@@ -1,0 +1,6 @@
+timestamp	kernel	group	backend	tok_per_sec	status	description
+2026-03-18 11:05	all	all	cpu	5.6	PASS	baseline measurement
+2026-03-18 11:06	all	all	metal	21.5	PASS	baseline measurement
+2026-03-18 11:28	softmax	norm	cpu	5.8	PASS	grid:softmax_width=4
+2026-03-18 11:28	softmax	norm	cpu	5.7	PASS	grid:softmax_width=8
+2026-03-18 11:28	softmax	norm	cpu	5.7	PASS	grid:softmax_width=16

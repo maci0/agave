@@ -1,0 +1,14 @@
+[project]
+name = "agave-kernel-research"
+version = "0.1.0"
+description = "Reference kernels, golden test generation, and benchmark harness for Agave"
+requires-python = ">=3.11"
+dependencies = [
+    "torch",
+    "numpy",
+]
+
+[project.optional-dependencies]
+# Triton only works on Linux with NVIDIA GPU — skip on macOS
+cuda = ["triton"]
+bayesian = ["optuna"]

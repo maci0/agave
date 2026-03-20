@@ -1,0 +1,35 @@
+# research/kernels/search_spaces.toml
+# Declarative per-kernel parameter search spaces for `run.py auto`.
+#
+# Format:
+#   [kernel_name]
+#   file = "src/path/to/source.zig"       # Source file to patch
+#   dimensions = ["param1", "param2"]      # Parameters to search over
+#
+#   [kernel_name.params.param1]
+#   type = "categorical"                   # "categorical", "int_range", "float_range", "boolean"
+#   values = [4, 8, 16]                    # For categorical
+#   # low = 1, high = 16, step = 1        # For int_range / float_range
+#   pattern = "const x: usize = 8;"       # Exact string to find in source
+#   template = "const x: usize = {value};"  # Replacement ({value} is substituted)
+#   # template_true / template_false       # For boolean type
+#
+# Per-backend overrides (optional):
+#   [kernel_name.backends.metal]
+#   file = "src/backend/kernels/metal/foo.metal"
+#   dimensions = ["param1"]
+#   [kernel_name.backends.metal.params.param1]
+#   ...
+#
+# All patterns must be exact literal strings from the source file.
+# Only {value} is allowed as a placeholder in templates.
+
+[softmax]
+file = "src/backend/cpu.zig"
+dimensions = ["softmax_width"]
+
+[softmax.params.softmax_width]
+type = "categorical"
+values = [4, 8, 16]
+pattern = "const softmax_width: comptime_int = 8; // SIMD width for softmax: 4, 8, or 16"
+template = "const softmax_width: comptime_int = {value}; // SIMD width for softmax: 4, 8, or 16"

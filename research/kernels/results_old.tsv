@@ -1,0 +1,7 @@
+timestamp	tag	kernels	quant	backend	tok_per_sec	prefill_ms	gen_ms	status
+2026-03-18 11:05		all	q4_0	cpu	5.6	3782	0	PASS
+2026-03-18 11:05		all	q4_0	metal	21.7	972	0	PASS
+2026-03-18 11:05		all	q8_0	cpu	4.4	4822	0	PASS
+2026-03-18 11:05		all	q8_0	metal	34.1	611	0	PASS
+2026-03-18 11:05		all	bf16	cpu	16.8	1243	0	PASS
+2026-03-18 11:05		all	bf16	metal	34.5	628	0	PASS
