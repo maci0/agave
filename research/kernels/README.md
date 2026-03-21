@@ -144,7 +144,7 @@ Two modes:
 - **Micro-benchmark** (default) — runs one kernel in isolation, measures raw
   speed in nanoseconds. No model files needed.
 - **End-to-end** (`--e2e`) — runs full model inference, measures tokens per
-  second. Requires `.gguf` model files in `weights/`.
+  second. Requires `.gguf` model files in `models/`.
 
 ```bash
 # Micro-benchmark (default)
@@ -153,7 +153,7 @@ uv run run.py bench gemv -b metal                # All gemv_* on Metal GPU
 uv run run.py bench gemv_f32 --dim=2048 --k=2048 # Custom matrix dimensions
 uv run run.py bench silu --iters=500             # More iterations for stability
 
-# End-to-end (needs model files in weights/)
+# End-to-end (needs model files in models/)
 uv run run.py bench --e2e                        # All weight formats
 uv run run.py bench gemv_q4_0 --e2e              # Just the relevant format
 
@@ -255,13 +255,13 @@ data. These are the "ground truth" that Zig implementations are tested against.
 
 | Function | Group | Zig equivalent |
 |----------|-------|----------------|
-| `rms_norm(x, w, eps)` | norm | `cpu.zig:rmsNormImpl` |
-| `softmax(x)` | norm | `cpu.zig:softmaxSimd` |
-| `l2_norm(x)` | norm | `cpu.zig:l2NormImpl` |
-| `silu(x)` | elementwise | `math.zig:silu` |
-| `gelu(x)` | elementwise | `math.zig:gelu` |
-| `add(a, b)` | elementwise | `cpu.zig:add` |
-| `mul(a, b)` | elementwise | `cpu.zig:mul` |
+| `rms_norm(x, w, eps)` | norm | `kernels/cpu/norm.zig:rmsNorm` |
+| `softmax(x)` | norm | `kernels/cpu/softmax.zig:softmaxSimd` |
+| `l2_norm(x)` | norm | `kernels/cpu/norm.zig:l2Norm` |
+| `silu(x)` | elementwise | `kernels/cpu/activation.zig:silu` |
+| `gelu(x)` | elementwise | `kernels/cpu/activation.zig:gelu` |
+| `add(a, b)` | elementwise | `kernels/cpu/elementwise.zig:add` |
+| `mul(a, b)` | elementwise | `kernels/cpu/elementwise.zig:mul` |
 | `sigmoid(x)` | math | `math.zig:sigmoid` |
 | `softplus(x)` | math | `math.zig:softplus` |
 | `argmax(x)` | math | `math.zig:argmax` |
@@ -274,7 +274,7 @@ data. These are the "ground truth" that Zig implementations are tested against.
 | `deltanet_recurrence(...)` | ssm | `qwen35.zig:deltaNet` |
 | `moe_routing_topk(logits, k)` | routing | `gpt_oss.zig:moeRouting` |
 | `moe_routing_sigmoid(logits)` | routing | `glm4.zig:moeRouting` |
-| `swiglu_fused(x, w_gate, w_up)` | fused | (not yet in Zig) |
+| `swiglu_fused(x, w_gate, w_up)` | fused | `backend.zig:siluMul` (silu+mul), GEMV done separately |
 
 ---
 

@@ -32,10 +32,12 @@ LOG_FILE = DATA_DIR / "optimization_log.tsv"
 SEARCH_SPACES_FILE = DATA_DIR / "search_spaces.toml"
 STAGING_DIR = DATA_DIR / "staging"
 
+# Paths follow models/<org>/<repo>/<file>.gguf convention.
+# Update these to match your local model files.
 BENCH_MODELS = {
-    "q4_0": "weights/gemma-3-1b-it-q4_0.gguf",
-    "q8_0": "weights/gemma-3-1b-it-q8_0.gguf",
-    "bf16": "weights/gemma-3-1b-it-bf16.gguf",
+    "q4_0": "models/lmstudio-community/gemma-3-4b-it-GGUF/gemma-3-4b-it-Q4_0.gguf",
+    "q8_0": "models/lmstudio-community/gemma-3-4b-it-GGUF/gemma-3-4b-it-Q8_0.gguf",
+    "bf16": "models/lmstudio-community/gemma-3-4b-it-GGUF/gemma-3-4b-it-BF16.gguf",
 }
 
 
@@ -935,42 +937,6 @@ def cmd_staged(args):
         print(f"\nApply with: run.py staged apply <name>")
         print(f"Diff with:  run.py staged diff <name>")
 
-    elif parsed.action in ("apply", "diff", "drop"):
-        entry, meta, staged_files = _load_staged_entry(parsed.action, parsed.name)
-
-    if parsed.action == "apply":
-        source_file = meta["source_file"]
-        if not parsed.yes:
-            try:
-                answer = input(f"Apply {parsed.name} -> {source_file}? [y/N] ").strip().lower()
-            except (EOFError, KeyboardInterrupt):
-                print()
-                return
-            if answer not in ("y", "yes"):
-                print("Aborted.")
-                return
-        staged_source = staged_files[0].read_text()
-        dest = AGAVE_ROOT / source_file
-        dest.write_text(staged_source)
-        print(f"Applied {parsed.name} -> {source_file}")
-
-    elif parsed.action == "diff":
-        source_file = meta["source_file"]
-        current = AGAVE_ROOT / source_file
-        result = subprocess.run(
-            ["diff", "-u", str(current), str(staged_files[0])],
-            capture_output=True, text=True
-        )
-        if result.stdout:
-            print(result.stdout)
-        else:
-            print("No differences (staged version matches current source).")
-
-    elif parsed.action == "drop":
-        import shutil
-        shutil.rmtree(entry)
-        print(f"Removed {parsed.name}")
-
     elif parsed.action == "clean":
         if not STAGING_DIR.exists():
             print("Nothing to clean.")
@@ -990,6 +956,43 @@ def cmd_staged(args):
             for entry in entries:
                 shutil.rmtree(entry)
             print(f"Removed {count} staged entries.")
+
+    else:
+        # apply, diff, drop — all require a valid staged entry
+        entry, meta, staged_files = _load_staged_entry(parsed.action, parsed.name)
+
+        if parsed.action == "apply":
+            source_file = meta["source_file"]
+            if not parsed.yes:
+                try:
+                    answer = input(f"Apply {parsed.name} -> {source_file}? [y/N] ").strip().lower()
+                except (EOFError, KeyboardInterrupt):
+                    print()
+                    return
+                if answer not in ("y", "yes"):
+                    print("Aborted.")
+                    return
+            staged_source = staged_files[0].read_text()
+            dest = AGAVE_ROOT / source_file
+            dest.write_text(staged_source)
+            print(f"Applied {parsed.name} -> {source_file}")
+
+        elif parsed.action == "diff":
+            source_file = meta["source_file"]
+            current = AGAVE_ROOT / source_file
+            result = subprocess.run(
+                ["diff", "-u", str(current), str(staged_files[0])],
+                capture_output=True, text=True
+            )
+            if result.stdout:
+                print(result.stdout)
+            else:
+                print("No differences (staged version matches current source).")
+
+        elif parsed.action == "drop":
+            import shutil
+            shutil.rmtree(entry)
+            print(f"Removed {parsed.name}")
 
 
 # Entry point — called from run.py

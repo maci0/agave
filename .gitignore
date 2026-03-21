@@ -1,0 +1,63 @@
+# Zig build artifacts
+.zig-cache/
+zig-out/
+
+# Python virtual environment
+.venv/
+__pycache__/
+
+# IDE configuration
+.opencode/
+.vscode/
+.idea/
+
+# Model weights (large files)
+/models/
+*.gguf
+*.safetensors
+
+# Compiled artifacts
+*.o
+*.a
+*.so
+*.dylib
+*.dll
+*.exe
+
+# Temporary kernel compilation artifacts (use `zig build ptx`/`zig build amdgcn` instead)
+test_*.s
+test_*.ll
+test_*.spv
+
+# Research kernel artifacts
+research/kernels/**/*.ptx
+research/kernels/**/*.spv
+research/kernels/**/*.cubin
+research/kernels/**/*.fatbin
+
+# OS-specific
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+
+# Test harness artifacts
+tests/.venv/
+tests/traces/
+tests/results/
+tests/golden_outputs/
+
+# Logs
+*.log
+
+# Environment and secrets
+.env
+.env.*
+*.key
+*.pem
+*.p12
+*.pfx
+
+# Claude code artifacts
+.claude/

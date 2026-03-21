@@ -1,0 +1,1393 @@
+//! Metal GPU backend for Apple Silicon.
+//! Compiles MSL kernels at init, dispatches compute via command buffers.
+//! On Apple Silicon the CPU and GPU share unified memory, so Metal buffers
+//! wrapping existing allocations require no copies on the GPU side.
+//!
+//! Command buffer batching: multiple kernel dispatches share a single command
+//! buffer. The buffer is committed only when `flush()` is called, which happens
+//! just before the CPU needs to read results. Multi-pass ops (softmax = 3 passes,
+//! l2Norm = 2 passes) batch in a single commit, reducing GPU round-trips.
+//! rmsNorm uses a fused single-dispatch kernel.
+
+const std = @import("std");
+const objc = @import("objc.zig");
+const backend_mod = @import("backend.zig");
+const TensorData = backend_mod.TensorData;
+const DType = backend_mod.DType;
+const CpuBackend = backend_mod.CpuBackend;
+const ThreadPool = @import("../thread_pool.zig").ThreadPool;
+
+const msl_source = @embedFile("kernels/metal/common.metal") ++
+    @embedFile("kernels/metal/elementwise.metal") ++
+    @embedFile("kernels/metal/norm.metal") ++
+    @embedFile("kernels/metal/rope.metal") ++
+    @embedFile("kernels/metal/gemv.metal") ++
+    @embedFile("kernels/metal/sdpa.metal") ++
+    @embedFile("kernels/metal/deltanet.metal");
+
+const page_size = std.heap.page_size_min;
+
+// ── Tuning constants ────────────────────────────────────────────
+// These thresholds control when the Metal backend falls back to CPU
+// or caps kernel dispatch sizes. Tuned for Apple Silicon M-series.
+
+/// Threadgroup size for reduction/GEMV kernels (matches MSL `[[ threads_per_threadgroup ]]`).
+const threadgroup_size: usize = 256;
+/// Softmax inputs smaller than this threshold run on CPU (GPU dispatch overhead dominates).
+const softmax_cpu_threshold: usize = 128;
+/// Maximum sequence length for the fused SDPA kernel (limited by threadgroup memory).
+const sdpa_max_seq_len: usize = 4096;
+/// Maximum per-head dimension for the fused SDPA kernel.
+const sdpa_max_head_dim: usize = 256;
+/// Number of output rows processed per threadgroup in Q4_0 GEMV (must match q4_0_nr in gemv.metal).
+const q4_0_nr: usize = 4;
+/// Number of output rows processed per threadgroup in Q8_0 GEMV (must match q8_0_nr in gemv.metal).
+const q8_0_nr: usize = 4;
+/// Elements per small quantization block (Q4_0, Q8_0, etc.).
+const quant_block_elems: usize = 32;
+/// Elements per large quantization super-block (Q4_K, Q5_K, Q6_K, etc.).
+const quant_super_block_elems: usize = 256;
+/// Elements per MLX group (64-element groups for MLX 4-bit quantization).
+const mlx_group_elems: usize = 64;
+
+/// Reference to a cached Metal buffer with a byte offset.
+/// Allows sub-region access (e.g. per-head slices) without creating separate
+/// Metal buffer objects — the parent buffer is reused with an offset.
+const BufRef = struct {
+    buf: objc.id,
+    offset: usize,
+};
+
+/// Cached Metal buffer info, keyed by page-aligned base address.
+const BufferInfo = struct {
+    metal_buf: objc.id,
+    len: usize,
+};
+
+/// Metal GPU backend state.
+pub const MetalBackend = struct {
+    device: objc.id,
+    queue: objc.id,
+    library: objc.id,
+    // Pipeline states for each kernel
+    pipe_silu: objc.id,
+    pipe_add: objc.id,
+    pipe_mul: objc.id,
+    pipe_rms_ss: objc.id,
+    pipe_rms_apply: objc.id,
+    pipe_softmax_max: objc.id,
+    pipe_softmax_exp_sum: objc.id,
+    pipe_softmax_div: objc.id,
+    pipe_rope: objc.id,
+    pipe_l2_apply: objc.id,
+    pipe_gemv_f32: objc.id,
+    pipe_gemv_q8_0: objc.id,
+    pipe_gemv_q4_0: objc.id,
+    pipe_gemv_q4_1: objc.id,
+    pipe_gemv_bf16: objc.id,
+    pipe_gemv_f16: objc.id,
+    pipe_gemv_nvfp4_st: objc.id,
+    pipe_gemv_q4_k: objc.id,
+    pipe_gemv_q6_k: objc.id,
+    pipe_gemv_q5_k: objc.id,
+    pipe_gemv_mlx_q4: objc.id,
+    pipe_gemv_fp8_e4m3: objc.id,
+    pipe_gemv_fp8_e5m2: objc.id,
+    pipe_gelu: objc.id,
+    pipe_sigmoid_mul: objc.id,
+    pipe_deinterleave: objc.id,
+    pipe_silu_mul: objc.id,
+    pipe_rms_norm_fused: objc.id,
+    pipe_add_rms_norm_fused: objc.id,
+    pipe_dn_gate_beta: objc.id,
+    pipe_dn_conv1d: objc.id,
+    pipe_dn_l2_norm: objc.id,
+    pipe_dn_recurrence: objc.id,
+    /// Scratch buffer for multi-pass reductions: 8 bytes = 2 × f32.
+    /// Used by softmax (3-pass: max at offset 0, sum at offset 4)
+    /// and l2Norm (2-pass: sum-of-squares at offset 0).
+    scratch_buf: objc.id,
+    /// Persistent command buffer for batching multiple dispatches.
+    /// Created lazily on first encode, committed and cleared on flush().
+    active_cmd: ?objc.id = null,
+    /// Persistent compute encoder reused across dispatches within one command buffer.
+    /// Memory barriers between dispatches ensure write visibility.
+    /// Ended and cleared on flush(). Eliminates per-op encoder overhead.
+    active_enc: ?objc.id = null,
+    /// Cache of MTLBuffer objects keyed by data pointer (usize).
+    /// Avoids recreating wrapBuffer objects for stable pointers (mmap'd weights,
+    /// model activation buffers) on every GEMV / norm / elementwise call.
+    /// Cached buffers live for the model's lifetime and are released in deinit().
+    buf_cache: std.AutoHashMap(usize, BufferInfo),
+    /// When true, memory barriers between dispatches are suppressed to allow
+    /// the GPU to overlap independent operations. Set by beginBatch(), cleared
+    /// by endBatch() which inserts a single barrier.
+    batch_mode: bool = false,
+    /// Optional thread pool for parallelizing CPU fallback work (e.g. SDPA heads).
+    /// Set by the caller after init — Metal doesn't own the pool.
+    pool: ?*ThreadPool = null,
+
+    // ── Init / deinit ─────────────────────────────────────────
+
+    /// Initialize the Metal backend: get device, compile shaders, create pipelines.
+    pub fn init(allocator: std.mem.Allocator) !MetalBackend {
+        const device = objc.MTLCreateSystemDefaultDevice() orelse return error.NoMetalDevice;
+        errdefer release(device);
+
+        const queue = objc.msgSend(?objc.id, device, objc.sel("newCommandQueue"), .{}) orelse
+            return error.CommandQueueFailed;
+        errdefer release(queue);
+
+        // Compile MSL source via NSString + newLibraryWithSource:options:error:
+        const NSString = objc.getClass("NSString") orelse return error.NoFoundation;
+        const source_ns = objc.msgSend(
+            ?objc.id,
+            NSString,
+            objc.sel("stringWithUTF8String:"),
+            .{@as([*:0]const u8, @ptrCast(msl_source.ptr))},
+        ) orelse return error.StringFailed;
+
+        var compile_err: ?objc.id = null;
+        const library = objc.msgSend(
+            ?objc.id,
+            device,
+            objc.sel("newLibraryWithSource:options:error:"),
+            .{ source_ns, @as(?objc.id, null), @as(*?objc.id, &compile_err) },
+        ) orelse return error.ShaderCompileFailed;
+        errdefer release(library);
+
+        // Scratch buffer — 8 bytes, MTLResourceStorageModeShared (0)
+        const scratch_buf = objc.msgSend(
+            objc.id,
+            device,
+            objc.sel("newBufferWithLength:options:"),
+            .{ @as(objc.NSUInteger, 8), @as(objc.NSUInteger, 0) },
+        );
+        errdefer release(scratch_buf);
+
+        var self = MetalBackend{
+            .device = device,
+            .queue = queue,
+            .library = library,
+            .pipe_silu = undefined,
+            .pipe_add = undefined,
+            .pipe_mul = undefined,
+            .pipe_rms_ss = undefined,
+            .pipe_rms_apply = undefined,
+            .pipe_softmax_max = undefined,
+            .pipe_softmax_exp_sum = undefined,
+            .pipe_softmax_div = undefined,
+            .pipe_rope = undefined,
+            .pipe_l2_apply = undefined,
+            .pipe_gemv_f32 = undefined,
+            .pipe_gemv_q8_0 = undefined,
+            .pipe_gemv_q4_0 = undefined,
+            .pipe_gemv_q4_1 = undefined,
+            .pipe_gemv_bf16 = undefined,
+            .pipe_gemv_f16 = undefined,
+            .pipe_gemv_mlx_q4 = undefined,
+            .pipe_gemv_nvfp4_st = undefined,
+            .pipe_gemv_q4_k = undefined,
+            .pipe_gemv_q6_k = undefined,
+            .pipe_gemv_q5_k = undefined,
+            .pipe_gemv_fp8_e4m3 = undefined,
+            .pipe_gemv_fp8_e5m2 = undefined,
+            .pipe_gelu = undefined,
+            .pipe_sigmoid_mul = undefined,
+            .pipe_deinterleave = undefined,
+            .pipe_silu_mul = undefined,
+            .pipe_rms_norm_fused = undefined,
+            .pipe_add_rms_norm_fused = undefined,
+            .pipe_dn_gate_beta = undefined,
+            .pipe_dn_conv1d = undefined,
+            .pipe_dn_l2_norm = undefined,
+            .pipe_dn_recurrence = undefined,
+            .scratch_buf = scratch_buf,
+            .active_cmd = null,
+            .buf_cache = std.AutoHashMap(usize, BufferInfo).init(allocator),
+        };
+        // Pre-allocate capacity to prevent OOM during hot-path buf_cache.put() calls.
+        // 512 entries covers typical models (weights + activations + KV cache buffers).
+        self.buf_cache.ensureTotalCapacity(512) catch {};
+
+        self.pipe_silu = try self.makePipeline("silu_f32");
+        self.pipe_add = try self.makePipeline("add_f32");
+        self.pipe_mul = try self.makePipeline("mul_f32");
+        self.pipe_rms_ss = try self.makePipeline("rms_norm_ss");
+        self.pipe_rms_apply = try self.makePipeline("rms_norm_apply");
+        self.pipe_softmax_max = try self.makePipeline("softmax_max");
+        self.pipe_softmax_exp_sum = try self.makePipeline("softmax_exp_sum");
+        self.pipe_softmax_div = try self.makePipeline("softmax_div");
+        self.pipe_rope = try self.makePipeline("rope_f32");
+        self.pipe_l2_apply = try self.makePipeline("l2_norm_apply");
+        self.pipe_gemv_f32 = try self.makePipeline("gemv_f32");
+        self.pipe_gemv_q8_0 = try self.makePipeline("gemv_q8_0");
+        self.pipe_gemv_q4_0 = try self.makePipeline("gemv_q4_0");
+        self.pipe_gemv_q4_1 = try self.makePipeline("gemv_q4_1");
+        self.pipe_gemv_bf16 = try self.makePipeline("gemv_bf16");
+        self.pipe_gemv_f16 = try self.makePipeline("gemv_f16");
+        self.pipe_gemv_mlx_q4 = try self.makePipeline("gemv_mlx_q4");
+        self.pipe_gemv_nvfp4_st = try self.makePipeline("gemv_nvfp4_st");
+        self.pipe_gemv_q4_k = try self.makePipeline("gemv_q4_k");
+        self.pipe_gemv_q6_k = try self.makePipeline("gemv_q6_k");
+        self.pipe_gemv_q5_k = try self.makePipeline("gemv_q5_k");
+        self.pipe_gemv_fp8_e4m3 = try self.makePipeline("gemv_fp8_e4m3");
+        self.pipe_gemv_fp8_e5m2 = try self.makePipeline("gemv_fp8_e5m2");
+        self.pipe_gelu = try self.makePipeline("gelu_f32");
+        self.pipe_sigmoid_mul = try self.makePipeline("sigmoid_mul_f32");
+        self.pipe_deinterleave = try self.makePipeline("deinterleave_f32");
+        self.pipe_silu_mul = try self.makePipeline("silu_mul_f32");
+        self.pipe_rms_norm_fused = try self.makePipeline("rms_norm_fused_f32");
+        self.pipe_add_rms_norm_fused = try self.makePipeline("add_rms_norm_fused_f32");
+        self.pipe_dn_gate_beta = try self.makePipeline("deltanet_gate_beta");
+        self.pipe_dn_conv1d = try self.makePipeline("deltanet_conv1d");
+        self.pipe_dn_l2_norm = try self.makePipeline("deltanet_l2_norm");
+        self.pipe_dn_recurrence = try self.makePipeline("deltanet_recurrence");
+
+        return self;
+    }
+
+    /// Number of MSL compute pipelines compiled at init.
+    pub const n_pipelines: u32 = 33;
+
+    /// Returns the Metal device name (e.g., "Apple M4 Pro").
+    pub fn deviceName(self: *const MetalBackend) []const u8 {
+        const ns_name = objc.msgSend(objc.id, self.device, objc.sel("name"), .{});
+        return std.mem.span(objc.msgSend([*:0]const u8, ns_name, objc.sel("UTF8String"), .{}));
+    }
+
+    /// Returns backend startup information for display.
+    pub fn backendInfo(self: *const MetalBackend) @import("backend.zig").BackendInfo {
+        const total: u64 = objc.msgSend(u64, self.device, objc.sel("recommendedMaxWorkingSetSize"), .{});
+        const allocated: u64 = objc.msgSend(u64, self.device, objc.sel("currentAllocatedSize"), .{});
+        return .{
+            .name = "Metal",
+            .device_name = self.deviceName(),
+            .lib_name = "Metal.framework",
+            .n_gpu_kernels = n_pipelines,
+            .kernel_type = "MSL",
+            .total_mem = total,
+            .avail_mem = if (total > allocated) total - allocated else 0,
+            .is_uma = true,
+            .driver_version = self.detectMetalFamily(),
+        };
+    }
+
+    /// Detect the highest supported Metal GPU family.
+    fn detectMetalFamily(self: *const MetalBackend) []const u8 {
+        // MTLGPUFamily enum values (Apple-defined)
+        const families = [_]struct { val: c_long, name: []const u8 }{
+            .{ .val = 5001, .name = "Metal 3" },
+            .{ .val = 1009, .name = "Apple Family 9" },
+            .{ .val = 1008, .name = "Apple Family 8" },
+            .{ .val = 1007, .name = "Apple Family 7" },
+        };
+        for (families) |fam| {
+            if (objc.msgSend(bool, self.device, objc.sel("supportsFamily:"), .{fam.val}))
+                return fam.name;
+        }
+        return "";
+    }
+
+    /// Compile a named MSL kernel into a compute pipeline state.
+    fn makePipeline(self: *MetalBackend, name: [*:0]const u8) !objc.id {
+        const NSString = objc.getClass("NSString").?;
+        const ns_name = objc.msgSend(
+            ?objc.id,
+            NSString,
+            objc.sel("stringWithUTF8String:"),
+            .{name},
+        ) orelse return error.StringFailed;
+
+        const func = objc.msgSend(
+            ?objc.id,
+            self.library,
+            objc.sel("newFunctionWithName:"),
+            .{ns_name},
+        ) orelse return error.KernelNotFound;
+
+        var err: ?objc.id = null;
+        return objc.msgSend(
+            ?objc.id,
+            self.device,
+            objc.sel("newComputePipelineStateWithFunction:error:"),
+            .{ func, @as(*?objc.id, &err) },
+        ) orelse return error.PipelineFailed;
+    }
+
+    // ── Buffer helpers ────────────────────────────────────────
+
+    /// Create a Metal buffer by copying `len` bytes from `ptr`.
+    /// MTLResourceStorageModeShared = 0.
+    fn makeBuffer(self: *MetalBackend, ptr: *const anyopaque, len: usize) objc.id {
+        return objc.msgSend(
+            objc.id,
+            self.device,
+            objc.sel("newBufferWithBytes:length:options:"),
+            .{ ptr, @as(objc.NSUInteger, len), @as(objc.NSUInteger, 0) },
+        );
+    }
+
+    /// Wrap existing memory as a Metal buffer with zero copy (Apple Silicon unified memory).
+    /// The caller retains ownership of the memory — Metal will not free it.
+    /// `ptr` MUST be page-aligned; returns null if Metal rejects the pointer.
+    fn wrapBuffer(self: *MetalBackend, ptr: *const anyopaque, len: usize) ?objc.id {
+        return objc.msgSend(
+            ?objc.id,
+            self.device,
+            objc.sel("newBufferWithBytesNoCopy:length:options:deallocator:"),
+            .{ ptr, @as(objc.NSUInteger, len), @as(objc.NSUInteger, 0), @as(?objc.id, null) },
+        );
+    }
+
+    /// Release all cached buffers and free the cache map.
+    /// Call this when the MetalBackend is no longer needed.
+    pub fn deinit(self: *MetalBackend) void {
+        var it = self.buf_cache.valueIterator();
+        while (it.next()) |info| release(info.metal_buf);
+        self.buf_cache.deinit();
+    }
+
+    /// Return a BufRef (Metal buffer + byte offset) for `ptr`.
+    ///
+    /// Page-aligned pointers are wrapped zero-copy via newBufferWithBytesNoCopy.
+    /// Non-page-aligned pointers are handled by wrapping the enclosing page-aligned
+    /// region and returning an offset, so sub-regions (e.g. per-head slices) reuse
+    /// the parent buffer instead of creating isolated copies.
+    ///
+    /// Cached by page-aligned base address — subsequent calls for the same page
+    /// skip ObjC allocation entirely.
+    fn getBufRef(self: *MetalBackend, ptr: *const anyopaque, len: usize) BufRef {
+        const addr = @intFromPtr(ptr);
+        const aligned_base = addr & ~(@as(usize, page_size - 1));
+        const offset = addr - aligned_base;
+        const needed = offset + len;
+
+        // Check cache for this page-aligned base
+        if (self.buf_cache.get(aligned_base)) |cached| {
+            if (cached.len >= needed) return .{ .buf = cached.metal_buf, .offset = offset };
+            // Buffer too small (e.g. KV cache grew) — release old, recreate below
+            release(cached.metal_buf);
+            _ = self.buf_cache.remove(aligned_base);
+        }
+
+        const aligned_len = (needed + page_size - 1) & ~(@as(usize, page_size - 1));
+        const aligned_ptr: *const anyopaque = @ptrFromInt(aligned_base);
+        if (self.wrapBuffer(aligned_ptr, aligned_len)) |buf| {
+            self.buf_cache.put(aligned_base, .{ .metal_buf = buf, .len = aligned_len }) catch |err| {
+                // Cache full — release wrap buffer to avoid leak, fall through to copy path
+                std.log.warn("Metal buf_cache put failed: {}", .{err});
+                release(buf);
+                return .{ .buf = self.makeBuffer(ptr, len), .offset = 0 };
+            };
+            return .{ .buf = buf, .offset = offset };
+        }
+        // Fallback: copy the data into a Metal-managed buffer (extremely rare)
+        const copy_buf = self.makeBuffer(ptr, len);
+        self.buf_cache.put(addr, .{ .metal_buf = copy_buf, .len = len }) catch |err| {
+            std.log.warn("Metal buf_cache put failed: {}", .{err});
+        };
+        return .{ .buf = copy_buf, .offset = 0 };
+    }
+
+    /// Bind a BufRef (buffer + offset) at the given argument index.
+    fn setBuf(enc: objc.id, ref: BufRef, index: u32) void {
+        objc.msgSend(void, enc, objc.sel("setBuffer:offset:atIndex:"), .{
+            ref.buf, @as(objc.NSUInteger, ref.offset), @as(objc.NSUInteger, index),
+        });
+    }
+
+    /// Read `count` f32 values back from a Metal buffer's contents pointer.
+    fn readBuffer(buf: objc.id, dst: [*]f32, count: usize) void {
+        const contents: [*]const f32 = @ptrCast(@alignCast(
+            objc.msgSend(*anyopaque, buf, objc.sel("contents"), .{}),
+        ));
+        @memcpy(dst[0..count], contents[0..count]);
+    }
+
+    /// Release an ObjC object (decrements retain count).
+    fn release(obj: objc.id) void {
+        objc.msgSend(void, obj, objc.sel("release"), .{});
+    }
+
+    // ── Dispatch helpers ──────────────────────────────────────
+
+    /// Get or reuse the active compute command encoder.
+    /// Creates command buffer and encoder lazily. Reuses the same encoder
+    /// across dispatches — pipeline state is swapped via setComputePipelineState.
+    /// Memory barriers between dispatches ensure write visibility.
+    fn getEncoder(self: *MetalBackend, pipeline: objc.id) objc.id {
+        if (self.active_cmd == null) {
+            self.active_cmd = objc.msgSend(objc.id, self.queue, objc.sel("commandBuffer"), .{});
+        }
+        if (self.active_enc == null) {
+            self.active_enc = objc.msgSend(objc.id, self.active_cmd.?, objc.sel("computeCommandEncoder"), .{});
+        }
+        objc.msgSend(void, self.active_enc.?, objc.sel("setComputePipelineState:"), .{pipeline});
+        return self.active_enc.?;
+    }
+
+    /// Bind a Metal buffer at the given slot with zero offset.
+    fn setBuffer(enc: objc.id, buf: objc.id, index: u32) void {
+        objc.msgSend(void, enc, objc.sel("setBuffer:offset:atIndex:"), .{
+            buf, @as(objc.NSUInteger, 0), @as(objc.NSUInteger, index),
+        });
+    }
+
+    /// Bind a Metal buffer at the given slot with a byte offset.
+    fn setBufferOffset(enc: objc.id, buf: objc.id, offset: usize, index: u32) void {
+        objc.msgSend(void, enc, objc.sel("setBuffer:offset:atIndex:"), .{
+            buf, @as(objc.NSUInteger, offset), @as(objc.NSUInteger, index),
+        });
+    }
+
+    /// Push a small constant directly into the argument table (avoids a buffer alloc).
+    fn setBytes(enc: objc.id, ptr: *const anyopaque, len: usize, index: u32) void {
+        objc.msgSend(void, enc, objc.sel("setBytes:length:atIndex:"), .{
+            ptr, @as(objc.NSUInteger, len), @as(objc.NSUInteger, index),
+        });
+    }
+
+    /// MTLBarrierScope.Buffers — ensures buffer writes from one dispatch
+    /// are visible to subsequent dispatches within the same encoder.
+    const barrier_scope_buffers: objc.NSUInteger = 1;
+
+    /// Dispatch threadgroups with a memory barrier (unless batch_mode is active,
+    /// in which case the barrier is deferred until endBatch).
+    fn endEncodeThreadgroups(self: *MetalBackend, enc: objc.id, n_groups: usize, tg_size: usize) void {
+        objc.msgSend(void, enc, objc.sel("dispatchThreadgroups:threadsPerThreadgroup:"), .{
+            objc.MTLSize{ .width = n_groups, .height = 1, .depth = 1 },
+            objc.MTLSize{ .width = tg_size, .height = 1, .depth = 1 },
+        });
+        if (!self.batch_mode)
+            objc.msgSend(void, enc, objc.sel("memoryBarrierWithScope:"), .{barrier_scope_buffers});
+    }
+
+    /// Dispatch grid_size threads (1-D) with conditional barrier.
+    fn endEncode1D(self: *MetalBackend, enc: objc.id, pipeline: objc.id, grid_size: usize) void {
+        const max_tpg = objc.msgSend(
+            objc.NSUInteger,
+            pipeline,
+            objc.sel("maxTotalThreadsPerThreadgroup"),
+            .{},
+        );
+        const tg = @min(max_tpg, grid_size);
+        objc.msgSend(void, enc, objc.sel("dispatchThreads:threadsPerThreadgroup:"), .{
+            objc.MTLSize{ .width = grid_size, .height = 1, .depth = 1 },
+            objc.MTLSize{ .width = tg, .height = 1, .depth = 1 },
+        });
+        if (!self.batch_mode)
+            objc.msgSend(void, enc, objc.sel("memoryBarrierWithScope:"), .{barrier_scope_buffers});
+    }
+
+    /// Dispatch exactly one threadgroup with conditional barrier.
+    fn endEncodeOneThreadgroup(self: *MetalBackend, enc: objc.id, tg_size: usize) void {
+        objc.msgSend(void, enc, objc.sel("dispatchThreadgroups:threadsPerThreadgroup:"), .{
+            objc.MTLSize{ .width = 1, .height = 1, .depth = 1 },
+            objc.MTLSize{ .width = tg_size, .height = 1, .depth = 1 },
+        });
+        if (!self.batch_mode)
+            objc.msgSend(void, enc, objc.sel("memoryBarrierWithScope:"), .{barrier_scope_buffers});
+    }
+
+    /// Commit the active command buffer and block until the GPU finishes.
+    /// After this returns, all GPU writes are visible to the CPU.
+    /// Sets active_cmd to null so the next getEncoder() starts a fresh buffer.
+    fn flush(self: *MetalBackend) void {
+        if (self.active_enc) |enc| {
+            objc.msgSend(void, enc, objc.sel("endEncoding"), .{});
+            self.active_enc = null;
+        }
+        if (self.active_cmd) |cmd| {
+            objc.msgSend(void, cmd, objc.sel("commit"), .{});
+            objc.msgSend(void, cmd, objc.sel("waitUntilCompleted"), .{});
+            self.active_cmd = null;
+        }
+    }
+
+    /// Flush pending GPU work and return a CPU backend for fallback.
+    /// Call this instead of constructing CpuBackend directly so that
+    /// GPU writes (e.g. rmsNorm output) are visible before the CPU reads.
+    fn cpuFallback(self: *MetalBackend) CpuBackend {
+        self.flush();
+        return CpuBackend{ .pool = self.pool };
+    }
+
+    // ── KV cache allocation ────────────────────────────────────
+
+    /// Allocate a KV cache slice using page-aligned memory for zero-copy GPU access.
+    /// On Apple Silicon's UMA, page-aligned buffers can be wrapped via
+    /// newBufferWithBytesNoCopy without any data copies. Pre-registers the
+    /// allocation in buf_cache so SDPA doesn't create Metal buffers lazily.
+    pub fn allocKvSlice(self: *MetalBackend, _: std.mem.Allocator, n: usize) error{OutOfMemory}![]f32 {
+        const byte_len = n * @sizeOf(f32);
+        // Round up to page boundary for newBufferWithBytesNoCopy compatibility
+        const aligned_bytes = std.mem.alignForward(usize, byte_len, page_size);
+        const raw = std.heap.page_allocator.alloc(u8, aligned_bytes) catch return error.OutOfMemory;
+        const ptr: [*]f32 = @ptrCast(@alignCast(raw.ptr));
+        @memset(ptr[0..n], 0);
+        // Pre-register in buf_cache — wraps as Metal buffer for zero-copy GPU access.
+        const addr = @intFromPtr(raw.ptr);
+        const metal_buf = objc.msgSend(
+            ?objc.id,
+            self.device,
+            objc.sel("newBufferWithBytesNoCopy:length:options:deallocator:"),
+            .{
+                @as(*anyopaque, @ptrCast(raw.ptr)),
+                @as(objc.NSUInteger, aligned_bytes),
+                @as(objc.NSUInteger, 0), // MTLResourceStorageModeShared
+                @as(?objc.id, null), // no deallocator — we manage lifetime
+            },
+        ) orelse return error.OutOfMemory;
+        self.buf_cache.put(addr, .{ .metal_buf = metal_buf, .len = aligned_bytes }) catch {
+            release(metal_buf);
+            return error.OutOfMemory;
+        };
+        return ptr[0..n];
+    }
+
+    /// Free a KV cache slice allocated via allocKvSlice.
+    /// Removes the Metal buffer from buf_cache and releases page-aligned memory.
+    pub fn freeKvSlice(self: *MetalBackend, _: std.mem.Allocator, slice: []f32) void {
+        if (slice.len == 0) return;
+        const addr = @intFromPtr(slice.ptr);
+        if (self.buf_cache.fetchRemove(addr)) |entry| {
+            release(entry.value.metal_buf);
+        }
+        const byte_len = slice.len * @sizeOf(f32);
+        const aligned_bytes = std.mem.alignForward(usize, byte_len, page_size);
+        std.heap.page_allocator.free(@as([*]align(std.heap.pageSize()) u8, @ptrCast(@alignCast(slice.ptr)))[0..aligned_bytes]);
+    }
+
+    // ── Weight size helper ────────────────────────────────────
+
+    const weightBytes = @import("backend.zig").weightBytes;
+
+    // ── GEMV ──────────────────────────────────────────────────
+
+    /// y[n] = W[n,k] @ x[k].  Dispatches a Metal kernel per supported dtype;
+    /// falls back to the CPU backend for dtypes not yet covered by MSL.
+    pub fn gemv(self: *MetalBackend, x: [*]const f32, w: TensorData, y: [*]f32, n: usize, k: usize) void {
+        const pipeline: objc.id = switch (w.dtype) {
+            .f32 => self.pipe_gemv_f32,
+            .q8_0 => self.pipe_gemv_q8_0,
+            .q4_0 => self.pipe_gemv_q4_0,
+            .q4_1 => self.pipe_gemv_q4_1,
+            .q4_k => self.pipe_gemv_q4_k,
+            .q5_k => self.pipe_gemv_q5_k,
+            .q6_k => self.pipe_gemv_q6_k,
+            .bf16 => self.pipe_gemv_bf16,
+            .f16 => self.pipe_gemv_f16,
+            .fp8_e4m3 => self.pipe_gemv_fp8_e4m3,
+            .fp8_e5m2 => self.pipe_gemv_fp8_e5m2,
+            else => {
+                var cpu = self.cpuFallback();
+                cpu.gemv(x, w, y, n, k);
+                return;
+            },
+        };
+
+        const w_bytes = weightBytes(w.dtype, n, k);
+        const x_ref = self.getBufRef(@ptrCast(x), k * @sizeOf(f32));
+        const w_ref = self.getBufRef(@ptrCast(w.data), w_bytes);
+        const y_ref = self.getBufRef(@ptrCast(y), n * @sizeOf(f32));
+
+        var n_val: u32 = @intCast(n);
+        var k_val: u32 = @intCast(k);
+
+        const enc = self.getEncoder(pipeline);
+        setBuf(enc, x_ref, 0);
+        setBuf(enc, w_ref, 1);
+        setBuf(enc, y_ref, 2);
+        setBytes(enc, @ptrCast(&n_val), @sizeOf(u32), 3);
+        setBytes(enc, @ptrCast(&k_val), @sizeOf(u32), 4);
+
+        // Adaptive threadgroup size: match block count to avoid idle threads.
+        // Block-based formats have nb blocks/row; threads beyond nb are wasted.
+        const tg = gemvThreadgroupSize(w.dtype, k);
+        const n_groups = gemvThreadgroups(w.dtype, n);
+        self.endEncodeThreadgroups(enc, n_groups, tg);
+    }
+
+    /// Compute optimal threadgroup size for GEMV based on dtype and k.
+    /// For block-based quantization, threads beyond block count are idle.
+    /// Returns a multiple of 32 (warp size) capped at threadgroup_size.
+    fn gemvThreadgroupSize(dtype: DType, k: usize) usize {
+        const nb: usize = switch (dtype) {
+            // 32-element block formats
+            .q4_0, .q4_1, .q5_0, .q8_0, .iq4_nl => (k + quant_block_elems - 1) / quant_block_elems,
+            // 256-element superblock formats
+            .q4_k, .q5_k, .q6_k, .q2_k, .q3_k, .iq4_xs => (k + quant_super_block_elems - 1) / quant_super_block_elems,
+            // MLX 4-bit: 64-element groups, each thread processes one group
+            .mlx_q => (k + mlx_group_elems - 1) / mlx_group_elems,
+            // Element-level formats — always fully utilized at 256 threads
+            else => threadgroup_size,
+        };
+        // Round up to warp boundary (32), clamp to [32, threadgroup_size]
+        const rounded = (nb + 31) & ~@as(usize, 31);
+        return @min(threadgroup_size, @max(32, rounded));
+    }
+
+    /// Number of threadgroups to dispatch for GEMV. Multi-row kernels
+    /// (e.g. Q4_0 with NR=4) process multiple output rows per threadgroup.
+    fn gemvThreadgroups(dtype: DType, n: usize) usize {
+        return switch (dtype) {
+            .q4_0 => (n + q4_0_nr - 1) / q4_0_nr,
+            .q8_0 => (n + q8_0_nr - 1) / q8_0_nr,
+            else => n,
+        };
+    }
+
+    // ── RMS Norm ──────────────────────────────────────────────
+
+    /// output = rms_norm(input, weight, n, eps).
+    /// Fused single-dispatch: sum-of-squares + normalize in one threadgroup.
+    /// Data stays in threadgroup memory between phases, avoiding extra bandwidth.
+    pub fn rmsNorm(self: *MetalBackend, input: [*]const f32, weight: [*]const f32, output: [*]f32, n: usize, eps: f32) void {
+        const in_ref = self.getBufRef(@ptrCast(input), n * @sizeOf(f32));
+        const w_ref = self.getBufRef(@ptrCast(weight), n * @sizeOf(f32));
+        const out_ref = self.getBufRef(@ptrCast(output), n * @sizeOf(f32));
+
+        var n_val: u32 = @intCast(n);
+        var eps_val: f32 = eps;
+
+        const tg = @min(threadgroup_size, n);
+        const enc = self.getEncoder(self.pipe_rms_norm_fused);
+        setBuf(enc, in_ref, 0);
+        setBuf(enc, w_ref, 1);
+        setBuf(enc, out_ref, 2);
+        setBytes(enc, @ptrCast(&n_val), @sizeOf(u32), 3);
+        setBytes(enc, @ptrCast(&eps_val), @sizeOf(f32), 4);
+        self.endEncodeThreadgroups(enc, 1, tg);
+    }
+
+    /// Fused add + rms_norm: a[i] = a[i] + b[i], output[i] = rms_norm(a+b, weight, eps).
+    /// Single dispatch replaces separate add + rmsNorm (saves one dispatch + barrier).
+    pub fn addRmsNorm(self: *MetalBackend, a: [*]f32, b: [*]const f32, weight: [*]const f32, output: [*]f32, n: usize, eps: f32) void {
+        const a_ref = self.getBufRef(@ptrCast(a), n * @sizeOf(f32));
+        const b_ref = self.getBufRef(@ptrCast(b), n * @sizeOf(f32));
+        const w_ref = self.getBufRef(@ptrCast(weight), n * @sizeOf(f32));
+        const out_ref = self.getBufRef(@ptrCast(output), n * @sizeOf(f32));
+
+        var n_val: u32 = @intCast(n);
+        var eps_val: f32 = eps;
+
+        const tg = @min(threadgroup_size, n);
+        const enc = self.getEncoder(self.pipe_add_rms_norm_fused);
+        setBuf(enc, a_ref, 0);
+        setBuf(enc, b_ref, 1);
+        setBuf(enc, w_ref, 2);
+        setBuf(enc, out_ref, 3);
+        setBytes(enc, @ptrCast(&n_val), @sizeOf(u32), 4);
+        setBytes(enc, @ptrCast(&eps_val), @sizeOf(f32), 5);
+        self.endEncodeThreadgroups(enc, 1, tg);
+    }
+
+    // ── Element-wise dispatch helpers ─────────────────────────
+
+    /// Dispatch a unary element-wise kernel: out[i] = f(a[i]).
+    fn dispatchUnaryOp(self: *MetalBackend, pipeline: objc.id, a: [*]const f32, out: [*]f32, n: usize) void {
+        const a_ref = self.getBufRef(@ptrCast(a), n * @sizeOf(f32));
+        const o_ref = self.getBufRef(@ptrCast(out), n * @sizeOf(f32));
+        var n_val: u32 = @intCast(n);
+        const enc = self.getEncoder(pipeline);
+        setBuf(enc, a_ref, 0);
+        setBuf(enc, o_ref, 1);
+        setBytes(enc, @ptrCast(&n_val), @sizeOf(u32), 2);
+        self.endEncode1D(enc, pipeline, n);
+    }
+
+    /// Dispatch a binary element-wise kernel: out[i] = f(a[i], b[i]).
+    fn dispatchBinaryOp(self: *MetalBackend, pipeline: objc.id, a: [*]const f32, b: [*]const f32, out: [*]f32, n: usize) void {
+        const a_ref = self.getBufRef(@ptrCast(a), n * @sizeOf(f32));
+        const b_ref = self.getBufRef(@ptrCast(b), n * @sizeOf(f32));
+        const o_ref = self.getBufRef(@ptrCast(out), n * @sizeOf(f32));
+        var n_val: u32 = @intCast(n);
+        const enc = self.getEncoder(pipeline);
+        setBuf(enc, a_ref, 0);
+        setBuf(enc, b_ref, 1);
+        setBuf(enc, o_ref, 2);
+        setBytes(enc, @ptrCast(&n_val), @sizeOf(u32), 3);
+        self.endEncode1D(enc, pipeline, n);
+    }
+
+    // ── SiLU ──────────────────────────────────────────────────
+
+    /// output[i] = input[i] * sigmoid(input[i])
+    pub fn silu(self: *MetalBackend, input: [*]const f32, output: [*]f32, n: usize) void {
+        self.dispatchUnaryOp(self.pipe_silu, input, output, n);
+    }
+
+    // ── GELU ─────────────────────────────────────────────────
+
+    /// GELU activation: y = 0.5 * x * (1 + tanh(sqrt(2/pi) * (x + 0.044715*x³)))
+    pub fn gelu(self: *MetalBackend, input: [*]const f32, output: [*]f32, n: usize) void {
+        self.dispatchUnaryOp(self.pipe_gelu, input, output, n);
+    }
+
+    // ── SiLU Mul (fused) ──────────────────────────────────────
+
+    /// out[i] = silu(a[i]) * b[i] — fused SwiGLU activation.
+    /// Replaces separate silu + mul dispatches (2 dispatches → 1).
+    pub fn siluMul(self: *MetalBackend, a: [*]const f32, b: [*]const f32, out: [*]f32, n: usize) void {
+        self.dispatchBinaryOp(self.pipe_silu_mul, a, b, out, n);
+    }
+
+    // ── Per-Head RMS Norm ──────────────────────────────────────
+
+    /// In-place rmsNorm applied to n_heads independent heads (each of head_dim
+    /// elements), using the same weight vector. Single dispatch:
+    /// n_heads threadgroups × head_dim threads (capped at 256).
+    pub fn rmsNormMulti(self: *MetalBackend, data: [*]f32, weight: [*]const f32, n_heads: usize, head_dim: usize, eps: f32) void {
+        const total = n_heads * head_dim;
+        const d_ref = self.getBufRef(@ptrCast(data), total * @sizeOf(f32));
+        const w_ref = self.getBufRef(@ptrCast(weight), head_dim * @sizeOf(f32));
+
+        var hd_val: u32 = @intCast(head_dim);
+        var eps_val: f32 = eps;
+
+        const tg = @min(threadgroup_size, head_dim);
+        const enc = self.getEncoder(self.pipe_rms_norm_fused);
+        setBuf(enc, d_ref, 0); // input
+        setBuf(enc, w_ref, 1); // weight
+        setBuf(enc, d_ref, 2); // output (in-place)
+        setBytes(enc, @ptrCast(&hd_val), @sizeOf(u32), 3);
+        setBytes(enc, @ptrCast(&eps_val), @sizeOf(f32), 4);
+        self.endEncodeThreadgroups(enc, n_heads, tg);
+    }
+
+    // ── Sigmoid Mul ──────────────────────────────────────────
+
+    /// data[i] *= sigmoid(gate[i]) — in-place sigmoid-gated multiply.
+    pub fn sigmoidMul(self: *MetalBackend, data: [*]f32, gate: [*]const f32, n: usize) void {
+        self.dispatchBinaryOp(self.pipe_sigmoid_mul, @ptrCast(data), gate, data, n);
+    }
+
+    // ── Deinterleave ─────────────────────────────────────────
+
+    /// Split interleaved pairs: input[n_pairs * 2 * stride] → out_a[n_pairs * stride] + out_b[n_pairs * stride].
+    /// For each pair h: out_a[h*stride..+stride] = input[h*2*stride..+stride],
+    ///                  out_b[h*stride..+stride] = input[h*2*stride+stride..+stride].
+    pub fn deinterleave(self: *MetalBackend, input: [*]const f32, out_a: [*]f32, out_b: [*]f32, stride: usize, n_pairs: usize) void {
+        const total = n_pairs * stride;
+        const in_ref = self.getBufRef(@ptrCast(input), n_pairs * 2 * stride * @sizeOf(f32));
+        const a_ref = self.getBufRef(@ptrCast(out_a), total * @sizeOf(f32));
+        const b_ref = self.getBufRef(@ptrCast(out_b), total * @sizeOf(f32));
+
+        var stride_val: u32 = @intCast(stride);
+        var pairs_val: u32 = @intCast(n_pairs);
+
+        const enc = self.getEncoder(self.pipe_deinterleave);
+        setBuf(enc, in_ref, 0);
+        setBuf(enc, a_ref, 1);
+        setBuf(enc, b_ref, 2);
+        setBytes(enc, @ptrCast(&stride_val), @sizeOf(u32), 3);
+        setBytes(enc, @ptrCast(&pairs_val), @sizeOf(u32), 4);
+        self.endEncode1D(enc, self.pipe_deinterleave, total);
+    }
+
+    // ── Add ───────────────────────────────────────────────────
+
+    /// out[i] = a[i] + b[i]
+    pub fn add(self: *MetalBackend, a: [*]const f32, b: [*]const f32, out: [*]f32, n: usize) void {
+        self.dispatchBinaryOp(self.pipe_add, a, b, out, n);
+    }
+
+    // ── Mul ───────────────────────────────────────────────────
+
+    /// out[i] = a[i] * b[i]
+    pub fn mul(self: *MetalBackend, a: [*]const f32, b: [*]const f32, out: [*]f32, n: usize) void {
+        self.dispatchBinaryOp(self.pipe_mul, a, b, out, n);
+    }
+
+    // ── Softmax ───────────────────────────────────────────────
+
+    /// In-place softmax.
+    /// Three passes: (1) find max, (2) exp(x - max) and sum, (3) divide by sum.
+    /// All three passes share one command buffer — single commit instead of three.
+    /// Uses scratch_buf as two adjacent f32 slots: [0..4]=max, [4..8]=sum.
+    pub fn softmax(self: *MetalBackend, data: [*]f32, n: usize) void {
+        // For very small n the GPU dispatch overhead isn't worth it.
+        if (n < softmax_cpu_threshold) {
+            var cpu = self.cpuFallback();
+            cpu.softmax(data, n);
+            return;
+        }
+
+        const d_ref = self.getBufRef(@ptrCast(data), n * @sizeOf(f32));
+
+        var n_val: u32 = @intCast(n);
+
+        // Pass 1: max reduction → scratch_buf offset 0
+        const enc1 = self.getEncoder(self.pipe_softmax_max);
+        setBuf(enc1, d_ref, 0);
+        setBufferOffset(enc1, self.scratch_buf, 0, 1); // max_out
+        setBytes(enc1, @ptrCast(&n_val), @sizeOf(u32), 2);
+        self.endEncodeOneThreadgroup(enc1, threadgroup_size);
+
+        // Pass 2: exp(x - max) in-place, sum → scratch_buf offset 4
+        // (same command buffer — no commit between passes)
+        const enc2 = self.getEncoder(self.pipe_softmax_exp_sum);
+        setBuf(enc2, d_ref, 0);
+        setBufferOffset(enc2, self.scratch_buf, 0, 1); // max_buf  (read)
+        setBufferOffset(enc2, self.scratch_buf, 4, 2); // sum_out  (write)
+        setBytes(enc2, @ptrCast(&n_val), @sizeOf(u32), 3);
+        self.endEncodeOneThreadgroup(enc2, threadgroup_size);
+
+        // Pass 3: divide by sum
+        // (same command buffer — no commit between passes)
+        const enc3 = self.getEncoder(self.pipe_softmax_div);
+        setBuf(enc3, d_ref, 0);
+        setBufferOffset(enc3, self.scratch_buf, 4, 1); // sum_buf
+        setBytes(enc3, @ptrCast(&n_val), @sizeOf(u32), 2);
+        self.endEncode1D(enc3, self.pipe_softmax_div, n);
+
+    }
+
+    // ── RoPE ──────────────────────────────────────────────────
+
+    /// Apply rotary position embedding in-place.
+    /// Grid = n_heads × rope_dim / 2 threads; each thread rotates one (re, im) pair.
+    pub fn rope(self: *MetalBackend, x: [*]f32, pos: usize, n_heads: usize, head_dim: usize, rope_dim: usize, theta: f32) void {
+        const total = n_heads * head_dim;
+        const x_ref = self.getBufRef(@ptrCast(x), total * @sizeOf(f32));
+
+        var pos_val: u32 = @intCast(pos);
+        var nh_val: u32 = @intCast(n_heads);
+        var hd_val: u32 = @intCast(head_dim);
+        var rd_val: u32 = @intCast(rope_dim);
+        var theta_val: f32 = theta;
+
+        const grid = n_heads * rope_dim / 2;
+        const enc = self.getEncoder(self.pipe_rope);
+        setBuf(enc, x_ref, 0);
+        setBytes(enc, @ptrCast(&pos_val), @sizeOf(u32), 1);
+        setBytes(enc, @ptrCast(&nh_val), @sizeOf(u32), 2);
+        setBytes(enc, @ptrCast(&hd_val), @sizeOf(u32), 3);
+        setBytes(enc, @ptrCast(&rd_val), @sizeOf(u32), 4);
+        setBytes(enc, @ptrCast(&theta_val), @sizeOf(f32), 5);
+        self.endEncode1D(enc, self.pipe_rope, grid);
+    }
+
+    // ── Embedding lookup — CPU fallback ───────────────────────
+
+    /// Embedding lookup is a single-row read; CPU is faster than GPU dispatch overhead.
+    pub fn embLookup(self: *MetalBackend, table: TensorData, token_id: u32, output: [*]f32, dim: usize) void {
+        var cpu = self.cpuFallback();
+        cpu.embLookup(table, token_id, output, dim);
+    }
+
+    // ── L2 Norm ───────────────────────────────────────────────
+
+    /// L2 normalize in-place.
+    /// Two-pass: (1) sum-of-squares via rms_norm_ss kernel, (2) l2_norm_apply.
+    /// Both passes share one command buffer — single commit instead of two.
+    pub fn l2Norm(self: *MetalBackend, x: [*]f32, n: usize, eps: f32) void {
+        const x_ref = self.getBufRef(@ptrCast(x), n * @sizeOf(f32));
+
+        var n_val: u32 = @intCast(n);
+        var eps_val: f32 = eps;
+
+        // Pass 1: sum of squares → scratch_buf[0]
+        const enc1 = self.getEncoder(self.pipe_rms_ss);
+        setBuf(enc1, x_ref, 0);
+        setBuffer(enc1, self.scratch_buf, 1);
+        setBytes(enc1, @ptrCast(&n_val), @sizeOf(u32), 2);
+        self.endEncodeOneThreadgroup(enc1, threadgroup_size);
+
+        // Pass 2: normalize in-place
+        // (same command buffer — no commit between passes)
+        const enc2 = self.getEncoder(self.pipe_l2_apply);
+        setBuf(enc2, x_ref, 0);
+        setBuffer(enc2, self.scratch_buf, 1);
+        setBytes(enc2, @ptrCast(&n_val), @sizeOf(u32), 2);
+        setBytes(enc2, @ptrCast(&eps_val), @sizeOf(f32), 3);
+        self.endEncode1D(enc2, self.pipe_l2_apply, n);
+    }
+
+    // ── NVFP4 SafeTensors GEMV ─────────────────────────────────
+
+    /// NVFP4 SafeTensors GEMV with GPU acceleration.
+    /// Weight nibbles and FP8 E4M3 scales are in separate buffers.
+    /// One threadgroup per output row, 256 threads per threadgroup.
+    pub fn gemvNvfp4St(self: *MetalBackend, x: [*]const f32, weight: [*]const u8, scale: [*]const u8, y: [*]f32, n: usize, k: usize) void {
+        const w_bytes = n * (k / 2);
+        const s_bytes = n * (k / 16);
+        const x_ref = self.getBufRef(@ptrCast(x), k * @sizeOf(f32));
+        const w_ref = self.getBufRef(@ptrCast(weight), w_bytes);
+        const s_ref = self.getBufRef(@ptrCast(scale), s_bytes);
+        const y_ref = self.getBufRef(@ptrCast(y), n * @sizeOf(f32));
+
+        var n_val: u32 = @intCast(n);
+        var k_val: u32 = @intCast(k);
+
+        const enc = self.getEncoder(self.pipe_gemv_nvfp4_st);
+        setBuf(enc, x_ref, 0);
+        setBuf(enc, w_ref, 1);
+        setBuf(enc, s_ref, 2);
+        setBuf(enc, y_ref, 3);
+        setBytes(enc, @ptrCast(&n_val), @sizeOf(u32), 4);
+        setBytes(enc, @ptrCast(&k_val), @sizeOf(u32), 5);
+        self.endEncodeThreadgroups(enc, n, threadgroup_size);
+    }
+
+    /// MLX affine 4-bit quantized GEMV on GPU.
+    /// Dispatches to a native Metal kernel for the 3-buffer MLX-Q layout
+    /// (packed u32 weights + bf16 scales + bf16 biases, group_size=64).
+    pub fn gemvMlxQ(self: *MetalBackend, x: [*]const f32, weight: [*]const u8, scales: [*]const u8, biases: [*]const u8, y: [*]f32, n: usize, k: usize, bits: u32) void {
+        if (bits != 4) {
+            var cpu = self.cpuFallback();
+            cpu.gemvMlxQ(x, weight, scales, biases, y, n, k, bits);
+            return;
+        }
+        const gpr = (k + 63) / 64;
+        const wpg: usize = 8;
+        const w_bytes = n * gpr * wpg * @sizeOf(u32);
+        const sb_bytes = n * gpr * 2;
+
+
+        const x_ref = self.getBufRef(@ptrCast(x), k * @sizeOf(f32));
+        const w_ref = self.getBufRef(@ptrCast(weight), w_bytes);
+        const s_ref = self.getBufRef(@ptrCast(scales), sb_bytes);
+        const b_ref = self.getBufRef(@ptrCast(biases), sb_bytes);
+        const y_ref = self.getBufRef(@ptrCast(y), n * @sizeOf(f32));
+
+        var n_val: u32 = @intCast(n);
+        var k_val: u32 = @intCast(k);
+
+        const enc = self.getEncoder(self.pipe_gemv_mlx_q4);
+        setBuf(enc, x_ref, 0);
+        setBuf(enc, w_ref, 1);
+        setBuf(enc, s_ref, 2);
+        setBuf(enc, b_ref, 3);
+        setBuf(enc, y_ref, 4);
+        setBytes(enc, @ptrCast(&n_val), @sizeOf(u32), 5);
+        setBytes(enc, @ptrCast(&k_val), @sizeOf(u32), 6);
+        self.endEncodeThreadgroups(enc, n, gemvThreadgroupSize(.mlx_q, k));
+    }
+
+    /// Batched GEMV: dispatches all ops sharing input x without inter-dispatch
+    /// memory barriers. Only a single barrier is placed after the last dispatch.
+    /// This allows the GPU to overlap independent GEMV dispatches.
+    pub fn gemvMulti(self: *MetalBackend, x: [*]const f32, ops: []const backend_mod.GemvOp, k: usize) void {
+        if (ops.len == 0) return;
+        const x_ref = self.getBufRef(@ptrCast(x), k * @sizeOf(f32));
+        var k_val: u32 = @intCast(k);
+
+        for (ops, 0..) |op, idx| {
+            const pipeline: objc.id = switch (op.w.dtype) {
+                .f32 => self.pipe_gemv_f32,
+                .q8_0 => self.pipe_gemv_q8_0,
+                .q4_0 => self.pipe_gemv_q4_0,
+                .q4_1 => self.pipe_gemv_q4_1,
+                .q4_k => self.pipe_gemv_q4_k,
+                .q5_k => self.pipe_gemv_q5_k,
+                .q6_k => self.pipe_gemv_q6_k,
+                .bf16 => self.pipe_gemv_bf16,
+                .f16 => self.pipe_gemv_f16,
+                .fp8_e4m3 => self.pipe_gemv_fp8_e4m3,
+                .fp8_e5m2 => self.pipe_gemv_fp8_e5m2,
+                else => {
+                    // Unsupported dtype — fall back to sequential for this op
+                    self.gemv(x, op.w, op.y, op.n, k);
+                    continue;
+                },
+            };
+
+            const w_bytes = weightBytes(op.w.dtype, op.n, k);
+            const w_ref = self.getBufRef(@ptrCast(op.w.data), w_bytes);
+            const y_ref = self.getBufRef(@ptrCast(op.y), op.n * @sizeOf(f32));
+
+            var n_val: u32 = @intCast(op.n);
+            const enc = self.getEncoder(pipeline);
+            setBuf(enc, x_ref, 0);
+            setBuf(enc, w_ref, 1);
+            setBuf(enc, y_ref, 2);
+            setBytes(enc, @ptrCast(&n_val), @sizeOf(u32), 3);
+            setBytes(enc, @ptrCast(&k_val), @sizeOf(u32), 4);
+
+            const tg = gemvThreadgroupSize(op.w.dtype, k);
+            const n_groups = gemvThreadgroups(op.w.dtype, op.n);
+            const is_last = (idx == ops.len - 1);
+            if (is_last) {
+                // Final dispatch gets barrier for subsequent reads
+                self.endEncodeThreadgroups(enc, n_groups, tg);
+            } else {
+                // Interior dispatches — no barrier, allow GPU overlap
+                objc.msgSend(void, enc, objc.sel("dispatchThreadgroups:threadsPerThreadgroup:"), .{
+                    objc.MTLSize{ .width = n_groups, .height = 1, .depth = 1 },
+                    objc.MTLSize{ .width = tg, .height = 1, .depth = 1 },
+                });
+            }
+        }
+    }
+
+    // ── Sync ─────────────────────────────────────────────────
+
+    /// Begin a batch of independent GPU dispatches. Suppresses per-dispatch
+    /// memory barriers so the GPU can overlap execution of independent ops.
+    pub fn beginBatch(self: *MetalBackend) void {
+        self.batch_mode = true;
+    }
+
+    /// End a batch and insert a single memory barrier for all preceding dispatches.
+    pub fn endBatch(self: *MetalBackend) void {
+        self.batch_mode = false;
+        if (self.active_enc) |enc|
+            objc.msgSend(void, enc, objc.sel("memoryBarrierWithScope:"), .{barrier_scope_buffers});
+    }
+
+    /// Commit all pending GPU commands and wait for completion.
+    /// Call before CPU code reads from buffers written by GPU ops.
+    /// On Apple Silicon's unified memory, this is the only synchronization
+    /// needed — zero-copy buffers mean no data transfer, just a fence.
+    pub fn sync(self: *MetalBackend) void {
+        self.flush();
+    }
+
+    // ── SDPA ─────────────────────────────────────────────────
+
+    /// Scaled dot-product attention with KV cache append.
+    /// Flushes queued GPU work, appends KV on CPU, then runs CPU SDPA.
+    /// CPU SDPA is negligible for decode; GPU SDPA reserved for future prefill.
+    /// Falls back to CPU for sequences > 4096 or head dims > 256.
+    pub fn sdpa(self: *MetalBackend, q: [*]const f32, keys: []f32, values: []f32, k_new: [*]const f32, v_new: [*]const f32, output: [*]f32, nh: usize, nkv: usize, hd: usize, seq_len: usize, scale: f32) void {
+        // Flush queued GPU work (norm, RoPE, GEMV) so q/k_new/v_new are CPU-visible.
+        self.flush();
+        // CPU SDPA handles KV append + attention. For decode (seq_len << 4096),
+        // CPU SDPA is negligible (~0.1ms). For long prefill, GPU SDPA would help
+        // but requires resolving the encoder overhead issue.
+        var cpu = CpuBackend{ .pool = self.pool };
+        cpu.sdpa(q, keys, values, k_new, v_new, output, nh, nkv, hd, seq_len, scale);
+    }
+
+    /// DeltaNet SSM — all 4 kernels on GPU, no CPU sync per layer.
+    /// GPU handles gate/beta, conv1d, L2 norm, recurrence+gated output.
+    pub fn deltaNet(self: *MetalBackend, conv_in: [*]const f32, conv_out: [*]f32, z_buf: [*]const f32, alpha_buf: [*]const f32, beta_buf: [*]const f32, output: [*]f32, conv_state: [*]f32, ssm_state: []f32, ssm_a: [*]const f32, dt_bias: [*]const f32, conv_w: [*]const f32, ssm_norm_w: [*]const f32, p: backend_mod.DeltaNetParams) void {
+        // GPU DeltaNet: all 4 kernels run on GPU without CPU sync.
+
+        const conv_ch: usize = p.conv_ch;
+        const num_v_heads: usize = p.num_v_heads;
+        const num_k_heads: usize = p.num_k_heads;
+        const head_k_dim: usize = p.head_k_dim;
+        const head_v_dim: usize = p.head_v_dim;
+
+        // ── GPU Kernel 1: gate & beta ──
+        // gate_ref/beta_out_ref alias alpha_ref/beta_ref (in-place overwrite).
+        const alpha_ref = self.getBufRef(@ptrCast(alpha_buf), num_v_heads * @sizeOf(f32));
+        const beta_ref = self.getBufRef(@ptrCast(beta_buf), num_v_heads * @sizeOf(f32));
+        const ssm_a_ref = self.getBufRef(@ptrCast(ssm_a), num_v_heads * @sizeOf(f32));
+        const dt_bias_ref = self.getBufRef(@ptrCast(dt_bias), num_v_heads * @sizeOf(f32));
+        const gate_ref = alpha_ref;
+        const beta_out_ref = beta_ref;
+        {
+            var n_heads_val: u32 = @intCast(num_v_heads);
+            const enc = self.getEncoder(self.pipe_dn_gate_beta);
+            setBuf(enc, alpha_ref, 0);
+            setBuf(enc, beta_ref, 1);
+            setBuf(enc, ssm_a_ref, 2);
+            setBuf(enc, dt_bias_ref, 3);
+            setBuf(enc, gate_ref, 4);
+            setBuf(enc, beta_out_ref, 5);
+            setBytes(enc, @ptrCast(&n_heads_val), @sizeOf(u32), 6);
+            self.endEncodeOneThreadgroup(enc, num_v_heads);
+        }
+
+        // ── GPU Kernel 2: conv1d + SiLU ──
+        const conv_in_ref = self.getBufRef(@ptrCast(conv_in), conv_ch * @sizeOf(f32));
+        const cs_ref = self.getBufRef(@ptrCast(conv_state), (p.d_conv - 1) * conv_ch * @sizeOf(f32));
+        const cw_ref = self.getBufRef(@ptrCast(conv_w), conv_ch * p.d_conv * @sizeOf(f32));
+        const co_ref = self.getBufRef(@ptrCast(conv_out), conv_ch * @sizeOf(f32));
+        {
+            var conv_ch_val: u32 = @intCast(conv_ch);
+            var d_conv_val: u32 = p.d_conv;
+            const enc = self.getEncoder(self.pipe_dn_conv1d);
+            setBuf(enc, conv_in_ref, 0);
+            setBuf(enc, cs_ref, 1);
+            setBuf(enc, cw_ref, 2);
+            setBuf(enc, co_ref, 3);
+            setBytes(enc, @ptrCast(&conv_ch_val), @sizeOf(u32), 4);
+            setBytes(enc, @ptrCast(&d_conv_val), @sizeOf(u32), 5);
+            const n_groups = (conv_ch + threadgroup_size - 1) / threadgroup_size;
+            self.endEncodeThreadgroups(enc, n_groups, threadgroup_size);
+        }
+
+        // ── GPU Kernel 3: L2 norm Q & K ──
+        {
+            var hd_val: u32 = @intCast(head_k_dim);
+            var nk_val: u32 = @intCast(num_k_heads);
+            var eps_val: f32 = p.rms_eps;
+            var q_off_val: u32 = 0;
+            var k_off_val: u32 = @intCast(num_k_heads * head_k_dim);
+            const enc = self.getEncoder(self.pipe_dn_l2_norm);
+            setBuf(enc, co_ref, 0);
+            setBytes(enc, @ptrCast(&hd_val), @sizeOf(u32), 1);
+            setBytes(enc, @ptrCast(&nk_val), @sizeOf(u32), 2);
+            setBytes(enc, @ptrCast(&eps_val), @sizeOf(f32), 3);
+            setBytes(enc, @ptrCast(&q_off_val), @sizeOf(u32), 4);
+            setBytes(enc, @ptrCast(&k_off_val), @sizeOf(u32), 5);
+            const l2_tg_size: usize = @min(threadgroup_size, @max(32, (head_k_dim + 31) & ~@as(usize, 31)));
+            self.endEncodeThreadgroups(enc, 2 * num_k_heads, l2_tg_size);
+        }
+
+        // ── GPU Kernel 4: recurrence + gated output ──
+        // Q/K/V are sub-regions of conv_out — reuse co_ref.buf with byte offsets
+        // so GPU writes from conv1d + L2 norm are visible (same Metal buffer).
+        {
+            const k_byte_off = num_k_heads * head_k_dim * @sizeOf(f32);
+            const v_byte_off = 2 * num_k_heads * head_k_dim * @sizeOf(f32);
+            const q_ref = co_ref;
+            const k_ref = BufRef{ .buf = co_ref.buf, .offset = co_ref.offset + k_byte_off };
+            const v_ref = BufRef{ .buf = co_ref.buf, .offset = co_ref.offset + v_byte_off };
+            const state_ref = self.getBufRef(@ptrCast(ssm_state.ptr), ssm_state.len * @sizeOf(f32));
+            const z_ref = self.getBufRef(@ptrCast(z_buf), num_v_heads * head_v_dim * @sizeOf(f32));
+            const nw_ref = self.getBufRef(@ptrCast(ssm_norm_w), head_v_dim * @sizeOf(f32));
+            const out_ref = self.getBufRef(@ptrCast(output), num_v_heads * head_v_dim * @sizeOf(f32));
+
+            var hvd_val: u32 = @intCast(head_v_dim);
+            var hkd_val: u32 = @intCast(head_k_dim);
+            var nk_val: u32 = @intCast(num_k_heads);
+            var nv_val: u32 = @intCast(num_v_heads);
+            var qs_val: f32 = p.q_scale;
+            var eps_val: f32 = p.rms_eps;
+
+            const enc = self.getEncoder(self.pipe_dn_recurrence);
+            setBuf(enc, q_ref, 0);
+            setBuf(enc, k_ref, 1);
+            setBuf(enc, v_ref, 2);
+            setBuf(enc, state_ref, 3);
+            setBuf(enc, gate_ref, 4);
+            setBuf(enc, beta_out_ref, 5);
+            setBuf(enc, z_ref, 6);
+            setBuf(enc, nw_ref, 7);
+            setBuf(enc, out_ref, 8);
+            setBytes(enc, @ptrCast(&hvd_val), @sizeOf(u32), 9);
+            setBytes(enc, @ptrCast(&hkd_val), @sizeOf(u32), 10);
+            setBytes(enc, @ptrCast(&nk_val), @sizeOf(u32), 11);
+            setBytes(enc, @ptrCast(&nv_val), @sizeOf(u32), 12);
+            setBytes(enc, @ptrCast(&qs_val), @sizeOf(f32), 13);
+            setBytes(enc, @ptrCast(&eps_val), @sizeOf(f32), 14);
+            const rec_tg_size: usize = @min(threadgroup_size, @max(32, (head_v_dim + 31) & ~@as(usize, 31)));
+            self.endEncodeThreadgroups(enc, num_v_heads, rec_tg_size);
+        }
+    }
+};
+
+// ── Tests ─────────────────────────────────────────────────────────
+
+const builtin = @import("builtin");
+
+test "Metal backend init and silu" {
+    if (comptime builtin.os.tag != .macos) return error.SkipZigTest;
+    const allocator = std.testing.allocator;
+    var metal = MetalBackend.init(allocator) catch return; // skip if no GPU
+    defer metal.deinit();
+
+    var input = [_]f32{ 0.0, 1.0, -1.0, 2.0 };
+    var output: [4]f32 = undefined;
+    metal.silu(&input, &output, 4);
+    metal.sync();
+
+    // SiLU(0) = 0
+    try std.testing.expectApproxEqAbs(@as(f32, 0.0), output[0], 0.01);
+    // SiLU(1) ≈ 0.731
+    try std.testing.expectApproxEqAbs(@as(f32, 0.731), output[1], 0.02);
+    // SiLU(-1) ≈ -0.269
+    try std.testing.expectApproxEqAbs(@as(f32, -0.269), output[2], 0.02);
+}
+
+test "Metal backend rmsNorm" {
+    if (comptime builtin.os.tag != .macos) return error.SkipZigTest;
+    const allocator = std.testing.allocator;
+    var metal = MetalBackend.init(allocator) catch return;
+    defer metal.deinit();
+
+    var input = [_]f32{ 1.0, 2.0, 3.0, 4.0 };
+    var weight = [_]f32{ 1.0, 1.0, 1.0, 1.0 };
+    var output: [4]f32 = undefined;
+    metal.rmsNorm(&input, &weight, &output, 4, 1e-6);
+    metal.sync();
+
+    // RMS = sqrt((1+4+9+16)/4) = sqrt(7.5) ≈ 2.7386
+    // output[0] = 1 / 2.7386 ≈ 0.3651
+    try std.testing.expectApproxEqAbs(@as(f32, 0.365), output[0], 0.05);
+}
+
+test "Metal backend add" {
+    if (comptime builtin.os.tag != .macos) return error.SkipZigTest;
+    const allocator = std.testing.allocator;
+    var metal = MetalBackend.init(allocator) catch return;
+    defer metal.deinit();
+
+    var a = [_]f32{ 1.0, 2.0, 3.0, 4.0 };
+    var b = [_]f32{ 10.0, 20.0, 30.0, 40.0 };
+    var output: [4]f32 = undefined;
+    metal.add(&a, &b, &output, 4);
+    metal.sync();
+
+    try std.testing.expectApproxEqAbs(@as(f32, 11.0), output[0], 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 22.0), output[1], 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 33.0), output[2], 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 44.0), output[3], 0.001);
+}
+
+test "Metal backend gemvNvfp4St basic" {
+    if (comptime builtin.os.tag != .macos) return error.SkipZigTest;
+    const allocator = std.testing.allocator;
+    var metal = MetalBackend.init(allocator) catch return;
+    defer metal.deinit();
+
+    // 1x16 GEMV: one output row, 16 input elements (one group).
+    // x = [1.0, 0, 0, ..., 0]
+    var x = [16]f32{ 1.0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+    // nibble 0x2 = e2m1(2) = 1.0. byte[0] low nibble = elem[0] = 1.0.
+    var weight = [8]u8{ 0x02, 0, 0, 0, 0, 0, 0, 0 };
+    // scale = 0x38 = FP8 E4M3 for 1.0
+    var scale = [1]u8{0x38};
+    var y = [1]f32{0};
+    metal.gemvNvfp4St(&x, &weight, &scale, &y, 1, 16);
+    metal.sync();
+    // x[0]=1.0 * e2m1(2)=1.0 * fp8(0x38)=1.0 = 1.0
+    try std.testing.expectApproxEqAbs(@as(f32, 1.0), y[0], 1e-6);
+}
+
+test "Metal backend gemvNvfp4St multi-row" {
+    if (comptime builtin.os.tag != .macos) return error.SkipZigTest;
+    const allocator = std.testing.allocator;
+    var metal = MetalBackend.init(allocator) catch return;
+    defer metal.deinit();
+
+    // 2x16 GEMV: two output rows.
+    var x = [16]f32{ 1.0, 1.0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+    // Row 0: byte[0] = 0x42 → low=2 (1.0), high=4 (2.0)
+    // Row 1: byte[0] = 0x24 → low=4 (2.0), high=2 (1.0)
+    var weight = [16]u8{ 0x42, 0, 0, 0, 0, 0, 0, 0, 0x24, 0, 0, 0, 0, 0, 0, 0 };
+    var scale = [2]u8{ 0x38, 0x38 }; // both rows scale = 1.0
+    var y = [2]f32{ 0, 0 };
+    metal.gemvNvfp4St(&x, &weight, &scale, &y, 2, 16);
+    metal.sync();
+    // Row 0: 1.0*1.0 + 1.0*2.0 = 3.0
+    try std.testing.expectApproxEqAbs(@as(f32, 3.0), y[0], 1e-6);
+    // Row 1: 1.0*2.0 + 1.0*1.0 = 3.0
+    try std.testing.expectApproxEqAbs(@as(f32, 3.0), y[1], 1e-6);
+}
+
+test "Metal backend gemvMlxQ4 basic" {
+    if (comptime builtin.os.tag != .macos) return error.SkipZigTest;
+    const allocator = std.testing.allocator;
+    var metal = MetalBackend.init(allocator) catch return;
+    defer metal.deinit();
+
+    // 1x64 GEMV: one output row, 64 input elements (one group).
+    // x = [1.0, 1.0, 0, 0, ...] — first two elements set
+    var x: [64]f32 = [_]f32{0} ** 64;
+    x[0] = 1.0;
+    x[1] = 1.0;
+    // Weight: u32 word[0] nibbles: elem[0]=3, elem[1]=5, rest=0.
+    // word[0] = 0x00000053 (nibble[0]=3, nibble[1]=5)
+    var weight: [8]u32 = [_]u32{0} ** 8;
+    weight[0] = 0x53; // nibble[0]=3, nibble[1]=5
+    // Scale = bf16 1.0 = 0x3F80 (lo=0x80, hi=0x3F)
+    var sc = [2]u8{ 0x80, 0x3F };
+    // Bias = bf16 0.5 = 0x3F00 (lo=0x00, hi=0x3F)
+    var bi = [2]u8{ 0x00, 0x3F };
+    var y = [1]f32{0};
+    // y = scale*sum(x*q) + bias*sum(x)
+    //   = 1.0*(1.0*3 + 1.0*5) + 0.5*(1.0+1.0)
+    //   = 8.0 + 1.0 = 9.0
+    metal.gemvMlxQ(&x, @ptrCast(&weight), @ptrCast(&sc), @ptrCast(&bi), &y, 1, 64, 4);
+    metal.sync();
+    try std.testing.expectApproxEqAbs(@as(f32, 9.0), y[0], 1e-4);
+}
+
+test "Metal backend gemvMlxQ4 matches CPU" {
+    if (comptime builtin.os.tag != .macos) return error.SkipZigTest;
+    const allocator = std.testing.allocator;
+    var metal = MetalBackend.init(allocator) catch return;
+    defer metal.deinit();
+
+    const mlx_ops = @import("../ops/mlx.zig");
+
+    // Test with k=128 (2 groups), n=4 rows
+    const k = 128;
+    const n = 4;
+    const gpr = (k + 63) / 64; // = 2
+    const wpg = 8;
+
+    // Fill x with a pattern
+    var x: [k]f32 = undefined;
+    for (0..k) |i| x[i] = @as(f32, @floatFromInt(i % 7)) * 0.3 - 1.0;
+
+    // Fill weight with a pattern (u32 words, 4 nibbles give values 0-15)
+    var weight: [n * gpr * wpg]u32 = undefined;
+    for (0..weight.len) |i| weight[i] = @truncate((i * 0x37) ^ 0x1234);
+
+    // Fill scales and biases (bf16 as u16)
+    var sc16: [n * gpr]u16 = undefined;
+    var bi16: [n * gpr]u16 = undefined;
+    for (0..sc16.len) |i| {
+        sc16[i] = 0x3C00 + @as(u16, @truncate(i * 0x80)); // small positive bf16
+        bi16[i] = 0x3800 + @as(u16, @truncate(i * 0x40));
+    }
+
+    // CPU reference
+    var y_cpu: [n]f32 = undefined;
+    mlx_ops.mlxGemvRaw(&x, &weight, &sc16, &bi16, &y_cpu, n, k, 4);
+
+    // Metal
+    var y_metal: [n]f32 = undefined;
+    metal.gemvMlxQ(&x, @ptrCast(&weight), @ptrCast(&sc16), @ptrCast(&bi16), &y_metal, n, k, 4);
+    metal.sync();
+
+    for (0..n) |i| {
+        try std.testing.expectApproxEqRel(y_cpu[i], y_metal[i], 1e-3);
+    }
+}
+
+test "Metal backend gemvMlxQ4 large matrix" {
+    if (comptime builtin.os.tag != .macos) return error.SkipZigTest;
+    const al = std.testing.allocator;
+    var metal = MetalBackend.init(al) catch return;
+    defer metal.deinit();
+    const mlx_ops = @import("../ops/mlx.zig");
+
+    const k = 2560;
+    const n = 64;
+    const gpr = (k + 63) / 64; // 40
+    const wpg = 8;
+
+    const x = try al.alloc(f32, k);
+    defer al.free(x);
+    const weight = try al.alloc(u32, n * gpr * wpg);
+    defer al.free(weight);
+    const sc16 = try al.alloc(u16, n * gpr);
+    defer al.free(sc16);
+    const bi16 = try al.alloc(u16, n * gpr);
+    defer al.free(bi16);
+
+    // Fill with deterministic pattern
+    for (0..k) |i| x[i] = @as(f32, @floatFromInt(i % 13)) * 0.2 - 1.2;
+    for (0..weight.len) |i| weight[i] = @truncate((i *% 0xDEAD) ^ 0x1234ABCD);
+    for (0..sc16.len) |i| sc16[i] = 0x3C00 +% @as(u16, @truncate(i *% 0x37)); // various bf16
+    for (0..bi16.len) |i| bi16[i] = 0xB800 +% @as(u16, @truncate(i *% 0x23));
+
+    const y_cpu = try al.alloc(f32, n);
+    defer al.free(y_cpu);
+    const y_metal = try al.alloc(f32, n);
+    defer al.free(y_metal);
+
+    mlx_ops.mlxGemvRaw(x.ptr, weight.ptr, sc16.ptr, bi16.ptr, y_cpu.ptr, n, k, 4);
+    metal.gemvMlxQ(x.ptr, @ptrCast(weight.ptr), @ptrCast(sc16.ptr), @ptrCast(bi16.ptr), y_metal.ptr, n, k, 4);
+    metal.sync();
+
+    var non_finite_count: usize = 0;
+    for (0..n) |i| {
+        if (!std.math.isFinite(y_cpu[i]) or !std.math.isFinite(y_metal[i])) {
+            non_finite_count += 1;
+            continue;
+        }
+        try std.testing.expectApproxEqRel(y_cpu[i], y_metal[i], 1e-3);
+    }
+    // Ensure the test isn't vacuous — at most a few non-finite values from random data
+    try std.testing.expect(non_finite_count < n / 2);
+}
