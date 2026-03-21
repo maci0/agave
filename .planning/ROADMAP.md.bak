@@ -78,13 +78,7 @@ Plans:
 4. KV pages automatically demote from VRAM to RAM when VRAM budget exceeded (configurable --kv-ram-budget), and promote back with LRU eviction
 5. Zero-copy KV access works on all backends (Metal newBufferWithBytesNoCopy for RAM tier, UMA platforms avoid upload for RAM-resident KV)
 
-**Plans**: 4 plans in 2 waves
-
-Plans:
-- [x] 03-01-PLAN.md — RadixAttention integration with cache-aware scheduling (wave 1)
-- [x] 03-02-PLAN.md — Tiered KV cache foundation (VRAM + RAM tiers) (wave 1)
-- [x] 03-03-PLAN.md — SSD tier with async prefetch (wave 2, depends on 03-02)
-- [x] 03-04-PLAN.md — Zero-copy tier access per backend + CLI flags (wave 2, depends on 03-02)
+**Plans**: TBD
 
 ---
 
@@ -100,7 +94,7 @@ Plans:
 |-------|----------------|--------|-----------|
 | 1. Correctness Foundation | 7/7 | Complete | 2026-03-22 |
 | 2. Production Serving | 3/3 | Complete | 2026-03-21 |
-| 3. Memory Optimization | 2/4 | In Progress|  |
+| 3. Memory Optimization | 0/? | Not started | - |
 | 4. Multi-GPU Parallelism | - | Backlog | - |
 
 ---

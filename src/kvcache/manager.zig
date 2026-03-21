@@ -73,6 +73,10 @@ pub const CacheBlock = struct {
     used: u16 = 0,
     /// Reference count for copy-on-write sharing.
     ref_count: u16 = 1,
+    /// Frequency tracking for eviction policy.
+    access_count: u32 = 0,
+    /// Last access timestamp for LRU within tier.
+    last_access_ms: i64 = 0,
 };
 
 /// Per-sequence metadata: which blocks hold this sequence's KV data.
@@ -151,6 +155,42 @@ pub const PagedKvCache = struct {
     /// Number of free blocks available.
     pub fn freeCount(self: *const PagedKvCache) usize {
         return self.free_list.items.len;
+    }
+
+    /// Evict the coldest block based on frequency × cost metric.
+    /// Per decision D-03: trigger when free blocks < 10% of total.
+    /// Per decision D-05: shared prefixes (ref_count > 1) get 100× cost multiplier.
+    /// Returns the evicted block ID, or error if no evictable blocks found.
+    pub fn evictColdestBlock(self: *PagedKvCache) !u32 {
+        var min_score: f32 = std.math.floatMax(f32);
+        var victim_id: u32 = 0;
+        var found_victim = false;
+
+        for (self.blocks, 0..) |*blk, id| {
+            if (blk.ref_count == 0) continue; // Skip free blocks
+
+            // Per D-05: shared prefixes (ref_count > 1) get 100× cost multiplier
+            const cost: f32 = if (blk.ref_count > 1) 100.0 else 1.0;
+            const score = @as(f32, @floatFromInt(blk.access_count)) * cost;
+
+            if (score < min_score) {
+                min_score = score;
+                victim_id = @intCast(id);
+                found_victim = true;
+            }
+        }
+
+        if (!found_victim) {
+            return error.NoEvictableBlocks;
+        }
+
+        // Free the victim block
+        self.blocks[victim_id].ref_count = 0;
+        self.blocks[victim_id].used = 0;
+        self.blocks[victim_id].access_count = 0;
+        try self.free_list.append(self.allocator, victim_id);
+
+        return victim_id;
     }
 
     /// Free all cache blocks and the free list.

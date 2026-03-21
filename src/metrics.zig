@@ -31,6 +31,12 @@ pub const Metrics = struct {
     latency_inf: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
     latency_sum: std.atomic.Value(u64) = std.atomic.Value(u64).init(0), // sum of all latencies (for avg)
 
+    // Prefix cache metrics
+    kv_cache_hits: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
+    kv_cache_misses: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
+    prefix_tokens_reused: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
+    prefix_tokens_total: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
+
     /// Increment total request counter.
     pub fn recordRequest(self: *Metrics) void {
         _ = self.requests_total.fetchAdd(1, .monotonic);
@@ -92,6 +98,18 @@ pub const Metrics = struct {
         self.kv_blocks_total.store(total, .monotonic);
     }
 
+    /// Record a cache hit (prefix match found in RadixTree).
+    pub fn recordCacheHit(self: *Metrics, prefix_len: u32) void {
+        _ = self.kv_cache_hits.fetchAdd(1, .monotonic);
+        _ = self.prefix_tokens_reused.fetchAdd(prefix_len, .monotonic);
+    }
+
+    /// Record a cache miss (no prefix match found).
+    pub fn recordCacheMiss(self: *Metrics, total_len: u32) void {
+        _ = self.kv_cache_misses.fetchAdd(1, .monotonic);
+        _ = self.prefix_tokens_total.fetchAdd(total_len, .monotonic);
+    }
+
     /// Render metrics in Prometheus text format.
     pub fn renderPrometheus(self: *const Metrics, writer: anytype) !void {
         // Counters
@@ -142,6 +160,24 @@ pub const Metrics = struct {
         try writer.print("agave_request_duration_seconds_bucket{{le=\"+Inf\"}} {d}\n", .{self.latency_inf.load(.monotonic)});
         try writer.print("agave_request_duration_seconds_sum {d}\n", .{self.latency_sum.load(.monotonic)});
         try writer.print("agave_request_duration_seconds_count {d}\n", .{self.requests_completed.load(.monotonic)});
+
+        // Prefix cache metrics
+        const hits = self.kv_cache_hits.load(.monotonic);
+        const misses = self.kv_cache_misses.load(.monotonic);
+        const total = hits + misses;
+        const hit_rate: f64 = if (total > 0) @as(f64, @floatFromInt(hits)) / @as(f64, @floatFromInt(total)) else 0.0;
+
+        try writer.writeAll("# HELP agave_kv_cache_hit_rate Ratio of cache hits to total requests\n");
+        try writer.writeAll("# TYPE agave_kv_cache_hit_rate gauge\n");
+        try writer.print("agave_kv_cache_hit_rate {d:.4}\n", .{hit_rate});
+
+        const reused = self.prefix_tokens_reused.load(.monotonic);
+        const total_tokens = self.prefix_tokens_total.load(.monotonic);
+        const reuse_ratio: f64 = if (total_tokens > 0) @as(f64, @floatFromInt(reused)) / @as(f64, @floatFromInt(total_tokens)) else 0.0;
+
+        try writer.writeAll("# HELP agave_prefix_reuse_ratio Fraction of tokens served from cache\n");
+        try writer.writeAll("# TYPE agave_prefix_reuse_ratio gauge\n");
+        try writer.print("agave_prefix_reuse_ratio {d:.4}\n", .{reuse_ratio});
     }
 };
 

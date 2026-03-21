@@ -411,6 +411,45 @@ pub const MetalBackend = struct {
         return .{ .buf = copy_buf, .offset = 0 };
     }
 
+    /// Get Metal buffer wrapping RAM-tier KV block with zero copy.
+    /// On UMA platforms (Apple Silicon), RAM-tier blocks are accessed directly
+    /// by GPU via newBufferWithBytesNoCopy — no copy needed. Host memory and
+    /// VRAM are physically shared.
+    ///
+    /// Uses newBufferWithBytesNoCopy for page-aligned host memory.
+    /// Returns BufRef with offset for non-aligned sub-regions.
+    /// Cached by page-aligned base address — reuses wraps on subsequent calls.
+    pub fn getKvBufRef(self: *MetalBackend, host_ptr: [*]u8, size: usize) !BufRef {
+        const page_aligned_size: usize = 4096; // macOS page size
+        const addr = @intFromPtr(host_ptr);
+
+        // Check if already cached
+        const page_base = addr & ~(page_aligned_size - 1);
+        if (self.buf_cache.get(page_base)) |info| {
+            const offset = addr - page_base;
+            return .{ .buf = info.metal_buf, .offset = offset };
+        }
+
+        // Wrap page-aligned region with newBufferWithBytesNoCopy
+        const page_ptr: [*]u8 = @ptrFromInt(page_base);
+        const offset = addr - page_base;
+        const total_size = size + offset;
+
+        const metal_buf = objc.msgSend(
+            ?objc.id,
+            self.device,
+            objc.sel("newBufferWithBytesNoCopy:length:options:deallocator:"),
+            .{ page_ptr, total_size, @as(objc.NSUInteger, 0), @as(?objc.id, null) },
+        );
+
+        if (metal_buf == null) return error.MetalBufferCreationFailed;
+
+        // Cache by page-aligned base
+        try self.buf_cache.put(page_base, .{ .metal_buf = metal_buf.?, .len = total_size });
+
+        return .{ .buf = metal_buf.?, .offset = offset };
+    }
+
     /// Bind a BufRef (buffer + offset) at the given argument index.
     fn setBuf(enc: objc.id, ref: BufRef, index: u32) void {
         objc.msgSend(void, enc, objc.sel("setBuffer:offset:atIndex:"), .{

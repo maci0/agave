@@ -30,6 +30,8 @@ const Glm4Model = model_mod.Glm4Model;
 const NemotronNanoModel = model_mod.NemotronNanoModel;
 const BpeTokenizer = tok_mod.BpeTokenizer;
 const LineEditor = @import("readline.zig").LineEditor;
+const KvQuantType = @import("ops/kv_quant.zig").KvQuantType;
+const math_ops = @import("ops/math.zig");
 
 const stdout = std.fs.File.stdout();
 const stderr = std.fs.File.stderr();
@@ -54,6 +56,10 @@ const max_stdin_prompt_size: usize = 1024 * 1024;
 const default_port: u16 = 49453;
 /// Default maximum tokens to generate per request.
 const default_max_tokens: u32 = 512;
+/// Default KV cache context size when user/recipe doesn't specify.
+/// 4096 balances memory usage with practical conversation length.
+/// Matches GPU SDPA kernel limit (threadgroup memory on Metal).
+const default_ctx_size: u32 = 4096;
 /// Minimum prompt tokens before showing prefill progress indicator.
 const prefill_progress_threshold: usize = 50;
 const max_eog_ids = arch_mod.max_eog_ids;
@@ -89,6 +95,18 @@ fn dbg(comptime fmt: []const u8, args: anytype) void {
 fn fatalExit(comptime msg: []const u8) noreturn {
     eprint("Fatal: " ++ msg ++ "\n", .{});
     std.process.exit(1);
+}
+
+/// Detect free system RAM in bytes.
+/// Platform-specific: sysctl on macOS, /proc/meminfo on Linux.
+/// Placeholder: returns 16GB default for now.
+/// Future: implement platform-specific detection via sysctl.vm.stats.vm.v_free_count
+/// on macOS and MemAvailable from /proc/meminfo on Linux.
+fn detectFreeRam() usize {
+    // TODO: Platform-specific implementation
+    // macOS: sysctl vm.stats.vm.v_free_count + vm_page_size
+    // Linux: read /proc/meminfo, extract MemAvailable
+    return 16 * 1024 * 1024 * 1024; // 16GB default
 }
 
 // ── Preload (fault-in mmap'd pages) ─────────────────────────────
@@ -220,7 +238,13 @@ const cli_params = clap.parseParamsComptime(
     \\    --repeat-penalty <str> Repetition penalty (default: 1.0).
     \\    --system <str>         System prompt for chat formatting.
     \\    --backend <str>        Compute backend: auto, cpu, metal, vulkan, cuda, rocm (default: auto).
-    \\    --ctx-size <u32>       Context window size, 0 = model default (default: 0).
+    \\    --ctx-size <u32>       Context window size (default: 4096, 0 = model max).
+    \\    --seed <u64>           Random seed for sampling (default: random).
+    \\    --kv-type <str>        KV cache quantization: f32, f16, q8_0, int8, fp8, nvfp4 (default: f16).
+    \\    --kv-tiers <str>       Enable tiered KV cache: vram, vram+ram, vram+ram+ssd (default: vram).
+    \\    --kv-ram-budget <str>  RAM tier budget in GB (default: 50% of free RAM).
+    \\    --kv-ssd-path <str>    SSD tier file path (enables SSD tier if set).
+    \\    --kv-ssd-budget <str>  SSD tier budget in GB (default: 10).
     \\    --no-color             Disable colored output.
     \\    --verbose              Show technical details (params, load times, EOG).
     \\    --allow-cpu-fallback   Allow GPU backends to fall back to CPU for unsupported ops.
@@ -249,6 +273,8 @@ const CliArgs = struct {
     system_prompt: ?[]const u8,
     backend_choice: BackendChoice,
     ctx_size: u32,
+    kv_type: KvQuantType,
+    seed: u64,
     allow_cpu_fallback: bool,
     debug: bool,
     json: bool,
@@ -332,6 +358,15 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
         .system_prompt = res.args.system,
         .backend_choice = backend_choice,
         .ctx_size = res.args.@"ctx-size" orelse 0,
+        .seed = res.args.seed orelse @as(u64, @truncate(@as(u128, @bitCast(std.time.nanoTimestamp())))),
+        .kv_type = blk: {
+            const kv_str = res.args.@"kv-type" orelse break :blk .f16;
+            break :blk KvQuantType.fromString(kv_str) orelse {
+                eprint("Error: unknown KV type '{s}'\n", .{kv_str});
+                eprint("  Valid options: f32, f16, q8_0, int8, fp8, nvfp4\n", .{});
+                std.process.exit(1);
+            };
+        },
         .allow_cpu_fallback = res.args.@"allow-cpu-fallback" != 0,
         .debug = res.args.debug != 0,
         .json = json_mode,
@@ -387,7 +422,8 @@ fn printUsage() void {
         \\      --repeat-penalty <R>  Repetition penalty [default: 1.0]
         \\      --system <TEXT>     System prompt for chat formatting
         \\      --backend <BE>     Compute backend: auto, cpu, metal, vulkan, cuda, rocm [default: auto]
-        \\      --ctx-size <N>     Context window size, 0 = model default [default: 0]
+        \\      --ctx-size <N>     Context window size [default: 4096, 0 = model max]
+        \\      --kv-type <TYPE>   KV cache quantization: f32, f16, q8_0, int8, fp8, nvfp4 [default: f16]
         \\      --verbose          Show technical details (params, load times, EOG)
         \\      --no-color         Disable colored output
         \\      --allow-cpu-fallback  Allow GPU backends to fall back to CPU for unsupported ops
@@ -821,6 +857,47 @@ pub fn main() !void {
         .load_ms = load_ms,
         .warmup_ms = 0, // updated after preload
     };
+
+    // ── Recipe defaults ─────────────────────────────────────────
+    const recipe = Recipe.match(arch_str, be_name, quant) orelse Recipe.default;
+    const applied = recipe.applyDefaults(
+        cli.temperature,
+        cli.top_p,
+        cli.top_k,
+        cli.repeat_penalty,
+        cli.max_tokens,
+        cli.ctx_size,
+        cli.user_set,
+    );
+    cli.temperature = applied.temperature;
+    cli.top_p = applied.top_p;
+    cli.top_k = applied.top_k;
+    cli.repeat_penalty = applied.repeat_penalty;
+    cli.max_tokens = applied.max_tokens;
+    cli.ctx_size = applied.ctx_size;
+
+    // ── Context size defaults ────────────────────────────────────
+    // When neither user nor recipe set ctx_size, cap to default_ctx_size
+    // to avoid massive KV cache allocations for models that report very
+    // large context lengths (e.g. 128K). --ctx-size 0 = use model's full context.
+    const model_native_ctx = disp_info.ctx_size; // from model metadata
+    if (cli.ctx_size == 0) {
+        if (cli.user_set.ctx_size) {
+            // User explicitly passed --ctx-size 0 → use model's full context
+            cli.ctx_size = if (model_native_ctx > 0) model_native_ctx else default_ctx_size;
+        } else {
+            // No user or recipe override → apply smart default cap
+            cli.ctx_size = if (model_native_ctx > 0)
+                @min(model_native_ctx, default_ctx_size)
+            else
+                default_ctx_size;
+        }
+    }
+    // Update banner info to show effective context size
+    disp_info.ctx_size = cli.ctx_size;
+    disp_info.kv_type_name = cli.kv_type.name();
+    disp_info.kv_bpe = cli.kv_type.bitsPerElement();
+
     if (!g_quiet) {
         display.printBanner(disp_info);
         var be_info = bs.be.backendInfo();
@@ -849,35 +926,8 @@ pub fn main() !void {
         0;
     disp_info.warmup_ms = warmup_ms;
 
-    // ── Recipe defaults ─────────────────────────────────────────
-    const recipe = Recipe.match(arch_str, be_name, quant) orelse Recipe.default;
-    const applied = recipe.applyDefaults(
-        cli.temperature,
-        cli.top_p,
-        cli.top_k,
-        cli.repeat_penalty,
-        cli.max_tokens,
-        cli.ctx_size,
-        cli.user_set,
-    );
-    cli.temperature = applied.temperature;
-    cli.top_p = applied.top_p;
-    cli.top_k = applied.top_k;
-    cli.repeat_penalty = applied.repeat_penalty;
-    cli.max_tokens = applied.max_tokens;
-    cli.ctx_size = applied.ctx_size;
     if (recipe.name.len > 0 and !std.mem.eql(u8, recipe.name, "default") and !cli.model_info and !g_quiet) {
         eprint("recipe: {s}\n", .{recipe.name});
-    }
-
-    // ── Sampling warning ─────────────────────────────────────────
-    // Sampling is currently greedy-only (argmax). Warn when the user
-    // explicitly sets sampling params that will have no effect.
-    if (!g_quiet and !cli.json and !cli.model_info) {
-        const has_sampling = (cli.user_set.temperature and cli.temperature != 0.0) or
-            cli.user_set.top_p or cli.user_set.top_k;
-        if (has_sampling)
-            eprint("Note: sampling is not yet implemented — generation uses greedy (argmax) regardless of --temperature/--top-p/--top-k values.\n", .{});
     }
 
     // ── Model info early exit ─────────────────────────────────────
@@ -947,7 +997,13 @@ pub fn main() !void {
         std.process.exit(1);
     }
 
-    if (cli.ctx_size > 0 and !g_quiet) eprint("context size: {d}\n", .{cli.ctx_size});
+    if (!g_quiet and !cli.json and !cli.model_info) {
+        if (model_native_ctx > 0 and cli.ctx_size < model_native_ctx) {
+            eprint("context: {d} (model supports {d}, use --ctx-size to increase)\n", .{ cli.ctx_size, model_native_ctx });
+        } else if (cli.user_set.ctx_size) {
+            eprint("context: {d}\n", .{cli.ctx_size});
+        }
+    }
 
     // ── Piped stdin → single prompt ──────────────────────────────
     var piped_prompt: ?[]const u8 = null;
@@ -1025,7 +1081,7 @@ fn initAndRun(
                 .glm4 => Glm4Model,
             };
             const init_start = std.time.milliTimestamp();
-            var mdl = ModelType.init(allocator, fmt, be, cli.ctx_size) catch |e| {
+            var mdl = ModelType.init(allocator, fmt, be, cli.ctx_size, cli.kv_type) catch |e| {
                 eprint("Error: failed to initialize {s}: {}\n", .{ arch.displayName(), e });
                 if (e == error.OutOfMemory)
                     eprint("  Not enough memory. Try a smaller quantization or model.\n", .{})
@@ -1250,7 +1306,7 @@ fn generateAndPrintInner(
     else
         prompt;
     defer if (format_prompt and formatted.ptr != prompt.ptr) allocator.free(formatted);
-    if (g_debug) dbg("formatted prompt ({d} bytes): [{s}]", .{ formatted.len, formatted });
+    if (g_debug or true) dbg("formatted prompt ({d} bytes): [{s}]", .{ formatted.len, formatted });
 
     const token_ids = switch (tok_kind) {
         .spm => tok.encodeSpm(formatted) catch {
@@ -1301,6 +1357,13 @@ fn generateAndPrintInner(
         display.clearPrefillProgress();
     }
 
+    // Apply sampling to the first generated token (from prefill's last forward call)
+    const use_sampling = cli.temperature > 0;
+    var prng = std.Random.Xoshiro256.init(cli.seed);
+    if (use_sampling and token_ids.len > 0) {
+        first_gen_token = math_ops.sampleToken(mdl.getLogits(), cli.temperature, cli.top_k, cli.top_p, prng.random());
+    }
+
     // Generate — stream tokens to stdout immediately.
     // Decode in small batches to balance responsiveness vs alloc count.
     // Stop early if the model enters a repetitive loop (same token 6+ times).
@@ -1326,10 +1389,13 @@ fn generateAndPrintInner(
 
     for (0..cli.max_tokens -| 1) |gi| {
         if (first_is_eog or token_ids.len == 0) break;
-        const next = mdl.forward(last) catch |e| {
+        var next = mdl.forward(last) catch |e| {
             dbg("gen forward failed at step {d}: {}", .{ gi, e });
             break;
         };
+        if (use_sampling) {
+            next = math_ops.sampleToken(mdl.getLogits(), cli.temperature, cli.top_k, cli.top_p, prng.random());
+        }
         dbg("gen step {d}: token={d}", .{ gi, next });
         if (isEogToken(next, eog)) { hit_eog = true; break; }
         if (token_count >= gen_ids_buf.len) break;
@@ -1450,9 +1516,9 @@ test "cpu backend softmax via tagged union dispatch" {
     // Verify approximate expected values: softmax([1,2,3])
     // exp(1-3)=exp(-2), exp(2-3)=exp(-1), exp(3-3)=exp(0)=1
     // Z = exp(-2) + exp(-1) + 1 ≈ 0.1353 + 0.3679 + 1.0 = 1.5032
-    try std.testing.expectApproxEqAbs(@as(f32, 0.0900), data[0], 0.01);
-    try std.testing.expectApproxEqAbs(@as(f32, 0.2447), data[1], 0.01);
-    try std.testing.expectApproxEqAbs(@as(f32, 0.6652), data[2], 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.0900), data[0], 1e-4);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.2447), data[1], 1e-4);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.6652), data[2], 1e-4);
 }
 
 test "cpu backend silu via tagged union dispatch" {

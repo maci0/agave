@@ -916,6 +916,49 @@ pub const CudaBackend = struct {
         allocator.free(slice);
     }
 
+    /// Register RAM-tier KV block in act_cache without upload.
+    /// On UMA platforms (GB10 Blackwell), host memory is GPU-accessible via
+    /// unified addressing — cuMemAllocManaged provides unified pointers that
+    /// work on both CPU and GPU. No copy needed.
+    ///
+    /// On discrete GPUs, allocates device buffer and uploads once. Future
+    /// optimization: use cuMemAllocHost for pinned RAM tier (faster transfers).
+    pub fn registerRamKv(self: *CudaBackend, host_ptr: [*]u8, size: usize) !void {
+        const addr = @intFromPtr(host_ptr);
+
+        // Check if already tracked
+        if (self.act_cache.get(addr)) |_| return; // Already registered
+
+        if (self.is_uma) {
+            // UMA: Host memory is GPU-accessible, no upload needed.
+            // On UMA platforms (integrated GPU), the host pointer IS the device
+            // pointer via unified addressing. Register as clean (data on device
+            // matches host).
+            try self.act_cache.put(addr, .{
+                .dptr = @intFromPtr(host_ptr), // Same address on UMA
+                .size = size,
+                .state = .clean,
+            });
+            std.log.debug("Registered RAM-tier KV block at {x} (UMA zero-copy)", .{addr});
+        } else {
+            // Discrete GPU: allocate device buffer + upload
+            // (Future optimization: use cuMemAllocHost for pinned RAM tier)
+            var dev_ptr: CUdeviceptr = 0;
+            const result = self.cuMemAlloc(&dev_ptr, size);
+            if (result != 0) return error.CudaMemAllocFailed;
+
+            const upload = self.cuMemcpyHtoD(dev_ptr, host_ptr, size);
+            if (upload != 0) return error.CudaMemcpyFailed;
+
+            try self.act_cache.put(addr, .{
+                .dptr = dev_ptr,
+                .size = size,
+                .state = .dirty, // Device has data, host may be stale
+            });
+            std.log.debug("Uploaded RAM-tier KV block to device at {x}", .{dev_ptr});
+        }
+    }
+
     // ── KV device cache (incremental upload) ───────────────────
 
     /// Get or allocate device KV cache buffer. Returns device pointer.

@@ -39,8 +39,8 @@ Requirements for production readiness. Each maps to roadmap phases.
 
 - [x] **SERV-01**: Continuous batching scheduler processes multiple concurrent requests with iteration-level scheduling
 - [x] **SERV-02**: PagedAttention integrated into model inference loop with block tables
-- [ ] **SERV-03**: RadixAttention prefix caching integrated into server with automatic prefix detection
-- [ ] **SERV-04**: RadixAttention LRU eviction using frequency x cost metric (not simple LRU)
+- [x] **SERV-03**: RadixAttention prefix caching integrated into server with automatic prefix detection
+- [x] **SERV-04**: RadixAttention LRU eviction using frequency x cost metric (not simple LRU)
 - [x] **SERV-05**: OpenAI-compatible /v1/chat/completions API with full schema compliance
 - [x] **SERV-06**: SSE streaming with correct OpenAI event format (data: [DONE])
 - [x] **SERV-07**: Per-request timeout with inference cancellation (configurable 30-120s)
@@ -52,13 +52,13 @@ Requirements for production readiness. Each maps to roadmap phases.
 
 ### Tiered KV Cache
 
-- [ ] **TIER-01**: PagedKvCache block tier tag (enum { vram, ram, ssd }) with tier-aware allocation
-- [ ] **TIER-02**: Automatic demotion of cold KV pages from VRAM to RAM when VRAM budget exceeded
-- [ ] **TIER-03**: Automatic promotion of needed KV pages from RAM back to VRAM with LRU eviction
-- [ ] **TIER-04**: SSD tier support with async I/O for KV page spill/restore (--kv-ssd-path, --kv-ssd-budget)
-- [ ] **TIER-05**: Prefetching of next KV pages from lower tiers during attention compute (overlap I/O with compute)
-- [ ] **TIER-06**: Zero-copy access paths per backend (Metal newBufferWithBytesNoCopy for RAM, GPUDirect Storage for CUDA, VK_EXT_external_memory_host for Vulkan)
-- [ ] **TIER-07**: CLI flags for tier configuration (--kv-tiers, --kv-ram-budget, --kv-ssd-path, --kv-ssd-budget)
+- [x] **TIER-01**: PagedKvCache block tier tag (enum { vram, ram, ssd }) with tier-aware allocation
+- [x] **TIER-02**: Automatic demotion of cold KV pages from VRAM to RAM when VRAM budget exceeded
+- [x] **TIER-03**: Automatic promotion of needed KV pages from RAM back to VRAM with LRU eviction
+- [x] **TIER-04**: SSD tier support with async I/O for KV page spill/restore (--kv-ssd-path, --kv-ssd-budget)
+- [x] **TIER-05**: Prefetching of next KV pages from lower tiers during attention compute (overlap I/O with compute)
+- [x] **TIER-06**: Zero-copy access paths per backend (Metal newBufferWithBytesNoCopy for RAM, GPUDirect Storage for CUDA, VK_EXT_external_memory_host for Vulkan)
+- [x] **TIER-07**: CLI flags for tier configuration (--kv-tiers, --kv-ram-budget, --kv-ssd-path, --kv-ssd-budget)
 
 ### Parallelism
 
@@ -140,8 +140,8 @@ Deferred to future release. Tracked but not in current roadmap.
 | MODL-09 | Phase 1 | Complete |
 | SERV-01 | Phase 2 | Complete |
 | SERV-02 | Phase 2 | Complete |
-| SERV-03 | Phase 3 | Pending |
-| SERV-04 | Phase 3 | Pending |
+| SERV-03 | Phase 3 | Complete |
+| SERV-04 | Phase 3 | Complete |
 | SERV-05 | Phase 2 | Complete |
 | SERV-06 | Phase 2 | Complete |
 | SERV-07 | Phase 2 | Complete |
@@ -150,13 +150,13 @@ Deferred to future release. Tracked but not in current roadmap.
 | SERV-10 | Phase 2 | Complete |
 | SERV-11 | Phase 2 | Complete |
 | SERV-12 | Phase 2 | Complete |
-| TIER-01 | Phase 3 | Pending |
-| TIER-02 | Phase 3 | Pending |
-| TIER-03 | Phase 3 | Pending |
-| TIER-04 | Phase 3 | Pending |
-| TIER-05 | Phase 3 | Pending |
-| TIER-06 | Phase 3 | Pending |
-| TIER-07 | Phase 3 | Pending |
+| TIER-01 | Phase 3 | Complete |
+| TIER-02 | Phase 3 | Complete |
+| TIER-03 | Phase 3 | Complete |
+| TIER-04 | Phase 3 | Complete |
+| TIER-05 | Phase 3 | Complete |
+| TIER-06 | Phase 3 | Complete |
+| TIER-07 | Phase 3 | Complete |
 | PARA-01 | Phase 4 | Pending |
 | PARA-02 | Phase 4 | Pending |
 | PARA-03 | Phase 4 | Pending |

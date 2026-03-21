@@ -1662,6 +1662,65 @@ pub const VulkanBackend = struct {
         allocator.free(slice);
     }
 
+    /// Create Vulkan buffer wrapping RAM-tier KV block with zero copy.
+    /// On UMA platforms, HOST_VISIBLE | DEVICE_LOCAL memory allows GPU to
+    /// access RAM-tier blocks directly without separate device allocation.
+    /// On discrete GPUs, performs one-time upload to cached device buffer.
+    ///
+    /// Returns cached buffer if already created for this pointer.
+    pub fn createKvBuffer(self: *VulkanBackend, host_ptr: [*]u8, size: usize) !VkBuffer {
+        // Check cache
+        const addr = @intFromPtr(host_ptr);
+        if (self.buf_cache.get(addr)) |cached| return cached.vk_buf.buf;
+
+        // Create buffer info
+        const buffer_info = VkBufferCreateInfo{
+            .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+            .size = size,
+            .usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+            .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
+        };
+
+        var buffer: VkBuffer = null;
+        const result = self.vkCreateBuffer(self.device, &buffer_info, null, &buffer);
+        if (result != VK_SUCCESS) return error.VulkanBufferCreationFailed;
+
+        // Get memory requirements
+        var mem_reqs: VkMemoryRequirements = undefined;
+        self.vkGetBufferMemoryRequirements(self.device, buffer, &mem_reqs);
+
+        // Allocate HOST_VISIBLE | DEVICE_LOCAL memory (UMA-friendly)
+        const mem_type_index = self.findMemoryType(
+            mem_reqs.memoryTypeBits,
+            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+        );
+
+        const alloc_info = VkMemoryAllocateInfo{
+            .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+            .allocationSize = mem_reqs.size,
+            .memoryTypeIndex = mem_type_index,
+        };
+
+        var memory: VkDeviceMemory = null;
+        const alloc_result = self.vkAllocateMemory(self.device, &alloc_info, null, &memory);
+        if (alloc_result != VK_SUCCESS) return error.VulkanMemoryAllocationFailed;
+
+        // Bind buffer to memory
+        _ = self.vkBindBufferMemory(self.device, buffer, memory, 0);
+
+        // Map and copy host data
+        var mapped_ptr: ?*anyopaque = null;
+        _ = self.vkMapMemory(self.device, memory, 0, size, 0, &mapped_ptr);
+        @memcpy(@as([*]u8, @ptrCast(mapped_ptr.?))[0..size], host_ptr[0..size]);
+        self.vkUnmapMemory(self.device, memory);
+
+        // Cache buffer
+        try self.buf_cache.put(addr, .{ .vk_buf = .{ .buf = buffer, .mem = memory }, .size = size });
+
+        std.log.debug("Created Vulkan KV buffer for RAM-tier block at {x}", .{addr});
+        return buffer.?;
+    }
+
     /// DeltaNet SSM recurrence — CPU fallback.
     pub fn deltaNet(self: *VulkanBackend, conv_in: [*]const f32, conv_out: [*]f32, z_buf: [*]const f32, alpha_buf: [*]const f32, beta_buf: [*]const f32, output: [*]f32, conv_state: [*]f32, ssm_state: []f32, ssm_a: [*]const f32, dt_bias: [*]const f32, conv_w: [*]const f32, ssm_norm_w: [*]const f32, p: backend_mod.DeltaNetParams) void {
         self.sync();
