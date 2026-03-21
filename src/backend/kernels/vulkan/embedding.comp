@@ -1,0 +1,20 @@
+#version 450
+
+layout(local_size_x = 256) in;
+
+layout(set = 0, binding = 0) readonly buffer TokenId { uint token_id; };
+layout(set = 0, binding = 1) readonly buffer Embeddings { float data[]; } emb;
+layout(set = 0, binding = 2) writeonly buffer Output { float data[]; } out_buf;
+
+layout(push_constant) uniform Params {
+    uint vocab_size;
+    uint n_embd;
+} params;
+
+void main() {
+    uint tid = gl_GlobalInvocationID.x;
+    if (tid >= params.n_embd) return;
+
+    uint offset = token_id * params.n_embd + tid;
+    out_buf.data[tid] = emb.data[offset];
+}

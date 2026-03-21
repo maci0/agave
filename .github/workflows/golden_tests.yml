@@ -1,0 +1,141 @@
+name: Golden Tests
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+
+env:
+  ZIG_VERSION: "0.15.2"
+
+jobs:
+  golden-tests-cpu:
+    name: Golden Tests - CPU Backend
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Zig
+        uses: goto-bus-stop/setup-zig@v2
+        with:
+          version: ${{ env.ZIG_VERSION }}
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Python dependencies
+        run: pip install numpy
+
+      - name: Cache Zig build
+        uses: actions/cache@v4
+        with:
+          path: |
+            .zig-cache
+            ~/.cache/zig
+          key: zig-golden-linux-${{ hashFiles('build.zig', 'build.zig.zon') }}
+          restore-keys: zig-golden-linux-
+
+      - name: Build Agave
+        run: zig build
+
+      - name: Run golden tests (CPU backend)
+        run: |
+          zig test tests/models/test_gemma3.zig --test-filter "CPU"
+          zig test tests/models/test_qwen35.zig --test-filter "CPU"
+          zig test tests/models/test_deepseek_r1_qwen3.zig --test-filter "CPU"
+          zig test tests/models/test_nemotron_nano.zig --test-filter "CPU"
+          zig test tests/models/test_glm4.zig --test-filter "CPU"
+          zig test tests/models/test_gpt_oss.zig --test-filter "CPU"
+          zig test tests/models/test_nemotron_h.zig --test-filter "CPU"
+
+  golden-tests-metal:
+    name: Golden Tests - Metal Backend
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Zig
+        uses: goto-bus-stop/setup-zig@v2
+        with:
+          version: ${{ env.ZIG_VERSION }}
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Python dependencies
+        run: pip install numpy
+
+      - name: Cache Zig build
+        uses: actions/cache@v4
+        with:
+          path: |
+            .zig-cache
+            ~/Library/Caches/zig
+          key: zig-golden-macos-${{ hashFiles('build.zig', 'build.zig.zon') }}
+          restore-keys: zig-golden-macos-
+
+      - name: Build Agave
+        run: zig build
+
+      - name: Run golden tests (Metal backend)
+        run: |
+          zig test tests/models/test_gemma3.zig --test-filter "Metal"
+          zig test tests/models/test_qwen35.zig --test-filter "Metal"
+          zig test tests/models/test_deepseek_r1_qwen3.zig --test-filter "Metal"
+          zig test tests/models/test_nemotron_nano.zig --test-filter "Metal"
+          zig test tests/models/test_glm4.zig --test-filter "Metal"
+          zig test tests/models/test_gpt_oss.zig --test-filter "Metal"
+          zig test tests/models/test_nemotron_h.zig --test-filter "Metal"
+
+  golden-tests-vulkan:
+    name: Golden Tests - Vulkan Backend
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Zig
+        uses: goto-bus-stop/setup-zig@v2
+        with:
+          version: ${{ env.ZIG_VERSION }}
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Vulkan SDK
+        run: |
+          wget -qO - https://packages.lunarg.com/lunarg-signing-key-pub.asc | sudo apt-key add -
+          sudo wget -qO /etc/apt/sources.list.d/lunarg-vulkan-jammy.list https://packages.lunarg.com/vulkan/lunarg-vulkan-jammy.list
+          sudo apt update
+          sudo apt install vulkan-sdk
+
+      - name: Install Python dependencies
+        run: pip install numpy
+
+      - name: Cache Zig build
+        uses: actions/cache@v4
+        with:
+          path: |
+            .zig-cache
+            ~/.cache/zig
+          key: zig-golden-vulkan-${{ hashFiles('build.zig', 'build.zig.zon') }}
+          restore-keys: zig-golden-vulkan-
+
+      - name: Build Agave
+        run: zig build
+
+      - name: Run golden tests (Vulkan backend)
+        run: |
+          zig test tests/models/test_gemma3.zig --test-filter "Vulkan"
+          zig test tests/models/test_qwen35.zig --test-filter "Vulkan"
+          zig test tests/models/test_deepseek_r1_qwen3.zig --test-filter "Vulkan"
+          zig test tests/models/test_nemotron_nano.zig --test-filter "Vulkan"
+          zig test tests/models/test_glm4.zig --test-filter "Vulkan"
+          zig test tests/models/test_gpt_oss.zig --test-filter "Vulkan"
+          zig test tests/models/test_nemotron_h.zig --test-filter "Vulkan"

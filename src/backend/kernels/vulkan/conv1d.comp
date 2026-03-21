@@ -1,0 +1,30 @@
+#version 450
+
+layout(local_size_x = 256) in;
+
+layout(set = 0, binding = 0) readonly buffer Input { float data[]; } input_buf;
+layout(set = 0, binding = 1) readonly buffer ConvState { float data[]; } state;
+layout(set = 0, binding = 2) readonly buffer Weights { float data[]; } conv_w;
+layout(set = 0, binding = 3) writeonly buffer OutputBuf { float data[]; } out_buf;
+
+layout(push_constant) uniform Params {
+    uint conv_ch;     // Number of channels
+    uint d_conv;      // Kernel size (e.g., 4)
+} params;
+
+void main() {
+    uint ch = gl_GlobalInvocationID.x;
+    if (ch >= params.conv_ch) return;
+
+    float sum = 0.0;
+    // Convolve: conv_state[(d_conv-1) × conv_ch] is ring buffer
+    // Last d_conv-1 positions + current input
+    for (uint i = 0; i < params.d_conv - 1; ++i) {
+        sum += state.data[i * params.conv_ch + ch] * conv_w.data[ch * params.d_conv + i];
+    }
+    sum += input_buf.data[ch] * conv_w.data[ch * params.d_conv + (params.d_conv - 1)];
+
+    // SiLU activation: x * sigmoid(x)
+    float sigmoid_val = 1.0 / (1.0 + exp(-sum));
+    out_buf.data[ch] = sum * sigmoid_val;
+}

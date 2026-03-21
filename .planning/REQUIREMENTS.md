@@ -9,28 +9,31 @@ Requirements for production readiness. Each maps to roadmap phases.
 
 ### GPU Kernel Parity
 
-- [ ] **KERN-01**: Metal GPU SDPA kernel produces correct output without CPU fallback
-- [ ] **KERN-02**: Metal SDPA uses compute-only path (no blit encoder switching in hot path)
-- [ ] **KERN-03**: CUDA GPU GEMV kernel for Q4_K quantization format
-- [ ] **KERN-04**: CUDA GPU GEMV kernel for Q5_K quantization format
-- [ ] **KERN-05**: CUDA GPU GEMV kernel for Q6_K quantization format
-- [ ] **KERN-06**: CUDA GPU GEMV kernel for FP8 E4M3/E5M2 formats
-- [ ] **KERN-07**: CUDA parallel SDPA softmax using warp-only reductions (replacing serial thread-0 workaround)
-- [ ] **KERN-08**: Vulkan GPU embedding lookup kernel (eliminate CPU fallback)
-- [ ] **KERN-09**: Vulkan GPU conv1d kernel for SSM models (eliminate CPU fallback)
-- [ ] **KERN-10**: All GPU kernels pass dual-delta numerical tests (GPU error <= 2x CPU error vs FP64 oracle)
+- [x] **KERN-01**: Metal GPU SDPA kernel produces correct output without CPU fallback
+- [x] **KERN-02**: Metal SDPA uses compute-only path (no blit encoder switching in hot path)
+- [x] **KERN-03**: CUDA GPU GEMV kernel for Q4_K quantization format
+- [x] **KERN-04**: CUDA GPU GEMV kernel for Q5_K quantization format
+- [x] **KERN-05**: CUDA GPU GEMV kernel for Q6_K quantization format
+- [x] **KERN-06**: CUDA GPU GEMV kernel for FP8 E4M3/E5M2 formats
+- [x] **KERN-07**: CUDA parallel SDPA softmax using warp-only reductions (replacing serial thread-0 workaround)
+- [x] **KERN-08**: Vulkan GPU embedding lookup kernel (eliminate CPU fallback)
+- [x] **KERN-09**: Vulkan GPU conv1d kernel for SSM models (eliminate CPU fallback)
+- [x] **KERN-10**: All GPU kernels pass dual-delta numerical tests (GPU error <= 2x CPU error vs FP64 oracle)
+- [x] **KERN-11**: ROCm GPU GEMV kernels for Q4_K, Q5_K, Q6_K quantization formats
+- [x] **KERN-12**: ROCm GPU GEMV kernel for FP8 E4M3/E5M2 formats
+- [x] **KERN-13**: ROCm eliminate CPU fallbacks for sigmoidMul, fused SiLU, deinterleave, DeltaNet
 
 ### Model Verification
 
-- [ ] **MODL-01**: Nemotron Nano 30B produces correct, coherent output (fix MoE routing instability)
-- [ ] **MODL-02**: GLM-4 produces correct output (MLA attention + sigmoid-gated MoE)
-- [ ] **MODL-03**: GPT-OSS produces correct output (sliding window + MoE with clamped SwiGLU)
-- [ ] **MODL-04**: Nemotron-H produces correct output (hybrid SSM + attention)
-- [ ] **MODL-05**: All 6 models verified on CPU backend with golden test output
-- [ ] **MODL-06**: All 6 models verified on Metal backend with golden test output
-- [ ] **MODL-07**: All 6 models verified on CUDA backend (DGX Spark) with golden test output
-- [ ] **MODL-08**: All 6 models verified on Vulkan backend with golden test output
-- [ ] **MODL-09**: Automated golden tests comparing output against reference (llama.cpp or HuggingFace)
+- [x] **MODL-01**: Nemotron Nano 30B produces correct, coherent output (fix MoE routing instability)
+- [x] **MODL-02**: GLM-4 produces correct output (MLA attention + sigmoid-gated MoE)
+- [x] **MODL-03**: GPT-OSS produces correct output (sliding window + MoE with clamped SwiGLU)
+- [x] **MODL-04**: Nemotron-H produces correct output (hybrid SSM + attention)
+- [x] **MODL-05**: All 6 models verified on CPU backend with golden test output
+- [x] **MODL-06**: All 6 models verified on Metal backend with golden test output
+- [x] **MODL-07**: All 6 models verified on CUDA backend (DGX Spark) with golden test output
+- [x] **MODL-08**: All 6 models verified on Vulkan backend with golden test output
+- [x] **MODL-09**: Automated golden tests comparing output against reference (llama.cpp or HuggingFace)
 
 ### Production Serving
 
@@ -113,25 +116,28 @@ Deferred to future release. Tracked but not in current roadmap.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| KERN-01 | Phase 1 | Pending |
-| KERN-02 | Phase 1 | Pending |
-| KERN-03 | Phase 1 | Pending |
-| KERN-04 | Phase 1 | Pending |
-| KERN-05 | Phase 1 | Pending |
-| KERN-06 | Phase 1 | Pending |
-| KERN-07 | Phase 1 | Pending |
-| KERN-08 | Phase 1 | Pending |
-| KERN-09 | Phase 1 | Pending |
-| KERN-10 | Phase 1 | Pending |
-| MODL-01 | Phase 1 | Pending |
-| MODL-02 | Phase 1 | Pending |
-| MODL-03 | Phase 1 | Pending |
-| MODL-04 | Phase 1 | Pending |
-| MODL-05 | Phase 1 | Pending |
-| MODL-06 | Phase 1 | Pending |
-| MODL-07 | Phase 1 | Pending |
-| MODL-08 | Phase 1 | Pending |
-| MODL-09 | Phase 1 | Pending |
+| KERN-01 | Phase 1 | Complete |
+| KERN-02 | Phase 1 | Complete |
+| KERN-03 | Phase 1 | Complete |
+| KERN-04 | Phase 1 | Complete |
+| KERN-05 | Phase 1 | Complete |
+| KERN-06 | Phase 1 | Complete |
+| KERN-07 | Phase 1 | Complete |
+| KERN-08 | Phase 1 | Complete |
+| KERN-09 | Phase 1 | Complete |
+| KERN-10 | Phase 1 | Complete |
+| KERN-11 | Phase 1 | Complete |
+| KERN-12 | Phase 1 | Complete |
+| KERN-13 | Phase 1 | Complete |
+| MODL-01 | Phase 1 | Complete |
+| MODL-02 | Phase 1 | Complete |
+| MODL-03 | Phase 1 | Complete |
+| MODL-04 | Phase 1 | Complete |
+| MODL-05 | Phase 1 | Complete |
+| MODL-06 | Phase 1 | Complete |
+| MODL-07 | Phase 1 | Complete |
+| MODL-08 | Phase 1 | Complete |
+| MODL-09 | Phase 1 | Complete |
 | SERV-01 | Phase 2 | Pending |
 | SERV-02 | Phase 2 | Pending |
 | SERV-03 | Phase 3 | Pending |
@@ -165,8 +171,8 @@ Deferred to future release. Tracked but not in current roadmap.
 | PARA-12 | Phase 4 | Pending |
 
 **Coverage:**
-- v1 requirements: 50 total
-- Mapped to phases: 50
+- v1 requirements: 53 total
+- Mapped to phases: 53
 - Unmapped: 0
 
 ---

@@ -89,6 +89,11 @@ pub const MetalBackend = struct {
     pipe_gemv_nvfp4_st: objc.id,
     pipe_gemv_q4_k: objc.id,
     pipe_gemv_q6_k: objc.id,
+    pipe_gemv_q2_k: objc.id,
+    pipe_gemv_q3_k: objc.id,
+    pipe_gemv_q5_0: objc.id,
+    pipe_gemv_iq4_nl: objc.id,
+    pipe_gemv_iq4_xs: objc.id,
     pipe_gemv_q5_k: objc.id,
     pipe_gemv_mlx_q4: objc.id,
     pipe_gemv_fp8_e4m3: objc.id,
@@ -99,6 +104,8 @@ pub const MetalBackend = struct {
     pipe_silu_mul: objc.id,
     pipe_rms_norm_fused: objc.id,
     pipe_add_rms_norm_fused: objc.id,
+    pipe_kv_append: objc.id,
+    pipe_sdpa: objc.id,
     pipe_dn_gate_beta: objc.id,
     pipe_dn_conv1d: objc.id,
     pipe_dn_l2_norm: objc.id,
@@ -189,6 +196,11 @@ pub const MetalBackend = struct {
             .pipe_gemv_nvfp4_st = undefined,
             .pipe_gemv_q4_k = undefined,
             .pipe_gemv_q6_k = undefined,
+            .pipe_gemv_q2_k = undefined,
+            .pipe_gemv_q3_k = undefined,
+            .pipe_gemv_q5_0 = undefined,
+            .pipe_gemv_iq4_nl = undefined,
+            .pipe_gemv_iq4_xs = undefined,
             .pipe_gemv_q5_k = undefined,
             .pipe_gemv_fp8_e4m3 = undefined,
             .pipe_gemv_fp8_e5m2 = undefined,
@@ -198,6 +210,8 @@ pub const MetalBackend = struct {
             .pipe_silu_mul = undefined,
             .pipe_rms_norm_fused = undefined,
             .pipe_add_rms_norm_fused = undefined,
+            .pipe_kv_append = undefined,
+            .pipe_sdpa = undefined,
             .pipe_dn_gate_beta = undefined,
             .pipe_dn_conv1d = undefined,
             .pipe_dn_l2_norm = undefined,
@@ -230,6 +244,11 @@ pub const MetalBackend = struct {
         self.pipe_gemv_nvfp4_st = try self.makePipeline("gemv_nvfp4_st");
         self.pipe_gemv_q4_k = try self.makePipeline("gemv_q4_k");
         self.pipe_gemv_q6_k = try self.makePipeline("gemv_q6_k");
+        self.pipe_gemv_q2_k = try self.makePipeline("gemv_q2_k");
+        self.pipe_gemv_q3_k = try self.makePipeline("gemv_q3_k");
+        self.pipe_gemv_q5_0 = try self.makePipeline("gemv_q5_0");
+        self.pipe_gemv_iq4_nl = try self.makePipeline("gemv_iq4_nl");
+        self.pipe_gemv_iq4_xs = try self.makePipeline("gemv_iq4_xs");
         self.pipe_gemv_q5_k = try self.makePipeline("gemv_q5_k");
         self.pipe_gemv_fp8_e4m3 = try self.makePipeline("gemv_fp8_e4m3");
         self.pipe_gemv_fp8_e5m2 = try self.makePipeline("gemv_fp8_e5m2");
@@ -239,6 +258,8 @@ pub const MetalBackend = struct {
         self.pipe_silu_mul = try self.makePipeline("silu_mul_f32");
         self.pipe_rms_norm_fused = try self.makePipeline("rms_norm_fused_f32");
         self.pipe_add_rms_norm_fused = try self.makePipeline("add_rms_norm_fused_f32");
+        self.pipe_kv_append = try self.makePipeline("kv_append");
+        self.pipe_sdpa = try self.makePipeline("sdpa_fa2");
         self.pipe_dn_gate_beta = try self.makePipeline("deltanet_gate_beta");
         self.pipe_dn_conv1d = try self.makePipeline("deltanet_conv1d");
         self.pipe_dn_l2_norm = try self.makePipeline("deltanet_l2_norm");
@@ -248,7 +269,7 @@ pub const MetalBackend = struct {
     }
 
     /// Number of MSL compute pipelines compiled at init.
-    pub const n_pipelines: u32 = 33;
+    pub const n_pipelines: u32 = 35;
 
     /// Returns the Metal device name (e.g., "Apple M4 Pro").
     pub fn deviceName(self: *const MetalBackend) []const u8 {
@@ -519,13 +540,12 @@ pub const MetalBackend = struct {
     /// On Apple Silicon's UMA, page-aligned buffers can be wrapped via
     /// newBufferWithBytesNoCopy without any data copies. Pre-registers the
     /// allocation in buf_cache so SDPA doesn't create Metal buffers lazily.
-    pub fn allocKvSlice(self: *MetalBackend, _: std.mem.Allocator, n: usize) error{OutOfMemory}![]f32 {
-        const byte_len = n * @sizeOf(f32);
+    pub fn allocKvSlice(self: *MetalBackend, _: std.mem.Allocator, n: usize) error{OutOfMemory}![]u8 {
+        const byte_len = n;
         // Round up to page boundary for newBufferWithBytesNoCopy compatibility
         const aligned_bytes = std.mem.alignForward(usize, byte_len, page_size);
         const raw = std.heap.page_allocator.alloc(u8, aligned_bytes) catch return error.OutOfMemory;
-        const ptr: [*]f32 = @ptrCast(@alignCast(raw.ptr));
-        @memset(ptr[0..n], 0);
+        @memset(raw, 0);
         // Pre-register in buf_cache — wraps as Metal buffer for zero-copy GPU access.
         const addr = @intFromPtr(raw.ptr);
         const metal_buf = objc.msgSend(
@@ -543,18 +563,18 @@ pub const MetalBackend = struct {
             release(metal_buf);
             return error.OutOfMemory;
         };
-        return ptr[0..n];
+        return raw[0..n];
     }
 
     /// Free a KV cache slice allocated via allocKvSlice.
     /// Removes the Metal buffer from buf_cache and releases page-aligned memory.
-    pub fn freeKvSlice(self: *MetalBackend, _: std.mem.Allocator, slice: []f32) void {
+    pub fn freeKvSlice(self: *MetalBackend, _: std.mem.Allocator, slice: []u8) void {
         if (slice.len == 0) return;
         const addr = @intFromPtr(slice.ptr);
         if (self.buf_cache.fetchRemove(addr)) |entry| {
             release(entry.value.metal_buf);
         }
-        const byte_len = slice.len * @sizeOf(f32);
+        const byte_len = slice.len;
         const aligned_bytes = std.mem.alignForward(usize, byte_len, page_size);
         std.heap.page_allocator.free(@as([*]align(std.heap.pageSize()) u8, @ptrCast(@alignCast(slice.ptr)))[0..aligned_bytes]);
     }
@@ -576,6 +596,11 @@ pub const MetalBackend = struct {
             .q4_k => self.pipe_gemv_q4_k,
             .q5_k => self.pipe_gemv_q5_k,
             .q6_k => self.pipe_gemv_q6_k,
+            .q2_k => self.pipe_gemv_q2_k,
+            .q3_k => self.pipe_gemv_q3_k,
+            .q5_0 => self.pipe_gemv_q5_0,
+            .iq4_nl => self.pipe_gemv_iq4_nl,
+            .iq4_xs => self.pipe_gemv_iq4_xs,
             .bf16 => self.pipe_gemv_bf16,
             .f16 => self.pipe_gemv_f16,
             .fp8_e4m3 => self.pipe_gemv_fp8_e4m3,
@@ -983,6 +1008,11 @@ pub const MetalBackend = struct {
                 .q4_k => self.pipe_gemv_q4_k,
                 .q5_k => self.pipe_gemv_q5_k,
                 .q6_k => self.pipe_gemv_q6_k,
+                .q2_k => self.pipe_gemv_q2_k,
+                .q3_k => self.pipe_gemv_q3_k,
+                .q5_0 => self.pipe_gemv_q5_0,
+                .iq4_nl => self.pipe_gemv_iq4_nl,
+                .iq4_xs => self.pipe_gemv_iq4_xs,
                 .bf16 => self.pipe_gemv_bf16,
                 .f16 => self.pipe_gemv_f16,
                 .fp8_e4m3 => self.pipe_gemv_fp8_e4m3,
@@ -1051,14 +1081,76 @@ pub const MetalBackend = struct {
     /// Flushes queued GPU work, appends KV on CPU, then runs CPU SDPA.
     /// CPU SDPA is negligible for decode; GPU SDPA reserved for future prefill.
     /// Falls back to CPU for sequences > 4096 or head dims > 256.
-    pub fn sdpa(self: *MetalBackend, q: [*]const f32, keys: []f32, values: []f32, k_new: [*]const f32, v_new: [*]const f32, output: [*]f32, nh: usize, nkv: usize, hd: usize, seq_len: usize, scale: f32) void {
-        // Flush queued GPU work (norm, RoPE, GEMV) so q/k_new/v_new are CPU-visible.
-        self.flush();
-        // CPU SDPA handles KV append + attention. For decode (seq_len << 4096),
-        // CPU SDPA is negligible (~0.1ms). For long prefill, GPU SDPA would help
-        // but requires resolving the encoder overhead issue.
-        var cpu = CpuBackend{ .pool = self.pool };
-        cpu.sdpa(q, keys, values, k_new, v_new, output, nh, nkv, hd, seq_len, scale);
+    /// GPU SDPA threadgroup size (threads per query head).
+    const sdpa_threadgroup_size: usize = 128;
+    /// Maximum sequence length for GPU SDPA (limited by threadgroup memory).
+    const sdpa_gpu_max_seq: usize = 4096;
+
+    pub fn sdpa(self: *MetalBackend, q: [*]const f32, keys: []u8, values: []u8, k_new: [*]const f32, v_new: [*]const f32, output: [*]f32, nh: usize, nkv: usize, hd: usize, seq_len: usize, scale: f32, kv_type: @import("backend.zig").KvQuantType) void {
+        // Non-f32 KV types: fall back to CPU (quantized SDPA not yet on GPU).
+        if (kv_type != .f32) {
+            self.flush();
+            var cpu = CpuBackend{ .pool = self.pool };
+            cpu.sdpa(q, keys, values, k_new, v_new, output, nh, nkv, hd, seq_len, scale, kv_type);
+            return;
+        }
+
+        const f32_keys: []f32 = @as([*]f32, @ptrCast(@alignCast(keys.ptr)))[0 .. keys.len / 4];
+        const f32_values: []f32 = @as([*]f32, @ptrCast(@alignCast(values.ptr)))[0 .. values.len / 4];
+
+        const kvd = nkv * hd;
+        const sl = seq_len + 1;
+
+        // Fall back to CPU for very long sequences (GPU threadgroup memory limit).
+        if (sl > sdpa_gpu_max_seq) {
+            self.flush();
+            var cpu = CpuBackend{ .pool = self.pool };
+            cpu.sdpa(q, keys, values, k_new, v_new, output, nh, nkv, hd, seq_len, scale, .f32);
+            return;
+        }
+
+        // ── GPU KV append: copy k_new/v_new into KV cache at position seq_len ──
+        {
+            const k_ref = self.getBufRef(@ptrCast(k_new), kvd * @sizeOf(f32));
+            const v_ref = self.getBufRef(@ptrCast(v_new), kvd * @sizeOf(f32));
+            const keys_ref = self.getBufRef(@ptrCast(f32_keys.ptr), sl * kvd * @sizeOf(f32));
+            const vals_ref = self.getBufRef(@ptrCast(f32_values.ptr), sl * kvd * @sizeOf(f32));
+            const enc = self.getEncoder(self.pipe_kv_append);
+            setBuf(enc, k_ref, 0);
+            setBuf(enc, v_ref, 1);
+            setBuf(enc, keys_ref, 2);
+            setBuf(enc, vals_ref, 3);
+            var kvd_u: u32 = @intCast(kvd);
+            var kv_off_u: u32 = @intCast(seq_len * kvd);
+            setBytes(enc, @ptrCast(&kvd_u), @sizeOf(u32), 4);
+            setBytes(enc, @ptrCast(&kv_off_u), @sizeOf(u32), 5);
+            self.endEncode1D(enc, self.pipe_kv_append, kvd);
+        }
+
+        // ── GPU SDPA: FlashAttention-2 with online softmax ──
+        // Dispatches to sdpa_fa2 kernel (compute-only, no blit encoders).
+        // One threadgroup per query head, processes K,V in blocks to fit threadgroup memory.
+        {
+            const q_ref = self.getBufRef(@ptrCast(q), nh * hd * @sizeOf(f32));
+            const keys_ref = self.getBufRef(@ptrCast(f32_keys.ptr), sl * kvd * @sizeOf(f32));
+            const vals_ref = self.getBufRef(@ptrCast(f32_values.ptr), sl * kvd * @sizeOf(f32));
+            const out_ref = self.getBufRef(@ptrCast(output), nh * hd * @sizeOf(f32));
+            const enc = self.getEncoder(self.pipe_sdpa);
+            setBuf(enc, q_ref, 0);
+            setBuf(enc, keys_ref, 1);
+            setBuf(enc, vals_ref, 2);
+            setBuf(enc, out_ref, 3);
+            var nh_u: u32 = @intCast(nh);
+            var nkv_u: u32 = @intCast(nkv);
+            var hd_u: u32 = @intCast(hd);
+            var sl_u: u32 = @intCast(sl);
+            setBytes(enc, @ptrCast(&nh_u), @sizeOf(u32), 4);
+            setBytes(enc, @ptrCast(&nkv_u), @sizeOf(u32), 5);
+            setBytes(enc, @ptrCast(&hd_u), @sizeOf(u32), 6);
+            setBytes(enc, @ptrCast(&sl_u), @sizeOf(u32), 7);
+            setBytes(enc, @ptrCast(&scale), @sizeOf(f32), 8);
+            self.endEncodeThreadgroups(enc, nh, sdpa_threadgroup_size);
+        }
     }
 
     /// DeltaNet SSM — all 4 kernels on GPU, no CPU sync per layer.
@@ -1365,11 +1457,11 @@ test "Metal backend gemvMlxQ4 large matrix" {
     const bi16 = try al.alloc(u16, n * gpr);
     defer al.free(bi16);
 
-    // Fill with deterministic pattern
+    // Fill with deterministic pattern — scales near 1.0, biases near 0 to avoid non-finite outputs
     for (0..k) |i| x[i] = @as(f32, @floatFromInt(i % 13)) * 0.2 - 1.2;
     for (0..weight.len) |i| weight[i] = @truncate((i *% 0xDEAD) ^ 0x1234ABCD);
-    for (0..sc16.len) |i| sc16[i] = 0x3C00 +% @as(u16, @truncate(i *% 0x37)); // various bf16
-    for (0..bi16.len) |i| bi16[i] = 0xB800 +% @as(u16, @truncate(i *% 0x23));
+    for (0..sc16.len) |i| sc16[i] = @bitCast(@as(f16, @floatCast(0.5 + @as(f32, @floatFromInt(i % 7)) * 0.2)));
+    for (0..bi16.len) |i| bi16[i] = @bitCast(@as(f16, @floatCast(@as(f32, @floatFromInt(i % 5)) * 0.1 - 0.2)));
 
     const y_cpu = try al.alloc(f32, n);
     defer al.free(y_cpu);
@@ -1380,14 +1472,7 @@ test "Metal backend gemvMlxQ4 large matrix" {
     metal.gemvMlxQ(x.ptr, @ptrCast(weight.ptr), @ptrCast(sc16.ptr), @ptrCast(bi16.ptr), y_metal.ptr, n, k, 4);
     metal.sync();
 
-    var non_finite_count: usize = 0;
     for (0..n) |i| {
-        if (!std.math.isFinite(y_cpu[i]) or !std.math.isFinite(y_metal[i])) {
-            non_finite_count += 1;
-            continue;
-        }
         try std.testing.expectApproxEqRel(y_cpu[i], y_metal[i], 1e-3);
     }
-    // Ensure the test isn't vacuous — at most a few non-finite values from random data
-    try std.testing.expect(non_finite_count < n / 2);
 }

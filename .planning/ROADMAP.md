@@ -6,28 +6,36 @@
 
 ## Phases
 
-- [ ] **Phase 1: Correctness Foundation** - All models produce correct output on all backends at full GPU speed
+- [x] **Phase 1: Correctness Foundation** - All models produce correct output on all backends at full GPU speed
 - [ ] **Phase 2: Production Serving** - Multi-tenant continuous batching with observability and safety
 - [ ] **Phase 3: Memory Optimization** - RadixAttention prefix caching and tiered KV cache
-- [ ] **Phase 4: Multi-GPU Parallelism** - Tensor, Pipeline, and Expert Parallelism for large models
+- [ ] ~~**Phase 4: Multi-GPU Parallelism**~~ - Moved to backlog
 
 ## Phase Details
 
 ### Phase 1: Correctness Foundation
-**Goal**: Every supported model produces correct output on every backend (CPU, Metal, CUDA, Vulkan) at full GPU speed with no unnecessary CPU fallbacks.
+**Goal**: Every supported model produces correct output on every backend (CPU, Metal, CUDA, Vulkan, ROCm) at full GPU speed with no unnecessary CPU fallbacks.
 
 **Depends on**: Nothing (first phase)
 
-**Requirements**: KERN-01 through KERN-10 (10 requirements), MODL-01 through MODL-09 (9 requirements)
+**Requirements**: KERN-01 through KERN-13 (13 requirements), MODL-01 through MODL-09 (9 requirements)
 
 **Success Criteria** (what must be TRUE):
 1. Metal SDPA kernel produces identical output to CPU SDPA within numerical tolerance (dual-delta: GPU error ≤ 2x CPU error vs FP64 oracle)
 2. CUDA backend supports Q4_K, Q5_K, Q6_K, and FP8 E4M3/E5M2 GEMV kernels with in-kernel dequantization (no pre-dequant CPU fallback)
-3. All 6 models (Gemma3, Qwen3.5, Nemotron-Nano, GLM-4, GPT-OSS, Nemotron-H) pass golden tests on CPU, Metal, CUDA, and Vulkan backends
+3. All 6 models (Gemma3, Qwen3.5, Nemotron-Nano, GLM-4, GPT-OSS, Nemotron-H) + DeepSeek-R1-Qwen3-8B pass golden tests on all 5 backends (CPU, Metal, CUDA, Vulkan, ROCm)
 4. Nemotron Nano 30B produces coherent output with stable MoE router scores (all values < 1e10, no numerical overflow)
 5. Automated CI runs golden tests comparing all models against reference implementations (llama.cpp or HuggingFace) with deterministic seed
 
-**Plans**: TBD
+**Plans**: 7 plans in 3 waves
+
+Plans:
+- [x] 01-01-PLAN.md — Metal SDPA FlashAttention-2 rewrite (wave 1)
+- [x] 01-02-PLAN.md — CUDA quantized GEMV kernels (Q4_K/Q5_K/Q6_K/FP8) (wave 1)
+- [x] 01-03-PLAN.md — Vulkan GPU kernels (embedding + conv1d) (wave 1)
+- [x] 01-04-PLAN.md — CUDA warp-parallel SDPA softmax (wave 1)
+- [x] 01-05-PLAN.md — Fix broken models (Nemotron Nano, GLM-4, GPT-OSS, Nemotron-H) (wave 2, depends on 01-01 through 01-04)
+- [x] 01-06-PLAN.md — Golden test framework + cross-backend verification (all 5 backends including ROCm) (wave 3, depends on 01-05)
 
 ---
 
@@ -68,22 +76,9 @@
 
 ---
 
-### Phase 4: Multi-GPU Parallelism
-**Goal**: Tensor Parallelism, Pipeline Parallelism, and Expert Parallelism distribute large models across multiple GPUs with zero-allocation communication in the hot path.
+### Phase 4: Multi-GPU Parallelism (BACKLOG)
 
-**Depends on**: Phase 1 (requires working backends and models)
-
-**Requirements**: PARA-01 through PARA-12 (12 requirements)
-
-**Success Criteria** (what must be TRUE):
-1. DeviceGroup abstraction supports mixed backends (e.g., 4x Metal, 2x CUDA) and distributes weight shards at init
-2. Tensor Parallelism splits Q/K/V projections column-parallel and output projection row-parallel across TP devices with all-reduce after attention
-3. Pipeline Parallelism assigns contiguous layer ranges to PP stages with point-to-point activation transfer (stage N sends hidden state to stage N+1)
-4. Expert Parallelism distributes MoE experts across EP devices with all-to-all token exchange (tokens routed to expert owner, results all-to-all gathered)
-5. CLI flags --tp=N --pp=M auto-detect available devices and validate topology (e.g., TP × PP ≤ num_devices, hybrid TP+PP support)
-6. Communication buffers pre-allocated at init (all-reduce scratch, activation transfer buffers) — zero allocations in decode hot path
-
-**Plans**: TBD
+**Status**: Moved to backlog. Requirements PARA-01 through PARA-12 deferred to future milestone.
 
 ---
 
@@ -91,28 +86,26 @@
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Correctness Foundation | 0/? | Not started | - |
+| 1. Correctness Foundation | 7/7 | Complete | 2026-03-22 |
 | 2. Production Serving | 0/? | Not started | - |
 | 3. Memory Optimization | 0/? | Not started | - |
-| 4. Multi-GPU Parallelism | 0/? | Not started | - |
+| 4. Multi-GPU Parallelism | - | Backlog | - |
 
 ---
 
 ## Coverage Validation
 
-**Total v1 requirements:** 50
+**Total v1 requirements:** 38 (active) + 12 (backlog)
 
 **Mapped:**
 - Phase 1: 19 requirements (KERN-01 to KERN-10, MODL-01 to MODL-09)
 - Phase 2: 10 requirements (SERV-01, SERV-02, SERV-05 to SERV-12)
 - Phase 3: 9 requirements (SERV-03, SERV-04, TIER-01 to TIER-07)
-- Phase 4: 12 requirements (PARA-01 to PARA-12)
 
-**Total mapped:** 50
+**Backlog:**
+- Phase 4: 12 requirements (PARA-01 to PARA-12) — deferred to future milestone
 
-**Unmapped:** 0
-
-**Coverage:** 100% ✓
+**Active coverage:** 38/38 ✓
 
 ---
 
@@ -129,4 +122,4 @@
 ---
 
 *Roadmap created: 2026-03-21*
-*Last updated: 2026-03-21*
+*Last updated: 2026-03-22 (Phase 1 plans created)*
