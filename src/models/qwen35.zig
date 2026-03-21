@@ -11,12 +11,17 @@ const math_ops = @import("../ops/math.zig");
 const attn_ops = @import("../ops/attention.zig");
 const quant = @import("../ops/quant.zig");
 const perf = @import("../perf.zig");
+const kv_quant = @import("../ops/kv_quant.zig");
+const kvcache = @import("../kvcache/manager.zig");
+const BlockAllocator = @import("../kvcache/block_allocator.zig").BlockAllocator;
 const Backend = backend_mod.Backend;
 const TensorData = backend_mod.TensorData;
 const Format = format_mod.Format;
 const FormatTensorInfo = format_mod.TensorInfo;
 const Model = model_mod.Model;
 const Allocator = std.mem.Allocator;
+const PagedKvCache = kvcache.PagedKvCache;
+const SeqBlockTable = kvcache.SeqBlockTable;
 
 /// Maximum DeltaNet V-heads validated at runtime (assert).
 const max_ssm_v_heads: usize = 128;
@@ -54,6 +59,7 @@ pub const Qwen35Model = struct {
     // Architecture variant detection (Qwen3.5 vs Qwen2/3)
     has_gate: bool = true, // Q projection includes interleaved gate (Qwen3.5 only)
     has_qk_norm: bool = true, // Per-head Q/K RMS norms (Qwen3/3.5 only, not Qwen2)
+    has_post_attn_norm: bool = true, // Qwen3.5 fused addRmsNorm; Qwen3 uses separate ffn_norm
 
     is_moe: bool = false,
     n_experts: u32 = 0,
@@ -92,8 +98,12 @@ pub const Qwen35Model = struct {
     // Per-layer state: conv_states[layer] = ring buffer [conv_channels * (d_conv-1)]
     conv_states: [][]f32 = &.{},
     ssm_states: [][]f32 = &.{},
-    kv_keys: [][]f32 = &.{},
-    kv_values: [][]f32 = &.{},
+
+    // KV cache (PagedAttention)
+    paged_cache: PagedKvCache = undefined,
+    seq_table: SeqBlockTable = undefined,
+    block_allocator: BlockAllocator = undefined,
+    kv_type: kv_quant.KvQuantType = .f32,
     kv_seq_len: usize = 0,
     cancelled: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
     perf: perf.PerfCounters = .{},
@@ -104,8 +114,9 @@ pub const Qwen35Model = struct {
     }
 
     /// Initialize a Qwen3.5 model from format metadata and weights.
-    pub fn init(allocator: Allocator, f: Format, be: Backend, ctx_size: u32) !Qwen35Model {
+    pub fn init(allocator: Allocator, f: Format, be: Backend, ctx_size: u32, kv_type: kv_quant.KvQuantType) !Qwen35Model {
         var self = Qwen35Model{ .fmt = f, .be = be, .allocator = allocator };
+        self.kv_type = kv_type;
         const arch = f.getMetaStr("general.architecture") orelse "qwen35";
         self.n_layers = f.getArchU32(arch, "block_count") orelse 32;
         self.n_embd = f.getArchU32(arch, "embedding_length") orelse 4096;
@@ -119,7 +130,7 @@ pub const Qwen35Model = struct {
         self.ssm_n_group = f.getArchU32(arch, "ssm.group_count") orelse 16;
         self.ssm_dt_rank = f.getArchU32(arch, "ssm.time_step_rank") orelse 16;
         self.ssm_d_inner = f.getArchU32(arch, "ssm.inner_size") orelse 2048;
-        self.rope_dim = f.getArchU32(arch, "rope.dimension_count") orelse 64;
+        self.rope_dim = f.getArchU32(arch, "rope.dimension_count") orelse self.head_dim;
 
         // MoE configuration (e.g., Qwen3.5-35B-A3B uses 256 experts, top-8 + shared expert)
         if (f.getArchU32(arch, "expert_count")) |ec| {
@@ -162,6 +173,11 @@ pub const Qwen35Model = struct {
 
         // Detect Q/K per-head norms (present in Qwen3/3.5, absent in Qwen2).
         self.has_qk_norm = f.layerTensor(check_layer, "attn_q_norm.weight") != null;
+
+        // Detect Qwen3.5 vs Qwen3 residual structure.
+        // Qwen3.5: "post_attention_norm" (fused addRmsNorm before MLP).
+        // Qwen3/2: "ffn_norm" (separate pre-norm, standard residual after attention).
+        self.has_post_attn_norm = f.layerTensor(check_layer, "post_attention_norm.weight") != null;
 
         std.debug.assert(self.n_head % self.n_head_kv == 0);
         std.debug.assert(self.ssm_d_inner % self.ssm_dt_rank == 0);
@@ -223,27 +239,39 @@ pub const Qwen35Model = struct {
         const head_v_dim: usize = self.ssm_d_inner / num_v_heads;
         const head_k_dim: usize = self.ssm_d_state;
         const nkv_dim: usize = @as(usize, self.n_head_kv) * @as(usize, self.head_dim);
+
+        // PagedAttention: block_size=16, calculate num_blocks for max_seq_len
+        const block_size: u16 = 16;
+        const num_blocks = (self.max_seq_len + block_size - 1) / block_size * nl;
+
+        var paged_cache = try PagedKvCache.init(allocator, nl, nkv_dim, num_blocks, block_size);
+        errdefer paged_cache.deinit();
+
+        var block_allocator = BlockAllocator.init(&paged_cache, allocator);
+
+        var seq_table = try block_allocator.allocateSeqTable(nl);
+        errdefer block_allocator.freeSeqTable(&seq_table);
+
+        // Allocate first block
+        try block_allocator.appendBlock(&seq_table);
+
+        self.paged_cache = paged_cache;
+        self.seq_table = seq_table;
+        self.block_allocator = block_allocator;
+
         self.conv_states = try allocator.alloc([]f32, nl);
         errdefer allocator.free(self.conv_states);
         self.ssm_states = try allocator.alloc([]f32, nl);
         errdefer allocator.free(self.ssm_states);
-        self.kv_keys = try allocator.alloc([]f32, nl);
-        errdefer allocator.free(self.kv_keys);
-        self.kv_values = try allocator.alloc([]f32, nl);
-        errdefer allocator.free(self.kv_values);
 
         var layer_init_count: usize = 0;
         errdefer {
             for (0..layer_init_count) |i| {
-                be.freeKvSlice(allocator, self.kv_keys[i]);
-                be.freeKvSlice(allocator, self.kv_values[i]);
                 if (self.conv_states[i].len > 0) allocator.free(self.conv_states[i]);
                 if (self.ssm_states[i].len > 0) allocator.free(self.ssm_states[i]);
             }
         }
         for (0..nl) |i| {
-            self.kv_keys[i] = try be.allocKvSlice(allocator, self.max_seq_len * nkv_dim);
-            self.kv_values[i] = try be.allocKvSlice(allocator, self.max_seq_len * nkv_dim);
             if (!self.isFullAttn(@intCast(i))) {
                 // Conv state: (d_conv-1) columns, each of conv_channels
                 self.conv_states[i] = try allocator.alloc(f32, (self.ssm_d_conv - 1) * conv_ch);
@@ -333,8 +361,6 @@ pub const Qwen35Model = struct {
             self.allocator.free(self.moe_out);
         }
         for (0..self.n_layers) |i| {
-            self.be.freeKvSlice(self.allocator, self.kv_keys[i]);
-            self.be.freeKvSlice(self.allocator, self.kv_values[i]);
             if (self.conv_states[i].len > 0) self.allocator.free(self.conv_states[i]);
             if (self.ssm_states[i].len > 0) self.allocator.free(self.ssm_states[i]);
             if (self.dn_ssm_a[i].len > 0) self.allocator.free(self.dn_ssm_a[i]);
@@ -344,12 +370,13 @@ pub const Qwen35Model = struct {
         }
         self.allocator.free(self.conv_states);
         self.allocator.free(self.ssm_states);
-        self.allocator.free(self.kv_keys);
-        self.allocator.free(self.kv_values);
         self.allocator.free(self.dn_ssm_a);
         self.allocator.free(self.dn_dt_bias);
         self.allocator.free(self.dn_conv_w);
         self.allocator.free(self.dn_ssm_norm_w);
+
+        self.block_allocator.freeSeqTable(&self.seq_table);
+        self.paged_cache.deinit();
     }
 
     /// Return tensor weight data as [*]const f32.
@@ -373,6 +400,22 @@ pub const Qwen35Model = struct {
     /// Flush GPU work for accurate profiling timestamps.
     fn syncProfile(self: *Qwen35Model) void {
         if (self.perf.enabled) self.be.sync();
+    }
+
+    /// Helper: get flat f32 view of KV cache for a layer (assembled from paged blocks).
+    /// Returns slices pointing into paged cache blocks.
+    fn getLayerKvView(self: *Qwen35Model, layer: usize) struct { keys: []u8, values: []u8 } {
+        const num_blocks = self.seq_table.block_table[layer].len;
+        if (num_blocks == 0) return .{ .keys = &[_]u8{}, .values = &[_]u8{} };
+
+        // For now, assume single block (will extend for multi-block later)
+        const block_id = self.seq_table.block_table[layer][0];
+        const keys_f32 = self.paged_cache.blocks[block_id].keys;
+        const values_f32 = self.paged_cache.blocks[block_id].values;
+        return .{
+            .keys = std.mem.sliceAsBytes(keys_f32),
+            .values = std.mem.sliceAsBytes(values_f32),
+        };
     }
 
     // ---- Full attention layer ----
@@ -441,10 +484,11 @@ pub const Qwen35Model = struct {
 
         // SDPA
         t = self.perf.start();
+        const kv_view = self.getLayerKvView(li);
         attn_ops.scaledDotProductAttention(
             q_ptr,
-            self.kv_keys[li],
-            self.kv_values[li],
+            kv_view.keys,
+            kv_view.values,
             self.k_buf,
             self.v_buf,
             self.attn_out.ptr,
@@ -457,6 +501,7 @@ pub const Qwen35Model = struct {
             self.be,
             null,
             0,
+            .f32, // PagedKvCache uses f32 blocks
         );
         self.syncProfile();
         self.perf.end(.sdpa, t);
@@ -476,6 +521,13 @@ pub const Qwen35Model = struct {
         self.syncProfile();
         self.perf.end(.gemv_out, t);
 
+        // Qwen3/2: standard residual after attention (no fused addRmsNorm in MLP).
+        if (!self.has_post_attn_norm) {
+            t = self.perf.start();
+            self.be.add(self.hidden.ptr, self.hidden2.ptr, self.hidden.ptr, e);
+            self.syncProfile();
+            self.perf.end(.add, t);
+        }
     }
 
     // ---- DeltaNet SSM layer ----
@@ -562,10 +614,16 @@ pub const Qwen35Model = struct {
         const e: usize = self.n_embd;
         const ff: usize = self.n_ff;
 
-        // Post-attention norm
+        // Pre-MLP norm: Qwen3.5 fuses residual add + norm (addRmsNorm with post_attention_norm),
+        // Qwen3/2 uses standard separate pre-norm (rmsNorm with ffn_norm).
         var t = self.perf.start();
-        const nw = self.fmt.layerTensor(li, "post_attention_norm.weight") orelse return error.MissingTensor;
-        self.be.addRmsNorm(self.hidden.ptr, self.hidden2.ptr, self.asF32(nw, e), self.hidden2.ptr, e, self.rms_eps);
+        if (self.has_post_attn_norm) {
+            const nw = self.fmt.layerTensor(li, "post_attention_norm.weight") orelse return error.MissingTensor;
+            self.be.addRmsNorm(self.hidden.ptr, self.hidden2.ptr, self.asF32(nw, e), self.hidden2.ptr, e, self.rms_eps);
+        } else {
+            const nw = self.fmt.layerTensor(li, "ffn_norm.weight") orelse return error.MissingTensor;
+            self.be.rmsNorm(self.hidden.ptr, self.asF32(nw, e), self.hidden2.ptr, e, self.rms_eps);
+        }
         self.syncProfile();
         self.perf.end(.rms_norm, t);
 
@@ -740,6 +798,14 @@ pub const Qwen35Model = struct {
     /// Run one token through the model, returning the argmax next token ID.
     pub fn forward(self: *Qwen35Model, token_id: u32) !u32 {
         if (self.kv_seq_len >= self.max_seq_len) return error.KVCacheFull;
+
+        // Check if new block needed
+        const current_blocks = self.seq_table.block_table[0].len;
+        const needed_blocks = (self.kv_seq_len + 1 + self.paged_cache.block_size - 1) / self.paged_cache.block_size;
+        if (needed_blocks > current_blocks) {
+            try self.block_allocator.appendBlock(&self.seq_table);
+        }
+
         const t = self.perf.start();
         try self.embLookup(token_id);
         self.syncProfile();
@@ -749,7 +815,6 @@ pub const Qwen35Model = struct {
             if (self.cancelled.load(.acquire)) return error.Cancelled;
             const l: u32 = @intCast(li);
             if (self.isFullAttn(l)) try self.fullAttnLayer(l) else try self.deltaNetLayer(l);
-
             if (self.is_moe) try self.moeLayer(l) else try self.mlpLayer(l);
         }
 
@@ -781,6 +846,14 @@ pub const Qwen35Model = struct {
             if (self.conv_states[i].len > 0) @memset(self.conv_states[i], 0);
             if (self.ssm_states[i].len > 0) @memset(self.ssm_states[i], 0);
         }
+        self.block_allocator.freeSeqTable(&self.seq_table);
+        self.seq_table = self.block_allocator.allocateSeqTable(self.n_layers) catch {
+            // If allocation fails, leave cache in invalid state (will fail on next forward)
+            return;
+        };
+        self.block_allocator.appendBlock(&self.seq_table) catch {
+            return;
+        };
         model_mod.resetInferenceState(&self.kv_seq_len, &self.cancelled);
     }
 };

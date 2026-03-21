@@ -37,18 +37,18 @@ Requirements for production readiness. Each maps to roadmap phases.
 
 ### Production Serving
 
-- [ ] **SERV-01**: Continuous batching scheduler processes multiple concurrent requests with iteration-level scheduling
-- [ ] **SERV-02**: PagedAttention integrated into model inference loop with block tables
+- [x] **SERV-01**: Continuous batching scheduler processes multiple concurrent requests with iteration-level scheduling
+- [x] **SERV-02**: PagedAttention integrated into model inference loop with block tables
 - [ ] **SERV-03**: RadixAttention prefix caching integrated into server with automatic prefix detection
 - [ ] **SERV-04**: RadixAttention LRU eviction using frequency x cost metric (not simple LRU)
-- [ ] **SERV-05**: OpenAI-compatible /v1/chat/completions API with full schema compliance
-- [ ] **SERV-06**: SSE streaming with correct OpenAI event format (data: [DONE])
-- [ ] **SERV-07**: Per-request timeout with inference cancellation (configurable 30-120s)
-- [ ] **SERV-08**: Rate limiting per API key (requests/min + tokens/min, token bucket algorithm)
-- [ ] **SERV-09**: API key authentication (--api-key CLI flag, Authorization: Bearer header)
-- [ ] **SERV-10**: Prometheus /metrics endpoint (throughput, latency p50/p95/p99, queue depth, KV cache usage)
-- [ ] **SERV-11**: Health check endpoints (/health, /ready)
-- [ ] **SERV-12**: Graceful shutdown (drain in-flight requests before exit)
+- [x] **SERV-05**: OpenAI-compatible /v1/chat/completions API with full schema compliance
+- [x] **SERV-06**: SSE streaming with correct OpenAI event format (data: [DONE])
+- [x] **SERV-07**: Per-request timeout with inference cancellation (configurable 30-120s)
+- [x] **SERV-08**: Rate limiting per API key (requests/min + tokens/min, token bucket algorithm)
+- [x] **SERV-09**: API key authentication (--api-key CLI flag, Authorization: Bearer header)
+- [x] **SERV-10**: Prometheus /metrics endpoint (throughput, latency p50/p95/p99, queue depth, KV cache usage)
+- [x] **SERV-11**: Health check endpoints (/health, /ready)
+- [x] **SERV-12**: Graceful shutdown (drain in-flight requests before exit)
 
 ### Tiered KV Cache
 
@@ -138,18 +138,18 @@ Deferred to future release. Tracked but not in current roadmap.
 | MODL-07 | Phase 1 | Complete |
 | MODL-08 | Phase 1 | Complete |
 | MODL-09 | Phase 1 | Complete |
-| SERV-01 | Phase 2 | Pending |
-| SERV-02 | Phase 2 | Pending |
+| SERV-01 | Phase 2 | Complete |
+| SERV-02 | Phase 2 | Complete |
 | SERV-03 | Phase 3 | Pending |
 | SERV-04 | Phase 3 | Pending |
-| SERV-05 | Phase 2 | Pending |
-| SERV-06 | Phase 2 | Pending |
-| SERV-07 | Phase 2 | Pending |
-| SERV-08 | Phase 2 | Pending |
-| SERV-09 | Phase 2 | Pending |
-| SERV-10 | Phase 2 | Pending |
-| SERV-11 | Phase 2 | Pending |
-| SERV-12 | Phase 2 | Pending |
+| SERV-05 | Phase 2 | Complete |
+| SERV-06 | Phase 2 | Complete |
+| SERV-07 | Phase 2 | Complete |
+| SERV-08 | Phase 2 | Complete |
+| SERV-09 | Phase 2 | Complete |
+| SERV-10 | Phase 2 | Complete |
+| SERV-11 | Phase 2 | Complete |
+| SERV-12 | Phase 2 | Complete |
 | TIER-01 | Phase 3 | Pending |
 | TIER-02 | Phase 3 | Pending |
 | TIER-03 | Phase 3 | Pending |

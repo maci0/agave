@@ -36,6 +36,7 @@ Plans:
 - [x] 01-04-PLAN.md — CUDA warp-parallel SDPA softmax (wave 1)
 - [x] 01-05-PLAN.md — Fix broken models (Nemotron Nano, GLM-4, GPT-OSS, Nemotron-H) (wave 2, depends on 01-01 through 01-04)
 - [x] 01-06-PLAN.md — Golden test framework + cross-backend verification (all 5 backends including ROCm) (wave 3, depends on 01-05)
+- [x] 01-07-PLAN.md — Add DeepSeek-R1-Qwen3-8B model (wave 3, depends on 01-06)
 
 ---
 
@@ -54,7 +55,12 @@ Plans:
 5. Prometheus /metrics endpoint exports throughput, latency p50/p95/p99, queue depth, KV cache usage, and GPU memory
 6. Server gracefully drains in-flight requests on SIGTERM/SIGINT (no aborted generations, max 30s drain timeout)
 
-**Plans**: TBD
+**Plans**: 3 plans in 2 waves
+
+Plans:
+- [x] 02-01-PLAN.md — Scheduler + rate limiter infrastructure (wave 1)
+- [x] 02-02-PLAN.md — PagedAttention integration in all models (wave 1)
+- [x] 02-03-PLAN.md — OpenAI API + metrics + health checks + graceful shutdown (wave 2, depends on 02-01)
 
 ---
 
@@ -87,7 +93,7 @@ Plans:
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Correctness Foundation | 7/7 | Complete | 2026-03-22 |
-| 2. Production Serving | 0/? | Not started | - |
+| 2. Production Serving | 3/3 | Complete | 2026-03-21 |
 | 3. Memory Optimization | 0/? | Not started | - |
 | 4. Multi-GPU Parallelism | - | Backlog | - |
 
@@ -122,4 +128,4 @@ Plans:
 ---
 
 *Roadmap created: 2026-03-21*
-*Last updated: 2026-03-22 (Phase 1 plans created)*
+*Last updated: 2026-03-22 (Phase 2 plans created)*

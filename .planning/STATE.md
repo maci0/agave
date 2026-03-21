@@ -3,17 +3,17 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: planning
-last_updated: "2026-03-21T17:16:38.652Z"
+last_updated: "2026-03-21T18:12:00.307Z"
 progress:
   total_phases: 4
-  completed_phases: 1
-  total_plans: 7
-  completed_plans: 7
+  completed_phases: 2
+  total_plans: 10
+  completed_plans: 10
 ---
 
 # Project State: Agave Production-Ready LLM Inference Engine
 
-**Updated:** 2026-03-22
+**Updated:** 2026-03-21
 **Status:** Ready to plan
 
 ---
@@ -22,7 +22,7 @@ progress:
 
 **Core Value**: Every supported model must produce correct output on every backend at full GPU speed
 
-**Current Focus**: Establishing correctness foundation — eliminate CPU fallbacks, verify all models on all backends
+**Current Focus**: Production serving infrastructure complete — moving to memory optimization
 
 **Mode**: YOLO (rapid iteration with continuous verification)
 
@@ -30,7 +30,7 @@ progress:
 
 ## Current Position
 
-Phase: 2
+Phase: 3
 Plan: Not started
 
 ## Performance Metrics
@@ -65,6 +65,10 @@ Plan: Not started
 | Keep all production serving features together in Phase 2 | Continuous batching, PagedAttention, API, auth, metrics are tightly coupled | Phase 2 scope: 10 requirements (2-3 weeks) |
 | Separate RadixAttention into Phase 3 | Depends on PagedAttention (Phase 2), but adds complexity beyond table stakes | Enables parallelization: Phase 3 + Phase 4 concurrent |
 | Make Phase 4 independent of Phases 2-3 | Parallelism only needs working backends/models, not serving infrastructure | Critical path optimization (saves 2-3 weeks calendar time) |
+| Lock-free atomics for metrics (02-03) | Hot path cannot afford mutex contention | Metrics recording is non-blocking |
+| Histogram buckets at 10/50/100/500ms, 1/5/10/30s (02-03) | Covers typical LLM latency distribution | Accurate p50/p95/p99 tracking |
+| 30-second drain timeout (02-03) | Balances clean shutdown vs deployment velocity | Kubernetes-native deployments |
+| Separate /health and /ready endpoints (02-03) | Kubernetes best practice for liveness vs readiness | Zero-downtime rolling updates |
 | Phase 01 P04 | 117 | 3 tasks | 3 files |
 | Phase 01 P01 | 292 | 3 tasks | 3 files |
 | Phase 01 P03 | 439 | 3 tasks | 5 files |
@@ -72,22 +76,20 @@ Plan: Not started
 | Phase 01 P02 | 8 | 3 tasks | 7 files |
 | Phase 01 P06 | 45 | 1 tasks | 1 files |
 | Phase 01 P07 | 2434 | 4 tasks | 9 files |
+| Phase 02 P01 | 11 | 3 tasks | 3 files |
+| Phase 02 P02 | 22 | 2 tasks | 5 files |
+| Phase 02 P03 | 18 | 3 tasks | 2 files |
 
 ### Active TODOs
 
-- [ ] Review roadmap with project stakeholders
-- [ ] Confirm Phase 1 priorities: Metal SDPA vs CUDA quantized GEMV order
-- [ ] Decide Metal SDPA approach: debug existing kernel vs rewrite with FlashAttention-2
-- [ ] Validate CUDA sm_121 as target (vs falling back to sm_120 compilation)
-- [ ] Proceed to `/gsd:plan-phase 1` when ready
+- [ ] Begin Phase 3 planning: RadixAttention + tiered KV cache
+- [ ] Design cache-aware scheduler priority scoring
+- [ ] Plan VRAM → RAM KV page demotion strategy
+- [ ] Design zero-copy KV access for UMA platforms
 
 ### Known Blockers
 
-**None at roadmap level.** Phase-specific blockers will surface during planning:
-
-- Phase 1: Metal GPU SDPA wrong output (likely race condition or barrier placement)
-- Phase 1: CUDA Blackwell sm_121 blockReduce hangs (compiler bug, warp-only workaround)
-- Phase 1: Nemotron Nano MoE router overflow (-2.3e26 scores, needs per-block quantization)
+**None** — Phase 2 complete, no active blockers for Phase 3 planning.
 
 ### Research Insights
 
@@ -103,32 +105,43 @@ Plan: Not started
 
 ### Last Session
 
-- Initialized project with `/gsd:new-project`
-- Created PROJECT.md, REQUIREMENTS.md, research/SUMMARY.md
-- Defined 50 v1 requirements across 5 categories
-- Completed comprehensive research synthesis (GPU kernels, serving, caching, parallelism)
-- Created ROADMAP.md with 4 phases, 100% requirement coverage
-- All files written to `.planning/`
+- Completed Phase 2 Plan 03: OpenAI API + Prometheus metrics + graceful shutdown
+- Created src/metrics.zig (Prometheus metrics collector)
+- Extended src/server.zig with /v1/chat/completions, /v1/completions, /metrics, /health, /ready
+- Added SIGTERM/SIGINT graceful shutdown with 30s drain timeout
+- Verified all endpoints work correctly
+- Created 02-03-SUMMARY.md
 
 ### Next Session
 
-**Expected action**: `/gsd:plan-phase 1`
+**Expected action**: `/gsd:plan-phase 3` (Memory Optimization: RadixAttention + tiered KV cache)
 
-**Context needed**: None (all context captured in PROJECT.md, REQUIREMENTS.md, research/SUMMARY.md, ROADMAP.md)
+**Context needed**: Phase 2 scheduler and PagedAttention infrastructure
 
 **Files to review**:
 
-- `.planning/ROADMAP.md` — Phase 1 goal, requirements, success criteria
-- `.planning/research/SUMMARY.md` — Metal SDPA pitfalls, CUDA quantized GEMV patterns, numerical testing
-- `CLAUDE.md` — Zig standards, backend patterns, quantization rules
+- `.planning/ROADMAP.md` — Phase 3 goal, requirements, success criteria
+- `.planning/research/SUMMARY.md` — RadixAttention eviction policy, cache-aware scheduling
+- `src/scheduler.zig` — RequestManager interface to extend
+- `src/kvcache/manager.zig` — PagedKvCache to build upon
 
 ---
 
 ## Phase Completion History
 
-**No phases completed yet.**
+### Phase 1: Correctness Foundation (COMPLETE)
+
+- **Completed:** 2026-03-22
+- **Plans:** 7/7 (Metal SDPA, CUDA GEMV, Vulkan kernels, CUDA SDPA, model fixes, golden tests, DeepSeek-R1)
+- **Key outcomes:** All 7 models verified on all 5 backends, no CPU fallbacks in hot path, golden test framework established
+
+### Phase 2: Production Serving (COMPLETE)
+
+- **Completed:** 2026-03-21
+- **Plans:** 3/3 (scheduler + rate limiter, PagedAttention, OpenAI API + metrics + graceful shutdown)
+- **Key outcomes:** Multi-tenant continuous batching, OpenAI-compatible API, Prometheus observability, Kubernetes-ready health probes
 
 ---
 
 *State initialized: 2026-03-21*
-*Last updated: 2026-03-21 after roadmap creation*
+*Last updated: 2026-03-21 after Phase 2 completion*
