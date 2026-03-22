@@ -1,0 +1,19 @@
+#version 450
+
+layout(local_size_x = 256) in;
+
+layout(set = 0, binding = 0) readonly buffer A { float a[]; };
+layout(set = 0, binding = 1) writeonly buffer O { float o[]; };
+layout(push_constant) uniform Params { uint n; };
+
+void main() {
+    uint i = gl_GlobalInvocationID.x;
+    if (i >= n) return;
+    float x = a[i];
+    const float sqrt_2_over_pi = 0.7978845608028654;
+    const float coeff = 0.044715;
+    float inner = sqrt_2_over_pi * fma(coeff * x * x, x, x);
+    float clamped = clamp(inner, -10.0, 10.0);
+    float e2 = exp(2.0 * clamped);
+    o[i] = 0.5 * x * (1.0 + (e2 - 1.0) / (e2 + 1.0));
+}

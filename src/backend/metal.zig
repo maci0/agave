@@ -160,7 +160,16 @@ pub const MetalBackend = struct {
             device,
             objc.sel("newLibraryWithSource:options:error:"),
             .{ source_ns, @as(?objc.id, null), @as(*?objc.id, &compile_err) },
-        ) orelse return error.ShaderCompileFailed;
+        ) orelse {
+            if (compile_err) |err_obj| {
+                const desc_ns = objc.msgSend(?objc.id, err_obj, objc.sel("localizedDescription"), .{});
+                if (desc_ns) |ns| {
+                    const cstr = objc.msgSend(?[*:0]const u8, ns, objc.sel("UTF8String"), .{});
+                    if (cstr) |d| std.log.err("Metal shader compile error: {s}", .{d});
+                }
+            }
+            return error.ShaderCompileFailed;
+        };
         errdefer release(library);
 
         // Scratch buffer — 8 bytes, MTLResourceStorageModeShared (0)
@@ -222,7 +231,7 @@ pub const MetalBackend = struct {
         };
         // Pre-allocate capacity to prevent OOM during hot-path buf_cache.put() calls.
         // 512 entries covers typical models (weights + activations + KV cache buffers).
-        self.buf_cache.ensureTotalCapacity(512) catch {};
+        self.buf_cache.ensureTotalCapacity(backend_mod.buf_cache_initial_capacity) catch {};
 
         self.pipe_silu = try self.makePipeline("silu_f32");
         self.pipe_add = try self.makePipeline("add_f32");
@@ -325,7 +334,10 @@ pub const MetalBackend = struct {
             self.library,
             objc.sel("newFunctionWithName:"),
             .{ns_name},
-        ) orelse return error.KernelNotFound;
+        ) orelse {
+            std.log.err("Metal kernel not found: {s}", .{name});
+            return error.KernelNotFound;
+        };
 
         var err: ?objc.id = null;
         return objc.msgSend(
@@ -333,7 +345,17 @@ pub const MetalBackend = struct {
             self.device,
             objc.sel("newComputePipelineStateWithFunction:error:"),
             .{ func, @as(*?objc.id, &err) },
-        ) orelse return error.PipelineFailed;
+        ) orelse {
+            std.log.err("Metal pipeline failed for kernel: {s}", .{name});
+            if (err) |err_obj| {
+                const desc_ns = objc.msgSend(?objc.id, err_obj, objc.sel("localizedDescription"), .{});
+                if (desc_ns) |ns| {
+                    const cstr = objc.msgSend(?[*:0]const u8, ns, objc.sel("UTF8String"), .{});
+                    if (cstr) |d| std.log.err("  Detail: {s}", .{d});
+                }
+            }
+            return error.PipelineFailed;
+        };
     }
 
     // ── Buffer helpers ────────────────────────────────────────
@@ -644,11 +666,7 @@ pub const MetalBackend = struct {
             .f16 => self.pipe_gemv_f16,
             .fp8_e4m3 => self.pipe_gemv_fp8_e4m3,
             .fp8_e5m2 => self.pipe_gemv_fp8_e5m2,
-            else => {
-                var cpu = self.cpuFallback();
-                cpu.gemv(x, w, y, n, k);
-                return;
-            },
+            else => @panic("Metal GEMV: unsupported dtype — add a GPU kernel"),
         };
 
         const w_bytes = weightBytes(w.dtype, n, k);
@@ -905,7 +923,6 @@ pub const MetalBackend = struct {
         setBufferOffset(enc3, self.scratch_buf, 4, 1); // sum_buf
         setBytes(enc3, @ptrCast(&n_val), @sizeOf(u32), 2);
         self.endEncode1D(enc3, self.pipe_softmax_div, n);
-
     }
 
     // ── RoPE ──────────────────────────────────────────────────
@@ -999,16 +1016,11 @@ pub const MetalBackend = struct {
     /// Dispatches to a native Metal kernel for the 3-buffer MLX-Q layout
     /// (packed u32 weights + bf16 scales + bf16 biases, group_size=64).
     pub fn gemvMlxQ(self: *MetalBackend, x: [*]const f32, weight: [*]const u8, scales: [*]const u8, biases: [*]const u8, y: [*]f32, n: usize, k: usize, bits: u32) void {
-        if (bits != 4) {
-            var cpu = self.cpuFallback();
-            cpu.gemvMlxQ(x, weight, scales, biases, y, n, k, bits);
-            return;
-        }
+        if (bits != 4) @panic("Metal MLX GEMV: only 4-bit supported — add GPU kernel for other bit widths");
         const gpr = (k + 63) / 64;
         const wpg: usize = 8;
         const w_bytes = n * gpr * wpg * @sizeOf(u32);
         const sb_bytes = n * gpr * 2;
-
 
         const x_ref = self.getBufRef(@ptrCast(x), k * @sizeOf(f32));
         const w_ref = self.getBufRef(@ptrCast(weight), w_bytes);
@@ -1126,13 +1138,8 @@ pub const MetalBackend = struct {
     const sdpa_gpu_max_seq: usize = 4096;
 
     pub fn sdpa(self: *MetalBackend, q: [*]const f32, keys: []u8, values: []u8, k_new: [*]const f32, v_new: [*]const f32, output: [*]f32, nh: usize, nkv: usize, hd: usize, seq_len: usize, scale: f32, kv_type: @import("backend.zig").KvQuantType) void {
-        // Non-f32 KV types: fall back to CPU (quantized SDPA not yet on GPU).
-        if (kv_type != .f32) {
-            self.flush();
-            var cpu = CpuBackend{ .pool = self.pool };
-            cpu.sdpa(q, keys, values, k_new, v_new, output, nh, nkv, hd, seq_len, scale, kv_type);
-            return;
-        }
+        // Non-f32 KV types not yet supported on GPU.
+        if (kv_type != .f32) @panic("Metal SDPA: quantized KV not supported — add GPU kernel or use --kv-type f32");
 
         const f32_keys: []f32 = @as([*]f32, @ptrCast(@alignCast(keys.ptr)))[0 .. keys.len / 4];
         const f32_values: []f32 = @as([*]f32, @ptrCast(@alignCast(values.ptr)))[0 .. values.len / 4];
@@ -1140,13 +1147,8 @@ pub const MetalBackend = struct {
         const kvd = nkv * hd;
         const sl = seq_len + 1;
 
-        // Fall back to CPU for very long sequences (GPU threadgroup memory limit).
-        if (sl > sdpa_gpu_max_seq) {
-            self.flush();
-            var cpu = CpuBackend{ .pool = self.pool };
-            cpu.sdpa(q, keys, values, k_new, v_new, output, nh, nkv, hd, seq_len, scale, .f32);
-            return;
-        }
+        // Very long sequences exceed GPU threadgroup memory limit.
+        if (sl > sdpa_gpu_max_seq) @panic("Metal SDPA: sequence length exceeds GPU limit (4096) — reduce --ctx-size");
 
         // ── GPU KV append: copy k_new/v_new into KV cache at position seq_len ──
         {
@@ -1169,6 +1171,7 @@ pub const MetalBackend = struct {
         // ── GPU SDPA: FlashAttention-2 with online softmax ──
         // Dispatches to sdpa_fa2 kernel (compute-only, no blit encoders).
         // One threadgroup per query head, processes K,V in blocks to fit threadgroup memory.
+        // Falls back to CPU SDPA if FA2 pipeline was unavailable at init.
         {
             const q_ref = self.getBufRef(@ptrCast(q), nh * hd * @sizeOf(f32));
             const keys_ref = self.getBufRef(@ptrCast(f32_keys.ptr), sl * kvd * @sizeOf(f32));

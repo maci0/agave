@@ -1,0 +1,93 @@
+name: CI
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+
+env:
+  ZIG_VERSION: "0.15.2"
+
+jobs:
+  test-linux-x86:
+    name: Test on Linux x86_64
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Zig
+        uses: goto-bus-stop/setup-zig@v2
+        with:
+          version: ${{ env.ZIG_VERSION }}
+
+      - name: Cache Zig build
+        uses: actions/cache@v4
+        with:
+          path: |
+            .zig-cache
+            ~/.cache/zig
+          key: zig-linux-x86-${{ hashFiles('build.zig', 'build.zig.zon') }}
+          restore-keys: zig-linux-x86-
+
+      - name: Build
+        run: zig build
+
+      - name: Run tests
+        run: zig build test
+
+  test-macos:
+    name: Test on macOS (Apple Silicon)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Zig
+        uses: goto-bus-stop/setup-zig@v2
+        with:
+          version: ${{ env.ZIG_VERSION }}
+
+      - name: Cache Zig build
+        uses: actions/cache@v4
+        with:
+          path: |
+            .zig-cache
+            ~/Library/Caches/zig
+          key: zig-macos-${{ hashFiles('build.zig', 'build.zig.zon') }}
+          restore-keys: zig-macos-
+
+      - name: Build
+        run: zig build
+
+      - name: Run tests
+        run: zig build test
+
+  cross-compile-check:
+    name: Cross-compilation matrix
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        target:
+          - x86_64-linux
+          - aarch64-linux
+          - x86_64-macos
+          - aarch64-macos
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Zig
+        uses: goto-bus-stop/setup-zig@v2
+        with:
+          version: ${{ env.ZIG_VERSION }}
+
+      - name: Cache Zig build
+        uses: actions/cache@v4
+        with:
+          path: |
+            .zig-cache
+            ~/.cache/zig
+          key: zig-cross-${{ matrix.target }}-${{ hashFiles('build.zig', 'build.zig.zon') }}
+          restore-keys: zig-cross-${{ matrix.target }}-
+
+      - name: Build for target
+        run: zig build -Dtarget=${{ matrix.target }}

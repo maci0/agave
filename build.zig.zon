@@ -1,0 +1,16 @@
+.{
+    .name = .agave,
+    .version = "0.1.0",
+    .fingerprint = 0xc9298ceaeb79e334,
+    .paths = .{""},
+    .dependencies = .{
+        .clap = .{
+            .url = "https://github.com/Hejsil/zig-clap/archive/refs/tags/0.11.0.tar.gz",
+            .hash = "clap-0.11.0-oBajB-HnAQDPCKYzwF7rO3qDFwRcD39Q0DALlTSz5H7e",
+        },
+        .vaxis = .{
+            .url = "git+https://github.com/rockorager/libvaxis.git#41fff922316dcb8776332ec460e73eaf397d5033",
+            .hash = "vaxis-0.5.1-BWNV_JJOCQAtdJyLvrYCKbKIhX9q3liQkKMAzujWS4HJ",
+        },
+    },
+}

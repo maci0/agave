@@ -1,0 +1,88 @@
+#version 450
+#extension GL_KHR_shader_subgroup_arithmetic : require
+
+layout(local_size_x = 256) in;
+
+layout(set = 0, binding = 0) readonly buffer X { float x[]; };
+layout(set = 0, binding = 1) readonly buffer W { uint w_raw[]; };
+layout(set = 0, binding = 2) writeonly buffer Y { float y[]; };
+layout(push_constant) uniform Params { uint n; uint k; };
+
+shared float shared_sums[8];
+
+// Q6_K: 256 values per super-block, 210 bytes.
+// Layout: { uchar ql[128]; uchar qh[64]; char scales[16]; half d; }
+
+uint readByte(uint byte_off) {
+    return (w_raw[byte_off / 4] >> ((byte_off % 4) * 8)) & 0xFF;
+}
+
+int readSByte(uint byte_off) {
+    int v = int(readByte(byte_off));
+    if (v > 127) v -= 256;
+    return v;
+}
+
+void main() {
+    uint row = gl_WorkGroupID.x;
+    uint tid = gl_LocalInvocationID.x;
+    uint tg_size = gl_WorkGroupSize.x;
+    if (row >= n) return;
+
+    const uint bpb = 210;
+    const uint bs = 256;
+    uint nb = (k + bs - 1) / bs;
+    float sum = 0.0;
+
+    for (uint b = tid; b < nb; b += tg_size) {
+        uint bp = (row * nb + b) * bpb;
+        uint d_off = bp + 208;
+        uint d_bits = readByte(d_off) | (readByte(d_off + 1) << 8);
+        float d = unpackHalf2x16(d_bits).x;
+        uint bk = b * bs;
+
+        for (uint chunk = 0; chunk < 2; chunk++) {
+            uint ql_off = bp + chunk * 64;
+            uint qh_off = bp + 128 + chunk * 32;
+            uint sc_off = bp + 192 + chunk * 8;
+            uint base = bk + chunk * 128;
+
+            for (uint l = 0; l < 32; l++) {
+                uint is_idx = l / 16;
+                uint ql_val = readByte(ql_off + l);
+                uint ql32_val = readByte(ql_off + l + 32);
+                uint qh_val = readByte(qh_off + l);
+
+                int q1 = int((ql_val & 0xF) | ((qh_val & 3u) << 4)) - 32;
+                int q2 = int((ql32_val & 0xF) | (((qh_val >> 2) & 3u) << 4)) - 32;
+                int q3 = int((ql_val >> 4) | (((qh_val >> 4) & 3u) << 4)) - 32;
+                int q4 = int((ql32_val >> 4) | (((qh_val >> 6) & 3u) << 4)) - 32;
+
+                uint gi0 = base + l;
+                uint gi1 = base + l + 32;
+                uint gi2 = base + l + 64;
+                uint gi3 = base + l + 96;
+                float sc0 = float(readSByte(sc_off + is_idx));
+                float sc2 = float(readSByte(sc_off + is_idx + 2));
+                float sc4 = float(readSByte(sc_off + is_idx + 4));
+                float sc6 = float(readSByte(sc_off + is_idx + 6));
+                if (gi0 < k) sum += x[gi0] * d * sc0 * float(q1);
+                if (gi1 < k) sum += x[gi1] * d * sc2 * float(q2);
+                if (gi2 < k) sum += x[gi2] * d * sc4 * float(q3);
+                if (gi3 < k) sum += x[gi3] * d * sc6 * float(q4);
+            }
+        }
+    }
+
+    sum = subgroupAdd(sum);
+    uint sg_id = gl_SubgroupID;
+    uint sg_lane = gl_SubgroupInvocationID;
+    if (sg_lane == 0) shared_sums[sg_id] = sum;
+    barrier();
+    uint num_sg = (tg_size + gl_SubgroupSize - 1) / gl_SubgroupSize;
+    if (tid < num_sg) sum = shared_sums[tid]; else sum = 0.0;
+    if (tid < gl_SubgroupSize) {
+        sum = subgroupAdd(sum);
+        if (tid == 0) y[row] = sum;
+    }
+}

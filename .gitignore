@@ -61,3 +61,6 @@ tests/golden_outputs/
 
 # Claude code artifacts
 .claude/
+
+/zig-out/
+/zig-out-linux

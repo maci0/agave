@@ -1,0 +1,104 @@
+#version 450
+#extension GL_KHR_shader_subgroup_arithmetic : require
+
+layout(local_size_x = 256) in;
+
+layout(set = 0, binding = 0) readonly buffer Q  { float q_data[];  };
+layout(set = 0, binding = 1) readonly buffer K  { float k_data[];  };
+layout(set = 0, binding = 2) readonly buffer V  { float v_data[];  };
+layout(set = 0, binding = 3) writeonly buffer O { float out_data[]; };
+
+layout(push_constant) uniform Params {
+    uint nh;
+    uint nkv;
+    uint hd;
+    uint sl;
+    float scale;
+};
+
+const uint SDPA_MAX_SEQ_LEN = 4096;
+const uint SDPA_MAX_HEAD_DIM = 256;
+
+shared float scores[SDPA_MAX_SEQ_LEN];
+shared float q_local[SDPA_MAX_HEAD_DIM];
+shared float shared_vals[8];
+
+void main() {
+    uint h = gl_WorkGroupID.x;
+    uint tid = gl_LocalInvocationID.x;
+    uint tg_sz = gl_WorkGroupSize.x;
+    if (h >= nh) return;
+
+    uint hpg = nh / nkv;
+    uint kvh = h / hpg;
+    uint kvd = nkv * hd;
+
+    // Load Q into shared memory
+    for (uint d = tid; d < hd; d += tg_sz) {
+        q_local[d] = q_data[h * hd + d];
+    }
+    barrier();
+
+    // QK dot products
+    for (uint t = tid; t < sl; t += tg_sz) {
+        float dot_val = 0.0;
+        uint base = t * kvd + kvh * hd;
+        for (uint d = 0; d < hd; d++) {
+            dot_val += q_local[d] * k_data[base + d];
+        }
+        scores[t] = dot_val * scale;
+    }
+    barrier();
+
+    // Softmax: find max
+    float mx = -1.0 / 0.0;
+    for (uint t = tid; t < sl; t += tg_sz) {
+        mx = max(mx, scores[t]);
+    }
+    mx = subgroupMax(mx);
+    uint sg_lane = gl_SubgroupInvocationID;
+    uint sg_id = gl_SubgroupID;
+    uint num_sg = (tg_sz + gl_SubgroupSize - 1) / gl_SubgroupSize;
+    if (sg_lane == 0) shared_vals[sg_id] = mx;
+    barrier();
+    if (tid < num_sg) mx = shared_vals[tid]; else mx = -1.0 / 0.0;
+    if (tid < gl_SubgroupSize) {
+        mx = subgroupMax(mx);
+        if (tid == 0) shared_vals[0] = mx;
+    }
+    barrier();
+    float max_val = shared_vals[0];
+
+    // Softmax: exp and sum
+    float local_sum = 0.0;
+    for (uint t = tid; t < sl; t += tg_sz) {
+        float v = exp(scores[t] - max_val);
+        scores[t] = v;
+        local_sum += v;
+    }
+    local_sum = subgroupAdd(local_sum);
+    if (sg_lane == 0) shared_vals[sg_id] = local_sum;
+    barrier();
+    if (tid < num_sg) local_sum = shared_vals[tid]; else local_sum = 0.0;
+    if (tid < gl_SubgroupSize) {
+        local_sum = subgroupAdd(local_sum);
+        if (tid == 0) shared_vals[0] = local_sum;
+    }
+    barrier();
+    float inv_sum = 1.0 / shared_vals[0];
+
+    // Softmax: normalize
+    for (uint t = tid; t < sl; t += tg_sz) {
+        scores[t] *= inv_sum;
+    }
+    barrier();
+
+    // V accumulation
+    for (uint d = tid; d < hd; d += tg_sz) {
+        float acc = 0.0;
+        for (uint t = 0; t < sl; t++) {
+            acc += scores[t] * v_data[t * kvd + kvh * hd + d];
+        }
+        out_data[h * hd + d] = acc;
+    }
+}

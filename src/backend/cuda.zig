@@ -156,10 +156,7 @@ pub const CudaBackend = struct {
     fn_gemv_fp8_e5m2: CUfunction = null,
     fn_sdpa: CUfunction = null,
 
-    /// Allow falling back to CPU for ops without CUDA kernels.
-    allow_cpu_fallback: bool = false,
-
-    /// CPU fallback for unsupported ops.
+    /// CPU backend for ops where CPU is genuinely faster than GPU dispatch (embLookup).
     cpu: CpuBackend = .{},
 
     /// Whether the GPU uses unified memory architecture (integrated GPU).
@@ -188,9 +185,6 @@ pub const CudaBackend = struct {
     /// Pre-formatted driver version string (e.g., "CUDA 13.0").
     drv_str: [16]u8 = .{0} ** 16,
 
-    /// One-shot flag: warn only once when NVFP4 SafeTensors GEMV falls back to CPU.
-    nvfp4_st_fallback_warned: bool = false,
-
     /// Allocator for buffer caches.
     allocator: std.mem.Allocator = undefined,
 
@@ -203,7 +197,6 @@ pub const CudaBackend = struct {
 
     /// KV cache: device mirrors of per-layer KV buffers with incremental upload.
     kv_dev_cache: std.AutoHashMap(usize, KvDevCache) = undefined,
-
 
     /// Number of PTX kernels loaded at init.
     pub const n_kernels: u32 = 20;
@@ -249,7 +242,7 @@ pub const CudaBackend = struct {
         var self = CudaBackend{};
         self.allocator = allocator;
         self.buf_cache = std.AutoHashMap(usize, CachedBuf).init(allocator);
-        self.buf_cache.ensureTotalCapacity(512) catch {};
+        self.buf_cache.ensureTotalCapacity(backend_mod.buf_cache_initial_capacity) catch {};
         errdefer self.buf_cache.deinit();
         self.act_cache = std.AutoHashMap(usize, ActBuf).init(allocator);
         errdefer self.act_cache.deinit();
@@ -615,37 +608,24 @@ pub const CudaBackend = struct {
         self.launch(func, @intCast(n), block_size, reduction_smem, &params);
     }
 
-    /// In-place sigmoid-gated multiply — CPU fallback.
-    pub fn sigmoidMul(self: *CudaBackend, data: [*]f32, gate: [*]const f32, n: usize) void {
-        self.flushActivations();
-        var cpu = backend_mod.CpuBackend{};
-        cpu.sigmoidMul(data, gate, n);
-        self.invalidateAct(data);
+    /// In-place sigmoid-gated multiply.
+    pub fn sigmoidMul(_: *CudaBackend, _: [*]f32, _: [*]const f32, _: usize) void {
+        @panic("CUDA sigmoidMul: no GPU kernel — add a CUDA kernel");
     }
 
-    /// Fused SiLU + multiply — CPU fallback.
-    pub fn siluMul(self: *CudaBackend, a: [*]const f32, b: [*]const f32, out: [*]f32, n: usize) void {
-        self.flushActivations();
-        var cpu = backend_mod.CpuBackend{};
-        cpu.siluMul(a, b, out, n);
-        self.invalidateAct(out);
+    /// Fused SiLU + multiply.
+    pub fn siluMul(_: *CudaBackend, _: [*]const f32, _: [*]const f32, _: [*]f32, _: usize) void {
+        @panic("CUDA siluMul: no GPU kernel — add a CUDA kernel");
     }
 
-    /// In-place per-head rmsNorm — CPU fallback.
-    pub fn rmsNormMulti(self: *CudaBackend, data: [*]f32, weight: [*]const f32, n_heads: usize, head_dim: usize, eps: f32) void {
-        self.flushActivations();
-        var cpu = backend_mod.CpuBackend{};
-        cpu.rmsNormMulti(data, weight, n_heads, head_dim, eps);
-        self.invalidateAct(data);
+    /// In-place per-head rmsNorm.
+    pub fn rmsNormMulti(_: *CudaBackend, _: [*]f32, _: [*]const f32, _: usize, _: usize, _: f32) void {
+        @panic("CUDA rmsNormMulti: no GPU kernel — add a CUDA kernel");
     }
 
-    /// Deinterleave paired data into two separate output buffers — CPU fallback.
-    pub fn deinterleave(self: *CudaBackend, input: [*]const f32, out_a: [*]f32, out_b: [*]f32, stride: usize, n_pairs: usize) void {
-        self.flushActivations();
-        var cpu = backend_mod.CpuBackend{};
-        cpu.deinterleave(input, out_a, out_b, stride, n_pairs);
-        self.invalidateAct(out_a);
-        self.invalidateAct(out_b);
+    /// Deinterleave paired data into two separate output buffers.
+    pub fn deinterleave(_: *CudaBackend, _: [*]const f32, _: [*]f32, _: [*]f32, _: usize, _: usize) void {
+        @panic("CUDA deinterleave: no GPU kernel — add a CUDA kernel");
     }
 
     /// Batched GEMV: fuse multiple GEMV ops sharing the same input into a single
@@ -698,9 +678,15 @@ pub const CudaBackend = struct {
         var k_u32: u32 = @intCast(k);
         var params = [_]?*anyopaque{
             @ptrCast(&d_x),
-            @ptrCast(&d_w0), @ptrCast(&d_y0), @ptrCast(&n0),
-            @ptrCast(&d_w1), @ptrCast(&d_y1), @ptrCast(&n1),
-            @ptrCast(&d_w2), @ptrCast(&d_y2), @ptrCast(&n2),
+            @ptrCast(&d_w0),
+            @ptrCast(&d_y0),
+            @ptrCast(&n0),
+            @ptrCast(&d_w1),
+            @ptrCast(&d_y1),
+            @ptrCast(&n1),
+            @ptrCast(&d_w2),
+            @ptrCast(&d_y2),
+            @ptrCast(&n2),
             @ptrCast(&k_u32),
         };
 
@@ -802,7 +788,7 @@ pub const CudaBackend = struct {
         var rd_u32: u32 = @intCast(rope_dim);
         var theta_f32: f32 = theta;
         var params = [_]?*anyopaque{
-            @ptrCast(&d_x),   @ptrCast(&pos_u32), @ptrCast(&nh_u32),
+            @ptrCast(&d_x),    @ptrCast(&pos_u32), @ptrCast(&nh_u32),
             @ptrCast(&hd_u32), @ptrCast(&rd_u32),  @ptrCast(&theta_f32),
         };
         const pairs = n_heads * rope_dim / 2;
@@ -827,24 +813,14 @@ pub const CudaBackend = struct {
         self.launch(self.fn_l2_norm, 1, block_size, reduction_smem, &params);
     }
 
-    /// NVFP4 SafeTensors GEMV — CPU fallback.
-    pub fn gemvNvfp4St(self: *CudaBackend, x: [*]const f32, weight: [*]const u8, scale: [*]const u8, y: [*]f32, n: usize, k: usize) void {
-        if (!self.allow_cpu_fallback)
-            @panic("NVFP4 SafeTensors GEMV has no CUDA kernel. Pass --allow-cpu-fallback to use CPU fallback.");
-        if (!self.nvfp4_st_fallback_warned) {
-            self.nvfp4_st_fallback_warned = true;
-            std.log.warn("NVFP4 SafeTensors GEMV: no CUDA kernel, using CPU fallback", .{});
-        }
-        self.flushActivations();
-        self.cpu.gemvNvfp4St(x, weight, scale, y, n, k);
-        self.invalidateAct(y);
+    /// NVFP4 SafeTensors GEMV.
+    pub fn gemvNvfp4St(_: *CudaBackend, _: [*]const f32, _: [*]const u8, _: [*]const u8, _: [*]f32, _: usize, _: usize) void {
+        @panic("CUDA NVFP4 SafeTensors GEMV: no GPU kernel — add a CUDA kernel");
     }
 
-    /// MLX affine quantized GEMV — CPU fallback.
-    pub fn gemvMlxQ(self: *CudaBackend, x: [*]const f32, weight: [*]const u8, scales: [*]const u8, biases: [*]const u8, y: [*]f32, n: usize, k: usize, bits: u32) void {
-        self.flushActivations();
-        self.cpu.gemvMlxQ(x, weight, scales, biases, y, n, k, bits);
-        self.invalidateAct(y);
+    /// MLX affine quantized GEMV.
+    pub fn gemvMlxQ(_: *CudaBackend, _: [*]const f32, _: [*]const u8, _: [*]const u8, _: [*]const u8, _: [*]f32, _: usize, _: usize, _: u32) void {
+        @panic("CUDA MLX GEMV: no GPU kernel — add a CUDA kernel");
     }
 
     /// Commit pending GPU work and download results to host.
@@ -983,14 +959,8 @@ pub const CudaBackend = struct {
     /// Appends k_new/v_new to device KV cache via D2D copy, then launches kernel.
     /// No sync() required — all data stays on GPU.
     pub fn sdpa(self: *CudaBackend, q: [*]const f32, keys: []u8, values: []u8, k_new: [*]const f32, v_new: [*]const f32, output: [*]f32, nh: usize, nkv: usize, hd: usize, seq_len: usize, scale: f32, kv_type: @import("backend.zig").KvQuantType) void {
-        // Non-f32 KV types: flush to host, run CPU SDPA, invalidate output
-        if (kv_type != .f32) {
-            self.flushActivations();
-            var cpu = @import("cpu.zig").CpuBackend{ .pool = null };
-            cpu.sdpa(q, keys, values, k_new, v_new, output, nh, nkv, hd, seq_len, scale, kv_type);
-            self.invalidateAct(output);
-            return;
-        }
+        // Non-f32 KV types not yet supported on GPU.
+        if (kv_type != .f32) @panic("CUDA SDPA: quantized KV not supported — add GPU kernel or use --kv-type f32");
 
         // f32 path: cast byte slices to f32 slices for GPU kernel
         const f32_keys: []f32 = @as([*]f32, @ptrCast(@alignCast(keys.ptr)))[0 .. keys.len / 4];
@@ -1041,11 +1011,8 @@ pub const CudaBackend = struct {
         self.launch(self.fn_sdpa, @intCast(nh), block_size, smem, &params);
     }
 
-    /// DeltaNet SSM recurrence — CPU fallback.
-    pub fn deltaNet(self: *CudaBackend, conv_in: [*]const f32, conv_out: [*]f32, z_buf: [*]const f32, alpha_buf: [*]const f32, beta_buf: [*]const f32, output: [*]f32, conv_state: [*]f32, ssm_state: []f32, ssm_a: [*]const f32, dt_bias: [*]const f32, conv_w: [*]const f32, ssm_norm_w: [*]const f32, p: backend_mod.DeltaNetParams) void {
-        self.flushActivations();
-        self.cpu.deltaNet(conv_in, conv_out, z_buf, alpha_buf, beta_buf, output, conv_state, ssm_state, ssm_a, dt_bias, conv_w, ssm_norm_w, p);
-        self.invalidateAct(conv_out);
-        self.invalidateAct(output);
+    /// DeltaNet SSM recurrence.
+    pub fn deltaNet(_: *CudaBackend, _: [*]const f32, _: [*]f32, _: [*]const f32, _: [*]const f32, _: [*]const f32, _: [*]f32, _: [*]f32, _: []f32, _: [*]const f32, _: [*]const f32, _: [*]const f32, _: [*]const f32, _: backend_mod.DeltaNetParams) void {
+        @panic("CUDA DeltaNet: no GPU kernel — add a CUDA kernel");
     }
 };

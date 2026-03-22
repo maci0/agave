@@ -136,14 +136,8 @@ pub const RocmBackend = struct {
     fn_deltanet_gate_beta: HipFunction = null,
     fn_deltanet_conv1d: HipFunction = null,
 
-    /// Allow falling back to CPU for ops without ROCm kernels.
-    allow_cpu_fallback: bool = false,
-
-    /// CPU fallback for unsupported ops.
+    /// CPU backend for ops where CPU is genuinely faster than GPU dispatch (embLookup).
     cpu: CpuBackend = .{},
-
-    /// One-shot flag: warn only once when NVFP4 SafeTensors GEMV falls back to CPU.
-    nvfp4_st_fallback_warned: bool = false,
 
     /// Device name retrieved during initialization.
     device_name: [device_name_buf_size]u8 = undefined,
@@ -200,7 +194,7 @@ pub const RocmBackend = struct {
         var self = RocmBackend{};
         self.allocator = allocator;
         self.buf_cache = std.AutoHashMap(usize, CachedBuf).init(allocator);
-        self.buf_cache.ensureTotalCapacity(512) catch {};
+        self.buf_cache.ensureTotalCapacity(backend_mod.buf_cache_initial_capacity) catch {};
         errdefer self.buf_cache.deinit();
         self.act_cache = std.AutoHashMap(usize, ActBuf).init(allocator);
         errdefer self.act_cache.deinit();
@@ -492,12 +486,7 @@ pub const RocmBackend = struct {
             .q6_k => self.fn_gemv_q6_k,
             .fp8_e4m3 => self.fn_gemv_fp8_e4m3,
             .fp8_e5m2 => self.fn_gemv_fp8_e5m2,
-            else => {
-                self.flushActivations();
-                self.cpu.gemv(x, w, y, n, k);
-                self.invalidateAct(y);
-                return;
-            },
+            else => @panic("ROCm GEMV: unsupported dtype — add a GPU kernel"),
         };
 
         var d_x = self.getInputBuf(x, k * @sizeOf(f32));
@@ -610,7 +599,7 @@ pub const RocmBackend = struct {
         var rd_u32: u32 = @intCast(rope_dim);
         var theta_f32: f32 = theta;
         var params = [_]?*anyopaque{
-            @ptrCast(&d_x),   @ptrCast(&pos_u32), @ptrCast(&nh_u32),
+            @ptrCast(&d_x),    @ptrCast(&pos_u32), @ptrCast(&nh_u32),
             @ptrCast(&hd_u32), @ptrCast(&rd_u32),  @ptrCast(&theta_f32),
         };
         const pairs = n_heads * rope_dim / 2;
@@ -635,24 +624,14 @@ pub const RocmBackend = struct {
         self.launch(self.fn_l2_norm, 1, block_size, reduction_smem, &params);
     }
 
-    /// NVFP4 SafeTensors GEMV — CPU fallback.
-    pub fn gemvNvfp4St(self: *RocmBackend, x: [*]const f32, weight: [*]const u8, scale: [*]const u8, y: [*]f32, n: usize, k: usize) void {
-        if (!self.allow_cpu_fallback)
-            @panic("NVFP4 SafeTensors GEMV has no ROCm kernel. Pass --allow-cpu-fallback to use CPU fallback.");
-        if (!self.nvfp4_st_fallback_warned) {
-            self.nvfp4_st_fallback_warned = true;
-            std.log.warn("NVFP4 SafeTensors GEMV: no ROCm kernel, using CPU fallback", .{});
-        }
-        self.flushActivations();
-        self.cpu.gemvNvfp4St(x, weight, scale, y, n, k);
-        self.invalidateAct(y);
+    /// NVFP4 SafeTensors GEMV.
+    pub fn gemvNvfp4St(_: *RocmBackend, _: [*]const f32, _: [*]const u8, _: [*]const u8, _: [*]f32, _: usize, _: usize) void {
+        @panic("ROCm NVFP4 SafeTensors GEMV: no GPU kernel — add a ROCm kernel");
     }
 
-    /// MLX affine quantized GEMV — CPU fallback.
-    pub fn gemvMlxQ(self: *RocmBackend, x: [*]const f32, weight: [*]const u8, scales: [*]const u8, biases: [*]const u8, y: [*]f32, n: usize, k: usize, bits: u32) void {
-        self.flushActivations();
-        self.cpu.gemvMlxQ(x, weight, scales, biases, y, n, k, bits);
-        self.invalidateAct(y);
+    /// MLX affine quantized GEMV.
+    pub fn gemvMlxQ(_: *RocmBackend, _: [*]const f32, _: [*]const u8, _: [*]const u8, _: [*]const u8, _: [*]f32, _: usize, _: usize, _: u32) void {
+        @panic("ROCm MLX GEMV: no GPU kernel — add a ROCm kernel");
     }
 
     /// In-place sigmoid-gated multiply: data[i] *= sigmoid(gate[i])
@@ -690,11 +669,9 @@ pub const RocmBackend = struct {
         self.launch(self.fn_silu_mul, grid, block_size, 0, &params);
     }
 
-    /// In-place per-head rmsNorm — CPU fallback (GPU kernel disabled for debugging).
-    pub fn rmsNormMulti(self: *RocmBackend, data: [*]f32, weight: [*]const f32, n_heads: usize, head_dim: usize, eps: f32) void {
-        self.flushActivations();
-        self.cpu.rmsNormMulti(data, weight, n_heads, head_dim, eps);
-        self.invalidateAct(data);
+    /// In-place per-head rmsNorm.
+    pub fn rmsNormMulti(_: *RocmBackend, _: [*]f32, _: [*]const f32, _: usize, _: usize, _: f32) void {
+        @panic("ROCm rmsNormMulti: no GPU kernel — add a ROCm kernel");
     }
 
     /// Deinterleave paired data: [A0(stride), B0(stride), ...] → [A0, A1, ...] [B0, B1, ...]
@@ -789,13 +766,8 @@ pub const RocmBackend = struct {
 
     /// Fused scaled dot-product attention on GPU with KV cache append.
     pub fn sdpa(self: *RocmBackend, q: [*]const f32, keys: []u8, values: []u8, k_new: [*]const f32, v_new: [*]const f32, output: [*]f32, nh: usize, nkv: usize, hd: usize, seq_len: usize, scale: f32, kv_type: @import("backend.zig").KvQuantType) void {
-        // CPU fallback for quantized KV — GPU kernel only handles f32.
-        if (kv_type != .f32) {
-            self.flushActivations();
-            self.cpu.sdpa(q, keys, values, k_new, v_new, output, nh, nkv, hd, seq_len, scale, kv_type);
-            self.invalidateAct(output);
-            return;
-        }
+        // Non-f32 KV types not yet supported on GPU.
+        if (kv_type != .f32) @panic("ROCm SDPA: quantized KV not supported — add GPU kernel or use --kv-type f32");
 
         // Cast byte slices to f32 for GPU path.
         const f32_keys: []f32 = @as([*]f32, @ptrCast(@alignCast(keys.ptr)))[0 .. keys.len / 4];
@@ -848,14 +820,8 @@ pub const RocmBackend = struct {
         self.launch(self.fn_sdpa, @intCast(nh), block_size, smem, &params);
     }
 
-    /// DeltaNet SSM recurrence — CPU fallback.
-    /// DeltaNet SSM recurrence — CPU fallback.
-    /// GPU kernels exist (gate_beta, conv1d) but full pipeline optimization deferred.
-    /// TODO: Implement full GPU DeltaNet pipeline (L2 norm, recurrence kernels).
-    pub fn deltaNet(self: *RocmBackend, conv_in: [*]const f32, conv_out: [*]f32, z_buf: [*]const f32, alpha_buf: [*]const f32, beta_buf: [*]const f32, output: [*]f32, conv_state: [*]f32, ssm_state: []f32, ssm_a: [*]const f32, dt_bias: [*]const f32, conv_w: [*]const f32, ssm_norm_w: [*]const f32, p: backend_mod.DeltaNetParams) void {
-        self.flushActivations();
-        self.cpu.deltaNet(conv_in, conv_out, z_buf, alpha_buf, beta_buf, output, conv_state, ssm_state, ssm_a, dt_bias, conv_w, ssm_norm_w, p);
-        self.invalidateAct(conv_out);
-        self.invalidateAct(output);
+    /// DeltaNet SSM recurrence.
+    pub fn deltaNet(_: *RocmBackend, _: [*]const f32, _: [*]f32, _: [*]const f32, _: [*]const f32, _: [*]const f32, _: [*]f32, _: [*]f32, _: []f32, _: [*]const f32, _: [*]const f32, _: [*]const f32, _: [*]const f32, _: backend_mod.DeltaNetParams) void {
+        @panic("ROCm DeltaNet: no GPU kernel — add a ROCm kernel");
     }
 };

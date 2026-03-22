@@ -1,0 +1,56 @@
+[
+  {
+    "status": "PASS",
+    "wall_time": 6.631010055541992,
+    "n_tokens": 10,
+    "tok_per_sec": 5.6,
+    "prefill_ms": 3782.0,
+    "quant": "q4_0",
+    "backend": "cpu"
+  },
+  {
+    "status": "PASS",
+    "wall_time": 1.6039750576019287,
+    "n_tokens": 10,
+    "tok_per_sec": 21.7,
+    "prefill_ms": 972.0,
+    "quant": "q4_0",
+    "backend": "metal"
+  },
+  {
+    "status": "PASS",
+    "wall_time": 8.623940706253052,
+    "n_tokens": 10,
+    "tok_per_sec": 4.4,
+    "prefill_ms": 4822.0,
+    "quant": "q8_0",
+    "backend": "cpu"
+  },
+  {
+    "status": "PASS",
+    "wall_time": 1.0618598461151123,
+    "n_tokens": 10,
+    "tok_per_sec": 34.1,
+    "prefill_ms": 611.0,
+    "quant": "q8_0",
+    "backend": "metal"
+  },
+  {
+    "status": "PASS",
+    "wall_time": 4.2423670291900635,
+    "n_tokens": 10,
+    "tok_per_sec": 16.8,
+    "prefill_ms": 1243.0,
+    "quant": "bf16",
+    "backend": "cpu"
+  },
+  {
+    "status": "PASS",
+    "wall_time": 1.1097517013549805,
+    "n_tokens": 10,
+    "tok_per_sec": 34.5,
+    "prefill_ms": 628.0,
+    "quant": "bf16",
+    "backend": "metal"
+  }
+]

@@ -1,0 +1,39 @@
+#version 450
+#extension GL_KHR_shader_subgroup_arithmetic : require
+
+layout(local_size_x = 256) in;
+
+layout(set = 0, binding = 0) buffer X { float x[]; };
+layout(push_constant) uniform Params { uint n; float eps; };
+
+shared float shared_sums[8];
+
+void main() {
+    uint tid = gl_LocalInvocationID.x;
+    uint tg_size = gl_WorkGroupSize.x;
+
+    // Sum of squares
+    float ss = 0.0;
+    for (uint i = tid; i < n; i += tg_size) {
+        ss += x[i] * x[i];
+    }
+
+    ss = subgroupAdd(ss);
+    uint sg_id = gl_SubgroupID;
+    uint sg_lane = gl_SubgroupInvocationID;
+    if (sg_lane == 0) shared_sums[sg_id] = ss;
+    barrier();
+    uint num_sg = (tg_size + gl_SubgroupSize - 1) / gl_SubgroupSize;
+    if (tid < num_sg) ss = shared_sums[tid]; else ss = 0.0;
+    if (tid < gl_SubgroupSize) {
+        ss = subgroupAdd(ss);
+        if (tid == 0) shared_sums[0] = ss;
+    }
+    barrier();
+
+    // Normalize in-place
+    float inv = inversesqrt(shared_sums[0] + eps);
+    for (uint i = tid; i < n; i += tg_size) {
+        x[i] *= inv;
+    }
+}

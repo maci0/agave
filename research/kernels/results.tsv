@@ -1,0 +1,5 @@
+timestamp	tag	kernels	quant	backend	tok_per_sec	prefill_ms	gen_ms	ns_median	gb_s	status
+2026-03-21 18:36	gemv_q8_0	gemv_q8_0		cpu	0.0	0	0	3849333	4.6	
+2026-03-21 18:36	rms_norm	rms_norm		metal	0.0	0	0	159750	0.3	
+2026-03-21 18:36	silu	silu		metal	0.0	0	0	135000	0.2	
+2026-03-21 18:36	gemv_q8_0	gemv_q8_0		metal	0.0	0	0	308375	57.9	

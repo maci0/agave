@@ -1,0 +1,59 @@
+#version 450
+#extension GL_KHR_shader_subgroup_arithmetic : require
+
+layout(local_size_x = 256) in;
+
+layout(set = 0, binding = 0) readonly buffer X { float x[]; };
+layout(set = 0, binding = 1) readonly buffer W { uint w_raw[]; };
+layout(set = 0, binding = 2) writeonly buffer Y { float y[]; };
+layout(push_constant) uniform Params { uint n; uint k; };
+
+shared float shared_sums[8];
+
+// BF16: 2 bytes per weight. Read as byte pairs, reconstruct float.
+float read_bf16(uint word_idx, uint byte_in_word) {
+    uint raw = w_raw[word_idx];
+    uint bits = (raw >> (byte_in_word * 8)) & 0xFFFF;
+    // BF16 to float: shift left by 16 bits
+    return uintBitsToFloat(bits << 16);
+}
+
+void main() {
+    uint row = gl_WorkGroupID.x;
+    uint tid = gl_LocalInvocationID.x;
+    uint tg_size = gl_WorkGroupSize.x;
+    if (row >= n) return;
+
+    float sum = 0.0;
+    uint row_byte_off = row * k * 2;
+
+    for (uint j = tid; j < k; j += tg_size) {
+        uint byte_off = row_byte_off + j * 2;
+        uint word_idx = byte_off / 4;
+        uint byte_in_word = byte_off % 4;
+
+        uint raw = w_raw[word_idx];
+        uint bits;
+        if (byte_in_word <= 2) {
+            bits = (raw >> (byte_in_word * 8)) & 0xFFFF;
+        } else {
+            // Spans two words
+            uint next_raw = w_raw[word_idx + 1];
+            bits = ((raw >> 24) & 0xFF) | ((next_raw & 0xFF) << 8);
+        }
+        float w_val = uintBitsToFloat(bits << 16);
+        sum += w_val * x[j];
+    }
+
+    sum = subgroupAdd(sum);
+    uint sg_id = gl_SubgroupID;
+    uint sg_lane = gl_SubgroupInvocationID;
+    if (sg_lane == 0) shared_sums[sg_id] = sum;
+    barrier();
+    uint num_sg = (tg_size + gl_SubgroupSize - 1) / gl_SubgroupSize;
+    if (tid < num_sg) sum = shared_sums[tid]; else sum = 0.0;
+    if (tid < gl_SubgroupSize) {
+        sum = subgroupAdd(sum);
+        if (tid == 0) y[row] = sum;
+    }
+}

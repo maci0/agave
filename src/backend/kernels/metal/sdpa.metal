@@ -19,7 +19,7 @@ using namespace metal;
 
 constant uint sdpa_max_seq_len = 4096;
 constant uint sdpa_max_head_dim = 256;
-constant uint sdpa_block_size = 32;  // Bc: K,V block size
+constant uint sdpa_block_size = 16;  // Bc: K,V block size (16 to fit 32KB threadgroup limit)
 
 kernel void sdpa_fa2(
     device const float* Q,       // [nh * hd]

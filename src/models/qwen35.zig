@@ -167,7 +167,10 @@ pub const Qwen35Model = struct {
         // Find first full-attention layer to check Q weight dimensions.
         var check_layer: u32 = 0;
         for (0..self.n_layers) |i| {
-            if (self.isFullAttn(@intCast(i))) { check_layer = @intCast(i); break; }
+            if (self.isFullAttn(@intCast(i))) {
+                check_layer = @intCast(i);
+                break;
+            }
         }
 
         // Detect gate in Q: Qwen3.5 Q weight has n_head * head_dim * 2 output elements.
@@ -255,7 +258,7 @@ pub const Qwen35Model = struct {
             self.tiered_cache = tc;
             self.tiered_block_allocator = ta;
         } else {
-            const block_size: u16 = 16;
+            const block_size = kvcache.default_block_size;
             const num_blocks = (self.max_seq_len + block_size - 1) / block_size * nl;
             var paged_cache = try PagedKvCache.init(allocator, nl, nkv_dim, num_blocks, block_size);
             errdefer paged_cache.deinit();
@@ -698,7 +701,6 @@ pub const Qwen35Model = struct {
         self.be.sync();
         self.perf.end(.gemv_ffn, t);
 
-
         // 2. Softmax over all router logits, then top-K selection.
         {
             var max_logit: f32 = self.router_logits[0];
@@ -888,4 +890,3 @@ pub const Qwen35Model = struct {
 };
 
 const expertWeightStride = model_mod.expertWeightStride;
-

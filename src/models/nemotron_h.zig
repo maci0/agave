@@ -252,7 +252,7 @@ pub const NemotronHModel = struct {
             self.tiered_cache = tc;
             self.tiered_block_allocator = ta;
         } else {
-            const block_size: u16 = 16;
+            const block_size = kvcache.default_block_size;
             const num_blocks = (self.max_seq_len + block_size - 1) / block_size * nl;
             var paged_cache = try PagedKvCache.init(allocator, nl, kvd, num_blocks, block_size);
             errdefer paged_cache.deinit();
@@ -354,10 +354,6 @@ pub const NemotronHModel = struct {
             }
         }
 
-        if (self.kv_seq_len < 12) {
-            std.log.warn("[nemotron_h] forward() called with token_id={}, kv_seq_len={}", .{ token_id, self.kv_seq_len });
-        }
-
         // Embedding lookup — zero-copy read from mmap.
         const emb_t = self.fmt.getTensor("token_embd.weight") orelse return error.MissingTensor;
         self.be.embLookup(
@@ -371,24 +367,10 @@ pub const NemotronHModel = struct {
             if (self.cancelled.load(.acquire)) return error.Cancelled;
             const l: u32 = @intCast(li);
 
-            // Debug: Check hidden state before layer
-            if (self.kv_seq_len == 0 and li == 0) {
-                var sum: f32 = 0;
-                for (self.hidden[0..10]) |v| sum += v;
-                std.log.warn("[nemotron_h] Before layer 0, hidden[0..10] sum = {d:.6}", .{sum});
-            }
-
             switch (self.layer_types[li]) {
                 .ssm => try self.ssmLayer(l),
                 .attention => try self.attentionLayer(l),
                 .ffn_only => try self.ffnLayer(l),
-            }
-
-            // Debug: Check hidden state after first layer
-            if (self.kv_seq_len == 0 and li == 0) {
-                var sum: f32 = 0;
-                for (self.hidden[0..10]) |v| sum += v;
-                std.log.warn("[nemotron_h] After layer 0 ({}), hidden[0..10] sum = {d:.6}", .{ self.layer_types[li], sum });
             }
         }
 
@@ -407,43 +389,6 @@ pub const NemotronHModel = struct {
             self.rms_eps,
             self.be,
         );
-
-        // Debug: Show top 10 logits and their indices
-        if (self.kv_seq_len <= 3) {
-            var top_logits: [10]f32 = undefined;
-            var top_indices: [10]u32 = undefined;
-            @memset(&top_logits, -std.math.inf(f32));
-            @memset(&top_indices, 0);
-
-            for (0..self.vocab_size) |i| {
-                const logit = self.logits_buf[i];
-                for (0..10) |j| {
-                    if (logit > top_logits[j]) {
-                        // Shift down
-                        if (j < 9) {
-                            var k: usize = 9;
-                            while (k > j) : (k -= 1) {
-                                top_logits[k] = top_logits[k - 1];
-                                top_indices[k] = top_indices[k - 1];
-                            }
-                        }
-                        top_logits[j] = logit;
-                        top_indices[j] = @intCast(i);
-                        break;
-                    }
-                }
-            }
-
-            std.log.warn("[nemotron_h] Token {}: Argmax={} (kv_seq_len={}) Top logits:", .{ self.kv_seq_len - 1, result, self.kv_seq_len });
-            for (0..10) |i| {
-                std.log.warn("  [{}: {d:.3}]", .{ top_indices[i], top_logits[i] });
-            }
-
-            // Check if hidden state is changing
-            var hidden_sum: f32 = 0;
-            for (self.hidden[0..10]) |v| hidden_sum += v;
-            std.log.warn("  hidden[0..10] sum = {d:.6}", .{hidden_sum});
-        }
 
         return result;
     }
@@ -518,11 +463,6 @@ pub const NemotronHModel = struct {
 
         // 1. Pre-norm.
         const nw = self.fmt.layerTensor(li, "attn_norm.weight") orelse return error.MissingTensor;
-
-        // Debug: Check norm weight dtype
-        if (li == 0 and self.kv_seq_len == 0) {
-            std.log.warn("[nemotron_h] SSM layer {} norm weight dtype: {}", .{ li, nw.dtype });
-        }
 
         self.be.rmsNorm(
             self.hidden.ptr,

@@ -12,6 +12,9 @@ const Metrics = @import("metrics.zig").Metrics;
 const TieredKvCache = @import("kvcache/tiered.zig").TieredKvCache;
 const Prefetcher = @import("kvcache/prefetch.zig").Prefetcher;
 
+/// Scheduler loop poll interval (nanoseconds).
+const scheduler_poll_ns: u64 = 1_000_000; // 1ms
+
 /// Cache-aware priority coefficient (α in the priority formula).
 /// Higher values give more weight to cached prefix length.
 /// Configurable via future CLI flag.
@@ -325,15 +328,14 @@ pub fn runSchedulerLoop(
         manager.step(model, eog_ids) catch |err| {
             std.log.err("Scheduler step failed: {}", .{err});
         };
-        std.Thread.sleep(1_000_000); // 1ms between iterations
+        std.Thread.sleep(scheduler_poll_ns); // 1ms between iterations
     }
 }
 
 // Unit tests
 test "enqueue increments waiting count" {
     const allocator = std.testing.allocator;
-    var metrics = try Metrics.init(allocator);
-    defer metrics.deinit();
+    var metrics = Metrics{};
     var manager = try RequestManager.init(allocator, &metrics, 4, 30, null);
     defer manager.deinit();
 
@@ -357,8 +359,7 @@ test "enqueue increments waiting count" {
 
 test "step fills batch from waiting queue" {
     const allocator = std.testing.allocator;
-    var metrics = try Metrics.init(allocator);
-    defer metrics.deinit();
+    var metrics = Metrics{};
     var manager = try RequestManager.init(allocator, &metrics, 2, 30, null);
     defer manager.deinit();
 
@@ -400,8 +401,7 @@ test "step fills batch from waiting queue" {
 
 test "step removes finished requests" {
     const allocator = std.testing.allocator;
-    var metrics = try Metrics.init(allocator);
-    defer metrics.deinit();
+    var metrics = Metrics{};
     var manager = try RequestManager.init(allocator, &metrics, 2, 30, null);
     defer manager.deinit();
 
@@ -438,8 +438,7 @@ test "step removes finished requests" {
 
 test "step cancels timed-out requests" {
     const allocator = std.testing.allocator;
-    var metrics = try Metrics.init(allocator);
-    defer metrics.deinit();
+    var metrics = Metrics{};
     var manager = try RequestManager.init(allocator, &metrics, 2, 1, null); // 1 second timeout
     defer manager.deinit();
 

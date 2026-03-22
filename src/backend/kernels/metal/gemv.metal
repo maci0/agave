@@ -529,6 +529,165 @@ kernel void gemv_q4_k(
     if (tid == 0) y[tgid] = sum;
 }
 
+// ── Q2_K GEMV ────────────────────────────────────────────────
+// 256 values per super-block, 84 bytes.
+// Layout: { uchar scales[16]; uchar qs[64]; half d; half dmin; }
+// Dequant: 2-bit values packed 4 per byte, per-sub-block (16 values)
+// 4-bit scale (low nibble) and min (high nibble).
+
+kernel void gemv_q2_k(
+    device const float* x [[buffer(0)]],
+    device const uchar* W [[buffer(1)]],
+    device float* y       [[buffer(2)]],
+    constant uint& n      [[buffer(3)]],
+    constant uint& k      [[buffer(4)]],
+    uint tgid     [[threadgroup_position_in_grid]],
+    uint tid      [[thread_index_in_threadgroup]],
+    uint tg_size  [[threads_per_threadgroup]])
+{
+    if (tgid >= n) return;
+
+    const uint bpb = 84;
+    const uint bs = 256;
+    uint nb = (k + bs - 1) / bs;
+    float sum = 0.0f;
+
+    for (uint b = tid; b < nb; b += tg_size) {
+        device const uchar* bp = W + (tgid * nb + b) * bpb;
+        device const uchar* scales = bp;
+        device const uchar* qs = bp + 16;
+        float d    = float(as_type<half>(ushort(bp[80] | (uint(bp[81]) << 8))));
+        float dmin = float(as_type<half>(ushort(bp[82] | (uint(bp[83]) << 8))));
+        uint bk = b * bs;
+
+        for (uint sb = 0; sb < 16; sb++) {
+            float sc = float(scales[sb] & 0x0F);
+            float m  = float(scales[sb] >> 4);
+            float d_sc = d * sc;
+            float dm_m = dmin * m;
+            uint gi_base = bk + sb * 16;
+
+            for (uint l = 0; l < 16; l++) {
+                uint gi = gi_base + l;
+                if (gi >= k) break;
+                uint qi = sb * 16 + l;
+                uint byte_idx = qi / 4;
+                uint shift = (qi % 4) * 2;
+                float q = float((qs[byte_idx] >> shift) & 0x03);
+                sum += x[gi] * (d_sc * q - dm_m);
+            }
+        }
+    }
+
+    threadgroup float tg_shared[8];
+    sum = threadgroup_reduce_sum(sum, tg_shared, tid, tg_size);
+    if (tid == 0) y[tgid] = sum;
+}
+
+// ── Q5_0 GEMV ────────────────────────────────────────────────
+// 32 values per block, 22 bytes (f16 scale + u32 qh + 16 nibble-packed bytes).
+// 5-bit: 4 bits from qs nibbles + 1 high bit from qh bitmask, subtract 16.
+
+kernel void gemv_q5_0(
+    device const float* x [[buffer(0)]],
+    device const uchar* W [[buffer(1)]],
+    device float* y       [[buffer(2)]],
+    constant uint& n      [[buffer(3)]],
+    constant uint& k      [[buffer(4)]],
+    uint tgid     [[threadgroup_position_in_grid]],
+    uint tid      [[thread_index_in_threadgroup]],
+    uint tg_size  [[threads_per_threadgroup]])
+{
+    if (tgid >= n) return;
+
+    const uint bpb = 22;
+    const uint qk = 32;
+    uint nb = k / qk;
+    float sum = 0.0f;
+
+    for (uint b = tid; b < nb; b += tg_size) {
+        device const uchar* bp = W + (tgid * nb + b) * bpb;
+        float d = float(as_type<half>(ushort(bp[0] | (uint(bp[1]) << 8))));
+        uint qh = uint(bp[2]) | (uint(bp[3]) << 8) | (uint(bp[4]) << 16) | (uint(bp[5]) << 24);
+        device const uchar* qs = bp + 6;
+        uint bk = b * qk;
+        float block_sum = 0.0f;
+
+        for (uint j = 0; j < 16; j++) {
+            uint lo_nib = qs[j] & 0xF;
+            uint hi_nib = qs[j] >> 4;
+            uint hb0 = (qh >> j) & 1;
+            uint hb1 = (qh >> (j + 16)) & 1;
+            int v0 = int(lo_nib | (hb0 << 4)) - 16;
+            int v1 = int(hi_nib | (hb1 << 4)) - 16;
+            block_sum += x[bk + j] * float(v0) + x[bk + j + 16] * float(v1);
+        }
+        sum += block_sum * d;
+    }
+
+    threadgroup float shared[8];
+    sum = threadgroup_reduce_sum(sum, shared, tid, tg_size);
+    if (tid == 0) y[tgid] = sum;
+}
+
+// ── Q3_K GEMV ────────────────────────────────────────────────
+// 256 values per super-block, 110 bytes.
+// Layout: { uchar hmask[32]; uchar qs[64]; uchar scales_raw[12]; half d; }
+// Dequant: q3 = ((qs[qi/4] >> (qi%4)*2) & 3) | ((hmask[qi%32] >> (qi/32)) & 1) << 2) - 4
+// Per-sub-block (16 values) scale: decoded from scales_raw nibbles, biased by -8.
+
+kernel void gemv_q3_k(
+    device const float* x [[buffer(0)]],
+    device const uchar* W [[buffer(1)]],
+    device float* y       [[buffer(2)]],
+    constant uint& n      [[buffer(3)]],
+    constant uint& k      [[buffer(4)]],
+    uint tgid     [[threadgroup_position_in_grid]],
+    uint tid      [[thread_index_in_threadgroup]],
+    uint tg_size  [[threads_per_threadgroup]])
+{
+    if (tgid >= n) return;
+
+    const uint bpb = 110;
+    const uint bs = 256;
+    uint nb = (k + bs - 1) / bs;
+    float sum = 0.0f;
+
+    for (uint b = tid; b < nb; b += tg_size) {
+        device const uchar* bp = W + (tgid * nb + b) * bpb;
+        device const uchar* hmask = bp;
+        device const uchar* qs = bp + 32;
+        device const uchar* raw_scales = bp + 96;
+        float d = float(as_type<half>(ushort(bp[108] | (uint(bp[109]) << 8))));
+        uint bk = b * bs;
+
+        // Decode 16 sub-block scales from 12 packed nibble bytes
+        int scales[16];
+        for (uint j = 0; j < 8; j++) {
+            scales[j]     = int(raw_scales[j] & 0xF) - 8;
+            scales[8 + j] = int(raw_scales[j] >> 4) - 8;
+        }
+
+        for (uint l = 0; l < 256; l++) {
+            uint gi = bk + l;
+            if (gi >= k) break;
+            uint byte_idx = l / 4;
+            uint shift = (l % 4) * 2;
+            uint q_lo = (qs[byte_idx] >> shift) & 0x03;
+            uint hm_byte = l % 32;
+            uint hm_bit = l / 32;
+            uint q_hi = (hmask[hm_byte] >> hm_bit) & 1;
+            int q3 = int(q_lo | (q_hi << 2)) - 4;
+            uint sb = l / 16;
+            sum += x[gi] * d * float(scales[sb]) * float(q3);
+        }
+    }
+
+    threadgroup float tg_shared[8];
+    sum = threadgroup_reduce_sum(sum, tg_shared, tid, tg_size);
+    if (tid == 0) y[tgid] = sum;
+}
+
 // ── Q6_K GEMV ────────────────────────────────────────────────
 // 256 values per super-block, 210 bytes.
 // Layout: { uchar ql[128]; uchar qh[64]; char scales[16]; half d; }
@@ -772,6 +931,122 @@ kernel void gemv_mlx_q4(
 
     threadgroup float shared[8];
     sum = threadgroup_reduce_sum(sum, shared, tid, tg_size);
+    if (tid == 0) y[tgid] = sum;
+}
+
+// ── IQ4_NL GEMV ──────────────────────────────────────────────
+// 32 values per block, 18 bytes (f16 scale + 16 nibble-packed bytes).
+// Non-linear lookup table dequant instead of linear (Q4_0-like structure).
+
+constant float iq4nl_lut[16] = {
+    -127, -104, -83, -65, -49, -35, -22, -10, 1, 13, 25, 38, 53, 69, 89, 113
+};
+
+struct block_iq4_nl {
+    half d;
+    uchar qs[16];
+};
+
+kernel void gemv_iq4_nl(
+    device const float* x        [[buffer(0)]],
+    device const block_iq4_nl* W [[buffer(1)]],
+    device float* y              [[buffer(2)]],
+    constant uint& n             [[buffer(3)]],
+    constant uint& k             [[buffer(4)]],
+    uint tgid     [[threadgroup_position_in_grid]],
+    uint tid      [[thread_index_in_threadgroup]],
+    uint tg_size  [[threads_per_threadgroup]])
+{
+    if (tgid >= n) return;
+    uint nb = k / 32;
+    float sum = 0.0f;
+
+    for (uint b = tid; b < nb; b += tg_size) {
+        device const block_iq4_nl& blk = W[tgid * nb + b];
+        float d = float(blk.d);
+        uint bk = b * 32;
+        float block_sum = 0.0f;
+        for (uint j = 0; j < 16; j += 4) {
+            float4 lo = float4(iq4nl_lut[blk.qs[j]   & 0xF],
+                               iq4nl_lut[blk.qs[j+1] & 0xF],
+                               iq4nl_lut[blk.qs[j+2] & 0xF],
+                               iq4nl_lut[blk.qs[j+3] & 0xF]);
+            float4 hi = float4(iq4nl_lut[blk.qs[j]   >> 4],
+                               iq4nl_lut[blk.qs[j+1] >> 4],
+                               iq4nl_lut[blk.qs[j+2] >> 4],
+                               iq4nl_lut[blk.qs[j+3] >> 4]);
+            float4 xlo = *(device const float4*)(x + bk + j);
+            float4 xhi = *(device const float4*)(x + bk + j + 16);
+            block_sum += dot(lo, xlo) + dot(hi, xhi);
+        }
+        sum += block_sum * d;
+    }
+
+    threadgroup float shared[8];
+    sum = threadgroup_reduce_sum(sum, shared, tid, tg_size);
+    if (tid == 0) y[tgid] = sum;
+}
+
+// ── IQ4_XS GEMV ──────────────────────────────────────────────
+// 256 values per super-block, 138 bytes.
+// Layout: { half d; ushort scales_h; uchar scales_l[8]; uchar qs[128]; }
+// 8 sub-blocks of 32 values each, per-sub-block 6-bit scale (biased by -32).
+// Uses IQ4_NL lookup table for nibble dequant.
+
+kernel void gemv_iq4_xs(
+    device const float* x [[buffer(0)]],
+    device const uchar* W [[buffer(1)]],
+    device float* y       [[buffer(2)]],
+    constant uint& n      [[buffer(3)]],
+    constant uint& k      [[buffer(4)]],
+    uint tgid     [[threadgroup_position_in_grid]],
+    uint tid      [[thread_index_in_threadgroup]],
+    uint tg_size  [[threads_per_threadgroup]])
+{
+    if (tgid >= n) return;
+
+    const uint bpb = 138;
+    const uint bs = 256;
+    uint nb = (k + bs - 1) / bs;
+    float sum = 0.0f;
+
+    for (uint b = tid; b < nb; b += tg_size) {
+        device const uchar* bp = W + (tgid * nb + b) * bpb;
+        float d = float(as_type<half>(ushort(bp[0] | (uint(bp[1]) << 8))));
+        uint scales_h = uint(bp[2]) | (uint(bp[3]) << 8);
+        device const uchar* scales_l = bp + 4;
+        device const uchar* qs = bp + 12;
+        uint bk = b * bs;
+
+        for (uint sb = 0; sb < 8; sb++) {
+            uint lo4 = (sb % 2 == 0) ? (scales_l[sb / 2] & 0xF) : (scales_l[sb / 2] >> 4);
+            uint hi2 = (scales_h >> (sb * 2)) & 0x03;
+            int scale_raw = int(lo4 | (hi2 << 4)) - 32;
+            float sub_scale = d * float(scale_raw);
+
+            device const uchar* sub_qs = qs + sb * 16;
+            uint sub_bk = bk + sb * 32;
+            float block_sum = 0.0f;
+
+            for (uint j = 0; j < 16; j += 4) {
+                float4 lo = float4(iq4nl_lut[sub_qs[j]   & 0xF],
+                                   iq4nl_lut[sub_qs[j+1] & 0xF],
+                                   iq4nl_lut[sub_qs[j+2] & 0xF],
+                                   iq4nl_lut[sub_qs[j+3] & 0xF]);
+                float4 hi = float4(iq4nl_lut[sub_qs[j]   >> 4],
+                                   iq4nl_lut[sub_qs[j+1] >> 4],
+                                   iq4nl_lut[sub_qs[j+2] >> 4],
+                                   iq4nl_lut[sub_qs[j+3] >> 4]);
+                float4 xlo = *(device const float4*)(x + sub_bk + j);
+                float4 xhi = *(device const float4*)(x + sub_bk + j + 16);
+                block_sum += dot(lo, xlo) + dot(hi, xhi);
+            }
+            sum += block_sum * sub_scale;
+        }
+    }
+
+    threadgroup float tg_shared[8];
+    sum = threadgroup_reduce_sum(sum, tg_shared, tid, tg_size);
     if (tid == 0) y[tgid] = sum;
 }
 

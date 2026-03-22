@@ -1,0 +1,64 @@
+#version 450
+#extension GL_KHR_shader_subgroup_arithmetic : require
+
+layout(local_size_x = 256) in;
+
+layout(set = 0, binding = 0) readonly buffer X { float x[]; };
+layout(set = 0, binding = 1) readonly buffer W { uint w_raw[]; };
+layout(set = 0, binding = 2) writeonly buffer Y { float y[]; };
+layout(push_constant) uniform Params { uint n; uint k; };
+
+shared float shared_sums[8];
+
+// Q4_0: 32 values per block, 18 bytes (f16 scale + 16 nibble-packed bytes).
+// Low nibble = first 16 elements, high nibble = second 16 elements.
+
+void main() {
+    uint row = gl_WorkGroupID.x;
+    uint tid = gl_LocalInvocationID.x;
+    uint tg_size = gl_WorkGroupSize.x;
+    if (row >= n) return;
+
+    uint nb = k / 32;
+    float sum = 0.0;
+
+    for (uint b = tid; b < nb; b += tg_size) {
+        uint block_byte_off = row * nb * 18 + b * 18;
+        uint word_off = block_byte_off / 4;
+        uint byte_in_word = block_byte_off % 4;
+
+        // Read f16 scale
+        uint raw_word = w_raw[word_off];
+        uint scale_bits = (raw_word >> (byte_in_word * 8)) & 0xFFFF;
+        float d = unpackHalf2x16(scale_bits).x;
+
+        float block_sum = 0.0;
+        uint bk = b * 32;
+
+        // 16 packed bytes → 32 nibbles
+        for (uint j = 0; j < 16; j++) {
+            uint qbyte_off = block_byte_off + 2 + j;
+            uint qword = w_raw[qbyte_off / 4];
+            uint qshift = (qbyte_off % 4) * 8;
+            uint byte_val = (qword >> qshift) & 0xFF;
+
+            float lo = float(int(byte_val & 0xF) - 8);
+            float hi = float(int(byte_val >> 4) - 8);
+            block_sum += lo * x[bk + j] + hi * x[bk + j + 16];
+        }
+        sum += block_sum * d;
+    }
+
+    // Subgroup + shared reduction
+    sum = subgroupAdd(sum);
+    uint sg_id = gl_SubgroupID;
+    uint sg_lane = gl_SubgroupInvocationID;
+    if (sg_lane == 0) shared_sums[sg_id] = sum;
+    barrier();
+    uint num_sg = (tg_size + gl_SubgroupSize - 1) / gl_SubgroupSize;
+    if (tid < num_sg) sum = shared_sums[tid]; else sum = 0.0;
+    if (tid < gl_SubgroupSize) {
+        sum = subgroupAdd(sum);
+        if (tid == 0) y[row] = sum;
+    }
+}

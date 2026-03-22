@@ -1,0 +1,67 @@
+</style>
+</head>
+<body>
+<div class="sidebar-overlay" id="sidebar-overlay" onclick="toggleSidebar()"></div>
+<header>
+<div class="logo">
+<button class="hdr-btn menu-btn" onclick="toggleSidebar()" style="display:none" title="Menu" aria-label="Toggle sidebar" aria-expanded="false" id="menu-btn">&#9776;</button>
+<h1>&#127797; agave</h1><span class="model-badge" id="model-name">loading...</span></div>
+<div class="hdr-btns">
+<button class="new-chat-btn" onclick="newConv()" aria-label="New conversation">+ New</button>
+<button class="hdr-btn" onclick="clearChat()" title="Clear chat" aria-label="Clear conversation"><span class="btn-text">Clear </span>&#10005;</button>
+<button class="hdr-btn" onclick="showInfo()" title="About" aria-label="About Agave"><span class="btn-text">Info </span>&#9432;</button>
+</div>
+</header>
+<div class="layout">
+<aside class="sidebar" id="sidebar" role="navigation" aria-label="Conversations">
+<div class="conv-list" id="conv-list"><div class="conv-empty">No conversations yet</div></div>
+</aside>
+<div class="main" role="main">
+<div id="chat" aria-live="polite" aria-relevant="additions">
+<div id="empty">
+<div class="icon">&#127797;</div><h2>agave</h2>
+<p>High-performance LLM inference engine</p>
+<div class="hints">
+<span class="hint">Type a message to start</span>
+<span class="hint">/help for commands</span>
+<span class="hint">Shift+Enter for new line</span>
+</div>
+</div>
+</div>
+<div class="modal-overlay" id="info-modal" onclick="if(event.target===this)hideInfo()" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+<div class="modal">
+<div class="modal-head">
+<span class="modal-title" id="modal-title">&#127797; About Agave</span>
+<button class="modal-close" onclick="hideInfo()" aria-label="Close dialog">&#10005;</button>
+</div>
+<div class="modal-body">
+<p><strong>Agave LLM Inference Engine</strong></p>
+<h3>System</h3>
+<div class="info-row"><span class="info-label">Model</span><span class="info-val" id="info-model">-</span></div>
+<div class="info-row"><span class="info-label">Backend</span><span class="info-val" id="info-backend">-</span></div>
+<div class="info-row"><span class="info-label">API</span><span class="info-val">OpenAI-compatible</span></div>
+<h3>Features</h3>
+<ul>
+<li>Multi-backend: CPU, Metal, Vulkan, CUDA</li>
+<li>GGUF &amp; SafeTensors support</li>
+<li>SSE streaming responses</li>
+<li>Zero-copy weight loading via mmap</li>
+</ul>
+<h3>Shortcuts</h3>
+<div class="info-row"><span class="info-label">Send</span><span class="info-val"><kbd>Enter</kbd></span></div>
+<div class="info-row"><span class="info-label">New line</span><span class="info-val"><kbd>Shift+Enter</kbd></span></div>
+<div class="info-row"><span class="info-label">Stop</span><span class="info-val"><kbd>Escape</kbd></span></div>
+</div>
+</div>
+</div>
+<form id="chat-form" onsubmit="return onSubmit(event)">
+<div class="input-row">
+<textarea id="msg" placeholder="Send a message..." rows="1" aria-label="Message input"></textarea>
+<button type="submit" class="send-btn" id="send-btn" aria-label="Send message">Send</button>
+<button type="button" class="stop-btn" id="stop-btn" onclick="stopGen()" aria-label="Stop generation">Stop</button>
+</div>
+<div class="input-hint">Enter to send &middot; Shift+Enter for new line &middot; Escape to stop</div>
+</form>
+</div>
+</div>
+<script>

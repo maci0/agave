@@ -581,14 +581,6 @@ pub const VulkanBackend = struct {
     // SSM (State Space Model) pipelines
     pipe_conv1d: PipelineInfo = .{},
 
-    // CPU fallback for unsupported ops
-    cpu: CpuBackend = .{},
-    /// Allow falling back to CPU for ops without Vulkan shaders.
-    allow_cpu_fallback: bool = false,
-
-    /// One-shot flag: warn only once when NVFP4 SafeTensors GEMV falls back to CPU.
-    nvfp4_st_fallback_warned: bool = false,
-
     /// Device name retrieved from VkPhysicalDeviceProperties (e.g., "Apple M4 Pro").
     device_name: [256]u8 = undefined,
     device_name_len: usize = 0,
@@ -743,7 +735,7 @@ pub const VulkanBackend = struct {
         var self = VulkanBackend{};
         self.allocator = allocator;
         self.buf_cache = std.AutoHashMap(usize, CachedBuf).init(allocator);
-        self.buf_cache.ensureTotalCapacity(512) catch {};
+        self.buf_cache.ensureTotalCapacity(backend_mod.buf_cache_initial_capacity) catch {};
         errdefer self.buf_cache.deinit();
         errdefer self.deinitCachedBuffers();
 
@@ -1020,22 +1012,23 @@ pub const VulkanBackend = struct {
 
         const pipelines = [_]*PipelineInfo{
             // Elementwise
-            &self.pipe_silu,     &self.pipe_gelu,
-            &self.pipe_add,      &self.pipe_mul,
+            &self.pipe_silu,          &self.pipe_gelu,
+            &self.pipe_add,           &self.pipe_mul,
             // Normalization
-            &self.pipe_rms_norm, &self.pipe_softmax, &self.pipe_l2_norm,
+            &self.pipe_rms_norm,      &self.pipe_softmax,
+            &self.pipe_l2_norm,
             // Position
-            &self.pipe_rope,
+                  &self.pipe_rope,
             // GEMV
-            &self.pipe_gemv_f32,  &self.pipe_gemv_q8_0,
-            &self.pipe_gemv_q4_0, &self.pipe_gemv_bf16,
-            &self.pipe_gemv_f16,  &self.pipe_gemv_q4_k,
-            &self.pipe_gemv_q5_k, &self.pipe_gemv_q6_k,
+            &self.pipe_gemv_f32,      &self.pipe_gemv_q8_0,
+            &self.pipe_gemv_q4_0,     &self.pipe_gemv_bf16,
+            &self.pipe_gemv_f16,      &self.pipe_gemv_q4_k,
+            &self.pipe_gemv_q5_k,     &self.pipe_gemv_q6_k,
             &self.pipe_gemv_fp8_e4m3, &self.pipe_gemv_fp8_e5m2,
             // Attention
             &self.pipe_sdpa,
             // Embedding
-            &self.pipe_embedding,
+                     &self.pipe_embedding,
             // SSM
             &self.pipe_conv1d,
         };
@@ -1318,10 +1311,7 @@ pub const VulkanBackend = struct {
             .q6_k => self.pipe_gemv_q6_k,
             .fp8_e4m3 => self.pipe_gemv_fp8_e4m3,
             .fp8_e5m2 => self.pipe_gemv_fp8_e5m2,
-            else => {
-                self.cpu.gemv(x, w, y, n, k);
-                return;
-            },
+            else => @panic("Vulkan GEMV: unsupported dtype — add a GPU shader"),
         };
 
         const x_sz = k * @sizeOf(f32);
@@ -1481,11 +1471,8 @@ pub const VulkanBackend = struct {
 
     /// Embedding lookup via GPU shader (eliminates CPU fallback).
     pub fn embLookup(self: *VulkanBackend, table: TensorData, token_id: u32, output: [*]f32, dim: usize) void {
-        // Only f32 embeddings supported on GPU (quantized embeddings use CPU fallback)
-        if (table.dtype != .f32) {
-            self.cpu.embLookup(table, token_id, output, dim);
-            return;
-        }
+        // Only f32 embeddings supported on GPU.
+        if (table.dtype != .f32) @panic("Vulkan embLookup: non-f32 dtype not supported — add GPU shader");
 
         // For f32 embeddings, we use the buffer cache to avoid re-uploading
         // the entire embedding table every token. We only know one row size (dim),
@@ -1541,10 +1528,7 @@ pub const VulkanBackend = struct {
         // Note: This kernel does NOT handle conv_b (bias). The CPU reference
         // causalConv1dSilu in ops/ssm.zig supports optional bias, but the GPU
         // shader currently does not. For models that need bias, we fall back to CPU.
-        if (conv_b != null) {
-            self.cpu.causalConv1dSilu(conv_out, conv_state, conv_in, conv_w, conv_b, conv_ch, d_conv);
-            return;
-        }
+        if (conv_b != null) @panic("Vulkan conv1d: bias not supported — add GPU shader support for conv bias");
 
         // Buffer sizes
         const conv_ch_sz = conv_ch * @sizeOf(f32);
@@ -1606,45 +1590,34 @@ pub const VulkanBackend = struct {
         self.downloadF32(x_buf.mem, x, n);
     }
 
-    /// NVFP4 SafeTensors GEMV — CPU fallback (no Vulkan shader yet).
-    pub fn gemvNvfp4St(self: *VulkanBackend, x: [*]const f32, weight: [*]const u8, scale: [*]const u8, y: [*]f32, n: usize, k: usize) void {
-        if (!self.allow_cpu_fallback)
-            @panic("NVFP4 SafeTensors GEMV has no Vulkan shader. Pass --allow-cpu-fallback to use CPU fallback.");
-        if (!self.nvfp4_st_fallback_warned) {
-            self.nvfp4_st_fallback_warned = true;
-            std.log.warn("NVFP4 SafeTensors GEMV: no Vulkan shader, using CPU fallback", .{});
-        }
-        self.cpu.gemvNvfp4St(x, weight, scale, y, n, k);
+    /// NVFP4 SafeTensors GEMV.
+    pub fn gemvNvfp4St(_: *VulkanBackend, _: [*]const f32, _: [*]const u8, _: [*]const u8, _: [*]f32, _: usize, _: usize) void {
+        @panic("Vulkan NVFP4 SafeTensors GEMV: no GPU shader — add a Vulkan compute shader");
     }
 
-    /// MLX affine quantized GEMV — CPU fallback.
-    pub fn gemvMlxQ(self: *VulkanBackend, x: [*]const f32, weight: [*]const u8, scales: [*]const u8, biases: [*]const u8, y: [*]f32, n: usize, k: usize, bits: u32) void {
-        self.sync();
-        self.cpu.gemvMlxQ(x, weight, scales, biases, y, n, k, bits);
+    /// MLX affine quantized GEMV.
+    pub fn gemvMlxQ(_: *VulkanBackend, _: [*]const f32, _: [*]const u8, _: [*]const u8, _: [*]const u8, _: [*]f32, _: usize, _: usize, _: u32) void {
+        @panic("Vulkan MLX GEMV: no GPU shader — add a Vulkan compute shader");
     }
 
-    /// In-place sigmoid-gated multiply — CPU fallback.
-    pub fn sigmoidMul(self: *VulkanBackend, data: [*]f32, gate: [*]const f32, n: usize) void {
-        self.sync();
-        self.cpu.sigmoidMul(data, gate, n);
+    /// In-place sigmoid-gated multiply.
+    pub fn sigmoidMul(_: *VulkanBackend, _: [*]f32, _: [*]const f32, _: usize) void {
+        @panic("Vulkan sigmoidMul: no GPU shader — add a Vulkan compute shader");
     }
 
-    /// Fused SiLU + multiply — CPU fallback.
-    pub fn siluMul(self: *VulkanBackend, a: [*]const f32, b: [*]const f32, out: [*]f32, n: usize) void {
-        self.sync();
-        self.cpu.siluMul(a, b, out, n);
+    /// Fused SiLU + multiply.
+    pub fn siluMul(_: *VulkanBackend, _: [*]const f32, _: [*]const f32, _: [*]f32, _: usize) void {
+        @panic("Vulkan siluMul: no GPU shader — add a Vulkan compute shader");
     }
 
-    /// In-place per-head rmsNorm — CPU fallback.
-    pub fn rmsNormMulti(self: *VulkanBackend, data: [*]f32, weight: [*]const f32, n_heads: usize, head_dim: usize, eps: f32) void {
-        self.sync();
-        self.cpu.rmsNormMulti(data, weight, n_heads, head_dim, eps);
+    /// In-place per-head rmsNorm.
+    pub fn rmsNormMulti(_: *VulkanBackend, _: [*]f32, _: [*]const f32, _: usize, _: usize, _: f32) void {
+        @panic("Vulkan rmsNormMulti: no GPU shader — add a Vulkan compute shader");
     }
 
-    /// Deinterleave paired data into two separate output buffers — CPU fallback.
-    pub fn deinterleave(self: *VulkanBackend, input: [*]const f32, out_a: [*]f32, out_b: [*]f32, stride: usize, n_pairs: usize) void {
-        self.sync();
-        self.cpu.deinterleave(input, out_a, out_b, stride, n_pairs);
+    /// Deinterleave paired data into two separate output buffers.
+    pub fn deinterleave(_: *VulkanBackend, _: [*]const f32, _: [*]f32, _: [*]f32, _: usize, _: usize) void {
+        @panic("Vulkan deinterleave: no GPU shader — add a Vulkan compute shader");
     }
 
     /// Batched GEMV — sequential dispatch on Vulkan.
@@ -1721,10 +1694,9 @@ pub const VulkanBackend = struct {
         return buffer.?;
     }
 
-    /// DeltaNet SSM recurrence — CPU fallback.
-    pub fn deltaNet(self: *VulkanBackend, conv_in: [*]const f32, conv_out: [*]f32, z_buf: [*]const f32, alpha_buf: [*]const f32, beta_buf: [*]const f32, output: [*]f32, conv_state: [*]f32, ssm_state: []f32, ssm_a: [*]const f32, dt_bias: [*]const f32, conv_w: [*]const f32, ssm_norm_w: [*]const f32, p: backend_mod.DeltaNetParams) void {
-        self.sync();
-        self.cpu.deltaNet(conv_in, conv_out, z_buf, alpha_buf, beta_buf, output, conv_state, ssm_state, ssm_a, dt_bias, conv_w, ssm_norm_w, p);
+    /// DeltaNet SSM recurrence.
+    pub fn deltaNet(_: *VulkanBackend, _: [*]const f32, _: [*]f32, _: [*]const f32, _: [*]const f32, _: [*]const f32, _: [*]f32, _: [*]f32, _: []f32, _: [*]const f32, _: [*]const f32, _: [*]const f32, _: [*]const f32, _: backend_mod.DeltaNetParams) void {
+        @panic("Vulkan DeltaNet: no GPU shader — add a Vulkan compute shader");
     }
 
     /// No-op — each Vulkan dispatch already submits and waits on a fence.
@@ -1751,11 +1723,7 @@ pub const VulkanBackend = struct {
     /// Fused Scaled Dot-Product Attention.
     /// One workgroup per query head. Falls back to CPU for large seq_len / head_dim.
     pub fn sdpa(self: *VulkanBackend, q: [*]const f32, keys: []u8, values: []u8, k_new: [*]const f32, v_new: [*]const f32, output: [*]f32, nh: usize, nkv: usize, hd: usize, seq_len: usize, scale: f32, kv_type: @import("backend.zig").KvQuantType) void {
-        if (kv_type != .f32) {
-            self.sync();
-            self.cpu.sdpa(q, keys, values, k_new, v_new, output, nh, nkv, hd, seq_len, scale, kv_type);
-            return;
-        }
+        if (kv_type != .f32) @panic("Vulkan SDPA: quantized KV not supported — add GPU shader or use --kv-type f32");
 
         const f32_keys: []f32 = @as([*]f32, @ptrCast(@alignCast(keys.ptr)))[0 .. keys.len / 4];
         const f32_values: []f32 = @as([*]f32, @ptrCast(@alignCast(values.ptr)))[0 .. values.len / 4];
@@ -1763,10 +1731,7 @@ pub const VulkanBackend = struct {
         const kvd = nkv * hd;
         const sl = seq_len + 1;
 
-        if (sl > sdpa_max_seq_len or hd > sdpa_max_head_dim) {
-            self.cpu.sdpa(q, keys, values, k_new, v_new, output, nh, nkv, hd, seq_len, scale, .f32);
-            return;
-        }
+        if (sl > sdpa_max_seq_len or hd > sdpa_max_head_dim) @panic("Vulkan SDPA: sequence or head dim exceeds GPU limit — reduce --ctx-size");
 
         // Flush pending GPU work so k_new/v_new are readable, then append to KV cache
         self.sync();

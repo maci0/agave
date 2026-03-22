@@ -38,19 +38,19 @@ pub fn deltaNet(conv_in: [*]const f32, conv_out: [*]f32, z_buf: [*]const f32, al
     for (0..num_k_heads) |h| {
         inline for ([_]usize{ q_off, k_off }) |base_off| {
             const ptr = conv_out + base_off + h * head_k_dim;
-            var acc: @Vector(8, f32) = @splat(@as(f32, 0.0));
+            var acc: V8 = @splat(0.0);
             var li2: usize = 0;
             while (li2 + 8 <= head_k_dim) : (li2 += 8) {
-                const v: @Vector(8, f32) = ptr[li2..][0..8].*;
+                const v: V8 = ptr[li2..][0..8].*;
                 acc += v * v;
             }
             var ss = @reduce(.Add, acc);
             while (li2 < head_k_dim) : (li2 += 1) ss += ptr[li2] * ptr[li2];
             const inv = 1.0 / @sqrt(ss + p.rms_eps);
-            const inv_v: @Vector(8, f32) = @splat(inv);
+            const inv_v: V8 = @splat(inv);
             li2 = 0;
             while (li2 + 8 <= head_k_dim) : (li2 += 8) {
-                ptr[li2..][0..8].* = @as(@Vector(8, f32), ptr[li2..][0..8].*) * inv_v;
+                ptr[li2..][0..8].* = @as(V8, ptr[li2..][0..8].*) * inv_v;
             }
             while (li2 < head_k_dim) : (li2 += 1) ptr[li2] *= inv;
         }
@@ -82,7 +82,7 @@ pub fn deltaNetHead(h: usize, gate_vals: *const [max_deltanet_v_heads]f32, beta_
     const decay_v: V8 = @splat(decay);
 
     // Precompute dot(K, Q)
-    var kq_acc: V8 = @splat(@as(f32, 0.0));
+    var kq_acc: V8 = @splat(0.0);
     var ki: usize = 0;
     while (ki + 8 <= head_k_dim) : (ki += 8) {
         kq_acc += @as(V8, k_ptr[k_base + ki ..][0..8].*) *
@@ -93,8 +93,8 @@ pub fn deltaNetHead(h: usize, gate_vals: *const [max_deltanet_v_heads]f32, beta_
 
     for (0..head_v_dim) |vi| {
         const row_off = s_off + vi * head_k_dim;
-        var acc_k: V8 = @splat(@as(f32, 0.0));
-        var acc_q: V8 = @splat(@as(f32, 0.0));
+        var acc_k: V8 = @splat(0.0);
+        var acc_q: V8 = @splat(0.0);
         ki = 0;
         while (ki + 8 <= head_k_dim) : (ki += 8) {
             const s_old: V8 = ssm_state[row_off + ki ..][0..8].*;
@@ -127,7 +127,7 @@ pub fn deltaNetHead(h: usize, gate_vals: *const [max_deltanet_v_heads]f32, beta_
 
     // Gated output: RMSNorm + SiLU
     const off = h * head_v_dim;
-    var acc_sq: V8 = @splat(@as(f32, 0.0));
+    var acc_sq: V8 = @splat(0.0);
     var vi: usize = 0;
     while (vi + 8 <= head_v_dim) : (vi += 8) {
         const v: V8 = output[off + vi ..][0..8].*;
@@ -137,8 +137,8 @@ pub fn deltaNetHead(h: usize, gate_vals: *const [max_deltanet_v_heads]f32, beta_
     while (vi < head_v_dim) : (vi += 1) ss += output[off + vi] * output[off + vi];
     const inv_rms = 1.0 / @sqrt(ss / @as(f32, @floatFromInt(head_v_dim)) + p.rms_eps);
     const inv_v_r: V8 = @splat(inv_rms);
-    const one_v: V8 = @splat(@as(f32, 1.0));
-    const neg_v: V8 = @splat(@as(f32, -1.0));
+    const one_v: V8 = @splat(1.0);
+    const neg_v: V8 = @splat(-1.0);
     vi = 0;
     while (vi + 8 <= head_v_dim) : (vi += 8) {
         const o: V8 = output[off + vi ..][0..8].*;

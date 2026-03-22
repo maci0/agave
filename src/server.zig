@@ -36,6 +36,13 @@ const conv_title_max_len: usize = 48;
 const conv_list_buf_size: usize = 8192;
 const conv_msgs_buf_size: usize = 65536;
 const http_buf_size: usize = 65536;
+const hdr_buf_size: usize = 1024;
+const short_hdr_buf_size: usize = 512;
+const error_body_buf_size: usize = 256;
+const health_buf_size: usize = 512;
+const metrics_render_buf_size: usize = 16384;
+const stats_buf_size: usize = 512;
+const sse_event_buf_size: usize = 1024;
 /// Maximum HTTP request body size (1 MB).
 const max_request_body_size: usize = 1_000_000;
 /// Maximum number of concurrent conversations.
@@ -84,7 +91,6 @@ const Conversation = struct {
 /// Server state — bundles all mutable state into a single struct
 /// instead of scattered globals. Only g_server is a global (required
 /// because the accept loop callback doesn't carry a context pointer).
-
 const Server = struct {
     model: *Model,
     tokenizer: *Tokenizer,
@@ -228,308 +234,14 @@ fn logGeneration(tokens: u32, time_ms: u64, tps: f32) void {
     }
 }
 
-const html_page =
-    \\<!DOCTYPE html><html lang="en"><head>
-    \\<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-    \\<title>agave</title>
-\\<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>&#127797;</text></svg>">
-    \\<link rel="preconnect" href="https://fonts.googleapis.com">
-    \\<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
-    \\<script src="https://cdn.jsdelivr.net/npm/marked@11.1.1/marked.min.js" integrity="sha384-zbcZAIxlvJtNE3Dp5nxLXdXtXyxwOdnILY1TDPVmKFhl4r4nSUG1r8bcFXGVa4Te" crossorigin="anonymous"></script>
-    \\<script src="https://cdn.jsdelivr.net/npm/dompurify@3.0.8/dist/purify.min.js" integrity="sha384-vdScihEZCfbPnBQf+lc7LgXUdJVYyhC3yWHUW5C5P5GpHRqVnaM6HJELJxT6IqwM" crossorigin="anonymous"></script>
-    \\<script src="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/highlight.min.js" integrity="sha384-F/bZzf7p3Joyp5psL90p/p89AZJsndkSoGwRpXcZhleCWhd8SnRuoYo4d0yirjJp" crossorigin="anonymous"></script>
-    \\<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/styles/monokai-sublime.min.css" integrity="sha384-fPmRQ3GXo2iBk8Sgxizmu0IOOv+vAPjYXqCHNut2KSkSBleqjCd7FpBJwrfyCfGc" crossorigin="anonymous">
-    \\<style>
-    \\:root{--bg:#1a1714;--surface:#231f1c;--elevated:#2c2825;--border:#3d3833;--border-hl:#544e48;--text:#ebe3db;--text-2:#a09890;--text-3:#8a847e;--accent:#d4a574;--accent-hover:#e0b88a;--accent-bg:rgba(212,165,116,0.1);--green:#8faa7b;--red:#c75050;--red-bg:rgba(199,80,80,0.1);--mono:'IBM Plex Mono',ui-monospace,'Cascadia Code',Menlo,monospace;--sans:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-serif;--max-w:860px;--r:8px;--sidebar-w:260px}
-    \\*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
-    \\body{font-family:var(--sans);background:var(--bg);color:var(--text);height:100vh;overflow:hidden;line-height:1.6;display:flex;flex-direction:column}
-    \\body::before{content:'';position:fixed;inset:0;pointer-events:none;background:radial-gradient(ellipse at 50% -20%,rgba(212,165,116,0.07) 0%,transparent 60%);z-index:0}
-    \\.layout{display:flex;flex:1;overflow:hidden;position:relative;z-index:1}
-    \\.sidebar{width:var(--sidebar-w);background:var(--surface);border-right:1px solid var(--border);display:flex;flex-direction:column;flex-shrink:0;z-index:20}
-    \\.new-chat-btn{font-family:var(--mono);font-size:12px;font-weight:500;padding:6px 12px;border-radius:var(--r);border:1px solid var(--accent);background:var(--accent-bg);color:var(--accent);cursor:pointer;transition:all .2s}
-    \\.new-chat-btn:hover{background:var(--accent);color:var(--bg)}
-    \\.conv-list{flex:1;overflow-y:auto;padding:8px}
-    \\.conv-list::-webkit-scrollbar{width:4px}
-    \\.conv-list::-webkit-scrollbar-thumb{background:var(--border);border-radius:2px}
-    \\.conv-item{padding:10px 12px;border-radius:6px;cursor:pointer;display:flex;align-items:center;gap:8px;margin-bottom:2px;transition:background .12s;border:1px solid transparent;outline:none}
-\\.conv-item:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
-    \\.conv-item:hover{background:var(--elevated)}
-    \\.conv-item.active{background:var(--accent-bg);border-color:rgba(212,165,116,0.25)}
-    \\.conv-title{flex:1;font-size:13px;color:var(--text-2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-    \\.conv-item.active .conv-title{color:var(--text)}
-    \\.conv-del{background:none;border:none;color:var(--text-3);cursor:pointer;font-size:14px;padding:2px 4px;border-radius:3px;opacity:0;transition:all .15s;flex-shrink:0}
-    \\.conv-item:hover .conv-del{opacity:1}
-    \\.conv-del:hover{color:var(--red);background:var(--red-bg)}
-    \\.conv-empty{padding:20px 12px;text-align:center;color:var(--text-3);font-size:12px;font-family:var(--mono)}
-    \\.main{flex:1;display:flex;flex-direction:column;min-width:0}
-    \\header{z-index:10;padding:12px 24px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;background:var(--surface);box-shadow:0 1px 3px rgba(0,0,0,0.2);flex-shrink:0}
-    \\.logo{display:flex;align-items:center;gap:10px}
-    \\.logo h1{font-family:var(--mono);font-size:18px;font-weight:600;color:var(--accent);letter-spacing:-0.5px}
-    \\.model-badge{font-family:var(--mono);font-size:12px;color:var(--text-2);background:var(--elevated);padding:4px 10px;border-radius:var(--r);border:1px solid var(--border)}
-    \\.hdr-btns{display:flex;gap:6px}
-    \\.hdr-btn{font-family:var(--mono);background:none;border:1px solid var(--border);color:var(--text-3);padding:6px 12px;border-radius:var(--r);cursor:pointer;font-size:12px;transition:all .2s}
-    \\.hdr-btn:hover{background:var(--elevated);color:var(--text);border-color:var(--border-hl)}
-    \\#chat{position:relative;z-index:1;flex:1;overflow-y:auto;padding:24px 24px 8px;display:flex;flex-direction:column;gap:24px;scroll-behavior:smooth}
-    \\#chat::-webkit-scrollbar{width:6px}
-    \\#chat::-webkit-scrollbar-track{background:transparent}
-    \\#chat::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px}
-    \\#chat::-webkit-scrollbar-thumb:hover{background:var(--border-hl)}
-    \\#empty{margin:auto;text-align:center;padding:40px 20px;animation:fadeUp .5s ease-out}
-    \\#empty .icon{font-size:48px;margin-bottom:16px;filter:grayscale(0.3)}
-    \\#empty h2{font-family:var(--mono);font-size:28px;font-weight:600;color:var(--accent);letter-spacing:-1px;margin-bottom:8px}
-    \\#empty p{color:var(--text-2);font-size:15px;margin-bottom:24px}
-    \\#empty .hints{display:flex;flex-wrap:wrap;justify-content:center;gap:8px}
-    \\#empty .hint{font-family:var(--mono);font-size:11px;color:var(--text-3);background:var(--surface);border:1px solid var(--border);padding:4px 10px;border-radius:var(--r)}
-    \\.msg-wrap{display:flex;flex-direction:column;gap:4px;max-width:var(--max-w);width:100%;margin:0 auto;animation:fadeUp .3s ease-out}
-    \\.msg-wrap.user{align-items:flex-end}
-    \\.msg-wrap.assistant{align-items:flex-start}
-    \\.role{font-family:var(--mono);font-size:11px;font-weight:500;text-transform:uppercase;letter-spacing:.5px;padding:0 4px}
-    \\.role.user{color:var(--text-3)}
-    \\.role.assistant{color:var(--accent)}
-    \\.msg{position:relative;padding:14px 18px;border-radius:var(--r);max-width:100%;word-wrap:break-word;overflow-wrap:break-word}
-    \\.msg.user{background:var(--surface);border:1px solid var(--border);border-bottom-right-radius:2px}
-    \\.msg.assistant{background:var(--elevated);border:1px solid var(--border);border-bottom-left-radius:2px}
-    \\.msg p{margin:0 0 10px}.msg p:last-child{margin:0}
-    \\.msg pre{background:var(--bg);padding:14px;border-radius:6px;overflow-x:auto;margin:12px 0;position:relative;border:1px solid var(--border)}
-    \\.msg pre code{font-family:var(--mono);font-size:13px;line-height:1.5;background:none!important;padding:0;border:none;color:inherit}
-    \\.msg code:not(pre code){font-family:var(--mono);background:var(--surface);padding:2px 6px;border-radius:3px;font-size:13px;color:var(--accent)}
-    \\.msg ul,.msg ol{margin:8px 0 8px 24px}
-    \\.msg li{margin:4px 0}
-    \\.msg blockquote{border-left:3px solid var(--accent);padding-left:16px;color:var(--text-2);margin:12px 0;font-style:italic}
-    \\.msg h1,.msg h2,.msg h3{color:var(--accent);margin:16px 0 8px}
-    \\.msg h1{font-size:1.4em}.msg h2{font-size:1.2em}.msg h3{font-size:1.1em}
-    \\.msg a{color:var(--accent);text-decoration:none}
-    \\.msg a:hover{text-decoration:underline}
-    \\.msg table{border-collapse:collapse;margin:12px 0;width:100%}
-    \\.msg th,.msg td{border:1px solid var(--border);padding:8px 12px;text-align:left}
-    \\.msg th{background:var(--surface);font-weight:600}
-    \\.code-lang{position:absolute;top:6px;left:12px;font-family:var(--mono);font-size:10px;color:var(--text-3);text-transform:uppercase;letter-spacing:.5px}
-    \\.copy-btn{position:absolute;top:6px;right:8px;font-family:var(--mono);background:var(--surface);border:1px solid var(--border);color:var(--text-3);padding:3px 8px;border-radius:4px;cursor:pointer;font-size:11px;opacity:0;transition:all .2s}
-    \\.msg pre:hover .copy-btn{opacity:1}
-    \\.copy-btn:hover{background:var(--border);color:var(--text)}
-    \\.msg-copy{position:absolute;top:8px;right:8px;font-family:var(--mono);background:none;border:none;color:var(--text-3);cursor:pointer;font-size:11px;opacity:0;transition:opacity .2s;padding:4px}
-    \\.msg:hover .msg-copy{opacity:1}
-    \\.msg-copy:hover{color:var(--accent)}
-    \\.stats{font-family:var(--mono);font-size:11px;color:var(--text-3);margin-top:10px;padding-top:10px;border-top:1px solid var(--border);display:flex;gap:16px;flex-wrap:wrap}
-    \\.stats .val{color:var(--accent);font-weight:500}
-    \\.streaming{display:flex;align-items:center;gap:6px;padding:4px 0}
-    \\.typing-dots{display:flex;gap:4px;align-items:center}
-    \\.typing-dot{width:6px;height:6px;border-radius:50%;background:var(--accent);opacity:.3;animation:pulse 1.4s ease-in-out infinite}
-    \\.typing-dot:nth-child(2){animation-delay:.2s}
-    \\.typing-dot:nth-child(3){animation-delay:.4s}
-    \\.error-msg{background:var(--red-bg);border:1px solid var(--red);color:#e8a0a0;padding:12px 18px;border-radius:var(--r);margin:8px 0;font-size:14px}
-    \\#chat-form{position:relative;z-index:10;padding:16px 24px 20px;border-top:1px solid var(--border);background:var(--surface);box-shadow:0 -1px 3px rgba(0,0,0,0.2)}
-    \\.input-row{max-width:var(--max-w);margin:0 auto;display:flex;gap:10px;align-items:flex-end}
-    \\#msg{flex:1;font-family:var(--sans);padding:12px 16px;border-radius:var(--r);border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:15px;outline:none;resize:none;min-height:48px;max-height:200px;line-height:1.5;transition:border-color .2s}
-    \\#msg:focus{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-bg)}
-    \\#msg::placeholder{color:var(--text-3)}
-    \\.send-btn{font-family:var(--mono);padding:12px 20px;border-radius:var(--r);border:1px solid var(--accent);background:var(--accent-bg);color:var(--accent);font-size:14px;font-weight:500;cursor:pointer;transition:all .2s;white-space:nowrap}
-    \\.send-btn:hover{background:var(--accent);color:var(--bg)}
-    \\.send-btn:disabled{opacity:.3;cursor:not-allowed}
-    \\.send-btn:disabled:hover{background:var(--accent-bg);color:var(--accent)}
-    \\.stop-btn{font-family:var(--mono);padding:12px 20px;border-radius:var(--r);border:1px solid var(--red);background:var(--red-bg);color:var(--red);font-size:14px;font-weight:500;cursor:pointer;transition:all .2s;white-space:nowrap;display:none}
-    \\.stop-btn:hover{background:var(--red);color:white}
-    \\.input-hint{font-family:var(--mono);font-size:11px;color:var(--text-3);text-align:center;margin-top:8px}
-    \\.modal-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:100;align-items:center;justify-content:center;backdrop-filter:blur(4px)}
-    \\.modal-overlay.show{display:flex}
-    \\.modal{background:var(--elevated);border:1px solid var(--border);border-radius:12px;padding:28px;max-width:480px;width:90%;box-shadow:0 24px 48px rgba(0,0,0,.4)}
-    \\.modal-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:20px}
-    \\.modal-title{font-family:var(--mono);font-size:16px;font-weight:600;color:var(--accent)}
-    \\.modal-close{background:none;border:none;color:var(--text-3);cursor:pointer;font-size:20px;padding:4px 8px;border-radius:4px}
-    \\.modal-close:hover{background:var(--surface);color:var(--text)}
-    \\.modal-body{color:var(--text-2);line-height:1.8}
-    \\.modal-body h3{font-family:var(--mono);color:var(--accent);margin:16px 0 8px;font-size:13px;text-transform:uppercase;letter-spacing:.5px}
-    \\.modal-body ul{margin:4px 0;padding-left:20px}
-    \\.modal-body li{margin:4px 0;font-size:14px}
-    \\.info-row{display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--border);font-size:13px}
-    \\.info-row:last-child{border:none}
-    \\.info-label{color:var(--text-3)}
-    \\.info-val{font-family:var(--mono);color:var(--text)}
-    \\.modal-body kbd{font-family:var(--mono);background:var(--surface);padding:2px 6px;border-radius:3px;border:1px solid var(--border);font-size:12px}
-    \\.hdr-btn:focus-visible,.new-chat-btn:focus-visible,.send-btn:focus-visible,.stop-btn:focus-visible,.modal-close:focus-visible,.conv-del:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
-    \\@keyframes fadeUp{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:translateY(0)}}
-    \\@keyframes pulse{0%,80%,100%{opacity:.3;transform:scale(.8)}40%{opacity:1;transform:scale(1)}}
-    \\@media(prefers-reduced-motion:reduce){.msg-wrap,.typing-dot,#empty{animation:none!important}.typing-dot{opacity:.6}}
-    \\@media(max-width:700px){.sidebar{position:fixed;left:0;top:0;bottom:0;transform:translateX(-100%);transition:transform .2s;z-index:50}.sidebar.open{transform:translateX(0)}.sidebar-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.4);z-index:40}.sidebar-overlay.show{display:block}header{padding:12px 16px}#chat{padding:16px 16px 8px}#chat-form{padding:12px 16px 16px}#msg{font-size:16px}.btn-text{display:none}.msg{padding:12px 14px}#empty h2{font-size:24px}.input-hint{display:none}.menu-btn{display:flex!important}}
-    \\</style></head><body>
-    \\<div class="sidebar-overlay" id="sidebar-overlay" onclick="toggleSidebar()"></div>
-    \\<header>
-    \\<div class="logo">
-    \\<button class="hdr-btn menu-btn" onclick="toggleSidebar()" style="display:none" title="Menu" aria-label="Toggle sidebar" aria-expanded="false" id="menu-btn">&#9776;</button>
-    \\<h1>&#127797; agave</h1><span class="model-badge" id="model-name">loading...</span></div>
-    \\<div class="hdr-btns">
-    \\<button class="new-chat-btn" onclick="newConv()" aria-label="New conversation">+ New</button>
-    \\<button class="hdr-btn" onclick="clearChat()" title="Clear chat" aria-label="Clear conversation"><span class="btn-text">Clear </span>&#10005;</button>
-    \\<button class="hdr-btn" onclick="showInfo()" title="About" aria-label="About Agave"><span class="btn-text">Info </span>&#9432;</button>
-    \\</div></header>
-    \\<div class="layout">
-    \\<aside class="sidebar" id="sidebar" role="navigation" aria-label="Conversations">
-    \\<div class="conv-list" id="conv-list"><div class="conv-empty">No conversations yet</div></div>
-    \\</aside>
-    \\<div class="main" role="main">
-    \\<div id="chat" aria-live="polite" aria-relevant="additions"><div id="empty">
-    \\<div class="icon">&#127797;</div><h2>agave</h2>
-    \\<p>High-performance LLM inference engine</p>
-    \\<div class="hints"><span class="hint">Type a message to start</span><span class="hint">/help for commands</span><span class="hint">Shift+Enter for new line</span></div>
-    \\</div></div>
-    \\<div class="modal-overlay" id="info-modal" onclick="if(event.target===this)hideInfo()" role="dialog" aria-modal="true" aria-labelledby="modal-title">
-    \\<div class="modal"><div class="modal-head">
-    \\<span class="modal-title" id="modal-title">&#127797; About Agave</span>
-    \\<button class="modal-close" onclick="hideInfo()" aria-label="Close dialog">&#10005;</button>
-    \\</div><div class="modal-body">
-    \\<p><strong>Agave LLM Inference Engine</strong></p>
-    \\<h3>System</h3>
-    \\<div class="info-row"><span class="info-label">Model</span><span class="info-val" id="info-model">-</span></div>
-    \\<div class="info-row"><span class="info-label">Backend</span><span class="info-val" id="info-backend">-</span></div>
-    \\<div class="info-row"><span class="info-label">API</span><span class="info-val">OpenAI-compatible</span></div>
-    \\<h3>Features</h3>
-    \\<ul><li>Multi-backend: CPU, Metal, Vulkan, CUDA</li><li>GGUF &amp; SafeTensors support</li><li>SSE streaming responses</li><li>Zero-copy weight loading via mmap</li></ul>
-    \\<h3>Shortcuts</h3>
-    \\<div class="info-row"><span class="info-label">Send</span><span class="info-val"><kbd>Enter</kbd></span></div>
-    \\<div class="info-row"><span class="info-label">New line</span><span class="info-val"><kbd>Shift+Enter</kbd></span></div>
-    \\<div class="info-row"><span class="info-label">Stop</span><span class="info-val"><kbd>Escape</kbd></span></div>
-    \\</div></div></div>
-    \\<form id="chat-form" onsubmit="return onSubmit(event)">
-    \\<div class="input-row">
-    \\<textarea id="msg" placeholder="Send a message..." rows="1" aria-label="Message input"></textarea>
-    \\<button type="submit" class="send-btn" id="send-btn" aria-label="Send message">Send</button>
-    \\<button type="button" class="stop-btn" id="stop-btn" onclick="stopGen()" aria-label="Stop generation">Stop</button>
-    \\</div>
-    \\<div class="input-hint">Enter to send &middot; Shift+Enter for new line &middot; Escape to stop</div>
-    \\</form>
-    \\</div></div>
-    \\<script>
-    \\marked.setOptions({breaks:true,gfm:true});
-    \\var chat=document.getElementById('chat'),inp=document.getElementById('msg'),sendBtn=document.getElementById('send-btn'),stopBtn=document.getElementById('stop-btn');
-    \\var modelName='',abortCtrl=null,isStreaming=false,autoScroll=true,renderTimer=null;
-    \\var backendName='';
-\\fetch('/v1/models').then(function(r){return r.json()}).then(function(d){if(d.data&&d.data[0]){modelName=d.data[0].id;backendName=d.data[0].backend||'';document.getElementById('model-name').textContent=modelName}}).catch(function(){document.getElementById('model-name').textContent='offline'});
-    \\function autoResize(){inp.style.height='auto';inp.style.height=Math.min(inp.scrollHeight,200)+'px'}
-    \\inp.addEventListener('input',autoResize);
-    \\inp.addEventListener('keydown',function(e){if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();document.getElementById('chat-form').requestSubmit()}});
-    \\document.addEventListener('keydown',function(e){if(e.key==='Escape'){if(document.getElementById('info-modal').classList.contains('show'))hideInfo();else if(isStreaming)stopGen()}});
-    \\chat.addEventListener('scroll',function(){autoScroll=chat.scrollHeight-chat.scrollTop-chat.clientHeight<80});
-    \\function scrollBottom(){if(autoScroll)chat.scrollTop=chat.scrollHeight}
-    \\function setStreaming(s){isStreaming=s;sendBtn.style.display=s?'none':'';stopBtn.style.display=s?'':'none';inp.disabled=s}
-    \\function addUser(text){
-    \\  var e=document.getElementById('empty');if(e)e.remove();
-    \\  var w=document.createElement('div');w.className='msg-wrap user';
-    \\  var r=document.createElement('span');r.className='role user';r.textContent='You';
-    \\  var m=document.createElement('div');m.className='msg user';m.textContent=text;
-    \\  w.appendChild(r);w.appendChild(m);chat.appendChild(w);scrollBottom()}
-    \\function addAssistant(){
-    \\  var e=document.getElementById('empty');if(e)e.remove();
-    \\  var w=document.createElement('div');w.className='msg-wrap assistant';
-    \\  var r=document.createElement('span');r.className='role assistant';r.textContent='agave';
-    \\  var m=document.createElement('div');m.className='msg assistant';
-    \\  m.textContent='\u2026';
-    \\  w.appendChild(r);w.appendChild(m);chat.appendChild(w);scrollBottom();return m}
-    \\function processCode(el){
-    \\  el.querySelectorAll('pre code').forEach(function(b){
-    \\    hljs.highlightElement(b);var pre=b.parentElement,lang=(b.className.match(/language-(\w+)/)||[])[1]||'';
-    \\    if(lang){var l=document.createElement('span');l.className='code-lang';l.textContent=lang;pre.appendChild(l)}
-    \\    var c=document.createElement('button');c.className='copy-btn';c.textContent='Copy';
-    \\    c.onclick=function(){navigator.clipboard.writeText(b.textContent);c.textContent='Copied!';setTimeout(function(){c.textContent='Copy'},2000)};
-    \\    pre.appendChild(c)})}
-    \\function renderContent(el,content,final){
-    \\  if(renderTimer&&!final)return;
-    \\  var doRender=function(){
-    \\    el.textContent='';var dc=content.replace(/<think>([\s\S]*?)<\/think>\s*/g,function(_,p){var t=p.trim();return t?'\n> '+t.replace(/\n/g,'\n> ')+'\n\n':''});if(dc.indexOf('<think>')===0)dc=dc.substring(7);var parsed=marked.parse(dc);
-    \\    var sanitized=typeof DOMPurify!=='undefined'?DOMPurify.sanitize(parsed):parsed;
-    \\    var container=document.createElement('div');container.innerHTML=sanitized;
-    \\    while(container.firstChild)el.appendChild(container.firstChild);
-    \\    processCode(el);
-    \\    if(final){var cb=document.createElement('button');cb.className='msg-copy';cb.textContent='Copy';
-    \\      cb.onclick=function(){navigator.clipboard.writeText(content);cb.textContent='Copied!';setTimeout(function(){cb.textContent='Copy'},2000)};el.appendChild(cb)}
-    \\    scrollBottom();renderTimer=null};
-    \\  if(final){if(renderTimer)clearTimeout(renderTimer);doRender()}else{renderTimer=setTimeout(doRender,60)}}
-    \\function mkStat(label,val,unit){var sp=document.createElement('span');sp.textContent=label+' ';var v=document.createElement('span');v.className='val';v.textContent=val;sp.appendChild(v);if(unit){var u=document.createTextNode(' '+unit);sp.appendChild(u)}return sp}
-    \\function addStats(el,s){
-    \\  var d=document.createElement('div');d.className='stats';
-    \\  var total=parseInt(s.time)+(parseInt(s.pfMs)||0);
-    \\  d.appendChild(mkStat('decode ',s.tokens+' tok @ '+s.tps,'tok/s'));
-    \\  if(s.pfTok&&s.pfTok!=='0')d.appendChild(mkStat('prefill ',s.pfTok+' tok @ '+s.pfTps,'tok/s'));
-    \\  if(s.pfMs&&s.pfMs!=='0')d.appendChild(mkStat('TTFT ',s.pfMs,'ms'));
-    \\  d.appendChild(mkStat('total ',String(total),'ms'));
-    \\  el.appendChild(d)}
-    \\function sendMessage(text){
-    \\  var el=addAssistant();
-    \\  setStreaming(true);abortCtrl=new AbortController();var content='';
-    \\  fetch('/v1/chat',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},
-    \\    body:'message='+encodeURIComponent(text)+'&stream=1',signal:abortCtrl.signal})
-    \\  .then(function(resp){if(!resp.ok)throw new Error('Server error: '+resp.status);
-    \\    var reader=resp.body.getReader(),decoder=new TextDecoder(),buf='';
-    \\    function read(){return reader.read().then(function(r){if(r.done){renderContent(el,content||'*(no response)*',true);loadConvs();return}
-    \\      buf+=decoder.decode(r.value,{stream:true});var lines=buf.split('\n');buf=lines.pop()||'';
-    \\      for(var i=0;i<lines.length;i++){var ln=lines[i];if(ln.indexOf('data: ')!==0)continue;var d=ln.substring(6);
-    \\        if(d==='[DONE]'){renderContent(el,content||'*(no response)*',true);loadConvs();return}
-    \\        try{var o=JSON.parse(d);if(o.t){content+=o.t;renderContent(el,content,false)}
-    \\          if(o.done)addStats(el,{tokens:String(o.n),tps:o.tps.toFixed(2),time:String(o.ms),pfTok:String(o.pn),pfMs:String(o.pms),pfTps:o.ptps.toFixed(1)})}catch(e){}}
-    \\      return read()})}return read()})
-    \\  .catch(function(e){
-    \\    if(e.name==='AbortError'){renderContent(el,content||'*Stopped*',true)}
-    \\    else{var err=document.createElement('div');err.className='error-msg';err.textContent='Failed to get response: '+e.message+'. Check that the server is running.';el.textContent='';el.appendChild(err)}})
-    \\  .finally(function(){abortCtrl=null;setStreaming(false);inp.focus()})}
-    \\function handleCommand(cmd){
-    \\  if(cmd==='/help'){var el=addAssistant();renderContent(el,'**Commands:**\n- `/clear` \u2014 Clear conversation and KV cache\n- `/model` \u2014 Show model name\n- `/help` \u2014 Show this help\n\n**Shortcuts:**\n- `Enter` \u2014 Send message\n- `Shift+Enter` \u2014 New line\n- `Escape` \u2014 Stop generation or close dialog',true);return}
-    \\  if(cmd==='/model'){var el2=addAssistant();renderContent(el2,'Model: **'+(modelName||'unknown')+'**',true);return}
-    \\  fetch('/v1/chat',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'message='+encodeURIComponent(cmd)})
-    \\  .then(function(resp){return resp.text()}).then(function(html){
-    \\    var tmp=document.createElement('div');tmp.innerHTML=html;
-    \\    var msgEl=tmp.querySelector('.msg.assistant');var msg=msgEl?msgEl.textContent:'Done';
-    \\    var el3=addAssistant();renderContent(el3,msg,true)})
-    \\  .catch(function(){var el4=addAssistant();var err=document.createElement('div');err.className='error-msg';err.textContent='Command failed';el4.textContent='';el4.appendChild(err)})}
-    \\function onSubmit(e){e.preventDefault();var text=inp.value.trim();if(!text||isStreaming)return false;
-    \\  inp.value='';autoResize();addUser(text);
-    \\  if(text.charAt(0)==='/')handleCommand(text);else sendMessage(text);return false}
-    \\function stopGen(){if(abortCtrl)abortCtrl.abort()}
-    \\function showEmpty(){
-    \\  while(chat.firstChild)chat.removeChild(chat.firstChild);
-    \\  var empty=document.createElement('div');empty.id='empty';
-    \\  var emptyHtml='<div class="icon">&#127797;</div><h2>agave</h2><p>High-performance LLM inference engine</p><div class="hints"><span class="hint">Type a message to start</span><span class="hint">/help for commands</span></div>';
-    \\  empty.innerHTML=typeof DOMPurify!=='undefined'?DOMPurify.sanitize(emptyHtml):emptyHtml;
-    \\  chat.appendChild(empty)}
-    \\function clearChat(){
-    \\  fetch('/v1/chat',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'message=%2Fclear'}).then(function(){loadConvs();showEmpty()}).catch(function(){showEmpty()})}
-    \\function toggleSidebar(){
-    \\  var sb=document.getElementById('sidebar'),btn=document.getElementById('menu-btn');
-    \\  sb.classList.toggle('open');document.getElementById('sidebar-overlay').classList.toggle('show');
-    \\  if(btn)btn.setAttribute('aria-expanded',sb.classList.contains('open'))}
-    \\function loadConvs(){
-    \\  fetch('/v1/conversations').then(function(r){return r.json()}).then(function(convs){
-    \\    var list=document.getElementById('conv-list');
-    \\    while(list.firstChild)list.removeChild(list.firstChild);
-    \\    if(!convs.length){var em=document.createElement('div');em.className='conv-empty';em.textContent='No conversations yet';list.appendChild(em);return}
-    \\    convs.forEach(function(c){
-    \\      var item=document.createElement('div');item.className='conv-item'+(c.active?' active':'');item.tabIndex=0;item.setAttribute('role','button');
-    \\      item.onclick=function(){selectConv(c.id)};item.onkeydown=function(e){if(e.key==='Enter'||e.key===' '){e.preventDefault();selectConv(c.id)}};
-    \\      var title=document.createElement('span');title.className='conv-title';title.textContent=c.title||'New chat';if(c.title&&c.title.length>30)title.title=c.title;
-    \\      var del=document.createElement('button');del.className='conv-del';del.textContent='\u00d7';del.setAttribute('aria-label','Delete conversation');
-    \\      del.onclick=function(e){e.stopPropagation();deleteConv(c.id)};
-    \\      item.appendChild(title);item.appendChild(del);list.appendChild(item)})
-    \\  }).catch(function(){})}
-    \\function newConv(){
-    \\  fetch('/v1/conversations',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'action=new'})
-    \\  .then(function(){loadConvs();showEmpty();inp.focus()}).catch(function(){})}
-    \\function selectConv(id){
-    \\  fetch('/v1/conversations',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'action=select&id='+id})
-    \\  .then(function(r){return r.json()}).then(function(data){
-    \\    while(chat.firstChild)chat.removeChild(chat.firstChild);
-    \\    if(!data.messages||!data.messages.length){showEmpty();loadConvs();return}
-    \\    var e=document.getElementById('empty');if(e)e.remove();
-    \\    data.messages.forEach(function(m){
-    \\      if(m.role==='user'){addUser(m.content)}
-    \\      else{var el=addAssistant();renderContent(el,m.content,true)}});
-    \\    loadConvs();scrollBottom()}).catch(function(){})}
-    \\function deleteConv(id){
-    \\  fetch('/v1/conversations',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'action=delete&id='+id})
-    \\  .then(function(r){return r.json()}).then(function(data){
-    \\    loadConvs();if(data.cleared)showEmpty()}).catch(function(){})}
-    \\function showInfo(){var m=document.getElementById('info-modal');m.classList.add('show');document.getElementById('info-model').textContent=modelName||'-';document.getElementById('info-backend').textContent=backendName||'-';var cb=m.querySelector('.modal-close');if(cb)cb.focus()}
-    \\function hideInfo(){document.getElementById('info-modal').classList.remove('show');inp.focus()}
-    \\loadConvs();
-    \\</script></body></html>
-;
+/// Web UI HTML page — assembled at comptime from src/ui/ files.
+/// Edit src/ui/style.css for styles, src/ui/app.js for behavior,
+/// src/ui/head.html for <head> content, src/ui/body.html for page structure.
+const html_page = @embedFile("ui/head.html") ++
+    @embedFile("ui/style.css") ++
+    @embedFile("ui/body.html") ++
+    @embedFile("ui/app.js") ++
+    "\n</script></body></html>\n";
 
 /// Generate a unique request ID (monotonically increasing counter).
 fn nextRequestId() u64 {
@@ -635,7 +347,7 @@ fn checkRateLimit(server: *Server, prompt_tokens: u32) ?u32 {
 
 /// Write a complete HTTP response (status line + headers + body).
 fn sendResponse(stream: net.Stream, status: []const u8, content_type: []const u8, body: []const u8) void {
-    var hdr_buf: [1024]u8 = undefined;
+    var hdr_buf: [hdr_buf_size]u8 = undefined;
     const hdr = std.fmt.bufPrint(&hdr_buf, "HTTP/1.1 {s}\r\nContent-Type: {s}\r\nContent-Length: {d}\r\nAccess-Control-Allow-Origin: *\r\n" ++ security_headers ++ "Connection: close\r\n\r\n", .{ status, content_type, body.len }) catch return;
     stream.writeAll(hdr) catch return;
     stream.writeAll(body) catch return;
@@ -666,9 +378,9 @@ fn send401(stream: net.Stream) void {
 
 /// Send 429 Too Many Requests with Retry-After header.
 fn send429(stream: net.Stream, retry_after: u32) void {
-    var buf: [256]u8 = undefined;
+    var buf: [error_body_buf_size]u8 = undefined;
     const body = std.fmt.bufPrint(&buf, "{{\"error\":{{\"message\":\"Rate limit exceeded. Retry after {d} seconds.\",\"type\":\"rate_limit_exceeded\",\"code\":null}}}}", .{retry_after}) catch return;
-    var hdr_buf: [512]u8 = undefined;
+    var hdr_buf: [short_hdr_buf_size]u8 = undefined;
     const hdr = std.fmt.bufPrint(&hdr_buf, "HTTP/1.1 429 Too Many Requests\r\nContent-Type: application/json\r\nContent-Length: {d}\r\nRetry-After: {d}\r\n" ++ security_headers ++ "Connection: close\r\n\r\n", .{ body.len, retry_after }) catch return;
     stream.writeAll(hdr) catch return;
     stream.writeAll(body) catch return;
@@ -691,7 +403,7 @@ fn handleRequest(stream: net.Stream, req: HttpRequest) void {
 
     // Health check endpoint — lightweight, no mutex, no inference
     if (is_get and std.mem.eql(u8, path, "/health")) {
-        var buf: [512]u8 = undefined;
+        var buf: [health_buf_size]u8 = undefined;
         const uptime: i64 = if (g_server.start_time > 0) std.time.timestamp() - g_server.start_time else 0;
         const json = std.fmt.bufPrint(&buf,
             \\{{"status":"ok","model":"{s}","backend":"{s}","uptime_s":{d},"active_connections":{d},"requests_served":{d}}}
@@ -719,7 +431,7 @@ fn handleRequest(stream: net.Stream, req: HttpRequest) void {
 
     // Prometheus metrics endpoint
     if (is_get and std.mem.eql(u8, path, "/metrics")) {
-        var buf: [16384]u8 = undefined;
+        var buf: [metrics_render_buf_size]u8 = undefined;
         var fbs = std.io.fixedBufferStream(&buf);
         const writer = fbs.writer();
         g_server.metrics.renderPrometheus(writer) catch return;
@@ -1134,8 +846,8 @@ fn handleRequest(stream: net.Stream, req: HttpRequest) void {
     for (known_endpoints) |ep| {
         if (std.mem.eql(u8, path, ep.path)) {
             logRequestDone(method, path, 405, elapsedMs(request_start));
-            var hdr_buf: [1024]u8 = undefined;
-            var body_buf: [256]u8 = undefined;
+            var hdr_buf: [hdr_buf_size]u8 = undefined;
+            var body_buf: [error_body_buf_size]u8 = undefined;
             const body = std.fmt.bufPrint(&body_buf,
                 \\{{"error":{{"message":"Method not allowed. {s}","type":"invalid_request_error","code":null}}}}
             , .{ep.msg}) catch return;
@@ -1344,7 +1056,10 @@ fn generateN(formatted: []const u8, reset: bool, max_tokens: usize) GenResult {
             if (err == error.Cancelled) cancelled = true;
             break;
         };
-        if (g_server.isEog(next)) { hit_eog = true; break; }
+        if (g_server.isEog(next)) {
+            hit_eog = true;
+            break;
+        }
         gen_tokens[token_count] = next;
         last = next;
         token_count += 1;
@@ -1429,7 +1144,7 @@ fn chatStreamGenerate(stream: net.Stream, formatted: []const u8, reset: bool) Ge
         const token_count: u32 = @intCast(req.tokens.items.len);
         const tps: f32 = if (time_ms > 0) @as(f32, @floatFromInt(token_count)) / (@as(f32, @floatFromInt(time_ms)) / 1000.0) else 0.0;
 
-        var stats_buf: [512]u8 = undefined;
+        var stats_buf: [stats_buf_size]u8 = undefined;
         const stats_json = std.fmt.bufPrint(&stats_buf,
             \\{{"done":true,"n":{d},"ms":{d},"tps":{d:.2},"pn":{d},"pms":0,"ptps":0.0}}
         , .{ token_count, time_ms, tps, prompt_token_count }) catch "";
@@ -1502,7 +1217,7 @@ fn chatStreamGenerate(stream: net.Stream, formatted: []const u8, reset: bool) Ge
     const tps: f32 = if (time_ms > 0) @as(f32, @floatFromInt(token_count)) / (@as(f32, @floatFromInt(time_ms)) / 1000.0) else 0.0;
 
     // Send final stats event
-    var stats_buf: [512]u8 = undefined;
+    var stats_buf: [stats_buf_size]u8 = undefined;
     const stats_json = std.fmt.bufPrint(&stats_buf,
         \\{{"done":true,"n":{d},"ms":{d},"tps":{d:.2},"pn":{d},"pms":{d},"ptps":{d:.1}}}
     , .{ token_count, time_ms, tps, prompt_token_count, prefill_ms, prefill_tps }) catch "";
@@ -1535,7 +1250,7 @@ fn streamToken(stream: net.Stream, tok: *Tokenizer, token_id: u32) void {
     const escaped = jsonEscape(g_server.allocator, decoded) catch return;
     defer if (escaped.ptr != decoded.ptr) g_server.allocator.free(escaped);
 
-    var buf: [1024]u8 = undefined;
+    var buf: [sse_event_buf_size]u8 = undefined;
     const event = std.fmt.bufPrint(&buf, "data: {{\"t\":\"{s}\"}}\n\n", .{escaped}) catch return;
     stream.writeAll(event) catch {};
 }
@@ -2047,7 +1762,7 @@ pub fn run(allocator: Allocator, model: *Model, tok: *Tokenizer, chat_tmpl: Chat
 
     const address = net.Address.initIp4(.{ 0, 0, 0, 0 }, port);
     var tcp = address.listen(.{ .reuse_address = true }) catch {
-        var buf: [256]u8 = undefined;
+        var buf: [error_body_buf_size]u8 = undefined;
         const msg = std.fmt.bufPrint(&buf, "Error: port {d} already in use. Try:\n  agave model.gguf --serve --port {d}\n", .{ port, port + 1 }) catch "";
         std.fs.File.stderr().writeAll(msg) catch {};
         return error.ListenError;
@@ -2055,7 +1770,7 @@ pub fn run(allocator: Allocator, model: *Model, tok: *Tokenizer, chat_tmpl: Chat
     defer tcp.deinit();
 
     const t = getTimeComponents();
-    var buf: [512]u8 = undefined;
+    var buf: [short_hdr_buf_size]u8 = undefined;
     const msg = std.fmt.bufPrint(&buf, "\n[{d:0>2}:{d:0>2}:{d:0>2}] agave server started on http://0.0.0.0:{d} (http://localhost:{d})\n  model={s} backend={s}\nPress Ctrl+C to stop\n", .{ t.hours, t.minutes, t.seconds, port, port, model_name, backend_name }) catch "";
     std.fs.File.stdout().writeAll(msg) catch {};
 

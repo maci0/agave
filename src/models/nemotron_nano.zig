@@ -229,7 +229,7 @@ pub const NemotronNanoModel = struct {
             self.tiered_cache = tc;
             self.tiered_block_allocator = ta;
         } else {
-            const block_size: u16 = 16;
+            const block_size = kvcache.default_block_size;
             const num_blocks = (self.max_seq_len + block_size - 1) / block_size * nl;
             var paged_cache = try PagedKvCache.init(allocator, nl, kvd, num_blocks, block_size);
             errdefer paged_cache.deinit();
@@ -296,11 +296,11 @@ pub const NemotronNanoModel = struct {
         }
 
         const bufs = .{
-            &self.hidden,         &self.hidden2,       &self.q_buf,
-            &self.k_buf,          &self.v_buf,         &self.attn_out,
-            &self.scores_buf,     &self.ssm_proj_buf,  &self.ssm_conv_out,
-            &self.ssm_y_buf,      &self.router_buf,    &self.expert_buf,
-            &self.moe_out,        &self.logits_buf,    &self.bf16_buf_large,
+            &self.hidden,         &self.hidden2,      &self.q_buf,
+            &self.k_buf,          &self.v_buf,        &self.attn_out,
+            &self.scores_buf,     &self.ssm_proj_buf, &self.ssm_conv_out,
+            &self.ssm_y_buf,      &self.router_buf,   &self.expert_buf,
+            &self.moe_out,        &self.logits_buf,   &self.bf16_buf_large,
             &self.bf16_buf_small,
         };
         inline for (bufs) |buf| self.allocator.free(buf.*);

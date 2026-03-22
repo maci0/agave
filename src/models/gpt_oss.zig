@@ -186,7 +186,7 @@ pub const GptOssModel = struct {
             self.tiered_cache = tc;
             self.tiered_block_allocator = ta;
         } else {
-            const block_size: u16 = 16;
+            const block_size = kvcache.default_block_size;
             const num_blocks = (self.max_seq_len + block_size - 1) / block_size * nl;
             var paged_cache = try PagedKvCache.init(allocator, nl, kvd, num_blocks, block_size);
             errdefer paged_cache.deinit();
@@ -580,7 +580,7 @@ pub const GptOssModel = struct {
 // ── Free functions ────────────────────────────────────────────────
 
 /// Add a raw f32 bias array (pointed to by `bias_bytes`) into `dst`.
-/// `bias_bytes` must point to at least `n * 4` valid bytes of f32 data.
+/// `bias_bytes` must point to at least `n * @sizeOf(f32)` valid bytes of f32 data.
 inline fn addBias(dst: []f32, bias_bytes: [*]const u8, n: usize) void {
     const bias: [*]const f32 = @ptrCast(@alignCast(bias_bytes));
     for (0..n) |i| dst[i] += bias[i];

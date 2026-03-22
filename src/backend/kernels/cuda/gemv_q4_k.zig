@@ -103,9 +103,7 @@ export fn gemv_q4_k_kernel(
                 const gi = gi_base + l;
                 if (gi >= k) break;
                 const byte_idx = qi_base + l / 2;
-                const nibble: f32 = @floatFromInt(
-                    if (l % 2 == 0) qs[byte_idx] & 0x0F else qs[byte_idx] >> 4
-                );
+                const nibble: f32 = @floatFromInt(if (l % 2 == 0) qs[byte_idx] & 0x0F else qs[byte_idx] >> 4);
                 q_dot += x[gi] * nibble;
                 x_sum += x[gi];
             }

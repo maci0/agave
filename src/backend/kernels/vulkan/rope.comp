@@ -1,0 +1,33 @@
+#version 450
+
+layout(local_size_x = 256) in;
+
+layout(set = 0, binding = 0) buffer X { float x[]; };
+layout(push_constant) uniform Params {
+    uint pos;
+    uint n_heads;
+    uint head_dim;
+    uint rope_dim;
+    float theta;
+};
+
+void main() {
+    uint tid = gl_GlobalInvocationID.x;
+    uint half_rope = rope_dim / 2;
+    uint total = n_heads * half_rope;
+    if (tid >= total) return;
+
+    uint h = tid / half_rope;
+    uint i = tid % half_rope;
+    uint base = h * head_dim;
+
+    float freq = exp(-log(theta) * float(2 * i) / float(rope_dim));
+    float angle = float(pos) * freq;
+    float cos_a = cos(angle);
+    float sin_a = sin(angle);
+
+    float r  = x[base + i];
+    float im = x[base + i + half_rope];
+    x[base + i]             = r * cos_a - im * sin_a;
+    x[base + i + half_rope] = r * sin_a + im * cos_a;
+}

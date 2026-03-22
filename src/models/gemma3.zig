@@ -124,7 +124,7 @@ pub const Gemma3Model = struct {
             try ta.appendBlock(&seq_table);
             tiered_block_allocator = ta;
         } else {
-            const block_size: u16 = 16;
+            const block_size = kvcache.default_block_size;
             const num_blocks = (max_sl + block_size - 1) / block_size * nl;
             paged_cache = try PagedKvCache.init(allocator, nl, kv_dim, num_blocks, block_size);
             errdefer paged_cache.deinit();
@@ -552,4 +552,3 @@ pub const Gemma3Model = struct {
         for (self.logits) |*v| v.* = @as(f32, math.tanh(v.* * inv)) * cap;
     }
 };
-

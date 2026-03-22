@@ -63,6 +63,12 @@ const default_max_tokens: u32 = 512;
 const default_ctx_size: u32 = 4096;
 /// Minimum prompt tokens before showing prefill progress indicator.
 const prefill_progress_threshold: usize = 50;
+/// Default free RAM estimate when platform detection is not implemented (16 GB).
+const default_free_ram: usize = 16 * 1024 * 1024 * 1024;
+/// Default tiered KV cache RAM budget when unspecified (GB).
+const default_ram_budget_gb: usize = 16;
+/// Default tiered KV cache SSD budget when unspecified (GB).
+const default_ssd_budget_gb: usize = 10;
 const max_eog_ids = arch_mod.max_eog_ids;
 const gemma_fallback_eos = arch_mod.gemma_fallback_eos;
 const default_fallback_eos = arch_mod.default_fallback_eos;
@@ -107,7 +113,7 @@ fn detectFreeRam() usize {
     // TODO: Platform-specific implementation
     // macOS: sysctl vm.stats.vm.v_free_count + vm_page_size
     // Linux: read /proc/meminfo, extract MemAvailable
-    return 16 * 1024 * 1024 * 1024; // 16GB default
+    return default_free_ram;
 }
 
 // ── Preload (fault-in mmap'd pages) ─────────────────────────────
@@ -119,7 +125,7 @@ fn detectFreeRam() usize {
 fn preloadRegion(data: []align(std.heap.page_size_min) const u8) void {
     const MADV = std.posix.MADV;
     // Hint the kernel to read ahead sequentially
-    std.posix.madvise(@constCast(@alignCast(data.ptr)), data.len, MADV.SEQUENTIAL) catch {};
+    std.posix.madvise(@alignCast(@constCast(data.ptr)), data.len, MADV.SEQUENTIAL) catch {};
 
     // Touch one byte per page to force all pages into RAM
     const page_size = std.heap.page_size_min;
@@ -129,7 +135,7 @@ fn preloadRegion(data: []align(std.heap.page_size_min) const u8) void {
     }
 
     // Switch to random access hint now that all pages are resident
-    std.posix.madvise(@constCast(@alignCast(data.ptr)), data.len, MADV.RANDOM) catch {};
+    std.posix.madvise(@alignCast(@constCast(data.ptr)), data.len, MADV.RANDOM) catch {};
 }
 
 /// Progress bar width for warming display.
@@ -173,7 +179,7 @@ fn preloadModel(gguf: ?*GGUFFile, st: ?*SafeTensorsDir, quiet: bool, tty: bool, 
 /// and prints a progress bar to stderr on each 1% increment.
 fn preloadRegionProgress(data: []align(std.heap.page_size_min) const u8, loaded: *usize, total_bytes: usize, fsize: display_mod.FormattedSize) void {
     const MADV = std.posix.MADV;
-    std.posix.madvise(@constCast(@alignCast(data.ptr)), data.len, MADV.SEQUENTIAL) catch {};
+    std.posix.madvise(@alignCast(@constCast(data.ptr)), data.len, MADV.SEQUENTIAL) catch {};
 
     const page_size = std.heap.page_size_min;
     // Report progress every ~1% of total or every 256 pages, whichever is smaller
@@ -212,7 +218,7 @@ fn preloadRegionProgress(data: []align(std.heap.page_size_min) const u8, loaded:
         }
     }
 
-    std.posix.madvise(@constCast(@alignCast(data.ptr)), data.len, MADV.RANDOM) catch {};
+    std.posix.madvise(@alignCast(@constCast(data.ptr)), data.len, MADV.RANDOM) catch {};
 }
 
 // ── Architecture detection ───────────────────────────────────────
@@ -232,7 +238,6 @@ const cli_params = clap.parseParamsComptime(
     \\-q, --quiet                Suppress banner and stats (output only).
     \\-p, --port <u16>           Server port (default: 49453).
     \\-n, --max-tokens <u32>     Maximum tokens to generate (default: 512).
-
     \\-t, --temperature <str>    Sampling temperature, 0 = greedy (default: 0).
     \\    --top-p <str>          Nucleus sampling threshold (default: 1.0).
     \\    --top-k <u32>          Top-k sampling, 0 = disabled (default: 0).
@@ -561,9 +566,9 @@ const BackendState = struct {
                 },
                 .metal => {
                     if (comptime build_options.enable_metal and builtin.os.tag == .macos) {
-                        self.metal_be = backend_mod.MetalBackend.init(allocator) catch {
+                        self.metal_be = backend_mod.MetalBackend.init(allocator) catch |err| {
                             if (comptime build_options.enable_cpu) {
-                                eprint("Warning: Metal unavailable, falling back to CPU\n", .{});
+                                eprint("Warning: Metal unavailable ({s}), falling back to CPU\n", .{@errorName(err)});
                                 break :blk .{ .cpu = &self.cpu_be };
                             } else {
                                 fatalExit("Metal unavailable and CPU backend disabled");
@@ -724,7 +729,6 @@ const BackendState = struct {
     }
 };
 
-
 // ── Main ─────────────────────────────────────────────────────────
 
 pub fn main() !void {
@@ -809,18 +813,6 @@ pub fn main() !void {
     const be = bs.be;
     const be_name = bs.name;
 
-    // ── Apply --allow-cpu-fallback to GPU backends ──────────────
-    if (cli.allow_cpu_fallback) {
-        switch (be) {
-            .vulkan => |v| if (comptime build_options.enable_vulkan) {
-                v.allow_cpu_fallback = true;
-            },
-            .cuda => |c| c.allow_cpu_fallback = true,
-            .rocm => |r| r.allow_cpu_fallback = true,
-            .cpu, .metal => {},
-        }
-    }
-
     // ── Display setup ──────────────────────────────────────────────
     const output_mode: display_mod.OutputMode = if (cli.json)
         .json
@@ -851,11 +843,11 @@ pub fn main() !void {
             fmt.getMetaU32("head_dim") orelse
             // Compute from n_embed / n_heads when metadata is missing
             if ((fmt.getArchU32(arch_str, "embedding_length") orelse fmt.getMetaU32("hidden_size") orelse 0) > 0 and
-            (fmt.getArchU32(arch_str, "attention.head_count") orelse fmt.getMetaU32("num_attention_heads") orelse 0) > 0)
-            (fmt.getArchU32(arch_str, "embedding_length") orelse fmt.getMetaU32("hidden_size") orelse 0) /
-                (fmt.getArchU32(arch_str, "attention.head_count") orelse fmt.getMetaU32("num_attention_heads") orelse 1)
-        else
-            0,
+                (fmt.getArchU32(arch_str, "attention.head_count") orelse fmt.getMetaU32("num_attention_heads") orelse 0) > 0)
+                (fmt.getArchU32(arch_str, "embedding_length") orelse fmt.getMetaU32("hidden_size") orelse 0) /
+                    (fmt.getArchU32(arch_str, "attention.head_count") orelse fmt.getMetaU32("num_attention_heads") orelse 1)
+            else
+                0,
         .ff_dim = fmt.getArchU32(arch_str, "feed_forward_length") orelse fmt.getMetaU32("intermediate_size") orelse 0,
         .vocab_size = if (fmt.getVocab()) |v| @intCast(v.len) else fmt.getArchU32(arch_str, "vocab_size") orelse 0,
         .ctx_size = fmt.getArchU32(arch_str, "context_length") orelse fmt.getMetaU32("max_position_embeddings") orelse 0,
@@ -1098,15 +1090,16 @@ fn initAndRun(
                 const has_ram = std.mem.indexOf(u8, tiers_str, "ram") != null;
                 const has_ssd = std.mem.indexOf(u8, tiers_str, "ssd") != null;
 
+                const gib: usize = 1024 * 1024 * 1024;
                 const ram_gb: usize = if (cli.kv_ram_budget) |b|
-                    std.fmt.parseInt(usize, b, 10) catch 16
+                    std.fmt.parseInt(usize, b, 10) catch default_ram_budget_gb
                 else
-                    detectFreeRam() / (2 * 1024 * 1024 * 1024); // 50% of free RAM in GB
+                    detectFreeRam() / (2 * gib); // 50% of free RAM in GB
 
                 const ssd_gb: usize = if (cli.kv_ssd_budget) |b|
-                    std.fmt.parseInt(usize, b, 10) catch 10
+                    std.fmt.parseInt(usize, b, 10) catch default_ssd_budget_gb
                 else
-                    10;
+                    default_ssd_budget_gb;
 
                 // Read model metadata for cache dimension calculations.
                 const n_layers = fmt.getMetaU32("llama.block_count") orelse
@@ -1125,8 +1118,8 @@ fn initAndRun(
                 const bytes_per_block = @as(usize, block_size) * kv_dim * @sizeOf(f32) * 2;
                 const ctx = if (cli.ctx_size > 0) cli.ctx_size else default_ctx_size;
                 const vram_blocks: usize = (@as(usize, ctx) + block_size - 1) / block_size;
-                const ram_blocks: usize = if (has_ram and bytes_per_block > 0) (ram_gb * 1024 * 1024 * 1024) / bytes_per_block else 0;
-                const ssd_blocks: usize = if (has_ssd and bytes_per_block > 0) (ssd_gb * 1024 * 1024 * 1024) / bytes_per_block else 0;
+                const ram_blocks: usize = if (has_ram and bytes_per_block > 0) (ram_gb * gib) / bytes_per_block else 0;
+                const ssd_blocks: usize = if (has_ssd and bytes_per_block > 0) (ssd_gb * gib) / bytes_per_block else 0;
 
                 tiered_cache_storage = TieredKvCache.init(
                     allocator,
@@ -1375,7 +1368,7 @@ fn generateAndPrintInner(
     else
         prompt;
     defer if (format_prompt and formatted.ptr != prompt.ptr) allocator.free(formatted);
-    if (g_debug or true) dbg("formatted prompt ({d} bytes): [{s}]", .{ formatted.len, formatted });
+    if (g_debug) dbg("formatted prompt ({d} bytes): [{s}]", .{ formatted.len, formatted });
 
     const token_ids = switch (tok_kind) {
         .spm => tok.encodeSpm(formatted) catch {
@@ -1466,7 +1459,10 @@ fn generateAndPrintInner(
             next = math_ops.sampleToken(mdl.getLogits(), cli.temperature, cli.top_k, cli.top_p, prng.random());
         }
         dbg("gen step {d}: token={d}", .{ gi, next });
-        if (isEogToken(next, eog)) { hit_eog = true; break; }
+        if (isEogToken(next, eog)) {
+            hit_eog = true;
+            break;
+        }
         if (token_count >= gen_ids_buf.len) break;
         gen_ids_buf[token_count] = next;
         last = next;

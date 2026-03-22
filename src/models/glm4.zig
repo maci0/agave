@@ -170,7 +170,7 @@ pub const Glm4Model = struct {
             self.tiered_block_allocator = ta;
         } else {
             const max_kv_dim = @max(kvd, vd);
-            const block_size: u16 = 16;
+            const block_size = kvcache.default_block_size;
             const num_blocks = (self.max_seq_len + block_size - 1) / block_size * nl;
             var paged_cache = try PagedKvCache.init(allocator, nl, max_kv_dim, num_blocks, block_size);
             errdefer paged_cache.deinit();
@@ -617,7 +617,7 @@ pub const Glm4Model = struct {
             mlx_ops.mlxGemvRaw(x.ptr, pw + w_offset, sc + s_offset, bi + s_offset, y.ptr, n, k, self.mlx_bits);
         } else {
             // Non-quantized expert: offset into expert slice
-            const row_bytes = k * 4; // f32
+            const row_bytes = k * @sizeOf(f32);
             const offset = @as(usize, expert_id) * n * row_bytes;
             self.be.gemv(x.ptr, .{ .data = w_t.data_ptr + offset, .dtype = w_t.dtype }, y.ptr, n, k);
         }
@@ -653,7 +653,7 @@ pub const Glm4Model = struct {
             }
         } else {
             // BF16/F32 multi-linear
-            const row_bytes = in_dim * 2; // bf16
+            const row_bytes = in_dim * @sizeOf(u16); // bf16
             for (0..nh) |h| {
                 const offset = h * out_dim * row_bytes;
                 self.be.gemv(x.ptr, .{ .data = w_t.data_ptr + offset, .dtype = w_t.dtype }, y + h * out_dim, out_dim, in_dim);
@@ -685,4 +685,3 @@ pub const Glm4Model = struct {
         }
     }
 };
-

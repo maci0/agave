@@ -974,7 +974,6 @@ fn benchKernel(kernel: Kernel, be: Backend, be_name: []const u8, n: usize, k: us
     }
 }
 
-
 // ── E2E benchmark ────────────────────────────────────────────────
 
 /// Runs an end-to-end inference benchmark: loads a model, tokenizes a short

@@ -1,0 +1,56 @@
+#version 450
+#extension GL_KHR_shader_subgroup_arithmetic : require
+
+layout(local_size_x = 256) in;
+
+layout(set = 0, binding = 0) buffer Data { float data_buf[]; };
+layout(push_constant) uniform Params { uint n; };
+
+shared float shared_vals[8];
+
+void main() {
+    uint tid = gl_LocalInvocationID.x;
+    uint tg_size = gl_WorkGroupSize.x;
+
+    // Pass 1: find max
+    float mx = -1.0 / 0.0;  // -inf
+    for (uint i = tid; i < n; i += tg_size) {
+        mx = max(mx, data_buf[i]);
+    }
+    mx = subgroupMax(mx);
+    uint sg_id = gl_SubgroupID;
+    uint sg_lane = gl_SubgroupInvocationID;
+    if (sg_lane == 0) shared_vals[sg_id] = mx;
+    barrier();
+    uint num_sg = (tg_size + gl_SubgroupSize - 1) / gl_SubgroupSize;
+    if (tid < num_sg) mx = shared_vals[tid]; else mx = -1.0 / 0.0;
+    if (tid < gl_SubgroupSize) {
+        mx = subgroupMax(mx);
+        if (tid == 0) shared_vals[0] = mx;
+    }
+    barrier();
+    float max_val = shared_vals[0];
+
+    // Pass 2: exp(x - max) and sum
+    float local_sum = 0.0;
+    for (uint i = tid; i < n; i += tg_size) {
+        float v = exp(data_buf[i] - max_val);
+        data_buf[i] = v;
+        local_sum += v;
+    }
+    local_sum = subgroupAdd(local_sum);
+    if (sg_lane == 0) shared_vals[sg_id] = local_sum;
+    barrier();
+    if (tid < num_sg) local_sum = shared_vals[tid]; else local_sum = 0.0;
+    if (tid < gl_SubgroupSize) {
+        local_sum = subgroupAdd(local_sum);
+        if (tid == 0) shared_vals[0] = local_sum;
+    }
+    barrier();
+    float inv_sum = 1.0 / shared_vals[0];
+
+    // Pass 3: normalize
+    for (uint i = tid; i < n; i += tg_size) {
+        data_buf[i] *= inv_sum;
+    }
+}

@@ -1,0 +1,46 @@
+# Build artifacts
+.zig-cache/
+zig-out/
+zig-out-linux/
+
+# Model weights (large files, bind-mounted at runtime)
+models/
+*.gguf
+*.safetensors
+
+# Python / research
+.venv/
+research/kernels/.venv/
+tests/.venv/
+__pycache__/
+research/kernels/**/*.ptx
+research/kernels/**/*.spv
+
+# IDE / tools
+.opencode/
+.vscode/
+.idea/
+.claude/
+
+# OS junk
+.DS_Store
+Thumbs.db
+
+# Git
+.git/
+
+# Docs (not needed in image)
+docs/
+*.md
+LICENSE
+
+# Test artifacts
+tests/traces/
+tests/results/
+*.log
+
+# Environment / secrets
+.env
+.env.*
+*.key
+*.pem

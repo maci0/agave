@@ -13,6 +13,12 @@ const Allocator = std.mem.Allocator;
 const manager = @import("manager.zig");
 const CacheBlock = manager.CacheBlock;
 
+/// VRAM usage threshold for triggering demotion (90% = evict at 10% free).
+const vram_eviction_threshold: f32 = 0.90;
+/// Eviction cost multiplier for shared prefix blocks (ref_count > 1).
+/// Higher cost protects shared prefixes from thrashing.
+const shared_prefix_cost: f32 = 100.0;
+
 /// Block tier enum: VRAM (T0), RAM (T1), SSD (T2).
 pub const BlockTier = enum {
     vram,
@@ -248,7 +254,7 @@ pub const TieredKvCache = struct {
         const vram_total = self.vram_block_count;
         const vram_usage = @as(f32, @floatFromInt(vram_used)) / @as(f32, @floatFromInt(vram_total));
 
-        if (vram_usage > 0.90) {
+        if (vram_usage > vram_eviction_threshold) {
             // Demote coldest VRAM block to RAM
             const evicted = try self.demoteToRam();
             std.log.debug("Demoted block {d} from VRAM to RAM (usage: {d:.1}%)", .{ evicted, vram_usage * 100.0 });
@@ -316,7 +322,7 @@ pub const TieredKvCache = struct {
             if (blk.base.ref_count == 0) continue; // Skip free blocks
 
             // Frequency × cost metric (shared prefixes prioritized)
-            const cost: f32 = if (blk.base.ref_count > 1) 100.0 else 1.0;
+            const cost: f32 = if (blk.base.ref_count > 1) shared_prefix_cost else 1.0;
             const score = @as(f32, @floatFromInt(blk.access_count)) * cost;
 
             if (score < min_score) {
@@ -361,7 +367,7 @@ pub const TieredKvCache = struct {
             if (blk.tier != .ram) continue; // Only select RAM blocks
             if (blk.base.ref_count == 0) continue; // Skip free blocks
 
-            const cost: f32 = if (blk.base.ref_count > 1) 100.0 else 1.0;
+            const cost: f32 = if (blk.base.ref_count > 1) shared_prefix_cost else 1.0;
             const score = @as(f32, @floatFromInt(blk.access_count)) * cost;
 
             if (score < min_score) {

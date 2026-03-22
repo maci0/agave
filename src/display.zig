@@ -32,6 +32,8 @@ pub const ModelInfo = struct {
     ff_dim: u32,
     vocab_size: u32,
     ctx_size: u32,
+    kv_type_name: []const u8 = "F32",
+    kv_bpe: f32 = 32.0,
     rope_theta: f32,
     n_params: u64,
     n_experts: u32,
@@ -136,7 +138,7 @@ fn fmtCompact(buf: *[16]u8, n: u64) []const u8 {
         return std.fmt.bufPrint(buf, "{d}M", .{m}) catch "";
     }
     if (n >= 1_000) {
-        return std.fmt.bufPrint(buf, "{d}K", .{ n / 1_000 }) catch "";
+        return std.fmt.bufPrint(buf, "{d}K", .{n / 1_000}) catch "";
     }
     return std.fmt.bufPrint(buf, "{d}", .{n}) catch "";
 }
@@ -328,8 +330,18 @@ pub const Display = struct {
                 }
                 var nb: [16]u8 = undefined;
                 const ns = fmtCompact(&nb, info.ctx_size);
-                const s = std.fmt.bufPrint(line_bufs[n_lines][p..], "{s} ctx", .{ns}) catch "";
-                p += s.len;
+                // Estimate KV cache memory: ctx * n_kv_heads * head_dim * n_layers * 2(K+V) * bytes_per_elem
+                const kv_elems: u64 = @as(u64, info.ctx_size) * info.n_kv_heads * info.head_dim * info.n_layers * 2;
+                const kv_bytes: u64 = @intFromFloat(@as(f64, @floatFromInt(kv_elems)) * @as(f64, info.kv_bpe) / 8.0);
+                if (kv_bytes > 0) {
+                    const kvs = formatSize(kv_bytes);
+                    const kv_label = info.kv_type_name;
+                    const s = std.fmt.bufPrint(line_bufs[n_lines][p..], "{s} ctx \xc2\xb7 {s} KV ({d:.1}{s})", .{ ns, kv_label, kvs.val, kvs.unit }) catch "";
+                    p += s.len;
+                } else {
+                    const s = std.fmt.bufPrint(line_bufs[n_lines][p..], "{s} ctx", .{ns}) catch "";
+                    p += s.len;
+                }
             }
             if (info.rope_theta > 0) {
                 if (p > 0) {

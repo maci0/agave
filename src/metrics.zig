@@ -181,7 +181,9 @@ pub const Metrics = struct {
     }
 };
 
-// Tests (TDD RED phase - write failing tests first)
+const test_render_buf_size: usize = 8192;
+
+// Tests
 test "Metrics: recordRequest increments counter" {
     var metrics = Metrics{};
 
@@ -227,7 +229,7 @@ test "Metrics: renderPrometheus outputs valid format" {
     metrics.updateQueueDepth(5);
 
     // Render to buffer
-    var buf: [8192]u8 = undefined;
+    var buf: [test_render_buf_size]u8 = undefined;
     var fbs = std.io.fixedBufferStream(&buf);
     const writer = fbs.writer();
 
