@@ -12,7 +12,7 @@ A high-performance LLM inference engine written in Zig. Zero external ML librari
 - **Chat Templates**: Data-driven per-architecture prompt formatting (ChatML, Gemma, GPT-OSS)
 - **Recipes**: Optional proven-default configs per model/hardware/quant combo
 - **Interactive REPL**: Multi-turn chat with `/help`, `/clear`, `/stats`, `/quit`
-- **HTTP Server**: OpenAI-compatible API + htmx chat UI
+- **HTTP Server**: OpenAI + Anthropic API, htmx chat UI, Prometheus metrics
 - **~34 tok/s** on Gemma 3 1B Q8_0 (Metal, Apple Silicon)
 
 ## Quick Start
@@ -71,24 +71,22 @@ agave [OPTIONS] <model> [prompt]
   -s, --serve              Start HTTP server
   -p, --port <PORT>        Server port [default: 49453]
   -n, --max-tokens <N>     Max tokens to generate [default: 512]
-  -t, --temperature <T>    Sampling temperature [default: 0] (greedy only, see note)
-      --top-p <P>          Nucleus sampling [default: 1.0] (not yet implemented)
-      --top-k <K>          Top-k sampling [default: 0] (not yet implemented)
+  -t, --temperature <T>    Sampling temperature, 0 = greedy [default: 0]
+      --top-p <P>          Nucleus sampling threshold [default: 1.0]
+      --top-k <K>          Top-k sampling, 0 = disabled [default: 0]
       --repeat-penalty <R> Repetition penalty [default: 1.0]
       --system <TEXT>      System prompt for chat formatting
       --backend <BE>       auto, cpu, metal, vulkan, cuda, rocm [default: auto]
-      --ctx-size <N>       Context window size, 0 = model default [default: 0]
+      --ctx-size <N>       Context window size [default: 4096, 0 = model max]
       --no-color           Disable ANSI colors
-      --verbose            Show technical details (params, load times, EOG)
+  -V, --verbose            Show technical details (params, load times, EOG)
       --allow-cpu-fallback Allow GPU backends to fall back to CPU
-      --debug              Enable debug logging (token IDs, layer timing)
+  -d, --debug              Enable debug logging (token IDs, layer timing)
       --json               Output results as JSON (implies --quiet)
       --model-info         Print model metadata and exit (combine with --json)
       --profile            Profile per-op timing (halves throughput)
       --mmap               Use lazy mmap instead of preloading weights into RAM
 ```
-
-> **Note**: Sampling is currently greedy only (argmax). The `--temperature`, `--top-p`, and `--top-k` flags are parsed but not yet applied — all generation uses temperature=0 regardless of the values provided.
 
 ## Build Options
 
@@ -165,7 +163,10 @@ Current presets: Qwen Q4 Metal, Gemma Q4 Metal, GPT-OSS Metal, CPU generic. Add 
 src/
 ├── main.zig           # CLI, format detection, model init, REPL, recipe application
 ├── arch.zig           # Architecture enum, detection, chat template mapping
-├── server.zig         # HTTP server (OpenAI API + chat UI)
+├── server.zig         # HTTP server (OpenAI + Anthropic API + chat UI)
+├── scheduler.zig      # Continuous batching request scheduler
+├── metrics.zig        # Prometheus metrics collector
+├── rate_limiter.zig   # Token bucket rate limiter
 ├── display.zig        # Rich CLI output (banner, stats, progress)
 ├── chat_template.zig  # Data-driven chat prompt templates (ChatML, Gemma, GPT-OSS)
 ├── recipe.zig         # Optional preset configs per model/hardware/quant combo
@@ -186,10 +187,11 @@ src/
 │   ├── nemotron_nano.zig # Nemotron Nano (SSM+MoE+attn, SafeTensors NVFP4)
 │   └── glm4.zig       #   GLM-4 MoE Lite (MLA, MoE)
 ├── ops/               # Shared compute kernels
-│   ├── attention.zig  #   SDPA with SIMD + sliding window
-│   ├── math.zig       #   argmax, softplus, sigmoid, GELU
+│   ├── attention.zig  #   SDPA with SIMD + sliding window + backend dispatch
+│   ├── math.zig       #   argmax, softplus, sigmoid, GELU, sampleToken
 │   ├── ssm.zig        #   SSM ops: causal conv1d, Mamba-2 recurrence, group norm+gate
 │   ├── quant.zig      #   Quantization helpers (bf16, mxfp4, fp8, iq4nl, nvfp4_st)
+│   ├── kv_quant.zig   #   KV cache quantization (f32/f16/q8_0/int8/fp8/nvfp4)
 │   └── mlx.zig        #   MLX 4/6-bit affine dequant
 ├── backend/           # Hardware backends (all individually toggleable)
 │   ├── backend.zig    #   Tagged union dispatcher + NullBackend stub
@@ -205,7 +207,10 @@ src/
 │       ├── cuda/      #     Zig CUDA kernels (compiled to PTX)
 │       └── rocm/      #     AMDGCN kernels (compiled to HSACO)
 ├── kvcache/
-│   └── manager.zig    #   KV cache alloc/free
+│   ├── manager.zig    #   KV cache alloc/free, PagedKvCache, RadixTree
+│   ├── block_allocator.zig # Block allocation for paged KV cache
+│   ├── tiered.zig     #   Tiered KV cache (VRAM + RAM + SSD)
+│   └── prefetch.zig   #   Async block prefetching for tiered cache
 └── tokenizer/
     ├── tokenizer.zig  #   Tokenizer interface
     └── bpe.zig        #   BPE + SPM tokenizer
@@ -278,9 +283,12 @@ zig build -Dtarget=aarch64-linux-musl \
 
 ## Documentation
 
-- **[DOCUMENTATION.md](docs/DOCUMENTATION.md)** — Concepts, architecture, module reference
+- **[Tutorial: LLM Inference From Scratch](docs/tutorial/README.md)** — 8-chapter progressive tutorial
+- **[Architecture](docs/ARCHITECTURE.md)** — Project structure, module reference, inference pipeline
+- **[Models](docs/MODELS.md)** — Supported models, parameters, benchmarks
+- **[Kernel Status](docs/KERNELS.md)** — Per-backend kernel implementation status
 - **[CLAUDE.md](CLAUDE.md)** — Engineering standards for contributors
-- **[research/kernels/](research/kernels/)** — Kernel research tools (benchmarks, golden tests, optimization driver)
+- **[research/kernels/](research/kernels/)** — Kernel research tools (benchmarks, golden tests)
 
 ## License
 

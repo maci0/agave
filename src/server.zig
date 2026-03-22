@@ -1,8 +1,8 @@
-//! HTTP server with OpenAI-compatible API endpoints.
+//! HTTP server with OpenAI-compatible and Anthropic-compatible API endpoints.
 //! Provides /v1/chat/completions, /v1/completions, /v1/models, /v1/responses,
-//! /v1/conversations, and /v1/chat (built-in web UI). Supports both synchronous
-//! JSON responses and SSE streaming. Uses std.net with per-connection threads;
-//! inference is mutex-serialized.
+//! /v1/messages (Anthropic Messages API), /v1/conversations, and /v1/chat
+//! (built-in web UI). Supports both synchronous JSON responses and SSE streaming.
+//! Uses std.net with per-connection threads; inference is mutex-serialized.
 
 const std = @import("std");
 const net = std.net;
@@ -326,15 +326,28 @@ const security_headers =
     "Content-Security-Policy: default-src 'none'; script-src 'unsafe-inline' https://cdn.jsdelivr.net; style-src 'unsafe-inline' https://cdn.jsdelivr.net https://fonts.googleapis.com; font-src https://fonts.gstatic.com; connect-src 'self'; img-src 'self'; frame-ancestors 'none'\r\n";
 
 /// Validate Authorization header against configured API key.
+/// Supports both OpenAI-style `Authorization: Bearer <key>` and
+/// Anthropic-style `x-api-key: <key>` headers.
 /// Returns true if no auth configured or if token matches.
 fn validateAuth(server: *const Server, headers: []const u8) bool {
     if (server.api_key == null) return true; // No auth configured
-    const needle = "authorization: bearer ";
-    const idx = std.ascii.indexOfIgnoreCase(headers, needle) orelse return false;
-    const token_start = idx + needle.len;
-    const token_end = std.mem.indexOfScalarPos(u8, headers, token_start, '\r') orelse headers.len;
-    const token = headers[token_start..token_end];
-    return std.mem.eql(u8, token, server.api_key.?);
+    // Try OpenAI-style: Authorization: Bearer <key>
+    const bearer_needle = "authorization: bearer ";
+    if (std.ascii.indexOfIgnoreCase(headers, bearer_needle)) |idx| {
+        const token_start = idx + bearer_needle.len;
+        const token_end = std.mem.indexOfScalarPos(u8, headers, token_start, '\r') orelse headers.len;
+        const token = headers[token_start..token_end];
+        if (std.mem.eql(u8, token, server.api_key.?)) return true;
+    }
+    // Try Anthropic-style: x-api-key: <key>
+    const apikey_needle = "x-api-key: ";
+    if (std.ascii.indexOfIgnoreCase(headers, apikey_needle)) |idx| {
+        const token_start = idx + apikey_needle.len;
+        const token_end = std.mem.indexOfScalarPos(u8, headers, token_start, '\r') orelse headers.len;
+        const token = headers[token_start..token_end];
+        if (std.mem.eql(u8, token, server.api_key.?)) return true;
+    }
+    return false;
 }
 
 /// Check rate limit for the given prompt token count.
@@ -458,6 +471,13 @@ fn handleRequest(stream: net.Stream, req: HttpRequest) void {
 
     if (is_get and std.mem.eql(u8, path, "/v1/models")) {
         logRequest(method, path);
+
+        if (!validateAuth(g_server, req.headers)) {
+            send401(stream);
+            logRequestDone(method, path, 401, elapsedMs(request_start));
+            return;
+        }
+
         var buf: [models_json_buf_size]u8 = undefined;
         const json = std.fmt.bufPrint(&buf,
             \\{{"object":"list","data":[{{"id":"{s}","object":"model","created":{d},"owned_by":"agave","backend":"{s}"}}]}}
@@ -535,9 +555,24 @@ fn handleRequest(stream: net.Stream, req: HttpRequest) void {
         g_server.metrics.recordRequest();
         const req_start_time = std.time.milliTimestamp();
 
+        if (!validateAuth(g_server, req.headers)) {
+            send401(stream);
+            logRequestDone(method, path, 401, elapsedMs(request_start));
+            return;
+        }
+
         const body = req.body;
         const prompt = extractField(body, "prompt") orelse "Hello";
         const max_tokens = extractIntField(body, "max_tokens") orelse default_max_gen_tokens;
+
+        // Rate limit check (estimate prompt tokens via encode)
+        const prompt_ids_c = g_server.tokenizer.encode(prompt) catch &[_]u32{};
+        defer if (prompt_ids_c.len > 0) g_server.allocator.free(prompt_ids_c);
+        if (checkRateLimit(g_server, @intCast(prompt_ids_c.len))) |retry| {
+            send429(stream, retry);
+            logRequestDone(method, path, 429, elapsedMs(request_start));
+            return;
+        }
 
         if (extractBoolField(body, "stream")) {
             startStreamRaw(stream, prompt, max_tokens);
@@ -581,31 +616,130 @@ fn handleRequest(stream: net.Stream, req: HttpRequest) void {
 
     if (is_post and std.mem.eql(u8, path, "/v1/responses")) {
         logRequest(method, path);
+        g_server.metrics.recordRequest();
+        const req_start_time = std.time.milliTimestamp();
+
+        if (!validateAuth(g_server, req.headers)) {
+            send401(stream);
+            logRequestDone(method, path, 401, elapsedMs(request_start));
+            return;
+        }
+
         const body = req.body;
         const input = extractField(body, "input") orelse "Hello";
         const max_tokens = extractIntField(body, "max_tokens") orelse default_max_gen_tokens;
-        const formatted_i = g_server.chat_template.format(g_server.allocator, null, input) catch input;
-        defer if (formatted_i.ptr != input.ptr) g_server.allocator.free(formatted_i);
-        const gen = generateEscapedN(formatted_i, true, max_tokens);
+
+        // Rate limit check
+        const formatted_rl = g_server.chat_template.format(g_server.allocator, null, input) catch input;
+        defer if (formatted_rl.ptr != input.ptr) g_server.allocator.free(formatted_rl);
+        const prompt_ids_r = g_server.tokenizer.encode(formatted_rl) catch &[_]u32{};
+        defer if (prompt_ids_r.len > 0) g_server.allocator.free(prompt_ids_r);
+        if (checkRateLimit(g_server, @intCast(prompt_ids_r.len))) |retry| {
+            send429(stream, retry);
+            logRequestDone(method, path, 429, elapsedMs(request_start));
+            return;
+        }
+
+        const gen = generateEscapedN(formatted_rl, true, max_tokens);
         defer gen.deinit();
         const req_id = nextRequestId();
         const created = std.time.timestamp();
         const total = gen.stats.tokens_generated + gen.stats.prompt_tokens;
         var resp_buf: [response_buf_size]u8 = undefined;
         const json = std.fmt.bufPrint(&resp_buf,
-            \\{{"id":"resp-{d}","object":"response","created":{d},"output":[{{"type":"message","content":[{{"type":"output_text","text":"{s}"}}]}}],"usage":{{"completion_tokens":{d},"prompt_tokens":{d},"total_tokens":{d}}}}}
-        , .{ req_id, created, gen.escaped, gen.stats.tokens_generated, gen.stats.prompt_tokens, total }) catch {
+            \\{{"id":"resp-{d}","object":"response","created":{d},"model":"{s}","output":[{{"type":"message","content":[{{"type":"output_text","text":"{s}"}}]}}],"usage":{{"completion_tokens":{d},"prompt_tokens":{d},"total_tokens":{d}}}}}
+        , .{ req_id, created, g_server.model_name, gen.escaped, gen.stats.tokens_generated, gen.stats.prompt_tokens, total }) catch {
             sendJsonError(stream, "500 Internal Server Error", "server_error", "Response too large");
             logRequestDone(method, path, 500, elapsedMs(request_start));
             return;
         };
         sendJson(stream, json);
+
+        // Record metrics
+        const req_end_time = std.time.milliTimestamp();
+        const duration_ms = @as(u64, @intCast(req_end_time - req_start_time));
+        g_server.metrics.recordLatency(duration_ms);
+        g_server.metrics.recordTokens(@intCast(gen.stats.tokens_generated));
+        g_server.metrics.recordCompletion();
+
+        logRequestDone(method, path, 200, elapsedMs(request_start));
+        return;
+    }
+
+    // ── Anthropic Messages API (/v1/messages) ───────────────────
+    if (is_post and std.mem.eql(u8, path, "/v1/messages")) {
+        logRequest(method, path);
+        g_server.metrics.recordRequest();
+        const req_start_time = std.time.milliTimestamp();
+
+        if (!validateAuth(g_server, req.headers)) {
+            sendAnthropicError(stream, "401", "authentication_error", "Invalid API key");
+            logRequestDone(method, path, 401, elapsedMs(request_start));
+            return;
+        }
+
+        const body = req.body;
+        const content = extractLastMessage(body) orelse "Hello!";
+        const max_tokens_m = extractIntField(body, "max_tokens") orelse default_max_gen_tokens;
+        const system_msg = extractField(body, "system");
+
+        // Format prompt with system message if provided
+        const formatted_m = g_server.chat_template.format(g_server.allocator, system_msg, content) catch content;
+        defer if (formatted_m.ptr != content.ptr) g_server.allocator.free(formatted_m);
+        const prompt_ids_m = g_server.tokenizer.encode(formatted_m) catch &[_]u32{};
+        defer if (prompt_ids_m.len > 0) g_server.allocator.free(prompt_ids_m);
+        const prompt_tokens_m: u32 = @intCast(prompt_ids_m.len);
+
+        // Rate limit check
+        if (checkRateLimit(g_server, prompt_tokens_m)) |retry| {
+            sendAnthropicError(stream, "429", "rate_limit_error", "Rate limit exceeded");
+            // Include Retry-After in a separate response for simplicity
+            _ = retry;
+            logRequestDone(method, path, 429, elapsedMs(request_start));
+            return;
+        }
+
+        if (extractBoolField(body, "stream")) {
+            startAnthropicStream(stream, formatted_m, max_tokens_m, prompt_tokens_m);
+            logRequestDone(method, path, 200, elapsedMs(request_start));
+            return;
+        }
+
+        // Non-streaming: generate and return Anthropic format
+        const gen = generateEscapedN(formatted_m, true, max_tokens_m);
+        defer gen.deinit();
+        const req_id = nextRequestId();
+        const stop_reason: []const u8 = if (std.mem.eql(u8, gen.finish_reason, "length")) "max_tokens" else "end_turn";
+        var resp_buf: [response_buf_size]u8 = undefined;
+        const json = std.fmt.bufPrint(&resp_buf,
+            \\{{"id":"msg_{d}","type":"message","role":"assistant","content":[{{"type":"text","text":"{s}"}}],"model":"{s}","stop_reason":"{s}","stop_sequence":null,"usage":{{"input_tokens":{d},"output_tokens":{d}}}}}
+        , .{ req_id, gen.escaped, g_server.model_name, stop_reason, gen.stats.prompt_tokens, gen.stats.tokens_generated }) catch {
+            sendAnthropicError(stream, "500", "api_error", "Response too large");
+            logRequestDone(method, path, 500, elapsedMs(request_start));
+            return;
+        };
+        sendJson(stream, json);
+
+        // Record metrics
+        const req_end_time = std.time.milliTimestamp();
+        const duration_ms = @as(u64, @intCast(req_end_time - req_start_time));
+        g_server.metrics.recordLatency(duration_ms);
+        g_server.metrics.recordTokens(@intCast(gen.stats.tokens_generated));
+        g_server.metrics.recordCompletion();
+
         logRequestDone(method, path, 200, elapsedMs(request_start));
         return;
     }
 
     if ((is_get or is_post) and std.mem.eql(u8, path, "/v1/conversations")) {
         logRequest(method, path);
+
+        if (!validateAuth(g_server, req.headers)) {
+            send401(stream);
+            logRequestDone(method, path, 401, elapsedMs(request_start));
+            return;
+        }
+
         if (is_get) {
             // Return list of conversations as JSON (mutex-protected to
             // prevent races with concurrent create/delete/select operations).
@@ -774,7 +908,7 @@ fn handleRequest(stream: net.Stream, req: HttpRequest) void {
         const wants_stream = extractFormField(body, "stream") != null;
         if (wants_stream) {
             stream.writeAll("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\nAccess-Control-Allow-Origin: *\r\n" ++ security_headers ++ "Connection: keep-alive\r\n\r\n") catch return;
-            const result = chatStreamGenerate(stream, formatted, need_reset);
+            const result = chatStreamGenerate(stream, formatted, need_reset, default_max_gen_tokens);
             defer g_server.allocator.free(result.data);
 
             g_server.mutex.lock();
@@ -836,6 +970,7 @@ fn handleRequest(stream: net.Stream, req: HttpRequest) void {
     const known_endpoints = [_]KnownEndpoint{
         .{ .path = "/v1/chat/completions", .allow = "POST, OPTIONS", .msg = "Use POST." },
         .{ .path = "/v1/completions", .allow = "POST, OPTIONS", .msg = "Use POST." },
+        .{ .path = "/v1/messages", .allow = "POST, OPTIONS", .msg = "Use POST." },
         .{ .path = "/v1/embeddings", .allow = "POST, OPTIONS", .msg = "Use POST." },
         .{ .path = "/v1/responses", .allow = "POST, OPTIONS", .msg = "Use POST." },
         .{ .path = "/v1/chat", .allow = "POST, OPTIONS", .msg = "Use POST." },
@@ -1100,7 +1235,7 @@ fn generateN(formatted: []const u8, reset: bool, max_tokens: usize) GenResult {
 /// Sends final stats as `data: {"done":true,...}` followed by `data: [DONE]`.
 /// Returns GenResult with accumulated decoded text for conversation storage.
 /// When the scheduler is active, routes through RequestManager.enqueue().
-fn chatStreamGenerate(stream: net.Stream, formatted: []const u8, reset: bool) GenResult {
+fn chatStreamGenerate(stream: net.Stream, formatted: []const u8, reset: bool, max_tokens: usize) GenResult {
     const tok = g_server.tokenizer;
     const zero_stats = Stats{ .tokens_generated = 0, .prompt_tokens = 0, .time_ms = 0, .tokens_per_sec = 0, .prefill_ms = 0, .prefill_tps = 0 };
     const token_ids = tok.encode(formatted) catch {
@@ -1201,7 +1336,7 @@ fn chatStreamGenerate(stream: net.Stream, formatted: []const u8, reset: bool) Ge
         streamToken(stream, tok, first_gen_token);
     }
 
-    const effective_max = @min(default_max_gen_tokens, gen_ids_buf_size);
+    const effective_max = @min(max_tokens, gen_ids_buf_size);
     for (0..effective_max -| 1) |_| {
         if (first_is_eog or token_ids.len == 0) break;
         const next = model.forward(last) catch break;
@@ -1253,6 +1388,196 @@ fn streamToken(stream: net.Stream, tok: *Tokenizer, token_id: u32) void {
     var buf: [sse_event_buf_size]u8 = undefined;
     const event = std.fmt.bufPrint(&buf, "data: {{\"t\":\"{s}\"}}\n\n", .{escaped}) catch return;
     stream.writeAll(event) catch {};
+}
+
+// ── Anthropic Messages API helpers ──────────────────────────────
+
+/// Send a JSON error response in Anthropic error format.
+fn sendAnthropicError(stream: net.Stream, status_code: []const u8, err_type: []const u8, message: []const u8) void {
+    var buf: [response_buf_size]u8 = undefined;
+    const json = std.fmt.bufPrint(&buf,
+        \\{{"type":"error","error":{{"type":"{s}","message":"{s}"}}}}
+    , .{ err_type, message }) catch return;
+    const status = if (std.mem.eql(u8, status_code, "401"))
+        @as([]const u8, "401 Unauthorized")
+    else if (std.mem.eql(u8, status_code, "429"))
+        @as([]const u8, "429 Too Many Requests")
+    else if (std.mem.eql(u8, status_code, "400"))
+        @as([]const u8, "400 Bad Request")
+    else
+        @as([]const u8, "500 Internal Server Error");
+    sendResponse(stream, status, "application/json", json);
+}
+
+/// Send an SSE event with both event type and data (Anthropic streaming format).
+fn sseWriteEvent(stream: net.Stream, event_type: []const u8, data: []const u8) bool {
+    var event_buf: [response_buf_size + 64]u8 = undefined;
+    const event = std.fmt.bufPrint(&event_buf, "event: {s}\ndata: {s}\n\n", .{ event_type, data }) catch return false;
+    stream.writeAll(event) catch return false;
+    return true;
+}
+
+/// Start an Anthropic-format SSE streaming response for /v1/messages.
+fn startAnthropicStream(stream: net.Stream, formatted: []const u8, max_tokens: usize, input_tokens: u32) void {
+    stream.writeAll("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\nAccess-Control-Allow-Origin: *\r\n" ++ security_headers ++ "Connection: keep-alive\r\n\r\n") catch return;
+    generateAnthropicStream(stream, formatted, max_tokens, input_tokens);
+}
+
+/// Run generation and stream tokens as Anthropic-format SSE events.
+/// Event sequence: message_start → content_block_start → content_block_delta* →
+/// content_block_stop → message_delta → message_stop.
+/// When the scheduler is active, routes through RequestManager.enqueue()
+/// and polls for generated tokens. Falls back to direct model.forward()
+/// when no scheduler is running.
+fn generateAnthropicStream(stream: net.Stream, formatted: []const u8, max_tokens: usize, input_tokens: u32) void {
+    const tok = g_server.tokenizer;
+    const req_id = nextRequestId();
+
+    const token_ids = tok.encode(formatted) catch |err| {
+        std.log.err("anthropic streaming tokenizer encode failed: {}", .{err});
+        return;
+    };
+    defer g_server.allocator.free(token_ids);
+
+    // message_start event
+    var msg_buf: [response_buf_size]u8 = undefined;
+    const msg_start = std.fmt.bufPrint(&msg_buf,
+        \\{{"type":"message_start","message":{{"id":"msg_{d}","type":"message","role":"assistant","content":[],"model":"{s}","stop_reason":null,"stop_sequence":null,"usage":{{"input_tokens":{d},"output_tokens":0}}}}}}
+    , .{ req_id, g_server.model_name, input_tokens }) catch return;
+    if (!sseWriteEvent(stream, "message_start", msg_start)) return;
+
+    // content_block_start
+    if (!sseWriteEvent(stream, "content_block_start",
+        \\{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}
+    )) return;
+
+    // Scheduler path: enqueue request and poll for tokens
+    if (g_server.request_manager) |rm| {
+        const req = rm.enqueue(token_ids) catch {
+            sendAnthropicFinalEvents(stream, "end_turn", 0);
+            return;
+        };
+        defer {
+            req.deinit();
+            g_server.allocator.destroy(req);
+        }
+
+        const gen_start = std.time.milliTimestamp();
+        var streamed_count: usize = 0;
+        var token_count: u32 = 0;
+
+        while (!req.is_finished and !req.is_cancelled.load(.monotonic)) {
+            const current_len = req.tokens.items.len;
+            while (streamed_count < current_len) {
+                streamAnthropicDelta(stream, tok, req.tokens.items[streamed_count]);
+                streamed_count += 1;
+                token_count += 1;
+                if (token_count >= max_tokens) {
+                    req.is_cancelled.store(true, .monotonic);
+                    break;
+                }
+            }
+            if (token_count >= max_tokens) break;
+            std.Thread.sleep(scheduler_poll_interval_ns);
+        }
+
+        // Drain remaining tokens
+        const final_len = req.tokens.items.len;
+        while (streamed_count < final_len and token_count < max_tokens) {
+            streamAnthropicDelta(stream, tok, req.tokens.items[streamed_count]);
+            streamed_count += 1;
+            token_count += 1;
+        }
+
+        const stop_reason: []const u8 = if (token_count >= max_tokens) "max_tokens" else "end_turn";
+        sendAnthropicFinalEvents(stream, stop_reason, token_count);
+
+        const gen_end = std.time.milliTimestamp();
+        const time_ms = @as(u64, @intCast(@max(gen_end - gen_start, 0)));
+        const tps: f32 = if (time_ms > 0) @as(f32, @floatFromInt(token_count)) / (@as(f32, @floatFromInt(time_ms)) / 1000.0) else 0.0;
+        logGeneration(token_count, time_ms, tps);
+        return;
+    }
+
+    // Direct forward path (fallback when scheduler is not active)
+    g_server.mutex.lock();
+    defer g_server.mutex.unlock();
+    const model = g_server.model;
+    model.resetCache();
+
+    if (g_server.bos_token_id > 0) {
+        _ = model.forward(g_server.bos_token_id) catch return;
+    }
+
+    // Prefill
+    var first_gen_token: u32 = 0;
+    for (token_ids) |tid| {
+        first_gen_token = model.forward(tid) catch |err| {
+            if (err == error.Cancelled) return;
+            break;
+        };
+    }
+
+    // Generate and stream deltas
+    const gen_start = std.time.milliTimestamp();
+    var last: u32 = first_gen_token;
+    var token_count: u32 = 0;
+
+    // Stream first generated token
+    if (token_ids.len > 0 and !g_server.isEog(first_gen_token)) {
+        streamAnthropicDelta(stream, tok, first_gen_token);
+        last = first_gen_token;
+        token_count = 1;
+    }
+
+    for (0..max_tokens -| 1) |_| {
+        if (token_ids.len == 0 or (token_count == 0 and g_server.isEog(first_gen_token))) break;
+        const next = model.forward(last) catch break;
+        if (g_server.isEog(next)) break;
+
+        streamAnthropicDelta(stream, tok, next);
+        last = next;
+        token_count += 1;
+    }
+
+    const stop_reason: []const u8 = if (token_count >= max_tokens) "max_tokens" else "end_turn";
+    sendAnthropicFinalEvents(stream, stop_reason, token_count);
+
+    const gen_end = std.time.milliTimestamp();
+    const time_ms = @as(u64, @intCast(@max(gen_end - gen_start, 0)));
+    const tps: f32 = if (time_ms > 0) @as(f32, @floatFromInt(token_count)) / (@as(f32, @floatFromInt(time_ms)) / 1000.0) else 0.0;
+    logGeneration(token_count, time_ms, tps);
+}
+
+/// Send the Anthropic SSE final events: content_block_stop, message_delta, message_stop.
+fn sendAnthropicFinalEvents(stream: net.Stream, stop_reason: []const u8, token_count: u32) void {
+    _ = sseWriteEvent(stream, "content_block_stop",
+        \\{"type":"content_block_stop","index":0}
+    );
+    var delta_buf: [response_buf_size]u8 = undefined;
+    const delta = std.fmt.bufPrint(&delta_buf,
+        \\{{"type":"message_delta","delta":{{"stop_reason":"{s}","stop_sequence":null}},"usage":{{"output_tokens":{d}}}}}
+    , .{ stop_reason, token_count }) catch "";
+    if (delta.len > 0) _ = sseWriteEvent(stream, "message_delta", delta);
+    _ = sseWriteEvent(stream, "message_stop",
+        \\{"type":"message_stop"}
+    );
+}
+
+/// Stream a single decoded token as an Anthropic content_block_delta SSE event.
+fn streamAnthropicDelta(stream: net.Stream, tok: *Tokenizer, token_id: u32) void {
+    const decoded = tok.decode(&[_]u32{token_id}) catch return;
+    defer g_server.allocator.free(decoded);
+    if (decoded.len == 0) return;
+
+    const escaped = jsonEscape(g_server.allocator, decoded) catch return;
+    defer if (escaped.ptr != decoded.ptr) g_server.allocator.free(escaped);
+
+    var buf: [sse_event_buf_size]u8 = undefined;
+    const data = std.fmt.bufPrint(&buf,
+        \\{{"type":"content_block_delta","index":0,"delta":{{"type":"text_delta","text":"{s}"}}}}
+    , .{escaped}) catch return;
+    _ = sseWriteEvent(stream, "content_block_delta", data);
 }
 
 // ── SSE Streaming ──────────────────────────────────────────────

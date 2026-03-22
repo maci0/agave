@@ -95,6 +95,8 @@ pub const RequestManager = struct {
     allocator: Allocator,
     mutex: std.Thread.Mutex,
     next_id: std.atomic.Value(u64),
+    completed_total: u32 = 0,
+    cancelled_total: u32 = 0,
 
     /// Optional tiered KV cache (from Plan 02).
     tiered_cache: ?*TieredKvCache = null,
@@ -200,10 +202,12 @@ pub const RequestManager = struct {
         var i: usize = 0;
         while (i < self.running.items.len) {
             const req = self.running.items[i];
-            if (req.is_finished or req.is_cancelled.load(.monotonic)) {
+            if (req.is_finished) {
                 _ = self.running.swapRemove(i);
-                // Note: caller owns request memory, we just remove from list
-                // Don't advance i — swapRemove puts last element at current index
+                self.completed_total += 1;
+            } else if (req.is_cancelled.load(.monotonic)) {
+                _ = self.running.swapRemove(i);
+                self.cancelled_total += 1;
             } else {
                 i += 1;
             }
@@ -309,8 +313,8 @@ pub const RequestManager = struct {
         return .{
             .waiting_count = @intCast(self.waiting.items.len),
             .running_count = @intCast(self.running.items.len),
-            .completed_total = 0, // TODO: track in real implementation
-            .cancelled_total = 0, // TODO: track in real implementation
+            .completed_total = self.completed_total,
+            .cancelled_total = self.cancelled_total,
         };
     }
 };

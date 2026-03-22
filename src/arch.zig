@@ -24,6 +24,7 @@ pub const Arch = enum {
             .{ "qwen3", .qwen35 },
             .{ "qwen2", .qwen35 },
             .{ "gpt-oss", .gpt_oss },
+            .{ "gpt_oss", .gpt_oss },
             .{ "gptoss", .gpt_oss },
             .{ "nemotron_h", .nemotron_h },
             .{ "nemotron-h", .nemotron_h },

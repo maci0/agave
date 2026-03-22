@@ -146,20 +146,29 @@ pub const Metrics = struct {
         try writer.writeAll("# TYPE agave_kv_blocks_total gauge\n");
         try writer.print("agave_kv_blocks_total {d}\n", .{self.kv_blocks_total.load(.monotonic)});
 
-        // Histogram
+        // Histogram — Prometheus requires cumulative buckets (each includes all lower)
         try writer.writeAll("# HELP agave_request_duration_seconds Request latency histogram\n");
         try writer.writeAll("# TYPE agave_request_duration_seconds histogram\n");
-        try writer.print("agave_request_duration_seconds_bucket{{le=\"0.01\"}} {d}\n", .{self.latency_10ms.load(.monotonic)});
-        try writer.print("agave_request_duration_seconds_bucket{{le=\"0.05\"}} {d}\n", .{self.latency_50ms.load(.monotonic)});
-        try writer.print("agave_request_duration_seconds_bucket{{le=\"0.1\"}} {d}\n", .{self.latency_100ms.load(.monotonic)});
-        try writer.print("agave_request_duration_seconds_bucket{{le=\"0.5\"}} {d}\n", .{self.latency_500ms.load(.monotonic)});
-        try writer.print("agave_request_duration_seconds_bucket{{le=\"1\"}} {d}\n", .{self.latency_1s.load(.monotonic)});
-        try writer.print("agave_request_duration_seconds_bucket{{le=\"5\"}} {d}\n", .{self.latency_5s.load(.monotonic)});
-        try writer.print("agave_request_duration_seconds_bucket{{le=\"10\"}} {d}\n", .{self.latency_10s.load(.monotonic)});
-        try writer.print("agave_request_duration_seconds_bucket{{le=\"30\"}} {d}\n", .{self.latency_30s.load(.monotonic)});
-        try writer.print("agave_request_duration_seconds_bucket{{le=\"+Inf\"}} {d}\n", .{self.latency_inf.load(.monotonic)});
+        const b10 = self.latency_10ms.load(.monotonic);
+        const b50 = b10 + self.latency_50ms.load(.monotonic);
+        const b100 = b50 + self.latency_100ms.load(.monotonic);
+        const b500 = b100 + self.latency_500ms.load(.monotonic);
+        const b1s = b500 + self.latency_1s.load(.monotonic);
+        const b5s = b1s + self.latency_5s.load(.monotonic);
+        const b10s = b5s + self.latency_10s.load(.monotonic);
+        const b30s = b10s + self.latency_30s.load(.monotonic);
+        const b_inf = b30s + self.latency_inf.load(.monotonic);
+        try writer.print("agave_request_duration_seconds_bucket{{le=\"0.01\"}} {d}\n", .{b10});
+        try writer.print("agave_request_duration_seconds_bucket{{le=\"0.05\"}} {d}\n", .{b50});
+        try writer.print("agave_request_duration_seconds_bucket{{le=\"0.1\"}} {d}\n", .{b100});
+        try writer.print("agave_request_duration_seconds_bucket{{le=\"0.5\"}} {d}\n", .{b500});
+        try writer.print("agave_request_duration_seconds_bucket{{le=\"1\"}} {d}\n", .{b1s});
+        try writer.print("agave_request_duration_seconds_bucket{{le=\"5\"}} {d}\n", .{b5s});
+        try writer.print("agave_request_duration_seconds_bucket{{le=\"10\"}} {d}\n", .{b10s});
+        try writer.print("agave_request_duration_seconds_bucket{{le=\"30\"}} {d}\n", .{b30s});
+        try writer.print("agave_request_duration_seconds_bucket{{le=\"+Inf\"}} {d}\n", .{b_inf});
         try writer.print("agave_request_duration_seconds_sum {d}\n", .{self.latency_sum.load(.monotonic)});
-        try writer.print("agave_request_duration_seconds_count {d}\n", .{self.requests_completed.load(.monotonic)});
+        try writer.print("agave_request_duration_seconds_count {d}\n", .{b_inf});
 
         // Prefix cache metrics
         const hits = self.kv_cache_hits.load(.monotonic);
@@ -243,5 +252,8 @@ test "Metrics: renderPrometheus outputs valid format" {
     try std.testing.expect(std.mem.indexOf(u8, output, "agave_requests_total 2") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "agave_tokens_generated_total 42") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "agave_queue_depth 5") != null);
+    // Cumulative: 250ms request counted in 0.5s bucket and all higher buckets
     try std.testing.expect(std.mem.indexOf(u8, output, "agave_request_duration_seconds_bucket{le=\"0.5\"} 1") != null);
+    // +Inf should equal total completed count (1 request)
+    try std.testing.expect(std.mem.indexOf(u8, output, "agave_request_duration_seconds_bucket{le=\"+Inf\"} 1") != null);
 }

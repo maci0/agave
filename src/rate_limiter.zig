@@ -68,9 +68,28 @@ pub const RateLimiter = struct {
 
     /// Try to consume one request and the given number of tokens.
     /// Returns true if both buckets had sufficient tokens.
+    /// Checks both buckets before consuming either to avoid wasting
+    /// capacity when one bucket is exhausted.
     pub fn tryConsumeRequest(self: *RateLimiter, token_count: u32) bool {
         const tokens_f64 = @as(f64, @floatFromInt(token_count));
-        return self.request_bucket.tryConsume(1.0) and self.token_bucket.tryConsume(tokens_f64);
+
+        // Refill both buckets first
+        const now = std.time.milliTimestamp();
+        const req_elapsed = @as(f64, @floatFromInt(now - self.request_bucket.last_refill)) / 1000.0;
+        self.request_bucket.tokens = @min(self.request_bucket.capacity, self.request_bucket.tokens + req_elapsed * self.request_bucket.refill_rate);
+        self.request_bucket.last_refill = now;
+
+        const tok_elapsed = @as(f64, @floatFromInt(now - self.token_bucket.last_refill)) / 1000.0;
+        self.token_bucket.tokens = @min(self.token_bucket.capacity, self.token_bucket.tokens + tok_elapsed * self.token_bucket.refill_rate);
+        self.token_bucket.last_refill = now;
+
+        // Check both before consuming either
+        if (self.request_bucket.tokens >= 1.0 and self.token_bucket.tokens >= tokens_f64) {
+            self.request_bucket.tokens -= 1.0;
+            self.token_bucket.tokens -= tokens_f64;
+            return true;
+        }
+        return false;
     }
 
     /// Calculate retry-after delay in seconds.

@@ -105,10 +105,8 @@ fn fatalExit(comptime msg: []const u8) noreturn {
 }
 
 /// Detect free system RAM in bytes.
-/// Platform-specific: sysctl on macOS, /proc/meminfo on Linux.
-/// Placeholder: returns 16GB default for now.
-/// Future: implement platform-specific detection via sysctl.vm.stats.vm.v_free_count
-/// on macOS and MemAvailable from /proc/meminfo on Linux.
+/// Currently returns a fixed 16GB default. Platform-specific detection
+/// (sysctl on macOS, /proc/meminfo on Linux) is not yet implemented.
 fn detectFreeRam() usize {
     // TODO: Platform-specific implementation
     // macOS: sysctl vm.stats.vm.v_free_count + vm_page_size
@@ -234,7 +232,7 @@ const TokenizerKind = arch_mod.TokenizerKind;
 const cli_params = clap.parseParamsComptime(
     \\-h, --help                 Show this help message and exit.
     \\-v, --version              Print version and exit.
-    \\-s, --serve                Start HTTP server instead of interactive mode.
+    \\-s, --serve                Start HTTP server (OpenAI + Anthropic compatible).
     \\-q, --quiet                Suppress banner and stats (output only).
     \\-p, --port <u16>           Server port (default: 49453).
     \\-n, --max-tokens <u32>     Maximum tokens to generate (default: 512).
@@ -252,9 +250,9 @@ const cli_params = clap.parseParamsComptime(
     \\    --kv-ssd-path <str>    SSD tier file path (enables SSD tier if set).
     \\    --kv-ssd-budget <str>  SSD tier budget in GB (default: 10).
     \\    --no-color             Disable colored output.
-    \\    --verbose              Show technical details (params, load times, EOG).
+    \\-V, --verbose              Show technical details (params, load times, EOG).
     \\    --allow-cpu-fallback   Allow GPU backends to fall back to CPU for unsupported ops.
-    \\    --debug                Enable debug logging (token IDs, layer timing).
+    \\-d, --debug                Enable debug logging (token IDs, layer timing).
     \\    --json                 Output results as JSON (implies --quiet).
     \\    --model-info           Print model metadata and exit (combine with --json).
     \\    --profile              Profile per-op timing (halves throughput).
@@ -356,16 +354,34 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
         std.process.exit(1);
     };
 
+    const temperature = parseF32(res.args.temperature, "temperature") orelse 0.0;
+    const top_p = parseF32(res.args.@"top-p", "top-p") orelse 1.0;
+    const repeat_penalty = parseF32(res.args.@"repeat-penalty", "repeat-penalty") orelse 1.0;
+
+    // Validate sampling parameter ranges
+    if (temperature < 0) {
+        eprint("Error: --temperature must be >= 0 (got {d:.2})\n", .{temperature});
+        std.process.exit(1);
+    }
+    if (top_p <= 0 or top_p > 1.0) {
+        eprint("Error: --top-p must be in (0, 1.0] (got {d:.2})\n", .{top_p});
+        std.process.exit(1);
+    }
+    if (repeat_penalty <= 0) {
+        eprint("Error: --repeat-penalty must be > 0 (got {d:.2})\n", .{repeat_penalty});
+        std.process.exit(1);
+    }
+
     return .{
         .model_path = if (positionals.len > 0) positionals[0] else "",
         .prompt = if (positionals.len > 1) positionals[1] else null,
         .serve = res.args.serve != 0,
         .port = res.args.port orelse default_port,
         .max_tokens = res.args.@"max-tokens" orelse default_max_tokens,
-        .temperature = parseF32(res.args.temperature, "temperature") orelse 0.0,
-        .top_p = parseF32(res.args.@"top-p", "top-p") orelse 1.0,
+        .temperature = temperature,
+        .top_p = top_p,
         .top_k = res.args.@"top-k" orelse 0,
-        .repeat_penalty = parseF32(res.args.@"repeat-penalty", "repeat-penalty") orelse 1.0,
+        .repeat_penalty = repeat_penalty,
         .system_prompt = res.args.system,
         .backend_choice = backend_choice,
         .ctx_size = res.args.@"ctx-size" orelse 0,
@@ -428,7 +444,7 @@ fn printUsage() void {
         \\  -h, --help             Show this help message
         \\  -v, --version          Print version
         \\  -q, --quiet            Suppress banner and stats (raw output only)
-        \\  -s, --serve            Start HTTP server (OpenAI-compatible API)
+        \\  -s, --serve            Start HTTP server (OpenAI + Anthropic API)
         \\  -p, --port <PORT>      Server port [default: 49453]
         \\  -n, --max-tokens <N>   Maximum tokens to generate [default: 512]
         \\  -t, --temperature <T>  Sampling temperature, 0 = greedy [default: 0]
@@ -439,10 +455,15 @@ fn printUsage() void {
         \\      --backend <BE>     Compute backend: auto, cpu, metal, vulkan, cuda, rocm [default: auto]
         \\      --ctx-size <N>     Context window size [default: 4096, 0 = model max]
         \\      --kv-type <TYPE>   KV cache quantization: f32, f16, q8_0, int8, fp8, nvfp4 [default: f16]
-        \\      --verbose          Show technical details (params, load times, EOG)
+        \\      --kv-tiers <TIERS> Tiered KV cache: vram, vram+ram, vram+ram+ssd [default: vram]
+        \\      --kv-ram-budget <GB>  RAM tier budget in GB [default: 50% of free RAM]
+        \\      --kv-ssd-path <PATH>  SSD tier file path (enables SSD tier)
+        \\      --kv-ssd-budget <GB>  SSD tier budget in GB [default: 10]
+        \\      --seed <N>         Random seed for sampling [default: random]
+        \\  -V, --verbose          Show technical details (params, load times, EOG)
         \\      --no-color         Disable colored output
         \\      --allow-cpu-fallback  Allow GPU backends to fall back to CPU for unsupported ops
-        \\      --debug            Enable debug logging (token IDs, layer timing)
+        \\  -d, --debug            Enable debug logging (token IDs, layer timing)
         \\      --json             Output results as JSON (implies --quiet)
         \\      --model-info       Print model metadata and exit (combine with --json)
         \\      --profile          Profile per-op timing (halves throughput)
@@ -530,8 +551,8 @@ fn isEogToken(token: u32, eog: anytype) bool {
 /// Holds the mutable backend storage alongside the tagged-union interface.
 /// The backend variables must outlive the `Backend` union (which holds pointers
 /// to them), so they are bundled together and kept on the caller's stack.
-/// No backend `deinit()` is called — process exit releases all resources.
-/// The thread pool is the sole exception (cleaned up via defer in `main()`).
+/// Process exit releases most resources; the thread pool is explicitly
+/// cleaned up via defer in `main()`.
 const BackendState = struct {
     const builtin = @import("builtin");
 
@@ -1092,12 +1113,18 @@ fn initAndRun(
 
                 const gib: usize = 1024 * 1024 * 1024;
                 const ram_gb: usize = if (cli.kv_ram_budget) |b|
-                    std.fmt.parseInt(usize, b, 10) catch default_ram_budget_gb
+                    std.fmt.parseInt(usize, b, 10) catch ram_fb: {
+                        eprint("Warning: invalid --kv-ram-budget '{s}', using default {d}GB\n", .{ b, default_ram_budget_gb });
+                        break :ram_fb default_ram_budget_gb;
+                    }
                 else
                     detectFreeRam() / (2 * gib); // 50% of free RAM in GB
 
                 const ssd_gb: usize = if (cli.kv_ssd_budget) |b|
-                    std.fmt.parseInt(usize, b, 10) catch default_ssd_budget_gb
+                    std.fmt.parseInt(usize, b, 10) catch ssd_fb: {
+                        eprint("Warning: invalid --kv-ssd-budget '{s}', using default {d}GB\n", .{ b, default_ssd_budget_gb });
+                        break :ssd_fb default_ssd_budget_gb;
+                    }
                 else
                     default_ssd_budget_gb;
 
