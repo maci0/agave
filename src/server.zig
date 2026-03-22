@@ -17,6 +17,7 @@ const max_eog_ids = @import("arch.zig").max_eog_ids;
 const scheduler = @import("scheduler.zig");
 const RateLimiter = @import("rate_limiter.zig").RateLimiter;
 const Metrics = @import("metrics.zig").Metrics;
+const TieredKvCache = @import("kvcache/tiered.zig").TieredKvCache;
 
 // ── Server constants ────────────────────────────────────────────
 const slog_buf_size: usize = 4096;
@@ -45,6 +46,12 @@ const max_messages_per_conv: usize = 1000;
 const max_message_len: usize = 100_000;
 /// Maximum concurrent HTTP handler threads.
 const max_concurrent_connections: u32 = 64;
+/// Maximum concurrent inference requests in the scheduler batch.
+const scheduler_max_batch_size: usize = 8;
+/// Request timeout in seconds before scheduler auto-cancels.
+const scheduler_timeout_sec: u32 = 30;
+/// Poll interval (nanoseconds) for SSE streaming when using scheduler path.
+const scheduler_poll_interval_ns: u64 = 10_000_000; // 10ms
 
 /// A single conversation with its message history.
 const Conversation = struct {
@@ -1229,15 +1236,11 @@ fn generate(formatted: []const u8, reset: bool) GenResult {
 }
 
 /// Run inference with a configurable max_tokens limit.
+/// When the scheduler is active, routes through RequestManager.enqueue()
+/// and blocks until completion. Falls back to direct model.forward()
+/// when no scheduler is running.
 fn generateN(formatted: []const u8, reset: bool, max_tokens: usize) GenResult {
-    // Mutex serialises inference requests. This is intentional: the model
-    // holds mutable state (KV cache, activation buffers) that cannot be
-    // shared across concurrent requests without full session isolation.
-    g_server.mutex.lock();
-    defer g_server.mutex.unlock();
-    const model = g_server.model;
     const tok = g_server.tokenizer;
-    if (reset) model.resetCache();
     const zero_stats = Stats{ .tokens_generated = 0, .prompt_tokens = 0, .time_ms = 0, .tokens_per_sec = 0, .prefill_ms = 0, .prefill_tps = 0 };
     const token_ids = tok.encode(formatted) catch |err| {
         std.log.err("tokenizer encode failed: {}", .{err});
@@ -1245,6 +1248,54 @@ fn generateN(formatted: []const u8, reset: bool, max_tokens: usize) GenResult {
     };
     defer g_server.allocator.free(token_ids);
     const prompt_token_count: u32 = @intCast(token_ids.len);
+
+    // Scheduler path: enqueue and block until complete
+    if (g_server.request_manager) |rm| {
+        const gen_start = std.time.milliTimestamp();
+        const req = rm.enqueue(token_ids) catch {
+            return .{ .data = g_server.allocator.dupe(u8, "[enqueue error]") catch &.{}, .stats = zero_stats };
+        };
+        defer {
+            req.deinit();
+            g_server.allocator.destroy(req);
+        }
+
+        // Block until request completes
+        while (!req.is_finished and !req.is_cancelled.load(.monotonic)) {
+            if (req.tokens.items.len >= max_tokens) {
+                req.is_cancelled.store(true, .monotonic);
+                break;
+            }
+            std.Thread.sleep(scheduler_poll_interval_ns);
+        }
+
+        const gen_end = std.time.milliTimestamp();
+        const time_ms = @as(u64, @intCast(@max(gen_end - gen_start, 0)));
+        const token_count: u32 = @intCast(req.tokens.items.len);
+        const tokens_per_sec: f32 = if (time_ms > 0) @as(f32, @floatFromInt(token_count)) / (@as(f32, @floatFromInt(time_ms)) / 1000.0) else 0.0;
+
+        const decoded = tok.decode(req.tokens.items) catch
+            g_server.allocator.dupe(u8, "[decode error]") catch @constCast("");
+
+        return .{
+            .data = decoded,
+            .finish_reason = if (req.is_finished) "stop" else "length",
+            .stats = .{
+                .tokens_generated = token_count,
+                .prompt_tokens = prompt_token_count,
+                .time_ms = time_ms,
+                .tokens_per_sec = tokens_per_sec,
+                .prefill_ms = 0,
+                .prefill_tps = 0,
+            },
+        };
+    }
+
+    // Direct forward path (fallback when scheduler is not active)
+    g_server.mutex.lock();
+    defer g_server.mutex.unlock();
+    const model = g_server.model;
+    if (reset) model.resetCache();
 
     // BOS token — required by models like Gemma to initialize state correctly
     if (reset and g_server.bos_token_id > 0) {
@@ -1333,12 +1384,9 @@ fn generateN(formatted: []const u8, reset: bool, max_tokens: usize) GenResult {
 /// Streams each decoded token as `data: {"t":"..."}` events.
 /// Sends final stats as `data: {"done":true,...}` followed by `data: [DONE]`.
 /// Returns GenResult with accumulated decoded text for conversation storage.
+/// When the scheduler is active, routes through RequestManager.enqueue().
 fn chatStreamGenerate(stream: net.Stream, formatted: []const u8, reset: bool) GenResult {
-    g_server.mutex.lock();
-    defer g_server.mutex.unlock();
-    const model = g_server.model;
     const tok = g_server.tokenizer;
-    if (reset) model.resetCache();
     const zero_stats = Stats{ .tokens_generated = 0, .prompt_tokens = 0, .time_ms = 0, .tokens_per_sec = 0, .prefill_ms = 0, .prefill_tps = 0 };
     const token_ids = tok.encode(formatted) catch {
         _ = sseWriteData(stream, "{\"t\":\"[encode error]\",\"done\":true}");
@@ -1347,6 +1395,60 @@ fn chatStreamGenerate(stream: net.Stream, formatted: []const u8, reset: bool) Ge
     };
     defer g_server.allocator.free(token_ids);
     const prompt_token_count: u32 = @intCast(token_ids.len);
+
+    // Scheduler path: enqueue and poll for streamed tokens
+    if (g_server.request_manager) |rm| {
+        const gen_start = std.time.milliTimestamp();
+        const req = rm.enqueue(token_ids) catch {
+            _ = sseWriteData(stream, "[DONE]");
+            return .{ .data = g_server.allocator.dupe(u8, "") catch &.{}, .stats = zero_stats };
+        };
+        defer {
+            req.deinit();
+            g_server.allocator.destroy(req);
+        }
+
+        var streamed_count: usize = 0;
+        while (!req.is_finished and !req.is_cancelled.load(.monotonic)) {
+            const current_len = req.tokens.items.len;
+            while (streamed_count < current_len) {
+                streamToken(stream, tok, req.tokens.items[streamed_count]);
+                streamed_count += 1;
+            }
+            std.Thread.sleep(scheduler_poll_interval_ns);
+        }
+        // Drain remaining tokens
+        const final_len = req.tokens.items.len;
+        while (streamed_count < final_len) {
+            streamToken(stream, tok, req.tokens.items[streamed_count]);
+            streamed_count += 1;
+        }
+
+        const gen_end = std.time.milliTimestamp();
+        const time_ms = @as(u64, @intCast(@max(gen_end - gen_start, 0)));
+        const token_count: u32 = @intCast(req.tokens.items.len);
+        const tps: f32 = if (time_ms > 0) @as(f32, @floatFromInt(token_count)) / (@as(f32, @floatFromInt(time_ms)) / 1000.0) else 0.0;
+
+        var stats_buf: [512]u8 = undefined;
+        const stats_json = std.fmt.bufPrint(&stats_buf,
+            \\{{"done":true,"n":{d},"ms":{d},"tps":{d:.2},"pn":{d},"pms":0,"ptps":0.0}}
+        , .{ token_count, time_ms, tps, prompt_token_count }) catch "";
+        if (stats_json.len > 0) _ = sseWriteData(stream, stats_json);
+        _ = sseWriteData(stream, "[DONE]");
+
+        const decoded = tok.decode(req.tokens.items) catch
+            g_server.allocator.dupe(u8, "") catch @constCast("");
+        return .{
+            .data = decoded,
+            .stats = .{ .tokens_generated = token_count, .prompt_tokens = prompt_token_count, .time_ms = time_ms, .tokens_per_sec = tps, .prefill_ms = 0, .prefill_tps = 0 },
+        };
+    }
+
+    // Direct forward path (fallback when scheduler is not active)
+    g_server.mutex.lock();
+    defer g_server.mutex.unlock();
+    const model = g_server.model;
+    if (reset) model.resetCache();
 
     if (reset and g_server.bos_token_id > 0) {
         _ = model.forward(g_server.bos_token_id) catch {
@@ -1461,14 +1563,51 @@ fn startStreamRaw(stream: net.Stream, prompt: []const u8, max_tokens: usize) voi
     generateStream(stream, prompt, nextRequestId(), std.time.timestamp(), false, false, max_tokens);
 }
 
+/// Stream a single token as an SSE chunk in OpenAI format.
+fn streamChunk(stream: net.Stream, chunk_buf: *[response_buf_size]u8, tok: *Tokenizer, token_id: u32, req_id: u64, created: i64, is_chat: bool) void {
+    const decoded = tok.decode(&[_]u32{token_id}) catch return;
+    defer g_server.allocator.free(decoded);
+    if (decoded.len == 0) return;
+
+    const escaped = jsonEscape(g_server.allocator, decoded) catch return;
+    defer if (escaped.ptr != decoded.ptr) g_server.allocator.free(escaped);
+
+    const chunk = if (is_chat)
+        std.fmt.bufPrint(chunk_buf,
+            \\{{"id":"chatcmpl-{d}","object":"chat.completion.chunk","created":{d},"model":"{s}","choices":[{{"index":0,"delta":{{"content":"{s}"}},"finish_reason":null}}]}}
+        , .{ req_id, created, g_server.model_name, escaped })
+    else
+        std.fmt.bufPrint(chunk_buf,
+            \\{{"id":"cmpl-{d}","object":"text_completion","created":{d},"model":"{s}","choices":[{{"text":"{s}","index":0,"finish_reason":null}}]}}
+        , .{ req_id, created, g_server.model_name, escaped });
+
+    if (chunk) |c| {
+        _ = sseWriteData(stream, c);
+    } else |_| {}
+}
+
+/// Send the final SSE chunk with finish_reason="stop".
+fn sendFinalChunk(stream: net.Stream, chunk_buf: *[response_buf_size]u8, req_id: u64, created: i64, is_chat: bool) void {
+    const id_prefix: []const u8 = if (is_chat) "chatcmpl" else "cmpl";
+    const obj_type: []const u8 = if (is_chat) "chat.completion.chunk" else "text_completion";
+    const delta_or_text: []const u8 = if (is_chat)
+        \\"delta":{}
+    else
+        \\"text":""
+    ;
+    const final = std.fmt.bufPrint(chunk_buf,
+        \\{{"id":"{s}-{d}","object":"{s}","created":{d},"model":"{s}","choices":[{{"index":0,{s},"finish_reason":"stop"}}]}}
+    , .{ id_prefix, req_id, obj_type, created, g_server.model_name, delta_or_text }) catch "";
+    if (final.len > 0) _ = sseWriteData(stream, final);
+}
+
 /// Run generation and stream tokens as SSE events in OpenAI format.
 /// Always resets the cache (completions API requests are stateless).
+/// When the scheduler is active, routes through RequestManager.enqueue()
+/// and polls for generated tokens. Falls back to direct model.forward()
+/// when no scheduler is running (CLI mode).
 fn generateStream(stream: net.Stream, prompt: []const u8, req_id: u64, created: i64, is_chat: bool, format_prompt: bool, max_tokens: usize) void {
-    g_server.mutex.lock();
-    defer g_server.mutex.unlock();
-    const model = g_server.model;
     const tok = g_server.tokenizer;
-    model.resetCache();
 
     const formatted = if (format_prompt)
         g_server.chat_template.format(g_server.allocator, null, prompt) catch prompt
@@ -1490,6 +1629,64 @@ fn generateStream(stream: net.Stream, prompt: []const u8, req_id: u64, created: 
         , .{ req_id, created, g_server.model_name }) catch "";
         if (initial.len > 0) _ = sseWriteData(stream, initial);
     }
+
+    // Scheduler path: enqueue request and poll for tokens
+    if (g_server.request_manager) |rm| {
+        const req = rm.enqueue(token_ids) catch {
+            _ = sseWriteData(stream, "[DONE]");
+            return;
+        };
+        defer {
+            req.deinit();
+            g_server.allocator.destroy(req);
+        }
+
+        const gen_start = std.time.milliTimestamp();
+        var streamed_count: usize = 0;
+        var token_count: u32 = 0;
+
+        while (!req.is_finished and !req.is_cancelled.load(.monotonic)) {
+            // Stream any new tokens since last poll
+            const current_len = req.tokens.items.len;
+            while (streamed_count < current_len) {
+                const token_id = req.tokens.items[streamed_count];
+                streamChunk(stream, &chunk_buf, tok, token_id, req_id, created, is_chat);
+                streamed_count += 1;
+                token_count += 1;
+                if (token_count >= max_tokens) {
+                    req.is_cancelled.store(true, .monotonic);
+                    break;
+                }
+            }
+            if (token_count >= max_tokens) break;
+            std.Thread.sleep(scheduler_poll_interval_ns);
+        }
+
+        // Drain any remaining tokens after completion
+        const final_len = req.tokens.items.len;
+        while (streamed_count < final_len and token_count < max_tokens) {
+            const token_id = req.tokens.items[streamed_count];
+            streamChunk(stream, &chunk_buf, tok, token_id, req_id, created, is_chat);
+            streamed_count += 1;
+            token_count += 1;
+        }
+
+        // Send final chunk and [DONE]
+        sendFinalChunk(stream, &chunk_buf, req_id, created, is_chat);
+        _ = sseWriteData(stream, "[DONE]");
+
+        const gen_end = std.time.milliTimestamp();
+        const time_ms = @as(u64, @intCast(@max(gen_end - gen_start, 0)));
+        const tps: f32 = if (time_ms > 0) @as(f32, @floatFromInt(token_count)) / (@as(f32, @floatFromInt(time_ms)) / 1000.0) else 0.0;
+        logGeneration(token_count, time_ms, tps);
+        return;
+    }
+
+    // Direct forward path (fallback when scheduler is not active)
+    g_server.mutex.lock();
+    defer g_server.mutex.unlock();
+    const model = g_server.model;
+    model.resetCache();
 
     // BOS token — required by models like Gemma to initialize state correctly
     if (g_server.bos_token_id > 0) {
@@ -1575,18 +1772,7 @@ fn generateStream(stream: net.Stream, prompt: []const u8, req_id: u64, created: 
     }
 
     // Send final chunk with finish_reason
-    const id_prefix: []const u8 = if (is_chat) "chatcmpl" else "cmpl";
-    const obj_type: []const u8 = if (is_chat) "chat.completion.chunk" else "text_completion";
-    const delta_or_text: []const u8 = if (is_chat)
-        \\"delta":{}
-    else
-        \\"text":""
-    ;
-    const final = std.fmt.bufPrint(&chunk_buf,
-        \\{{"id":"{s}-{d}","object":"{s}","created":{d},"model":"{s}","choices":[{{"index":0,{s},"finish_reason":"stop"}}]}}
-    , .{ id_prefix, req_id, obj_type, created, g_server.model_name, delta_or_text }) catch "";
-    if (final.len > 0) _ = sseWriteData(stream, final);
-
+    sendFinalChunk(stream, &chunk_buf, req_id, created, is_chat);
     _ = sseWriteData(stream, "[DONE]");
 
     const gen_end = std.time.milliTimestamp();
@@ -1826,7 +2012,7 @@ fn handleConnection(stream: net.Stream) void {
 ///   - bos_token_id: Beginning-of-sequence token ID (0 to skip).
 ///   - eog_ids: End-of-generation token IDs (slice of up to max_eog_ids).
 ///   - eog_len: Number of valid entries in eog_ids.
-pub fn run(allocator: Allocator, model: *Model, tok: *Tokenizer, chat_tmpl: ChatTemplate, model_name: []const u8, backend_name: []const u8, port: u16, bos_token_id: u32, eog_ids: [max_eog_ids]u32, eog_len: usize) !void {
+pub fn run(allocator: Allocator, model: *Model, tok: *Tokenizer, chat_tmpl: ChatTemplate, model_name: []const u8, backend_name: []const u8, port: u16, bos_token_id: u32, eog_ids: [max_eog_ids]u32, eog_len: usize, tiered_cache: ?*TieredKvCache) !void {
     // Stack-allocate the Server struct. This is safe because run() blocks
     // until the server shuts down, so the frame stays alive.
     var server = Server{
@@ -1842,6 +2028,22 @@ pub fn run(allocator: Allocator, model: *Model, tok: *Tokenizer, chat_tmpl: Chat
     };
     server.start_time = std.time.timestamp();
     g_server = &server;
+
+    // Initialize continuous batching scheduler and background thread.
+    // The scheduler owns the model forward loop; HTTP handlers enqueue
+    // requests and poll for results instead of calling model.forward() directly.
+    var request_manager = try scheduler.RequestManager.init(allocator, &server.metrics, scheduler_max_batch_size, scheduler_timeout_sec, tiered_cache);
+    defer request_manager.deinit();
+    server.request_manager = &request_manager;
+
+    const eog_slice = server.eog_ids[0..server.eog_len];
+    const sched_thread = try std.Thread.spawn(.{}, scheduler.runSchedulerLoop, .{
+        &request_manager,
+        server.model,
+        eog_slice,
+        &server.scheduler_shutdown,
+    });
+    server.scheduler_thread = sched_thread;
 
     const address = net.Address.initIp4(.{ 0, 0, 0, 0 }, port);
     var tcp = address.listen(.{ .reuse_address = true }) catch {
@@ -1895,6 +2097,11 @@ pub fn run(allocator: Allocator, model: *Model, tok: *Tokenizer, chat_tmpl: Chat
         };
         thread.detach();
     }
+
+    // Stop scheduler thread before draining connections
+    server.scheduler_shutdown.store(true, .release);
+    if (server.scheduler_thread) |sched_t| sched_t.join();
+    server.scheduler_thread = null;
 
     // Drain active connections (wait up to 30 seconds)
     const drain_timeout_sec: i64 = 30;

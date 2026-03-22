@@ -30,6 +30,9 @@ pub const Request = struct {
     cached_blocks: []const u32 = &[_]u32{},
     prompt_tokens_slice: []const u32 = &[_]u32{},
     block_table: []u32 = &[_]u32{}, // Physical block IDs for this request (placeholder for PagedAttention integration)
+    /// Current position in prompt prefill. When < prompt_tokens, the scheduler
+    /// feeds prompt tokens to the model. When == prompt_tokens, decode begins.
+    prefill_pos: u32 = 0,
     allocator: Allocator,
 
     /// Append a token to the output sequence.
@@ -256,6 +259,27 @@ pub const RequestManager = struct {
         for (self.running.items) |req| {
             if (req.is_cancelled.load(.monotonic)) continue;
 
+            // Prefill phase: feed prompt tokens one at a time.
+            // Note: continuous batching currently processes one request at a time
+            // (no batched prefill). Each step() call processes one token per request.
+            if (req.prefill_pos < req.prompt_tokens) {
+                const prompt_tid = req.prompt_tokens_slice[req.prefill_pos];
+                const next_token = model.forward(prompt_tid) catch |err| {
+                    std.log.err("Request {d} prefill failed: {}", .{ req.id, err });
+                    req.is_cancelled.store(true, .monotonic);
+                    continue;
+                };
+                req.prefill_pos += 1;
+
+                // Last prefill token produces the first generated token
+                if (req.prefill_pos == req.prompt_tokens) {
+                    req.last_token_id = next_token;
+                    req.appendToken(next_token, eog_ids);
+                }
+                continue;
+            }
+
+            // Decode phase: generate tokens
             const next_token = model.forward(req.last_token_id) catch |err| {
                 std.log.err("Request {d} forward failed: {}", .{ req.id, err });
                 req.is_cancelled.store(true, .monotonic);
@@ -266,10 +290,8 @@ pub const RequestManager = struct {
 
             // On completion, insert full sequence into RadixTree for future reuse
             if (req.is_finished and req.tokens.items.len > 0) {
-                // TODO: Extract block_table from model's PagedKvCache
-                // For now, insert with empty block list — will be wired in Task 2
-                const empty_blocks: []const u32 = &[_]u32{};
-                self.radix_tree.insert(req.tokens.items, empty_blocks) catch |err| {
+                const block_ids = model.getBlockTable();
+                self.radix_tree.insert(req.tokens.items, block_ids) catch |err| {
                     std.log.warn("Failed to insert sequence into RadixTree: {}", .{err});
                 };
             }
@@ -303,7 +325,7 @@ pub fn runSchedulerLoop(
         manager.step(model, eog_ids) catch |err| {
             std.log.err("Scheduler step failed: {}", .{err});
         };
-        std.time.sleep(1_000_000); // 1ms between iterations
+        std.Thread.sleep(1_000_000); // 1ms between iterations
     }
 }
 
@@ -460,6 +482,10 @@ const MockModel = struct {
     pub fn resetCache(_: *MockModel) void {}
 
     pub fn cancel(_: *MockModel) void {}
+
+    pub fn getBlockTable(_: *MockModel) []const u32 {
+        return &[_]u32{};
+    }
 };
 
 // Mock model that returns EOS token
@@ -479,4 +505,8 @@ const MockEosModel = struct {
     pub fn resetCache(_: *MockEosModel) void {}
 
     pub fn cancel(_: *MockEosModel) void {}
+
+    pub fn getBlockTable(_: *MockEosModel) []const u32 {
+        return &[_]u32{};
+    }
 };

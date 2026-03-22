@@ -32,6 +32,7 @@ const BpeTokenizer = tok_mod.BpeTokenizer;
 const LineEditor = @import("readline.zig").LineEditor;
 const KvQuantType = @import("ops/kv_quant.zig").KvQuantType;
 const math_ops = @import("ops/math.zig");
+const TieredKvCache = @import("kvcache/tiered.zig").TieredKvCache;
 
 const stdout = std.fs.File.stdout();
 const stderr = std.fs.File.stderr();
@@ -275,6 +276,11 @@ const CliArgs = struct {
     ctx_size: u32,
     kv_type: KvQuantType,
     seed: u64,
+    // Tiered KV cache CLI options
+    kv_tiers: ?[]const u8 = null,
+    kv_ram_budget: ?[]const u8 = null,
+    kv_ssd_path: ?[]const u8 = null,
+    kv_ssd_budget: ?[]const u8 = null,
     allow_cpu_fallback: bool,
     debug: bool,
     json: bool,
@@ -367,6 +373,10 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
                 std.process.exit(1);
             };
         },
+        .kv_tiers = res.args.@"kv-tiers",
+        .kv_ram_budget = res.args.@"kv-ram-budget",
+        .kv_ssd_path = res.args.@"kv-ssd-path",
+        .kv_ssd_budget = res.args.@"kv-ssd-budget",
         .allow_cpu_fallback = res.args.@"allow-cpu-fallback" != 0,
         .debug = res.args.debug != 0,
         .json = json_mode,
@@ -1080,8 +1090,67 @@ fn initAndRun(
                 .nemotron_nano => NemotronNanoModel,
                 .glm4 => Glm4Model,
             };
+            // Initialize optional tiered KV cache from CLI flags.
+            var tiered_cache_storage: ?TieredKvCache = null;
+            defer if (tiered_cache_storage) |*tc| tc.deinit();
+
+            if (cli.kv_tiers) |tiers_str| {
+                const has_ram = std.mem.indexOf(u8, tiers_str, "ram") != null;
+                const has_ssd = std.mem.indexOf(u8, tiers_str, "ssd") != null;
+
+                const ram_gb: usize = if (cli.kv_ram_budget) |b|
+                    std.fmt.parseInt(usize, b, 10) catch 16
+                else
+                    detectFreeRam() / (2 * 1024 * 1024 * 1024); // 50% of free RAM in GB
+
+                const ssd_gb: usize = if (cli.kv_ssd_budget) |b|
+                    std.fmt.parseInt(usize, b, 10) catch 10
+                else
+                    10;
+
+                // Read model metadata for cache dimension calculations.
+                const n_layers = fmt.getMetaU32("llama.block_count") orelse
+                    fmt.getMetaU32("num_hidden_layers") orelse 32;
+                const n_embd = fmt.getMetaU32("llama.embedding_length") orelse
+                    fmt.getMetaU32("hidden_size") orelse 2048;
+                const n_kv_heads = fmt.getMetaU32("llama.attention.head_count_kv") orelse
+                    fmt.getMetaU32("num_key_value_heads") orelse 8;
+                const n_heads = fmt.getMetaU32("llama.attention.head_count") orelse
+                    fmt.getMetaU32("num_attention_heads") orelse 32;
+                const head_dim = fmt.getMetaU32("llama.attention.key_length") orelse
+                    fmt.getMetaU32("head_dim") orelse (n_embd / n_heads);
+                const kv_dim: usize = @as(usize, n_kv_heads) * head_dim;
+
+                const block_size: u16 = 16;
+                const bytes_per_block = @as(usize, block_size) * kv_dim * @sizeOf(f32) * 2;
+                const ctx = if (cli.ctx_size > 0) cli.ctx_size else default_ctx_size;
+                const vram_blocks: usize = (@as(usize, ctx) + block_size - 1) / block_size;
+                const ram_blocks: usize = if (has_ram and bytes_per_block > 0) (ram_gb * 1024 * 1024 * 1024) / bytes_per_block else 0;
+                const ssd_blocks: usize = if (has_ssd and bytes_per_block > 0) (ssd_gb * 1024 * 1024 * 1024) / bytes_per_block else 0;
+
+                tiered_cache_storage = TieredKvCache.init(
+                    allocator,
+                    n_layers,
+                    kv_dim,
+                    vram_blocks,
+                    ram_blocks,
+                    ssd_blocks,
+                    block_size,
+                    if (has_ssd) cli.kv_ssd_path else null,
+                ) catch |e| {
+                    eprint("Error: failed to initialize tiered KV cache: {}\n", .{e});
+                    return false;
+                };
+
+                if (!g_quiet) {
+                    eprint("  Tiered KV cache: {d} VRAM + {d} RAM + {d} SSD blocks\n", .{ vram_blocks, ram_blocks, ssd_blocks });
+                }
+            }
+
+            const tiered_ptr: ?*TieredKvCache = if (tiered_cache_storage != null) &tiered_cache_storage.? else null;
+
             const init_start = std.time.milliTimestamp();
-            var mdl = ModelType.init(allocator, fmt, be, cli.ctx_size, cli.kv_type) catch |e| {
+            var mdl = ModelType.init(allocator, fmt, be, cli.ctx_size, cli.kv_type, tiered_ptr) catch |e| {
                 eprint("Error: failed to initialize {s}: {}\n", .{ arch.displayName(), e });
                 if (e == error.OutOfMemory)
                     eprint("  Not enough memory. Try a smaller quantization or model.\n", .{})
@@ -1108,7 +1177,7 @@ fn initAndRun(
             var model_if = mdl.model();
             if (cli.serve) {
                 var tok_if = tok.tokenizer();
-                server.run(allocator, &model_if, &tok_if, arch.chatTemplate(), minfo.name, minfo.be_name, cli.port, tok.bos_token_id, eog.ids, eog.len) catch |e| {
+                server.run(allocator, &model_if, &tok_if, arch.chatTemplate(), minfo.name, minfo.be_name, cli.port, tok.bos_token_id, eog.ids, eog.len, tiered_ptr) catch |e| {
                     eprint("Error: server failed: {}\n", .{e});
                     return false;
                 };

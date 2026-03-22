@@ -101,17 +101,17 @@ pub const TieredKvCache = struct {
         const blocks = try allocator.alloc(TieredBlock, total_blocks);
         errdefer allocator.free(blocks);
 
-        var vram_free = std.ArrayList(u32).init(allocator);
-        errdefer vram_free.deinit();
-        var ram_free = std.ArrayList(u32).init(allocator);
-        errdefer ram_free.deinit();
-        var ssd_free = std.ArrayList(u32).init(allocator);
-        errdefer ssd_free.deinit();
+        var vram_free: std.ArrayList(u32) = .empty;
+        errdefer vram_free.deinit(allocator);
+        var ram_free: std.ArrayList(u32) = .empty;
+        errdefer ram_free.deinit(allocator);
+        var ssd_free: std.ArrayList(u32) = .empty;
+        errdefer ssd_free.deinit(allocator);
 
         // Reserve capacity for free lists
-        try vram_free.ensureTotalCapacity(vram_blocks);
-        try ram_free.ensureTotalCapacity(ram_blocks);
-        try ssd_free.ensureTotalCapacity(ssd_blocks);
+        try vram_free.ensureTotalCapacity(allocator, vram_blocks);
+        try ram_free.ensureTotalCapacity(allocator, ram_blocks);
+        try ssd_free.ensureTotalCapacity(allocator, ssd_blocks);
 
         // Calculate block bytes (keys + values)
         const slot_size = @as(usize, block_size) * kv_dim;
@@ -127,7 +127,8 @@ pub const TieredKvCache = struct {
             const total_size = ssd_blocks * block_bytes;
             if (total_size > 0) {
                 try ssd_file.?.seekTo(total_size - 1);
-                try ssd_file.?.writer().writeByte(0);
+                var write_buf: [1]u8 = .{0};
+                _ = try ssd_file.?.write(&write_buf);
                 try ssd_file.?.seekTo(0);
             }
 
@@ -213,9 +214,9 @@ pub const TieredKvCache = struct {
             if (blk.base.values.len > 0) self.allocator.free(blk.base.values);
         }
         self.allocator.free(self.blocks);
-        self.vram_free_list.deinit();
-        self.ram_free_list.deinit();
-        self.ssd_free_list.deinit();
+        self.vram_free_list.deinit(self.allocator);
+        self.ram_free_list.deinit(self.allocator);
+        self.ssd_free_list.deinit(self.allocator);
     }
 
     /// Allocate a block from highest available tier.
@@ -235,7 +236,7 @@ pub const TieredKvCache = struct {
     pub fn allocBlock(self: *TieredKvCache) !u32 {
         // Try VRAM first
         if (self.vram_free_list.items.len > 0) {
-            const block_id = self.vram_free_list.pop();
+            const block_id = self.vram_free_list.pop().?;
             self.blocks[block_id].tier = .vram;
             self.blocks[block_id].base.ref_count = 1;
             self.blocks[block_id].base.used = 0;
@@ -257,7 +258,7 @@ pub const TieredKvCache = struct {
 
         // Fallback to RAM tier
         if (self.ram_free_list.items.len > 0) {
-            const block_id = self.ram_free_list.pop();
+            const block_id = self.ram_free_list.pop().?;
             self.blocks[block_id].tier = .ram;
             self.blocks[block_id].base.ref_count = 1;
             self.blocks[block_id].base.used = 0;
@@ -266,7 +267,7 @@ pub const TieredKvCache = struct {
 
         // Fallback to SSD tier (promote from SSD to RAM before use)
         if (self.ssd_free_list.items.len > 0) {
-            const block_id = self.ssd_free_list.pop();
+            const block_id = self.ssd_free_list.pop().?;
             // Promote from SSD to RAM before use
             try self.promoteFromSsd(block_id);
             self.blocks[block_id].base.ref_count = 1;
@@ -459,9 +460,9 @@ pub const TieredKvCache = struct {
         blk.access_count = 0;
 
         switch (blk.tier) {
-            .vram => try self.vram_free_list.append(block_id),
-            .ram => try self.ram_free_list.append(block_id),
-            .ssd => try self.ssd_free_list.append(block_id),
+            .vram => try self.vram_free_list.append(self.allocator, block_id),
+            .ram => try self.ram_free_list.append(self.allocator, block_id),
+            .ssd => try self.ssd_free_list.append(self.allocator, block_id),
         }
     }
 

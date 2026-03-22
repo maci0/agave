@@ -45,6 +45,7 @@ pub const Model = struct {
         get_n_head: *const fn (self: *anyopaque) u32,
         get_n_head_kv: *const fn (self: *anyopaque) u32,
         get_logits: *const fn (self: *anyopaque) []f32,
+        get_block_table: *const fn (self: *anyopaque) []const u32,
     };
 
     /// Construct a Model interface from any concrete model type at comptime.
@@ -107,6 +108,11 @@ pub const Model = struct {
                     return if (@hasField(T, "logits")) self.logits else self.logits_buf;
                 }
             }.call),
+            .get_block_table = @ptrCast(&struct {
+                fn call(self: *T) []const u32 {
+                    return self.getBlockTable();
+                }
+            }.call),
         };
     }
 
@@ -167,6 +173,13 @@ pub const Model = struct {
     /// Return the number of key/value attention heads (for GQA).
     pub fn nHeadKv(self: Model) u32 {
         return self.vtable.get_n_head_kv(self.ptr);
+    }
+
+    /// Return the physical block IDs from layer 0 of the current sequence's block table.
+    /// Used by the scheduler to populate RadixTree on request completion.
+    /// Returns empty slice if no blocks allocated.
+    pub fn getBlockTable(self: Model) []const u32 {
+        return self.vtable.get_block_table(self.ptr);
     }
 };
 

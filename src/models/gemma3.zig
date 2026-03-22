@@ -14,7 +14,10 @@ const quant = @import("../ops/quant.zig");
 const perf = @import("../perf.zig");
 const kv_quant = @import("../ops/kv_quant.zig");
 const kvcache = @import("../kvcache/manager.zig");
-const BlockAllocator = @import("../kvcache/block_allocator.zig").BlockAllocator;
+const block_alloc_mod = @import("../kvcache/block_allocator.zig");
+const BlockAllocator = block_alloc_mod.BlockAllocator;
+const TieredBlockAllocator = block_alloc_mod.TieredBlockAllocator;
+const TieredKvCache = @import("../kvcache/tiered.zig").TieredKvCache;
 const Backend = backend_mod.Backend;
 const Format = format_mod.Format;
 const TensorInfo = format_mod.TensorInfo;
@@ -76,17 +79,21 @@ pub const Gemma3Model = struct {
     mlx_cc_keys: [mlx_companion_cache_size]usize = [_]usize{0} ** mlx_companion_cache_size,
     mlx_cc_vals: [mlx_companion_cache_size]MlxCompanion = undefined,
 
-    // KV cache (PagedAttention)
-    paged_cache: PagedKvCache,
-    seq_table: SeqBlockTable,
-    block_allocator: BlockAllocator,
+    // KV cache (PagedAttention or TieredKvCache)
+    paged_cache: PagedKvCache = undefined,
+    seq_table: SeqBlockTable = undefined,
+    block_allocator: BlockAllocator = undefined,
+    tiered_cache: ?*TieredKvCache = null,
+    tiered_block_allocator: ?TieredBlockAllocator = null,
     kv_type: kv_quant.KvQuantType,
     kv_seq_len: usize = 0,
     cancelled: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
     perf: perf.PerfCounters = .{},
 
     /// Initialize the model from format metadata and allocate all working buffers.
-    pub fn init(allocator: Allocator, f: Format, be: Backend, ctx_size: u32, kv_type: kv_quant.KvQuantType) !Gemma3Model {
+    /// When `tiered_cache` is provided, the model uses tiered block allocation instead
+    /// of creating its own PagedKvCache (the tiered cache is owned externally).
+    pub fn init(allocator: Allocator, f: Format, be: Backend, ctx_size: u32, kv_type: kv_quant.KvQuantType, tiered_cache: ?*TieredKvCache) !Gemma3Model {
         const arch = f.getMetaStr("general.architecture") orelse "gemma3";
         const n_layers = f.getArchU32(arch, "block_count") orelse 26;
         const n_embd = f.getArchU32(arch, "embedding_length") orelse 1152;
@@ -104,20 +111,28 @@ pub const Gemma3Model = struct {
         if (f.getArchU32(arch, "context_length")) |cl| max_sl = cl;
         if (ctx_size > 0) max_sl = ctx_size;
 
-        // PagedAttention: block_size=16, calculate num_blocks for max_seq_len
-        const block_size: u16 = 16;
-        const num_blocks = (max_sl + block_size - 1) / block_size * nl;
+        // KV cache: use TieredKvCache if provided, otherwise flat PagedKvCache.
+        var paged_cache: PagedKvCache = undefined;
+        var block_allocator: BlockAllocator = undefined;
+        var tiered_block_allocator: ?TieredBlockAllocator = null;
+        var seq_table: SeqBlockTable = undefined;
 
-        var paged_cache = try PagedKvCache.init(allocator, nl, kv_dim, num_blocks, block_size);
-        errdefer paged_cache.deinit();
-
-        var block_allocator = BlockAllocator.init(&paged_cache, allocator);
-
-        var seq_table = try block_allocator.allocateSeqTable(nl);
-        errdefer block_allocator.freeSeqTable(&seq_table);
-
-        // Allocate first block
-        try block_allocator.appendBlock(&seq_table);
+        if (tiered_cache) |tc| {
+            var ta = TieredBlockAllocator.init(tc, allocator);
+            seq_table = try ta.allocateSeqTable(nl);
+            errdefer ta.freeSeqTable(&seq_table);
+            try ta.appendBlock(&seq_table);
+            tiered_block_allocator = ta;
+        } else {
+            const block_size: u16 = 16;
+            const num_blocks = (max_sl + block_size - 1) / block_size * nl;
+            paged_cache = try PagedKvCache.init(allocator, nl, kv_dim, num_blocks, block_size);
+            errdefer paged_cache.deinit();
+            block_allocator = BlockAllocator.init(&paged_cache, allocator);
+            seq_table = try block_allocator.allocateSeqTable(nl);
+            errdefer block_allocator.freeSeqTable(&seq_table);
+            try block_allocator.appendBlock(&seq_table);
+        }
 
         const hidden = try allocator.alloc(f32, n_embd);
         errdefer allocator.free(hidden);
@@ -182,6 +197,8 @@ pub const Gemma3Model = struct {
             .paged_cache = paged_cache,
             .seq_table = seq_table,
             .block_allocator = block_allocator,
+            .tiered_cache = tiered_cache,
+            .tiered_block_allocator = tiered_block_allocator,
             .kv_type = kv_type,
         };
     }
@@ -195,8 +212,12 @@ pub const Gemma3Model = struct {
         };
         inline for (bufs) |buf| self.allocator.free(buf.*);
         for (self.norm_cache[0..self.norm_cache_len]) |entry| self.allocator.free(entry.data);
-        self.block_allocator.freeSeqTable(&self.seq_table);
-        self.paged_cache.deinit();
+        if (self.tiered_block_allocator) |*ta| {
+            ta.freeSeqTable(&self.seq_table);
+        } else {
+            self.block_allocator.freeSeqTable(&self.seq_table);
+            self.paged_cache.deinit();
+        }
     }
 
     /// Wrap this model in the generic `Model` interface.
@@ -211,10 +232,15 @@ pub const Gemma3Model = struct {
         if (self.kv_seq_len >= self.max_seq_len) return error.KVCacheFull;
 
         // Check if new block needed
+        const bs: usize = if (self.tiered_cache) |tc| tc.block_size else self.paged_cache.block_size;
         const current_blocks = self.seq_table.block_table[0].len;
-        const needed_blocks = (self.kv_seq_len + 1 + self.paged_cache.block_size - 1) / self.paged_cache.block_size;
+        const needed_blocks = (self.kv_seq_len + 1 + bs - 1) / bs;
         if (needed_blocks > current_blocks) {
-            try self.block_allocator.appendBlock(&self.seq_table);
+            if (self.tiered_block_allocator) |*ta| {
+                try ta.appendBlock(&self.seq_table);
+            } else {
+                try self.block_allocator.appendBlock(&self.seq_table);
+            }
         }
 
         // Embedding lookup + Gemma scaling
@@ -250,14 +276,15 @@ pub const Gemma3Model = struct {
 
     /// Reset the KV cache position for a new conversation.
     pub fn resetCache(self: *Gemma3Model) void {
-        self.block_allocator.freeSeqTable(&self.seq_table);
-        self.seq_table = self.block_allocator.allocateSeqTable(self.n_layers) catch {
-            // If allocation fails, leave cache in invalid state (will fail on next forward)
-            return;
-        };
-        self.block_allocator.appendBlock(&self.seq_table) catch {
-            return;
-        };
+        if (self.tiered_block_allocator) |*ta| {
+            ta.freeSeqTable(&self.seq_table);
+            self.seq_table = ta.allocateSeqTable(self.n_layers) catch return;
+            ta.appendBlock(&self.seq_table) catch return;
+        } else {
+            self.block_allocator.freeSeqTable(&self.seq_table);
+            self.seq_table = self.block_allocator.allocateSeqTable(self.n_layers) catch return;
+            self.block_allocator.appendBlock(&self.seq_table) catch return;
+        }
         model_mod.resetInferenceState(&self.kv_seq_len, &self.cancelled);
     }
 
@@ -266,16 +293,28 @@ pub const Gemma3Model = struct {
         model_mod.signalCancel(&self.cancelled);
     }
 
+    /// Return physical block IDs from layer 0 of the current sequence table.
+    /// All layers share the same block IDs, so layer 0 is sufficient.
+    pub fn getBlockTable(self: *Gemma3Model) []const u32 {
+        return self.seq_table.block_table[0];
+    }
+
     // ── Layer implementations ─────────────────────────────────────
 
     /// Helper: get flat f32 view of KV cache for a layer (assembled from paged blocks).
-    /// Returns slices pointing into paged cache blocks.
+    /// Returns slices pointing into paged or tiered cache blocks.
     fn getLayerKvView(self: *Gemma3Model, layer: usize) struct { keys: []f32, values: []f32 } {
         const num_blocks = self.seq_table.block_table[layer].len;
         if (num_blocks == 0) return .{ .keys = &[_]f32{}, .values = &[_]f32{} };
 
         // For now, assume single block (will extend for multi-block later)
         const block_id = self.seq_table.block_table[layer][0];
+        if (self.tiered_cache) |tc| {
+            return .{
+                .keys = tc.blocks[block_id].base.keys,
+                .values = tc.blocks[block_id].base.values,
+            };
+        }
         return .{
             .keys = self.paged_cache.blocks[block_id].keys,
             .values = self.paged_cache.blocks[block_id].values,

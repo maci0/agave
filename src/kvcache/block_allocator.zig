@@ -1,11 +1,14 @@
 //! Block table allocator for PagedAttention.
 //! Manages per-request SeqBlockTable allocation and block append operations.
+//! Provides both `BlockAllocator` (backed by `PagedKvCache`) and
+//! `TieredBlockAllocator` (backed by `TieredKvCache`) for tiered storage.
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const kvcache = @import("manager.zig");
 const PagedKvCache = kvcache.PagedKvCache;
 const SeqBlockTable = kvcache.SeqBlockTable;
+const TieredKvCache = @import("tiered.zig").TieredKvCache;
 
 /// BlockAllocator manages SeqBlockTable creation and physical block allocation.
 pub const BlockAllocator = struct {
@@ -69,6 +72,66 @@ pub const BlockAllocator = struct {
     pub fn getPhysicalBlock(seq_table: *const SeqBlockTable, layer: usize, logical_idx: usize) u32 {
         std.debug.assert(logical_idx < seq_table.block_table[layer].len);
         return seq_table.block_table[layer][logical_idx];
+    }
+};
+
+/// TieredBlockAllocator manages SeqBlockTable creation and block allocation
+/// backed by a `TieredKvCache` instead of `PagedKvCache`. Provides the same
+/// interface as `BlockAllocator` so models can use either via an optional field.
+pub const TieredBlockAllocator = struct {
+    cache: *TieredKvCache,
+    allocator: Allocator,
+
+    /// Initialize a tiered block allocator with a reference to the tiered cache.
+    pub fn init(cache: *TieredKvCache, allocator: Allocator) TieredBlockAllocator {
+        return .{ .cache = cache, .allocator = allocator };
+    }
+
+    /// Allocate a new SeqBlockTable with empty block tables for all layers.
+    /// Caller must call freeSeqTable when done.
+    pub fn allocateSeqTable(self: *TieredBlockAllocator, n_layers: usize) !SeqBlockTable {
+        const block_table = try self.allocator.alloc([]u32, n_layers);
+        errdefer self.allocator.free(block_table);
+
+        var init_count: usize = 0;
+        errdefer for (0..init_count) |i| self.allocator.free(block_table[i]);
+
+        for (0..n_layers) |i| {
+            block_table[i] = try self.allocator.alloc(u32, 0); // Empty initially
+            init_count = i + 1;
+        }
+
+        return .{ .block_table = block_table, .seq_len = 0 };
+    }
+
+    /// Append a new physical block to all layers of the sequence table.
+    /// Returns error.OutOfBlocks if no blocks available.
+    pub fn appendBlock(self: *TieredBlockAllocator, seq_table: *SeqBlockTable) !void {
+        const block_id = self.cache.allocBlock() catch return error.OutOfBlocks;
+
+        for (seq_table.block_table) |*layer_table| {
+            const new_table = try self.allocator.realloc(layer_table.*, layer_table.len + 1);
+            new_table[new_table.len - 1] = block_id;
+            layer_table.* = new_table;
+        }
+
+        seq_table.seq_len += self.cache.block_size;
+    }
+
+    /// Free all blocks and memory associated with a SeqBlockTable.
+    pub fn freeSeqTable(self: *TieredBlockAllocator, seq_table: *SeqBlockTable) void {
+        if (seq_table.block_table.len == 0) return;
+
+        // Free physical blocks (only from first layer to avoid double-free)
+        for (seq_table.block_table[0]) |block_id| {
+            self.cache.freeBlock(block_id) catch {};
+        }
+
+        // Free block_table arrays
+        for (seq_table.block_table) |layer_table| {
+            self.allocator.free(layer_table);
+        }
+        self.allocator.free(seq_table.block_table);
     }
 };
 

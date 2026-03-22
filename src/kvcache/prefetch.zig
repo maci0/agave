@@ -30,7 +30,7 @@ pub const Prefetcher = struct {
     /// Mutex protecting work_queue.
     mutex: std.Thread.Mutex,
     /// Generation counter for futex wake.
-    generation: std.atomic.Value(u64),
+    generation: std.atomic.Value(u32),
     /// Shutdown flag.
     shutdown: std.atomic.Value(bool),
     /// Worker thread handle.
@@ -51,9 +51,9 @@ pub const Prefetcher = struct {
     pub fn init(allocator: Allocator, cache: *TieredKvCache) !Prefetcher {
         return .{
             .cache = cache,
-            .work_queue = std.ArrayList(PrefetchJob).init(allocator),
+            .work_queue = .empty,
             .mutex = .{},
-            .generation = std.atomic.Value(u64).init(0),
+            .generation = std.atomic.Value(u32).init(0),
             .shutdown = std.atomic.Value(bool).init(false),
             .allocator = allocator,
         };
@@ -75,7 +75,7 @@ pub const Prefetcher = struct {
         // Wait for worker to exit
         if (self.thread) |t| t.join();
 
-        self.work_queue.deinit();
+        self.work_queue.deinit(self.allocator);
     }
 
     /// Queue prefetch for next N blocks starting from current index.
@@ -101,7 +101,7 @@ pub const Prefetcher = struct {
         for (block_ids[start_idx..end]) |block_id| {
             // Only queue if block is in lower tier (SSD or RAM → VRAM)
             if (self.cache.needsPromotion(block_id)) {
-                try self.work_queue.append(.{ .block_id = block_id });
+                try self.work_queue.append(self.allocator, .{ .block_id = block_id });
                 queued += 1;
             }
         }
@@ -121,7 +121,7 @@ pub const Prefetcher = struct {
     /// Critical: local_gen MUST init to 0 (not generation.load) to avoid
     /// late-starting workers missing wake signals.
     fn workerLoop(self: *Prefetcher) void {
-        var local_gen: u64 = 0; // Critical: init to 0, not generation.load
+        var local_gen: u32 = 0; // Critical: init to 0, not generation.load
 
         while (!self.shutdown.load(.acquire)) {
             self.mutex.lock();

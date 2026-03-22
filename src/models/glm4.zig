@@ -9,7 +9,10 @@ const model_mod = @import("model.zig");
 const math_ops = @import("../ops/math.zig");
 const mlx_ops = @import("../ops/mlx.zig");
 const kvcache = @import("../kvcache/manager.zig");
-const BlockAllocator = @import("../kvcache/block_allocator.zig").BlockAllocator;
+const block_alloc_mod = @import("../kvcache/block_allocator.zig");
+const BlockAllocator = block_alloc_mod.BlockAllocator;
+const TieredBlockAllocator = block_alloc_mod.TieredBlockAllocator;
+const TieredKvCache = @import("../kvcache/tiered.zig").TieredKvCache;
 
 const Backend = backend_mod.Backend;
 const Format = format_mod.Format;
@@ -73,10 +76,12 @@ pub const Glm4Model = struct {
     router_logits: []f32 = &.{},
     logits_buf: []f32 = &.{},
 
-    // KV cache (PagedAttention): store full reconstructed K and V per layer (MLA decompresses before caching)
+    // KV cache (PagedAttention or TieredKvCache): store full reconstructed K and V per layer
     paged_cache: PagedKvCache = undefined,
     seq_table: SeqBlockTable = undefined,
     block_allocator: BlockAllocator = undefined,
+    tiered_cache: ?*TieredKvCache = null,
+    tiered_block_allocator: ?TieredBlockAllocator = null,
     kv_type: kv_quant.KvQuantType = .f32,
     kv_seq_len: usize = 0,
     cancelled: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
@@ -85,7 +90,7 @@ pub const Glm4Model = struct {
     name_buf: [name_buf_size]u8 = undefined,
 
     /// Initialize the model from format metadata and allocate all working buffers.
-    pub fn init(allocator: Allocator, f: Format, be: Backend, ctx_size: u32, kv_type: kv_quant.KvQuantType) !Glm4Model {
+    pub fn init(allocator: Allocator, f: Format, be: Backend, ctx_size: u32, kv_type: kv_quant.KvQuantType, tiered_cache: ?*TieredKvCache) !Glm4Model {
         var self = Glm4Model{ .fmt = f, .be = be, .allocator = allocator };
         self.kv_type = kv_type;
 
@@ -154,34 +159,41 @@ pub const Glm4Model = struct {
         self.logits_buf = try allocator.alloc(f32, self.vocab_size);
         errdefer allocator.free(self.logits_buf);
 
-        // PagedAttention: block_size=16, calculate num_blocks for max_seq_len
-        // Note: GLM4 uses different k_head_dim and v_head_dim, use larger for cache
-        const max_kv_dim = @max(kvd, vd);
-        const block_size: u16 = 16;
-        const num_blocks = (self.max_seq_len + block_size - 1) / block_size * nl;
-
-        var paged_cache = try PagedKvCache.init(allocator, nl, max_kv_dim, num_blocks, block_size);
-        errdefer paged_cache.deinit();
-
-        var block_allocator = BlockAllocator.init(&paged_cache, allocator);
-
-        var seq_table = try block_allocator.allocateSeqTable(nl);
-        errdefer block_allocator.freeSeqTable(&seq_table);
-
-        // Allocate first block
-        try block_allocator.appendBlock(&seq_table);
-
-        self.paged_cache = paged_cache;
-        self.seq_table = seq_table;
-        self.block_allocator = block_allocator;
+        // KV cache: use TieredKvCache if provided, otherwise flat PagedKvCache.
+        // Note: GLM4 uses different k_head_dim and v_head_dim, use larger for cache.
+        if (tiered_cache) |tc| {
+            var ta = TieredBlockAllocator.init(tc, allocator);
+            self.seq_table = try ta.allocateSeqTable(nl);
+            errdefer ta.freeSeqTable(&self.seq_table);
+            try ta.appendBlock(&self.seq_table);
+            self.tiered_cache = tc;
+            self.tiered_block_allocator = ta;
+        } else {
+            const max_kv_dim = @max(kvd, vd);
+            const block_size: u16 = 16;
+            const num_blocks = (self.max_seq_len + block_size - 1) / block_size * nl;
+            var paged_cache = try PagedKvCache.init(allocator, nl, max_kv_dim, num_blocks, block_size);
+            errdefer paged_cache.deinit();
+            var block_allocator = BlockAllocator.init(&paged_cache, allocator);
+            var seq_table = try block_allocator.allocateSeqTable(nl);
+            errdefer block_allocator.freeSeqTable(&seq_table);
+            try block_allocator.appendBlock(&seq_table);
+            self.paged_cache = paged_cache;
+            self.seq_table = seq_table;
+            self.block_allocator = block_allocator;
+        }
 
         return self;
     }
 
     /// Release all heap allocations owned by this model.
     pub fn deinit(self: *Glm4Model) void {
-        self.block_allocator.freeSeqTable(&self.seq_table);
-        self.paged_cache.deinit();
+        if (self.tiered_block_allocator) |*ta| {
+            ta.freeSeqTable(&self.seq_table);
+        } else {
+            self.block_allocator.freeSeqTable(&self.seq_table);
+            self.paged_cache.deinit();
+        }
 
         const bufs = .{
             &self.hidden,     &self.hidden2,    &self.q_compressed,
@@ -206,10 +218,15 @@ pub const Glm4Model = struct {
         if (self.kv_seq_len >= self.max_seq_len) return error.KVCacheFull;
 
         // Check if new block needed
+        const bs: usize = if (self.tiered_cache) |tc| tc.block_size else self.paged_cache.block_size;
         const current_blocks = self.seq_table.block_table[0].len;
-        const needed_blocks = (self.kv_seq_len + 1 + self.paged_cache.block_size - 1) / self.paged_cache.block_size;
+        const needed_blocks = (self.kv_seq_len + 1 + bs - 1) / bs;
         if (needed_blocks > current_blocks) {
-            try self.block_allocator.appendBlock(&self.seq_table);
+            if (self.tiered_block_allocator) |*ta| {
+                try ta.appendBlock(&self.seq_table);
+            } else {
+                try self.block_allocator.appendBlock(&self.seq_table);
+            }
         }
 
         // Embedding lookup
@@ -241,13 +258,15 @@ pub const Glm4Model = struct {
 
     /// Reset the KV cache position for a new conversation.
     pub fn resetCache(self: *Glm4Model) void {
-        self.block_allocator.freeSeqTable(&self.seq_table);
-        self.seq_table = self.block_allocator.allocateSeqTable(self.n_layers) catch {
-            return;
-        };
-        self.block_allocator.appendBlock(&self.seq_table) catch {
-            return;
-        };
+        if (self.tiered_block_allocator) |*ta| {
+            ta.freeSeqTable(&self.seq_table);
+            self.seq_table = ta.allocateSeqTable(self.n_layers) catch return;
+            ta.appendBlock(&self.seq_table) catch return;
+        } else {
+            self.block_allocator.freeSeqTable(&self.seq_table);
+            self.seq_table = self.block_allocator.allocateSeqTable(self.n_layers) catch return;
+            self.block_allocator.appendBlock(&self.seq_table) catch return;
+        }
         model_mod.resetInferenceState(&self.kv_seq_len, &self.cancelled);
     }
 
@@ -256,13 +275,24 @@ pub const Glm4Model = struct {
         model_mod.signalCancel(&self.cancelled);
     }
 
-    /// Helper: get flat f32 view of KV cache for a layer (assembled from paged blocks).
+    /// Return physical block IDs from layer 0 of the current sequence table.
+    /// All layers share the same block IDs, so layer 0 is sufficient.
+    pub fn getBlockTable(self: *Glm4Model) []const u32 {
+        return self.seq_table.block_table[0];
+    }
+
+    /// Helper: get flat f32 view of KV cache for a layer (assembled from paged or tiered blocks).
     fn getLayerKvView(self: *Glm4Model, layer: usize) struct { keys: []f32, values: []f32 } {
         const num_blocks = self.seq_table.block_table[layer].len;
         if (num_blocks == 0) return .{ .keys = &[_]f32{}, .values = &[_]f32{} };
 
-        // For now, assume single block (will extend for multi-block later)
         const block_id = self.seq_table.block_table[layer][0];
+        if (self.tiered_cache) |tc| {
+            return .{
+                .keys = tc.blocks[block_id].base.keys,
+                .values = tc.blocks[block_id].base.values,
+            };
+        }
         return .{
             .keys = self.paged_cache.blocks[block_id].keys,
             .values = self.paged_cache.blocks[block_id].values,
