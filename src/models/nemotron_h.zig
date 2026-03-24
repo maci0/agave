@@ -381,6 +381,15 @@ pub const NemotronHModel = struct {
         return result;
     }
 
+    /// Batched prefill — sequential. Mamba-2 SSM layers require sequential
+    /// state updates. Mixed attention/SSM/FFN layer pattern makes partial
+    /// batching impractical.
+    pub fn prefill(self: *NemotronHModel, token_ids: []const u32) !u32 {
+        var last: u32 = 0;
+        for (token_ids) |tid| last = try self.forward(tid);
+        return last;
+    }
+
     /// Reset all SSM states, KV cache, and the cancellation flag for a new conversation.
     pub fn resetCache(self: *NemotronHModel) void {
         for (0..self.n_layers) |i| {

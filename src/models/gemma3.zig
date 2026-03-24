@@ -27,6 +27,9 @@ const Allocator = std.mem.Allocator;
 const PagedKvCache = kvcache.PagedKvCache;
 const SeqBlockTable = kvcache.SeqBlockTable;
 
+/// Default prefill chunk size (tokens per batch).
+const default_chunk_size: u32 = 512;
+
 /// Gemma 3 transformer model with GQA, GELU activation, and per-head QK normalization.
 /// Supports both GGUF and SafeTensors/MLX quantized weights.
 pub const Gemma3Model = struct {
@@ -73,6 +76,19 @@ pub const Gemma3Model = struct {
     ff_up: []f32,
     logits: []f32,
     scores: []f32,
+
+    // Prefill buffers (sized to chunk_size × dim, allocated at init)
+    pf_hidden: []f32 = &[_]f32{},
+    pf_hidden2: []f32 = &[_]f32{},
+    pf_q: []f32 = &[_]f32{},
+    pf_k: []f32 = &[_]f32{},
+    pf_v: []f32 = &[_]f32{},
+    pf_attn_out: []f32 = &[_]f32{},
+    pf_ff_gate: []f32 = &[_]f32{},
+    pf_ff_up: []f32 = &[_]f32{},
+    pf_positions: []u32 = &[_]u32{},
+    chunk_size: u32 = default_chunk_size,
+
     /// Cached pre-computed f32 norm weights (lazily populated on first token).
     /// Eliminates per-token dequantization and all norm-buffer GPU sync points.
     norm_cache: [max_norm_entries]NormCacheEntry = undefined,
@@ -174,8 +190,10 @@ pub const Gemma3Model = struct {
             try ta.appendBlock(&self.seq_table);
             self.tiered_block_allocator = ta;
         } else {
-            const block_size = kvcache.default_block_size;
-            const num_blocks = (max_sl + block_size - 1) / block_size * nl;
+            // Use full-sequence blocks for contiguous KV access in both prefill and decode.
+            // One block per layer, each holding max_sl positions. Same total memory.
+            const block_size: u16 = @intCast(@min(max_sl, std.math.maxInt(u16)));
+            const num_blocks = nl;
             self.paged_cache = try PagedKvCache.init(allocator, nl, kv_dim, num_blocks, block_size);
             errdefer self.paged_cache.deinit();
             // BlockAllocator stores a pointer — must point to self.paged_cache (not a local copy).
@@ -206,6 +224,29 @@ pub const Gemma3Model = struct {
         self.scores = try allocator.alloc(f32, max_sl);
         errdefer allocator.free(self.scores);
 
+        // Prefill buffers use page allocator for GPU compatibility (Metal's
+        // newBufferWithBytesNoCopy requires page-aligned pointers).
+        const pa = std.heap.page_allocator;
+        const cs: usize = default_chunk_size;
+        self.pf_hidden = try pa.alloc(f32, cs * n_embd);
+        errdefer pa.free(self.pf_hidden);
+        self.pf_hidden2 = try pa.alloc(f32, cs * n_embd);
+        errdefer pa.free(self.pf_hidden2);
+        self.pf_q = try pa.alloc(f32, cs * qkv_dim);
+        errdefer pa.free(self.pf_q);
+        self.pf_k = try pa.alloc(f32, cs * kv_dim);
+        errdefer pa.free(self.pf_k);
+        self.pf_v = try pa.alloc(f32, cs * kv_dim);
+        errdefer pa.free(self.pf_v);
+        self.pf_attn_out = try pa.alloc(f32, cs * qkv_dim);
+        errdefer pa.free(self.pf_attn_out);
+        self.pf_ff_gate = try pa.alloc(f32, cs * n_ff);
+        errdefer pa.free(self.pf_ff_gate);
+        self.pf_ff_up = try pa.alloc(f32, cs * n_ff);
+        errdefer pa.free(self.pf_ff_up);
+        self.pf_positions = try pa.alloc(u32, cs);
+        errdefer pa.free(self.pf_positions);
+
         return self;
     }
 
@@ -217,6 +258,13 @@ pub const Gemma3Model = struct {
             &self.logits, &self.scores,
         };
         inline for (bufs) |buf| self.allocator.free(buf.*);
+        const pa = std.heap.page_allocator;
+        const pf_bufs = .{
+            &self.pf_hidden, &self.pf_hidden2, &self.pf_q, &self.pf_k,
+            &self.pf_v, &self.pf_attn_out, &self.pf_ff_gate, &self.pf_ff_up,
+        };
+        inline for (pf_bufs) |buf| if (buf.len > 0) pa.free(buf.*);
+        if (self.pf_positions.len > 0) pa.free(self.pf_positions);
         for (self.norm_cache[0..self.norm_cache_len]) |entry| self.allocator.free(entry.data);
         if (self.tiered_block_allocator) |*ta| {
             ta.freeSeqTable(&self.seq_table);
@@ -268,6 +316,158 @@ pub const Gemma3Model = struct {
         self.kv_seq_len += 1;
         self.perf.addToken();
         return math_ops.argmax(self.logits);
+    }
+
+    /// Batched prefill: process all token_ids through all layers.
+    /// Splits into chunks of `chunk_size` tokens. Returns argmax of
+    /// the last token's logits.
+    pub fn prefill(self: *Gemma3Model, token_ids: []const u32) !u32 {
+        if (token_ids.len == 0) return error.MissingTensor;
+        if (token_ids.len > self.max_seq_len) return error.KVCacheFull;
+
+        // For chunk_size=1 or single token, use the decode forward() path
+        // which runs entirely on GPU (no CPU backend swap overhead).
+        const cs: usize = self.chunk_size;
+        if (cs <= 1 or token_ids.len == 1) {
+            var last: u32 = 0;
+            for (token_ids) |tid| last = try self.forward(tid);
+            return last;
+        }
+        var offset: usize = 0;
+
+        while (offset < token_ids.len) {
+            const chunk_len = @min(cs, token_ids.len - offset);
+            try self.prefillChunk(token_ids[offset..][0..chunk_len], @intCast(offset));
+            offset += chunk_len;
+        }
+
+        // Final: rmsNorm + logits on the LAST token only
+        const last_in_chunk = (token_ids.len - 1) % cs;
+        const e: usize = self.n_embd;
+        @memcpy(self.hidden, self.pf_hidden[last_in_chunk * e ..][0..e]);
+
+        const norm_w = self.fmt.getTensor("output_norm.weight") orelse return error.MissingTensor;
+        self.be.rmsNorm(self.hidden.ptr, self.normAsF32(norm_w, e), self.hidden.ptr, e, self.rms_eps);
+
+        const out_w = self.fmt.getTensor("output.weight") orelse
+            self.fmt.getTensor("token_embd.weight") orelse return error.MissingTensor;
+        self.doGemv(self.hidden.ptr, out_w, self.logits.ptr, self.vocab_size, e);
+
+        self.be.sync();
+        if (self.final_logit_softcap > 0.0) self.applySoftcap();
+
+        self.kv_seq_len = token_ids.len;
+        self.perf.addToken();
+        return math_ops.argmax(self.logits);
+    }
+
+    fn prefillChunk(self: *Gemma3Model, token_ids: []const u32, base_pos: u32) !void {
+        const n_tok = token_ids.len;
+        const e: usize = self.n_embd;
+
+        // Ensure KV blocks allocated for all new positions
+        for (0..n_tok) |t| {
+            self.kv_seq_len = base_pos + t;
+            try model_mod.ensureKvBlock(self);
+        }
+
+        // Embedding lookup for all tokens
+        for (token_ids, 0..) |tid, t| {
+            self.lookupEmbd(tid);
+            @memcpy(self.pf_hidden[t * e ..][0..e], self.hidden);
+        }
+
+        // Build position array
+        for (0..n_tok) |t| {
+            self.pf_positions[t] = base_pos + @as(u32, @intCast(t));
+        }
+
+        for (0..self.n_layers) |li| {
+            if (self.cancelled.load(.acquire)) return error.Cancelled;
+            try self.prefillAttention(@intCast(li), n_tok);
+            try self.prefillFeedForward(@intCast(li), n_tok);
+        }
+
+        self.kv_seq_len = base_pos + n_tok;
+    }
+
+    fn prefillAttention(self: *Gemma3Model, li: u32, n_tok: usize) !void {
+        const e: usize = self.n_embd;
+        const nh: usize = self.n_head;
+        const nkv: usize = self.n_head_kv;
+        const hd: usize = self.head_dim;
+
+        const norm_w = self.fmt.layerTensor(li, "attn_norm.weight") orelse return error.MissingTensor;
+        self.be.rmsNormBatched(self.pf_hidden.ptr, self.normAsF32(norm_w, e), self.pf_hidden2.ptr, n_tok, e, self.rms_eps);
+
+        const qw = self.fmt.layerTensor(li, "attn_q.weight") orelse return error.MissingTensor;
+        const kw = self.fmt.layerTensor(li, "attn_k.weight") orelse return error.MissingTensor;
+        const vw = self.fmt.layerTensor(li, "attn_v.weight") orelse return error.MissingTensor;
+        self.doGemm(self.pf_hidden2.ptr, qw, self.pf_q.ptr, n_tok, nh * hd, e);
+        self.doGemm(self.pf_hidden2.ptr, kw, self.pf_k.ptr, n_tok, nkv * hd, e);
+        self.doGemm(self.pf_hidden2.ptr, vw, self.pf_v.ptr, n_tok, nkv * hd, e);
+
+        // Per-head QK norms — treat n_tok*n_heads as total heads
+        const qn = self.fmt.layerTensor(li, "attn_q_norm.weight") orelse return error.MissingTensor;
+        self.be.rmsNormMulti(self.pf_q.ptr, self.normAsF32(qn, hd), n_tok * nh, hd, self.rms_eps);
+        const kn = self.fmt.layerTensor(li, "attn_k_norm.weight") orelse return error.MissingTensor;
+        self.be.rmsNormMulti(self.pf_k.ptr, self.normAsF32(kn, hd), n_tok * nkv, hd, self.rms_eps);
+
+        // RoPE
+        const rd: usize = self.rope_dim;
+        const is_local = self.sliding_window_pattern > 0 and (li + 1) % self.sliding_window_pattern != 0;
+        if (is_local) {
+            self.be.ropeBatched(self.pf_q.ptr, self.pf_positions.ptr, n_tok, nh, hd, rd, self.rope_local_theta);
+            self.be.ropeBatched(self.pf_k.ptr, self.pf_positions.ptr, n_tok, nkv, hd, rd, self.rope_local_theta);
+        } else if (self.rope_freq_scale != 1.0) {
+            for (0..n_tok) |t| {
+                applyRopeScaled(self.pf_q.ptr + t * nh * hd, self.pf_positions[t], nh, hd, rd, self.rope_theta, self.rope_freq_scale);
+                applyRopeScaled(self.pf_k.ptr + t * nkv * hd, self.pf_positions[t], nkv, hd, rd, self.rope_theta, self.rope_freq_scale);
+            }
+        } else {
+            self.be.ropeBatched(self.pf_q.ptr, self.pf_positions.ptr, n_tok, nh, hd, rd, self.rope_theta);
+            self.be.ropeBatched(self.pf_k.ptr, self.pf_positions.ptr, n_tok, nkv, hd, rd, self.rope_theta);
+        }
+
+        // Fused causal attention
+        const kv_view = self.getLayerKvView(li);
+        const kv_keys_bytes: []u8 = std.mem.sliceAsBytes(kv_view.keys);
+        const kv_values_bytes: []u8 = std.mem.sliceAsBytes(kv_view.values);
+        const prev_len: usize = self.pf_positions[0];
+        // Use .f32 — PagedKvCache blocks store f32. Must match decode path.
+        self.be.sdpaPrefill(self.pf_q.ptr, self.pf_k.ptr, self.pf_v.ptr, kv_keys_bytes, kv_values_bytes, self.pf_attn_out.ptr, nh, nkv, hd, prev_len, n_tok, self.attn_scale, .f32);
+
+        // Output projection
+        const ow = self.fmt.layerTensor(li, "attn_output.weight") orelse return error.MissingTensor;
+        self.doGemm(self.pf_attn_out.ptr, ow, self.pf_hidden2.ptr, n_tok, e, nh * hd);
+
+        // Post-attention norm + residual
+        const post_norm = self.fmt.layerTensor(li, "post_attention_norm.weight") orelse return error.MissingTensor;
+        self.be.rmsNormBatched(self.pf_hidden2.ptr, self.normAsF32(post_norm, e), self.pf_hidden2.ptr, n_tok, e, self.rms_eps);
+        self.be.add(self.pf_hidden.ptr, self.pf_hidden2.ptr, self.pf_hidden.ptr, n_tok * e);
+    }
+
+    fn prefillFeedForward(self: *Gemma3Model, li: u32, n_tok: usize) !void {
+        const e: usize = self.n_embd;
+        const ff: usize = self.n_ff;
+
+        const norm_w = self.fmt.layerTensor(li, "ffn_norm.weight") orelse return error.MissingTensor;
+        self.be.rmsNormBatched(self.pf_hidden.ptr, self.normAsF32(norm_w, e), self.pf_hidden2.ptr, n_tok, e, self.rms_eps);
+
+        const gw = self.fmt.layerTensor(li, "ffn_gate.weight") orelse return error.MissingTensor;
+        const uw = self.fmt.layerTensor(li, "ffn_up.weight") orelse return error.MissingTensor;
+        const dw = self.fmt.layerTensor(li, "ffn_down.weight") orelse return error.MissingTensor;
+        self.doGemm(self.pf_hidden2.ptr, gw, self.pf_ff_gate.ptr, n_tok, ff, e);
+        self.doGemm(self.pf_hidden2.ptr, uw, self.pf_ff_up.ptr, n_tok, ff, e);
+
+        self.be.gelu(self.pf_ff_gate.ptr, self.pf_ff_gate.ptr, n_tok * ff);
+        self.be.mul(self.pf_ff_gate.ptr, self.pf_ff_up.ptr, self.pf_ff_gate.ptr, n_tok * ff);
+
+        self.doGemm(self.pf_ff_gate.ptr, dw, self.pf_hidden2.ptr, n_tok, e, ff);
+
+        const post_norm = self.fmt.layerTensor(li, "post_ffw_norm.weight") orelse return error.MissingTensor;
+        self.be.rmsNormBatched(self.pf_hidden2.ptr, self.normAsF32(post_norm, e), self.pf_hidden2.ptr, n_tok, e, self.rms_eps);
+        self.be.add(self.pf_hidden.ptr, self.pf_hidden2.ptr, self.pf_hidden.ptr, n_tok * e);
     }
 
     /// Reset the KV cache position for a new conversation.
@@ -529,6 +729,18 @@ pub const Gemma3Model = struct {
             k,
             self.mlx_bits,
         );
+    }
+
+    /// GEMM dispatch handling both regular and MLX-quantized weights.
+    /// For MLX-Q, falls back to loop-of-doGemv (no native MLX GEMM yet).
+    fn doGemm(self: *Gemma3Model, x: [*]const f32, t: TensorInfo, y: [*]f32, n_tok: usize, n_out: usize, n_in: usize) void {
+        if (t.dtype == .mlx_q) {
+            for (0..n_tok) |i| {
+                self.doGemv(x + i * n_in, t, y + i * n_out, n_out, n_in);
+            }
+            return;
+        }
+        self.be.gemm(x, .{ .data = t.data_ptr, .dtype = t.dtype }, y, n_tok, n_out, n_in);
     }
 
     fn lookupEmbd(self: *Gemma3Model, tok: u32) void {

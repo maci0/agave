@@ -28,6 +28,7 @@ const backend_mod = @import("backend.zig");
 const TensorData = backend_mod.TensorData;
 const DType = backend_mod.DType;
 const CpuBackend = backend_mod.CpuBackend;
+const KvQuantType = backend_mod.KvQuantType;
 
 // ── Embedded PTX ────────────────────────────────────────────────
 
@@ -155,6 +156,9 @@ pub const CudaBackend = struct {
     fn_gemv_fp8_e4m3: CUfunction = null,
     fn_gemv_fp8_e5m2: CUfunction = null,
     fn_sdpa: CUfunction = null,
+    fn_gemm_q8_0: CUfunction = null,
+    fn_rms_norm_batched: CUfunction = null,
+    fn_rope_batched: CUfunction = null,
 
     /// CPU backend for ops where CPU is genuinely faster than GPU dispatch (embLookup).
     cpu: CpuBackend = .{},
@@ -355,6 +359,9 @@ pub const CudaBackend = struct {
         self.fn_gemv_fp8_e4m3 = try self.getFunction("gemv_fp8_e4m3_kernel");
         self.fn_gemv_fp8_e5m2 = try self.getFunction("gemv_fp8_e5m2_kernel");
         self.fn_sdpa = try self.getFunction("sdpa_kernel");
+        self.fn_gemm_q8_0 = try self.getFunction("gemm_q8_0_kernel");
+        self.fn_rms_norm_batched = try self.getFunction("rms_norm_batched_kernel");
+        self.fn_rope_batched = try self.getFunction("rope_batched_kernel");
 
         return self;
     }
@@ -618,9 +625,20 @@ pub const CudaBackend = struct {
         @panic("CUDA siluMul: no GPU kernel — add a CUDA kernel");
     }
 
-    /// In-place per-head rmsNorm.
-    pub fn rmsNormMulti(_: *CudaBackend, _: [*]f32, _: [*]const f32, _: usize, _: usize, _: f32) void {
-        @panic("CUDA rmsNormMulti: no GPU kernel — add a CUDA kernel");
+    /// In-place per-head rmsNorm: n_heads independent heads, each head_dim elements.
+    /// Reuses the batched rmsNorm kernel (one block per head, shared weight).
+    pub fn rmsNormMulti(self: *CudaBackend, data: [*]f32, weight: [*]const f32, n_heads: usize, head_dim: usize, eps: f32) void {
+        var d_data = self.getOutputBuf(data, n_heads * head_dim * @sizeOf(f32));
+        var d_w = self.getInputBuf(weight, head_dim * @sizeOf(f32));
+        // in-place: input == output
+        var n_tok_u: u32 = @intCast(n_heads);
+        var dim_u: u32 = @intCast(head_dim);
+        var eps_v: f32 = eps;
+        var params = [_]?*anyopaque{
+            @ptrCast(&d_data), @ptrCast(&d_w), @ptrCast(&d_data),
+            @ptrCast(&n_tok_u), @ptrCast(&dim_u), @ptrCast(&eps_v),
+        };
+        self.launch(self.fn_rms_norm_batched, @intCast(n_heads), block_size, reduction_smem, &params);
     }
 
     /// Deinterleave paired data into two separate output buffers.
@@ -1024,6 +1042,77 @@ pub const CudaBackend = struct {
         // Shared memory: sl floats for attention scores (f32 = 4 bytes)
         const smem: u32 = sl_u32 * @sizeOf(f32);
         self.launch(self.fn_sdpa, @intCast(nh), block_size, smem, &params);
+    }
+
+    // ── Batched prefill ops ─────────────────────────────────────
+
+    /// GEMM: Y[n_tok × n_out] = X[n_tok × n_in] @ W[n_out × n_in]^T.
+    /// Native GPU kernel for Q8_0; others use loop-of-GEMV.
+    pub fn gemm(self: *CudaBackend, x: [*]const f32, w: TensorData, y: [*]f32, n_tok: usize, n_out: usize, n_in: usize) void {
+        if (n_tok <= 1) {
+            self.gemv(x, w, y, n_out, n_in);
+            return;
+        }
+        if (w.dtype == .q8_0) {
+            var d_x = self.getInputBuf(x, n_tok * n_in * @sizeOf(f32));
+            var d_w = self.getOrUpload(w.data, weightBytes(w.dtype, n_out, n_in));
+            var d_y = self.getOutputBuf(y, n_tok * n_out * @sizeOf(f32));
+            var n_out_u: u32 = @intCast(n_out);
+            var n_in_u: u32 = @intCast(n_in);
+            var n_tok_u: u32 = @intCast(n_tok);
+            var params = [_]?*anyopaque{
+                @ptrCast(&d_x), @ptrCast(&d_w), @ptrCast(&d_y),
+                @ptrCast(&n_out_u), @ptrCast(&n_in_u), @ptrCast(&n_tok_u),
+            };
+            self.launch(self.fn_gemm_q8_0, @intCast(n_out), block_size, reduction_smem, &params);
+            return;
+        }
+        // Fallback: loop-of-GEMV for other dtypes
+        for (0..n_tok) |t| self.gemv(x + t * n_in, w, y + t * n_out, n_out, n_in);
+    }
+
+    /// Batched RMS normalization — single GPU dispatch, one block per row.
+    pub fn rmsNormBatched(self: *CudaBackend, input: [*]const f32, weight: [*]const f32, output: [*]f32, n_tok: usize, dim: usize, eps: f32) void {
+        var d_in = self.getInputBuf(input, n_tok * dim * @sizeOf(f32));
+        var d_w = self.getInputBuf(weight, dim * @sizeOf(f32));
+        var d_out = self.getOutputBuf(output, n_tok * dim * @sizeOf(f32));
+        var n_tok_u: u32 = @intCast(n_tok);
+        var dim_u: u32 = @intCast(dim);
+        var eps_v: f32 = eps;
+        var params = [_]?*anyopaque{
+            @ptrCast(&d_in), @ptrCast(&d_w), @ptrCast(&d_out),
+            @ptrCast(&n_tok_u), @ptrCast(&dim_u), @ptrCast(&eps_v),
+        };
+        self.launch(self.fn_rms_norm_batched, @intCast(n_tok), block_size, reduction_smem, &params);
+    }
+
+    /// Batched RoPE — single GPU dispatch for all tokens.
+    pub fn ropeBatched(self: *CudaBackend, x: [*]f32, positions: [*]const u32, n_tok: usize, n_heads: usize, head_dim: usize, rope_dim: usize, theta: f32) void {
+        const half_rope = rope_dim / 2;
+        const total = n_tok * n_heads * half_rope;
+        const stride = n_heads * head_dim;
+        var d_x = self.getOutputBuf(x, n_tok * stride * @sizeOf(f32)); // in-place: both input+output
+        var d_pos = self.getInputBuf(positions, n_tok * @sizeOf(u32));
+        var n_tok_u: u32 = @intCast(n_tok);
+        var nh_u: u32 = @intCast(n_heads);
+        var hd_u: u32 = @intCast(head_dim);
+        var rd_u: u32 = @intCast(rope_dim);
+        var theta_v: f32 = theta;
+        var params = [_]?*anyopaque{
+            @ptrCast(&d_x), @ptrCast(&d_pos),
+            @ptrCast(&n_tok_u), @ptrCast(&nh_u), @ptrCast(&hd_u),
+            @ptrCast(&rd_u), @ptrCast(&theta_v),
+        };
+        const grid = @as(u32, @intCast((total + block_size - 1) / block_size));
+        self.launch(self.fn_rope_batched, grid, block_size, 0, &params);
+    }
+
+    /// Prefill SDPA — sequential single-token sdpa (GPU kernel handles KV append + FA).
+    pub fn sdpaPrefill(self: *CudaBackend, q: [*]const f32, k: [*]const f32, v: [*]const f32, kv_keys: []u8, kv_values: []u8, output: [*]f32, nh: usize, nkv: usize, hd: usize, prev_len: usize, n_tok: usize, scale: f32, kv_type: KvQuantType) void {
+        const kvd = nkv * hd;
+        for (0..n_tok) |t| {
+            self.sdpa(q + t * nh * hd, kv_keys, kv_values, k + t * kvd, v + t * kvd, output + t * nh * hd, nh, nkv, hd, prev_len + t, scale, kv_type);
+        }
     }
 
     /// DeltaNet SSM recurrence.

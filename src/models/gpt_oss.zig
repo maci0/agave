@@ -320,6 +320,15 @@ pub const GptOssModel = struct {
         return math_ops.argmax(self.logits_buf);
     }
 
+    /// Batched prefill — sequential. MoE routing selects different experts
+    /// per token, preventing straightforward batched FFN. Attention layers
+    /// could be batched but MoE dominates compute.
+    pub fn prefill(self: *GptOssModel, token_ids: []const u32) !u32 {
+        var last: u32 = 0;
+        for (token_ids) |tid| last = try self.forward(tid);
+        return last;
+    }
+
     /// Reset the KV cache and cancellation flag for a new conversation.
     pub fn resetCache(self: *GptOssModel) void {
         model_mod.resetKvCache(self);

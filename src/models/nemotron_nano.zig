@@ -354,6 +354,14 @@ pub const NemotronNanoModel = struct {
         return result;
     }
 
+    /// Batched prefill — sequential. Hybrid SSM/MoE/attention pattern
+    /// requires sequential SSM state updates. MoE routing is per-token.
+    pub fn prefill(self: *NemotronNanoModel, token_ids: []const u32) !u32 {
+        var last: u32 = 0;
+        for (token_ids) |tid| last = try self.forward(tid);
+        return last;
+    }
+
     /// Reset all SSM states, KV cache, and cancellation flag.
     pub fn resetCache(self: *NemotronNanoModel) void {
         for (0..self.n_layers) |i| {

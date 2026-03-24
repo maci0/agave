@@ -117,7 +117,23 @@ Unlike **LayerNorm** (an older normalization method that also subtracts the mean
 
 ---
 
-**In the code:** `src/ops/attention.zig` (SDPA), `src/backend/kernels/cpu/rope.zig` (RoPE), `src/backend/kernels/cpu/norm.zig` (RMSNorm, L2Norm), `src/backend/kernels/cpu/sdpa.zig` (CPU FlashAttention)
+## GEMV vs GEMM (Decode vs Prefill)
+
+During **decode** (one token at a time), each weight matrix computes one output vector: `y = W @ x`. This is a **GEMV** (General Matrix-Vector multiply) — bandwidth-bound because each weight element is loaded from memory, multiplied once, and discarded.
+
+During **prefill** (processing the entire prompt), all N prompt tokens can be processed through each layer together. The GEMV becomes a **GEMM** (General Matrix-Matrix multiply): `Y[N×out] = X[N×in] @ W[out×in]^T`. The key difference: each weight row is loaded once and multiplied against N input vectors. This gives **N× bandwidth savings** — the same weight data does N× more useful work.
+
+```
+GEMV (decode, 1 token):   load weight row → 1 dot product  → discard
+GEMM (prefill, N tokens): load weight row → N dot products → discard
+                                             ↑ N× more compute per byte loaded
+```
+
+With N=200 tokens, GEMM has 200× higher **arithmetic intensity** (compute-to-memory ratio), shifting the bottleneck from memory bandwidth to compute throughput. This is why batched prefill is dramatically faster for long prompts.
+
+**Chunked prefill** (`--prefill-batch-size N`, default 512) splits long prompts into fixed-size chunks. Each chunk is one batched pass through all layers. Memory overhead is bounded by the chunk size, not the full prompt length.
+
+**In the code:** `src/ops/attention.zig` (SDPA), `src/backend/kernels/cpu/rope.zig` (RoPE), `src/backend/kernels/cpu/norm.zig` (RMSNorm, L2Norm), `src/backend/kernels/cpu/sdpa.zig` (CPU FlashAttention), `src/backend/kernels/cpu/gemm.zig` (CPU GEMM), `src/backend/kernels/metal/gemm.metal` (Metal GEMM), `src/backend/kernels/cuda/gemm_q8_0.zig` (CUDA GEMM)
 
 **Math reference:** [Q/K/V projections](appendix-math.md#qkv-projections), [Attention scores](appendix-math.md#attention-score-computation), [Dot product](appendix-math.md#dot-product), [Softmax](appendix-math.md#softmax), [RMSNorm](appendix-math.md#rms-normalization-rmsnorm), [L2 norm](appendix-math.md#l2-normalization)
 

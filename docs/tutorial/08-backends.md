@@ -84,11 +84,29 @@ On **UMA** platforms (where CPU and GPU share the same physical memory chips, un
 
 All GPU backends use **deferred dispatch** — operations are encoded into **command buffers** (queues of GPU operations) without blocking. Models call `be.sync()` only when CPU code needs to read GPU-produced data.
 
+## Batched Prefill Dispatch
+
+During prefill, the backend dispatches **batched** versions of the core ops — GEMM (instead of GEMV), batched RMSNorm, batched RoPE, and fused causal SDPA:
+
+```
+Prefill layer pipeline (Gemma 3):
+  rmsNormBatched → GEMM(Q,K,V) → rmsNormMulti → ropeBatched
+    → sdpaPrefill(FA2) → GEMM(O) → rmsNormBatched → add
+    → rmsNormBatched → GEMM(gate,up) → gelu → mul → GEMM(down)
+    → rmsNormBatched → add
+```
+
+**Metal**: all batched ops are native GPU kernels. The GEMM uses one threadgroup per output row with weight reuse across tokens. The `sdpa_prefill_fa2` kernel reads old K/V from the cache and new K/V directly from GEMM output (dual-source), then a `copy_f32` kernel populates the cache — all in one command buffer with zero CPU-GPU flush.
+
+**CUDA**: native GPU GEMM (Q8_0), batched RMSNorm and RoPE kernels compiled to PTX. The SDPA uses sequential single-token GPU sdpa calls (already fused with KV append on GPU).
+
+**CPU**: parallel GEMV-based GEMM via thread pool, parallel-head SDPA with bulk KV append.
+
 ## Backend-Specific Notes
 
-**Metal** (`metal.zig`): MSL compute shaders with **threadgroup**-level (a group of threads that execute together and can share fast on-chip memory) `simd_sum` reduction. Buffer caching eliminates ~800 ObjC alloc/release per token. FlashAttention-2 with block_size=16 (fits 32KB threadgroup memory).
+**Metal** (`metal.zig`): MSL compute shaders with **threadgroup**-level (a group of threads that execute together and can share fast on-chip memory) `simd_sum` reduction. Buffer caching eliminates ~800 ObjC alloc/release per token. FlashAttention-2 with block_size=16 (fits 32KB threadgroup memory). Prefill: native GEMM (f32/Q8_0/Q4_0), batched RoPE, dual-source FA2, zero per-layer flush.
 
-**CUDA** (`cuda.zig`): Zig kernels compiled to PTX via `nvptx64-cuda` target — no CUDA C++ dependency. Driver API loaded dynamically via `dlopen`. Deferred execution with activation caching for zero-sync SDPA.
+**CUDA** (`cuda.zig`): Zig kernels compiled to PTX via `nvptx64-cuda` target — no CUDA C++ dependency. Driver API loaded dynamically via `dlopen`. Deferred execution with activation caching for zero-sync SDPA. Prefill: native GEMM (Q8_0), batched RMSNorm/RoPE.
 
 **Vulkan** (`vulkan.zig`): Pre-compiled SPIR-V compute shaders. Subgroup arithmetic for reductions. Fused single-dispatch normalization/softmax. Works on all vendors including Apple (via MoltenVK).
 

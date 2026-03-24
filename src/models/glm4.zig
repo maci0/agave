@@ -252,6 +252,15 @@ pub const Glm4Model = struct {
         return math_ops.argmax(self.logits_buf);
     }
 
+    /// Batched prefill — sequential. MLA attention could be batched but MoE
+    /// routing selects different experts per token, preventing batched FFN.
+    /// Sigmoid gating (independent expert scores) adds further complexity.
+    pub fn prefill(self: *Glm4Model, token_ids: []const u32) !u32 {
+        var last: u32 = 0;
+        for (token_ids) |tid| last = try self.forward(tid);
+        return last;
+    }
+
     /// Reset the KV cache position for a new conversation.
     pub fn resetCache(self: *Glm4Model) void {
         model_mod.resetKvCache(self);

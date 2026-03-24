@@ -53,8 +53,26 @@ Key operations (all at the scheduler layer, never in the token generation hot pa
 
 RadixAttention is the preferred strategy for production serving.
 
+## Chunked Prefill and Bulk KV Population
+
+During **batched prefill**, all prompt tokens are processed through each layer together using GEMM instead of GEMV. The KV cache is populated in bulk — each layer's `sdpaPrefill` kernel appends all N key/value vectors at once.
+
+**Chunked prefill** limits memory usage by splitting long prompts into fixed-size chunks (default 512 tokens). Each chunk is one batched pass through all layers:
+
+```
+prefill([2048 tokens], chunk_size=512):
+  chunk 0: tokens[0..512]    → GEMM + causal FA2 (prev_len=0)
+  chunk 1: tokens[512..1024] → GEMM + causal FA2 (prev_len=512)
+  chunk 2: tokens[1024..1536]→ GEMM + causal FA2 (prev_len=1024)
+  chunk 3: tokens[1536..2048]→ GEMM + causal FA2 (prev_len=1536)
+```
+
+Each chunk's attention is **causal within the chunk AND attends to all previous chunks' KV data** in the cache. The `prev_len` parameter tells the attention kernel how many cached positions precede this chunk.
+
+Prefill buffers are allocated once at model init, sized to `chunk_size × dim`. They are separate from the single-token decode buffers to avoid any regression on the decode path.
+
 ---
 
-**In the code:** `src/kvcache/manager.zig` (KvCache, PagedKvCache, RadixTree), `src/kvcache/block_allocator.zig` (block allocation), `src/kvcache/tiered.zig` (VRAM + RAM + SSD tiers), `src/ops/kv_quant.zig` (KV cache quantization)
+**In the code:** `src/kvcache/manager.zig` (KvCache, PagedKvCache, RadixTree), `src/kvcache/block_allocator.zig` (block allocation), `src/kvcache/tiered.zig` (VRAM + RAM + SSD tiers), `src/ops/kv_quant.zig` (KV cache quantization), `src/backend/kernels/cpu/sdpa_prefill.zig` (CPU prefill attention), `src/backend/kernels/metal/sdpa.metal` (`sdpa_prefill_fa2` — GPU prefill FA2)
 
 **Next:** [Chapter 6: State Space Models →](06-state-space-models.md)

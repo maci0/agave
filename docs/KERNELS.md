@@ -16,7 +16,7 @@ This document tracks the implementation status of all compute kernels across bac
 | Operation | CPU | Metal | Vulkan | CUDA | ROCm |
 | :--- | :---: | :---: | :---: | :---: | :---: |
 | RMS Norm | Native (SIMD) | Native (fused) | Native (fused) | Native | Native |
-| RMS Norm Multi (per-head) | Native | Native | Missing | Missing | Missing |
+| RMS Norm Multi (per-head) | Native | Native | Missing | Native | Missing |
 | L2 Norm | Native (SIMD) | Native | Native (fused) | Native | Native |
 | Softmax | Native (SIMD) | Native (3-pass) | Native (fused) | Native | Native |
 | SiLU | Native (SIMD) | Native | Native | Native | Native |
@@ -33,6 +33,11 @@ This document tracks the implementation status of all compute kernels across bac
 | Causal Conv1d | Native | Native (DeltaNet) | Native³ | Missing | Missing |
 | DeltaNet (4 kernels) | Native | Native | Missing | Missing | Missing |
 | Argmax / Final Logits | Native | CPU perf | CPU perf | CPU perf | CPU perf |
+| **Batched Prefill Ops** | | | | | |
+| GEMM (batched matmul) | Native (SIMD) | Native (f32/Q8_0/Q4_0) | Loop-of-GEMV | Native (Q8_0) | Loop-of-GEMV |
+| RMS Norm Batched | Native | Native (fused) | Loop-of-single | Native | Loop-of-single |
+| RoPE Batched | Native | Native | Loop-of-single | Native | Loop-of-single |
+| SDPA Prefill (causal FA2) | Native (SIMD) | Native (dual-source FA2) | Loop-of-SDPA | Loop-of-SDPA | Loop-of-SDPA |
 
 ¹ Single-row table read — CPU memcpy is faster than GPU dispatch + sync overhead.
 ² Metal FlashAttention-2 with block_size=16 (fits 32KB threadgroup memory). Online softmax, no blit encoders.
@@ -67,10 +72,10 @@ This document tracks the implementation status of all compute kernels across bac
 
 | Backend | Directory | Files |
 | :--- | :--- | :--- |
-| CPU | `src/backend/kernels/cpu/` | `gemv.zig` (dispatcher), `gemv_*.zig` (per-format), `norm.zig`, `activation.zig`, `elementwise.zig`, `rope.zig`, `softmax.zig`, `sdpa.zig`, `embedding.zig`, `deltanet.zig` |
-| Metal | `src/backend/kernels/metal/` | `common.metal`, `elementwise.metal`, `norm.metal`, `rope.metal`, `gemv.metal`, `sdpa.metal`, `deltanet.metal` |
+| CPU | `src/backend/kernels/cpu/` | `gemv.zig` (dispatcher), `gemv_*.zig` (per-format), `gemm.zig` (batched matmul), `norm.zig`, `activation.zig`, `elementwise.zig`, `rope.zig`, `softmax.zig`, `sdpa.zig`, `sdpa_prefill.zig` (causal prefill), `embedding.zig`, `deltanet.zig` |
+| Metal | `src/backend/kernels/metal/` | `common.metal`, `elementwise.metal` (incl. `copy_f32`), `norm.metal`, `rope.metal` (incl. `rope_batched_f32`), `gemv.metal`, `gemm.metal` (f32/Q8_0/Q4_0), `sdpa.metal` (incl. `sdpa_prefill_fa2`), `deltanet.metal` |
 | Vulkan | `src/backend/kernels/vulkan/` | `silu.comp`, `gelu.comp`, `add.comp`, `mul.comp`, `rms_norm.comp`, `softmax.comp`, `l2_norm.comp`, `rope.comp`, `sdpa.comp`, `embedding.comp`, `conv1d.comp`, `gemv_{f32,q8_0,q4_0,bf16,f16,q4_k,q5_k,q6_k,fp8_e4m3,fp8_e5m2}.comp` (+compiled `.spv`) |
-| CUDA | `src/backend/kernels/cuda/` | `common.zig` (shared primitives), `silu.zig`, `gelu.zig`, `add.zig`, `mul.zig`, `rms_norm.zig`, `softmax.zig`, `l2_norm.zig`, `rope.zig`, `sdpa.zig`, `gemv_{f32,bf16,f16,q8_0,q4_0,q4_0_batch,q4_k,q5_k,q6_k,fp8_e4m3,fp8_e5m2}.zig`, `all.zig` (aggregator) — compiled to PTX via `zig build ptx` |
+| CUDA | `src/backend/kernels/cuda/` | `common.zig` (shared primitives), `silu.zig`, `gelu.zig`, `add.zig`, `mul.zig`, `rms_norm.zig`, `rms_norm_batched.zig`, `softmax.zig`, `l2_norm.zig`, `rope.zig`, `rope_batched.zig`, `sdpa.zig`, `gemv_{f32,bf16,f16,q8_0,q4_0,q4_0_batch,q4_k,q5_k,q6_k,fp8_e4m3,fp8_e5m2}.zig`, `gemm_q8_0.zig`, `all.zig` (aggregator) — compiled to PTX via `zig build ptx` |
 | ROCm | `src/backend/kernels/rocm/` | `common.zig` (shared primitives), `silu.zig`, `gelu.zig`, `add.zig`, `mul.zig`, `rms_norm.zig`, `rms_norm_multi.zig`, `softmax.zig`, `l2_norm.zig`, `rope.zig`, `sdpa.zig`, `gemv_{f32,bf16,f16,q8_0,q4_0,q4_k,q5_k,q6_k,fp8_e4m3,fp8_e5m2,mlx_q4}.zig`, `sigmoid_mul.zig`, `deinterleave.zig`, `deltanet.zig`, `all.zig` (aggregator) — compiled to HSACO via `zig build amdgcn` |
 
 ## Priority Roadmap
@@ -78,7 +83,7 @@ This document tracks the implementation status of all compute kernels across bac
 ### Missing Kernels (will @panic if model needs them)
 
 **CUDA** — highest priority gaps:
-- sigmoidMul, siluMul, deinterleave, rmsNormMulti (needed for Qwen3.5 DeltaNet layers)
+- sigmoidMul, siluMul, deinterleave (needed for Qwen3.5 DeltaNet layers)
 - DeltaNet recurrence (4 kernels: gate_beta, conv1d, l2_norm, recurrence)
 - GEMV: q4_k, q5_k, q6_k already native; NVFP4/MXFP4 still missing
 - Paged SDPA

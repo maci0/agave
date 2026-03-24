@@ -15,6 +15,8 @@ const rope_kernel = @import("kernels/cpu/rope.zig");
 const activation_kernel = @import("kernels/cpu/activation.zig");
 const elementwise_kernel = @import("kernels/cpu/elementwise.zig");
 const sdpa_kernel = @import("kernels/cpu/sdpa.zig");
+const sdpa_prefill_kernel = @import("kernels/cpu/sdpa_prefill.zig");
+const gemm_kernel = @import("kernels/cpu/gemm.zig");
 const deltanet_kernel = @import("kernels/cpu/deltanet.zig");
 
 // ── Buffer sizes for system detection ─────────────────────────────
@@ -577,6 +579,95 @@ pub const CpuBackend = struct {
             }
         }
     };
+
+    /// GEMM: Y[n_tok × n_out] = X[n_tok × n_in] @ W[n_out × n_in]^T.
+    /// Each token's GEMV dispatches through the thread pool for parallelism.
+    pub fn gemm(self: *CpuBackend, x: [*]const f32, w: TensorData, y: [*]f32, n_tok: usize, n_out: usize, n_in: usize) void {
+        for (0..n_tok) |t| {
+            self.gemv(x + t * n_in, w, y + t * n_out, n_out, n_in);
+        }
+    }
+
+    /// Apply RMS normalization independently to each of n_tok rows.
+    pub fn rmsNormBatched(self: *CpuBackend, input: [*]const f32, weight: [*]const f32, output: [*]f32, n_tok: usize, dim: usize, eps: f32) void {
+        for (0..n_tok) |t| self.rmsNorm(input + t * dim, weight, output + t * dim, dim, eps);
+    }
+
+    /// Apply RoPE to n_tok vectors at positions[0..n_tok].
+    pub fn ropeBatched(_: *CpuBackend, x: [*]f32, positions: [*]const u32, n_tok: usize, n_heads: usize, head_dim: usize, rope_dim: usize, theta: f32) void {
+        const stride = n_heads * head_dim;
+        for (0..n_tok) |t| rope_kernel.rope(x + t * stride, positions[t], n_heads, head_dim, rope_dim, theta);
+    }
+
+    /// Prefill attention: causal self-attention for n_tok new tokens.
+    /// Appends all KV data in bulk, then computes attention per token
+    /// with parallel head dispatch via the thread pool.
+    pub fn sdpaPrefill(self: *CpuBackend, q: [*]const f32, k: [*]const f32, v: [*]const f32, kv_keys: []u8, kv_values: []u8, output: [*]f32, nh: usize, nkv: usize, hd: usize, prev_len: usize, n_tok: usize, scale: f32, kv_type: KvQuantType) void {
+        const kvd = nkv * hd;
+
+        // Bulk KV append: store all n_tok key/value vectors into the cache
+        for (0..n_tok) |t| {
+            const src_off = t * kvd;
+            const dst_elem = (prev_len + t) * kvd;
+            const dst_byte = kv_quant.kvByteOffset(kv_type, dst_elem);
+            kv_quant.kvStore(kv_keys.ptr + dst_byte, k + src_off, kvd, kv_type);
+            kv_quant.kvStore(kv_values.ptr + dst_byte, v + src_off, kvd, kv_type);
+        }
+
+        // Per-token causal attention using decode sdpa's parallel head dispatch
+        if (kv_type == .f32) {
+            const f32_keys: [*]const f32 = @ptrCast(@alignCast(kv_keys.ptr));
+            const f32_values: [*]const f32 = @ptrCast(@alignCast(kv_values.ptr));
+            for (0..n_tok) |t| {
+                const sl = prev_len + t + 1;
+                const q_off = t * nh * hd;
+                const out_off = t * nh * hd;
+                if (self.pool) |pool| {
+                    if (nh >= sdpa_parallel_min_heads) {
+                        var ctx = SdpaF32Ctx{
+                            .q = q + q_off,
+                            .keys = f32_keys,
+                            .values = f32_values,
+                            .output = output + out_off,
+                            .nh = nh,
+                            .nkv = nkv,
+                            .hd = hd,
+                            .sl = sl,
+                            .scale = scale,
+                        };
+                        pool.parallelFor(nh, 1, @ptrCast(&ctx), SdpaF32Ctx.work);
+                        continue;
+                    }
+                }
+                sdpa_kernel.sdpaHeads(q + q_off, f32_keys, f32_values, output + out_off, nh, nkv, hd, sl, scale);
+            }
+        } else {
+            for (0..n_tok) |t| {
+                const sl = prev_len + t + 1;
+                const q_off = t * nh * hd;
+                const out_off = t * nh * hd;
+                if (self.pool) |pool| {
+                    if (nh >= sdpa_parallel_min_heads) {
+                        var ctx = SdpaQuantCtx{
+                            .q = q + q_off,
+                            .keys = kv_keys.ptr,
+                            .values = kv_values.ptr,
+                            .output = output + out_off,
+                            .nh = nh,
+                            .nkv = nkv,
+                            .hd = hd,
+                            .sl = sl,
+                            .scale = scale,
+                            .kv_type = kv_type,
+                        };
+                        pool.parallelFor(nh, 1, @ptrCast(&ctx), SdpaQuantCtx.work);
+                        continue;
+                    }
+                }
+                sdpa_kernel.sdpaQuantHeads(q + q_off, kv_keys.ptr, kv_values.ptr, output + out_off, nh, nkv, hd, sl, scale, kv_type);
+            }
+        }
+    }
 
     /// Minimum query heads to justify parallelizing SDPA across heads.
     const sdpa_parallel_min_heads: usize = 4;

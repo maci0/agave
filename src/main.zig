@@ -61,6 +61,8 @@ const default_max_tokens: u32 = 512;
 /// 4096 balances memory usage with practical conversation length.
 /// Matches GPU SDPA kernel limit (threadgroup memory on Metal).
 const default_ctx_size: u32 = 4096;
+/// Default prefill chunk size (tokens per batch).
+const default_chunk_size: u32 = 512;
 /// Minimum prompt tokens before showing prefill progress indicator.
 const prefill_progress_threshold: usize = 50;
 /// Default free RAM estimate when platform detection is not implemented (16 GB).
@@ -257,6 +259,7 @@ const cli_params = clap.parseParamsComptime(
     \\    --model-info           Print model metadata and exit (combine with --json).
     \\    --profile              Profile per-op timing (halves throughput).
     \\    --mmap                 Use lazy mmap instead of eagerly paging weights into RAM.
+    \\    --prefill-batch-size <u32>  Prefill chunk size in tokens (default: 512).
     \\<str>...
     \\
 );
@@ -290,6 +293,7 @@ const CliArgs = struct {
     model_info: bool,
     profile: bool,
     use_mmap: bool,
+    prefill_batch_size: u32,
     /// Tracks which sampling/generation args the user explicitly set on the CLI.
     user_set: Recipe.Overrides = .{},
 };
@@ -404,6 +408,7 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
         .model_info = res.args.@"model-info" != 0,
         .profile = res.args.profile != 0,
         .use_mmap = res.args.mmap != 0,
+        .prefill_batch_size = res.args.@"prefill-batch-size" orelse default_chunk_size,
         .user_set = .{
             .temperature = res.args.temperature != null,
             .top_p = res.args.@"top-p" != null,
@@ -468,6 +473,7 @@ fn printUsage() void {
         \\      --model-info       Print model metadata and exit (combine with --json)
         \\      --profile          Profile per-op timing (halves throughput)
         \\      --mmap             Use lazy mmap instead of eagerly paging weights into RAM
+        \\      --prefill-batch-size <N>  Prefill chunk size in tokens [default: 512]
         \\
         \\EXAMPLES:
         \\  agave model.gguf                          Interactive REPL
@@ -1189,6 +1195,9 @@ fn initAndRun(
             if (comptime @hasField(ModelType, "block_allocator")) {
                 mdl.block_allocator.setCachePtr(&mdl.paged_cache);
             }
+            if (comptime @hasField(ModelType, "chunk_size")) {
+                mdl.chunk_size = cli.prefill_batch_size;
+            }
             const init_ms = elapsedMs(init_start);
             if (!g_quiet) {
                 var li = load_info_in;
@@ -1421,35 +1430,44 @@ fn generateAndPrintInner(
     defer allocator.free(token_ids);
     dbg("encoded {d} tokens, tok_kind={s}", .{ token_ids.len, @tagName(tok_kind) });
 
-    // BOS token — sent on first turn for models that require it (Gemma, etc.)
-    if (tok.bos_token_id > 0 and !skip_bos) {
-        dbg("sending BOS token (id={d}) before prefill...", .{tok.bos_token_id});
-        const bos_t0 = std.time.milliTimestamp();
-        _ = mdl.forward(tok.bos_token_id) catch return null;
-        dbg("BOS forward done in {d}ms", .{elapsedMs(bos_t0)});
-    }
-
-    // Prefill with progress
+    // Build prefill array: BOS (if needed) + prompt tokens
     const prefill_start = std.time.milliTimestamp();
     if (!g_quiet and token_ids.len > prefill_progress_threshold) {
         display.showPrefillStart(token_ids.len);
     }
-    dbg("entering prefill loop, {d} tokens", .{token_ids.len});
-    // Prefill all prompt tokens. The last forward() call's result is the
-    // first generated token — capture it to avoid re-processing the last
-    // prompt token (which would duplicate it in the KV/SSM state).
+
+    var prefill_buf: ?[]u32 = null;
+    defer if (prefill_buf) |ids| allocator.free(ids);
+
+    const prefill_toks: []const u32 = blk: {
+        if (tok.bos_token_id > 0 and !skip_bos and token_ids.len > 0) {
+            var all = allocator.alloc(u32, token_ids.len + 1) catch {
+                eprint("Error: out of memory for prefill buffer\n", .{});
+                break :blk token_ids;
+            };
+            all[0] = tok.bos_token_id;
+            @memcpy(all[1..], token_ids);
+            prefill_buf = all;
+            break :blk all;
+        } else if (tok.bos_token_id > 0 and !skip_bos) {
+            _ = mdl.forward(tok.bos_token_id) catch return null;
+            break :blk token_ids;
+        } else {
+            break :blk token_ids;
+        }
+    };
+
     var first_gen_token: u32 = 0;
-    for (token_ids, 0..) |tid, pi| {
-        dbg("prefill {d}/{d} token={d}", .{ pi + 1, token_ids.len, tid });
-        const pfill_t0 = std.time.milliTimestamp();
-        first_gen_token = mdl.forward(tid) catch |e| {
-            eprint("Error: forward failed on token {d}: {}\n", .{ tid, e });
+    if (prefill_toks.len > 0) {
+        dbg("entering batched prefill, {d} tokens", .{prefill_toks.len});
+        first_gen_token = mdl.prefill(prefill_toks) catch |e| {
+            eprint("Error: prefill failed: {}\n", .{e});
             return null;
         };
-        dbg("  done in {d}ms", .{elapsedMs(pfill_t0)});
+        dbg("prefill done in {d}ms", .{elapsedMs(prefill_start)});
     }
     const prefill_ms = elapsedMs(prefill_start);
-    if (!g_quiet and token_ids.len > prefill_progress_threshold) {
+    if (!g_quiet and prefill_toks.len > prefill_progress_threshold) {
         display.clearPrefillProgress();
     }
 

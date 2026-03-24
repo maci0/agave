@@ -26,7 +26,7 @@ pub const ForwardError = error{
 
 /// Model interface — all models implement this via comptime vtable generation.
 ///
-/// Usage: implement `forward`, `resetCache`, `cancel` methods and fields
+/// Usage: implement `forward`, `prefill`, `resetCache`, `cancel` methods and fields
 /// `eos_token_id`, `vocab_size`, `n_layers`, `n_embd`, `n_head`, `n_head_kv`,
 /// then call `Model.from(MyModel, &my_instance)`.
 pub const Model = struct {
@@ -36,6 +36,7 @@ pub const Model = struct {
     /// Function pointer table for polymorphic model dispatch.
     pub const VTable = struct {
         forward: *const fn (self: *anyopaque, token_id: u32) ForwardError!u32,
+        prefill: *const fn (self: *anyopaque, token_ids: []const u32) ForwardError!u32,
         reset_cache: *const fn (self: *anyopaque) void,
         cancel: *const fn (self: *anyopaque) void,
         get_eos_id: *const fn (self: *anyopaque) u32,
@@ -61,6 +62,11 @@ pub const Model = struct {
             .forward = @ptrCast(&struct {
                 fn call(self: *T, token_id: u32) ForwardError!u32 {
                     return self.forward(token_id);
+                }
+            }.call),
+            .prefill = @ptrCast(&struct {
+                fn call(self: *T, token_ids: []const u32) ForwardError!u32 {
+                    return self.prefill(token_ids);
                 }
             }.call),
             .reset_cache = @ptrCast(&struct {
@@ -126,6 +132,12 @@ pub const Model = struct {
     /// Errors: MissingTensor, KVCacheFull, Cancelled, OutOfMemory.
     pub fn forward(self: Model, token_id: u32) ForwardError!u32 {
         return self.vtable.forward(self.ptr, token_id);
+    }
+
+    /// Run batched prefill: process all token_ids through all layers,
+    /// populating the KV cache. Returns the predicted next-token ID.
+    pub fn prefill(self: Model, token_ids: []const u32) ForwardError!u32 {
+        return self.vtable.prefill(self.ptr, token_ids);
     }
 
     /// Return the raw logits buffer from the last forward() call.

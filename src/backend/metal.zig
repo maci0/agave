@@ -15,6 +15,7 @@ const backend_mod = @import("backend.zig");
 const TensorData = backend_mod.TensorData;
 const DType = backend_mod.DType;
 const CpuBackend = backend_mod.CpuBackend;
+const KvQuantType = backend_mod.KvQuantType;
 const ThreadPool = @import("../thread_pool.zig").ThreadPool;
 
 const msl_source = @embedFile("kernels/metal/common.metal") ++
@@ -22,6 +23,7 @@ const msl_source = @embedFile("kernels/metal/common.metal") ++
     @embedFile("kernels/metal/norm.metal") ++
     @embedFile("kernels/metal/rope.metal") ++
     @embedFile("kernels/metal/gemv.metal") ++
+    @embedFile("kernels/metal/gemm.metal") ++
     @embedFile("kernels/metal/sdpa.metal") ++
     @embedFile("kernels/metal/deltanet.metal");
 
@@ -101,6 +103,12 @@ pub const MetalBackend = struct {
     pipe_gemv_mxfp4_st: objc.id,
     pipe_gemv_fp8_e4m3: objc.id,
     pipe_gemv_fp8_e5m2: objc.id,
+    pipe_gemm_f32: objc.id,
+    pipe_gemm_q8_0: objc.id,
+    pipe_gemm_q4_0: objc.id,
+    pipe_rope_batched: objc.id,
+    pipe_sdpa_prefill: objc.id,
+    pipe_copy_f32: objc.id,
     pipe_gelu: objc.id,
     pipe_sigmoid_mul: objc.id,
     pipe_add_scaled: objc.id,
@@ -221,6 +229,12 @@ pub const MetalBackend = struct {
             .pipe_gemv_q5_k = undefined,
             .pipe_gemv_fp8_e4m3 = undefined,
             .pipe_gemv_fp8_e5m2 = undefined,
+            .pipe_gemm_f32 = undefined,
+            .pipe_gemm_q8_0 = undefined,
+            .pipe_gemm_q4_0 = undefined,
+            .pipe_rope_batched = undefined,
+            .pipe_sdpa_prefill = undefined,
+            .pipe_copy_f32 = undefined,
             .pipe_gelu = undefined,
             .pipe_sigmoid_mul = undefined,
             .pipe_add_scaled = undefined,
@@ -274,6 +288,12 @@ pub const MetalBackend = struct {
         self.pipe_gemv_q5_k = try self.makePipeline("gemv_q5_k");
         self.pipe_gemv_fp8_e4m3 = try self.makePipeline("gemv_fp8_e4m3");
         self.pipe_gemv_fp8_e5m2 = try self.makePipeline("gemv_fp8_e5m2");
+        self.pipe_gemm_f32 = try self.makePipeline("gemm_f32");
+        self.pipe_gemm_q8_0 = try self.makePipeline("gemm_q8_0");
+        self.pipe_gemm_q4_0 = try self.makePipeline("gemm_q4_0");
+        self.pipe_rope_batched = try self.makePipeline("rope_batched_f32");
+        self.pipe_sdpa_prefill = try self.makePipeline("sdpa_prefill_fa2");
+        self.pipe_copy_f32 = try self.makePipeline("copy_f32");
         self.pipe_gelu = try self.makePipeline("gelu_f32");
         self.pipe_sigmoid_mul = try self.makePipeline("sigmoid_mul_f32");
         self.pipe_add_scaled = try self.makePipeline("add_scaled_f32");
@@ -1275,6 +1295,159 @@ pub const MetalBackend = struct {
             setBytes(enc, @ptrCast(&sl_u), @sizeOf(u32), 7);
             setBytes(enc, @ptrCast(&scale), @sizeOf(f32), 8);
             self.endEncodeThreadgroups(enc, nh, sdpa_threadgroup_size);
+        }
+    }
+
+    // ── Batched prefill ops (CPU fallback) ──────────────────────
+    //
+    // Prefill buffers are CPU-allocated (GPA), not page-aligned Metal buffers.
+    // GPU kernels write to wrong addresses via getBufRef() on non-aligned ptrs.
+    // Use CPU fallback until native Metal prefill kernels with proper buffer
+    // management are implemented (Phase 2).
+
+    /// GEMM: Y[n_tok × n_out] = X[n_tok × n_in] @ W[n_out × n_in]^T.
+    /// One threadgroup per output row. Weight reused across TILE_T=8 tokens.
+    /// Threadgroup size matched to block count for full thread utilization.
+    pub fn gemm(self: *MetalBackend, x: [*]const f32, w: TensorData, y: [*]f32, n_tok: usize, n_out: usize, n_in: usize) void {
+        if (n_tok <= 1) {
+            self.gemv(x, w, y, n_out, n_in);
+            return;
+        }
+
+        const pipeline: objc.id = switch (w.dtype) {
+            .f32 => self.pipe_gemm_f32,
+            .q8_0 => self.pipe_gemm_q8_0,
+            .q4_0 => self.pipe_gemm_q4_0,
+            else => @panic("Metal GEMM: unsupported dtype — add GPU kernel"),
+        };
+
+        const w_bytes = weightBytes(w.dtype, n_out, n_in);
+        const x_ref = self.getBufRef(@ptrCast(x), n_tok * n_in * @sizeOf(f32));
+        const w_ref = self.getBufRef(@ptrCast(w.data), w_bytes);
+        const y_ref = self.getBufRef(@ptrCast(y), n_tok * n_out * @sizeOf(f32));
+
+        var n_out_val: u32 = @intCast(n_out);
+        var n_in_val: u32 = @intCast(n_in);
+        var n_tok_val: u32 = @intCast(n_tok);
+
+        const enc = self.getEncoder(pipeline);
+        setBuf(enc, x_ref, 0);
+        setBuf(enc, w_ref, 1);
+        setBuf(enc, y_ref, 2);
+        setBytes(enc, @ptrCast(&n_out_val), @sizeOf(u32), 3);
+        setBytes(enc, @ptrCast(&n_in_val), @sizeOf(u32), 4);
+        setBytes(enc, @ptrCast(&n_tok_val), @sizeOf(u32), 5);
+
+        const tg = gemvThreadgroupSize(w.dtype, n_in);
+        self.endEncodeThreadgroups(enc, n_out, tg);
+    }
+
+    /// Batched RMSNorm: GPU dispatch using rms_norm_fused_f32 with n_tok threadgroups.
+    /// Each threadgroup normalizes one row of dim elements, sharing the same weight.
+    pub fn rmsNormBatched(self: *MetalBackend, input: [*]const f32, weight: [*]const f32, output: [*]f32, n_tok: usize, dim: usize, eps: f32) void {
+        const total = n_tok * dim;
+        const in_ref = self.getBufRef(@ptrCast(input), total * @sizeOf(f32));
+        const w_ref = self.getBufRef(@ptrCast(weight), dim * @sizeOf(f32));
+        const out_ref = self.getBufRef(@ptrCast(output), total * @sizeOf(f32));
+
+        var dim_val: u32 = @intCast(dim);
+        var eps_val: f32 = eps;
+
+        const tg = @min(threadgroup_size, dim);
+        const enc = self.getEncoder(self.pipe_rms_norm_fused);
+        setBuf(enc, in_ref, 0);
+        setBuf(enc, w_ref, 1);
+        setBuf(enc, out_ref, 2);
+        setBytes(enc, @ptrCast(&dim_val), @sizeOf(u32), 3);
+        setBytes(enc, @ptrCast(&eps_val), @sizeOf(f32), 4);
+        self.endEncodeThreadgroups(enc, n_tok, tg);
+    }
+
+    /// Batched RoPE: single GPU dispatch for all n_tok tokens at different positions.
+    pub fn ropeBatched(self: *MetalBackend, x: [*]f32, positions: [*]const u32, n_tok: usize, n_heads: usize, head_dim: usize, rope_dim: usize, theta: f32) void {
+        const half_rope = rope_dim / 2;
+        const stride = n_heads * head_dim;
+        const x_ref = self.getBufRef(@ptrCast(x), n_tok * stride * @sizeOf(f32));
+        const pos_ref = self.getBufRef(@ptrCast(positions), n_tok * @sizeOf(u32));
+
+        var n_tok_val: u32 = @intCast(n_tok);
+        var nh_val: u32 = @intCast(n_heads);
+        var hd_val: u32 = @intCast(head_dim);
+        var rd_val: u32 = @intCast(rope_dim);
+        var theta_val: f32 = theta;
+
+        const enc = self.getEncoder(self.pipe_rope_batched);
+        setBuf(enc, x_ref, 0);
+        setBuf(enc, pos_ref, 1);
+        setBytes(enc, @ptrCast(&n_tok_val), @sizeOf(u32), 2);
+        setBytes(enc, @ptrCast(&nh_val), @sizeOf(u32), 3);
+        setBytes(enc, @ptrCast(&hd_val), @sizeOf(u32), 4);
+        setBytes(enc, @ptrCast(&rd_val), @sizeOf(u32), 5);
+        setBytes(enc, @ptrCast(&theta_val), @sizeOf(f32), 6);
+
+        const grid_size = n_tok * n_heads * half_rope;
+        self.endEncode1D(enc, self.pipe_rope_batched, grid_size);
+    }
+
+    /// Prefill SDPA: zero-flush GPU pipeline.
+    /// FA2 reads old K/V from cache, new K/V from pf_k/pf_v (no copy needed
+    /// for attention). Then GPU copy kernel writes pf_k/pf_v into the KV cache
+    /// for future chunks/decode. All dispatches in one command buffer.
+    pub fn sdpaPrefill(self: *MetalBackend, q: [*]const f32, k: [*]const f32, v: [*]const f32, kv_keys: []u8, kv_values: []u8, output: [*]f32, nh: usize, nkv: usize, hd: usize, prev_len: usize, n_tok: usize, scale: f32, kv_type: KvQuantType) void {
+        if (kv_type != .f32) @panic("Metal SDPA prefill: quantized KV not supported — use --kv-type f32");
+
+        const kvd = nkv * hd;
+        const f32_keys: [*]f32 = @ptrCast(@alignCast(kv_keys.ptr));
+        const f32_values: [*]f32 = @ptrCast(@alignCast(kv_values.ptr));
+        const copy_elems = n_tok * kvd;
+
+        // GPU dispatch 1: FA2 with dual K/V sources (cache + new)
+        const q_ref = self.getBufRef(@ptrCast(q), n_tok * nh * hd * @sizeOf(f32));
+        const kc_ref = self.getBufRef(@ptrCast(f32_keys), (prev_len + n_tok) * kvd * @sizeOf(f32));
+        const vc_ref = self.getBufRef(@ptrCast(f32_values), (prev_len + n_tok) * kvd * @sizeOf(f32));
+        const kn_ref = self.getBufRef(@ptrCast(k), copy_elems * @sizeOf(f32));
+        const vn_ref = self.getBufRef(@ptrCast(v), copy_elems * @sizeOf(f32));
+        const o_ref = self.getBufRef(@ptrCast(output), n_tok * nh * hd * @sizeOf(f32));
+
+        var nh_val: u32 = @intCast(nh);
+        var nkv_val: u32 = @intCast(nkv);
+        var hd_val: u32 = @intCast(hd);
+        var prev_val: u32 = @intCast(prev_len);
+        var ntok_val: u32 = @intCast(n_tok);
+        var scale_val: f32 = scale;
+
+        {
+            const enc = self.getEncoder(self.pipe_sdpa_prefill);
+            setBuf(enc, q_ref, 0);
+            setBuf(enc, kc_ref, 1); // K_cache (old positions)
+            setBuf(enc, vc_ref, 2); // V_cache (old positions)
+            setBuf(enc, kn_ref, 3); // K_new (this chunk)
+            setBuf(enc, vn_ref, 4); // V_new (this chunk)
+            setBuf(enc, o_ref, 5);
+            setBytes(enc, @ptrCast(&nh_val), @sizeOf(u32), 6);
+            setBytes(enc, @ptrCast(&nkv_val), @sizeOf(u32), 7);
+            setBytes(enc, @ptrCast(&hd_val), @sizeOf(u32), 8);
+            setBytes(enc, @ptrCast(&prev_val), @sizeOf(u32), 9);
+            setBytes(enc, @ptrCast(&ntok_val), @sizeOf(u32), 10);
+            setBytes(enc, @ptrCast(&scale_val), @sizeOf(f32), 11);
+            self.endEncodeThreadgroups(enc, n_tok * nh, sdpa_threadgroup_size);
+        }
+
+        // GPU dispatch 2: copy pf_k/pf_v → KV cache at prev_len offset
+        // Contiguous: pf_k[0..n_tok*kvd] → kv_keys[prev_len*kvd..]
+        {
+            const dst_k = self.getBufRef(@ptrCast(f32_keys + prev_len * kvd), copy_elems * @sizeOf(f32));
+            const dst_v = self.getBufRef(@ptrCast(f32_values + prev_len * kvd), copy_elems * @sizeOf(f32));
+            // Copy keys
+            const enc_k = self.getEncoder(self.pipe_copy_f32);
+            setBuf(enc_k, kn_ref, 0);
+            setBuf(enc_k, dst_k, 1);
+            self.endEncode1D(enc_k, self.pipe_copy_f32, copy_elems);
+            // Copy values
+            const enc_v = self.getEncoder(self.pipe_copy_f32);
+            setBuf(enc_v, vn_ref, 0);
+            setBuf(enc_v, dst_v, 1);
+            self.endEncode1D(enc_v, self.pipe_copy_f32, copy_elems);
         }
     }
 

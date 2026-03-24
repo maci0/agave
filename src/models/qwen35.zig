@@ -955,6 +955,16 @@ pub const Qwen35Model = struct {
         );
     }
 
+    /// Batched prefill — sequential. DeltaNet SSM layers require sequential
+    /// state updates (recurrence depends on previous token). Only every
+    /// full_attn_interval-th layer is pure attention — batching those alone
+    /// would add complexity for marginal gain.
+    pub fn prefill(self: *Qwen35Model, token_ids: []const u32) !u32 {
+        var last: u32 = 0;
+        for (token_ids) |tid| last = try self.forward(tid);
+        return last;
+    }
+
     /// Reset all KV cache and SSM state for a new conversation.
     pub fn resetCache(self: *Qwen35Model) void {
         for (0..self.n_layers) |i| {

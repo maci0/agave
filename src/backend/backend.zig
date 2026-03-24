@@ -305,6 +305,26 @@ pub const NullBackend = struct {
         unreachable;
     }
 
+    /// Stub GEMM — unreachable (backend disabled).
+    pub fn gemm(_: *NullBackend, _: [*]const f32, _: TensorData, _: [*]f32, _: usize, _: usize, _: usize) void {
+        unreachable;
+    }
+
+    /// Stub batched rmsNorm — unreachable (backend disabled).
+    pub fn rmsNormBatched(_: *NullBackend, _: [*]const f32, _: [*]const f32, _: [*]f32, _: usize, _: usize, _: f32) void {
+        unreachable;
+    }
+
+    /// Stub batched RoPE — unreachable (backend disabled).
+    pub fn ropeBatched(_: *NullBackend, _: [*]f32, _: [*]const u32, _: usize, _: usize, _: usize, _: usize, _: f32) void {
+        unreachable;
+    }
+
+    /// Stub prefill SDPA — unreachable (backend disabled).
+    pub fn sdpaPrefill(_: *NullBackend, _: [*]const f32, _: [*]const f32, _: [*]const f32, _: []u8, _: []u8, _: [*]f32, _: usize, _: usize, _: usize, _: usize, _: usize, _: f32, _: KvQuantType) void {
+        unreachable;
+    }
+
     /// Stub DeltaNet recurrence — unreachable (backend disabled).
     pub fn deltaNet(_: *NullBackend, _: [*]const f32, _: [*]f32, _: [*]const f32, _: [*]const f32, _: [*]const f32, _: [*]f32, _: [*]f32, _: []f32, _: [*]const f32, _: [*]const f32, _: [*]const f32, _: [*]const f32, _: DeltaNetParams) void {
         unreachable;
@@ -395,6 +415,34 @@ pub const Backend = union(enum) {
     pub inline fn gemv(self: Backend, x: [*]const f32, w: TensorData, y: [*]f32, n: usize, k: usize) void {
         switch (self) {
             inline else => |be| be.gemv(x, w, y, n, k),
+        }
+    }
+
+    /// Y[n_tok × n_out] = X[n_tok × n_in] @ W[n_out × n_in]^T.
+    pub inline fn gemm(self: Backend, x: [*]const f32, w: TensorData, y: [*]f32, n_tok: usize, n_out: usize, n_in: usize) void {
+        switch (self) {
+            inline else => |be| be.gemm(x, w, y, n_tok, n_out, n_in),
+        }
+    }
+
+    /// Normalize each of n_tok rows independently.
+    pub inline fn rmsNormBatched(self: Backend, input: [*]const f32, weight: [*]const f32, output: [*]f32, n_tok: usize, dim: usize, eps: f32) void {
+        switch (self) {
+            inline else => |be| be.rmsNormBatched(input, weight, output, n_tok, dim, eps),
+        }
+    }
+
+    /// Apply RoPE to n_tok vectors at positions[0..n_tok].
+    pub inline fn ropeBatched(self: Backend, x: [*]f32, positions: [*]const u32, n_tok: usize, n_heads: usize, head_dim: usize, rope_dim: usize, theta: f32) void {
+        switch (self) {
+            inline else => |be| be.ropeBatched(x, positions, n_tok, n_heads, head_dim, rope_dim, theta),
+        }
+    }
+
+    /// Prefill attention: causal self-attention for n_tok new tokens.
+    pub inline fn sdpaPrefill(self: Backend, q: [*]const f32, k: [*]const f32, v: [*]const f32, kv_keys: []u8, kv_values: []u8, output: [*]f32, nh: usize, nkv: usize, hd: usize, prev_len: usize, n_tok: usize, scale: f32, kv_type: KvQuantType) void {
+        switch (self) {
+            inline else => |be| be.sdpaPrefill(q, k, v, kv_keys, kv_values, output, nh, nkv, hd, prev_len, n_tok, scale, kv_type),
         }
     }
 

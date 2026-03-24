@@ -40,4 +40,9 @@ comptime {
 
     // Batched GEMV
     _ = @import("gemv_q4_0_batch.zig");
+
+    // Batched prefill
+    _ = @import("gemm_q8_0.zig");
+    _ = @import("rms_norm_batched.zig");
+    _ = @import("rope_batched.zig");
 }

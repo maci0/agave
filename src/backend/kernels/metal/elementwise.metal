@@ -1,4 +1,15 @@
-// Element-wise operations: SiLU, add, mul, GELU, sigmoid_mul, deinterleave, silu_mul, kv_append.
+// Element-wise operations: SiLU, add, mul, GELU, sigmoid_mul, deinterleave, silu_mul, kv_append, copy.
+
+// GPU memory copy: dst[i] = src[i]
+kernel void copy_f32(
+    device const float* src [[buffer(0)]],
+    device float* dst       [[buffer(1)]],
+    uint tid [[thread_position_in_grid]],
+    uint grid_size [[threads_per_grid]])
+{
+    // grid_size == total element count (dispatched via endEncode1D)
+    if (tid < grid_size) dst[tid] = src[tid];
+}
 
 // SiLU activation: y = x * sigmoid(x)
 kernel void silu_f32(
