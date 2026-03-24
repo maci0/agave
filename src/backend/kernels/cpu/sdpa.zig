@@ -121,19 +121,47 @@ pub fn sdpaQuantHead(q: [*]const f32, keys: [*]const u8, values: [*]const u8, ou
     }
 }
 
-/// In-place softmax over a score buffer.
+/// In-place softmax over a score buffer. SIMD-accelerated max, exp+sum, and normalize.
 fn softmax(scores: []f32) void {
-    var max_val: f32 = scores[0];
-    for (scores[1..]) |s| if (s > max_val) {
-        max_val = s;
-    };
-    var sum: f32 = 0;
-    for (scores) |*s| {
-        s.* = @exp(s.* - max_val);
-        sum += s.*;
+    const n = scores.len;
+    if (n == 0) return;
+
+    // Pass 1: find max (SIMD)
+    var max_acc: V8 = @splat(scores[0]);
+    var i: usize = 0;
+    while (i + 8 <= n) : (i += 8) {
+        const sv: V8 = scores[i..][0..8].*;
+        max_acc = @max(max_acc, sv);
+    }
+    var max_val: f32 = @reduce(.Max, max_acc);
+    while (i < n) : (i += 1) {
+        if (scores[i] > max_val) max_val = scores[i];
+    }
+
+    // Pass 2: exp and sum (fused, SIMD)
+    const max_v: V8 = @splat(max_val);
+    var sum_acc: V8 = v8zero;
+    i = 0;
+    while (i + 8 <= n) : (i += 8) {
+        const sv: V8 = scores[i..][0..8].*;
+        const ev = @exp(sv - max_v);
+        scores[i..][0..8].* = ev;
+        sum_acc += ev;
+    }
+    var sum: f32 = @reduce(.Add, sum_acc);
+    while (i < n) : (i += 1) {
+        scores[i] = @exp(scores[i] - max_val);
+        sum += scores[i];
+    }
+
+    // Pass 3: normalize (SIMD)
+    const inv_v: V8 = @splat(1.0 / sum);
+    i = 0;
+    while (i + 8 <= n) : (i += 8) {
+        scores[i..][0..8].* = @as(V8, scores[i..][0..8].*) * inv_v;
     }
     const inv_sum = 1.0 / sum;
-    for (scores) |*s| s.* *= inv_sum;
+    while (i < n) : (i += 1) scores[i] *= inv_sum;
 }
 
 test "sdpa single head single position" {

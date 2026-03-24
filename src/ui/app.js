@@ -99,8 +99,8 @@ function renderContent(el, content, final) {
       return t ? '\n> ' + t.replace(/\n/g, '\n> ') + '\n\n' : '';
     });
     if (dc.indexOf('<think>') === 0) dc = dc.substring(7);
-    var parsed = marked.parse(dc);
-    var sanitized = typeof DOMPurify !== 'undefined' ? DOMPurify.sanitize(parsed) : parsed;
+    var parsed = typeof marked !== 'undefined' ? marked.parse(dc) : dc.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\n/g,'<br>');
+    var sanitized = typeof DOMPurify !== 'undefined' ? DOMPurify.sanitize(parsed) : parsed.replace(/<script[\s\S]*?<\/script>/gi, '');
     var container = document.createElement('div'); container.innerHTML = sanitized;
     while (container.firstChild) el.appendChild(container.firstChild);
     processCode(el);
@@ -222,7 +222,7 @@ function showEmpty() {
   var h2 = document.createElement('h2'); h2.textContent = 'agave';
   var p = document.createElement('p'); p.textContent = 'High-performance LLM inference engine';
   var hints = document.createElement('div'); hints.className = 'hints';
-  ['Type a message to start', '/help for commands'].forEach(function(t) {
+  ['Type a message to start', '/help for commands', 'Shift+Enter for new line'].forEach(function(t) {
     var s = document.createElement('span'); s.className = 'hint'; s.textContent = t; hints.appendChild(s);
   });
   empty.appendChild(icon); empty.appendChild(h2); empty.appendChild(p); empty.appendChild(hints);

@@ -98,6 +98,9 @@ test "CUDA SDPA warp-parallel dual-delta correctness" {
     std.debug.print("  GPU max error: {e:.2}\n", .{max_gpu_err});
     std.debug.print("  GPU/CPU ratio: {d:.2}×\n", .{max_gpu_err / max_cpu_err});
 
+    // Both errors must be small in absolute terms (not just relative)
+    try std.testing.expect(max_cpu_err < 1e-3);
+    try std.testing.expect(max_gpu_err < 1e-3);
     // Accept GPU if error <= 2× CPU error
     try std.testing.expect(max_gpu_err <= 2.0 * max_cpu_err);
 }

@@ -57,15 +57,14 @@ pub fn scaledDotProductAttention(
         return;
     }
 
-    // Windowed / offset fallback — CPU path with inline softmax.
+    // Windowed / offset fallback — explicit KV append + CPU-side SDPA loop.
     // Sync first to flush any pending GPU ops (no-op on CPU backend).
     be.sync();
 
     // KV append: quantize k_buf/v_buf into cache
-    const k_byte_off = kv_quant.kvByteOffset(kv_type, seq_len * kvd);
-    const v_byte_off = kv_quant.kvByteOffset(kv_type, seq_len * kvd);
-    kv_quant.kvStore(kv_keys.ptr + k_byte_off, k_buf.ptr, kvd, kv_type);
-    kv_quant.kvStore(kv_values.ptr + v_byte_off, v_buf.ptr, kvd, kv_type);
+    const kv_byte_off = kv_quant.kvByteOffset(kv_type, seq_len * kvd);
+    kv_quant.kvStore(kv_keys.ptr + kv_byte_off, k_buf.ptr, kvd, kv_type);
+    kv_quant.kvStore(kv_values.ptr + kv_byte_off, v_buf.ptr, kvd, kv_type);
     const sl = seq_len + 1;
 
     const win_start = if (window) |w| w.start else 0;
@@ -154,8 +153,7 @@ pub fn scaledDotProductAttention(
 
 const CacheBlock = @import("../kvcache/manager.zig").CacheBlock;
 
-/// Paged SDPA: same as scaledDotProductAttention but reads K/V from
-/// block tables instead of flat contiguous arrays.
+/// Paged SDPA: block-table-based attention (f32 KV cache only, no windowing/offsets).
 ///
 /// Parameters:
 ///   - q: Query buffer [nh * hd].

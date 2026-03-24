@@ -94,6 +94,9 @@ pub const BackendInfo = struct {
 
     // ── System-level info (populated by caller, not backend) ──
 
+    /// OS version string (e.g., "macOS 14.2.1", "Linux 6.5.0"). Populated by main.
+    os_version: []const u8 = "",
+
     /// CPU thread count (populated by main).
     n_threads: u32 = 0,
 
@@ -126,6 +129,9 @@ pub const detectCacheSizes = @import("cpu.zig").detectCacheSizes;
 
 /// Detect available (free) system memory in bytes. Re-exported from cpu.zig.
 pub const detectAvailMem = @import("cpu.zig").detectAvailMem;
+
+/// Detect OS version string (e.g., "macOS 14.2.1", "Linux 6.5.0"). Re-exported from cpu.zig.
+pub const detectOsVersion = @import("cpu.zig").detectOsVersion;
 
 /// Pre-allocated capacity for GPU buffer caches (weights + activations + KV).
 /// Used by Metal, CUDA, Vulkan, and ROCm backends to avoid OOM during hot-path cache puts.
@@ -209,6 +215,16 @@ pub const NullBackend = struct {
         unreachable;
     }
 
+    /// Stub gemvT — unreachable (backend disabled).
+    pub fn gemvT(_: *NullBackend, _: [*]const f32, _: [*]const u8, _: [*]f32, _: usize, _: usize) void {
+        unreachable;
+    }
+
+    /// Stub addScaled — unreachable (backend disabled).
+    pub fn addScaled(_: *NullBackend, _: [*]const f32, _: [*]f32, _: f32, _: usize) void {
+        unreachable;
+    }
+
     /// Stub fused add + rmsNorm — unreachable (backend disabled).
     pub fn addRmsNorm(_: *NullBackend, _: [*]f32, _: [*]const f32, _: [*]const f32, _: [*]f32, _: usize, _: f32) void {
         unreachable;
@@ -276,6 +292,11 @@ pub const NullBackend = struct {
 
     /// Stub MLX-Q GEMV — unreachable (backend disabled).
     pub fn gemvMlxQ(_: *NullBackend, _: [*]const f32, _: [*]const u8, _: [*]const u8, _: [*]const u8, _: [*]f32, _: usize, _: usize, _: u32) void {
+        unreachable;
+    }
+
+    /// Stub MXFP4 SafeTensors GEMV — unreachable (backend disabled).
+    pub fn gemvMxfp4St(_: *NullBackend, _: [*]const f32, _: [*]const u8, _: [*]const u8, _: [*]f32, _: usize, _: usize) void {
         unreachable;
     }
 
@@ -402,6 +423,22 @@ pub const Backend = union(enum) {
     pub inline fn add(self: Backend, a: [*]const f32, b: [*]const f32, output: [*]f32, n: usize) void {
         switch (self) {
             inline else => |be| be.add(a, b, output, n),
+        }
+    }
+
+    /// Transposed GEMV: y[out_dim] = W^T @ x[in_dim] for Q8_0 3D weights.
+    /// W is stored as [in_dim rows, out_dim cols] in Q8_0 blocks.
+    pub inline fn gemvT(self: Backend, x: [*]const f32, w: [*]const u8, y: [*]f32, out_dim: usize, in_dim: usize) void {
+        switch (self) {
+            inline else => |be| be.gemvT(x, w, y, out_dim, in_dim),
+        }
+    }
+
+    /// Scaled accumulate: dst[i] += src[i] * scale.
+    /// Used for MoE expert output accumulation to avoid per-expert GPU sync.
+    pub inline fn addScaled(self: Backend, src: [*]const f32, dst: [*]f32, scale: f32, n: usize) void {
+        switch (self) {
+            inline else => |be| be.addScaled(src, dst, scale, n),
         }
     }
 
@@ -561,10 +598,21 @@ pub const Backend = union(enum) {
     ///   - y: Output vector [n].
     ///   - n: Number of output rows.
     ///   - k: Number of input columns.
-    ///   - bits: Quantization bit width (4 or 6).
+    ///   - bits: Quantization bit width (4, 6, or 8).
     pub inline fn gemvMlxQ(self: Backend, x: [*]const f32, weight: [*]const u8, scales: [*]const u8, biases: [*]const u8, y: [*]f32, n: usize, k: usize, bits: u32) void {
         switch (self) {
             inline else => |be| be.gemvMlxQ(x, weight, scales, biases, y, n, k, bits),
+        }
+    }
+
+    /// Compute y[n] = W[n,k] @ x[k] for MXFP4 SafeTensors layout (MLX-style packing).
+    ///
+    /// MXFP4 stores weights as U32-packed 4-bit nibbles (8 per word) with
+    /// FP8 E4M3 per-group scales (group_size=32). No quantization bias.
+    /// Dequant: float_val = mxfp4_lut[nibble] * fp8_scale.
+    pub inline fn gemvMxfp4St(self: Backend, x: [*]const f32, weight: [*]const u8, scale: [*]const u8, y: [*]f32, n: usize, k: usize) void {
+        switch (self) {
+            inline else => |be| be.gemvMxfp4St(x, weight, scale, y, n, k),
         }
     }
 

@@ -8,16 +8,16 @@ const std = @import("std");
 const net = std.net;
 const Allocator = std.mem.Allocator;
 
-const Model = @import("models/model.zig").Model;
-const Tokenizer = @import("tokenizer/tokenizer.zig").Tokenizer;
-const chat_tmpl_mod = @import("chat_template.zig");
+const Model = @import("../models/model.zig").Model;
+const Tokenizer = @import("../tokenizer/tokenizer.zig").Tokenizer;
+const chat_tmpl_mod = @import("../chat_template.zig");
 const ChatTemplate = chat_tmpl_mod.ChatTemplate;
 const Message = chat_tmpl_mod.Message;
-const max_eog_ids = @import("arch.zig").max_eog_ids;
+const max_eog_ids = @import("../arch.zig").max_eog_ids;
 const scheduler = @import("scheduler.zig");
 const RateLimiter = @import("rate_limiter.zig").RateLimiter;
 const Metrics = @import("metrics.zig").Metrics;
-const TieredKvCache = @import("kvcache/tiered.zig").TieredKvCache;
+const TieredKvCache = @import("../kvcache/tiered.zig").TieredKvCache;
 
 // ── Server constants ────────────────────────────────────────────
 const slog_buf_size: usize = 4096;
@@ -237,10 +237,10 @@ fn logGeneration(tokens: u32, time_ms: u64, tps: f32) void {
 /// Web UI HTML page — assembled at comptime from src/ui/ files.
 /// Edit src/ui/style.css for styles, src/ui/app.js for behavior,
 /// src/ui/head.html for <head> content, src/ui/body.html for page structure.
-const html_page = @embedFile("ui/head.html") ++
-    @embedFile("ui/style.css") ++
-    @embedFile("ui/body.html") ++
-    @embedFile("ui/app.js") ++
+const html_page = @embedFile("../ui/head.html") ++
+    @embedFile("../ui/style.css") ++
+    @embedFile("../ui/body.html") ++
+    @embedFile("../ui/app.js") ++
     "\n</script></body></html>\n";
 
 /// Generate a unique request ID (monotonically increasing counter).
@@ -2092,6 +2092,11 @@ pub fn run(allocator: Allocator, model: *Model, tok: *Tokenizer, chat_tmpl: Chat
         std.fs.File.stderr().writeAll(msg) catch {};
         return error.ListenError;
     };
+
+    // Set accept timeout so signal handler can interrupt the loop.
+    // Without this, accept() blocks indefinitely and Ctrl+C doesn't work on macOS.
+    const timeout = std.posix.timeval{ .sec = 1, .usec = 0 };
+    std.posix.setsockopt(tcp.stream.handle, std.posix.SOL.SOCKET, std.posix.SO.RCVTIMEO, std.mem.asBytes(&timeout)) catch {};
     defer tcp.deinit();
 
     const t = getTimeComponents();
@@ -2124,6 +2129,8 @@ pub fn run(allocator: Allocator, model: *Model, tok: *Tokenizer, chat_tmpl: Chat
     while (!g_server.shutdown_requested.load(.acquire)) {
         const conn = tcp.accept() catch |err| {
             if (g_server.shutdown_requested.load(.acquire)) break;
+            // Timeout is expected — allows periodic shutdown check
+            if (err == error.WouldBlock) continue;
             std.log.err("Accept failed: {}", .{err});
             continue;
         };

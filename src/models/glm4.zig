@@ -22,6 +22,9 @@ const kv_quant = @import("../ops/kv_quant.zig");
 const PagedKvCache = kvcache.PagedKvCache;
 const SeqBlockTable = kvcache.SeqBlockTable;
 
+const DType = format_mod.DType;
+const quant_ops = @import("../ops/quant.zig");
+
 /// Maximum top-k experts for stack-allocated selection arrays.
 const max_active_experts: usize = 8;
 /// Buffer size for tensor name formatting (layer prefix + suffix).
@@ -64,7 +67,7 @@ pub const Glm4Model = struct {
     q_compressed: []f32 = &.{}, // [q_lora_rank]
     q_full: []f32 = &.{}, // [n_head * q_head_dim] where q_head_dim = nope + rope
     kv_proj: []f32 = &.{}, // [kv_lora_rank + qk_rope_head_dim]
-    kv_latent: []f32 = &.{}, // [kv_lora_rank] (after layernorm)
+    kv_latent: []f32 = &.{}, // [kv_lora_rank]
     k_buf: []f32 = &.{}, // [n_head * (qk_nope_head_dim + qk_rope_head_dim)]
     v_buf: []f32 = &.{}, // [n_head * v_head_dim]
     attn_out: []f32 = &.{}, // [n_head * v_head_dim]
@@ -88,6 +91,9 @@ pub const Glm4Model = struct {
 
     // Name buffer for tensor lookups
     name_buf: [name_buf_size]u8 = undefined,
+
+    // Thread pool for parallel CPU work
+    pool: ?*@import("../thread_pool.zig").ThreadPool = null,
 
     /// Initialize the model from format metadata and allocate all working buffers.
     pub fn init(allocator: Allocator, f: Format, be: Backend, ctx_size: u32, kv_type: kv_quant.KvQuantType, tiered_cache: ?*TieredKvCache) !Glm4Model {
@@ -170,17 +176,17 @@ pub const Glm4Model = struct {
             self.tiered_block_allocator = ta;
         } else {
             const max_kv_dim = @max(kvd, vd);
-            const block_size = kvcache.default_block_size;
-            const num_blocks = (self.max_seq_len + block_size - 1) / block_size * nl;
-            var paged_cache = try PagedKvCache.init(allocator, nl, max_kv_dim, num_blocks, block_size);
-            errdefer paged_cache.deinit();
-            var block_allocator = BlockAllocator.init(&paged_cache, allocator);
-            var seq_table = try block_allocator.allocateSeqTable(nl);
-            errdefer block_allocator.freeSeqTable(&seq_table);
-            try block_allocator.appendBlock(&seq_table);
-            self.paged_cache = paged_cache;
-            self.seq_table = seq_table;
-            self.block_allocator = block_allocator;
+            // One block per layer spanning the full context — MLA attention
+            // indexes the KV cache flat (pos * kvd), not via block tables.
+            const block_size: u16 = @intCast(self.max_seq_len);
+            const num_blocks = nl;
+            self.paged_cache = try PagedKvCache.init(allocator, nl, max_kv_dim, num_blocks, block_size);
+            errdefer self.paged_cache.deinit();
+            // BlockAllocator stores a pointer — must point to self.paged_cache (not a local copy).
+            self.block_allocator = BlockAllocator.init(&self.paged_cache, allocator);
+            self.seq_table = try self.block_allocator.allocateSeqTable(nl);
+            errdefer self.block_allocator.freeSeqTable(&self.seq_table);
+            try self.block_allocator.appendBlock(&self.seq_table);
         }
 
         return self;
@@ -217,17 +223,7 @@ pub const Glm4Model = struct {
     pub fn forward(self: *Glm4Model, token_id: u32) !u32 {
         if (self.kv_seq_len >= self.max_seq_len) return error.KVCacheFull;
 
-        // Check if new block needed
-        const bs: usize = if (self.tiered_cache) |tc| tc.block_size else self.paged_cache.block_size;
-        const current_blocks = self.seq_table.block_table[0].len;
-        const needed_blocks = (self.kv_seq_len + 1 + bs - 1) / bs;
-        if (needed_blocks > current_blocks) {
-            if (self.tiered_block_allocator) |*ta| {
-                try ta.appendBlock(&self.seq_table);
-            } else {
-                try self.block_allocator.appendBlock(&self.seq_table);
-            }
-        }
+        try model_mod.ensureKvBlock(self);
 
         // Embedding lookup
         try self.embLookup(token_id);
@@ -258,16 +254,7 @@ pub const Glm4Model = struct {
 
     /// Reset the KV cache position for a new conversation.
     pub fn resetCache(self: *Glm4Model) void {
-        if (self.tiered_block_allocator) |*ta| {
-            ta.freeSeqTable(&self.seq_table);
-            self.seq_table = ta.allocateSeqTable(self.n_layers) catch return;
-            ta.appendBlock(&self.seq_table) catch return;
-        } else {
-            self.block_allocator.freeSeqTable(&self.seq_table);
-            self.seq_table = self.block_allocator.allocateSeqTable(self.n_layers) catch return;
-            self.block_allocator.appendBlock(&self.seq_table) catch return;
-        }
-        model_mod.resetInferenceState(&self.kv_seq_len, &self.cancelled);
+        model_mod.resetKvCache(self);
     }
 
     /// Signal an in-progress forward pass to abort. Thread-safe.
@@ -303,17 +290,21 @@ pub const Glm4Model = struct {
 
     fn embLookup(self: *Glm4Model, token_id: u32) !void {
         const w_t = self.fmt.getTensor("model.embed_tokens.weight") orelse return error.MissingTensor;
-        const s_t = self.fmt.getTensor("model.embed_tokens.scales") orelse return error.MissingTensor;
-        const b_t = self.fmt.getTensor("model.embed_tokens.biases") orelse return error.MissingTensor;
-        mlx_ops.mlxEmbLookup(
-            self.hidden.ptr,
-            @ptrCast(@alignCast(w_t.data_ptr)),
-            @ptrCast(@alignCast(s_t.data_ptr)),
-            @ptrCast(@alignCast(b_t.data_ptr)),
-            token_id,
-            self.n_embd,
-            self.mlx_bits,
-        );
+        if (w_t.dtype == .mlx_q) {
+            const s_t = self.fmt.getTensor("model.embed_tokens.scales") orelse return error.MissingTensor;
+            const b_t = self.fmt.getTensor("model.embed_tokens.biases") orelse return error.MissingTensor;
+            mlx_ops.mlxEmbLookup(
+                self.hidden.ptr,
+                @ptrCast(@alignCast(w_t.data_ptr)),
+                @ptrCast(@alignCast(s_t.data_ptr)),
+                @ptrCast(@alignCast(b_t.data_ptr)),
+                token_id,
+                self.n_embd,
+                self.mlx_bits,
+            );
+        } else {
+            self.be.embLookup(.{ .data = w_t.data_ptr, .dtype = w_t.dtype }, token_id, self.hidden.ptr, self.n_embd);
+        }
     }
 
     // ── MLA Attention ────────────────────────────────────────────
@@ -326,7 +317,6 @@ pub const Glm4Model = struct {
         const q_head_dim: usize = nope_dim + rope_dim;
         const kv_rank: usize = self.kv_lora_rank;
         const vhd: usize = self.v_head_dim;
-
         // 1. Pre-norm
         const nw = self.layerTensor(li, "input_layernorm.weight") orelse return error.MissingTensor;
         self.be.rmsNorm(self.hidden.ptr, @ptrCast(@alignCast(nw.data_ptr)), self.hidden2.ptr, e, self.rms_eps);
@@ -338,7 +328,6 @@ pub const Glm4Model = struct {
         self.be.rmsNorm(self.q_compressed.ptr, @ptrCast(@alignCast(qn.data_ptr)), self.q_compressed.ptr, self.q_lora_rank, self.rms_eps);
         self.be.sync();
         try self.mlxLayerGemv(li, "self_attn.q_b_proj", self.q_compressed, self.q_full, nh * q_head_dim, self.q_lora_rank);
-
         // 3. KV path: hidden2 → kv_a_proj_with_mqa(e→kv_rank+rope_dim) → split
         try self.mlxLayerGemv(li, "self_attn.kv_a_proj_with_mqa", self.hidden2, self.kv_proj, kv_rank + rope_dim, e);
         // Split: kv_latent[0..kv_rank], k_pe[kv_rank..kv_rank+rope_dim]
@@ -409,7 +398,7 @@ pub const Glm4Model = struct {
                 self.scores_buf[t] = dot * scale;
             }
             // Inline CPU softmax — avoids backend dispatch + sync overhead
-            // since QK dot products and V accumulation are already CPU SIMD.
+            // since QK dot products and V accumulation are already on CPU.
             {
                 var max_val: f32 = self.scores_buf[0];
                 for (1..sl) |i| if (self.scores_buf[i] > max_val) {
@@ -429,7 +418,7 @@ pub const Glm4Model = struct {
             @memset(self.attn_out[v_base..][0..vhd], 0);
             for (0..sl) |t| {
                 const v_elem_off = t * vd + h * vhd;
-                const v_ptr: [*]const f32 = @ptrCast(@alignCast(kv_view.values.ptr + v_elem_off * @sizeOf(f32)));
+                const v_ptr = kv_view.values.ptr + v_elem_off;
                 const weight = self.scores_buf[t];
                 for (0..vhd) |i| self.attn_out[v_base + i] += weight * v_ptr[i];
             }
@@ -501,19 +490,17 @@ pub const Glm4Model = struct {
             for (0..top_k) |ti| top_scores[ti] /= score_sum;
         }
 
-        // Accumulate expert outputs
+        // Accumulate expert outputs — GPU addScaled avoids per-expert sync
         @memset(self.expert_buf, 0);
         for (0..top_k) |ti| {
             try self.expertFfn(li, @intCast(top_experts[ti]), self.hidden2, self.ff_down, ff, e);
-            self.be.sync();
             const w = top_scores[ti] * self.routed_scaling_factor;
-            for (0..e) |i| self.expert_buf[i] += w * self.ff_down[i];
+            self.be.addScaled(self.ff_down.ptr, self.expert_buf.ptr, w, e);
         }
 
-        // Shared expert (always active)
+        // Shared expert (always active, scale = 1.0)
         try self.sharedExpertFfn(li, self.hidden2, self.ff_down, ff, e);
-        self.be.sync();
-        for (0..e) |i| self.expert_buf[i] += self.ff_down[i];
+        self.be.addScaled(self.ff_down.ptr, self.expert_buf.ptr, 1.0, e);
 
         // Residual
         self.be.add(self.hidden.ptr, self.expert_buf.ptr, self.hidden.ptr, e);
@@ -548,7 +535,7 @@ pub const Glm4Model = struct {
         return self.fmt.getTensor(name);
     }
 
-    /// MLX quantized GEMV for a layer tensor (looks up .weight/.scales/.biases)
+    /// Layer GEMV: MLX quantized path or standard be.gemv for GGUF/BF16/F32.
     fn mlxLayerGemv(self: *Glm4Model, li: u32, prefix: []const u8, x: []const f32, y: []f32, n: usize, k: usize) !void {
         var buf: [name_buf_size]u8 = undefined;
         const w_name = std.fmt.bufPrint(&buf, "model.layers.{d}.{s}.weight", .{ li, prefix }) catch return error.MissingTensor;
@@ -563,12 +550,11 @@ pub const Glm4Model = struct {
             const b_t = self.fmt.getTensor(b_name) orelse return error.MissingTensor;
             mlx_ops.mlxGemvRaw(x.ptr, @ptrCast(@alignCast(w_t.data_ptr)), @ptrCast(@alignCast(s_t.data_ptr)), @ptrCast(@alignCast(b_t.data_ptr)), y.ptr, n, k, self.mlx_bits);
         } else {
-            // Non-quantized (BF16/F32)
             self.be.gemv(x.ptr, .{ .data = w_t.data_ptr, .dtype = w_t.dtype }, y.ptr, n, k);
         }
     }
 
-    /// MLX quantized GEMV for a top-level tensor (e.g., "lm_head")
+    /// Top-level GEMV (e.g., "lm_head"): MLX quantized or standard be.gemv.
     fn mlxGemv(self: *Glm4Model, prefix: []const u8, x: []const f32, y: []f32, n: usize, k: usize) !void {
         var buf: [name_buf_size]u8 = undefined;
         const w_name = std.fmt.bufPrint(&buf, "{s}.weight", .{prefix}) catch return error.MissingTensor;
@@ -587,7 +573,7 @@ pub const Glm4Model = struct {
         }
     }
 
-    /// MLX GEMV for stacked expert weights (first dim = expert_id)
+    /// GEMV for stacked expert weights (first dim = expert_id).
     fn mlxExpertGemv(self: *Glm4Model, li: u32, prefix: []const u8, expert_id: u32, x: []const f32, y: []f32, n: usize, k: usize) !void {
         var buf: [name_buf_size]u8 = undefined;
         const w_name = std.fmt.bufPrint(&buf, "model.layers.{d}.{s}.weight", .{ li, prefix }) catch return error.MissingTensor;
@@ -616,14 +602,16 @@ pub const Glm4Model = struct {
 
             mlx_ops.mlxGemvRaw(x.ptr, pw + w_offset, sc + s_offset, bi + s_offset, y.ptr, n, k, self.mlx_bits);
         } else {
-            // Non-quantized expert: offset into expert slice
-            const row_bytes = k * @sizeOf(f32);
-            const offset = @as(usize, expert_id) * n * row_bytes;
+            // Non-MLX expert: offset into expert slice
+            const expert_bytes = dtypeBytes(w_t.dtype, n * k);
+            const offset = @as(usize, expert_id) * expert_bytes;
             self.be.gemv(x.ptr, .{ .data = w_t.data_ptr + offset, .dtype = w_t.dtype }, y.ptr, n, k);
         }
     }
 
-    /// Per-head linear: weight shape [nh, out_dim, in_dim], compute for each head
+    /// Per-head linear projection. For GGUF, the weight is transposed per head
+    /// ([in_dim, out_dim, nh] in GGUF convention), requiring dequant + transposed
+    /// accumulation. For MLX, uses standard per-head mlxGemvRaw.
     fn multiLinearGemv(self: *Glm4Model, li: u32, prefix: []const u8, x: []const f32, y: [*]f32, nh: usize, out_dim: usize, in_dim: usize) !void {
         var buf: [name_buf_size]u8 = undefined;
         const w_name = std.fmt.bufPrint(&buf, "model.layers.{d}.{s}.weight", .{ li, prefix }) catch return error.MissingTensor;
@@ -651,12 +639,31 @@ pub const Glm4Model = struct {
                 const s_off = h * out_dim * groups_per_row;
                 mlx_ops.mlxGemvRaw(x.ptr, pw + w_off, sc + s_off, bi + s_off, y + h * out_dim, out_dim, in_dim, self.mlx_bits);
             }
-        } else {
-            // BF16/F32 multi-linear
-            const row_bytes = in_dim * @sizeOf(u16); // bf16
+        } else if (w_t.dtype == .q8_0) {
+            // GPU transposed GEMV for Q8_0 3D weights (GGUF MLA layout).
+            const head_bytes = dtypeBytes(w_t.dtype, out_dim * in_dim);
             for (0..nh) |h| {
-                const offset = h * out_dim * row_bytes;
-                self.be.gemv(x.ptr, .{ .data = w_t.data_ptr + offset, .dtype = w_t.dtype }, y + h * out_dim, out_dim, in_dim);
+                self.be.gemvT(x.ptr, w_t.data_ptr + h * head_bytes, y + h * out_dim, out_dim, in_dim);
+            }
+        } else {
+            // Non-MLX, non-Q8_0: CPU dequant + transposed accumulation fallback.
+            const head_elems = out_dim * in_dim;
+            const head_bytes = dtypeBytes(w_t.dtype, head_elems);
+            std.debug.assert(head_elems <= self.logits_buf.len);
+            const scratch = self.logits_buf[0..head_elems];
+            self.be.sync();
+            for (0..nh) |h| {
+                const w_ptr = w_t.data_ptr + h * head_bytes;
+                quant_ops.dequantToF32(scratch, w_ptr, w_t.dtype, head_elems);
+                const y_head = y + h * out_dim;
+                @memset(y_head[0..out_dim], 0);
+                for (0..in_dim) |j| {
+                    const xj = x[j];
+                    const row = scratch[j * out_dim ..][0..out_dim];
+                    for (0..out_dim) |i| {
+                        y_head[i] += row[i] * xj;
+                    }
+                }
             }
         }
     }
@@ -683,5 +690,19 @@ pub const Glm4Model = struct {
                 x[base + i + half] = r * @sin(angle) + im * @cos(angle);
             }
         }
+    }
+
+    /// Byte size for `n` elements at the given dtype (for sub-tensor offset computation).
+    fn dtypeBytes(dtype: DType, n: usize) usize {
+        return switch (dtype) {
+            .f32 => n * 4,
+            .bf16, .f16 => n * 2,
+            .q8_0 => @divExact(n, 32) * 34,
+            .q4_0 => @divExact(n, 32) * 18,
+            .q4_k => @divExact(n, 256) * 144,
+            .q5_k => @divExact(n, 256) * 176,
+            .q6_k => @divExact(n, 256) * 210,
+            else => n, // fallback: 1 byte per element
+        };
     }
 };

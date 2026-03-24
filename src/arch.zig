@@ -19,8 +19,10 @@ pub const Arch = enum {
             .{ "gemma3", .gemma3 },
             .{ "gemma3_text", .gemma3 },
             .{ "gemma2", .gemma3 },
+            .{ "qwen3_5_text", .qwen35 },
             .{ "qwen35moe", .qwen35 },
             .{ "qwen35", .qwen35 },
+            .{ "qwen3_5", .qwen35 },
             .{ "qwen3", .qwen35 },
             .{ "qwen2", .qwen35 },
             .{ "gpt-oss", .gpt_oss },
@@ -33,6 +35,7 @@ pub const Arch = enum {
             .{ "nemotron-nano", .nemotron_nano },
             .{ "glm4_moe_lite", .glm4 },
             .{ "glm4", .glm4 },
+            .{ "deepseek2", .glm4 },
         };
         inline for (map) |entry| {
             if (std.mem.eql(u8, name, entry[0])) return entry[1];
@@ -58,6 +61,7 @@ pub const Arch = enum {
             .gemma3 => ChatTemplate.gemma,
             .gpt_oss => ChatTemplate.gpt_oss,
             .qwen35 => ChatTemplate.qwen35,
+            .glm4 => ChatTemplate.glm4,
             else => ChatTemplate.chatml,
         };
     }
@@ -68,6 +72,7 @@ pub const Arch = enum {
             .gemma3 => "gemma",
             .gpt_oss => "gpt-oss",
             .qwen35 => "qwen35",
+            .glm4 => "glm4",
             else => "chatml",
         };
     }
@@ -106,6 +111,8 @@ pub const TokenizerKind = enum { bpe, spm, spm_no_dummy };
 pub const gemma_fallback_eos: u32 = 1;
 /// Qwen-family fallback EOS token ID (used when metadata is missing).
 pub const default_fallback_eos: u32 = 248046;
+/// GLM-4 fallback BOS token ID (`[gMASK]`, used when metadata is missing).
+pub const glm4_fallback_bos: u32 = 154822;
 /// Default BOS token ID when metadata is missing (SentencePiece convention).
 pub const default_bos_id: u32 = 2;
 /// Maximum end-of-generation token IDs tracked simultaneously.
@@ -116,6 +123,9 @@ test "Arch.detect known names" {
     try std.testing.expectEqual(Arch.gemma3, Arch.detect("gemma2").?);
     try std.testing.expectEqual(Arch.qwen35, Arch.detect("qwen35").?);
     try std.testing.expectEqual(Arch.gpt_oss, Arch.detect("gpt-oss").?);
+    try std.testing.expectEqual(Arch.glm4, Arch.detect("glm4").?);
+    try std.testing.expectEqual(Arch.glm4, Arch.detect("deepseek2").?);
+    try std.testing.expectEqual(Arch.glm4, Arch.detect("glm4_moe_lite").?);
     try std.testing.expect(Arch.detect("unknown_model") == null);
 }
 

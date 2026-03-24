@@ -11,10 +11,10 @@
 const std = @import("std");
 const quant = @import("quant.zig");
 
-/// Block size for Q8_0 and INT8 quantization.
-const block_size: usize = 32;
-/// Q8_0 block: f16 scale (2 bytes) + 32 i8 values = 34 bytes.
-const q8_0_bytes: usize = 34;
+/// Block size for Q8_0 and INT8 quantization (shared with quant.zig).
+const block_size: usize = quant.quant_block_elems;
+/// Q8_0 block: f16 scale (2 bytes) + 32 i8 values = 34 bytes (shared with quant.zig).
+const q8_0_bytes: usize = quant.q8_0_block_bytes;
 /// INT8 block: f32 scale (4 bytes) + 32 i8 values = 36 bytes.
 const int8_bytes: usize = 36;
 /// NVFP4 block size: 16 elements.
@@ -220,21 +220,42 @@ pub fn kvDot(q_vec: [*]const f32, kv_data: [*]const u8, n: usize, kv_type: KvQua
 
 fn dotF32(q_vec: [*]const f32, kv_data: [*]const u8, n: usize) f32 {
     const kv: [*]const f32 = @ptrCast(@alignCast(kv_data));
-    var sum: f32 = 0;
-    for (0..n) |i| sum += q_vec[i] * kv[i];
+    const V8 = @Vector(8, f32);
+    var acc: V8 = @splat(0.0);
+    var i: usize = 0;
+    while (i + 8 <= n) : (i += 8) {
+        const qv: V8 = q_vec[i..][0..8].*;
+        const kv_v: V8 = kv[i..][0..8].*;
+        acc += qv * kv_v;
+    }
+    var sum: f32 = @reduce(.Add, acc);
+    while (i < n) : (i += 1) sum += q_vec[i] * kv[i];
     return sum;
 }
 
 fn dotF16(q_vec: [*]const f32, kv_data: [*]const u8, n: usize) f32 {
     const kv: [*]const u16 = @ptrCast(@alignCast(kv_data));
-    var sum: f32 = 0;
-    for (0..n) |i| {
+    const V8 = @Vector(8, f32);
+    var acc: V8 = @splat(0.0);
+    var i: usize = 0;
+    while (i + 8 <= n) : (i += 8) {
+        const qv: V8 = q_vec[i..][0..8].*;
+        // Convert 8 f16 values to f32
+        var kv_v: V8 = undefined;
+        inline for (0..8) |j| {
+            kv_v[j] = @as(f32, @floatCast(@as(f16, @bitCast(kv[i + j]))));
+        }
+        acc += qv * kv_v;
+    }
+    var sum: f32 = @reduce(.Add, acc);
+    while (i < n) : (i += 1) {
         sum += q_vec[i] * @as(f32, @floatCast(@as(f16, @bitCast(kv[i]))));
     }
     return sum;
 }
 
 fn dotQ8_0(q_vec: [*]const f32, kv_data: [*]const u8, n: usize) f32 {
+    const V8 = @Vector(8, f32);
     const nb = (n + block_size - 1) / block_size;
     var sum: f32 = 0;
     for (0..nb) |b| {
@@ -242,8 +263,18 @@ fn dotQ8_0(q_vec: [*]const f32, kv_data: [*]const u8, n: usize) f32 {
         const scale: f32 = @floatCast(@as(f16, @bitCast(@as(*align(1) const u16, @ptrCast(bp)).*)));
         const base = b * block_size;
         const count = @min(block_size, n - base);
-        var block_sum: f32 = 0;
-        for (0..count) |i| {
+        var acc: V8 = @splat(0.0);
+        var i: usize = 0;
+        while (i + 8 <= count) : (i += 8) {
+            const qv: V8 = q_vec[base + i ..][0..8].*;
+            var val_v: V8 = undefined;
+            inline for (0..8) |j| {
+                val_v[j] = @floatFromInt(@as(i8, @bitCast(bp[2 + i + j])));
+            }
+            acc += qv * val_v;
+        }
+        var block_sum: f32 = @reduce(.Add, acc);
+        while (i < count) : (i += 1) {
             const val: f32 = @floatFromInt(@as(i8, @bitCast(bp[2 + i])));
             block_sum += q_vec[base + i] * val;
         }
@@ -313,25 +344,55 @@ pub fn kvMulAccum(acc: [*]f32, weight: f32, kv_data: [*]const u8, n: usize, kv_t
 
 fn mulAccF32(acc: [*]f32, weight: f32, kv_data: [*]const u8, n: usize) void {
     const kv: [*]const f32 = @ptrCast(@alignCast(kv_data));
-    for (0..n) |i| acc[i] += weight * kv[i];
+    const V8 = @Vector(8, f32);
+    const wv: V8 = @splat(weight);
+    var i: usize = 0;
+    while (i + 8 <= n) : (i += 8) {
+        const cur: V8 = acc[i..][0..8].*;
+        const kv_v: V8 = kv[i..][0..8].*;
+        acc[i..][0..8].* = cur + wv * kv_v;
+    }
+    while (i < n) : (i += 1) acc[i] += weight * kv[i];
 }
 
 fn mulAccF16(acc: [*]f32, weight: f32, kv_data: [*]const u8, n: usize) void {
     const kv: [*]const u16 = @ptrCast(@alignCast(kv_data));
-    for (0..n) |i| {
+    const V8 = @Vector(8, f32);
+    const wv: V8 = @splat(weight);
+    var i: usize = 0;
+    while (i + 8 <= n) : (i += 8) {
+        const cur: V8 = acc[i..][0..8].*;
+        var kv_v: V8 = undefined;
+        inline for (0..8) |j| {
+            kv_v[j] = @as(f32, @floatCast(@as(f16, @bitCast(kv[i + j]))));
+        }
+        acc[i..][0..8].* = cur + wv * kv_v;
+    }
+    while (i < n) : (i += 1) {
         acc[i] += weight * @as(f32, @floatCast(@as(f16, @bitCast(kv[i]))));
     }
 }
 
 fn mulAccQ8_0(acc: [*]f32, weight: f32, kv_data: [*]const u8, n: usize) void {
+    const V8 = @Vector(8, f32);
     const nb = (n + block_size - 1) / block_size;
     for (0..nb) |b| {
         const bp = kv_data + b * q8_0_bytes;
         const scale: f32 = @floatCast(@as(f16, @bitCast(@as(*align(1) const u16, @ptrCast(bp)).*)));
-        const ws = weight * scale;
+        const ws_v: V8 = @splat(weight * scale);
         const base = b * block_size;
         const count = @min(block_size, n - base);
-        for (0..count) |i| {
+        var i: usize = 0;
+        while (i + 8 <= count) : (i += 8) {
+            const cur: V8 = acc[base + i ..][0..8].*;
+            var val_v: V8 = undefined;
+            inline for (0..8) |j| {
+                val_v[j] = @floatFromInt(@as(i8, @bitCast(bp[2 + i + j])));
+            }
+            acc[base + i ..][0..8].* = cur + ws_v * val_v;
+        }
+        const ws = weight * scale;
+        while (i < count) : (i += 1) {
             acc[base + i] += ws * @as(f32, @floatFromInt(@as(i8, @bitCast(bp[2 + i]))));
         }
     }
@@ -423,7 +484,7 @@ fn f32ToFp8E4M3(val: f32) u8 {
 
 // ── E2M1 f32→nibble conversion ───────────────────────────────────
 
-/// Convert f32 (pre-scaled to [-6, 6]) to E2M1 4-bit nibble.
+/// Convert f32 to E2M1 4-bit nibble (clamps to [-6, 6] via threshold matching).
 /// E2M1 representable values: 0, 0.5, 1, 1.5, 2, 3, 4, 6 (+ negatives).
 fn f32ToE2M1(val: f32) u8 {
     const sign: u8 = if (val < 0) 8 else 0; // bit 3 = sign

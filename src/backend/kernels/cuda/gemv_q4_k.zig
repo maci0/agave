@@ -80,36 +80,49 @@ export fn gemv_q4_k_kernel(
         const qs = bp + 16;
         const block_start = b * values_per_block;
 
-        // Process 8 sub-blocks of 32 values each
-        var sb: u32 = 0;
-        while (sb < 8) : (sb += 1) {
-            const gi_base = block_start + sb * 32;
-            if (gi_base >= k) break;
+        // Process 4 groups of 64 values: low nibbles (32 elems) then high nibbles (32 elems)
+        var g: u32 = 0;
+        while (g < 4) : (g += 1) {
+            const gi_lo = block_start + g * 64;
+            if (gi_lo >= k) break;
+            const ql_off = g * 32;
 
-            var sc: u8 = undefined;
-            var m: u8 = undefined;
-            getScaleMinK4(sb, scales, &sc, &m);
+            var sc_lo: u8 = undefined;
+            var m_lo: u8 = undefined;
+            var sc_hi: u8 = undefined;
+            var m_hi: u8 = undefined;
+            getScaleMinK4(g * 2, scales, &sc_lo, &m_lo);
+            getScaleMinK4(g * 2 + 1, scales, &sc_hi, &m_hi);
 
-            const d_sc = d * @as(f32, @floatFromInt(sc));
-            const dm_m = dmin * @as(f32, @floatFromInt(m));
-
-            // Accumulate dot product for sub-block using factored form:
-            // dot(x, d*q - dm) = d*sc*dot(x, q) - dm*m*sum(x)
-            var q_dot: f32 = 0.0;
-            var x_sum: f32 = 0.0;
-            const qi_base = sb * 16; // 32 values = 16 bytes (2 nibbles per byte)
-
-            for (0..32) |l| {
-                const gi = gi_base + l;
-                if (gi >= k) break;
-                const byte_idx = qi_base + l / 2;
-                const nibble: f32 = @floatFromInt(if (l % 2 == 0) qs[byte_idx] & 0x0F else qs[byte_idx] >> 4);
-                q_dot += x[gi] * nibble;
-                x_sum += x[gi];
+            // Low nibbles: elements gi_lo..gi_lo+31
+            {
+                const d_sc = d * @as(f32, @floatFromInt(sc_lo));
+                const dm_m = dmin * @as(f32, @floatFromInt(m_lo));
+                var q_dot: f32 = 0.0;
+                var x_sum: f32 = 0.0;
+                for (0..32) |l| {
+                    const gi = gi_lo + l;
+                    if (gi >= k) break;
+                    q_dot += x[gi] * @as(f32, @floatFromInt(qs[ql_off + l] & 0x0F));
+                    x_sum += x[gi];
+                }
+                sum += d_sc * q_dot - dm_m * x_sum;
             }
 
-            // Apply scale and min correction
-            sum += d_sc * q_dot - dm_m * x_sum;
+            // High nibbles: elements gi_lo+32..gi_lo+63
+            {
+                const d_sc = d * @as(f32, @floatFromInt(sc_hi));
+                const dm_m = dmin * @as(f32, @floatFromInt(m_hi));
+                var q_dot: f32 = 0.0;
+                var x_sum: f32 = 0.0;
+                for (0..32) |l| {
+                    const gi = gi_lo + 32 + l;
+                    if (gi >= k) break;
+                    q_dot += x[gi] * @as(f32, @floatFromInt(qs[ql_off + l] >> 4));
+                    x_sum += x[gi];
+                }
+                sum += d_sc * q_dot - dm_m * x_sum;
+            }
         }
     }
 

@@ -295,17 +295,44 @@ pub const GGUFFile = struct {
     }
 
     fn fmtGetTensor(self: *GGUFFile, name: []const u8) ?FormatTensorInfo {
-        const info = self.tensors.getPtr(name) orelse return null;
+        const info = self.tensors.getPtr(name) orelse {
+            // Fallback: try translating HF-style name to GGUF-style.
+            var buf: [256]u8 = undefined;
+            const gguf_name = hfNameToGguf(name, &buf) orelse return null;
+            const info2 = self.tensors.getPtr(gguf_name) orelse return null;
+            return .{ .name = info2.name, .n_dims = info2.n_dims, .dims = info2.dims, .dtype = ggmlToDType(info2.ggml_type), .data_ptr = self.tensorData(info2) };
+        };
         return .{ .name = info.name, .n_dims = info.n_dims, .dims = info.dims, .dtype = ggmlToDType(info.ggml_type), .data_ptr = self.tensorData(info) };
     }
     fn fmtGetMetaStr(self: *GGUFFile, key: []const u8) ?[]const u8 {
-        return self.getMetaStr(key);
+        if (self.getMetaStr(key)) |v| return v;
+        return self.getMetaHfKey(key);
     }
     fn fmtGetMetaU32(self: *GGUFFile, key: []const u8) ?u32 {
-        return self.getMetaU32(key);
+        if (self.getMetaU32(key)) |v| return v;
+        // Fallback: try arch-prefixed GGUF key.
+        var buf: [256]u8 = undefined;
+        const arch_prefix = self.getMetaStr("general.architecture") orelse return null;
+        const gguf_suffix = hfKeyToGgufSuffix(key) orelse return null;
+        const gguf_key = std.fmt.bufPrint(&buf, "{s}.{s}", .{ arch_prefix, gguf_suffix }) catch return null;
+        return self.getMetaU32(gguf_key);
     }
     fn fmtGetMetaF32(self: *GGUFFile, key: []const u8) ?f32 {
-        return self.getMetaF32(key);
+        if (self.getMetaF32(key)) |v| return v;
+        var buf: [256]u8 = undefined;
+        const arch_prefix = self.getMetaStr("general.architecture") orelse return null;
+        const gguf_suffix = hfKeyToGgufSuffix(key) orelse return null;
+        const gguf_key = std.fmt.bufPrint(&buf, "{s}.{s}", .{ arch_prefix, gguf_suffix }) catch return null;
+        return self.getMetaF32(gguf_key);
+    }
+
+    /// Look up a metadata value using arch-prefixed fallback, returning string.
+    fn getMetaHfKey(self: *GGUFFile, key: []const u8) ?[]const u8 {
+        var buf: [256]u8 = undefined;
+        const arch_prefix = self.getMetaStr("general.architecture") orelse return null;
+        const gguf_suffix = hfKeyToGgufSuffix(key) orelse return null;
+        const gguf_key = std.fmt.bufPrint(&buf, "{s}.{s}", .{ arch_prefix, gguf_suffix }) catch return null;
+        return self.getMetaStr(gguf_key);
     }
     fn fmtGetMetaU32Array(self: *GGUFFile, key: []const u8) ?[]const u32 {
         return self.getMetaU32Array(key);
@@ -615,7 +642,148 @@ pub const GGUFFile = struct {
     }
 };
 
+// ── HF → GGUF name translation ────────────────────────────────────────────────
+// Used as fallback when models (e.g. GLM-4) use HuggingFace-style tensor names
+// with a GGUF format file. Reverse of safetensors.zig's ggufToHfName.
+
+/// HF layer component → GGUF layer component (longest-prefix match order).
+const hf_gguf_layer_map = [_]struct { []const u8, []const u8 }{
+    // MLA attention (DeepSeek2/GLM-4) — longer prefixes first
+    .{ "self_attn.q_a_layernorm", "attn_q_a_norm" },
+    .{ "self_attn.kv_a_layernorm", "attn_kv_a_norm" },
+    .{ "self_attn.q_a_proj", "attn_q_a" },
+    .{ "self_attn.q_b_proj", "attn_q_b" },
+    .{ "self_attn.kv_a_proj_with_mqa", "attn_kv_a_mqa" },
+    .{ "self_attn.embed_q", "attn_k_b" },
+    .{ "self_attn.unembed_out", "attn_v_b" },
+    .{ "self_attn.o_proj", "attn_output" },
+    // Standard attention
+    .{ "self_attn.q_norm", "attn_q_norm" },
+    .{ "self_attn.k_norm", "attn_k_norm" },
+    .{ "self_attn.q_proj", "attn_q" },
+    .{ "self_attn.k_proj", "attn_k" },
+    .{ "self_attn.v_proj", "attn_v" },
+    .{ "input_layernorm", "attn_norm" },
+    .{ "post_attention_layernorm", "ffn_norm" },
+    .{ "pre_feedforward_layernorm", "ffn_norm" },
+    .{ "post_feedforward_layernorm", "post_ffw_norm" },
+    // Dense FFN
+    .{ "mlp.gate_proj", "ffn_gate" },
+    .{ "mlp.up_proj", "ffn_up" },
+    .{ "mlp.down_proj", "ffn_down" },
+    // MoE routing — longer prefixes first
+    .{ "mlp.gate.e_score_correction_bias", "exp_probs_b.bias" },
+    .{ "mlp.gate", "ffn_gate_inp" },
+    .{ "mlp.router", "ffn_gate_inp" },
+    // MoE experts
+    .{ "mlp.switch_mlp.gate_proj", "ffn_gate_exps" },
+    .{ "mlp.switch_mlp.up_proj", "ffn_up_exps" },
+    .{ "mlp.switch_mlp.down_proj", "ffn_down_exps" },
+    .{ "mlp.experts.gate_proj", "ffn_gate_exps" },
+    .{ "mlp.experts.up_proj", "ffn_up_exps" },
+    .{ "mlp.experts.down_proj", "ffn_down_exps" },
+    // Shared expert
+    .{ "mlp.shared_experts.gate_proj", "ffn_gate_shexp" },
+    .{ "mlp.shared_experts.up_proj", "ffn_up_shexp" },
+    .{ "mlp.shared_experts.down_proj", "ffn_down_shexp" },
+};
+
+/// Translate an HF-style tensor name to GGUF-style.
+/// Handles top-level tensors and layer tensors with prefix stripping.
+fn hfNameToGguf(name: []const u8, buf: *[256]u8) ?[]const u8 {
+    // Strip known HF prefixes (multimodal and plain)
+    const stripped = for ([_][]const u8{ "language_model.model.", "model." }) |pfx| {
+        if (std.mem.startsWith(u8, name, pfx)) break name[pfx.len..];
+    } else name;
+
+    // Top-level tensors
+    if (std.mem.startsWith(u8, stripped, "embed_tokens.")) {
+        return std.fmt.bufPrint(buf, "token_embd.{s}", .{stripped["embed_tokens.".len..]}) catch null;
+    }
+    if (std.mem.startsWith(u8, stripped, "norm.")) {
+        return std.fmt.bufPrint(buf, "output_norm.{s}", .{stripped["norm.".len..]}) catch null;
+    }
+    if (std.mem.startsWith(u8, stripped, "lm_head.")) {
+        return std.fmt.bufPrint(buf, "output.{s}", .{stripped["lm_head.".len..]}) catch null;
+    }
+
+    // Layer tensors: layers.{i}.{hf_component}.{attr} → blk.{i}.{gguf_component}.{attr}
+    if (std.mem.startsWith(u8, stripped, "layers.")) {
+        const rest = stripped["layers.".len..];
+        const dot1 = std.mem.indexOfScalar(u8, rest, '.') orelse return null;
+        const layer_str = rest[0..dot1];
+        const suffix = rest[dot1 + 1 ..];
+
+        for (hf_gguf_layer_map) |mapping| {
+            if (std.mem.startsWith(u8, suffix, mapping[0])) {
+                const attr = suffix[mapping[0].len..]; // e.g., ".weight"
+                return std.fmt.bufPrint(buf, "blk.{s}.{s}{s}", .{ layer_str, mapping[1], attr }) catch null;
+            }
+        }
+    }
+    return null;
+}
+
+/// HF config key → GGUF metadata suffix (without arch prefix).
+const hf_gguf_meta_map = [_]struct { []const u8, []const u8 }{
+    .{ "num_hidden_layers", "block_count" },
+    .{ "hidden_size", "embedding_length" },
+    .{ "num_attention_heads", "attention.head_count" },
+    .{ "num_key_value_heads", "attention.head_count_kv" },
+    .{ "head_dim", "attention.key_length" },
+    .{ "intermediate_size", "feed_forward_length" },
+    .{ "max_position_embeddings", "context_length" },
+    .{ "context_length", "context_length" },
+    .{ "rope_theta", "rope.freq_base" },
+    .{ "rms_norm_eps", "attention.layer_norm_rms_epsilon" },
+    .{ "vocab_size", "vocab_size" },
+    // MLA/DeepSeek2 specific
+    .{ "q_lora_rank", "attention.q_lora_rank" },
+    .{ "kv_lora_rank", "attention.kv_lora_rank" },
+    .{ "qk_rope_head_dim", "rope.dimension_count" },
+    .{ "n_routed_experts", "expert_count" },
+    .{ "num_experts_per_tok", "expert_used_count" },
+    .{ "moe_intermediate_size", "expert_feed_forward_length" },
+    .{ "first_k_dense_replace", "leading_dense_block_count" },
+    .{ "routed_scaling_factor", "expert_weights_scale" },
+};
+
+/// Map an HF config.json key to a GGUF metadata suffix (without the arch prefix).
+fn hfKeyToGgufSuffix(key: []const u8) ?[]const u8 {
+    for (hf_gguf_meta_map) |mapping| {
+        if (std.mem.eql(u8, key, mapping[0])) return mapping[1];
+    }
+    return null;
+}
+
 // ── Tests ─────────────────────────────────────────────────────────
+
+test "hfNameToGguf top-level" {
+    var buf: [256]u8 = undefined;
+    try std.testing.expectEqualStrings("token_embd.weight", hfNameToGguf("model.embed_tokens.weight", &buf).?);
+    try std.testing.expectEqualStrings("output_norm.weight", hfNameToGguf("model.norm.weight", &buf).?);
+    try std.testing.expectEqualStrings("output.weight", hfNameToGguf("model.lm_head.weight", &buf).?);
+    try std.testing.expectEqualStrings("output.weight", hfNameToGguf("language_model.model.lm_head.weight", &buf).?);
+}
+
+test "hfNameToGguf layer tensors" {
+    var buf: [256]u8 = undefined;
+    try std.testing.expectEqualStrings("blk.0.attn_norm.weight", hfNameToGguf("model.layers.0.input_layernorm.weight", &buf).?);
+    try std.testing.expectEqualStrings("blk.5.attn_q_a.weight", hfNameToGguf("model.layers.5.self_attn.q_a_proj.weight", &buf).?);
+    try std.testing.expectEqualStrings("blk.1.ffn_gate_inp.weight", hfNameToGguf("model.layers.1.mlp.gate.weight", &buf).?);
+    try std.testing.expectEqualStrings("blk.1.exp_probs_b.bias", hfNameToGguf("model.layers.1.mlp.gate.e_score_correction_bias", &buf).?);
+    try std.testing.expectEqualStrings("blk.2.ffn_gate_exps.weight", hfNameToGguf("model.layers.2.mlp.switch_mlp.gate_proj.weight", &buf).?);
+    try std.testing.expectEqualStrings("blk.3.ffn_down_shexp.weight", hfNameToGguf("model.layers.3.mlp.shared_experts.down_proj.weight", &buf).?);
+    try std.testing.expect(hfNameToGguf("model.layers.0.unknown_component.weight", &buf) == null);
+}
+
+test "hfKeyToGgufSuffix metadata keys" {
+    try std.testing.expectEqualStrings("block_count", hfKeyToGgufSuffix("num_hidden_layers").?);
+    try std.testing.expectEqualStrings("embedding_length", hfKeyToGgufSuffix("hidden_size").?);
+    try std.testing.expectEqualStrings("rope.freq_base", hfKeyToGgufSuffix("rope_theta").?);
+    try std.testing.expectEqualStrings("expert_count", hfKeyToGgufSuffix("n_routed_experts").?);
+    try std.testing.expect(hfKeyToGgufSuffix("unknown_key") == null);
+}
 
 test "GGMLType blockSize" {
     try std.testing.expectEqual(@as(usize, 32), GGMLType.q4_0.blockSize());

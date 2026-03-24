@@ -13,7 +13,7 @@ A progressive tutorial series that builds understanding layer by layer:
 5. [Memory and Caching](tutorial/05-memory-and-caching.md) — KV cache, PagedAttention, RadixAttention
 6. [State Space Models](tutorial/06-state-space-models.md) — DeltaNet, Mamba-2, hybrids
 7. [Sampling](tutorial/07-sampling.md) — temperature, top-k, top-p, repeat penalty
-8. [GPU Backends](tutorial/08-gpu-backends.md) — CUDA, Metal, Vulkan, ROCm, dispatch
+8. [Backends](tutorial/08-backends.md) — CPU, CUDA, Metal, Vulkan, ROCm, dispatch
 
 Start here: **[tutorial/README.md](tutorial/README.md)**
 

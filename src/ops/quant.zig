@@ -4,6 +4,7 @@
 //! dequantize during GEMV; GPU backends use native shader/PTX equivalents.
 
 const std = @import("std");
+const DType = @import("../backend/backend.zig").DType;
 
 /// FP8 E4M3 denormal scale: 2^(-6) / 8 = 2^(-9).
 const fp8_e4m3_denorm_scale: f32 = 1.0 / 512.0;
@@ -11,9 +12,9 @@ const fp8_e4m3_denorm_scale: f32 = 1.0 / 512.0;
 const fp8_e5m2_denorm_scale: f32 = 1.0 / 65536.0;
 
 /// Elements per Q8_0 / Q4_0 quantization block.
-const quant_block_elems: usize = 32;
+pub const quant_block_elems: usize = 32;
 /// Bytes per Q8_0 block: 2-byte f16 scale + 32 int8 values.
-const q8_0_block_bytes: usize = 34;
+pub const q8_0_block_bytes: usize = 34;
 /// Bytes per Q4_0 block: 2-byte f16 scale + 16 nibble bytes.
 const q4_0_block_bytes: usize = 18;
 
@@ -139,7 +140,7 @@ pub inline fn fp8e5m2ToF32(val: u8) f32 {
 
 /// Dequantize tensor data to f32.
 /// Handles f32 (pass-through), bf16, f16, q8_0, and q4_0 formats.
-/// Unsupported dtypes trigger a debug assertion failure; in release builds, they are zero-filled.
+/// Unsupported dtypes trigger a panic.
 /// Used for "direct read" tensors (norms, biases, conv weights) that are
 /// passed to CPU code expecting [*]const f32 but may be stored quantized.
 ///
@@ -148,7 +149,7 @@ pub inline fn fp8e5m2ToF32(val: u8) f32 {
 ///   - data: Raw tensor data pointer.
 ///   - dtype: Data format of the tensor.
 ///   - n: Number of elements to dequantize.
-pub fn dequantToF32(output: []f32, data: [*]const u8, dtype: @import("../backend/backend.zig").DType, n: usize) void {
+pub fn dequantToF32(output: []f32, data: [*]const u8, dtype: DType, n: usize) void {
     switch (dtype) {
         .f32 => {
             const src: [*]const f32 = @ptrCast(@alignCast(data));

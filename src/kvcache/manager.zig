@@ -162,8 +162,7 @@ pub const PagedKvCache = struct {
     }
 
     /// Evict the coldest block based on frequency × cost metric.
-    /// Per decision D-03: trigger when free blocks < 10% of total.
-    /// Per decision D-05: shared prefixes (ref_count > 1) get 100× cost multiplier.
+    /// Shared prefixes (ref_count > 1) get 100× cost multiplier to preserve reuse.
     /// Returns the evicted block ID, or error if no evictable blocks found.
     pub fn evictColdestBlock(self: *PagedKvCache) !u32 {
         var min_score: f32 = std.math.floatMax(f32);

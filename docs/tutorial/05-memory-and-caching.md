@@ -20,7 +20,7 @@ Quantizing the KV cache (e.g., to f16 or fp8) halves or quarters this cost with 
 
 ## PagedAttention
 
-Allocating a contiguous KV cache per sequence wastes memory when sequences have different lengths. PagedAttention breaks the cache into fixed-size **blocks** (default 16 positions):
+Allocating a **contiguous** (single continuous memory region) KV cache per **sequence** (a single request or conversation — the tokens for one prompt and its generated response) wastes memory when sequences have different lengths. PagedAttention breaks the cache into fixed-size **blocks** (default 16 positions):
 
 ```
 physical_block = block_table[position / block_size]
@@ -29,15 +29,16 @@ K[position] = blocks[physical_block].keys[offset * kv_dim ...]
 ```
 
 Benefits:
-- **No internal fragmentation** — blocks allocated on demand
-- **Memory sharing** — reference counting enables copy-on-write between requests
+
+- **No internal fragmentation** (wasted space within allocated regions) — blocks allocated on demand
+- **Memory sharing** — **reference counting** (tracking how many sequences use each block) enables **copy-on-write** (sharing read-only data, duplicating only when modified) between requests
 - **Continuous batching** — sequences can grow/shrink independently
 
 Each `CacheBlock` tracks: `keys`, `values`, `used` count, `ref_count` (for sharing), `access_count` (for eviction).
 
 ## RadixAttention
 
-RadixAttention builds a radix tree (prefix trie) over token sequences to automatically detect and share common prefixes. If two requests share the same system prompt, the KV cache for that prefix is computed once and reused.
+RadixAttention builds a **radix tree** (also called a **prefix trie** — a tree data structure where shared prefixes are stored only once) over token sequences to automatically detect and share common prefixes. If two requests share the same system prompt, the KV cache for that prefix is computed once and reused.
 
 ```
 Request A: "You are helpful. What is 2+2?"     → compute KV for "You are helpful." once
@@ -45,9 +46,10 @@ Request B: "You are helpful. Tell me a joke."   → reuse KV, only compute " Tel
 ```
 
 Key operations (all at the scheduler layer, never in the token generation hot path):
+
 - **Insert**: Cache a completed sequence's block IDs
 - **Lookup**: Find the longest cached prefix for a new prompt
-- **Eviction**: LRU based on access timestamps; shared prefixes (ref_count > 1) get 100× eviction cost to preserve reuse
+- **Eviction**: **LRU** (Least Recently Used — remove the oldest unused data first) based on access **timestamps** (recorded times when each block was last used); shared prefixes (ref_count > 1) get 100× **eviction cost** (penalty score that makes them harder to remove) to preserve reuse
 
 RadixAttention is the preferred strategy for production serving.
 

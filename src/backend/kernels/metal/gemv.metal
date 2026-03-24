@@ -483,42 +483,52 @@ kernel void gemv_q4_k(
         device const uchar* qs = bp + 16;
         uint bk = b * bs;
 
-        for (uint sb = 0; sb < 8; sb++) {
-            uint sc, m;
-            getScaleMinK4(sb, scales, sc, m);
-            float d_sc = d * float(sc);
-            float dm_m = dmin * float(m);
-            uint gi_base = bk + sb * 32;
-            uint qi_base = sb * 16; // byte offset = sb*32/2
+        // 4 groups of 64 elements: low nibbles (32 elems) then high nibbles (32 elems)
+        for (uint g = 0; g < 4; g++) {
+            uint sc_lo, m_lo, sc_hi, m_hi;
+            getScaleMinK4(g * 2, scales, sc_lo, m_lo);
+            getScaleMinK4(g * 2 + 1, scales, sc_hi, m_hi);
+            float d_lo = d * float(sc_lo);
+            float dm_lo = dmin * float(m_lo);
+            float d_hi = d * float(sc_hi);
+            float dm_hi = dmin * float(m_hi);
+            uint ql_off = g * 32;
+            uint gi_lo = bk + g * 64;
+            uint gi_hi = gi_lo + 32;
 
-            // Factored scale+min: dot(x, d_sc*q - dm_m) = d_sc*dot(x,q) - dm_m*sum(x)
-            // Saves per-element broadcast multiply+subtract (same pattern as Q4_1).
-            if (gi_base + 31 < k) {
-                float q_dot = 0.0f;
-                float x_sum = 0.0f;
-                for (uint l = 0; l < 16; l += 4) {
-                    uchar b0 = qs[qi_base + l];
-                    uchar b1 = qs[qi_base + l + 1];
-                    uchar b2 = qs[qi_base + l + 2];
-                    uchar b3 = qs[qi_base + l + 3];
-                    uint gi = gi_base + l * 2;
-                    float4 xv0 = *(device const float4*)(x + gi);
-                    float4 xv1 = *(device const float4*)(x + gi + 4);
-                    float4 qv0 = float4(b0 & 0xF, b0 >> 4, b1 & 0xF, b1 >> 4);
-                    float4 qv1 = float4(b2 & 0xF, b2 >> 4, b3 & 0xF, b3 >> 4);
-                    q_dot += dot(xv0, qv0) + dot(xv1, qv1);
-                    x_sum += (xv0.x + xv0.y + xv0.z + xv0.w) +
-                             (xv1.x + xv1.y + xv1.z + xv1.w);
+            if (gi_lo + 63 < k) {
+                // Full group — low nibbles (elements gi_lo..gi_lo+31)
+                float q_dot_lo = 0.0f, x_sum_lo = 0.0f;
+                for (uint l = 0; l < 32; l += 4) {
+                    float4 xv = *(device const float4*)(x + gi_lo + l);
+                    float4 qv = float4(qs[ql_off + l] & 0xF, qs[ql_off + l + 1] & 0xF,
+                                       qs[ql_off + l + 2] & 0xF, qs[ql_off + l + 3] & 0xF);
+                    q_dot_lo += dot(xv, qv);
+                    x_sum_lo += xv.x + xv.y + xv.z + xv.w;
                 }
-                sum += d_sc * q_dot - dm_m * x_sum;
+                sum += d_lo * q_dot_lo - dm_lo * x_sum_lo;
+
+                // High nibbles (elements gi_hi..gi_hi+31)
+                float q_dot_hi = 0.0f, x_sum_hi = 0.0f;
+                for (uint l = 0; l < 32; l += 4) {
+                    float4 xv = *(device const float4*)(x + gi_hi + l);
+                    float4 qv = float4(qs[ql_off + l] >> 4, qs[ql_off + l + 1] >> 4,
+                                       qs[ql_off + l + 2] >> 4, qs[ql_off + l + 3] >> 4);
+                    q_dot_hi += dot(xv, qv);
+                    x_sum_hi += xv.x + xv.y + xv.z + xv.w;
+                }
+                sum += d_hi * q_dot_hi - dm_hi * x_sum_hi;
             } else {
+                // Partial group — scalar fallback
                 for (uint l = 0; l < 32; l++) {
-                    uint gi = gi_base + l;
+                    uint gi = gi_lo + l;
                     if (gi >= k) break;
-                    uint qi = sb * 32 + l;
-                    uint byte_idx = qi / 2;
-                    float q = (qi % 2 == 0) ? float(qs[byte_idx] & 0xF) : float(qs[byte_idx] >> 4);
-                    sum += x[gi] * (d_sc * q - dm_m);
+                    sum += x[gi] * (d_lo * float(qs[ql_off + l] & 0xF) - dm_lo);
+                }
+                for (uint l = 0; l < 32; l++) {
+                    uint gi = gi_hi + l;
+                    if (gi >= k) break;
+                    sum += x[gi] * (d_hi * float(qs[ql_off + l] >> 4) - dm_hi);
                 }
             }
         }
@@ -934,6 +944,180 @@ kernel void gemv_mlx_q4(
     if (tid == 0) y[tgid] = sum;
 }
 
+// ── MLX 8-bit affine GEMV ────────────────────────────────────
+// U32-packed bytes (4 per word), bf16 per-group scale + bias, group_size=64.
+// Dequant: float_val = scale * u8_val + bias
+
+kernel void gemv_mlx_q8(
+    device const float* x              [[buffer(0)]],
+    device const packed_uchar4* W      [[buffer(1)]],
+    device const packed_uchar2* scales [[buffer(2)]],
+    device const packed_uchar2* biases [[buffer(3)]],
+    device float* y                    [[buffer(4)]],
+    constant uint& n                   [[buffer(5)]],
+    constant uint& k                   [[buffer(6)]],
+    uint tgid     [[threadgroup_position_in_grid]],
+    uint tid      [[thread_index_in_threadgroup]],
+    uint tg_size  [[threads_per_threadgroup]])
+{
+    if (tgid >= n) return;
+
+    const uint gs = 64;
+    const uint wpg = 16;   // u32 words per group (64 bytes / 4 per word)
+    uint gpr = (k + gs - 1) / gs;
+    uint w_row = tgid * gpr * wpg;
+    float sum = 0.0f;
+
+    for (uint g = tid; g < gpr; g += tg_size) {
+        uint sb_idx = tgid * gpr + g;
+        packed_uchar2 sb = scales[sb_idx];
+        float scale = as_type<float>(uint(ushort(sb[0]) | (ushort(sb[1]) << 8)) << 16);
+        packed_uchar2 bb = biases[sb_idx];
+        float bias  = as_type<float>(uint(ushort(bb[0]) | (ushort(bb[1]) << 8)) << 16);
+
+        uint xo = g * gs;
+        uint wg = w_row + g * wpg;
+        float q_dot = 0.0f;
+        float x_sum = 0.0f;
+
+        for (uint w = 0; w < wpg && xo + w * 4 < k; w++) {
+            uint xi = xo + w * 4;
+            packed_uchar4 bytes = W[wg + w];
+            float4 q = float4(float(bytes[0]), float(bytes[1]),
+                              float(bytes[2]), float(bytes[3]));
+            uint rem = min(uint(4), k - xi);
+            if (rem == 4) {
+                float4 xv = *(device const float4*)(x + xi);
+                q_dot += dot(q, xv);
+                x_sum += xv.x + xv.y + xv.z + xv.w;
+            } else {
+                for (uint i = 0; i < rem; i++) {
+                    q_dot += q[i] * x[xi + i];
+                    x_sum += x[xi + i];
+                }
+            }
+        }
+        sum += scale * q_dot + bias * x_sum;
+    }
+
+    threadgroup float shared[8];
+    sum = threadgroup_reduce_sum(sum, shared, tid, tg_size);
+    if (tid == 0) y[tgid] = sum;
+}
+
+// ── MXFP4 SafeTensors GEMV ──────────────────────────────────
+// U32-packed 4-bit nibbles (8 per word), E8M0 per-group scale, group_size=32.
+// Dequant: float_val = mxfp4_lut[nibble] * 2^(scale_byte - 127)
+// E8M0 is a pure power-of-2 format (OCP Microscaling spec). No bias.
+
+// E8M0 → float: val = 2^(byte - 127). Pure exponent, no mantissa bits.
+inline float e8m0_to_f32(uchar val) {
+    if (val == 0) return 0.0f;
+    return as_type<float>(uint(val) << 23);
+}
+
+// MXFP4 E2M1 dequant lookup table
+constant float mxfp4_lut[16] = {
+    0.0f, 0.5f, 1.0f, 1.5f, 2.0f, 3.0f, 4.0f, 6.0f,
+    -0.0f, -0.5f, -1.0f, -1.5f, -2.0f, -3.0f, -4.0f, -6.0f
+};
+
+kernel void gemv_mxfp4_st(
+    device const float* x             [[buffer(0)]],
+    device const packed_uchar4* W     [[buffer(1)]],
+    device const uchar* scales        [[buffer(2)]],
+    device float* y                   [[buffer(3)]],
+    constant uint& n                  [[buffer(4)]],
+    constant uint& k                  [[buffer(5)]],
+    uint tgid     [[threadgroup_position_in_grid]],
+    uint tid      [[thread_index_in_threadgroup]],
+    uint tg_size  [[threads_per_threadgroup]])
+{
+    if (tgid >= n) return;
+
+    const uint gs = 32;
+    const uint wpg = 4;   // u32 words per group (32 nibbles / 8 per word)
+    uint gpr = (k + gs - 1) / gs;
+    uint w_row = tgid * gpr * wpg;
+    float sum = 0.0f;
+
+    for (uint g = tid; g < gpr; g += tg_size) {
+        float scale = e8m0_to_f32(scales[tgid * gpr + g]);
+        uint xo = g * gs;
+        uint wg = w_row + g * wpg;
+
+        float gdot = 0.0f;
+        for (uint w = 0; w < wpg && xo + w * 8 < k; w++) {
+            uint xi = xo + w * 8;
+            packed_uchar4 bytes = W[wg + w];
+            uint word = uint(bytes[0]) | (uint(bytes[1]) << 8) |
+                        (uint(bytes[2]) << 16) | (uint(bytes[3]) << 24);
+
+            uint rem = min(uint(8), k - xi);
+            if (rem == 8) {
+                float4 q_lo = float4(mxfp4_lut[word & 0xF], mxfp4_lut[(word >> 4) & 0xF],
+                                      mxfp4_lut[(word >> 8) & 0xF], mxfp4_lut[(word >> 12) & 0xF]);
+                float4 q_hi = float4(mxfp4_lut[(word >> 16) & 0xF], mxfp4_lut[(word >> 20) & 0xF],
+                                      mxfp4_lut[(word >> 24) & 0xF], mxfp4_lut[(word >> 28) & 0xF]);
+                float4 x_lo = *(device const float4*)(x + xi);
+                float4 x_hi = *(device const float4*)(x + xi + 4);
+                gdot += dot(q_lo, x_lo) + dot(q_hi, x_hi);
+            } else {
+                for (uint i = 0; i < rem; i++) {
+                    gdot += mxfp4_lut[(word >> (i * 4)) & 0xF] * x[xi + i];
+                }
+            }
+        }
+        sum += scale * gdot;
+    }
+
+    threadgroup float shared[8];
+    sum = threadgroup_reduce_sum(sum, shared, tid, tg_size);
+    if (tid == 0) y[tgid] = sum;
+}
+
+// ── MXFP4 GGUF GEMV ─────────────────────────────────────────
+// 32 values per block, 17 bytes: 1 E8M0 scale + 16 nibble-packed bytes.
+// Split-half packing: low nibble → position j, high nibble → position j+16.
+
+kernel void gemv_mxfp4(
+    device const float* x     [[buffer(0)]],
+    device const uchar* W     [[buffer(1)]],
+    device float* y            [[buffer(2)]],
+    constant uint& n           [[buffer(3)]],
+    constant uint& k           [[buffer(4)]],
+    uint tgid     [[threadgroup_position_in_grid]],
+    uint tid      [[thread_index_in_threadgroup]],
+    uint tg_size  [[threads_per_threadgroup]])
+{
+    if (tgid >= n) return;
+
+    const uint qk = 32;
+    const uint bpb = 17;
+    uint nb = (k + qk - 1) / qk;
+    float sum = 0.0f;
+
+    for (uint b = tid; b < nb; b += tg_size) {
+        uint bp = tgid * nb * bpb + b * bpb;
+        float d = e8m0_to_f32(W[bp]);
+        uint bk = b * qk;
+
+        for (uint j = 0; j < qk / 2; j++) {
+            uchar byte_val = W[bp + 1 + j];
+            float v0 = mxfp4_lut[byte_val & 0xF];
+            float v1 = mxfp4_lut[byte_val >> 4];
+            uint gi0 = bk + j;
+            uint gi1 = bk + j + qk / 2;
+            if (gi0 < k) sum += x[gi0] * v0 * d;
+            if (gi1 < k) sum += x[gi1] * v1 * d;
+        }
+    }
+
+    threadgroup float shared[8];
+    sum = threadgroup_reduce_sum(sum, shared, tid, tg_size);
+    if (tid == 0) y[tgid] = sum;
+}
+
 // ── IQ4_NL GEMV ──────────────────────────────────────────────
 // 32 values per block, 18 bytes (f16 scale + 16 nibble-packed bytes).
 // Non-linear lookup table dequant instead of linear (Q4_0-like structure).
@@ -1113,6 +1297,45 @@ kernel void gemv_fp8_e5m2(
     uint row_off = tgid * k;
     for (uint j = tid; j < k; j += tg_size) {
         sum += fp8e5m2_to_f32(W[row_off + j]) * x[j];
+    }
+
+    threadgroup float shared[8];
+    sum = threadgroup_reduce_sum(sum, shared, tid, tg_size);
+    if (tid == 0) y[tgid] = sum;
+}
+
+// ── Transposed Q8_0 GEMV ─────────────────────────────────────
+// Computes y[out_dim] = W^T @ x[in_dim] where W is stored as
+// [in_dim rows, out_dim cols] in Q8_0 (GGUF 3D multi-head layout).
+// Used for MLA K_nope/V projections (embed_q, unembed_out).
+//
+// Dispatch: one threadgroup per output element (dispatchThreadgroups(out_dim,1,1)).
+// Each threadgroup reduces across all in_dim rows for its output column.
+// Q8_0 blocks run along out_dim (each row has ceil(out_dim/32) blocks).
+
+kernel void gemv_t_q8_0(
+    device const float* x          [[buffer(0)]],
+    device const block_q8_0* W     [[buffer(1)]],
+    device float* y                [[buffer(2)]],
+    constant uint& out_dim         [[buffer(3)]],
+    constant uint& in_dim          [[buffer(4)]],
+    uint tgid     [[threadgroup_position_in_grid]],
+    uint tid      [[thread_index_in_threadgroup]],
+    uint tg_size  [[threads_per_threadgroup]])
+{
+    if (tgid >= out_dim) return;
+
+    // Which Q8_0 block and element within block for output column tgid
+    uint blocks_per_row = (out_dim + 31) / 32;
+    uint blk_col = tgid / 32;
+    uint blk_off = tgid % 32;
+
+    float sum = 0.0f;
+    // Each thread strides over in_dim rows
+    for (uint j = tid; j < in_dim; j += tg_size) {
+        device const block_q8_0& blk = W[j * blocks_per_row + blk_col];
+        float w = float(blk.qs[blk_off]) * float(blk.d);
+        sum += w * x[j];
     }
 
     threadgroup float shared[8];

@@ -5,12 +5,12 @@
 //! ejects finished/cancelled requests, and fills batch from waiting queue (FIFO).
 
 const std = @import("std");
-const Model = @import("models/model.zig").Model;
+const Model = @import("../models/model.zig").Model;
 const Allocator = std.mem.Allocator;
-const RadixTree = @import("kvcache/manager.zig").RadixTree;
+const RadixTree = @import("../kvcache/manager.zig").RadixTree;
 const Metrics = @import("metrics.zig").Metrics;
-const TieredKvCache = @import("kvcache/tiered.zig").TieredKvCache;
-const Prefetcher = @import("kvcache/prefetch.zig").Prefetcher;
+const TieredKvCache = @import("../kvcache/tiered.zig").TieredKvCache;
+const Prefetcher = @import("../kvcache/prefetch.zig").Prefetcher;
 
 /// Scheduler loop poll interval (nanoseconds).
 const scheduler_poll_ns: u64 = 1_000_000; // 1ms

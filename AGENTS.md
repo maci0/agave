@@ -449,7 +449,7 @@ CUDA kernels under `src/backend/kernels/cuda/`, ROCm under `src/backend/kernels/
 
 **No CPU fallbacks in GPU backends:** GPU backends (Metal, CUDA, Vulkan, ROCm) must `@panic` on missing kernels — never silently delegate to CPU. Only exceptions: `embLookup` (single-row read, CPU faster) and `softmax` below threshold (Metal only). See AGENTS.md Section 1.
 
-**Web UI:** Built-in chat UI at `/v1/chat`. Source files in `src/ui/` (style.css, app.js, head.html, body.html), assembled at comptime via `@embedFile` concatenation in `server.zig`.
+**Web UI:** Built-in chat UI at `/v1/chat`. Source files in `src/ui/` (style.css, app.js, head.html, body.html), assembled at comptime via `@embedFile` concatenation in `src/server/server.zig`.
 
 **Build verification:** `zig build test` does NOT compile `agave-bench`. Always run `zig build` (full build) to catch signature mismatches in `src/micro_bench.zig` after changing model init or backend interfaces.
 
@@ -910,7 +910,7 @@ A high-performance LLM inference engine written in Zig, optimized for extreme cr
 - Strict boundary enforcement: implementations accessed only through dispatchers
 ## Layers
 - Purpose: CLI interface, REPL, HTTP server, output formatting
-- Location: `src/main.zig` (CLI + generation logic), `src/server.zig` (HTTP API), `src/display.zig` (formatting), `src/readline.zig` (interactive input)
+- Location: `src/main.zig` (CLI + generation logic), `src/server/server.zig` (HTTP API), `src/display.zig` (formatting), `src/readline.zig` (interactive input)
 - Contains: Argument parsing, generation loop, prompt formatting, token streaming
 - Depends on: Model interface, Tokenizer interface, Format interface
 - Used by: Entry point only
@@ -977,16 +977,16 @@ A high-performance LLM inference engine written in Zig, optimized for extreme cr
 - Paged: Block-based allocation per vLLM PagedAttention spec (multi-sequence, shared blocks)
 - Radix: Prefix tree for longest-common-prefix detection and copy-on-write sharing (SGLang-style)
 ## Entry Points
-- Location: `src/main.zig` lines 1114–1245
+- Location: `src/main.zig` `runRepl()`
 - Triggers: No prompt or server flag provided
 - Responsibilities:
-- Location: `src/main.zig` lines 1249–1265
+- Location: `src/main.zig` `generateAndPrint()`
 - Triggers: Prompt provided (CLI arg or piped stdin)
 - Responsibilities:
-- Location: `src/server.zig`
+- Location: `src/server/server.zig`
 - Triggers: `--serve` flag
 - Responsibilities:
-- Location: `src/main.zig` lines 1272–1451
+- Location: `src/main.zig` `initAndRun()`
 - Triggers: Called by all three entry points
 - Responsibilities:
 ## Error Handling

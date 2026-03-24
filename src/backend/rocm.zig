@@ -269,7 +269,7 @@ pub const RocmBackend = struct {
         self.fn_gemv_fp8_e4m3 = try self.getFunction(hipModuleGetFunction, "gemv_fp8_e4m3_kernel");
         self.fn_gemv_fp8_e5m2 = try self.getFunction(hipModuleGetFunction, "gemv_fp8_e5m2_kernel");
         self.fn_gemv_mlx_q4 = try self.getFunction(hipModuleGetFunction, "gemv_mlx_q4_kernel");
-        self.fn_rms_norm_multi = try self.getFunction(hipModuleGetFunction, "rms_norm_multi_kernel"); // loaded but rmsNormMulti() uses CPU fallback — GPU kernel not yet validated
+        self.fn_rms_norm_multi = try self.getFunction(hipModuleGetFunction, "rms_norm_multi_kernel"); // loaded but rmsNormMulti() panics — GPU kernel not yet validated
         self.fn_sdpa = try self.getFunction(hipModuleGetFunction, "sdpa_kernel");
         self.fn_sigmoid_mul = try self.getFunction(hipModuleGetFunction, "sigmoid_mul_kernel");
         self.fn_silu_mul = try self.getFunction(hipModuleGetFunction, "silu_mul_kernel");
@@ -472,8 +472,8 @@ pub const RocmBackend = struct {
 
     // ── Backend interface ────────────────────────────────────────
 
-    /// y[n] = W[n,k] @ x[k]. GPU kernels for F32, BF16, F16, Q8_0, Q4_0;
-    /// other dtypes fall back to CPU.
+    /// y[n] = W[n,k] @ x[k]. GPU kernels for F32, BF16, F16, Q8_0, Q4_0,
+    /// Q4_K, Q5_K, Q6_K, FP8_E4M3, FP8_E5M2; other dtypes panic.
     pub fn gemv(self: *RocmBackend, x: [*]const f32, w: TensorData, y: [*]f32, n: usize, k: usize) void {
         const func = switch (w.dtype) {
             .f32 => self.fn_gemv_f32,
@@ -567,6 +567,17 @@ pub const RocmBackend = struct {
         self.rmsNorm(a, weight, output, n, eps);
     }
 
+    /// Transposed GEMV for Q8_0 3D weights — not yet implemented.
+    pub fn gemvT(_: *RocmBackend, _: [*]const f32, _: [*]const u8, _: [*]f32, _: usize, _: usize) void {
+        @panic("gemvT not implemented for ROCm");
+    }
+
+    /// Scaled accumulate: dst[i] += src[i] * scale.
+    pub fn addScaled(_: *RocmBackend, src: [*]const f32, dst: [*]f32, scale: f32, n: usize) void {
+        // TODO: ROCm kernel — inline CPU loop for now (n_embd-sized, negligible vs GEMV)
+        for (0..n) |i| dst[i] += src[i] * scale;
+    }
+
     /// Element-wise mul
     pub fn mul(self: *RocmBackend, a: [*]const f32, b: [*]const f32, output: [*]f32, n: usize) void {
         const sz = n * @sizeOf(f32);
@@ -632,6 +643,10 @@ pub const RocmBackend = struct {
     /// MLX affine quantized GEMV.
     pub fn gemvMlxQ(_: *RocmBackend, _: [*]const f32, _: [*]const u8, _: [*]const u8, _: [*]const u8, _: [*]f32, _: usize, _: usize, _: u32) void {
         @panic("ROCm MLX GEMV: no GPU kernel — add a ROCm kernel");
+    }
+
+    pub fn gemvMxfp4St(_: *RocmBackend, _: [*]const f32, _: [*]const u8, _: [*]const u8, _: [*]f32, _: usize, _: usize) void {
+        @panic("ROCm MXFP4 SafeTensors GEMV: no GPU kernel — add a ROCm kernel");
     }
 
     /// In-place sigmoid-gated multiply: data[i] *= sigmoid(gate[i])

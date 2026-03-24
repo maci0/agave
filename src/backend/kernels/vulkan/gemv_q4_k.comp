@@ -52,19 +52,30 @@ void main() {
         uint qs_off = bp + 16;
         uint bk = b * bs;
 
-        for (uint sb = 0; sb < 8; sb++) {
-            uint sc, m;
-            getScaleMinK4(sb, scales_off, sc, m);
-            float d_sc = d * float(sc);
-            float dm_m = dmin * float(m);
+        // 4 groups of 64 elements: low nibbles (32 elems) then high nibbles (32 elems)
+        for (uint g = 0; g < 4; g++) {
+            uint sc_lo, m_lo, sc_hi, m_hi;
+            getScaleMinK4(g * 2, scales_off, sc_lo, m_lo);
+            getScaleMinK4(g * 2 + 1, scales_off, sc_hi, m_hi);
+            float d_lo = d * float(sc_lo);
+            float dm_lo = dmin * float(m_lo);
+            float d_hi = d * float(sc_hi);
+            float dm_hi = dmin * float(m_hi);
+            uint ql_off = g * 32;
+            uint gi_lo = bk + g * 64;
+            // Low nibbles: elements gi_lo..gi_lo+31
             for (uint l = 0; l < 32; l++) {
-                uint gi = bk + sb * 32 + l;
+                uint gi = gi_lo + l;
                 if (gi >= k) break;
-                uint qi = sb * 32 + l;
-                uint byte_idx = qi / 2;
-                uint raw_q = readByte(qs_off + byte_idx);
-                float q = (qi % 2 == 0) ? float(raw_q & 0xF) : float(raw_q >> 4);
-                sum += x[gi] * (d_sc * q - dm_m);
+                float q = float(readByte(qs_off + ql_off + l) & 0xF);
+                sum += x[gi] * (d_lo * q - dm_lo);
+            }
+            // High nibbles: elements gi_lo+32..gi_lo+63
+            for (uint l = 0; l < 32; l++) {
+                uint gi = gi_lo + 32 + l;
+                if (gi >= k) break;
+                float q = float(readByte(qs_off + ql_off + l) >> 4);
+                sum += x[gi] * (d_hi * q - dm_hi);
             }
         }
     }

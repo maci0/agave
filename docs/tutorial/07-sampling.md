@@ -1,6 +1,6 @@
 # Chapter 7: Sampling
 
-After the forward pass produces logits (one score per vocabulary token), the model must **select** the next token. The simplest method is greedy decoding (pick the highest score), but this produces repetitive, deterministic output. Sampling parameters add controlled randomness for more natural text.
+After the forward pass produces **logits** (raw unnormalized scores, one per vocabulary token), the model must **select** the next token. The simplest method is **greedy decoding** (pick the highest score), but this produces repetitive, **deterministic** (always the same output for the same input) output. Sampling parameters add controlled randomness for more natural text.
 
 ## Temperature
 
@@ -31,11 +31,11 @@ Restricts sampling to only the K highest-scoring tokens:
 --top-k 0     Disabled (consider all tokens) — default
 ```
 
-Sort tokens by score, keep the top K, renormalize probabilities, sample. Prevents picking extremely unlikely tokens at high temperatures.
+Sort tokens by score, keep the top K, **renormalize** probabilities (rescale so they sum to 1.0 again), sample. Prevents picking extremely unlikely tokens at high temperatures.
 
 ## Top-P (Nucleus Sampling)
 
-Restricts sampling to the smallest set of tokens whose cumulative probability exceeds P:
+Restricts sampling to the smallest set of tokens whose **cumulative probability** (running sum of probabilities in sorted order) exceeds P:
 
 ```
 --top-p 0.9    Keep tokens until cumulative probability reaches 90%
@@ -80,4 +80,6 @@ agave model.gguf -t 0.8 --repeat-penalty 1.1 -n 1000 "Write an essay"
 
 **In the code:** `src/ops/math.zig` (sampleToken — temperature scaling, top-k, top-p, nucleus sampling)
 
-**Next:** [Chapter 8: GPU Backends →](08-gpu-backends.md)
+**Math reference:** [Argmax](appendix-math.md#argmax), [Temperature Scaling](appendix-math.md#temperature-scaling), [Top-K](appendix-math.md#top-k-selection), [Top-P](appendix-math.md#top-p-nucleus-sampling)
+
+**Next:** [Chapter 8: Backends →](08-backends.md)

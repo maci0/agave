@@ -231,15 +231,13 @@ pub const NemotronNanoModel = struct {
         } else {
             const block_size = kvcache.default_block_size;
             const num_blocks = (self.max_seq_len + block_size - 1) / block_size * nl;
-            var paged_cache = try PagedKvCache.init(allocator, nl, kvd, num_blocks, block_size);
-            errdefer paged_cache.deinit();
-            var block_allocator = BlockAllocator.init(&paged_cache, allocator);
-            var seq_table = try block_allocator.allocateSeqTable(nl);
-            errdefer block_allocator.freeSeqTable(&seq_table);
-            try block_allocator.appendBlock(&seq_table);
-            self.paged_cache = paged_cache;
-            self.seq_table = seq_table;
-            self.block_allocator = block_allocator;
+            self.paged_cache = try PagedKvCache.init(allocator, nl, kvd, num_blocks, block_size);
+            errdefer self.paged_cache.deinit();
+            // BlockAllocator stores a pointer — must point to self.paged_cache (not a local copy).
+            self.block_allocator = BlockAllocator.init(&self.paged_cache, allocator);
+            self.seq_table = try self.block_allocator.allocateSeqTable(nl);
+            errdefer self.block_allocator.freeSeqTable(&self.seq_table);
+            try self.block_allocator.appendBlock(&self.seq_table);
         }
 
         self.conv_states = try allocator.alloc([]f32, nl);
@@ -317,17 +315,7 @@ pub const NemotronNanoModel = struct {
     pub fn forward(self: *NemotronNanoModel, token_id: u32) !u32 {
         if (self.kv_seq_len >= self.max_seq_len) return error.KVCacheFull;
 
-        // Check if new block needed
-        const bs: usize = if (self.tiered_cache) |tc| tc.block_size else self.paged_cache.block_size;
-        const current_blocks = self.seq_table.block_table[0].len;
-        const needed_blocks = (self.kv_seq_len + 1 + bs - 1) / bs;
-        if (needed_blocks > current_blocks) {
-            if (self.tiered_block_allocator) |*ta| {
-                try ta.appendBlock(&self.seq_table);
-            } else {
-                try self.block_allocator.appendBlock(&self.seq_table);
-            }
-        }
+        try model_mod.ensureKvBlock(self);
 
         const e: usize = self.n_embd;
 
@@ -372,16 +360,7 @@ pub const NemotronNanoModel = struct {
             if (self.conv_states[i].len > 0) @memset(self.conv_states[i], 0);
             if (self.ssm_states[i].len > 0) @memset(self.ssm_states[i], 0);
         }
-        if (self.tiered_block_allocator) |*ta| {
-            ta.freeSeqTable(&self.seq_table);
-            self.seq_table = ta.allocateSeqTable(self.n_layers) catch return;
-            ta.appendBlock(&self.seq_table) catch return;
-        } else {
-            self.block_allocator.freeSeqTable(&self.seq_table);
-            self.seq_table = self.block_allocator.allocateSeqTable(self.n_layers) catch return;
-            self.block_allocator.appendBlock(&self.seq_table) catch return;
-        }
-        model_mod.resetInferenceState(&self.kv_seq_len, &self.cancelled);
+        model_mod.resetKvCache(self);
     }
 
     /// Signal an in-progress forward pass to abort.
@@ -397,7 +376,7 @@ pub const NemotronNanoModel = struct {
 
     // ── Layer implementations ─────────────────────────────────────
 
-    /// Helper: get flat f32 view of KV cache for a layer (assembled from paged or tiered blocks).
+    /// Helper: get KV cache byte slices for a layer from the first paged/tiered block.
     fn getLayerKvView(self: *NemotronNanoModel, layer: usize) struct { keys: []u8, values: []u8 } {
         const num_blocks = self.seq_table.block_table[layer].len;
         if (num_blocks == 0) return .{ .keys = &[_]u8{}, .values = &[_]u8{} };

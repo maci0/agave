@@ -64,6 +64,9 @@ pub const Qwen35Model = struct {
     has_qk_norm: bool = true, // Per-head Q/K RMS norms (Qwen3/3.5 only, not Qwen2)
     has_post_attn_norm: bool = true, // Qwen3.5 fused addRmsNorm; Qwen3 uses separate ffn_norm
 
+    /// True when weights are MLX quantized (SafeTensors U32 packed).
+    is_mlx: bool = false,
+
     is_moe: bool = false,
     n_experts: u32 = 0,
     n_experts_active: u32 = 0,
@@ -188,6 +191,19 @@ pub const Qwen35Model = struct {
         // Qwen3/2: "ffn_norm" (separate pre-norm, standard residual after attention).
         self.has_post_attn_norm = f.layerTensor(check_layer, "post_attention_norm.weight") != null;
 
+        // Detect MLX quantized weights (SafeTensors U32 packed with companion scale/bias).
+        // Check multiple tensor names since some layers might not have attention.
+        const mlx_check_names = [_][]const u8{ "attn_q.weight", "ffn_gate.weight", "ffn_up.weight" };
+        for (mlx_check_names) |name| {
+            for (0..self.n_layers) |li| {
+                if (f.layerTensor(@intCast(li), name)) |tw| {
+                    if (tw.dtype == .mlx_q) self.is_mlx = true;
+                    break;
+                }
+            }
+            if (self.is_mlx) break;
+        }
+
         std.debug.assert(self.n_head % self.n_head_kv == 0);
         std.debug.assert(self.ssm_d_inner % self.ssm_dt_rank == 0);
         std.debug.assert(self.rope_dim <= self.head_dim);
@@ -260,15 +276,13 @@ pub const Qwen35Model = struct {
         } else {
             const block_size = kvcache.default_block_size;
             const num_blocks = (self.max_seq_len + block_size - 1) / block_size * nl;
-            var paged_cache = try PagedKvCache.init(allocator, nl, nkv_dim, num_blocks, block_size);
-            errdefer paged_cache.deinit();
-            var block_allocator = BlockAllocator.init(&paged_cache, allocator);
-            var seq_table = try block_allocator.allocateSeqTable(nl);
-            errdefer block_allocator.freeSeqTable(&seq_table);
-            try block_allocator.appendBlock(&seq_table);
-            self.paged_cache = paged_cache;
-            self.seq_table = seq_table;
-            self.block_allocator = block_allocator;
+            self.paged_cache = try PagedKvCache.init(allocator, nl, nkv_dim, num_blocks, block_size);
+            errdefer self.paged_cache.deinit();
+            // BlockAllocator stores a pointer — must point to self.paged_cache (not a local copy).
+            self.block_allocator = BlockAllocator.init(&self.paged_cache, allocator);
+            self.seq_table = try self.block_allocator.allocateSeqTable(nl);
+            errdefer self.block_allocator.freeSeqTable(&self.seq_table);
+            try self.block_allocator.appendBlock(&self.seq_table);
         }
 
         self.conv_states = try allocator.alloc([]f32, nl);
@@ -406,7 +420,15 @@ pub const Qwen35Model = struct {
 
     fn embLookup(self: *Qwen35Model, tok: u32) !void {
         const t = self.fmt.getTensor("token_embd.weight") orelse return error.MissingTensor;
-        self.be.embLookup(.{ .data = t.data_ptr, .dtype = t.dtype }, tok, self.hidden.ptr, self.n_embd);
+        if (t.dtype == .mlx_q) {
+            const mlx_ops = @import("../ops/mlx.zig");
+            const st = self.fmt.getTensor("token_embd.scales") orelse return error.MissingTensor;
+            const bt = self.fmt.getTensor("token_embd.biases") orelse return error.MissingTensor;
+            const bits: u32 = if (st.dtype == .unknown) 4 else (self.fmt.getMetaU32("bits") orelse 4);
+            mlx_ops.mlxEmbLookup(self.hidden.ptr, @ptrCast(@alignCast(t.data_ptr)), @ptrCast(@alignCast(st.data_ptr)), @ptrCast(@alignCast(bt.data_ptr)), tok, self.n_embd, bits);
+        } else {
+            self.be.embLookup(.{ .data = t.data_ptr, .dtype = t.dtype }, tok, self.hidden.ptr, self.n_embd);
+        }
     }
     fn isFullAttn(self: *const Qwen35Model, layer: u32) bool {
         if (self.full_attn_interval == 0) return true;
@@ -418,7 +440,7 @@ pub const Qwen35Model = struct {
         if (self.perf.enabled) self.be.sync();
     }
 
-    /// Helper: get flat f32 view of KV cache for a layer (assembled from paged or tiered blocks).
+    /// Helper: get KV cache byte slices for a layer from the first paged/tiered block.
     fn getLayerKvView(self: *Qwen35Model, layer: usize) struct { keys: []u8, values: []u8 } {
         const num_blocks = self.seq_table.block_table[layer].len;
         if (num_blocks == 0) return .{ .keys = &[_]u8{}, .values = &[_]u8{} };
@@ -436,6 +458,71 @@ pub const Qwen35Model = struct {
             .keys = std.mem.sliceAsBytes(keys_f32),
             .values = std.mem.sliceAsBytes(values_f32),
         };
+    }
+
+    // ---- MLX-aware GEMV dispatch ----
+
+    /// Dispatch GEMV: handles MLX quantized weights via model_mod.dispatchGemv.
+    fn doGemv(self: *Qwen35Model, x: [*]const f32, t: FormatTensorInfo, y: [*]f32, n: usize, k: usize) void {
+        model_mod.dispatchGemv(self.be, self.fmt, x, t, y, n, k);
+    }
+
+    /// Batched GEMV: dispatches 2 or 3 ops. For MLX, uses sequential doGemv
+    /// with TensorInfo (needed for companion tensor lookup).
+    fn doGemvBatch2(self: *Qwen35Model, x: [*]const f32, t0: FormatTensorInfo, y0: [*]f32, n0: usize, t1: FormatTensorInfo, y1: [*]f32, n1: usize, k: usize) void {
+        if (!self.is_mlx) {
+            const GemvOp = backend_mod.GemvOp;
+            const ops = [_]GemvOp{
+                .{ .w = .{ .data = t0.data_ptr, .dtype = t0.dtype }, .y = y0, .n = n0 },
+                .{ .w = .{ .data = t1.data_ptr, .dtype = t1.dtype }, .y = y1, .n = n1 },
+            };
+            self.be.gemvMulti(x, &ops, k);
+        } else {
+            self.doGemv(x, t0, y0, n0, k);
+            self.doGemv(x, t1, y1, n1, k);
+        }
+    }
+
+    fn doGemvBatch3(self: *Qwen35Model, x: [*]const f32, t0: FormatTensorInfo, y0: [*]f32, n0: usize, t1: FormatTensorInfo, y1: [*]f32, n1: usize, t2: FormatTensorInfo, y2: [*]f32, n2: usize, k: usize) void {
+        if (!self.is_mlx) {
+            const GemvOp = backend_mod.GemvOp;
+            const ops = [_]GemvOp{
+                .{ .w = .{ .data = t0.data_ptr, .dtype = t0.dtype }, .y = y0, .n = n0 },
+                .{ .w = .{ .data = t1.data_ptr, .dtype = t1.dtype }, .y = y1, .n = n1 },
+                .{ .w = .{ .data = t2.data_ptr, .dtype = t2.dtype }, .y = y2, .n = n2 },
+            };
+            self.be.gemvMulti(x, &ops, k);
+        } else {
+            self.doGemv(x, t0, y0, n0, k);
+            self.doGemv(x, t1, y1, n1, k);
+            self.doGemv(x, t2, y2, n2, k);
+        }
+    }
+
+    /// Dispatch expert slice GEMV for MLX quantized expert tensors.
+    fn doGemvExpert(self: *Qwen35Model, x: [*]const f32, exp_t: FormatTensorInfo, ei: usize, stride: usize, y: [*]f32, n: usize, k: usize) void {
+        const data = exp_t.data_ptr + ei * stride;
+        if (exp_t.dtype != .mlx_q) {
+            self.be.gemv(x, .{ .data = data, .dtype = exp_t.dtype }, y, n, k);
+            return;
+        }
+        const wi = std.mem.lastIndexOf(u8, exp_t.name, ".weight") orelse return;
+        var sbuf: [128]u8 = undefined;
+        const prefix = exp_t.name[0..wi];
+        const s_name = std.fmt.bufPrint(&sbuf, "{s}.scales", .{prefix}) catch return;
+        const st = self.fmt.getTensor(s_name) orelse return;
+        if (st.dtype == .unknown) {
+            // MXFP4
+            const s_stride = if (st.n_dims >= 3) @as(usize, @intCast(st.dims[0])) * @as(usize, @intCast(st.dims[1])) else st.numElements();
+            self.be.gemvMxfp4St(x, data, st.data_ptr + ei * s_stride, y, n, k);
+        } else {
+            // MLX affine
+            var bbuf: [128]u8 = undefined;
+            const b_name = std.fmt.bufPrint(&bbuf, "{s}.biases", .{prefix}) catch return;
+            const bt = self.fmt.getTensor(b_name) orelse return;
+            const s_stride = if (st.n_dims >= 3) @as(usize, @intCast(st.dims[0])) * @as(usize, @intCast(st.dims[1])) * 2 else st.numElements() * 2;
+            self.be.gemvMlxQ(x, data, st.data_ptr + ei * s_stride, bt.data_ptr + ei * s_stride, y, n, k, 8);
+        }
     }
 
     // ---- Full attention layer ----
@@ -461,13 +548,7 @@ pub const Qwen35Model = struct {
         const vw = self.fmt.layerTensor(li, "attn_v.weight") orelse return;
 
         const q_out: usize = if (self.has_gate) qd * 2 else qd;
-        const GemvOp = backend_mod.GemvOp;
-        const qkv_ops = [_]GemvOp{
-            .{ .w = .{ .data = qw.data_ptr, .dtype = qw.dtype }, .y = self.q_buf.ptr, .n = q_out },
-            .{ .w = .{ .data = kw.data_ptr, .dtype = kw.dtype }, .y = self.k_buf.ptr, .n = nkv * hd },
-            .{ .w = .{ .data = vw.data_ptr, .dtype = vw.dtype }, .y = self.v_buf.ptr, .n = nkv * hd },
-        };
-        self.be.gemvMulti(self.hidden2.ptr, &qkv_ops, e);
+        self.doGemvBatch3(self.hidden2.ptr, qw, self.q_buf.ptr, q_out, kw, self.k_buf.ptr, nkv * hd, vw, self.v_buf.ptr, nkv * hd, e);
         self.syncProfile();
         self.perf.end(.gemv_qkv, t);
 
@@ -537,7 +618,7 @@ pub const Qwen35Model = struct {
         // Output projection
         t = self.perf.start();
         const ow = self.fmt.layerTensor(li, "attn_output.weight") orelse return;
-        self.be.gemv(self.attn_out.ptr, .{ .data = ow.data_ptr, .dtype = ow.dtype }, self.hidden2.ptr, e, qd);
+        self.doGemv(self.attn_out.ptr, ow, self.hidden2.ptr, e, qd);
         self.syncProfile();
         self.perf.end(.gemv_out, t);
 
@@ -577,14 +658,21 @@ pub const Qwen35Model = struct {
         const gate_w = self.fmt.layerTensor(li, "attn_gate.weight") orelse return error.MissingTensor;
         const alpha_w = self.fmt.layerTensor(li, "ssm_alpha.weight") orelse return error.MissingTensor;
         const beta_w = self.fmt.layerTensor(li, "ssm_beta.weight") orelse return error.MissingTensor;
-        const GemvOp = backend_mod.GemvOp;
-        const delta_ops = [_]GemvOp{
-            .{ .w = .{ .data = qkv_w.data_ptr, .dtype = qkv_w.dtype }, .y = self.ssm_qkv_buf.ptr, .n = conv_ch },
-            .{ .w = .{ .data = gate_w.data_ptr, .dtype = gate_w.dtype }, .y = self.ssm_z_buf.ptr, .n = d_inner },
-            .{ .w = .{ .data = alpha_w.data_ptr, .dtype = alpha_w.dtype }, .y = self.ssm_alpha_buf.ptr, .n = num_v_heads },
-            .{ .w = .{ .data = beta_w.data_ptr, .dtype = beta_w.dtype }, .y = self.ssm_beta_buf.ptr, .n = num_v_heads },
-        };
-        self.be.gemvMulti(self.hidden2.ptr, &delta_ops, e);
+        if (self.is_mlx) {
+            self.doGemv(self.hidden2.ptr, qkv_w, self.ssm_qkv_buf.ptr, conv_ch, e);
+            self.doGemv(self.hidden2.ptr, gate_w, self.ssm_z_buf.ptr, d_inner, e);
+            self.doGemv(self.hidden2.ptr, alpha_w, self.ssm_alpha_buf.ptr, num_v_heads, e);
+            self.doGemv(self.hidden2.ptr, beta_w, self.ssm_beta_buf.ptr, num_v_heads, e);
+        } else {
+            const GemvOp = backend_mod.GemvOp;
+            const delta_ops = [_]GemvOp{
+                .{ .w = .{ .data = qkv_w.data_ptr, .dtype = qkv_w.dtype }, .y = self.ssm_qkv_buf.ptr, .n = conv_ch },
+                .{ .w = .{ .data = gate_w.data_ptr, .dtype = gate_w.dtype }, .y = self.ssm_z_buf.ptr, .n = d_inner },
+                .{ .w = .{ .data = alpha_w.data_ptr, .dtype = alpha_w.dtype }, .y = self.ssm_alpha_buf.ptr, .n = num_v_heads },
+                .{ .w = .{ .data = beta_w.data_ptr, .dtype = beta_w.dtype }, .y = self.ssm_beta_buf.ptr, .n = num_v_heads },
+            };
+            self.be.gemvMulti(self.hidden2.ptr, &delta_ops, e);
+        }
         self.syncProfile();
         self.perf.end(.gemv_qkv, t);
 
@@ -622,7 +710,7 @@ pub const Qwen35Model = struct {
         // 9. Output projection
         t = self.perf.start();
         const out_w = self.fmt.layerTensor(li, "ssm_out.weight") orelse return error.MissingTensor;
-        self.be.gemv(self.attn_out.ptr, .{ .data = out_w.data_ptr, .dtype = out_w.dtype }, self.hidden2.ptr, e, d_inner);
+        self.doGemv(self.attn_out.ptr, out_w, self.hidden2.ptr, e, d_inner);
         self.syncProfile();
         self.perf.end(.gemv_out, t);
     }
@@ -651,12 +739,7 @@ pub const Qwen35Model = struct {
         t = self.perf.start();
         const gw = self.fmt.layerTensor(li, "ffn_gate.weight") orelse return error.MissingTensor;
         const uw = self.fmt.layerTensor(li, "ffn_up.weight") orelse return error.MissingTensor;
-        const GemvOp = backend_mod.GemvOp;
-        const mlp_ops = [_]GemvOp{
-            .{ .w = .{ .data = gw.data_ptr, .dtype = gw.dtype }, .y = self.ff_buf1.ptr, .n = ff },
-            .{ .w = .{ .data = uw.data_ptr, .dtype = uw.dtype }, .y = self.ff_buf2.ptr, .n = ff },
-        };
-        self.be.gemvMulti(self.hidden2.ptr, &mlp_ops, e);
+        self.doGemvBatch2(self.hidden2.ptr, gw, self.ff_buf1.ptr, ff, uw, self.ff_buf2.ptr, ff, e);
         self.syncProfile();
         self.perf.end(.gemv_ffn, t);
 
@@ -668,7 +751,7 @@ pub const Qwen35Model = struct {
         // Down projection
         t = self.perf.start();
         const dw = self.fmt.layerTensor(li, "ffn_down.weight") orelse return error.MissingTensor;
-        self.be.gemv(self.ff_buf1.ptr, .{ .data = dw.data_ptr, .dtype = dw.dtype }, self.hidden2.ptr, e, ff);
+        self.doGemv(self.ff_buf1.ptr, dw, self.hidden2.ptr, e, ff);
         self.syncProfile();
         self.perf.end(.gemv_ffn, t);
 
@@ -697,7 +780,7 @@ pub const Qwen35Model = struct {
         // 1. Router: logits = router_weight @ hidden2
         t = self.perf.start();
         const rw = self.fmt.layerTensor(li, "ffn_gate_inp.weight") orelse return error.MissingTensor;
-        self.be.gemv(self.hidden2.ptr, .{ .data = rw.data_ptr, .dtype = rw.dtype }, self.router_logits.ptr, n_exp, e);
+        self.doGemv(self.hidden2.ptr, rw, self.router_logits.ptr, n_exp, e);
         self.be.sync();
         self.perf.end(.gemv_ffn, t);
 
@@ -746,13 +829,18 @@ pub const Qwen35Model = struct {
             t = self.perf.start();
             // Gate + up projections
             const gate_data = gate_exps.data_ptr + ei * gate_stride;
-            const up_data = up_exps.data_ptr + ei * up_stride;
-            const GemvOp = backend_mod.GemvOp;
-            const exp_ops = [_]GemvOp{
-                .{ .w = .{ .data = gate_data, .dtype = gate_exps.dtype }, .y = self.ff_buf1.ptr, .n = ff },
-                .{ .w = .{ .data = up_data, .dtype = up_exps.dtype }, .y = self.ff_buf2.ptr, .n = ff },
-            };
-            self.be.gemvMulti(self.hidden2.ptr, &exp_ops, e);
+            if (self.is_mlx and gate_exps.dtype == .mlx_q) {
+                self.doGemvExpert(self.hidden2.ptr, gate_exps, ei, gate_stride, self.ff_buf1.ptr, ff, e);
+                self.doGemvExpert(self.hidden2.ptr, up_exps, ei, up_stride, self.ff_buf2.ptr, ff, e);
+            } else {
+                const up_data = up_exps.data_ptr + ei * up_stride;
+                const GemvOp = backend_mod.GemvOp;
+                const exp_ops = [_]GemvOp{
+                    .{ .w = .{ .data = gate_data, .dtype = gate_exps.dtype }, .y = self.ff_buf1.ptr, .n = ff },
+                    .{ .w = .{ .data = up_data, .dtype = up_exps.dtype }, .y = self.ff_buf2.ptr, .n = ff },
+                };
+                self.be.gemvMulti(self.hidden2.ptr, &exp_ops, e);
+            }
             self.perf.end(.gemv_ffn, t);
 
             // SwiGLU: silu(gate) * up — GPU-accelerated, chains with gemvMulti
@@ -761,7 +849,11 @@ pub const Qwen35Model = struct {
 
             // Down projection → attn_out (reused as scratch, ≥ n_embd)
             const down_data = down_exps.data_ptr + ei * down_stride;
-            self.be.gemv(self.ff_buf1.ptr, .{ .data = down_data, .dtype = down_exps.dtype }, self.attn_out.ptr, e, ff);
+            if (self.is_mlx and down_exps.dtype == .mlx_q) {
+                self.doGemvExpert(self.ff_buf1.ptr, down_exps, ei, down_stride, self.attn_out.ptr, e, ff);
+            } else {
+                self.be.gemv(self.ff_buf1.ptr, .{ .data = down_data, .dtype = down_exps.dtype }, self.attn_out.ptr, e, ff);
+            }
             self.be.sync();
             self.perf.end(.gemv_ffn, t);
 
@@ -774,12 +866,7 @@ pub const Qwen35Model = struct {
         const sg = self.fmt.layerTensor(li, "ffn_gate_shexp.weight") orelse return error.MissingTensor;
         const su = self.fmt.layerTensor(li, "ffn_up_shexp.weight") orelse return error.MissingTensor;
         const shared_ff: usize = self.shared_expert_ff_dim;
-        const GemvOp2 = backend_mod.GemvOp;
-        const sh_ops = [_]GemvOp2{
-            .{ .w = .{ .data = sg.data_ptr, .dtype = sg.dtype }, .y = self.ff_buf1.ptr, .n = shared_ff },
-            .{ .w = .{ .data = su.data_ptr, .dtype = su.dtype }, .y = self.ff_buf2.ptr, .n = shared_ff },
-        };
-        self.be.gemvMulti(self.hidden2.ptr, &sh_ops, e);
+        self.doGemvBatch2(self.hidden2.ptr, sg, self.ff_buf1.ptr, shared_ff, su, self.ff_buf2.ptr, shared_ff, e);
         self.perf.end(.gemv_ffn, t);
 
         // SwiGLU for shared expert — GPU-accelerated, chains with gemvMulti
@@ -787,7 +874,7 @@ pub const Qwen35Model = struct {
         self.be.siluMul(self.ff_buf1.ptr, self.ff_buf2.ptr, self.ff_buf1.ptr, shared_ff);
 
         const sd = self.fmt.layerTensor(li, "ffn_down_shexp.weight") orelse return error.MissingTensor;
-        self.be.gemv(self.ff_buf1.ptr, .{ .data = sd.data_ptr, .dtype = sd.dtype }, self.attn_out.ptr, e, shared_ff);
+        self.doGemv(self.ff_buf1.ptr, sd, self.attn_out.ptr, e, shared_ff);
         self.be.sync();
         self.perf.end(.gemv_ffn, t);
 
@@ -824,17 +911,7 @@ pub const Qwen35Model = struct {
     pub fn forward(self: *Qwen35Model, token_id: u32) !u32 {
         if (self.kv_seq_len >= self.max_seq_len) return error.KVCacheFull;
 
-        // Check if new block needed
-        const bs: usize = if (self.tiered_cache) |tc| tc.block_size else self.paged_cache.block_size;
-        const current_blocks = self.seq_table.block_table[0].len;
-        const needed_blocks = (self.kv_seq_len + 1 + bs - 1) / bs;
-        if (needed_blocks > current_blocks) {
-            if (self.tiered_block_allocator) |*ta| {
-                try ta.appendBlock(&self.seq_table);
-            } else {
-                try self.block_allocator.appendBlock(&self.seq_table);
-            }
-        }
+        try model_mod.ensureKvBlock(self);
 
         const t = self.perf.start();
         try self.embLookup(token_id);
@@ -858,6 +935,14 @@ pub const Qwen35Model = struct {
             quant.dequantToF32(self.dequant_buf, nw.data_ptr, nw.dtype, self.n_embd);
             break :blk @ptrCast(self.dequant_buf.ptr);
         };
+        if (ow.dtype == .mlx_q) {
+            // MLX output weight: inline RMSNorm + doGemv + argmax
+            self.be.rmsNorm(self.hidden.ptr, @ptrCast(@alignCast(norm_ptr)), self.hidden.ptr, self.n_embd, self.rms_eps);
+            self.be.sync();
+            self.doGemv(self.hidden.ptr, ow, self.logits_buf.ptr, self.vocab_size, self.n_embd);
+            self.be.sync();
+            return math_ops.argmax(self.logits_buf);
+        }
         return math_ops.finalLogits(
             self.hidden.ptr,
             norm_ptr,
@@ -876,16 +961,7 @@ pub const Qwen35Model = struct {
             if (self.conv_states[i].len > 0) @memset(self.conv_states[i], 0);
             if (self.ssm_states[i].len > 0) @memset(self.ssm_states[i], 0);
         }
-        if (self.tiered_block_allocator) |*ta| {
-            ta.freeSeqTable(&self.seq_table);
-            self.seq_table = ta.allocateSeqTable(self.n_layers) catch return;
-            ta.appendBlock(&self.seq_table) catch return;
-        } else {
-            self.block_allocator.freeSeqTable(&self.seq_table);
-            self.seq_table = self.block_allocator.allocateSeqTable(self.n_layers) catch return;
-            self.block_allocator.appendBlock(&self.seq_table) catch return;
-        }
-        model_mod.resetInferenceState(&self.kv_seq_len, &self.cancelled);
+        model_mod.resetKvCache(self);
     }
 };
 

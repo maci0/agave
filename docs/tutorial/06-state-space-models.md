@@ -1,6 +1,6 @@
 # Chapter 6: State Space Models
 
-SSMs are an alternative to attention that process tokens in **O(1)** time per step instead of O(n²). Instead of re-reading all previous tokens, they maintain a fixed-size **state matrix** that summarizes the past:
+SSMs are an alternative to attention that process tokens in **O(1)** time per step (constant time — doesn't grow with sequence length) instead of O(n²). Instead of re-reading all previous tokens, they maintain a fixed-size **state matrix** that summarizes the past:
 
 ```
 state[t] = decay * state[t-1] + input[t]    (simplified)
@@ -13,13 +13,13 @@ The **decay** factor controls how quickly old information fades — like a leaky
 
 ## Causal Convolution
 
-Both DeltaNet and Mamba-2 use causal convolution as a preprocessing step. It's a 1D convolution that only looks at past inputs:
+Both DeltaNet and Mamba-2 use **causal convolution** as a preprocessing step. A **convolution** is a sliding window operation that combines nearby values using learned weights. **Causal** means it only looks at past inputs (backward in time), never future ones — ensuring the model can't "cheat" by seeing ahead:
 
 ```
 conv_out[t] = sum(conv_weight[k] * input[t-k] for k in 0..d_conv)
 ```
 
-With `d_conv=4`, each output depends on the current input and the 3 most recent. A **ring buffer** stores the history (zero allocation in the hot path):
+With `d_conv=4`, each output depends on the current input and the 3 most recent. A **ring buffer** (a fixed-size circular array where new entries overwrite the oldest, avoiding reallocation) stores the history (zero allocation in the hot path):
 
 ```
 Ring buffer: [input[t-3], input[t-2], input[t-1]]
@@ -32,9 +32,11 @@ Agave fuses the convolution with SiLU activation in a single pass.
 
 ## DeltaNet (Qwen3.5)
 
-DeltaNet replaces quadratic softmax attention with a linear-complexity recurrence. It maintains a per-head state matrix `S[v_dim, k_dim]` that accumulates information via the **delta rule** — error-correcting outer-product updates.
+**The problem**: Standard attention is O(n²) — for a 100K-token context, that's 10 billion pairwise comparisons. Computationally expensive and memory-intensive.
 
-The name comes from the delta rule: the update is proportional to the *error* `(v - S^T * k)`, not just the raw value. This makes the state self-correcting.
+**DeltaNet's solution**: Replace the quadratic attention computation with a **linear-complexity recurrence** (an update loop where each step depends only on the previous step's state, not all history). Instead of comparing the current token to all 100K previous tokens, maintain a fixed-size summary (the state matrix) that gets updated incrementally.
+
+**How it works**: DeltaNet maintains a per-head state matrix `S[v_dim, k_dim]` that accumulates information via the **delta rule** — error-correcting **outer-product** updates (forming a matrix by multiplying a column vector by a row vector). The name comes from the delta rule: the update is proportional to the *error* `(v - S^T * k)`, not just the raw value. This makes the state self-correcting — if the state doesn't already contain information similar to `v`, it gets added with high weight.
 
 **Per-timestep algorithm for each V-head `h`:**
 
@@ -59,7 +61,7 @@ The name comes from the delta rule: the update is proportional to the *error* `(
 
 ## Mamba-2 (Nemotron-H)
 
-Mamba-2 learns input-dependent discretization — the `dt` (timestep) is computed from the input, making the model selectively remember or forget.
+Mamba-2 learns input-dependent **discretization** (choosing how much time passes between updates) — the `dt` (timestep, delta-time) is computed from the input, making the model selectively remember or forget.
 
 **Per-head recurrence:**
 
@@ -73,7 +75,8 @@ For each state element [i, j]:
 ```
 
 **Key differences from DeltaNet:**
-- **B/C are input-dependent projections** (selectivity)
+
+- **B/C are input-dependent projections** (**selectivity** — the model can choose what to remember based on the current input, not just a fixed decay pattern)
 - **D skip connection** adds a direct path from input to output
 - **Group structure**: B and C are shared within head groups
 - **Group RMS norm** on output (not per-head)
@@ -87,10 +90,12 @@ For each state element [i, j]:
 | Nemotron-Nano | SSM + MoE + Attention | 52-layer pattern: M=SSM, E=MoE, *=Attention |
 | GPT-OSS | Sliding + Full attention | Even = 128-token window, odd = full sequence |
 
-Layer types are determined at init from model metadata and dispatched in each model's `forward()` loop.
+Layer types are determined at init from model **metadata** (descriptive information about the model structure — layer counts, dimensions, patterns — stored in the model file header) and dispatched in each model's `forward()` loop.
 
 ---
 
 **In the code:** `src/ops/ssm.zig` (causalConv1dSilu, mamba2Recurrence, groupRmsNormSiluGate), `src/backend/kernels/cpu/deltanet.zig` (DeltaNet recurrence), `src/models/qwen35.zig` (hybrid dispatch)
+
+**Math reference:** [Convolution (1D Causal)](appendix-math.md#convolution-1d-causal), [Outer Product](appendix-math.md#outer-product), [Softplus](appendix-math.md#softplus)
 
 **Next:** [Chapter 7: Sampling →](07-sampling.md)

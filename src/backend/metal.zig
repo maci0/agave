@@ -96,10 +96,15 @@ pub const MetalBackend = struct {
     pipe_gemv_iq4_xs: objc.id,
     pipe_gemv_q5_k: objc.id,
     pipe_gemv_mlx_q4: objc.id,
+    pipe_gemv_mlx_q8: objc.id,
+    pipe_gemv_mxfp4: objc.id,
+    pipe_gemv_mxfp4_st: objc.id,
     pipe_gemv_fp8_e4m3: objc.id,
     pipe_gemv_fp8_e5m2: objc.id,
     pipe_gelu: objc.id,
     pipe_sigmoid_mul: objc.id,
+    pipe_add_scaled: objc.id,
+    pipe_gemv_t_q8_0: objc.id,
     pipe_deinterleave: objc.id,
     pipe_silu_mul: objc.id,
     pipe_rms_norm_fused: objc.id,
@@ -202,6 +207,9 @@ pub const MetalBackend = struct {
             .pipe_gemv_bf16 = undefined,
             .pipe_gemv_f16 = undefined,
             .pipe_gemv_mlx_q4 = undefined,
+            .pipe_gemv_mlx_q8 = undefined,
+            .pipe_gemv_mxfp4 = undefined,
+            .pipe_gemv_mxfp4_st = undefined,
             .pipe_gemv_nvfp4_st = undefined,
             .pipe_gemv_q4_k = undefined,
             .pipe_gemv_q6_k = undefined,
@@ -215,6 +223,8 @@ pub const MetalBackend = struct {
             .pipe_gemv_fp8_e5m2 = undefined,
             .pipe_gelu = undefined,
             .pipe_sigmoid_mul = undefined,
+            .pipe_add_scaled = undefined,
+            .pipe_gemv_t_q8_0 = undefined,
             .pipe_deinterleave = undefined,
             .pipe_silu_mul = undefined,
             .pipe_rms_norm_fused = undefined,
@@ -250,6 +260,9 @@ pub const MetalBackend = struct {
         self.pipe_gemv_bf16 = try self.makePipeline("gemv_bf16");
         self.pipe_gemv_f16 = try self.makePipeline("gemv_f16");
         self.pipe_gemv_mlx_q4 = try self.makePipeline("gemv_mlx_q4");
+        self.pipe_gemv_mlx_q8 = try self.makePipeline("gemv_mlx_q8");
+        self.pipe_gemv_mxfp4 = try self.makePipeline("gemv_mxfp4");
+        self.pipe_gemv_mxfp4_st = try self.makePipeline("gemv_mxfp4_st");
         self.pipe_gemv_nvfp4_st = try self.makePipeline("gemv_nvfp4_st");
         self.pipe_gemv_q4_k = try self.makePipeline("gemv_q4_k");
         self.pipe_gemv_q6_k = try self.makePipeline("gemv_q6_k");
@@ -263,6 +276,8 @@ pub const MetalBackend = struct {
         self.pipe_gemv_fp8_e5m2 = try self.makePipeline("gemv_fp8_e5m2");
         self.pipe_gelu = try self.makePipeline("gelu_f32");
         self.pipe_sigmoid_mul = try self.makePipeline("sigmoid_mul_f32");
+        self.pipe_add_scaled = try self.makePipeline("add_scaled_f32");
+        self.pipe_gemv_t_q8_0 = try self.makePipeline("gemv_t_q8_0");
         self.pipe_deinterleave = try self.makePipeline("deinterleave_f32");
         self.pipe_silu_mul = try self.makePipeline("silu_mul_f32");
         self.pipe_rms_norm_fused = try self.makePipeline("rms_norm_fused_f32");
@@ -666,6 +681,7 @@ pub const MetalBackend = struct {
             .f16 => self.pipe_gemv_f16,
             .fp8_e4m3 => self.pipe_gemv_fp8_e4m3,
             .fp8_e5m2 => self.pipe_gemv_fp8_e5m2,
+            .mxfp4 => self.pipe_gemv_mxfp4,
             else => @panic("Metal GEMV: unsupported dtype — add a GPU kernel"),
         };
 
@@ -875,6 +891,44 @@ pub const MetalBackend = struct {
         self.dispatchBinaryOp(self.pipe_add, a, b, out, n);
     }
 
+    // ── Transposed GEMV (Q8_0) ─────────────────────────────────
+
+    /// Transposed GEMV: y[out_dim] = W^T @ x[in_dim] for Q8_0 3D multi-head weights.
+    /// W is stored as [in_dim rows, out_dim cols] in Q8_0 blocks.
+    pub fn gemvT(self: *MetalBackend, x: [*]const f32, w: [*]const u8, y: [*]f32, out_dim: usize, in_dim: usize) void {
+        const x_ref = self.getBufRef(@ptrCast(x), in_dim * @sizeOf(f32));
+        const blocks_per_row = (out_dim + 31) / 32;
+        const w_bytes = in_dim * blocks_per_row * 34; // 34 bytes per Q8_0 block
+        const w_ref = self.getBufRef(w, w_bytes);
+        const y_ref = self.getBufRef(@ptrCast(y), out_dim * @sizeOf(f32));
+        var od: u32 = @intCast(out_dim);
+        var id: u32 = @intCast(in_dim);
+        const enc = self.getEncoder(self.pipe_gemv_t_q8_0);
+        setBuf(enc, x_ref, 0);
+        setBuf(enc, w_ref, 1);
+        setBuf(enc, y_ref, 2);
+        setBytes(enc, @ptrCast(&od), @sizeOf(u32), 3);
+        setBytes(enc, @ptrCast(&id), @sizeOf(u32), 4);
+        // One threadgroup per output element
+        self.endEncode1D(enc, self.pipe_gemv_t_q8_0, out_dim);
+    }
+
+    // ── Add Scaled ────────────────────────────────────────────
+
+    /// dst[i] += src[i] * scale
+    pub fn addScaled(self: *MetalBackend, src: [*]const f32, dst: [*]f32, scale: f32, n: usize) void {
+        const src_ref = self.getBufRef(@ptrCast(src), n * @sizeOf(f32));
+        const dst_ref = self.getBufRef(@ptrCast(dst), n * @sizeOf(f32));
+        var s = scale;
+        var n_val: u32 = @intCast(n);
+        const enc = self.getEncoder(self.pipe_add_scaled);
+        setBuf(enc, src_ref, 0);
+        setBuf(enc, dst_ref, 1);
+        setBytes(enc, @ptrCast(&s), @sizeOf(f32), 2);
+        setBytes(enc, @ptrCast(&n_val), @sizeOf(u32), 3);
+        self.endEncode1D(enc, self.pipe_add_scaled, n);
+    }
+
     // ── Mul ───────────────────────────────────────────────────
 
     /// out[i] = a[i] * b[i]
@@ -1016,9 +1070,9 @@ pub const MetalBackend = struct {
     /// Dispatches to a native Metal kernel for the 3-buffer MLX-Q layout
     /// (packed u32 weights + bf16 scales + bf16 biases, group_size=64).
     pub fn gemvMlxQ(self: *MetalBackend, x: [*]const f32, weight: [*]const u8, scales: [*]const u8, biases: [*]const u8, y: [*]f32, n: usize, k: usize, bits: u32) void {
-        if (bits != 4) @panic("Metal MLX GEMV: only 4-bit supported — add GPU kernel for other bit widths");
+        if (bits != 4 and bits != 8) @panic("Metal MLX GEMV: unsupported bit width — add GPU kernel");
         const gpr = (k + 63) / 64;
-        const wpg: usize = 8;
+        const wpg: usize = if (bits == 8) 16 else 8; // 8-bit: 4 values/word, 64/4=16 words; 4-bit: 8 values/word, 64/8=8
         const w_bytes = n * gpr * wpg * @sizeOf(u32);
         const sb_bytes = n * gpr * 2;
 
@@ -1031,7 +1085,8 @@ pub const MetalBackend = struct {
         var n_val: u32 = @intCast(n);
         var k_val: u32 = @intCast(k);
 
-        const enc = self.getEncoder(self.pipe_gemv_mlx_q4);
+        const pipe = if (bits == 8) self.pipe_gemv_mlx_q8 else self.pipe_gemv_mlx_q4;
+        const enc = self.getEncoder(pipe);
         setBuf(enc, x_ref, 0);
         setBuf(enc, w_ref, 1);
         setBuf(enc, s_ref, 2);
@@ -1040,6 +1095,34 @@ pub const MetalBackend = struct {
         setBytes(enc, @ptrCast(&n_val), @sizeOf(u32), 5);
         setBytes(enc, @ptrCast(&k_val), @sizeOf(u32), 6);
         self.endEncodeThreadgroups(enc, n, gemvThreadgroupSize(.mlx_q, k));
+    }
+
+    /// MXFP4 SafeTensors GEMV on GPU.
+    /// U32-packed nibbles with FP8 E4M3 per-group scales and BF16 per-row bias.
+    /// group_size=32, 4 words per group (8 nibbles per word × 4 = 32 values).
+    pub fn gemvMxfp4St(self: *MetalBackend, x: [*]const f32, weight: [*]const u8, scale: [*]const u8, y: [*]f32, n: usize, k: usize) void {
+        const mxfp4_gs: usize = 32;
+        const gpr = (k + mxfp4_gs - 1) / mxfp4_gs;
+        const wpg: usize = 4; // 32 nibbles / 8 per word
+        const w_bytes = n * gpr * wpg * @sizeOf(u32);
+        const s_bytes = n * gpr; // U8 FP8 E4M3 scales
+
+        const x_ref = self.getBufRef(@ptrCast(x), k * @sizeOf(f32));
+        const w_ref = self.getBufRef(@ptrCast(weight), w_bytes);
+        const s_ref = self.getBufRef(@ptrCast(scale), s_bytes);
+        const y_ref = self.getBufRef(@ptrCast(y), n * @sizeOf(f32));
+
+        var n_val: u32 = @intCast(n);
+        var k_val: u32 = @intCast(k);
+
+        const enc_m = self.getEncoder(self.pipe_gemv_mxfp4_st);
+        setBuf(enc_m, x_ref, 0);
+        setBuf(enc_m, w_ref, 1);
+        setBuf(enc_m, s_ref, 2);
+        setBuf(enc_m, y_ref, 3);
+        setBytes(enc_m, @ptrCast(&n_val), @sizeOf(u32), 4);
+        setBytes(enc_m, @ptrCast(&k_val), @sizeOf(u32), 5);
+        self.endEncodeThreadgroups(enc_m, n, gemvThreadgroupSize(.mxfp4, k));
     }
 
     /// Batched GEMV: dispatches all ops sharing input x without inter-dispatch
@@ -1129,9 +1212,9 @@ pub const MetalBackend = struct {
     // ── SDPA ─────────────────────────────────────────────────
 
     /// Scaled dot-product attention with KV cache append.
-    /// Flushes queued GPU work, appends KV on CPU, then runs CPU SDPA.
-    /// CPU SDPA is negligible for decode; GPU SDPA reserved for future prefill.
-    /// Falls back to CPU for sequences > 4096 or head dims > 256.
+    /// Appends k_new/v_new to KV cache via GPU compute kernel, then runs
+    /// FlashAttention-2 (online softmax, tiled K/V) on GPU.
+    /// Panics for sequences > 4096, head dims > 256, or non-f32 KV types.
     /// GPU SDPA threadgroup size (threads per query head).
     const sdpa_threadgroup_size: usize = 128;
     /// Maximum sequence length for GPU SDPA (limited by threadgroup memory).

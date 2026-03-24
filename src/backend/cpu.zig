@@ -170,6 +170,43 @@ pub fn detectCacheSizes() CacheSizes {
     return .{};
 }
 
+// ── OS version detection ─────────────────────────────────────────
+
+const os_version_buf_size: usize = 128;
+var os_version_buf: [os_version_buf_size]u8 = .{0} ** os_version_buf_size;
+var os_version_len: usize = 0;
+var os_version_detected: bool = false;
+
+/// Detect OS version string. Returns "macOS 14.2.1" or "Linux 6.5.0" style strings.
+pub fn detectOsVersion() []const u8 {
+    if (os_version_detected) return os_version_buf[0..os_version_len];
+    os_version_detected = true;
+
+    if (comptime builtin.os.tag == .macos) {
+        // macOS: Try kern.osproductversion first (e.g., "14.2.1"), fall back to kern.osrelease
+        var len: usize = os_version_buf.len - 6; // Reserve space for "macOS " prefix
+        const rc = std.c.sysctlbyname("kern.osproductversion", os_version_buf[6..].ptr, &len, null, 0);
+        if (rc == 0 and len > 0) {
+            @memcpy(os_version_buf[0..6], "macOS ");
+            // Strip trailing null
+            const total_len = 6 + (if (os_version_buf[6 + len - 1] == 0) len - 1 else len);
+            os_version_len = total_len;
+            return os_version_buf[0..os_version_len];
+        }
+    } else if (comptime builtin.os.tag == .linux) {
+        // Linux: Use uname to get kernel release (e.g., "6.5.0-14-generic")
+        const uts = std.posix.uname();
+        @memcpy(os_version_buf[0..6], "Linux ");
+        // uts.release is a null-terminated array; find the null
+        const release_slice = std.mem.sliceTo(&uts.release, 0);
+        const copy_len = @min(release_slice.len, os_version_buf.len - 6);
+        @memcpy(os_version_buf[6..][0..copy_len], release_slice[0..copy_len]);
+        os_version_len = 6 + copy_len;
+        return os_version_buf[0..os_version_len];
+    }
+    return "";
+}
+
 // ── Autotune constants ───────────────────────────────────────────
 // These can be overridden by the grid search in research/kernels/autotune.py
 // to find the optimal value for each target platform.
@@ -281,6 +318,29 @@ pub const CpuBackend = struct {
     pub fn add(self: *CpuBackend, a: [*]const f32, b: [*]const f32, out: [*]f32, n: usize) void {
         _ = self;
         elementwise_kernel.add(a, b, out, n);
+    }
+
+    /// Transposed GEMV: y[out_dim] = W^T @ x[in_dim] for Q8_0 3D weights.
+    pub fn gemvT(_: *CpuBackend, x: [*]const f32, w: [*]const u8, y: [*]f32, out_dim: usize, in_dim: usize) void {
+        const blocks_per_row = (out_dim + 31) / 32;
+        @memset(y[0..out_dim], 0);
+        for (0..in_dim) |j| {
+            const xj = x[j];
+            const row_base = j * blocks_per_row * 34; // 34 bytes per Q8_0 block
+            for (0..out_dim) |i| {
+                const blk_idx = i / 32;
+                const blk_off = i % 32;
+                const blk_ptr = w + row_base + blk_idx * 34;
+                const scale: f32 = @floatCast(@as(f16, @bitCast(std.mem.readInt(u16, blk_ptr[0..2], .little))));
+                const val: i8 = @bitCast(blk_ptr[2 + blk_off]);
+                y[i] += @as(f32, @floatFromInt(val)) * scale * xj;
+            }
+        }
+    }
+
+    /// Scaled accumulate: dst[i] += src[i] * scale.
+    pub fn addScaled(_: *CpuBackend, src: [*]const f32, dst: [*]f32, scale: f32, n: usize) void {
+        for (0..n) |i| dst[i] += src[i] * scale;
     }
 
     /// Fused SiLU + multiply: out[i] = silu(a[i]) * b[i].
@@ -421,6 +481,39 @@ pub const CpuBackend = struct {
             const ctx: *const MlxGemvCtx = @ptrCast(@alignCast(ctx_ptr));
             const mlx = @import("../ops/mlx.zig");
             mlx.mlxGemvRows(ctx.x, ctx.pw, ctx.sc, ctx.bi, ctx.y, start, end - start, ctx.k, ctx.bits);
+        }
+    };
+
+    /// MXFP4 SafeTensors GEMV (U32-packed nibbles, E8M0 scales, no bias).
+    pub fn gemvMxfp4St(self: *CpuBackend, x: [*]const f32, weight: [*]const u8, scale: [*]const u8, y: [*]f32, n: usize, k: usize) void {
+        const mlx_ops = @import("../ops/mlx.zig");
+        if (self.pool) |pool| {
+            if (n >= parallel_min_rows) {
+                var ctx = Mxfp4StCtx{
+                    .x = x,
+                    .pw = @ptrCast(@alignCast(weight)),
+                    .scales_u8 = scale,
+                    .y = y,
+                    .k = k,
+                };
+                pool.parallelFor(n, parallel_grain, @ptrCast(&ctx), Mxfp4StCtx.work);
+                return;
+            }
+        }
+        mlx_ops.mlxMxfp4GemvRows(x, @ptrCast(@alignCast(weight)), scale, y, 0, n, k);
+    }
+
+    const Mxfp4StCtx = struct {
+        x: [*]const f32,
+        pw: [*]const u32,
+        scales_u8: [*]const u8,
+        y: [*]f32,
+        k: usize,
+
+        fn work(ctx_ptr: *anyopaque, start: usize, end: usize) void {
+            const ctx: *const Mxfp4StCtx = @ptrCast(@alignCast(ctx_ptr));
+            const mlx = @import("../ops/mlx.zig");
+            mlx.mlxMxfp4GemvRows(ctx.x, ctx.pw, ctx.scales_u8, ctx.y, start, end - start, ctx.k);
         }
     };
 

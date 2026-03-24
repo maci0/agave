@@ -81,7 +81,7 @@ pub fn topKExperts(
 }
 
 /// Numerically stable softplus: log(1 + exp(x)).
-/// For large x (> 20), exp(x) overflows f32; softplus(x) ≈ x in that regime.
+/// For large x (> 20), softplus(x) ≈ x (1 + exp(x) ≈ exp(x) in float precision).
 ///
 /// Parameters:
 ///   - x: Input value.
@@ -211,27 +211,27 @@ pub fn sampleToken(logits: []f32, temperature: f32, top_k: u32, top_p: f32, rng:
     const inv_temp = 1.0 / temperature;
     for (logits) |*v| v.* *= inv_temp;
 
-    // 2. Top-k: find k-th largest value via min-replacement scan, mask the rest
+    // 2. Top-k: find k-th largest value via min-replacement scan, mask the rest.
+    // Tracks min index to avoid O(k) rescan per element → O(n) total instead of O(n*k).
     if (top_k > 0 and top_k < n) {
         const k: usize = top_k;
-        // Track the k largest values seen so far using O(k) min-replacement.
-        // We only need the minimum of the top-k set (the threshold).
-        // Find the k-th largest value using min-replacement into a small buffer.
         var top_buf: [max_top_k]f32 = undefined;
         const buf_k = @min(k, max_top_k);
         for (0..buf_k) |i| top_buf[i] = neg_inf;
+        // Track current min position in top_buf
+        var mi: usize = 0;
 
         for (logits) |v| {
-            var mi: usize = 0;
-            for (1..buf_k) |j| {
-                if (top_buf[j] < top_buf[mi]) mi = j;
+            if (v > top_buf[mi]) {
+                top_buf[mi] = v;
+                // Rescan for new min only when we insert
+                mi = 0;
+                for (1..buf_k) |j| {
+                    if (top_buf[j] < top_buf[mi]) mi = j;
+                }
             }
-            if (v > top_buf[mi]) top_buf[mi] = v;
         }
-        var top_min: f32 = top_buf[0];
-        for (1..buf_k) |j| {
-            if (top_buf[j] < top_min) top_min = top_buf[j];
-        }
+        const top_min = top_buf[mi];
         for (logits) |*v| {
             if (v.* < top_min) v.* = neg_inf;
         }
@@ -405,8 +405,16 @@ test "sampleToken deterministic with seed" {
 }
 
 test "sampleToken top_k filters" {
-    // With top_k=1, should always pick the highest logit
-    var logits = [_]f32{ 1.0, 10.0, 2.0, 3.0 };
-    var prng = std.Random.DefaultPrng.init(99);
-    try std.testing.expectEqual(@as(u32, 1), sampleToken(&logits, 0.5, 1, 1.0, prng.random()));
+    // top_k=2 keeps only the two highest logits (indices 1=3.0 and 3=2.5)
+    // Close values + temp=1.0 ensure both get sampled across many seeds
+    var seen = [_]bool{false} ** 4;
+    for (0..100) |seed| {
+        var l = [_]f32{ 0.1, 3.0, 0.2, 2.5 };
+        var p = std.Random.DefaultPrng.init(seed);
+        seen[sampleToken(&l, 1.0, 2, 1.0, p.random())] = true;
+    }
+    try std.testing.expect(!seen[0]); // index 0 (0.1) filtered out
+    try std.testing.expect(seen[1]); // index 1 (3.0) kept
+    try std.testing.expect(!seen[2]); // index 2 (0.2) filtered out
+    try std.testing.expect(seen[3]); // index 3 (2.5) kept
 }

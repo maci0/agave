@@ -1408,6 +1408,16 @@ pub const VulkanBackend = struct {
         self.downloadF32(o_buf.mem, out, n);
     }
 
+    /// Transposed GEMV for Q8_0 3D weights — not yet implemented.
+    pub fn gemvT(_: *VulkanBackend, _: [*]const f32, _: [*]const u8, _: [*]f32, _: usize, _: usize) void {
+        @panic("gemvT not implemented for Vulkan");
+    }
+
+    /// Scaled accumulate: dst[i] += src[i] * scale.
+    pub fn addScaled(_: *VulkanBackend, src: [*]const f32, dst: [*]f32, scale: f32, n: usize) void {
+        for (0..n) |i| dst[i] += src[i] * scale;
+    }
+
     /// Fused add + rmsNorm (sequential fallback — no fused Vulkan kernel yet).
     pub fn addRmsNorm(self: *VulkanBackend, a: [*]f32, b: [*]const f32, weight: [*]const f32, output: [*]f32, n: usize, eps: f32) void {
         self.add(a, b, a, n);
@@ -1598,6 +1608,10 @@ pub const VulkanBackend = struct {
     /// MLX affine quantized GEMV.
     pub fn gemvMlxQ(_: *VulkanBackend, _: [*]const f32, _: [*]const u8, _: [*]const u8, _: [*]const u8, _: [*]f32, _: usize, _: usize, _: u32) void {
         @panic("Vulkan MLX GEMV: no GPU shader — add a Vulkan compute shader");
+    }
+
+    pub fn gemvMxfp4St(_: *VulkanBackend, _: [*]const f32, _: [*]const u8, _: [*]const u8, _: [*]f32, _: usize, _: usize) void {
+        @panic("Vulkan MXFP4 SafeTensors GEMV: no GPU shader — add a Vulkan compute shader");
     }
 
     /// In-place sigmoid-gated multiply.

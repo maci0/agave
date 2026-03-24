@@ -20,6 +20,13 @@ pub const BlockAllocator = struct {
         return .{ .cache = cache, .allocator = allocator };
     }
 
+    /// Update the cache pointer after the parent struct has been moved.
+    /// Must be called when the struct containing PagedKvCache is moved
+    /// (e.g., after returning from init by value).
+    pub fn setCachePtr(self: *BlockAllocator, cache: *PagedKvCache) void {
+        self.cache = cache;
+    }
+
     /// Allocate a new SeqBlockTable with empty block tables for all layers.
     /// Caller must call freeSeqTable when done.
     pub fn allocateSeqTable(self: *BlockAllocator, n_layers: usize) !SeqBlockTable {

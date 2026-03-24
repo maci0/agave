@@ -43,6 +43,8 @@ pub const Gemma3Model = struct {
     vocab_size: u32,
     rope_theta: f32,
     rope_local_theta: f32,
+    rope_freq_scale: f32,
+    rope_dim: u32,
     sliding_window_pattern: u32,
     rms_eps: f32,
     eos_token_id: u32,
@@ -101,6 +103,7 @@ pub const Gemma3Model = struct {
         const n_head_kv = f.getArchU32(arch, "attention.head_count_kv") orelse 1;
         const head_dim = f.getArchU32(arch, "attention.key_length") orelse 256;
         const n_ff = f.getArchU32(arch, "feed_forward_length") orelse 6912;
+        const rope_dim: u32 = head_dim;
         const vocab_size: u32 = if (f.getVocab()) |v| @intCast(v.len) else 262144;
 
         const qkv_dim = n_head * head_dim;
@@ -111,50 +114,7 @@ pub const Gemma3Model = struct {
         if (f.getArchU32(arch, "context_length")) |cl| max_sl = cl;
         if (ctx_size > 0) max_sl = ctx_size;
 
-        // KV cache: use TieredKvCache if provided, otherwise flat PagedKvCache.
-        var paged_cache: PagedKvCache = undefined;
-        var block_allocator: BlockAllocator = undefined;
-        var tiered_block_allocator: ?TieredBlockAllocator = null;
-        var seq_table: SeqBlockTable = undefined;
-
-        if (tiered_cache) |tc| {
-            var ta = TieredBlockAllocator.init(tc, allocator);
-            seq_table = try ta.allocateSeqTable(nl);
-            errdefer ta.freeSeqTable(&seq_table);
-            try ta.appendBlock(&seq_table);
-            tiered_block_allocator = ta;
-        } else {
-            const block_size = kvcache.default_block_size;
-            const num_blocks = (max_sl + block_size - 1) / block_size * nl;
-            paged_cache = try PagedKvCache.init(allocator, nl, kv_dim, num_blocks, block_size);
-            errdefer paged_cache.deinit();
-            block_allocator = BlockAllocator.init(&paged_cache, allocator);
-            seq_table = try block_allocator.allocateSeqTable(nl);
-            errdefer block_allocator.freeSeqTable(&seq_table);
-            try block_allocator.appendBlock(&seq_table);
-        }
-
-        const hidden = try allocator.alloc(f32, n_embd);
-        errdefer allocator.free(hidden);
-        const hidden2 = try allocator.alloc(f32, n_embd);
-        errdefer allocator.free(hidden2);
-        const q_buf = try allocator.alloc(f32, qkv_dim);
-        errdefer allocator.free(q_buf);
-        const k_buf = try allocator.alloc(f32, kv_dim);
-        errdefer allocator.free(k_buf);
-        const v_buf = try allocator.alloc(f32, kv_dim);
-        errdefer allocator.free(v_buf);
-        const attn_out = try allocator.alloc(f32, qkv_dim);
-        errdefer allocator.free(attn_out);
-        const ff_gate = try allocator.alloc(f32, n_ff);
-        errdefer allocator.free(ff_gate);
-        const ff_up = try allocator.alloc(f32, n_ff);
-        errdefer allocator.free(ff_up);
-        const logits = try allocator.alloc(f32, vocab_size);
-        errdefer allocator.free(logits);
-        const scores = try allocator.alloc(f32, max_sl);
-        errdefer allocator.free(scores);
-        return .{
+        var self = Gemma3Model{
             .n_layers = n_layers,
             .n_embd = n_embd,
             .n_head = n_head,
@@ -163,9 +123,17 @@ pub const Gemma3Model = struct {
             .n_ff = n_ff,
             .vocab_size = vocab_size,
             .rope_theta = f.getArchF32(arch, "rope.freq_base") orelse 1_000_000.0,
-            .rope_local_theta = f.getMetaF32("rope_local_base_freq") orelse
-                f.getArchF32(arch, "rope.freq_base") orelse 1_000_000.0,
-            .sliding_window_pattern = f.getMetaU32("sliding_window_pattern") orelse 0,
+            .rope_local_theta = f.getArchF32(arch, "rope.freq_base_swa") orelse
+                f.getMetaF32("rope_local_base_freq") orelse 10_000.0,
+            .rope_freq_scale = blk: {
+                const factor = f.getArchF32(arch, "rope.scaling.factor") orelse
+                    f.getMetaF32("rope_scaling_factor") orelse 1.0;
+                break :blk if (factor > 0) 1.0 / factor else 1.0;
+            },
+            .rope_dim = rope_dim,
+            .sliding_window_pattern = f.getArchU32(arch, "attention.sliding_window_pattern") orelse
+                f.getMetaU32("sliding_window_pattern") orelse
+                if (f.getArchU32(arch, "attention.sliding_window")) |_| @as(u32, 6) else 0,
             .rms_eps = f.getArchF32(arch, "attention.layer_norm_rms_epsilon") orelse 1e-6,
             .eos_token_id = f.getMetaU32("tokenizer.ggml.eos_token_id") orelse 1,
             .attn_scale = blk: {
@@ -184,23 +152,61 @@ pub const Gemma3Model = struct {
             .fmt = f,
             .be = be,
             .allocator = allocator,
-            .hidden = hidden,
-            .hidden2 = hidden2,
-            .q_buf = q_buf,
-            .k_buf = k_buf,
-            .v_buf = v_buf,
-            .attn_out = attn_out,
-            .ff_gate = ff_gate,
-            .ff_up = ff_up,
-            .logits = logits,
-            .scores = scores,
-            .paged_cache = paged_cache,
-            .seq_table = seq_table,
-            .block_allocator = block_allocator,
+            .hidden = undefined,
+            .hidden2 = undefined,
+            .q_buf = undefined,
+            .k_buf = undefined,
+            .v_buf = undefined,
+            .attn_out = undefined,
+            .ff_gate = undefined,
+            .ff_up = undefined,
+            .logits = undefined,
+            .scores = undefined,
             .tiered_cache = tiered_cache,
-            .tiered_block_allocator = tiered_block_allocator,
             .kv_type = kv_type,
         };
+
+        // KV cache: use TieredKvCache if provided, otherwise flat PagedKvCache.
+        if (tiered_cache) |tc| {
+            var ta = TieredBlockAllocator.init(tc, allocator);
+            self.seq_table = try ta.allocateSeqTable(nl);
+            errdefer ta.freeSeqTable(&self.seq_table);
+            try ta.appendBlock(&self.seq_table);
+            self.tiered_block_allocator = ta;
+        } else {
+            const block_size = kvcache.default_block_size;
+            const num_blocks = (max_sl + block_size - 1) / block_size * nl;
+            self.paged_cache = try PagedKvCache.init(allocator, nl, kv_dim, num_blocks, block_size);
+            errdefer self.paged_cache.deinit();
+            // BlockAllocator stores a pointer — must point to self.paged_cache (not a local copy).
+            self.block_allocator = BlockAllocator.init(&self.paged_cache, allocator);
+            self.seq_table = try self.block_allocator.allocateSeqTable(nl);
+            errdefer self.block_allocator.freeSeqTable(&self.seq_table);
+            try self.block_allocator.appendBlock(&self.seq_table);
+        }
+
+        self.hidden = try allocator.alloc(f32, n_embd);
+        errdefer allocator.free(self.hidden);
+        self.hidden2 = try allocator.alloc(f32, n_embd);
+        errdefer allocator.free(self.hidden2);
+        self.q_buf = try allocator.alloc(f32, qkv_dim);
+        errdefer allocator.free(self.q_buf);
+        self.k_buf = try allocator.alloc(f32, kv_dim);
+        errdefer allocator.free(self.k_buf);
+        self.v_buf = try allocator.alloc(f32, kv_dim);
+        errdefer allocator.free(self.v_buf);
+        self.attn_out = try allocator.alloc(f32, qkv_dim);
+        errdefer allocator.free(self.attn_out);
+        self.ff_gate = try allocator.alloc(f32, n_ff);
+        errdefer allocator.free(self.ff_gate);
+        self.ff_up = try allocator.alloc(f32, n_ff);
+        errdefer allocator.free(self.ff_up);
+        self.logits = try allocator.alloc(f32, vocab_size);
+        errdefer allocator.free(self.logits);
+        self.scores = try allocator.alloc(f32, max_sl);
+        errdefer allocator.free(self.scores);
+
+        return self;
     }
 
     /// Release all heap allocations owned by this model.
@@ -231,17 +237,7 @@ pub const Gemma3Model = struct {
     pub fn forward(self: *Gemma3Model, token_id: u32) !u32 {
         if (self.kv_seq_len >= self.max_seq_len) return error.KVCacheFull;
 
-        // Check if new block needed
-        const bs: usize = if (self.tiered_cache) |tc| tc.block_size else self.paged_cache.block_size;
-        const current_blocks = self.seq_table.block_table[0].len;
-        const needed_blocks = (self.kv_seq_len + 1 + bs - 1) / bs;
-        if (needed_blocks > current_blocks) {
-            if (self.tiered_block_allocator) |*ta| {
-                try ta.appendBlock(&self.seq_table);
-            } else {
-                try self.block_allocator.appendBlock(&self.seq_table);
-            }
-        }
+        try model_mod.ensureKvBlock(self);
 
         // Embedding lookup + Gemma scaling
         var t = self.perf.start();
@@ -276,16 +272,7 @@ pub const Gemma3Model = struct {
 
     /// Reset the KV cache position for a new conversation.
     pub fn resetCache(self: *Gemma3Model) void {
-        if (self.tiered_block_allocator) |*ta| {
-            ta.freeSeqTable(&self.seq_table);
-            self.seq_table = ta.allocateSeqTable(self.n_layers) catch return;
-            ta.appendBlock(&self.seq_table) catch return;
-        } else {
-            self.block_allocator.freeSeqTable(&self.seq_table);
-            self.seq_table = self.block_allocator.allocateSeqTable(self.n_layers) catch return;
-            self.block_allocator.appendBlock(&self.seq_table) catch return;
-        }
-        model_mod.resetInferenceState(&self.kv_seq_len, &self.cancelled);
+        model_mod.resetKvCache(self);
     }
 
     /// Signal an in-progress forward pass to abort. Thread-safe.
@@ -352,14 +339,21 @@ pub const Gemma3Model = struct {
         self.be.rmsNormMulti(self.k_buf.ptr, kn_w, nkv, hd, self.rms_eps);
         self.perf.end(.rms_norm, t);
 
-        // RoPE
+        // RoPE — partial rotation (rope_dim may be < head_dim)
+        // Local layers: theta=10K unscaled; global layers: theta=1M with freq_scale
         t = self.perf.start();
-        const theta = if (self.sliding_window_pattern > 0 and (li + 1) % self.sliding_window_pattern != 0)
-            self.rope_local_theta
-        else
-            self.rope_theta;
-        self.be.rope(self.q_buf.ptr, self.kv_seq_len, nh, hd, hd, theta);
-        self.be.rope(self.k_buf.ptr, self.kv_seq_len, nkv, hd, hd, theta);
+        const rd: usize = self.rope_dim;
+        const is_local = self.sliding_window_pattern > 0 and (li + 1) % self.sliding_window_pattern != 0;
+        if (is_local) {
+            self.be.rope(self.q_buf.ptr, self.kv_seq_len, nh, hd, rd, self.rope_local_theta);
+            self.be.rope(self.k_buf.ptr, self.kv_seq_len, nkv, hd, rd, self.rope_local_theta);
+        } else if (self.rope_freq_scale != 1.0) {
+            applyRopeScaled(self.q_buf.ptr, self.kv_seq_len, nh, hd, rd, self.rope_theta, self.rope_freq_scale);
+            applyRopeScaled(self.k_buf.ptr, self.kv_seq_len, nkv, hd, rd, self.rope_theta, self.rope_freq_scale);
+        } else {
+            self.be.rope(self.q_buf.ptr, self.kv_seq_len, nh, hd, rd, self.rope_theta);
+            self.be.rope(self.k_buf.ptr, self.kv_seq_len, nkv, hd, rd, self.rope_theta);
+        }
         self.perf.end(.rope, t);
 
         // KV cache append + scaled dot-product attention
@@ -433,6 +427,28 @@ pub const Gemma3Model = struct {
         self.be.rmsNorm(self.hidden2.ptr, self.normAsF32(post_norm, e), self.hidden2.ptr, self.hidden2.len, self.rms_eps);
         self.be.add(self.hidden.ptr, self.hidden2.ptr, self.hidden.ptr, e);
         self.perf.end(.add, t);
+    }
+
+    /// RoPE with linear frequency scaling for context extension.
+    /// angle = (pos * freq_scale) * theta^(-2i/d)
+    fn applyRopeScaled(x: [*]f32, pos: usize, n_heads: usize, head_dim: usize, rope_dim_arg: usize, theta: f32, freq_scale: f32) void {
+        const half = rope_dim_arg / 2;
+        const p: f32 = @as(f32, @floatFromInt(pos)) * freq_scale;
+        const inv_rd: f32 = 1.0 / @as(f32, @floatFromInt(rope_dim_arg));
+        const neg_log_theta: f32 = -@log(theta);
+        for (0..n_heads) |h| {
+            const base = h * head_dim;
+            for (0..half) |i| {
+                const freq = @exp(neg_log_theta * @as(f32, @floatFromInt(2 * i)) * inv_rd);
+                const angle = p * freq;
+                const c = @cos(angle);
+                const s = @sin(angle);
+                const r = x[base + i];
+                const im = x[base + i + half];
+                x[base + i] = r * c - im * s;
+                x[base + i + half] = r * s + im * c;
+            }
+        }
     }
 
     // ── Helpers ───────────────────────────────────────────────────

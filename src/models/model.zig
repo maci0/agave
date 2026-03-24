@@ -202,9 +202,86 @@ pub fn expertWeightStride(t: format_mod.TensorInfo) usize {
     return backend_mod.weightBytes(t.dtype, 1, elems);
 }
 
+/// Dispatch GEMV for an mlx_q tensor through the backend's gemvMlxQ path.
+/// Looks up companion .scales/.biases tensors and determines bit width.
+/// Call this instead of be.gemv() when the tensor may be mlx_q.
+/// Returns true if handled, false if the tensor is not mlx_q (caller should use be.gemv).
+pub fn mlxGemv(be: backend_mod.Backend, fmt: format_mod.Format, x: [*]const f32, t: format_mod.TensorInfo, y: [*]f32, n: usize, k: usize) bool {
+    if (t.dtype != .mlx_q) return false;
+    const wi = std.mem.lastIndexOf(u8, t.name, ".weight") orelse return false;
+    var sbuf: [128]u8 = undefined;
+    var bbuf: [128]u8 = undefined;
+    const prefix = t.name[0..wi];
+    const s_name = std.fmt.bufPrint(&sbuf, "{s}.scales", .{prefix}) catch return false;
+    const st = fmt.getTensor(s_name) orelse return false;
+
+    if (st.dtype == .unknown) {
+        // MXFP4: U8 E8M0 scales, no bias
+        be.gemvMxfp4St(x, t.data_ptr, st.data_ptr, y, n, k);
+    } else {
+        // MLX affine: BF16 scales + biases
+        const b_name = std.fmt.bufPrint(&bbuf, "{s}.biases", .{prefix}) catch return false;
+        const bt = fmt.getTensor(b_name) orelse return false;
+        // Detect bits per-tensor from weight dimensions: bits = words_per_row * 32 / k.
+        // This handles mixed-quant models where default config bits differs from per-layer overrides.
+        const bits: u32 = if (t.n_dims >= 2 and k > 0)
+            @intCast(@as(u64, t.dims[t.n_dims - 1]) * 32 / @as(u64, @intCast(k)))
+        else
+            fmt.getMetaU32("bits") orelse 4;
+        be.gemvMlxQ(x, t.data_ptr, st.data_ptr, bt.data_ptr, y, n, k, bits);
+    }
+    return true;
+}
+
+/// Dispatch GEMV — tries MLX path first, falls back to standard backend gemv.
+/// Use this in models that support both GGUF and SafeTensors MLX weights.
+pub fn dispatchGemv(be: backend_mod.Backend, fmt: format_mod.Format, x: [*]const f32, t: format_mod.TensorInfo, y: [*]f32, n: usize, k: usize) void {
+    if (mlxGemv(be, fmt, x, t, y, n, k)) return;
+    be.gemv(x, .{ .data = t.data_ptr, .dtype = t.dtype }, y, n, k);
+}
+
 /// Signal cancellation of a forward pass (thread-safe).
 pub inline fn signalCancel(cancelled: *std.atomic.Value(bool)) void {
     cancelled.store(true, .release);
+}
+
+/// Ensure a KV cache block is allocated for the next token position.
+/// Called at the start of each forward() pass. If the current sequence
+/// length would cross into a new block boundary, allocates one more block
+/// from either the tiered or paged block allocator.
+///
+/// The model struct must have fields: tiered_cache, paged_cache,
+/// kv_seq_len, seq_table, tiered_block_allocator, block_allocator.
+pub fn ensureKvBlock(self: anytype) !void {
+    const bs: usize = if (self.tiered_cache) |tc| tc.block_size else self.paged_cache.block_size;
+    const current_blocks = self.seq_table.block_table[0].len;
+    const needed_blocks = (self.kv_seq_len + 1 + bs - 1) / bs;
+    if (needed_blocks > current_blocks) {
+        if (self.tiered_block_allocator) |*ta| {
+            try ta.appendBlock(&self.seq_table);
+        } else {
+            try self.block_allocator.appendBlock(&self.seq_table);
+        }
+    }
+}
+
+/// Reset the paged KV cache for a new conversation: free all blocks in the
+/// current sequence table, allocate a fresh table, and append the first block.
+/// Also resets kv_seq_len and the cancellation flag.
+///
+/// The model struct must have fields: tiered_block_allocator, block_allocator,
+/// seq_table, n_layers, kv_seq_len, cancelled.
+pub fn resetKvCache(self: anytype) void {
+    if (self.tiered_block_allocator) |*ta| {
+        ta.freeSeqTable(&self.seq_table);
+        self.seq_table = ta.allocateSeqTable(self.n_layers) catch return;
+        ta.appendBlock(&self.seq_table) catch return;
+    } else {
+        self.block_allocator.freeSeqTable(&self.seq_table);
+        self.seq_table = self.block_allocator.allocateSeqTable(self.n_layers) catch return;
+        self.block_allocator.appendBlock(&self.seq_table) catch return;
+    }
+    resetInferenceState(&self.kv_seq_len, &self.cancelled);
 }
 
 /// Gemma 3 model implementation — conditionally compiled via -Denable-gemma3.

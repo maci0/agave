@@ -290,6 +290,9 @@ def detect_quant(name: str) -> str:
     # Check for bf16 in SafeTensors dir names
     if "bf16" in name.lower():
         return "BF16"
+    # MLX models with non-standard naming (e.g., "-mlx" suffix without explicit bit width)
+    if "-mlx" in name.lower() or "_mlx" in name.lower():
+        return "MLX-4bit"
     return "unknown"
 
 
@@ -596,6 +599,109 @@ def _parse_bench_output(output: str) -> dict:
                 metrics[f"{key}/bandwidth"] = {"value": float(bw.group(1)), "unit": "GB/s"}
 
     return metrics
+
+
+@dataclass
+class SmokeResult:
+    """Result from a quick 1-token smoke test."""
+    model: str
+    arch: str
+    quant: str
+    backend: str
+    status: str  # "pass", "fail", "crash", "timeout", "error"
+    tokens_generated: int = 0
+    error_message: str = ""
+    exit_code: int = 0
+    signal: int = 0  # non-zero if killed by signal (e.g. SIGSEGV=11)
+
+
+def run_smoke(
+    model: ModelInfo,
+    backend: str,
+    timeout: int,
+) -> SmokeResult:
+    """Run a quick 1-token inference test to catch crashes and 0-token failures.
+
+    This is faster than full inference but catches:
+    - Segfaults (signal 11)
+    - Panics (missing kernels, unsupported dtypes)
+    - 0-token output (broken dequant, missing tensor mappings)
+    - Immediate EOG (wrong logits)
+    """
+    cmd = [
+        str(AGAVE_BIN),
+        str(model.path),
+        "--backend", backend,
+        "--max-tokens", "4",
+        "--json",
+        "-q",
+        "Hello",
+    ]
+
+    result = SmokeResult(
+        model=model.name, arch=model.arch, quant=model.quant, backend=backend,
+        status="error",
+    )
+
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        result.exit_code = proc.returncode
+
+        if proc.returncode < 0:
+            # Killed by signal (e.g. -11 = SIGSEGV)
+            result.signal = -proc.returncode
+            result.status = "crash"
+            sig_name = {11: "SIGSEGV", 6: "SIGABRT", 134: "SIGABRT"}.get(result.signal, f"signal {result.signal}")
+            result.error_message = f"Crashed with {sig_name}"
+            return result
+
+        if proc.returncode != 0:
+            combined = proc.stdout + proc.stderr
+            # Check for panic
+            if "panic:" in combined:
+                panic_line = next((l for l in combined.splitlines() if "panic:" in l), "")
+                result.status = "crash"
+                result.error_message = f"Panic: {_truncate(panic_line, 120)}"
+            else:
+                result.status = "fail"
+                result.error_message = _truncate(combined, 200)
+            return result
+
+        # Parse JSON output
+        stdout = proc.stdout.strip()
+        if stdout:
+            try:
+                data = json.loads(stdout)
+                result.tokens_generated = data.get("tokens", 0)
+                output_text = data.get("output", "")
+                if result.tokens_generated == 0 and not output_text.strip():
+                    result.status = "fail"
+                    result.error_message = "0 tokens generated (immediate EOG)"
+                else:
+                    result.status = "pass"
+            except json.JSONDecodeError:
+                # Non-JSON output — check if any text was produced
+                if proc.stdout.strip():
+                    result.status = "pass"
+                    result.tokens_generated = 1  # approximate
+                else:
+                    result.status = "fail"
+                    result.error_message = "Empty output"
+        else:
+            result.status = "fail"
+            result.error_message = "Empty stdout"
+
+    except subprocess.TimeoutExpired:
+        result.status = "timeout"
+        result.error_message = f"Timed out after {timeout}s"
+    except FileNotFoundError:
+        result.status = "error"
+        result.error_message = f"Binary not found: {AGAVE_BIN}"
+    except Exception as e:
+        result.status = "error"
+        result.error_message = str(e)
+
+    return result
 
 
 def run_zig_tests(timeout: int) -> tuple[str, int]:
@@ -1176,6 +1282,10 @@ def build_parser() -> argparse.ArgumentParser:
                      help="Only inference, skip benchmarks")
     sel.add_argument("--model-info-only", action="store_true",
                      help="Only validate model metadata (fast, no inference)")
+    sel.add_argument("--smoke", action="store_true", default=True,
+                     help="Run 1-token smoke tests per model/backend (default: on)")
+    sel.add_argument("--no-smoke", action="store_true",
+                     help="Skip smoke tests")
     sel.add_argument("--zig-test", action="store_true",
                      help="Also run zig build test (unit tests)")
     sel.add_argument("--no-bench", action="store_true",
@@ -1311,11 +1421,14 @@ def main() -> int:
     total_runs = len(test_matrix) * args.repeat
     do_bench = not args.correctness_only and not args.no_bench and not args.model_info_only
     do_inference = not args.bench_only and not args.model_info_only
+    do_smoke = args.smoke and not args.no_smoke and not args.bench_only
     do_model_info = args.model_info_only or True  # Always run model-info as fast validation
 
     console.print()
     if do_model_info:
         console.print(f"Model info:      [bold]{len(models)}[/] models (metadata validation)")
+    if do_smoke:
+        console.print(f"Smoke tests:     [bold]{len(test_matrix)}[/] ({len(models)} models x {len(backends)} backends)")
     if do_inference:
         run_label = f"{total_runs}" if args.repeat > 1 else f"{len(test_matrix)}"
         console.print(f"Inference tests: [bold]{run_label}[/] ({len(models)} models x {len(backends)} backends" +
@@ -1406,6 +1519,46 @@ def main() -> int:
                 console.print_json(json.dumps(data, indent=2))
             any_fail = any(r.status in ("fail", "error") for r in model_info_results)
             return 1 if any_fail else 0
+
+    # --- Smoke tests (1-token inference to catch crashes/0-token) ---
+    smoke_results: list[SmokeResult] = []
+    if do_smoke and not args.model_info_only:
+        console.print()
+        console.print("[bold]Running smoke tests (1-token inference)...[/]")
+        smoke_timeout = min(args.timeout, 60)  # Smoke tests should be fast
+        for model, backend in test_matrix:
+            label = f"{model.short_name} on {backend}"
+            with console.status(f"  [bold]{label}...[/]"):
+                sr = run_smoke(model, backend, smoke_timeout)
+            smoke_results.append(sr)
+
+            if sr.status == "pass":
+                console.print(f"  [green]PASS[/] {label} [dim]({sr.tokens_generated} tok)[/]")
+            elif sr.status == "crash":
+                console.print(f"  [bold red]CRASH[/] {label}")
+                console.print(f"    [red]{sr.error_message}[/]")
+            elif sr.status == "fail":
+                console.print(f"  [bold red]FAIL[/] {label}")
+                console.print(f"    [red]{sr.error_message}[/]")
+            else:
+                console.print(f"  {status_markup(sr.status)} {label}")
+                if sr.error_message:
+                    console.print(f"    [dim]{_truncate(sr.error_message, 120)}[/]")
+
+            if args.fail_fast and sr.status in ("crash", "fail", "error"):
+                console.print("[bold red]Stopping (--fail-fast)[/]")
+                break
+
+        # Print smoke summary
+        smoke_pass = sum(1 for s in smoke_results if s.status == "pass")
+        smoke_crash = sum(1 for s in smoke_results if s.status == "crash")
+        smoke_fail = sum(1 for s in smoke_results if s.status == "fail")
+        if smoke_crash > 0 or smoke_fail > 0:
+            console.print()
+            console.print(f"  [bold]Smoke: {smoke_pass}/{len(smoke_results)} pass", end="")
+            if smoke_crash: console.print(f", [bold red]{smoke_crash} CRASH[/]", end="")
+            if smoke_fail: console.print(f", [bold red]{smoke_fail} FAIL[/]", end="")
+            console.print("[/]")
 
     # --- Synthetic benchmarks ---
     if do_bench:
@@ -1558,8 +1711,9 @@ def main() -> int:
 
     any_fail = any(r.status in ("fail", "error") for r in inference_results)
     any_mi_fail = any(r.status in ("fail", "error") for r in model_info_results)
+    any_smoke_fail = any(r.status in ("fail", "crash", "error") for r in smoke_results)
     any_mismatch = golden_stats.get("mismatch", 0) > 0
-    return 1 if (any_fail or any_mi_fail or regressions or any_mismatch) else 0
+    return 1 if (any_fail or any_mi_fail or any_smoke_fail or regressions or any_mismatch) else 0
 
 
 if __name__ == "__main__":

@@ -25,9 +25,19 @@ pub fn rope(x: [*]f32, pos: usize, n_heads: usize, head_dim: usize, rope_dim: us
         sin_buf[i] = @sin(angle);
     }
 
+    const V8 = @Vector(8, f32);
     for (0..n_heads) |h| {
         const base = h * head_dim;
-        for (0..half) |i| {
+        var i: usize = 0;
+        while (i + 8 <= half) : (i += 8) {
+            const r: V8 = x[base + i ..][0..8].*;
+            const im: V8 = x[base + i + half ..][0..8].*;
+            const c: V8 = cos_buf[i..][0..8].*;
+            const s: V8 = sin_buf[i..][0..8].*;
+            x[base + i ..][0..8].* = r * c - im * s;
+            x[base + i + half ..][0..8].* = r * s + im * c;
+        }
+        while (i < half) : (i += 1) {
             const r = x[base + i];
             const im = x[base + i + half];
             x[base + i] = r * cos_buf[i] - im * sin_buf[i];

@@ -41,6 +41,13 @@ pub const ModelInfo = struct {
     file_size_bytes: usize,
     load_ms: u64,
     warmup_ms: u64,
+    // Optional extended info
+    format_name: []const u8 = "", // "GGUF v3", "SafeTensors"
+    attention_desc: []const u8 = "", // "full", "sliding (128)", "hybrid: attn every 4"
+    active_params: u64 = 0, // For MoE: params active per forward pass
+    server_mode: bool = false,
+    server_port: u16 = 0,
+    batch_size: u32 = 0,
 };
 
 /// Re-export BackendInfo from backend.zig for display consumers.
@@ -274,12 +281,12 @@ pub const Display = struct {
         lines[n_lines] = info.name;
         n_lines += 1;
 
-        // Line 1: arch · quant · params · size · bpw
+        // Line 1: arch · quant · params · size · bits/weight
         if (info.n_params > 0) {
             var pb: [16]u8 = undefined;
             const ps = fmtCompact(&pb, info.n_params);
             const bpw: f32 = @as(f32, @floatFromInt(info.file_size_bytes)) * bits_per_byte / @as(f32, @floatFromInt(info.n_params));
-            lines[n_lines] = std.fmt.bufPrint(&line_bufs[n_lines], "{s} \xc2\xb7 {s} \xc2\xb7 {s} \xc2\xb7 {d:.1}{s} \xc2\xb7 {d:.1} bpw", .{
+            lines[n_lines] = std.fmt.bufPrint(&line_bufs[n_lines], "{s} \xc2\xb7 {s} \xc2\xb7 {s} params \xc2\xb7 {d:.1}{s} \xc2\xb7 {d:.1} bits/weight", .{
                 info.arch_name, info.quant, ps, fsize.val, fsize.unit, bpw,
             }) catch "";
         } else {
@@ -289,31 +296,31 @@ pub const Display = struct {
         }
         n_lines += 1;
 
-        // Line 2: layers · embed [· ffn] · heads · head_dim [· experts]
+        // Line 2: layers · embed [· ffn] · heads (kv) · head_dim [· experts]
         {
             const has_ff = info.ff_dim > 0;
             const has_exp = info.n_experts > 0;
             if (has_ff and has_exp) {
-                lines[n_lines] = std.fmt.bufPrint(&line_bufs[n_lines], "{d}L \xc2\xb7 {d}E \xc2\xb7 {d}FFN \xc2\xb7 {d}h/{d}kv \xc2\xb7 hd{d} \xc2\xb7 {d}/{d}exp", .{
+                lines[n_lines] = std.fmt.bufPrint(&line_bufs[n_lines], "{d} layers \xc2\xb7 embed {d} \xc2\xb7 FFN {d} \xc2\xb7 {d} heads ({d} KV) \xc2\xb7 dim {d} \xc2\xb7 {d}/{d} experts", .{
                     info.n_layers, info.n_embed, info.ff_dim, info.n_heads, info.n_kv_heads, info.head_dim, info.n_experts_used, info.n_experts,
                 }) catch "";
             } else if (has_ff) {
-                lines[n_lines] = std.fmt.bufPrint(&line_bufs[n_lines], "{d}L \xc2\xb7 {d}E \xc2\xb7 {d}FFN \xc2\xb7 {d}h/{d}kv \xc2\xb7 hd{d}", .{
+                lines[n_lines] = std.fmt.bufPrint(&line_bufs[n_lines], "{d} layers \xc2\xb7 embed {d} \xc2\xb7 FFN {d} \xc2\xb7 {d} heads ({d} KV) \xc2\xb7 dim {d}", .{
                     info.n_layers, info.n_embed, info.ff_dim, info.n_heads, info.n_kv_heads, info.head_dim,
                 }) catch "";
             } else if (has_exp) {
-                lines[n_lines] = std.fmt.bufPrint(&line_bufs[n_lines], "{d}L \xc2\xb7 {d}E \xc2\xb7 {d}h/{d}kv \xc2\xb7 hd{d} \xc2\xb7 {d}/{d}exp", .{
+                lines[n_lines] = std.fmt.bufPrint(&line_bufs[n_lines], "{d} layers \xc2\xb7 embed {d} \xc2\xb7 {d} heads ({d} KV) \xc2\xb7 dim {d} \xc2\xb7 {d}/{d} experts", .{
                     info.n_layers, info.n_embed, info.n_heads, info.n_kv_heads, info.head_dim, info.n_experts_used, info.n_experts,
                 }) catch "";
             } else {
-                lines[n_lines] = std.fmt.bufPrint(&line_bufs[n_lines], "{d}L \xc2\xb7 {d}E \xc2\xb7 {d}h/{d}kv \xc2\xb7 hd{d}", .{
+                lines[n_lines] = std.fmt.bufPrint(&line_bufs[n_lines], "{d} layers \xc2\xb7 embed {d} \xc2\xb7 {d} heads ({d} KV) \xc2\xb7 dim {d}", .{
                     info.n_layers, info.n_embed, info.n_heads, info.n_kv_heads, info.head_dim,
                 }) catch "";
             }
         }
         n_lines += 1;
 
-        // Line 3: vocab · ctx · θ (only if any value is present)
+        // Line 3: vocab · context · kv cache · rope theta (only if any value is present)
         {
             var p: usize = 0;
             const sep: []const u8 = " \xc2\xb7 ";
@@ -336,10 +343,10 @@ pub const Display = struct {
                 if (kv_bytes > 0) {
                     const kvs = formatSize(kv_bytes);
                     const kv_label = info.kv_type_name;
-                    const s = std.fmt.bufPrint(line_bufs[n_lines][p..], "{s} ctx \xc2\xb7 {s} KV ({d:.1}{s})", .{ ns, kv_label, kvs.val, kvs.unit }) catch "";
+                    const s = std.fmt.bufPrint(line_bufs[n_lines][p..], "{s} context \xc2\xb7 KV cache {s} ({d:.1}{s})", .{ ns, kv_label, kvs.val, kvs.unit }) catch "";
                     p += s.len;
                 } else {
-                    const s = std.fmt.bufPrint(line_bufs[n_lines][p..], "{s} ctx", .{ns}) catch "";
+                    const s = std.fmt.bufPrint(line_bufs[n_lines][p..], "{s} context", .{ns}) catch "";
                     p += s.len;
                 }
             }
@@ -350,7 +357,7 @@ pub const Display = struct {
                 }
                 var nb: [16]u8 = undefined;
                 const ns = fmtCompact(&nb, @as(u64, @intFromFloat(info.rope_theta)));
-                const s = std.fmt.bufPrint(line_bufs[n_lines][p..], "\xce\xb8 {s}", .{ns}) catch "";
+                const s = std.fmt.bufPrint(line_bufs[n_lines][p..], "RoPE \xce\xb8={s}", .{ns}) catch "";
                 p += s.len;
             }
             if (p > 0) {
@@ -484,7 +491,11 @@ pub const Display = struct {
         }.f;
 
         if (is_tty) w(&buf, &pos, "{s}", .{ctl.dim_set});
-        w(&buf, &pos, "system: {s}/{s}", .{ info.arch, info.os });
+        if (info.os_version.len > 0) {
+            w(&buf, &pos, "system: {s} ({s})", .{ info.os_version, info.arch });
+        } else {
+            w(&buf, &pos, "system: {s}/{s}", .{ info.arch, info.os });
+        }
         w(&buf, &pos, " \xc2\xb7 {s}", .{info.name});
         if (info.device_name.len > 0) w(&buf, &pos, " \xc2\xb7 {s}", .{info.device_name});
         if (info.compute_cap.len > 0) w(&buf, &pos, " ({s})", .{info.compute_cap});

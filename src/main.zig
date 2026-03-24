@@ -11,7 +11,7 @@ const backend_mod = @import("backend/backend.zig");
 const format_mod = @import("format/format.zig");
 const model_mod = @import("models/model.zig");
 const tok_mod = @import("tokenizer/tokenizer.zig");
-const server = @import("server.zig");
+const server = @import("server/server.zig");
 const display_mod = @import("display.zig");
 const Display = display_mod.Display;
 
@@ -245,7 +245,7 @@ const cli_params = clap.parseParamsComptime(
     \\    --ctx-size <u32>       Context window size (default: 4096, 0 = model max).
     \\    --seed <u64>           Random seed for sampling (default: random).
     \\    --kv-type <str>        KV cache quantization: f32, f16, q8_0, int8, fp8, nvfp4 (default: f16).
-    \\    --kv-tiers <str>       Enable tiered KV cache: vram, vram+ram, vram+ram+ssd (default: vram).
+    \\    --kv-tiers <str>       Enable tiered KV cache: vram+ram, vram+ram+ssd (default: off).
     \\    --kv-ram-budget <str>  RAM tier budget in GB (default: 50% of free RAM).
     \\    --kv-ssd-path <str>    SSD tier file path (enables SSD tier if set).
     \\    --kv-ssd-budget <str>  SSD tier budget in GB (default: 10).
@@ -455,7 +455,7 @@ fn printUsage() void {
         \\      --backend <BE>     Compute backend: auto, cpu, metal, vulkan, cuda, rocm [default: auto]
         \\      --ctx-size <N>     Context window size [default: 4096, 0 = model max]
         \\      --kv-type <TYPE>   KV cache quantization: f32, f16, q8_0, int8, fp8, nvfp4 [default: f16]
-        \\      --kv-tiers <TIERS> Tiered KV cache: vram, vram+ram, vram+ram+ssd [default: vram]
+        \\      --kv-tiers <TIERS> Tiered KV cache: vram+ram, vram+ram+ssd [default: off]
         \\      --kv-ram-budget <GB>  RAM tier budget in GB [default: 50% of free RAM]
         \\      --kv-ssd-path <PATH>  SSD tier file path (enables SSD tier)
         \\      --kv-ssd-budget <GB>  SSD tier budget in GB [default: 10]
@@ -933,6 +933,7 @@ pub fn main() !void {
             be_info.l2_cache = caches.l2;
             be_info.l3_cache = caches.l3;
         }
+        if (be_info.os_version.len == 0) be_info.os_version = backend_mod.detectOsVersion();
         display.printSystemInfo(be_info);
     }
 
@@ -987,6 +988,8 @@ pub fn main() !void {
         if (fmt.getMetaStr("tokenizer.ggml.model")) |m| {
             if (std.mem.eql(u8, m, "gpt2")) break :blk 0;
         }
+        // Architecture-specific fallbacks
+        if (arch == .glm4) break :blk arch_mod.glm4_fallback_bos;
         break :blk default_bos_id;
     };
     var eog = getEogTokens(fmt, eos_id);
@@ -1181,6 +1184,10 @@ fn initAndRun(
             defer mdl.deinit();
             if (comptime @hasField(ModelType, "pool")) {
                 mdl.pool = pool;
+            }
+            // Fix block allocator pointer after struct was moved from init's return.
+            if (comptime @hasField(ModelType, "block_allocator")) {
+                mdl.block_allocator.setCachePtr(&mdl.paged_cache);
             }
             const init_ms = elapsedMs(init_start);
             if (!g_quiet) {

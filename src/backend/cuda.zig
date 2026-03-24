@@ -569,8 +569,8 @@ pub const CudaBackend = struct {
 
     // ── Backend interface ────────────────────────────────────────
 
-    /// y[n] = W[n,k] @ x[k]. GPU kernels for F32, BF16, F16, Q8_0, Q4_0;
-    /// other dtypes fall back to CPU.
+    /// y[n] = W[n,k] @ x[k]. GPU kernels for F32, BF16, F16, Q8_0, Q4_0,
+    /// Q4_K, Q5_K, Q6_K, FP8_E4M3, FP8_E5M2; other dtypes fall back to CPU.
     pub fn gemv(self: *CudaBackend, x: [*]const f32, w: TensorData, y: [*]f32, n: usize, k: usize) void {
         const func = switch (w.dtype) {
             .f32 => self.fn_gemv_f32,
@@ -756,6 +756,17 @@ pub const CudaBackend = struct {
         self.rmsNorm(a, weight, output, n, eps);
     }
 
+    /// Transposed GEMV for Q8_0 3D weights — not yet implemented.
+    pub fn gemvT(_: *CudaBackend, _: [*]const f32, _: [*]const u8, _: [*]f32, _: usize, _: usize) void {
+        @panic("gemvT not implemented for CUDA");
+    }
+
+    /// Scaled accumulate: dst[i] += src[i] * scale.
+    pub fn addScaled(_: *CudaBackend, src: [*]const f32, dst: [*]f32, scale: f32, n: usize) void {
+        // TODO: CUDA kernel — inline CPU loop for now (n_embd-sized, negligible vs GEMV)
+        for (0..n) |i| dst[i] += src[i] * scale;
+    }
+
     /// Element-wise mul
     pub fn mul(self: *CudaBackend, a: [*]const f32, b: [*]const f32, output: [*]f32, n: usize) void {
         const sz = n * @sizeOf(f32);
@@ -821,6 +832,10 @@ pub const CudaBackend = struct {
     /// MLX affine quantized GEMV.
     pub fn gemvMlxQ(_: *CudaBackend, _: [*]const f32, _: [*]const u8, _: [*]const u8, _: [*]const u8, _: [*]f32, _: usize, _: usize, _: u32) void {
         @panic("CUDA MLX GEMV: no GPU kernel — add a CUDA kernel");
+    }
+
+    pub fn gemvMxfp4St(_: *CudaBackend, _: [*]const f32, _: [*]const u8, _: [*]const u8, _: [*]f32, _: usize, _: usize) void {
+        @panic("CUDA MXFP4 SafeTensors GEMV: no GPU kernel — add a CUDA kernel");
     }
 
     /// Commit pending GPU work and download results to host.

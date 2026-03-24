@@ -102,7 +102,7 @@ pub const ChatTemplate = struct {
 
     // ── Preset templates ─────────────────────────────────────
 
-    /// ChatML — Nemotron-H, Nemotron-Nano, GLM-4, and most open models.
+    /// ChatML — Nemotron-H, Nemotron-Nano, and most open models.
     pub const chatml = ChatTemplate{
         .system_prefix = "<|im_start|>system\n",
         .system_suffix = "<|im_end|>\n",
@@ -137,6 +137,25 @@ pub const ChatTemplate = struct {
         .assistant_prefix = "<end_of_turn>\n<start_of_turn>model\n",
         .assistant_suffix = "<end_of_turn>\n",
         .eog_tokens = &.{ "<end_of_turn>", "<eos>" },
+    };
+
+    /// GLM-4 — uses `[gMASK]<sop>` prefix (BOS sends `[gMASK]`, template starts
+    /// with `<sop>`) and `<|user|>`/`<|assistant|>` role markers. Thinking is
+    /// disabled by default via `</think>` generation prefix.
+    pub const glm4 = ChatTemplate{
+        .system_prefix = "<sop>",
+        .system_suffix = "",
+        .user_prefix = "<|user|>",
+        .user_suffix = "",
+        .assistant_prefix = "<|assistant|>",
+        .assistant_suffix = "",
+        .eog_tokens = &.{ "<|endoftext|>", "<|user|>" },
+        .default_system = "",
+        .system_role_override = .{
+            .prefix = "<|system|>",
+            .suffix = "",
+        },
+        .generation_prefix = "</think>",
     };
 
     /// GPT-OSS Harmony.

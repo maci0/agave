@@ -70,8 +70,8 @@ This document tracks the implementation status of all compute kernels across bac
 | CPU | `src/backend/kernels/cpu/` | `gemv.zig` (dispatcher), `gemv_*.zig` (per-format), `norm.zig`, `activation.zig`, `elementwise.zig`, `rope.zig`, `softmax.zig`, `sdpa.zig`, `embedding.zig`, `deltanet.zig` |
 | Metal | `src/backend/kernels/metal/` | `common.metal`, `elementwise.metal`, `norm.metal`, `rope.metal`, `gemv.metal`, `sdpa.metal`, `deltanet.metal` |
 | Vulkan | `src/backend/kernels/vulkan/` | `silu.comp`, `gelu.comp`, `add.comp`, `mul.comp`, `rms_norm.comp`, `softmax.comp`, `l2_norm.comp`, `rope.comp`, `sdpa.comp`, `embedding.comp`, `conv1d.comp`, `gemv_{f32,q8_0,q4_0,bf16,f16,q4_k,q5_k,q6_k,fp8_e4m3,fp8_e5m2}.comp` (+compiled `.spv`) |
-| CUDA | `src/backend/kernels/cuda/` | `common.zig` (shared primitives), `silu.zig`, `gelu.zig`, `add.zig`, `mul.zig`, `rms_norm.zig`, `softmax.zig`, `l2_norm.zig`, `rope.zig`, `sdpa.zig`, `gemv_{f32,bf16,f16,q8_0,q4_0,q4_0_batch}.zig`, `all.zig` (aggregator) — compiled to PTX via `zig build ptx` |
-| ROCm | `src/backend/kernels/rocm/` | `common.zig` (shared primitives), `silu.zig`, `gelu.zig`, `add.zig`, `mul.zig`, `rms_norm.zig`, `rms_norm_multi.zig`, `softmax.zig`, `l2_norm.zig`, `rope.zig`, `sdpa.zig`, `gemv_{f32,bf16,f16,q8_0,q4_0,mlx_q4}.zig`, `sigmoid_mul.zig`, `deinterleave.zig`, `all.zig` (aggregator) — compiled to HSACO via `zig build amdgcn` |
+| CUDA | `src/backend/kernels/cuda/` | `common.zig` (shared primitives), `silu.zig`, `gelu.zig`, `add.zig`, `mul.zig`, `rms_norm.zig`, `softmax.zig`, `l2_norm.zig`, `rope.zig`, `sdpa.zig`, `gemv_{f32,bf16,f16,q8_0,q4_0,q4_0_batch,q4_k,q5_k,q6_k,fp8_e4m3,fp8_e5m2}.zig`, `all.zig` (aggregator) — compiled to PTX via `zig build ptx` |
+| ROCm | `src/backend/kernels/rocm/` | `common.zig` (shared primitives), `silu.zig`, `gelu.zig`, `add.zig`, `mul.zig`, `rms_norm.zig`, `rms_norm_multi.zig`, `softmax.zig`, `l2_norm.zig`, `rope.zig`, `sdpa.zig`, `gemv_{f32,bf16,f16,q8_0,q4_0,q4_k,q5_k,q6_k,fp8_e4m3,fp8_e5m2,mlx_q4}.zig`, `sigmoid_mul.zig`, `deinterleave.zig`, `deltanet.zig`, `all.zig` (aggregator) — compiled to HSACO via `zig build amdgcn` |
 
 ## Priority Roadmap
 
@@ -92,7 +92,7 @@ This document tracks the implementation status of all compute kernels across bac
 **ROCm** — medium priority:
 - rmsNormMulti (GPU kernel exists but disabled — needs validation)
 - DeltaNet recurrence
-- GEMV: q4_k, q5_k, q6_k (kernels exist for CUDA, need ROCm port)
+- GEMV: q4_1, q5_0, q2_k, q3_k, iq4_nl, iq4_xs, nvfp4_st, mxfp4
 
 **Metal** — near-complete:
 - GEMV: nvfp4 (GGUF), mxfp4

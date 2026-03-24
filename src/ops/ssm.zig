@@ -1,6 +1,6 @@
 //! SSM (State Space Model) utility kernels.
 //! Provides shared causal conv1d with SiLU activation and ring-buffer state, used by
-//! Qwen3.5 (DeltaNet), Nemotron-H (Mamba-2), and Nemotron-Nano architectures.
+//! Qwen3.5 (DeltaNet) and Nemotron-H (Mamba-2) architectures.
 
 const std = @import("std");
 const math_ops = @import("math.zig");
@@ -130,7 +130,24 @@ pub fn mamba2Recurrence(
             const xd = x_h[i] * dt_h;
             var yi: f32 = ssm_d[h] * x_h[i];
             const s_row = state[s_off + i * d_state ..][0..d_state];
-            for (0..d_state) |j| {
+
+            // SIMD-vectorized state update + output accumulation
+            const V8 = @Vector(8, f32);
+            const decay_v: V8 = @splat(decay);
+            const xd_v: V8 = @splat(xd);
+            var yi_acc: V8 = @splat(0.0);
+            var j: usize = 0;
+            while (j + 8 <= d_state) : (j += 8) {
+                const s_v: V8 = s_row[j..][0..8].*;
+                const b_v: V8 = B_g[j..][0..8].*;
+                const c_v: V8 = C_g[j..][0..8].*;
+                const new_s = decay_v * s_v + xd_v * b_v;
+                s_row[j..][0..8].* = new_s;
+                yi_acc += new_s * c_v;
+            }
+            yi += @reduce(.Add, yi_acc);
+            // Scalar tail
+            while (j < d_state) : (j += 1) {
                 s_row[j] = decay * s_row[j] + xd * B_g[j];
                 yi += s_row[j] * C_g[j];
             }
@@ -159,18 +176,29 @@ pub fn groupRmsNormSiluGate(
     n_groups: usize,
     eps: f32,
 ) void {
+    const V8 = @Vector(8, f32);
     const elem_per_group: usize = d_inner / n_groups;
     for (0..n_groups) |g| {
         const off = g * elem_per_group;
         const y_g = y + off;
         const w_g = norm_w + g * elem_per_group;
-        var ss: f32 = 0.0;
-        for (0..elem_per_group) |i| ss += y_g[i] * y_g[i];
+
+        // SIMD sum of squares
+        var ss_acc: V8 = @splat(0.0);
+        var i: usize = 0;
+        while (i + 8 <= elem_per_group) : (i += 8) {
+            const v: V8 = y_g[i..][0..8].*;
+            ss_acc += v * v;
+        }
+        var ss: f32 = @reduce(.Add, ss_acc);
+        while (i < elem_per_group) : (i += 1) ss += y_g[i] * y_g[i];
+
         const inv_rms = 1.0 / @sqrt(ss / @as(f32, @floatFromInt(elem_per_group)) + eps);
         const z_g = z + off;
-        for (0..elem_per_group) |i| {
-            const normed = y_g[i] * inv_rms * w_g[i];
-            y_g[i] = normed * silu(z_g[i]);
+        // Scalar norm+gate (SiLU per-element prevents full vectorization)
+        for (0..elem_per_group) |j| {
+            const normed = y_g[j] * inv_rms * w_g[j];
+            y_g[j] = normed * silu(z_g[j]);
         }
     }
 }
@@ -204,6 +232,8 @@ test "causalConv1dSilu ring buffer evolution" {
 
     // Step 1: input=1.0, state=[0,0] → conv = 0*1 + 0*1 + 1*1 = 1.0
     causalConv1dSilu(&conv_out, &conv_state, &[_]f32{1.0}, &conv_w, null, 1, 3);
+    const expected1 = silu(1.0);
+    try std.testing.expectApproxEqAbs(expected1, conv_out[0], 1e-5);
     try std.testing.expectApproxEqAbs(@as(f32, 0.0), conv_state[0], 1e-6); // shifted: was state[1]=0
     try std.testing.expectApproxEqAbs(@as(f32, 1.0), conv_state[1], 1e-6); // current input
 

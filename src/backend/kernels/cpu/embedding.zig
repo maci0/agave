@@ -131,6 +131,9 @@ pub fn embQ6_K(data: [*]const u8, tok: u32, out: [*]f32, dim: usize) void {
 
 /// Dequantizes a Q4_K embedding row to f32.
 /// 256 elements per super-block, 144 bytes: d(f16) + dmin(f16) + scales[12] + qs[128].
+/// Layout: 4 groups of 64 elements, each group in 32 bytes.
+///   Elements 0-31: LOW nibbles of bytes 0-31 (scale index 2g)
+///   Elements 32-63: HIGH nibbles of bytes 0-31 (scale index 2g+1)
 pub fn embQ4_K(data: [*]const u8, tok: u32, out: [*]f32, dim: usize) void {
     const bpb: usize = 144;
     const bs: usize = 256;
@@ -142,22 +145,29 @@ pub fn embQ4_K(data: [*]const u8, tok: u32, out: [*]f32, dim: usize) void {
         const dmin: f32 = @floatCast(@as(f16, @bitCast(std.mem.readInt(u16, bp[2..4], .little))));
         const scales = bp[4..16];
         const qs = bp + 16;
-        for (0..8) |sb| {
-            const gi_base = b * bs + sb * 32;
-            if (gi_base >= dim) break;
-            var sc: u8 = undefined;
-            var m: u8 = undefined;
-            quant.getScaleMinK4(sb, scales, &sc, &m);
-            const d_sc = d * @as(f32, @floatFromInt(sc));
-            const dm_m = dmin * @as(f32, @floatFromInt(m));
-            const qi_base = sb * 32;
+        for (0..4) |g| {
+            const ql_off = g * 32;
+            var sc_lo: u8 = undefined;
+            var m_lo: u8 = undefined;
+            var sc_hi: u8 = undefined;
+            var m_hi: u8 = undefined;
+            quant.getScaleMinK4(g * 2, scales, &sc_lo, &m_lo);
+            quant.getScaleMinK4(g * 2 + 1, scales, &sc_hi, &m_hi);
+            const d_lo = d * @as(f32, @floatFromInt(sc_lo));
+            const dm_lo = dmin * @as(f32, @floatFromInt(m_lo));
+            const d_hi = d * @as(f32, @floatFromInt(sc_hi));
+            const dm_hi = dmin * @as(f32, @floatFromInt(m_hi));
+            // First 32 elements: low nibbles
             for (0..32) |l| {
-                const gi = gi_base + l;
+                const gi = b * bs + g * 64 + l;
                 if (gi >= dim) break;
-                const qi = qi_base + l;
-                const byte_idx = qi / 2;
-                const qv: f32 = @floatFromInt(if (qi % 2 == 0) qs[byte_idx] & 0x0F else qs[byte_idx] >> 4);
-                out[gi] = d_sc * qv - dm_m;
+                out[gi] = d_lo * @as(f32, @floatFromInt(qs[ql_off + l] & 0x0F)) - dm_lo;
+            }
+            // Next 32 elements: high nibbles
+            for (0..32) |l| {
+                const gi = b * bs + g * 64 + 32 + l;
+                if (gi >= dim) break;
+                out[gi] = d_hi * @as(f32, @floatFromInt(qs[ql_off + l] >> 4)) - dm_hi;
             }
         }
     }
@@ -165,6 +175,10 @@ pub fn embQ4_K(data: [*]const u8, tok: u32, out: [*]f32, dim: usize) void {
 
 /// Dequantizes a Q5_K embedding row to f32.
 /// 256 elements per super-block, 176 bytes: d(f16) + dmin(f16) + scales[12] + qh[32] + qs[128].
+/// Layout: 4 groups of 64 elements, each group in 32 bytes of qs.
+///   Elements 0-31: LOW nibbles + high bit (scale index 2g)
+///   Elements 32-63: HIGH nibbles + high bit (scale index 2g+1)
+/// High bits: qh[l] bit (2g) for low half, bit (2g+1) for high half.
 pub fn embQ5_K(data: [*]const u8, tok: u32, out: [*]f32, dim: usize) void {
     const bpb: usize = 176;
     const bs: usize = 256;
@@ -177,24 +191,35 @@ pub fn embQ5_K(data: [*]const u8, tok: u32, out: [*]f32, dim: usize) void {
         const scales = bp[4..16];
         const qh = bp + 16;
         const qs = bp + 48;
-        for (0..8) |sb| {
-            const gi_base = b * bs + sb * 32;
-            if (gi_base >= dim) break;
-            var sc: u8 = undefined;
-            var m: u8 = undefined;
-            quant.getScaleMinK4(sb, scales, &sc, &m);
-            const d_sc = d * @as(f32, @floatFromInt(sc));
-            const dm_m = dmin * @as(f32, @floatFromInt(m));
-            const qi_base = sb * 32;
+        for (0..4) |g| {
+            const ql_off = g * 32;
+            const umask1: u8 = @as(u8, 1) << @intCast(g * 2);
+            const umask2: u8 = @as(u8, 2) << @intCast(g * 2);
+            var sc_lo: u8 = undefined;
+            var m_lo: u8 = undefined;
+            var sc_hi: u8 = undefined;
+            var m_hi: u8 = undefined;
+            quant.getScaleMinK4(g * 2, scales, &sc_lo, &m_lo);
+            quant.getScaleMinK4(g * 2 + 1, scales, &sc_hi, &m_hi);
+            const d_lo = d * @as(f32, @floatFromInt(sc_lo));
+            const dm_lo = dmin * @as(f32, @floatFromInt(m_lo));
+            const d_hi = d * @as(f32, @floatFromInt(sc_hi));
+            const dm_hi = dmin * @as(f32, @floatFromInt(m_hi));
+            // First 32 elements: low nibbles + high bit
             for (0..32) |l| {
-                const gi = gi_base + l;
+                const gi = b * bs + g * 64 + l;
                 if (gi >= dim) break;
-                const qi = qi_base + l;
-                const byte_idx = qi / 2;
-                const lo: u8 = if (qi % 2 == 0) qs[byte_idx] & 0x0F else qs[byte_idx] >> 4;
-                const hi: u8 = @truncate((qh[qi / 8] >> @intCast(qi % 8)) & 1);
-                const qv: f32 = @floatFromInt(lo | (hi << 4));
-                out[gi] = d_sc * qv - dm_m;
+                const lo: f32 = @floatFromInt(qs[ql_off + l] & 0x0F);
+                const hi: f32 = if ((qh[l] & umask1) != 0) 16.0 else 0.0;
+                out[gi] = d_lo * (lo + hi) - dm_lo;
+            }
+            // Next 32 elements: high nibbles + high bit
+            for (0..32) |l| {
+                const gi = b * bs + g * 64 + 32 + l;
+                if (gi >= dim) break;
+                const lo: f32 = @floatFromInt(qs[ql_off + l] >> 4);
+                const hi: f32 = if ((qh[l] & umask2) != 0) 16.0 else 0.0;
+                out[gi] = d_hi * (lo + hi) - dm_hi;
             }
         }
     }

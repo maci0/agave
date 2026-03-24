@@ -101,6 +101,19 @@ kernel void gelu_f32(
     output[tid] = 0.5f * x * (1.0f + (e2 - 1.0f) / (e2 + 1.0f));
 }
 
+// Scaled accumulate: dst[i] += src[i] * scale
+// Used for MoE expert output accumulation to avoid per-expert GPU sync.
+kernel void add_scaled_f32(
+    device const float* src  [[buffer(0)]],
+    device float* dst        [[buffer(1)]],
+    constant float& scale    [[buffer(2)]],
+    constant uint& n         [[buffer(3)]],
+    uint tid [[thread_position_in_grid]])
+{
+    if (tid >= n) return;
+    dst[tid] += src[tid] * scale;
+}
+
 // ── KV cache append (compute-based) ─────────────────────────
 // Copies k_new and v_new into KV cache at the given offset.
 // Runs on the compute encoder — avoids blit encoder switching overhead.

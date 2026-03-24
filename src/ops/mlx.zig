@@ -1,5 +1,5 @@
 //! MLX quantization kernels.
-//! Provides dequantization for MLX's affine quantized format (4-bit or 6-bit, group_size=64).
+//! Provides dequantization for MLX's affine quantized format (4-bit, 6-bit, or 8-bit, group_size=32/64).
 //! Used by models loaded from safetensors with MLX quantization.
 
 const std = @import("std");
@@ -34,6 +34,13 @@ pub fn unpackU6(w: [*]const u32, idx: usize) u6 {
     return @truncate(lo | hi);
 }
 
+/// Unpack a single 8-bit value from a packed u32 array.
+pub fn unpackU8(w: [*]const u32, idx: usize) u8 {
+    const wi = idx / 4;
+    const bo: u5 = @intCast((idx % 4) * 8);
+    return @truncate(w[wi] >> bo);
+}
+
 /// MLX affine GEMV: y[row] = sum_j(dequant(W[row,j]) * x[j])
 /// Dequant: float_val = scale * int_val + bias, per group of 64 elements.
 pub fn mlxGemvRaw(
@@ -62,7 +69,7 @@ pub fn mlxGemvRows(
     k: usize,
     bits: u32,
 ) void {
-    std.debug.assert(bits == 4 or bits == 6);
+    std.debug.assert(bits == 4 or bits == 6 or bits == 8);
     const gs = mlx_group_size;
     const gpr = (k + gs - 1) / gs;
     const wpg = wordsPerGroup(bits);
@@ -70,8 +77,10 @@ pub fn mlxGemvRows(
 
     if (bits == 4) {
         mlxGemvQ4Rows(x, pw, sc, bi, y, start_row, n_rows, k, gpr, wpr);
-    } else {
+    } else if (bits == 6) {
         mlxGemvQ6Rows(x, pw, sc, bi, y, start_row, n_rows, k, gpr, wpg, wpr);
+    } else {
+        mlxGemvQ8Rows(x, pw, sc, bi, y, start_row, n_rows, k, gpr, wpr);
     }
 }
 
@@ -226,6 +235,141 @@ fn mlxGemvQ6Rows(
     }
 }
 
+/// SIMD-optimized 8-bit MLX GEMV for a range of rows.
+/// 4 values per u32 word, same factored scale/bias pattern as Q4.
+fn mlxGemvQ8Rows(
+    x: [*]const f32,
+    pw: [*]const u32,
+    sc: [*]const u16,
+    bi: [*]const u16,
+    y: [*]f32,
+    start_row: usize,
+    n_rows: usize,
+    k: usize,
+    gpr: usize,
+    wpr: usize,
+) void {
+    const gs = mlx_group_size;
+    const V = 4; // 4 bytes per u32 word
+    const VecF32 = @Vector(V, f32);
+    const VecU32 = @Vector(V, u32);
+    const byte_shifts: VecU32 = .{ 0, 8, 16, 24 };
+    const mask8: VecU32 = @splat(0xFF);
+    const vzero: VecF32 = @splat(0.0);
+
+    for (start_row..start_row + n_rows) |row| {
+        var sum: f32 = 0.0;
+        const wr = pw + row * wpr;
+        const sr = sc + row * gpr;
+        const br = bi + row * gpr;
+        for (0..gpr) |g| {
+            const scale = quant.bf16ToF32(sr[g]);
+            const bias = quant.bf16ToF32(br[g]);
+            const xo = g * gs;
+            const wo = g * wordsPerGroup(8);
+            const elems = @min(gs, k - xo);
+            const full_words = elems / V;
+
+            var q_acc: VecF32 = vzero;
+            var x_acc: VecF32 = vzero;
+
+            for (0..full_words) |wi| {
+                const xv: VecF32 = (x + xo + wi * V)[0..V].*;
+                const word: VecU32 = @splat(wr[wo + wi]);
+                const vals: VecF32 = @floatFromInt((word >> byte_shifts) & mask8);
+                q_acc = @mulAdd(VecF32, xv, vals, q_acc);
+                x_acc += xv;
+            }
+            sum += scale * @reduce(.Add, q_acc) + bias * @reduce(.Add, x_acc);
+
+            // Scalar tail
+            const done = full_words * V;
+            for (done..elems) |i| {
+                const val: u32 = unpackU8(wr + wo, i);
+                sum += x[xo + i] * (scale * @as(f32, @floatFromInt(val)) + bias);
+            }
+        }
+        y[row] = sum;
+    }
+}
+
+/// GEMV for MLX MXFP4 SafeTensors layout.
+/// Weight: U32-packed 4-bit nibbles (8 nibbles per word), group_size=32.
+/// Scales: FP8 E4M3 per group (U8 array). No quantization bias.
+/// Dequant: float_val = mxfp4_lookup(nibble) * fp8_scale.
+pub fn mlxMxfp4Gemv(
+    x: [*]const f32,
+    pw: [*]const u32,
+    scales_u8: [*]const u8,
+    y: [*]f32,
+    n: usize,
+    k: usize,
+) void {
+    mlxMxfp4GemvRows(x, pw, scales_u8, y, 0, n, k);
+}
+
+/// Convert an E8M0 scale byte to f32: val = 2^(byte - 127).
+/// E8M0 is a pure power-of-2 format used by OCP Microscaling (MX) spec.
+inline fn e8m0ToF32(byte: u8) f32 {
+    if (byte == 0) return 0.0; // Zero exponent → zero scale
+    // Construct IEEE 754 float: exponent = byte - 127 + 127 = byte, mantissa = 0
+    return @bitCast(@as(u32, byte) << 23);
+}
+
+/// Compute a range of rows for MLX MXFP4 GEMV.
+/// Scales are E8M0 (pure power-of-2), NOT FP8 E4M3.
+pub fn mlxMxfp4GemvRows(
+    x: [*]const f32,
+    pw: [*]const u32,
+    scales_u8: [*]const u8,
+    y: [*]f32,
+    start_row: usize,
+    n_rows: usize,
+    k: usize,
+) void {
+    const mxfp4_gs: usize = 32;
+    const gpr = (k + mxfp4_gs - 1) / mxfp4_gs;
+    const wpg: usize = mxfp4_gs * 4 / 32; // 4 u32 words per group
+    const wpr = gpr * wpg;
+
+    const V8 = @Vector(8, f32);
+
+    for (start_row..start_row + n_rows) |row| {
+        var acc: V8 = @splat(0.0);
+        const wr = pw + row * wpr;
+        const sr = scales_u8 + row * gpr;
+
+        for (0..gpr) |g| {
+            const sv: V8 = @splat(e8m0ToF32(sr[g]));
+            const xo = g * mxfp4_gs;
+            const wo = g * wpg;
+            const elems = @min(mxfp4_gs, k - xo);
+
+            const full_words = elems / 8;
+            for (0..full_words) |wi| {
+                const word = wr[wo + wi];
+                var vals: [8]f32 = undefined;
+                inline for (0..8) |ni| {
+                    const nibble: u8 = @truncate((word >> @as(u5, @intCast(ni * 4))) & 0xF);
+                    vals[ni] = quant.mxfp4Lookup(nibble);
+                }
+                const v: V8 = vals;
+                const xv: V8 = (x + xo + wi * 8)[0..8].*;
+                acc += sv * v * xv;
+            }
+
+            // Scalar tail
+            const done = full_words * 8;
+            for (done..elems) |i| {
+                const nibble = unpackU4(wr + wo, i);
+                const val = quant.mxfp4Lookup(nibble);
+                acc[0] += e8m0ToF32(sr[g]) * val * x[xo + i];
+            }
+        }
+        y[row] = @reduce(.Add, acc);
+    }
+}
+
 /// Dequantize a single row from an MLX-quantized embedding table into f32.
 ///
 /// Parameters:
@@ -235,7 +379,7 @@ fn mlxGemvQ6Rows(
 ///   - bi:    BF16 biases for the full table.
 ///   - row:   Row index (token ID).
 ///   - k:     Embedding dimension.
-///   - bits:  Quantization bit width (4 or 6).
+///   - bits:  Quantization bit width (4, 6, or 8).
 pub fn mlxEmbLookup(
     out: [*]f32,
     pw: [*]const u32,
@@ -259,7 +403,7 @@ pub fn mlxEmbLookup(
         const wo = g * wpg;
         const elems = @min(gs, k - xo);
         for (0..elems) |i| {
-            const val: u32 = if (bits == 4) unpackU4(wr + wo, i) else unpackU6(wr + wo, i);
+            const val: u32 = if (bits == 4) unpackU4(wr + wo, i) else if (bits == 8) unpackU8(wr + wo, i) else unpackU6(wr + wo, i);
             out[xo + i] = scale * @as(f32, @floatFromInt(val)) + bias;
         }
     }

@@ -4,7 +4,7 @@ Language models don't see text — they see **tokens**, which are integer IDs re
 
 ## What is Inference?
 
-**Training** teaches a model by adjusting billions of **weights** (learned parameters — the numbers in matrices and vectors that encode the model's knowledge) over trillions of tokens. **Inference** uses those frozen weights to generate new text. Agave only does inference — it loads pre-trained weights and runs the model forward (a single pass through the network layers to produce output).
+**Training** teaches a model by adjusting billions of **weights** (learned parameters — the numbers in matrices and vectors that encode the model's knowledge) over trillions of tokens. **Inference** uses those **frozen** (fixed, no longer changing) weights to generate new text. Agave only does inference — it loads **pre-trained** (already trained by someone else, ready to use) weights and runs the model forward (a single pass through the network layers to produce output).
 
 ## Tokenization
 
@@ -22,17 +22,31 @@ The tokenizer converts between text and token IDs:
 3. Next most frequent is `H e` → merge to `He`: `He ll o`
 4. Continue until vocabulary is built: `Hello`
 
-The merge rules are learned during training and stored alongside the model. Agave's BPE tokenizer (`src/tokenizer/bpe.zig`) supports two modes:
+The merge rules are learned during training and stored alongside the model. This process creates the **vocabulary** — the complete set of all possible tokens the model knows about. Each token gets a unique ID (0 to vocab_size-1). For example:
+
+```
+Token ID 0:    "<pad>" (padding — fills empty space when batching multiple sequences of different lengths)
+Token ID 1:    "<s>" (start of sequence)
+Token ID 15496: "Hello"
+Token ID 11:    ","
+Token ID 128000: (last valid token)
+```
+
+The **vocabulary size** (vocab_size) is the total number of distinct tokens. Modern models have vocabularies of 32K–256K tokens. Larger vocabularies encode text more efficiently (fewer tokens per sentence) but increase memory and compute costs.
+
+Agave's BPE tokenizer (`src/tokenizer/bpe.zig`) supports two modes:
 - **BPE mode** — uses merge rules (Qwen, GPT)
-- **SPM mode** — greedy longest-match without merges (Gemma)
+- **SPM mode** — **greedy** (always picks the best option at each step without backtracking) longest-match without merges (Gemma)
 
 ## Embedding Lookup
 
-The first operation in the forward pass converts a token ID into a vector. The model has an **embedding table** — a matrix of shape `[vocab_size × n_embd]` where `n_embd` is the embedding dimension (typically 1024–8192 floating-point numbers) and each row is the learned representation of one token.
+The first operation in the forward pass converts a token ID into a **vector** (a 1D array of numbers). The model has an **embedding table** — a **matrix** (a 2D array) of shape `[vocab_size × n_embd]` where `vocab_size` is the total number of tokens in the vocabulary (e.g., 128K) and `n_embd` is the **embedding dimension** (the size/length of each vector — how many numbers it contains, typically 1024–8192 floating-point numbers). Each row is the learned representation of one token.
 
-Embedding lookup is just a table read: take row `token_id` from the matrix. It's so simple that CPU memcpy is faster than GPU dispatch overhead, which is why all backends run this on the CPU.
+**Note on terminology:** Machine learning uses the term **tensor** for multi-dimensional arrays — a **scalar** (single number, 0D), vector (1D), matrix (2D), or higher-dimensional array (3D, 4D, etc.) are all tensors. Throughout this tutorial we use the more specific terms (scalar/vector/matrix) since nearly all operations are 0D, 1D, or 2D, but you'll see "tensor" in the code and documentation referring to these same arrays.
 
-The table may be **quantized** (compressed to lower precision formats like Q4_0 or BF16 to save memory) — the implementation **dequantizes** (converts back to full precision) on the fly during the lookup. Gemma3 scales embeddings by `sqrt(n_embd)` after lookup, amplifying the signal for its architecture.
+Embedding lookup is just a table read: take row `token_id` from the matrix. It's so simple that CPU memcpy is faster than GPU **dispatch** overhead (the cost of sending work to the GPU and synchronizing), which is why all backends run this on the CPU.
+
+The table may be **quantized** (compressed to lower **precision** — fewer bits per number, less accurate — formats like Q4_0 or BF16 to save memory) — the implementation **dequantizes** (converts back to full precision) on the fly during the lookup. Gemma3 scales embeddings by `sqrt(n_embd)` after lookup, **amplifying the signal** (making the values larger to increase their influence) for its architecture.
 
 ## Vocabulary Projection
 

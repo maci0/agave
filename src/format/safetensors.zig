@@ -385,6 +385,24 @@ const gguf_hf_layer_map = [_]struct { []const u8, []const u8 }{
     .{ "ffn_up", "mlp.up_proj" },
     .{ "ffn_down", "mlp.down_proj" },
     .{ "post_ffw_norm", "post_feedforward_layernorm" },
+    // MoE expert tensors (packed [n_experts, rows, cols])
+    .{ "ffn_gate_exps", "mlp.experts.gate_proj" },
+    .{ "ffn_up_exps", "mlp.experts.up_proj" },
+    .{ "ffn_down_exps", "mlp.experts.down_proj" },
+    .{ "ffn_gate_inp", "mlp.router" },
+    // MLA attention (DeepSeek2/GLM-4)
+    .{ "attn_q_a", "self_attn.q_a_proj" },
+    .{ "attn_q_b", "self_attn.q_b_proj" },
+    .{ "attn_q_a_norm", "self_attn.q_a_layernorm" },
+    .{ "attn_kv_a_mqa", "self_attn.kv_a_proj_with_mqa" },
+    .{ "attn_kv_a_norm", "self_attn.kv_a_layernorm" },
+    .{ "attn_k_b", "self_attn.embed_q" },
+    .{ "attn_v_b", "self_attn.unembed_out" },
+    // MoE shared expert + routing bias
+    .{ "ffn_gate_shexp", "mlp.shared_experts.gate_proj" },
+    .{ "ffn_up_shexp", "mlp.shared_experts.up_proj" },
+    .{ "ffn_down_shexp", "mlp.shared_experts.down_proj" },
+    .{ "exp_probs_b", "mlp.gate.e_score_correction_bias" },
 };
 
 /// HuggingFace model prefixes to try (multimodal first, then plain).
@@ -781,7 +799,8 @@ fn parseShardHeader(
                         i = skipWs(json, i);
                         if (i < json.len and json[i] == ',') i += 1;
                     }
-                    i = skipWs(json, i);
+                    // Skip remaining dimensions beyond 4 (e.g. 5-D vision tensors).
+                    while (i < json.len and json[i] != ']') : (i += 1) {}
                     if (i < json.len and json[i] == ']') i += 1;
                 } else if (std.mem.eql(u8, key_res.val, "data_offsets")) {
                     i = try expect(json, i, '[');
@@ -930,8 +949,26 @@ fn parseConfigObject(
                     if (is_override or !meta.contains(owned_key))
                         try meta.put(owned_key, .{ .string = owned_val });
                 },
-                '{', '[' => {
+                '{' => {
                     i = try skipValue(json, i);
+                },
+                '[' => {
+                    // For integer arrays (e.g. eos_token_id: [154820, 154827]),
+                    // store the first element as a uint value.
+                    const arr_start = i;
+                    i += 1; // skip '['
+                    i = skipWs(json, i);
+                    if (i < json.len and json[i] != ']' and json[i] != '"' and json[i] != '{' and json[i] != '[') {
+                        // Looks like a number — try to parse the first element.
+                        const num_start = i;
+                        while (i < json.len and json[i] != ',' and json[i] != ']') : (i += 1) {}
+                        if (parseU64Slice(json[num_start..i])) |u| {
+                            if (is_override or !meta.contains(owned_key))
+                                try meta.put(owned_key, .{ .uint = u });
+                        } else |_| {}
+                    }
+                    // Skip the rest of the array.
+                    i = try skipValue(json, arr_start);
                 },
                 't' => {
                     i = try skipValue(json, i);
@@ -1021,6 +1058,8 @@ fn parseTokenizerJson(
                 if (i < json.len and json[i] == ',') i += 1;
             }
             if (i < json.len and json[i] == '}') i += 1;
+        } else if (std.mem.eql(u8, key_res.val, "added_tokens")) {
+            i = try parseAddedTokens(allocator, json, i, out_vocab, owned);
         } else {
             i = try skipValue(json, i);
         }
@@ -1063,9 +1102,22 @@ fn parseVocab(
     }
 
     const vocab_size = max_id + 1;
-    const vocab_arr = try allocator.alloc([]u8, vocab_size);
-    errdefer allocator.free(vocab_arr);
-    for (vocab_arr) |*slot| slot.* = @constCast(&[_]u8{});
+    // Reuse existing array (from added_tokens parsed earlier) if large enough,
+    // otherwise allocate a new one and copy existing entries.
+    const vocab_arr = if (out_vocab.*) |old| blk: {
+        if (old.len >= vocab_size) break :blk old;
+        const new = try allocator.alloc([]u8, vocab_size);
+        @memcpy(new[0..old.len], old);
+        for (new[old.len..]) |*slot| slot.* = @constCast(&[_]u8{});
+        allocator.free(old);
+        out_vocab.* = new;
+        break :blk new;
+    } else blk: {
+        const new = try allocator.alloc([]u8, vocab_size);
+        for (new) |*slot| slot.* = @constCast(&[_]u8{});
+        out_vocab.* = new; // Set early so caller can free on error
+        break :blk new;
+    };
 
     // Second pass: populate.
     var i = try expect(json, start, '{');
@@ -1090,7 +1142,6 @@ fn parseVocab(
     }
     if (i < json.len and json[i] == '}') i += 1;
 
-    out_vocab.* = vocab_arr;
     return i;
 }
 
@@ -1145,6 +1196,96 @@ fn parseMerges(
     if (i < json.len and json[i] == ']') i += 1;
 
     out_merges.* = try list.toOwnedSlice(allocator);
+    return i;
+}
+
+/// Parse `added_tokens` array from tokenizer.json.
+/// Each element is `{"id": N, "content": "...", ...}`.
+/// Extends the existing vocab array to include these tokens at their IDs.
+fn parseAddedTokens(
+    allocator: Allocator,
+    json: []const u8,
+    start: usize,
+    out_vocab: *?[][]u8,
+    owned: *std.ArrayList([]u8),
+) !usize {
+    // First pass: collect (id, content) pairs and find max id.
+    const Entry = struct { id: usize, content: []const u8 };
+    var entries: std.ArrayList(Entry) = .empty;
+    defer entries.deinit(allocator);
+
+    var i = try expect(json, start, '[');
+    while (true) {
+        i = skipWs(json, i);
+        if (i >= json.len or json[i] == ']') break;
+
+        // Parse one added_token object.
+        i = try expect(json, i, '{');
+        var token_id: ?usize = null;
+        var content: ?[]const u8 = null;
+        while (true) {
+            i = skipWs(json, i);
+            if (i >= json.len or json[i] == '}') break;
+            const fk = try parseString(json, i);
+            i = fk.next;
+            i = try expect(json, i, ':');
+            i = skipWs(json, i);
+
+            if (std.mem.eql(u8, fk.val, "id")) {
+                const ns = i;
+                while (i < json.len and json[i] != ',' and json[i] != '}') : (i += 1) {}
+                token_id = @intCast(parseU64Slice(json[ns..i]) catch 0);
+            } else if (std.mem.eql(u8, fk.val, "content")) {
+                const cr = try parseString(json, i);
+                i = cr.next;
+                content = cr.val;
+            } else {
+                i = try skipValue(json, i);
+            }
+            i = skipWs(json, i);
+            if (i < json.len and json[i] == ',') i += 1;
+        }
+        if (i < json.len and json[i] == '}') i += 1;
+
+        if (token_id != null and content != null) {
+            try entries.append(allocator, .{ .id = token_id.?, .content = content.? });
+        }
+        i = skipWs(json, i);
+        if (i < json.len and json[i] == ',') i += 1;
+    }
+    if (i < json.len and json[i] == ']') i += 1;
+
+    if (entries.items.len == 0) return i;
+
+    // Find max id across existing vocab and added tokens.
+    var max_id: usize = if (out_vocab.*) |v| v.len else 0;
+    for (entries.items) |e| {
+        if (e.id + 1 > max_id) max_id = e.id + 1;
+    }
+
+    // Extend or create vocab array.
+    if (out_vocab.*) |old_vocab| {
+        if (max_id > old_vocab.len) {
+            const new_vocab = try allocator.alloc([]u8, max_id);
+            @memcpy(new_vocab[0..old_vocab.len], old_vocab);
+            for (new_vocab[old_vocab.len..]) |*slot| slot.* = @constCast(&[_]u8{});
+            allocator.free(old_vocab);
+            out_vocab.* = new_vocab;
+        }
+    } else {
+        const new_vocab = try allocator.alloc([]u8, max_id);
+        for (new_vocab) |*slot| slot.* = @constCast(&[_]u8{});
+        out_vocab.* = new_vocab;
+    }
+
+    // Insert added tokens.
+    const vocab = out_vocab.*.?;
+    for (entries.items) |e| {
+        if (e.id < vocab.len) {
+            vocab[e.id] = try dupeUnescaped(allocator, owned, e.content);
+        }
+    }
+
     return i;
 }
 
@@ -1229,6 +1370,33 @@ test "parseIndexJson collects shards in order" {
     try std.testing.expectEqual(@as(usize, 2), shard_list.items.len);
     try std.testing.expectEqualStrings("model-00001-of-00002.safetensors", shard_list.items[0]);
     try std.testing.expectEqualStrings("model-00002-of-00002.safetensors", shard_list.items[1]);
+}
+
+test "parseShardHeader 5D shape" {
+    const allocator = std.testing.allocator;
+    const json =
+        \\{"__metadata__":{},"vision.proj.weight":{"dtype":"BF16","shape":[1152,2,16,16,3],"data_offsets":[0,1769472]}}
+    ;
+
+    var tensors = std.StringHashMap(TensorEntry).init(allocator);
+    defer tensors.deinit();
+    var owned: std.ArrayList([]u8) = .empty;
+    defer {
+        for (owned.items) |s| allocator.free(s);
+        owned.deinit(allocator);
+    }
+
+    try parseShardHeader(allocator, json, 0, &tensors, &owned);
+
+    try std.testing.expectEqual(@as(usize, 1), tensors.count());
+    const entry = tensors.get("vision.proj.weight") orelse return error.MissingTensor;
+    try std.testing.expectEqual(DType.bf16, entry.dtype);
+    // Only first 4 dims are stored; 5th is skipped gracefully
+    try std.testing.expectEqual(@as(u32, 4), entry.n_dims);
+    try std.testing.expectEqual(@as(u64, 1152), entry.dims[0]);
+    try std.testing.expectEqual(@as(u64, 2), entry.dims[1]);
+    try std.testing.expectEqual(@as(u64, 16), entry.dims[2]);
+    try std.testing.expectEqual(@as(u64, 16), entry.dims[3]);
 }
 
 test "dupeUnescaped surrogate pair" {
