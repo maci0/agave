@@ -17,6 +17,28 @@ const bits_per_byte: f32 = 8.0;
 const avail_display_pct: usize = 98;
 /// Maximum number of content lines in the TTY banner box.
 const max_content_lines: usize = 6;
+/// Milliseconds per second — used for tok/s calculations.
+const ms_per_second: f32 = 1000.0;
+/// Bytes per GiB (binary gigabyte).
+const bytes_per_gib: usize = 1024 * 1024 * 1024;
+/// Bytes per MiB (binary megabyte).
+const bytes_per_mib: usize = 1024 * 1024;
+/// Buffer size for per-line content in TTY banner and progress bar.
+const line_buf_size: usize = 256;
+/// Duration threshold (ms) above which seconds are shown without fraction.
+const duration_whole_seconds_threshold: u64 = 10_000;
+/// Divisor for extracting tenths-of-a-second from a millisecond remainder.
+const duration_tenths_divisor: u64 = 100;
+/// Default terminal width when ioctl is unavailable.
+const default_terminal_width: usize = 80;
+/// Horizontal margin (chars) subtracted from terminal width for box rendering.
+const box_horizontal_margin: usize = 4;
+/// Padding (chars) added on each side of box content.
+const box_side_padding: usize = 2;
+/// Width (chars) of the token generation progress bar.
+const progress_bar_width: u32 = 30;
+/// Buffer size for human-readable file size formatting.
+const file_size_buf_size: usize = 32;
 
 // ── Public Types ─────────────────────────────────────────────────
 
@@ -88,14 +110,14 @@ pub const GenStats = struct {
     /// Returns 0.0 if gen_ms is zero to avoid division by zero.
     pub fn tokPerSec(self: GenStats) f32 {
         if (self.gen_ms == 0) return 0.0;
-        return @as(f32, @floatFromInt(self.token_count)) / (@as(f32, @floatFromInt(self.gen_ms)) / 1000.0);
+        return @as(f32, @floatFromInt(self.token_count)) / (@as(f32, @floatFromInt(self.gen_ms)) / ms_per_second);
     }
 
     /// Tokens per second during prefill.
     /// Returns 0.0 if prefill_ms is zero to avoid division by zero.
     pub fn prefillTokPerSec(self: GenStats) f32 {
         if (self.prefill_ms == 0) return 0.0;
-        return @as(f32, @floatFromInt(self.prefill_token_count)) / (@as(f32, @floatFromInt(self.prefill_ms)) / 1000.0);
+        return @as(f32, @floatFromInt(self.prefill_token_count)) / (@as(f32, @floatFromInt(self.prefill_ms)) / ms_per_second);
     }
 };
 
@@ -125,10 +147,8 @@ pub const FormattedSize = struct {
 /// Formats a byte count into a human-readable size with appropriate unit.
 /// Uses binary (1024-based) thresholds: returns "GB" for >= 1 GiB, "MB" for >= 1 MiB, "KB" otherwise.
 pub fn formatSize(size: usize) FormattedSize {
-    const gib: usize = 1024 * 1024 * 1024;
-    const mib: usize = 1024 * 1024;
-    if (size >= gib) return .{ .val = @as(f64, @floatFromInt(size)) / @as(f64, @floatFromInt(gib)), .unit = "GB" };
-    if (size >= mib) return .{ .val = @as(f64, @floatFromInt(size)) / @as(f64, @floatFromInt(mib)), .unit = "MB" };
+    if (size >= bytes_per_gib) return .{ .val = @as(f64, @floatFromInt(size)) / @as(f64, @floatFromInt(bytes_per_gib)), .unit = "GB" };
+    if (size >= bytes_per_mib) return .{ .val = @as(f64, @floatFromInt(size)) / @as(f64, @floatFromInt(bytes_per_mib)), .unit = "MB" };
     return .{ .val = @as(f64, @floatFromInt(size)) / 1024.0, .unit = "KB" };
 }
 
@@ -154,11 +174,11 @@ fn fmtCompact(buf: *[16]u8, n: u64) []const u8 {
 
 /// Formats milliseconds as duration: 21515 → "21.5s", 800 → "800ms".
 fn fmtDuration(buf: *[16]u8, ms: u64) []const u8 {
-    if (ms >= 10_000) {
+    if (ms >= duration_whole_seconds_threshold) {
         return std.fmt.bufPrint(buf, "{d}s", .{ms / 1000}) catch "";
     }
     if (ms >= 1_000) {
-        return std.fmt.bufPrint(buf, "{d}.{d}s", .{ ms / 1000, (ms % 1000) / 100 }) catch "";
+        return std.fmt.bufPrint(buf, "{d}.{d}s", .{ ms / 1000, (ms % 1000) / duration_tenths_divisor }) catch "";
     }
     return std.fmt.bufPrint(buf, "{d}ms", .{ms}) catch "";
 }
@@ -274,7 +294,7 @@ pub const Display = struct {
         const vt = "\xe2\x94\x82"; // │
 
         // Build content lines
-        var line_bufs: [max_content_lines][256]u8 = undefined;
+        var line_bufs: [max_content_lines][line_buf_size]u8 = undefined;
         var lines: [max_content_lines][]const u8 = undefined;
         var n_lines: usize = 0;
 
@@ -395,11 +415,11 @@ pub const Display = struct {
             var ws: std.posix.winsize = undefined;
             const rc = std.posix.system.ioctl(stderr.handle, std.posix.T.IOCGWINSZ, @intFromPtr(&ws));
             if (rc == 0 and ws.col > 0) break :blk @as(usize, ws.col);
-            break :blk 80;
+            break :blk default_terminal_width;
         };
-        if (max_width + 4 > term_cols) max_width = term_cols - 4;
+        if (max_width + box_horizontal_margin > term_cols) max_width = term_cols - box_horizontal_margin;
 
-        const box_w = max_width + 2; // 1 char padding each side
+        const box_w = max_width + box_side_padding; // 1 char padding each side
 
         var out_buf: [out_buf_size]u8 = undefined;
         var out_pos: usize = 0;
@@ -604,17 +624,17 @@ pub const Display = struct {
         if (self.mode != .tty) return;
         const ctl = vaxis.ctlseqs;
         const tps: f32 = if (elapsed_ms > 0)
-            @as(f32, @floatFromInt(tokens_generated)) / (@as(f32, @floatFromInt(elapsed_ms)) / 1000.0)
+            @as(f32, @floatFromInt(tokens_generated)) / (@as(f32, @floatFromInt(elapsed_ms)) / ms_per_second)
         else
             0.0;
 
-        const bar_width: u32 = 30;
+        const bar_width: u32 = progress_bar_width;
         const filled: u32 = if (max_tokens > 0)
             @intCast(@min(@as(u64, tokens_generated) * bar_width / max_tokens, bar_width))
         else
             0;
 
-        var buf: [256]u8 = undefined;
+        var buf: [line_buf_size]u8 = undefined;
         var pos: usize = 0;
         const append = struct {
             fn f(b: []u8, p: *usize, s: []const u8) void {
@@ -777,7 +797,7 @@ pub const Display = struct {
         jw.objectField("file_size_human") catch return;
         // Format as "1.2GB"
         {
-            var sbuf: [32]u8 = undefined;
+            var sbuf: [file_size_buf_size]u8 = undefined;
             const stxt = std.fmt.bufPrint(&sbuf, "{d:.1}{s}", .{ fsize.val, fsize.unit }) catch "?";
             jw.write(stxt) catch return;
         }

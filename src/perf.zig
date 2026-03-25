@@ -8,6 +8,12 @@
 
 const std = @import("std");
 
+/// Microseconds per millisecond — for display conversion.
+const us_per_ms: f64 = 1000.0;
+
+/// Multiplier to convert a fraction to a percentage.
+const percent_scale: f64 = 100.0;
+
 /// Operation categories for profiling.
 pub const Op = enum {
     emb_lookup,
@@ -75,7 +81,7 @@ pub const PerfCounters = struct {
 
         write(stderr, &buf, "\n\x1b[1m── Profile ({d} tokens, {d:.1}ms avg) ──\x1b[0m\n", .{
             self.n_tokens,
-            @as(f64, @floatFromInt(total_us)) / @as(f64, @floatFromInt(self.n_tokens)) / 1000.0,
+            @as(f64, @floatFromInt(total_us)) / @as(f64, @floatFromInt(self.n_tokens)) / us_per_ms,
         });
         write(stderr, &buf, "{s:<16} {s:>8} {s:>10} {s:>8} {s:>6}\n", .{ "Operation", "Calls", "Total(ms)", "Avg(µs)", "%" });
         write(stderr, &buf, "{s}\n", .{"─" ** 54});
@@ -84,12 +90,12 @@ pub const PerfCounters = struct {
         inline for (fields) |field| {
             const idx = field.value;
             if (self.counts[idx] > 0) {
-                const pct = @as(f64, @floatFromInt(self.times_us[idx])) / @as(f64, @floatFromInt(total_us)) * 100.0;
+                const pct = @as(f64, @floatFromInt(self.times_us[idx])) / @as(f64, @floatFromInt(total_us)) * percent_scale;
                 const avg = @as(f64, @floatFromInt(self.times_us[idx])) / @as(f64, @floatFromInt(self.counts[idx]));
                 write(stderr, &buf, "{s:<16} {d:>8} {d:>10.1} {d:>8.0} {d:>5.1}%\n", .{
                     field.name,
                     self.counts[idx],
-                    @as(f64, @floatFromInt(self.times_us[idx])) / 1000.0,
+                    @as(f64, @floatFromInt(self.times_us[idx])) / us_per_ms,
                     avg,
                     pct,
                 });
@@ -98,7 +104,7 @@ pub const PerfCounters = struct {
         write(stderr, &buf, "{s}\n", .{"─" ** 54});
         write(stderr, &buf, "{s:<16} {s:>8} {d:>10.1}\n", .{
             "TOTAL",                                    "",
-            @as(f64, @floatFromInt(total_us)) / 1000.0,
+            @as(f64, @floatFromInt(total_us)) / us_per_ms,
         });
     }
 };

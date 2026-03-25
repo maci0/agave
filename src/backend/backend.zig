@@ -147,9 +147,30 @@ pub const detectOsVersion = @import("cpu.zig").detectOsVersion;
 pub const buf_cache_initial_capacity: usize = 512;
 
 /// Elements per small quantization block (Q4_0, Q8_0, etc.).
-const quant_block_elems: usize = 32;
+pub const quant_block_elems: usize = 32;
 /// Elements per large quantization super-block (Q4_K, Q5_K, Q6_K, etc.).
-const quant_super_block_elems: usize = 256;
+pub const quant_super_block_elems: usize = 256;
+/// Elements per NVFP4 block (8 nibble pairs + 1 scale byte).
+pub const nvfp4_block_elems: usize = 16;
+
+// ── Element and block byte sizes ──────────────────────────────────────
+// Byte size per element for non-quantized types, and per block for quantized
+// formats. Used by weightBytes, gemvRowBytes, and model dtypeBytes.
+pub const f32_elem_bytes: usize = 4;
+pub const f16_elem_bytes: usize = 2; // also bf16
+pub const q4_0_block_bytes: usize = 18; // f16 scale + 16B quants
+pub const q4_1_block_bytes: usize = 20; // f16 scale + f16 min + 16B quants
+pub const q5_0_block_bytes: usize = 22; // f16 scale + 4B high bits + 16B quants
+pub const q8_0_block_bytes: usize = 34; // f16 scale + 32B quants
+pub const q2_k_block_bytes: usize = 84; // 256-element super-block
+pub const q3_k_block_bytes: usize = 110; // 256-element super-block
+pub const q4_k_block_bytes: usize = 144; // 256-element super-block
+pub const q5_k_block_bytes: usize = 176; // 256-element super-block
+pub const q6_k_block_bytes: usize = 210; // 256-element super-block
+pub const iq4_nl_block_bytes: usize = 18; // 32-element block (same layout as Q4_0)
+pub const iq4_xs_block_bytes: usize = 138; // 256-element super-block
+pub const mxfp4_block_bytes: usize = 17; // 16B quants + 1B scale
+pub const nvfp4_block_bytes: usize = 9; // 8B quants + 1B scale
 
 /// Compute raw byte size of a weight matrix [n, k] for a given dtype.
 /// Used by GPU backends to determine upload buffer sizes. Accounts for
@@ -158,19 +179,19 @@ pub fn weightBytes(dtype: DType, n: usize, k: usize) usize {
     const nb = (k + quant_block_elems - 1) / quant_block_elems;
     const nsb = (k + quant_super_block_elems - 1) / quant_super_block_elems;
     return switch (dtype) {
-        .f32 => n * k * 4,
-        .f16, .bf16 => n * k * 2,
+        .f32 => n * k * f32_elem_bytes,
+        .f16, .bf16 => n * k * f16_elem_bytes,
         .fp8_e4m3, .fp8_e5m2 => n * k,
-        .q8_0 => n * nb * 34,
-        .q4_0 => n * nb * 18,
-        .q4_1 => n * nb * 20,
-        .q5_0 => n * nb * 22,
-        .q4_k => n * nsb * 144,
-        .q5_k => n * nsb * 176,
-        .q6_k => n * nsb * 210,
-        .mxfp4 => n * nb * 17,
-        .q2_k => n * nsb * 84,
-        .q3_k => n * nsb * 110,
+        .q8_0 => n * nb * q8_0_block_bytes,
+        .q4_0 => n * nb * q4_0_block_bytes,
+        .q4_1 => n * nb * q4_1_block_bytes,
+        .q5_0 => n * nb * q5_0_block_bytes,
+        .q4_k => n * nsb * q4_k_block_bytes,
+        .q5_k => n * nsb * q5_k_block_bytes,
+        .q6_k => n * nsb * q6_k_block_bytes,
+        .mxfp4 => n * nb * mxfp4_block_bytes,
+        .q2_k => n * nsb * q2_k_block_bytes,
+        .q3_k => n * nsb * q3_k_block_bytes,
         // Conservative fallback for unsupported dtypes (overestimates at f32).
         .tq1_0, .iq4_xs, .iq4_nl, .nvfp4, .mlx_q, .unknown => n * k * 4,
     };

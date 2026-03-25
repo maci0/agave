@@ -9,6 +9,11 @@ const Allocator = std.mem.Allocator;
 /// Shared constant to avoid repeating the literal 16 in every model init.
 pub const default_block_size: u16 = 16;
 
+/// Cost multiplier for shared prefix blocks during LRU eviction.
+/// Blocks with ref_count > 1 are shared across sequences, so evicting them
+/// is 100× more expensive than evicting private blocks.
+const shared_prefix_cost: f32 = 100.0;
+
 /// Result of allocating a KV cache.
 /// Slices are byte arrays — the actual format (f32, f16, q8_0, etc.)
 /// is tracked by the model's `kv_type` field.
@@ -172,8 +177,8 @@ pub const PagedKvCache = struct {
         for (self.blocks, 0..) |*blk, id| {
             if (blk.ref_count == 0) continue; // Skip free blocks
 
-            // Per D-05: shared prefixes (ref_count > 1) get 100× cost multiplier
-            const cost: f32 = if (blk.ref_count > 1) 100.0 else 1.0;
+            // Shared prefixes (ref_count > 1) are expensive to evict
+            const cost: f32 = if (blk.ref_count > 1) shared_prefix_cost else 1.0;
             const score = @as(f32, @floatFromInt(blk.access_count)) * cost;
 
             if (score < min_score) {

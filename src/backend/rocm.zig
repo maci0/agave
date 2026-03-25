@@ -61,6 +61,13 @@ const reduction_smem: u32 = 32;
 /// Size of the buffer for retrieving the HIP device name.
 const device_name_buf_size: usize = 256;
 
+/// HIP version encoding: major = version / 10_000_000.
+const hip_version_major_divisor: u32 = 10_000_000;
+/// HIP version encoding: minor = (version / 100_000) % 100.
+const hip_version_minor_divisor: u32 = 100_000;
+/// HIP version encoding: minor field modulus.
+const hip_version_minor_modulus: u32 = 100;
+
 // ── HIP function pointer types ──────────────────────────────────
 
 const FnInit = *const fn (c_uint) callconv(.c) HipError;
@@ -233,7 +240,7 @@ pub const RocmBackend = struct {
             var ver: c_int = 0;
             if (hipRuntimeGetVersion(&ver) == HIP_SUCCESS and ver > 0) {
                 const v: u32 = @intCast(ver);
-                _ = std.fmt.bufPrint(&self.hip_ver_str, "HIP {d}.{d}", .{ v / 10_000_000, (v / 100_000) % 100 }) catch {};
+                _ = std.fmt.bufPrint(&self.hip_ver_str, "HIP {d}.{d}", .{ v / hip_version_major_divisor, (v / hip_version_minor_divisor) % hip_version_minor_modulus }) catch {};
             }
         }
 

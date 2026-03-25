@@ -37,6 +37,8 @@ const SeqBlockTable = kvcache.SeqBlockTable;
 
 /// Maximum top-k experts for stack-allocated selection arrays.
 const max_active_experts: usize = 8;
+/// Maximum attention heads for stack-allocated sink bias array.
+const max_sink_heads: usize = 64;
 
 /// Compute the byte stride between consecutive experts in a packed weight tensor.
 /// Handles both GGUF layout [inner, outer, n_experts] and SafeTensors MLX
@@ -59,10 +61,10 @@ fn expertScaleStride(scale_t: TensorInfo, weight_t: TensorInfo) usize {
     _ = weight_t;
     if (scale_t.n_dims >= 3) {
         const elems: usize = @as(usize, @intCast(scale_t.dims[0])) * @as(usize, @intCast(scale_t.dims[1]));
-        return elems * 2; // bf16 = 2 bytes per element
+        return elems * @sizeOf(u16); // bf16 = 2 bytes per element
     }
     // Fallback: divide total size by number of experts
-    const total = scale_t.numElements() * 2;
+    const total = scale_t.numElements() * @sizeOf(u16);
     const n_experts = if (scale_t.n_dims >= 3) @as(usize, @intCast(scale_t.dims[2])) else 1;
     return if (n_experts > 0) total / n_experts else total;
 }
@@ -157,16 +159,16 @@ pub const GptOssModel = struct {
         self.kv_type = kv_type;
 
         const arch = f.getMetaStr("general.architecture") orelse "gpt-oss";
-        self.n_layers = f.getArchU32(arch, "block_count") orelse 24;
-        self.n_embd = f.getArchU32(arch, "embedding_length") orelse 2880;
-        self.n_head = f.getArchU32(arch, "attention.head_count") orelse 64;
-        self.n_head_kv = f.getArchU32(arch, "attention.head_count_kv") orelse 8;
-        self.head_dim = f.getArchU32(arch, "attention.key_length") orelse 64;
+        if (f.getArchU32(arch, "block_count")) |v| self.n_layers = v;
+        if (f.getArchU32(arch, "embedding_length")) |v| self.n_embd = v;
+        if (f.getArchU32(arch, "attention.head_count")) |v| self.n_head = v;
+        if (f.getArchU32(arch, "attention.head_count_kv")) |v| self.n_head_kv = v;
+        if (f.getArchU32(arch, "attention.key_length")) |v| self.head_dim = v;
         self.n_ff = f.getArchU32(arch, "expert_feed_forward_length") orelse
-            f.getArchU32(arch, "feed_forward_length") orelse 2880;
-        self.n_experts = f.getArchU32(arch, "expert_count") orelse 32;
-        self.n_experts_active = f.getArchU32(arch, "expert_used_count") orelse 4;
-        self.sliding_window = f.getArchU32(arch, "attention.sliding_window") orelse 128;
+            f.getArchU32(arch, "feed_forward_length") orelse self.n_ff;
+        if (f.getArchU32(arch, "expert_count")) |v| self.n_experts = v;
+        if (f.getArchU32(arch, "expert_used_count")) |v| self.n_experts_active = v;
+        if (f.getArchU32(arch, "attention.sliding_window")) |v| self.sliding_window = v;
         if (f.getArchF32(arch, "rope.freq_base")) |v| self.rope_theta = v;
         if (f.getArchF32(arch, "attention.layer_norm_rms_epsilon")) |v| self.rms_eps = v;
         if (f.getMetaU32("tokenizer.ggml.eos_token_id")) |v| self.eos_token_id = v;
@@ -516,7 +518,7 @@ pub const GptOssModel = struct {
         // Learned attention sinks — optional per-head scalar logit prepended to scores.
         // SafeTensors stores sinks as BF16; dequant inline.
         const sinks_t = self.fmt.layerTensor(li, "attn_sinks.weight");
-        var sinks_f32: [64]f32 = undefined; // max 64 heads
+        var sinks_f32: [max_sink_heads]f32 = undefined;
         const sinks: ?[*]const f32 = if (sinks_t) |st| blk: {
             if (st.dtype == .bf16) {
                 const bf16_ptr: [*]const u16 = @ptrCast(@alignCast(st.data_ptr));
@@ -676,11 +678,11 @@ pub const GptOssModel = struct {
             }
             self.be.sync();
             if (gate_bias_t) |gbt| {
-                const bpe: usize = if (gbt.dtype == .bf16) 2 else @sizeOf(f32);
+                const bpe: usize = if (gbt.dtype == .bf16) backend_mod.f16_elem_bytes else @sizeOf(f32);
                 addBiasTyped(self.expert_gate[0..ff], gbt.data_ptr + ei * ff * bpe, ff, gbt.dtype);
             }
             if (up_bias_t) |ubt| {
-                const bpe: usize = if (ubt.dtype == .bf16) 2 else @sizeOf(f32);
+                const bpe: usize = if (ubt.dtype == .bf16) backend_mod.f16_elem_bytes else @sizeOf(f32);
                 addBiasTyped(self.expert_up[0..ff], ubt.data_ptr + ei * ff * bpe, ff, ubt.dtype);
             }
 
@@ -697,7 +699,7 @@ pub const GptOssModel = struct {
             self.doGemvExpert(self.expert_gate.ptr, down_exps, ei, down_stride, self.expert_down.ptr, e, ff);
             self.be.sync();
             if (down_bias_t) |dbt| {
-                const bpe: usize = if (dbt.dtype == .bf16) 2 else @sizeOf(f32);
+                const bpe: usize = if (dbt.dtype == .bf16) backend_mod.f16_elem_bytes else @sizeOf(f32);
                 addBiasTyped(self.expert_down[0..e], dbt.data_ptr + ei * e * bpe, e, dbt.dtype);
             }
 

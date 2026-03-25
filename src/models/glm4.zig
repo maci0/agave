@@ -704,13 +704,13 @@ pub const Glm4Model = struct {
     /// Byte size for `n` elements at the given dtype (for sub-tensor offset computation).
     fn dtypeBytes(dtype: DType, n: usize) usize {
         return switch (dtype) {
-            .f32 => n * 4,
-            .bf16, .f16 => n * 2,
-            .q8_0 => @divExact(n, 32) * 34,
-            .q4_0 => @divExact(n, 32) * 18,
-            .q4_k => @divExact(n, 256) * 144,
-            .q5_k => @divExact(n, 256) * 176,
-            .q6_k => @divExact(n, 256) * 210,
+            .f32 => n * backend_mod.f32_elem_bytes,
+            .bf16, .f16 => n * backend_mod.f16_elem_bytes,
+            .q8_0 => @divExact(n, backend_mod.quant_block_elems) * backend_mod.q8_0_block_bytes,
+            .q4_0 => @divExact(n, backend_mod.quant_block_elems) * backend_mod.q4_0_block_bytes,
+            .q4_k => @divExact(n, backend_mod.quant_super_block_elems) * backend_mod.q4_k_block_bytes,
+            .q5_k => @divExact(n, backend_mod.quant_super_block_elems) * backend_mod.q5_k_block_bytes,
+            .q6_k => @divExact(n, backend_mod.quant_super_block_elems) * backend_mod.q6_k_block_bytes,
             else => n, // fallback: 1 byte per element
         };
     }

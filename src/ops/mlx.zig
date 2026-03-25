@@ -11,33 +11,42 @@ pub const mlx_group_size: usize = 64;
 /// MXFP4 group size (32 elements per group, distinct from MLX affine's 64).
 pub const mxfp4_group_size: usize = 32;
 
+/// Bit-packing constants for u32-packed quantized weights.
+const bits_per_u32: usize = 32;
+const nibbles_per_u32: usize = 8; // 32 / 4
+const bits_per_nibble: u32 = 4;
+const bytes_per_u32: usize = 4; // 32 / 8
+const bits_per_byte: u32 = 8;
+/// Maximum bit offset in a u32 where a 6-bit value fits without spanning two words.
+const u6_max_single_word_offset: u5 = 26; // 32 - 6
+
 /// Compute words (u32) per group for a given bit width.
 pub fn wordsPerGroup(bits: u32) usize {
-    return mlx_group_size * bits / 32;
+    return mlx_group_size * bits / bits_per_u32;
 }
 
 /// Unpack a single 4-bit value from a packed u32 array.
 pub fn unpackU4(w: [*]const u32, idx: usize) u4 {
-    const wi = idx / 8;
-    const bo: u5 = @intCast((idx % 8) * 4);
+    const wi = idx / nibbles_per_u32;
+    const bo: u5 = @intCast((idx % nibbles_per_u32) * bits_per_nibble);
     return @truncate(w[wi] >> bo);
 }
 
 /// Unpack a single 6-bit value from a packed u32 array.
 pub fn unpackU6(w: [*]const u32, idx: usize) u6 {
     const bp = idx * 6;
-    const wi = bp / 32;
-    const bo: u5 = @intCast(bp % 32);
-    if (bo <= 26) return @truncate(w[wi] >> bo);
+    const wi = bp / bits_per_u32;
+    const bo: u5 = @intCast(bp % bits_per_u32);
+    if (bo <= u6_max_single_word_offset) return @truncate(w[wi] >> bo);
     const lo = w[wi] >> bo;
-    const hi = w[wi + 1] << @intCast(32 - @as(u6, bo));
+    const hi = w[wi + 1] << @intCast(bits_per_u32 - @as(u6, bo));
     return @truncate(lo | hi);
 }
 
 /// Unpack a single 8-bit value from a packed u32 array.
 pub fn unpackU8(w: [*]const u32, idx: usize) u8 {
-    const wi = idx / 4;
-    const bo: u5 = @intCast((idx % 4) * 8);
+    const wi = idx / bytes_per_u32;
+    const bo: u5 = @intCast((idx % bytes_per_u32) * bits_per_byte);
     return @truncate(w[wi] >> bo);
 }
 
@@ -328,10 +337,10 @@ pub fn mlxMxfp4GemvRows(
     k: usize,
 ) void {
     const gpr = (k + mxfp4_group_size - 1) / mxfp4_group_size;
-    const wpg: usize = mxfp4_group_size * 4 / 32; // 4 u32 words per group
+    const wpg: usize = mxfp4_group_size * bits_per_nibble / bits_per_u32;
     const wpr = gpr * wpg;
 
-    const V8 = @Vector(8, f32);
+    const V8 = @Vector(nibbles_per_u32, f32);
 
     for (start_row..start_row + n_rows) |row| {
         var acc: V8 = @splat(0.0);
@@ -345,21 +354,21 @@ pub fn mlxMxfp4GemvRows(
             const wo = g * wpg;
             const elems = @min(mxfp4_group_size, k - xo);
 
-            const full_words = elems / 8;
+            const full_words = elems / nibbles_per_u32;
             for (0..full_words) |wi| {
                 const word = wr[wo + wi];
-                var vals: [8]f32 = undefined;
-                inline for (0..8) |ni| {
-                    const nibble: u8 = @truncate((word >> @as(u5, @intCast(ni * 4))) & 0xF);
+                var vals: [nibbles_per_u32]f32 = undefined;
+                inline for (0..nibbles_per_u32) |ni| {
+                    const nibble: u8 = @truncate((word >> @as(u5, @intCast(ni * bits_per_nibble))) & 0xF);
                     vals[ni] = quant.mxfp4Lookup(nibble);
                 }
                 const v: V8 = vals;
-                const xv: V8 = (x + xo + wi * 8)[0..8].*;
+                const xv: V8 = (x + xo + wi * nibbles_per_u32)[0..nibbles_per_u32].*;
                 acc += sv * v * xv;
             }
 
             // Scalar tail — reuse pre-computed scale
-            const done = full_words * 8;
+            const done = full_words * nibbles_per_u32;
             for (done..elems) |i| {
                 const nibble = unpackU4(wr + wo, i);
                 const val = quant.mxfp4Lookup(nibble);

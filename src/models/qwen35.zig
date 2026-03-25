@@ -32,6 +32,11 @@ const max_ssm_v_heads: usize = 128;
 /// Maximum top-k experts for stack-allocated selection arrays (MoE variant).
 const max_active_experts: usize = 16;
 
+/// Default top-k experts for Qwen3.5 MoE (35B-A3B variant).
+const default_moe_experts_active: u32 = 8;
+/// Default per-expert FFN dimension for Qwen3.5 MoE.
+const default_moe_expert_ff_dim: u32 = 512;
+
 /// Qwen3.5 hybrid model with DeltaNet SSM, full attention layers, and optional MoE FFN.
 pub const Qwen35Model = struct {
     /// Norm weight cache: permanently dequantized BF16 norm weights keyed by data pointer.
@@ -137,17 +142,17 @@ pub const Qwen35Model = struct {
         var self = Qwen35Model{ .fmt = f, .be = be, .allocator = allocator, .is_safetensors = f.is_safetensors };
         self.kv_type = kv_type;
         const arch = f.getMetaStr("general.architecture") orelse "qwen35";
-        self.n_layers = f.getArchU32(arch, "block_count") orelse 32;
-        self.n_embd = f.getArchU32(arch, "embedding_length") orelse 4096;
-        self.n_head = f.getArchU32(arch, "attention.head_count") orelse 16;
-        self.n_head_kv = f.getArchU32(arch, "attention.head_count_kv") orelse 4;
-        self.head_dim = f.getArchU32(arch, "attention.key_length") orelse 256;
-        self.n_ff = f.getArchU32(arch, "feed_forward_length") orelse 12288;
-        self.full_attn_interval = f.getArchU32(arch, "full_attention_interval") orelse 4;
-        self.ssm_d_conv = f.getArchU32(arch, "ssm.conv_kernel") orelse 4;
-        self.ssm_d_state = f.getArchU32(arch, "ssm.state_size") orelse 128;
-        self.ssm_n_group = f.getArchU32(arch, "ssm.group_count") orelse 16;
-        self.ssm_dt_rank = f.getArchU32(arch, "ssm.time_step_rank") orelse 16;
+        if (f.getArchU32(arch, "block_count")) |v| self.n_layers = v;
+        if (f.getArchU32(arch, "embedding_length")) |v| self.n_embd = v;
+        if (f.getArchU32(arch, "attention.head_count")) |v| self.n_head = v;
+        if (f.getArchU32(arch, "attention.head_count_kv")) |v| self.n_head_kv = v;
+        if (f.getArchU32(arch, "attention.key_length")) |v| self.head_dim = v;
+        if (f.getArchU32(arch, "feed_forward_length")) |v| self.n_ff = v;
+        if (f.getArchU32(arch, "full_attention_interval")) |v| self.full_attn_interval = v;
+        if (f.getArchU32(arch, "ssm.conv_kernel")) |v| self.ssm_d_conv = v;
+        if (f.getArchU32(arch, "ssm.state_size")) |v| self.ssm_d_state = v;
+        if (f.getArchU32(arch, "ssm.group_count")) |v| self.ssm_n_group = v;
+        if (f.getArchU32(arch, "ssm.time_step_rank")) |v| self.ssm_dt_rank = v;
         self.ssm_d_inner = f.getArchU32(arch, "ssm.inner_size") orelse blk: {
             // SafeTensors: compute from linear_num_value_heads × linear_value_head_dim.
             if (f.getMetaU32("linear_value_head_dim")) |vhd| {
@@ -167,8 +172,8 @@ pub const Qwen35Model = struct {
         if (f.getArchU32(arch, "expert_count")) |ec| {
             self.is_moe = true;
             self.n_experts = ec;
-            self.n_experts_active = f.getArchU32(arch, "expert_used_count") orelse 8;
-            self.expert_ff_dim = f.getArchU32(arch, "expert_feed_forward_length") orelse 512;
+            self.n_experts_active = f.getArchU32(arch, "expert_used_count") orelse default_moe_experts_active;
+            self.expert_ff_dim = f.getArchU32(arch, "expert_feed_forward_length") orelse default_moe_expert_ff_dim;
             self.shared_expert_ff_dim = f.getArchU32(arch, "expert_shared_feed_forward_length") orelse self.expert_ff_dim;
             // For MoE, n_ff is repurposed as max buffer size (must fit both expert FFN and attention de-interleave)
             self.n_ff = @max(self.expert_ff_dim, self.n_head * self.head_dim);
@@ -372,6 +377,9 @@ pub const Qwen35Model = struct {
             const dt_bias_t = f.layerTensor(li, "ssm_dt.bias") orelse return error.MissingTensor;
             const conv_w_t = f.layerTensor(li, "ssm_conv1d.weight") orelse return error.MissingTensor;
             const ssm_norm_t = f.layerTensor(li, "ssm_norm.weight") orelse return error.MissingTensor;
+            // Set init_count early so the outer errdefer covers partial allocations
+            // at index i (the .len > 0 guards prevent freeing unallocated empty slices).
+            dn_init_count = i + 1;
             self.dn_ssm_a[i] = try allocator.alloc(f32, num_v_heads);
             self.dn_dt_bias[i] = try allocator.alloc(f32, num_v_heads);
             self.dn_conv_w[i] = try allocator.alloc(f32, conv_ch * self.ssm_d_conv);
@@ -385,7 +393,6 @@ pub const Qwen35Model = struct {
             quant.dequantToF32(self.dn_dt_bias[i], dt_bias_t.data_ptr, dt_bias_t.dtype, num_v_heads);
             quant.dequantToF32(self.dn_conv_w[i], conv_w_t.data_ptr, conv_w_t.dtype, conv_ch * self.ssm_d_conv);
             quant.dequantToF32(self.dn_ssm_norm_w[i], ssm_norm_t.data_ptr, ssm_norm_t.dtype, head_v_dim);
-            dn_init_count = i + 1;
         }
 
         return self;

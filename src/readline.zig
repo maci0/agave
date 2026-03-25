@@ -13,6 +13,12 @@ const search_buf_size = 256;
 const leftover_buf_size = 128;
 const input_read_buf_size = 256;
 const ctrl_c_double_tap_ms: i64 = 1000;
+const cursor_buf_size = 32;
+const simple_read_buf_size = 4096;
+/// ASCII control character boundaries for ANSI escape sequence parsing.
+const ascii_printable_start: u8 = 0x20; // Space — first printable character
+const ascii_intermediate_end: u8 = 0x40; // '@' — end of ANSI intermediate byte range
+const ascii_escape: u8 = 0x1b; // ESC — start of ANSI escape sequences
 
 /// Interactive line editor with history and reverse-search (Ctrl-R).
 pub const LineEditor = struct {
@@ -239,7 +245,7 @@ pub const LineEditor = struct {
             return;
         }
         if (key.text) |text| {
-            if (text.len > 0 and text[0] >= 0x20 and search_len.* + text.len <= search_buf.len) {
+            if (text.len > 0 and text[0] >= ascii_printable_start and search_len.* + text.len <= search_buf.len) {
                 @memcpy(search_buf[search_len.*..][0..text.len], text);
                 search_len.* += text.len;
                 search_match.* = self.searchBack(search_buf[0..search_len.*], null);
@@ -289,7 +295,7 @@ pub const LineEditor = struct {
             self.writeAll("\r");
             return;
         }
-        var cbuf: [32]u8 = undefined;
+        var cbuf: [cursor_buf_size]u8 = undefined;
         const s = std.fmt.bufPrint(&cbuf, "\r\x1b[{d}C", .{col}) catch return;
         self.writeAll(s);
     }
@@ -302,7 +308,7 @@ pub const LineEditor = struct {
     // ── Terminal ────────────────────────────────────────────────
 
     fn readSimple(self: *LineEditor) ?[]const u8 {
-        var buf: [4096]u8 = undefined;
+        var buf: [simple_read_buf_size]u8 = undefined;
         var len: usize = 0;
         while (len < buf.len) {
             var b: [1]u8 = undefined;
@@ -352,14 +358,14 @@ pub const LineEditor = struct {
         var cols: usize = 0;
         var i: usize = 0;
         while (i < s.len) {
-            if (s[i] == 0x1b) {
+            if (s[i] == ascii_escape) {
                 i += 1;
                 if (i < s.len and s[i] == '[') {
                     i += 1;
-                    while (i < s.len and s[i] >= 0x20 and s[i] < 0x40) i += 1;
+                    while (i < s.len and s[i] >= ascii_printable_start and s[i] < ascii_intermediate_end) i += 1;
                     if (i < s.len) i += 1;
                 }
-            } else if (s[i] < 0x20) {
+            } else if (s[i] < ascii_printable_start) {
                 i += 1;
             } else {
                 // Measure the next grapheme cluster

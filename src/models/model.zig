@@ -12,6 +12,8 @@ const format_mod = @import("../format/format.zig");
 
 /// Buffer size for constructing companion tensor names (e.g., ".scales", ".biases").
 pub const tensor_name_buf_size: usize = 256;
+/// Bits per u32 word — used to compute per-tensor bit width from packed weight dimensions.
+const bits_per_u32_word: u64 = 32;
 
 /// Errors that can occur during model forward pass.
 pub const ForwardError = error{
@@ -241,7 +243,7 @@ pub fn mlxGemv(be: backend_mod.Backend, fmt: format_mod.Format, x: [*]const f32,
         // Detect bits per-tensor from weight dimensions: bits = words_per_row * 32 / k.
         // This handles mixed-quant models where default config bits differs from per-layer overrides.
         const bits: u32 = if (t.n_dims >= 2 and k > 0)
-            @intCast(@as(u64, t.dims[t.n_dims - 1]) * 32 / @as(u64, @intCast(k)))
+            @intCast(@as(u64, t.dims[t.n_dims - 1]) * bits_per_u32_word / @as(u64, @intCast(k)))
         else
             fmt.getMetaU32("bits") orelse 4;
         be.gemvMlxQ(x, t.data_ptr, st.data_ptr, bt.data_ptr, y, n, k, bits);
@@ -266,7 +268,7 @@ pub fn findMlxCompanion(fmt: format_mod.Format, t: format_mod.TensorInfo, k: usi
     const b_name = std.fmt.bufPrint(&bbuf, "{s}.biases", .{prefix}) catch return null;
     const bt = fmt.getTensor(b_name) orelse return null;
     const bits: u32 = if (t.n_dims >= 2 and k > 0)
-        @intCast(@as(u64, t.dims[t.n_dims - 1]) * 32 / @as(u64, @intCast(k)))
+        @intCast(@as(u64, t.dims[t.n_dims - 1]) * bits_per_u32_word / @as(u64, @intCast(k)))
     else
         fmt.getMetaU32("bits") orelse 4;
     return .{ .scales = st.data_ptr, .biases = bt.data_ptr, .bits = bits };

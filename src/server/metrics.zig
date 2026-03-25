@@ -5,6 +5,17 @@
 
 const std = @import("std");
 
+/// Latency histogram bucket boundaries (milliseconds).
+/// These must match the Prometheus `le` labels in renderPrometheus().
+const latency_bucket_10ms: u64 = 10;
+const latency_bucket_50ms: u64 = 50;
+const latency_bucket_100ms: u64 = 100;
+const latency_bucket_500ms: u64 = 500;
+const latency_bucket_1s: u64 = 1000;
+const latency_bucket_5s: u64 = 5000;
+const latency_bucket_10s: u64 = 10000;
+const latency_bucket_30s: u64 = 30000;
+
 /// Prometheus metrics collector with atomic counters and gauges.
 pub const Metrics = struct {
     // Counters (monotonically increasing)
@@ -68,21 +79,21 @@ pub const Metrics = struct {
     pub fn recordLatency(self: *Metrics, duration_ms: u64) void {
         _ = self.latency_sum.fetchAdd(duration_ms, .monotonic);
 
-        if (duration_ms <= 10) {
+        if (duration_ms <= latency_bucket_10ms) {
             _ = self.latency_10ms.fetchAdd(1, .monotonic);
-        } else if (duration_ms <= 50) {
+        } else if (duration_ms <= latency_bucket_50ms) {
             _ = self.latency_50ms.fetchAdd(1, .monotonic);
-        } else if (duration_ms <= 100) {
+        } else if (duration_ms <= latency_bucket_100ms) {
             _ = self.latency_100ms.fetchAdd(1, .monotonic);
-        } else if (duration_ms <= 500) {
+        } else if (duration_ms <= latency_bucket_500ms) {
             _ = self.latency_500ms.fetchAdd(1, .monotonic);
-        } else if (duration_ms <= 1000) {
+        } else if (duration_ms <= latency_bucket_1s) {
             _ = self.latency_1s.fetchAdd(1, .monotonic);
-        } else if (duration_ms <= 5000) {
+        } else if (duration_ms <= latency_bucket_5s) {
             _ = self.latency_5s.fetchAdd(1, .monotonic);
-        } else if (duration_ms <= 10000) {
+        } else if (duration_ms <= latency_bucket_10s) {
             _ = self.latency_10s.fetchAdd(1, .monotonic);
-        } else if (duration_ms <= 30000) {
+        } else if (duration_ms <= latency_bucket_30s) {
             _ = self.latency_30s.fetchAdd(1, .monotonic);
         } else {
             _ = self.latency_inf.fetchAdd(1, .monotonic);

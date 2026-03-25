@@ -55,9 +55,17 @@ const quant_super_block_elems: usize = 256;
 const mlx_group_elems: usize = 64;
 /// Elements per MXFP4 group (32-element groups for microscaled FP4 quantization).
 const mxfp4_group_size: usize = 32;
+/// SIMD group width on Apple Silicon GPUs (threads per SIMD group).
+const simd_width: usize = 32;
 /// GPU SDPA threadgroup size (threads per query head, smaller than general threadgroup_size
 /// to fit per-head accumulation state within threadgroup memory).
 const sdpa_threadgroup_size: usize = 128;
+/// Words per group for MLX 4-bit quantization (64 elems / 8 nibbles per word).
+const mlx_words_per_group_q4: usize = 8;
+/// Words per group for MLX 8-bit quantization (64 elems / 4 values per word).
+const mlx_words_per_group_q8: usize = 16;
+/// Words per group for MXFP4 quantization (32 nibbles / 8 per word).
+const mxfp4_words_per_group: usize = 4;
 
 /// Reference to a cached Metal buffer with a byte offset.
 /// Allows sub-region access (e.g. per-head slices) without creating separate
@@ -270,6 +278,7 @@ pub const MetalBackend = struct {
         };
         // Pre-allocate capacity so hot-path buf_cache.put() calls won't need to grow.
         try self.buf_cache.ensureTotalCapacity(backend_mod.buf_cache_initial_capacity);
+        errdefer self.buf_cache.deinit();
 
         self.pipe_silu = try self.makePipeline("silu_f32");
         self.pipe_add = try self.makePipeline("add_f32");
@@ -764,9 +773,9 @@ pub const MetalBackend = struct {
             // Element-level formats — always fully utilized at 256 threads
             else => threadgroup_size,
         };
-        // Round up to warp boundary (32), clamp to [32, threadgroup_size]
-        const rounded = (nb + 31) & ~@as(usize, 31);
-        return @min(threadgroup_size, @max(32, rounded));
+        // Round up to SIMD group boundary, clamp to [simd_width, threadgroup_size]
+        const rounded = (nb + simd_width - 1) & ~(simd_width - 1);
+        return @min(threadgroup_size, @max(simd_width, rounded));
     }
 
     /// Number of threadgroups to dispatch for GEMV. Multi-row kernels
@@ -959,7 +968,7 @@ pub const MetalBackend = struct {
     /// W is stored as [in_dim rows, out_dim cols] in Q8_0 blocks.
     pub fn gemvT(self: *MetalBackend, x: [*]const f32, w: [*]const u8, y: [*]f32, out_dim: usize, in_dim: usize) void {
         const x_ref = self.getBufRef(@ptrCast(x), in_dim * @sizeOf(f32));
-        const blocks_per_row = (out_dim + 31) / 32;
+        const blocks_per_row = (out_dim + simd_width - 1) / simd_width;
         const w_bytes = in_dim * blocks_per_row * q8_0_block_bytes;
         const w_ref = self.getBufRef(w, w_bytes);
         const y_ref = self.getBufRef(@ptrCast(y), out_dim * @sizeOf(f32));
@@ -1133,10 +1142,10 @@ pub const MetalBackend = struct {
     /// (packed u32 weights + bf16 scales + bf16 biases, group_size=64).
     pub fn gemvMlxQ(self: *MetalBackend, x: [*]const f32, weight: [*]const u8, scales: [*]const u8, biases: [*]const u8, y: [*]f32, n: usize, k: usize, bits: u32) void {
         if (bits != 4 and bits != 8) @panic("Metal MLX GEMV: unsupported bit width — add GPU kernel");
-        const gpr = (k + 63) / 64;
-        const wpg: usize = if (bits == 8) 16 else 8; // 8-bit: 4 values/word, 64/4=16 words; 4-bit: 8 values/word, 64/8=8
+        const gpr = (k + mlx_group_elems - 1) / mlx_group_elems;
+        const wpg: usize = if (bits == 8) mlx_words_per_group_q8 else mlx_words_per_group_q4;
         const w_bytes = n * gpr * wpg * @sizeOf(u32);
-        const sb_bytes = n * gpr * 2;
+        const sb_bytes = n * gpr * @sizeOf(u16); // bf16 scales/biases
 
         const x_ref = self.getBufRef(@ptrCast(x), k * @sizeOf(f32));
         const w_ref = self.getBufRef(@ptrCast(weight), w_bytes);
@@ -1164,7 +1173,7 @@ pub const MetalBackend = struct {
     /// group_size=32, 4 words per group (8 nibbles per word × 4 = 32 values).
     pub fn gemvMxfp4St(self: *MetalBackend, x: [*]const f32, weight: [*]const u8, scale: [*]const u8, y: [*]f32, n: usize, k: usize) void {
         const gpr = (k + mxfp4_group_size - 1) / mxfp4_group_size;
-        const wpg: usize = 4; // 32 nibbles / 8 per word
+        const wpg: usize = mxfp4_words_per_group;
         const w_bytes = n * gpr * wpg * @sizeOf(u32);
         const s_bytes = n * gpr; // U8 FP8 E4M3 scales
 
@@ -1200,10 +1209,10 @@ pub const MetalBackend = struct {
             // MLX quantized weights — dispatch MLX-Q kernel with companion buffers
             if (op.mlx_scales != null) {
                 const bits = op.mlx_bits;
-                const gpr = (k + 63) / 64;
-                const wpg: usize = if (bits == 8) 16 else 8;
+                const gpr = (k + mlx_group_elems - 1) / mlx_group_elems;
+                const wpg: usize = if (bits == 8) mlx_words_per_group_q8 else mlx_words_per_group_q4;
                 const w_bytes_mlx = op.n * gpr * wpg * @sizeOf(u32);
-                const sb_bytes = op.n * gpr * 2;
+                const sb_bytes = op.n * gpr * @sizeOf(u16); // bf16 scales/biases
 
                 const w_ref = self.getBufRef(@ptrCast(op.w.data), w_bytes_mlx);
                 const y_ref = self.getBufRef(@ptrCast(op.y), op.n * @sizeOf(f32));
@@ -1591,7 +1600,7 @@ pub const MetalBackend = struct {
             setBytes(enc, @ptrCast(&eps_val), @sizeOf(f32), 3);
             setBytes(enc, @ptrCast(&q_off_val), @sizeOf(u32), 4);
             setBytes(enc, @ptrCast(&k_off_val), @sizeOf(u32), 5);
-            const l2_tg_size: usize = @min(threadgroup_size, @max(32, (head_k_dim + 31) & ~@as(usize, 31)));
+            const l2_tg_size: usize = @min(threadgroup_size, @max(simd_width, (head_k_dim + simd_width - 1) & ~(simd_width - 1)));
             self.endEncodeThreadgroups(enc, 2 * num_k_heads, l2_tg_size);
         }
 
@@ -1636,7 +1645,7 @@ pub const MetalBackend = struct {
             setBytes(enc, @ptrCast(&eps_val), @sizeOf(f32), 14);
             var use_grouped: u32 = if (p.kqv_order) 1 else 0;
             setBytes(enc, @ptrCast(&use_grouped), @sizeOf(u32), 15);
-            const rec_tg_size: usize = @min(threadgroup_size, @max(32, (head_v_dim + 31) & ~@as(usize, 31)));
+            const rec_tg_size: usize = @min(threadgroup_size, @max(simd_width, (head_v_dim + simd_width - 1) & ~(simd_width - 1)));
             self.endEncodeThreadgroups(enc, num_v_heads, rec_tg_size);
         }
     }

@@ -19,6 +19,18 @@ const qwen_default_eos_id: u32 = 151645;
 /// Default Qwen BOS token ID, used when tokenizer.json doesn't specify one.
 const qwen_default_bos_id: u32 = 151643;
 
+// ── GPT-2 byte-to-unicode mapping ranges (OpenAI BPE specification) ──
+/// First printable ASCII codepoint (maps 1:1 in GPT-2 byte encoder).
+const gpt2_printable_min: u8 = 33; // '!'
+/// Last printable ASCII codepoint (maps 1:1 in GPT-2 byte encoder).
+const gpt2_printable_max: u8 = 126; // '~'
+/// Start of Latin-1 Supplement passthrough range (maps 1:1 in GPT-2 byte encoder).
+const gpt2_latin1_min: u8 = 161; // '¡'
+/// End of first Latin-1 Supplement passthrough sub-range (soft hyphen excluded).
+const gpt2_latin1_mid: u8 = 172; // '¬'
+/// Start of second Latin-1 Supplement passthrough sub-range (after soft hyphen).
+const gpt2_latin1_resume: u8 = 174; // '®'
+
 /// Byte-level BPE tokenizer supporting both BPE (with merges) and SPM (greedy longest-match) modes.
 pub const BpeTokenizer = struct {
     token_to_id: std.StringHashMap(u32),
@@ -184,12 +196,22 @@ pub const BpeTokenizer = struct {
     fn initByteMappings(self: *BpeTokenizer) !void {
         if (self.byte_mappings_init) return;
         self.byte_mappings_init = true;
+        errdefer {
+            // Clean up partially-allocated byte_to_unicode entries on error.
+            for (&self.byte_to_unicode) |*s| {
+                if (s.len > 0) {
+                    self.allocator.free(s.*);
+                    s.* = &.{};
+                }
+            }
+            self.byte_mappings_init = false;
+        }
         var unicode_start: u21 = 256;
         for (0..256) |b| {
             const byte: u8 = @intCast(b);
-            if ((byte >= 33 and byte <= 126)) {
+            if ((byte >= gpt2_printable_min and byte <= gpt2_printable_max)) {
                 self.byte_to_unicode[b] = try self.allocator.dupe(u8, &[_]u8{byte});
-            } else if ((byte >= 161 and byte <= 172) or byte >= 174) {
+            } else if ((byte >= gpt2_latin1_min and byte <= gpt2_latin1_mid) or byte >= gpt2_latin1_resume) {
                 // 2-byte UTF-8 for codepoints 161-255
                 var buf: [2]u8 = undefined;
                 buf[0] = 0xC0 | (byte >> 6);

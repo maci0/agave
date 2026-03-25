@@ -39,12 +39,10 @@ pub const gemvQ5_0 = gemv_q_small.gemvQ5_0;
 pub const gemvQ2_K = gemv_q_small.gemvQ2_K;
 pub const gemvQ3_K = gemv_q_small.gemvQ3_K;
 
-/// Elements per small quantization block (Q4_0, Q8_0, etc.).
-const quant_block_elems: usize = 32;
-/// Elements per large quantization super-block (Q4_K, Q5_K, Q6_K, etc.).
-const quant_super_block_elems: usize = 256;
-/// Elements per NVFP4 block (8 nibble pairs + 1 scale byte).
-const nvfp4_block_elems: usize = 16;
+const backend_mod = @import("../../backend.zig");
+const quant_block_elems = backend_mod.quant_block_elems;
+const quant_super_block_elems = backend_mod.quant_super_block_elems;
+const nvfp4_block_elems = backend_mod.nvfp4_block_elems;
 
 /// Returns the row stride in bytes for a given dtype and column count.
 /// Used by parallel GEMV to compute per-row offsets.
@@ -52,21 +50,21 @@ pub fn gemvRowBytes(dtype: DType, k: usize) usize {
     const nb = (k + quant_block_elems - 1) / quant_block_elems;
     const nsb = (k + quant_super_block_elems - 1) / quant_super_block_elems;
     return switch (dtype) {
-        .q4_0 => nb * 18,
-        .q4_1 => nb * 20,
-        .q5_0 => nb * 22,
-        .q8_0 => nb * 34,
-        .q2_k => nsb * 84,
-        .q3_k => nsb * 110,
-        .q4_k => nsb * 144,
-        .q5_k => nsb * 176,
-        .q6_k => nsb * 210,
-        .iq4_nl => nb * 18,
-        .iq4_xs => nsb * 138,
-        .mxfp4 => nb * 17,
-        .nvfp4 => ((k + nvfp4_block_elems - 1) / nvfp4_block_elems) * 9,
-        .f16, .bf16 => k * 2,
-        .f32 => k * 4,
+        .q4_0 => nb * backend_mod.q4_0_block_bytes,
+        .q4_1 => nb * backend_mod.q4_1_block_bytes,
+        .q5_0 => nb * backend_mod.q5_0_block_bytes,
+        .q8_0 => nb * backend_mod.q8_0_block_bytes,
+        .q2_k => nsb * backend_mod.q2_k_block_bytes,
+        .q3_k => nsb * backend_mod.q3_k_block_bytes,
+        .q4_k => nsb * backend_mod.q4_k_block_bytes,
+        .q5_k => nsb * backend_mod.q5_k_block_bytes,
+        .q6_k => nsb * backend_mod.q6_k_block_bytes,
+        .iq4_nl => nb * backend_mod.iq4_nl_block_bytes,
+        .iq4_xs => nsb * backend_mod.iq4_xs_block_bytes,
+        .mxfp4 => nb * backend_mod.mxfp4_block_bytes,
+        .nvfp4 => ((k + nvfp4_block_elems - 1) / nvfp4_block_elems) * backend_mod.nvfp4_block_bytes,
+        .f16, .bf16 => k * backend_mod.f16_elem_bytes,
+        .f32 => k * backend_mod.f32_elem_bytes,
         .fp8_e4m3, .fp8_e5m2 => k,
         .tq1_0, .mlx_q, .unknown => 0, // tq1_0/mlx_q: not applicable
     };

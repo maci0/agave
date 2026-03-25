@@ -58,6 +58,9 @@ pub const Format = struct {
     /// correct Q/K/V split order, GQA head mapping, and weight pre-processing.
     is_safetensors: bool = false,
 
+    /// Virtual function table for the Format dispatcher.
+    /// Each format implementation (GGUF, SafeTensors) provides these function pointers
+    /// to enable polymorphic tensor/metadata lookup without runtime type checks.
     pub const VTable = struct {
         get_tensor: *const fn (self: *anyopaque, name: []const u8) ?TensorInfo,
         get_meta_str: *const fn (self: *anyopaque, key: []const u8) ?[]const u8,

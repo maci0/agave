@@ -147,22 +147,24 @@ pub const NemotronHModel = struct {
         self.kv_type = kv_type;
 
         const arch = f.getMetaStr("general.architecture") orelse "nemotron-h";
-        self.n_layers = f.getArchU32(arch, "block_count") orelse 42;
-        self.n_embd = f.getArchU32(arch, "embedding_length") orelse 3136;
-        self.n_head = f.getArchU32(arch, "attention.head_count") orelse 40;
+        if (f.getArchU32(arch, "block_count")) |v| self.n_layers = v;
+        if (f.getArchU32(arch, "embedding_length")) |v| self.n_embd = v;
+        if (f.getArchU32(arch, "attention.head_count")) |v| self.n_head = v;
         // head_count_kv and feed_forward_length are per-layer arrays in nemotron_h GGUF.
-        // getArchU32 returns 0 for array-type metadata, so fall back to defaults.
-        const raw_kv = f.getArchU32(arch, "attention.head_count_kv");
-        self.n_head_kv = if (raw_kv == null or raw_kv.? == 0) 8 else raw_kv.?;
-        self.head_dim = f.getArchU32(arch, "attention.key_length") orelse 128;
-        const raw_ff = f.getArchU32(arch, "feed_forward_length");
-        self.n_ff = if (raw_ff == null or raw_ff.? == 0) 12544 else raw_ff.?;
-        self.ssm_d_conv = f.getArchU32(arch, "ssm.conv_kernel") orelse 4;
-        self.ssm_d_state = f.getArchU32(arch, "ssm.state_size") orelse 128;
-        self.ssm_n_group = f.getArchU32(arch, "ssm.group_count") orelse 8;
-        self.ssm_dt_rank = f.getArchU32(arch, "ssm.time_step_rank") orelse 96;
-        self.ssm_d_inner = f.getArchU32(arch, "ssm.inner_size") orelse 7680;
-        self.rope_dim = f.getArchU32(arch, "rope.dimension_count") orelse 78;
+        // getArchU32 returns 0 for array-type metadata, so fall back to struct defaults.
+        if (f.getArchU32(arch, "attention.head_count_kv")) |v| {
+            if (v > 0) self.n_head_kv = v;
+        }
+        if (f.getArchU32(arch, "attention.key_length")) |v| self.head_dim = v;
+        if (f.getArchU32(arch, "feed_forward_length")) |v| {
+            if (v > 0) self.n_ff = v;
+        }
+        if (f.getArchU32(arch, "ssm.conv_kernel")) |v| self.ssm_d_conv = v;
+        if (f.getArchU32(arch, "ssm.state_size")) |v| self.ssm_d_state = v;
+        if (f.getArchU32(arch, "ssm.group_count")) |v| self.ssm_n_group = v;
+        if (f.getArchU32(arch, "ssm.time_step_rank")) |v| self.ssm_dt_rank = v;
+        if (f.getArchU32(arch, "ssm.inner_size")) |v| self.ssm_d_inner = v;
+        if (f.getArchU32(arch, "rope.dimension_count")) |v| self.rope_dim = v;
         if (f.getArchF32(arch, "rope.freq_base")) |v| self.rope_theta = v;
         if (f.getArchF32(arch, "attention.layer_norm_rms_epsilon")) |v| self.rms_eps = v;
         if (f.getMetaU32("tokenizer.ggml.eos_token_id")) |v| self.eos_token_id = v;

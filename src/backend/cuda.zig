@@ -56,6 +56,11 @@ const reduction_smem: u32 = 32;
 /// Size of the buffer for retrieving the CUDA device name.
 const device_name_buf_size: usize = 256;
 
+/// CUDA driver version encoding: major = version / 1000.
+const cuda_version_major_divisor: u32 = 1000;
+/// CUDA driver version encoding: minor = (version % 1000) / 10.
+const cuda_version_minor_divisor: u32 = 10;
+
 /// Library name varies by platform.
 const cuda_lib_name = switch (builtin.os.tag) {
     .linux => "libcuda.so.1",
@@ -324,7 +329,7 @@ pub const CudaBackend = struct {
             _ = std.fmt.bufPrint(&self.cc_str, "sm_{d}{d}", .{ self.sm_major, self.sm_minor }) catch {};
         }
         if (self.driver_version > 0) {
-            _ = std.fmt.bufPrint(&self.drv_str, "CUDA {d}.{d}", .{ self.driver_version / 1000, (self.driver_version % 1000) / 10 }) catch {};
+            _ = std.fmt.bufPrint(&self.drv_str, "CUDA {d}.{d}", .{ self.driver_version / cuda_version_major_divisor, (self.driver_version % cuda_version_major_divisor) / cuda_version_minor_divisor }) catch {};
         }
 
         if (cuCtxCreate(&self.context, 0, dev) != CUDA_SUCCESS) return error.CudaInitFailed;

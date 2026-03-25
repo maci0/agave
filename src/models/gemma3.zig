@@ -29,6 +29,14 @@ const SeqBlockTable = kvcache.SeqBlockTable;
 
 /// Default prefill chunk size (tokens per batch).
 const default_chunk_size: u32 = 512;
+/// Default sliding window pattern (every Nth layer uses full attention).
+const default_sliding_window_pattern: u32 = 6;
+/// Default RoPE frequency base for global attention layers.
+const default_rope_freq_base: f32 = 1_000_000.0;
+/// Default RoPE frequency base for local (sliding-window) attention layers.
+const default_rope_local_freq_base: f32 = 10_000.0;
+/// Default RMS layer-norm epsilon.
+const default_rms_eps: f32 = 1e-6;
 
 /// Gemma 3 transformer model with GQA, GELU activation, and per-head QK normalization.
 /// Supports both GGUF and SafeTensors/MLX quantized weights.
@@ -138,9 +146,9 @@ pub const Gemma3Model = struct {
             .head_dim = head_dim,
             .n_ff = n_ff,
             .vocab_size = vocab_size,
-            .rope_theta = f.getArchF32(arch, "rope.freq_base") orelse 1_000_000.0,
+            .rope_theta = f.getArchF32(arch, "rope.freq_base") orelse default_rope_freq_base,
             .rope_local_theta = f.getArchF32(arch, "rope.freq_base_swa") orelse
-                f.getMetaF32("rope_local_base_freq") orelse 10_000.0,
+                f.getMetaF32("rope_local_base_freq") orelse default_rope_local_freq_base,
             .rope_freq_scale = blk: {
                 const factor = f.getArchF32(arch, "rope.scaling.factor") orelse
                     f.getMetaF32("rope_scaling_factor") orelse 1.0;
@@ -149,8 +157,8 @@ pub const Gemma3Model = struct {
             .rope_dim = rope_dim,
             .sliding_window_pattern = f.getArchU32(arch, "attention.sliding_window_pattern") orelse
                 f.getMetaU32("sliding_window_pattern") orelse
-                if (f.getArchU32(arch, "attention.sliding_window")) |_| @as(u32, 6) else 0,
-            .rms_eps = f.getArchF32(arch, "attention.layer_norm_rms_epsilon") orelse 1e-6,
+                if (f.getArchU32(arch, "attention.sliding_window")) |_| default_sliding_window_pattern else 0,
+            .rms_eps = f.getArchF32(arch, "attention.layer_norm_rms_epsilon") orelse default_rms_eps,
             .eos_token_id = f.getMetaU32("tokenizer.ggml.eos_token_id") orelse 1,
             .attn_scale = blk: {
                 // Gemma uses query_pre_attn_scalar (config) or head_dim as the scaling denominator

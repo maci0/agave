@@ -43,6 +43,8 @@ const health_buf_size: usize = 512;
 const metrics_render_buf_size: usize = 16384;
 const stats_buf_size: usize = 512;
 const sse_event_buf_size: usize = 1024;
+/// Buffer size for short JSON responses (e.g., clear conversation result).
+const clear_response_buf_size: usize = 128;
 /// Maximum HTTP request body size (1 MB).
 const max_request_body_size: usize = 1_000_000;
 /// Maximum number of concurrent conversations.
@@ -63,6 +65,14 @@ const scheduler_poll_interval_ns: u64 = 10_000_000; // 10ms
 const accept_timeout_sec: i64 = 1;
 /// Poll interval (milliseconds) while draining active connections during shutdown.
 const drain_poll_interval_ms: u64 = 100;
+/// Seconds per minute — used for UTC time decomposition in request logs.
+const seconds_per_minute: u64 = 60;
+/// Seconds per hour — used for UTC time decomposition in request logs.
+const seconds_per_hour: u64 = 3600;
+/// Hours per day — used for UTC time decomposition in request logs.
+const hours_per_day: u64 = 24;
+/// CORS preflight cache duration in seconds (24 hours).
+const cors_max_age_seconds = "86400";
 
 /// A single conversation with its message history.
 const Conversation = struct {
@@ -212,9 +222,9 @@ const TimeComponents = struct { hours: u64, minutes: u64, seconds: u64 };
 fn getTimeComponents() TimeComponents {
     const now = std.time.timestamp();
     return .{
-        .hours = @intCast(@mod(@divTrunc(now, 3600), 24)),
-        .minutes = @intCast(@mod(@divTrunc(now, 60), 60)),
-        .seconds = @intCast(@mod(now, 60)),
+        .hours = @intCast(@mod(@divTrunc(now, seconds_per_hour), hours_per_day)),
+        .minutes = @intCast(@mod(@divTrunc(now, seconds_per_minute), seconds_per_minute)),
+        .seconds = @intCast(@mod(now, seconds_per_minute)),
     };
 }
 
@@ -435,7 +445,7 @@ fn handleRequest(stream: net.Stream, req: HttpRequest) void {
 
     // CORS preflight
     if (std.mem.eql(u8, method, "OPTIONS")) {
-        stream.writeAll("HTTP/1.1 204 No Content\r\nAccess-Control-Allow-Origin: *\r\nAccess-Control-Allow-Methods: GET, POST, OPTIONS\r\nAccess-Control-Allow-Headers: Content-Type, Authorization\r\nAccess-Control-Max-Age: 86400\r\n" ++ security_headers ++ "Content-Length: 0\r\nConnection: close\r\n\r\n") catch return;
+        stream.writeAll("HTTP/1.1 204 No Content\r\nAccess-Control-Allow-Origin: *\r\nAccess-Control-Allow-Methods: GET, POST, OPTIONS\r\nAccess-Control-Allow-Headers: Content-Type, Authorization\r\nAccess-Control-Max-Age: " ++ cors_max_age_seconds ++ "\r\n" ++ security_headers ++ "Content-Length: 0\r\nConnection: close\r\n\r\n") catch return;
         return;
     }
 
@@ -836,7 +846,7 @@ fn handleRequest(stream: net.Stream, req: HttpRequest) void {
             const was_active = g_server.active_id == id;
             g_server.deleteConv(id);
             g_server.mutex.unlock();
-            var dbuf: [128]u8 = undefined;
+            var dbuf: [clear_response_buf_size]u8 = undefined;
             const djson = std.fmt.bufPrint(&dbuf,
                 \\{{"ok":true,"cleared":{s}}}
             , .{if (was_active) "true" else "false"}) catch "{\"ok\":true}";

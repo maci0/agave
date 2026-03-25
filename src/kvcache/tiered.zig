@@ -151,11 +151,11 @@ pub const TieredKvCache = struct {
 
         // Initialize VRAM tier blocks
         for (0..vram_blocks) |i| {
+            const keys = try allocator.alloc(f32, slot_size);
+            errdefer allocator.free(keys);
+            const values = try allocator.alloc(f32, slot_size);
             blocks[i] = .{
-                .base = .{
-                    .keys = try allocator.alloc(f32, slot_size),
-                    .values = try allocator.alloc(f32, slot_size),
-                },
+                .base = .{ .keys = keys, .values = values },
                 .tier = .vram,
             };
             vram_free.appendAssumeCapacity(@intCast(i));
@@ -164,11 +164,11 @@ pub const TieredKvCache = struct {
 
         // Initialize RAM tier blocks
         for (vram_blocks..(vram_blocks + ram_blocks)) |i| {
+            const keys = try allocator.alloc(f32, slot_size);
+            errdefer allocator.free(keys);
+            const values = try allocator.alloc(f32, slot_size);
             blocks[i] = .{
-                .base = .{
-                    .keys = try allocator.alloc(f32, slot_size),
-                    .values = try allocator.alloc(f32, slot_size),
-                },
+                .base = .{ .keys = keys, .values = values },
                 .tier = .ram,
             };
             ram_free.appendAssumeCapacity(@intCast(i));

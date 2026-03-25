@@ -378,6 +378,7 @@ pub const GGUFFile = struct {
 
     fn own(self: *GGUFFile, s: []const u8) ![]const u8 {
         const d = try self.allocator.dupe(u8, s);
+        errdefer self.allocator.free(d);
         try self.owned_strings.append(self.allocator, d);
         return d;
     }

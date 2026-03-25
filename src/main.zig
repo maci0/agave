@@ -67,10 +67,30 @@ const default_chunk_size: u32 = 512;
 const prefill_progress_threshold: usize = 50;
 /// Default free RAM estimate when platform detection is not implemented (16 GB).
 const default_free_ram: usize = 16 * 1024 * 1024 * 1024;
+/// Minimum pages between progress reports during model preloading.
+const min_report_pages: usize = 256;
 /// Default tiered KV cache RAM budget when unspecified (GB).
 const default_ram_budget_gb: usize = 16;
 /// Default tiered KV cache SSD budget when unspecified (GB).
 const default_ssd_budget_gb: usize = 10;
+/// Bytes per GiB (2^30) for memory budget calculations.
+const gib_bytes: usize = 1024 * 1024 * 1024;
+/// Block size for tiered KV cache block allocation.
+const tiered_kv_block_size: u16 = 16;
+/// Number of KV tensors per position (key + value).
+const kv_tensors_per_position: usize = 2;
+/// Fraction of free RAM to allocate for KV cache (1/N = 50%).
+const ram_budget_divisor: usize = 2;
+/// Buffer size for warmup progress bar formatting.
+const warmup_buf_size: usize = 256;
+/// Fallback n_layers for tiered KV cache sizing when metadata is missing.
+const tiered_fallback_n_layers: u32 = 32;
+/// Fallback n_embd for tiered KV cache sizing when metadata is missing.
+const tiered_fallback_n_embd: u32 = 2048;
+/// Fallback n_kv_heads for tiered KV cache sizing when metadata is missing.
+const tiered_fallback_n_kv_heads: u32 = 8;
+/// Fallback n_heads for tiered KV cache sizing when metadata is missing.
+const tiered_fallback_n_heads: u32 = 32;
 const max_eog_ids = arch_mod.max_eog_ids;
 const gemma_fallback_eos = arch_mod.gemma_fallback_eos;
 const default_fallback_eos = arch_mod.default_fallback_eos;
@@ -182,8 +202,8 @@ fn preloadRegionProgress(data: []align(std.heap.page_size_min) const u8, loaded:
     std.posix.madvise(@alignCast(@constCast(data.ptr)), data.len, MADV.SEQUENTIAL) catch {};
 
     const page_size = std.heap.page_size_min;
-    // Report progress every ~1% of total, but no more frequently than every 256 pages
-    const report_interval = @max(total_bytes / 100, page_size * 256);
+    // Report progress every ~1% of total, but no more frequently than min_report_pages
+    const report_interval = @max(total_bytes / 100, page_size * min_report_pages);
     var last_report: usize = loaded.*;
     var offset: usize = 0;
     while (offset < data.len) : (offset += page_size) {
@@ -194,7 +214,7 @@ fn preloadRegionProgress(data: []align(std.heap.page_size_min) const u8, loaded:
             last_report = loaded.*;
             const pct: u32 = if (total_bytes > 0) @intCast(@min(loaded.* * 100 / total_bytes, 100)) else 100;
             const filled: u32 = @intCast(@min(@as(u64, pct) * warmup_bar_width / 100, warmup_bar_width));
-            var buf: [256]u8 = undefined;
+            var buf: [warmup_buf_size]u8 = undefined;
             var pos: usize = 0;
             const append = struct {
                 fn f(b: []u8, p: *usize, s: []const u8) void {
@@ -1134,14 +1154,13 @@ fn initAndRun(
                 const has_ram = std.mem.indexOf(u8, tiers_str, "ram") != null;
                 const has_ssd = std.mem.indexOf(u8, tiers_str, "ssd") != null;
 
-                const gib: usize = 1024 * 1024 * 1024;
                 const ram_gb: usize = if (cli.kv_ram_budget) |b|
                     std.fmt.parseInt(usize, b, 10) catch ram_fb: {
                         eprint("Warning: invalid --kv-ram-budget '{s}', using default {d}GB\n", .{ b, default_ram_budget_gb });
                         break :ram_fb default_ram_budget_gb;
                     }
                 else
-                    detectFreeRam() / (2 * gib); // 50% of free RAM in GB
+                    detectFreeRam() / (ram_budget_divisor * gib_bytes);
 
                 const ssd_gb: usize = if (cli.kv_ssd_budget) |b|
                     std.fmt.parseInt(usize, b, 10) catch ssd_fb: {
@@ -1153,23 +1172,23 @@ fn initAndRun(
 
                 // Read model metadata for cache dimension calculations.
                 const n_layers = fmt.getMetaU32("llama.block_count") orelse
-                    fmt.getMetaU32("num_hidden_layers") orelse 32;
+                    fmt.getMetaU32("num_hidden_layers") orelse tiered_fallback_n_layers;
                 const n_embd = fmt.getMetaU32("llama.embedding_length") orelse
-                    fmt.getMetaU32("hidden_size") orelse 2048;
+                    fmt.getMetaU32("hidden_size") orelse tiered_fallback_n_embd;
                 const n_kv_heads = fmt.getMetaU32("llama.attention.head_count_kv") orelse
-                    fmt.getMetaU32("num_key_value_heads") orelse 8;
+                    fmt.getMetaU32("num_key_value_heads") orelse tiered_fallback_n_kv_heads;
                 const n_heads = fmt.getMetaU32("llama.attention.head_count") orelse
-                    fmt.getMetaU32("num_attention_heads") orelse 32;
+                    fmt.getMetaU32("num_attention_heads") orelse tiered_fallback_n_heads;
                 const head_dim = fmt.getMetaU32("llama.attention.key_length") orelse
                     fmt.getMetaU32("head_dim") orelse (n_embd / n_heads);
                 const kv_dim: usize = @as(usize, n_kv_heads) * head_dim;
 
-                const block_size: u16 = 16;
-                const bytes_per_block = @as(usize, block_size) * kv_dim * @sizeOf(f32) * 2;
+                const block_size = tiered_kv_block_size;
+                const bytes_per_block = @as(usize, block_size) * kv_dim * @sizeOf(f32) * kv_tensors_per_position;
                 const ctx = if (cli.ctx_size > 0) cli.ctx_size else default_ctx_size;
                 const vram_blocks: usize = (@as(usize, ctx) + block_size - 1) / block_size;
-                const ram_blocks: usize = if (has_ram and bytes_per_block > 0) (ram_gb * gib) / bytes_per_block else 0;
-                const ssd_blocks: usize = if (has_ssd and bytes_per_block > 0) (ssd_gb * gib) / bytes_per_block else 0;
+                const ram_blocks: usize = if (has_ram and bytes_per_block > 0) (ram_gb * gib_bytes) / bytes_per_block else 0;
+                const ssd_blocks: usize = if (has_ssd and bytes_per_block > 0) (ssd_gb * gib_bytes) / bytes_per_block else 0;
 
                 tiered_cache_storage = TieredKvCache.init(
                     allocator,

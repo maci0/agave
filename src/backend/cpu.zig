@@ -24,6 +24,10 @@ const cpu_model_buf_size: usize = 128;
 const cpuinfo_read_buf_size: usize = 4096;
 const meminfo_read_buf_size: usize = 1024;
 const memavail_read_buf_size: usize = 2048;
+/// Bytes per kilobyte — used for /proc/meminfo and sysfs cache size parsing.
+const kb_to_bytes: usize = 1024;
+/// Bytes per megabyte — used for sysfs cache size parsing.
+const mb_to_bytes: usize = 1024 * 1024;
 
 // ── CPU model detection ─────────────────────────────────────────
 
@@ -94,8 +98,8 @@ fn parseSysfsCacheSize(comptime path: []const u8) usize {
     }
     // Check suffix: K or M
     if (i < data.len) {
-        if (data[i] == 'K') return val * 1024;
-        if (data[i] == 'M') return val * 1024 * 1024;
+        if (data[i] == 'K') return val * kb_to_bytes;
+        if (data[i] == 'M') return val * mb_to_bytes;
     }
     return val;
 }
@@ -118,7 +122,7 @@ pub fn detectSystemMem() usize {
             while (i < data.len and data[i] >= '0' and data[i] <= '9') : (i += 1) {
                 val = val * 10 + (data[i] - '0');
             }
-            return val * 1024; // kB to bytes
+            return val * kb_to_bytes; // kB to bytes
         }
     }
     return 0;
@@ -146,7 +150,7 @@ pub fn detectAvailMem() usize {
             while (i < data.len and data[i] >= '0' and data[i] <= '9') : (i += 1) {
                 val = val * 10 + (data[i] - '0');
             }
-            return val * 1024; // kB to bytes
+            return val * kb_to_bytes; // kB to bytes
         }
     }
     return 0;
@@ -175,6 +179,8 @@ pub fn detectCacheSizes() CacheSizes {
 // ── OS version detection ─────────────────────────────────────────
 
 const os_version_buf_size: usize = 128;
+/// Length of the "macOS " / "Linux " prefix prepended to OS version strings.
+const os_prefix_len: usize = 6;
 var os_version_buf: [os_version_buf_size]u8 = .{0} ** os_version_buf_size;
 var os_version_len: usize = 0;
 var os_version_detected: bool = false;
@@ -186,24 +192,24 @@ pub fn detectOsVersion() []const u8 {
 
     if (comptime builtin.os.tag == .macos) {
         // macOS: Try kern.osproductversion first (e.g., "14.2.1"), fall back to kern.osrelease
-        var len: usize = os_version_buf.len - 6; // Reserve space for "macOS " prefix
-        const rc = std.c.sysctlbyname("kern.osproductversion", os_version_buf[6..].ptr, &len, null, 0);
+        var len: usize = os_version_buf.len - os_prefix_len;
+        const rc = std.c.sysctlbyname("kern.osproductversion", os_version_buf[os_prefix_len..].ptr, &len, null, 0);
         if (rc == 0 and len > 0) {
-            @memcpy(os_version_buf[0..6], "macOS ");
+            @memcpy(os_version_buf[0..os_prefix_len], "macOS ");
             // Strip trailing null
-            const total_len = 6 + (if (os_version_buf[6 + len - 1] == 0) len - 1 else len);
+            const total_len = os_prefix_len + (if (os_version_buf[os_prefix_len + len - 1] == 0) len - 1 else len);
             os_version_len = total_len;
             return os_version_buf[0..os_version_len];
         }
     } else if (comptime builtin.os.tag == .linux) {
         // Linux: Use uname to get kernel release (e.g., "6.5.0-14-generic")
         const uts = std.posix.uname();
-        @memcpy(os_version_buf[0..6], "Linux ");
+        @memcpy(os_version_buf[0..os_prefix_len], "Linux ");
         // uts.release is a null-terminated array; find the null
         const release_slice = std.mem.sliceTo(&uts.release, 0);
-        const copy_len = @min(release_slice.len, os_version_buf.len - 6);
-        @memcpy(os_version_buf[6..][0..copy_len], release_slice[0..copy_len]);
-        os_version_len = 6 + copy_len;
+        const copy_len = @min(release_slice.len, os_version_buf.len - os_prefix_len);
+        @memcpy(os_version_buf[os_prefix_len..][0..copy_len], release_slice[0..copy_len]);
+        os_version_len = os_prefix_len + copy_len;
         return os_version_buf[0..os_version_len];
     }
     return "";

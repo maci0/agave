@@ -130,29 +130,29 @@ pub const NemotronNanoModel = struct {
         self.kv_type = kv_type;
 
         // Read hyperparameters from config.json metadata
-        self.n_layers = f.getMetaU32("num_hidden_layers") orelse 52;
-        self.n_embd = f.getMetaU32("hidden_size") orelse 2688;
-        self.n_head = f.getMetaU32("num_attention_heads") orelse 32;
-        self.n_head_kv = f.getMetaU32("num_key_value_heads") orelse 2;
-        self.head_dim = f.getMetaU32("head_dim") orelse 128;
-        self.mamba_num_heads = f.getMetaU32("mamba_num_heads") orelse 64;
-        self.mamba_head_dim = f.getMetaU32("mamba_head_dim") orelse 64;
-        self.ssm_d_conv = f.getMetaU32("conv_kernel") orelse 4;
-        self.ssm_d_state = f.getMetaU32("ssm_state_size") orelse 128;
-        self.ssm_n_groups = f.getMetaU32("n_groups") orelse 8;
+        if (f.getMetaU32("num_hidden_layers")) |v| self.n_layers = v;
+        if (f.getMetaU32("hidden_size")) |v| self.n_embd = v;
+        if (f.getMetaU32("num_attention_heads")) |v| self.n_head = v;
+        if (f.getMetaU32("num_key_value_heads")) |v| self.n_head_kv = v;
+        if (f.getMetaU32("head_dim")) |v| self.head_dim = v;
+        if (f.getMetaU32("mamba_num_heads")) |v| self.mamba_num_heads = v;
+        if (f.getMetaU32("mamba_head_dim")) |v| self.mamba_head_dim = v;
+        if (f.getMetaU32("conv_kernel")) |v| self.ssm_d_conv = v;
+        if (f.getMetaU32("ssm_state_size")) |v| self.ssm_d_state = v;
+        if (f.getMetaU32("n_groups")) |v| self.ssm_n_groups = v;
         self.moe_intermediate_size = f.getMetaU32("moe_intermediate_size") orelse
-            f.getMetaU32("intermediate_size") orelse 1856;
-        self.shared_expert_size = f.getMetaU32("moe_shared_expert_intermediate_size") orelse 3712;
-        self.num_experts_per_tok = f.getMetaU32("num_experts_per_tok") orelse 6;
-        self.n_routed_experts = f.getMetaU32("n_routed_experts") orelse 128;
-        self.vocab_size = f.getMetaU32("vocab_size") orelse 131072;
-        self.rms_eps = f.getMetaF32("norm_eps") orelse f.getMetaF32("layer_norm_epsilon") orelse 1e-5;
-        self.eos_token_id = f.getMetaU32("eos_token_id") orelse 2;
-        self.rope_theta = f.getMetaF32("rope_theta") orelse 10000.0;
+            f.getMetaU32("intermediate_size") orelse self.moe_intermediate_size;
+        if (f.getMetaU32("moe_shared_expert_intermediate_size")) |v| self.shared_expert_size = v;
+        if (f.getMetaU32("num_experts_per_tok")) |v| self.num_experts_per_tok = v;
+        if (f.getMetaU32("n_routed_experts")) |v| self.n_routed_experts = v;
+        if (f.getMetaU32("vocab_size")) |v| self.vocab_size = v;
+        self.rms_eps = f.getMetaF32("norm_eps") orelse f.getMetaF32("layer_norm_epsilon") orelse self.rms_eps;
+        if (f.getMetaU32("eos_token_id")) |v| self.eos_token_id = v;
+        if (f.getMetaF32("rope_theta")) |v| self.rope_theta = v;
         self.rope_dim = self.head_dim; // partial_rotary_factor = 1.0
         if (f.getMetaF32("routed_scaling_factor")) |v| self.routed_scaling_factor = v;
         if (f.getVocab()) |v| self.vocab_size = @intCast(v.len);
-        self.max_seq_len = f.getMetaU32("max_position_embeddings") orelse 4096;
+        if (f.getMetaU32("max_position_embeddings")) |v| self.max_seq_len = v;
         if (ctx_size > 0) self.max_seq_len = ctx_size;
 
         std.debug.assert(self.n_layers <= max_layers);
