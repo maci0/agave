@@ -19,6 +19,9 @@ const gelu_clamp_hi: f32 = 10.0;
 const gelu_clamp_lo: f32 = -10.0;
 /// Maximum top-k value for stack-allocated selection buffer in sampleToken.
 const max_top_k: usize = 1024;
+/// Maximum candidates for top-p nucleus sampling buffer.
+/// Caps the number of probabilities tracked during threshold computation.
+const nucleus_max_candidates: usize = 1024;
 
 /// Return the index of the maximum element in `buf`.
 /// Single-pass scalar scan tracking both value and index.
@@ -63,19 +66,22 @@ pub fn topKExperts(
         out_scores[i] = -std.math.inf(f32);
         out_indices[i] = 0;
     }
+    // Track min across iterations; rescan only after insertion.
+    var min_idx: usize = 0;
+    var min_val = out_scores[0];
     for (scores, 0..) |score, i| {
-        // Find the minimum score in current top-k
-        var min_idx: usize = 0;
-        var min_val = out_scores[0];
-        for (1..k) |j| {
-            if (out_scores[j] < min_val) {
-                min_val = out_scores[j];
-                min_idx = j;
-            }
-        }
         if (score > min_val) {
             out_scores[min_idx] = score;
             out_indices[min_idx] = i;
+            // Rescan for new min only when we insert
+            min_idx = 0;
+            min_val = out_scores[0];
+            for (1..k) |j| {
+                if (out_scores[j] < min_val) {
+                    min_val = out_scores[j];
+                    min_idx = j;
+                }
+            }
         }
     }
 }
@@ -250,34 +256,67 @@ pub fn sampleToken(logits: []f32, temperature: f32, top_k: u32, top_p: f32, rng:
     const inv_sum = 1.0 / sum;
     for (logits) |*v| v.* *= inv_sum;
 
-    // 4. Top-p (nucleus): greedily accumulate highest-prob tokens until cumsum >= top_p
+    // 4. Top-p (nucleus): threshold-based filtering — O(n) instead of O(n*k).
+    // Collects top candidates via single scan, sorts them, finds the probability
+    // threshold where cumulative probability >= top_p, then zeroes out below it.
     if (top_p < 1.0 and top_p > 0.0) {
-        var cumsum: f32 = 0;
-        // Repeatedly find the max prob, accumulate, mark as visited (negate)
-        while (cumsum < top_p) {
-            var best: f32 = 0;
-            var best_i: usize = 0;
-            for (logits, 0..) |v, i| {
-                if (v > best) {
-                    best = v;
-                    best_i = i;
+        var top_vals: [nucleus_max_candidates]f32 = undefined;
+        var n_top: usize = 0;
+        var mi2: usize = 0;
+
+        // Collect top-N probabilities via min-replacement scan (O(n))
+        for (logits) |v| {
+            if (v <= 0) continue;
+            if (n_top < nucleus_max_candidates) {
+                top_vals[n_top] = v;
+                n_top += 1;
+                if (n_top == nucleus_max_candidates) {
+                    // Buffer just filled — find initial minimum
+                    for (1..nucleus_max_candidates) |j| {
+                        if (top_vals[j] < top_vals[mi2]) mi2 = j;
+                    }
+                }
+            } else if (v > top_vals[mi2]) {
+                top_vals[mi2] = v;
+                mi2 = 0;
+                for (1..nucleus_max_candidates) |j| {
+                    if (top_vals[j] < top_vals[mi2]) mi2 = j;
                 }
             }
-            if (best == 0) break;
-            cumsum += best;
-            logits[best_i] = -best; // mark as kept (negative)
         }
-        // Restore kept tokens, zero rejected ones
-        for (logits) |*v| {
-            if (v.* < 0) {
-                v.* = -v.*;
-            } else {
-                v.* = 0;
+
+        // Sort candidates descending (insertion sort — small N, cache-friendly)
+        var ci: usize = 1;
+        while (ci < n_top) : (ci += 1) {
+            const val = top_vals[ci];
+            var j = ci;
+            while (j > 0 and top_vals[j - 1] < val) {
+                top_vals[j] = top_vals[j - 1];
+                j -= 1;
+            }
+            top_vals[j] = val;
+        }
+
+        // Cumsum scan to find probability threshold
+        var cumsum: f32 = 0;
+        var threshold: f32 = 0;
+        for (top_vals[0..n_top]) |v| {
+            cumsum += v;
+            if (cumsum >= top_p) {
+                threshold = v;
+                break;
             }
         }
-        // Renormalize
+
+        // Apply threshold: zero out tokens below cutoff, recompute sum
         sum = 0;
-        for (logits) |v| sum += v;
+        for (logits) |*v| {
+            if (v.* < threshold) {
+                v.* = 0;
+            } else {
+                sum += v.*;
+            }
+        }
         if (sum > 0) {
             const inv = 1.0 / sum;
             for (logits) |*v| v.* *= inv;
@@ -375,7 +414,8 @@ test "applyReluSquared" {
 }
 
 test "applyGelu" {
-    var buf = [_]f32{ 0.0, 1.0, -1.0 };
+    // 10 elements: 8 via SIMD loop + 2 via scalar tail
+    var buf = [_]f32{ 0.0, 1.0, -1.0, 2.0, -2.0, 0.5, -0.5, 3.0, -3.0, 1.5 };
     applyGelu(&buf);
     // GELU(0) = 0
     try std.testing.expectApproxEqAbs(@as(f32, 0.0), buf[0], 0.001);
@@ -383,6 +423,12 @@ test "applyGelu" {
     try std.testing.expectApproxEqAbs(@as(f32, 0.841), buf[1], 0.01);
     // GELU(-1) ≈ -0.159
     try std.testing.expectApproxEqAbs(@as(f32, -0.159), buf[2], 0.01);
+    // GELU(2) ≈ 1.955
+    try std.testing.expectApproxEqAbs(@as(f32, 1.955), buf[3], 0.01);
+    // Scalar tail: GELU(-3) ≈ -0.004 (near zero)
+    try std.testing.expect(buf[8] < 0 and buf[8] > -0.01);
+    // Scalar tail: GELU(1.5) ≈ 1.399
+    try std.testing.expectApproxEqAbs(@as(f32, 1.399), buf[9], 0.01);
 }
 
 test "sampleToken greedy" {

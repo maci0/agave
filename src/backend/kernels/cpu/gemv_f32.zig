@@ -84,6 +84,28 @@ test "gemvF32 scaling" {
     for (0..4) |i| try std.testing.expectApproxEqAbs(expected[i], y[i], 1e-6);
 }
 
+test "gemvF32 dense matrix" {
+    // Dense W and non-uniform x to catch stride and accumulation bugs.
+    // W[4×4] row-major, x[4] → y[4].
+    var w: [16]f32 = .{
+        1.0, 0.5, 2.0, 0.3,
+        3.0, 1.0, 0.5, 0.7,
+        0.5, 2.0, 1.0, 1.5,
+        0.2, 0.8, 1.3, 2.1,
+    };
+    var x = [_]f32{ 2.0, 3.0, 1.0, 4.0 };
+    var y: [4]f32 = undefined;
+    gemvF32(&x, &w, &y, 4, 4);
+    // y[0] = 2×1 + 3×0.5 + 1×2 + 4×0.3 = 6.7
+    // y[1] = 2×3 + 3×1 + 1×0.5 + 4×0.7 = 12.3
+    // y[2] = 2×0.5 + 3×2 + 1×1 + 4×1.5 = 14.0
+    // y[3] = 2×0.2 + 3×0.8 + 1×1.3 + 4×2.1 = 12.5
+    try std.testing.expectApproxEqAbs(@as(f32, 6.7), y[0], 1e-5);
+    try std.testing.expectApproxEqAbs(@as(f32, 12.3), y[1], 1e-5);
+    try std.testing.expectApproxEqAbs(@as(f32, 14.0), y[2], 1e-5);
+    try std.testing.expectApproxEqAbs(@as(f32, 12.5), y[3], 1e-5);
+}
+
 test "gemvF32 non-aligned k exercises scalar cleanup" {
     // k=5 (not a multiple of 8) exercises the scalar tail loop.
     // n=3 (not a multiple of 4) exercises the single-row tail.

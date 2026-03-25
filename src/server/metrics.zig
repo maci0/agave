@@ -11,11 +11,13 @@ pub const Metrics = struct {
     requests_total: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
     requests_completed: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
     requests_cancelled: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
+    requests_failed: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
     tokens_generated_total: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
 
     // Gauges (current value)
     queue_depth: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
     active_requests: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
+    active_connections: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
     kv_blocks_used: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
     kv_blocks_total: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
 
@@ -50,6 +52,11 @@ pub const Metrics = struct {
     /// Increment cancelled request counter.
     pub fn recordCancellation(self: *Metrics) void {
         _ = self.requests_cancelled.fetchAdd(1, .monotonic);
+    }
+
+    /// Increment failed request counter (5xx errors, encode/forward failures).
+    pub fn recordFailure(self: *Metrics) void {
+        _ = self.requests_failed.fetchAdd(1, .monotonic);
     }
 
     /// Increment tokens generated counter.
@@ -117,13 +124,17 @@ pub const Metrics = struct {
         try writer.writeAll("# TYPE agave_requests_total counter\n");
         try writer.print("agave_requests_total {d}\n", .{self.requests_total.load(.monotonic)});
 
-        try writer.writeAll("# HELP agave_requests_completed Total requests completed successfully\n");
-        try writer.writeAll("# TYPE agave_requests_completed counter\n");
-        try writer.print("agave_requests_completed {d}\n", .{self.requests_completed.load(.monotonic)});
+        try writer.writeAll("# HELP agave_requests_completed_total Total requests completed successfully\n");
+        try writer.writeAll("# TYPE agave_requests_completed_total counter\n");
+        try writer.print("agave_requests_completed_total {d}\n", .{self.requests_completed.load(.monotonic)});
 
-        try writer.writeAll("# HELP agave_requests_cancelled Total requests cancelled by timeout\n");
-        try writer.writeAll("# TYPE agave_requests_cancelled counter\n");
-        try writer.print("agave_requests_cancelled {d}\n", .{self.requests_cancelled.load(.monotonic)});
+        try writer.writeAll("# HELP agave_requests_cancelled_total Total requests cancelled by timeout\n");
+        try writer.writeAll("# TYPE agave_requests_cancelled_total counter\n");
+        try writer.print("agave_requests_cancelled_total {d}\n", .{self.requests_cancelled.load(.monotonic)});
+
+        try writer.writeAll("# HELP agave_requests_failed_total Total requests failed with errors\n");
+        try writer.writeAll("# TYPE agave_requests_failed_total counter\n");
+        try writer.print("agave_requests_failed_total {d}\n", .{self.requests_failed.load(.monotonic)});
 
         try writer.writeAll("# HELP agave_tokens_generated_total Total tokens generated\n");
         try writer.writeAll("# TYPE agave_tokens_generated_total counter\n");
@@ -137,6 +148,10 @@ pub const Metrics = struct {
         try writer.writeAll("# HELP agave_active_requests Currently running requests\n");
         try writer.writeAll("# TYPE agave_active_requests gauge\n");
         try writer.print("agave_active_requests {d}\n", .{self.active_requests.load(.monotonic)});
+
+        try writer.writeAll("# HELP agave_active_connections Current HTTP connections\n");
+        try writer.writeAll("# TYPE agave_active_connections gauge\n");
+        try writer.print("agave_active_connections {d}\n", .{self.active_connections.load(.monotonic)});
 
         try writer.writeAll("# HELP agave_kv_blocks_used KV cache blocks in use\n");
         try writer.writeAll("# TYPE agave_kv_blocks_used gauge\n");
@@ -167,7 +182,9 @@ pub const Metrics = struct {
         try writer.print("agave_request_duration_seconds_bucket{{le=\"10\"}} {d}\n", .{b10s});
         try writer.print("agave_request_duration_seconds_bucket{{le=\"30\"}} {d}\n", .{b30s});
         try writer.print("agave_request_duration_seconds_bucket{{le=\"+Inf\"}} {d}\n", .{b_inf});
-        try writer.print("agave_request_duration_seconds_sum {d}\n", .{self.latency_sum.load(.monotonic)});
+        const sum_ms = self.latency_sum.load(.monotonic);
+        const sum_sec = @as(f64, @floatFromInt(sum_ms)) / 1000.0;
+        try writer.print("agave_request_duration_seconds_sum {d:.3}\n", .{sum_sec});
         try writer.print("agave_request_duration_seconds_count {d}\n", .{b_inf});
 
         // Prefix cache metrics
@@ -250,6 +267,8 @@ test "Metrics: renderPrometheus outputs valid format" {
     try std.testing.expect(std.mem.indexOf(u8, output, "# HELP agave_requests_total") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "# TYPE agave_requests_total counter") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "agave_requests_total 2") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "agave_requests_completed_total 1") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "agave_requests_failed_total 0") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "agave_tokens_generated_total 42") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "agave_queue_depth 5") != null);
     // Cumulative: 250ms request counted in 0.5s bucket and all higher buckets

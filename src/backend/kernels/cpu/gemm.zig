@@ -58,6 +58,27 @@ test "gemm f32 matches expected output" {
     try std.testing.expectApproxEqAbs(@as(f32, 7.0), y[5], 1e-5);
 }
 
+test "gemm f32 dense matrix" {
+    // Dense W with non-trivial values to catch row/column stride bugs.
+    // W[3×3] row-major, x[2×3] row-major → y[2×3].
+    const x = [_]f32{ 2, 3, 1, 1, 4, 2 };
+    const w = [_]f32{ 1, 0.5, 2, 3, 1, 0.5, 0.5, 2, 1 };
+    var y: [6]f32 = undefined;
+    gemmF32(&x, &w, &y, 2, 3, 3);
+    // y[0,0] = 2×1 + 3×0.5 + 1×2 = 5.5
+    // y[0,1] = 2×3 + 3×1 + 1×0.5 = 9.5
+    // y[0,2] = 2×0.5 + 3×2 + 1×1 = 8.0
+    // y[1,0] = 1×1 + 4×0.5 + 2×2 = 7.0
+    // y[1,1] = 1×3 + 4×1 + 2×0.5 = 8.0
+    // y[1,2] = 1×0.5 + 4×2 + 2×1 = 10.5
+    try std.testing.expectApproxEqAbs(@as(f32, 5.5), y[0], 1e-5);
+    try std.testing.expectApproxEqAbs(@as(f32, 9.5), y[1], 1e-5);
+    try std.testing.expectApproxEqAbs(@as(f32, 8.0), y[2], 1e-5);
+    try std.testing.expectApproxEqAbs(@as(f32, 7.0), y[3], 1e-5);
+    try std.testing.expectApproxEqAbs(@as(f32, 8.0), y[4], 1e-5);
+    try std.testing.expectApproxEqAbs(@as(f32, 10.5), y[5], 1e-5);
+}
+
 test "gemm n_tok=1 matches gemv" {
     const x = [_]f32{ 1, 2, 3, 4 };
     const w = [_]f32{ 1, 0, 0, 0, 0, 1, 0, 0 };

@@ -76,7 +76,7 @@ pub fn deltaNetHead(h: usize, gate_vals: *const [max_deltanet_v_heads]f32, beta_
     const num_v_heads: usize = p.num_v_heads;
     const decay = @exp(gate_vals[h]);
     const beta_h = beta_vals_arr[h];
-    const kh = if (num_k_heads == num_v_heads) h else h % num_k_heads;
+    const kh = if (num_k_heads == num_v_heads) h else if (p.kqv_order) h * num_k_heads / num_v_heads else h % num_k_heads;
     const s_off = h * head_v_dim * head_k_dim;
     const k_base = kh * head_k_dim;
     const decay_v: V8 = @splat(decay);

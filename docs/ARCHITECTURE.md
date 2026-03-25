@@ -28,12 +28,13 @@ agave/
 ├── src/
 │   ├── main.zig           # CLI: arg parsing, format detection, model init, REPL, recipe application
 │   ├── arch.zig           # Architecture enum, detection, chat template mapping
-│   ├── server.zig         # HTTP server (OpenAI + Anthropic API + chat UI)
-│   ├── scheduler.zig      # Continuous batching request scheduler
-│   ├── metrics.zig        # Prometheus metrics collector
-│   ├── rate_limiter.zig   # Token bucket rate limiter
+│   ├── server/
+│   │   ├── server.zig     # HTTP server (OpenAI + Anthropic API + chat UI)
+│   │   ├── scheduler.zig  # Continuous batching request scheduler
+│   │   ├── metrics.zig    # Prometheus metrics collector
+│   │   └── rate_limiter.zig # Token bucket rate limiter
 │   ├── display.zig        # Rich CLI output (banner, stats, progress)
-│   ├── chat_template.zig  # Data-driven chat prompt templates (ChatML, Gemma, GPT-OSS)
+│   ├── chat_template.zig  # Data-driven chat prompt templates (ChatML, Gemma, Qwen35, GLM-4, GPT-OSS)
 │   ├── recipe.zig         # Optional preset configs per model/hardware/quant combo
 │   ├── thread_pool.zig    # Futex-based work-stealing thread pool
 │   ├── perf.zig           # Performance timer utilities
@@ -44,7 +45,7 @@ agave/
 │   │   ├── gguf.zig       # GGUF v2/v3 parser with mmap
 │   │   └── safetensors.zig# Multi-shard SafeTensors loader with config.json
 │   ├── models/
-│   │   ├── model.zig      # Model interface (forward, resetCache, cancel)
+│   │   ├── model.zig      # Model interface (forward, prefill, resetCache, cancel)
 │   │   ├── gemma3.zig     # Gemma 3 (GQA, GELU, post-norms)
 │   │   ├── qwen35.zig     # Qwen 3.5 (hybrid DeltaNet SSM + attention)
 │   │   ├── gpt_oss.zig    # GPT-OSS (MoE, sliding window, attention sinks)
@@ -92,7 +93,7 @@ When you run `agave model.gguf "Hello"`:
 4. RECIPE      Match arch + backend + quant → apply proven defaults
 5. TEMPLATE    arch → ChatTemplate → format prompt with role markers
 6. TOKENIZE    formatted prompt → [BOS, 15496, ...] (BPE/SPM encode)
-7. PREFILL     For each input token: model.forward(token_id) → fills KV cache
+7. PREFILL     model.prefill(prompt_tokens) → fills KV cache (batched)
 8. GENERATE    Loop: next = model.forward(last) → sample/argmax → decode → print
 9. STATS       "5 tok, 10.4 tok/s, prefill 200ms, gen 480ms"
 ```
@@ -124,6 +125,11 @@ When you run `agave model.gguf "Hello"`:
 | `gelu(in, out, n)` | GELU activation | Yes |
 | `add(a, b, out, n)` | Element-wise add | Yes |
 | `mul(a, b, out, n)` | Element-wise multiply | Yes |
+| `l2Norm(x, n, eps)` | L2 normalization (DeltaNet) | Yes |
+| `addRmsNorm(a, b, w, out, n, eps)` | Fused add + RMS norm | Yes |
+| `siluMul(a, b, out, n)` | Fused SiLU(a) × b gate | Yes |
+| `sigmoidMul(data, gate, n)` | In-place data × sigmoid(gate) | Yes |
+| `deltaNet(...)` | DeltaNet SSM recurrence | Yes |
 | `embLookup(table, id, out, d)` | Embedding with dequant | Once per token |
 | `sync()` | Flush GPU work | At sync points |
 
@@ -131,9 +137,10 @@ When you run `agave model.gguf "Hello"`:
 
 | Preset | Models | EOG Tokens | Notes |
 |--------|--------|------------|-------|
-| `chatml` | Nemotron-H, Nemotron-Nano, GLM-4 | `<\|im_end\|>`, `<\|endoftext\|>` | Standard ChatML |
+| `chatml` | Nemotron-H, Nemotron-Nano | `<\|im_end\|>`, `<\|endoftext\|>` | Standard ChatML |
 | `qwen35` | Qwen 3.5 | `<\|im_end\|>`, `<\|endoftext\|>` | ChatML + `<think>\n\n</think>\n\n` generation prefix (disables reasoning) |
 | `gemma` | Gemma 3, Gemma 2 | `<end_of_turn>`, `<eos>` | |
+| `glm4` | GLM-4 | `<\|endoftext\|>`, `<\|user\|>` | `[gMASK]<sop>` prefix, `</think>` generation prefix |
 | `gpt_oss` | GPT-OSS Harmony | `<\|end\|>`, `<\|endoftext\|>` | Includes default system prompt + developer role override |
 
 ### Recipes (`src/recipe.zig`)

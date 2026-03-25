@@ -59,6 +59,10 @@ const scheduler_max_batch_size: usize = 8;
 const scheduler_timeout_sec: u32 = 30;
 /// Poll interval (nanoseconds) for SSE streaming when using scheduler path.
 const scheduler_poll_interval_ns: u64 = 10_000_000; // 10ms
+/// Accept socket timeout (seconds) — allows Ctrl+C to interrupt the accept loop.
+const accept_timeout_sec: i64 = 1;
+/// Poll interval (milliseconds) while draining active connections during shutdown.
+const drain_poll_interval_ms: u64 = 100;
 
 /// A single conversation with its message history.
 const Conversation = struct {
@@ -259,16 +263,20 @@ const HttpRequest = struct {
 };
 
 /// Parse Content-Length from raw HTTP headers.
-fn parseContentLength(headers: []const u8) usize {
+/// Returns null if duplicate Content-Length headers are detected (RFC 7230 §3.3.3).
+fn parseContentLength(headers: []const u8) ?usize {
     const header_name = "content-length";
     var iter = std.mem.splitSequence(u8, headers, "\r\n");
+    var found: ?usize = null;
     while (iter.next()) |line| {
         const colon = std.mem.indexOf(u8, line, ":") orelse continue;
         if (colon == header_name.len and std.ascii.eqlIgnoreCase(line[0..header_name.len], header_name)) {
-            return std.fmt.parseInt(usize, std.mem.trim(u8, line[colon + 1 ..], " "), 10) catch 0;
+            const val = std.fmt.parseInt(usize, std.mem.trim(u8, line[colon + 1 ..], " "), 10) catch 0;
+            if (found != null) return null; // Duplicate Content-Length — reject
+            found = val;
         }
     }
-    return 0;
+    return found orelse 0;
 }
 
 /// Read a complete HTTP/1.1 request from a TCP stream. Returns null on
@@ -297,9 +305,9 @@ fn readHttpRequest(stream: net.Stream, buf: []u8) ?HttpRequest {
     // Strip query string
     const path = if (std.mem.indexOf(u8, raw_path, "?")) |q| raw_path[0..q] else raw_path;
 
-    // Parse Content-Length
+    // Parse Content-Length (null = duplicate headers, reject per RFC 7230)
     const headers = buf[req_line_end + 2 .. hdr_end];
-    const content_length = parseContentLength(headers);
+    const content_length = parseContentLength(headers) orelse return null;
     const body_start = hdr_end + 4;
 
     // Read remaining body bytes if needed
@@ -329,6 +337,7 @@ const security_headers =
 /// Supports both OpenAI-style `Authorization: Bearer <key>` and
 /// Anthropic-style `x-api-key: <key>` headers.
 /// Returns true if no auth configured or if token matches.
+/// Uses constant-time comparison to prevent timing side-channel attacks.
 fn validateAuth(server: *const Server, headers: []const u8) bool {
     if (server.api_key == null) return true; // No auth configured
     // Try OpenAI-style: Authorization: Bearer <key>
@@ -337,7 +346,7 @@ fn validateAuth(server: *const Server, headers: []const u8) bool {
         const token_start = idx + bearer_needle.len;
         const token_end = std.mem.indexOfScalarPos(u8, headers, token_start, '\r') orelse headers.len;
         const token = headers[token_start..token_end];
-        if (std.mem.eql(u8, token, server.api_key.?)) return true;
+        if (constantTimeEql(token, server.api_key.?)) return true;
     }
     // Try Anthropic-style: x-api-key: <key>
     const apikey_needle = "x-api-key: ";
@@ -345,9 +354,25 @@ fn validateAuth(server: *const Server, headers: []const u8) bool {
         const token_start = idx + apikey_needle.len;
         const token_end = std.mem.indexOfScalarPos(u8, headers, token_start, '\r') orelse headers.len;
         const token = headers[token_start..token_end];
-        if (std.mem.eql(u8, token, server.api_key.?)) return true;
+        if (constantTimeEql(token, server.api_key.?)) return true;
     }
     return false;
+}
+
+/// Constant-time byte comparison to prevent timing side-channel attacks on secrets.
+/// Always iterates over the secret length (b) to avoid leaking key length.
+/// Uses volatile reads to prevent compiler optimizations that could
+/// short-circuit the comparison.
+fn constantTimeEql(a: []const u8, b: []const u8) bool {
+    var diff: u8 = if (a.len == b.len) 0 else 1;
+    // Always iterate over the full secret length (b) to avoid
+    // leaking key length through timing. When a is shorter,
+    // read index 0 as dummy (XOR result is discarded via len_match).
+    for (0..b.len) |i| {
+        const a_byte = if (i < a.len) a[i] else 0;
+        diff |= a_byte ^ b[i];
+    }
+    return diff == 0;
 }
 
 /// Check rate limit for the given prompt token count.
@@ -393,7 +418,7 @@ fn send401(stream: net.Stream) void {
 fn send429(stream: net.Stream, retry_after: u32) void {
     var buf: [error_body_buf_size]u8 = undefined;
     const body = std.fmt.bufPrint(&buf, "{{\"error\":{{\"message\":\"Rate limit exceeded. Retry after {d} seconds.\",\"type\":\"rate_limit_exceeded\",\"code\":null}}}}", .{retry_after}) catch return;
-    var hdr_buf: [short_hdr_buf_size]u8 = undefined;
+    var hdr_buf: [hdr_buf_size]u8 = undefined;
     const hdr = std.fmt.bufPrint(&hdr_buf, "HTTP/1.1 429 Too Many Requests\r\nContent-Type: application/json\r\nContent-Length: {d}\r\nRetry-After: {d}\r\n" ++ security_headers ++ "Connection: close\r\n\r\n", .{ body.len, retry_after }) catch return;
     stream.writeAll(hdr) catch return;
     stream.writeAll(body) catch return;
@@ -428,33 +453,25 @@ fn handleRequest(stream: net.Stream, req: HttpRequest) void {
     // Readiness check endpoint — returns 503 if shutting down
     if (is_get and std.mem.eql(u8, path, "/ready")) {
         if (g_server.shutdown_requested.load(.acquire)) {
-            const body = "{\"status\":\"shutting_down\"}";
-            stream.writeAll("HTTP/1.1 503 Service Unavailable\r\nContent-Type: application/json\r\nContent-Length: ") catch return;
-            var len_buf: [20]u8 = undefined;
-            const len_str = std.fmt.bufPrint(&len_buf, "{d}", .{body.len}) catch return;
-            stream.writeAll(len_str) catch return;
-            stream.writeAll("\r\nConnection: close\r\n\r\n") catch return;
-            stream.writeAll(body) catch return;
+            sendResponse(stream, "503 Service Unavailable", "application/json", "{\"status\":\"shutting_down\"}");
         } else {
-            const body = "{\"status\":\"ready\"}";
-            sendJson(stream, body);
+            sendJson(stream, "{\"status\":\"ready\"}");
         }
         return;
     }
 
-    // Prometheus metrics endpoint
+    // Prometheus metrics endpoint (requires auth when API key configured)
     if (is_get and std.mem.eql(u8, path, "/metrics")) {
+        if (!validateAuth(g_server, req.headers)) {
+            send401(stream);
+            logRequestDone(method, path, 401, elapsedMs(request_start));
+            return;
+        }
         var buf: [metrics_render_buf_size]u8 = undefined;
         var fbs = std.io.fixedBufferStream(&buf);
         const writer = fbs.writer();
         g_server.metrics.renderPrometheus(writer) catch return;
-        const body = fbs.getWritten();
-        stream.writeAll("HTTP/1.1 200 OK\r\nContent-Type: text/plain; version=0.0.4\r\nContent-Length: ") catch return;
-        var len_buf: [20]u8 = undefined;
-        const len_str = std.fmt.bufPrint(&len_buf, "{d}", .{body.len}) catch return;
-        stream.writeAll(len_str) catch return;
-        stream.writeAll("\r\nConnection: close\r\n\r\n") catch return;
-        stream.writeAll(body) catch return;
+        sendResponse(stream, "200 OK", "text/plain; version=0.0.4", fbs.getWritten());
         return;
     }
 
@@ -488,7 +505,6 @@ fn handleRequest(stream: net.Stream, req: HttpRequest) void {
 
     if (is_post and std.mem.eql(u8, path, "/v1/chat/completions")) {
         logRequest(method, path);
-        g_server.metrics.recordRequest();
         const req_start_time = std.time.milliTimestamp();
 
         // 1. Validate authentication
@@ -497,6 +513,7 @@ fn handleRequest(stream: net.Stream, req: HttpRequest) void {
             logRequestDone(method, path, 401, elapsedMs(request_start));
             return;
         }
+        g_server.metrics.recordRequest();
 
         const body = req.body;
         const content = extractLastMessage(body) orelse "Hello!";
@@ -518,7 +535,6 @@ fn handleRequest(stream: net.Stream, req: HttpRequest) void {
 
         if (extractBoolField(body, "stream")) {
             startStream(stream, content, true, max_tokens);
-            // Note: metrics for streaming recorded inside startStream
             logRequestDone(method, path, 200, elapsedMs(request_start));
             return;
         }
@@ -534,6 +550,7 @@ fn handleRequest(stream: net.Stream, req: HttpRequest) void {
             \\{{"id":"chatcmpl-{d}","object":"chat.completion","created":{d},"model":"{s}","choices":[{{"index":0,"message":{{"role":"assistant","content":"{s}"}},"finish_reason":"{s}"}}],"usage":{{"completion_tokens":{d},"prompt_tokens":{d},"total_tokens":{d}}}}}
         , .{ req_id, created, g_server.model_name, gen.escaped, gen.finish_reason, gen.stats.tokens_generated, gen.stats.prompt_tokens, total }) catch {
             sendJsonError(stream, "500 Internal Server Error", "server_error", "Response too large");
+            g_server.metrics.recordFailure();
             logRequestDone(method, path, 500, elapsedMs(request_start));
             return;
         };
@@ -552,7 +569,6 @@ fn handleRequest(stream: net.Stream, req: HttpRequest) void {
 
     if (is_post and std.mem.eql(u8, path, "/v1/completions")) {
         logRequest(method, path);
-        g_server.metrics.recordRequest();
         const req_start_time = std.time.milliTimestamp();
 
         if (!validateAuth(g_server, req.headers)) {
@@ -560,6 +576,7 @@ fn handleRequest(stream: net.Stream, req: HttpRequest) void {
             logRequestDone(method, path, 401, elapsedMs(request_start));
             return;
         }
+        g_server.metrics.recordRequest();
 
         const body = req.body;
         const prompt = extractField(body, "prompt") orelse "Hello";
@@ -576,7 +593,6 @@ fn handleRequest(stream: net.Stream, req: HttpRequest) void {
 
         if (extractBoolField(body, "stream")) {
             startStreamRaw(stream, prompt, max_tokens);
-            // Note: metrics for streaming recorded inside startStreamRaw
             logRequestDone(method, path, 200, elapsedMs(request_start));
             return;
         }
@@ -592,6 +608,7 @@ fn handleRequest(stream: net.Stream, req: HttpRequest) void {
             \\{{"id":"cmpl-{d}","object":"text_completion","created":{d},"model":"{s}","choices":[{{"text":"{s}","index":0,"finish_reason":"{s}"}}],"usage":{{"completion_tokens":{d},"prompt_tokens":{d},"total_tokens":{d}}}}}
         , .{ req_id, created, g_server.model_name, gen.escaped, gen.finish_reason, gen.stats.tokens_generated, gen.stats.prompt_tokens, total }) catch {
             sendJsonError(stream, "500 Internal Server Error", "server_error", "Response too large");
+            g_server.metrics.recordFailure();
             logRequestDone(method, path, 500, elapsedMs(request_start));
             return;
         };
@@ -650,6 +667,7 @@ fn handleRequest(stream: net.Stream, req: HttpRequest) void {
             \\{{"id":"resp-{d}","object":"response","created":{d},"model":"{s}","output":[{{"type":"message","content":[{{"type":"output_text","text":"{s}"}}]}}],"usage":{{"completion_tokens":{d},"prompt_tokens":{d},"total_tokens":{d}}}}}
         , .{ req_id, created, g_server.model_name, gen.escaped, gen.stats.tokens_generated, gen.stats.prompt_tokens, total }) catch {
             sendJsonError(stream, "500 Internal Server Error", "server_error", "Response too large");
+            g_server.metrics.recordFailure();
             logRequestDone(method, path, 500, elapsedMs(request_start));
             return;
         };
@@ -692,9 +710,7 @@ fn handleRequest(stream: net.Stream, req: HttpRequest) void {
 
         // Rate limit check
         if (checkRateLimit(g_server, prompt_tokens_m)) |retry| {
-            sendAnthropicError(stream, "429", "rate_limit_error", "Rate limit exceeded");
-            // Include Retry-After in a separate response for simplicity
-            _ = retry;
+            sendAnthropic429(stream, retry);
             logRequestDone(method, path, 429, elapsedMs(request_start));
             return;
         }
@@ -715,6 +731,7 @@ fn handleRequest(stream: net.Stream, req: HttpRequest) void {
             \\{{"id":"msg_{d}","type":"message","role":"assistant","content":[{{"type":"text","text":"{s}"}}],"model":"{s}","stop_reason":"{s}","stop_sequence":null,"usage":{{"input_tokens":{d},"output_tokens":{d}}}}}
         , .{ req_id, gen.escaped, g_server.model_name, stop_reason, gen.stats.prompt_tokens, gen.stats.tokens_generated }) catch {
             sendAnthropicError(stream, "500", "api_error", "Response too large");
+            g_server.metrics.recordFailure();
             logRequestDone(method, path, 500, elapsedMs(request_start));
             return;
         };
@@ -832,6 +849,13 @@ fn handleRequest(stream: net.Stream, req: HttpRequest) void {
 
     if (is_post and std.mem.eql(u8, path, "/v1/chat")) {
         logRequest(method, path);
+
+        if (!validateAuth(g_server, req.headers)) {
+            send401(stream);
+            logRequestDone(method, path, 401, elapsedMs(request_start));
+            return;
+        }
+
         const body = req.body;
         const msg = extractFormField(body, "message") orelse "Hello";
         if (msg.len > max_message_len) {
@@ -847,13 +871,18 @@ fn handleRequest(stream: net.Stream, req: HttpRequest) void {
             return;
         }
 
-        // Log the user's message (truncate if too long)
+        // Log the user's message (truncate if too long, sanitize newlines to prevent log injection)
         var msg_preview: [msg_preview_buf_size]u8 = undefined;
-        const preview = if (decoded.len > msg_preview_max_len)
-            std.fmt.bufPrint(&msg_preview, "{s}...", .{decoded[0..msg_preview_max_len]}) catch decoded
-        else
-            decoded;
-        slog("  User: {s}\n", .{preview});
+        const src = if (decoded.len > msg_preview_max_len) decoded[0..msg_preview_max_len] else decoded;
+        var sanitized_len: usize = 0;
+        for (src) |c| {
+            if (sanitized_len >= msg_preview.len) break;
+            msg_preview[sanitized_len] = if (c == '\n' or c == '\r') ' ' else c;
+            sanitized_len += 1;
+        }
+        const preview = msg_preview[0..sanitized_len];
+        const suffix: []const u8 = if (decoded.len > msg_preview_max_len) "..." else "";
+        slog("  User: {s}{s}\n", .{ preview, suffix });
 
         // Handle REPL-style commands in the chat interface
         const trimmed = std.mem.trim(u8, decoded, " \t\r\n");
@@ -977,6 +1006,8 @@ fn handleRequest(stream: net.Stream, req: HttpRequest) void {
         .{ .path = "/v1/conversations", .allow = "GET, POST, OPTIONS", .msg = "Use GET or POST." },
         .{ .path = "/v1/models", .allow = "GET, OPTIONS", .msg = "Use GET." },
         .{ .path = "/health", .allow = "GET, OPTIONS", .msg = "Use GET." },
+        .{ .path = "/ready", .allow = "GET, OPTIONS", .msg = "Use GET." },
+        .{ .path = "/metrics", .allow = "GET, OPTIONS", .msg = "Use GET." },
     };
     for (known_endpoints) |ep| {
         if (std.mem.eql(u8, path, ep.path)) {
@@ -1286,6 +1317,10 @@ fn chatStreamGenerate(stream: net.Stream, formatted: []const u8, reset: bool, ma
         if (stats_json.len > 0) _ = sseWriteData(stream, stats_json);
         _ = sseWriteData(stream, "[DONE]");
 
+        g_server.metrics.recordLatency(time_ms);
+        g_server.metrics.recordTokens(token_count);
+        g_server.metrics.recordCompletion();
+
         const decoded = tok.decode(req.tokens.items) catch
             g_server.allocator.dupe(u8, "") catch @constCast("");
         return .{
@@ -1359,6 +1394,10 @@ fn chatStreamGenerate(stream: net.Stream, formatted: []const u8, reset: bool, ma
     if (stats_json.len > 0) _ = sseWriteData(stream, stats_json);
     _ = sseWriteData(stream, "[DONE]");
 
+    g_server.metrics.recordLatency(time_ms);
+    g_server.metrics.recordTokens(token_count);
+    g_server.metrics.recordCompletion();
+
     // Decode accumulated text for conversation storage
     const decoded = tok.decode(gen_tokens[0..token_count]) catch
         g_server.allocator.dupe(u8, "") catch @constCast("");
@@ -1407,6 +1446,16 @@ fn sendAnthropicError(stream: net.Stream, status_code: []const u8, err_type: []c
     else
         @as([]const u8, "500 Internal Server Error");
     sendResponse(stream, status, "application/json", json);
+}
+
+/// Send a 429 Too Many Requests response in Anthropic error format with Retry-After header.
+fn sendAnthropic429(stream: net.Stream, retry_after: u32) void {
+    var buf: [error_body_buf_size]u8 = undefined;
+    const body = std.fmt.bufPrint(&buf, "{{\"type\":\"error\",\"error\":{{\"type\":\"rate_limit_error\",\"message\":\"Rate limit exceeded. Retry after {d} seconds.\"}}}}", .{retry_after}) catch return;
+    var hdr_buf: [hdr_buf_size]u8 = undefined;
+    const hdr = std.fmt.bufPrint(&hdr_buf, "HTTP/1.1 429 Too Many Requests\r\nContent-Type: application/json\r\nContent-Length: {d}\r\nRetry-After: {d}\r\n" ++ security_headers ++ "Connection: close\r\n\r\n", .{ body.len, retry_after }) catch return;
+    stream.writeAll(hdr) catch return;
+    stream.writeAll(body) catch return;
 }
 
 /// Send an SSE event with both event type and data (Anthropic streaming format).
@@ -1496,6 +1545,9 @@ fn generateAnthropicStream(stream: net.Stream, formatted: []const u8, max_tokens
         const time_ms = @as(u64, @intCast(@max(gen_end - gen_start, 0)));
         const tps: f32 = if (time_ms > 0) @as(f32, @floatFromInt(token_count)) / (@as(f32, @floatFromInt(time_ms)) / 1000.0) else 0.0;
         logGeneration(token_count, time_ms, tps);
+        g_server.metrics.recordLatency(time_ms);
+        g_server.metrics.recordTokens(token_count);
+        g_server.metrics.recordCompletion();
         return;
     }
 
@@ -1547,6 +1599,9 @@ fn generateAnthropicStream(stream: net.Stream, formatted: []const u8, max_tokens
     const time_ms = @as(u64, @intCast(@max(gen_end - gen_start, 0)));
     const tps: f32 = if (time_ms > 0) @as(f32, @floatFromInt(token_count)) / (@as(f32, @floatFromInt(time_ms)) / 1000.0) else 0.0;
     logGeneration(token_count, time_ms, tps);
+    g_server.metrics.recordLatency(time_ms);
+    g_server.metrics.recordTokens(token_count);
+    g_server.metrics.recordCompletion();
 }
 
 /// Send the Anthropic SSE final events: content_block_stop, message_delta, message_stop.
@@ -1719,6 +1774,9 @@ fn generateStream(stream: net.Stream, prompt: []const u8, req_id: u64, created: 
         const time_ms = @as(u64, @intCast(@max(gen_end - gen_start, 0)));
         const tps: f32 = if (time_ms > 0) @as(f32, @floatFromInt(token_count)) / (@as(f32, @floatFromInt(time_ms)) / 1000.0) else 0.0;
         logGeneration(token_count, time_ms, tps);
+        g_server.metrics.recordLatency(time_ms);
+        g_server.metrics.recordTokens(token_count);
+        g_server.metrics.recordCompletion();
         return;
     }
 
@@ -1819,6 +1877,9 @@ fn generateStream(stream: net.Stream, prompt: []const u8, req_id: u64, created: 
     const time_ms = @as(u64, @intCast(@max(gen_end - gen_start, 0)));
     const tps: f32 = if (time_ms > 0) @as(f32, @floatFromInt(token_count)) / (@as(f32, @floatFromInt(time_ms)) / 1000.0) else 0.0;
     logGeneration(token_count, time_ms, tps);
+    g_server.metrics.recordLatency(time_ms);
+    g_server.metrics.recordTokens(token_count);
+    g_server.metrics.recordCompletion();
 }
 
 /// Check if a JSON body contains `"field": true`.
@@ -2029,8 +2090,10 @@ fn htmlEscape(allocator: Allocator, input: []const u8) ![]u8 {
 
 fn handleConnection(stream: net.Stream) void {
     _ = g_server.active_connections.fetchAdd(1, .monotonic);
+    _ = g_server.metrics.active_connections.fetchAdd(1, .monotonic);
     defer {
         _ = g_server.active_connections.fetchSub(1, .monotonic);
+        _ = g_server.metrics.active_connections.fetchSub(1, .monotonic);
         stream.close();
     }
     var buf: [http_buf_size]u8 = undefined;
@@ -2052,7 +2115,7 @@ fn handleConnection(stream: net.Stream) void {
 ///   - bos_token_id: Beginning-of-sequence token ID (0 to skip).
 ///   - eog_ids: End-of-generation token IDs (slice of up to max_eog_ids).
 ///   - eog_len: Number of valid entries in eog_ids.
-pub fn run(allocator: Allocator, model: *Model, tok: *Tokenizer, chat_tmpl: ChatTemplate, model_name: []const u8, backend_name: []const u8, port: u16, bos_token_id: u32, eog_ids: [max_eog_ids]u32, eog_len: usize, tiered_cache: ?*TieredKvCache) !void {
+pub fn run(allocator: Allocator, model: *Model, tok: *Tokenizer, chat_tmpl: ChatTemplate, model_name: []const u8, backend_name: []const u8, port: u16, bos_token_id: u32, eog_ids: [max_eog_ids]u32, eog_len: usize, tiered_cache: ?*TieredKvCache, api_key: ?[]const u8) !void {
     // Stack-allocate the Server struct. This is safe because run() blocks
     // until the server shuts down, so the frame stays alive.
     var server = Server{
@@ -2066,6 +2129,7 @@ pub fn run(allocator: Allocator, model: *Model, tok: *Tokenizer, chat_tmpl: Chat
         .eog_ids = eog_ids,
         .eog_len = eog_len,
     };
+    server.api_key = api_key;
     server.start_time = std.time.timestamp();
     g_server = &server;
 
@@ -2095,7 +2159,7 @@ pub fn run(allocator: Allocator, model: *Model, tok: *Tokenizer, chat_tmpl: Chat
 
     // Set accept timeout so signal handler can interrupt the loop.
     // Without this, accept() blocks indefinitely and Ctrl+C doesn't work on macOS.
-    const timeout = std.posix.timeval{ .sec = 1, .usec = 0 };
+    const timeout = std.posix.timeval{ .sec = accept_timeout_sec, .usec = 0 };
     std.posix.setsockopt(tcp.stream.handle, std.posix.SOL.SOCKET, std.posix.SO.RCVTIMEO, std.mem.asBytes(&timeout)) catch {};
     defer tcp.deinit();
 
@@ -2164,7 +2228,7 @@ pub fn run(allocator: Allocator, model: *Model, tok: *Tokenizer, chat_tmpl: Chat
             std.log.warn("Drain timeout after {d}s, forcing shutdown", .{elapsed});
             break;
         }
-        std.Thread.sleep(100 * std.time.ns_per_ms);
+        std.Thread.sleep(drain_poll_interval_ms * std.time.ns_per_ms);
     }
 
     std.log.info("Graceful shutdown complete", .{});

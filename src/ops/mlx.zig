@@ -8,8 +8,8 @@ const quant = @import("quant.zig");
 /// Default MLX quantization parameters.
 /// 64 elements per quantization group.
 pub const mlx_group_size: usize = 64;
-/// Words per group for 6-bit (legacy default). Use wordsPerGroup(bits) for variable bit width.
-pub const mlx_words_per_group: usize = 12;
+/// MXFP4 group size (32 elements per group, distinct from MLX affine's 64).
+pub const mxfp4_group_size: usize = 32;
 
 /// Compute words (u32) per group for a given bit width.
 pub fn wordsPerGroup(bits: u32) usize {
@@ -308,7 +308,7 @@ pub fn mlxMxfp4Gemv(
     mlxMxfp4GemvRows(x, pw, scales_u8, y, 0, n, k);
 }
 
-/// Convert an E8M0 scale byte to f32: val = 2^(byte - 127).
+/// Convert an E8M0 scale byte to f32: val = 2^(byte - 127) for byte > 0; 0.0 for byte == 0.
 /// E8M0 is a pure power-of-2 format used by OCP Microscaling (MX) spec.
 inline fn e8m0ToF32(byte: u8) f32 {
     if (byte == 0) return 0.0; // Zero exponent → zero scale
@@ -327,9 +327,8 @@ pub fn mlxMxfp4GemvRows(
     n_rows: usize,
     k: usize,
 ) void {
-    const mxfp4_gs: usize = 32;
-    const gpr = (k + mxfp4_gs - 1) / mxfp4_gs;
-    const wpg: usize = mxfp4_gs * 4 / 32; // 4 u32 words per group
+    const gpr = (k + mxfp4_group_size - 1) / mxfp4_group_size;
+    const wpg: usize = mxfp4_group_size * 4 / 32; // 4 u32 words per group
     const wpr = gpr * wpg;
 
     const V8 = @Vector(8, f32);
@@ -340,10 +339,11 @@ pub fn mlxMxfp4GemvRows(
         const sr = scales_u8 + row * gpr;
 
         for (0..gpr) |g| {
-            const sv: V8 = @splat(e8m0ToF32(sr[g]));
-            const xo = g * mxfp4_gs;
+            const scale = e8m0ToF32(sr[g]);
+            const sv: V8 = @splat(scale);
+            const xo = g * mxfp4_group_size;
             const wo = g * wpg;
-            const elems = @min(mxfp4_gs, k - xo);
+            const elems = @min(mxfp4_group_size, k - xo);
 
             const full_words = elems / 8;
             for (0..full_words) |wi| {
@@ -358,12 +358,12 @@ pub fn mlxMxfp4GemvRows(
                 acc += sv * v * xv;
             }
 
-            // Scalar tail
+            // Scalar tail — reuse pre-computed scale
             const done = full_words * 8;
             for (done..elems) |i| {
                 const nibble = unpackU4(wr + wo, i);
                 const val = quant.mxfp4Lookup(nibble);
-                acc[0] += e8m0ToF32(sr[g]) * val * x[xo + i];
+                acc[0] += scale * val * x[xo + i];
             }
         }
         y[row] = @reduce(.Add, acc);
@@ -389,6 +389,7 @@ pub fn mlxEmbLookup(
     k: usize,
     bits: u32,
 ) void {
+    std.debug.assert(bits == 4 or bits == 6 or bits == 8);
     const gs = mlx_group_size;
     const gpr = (k + gs - 1) / gs;
     const wpg = wordsPerGroup(bits);

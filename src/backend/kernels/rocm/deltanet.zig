@@ -5,6 +5,9 @@
 
 const cu = @import("common.zig");
 
+/// Softplus stability threshold: for x > this value, softplus(x) ≈ x.
+const softplus_threshold: f32 = 20.0;
+
 /// Placeholder gate/beta computation kernel.
 /// gate[h] = ssm_a[h] * softplus(alpha[h] + dt_bias[h])
 /// beta[h] = sigmoid(beta_in[h])
@@ -22,7 +25,7 @@ export fn deltanet_gate_beta_kernel(
 
     const x = alpha[idx] + dt_bias[idx];
     // Softplus: log(1 + exp(x)), clamped for stability
-    const sp = if (x > 20.0) x else @log(1.0 + cu.expf(x));
+    const sp = if (x > softplus_threshold) x else @log(1.0 + cu.expf(x));
     gate_out[idx] = ssm_a[idx] * sp;
     beta_out[idx] = cu.sigmoidf(beta_in[idx]);
 }

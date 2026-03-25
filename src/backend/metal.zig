@@ -47,10 +47,17 @@ const q4_0_nr: usize = 4;
 const q8_0_nr: usize = 4;
 /// Elements per small quantization block (Q4_0, Q8_0, etc.).
 const quant_block_elems: usize = 32;
+/// Bytes per Q8_0 block: 2 bytes f16 scale + 32 bytes i8 data.
+const q8_0_block_bytes: usize = 34;
 /// Elements per large quantization super-block (Q4_K, Q5_K, Q6_K, etc.).
 const quant_super_block_elems: usize = 256;
 /// Elements per MLX group (64-element groups for MLX 4-bit quantization).
 const mlx_group_elems: usize = 64;
+/// Elements per MXFP4 group (32-element groups for microscaled FP4 quantization).
+const mxfp4_group_size: usize = 32;
+/// GPU SDPA threadgroup size (threads per query head, smaller than general threadgroup_size
+/// to fit per-head accumulation state within threadgroup memory).
+const sdpa_threadgroup_size: usize = 128;
 
 /// Reference to a cached Metal buffer with a byte offset.
 /// Allows sub-region access (e.g. per-head slices) without creating separate
@@ -89,6 +96,7 @@ pub const MetalBackend = struct {
     pipe_gemv_bf16: objc.id,
     pipe_gemv_f16: objc.id,
     pipe_gemv_nvfp4_st: objc.id,
+    pipe_split_qgate: objc.id,
     pipe_gemv_q4_k: objc.id,
     pipe_gemv_q6_k: objc.id,
     pipe_gemv_q2_k: objc.id,
@@ -143,9 +151,15 @@ pub const MetalBackend = struct {
     /// the GPU to overlap independent operations. Set by beginBatch(), cleared
     /// by endBatch() which inserts a single barrier.
     batch_mode: bool = false,
-    /// Optional thread pool for parallelizing CPU fallback work (e.g. SDPA heads).
+    /// Optional thread pool for parallelizing CPU fallback work (e.g. unsupported dtypes).
     /// Set by the caller after init — Metal doesn't own the pool.
     pool: ?*ThreadPool = null,
+
+    /// Dispatch/barrier/sync counters — active only when profiling is enabled.
+    dispatch_count: u32 = 0,
+    barrier_count: u32 = 0,
+    sync_count: u32 = 0,
+    profile_counters: bool = false,
 
     // ── Init / deinit ─────────────────────────────────────────
 
@@ -219,6 +233,7 @@ pub const MetalBackend = struct {
             .pipe_gemv_mxfp4 = undefined,
             .pipe_gemv_mxfp4_st = undefined,
             .pipe_gemv_nvfp4_st = undefined,
+            .pipe_split_qgate = undefined,
             .pipe_gemv_q4_k = undefined,
             .pipe_gemv_q6_k = undefined,
             .pipe_gemv_q2_k = undefined,
@@ -253,9 +268,8 @@ pub const MetalBackend = struct {
             .active_cmd = null,
             .buf_cache = std.AutoHashMap(usize, BufferInfo).init(allocator),
         };
-        // Pre-allocate capacity to prevent OOM during hot-path buf_cache.put() calls.
-        // 512 entries covers typical models (weights + activations + KV cache buffers).
-        self.buf_cache.ensureTotalCapacity(backend_mod.buf_cache_initial_capacity) catch {};
+        // Pre-allocate capacity so hot-path buf_cache.put() calls won't need to grow.
+        try self.buf_cache.ensureTotalCapacity(backend_mod.buf_cache_initial_capacity);
 
         self.pipe_silu = try self.makePipeline("silu_f32");
         self.pipe_add = try self.makePipeline("add_f32");
@@ -278,6 +292,7 @@ pub const MetalBackend = struct {
         self.pipe_gemv_mxfp4 = try self.makePipeline("gemv_mxfp4");
         self.pipe_gemv_mxfp4_st = try self.makePipeline("gemv_mxfp4_st");
         self.pipe_gemv_nvfp4_st = try self.makePipeline("gemv_nvfp4_st");
+        self.pipe_split_qgate = try self.makePipeline("split_qgate");
         self.pipe_gemv_q4_k = try self.makePipeline("gemv_q4_k");
         self.pipe_gemv_q6_k = try self.makePipeline("gemv_q6_k");
         self.pipe_gemv_q2_k = try self.makePipeline("gemv_q2_k");
@@ -418,9 +433,10 @@ pub const MetalBackend = struct {
         );
     }
 
-    /// Release all cached buffers and free the cache map.
+    /// Release all cached buffers, the scratch buffer, and free the cache map.
     /// Call this when the MetalBackend is no longer needed.
     pub fn deinit(self: *MetalBackend) void {
+        release(self.scratch_buf);
         var it = self.buf_cache.valueIterator();
         while (it.next()) |info| release(info.metal_buf);
         self.buf_cache.deinit();
@@ -477,11 +493,10 @@ pub const MetalBackend = struct {
     /// Returns BufRef with offset for non-aligned sub-regions.
     /// Cached by page-aligned base address — reuses wraps on subsequent calls.
     pub fn getKvBufRef(self: *MetalBackend, host_ptr: [*]u8, size: usize) !BufRef {
-        const page_aligned_size: usize = 4096; // macOS page size
         const addr = @intFromPtr(host_ptr);
 
         // Check if already cached
-        const page_base = addr & ~(page_aligned_size - 1);
+        const page_base = addr & ~(@as(usize, page_size - 1));
         if (self.buf_cache.get(page_base)) |info| {
             const offset = addr - page_base;
             return .{ .buf = info.metal_buf, .offset = offset };
@@ -569,15 +584,27 @@ pub const MetalBackend = struct {
     /// are visible to subsequent dispatches within the same encoder.
     const barrier_scope_buffers: objc.NSUInteger = 1;
 
+    /// Create a 1-D MTLSize (height=1, depth=1).
+    inline fn mtlSize1D(width: usize) objc.MTLSize {
+        return .{ .width = width, .height = 1, .depth = 1 };
+    }
+
+    /// Insert a buffer memory barrier (unless batch_mode defers it) and update profiling counters.
+    fn insertBarrier(self: *MetalBackend, enc: objc.id) void {
+        if (self.profile_counters) self.dispatch_count += 1;
+        if (!self.batch_mode) {
+            objc.msgSend(void, enc, objc.sel("memoryBarrierWithScope:"), .{barrier_scope_buffers});
+            if (self.profile_counters) self.barrier_count += 1;
+        }
+    }
+
     /// Dispatch threadgroups with a memory barrier (unless batch_mode is active,
     /// in which case the barrier is deferred until endBatch).
     fn endEncodeThreadgroups(self: *MetalBackend, enc: objc.id, n_groups: usize, tg_size: usize) void {
         objc.msgSend(void, enc, objc.sel("dispatchThreadgroups:threadsPerThreadgroup:"), .{
-            objc.MTLSize{ .width = n_groups, .height = 1, .depth = 1 },
-            objc.MTLSize{ .width = tg_size, .height = 1, .depth = 1 },
+            mtlSize1D(n_groups), mtlSize1D(tg_size),
         });
-        if (!self.batch_mode)
-            objc.msgSend(void, enc, objc.sel("memoryBarrierWithScope:"), .{barrier_scope_buffers});
+        self.insertBarrier(enc);
     }
 
     /// Dispatch grid_size threads (1-D) with conditional barrier.
@@ -590,21 +617,17 @@ pub const MetalBackend = struct {
         );
         const tg = @min(max_tpg, grid_size);
         objc.msgSend(void, enc, objc.sel("dispatchThreads:threadsPerThreadgroup:"), .{
-            objc.MTLSize{ .width = grid_size, .height = 1, .depth = 1 },
-            objc.MTLSize{ .width = tg, .height = 1, .depth = 1 },
+            mtlSize1D(grid_size), mtlSize1D(tg),
         });
-        if (!self.batch_mode)
-            objc.msgSend(void, enc, objc.sel("memoryBarrierWithScope:"), .{barrier_scope_buffers});
+        self.insertBarrier(enc);
     }
 
     /// Dispatch exactly one threadgroup with conditional barrier.
     fn endEncodeOneThreadgroup(self: *MetalBackend, enc: objc.id, tg_size: usize) void {
         objc.msgSend(void, enc, objc.sel("dispatchThreadgroups:threadsPerThreadgroup:"), .{
-            objc.MTLSize{ .width = 1, .height = 1, .depth = 1 },
-            objc.MTLSize{ .width = tg_size, .height = 1, .depth = 1 },
+            mtlSize1D(1), mtlSize1D(tg_size),
         });
-        if (!self.batch_mode)
-            objc.msgSend(void, enc, objc.sel("memoryBarrierWithScope:"), .{barrier_scope_buffers});
+        self.insertBarrier(enc);
     }
 
     /// Commit the active command buffer and block until the GPU finishes.
@@ -682,7 +705,7 @@ pub const MetalBackend = struct {
     // ── GEMV ──────────────────────────────────────────────────
 
     /// y[n] = W[n,k] @ x[k].  Dispatches a Metal kernel per supported dtype;
-    /// falls back to the CPU backend for dtypes not yet covered by MSL.
+    /// panics for unsupported dtypes (no silent CPU fallback).
     pub fn gemv(self: *MetalBackend, x: [*]const f32, w: TensorData, y: [*]f32, n: usize, k: usize) void {
         const pipeline: objc.id = switch (w.dtype) {
             .f32 => self.pipe_gemv_f32,
@@ -904,6 +927,25 @@ pub const MetalBackend = struct {
         self.endEncode1D(enc, self.pipe_deinterleave, total);
     }
 
+    /// Split concatenated Q+gate per head into separate Q and gate arrays.
+    /// Input layout: [Q0..Q_{hd-1}, G0..G_{hd-1}] × nh heads.
+    /// Output: q_out[nh*hd], g_out[nh*hd].
+    pub fn splitQGate(self: *MetalBackend, qg: [*]const f32, q_out: [*]f32, g_out: [*]f32, hd: usize, nh: usize) void {
+        const total = nh * hd;
+        const in_ref = self.getBufRef(@ptrCast(qg), nh * hd * 2 * @sizeOf(f32));
+        const q_ref = self.getBufRef(@ptrCast(q_out), total * @sizeOf(f32));
+        const g_ref = self.getBufRef(@ptrCast(g_out), total * @sizeOf(f32));
+        var hd_val: u32 = @intCast(hd);
+        var nh_val: u32 = @intCast(nh);
+        const enc = self.getEncoder(self.pipe_split_qgate);
+        setBuf(enc, in_ref, 0);
+        setBuf(enc, q_ref, 1);
+        setBuf(enc, g_ref, 2);
+        setBytes(enc, @ptrCast(&hd_val), @sizeOf(u32), 3);
+        setBytes(enc, @ptrCast(&nh_val), @sizeOf(u32), 4);
+        self.endEncode1D(enc, self.pipe_split_qgate, total);
+    }
+
     // ── Add ───────────────────────────────────────────────────
 
     /// out[i] = a[i] + b[i]
@@ -918,7 +960,7 @@ pub const MetalBackend = struct {
     pub fn gemvT(self: *MetalBackend, x: [*]const f32, w: [*]const u8, y: [*]f32, out_dim: usize, in_dim: usize) void {
         const x_ref = self.getBufRef(@ptrCast(x), in_dim * @sizeOf(f32));
         const blocks_per_row = (out_dim + 31) / 32;
-        const w_bytes = in_dim * blocks_per_row * 34; // 34 bytes per Q8_0 block
+        const w_bytes = in_dim * blocks_per_row * q8_0_block_bytes;
         const w_ref = self.getBufRef(w, w_bytes);
         const y_ref = self.getBufRef(@ptrCast(y), out_dim * @sizeOf(f32));
         var od: u32 = @intCast(out_dim);
@@ -1121,8 +1163,7 @@ pub const MetalBackend = struct {
     /// U32-packed nibbles with FP8 E4M3 per-group scales and BF16 per-row bias.
     /// group_size=32, 4 words per group (8 nibbles per word × 4 = 32 values).
     pub fn gemvMxfp4St(self: *MetalBackend, x: [*]const f32, weight: [*]const u8, scale: [*]const u8, y: [*]f32, n: usize, k: usize) void {
-        const mxfp4_gs: usize = 32;
-        const gpr = (k + mxfp4_gs - 1) / mxfp4_gs;
+        const gpr = (k + mxfp4_group_size - 1) / mxfp4_group_size;
         const wpg: usize = 4; // 32 nibbles / 8 per word
         const w_bytes = n * gpr * wpg * @sizeOf(u32);
         const s_bytes = n * gpr; // U8 FP8 E4M3 scales
@@ -1154,6 +1195,44 @@ pub const MetalBackend = struct {
         var k_val: u32 = @intCast(k);
 
         for (ops, 0..) |op, idx| {
+            const is_last = (idx == ops.len - 1);
+
+            // MLX quantized weights — dispatch MLX-Q kernel with companion buffers
+            if (op.mlx_scales != null) {
+                const bits = op.mlx_bits;
+                const gpr = (k + 63) / 64;
+                const wpg: usize = if (bits == 8) 16 else 8;
+                const w_bytes_mlx = op.n * gpr * wpg * @sizeOf(u32);
+                const sb_bytes = op.n * gpr * 2;
+
+                const w_ref = self.getBufRef(@ptrCast(op.w.data), w_bytes_mlx);
+                const y_ref = self.getBufRef(@ptrCast(op.y), op.n * @sizeOf(f32));
+                const s_ref = self.getBufRef(@ptrCast(op.mlx_scales.?), sb_bytes);
+                const b_ref = self.getBufRef(@ptrCast(op.mlx_biases.?), sb_bytes);
+                var n_val: u32 = @intCast(op.n);
+
+                const pipe = if (bits == 8) self.pipe_gemv_mlx_q8 else self.pipe_gemv_mlx_q4;
+                const enc = self.getEncoder(pipe);
+                setBuf(enc, x_ref, 0);
+                setBuf(enc, w_ref, 1);
+                setBuf(enc, s_ref, 2);
+                setBuf(enc, b_ref, 3);
+                setBuf(enc, y_ref, 4);
+                setBytes(enc, @ptrCast(&n_val), @sizeOf(u32), 5);
+                setBytes(enc, @ptrCast(&k_val), @sizeOf(u32), 6);
+
+                const tg = gemvThreadgroupSize(.mlx_q, k);
+                if (is_last) {
+                    self.endEncodeThreadgroups(enc, op.n, tg);
+                } else {
+                    objc.msgSend(void, enc, objc.sel("dispatchThreadgroups:threadsPerThreadgroup:"), .{
+                        mtlSize1D(op.n), mtlSize1D(tg),
+                    });
+                    if (self.profile_counters) self.dispatch_count += 1;
+                }
+                continue;
+            }
+
             const pipeline: objc.id = switch (op.w.dtype) {
                 .f32 => self.pipe_gemv_f32,
                 .q8_0 => self.pipe_gemv_q8_0,
@@ -1171,8 +1250,8 @@ pub const MetalBackend = struct {
                 .f16 => self.pipe_gemv_f16,
                 .fp8_e4m3 => self.pipe_gemv_fp8_e4m3,
                 .fp8_e5m2 => self.pipe_gemv_fp8_e5m2,
+                .mxfp4 => self.pipe_gemv_mxfp4,
                 else => {
-                    // Unsupported dtype — fall back to sequential for this op
                     self.gemv(x, op.w, op.y, op.n, k);
                     continue;
                 },
@@ -1192,16 +1271,13 @@ pub const MetalBackend = struct {
 
             const tg = gemvThreadgroupSize(op.w.dtype, k);
             const n_groups = gemvThreadgroups(op.w.dtype, op.n);
-            const is_last = (idx == ops.len - 1);
             if (is_last) {
-                // Final dispatch gets barrier for subsequent reads
                 self.endEncodeThreadgroups(enc, n_groups, tg);
             } else {
-                // Interior dispatches — no barrier, allow GPU overlap
                 objc.msgSend(void, enc, objc.sel("dispatchThreadgroups:threadsPerThreadgroup:"), .{
-                    objc.MTLSize{ .width = n_groups, .height = 1, .depth = 1 },
-                    objc.MTLSize{ .width = tg, .height = 1, .depth = 1 },
+                    mtlSize1D(n_groups), mtlSize1D(tg),
                 });
+                if (self.profile_counters) self.dispatch_count += 1;
             }
         }
     }
@@ -1227,6 +1303,15 @@ pub const MetalBackend = struct {
     /// needed — zero-copy buffers mean no data transfer, just a fence.
     pub fn sync(self: *MetalBackend) void {
         self.flush();
+        if (self.profile_counters) self.sync_count += 1;
+    }
+
+    /// Reset dispatch counters and enable counting (call at start of profiled token).
+    pub fn resetCounters(self: *MetalBackend) void {
+        self.dispatch_count = 0;
+        self.barrier_count = 0;
+        self.sync_count = 0;
+        self.profile_counters = true;
     }
 
     // ── SDPA ─────────────────────────────────────────────────
@@ -1235,11 +1320,6 @@ pub const MetalBackend = struct {
     /// Appends k_new/v_new to KV cache via GPU compute kernel, then runs
     /// FlashAttention-2 (online softmax, tiled K/V) on GPU.
     /// Panics for sequences > 4096, head dims > 256, or non-f32 KV types.
-    /// GPU SDPA threadgroup size (threads per query head).
-    const sdpa_threadgroup_size: usize = 128;
-    /// Maximum sequence length for GPU SDPA (limited by threadgroup memory).
-    const sdpa_gpu_max_seq: usize = 4096;
-
     pub fn sdpa(self: *MetalBackend, q: [*]const f32, keys: []u8, values: []u8, k_new: [*]const f32, v_new: [*]const f32, output: [*]f32, nh: usize, nkv: usize, hd: usize, seq_len: usize, scale: f32, kv_type: @import("backend.zig").KvQuantType) void {
         // Non-f32 KV types not yet supported on GPU.
         if (kv_type != .f32) @panic("Metal SDPA: quantized KV not supported — add GPU kernel or use --kv-type f32");
@@ -1251,7 +1331,7 @@ pub const MetalBackend = struct {
         const sl = seq_len + 1;
 
         // Very long sequences exceed GPU threadgroup memory limit.
-        if (sl > sdpa_gpu_max_seq) @panic("Metal SDPA: sequence length exceeds GPU limit (4096) — reduce --ctx-size");
+        if (sl > sdpa_max_seq_len) @panic("Metal SDPA: sequence length exceeds GPU limit (4096) — reduce --ctx-size");
 
         // ── GPU KV append: copy k_new/v_new into KV cache at position seq_len ──
         {
@@ -1298,12 +1378,7 @@ pub const MetalBackend = struct {
         }
     }
 
-    // ── Batched prefill ops (CPU fallback) ──────────────────────
-    //
-    // Prefill buffers are CPU-allocated (GPA), not page-aligned Metal buffers.
-    // GPU kernels write to wrong addresses via getBufRef() on non-aligned ptrs.
-    // Use CPU fallback until native Metal prefill kernels with proper buffer
-    // management are implemented (Phase 2).
+    // ── Batched prefill ops ────────────────────────────────────
 
     /// GEMM: Y[n_tok × n_out] = X[n_tok × n_in] @ W[n_out × n_in]^T.
     /// One threadgroup per output row. Weight reused across TILE_T=8 tokens.
@@ -1507,8 +1582,8 @@ pub const MetalBackend = struct {
             var hd_val: u32 = @intCast(head_k_dim);
             var nk_val: u32 = @intCast(num_k_heads);
             var eps_val: f32 = p.rms_eps;
-            var q_off_val: u32 = 0;
-            var k_off_val: u32 = @intCast(num_k_heads * head_k_dim);
+            var q_off_val: u32 = if (p.kqv_order) @intCast(num_k_heads * head_k_dim) else 0;
+            var k_off_val: u32 = if (p.kqv_order) 0 else @intCast(num_k_heads * head_k_dim);
             const enc = self.getEncoder(self.pipe_dn_l2_norm);
             setBuf(enc, co_ref, 0);
             setBytes(enc, @ptrCast(&hd_val), @sizeOf(u32), 1);
@@ -1524,9 +1599,11 @@ pub const MetalBackend = struct {
         // Q/K/V are sub-regions of conv_out — reuse co_ref.buf with byte offsets
         // so GPU writes from conv1d + L2 norm are visible (same Metal buffer).
         {
-            const k_byte_off = num_k_heads * head_k_dim * @sizeOf(f32);
+            const qk_dim = num_k_heads * head_k_dim * @sizeOf(f32);
             const v_byte_off = 2 * num_k_heads * head_k_dim * @sizeOf(f32);
-            const q_ref = co_ref;
+            const q_byte_off: usize = if (p.kqv_order) qk_dim else 0;
+            const k_byte_off: usize = if (p.kqv_order) 0 else qk_dim;
+            const q_ref = BufRef{ .buf = co_ref.buf, .offset = co_ref.offset + q_byte_off };
             const k_ref = BufRef{ .buf = co_ref.buf, .offset = co_ref.offset + k_byte_off };
             const v_ref = BufRef{ .buf = co_ref.buf, .offset = co_ref.offset + v_byte_off };
             const state_ref = self.getBufRef(@ptrCast(ssm_state.ptr), ssm_state.len * @sizeOf(f32));
@@ -1557,6 +1634,8 @@ pub const MetalBackend = struct {
             setBytes(enc, @ptrCast(&nv_val), @sizeOf(u32), 12);
             setBytes(enc, @ptrCast(&qs_val), @sizeOf(f32), 13);
             setBytes(enc, @ptrCast(&eps_val), @sizeOf(f32), 14);
+            var use_grouped: u32 = if (p.kqv_order) 1 else 0;
+            setBytes(enc, @ptrCast(&use_grouped), @sizeOf(u32), 15);
             const rec_tg_size: usize = @min(threadgroup_size, @max(32, (head_v_dim + 31) & ~@as(usize, 31)));
             self.endEncodeThreadgroups(enc, num_v_heads, rec_tg_size);
         }

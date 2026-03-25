@@ -20,12 +20,16 @@ pub const Op = enum {
     sdpa,
     sigmoid_mul,
     silu_mul,
+    gelu_mul,
     add,
     deltanet,
     total_layer,
 };
 
 const n_ops = @typeInfo(Op).@"enum".fields.len;
+
+/// Buffer size for the profiling report output.
+const report_buf_size: usize = 4096;
 
 /// Accumulates wall-clock time per operation type across all tokens.
 pub const PerfCounters = struct {
@@ -62,7 +66,7 @@ pub const PerfCounters = struct {
         if (total_us == 0) return;
 
         const stderr = std.fs.File.stderr();
-        var buf: [4096]u8 = undefined;
+        var buf: [report_buf_size]u8 = undefined;
         const write = struct {
             fn w(f: std.fs.File, b: []u8, comptime fmt: []const u8, args: anytype) void {
                 f.writeAll(std.fmt.bufPrint(b, fmt, args) catch return) catch {};

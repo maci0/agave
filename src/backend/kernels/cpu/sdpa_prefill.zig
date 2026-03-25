@@ -55,20 +55,29 @@ fn prefillF32(q: [*]const f32, keys: [*]const f32, values: [*]const f32, output:
                 scores_buf[s] = dot * scale;
             }
             softmax(scores_buf[0..sl]);
-            var d: usize = 0;
-            while (d + 8 <= hd) : (d += 8) {
-                var sum: V8 = v8zero;
-                for (0..sl) |s| {
-                    const sv: V8 = @splat(scores_buf[s]);
-                    const vv: V8 = values[s * kvd + kvh * hd + d ..][0..8].*;
-                    sum += sv * vv;
+            // V accumulation — position-outer, dimension-inner for cache locality.
+            // Each V row (hd floats) fits in L1; iterating dimensions sequentially
+            // avoids the kvd-stride cache thrashing of the dimension-outer layout.
+            {
+                var d: usize = 0;
+                while (d + 8 <= hd) : (d += 8) {
+                    output[out_off + d ..][0..8].* = v8zero;
                 }
-                output[out_off + d ..][0..8].* = sum;
-            }
-            while (d < hd) : (d += 1) {
-                var sum: f32 = 0.0;
-                for (0..sl) |s| sum += scores_buf[s] * values[s * kvd + kvh * hd + d];
-                output[out_off + d] = sum;
+                while (d < hd) : (d += 1) output[out_off + d] = 0;
+
+                for (0..sl) |s| {
+                    const v_base = s * kvd + kvh * hd;
+                    const sv: V8 = @splat(scores_buf[s]);
+                    d = 0;
+                    while (d + 8 <= hd) : (d += 8) {
+                        const vv: V8 = values[v_base + d ..][0..8].*;
+                        const cur: V8 = output[out_off + d ..][0..8].*;
+                        output[out_off + d ..][0..8].* = @mulAdd(V8, sv, vv, cur);
+                    }
+                    while (d < hd) : (d += 1) {
+                        output[out_off + d] += scores_buf[s] * values[v_base + d];
+                    }
+                }
             }
         }
     }
@@ -101,20 +110,47 @@ fn prefillQuant(q: [*]const f32, keys: [*]const u8, values: [*]const u8, output:
     }
 }
 
+/// In-place softmax over a score buffer. SIMD-accelerated max, exp+sum, and normalize.
 fn softmax(scores: []f32) void {
     const n = scores.len;
     if (n == 0) return;
-    var max_val: f32 = scores[0];
-    for (scores[1..]) |s| if (s > max_val) {
-        max_val = s;
-    };
-    var sum: f32 = 0.0;
-    for (scores) |*s| {
-        s.* = @exp(s.* - max_val);
-        sum += s.*;
+
+    // Pass 1: find max (SIMD)
+    var max_acc: V8 = @splat(scores[0]);
+    var i: usize = 0;
+    while (i + 8 <= n) : (i += 8) {
+        const sv: V8 = scores[i..][0..8].*;
+        max_acc = @max(max_acc, sv);
     }
-    const inv = 1.0 / sum;
-    for (scores) |*s| s.* *= inv;
+    var max_val: f32 = @reduce(.Max, max_acc);
+    while (i < n) : (i += 1) {
+        if (scores[i] > max_val) max_val = scores[i];
+    }
+
+    // Pass 2: exp and sum (fused, SIMD)
+    const max_v: V8 = @splat(max_val);
+    var sum_acc: V8 = v8zero;
+    i = 0;
+    while (i + 8 <= n) : (i += 8) {
+        const sv: V8 = scores[i..][0..8].*;
+        const ev = @exp(sv - max_v);
+        scores[i..][0..8].* = ev;
+        sum_acc += ev;
+    }
+    var sum: f32 = @reduce(.Add, sum_acc);
+    while (i < n) : (i += 1) {
+        scores[i] = @exp(scores[i] - max_val);
+        sum += scores[i];
+    }
+
+    // Pass 3: normalize (SIMD)
+    const inv_v: V8 = @splat(1.0 / sum);
+    i = 0;
+    while (i + 8 <= n) : (i += 8) {
+        scores[i..][0..8].* = @as(V8, scores[i..][0..8].*) * inv_v;
+    }
+    const inv_sum = 1.0 / sum;
+    while (i < n) : (i += 1) scores[i] *= inv_sum;
 }
 
 test "sdpaPrefill single token matches decode sdpa" {
@@ -150,4 +186,12 @@ test "sdpaPrefill 3 tokens causal" {
     const e = @exp(@as(f32, 1.0));
     const w1 = e / (1.0 + e);
     try std.testing.expectApproxEqAbs(w1, output[4 + 1], 1e-4);
+    // Token 2: q2=[1,0,0,0], k0=[1,0,0,0], k1=[0,0,0,1], k2=[0,1,0,0]
+    // scores: q2.k0=1, q2.k1=0, q2.k2=0 -> softmax([1,0,0])
+    // weights: w0=e/(e+2), w1=1/(e+2), w2=1/(e+2)
+    const e1 = @exp(@as(f32, 1.0));
+    const w_tok2_0 = e1 / (e1 + 2.0);
+    // output[8..12] = w0*v0 + w1*v1 + w2*v2
+    // v0=[1,0,0,0], v1=[0,1,0,0], v2=[0,0,1,0]
+    try std.testing.expectApproxEqAbs(w_tok2_0, output[8 + 0], 1e-4);
 }

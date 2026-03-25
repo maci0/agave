@@ -246,7 +246,7 @@ pub const CudaBackend = struct {
         var self = CudaBackend{};
         self.allocator = allocator;
         self.buf_cache = std.AutoHashMap(usize, CachedBuf).init(allocator);
-        self.buf_cache.ensureTotalCapacity(backend_mod.buf_cache_initial_capacity) catch {};
+        try self.buf_cache.ensureTotalCapacity(backend_mod.buf_cache_initial_capacity);
         errdefer self.buf_cache.deinit();
         self.act_cache = std.AutoHashMap(usize, ActBuf).init(allocator);
         errdefer self.act_cache.deinit();
@@ -577,7 +577,7 @@ pub const CudaBackend = struct {
     // ── Backend interface ────────────────────────────────────────
 
     /// y[n] = W[n,k] @ x[k]. GPU kernels for F32, BF16, F16, Q8_0, Q4_0,
-    /// Q4_K, Q5_K, Q6_K, FP8_E4M3, FP8_E5M2; other dtypes fall back to CPU.
+    /// Q4_K, Q5_K, Q6_K, FP8_E4M3, FP8_E5M2; unsupported dtypes panic.
     pub fn gemv(self: *CudaBackend, x: [*]const f32, w: TensorData, y: [*]f32, n: usize, k: usize) void {
         const func = switch (w.dtype) {
             .f32 => self.fn_gemv_f32,
@@ -590,13 +590,7 @@ pub const CudaBackend = struct {
             .q6_k => self.fn_gemv_q6_k,
             .fp8_e4m3 => self.fn_gemv_fp8_e4m3,
             .fp8_e5m2 => self.fn_gemv_fp8_e5m2,
-            else => {
-                // Unsupported dtype: flush GPU→host, run on CPU, mark output stale for re-upload
-                self.flushActivations();
-                self.cpu.gemv(x, w, y, n, k);
-                self.invalidateAct(y);
-                return;
-            },
+            else => @panic("CUDA GEMV: unsupported dtype — add a GPU kernel"),
         };
 
         var d_x = self.getInputBuf(x, k * @sizeOf(f32));
@@ -776,13 +770,15 @@ pub const CudaBackend = struct {
 
     /// Transposed GEMV for Q8_0 3D weights — not yet implemented.
     pub fn gemvT(_: *CudaBackend, _: [*]const f32, _: [*]const u8, _: [*]f32, _: usize, _: usize) void {
-        @panic("gemvT not implemented for CUDA");
+        @panic("CUDA gemvT: no GPU kernel — add a CUDA kernel");
     }
 
     /// Scaled accumulate: dst[i] += src[i] * scale.
-    pub fn addScaled(_: *CudaBackend, src: [*]const f32, dst: [*]f32, scale: f32, n: usize) void {
-        // TODO: CUDA kernel — inline CPU loop for now (n_embd-sized, negligible vs GEMV)
+    /// CPU fallback — n_embd-sized, negligible vs GEMV dispatch overhead.
+    pub fn addScaled(self: *CudaBackend, src: [*]const f32, dst: [*]f32, scale: f32, n: usize) void {
+        self.flushActivations();
         for (0..n) |i| dst[i] += src[i] * scale;
+        self.invalidateAct(dst);
     }
 
     /// Element-wise mul
@@ -852,6 +848,7 @@ pub const CudaBackend = struct {
         @panic("CUDA MLX GEMV: no GPU kernel — add a CUDA kernel");
     }
 
+    /// MXFP4 SafeTensors GEMV.
     pub fn gemvMxfp4St(_: *CudaBackend, _: [*]const f32, _: [*]const u8, _: [*]const u8, _: [*]f32, _: usize, _: usize) void {
         @panic("CUDA MXFP4 SafeTensors GEMV: no GPU kernel — add a CUDA kernel");
     }
@@ -887,11 +884,11 @@ pub const CudaBackend = struct {
 
     // ── KV cache allocation ────────────────────────────────────
 
-    /// Allocate a KV cache slice using GPU-optimal memory.
+    /// Allocate a KV cache slice.
     /// On UMA (integrated GPU): uses cuMemAllocManaged so both CPU and GPU
-    /// can access the same pointer directly — no mirror or D2D copies needed.
-    /// On discrete GPU: uses the provided allocator (host memory); the existing
-    /// kv_dev_cache will mirror to VRAM on demand during SDPA.
+    /// can access the same pointer directly — no copies needed.
+    /// On discrete GPU: falls back to host allocator; the caller manages
+    /// VRAM mirroring separately via kv_dev_cache during SDPA.
     pub fn allocKvSlice(self: *CudaBackend, allocator: std.mem.Allocator, n: usize) error{OutOfMemory}![]u8 {
         const byte_len = n;
         if (self.is_uma) {

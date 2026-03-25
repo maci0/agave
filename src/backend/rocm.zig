@@ -195,7 +195,7 @@ pub const RocmBackend = struct {
         var self = RocmBackend{};
         self.allocator = allocator;
         self.buf_cache = std.AutoHashMap(usize, CachedBuf).init(allocator);
-        self.buf_cache.ensureTotalCapacity(backend_mod.buf_cache_initial_capacity) catch {};
+        try self.buf_cache.ensureTotalCapacity(backend_mod.buf_cache_initial_capacity);
         errdefer self.buf_cache.deinit();
         self.act_cache = std.AutoHashMap(usize, ActBuf).init(allocator);
         errdefer self.act_cache.deinit();
@@ -562,7 +562,7 @@ pub const RocmBackend = struct {
         self.launch(self.fn_add, grid, block_size, 0, &params);
     }
 
-    /// Fused add + rmsNorm
+    /// Fused add + rmsNorm (sequential fallback — no fused ROCm kernel yet).
     pub fn addRmsNorm(self: *RocmBackend, a: [*]f32, b: [*]const f32, weight: [*]const f32, output: [*]f32, n: usize, eps: f32) void {
         self.add(a, b, a, n);
         self.rmsNorm(a, weight, output, n, eps);
@@ -570,13 +570,15 @@ pub const RocmBackend = struct {
 
     /// Transposed GEMV for Q8_0 3D weights — not yet implemented.
     pub fn gemvT(_: *RocmBackend, _: [*]const f32, _: [*]const u8, _: [*]f32, _: usize, _: usize) void {
-        @panic("gemvT not implemented for ROCm");
+        @panic("ROCm gemvT: no GPU kernel — add a ROCm kernel");
     }
 
     /// Scaled accumulate: dst[i] += src[i] * scale.
-    pub fn addScaled(_: *RocmBackend, src: [*]const f32, dst: [*]f32, scale: f32, n: usize) void {
-        // TODO: ROCm kernel — inline CPU loop for now (n_embd-sized, negligible vs GEMV)
+    /// CPU fallback — n_embd-sized, negligible vs GEMV dispatch overhead.
+    pub fn addScaled(self: *RocmBackend, src: [*]const f32, dst: [*]f32, scale: f32, n: usize) void {
+        self.flushActivations();
         for (0..n) |i| dst[i] += src[i] * scale;
+        self.invalidateAct(dst);
     }
 
     /// Element-wise mul
@@ -646,6 +648,7 @@ pub const RocmBackend = struct {
         @panic("ROCm MLX GEMV: no GPU kernel — add a ROCm kernel");
     }
 
+    /// MXFP4 SafeTensors GEMV.
     pub fn gemvMxfp4St(_: *RocmBackend, _: [*]const f32, _: [*]const u8, _: [*]const u8, _: [*]f32, _: usize, _: usize) void {
         @panic("ROCm MXFP4 SafeTensors GEMV: no GPU kernel — add a ROCm kernel");
     }

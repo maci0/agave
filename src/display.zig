@@ -15,6 +15,8 @@ pub const version = "0.1.0";
 const bits_per_byte: f32 = 8.0;
 /// Show available memory when available is less than this percentage of total.
 const avail_display_pct: usize = 98;
+/// Maximum number of content lines in the TTY banner box.
+const max_content_lines: usize = 6;
 
 // ── Public Types ─────────────────────────────────────────────────
 
@@ -272,7 +274,6 @@ pub const Display = struct {
         const vt = "\xe2\x94\x82"; // │
 
         // Build content lines
-        const max_content_lines = 6;
         var line_bufs: [max_content_lines][256]u8 = undefined;
         var lines: [max_content_lines][]const u8 = undefined;
         var n_lines: usize = 0;

@@ -1,6 +1,9 @@
 // DeltaNet SSM kernels (conv1d, L2 norm, recurrence). Used by hybrid attention/SSM models (e.g. Qwen3.5).
 // Eliminates GPU-CPU sync by running conv1d, L2 norm, and recurrence on GPU.
 
+// Softplus stability threshold: for x > this value, softplus(x) ≈ x.
+constant float softplus_threshold = 20.0f;
+
 // ── Gate & Beta computation ─────────────────────────────────
 // gate[h] = ssm_a[h] * softplus(alpha[h] + dt_bias[h])
 // beta[h] = sigmoid(beta_in[h])
@@ -18,7 +21,7 @@ kernel void deltanet_gate_beta(
 {
     if (tid >= n_heads) return;
     float x = alpha[tid] + dt_bias[tid];
-    float sp = (x > 20.0f) ? x : log(1.0f + exp(x));
+    float sp = (x > softplus_threshold) ? x : log(1.0f + exp(x));
     gate_out[tid] = ssm_a[tid] * sp;
     beta_out[tid] = 1.0f / (1.0f + exp(-beta_in[tid]));
 }
@@ -117,6 +120,7 @@ kernel void deltanet_recurrence(
     constant uint& num_v_heads      [[buffer(12)]],
     constant float& q_scale         [[buffer(13)]],
     constant float& rms_eps         [[buffer(14)]],
+    constant uint& use_grouped      [[buffer(15)]],
     uint tgid    [[threadgroup_position_in_grid]],
     uint tid     [[thread_index_in_threadgroup]],
     uint tg_size [[threads_per_threadgroup]])
@@ -128,7 +132,8 @@ kernel void deltanet_recurrence(
     uint hkd = head_k_dim;
     float decay = exp(gate[h]);
     float beta_h = beta_vals[h];
-    uint kh = (num_k_heads == num_v_heads) ? h : h % num_k_heads;
+    // GGUF: tiling (h % n_kv). SafeTensors/HF: interleaved grouping (h * n_kv / n_v).
+    uint kh = (num_k_heads == num_v_heads) ? h : (use_grouped != 0 ? h * num_k_heads / num_v_heads : h % num_k_heads);
     uint s_off = h * hvd * hkd;
     uint k_base = kh * hkd;
 

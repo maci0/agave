@@ -28,7 +28,7 @@ const quant_ops = @import("../ops/quant.zig");
 /// Maximum top-k experts for stack-allocated selection arrays.
 const max_active_experts: usize = 8;
 /// Buffer size for tensor name formatting (layer prefix + suffix).
-const name_buf_size: usize = 256;
+const name_buf_size: usize = model_mod.tensor_name_buf_size;
 
 // ── Model struct ─────────────────────────────────────────────────
 

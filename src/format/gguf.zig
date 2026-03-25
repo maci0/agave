@@ -21,6 +21,8 @@ const max_metadata_kv_count: usize = 1_000_000;
 const max_tensor_count: usize = 100_000;
 /// Maximum allowed metadata array length.
 const max_array_len: usize = 10_000_000;
+/// Buffer size for tensor/metadata name formatting (must fit longest GGUF key).
+const name_buf_size: usize = 256;
 
 /// GGML quantization type identifiers.
 pub const GGMLType = enum(u32) {
@@ -117,10 +119,13 @@ pub const GGMLType = enum(u32) {
     }
 
     /// Computes total byte size for a tensor with given element count.
+    /// Uses checked arithmetic to prevent silent overflow on crafted metadata.
     pub fn tensorBytes(self: GGMLType, n_elements: usize) usize {
         const bs = self.blockSize();
-        const n_blocks = (n_elements + bs - 1) / bs;
-        return n_blocks * self.bytesPerBlock();
+        const n_blocks = (std.math.add(usize, n_elements, bs - 1) catch
+            std.math.maxInt(usize)) / bs;
+        return std.math.mul(usize, n_blocks, self.bytesPerBlock()) catch
+            std.math.maxInt(usize); // Saturate on overflow — caller validates against file size
     }
 };
 
@@ -297,7 +302,7 @@ pub const GGUFFile = struct {
     fn fmtGetTensor(self: *GGUFFile, name: []const u8) ?FormatTensorInfo {
         const info = self.tensors.getPtr(name) orelse {
             // Fallback: try translating HF-style name to GGUF-style.
-            var buf: [256]u8 = undefined;
+            var buf: [name_buf_size]u8 = undefined;
             const gguf_name = hfNameToGguf(name, &buf) orelse return null;
             const info2 = self.tensors.getPtr(gguf_name) orelse return null;
             return .{ .name = info2.name, .n_dims = info2.n_dims, .dims = info2.dims, .dtype = ggmlToDType(info2.ggml_type), .data_ptr = self.tensorData(info2) };
@@ -311,7 +316,7 @@ pub const GGUFFile = struct {
     fn fmtGetMetaU32(self: *GGUFFile, key: []const u8) ?u32 {
         if (self.getMetaU32(key)) |v| return v;
         // Fallback: try arch-prefixed GGUF key.
-        var buf: [256]u8 = undefined;
+        var buf: [name_buf_size]u8 = undefined;
         const arch_prefix = self.getMetaStr("general.architecture") orelse return null;
         const gguf_suffix = hfKeyToGgufSuffix(key) orelse return null;
         const gguf_key = std.fmt.bufPrint(&buf, "{s}.{s}", .{ arch_prefix, gguf_suffix }) catch return null;
@@ -319,7 +324,7 @@ pub const GGUFFile = struct {
     }
     fn fmtGetMetaF32(self: *GGUFFile, key: []const u8) ?f32 {
         if (self.getMetaF32(key)) |v| return v;
-        var buf: [256]u8 = undefined;
+        var buf: [name_buf_size]u8 = undefined;
         const arch_prefix = self.getMetaStr("general.architecture") orelse return null;
         const gguf_suffix = hfKeyToGgufSuffix(key) orelse return null;
         const gguf_key = std.fmt.bufPrint(&buf, "{s}.{s}", .{ arch_prefix, gguf_suffix }) catch return null;
@@ -328,7 +333,7 @@ pub const GGUFFile = struct {
 
     /// Look up a metadata value using arch-prefixed fallback, returning string.
     fn getMetaHfKey(self: *GGUFFile, key: []const u8) ?[]const u8 {
-        var buf: [256]u8 = undefined;
+        var buf: [name_buf_size]u8 = undefined;
         const arch_prefix = self.getMetaStr("general.architecture") orelse return null;
         const gguf_suffix = hfKeyToGgufSuffix(key) orelse return null;
         const gguf_key = std.fmt.bufPrint(&buf, "{s}.{s}", .{ arch_prefix, gguf_suffix }) catch return null;
@@ -507,9 +512,11 @@ pub const GGUFFile = struct {
             try self.metadata.put(key, val_result.val);
         }
 
-        // Check alignment
+        // Check alignment (must be non-zero to avoid division by zero)
         if (self.metadata.get("general.alignment")) |v| {
-            if (v.asU32()) |a| self.alignment = a;
+            if (v.asU32()) |a| {
+                if (a > 0) self.alignment = a;
+            }
         }
 
         // Parse tensor infos
@@ -522,11 +529,16 @@ pub const GGUFFile = struct {
             off += 4;
             if (n_dims > 4) return error.TooManyDimensions;
 
-            var dims: [4]u64 = .{ 0, 0, 0, 0 };
+            // Read dims and reverse to standard order (outermost first).
+            // GGUF stores dims inner-first; we normalize to [output_rows, input_cols, ...]
+            // so all consumers can use dims[0] for output rows regardless of format.
+            var raw_dims: [4]u64 = .{ 0, 0, 0, 0 };
             for (0..n_dims) |d| {
-                dims[d] = try self.readU64(off);
+                raw_dims[d] = try self.readU64(off);
                 off += 8;
             }
+            var dims: [4]u64 = .{ 0, 0, 0, 0 };
+            for (0..n_dims) |d| dims[d] = raw_dims[n_dims - 1 - d];
 
             const ggml_type: GGMLType = @enumFromInt(try self.readU32(off));
             off += 4;
@@ -593,7 +605,7 @@ pub const GGUFFile = struct {
 
     /// Looks up a uint32 metadata value using a concatenated prefix+suffix key.
     pub fn getMetaPrefixed(self: *const GGUFFile, prefix: []const u8, suffix: []const u8) ?u32 {
-        var buf: [256]u8 = undefined;
+        var buf: [name_buf_size]u8 = undefined;
         const key = std.fmt.bufPrint(&buf, "{s}{s}", .{ prefix, suffix }) catch return null;
         return self.getMetaU32(key);
     }
@@ -690,7 +702,7 @@ const hf_gguf_layer_map = [_]struct { []const u8, []const u8 }{
 
 /// Translate an HF-style tensor name to GGUF-style.
 /// Handles top-level tensors and layer tensors with prefix stripping.
-fn hfNameToGguf(name: []const u8, buf: *[256]u8) ?[]const u8 {
+fn hfNameToGguf(name: []const u8, buf: *[name_buf_size]u8) ?[]const u8 {
     // Strip known HF prefixes (multimodal and plain)
     const stripped = for ([_][]const u8{ "language_model.model.", "model." }) |pfx| {
         if (std.mem.startsWith(u8, name, pfx)) break name[pfx.len..];
@@ -759,7 +771,7 @@ fn hfKeyToGgufSuffix(key: []const u8) ?[]const u8 {
 // ── Tests ─────────────────────────────────────────────────────────
 
 test "hfNameToGguf top-level" {
-    var buf: [256]u8 = undefined;
+    var buf: [name_buf_size]u8 = undefined;
     try std.testing.expectEqualStrings("token_embd.weight", hfNameToGguf("model.embed_tokens.weight", &buf).?);
     try std.testing.expectEqualStrings("output_norm.weight", hfNameToGguf("model.norm.weight", &buf).?);
     try std.testing.expectEqualStrings("output.weight", hfNameToGguf("model.lm_head.weight", &buf).?);
@@ -767,7 +779,7 @@ test "hfNameToGguf top-level" {
 }
 
 test "hfNameToGguf layer tensors" {
-    var buf: [256]u8 = undefined;
+    var buf: [name_buf_size]u8 = undefined;
     try std.testing.expectEqualStrings("blk.0.attn_norm.weight", hfNameToGguf("model.layers.0.input_layernorm.weight", &buf).?);
     try std.testing.expectEqualStrings("blk.5.attn_q_a.weight", hfNameToGguf("model.layers.5.self_attn.q_a_proj.weight", &buf).?);
     try std.testing.expectEqualStrings("blk.1.ffn_gate_inp.weight", hfNameToGguf("model.layers.1.mlp.gate.weight", &buf).?);

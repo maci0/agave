@@ -99,24 +99,26 @@ pub fn scaledDotProductAttention(
             const n_scores = score_offset + win_len;
             be.softmax(scores, n_scores);
 
+            // V accumulation — position-outer, dimension-inner for cache locality.
             var d: usize = 0;
             while (d + simd_width <= hd) : (d += simd_width) {
-                var sum: SimdVec = @splat(0.0);
-                for (0..win_len) |wi| {
-                    const t = win_start + wi;
-                    const sv: SimdVec = @splat(scores[score_offset + wi]);
-                    const vv: SimdVec = f32_values[t * kvd + kvh * hd + d ..][0..simd_width].*;
-                    sum += sv * vv;
-                }
-                attn_out[q_base + d ..][0..simd_width].* = sum;
+                attn_out[q_base + d ..][0..simd_width].* = @as(SimdVec, @splat(0.0));
             }
-            while (d < hd) : (d += 1) {
-                var s: f32 = 0.0;
-                for (0..win_len) |wi| {
-                    const t = win_start + wi;
-                    s += scores[score_offset + wi] * f32_values[t * kvd + kvh * hd + d];
+            while (d < hd) : (d += 1) attn_out[q_base + d] = 0;
+
+            for (0..win_len) |wi| {
+                const t = win_start + wi;
+                const v_base = t * kvd + kvh * hd;
+                const sv: SimdVec = @splat(scores[score_offset + wi]);
+                d = 0;
+                while (d + simd_width <= hd) : (d += simd_width) {
+                    const vv: SimdVec = f32_values[v_base + d ..][0..simd_width].*;
+                    const cur: SimdVec = attn_out[q_base + d ..][0..simd_width].*;
+                    attn_out[q_base + d ..][0..simd_width].* = @mulAdd(SimdVec, sv, vv, cur);
                 }
-                attn_out[q_base + d] = s;
+                while (d < hd) : (d += 1) {
+                    attn_out[q_base + d] += scores[score_offset + wi] * f32_values[v_base + d];
+                }
             }
         }
         return;

@@ -219,6 +219,10 @@ test "causalConv1dSilu basic" {
     const expected0 = 2.0 / (1.0 + @exp(@as(f32, -2.0)));
     try std.testing.expectApproxEqAbs(expected0, conv_out[0], 0.01);
 
+    // ch1: 2.0*0.5 + 4.0*0.5 = 3.0, SiLU(3.0) = 3.0 * sigmoid(3.0)
+    const expected1 = 3.0 / (1.0 + @exp(@as(f32, -3.0)));
+    try std.testing.expectApproxEqAbs(expected1, conv_out[1], 0.01);
+
     // State should now contain the current input
     try std.testing.expectApproxEqAbs(@as(f32, 3.0), conv_state[0], 0.01);
     try std.testing.expectApproxEqAbs(@as(f32, 4.0), conv_state[1], 0.01);

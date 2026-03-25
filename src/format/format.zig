@@ -53,6 +53,10 @@ pub const TensorInfo = struct {
 pub const Format = struct {
     ptr: *anyopaque,
     vtable: *const VTable,
+    /// True when loaded from SafeTensors (HF conventions for tensor layout).
+    /// False for GGUF (llama.cpp conventions). Models use this to select the
+    /// correct Q/K/V split order, GQA head mapping, and weight pre-processing.
+    is_safetensors: bool = false,
 
     pub const VTable = struct {
         get_tensor: *const fn (self: *anyopaque, name: []const u8) ?TensorInfo,

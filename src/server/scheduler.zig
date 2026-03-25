@@ -41,7 +41,11 @@ pub const Request = struct {
     /// Append a token to the output sequence.
     /// Sets is_finished if the token matches any EOG (end-of-generation) ID.
     pub fn appendToken(self: *Request, token: u32, eog_ids: []const u32) void {
-        self.tokens.append(self.allocator, token) catch return; // Best-effort in hot path
+        self.tokens.append(self.allocator, token) catch {
+            // OOM: cancel the request instead of silently dropping tokens
+            self.is_cancelled.store(true, .monotonic);
+            return;
+        };
         self.last_token_id = token;
 
         for (eog_ids) |eog_id| {
@@ -236,6 +240,10 @@ pub const RequestManager = struct {
             try self.running.append(self.allocator, req);
         }
 
+        // Update Prometheus gauges
+        self.metrics.updateQueueDepth(@intCast(self.waiting.items.len));
+        self.metrics.updateActiveRequests(@intCast(self.running.items.len));
+
         self.mutex.unlock();
 
         // 5. Promote all blocks in running requests' block tables to VRAM (if tiered cache enabled)
@@ -343,12 +351,14 @@ test "enqueue increments waiting count" {
     var manager = try RequestManager.init(allocator, &metrics, 4, 30, null);
     defer manager.deinit();
 
-    const req1 = try manager.enqueue(10);
+    const tokens_a = [_]u32{ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 };
+    const req1 = try manager.enqueue(&tokens_a);
     defer {
         req1.deinit();
         allocator.destroy(req1);
     }
-    const req2 = try manager.enqueue(20);
+    const tokens_b = [_]u32{ 11, 12, 13, 14, 15, 16, 17, 18, 19, 20 };
+    const req2 = try manager.enqueue(&tokens_b);
     defer {
         req2.deinit();
         allocator.destroy(req2);
@@ -368,17 +378,18 @@ test "step fills batch from waiting queue" {
     defer manager.deinit();
 
     // Enqueue 3 requests
-    const req1 = try manager.enqueue(10);
+    const dummy_tokens = [_]u32{ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 };
+    const req1 = try manager.enqueue(&dummy_tokens);
     defer {
         req1.deinit();
         allocator.destroy(req1);
     }
-    const req2 = try manager.enqueue(10);
+    const req2 = try manager.enqueue(&dummy_tokens);
     defer {
         req2.deinit();
         allocator.destroy(req2);
     }
-    const req3 = try manager.enqueue(10);
+    const req3 = try manager.enqueue(&dummy_tokens);
     defer {
         req3.deinit();
         allocator.destroy(req3);
@@ -409,12 +420,13 @@ test "step removes finished requests" {
     var manager = try RequestManager.init(allocator, &metrics, 2, 30, null);
     defer manager.deinit();
 
-    const req1 = try manager.enqueue(10);
+    const dummy_tokens = [_]u32{ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 };
+    const req1 = try manager.enqueue(&dummy_tokens);
     defer {
         req1.deinit();
         allocator.destroy(req1);
     }
-    const req2 = try manager.enqueue(10);
+    const req2 = try manager.enqueue(&dummy_tokens);
     defer {
         req2.deinit();
         allocator.destroy(req2);
@@ -446,7 +458,8 @@ test "step cancels timed-out requests" {
     var manager = try RequestManager.init(allocator, &metrics, 2, 1, null); // 1 second timeout
     defer manager.deinit();
 
-    const req = try manager.enqueue(10);
+    const dummy_tokens = [_]u32{ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 };
+    const req = try manager.enqueue(&dummy_tokens);
     defer {
         req.deinit();
         allocator.destroy(req);
@@ -482,6 +495,12 @@ const MockModel = struct {
         return 42; // Return dummy token
     }
 
+    pub fn prefill(self: *MockModel, token_ids: []const u32) !u32 {
+        var last: u32 = 0;
+        for (token_ids) |tid| last = self.forward(tid) catch return error.Cancelled;
+        return last;
+    }
+
     pub fn resetCache(_: *MockModel) void {}
 
     pub fn cancel(_: *MockModel) void {}
@@ -503,6 +522,12 @@ const MockEosModel = struct {
 
     pub fn forward(_: *MockEosModel, _: u32) !u32 {
         return 1; // Return EOS token
+    }
+
+    pub fn prefill(self: *MockEosModel, token_ids: []const u32) !u32 {
+        var last: u32 = 0;
+        for (token_ids) |tid| last = self.forward(tid) catch return error.Cancelled;
+        return last;
     }
 
     pub fn resetCache(_: *MockEosModel) void {}

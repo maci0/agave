@@ -431,7 +431,7 @@ pub const GptOssModel = struct {
     /// MLX affine has both .scales (BF16) and .biases (BF16).
     fn findCompanion(self: *const GptOssModel, t: TensorInfo) ?Companion {
         const wi = std.mem.lastIndexOf(u8, t.name, ".weight") orelse return null;
-        var sbuf: [128]u8 = undefined;
+        var sbuf: [model_mod.tensor_name_buf_size]u8 = undefined;
         const prefix = t.name[0..wi];
         const s_name = std.fmt.bufPrint(&sbuf, "{s}.scales", .{prefix}) catch return null;
         const st = self.fmt.getTensor(s_name) orelse return null;
@@ -449,7 +449,7 @@ pub const GptOssModel = struct {
             };
         }
         // MLX affine: needs .biases companion tensor
-        var bbuf: [128]u8 = undefined;
+        var bbuf: [model_mod.tensor_name_buf_size]u8 = undefined;
         const b_name = std.fmt.bufPrint(&bbuf, "{s}.biases", .{prefix}) catch return null;
         const bt = self.fmt.getTensor(b_name) orelse return null;
         return .{
@@ -712,9 +712,8 @@ pub const GptOssModel = struct {
 
 // ── Free functions ────────────────────────────────────────────────
 
-/// Add a raw f32 bias array (pointed to by `bias_bytes`) into `dst`.
-/// `bias_bytes` must point to at least `n * @sizeOf(f32)` valid bytes of f32 data.
-/// Add bias to dst. Handles both f32 and bf16 bias data.
+/// Add f32 bias (pointed to by `bias_bytes`) into `dst`.
+/// For bf16 bias data, call `addBiasTyped()` directly with `.bf16`.
 inline fn addBias(dst: []f32, bias_bytes: [*]const u8, n: usize) void {
     addBiasTyped(dst, bias_bytes, n, .f32);
 }

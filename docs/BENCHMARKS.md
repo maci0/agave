@@ -55,9 +55,10 @@ CLI: `--prefill-batch-size <N>` (default 512). Use `--prefill-batch-size 1` for 
 | bf16 | ✅ | ✅ | ✅ |
 | f16 | ✅ | ✅ | ✅ |
 | MLX-Q4 | ✅ | ✅ | ❌ |
-| NVFP4 | ✅ | ❌ | ✅ |
+| NVFP4 (GGUF) | ✅ | ❌ | ✅ |
+| NVFP4 (SafeTensors) | ✅ | ✅ | — |
 | MXFP4 | ✅ | ✅ | ✅ |
-| IQ4_XS/NL | ✅ (CPU only) | ❌ | ✅ |
+| IQ4_XS/NL | ✅ | ✅ | ✅ |
 
 ## Supported Model Architectures
 
@@ -66,7 +67,7 @@ CLI: `--prefill-batch-size <N>` (default 512). Use `--prefill-batch-size 1` for 
 | Gemma 3 | 4B, 12B, 27B | ✅ Working |
 | Qwen3.5 | 0.8B, 9B, 27B | ✅ Working |
 | GLM-4 | 4.7B | ⚠️ Poor output quality |
-| Nemotron-Nano | 4B | ⚠️ Poor output quality |
+| Nemotron-Nano | 30B | ⚠️ Poor output quality |
 | GPT-OSS | 20B | ⚠️ Poor output quality |
 
 ## Known Issues

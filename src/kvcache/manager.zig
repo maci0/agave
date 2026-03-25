@@ -221,7 +221,7 @@ const radix_fanout = 256;
 
 /// A single node in the radix tree. Each node owns a span of token IDs
 /// and references the physical blocks that hold those tokens' KV data.
-pub const RadixNode = struct {
+const RadixNode = struct {
     /// Token IDs stored at this node (the "edge label").
     tokens: []u32,
     /// Physical block IDs holding KV data for these tokens.

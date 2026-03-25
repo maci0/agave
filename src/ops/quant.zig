@@ -365,6 +365,16 @@ test "nvfp4Dequant" {
     try std.testing.expectEqual(@as(f32, 0.0), nvfp4Dequant(0, 0x38));
     // nibble=4 (2.0), scale=0x40 (FP8 E4M3 2.0) → 2.0 * 2.0 = 4.0
     try std.testing.expectEqual(@as(f32, 4.0), nvfp4Dequant(4, 0x40));
+    // Odd nibbles: nibble=1 (0.5), scale=0x38 (1.0) → 0.5
+    try std.testing.expectEqual(@as(f32, 0.5), nvfp4Dequant(1, 0x38));
+    // nibble=3 (1.5), scale=0x38 (1.0) → 1.5
+    try std.testing.expectEqual(@as(f32, 1.5), nvfp4Dequant(3, 0x38));
+    // Negative side: nibble=8 (sign bit) → -0.0
+    try std.testing.expectEqual(@as(f32, -0.0), nvfp4Dequant(8, 0x38));
+    // nibble=10 (-1.0), scale=0x38 (1.0) → -1.0
+    try std.testing.expectEqual(@as(f32, -1.0), nvfp4Dequant(10, 0x38));
+    // nibble=12 (-2.0), scale=0x40 (2.0) → -4.0
+    try std.testing.expectEqual(@as(f32, -4.0), nvfp4Dequant(12, 0x40));
 }
 
 test "fp8e4m3ToF32" {

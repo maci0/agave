@@ -18,6 +18,8 @@ const DType = format_mod.DType;
 /// Maximum allowed SafeTensors JSON header size (100 MB).
 /// Legitimate models have headers well under 10 MB even with thousands of tensors.
 const max_header_json_size: u64 = 100_000_000;
+/// Buffer size for tensor name translation (GGUF↔HuggingFace).
+const name_buf_size: usize = 256;
 
 // ── Shard & tensor storage ────────────────────────────────────────────────────
 
@@ -162,7 +164,7 @@ pub const SafeTensorsDir = struct {
                 null,
                 file_size,
                 std.posix.PROT.READ,
-                .{ .TYPE = .PRIVATE },
+                .{ .TYPE = .SHARED },
                 file.handle,
                 0,
             );
@@ -228,13 +230,14 @@ pub const SafeTensorsDir = struct {
     }
 
     /// Returns the total number of parameters (sum of all tensor element counts).
+    /// Uses checked arithmetic to prevent overflow on crafted metadata.
     pub fn totalParams(self: *const SafeTensorsDir) u64 {
         var total: u64 = 0;
         var it = self.tensors.valueIterator();
         while (it.next()) |entry| {
             var n: u64 = 1;
-            for (0..entry.n_dims) |i| n *= entry.dims[i];
-            total += n;
+            for (0..entry.n_dims) |i| n = std.math.mul(u64, n, entry.dims[i]) catch std.math.maxInt(u64);
+            total = std.math.add(u64, total, n) catch std.math.maxInt(u64);
         }
         return total;
     }
@@ -256,7 +259,7 @@ pub const SafeTensorsDir = struct {
 
     /// Return a `Format` interface backed by this loader.
     pub fn format(self: *SafeTensorsDir) Format {
-        return .{ .ptr = self, .vtable = &vtable };
+        return .{ .ptr = self, .vtable = &vtable, .is_safetensors = true };
     }
 
     // ── VTable implementations ────────────────────────────────────────────────
@@ -268,7 +271,7 @@ pub const SafeTensorsDir = struct {
         if (self.lookupStable(name)) |r| return self.entryToInfo(r.key, r.entry);
         // Fallback: translate GGUF-style name to HuggingFace-style.
         // Try both "language_model.model." and "model." prefixes.
-        var buf: [256]u8 = undefined;
+        var buf: [name_buf_size]u8 = undefined;
         for (hf_prefixes) |pfx| {
             if (ggufToHfName(name, &buf, pfx)) |hf_name| {
                 if (self.lookupStable(hf_name)) |r| return self.entryToInfo(r.key, r.entry);
@@ -403,6 +406,15 @@ const gguf_hf_layer_map = [_]struct { []const u8, []const u8 }{
     .{ "ffn_up_shexp", "mlp.shared_experts.up_proj" },
     .{ "ffn_down_shexp", "mlp.shared_experts.down_proj" },
     .{ "exp_probs_b", "mlp.gate.e_score_correction_bias" },
+    // DeltaNet SSM (Qwen3.5 linear attention layers)
+    .{ "attn_qkv", "linear_attn.in_proj_qkv" },
+    .{ "attn_gate", "linear_attn.in_proj_z" },
+    .{ "ssm_alpha", "linear_attn.in_proj_a" },
+    .{ "ssm_beta", "linear_attn.in_proj_b" },
+    .{ "ssm_out", "linear_attn.out_proj" },
+    .{ "ssm_a", "linear_attn.A_log" },
+    .{ "ssm_conv1d", "linear_attn.conv1d" },
+    .{ "ssm_norm", "linear_attn.norm" },
 };
 
 /// HuggingFace model prefixes to try (multimodal first, then plain).
@@ -413,7 +425,7 @@ const hf_prefixes = [_][]const u8{
 
 /// Translate a GGUF-style tensor name to HuggingFace-style using a given prefix.
 /// Returns the translated name written into `buf`, or null if no mapping exists.
-fn ggufToHfName(name: []const u8, buf: *[256]u8, prefix: []const u8) ?[]const u8 {
+fn ggufToHfName(name: []const u8, buf: *[name_buf_size]u8, prefix: []const u8) ?[]const u8 {
     // Top-level tensors
     if (std.mem.startsWith(u8, name, "token_embd.")) {
         const attr = name["token_embd.".len..];
@@ -439,9 +451,22 @@ fn ggufToHfName(name: []const u8, buf: *[256]u8, prefix: []const u8) ?[]const u8
         const dot1 = std.mem.indexOfScalar(u8, rest, '.') orelse return null;
         const layer_str = rest[0..dot1];
         const suffix = rest[dot1 + 1 ..]; // e.g. "attn_q.weight"
-        const dot2 = std.mem.indexOfScalar(u8, suffix, '.') orelse return null;
+        const dot2 = std.mem.indexOfScalar(u8, suffix, '.') orelse {
+            // No attribute suffix (e.g., "ssm_a" → "linear_attn.A_log")
+            for (gguf_hf_layer_map) |mapping| {
+                if (std.mem.eql(u8, suffix, mapping[0])) {
+                    return std.fmt.bufPrint(buf, "{s}layers.{s}.{s}", .{ prefix, layer_str, mapping[1] }) catch null;
+                }
+            }
+            return null;
+        };
         const component = suffix[0..dot2]; // e.g. "attn_q"
         const attr = suffix[dot2 + 1 ..]; // e.g. "weight"
+
+        // Special case: ssm_dt.bias → linear_attn.dt_bias (HF uses underscore, not dot)
+        if (std.mem.eql(u8, component, "ssm_dt") and std.mem.eql(u8, attr, "bias")) {
+            return std.fmt.bufPrint(buf, "{s}layers.{s}.linear_attn.dt_bias", .{ prefix, layer_str }) catch null;
+        }
 
         for (gguf_hf_layer_map) |mapping| {
             if (std.mem.eql(u8, component, mapping[0])) {
@@ -465,6 +490,13 @@ const gguf_hf_meta_map = [_]struct { []const u8, []const u8 }{
     .{ "context_length", "max_position_embeddings" },
     .{ "rope.freq_base", "rope_theta" },
     .{ "attention.layer_norm_rms_epsilon", "rms_norm_eps" },
+    // Qwen3.5 DeltaNet SSM
+    .{ "full_attention_interval", "full_attention_interval" },
+    .{ "ssm.conv_kernel", "linear_conv_kernel_dim" },
+    .{ "ssm.state_size", "linear_key_head_dim" },
+    .{ "ssm.group_count", "linear_num_key_heads" },
+    .{ "ssm.time_step_rank", "linear_num_value_heads" },
+    .{ "partial_rotary_factor", "partial_rotary_factor" },
 };
 
 /// Translate a GGUF-style metadata key to HuggingFace config.json key.

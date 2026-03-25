@@ -66,3 +66,18 @@ test "rope preserves magnitude" {
     try std.testing.expectApproxEqAbs(@as(f32, 5.0), mag0, 1e-4);
     try std.testing.expectApproxEqAbs(@as(f32, 0.0), mag1, 1e-4);
 }
+
+test "rope pos>0 rotates values" {
+    // Verify pos=1, theta=10000, rope_dim=4 produces expected rotation.
+    // Split-complex pairs: (x[0], x[2]) and (x[1], x[3]).
+    // freq[0] = exp(-log(10000) * 0 / 4) = 1.0, angle = 1.0 * 1 = 1.0
+    // freq[1] = exp(-log(10000) * 2 / 4) = 1/100, angle = 0.01
+    var x = [_]f32{ 1.0, 0.0, 0.0, 0.0 };
+    rope(&x, 1, 1, 4, 4, 10000.0);
+    // Pair 0 rotated by angle=1.0: x[0]=cos(1), x[2]=sin(1)
+    try std.testing.expectApproxEqAbs(@cos(@as(f32, 1.0)), x[0], 1e-5);
+    try std.testing.expectApproxEqAbs(@sin(@as(f32, 1.0)), x[2], 1e-5);
+    // Pair 1 should stay near zero (input was zero)
+    try std.testing.expectApproxEqAbs(@as(f32, 0.0), x[1], 1e-5);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.0), x[3], 1e-5);
+}

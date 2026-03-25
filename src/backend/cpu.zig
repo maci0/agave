@@ -532,7 +532,7 @@ pub const CpuBackend = struct {
             var all_same = rb > 0;
             for (ops) |op| {
                 total_n += op.n;
-                if (op.w.dtype != dtype) all_same = false;
+                if (op.w.dtype != dtype or op.mlx_scales != null) all_same = false;
             }
 
             if (all_same and total_n >= parallel_min_rows) {
@@ -549,7 +549,14 @@ pub const CpuBackend = struct {
         }
 
         // Fallback: sequential per-op dispatch
-        for (ops) |op| self.gemv(x, op.w, op.y, op.n, k);
+        for (ops) |op| {
+            if (op.mlx_scales != null) {
+                const mlx_ops = @import("../ops/mlx.zig");
+                mlx_ops.mlxGemvRaw(x, @ptrCast(@alignCast(op.w.data)), @ptrCast(@alignCast(op.mlx_scales.?)), @ptrCast(@alignCast(op.mlx_biases.?)), op.y, op.n, k, op.mlx_bits);
+            } else {
+                self.gemv(x, op.w, op.y, op.n, k);
+            }
+        }
     }
 
     /// Context for batched parallel GEMV. Maps virtual row indices to specific ops.
@@ -798,8 +805,10 @@ pub const CpuBackend = struct {
         ssm_ops.causalConv1dSilu(conv_out, conv_state, conv_in, conv_w, null, p.conv_ch, p.d_conv);
 
         // 3. L2 normalize Q and K per head
-        const q_off: usize = 0;
-        const k_off: usize = num_k_heads * head_k_dim;
+        // GGUF (llama.cpp) rearranges to Q,K,V order.
+        // SafeTensors/HF keeps original K,Q,V order (split at key_dim, 2*key_dim).
+        const q_off: usize = if (p.kqv_order) num_k_heads * head_k_dim else 0;
+        const k_off: usize = if (p.kqv_order) 0 else num_k_heads * head_k_dim;
         for (0..num_k_heads) |h| {
             inline for ([_]usize{ q_off, k_off }) |base_off| {
                 norm_kernel.l2Norm(conv_out + base_off + h * head_k_dim, head_k_dim, p.rms_eps);

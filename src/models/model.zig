@@ -10,6 +10,9 @@ const build_options = @import("build_options");
 const backend_mod = @import("../backend/backend.zig");
 const format_mod = @import("../format/format.zig");
 
+/// Buffer size for constructing companion tensor names (e.g., ".scales", ".biases").
+pub const tensor_name_buf_size: usize = 256;
+
 /// Errors that can occur during model forward pass.
 pub const ForwardError = error{
     /// A required weight tensor was not found in the model file.
@@ -50,8 +53,9 @@ pub const Model = struct {
     };
 
     /// Construct a Model interface from any concrete model type at comptime.
-    /// The concrete type must have: forward(token_id) !u32, resetCache(), cancel(),
-    /// and fields: eos_token_id, vocab_size, n_layers, n_embd, n_head, n_head_kv.
+    /// The concrete type must have: forward(token_id) !u32, prefill(token_ids) !u32,
+    /// resetCache(), cancel(), getBlockTable(), and fields: eos_token_id, vocab_size,
+    /// n_layers, n_embd, n_head, n_head_kv, and either `logits` or `logits_buf`.
     pub fn from(comptime T: type, ptr: *T) Model {
         const vtable = comptime genVTable(T);
         return .{ .ptr = ptr, .vtable = vtable };
@@ -221,8 +225,8 @@ pub fn expertWeightStride(t: format_mod.TensorInfo) usize {
 pub fn mlxGemv(be: backend_mod.Backend, fmt: format_mod.Format, x: [*]const f32, t: format_mod.TensorInfo, y: [*]f32, n: usize, k: usize) bool {
     if (t.dtype != .mlx_q) return false;
     const wi = std.mem.lastIndexOf(u8, t.name, ".weight") orelse return false;
-    var sbuf: [128]u8 = undefined;
-    var bbuf: [128]u8 = undefined;
+    var sbuf: [tensor_name_buf_size]u8 = undefined;
+    var bbuf: [tensor_name_buf_size]u8 = undefined;
     const prefix = t.name[0..wi];
     const s_name = std.fmt.bufPrint(&sbuf, "{s}.scales", .{prefix}) catch return false;
     const st = fmt.getTensor(s_name) orelse return false;
@@ -243,6 +247,29 @@ pub fn mlxGemv(be: backend_mod.Backend, fmt: format_mod.Format, x: [*]const f32,
         be.gemvMlxQ(x, t.data_ptr, st.data_ptr, bt.data_ptr, y, n, k, bits);
     }
     return true;
+}
+
+/// MLX companion tensor lookup result.
+pub const MlxCompanion = struct { scales: [*]const u8, biases: [*]const u8, bits: u32 };
+
+/// Find MLX companion tensors (scales + biases) for an MLX-quantized weight.
+/// Returns null for non-MLX tensors, MXFP4 tensors, or when companions are missing.
+pub fn findMlxCompanion(fmt: format_mod.Format, t: format_mod.TensorInfo, k: usize) ?MlxCompanion {
+    if (t.dtype != .mlx_q) return null;
+    const wi = std.mem.lastIndexOf(u8, t.name, ".weight") orelse return null;
+    var sbuf: [tensor_name_buf_size]u8 = undefined;
+    var bbuf: [tensor_name_buf_size]u8 = undefined;
+    const prefix = t.name[0..wi];
+    const s_name = std.fmt.bufPrint(&sbuf, "{s}.scales", .{prefix}) catch return null;
+    const st = fmt.getTensor(s_name) orelse return null;
+    if (st.dtype == .unknown) return null; // MXFP4 — not affine MLX
+    const b_name = std.fmt.bufPrint(&bbuf, "{s}.biases", .{prefix}) catch return null;
+    const bt = fmt.getTensor(b_name) orelse return null;
+    const bits: u32 = if (t.n_dims >= 2 and k > 0)
+        @intCast(@as(u64, t.dims[t.n_dims - 1]) * 32 / @as(u64, @intCast(k)))
+    else
+        fmt.getMetaU32("bits") orelse 4;
+    return .{ .scales = st.data_ptr, .biases = bt.data_ptr, .bits = bits };
 }
 
 /// Dispatch GEMV — tries MLX path first, falls back to standard backend gemv.

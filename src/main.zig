@@ -182,7 +182,7 @@ fn preloadRegionProgress(data: []align(std.heap.page_size_min) const u8, loaded:
     std.posix.madvise(@alignCast(@constCast(data.ptr)), data.len, MADV.SEQUENTIAL) catch {};
 
     const page_size = std.heap.page_size_min;
-    // Report progress every ~1% of total or every 256 pages, whichever is smaller
+    // Report progress every ~1% of total, but no more frequently than every 256 pages
     const report_interval = @max(total_bytes / 100, page_size * 256);
     var last_report: usize = loaded.*;
     var offset: usize = 0;
@@ -229,6 +229,23 @@ const arch_mod = @import("arch.zig");
 const Arch = arch_mod.Arch;
 const TokenizerKind = arch_mod.TokenizerKind;
 
+// ── REPL help (shared between --help and /help) ─────────────────
+
+const repl_help =
+    \\  /clear              Clear conversation and KV cache (stay in chat)
+    \\  /stats              Toggle generation stats
+    \\  /verbose            Toggle technical details
+    \\  /model              Show model info
+    \\  /help               Show this help
+    \\  /quit, /exit, /q    Exit interactive mode
+    \\  Ctrl+C              Cancel input (double-tap to quit)
+    \\  Ctrl+D              Quit (on empty line)
+    \\  Ctrl+L              Clear screen
+    \\  Ctrl+R              Reverse search history
+    \\  Up/Down             Navigate history
+    \\
+;
+
 // ── CLI definition ───────────────────────────────────────────────
 
 const cli_params = clap.parseParamsComptime(
@@ -259,6 +276,7 @@ const cli_params = clap.parseParamsComptime(
     \\    --model-info           Print model metadata and exit (combine with --json).
     \\    --profile              Profile per-op timing (halves throughput).
     \\    --mmap                 Use lazy mmap instead of eagerly paging weights into RAM.
+    \\    --api-key <str>            API key for server authentication (Bearer token).
     \\    --prefill-batch-size <u32>  Prefill chunk size in tokens (default: 512).
     \\<str>...
     \\
@@ -287,6 +305,7 @@ const CliArgs = struct {
     kv_ram_budget: ?[]const u8 = null,
     kv_ssd_path: ?[]const u8 = null,
     kv_ssd_budget: ?[]const u8 = null,
+    api_key: ?[]const u8 = null,
     allow_cpu_fallback: bool,
     debug: bool,
     json: bool,
@@ -402,6 +421,7 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
         .kv_ram_budget = res.args.@"kv-ram-budget",
         .kv_ssd_path = res.args.@"kv-ssd-path",
         .kv_ssd_budget = res.args.@"kv-ssd-budget",
+        .api_key = res.args.@"api-key",
         .allow_cpu_fallback = res.args.@"allow-cpu-fallback" != 0,
         .debug = res.args.debug != 0,
         .json = json_mode,
@@ -472,6 +492,7 @@ fn printUsage() void {
         \\      --json             Output results as JSON (implies --quiet)
         \\      --model-info       Print model metadata and exit (combine with --json)
         \\      --profile          Profile per-op timing (halves throughput)
+        \\      --api-key <KEY>    API key for server authentication (Bearer token)
         \\      --mmap             Use lazy mmap instead of eagerly paging weights into RAM
         \\      --prefill-batch-size <N>  Prefill chunk size in tokens [default: 512]
         \\
@@ -491,19 +512,8 @@ fn printUsage() void {
         \\  gemma3, qwen35, gpt-oss, nemotron-h, nemotron-nano, glm4
         \\
         \\REPL COMMANDS:
-        \\  /clear                 Clear conversation and KV cache (stay in chat)
-        \\  /stats                 Toggle generation stats
-        \\  /verbose               Toggle technical details
-        \\  /model                 Show model info
-        \\  /quit, /exit, /q       Exit interactive mode
-        \\  /help                  Show available commands
-        \\  Ctrl+C                 Cancel input (double-tap to quit)
-        \\  Ctrl+D                 Quit (on empty line)
-        \\  Ctrl+L                 Clear screen
-        \\  Ctrl+R                 Reverse search history
-        \\  Up/Down                Navigate history
         \\
-    ;
+    ++ repl_help;
     stdout.writeAll(usage) catch {};
 }
 
@@ -996,6 +1006,8 @@ pub fn main() !void {
         }
         // Architecture-specific fallbacks
         if (arch == .glm4) break :blk arch_mod.glm4_fallback_bos;
+        // Qwen3.5 uses GPT-2 tokenizer but SafeTensors lacks the model tag.
+        if (arch == .qwen35) break :blk 0;
         break :blk default_bos_id;
     };
     var eog = getEogTokens(fmt, eos_id);
@@ -1044,8 +1056,10 @@ pub fn main() !void {
         const stdin_fd = std.fs.File.stdin();
         if (!std.posix.isatty(stdin_fd.handle)) {
             piped_prompt = stdin_fd.readToEndAlloc(allocator, max_stdin_prompt_size) catch |e| blk: {
-                if (e == error.StreamTooLong)
+                if (e == error.StreamTooLong) {
                     eprint("Error: piped input exceeds {d} bytes limit\n", .{max_stdin_prompt_size});
+                    std.process.exit(1);
+                }
                 break :blk null;
             };
         }
@@ -1213,7 +1227,7 @@ fn initAndRun(
             var model_if = mdl.model();
             if (cli.serve) {
                 var tok_if = tok.tokenizer();
-                server.run(allocator, &model_if, &tok_if, arch.chatTemplate(), minfo.name, minfo.be_name, cli.port, tok.bos_token_id, eog.ids, eog.len, tiered_ptr) catch |e| {
+                server.run(allocator, &model_if, &tok_if, arch.chatTemplate(), minfo.name, minfo.be_name, cli.port, tok.bos_token_id, eog.ids, eog.len, tiered_ptr, cli.api_key) catch |e| {
                     eprint("Error: server failed: {}\n", .{e});
                     return false;
                 };
@@ -1299,20 +1313,7 @@ fn runRepl(
                 display.printModelInfo(minfo);
                 continue;
             } else if (std.mem.eql(u8, trimmed, "/help")) {
-                print(
-                    \\  /clear              Clear conversation and KV cache (stay in chat)
-                    \\  /stats              Toggle generation stats
-                    \\  /verbose            Toggle technical details
-                    \\  /model              Show model info
-                    \\  /help               Show this help
-                    \\  /quit, /exit, /q    Exit interactive mode
-                    \\  Ctrl+C              Cancel input (double-tap to quit)
-                    \\  Ctrl+D              Quit (on empty line)
-                    \\  Ctrl+L              Clear screen
-                    \\  Ctrl+R              Reverse search history
-                    \\  Up/Down             Navigate history
-                    \\
-                , .{});
+                stdout.writeAll(repl_help) catch {};
                 continue;
             } else {
                 print("Unknown command: {s} (try /help)\n", .{trimmed});
@@ -1450,7 +1451,10 @@ fn generateAndPrintInner(
             prefill_buf = all;
             break :blk all;
         } else if (tok.bos_token_id > 0 and !skip_bos) {
-            _ = mdl.forward(tok.bos_token_id) catch return null;
+            _ = mdl.forward(tok.bos_token_id) catch |e| {
+                eprint("Error: BOS token forward failed: {}\n", .{e});
+                return null;
+            };
             break :blk token_ids;
         } else {
             break :blk token_ids;
@@ -1504,7 +1508,7 @@ fn generateAndPrintInner(
     for (0..cli.max_tokens -| 1) |gi| {
         if (first_is_eog or token_ids.len == 0) break;
         var next = mdl.forward(last) catch |e| {
-            dbg("gen forward failed at step {d}: {}", .{ gi, e });
+            eprint("Error: generation failed at token {d}: {}\n", .{ gi + 1, e });
             break;
         };
         if (use_sampling) {

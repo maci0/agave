@@ -142,3 +142,24 @@ kernel void kv_append(
     keys[kv_off + tid] = k_new[tid];
     values[kv_off + tid] = v_new[tid];
 }
+
+// ── Q/Gate Split ──────────────────────────────────────────────
+// Split concatenated [Q0..Q_{hd-1}, G0..G_{hd-1}] per head into
+// separate Q[nh*hd] and G[nh*hd] arrays. One thread per element.
+
+kernel void split_qgate(
+    device const float* qg  [[buffer(0)]],
+    device float* q_out     [[buffer(1)]],
+    device float* g_out     [[buffer(2)]],
+    constant uint& hd       [[buffer(3)]],
+    constant uint& nh       [[buffer(4)]],
+    uint tid [[thread_position_in_grid]])
+{
+    uint total = nh * hd;
+    if (tid >= total) return;
+    uint h = tid / hd;
+    uint d = tid % hd;
+    uint src = h * hd * 2;
+    q_out[tid] = qg[src + d];
+    g_out[tid] = qg[src + hd + d];
+}

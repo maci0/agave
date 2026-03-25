@@ -41,7 +41,7 @@ pub const LayerType = enum { ssm, attention, ffn_only };
 const max_layers: usize = 128;
 
 /// Buffer size for tensor name formatting.
-const name_buf_size: usize = 256;
+const name_buf_size: usize = model_mod.tensor_name_buf_size;
 
 /// Nemotron-H hybrid model state.
 pub const NemotronHModel = struct {
@@ -252,8 +252,9 @@ pub const NemotronHModel = struct {
             self.tiered_cache = tc;
             self.tiered_block_allocator = ta;
         } else {
-            const block_size = kvcache.default_block_size;
-            const num_blocks = (self.max_seq_len + block_size - 1) / block_size * nl;
+            // Use full-sequence blocks for contiguous KV access in both prefill and decode.
+            const block_size: u16 = @intCast(@min(self.max_seq_len, std.math.maxInt(u16)));
+            const num_blocks = nl;
             self.paged_cache = try PagedKvCache.init(allocator, nl, kvd, num_blocks, block_size);
             errdefer self.paged_cache.deinit();
             // BlockAllocator stores a pointer — must point to self.paged_cache (not a local copy).

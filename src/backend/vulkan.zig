@@ -1,6 +1,6 @@
 //! Vulkan compute backend via MoltenVK (macOS) or native Vulkan (Linux).
 //! Uses SPIR-V compute shaders for GPU dispatch with subgroup reduction.
-//! Falls back to CPU for unsupported quantization types.
+//! Panics on unsupported quantization types (no silent CPU fallback).
 //!
 //! The Vulkan library (libvulkan.so / libMoltenVK.dylib) is loaded at runtime
 //! via std.DynLib — no link-time dependency. If the library is not available,
@@ -533,6 +533,9 @@ const sdpa_max_seq_len: usize = 4096;
 /// Maximum per-head dimension for the fused SDPA kernel.
 const sdpa_max_head_dim: usize = 256;
 
+/// Assumed maximum vocabulary size for embedding table caching.
+const emb_max_vocab_size: usize = 65536;
+
 // ── Backend struct ───────────────────────────────────────────────
 
 /// Vulkan GPU backend — SPIR-V compute shaders with dynamic library loading.
@@ -736,7 +739,7 @@ pub const VulkanBackend = struct {
         var self = VulkanBackend{};
         self.allocator = allocator;
         self.buf_cache = std.AutoHashMap(usize, CachedBuf).init(allocator);
-        self.buf_cache.ensureTotalCapacity(backend_mod.buf_cache_initial_capacity) catch {};
+        try self.buf_cache.ensureTotalCapacity(backend_mod.buf_cache_initial_capacity);
         errdefer self.buf_cache.deinit();
         errdefer self.deinitCachedBuffers();
 
@@ -1294,11 +1297,6 @@ pub const VulkanBackend = struct {
 
     // ── Backend interface ────────────────────────────────────────
 
-    /// Return this backend wrapped in the Backend tagged union for dispatch.
-    pub fn backend(self: *VulkanBackend) backend_mod.Backend {
-        return .{ .vulkan = self };
-    }
-
     /// y[n] = W[n,k] @ x[k]. Native GPU dispatch for supported dtypes.
     pub fn gemv(self: *VulkanBackend, x: [*]const f32, w: TensorData, y: [*]f32, n: usize, k: usize) void {
         const pipe = switch (w.dtype) {
@@ -1411,10 +1409,12 @@ pub const VulkanBackend = struct {
 
     /// Transposed GEMV for Q8_0 3D weights — not yet implemented.
     pub fn gemvT(_: *VulkanBackend, _: [*]const f32, _: [*]const u8, _: [*]f32, _: usize, _: usize) void {
-        @panic("gemvT not implemented for Vulkan");
+        @panic("Vulkan gemvT: no GPU shader — add a Vulkan compute shader");
     }
 
     /// Scaled accumulate: dst[i] += src[i] * scale.
+    /// CPU fallback — n_embd-sized, negligible vs GPU dispatch overhead.
+    /// Safe without flush: Vulkan dispatches are synchronous (fence-waited).
     pub fn addScaled(_: *VulkanBackend, src: [*]const f32, dst: [*]f32, scale: f32, n: usize) void {
         for (0..n) |i| dst[i] += src[i] * scale;
     }
@@ -1488,7 +1488,7 @@ pub const VulkanBackend = struct {
         // For f32 embeddings, we use the buffer cache to avoid re-uploading
         // the entire embedding table every token. We only know one row size (dim),
         // so estimate a reasonable table size for caching.
-        const table_sz = dim * @sizeOf(f32) * 65536; // Assume max 65k vocab
+        const table_sz = dim * @sizeOf(f32) * emb_max_vocab_size;
 
         // Get or upload cached buffer for embedding table
         const table_buf = self.getOrUpload(table.data, table_sz);
@@ -1611,6 +1611,7 @@ pub const VulkanBackend = struct {
         @panic("Vulkan MLX GEMV: no GPU shader — add a Vulkan compute shader");
     }
 
+    /// MXFP4 SafeTensors GEMV.
     pub fn gemvMxfp4St(_: *VulkanBackend, _: [*]const f32, _: [*]const u8, _: [*]const u8, _: [*]f32, _: usize, _: usize) void {
         @panic("Vulkan MXFP4 SafeTensors GEMV: no GPU shader — add a Vulkan compute shader");
     }
@@ -1677,11 +1678,8 @@ pub const VulkanBackend = struct {
         var mem_reqs: VkMemoryRequirements = undefined;
         self.vkGetBufferMemoryRequirements(self.device, buffer, &mem_reqs);
 
-        // Allocate HOST_VISIBLE | DEVICE_LOCAL memory (UMA-friendly)
-        const mem_type_index = self.findMemoryType(
-            mem_reqs.memoryTypeBits,
-            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
-        );
+        // Use the host-visible memory type selected at init (prefers DEVICE_LOCAL on UMA).
+        const mem_type_index = self.host_mem_type;
 
         const alloc_info = VkMemoryAllocateInfo{
             .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
@@ -1870,9 +1868,11 @@ test "VulkanBackend softmax" {
     // softmax([1,2,3,4]) ≈ [0.0321, 0.0871, 0.2369, 0.6439]
     var sum: f32 = 0;
     for (&data) |v| sum += v;
-    try std.testing.expectApproxEqAbs(@as(f32, 1.0), sum, 0.01);
-    try std.testing.expect(data[3] > data[2]);
-    try std.testing.expect(data[2] > data[1]);
+    try std.testing.expectApproxEqAbs(@as(f32, 1.0), sum, 1e-4);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.0321), data[0], 1e-3);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.0871), data[1], 1e-3);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.2369), data[2], 1e-3);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.6439), data[3], 1e-3);
 }
 
 test "VulkanBackend l2Norm" {
@@ -1885,8 +1885,8 @@ test "VulkanBackend l2Norm" {
     var data = [_]f32{ 3.0, 4.0, 0.0, 0.0 };
     vk_be.l2Norm(&data, 4, 1e-6);
     // L2 = 5, normalized: [0.6, 0.8, 0, 0]
-    try std.testing.expectApproxEqAbs(@as(f32, 0.6), data[0], 0.01);
-    try std.testing.expectApproxEqAbs(@as(f32, 0.8), data[1], 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.6), data[0], 1e-4);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.8), data[1], 1e-4);
 }
 
 test "VulkanBackend rope" {

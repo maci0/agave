@@ -61,24 +61,28 @@ pub fn sdpaHead(q: [*]const f32, keys: [*]const f32, values: [*]const f32, outpu
     // Softmax
     softmax(scores_buf[0..sl]);
 
-    // V accumulation
+    // V accumulation — position-outer, dimension-inner for cache locality.
+    // Each V row (hd floats) fits in L1; iterating dimensions sequentially
+    // avoids the kvd-stride cache thrashing of the dimension-outer layout.
     {
         var d: usize = 0;
         while (d + 8 <= hd) : (d += 8) {
-            var s: V8 = v8zero;
-            for (0..sl) |t| {
-                const sv: V8 = @splat(scores_buf[t]);
-                const vv: V8 = values[t * kvd + kvh * hd + d ..][0..8].*;
-                s += sv * vv;
-            }
-            output[q_base + d ..][0..8].* = s;
+            output[q_base + d ..][0..8].* = v8zero;
         }
-        while (d < hd) : (d += 1) {
-            var s: f32 = 0.0;
-            for (0..sl) |t| {
-                s += scores_buf[t] * values[t * kvd + kvh * hd + d];
+        while (d < hd) : (d += 1) output[q_base + d] = 0;
+
+        for (0..sl) |t| {
+            const v_base = t * kvd + kvh * hd;
+            const sv: V8 = @splat(scores_buf[t]);
+            d = 0;
+            while (d + 8 <= hd) : (d += 8) {
+                const vv: V8 = values[v_base + d ..][0..8].*;
+                const cur: V8 = output[q_base + d ..][0..8].*;
+                output[q_base + d ..][0..8].* = @mulAdd(V8, sv, vv, cur);
             }
-            output[q_base + d] = s;
+            while (d < hd) : (d += 1) {
+                output[q_base + d] += scores_buf[t] * values[v_base + d];
+            }
         }
     }
 }
@@ -268,5 +272,5 @@ test "sdpa quantized f16 roundtrip" {
     sdpaQuantHeads(&q, &keys_buf, &vals_buf, &output, 1, 1, hd, 1, 1.0, .f16);
 
     // Single position: output ≈ v_new (with f16 precision)
-    for (0..4) |i| try std.testing.expectApproxEqAbs(v_new[i], output[i], 0.01);
+    for (0..4) |i| try std.testing.expectApproxEqAbs(v_new[i], output[i], 1e-3);
 }

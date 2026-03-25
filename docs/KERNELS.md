@@ -24,6 +24,9 @@ This document tracks the implementation status of all compute kernels across bac
 | GELU | Native (SIMD) | Native | Native | Native | Native |
 | Add | Native (SIMD) | Native | Native | Native | Native |
 | Mul | Native (SIMD) | Native | Native | Native | Native |
+| Add+RmsNorm (fused) | Native (fused) | Native (fused) | Sequential⁴ | Sequential⁴ | Sequential⁴ |
+| Add Scaled | Native | Native | CPU perf | CPU perf | CPU perf |
+| GEMV Transposed (Q8_0) | Native | Native | Missing | Missing | Missing |
 | RoPE | Native (SIMD) | Native | Native | Native | Native |
 | Sigmoid Mul | Native | Native | Missing | Missing | Native |
 | Deinterleave | Native | Native | Missing | Missing | Native |
@@ -42,6 +45,8 @@ This document tracks the implementation status of all compute kernels across bac
 ¹ Single-row table read — CPU memcpy is faster than GPU dispatch + sync overhead.
 ² Metal FlashAttention-2 with block_size=16 (fits 32KB threadgroup memory). Online softmax, no blit encoders.
 ³ Vulkan conv1d does not support bias parameter — models with conv bias will panic.
+⁴ Sequential: dispatches separate `add` then `rmsNorm` (no fused GPU kernel yet).
+⁵ ROCm kernel file exists (`gemv_mlx_q4.zig`) but backend panics — not yet integrated.
 
 ## GEMV by Data Type
 
@@ -65,8 +70,8 @@ This document tracks the implementation status of all compute kernels across bac
 | fp8_e5m2 | Native | Native | Native | Native | Native |
 | nvfp4 (GGUF) | Native | Missing | Missing | Missing | Missing |
 | nvfp4_st (SafeTensors) | Native | Native | Missing | Missing | Missing |
-| mxfp4 | Native | Missing | Missing | Missing | Missing |
-| mlx_q4 | Native | Native (4-bit only) | Missing | Missing | Native |
+| mxfp4 | Native | Native | Missing | Missing | Missing |
+| mlx_q | Native | Native (4-bit + 8-bit) | Missing | Missing | Missing⁵ |
 
 ## Kernel File Locations
 
@@ -100,5 +105,5 @@ This document tracks the implementation status of all compute kernels across bac
 - GEMV: q4_1, q5_0, q2_k, q3_k, iq4_nl, iq4_xs, nvfp4_st, mxfp4
 
 **Metal** — near-complete:
-- GEMV: nvfp4 (GGUF), mxfp4
+- GEMV: nvfp4 (GGUF)
 - Paged SDPA

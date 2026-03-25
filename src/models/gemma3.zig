@@ -616,7 +616,7 @@ pub const Gemma3Model = struct {
         t = self.perf.start();
         self.be.gelu(self.ff_gate.ptr, self.ff_gate.ptr, ff);
         self.be.mul(self.ff_gate.ptr, self.ff_up.ptr, self.ff_gate.ptr, ff);
-        self.perf.end(.silu_mul, t);
+        self.perf.end(.gelu_mul, t);
 
         t = self.perf.start();
         self.doGemv(self.ff_gate.ptr, dw, self.hidden2.ptr, e, ff);
@@ -709,8 +709,8 @@ pub const Gemma3Model = struct {
                 base_name.len - ".weight".len
             else
                 base_name.len;
-            var sbuf: [256]u8 = undefined;
-            var bbuf: [256]u8 = undefined;
+            var sbuf: [model_mod.tensor_name_buf_size]u8 = undefined;
+            var bbuf: [model_mod.tensor_name_buf_size]u8 = undefined;
             const s_name = std.fmt.bufPrint(&sbuf, "{s}.scales", .{base_name[0..prefix_len]}) catch return;
             const b_name = std.fmt.bufPrint(&bbuf, "{s}.biases", .{base_name[0..prefix_len]}) catch return;
             const st = self.fmt.getTensor(s_name) orelse return;

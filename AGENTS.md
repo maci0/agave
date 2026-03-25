@@ -25,6 +25,7 @@ zig build test                                 # Run all tests
 ./zig-out/bin/agave model.gguf "prompt"        # Run inference
 ./zig-out/bin/agave model.gguf --serve         # HTTP server
 ./zig-out/bin/agave model.gguf --backend cpu   # Force CPU backend
+./zig-out/bin/agave model.gguf --prefill-batch-size 256  # Chunked prefill
 zig build -Denable-glm4=false                  # Disable a model at compile time
 ```
 
@@ -38,8 +39,9 @@ zig build -Denable-glm4=false                  # Disable a model at compile time
 - [src/ops/math.zig](src/ops/math.zig) - Shared math ops (GELU, softplus, sigmoid, argmax)
 - [src/chat_template.zig](src/chat_template.zig) - Chat prompt templates
 - [src/recipe.zig](src/recipe.zig) - Preset configurations per model/hardware combo
-- [Section 14: Implementation Quick Reference](#14-implementation-quick-reference) - File locations, model parameters, implementation gotchas
-- [DOCUMENTATION.md](docs/DOCUMENTATION.md) - Core concepts, algorithm details, mathematical formulations
+- [docs/KERNELS.md](docs/KERNELS.md) - Kernel file locations and implementation status per backend
+- [docs/MODELS.md](docs/MODELS.md) - Model parameters, per-model details
+- [docs/DOCUMENTATION.md](docs/DOCUMENTATION.md) - Tutorials, algorithm details
 
 ---
 
@@ -96,7 +98,7 @@ zig build -Denable-glm4=false                  # Disable a model at compile time
       - **Allocators**: `std.heap.FixedBufferAllocator` (pre-allocated scratch space for KV cache), `std.heap.ArenaAllocator` (per-request temporary allocations, bulk free), `std.heap.MemoryPool` (fixed-size object pooling)
       - **Buffering**: `std.io.BufferedReader`, `std.io.BufferedWriter` (batch small I/O to reduce syscalls), `std.io.FixedBufferStream` (zero-alloc in-memory I/O)
       - **CPU Affinity**: `std.Thread.setCpuAffinity` (pin inference threads to specific cores/NUMA nodes for cache locality)
-      - **Atomics**: `std.atomic.Ordering` (use `.Monotonic` or `.Acquire`/`.Release` instead of `.SeqCst` when full ordering isn't needed)
+      - **Atomics**: `std.atomic.Value(T)` with `std.builtin.AtomicOrder` (use `.monotonic` or `.acquire`/`.release` instead of `.seq_cst` when full ordering isn't needed)
       - **SIMD Detection**: `std.Target.Cpu.Feature` via `@import("builtin").cpu.features` (check for `avx2`, `avx512f`, `neon`, `sve`, `dotprod` at comptime)
       - **Hashing**: `std.hash.Wyhash` (fast non-cryptographic hash for cache key generation in RadixAttention), `std.hash.XxHash3` (high-quality alternative)
 * **Named Constants:** All tuning thresholds, magic numbers, and repeated literals must be extracted into named `const` declarations at module level. This makes the codebase self-documenting and enables future configurability. Examples:
@@ -107,7 +109,7 @@ zig build -Denable-glm4=false                  # Disable a model at compile time
 * **No CPU Fallbacks in GPU Backends:** GPU backends (Metal, CUDA, Vulkan, ROCm) must **never** silently fall back to CPU for unsupported operations. If a GPU kernel is missing, `@panic` with a clear message naming the missing kernel. The **only** exceptions are operations where CPU is provably faster than GPU dispatch overhead (e.g., single-row embedding lookup, tiny softmax below threshold). These must be documented with a comment explaining the performance justification. This policy prevents silent performance regressions where GPU backends unknowingly run CPU code in the hot path.
 * **Concurrency & Synchronization:**
     * Do not spawn unmanaged threads. All CPU-bound parallel execution must utilize a centralized thread pool passed down from the engine's root context.
-    * Avoid heavy mutex locks in the inference hot path. Prefer atomic operations (`@atomicLoad`, `@atomicStore`) and lock-free queues where cross-thread communication is strictly necessary.
+    * Avoid heavy mutex locks in the inference hot path. Prefer atomic operations (`std.atomic.Value(T)`) and lock-free queues where cross-thread communication is strictly necessary.
 
 ## 2. Memory Management & Safety
 * **Explicit Allocation:** Functions requiring memory **must** accept an `std.mem.Allocator` as an argument. Do not use global or hidden allocators.
@@ -185,16 +187,16 @@ The actual backend uses a tagged union with `inline else` dispatch — each back
 
 ```zig
 // src/backend/backend.zig (The Dispatcher)
-// Backend is a tagged union: union(Enum) { cpu, metal, vulkan, cuda, rocm }
+// Backend is a tagged union of pointers: union(enum) { cpu, metal, vulkan, cuda, rocm }
 // Dispatch happens via `inline else` — zero VTable overhead.
-pub const Backend = union(Enum) {
-    cpu: CpuBackend,
-    metal: MetalBackend,
+pub const Backend = union(enum) {
+    cpu: *CpuBackend,
+    metal: *MetalBackend,
     // ...
 
-    pub fn gemv(self: *Backend, x: [*]const f32, w: TensorData, y: [*]f32, n: usize, k: usize) void {
-        switch (self.*) {
-            inline else => |*be| be.gemv(x, w, y, n, k),
+    pub inline fn gemv(self: Backend, x: [*]const f32, w: TensorData, y: [*]f32, n: usize, k: usize) void {
+        switch (self) {
+            inline else => |be| be.gemv(x, w, y, n, k),
         }
     }
 };
@@ -212,48 +214,18 @@ be.gemv(x, weight, output, n, k);
 ```
 
 ## 5. Hardware Support & Cross-Compilation
-The engine supports a diverse target matrix. Code must be written to respect the `std.Target` passed by the build system. Do not hardcode host architecture assumptions.
+Code must respect `std.Target` — do not hardcode host architecture assumptions. Every change must maintain cross-compilation for all targets.
 
-**Hardware & Compute Backends:**
+* **Kernel targets**: NVIDIA = `nvptx64-cuda`, AMD = `amdgcn-amdhsa`, Vulkan = `spirv64-vulkan`. Do not use OpenCL or PAL variants.
+* **Feature Detection:** Use `@import("builtin")` to detect CPU/GPU capabilities at comptime.
+* **Kernel Compilation:** Compile to native IR (PTX, SPIR-V, AMDGCN) via the Zig build system.
 
-| Vendor | Host-Side Driver (`src/backend/`) | Device Target (Kernels) | Platform |
-| :--- | :--- | :--- | :--- |
-| **NVIDIA** | `cuda.zig` | `nvptx64-cuda` **(use this one)** | Linux/Windows |
-| **AMD** | `rocm.zig` | `amdgcn-amdhsa` **(use this one)** | Linux |
-| **Apple** | `metal.zig` | Native MSL / MPS | macOS/iOS |
-| **Universal** | `vulkan.zig` | `spirv64-vulkan` | Cross-platform |
-| **CPU** | `cpu.zig` | Host Arch (`x86_64`, `aarch64`) | All |
+For the full backend/platform matrix, see **[docs/KERNELS.md](docs/KERNELS.md)**.
 
-**Note on NVIDIA targets:**  
-`nvptx64-cuda` = CUDA runtime (correct for our driver API usage).  
-`nvptx64-nvcl` = NVIDIA OpenCL runtime (do **not** use unless adding an OpenCL backend).
-
-**Note on AMD targets:**  
-`amdgcn-amdhsa` = HSA/ROCm runtime (correct for our `rocm.zig` and HSA calls).  
-`amdgcn-amdpal` = AMD PAL runtime (graphics-focused, proprietary drivers).  
-`amdgcn-mesa3d` = Mesa 3D open-source runtime (RADV Vulkan / OpenCL — do **not** use unless adding a Mesa backend).
-
-**Cross-Compilation Matrix:**
-
-| OS | Architecture | Expected Backends |
-| :--- | :--- | :--- |
-| **Linux** | `x86_64`, `aarch64` | CUDA, ROCm, Vulkan, CPU |
-| **macOS** | `aarch64` (M-series) | Metal, CPU |
-
-* **Kernel Compilation:** Kernels should be compiled to their native IR (PTX, SPIR-V, AMDGCN) via the Zig build system (`zig build-obj` with appropriate cross-target) and loaded as blobs or compiled at runtime through the driver API.
-* **Vulkan/SPIR-V:** Implementations using Vulkan must target SPIR-V for shader kernels. Prefer Zig-native Vulkan wrappers.
-* **Feature Detection:** Use `@import("builtin")` to detect CPU/GPU capabilities (e.g., `avx2`, `neon`, `dotprod`, Blackwell NVFP4/MXFP4) and select the fastest math kernels at compile time.
-* **ROCm Specifics:** `rocm.zig` must correctly handle HIP Runtime API calls and memory dispatch.
-
-## 6. KV Cache Management & Attention Patterns
+## 6. KV Cache Management
 * All models must use a memory-bounded KV cache. Unbounded growth is strictly forbidden.
-* **KV Cache Strategies** (in increasing order of sophistication and production preference):
-  - Circular / fixed-size buffer (simple single-request baseline)
-  - **PagedAttention** with block tables (mandatory for good memory utilization and continuous batching)
-  - **RadixAttention** (radix tree / prefix trie structure) — **strongly recommended for production serving**. Enables automatic longest-common-prefix detection, sharing, insertion, lookup, and LRU eviction across multiple requests (SGLang-style).
-* KV cache management operations (tree traversal, eviction, reference counting) **must** occur at the request scheduler / batching layer — **never inside the per-token generation hot path**. This preserves zero allocations, zero locks, and zero syscalls during decoding.
-* The KV cache logic shall live in `src/kvcache/` and follow the dispatcher pattern (`src/kvcache/manager.zig`).
-* Provide a generic `src/ops/attention.zig` interface that individual backends can specialize via `comptime`. The attention kernel must support indirect block access (for both paged and radix layouts).
+* KV cache management operations **must** occur at the scheduler layer — **never inside the per-token generation hot path**.
+* The KV cache logic lives in `src/kvcache/` (see **[tutorial/05-memory-and-caching.md](docs/tutorial/05-memory-and-caching.md)** for PagedAttention and RadixAttention details).
 
 ## 7. Naming Conventions
 * Follow the official Zig Coding Conventions (Language Reference):
@@ -280,7 +252,7 @@ The engine supports a diverse target matrix. Code must be written to respect the
 * **Strict Boundaries:** Use `pub` only for the intended API surface. Keep internal state and hardware handles (like `CUcontext` or `hsa_queue_t`) private to their backend file.
 * **Zig-style Interfaces:** Use `comptime` duck-typing or VTable structs to provide clean abstractions without "leaky" implementation details.
 * **Re-usability:** Logic should be generic. A tokenizer that works for Gemma should be configurable for Qwen with minimal changes.
-* **Error Handling:** Use explicit Zig error sets (e.g., `error.DeviceOutOfMemory`, `error.KernelCompilationFailed`).
+* **Error Handling:** Use explicit Zig error sets (e.g., `error.OutOfMemory`, `error.BackendDisabled`, `error.OffsetOutOfBounds`).
 
 ## 10. Documentation
 * **Doc Comments:** Every public function and struct must have `///` comments explaining:
@@ -371,72 +343,19 @@ Cache Hit Rate: 73% (RadixAttention)
 * **Mandatory Porting Rule:** Every prototype **must** be manually re-implemented in native Zig + target IR before it can be merged into `src/`.
 * **Documentation:** If using prototypes, document the translation plan in `research/kernels/README.md`.
 
-## 14. Implementation Quick Reference
+## 14. Reference
 
-For algorithm explanations and mathematical formulations, see [DOCUMENTATION.md §2 — Concepts](docs/DOCUMENTATION.md#2-concepts). This section covers only implementation-specific details, gotchas, and file locations needed when modifying the code.
+For kernel file locations and implementation status across backends, see **[docs/KERNELS.md](docs/KERNELS.md)**.
+For model parameters (n_embd, n_heads, etc.), see **[docs/MODELS.md](docs/MODELS.md)**.
+For algorithm explanations, see **[docs/DOCUMENTATION.md](docs/DOCUMENTATION.md)** and the **[tutorials](docs/tutorial/)**.
 
-### File Locations
-
-| Component | CPU | Metal | Shared |
-| :--- | :--- | :--- | :--- |
-| RoPE | `src/backend/kernels/cpu/rope.zig` | `src/backend/kernels/metal/rope.metal` | — |
-| RMSNorm | `src/backend/kernels/cpu/norm.zig` | `src/backend/kernels/metal/norm.metal` | — |
-| L2Norm | `src/backend/kernels/cpu/norm.zig` | `src/backend/kernels/metal/norm.metal` | — |
-| SiLU | `src/backend/kernels/cpu/activation.zig` | `src/backend/kernels/metal/elementwise.metal` | — |
-| GELU | `src/backend/kernels/cpu/activation.zig` | `src/backend/kernels/metal/elementwise.metal` | `src/ops/math.zig` |
-| Softplus | — | — | `src/ops/math.zig` |
-| Sigmoid | — | — | `src/ops/math.zig` |
-| Embedding | `src/backend/kernels/cpu/embedding.zig` | CPU (faster than GPU dispatch for single row) | — |
-| Softmax | `src/backend/kernels/cpu/softmax.zig` | `src/backend/metal.zig` (3-pass GPU) | — |
-| Elementwise | `src/backend/kernels/cpu/elementwise.zig` | `src/backend/kernels/metal/elementwise.metal` | — |
-| DeltaNet | `src/backend/kernels/cpu/deltanet.zig` | `src/backend/kernels/metal/deltanet.metal` (4 GPU kernels) | — |
-| GEMV | `src/backend/kernels/cpu/gemv.zig` (dispatcher) | `src/backend/kernels/metal/gemv.metal` | — |
-| SDPA | `src/backend/kernels/cpu/sdpa.zig` | `src/backend/kernels/metal/sdpa.metal` (FlashAttention-2) | `src/ops/attention.zig` |
-| PagedSDPA | — | — | `src/ops/attention.zig` |
-| Causal Conv1d | — | — | `src/ops/ssm.zig` |
-| Mamba-2 Recurrence | — | — | `src/ops/ssm.zig` |
-| Group RMSNorm+Gate | — | — | `src/ops/ssm.zig` |
-| Final Logits | — | — | `src/ops/math.zig` |
-| KV Cache | — | — | `src/kvcache/manager.zig` |
-
-CUDA kernels under `src/backend/kernels/cuda/`, ROCm under `src/backend/kernels/rocm/`, Vulkan under `src/backend/kernels/vulkan/` — see those directories and `docs/KERNELS.md` for the full list.
-
-### Model Parameters
-
-| Model | n_embd | n_heads | n_kv_heads | head_dim | ff_dim | n_layers | theta | rope_dim |
-| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| Gemma3 1B | 1152 | 4 | 1 | 256 | 6912 | 26 | 1M | 256 |
-| Qwen3.5 0.8B | 1536 | 16 | 4 | 128 | 4096 | 64 | 10M | 64 |
-| GPT-OSS | 2880 | 64 | 8 | 64 | 2880 (MoE) | 24 | 150K | 128 |
-| Nemotron-H | 3136 | 40 | 8 | 128 | 12544 | 42 | 10K | 78 |
-| Nemotron-Nano | 2688 | 32 | 2 | 128 | 1856 (MoE) | 52 | 10K | 128 |
-| GLM-4 | 2048 | 20 | 20 (MLA) | 256 | 1536 (MoE) | 47 | 1M | 64 |
-
-### Implementation Gotchas
-
-**DeltaNet Q|K|V split order (Qwen3.5):** After conv1d, the output is split as `[Q | K | V]` (llama.cpp convention, not Mamba's V,K,Q). Offsets: `q_off=0`, `k_off=num_k_heads * head_k_dim`, `v_off=2 * num_k_heads * head_k_dim`. Getting this wrong produces garbage output.
-
-**GGUF +1.0 baked into norm weights (Gemma3):** QK norm weights in GGUF already have +1.0 added. Do not add it again in the normalization code.
-
-**Gemma3 embedding scaling:** After embedding lookup, multiply by `sqrt(n_embd)`. This is Gemma-specific — other models do not scale.
+### Gotchas That Affect How You Write Code
 
 **GPU sync before argmax:** Final logits are written by the GPU. CPU argmax must call `be.sync()` first. Missing this reads stale data on UMA platforms.
 
-**SDPA two paths:** `attention.zig` has a fast path (dispatches to `Backend.sdpa()` — GPU kernel on all backends) and a fallback path (inline CPU with SIMD). The fallback is used when sliding window or attention sinks are active.
+**No CPU fallbacks in GPU backends:** GPU backends must `@panic` on missing kernels — never silently delegate to CPU. Only exceptions: `embLookup` (single-row read, CPU faster) and `softmax` below threshold (Metal only).
 
-**Conv1d ring buffer is row-major:** `conv_state[(d_conv-1) × conv_ch]`. Rows shift left after each step. Current input appended at end. Zero allocation in hot path.
-
-**MoE expert selection is stack-allocated:** `max_active_experts` sets stack array size: 8 (GPT-OSS, Nemotron-Nano), 16 (Qwen3.5). Actual top-K per token: 4 (GPT-OSS), 6 (Nemotron-Nano). Uses O(K×N) scan, not a heap — keeps hot path allocation-free.
-
-**Clamped SwiGLU (GPT-OSS MoE):** Output is clamped to `[-7.0, +7.0]` to prevent overflow during mixed-precision expert computation.
-
-**Sigmoid routing (GLM4):** Uses `sigmoid(logit)` instead of softmax for expert gating. Each expert gate is independent — not competing.
-
-**Hybrid layer dispatch:** Layer types determined at init from GGUF metadata, dispatched in each model's `forward()` loop:
-- Qwen3.5: attention every `full_attn_interval` layers (default 4), DeltaNet for the rest
-- Nemotron-H: configured by `hybrid_override_pattern` string
-- Nemotron-Nano: 52-layer pattern `M`=SSM, `E`=MoE, `*`=attention
-- GPT-OSS: even layers = sliding window (128 tokens), odd = full attention
+**Build verification:** `zig build test` does NOT compile `agave-bench`. Always run `zig build` (full build) to catch signature mismatches in `src/micro_bench.zig` after changing model init or backend interfaces.
 
 **Zig 0.15.2 API Notes:**
 - `std.ArrayList(T).init(allocator)` removed → use `.empty`, pass allocator to `deinit(allocator)`, `append(allocator, val)`, `ensureTotalCapacity(allocator, n)`
@@ -445,13 +364,7 @@ CUDA kernels under `src/backend/kernels/cuda/`, ROCm under `src/backend/kernels/
 - `File.writer()` requires buffer arg → use `File.write(&buf)` for simple writes
 - `std.Thread.Futex` requires `std.atomic.Value(u32)`, not `u64`
 
-**Metal threadgroup memory limit:** Must stay ≤ 32KB. The `sdpa_fa2` kernel uses `block_size=16` (not 32) to fit. Calculate total: `q_local + kv_block + out_acc + scores + shared`. Pipeline creation fails silently without the error logging added in `makePipeline`.
-
-**No CPU fallbacks in GPU backends:** GPU backends (Metal, CUDA, Vulkan, ROCm) must `@panic` on missing kernels — never silently delegate to CPU. Only exceptions: `embLookup` (single-row read, CPU faster) and `softmax` below threshold (Metal only). See AGENTS.md Section 1.
-
-**Web UI:** Built-in chat UI at `/v1/chat`. Source files in `src/ui/` (style.css, app.js, head.html, body.html), assembled at comptime via `@embedFile` concatenation in `src/server/server.zig`.
-
-**Build verification:** `zig build test` does NOT compile `agave-bench`. Always run `zig build` (full build) to catch signature mismatches in `src/micro_bench.zig` after changing model init or backend interfaces.
+**Metal threadgroup memory limit:** Must stay ≤ 32KB. Calculate total: `q_local + kv_block + out_acc + scores + shared`. Pipeline creation fails silently without the error logging in `makePipeline`.
 
 ---
 
@@ -490,7 +403,7 @@ const thread = try std.Thread.spawn(.{}, workerFn, .{}); // WRONG!
 ```
 ✅ **Do**: Use the centralized thread pool
 ```zig
-try engine.thread_pool.spawn(workerFn, context);
+thread_pool.parallelFor(n_rows, grain, &ctx, workerFn);
 ```
 
 ### Quantization
@@ -508,14 +421,14 @@ be.gemv(input, .{ .data = q4_weights, .dtype = .q4_0 }, output, n, k); // Dequan
 ### Error Handling
 ❌ **Don't**: Swallow errors silently
 ```zig
-be.gemv(x, w, y, n, k) catch {}; // WRONG! Silent failure
+const kv = be.allocKvSlice(allocator, size) catch undefined; // WRONG! Silent failure
 ```
 ✅ **Do**: Propagate or handle explicitly
 ```zig
-try be.gemv(x, w, y, n, k); // Propagate to caller
+const kv = try be.allocKvSlice(allocator, size); // Propagate to caller
 // OR
-be.gemv(x, w, y, n, k) catch |err| {
-    std.log.err("GEMV failed: {}", .{err});
+const kv = be.allocKvSlice(allocator, size) catch |err| {
+    std.log.err("KV alloc failed: {}", .{err});
     return err;
 };
 ```
@@ -583,7 +496,7 @@ pub const YourBackend = struct {
     pub fn gemv(self: *YourBackend, x: [*]const f32, w: TensorData, y: [*]f32, n: usize, k: usize) void { }
     pub fn rmsNorm(self: *YourBackend, input: [*]const f32, weight: [*]const f32, output: [*]f32, n: usize, eps: f32) void { }
     pub fn rope(self: *YourBackend, x: [*]f32, pos: usize, n_heads: usize, head_dim: usize, rope_dim: usize, theta: f32) void { }
-    pub fn sdpa(self: *YourBackend, q: [*]const f32, keys: []f32, values: []f32, k_new: [*]const f32, v_new: [*]const f32, output: [*]f32, nh: usize, nkv: usize, hd: usize, seq_len: usize, scale: f32) void { }
+    pub fn sdpa(self: *YourBackend, q: [*]const f32, keys: []u8, values: []u8, k_new: [*]const f32, v_new: [*]const f32, output: [*]f32, nh: usize, nkv: usize, hd: usize, seq_len: usize, scale: f32, kv_type: KvQuantType) void { }
     pub fn sync(self: *YourBackend) void { }
     // ... see cpu.zig for remaining functions
 };
@@ -624,6 +537,7 @@ pub const YourModel = struct {
     n_embd: u32,
     n_head: u32,
     n_head_kv: u32,
+    logits_buf: []f32, // or `logits: []f32` — vtable checks both
 
     // Implementation fields:
     fmt: Format,
@@ -633,8 +547,10 @@ pub const YourModel = struct {
     pub fn init(allocator: Allocator, fmt: Format, be: Backend) !YourModel { }
     pub fn deinit(self: *YourModel) void { }
     pub fn forward(self: *YourModel, token_id: u32) ForwardError!u32 { }
+    pub fn prefill(self: *YourModel, token_ids: []const u32) ForwardError!u32 { }
     pub fn resetCache(self: *YourModel) void { }
     pub fn cancel(self: *YourModel) void { }
+    pub fn getBlockTable(self: *YourModel) []const u32 { }
 };
 ```
 
@@ -798,7 +714,7 @@ A high-performance LLM inference engine written in Zig, optimized for extreme cr
 - Max line length: no hard limit; clarity is preferred over wrapping
 - Use blank lines between logical sections (imports, constants, types, functions)
 - No external linter enforced; rely on `zig fmt` for auto-formatting
-- `zig build` runs `zig fmt` check on changed files
+- Run `zig fmt src/` manually to check formatting (not integrated into `zig build`)
 - Always specify types explicitly in function signatures (no inference at boundaries)
 - Use explicit type annotations for quantized data: `f32`, `f16`, `bf16`, `i8`, `u8`, etc.
 - Example: `pub fn bf16ToF32(val: u16) f32` — types clear at call site
@@ -807,7 +723,7 @@ A high-performance LLM inference engine written in Zig, optimized for extreme cr
 - Dispatcher pattern: high-level modules import the dispatcher (e.g., `@import("backend/backend.zig")`), never implementation directly
 - Re-exports used to avoid exposing internal types: `pub const DType = @import("../format/format.zig").DType;`
 ## Error Handling
-- Use explicit error sets: `error.DeviceOutOfMemory`, `error.OffsetOutOfBounds`, `error.FileTooSmall`
+- Use explicit error sets: `error.OutOfMemory`, `error.OffsetOutOfBounds`, `error.FileTooSmall`
 - Propagate errors up with `try`: `const val = try self.readU32(off);`
 - Use `catch` with logging for non-critical paths: `catch |err| { std.log.err("detail: {}", .{err}); return err; }`
 - Silent error swallowing (`catch {}`) is forbidden except in shutdown paths
@@ -965,7 +881,7 @@ A high-performance LLM inference engine written in Zig, optimized for extreme cr
 - Pattern: Operations that differ per-backend (e.g., GPU-accelerated) dispatch to backend; ops that are universal (e.g., CPU-only math) call shared helpers
 - Type: `struct { ptr: *anyopaque, vtable: *const VTable }`
 - Generated: Comptime vtable creation via `Model.from(ConcreteType, &instance)`
-- Interface: `forward(token_id) !u32`, `resetCache()`, `cancel()`, field accessors
+- Interface: `forward(token_id) !u32`, `prefill(token_ids) !u32`, `resetCache()`, `cancel()`, field accessors
 - Benefit: High-level code (`main.zig`, `server.zig`) works with any model type without generics
 - Type: `struct { ptr: *anyopaque, vtable: *const VTable }`
 - Methods: `getTensor(name)`, `getMetaStr/U32/F32(key)`, `getVocab()`, `getMerges()`
@@ -977,21 +893,11 @@ A high-performance LLM inference engine written in Zig, optimized for extreme cr
 - Paged: Block-based allocation per vLLM PagedAttention spec (multi-sequence, shared blocks)
 - Radix: Prefix tree for longest-common-prefix detection and copy-on-write sharing (SGLang-style)
 ## Entry Points
-- Location: `src/main.zig` `runRepl()`
-- Triggers: No prompt or server flag provided
-- Responsibilities:
-- Location: `src/main.zig` `generateAndPrint()`
-- Triggers: Prompt provided (CLI arg or piped stdin)
-- Responsibilities:
-- Location: `src/server/server.zig`
-- Triggers: `--serve` flag
-- Responsibilities:
-- Location: `src/main.zig` `initAndRun()`
-- Triggers: Called by all three entry points
-- Responsibilities:
+- `src/main.zig` `runRepl()` — interactive REPL (no prompt or server flag)
+- `src/main.zig` `generateAndPrint()` — one-shot generation (CLI arg or piped stdin)
+- `src/server/server.zig` — HTTP server (`--serve` flag)
+- `src/main.zig` `initAndRun()` — shared init (format, backend, model) called by all entry points
 ## Error Handling
-```zig
-```
 - Main catches all initialization errors, prints diagnostic, exits
 - Generation errors (forward fails) logged and generation aborts
 - Tokenizer errors (encode/decode fails) logged and prompt/output skipped

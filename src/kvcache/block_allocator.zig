@@ -44,16 +44,28 @@ pub const BlockAllocator = struct {
         return .{ .block_table = block_table, .seq_len = 0 };
     }
 
-    /// Append a new physical block to all layers of the sequence table.
-    /// Returns error.OutOfBlocks if no blocks available.
+    /// Append a new physical block to each layer of the sequence table.
+    /// Each layer gets its own independent block so layers don't overwrite
+    /// each other's KV cache data.
     pub fn appendBlock(self: *BlockAllocator, seq_table: *SeqBlockTable) !void {
-        const block_id = self.cache.allocBlock() orelse return error.OutOfBlocks;
-        errdefer self.cache.freeBlock(block_id);
+        var allocated: usize = 0;
+        errdefer {
+            // Roll back: free blocks already appended to earlier layers
+            for (seq_table.block_table[0..allocated]) |*layer_table| {
+                const bid = layer_table.*[layer_table.len - 1];
+                self.cache.freeBlock(bid);
+                if (layer_table.len > 1) {
+                    layer_table.* = self.allocator.realloc(layer_table.*, layer_table.len - 1) catch layer_table.*;
+                }
+            }
+        }
 
         for (seq_table.block_table) |*layer_table| {
+            const block_id = self.cache.allocBlock() orelse return error.OutOfBlocks;
             const new_table = try self.allocator.realloc(layer_table.*, layer_table.len + 1);
             new_table[new_table.len - 1] = block_id;
             layer_table.* = new_table;
+            allocated += 1;
         }
 
         seq_table.seq_len += self.cache.block_size;
@@ -63,9 +75,11 @@ pub const BlockAllocator = struct {
     pub fn freeSeqTable(self: *BlockAllocator, seq_table: *SeqBlockTable) void {
         if (seq_table.block_table.len == 0) return;
 
-        // Free physical blocks (only from first layer to avoid double-free)
-        for (seq_table.block_table[0]) |block_id| {
-            self.cache.freeBlock(block_id);
+        // Free physical blocks from ALL layers (each layer has its own blocks)
+        for (seq_table.block_table) |layer_table| {
+            for (layer_table) |block_id| {
+                self.cache.freeBlock(block_id);
+            }
         }
 
         // Free block_table arrays
@@ -111,15 +125,27 @@ pub const TieredBlockAllocator = struct {
         return .{ .block_table = block_table, .seq_len = 0 };
     }
 
-    /// Append a new physical block to all layers of the sequence table.
-    /// Returns error.OutOfBlocks if no blocks available.
+    /// Append a new physical block to each layer of the sequence table.
+    /// Each layer gets its own independent block.
     pub fn appendBlock(self: *TieredBlockAllocator, seq_table: *SeqBlockTable) !void {
-        const block_id = self.cache.allocBlock() catch return error.OutOfBlocks;
+        var allocated: usize = 0;
+        errdefer {
+            // Roll back: free blocks already appended to earlier layers
+            for (seq_table.block_table[0..allocated]) |*layer_table| {
+                const bid = layer_table.*[layer_table.len - 1];
+                self.cache.freeBlock(bid) catch {};
+                if (layer_table.len > 1) {
+                    layer_table.* = self.allocator.realloc(layer_table.*, layer_table.len - 1) catch layer_table.*;
+                }
+            }
+        }
 
         for (seq_table.block_table) |*layer_table| {
+            const block_id = self.cache.allocBlock() catch return error.OutOfBlocks;
             const new_table = try self.allocator.realloc(layer_table.*, layer_table.len + 1);
             new_table[new_table.len - 1] = block_id;
             layer_table.* = new_table;
+            allocated += 1;
         }
 
         seq_table.seq_len += self.cache.block_size;
@@ -129,9 +155,11 @@ pub const TieredBlockAllocator = struct {
     pub fn freeSeqTable(self: *TieredBlockAllocator, seq_table: *SeqBlockTable) void {
         if (seq_table.block_table.len == 0) return;
 
-        // Free physical blocks (only from first layer to avoid double-free)
-        for (seq_table.block_table[0]) |block_id| {
-            self.cache.freeBlock(block_id) catch {};
+        // Free physical blocks from ALL layers (each layer has its own blocks)
+        for (seq_table.block_table) |layer_table| {
+            for (layer_table) |block_id| {
+                self.cache.freeBlock(block_id) catch {};
+            }
         }
 
         // Free block_table arrays
@@ -174,13 +202,13 @@ test "appendBlock allocates and appends to all layers" {
 
     try block_alloc.appendBlock(&seq_table);
 
-    // Should have allocated one block from cache
-    try std.testing.expectEqual(initial_free - 1, paged.freeCount());
+    // Should have allocated one block PER LAYER from cache
+    try std.testing.expectEqual(initial_free - 2, paged.freeCount());
 
-    // Both layers should have the same block ID appended
+    // Both layers should have one block appended (different block IDs)
     try std.testing.expectEqual(@as(usize, 1), seq_table.block_table[0].len);
     try std.testing.expectEqual(@as(usize, 1), seq_table.block_table[1].len);
-    try std.testing.expectEqual(seq_table.block_table[0][0], seq_table.block_table[1][0]);
+    try std.testing.expect(seq_table.block_table[0][0] != seq_table.block_table[1][0]);
 
     // seq_len should be incremented by block_size
     try std.testing.expectEqual(@as(usize, 16), seq_table.seq_len);
@@ -206,8 +234,8 @@ test "freeSeqTable returns blocks to free list" {
     block_alloc.freeSeqTable(&seq_table);
     const free_after = paged.freeCount();
 
-    // Should have freed 2 blocks
-    try std.testing.expectEqual(free_before + 2, free_after);
+    // Should have freed 2 blocks per layer = 4 total (2 layers × 2 blocks)
+    try std.testing.expectEqual(free_before + 4, free_after);
 }
 
 test "getPhysicalBlock returns correct block ID" {
@@ -226,7 +254,7 @@ test "getPhysicalBlock returns correct block ID" {
     const block0 = BlockAllocator.getPhysicalBlock(&seq_table, 0, 0);
     const block1 = BlockAllocator.getPhysicalBlock(&seq_table, 0, 1);
 
-    // Both layers should have same block IDs
-    try std.testing.expectEqual(block0, BlockAllocator.getPhysicalBlock(&seq_table, 1, 0));
-    try std.testing.expectEqual(block1, BlockAllocator.getPhysicalBlock(&seq_table, 1, 1));
+    // Each layer should have DIFFERENT block IDs
+    try std.testing.expect(block0 != BlockAllocator.getPhysicalBlock(&seq_table, 1, 0));
+    try std.testing.expect(block1 != BlockAllocator.getPhysicalBlock(&seq_table, 1, 1));
 }

@@ -36,6 +36,11 @@ pub const GemvOp = struct {
     w: TensorData,
     y: [*]f32,
     n: usize,
+    /// Optional MLX companion pointers for quantized weights.
+    /// When non-null, the GEMV dispatches the MLX-Q kernel instead of standard dequant.
+    mlx_scales: ?[*]const u8 = null,
+    mlx_biases: ?[*]const u8 = null,
+    mlx_bits: u32 = 0,
 };
 
 /// Supported tensor data types — canonical definition in format/format.zig,
@@ -57,9 +62,13 @@ pub const DeltaNetParams = struct {
     head_v_dim: u32,
     q_scale: f32,
     rms_eps: f32,
+    /// True when conv_out split order is K,Q,V (HuggingFace/SafeTensors).
+    /// False (default) when split order is Q,K,V (GGUF/llama.cpp convention).
+    kqv_order: bool = false,
 };
 
-/// Backend startup information — filled by each backend during init.
+/// Backend and system startup information — partially filled by each backend
+/// during init, remainder populated by the caller (see "populated by main" fields).
 /// Displayed in the system info line after the model banner.
 pub const BackendInfo = struct {
     /// Backend display name (e.g., "Metal", "CUDA", "Vulkan", "ROCm", "CPU").
@@ -550,6 +559,23 @@ pub const Backend = union(enum) {
         }
     }
 
+    /// Split concatenated Q+gate per head into separate arrays (GPU kernel).
+    /// Input: [Q0..Q_{hd-1}, G0..G_{hd-1}] × nh heads. Output: q[nh*hd], g[nh*hd].
+    /// Metal: GPU kernel (no sync needed). Other backends: CPU memcpy fallback.
+    pub inline fn splitQGate(self: Backend, qg: [*]const f32, q_out: [*]f32, g_out: [*]f32, hd: usize, nh: usize) void {
+        switch (self) {
+            .metal => |be| be.splitQGate(qg, q_out, g_out, hd, nh),
+            inline else => {
+                for (0..nh) |h| {
+                    const src = h * hd * 2;
+                    const dst = h * hd;
+                    @memcpy(q_out[dst..][0..hd], qg[src..][0..hd]);
+                    @memcpy(g_out[dst..][0..hd], qg[src + hd ..][0..hd]);
+                }
+            },
+        }
+    }
+
     /// Fused SiLU activation + multiply: out[i] = silu(a[i]) * b[i].
     /// Used in SwiGLU FFN to replace separate silu + mul dispatches.
     pub inline fn siluMul(self: Backend, a: [*]const f32, b: [*]const f32, out: [*]f32, n: usize) void {
@@ -605,7 +631,7 @@ pub const Backend = union(enum) {
     /// On GPU backends, runs entirely on the GPU (no CPU sync needed).
     /// On CPU, runs the same computation inline.
     /// Parameters (in order): conv_in, conv_out, z_buf, alpha_buf, beta_buf,
-    /// output, conv_state, ssm_state, ssm_a, dt_bias, conv_w, ssm_norm_w, params.
+    /// output, conv_state, ssm_state, ssm_a, dt_bias, conv_w, ssm_norm_w, p.
     pub inline fn deltaNet(self: Backend, conv_in: [*]const f32, conv_out: [*]f32, z_buf: [*]const f32, alpha_buf: [*]const f32, beta_buf: [*]const f32, output: [*]f32, conv_state: [*]f32, ssm_state: []f32, ssm_a: [*]const f32, dt_bias: [*]const f32, conv_w: [*]const f32, ssm_norm_w: [*]const f32, p: DeltaNetParams) void {
         switch (self) {
             inline else => |be| be.deltaNet(conv_in, conv_out, z_buf, alpha_buf, beta_buf, output, conv_state, ssm_state, ssm_a, dt_bias, conv_w, ssm_norm_w, p),
