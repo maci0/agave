@@ -11,12 +11,18 @@
 comptime {
     // Elementwise
     _ = @import("silu.zig");
+    _ = @import("silu_mul.zig");
     _ = @import("gelu.zig");
     _ = @import("add.zig");
+    _ = @import("add_scaled.zig");
     _ = @import("mul.zig");
+    _ = @import("sigmoid_mul.zig");
+    _ = @import("gelu_mul.zig");
+    _ = @import("deinterleave.zig");
 
     // Normalization
     _ = @import("rms_norm.zig");
+    _ = @import("add_rms_norm.zig");
     _ = @import("softmax.zig");
     _ = @import("l2_norm.zig");
 
@@ -25,6 +31,7 @@ comptime {
 
     // Attention
     _ = @import("sdpa.zig");
+    _ = @import("sdpa_prefill.zig");
 
     // GEMV
     _ = @import("gemv_f32.zig");
@@ -32,11 +39,18 @@ comptime {
     _ = @import("gemv_f16.zig");
     _ = @import("gemv_q8_0.zig");
     _ = @import("gemv_q4_0.zig");
+    _ = @import("gemv_q4_1.zig");
     _ = @import("gemv_q4_k.zig");
     _ = @import("gemv_q5_k.zig");
     _ = @import("gemv_q6_k.zig");
     _ = @import("gemv_fp8_e4m3.zig");
     _ = @import("gemv_fp8_e5m2.zig");
+    _ = @import("gemv_t_q8_0.zig");
+    _ = @import("gemv_nvfp4_st.zig");
+    _ = @import("gemv_mlx_q4.zig");
+    _ = @import("gemv_mlx_q6.zig");
+    _ = @import("gemv_mlx_q8.zig");
+    _ = @import("gemv_mxfp4_st.zig");
 
     // Batched GEMV
     _ = @import("gemv_q4_0_batch.zig");

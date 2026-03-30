@@ -867,6 +867,83 @@ kernel void gemv_q5_k(
     if (tid == 0) y[tgid] = sum;
 }
 
+// ── MLX Q6 GEMV ─────────────────────────────────────────────
+// MLX affine 6-bit quantization: group_size=64, 12 u32 words per group.
+// 6-bit values can span across u32 word boundaries (32 / 6 = 5 remainder 2),
+// so extraction is scalar (cross-word reads needed for indices 5, 10, ...).
+// Dequant: float_val = scale * uint6_val + bias (per-group bf16 scale and bias).
+
+// Extract one 6-bit value from packed u32 array at element index idx.
+inline uint unpack_u6(device const packed_uchar4* base, uint idx) {
+    uint bp = idx * 6;
+    uint wi = bp / 32;
+    uint bo = bp % 32;
+
+    // Reconstruct u32 from packed_uchar4 (alignment-safe)
+    packed_uchar4 b0 = base[wi];
+    uint word0 = uint(b0[0]) | (uint(b0[1]) << 8) | (uint(b0[2]) << 16) | (uint(b0[3]) << 24);
+
+    if (bo <= 26) {
+        // Value fits in single word
+        return (word0 >> bo) & 0x3F;
+    }
+    // Value spans two words
+    packed_uchar4 b1 = base[wi + 1];
+    uint word1 = uint(b1[0]) | (uint(b1[1]) << 8) | (uint(b1[2]) << 16) | (uint(b1[3]) << 24);
+    uint lo = word0 >> bo;
+    uint hi = word1 << (32 - bo);
+    return (lo | hi) & 0x3F;
+}
+
+kernel void gemv_mlx_q6(
+    device const float* x              [[buffer(0)]],
+    device const packed_uchar4* W      [[buffer(1)]],
+    device const packed_uchar2* scales [[buffer(2)]],
+    device const packed_uchar2* biases [[buffer(3)]],
+    device float* y                    [[buffer(4)]],
+    constant uint& n                   [[buffer(5)]],
+    constant uint& k                   [[buffer(6)]],
+    uint tgid     [[threadgroup_position_in_grid]],
+    uint tid      [[thread_index_in_threadgroup]],
+    uint tg_size  [[threads_per_threadgroup]])
+{
+    if (tgid >= n) return;
+
+    const uint gs = 64;
+    const uint wpg = 12;  // u32 words per group (64 * 6 / 32 = 12)
+    uint gpr = (k + gs - 1) / gs;
+    uint w_row = tgid * gpr * wpg;
+    float sum = 0.0f;
+
+    for (uint g = tid; g < gpr; g += tg_size) {
+        // BF16 scale and bias
+        uint sb_idx = tgid * gpr + g;
+        packed_uchar2 sb = scales[sb_idx];
+        float scale = as_type<float>(uint(ushort(sb[0]) | (ushort(sb[1]) << 8)) << 16);
+        packed_uchar2 bb = biases[sb_idx];
+        float bias  = as_type<float>(uint(ushort(bb[0]) | (ushort(bb[1]) << 8)) << 16);
+
+        uint xo = g * gs;
+        device const packed_uchar4* wg = W + w_row + g * wpg;
+        uint elems = min(gs, k - xo);
+
+        float q_dot = 0.0f;
+        float x_sum = 0.0f;
+
+        for (uint i = 0; i < elems; i++) {
+            float q = float(unpack_u6(wg, i));
+            float xv = x[xo + i];
+            q_dot += q * xv;
+            x_sum += xv;
+        }
+        sum += scale * q_dot + bias * x_sum;
+    }
+
+    threadgroup float shared[8];
+    sum = threadgroup_reduce_sum(sum, shared, tid, tg_size);
+    if (tid == 0) y[tgid] = sum;
+}
+
 // ── MLX Q4 GEMV ─────────────────────────────────────────────
 // MLX affine 4-bit quantization: group_size=64, 8 u32 words per group.
 // Dequant: float_val = scale * uint4_val + bias (per-group bf16 scale and bias).

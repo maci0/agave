@@ -74,6 +74,7 @@ import shutil
 import subprocess
 import sys
 import time
+from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
@@ -377,6 +378,74 @@ def detect_available_backends() -> list[str]:
 
 
 # ---------------------------------------------------------------------------
+# Coherence checking
+# ---------------------------------------------------------------------------
+
+# Minimum output length to apply coherence checks (very short outputs skip them)
+COHERENCE_MIN_LEN = 8
+# Maximum fraction of output that can be a single repeated character
+COHERENCE_MAX_CHAR_REPEAT_RATIO = 0.8
+# Maximum fraction of output that can be a single repeated word
+COHERENCE_MAX_WORD_REPEAT_RATIO = 0.7
+# Minimum ratio of unique words to total words
+COHERENCE_MIN_UNIQUE_WORD_RATIO = 0.15
+# Known garbage patterns (substrings that indicate broken output)
+COHERENCE_GARBAGE_PATTERNS = ["<pad>"]
+
+
+def check_coherence(text: str) -> str:
+    """Check if output text is coherent. Returns empty string if OK, or a reason if not."""
+    text = text.strip()
+    if len(text) < COHERENCE_MIN_LEN:
+        return ""  # Too short to judge
+
+    # Check for known garbage patterns
+    for pat in COHERENCE_GARBAGE_PATTERNS:
+        count = text.count(pat)
+        if count >= 3:
+            return f"repeated garbage token '{pat}' ({count}x)"
+
+    # Check for single-character repetition (e.g. "!!!!!!")
+    char_counts = Counter(text.replace(" ", "").replace("\n", ""))
+    if char_counts:
+        most_common_char, most_common_count = char_counts.most_common(1)[0]
+        non_ws_len = sum(char_counts.values())
+        if non_ws_len > 0 and most_common_count / non_ws_len > COHERENCE_MAX_CHAR_REPEAT_RATIO:
+            return f"single character '{most_common_char}' repeated ({most_common_count}/{non_ws_len})"
+
+    # Check for word-level repetition (e.g. "I am an AI assistant" looping)
+    words = text.split()
+    if len(words) >= 6:
+        word_counts = Counter(words)
+        most_common_word, most_common_wcount = word_counts.most_common(1)[0]
+        # Exclude common English words from this check
+        common_words = {"the", "a", "an", "is", "of", "to", "and", "in", "for", "it", "i"}
+        if most_common_word.lower() not in common_words:
+            if most_common_wcount / len(words) > COHERENCE_MAX_WORD_REPEAT_RATIO:
+                return f"word '{most_common_word}' repeated ({most_common_wcount}/{len(words)} words)"
+
+        # Check unique word ratio (pathological loops have very low uniqueness)
+        unique_ratio = len(word_counts) / len(words)
+        if unique_ratio < COHERENCE_MIN_UNIQUE_WORD_RATIO and len(words) >= 10:
+            return f"low word diversity ({len(word_counts)}/{len(words)} unique, {unique_ratio:.0%})"
+
+        # Check for repeated phrases (n-gram repetition)
+        # Build 4-grams and check if any appears more than 3 times
+        if len(words) >= 16:
+            ngram_size = 4
+            ngrams: dict[str, int] = {}
+            for i in range(len(words) - ngram_size + 1):
+                ng = " ".join(words[i : i + ngram_size])
+                ngrams[ng] = ngrams.get(ng, 0) + 1
+            if ngrams:
+                top_ng, top_count = max(ngrams.items(), key=lambda kv: kv[1])
+                if top_count >= 3:
+                    return f"repeated phrase '{top_ng}' ({top_count}x)"
+
+    return ""
+
+
+# ---------------------------------------------------------------------------
 # Running agave
 # ---------------------------------------------------------------------------
 
@@ -486,17 +555,23 @@ def run_inference(
             try:
                 data = json.loads(stdout)
                 result.status = "pass"
-                result.output_text = data.get("output", "")
+                raw_output = data.get("output", "")
+                result.output_text = raw_output if isinstance(raw_output, str) else str(raw_output)
                 result.tokens_generated = data.get("tokens", 0)
                 result.tokens_per_sec = data.get("tok_per_sec", 0.0)
                 result.time_to_first_token_ms = data.get("prefill_ms", 0.0)
                 result.total_time_ms = data.get("gen_ms", 0.0)
                 result.load_time_ms = data.get("load_ms", 0.0)
 
-                # Basic correctness: output should be non-empty
+                # Basic correctness: output should be non-empty and coherent
                 if not result.output_text.strip():
                     result.status = "fail"
                     result.error_message = "Empty output text"
+                else:
+                    coherence = check_coherence(result.output_text)
+                    if coherence:
+                        result.status = "fail"
+                        result.error_message = f"Incoherent output: {coherence}"
 
             except json.JSONDecodeError:
                 # Fallback: try parsing human-readable output
@@ -1555,10 +1630,10 @@ def main() -> int:
         smoke_fail = sum(1 for s in smoke_results if s.status == "fail")
         if smoke_crash > 0 or smoke_fail > 0:
             console.print()
-            console.print(f"  [bold]Smoke: {smoke_pass}/{len(smoke_results)} pass", end="")
-            if smoke_crash: console.print(f", [bold red]{smoke_crash} CRASH[/]", end="")
-            if smoke_fail: console.print(f", [bold red]{smoke_fail} FAIL[/]", end="")
-            console.print("[/]")
+            parts = [f"[bold]Smoke: {smoke_pass}/{len(smoke_results)} pass[/bold]"]
+            if smoke_crash: parts.append(f"[bold red]{smoke_crash} CRASH[/]")
+            if smoke_fail: parts.append(f"[bold red]{smoke_fail} FAIL[/]")
+            console.print("  " + ", ".join(parts))
 
     # --- Synthetic benchmarks ---
     if do_bench:

@@ -30,6 +30,7 @@ const TensorInfo = format_mod.TensorInfo;
 const DType = format_mod.DType;
 const Model = model_mod.Model;
 const Allocator = std.mem.Allocator;
+const quant = @import("../ops/quant.zig");
 const kv_quant = @import("../ops/kv_quant.zig");
 const mlx_ops = @import("../ops/mlx.zig");
 const PagedKvCache = kvcache.PagedKvCache;
@@ -39,6 +40,10 @@ const SeqBlockTable = kvcache.SeqBlockTable;
 const max_active_experts: usize = 8;
 /// Maximum attention heads for stack-allocated sink bias array.
 const max_sink_heads: usize = 64;
+/// Maximum cached norm weight entries (≥ 3 norms/layer × 24 layers + 1 output norm).
+const max_norm_entries: usize = 128;
+/// Cached f32 norm weight entry, keyed by source data pointer.
+const NormCacheEntry = struct { key: usize, data: []f32 };
 
 /// Compute the byte stride between consecutive experts in a packed weight tensor.
 /// Handles both GGUF layout [inner, outer, n_experts] and SafeTensors MLX
@@ -150,6 +155,10 @@ pub const GptOssModel = struct {
     /// Set to true to abort a running `forward` call from another thread.
     cancelled: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
 
+    // ── Norm weight cache (BF16 → f32, converted once) ────────────
+    norm_cache: [max_norm_entries]NormCacheEntry = undefined,
+    norm_cache_len: usize = 0,
+
     // ── Lifecycle ─────────────────────────────────────────────────
 
     /// Initialize the model from format metadata and pre-allocate all buffers.
@@ -253,6 +262,8 @@ pub const GptOssModel = struct {
             self.block_allocator.freeSeqTable(&self.seq_table);
             self.paged_cache.deinit();
         }
+        // Free cached norm weight conversions
+        for (self.norm_cache[0..self.norm_cache_len]) |entry| self.allocator.free(entry.data);
         // Free working buffers
         const bufs = .{
             &self.hidden,     &self.hidden2,       &self.q_buf,
@@ -315,7 +326,7 @@ pub const GptOssModel = struct {
         const nw = self.fmt.getTensor("output_norm.weight") orelse return error.MissingTensor;
         const ow = self.fmt.getTensor("output.weight") orelse return error.MissingTensor;
         self.kv_seq_len += 1;
-        self.be.rmsNorm(self.hidden.ptr, normAsF32(nw, self.moe_out), self.hidden.ptr, self.n_embd, self.rms_eps);
+        self.be.rmsNorm(self.hidden.ptr, self.normAsF32(nw, self.n_embd), self.hidden.ptr, self.n_embd, self.rms_eps);
         self.be.sync();
         self.doGemv(self.hidden.ptr, ow, self.logits_buf.ptr, self.vocab_size, self.n_embd);
         self.be.sync();
@@ -480,7 +491,7 @@ pub const GptOssModel = struct {
 
         // 1. Pre-attention RMS norm: hidden2 = norm(hidden, attn_norm)
         const nw = self.fmt.layerTensor(li, "attn_norm.weight") orelse return error.MissingTensor;
-        self.be.rmsNorm(self.hidden.ptr, normAsF32(nw, self.moe_out), self.hidden2.ptr, e, self.rms_eps);
+        self.be.rmsNorm(self.hidden.ptr, self.normAsF32(nw, e), self.hidden2.ptr, e, self.rms_eps);
         // 2. QKV projections.
         const qw = self.fmt.layerTensor(li, "attn_q.weight") orelse return error.MissingTensor;
         const kw = self.fmt.layerTensor(li, "attn_k.weight") orelse return error.MissingTensor;
@@ -522,7 +533,7 @@ pub const GptOssModel = struct {
         const sinks: ?[*]const f32 = if (sinks_t) |st| blk: {
             if (st.dtype == .bf16) {
                 const bf16_ptr: [*]const u16 = @ptrCast(@alignCast(st.data_ptr));
-                for (0..nh) |i| sinks_f32[i] = @import("../ops/quant.zig").bf16ToF32(bf16_ptr[i]);
+                for (0..nh) |i| sinks_f32[i] = quant.bf16ToF32(bf16_ptr[i]);
                 break :blk &sinks_f32;
             }
             break :blk @ptrCast(@alignCast(st.data_ptr));
@@ -591,7 +602,7 @@ pub const GptOssModel = struct {
 
         // 8. Post-attention norm applied to the attention output.
         const pan = self.fmt.layerTensor(li, "post_attention_norm.weight") orelse return error.MissingTensor;
-        self.be.rmsNorm(self.hidden2.ptr, normAsF32(pan, self.moe_out), self.hidden2.ptr, e, self.rms_eps);
+        self.be.rmsNorm(self.hidden2.ptr, self.normAsF32(pan, e), self.hidden2.ptr, e, self.rms_eps);
 
         // 9. Residual: hidden += attn_out (post-normed).
         self.be.add(self.hidden.ptr, self.hidden2.ptr, self.hidden.ptr, e);
@@ -607,7 +618,7 @@ pub const GptOssModel = struct {
 
         // Optional pre-FFN norm (may be absent — model uses residual stream directly).
         if (self.fmt.layerTensor(li, "ffn_norm.weight")) |fnw| {
-            self.be.rmsNorm(self.hidden.ptr, normAsF32(fnw, self.moe_out), self.hidden2.ptr, e, self.rms_eps);
+            self.be.rmsNorm(self.hidden.ptr, self.normAsF32(fnw, e), self.hidden2.ptr, e, self.rms_eps);
         } else {
             @memcpy(self.hidden2[0..e], self.hidden[0..e]);
         }
@@ -710,6 +721,31 @@ pub const GptOssModel = struct {
         // 6. Residual: hidden += moe_out
         self.be.add(self.hidden.ptr, self.moe_out.ptr, self.hidden.ptr, e);
     }
+
+    /// Get norm weights as f32 pointer. Caches converted weights on first access
+    /// so subsequent tokens return a stable pointer with zero work and no GPU syncs.
+    fn normAsF32(self: *GptOssModel, t: TensorInfo, n: usize) [*]const f32 {
+        if (t.dtype != .bf16) return @ptrCast(@alignCast(t.data_ptr));
+
+        // Check cache (linear scan — at most ~73 entries, first-token only on miss)
+        const key = @intFromPtr(t.data_ptr);
+        for (self.norm_cache[0..self.norm_cache_len]) |entry| {
+            if (entry.key == key) return entry.data.ptr;
+        }
+
+        // Cache miss: allocate, convert, and store permanently
+        if (self.norm_cache_len >= max_norm_entries) {
+            // Cache full — fall back to raw pointer (BF16 read directly).
+            // This should not happen in practice (max ~73 entries needed).
+            return @ptrCast(@alignCast(t.data_ptr));
+        }
+        const buf = self.allocator.alloc(f32, n) catch return @ptrCast(@alignCast(t.data_ptr));
+        const src: [*]const u16 = @ptrCast(@alignCast(t.data_ptr));
+        for (0..n) |i| buf[i] = quant.bf16ToF32(src[i]);
+        self.norm_cache[self.norm_cache_len] = .{ .key = key, .data = buf };
+        self.norm_cache_len += 1;
+        return buf.ptr;
+    }
 };
 
 // ── Free functions ────────────────────────────────────────────────
@@ -724,22 +760,11 @@ inline fn addBias(dst: []f32, bias_bytes: [*]const u8, n: usize) void {
 fn addBiasTyped(dst: []f32, bias_bytes: [*]const u8, n: usize, dtype: format_mod.DType) void {
     if (dtype == .bf16) {
         const bias_bf16: [*]const u16 = @ptrCast(@alignCast(bias_bytes));
-        for (0..n) |i| dst[i] += @import("../ops/quant.zig").bf16ToF32(bias_bf16[i]);
+        for (0..n) |i| dst[i] += quant.bf16ToF32(bias_bf16[i]);
     } else {
         const bias: [*]const f32 = @ptrCast(@alignCast(bias_bytes));
         for (0..n) |i| dst[i] += bias[i];
     }
-}
-
-/// Get norm weight as f32 pointer. Dequants BF16 in-place into scratch if needed.
-fn normAsF32(t: TensorInfo, scratch: []f32) [*]const f32 {
-    if (t.dtype == .bf16) {
-        const n = @min(scratch.len, t.numElements());
-        const bf16: [*]const u16 = @ptrCast(@alignCast(t.data_ptr));
-        for (0..n) |i| scratch[i] = @import("../ops/quant.zig").bf16ToF32(bf16[i]);
-        return scratch.ptr;
-    }
-    return @ptrCast(@alignCast(t.data_ptr));
 }
 
 /// Infer MLX quantization bits from weight tensor dimensions.

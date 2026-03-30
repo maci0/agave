@@ -1,4 +1,6 @@
 //! KV cache quantization — store/load operations for compressed KV cache.
+//! Separate from src/ops/quant.zig which handles weight dequantization.
+//! KV cache formats are optimized for inference access patterns (loads during SDPA).
 //!
 //! Supported formats:
 //!   - f32:       Full precision (4 bytes/element, baseline)
@@ -23,6 +25,8 @@ const nvfp4_block: usize = 16;
 const nvfp4_bytes: usize = 9;
 /// Maximum representable INT8 value (scale normalization factor for Q8_0/INT8).
 const int8_max: f32 = 127.0;
+/// Minimum representable INT8 value (lower clamp bound for quantized values).
+const int8_min: f32 = -128.0;
 /// Maximum representable E2M1 value (scale normalization factor for NVFP4).
 const e2m1_max: f32 = 6.0;
 
@@ -141,7 +145,7 @@ fn storeQ8_0(dst: [*]u8, src: [*]const f32, n: usize) void {
         // Write quantized values
         for (0..count) |i| {
             const v = src[base + i] * inv_scale;
-            bp[2 + i] = @bitCast(@as(i8, @intFromFloat(std.math.clamp(std.math.round(v), -128, 127))));
+            bp[2 + i] = @bitCast(@as(i8, @intFromFloat(std.math.clamp(std.math.round(v), int8_min, int8_max))));
         }
         // Zero-pad remainder
         for (count..block_size) |i| bp[2 + i] = 0;
@@ -164,7 +168,7 @@ fn storeInt8(dst: [*]u8, src: [*]const f32, n: usize) void {
         // Write quantized values
         for (0..count) |i| {
             const v = src[base + i] * inv_scale;
-            bp[4 + i] = @bitCast(@as(i8, @intFromFloat(std.math.clamp(std.math.round(v), -128, 127))));
+            bp[4 + i] = @bitCast(@as(i8, @intFromFloat(std.math.clamp(std.math.round(v), int8_min, int8_max))));
         }
         for (count..block_size) |i| bp[4 + i] = 0;
     }
@@ -226,7 +230,7 @@ fn dotF32(q_vec: [*]const f32, kv_data: [*]const u8, n: usize) f32 {
     while (i + 8 <= n) : (i += 8) {
         const qv: V8 = q_vec[i..][0..8].*;
         const kv_v: V8 = kv[i..][0..8].*;
-        acc += qv * kv_v;
+        acc = @mulAdd(V8, qv, kv_v, acc);
     }
     var sum: f32 = @reduce(.Add, acc);
     while (i < n) : (i += 1) sum += q_vec[i] * kv[i];
@@ -245,7 +249,7 @@ fn dotF16(q_vec: [*]const f32, kv_data: [*]const u8, n: usize) f32 {
         inline for (0..8) |j| {
             kv_v[j] = @as(f32, @floatCast(@as(f16, @bitCast(kv[i + j]))));
         }
-        acc += qv * kv_v;
+        acc = @mulAdd(V8, qv, kv_v, acc);
     }
     var sum: f32 = @reduce(.Add, acc);
     while (i < n) : (i += 1) {
@@ -271,7 +275,7 @@ fn dotQ8_0(q_vec: [*]const f32, kv_data: [*]const u8, n: usize) f32 {
             inline for (0..8) |j| {
                 val_v[j] = @floatFromInt(@as(i8, @bitCast(bp[2 + i + j])));
             }
-            acc += qv * val_v;
+            acc = @mulAdd(V8, qv, val_v, acc);
         }
         var block_sum: f32 = @reduce(.Add, acc);
         while (i < count) : (i += 1) {
@@ -284,6 +288,7 @@ fn dotQ8_0(q_vec: [*]const f32, kv_data: [*]const u8, n: usize) f32 {
 }
 
 fn dotInt8(q_vec: [*]const f32, kv_data: [*]const u8, n: usize) f32 {
+    const V8 = @Vector(8, f32);
     const nb = (n + block_size - 1) / block_size;
     var sum: f32 = 0;
     for (0..nb) |b| {
@@ -291,8 +296,18 @@ fn dotInt8(q_vec: [*]const f32, kv_data: [*]const u8, n: usize) f32 {
         const scale: f32 = @as(*align(1) const f32, @ptrCast(bp)).*;
         const base = b * block_size;
         const count = @min(block_size, n - base);
-        var block_sum: f32 = 0;
-        for (0..count) |i| {
+        var acc: V8 = @splat(0.0);
+        var i: usize = 0;
+        while (i + 8 <= count) : (i += 8) {
+            const qv: V8 = q_vec[base + i ..][0..8].*;
+            var val_v: V8 = undefined;
+            inline for (0..8) |j| {
+                val_v[j] = @floatFromInt(@as(i8, @bitCast(bp[4 + i + j])));
+            }
+            acc = @mulAdd(V8, qv, val_v, acc);
+        }
+        var block_sum: f32 = @reduce(.Add, acc);
+        while (i < count) : (i += 1) {
             const val: f32 = @floatFromInt(@as(i8, @bitCast(bp[4 + i])));
             block_sum += q_vec[base + i] * val;
         }
@@ -350,9 +365,9 @@ fn mulAccF32(acc: [*]f32, weight: f32, kv_data: [*]const u8, n: usize) void {
     while (i + 8 <= n) : (i += 8) {
         const cur: V8 = acc[i..][0..8].*;
         const kv_v: V8 = kv[i..][0..8].*;
-        acc[i..][0..8].* = cur + wv * kv_v;
+        acc[i..][0..8].* = @mulAdd(V8, wv, kv_v, cur);
     }
-    while (i < n) : (i += 1) acc[i] += weight * kv[i];
+    while (i < n) : (i += 1) acc[i] = @mulAdd(f32, weight, kv[i], acc[i]);
 }
 
 fn mulAccF16(acc: [*]f32, weight: f32, kv_data: [*]const u8, n: usize) void {
@@ -366,10 +381,10 @@ fn mulAccF16(acc: [*]f32, weight: f32, kv_data: [*]const u8, n: usize) void {
         inline for (0..8) |j| {
             kv_v[j] = @as(f32, @floatCast(@as(f16, @bitCast(kv[i + j]))));
         }
-        acc[i..][0..8].* = cur + wv * kv_v;
+        acc[i..][0..8].* = @mulAdd(V8, wv, kv_v, cur);
     }
     while (i < n) : (i += 1) {
-        acc[i] += weight * @as(f32, @floatCast(@as(f16, @bitCast(kv[i]))));
+        acc[i] = @mulAdd(f32, weight, @as(f32, @floatCast(@as(f16, @bitCast(kv[i])))), acc[i]);
     }
 }
 
@@ -389,25 +404,36 @@ fn mulAccQ8_0(acc: [*]f32, weight: f32, kv_data: [*]const u8, n: usize) void {
             inline for (0..8) |j| {
                 val_v[j] = @floatFromInt(@as(i8, @bitCast(bp[2 + i + j])));
             }
-            acc[base + i ..][0..8].* = cur + ws_v * val_v;
+            acc[base + i ..][0..8].* = @mulAdd(V8, ws_v, val_v, cur);
         }
         const ws = weight * scale;
         while (i < count) : (i += 1) {
-            acc[base + i] += ws * @as(f32, @floatFromInt(@as(i8, @bitCast(bp[2 + i]))));
+            acc[base + i] = @mulAdd(f32, ws, @as(f32, @floatFromInt(@as(i8, @bitCast(bp[2 + i])))), acc[base + i]);
         }
     }
 }
 
 fn mulAccInt8(acc: [*]f32, weight: f32, kv_data: [*]const u8, n: usize) void {
+    const V8 = @Vector(8, f32);
     const nb = (n + block_size - 1) / block_size;
     for (0..nb) |b| {
         const bp = kv_data + b * int8_bytes;
         const scale: f32 = @as(*align(1) const f32, @ptrCast(bp)).*;
-        const ws = weight * scale;
+        const ws_v: V8 = @splat(weight * scale);
         const base = b * block_size;
         const count = @min(block_size, n - base);
-        for (0..count) |i| {
-            acc[base + i] += ws * @as(f32, @floatFromInt(@as(i8, @bitCast(bp[4 + i]))));
+        var i: usize = 0;
+        while (i + 8 <= count) : (i += 8) {
+            const cur: V8 = acc[base + i ..][0..8].*;
+            var val_v: V8 = undefined;
+            inline for (0..8) |j| {
+                val_v[j] = @floatFromInt(@as(i8, @bitCast(bp[4 + i + j])));
+            }
+            acc[base + i ..][0..8].* = @mulAdd(V8, ws_v, val_v, cur);
+        }
+        const ws = weight * scale;
+        while (i < count) : (i += 1) {
+            acc[base + i] = @mulAdd(f32, ws, @as(f32, @floatFromInt(@as(i8, @bitCast(bp[4 + i])))), acc[base + i]);
         }
     }
 }
@@ -528,7 +554,8 @@ test "f16 roundtrip" {
         const expected: f32 = @floatCast(@as(f16, @floatCast(src[i])));
         var dot_q = [1]f32{0};
         var dot_v = [1]f32{1.0};
-        _ = kvDot(&dot_v, buf[i * 2 ..].ptr, 1, .f16);
+        const dot_result = kvDot(&dot_v, buf[i * 2 ..].ptr, 1, .f16);
+        try std.testing.expectApproxEqAbs(expected, dot_result, 1e-6);
         // Verify via mulAccum
         kvMulAccum(&dot_q, 1.0, buf[i * 2 ..].ptr, 1, .f16);
         try std.testing.expectApproxEqAbs(expected, dot_q[0], 1e-6);
@@ -576,7 +603,7 @@ test "fp8_e4m3 roundtrip" {
     var q_unit = [_]f32{0} ** 8;
     q_unit[0] = 1.0;
     const dot = kvDot(&q_unit, &buf, 8, .fp8_e4m3);
-    try std.testing.expectApproxEqAbs(src[0], dot, 0.1);
+    try std.testing.expectApproxEqAbs(src[0], dot, 0.01);
 
     // Test mulAccum
     var acc = [_]f32{0} ** 8;
@@ -597,7 +624,7 @@ test "nvfp4 roundtrip" {
     var expected: f32 = 0;
     for (src) |v| expected += v;
     // All test values are exactly representable after E2M1 quantization + FP8 scale
-    try std.testing.expectApproxEqAbs(expected, dot, 0.1);
+    try std.testing.expectApproxEqAbs(expected, dot, 0.05);
 }
 
 test "kvByteOffset consistency" {

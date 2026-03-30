@@ -53,6 +53,10 @@ const block_size: u32 = 256;
 /// Shared memory for block reductions (8 warps × 4 bytes).
 const reduction_smem: u32 = 32;
 
+/// SDPA prefill shared memory layout constants (must match sdpa_prefill.zig).
+const prefill_kv_tile: u32 = 32;
+const prefill_reduce_slots: u32 = 8;
+
 /// Size of the buffer for retrieving the CUDA device name.
 const device_name_buf_size: usize = 256;
 
@@ -104,6 +108,11 @@ const CU_MEM_ATTACH_GLOBAL: c_uint = 1;
 const FnMemcpyHtoD = *const fn (CUdeviceptr, *const anyopaque, usize) callconv(.c) CUresult;
 const FnMemcpyDtoH = *const fn (*anyopaque, CUdeviceptr, usize) callconv(.c) CUresult;
 const FnMemcpyDtoD = *const fn (CUdeviceptr, CUdeviceptr, usize) callconv(.c) CUresult;
+const FnMemHostRegister = *const fn (*const anyopaque, usize, c_uint) callconv(.c) CUresult;
+const FnMemHostGetDevicePointer = *const fn (*CUdeviceptr, *const anyopaque, c_uint) callconv(.c) CUresult;
+const FnMemHostUnregister = *const fn (*const anyopaque) callconv(.c) CUresult;
+/// CU_MEMHOSTREGISTER_DEVICEMAP: maps host memory into device address space.
+const CU_MEMHOSTREGISTER_DEVICEMAP: c_uint = 0x02;
 const FnLaunchKernel = *const fn (
     CUfunction,
     c_uint,
@@ -137,6 +146,9 @@ pub const CudaBackend = struct {
     cuMemcpyHtoD: FnMemcpyHtoD = undefined,
     cuMemcpyDtoH: FnMemcpyDtoH = undefined,
     cuMemcpyDtoD: FnMemcpyDtoD = undefined,
+    cuMemHostRegister: ?FnMemHostRegister = null,
+    cuMemHostGetDevicePointer: ?FnMemHostGetDevicePointer = null,
+    cuMemHostUnregister: ?FnMemHostUnregister = null,
     cuMemAllocManaged: ?FnMemAllocManaged = null,
     cuLaunchKernel: FnLaunchKernel = undefined,
 
@@ -146,6 +158,7 @@ pub const CudaBackend = struct {
     fn_add: CUfunction = null,
     fn_mul: CUfunction = null,
     fn_rms_norm: CUfunction = null,
+    fn_add_rms_norm: CUfunction = null,
     fn_softmax: CUfunction = null,
     fn_l2_norm: CUfunction = null,
     fn_rope: CUfunction = null,
@@ -154,13 +167,26 @@ pub const CudaBackend = struct {
     fn_gemv_f16: CUfunction = null,
     fn_gemv_q8_0: CUfunction = null,
     fn_gemv_q4_0: CUfunction = null,
+    fn_gemv_q4_1: CUfunction = null,
     fn_gemv_q4_0_batch: CUfunction = null,
     fn_gemv_q4_k: CUfunction = null,
     fn_gemv_q5_k: CUfunction = null,
     fn_gemv_q6_k: CUfunction = null,
     fn_gemv_fp8_e4m3: CUfunction = null,
     fn_gemv_fp8_e5m2: CUfunction = null,
+    fn_silu_mul: CUfunction = null,
+    fn_add_scaled: CUfunction = null,
+    fn_sigmoid_mul: CUfunction = null,
+    fn_gelu_mul: CUfunction = null,
+    fn_deinterleave: CUfunction = null,
+    fn_gemv_t_q8_0: CUfunction = null,
+    fn_gemv_nvfp4_st: CUfunction = null,
+    fn_gemv_mlx_q4: CUfunction = null,
+    fn_gemv_mlx_q6: CUfunction = null,
+    fn_gemv_mlx_q8: CUfunction = null,
+    fn_gemv_mxfp4_st: CUfunction = null,
     fn_sdpa: CUfunction = null,
+    fn_sdpa_prefill: CUfunction = null,
     fn_gemm_q8_0: CUfunction = null,
     fn_rms_norm_batched: CUfunction = null,
     fn_rope_batched: CUfunction = null,
@@ -208,7 +234,7 @@ pub const CudaBackend = struct {
     kv_dev_cache: std.AutoHashMap(usize, KvDevCache) = undefined,
 
     /// Number of PTX kernels loaded at init.
-    pub const n_kernels: u32 = 20;
+    pub const n_kernels: u32 = 37;
 
     /// Library name loaded via dlopen at init.
     pub const lib_name = cuda_lib_name;
@@ -216,6 +242,9 @@ pub const CudaBackend = struct {
     const CachedBuf = struct {
         dptr: CUdeviceptr,
         size: usize,
+        /// True if this entry was registered via cuMemHostRegister (UMA).
+        /// Cleanup uses cuMemHostUnregister instead of cuMemFree.
+        is_registered: bool = false,
     };
 
     /// Device-side KV cache buffer, tracking how many positions have been uploaded.
@@ -279,6 +308,10 @@ pub const CudaBackend = struct {
         self.cuMemcpyHtoD = self.lookup(FnMemcpyHtoD, "cuMemcpyHtoD_v2") orelse return error.CudaNotAvailable;
         self.cuMemcpyDtoH = self.lookup(FnMemcpyDtoH, "cuMemcpyDtoH_v2") orelse return error.CudaNotAvailable;
         self.cuMemcpyDtoD = self.lookup(FnMemcpyDtoD, "cuMemcpyDtoD_v2") orelse return error.CudaNotAvailable;
+        // UMA zero-copy support (optional — only needed on integrated GPUs)
+        self.cuMemHostRegister = self.lookup(FnMemHostRegister, "cuMemHostRegister_v2");
+        self.cuMemHostGetDevicePointer = self.lookup(FnMemHostGetDevicePointer, "cuMemHostGetDevicePointer_v2");
+        self.cuMemHostUnregister = self.lookup(FnMemHostUnregister, "cuMemHostUnregister");
         self.cuLaunchKernel = self.lookup(FnLaunchKernel, "cuLaunchKernel") orelse return error.CudaNotAvailable;
 
         // Initialize CUDA
@@ -349,6 +382,7 @@ pub const CudaBackend = struct {
         self.fn_add = try self.getFunction("add_kernel");
         self.fn_mul = try self.getFunction("mul_kernel");
         self.fn_rms_norm = try self.getFunction("rms_norm_kernel");
+        self.fn_add_rms_norm = try self.getFunction("add_rms_norm_kernel");
         self.fn_softmax = try self.getFunction("softmax_kernel");
         self.fn_l2_norm = try self.getFunction("l2_norm_kernel");
         self.fn_rope = try self.getFunction("rope_kernel");
@@ -357,13 +391,26 @@ pub const CudaBackend = struct {
         self.fn_gemv_f16 = try self.getFunction("gemv_f16_kernel");
         self.fn_gemv_q8_0 = try self.getFunction("gemv_q8_0_kernel");
         self.fn_gemv_q4_0 = try self.getFunction("gemv_q4_0_kernel");
+        self.fn_gemv_q4_1 = try self.getFunction("gemv_q4_1_kernel");
         self.fn_gemv_q4_0_batch = try self.getFunction("gemv_q4_0_batch_kernel");
         self.fn_gemv_q4_k = try self.getFunction("gemv_q4_k_kernel");
         self.fn_gemv_q5_k = try self.getFunction("gemv_q5_k_kernel");
         self.fn_gemv_q6_k = try self.getFunction("gemv_q6_k_kernel");
         self.fn_gemv_fp8_e4m3 = try self.getFunction("gemv_fp8_e4m3_kernel");
         self.fn_gemv_fp8_e5m2 = try self.getFunction("gemv_fp8_e5m2_kernel");
+        self.fn_silu_mul = try self.getFunction("silu_mul_kernel");
+        self.fn_add_scaled = try self.getFunction("add_scaled_kernel");
+        self.fn_sigmoid_mul = try self.getFunction("sigmoid_mul_kernel");
+        self.fn_gelu_mul = try self.getFunction("gelu_mul_kernel");
+        self.fn_deinterleave = try self.getFunction("deinterleave_kernel");
+        self.fn_gemv_t_q8_0 = try self.getFunction("gemv_t_q8_0_kernel");
+        self.fn_gemv_nvfp4_st = try self.getFunction("gemv_nvfp4_st_kernel");
+        self.fn_gemv_mlx_q4 = try self.getFunction("gemv_mlx_q4_kernel");
+        self.fn_gemv_mlx_q6 = try self.getFunction("gemv_mlx_q6_kernel");
+        self.fn_gemv_mlx_q8 = try self.getFunction("gemv_mlx_q8_kernel");
+        self.fn_gemv_mxfp4_st = try self.getFunction("gemv_mxfp4_st_kernel");
         self.fn_sdpa = try self.getFunction("sdpa_kernel");
+        self.fn_sdpa_prefill = try self.getFunction("sdpa_prefill_kernel");
         self.fn_gemm_q8_0 = try self.getFunction("gemm_q8_0_kernel");
         self.fn_rms_norm_batched = try self.getFunction("rms_norm_batched_kernel");
         self.fn_rope_batched = try self.getFunction("rope_batched_kernel");
@@ -384,8 +431,14 @@ pub const CudaBackend = struct {
         self.kv_dev_cache.deinit();
 
         // Free all cached weight buffers
-        var wt_it = self.buf_cache.valueIterator();
-        while (wt_it.next()) |cached| _ = self.cuMemFree(cached.dptr);
+        var wt_it = self.buf_cache.iterator();
+        while (wt_it.next()) |entry| {
+            if (entry.value_ptr.is_registered) {
+                if (self.cuMemHostUnregister) |unreg| _ = unreg(@ptrFromInt(entry.key_ptr.*));
+            } else {
+                _ = self.cuMemFree(entry.value_ptr.dptr);
+            }
+        }
         self.buf_cache.deinit();
 
         if (self.module != null) _ = self.cuModuleUnload(self.module);
@@ -429,12 +482,38 @@ pub const CudaBackend = struct {
         const addr = @intFromPtr(ptr);
         if (self.buf_cache.get(addr)) |cached| {
             if (cached.size >= size) return cached.dptr;
-            if (!self.is_uma) _ = self.cuMemFree(cached.dptr);
+            // Size mismatch — evict old entry
+            if (cached.is_registered) {
+                if (self.cuMemHostUnregister) |unreg| _ = unreg(@ptrFromInt(addr));
+            } else {
+                _ = self.cuMemFree(cached.dptr);
+            }
             _ = self.buf_cache.remove(addr);
         }
 
-        const dptr = self.uploadToDevice(ptr, size);
-        self.buf_cache.put(addr, .{ .dptr = dptr, .size = size }) catch |err| {
+        if (self.is_uma) {
+            if (self.cuMemHostRegister) |reg| {
+                if (self.cuMemHostGetDevicePointer) |getDevPtr| {
+                    // Pin host mmap'd memory for GPU access — zero copy.
+                    // cuMemHostRegister requires page-aligned pointers (mmap'd weights are page-aligned).
+                    std.debug.assert(std.mem.isAligned(@intFromPtr(ptr), std.heap.page_size_min));
+                    if (reg(@ptrCast(ptr), size, CU_MEMHOSTREGISTER_DEVICEMAP) == CUDA_SUCCESS) {
+                        var dptr: CUdeviceptr = 0;
+                        if (getDevPtr(&dptr, @ptrCast(ptr), 0) == CUDA_SUCCESS) {
+                            self.buf_cache.put(addr, .{ .dptr = dptr, .size = size, .is_registered = true }) catch |err| {
+                                std.log.warn("cache put failed: {}", .{err});
+                            };
+                            return dptr;
+                        }
+                    }
+                    // Registration failed — fall through to upload path
+                    std.log.warn("UMA cuMemHostRegister failed for {x}, falling back to upload", .{addr});
+                }
+            }
+        }
+
+        const dptr = self.uploadToDevice(@ptrCast(ptr), size);
+        self.buf_cache.put(addr, .{ .dptr = dptr, .size = size, .is_registered = false }) catch |err| {
             std.log.warn("cache put failed: {}", .{err});
         };
         return dptr;
@@ -590,6 +669,7 @@ pub const CudaBackend = struct {
             .f16 => self.fn_gemv_f16,
             .q8_0 => self.fn_gemv_q8_0,
             .q4_0 => self.fn_gemv_q4_0,
+            .q4_1 => self.fn_gemv_q4_1,
             .q4_k => self.fn_gemv_q4_k,
             .q5_k => self.fn_gemv_q5_k,
             .q6_k => self.fn_gemv_q6_k,
@@ -614,20 +694,48 @@ pub const CudaBackend = struct {
         self.launch(func, @intCast(n), block_size, reduction_smem, &params);
     }
 
-    /// In-place sigmoid-gated multiply.
-    pub fn sigmoidMul(_: *CudaBackend, _: [*]f32, _: [*]const f32, _: usize) void {
-        @panic("CUDA sigmoidMul: no GPU kernel — add a CUDA kernel");
+    /// In-place sigmoid-gated multiply: data[i] *= sigmoid(gate[i]).
+    pub fn sigmoidMul(self: *CudaBackend, data: [*]f32, gate: [*]const f32, n: usize) void {
+        const sz = n * @sizeOf(f32);
+        var d_data = self.getInPlaceBuf(data, sz);
+        var d_gate = self.getInputBuf(gate, sz);
+
+        var n_u32: u32 = @intCast(n);
+        var params = [_]?*anyopaque{ @ptrCast(&d_data), @ptrCast(&d_gate), @ptrCast(&n_u32) };
+        const grid: u32 = @intCast((n + block_size - 1) / block_size);
+        self.launch(self.fn_sigmoid_mul, grid, block_size, 0, &params);
     }
 
-    /// Fused SiLU + multiply.
-    pub fn siluMul(_: *CudaBackend, _: [*]const f32, _: [*]const f32, _: [*]f32, _: usize) void {
-        @panic("CUDA siluMul: no GPU kernel — add a CUDA kernel");
+    /// Fused SiLU + multiply: out[i] = silu(a[i]) * b[i].
+    pub fn siluMul(self: *CudaBackend, a: [*]const f32, b: [*]const f32, out: [*]f32, n: usize) void {
+        const sz = n * @sizeOf(f32);
+        var d_a = self.getInputBuf(a, sz);
+        var d_b = self.getInputBuf(b, sz);
+        var d_out = self.getOutputBuf(out, sz);
+
+        var n_u32: u32 = @intCast(n);
+        var params = [_]?*anyopaque{ @ptrCast(&d_a), @ptrCast(&d_b), @ptrCast(&d_out), @ptrCast(&n_u32) };
+        const grid: u32 = @intCast((n + block_size - 1) / block_size);
+        self.launch(self.fn_silu_mul, grid, block_size, 0, &params);
+    }
+
+    /// Fused GELU + multiply: out[i] = gelu(a[i]) * b[i].
+    pub fn geluMul(self: *CudaBackend, a: [*]const f32, b: [*]const f32, out: [*]f32, n: usize) void {
+        const sz = n * @sizeOf(f32);
+        var d_a = self.getInputBuf(a, sz);
+        var d_b = self.getInputBuf(b, sz);
+        var d_out = self.getOutputBuf(out, sz);
+
+        var n_u32: u32 = @intCast(n);
+        var params = [_]?*anyopaque{ @ptrCast(&d_a), @ptrCast(&d_b), @ptrCast(&d_out), @ptrCast(&n_u32) };
+        const grid: u32 = @intCast((n + block_size - 1) / block_size);
+        self.launch(self.fn_gelu_mul, grid, block_size, 0, &params);
     }
 
     /// In-place per-head rmsNorm: n_heads independent heads, each head_dim elements.
     /// Reuses the batched rmsNorm kernel (one block per head, shared weight).
     pub fn rmsNormMulti(self: *CudaBackend, data: [*]f32, weight: [*]const f32, n_heads: usize, head_dim: usize, eps: f32) void {
-        var d_data = self.getOutputBuf(data, n_heads * head_dim * @sizeOf(f32));
+        var d_data = self.getInPlaceBuf(data, n_heads * head_dim * @sizeOf(f32));
         var d_w = self.getInputBuf(weight, head_dim * @sizeOf(f32));
         // in-place: input == output
         var n_tok_u: u32 = @intCast(n_heads);
@@ -641,15 +749,27 @@ pub const CudaBackend = struct {
     }
 
     /// Deinterleave paired data into two separate output buffers.
-    pub fn deinterleave(_: *CudaBackend, _: [*]const f32, _: [*]f32, _: [*]f32, _: usize, _: usize) void {
-        @panic("CUDA deinterleave: no GPU kernel — add a CUDA kernel");
+    pub fn deinterleave(self: *CudaBackend, input: [*]const f32, out_a: [*]f32, out_b: [*]f32, stride: usize, n_pairs: usize) void {
+        const total = n_pairs * stride;
+        var d_in = self.getInputBuf(input, total * 2 * @sizeOf(f32));
+        var d_a = self.getOutputBuf(out_a, total * @sizeOf(f32));
+        var d_b = self.getOutputBuf(out_b, total * @sizeOf(f32));
+
+        var stride_u32: u32 = @intCast(stride);
+        var n_pairs_u32: u32 = @intCast(n_pairs);
+        var params = [_]?*anyopaque{
+            @ptrCast(&d_in), @ptrCast(&d_a), @ptrCast(&d_b),
+            @ptrCast(&stride_u32), @ptrCast(&n_pairs_u32),
+        };
+        const grid: u32 = @intCast((total + block_size - 1) / block_size);
+        self.launch(self.fn_deinterleave, grid, block_size, 0, &params);
     }
 
     /// Batched GEMV: fuse multiple GEMV ops sharing the same input into a single
-    /// kernel launch. On Q4_0 with 2-3 ops, uses the dedicated batch kernel.
+    /// kernel launch. On Q4_0 with 2-4 ops, uses the dedicated batch kernel.
     /// Otherwise falls back to sequential gemv calls.
     pub fn gemvMulti(self: *CudaBackend, x: [*]const f32, ops: []const backend_mod.GemvOp, k: usize) void {
-        if (ops.len >= 2 and ops.len <= 3) {
+        if (ops.len >= 2 and ops.len <= 4) {
             // Check if all ops share the same dtype and we have a batch kernel
             const dtype = ops[0].w.dtype;
             var all_same = true;
@@ -668,7 +788,7 @@ pub const CudaBackend = struct {
         for (ops) |op| self.gemv(x, op.w, op.y, op.n, k);
     }
 
-    /// Launch the fused Q4_0 batched GEMV kernel for 2-3 ops.
+    /// Launch the fused Q4_0 batched GEMV kernel for 2-4 ops.
     fn launchBatchedGemvQ4_0(self: *CudaBackend, x: [*]const f32, ops: []const backend_mod.GemvOp, k: usize) void {
         var d_x = self.getInputBuf(x, k * @sizeOf(f32));
 
@@ -682,7 +802,7 @@ pub const CudaBackend = struct {
         var d_y1 = self.getOutputBuf(ops[1].y, ops[1].n * @sizeOf(f32));
         var n1: u32 = @intCast(ops[1].n);
 
-        // Op 2 (present for len == 3, else dummy with n2=0)
+        // Op 2 (present for len >= 3, else dummy with n2=0)
         var d_w2: CUdeviceptr = d_w0;
         var d_y2: CUdeviceptr = d_y0;
         var n2: u32 = 0;
@@ -692,22 +812,27 @@ pub const CudaBackend = struct {
             n2 = @intCast(ops[2].n);
         }
 
+        // Op 3 (present for len >= 4, else dummy with n3=0)
+        var d_w3: CUdeviceptr = d_w0;
+        var d_y3: CUdeviceptr = d_y0;
+        var n3: u32 = 0;
+        if (ops.len >= 4) {
+            d_w3 = self.getOrUpload(ops[3].w.data, weightBytes(.q4_0, ops[3].n, k));
+            d_y3 = self.getOutputBuf(ops[3].y, ops[3].n * @sizeOf(f32));
+            n3 = @intCast(ops[3].n);
+        }
+
         var k_u32: u32 = @intCast(k);
         var params = [_]?*anyopaque{
             @ptrCast(&d_x),
-            @ptrCast(&d_w0),
-            @ptrCast(&d_y0),
-            @ptrCast(&n0),
-            @ptrCast(&d_w1),
-            @ptrCast(&d_y1),
-            @ptrCast(&n1),
-            @ptrCast(&d_w2),
-            @ptrCast(&d_y2),
-            @ptrCast(&n2),
+            @ptrCast(&d_w0), @ptrCast(&d_y0), @ptrCast(&n0),
+            @ptrCast(&d_w1), @ptrCast(&d_y1), @ptrCast(&n1),
+            @ptrCast(&d_w2), @ptrCast(&d_y2), @ptrCast(&n2),
+            @ptrCast(&d_w3), @ptrCast(&d_y3), @ptrCast(&n3),
             @ptrCast(&k_u32),
         };
 
-        const grid = n0 + n1 + n2;
+        const grid = n0 + n1 + n2 + n3;
         self.launch(self.fn_gemv_q4_0_batch, grid, block_size, reduction_smem, &params);
     }
 
@@ -715,7 +840,13 @@ pub const CudaBackend = struct {
     pub fn rmsNorm(self: *CudaBackend, input: [*]const f32, weight: [*]const f32, output: [*]f32, n: usize, eps: f32) void {
         const sz = n * @sizeOf(f32);
         var d_in = self.getInputBuf(input, sz);
-        var d_w = self.getOrUpload(@ptrCast(weight), sz);
+        // Force re-upload of weight — models may reuse the same buffer for different
+        // per-layer norm weights (e.g. Nemotron bf16_buf_small written by CPU each layer).
+        // Mark stale so getInputBuf re-uploads to the existing device buffer (no realloc).
+        if (self.act_cache.getPtr(@intFromPtr(weight))) |act| {
+            act.state = .stale;
+        }
+        var d_w = self.getInputBuf(weight, sz);
         var d_out = self.getOutputBuf(output, sz);
 
         var n_u32: u32 = @intCast(n);
@@ -767,23 +898,59 @@ pub const CudaBackend = struct {
         self.launch(self.fn_add, grid, block_size, 0, &params);
     }
 
-    /// Fused add + rmsNorm (sequential fallback — no fused CUDA kernel yet).
+    /// Fused add + rmsNorm: a[i] += b[i], output = rmsNorm(a, weight, eps).
     pub fn addRmsNorm(self: *CudaBackend, a: [*]f32, b: [*]const f32, weight: [*]const f32, output: [*]f32, n: usize, eps: f32) void {
-        self.add(a, b, a, n);
-        self.rmsNorm(a, weight, output, n, eps);
+        const sz = n * @sizeOf(f32);
+        var d_a = self.getInPlaceBuf(a, sz);
+        var d_b = self.getInputBuf(b, sz);
+        // Force re-upload of weight — models may reuse the same buffer for different
+        // per-layer norm weights. Mark stale so getInputBuf re-uploads (no realloc).
+        if (self.act_cache.getPtr(@intFromPtr(weight))) |act| {
+            act.state = .stale;
+        }
+        var d_w = self.getInputBuf(weight, sz);
+        var d_out = self.getOutputBuf(output, sz);
+
+        var n_u32: u32 = @intCast(n);
+        var eps_f32: f32 = eps;
+        var params = [_]?*anyopaque{
+            @ptrCast(&d_a), @ptrCast(&d_b), @ptrCast(&d_w),
+            @ptrCast(&d_out), @ptrCast(&n_u32), @ptrCast(&eps_f32),
+        };
+        self.launch(self.fn_add_rms_norm, 1, block_size, reduction_smem, &params);
     }
 
-    /// Transposed GEMV for Q8_0 3D weights — not yet implemented.
-    pub fn gemvT(_: *CudaBackend, _: [*]const f32, _: [*]const u8, _: [*]f32, _: usize, _: usize) void {
-        @panic("CUDA gemvT: no GPU kernel — add a CUDA kernel");
+    /// Transposed GEMV: y[out_dim] = W^T @ x[in_dim] for Q8_0 3D weights.
+    pub fn gemvT(self: *CudaBackend, x: [*]const f32, w: [*]const u8, y: [*]f32, out_dim: usize, in_dim: usize) void {
+        const quant = @import("../ops/quant.zig");
+        const w_bytes = (out_dim * in_dim / quant.quant_block_elems) * quant.q8_0_block_bytes;
+        var d_x = self.getInputBuf(x, in_dim * @sizeOf(f32));
+        var d_w = self.getOrUpload(w, w_bytes);
+        var d_y = self.getOutputBuf(y, out_dim * @sizeOf(f32));
+
+        var out_u32: u32 = @intCast(out_dim);
+        var in_u32: u32 = @intCast(in_dim);
+        var params = [_]?*anyopaque{
+            @ptrCast(&d_x), @ptrCast(&d_w), @ptrCast(&d_y),
+            @ptrCast(&out_u32), @ptrCast(&in_u32),
+        };
+        self.launch(self.fn_gemv_t_q8_0, @intCast(out_dim), block_size, reduction_smem, &params);
     }
 
     /// Scaled accumulate: dst[i] += src[i] * scale.
-    /// CPU fallback — n_embd-sized, negligible vs GEMV dispatch overhead.
     pub fn addScaled(self: *CudaBackend, src: [*]const f32, dst: [*]f32, scale: f32, n: usize) void {
-        self.flushActivations();
-        for (0..n) |i| dst[i] += src[i] * scale;
-        self.invalidateAct(dst);
+        const sz = n * @sizeOf(f32);
+        var d_src = self.getInputBuf(src, sz);
+        var d_dst = self.getInPlaceBuf(dst, sz);
+
+        var scale_f32: f32 = scale;
+        var n_u32: u32 = @intCast(n);
+        var params = [_]?*anyopaque{
+            @ptrCast(&d_src), @ptrCast(&d_dst),
+            @ptrCast(&scale_f32), @ptrCast(&n_u32),
+        };
+        const grid: u32 = @intCast((n + block_size - 1) / block_size);
+        self.launch(self.fn_add_scaled, grid, block_size, 0, &params);
     }
 
     /// Element-wise mul
@@ -843,19 +1010,70 @@ pub const CudaBackend = struct {
         self.launch(self.fn_l2_norm, 1, block_size, reduction_smem, &params);
     }
 
-    /// NVFP4 SafeTensors GEMV.
-    pub fn gemvNvfp4St(_: *CudaBackend, _: [*]const f32, _: [*]const u8, _: [*]const u8, _: [*]f32, _: usize, _: usize) void {
-        @panic("CUDA NVFP4 SafeTensors GEMV: no GPU kernel — add a CUDA kernel");
+    /// NVFP4 SafeTensors GEMV: packed nibbles + FP8 E4M3 scales, group_size=16.
+    pub fn gemvNvfp4St(self: *CudaBackend, x: [*]const f32, weight: [*]const u8, scale: [*]const u8, y: [*]f32, n: usize, k: usize) void {
+        var d_x = self.getInputBuf(x, k * @sizeOf(f32));
+        var d_w = self.getOrUpload(weight, n * (k / 2));
+        var d_s = self.getOrUpload(scale, n * (k / 16));
+        var d_y = self.getOutputBuf(y, n * @sizeOf(f32));
+
+        var n_u32: u32 = @intCast(n);
+        var k_u32: u32 = @intCast(k);
+        var params = [_]?*anyopaque{
+            @ptrCast(&d_x), @ptrCast(&d_w), @ptrCast(&d_s),
+            @ptrCast(&d_y), @ptrCast(&n_u32), @ptrCast(&k_u32),
+        };
+        self.launch(self.fn_gemv_nvfp4_st, @intCast(n), block_size, reduction_smem, &params);
     }
 
-    /// MLX affine quantized GEMV.
-    pub fn gemvMlxQ(_: *CudaBackend, _: [*]const f32, _: [*]const u8, _: [*]const u8, _: [*]const u8, _: [*]f32, _: usize, _: usize, _: u32) void {
-        @panic("CUDA MLX GEMV: no GPU kernel — add a CUDA kernel");
+    /// MLX affine quantized GEMV: packed int (4/6/8-bit) + BF16 scales/biases, group_size=64.
+    pub fn gemvMlxQ(self: *CudaBackend, x: [*]const f32, weight: [*]const u8, scales: [*]const u8, biases: [*]const u8, y: [*]f32, n: usize, k: usize, bits: u32) void {
+        const mlx_group_size: usize = 64;
+        const gpr = (k + mlx_group_size - 1) / mlx_group_size;
+        const wpg: usize = mlx_group_size * bits / 32;
+        const w_bytes = n * gpr * wpg * @sizeOf(u32);
+        const sb_bytes = n * gpr * @sizeOf(u16);
+
+        var d_x = self.getInputBuf(x, k * @sizeOf(f32));
+        var d_w = self.getOrUpload(weight, w_bytes);
+        var d_s = self.getOrUpload(scales, sb_bytes);
+        var d_b = self.getOrUpload(biases, sb_bytes);
+        var d_y = self.getOutputBuf(y, n * @sizeOf(f32));
+
+        var n_u32: u32 = @intCast(n);
+        var k_u32: u32 = @intCast(k);
+        var params = [_]?*anyopaque{
+            @ptrCast(&d_x), @ptrCast(&d_w), @ptrCast(&d_s),
+            @ptrCast(&d_b), @ptrCast(&d_y), @ptrCast(&n_u32),
+            @ptrCast(&k_u32),
+        };
+        const func = switch (bits) {
+            8 => self.fn_gemv_mlx_q8,
+            6 => self.fn_gemv_mlx_q6,
+            else => self.fn_gemv_mlx_q4,
+        };
+        self.launch(func, @intCast(n), block_size, reduction_smem, &params);
     }
 
-    /// MXFP4 SafeTensors GEMV.
-    pub fn gemvMxfp4St(_: *CudaBackend, _: [*]const f32, _: [*]const u8, _: [*]const u8, _: [*]f32, _: usize, _: usize) void {
-        @panic("CUDA MXFP4 SafeTensors GEMV: no GPU kernel — add a CUDA kernel");
+    /// MXFP4 SafeTensors GEMV: u32-packed nibbles + E8M0 scales, group_size=32.
+    pub fn gemvMxfp4St(self: *CudaBackend, x: [*]const f32, weight: [*]const u8, scale: [*]const u8, y: [*]f32, n: usize, k: usize) void {
+        const mxfp4_gs: usize = 32;
+        const gpr = (k + mxfp4_gs - 1) / mxfp4_gs;
+        const wpg: usize = 4; // 32 nibbles / 8 per word
+        const w_bytes = n * gpr * wpg * @sizeOf(u32);
+
+        var d_x = self.getInputBuf(x, k * @sizeOf(f32));
+        var d_w = self.getOrUpload(weight, w_bytes);
+        var d_s = self.getOrUpload(scale, n * gpr);
+        var d_y = self.getOutputBuf(y, n * @sizeOf(f32));
+
+        var n_u32: u32 = @intCast(n);
+        var k_u32: u32 = @intCast(k);
+        var params = [_]?*anyopaque{
+            @ptrCast(&d_x), @ptrCast(&d_w), @ptrCast(&d_s),
+            @ptrCast(&d_y), @ptrCast(&n_u32), @ptrCast(&k_u32),
+        };
+        self.launch(self.fn_gemv_mxfp4_st, @intCast(n), block_size, reduction_smem, &params);
     }
 
     /// Commit pending GPU work and download results to host.
@@ -894,36 +1112,18 @@ pub const CudaBackend = struct {
     /// can access the same pointer directly — no copies needed.
     /// On discrete GPU: falls back to host allocator; the caller manages
     /// VRAM mirroring separately via kv_dev_cache during SDPA.
-    pub fn allocKvSlice(self: *CudaBackend, allocator: std.mem.Allocator, n: usize) error{OutOfMemory}![]u8 {
-        const byte_len = n;
-        if (self.is_uma) {
-            if (self.cuMemAllocManaged) |allocManaged| {
-                var dptr: CUdeviceptr = 0;
-                const result = allocManaged(&dptr, @max(byte_len, 4), CU_MEM_ATTACH_GLOBAL);
-                if (result == 0 and dptr != 0) {
-                    const ptr: [*]u8 = @ptrFromInt(dptr);
-                    @memset(ptr[0..n], 0);
-                    return ptr[0..n];
-                }
-            }
-        }
-        // Fallback: plain host allocation (discrete GPU or managed alloc failed)
+    pub fn allocKvSlice(_: *CudaBackend, allocator: std.mem.Allocator, n: usize) error{OutOfMemory}![]u8 {
+        // Use host allocator — cuMemAllocManaged on UMA (GB10) returns pointers
+        // that cause data corruption when used as both host and device memory.
+        // TODO: investigate UMA zero-copy KV cache after fixing correctness.
         return allocator.alloc(u8, n);
     }
 
     /// Free a KV cache slice allocated via allocKvSlice.
     /// Detects whether the slice was allocated via cuMemAllocManaged (UMA)
     /// or the host allocator, and frees accordingly.
-    pub fn freeKvSlice(self: *CudaBackend, allocator: std.mem.Allocator, slice: []u8) void {
+    pub fn freeKvSlice(_: *CudaBackend, allocator: std.mem.Allocator, slice: []u8) void {
         if (slice.len == 0) return;
-        if (self.is_uma and self.cuMemAllocManaged != null) {
-            // Try cuMemFree — if the pointer was managed, this succeeds.
-            // cuMemFree returns 0 (CUDA_SUCCESS) for managed pointers.
-            const dptr: CUdeviceptr = @intFromPtr(slice.ptr);
-            const result = self.cuMemFree(dptr);
-            if (result == 0) return;
-        }
-        // Host-allocated fallback
         allocator.free(slice);
     }
 
@@ -990,14 +1190,9 @@ pub const CudaBackend = struct {
     }
 
     /// Fused scaled dot-product attention on GPU with KV cache append.
-    /// Reads Q, k_new, v_new from act_cache (still on GPU from prior ops).
-    /// Appends k_new/v_new to device KV cache via D2D copy, then launches kernel.
-    /// No sync() required — all data stays on GPU.
     pub fn sdpa(self: *CudaBackend, q: [*]const f32, keys: []u8, values: []u8, k_new: [*]const f32, v_new: [*]const f32, output: [*]f32, nh: usize, nkv: usize, hd: usize, seq_len: usize, scale: f32, kv_type: @import("backend.zig").KvQuantType) void {
-        // Non-f32 KV types not yet supported on GPU.
         if (kv_type != .f32) @panic("CUDA SDPA: quantized KV not supported — add GPU kernel or use --kv-type f32");
 
-        // f32 path: cast byte slices to f32 slices for GPU kernel
         const f32_keys: []f32 = @as([*]f32, @ptrCast(@alignCast(keys.ptr)))[0 .. keys.len / 4];
         const f32_values: []f32 = @as([*]f32, @ptrCast(@alignCast(values.ptr)))[0 .. values.len / 4];
 
@@ -1005,19 +1200,15 @@ pub const CudaBackend = struct {
         const kvd_bytes = kvd * @sizeOf(f32);
         const sl = seq_len + 1;
 
-        // Get device KV cache buffers (allocated once, reused across tokens)
         var d_keys = self.getOrAllocKvBuf(@intFromPtr(f32_keys.ptr), f32_keys.len * @sizeOf(f32));
         var d_vals = self.getOrAllocKvBuf(@intFromPtr(f32_values.ptr), f32_values.len * @sizeOf(f32));
 
-        // Get k_new/v_new from act_cache (still on GPU from RoPE/gemv — no sync needed)
         const d_k_new = self.getInputBuf(k_new, kvd_bytes);
         const d_v_new = self.getInputBuf(v_new, kvd_bytes);
 
-        // Append k_new/v_new at position seq_len via device-to-device copy
         _ = self.cuMemcpyDtoD(d_keys + seq_len * kvd_bytes, d_k_new, kvd_bytes);
         _ = self.cuMemcpyDtoD(d_vals + seq_len * kvd_bytes, d_v_new, kvd_bytes);
 
-        // Q is an activation buffer, output is an activation
         var d_q = self.getInputBuf(q, nh * hd * @sizeOf(f32));
         var d_out = self.getOutputBuf(output, nh * hd * @sizeOf(f32));
 
@@ -1029,20 +1220,13 @@ pub const CudaBackend = struct {
         var scale_f32: f32 = scale;
 
         var params = [_]?*anyopaque{
-            @ptrCast(&d_q),
-            @ptrCast(&d_keys),
-            @ptrCast(&d_vals),
-            @ptrCast(&d_out),
-            @ptrCast(&nh_u32),
-            @ptrCast(&nkv_u32),
-            @ptrCast(&hd_u32),
-            @ptrCast(&sl_u32),
-            @ptrCast(&kvd_u32),
+            @ptrCast(&d_q),      @ptrCast(&d_keys),  @ptrCast(&d_vals),
+            @ptrCast(&d_out),    @ptrCast(&nh_u32),   @ptrCast(&nkv_u32),
+            @ptrCast(&hd_u32),   @ptrCast(&sl_u32),   @ptrCast(&kvd_u32),
             @ptrCast(&scale_f32),
         };
 
-        // Shared memory: sl floats for attention scores (f32 = 4 bytes)
-        const smem: u32 = sl_u32 * @sizeOf(f32);
+        const smem: u32 = (sl_u32 + 1) * @sizeOf(f32);
         self.launch(self.fn_sdpa, @intCast(nh), block_size, smem, &params);
     }
 
@@ -1076,6 +1260,8 @@ pub const CudaBackend = struct {
     /// Batched RMS normalization — single GPU dispatch, one block per row.
     pub fn rmsNormBatched(self: *CudaBackend, input: [*]const f32, weight: [*]const f32, output: [*]f32, n_tok: usize, dim: usize, eps: f32) void {
         var d_in = self.getInputBuf(input, n_tok * dim * @sizeOf(f32));
+        // Mark weight stale — may be a mutable per-layer buffer (see rmsNorm comment).
+        if (self.act_cache.getPtr(@intFromPtr(weight))) |act| act.state = .stale;
         var d_w = self.getInputBuf(weight, dim * @sizeOf(f32));
         var d_out = self.getOutputBuf(output, n_tok * dim * @sizeOf(f32));
         var n_tok_u: u32 = @intCast(n_tok);
@@ -1093,7 +1279,7 @@ pub const CudaBackend = struct {
         const half_rope = rope_dim / 2;
         const total = n_tok * n_heads * half_rope;
         const stride = n_heads * head_dim;
-        var d_x = self.getOutputBuf(x, n_tok * stride * @sizeOf(f32)); // in-place: both input+output
+        var d_x = self.getInPlaceBuf(x, n_tok * stride * @sizeOf(f32));
         var d_pos = self.getInputBuf(positions, n_tok * @sizeOf(u32));
         var n_tok_u: u32 = @intCast(n_tok);
         var nh_u: u32 = @intCast(n_heads);
@@ -1109,16 +1295,61 @@ pub const CudaBackend = struct {
         self.launch(self.fn_rope_batched, grid, block_size, 0, &params);
     }
 
-    /// Prefill SDPA — sequential single-token sdpa (GPU kernel handles KV append + FA).
+    /// Prefill SDPA — FlashAttention-2 with causal masking.
+    /// Attends to both cached KV (prev_len positions) and new KV (n_tok positions).
+    /// Grid: n_tok * nh blocks, 256 threads. KV cache updated after kernel.
     pub fn sdpaPrefill(self: *CudaBackend, q: [*]const f32, k: [*]const f32, v: [*]const f32, kv_keys: []u8, kv_values: []u8, output: [*]f32, nh: usize, nkv: usize, hd: usize, prev_len: usize, n_tok: usize, scale: f32, kv_type: KvQuantType) void {
+        if (kv_type != .f32) @panic("CUDA sdpaPrefill: quantized KV not supported — use --kv-type f32");
+
         const kvd = nkv * hd;
-        for (0..n_tok) |t| {
-            self.sdpa(q + t * nh * hd, kv_keys, kv_values, k + t * kvd, v + t * kvd, output + t * nh * hd, nh, nkv, hd, prev_len + t, scale, kv_type);
-        }
+
+        // Get device pointers for Q and new K/V
+        var d_q = self.getInputBuf(q, n_tok * nh * hd * @sizeOf(f32));
+        var d_k_new = self.getInputBuf(k, n_tok * kvd * @sizeOf(f32));
+        var d_v_new = self.getInputBuf(v, n_tok * kvd * @sizeOf(f32));
+        var d_out = self.getOutputBuf(output, n_tok * nh * hd * @sizeOf(f32));
+
+        // Get device pointers for KV cache
+        const f32_keys: []f32 = @as([*]f32, @ptrCast(@alignCast(kv_keys.ptr)))[0 .. kv_keys.len / 4];
+        const f32_values: []f32 = @as([*]f32, @ptrCast(@alignCast(kv_values.ptr)))[0 .. kv_values.len / 4];
+        var d_k_cache = self.getOrAllocKvBuf(@intFromPtr(f32_keys.ptr), f32_keys.len * @sizeOf(f32));
+        var d_v_cache = self.getOrAllocKvBuf(@intFromPtr(f32_values.ptr), f32_values.len * @sizeOf(f32));
+
+        var nh_u: u32 = @intCast(nh);
+        var nkv_u: u32 = @intCast(nkv);
+        var hd_u: u32 = @intCast(hd);
+        var prev_u: u32 = @intCast(prev_len);
+        var ntok_u: u32 = @intCast(n_tok);
+        var scale_f: f32 = scale;
+
+        // Dynamic shared memory: q[hd] + kv_block[kv_tile*hd] + scores[kv_tile] + out_acc[hd] + reduce[warps] + broadcast[1]
+        // Must match layout in sdpa_prefill.zig (kv_block_size=32, max_warps=8).
+        const smem: u32 = (hd_u + prefill_kv_tile * hd_u + prefill_kv_tile + hd_u + prefill_reduce_slots + 1) * @sizeOf(f32);
+
+        var params = [_]?*anyopaque{
+            @ptrCast(&d_q),       @ptrCast(&d_k_cache), @ptrCast(&d_v_cache),
+            @ptrCast(&d_k_new),   @ptrCast(&d_v_new),   @ptrCast(&d_out),
+            @ptrCast(&nh_u),      @ptrCast(&nkv_u),     @ptrCast(&hd_u),
+            @ptrCast(&prev_u),    @ptrCast(&ntok_u),     @ptrCast(&scale_f),
+        };
+
+        const grid: u32 = ntok_u * nh_u;
+        self.launch(self.fn_sdpa_prefill, grid, block_size, smem, &params);
+
+        // Bulk copy new K/V to KV cache on device (for future decode steps)
+        const kvd_bytes = kvd * @sizeOf(f32);
+        _ = self.cuMemcpyDtoD(d_k_cache + prev_len * kvd_bytes, d_k_new, n_tok * kvd_bytes);
+        _ = self.cuMemcpyDtoD(d_v_cache + prev_len * kvd_bytes, d_v_new, n_tok * kvd_bytes);
     }
 
-    /// DeltaNet SSM recurrence.
-    pub fn deltaNet(_: *CudaBackend, _: [*]const f32, _: [*]f32, _: [*]const f32, _: [*]const f32, _: [*]const f32, _: [*]f32, _: [*]f32, _: []f32, _: [*]const f32, _: [*]const f32, _: [*]const f32, _: [*]const f32, _: backend_mod.DeltaNetParams) void {
-        @panic("CUDA DeltaNet: no GPU kernel — add a CUDA kernel");
+    /// DeltaNet SSM recurrence — CPU fallback.
+    /// Sequential SSM state updates are inherently serial per head; GPU dispatch
+    /// overhead exceeds the compute benefit for single-token decode.
+    pub fn deltaNet(self: *CudaBackend, conv_in: [*]const f32, conv_out: [*]f32, z_buf: [*]const f32, alpha_buf: [*]const f32, beta_buf: [*]const f32, output: [*]f32, conv_state: [*]f32, ssm_state: []f32, ssm_a: [*]const f32, dt_bias: [*]const f32, conv_w: [*]const f32, ssm_norm_w: [*]const f32, p: backend_mod.DeltaNetParams) void {
+        self.flushActivations();
+        self.cpu.deltaNet(conv_in, conv_out, z_buf, alpha_buf, beta_buf, output, conv_state, ssm_state, ssm_a, dt_bias, conv_w, ssm_norm_w, p);
+        // Invalidate all activation buffers that DeltaNet wrote to
+        self.invalidateAct(conv_out);
+        self.invalidateAct(output);
     }
 };

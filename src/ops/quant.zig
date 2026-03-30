@@ -233,11 +233,11 @@ pub fn gemvNvfp4St(x: [*]const f32, weight: [*]const u8, scale: [*]const u8, y: 
 
             const v0: V8 = vals[0..8].*;
             const x0: V8 = x[base..][0..8].*;
-            acc += sv * v0 * x0;
+            acc = @mulAdd(V8, sv * v0, x0, acc);
 
             const v1: V8 = vals[8..16].*;
             const x1: V8 = x[base + 8 ..][0..8].*;
-            acc += sv * v1 * x1;
+            acc = @mulAdd(V8, sv * v1, x1, acc);
         }
         y[row] = @reduce(.Add, acc);
     }

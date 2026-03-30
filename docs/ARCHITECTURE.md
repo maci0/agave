@@ -16,8 +16,8 @@ zig build                                          # Build (ReleaseFast + Debug)
 ```
 
 `zig build` produces two binaries:
-- `zig-out/bin/agave` — ReleaseFast (optimized, ~1.7 MB)
-- `zig-out/bin/agave-debug` — Debug (safety checks, leak detection, ~4.6 MB)
+- `zig-out/bin/agave` — ReleaseFast (optimized, ~2.0 MB)
+- `zig-out/bin/agave-debug` — Debug (safety checks, leak detection, ~5.2 MB)
 
 ## Project Structure
 

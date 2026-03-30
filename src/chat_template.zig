@@ -115,8 +115,7 @@ pub const ChatTemplate = struct {
 
     /// Qwen 3.5 — ChatML with thinking disabled (empty `<think>` block
     /// prepended to skip straight to the response). Greedy decoding without
-    /// sampling makes open-ended thinking unstable, so thinking is disabled
-    /// by default until sampling is implemented.
+    /// sampling makes open-ended thinking unstable.
     pub const qwen35 = ChatTemplate{
         .system_prefix = "<|im_start|>system\n",
         .system_suffix = "<|im_end|>\n",
@@ -140,22 +139,23 @@ pub const ChatTemplate = struct {
     };
 
     /// GLM-4 — uses `[gMASK]<sop>` prefix (BOS sends `[gMASK]`, template starts
-    /// with `<sop>`) and `<|user|>`/`<|assistant|>` role markers. Thinking is
-    /// disabled by default via `</think>` generation prefix.
+    /// with `<sop>`) and `<|user|>`/`<|assistant|>` role markers.
+    /// generation_prefix `</think>` disables the model's reasoning mode, forcing
+    /// direct answers (matching HuggingFace's enable_thinking=false behavior).
     pub const glm4 = ChatTemplate{
         .system_prefix = "<sop>",
         .system_suffix = "",
         .user_prefix = "<|user|>",
         .user_suffix = "",
-        .assistant_prefix = "<|assistant|>",
+        .assistant_prefix = "<|assistant|>\n",
         .assistant_suffix = "",
-        .eog_tokens = &.{ "<|endoftext|>", "<|user|>" },
+        .eog_tokens = &.{ "<|endoftext|>", "<|user|>", "<|observation|>" },
         .default_system = "",
+        .generation_prefix = "</think>",
         .system_role_override = .{
-            .prefix = "<|system|>",
+            .prefix = "<|system|>\n",
             .suffix = "",
         },
-        .generation_prefix = "</think>",
     };
 
     /// GPT-OSS Harmony.
@@ -276,6 +276,26 @@ test "qwen35 continuation includes generation prefix" {
     const result = try ChatTemplate.qwen35.formatContinuation(std.testing.allocator, "what?");
     defer std.testing.allocator.free(result);
     try std.testing.expect(std.mem.endsWith(u8, result, "<|im_start|>assistant\n<think>\n\n</think>\n\n"));
+}
+
+test "glm4 format includes sop prefix and generation prefix" {
+    const result = try ChatTemplate.glm4.format(std.testing.allocator, null, "What is 2+2?");
+    defer std.testing.allocator.free(result);
+    // Must start with <sop> (system_prefix with empty default_system)
+    try std.testing.expect(std.mem.startsWith(u8, result, "<sop>"));
+    // Must contain user message with correct prefix (no newline before content)
+    try std.testing.expect(std.mem.indexOf(u8, result, "<|user|>What is 2+2?") != null);
+    // Must end with assistant prefix + </think> generation prefix
+    try std.testing.expect(std.mem.endsWith(u8, result, "<|assistant|>\n</think>"));
+}
+
+test "glm4 format with system message uses system_role_override" {
+    const result = try ChatTemplate.glm4.format(std.testing.allocator, "You are helpful.", "Hi");
+    defer std.testing.allocator.free(result);
+    // system_role_override uses <|system|> prefix
+    try std.testing.expect(std.mem.indexOf(u8, result, "<|system|>\nYou are helpful.") != null);
+    // Still starts with <sop>
+    try std.testing.expect(std.mem.startsWith(u8, result, "<sop>"));
 }
 
 test "continuation matches full format suffix" {

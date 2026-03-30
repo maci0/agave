@@ -384,8 +384,8 @@ test "softplus" {
     try std.testing.expectApproxEqAbs(@as(f32, 100.0), softplus(100.0), 0.001);
     // At threshold boundary: softplus(20) ≈ 20.0 (linear regime)
     try std.testing.expectApproxEqAbs(@as(f32, 20.0), softplus(softplus_threshold), 1e-4);
-    // Just below threshold: still computed via log(1+exp(x))
-    try std.testing.expectApproxEqAbs(@as(f32, 19.0), softplus(19.0), 0.01);
+    // Just below threshold: still computed via log(1+exp(x)), result ≈ 19.0
+    try std.testing.expectApproxEqAbs(@as(f32, 19.0), softplus(19.0), 1e-4);
     // Negative value
     try std.testing.expectApproxEqAbs(@as(f32, 0.3133), softplus(-1.0), 0.001);
 }
@@ -425,8 +425,8 @@ test "applyGelu" {
     try std.testing.expectApproxEqAbs(@as(f32, -0.159), buf[2], 0.01);
     // GELU(2) ≈ 1.955
     try std.testing.expectApproxEqAbs(@as(f32, 1.955), buf[3], 0.01);
-    // Scalar tail: GELU(-3) ≈ -0.004 (near zero)
-    try std.testing.expect(buf[8] < 0 and buf[8] > -0.01);
+    // Scalar tail: GELU(-3) ≈ -0.00436
+    try std.testing.expectApproxEqAbs(@as(f32, -0.004), buf[8], 0.002);
     // Scalar tail: GELU(1.5) ≈ 1.399
     try std.testing.expectApproxEqAbs(@as(f32, 1.399), buf[9], 0.01);
 }

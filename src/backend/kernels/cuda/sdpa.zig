@@ -51,15 +51,19 @@ export fn sdpa_kernel(
     const end = @min(start + chunk, sl);
 
     // Phase 2a: Warp-parallel max reduction
+    // warpReduceMax returns final result only in lane 0 — broadcast via shared memory.
     var local_max: f32 = cu.neg_f32_max;
     var i = start;
     while (i < end) : (i += 1) {
         local_max = @max(local_max, smem[i]);
     }
-    // All 32 threads participate in warp reduction
-    const max_val = cu.warpReduceMax(local_max);
+    var max_val = cu.warpReduceMax(local_max);
+    if (tid == 0) cu.sharedStore(sl, max_val); // Reuse smem slot beyond scores
+    cu.syncthreads();
+    max_val = cu.sharedLoad(sl);
 
     // Phase 2b: Warp-parallel exp and sum
+    // warpReduceAdd returns final result only in lane 0 — broadcast via shared memory.
     var local_sum: f32 = 0.0;
     i = start;
     while (i < end) : (i += 1) {
@@ -67,7 +71,10 @@ export fn sdpa_kernel(
         smem[i] = e;
         local_sum += e;
     }
-    const sum_val = cu.warpReduceAdd(local_sum);
+    var sum_val = cu.warpReduceAdd(local_sum);
+    if (tid == 0) cu.sharedStore(sl, sum_val);
+    cu.syncthreads();
+    sum_val = cu.sharedLoad(sl);
 
     // Phase 2c: Warp-parallel normalization
     const inv = cu.rcpf(sum_val);

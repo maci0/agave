@@ -220,7 +220,7 @@ pub fn detectOsVersion() []const u8 {
 // to find the optimal value for each target platform.
 const softmax_width: comptime_int = 8; // SIMD width for softmax: 4, 8, or 16
 
-// ── Parallel GEMV constants ─────────────────────────────────────
+// ── Parallel computation constants ──────────────────────────────
 /// Minimum output rows to justify thread pool dispatch overhead.
 const parallel_min_rows: usize = 32;
 /// Row granularity for work-stealing (aligned to 4-row batch size).
@@ -293,12 +293,12 @@ pub const CpuBackend = struct {
     /// Returns 0 for unsupported formats (fallback to sequential).
     const gemvRowBytes = gemv_kernel.gemvRowBytes;
 
-    /// Sequential GEMV — dispatches to the appropriate quantized kernel.
+    /// Sequential GEMV — delegates to gemv_kernel for dtype-specific dequantization.
     fn gemvSeq(x: [*]const f32, w: TensorData, y: [*]f32, n: usize, k: usize) void {
         gemv_kernel.gemvSeq(x, w.data, w.dtype, y, n, k);
     }
 
-    /// Applies Root Mean Square Layer Normalization in-place.
+    /// Applies Root Mean Square Layer Normalization: output[i] = input[i] * weight[i] / rms(input).
     pub fn rmsNorm(self: *CpuBackend, input: [*]const f32, weight: [*]const f32, output: [*]f32, n: usize, eps: f32) void {
         _ = self;
         norm_kernel.rmsNorm(input, weight, output, n, eps);
@@ -330,15 +330,15 @@ pub const CpuBackend = struct {
 
     /// Transposed GEMV: y[out_dim] = W^T @ x[in_dim] for Q8_0 3D weights.
     pub fn gemvT(_: *CpuBackend, x: [*]const f32, w: [*]const u8, y: [*]f32, out_dim: usize, in_dim: usize) void {
-        const blocks_per_row = (out_dim + 31) / 32;
+        const blocks_per_row = (out_dim + quant.quant_block_elems - 1) / quant.quant_block_elems;
         @memset(y[0..out_dim], 0);
         for (0..in_dim) |j| {
             const xj = x[j];
-            const row_base = j * blocks_per_row * 34; // 34 bytes per Q8_0 block
+            const row_base = j * blocks_per_row * quant.q8_0_block_bytes;
             for (0..out_dim) |i| {
-                const blk_idx = i / 32;
-                const blk_off = i % 32;
-                const blk_ptr = w + row_base + blk_idx * 34;
+                const blk_idx = i / quant.quant_block_elems;
+                const blk_off = i % quant.quant_block_elems;
+                const blk_ptr = w + row_base + blk_idx * quant.q8_0_block_bytes;
                 const scale: f32 = @floatCast(@as(f16, @bitCast(std.mem.readInt(u16, blk_ptr[0..2], .little))));
                 const val: i8 = @bitCast(blk_ptr[2 + blk_off]);
                 y[i] += @as(f32, @floatFromInt(val)) * scale * xj;
@@ -346,15 +346,34 @@ pub const CpuBackend = struct {
         }
     }
 
-    /// Scaled accumulate: dst[i] += src[i] * scale.
+    /// Scaled accumulate: dst[i] += src[i] * scale. SIMD-optimized with V8.
     pub fn addScaled(_: *CpuBackend, src: [*]const f32, dst: [*]f32, scale: f32, n: usize) void {
-        for (0..n) |i| dst[i] += src[i] * scale;
+        const V8 = @Vector(8, f32);
+        const sv: V8 = @splat(scale);
+        var i: usize = 0;
+        while (i + 8 <= n) : (i += 8) {
+            const s: V8 = src[i..][0..8].*;
+            const d: V8 = dst[i..][0..8].*;
+            dst[i..][0..8].* = @mulAdd(V8, s, sv, d);
+        }
+        while (i < n) : (i += 1) {
+            dst[i] = @mulAdd(f32, src[i], scale, dst[i]);
+        }
     }
 
     /// Fused SiLU + multiply: out[i] = silu(a[i]) * b[i].
     pub fn siluMul(self: *CpuBackend, a: [*]const f32, b: [*]const f32, out: [*]f32, n: usize) void {
         _ = self;
         activation_kernel.siluMul(a, b, out, n);
+    }
+
+    /// GELU + multiply: out[i] = gelu(a[i]) * b[i].
+    /// Sequential two-pass (gelu then mul) — not fused. Acceptable for CPU
+    /// where elementwise ops are fast relative to GEMV bottleneck.
+    pub fn geluMul(self: *CpuBackend, a: [*]const f32, b: [*]const f32, out: [*]f32, n: usize) void {
+        _ = self;
+        activation_kernel.gelu(a, out, n);
+        elementwise_kernel.mul(out, b, out, n);
     }
 
     /// In-place per-head rmsNorm: applies same weight to n_heads independent heads.
@@ -406,7 +425,8 @@ pub const CpuBackend = struct {
         elementwise_kernel.deinterleave(input, out_a, out_b, stride, n_pairs);
     }
 
-    /// No-op on CPU — all operations are synchronous.
+    /// No-op on CPU. GPU backends flush pending commands here;
+    /// CPU ops are immediately visible, so no flush is needed.
     pub fn sync(self: *CpuBackend) void {
         _ = self;
     }
@@ -434,13 +454,14 @@ pub const CpuBackend = struct {
             Static.sys_mem = detectSystemMem();
             Static.detected = true;
         }
+        const avail = detectAvailMem();
         return .{
             .name = "CPU",
             .device_name = detectCpuModel(),
             .total_mem = Static.sys_mem,
-            .avail_mem = detectAvailMem(),
+            .avail_mem = avail,
             .system_mem = Static.sys_mem,
-            .system_avail = detectAvailMem(),
+            .system_avail = avail,
             .l1_cache = Static.caches.l1,
             .l2_cache = Static.caches.l2,
             .l3_cache = Static.caches.l3,

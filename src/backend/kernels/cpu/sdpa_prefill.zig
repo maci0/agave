@@ -4,10 +4,11 @@ const std = @import("std");
 const kv_quant = @import("../../../ops/kv_quant.zig");
 const KvQuantType = kv_quant.KvQuantType;
 
+const sdpa_mod = @import("sdpa.zig");
 const V8 = @Vector(8, f32);
 const v8zero: V8 = @splat(0.0);
-const max_sdpa_seq_len: usize = 8192;
-const max_head_dim: usize = 256;
+const max_sdpa_seq_len = sdpa_mod.max_sdpa_seq_len;
+const max_head_dim = sdpa_mod.max_head_dim;
 
 pub fn sdpaPrefill(q: [*]const f32, k: [*]const f32, v: [*]const f32, kv_keys: []u8, kv_values: []u8, output: [*]f32, nh: usize, nkv: usize, hd: usize, prev_len: usize, n_tok: usize, scale: f32, kv_type: KvQuantType) void {
     const kvd = nkv * hd;
@@ -51,7 +52,7 @@ fn prefillF32(q: [*]const f32, keys: [*]const f32, values: [*]const f32, output:
                     acc = @mulAdd(V8, qv, kv, acc);
                 }
                 var dot = @reduce(.Add, acc);
-                while (d < hd) : (d += 1) dot += q_cached[d] * keys[k_base + d];
+                while (d < hd) : (d += 1) dot = @mulAdd(f32, q_cached[d], keys[k_base + d], dot);
                 scores_buf[s] = dot * scale;
             }
             softmax(scores_buf[0..sl]);
@@ -75,7 +76,7 @@ fn prefillF32(q: [*]const f32, keys: [*]const f32, values: [*]const f32, output:
                         output[out_off + d ..][0..8].* = @mulAdd(V8, sv, vv, cur);
                     }
                     while (d < hd) : (d += 1) {
-                        output[out_off + d] += scores_buf[s] * values[v_base + d];
+                        output[out_off + d] = @mulAdd(f32, scores_buf[s], values[v_base + d], output[out_off + d]);
                     }
                 }
             }
@@ -144,12 +145,12 @@ fn softmax(scores: []f32) void {
     }
 
     // Pass 3: normalize (SIMD)
-    const inv_v: V8 = @splat(1.0 / sum);
+    const inv_sum = 1.0 / sum;
+    const inv_v: V8 = @splat(inv_sum);
     i = 0;
     while (i + 8 <= n) : (i += 8) {
         scores[i..][0..8].* = @as(V8, scores[i..][0..8].*) * inv_v;
     }
-    const inv_sum = 1.0 / sum;
     while (i < n) : (i += 1) scores[i] *= inv_sum;
 }
 

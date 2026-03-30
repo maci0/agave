@@ -31,10 +31,10 @@ pub fn gemvBF16(x: [*]const f32, w: [*]const u8, y: [*]f32, n: usize, k: usize) 
                 w2[idx] = quant.bf16ToF32(w16[r2 + i + idx]);
                 w3[idx] = quant.bf16ToF32(w16[r3 + i + idx]);
             }
-            acc0 += xv * w0;
-            acc1 += xv * w1;
-            acc2 += xv * w2;
-            acc3 += xv * w3;
+            acc0 = @mulAdd(V8, xv, w0, acc0);
+            acc1 = @mulAdd(V8, xv, w1, acc1);
+            acc2 = @mulAdd(V8, xv, w2, acc2);
+            acc3 = @mulAdd(V8, xv, w3, acc3);
         }
         var t0: f32 = 0.0;
         var t1: f32 = 0.0;
@@ -42,10 +42,10 @@ pub fn gemvBF16(x: [*]const f32, w: [*]const u8, y: [*]f32, n: usize, k: usize) 
         var t3: f32 = 0.0;
         while (i < k) : (i += 1) {
             const xv = x[i];
-            t0 += xv * quant.bf16ToF32(w16[r0 + i]);
-            t1 += xv * quant.bf16ToF32(w16[r1 + i]);
-            t2 += xv * quant.bf16ToF32(w16[r2 + i]);
-            t3 += xv * quant.bf16ToF32(w16[r3 + i]);
+            t0 = @mulAdd(f32, xv, quant.bf16ToF32(w16[r0 + i]), t0);
+            t1 = @mulAdd(f32, xv, quant.bf16ToF32(w16[r1 + i]), t1);
+            t2 = @mulAdd(f32, xv, quant.bf16ToF32(w16[r2 + i]), t2);
+            t3 = @mulAdd(f32, xv, quant.bf16ToF32(w16[r3 + i]), t3);
         }
         y[row] = @reduce(.Add, acc0) + t0;
         y[row + 1] = @reduce(.Add, acc1) + t1;
@@ -63,9 +63,9 @@ pub fn gemvBF16(x: [*]const f32, w: [*]const u8, y: [*]f32, n: usize, k: usize) 
             inline for (0..8) |idx| {
                 wv[idx] = quant.bf16ToF32(w16[roff + i + idx]);
             }
-            acc += xv * wv;
+            acc = @mulAdd(V8, xv, wv, acc);
         }
-        while (i < k) : (i += 1) tail += x[i] * quant.bf16ToF32(w16[roff + i]);
+        while (i < k) : (i += 1) tail = @mulAdd(f32, x[i], quant.bf16ToF32(w16[roff + i]), tail);
         y[row] = @reduce(.Add, acc) + tail;
     }
 }

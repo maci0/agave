@@ -1626,6 +1626,11 @@ pub const VulkanBackend = struct {
         @panic("Vulkan siluMul: no GPU shader — add a Vulkan compute shader");
     }
 
+    /// Fused GELU + multiply.
+    pub fn geluMul(_: *VulkanBackend, _: [*]const f32, _: [*]const f32, _: [*]f32, _: usize) void {
+        @panic("Vulkan geluMul: no GPU shader — add a Vulkan compute shader");
+    }
+
     /// In-place per-head rmsNorm.
     pub fn rmsNormMulti(_: *VulkanBackend, _: [*]f32, _: [*]const f32, _: usize, _: usize, _: f32) void {
         @panic("Vulkan rmsNormMulti: no GPU shader — add a Vulkan compute shader");
@@ -1814,8 +1819,7 @@ pub const VulkanBackend = struct {
 
 test "VulkanBackend init and silu" {
     var vk_be = VulkanBackend.init(std.testing.allocator) catch {
-        std.log.warn("Vulkan not available — skipping test", .{});
-        return;
+        return error.SkipZigTest;
     };
     defer vk_be.deinit();
 
@@ -1828,8 +1832,7 @@ test "VulkanBackend init and silu" {
 
 test "VulkanBackend gelu" {
     var vk_be = VulkanBackend.init(std.testing.allocator) catch {
-        std.log.warn("Vulkan not available — skipping test", .{});
-        return;
+        return error.SkipZigTest;
     };
     defer vk_be.deinit();
 
@@ -1843,8 +1846,7 @@ test "VulkanBackend gelu" {
 
 test "VulkanBackend rmsNorm" {
     var vk_be = VulkanBackend.init(std.testing.allocator) catch {
-        std.log.warn("Vulkan not available — skipping test", .{});
-        return;
+        return error.SkipZigTest;
     };
     defer vk_be.deinit();
 
@@ -1858,8 +1860,7 @@ test "VulkanBackend rmsNorm" {
 
 test "VulkanBackend softmax" {
     var vk_be = VulkanBackend.init(std.testing.allocator) catch {
-        std.log.warn("Vulkan not available — skipping test", .{});
-        return;
+        return error.SkipZigTest;
     };
     defer vk_be.deinit();
 
@@ -1877,8 +1878,7 @@ test "VulkanBackend softmax" {
 
 test "VulkanBackend l2Norm" {
     var vk_be = VulkanBackend.init(std.testing.allocator) catch {
-        std.log.warn("Vulkan not available — skipping test", .{});
-        return;
+        return error.SkipZigTest;
     };
     defer vk_be.deinit();
 
@@ -1891,8 +1891,7 @@ test "VulkanBackend l2Norm" {
 
 test "VulkanBackend rope" {
     var vk_be = VulkanBackend.init(std.testing.allocator) catch {
-        std.log.warn("Vulkan not available — skipping test", .{});
-        return;
+        return error.SkipZigTest;
     };
     defer vk_be.deinit();
 

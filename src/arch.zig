@@ -102,9 +102,6 @@ pub const Arch = enum {
     }
 };
 
-/// Tokenizer mode: BPE (byte-pair merges), SPM (SentencePiece greedy), or SPM without dummy prefix.
-pub const TokenizerKind = enum { bpe, spm, spm_no_dummy };
-
 // ── Shared token ID defaults ─────────────────────────────────────
 
 /// Fallback EOS token ID for Gemma models (used when metadata is missing).

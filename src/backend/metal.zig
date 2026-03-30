@@ -62,6 +62,8 @@ const simd_width: usize = 32;
 const sdpa_threadgroup_size: usize = 128;
 /// Words per group for MLX 4-bit quantization (64 elems / 8 nibbles per word).
 const mlx_words_per_group_q4: usize = 8;
+/// MLX 6-bit: 64 elements × 6 bits / 32 bits per word = 12 words per group.
+const mlx_words_per_group_q6: usize = 12;
 /// Words per group for MLX 8-bit quantization (64 elems / 4 values per word).
 const mlx_words_per_group_q8: usize = 16;
 /// Words per group for MXFP4 quantization (32 nibbles / 8 per word).
@@ -114,6 +116,7 @@ pub const MetalBackend = struct {
     pipe_gemv_iq4_xs: objc.id,
     pipe_gemv_q5_k: objc.id,
     pipe_gemv_mlx_q4: objc.id,
+    pipe_gemv_mlx_q6: objc.id,
     pipe_gemv_mlx_q8: objc.id,
     pipe_gemv_mxfp4: objc.id,
     pipe_gemv_mxfp4_st: objc.id,
@@ -131,6 +134,7 @@ pub const MetalBackend = struct {
     pipe_gemv_t_q8_0: objc.id,
     pipe_deinterleave: objc.id,
     pipe_silu_mul: objc.id,
+    pipe_gelu_mul: objc.id,
     pipe_rms_norm_fused: objc.id,
     pipe_add_rms_norm_fused: objc.id,
     pipe_kv_append: objc.id,
@@ -237,6 +241,7 @@ pub const MetalBackend = struct {
             .pipe_gemv_bf16 = undefined,
             .pipe_gemv_f16 = undefined,
             .pipe_gemv_mlx_q4 = undefined,
+            .pipe_gemv_mlx_q6 = undefined,
             .pipe_gemv_mlx_q8 = undefined,
             .pipe_gemv_mxfp4 = undefined,
             .pipe_gemv_mxfp4_st = undefined,
@@ -264,6 +269,7 @@ pub const MetalBackend = struct {
             .pipe_gemv_t_q8_0 = undefined,
             .pipe_deinterleave = undefined,
             .pipe_silu_mul = undefined,
+            .pipe_gelu_mul = undefined,
             .pipe_rms_norm_fused = undefined,
             .pipe_add_rms_norm_fused = undefined,
             .pipe_kv_append = undefined,
@@ -297,6 +303,7 @@ pub const MetalBackend = struct {
         self.pipe_gemv_bf16 = try self.makePipeline("gemv_bf16");
         self.pipe_gemv_f16 = try self.makePipeline("gemv_f16");
         self.pipe_gemv_mlx_q4 = try self.makePipeline("gemv_mlx_q4");
+        self.pipe_gemv_mlx_q6 = try self.makePipeline("gemv_mlx_q6");
         self.pipe_gemv_mlx_q8 = try self.makePipeline("gemv_mlx_q8");
         self.pipe_gemv_mxfp4 = try self.makePipeline("gemv_mxfp4");
         self.pipe_gemv_mxfp4_st = try self.makePipeline("gemv_mxfp4_st");
@@ -324,6 +331,7 @@ pub const MetalBackend = struct {
         self.pipe_gemv_t_q8_0 = try self.makePipeline("gemv_t_q8_0");
         self.pipe_deinterleave = try self.makePipeline("deinterleave_f32");
         self.pipe_silu_mul = try self.makePipeline("silu_mul_f32");
+        self.pipe_gelu_mul = try self.makePipeline("gelu_mul_f32");
         self.pipe_rms_norm_fused = try self.makePipeline("rms_norm_fused_f32");
         self.pipe_add_rms_norm_fused = try self.makePipeline("add_rms_norm_fused_f32");
         self.pipe_kv_append = try self.makePipeline("kv_append");
@@ -337,7 +345,7 @@ pub const MetalBackend = struct {
     }
 
     /// Number of MSL compute pipelines compiled at init.
-    pub const n_pipelines: u32 = 35;
+    pub const n_pipelines: u32 = 54;
 
     /// Returns the Metal device name (e.g., "Apple M4 Pro").
     pub fn deviceName(self: *const MetalBackend) []const u8 {
@@ -761,7 +769,7 @@ pub const MetalBackend = struct {
 
     /// Compute optimal threadgroup size for GEMV based on dtype and k.
     /// For block-based quantization, threads beyond block count are idle.
-    /// Returns a multiple of 32 (warp size) capped at threadgroup_size.
+    /// Returns a multiple of 32 (SIMD group width) capped at threadgroup_size.
     fn gemvThreadgroupSize(dtype: DType, k: usize) usize {
         const nb: usize = switch (dtype) {
             // 32-element block formats
@@ -881,6 +889,11 @@ pub const MetalBackend = struct {
     /// Replaces separate silu + mul dispatches (2 dispatches → 1).
     pub fn siluMul(self: *MetalBackend, a: [*]const f32, b: [*]const f32, out: [*]f32, n: usize) void {
         self.dispatchBinaryOp(self.pipe_silu_mul, a, b, out, n);
+    }
+
+    /// out[i] = gelu(a[i]) * b[i] — fused GeGLU activation.
+    pub fn geluMul(self: *MetalBackend, a: [*]const f32, b: [*]const f32, out: [*]f32, n: usize) void {
+        self.dispatchBinaryOp(self.pipe_gelu_mul, a, b, out, n);
     }
 
     // ── Per-Head RMS Norm ──────────────────────────────────────
@@ -1141,9 +1154,13 @@ pub const MetalBackend = struct {
     /// Dispatches to a native Metal kernel for the 3-buffer MLX-Q layout
     /// (packed u32 weights + bf16 scales + bf16 biases, group_size=64).
     pub fn gemvMlxQ(self: *MetalBackend, x: [*]const f32, weight: [*]const u8, scales: [*]const u8, biases: [*]const u8, y: [*]f32, n: usize, k: usize, bits: u32) void {
-        if (bits != 4 and bits != 8) @panic("Metal MLX GEMV: unsupported bit width — add GPU kernel");
+        if (bits != 4 and bits != 6 and bits != 8) @panic("Metal MLX GEMV: unsupported bit width");
         const gpr = (k + mlx_group_elems - 1) / mlx_group_elems;
-        const wpg: usize = if (bits == 8) mlx_words_per_group_q8 else mlx_words_per_group_q4;
+        const wpg: usize = switch (bits) {
+            8 => mlx_words_per_group_q8,
+            6 => mlx_words_per_group_q6,
+            else => mlx_words_per_group_q4,
+        };
         const w_bytes = n * gpr * wpg * @sizeOf(u32);
         const sb_bytes = n * gpr * @sizeOf(u16); // bf16 scales/biases
 
@@ -1156,7 +1173,11 @@ pub const MetalBackend = struct {
         var n_val: u32 = @intCast(n);
         var k_val: u32 = @intCast(k);
 
-        const pipe = if (bits == 8) self.pipe_gemv_mlx_q8 else self.pipe_gemv_mlx_q4;
+        const pipe = switch (bits) {
+            8 => self.pipe_gemv_mlx_q8,
+            6 => self.pipe_gemv_mlx_q6,
+            else => self.pipe_gemv_mlx_q4,
+        };
         const enc = self.getEncoder(pipe);
         setBuf(enc, x_ref, 0);
         setBuf(enc, w_ref, 1);
@@ -1210,7 +1231,11 @@ pub const MetalBackend = struct {
             if (op.mlx_scales != null) {
                 const bits = op.mlx_bits;
                 const gpr = (k + mlx_group_elems - 1) / mlx_group_elems;
-                const wpg: usize = if (bits == 8) mlx_words_per_group_q8 else mlx_words_per_group_q4;
+                const wpg: usize = switch (bits) {
+                    8 => mlx_words_per_group_q8,
+                    6 => mlx_words_per_group_q6,
+                    else => mlx_words_per_group_q4,
+                };
                 const w_bytes_mlx = op.n * gpr * wpg * @sizeOf(u32);
                 const sb_bytes = op.n * gpr * @sizeOf(u16); // bf16 scales/biases
 
@@ -1220,7 +1245,11 @@ pub const MetalBackend = struct {
                 const b_ref = self.getBufRef(@ptrCast(op.mlx_biases.?), sb_bytes);
                 var n_val: u32 = @intCast(op.n);
 
-                const pipe = if (bits == 8) self.pipe_gemv_mlx_q8 else self.pipe_gemv_mlx_q4;
+                const pipe = switch (bits) {
+                    8 => self.pipe_gemv_mlx_q8,
+                    6 => self.pipe_gemv_mlx_q6,
+                    else => self.pipe_gemv_mlx_q4,
+                };
                 const enc = self.getEncoder(pipe);
                 setBuf(enc, x_ref, 0);
                 setBuf(enc, w_ref, 1);
@@ -1341,6 +1370,7 @@ pub const MetalBackend = struct {
 
         // Very long sequences exceed GPU threadgroup memory limit.
         if (sl > sdpa_max_seq_len) @panic("Metal SDPA: sequence length exceeds GPU limit (4096) — reduce --ctx-size");
+        if (hd > sdpa_max_head_dim) @panic("Metal SDPA: head_dim exceeds GPU limit (256)");
 
         // ── GPU KV append: copy k_new/v_new into KV cache at position seq_len ──
         {
@@ -1658,7 +1688,7 @@ const builtin = @import("builtin");
 test "Metal backend init and silu" {
     if (comptime builtin.os.tag != .macos) return error.SkipZigTest;
     const allocator = std.testing.allocator;
-    var metal = MetalBackend.init(allocator) catch return; // skip if no GPU
+    var metal = MetalBackend.init(allocator) catch return error.SkipZigTest;
     defer metal.deinit();
 
     var input = [_]f32{ 0.0, 1.0, -1.0, 2.0 };
@@ -1677,7 +1707,7 @@ test "Metal backend init and silu" {
 test "Metal backend rmsNorm" {
     if (comptime builtin.os.tag != .macos) return error.SkipZigTest;
     const allocator = std.testing.allocator;
-    var metal = MetalBackend.init(allocator) catch return;
+    var metal = MetalBackend.init(allocator) catch return error.SkipZigTest;
     defer metal.deinit();
 
     var input = [_]f32{ 1.0, 2.0, 3.0, 4.0 };
@@ -1694,7 +1724,7 @@ test "Metal backend rmsNorm" {
 test "Metal backend add" {
     if (comptime builtin.os.tag != .macos) return error.SkipZigTest;
     const allocator = std.testing.allocator;
-    var metal = MetalBackend.init(allocator) catch return;
+    var metal = MetalBackend.init(allocator) catch return error.SkipZigTest;
     defer metal.deinit();
 
     var a = [_]f32{ 1.0, 2.0, 3.0, 4.0 };
@@ -1712,7 +1742,7 @@ test "Metal backend add" {
 test "Metal backend gemvNvfp4St basic" {
     if (comptime builtin.os.tag != .macos) return error.SkipZigTest;
     const allocator = std.testing.allocator;
-    var metal = MetalBackend.init(allocator) catch return;
+    var metal = MetalBackend.init(allocator) catch return error.SkipZigTest;
     defer metal.deinit();
 
     // 1x16 GEMV: one output row, 16 input elements (one group).
@@ -1732,7 +1762,7 @@ test "Metal backend gemvNvfp4St basic" {
 test "Metal backend gemvNvfp4St multi-row" {
     if (comptime builtin.os.tag != .macos) return error.SkipZigTest;
     const allocator = std.testing.allocator;
-    var metal = MetalBackend.init(allocator) catch return;
+    var metal = MetalBackend.init(allocator) catch return error.SkipZigTest;
     defer metal.deinit();
 
     // 2x16 GEMV: two output rows.
@@ -1753,7 +1783,7 @@ test "Metal backend gemvNvfp4St multi-row" {
 test "Metal backend gemvMlxQ4 basic" {
     if (comptime builtin.os.tag != .macos) return error.SkipZigTest;
     const allocator = std.testing.allocator;
-    var metal = MetalBackend.init(allocator) catch return;
+    var metal = MetalBackend.init(allocator) catch return error.SkipZigTest;
     defer metal.deinit();
 
     // 1x64 GEMV: one output row, 64 input elements (one group).
@@ -1781,7 +1811,7 @@ test "Metal backend gemvMlxQ4 basic" {
 test "Metal backend gemvMlxQ4 matches CPU" {
     if (comptime builtin.os.tag != .macos) return error.SkipZigTest;
     const allocator = std.testing.allocator;
-    var metal = MetalBackend.init(allocator) catch return;
+    var metal = MetalBackend.init(allocator) catch return error.SkipZigTest;
     defer metal.deinit();
 
     const mlx_ops = @import("../ops/mlx.zig");
@@ -1789,7 +1819,7 @@ test "Metal backend gemvMlxQ4 matches CPU" {
     // Test with k=128 (2 groups), n=4 rows
     const k = 128;
     const n = 4;
-    const gpr = (k + 63) / 64; // = 2
+    const gpr = (k + mlx_group_elems - 1) / mlx_group_elems; // = 2
     const wpg = 8;
 
     // Fill x with a pattern
@@ -1825,13 +1855,13 @@ test "Metal backend gemvMlxQ4 matches CPU" {
 test "Metal backend gemvMlxQ4 large matrix" {
     if (comptime builtin.os.tag != .macos) return error.SkipZigTest;
     const al = std.testing.allocator;
-    var metal = MetalBackend.init(al) catch return;
+    var metal = MetalBackend.init(al) catch return error.SkipZigTest;
     defer metal.deinit();
     const mlx_ops = @import("../ops/mlx.zig");
 
     const k = 2560;
     const n = 64;
-    const gpr = (k + 63) / 64; // 40
+    const gpr = (k + mlx_group_elems - 1) / mlx_group_elems; // 40
     const wpg = 8;
 
     const x = try al.alloc(f32, k);

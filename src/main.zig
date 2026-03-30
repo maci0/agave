@@ -14,6 +14,13 @@ const tok_mod = @import("tokenizer/tokenizer.zig");
 const server = @import("server/server.zig");
 const display_mod = @import("display.zig");
 const Display = display_mod.Display;
+const chat_tmpl_mod = @import("chat_template.zig");
+const ChatTemplate = chat_tmpl_mod.ChatTemplate;
+const Message = chat_tmpl_mod.Message;
+const arch_mod = @import("arch.zig");
+const Arch = arch_mod.Arch;
+const TokenizerKind = tok_mod.TokenizerKind;
+const Recipe = @import("recipe.zig").Recipe;
 
 const Backend = backend_mod.Backend;
 const CpuBackend = backend_mod.CpuBackend;
@@ -127,13 +134,11 @@ fn fatalExit(comptime msg: []const u8) noreturn {
 }
 
 /// Detect free system RAM in bytes.
-/// Currently returns a fixed 16GB default. Platform-specific detection
-/// (sysctl on macOS, /proc/meminfo on Linux) is not yet implemented.
+/// Uses platform-specific detection (sysctl on macOS, /proc/meminfo on Linux).
+/// Falls back to default_free_ram on unsupported platforms.
 fn detectFreeRam() usize {
-    // TODO: Platform-specific implementation
-    // macOS: sysctl vm.stats.vm.v_free_count + vm_page_size
-    // Linux: read /proc/meminfo, extract MemAvailable
-    return default_free_ram;
+    const avail = backend_mod.detectAvailMem();
+    return if (avail > 0) avail else default_free_ram;
 }
 
 // ── Preload (fault-in mmap'd pages) ─────────────────────────────
@@ -241,14 +246,6 @@ fn preloadRegionProgress(data: []align(std.heap.page_size_min) const u8, loaded:
     std.posix.madvise(@alignCast(@constCast(data.ptr)), data.len, MADV.RANDOM) catch {};
 }
 
-// ── Architecture detection ───────────────────────────────────────
-
-const ChatTemplate = @import("chat_template.zig").ChatTemplate;
-const Recipe = @import("recipe.zig").Recipe;
-const arch_mod = @import("arch.zig");
-const Arch = arch_mod.Arch;
-const TokenizerKind = arch_mod.TokenizerKind;
-
 // ── REPL help (shared between --help and /help) ─────────────────
 
 const repl_help =
@@ -273,21 +270,21 @@ const cli_params = clap.parseParamsComptime(
     \\-v, --version              Print version and exit.
     \\-s, --serve                Start HTTP server (OpenAI + Anthropic compatible).
     \\-q, --quiet                Suppress banner and stats (output only).
-    \\-p, --port <u16>           Server port (default: 49453).
-    \\-n, --max-tokens <u32>     Maximum tokens to generate (default: 512).
-    \\-t, --temperature <str>    Sampling temperature, 0 = greedy (default: 0).
-    \\    --top-p <str>          Nucleus sampling threshold (default: 1.0).
-    \\    --top-k <u32>          Top-k sampling, 0 = disabled (default: 0).
-    \\    --repeat-penalty <str> Repetition penalty (default: 1.0).
+    \\-p, --port <u16>           Server port [default: 49453].
+    \\-n, --max-tokens <u32>     Maximum tokens to generate [default: 512].
+    \\-t, --temperature <str>    Sampling temperature, 0 = greedy [default: 0].
+    \\    --top-p <str>          Nucleus sampling threshold [default: 1.0].
+    \\    --top-k <u32>          Top-k sampling, 0 = disabled [default: 0].
+    \\    --repeat-penalty <str> Repetition penalty [default: 1.0].
     \\    --system <str>         System prompt for chat formatting.
-    \\    --backend <str>        Compute backend: auto, cpu, metal, vulkan, cuda, rocm (default: auto).
-    \\    --ctx-size <u32>       Context window size (default: 4096, 0 = model max).
-    \\    --seed <u64>           Random seed for sampling (default: random).
-    \\    --kv-type <str>        KV cache quantization: f32, f16, q8_0, int8, fp8, nvfp4 (default: f16).
-    \\    --kv-tiers <str>       Enable tiered KV cache: vram+ram, vram+ram+ssd (default: off).
-    \\    --kv-ram-budget <str>  RAM tier budget in GB (default: 50% of free RAM).
-    \\    --kv-ssd-path <str>    SSD tier file path (enables SSD tier if set).
-    \\    --kv-ssd-budget <str>  SSD tier budget in GB (default: 10).
+    \\    --backend <str>        Compute backend: auto, cpu, metal, vulkan, cuda, rocm [default: auto].
+    \\    --ctx-size <u32>       Context window size [default: 4096, 0 = model max].
+    \\    --seed <u64>           Random seed for sampling [default: random].
+    \\    --kv-type <str>        KV cache quantization: f32, f16, q8_0, int8, fp8, nvfp4 [default: f16].
+    \\    --kv-tiers <str>       Enable tiered KV cache: vram+ram, vram+ram+ssd [default: off].
+    \\    --kv-ram-budget <str>  RAM tier budget in GB, requires --kv-tiers [default: 50% of free RAM].
+    \\    --kv-ssd-path <str>    SSD tier file path, requires --kv-tiers with ssd.
+    \\    --kv-ssd-budget <str>  SSD tier budget in GB, requires --kv-tiers with ssd [default: 10].
     \\    --no-color             Disable colored output.
     \\-V, --verbose              Show technical details (params, load times, EOG).
     \\    --allow-cpu-fallback   Allow GPU backends to fall back to CPU for unsupported ops.
@@ -296,8 +293,9 @@ const cli_params = clap.parseParamsComptime(
     \\    --model-info           Print model metadata and exit (combine with --json).
     \\    --profile              Profile per-op timing (halves throughput).
     \\    --mmap                 Use lazy mmap instead of eagerly paging weights into RAM.
-    \\    --api-key <str>            API key for server authentication (Bearer token).
-    \\    --prefill-batch-size <u32>  Prefill chunk size in tokens (default: 512).
+    \\    --host <str>           Server bind address [default: 127.0.0.1].
+    \\    --api-key <str>        API key for server authentication (Bearer token).
+    \\    --prefill-batch-size <u32>  Prefill chunk size in tokens [default: 512].
     \\<str>...
     \\
 );
@@ -325,6 +323,7 @@ const CliArgs = struct {
     kv_ram_budget: ?[]const u8 = null,
     kv_ssd_path: ?[]const u8 = null,
     kv_ssd_budget: ?[]const u8 = null,
+    host: [4]u8 = .{ 127, 0, 0, 1 },
     api_key: ?[]const u8 = null,
     allow_cpu_fallback: bool,
     debug: bool,
@@ -415,6 +414,35 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
         std.process.exit(1);
     }
 
+    // Validate --kv-tiers value
+    if (res.args.@"kv-tiers") |tiers_str| {
+        if (!std.mem.eql(u8, tiers_str, "vram+ram") and !std.mem.eql(u8, tiers_str, "vram+ram+ssd")) {
+            eprint("Error: invalid --kv-tiers value '{s}'\n", .{tiers_str});
+            eprint("  Valid options: vram+ram, vram+ram+ssd\n", .{});
+            std.process.exit(1);
+        }
+    }
+
+    // Warn about KV tier flags that have no effect without --kv-tiers
+    if (res.args.@"kv-tiers" == null) {
+        if (res.args.@"kv-ram-budget" != null)
+            eprint("Warning: --kv-ram-budget has no effect without --kv-tiers\n", .{});
+        if (res.args.@"kv-ssd-budget" != null)
+            eprint("Warning: --kv-ssd-budget has no effect without --kv-tiers\n", .{});
+        if (res.args.@"kv-ssd-path" != null)
+            eprint("Warning: --kv-ssd-path has no effect without --kv-tiers\n", .{});
+    }
+
+    // Warn about server-only flags that have no effect without --serve
+    if (res.args.serve == 0) {
+        if (res.args.port != null)
+            eprint("Warning: --port has no effect without --serve\n", .{});
+        if (res.args.host != null)
+            eprint("Warning: --host has no effect without --serve\n", .{});
+        if (res.args.@"api-key" != null)
+            eprint("Warning: --api-key has no effect without --serve\n", .{});
+    }
+
     return .{
         .model_path = if (positionals.len > 0) positionals[0] else "",
         .prompt = if (positionals.len > 1) positionals[1] else null,
@@ -441,7 +469,29 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
         .kv_ram_budget = res.args.@"kv-ram-budget",
         .kv_ssd_path = res.args.@"kv-ssd-path",
         .kv_ssd_budget = res.args.@"kv-ssd-budget",
-        .api_key = res.args.@"api-key",
+        .host = blk: {
+            const host_str = res.args.host orelse break :blk [4]u8{ 127, 0, 0, 1 };
+            if (std.mem.eql(u8, host_str, "0.0.0.0")) break :blk [4]u8{ 0, 0, 0, 0 };
+            if (std.mem.eql(u8, host_str, "127.0.0.1") or std.mem.eql(u8, host_str, "localhost")) break :blk [4]u8{ 127, 0, 0, 1 };
+            // Parse dotted-quad IPv4
+            var parts: [4]u8 = .{ 0, 0, 0, 0 };
+            var iter = std.mem.splitScalar(u8, host_str, '.');
+            var pi: usize = 0;
+            while (iter.next()) |part| {
+                if (pi >= 4) break;
+                parts[pi] = std.fmt.parseInt(u8, part, 10) catch {
+                    eprint("Error: invalid host address '{s}'\n", .{host_str});
+                    std.process.exit(1);
+                };
+                pi += 1;
+            }
+            if (pi != 4) {
+                eprint("Error: invalid host address '{s}' (expected IPv4 dotted-quad)\n", .{host_str});
+                std.process.exit(1);
+            }
+            break :blk parts;
+        },
+        .api_key = res.args.@"api-key" orelse std.posix.getenv("AGAVE_API_KEY"),
         .allow_cpu_fallback = res.args.@"allow-cpu-fallback" != 0,
         .debug = res.args.debug != 0,
         .json = json_mode,
@@ -491,6 +541,8 @@ fn printUsage() void {
         \\  -q, --quiet            Suppress banner and stats (raw output only)
         \\  -s, --serve            Start HTTP server (OpenAI + Anthropic API)
         \\  -p, --port <PORT>      Server port [default: 49453]
+        \\      --host <ADDR>      Server bind address [default: 127.0.0.1]
+        \\      --api-key <KEY>    API key for server authentication (Bearer token)
         \\  -n, --max-tokens <N>   Maximum tokens to generate [default: 512]
         \\  -t, --temperature <T>  Sampling temperature, 0 = greedy [default: 0]
         \\      --top-p <P>        Nucleus sampling threshold [default: 1.0]
@@ -502,7 +554,7 @@ fn printUsage() void {
         \\      --kv-type <TYPE>   KV cache quantization: f32, f16, q8_0, int8, fp8, nvfp4 [default: f16]
         \\      --kv-tiers <TIERS> Tiered KV cache: vram+ram, vram+ram+ssd [default: off]
         \\      --kv-ram-budget <GB>  RAM tier budget in GB [default: 50% of free RAM]
-        \\      --kv-ssd-path <PATH>  SSD tier file path (enables SSD tier)
+        \\      --kv-ssd-path <PATH>  SSD tier file path (requires --kv-tiers with ssd)
         \\      --kv-ssd-budget <GB>  SSD tier budget in GB [default: 10]
         \\      --seed <N>         Random seed for sampling [default: random]
         \\  -V, --verbose          Show technical details (params, load times, EOG)
@@ -512,7 +564,6 @@ fn printUsage() void {
         \\      --json             Output results as JSON (implies --quiet)
         \\      --model-info       Print model metadata and exit (combine with --json)
         \\      --profile          Profile per-op timing (halves throughput)
-        \\      --api-key <KEY>    API key for server authentication (Bearer token)
         \\      --mmap             Use lazy mmap instead of eagerly paging weights into RAM
         \\      --prefill-batch-size <N>  Prefill chunk size in tokens [default: 512]
         \\
@@ -974,7 +1025,7 @@ pub fn main() !void {
     }
 
     // ── Preload weights into RAM (after banner so user sees info first) ──
-    const warmup_ms: u64 = if (!cli.use_mmap)
+    const warmup_ms: u64 = if (!cli.use_mmap and !cli.model_info)
         preloadModel(
             if (gguf_file != null) &gguf_file.? else null,
             if (st_dir != null) &st_dir.? else null,
@@ -1093,6 +1144,9 @@ pub fn main() !void {
 
     if (cli.serve and effective_prompt != null) {
         eprint("Warning: prompt ignored in server mode (--serve)\n", .{});
+    }
+    if (cli.serve and cli.system_prompt != null) {
+        eprint("Warning: --system ignored in server mode (system prompt comes from API request)\n", .{});
     }
 
     // ── Construct load info ────────────────────────────────────────
@@ -1246,7 +1300,7 @@ fn initAndRun(
             var model_if = mdl.model();
             if (cli.serve) {
                 var tok_if = tok.tokenizer();
-                server.run(allocator, &model_if, &tok_if, arch.chatTemplate(), minfo.name, minfo.be_name, cli.port, tok.bos_token_id, eog.ids, eog.len, tiered_ptr, cli.api_key) catch |e| {
+                server.run(allocator, &model_if, &tok_if, arch.chatTemplate(), minfo.name, minfo.be_name, cli.port, tok.bos_token_id, eog.ids, eog.len, tiered_ptr, cli.api_key, cli.host) catch |e| {
                     eprint("Error: server failed: {}\n", .{e});
                     return false;
                 };
@@ -1284,8 +1338,6 @@ fn runRepl(
 
     const repl_prompt = if (g_color) "\x1b[1;32m> \x1b[0m" else "> ";
     var show_stats: bool = !g_quiet;
-
-    const Message = @import("chat_template.zig").Message;
 
     // Conversation history for multi-turn support
     var history: std.ArrayList(Message) = .empty;

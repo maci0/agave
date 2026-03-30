@@ -3,7 +3,7 @@
 // ── RMS Norm (two-kernel approach) ────────────────────────────
 
 // Pass 1: Compute sum of squares (reduction into a single float)
-// Uses simd_sum for fast warp-level reduction. Launch with 1 threadgroup.
+// Uses simd_sum for fast SIMD-group reduction. Launch with 1 threadgroup.
 kernel void rms_norm_ss(
     device const float* input [[buffer(0)]],
     device float* ss_out      [[buffer(1)]],  // single float output
@@ -115,7 +115,7 @@ kernel void add_rms_norm_fused_f32(
 
 // ── Softmax (three-pass with threadgroup reduction) ───────────
 
-// Pass 1: Find max (reduction) — uses simd_max for fast warp-level reduction.
+// Pass 1: Find max (reduction) — uses simd_max for fast SIMD-group reduction.
 kernel void softmax_max(
     device const float* data [[buffer(0)]],
     device float* max_out    [[buffer(1)]],

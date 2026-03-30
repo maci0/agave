@@ -11,9 +11,13 @@ const silu = math_ops.silu;
 /// Dispatches to a comptime-unrolled inner loop for common d_conv values (2-8),
 /// which fully unrolls the history accumulation and ring-buffer shift.
 ///
+/// The ring buffer holds the (d_conv-1) most recent input vectors. On each call,
+/// history is shifted forward, the current input is appended, and the output is
+/// computed from [history, current_input] via convolution weights + SiLU.
+///
 /// Parameters:
 ///   - conv_out: Output buffer [conv_ch]. Receives SiLU(conv(state, input)).
-///   - conv_state: Ring buffer [(d_conv-1) * conv_ch], row-major.
+///   - conv_state: Ring buffer [(d_conv-1) * conv_ch], row-major. Updated in-place.
 ///   - conv_in: Current input vector [conv_ch].
 ///   - conv_w: Convolution weights [conv_ch * d_conv], row-major
 ///             (each channel contiguous: conv_w[ch * d_conv + k]).
@@ -141,25 +145,26 @@ pub fn mamba2Recurrence(
                 const s_v: V8 = s_row[j..][0..8].*;
                 const b_v: V8 = B_g[j..][0..8].*;
                 const c_v: V8 = C_g[j..][0..8].*;
-                const new_s = decay_v * s_v + xd_v * b_v;
+                const new_s = @mulAdd(V8, xd_v, b_v, decay_v * s_v);
                 s_row[j..][0..8].* = new_s;
-                yi_acc += new_s * c_v;
+                yi_acc = @mulAdd(V8, new_s, c_v, yi_acc);
             }
             yi += @reduce(.Add, yi_acc);
             // Scalar tail
             while (j < d_state) : (j += 1) {
-                s_row[j] = decay * s_row[j] + xd * B_g[j];
-                yi += s_row[j] * C_g[j];
+                s_row[j] = @mulAdd(f32, xd, B_g[j], decay * s_row[j]);
+                yi = @mulAdd(f32, s_row[j], C_g[j], yi);
             }
             y_h[i] = yi;
         }
     }
 }
 
-/// Group RMS norm followed by SiLU gate, applied in-place to y.
+/// SiLU gate then group RMS norm, applied in-place to y.
 ///
-/// Divides y into `n_groups` groups of `d_inner / n_groups` elements each.
-/// For each group: normalize by RMS, apply weight, multiply by SiLU(z).
+/// Follows the Mamba-2 `norm_before_gate=False` convention:
+/// 1. Gate: gated = y * SiLU(z)
+/// 2. Group RMS norm: output = rms_norm(gated) * weight
 ///
 /// Parameters:
 ///   - y:       Input/output buffer [d_inner], modified in place.
@@ -177,28 +182,33 @@ pub fn groupRmsNormSiluGate(
     eps: f32,
 ) void {
     const V8 = @Vector(8, f32);
+    std.debug.assert(d_inner % n_groups == 0);
     const elem_per_group: usize = d_inner / n_groups;
     for (0..n_groups) |g| {
         const off = g * elem_per_group;
         const y_g = y + off;
+        const z_g = z + off;
         const w_g = norm_w + g * elem_per_group;
 
-        // SIMD sum of squares
+        // 1. Apply SiLU gate in-place: y = y * silu(z)
+        for (0..elem_per_group) |j| {
+            y_g[j] *= silu(z_g[j]);
+        }
+
+        // 2. SIMD sum of squares on gated values
         var ss_acc: V8 = @splat(0.0);
         var i: usize = 0;
         while (i + 8 <= elem_per_group) : (i += 8) {
             const v: V8 = y_g[i..][0..8].*;
-            ss_acc += v * v;
+            ss_acc = @mulAdd(V8, v, v, ss_acc);
         }
         var ss: f32 = @reduce(.Add, ss_acc);
         while (i < elem_per_group) : (i += 1) ss += y_g[i] * y_g[i];
 
+        // 3. RMS normalize and apply weight
         const inv_rms = 1.0 / @sqrt(ss / @as(f32, @floatFromInt(elem_per_group)) + eps);
-        const z_g = z + off;
-        // Scalar norm+gate (SiLU per-element prevents full vectorization)
         for (0..elem_per_group) |j| {
-            const normed = y_g[j] * inv_rms * w_g[j];
-            y_g[j] = normed * silu(z_g[j]);
+            y_g[j] *= inv_rms * w_g[j];
         }
     }
 }
@@ -215,13 +225,11 @@ test "causalConv1dSilu basic" {
 
     causalConv1dSilu(&conv_out, &conv_state, &conv_in, &conv_w, null, 2, 2);
 
-    // ch0: 1.0*0.5 + 3.0*0.5 = 2.0, SiLU(2.0) = 2.0 * sigmoid(2.0)
-    const expected0 = 2.0 / (1.0 + @exp(@as(f32, -2.0)));
-    try std.testing.expectApproxEqAbs(expected0, conv_out[0], 0.01);
+    // ch0: 1.0*0.5 + 3.0*0.5 = 2.0, SiLU(2.0) ≈ 1.7616
+    try std.testing.expectApproxEqAbs(@as(f32, 1.7616), conv_out[0], 0.001);
 
-    // ch1: 2.0*0.5 + 4.0*0.5 = 3.0, SiLU(3.0) = 3.0 * sigmoid(3.0)
-    const expected1 = 3.0 / (1.0 + @exp(@as(f32, -3.0)));
-    try std.testing.expectApproxEqAbs(expected1, conv_out[1], 0.01);
+    // ch1: 2.0*0.5 + 4.0*0.5 = 3.0, SiLU(3.0) ≈ 2.8577
+    try std.testing.expectApproxEqAbs(@as(f32, 2.8577), conv_out[1], 0.001);
 
     // State should now contain the current input
     try std.testing.expectApproxEqAbs(@as(f32, 3.0), conv_state[0], 0.01);
@@ -265,11 +273,9 @@ test "causalConv1dSilu with bias" {
 
     causalConv1dSilu(&conv_out, &conv_state, &conv_in, &conv_w, &conv_b, 2, 2);
 
-    // ch0: bias(0.5) + 0*1 + 1*1 = 1.5, SiLU(1.5)
-    const expected0 = 1.5 / (1.0 + @exp(@as(f32, -1.5)));
-    try std.testing.expectApproxEqAbs(expected0, conv_out[0], 0.01);
+    // ch0: bias(0.5) + 0*1 + 1*1 = 1.5, SiLU(1.5) ≈ 1.2262
+    try std.testing.expectApproxEqAbs(@as(f32, 1.2262), conv_out[0], 0.001);
 
-    // ch1: bias(-0.5) + 0*1 + 1*1 = 0.5, SiLU(0.5)
-    const expected1 = 0.5 / (1.0 + @exp(@as(f32, -0.5)));
-    try std.testing.expectApproxEqAbs(expected1, conv_out[1], 0.01);
+    // ch1: bias(-0.5) + 0*1 + 1*1 = 0.5, SiLU(0.5) ≈ 0.3112
+    try std.testing.expectApproxEqAbs(@as(f32, 0.3112), conv_out[1], 0.001);
 }

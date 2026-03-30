@@ -3,13 +3,13 @@
 const V8 = @Vector(8, f32);
 const v8zero: V8 = @splat(0.0);
 
-/// Applies Root Mean Square Layer Normalization in-place.
+/// Applies Root Mean Square Layer Normalization: output[i] = input[i] * weight[i] / rms(input).
 pub fn rmsNorm(input: [*]const f32, weight: [*]const f32, output: [*]f32, n: usize, eps: f32) void {
     var acc: V8 = v8zero;
     var i: usize = 0;
     while (i + 8 <= n) : (i += 8) {
         const v: V8 = input[i..][0..8].*;
-        acc += v * v;
+        acc = @mulAdd(V8, v, v, acc);
     }
     var ss = @reduce(.Add, acc);
     while (i < n) : (i += 1) ss += input[i] * input[i];
@@ -35,7 +35,7 @@ pub fn addRmsNorm(a: [*]f32, b: [*]const f32, weight: [*]const f32, output: [*]f
         const vb: V8 = b[i..][0..8].*;
         const vs = va + vb;
         a[i..][0..8].* = vs;
-        acc += vs * vs;
+        acc = @mulAdd(V8, vs, vs, acc);
     }
     var ss = @reduce(.Add, acc);
     while (i < n) : (i += 1) {
@@ -61,7 +61,7 @@ pub fn l2Norm(x: [*]f32, n: usize, eps: f32) void {
     var i: usize = 0;
     while (i + 8 <= n) : (i += 8) {
         const v: V8 = x[i..][0..8].*;
-        acc += v * v;
+        acc = @mulAdd(V8, v, v, acc);
     }
     var ss = @reduce(.Add, acc);
     while (i < n) : (i += 1) ss += x[i] * x[i];
@@ -132,6 +132,45 @@ test "rmsNorm near-zero input uses epsilon" {
         try std.testing.expect(!std.math.isNan(output[i]));
         try std.testing.expect(!std.math.isInf(output[i]));
         try std.testing.expectApproxEqAbs(@as(f32, 1e-17), output[i], 1e-18);
+    }
+}
+
+test "addRmsNorm matches separate add + rmsNorm" {
+    // Verify the fused kernel produces the same result as separate add + rmsNorm
+    var a1 = [_]f32{ 1.0, -2.0, 3.0, -4.0, 5.0, -6.0, 7.0, -8.0 };
+    var a2 = [_]f32{ 1.0, -2.0, 3.0, -4.0, 5.0, -6.0, 7.0, -8.0 };
+    var b = [_]f32{ 0.5, 1.5, -0.5, 2.0, -1.0, 0.0, 1.0, -0.5 };
+    var weight = [_]f32{ 1.0, 2.0, 0.5, 1.5, 1.0, 2.0, 0.5, 1.5 };
+    const eps: f32 = 1e-6;
+
+    // Reference: separate add then rmsNorm
+    const elementwise_kernel = @import("elementwise.zig");
+    elementwise_kernel.add(&a1, &b, &a1, 8); // a1 = a1 + b
+    var ref_output: [8]f32 = undefined;
+    rmsNorm(&a1, &weight, &ref_output, 8, eps);
+
+    // Fused: addRmsNorm does both in one call
+    var fused_output: [8]f32 = undefined;
+    addRmsNorm(&a2, &b, &weight, &fused_output, 8, eps);
+
+    // Results should match
+    for (0..8) |i| try std.testing.expectApproxEqAbs(ref_output[i], fused_output[i], 1e-5);
+    // a2 should also be modified (a2 = a2 + b)
+    for (0..8) |i| try std.testing.expectApproxEqAbs(a1[i], a2[i], 1e-6);
+}
+
+test "addRmsNorm non-aligned size" {
+    var a = [_]f32{ 1.0, 2.0, 3.0, 4.0, 5.0 };
+    var b = [_]f32{ 1.0, 1.0, 1.0, 1.0, 1.0 };
+    var weight = [_]f32{ 1.0, 1.0, 1.0, 1.0, 1.0 };
+    var output: [5]f32 = undefined;
+    addRmsNorm(&a, &b, &weight, &output, 5, 1e-6);
+    // After add: a = [2,3,4,5,6], sum_sq = 4+9+16+25+36 = 90
+    // RMS = sqrt(90/5) = sqrt(18)
+    const rms = @sqrt(@as(f32, 90.0 / 5.0));
+    for (0..5) |i| {
+        const expected = @as(f32, @floatFromInt(i + 2)) / rms;
+        try std.testing.expectApproxEqAbs(expected, output[i], 1e-4);
     }
 }
 

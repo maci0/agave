@@ -17,7 +17,7 @@ const cursor_buf_size = 32;
 const simple_read_buf_size = 4096;
 /// ASCII control character boundaries for ANSI escape sequence parsing.
 const ascii_printable_start: u8 = 0x20; // Space — first printable character
-const ascii_intermediate_end: u8 = 0x40; // '@' — end of ANSI intermediate byte range
+const ascii_intermediate_end: u8 = 0x40; // '@' — start of ANSI final byte range
 const ascii_escape: u8 = 0x1b; // ESC — start of ANSI escape sequences
 
 /// Interactive line editor with history and reverse-search (Ctrl-R).

@@ -44,6 +44,24 @@ pub const Metrics = struct {
     latency_inf: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
     latency_sum: std.atomic.Value(u64) = std.atomic.Value(u64).init(0), // sum of all latencies (for avg)
 
+    // TTFT (Time-to-First-Token) histogram — same bucket scheme as request latency
+    ttft_10ms: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
+    ttft_50ms: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
+    ttft_100ms: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
+    ttft_500ms: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
+    ttft_1s: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
+    ttft_5s: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
+    ttft_10s: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
+    ttft_30s: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
+    ttft_inf: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
+    ttft_sum: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
+
+    // Prefill token counter (total prompt tokens processed)
+    prefill_tokens_total: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
+
+    // Throughput gauge (last completed request's tokens/sec × 100, stored as integer)
+    last_tps_x100: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
+
     // Prefix cache metrics
     kv_cache_hits: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
     kv_cache_misses: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
@@ -128,6 +146,40 @@ pub const Metrics = struct {
         _ = self.prefix_tokens_total.fetchAdd(total_len, .monotonic);
     }
 
+    /// Record time-to-first-token (prefill latency) and update TTFT histogram.
+    pub fn recordTTFT(self: *Metrics, prefill_ms: u64, prompt_tokens: u32) void {
+        _ = self.ttft_sum.fetchAdd(prefill_ms, .monotonic);
+        _ = self.prefill_tokens_total.fetchAdd(prompt_tokens, .monotonic);
+
+        if (prefill_ms <= latency_bucket_10ms) {
+            _ = self.ttft_10ms.fetchAdd(1, .monotonic);
+        } else if (prefill_ms <= latency_bucket_50ms) {
+            _ = self.ttft_50ms.fetchAdd(1, .monotonic);
+        } else if (prefill_ms <= latency_bucket_100ms) {
+            _ = self.ttft_100ms.fetchAdd(1, .monotonic);
+        } else if (prefill_ms <= latency_bucket_500ms) {
+            _ = self.ttft_500ms.fetchAdd(1, .monotonic);
+        } else if (prefill_ms <= latency_bucket_1s) {
+            _ = self.ttft_1s.fetchAdd(1, .monotonic);
+        } else if (prefill_ms <= latency_bucket_5s) {
+            _ = self.ttft_5s.fetchAdd(1, .monotonic);
+        } else if (prefill_ms <= latency_bucket_10s) {
+            _ = self.ttft_10s.fetchAdd(1, .monotonic);
+        } else if (prefill_ms <= latency_bucket_30s) {
+            _ = self.ttft_30s.fetchAdd(1, .monotonic);
+        } else {
+            _ = self.ttft_inf.fetchAdd(1, .monotonic);
+        }
+    }
+
+    /// Record throughput from a completed request (tokens per second × 100).
+    pub fn recordThroughput(self: *Metrics, tokens: u32, duration_ms: u64) void {
+        if (duration_ms > 0) {
+            const tps_x100: u64 = @as(u64, tokens) * 100_000 / duration_ms;
+            self.last_tps_x100.store(tps_x100, .monotonic);
+        }
+    }
+
     /// Render metrics in Prometheus text format.
     pub fn renderPrometheus(self: *const Metrics, writer: anytype) !void {
         // Counters
@@ -198,6 +250,44 @@ pub const Metrics = struct {
         try writer.print("agave_request_duration_seconds_sum {d:.3}\n", .{sum_sec});
         try writer.print("agave_request_duration_seconds_count {d}\n", .{b_inf});
 
+        // TTFT histogram — time from request start to first generated token
+        try writer.writeAll("# HELP agave_ttft_seconds Time-to-first-token histogram\n");
+        try writer.writeAll("# TYPE agave_ttft_seconds histogram\n");
+        const t10 = self.ttft_10ms.load(.monotonic);
+        const t50 = t10 + self.ttft_50ms.load(.monotonic);
+        const t100 = t50 + self.ttft_100ms.load(.monotonic);
+        const t500 = t100 + self.ttft_500ms.load(.monotonic);
+        const t1s = t500 + self.ttft_1s.load(.monotonic);
+        const t5s = t1s + self.ttft_5s.load(.monotonic);
+        const t10s = t5s + self.ttft_10s.load(.monotonic);
+        const t30s = t10s + self.ttft_30s.load(.monotonic);
+        const t_inf = t30s + self.ttft_inf.load(.monotonic);
+        try writer.print("agave_ttft_seconds_bucket{{le=\"0.01\"}} {d}\n", .{t10});
+        try writer.print("agave_ttft_seconds_bucket{{le=\"0.05\"}} {d}\n", .{t50});
+        try writer.print("agave_ttft_seconds_bucket{{le=\"0.1\"}} {d}\n", .{t100});
+        try writer.print("agave_ttft_seconds_bucket{{le=\"0.5\"}} {d}\n", .{t500});
+        try writer.print("agave_ttft_seconds_bucket{{le=\"1\"}} {d}\n", .{t1s});
+        try writer.print("agave_ttft_seconds_bucket{{le=\"5\"}} {d}\n", .{t5s});
+        try writer.print("agave_ttft_seconds_bucket{{le=\"10\"}} {d}\n", .{t10s});
+        try writer.print("agave_ttft_seconds_bucket{{le=\"30\"}} {d}\n", .{t30s});
+        try writer.print("agave_ttft_seconds_bucket{{le=\"+Inf\"}} {d}\n", .{t_inf});
+        const ttft_sum_ms = self.ttft_sum.load(.monotonic);
+        const ttft_sum_sec = @as(f64, @floatFromInt(ttft_sum_ms)) / 1000.0;
+        try writer.print("agave_ttft_seconds_sum {d:.3}\n", .{ttft_sum_sec});
+        try writer.print("agave_ttft_seconds_count {d}\n", .{t_inf});
+
+        // Prefill tokens
+        try writer.writeAll("# HELP agave_prefill_tokens_total Total prompt tokens processed during prefill\n");
+        try writer.writeAll("# TYPE agave_prefill_tokens_total counter\n");
+        try writer.print("agave_prefill_tokens_total {d}\n", .{self.prefill_tokens_total.load(.monotonic)});
+
+        // Throughput gauge
+        try writer.writeAll("# HELP agave_tokens_per_second Tokens per second from last completed request\n");
+        try writer.writeAll("# TYPE agave_tokens_per_second gauge\n");
+        const tps_x100 = self.last_tps_x100.load(.monotonic);
+        const tps: f64 = @as(f64, @floatFromInt(tps_x100)) / 100.0;
+        try writer.print("agave_tokens_per_second {d:.2}\n", .{tps});
+
         // Prefix cache metrics
         const hits = self.kv_cache_hits.load(.monotonic);
         const misses = self.kv_cache_misses.load(.monotonic);
@@ -218,7 +308,7 @@ pub const Metrics = struct {
     }
 };
 
-const test_render_buf_size: usize = 8192;
+const test_render_buf_size: usize = 16384;
 
 // Tests
 test "Metrics: recordRequest increments counter" {
@@ -284,6 +374,6 @@ test "Metrics: renderPrometheus outputs valid format" {
     try std.testing.expect(std.mem.indexOf(u8, output, "agave_queue_depth 5") != null);
     // Cumulative: 250ms request counted in 0.5s bucket and all higher buckets
     try std.testing.expect(std.mem.indexOf(u8, output, "agave_request_duration_seconds_bucket{le=\"0.5\"} 1") != null);
-    // +Inf should equal total completed count (1 request)
+    // +Inf bucket is cumulative — should equal total latency observations (1)
     try std.testing.expect(std.mem.indexOf(u8, output, "agave_request_duration_seconds_bucket{le=\"+Inf\"} 1") != null);
 }

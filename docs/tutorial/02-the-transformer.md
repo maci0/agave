@@ -47,6 +47,19 @@ Attention is computed **in parallel** (all heads compute simultaneously, not one
 | GPT-OSS | 64 | 8 | 8:1 |
 | Nemotron-H | 40 | 8 | 5:1 |
 
+**GQA Head Mapping Visualization** (Qwen3.5: 16 Q heads, 4 KV heads):
+
+```
+Q heads:  [Q0] [Q1] [Q2] [Q3] [Q4] [Q5] [Q6] [Q7] [Q8] [Q9] [Q10] [Q11] [Q12] [Q13] [Q14] [Q15]
+           │    │    │    │    │    │    │    │    │    │     │     │     │     │     │     │
+           └────┴────┴────┘    └────┴────┴────┘    └────┴─────┘     └─────┴─────┴─────┘
+                 │                   │                   │                   │
+KV heads:       [K0,V0]            [K1,V1]            [K2,V2]            [K3,V3]
+
+Each KV head is shared by 4 Q heads (16 / 4 = 4 heads per group)
+Memory: 4× smaller KV cache vs full Multi-Head Attention (MHA)
+```
+
 **MLA (Multi-head Latent Attention)** goes further — it compresses K/V into a **low-rank latent space** (a smaller intermediate representation with fewer dimensions) before caching, reducing memory even more. Used by GLM-4.
 
 ### SDPA (Scaled Dot-Product Attention)
@@ -90,6 +103,28 @@ x'[i + half] = x[i] * sin(angle) + x[i + half] * cos(angle)
 ```
 
 Each pair of dimensions `[i, i+rope_dim/2]` forms a 2D plane rotated by `angle`. Different planes use different frequencies (lower dimensions rotate faster, higher dimensions rotate slower), giving the model a range of **"wavelengths"** (cycles per distance — like how light has different wavelengths for different colors) to detect patterns at different distances.
+
+**RoPE Rotation Visualization:**
+
+```
+Original vector:      [x0, x1, x2, x3, x4, x5, x6, x7]
+                       └──┬──┘ └──┬──┘ └──┬──┘ └──┬──┘
+                       plane0  plane1  plane2  plane3
+                       (fast)  (med)   (med)   (slow)
+
+Position i=0 (θ=0):   [x0, x1, x2, x3, x4, x5, x6, x7]   (no rotation)
+
+Position i=1:         [x0', x1', x2', x3', x4', x5', x6', x7']
+                       └───┬───┘  rotation by θ*freq[0] (large angle)
+                              └───┬───┘  rotation by θ*freq[1] (medium angle)
+                                     └───┬───┘  rotation by θ*freq[2] (small angle)
+
+Position i=2:         [x0'', x1'', x2'', x3'', x4'', x5'', x6'', x7'']
+                       └────┬────┘  rotation by 2θ*freq[0] (2× plane0 angle)
+
+Dot product Q₁ · K₂ includes cos(θ₁ - θ₂) terms → relative distance (1-2) = -1 encoded
+Key insight: Attention score depends on distance between positions, not absolute positions
+```
 
 Higher theta values produce lower-frequency rotations for better long-range discrimination (allowing the model to handle longer sequences):
 

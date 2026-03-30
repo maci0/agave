@@ -32,7 +32,7 @@ const BpeTokenizer = tok_mod.BpeTokenizer;
 const ChatTemplate = @import("chat_template.zig").ChatTemplate;
 const arch_mod = @import("arch.zig");
 const Arch = arch_mod.Arch;
-const TokenizerKind = arch_mod.TokenizerKind;
+const TokenizerKind = tok_mod.TokenizerKind;
 const display_mod = @import("display.zig");
 
 // ── Named constants ──────────────────────────────────────────────

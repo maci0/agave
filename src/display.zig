@@ -14,7 +14,7 @@ pub const version = "0.1.0";
 /// Bits per byte, used for bits-per-weight (bpw) calculation.
 const bits_per_byte: f32 = 8.0;
 /// Show available memory when available is less than this percentage of total.
-const avail_display_pct: usize = 98;
+const avail_display_threshold_pct: usize = 98;
 /// Maximum number of content lines in the TTY banner box.
 const max_content_lines: usize = 6;
 /// Milliseconds per second — used for tok/s calculations.
@@ -525,7 +525,7 @@ pub const Display = struct {
             const is_gpu = info.n_gpu_kernels > 0;
             const label: []const u8 = if (info.is_uma) "unified" else if (is_gpu) "VRAM" else "RAM";
             // Show "avail/total" when available differs meaningfully from total (>2%)
-            if (info.avail_mem > 0 and info.avail_mem < info.total_mem * avail_display_pct / 100) {
+            if (info.avail_mem > 0 and info.avail_mem < info.total_mem * avail_display_threshold_pct / 100) {
                 const avail = formatSize(info.avail_mem);
                 w(&buf, &pos, " \xc2\xb7 {d:.1}/{d:.1}{s} {s}", .{ avail.val, total.val, total.unit, label });
             } else {
@@ -535,7 +535,7 @@ pub const Display = struct {
         // Show system RAM separately for discrete GPUs (VRAM differs from system RAM)
         if (info.n_gpu_kernels > 0 and !info.is_uma and info.system_mem > 0) {
             const sys_total = formatSize(info.system_mem);
-            if (info.system_avail > 0 and info.system_avail < info.system_mem * avail_display_pct / 100) {
+            if (info.system_avail > 0 and info.system_avail < info.system_mem * avail_display_threshold_pct / 100) {
                 const sys_avail = formatSize(info.system_avail);
                 w(&buf, &pos, " \xc2\xb7 {d:.1}/{d:.1}{s} RAM", .{ sys_avail.val, sys_total.val, sys_total.unit });
             } else {

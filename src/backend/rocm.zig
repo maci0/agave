@@ -695,6 +695,12 @@ pub const RocmBackend = struct {
         self.launch(self.fn_silu_mul, grid, block_size, 0, &params);
     }
 
+    /// Fused GELU + multiply: out[i] = gelu(a[i]) * b[i].
+    pub fn geluMul(self: *RocmBackend, a: [*]const f32, b: [*]const f32, out: [*]f32, n: usize) void {
+        self.gelu(a, out, n);
+        self.mul(out, b, out, n);
+    }
+
     /// In-place per-head rmsNorm.
     pub fn rmsNormMulti(_: *RocmBackend, _: [*]f32, _: [*]const f32, _: usize, _: usize, _: f32) void {
         @panic("ROCm rmsNormMulti: no GPU kernel — add a ROCm kernel");

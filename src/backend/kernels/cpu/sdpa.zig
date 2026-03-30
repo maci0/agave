@@ -5,9 +5,9 @@ const V8 = @Vector(8, f32);
 const v8zero: V8 = @splat(0.0);
 
 /// Maximum sequence length supported by the CPU SDPA scores buffer.
-const max_sdpa_seq_len: usize = 8192;
+pub const max_sdpa_seq_len: usize = 8192;
 /// Maximum per-head dimension for the cached Q vector in SDPA.
-const max_head_dim: usize = 256;
+pub const max_head_dim: usize = 256;
 
 const kv_quant = @import("../../../ops/kv_quant.zig");
 const KvQuantType = kv_quant.KvQuantType;
@@ -51,10 +51,10 @@ pub fn sdpaHead(q: [*]const f32, keys: [*]const f32, values: [*]const f32, outpu
         while (d + 8 <= hd) : (d += 8) {
             const qv: V8 = q_cached[d..][0..8].*;
             const kv: V8 = keys[k_base + d ..][0..8].*;
-            acc += qv * kv;
+            acc = @mulAdd(V8, qv, kv, acc);
         }
         var dot = @reduce(.Add, acc);
-        while (d < hd) : (d += 1) dot += q_cached[d] * keys[k_base + d];
+        while (d < hd) : (d += 1) dot = @mulAdd(f32, q_cached[d], keys[k_base + d], dot);
         scores_buf[t] = dot * scale;
     }
 
@@ -81,7 +81,7 @@ pub fn sdpaHead(q: [*]const f32, keys: [*]const f32, values: [*]const f32, outpu
                 output[q_base + d ..][0..8].* = @mulAdd(V8, sv, vv, cur);
             }
             while (d < hd) : (d += 1) {
-                output[q_base + d] += scores_buf[t] * values[v_base + d];
+                output[q_base + d] = @mulAdd(f32, scores_buf[t], values[v_base + d], output[q_base + d]);
             }
         }
     }
@@ -159,12 +159,12 @@ fn softmax(scores: []f32) void {
     }
 
     // Pass 3: normalize (SIMD)
-    const inv_v: V8 = @splat(1.0 / sum);
+    const inv_sum = 1.0 / sum;
+    const inv_v: V8 = @splat(inv_sum);
     i = 0;
     while (i + 8 <= n) : (i += 8) {
         scores[i..][0..8].* = @as(V8, scores[i..][0..8].*) * inv_v;
     }
-    const inv_sum = 1.0 / sum;
     while (i < n) : (i += 1) scores[i] *= inv_sum;
 }
 

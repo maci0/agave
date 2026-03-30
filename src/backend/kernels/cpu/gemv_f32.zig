@@ -19,10 +19,10 @@ pub fn gemvF32(x: [*]const f32, w: [*]const f32, y: [*]f32, n: usize, k: usize) 
         var i: usize = 0;
         while (i + 8 <= k) : (i += 8) {
             const xv: V8 = x[i..][0..8].*;
-            acc0 += xv * @as(V8, w[r0 + i ..][0..8].*);
-            acc1 += xv * @as(V8, w[r1 + i ..][0..8].*);
-            acc2 += xv * @as(V8, w[r2 + i ..][0..8].*);
-            acc3 += xv * @as(V8, w[r3 + i ..][0..8].*);
+            acc0 = @mulAdd(V8, xv, @as(V8, w[r0 + i ..][0..8].*), acc0);
+            acc1 = @mulAdd(V8, xv, @as(V8, w[r1 + i ..][0..8].*), acc1);
+            acc2 = @mulAdd(V8, xv, @as(V8, w[r2 + i ..][0..8].*), acc2);
+            acc3 = @mulAdd(V8, xv, @as(V8, w[r3 + i ..][0..8].*), acc3);
         }
         var t0: f32 = 0.0;
         var t1: f32 = 0.0;
@@ -30,10 +30,10 @@ pub fn gemvF32(x: [*]const f32, w: [*]const f32, y: [*]f32, n: usize, k: usize) 
         var t3: f32 = 0.0;
         while (i < k) : (i += 1) {
             const xv = x[i];
-            t0 += xv * w[r0 + i];
-            t1 += xv * w[r1 + i];
-            t2 += xv * w[r2 + i];
-            t3 += xv * w[r3 + i];
+            t0 = @mulAdd(f32, xv, w[r0 + i], t0);
+            t1 = @mulAdd(f32, xv, w[r1 + i], t1);
+            t2 = @mulAdd(f32, xv, w[r2 + i], t2);
+            t3 = @mulAdd(f32, xv, w[r3 + i], t3);
         }
         y[row] = @reduce(.Add, acc0) + t0;
         y[row + 1] = @reduce(.Add, acc1) + t1;
@@ -46,9 +46,9 @@ pub fn gemvF32(x: [*]const f32, w: [*]const f32, y: [*]f32, n: usize, k: usize) 
         const roff = row * k;
         var i: usize = 0;
         while (i + 8 <= k) : (i += 8) {
-            acc += @as(V8, x[i..][0..8].*) * @as(V8, w[roff + i ..][0..8].*);
+            acc = @mulAdd(V8, @as(V8, x[i..][0..8].*), @as(V8, w[roff + i ..][0..8].*), acc);
         }
-        while (i < k) : (i += 1) tail += x[i] * w[roff + i];
+        while (i < k) : (i += 1) tail = @mulAdd(f32, x[i], w[roff + i], tail);
         y[row] = @reduce(.Add, acc) + tail;
     }
 }

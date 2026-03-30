@@ -94,6 +94,25 @@ kernel void silu_mul_f32(
     out[tid] = (x / (1.0f + exp(-x))) * b[tid];
 }
 
+// Fused GELU + multiply: out = gelu(a) * b — used by GeGLU FFN in Gemma3.
+kernel void gelu_mul_f32(
+    device const float* a [[buffer(0)]],
+    device const float* b [[buffer(1)]],
+    device float* out     [[buffer(2)]],
+    constant uint& n      [[buffer(3)]],
+    uint tid [[thread_position_in_grid]])
+{
+    if (tid >= n) return;
+    float x = a[tid];
+    const float sqrt_2_over_pi = 0.7978845608028654f;
+    const float coeff = 0.044715f;
+    float inner = sqrt_2_over_pi * fma(coeff * x * x, x, x);
+    float clamped = clamp(inner, -10.0f, 10.0f);
+    float e2 = exp(2.0f * clamped);
+    float t = (e2 - 1.0f) / (e2 + 1.0f);
+    out[tid] = 0.5f * x * (1.0f + t) * b[tid];
+}
+
 // GELU activation: y = 0.5 * x * (1 + tanh(sqrt(2/pi) * (x + 0.044715 * x^3)))
 kernel void gelu_f32(
     device const float* input [[buffer(0)]],

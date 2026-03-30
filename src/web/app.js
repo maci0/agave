@@ -5,6 +5,7 @@ var inp = document.getElementById('msg');
 var sendBtn = document.getElementById('send-btn');
 var stopBtn = document.getElementById('stop-btn');
 var modelName = '', abortCtrl = null, isStreaming = false, autoScroll = true, renderTimer = null;
+sendBtn.disabled = true;
 var backendName = '';
 
 fetch('/v1/models').then(function(r) { return r.json(); }).then(function(d) {
@@ -18,6 +19,7 @@ fetch('/v1/models').then(function(r) { return r.json(); }).then(function(d) {
 function autoResize() {
   inp.style.height = 'auto';
   inp.style.height = Math.min(inp.scrollHeight, 200) + 'px';
+  sendBtn.disabled = !inp.value.trim();
 }
 
 inp.addEventListener('input', autoResize);
@@ -31,6 +33,7 @@ inp.addEventListener('keydown', function(e) {
 document.addEventListener('keydown', function(e) {
   if (e.key === 'Escape') {
     if (document.getElementById('info-modal').classList.contains('show')) hideInfo();
+    else if (document.getElementById('sidebar').classList.contains('open')) toggleSidebar();
     else if (isStreaming) stopGen();
   }
 });
@@ -76,9 +79,10 @@ function processCode(el) {
     }
     var c = document.createElement('button'); c.className = 'copy-btn'; c.textContent = 'Copy';
     c.onclick = function() {
-      navigator.clipboard.writeText(b.textContent);
-      c.textContent = 'Copied!';
-      setTimeout(function() { c.textContent = 'Copy'; }, 2000);
+      navigator.clipboard.writeText(b.textContent).then(function() {
+        c.textContent = 'Copied!';
+        setTimeout(function() { c.textContent = 'Copy'; }, 2000);
+      }).catch(function() { c.textContent = 'Failed'; setTimeout(function() { c.textContent = 'Copy'; }, 2000); });
     };
     pre.appendChild(c);
   });
@@ -89,6 +93,13 @@ function processCode(el) {
 // This is safe because: (1) user input goes through marked.parse() which escapes HTML,
 // (2) the result is then passed through DOMPurify.sanitize() before DOM insertion,
 // (3) showEmpty() uses hardcoded HTML constants (no user input).
+// If DOMPurify fails to load, the fallback escapes all HTML entities (breaks markdown
+// rendering but prevents XSS). The previous regex-only fallback was insufficient.
+
+function announceToSR(text) {
+  var sr = document.getElementById('sr-announce');
+  if (sr) { sr.textContent = ''; setTimeout(function() { sr.textContent = text; }, 100); }
+}
 
 function renderContent(el, content, final) {
   if (renderTimer && !final) return;
@@ -100,18 +111,21 @@ function renderContent(el, content, final) {
     });
     if (dc.indexOf('<think>') === 0) dc = dc.substring(7);
     var parsed = typeof marked !== 'undefined' ? marked.parse(dc) : dc.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\n/g,'<br>');
-    var sanitized = typeof DOMPurify !== 'undefined' ? DOMPurify.sanitize(parsed) : parsed.replace(/<script[\s\S]*?<\/script>/gi, '');
+    var sanitized = typeof DOMPurify !== 'undefined' ? DOMPurify.sanitize(parsed) : parsed.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
     var container = document.createElement('div'); container.innerHTML = sanitized;
     while (container.firstChild) el.appendChild(container.firstChild);
     processCode(el);
     if (final) {
       var cb = document.createElement('button'); cb.className = 'msg-copy'; cb.textContent = 'Copy';
       cb.onclick = function() {
-        navigator.clipboard.writeText(content);
-        cb.textContent = 'Copied!';
-        setTimeout(function() { cb.textContent = 'Copy'; }, 2000);
+        navigator.clipboard.writeText(content).then(function() {
+          cb.textContent = 'Copied!';
+          setTimeout(function() { cb.textContent = 'Copy'; }, 2000);
+        }).catch(function() { cb.textContent = 'Failed'; setTimeout(function() { cb.textContent = 'Copy'; }, 2000); });
       };
       el.appendChild(cb);
+      var plain = el.textContent.substring(0, 200);
+      announceToSR('Agave responded: ' + plain + (content.length > 200 ? '...' : ''));
     }
     scrollBottom();
     renderTimer = null;
@@ -160,7 +174,7 @@ function sendMessage(text) {
             var o = JSON.parse(d);
             if (o.t) { content += o.t; renderContent(el, content, false); }
             if (o.done) addStats(el, { tokens: String(o.n), tps: o.tps.toFixed(2), time: String(o.ms), pfTok: String(o.pn), pfMs: String(o.pms), pfTps: o.ptps.toFixed(1) });
-          } catch(e) {}
+          } catch(e) { console.warn('SSE parse:', e); }
         }
         return read();
       });
@@ -189,10 +203,16 @@ function handleCommand(cmd) {
     renderContent(el2, 'Model: **' + (modelName || 'unknown') + '**', true);
     return;
   }
+  if (cmd === '/clear') { clearChat(); return; }
   fetch('/v1/chat', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: 'message=' + encodeURIComponent(cmd) })
   .then(function(resp) { return resp.text(); }).then(function(responseHtml) {
     var tmp = document.createElement('div');
-    tmp.innerHTML = typeof DOMPurify !== 'undefined' ? DOMPurify.sanitize(responseHtml) : responseHtml;
+    // DOMPurify sanitizes HTML; fallback escapes all entities to prevent XSS
+    if (typeof DOMPurify !== 'undefined') {
+      tmp.innerHTML = DOMPurify.sanitize(responseHtml);
+    } else {
+      tmp.textContent = responseHtml;
+    }
     var msgEl = tmp.querySelector('.msg.assistant'); var msg = msgEl ? msgEl.textContent : 'Done';
     var el3 = addAssistant(); renderContent(el3, msg, true);
   })
@@ -207,7 +227,7 @@ function onSubmit(e) {
   e.preventDefault();
   var text = inp.value.trim();
   if (!text || isStreaming) return false;
-  inp.value = ''; autoResize(); addUser(text);
+  inp.value = ''; autoResize(); sendBtn.disabled = true; addUser(text);
   if (text.charAt(0) === '/') handleCommand(text); else sendMessage(text);
   return false;
 }
@@ -230,8 +250,9 @@ function showEmpty() {
 }
 
 function clearChat() {
+  if (!confirm('Clear this conversation?')) return;
   fetch('/v1/chat', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: 'message=%2Fclear' })
-  .then(function() { loadConvs(); showEmpty(); }).catch(function() { showEmpty(); });
+  .then(function() { loadConvs(); showEmpty(); inp.focus(); }).catch(function() { showEmpty(); inp.focus(); });
 }
 
 function toggleSidebar() {
@@ -279,20 +300,28 @@ function selectConv(id) {
   .then(function(r) { return r.json(); }).then(function(data) {
     while (chat.firstChild) chat.removeChild(chat.firstChild);
     if (!data.messages || !data.messages.length) { showEmpty(); loadConvs(); return; }
-    var e = document.getElementById('empty'); if (e) e.remove();
     data.messages.forEach(function(m) {
       if (m.role === 'user') { addUser(m.content); }
       else { var el = addAssistant(); renderContent(el, m.content, true); }
     });
     loadConvs(); scrollBottom();
-  }).catch(function() {});
+  }).catch(function() {
+    var err = document.createElement('div'); err.className = 'error-msg';
+    err.textContent = 'Failed to load conversation. Check that the server is running.';
+    chat.appendChild(err); scrollBottom();
+  });
 }
 
 function deleteConv(id) {
+  if (!confirm('Delete this conversation?')) return;
   fetch('/v1/conversations', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: 'action=delete&id=' + id })
   .then(function(r) { return r.json(); }).then(function(data) {
-    loadConvs(); if (data.cleared) showEmpty();
-  }).catch(function() {});
+    loadConvs(); if (data.cleared) showEmpty(); inp.focus();
+  }).catch(function() {
+    var err = document.createElement('div'); err.className = 'error-msg';
+    err.textContent = 'Failed to delete conversation.';
+    chat.appendChild(err); scrollBottom();
+  });
 }
 
 function showInfo() {
@@ -300,8 +329,21 @@ function showInfo() {
   document.getElementById('info-model').textContent = modelName || '-';
   document.getElementById('info-backend').textContent = backendName || '-';
   var cb = m.querySelector('.modal-close'); if (cb) cb.focus();
+  m._trapFocus = function(e) {
+    if (e.key !== 'Tab') return;
+    var focusable = m.querySelectorAll('button, [href], [tabindex]:not([tabindex="-1"])');
+    if (!focusable.length) return;
+    var first = focusable[0], last = focusable[focusable.length - 1];
+    if (e.shiftKey) { if (document.activeElement === first) { e.preventDefault(); last.focus(); } }
+    else { if (document.activeElement === last) { e.preventDefault(); first.focus(); } }
+  };
+  m.addEventListener('keydown', m._trapFocus);
 }
 
-function hideInfo() { document.getElementById('info-modal').classList.remove('show'); inp.focus(); }
+function hideInfo() {
+  var m = document.getElementById('info-modal'); m.classList.remove('show');
+  if (m._trapFocus) { m.removeEventListener('keydown', m._trapFocus); m._trapFocus = null; }
+  inp.focus();
+}
 
 loadConvs();

@@ -8,10 +8,7 @@
 
 const std = @import("std");
 
-/// Microseconds per millisecond — for display conversion.
 const us_per_ms: f64 = 1000.0;
-
-/// Multiplier to convert a fraction to a percentage.
 const percent_scale: f64 = 100.0;
 
 /// Operation categories for profiling.
@@ -45,13 +42,16 @@ pub const PerfCounters = struct {
     enabled: bool = false,
 
     /// Begin timing an operation. Returns the current timestamp (or 0 if profiling is disabled).
-    pub fn start(self: *PerfCounters) i128 {
+    /// Inlined so the compiler can fold the `enabled` check at each call site,
+    /// eliminating function-call overhead on the common (disabled) path.
+    pub inline fn start(self: *PerfCounters) i128 {
         if (!self.enabled) return 0;
         return std.time.nanoTimestamp();
     }
 
     /// End timing for `op`, accumulating elapsed microseconds since `t0`.
-    pub fn end(self: *PerfCounters, op: Op, t0: i128) void {
+    /// Inlined to eliminate per-call overhead when profiling is disabled.
+    pub inline fn end(self: *PerfCounters, op: Op, t0: i128) void {
         if (!self.enabled) return;
         const elapsed: u64 = @intCast(@divFloor(std.time.nanoTimestamp() - t0, 1000));
         const idx = @intFromEnum(op);
@@ -60,7 +60,8 @@ pub const PerfCounters = struct {
     }
 
     /// Increment the generated token count (used for per-token averaging in reports).
-    pub fn addToken(self: *PerfCounters) void {
+    /// Inlined to eliminate per-call overhead when profiling is disabled.
+    pub inline fn addToken(self: *PerfCounters) void {
         if (self.enabled) self.n_tokens += 1;
     }
 

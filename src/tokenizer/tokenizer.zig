@@ -32,6 +32,9 @@ pub const Tokenizer = struct {
     }
 };
 
+/// Tokenizer mode: BPE (byte-pair merges), SPM (SentencePiece greedy), or SPM without dummy prefix.
+pub const TokenizerKind = enum { bpe, spm, spm_no_dummy };
+
 /// BPE tokenizer implementation (supports BPE and SPM modes) — re-exported so callers use tokenizer.zig as the single import.
 pub const BpeTokenizer = @import("bpe.zig").BpeTokenizer;
 

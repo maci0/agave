@@ -1,10 +1,11 @@
 </style>
 </head>
 <body>
-<div class="sidebar-overlay" id="sidebar-overlay" onclick="toggleSidebar()"></div>
+<a href="#msg" class="skip-link">Skip to message input</a>
+<div class="sidebar-overlay" id="sidebar-overlay" onclick="toggleSidebar()" role="presentation"></div>
 <header>
 <div class="logo">
-<button class="hdr-btn menu-btn" onclick="toggleSidebar()" style="display:none" title="Menu" aria-label="Toggle sidebar" aria-expanded="false" id="menu-btn">&#9776;</button>
+<button class="hdr-btn menu-btn" onclick="toggleSidebar()" title="Menu" aria-label="Toggle sidebar" aria-expanded="false" id="menu-btn">&#9776;</button>
 <h1>&#127797; agave</h1><span class="model-badge" id="model-name">loading...</span></div>
 <div class="hdr-btns">
 <button class="new-chat-btn" onclick="newConv()" aria-label="New conversation">+ New</button>
@@ -17,7 +18,7 @@
 <div class="conv-list" id="conv-list"><div class="conv-empty">No conversations yet</div></div>
 </aside>
 <div class="main" role="main">
-<div id="chat" aria-live="polite" aria-relevant="additions">
+<div id="chat" role="log" aria-live="polite" aria-relevant="additions">
 <div id="empty">
 <div class="icon">&#127797;</div><h2>agave</h2>
 <p>High-performance LLM inference engine</p>
@@ -54,9 +55,10 @@
 </div>
 </div>
 </div>
+<div id="sr-announce" class="sr-only" aria-live="polite" aria-atomic="true"></div>
 <form id="chat-form" onsubmit="return onSubmit(event)">
 <div class="input-row">
-<textarea id="msg" placeholder="Send a message..." rows="1" aria-label="Message input"></textarea>
+<textarea id="msg" placeholder="Send a message..." rows="1" aria-label="Message input" autofocus></textarea>
 <button type="submit" class="send-btn" id="send-btn" aria-label="Send message">Send</button>
 <button type="button" class="stop-btn" id="stop-btn" onclick="stopGen()" aria-label="Stop generation">Stop</button>
 </div>

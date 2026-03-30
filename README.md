@@ -8,11 +8,11 @@ A high-performance LLM inference engine written in Zig. Zero external ML librari
 - **5 Backends**: CPU (SIMD-optimized), Metal GPU (Apple Silicon), Vulkan, CUDA, ROCm — individually toggleable at build time
 - **Compile-Time Model Selection**: Disable unused model architectures to reduce binary size (1.8 MB → 0.75 MB with all models stripped)
 - **2 Formats**: GGUF, SafeTensors (multi-shard, MLX quantized, NVFP4)
-- **19 Quantization Types**: F32, F16, BF16, Q2_K, Q3_K, Q4_0, Q4_1, Q4_K, Q5_0, Q5_K, Q6_K, Q8_0, IQ4_XS, IQ4_NL, FP8 E4M3, FP8 E5M2, NVFP4, MXFP4, MLX 4/6-bit
+- **20 Quantization Types**: F32, F16, BF16, Q2_K, Q3_K, Q4_0, Q4_1, Q4_K, Q5_0, Q5_K, Q6_K, Q8_0, TQ1_0, IQ4_XS, IQ4_NL, FP8 E4M3, FP8 E5M2, NVFP4, MXFP4, MLX 4/6-bit
 - **Chat Templates**: Data-driven per-architecture prompt formatting (ChatML, Gemma, GPT-OSS)
 - **Recipes**: Optional proven-default configs per model/hardware/quant combo
 - **Interactive REPL**: Multi-turn chat with `/help`, `/clear`, `/stats`, `/quit`
-- **HTTP Server**: OpenAI + Anthropic API, htmx chat UI, Prometheus metrics
+- **HTTP Server**: OpenAI + Anthropic API, chat UI, Prometheus metrics
 - **~34 tok/s** on Gemma 3 1B Q8_0 (Metal, Apple Silicon)
 
 ## Quick Start
@@ -78,6 +78,15 @@ agave [OPTIONS] <model> [prompt]
       --system <TEXT>      System prompt for chat formatting
       --backend <BE>       auto, cpu, metal, vulkan, cuda, rocm [default: auto]
       --ctx-size <N>       Context window size [default: 4096, 0 = model max]
+      --seed <N>           Random seed for sampling [default: random]
+      --kv-type <TYPE>     KV cache quantization: f32, f16, q8_0, int8, fp8, nvfp4 [default: f16]
+      --kv-tiers <TIERS>   Enable tiered KV cache: vram+ram, vram+ram+ssd [default: off]
+      --kv-ram-budget <GB> RAM tier budget in GB, requires --kv-tiers [default: 50% free]
+      --kv-ssd-path <PATH> SSD tier file path, requires --kv-tiers with ssd
+      --kv-ssd-budget <GB> SSD tier budget in GB, requires --kv-tiers with ssd [default: 10]
+      --host <ADDR>        Server bind address [default: 127.0.0.1]
+      --api-key <KEY>      API key for server authentication (Bearer token)
+      --prefill-batch-size <N> Prefill chunk size in tokens [default: 512]
       --no-color           Disable ANSI colors
   -V, --verbose            Show technical details (params, load times, EOG)
       --allow-cpu-fallback Allow GPU backends to fall back to CPU
@@ -163,10 +172,11 @@ Current presets: Qwen Q4 Metal, Gemma Q4 Metal, GPT-OSS Metal, CPU generic. Add 
 src/
 ├── main.zig           # CLI, format detection, model init, REPL, recipe application
 ├── arch.zig           # Architecture enum, detection, chat template mapping
-├── server.zig         # HTTP server (OpenAI + Anthropic API + chat UI)
-├── scheduler.zig      # Continuous batching request scheduler
-├── metrics.zig        # Prometheus metrics collector
-├── rate_limiter.zig   # Token bucket rate limiter
+├── server/            # HTTP server
+│   ├── server.zig     #   HTTP server (OpenAI + Anthropic API + chat UI)
+│   ├── scheduler.zig  #   Continuous batching request scheduler
+│   ├── metrics.zig    #   Prometheus metrics collector
+│   └── rate_limiter.zig #  Token bucket rate limiter
 ├── display.zig        # Rich CLI output (banner, stats, progress)
 ├── chat_template.zig  # Data-driven chat prompt templates (ChatML, Gemma, GPT-OSS)
 ├── recipe.zig         # Optional preset configs per model/hardware/quant combo
@@ -255,7 +265,7 @@ docker buildx build --load -t agave \
 docker run --rm -v /path/to/models:/models agave /models/model.gguf "Hello"
 
 # Run HTTP server
-docker run --rm -p 8080:8080 -v /path/to/models:/models agave /models/model.gguf --serve
+docker run --rm -p 49453:49453 -v /path/to/models:/models agave /models/model.gguf --serve
 
 # Override Zig version at build time
 docker buildx build --build-arg ZIG_VERSION=0.16.0 -t agave .

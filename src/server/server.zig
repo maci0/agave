@@ -14,6 +14,7 @@ const chat_tmpl_mod = @import("../chat_template.zig");
 const ChatTemplate = chat_tmpl_mod.ChatTemplate;
 const Message = chat_tmpl_mod.Message;
 const max_eog_ids = @import("../arch.zig").max_eog_ids;
+const math_ops = @import("../ops/math.zig");
 const scheduler = @import("scheduler.zig");
 const RateLimiter = @import("rate_limiter.zig").RateLimiter;
 const Metrics = @import("metrics.zig").Metrics;
@@ -39,14 +40,18 @@ const http_buf_size: usize = 65536;
 const hdr_buf_size: usize = 1024;
 const short_hdr_buf_size: usize = 512;
 const error_body_buf_size: usize = 256;
+/// Maximum path length logged per request (truncates longer paths).
+const max_log_path_len: usize = 256;
 const health_buf_size: usize = 512;
-const metrics_render_buf_size: usize = 16384;
+const metrics_render_buf_size: usize = 32768;
 const stats_buf_size: usize = 512;
 const sse_event_buf_size: usize = 1024;
 /// Buffer size for short JSON responses (e.g., clear conversation result).
 const clear_response_buf_size: usize = 128;
 /// Maximum HTTP request body size (1 MB).
 const max_request_body_size: usize = 1_000_000;
+/// Maximum messages extractable from a single API request body.
+const max_api_messages: usize = 128;
 /// Maximum number of concurrent conversations.
 const max_conversations: usize = 100;
 /// Maximum messages per conversation.
@@ -63,6 +68,9 @@ const scheduler_timeout_sec: u32 = 30;
 const scheduler_poll_interval_ns: u64 = 10_000_000; // 10ms
 /// Accept socket timeout (seconds) — allows Ctrl+C to interrupt the accept loop.
 const accept_timeout_sec: i64 = 1;
+/// Per-connection read timeout (seconds) — prevents slow loris DoS attacks
+/// where an attacker holds connections open by sending data one byte at a time.
+const connection_read_timeout_sec: i64 = 30;
 /// Poll interval (milliseconds) while draining active connections during shutdown.
 const drain_poll_interval_ms: u64 = 100;
 /// Seconds per minute — used for UTC time decomposition in request logs.
@@ -228,15 +236,35 @@ fn getTimeComponents() TimeComponents {
     };
 }
 
+/// Sanitize a string for safe terminal output by replacing control characters
+/// (bytes < 0x20 except space, and DEL 0x7F) with '?'. Prevents log injection
+/// via terminal escape sequences (CWE-117).
+fn sanitizeForLog(input: []const u8, buf: []u8) []const u8 {
+    const len = @min(input.len, buf.len);
+    for (0..len) |i| {
+        const c = input[i];
+        buf[i] = if ((c < 0x20 and c != ' ') or c == 0x7F) '?' else c;
+    }
+    return buf[0..len];
+}
+
 fn logRequest(method: []const u8, path: []const u8) void {
     const t = getTimeComponents();
-    slog("[{d:0>2}:{d:0>2}:{d:0>2}] {s} {s}\n", .{ t.hours, t.minutes, t.seconds, method, path });
+    var method_buf: [16]u8 = undefined;
+    var path_buf: [max_log_path_len]u8 = undefined;
+    const safe_method = sanitizeForLog(method, &method_buf);
+    const safe_path = sanitizeForLog(path, &path_buf);
+    slog("[{d:0>2}:{d:0>2}:{d:0>2}] {s} {s}\n", .{ t.hours, t.minutes, t.seconds, safe_method, safe_path });
 }
 
 /// Log completion of a request with status code and duration.
 fn logRequestDone(method: []const u8, path: []const u8, status: u16, duration_ms: u64) void {
     const t = getTimeComponents();
-    slog("[{d:0>2}:{d:0>2}:{d:0>2}] {s} {s} -> {d} ({d}ms)\n", .{ t.hours, t.minutes, t.seconds, method, path, status, duration_ms });
+    var method_buf: [16]u8 = undefined;
+    var path_buf: [max_log_path_len]u8 = undefined;
+    const safe_method = sanitizeForLog(method, &method_buf);
+    const safe_path = sanitizeForLog(path, &path_buf);
+    slog("[{d:0>2}:{d:0>2}:{d:0>2}] {s} {s} -> {d} ({d}ms)\n", .{ t.hours, t.minutes, t.seconds, safe_method, safe_path, status, duration_ms });
 }
 
 fn logGeneration(tokens: u32, time_ms: u64, tps: f32) void {
@@ -248,13 +276,11 @@ fn logGeneration(tokens: u32, time_ms: u64, tps: f32) void {
     }
 }
 
-/// Web UI HTML page — assembled at comptime from src/ui/ files.
-/// Edit src/ui/style.css for styles, src/ui/app.js for behavior,
-/// src/ui/head.html for <head> content, src/ui/body.html for page structure.
-const html_page = @embedFile("../ui/head.html") ++
-    @embedFile("../ui/style.css") ++
-    @embedFile("../ui/body.html") ++
-    @embedFile("../ui/app.js") ++
+/// Web UI HTML page — assembled at comptime from src/web/ files.
+const html_page = @embedFile("../web/head.html") ++
+    @embedFile("../web/style.css") ++
+    @embedFile("../web/body.html") ++
+    @embedFile("../web/app.js") ++
     "\n</script></body></html>\n";
 
 /// Generate a unique request ID (monotonically increasing counter).
@@ -341,6 +367,7 @@ const security_headers =
     "X-Content-Type-Options: nosniff\r\n" ++
     "X-Frame-Options: DENY\r\n" ++
     "Referrer-Policy: no-referrer\r\n" ++
+    "Cache-Control: no-store\r\n" ++
     "Content-Security-Policy: default-src 'none'; script-src 'unsafe-inline' https://cdn.jsdelivr.net; style-src 'unsafe-inline' https://cdn.jsdelivr.net https://fonts.googleapis.com; font-src https://fonts.gstatic.com; connect-src 'self'; img-src 'self'; frame-ancestors 'none'\r\n";
 
 /// Validate Authorization header against configured API key.
@@ -371,8 +398,8 @@ fn validateAuth(server: *const Server, headers: []const u8) bool {
 
 /// Constant-time byte comparison to prevent timing side-channel attacks on secrets.
 /// Always iterates over the secret length (b) to avoid leaking key length.
-/// Uses volatile reads to prevent compiler optimizations that could
-/// short-circuit the comparison.
+/// Accumulates XOR differences into a single byte — the compiler cannot
+/// short-circuit because the final result depends on every iteration.
 fn constantTimeEql(a: []const u8, b: []const u8) bool {
     var diff: u8 = if (a.len == b.len) 0 else 1;
     // Always iterate over the full secret length (b) to avoid
@@ -429,7 +456,7 @@ fn send429(stream: net.Stream, retry_after: u32) void {
     var buf: [error_body_buf_size]u8 = undefined;
     const body = std.fmt.bufPrint(&buf, "{{\"error\":{{\"message\":\"Rate limit exceeded. Retry after {d} seconds.\",\"type\":\"rate_limit_exceeded\",\"code\":null}}}}", .{retry_after}) catch return;
     var hdr_buf: [hdr_buf_size]u8 = undefined;
-    const hdr = std.fmt.bufPrint(&hdr_buf, "HTTP/1.1 429 Too Many Requests\r\nContent-Type: application/json\r\nContent-Length: {d}\r\nRetry-After: {d}\r\n" ++ security_headers ++ "Connection: close\r\n\r\n", .{ body.len, retry_after }) catch return;
+    const hdr = std.fmt.bufPrint(&hdr_buf, "HTTP/1.1 429 Too Many Requests\r\nContent-Type: application/json\r\nContent-Length: {d}\r\nRetry-After: {d}\r\nAccess-Control-Allow-Origin: *\r\n" ++ security_headers ++ "Connection: close\r\n\r\n", .{ body.len, retry_after }) catch return;
     stream.writeAll(hdr) catch return;
     stream.writeAll(body) catch return;
 }
@@ -445,7 +472,7 @@ fn handleRequest(stream: net.Stream, req: HttpRequest) void {
 
     // CORS preflight
     if (std.mem.eql(u8, method, "OPTIONS")) {
-        stream.writeAll("HTTP/1.1 204 No Content\r\nAccess-Control-Allow-Origin: *\r\nAccess-Control-Allow-Methods: GET, POST, OPTIONS\r\nAccess-Control-Allow-Headers: Content-Type, Authorization\r\nAccess-Control-Max-Age: " ++ cors_max_age_seconds ++ "\r\n" ++ security_headers ++ "Content-Length: 0\r\nConnection: close\r\n\r\n") catch return;
+        stream.writeAll("HTTP/1.1 204 No Content\r\nAccess-Control-Allow-Origin: *\r\nAccess-Control-Allow-Methods: GET, POST, OPTIONS\r\nAccess-Control-Allow-Headers: Content-Type, Authorization, x-api-key\r\nAccess-Control-Max-Age: " ++ cors_max_age_seconds ++ "\r\n" ++ security_headers ++ "Content-Length: 0\r\nConnection: close\r\n\r\n") catch return;
         return;
     }
 
@@ -454,8 +481,8 @@ fn handleRequest(stream: net.Stream, req: HttpRequest) void {
         var buf: [health_buf_size]u8 = undefined;
         const uptime: i64 = if (g_server.start_time > 0) std.time.timestamp() - g_server.start_time else 0;
         const json = std.fmt.bufPrint(&buf,
-            \\{{"status":"ok","model":"{s}","backend":"{s}","uptime_s":{d},"active_connections":{d},"requests_served":{d}}}
-        , .{ g_server.model_name, g_server.backend_name, uptime, g_server.active_connections.load(.monotonic), g_server.request_counter.load(.monotonic) }) catch return;
+            \\{{"status":"ok","model":"{s}","backend":"{s}","uptime_s":{d},"active_connections":{d},"requests_total":{d}}}
+        , .{ g_server.model_name, g_server.backend_name, uptime, g_server.active_connections.load(.monotonic), g_server.metrics.requests_total.load(.monotonic) }) catch return;
         sendJson(stream, json);
         return;
     }
@@ -526,12 +553,25 @@ fn handleRequest(stream: net.Stream, req: HttpRequest) void {
         g_server.metrics.recordRequest();
 
         const body = req.body;
-        const content = extractLastMessage(body) orelse "Hello!";
         const max_tokens = extractIntField(body, "max_tokens") orelse default_max_gen_tokens;
+        const sampling = SamplingParams{
+            .temperature = extractFloatField(body, "temperature") orelse 0,
+            .top_k = @intCast(extractIntField(body, "top_k") orelse 0),
+            .top_p = extractFloatField(body, "top_p") orelse 1.0,
+        };
 
-        // 2. Format prompt and get token count for rate limiting
-        const formatted = g_server.chat_template.format(g_server.allocator, null, content) catch content;
-        defer if (formatted.ptr != content.ptr) g_server.allocator.free(formatted);
+        // 2. Extract full messages array (system + conversation history)
+        const extracted = extractMessages(body, g_server.allocator);
+        defer if (extracted) |ex| ex.deinit(g_server.allocator);
+        const fallback_content = extractLastMessage(body) orelse "Hello!";
+
+        // Format with full conversation context when available
+        const formatted = if (extracted) |ex|
+            g_server.chat_template.formatConversation(g_server.allocator, ex.system, ex.messages) catch
+                g_server.chat_template.format(g_server.allocator, null, fallback_content) catch fallback_content
+        else
+            g_server.chat_template.format(g_server.allocator, null, fallback_content) catch fallback_content;
+        defer if (formatted.ptr != fallback_content.ptr) g_server.allocator.free(formatted);
         const prompt_ids = g_server.tokenizer.encode(formatted) catch &[_]u32{};
         defer if (prompt_ids.len > 0) g_server.allocator.free(prompt_ids);
         const prompt_tokens: u32 = @intCast(prompt_ids.len);
@@ -544,13 +584,13 @@ fn handleRequest(stream: net.Stream, req: HttpRequest) void {
         }
 
         if (extractBoolField(body, "stream")) {
-            startStream(stream, content, true, max_tokens);
+            startStream(stream, formatted, true, false, max_tokens, sampling);
             logRequestDone(method, path, 200, elapsedMs(request_start));
             return;
         }
 
         // Formatted already computed above for token counting
-        const gen = generateEscapedN(formatted, true, max_tokens);
+        const gen = generateEscapedN(formatted, true, max_tokens, sampling);
         defer gen.deinit();
         const req_id = nextRequestId();
         const created = std.time.timestamp();
@@ -591,6 +631,11 @@ fn handleRequest(stream: net.Stream, req: HttpRequest) void {
         const body = req.body;
         const prompt = extractField(body, "prompt") orelse "Hello";
         const max_tokens = extractIntField(body, "max_tokens") orelse default_max_gen_tokens;
+        const sampling_c = SamplingParams{
+            .temperature = extractFloatField(body, "temperature") orelse 0,
+            .top_k = @intCast(extractIntField(body, "top_k") orelse 0),
+            .top_p = extractFloatField(body, "top_p") orelse 1.0,
+        };
 
         // Rate limit check (estimate prompt tokens via encode)
         const prompt_ids_c = g_server.tokenizer.encode(prompt) catch &[_]u32{};
@@ -602,13 +647,13 @@ fn handleRequest(stream: net.Stream, req: HttpRequest) void {
         }
 
         if (extractBoolField(body, "stream")) {
-            startStreamRaw(stream, prompt, max_tokens);
+            startStreamRaw(stream, prompt, max_tokens, sampling_c);
             logRequestDone(method, path, 200, elapsedMs(request_start));
             return;
         }
 
         // Completions endpoint: use prompt as-is (no chat template wrapping)
-        const gen = generateEscapedN(prompt, true, max_tokens);
+        const gen = generateEscapedN(prompt, true, max_tokens, sampling_c);
         defer gen.deinit();
         const req_id = nextRequestId();
         const created = std.time.timestamp();
@@ -643,7 +688,6 @@ fn handleRequest(stream: net.Stream, req: HttpRequest) void {
 
     if (is_post and std.mem.eql(u8, path, "/v1/responses")) {
         logRequest(method, path);
-        g_server.metrics.recordRequest();
         const req_start_time = std.time.milliTimestamp();
 
         if (!validateAuth(g_server, req.headers)) {
@@ -651,10 +695,16 @@ fn handleRequest(stream: net.Stream, req: HttpRequest) void {
             logRequestDone(method, path, 401, elapsedMs(request_start));
             return;
         }
+        g_server.metrics.recordRequest();
 
         const body = req.body;
         const input = extractField(body, "input") orelse "Hello";
         const max_tokens = extractIntField(body, "max_tokens") orelse default_max_gen_tokens;
+        const sampling_r = SamplingParams{
+            .temperature = extractFloatField(body, "temperature") orelse 0,
+            .top_k = @intCast(extractIntField(body, "top_k") orelse 0),
+            .top_p = extractFloatField(body, "top_p") orelse 1.0,
+        };
 
         // Rate limit check
         const formatted_rl = g_server.chat_template.format(g_server.allocator, null, input) catch input;
@@ -667,7 +717,13 @@ fn handleRequest(stream: net.Stream, req: HttpRequest) void {
             return;
         }
 
-        const gen = generateEscapedN(formatted_rl, true, max_tokens);
+        if (extractBoolField(body, "stream")) {
+            startStream(stream, input, true, true, max_tokens, sampling_r);
+            logRequestDone(method, path, 200, elapsedMs(request_start));
+            return;
+        }
+
+        const gen = generateEscapedN(formatted_rl, true, max_tokens, sampling_r);
         defer gen.deinit();
         const req_id = nextRequestId();
         const created = std.time.timestamp();
@@ -697,7 +753,6 @@ fn handleRequest(stream: net.Stream, req: HttpRequest) void {
     // ── Anthropic Messages API (/v1/messages) ───────────────────
     if (is_post and std.mem.eql(u8, path, "/v1/messages")) {
         logRequest(method, path);
-        g_server.metrics.recordRequest();
         const req_start_time = std.time.milliTimestamp();
 
         if (!validateAuth(g_server, req.headers)) {
@@ -705,15 +760,30 @@ fn handleRequest(stream: net.Stream, req: HttpRequest) void {
             logRequestDone(method, path, 401, elapsedMs(request_start));
             return;
         }
+        g_server.metrics.recordRequest();
 
         const body = req.body;
-        const content = extractLastMessage(body) orelse "Hello!";
         const max_tokens_m = extractIntField(body, "max_tokens") orelse default_max_gen_tokens;
+        const sampling_m = SamplingParams{
+            .temperature = extractFloatField(body, "temperature") orelse 0,
+            .top_k = @intCast(extractIntField(body, "top_k") orelse 0),
+            .top_p = extractFloatField(body, "top_p") orelse 1.0,
+        };
+        // Anthropic: system message is a top-level field, not in messages array
         const system_msg = extractField(body, "system");
 
-        // Format prompt with system message if provided
-        const formatted_m = g_server.chat_template.format(g_server.allocator, system_msg, content) catch content;
-        defer if (formatted_m.ptr != content.ptr) g_server.allocator.free(formatted_m);
+        // Extract full messages array for multi-turn conversations
+        const extracted_m = extractMessages(body, g_server.allocator);
+        defer if (extracted_m) |ex| ex.deinit(g_server.allocator);
+        const fallback_content_m = extractLastMessage(body) orelse "Hello!";
+
+        // Format with full conversation context when available
+        const formatted_m = if (extracted_m) |ex|
+            g_server.chat_template.formatConversation(g_server.allocator, system_msg, ex.messages) catch
+                g_server.chat_template.format(g_server.allocator, system_msg, fallback_content_m) catch fallback_content_m
+        else
+            g_server.chat_template.format(g_server.allocator, system_msg, fallback_content_m) catch fallback_content_m;
+        defer if (formatted_m.ptr != fallback_content_m.ptr) g_server.allocator.free(formatted_m);
         const prompt_ids_m = g_server.tokenizer.encode(formatted_m) catch &[_]u32{};
         defer if (prompt_ids_m.len > 0) g_server.allocator.free(prompt_ids_m);
         const prompt_tokens_m: u32 = @intCast(prompt_ids_m.len);
@@ -726,13 +796,13 @@ fn handleRequest(stream: net.Stream, req: HttpRequest) void {
         }
 
         if (extractBoolField(body, "stream")) {
-            startAnthropicStream(stream, formatted_m, max_tokens_m, prompt_tokens_m);
+            startAnthropicStream(stream, formatted_m, max_tokens_m, prompt_tokens_m, sampling_m);
             logRequestDone(method, path, 200, elapsedMs(request_start));
             return;
         }
 
         // Non-streaming: generate and return Anthropic format
-        const gen = generateEscapedN(formatted_m, true, max_tokens_m);
+        const gen = generateEscapedN(formatted_m, true, max_tokens_m, sampling_m);
         defer gen.deinit();
         const req_id = nextRequestId();
         const stop_reason: []const u8 = if (std.mem.eql(u8, gen.finish_reason, "length")) "max_tokens" else "end_turn";
@@ -766,6 +836,7 @@ fn handleRequest(stream: net.Stream, req: HttpRequest) void {
             logRequestDone(method, path, 401, elapsedMs(request_start));
             return;
         }
+        g_server.metrics.recordRequest();
 
         if (is_get) {
             // Return list of conversations as JSON (mutex-protected to
@@ -787,6 +858,8 @@ fn handleRequest(stream: net.Stream, req: HttpRequest) void {
             }
             w.writeByte(']') catch return;
             sendJson(stream, fbs.getWritten());
+            g_server.metrics.recordCompletion();
+            logRequestDone(method, path, 200, elapsedMs(request_start));
             return;
         }
         // POST: action=new|select|delete
@@ -799,6 +872,8 @@ fn handleRequest(stream: net.Stream, req: HttpRequest) void {
             _ = g_server.createConv();
             g_server.mutex.unlock();
             sendJson(stream, "{\"ok\":true}");
+            g_server.metrics.recordCompletion();
+            logRequestDone(method, path, 200, elapsedMs(request_start));
         } else if (std.mem.eql(u8, action, "select")) {
             const id_str = extractFormField(body, "id") orelse "0";
             const id = std.fmt.parseInt(u32, id_str, 10) catch 0;
@@ -839,6 +914,8 @@ fn handleRequest(stream: net.Stream, req: HttpRequest) void {
             };
             g_server.mutex.unlock();
             sendJson(stream, mfbs.getWritten());
+            g_server.metrics.recordCompletion();
+            logRequestDone(method, path, 200, elapsedMs(request_start));
         } else if (std.mem.eql(u8, action, "delete")) {
             const id_str = extractFormField(body, "id") orelse "0";
             const id = std.fmt.parseInt(u32, id_str, 10) catch 0;
@@ -851,8 +928,11 @@ fn handleRequest(stream: net.Stream, req: HttpRequest) void {
                 \\{{"ok":true,"cleared":{s}}}
             , .{if (was_active) "true" else "false"}) catch "{\"ok\":true}";
             sendJson(stream, djson);
+            g_server.metrics.recordCompletion();
+            logRequestDone(method, path, 200, elapsedMs(request_start));
         } else {
-            sendJson(stream, "{\"ok\":false}");
+            logRequestDone(method, path, 400, elapsedMs(request_start));
+            sendJsonError(stream, "400 Bad Request", "invalid_request_error", "Unknown conversation action");
         }
         return;
     }
@@ -865,6 +945,7 @@ fn handleRequest(stream: net.Stream, req: HttpRequest) void {
             logRequestDone(method, path, 401, elapsedMs(request_start));
             return;
         }
+        g_server.metrics.recordRequest();
 
         const body = req.body;
         const msg = extractFormField(body, "message") orelse "Hello";
@@ -900,6 +981,8 @@ fn handleRequest(stream: net.Stream, req: HttpRequest) void {
             const cmd_html = handleChatCommand(trimmed);
             if (cmd_html) |html| {
                 sendHtml(stream, html);
+                g_server.metrics.recordCompletion();
+                logRequestDone(method, path, 200, elapsedMs(request_start));
                 return;
             }
         }
@@ -908,6 +991,9 @@ fn handleRequest(stream: net.Stream, req: HttpRequest) void {
         g_server.mutex.lock();
         const conv = g_server.getActiveConv() orelse g_server.createConv() orelse {
             g_server.mutex.unlock();
+            g_server.metrics.recordFailure();
+            logRequestDone(method, path, 503, elapsedMs(request_start));
+            sendJsonError(stream, "503 Service Unavailable", "server_error", "Maximum conversation limit reached");
             return;
         };
 
@@ -991,6 +1077,11 @@ fn handleRequest(stream: net.Stream, req: HttpRequest) void {
             }
         }
         g_server.mutex.unlock();
+
+        // Record metrics
+        g_server.metrics.recordLatency(result.stats.time_ms);
+        g_server.metrics.recordTokens(result.stats.tokens_generated);
+        g_server.metrics.recordCompletion();
 
         const escaped_user = htmlEscape(g_server.allocator, decoded) catch decoded;
         defer if (escaped_user.ptr != decoded.ptr) g_server.allocator.free(escaped_user);
@@ -1099,12 +1190,8 @@ const GeneratedEscaped = struct {
     }
 };
 
-fn generateEscaped(prompt: []const u8, reset: bool) GeneratedEscaped {
-    return generateEscapedN(prompt, reset, default_max_gen_tokens);
-}
-
-fn generateEscapedN(prompt: []const u8, reset: bool, max_tokens: usize) GeneratedEscaped {
-    const result = generateN(prompt, reset, max_tokens);
+fn generateEscapedN(prompt: []const u8, reset: bool, max_tokens: usize, sampling: SamplingParams) GeneratedEscaped {
+    const result = generateN(prompt, reset, max_tokens, sampling);
     logGeneration(result.stats.tokens_generated, result.stats.time_ms, result.stats.tokens_per_sec);
     const escaped = jsonEscape(g_server.allocator, result.data) catch result.data;
     return .{
@@ -1120,14 +1207,14 @@ fn generateEscapedN(prompt: []const u8, reset: bool, max_tokens: usize) Generate
 /// the KV cache is cleared and BOS is sent (first turn). When false, the
 /// existing KV cache is reused (continuation turn).
 fn generate(formatted: []const u8, reset: bool) GenResult {
-    return generateN(formatted, reset, default_max_gen_tokens);
+    return generateN(formatted, reset, default_max_gen_tokens, .{});
 }
 
-/// Run inference with a configurable max_tokens limit.
+/// Run inference with a configurable max_tokens limit and optional sampling.
 /// When the scheduler is active, routes through RequestManager.enqueue()
 /// and blocks until completion. Falls back to direct model.forward()
 /// when no scheduler is running.
-fn generateN(formatted: []const u8, reset: bool, max_tokens: usize) GenResult {
+fn generateN(formatted: []const u8, reset: bool, max_tokens: usize, sampling: SamplingParams) GenResult {
     const tok = g_server.tokenizer;
     const zero_stats = Stats{ .tokens_generated = 0, .prompt_tokens = 0, .time_ms = 0, .tokens_per_sec = 0, .prefill_ms = 0, .prefill_tps = 0 };
     const token_ids = tok.encode(formatted) catch |err| {
@@ -1208,6 +1295,14 @@ fn generateN(formatted: []const u8, reset: bool, max_tokens: usize) GenResult {
     }
     const prefill_ms: u64 = @intCast(@max(std.time.milliTimestamp() - prefill_start, 0));
     const prefill_tps: f32 = if (prefill_ms > 0) @as(f32, @floatFromInt(prompt_token_count)) / (@as(f32, @floatFromInt(prefill_ms)) / 1000.0) else 0.0;
+    g_server.metrics.recordTTFT(prefill_ms, prompt_token_count);
+
+    // Apply sampling to first generated token (from prefill's last forward call)
+    const use_sampling = sampling.temperature > 0;
+    var prng = std.Random.Xoshiro256.init(@as(u64, @truncate(@as(u128, @bitCast(std.time.nanoTimestamp())))));
+    if (use_sampling and token_ids.len > 0) {
+        first_gen_token = math_ops.sampleToken(model.getLogits(), sampling.temperature, sampling.top_k, sampling.top_p, prng.random());
+    }
 
     // Generation phase (timed) — collect token IDs, batch-decode once at the end
     // to avoid per-token alloc/free overhead.
@@ -1228,10 +1323,13 @@ fn generateN(formatted: []const u8, reset: bool, max_tokens: usize) GenResult {
     const effective_max = @min(max_tokens, gen_ids_buf_size);
     for (0..effective_max -| 1) |_| {
         if (first_is_eog or token_ids.len == 0) break;
-        const next = model.forward(last) catch |err| {
+        var next = model.forward(last) catch |err| {
             if (err == error.Cancelled) cancelled = true;
             break;
         };
+        if (use_sampling) {
+            next = math_ops.sampleToken(model.getLogits(), sampling.temperature, sampling.top_k, sampling.top_p, prng.random());
+        }
         if (g_server.isEog(next)) {
             hit_eog = true;
             break;
@@ -1245,6 +1343,7 @@ fn generateN(formatted: []const u8, reset: bool, max_tokens: usize) GenResult {
     const time_ms = @as(u64, @intCast(gen_end - gen_start));
     const tokens_per_sec = if (time_ms > 0) @as(f32, @floatFromInt(token_count)) / (@as(f32, @floatFromInt(time_ms)) / 1000.0) else 0.0;
     const finish_reason: []const u8 = if (cancelled) "stop" else if (hit_eog) "stop" else "length";
+    g_server.metrics.recordThroughput(token_count, time_ms);
 
     if (cancelled) {
         return .{
@@ -1366,6 +1465,7 @@ fn chatStreamGenerate(stream: net.Stream, formatted: []const u8, reset: bool, ma
     }
     const prefill_ms: u64 = @intCast(@max(std.time.milliTimestamp() - prefill_start, 0));
     const prefill_tps: f32 = if (prefill_ms > 0) @as(f32, @floatFromInt(prompt_token_count)) / (@as(f32, @floatFromInt(prefill_ms)) / 1000.0) else 0.0;
+    g_server.metrics.recordTTFT(prefill_ms, prompt_token_count);
 
     // Generate and stream tokens
     const gen_start = std.time.milliTimestamp();
@@ -1395,6 +1495,7 @@ fn chatStreamGenerate(stream: net.Stream, formatted: []const u8, reset: bool, ma
     const gen_end = std.time.milliTimestamp();
     const time_ms = @as(u64, @intCast(gen_end - gen_start));
     const tps: f32 = if (time_ms > 0) @as(f32, @floatFromInt(token_count)) / (@as(f32, @floatFromInt(time_ms)) / 1000.0) else 0.0;
+    g_server.metrics.recordThroughput(token_count, time_ms);
 
     // Send final stats event
     var stats_buf: [stats_buf_size]u8 = undefined;
@@ -1463,7 +1564,7 @@ fn sendAnthropic429(stream: net.Stream, retry_after: u32) void {
     var buf: [error_body_buf_size]u8 = undefined;
     const body = std.fmt.bufPrint(&buf, "{{\"type\":\"error\",\"error\":{{\"type\":\"rate_limit_error\",\"message\":\"Rate limit exceeded. Retry after {d} seconds.\"}}}}", .{retry_after}) catch return;
     var hdr_buf: [hdr_buf_size]u8 = undefined;
-    const hdr = std.fmt.bufPrint(&hdr_buf, "HTTP/1.1 429 Too Many Requests\r\nContent-Type: application/json\r\nContent-Length: {d}\r\nRetry-After: {d}\r\n" ++ security_headers ++ "Connection: close\r\n\r\n", .{ body.len, retry_after }) catch return;
+    const hdr = std.fmt.bufPrint(&hdr_buf, "HTTP/1.1 429 Too Many Requests\r\nContent-Type: application/json\r\nContent-Length: {d}\r\nRetry-After: {d}\r\nAccess-Control-Allow-Origin: *\r\n" ++ security_headers ++ "Connection: close\r\n\r\n", .{ body.len, retry_after }) catch return;
     stream.writeAll(hdr) catch return;
     stream.writeAll(body) catch return;
 }
@@ -1477,9 +1578,9 @@ fn sseWriteEvent(stream: net.Stream, event_type: []const u8, data: []const u8) b
 }
 
 /// Start an Anthropic-format SSE streaming response for /v1/messages.
-fn startAnthropicStream(stream: net.Stream, formatted: []const u8, max_tokens: usize, input_tokens: u32) void {
+fn startAnthropicStream(stream: net.Stream, formatted: []const u8, max_tokens: usize, input_tokens: u32, sampling: SamplingParams) void {
     stream.writeAll("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\nAccess-Control-Allow-Origin: *\r\n" ++ security_headers ++ "Connection: keep-alive\r\n\r\n") catch return;
-    generateAnthropicStream(stream, formatted, max_tokens, input_tokens);
+    generateAnthropicStream(stream, formatted, max_tokens, input_tokens, sampling);
 }
 
 /// Run generation and stream tokens as Anthropic-format SSE events.
@@ -1488,7 +1589,7 @@ fn startAnthropicStream(stream: net.Stream, formatted: []const u8, max_tokens: u
 /// When the scheduler is active, routes through RequestManager.enqueue()
 /// and polls for generated tokens. Falls back to direct model.forward()
 /// when no scheduler is running.
-fn generateAnthropicStream(stream: net.Stream, formatted: []const u8, max_tokens: usize, input_tokens: u32) void {
+fn generateAnthropicStream(stream: net.Stream, formatted: []const u8, max_tokens: usize, input_tokens: u32, sampling_a: SamplingParams) void {
     const tok = g_server.tokenizer;
     const req_id = nextRequestId();
 
@@ -1572,12 +1673,20 @@ fn generateAnthropicStream(stream: net.Stream, formatted: []const u8, max_tokens
     }
 
     // Prefill
+    const use_sampling_a = sampling_a.temperature > 0;
+    var prng_a = std.Random.Xoshiro256.init(@as(u64, @truncate(@as(u128, @bitCast(std.time.nanoTimestamp())))));
+    const anth_prefill_start = std.time.milliTimestamp();
     var first_gen_token: u32 = 0;
     for (token_ids) |tid| {
         first_gen_token = model.forward(tid) catch |err| {
             if (err == error.Cancelled) return;
             break;
         };
+    }
+    const anth_prefill_ms: u64 = @intCast(@max(std.time.milliTimestamp() - anth_prefill_start, 0));
+    g_server.metrics.recordTTFT(anth_prefill_ms, @intCast(token_ids.len));
+    if (use_sampling_a and token_ids.len > 0) {
+        first_gen_token = math_ops.sampleToken(model.getLogits(), sampling_a.temperature, sampling_a.top_k, sampling_a.top_p, prng_a.random());
     }
 
     // Generate and stream deltas
@@ -1594,7 +1703,10 @@ fn generateAnthropicStream(stream: net.Stream, formatted: []const u8, max_tokens
 
     for (0..max_tokens -| 1) |_| {
         if (token_ids.len == 0 or (token_count == 0 and g_server.isEog(first_gen_token))) break;
-        const next = model.forward(last) catch break;
+        var next = model.forward(last) catch break;
+        if (use_sampling_a) {
+            next = math_ops.sampleToken(model.getLogits(), sampling_a.temperature, sampling_a.top_k, sampling_a.top_p, prng_a.random());
+        }
         if (g_server.isEog(next)) break;
 
         streamAnthropicDelta(stream, tok, next);
@@ -1609,6 +1721,7 @@ fn generateAnthropicStream(stream: net.Stream, formatted: []const u8, max_tokens
     const time_ms = @as(u64, @intCast(@max(gen_end - gen_start, 0)));
     const tps: f32 = if (time_ms > 0) @as(f32, @floatFromInt(token_count)) / (@as(f32, @floatFromInt(time_ms)) / 1000.0) else 0.0;
     logGeneration(token_count, time_ms, tps);
+    g_server.metrics.recordThroughput(token_count, time_ms);
     g_server.metrics.recordLatency(time_ms);
     g_server.metrics.recordTokens(token_count);
     g_server.metrics.recordCompletion();
@@ -1657,15 +1770,15 @@ fn sseWriteData(stream: net.Stream, data: []const u8) bool {
 
 /// Start an SSE streaming response. Writes headers, generates tokens inline,
 /// and writes each as an SSE frame. Runs synchronously on the handler thread.
-fn startStream(stream: net.Stream, prompt: []const u8, is_chat: bool, max_tokens: usize) void {
+fn startStream(stream: net.Stream, prompt: []const u8, is_chat: bool, format_prompt: bool, max_tokens: usize, sampling: SamplingParams) void {
     stream.writeAll("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\nAccess-Control-Allow-Origin: *\r\n" ++ security_headers ++ "Connection: keep-alive\r\n\r\n") catch return;
-    generateStream(stream, prompt, nextRequestId(), std.time.timestamp(), is_chat, true, max_tokens);
+    generateStream(stream, prompt, nextRequestId(), std.time.timestamp(), is_chat, format_prompt, max_tokens, sampling);
 }
 
 /// Start an SSE streaming response without chat template wrapping (for /v1/completions).
-fn startStreamRaw(stream: net.Stream, prompt: []const u8, max_tokens: usize) void {
+fn startStreamRaw(stream: net.Stream, prompt: []const u8, max_tokens: usize, sampling: SamplingParams) void {
     stream.writeAll("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\nAccess-Control-Allow-Origin: *\r\n" ++ security_headers ++ "Connection: keep-alive\r\n\r\n") catch return;
-    generateStream(stream, prompt, nextRequestId(), std.time.timestamp(), false, false, max_tokens);
+    generateStream(stream, prompt, nextRequestId(), std.time.timestamp(), false, false, max_tokens, sampling);
 }
 
 /// Stream a single token as an SSE chunk in OpenAI format.
@@ -1691,8 +1804,8 @@ fn streamChunk(stream: net.Stream, chunk_buf: *[response_buf_size]u8, tok: *Toke
     } else |_| {}
 }
 
-/// Send the final SSE chunk with finish_reason="stop".
-fn sendFinalChunk(stream: net.Stream, chunk_buf: *[response_buf_size]u8, req_id: u64, created: i64, is_chat: bool) void {
+/// Send the final SSE chunk with the given finish_reason ("stop" or "length").
+fn sendFinalChunk(stream: net.Stream, chunk_buf: *[response_buf_size]u8, req_id: u64, created: i64, is_chat: bool, finish_reason: []const u8) void {
     const id_prefix: []const u8 = if (is_chat) "chatcmpl" else "cmpl";
     const obj_type: []const u8 = if (is_chat) "chat.completion.chunk" else "text_completion";
     const delta_or_text: []const u8 = if (is_chat)
@@ -1701,8 +1814,8 @@ fn sendFinalChunk(stream: net.Stream, chunk_buf: *[response_buf_size]u8, req_id:
         \\"text":""
     ;
     const final = std.fmt.bufPrint(chunk_buf,
-        \\{{"id":"{s}-{d}","object":"{s}","created":{d},"model":"{s}","choices":[{{"index":0,{s},"finish_reason":"stop"}}]}}
-    , .{ id_prefix, req_id, obj_type, created, g_server.model_name, delta_or_text }) catch "";
+        \\{{"id":"{s}-{d}","object":"{s}","created":{d},"model":"{s}","choices":[{{"index":0,{s},"finish_reason":"{s}"}}]}}
+    , .{ id_prefix, req_id, obj_type, created, g_server.model_name, delta_or_text, finish_reason }) catch "";
     if (final.len > 0) _ = sseWriteData(stream, final);
 }
 
@@ -1711,7 +1824,7 @@ fn sendFinalChunk(stream: net.Stream, chunk_buf: *[response_buf_size]u8, req_id:
 /// When the scheduler is active, routes through RequestManager.enqueue()
 /// and polls for generated tokens. Falls back to direct model.forward()
 /// when no scheduler is running (CLI mode).
-fn generateStream(stream: net.Stream, prompt: []const u8, req_id: u64, created: i64, is_chat: bool, format_prompt: bool, max_tokens: usize) void {
+fn generateStream(stream: net.Stream, prompt: []const u8, req_id: u64, created: i64, is_chat: bool, format_prompt: bool, max_tokens: usize, sampling: SamplingParams) void {
     const tok = g_server.tokenizer;
 
     const formatted = if (format_prompt)
@@ -1777,7 +1890,8 @@ fn generateStream(stream: net.Stream, prompt: []const u8, req_id: u64, created: 
         }
 
         // Send final chunk and [DONE]
-        sendFinalChunk(stream, &chunk_buf, req_id, created, is_chat);
+        const sched_finish: []const u8 = if (token_count >= max_tokens) "length" else "stop";
+        sendFinalChunk(stream, &chunk_buf, req_id, created, is_chat, sched_finish);
         _ = sseWriteData(stream, "[DONE]");
 
         const gen_end = std.time.milliTimestamp();
@@ -1806,6 +1920,9 @@ fn generateStream(stream: net.Stream, prompt: []const u8, req_id: u64, created: 
     }
 
     // Prefill — capture the last forward's return value (first generated token)
+    const use_sampling_s = sampling.temperature > 0;
+    var prng_s = std.Random.Xoshiro256.init(@as(u64, @truncate(@as(u128, @bitCast(std.time.nanoTimestamp())))));
+    const prefill_start = std.time.milliTimestamp();
     var first_gen_token: u32 = 0;
     for (token_ids) |tid| {
         first_gen_token = model.forward(tid) catch |err| {
@@ -1815,6 +1932,11 @@ fn generateStream(stream: net.Stream, prompt: []const u8, req_id: u64, created: 
             }
             break;
         };
+    }
+    const stream_prefill_ms: u64 = @intCast(@max(std.time.milliTimestamp() - prefill_start, 0));
+    g_server.metrics.recordTTFT(stream_prefill_ms, @intCast(token_ids.len));
+    if (use_sampling_s and token_ids.len > 0) {
+        first_gen_token = math_ops.sampleToken(model.getLogits(), sampling.temperature, sampling.top_k, sampling.top_p, prng_s.random());
     }
 
     // Generate and stream tokens
@@ -1853,7 +1975,10 @@ fn generateStream(stream: net.Stream, prompt: []const u8, req_id: u64, created: 
 
     for (0..max_tokens -| 1) |_| {
         if (token_ids.len == 0 or (token_count == 0 and g_server.isEog(first_gen_token))) break;
-        const next = model.forward(last) catch break;
+        var next = model.forward(last) catch break;
+        if (use_sampling_s) {
+            next = math_ops.sampleToken(model.getLogits(), sampling.temperature, sampling.top_k, sampling.top_p, prng_s.random());
+        }
         if (g_server.isEog(next)) break;
 
         const decoded = tok.decode(&[_]u32{next}) catch continue;
@@ -1880,13 +2005,15 @@ fn generateStream(stream: net.Stream, prompt: []const u8, req_id: u64, created: 
     }
 
     // Send final chunk with finish_reason
-    sendFinalChunk(stream, &chunk_buf, req_id, created, is_chat);
+    const direct_finish: []const u8 = if (token_count >= max_tokens) "length" else "stop";
+    sendFinalChunk(stream, &chunk_buf, req_id, created, is_chat, direct_finish);
     _ = sseWriteData(stream, "[DONE]");
 
     const gen_end = std.time.milliTimestamp();
     const time_ms = @as(u64, @intCast(@max(gen_end - gen_start, 0)));
     const tps: f32 = if (time_ms > 0) @as(f32, @floatFromInt(token_count)) / (@as(f32, @floatFromInt(time_ms)) / 1000.0) else 0.0;
     logGeneration(token_count, time_ms, tps);
+    g_server.metrics.recordThroughput(token_count, time_ms);
     g_server.metrics.recordLatency(time_ms);
     g_server.metrics.recordTokens(token_count);
     g_server.metrics.recordCompletion();
@@ -1957,6 +2084,99 @@ fn extractLastMessage(json: []const u8) ?[]const u8 {
         pos = abs + 1;
     }
     return last;
+}
+
+/// Per-request sampling parameters. Defaults match greedy decoding.
+const SamplingParams = struct {
+    temperature: f32 = 0,
+    top_k: u32 = 0,
+    top_p: f32 = 1.0,
+};
+
+/// Extract a floating-point field value from a JSON body (e.g., `"temperature": 0.7`).
+fn extractFloatField(json: []const u8, field: []const u8) ?f32 {
+    var buf: [extract_field_buf_size]u8 = undefined;
+    const needle = std.fmt.bufPrint(&buf, "\"{s}\"", .{field}) catch return null;
+    const pos = std.mem.indexOf(u8, json, needle) orelse return null;
+    var i = pos + needle.len;
+    while (i < json.len and (json[i] == ':' or json[i] == ' ')) : (i += 1) {}
+    const start = i;
+    while (i < json.len and (json[i] == '.' or (json[i] >= '0' and json[i] <= '9') or json[i] == '-' or json[i] == 'e' or json[i] == 'E' or json[i] == '+')) : (i += 1) {}
+    if (i == start) return null;
+    return std.fmt.parseFloat(f32, json[start..i]) catch null;
+}
+
+/// Result of extracting messages from an OpenAI/Anthropic-format JSON body.
+const ExtractedMessages = struct {
+    messages: []Message,
+    system: ?[]const u8,
+
+    fn deinit(self: ExtractedMessages, allocator: Allocator) void {
+        allocator.free(self.messages);
+    }
+};
+
+/// Extract all messages from an OpenAI-format `"messages"` JSON array.
+/// Returns conversation messages (user/assistant) and an optional system message.
+/// Message content slices point into the original JSON body — valid for the request lifetime.
+fn extractMessages(json: []const u8, allocator: Allocator) ?ExtractedMessages {
+    const msgs_key = "\"messages\"";
+    const msgs_pos = std.mem.indexOf(u8, json, msgs_key) orelse return null;
+    var i = msgs_pos + msgs_key.len;
+
+    // Skip to array start
+    while (i < json.len and (json[i] == ':' or json[i] == ' ' or json[i] == '\n' or json[i] == '\r' or json[i] == '\t')) : (i += 1) {}
+    if (i >= json.len or json[i] != '[') return null;
+    i += 1;
+
+    var messages_buf: [max_api_messages]Message = undefined;
+    var count: usize = 0;
+    var system_msg: ?[]const u8 = null;
+
+    while (i < json.len and count < max_api_messages) {
+        // Skip whitespace and commas
+        while (i < json.len and (json[i] == ' ' or json[i] == '\n' or json[i] == '\r' or json[i] == '\t' or json[i] == ',')) : (i += 1) {}
+        if (i >= json.len or json[i] == ']') break;
+        if (json[i] != '{') break;
+
+        // Find end of this object (handle nested braces and strings)
+        var depth: usize = 1;
+        const obj_start = i + 1;
+        i += 1;
+        while (i < json.len and depth > 0) : (i += 1) {
+            if (json[i] == '{') {
+                depth += 1;
+            } else if (json[i] == '}') {
+                depth -= 1;
+            } else if (json[i] == '"') {
+                i += 1;
+                while (i < json.len and json[i] != '"') : (i += 1) {
+                    if (json[i] == '\\' and i + 1 < json.len) i += 1;
+                }
+            }
+        }
+        const obj_slice = json[obj_start .. i -| 1];
+
+        const role_str = extractField(obj_slice, "role") orelse continue;
+        const content = extractField(obj_slice, "content") orelse continue;
+
+        if (std.mem.eql(u8, role_str, "system")) {
+            system_msg = content;
+        } else if (std.mem.eql(u8, role_str, "user")) {
+            messages_buf[count] = .{ .role = .user, .content = content };
+            count += 1;
+        } else if (std.mem.eql(u8, role_str, "assistant")) {
+            messages_buf[count] = .{ .role = .assistant, .content = content };
+            count += 1;
+        }
+    }
+
+    if (count == 0) return null;
+
+    const messages = allocator.alloc(Message, count) catch return null;
+    @memcpy(messages, messages_buf[0..count]);
+
+    return .{ .messages = messages, .system = system_msg };
 }
 
 fn extractFormField(body: []const u8, field: []const u8) ?[]const u8 {
@@ -2099,6 +2319,12 @@ fn htmlEscape(allocator: Allocator, input: []const u8) ![]u8 {
 // ── Connection handler & server entry point ─────────────────────
 
 fn handleConnection(stream: net.Stream) void {
+    // Set read timeout to prevent slow loris attacks — without this,
+    // stream.read() blocks indefinitely and an attacker can exhaust
+    // all max_concurrent_connections slots with incomplete requests.
+    const timeout = std.posix.timeval{ .sec = connection_read_timeout_sec, .usec = 0 };
+    std.posix.setsockopt(stream.handle, std.posix.SOL.SOCKET, std.posix.SO.RCVTIMEO, std.mem.asBytes(&timeout)) catch {};
+
     _ = g_server.active_connections.fetchAdd(1, .monotonic);
     _ = g_server.metrics.active_connections.fetchAdd(1, .monotonic);
     defer {
@@ -2125,7 +2351,7 @@ fn handleConnection(stream: net.Stream) void {
 ///   - bos_token_id: Beginning-of-sequence token ID (0 to skip).
 ///   - eog_ids: End-of-generation token IDs (slice of up to max_eog_ids).
 ///   - eog_len: Number of valid entries in eog_ids.
-pub fn run(allocator: Allocator, model: *Model, tok: *Tokenizer, chat_tmpl: ChatTemplate, model_name: []const u8, backend_name: []const u8, port: u16, bos_token_id: u32, eog_ids: [max_eog_ids]u32, eog_len: usize, tiered_cache: ?*TieredKvCache, api_key: ?[]const u8) !void {
+pub fn run(allocator: Allocator, model: *Model, tok: *Tokenizer, chat_tmpl: ChatTemplate, model_name: []const u8, backend_name: []const u8, port: u16, bos_token_id: u32, eog_ids: [max_eog_ids]u32, eog_len: usize, tiered_cache: ?*TieredKvCache, api_key: ?[]const u8, host: [4]u8) !void {
     // Stack-allocate the Server struct. This is safe because run() blocks
     // until the server shuts down, so the frame stays alive.
     var server = Server{
@@ -2159,7 +2385,7 @@ pub fn run(allocator: Allocator, model: *Model, tok: *Tokenizer, chat_tmpl: Chat
     });
     server.scheduler_thread = sched_thread;
 
-    const address = net.Address.initIp4(.{ 0, 0, 0, 0 }, port);
+    const address = net.Address.initIp4(host, port);
     var tcp = address.listen(.{ .reuse_address = true }) catch {
         var buf: [error_body_buf_size]u8 = undefined;
         const msg = std.fmt.bufPrint(&buf, "Error: port {d} already in use. Try:\n  agave model.gguf --serve --port {d}\n", .{ port, port + 1 }) catch "";
@@ -2175,7 +2401,7 @@ pub fn run(allocator: Allocator, model: *Model, tok: *Tokenizer, chat_tmpl: Chat
 
     const t = getTimeComponents();
     var buf: [short_hdr_buf_size]u8 = undefined;
-    const msg = std.fmt.bufPrint(&buf, "\n[{d:0>2}:{d:0>2}:{d:0>2}] agave server started on http://0.0.0.0:{d} (http://localhost:{d})\n  model={s} backend={s}\nPress Ctrl+C to stop\n", .{ t.hours, t.minutes, t.seconds, port, port, model_name, backend_name }) catch "";
+    const msg = std.fmt.bufPrint(&buf, "\n[{d:0>2}:{d:0>2}:{d:0>2}] agave server started on http://{d}.{d}.{d}.{d}:{d}\n  model={s} backend={s}\nPress Ctrl+C to stop\n", .{ t.hours, t.minutes, t.seconds, host[0], host[1], host[2], host[3], port, model_name, backend_name }) catch "";
     std.fs.File.stdout().writeAll(msg) catch {};
 
     // Install graceful shutdown handlers for SIGTERM and SIGINT.
@@ -2209,6 +2435,7 @@ pub fn run(allocator: Allocator, model: *Model, tok: *Tokenizer, chat_tmpl: Chat
             continue;
         };
         if (g_server.active_connections.load(.monotonic) >= max_concurrent_connections) {
+            sendResponse(conn.stream, "503 Service Unavailable", "application/json", "{\"error\":{\"message\":\"Server at capacity\",\"type\":\"server_error\",\"code\":null}}");
             conn.stream.close();
             continue;
         }

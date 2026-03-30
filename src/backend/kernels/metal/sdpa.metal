@@ -6,13 +6,13 @@
 //
 // Algorithm: FlashAttention-2 (Tri Dao, 2023) with conservative block sizes.
 // Block sizes tuned for Apple Silicon M-series (32KB threadgroup memory):
-// - Bc = 32 (K,V block size along sequence dimension)
-// - Br = 32 (Q,O block size — currently unused, single Q head per threadgroup)
+// - Bc = 16 (K,V block size along sequence dimension)
+// - Br = 1  (single Q head per threadgroup — decode only)
 // - max_d = 256 (maximum head dimension)
 //
 // Memory layout: K_block and V_block reuse same threadgroup memory (sequential processing).
-// Total threadgroup memory: q_local[256] + kv_block[32*256] + scores[32] + shared[8]
-//                         = 1KB + 32KB + 128B + 32B ≈ 33KB (fits in 32KB budget after optimization)
+// Total threadgroup memory: q_local[256] + kv_block[16*256] + out_acc[256] + scores[16] + shared[8]
+//                         = 1KB + 16KB + 1KB + 64B + 32B ≈ 18KB (within 32KB budget)
 
 #include <metal_stdlib>
 using namespace metal;
@@ -328,111 +328,5 @@ kernel void sdpa_prefill_fa2(
     // Final normalization
     for (uint d = tid; d < hd; d += tg_sz) {
         output[o_base + d] = out_acc[d] / l_i;
-    }
-}
-
-// Legacy kernel (kept for reference, not used)
-kernel void sdpa_f32(
-    device const float* Q,
-    device const float* K_cache,
-    device const float* V_cache,
-    device float* output,
-    constant uint& nh,
-    constant uint& nkv,
-    constant uint& hd,
-    constant uint& sl,
-    constant float& scale,
-    uint h     [[threadgroup_position_in_grid]],
-    uint tid   [[thread_index_in_threadgroup]],
-    uint tg_sz [[threads_per_threadgroup]])
-{
-    if (h >= nh) return;
-
-    uint hpg = nh / nkv;
-    uint kvh = h / hpg;
-    uint kvd = nkv * hd;
-
-    threadgroup float scores[sdpa_max_seq_len];
-    threadgroup float q_local[sdpa_max_head_dim];
-    threadgroup float shared[8];
-
-    for (uint d = tid; d < hd; d += tg_sz) {
-        q_local[d] = Q[h * hd + d];
-    }
-    threadgroup_barrier(mem_flags::mem_threadgroup);
-
-    uint hd4 = hd & ~3u;
-    for (uint t = tid; t < sl; t += tg_sz) {
-        float dot_val = 0.0f;
-        uint base = t * kvd + kvh * hd;
-        for (uint d = 0; d < hd4; d += 4) {
-            dot_val += dot(float4(q_local[d], q_local[d+1], q_local[d+2], q_local[d+3]),
-                           float4(K_cache[base+d], K_cache[base+d+1], K_cache[base+d+2], K_cache[base+d+3]));
-        }
-        for (uint d = hd4; d < hd; d++) {
-            dot_val += q_local[d] * K_cache[base + d];
-        }
-        scores[t] = dot_val * scale;
-    }
-    threadgroup_barrier(mem_flags::mem_threadgroup);
-
-    uint simd_lane  = tid % 32;
-    uint simd_group = tid / 32;
-    uint num_sg = (tg_sz + 31) / 32;
-    float mx = -INFINITY;
-    for (uint t = tid; t < sl; t += tg_sz) {
-        mx = max(mx, scores[t]);
-    }
-    mx = simd_max(mx);
-    if (simd_lane == 0) shared[simd_group] = mx;
-    threadgroup_barrier(mem_flags::mem_threadgroup);
-    if (tid < num_sg) mx = shared[tid]; else mx = -INFINITY;
-    if (tid < 32) {
-        mx = simd_max(mx);
-        if (tid == 0) shared[0] = mx;
-    }
-    threadgroup_barrier(mem_flags::mem_threadgroup);
-    float max_val = shared[0];
-
-    float local_sum = 0.0f;
-    for (uint t = tid; t < sl; t += tg_sz) {
-        float v = exp(scores[t] - max_val);
-        scores[t] = v;
-        local_sum += v;
-    }
-    local_sum = simd_sum(local_sum);
-    if (simd_lane == 0) shared[simd_group] = local_sum;
-    threadgroup_barrier(mem_flags::mem_threadgroup);
-    if (tid < num_sg) local_sum = shared[tid]; else local_sum = 0.0f;
-    if (tid < 32) {
-        local_sum = simd_sum(local_sum);
-        if (tid == 0) shared[0] = local_sum;
-    }
-    threadgroup_barrier(mem_flags::mem_threadgroup);
-    float inv_sum = 1.0f / shared[0];
-
-    for (uint t = tid; t < sl; t += tg_sz) {
-        scores[t] *= inv_sum;
-    }
-    threadgroup_barrier(mem_flags::mem_threadgroup);
-
-    for (uint d = tid * 4; d + 3 < hd; d += tg_sz * 4) {
-        float4 acc = float4(0.0f);
-        for (uint t = 0; t < sl; t++) {
-            uint v_base = t * kvd + kvh * hd + d;
-            acc += scores[t] * float4(V_cache[v_base], V_cache[v_base+1], V_cache[v_base+2], V_cache[v_base+3]);
-        }
-        uint o_base = h * hd + d;
-        output[o_base] = acc.x;
-        output[o_base+1] = acc.y;
-        output[o_base+2] = acc.z;
-        output[o_base+3] = acc.w;
-    }
-    for (uint d = (hd & ~3u) + tid; d < hd; d += tg_sz) {
-        float acc = 0.0f;
-        for (uint t = 0; t < sl; t++) {
-            acc += scores[t] * V_cache[t * kvd + kvh * hd + d];
-        }
-        output[h * hd + d] = acc;
     }
 }

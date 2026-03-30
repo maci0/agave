@@ -6,13 +6,33 @@ on:
   pull_request:
     branches: [ main ]
 
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   ZIG_VERSION: "0.15.2"
 
 jobs:
+  fmt-check:
+    name: Check formatting
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Zig
+        uses: goto-bus-stop/setup-zig@v2
+        with:
+          version: ${{ env.ZIG_VERSION }}
+
+      - name: Check formatting
+        run: zig fmt --check src/ tests/
+
   test-linux-x86:
     name: Test on Linux x86_64
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 
@@ -39,6 +59,7 @@ jobs:
   test-macos:
     name: Test on macOS (Apple Silicon)
     runs-on: macos-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 
@@ -65,7 +86,9 @@ jobs:
   cross-compile-check:
     name: Cross-compilation matrix
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     strategy:
+      fail-fast: false
       matrix:
         target:
           - x86_64-linux

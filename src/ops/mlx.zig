@@ -111,7 +111,7 @@ fn mlxGemvQ4Rows(
     wpr: usize,
 ) void {
     const gs = mlx_group_size;
-    const V = 8; // 8 nibbles per u32 word
+    const V = nibbles_per_u32;
     const VecF32 = @Vector(V, f32);
     const VecU32 = @Vector(V, u32);
     const nibble_shifts: VecU32 = .{ 0, 4, 8, 12, 16, 20, 24, 28 };
@@ -259,7 +259,7 @@ fn mlxGemvQ8Rows(
     wpr: usize,
 ) void {
     const gs = mlx_group_size;
-    const V = 4; // 4 bytes per u32 word
+    const V = bytes_per_u32;
     const VecF32 = @Vector(V, f32);
     const VecU32 = @Vector(V, u32);
     const byte_shifts: VecU32 = .{ 0, 8, 16, 24 };
@@ -304,7 +304,7 @@ fn mlxGemvQ8Rows(
 
 /// GEMV for MLX MXFP4 SafeTensors layout.
 /// Weight: U32-packed 4-bit nibbles (8 nibbles per word), group_size=32.
-/// Scales: FP8 E4M3 per group (U8 array). No quantization bias.
+/// Scales: E8M0 (pure power-of-2) per group (U8 array). No quantization bias.
 /// Dequant: float_val = mxfp4_lookup(nibble) * fp8_scale.
 pub fn mlxMxfp4Gemv(
     x: [*]const f32,
@@ -364,7 +364,7 @@ pub fn mlxMxfp4GemvRows(
                 }
                 const v: V8 = vals;
                 const xv: V8 = (x + xo + wi * nibbles_per_u32)[0..nibbles_per_u32].*;
-                acc += sv * v * xv;
+                acc = @mulAdd(V8, sv * v, xv, acc);
             }
 
             // Scalar tail — reuse pre-computed scale

@@ -168,6 +168,8 @@ pub const SafeTensorsDir = struct {
                 file.handle,
                 0,
             );
+            // Hint sequential access for weight loading — enables OS readahead and reduces page faults.
+            std.posix.madvise(mapped.ptr, mapped.len, std.posix.MADV.SEQUENTIAL) catch {};
             const json_len = std.mem.readInt(u64, mapped[0..8], .little);
             if (json_len > max_header_json_size or 8 + json_len > file_size) {
                 std.posix.munmap(mapped);

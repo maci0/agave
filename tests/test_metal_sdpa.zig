@@ -2,6 +2,7 @@ const std = @import("std");
 const Backend = @import("../src/backend/backend.zig").Backend;
 const CpuBackend = @import("../src/backend/cpu.zig").CpuBackend;
 const MetalBackend = @import("../src/backend/metal.zig").MetalBackend;
+const computeOracleSdpa = @import("sdpa_oracle.zig").computeOracleSdpa;
 
 test "Metal SDPA FlashAttention-2 dual-delta correctness" {
     const builtin = @import("builtin");
@@ -51,9 +52,8 @@ test "Metal SDPA FlashAttention-2 dual-delta correctness" {
     computeOracleSdpa(q, keys, values, oracle_output, nh, nkv, hd, seq_len, scale);
 
     // Compute CPU SDPA (f32)
-    var cpu_be = try CpuBackend.init(allocator);
-    defer cpu_be.deinit();
-    var cpu_backend: Backend = .{ .cpu = cpu_be };
+    var cpu_be: CpuBackend = .{};
+    var cpu_backend: Backend = .{ .cpu = &cpu_be };
     cpu_backend.sdpa(
         q.ptr,
         @ptrCast(keys),
@@ -70,7 +70,7 @@ test "Metal SDPA FlashAttention-2 dual-delta correctness" {
     );
 
     // Compute Metal SDPA (f32 GPU with FlashAttention-2)
-    var metal_backend: Backend = .{ .metal = metal_be };
+    var metal_backend: Backend = .{ .metal = &metal_be };
     metal_backend.sdpa(
         q.ptr,
         @ptrCast(keys),
@@ -107,54 +107,4 @@ test "Metal SDPA FlashAttention-2 dual-delta correctness" {
     try std.testing.expect(max_gpu_err < 1e-3);
     // Accept GPU if error <= 2× CPU error
     try std.testing.expect(max_gpu_err <= 2.0 * max_cpu_err);
-}
-
-fn computeOracleSdpa(
-    q: []const f32,
-    keys: []const f32,
-    values: []const f32,
-    output: []f64,
-    nh: usize,
-    nkv: usize,
-    hd: usize,
-    seq_len: usize,
-    scale: f32,
-) void {
-    // High-precision FP64 SDPA implementation
-    const hpg = nh / nkv;
-    for (0..nh) |h| {
-        const kvh = h / hpg;
-        for (0..hd) |d| {
-            var sum: f64 = 0.0;
-            var max_score: f64 = -std.math.inf(f64);
-
-            // Compute scores and find max
-            var scores: [256]f64 = undefined; // Max seq_len for test
-            for (0..seq_len) |t| {
-                var dot: f64 = 0.0;
-                for (0..hd) |k| {
-                    const q_val: f64 = @floatCast(q[h * hd + k]);
-                    const k_val: f64 = @floatCast(keys[t * nkv * hd + kvh * hd + k]);
-                    dot += q_val * k_val;
-                }
-                scores[t] = dot * @as(f64, @floatCast(scale));
-                max_score = @max(max_score, scores[t]);
-            }
-
-            // Softmax numerator and sum
-            var exp_sum: f64 = 0.0;
-            for (0..seq_len) |t| {
-                scores[t] = @exp(scores[t] - max_score);
-                exp_sum += scores[t];
-            }
-
-            // Weighted sum over values
-            for (0..seq_len) |t| {
-                const weight = scores[t] / exp_sum;
-                const v_val: f64 = @floatCast(values[t * nkv * hd + kvh * hd + d]);
-                sum += weight * v_val;
-            }
-            output[h * hd + d] = sum;
-        }
-    }
 }

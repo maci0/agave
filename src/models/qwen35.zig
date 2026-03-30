@@ -3,6 +3,7 @@
 //! standard GQA layers based on full_attention_interval.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const math = std.math;
 const backend_mod = @import("../backend/backend.zig");
 const format_mod = @import("../format/format.zig");
@@ -10,6 +11,7 @@ const model_mod = @import("model.zig");
 const math_ops = @import("../ops/math.zig");
 const attn_ops = @import("../ops/attention.zig");
 const quant = @import("../ops/quant.zig");
+const mlx_ops = @import("../ops/mlx.zig");
 const perf = @import("../perf.zig");
 const kv_quant = @import("../ops/kv_quant.zig");
 const kvcache = @import("../kvcache/manager.zig");
@@ -478,7 +480,6 @@ pub const Qwen35Model = struct {
     fn embLookup(self: *Qwen35Model, tok: u32) !void {
         const t = self.fmt.getTensor("token_embd.weight") orelse return error.MissingTensor;
         if (t.dtype == .mlx_q) {
-            const mlx_ops = @import("../ops/mlx.zig");
             const st = self.fmt.getTensor("token_embd.scales") orelse return error.MissingTensor;
             const bt = self.fmt.getTensor("token_embd.biases") orelse return error.MissingTensor;
             const bits: u32 = if (st.dtype == .unknown) 4 else (self.fmt.getMetaU32("bits") orelse 4);
@@ -1002,10 +1003,12 @@ pub const Qwen35Model = struct {
 
         try model_mod.ensureKvBlock(self);
 
-        if (self.perf.enabled) switch (self.be) {
-            .metal => |be| be.resetCounters(),
-            else => {},
-        };
+        if (self.perf.enabled) {
+            if (comptime builtin.os.tag == .macos) switch (self.be) {
+                .metal => |be| be.resetCounters(),
+                else => {},
+            };
+        }
 
         const t = self.perf.start();
         try self.embLookup(token_id);
@@ -1045,12 +1048,12 @@ pub const Qwen35Model = struct {
         self.be.sync();
         // Log dispatch stats on first generated token
         if (self.perf.enabled and self.kv_seq_len == 1) {
-            switch (self.be) {
+            if (comptime builtin.os.tag == .macos) switch (self.be) {
                 .metal => |be| std.log.warn("Metal stats: {d} dispatches, {d} barriers, {d} syncs", .{
                     be.dispatch_count, be.barrier_count, be.sync_count,
                 }),
                 else => {},
-            }
+            };
         }
         return math_ops.argmax(self.logits_buf);
     }

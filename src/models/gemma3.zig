@@ -333,9 +333,12 @@ pub const Gemma3Model = struct {
         if (token_ids.len == 0) return error.MissingTensor;
         if (token_ids.len > self.max_seq_len) return error.KVCacheFull;
 
-        // For chunk_size=1 or single token, use the decode forward() path
-        // which runs entirely on GPU (no CPU backend swap overhead).
-        const cs: usize = self.chunk_size;
+        // For chunk_size=1, single token, or MLX-quantized models, use the
+        // decode forward() path. MLX models loop per-token in doGemm anyway
+        // (no batched MLX GEMM kernel), and the mixed CPU/GPU prefill path
+        // has data coherence issues on Metal with MLX weights.
+        const is_mlx = (self.fmt.getTensor("token_embd.weight") orelse unreachable).dtype == .mlx_q;
+        const cs: usize = if (is_mlx) 1 else self.chunk_size;
         if (cs <= 1 or token_ids.len == 1) {
             var last: u32 = 0;
             for (token_ids) |tid| last = try self.forward(tid);
@@ -428,6 +431,8 @@ pub const Gemma3Model = struct {
             self.be.ropeBatched(self.pf_q.ptr, self.pf_positions.ptr, n_tok, nh, hd, rd, self.rope_local_theta);
             self.be.ropeBatched(self.pf_k.ptr, self.pf_positions.ptr, n_tok, nkv, hd, rd, self.rope_local_theta);
         } else if (self.rope_freq_scale != 1.0) {
+            // CPU RoPE with frequency scaling — must sync before reading GPU-written pf_q/pf_k.
+            self.be.sync();
             for (0..n_tok) |t| {
                 applyRopeScaled(self.pf_q.ptr + t * nh * hd, self.pf_positions[t], nh, hd, rd, self.rope_theta, self.rope_freq_scale);
                 applyRopeScaled(self.pf_k.ptr + t * nkv * hd, self.pf_positions[t], nkv, hd, rd, self.rope_theta, self.rope_freq_scale);
@@ -468,8 +473,7 @@ pub const Gemma3Model = struct {
         self.doGemm(self.pf_hidden2.ptr, gw, self.pf_ff_gate.ptr, n_tok, ff, e);
         self.doGemm(self.pf_hidden2.ptr, uw, self.pf_ff_up.ptr, n_tok, ff, e);
 
-        self.be.gelu(self.pf_ff_gate.ptr, self.pf_ff_gate.ptr, n_tok * ff);
-        self.be.mul(self.pf_ff_gate.ptr, self.pf_ff_up.ptr, self.pf_ff_gate.ptr, n_tok * ff);
+        self.be.geluMul(self.pf_ff_gate.ptr, self.pf_ff_up.ptr, self.pf_ff_gate.ptr, n_tok * ff);
 
         self.doGemm(self.pf_ff_gate.ptr, dw, self.pf_hidden2.ptr, n_tok, e, ff);
 
@@ -556,6 +560,8 @@ pub const Gemma3Model = struct {
             self.be.rope(self.q_buf.ptr, self.kv_seq_len, nh, hd, rd, self.rope_local_theta);
             self.be.rope(self.k_buf.ptr, self.kv_seq_len, nkv, hd, rd, self.rope_local_theta);
         } else if (self.rope_freq_scale != 1.0) {
+            // CPU RoPE with frequency scaling — must sync before reading GPU-written q_buf/k_buf.
+            self.be.sync();
             applyRopeScaled(self.q_buf.ptr, self.kv_seq_len, nh, hd, rd, self.rope_theta, self.rope_freq_scale);
             applyRopeScaled(self.k_buf.ptr, self.kv_seq_len, nkv, hd, rd, self.rope_theta, self.rope_freq_scale);
         } else {
@@ -622,8 +628,7 @@ pub const Gemma3Model = struct {
         self.perf.end(.gemv_ffn, t);
 
         t = self.perf.start();
-        self.be.gelu(self.ff_gate.ptr, self.ff_gate.ptr, ff);
-        self.be.mul(self.ff_gate.ptr, self.ff_up.ptr, self.ff_gate.ptr, ff);
+        self.be.geluMul(self.ff_gate.ptr, self.ff_up.ptr, self.ff_gate.ptr, ff);
         self.perf.end(.gelu_mul, t);
 
         t = self.perf.start();

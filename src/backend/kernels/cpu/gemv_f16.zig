@@ -29,10 +29,10 @@ pub fn gemvF16(x: [*]const f32, w: [*]const f16, y: [*]f32, n: usize, k: usize) 
                 w2[idx] = @floatCast(w[r2 + i + idx]);
                 w3[idx] = @floatCast(w[r3 + i + idx]);
             }
-            acc0 += xv * w0;
-            acc1 += xv * w1;
-            acc2 += xv * w2;
-            acc3 += xv * w3;
+            acc0 = @mulAdd(V8, xv, w0, acc0);
+            acc1 = @mulAdd(V8, xv, w1, acc1);
+            acc2 = @mulAdd(V8, xv, w2, acc2);
+            acc3 = @mulAdd(V8, xv, w3, acc3);
         }
         var t0: f32 = 0.0;
         var t1: f32 = 0.0;
@@ -40,10 +40,10 @@ pub fn gemvF16(x: [*]const f32, w: [*]const f16, y: [*]f32, n: usize, k: usize) 
         var t3: f32 = 0.0;
         while (i < k) : (i += 1) {
             const xv = x[i];
-            t0 += xv * @as(f32, @floatCast(w[r0 + i]));
-            t1 += xv * @as(f32, @floatCast(w[r1 + i]));
-            t2 += xv * @as(f32, @floatCast(w[r2 + i]));
-            t3 += xv * @as(f32, @floatCast(w[r3 + i]));
+            t0 = @mulAdd(f32, xv, @as(f32, @floatCast(w[r0 + i])), t0);
+            t1 = @mulAdd(f32, xv, @as(f32, @floatCast(w[r1 + i])), t1);
+            t2 = @mulAdd(f32, xv, @as(f32, @floatCast(w[r2 + i])), t2);
+            t3 = @mulAdd(f32, xv, @as(f32, @floatCast(w[r3 + i])), t3);
         }
         y[row] = @reduce(.Add, acc0) + t0;
         y[row + 1] = @reduce(.Add, acc1) + t1;
@@ -60,9 +60,9 @@ pub fn gemvF16(x: [*]const f32, w: [*]const f16, y: [*]f32, n: usize, k: usize) 
             inline for (0..8) |idx| {
                 wv[idx] = @floatCast(w[roff + i + idx]);
             }
-            acc += @as(V8, x[i..][0..8].*) * wv;
+            acc = @mulAdd(V8, @as(V8, x[i..][0..8].*), wv, acc);
         }
-        while (i < k) : (i += 1) tail += x[i] * @as(f32, @floatCast(w[roff + i]));
+        while (i < k) : (i += 1) tail = @mulAdd(f32, x[i], @as(f32, @floatCast(w[roff + i])), tail);
         y[row] = @reduce(.Add, acc) + tail;
     }
 }

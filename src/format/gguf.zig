@@ -10,9 +10,9 @@ const FormatTensorInfo = fmt.TensorInfo;
 const DType = fmt.DType;
 
 /// GGUF magic bytes: "GGUF" as a little-endian u32.
-pub const GGUF_MAGIC: u32 = 0x46554747;
+const gguf_magic: u32 = 0x46554747;
 /// Maximum supported GGUF format version (versions 2 and 3 are accepted).
-pub const GGUF_VERSION_3: u32 = 3;
+const gguf_version_3: u32 = 3;
 /// Minimum valid GGUF file size: 4 magic + 4 version + 8 tensor_count + 8 metadata_kv_count.
 const gguf_min_header_size: usize = 24;
 /// Maximum allowed metadata key-value count (prevents DoS via crafted files).
@@ -250,6 +250,8 @@ pub const GGUFFile = struct {
 
         const mapped = try posix.mmap(null, file_size, posix.PROT.READ, .{ .TYPE = .SHARED }, file.handle, 0);
         errdefer posix.munmap(mapped);
+        // Hint sequential access for weight loading — enables OS readahead and reduces page faults.
+        posix.madvise(mapped.ptr, mapped.len, posix.MADV.SEQUENTIAL) catch {};
 
         var self = GGUFFile{
             .mapped_data = mapped,
@@ -490,11 +492,11 @@ pub const GGUFFile = struct {
 
         const magic = try self.readU32(off);
         off += 4;
-        if (magic != GGUF_MAGIC) return error.InvalidMagic;
+        if (magic != gguf_magic) return error.InvalidMagic;
 
         self.version = try self.readU32(off);
         off += 4;
-        if (self.version < 2 or self.version > 3) return error.UnsupportedVersion;
+        if (self.version < 2 or self.version > gguf_version_3) return error.UnsupportedVersion;
 
         self.tensor_count = try self.readU64(off);
         off += 8;
@@ -560,6 +562,18 @@ pub const GGUFFile = struct {
         const rem = off % self.alignment;
         if (rem != 0) off += self.alignment - rem;
         self.data_offset = off;
+
+        // Validate all tensor data fits within the mapped file.
+        // A crafted GGUF could specify offsets past the mmap'd region,
+        // causing out-of-bounds reads when tensorData() is called later.
+        var tensor_it = self.tensors.valueIterator();
+        while (tensor_it.next()) |info| {
+            const abs_offset = std.math.add(usize, self.data_offset, @as(usize, @intCast(info.offset))) catch
+                return error.OffsetOutOfBounds;
+            const tensor_end = std.math.add(usize, abs_offset, info.dataBytes()) catch
+                return error.OffsetOutOfBounds;
+            if (tensor_end > self.file_size) return error.OffsetOutOfBounds;
+        }
     }
 
     /// Returns raw tensor data bytes for the given tensor info.

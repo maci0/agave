@@ -4,11 +4,11 @@ const V8 = @Vector(8, f32);
 
 /// Applies SiLU (Swish) activation: x * sigmoid(x).
 pub fn silu(input: [*]const f32, output: [*]f32, n: usize) void {
+    const one: V8 = @splat(@as(f32, 1.0));
+    const neg: V8 = @splat(@as(f32, -1.0));
     var i: usize = 0;
     while (i + 8 <= n) : (i += 8) {
         const x: V8 = input[i..][0..8].*;
-        const neg: V8 = @splat(@as(f32, -1.0));
-        const one: V8 = @splat(@as(f32, 1.0));
         output[i..][0..8].* = x / (one + @exp(neg * x));
     }
     while (i < n) : (i += 1) {
@@ -120,4 +120,54 @@ test "siluMul non-aligned size" {
     var silu_ref: [5]f32 = undefined;
     silu(&a, &silu_ref, 5);
     for (0..5) |i| try std.testing.expectApproxEqAbs(silu_ref[i] * b[i], out[i], 1e-5);
+}
+
+test "geluMul matches gelu * mul" {
+    const elementwise_kernel = @import("elementwise.zig");
+    var a = [_]f32{ 1.0, 2.0, -1.0, 0.5, -2.0, 3.0, 0.0, -0.5 };
+    var b = [_]f32{ 2.0, 0.5, 1.0, 3.0, -1.0, 2.0, 5.0, 0.1 };
+    // Compute reference: gelu(a) * b
+    var gelu_ref: [8]f32 = undefined;
+    gelu(&a, &gelu_ref, 8);
+    var expected: [8]f32 = undefined;
+    elementwise_kernel.mul(&gelu_ref, &b, &expected, 8);
+    // Compute via composed path (same as CPU backend geluMul)
+    var out: [8]f32 = undefined;
+    gelu(&a, &out, 8);
+    elementwise_kernel.mul(&out, &b, &out, 8);
+    for (0..8) |i| try std.testing.expectApproxEqAbs(expected[i], out[i], 1e-6);
+}
+
+test "geluMul scaling" {
+    const elementwise_kernel = @import("elementwise.zig");
+    var a = [_]f32{ 0.0, 1.0, -1.0, 2.0, -2.0, 0.5, -0.5, 3.0 };
+    // Compute gelu(a) as baseline
+    var gelu_a: [8]f32 = undefined;
+    gelu(&a, &gelu_a, 8);
+    // GELU(0) = 0, GELU(1) ≈ 0.841, GELU(-1) ≈ -0.159
+    try std.testing.expectApproxEqAbs(@as(f32, 0.0), gelu_a[0], 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.841), gelu_a[1], 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, -0.159), gelu_a[2], 0.01);
+    // With b=2: geluMul(a, 2) = gelu(a) * 2
+    var b2 = [_]f32{ 2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0 };
+    var out: [8]f32 = undefined;
+    gelu(&a, &out, 8);
+    elementwise_kernel.mul(&out, &b2, &out, 8);
+    for (0..8) |i| try std.testing.expectApproxEqAbs(gelu_a[i] * 2.0, out[i], 1e-5);
+}
+
+test "geluMul non-aligned size" {
+    var a = [_]f32{ 1.0, 2.0, -1.0, 0.5, 3.0 };
+    var b = [_]f32{ 2.0, 0.5, 1.0, 3.0, -1.0 };
+    // Reference: gelu(a) * b
+    var gelu_ref: [5]f32 = undefined;
+    gelu(&a, &gelu_ref, 5);
+    var expected: [5]f32 = undefined;
+    const elementwise_kernel = @import("elementwise.zig");
+    elementwise_kernel.mul(&gelu_ref, &b, &expected, 5);
+    // Composed path
+    var out: [5]f32 = undefined;
+    gelu(&a, &out, 5);
+    elementwise_kernel.mul(&out, &b, &out, 5);
+    for (0..5) |i| try std.testing.expectApproxEqAbs(expected[i], out[i], 1e-5);
 }

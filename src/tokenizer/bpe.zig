@@ -4,7 +4,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const tok_iface = @import("tokenizer.zig");
 const TokenizerIface = tok_iface.Tokenizer;
-const TokenizerKind = @import("../arch.zig").TokenizerKind;
+const TokenizerKind = @import("tokenizer.zig").TokenizerKind;
 
 const max_path_buf_size: usize = 4096;
 const max_vocab_file_size: usize = 64 * 1024 * 1024;
@@ -125,6 +125,10 @@ pub const BpeTokenizer = struct {
             defer file.close();
             const content = try file.readToEndAlloc(self.allocator, max_vocab_file_size);
             defer self.allocator.free(content);
+            // Pre-allocate maps based on line count to avoid repeated rehashing.
+            const line_count = std.mem.count(u8, content, "\n") + 1;
+            try self.token_to_id.ensureTotalCapacity(@intCast(line_count));
+            try self.id_to_token.ensureTotalCapacity(self.allocator, line_count);
             var id: u32 = 0;
             var lines = std.mem.splitScalar(u8, content, '\n');
             while (lines.next()) |raw_line| {
@@ -147,6 +151,9 @@ pub const BpeTokenizer = struct {
             defer file.close();
             const content = try file.readToEndAlloc(self.allocator, max_vocab_file_size);
             defer self.allocator.free(content);
+            // Pre-allocate merge map based on line count.
+            const merge_line_count = std.mem.count(u8, content, "\n") + 1;
+            try self.merge_map.ensureTotalCapacity(@intCast(merge_line_count));
             var priority: u32 = 0;
             var lines = std.mem.splitScalar(u8, content, '\n');
             while (lines.next()) |raw_line| {
@@ -434,6 +441,10 @@ pub const BpeTokenizer = struct {
     /// Load vocabulary and merge rules from GGUF-embedded tokenizer data.
     pub fn loadFromGGUF(self: *BpeTokenizer, vocab: []const []const u8, merges: []const []const u8, eos_id: u32) !void {
         self.eos_token_id = eos_id;
+        // Pre-allocate maps to avoid repeated rehashing during bulk insert.
+        try self.token_to_id.ensureTotalCapacity(@intCast(vocab.len));
+        try self.id_to_token.ensureTotalCapacity(self.allocator, vocab.len);
+        try self.merge_map.ensureTotalCapacity(@intCast(merges.len));
         var special_count: usize = 0;
         for (vocab, 0..) |tok, i| {
             const owned_tok = try self.own(tok);
@@ -474,6 +485,9 @@ pub const BpeTokenizer = struct {
     /// Uses greedy longest-match encoding instead of BPE merges.
     pub fn loadFromGGUFSpm(self: *BpeTokenizer, vocab: []const []const u8, eos_id: u32) !void {
         self.eos_token_id = eos_id;
+        // Pre-allocate maps to avoid repeated rehashing during bulk insert.
+        try self.token_to_id.ensureTotalCapacity(@intCast(vocab.len));
+        try self.id_to_token.ensureTotalCapacity(self.allocator, vocab.len);
         var special_count: usize = 0;
         for (vocab, 0..) |tok, i| {
             const owned_tok = try self.own(tok);

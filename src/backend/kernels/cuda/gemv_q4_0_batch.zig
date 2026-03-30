@@ -1,8 +1,8 @@
-//! Batched GEMV Q4_0 kernel: compute up to 3 independent matrix-vector products
-//! sharing the same input vector x. Used to fuse QKV projections (3 ops) and
-//! Gate+Up projections (2 ops, n2=0) into a single kernel launch.
+//! Batched GEMV Q4_0 kernel: compute up to 4 independent matrix-vector products
+//! sharing the same input vector x. Used to fuse QKV projections (3 ops),
+//! Gate+Up projections (2 ops), or QKV+gate (4 ops) into a single kernel launch.
 //!
-//! Launch with (n0 + n1 + n2) blocks of 256 threads.
+//! Launch with (n0 + n1 + n2 + n3) blocks of 256 threads.
 
 const cu = @import("common.zig");
 
@@ -22,10 +22,13 @@ export fn gemv_q4_0_batch_kernel(
     w2: [*]const u8,
     y2: [*]f32,
     n2: u32,
+    w3: [*]const u8,
+    y3: [*]f32,
+    n3: u32,
     k: u32,
 ) callconv(.kernel) void {
     const global_row = cu.blockIdx();
-    const total = n0 + n1 + n2;
+    const total = n0 + n1 + n2 + n3;
     if (global_row >= total) return;
 
     // Select weight matrix and output based on block index
@@ -41,10 +44,14 @@ export fn gemv_q4_0_batch_kernel(
         w = w1;
         y = y1;
         row = global_row - n0;
-    } else {
+    } else if (global_row < n0 + n1 + n2) {
         w = w2;
         y = y2;
         row = global_row - n0 - n1;
+    } else {
+        w = w3;
+        y = y3;
+        row = global_row - n0 - n1 - n2;
     }
 
     // Standard Q4_0 dot product (identical to gemv_q4_0_kernel)

@@ -1,5 +1,6 @@
 //! CPU DeltaNet SSM recurrence kernel.
 
+const std = @import("std");
 const math_ops = @import("../../../ops/math.zig");
 const ssm_ops = @import("../../../ops/ssm.zig");
 const DeltaNetParams = @import("../../backend.zig").DeltaNetParams;
@@ -17,6 +18,7 @@ pub fn deltaNet(conv_in: [*]const f32, conv_out: [*]f32, z_buf: [*]const f32, al
     const num_k_heads: usize = p.num_k_heads;
     const head_k_dim: usize = p.head_k_dim;
     const conv_ch: usize = p.conv_ch;
+    std.debug.assert(num_v_heads <= max_deltanet_v_heads);
 
     // 1. Gate & beta computation
     var gate_vals: [max_deltanet_v_heads]f32 = undefined;
@@ -42,7 +44,7 @@ pub fn deltaNet(conv_in: [*]const f32, conv_out: [*]f32, z_buf: [*]const f32, al
             var li2: usize = 0;
             while (li2 + 8 <= head_k_dim) : (li2 += 8) {
                 const v: V8 = ptr[li2..][0..8].*;
-                acc += v * v;
+                acc = @mulAdd(V8, v, v, acc);
             }
             var ss = @reduce(.Add, acc);
             while (li2 < head_k_dim) : (li2 += 1) ss += ptr[li2] * ptr[li2];

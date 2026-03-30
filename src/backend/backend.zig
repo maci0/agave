@@ -171,6 +171,7 @@ pub const iq4_nl_block_bytes: usize = 18; // 32-element block (same layout as Q4
 pub const iq4_xs_block_bytes: usize = 138; // 256-element super-block
 pub const mxfp4_block_bytes: usize = 17; // 16B quants + 1B scale
 pub const nvfp4_block_bytes: usize = 9; // 8B quants + 1B scale
+pub const tq1_0_block_bytes: usize = 64; // 256-element super-block
 
 /// Compute raw byte size of a weight matrix [n, k] for a given dtype.
 /// Used by GPU backends to determine upload buffer sizes. Accounts for
@@ -192,8 +193,12 @@ pub fn weightBytes(dtype: DType, n: usize, k: usize) usize {
         .mxfp4 => n * nb * mxfp4_block_bytes,
         .q2_k => n * nsb * q2_k_block_bytes,
         .q3_k => n * nsb * q3_k_block_bytes,
+        .iq4_nl => n * nb * iq4_nl_block_bytes,
+        .iq4_xs => n * nsb * iq4_xs_block_bytes,
+        .tq1_0 => n * nsb * tq1_0_block_bytes,
+        .nvfp4 => n * ((k + nvfp4_block_elems - 1) / nvfp4_block_elems) * nvfp4_block_bytes,
         // Conservative fallback for unsupported dtypes (overestimates at f32).
-        .tq1_0, .iq4_xs, .iq4_nl, .nvfp4, .mlx_q, .unknown => n * k * 4,
+        .mlx_q, .unknown => n * k * 4,
     };
 }
 
@@ -210,167 +215,138 @@ pub const NullBackend = struct {
 
     // Stub methods — unreachable because the variant is never constructed.
 
-    /// Stub KV slice alloc — unreachable (backend disabled).
     pub fn allocKvSlice(_: *NullBackend, _: std.mem.Allocator, _: usize) error{OutOfMemory}![]u8 {
         unreachable;
     }
 
-    /// Stub KV slice free — unreachable (backend disabled).
     pub fn freeKvSlice(_: *NullBackend, _: std.mem.Allocator, _: []u8) void {
         unreachable;
     }
 
-    /// Stub GEMV — unreachable (backend disabled).
     pub fn gemv(_: *NullBackend, _: [*]const f32, _: TensorData, _: [*]f32, _: usize, _: usize) void {
         unreachable;
     }
 
-    /// Stub RMS normalization — unreachable (backend disabled).
     pub fn rmsNorm(_: *NullBackend, _: [*]const f32, _: [*]const f32, _: [*]f32, _: usize, _: f32) void {
         unreachable;
     }
 
-    /// Stub SiLU activation — unreachable (backend disabled).
     pub fn silu(_: *NullBackend, _: [*]const f32, _: [*]f32, _: usize) void {
         unreachable;
     }
 
-    /// Stub GELU activation — unreachable (backend disabled).
     pub fn gelu(_: *NullBackend, _: [*]const f32, _: [*]f32, _: usize) void {
         unreachable;
     }
 
-    /// Stub element-wise add — unreachable (backend disabled).
     pub fn add(_: *NullBackend, _: [*]const f32, _: [*]const f32, _: [*]f32, _: usize) void {
         unreachable;
     }
 
-    /// Stub gemvT — unreachable (backend disabled).
     pub fn gemvT(_: *NullBackend, _: [*]const f32, _: [*]const u8, _: [*]f32, _: usize, _: usize) void {
         unreachable;
     }
 
-    /// Stub addScaled — unreachable (backend disabled).
     pub fn addScaled(_: *NullBackend, _: [*]const f32, _: [*]f32, _: f32, _: usize) void {
         unreachable;
     }
 
-    /// Stub fused add + rmsNorm — unreachable (backend disabled).
     pub fn addRmsNorm(_: *NullBackend, _: [*]f32, _: [*]const f32, _: [*]const f32, _: [*]f32, _: usize, _: f32) void {
         unreachable;
     }
 
-    /// Stub element-wise mul — unreachable (backend disabled).
     pub fn mul(_: *NullBackend, _: [*]const f32, _: [*]const f32, _: [*]f32, _: usize) void {
         unreachable;
     }
 
-    /// Stub softmax — unreachable (backend disabled).
     pub fn softmax(_: *NullBackend, _: [*]f32, _: usize) void {
         unreachable;
     }
 
-    /// Stub RoPE — unreachable (backend disabled).
     pub fn rope(_: *NullBackend, _: [*]f32, _: usize, _: usize, _: usize, _: usize, _: f32) void {
         unreachable;
     }
 
-    /// Stub embedding lookup — unreachable (backend disabled).
     pub fn embLookup(_: *NullBackend, _: TensorData, _: u32, _: [*]f32, _: usize) void {
         unreachable;
     }
 
-    /// Stub L2 norm — unreachable (backend disabled).
     pub fn l2Norm(_: *NullBackend, _: [*]f32, _: usize, _: f32) void {
         unreachable;
     }
 
-    /// Stub sigmoid mul — unreachable (backend disabled).
     pub fn sigmoidMul(_: *NullBackend, _: [*]f32, _: [*]const f32, _: usize) void {
         unreachable;
     }
 
-    /// Stub fused silu*mul — unreachable (backend disabled).
     pub fn siluMul(_: *NullBackend, _: [*]const f32, _: [*]const f32, _: [*]f32, _: usize) void {
         unreachable;
     }
 
-    /// Stub per-head rmsNorm — unreachable (backend disabled).
+    pub fn geluMul(_: *NullBackend, _: [*]const f32, _: [*]const f32, _: [*]f32, _: usize) void {
+        unreachable;
+    }
+
     pub fn rmsNormMulti(_: *NullBackend, _: [*]f32, _: [*]const f32, _: usize, _: usize, _: f32) void {
         unreachable;
     }
 
-    /// Stub deinterleave — unreachable (backend disabled).
     pub fn deinterleave(_: *NullBackend, _: [*]const f32, _: [*]f32, _: [*]f32, _: usize, _: usize) void {
         unreachable;
     }
 
-    /// Stub sync — unreachable (backend disabled).
     pub fn sync(_: *NullBackend) void {
         unreachable;
     }
 
-    /// Stub SDPA — unreachable (backend disabled).
     pub fn sdpa(_: *NullBackend, _: [*]const f32, _: []u8, _: []u8, _: [*]const f32, _: [*]const f32, _: [*]f32, _: usize, _: usize, _: usize, _: usize, _: f32, _: KvQuantType) void {
         unreachable;
     }
 
-    /// Stub NVFP4 SafeTensors GEMV — unreachable (backend disabled).
     pub fn gemvNvfp4St(_: *NullBackend, _: [*]const f32, _: [*]const u8, _: [*]const u8, _: [*]f32, _: usize, _: usize) void {
         unreachable;
     }
 
-    /// Stub MLX-Q GEMV — unreachable (backend disabled).
     pub fn gemvMlxQ(_: *NullBackend, _: [*]const f32, _: [*]const u8, _: [*]const u8, _: [*]const u8, _: [*]f32, _: usize, _: usize, _: u32) void {
         unreachable;
     }
 
-    /// Stub MXFP4 SafeTensors GEMV — unreachable (backend disabled).
     pub fn gemvMxfp4St(_: *NullBackend, _: [*]const f32, _: [*]const u8, _: [*]const u8, _: [*]f32, _: usize, _: usize) void {
         unreachable;
     }
 
-    /// Stub batched GEMV — unreachable (backend disabled).
     pub fn gemvMulti(_: *NullBackend, _: [*]const f32, _: []const GemvOp, _: usize) void {
         unreachable;
     }
 
-    /// Stub GEMM — unreachable (backend disabled).
     pub fn gemm(_: *NullBackend, _: [*]const f32, _: TensorData, _: [*]f32, _: usize, _: usize, _: usize) void {
         unreachable;
     }
 
-    /// Stub batched rmsNorm — unreachable (backend disabled).
     pub fn rmsNormBatched(_: *NullBackend, _: [*]const f32, _: [*]const f32, _: [*]f32, _: usize, _: usize, _: f32) void {
         unreachable;
     }
 
-    /// Stub batched RoPE — unreachable (backend disabled).
     pub fn ropeBatched(_: *NullBackend, _: [*]f32, _: [*]const u32, _: usize, _: usize, _: usize, _: usize, _: f32) void {
         unreachable;
     }
 
-    /// Stub prefill SDPA — unreachable (backend disabled).
     pub fn sdpaPrefill(_: *NullBackend, _: [*]const f32, _: [*]const f32, _: [*]const f32, _: []u8, _: []u8, _: [*]f32, _: usize, _: usize, _: usize, _: usize, _: usize, _: f32, _: KvQuantType) void {
         unreachable;
     }
 
-    /// Stub DeltaNet recurrence — unreachable (backend disabled).
     pub fn deltaNet(_: *NullBackend, _: [*]const f32, _: [*]f32, _: [*]const f32, _: [*]const f32, _: [*]const f32, _: [*]f32, _: [*]f32, _: []f32, _: [*]const f32, _: [*]const f32, _: [*]const f32, _: [*]const f32, _: DeltaNetParams) void {
         unreachable;
     }
 
-    /// Stub beginBatch — unreachable (backend disabled).
     pub fn beginBatch(_: *NullBackend) void {
         unreachable;
     }
 
-    /// Stub endBatch — unreachable (backend disabled).
     pub fn endBatch(_: *NullBackend) void {
         unreachable;
     }
 
-    /// Stub backendInfo — unreachable (backend disabled).
     pub fn backendInfo(_: *const NullBackend) BackendInfo {
         unreachable;
     }
@@ -584,16 +560,21 @@ pub const Backend = union(enum) {
     /// Input: [Q0..Q_{hd-1}, G0..G_{hd-1}] × nh heads. Output: q[nh*hd], g[nh*hd].
     /// Metal: GPU kernel (no sync needed). Other backends: CPU memcpy fallback.
     pub inline fn splitQGate(self: Backend, qg: [*]const f32, q_out: [*]f32, g_out: [*]f32, hd: usize, nh: usize) void {
-        switch (self) {
-            .metal => |be| be.splitQGate(qg, q_out, g_out, hd, nh),
-            inline else => {
-                for (0..nh) |h| {
-                    const src = h * hd * 2;
-                    const dst = h * hd;
-                    @memcpy(q_out[dst..][0..hd], qg[src..][0..hd]);
-                    @memcpy(g_out[dst..][0..hd], qg[src + hd ..][0..hd]);
-                }
-            },
+        if (comptime builtin.os.tag == .macos) {
+            switch (self) {
+                .metal => |be| {
+                    be.splitQGate(qg, q_out, g_out, hd, nh);
+                    return;
+                },
+                else => {},
+            }
+        }
+        // CPU fallback for all non-Metal backends
+        for (0..nh) |h| {
+            const src = h * hd * 2;
+            const dst = h * hd;
+            @memcpy(q_out[dst..][0..hd], qg[src..][0..hd]);
+            @memcpy(g_out[dst..][0..hd], qg[src + hd ..][0..hd]);
         }
     }
 
@@ -602,6 +583,14 @@ pub const Backend = union(enum) {
     pub inline fn siluMul(self: Backend, a: [*]const f32, b: [*]const f32, out: [*]f32, n: usize) void {
         switch (self) {
             inline else => |be| be.siluMul(a, b, out, n),
+        }
+    }
+
+    /// Fused GELU + multiply: out[i] = gelu(a[i]) * b[i].
+    /// Replaces separate gelu + mul dispatches (2 dispatches → 1).
+    pub inline fn geluMul(self: Backend, a: [*]const f32, b: [*]const f32, out: [*]f32, n: usize) void {
+        switch (self) {
+            inline else => |be| be.geluMul(a, b, out, n),
         }
     }
 

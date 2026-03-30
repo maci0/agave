@@ -521,10 +521,11 @@ pub const NemotronNanoModel = struct {
         self.be.sync();
 
         const bias_t = self.stLayerTensor(li, "mixer.gate.e_score_correction_bias") orelse return error.MissingTensor;
-        bf16ToF32Buf(bias_t.data_ptr, self.bf16_buf_small[0..n_exp]);
+        // Bias is F32 (not BF16 like other tensors) — read directly
+        const bias_ptr: [*]const f32 = @ptrCast(@alignCast(bias_t.data_ptr));
         for (0..n_exp) |i| {
             const sig = math_ops.sigmoid(self.router_buf[i]);
-            self.router_buf[i] = sig + self.bf16_buf_small[i];
+            self.router_buf[i] = sig + bias_ptr[i];
         }
 
         // 3. Top-k selection

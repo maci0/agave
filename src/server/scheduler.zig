@@ -212,6 +212,7 @@ pub const RequestManager = struct {
             } else if (req.is_cancelled.load(.monotonic)) {
                 _ = self.running.swapRemove(i);
                 self.cancelled_total += 1;
+                self.metrics.recordCancellation();
             } else {
                 i += 1;
             }

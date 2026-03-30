@@ -45,6 +45,35 @@ Request A: "You are helpful. What is 2+2?"     → compute KV for "You are helpf
 Request B: "You are helpful. Tell me a joke."   → reuse KV, only compute " Tell me a joke."
 ```
 
+**RadixAttention Tree Visualization:**
+
+```
+                           root
+                             │
+                      "You are helpful."
+                     [blocks 0,1,2] (shared)
+                             │
+                    ┌────────┴────────┐
+                    │                 │
+              " What is"        " Tell me a"
+              [block 3]          [block 3']
+                    │                 │
+                 " 2+2?"            " joke."
+                [block 4]          [block 4']
+                    │                 │
+              Answer: "4"       Answer: "Why..."
+              [block 5]          [block 5']
+
+Request A path: root → "You are helpful." → " What is" → " 2+2?" → "4"
+Request B path: root → "You are helpful." → " Tell me a" → " joke." → "Why..."
+                         └─────┬─────┘
+                        shared prefix (blocks 0,1,2)
+                        computed once, reused by both requests
+
+Eviction: Shared blocks (ref_count=2) have 100× cost → preserved longer
+Benefit: 3 shared blocks = 48 positions × 2 requests = 96 positions saved
+```
+
 Key operations (all at the scheduler layer, never in the token generation hot path):
 
 - **Insert**: Cache a completed sequence's block IDs

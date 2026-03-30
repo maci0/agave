@@ -89,7 +89,7 @@ pub fn scaledDotProductAttention(
                 while (d + simd_width <= hd) : (d += simd_width) {
                     const qv: SimdVec = q[q_base + d ..][0..simd_width].*;
                     const kv: SimdVec = f32_keys[k_base + d ..][0..simd_width].*;
-                    acc += qv * kv;
+                    acc = @mulAdd(SimdVec, qv, kv, acc);
                 }
                 var dot = @reduce(.Add, acc);
                 while (d < hd) : (d += 1) dot += q[q_base + d] * f32_keys[k_base + d];
@@ -100,24 +100,20 @@ pub fn scaledDotProductAttention(
             be.softmax(scores, n_scores);
 
             // V accumulation — position-outer, dimension-inner for cache locality.
-            var d: usize = 0;
-            while (d + simd_width <= hd) : (d += simd_width) {
-                attn_out[q_base + d ..][0..simd_width].* = @as(SimdVec, @splat(0.0));
-            }
-            while (d < hd) : (d += 1) attn_out[q_base + d] = 0;
+            @memset(attn_out[q_base..][0..hd], 0);
 
             for (0..win_len) |wi| {
                 const t = win_start + wi;
                 const v_base = t * kvd + kvh * hd;
                 const sv: SimdVec = @splat(scores[score_offset + wi]);
-                d = 0;
+                var d: usize = 0;
                 while (d + simd_width <= hd) : (d += simd_width) {
                     const vv: SimdVec = f32_values[v_base + d ..][0..simd_width].*;
                     const cur: SimdVec = attn_out[q_base + d ..][0..simd_width].*;
                     attn_out[q_base + d ..][0..simd_width].* = @mulAdd(SimdVec, sv, vv, cur);
                 }
                 while (d < hd) : (d += 1) {
-                    attn_out[q_base + d] += scores[score_offset + wi] * f32_values[v_base + d];
+                    attn_out[q_base + d] = @mulAdd(f32, scores[score_offset + wi], f32_values[v_base + d], attn_out[q_base + d]);
                 }
             }
         }
@@ -222,7 +218,7 @@ pub fn pagedAttention(
             while (d + simd_width <= hd) : (d += simd_width) {
                 const qv: SimdVec = q[q_base + d ..][0..simd_width].*;
                 const kv: SimdVec = blocks[phys].keys[k_start + d ..][0..simd_width].*;
-                acc += qv * kv;
+                acc = @mulAdd(SimdVec, qv, kv, acc);
             }
             var dot = @reduce(.Add, acc);
             while (d < hd) : (d += 1) dot += q[q_base + d] * blocks[phys].keys[k_start + d];
@@ -235,11 +231,7 @@ pub fn pagedAttention(
         // block lookups (div/mod) once per position instead of per dimension.
         {
             // Zero-init output for this head
-            var d: usize = 0;
-            while (d + simd_width <= hd) : (d += simd_width) {
-                attn_out[q_base + d ..][0..simd_width].* = @splat(0.0);
-            }
-            while (d < hd) : (d += 1) attn_out[q_base + d] = 0;
+            @memset(attn_out[q_base..][0..hd], 0);
 
             for (0..sl) |t| {
                 const lb = t / block_size;
@@ -249,14 +241,14 @@ pub fn pagedAttention(
                 const sv: SimdVec = @splat(scores[t]);
                 const v_row = blocks[phys].values;
 
-                d = 0;
+                var d: usize = 0;
                 while (d + simd_width <= hd) : (d += simd_width) {
                     const vv: SimdVec = v_row[v_start + d ..][0..simd_width].*;
                     const cur: SimdVec = attn_out[q_base + d ..][0..simd_width].*;
-                    attn_out[q_base + d ..][0..simd_width].* = cur + sv * vv;
+                    attn_out[q_base + d ..][0..simd_width].* = @mulAdd(SimdVec, sv, vv, cur);
                 }
                 while (d < hd) : (d += 1) {
-                    attn_out[q_base + d] += scores[t] * v_row[v_start + d];
+                    attn_out[q_base + d] = @mulAdd(f32, scores[t], v_row[v_start + d], attn_out[q_base + d]);
                 }
             }
         }

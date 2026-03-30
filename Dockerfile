@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1
 FROM --platform=$BUILDPLATFORM debian:bookworm-slim AS build
 
 ARG ZIG_VERSION=0.15.2
@@ -30,7 +31,9 @@ COPY . .
 # Cross-compile for the target platform.
 # Use glibc (-gnu) when any dlopen backend is enabled (CUDA/Vulkan/ROCm need glibc).
 # Use musl when only CPU/Metal backends are active (smaller static binary).
-RUN ZIG_TARGET=$(case "$TARGETARCH" in \
+RUN --mount=type=cache,target=/src/.zig-cache \
+    --mount=type=cache,target=/root/.cache/zig \
+    ZIG_TARGET=$(case "$TARGETARCH" in \
         amd64) echo "x86_64-linux" ;; \
         arm64) echo "aarch64-linux" ;; \
     esac) && \
@@ -68,6 +71,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates
 COPY --from=build /out/bin/ /usr/local/bin/
 
 USER agave
+
+EXPOSE 49453
 
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
     CMD agave --version || exit 1
