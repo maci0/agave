@@ -37,6 +37,16 @@ const default_rope_freq_base: f32 = 1_000_000.0;
 const default_rope_local_freq_base: f32 = 10_000.0;
 /// Default RMS layer-norm epsilon.
 const default_rms_eps: f32 = 1e-6;
+/// Fallback layer count for Gemma3 1B when metadata is missing.
+const default_n_layers: u32 = 26;
+/// Fallback embedding dimension for Gemma3 1B.
+const default_n_embd: u32 = 1152;
+/// Fallback head dimension for Gemma3.
+const default_head_dim: u32 = 256;
+/// Fallback feed-forward dimension for Gemma3 1B.
+const default_n_ff: u32 = 6912;
+/// Fallback vocabulary size for Gemma3.
+const default_vocab_size: u32 = 262144;
 
 /// Gemma 3 transformer model with GQA, GELU activation, and per-head QK normalization.
 /// Supports both GGUF and SafeTensors/MLX quantized weights.
@@ -111,7 +121,8 @@ pub const Gemma3Model = struct {
     block_allocator: BlockAllocator = undefined,
     tiered_cache: ?*TieredKvCache = null,
     tiered_block_allocator: ?TieredBlockAllocator = null,
-    kv_type: kv_quant.KvQuantType,
+    kv_type_k: kv_quant.KvQuantType,
+    kv_type_v: kv_quant.KvQuantType,
     kv_seq_len: usize = 0,
     cancelled: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
     perf: perf.PerfCounters = .{},
@@ -119,16 +130,16 @@ pub const Gemma3Model = struct {
     /// Initialize the model from format metadata and allocate all working buffers.
     /// When `tiered_cache` is provided, the model uses tiered block allocation instead
     /// of creating its own PagedKvCache (the tiered cache is owned externally).
-    pub fn init(allocator: Allocator, f: Format, be: Backend, ctx_size: u32, kv_type: kv_quant.KvQuantType, tiered_cache: ?*TieredKvCache) !Gemma3Model {
+    pub fn init(allocator: Allocator, f: Format, be: Backend, ctx_size: u32, kv_type_k: kv_quant.KvQuantType, kv_type_v: kv_quant.KvQuantType, tiered_cache: ?*TieredKvCache) !Gemma3Model {
         const arch = f.getMetaStr("general.architecture") orelse "gemma3";
-        const n_layers = f.getArchU32(arch, "block_count") orelse 26;
-        const n_embd = f.getArchU32(arch, "embedding_length") orelse 1152;
+        const n_layers = f.getArchU32(arch, "block_count") orelse default_n_layers;
+        const n_embd = f.getArchU32(arch, "embedding_length") orelse default_n_embd;
         const n_head = f.getArchU32(arch, "attention.head_count") orelse 4;
         const n_head_kv = f.getArchU32(arch, "attention.head_count_kv") orelse 1;
-        const head_dim = f.getArchU32(arch, "attention.key_length") orelse 256;
-        const n_ff = f.getArchU32(arch, "feed_forward_length") orelse 6912;
+        const head_dim = f.getArchU32(arch, "attention.key_length") orelse default_head_dim;
+        const n_ff = f.getArchU32(arch, "feed_forward_length") orelse default_n_ff;
         const rope_dim: u32 = head_dim;
-        const vocab_size: u32 = if (f.getVocab()) |v| @intCast(v.len) else 262144;
+        const vocab_size: u32 = if (f.getVocab()) |v| @intCast(v.len) else default_vocab_size;
 
         const qkv_dim = n_head * head_dim;
         const kv_dim = n_head_kv * head_dim;
@@ -187,7 +198,8 @@ pub const Gemma3Model = struct {
             .logits = undefined,
             .scores = undefined,
             .tiered_cache = tiered_cache,
-            .kv_type = kv_type,
+            .kv_type_k = kv_type_k,
+            .kv_type_v = kv_type_v,
         };
 
         // KV cache: use TieredKvCache if provided, otherwise flat PagedKvCache.
@@ -254,6 +266,9 @@ pub const Gemma3Model = struct {
         errdefer pa.free(self.pf_ff_up);
         self.pf_positions = try pa.alloc(u32, cs);
         errdefer pa.free(self.pf_positions);
+
+        // Pre-populate norm cache so no allocations happen during inference.
+        self.warmNormCache();
 
         return self;
     }
@@ -448,7 +463,7 @@ pub const Gemma3Model = struct {
         const kv_values_bytes: []u8 = std.mem.sliceAsBytes(kv_view.values);
         const prev_len: usize = self.pf_positions[0];
         // Use .f32 — PagedKvCache blocks store f32. Must match decode path.
-        self.be.sdpaPrefill(self.pf_q.ptr, self.pf_k.ptr, self.pf_v.ptr, kv_keys_bytes, kv_values_bytes, self.pf_attn_out.ptr, nh, nkv, hd, prev_len, n_tok, self.attn_scale, .f32);
+        self.be.sdpaPrefill(self.pf_q.ptr, self.pf_k.ptr, self.pf_v.ptr, kv_keys_bytes, kv_values_bytes, self.pf_attn_out.ptr, nh, nkv, hd, prev_len, n_tok, self.attn_scale, .f32, .f32);
 
         // Output projection
         const ow = self.fmt.layerTensor(li, "attn_output.weight") orelse return error.MissingTensor;
@@ -594,6 +609,7 @@ pub const Gemma3Model = struct {
             null,
             0,
             .f32, // PagedKvCache uses f32 blocks
+            .f32,
         );
         self.perf.end(.sdpa, t);
 
@@ -665,6 +681,23 @@ pub const Gemma3Model = struct {
     }
 
     // ── Helpers ───────────────────────────────────────────────────
+
+    /// Pre-populate the norm weight cache during init so no allocations occur
+    /// in the hot path. Iterates all norm tensors and triggers conversion.
+    fn warmNormCache(self: *Gemma3Model) void {
+        const e: usize = self.n_embd;
+        const hd: usize = self.head_dim;
+        if (self.fmt.getTensor("output_norm.weight")) |t| _ = self.normAsF32(t, e);
+        for (0..self.n_layers) |i| {
+            const li: u32 = @intCast(i);
+            if (self.fmt.layerTensor(li, "attn_norm.weight")) |t| _ = self.normAsF32(t, e);
+            if (self.fmt.layerTensor(li, "attn_q_norm.weight")) |t| _ = self.normAsF32(t, hd);
+            if (self.fmt.layerTensor(li, "attn_k_norm.weight")) |t| _ = self.normAsF32(t, hd);
+            if (self.fmt.layerTensor(li, "post_attention_norm.weight")) |t| _ = self.normAsF32(t, e);
+            if (self.fmt.layerTensor(li, "ffn_norm.weight")) |t| _ = self.normAsF32(t, e);
+            if (self.fmt.layerTensor(li, "post_ffw_norm.weight")) |t| _ = self.normAsF32(t, e);
+        }
+    }
 
     /// Get norm weights as f32 pointer. Caches converted weights on first access
     /// so subsequent tokens return a stable pointer with zero work and no GPU syncs.

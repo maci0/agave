@@ -75,6 +75,12 @@ fn expertScaleStride(scale_t: TensorInfo, weight_t: TensorInfo) usize {
 }
 /// Extra score slot reserved for the learned attention sink.
 const attention_sink_slots: usize = 1;
+/// Minimum valid MLX quantization bits.
+const min_mlx_bits: u64 = 1;
+/// Maximum valid MLX quantization bits.
+const max_mlx_bits: u64 = 32;
+/// Default MLX quantization bits when inference fails.
+const default_mlx_bits: u32 = 4;
 
 /// GPT-OSS 20B model state.
 pub const GptOssModel = struct {
@@ -148,8 +154,10 @@ pub const GptOssModel = struct {
     block_allocator: BlockAllocator = undefined,
     tiered_cache: ?*TieredKvCache = null,
     tiered_block_allocator: ?TieredBlockAllocator = null,
-    /// KV cache quantization format.
-    kv_type: kv_quant.KvQuantType = .f32,
+    /// KV cache quantization format for keys.
+    kv_type_k: kv_quant.KvQuantType = .f32,
+    /// KV cache quantization format for values.
+    kv_type_v: kv_quant.KvQuantType = .f32,
     /// Number of tokens currently stored in the KV cache.
     kv_seq_len: usize = 0,
     /// Set to true to abort a running `forward` call from another thread.
@@ -163,9 +171,10 @@ pub const GptOssModel = struct {
 
     /// Initialize the model from format metadata and pre-allocate all buffers.
     /// Caller owns the returned struct and must call `deinit` when done.
-    pub fn init(allocator: Allocator, f: Format, be: Backend, ctx_size: u32, kv_type: kv_quant.KvQuantType, tiered_cache: ?*TieredKvCache) !GptOssModel {
+    pub fn init(allocator: Allocator, f: Format, be: Backend, ctx_size: u32, kv_type_k: kv_quant.KvQuantType, kv_type_v: kv_quant.KvQuantType, tiered_cache: ?*TieredKvCache) !GptOssModel {
         var self = GptOssModel{ .fmt = f, .be = be, .allocator = allocator };
-        self.kv_type = kv_type;
+        self.kv_type_k = kv_type_k;
+        self.kv_type_v = kv_type_v;
 
         const arch = f.getMetaStr("general.architecture") orelse "gpt-oss";
         if (f.getArchU32(arch, "block_count")) |v| self.n_layers = v;
@@ -248,6 +257,9 @@ pub const GptOssModel = struct {
             errdefer self.block_allocator.freeSeqTable(&self.seq_table);
             try self.block_allocator.appendBlock(&self.seq_table);
         }
+
+        // Pre-populate norm cache so no allocations happen during inference.
+        self.warmNormCache();
 
         return self;
     }
@@ -722,6 +734,19 @@ pub const GptOssModel = struct {
         self.be.add(self.hidden.ptr, self.moe_out.ptr, self.hidden.ptr, e);
     }
 
+    /// Pre-populate the norm weight cache during init so no allocations occur
+    /// in the hot path. Iterates all norm tensors and triggers conversion.
+    fn warmNormCache(self: *GptOssModel) void {
+        const e: usize = self.n_embd;
+        if (self.fmt.getTensor("output_norm.weight")) |t| _ = self.normAsF32(t, e);
+        for (0..self.n_layers) |i| {
+            const li: u32 = @intCast(i);
+            if (self.fmt.layerTensor(li, "attn_norm.weight")) |t| _ = self.normAsF32(t, e);
+            if (self.fmt.layerTensor(li, "post_attention_norm.weight")) |t| _ = self.normAsF32(t, e);
+            if (self.fmt.layerTensor(li, "ffn_norm.weight")) |t| _ = self.normAsF32(t, e);
+        }
+    }
+
     /// Get norm weights as f32 pointer. Caches converted weights on first access
     /// so subsequent tokens return a stable pointer with zero work and no GPU syncs.
     fn normAsF32(self: *GptOssModel, t: TensorInfo, n: usize) [*]const f32 {
@@ -775,7 +800,7 @@ fn inferMlxBits(t: TensorInfo, k: u32) u32 {
     // For expert tensors [n_experts, rows, words], use dims[n_dims-1]
     const words_dim = @as(u64, @intCast(t.dims[t.n_dims - 1]));
     const result = words_dim * 32 / @as(u64, k);
-    return if (result >= 1 and result <= 32) @intCast(result) else 4;
+    return if (result >= min_mlx_bits and result <= max_mlx_bits) @intCast(result) else default_mlx_bits;
 }
 
 const expertWeightStride = model_mod.expertWeightStride;

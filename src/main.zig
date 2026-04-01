@@ -23,18 +23,14 @@ const TokenizerKind = tok_mod.TokenizerKind;
 const Recipe = @import("recipe.zig").Recipe;
 
 const Backend = backend_mod.Backend;
-const CpuBackend = backend_mod.CpuBackend;
+const BackendState = backend_mod.BackendState;
+const BackendChoice = backend_mod.BackendChoice;
 const ThreadPool = @import("thread_pool.zig").ThreadPool;
 const Format = format_mod.Format;
 const GGUFFile = format_mod.GGUFFile;
 const SafeTensorsDir = format_mod.SafeTensorsDir;
 const Model = model_mod.Model;
-const Gemma3Model = model_mod.Gemma3Model;
-const Qwen35Model = model_mod.Qwen35Model;
-const GptOssModel = model_mod.GptOssModel;
-const NemotronHModel = model_mod.NemotronHModel;
-const Glm4Model = model_mod.Glm4Model;
-const NemotronNanoModel = model_mod.NemotronNanoModel;
+const ModelStorage = model_mod.ModelStorage;
 const BpeTokenizer = tok_mod.BpeTokenizer;
 const LineEditor = @import("readline.zig").LineEditor;
 const KvQuantType = @import("ops/kv_quant.zig").KvQuantType;
@@ -280,7 +276,9 @@ const cli_params = clap.parseParamsComptime(
     \\    --backend <str>        Compute backend: auto, cpu, metal, vulkan, cuda, rocm [default: auto].
     \\    --ctx-size <u32>       Context window size [default: 4096, 0 = model max].
     \\    --seed <u64>           Random seed for sampling [default: random].
-    \\    --kv-type <str>        KV cache quantization: f32, f16, q8_0, int8, fp8, nvfp4 [default: f16].
+    \\    --kv-type <str>        KV cache quantization: f32, f16, q8_0, int8, fp8, nvfp4, turbo2, turbo3, turbo4 [default: f16].
+    \\    --cache-type-k <str>  KV cache key quantization (overrides --kv-type for keys).
+    \\    --cache-type-v <str>  KV cache value quantization (overrides --kv-type for values).
     \\    --kv-tiers <str>       Enable tiered KV cache: vram+ram, vram+ram+ssd [default: off].
     \\    --kv-ram-budget <str>  RAM tier budget in GB, requires --kv-tiers [default: 50% of free RAM].
     \\    --kv-ssd-path <str>    SSD tier file path, requires --kv-tiers with ssd.
@@ -300,9 +298,6 @@ const cli_params = clap.parseParamsComptime(
     \\
 );
 
-/// Requested compute backend from CLI.
-const BackendChoice = enum { auto, cpu, metal, vulkan, cuda, rocm };
-
 const CliArgs = struct {
     model_path: []const u8,
     prompt: ?[]const u8,
@@ -316,7 +311,8 @@ const CliArgs = struct {
     system_prompt: ?[]const u8,
     backend_choice: BackendChoice,
     ctx_size: u32,
-    kv_type: KvQuantType,
+    kv_type_k: KvQuantType,
+    kv_type_v: KvQuantType,
     seed: u64,
     // Tiered KV cache CLI options
     kv_tiers: ?[]const u8 = null,
@@ -457,11 +453,35 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
         .backend_choice = backend_choice,
         .ctx_size = res.args.@"ctx-size" orelse 0,
         .seed = res.args.seed orelse @as(u64, @truncate(@as(u128, @bitCast(std.time.nanoTimestamp())))),
-        .kv_type = blk: {
+        .kv_type_k = blk: {
+            // --cache-type-k overrides --kv-type for keys
+            if (res.args.@"cache-type-k") |ks| {
+                break :blk KvQuantType.fromString(ks) orelse {
+                    eprint("Error: unknown cache-type-k '{s}'\n", .{ks});
+                    eprint("  Valid options: f32, f16, q8_0, int8, fp8, nvfp4, turbo2, turbo3, turbo4\n", .{});
+                    std.process.exit(1);
+                };
+            }
             const kv_str = res.args.@"kv-type" orelse break :blk .f16;
             break :blk KvQuantType.fromString(kv_str) orelse {
                 eprint("Error: unknown KV type '{s}'\n", .{kv_str});
-                eprint("  Valid options: f32, f16, q8_0, int8, fp8, nvfp4\n", .{});
+                eprint("  Valid options: f32, f16, q8_0, int8, fp8, nvfp4, turbo2, turbo3, turbo4\n", .{});
+                std.process.exit(1);
+            };
+        },
+        .kv_type_v = blk: {
+            // --cache-type-v overrides --kv-type for values
+            if (res.args.@"cache-type-v") |vs| {
+                break :blk KvQuantType.fromString(vs) orelse {
+                    eprint("Error: unknown cache-type-v '{s}'\n", .{vs});
+                    eprint("  Valid options: f32, f16, q8_0, int8, fp8, nvfp4, turbo2, turbo3, turbo4\n", .{});
+                    std.process.exit(1);
+                };
+            }
+            const kv_str = res.args.@"kv-type" orelse break :blk .f16;
+            break :blk KvQuantType.fromString(kv_str) orelse {
+                eprint("Error: unknown KV type '{s}'\n", .{kv_str});
+                eprint("  Valid options: f32, f16, q8_0, int8, fp8, nvfp4, turbo2, turbo3, turbo4\n", .{});
                 std.process.exit(1);
             };
         },
@@ -551,7 +571,9 @@ fn printUsage() void {
         \\      --system <TEXT>     System prompt for chat formatting
         \\      --backend <BE>     Compute backend: auto, cpu, metal, vulkan, cuda, rocm [default: auto]
         \\      --ctx-size <N>     Context window size [default: 4096, 0 = model max]
-        \\      --kv-type <TYPE>   KV cache quantization: f32, f16, q8_0, int8, fp8, nvfp4 [default: f16]
+        \\      --kv-type <TYPE>   KV cache quantization: f32, f16, q8_0, int8, fp8, nvfp4, turbo2/3/4 [default: f16]
+        \\      --cache-type-k <TYPE>  KV key quantization (overrides --kv-type for keys)
+        \\      --cache-type-v <TYPE>  KV value quantization (overrides --kv-type for values)
         \\      --kv-tiers <TIERS> Tiered KV cache: vram+ram, vram+ram+ssd [default: off]
         \\      --kv-ram-budget <GB>  RAM tier budget in GB [default: 50% of free RAM]
         \\      --kv-ssd-path <PATH>  SSD tier file path (requires --kv-tiers with ssd)
@@ -632,210 +654,6 @@ fn isEogToken(token: u32, eog: anytype) bool {
     }
     return false;
 }
-
-// ── Backend initialization ───────────────────────────────────────
-
-/// Holds the mutable backend storage alongside the tagged-union interface.
-/// The backend variables must outlive the `Backend` union (which holds pointers
-/// to them), so they are bundled together and kept on the caller's stack.
-/// Process exit releases most resources; the thread pool is explicitly
-/// cleaned up via defer in `main()`.
-const BackendState = struct {
-    const builtin = @import("builtin");
-
-    cpu_be: CpuBackend = .{},
-    metal_be: if (builtin.os.tag == .macos) backend_mod.MetalBackend else void = undefined,
-    vulkan_be: backend_mod.VulkanBackend = undefined,
-    cuda_be: backend_mod.CudaBackend = undefined,
-    rocm_be: backend_mod.RocmBackend = undefined,
-    pool: ?ThreadPool = null,
-    be: Backend = undefined,
-    name: []const u8 = "CPU",
-
-    /// Initialize the requested compute backend, with automatic fallback.
-    /// Must be called on a stack-allocated `BackendState` — the `be` field
-    /// stores pointers into the struct's own backend fields.
-    fn init(self: *BackendState, allocator: std.mem.Allocator, backend_choice: BackendChoice) void {
-        // Create thread pool for CPU GEMV parallelism.
-        // n_workers = CPU count - 1 (main thread also participates).
-        const cpu_count = std.Thread.getCpuCount() catch 1;
-        const n_workers = if (cpu_count > 1) cpu_count - 1 else 0;
-        self.pool = ThreadPool.init(n_workers);
-        self.pool.?.spawn();
-        self.cpu_be.pool = &self.pool.?;
-        self.be = blk: {
-            switch (backend_choice) {
-                .cpu => {
-                    if (comptime build_options.enable_cpu) {
-                        break :blk .{ .cpu = &self.cpu_be };
-                    } else {
-                        fatalExit("CPU backend disabled at build time");
-                    }
-                },
-                .metal => {
-                    if (comptime build_options.enable_metal and builtin.os.tag == .macos) {
-                        self.metal_be = backend_mod.MetalBackend.init(allocator) catch |err| {
-                            if (comptime build_options.enable_cpu) {
-                                eprint("Warning: Metal unavailable ({s}), falling back to CPU\n", .{@errorName(err)});
-                                break :blk .{ .cpu = &self.cpu_be };
-                            } else {
-                                fatalExit("Metal unavailable and CPU backend disabled");
-                            }
-                        };
-                        self.metal_be.pool = &self.pool.?;
-                        self.name = "Metal";
-                        break :blk .{ .metal = &self.metal_be };
-                    } else {
-                        if (comptime build_options.enable_cpu) {
-                            eprint("Warning: Metal not available on this platform\n", .{});
-                            break :blk .{ .cpu = &self.cpu_be };
-                        } else {
-                            fatalExit("Metal not available and CPU backend disabled");
-                        }
-                    }
-                },
-                .vulkan => {
-                    if (comptime build_options.enable_vulkan) {
-                        self.vulkan_be = backend_mod.VulkanBackend.init(allocator) catch {
-                            if (comptime build_options.enable_cpu) {
-                                eprint("Warning: Vulkan unavailable, falling back to CPU\n", .{});
-                                break :blk .{ .cpu = &self.cpu_be };
-                            } else {
-                                fatalExit("Vulkan unavailable and CPU backend disabled");
-                            }
-                        };
-                        self.name = "Vulkan";
-                        break :blk .{ .vulkan = &self.vulkan_be };
-                    } else {
-                        fatalExit("Vulkan backend disabled at build time");
-                    }
-                },
-                .cuda => {
-                    if (comptime build_options.enable_cuda) {
-                        self.cuda_be = backend_mod.CudaBackend.init(allocator) catch {
-                            if (comptime build_options.enable_cpu) {
-                                eprint("Warning: CUDA unavailable, falling back to CPU\n", .{});
-                                break :blk .{ .cpu = &self.cpu_be };
-                            } else {
-                                fatalExit("CUDA unavailable and CPU backend disabled");
-                            }
-                        };
-                        self.name = "CUDA";
-                        break :blk .{ .cuda = &self.cuda_be };
-                    } else {
-                        fatalExit("CUDA backend disabled at build time");
-                    }
-                },
-                .rocm => {
-                    if (comptime build_options.enable_rocm) {
-                        self.rocm_be = backend_mod.RocmBackend.init(allocator) catch {
-                            if (comptime build_options.enable_cpu) {
-                                eprint("Warning: ROCm unavailable, falling back to CPU\n", .{});
-                                break :blk .{ .cpu = &self.cpu_be };
-                            } else {
-                                fatalExit("ROCm unavailable and CPU backend disabled");
-                            }
-                        };
-                        self.name = "ROCm";
-                        break :blk .{ .rocm = &self.rocm_be };
-                    } else {
-                        fatalExit("ROCm backend disabled at build time");
-                    }
-                },
-                .auto => {
-                    // Try Metal (macOS only)
-                    if (comptime build_options.enable_metal and builtin.os.tag == .macos) {
-                        self.metal_be = backend_mod.MetalBackend.init(allocator) catch {
-                            if (comptime build_options.enable_cuda) {
-                                self.cuda_be = backend_mod.CudaBackend.init(allocator) catch {
-                                    if (comptime build_options.enable_vulkan) {
-                                        self.vulkan_be = backend_mod.VulkanBackend.init(allocator) catch {
-                                            if (comptime build_options.enable_cpu) break :blk .{ .cpu = &self.cpu_be } else fatalExit("All GPU backends failed and CPU disabled");
-                                        };
-                                        self.name = "Vulkan";
-                                        break :blk .{ .vulkan = &self.vulkan_be };
-                                    }
-                                    if (comptime build_options.enable_cpu) break :blk .{ .cpu = &self.cpu_be } else fatalExit("CUDA failed, no other backends enabled");
-                                };
-                                self.name = "CUDA";
-                                break :blk .{ .cuda = &self.cuda_be };
-                            } else if (comptime build_options.enable_vulkan) {
-                                self.vulkan_be = backend_mod.VulkanBackend.init(allocator) catch {
-                                    if (comptime build_options.enable_cpu) break :blk .{ .cpu = &self.cpu_be } else fatalExit("Vulkan failed and CPU disabled");
-                                };
-                                self.name = "Vulkan";
-                                break :blk .{ .vulkan = &self.vulkan_be };
-                            } else if (comptime build_options.enable_cpu) {
-                                break :blk .{ .cpu = &self.cpu_be };
-                            } else {
-                                fatalExit("No backends enabled");
-                            }
-                        };
-                        self.name = "Metal";
-                        break :blk .{ .metal = &self.metal_be };
-                    }
-                    // Try CUDA
-                    if (comptime build_options.enable_cuda) {
-                        self.cuda_be = backend_mod.CudaBackend.init(allocator) catch {
-                            if (comptime build_options.enable_rocm) {
-                                self.rocm_be = backend_mod.RocmBackend.init(allocator) catch {
-                                    if (comptime build_options.enable_vulkan) {
-                                        self.vulkan_be = backend_mod.VulkanBackend.init(allocator) catch {
-                                            if (comptime build_options.enable_cpu) break :blk .{ .cpu = &self.cpu_be } else fatalExit("All GPU backends failed and CPU disabled");
-                                        };
-                                        self.name = "Vulkan";
-                                        break :blk .{ .vulkan = &self.vulkan_be };
-                                    }
-                                    if (comptime build_options.enable_cpu) break :blk .{ .cpu = &self.cpu_be } else fatalExit("All GPU backends failed and CPU disabled");
-                                };
-                                self.name = "ROCm";
-                                break :blk .{ .rocm = &self.rocm_be };
-                            }
-                            if (comptime build_options.enable_vulkan) {
-                                self.vulkan_be = backend_mod.VulkanBackend.init(allocator) catch {
-                                    if (comptime build_options.enable_cpu) break :blk .{ .cpu = &self.cpu_be } else fatalExit("All GPU backends failed and CPU disabled");
-                                };
-                                self.name = "Vulkan";
-                                break :blk .{ .vulkan = &self.vulkan_be };
-                            }
-                            if (comptime build_options.enable_cpu) break :blk .{ .cpu = &self.cpu_be } else fatalExit("CUDA failed, no other backends enabled");
-                        };
-                        self.name = "CUDA";
-                        break :blk .{ .cuda = &self.cuda_be };
-                    }
-                    // Try ROCm
-                    if (comptime build_options.enable_rocm) {
-                        self.rocm_be = backend_mod.RocmBackend.init(allocator) catch {
-                            if (comptime build_options.enable_vulkan) {
-                                self.vulkan_be = backend_mod.VulkanBackend.init(allocator) catch {
-                                    if (comptime build_options.enable_cpu) break :blk .{ .cpu = &self.cpu_be } else fatalExit("All GPU backends failed and CPU disabled");
-                                };
-                                self.name = "Vulkan";
-                                break :blk .{ .vulkan = &self.vulkan_be };
-                            }
-                            if (comptime build_options.enable_cpu) break :blk .{ .cpu = &self.cpu_be } else fatalExit("ROCm failed, no other backends enabled");
-                        };
-                        self.name = "ROCm";
-                        break :blk .{ .rocm = &self.rocm_be };
-                    }
-                    // Try Vulkan
-                    if (comptime build_options.enable_vulkan) {
-                        self.vulkan_be = backend_mod.VulkanBackend.init(allocator) catch {
-                            if (comptime build_options.enable_cpu) break :blk .{ .cpu = &self.cpu_be } else fatalExit("Vulkan failed and CPU disabled");
-                        };
-                        self.name = "Vulkan";
-                        break :blk .{ .vulkan = &self.vulkan_be };
-                    }
-                    // CPU fallback
-                    if (comptime build_options.enable_cpu) {
-                        break :blk .{ .cpu = &self.cpu_be };
-                    }
-                    fatalExit("No backends enabled");
-                },
-            }
-        };
-    }
-};
 
 // ── Main ─────────────────────────────────────────────────────────
 
@@ -1005,8 +823,16 @@ pub fn main() !void {
     }
     // Update banner info to show effective context size
     disp_info.ctx_size = cli.ctx_size;
-    disp_info.kv_type_name = cli.kv_type.name();
-    disp_info.kv_bpe = cli.kv_type.bitsPerElement();
+    if (cli.kv_type_k == cli.kv_type_v) {
+        disp_info.kv_type_name = cli.kv_type_k.name();
+        disp_info.kv_bpe = cli.kv_type_k.bitsPerElement();
+    } else {
+        // Asymmetric: show "K-type / V-type" and average bpe
+        const kv_label_buf = &disp_info.kv_asym_name_buf;
+        disp_info.kv_asym_name_len = (std.fmt.bufPrint(kv_label_buf, "{s}-K / {s}-V", .{ cli.kv_type_k.name(), cli.kv_type_v.name() }) catch "").len;
+        disp_info.kv_type_name = kv_label_buf[0..disp_info.kv_asym_name_len];
+        disp_info.kv_bpe = (cli.kv_type_k.bitsPerElement() + cli.kv_type_v.bitsPerElement()) / 2.0;
+    }
 
     if (!g_quiet) {
         display.printBanner(disp_info);
@@ -1189,132 +1015,108 @@ fn initAndRun(
     pool: ?*ThreadPool,
     load_info_in: display_mod.LoadInfo,
 ) bool {
-    switch (arch) {
-        inline .gemma3, .qwen35, .gpt_oss, .nemotron_h, .nemotron_nano, .glm4 => |a| {
-            if (comptime !a.isEnabled()) unreachable; // Validated in main()
-            const ModelType = switch (a) {
-                .gemma3 => Gemma3Model,
-                .qwen35 => Qwen35Model,
-                .gpt_oss => GptOssModel,
-                .nemotron_h => NemotronHModel,
-                .nemotron_nano => NemotronNanoModel,
-                .glm4 => Glm4Model,
-            };
-            // Initialize optional tiered KV cache from CLI flags.
-            var tiered_cache_storage: ?TieredKvCache = null;
-            defer if (tiered_cache_storage) |*tc| tc.deinit();
+    // Initialize optional tiered KV cache from CLI flags.
+    // This is model-independent — only reads format metadata.
+    var tiered_cache_storage: ?TieredKvCache = null;
+    defer if (tiered_cache_storage) |*tc| tc.deinit();
 
-            if (cli.kv_tiers) |tiers_str| {
-                const has_ram = std.mem.indexOf(u8, tiers_str, "ram") != null;
-                const has_ssd = std.mem.indexOf(u8, tiers_str, "ssd") != null;
+    if (cli.kv_tiers) |tiers_str| {
+        const has_ram = std.mem.indexOf(u8, tiers_str, "ram") != null;
+        const has_ssd = std.mem.indexOf(u8, tiers_str, "ssd") != null;
 
-                const ram_gb: usize = if (cli.kv_ram_budget) |b|
-                    std.fmt.parseInt(usize, b, 10) catch ram_fb: {
-                        eprint("Warning: invalid --kv-ram-budget '{s}', using default {d}GB\n", .{ b, default_ram_budget_gb });
-                        break :ram_fb default_ram_budget_gb;
-                    }
-                else
-                    detectFreeRam() / (ram_budget_divisor * gib_bytes);
-
-                const ssd_gb: usize = if (cli.kv_ssd_budget) |b|
-                    std.fmt.parseInt(usize, b, 10) catch ssd_fb: {
-                        eprint("Warning: invalid --kv-ssd-budget '{s}', using default {d}GB\n", .{ b, default_ssd_budget_gb });
-                        break :ssd_fb default_ssd_budget_gb;
-                    }
-                else
-                    default_ssd_budget_gb;
-
-                // Read model metadata for cache dimension calculations.
-                const n_layers = fmt.getMetaU32("llama.block_count") orelse
-                    fmt.getMetaU32("num_hidden_layers") orelse tiered_fallback_n_layers;
-                const n_embd = fmt.getMetaU32("llama.embedding_length") orelse
-                    fmt.getMetaU32("hidden_size") orelse tiered_fallback_n_embd;
-                const n_kv_heads = fmt.getMetaU32("llama.attention.head_count_kv") orelse
-                    fmt.getMetaU32("num_key_value_heads") orelse tiered_fallback_n_kv_heads;
-                const n_heads = fmt.getMetaU32("llama.attention.head_count") orelse
-                    fmt.getMetaU32("num_attention_heads") orelse tiered_fallback_n_heads;
-                const head_dim = fmt.getMetaU32("llama.attention.key_length") orelse
-                    fmt.getMetaU32("head_dim") orelse (n_embd / n_heads);
-                const kv_dim: usize = @as(usize, n_kv_heads) * head_dim;
-
-                const block_size = tiered_kv_block_size;
-                const bytes_per_block = @as(usize, block_size) * kv_dim * @sizeOf(f32) * kv_tensors_per_position;
-                const ctx = if (cli.ctx_size > 0) cli.ctx_size else default_ctx_size;
-                const vram_blocks: usize = (@as(usize, ctx) + block_size - 1) / block_size;
-                const ram_blocks: usize = if (has_ram and bytes_per_block > 0) (ram_gb * gib_bytes) / bytes_per_block else 0;
-                const ssd_blocks: usize = if (has_ssd and bytes_per_block > 0) (ssd_gb * gib_bytes) / bytes_per_block else 0;
-
-                tiered_cache_storage = TieredKvCache.init(
-                    allocator,
-                    n_layers,
-                    kv_dim,
-                    vram_blocks,
-                    ram_blocks,
-                    ssd_blocks,
-                    block_size,
-                    if (has_ssd) cli.kv_ssd_path else null,
-                ) catch |e| {
-                    eprint("Error: failed to initialize tiered KV cache: {}\n", .{e});
-                    return false;
-                };
-
-                if (!g_quiet) {
-                    eprint("  Tiered KV cache: {d} VRAM + {d} RAM + {d} SSD blocks\n", .{ vram_blocks, ram_blocks, ssd_blocks });
-                }
+        const ram_gb: usize = if (cli.kv_ram_budget) |b|
+            std.fmt.parseInt(usize, b, 10) catch ram_fb: {
+                eprint("Warning: invalid --kv-ram-budget '{s}', using default {d}GB\n", .{ b, default_ram_budget_gb });
+                break :ram_fb default_ram_budget_gb;
             }
+        else
+            detectFreeRam() / (ram_budget_divisor * gib_bytes);
 
-            const tiered_ptr: ?*TieredKvCache = if (tiered_cache_storage != null) &tiered_cache_storage.? else null;
+        const ssd_gb: usize = if (cli.kv_ssd_budget) |b|
+            std.fmt.parseInt(usize, b, 10) catch ssd_fb: {
+                eprint("Warning: invalid --kv-ssd-budget '{s}', using default {d}GB\n", .{ b, default_ssd_budget_gb });
+                break :ssd_fb default_ssd_budget_gb;
+            }
+        else
+            default_ssd_budget_gb;
 
-            const init_start = std.time.milliTimestamp();
-            var mdl = ModelType.init(allocator, fmt, be, cli.ctx_size, cli.kv_type, tiered_ptr) catch |e| {
-                eprint("Error: failed to initialize {s}: {}\n", .{ arch.displayName(), e });
-                if (e == error.OutOfMemory)
-                    eprint("  Not enough memory. Try a smaller quantization or model.\n", .{})
-                else if (e == error.TensorNotFound)
-                    eprint("  Required tensor missing. The model file may be corrupted or incomplete.\n", .{});
-                return false;
-            };
-            defer mdl.deinit();
-            if (comptime @hasField(ModelType, "pool")) {
-                mdl.pool = pool;
-            }
-            // Fix block allocator pointer after struct was moved from init's return.
-            if (comptime @hasField(ModelType, "block_allocator")) {
-                mdl.block_allocator.setCachePtr(&mdl.paged_cache);
-            }
-            if (comptime @hasField(ModelType, "chunk_size")) {
-                mdl.chunk_size = cli.prefill_batch_size;
-            }
-            const init_ms = elapsedMs(init_start);
-            if (!g_quiet) {
-                var li = load_info_in;
-                li.init_ms = init_ms;
-                display.printLoadInfo(li);
-            }
-            if (cli.profile) {
-                if (comptime @hasField(ModelType, "perf")) {
-                    mdl.perf.enabled = true;
-                }
-            }
+        // Read model metadata for cache dimension calculations.
+        const n_layers = fmt.getMetaU32("llama.block_count") orelse
+            fmt.getMetaU32("num_hidden_layers") orelse tiered_fallback_n_layers;
+        const n_embd = fmt.getMetaU32("llama.embedding_length") orelse
+            fmt.getMetaU32("hidden_size") orelse tiered_fallback_n_embd;
+        const n_kv_heads = fmt.getMetaU32("llama.attention.head_count_kv") orelse
+            fmt.getMetaU32("num_key_value_heads") orelse tiered_fallback_n_kv_heads;
+        const n_heads = fmt.getMetaU32("llama.attention.head_count") orelse
+            fmt.getMetaU32("num_attention_heads") orelse tiered_fallback_n_heads;
+        const head_dim = fmt.getMetaU32("llama.attention.key_length") orelse
+            fmt.getMetaU32("head_dim") orelse (n_embd / n_heads);
+        const kv_dim: usize = @as(usize, n_kv_heads) * head_dim;
 
-            var model_if = mdl.model();
-            if (cli.serve) {
-                var tok_if = tok.tokenizer();
-                server.run(allocator, &model_if, &tok_if, arch.chatTemplate(), minfo.name, minfo.be_name, cli.port, tok.bos_token_id, eog.ids, eog.len, tiered_ptr, cli.api_key, cli.host) catch |e| {
-                    eprint("Error: server failed: {}\n", .{e});
-                    return false;
-                };
-            } else if (effective_prompt) |prompt| {
-                generateAndPrint(allocator, &model_if, tok, cli, tok_kind, eog, a, prompt, !g_quiet, minfo, display);
-            } else {
-                runRepl(allocator, &model_if, tok, cli, tok_kind, eog, a, minfo, display);
-            }
-            if (comptime @hasField(ModelType, "perf")) {
-                mdl.perf.report();
-            }
-            return true;
-        },
+        const block_size = tiered_kv_block_size;
+        const bytes_per_block = @as(usize, block_size) * kv_dim * @sizeOf(f32) * kv_tensors_per_position;
+        const ctx = if (cli.ctx_size > 0) cli.ctx_size else default_ctx_size;
+        const vram_blocks: usize = (@as(usize, ctx) + block_size - 1) / block_size;
+        const ram_blocks: usize = if (has_ram and bytes_per_block > 0) (ram_gb * gib_bytes) / bytes_per_block else 0;
+        const ssd_blocks: usize = if (has_ssd and bytes_per_block > 0) (ssd_gb * gib_bytes) / bytes_per_block else 0;
+
+        tiered_cache_storage = TieredKvCache.init(
+            allocator,
+            n_layers,
+            kv_dim,
+            vram_blocks,
+            ram_blocks,
+            ssd_blocks,
+            block_size,
+            if (has_ssd) cli.kv_ssd_path else null,
+        ) catch |e| {
+            eprint("Error: failed to initialize tiered KV cache: {}\n", .{e});
+            return false;
+        };
+
+        if (!g_quiet) {
+            eprint("  Tiered KV cache: {d} VRAM + {d} RAM + {d} SSD blocks\n", .{ vram_blocks, ram_blocks, ssd_blocks });
+        }
     }
+
+    const tiered_ptr: ?*TieredKvCache = if (tiered_cache_storage != null) &tiered_cache_storage.? else null;
+
+    // Use ModelStorage to initialize the model without exposing concrete types.
+    const init_start = std.time.milliTimestamp();
+    var mdl = ModelStorage.initFromArch(arch, allocator, fmt, be, cli.ctx_size, cli.kv_type_k, cli.kv_type_v, tiered_ptr) catch |e| {
+        eprint("Error: failed to initialize {s}: {}\n", .{ arch.displayName(), e });
+        if (e == error.OutOfMemory)
+            eprint("  Not enough memory. Try a smaller quantization or model.\n", .{})
+        else if (e == error.TensorNotFound)
+            eprint("  Required tensor missing. The model file may be corrupted or incomplete.\n", .{});
+        return false;
+    };
+    defer mdl.deinit();
+    mdl.setPool(pool);
+    mdl.fixBlockAllocator();
+    mdl.setChunkSize(cli.prefill_batch_size);
+    const init_ms = elapsedMs(init_start);
+    if (!g_quiet) {
+        var li = load_info_in;
+        li.init_ms = init_ms;
+        display.printLoadInfo(li);
+    }
+    if (cli.profile) mdl.enableProfiling();
+
+    var model_if = mdl.model();
+    if (cli.serve) {
+        var tok_if = tok.tokenizer();
+        server.run(allocator, &model_if, &tok_if, arch.chatTemplate(), minfo.name, minfo.be_name, cli.port, tok.bos_token_id, eog.ids, eog.len, tiered_ptr, cli.api_key, cli.host) catch |e| {
+            eprint("Error: server failed: {}\n", .{e});
+            return false;
+        };
+    } else if (effective_prompt) |prompt| {
+        generateAndPrint(allocator, &model_if, tok, cli, tok_kind, eog, arch, prompt, !g_quiet, minfo, display);
+    } else {
+        runRepl(allocator, &model_if, tok, cli, tok_kind, eog, arch, minfo, display);
+    }
+    mdl.reportPerf();
+    return true;
 }
 
 // ── Interactive REPL ─────────────────────────────────────────────
@@ -1680,8 +1482,10 @@ test {
 }
 
 test "cpu backend rms_norm via tagged union dispatch" {
-    var cpu = CpuBackend{};
-    const be: Backend = .{ .cpu = &cpu };
+    var bs = BackendState{};
+    bs.init(std.testing.allocator, .cpu);
+    defer if (bs.pool) |*p| p.deinit();
+    const be = bs.be;
     var input = [_]f32{ 1, 2, 3, 4 };
     var weight = [_]f32{ 1, 1, 1, 1 };
     var output_buf: [4]f32 = undefined;
@@ -1695,8 +1499,10 @@ test "cpu backend rms_norm via tagged union dispatch" {
 }
 
 test "cpu backend softmax via tagged union dispatch" {
-    var cpu = CpuBackend{};
-    const be: Backend = .{ .cpu = &cpu };
+    var bs = BackendState{};
+    bs.init(std.testing.allocator, .cpu);
+    defer if (bs.pool) |*p| p.deinit();
+    const be = bs.be;
     var data = [_]f32{ 1.0, 2.0, 3.0 };
     be.softmax(&data, 3);
     // softmax should sum to 1.0
@@ -1714,8 +1520,10 @@ test "cpu backend softmax via tagged union dispatch" {
 }
 
 test "cpu backend silu via tagged union dispatch" {
-    var cpu = CpuBackend{};
-    const be: Backend = .{ .cpu = &cpu };
+    var bs = BackendState{};
+    bs.init(std.testing.allocator, .cpu);
+    defer if (bs.pool) |*p| p.deinit();
+    const be = bs.be;
     var input = [_]f32{ 0.0, 1.0, -1.0 };
     var output: [3]f32 = undefined;
     be.silu(&input, &output, 3);

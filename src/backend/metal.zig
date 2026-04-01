@@ -14,9 +14,10 @@ const objc = @import("objc.zig");
 const backend_mod = @import("backend.zig");
 const TensorData = backend_mod.TensorData;
 const DType = backend_mod.DType;
-const CpuBackend = backend_mod.CpuBackend;
+const CpuBackend = @import("cpu.zig").CpuBackend;
 const KvQuantType = backend_mod.KvQuantType;
 const ThreadPool = @import("../thread_pool.zig").ThreadPool;
+const kv_quant = @import("../ops/kv_quant.zig");
 
 const msl_source = @embedFile("kernels/metal/common.metal") ++
     @embedFile("kernels/metal/elementwise.metal") ++
@@ -60,6 +61,12 @@ const simd_width: usize = 32;
 /// GPU SDPA threadgroup size (threads per query head, smaller than general threadgroup_size
 /// to fit per-head accumulation state within threadgroup memory).
 const sdpa_threadgroup_size: usize = 128;
+/// TurboQuant 2-bit block: f16 norm (2 bytes) + 8 packed bytes = 10 bytes per 32 elements.
+const turbo2_block_bytes: usize = 10;
+/// TurboQuant 3-bit block: f16 norm (2 bytes) + 12 packed bytes = 14 bytes per 32 elements.
+const turbo3_block_bytes: usize = 14;
+/// TurboQuant 4-bit block: f16 norm (2 bytes) + 16 packed bytes = 18 bytes per 32 elements.
+const turbo4_block_bytes: usize = 18;
 /// Words per group for MLX 4-bit quantization (64 elems / 8 nibbles per word).
 const mlx_words_per_group_q4: usize = 8;
 /// MLX 6-bit: 64 elements × 6 bits / 32 bits per word = 12 words per group.
@@ -139,6 +146,7 @@ pub const MetalBackend = struct {
     pipe_add_rms_norm_fused: objc.id,
     pipe_kv_append: objc.id,
     pipe_sdpa: objc.id,
+    pipe_sdpa_turbo: objc.id,
     pipe_dn_gate_beta: objc.id,
     pipe_dn_conv1d: objc.id,
     pipe_dn_l2_norm: objc.id,
@@ -274,6 +282,7 @@ pub const MetalBackend = struct {
             .pipe_add_rms_norm_fused = undefined,
             .pipe_kv_append = undefined,
             .pipe_sdpa = undefined,
+            .pipe_sdpa_turbo = undefined,
             .pipe_dn_gate_beta = undefined,
             .pipe_dn_conv1d = undefined,
             .pipe_dn_l2_norm = undefined,
@@ -336,6 +345,7 @@ pub const MetalBackend = struct {
         self.pipe_add_rms_norm_fused = try self.makePipeline("add_rms_norm_fused_f32");
         self.pipe_kv_append = try self.makePipeline("kv_append");
         self.pipe_sdpa = try self.makePipeline("sdpa_fa2");
+        self.pipe_sdpa_turbo = try self.makePipeline("sdpa_fa2_turbo");
         self.pipe_dn_gate_beta = try self.makePipeline("deltanet_gate_beta");
         self.pipe_dn_conv1d = try self.makePipeline("deltanet_conv1d");
         self.pipe_dn_l2_norm = try self.makePipeline("deltanet_l2_norm");
@@ -345,7 +355,7 @@ pub const MetalBackend = struct {
     }
 
     /// Number of MSL compute pipelines compiled at init.
-    pub const n_pipelines: u32 = 54;
+    pub const n_pipelines: u32 = 55;
 
     /// Returns the Metal device name (e.g., "Apple M4 Pro").
     pub fn deviceName(self: *const MetalBackend) []const u8 {
@@ -681,6 +691,7 @@ pub const MetalBackend = struct {
         // Round up to page boundary for newBufferWithBytesNoCopy compatibility
         const aligned_bytes = std.mem.alignForward(usize, byte_len, page_size);
         const raw = std.heap.page_allocator.alloc(u8, aligned_bytes) catch return error.OutOfMemory;
+        errdefer std.heap.page_allocator.free(raw);
         @memset(raw, 0);
         // Pre-register in buf_cache — wraps as Metal buffer for zero-copy GPU access.
         const addr = @intFromPtr(raw.ptr);
@@ -1354,30 +1365,58 @@ pub const MetalBackend = struct {
 
     // ── SDPA ─────────────────────────────────────────────────
 
-    /// Scaled dot-product attention with KV cache append.
-    /// Appends k_new/v_new to KV cache via GPU compute kernel, then runs
-    /// FlashAttention-2 (online softmax, tiled K/V) on GPU.
-    /// Panics for sequences > 4096, head dims > 256, or non-f32 KV types.
-    pub fn sdpa(self: *MetalBackend, q: [*]const f32, keys: []u8, values: []u8, k_new: [*]const f32, v_new: [*]const f32, output: [*]f32, nh: usize, nkv: usize, hd: usize, seq_len: usize, scale: f32, kv_type: @import("backend.zig").KvQuantType) void {
-        // Non-f32 KV types not yet supported on GPU.
-        if (kv_type != .f32) @panic("Metal SDPA: quantized KV not supported — add GPU kernel or use --kv-type f32");
+    /// Return the turbo bit width for a KV quant type, or 0 for non-turbo types.
+    fn turboBits(kv_type: KvQuantType) u32 {
+        return switch (kv_type) {
+            .turbo2 => 2,
+            .turbo3 => 3,
+            .turbo4 => 4,
+            else => 0,
+        };
+    }
 
-        const f32_keys: []f32 = @as([*]f32, @ptrCast(@alignCast(keys.ptr)))[0 .. keys.len / 4];
-        const f32_values: []f32 = @as([*]f32, @ptrCast(@alignCast(values.ptr)))[0 .. values.len / 4];
+    /// Return the byte size per 32-element turbo block, or 0 for non-turbo types.
+    fn turboBlockByteSize(kv_type: KvQuantType) u32 {
+        return switch (kv_type) {
+            .turbo2 => turbo2_block_bytes,
+            .turbo3 => turbo3_block_bytes,
+            .turbo4 => turbo4_block_bytes,
+            else => 0,
+        };
+    }
+
+    /// Scaled dot-product attention with KV cache append.
+    /// Appends k_new/v_new to KV cache, then runs FlashAttention-2 on GPU.
+    /// Supports f32 KV cache (existing fast path) and TurboQuant 2/3/4-bit
+    /// KV cache (native GPU dequant — no CPU fallback for SDPA compute).
+    /// KV append for turbo types uses CPU quantization (once per token per layer,
+    /// not the SDPA hot path). Panics on unsupported KV types (q8_0, f16, fp8, etc.).
+    /// Panics for sequences > 4096 or head dims > 256.
+    pub fn sdpa(self: *MetalBackend, q: [*]const f32, keys: []u8, values: []u8, k_new: [*]const f32, v_new: [*]const f32, output: [*]f32, nh: usize, nkv: usize, hd: usize, seq_len: usize, scale: f32, kv_type_k: @import("backend.zig").KvQuantType, kv_type_v: @import("backend.zig").KvQuantType) void {
+        const is_turbo_k = (kv_type_k == .turbo2 or kv_type_k == .turbo3 or kv_type_k == .turbo4);
+        const is_turbo_v = (kv_type_v == .turbo2 or kv_type_v == .turbo3 or kv_type_v == .turbo4);
+        const is_f32_k = (kv_type_k == .f32);
+        const is_f32_v = (kv_type_v == .f32);
+
+        // Non-turbo, non-f32 quantized KV: not supported — add GPU kernel or use --kv-type f32
+        if ((!is_f32_k and !is_turbo_k) or (!is_f32_v and !is_turbo_v))
+            @panic("Metal SDPA: unsupported KV type — use f32, turbo2, turbo3, or turbo4");
 
         const kvd = nkv * hd;
         const sl = seq_len + 1;
 
-        // Very long sequences exceed GPU threadgroup memory limit.
         if (sl > sdpa_max_seq_len) @panic("Metal SDPA: sequence length exceeds GPU limit (4096) — reduce --ctx-size");
         if (hd > sdpa_max_head_dim) @panic("Metal SDPA: head_dim exceeds GPU limit (256)");
 
-        // ── GPU KV append: copy k_new/v_new into KV cache at position seq_len ──
-        {
+        // ── KV append ──
+        if (is_f32_k and is_f32_v) {
+            // f32 path: GPU KV append via compute kernel
+            const f32_keys: [*]f32 = @ptrCast(@alignCast(keys.ptr));
+            const f32_values: [*]f32 = @ptrCast(@alignCast(values.ptr));
             const k_ref = self.getBufRef(@ptrCast(k_new), kvd * @sizeOf(f32));
             const v_ref = self.getBufRef(@ptrCast(v_new), kvd * @sizeOf(f32));
-            const keys_ref = self.getBufRef(@ptrCast(f32_keys.ptr), sl * kvd * @sizeOf(f32));
-            const vals_ref = self.getBufRef(@ptrCast(f32_values.ptr), sl * kvd * @sizeOf(f32));
+            const keys_ref = self.getBufRef(@ptrCast(f32_keys), sl * kvd * @sizeOf(f32));
+            const vals_ref = self.getBufRef(@ptrCast(f32_values), sl * kvd * @sizeOf(f32));
             const enc = self.getEncoder(self.pipe_kv_append);
             setBuf(enc, k_ref, 0);
             setBuf(enc, v_ref, 1);
@@ -1388,16 +1427,24 @@ pub const MetalBackend = struct {
             setBytes(enc, @ptrCast(&kvd_u), @sizeOf(u32), 4);
             setBytes(enc, @ptrCast(&kv_off_u), @sizeOf(u32), 5);
             self.endEncode1D(enc, self.pipe_kv_append, kvd);
+        } else {
+            // Turbo/mixed path: CPU quantization for KV append (once per token,
+            // not the SDPA hot path — acceptable per AGENTS.md).
+            self.sync();
+            const k_off = kv_quant.kvByteOffset(kv_type_k, seq_len * kvd);
+            const v_off = kv_quant.kvByteOffset(kv_type_v, seq_len * kvd);
+            kv_quant.kvStore(keys.ptr + k_off, k_new, kvd, kv_type_k);
+            kv_quant.kvStore(values.ptr + v_off, v_new, kvd, kv_type_v);
         }
 
-        // ── GPU SDPA: FlashAttention-2 with online softmax ──
-        // Dispatches to sdpa_fa2 kernel (compute-only, no blit encoders).
-        // One threadgroup per query head, processes K,V in blocks to fit threadgroup memory.
-        // Falls back to CPU SDPA if FA2 pipeline was unavailable at init.
-        {
+        // ── GPU SDPA: FlashAttention-2 ──
+        if (is_f32_k and is_f32_v) {
+            // Pure f32 path: use existing sdpa_fa2 kernel
+            const f32_keys: [*]f32 = @ptrCast(@alignCast(keys.ptr));
+            const f32_values: [*]f32 = @ptrCast(@alignCast(values.ptr));
             const q_ref = self.getBufRef(@ptrCast(q), nh * hd * @sizeOf(f32));
-            const keys_ref = self.getBufRef(@ptrCast(f32_keys.ptr), sl * kvd * @sizeOf(f32));
-            const vals_ref = self.getBufRef(@ptrCast(f32_values.ptr), sl * kvd * @sizeOf(f32));
+            const keys_ref = self.getBufRef(@ptrCast(f32_keys), sl * kvd * @sizeOf(f32));
+            const vals_ref = self.getBufRef(@ptrCast(f32_values), sl * kvd * @sizeOf(f32));
             const out_ref = self.getBufRef(@ptrCast(output), nh * hd * @sizeOf(f32));
             const enc = self.getEncoder(self.pipe_sdpa);
             setBuf(enc, q_ref, 0);
@@ -1413,6 +1460,37 @@ pub const MetalBackend = struct {
             setBytes(enc, @ptrCast(&hd_u), @sizeOf(u32), 6);
             setBytes(enc, @ptrCast(&sl_u), @sizeOf(u32), 7);
             setBytes(enc, @ptrCast(&scale), @sizeOf(f32), 8);
+            self.endEncodeThreadgroups(enc, nh, sdpa_threadgroup_size);
+        } else {
+            // Turbo or mixed path: use sdpa_fa2_turbo kernel with in-GPU dequant
+            const k_cache_bytes = kv_quant.kvSliceBytes(kv_type_k, sl * kvd);
+            const v_cache_bytes = kv_quant.kvSliceBytes(kv_type_v, sl * kvd);
+            const q_ref = self.getBufRef(@ptrCast(q), nh * hd * @sizeOf(f32));
+            const keys_ref = self.getBufRef(@ptrCast(keys.ptr), k_cache_bytes);
+            const vals_ref = self.getBufRef(@ptrCast(values.ptr), v_cache_bytes);
+            const out_ref = self.getBufRef(@ptrCast(output), nh * hd * @sizeOf(f32));
+            const enc = self.getEncoder(self.pipe_sdpa_turbo);
+            setBuf(enc, q_ref, 0);
+            setBuf(enc, keys_ref, 1);
+            setBuf(enc, vals_ref, 2);
+            setBuf(enc, out_ref, 3);
+            var nh_u: u32 = @intCast(nh);
+            var nkv_u: u32 = @intCast(nkv);
+            var hd_u: u32 = @intCast(hd);
+            var sl_u: u32 = @intCast(sl);
+            var bits_k_u: u32 = turboBits(kv_type_k);
+            var bits_v_u: u32 = turboBits(kv_type_v);
+            var bb_k_u: u32 = turboBlockByteSize(kv_type_k);
+            var bb_v_u: u32 = turboBlockByteSize(kv_type_v);
+            setBytes(enc, @ptrCast(&nh_u), @sizeOf(u32), 4);
+            setBytes(enc, @ptrCast(&nkv_u), @sizeOf(u32), 5);
+            setBytes(enc, @ptrCast(&hd_u), @sizeOf(u32), 6);
+            setBytes(enc, @ptrCast(&sl_u), @sizeOf(u32), 7);
+            setBytes(enc, @ptrCast(&scale), @sizeOf(f32), 8);
+            setBytes(enc, @ptrCast(&bits_k_u), @sizeOf(u32), 9);
+            setBytes(enc, @ptrCast(&bits_v_u), @sizeOf(u32), 10);
+            setBytes(enc, @ptrCast(&bb_k_u), @sizeOf(u32), 11);
+            setBytes(enc, @ptrCast(&bb_v_u), @sizeOf(u32), 12);
             self.endEncodeThreadgroups(enc, nh, sdpa_threadgroup_size);
         }
     }
@@ -1507,8 +1585,72 @@ pub const MetalBackend = struct {
     /// FA2 reads old K/V from cache, new K/V from pf_k/pf_v (no copy needed
     /// for attention). Then GPU copy kernel writes pf_k/pf_v into the KV cache
     /// for future chunks/decode. All dispatches in one command buffer.
-    pub fn sdpaPrefill(self: *MetalBackend, q: [*]const f32, k: [*]const f32, v: [*]const f32, kv_keys: []u8, kv_values: []u8, output: [*]f32, nh: usize, nkv: usize, hd: usize, prev_len: usize, n_tok: usize, scale: f32, kv_type: KvQuantType) void {
-        if (kv_type != .f32) @panic("Metal SDPA prefill: quantized KV not supported — use --kv-type f32");
+    ///
+    /// For turbo KV types: CPU-side KV append + sequential GPU turbo SDPA per token.
+    /// For non-turbo quantized types (q8_0, f16, etc.): full CPU fallback.
+    pub fn sdpaPrefill(self: *MetalBackend, q: [*]const f32, k: [*]const f32, v: [*]const f32, kv_keys: []u8, kv_values: []u8, output: [*]f32, nh: usize, nkv: usize, hd: usize, prev_len: usize, n_tok: usize, scale: f32, kv_type_k: KvQuantType, kv_type_v: KvQuantType) void {
+        const is_turbo_k = (kv_type_k == .turbo2 or kv_type_k == .turbo3 or kv_type_k == .turbo4);
+        const is_turbo_v = (kv_type_v == .turbo2 or kv_type_v == .turbo3 or kv_type_v == .turbo4);
+        const is_f32_k = (kv_type_k == .f32);
+        const is_f32_v = (kv_type_v == .f32);
+
+        // Turbo/mixed prefill: CPU KV append + sequential GPU turbo SDPA per token.
+        // The GPU turbo kernel handles the SDPA compute; CPU does the quantization
+        // for KV append (once per position, not the SDPA hot path).
+        if ((is_turbo_k or is_f32_k) and (is_turbo_v or is_f32_v) and (is_turbo_k or is_turbo_v)) {
+            self.sync();
+            const kvd = nkv * hd;
+            // Append all n_tok keys/values to KV cache on CPU
+            for (0..n_tok) |t| {
+                const src_off = t * kvd;
+                const dst_elem = (prev_len + t) * kvd;
+                const dst_byte_k = kv_quant.kvByteOffset(kv_type_k, dst_elem);
+                const dst_byte_v = kv_quant.kvByteOffset(kv_type_v, dst_elem);
+                kv_quant.kvStore(kv_keys.ptr + dst_byte_k, k + src_off, kvd, kv_type_k);
+                kv_quant.kvStore(kv_values.ptr + dst_byte_v, v + src_off, kvd, kv_type_v);
+            }
+            // Sequential GPU SDPA per token (each uses turbo kernel over full history)
+            const k_cache_bytes = kv_quant.kvSliceBytes(kv_type_k, (prev_len + n_tok) * kvd);
+            const v_cache_bytes = kv_quant.kvSliceBytes(kv_type_v, (prev_len + n_tok) * kvd);
+            for (0..n_tok) |t| {
+                const sl = prev_len + t + 1;
+                const q_off = t * nh * hd;
+                const out_off = t * nh * hd;
+                const q_ref = self.getBufRef(@ptrCast(q + q_off), nh * hd * @sizeOf(f32));
+                const keys_ref = self.getBufRef(@ptrCast(kv_keys.ptr), k_cache_bytes);
+                const vals_ref = self.getBufRef(@ptrCast(kv_values.ptr), v_cache_bytes);
+                const out_ref = self.getBufRef(@ptrCast(output + out_off), nh * hd * @sizeOf(f32));
+                const enc = self.getEncoder(self.pipe_sdpa_turbo);
+                setBuf(enc, q_ref, 0);
+                setBuf(enc, keys_ref, 1);
+                setBuf(enc, vals_ref, 2);
+                setBuf(enc, out_ref, 3);
+                var nh_u: u32 = @intCast(nh);
+                var nkv_u: u32 = @intCast(nkv);
+                var hd_u: u32 = @intCast(hd);
+                var sl_u: u32 = @intCast(sl);
+                var scale_val: f32 = scale;
+                var bits_k_u: u32 = turboBits(kv_type_k);
+                var bits_v_u: u32 = turboBits(kv_type_v);
+                var bb_k_u: u32 = turboBlockByteSize(kv_type_k);
+                var bb_v_u: u32 = turboBlockByteSize(kv_type_v);
+                setBytes(enc, @ptrCast(&nh_u), @sizeOf(u32), 4);
+                setBytes(enc, @ptrCast(&nkv_u), @sizeOf(u32), 5);
+                setBytes(enc, @ptrCast(&hd_u), @sizeOf(u32), 6);
+                setBytes(enc, @ptrCast(&sl_u), @sizeOf(u32), 7);
+                setBytes(enc, @ptrCast(&scale_val), @sizeOf(f32), 8);
+                setBytes(enc, @ptrCast(&bits_k_u), @sizeOf(u32), 9);
+                setBytes(enc, @ptrCast(&bits_v_u), @sizeOf(u32), 10);
+                setBytes(enc, @ptrCast(&bb_k_u), @sizeOf(u32), 11);
+                setBytes(enc, @ptrCast(&bb_v_u), @sizeOf(u32), 12);
+                self.endEncodeThreadgroups(enc, nh, sdpa_threadgroup_size);
+            }
+            return;
+        }
+
+        // Non-turbo, non-f32 quantized KV: not supported
+        if (kv_type_k != .f32 or kv_type_v != .f32)
+            @panic("Metal SDPA prefill: unsupported KV type — use f32, turbo2, turbo3, or turbo4");
 
         const kvd = nkv * hd;
         const f32_keys: [*]f32 = @ptrCast(@alignCast(kv_keys.ptr));

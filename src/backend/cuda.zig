@@ -27,8 +27,9 @@ const builtin = @import("builtin");
 const backend_mod = @import("backend.zig");
 const TensorData = backend_mod.TensorData;
 const DType = backend_mod.DType;
-const CpuBackend = backend_mod.CpuBackend;
+const CpuBackend = @import("cpu.zig").CpuBackend;
 const KvQuantType = backend_mod.KvQuantType;
+const kv_quant = @import("../ops/kv_quant.zig");
 
 // ── Embedded PTX ────────────────────────────────────────────────
 
@@ -56,6 +57,13 @@ const reduction_smem: u32 = 32;
 /// SDPA prefill shared memory layout constants (must match sdpa_prefill.zig).
 const prefill_kv_tile: u32 = 32;
 const prefill_reduce_slots: u32 = 8;
+
+/// TurboQuant 2-bit block: f16 norm (2 bytes) + 8 packed bytes = 10 bytes per 32 elements.
+const turbo2_block_bytes: u32 = 10;
+/// TurboQuant 3-bit block: f16 norm (2 bytes) + 12 packed bytes = 14 bytes per 32 elements.
+const turbo3_block_bytes: u32 = 14;
+/// TurboQuant 4-bit block: f16 norm (2 bytes) + 16 packed bytes = 18 bytes per 32 elements.
+const turbo4_block_bytes: u32 = 18;
 
 /// Size of the buffer for retrieving the CUDA device name.
 const device_name_buf_size: usize = 256;
@@ -186,6 +194,7 @@ pub const CudaBackend = struct {
     fn_gemv_mlx_q8: CUfunction = null,
     fn_gemv_mxfp4_st: CUfunction = null,
     fn_sdpa: CUfunction = null,
+    fn_sdpa_turbo: CUfunction = null,
     fn_sdpa_prefill: CUfunction = null,
     fn_gemm_q8_0: CUfunction = null,
     fn_rms_norm_batched: CUfunction = null,
@@ -234,7 +243,7 @@ pub const CudaBackend = struct {
     kv_dev_cache: std.AutoHashMap(usize, KvDevCache) = undefined,
 
     /// Number of PTX kernels loaded at init.
-    pub const n_kernels: u32 = 37;
+    pub const n_kernels: u32 = 38;
 
     /// Library name loaded via dlopen at init.
     pub const lib_name = cuda_lib_name;
@@ -410,6 +419,7 @@ pub const CudaBackend = struct {
         self.fn_gemv_mlx_q8 = try self.getFunction("gemv_mlx_q8_kernel");
         self.fn_gemv_mxfp4_st = try self.getFunction("gemv_mxfp4_st_kernel");
         self.fn_sdpa = try self.getFunction("sdpa_kernel");
+        self.fn_sdpa_turbo = try self.getFunction("sdpa_turbo_kernel");
         self.fn_sdpa_prefill = try self.getFunction("sdpa_prefill_kernel");
         self.fn_gemm_q8_0 = try self.getFunction("gemm_q8_0_kernel");
         self.fn_rms_norm_batched = try self.getFunction("rms_norm_batched_kernel");
@@ -763,6 +773,11 @@ pub const CudaBackend = struct {
         };
         const grid: u32 = @intCast((total + block_size - 1) / block_size);
         self.launch(self.fn_deinterleave, grid, block_size, 0, &params);
+    }
+
+    /// Split concatenated Q+gate per-head data into separate arrays.
+    pub fn splitQGate(_: *CudaBackend, _: [*]const f32, _: [*]f32, _: [*]f32, _: usize, _: usize) void {
+        @panic("CUDA splitQGate: no GPU kernel — add a CUDA kernel");
     }
 
     /// Batched GEMV: fuse multiple GEMV ops sharing the same input into a single
@@ -1189,45 +1204,125 @@ pub const CudaBackend = struct {
         return dptr;
     }
 
-    /// Fused scaled dot-product attention on GPU with KV cache append.
-    pub fn sdpa(self: *CudaBackend, q: [*]const f32, keys: []u8, values: []u8, k_new: [*]const f32, v_new: [*]const f32, output: [*]f32, nh: usize, nkv: usize, hd: usize, seq_len: usize, scale: f32, kv_type: @import("backend.zig").KvQuantType) void {
-        if (kv_type != .f32) @panic("CUDA SDPA: quantized KV not supported — add GPU kernel or use --kv-type f32");
+    /// Return the turbo bit width for a KV quant type, or 0 for non-turbo types.
+    fn turboBits(kv_type: KvQuantType) u32 {
+        return switch (kv_type) {
+            .turbo2 => 2,
+            .turbo3 => 3,
+            .turbo4 => 4,
+            else => 0,
+        };
+    }
 
-        const f32_keys: []f32 = @as([*]f32, @ptrCast(@alignCast(keys.ptr)))[0 .. keys.len / 4];
-        const f32_values: []f32 = @as([*]f32, @ptrCast(@alignCast(values.ptr)))[0 .. values.len / 4];
+    /// Return the byte size per 32-element turbo block, or 0 for non-turbo types.
+    fn turboBlockByteSize(kv_type: KvQuantType) u32 {
+        return switch (kv_type) {
+            .turbo2 => turbo2_block_bytes,
+            .turbo3 => turbo3_block_bytes,
+            .turbo4 => turbo4_block_bytes,
+            else => 0,
+        };
+    }
+
+    /// Check if a KV quant type is a TurboQuant variant.
+    fn isTurbo(kv_type: KvQuantType) bool {
+        return kv_type == .turbo2 or kv_type == .turbo3 or kv_type == .turbo4;
+    }
+
+    /// Fused scaled dot-product attention on GPU with KV cache append.
+    /// Supports f32 KV cache (existing fast path) and TurboQuant 2/3/4-bit
+    /// KV cache (native GPU dequant — no CPU fallback for SDPA compute).
+    /// KV append for turbo types uses CPU quantization (once per token per layer,
+    /// not the SDPA hot path). Non-turbo quantized types (q8_0, etc.) panic.
+    pub fn sdpa(self: *CudaBackend, q: [*]const f32, keys: []u8, values: []u8, k_new: [*]const f32, v_new: [*]const f32, output: [*]f32, nh: usize, nkv: usize, hd: usize, seq_len: usize, scale: f32, kv_type_k: @import("backend.zig").KvQuantType, kv_type_v: @import("backend.zig").KvQuantType) void {
+        const is_turbo_k = isTurbo(kv_type_k);
+        const is_turbo_v = isTurbo(kv_type_v);
+        const is_f32_k = (kv_type_k == .f32);
+        const is_f32_v = (kv_type_v == .f32);
+
+        // Non-turbo, non-f32 quantized KV: not yet supported
+        if (!is_f32_k and !is_turbo_k or !is_f32_v and !is_turbo_v)
+            @panic("CUDA SDPA: unsupported KV quant type — use f32 or turbo2/3/4");
 
         const kvd = nkv * hd;
-        const kvd_bytes = kvd * @sizeOf(f32);
-        const sl = seq_len + 1;
+        var sl: u32 = @intCast(seq_len + 1);
 
-        var d_keys = self.getOrAllocKvBuf(@intFromPtr(f32_keys.ptr), f32_keys.len * @sizeOf(f32));
-        var d_vals = self.getOrAllocKvBuf(@intFromPtr(f32_values.ptr), f32_values.len * @sizeOf(f32));
+        if (is_f32_k and is_f32_v) {
+            // Pure f32 path: use original sdpa_kernel
+            const f32_keys: []f32 = @as([*]f32, @ptrCast(@alignCast(keys.ptr)))[0 .. keys.len / 4];
+            const f32_values: []f32 = @as([*]f32, @ptrCast(@alignCast(values.ptr)))[0 .. values.len / 4];
+            const kvd_bytes = kvd * @sizeOf(f32);
 
-        const d_k_new = self.getInputBuf(k_new, kvd_bytes);
-        const d_v_new = self.getInputBuf(v_new, kvd_bytes);
+            var d_keys = self.getOrAllocKvBuf(@intFromPtr(f32_keys.ptr), f32_keys.len * @sizeOf(f32));
+            var d_vals = self.getOrAllocKvBuf(@intFromPtr(f32_values.ptr), f32_values.len * @sizeOf(f32));
 
-        _ = self.cuMemcpyDtoD(d_keys + seq_len * kvd_bytes, d_k_new, kvd_bytes);
-        _ = self.cuMemcpyDtoD(d_vals + seq_len * kvd_bytes, d_v_new, kvd_bytes);
+            const d_k_new = self.getInputBuf(k_new, kvd_bytes);
+            const d_v_new = self.getInputBuf(v_new, kvd_bytes);
 
-        var d_q = self.getInputBuf(q, nh * hd * @sizeOf(f32));
-        var d_out = self.getOutputBuf(output, nh * hd * @sizeOf(f32));
+            _ = self.cuMemcpyDtoD(d_keys + seq_len * kvd_bytes, d_k_new, kvd_bytes);
+            _ = self.cuMemcpyDtoD(d_vals + seq_len * kvd_bytes, d_v_new, kvd_bytes);
 
-        var nh_u32: u32 = @intCast(nh);
-        var nkv_u32: u32 = @intCast(nkv);
-        var hd_u32: u32 = @intCast(hd);
-        var sl_u32: u32 = @intCast(sl);
-        var kvd_u32: u32 = @intCast(kvd);
-        var scale_f32: f32 = scale;
+            var d_q = self.getInputBuf(q, nh * hd * @sizeOf(f32));
+            var d_out = self.getOutputBuf(output, nh * hd * @sizeOf(f32));
 
-        var params = [_]?*anyopaque{
-            @ptrCast(&d_q),      @ptrCast(&d_keys),  @ptrCast(&d_vals),
-            @ptrCast(&d_out),    @ptrCast(&nh_u32),   @ptrCast(&nkv_u32),
-            @ptrCast(&hd_u32),   @ptrCast(&sl_u32),   @ptrCast(&kvd_u32),
-            @ptrCast(&scale_f32),
-        };
+            var nh_u32: u32 = @intCast(nh);
+            var nkv_u32: u32 = @intCast(nkv);
+            var hd_u32: u32 = @intCast(hd);
+            var kvd_u32: u32 = @intCast(kvd);
+            var scale_f32: f32 = scale;
 
-        const smem: u32 = (sl_u32 + 1) * @sizeOf(f32);
-        self.launch(self.fn_sdpa, @intCast(nh), block_size, smem, &params);
+            var params = [_]?*anyopaque{
+                @ptrCast(&d_q),      @ptrCast(&d_keys),  @ptrCast(&d_vals),
+                @ptrCast(&d_out),    @ptrCast(&nh_u32),   @ptrCast(&nkv_u32),
+                @ptrCast(&hd_u32),   @ptrCast(&sl),       @ptrCast(&kvd_u32),
+                @ptrCast(&scale_f32),
+            };
+
+            const smem: u32 = (sl + 1) * @sizeOf(f32);
+            self.launch(self.fn_sdpa, @intCast(nh), block_size, smem, &params);
+        } else {
+            // Turbo or mixed path: CPU KV append + GPU turbo SDPA kernel.
+            // KV append on CPU (one write per token per layer — not the hot path).
+            self.flushActivations();
+            const k_off = kv_quant.kvByteOffset(kv_type_k, seq_len * kvd);
+            const v_off = kv_quant.kvByteOffset(kv_type_v, seq_len * kvd);
+            kv_quant.kvStore(keys.ptr + k_off, k_new, kvd, kv_type_k);
+            kv_quant.kvStore(values.ptr + v_off, v_new, kvd, kv_type_v);
+
+            // Upload entire KV cache to device for GPU SDPA
+            const k_cache_bytes = kv_quant.kvSliceBytes(kv_type_k, @as(usize, sl) * kvd);
+            const v_cache_bytes = kv_quant.kvSliceBytes(kv_type_v, @as(usize, sl) * kvd);
+            var d_keys = self.getOrAllocKvBuf(@intFromPtr(keys.ptr), keys.len);
+            var d_vals = self.getOrAllocKvBuf(@intFromPtr(values.ptr), values.len);
+
+            // Re-upload the full cache (turbo data was written by CPU)
+            _ = self.cuMemcpyHtoD(d_keys, @ptrCast(keys.ptr), k_cache_bytes);
+            _ = self.cuMemcpyHtoD(d_vals, @ptrCast(values.ptr), v_cache_bytes);
+
+            var d_q = self.getInputBuf(q, nh * hd * @sizeOf(f32));
+            var d_out = self.getOutputBuf(output, nh * hd * @sizeOf(f32));
+
+            var nh_u32: u32 = @intCast(nh);
+            var nkv_u32: u32 = @intCast(nkv);
+            var hd_u32: u32 = @intCast(hd);
+            var kvd_u32: u32 = @intCast(kvd);
+            var scale_f32: f32 = scale;
+            var bits_k_u: u32 = turboBits(kv_type_k);
+            var bits_v_u: u32 = turboBits(kv_type_v);
+            var bb_k_u: u32 = turboBlockByteSize(kv_type_k);
+            var bb_v_u: u32 = turboBlockByteSize(kv_type_v);
+
+            var params = [_]?*anyopaque{
+                @ptrCast(&d_q),       @ptrCast(&d_keys),   @ptrCast(&d_vals),
+                @ptrCast(&d_out),     @ptrCast(&nh_u32),    @ptrCast(&nkv_u32),
+                @ptrCast(&hd_u32),    @ptrCast(&sl),         @ptrCast(&kvd_u32),
+                @ptrCast(&scale_f32), @ptrCast(&bits_k_u),   @ptrCast(&bits_v_u),
+                @ptrCast(&bb_k_u),    @ptrCast(&bb_v_u),
+            };
+
+            const smem: u32 = (sl + 1) * @sizeOf(f32);
+            self.launch(self.fn_sdpa_turbo, @intCast(nh), block_size, smem, &params);
+        }
     }
 
     // ── Batched prefill ops ─────────────────────────────────────
@@ -1297,10 +1392,77 @@ pub const CudaBackend = struct {
 
     /// Prefill SDPA — FlashAttention-2 with causal masking.
     /// Attends to both cached KV (prev_len positions) and new KV (n_tok positions).
-    /// Grid: n_tok * nh blocks, 256 threads. KV cache updated after kernel.
-    pub fn sdpaPrefill(self: *CudaBackend, q: [*]const f32, k: [*]const f32, v: [*]const f32, kv_keys: []u8, kv_values: []u8, output: [*]f32, nh: usize, nkv: usize, hd: usize, prev_len: usize, n_tok: usize, scale: f32, kv_type: KvQuantType) void {
-        if (kv_type != .f32) @panic("CUDA sdpaPrefill: quantized KV not supported — use --kv-type f32");
+    /// For f32 KV: native FA2 GPU kernel (single dispatch for all tokens).
+    /// For turbo KV: CPU-side KV append + sequential GPU turbo SDPA per token.
+    /// For other quantized KV types: panics (not yet supported).
+    pub fn sdpaPrefill(self: *CudaBackend, q: [*]const f32, k: [*]const f32, v: [*]const f32, kv_keys: []u8, kv_values: []u8, output: [*]f32, nh: usize, nkv: usize, hd: usize, prev_len: usize, n_tok: usize, scale: f32, kv_type_k: KvQuantType, kv_type_v: KvQuantType) void {
+        const is_turbo_k = isTurbo(kv_type_k);
+        const is_turbo_v = isTurbo(kv_type_v);
+        const is_f32_k = (kv_type_k == .f32);
+        const is_f32_v = (kv_type_v == .f32);
 
+        // Turbo/mixed prefill: CPU KV append + sequential GPU turbo SDPA per token.
+        if ((is_turbo_k or is_f32_k) and (is_turbo_v or is_f32_v) and (is_turbo_k or is_turbo_v)) {
+            self.flushActivations();
+            const kvd = nkv * hd;
+
+            // Append all n_tok keys/values to KV cache on CPU
+            for (0..n_tok) |t| {
+                const src_off = t * kvd;
+                const dst_elem = (prev_len + t) * kvd;
+                const dst_byte_k = kv_quant.kvByteOffset(kv_type_k, dst_elem);
+                const dst_byte_v = kv_quant.kvByteOffset(kv_type_v, dst_elem);
+                kv_quant.kvStore(kv_keys.ptr + dst_byte_k, k + src_off, kvd, kv_type_k);
+                kv_quant.kvStore(kv_values.ptr + dst_byte_v, v + src_off, kvd, kv_type_v);
+            }
+
+            // Upload KV cache to device
+            const total_sl = prev_len + n_tok;
+            const k_cache_bytes = kv_quant.kvSliceBytes(kv_type_k, total_sl * kvd);
+            const v_cache_bytes = kv_quant.kvSliceBytes(kv_type_v, total_sl * kvd);
+            var d_keys = self.getOrAllocKvBuf(@intFromPtr(kv_keys.ptr), kv_keys.len);
+            var d_vals = self.getOrAllocKvBuf(@intFromPtr(kv_values.ptr), kv_values.len);
+            _ = self.cuMemcpyHtoD(d_keys, @ptrCast(kv_keys.ptr), k_cache_bytes);
+            _ = self.cuMemcpyHtoD(d_vals, @ptrCast(kv_values.ptr), v_cache_bytes);
+
+            // Sequential GPU SDPA per token (each uses turbo kernel over full history)
+            for (0..n_tok) |t| {
+                var sl: u32 = @intCast(prev_len + t + 1);
+                const q_off = t * nh * hd;
+                const out_off = t * nh * hd;
+
+                var d_q = self.getInputBuf(q + q_off, nh * hd * @sizeOf(f32));
+                var d_out = self.getOutputBuf(output + out_off, nh * hd * @sizeOf(f32));
+
+                var nh_u: u32 = @intCast(nh);
+                var nkv_u: u32 = @intCast(nkv);
+                var hd_u: u32 = @intCast(hd);
+                var kvd_u: u32 = @intCast(kvd);
+                var scale_f: f32 = scale;
+                var bits_k_u: u32 = turboBits(kv_type_k);
+                var bits_v_u: u32 = turboBits(kv_type_v);
+                var bb_k_u: u32 = turboBlockByteSize(kv_type_k);
+                var bb_v_u: u32 = turboBlockByteSize(kv_type_v);
+
+                var params = [_]?*anyopaque{
+                    @ptrCast(&d_q),       @ptrCast(&d_keys),   @ptrCast(&d_vals),
+                    @ptrCast(&d_out),     @ptrCast(&nh_u),      @ptrCast(&nkv_u),
+                    @ptrCast(&hd_u),      @ptrCast(&sl),         @ptrCast(&kvd_u),
+                    @ptrCast(&scale_f),   @ptrCast(&bits_k_u),   @ptrCast(&bits_v_u),
+                    @ptrCast(&bb_k_u),    @ptrCast(&bb_v_u),
+                };
+
+                const smem: u32 = (sl + 1) * @sizeOf(f32);
+                self.launch(self.fn_sdpa_turbo, @intCast(nh), block_size, smem, &params);
+            }
+            return;
+        }
+
+        // Non-turbo, non-f32 quantized KV: not yet supported
+        if (kv_type_k != .f32 or kv_type_v != .f32)
+            @panic("CUDA SDPA prefill: unsupported KV quant type — use f32 or turbo2/3/4");
+
+        // Pure f32 path
         const kvd = nkv * hd;
 
         // Get device pointers for Q and new K/V

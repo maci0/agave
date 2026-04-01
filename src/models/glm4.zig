@@ -85,7 +85,8 @@ pub const Glm4Model = struct {
     block_allocator: BlockAllocator = undefined,
     tiered_cache: ?*TieredKvCache = null,
     tiered_block_allocator: ?TieredBlockAllocator = null,
-    kv_type: kv_quant.KvQuantType = .f32,
+    kv_type_k: kv_quant.KvQuantType = .f32,
+    kv_type_v: kv_quant.KvQuantType = .f32,
     kv_seq_len: usize = 0,
     cancelled: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
 
@@ -96,9 +97,10 @@ pub const Glm4Model = struct {
     pool: ?*@import("../thread_pool.zig").ThreadPool = null,
 
     /// Initialize the model from format metadata and allocate all working buffers.
-    pub fn init(allocator: Allocator, f: Format, be: Backend, ctx_size: u32, kv_type: kv_quant.KvQuantType, tiered_cache: ?*TieredKvCache) !Glm4Model {
+    pub fn init(allocator: Allocator, f: Format, be: Backend, ctx_size: u32, kv_type_k: kv_quant.KvQuantType, kv_type_v: kv_quant.KvQuantType, tiered_cache: ?*TieredKvCache) !Glm4Model {
         var self = Glm4Model{ .fmt = f, .be = be, .allocator = allocator };
-        self.kv_type = kv_type;
+        self.kv_type_k = kv_type_k;
+        self.kv_type_v = kv_type_v;
 
         // Read config
         if (f.getMetaU32("num_hidden_layers")) |v| self.n_layers = v;
@@ -648,49 +650,41 @@ pub const Glm4Model = struct {
                 const s_off = h * out_dim * groups_per_row;
                 mlx_ops.mlxGemvRaw(x.ptr, pw + w_off, sc + s_off, bi + s_off, y + h * out_dim, out_dim, in_dim, self.mlx_bits);
             }
-        } else if (w_t.dtype == .q8_0) {
-            // Q8_0 3D weights (GGUF MLA layout). Detect layout from GGUF dims:
-            // dims[0] = out_dim → transposed [in_dim × out_dim], use gemvT
-            // dims[0] = in_dim → standard [out_dim × in_dim], use gemv
+        } else {
+            // Non-MLX GGUF: dispatch via backend for in-kernel dequantization.
+            // Detect layout from GGUF dims:
+            // dims[0] = out_dim → transposed [in_dim × out_dim]
+            // dims[0] = in_dim → standard [out_dim × in_dim]
             const head_bytes = dtypeBytes(w_t.dtype, out_dim * in_dim);
             const transposed = (w_t.n_dims >= 2 and w_t.dims[0] == out_dim);
-            for (0..nh) |h| {
-                const w_ptr = w_t.data_ptr + h * head_bytes;
-                if (transposed) {
-                    self.be.gemvT(x.ptr, w_ptr, y + h * out_dim, out_dim, in_dim);
-                } else {
+            if (!transposed) {
+                // Standard layout — backend handles dequant in-kernel.
+                for (0..nh) |h| {
+                    const w_ptr = w_t.data_ptr + h * head_bytes;
                     self.be.gemv(x.ptr, .{ .data = w_ptr, .dtype = w_t.dtype }, y + h * out_dim, out_dim, in_dim);
                 }
-            }
-        } else {
-            // Non-MLX, non-Q8_0: CPU dequant fallback. Detect layout from GGUF dims.
-            const head_elems = out_dim * in_dim;
-            const head_bytes = dtypeBytes(w_t.dtype, head_elems);
-            std.debug.assert(head_elems <= self.logits_buf.len);
-            const scratch = self.logits_buf[0..head_elems];
-            const transposed = (w_t.n_dims >= 2 and w_t.dims[0] == out_dim);
-            self.be.sync();
-            for (0..nh) |h| {
-                const w_ptr = w_t.data_ptr + h * head_bytes;
-                quant_ops.dequantToF32(scratch, w_ptr, w_t.dtype, head_elems);
-                const y_head = y + h * out_dim;
-                @memset(y_head[0..out_dim], 0);
-                if (transposed) {
-                    // [in_dim × out_dim] layout: accumulate column-wise
+            } else if (w_t.dtype == .q8_0) {
+                // Transposed Q8_0 — backend gemvT handles in-kernel.
+                for (0..nh) |h| {
+                    const w_ptr = w_t.data_ptr + h * head_bytes;
+                    self.be.gemvT(x.ptr, w_ptr, y + h * out_dim, out_dim, in_dim);
+                }
+            } else {
+                // Transposed non-Q8_0 — gemvT only supports Q8_0, so CPU dequant
+                // fallback until gemvT gains dtype support.
+                const head_elems = out_dim * in_dim;
+                std.debug.assert(head_elems <= self.logits_buf.len);
+                const scratch = self.logits_buf[0..head_elems];
+                self.be.sync();
+                for (0..nh) |h| {
+                    const w_ptr = w_t.data_ptr + h * head_bytes;
+                    quant_ops.dequantToF32(scratch, w_ptr, w_t.dtype, head_elems);
+                    const y_head = y + h * out_dim;
+                    @memset(y_head[0..out_dim], 0);
                     for (0..in_dim) |j| {
                         const xj = x[j];
                         const row = scratch[j * out_dim ..][0..out_dim];
-                        for (0..out_dim) |i| {
-                            y_head[i] += row[i] * xj;
-                        }
-                    }
-                } else {
-                    // [out_dim × in_dim] layout: standard row-wise dot product
-                    for (0..out_dim) |i| {
-                        const row = scratch[i * in_dim ..][0..in_dim];
-                        var sum: f32 = 0;
-                        for (0..in_dim) |j| sum += row[j] * x[j];
-                        y_head[i] = sum;
+                        for (0..out_dim) |i| y_head[i] += row[i] * xj;
                     }
                 }
             }

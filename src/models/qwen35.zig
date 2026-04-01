@@ -128,7 +128,8 @@ pub const Qwen35Model = struct {
     block_allocator: BlockAllocator = undefined,
     tiered_cache: ?*TieredKvCache = null,
     tiered_block_allocator: ?TieredBlockAllocator = null,
-    kv_type: kv_quant.KvQuantType = .f32,
+    kv_type_k: kv_quant.KvQuantType = .f32,
+    kv_type_v: kv_quant.KvQuantType = .f32,
     kv_seq_len: usize = 0,
     cancelled: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
     perf: perf.PerfCounters = .{},
@@ -140,9 +141,10 @@ pub const Qwen35Model = struct {
 
     /// Initialize a Qwen3.5 model from format metadata and weights.
     /// When `tiered_cache` is provided, uses tiered block allocation instead of PagedKvCache.
-    pub fn init(allocator: Allocator, f: Format, be: Backend, ctx_size: u32, kv_type: kv_quant.KvQuantType, tiered_cache: ?*TieredKvCache) !Qwen35Model {
+    pub fn init(allocator: Allocator, f: Format, be: Backend, ctx_size: u32, kv_type_k: kv_quant.KvQuantType, kv_type_v: kv_quant.KvQuantType, tiered_cache: ?*TieredKvCache) !Qwen35Model {
         var self = Qwen35Model{ .fmt = f, .be = be, .allocator = allocator, .is_safetensors = f.is_safetensors };
-        self.kv_type = kv_type;
+        self.kv_type_k = kv_type_k;
+        self.kv_type_v = kv_type_v;
         const arch = f.getMetaStr("general.architecture") orelse "qwen35";
         if (f.getArchU32(arch, "block_count")) |v| self.n_layers = v;
         if (f.getArchU32(arch, "embedding_length")) |v| self.n_embd = v;
@@ -397,6 +399,9 @@ pub const Qwen35Model = struct {
             quant.dequantToF32(self.dn_ssm_norm_w[i], ssm_norm_t.data_ptr, ssm_norm_t.dtype, head_v_dim);
         }
 
+        // Pre-populate norm cache so no allocations happen during inference.
+        self.warmNormCache();
+
         return self;
     }
 
@@ -447,6 +452,22 @@ pub const Qwen35Model = struct {
         } else {
             self.block_allocator.freeSeqTable(&self.seq_table);
             self.paged_cache.deinit();
+        }
+    }
+
+    /// Pre-populate the norm weight cache during init so no allocations occur
+    /// in the hot path. Iterates all norm tensors and triggers conversion.
+    fn warmNormCache(self: *Qwen35Model) void {
+        const e: usize = self.n_embd;
+        const hd: usize = self.head_dim;
+        if (self.fmt.getTensor("output_norm.weight")) |t| _ = self.asF32(t, e);
+        for (0..self.n_layers) |i| {
+            const li: u32 = @intCast(i);
+            if (self.fmt.layerTensor(li, "attn_norm.weight")) |t| _ = self.asF32(t, e);
+            if (self.fmt.layerTensor(li, "attn_q_norm.weight")) |t| _ = self.asF32(t, hd);
+            if (self.fmt.layerTensor(li, "attn_k_norm.weight")) |t| _ = self.asF32(t, hd);
+            if (self.fmt.layerTensor(li, "post_attention_norm.weight")) |t| _ = self.asF32(t, e);
+            if (self.fmt.layerTensor(li, "ffn_norm.weight")) |t| _ = self.asF32(t, e);
         }
     }
 
@@ -684,6 +705,7 @@ pub const Qwen35Model = struct {
             null,
             0,
             .f32, // PagedKvCache uses f32 blocks
+            .f32,
         );
         self.syncProfile();
         self.perf.end(.sdpa, t);

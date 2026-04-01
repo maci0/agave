@@ -131,8 +131,10 @@ pub const NemotronHModel = struct {
     block_allocator: BlockAllocator = undefined,
     tiered_cache: ?*TieredKvCache = null,
     tiered_block_allocator: ?TieredBlockAllocator = null,
-    /// KV cache quantization type.
-    kv_type: kv_quant.KvQuantType = .f32,
+    /// KV cache quantization type for keys.
+    kv_type_k: kv_quant.KvQuantType = .f32,
+    /// KV cache quantization type for values.
+    kv_type_v: kv_quant.KvQuantType = .f32,
     /// Number of tokens committed to the KV cache.
     kv_seq_len: usize = 0,
     /// Set to true from another thread to abort an in-progress `forward` call.
@@ -142,9 +144,10 @@ pub const NemotronHModel = struct {
 
     /// Initialize the model from format metadata and pre-allocate all buffers.
     /// Caller owns the returned value and must call `deinit` when done.
-    pub fn init(allocator: Allocator, f: Format, be: Backend, ctx_size: u32, kv_type: kv_quant.KvQuantType, tiered_cache: ?*TieredKvCache) !NemotronHModel {
+    pub fn init(allocator: Allocator, f: Format, be: Backend, ctx_size: u32, kv_type_k: kv_quant.KvQuantType, kv_type_v: kv_quant.KvQuantType, tiered_cache: ?*TieredKvCache) !NemotronHModel {
         var self = NemotronHModel{ .fmt = f, .be = be, .allocator = allocator };
-        self.kv_type = kv_type;
+        self.kv_type_k = kv_type_k;
+        self.kv_type_v = kv_type_v;
 
         const arch = f.getMetaStr("general.architecture") orelse "nemotron-h";
         if (f.getArchU32(arch, "block_count")) |v| self.n_layers = v;
@@ -579,6 +582,7 @@ pub const NemotronHModel = struct {
             null,
             0,
             .f32, // PagedKvCache uses f32 blocks
+            .f32,
         );
 
         // 6. Output projection.

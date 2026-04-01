@@ -12,8 +12,9 @@ const builtin = @import("builtin");
 const backend_mod = @import("backend.zig");
 const TensorData = backend_mod.TensorData;
 const DType = backend_mod.DType;
-const CpuBackend = backend_mod.CpuBackend;
+const CpuBackend = @import("cpu.zig").CpuBackend;
 const KvQuantType = backend_mod.KvQuantType;
+const kv_quant = @import("../ops/kv_quant.zig");
 
 // ── Vulkan types (native Zig definitions) ───────────────────────
 
@@ -506,6 +507,7 @@ const spv_gemv_fp8_e5m2 = @embedFile("kernels/vulkan/gemv_fp8_e5m2.spv");
 
 // Attention
 const spv_sdpa = @embedFile("kernels/vulkan/sdpa.spv");
+const spv_sdpa_turbo = @embedFile("kernels/vulkan/sdpa_turbo.spv");
 
 // Embedding
 const spv_embedding = @embedFile("kernels/vulkan/embedding.spv");
@@ -578,6 +580,7 @@ pub const VulkanBackend = struct {
 
     // Attention pipelines
     pipe_sdpa: PipelineInfo = .{},
+    pipe_sdpa_turbo: PipelineInfo = .{},
 
     // Embedding pipeline
     pipe_embedding: PipelineInfo = .{},
@@ -664,7 +667,7 @@ pub const VulkanBackend = struct {
     act_pool_count: u32 = 0,
 
     /// Number of SPIR-V compute pipelines compiled at init.
-    pub const n_pipelines: u32 = 19;
+    pub const n_pipelines: u32 = 20;
 
     /// Library name loaded via dlopen at init.
     pub const lib_name = vk_lib_name;
@@ -982,6 +985,9 @@ pub const VulkanBackend = struct {
         self.pipe_gemv_fp8_e5m2 = try self.createPipeline(spv_gemv_fp8_e5m2, 3, 8);
         // SDPA: 4 bufs (Q, K, V, out), 20 bytes push (nh, nkv, hd, sl, scale)
         self.pipe_sdpa = try self.createPipeline(spv_sdpa, 4, 20);
+        // SDPA TurboQuant: 4 bufs (Q, K_raw, V_raw, out), 36 bytes push
+        // (nh, nkv, hd, sl, scale, bits_k, bits_v, block_bytes_k, block_bytes_v)
+        self.pipe_sdpa_turbo = try self.createPipeline(spv_sdpa_turbo, 4, 36);
         // Embedding: 3 bufs (token_id, emb_table, output), 8 bytes push (vocab_size, n_embd)
         self.pipe_embedding = try self.createPipeline(spv_embedding, 3, 8);
         // Conv1d: 4 bufs (input, state, conv_w, output), 8 bytes push (conv_ch, d_conv)
@@ -1030,7 +1036,7 @@ pub const VulkanBackend = struct {
             &self.pipe_gemv_q5_k,     &self.pipe_gemv_q6_k,
             &self.pipe_gemv_fp8_e4m3, &self.pipe_gemv_fp8_e5m2,
             // Attention
-            &self.pipe_sdpa,
+            &self.pipe_sdpa,          &self.pipe_sdpa_turbo,
             // Embedding
                      &self.pipe_embedding,
             // SSM
@@ -1641,6 +1647,11 @@ pub const VulkanBackend = struct {
         @panic("Vulkan deinterleave: no GPU shader — add a Vulkan compute shader");
     }
 
+    /// Split concatenated Q+gate per-head data into separate arrays.
+    pub fn splitQGate(_: *VulkanBackend, _: [*]const f32, _: [*]f32, _: [*]f32, _: usize, _: usize) void {
+        @panic("Vulkan splitQGate: no GPU shader — add a Vulkan compute shader");
+    }
+
     /// Batched GEMV — sequential dispatch on Vulkan.
     pub fn gemvMulti(self: *VulkanBackend, x: [*]const f32, ops: []const backend_mod.GemvOp, k: usize) void {
         for (ops) |op| self.gemv(x, op.w, op.y, op.n, k);
@@ -1732,10 +1743,10 @@ pub const VulkanBackend = struct {
     }
 
     /// Prefill SDPA — sequential loop over tokens, calling single-token sdpa.
-    pub fn sdpaPrefill(self: *VulkanBackend, q: [*]const f32, k: [*]const f32, v: [*]const f32, kv_keys: []u8, kv_values: []u8, output: [*]f32, nh: usize, nkv: usize, hd: usize, prev_len: usize, n_tok: usize, scale: f32, kv_type: KvQuantType) void {
+    pub fn sdpaPrefill(self: *VulkanBackend, q: [*]const f32, k: [*]const f32, v: [*]const f32, kv_keys: []u8, kv_values: []u8, output: [*]f32, nh: usize, nkv: usize, hd: usize, prev_len: usize, n_tok: usize, scale: f32, kv_type_k: KvQuantType, kv_type_v: KvQuantType) void {
         const kvd = nkv * hd;
         for (0..n_tok) |t| {
-            self.sdpa(q + t * nh * hd, kv_keys, kv_values, k + t * kvd, v + t * kvd, output + t * nh * hd, nh, nkv, hd, prev_len + t, scale, kv_type);
+            self.sdpa(q + t * nh * hd, kv_keys, kv_values, k + t * kvd, v + t * kvd, output + t * nh * hd, nh, nkv, hd, prev_len + t, scale, kv_type_k, kv_type_v);
         }
     }
 
@@ -1765,13 +1776,50 @@ pub const VulkanBackend = struct {
         };
     }
 
-    /// Fused Scaled Dot-Product Attention.
-    /// One workgroup per query head. Falls back to CPU for large seq_len / head_dim.
-    pub fn sdpa(self: *VulkanBackend, q: [*]const f32, keys: []u8, values: []u8, k_new: [*]const f32, v_new: [*]const f32, output: [*]f32, nh: usize, nkv: usize, hd: usize, seq_len: usize, scale: f32, kv_type: @import("backend.zig").KvQuantType) void {
-        if (kv_type != .f32) @panic("Vulkan SDPA: quantized KV not supported — add GPU shader or use --kv-type f32");
+    // ── TurboQuant helpers ────────────────────────────────────
 
-        const f32_keys: []f32 = @as([*]f32, @ptrCast(@alignCast(keys.ptr)))[0 .. keys.len / 4];
-        const f32_values: []f32 = @as([*]f32, @ptrCast(@alignCast(values.ptr)))[0 .. values.len / 4];
+    /// TurboQuant 2-bit block: f16 norm (2 bytes) + 8 packed bytes = 10 bytes per 32 elements.
+    const turbo2_block_bytes: u32 = 10;
+    /// TurboQuant 3-bit block: f16 norm (2 bytes) + 12 packed bytes = 14 bytes per 32 elements.
+    const turbo3_block_bytes: u32 = 14;
+    /// TurboQuant 4-bit block: f16 norm (2 bytes) + 16 packed bytes = 18 bytes per 32 elements.
+    const turbo4_block_bytes: u32 = 18;
+
+    /// Return the turbo bit width for a KV quant type, or 0 for non-turbo types.
+    fn turboBits(kv_type: KvQuantType) u32 {
+        return switch (kv_type) {
+            .turbo2 => 2,
+            .turbo3 => 3,
+            .turbo4 => 4,
+            else => 0,
+        };
+    }
+
+    /// Return the byte size per 32-element turbo block, or 0 for non-turbo types.
+    fn turboBlockByteSize(kv_type: KvQuantType) u32 {
+        return switch (kv_type) {
+            .turbo2 => turbo2_block_bytes,
+            .turbo3 => turbo3_block_bytes,
+            .turbo4 => turbo4_block_bytes,
+            else => 0,
+        };
+    }
+
+    /// Fused Scaled Dot-Product Attention.
+    /// One workgroup per query head. Supports f32 and TurboQuant 2/3/4-bit KV cache.
+    /// TurboQuant dequantization happens in-GPU via the sdpa_turbo shader.
+    /// KV append for turbo types uses CPU quantization (once per token per layer).
+    /// Panics for non-turbo quantized types (q8_0, f16, etc.) — add GPU shaders.
+    pub fn sdpa(self: *VulkanBackend, q: [*]const f32, keys: []u8, values: []u8, k_new: [*]const f32, v_new: [*]const f32, output: [*]f32, nh: usize, nkv: usize, hd: usize, seq_len: usize, scale: f32, kv_type_k: @import("backend.zig").KvQuantType, kv_type_v: @import("backend.zig").KvQuantType) void {
+        const is_turbo_k = (kv_type_k == .turbo2 or kv_type_k == .turbo3 or kv_type_k == .turbo4);
+        const is_turbo_v = (kv_type_v == .turbo2 or kv_type_v == .turbo3 or kv_type_v == .turbo4);
+        const is_f32_k = (kv_type_k == .f32);
+        const is_f32_v = (kv_type_v == .f32);
+
+        // Non-turbo, non-f32 quantized KV: no GPU kernel yet
+        if (!is_f32_k and !is_turbo_k or !is_f32_v and !is_turbo_v) {
+            @panic("Vulkan SDPA: non-turbo quantized KV not yet supported — use --kv-type f32 or turbo2/3/4");
+        }
 
         const kvd = nkv * hd;
         const sl = seq_len + 1;
@@ -1780,38 +1828,95 @@ pub const VulkanBackend = struct {
 
         // Flush pending GPU work so k_new/v_new are readable, then append to KV cache
         self.sync();
-        @memcpy(f32_keys[seq_len * kvd ..][0..kvd], k_new[0..kvd]);
-        @memcpy(f32_values[seq_len * kvd ..][0..kvd], v_new[0..kvd]);
 
-        const q_sz = nh * hd * @sizeOf(f32);
-        const k_sz = f32_keys.len * @sizeOf(f32);
-        const v_sz = f32_values.len * @sizeOf(f32);
-        const o_sz = nh * hd * @sizeOf(f32);
+        if (is_f32_k and is_f32_v) {
+            // Pure f32 path: direct memcpy append
+            const f32_keys: []f32 = @as([*]f32, @ptrCast(@alignCast(keys.ptr)))[0 .. keys.len / 4];
+            const f32_values: []f32 = @as([*]f32, @ptrCast(@alignCast(values.ptr)))[0 .. values.len / 4];
+            @memcpy(f32_keys[seq_len * kvd ..][0..kvd], k_new[0..kvd]);
+            @memcpy(f32_values[seq_len * kvd ..][0..kvd], v_new[0..kvd]);
 
-        const q_buf = self.getPooledBuf(q_sz);
-        defer self.releasePooledBuf(q_buf);
-        const k_buf = self.getPooledBuf(k_sz);
-        defer self.releasePooledBuf(k_buf);
-        const v_buf = self.getPooledBuf(v_sz);
-        defer self.releasePooledBuf(v_buf);
-        const o_buf = self.getPooledBuf(o_sz);
-        defer self.releasePooledBuf(o_buf);
+            const q_sz = nh * hd * @sizeOf(f32);
+            const k_sz = f32_keys.len * @sizeOf(f32);
+            const v_sz = f32_values.len * @sizeOf(f32);
+            const o_sz = nh * hd * @sizeOf(f32);
 
-        self.uploadBuffer(q_buf.mem, @ptrCast(q), q_sz);
-        self.uploadBuffer(k_buf.mem, @ptrCast(f32_keys.ptr), k_sz);
-        self.uploadBuffer(v_buf.mem, @ptrCast(f32_values.ptr), v_sz);
+            const q_buf = self.getPooledBuf(q_sz);
+            defer self.releasePooledBuf(q_buf);
+            const k_buf = self.getPooledBuf(k_sz);
+            defer self.releasePooledBuf(k_buf);
+            const v_buf = self.getPooledBuf(v_sz);
+            defer self.releasePooledBuf(v_buf);
+            const o_buf = self.getPooledBuf(o_sz);
+            defer self.releasePooledBuf(o_buf);
 
-        const params = extern struct { nh: u32, nkv: u32, hd: u32, sl: u32, scale: f32 }{
-            .nh = @intCast(nh),
-            .nkv = @intCast(nkv),
-            .hd = @intCast(hd),
-            .sl = @intCast(sl),
-            .scale = scale,
-        };
-        const bufs = [_]VkBuffer{ q_buf.buf, k_buf.buf, v_buf.buf, o_buf.buf };
-        const sizes = [_]usize{ q_sz, k_sz, v_sz, o_sz };
-        self.dispatch(self.pipe_sdpa, &bufs, &sizes, @ptrCast(&params), 20, @intCast(nh));
-        self.downloadF32(o_buf.mem, output, nh * hd);
+            self.uploadBuffer(q_buf.mem, @ptrCast(q), q_sz);
+            self.uploadBuffer(k_buf.mem, @ptrCast(f32_keys.ptr), k_sz);
+            self.uploadBuffer(v_buf.mem, @ptrCast(f32_values.ptr), v_sz);
+
+            const params = extern struct { nh_v: u32, nkv_v: u32, hd_v: u32, sl_v: u32, scale_v: f32 }{
+                .nh_v = @intCast(nh),
+                .nkv_v = @intCast(nkv),
+                .hd_v = @intCast(hd),
+                .sl_v = @intCast(sl),
+                .scale_v = scale,
+            };
+            const bufs = [_]VkBuffer{ q_buf.buf, k_buf.buf, v_buf.buf, o_buf.buf };
+            const sizes = [_]usize{ q_sz, k_sz, v_sz, o_sz };
+            self.dispatch(self.pipe_sdpa, &bufs, &sizes, @ptrCast(&params), 20, @intCast(nh));
+            self.downloadF32(o_buf.mem, output, nh * hd);
+        } else {
+            // Turbo or mixed path: CPU quantization for KV append (once per token,
+            // not the SDPA hot path), then GPU turbo SDPA.
+            const k_off = kv_quant.kvByteOffset(kv_type_k, seq_len * kvd);
+            const v_off = kv_quant.kvByteOffset(kv_type_v, seq_len * kvd);
+            kv_quant.kvStore(keys.ptr + k_off, k_new, kvd, kv_type_k);
+            kv_quant.kvStore(values.ptr + v_off, v_new, kvd, kv_type_v);
+
+            const k_cache_bytes = kv_quant.kvSliceBytes(kv_type_k, sl * kvd);
+            const v_cache_bytes = kv_quant.kvSliceBytes(kv_type_v, sl * kvd);
+            const q_sz = nh * hd * @sizeOf(f32);
+            const o_sz = nh * hd * @sizeOf(f32);
+
+            const q_buf = self.getPooledBuf(q_sz);
+            defer self.releasePooledBuf(q_buf);
+            const k_buf = self.getPooledBuf(k_cache_bytes);
+            defer self.releasePooledBuf(k_buf);
+            const v_buf = self.getPooledBuf(v_cache_bytes);
+            defer self.releasePooledBuf(v_buf);
+            const o_buf = self.getPooledBuf(o_sz);
+            defer self.releasePooledBuf(o_buf);
+
+            self.uploadBuffer(q_buf.mem, @ptrCast(q), q_sz);
+            self.uploadBuffer(k_buf.mem, @ptrCast(keys.ptr), k_cache_bytes);
+            self.uploadBuffer(v_buf.mem, @ptrCast(values.ptr), v_cache_bytes);
+
+            const params = extern struct {
+                nh_v: u32,
+                nkv_v: u32,
+                hd_v: u32,
+                sl_v: u32,
+                scale_v: f32,
+                bits_k_v: u32,
+                bits_v_v: u32,
+                block_bytes_k_v: u32,
+                block_bytes_v_v: u32,
+            }{
+                .nh_v = @intCast(nh),
+                .nkv_v = @intCast(nkv),
+                .hd_v = @intCast(hd),
+                .sl_v = @intCast(sl),
+                .scale_v = scale,
+                .bits_k_v = turboBits(kv_type_k),
+                .bits_v_v = turboBits(kv_type_v),
+                .block_bytes_k_v = turboBlockByteSize(kv_type_k),
+                .block_bytes_v_v = turboBlockByteSize(kv_type_v),
+            };
+            const bufs = [_]VkBuffer{ q_buf.buf, k_buf.buf, v_buf.buf, o_buf.buf };
+            const sizes = [_]usize{ q_sz, k_cache_bytes, v_cache_bytes, o_sz };
+            self.dispatch(self.pipe_sdpa_turbo, &bufs, &sizes, @ptrCast(&params), 36, @intCast(nh));
+            self.downloadF32(o_buf.mem, output, nh * hd);
+        }
     }
 };
 

@@ -31,6 +31,7 @@ comptime {
 
     // Attention
     _ = @import("sdpa.zig");
+    _ = @import("sdpa_turbo.zig");
     _ = @import("sdpa_prefill.zig");
 
     // GEMV

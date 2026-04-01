@@ -19,7 +19,7 @@ const build_options = @import("build_options");
 
 const backend_mod = @import("backend/backend.zig");
 const Backend = backend_mod.Backend;
-const CpuBackend = backend_mod.CpuBackend;
+const BackendState = backend_mod.BackendState;
 const TensorData = backend_mod.TensorData;
 const format_mod = @import("format/format.zig");
 const Format = format_mod.Format;
@@ -34,6 +34,8 @@ const arch_mod = @import("arch.zig");
 const Arch = arch_mod.Arch;
 const TokenizerKind = tok_mod.TokenizerKind;
 const display_mod = @import("display.zig");
+const kv_quant = @import("ops/kv_quant.zig");
+const KvQuantType = kv_quant.KvQuantType;
 
 // ── Named constants ──────────────────────────────────────────────
 
@@ -53,6 +55,8 @@ const synthetic_x_mod: usize = 17;
 const synthetic_w_mod: usize = 31;
 /// Default number of attention heads for RoPE/SDPA benchmarks.
 const default_n_heads: usize = 32;
+/// Default head dimension for RoPE/SDPA benchmarks when not specified.
+const default_head_dim: usize = 128;
 /// Default RoPE theta value.
 const default_rope_theta: f32 = 10000.0;
 /// RMS norm epsilon.
@@ -130,7 +134,7 @@ fn eprint(comptime fmt: []const u8, args: anytype) void {
 
 const Mode = enum { kernel, e2e };
 
-const BackendChoice = enum { cpu, metal, vulkan, cuda, rocm };
+const BackendChoice = backend_mod.BackendChoice;
 
 const Kernel = enum {
     gemv_f32,
@@ -147,6 +151,9 @@ const Kernel = enum {
     mul,
     rope,
     sdpa,
+    sdpa_turbo4,
+    sdpa_turbo3,
+    sdpa_turbo2,
 };
 
 const CliArgs = struct {
@@ -215,7 +222,8 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
         result.kernel = parseKernelName(positional.?) orelse {
             eprint("Error: unknown kernel '{s}'\n", .{positional.?});
             eprint("Valid kernels: gemv_f32 gemv_bf16 gemv_f16 gemv_q8_0 gemv_q4_0\n", .{});
-            eprint("               rms_norm silu gelu softmax l2_norm add mul rope sdpa\n", .{});
+            eprint("               rms_norm silu gelu softmax l2_norm add mul rope\n", .{});
+            eprint("               sdpa sdpa_turbo4 sdpa_turbo3 sdpa_turbo2\n", .{});
             eprint("Run 'agave-bench --help' for usage information.\n", .{});
             std.process.exit(1);
         };
@@ -314,7 +322,8 @@ fn printUsage() void {
         \\
         \\KERNELS:
         \\  gemv_f32  gemv_bf16  gemv_f16  gemv_q8_0  gemv_q4_0
-        \\  rms_norm  silu  gelu  softmax  l2_norm  add  mul  rope  sdpa
+        \\  rms_norm  silu  gelu  softmax  l2_norm  add  mul  rope
+        \\  sdpa  sdpa_turbo4  sdpa_turbo3  sdpa_turbo2
         \\
         \\OPTIONS:
         \\  -h, --help     Show this help message
@@ -333,66 +342,6 @@ fn printUsage() void {
         \\
     ;
     stdout_file.writeAll(usage) catch {};
-}
-
-// ── Backend initialization ───────────────────────────────────────
-
-/// Initializes the requested backend, falling back to CPU on failure.
-/// Returns the Backend tagged union and the backend name string.
-fn initBackend(allocator: std.mem.Allocator, choice: BackendChoice, cpu_be: *CpuBackend, metal_be_ptr: anytype, vulkan_be_ptr: anytype, cuda_be_ptr: anytype, rocm_be_ptr: anytype) struct { be: Backend, name: []const u8 } {
-    switch (choice) {
-        .cpu => {
-            return .{ .be = .{ .cpu = cpu_be }, .name = "cpu" };
-        },
-        .metal => {
-            if (comptime build_options.enable_metal and builtin.os.tag == .macos) {
-                metal_be_ptr.* = backend_mod.MetalBackend.init(allocator) catch {
-                    eprint("Warning: Metal unavailable, falling back to CPU\n", .{});
-                    return .{ .be = .{ .cpu = cpu_be }, .name = "cpu" };
-                };
-                return .{ .be = .{ .metal = metal_be_ptr }, .name = "metal" };
-            } else {
-                eprint("Warning: Metal not available on this platform, falling back to CPU\n", .{});
-                return .{ .be = .{ .cpu = cpu_be }, .name = "cpu" };
-            }
-        },
-        .vulkan => {
-            if (comptime build_options.enable_vulkan) {
-                vulkan_be_ptr.* = backend_mod.VulkanBackend.init(allocator) catch {
-                    eprint("Warning: Vulkan unavailable, falling back to CPU\n", .{});
-                    return .{ .be = .{ .cpu = cpu_be }, .name = "cpu" };
-                };
-                return .{ .be = .{ .vulkan = vulkan_be_ptr }, .name = "vulkan" };
-            } else {
-                eprint("Warning: Vulkan disabled at build time, falling back to CPU\n", .{});
-                return .{ .be = .{ .cpu = cpu_be }, .name = "cpu" };
-            }
-        },
-        .cuda => {
-            if (comptime build_options.enable_cuda) {
-                cuda_be_ptr.* = backend_mod.CudaBackend.init(allocator) catch {
-                    eprint("Warning: CUDA unavailable, falling back to CPU\n", .{});
-                    return .{ .be = .{ .cpu = cpu_be }, .name = "cpu" };
-                };
-                return .{ .be = .{ .cuda = cuda_be_ptr }, .name = "cuda" };
-            } else {
-                eprint("Warning: CUDA disabled at build time, falling back to CPU\n", .{});
-                return .{ .be = .{ .cpu = cpu_be }, .name = "cpu" };
-            }
-        },
-        .rocm => {
-            if (comptime build_options.enable_rocm) {
-                rocm_be_ptr.* = backend_mod.RocmBackend.init(allocator) catch {
-                    eprint("Warning: ROCm unavailable, falling back to CPU\n", .{});
-                    return .{ .be = .{ .cpu = cpu_be }, .name = "cpu" };
-                };
-                return .{ .be = .{ .rocm = rocm_be_ptr }, .name = "rocm" };
-            } else {
-                eprint("Warning: ROCm disabled at build time, falling back to CPU\n", .{});
-                return .{ .be = .{ .cpu = cpu_be }, .name = "cpu" };
-            }
-        },
-    }
 }
 
 // ── Timing utilities ─────────────────────────────────────────────
@@ -441,6 +390,9 @@ const BenchCtx = struct {
     k_new: ?[]f32 = null,
     v_new: ?[]f32 = null,
     sdpa_out: ?[]f32 = null,
+    // KV cache types for turbo SDPA benchmarks
+    kv_type_k: KvQuantType = .f32,
+    kv_type_v: KvQuantType = .f32,
     // Dimensions
     n: usize,
     k: usize = 0,
@@ -512,7 +464,8 @@ fn runSdpa(ctx: *const BenchCtx) void {
         ctx.head_dim,
         ctx.seq_len,
         ctx.scale,
-        .f32,
+        ctx.kv_type_k,
+        ctx.kv_type_v,
     );
     ctx.be.sync();
 }
@@ -888,7 +841,7 @@ fn benchKernel(kernel: Kernel, be: Backend, be_name: []const u8, n: usize, k: us
 
         .rope => {
             // n = total elements = n_heads * head_dim. Derive head layout.
-            const head_dim: usize = if (n >= default_n_heads * 2) n / default_n_heads else 128;
+            const head_dim: usize = if (n >= default_n_heads * 2) n / default_n_heads else default_head_dim;
             const n_heads: usize = if (head_dim > 0) n / head_dim else 1;
             const total = n_heads * head_dim;
 
@@ -912,24 +865,28 @@ fn benchKernel(kernel: Kernel, be: Backend, be_name: []const u8, n: usize, k: us
             emitJson("rope", be_name, median_ns, computeGbps(total_bytes, median_ns), computeGflops(total_flops, median_ns), iters);
         },
 
-        .sdpa => {
+        .sdpa, .sdpa_turbo4, .sdpa_turbo3, .sdpa_turbo2 => {
             // For SDPA: --n = n_heads, --k = head_dim. Sequence length from
             // a sensible default or derived from context.
             const n_heads = if (n > 0) n else default_n_heads;
-            const head_dim = if (k > 0) k else 128;
+            const head_dim = if (k > 0) k else default_head_dim;
             const seq_len = default_sdpa_seq_len;
             const nkv = n_heads; // no GQA for benchmark simplicity
             const kv_dim = nkv * head_dim;
             const total_q = n_heads * head_dim;
+            const total_kv_elems = seq_len * kv_dim;
+
+            // Determine KV cache types
+            const kv_type: KvQuantType = switch (kernel) {
+                .sdpa_turbo4 => .turbo4,
+                .sdpa_turbo3 => .turbo3,
+                .sdpa_turbo2 => .turbo2,
+                else => .f32,
+            };
+            const is_turbo = kv_type != .f32;
 
             const q = page.alloc(f32, total_q) catch return;
             defer page.free(q);
-            const keys_f32 = page.alloc(f32, seq_len * kv_dim) catch return;
-            defer page.free(keys_f32);
-            const values_f32 = page.alloc(f32, seq_len * kv_dim) catch return;
-            defer page.free(values_f32);
-            const keys = std.mem.sliceAsBytes(keys_f32);
-            const values = std.mem.sliceAsBytes(values_f32);
             const k_new = page.alloc(f32, kv_dim) catch return;
             defer page.free(k_new);
             const v_new = page.alloc(f32, kv_dim) catch return;
@@ -938,8 +895,6 @@ fn benchKernel(kernel: Kernel, be: Backend, be_name: []const u8, n: usize, k: us
             defer page.free(sdpa_out);
 
             fillSyntheticF32(q, sdpa_q_mod, sdpa_q_scale, sdpa_q_offset);
-            fillSyntheticF32(keys_f32, sdpa_k_mod, sdpa_kv_scale, sdpa_k_offset);
-            fillSyntheticF32(values_f32, sdpa_v_mod, sdpa_kv_scale, sdpa_v_offset);
             fillSyntheticF32(k_new, synthetic_x_mod, sdpa_kv_scale, sdpa_k_offset);
             fillSyntheticF32(v_new, sdpa_v_new_mod, sdpa_kv_scale, sdpa_v_offset);
 
@@ -948,6 +903,43 @@ fn benchKernel(kernel: Kernel, be: Backend, be_name: []const u8, n: usize, k: us
             // Dummy x/y for BenchCtx (unused by SDPA runner)
             const dummy = page.alloc(f32, 1) catch return;
             defer page.free(dummy);
+
+            var keys: []u8 = undefined;
+            var values: []u8 = undefined;
+
+            if (is_turbo) {
+                // Allocate byte-sized KV cache for turbo types
+                const kv_bytes = kv_quant.kvSliceBytes(kv_type, total_kv_elems);
+                const keys_buf = page.alloc(u8, kv_bytes) catch return;
+                defer page.free(keys_buf);
+                const values_buf = page.alloc(u8, kv_bytes) catch return;
+                defer page.free(values_buf);
+                @memset(keys_buf, 0);
+                @memset(values_buf, 0);
+
+                // Pre-fill KV cache with quantized synthetic data
+                const tmp = page.alloc(f32, kv_dim) catch return;
+                defer page.free(tmp);
+                for (0..seq_len - 1) |pos| {
+                    fillSyntheticF32(tmp, sdpa_k_mod + pos, sdpa_kv_scale, sdpa_k_offset);
+                    const byte_off = kv_quant.kvByteOffset(kv_type, pos * kv_dim);
+                    kv_quant.kvStore(keys_buf.ptr + byte_off, tmp.ptr, kv_dim, kv_type);
+                    fillSyntheticF32(tmp, sdpa_v_mod + pos, sdpa_kv_scale, sdpa_v_offset);
+                    kv_quant.kvStore(values_buf.ptr + byte_off, tmp.ptr, kv_dim, kv_type);
+                }
+                keys = keys_buf;
+                values = values_buf;
+            } else {
+                // f32 path: allocate as f32, reinterpret as bytes
+                const keys_f32 = page.alloc(f32, total_kv_elems) catch return;
+                defer page.free(keys_f32);
+                const values_f32 = page.alloc(f32, total_kv_elems) catch return;
+                defer page.free(values_f32);
+                fillSyntheticF32(keys_f32, sdpa_k_mod, sdpa_kv_scale, sdpa_k_offset);
+                fillSyntheticF32(values_f32, sdpa_v_mod, sdpa_kv_scale, sdpa_v_offset);
+                keys = std.mem.sliceAsBytes(keys_f32);
+                values = std.mem.sliceAsBytes(values_f32);
+            }
 
             var ctx = BenchCtx{
                 .be = be,
@@ -963,13 +955,27 @@ fn benchKernel(kernel: Kernel, be: Backend, be_name: []const u8, n: usize, k: us
                 .head_dim = head_dim,
                 .seq_len = seq_len - 1, // backend appends k_new at this pos
                 .scale = scale,
+                .kv_type_k = kv_type,
+                .kv_type_v = kv_type,
             };
             const median_ns = collectMedian(runSdpa, &ctx, iters);
-            // Bandwidth: Q[nh*hd] + K[sl*nkv*hd] + V[sl*nkv*hd] + out[nh*hd]
-            const total_bytes = (2 * total_q + 2 * seq_len * kv_dim) * @sizeOf(f32);
+
+            // Bandwidth: turbo reads fewer bytes from KV cache
+            const kv_bytes_total = if (is_turbo)
+                2 * kv_quant.kvSliceBytes(kv_type, total_kv_elems)
+            else
+                2 * total_kv_elems * @sizeOf(f32);
+            const total_bytes = 2 * total_q * @sizeOf(f32) + kv_bytes_total;
             // Flops: per head: 2*sl*hd (QK^T) + 2*sl (softmax approx) + 2*sl*hd (attn@V)
+            // Turbo adds WHT overhead: ~5*32 adds per 32-element block for dequant
             const total_flops = n_heads * (4 * seq_len * head_dim + 2 * seq_len);
-            emitJson("sdpa", be_name, median_ns, computeGbps(total_bytes, median_ns), computeGflops(total_flops, median_ns), iters);
+            const kernel_name = switch (kernel) {
+                .sdpa_turbo4 => "sdpa_turbo4",
+                .sdpa_turbo3 => "sdpa_turbo3",
+                .sdpa_turbo2 => "sdpa_turbo2",
+                else => "sdpa",
+            };
+            emitJson(kernel_name, be_name, median_ns, computeGbps(total_bytes, median_ns), computeGflops(total_flops, median_ns), iters);
         },
     }
 }
@@ -1043,15 +1049,11 @@ fn runE2e(allocator: std.mem.Allocator, cli: CliArgs) u8 {
     const quant = getQuantName(fmt);
 
     // ── Initialize backend ───────────────────────────────────────
-    var cpu_be = CpuBackend{};
-    var metal_be: if (builtin.os.tag == .macos) backend_mod.MetalBackend else void = undefined;
-    var vulkan_be: backend_mod.VulkanBackend = undefined;
-    var cuda_be: backend_mod.CudaBackend = undefined;
-    var rocm_be: backend_mod.RocmBackend = undefined;
-
-    const init_result = initBackend(allocator, cli.backend, &cpu_be, &metal_be, &vulkan_be, &cuda_be, &rocm_be);
-    const be = init_result.be;
-    const be_name = init_result.name;
+    var bs = BackendState{};
+    bs.init(allocator, cli.backend);
+    defer if (bs.pool) |*p| p.deinit();
+    const be = bs.be;
+    const be_name = bs.name;
 
     // ── Load tokenizer ───────────────────────────────────────────
     var tok = BpeTokenizer.init(allocator);
@@ -1104,27 +1106,16 @@ fn runE2eWithArch(
     model_name: []const u8,
     quant: []const u8,
 ) void {
-    switch (arch) {
-        inline .gemma3, .qwen35, .gpt_oss, .nemotron_h, .nemotron_nano, .glm4 => |a| {
-            if (comptime !a.isEnabled()) unreachable;
-            const ModelType = switch (a) {
-                .gemma3 => model_mod.Gemma3Model,
-                .qwen35 => model_mod.Qwen35Model,
-                .gpt_oss => model_mod.GptOssModel,
-                .nemotron_h => model_mod.NemotronHModel,
-                .nemotron_nano => model_mod.NemotronNanoModel,
-                .glm4 => model_mod.Glm4Model,
-            };
-            var mdl = ModelType.init(allocator, fmt, be, 0, .f32, null) catch |e| {
-                eprint("Error: failed to initialize {s}: {}\n", .{ arch.displayName(), e });
-                return;
-            };
-            defer mdl.deinit();
+    const ModelStorage = model_mod.ModelStorage;
+    var mdl = ModelStorage.initFromArch(arch, allocator, fmt, be, 0, .f32, .f32, null) catch |e| {
+        eprint("Error: failed to initialize {s}: {}\n", .{ arch.displayName(), e });
+        return;
+    };
+    defer mdl.deinit();
+    mdl.fixBlockAllocator();
 
-            var model_if = mdl.model();
-            runE2eInference(&model_if, tok, tok_kind, eos_id, gen_tokens, be_name, model_name, quant, arch);
-        },
-    }
+    var model_if = mdl.model();
+    runE2eInference(&model_if, tok, tok_kind, eos_id, gen_tokens, be_name, model_name, quant, arch);
 }
 
 /// Core e2e inference loop: encode prompt, prefill, generate, and emit JSON.
@@ -1253,15 +1244,11 @@ pub fn main() u8 {
     }
 
     // Initialize backend
-    var cpu_be = CpuBackend{};
-    var metal_be: if (builtin.os.tag == .macos) backend_mod.MetalBackend else void = undefined;
-    var vulkan_be: backend_mod.VulkanBackend = undefined;
-    var cuda_be: backend_mod.CudaBackend = undefined;
-    var rocm_be: backend_mod.RocmBackend = undefined;
-
-    const init_result = initBackend(allocator, cli.backend, &cpu_be, &metal_be, &vulkan_be, &cuda_be, &rocm_be);
-    const be = init_result.be;
-    const be_name = init_result.name;
+    var bs = BackendState{};
+    bs.init(allocator, cli.backend);
+    defer if (bs.pool) |*p| p.deinit();
+    const be = bs.be;
+    const be_name = bs.name;
 
     // Dispatch to kernel benchmark
     benchKernel(cli.kernel.?, be, be_name, cli.n, cli.k, cli.iters);

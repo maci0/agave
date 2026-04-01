@@ -58,6 +58,9 @@ pub const ModelInfo = struct {
     ctx_size: u32,
     kv_type_name: []const u8 = "F32",
     kv_bpe: f32 = 32.0,
+    /// Buffer for asymmetric KV type display string (e.g. "Q8_0-K / TURBO4-V").
+    kv_asym_name_buf: [64]u8 = .{0} ** 64,
+    kv_asym_name_len: usize = 0,
     rope_theta: f32,
     n_params: u64,
     n_experts: u32,

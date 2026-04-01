@@ -18,6 +18,29 @@ The cache grows linearly with sequence length. For a model with 30 layers, 5 KV 
 
 Quantizing the KV cache (e.g., to f16 or fp8) halves or quarters this cost with minimal quality loss.
 
+### KV Cache Quantization
+
+The KV cache can be quantized to reduce memory usage:
+
+```
+Format     Bits/elem  Memory for 30L × 5KV × 128d × 4096 tokens
+f32        32         600 MB
+f16        16         300 MB
+q8_0       8.5        159 MB
+turbo4     4.5         84 MB  (3.6x vs f16)
+turbo3     3.5         66 MB  (4.6x vs f16)
+turbo2     2.5         47 MB  (6.4x vs f16)
+```
+
+TurboQuant achieves the lowest KV cache sizes by applying a Walsh-Hadamard Transform before quantization (see [Chapter 4: Quantization](04-quantization.md#turboquant--kv-cache-quantization)).
+
+**Asymmetric K/V:** Keys and values have different sensitivity — value compression is nearly free while key compression drives quality loss. Agave supports independent types via `--cache-type-k` and `--cache-type-v`:
+
+```bash
+# q8_0 keys (high quality) + turbo4 values (3.6x compressed) = best of both worlds
+./agave model.gguf --cache-type-k q8_0 --cache-type-v turbo4 "prompt"
+```
+
 ## PagedAttention
 
 Allocating a **contiguous** (single continuous memory region) KV cache per **sequence** (a single request or conversation — the tokens for one prompt and its generated response) wastes memory when sequences have different lengths. PagedAttention breaks the cache into fixed-size **blocks** (default 16 positions):
@@ -102,6 +125,6 @@ Prefill buffers are allocated once at model init, sized to `chunk_size × dim`. 
 
 ---
 
-**In the code:** `src/kvcache/manager.zig` (KvCache, PagedKvCache, RadixTree), `src/kvcache/block_allocator.zig` (block allocation), `src/kvcache/tiered.zig` (VRAM + RAM + SSD tiers), `src/ops/kv_quant.zig` (KV cache quantization), `src/backend/kernels/cpu/sdpa_prefill.zig` (CPU prefill attention), `src/backend/kernels/metal/sdpa.metal` (`sdpa_prefill_fa2` — GPU prefill FA2)
+**In the code:** `src/kvcache/manager.zig` (KvCache, PagedKvCache, RadixTree), `src/kvcache/block_allocator.zig` (block allocation), `src/kvcache/tiered.zig` (VRAM + RAM + SSD tiers), `src/ops/kv_quant.zig` (KV cache quantization — f16, q8_0, fp8, nvfp4, TurboQuant), `src/backend/kernels/cpu/sdpa_prefill.zig` (CPU prefill attention), `src/backend/kernels/metal/sdpa.metal` (`sdpa_prefill_fa2` — GPU prefill FA2)
 
 **Next:** [Chapter 6: State Space Models →](06-state-space-models.md)

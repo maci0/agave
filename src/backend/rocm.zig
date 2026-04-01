@@ -29,8 +29,9 @@ const std = @import("std");
 const backend_mod = @import("backend.zig");
 const TensorData = backend_mod.TensorData;
 const DType = backend_mod.DType;
-const CpuBackend = backend_mod.CpuBackend;
+const CpuBackend = @import("cpu.zig").CpuBackend;
 const KvQuantType = backend_mod.KvQuantType;
+const kv_quant = @import("../ops/kv_quant.zig");
 
 // ── Embedded HSACO ────────────────────────────────────────────────
 
@@ -57,6 +58,13 @@ const block_size: u32 = 256;
 
 /// LDS bytes for block reductions (8 waves x 4 bytes).
 const reduction_smem: u32 = 32;
+
+/// TurboQuant 2-bit block: f16 norm (2 bytes) + 64 packed bits = 10 bytes.
+const turbo2_block_bytes: u32 = 10;
+/// TurboQuant 3-bit block: f16 norm (2 bytes) + 96 packed bits = 14 bytes.
+const turbo3_block_bytes: u32 = 14;
+/// TurboQuant 4-bit block: f16 norm (2 bytes) + 128 packed bits = 18 bytes.
+const turbo4_block_bytes: u32 = 18;
 
 /// Size of the buffer for retrieving the HIP device name.
 const device_name_buf_size: usize = 256;
@@ -138,6 +146,7 @@ pub const RocmBackend = struct {
     fn_gemv_mlx_q4: HipFunction = null,
     fn_rms_norm_multi: HipFunction = null,
     fn_sdpa: HipFunction = null,
+    fn_sdpa_turbo: HipFunction = null,
     fn_sigmoid_mul: HipFunction = null,
     fn_silu_mul: HipFunction = null,
     fn_deinterleave: HipFunction = null,
@@ -170,7 +179,7 @@ pub const RocmBackend = struct {
     kv_dev_cache: std.AutoHashMap(usize, KvDevCache) = undefined,
 
     /// Number of AMDGCN kernels loaded at init.
-    pub const n_kernels: u32 = 26;
+    pub const n_kernels: u32 = 27;
 
     /// Library name loaded via dlopen at init.
     pub const lib_name = "libamdhip64.so";
@@ -279,6 +288,7 @@ pub const RocmBackend = struct {
         self.fn_gemv_mlx_q4 = try self.getFunction(hipModuleGetFunction, "gemv_mlx_q4_kernel");
         self.fn_rms_norm_multi = try self.getFunction(hipModuleGetFunction, "rms_norm_multi_kernel"); // loaded but rmsNormMulti() panics — GPU kernel not yet validated
         self.fn_sdpa = try self.getFunction(hipModuleGetFunction, "sdpa_kernel");
+        self.fn_sdpa_turbo = try self.getFunction(hipModuleGetFunction, "sdpa_turbo_kernel");
         self.fn_sigmoid_mul = try self.getFunction(hipModuleGetFunction, "sigmoid_mul_kernel");
         self.fn_silu_mul = try self.getFunction(hipModuleGetFunction, "silu_mul_kernel");
         self.fn_deinterleave = try self.getFunction(hipModuleGetFunction, "deinterleave_kernel");
@@ -727,6 +737,11 @@ pub const RocmBackend = struct {
         self.launch(self.fn_deinterleave, grid, block_size, 0, &params);
     }
 
+    /// Split concatenated Q+gate per-head data into separate arrays.
+    pub fn splitQGate(_: *RocmBackend, _: [*]const f32, _: [*]f32, _: [*]f32, _: usize, _: usize) void {
+        @panic("ROCm splitQGate: no GPU kernel — add a ROCm kernel");
+    }
+
     /// Batched GEMV — sequential dispatch.
     pub fn gemvMulti(self: *RocmBackend, x: [*]const f32, ops: []const backend_mod.GemvOp, k: usize) void {
         for (ops) |op| self.gemv(x, op.w, op.y, op.n, k);
@@ -796,60 +811,150 @@ pub const RocmBackend = struct {
         return dptr;
     }
 
-    /// Fused scaled dot-product attention on GPU with KV cache append.
-    pub fn sdpa(self: *RocmBackend, q: [*]const f32, keys: []u8, values: []u8, k_new: [*]const f32, v_new: [*]const f32, output: [*]f32, nh: usize, nkv: usize, hd: usize, seq_len: usize, scale: f32, kv_type: @import("backend.zig").KvQuantType) void {
-        // Non-f32 KV types not yet supported on GPU.
-        if (kv_type != .f32) @panic("ROCm SDPA: quantized KV not supported — add GPU kernel or use --kv-type f32");
+    /// Return the turbo bit width for a KV quant type, or 0 for non-turbo types.
+    fn turboBits(kv_type: KvQuantType) u32 {
+        return switch (kv_type) {
+            .turbo2 => 2,
+            .turbo3 => 3,
+            .turbo4 => 4,
+            else => 0,
+        };
+    }
 
-        // Cast byte slices to f32 for GPU path.
-        const f32_keys: []f32 = @as([*]f32, @ptrCast(@alignCast(keys.ptr)))[0 .. keys.len / 4];
-        const f32_values: []f32 = @as([*]f32, @ptrCast(@alignCast(values.ptr)))[0 .. values.len / 4];
+    /// Return the byte size per 32-element turbo block, or 0 for non-turbo types.
+    fn turboBlockByteSize(kv_type: KvQuantType) u32 {
+        return switch (kv_type) {
+            .turbo2 => turbo2_block_bytes,
+            .turbo3 => turbo3_block_bytes,
+            .turbo4 => turbo4_block_bytes,
+            else => 0,
+        };
+    }
+
+    /// Fused scaled dot-product attention on GPU with KV cache append.
+    /// Supports f32 KV cache (existing fast path) and TurboQuant 2/3/4-bit
+    /// KV cache (native GPU dequant). KV append for turbo types uses CPU
+    /// quantization (once per token per layer, not the SDPA hot path).
+    /// Non-turbo quantized types (q8_0, f16, fp8, etc.) panic.
+    pub fn sdpa(self: *RocmBackend, q: [*]const f32, keys: []u8, values: []u8, k_new: [*]const f32, v_new: [*]const f32, output: [*]f32, nh: usize, nkv: usize, hd: usize, seq_len: usize, scale: f32, kv_type_k: @import("backend.zig").KvQuantType, kv_type_v: @import("backend.zig").KvQuantType) void {
+        const is_turbo_k = (kv_type_k == .turbo2 or kv_type_k == .turbo3 or kv_type_k == .turbo4);
+        const is_turbo_v = (kv_type_v == .turbo2 or kv_type_v == .turbo3 or kv_type_v == .turbo4);
+        const is_f32_k = (kv_type_k == .f32);
+        const is_f32_v = (kv_type_v == .f32);
+
+        // Non-turbo, non-f32 quantized KV: not supported on GPU
+        if (!is_f32_k and !is_turbo_k or !is_f32_v and !is_turbo_v)
+            @panic("ROCm SDPA: quantized KV type not supported — use f32 or turbo2/3/4");
 
         const kvd = nkv * hd;
-        const kvd_bytes = kvd * @sizeOf(f32);
         const sl = seq_len + 1;
 
-        // Get device KV cache buffers (grow incrementally to avoid pre-allocating full capacity)
-        const max_kv_bytes = f32_keys.len * @sizeOf(f32);
-        const needed_kv_bytes = sl * kvd_bytes;
-        var d_keys = self.getOrAllocKvBuf(@intFromPtr(f32_keys.ptr), needed_kv_bytes, max_kv_bytes);
-        var d_vals = self.getOrAllocKvBuf(@intFromPtr(f32_values.ptr), needed_kv_bytes, max_kv_bytes);
+        if (is_f32_k and is_f32_v) {
+            // ── Pure f32 path: GPU KV append + f32 SDPA kernel ──
 
-        // Get k_new/v_new from act_cache (still on GPU from RoPE/gemv)
-        const d_k_new = self.getInputBuf(k_new, kvd_bytes);
-        const d_v_new = self.getInputBuf(v_new, kvd_bytes);
+            const kvd_bytes = kvd * @sizeOf(f32);
 
-        // Append k_new/v_new at position seq_len via device-to-device copy
-        self.memcpyDtoD(d_keys + seq_len * kvd_bytes, d_k_new, kvd_bytes);
-        self.memcpyDtoD(d_vals + seq_len * kvd_bytes, d_v_new, kvd_bytes);
+            // Cast byte slices to f32 for GPU path.
+            const f32_keys: []f32 = @as([*]f32, @ptrCast(@alignCast(keys.ptr)))[0 .. keys.len / 4];
+            const f32_values: []f32 = @as([*]f32, @ptrCast(@alignCast(values.ptr)))[0 .. values.len / 4];
 
-        // Q is an activation buffer, output is an activation
-        var d_q = self.getInputBuf(q, nh * hd * @sizeOf(f32));
-        var d_out = self.getOutputBuf(output, nh * hd * @sizeOf(f32));
+            // Get device KV cache buffers (grow incrementally)
+            const max_kv_bytes = f32_keys.len * @sizeOf(f32);
+            const needed_kv_bytes = sl * kvd_bytes;
+            var d_keys = self.getOrAllocKvBuf(@intFromPtr(f32_keys.ptr), needed_kv_bytes, max_kv_bytes);
+            var d_vals = self.getOrAllocKvBuf(@intFromPtr(f32_values.ptr), needed_kv_bytes, max_kv_bytes);
 
-        var nh_u32: u32 = @intCast(nh);
-        var nkv_u32: u32 = @intCast(nkv);
-        var hd_u32: u32 = @intCast(hd);
-        var sl_u32: u32 = @intCast(sl);
-        var kvd_u32: u32 = @intCast(kvd);
-        var scale_f32: f32 = scale;
+            // Get k_new/v_new from act_cache (still on GPU from RoPE/gemv)
+            const d_k_new = self.getInputBuf(k_new, kvd_bytes);
+            const d_v_new = self.getInputBuf(v_new, kvd_bytes);
 
-        var params = [_]?*anyopaque{
-            @ptrCast(&d_q),
-            @ptrCast(&d_keys),
-            @ptrCast(&d_vals),
-            @ptrCast(&d_out),
-            @ptrCast(&nh_u32),
-            @ptrCast(&nkv_u32),
-            @ptrCast(&hd_u32),
-            @ptrCast(&sl_u32),
-            @ptrCast(&kvd_u32),
-            @ptrCast(&scale_f32),
-        };
+            // Append k_new/v_new at position seq_len via device-to-device copy
+            self.memcpyDtoD(d_keys + seq_len * kvd_bytes, d_k_new, kvd_bytes);
+            self.memcpyDtoD(d_vals + seq_len * kvd_bytes, d_v_new, kvd_bytes);
 
-        // LDS: sl floats for attention scores
-        const smem: u32 = sl_u32 * @sizeOf(f32);
-        self.launch(self.fn_sdpa, @intCast(nh), block_size, smem, &params);
+            // Q is an activation buffer, output is an activation
+            var d_q = self.getInputBuf(q, nh * hd * @sizeOf(f32));
+            var d_out = self.getOutputBuf(output, nh * hd * @sizeOf(f32));
+
+            var nh_u32: u32 = @intCast(nh);
+            var nkv_u32: u32 = @intCast(nkv);
+            var hd_u32: u32 = @intCast(hd);
+            var sl_u32: u32 = @intCast(sl);
+            var kvd_u32: u32 = @intCast(kvd);
+            var scale_f32: f32 = scale;
+
+            var params = [_]?*anyopaque{
+                @ptrCast(&d_q),
+                @ptrCast(&d_keys),
+                @ptrCast(&d_vals),
+                @ptrCast(&d_out),
+                @ptrCast(&nh_u32),
+                @ptrCast(&nkv_u32),
+                @ptrCast(&hd_u32),
+                @ptrCast(&sl_u32),
+                @ptrCast(&kvd_u32),
+                @ptrCast(&scale_f32),
+            };
+
+            // LDS: sl floats for attention scores
+            const smem: u32 = @as(u32, @intCast(sl)) * @sizeOf(f32);
+            self.launch(self.fn_sdpa, @intCast(nh), block_size, smem, &params);
+        } else {
+            // ── Turbo/mixed path: CPU KV append + GPU turbo SDPA kernel ──
+
+            // Sync GPU, then CPU-side KV quantization for append (once per token per layer)
+            self.flushActivations();
+            const k_off = kv_quant.kvByteOffset(kv_type_k, seq_len * kvd);
+            const v_off = kv_quant.kvByteOffset(kv_type_v, seq_len * kvd);
+            kv_quant.kvStore(keys.ptr + k_off, k_new, kvd, kv_type_k);
+            kv_quant.kvStore(values.ptr + v_off, v_new, kvd, kv_type_v);
+
+            // Upload KV cache to device — re-upload each token since CPU modified the data.
+            // Uses kv_dev_cache for persistent device allocation with incremental growth.
+            const k_cache_bytes = kv_quant.kvSliceBytes(kv_type_k, sl * kvd);
+            const v_cache_bytes = kv_quant.kvSliceBytes(kv_type_v, sl * kvd);
+            var d_k_cache = self.getOrAllocKvBuf(@intFromPtr(keys.ptr), k_cache_bytes, keys.len);
+            var d_v_cache = self.getOrAllocKvBuf(@intFromPtr(values.ptr), v_cache_bytes, values.len);
+            // Re-upload from host since CPU just wrote new quantized data
+            _ = self.hipMemcpy(@ptrFromInt(d_k_cache), @as(?*const anyopaque, @ptrCast(keys.ptr)), k_cache_bytes, hipMemcpyHostToDevice);
+            _ = self.hipMemcpy(@ptrFromInt(d_v_cache), @as(?*const anyopaque, @ptrCast(values.ptr)), v_cache_bytes, hipMemcpyHostToDevice);
+
+            // Q from act_cache, output as activation
+            var d_q = self.getInputBuf(q, nh * hd * @sizeOf(f32));
+            var d_out = self.getOutputBuf(output, nh * hd * @sizeOf(f32));
+
+            var nh_u32: u32 = @intCast(nh);
+            var nkv_u32: u32 = @intCast(nkv);
+            var hd_u32: u32 = @intCast(hd);
+            var sl_u32: u32 = @intCast(sl);
+            var kvd_u32: u32 = @intCast(kvd);
+            var scale_f32: f32 = scale;
+            var bits_k_u32: u32 = turboBits(kv_type_k);
+            var bits_v_u32: u32 = turboBits(kv_type_v);
+            var bb_k_u32: u32 = turboBlockByteSize(kv_type_k);
+            var bb_v_u32: u32 = turboBlockByteSize(kv_type_v);
+
+            var params = [_]?*anyopaque{
+                @ptrCast(&d_q),
+                @ptrCast(&d_k_cache),
+                @ptrCast(&d_v_cache),
+                @ptrCast(&d_out),
+                @ptrCast(&nh_u32),
+                @ptrCast(&nkv_u32),
+                @ptrCast(&hd_u32),
+                @ptrCast(&sl_u32),
+                @ptrCast(&kvd_u32),
+                @ptrCast(&scale_f32),
+                @ptrCast(&bits_k_u32),
+                @ptrCast(&bits_v_u32),
+                @ptrCast(&bb_k_u32),
+                @ptrCast(&bb_v_u32),
+            };
+
+            // LDS: sl floats for attention scores
+            const smem: u32 = @as(u32, @intCast(sl)) * @sizeOf(f32);
+            self.launch(self.fn_sdpa_turbo, @intCast(nh), block_size, smem, &params);
+        }
     }
 
     // ── Batched prefill ops (loop-of-single fallback) ──────────
@@ -872,10 +977,10 @@ pub const RocmBackend = struct {
     }
 
     /// Prefill SDPA — sequential loop over tokens, calling single-token sdpa.
-    pub fn sdpaPrefill(self: *RocmBackend, q: [*]const f32, k: [*]const f32, v: [*]const f32, kv_keys: []u8, kv_values: []u8, output: [*]f32, nh: usize, nkv: usize, hd: usize, prev_len: usize, n_tok: usize, scale: f32, kv_type: KvQuantType) void {
+    pub fn sdpaPrefill(self: *RocmBackend, q: [*]const f32, k: [*]const f32, v: [*]const f32, kv_keys: []u8, kv_values: []u8, output: [*]f32, nh: usize, nkv: usize, hd: usize, prev_len: usize, n_tok: usize, scale: f32, kv_type_k: KvQuantType, kv_type_v: KvQuantType) void {
         const kvd = nkv * hd;
         for (0..n_tok) |t| {
-            self.sdpa(q + t * nh * hd, kv_keys, kv_values, k + t * kvd, v + t * kvd, output + t * nh * hd, nh, nkv, hd, prev_len + t, scale, kv_type);
+            self.sdpa(q + t * nh * hd, kv_keys, kv_values, k + t * kvd, v + t * kvd, output + t * nh * hd, nh, nkv, hd, prev_len + t, scale, kv_type_k, kv_type_v);
         }
     }
 

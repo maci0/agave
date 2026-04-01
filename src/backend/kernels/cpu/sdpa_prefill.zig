@@ -10,22 +10,23 @@ const v8zero: V8 = @splat(0.0);
 const max_sdpa_seq_len = sdpa_mod.max_sdpa_seq_len;
 const max_head_dim = sdpa_mod.max_head_dim;
 
-pub fn sdpaPrefill(q: [*]const f32, k: [*]const f32, v: [*]const f32, kv_keys: []u8, kv_values: []u8, output: [*]f32, nh: usize, nkv: usize, hd: usize, prev_len: usize, n_tok: usize, scale: f32, kv_type: KvQuantType) void {
+pub fn sdpaPrefill(q: [*]const f32, k: [*]const f32, v: [*]const f32, kv_keys: []u8, kv_values: []u8, output: [*]f32, nh: usize, nkv: usize, hd: usize, prev_len: usize, n_tok: usize, scale: f32, kv_type_k: KvQuantType, kv_type_v: KvQuantType) void {
     const kvd = nkv * hd;
     // Append all n_tok keys/values to KV cache
     for (0..n_tok) |t| {
         const src_off = t * kvd;
         const dst_elem = (prev_len + t) * kvd;
-        const dst_byte = kv_quant.kvByteOffset(kv_type, dst_elem);
-        kv_quant.kvStore(kv_keys.ptr + dst_byte, k + src_off, kvd, kv_type);
-        kv_quant.kvStore(kv_values.ptr + dst_byte, v + src_off, kvd, kv_type);
+        const dst_byte_k = kv_quant.kvByteOffset(kv_type_k, dst_elem);
+        const dst_byte_v = kv_quant.kvByteOffset(kv_type_v, dst_elem);
+        kv_quant.kvStore(kv_keys.ptr + dst_byte_k, k + src_off, kvd, kv_type_k);
+        kv_quant.kvStore(kv_values.ptr + dst_byte_v, v + src_off, kvd, kv_type_v);
     }
-    if (kv_type == .f32) {
+    if (kv_type_k == .f32 and kv_type_v == .f32) {
         const f32_keys: [*]const f32 = @ptrCast(@alignCast(kv_keys.ptr));
         const f32_values: [*]const f32 = @ptrCast(@alignCast(kv_values.ptr));
         prefillF32(q, f32_keys, f32_values, output, nh, nkv, hd, prev_len, n_tok, scale);
     } else {
-        prefillQuant(q, kv_keys.ptr, kv_values.ptr, output, nh, nkv, hd, prev_len, n_tok, scale, kv_type);
+        prefillQuant(q, kv_keys.ptr, kv_values.ptr, output, nh, nkv, hd, prev_len, n_tok, scale, kv_type_k, kv_type_v);
     }
 }
 
@@ -84,7 +85,7 @@ fn prefillF32(q: [*]const f32, keys: [*]const f32, values: [*]const f32, output:
     }
 }
 
-fn prefillQuant(q: [*]const f32, keys: [*]const u8, values: [*]const u8, output: [*]f32, nh: usize, nkv: usize, hd: usize, prev_len: usize, n_tok: usize, scale: f32, kv_type: KvQuantType) void {
+fn prefillQuant(q: [*]const f32, keys: [*]const u8, values: [*]const u8, output: [*]f32, nh: usize, nkv: usize, hd: usize, prev_len: usize, n_tok: usize, scale: f32, kv_type_k: KvQuantType, kv_type_v: KvQuantType) void {
     const kvd = nkv * hd;
     const hpg = nh / nkv;
     for (0..n_tok) |t| {
@@ -98,14 +99,14 @@ fn prefillQuant(q: [*]const f32, keys: [*]const u8, values: [*]const u8, output:
             @memcpy(q_cached[0..hd], q[q_off..][0..hd]);
             var scores_buf: [max_sdpa_seq_len]f32 = undefined;
             for (0..sl) |s| {
-                const k_byte_off = kv_quant.kvByteOffset(kv_type, s * kvd + kvh * hd);
-                scores_buf[s] = kv_quant.kvDot(q_cached[0..hd].ptr, keys + k_byte_off, hd, kv_type) * scale;
+                const k_byte_off = kv_quant.kvByteOffset(kv_type_k, s * kvd + kvh * hd);
+                scores_buf[s] = kv_quant.kvDot(q_cached[0..hd].ptr, keys + k_byte_off, hd, kv_type_k) * scale;
             }
             softmax(scores_buf[0..sl]);
             @memset(output[out_off..][0..hd], 0);
             for (0..sl) |s| {
-                const v_byte_off = kv_quant.kvByteOffset(kv_type, s * kvd + kvh * hd);
-                kv_quant.kvMulAccum(output + out_off, scores_buf[s], values + v_byte_off, hd, kv_type);
+                const v_byte_off = kv_quant.kvByteOffset(kv_type_v, s * kvd + kvh * hd);
+                kv_quant.kvMulAccum(output + out_off, scores_buf[s], values + v_byte_off, hd, kv_type_v);
             }
         }
     }

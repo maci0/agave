@@ -88,15 +88,15 @@ pub fn sdpaHead(q: [*]const f32, keys: [*]const f32, values: [*]const f32, outpu
 }
 
 /// Process all heads sequentially with quantized KV data.
-pub fn sdpaQuantHeads(q: [*]const f32, keys: [*]const u8, values: [*]const u8, output: [*]f32, nh: usize, nkv: usize, hd: usize, sl: usize, scale: f32, kv_type: KvQuantType) void {
+pub fn sdpaQuantHeads(q: [*]const f32, keys: [*]const u8, values: [*]const u8, output: [*]f32, nh: usize, nkv: usize, hd: usize, sl: usize, scale: f32, kv_type_k: KvQuantType, kv_type_v: KvQuantType) void {
     for (0..nh) |h| {
-        sdpaQuantHead(q, keys, values, output, h, nh, nkv, hd, sl, scale, kv_type);
+        sdpaQuantHead(q, keys, values, output, h, nh, nkv, hd, sl, scale, kv_type_k, kv_type_v);
     }
 }
 
 /// Process a single query head with quantized KV cache.
-/// Uses kvDot for QK dot products and kvMulAccum for V accumulation.
-pub fn sdpaQuantHead(q: [*]const f32, keys: [*]const u8, values: [*]const u8, output: [*]f32, h: usize, nh: usize, nkv: usize, hd: usize, sl: usize, scale: f32, kv_type: KvQuantType) void {
+/// Uses kvDot for QK dot products (kv_type_k) and kvMulAccum for V accumulation (kv_type_v).
+pub fn sdpaQuantHead(q: [*]const f32, keys: [*]const u8, values: [*]const u8, output: [*]f32, h: usize, nh: usize, nkv: usize, hd: usize, sl: usize, scale: f32, kv_type_k: KvQuantType, kv_type_v: KvQuantType) void {
     const kvd = nkv * hd;
     const hpg = nh / nkv;
     const kvh = h / hpg;
@@ -108,20 +108,20 @@ pub fn sdpaQuantHead(q: [*]const f32, keys: [*]const u8, values: [*]const u8, ou
     var q_cached: [max_head_dim]f32 = undefined;
     @memcpy(q_cached[0..hd], q[q_base..][0..hd]);
 
-    // QK dot products using quantized KV
+    // QK dot products using quantized KV (key type)
     for (0..sl) |t| {
-        const k_byte_off = kv_quant.kvByteOffset(kv_type, t * kvd + kvh * hd);
-        scores_buf[t] = kv_quant.kvDot(q_cached[0..hd].ptr, keys + k_byte_off, hd, kv_type) * scale;
+        const k_byte_off = kv_quant.kvByteOffset(kv_type_k, t * kvd + kvh * hd);
+        scores_buf[t] = kv_quant.kvDot(q_cached[0..hd].ptr, keys + k_byte_off, hd, kv_type_k) * scale;
     }
 
     // Softmax
     softmax(scores_buf[0..sl]);
 
-    // V accumulation using quantized KV
+    // V accumulation using quantized KV (value type)
     @memset(output[q_base..][0..hd], 0);
     for (0..sl) |t| {
-        const v_byte_off = kv_quant.kvByteOffset(kv_type, t * kvd + kvh * hd);
-        kv_quant.kvMulAccum(output + q_base, scores_buf[t], values + v_byte_off, hd, kv_type);
+        const v_byte_off = kv_quant.kvByteOffset(kv_type_v, t * kvd + kvh * hd);
+        kv_quant.kvMulAccum(output + q_base, scores_buf[t], values + v_byte_off, hd, kv_type_v);
     }
 }
 

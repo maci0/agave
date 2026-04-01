@@ -29,7 +29,8 @@ const simd_width: usize = 8;
 ///   - be: Backend for SDPA dispatch (fast path) or softmax + sync (windowed fallback).
 ///   - window: If non-null, sliding window config: .start and .len.
 ///   - score_offset: Starting index in scores buffer (for prepended sink logits).
-///   - kv_type: KV cache quantization format.
+///   - kv_type_k: KV cache quantization format for keys.
+///   - kv_type_v: KV cache quantization format for values.
 pub fn scaledDotProductAttention(
     q: [*]const f32,
     kv_keys: []u8,
@@ -46,14 +47,15 @@ pub fn scaledDotProductAttention(
     be: Backend,
     window: ?struct { start: usize, len: usize },
     score_offset: usize,
-    kv_type: KvQuantType,
+    kv_type_k: KvQuantType,
+    kv_type_v: KvQuantType,
 ) void {
     const kvd = nkv * hd;
 
     // Fast path: no window, no score offset → delegate KV append + attention to backend.
     // All backends handle KV append + attention in one call (GPU: fused kernel, CPU: inline).
     if (window == null and score_offset == 0) {
-        be.sdpa(q, kv_keys, kv_values, k_buf.ptr, v_buf.ptr, attn_out, nh, nkv, hd, seq_len, scale, kv_type);
+        be.sdpa(q, kv_keys, kv_values, k_buf.ptr, v_buf.ptr, attn_out, nh, nkv, hd, seq_len, scale, kv_type_k, kv_type_v);
         return;
     }
 
@@ -61,10 +63,11 @@ pub fn scaledDotProductAttention(
     // Sync first to flush any pending GPU ops (no-op on CPU backend).
     be.sync();
 
-    // KV append: quantize k_buf/v_buf into cache
-    const kv_byte_off = kv_quant.kvByteOffset(kv_type, seq_len * kvd);
-    kv_quant.kvStore(kv_keys.ptr + kv_byte_off, k_buf.ptr, kvd, kv_type);
-    kv_quant.kvStore(kv_values.ptr + kv_byte_off, v_buf.ptr, kvd, kv_type);
+    // KV append: quantize k_buf/v_buf into cache (use respective types)
+    const k_byte_off = kv_quant.kvByteOffset(kv_type_k, seq_len * kvd);
+    const v_byte_off = kv_quant.kvByteOffset(kv_type_v, seq_len * kvd);
+    kv_quant.kvStore(kv_keys.ptr + k_byte_off, k_buf.ptr, kvd, kv_type_k);
+    kv_quant.kvStore(kv_values.ptr + v_byte_off, v_buf.ptr, kvd, kv_type_v);
     const sl = seq_len + 1;
 
     const win_start = if (window) |w| w.start else 0;
@@ -72,7 +75,7 @@ pub fn scaledDotProductAttention(
     const hpg = nh / nkv;
 
     // f32 fast path for windowed attention — use existing SIMD code
-    if (kv_type == .f32) {
+    if (kv_type_k == .f32 and kv_type_v == .f32) {
         const f32_keys: [*]const f32 = @ptrCast(@alignCast(kv_keys.ptr));
         const f32_values: [*]const f32 = @ptrCast(@alignCast(kv_values.ptr));
         const SimdVec = @Vector(simd_width, f32);
@@ -120,29 +123,29 @@ pub fn scaledDotProductAttention(
         return;
     }
 
-    // Quantized windowed fallback — use kvDot/kvMulAccum
+    // Quantized windowed fallback — use kvDot (kv_type_k) / kvMulAccum (kv_type_v)
     for (0..nh) |h| {
         const kvh = h / hpg;
         const q_base = h * hd;
 
-        // QK dot products
+        // QK dot products (key type)
         for (0..win_len) |wi| {
             const t = win_start + wi;
             const elem_off = t * kvd + kvh * hd;
-            const k_off = kv_quant.kvByteOffset(kv_type, elem_off);
-            scores[score_offset + wi] = kv_quant.kvDot(q + q_base, kv_keys.ptr + k_off, hd, kv_type) * scale;
+            const k_off = kv_quant.kvByteOffset(kv_type_k, elem_off);
+            scores[score_offset + wi] = kv_quant.kvDot(q + q_base, kv_keys.ptr + k_off, hd, kv_type_k) * scale;
         }
 
         const n_scores = score_offset + win_len;
         be.softmax(scores, n_scores);
 
-        // V accumulation
+        // V accumulation (value type)
         @memset(attn_out[q_base..][0..hd], 0);
         for (0..win_len) |wi| {
             const t = win_start + wi;
             const elem_off = t * kvd + kvh * hd;
-            const v_off = kv_quant.kvByteOffset(kv_type, elem_off);
-            kv_quant.kvMulAccum(attn_out + q_base, scores[score_offset + wi], kv_values.ptr + v_off, hd, kv_type);
+            const v_off = kv_quant.kvByteOffset(kv_type_v, elem_off);
+            kv_quant.kvMulAccum(attn_out + q_base, scores[score_offset + wi], kv_values.ptr + v_off, hd, kv_type_v);
         }
     }
 }
@@ -269,9 +272,11 @@ test "sdpa single head single token" {
     var attn_out = [_]f32{0} ** 4;
     var scores = [_]f32{0} ** 64;
 
-    const backend_mod = @import("../backend/backend.zig");
-    var cpu = backend_mod.CpuBackend{};
-    const be: Backend = .{ .cpu = &cpu };
+    const BackendState = @import("../backend/backend.zig").BackendState;
+    var bs = BackendState{};
+    bs.init(std.testing.allocator, .cpu);
+    defer if (bs.pool) |*p| p.deinit();
+    const be = bs.be;
 
     scaledDotProductAttention(
         &q,
@@ -289,6 +294,7 @@ test "sdpa single head single token" {
         be,
         null,
         0,
+        .f32,
         .f32,
     );
 
@@ -308,21 +314,23 @@ test "sdpa multi-token with GQA" {
     var attn_out = [_]f32{0} ** 8; // 2 heads × 4 dims
     var scores = [_]f32{0} ** 64;
 
-    const backend_mod = @import("../backend/backend.zig");
-    var cpu = backend_mod.CpuBackend{};
-    const be: Backend = .{ .cpu = &cpu };
+    const BackendState = @import("../backend/backend.zig").BackendState;
+    var bs = BackendState{};
+    bs.init(std.testing.allocator, .cpu);
+    defer if (bs.pool) |*p| p.deinit();
+    const be = bs.be;
 
     // Token 0: k=[1,0,0,0], v=[1,0,0,0]
     var k0 = [_]f32{ 1.0, 0.0, 0.0, 0.0 };
     var v0 = [_]f32{ 1.0, 0.0, 0.0, 0.0 };
     var q0 = [_]f32{ 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0 };
-    scaledDotProductAttention(&q0, kv_keys, kv_values, &k0, &v0, &attn_out, &scores, 2, 1, 4, 0, 1.0, be, null, 0, .f32);
+    scaledDotProductAttention(&q0, kv_keys, kv_values, &k0, &v0, &attn_out, &scores, 2, 1, 4, 0, 1.0, be, null, 0, .f32, .f32);
 
     // Token 1: k=[0,0,0,1], v=[0,1,0,0], q=[0,0,0,1,...] aligns with k1
     var k1 = [_]f32{ 0.0, 0.0, 0.0, 1.0 };
     var v1 = [_]f32{ 0.0, 1.0, 0.0, 0.0 };
     var q1 = [_]f32{ 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0 };
-    scaledDotProductAttention(&q1, kv_keys, kv_values, &k1, &v1, &attn_out, &scores, 2, 1, 4, 1, 1.0, be, null, 0, .f32);
+    scaledDotProductAttention(&q1, kv_keys, kv_values, &k1, &v1, &attn_out, &scores, 2, 1, 4, 1, 1.0, be, null, 0, .f32, .f32);
 
     // softmax([0, 1]) = [1/(1+e), e/(1+e)]
     const e = @exp(@as(f32, 1.0));
@@ -354,9 +362,11 @@ test "paged attention single head single token" {
     var attn_out = [_]f32{0} ** 4;
     var scores = [_]f32{0} ** 64;
 
-    const backend_mod = @import("../backend/backend.zig");
-    var cpu = backend_mod.CpuBackend{};
-    const be: Backend = .{ .cpu = &cpu };
+    const BackendState = @import("../backend/backend.zig").BackendState;
+    var bs = BackendState{};
+    bs.init(std.testing.allocator, .cpu);
+    defer if (bs.pool) |*p| p.deinit();
+    const be = bs.be;
 
     pagedAttention(
         &q,
@@ -378,5 +388,57 @@ test "paged attention single head single token" {
     // Single token: softmax([score]) = [1.0], output = V
     for (0..4) |i| {
         try std.testing.expectApproxEqAbs(@as(f32, 0.5), attn_out[i], 0.01);
+    }
+}
+
+test "sdpa asymmetric kv types" {
+    // Test asymmetric quantization: f32 keys + q8_0 values.
+    // With seq_len=0 (first token), attention should return V (single position).
+    const hd = 32; // Must be multiple of 32 for q8_0 block alignment
+    const kvd = hd;
+    const max_sl = 4;
+
+    // Allocate KV cache buffers: keys as f32, values as q8_0
+    const k_bytes = kv_quant.kvSliceBytes(.f32, max_sl * kvd);
+    const v_bytes = kv_quant.kvSliceBytes(.q8_0, max_sl * kvd);
+    var kv_keys_buf: [k_bytes]u8 = .{0} ** k_bytes;
+    var kv_values_buf: [v_bytes]u8 = .{0} ** v_bytes;
+
+    var k_buf = [_]f32{1.0} ** hd;
+    var v_buf: [hd]f32 = undefined;
+    for (0..hd) |i| v_buf[i] = @as(f32, @floatFromInt(i)) * 0.1;
+    var q = [_]f32{1.0} ** hd;
+    var attn_out: [hd]f32 = .{0} ** hd;
+    var scores = [_]f32{0} ** 64;
+
+    const BackendState = @import("../backend/backend.zig").BackendState;
+    var bs = BackendState{};
+    bs.init(std.testing.allocator, .cpu);
+    defer if (bs.pool) |*p| p.deinit();
+    const be = bs.be;
+
+    scaledDotProductAttention(
+        &q,
+        &kv_keys_buf,
+        &kv_values_buf,
+        &k_buf,
+        &v_buf,
+        &attn_out,
+        &scores,
+        1, // nh
+        1, // nkv
+        hd,
+        0, // seq_len
+        1.0,
+        be,
+        null,
+        0,
+        .f32, // keys stored as f32
+        .q8_0, // values stored as q8_0
+    );
+
+    // Single token: softmax([score]) = [1.0], output ≈ V (with q8_0 precision loss)
+    for (0..hd) |i| {
+        try std.testing.expectApproxEqAbs(v_buf[i], attn_out[i], 0.05);
     }
 }

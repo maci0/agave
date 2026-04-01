@@ -92,6 +92,7 @@ from rich import box
 
 AGAVE_ROOT = Path(__file__).resolve().parent.parent
 AGAVE_BIN = AGAVE_ROOT / "zig-out" / "bin" / "agave"
+AGAVE_BENCH_BIN = AGAVE_ROOT / "zig-out" / "bin" / "agave-bench"
 DEFAULT_WEIGHTS_DIR = AGAVE_ROOT / "models"
 GOLDEN_DIR = AGAVE_ROOT / "tests" / "golden_outputs"
 DEFAULT_PROMPT = "What is 2+2? Answer briefly."
@@ -129,6 +130,9 @@ QUANT_PATTERNS = [
 # Files to skip during GGUF discovery (not inference models)
 SKIP_GGUF_PREFIXES = ["mmproj-", "mmproj_"]
 
+# KV cache quantization types available for testing
+KV_TYPES = ["f16", "q8_0", "int8", "fp8", "nvfp4", "turbo2", "turbo3", "turbo4"]
+
 # Backends to try per platform
 PLATFORM_BACKENDS: dict[str, list[str]] = {
     "Darwin": ["metal", "cpu", "vulkan"],
@@ -136,6 +140,43 @@ PLATFORM_BACKENDS: dict[str, list[str]] = {
 }
 
 console = Console()
+
+
+@dataclass
+class KvConfig:
+    """KV cache quantization configuration for a test run."""
+    type_k: str  # Key cache type (e.g., "turbo4", "q8_0", "f16")
+    type_v: str  # Value cache type
+
+    @property
+    def label(self) -> str:
+        if self.type_k == self.type_v:
+            return self.type_k
+        return f"{self.type_k}-K/{self.type_v}-V"
+
+    @property
+    def is_default(self) -> bool:
+        return self.type_k == "" and self.type_v == ""
+
+    def cli_flags(self) -> list[str]:
+        """Return CLI flags for this KV config."""
+        if self.is_default:
+            return []
+        if self.type_k == self.type_v:
+            return ["--kv-type", self.type_k]
+        return ["--cache-type-k", self.type_k, "--cache-type-v", self.type_v]
+
+    @staticmethod
+    def default() -> "KvConfig":
+        return KvConfig(type_k="", type_v="")
+
+    @staticmethod
+    def parse_asym(spec: str) -> "KvConfig":
+        """Parse 'k_type:v_type' spec."""
+        parts = spec.split(":")
+        if len(parts) != 2:
+            raise ValueError(f"Invalid asymmetric KV spec '{spec}', expected 'K:V' (e.g., q8_0:turbo4)")
+        return KvConfig(type_k=parts[0], type_v=parts[1])
 
 
 # ---------------------------------------------------------------------------
@@ -196,6 +237,8 @@ class RunResult:
     exit_code: int = 0
     command: str = ""
     correctness: str = ""  # "match", "mismatch", "no_golden", ""
+    kv_type_k: str = ""  # KV key cache type (empty = default f16)
+    kv_type_v: str = ""  # KV value cache type (empty = default f16)
 
 
 @dataclass
@@ -516,6 +559,7 @@ def run_inference(
     max_tokens: int,
     timeout: int,
     extra_flags: list[str] | None = None,
+    kv_config: KvConfig | None = None,
 ) -> RunResult:
     """Run inference with --json for structured output parsing."""
     cmd = [
@@ -525,6 +569,8 @@ def run_inference(
         "--max-tokens", str(max_tokens),
         "--json",
     ]
+    if kv_config and not kv_config.is_default:
+        cmd.extend(kv_config.cli_flags())
     if extra_flags:
         cmd.extend(extra_flags)
     cmd.append(prompt)
@@ -537,6 +583,8 @@ def run_inference(
         status="error",
         model_size_mb=model.size_mb,
         command=" ".join(cmd),
+        kv_type_k=kv_config.type_k if kv_config else "",
+        kv_type_v=kv_config.type_v if kv_config else "",
     )
 
     try:
@@ -630,7 +678,7 @@ def _parse_stats_fallback(output: str, result: RunResult) -> None:
 
 
 def run_bench(backend: str, timeout: int) -> BenchResult:
-    cmd = [str(AGAVE_BIN), "--bench", "--backend", backend]
+    cmd = [str(AGAVE_BENCH_BIN), "gemv_f32", "--backend=" + backend]
     result = BenchResult(backend=backend, status="error")
 
     try:
@@ -688,12 +736,16 @@ class SmokeResult:
     error_message: str = ""
     exit_code: int = 0
     signal: int = 0  # non-zero if killed by signal (e.g. SIGSEGV=11)
+    kv_type_k: str = ""  # KV key cache type (empty = default)
+    kv_type_v: str = ""  # KV value cache type (empty = default)
 
 
 def run_smoke(
     model: ModelInfo,
     backend: str,
     timeout: int,
+    kv_type_k: str = "",
+    kv_type_v: str = "",
 ) -> SmokeResult:
     """Run a quick 1-token inference test to catch crashes and 0-token failures.
 
@@ -710,12 +762,16 @@ def run_smoke(
         "--max-tokens", "4",
         "--json",
         "-q",
-        "Hello",
     ]
+    if kv_type_k and kv_type_v and kv_type_k != kv_type_v:
+        cmd.extend(["--cache-type-k", kv_type_k, "--cache-type-v", kv_type_v])
+    elif kv_type_k:
+        cmd.extend(["--kv-type", kv_type_k])
+    cmd.append("Hello")
 
     result = SmokeResult(
         model=model.name, arch=model.arch, quant=model.quant, backend=backend,
-        status="error",
+        status="error", kv_type_k=kv_type_k, kv_type_v=kv_type_v,
     )
 
     try:
@@ -1028,6 +1084,8 @@ def print_inference_table(results: list[RunResult], show_golden: bool = False) -
     if not results:
         return
 
+    has_kv = any(r.kv_type_k for r in results)
+
     table = Table(
         title="Inference Results",
         box=box.ROUNDED,
@@ -1039,6 +1097,8 @@ def print_inference_table(results: list[RunResult], show_golden: bool = False) -
     table.add_column("Architecture", width=14)
     table.add_column("Quant", width=12)
     table.add_column("Backend", width=8)
+    if has_kv:
+        table.add_column("KV Cache", width=16)
     table.add_column("Size", justify="right", width=8)
     table.add_column("Load", justify="right", width=8)
     table.add_column("TTFT", justify="right", width=9)
@@ -1049,27 +1109,42 @@ def print_inference_table(results: list[RunResult], show_golden: bool = False) -
         table.add_column("Golden", justify="center", width=10)
 
     for r in results:
+        kv_label = ""
+        if r.kv_type_k:
+            if r.kv_type_k == r.kv_type_v:
+                kv_label = r.kv_type_k
+            else:
+                kv_label = f"{r.kv_type_k}-K/{r.kv_type_v}-V"
+
         row = []
         if r.status == "pass":
             row = [
                 status_markup(r.status),
                 r.arch, r.quant, r.backend,
+            ]
+            if has_kv:
+                row.append(kv_label or "[dim]f16[/]")
+            row.extend([
                 f"{r.model_size_mb:.0f} MB",
                 fmt_ms(r.load_time_ms),
                 fmt_ms(r.time_to_first_token_ms),
                 fmt_tps(r.tokens_per_sec),
                 str(r.tokens_generated),
                 fmt_ms(r.total_time_ms),
-            ]
+            ])
         else:
             err = _truncate(r.error_message, 40) if r.error_message else ""
             row = [
                 status_markup(r.status),
                 r.arch, r.quant, r.backend,
+            ]
+            if has_kv:
+                row.append(kv_label or "[dim]f16[/]")
+            row.extend([
                 f"{r.model_size_mb:.0f} MB",
                 "[dim]-[/]", "[dim]-[/]", "[dim]-[/]", "[dim]-[/]",
                 f"[dim]{err}[/]" if err else "[dim]-[/]",
-            ]
+            ])
         if show_golden:
             row.append(correctness_markup(r.correctness))
         table.add_row(*row)
@@ -1365,6 +1440,10 @@ def build_parser() -> argparse.ArgumentParser:
                      help="Also run zig build test (unit tests)")
     sel.add_argument("--no-bench", action="store_true",
                      help="Skip synthetic benchmarks")
+    sel.add_argument("--kv-type", nargs="+", metavar="TYPE",
+                     help=f"KV cache types to test (e.g., turbo4 q8_0). Available: {', '.join(KV_TYPES)}")
+    sel.add_argument("--kv-asym", nargs="+", metavar="K:V",
+                     help="Asymmetric K/V type combos (e.g., q8_0:turbo4 f16:turbo3)")
 
     cfg = p.add_argument_group("Configuration")
     cfg.add_argument("--model-dir", type=Path, default=DEFAULT_WEIGHTS_DIR,
@@ -1491,8 +1570,19 @@ def main() -> int:
         console.print("[dim]Download models or specify --model-dir / --model[/]")
         return 1
 
+    # Build KV configs to test
+    kv_configs: list[KvConfig] = [KvConfig.default()]
+    if args.kv_type:
+        for kt in args.kv_type:
+            kv_configs.append(KvConfig(type_k=kt, type_v=kt))
+    if args.kv_asym:
+        for spec in args.kv_asym:
+            kv_configs.append(KvConfig.parse_asym(spec))
+
     # Test matrix
-    test_matrix: list[tuple[ModelInfo, str]] = [(m, be) for m in models for be in backends]
+    test_matrix: list[tuple[ModelInfo, str, KvConfig]] = [
+        (m, be, kv) for m in models for be in backends for kv in kv_configs
+    ]
     total_runs = len(test_matrix) * args.repeat
     do_bench = not args.correctness_only and not args.no_bench and not args.model_info_only
     do_inference = not args.bench_only and not args.model_info_only
@@ -1503,13 +1593,18 @@ def main() -> int:
     if do_model_info:
         console.print(f"Model info:      [bold]{len(models)}[/] models (metadata validation)")
     if do_smoke:
-        console.print(f"Smoke tests:     [bold]{len(test_matrix)}[/] ({len(models)} models x {len(backends)} backends)")
+        console.print(f"Smoke tests:     [bold]{len(test_matrix)}[/] ({len(models)} models x {len(backends)} backends" +
+                      (f" x {len(kv_configs)} KV configs)" if len(kv_configs) > 1 else ")"))
     if do_inference:
         run_label = f"{total_runs}" if args.repeat > 1 else f"{len(test_matrix)}"
         console.print(f"Inference tests: [bold]{run_label}[/] ({len(models)} models x {len(backends)} backends" +
+                      (f" x {len(kv_configs)} KV configs" if len(kv_configs) > 1 else "") +
                       (f" x {args.repeat} repeats)" if args.repeat > 1 else ")"))
     if do_bench:
         console.print(f"Synthetic benchmarks: [bold]{len(backends)}[/] backends")
+    if len(kv_configs) > 1:
+        kv_labels = [kv.label for kv in kv_configs if not kv.is_default]
+        console.print(f"KV types:        [bold]{', '.join(kv_labels)}[/]")
     if args.zig_test:
         console.print("Zig unit tests: [bold]enabled[/]")
     if args.check_golden:
@@ -1525,12 +1620,13 @@ def main() -> int:
             for m in models:
                 console.print(f"  [dim]agave[/] {m.path.name} [dim]--backend {backends[0]} --json --model-info[/]")
         if do_inference:
-            for m, be in test_matrix:
+            for m, be, kv in test_matrix:
                 repeat_str = f" [dim](x{args.repeat})[/]" if args.repeat > 1 else ""
-                console.print(f"  [dim]agave[/] {m.path.name} [dim]--backend[/] {be} [dim]--json -n[/] {args.max_tokens}{repeat_str}")
+                kv_str = f" [dim]{' '.join(kv.cli_flags())}[/]" if not kv.is_default else ""
+                console.print(f"  [dim]agave[/] {m.path.name} [dim]--backend[/] {be}{kv_str} [dim]--json -n[/] {args.max_tokens}{repeat_str}")
         if do_bench:
             for be in backends:
-                console.print(f"  [dim]agave[/] --bench [dim]--backend[/] {be}")
+                console.print(f"  [dim]agave-bench[/] gemv_f32 [dim]--backend=[/]{be}")
         if args.zig_test:
             console.print("  [dim]zig build test[/]")
         return 0
@@ -1601,10 +1697,12 @@ def main() -> int:
         console.print()
         console.print("[bold]Running smoke tests (1-token inference)...[/]")
         smoke_timeout = min(args.timeout, 60)  # Smoke tests should be fast
-        for model, backend in test_matrix:
-            label = f"{model.short_name} on {backend}"
+        for model, backend, kv in test_matrix:
+            kv_label = f" [{kv.label}]" if not kv.is_default else ""
+            label = f"{model.short_name} on {backend}{kv_label}"
             with console.status(f"  [bold]{label}...[/]"):
-                sr = run_smoke(model, backend, smoke_timeout)
+                sr = run_smoke(model, backend, smoke_timeout,
+                               kv_type_k=kv.type_k, kv_type_v=kv.type_v)
             smoke_results.append(sr)
 
             if sr.status == "pass":
@@ -1662,19 +1760,21 @@ def main() -> int:
         ) as progress:
             task = progress.add_task("Inference", total=total_runs)
 
-            for model, backend in test_matrix:
-                key = (model.arch, model.quant, backend)
+            for model, backend, kv in test_matrix:
+                kv_label = f" [{kv.label}]" if not kv.is_default else ""
+                key = (model.arch, model.quant, backend, kv.label)
                 if key not in repeat_stats:
                     repeat_stats[key] = RepeatStats()
 
                 for run_idx in range(args.repeat):
-                    label = f"{model.short_name} on {backend}"
+                    label = f"{model.short_name} on {backend}{kv_label}"
                     if args.repeat > 1:
                         label += f" [{run_idx + 1}/{args.repeat}]"
                     progress.update(task, description=f"[bold]{label}[/]")
 
                     result = run_inference(
                         model, backend, args.prompt, args.max_tokens, args.timeout,
+                        kv_config=kv,
                     )
 
                     # Golden checks

@@ -206,7 +206,7 @@ Value = (-1)^0 × 1.875 × 2^2 = 7.5
 **Practical usage in Agave**:
 
 - **E4M3**: Weight quantization, gradient accumulation
-- **E5M2**: KV cache quantization (default: f16, but FP8 E5M2 option available via `--kv-type fp8_e5m2`)
+- **E5M2**: KV cache quantization (default: q8_0-K/turbo4-V, FP8 E5M2 option available via `--kv-type fp8_e5m2`)
 - **int8**: Alternative to FP8 for KV cache (simpler, slightly less accurate)
 
 ### Why FP8 instead of int8?
@@ -230,6 +230,65 @@ Value = (-1)^0 × 1.875 × 2^2 = 7.5
 - FP8 E5M2: Activations with wide dynamic range
 
 **NVFP4, MXFP4**: 4-bit microscaled floating-point. 16-element blocks with FP8 scales. Hardware-native on NVIDIA Blackwell and newer.
+
+## TurboQuant — KV Cache Quantization
+
+TurboQuant ([arXiv 2504.19874](https://arxiv.org/abs/2504.19874), ICLR 2026) is a KV cache-specific quantization method that achieves 3.6-6.4x compression vs f16 with minimal quality loss. Unlike weight quantization formats (Q4_0, Q8_0), TurboQuant is applied at runtime to the KV cache during inference.
+
+### How It Works
+
+Traditional KV cache quantization (q8_0, fp8) applies simple per-block scaling. TurboQuant adds a **Walsh-Hadamard Transform (WHT)** preprocessing step that gaussianizes the distribution, then uses an optimal **Lloyd-Max codebook** for scalar quantization:
+
+```
+Quantize:  normalize → WHT → codebook lookup → pack
+Dequantize: unpack → codebook → inverse WHT → rescale
+```
+
+The WHT is a deterministic rotation (like a Fourier transform but with only additions and subtractions) that makes each coordinate approximately N(0,1), regardless of the original distribution. This lets us use a single fixed codebook — no per-model calibration needed.
+
+### Format Family
+
+| Format | Bits/elem | Compression vs f16 | PPL impact |
+|--------|-----------|-------------------|-----------|
+| turbo4 | 4.5 | 3.6x | +0.23% |
+| turbo3 | 3.5 | 4.6x | +1.06% |
+| turbo2 | 2.5 | 6.4x | +6.48% |
+
+### Asymmetric K/V
+
+A key insight: **V compression is nearly free** — all quality degradation comes from K compression. Agave supports independent K/V cache types:
+
+```bash
+# Best quality: high-precision K + compressed V
+./agave model.gguf --cache-type-k q8_0 --cache-type-v turbo4 "prompt"
+
+# Maximum compression
+./agave model.gguf --cache-type-k turbo3 --cache-type-v turbo2 "prompt"
+
+# Symmetric (shorthand via --kv-type)
+./agave model.gguf --kv-type turbo4 "prompt"
+```
+
+### Block Layout
+
+Each 32-element block stores: `[f16 norm (2B)] [packed codebook indices]`
+
+```
+turbo4: 2B norm + 16B nibbles = 18B per 32 elements
+turbo3: 2B norm + 12B packed 3-bit = 14B per 32 elements
+turbo2: 2B norm + 8B packed 2-bit = 10B per 32 elements
+```
+
+### When to Use TurboQuant
+
+**Recommended for:**
+- Long-context inference (32K+ tokens) where KV cache dominates memory
+- Serving multiple concurrent requests (KV cache × batch size)
+- Memory-constrained devices (laptops, phones)
+
+**Not recommended for:**
+- Short prompts where KV cache is small relative to weights
+- Latency-critical applications (WHT adds ~7-10% decode overhead)
 
 ## Key Principle
 
@@ -264,7 +323,9 @@ For a 2560×2560 matrix, that's 6.5M **multiply-accumulates** (multiply two numb
 | Maximum compression | Q2_K, IQ4_XS | Smallest memory footprint |
 | CPU inference | IQ4_NL, Q4_0, Q5_K | Optimized SIMD kernels |
 | GPU with limited VRAM | Q4_K, FP8 E4M3 | Good quality/size tradeoff |
-| KV cache | f16, FP8 E5M2 | Fast decode, minimal quality loss |
+| KV cache (default) | q8_0-K + turbo4-V | Zero quality loss, 2x compression |
+| KV cache (max compress) | turbo3, turbo4 | 3.6-4.6x compression, ~1% PPL |
+| KV cache (max quality) | f16, FP8 E5M2 | Fast decode, no transform overhead |
 | Reference accuracy | f32 | Full precision |
 
 **Quality hierarchy:** `f32 > bf16 > FP8 > Q6_K > Q5_K > Q4_K > Q4_0 > IQ4_NL > Q3_K > Q2_K`

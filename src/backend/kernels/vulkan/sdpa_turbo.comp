@@ -1,0 +1,358 @@
+// TurboQuant SDPA — FlashAttention-2 with native TurboQuant KV dequantization.
+//
+// Same algorithm as sdpa.comp but reads K/V from packed TurboQuant blocks
+// instead of f32 arrays. Dequantization happens in-register per 32-element block.
+//
+// bits_k/bits_v: 0 = f32 passthrough, 2/3/4 = TurboQuant bit width.
+// block_bytes_k/block_bytes_v: byte size per 32-element turbo block.
+//
+// Mixed types supported: f32-K + turbo-V, turbo-K + f32-V, or both turbo.
+
+#version 450
+#extension GL_KHR_shader_subgroup_arithmetic : require
+
+layout(local_size_x = 256) in;
+
+layout(set = 0, binding = 0) readonly buffer Q     { float q_data[];   };
+layout(set = 0, binding = 1) readonly buffer K_raw { uint k_raw[];     };
+layout(set = 0, binding = 2) readonly buffer V_raw { uint v_raw[];     };
+layout(set = 0, binding = 3) writeonly buffer O    { float out_data[]; };
+
+layout(push_constant) uniform Params {
+    uint nh;
+    uint nkv;
+    uint hd;
+    uint sl;
+    float scale;
+    uint bits_k;         // 0=f32, 2/3/4=turbo
+    uint bits_v;         // 0=f32, 2/3/4=turbo
+    uint block_bytes_k;  // bytes per 32-element turbo block (K)
+    uint block_bytes_v;  // bytes per 32-element turbo block (V)
+};
+
+const uint SDPA_MAX_SEQ_LEN = 4096;
+const uint SDPA_MAX_HEAD_DIM = 256;
+const uint KV_BLOCK_SIZE = 16;
+
+shared float scores[SDPA_MAX_SEQ_LEN];
+shared float q_local[SDPA_MAX_HEAD_DIM];
+shared float out_acc[SDPA_MAX_HEAD_DIM];
+shared float kv_block_data[KV_BLOCK_SIZE * SDPA_MAX_HEAD_DIM];
+shared float shared_vals[8];
+
+// ── Lloyd-Max codebook constants ────────────────────────────────
+
+const float lloyd_max_2bit[4] = float[4](-1.510, -0.453, 0.453, 1.510);
+const float lloyd_max_3bit[8] = float[8](-2.152, -1.344, -0.756, -0.245, 0.245, 0.756, 1.344, 2.152);
+const float lloyd_max_4bit[16] = float[16](-2.733, -2.069, -1.618, -1.256, -0.942, -0.657, -0.388, -0.128, 0.128, 0.388, 0.657, 0.942, 1.256, 1.618, 2.069, 2.733);
+
+// ── In-place 32-point Walsh-Hadamard Transform ─────────────────
+
+void wht32(inout float buf[32]) {
+    for (int stride = 1; stride <= 16; stride *= 2) {
+        for (int i = 0; i < 32; i += stride * 2) {
+            for (int j = 0; j < stride; j++) {
+                float a = buf[i + j] + buf[i + j + stride];
+                float b = buf[i + j] - buf[i + j + stride];
+                buf[i + j] = a;
+                buf[i + j + stride] = b;
+            }
+        }
+    }
+}
+
+// ── Byte read helpers ───────────────────────────────────────────
+// K and V buffers are uint (u32) arrays. Read individual bytes by
+// word offset + shift, matching the pattern in gemv_q8_0.comp.
+
+uint k_byte(uint byte_off) {
+    uint word = k_raw[byte_off / 4u];
+    return (word >> ((byte_off % 4u) * 8u)) & 0xFFu;
+}
+
+uint v_byte(uint byte_off) {
+    uint word = v_raw[byte_off / 4u];
+    return (word >> ((byte_off % 4u) * 8u)) & 0xFFu;
+}
+
+// Read f16 (2 bytes, little-endian) from K buffer.
+float k_read_f16(uint byte_off) {
+    uint bits16 = k_byte(byte_off) | (k_byte(byte_off + 1u) << 8u);
+    return unpackHalf2x16(bits16).x;
+}
+
+// Read f16 from V buffer.
+float v_read_f16(uint byte_off) {
+    uint bits16 = v_byte(byte_off) | (v_byte(byte_off + 1u) << 8u);
+    return unpackHalf2x16(bits16).x;
+}
+
+// Read f32 element from K buffer at element index (f32 passthrough).
+float k_read_f32_elem(uint elem_idx) {
+    uint byte_off = elem_idx * 4u;
+    if ((byte_off & 3u) == 0u) {
+        return uintBitsToFloat(k_raw[byte_off / 4u]);
+    }
+    uint b0 = k_byte(byte_off);
+    uint b1 = k_byte(byte_off + 1u);
+    uint b2 = k_byte(byte_off + 2u);
+    uint b3 = k_byte(byte_off + 3u);
+    return uintBitsToFloat(b0 | (b1 << 8u) | (b2 << 16u) | (b3 << 24u));
+}
+
+// Read f32 element from V buffer at element index (f32 passthrough).
+float v_read_f32_elem(uint elem_idx) {
+    uint byte_off = elem_idx * 4u;
+    if ((byte_off & 3u) == 0u) {
+        return uintBitsToFloat(v_raw[byte_off / 4u]);
+    }
+    uint b0 = v_byte(byte_off);
+    uint b1 = v_byte(byte_off + 1u);
+    uint b2 = v_byte(byte_off + 2u);
+    uint b3 = v_byte(byte_off + 3u);
+    return uintBitsToFloat(b0 | (b1 << 8u) | (b2 << 16u) | (b3 << 24u));
+}
+
+// ── Turbo dequant: K buffer ─────────────────────────────────────
+
+void turbo_dequant_k(uint byte_offset, uint bits_w, out float dst[32]) {
+    float norm = k_read_f16(byte_offset);
+    if (norm == 0.0) {
+        for (int i = 0; i < 32; i++) dst[i] = 0.0;
+        return;
+    }
+    uint p = byte_offset + 2u;
+
+    if (bits_w == 4u) {
+        for (int i = 0; i < 16; i++) {
+            uint b = k_byte(p + uint(i));
+            dst[i * 2]     = lloyd_max_4bit[b & 0xFu];
+            dst[i * 2 + 1] = lloyd_max_4bit[b >> 4u];
+        }
+    } else if (bits_w == 2u) {
+        for (int i = 0; i < 8; i++) {
+            uint b = k_byte(p + uint(i));
+            dst[i * 4]     = lloyd_max_2bit[b & 0x3u];
+            dst[i * 4 + 1] = lloyd_max_2bit[(b >> 2u) & 0x3u];
+            dst[i * 4 + 2] = lloyd_max_2bit[(b >> 4u) & 0x3u];
+            dst[i * 4 + 3] = lloyd_max_2bit[(b >> 6u) & 0x3u];
+        }
+    } else {
+        for (int i = 0; i < 32; i++) {
+            uint bit_pos = uint(i) * 3u;
+            uint byte_idx = bit_pos / 8u;
+            uint bit_off = bit_pos % 8u;
+            uint val = k_byte(p + byte_idx) >> bit_off;
+            if (bit_off + 3u > 8u) {
+                val |= k_byte(p + byte_idx + 1u) << (8u - bit_off);
+            }
+            dst[i] = lloyd_max_3bit[val & 0x7u];
+        }
+    }
+
+    wht32(dst);
+    float s = norm / 32.0;
+    for (int i = 0; i < 32; i++) dst[i] *= s;
+}
+
+// ── Turbo dequant: V buffer ─────────────────────────────────────
+
+void turbo_dequant_v(uint byte_offset, uint bits_w, out float dst[32]) {
+    float norm = v_read_f16(byte_offset);
+    if (norm == 0.0) {
+        for (int i = 0; i < 32; i++) dst[i] = 0.0;
+        return;
+    }
+    uint p = byte_offset + 2u;
+
+    if (bits_w == 4u) {
+        for (int i = 0; i < 16; i++) {
+            uint b = v_byte(p + uint(i));
+            dst[i * 2]     = lloyd_max_4bit[b & 0xFu];
+            dst[i * 2 + 1] = lloyd_max_4bit[b >> 4u];
+        }
+    } else if (bits_w == 2u) {
+        for (int i = 0; i < 8; i++) {
+            uint b = v_byte(p + uint(i));
+            dst[i * 4]     = lloyd_max_2bit[b & 0x3u];
+            dst[i * 4 + 1] = lloyd_max_2bit[(b >> 2u) & 0x3u];
+            dst[i * 4 + 2] = lloyd_max_2bit[(b >> 4u) & 0x3u];
+            dst[i * 4 + 3] = lloyd_max_2bit[(b >> 6u) & 0x3u];
+        }
+    } else {
+        for (int i = 0; i < 32; i++) {
+            uint bit_pos = uint(i) * 3u;
+            uint byte_idx = bit_pos / 8u;
+            uint bit_off = bit_pos % 8u;
+            uint val = v_byte(p + byte_idx) >> bit_off;
+            if (bit_off + 3u > 8u) {
+                val |= v_byte(p + byte_idx + 1u) << (8u - bit_off);
+            }
+            dst[i] = lloyd_max_3bit[val & 0x7u];
+        }
+    }
+
+    wht32(dst);
+    float s = norm / 32.0;
+    for (int i = 0; i < 32; i++) dst[i] *= s;
+}
+
+// ── Main kernel ─────────────────────────────────────────────────
+
+void main() {
+    uint h = gl_WorkGroupID.x;
+    uint tid = gl_LocalInvocationID.x;
+    uint tg_sz = gl_WorkGroupSize.x;
+    if (h >= nh) return;
+
+    uint hpg = nh / nkv;
+    uint kvh = h / hpg;
+    uint kvd = nkv * hd;
+    uint num_blocks = (sl + KV_BLOCK_SIZE - 1u) / KV_BLOCK_SIZE;
+
+    // Load Q into shared memory
+    for (uint d = tid; d < hd; d += tg_sz) {
+        q_local[d] = q_data[h * hd + d];
+    }
+    barrier();
+
+    // Online softmax state
+    float m_i = -1.0 / 0.0;
+    float l_i = 0.0;
+    for (uint d = tid; d < hd; d += tg_sz) {
+        out_acc[d] = 0.0;
+    }
+    barrier();
+
+    // Outer loop: iterate over K,V blocks
+    for (uint block = 0u; block < num_blocks; block++) {
+        uint block_start = block * KV_BLOCK_SIZE;
+        uint block_len = min(KV_BLOCK_SIZE, sl - block_start);
+
+        // ── Load K block with turbo dequant ───────────────────
+        for (uint t = tid; t < block_len; t += tg_sz) {
+            uint t_global = block_start + t;
+            if (bits_k == 0u) {
+                // f32 passthrough
+                uint base = t_global * kvd + kvh * hd;
+                for (uint d = 0u; d < hd; d++) {
+                    kv_block_data[t * hd + d] = k_read_f32_elem(base + d);
+                }
+            } else {
+                // TurboQuant: dequant 32-element blocks
+                uint elem_base = t_global * kvd + kvh * hd;
+                uint n_turbo_blocks = hd / 32u;
+                for (uint blk = 0u; blk < n_turbo_blocks; blk++) {
+                    uint elem_idx = elem_base + blk * 32u;
+                    uint turbo_block_idx = elem_idx / 32u;
+                    uint byte_off = turbo_block_idx * block_bytes_k;
+                    float dequant_buf[32];
+                    turbo_dequant_k(byte_off, bits_k, dequant_buf);
+                    for (uint d = 0u; d < 32u; d++) {
+                        kv_block_data[t * hd + blk * 32u + d] = dequant_buf[d];
+                    }
+                }
+            }
+        }
+        barrier();
+
+        // ── Compute scores = Q @ K_block^T ─────────────────────
+        for (uint t = tid; t < block_len; t += tg_sz) {
+            float dot_val = 0.0;
+            for (uint d = 0u; d < hd; d++) {
+                dot_val += q_local[d] * kv_block_data[t * hd + d];
+            }
+            scores[t] = dot_val * scale;
+        }
+        barrier();
+
+        // ── Online softmax max reduction ───────────────────────
+        float block_max = -1.0 / 0.0;
+        for (uint t = tid; t < block_len; t += tg_sz) {
+            block_max = max(block_max, scores[t]);
+        }
+        block_max = subgroupMax(block_max);
+        uint sg_lane = gl_SubgroupInvocationID;
+        uint sg_id = gl_SubgroupID;
+        uint num_sg = (tg_sz + gl_SubgroupSize - 1u) / gl_SubgroupSize;
+        if (sg_lane == 0u) shared_vals[sg_id] = block_max;
+        barrier();
+        if (tid < num_sg) block_max = shared_vals[tid]; else block_max = -1.0 / 0.0;
+        if (tid < gl_SubgroupSize) {
+            block_max = subgroupMax(block_max);
+            if (tid == 0u) shared_vals[0] = block_max;
+        }
+        barrier();
+        float m_new = shared_vals[0];
+
+        // ── Online softmax: rescale previous sum and accumulator ──
+        float m_prev = m_i;
+        m_i = max(m_i, m_new);
+        float rescale_factor = exp(m_prev - m_i);
+        l_i *= rescale_factor;
+        for (uint d = tid; d < hd; d += tg_sz) {
+            out_acc[d] *= rescale_factor;
+        }
+        barrier();
+
+        // ── Compute exp(scores - m_i) and sum ───────────────────
+        float local_sum = 0.0;
+        for (uint t = tid; t < block_len; t += tg_sz) {
+            float v = exp(scores[t] - m_i);
+            scores[t] = v;
+            local_sum += v;
+        }
+        local_sum = subgroupAdd(local_sum);
+        if (sg_lane == 0u) shared_vals[sg_id] = local_sum;
+        barrier();
+        if (tid < num_sg) local_sum = shared_vals[tid]; else local_sum = 0.0;
+        if (tid < gl_SubgroupSize) {
+            local_sum = subgroupAdd(local_sum);
+            if (tid == 0u) shared_vals[0] = local_sum;
+        }
+        barrier();
+        l_i += shared_vals[0];
+
+        // ── Load V block with turbo dequant (reuses kv_block_data) ──
+        for (uint t = tid; t < block_len; t += tg_sz) {
+            uint t_global = block_start + t;
+            if (bits_v == 0u) {
+                // f32 passthrough
+                uint base = t_global * kvd + kvh * hd;
+                for (uint d = 0u; d < hd; d++) {
+                    kv_block_data[t * hd + d] = v_read_f32_elem(base + d);
+                }
+            } else {
+                // TurboQuant: dequant 32-element blocks
+                uint elem_base = t_global * kvd + kvh * hd;
+                uint n_turbo_blocks = hd / 32u;
+                for (uint blk = 0u; blk < n_turbo_blocks; blk++) {
+                    uint elem_idx = elem_base + blk * 32u;
+                    uint turbo_block_idx = elem_idx / 32u;
+                    uint byte_off = turbo_block_idx * block_bytes_v;
+                    float dequant_buf[32];
+                    turbo_dequant_v(byte_off, bits_v, dequant_buf);
+                    for (uint d = 0u; d < 32u; d++) {
+                        kv_block_data[t * hd + blk * 32u + d] = dequant_buf[d];
+                    }
+                }
+            }
+        }
+        barrier();
+
+        // ── Accumulate: out_acc += scores @ V_block ────────────
+        for (uint d = tid; d < hd; d += tg_sz) {
+            float acc = 0.0;
+            for (uint t = 0u; t < block_len; t++) {
+                acc += scores[t] * kv_block_data[t * hd + d];
+            }
+            out_acc[d] += acc;
+        }
+        barrier();
+    }
+
+    // ── Final normalization: output = out_acc / l_i ────────────
+    for (uint d = tid; d < hd; d += tg_sz) {
+        out_data[h * hd + d] = out_acc[d] / l_i;
+    }
+}

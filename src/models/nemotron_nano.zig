@@ -117,7 +117,8 @@ pub const NemotronNanoModel = struct {
     block_allocator: BlockAllocator = undefined,
     tiered_cache: ?*TieredKvCache = null,
     tiered_block_allocator: ?TieredBlockAllocator = null,
-    kv_type: kv_quant.KvQuantType = .f32,
+    kv_type_k: kv_quant.KvQuantType = .f32,
+    kv_type_v: kv_quant.KvQuantType = .f32,
     kv_seq_len: usize = 0,
     cancelled: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
 
@@ -125,9 +126,10 @@ pub const NemotronNanoModel = struct {
 
     /// Initialize the model, reading hyperparameters from SafeTensors config.json
     /// and allocating all working buffers and per-layer state.
-    pub fn init(allocator: Allocator, f: Format, be: Backend, ctx_size: u32, kv_type: kv_quant.KvQuantType, tiered_cache: ?*TieredKvCache) !NemotronNanoModel {
+    pub fn init(allocator: Allocator, f: Format, be: Backend, ctx_size: u32, kv_type_k: kv_quant.KvQuantType, kv_type_v: kv_quant.KvQuantType, tiered_cache: ?*TieredKvCache) !NemotronNanoModel {
         var self = NemotronNanoModel{ .fmt = f, .be = be, .allocator = allocator };
-        self.kv_type = kv_type;
+        self.kv_type_k = kv_type_k;
+        self.kv_type_v = kv_type_v;
 
         // Read hyperparameters from config.json metadata
         if (f.getMetaU32("num_hidden_layers")) |v| self.n_layers = v;
@@ -650,6 +652,7 @@ pub const NemotronNanoModel = struct {
             null,
             0,
             .f32, // PagedKvCache uses f32 blocks
+            .f32,
         );
 
         // 5. Output projection (BF16)

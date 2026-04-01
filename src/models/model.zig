@@ -9,6 +9,11 @@ const std = @import("std");
 const build_options = @import("build_options");
 const backend_mod = @import("../backend/backend.zig");
 const format_mod = @import("../format/format.zig");
+const Arch = @import("../arch.zig").Arch;
+const ThreadPool = @import("../thread_pool.zig").ThreadPool;
+const kv_quant = @import("../ops/kv_quant.zig");
+const KvQuantType = kv_quant.KvQuantType;
+const TieredKvCache = @import("../kvcache/tiered.zig").TieredKvCache;
 
 /// Buffer size for constructing companion tensor names (e.g., ".scales", ".biases").
 pub const tensor_name_buf_size: usize = 256;
@@ -325,18 +330,129 @@ pub fn resetKvCache(self: anytype) void {
     resetInferenceState(&self.kv_seq_len, &self.cancelled);
 }
 
-/// Gemma 3 model implementation — conditionally compiled via -Denable-gemma3.
-pub const Gemma3Model = if (build_options.enable_gemma3) @import("gemma3.zig").Gemma3Model else void;
-/// Qwen3.5 hybrid DeltaNet + attention model — conditionally compiled via -Denable-qwen35.
-pub const Qwen35Model = if (build_options.enable_qwen35) @import("qwen35.zig").Qwen35Model else void;
-/// GPT-OSS Mixture-of-Experts model — conditionally compiled via -Denable-gpt-oss.
-pub const GptOssModel = if (build_options.enable_gpt_oss) @import("gpt_oss.zig").GptOssModel else void;
-/// Nemotron-H hybrid Mamba-2 + Attention + FFN-only model — conditionally compiled via -Denable-nemotron-h.
-pub const NemotronHModel = if (build_options.enable_nemotron_h) @import("nemotron_h.zig").NemotronHModel else void;
-/// GLM-4 MoE Lite model with MLA attention — conditionally compiled via -Denable-glm4.
-pub const Glm4Model = if (build_options.enable_glm4) @import("glm4.zig").Glm4Model else void;
-/// Nemotron Nano 30B-A3B hybrid Mamba-2 + MoE + Attention model — conditionally compiled via -Denable-nemotron-nano.
-pub const NemotronNanoModel = if (build_options.enable_nemotron_nano) @import("nemotron_nano.zig").NemotronNanoModel else void;
+// ── Model container ─────────────────────────────────────────────
+
+/// Opaque model container — holds any concrete model type and provides
+/// lifecycle and configuration methods without exposing implementation types.
+/// Uses `inline else` dispatch for zero-overhead method calls.
+pub const ModelStorage = union(enum) {
+    gemma3: Gemma3Model,
+    qwen35: Qwen35Model,
+    gpt_oss: GptOssModel,
+    nemotron_h: NemotronHModel,
+    nemotron_nano: NemotronNanoModel,
+    glm4: Glm4Model,
+
+    /// Initialize a model from its architecture type.
+    /// Returns a ModelStorage union holding the initialized concrete model.
+    pub fn initFromArch(arch: Arch, allocator: std.mem.Allocator, fmt: format_mod.Format, be: backend_mod.Backend, ctx_size: u32, kv_type_k: KvQuantType, kv_type_v: KvQuantType, tiered_cache: ?*TieredKvCache) !ModelStorage {
+        switch (arch) {
+            inline .gemma3, .qwen35, .gpt_oss, .nemotron_h, .nemotron_nano, .glm4 => |a| {
+                if (comptime !a.isEnabled()) unreachable;
+                const M = comptime modelType(a);
+                const mdl = try M.init(allocator, fmt, be, ctx_size, kv_type_k, kv_type_v, tiered_cache);
+                return @unionInit(ModelStorage, @tagName(a), mdl);
+            },
+        }
+    }
+
+    /// Map Arch variant to concrete model type at comptime.
+    fn modelType(comptime a: Arch) type {
+        return switch (a) {
+            .gemma3 => Gemma3Model,
+            .qwen35 => Qwen35Model,
+            .gpt_oss => GptOssModel,
+            .nemotron_h => NemotronHModel,
+            .nemotron_nano => NemotronNanoModel,
+            .glm4 => Glm4Model,
+        };
+    }
+
+    /// Get the type-erased Model interface for this model.
+    pub fn model(self: *ModelStorage) Model {
+        switch (self.*) {
+            inline else => |*m| {
+                if (@TypeOf(m.*) == void) unreachable;
+                return Model.from(@TypeOf(m.*), m);
+            },
+        }
+    }
+
+    /// Release all resources owned by this model.
+    pub fn deinit(self: *ModelStorage) void {
+        switch (self.*) {
+            inline else => |*m| {
+                if (@TypeOf(m.*) != void) m.deinit();
+            },
+        }
+    }
+
+    /// Set the thread pool reference for CPU parallelism.
+    pub fn setPool(self: *ModelStorage, pool: ?*ThreadPool) void {
+        switch (self.*) {
+            inline else => |*m| {
+                if (@TypeOf(m.*) != void) {
+                    if (comptime @hasField(@TypeOf(m.*), "pool")) m.pool = pool;
+                }
+            },
+        }
+    }
+
+    /// Fix the block allocator's cache pointer after the struct has been moved.
+    pub fn fixBlockAllocator(self: *ModelStorage) void {
+        switch (self.*) {
+            inline else => |*m| {
+                if (@TypeOf(m.*) != void) {
+                    if (comptime @hasField(@TypeOf(m.*), "block_allocator")) {
+                        m.block_allocator.setCachePtr(&m.paged_cache);
+                    }
+                }
+            },
+        }
+    }
+
+    /// Set the prefill chunk size for batched prefill.
+    pub fn setChunkSize(self: *ModelStorage, size: u32) void {
+        switch (self.*) {
+            inline else => |*m| {
+                if (@TypeOf(m.*) != void) {
+                    if (comptime @hasField(@TypeOf(m.*), "chunk_size")) m.chunk_size = size;
+                }
+            },
+        }
+    }
+
+    /// Enable per-layer performance profiling.
+    pub fn enableProfiling(self: *ModelStorage) void {
+        switch (self.*) {
+            inline else => |*m| {
+                if (@TypeOf(m.*) != void) {
+                    if (comptime @hasField(@TypeOf(m.*), "perf")) m.perf.enabled = true;
+                }
+            },
+        }
+    }
+
+    /// Print accumulated performance counters.
+    pub fn reportPerf(self: *ModelStorage) void {
+        switch (self.*) {
+            inline else => |*m| {
+                if (@TypeOf(m.*) != void) {
+                    if (comptime @hasField(@TypeOf(m.*), "perf")) m.perf.report();
+                }
+            },
+        }
+    }
+};
+
+// ── Concrete model types (internal — access via ModelStorage) ────
+
+const Gemma3Model = if (build_options.enable_gemma3) @import("gemma3.zig").Gemma3Model else void;
+const Qwen35Model = if (build_options.enable_qwen35) @import("qwen35.zig").Qwen35Model else void;
+const GptOssModel = if (build_options.enable_gpt_oss) @import("gpt_oss.zig").GptOssModel else void;
+const NemotronHModel = if (build_options.enable_nemotron_h) @import("nemotron_h.zig").NemotronHModel else void;
+const Glm4Model = if (build_options.enable_glm4) @import("glm4.zig").Glm4Model else void;
+const NemotronNanoModel = if (build_options.enable_nemotron_nano) @import("nemotron_nano.zig").NemotronNanoModel else void;
 
 // ── Tests ─────────────────────────────────────────────────────────
 

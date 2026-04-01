@@ -425,6 +425,18 @@ pub const CpuBackend = struct {
         elementwise_kernel.deinterleave(input, out_a, out_b, stride, n_pairs);
     }
 
+    /// Split concatenated Q+gate per-head data into separate Q and gate arrays.
+    /// Input layout: [Q0..Q_{hd-1}, G0..G_{hd-1}] × nh heads.
+    /// Output: q_out[nh*hd], g_out[nh*hd].
+    pub fn splitQGate(_: *CpuBackend, qg: [*]const f32, q_out: [*]f32, g_out: [*]f32, hd: usize, nh: usize) void {
+        for (0..nh) |h| {
+            const src = h * hd * 2;
+            const dst = h * hd;
+            @memcpy(q_out[dst..][0..hd], qg[src..][0..hd]);
+            @memcpy(g_out[dst..][0..hd], qg[src + hd ..][0..hd]);
+        }
+    }
+
     /// No-op on CPU. GPU backends flush pending commands here;
     /// CPU ops are immediately visible, so no flush is needed.
     pub fn sync(self: *CpuBackend) void {
@@ -636,20 +648,21 @@ pub const CpuBackend = struct {
     /// Prefill attention: causal self-attention for n_tok new tokens.
     /// Appends all KV data in bulk, then computes attention per token
     /// with parallel head dispatch via the thread pool.
-    pub fn sdpaPrefill(self: *CpuBackend, q: [*]const f32, k: [*]const f32, v: [*]const f32, kv_keys: []u8, kv_values: []u8, output: [*]f32, nh: usize, nkv: usize, hd: usize, prev_len: usize, n_tok: usize, scale: f32, kv_type: KvQuantType) void {
+    pub fn sdpaPrefill(self: *CpuBackend, q: [*]const f32, k: [*]const f32, v: [*]const f32, kv_keys: []u8, kv_values: []u8, output: [*]f32, nh: usize, nkv: usize, hd: usize, prev_len: usize, n_tok: usize, scale: f32, kv_type_k: KvQuantType, kv_type_v: KvQuantType) void {
         const kvd = nkv * hd;
 
         // Bulk KV append: store all n_tok key/value vectors into the cache
         for (0..n_tok) |t| {
             const src_off = t * kvd;
             const dst_elem = (prev_len + t) * kvd;
-            const dst_byte = kv_quant.kvByteOffset(kv_type, dst_elem);
-            kv_quant.kvStore(kv_keys.ptr + dst_byte, k + src_off, kvd, kv_type);
-            kv_quant.kvStore(kv_values.ptr + dst_byte, v + src_off, kvd, kv_type);
+            const dst_byte_k = kv_quant.kvByteOffset(kv_type_k, dst_elem);
+            const dst_byte_v = kv_quant.kvByteOffset(kv_type_v, dst_elem);
+            kv_quant.kvStore(kv_keys.ptr + dst_byte_k, k + src_off, kvd, kv_type_k);
+            kv_quant.kvStore(kv_values.ptr + dst_byte_v, v + src_off, kvd, kv_type_v);
         }
 
         // Per-token causal attention using decode sdpa's parallel head dispatch
-        if (kv_type == .f32) {
+        if (kv_type_k == .f32 and kv_type_v == .f32) {
             const f32_keys: [*]const f32 = @ptrCast(@alignCast(kv_keys.ptr));
             const f32_values: [*]const f32 = @ptrCast(@alignCast(kv_values.ptr));
             for (0..n_tok) |t| {
@@ -692,13 +705,14 @@ pub const CpuBackend = struct {
                             .hd = hd,
                             .sl = sl,
                             .scale = scale,
-                            .kv_type = kv_type,
+                            .kv_type_k = kv_type_k,
+                            .kv_type_v = kv_type_v,
                         };
                         pool.parallelFor(nh, 1, @ptrCast(&ctx), SdpaQuantCtx.work);
                         continue;
                     }
                 }
-                sdpa_kernel.sdpaQuantHeads(q + q_off, kv_keys.ptr, kv_values.ptr, output + out_off, nh, nkv, hd, sl, scale, kv_type);
+                sdpa_kernel.sdpaQuantHeads(q + q_off, kv_keys.ptr, kv_values.ptr, output + out_off, nh, nkv, hd, sl, scale, kv_type_k, kv_type_v);
             }
         }
     }
@@ -713,17 +727,17 @@ pub const CpuBackend = struct {
     /// Parallelizes across query heads when a thread pool is available.
     /// Supports quantized KV cache: quantizes k_new/v_new on append,
     /// dequantizes during QK dot products and V accumulation.
-    pub fn sdpa(self: *CpuBackend, q: [*]const f32, keys: []u8, values: []u8, k_new: [*]const f32, v_new: [*]const f32, output: [*]f32, nh: usize, nkv: usize, hd: usize, seq_len: usize, scale: f32, kv_type: KvQuantType) void {
+    pub fn sdpa(self: *CpuBackend, q: [*]const f32, keys: []u8, values: []u8, k_new: [*]const f32, v_new: [*]const f32, output: [*]f32, nh: usize, nkv: usize, hd: usize, seq_len: usize, scale: f32, kv_type_k: KvQuantType, kv_type_v: KvQuantType) void {
         const kvd = nkv * hd;
 
         // KV append: quantize k_new/v_new into cache at position seq_len
-        const k_byte_off = kv_quant.kvByteOffset(kv_type, seq_len * kvd);
-        const v_byte_off = kv_quant.kvByteOffset(kv_type, seq_len * kvd);
-        kv_quant.kvStore(keys.ptr + k_byte_off, k_new, kvd, kv_type);
-        kv_quant.kvStore(values.ptr + v_byte_off, v_new, kvd, kv_type);
+        const k_byte_off = kv_quant.kvByteOffset(kv_type_k, seq_len * kvd);
+        const v_byte_off = kv_quant.kvByteOffset(kv_type_v, seq_len * kvd);
+        kv_quant.kvStore(keys.ptr + k_byte_off, k_new, kvd, kv_type_k);
+        kv_quant.kvStore(values.ptr + v_byte_off, v_new, kvd, kv_type_v);
 
         // f32 fast path: cast to [*]f32 and use existing SIMD kernel for zero regression
-        if (kv_type == .f32) {
+        if (kv_type_k == .f32 and kv_type_v == .f32) {
             const f32_keys: [*]const f32 = @ptrCast(@alignCast(keys.ptr));
             const f32_vals: [*]const f32 = @ptrCast(@alignCast(values.ptr));
             if (self.pool) |pool| {
@@ -760,13 +774,14 @@ pub const CpuBackend = struct {
                     .hd = hd,
                     .sl = seq_len + 1,
                     .scale = scale,
-                    .kv_type = kv_type,
+                    .kv_type_k = kv_type_k,
+                    .kv_type_v = kv_type_v,
                 };
                 pool.parallelFor(nh, 1, @ptrCast(&ctx), SdpaQuantCtx.work);
                 return;
             }
         }
-        sdpa_kernel.sdpaQuantHeads(q, keys.ptr, values.ptr, output, nh, nkv, hd, seq_len + 1, scale, kv_type);
+        sdpa_kernel.sdpaQuantHeads(q, keys.ptr, values.ptr, output, nh, nkv, hd, seq_len + 1, scale, kv_type_k, kv_type_v);
     }
 
     /// Context for parallel f32 SDPA dispatch across query heads.
@@ -800,12 +815,13 @@ pub const CpuBackend = struct {
         hd: usize,
         sl: usize,
         scale: f32,
-        kv_type: KvQuantType,
+        kv_type_k: KvQuantType,
+        kv_type_v: KvQuantType,
 
         fn work(ctx_ptr: *anyopaque, start: usize, end: usize) void {
             const ctx: *const SdpaQuantCtx = @ptrCast(@alignCast(ctx_ptr));
             for (start..end) |h| {
-                sdpa_kernel.sdpaQuantHead(ctx.q, ctx.keys, ctx.values, ctx.output, h, ctx.nh, ctx.nkv, ctx.hd, ctx.sl, ctx.scale, ctx.kv_type);
+                sdpa_kernel.sdpaQuantHead(ctx.q, ctx.keys, ctx.values, ctx.output, h, ctx.nh, ctx.nkv, ctx.hd, ctx.sl, ctx.scale, ctx.kv_type_k, ctx.kv_type_v);
             }
         }
     };
