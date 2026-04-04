@@ -80,6 +80,13 @@ pub const GGMLType = enum(u32) {
             .i64 => 1,
             .f64 => 1,
             .bf16 => 1,
+            .iq2_xxs => 256,
+            .iq2_xs => 256,
+            .iq2_s => 256,
+            .iq3_xxs => 256,
+            .iq3_s => 256,
+            .iq1_s => 256,
+            .iq1_m => 256,
             .iq4_nl => 32,
             .iq4_xs => 256,
             .tq1_0 => 256,
@@ -110,6 +117,13 @@ pub const GGMLType = enum(u32) {
             .i64 => 8,
             .f64 => 8,
             .bf16 => 2,
+            .iq2_xxs => 66, // 256 elements: 2 bytes scale + 2*8 bytes (16 groups × 2B each) + 8*4 bytes (8 blocks × 4B signs) = 66
+            .iq2_xs => 74, // 256 elements: 2 bytes scale + 2*8 bytes + 8*4 bytes + 8 bytes scales = 74
+            .iq2_s => 82, // 256 elements
+            .iq3_xxs => 98, // 256 elements
+            .iq3_s => 110, // 256 elements
+            .iq1_s => 50, // 256 elements
+            .iq1_m => 56, // 256 elements
             .iq4_nl => 18, // f16 scale + 16 bytes (32 nibbles, same as q4_0)
             .iq4_xs => 138, // f16 scale + 128 qs + 8 scales_h (256 elements)
             .tq1_0 => 64, // f16 scale (2) + qs[40] + qh[13] + padding[9]
@@ -458,14 +472,26 @@ pub const GGUFFile = struct {
                     }
                     return .{ .val = .{ .array_str = strings }, .len = pos - off };
                 }
-                // Parse u32 arrays (used for eog_token_id, etc.)
-                if (arr_type == .uint32) {
+                // Parse u32/i32 arrays (used for eog_token_id, head_count_kv, etc.)
+                if (arr_type == .uint32 or arr_type == .int32) {
                     const ids = try self.allocator.alloc(u32, arr_len);
                     errdefer self.allocator.free(ids);
                     try self.owned_u32_arrays.append(self.allocator, ids);
                     for (0..arr_len) |i| {
                         ids[i] = try self.readU32(pos);
                         pos += 4;
+                    }
+                    return .{ .val = .{ .array_u32 = ids }, .len = pos - off };
+                }
+                // Parse bool arrays as u32 (used for sliding_window_pattern)
+                if (arr_type == .bool_type) {
+                    const ids = try self.allocator.alloc(u32, arr_len);
+                    errdefer self.allocator.free(ids);
+                    try self.owned_u32_arrays.append(self.allocator, ids);
+                    for (0..arr_len) |i| {
+                        if (pos >= self.file_size) return error.OffsetOutOfBounds;
+                        ids[i] = self.mapped_data[pos];
+                        pos += 1;
                     }
                     return .{ .val = .{ .array_u32 = ids }, .len = pos - off };
                 }

@@ -46,16 +46,16 @@ const max_norm_entries: usize = 128;
 const NormCacheEntry = struct { key: usize, data: []f32 };
 
 /// Compute the byte stride between consecutive experts in a packed weight tensor.
-/// Handles both GGUF layout [inner, outer, n_experts] and SafeTensors MLX
-/// layout [n_experts, rows, words_per_row].
+/// Both GGUF (reversed) and SafeTensors store 3D expert tensors as
+/// [n_experts, rows, cols/words]. Per-expert stride uses dims[1] * dims[2].
 fn expertStride(t: TensorInfo) usize {
     if (t.dtype == .mlx_q) {
         // SafeTensors MLX: [n_experts, rows, words_per_row] U32
         // Per-expert: rows * words_per_row * sizeof(u32)
         std.debug.assert(t.n_dims >= 3);
-        return @as(usize, @intCast(t.dims[0])) * @as(usize, @intCast(t.dims[1])) * @sizeOf(u32);
+        return @as(usize, @intCast(t.dims[1])) * @as(usize, @intCast(t.dims[2])) * @sizeOf(u32);
     }
-    // GGUF: dims = [inner, outer, n_experts] — use shared helper
+    // GGUF dims (reversed): [n_experts, rows, cols]
     return expertWeightStride(t);
 }
 
@@ -65,12 +65,13 @@ fn expertStride(t: TensorInfo) usize {
 fn expertScaleStride(scale_t: TensorInfo, weight_t: TensorInfo) usize {
     _ = weight_t;
     if (scale_t.n_dims >= 3) {
-        const elems: usize = @as(usize, @intCast(scale_t.dims[0])) * @as(usize, @intCast(scale_t.dims[1]));
+        // Per-expert: rows * groups_per_row elements, each bf16 (2 bytes)
+        const elems: usize = @as(usize, @intCast(scale_t.dims[1])) * @as(usize, @intCast(scale_t.dims[2]));
         return elems * @sizeOf(u16); // bf16 = 2 bytes per element
     }
     // Fallback: divide total size by number of experts
     const total = scale_t.numElements() * @sizeOf(u16);
-    const n_experts = if (scale_t.n_dims >= 3) @as(usize, @intCast(scale_t.dims[2])) else 1;
+    const n_experts = if (scale_t.n_dims >= 3) @as(usize, @intCast(scale_t.dims[0])) else 1;
     return if (n_experts > 0) total / n_experts else total;
 }
 /// Extra score slot reserved for the learned attention sink.
@@ -437,15 +438,17 @@ pub const GptOssModel = struct {
         bits: u32,
 
         /// Per-expert stride for U8 MXFP4 scales: rows × groups_per_row × 1 byte.
+        /// Dims are [n_experts, rows, groups_per_row] — per-expert = dims[1]*dims[2].
         fn expertScaleStrideMxfp4(self: Companion) usize {
             if (self.scale_t.n_dims >= 3)
-                return @as(usize, @intCast(self.scale_t.dims[0])) * @as(usize, @intCast(self.scale_t.dims[1]));
+                return @as(usize, @intCast(self.scale_t.dims[1])) * @as(usize, @intCast(self.scale_t.dims[2]));
             return self.scale_t.numElements();
         }
         /// Per-expert stride for BF16 affine scales: rows × groups_per_row × 2 bytes.
+        /// Dims are [n_experts, rows, groups_per_row] — per-expert = dims[1]*dims[2]*2.
         fn expertScaleStrideAffine(self: Companion) usize {
             if (self.scale_t.n_dims >= 3)
-                return @as(usize, @intCast(self.scale_t.dims[0])) * @as(usize, @intCast(self.scale_t.dims[1])) * 2;
+                return @as(usize, @intCast(self.scale_t.dims[1])) * @as(usize, @intCast(self.scale_t.dims[2])) * 2;
             return self.scale_t.numElements() * 2;
         }
     };
@@ -671,8 +674,8 @@ pub const GptOssModel = struct {
         const down_bias_t = self.fmt.layerTensor(li, "ffn_down_exps.bias");
 
         // Byte stride per expert inside the packed weight tensor.
-        // GGUF: dims = [inner, outer, n_experts] — expertWeightStride uses dims[0]*dims[1]
-        // SafeTensors MLX: dims = [n_experts, rows, cols] — stride = dims[0]*dims[1]*sizeof(u32)
+        // GGUF (reversed): dims = [n_experts, rows, cols] — per-expert = dims[1]*dims[2]
+        // SafeTensors MLX: dims = [n_experts, rows, words] — per-expert = dims[1]*dims[2]*sizeof(u32)
         const gate_stride = expertStride(gate_exps);
         const up_stride = expertStride(up_exps);
         const down_stride = expertStride(down_exps);

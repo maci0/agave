@@ -595,15 +595,15 @@ pub const Qwen35Model = struct {
         const s_name = std.fmt.bufPrint(&sbuf, "{s}.scales", .{prefix}) catch return;
         const st = self.fmt.getTensor(s_name) orelse return;
         if (st.dtype == .unknown) {
-            // MXFP4
-            const s_stride = if (st.n_dims >= 3) @as(usize, @intCast(st.dims[0])) * @as(usize, @intCast(st.dims[1])) else st.numElements();
+            // MXFP4: dims [n_experts, rows, groups_per_row], U8 — per-expert = dims[1]*dims[2]
+            const s_stride = if (st.n_dims >= 3) @as(usize, @intCast(st.dims[1])) * @as(usize, @intCast(st.dims[2])) else st.numElements();
             self.be.gemvMxfp4St(x, data, st.data_ptr + ei * s_stride, y, n, k);
         } else {
-            // MLX affine
+            // MLX affine: dims [n_experts, rows, groups_per_row], BF16 — per-expert = dims[1]*dims[2]*2
             var bbuf: [model_mod.tensor_name_buf_size]u8 = undefined;
             const b_name = std.fmt.bufPrint(&bbuf, "{s}.biases", .{prefix}) catch return;
             const bt = self.fmt.getTensor(b_name) orelse return;
-            const s_stride = if (st.n_dims >= 3) @as(usize, @intCast(st.dims[0])) * @as(usize, @intCast(st.dims[1])) * 2 else st.numElements() * 2;
+            const s_stride = if (st.n_dims >= 3) @as(usize, @intCast(st.dims[1])) * @as(usize, @intCast(st.dims[2])) * 2 else st.numElements() * 2;
             self.be.gemvMlxQ(x, data, st.data_ptr + ei * s_stride, bt.data_ptr + ei * s_stride, y, n, k, 8);
         }
     }
@@ -907,7 +907,7 @@ pub const Qwen35Model = struct {
                 self.router_logits[i] = @exp(self.router_logits[i] - max_logit);
                 sum_e += self.router_logits[i];
             }
-            const inv = 1.0 / sum_e;
+            const inv = if (sum_e > 0.0) 1.0 / sum_e else 0.0;
             for (0..n_exp) |i| self.router_logits[i] *= inv;
         }
 
@@ -919,7 +919,7 @@ pub const Qwen35Model = struct {
         {
             var sel_sum: f32 = 0.0;
             for (0..n_active) |i| sel_sum += top_scores[i];
-            const inv = 1.0 / sel_sum;
+            const inv = if (sel_sum > 0.0) 1.0 / sel_sum else 0.0;
             for (0..n_active) |i| top_scores[i] *= inv;
         }
 

@@ -217,11 +217,11 @@ pub inline fn resetInferenceState(kv_seq_len: *usize, cancelled: *std.atomic.Val
 }
 
 /// Compute the byte stride between consecutive experts in a packed weight tensor.
-/// GGUF stores packed expert tensors with dims [inner, outer, n_experts] where
-/// the expert index is the slowest-varying axis.
+/// GGUF dims are reversed during parsing to [n_experts, rows, cols] (outermost-first).
+/// Per-expert stride = weightBytes(rows * cols) = dims[1] * dims[2].
 pub fn expertWeightStride(t: format_mod.TensorInfo) usize {
     std.debug.assert(t.n_dims >= 3);
-    const elems: usize = @as(usize, @intCast(t.dims[0])) * @as(usize, @intCast(t.dims[1]));
+    const elems: usize = @as(usize, @intCast(t.dims[1])) * @as(usize, @intCast(t.dims[2]));
     return backend_mod.weightBytes(t.dtype, 1, elems);
 }
 
@@ -337,6 +337,7 @@ pub fn resetKvCache(self: anytype) void {
 /// Uses `inline else` dispatch for zero-overhead method calls.
 pub const ModelStorage = union(enum) {
     gemma3: Gemma3Model,
+    gemma4: Gemma4Model,
     qwen35: Qwen35Model,
     gpt_oss: GptOssModel,
     nemotron_h: NemotronHModel,
@@ -347,7 +348,7 @@ pub const ModelStorage = union(enum) {
     /// Returns a ModelStorage union holding the initialized concrete model.
     pub fn initFromArch(arch: Arch, allocator: std.mem.Allocator, fmt: format_mod.Format, be: backend_mod.Backend, ctx_size: u32, kv_type_k: KvQuantType, kv_type_v: KvQuantType, tiered_cache: ?*TieredKvCache) !ModelStorage {
         switch (arch) {
-            inline .gemma3, .qwen35, .gpt_oss, .nemotron_h, .nemotron_nano, .glm4 => |a| {
+            inline .gemma3, .gemma4, .qwen35, .gpt_oss, .nemotron_h, .nemotron_nano, .glm4 => |a| {
                 if (comptime !a.isEnabled()) unreachable;
                 const M = comptime modelType(a);
                 const mdl = try M.init(allocator, fmt, be, ctx_size, kv_type_k, kv_type_v, tiered_cache);
@@ -360,6 +361,7 @@ pub const ModelStorage = union(enum) {
     fn modelType(comptime a: Arch) type {
         return switch (a) {
             .gemma3 => Gemma3Model,
+            .gemma4 => Gemma4Model,
             .qwen35 => Qwen35Model,
             .gpt_oss => GptOssModel,
             .nemotron_h => NemotronHModel,
@@ -448,6 +450,7 @@ pub const ModelStorage = union(enum) {
 // ── Concrete model types (internal — access via ModelStorage) ────
 
 const Gemma3Model = if (build_options.enable_gemma3) @import("gemma3.zig").Gemma3Model else void;
+const Gemma4Model = if (build_options.enable_gemma4) @import("gemma4.zig").Gemma4Model else void;
 const Qwen35Model = if (build_options.enable_qwen35) @import("qwen35.zig").Qwen35Model else void;
 const GptOssModel = if (build_options.enable_gpt_oss) @import("gpt_oss.zig").GptOssModel else void;
 const NemotronHModel = if (build_options.enable_nemotron_h) @import("nemotron_h.zig").NemotronHModel else void;
@@ -457,10 +460,12 @@ const NemotronNanoModel = if (build_options.enable_nemotron_nano) @import("nemot
 // ── Tests ─────────────────────────────────────────────────────────
 
 test "expertWeightStride f32 2x2 layout" {
+    // After GGUF reversal, dims = [n_experts, rows, cols].
+    // Per-expert stride = rows * cols * sizeof(f32).
     const t = format_mod.TensorInfo{
         .name = "test",
         .n_dims = 3,
-        .dims = .{ 4, 4, 2, 0 },
+        .dims = .{ 2, 4, 4, 0 },
         .dtype = .f32,
         .data_ptr = undefined,
     };

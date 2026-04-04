@@ -602,7 +602,7 @@ fn printUsage() void {
         \\  agave model.gguf --json --model-info       Model metadata as JSON
         \\
         \\SUPPORTED ARCHITECTURES:
-        \\  gemma3, qwen35, gpt-oss, nemotron-h, nemotron-nano, glm4
+        \\  gemma3, gemma4, qwen35, gpt-oss, nemotron-h, nemotron-nano, glm4
         \\
         \\REPL COMMANDS:
         \\
@@ -717,7 +717,7 @@ pub fn main() !void {
 
     var arch = Arch.detect(arch_str) orelse {
         eprint("Error: unsupported architecture '{s}'\n", .{arch_str});
-        eprint("  Supported: gemma3, qwen35, gpt-oss, nemotron-h, nemotron-nano, glm4\n", .{});
+        eprint("  Supported: gemma3, gemma4, qwen35, gpt-oss, nemotron-h, nemotron-nano, glm4\n", .{});
         std.process.exit(1);
     };
 
@@ -884,7 +884,7 @@ pub fn main() !void {
     const vocab = fmt.getVocab();
     const merges = fmt.getMerges();
     // Gemma uses SentencePiece tokenization even when merges are present in tokenizer.json
-    const tok_kind: TokenizerKind = if (arch == .gemma3) .spm_no_dummy else if (merges != null) .bpe else .spm;
+    const tok_kind: TokenizerKind = if (arch == .gemma3 or arch == .gemma4) .spm_no_dummy else if (merges != null) .bpe else .spm;
     dbg("tokenizer: vocab={s}, merges={s}, kind={s}", .{
         if (vocab != null) @as([]const u8, "yes") else @as([]const u8, "null"),
         if (merges != null) @as([]const u8, "yes") else @as([]const u8, "null"),
@@ -892,7 +892,7 @@ pub fn main() !void {
     });
     const eos_id = fmt.getMetaU32("tokenizer.ggml.eos_token_id") orelse
         fmt.getMetaU32("eos_token_id") orelse
-        if (arch == .gemma3) gemma_fallback_eos else default_fallback_eos;
+        if (arch == .gemma3 or arch == .gemma4) gemma_fallback_eos else default_fallback_eos;
     const bos_id: u32 = blk: {
         // Explicit BOS token ID from metadata takes priority.
         if (fmt.getMetaU32("tokenizer.ggml.bos_token_id")) |id| break :blk id;
@@ -1350,8 +1350,11 @@ fn generateAndPrintInner(
 
     // Apply sampling to the first generated token (from prefill's last forward call)
     const use_sampling = cli.temperature > 0;
+    const use_repeat_penalty = cli.repeat_penalty != 1.0;
     var prng = std.Random.Xoshiro256.init(cli.seed);
     if (use_sampling and token_ids.len > 0) {
+        // No recent tokens yet for the first generated token — repeat penalty
+        // will be applied starting from the generation loop below.
         first_gen_token = math_ops.sampleToken(mdl.getLogits(), cli.temperature, cli.top_k, cli.top_p, prng.random());
     }
 
@@ -1384,8 +1387,15 @@ fn generateAndPrintInner(
             eprint("Error: generation failed at token {d}: {}\n", .{ gi + 1, e });
             break;
         };
+        // Apply repeat penalty to logits for recently generated tokens
+        if (use_repeat_penalty and token_count > 0) {
+            math_ops.applyRepeatPenalty(mdl.getLogits(), gen_ids_buf[0..token_count], cli.repeat_penalty);
+        }
         if (use_sampling) {
             next = math_ops.sampleToken(mdl.getLogits(), cli.temperature, cli.top_k, cli.top_p, prng.random());
+        } else if (use_repeat_penalty and token_count > 0) {
+            // Greedy decoding with repeat penalty: re-argmax after penalty
+            next = math_ops.argmax(mdl.getLogits());
         }
         dbg("gen step {d}: token={d}", .{ gi, next });
         if (isEogToken(next, eog)) {

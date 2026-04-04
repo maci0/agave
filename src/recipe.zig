@@ -139,6 +139,18 @@ pub const Recipe = struct {
                 .ctx_size = 2048,
             },
         },
+        // ── GLM-4 — needs repeat penalty to avoid greedy loops ──
+        .{
+            .arch_prefix = "glm4",
+            .backend = "",
+            .quant = "",
+            .recipe = .{
+                .name = "GLM-4 generic",
+                .temperature = 0.7,
+                .repeat_penalty = 1.1,
+                .max_tokens = 1024,
+            },
+        },
         // ── CPU-only — larger batches, lower context ──
         .{
             .arch_prefix = "",
@@ -161,8 +173,14 @@ test "recipe match exact" {
     try std.testing.expectApproxEqAbs(@as(f32, 0.6), r.temperature.?, 0.001);
 }
 
-test "recipe match falls through to CPU generic" {
+test "recipe match glm4 gets GLM-4 recipe" {
     const r = Recipe.match("glm4", "CPU", "Q4_0") orelse Recipe.default;
+    try std.testing.expectEqualStrings("GLM-4 generic", r.name);
+    try std.testing.expectApproxEqAbs(@as(f32, 1.1), r.repeat_penalty.?, 0.001);
+}
+
+test "recipe match falls through to CPU generic" {
+    const r = Recipe.match("unknown_cpu_arch", "CPU", "Q4_0") orelse Recipe.default;
     try std.testing.expectEqualStrings("CPU generic", r.name);
 }
 

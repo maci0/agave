@@ -19,6 +19,7 @@ const math_ops = @import("../ops/math.zig");
 const attn_ops = @import("../ops/attention.zig");
 const ssm_ops = @import("../ops/ssm.zig");
 const quant = @import("../ops/quant.zig");
+const mlx_ops = @import("../ops/mlx.zig");
 const kvcache = @import("../kvcache/manager.zig");
 const block_alloc_mod = @import("../kvcache/block_allocator.zig");
 const BlockAllocator = block_alloc_mod.BlockAllocator;
@@ -50,6 +51,8 @@ const name_buf_size: usize = model_mod.tensor_name_buf_size;
 const nvfp4_values_per_byte: usize = 2;
 /// NVFP4 scaling: 1 FP8 scale per 16 elements.
 const nvfp4_scale_group_size: usize = 16;
+/// MLX quantization group size (elements per scale/bias pair).
+const mlx_group_size: usize = mlx_ops.mlx_group_size;
 
 /// Nemotron-3 Nano 30B hybrid model state.
 pub const NemotronNanoModel = struct {
@@ -76,6 +79,9 @@ pub const NemotronNanoModel = struct {
     ssm_n_groups: u32 = 8,
     mamba_num_heads: u32 = 64,
     mamba_head_dim: u32 = 64,
+
+    // MLX quantization
+    mlx_bits: u32 = 4,
 
     // MoE parameters
     moe_intermediate_size: u32 = 1856,
@@ -153,6 +159,7 @@ pub const NemotronNanoModel = struct {
         if (f.getMetaF32("rope_theta")) |v| self.rope_theta = v;
         self.rope_dim = self.head_dim; // partial_rotary_factor = 1.0
         if (f.getMetaF32("routed_scaling_factor")) |v| self.routed_scaling_factor = v;
+        self.mlx_bits = f.getMetaU32("bits") orelse 4;
         if (f.getVocab()) |v| self.vocab_size = @intCast(v.len);
         if (f.getMetaU32("max_position_embeddings")) |v| self.max_seq_len = v;
         if (ctx_size > 0) self.max_seq_len = ctx_size;
@@ -322,14 +329,28 @@ pub const NemotronNanoModel = struct {
 
         const e: usize = self.n_embd;
 
-        // Embedding lookup (BF16)
+        // Embedding lookup (BF16 or MLX quantized)
         const emb = self.fmt.getTensor("backbone.embeddings.weight") orelse return error.MissingTensor;
-        self.be.embLookup(
-            .{ .data = emb.data_ptr, .dtype = emb.dtype },
-            token_id,
-            self.hidden.ptr,
-            e,
-        );
+        if (emb.dtype == .mlx_q) {
+            const emb_s = self.fmt.getTensor("backbone.embeddings.scales") orelse return error.MissingTensor;
+            const emb_b = self.fmt.getTensor("backbone.embeddings.biases") orelse return error.MissingTensor;
+            mlx_ops.mlxEmbLookup(
+                self.hidden.ptr,
+                @ptrCast(@alignCast(emb.data_ptr)),
+                @ptrCast(@alignCast(emb_s.data_ptr)),
+                @ptrCast(@alignCast(emb_b.data_ptr)),
+                token_id,
+                e,
+                self.mlx_bits,
+            );
+        } else {
+            self.be.embLookup(
+                .{ .data = emb.data_ptr, .dtype = emb.dtype },
+                token_id,
+                self.hidden.ptr,
+                e,
+            );
+        }
 
         // Transformer layers
         for (0..self.n_layers) |li| {
@@ -348,7 +369,13 @@ pub const NemotronNanoModel = struct {
         self.be.rmsNorm(self.hidden.ptr, self.bf16_buf_small.ptr, self.hidden.ptr, e, self.rms_eps);
 
         const lm = self.fmt.getTensor("lm_head.weight") orelse return error.MissingTensor;
-        self.be.gemv(self.hidden.ptr, .{ .data = lm.data_ptr, .dtype = lm.dtype }, self.logits_buf.ptr, self.vocab_size, e);
+        if (lm.dtype == .mlx_q) {
+            const lm_s = self.fmt.getTensor("lm_head.scales") orelse return error.MissingTensor;
+            const lm_b = self.fmt.getTensor("lm_head.biases") orelse return error.MissingTensor;
+            self.be.gemvMlxQ(self.hidden.ptr, lm.data_ptr, lm_s.data_ptr, lm_b.data_ptr, self.logits_buf.ptr, self.vocab_size, e, self.mlx_bits);
+        } else {
+            self.be.gemv(self.hidden.ptr, .{ .data = lm.data_ptr, .dtype = lm.dtype }, self.logits_buf.ptr, self.vocab_size, e);
+        }
 
         self.kv_seq_len += 1;
         self.be.sync();
@@ -428,9 +455,11 @@ pub const NemotronNanoModel = struct {
         self.be.rmsNorm(self.hidden.ptr, self.bf16_buf_small.ptr, self.hidden2.ptr, e, self.rms_eps);
         self.be.sync();
 
-        // 2. Input projection (NVFP4 or BF16 depending on layer)
+        // 2. Input projection (MLX, NVFP4, or BF16 depending on format)
         const ip_w = self.stLayerTensor(li, "mixer.in_proj.weight") orelse return error.MissingTensor;
-        if (self.stLayerTensor(li, "mixer.in_proj.scales")) |ip_s| {
+        if (ip_w.dtype == .mlx_q) {
+            try self.doGemv(self.hidden2.ptr, ip_w, self.ssm_proj_buf.ptr, proj_size, e, li, "mixer.in_proj");
+        } else if (self.stLayerTensor(li, "mixer.in_proj.scales")) |ip_s| {
             self.be.gemvNvfp4St(self.hidden2.ptr, ip_w.data_ptr, ip_s.data_ptr, self.ssm_proj_buf.ptr, proj_size, e);
         } else {
             self.be.gemv(self.hidden2.ptr, .{ .data = ip_w.data_ptr, .dtype = ip_w.dtype }, self.ssm_proj_buf.ptr, proj_size, e);
@@ -488,9 +517,11 @@ pub const NemotronNanoModel = struct {
 
         ssm_ops.groupRmsNormSiluGate(y_ptr, z_ptr, norm_w, d_inner, n_groups, self.rms_eps);
 
-        // 8. Output projection (NVFP4 or BF16 depending on layer)
+        // 8. Output projection (MLX, NVFP4, or BF16 depending on format)
         const op_w = self.stLayerTensor(li, "mixer.out_proj.weight") orelse return error.MissingTensor;
-        if (self.stLayerTensor(li, "mixer.out_proj.scales")) |op_s| {
+        if (op_w.dtype == .mlx_q) {
+            try self.doGemv(y_ptr, op_w, self.hidden2.ptr, e, d_inner, li, "mixer.out_proj");
+        } else if (self.stLayerTensor(li, "mixer.out_proj.scales")) |op_s| {
             self.be.gemvNvfp4St(y_ptr, op_w.data_ptr, op_s.data_ptr, self.hidden2.ptr, e, d_inner);
         } else {
             self.be.gemv(y_ptr, .{ .data = op_w.data_ptr, .dtype = op_w.dtype }, self.hidden2.ptr, e, d_inner);
@@ -515,11 +546,11 @@ pub const NemotronNanoModel = struct {
         bf16ToF32Buf(nw.data_ptr, self.bf16_buf_small[0..e]);
         self.be.rmsNorm(self.hidden.ptr, self.bf16_buf_small.ptr, self.hidden2.ptr, e, self.rms_eps);
 
-        // 2. Router: BF16 GEMV → sigmoid + bias correction
+        // 2. Router: GEMV → sigmoid + bias correction
         const gate_w = self.stLayerTensor(li, "mixer.gate.weight") orelse return error.MissingTensor;
         self.be.sync(); // ensure hidden2 (from rmsNorm) is ready
 
-        self.be.gemv(self.hidden2.ptr, .{ .data = gate_w.data_ptr, .dtype = .bf16 }, self.router_buf.ptr, n_exp, e);
+        try self.doGemv(self.hidden2.ptr, gate_w, self.router_buf.ptr, n_exp, e, li, "mixer.gate");
         self.be.sync();
 
         const bias_t = self.stLayerTensor(li, "mixer.gate.e_score_correction_bias") orelse return error.MissingTensor;
@@ -546,42 +577,21 @@ pub const NemotronNanoModel = struct {
         // 4. Routed expert computation
         @memset(self.moe_out, 0);
         const fc1_w = self.stLayerTensor(li, "mixer.switch_mlp.fc1.weight") orelse return error.MissingTensor;
-        const fc1_s = self.stLayerTensor(li, "mixer.switch_mlp.fc1.scales") orelse return error.MissingTensor;
         const fc2_w = self.stLayerTensor(li, "mixer.switch_mlp.fc2.weight") orelse return error.MissingTensor;
-        const fc2_s = self.stLayerTensor(li, "mixer.switch_mlp.fc2.scales") orelse return error.MissingTensor;
-
-        const fc1_w_stride = ff * (e / nvfp4_values_per_byte);
-        const fc1_s_stride = ff * (e / nvfp4_scale_group_size);
-        const fc2_w_stride = e * (ff / nvfp4_values_per_byte);
-        const fc2_s_stride = e * (ff / nvfp4_scale_group_size);
 
         for (0..k_exp) |t| {
             const exp_idx = top_experts[t];
             const w = top_scores[t];
 
-            // fc1: up projection [ff, e] NVFP4 → expert_buf [ff]
-            self.be.gemvNvfp4St(
-                self.hidden2.ptr,
-                fc1_w.data_ptr + exp_idx * fc1_w_stride,
-                fc1_s.data_ptr + exp_idx * fc1_s_stride,
-                self.expert_buf.ptr,
-                ff,
-                e,
-            );
+            // fc1: up projection [ff, e] → expert_buf [ff]
+            try self.doExpertGemv(li, fc1_w, "mixer.switch_mlp.fc1", self.hidden2.ptr, self.expert_buf.ptr, ff, e, exp_idx);
             self.be.sync(); // CPU reads expert_buf next
 
             // relu²
             math_ops.applyReluSquared(self.expert_buf[0..ff]);
 
-            // fc2: down projection [e, ff] NVFP4 → attn_out [e]
-            self.be.gemvNvfp4St(
-                self.expert_buf.ptr,
-                fc2_w.data_ptr + exp_idx * fc2_w_stride,
-                fc2_s.data_ptr + exp_idx * fc2_s_stride,
-                self.attn_out.ptr,
-                e,
-                ff,
-            );
+            // fc2: down projection [e, ff] → attn_out [e]
+            try self.doExpertGemv(li, fc2_w, "mixer.switch_mlp.fc2", self.expert_buf.ptr, self.attn_out.ptr, e, ff, exp_idx);
             self.be.sync(); // CPU reads attn_out next
 
             // Accumulate weighted output
@@ -590,15 +600,13 @@ pub const NemotronNanoModel = struct {
 
         // 5. Shared expert
         const sup_w = self.stLayerTensor(li, "mixer.shared_experts.up_proj.weight") orelse return error.MissingTensor;
-        const sup_s = self.stLayerTensor(li, "mixer.shared_experts.up_proj.scales") orelse return error.MissingTensor;
-        self.be.gemvNvfp4St(self.hidden2.ptr, sup_w.data_ptr, sup_s.data_ptr, self.expert_buf.ptr, shared_ff, e);
+        try self.doSharedExpertGemv(li, sup_w, "mixer.shared_experts.up_proj", self.hidden2.ptr, self.expert_buf.ptr, shared_ff, e);
         self.be.sync(); // CPU reads expert_buf next
 
         math_ops.applyReluSquared(self.expert_buf[0..shared_ff]);
 
         const sdp_w = self.stLayerTensor(li, "mixer.shared_experts.down_proj.weight") orelse return error.MissingTensor;
-        const sdp_s = self.stLayerTensor(li, "mixer.shared_experts.down_proj.scales") orelse return error.MissingTensor;
-        self.be.gemvNvfp4St(self.expert_buf.ptr, sdp_w.data_ptr, sdp_s.data_ptr, self.attn_out.ptr, e, shared_ff);
+        try self.doSharedExpertGemv(li, sdp_w, "mixer.shared_experts.down_proj", self.expert_buf.ptr, self.attn_out.ptr, e, shared_ff);
         self.be.sync(); // CPU reads attn_out next
 
         for (0..e) |i| self.moe_out[i] += self.attn_out[i];
@@ -620,13 +628,13 @@ pub const NemotronNanoModel = struct {
         bf16ToF32Buf(nw.data_ptr, self.bf16_buf_small[0..e]);
         self.be.rmsNorm(self.hidden.ptr, self.bf16_buf_small.ptr, self.hidden2.ptr, e, self.rms_eps);
 
-        // 2. Q/K/V projections (BF16, via backend)
+        // 2. Q/K/V projections (BF16 or MLX quantized)
         const qw = self.stLayerTensor(li, "mixer.q_proj.weight") orelse return error.MissingTensor;
         const kw = self.stLayerTensor(li, "mixer.k_proj.weight") orelse return error.MissingTensor;
         const vw = self.stLayerTensor(li, "mixer.v_proj.weight") orelse return error.MissingTensor;
-        self.be.gemv(self.hidden2.ptr, .{ .data = qw.data_ptr, .dtype = .bf16 }, self.q_buf.ptr, nh * hd, e);
-        self.be.gemv(self.hidden2.ptr, .{ .data = kw.data_ptr, .dtype = .bf16 }, self.k_buf.ptr, nkv * hd, e);
-        self.be.gemv(self.hidden2.ptr, .{ .data = vw.data_ptr, .dtype = .bf16 }, self.v_buf.ptr, nkv * hd, e);
+        try self.doGemv(self.hidden2.ptr, qw, self.q_buf.ptr, nh * hd, e, li, "mixer.q_proj");
+        try self.doGemv(self.hidden2.ptr, kw, self.k_buf.ptr, nkv * hd, e, li, "mixer.k_proj");
+        try self.doGemv(self.hidden2.ptr, vw, self.v_buf.ptr, nkv * hd, e, li, "mixer.v_proj");
 
         // 3. RoPE
         self.be.rope(self.q_buf.ptr, self.kv_seq_len, nh, hd, self.rope_dim, self.rope_theta);
@@ -655,9 +663,9 @@ pub const NemotronNanoModel = struct {
             .f32,
         );
 
-        // 5. Output projection (BF16)
+        // 5. Output projection (BF16 or MLX quantized)
         const ow = self.stLayerTensor(li, "mixer.o_proj.weight") orelse return error.MissingTensor;
-        self.be.gemv(self.attn_out.ptr, .{ .data = ow.data_ptr, .dtype = .bf16 }, self.hidden2.ptr, e, nh * hd);
+        try self.doGemv(self.attn_out.ptr, ow, self.hidden2.ptr, e, nh * hd, li, "mixer.o_proj");
 
         // 6. Residual
         self.be.add(self.hidden.ptr, self.hidden2.ptr, self.hidden.ptr, e);
@@ -671,6 +679,81 @@ pub const NemotronNanoModel = struct {
         var buf: [name_buf_size]u8 = undefined;
         const name = std.fmt.bufPrint(&buf, "backbone.layers.{d}.{s}", .{ li, suffix }) catch return null;
         return self.fmt.getTensor(name);
+    }
+
+    /// GEMV dispatch: MLX quantized path or standard be.gemv for BF16/f32.
+    /// The `prefix` is the layer-relative tensor name prefix without ".weight"
+    /// (used to look up companion ".scales" and ".biases" tensors for MLX
+    /// quantization via stLayerTensor).
+    fn doGemv(self: *NemotronNanoModel, x: [*]const f32, w: TensorInfo, y: [*]f32, n: usize, k: usize, li: u32, comptime prefix: []const u8) !void {
+        if (w.dtype == .mlx_q) {
+            const s_t = self.stLayerTensor(li, prefix ++ ".scales") orelse return error.MissingTensor;
+            const b_t = self.stLayerTensor(li, prefix ++ ".biases") orelse return error.MissingTensor;
+            self.be.gemvMlxQ(x, w.data_ptr, s_t.data_ptr, b_t.data_ptr, y, n, k, self.mlx_bits);
+        } else if (self.stLayerTensor(li, prefix ++ ".scales")) |s_t| {
+            // NVFP4 path: separate scales tensor
+            self.be.gemvNvfp4St(x, w.data_ptr, s_t.data_ptr, y, n, k);
+        } else {
+            self.be.gemv(x, .{ .data = w.data_ptr, .dtype = w.dtype }, y, n, k);
+        }
+    }
+
+    /// GEMV dispatch for stacked expert weights (indexed by expert_id).
+    /// For NVFP4: uses strides into packed weight/scale tensors.
+    /// For MLX: uses strides into packed weight/scale/bias tensors.
+    /// For BF16/f32: uses byte stride into weight tensor.
+    fn doExpertGemv(
+        self: *NemotronNanoModel,
+        li: u32,
+        w: TensorInfo,
+        comptime prefix: []const u8,
+        x: [*]const f32,
+        y: [*]f32,
+        n: usize,
+        k: usize,
+        exp_idx: usize,
+    ) !void {
+        if (w.dtype == .mlx_q) {
+            const s_t = self.stLayerTensor(li, prefix ++ ".scales") orelse return error.MissingTensor;
+            const b_t = self.stLayerTensor(li, prefix ++ ".biases") orelse return error.MissingTensor;
+            const gs = mlx_group_size;
+            const gpr = (k + gs - 1) / gs;
+            const wpg = mlx_ops.wordsPerGroup(self.mlx_bits);
+            const wpr = gpr * wpg;
+            // Byte offsets: weights are u32 words, scales/biases are u16 (bf16)
+            const w_byte_offset = exp_idx * n * wpr * @sizeOf(u32);
+            const s_byte_offset = exp_idx * n * gpr * @sizeOf(u16);
+            self.be.gemvMlxQ(x, w.data_ptr + w_byte_offset, s_t.data_ptr + s_byte_offset, b_t.data_ptr + s_byte_offset, y, n, k, self.mlx_bits);
+        } else {
+            // NVFP4 path: look up separate NVFP4 scale tensor
+            const s_t = self.stLayerTensor(li, prefix ++ ".scales") orelse return error.MissingTensor;
+            const w_stride = n * (k / nvfp4_values_per_byte);
+            const s_stride = n * (k / nvfp4_scale_group_size);
+            self.be.gemvNvfp4St(x, w.data_ptr + exp_idx * w_stride, s_t.data_ptr + exp_idx * s_stride, y, n, k);
+        }
+    }
+
+    /// GEMV dispatch for non-stacked (shared) expert weights.
+    /// For NVFP4: uses separate scale tensor. For MLX: uses companion tensors.
+    fn doSharedExpertGemv(
+        self: *NemotronNanoModel,
+        li: u32,
+        w: TensorInfo,
+        comptime prefix: []const u8,
+        x: [*]const f32,
+        y: [*]f32,
+        n: usize,
+        k: usize,
+    ) !void {
+        if (w.dtype == .mlx_q) {
+            const s_t = self.stLayerTensor(li, prefix ++ ".scales") orelse return error.MissingTensor;
+            const b_t = self.stLayerTensor(li, prefix ++ ".biases") orelse return error.MissingTensor;
+            self.be.gemvMlxQ(x, w.data_ptr, s_t.data_ptr, b_t.data_ptr, y, n, k, self.mlx_bits);
+        } else {
+            // NVFP4 path
+            const s_t = self.stLayerTensor(li, prefix ++ ".scales") orelse return error.MissingTensor;
+            self.be.gemvNvfp4St(x, w.data_ptr, s_t.data_ptr, y, n, k);
+        }
     }
 };
 

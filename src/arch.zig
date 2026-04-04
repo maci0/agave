@@ -8,6 +8,7 @@ const ChatTemplate = @import("chat_template.zig").ChatTemplate;
 pub const Arch = enum {
     qwen35,
     gemma3,
+    gemma4,
     gpt_oss,
     nemotron_h,
     nemotron_nano,
@@ -16,6 +17,8 @@ pub const Arch = enum {
     /// Detect model architecture from GGUF/SafeTensors arch string.
     pub fn detect(name: []const u8) ?Arch {
         const map = .{
+            .{ "gemma4", .gemma4 },
+            .{ "gemma4_text", .gemma4 },
             .{ "gemma3", .gemma3 },
             .{ "gemma3_text", .gemma3 },
             .{ "gemma2", .gemma3 },
@@ -47,6 +50,7 @@ pub const Arch = enum {
     pub fn displayName(self: Arch) []const u8 {
         return switch (self) {
             .gemma3 => "Gemma 3",
+            .gemma4 => "Gemma 4",
             .qwen35 => "Qwen 3.5",
             .gpt_oss => "GPT-OSS",
             .nemotron_h => "Nemotron-H",
@@ -59,6 +63,7 @@ pub const Arch = enum {
     pub fn chatTemplate(self: Arch) ChatTemplate {
         return switch (self) {
             .gemma3 => ChatTemplate.gemma,
+            .gemma4 => ChatTemplate.gemma4,
             .gpt_oss => ChatTemplate.gpt_oss,
             .qwen35 => ChatTemplate.qwen35,
             .glm4 => ChatTemplate.glm4,
@@ -70,6 +75,7 @@ pub const Arch = enum {
     pub fn templateName(self: Arch) []const u8 {
         return switch (self) {
             .gemma3 => "gemma",
+            .gemma4 => "gemma4",
             .gpt_oss => "gpt-oss",
             .qwen35 => "qwen35",
             .glm4 => "glm4",
@@ -81,6 +87,7 @@ pub const Arch = enum {
     pub fn isEnabled(self: Arch) bool {
         return switch (self) {
             .gemma3 => build_options.enable_gemma3,
+            .gemma4 => build_options.enable_gemma4,
             .qwen35 => build_options.enable_qwen35,
             .gpt_oss => build_options.enable_gpt_oss,
             .nemotron_h => build_options.enable_nemotron_h,
@@ -93,6 +100,7 @@ pub const Arch = enum {
     pub fn buildFlag(self: Arch) []const u8 {
         return switch (self) {
             .gemma3 => "gemma3",
+            .gemma4 => "gemma4",
             .qwen35 => "qwen35",
             .gpt_oss => "gpt-oss",
             .nemotron_h => "nemotron-h",
@@ -116,6 +124,8 @@ pub const default_bos_id: u32 = 2;
 pub const max_eog_ids: usize = 8;
 
 test "Arch.detect known names" {
+    try std.testing.expectEqual(Arch.gemma4, Arch.detect("gemma4").?);
+    try std.testing.expectEqual(Arch.gemma4, Arch.detect("gemma4_text").?);
     try std.testing.expectEqual(Arch.gemma3, Arch.detect("gemma3").?);
     try std.testing.expectEqual(Arch.gemma3, Arch.detect("gemma2").?);
     try std.testing.expectEqual(Arch.qwen35, Arch.detect("qwen35").?);
@@ -128,6 +138,7 @@ test "Arch.detect known names" {
 
 test "Arch.displayName" {
     try std.testing.expectEqualStrings("Gemma 3", Arch.gemma3.displayName());
+    try std.testing.expectEqualStrings("Gemma 4", Arch.gemma4.displayName());
     try std.testing.expectEqualStrings("Qwen 3.5", Arch.qwen35.displayName());
     try std.testing.expectEqualStrings("GPT-OSS", Arch.gpt_oss.displayName());
     try std.testing.expectEqualStrings("Nemotron-H", Arch.nemotron_h.displayName());

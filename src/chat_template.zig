@@ -128,6 +128,7 @@ pub const ChatTemplate = struct {
     };
 
     /// Gemma 3 (and Gemma 2, which auto-detects as gemma3).
+    /// Gemma 3 — uses `<start_of_turn>`/`<end_of_turn>` markers.
     pub const gemma = ChatTemplate{
         .system_prefix = "<start_of_turn>user\n",
         .system_suffix = "\n\n",
@@ -136,6 +137,22 @@ pub const ChatTemplate = struct {
         .assistant_prefix = "<end_of_turn>\n<start_of_turn>model\n",
         .assistant_suffix = "<end_of_turn>\n",
         .eog_tokens = &.{ "<end_of_turn>", "<eos>" },
+    };
+
+    /// Gemma 4 — uses `<|turn>`/`<turn|>` markers (different from Gemma 3).
+    /// `generation_prefix` selects channel 0 (direct answer) and immediately
+    /// closes it, preventing the model from emitting reasoning tokens.
+    /// `<channel|>` is an EOG token so generation stops if the model outputs
+    /// a channel-end marker.
+    pub const gemma4 = ChatTemplate{
+        .system_prefix = "<|turn>system\n",
+        .system_suffix = "<turn|>\n",
+        .user_prefix = "<|turn>user\n",
+        .user_suffix = "<turn|>\n",
+        .assistant_prefix = "<|turn>model\n",
+        .assistant_suffix = "<turn|>\n",
+        .eog_tokens = &.{ "<turn|>", "<eos>", "<channel|>", "<|endoftext|>", "<|end|>" },
+        .generation_prefix = "<|channel>0\n<channel|>",
     };
 
     /// GLM-4 — uses `[gMASK]<sop>` prefix (BOS sends `[gMASK]`, template starts
@@ -296,6 +313,21 @@ test "glm4 format with system message uses system_role_override" {
     try std.testing.expect(std.mem.indexOf(u8, result, "<|system|>\nYou are helpful.") != null);
     // Still starts with <sop>
     try std.testing.expect(std.mem.startsWith(u8, result, "<sop>"));
+}
+
+test "gemma4 format includes generation prefix for channel 0" {
+    const result = try ChatTemplate.gemma4.format(std.testing.allocator, null, "Hi");
+    defer std.testing.allocator.free(result);
+    // Must end with assistant_prefix + generation_prefix (channel 0 selection)
+    try std.testing.expect(std.mem.endsWith(u8, result, "<|turn>model\n<|channel>0\n<channel|>"));
+    // User turn must close with <turn|>
+    try std.testing.expect(std.mem.indexOf(u8, result, "<|turn>user\nHi<turn|>") != null);
+}
+
+test "gemma4 continuation includes generation prefix" {
+    const result = try ChatTemplate.gemma4.formatContinuation(std.testing.allocator, "next?");
+    defer std.testing.allocator.free(result);
+    try std.testing.expect(std.mem.endsWith(u8, result, "<|turn>model\n<|channel>0\n<channel|>"));
 }
 
 test "continuation matches full format suffix" {

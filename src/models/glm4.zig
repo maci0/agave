@@ -559,7 +559,7 @@ pub const Glm4Model = struct {
             const b_name = std.fmt.bufPrint(&buf3, "model.layers.{d}.{s}.biases", .{ li, prefix }) catch return error.MissingTensor;
             const s_t = self.fmt.getTensor(s_name) orelse return error.MissingTensor;
             const b_t = self.fmt.getTensor(b_name) orelse return error.MissingTensor;
-            mlx_ops.mlxGemvRaw(x.ptr, @ptrCast(@alignCast(w_t.data_ptr)), @ptrCast(@alignCast(s_t.data_ptr)), @ptrCast(@alignCast(b_t.data_ptr)), y.ptr, n, k, self.mlx_bits);
+            self.be.gemvMlxQ(x.ptr, w_t.data_ptr, s_t.data_ptr, b_t.data_ptr, y.ptr, n, k, self.mlx_bits);
         } else {
             self.be.gemv(x.ptr, .{ .data = w_t.data_ptr, .dtype = w_t.dtype }, y.ptr, n, k);
         }
@@ -578,7 +578,7 @@ pub const Glm4Model = struct {
             const b_name = std.fmt.bufPrint(&buf3, "{s}.biases", .{prefix}) catch return error.MissingTensor;
             const s_t = self.fmt.getTensor(s_name) orelse return error.MissingTensor;
             const b_t = self.fmt.getTensor(b_name) orelse return error.MissingTensor;
-            mlx_ops.mlxGemvRaw(x.ptr, @ptrCast(@alignCast(w_t.data_ptr)), @ptrCast(@alignCast(s_t.data_ptr)), @ptrCast(@alignCast(b_t.data_ptr)), y.ptr, n, k, self.mlx_bits);
+            self.be.gemvMlxQ(x.ptr, w_t.data_ptr, s_t.data_ptr, b_t.data_ptr, y.ptr, n, k, self.mlx_bits);
         } else {
             self.be.gemv(x.ptr, .{ .data = w_t.data_ptr, .dtype = w_t.dtype }, y.ptr, n, k);
         }
@@ -603,15 +603,12 @@ pub const Glm4Model = struct {
             const wpg = mlx_ops.wordsPerGroup(self.mlx_bits);
             const wpr = gpr * wpg;
 
-            const pw: [*]const u32 = @ptrCast(@alignCast(w_t.data_ptr));
-            const sc: [*]const u16 = @ptrCast(@alignCast(s_t.data_ptr));
-            const bi: [*]const u16 = @ptrCast(@alignCast(b_t.data_ptr));
-
             const eid: usize = expert_id;
-            const w_offset = eid * n * wpr;
-            const s_offset = eid * n * gpr;
+            // Byte offsets: weights are u32 words, scales/biases are u16 (bf16)
+            const w_byte_offset = eid * n * wpr * @sizeOf(u32);
+            const s_byte_offset = eid * n * gpr * @sizeOf(u16);
 
-            mlx_ops.mlxGemvRaw(x.ptr, pw + w_offset, sc + s_offset, bi + s_offset, y.ptr, n, k, self.mlx_bits);
+            self.be.gemvMlxQ(x.ptr, w_t.data_ptr + w_byte_offset, s_t.data_ptr + s_byte_offset, b_t.data_ptr + s_byte_offset, y.ptr, n, k, self.mlx_bits);
         } else {
             // Non-MLX expert: offset into expert slice
             const expert_bytes = dtypeBytes(w_t.dtype, n * k);
@@ -641,14 +638,11 @@ pub const Glm4Model = struct {
             const wpg = mlx_ops.wordsPerGroup(self.mlx_bits);
             const words_per_row = groups_per_row * wpg;
 
-            const pw: [*]const u32 = @ptrCast(@alignCast(w_t.data_ptr));
-            const sc: [*]const u16 = @ptrCast(@alignCast(s_t.data_ptr));
-            const bi: [*]const u16 = @ptrCast(@alignCast(b_t.data_ptr));
-
             for (0..nh) |h| {
-                const w_off = h * out_dim * words_per_row;
-                const s_off = h * out_dim * groups_per_row;
-                mlx_ops.mlxGemvRaw(x.ptr, pw + w_off, sc + s_off, bi + s_off, y + h * out_dim, out_dim, in_dim, self.mlx_bits);
+                // Byte offsets: weights are u32 words, scales/biases are u16 (bf16)
+                const w_byte_off = h * out_dim * words_per_row * @sizeOf(u32);
+                const s_byte_off = h * out_dim * groups_per_row * @sizeOf(u16);
+                self.be.gemvMlxQ(x.ptr, w_t.data_ptr + w_byte_off, s_t.data_ptr + s_byte_off, b_t.data_ptr + s_byte_off, y + h * out_dim, out_dim, in_dim, self.mlx_bits);
             }
         } else {
             // Non-MLX GGUF: dispatch via backend for in-kernel dequantization.

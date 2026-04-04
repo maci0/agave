@@ -197,6 +197,28 @@ pub fn finalLogits(
     return argmax(logits);
 }
 
+/// Apply repetition penalty to logits for recently generated tokens.
+/// For each token ID in `recent_ids`, divides its logit by `penalty` if positive,
+/// multiplies if negative. This discourages the model from repeating tokens.
+/// Standard repeat penalty from the Transformer paper (Keskar et al. 2019).
+///
+/// Parameters:
+///   - logits: Mutable logit buffer [vocab_size], modified in-place.
+///   - recent_ids: Slice of recently generated token IDs to penalize.
+///   - penalty: Repetition penalty factor (> 1.0 = more penalty, 1.0 = no penalty).
+pub fn applyRepeatPenalty(logits: []f32, recent_ids: []const u32, penalty: f32) void {
+    std.debug.assert(penalty > 0);
+    for (recent_ids) |tok_id| {
+        if (tok_id < logits.len) {
+            if (logits[tok_id] > 0) {
+                logits[tok_id] /= penalty;
+            } else {
+                logits[tok_id] *= penalty;
+            }
+        }
+    }
+}
+
 /// Sample a token from logits using temperature, top-k, and top-p (nucleus) filtering.
 ///
 /// When temperature == 0, returns argmax (greedy). Otherwise:
@@ -463,4 +485,46 @@ test "sampleToken top_k filters" {
     try std.testing.expect(seen[1]); // index 1 (3.0) kept
     try std.testing.expect(!seen[2]); // index 2 (0.2) filtered out
     try std.testing.expect(seen[3]); // index 3 (2.5) kept
+}
+
+test "applyRepeatPenalty positive logits divided" {
+    var logits = [_]f32{ 1.0, 2.0, 3.0, 4.0 };
+    const recent = [_]u32{ 1, 3 };
+    applyRepeatPenalty(&logits, &recent, 2.0);
+    // Unpenalized tokens unchanged
+    try std.testing.expectEqual(@as(f32, 1.0), logits[0]);
+    try std.testing.expectEqual(@as(f32, 3.0), logits[2]);
+    // Positive logits divided by penalty
+    try std.testing.expectEqual(@as(f32, 1.0), logits[1]); // 2.0 / 2.0
+    try std.testing.expectEqual(@as(f32, 2.0), logits[3]); // 4.0 / 2.0
+}
+
+test "applyRepeatPenalty negative logits multiplied" {
+    var logits = [_]f32{ -1.0, 2.0, -3.0 };
+    const recent = [_]u32{ 0, 2 };
+    applyRepeatPenalty(&logits, &recent, 1.5);
+    // Negative logits multiplied by penalty (made more negative)
+    try std.testing.expectApproxEqAbs(@as(f32, -1.5), logits[0], 1e-6);
+    try std.testing.expectApproxEqAbs(@as(f32, -4.5), logits[2], 1e-6);
+    // Unpenalized positive logit unchanged
+    try std.testing.expectEqual(@as(f32, 2.0), logits[1]);
+}
+
+test "applyRepeatPenalty no-op at 1.0" {
+    var logits = [_]f32{ 1.0, -2.0, 3.0 };
+    const original = [_]f32{ 1.0, -2.0, 3.0 };
+    const recent = [_]u32{ 0, 1, 2 };
+    applyRepeatPenalty(&logits, &recent, 1.0);
+    // penalty=1.0 should not change any logits
+    for (0..3) |i| {
+        try std.testing.expectEqual(original[i], logits[i]);
+    }
+}
+
+test "applyRepeatPenalty out-of-range token ignored" {
+    var logits = [_]f32{ 1.0, 2.0 };
+    const recent = [_]u32{ 0, 999 }; // 999 is out of range
+    applyRepeatPenalty(&logits, &recent, 2.0);
+    try std.testing.expectEqual(@as(f32, 0.5), logits[0]); // 1.0 / 2.0
+    try std.testing.expectEqual(@as(f32, 2.0), logits[1]); // unchanged
 }

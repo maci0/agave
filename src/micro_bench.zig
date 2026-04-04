@@ -1061,10 +1061,10 @@ fn runE2e(allocator: std.mem.Allocator, cli: CliArgs) u8 {
 
     const vocab = fmt.getVocab();
     const merges = fmt.getMerges();
-    const tok_kind: TokenizerKind = if (arch == .gemma3) .spm_no_dummy else if (merges != null) .bpe else .spm;
+    const tok_kind: TokenizerKind = if (arch == .gemma3 or arch == .gemma4) .spm_no_dummy else if (merges != null) .bpe else .spm;
     const eos_id = fmt.getMetaU32("tokenizer.ggml.eos_token_id") orelse
         fmt.getMetaU32("eos_token_id") orelse
-        if (arch == .gemma3) gemma_fallback_eos else default_fallback_eos;
+        if (arch == .gemma3 or arch == .gemma4) gemma_fallback_eos else default_fallback_eos;
     const bos_id = fmt.getMetaU32("tokenizer.ggml.bos_token_id") orelse
         fmt.getMetaU32("bos_token_id") orelse default_bos_id;
 
