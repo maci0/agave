@@ -19,6 +19,7 @@ const scheduler = @import("scheduler.zig");
 const RateLimiter = @import("rate_limiter.zig").RateLimiter;
 const Metrics = @import("metrics.zig").Metrics;
 const TieredKvCache = @import("../kvcache/tiered.zig").TieredKvCache;
+const engine_version = @import("../display.zig").version;
 
 // ── Server constants ────────────────────────────────────────────
 const slog_buf_size: usize = 4096;
@@ -481,8 +482,8 @@ fn handleRequest(stream: net.Stream, req: HttpRequest) void {
         var buf: [health_buf_size]u8 = undefined;
         const uptime: i64 = if (g_server.start_time > 0) std.time.timestamp() - g_server.start_time else 0;
         const json = std.fmt.bufPrint(&buf,
-            \\{{"status":"ok","model":"{s}","backend":"{s}","uptime_s":{d},"active_connections":{d},"requests_total":{d}}}
-        , .{ g_server.model_name, g_server.backend_name, uptime, g_server.active_connections.load(.monotonic), g_server.metrics.requests_total.load(.monotonic) }) catch return;
+            \\{{"status":"ok","version":"{s}","model":"{s}","backend":"{s}","uptime_s":{d},"active_connections":{d},"requests_total":{d}}}
+        , .{ engine_version, g_server.model_name, g_server.backend_name, uptime, g_server.active_connections.load(.monotonic), g_server.metrics.requests_total.load(.monotonic) }) catch return;
         sendJson(stream, json);
         return;
     }

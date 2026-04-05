@@ -528,3 +528,82 @@ test "applyRepeatPenalty out-of-range token ignored" {
     try std.testing.expectEqual(@as(f32, 0.5), logits[0]); // 1.0 / 2.0
     try std.testing.expectEqual(@as(f32, 2.0), logits[1]); // unchanged
 }
+
+test "topKExperts bias-corrected selection vs raw weighting" {
+    // Verify the Nemotron-Nano MoE routing pattern:
+    // Use bias to shift expert SELECTION, but weight with raw sigmoid scores.
+    const raw_sigmoid = [_]f32{ 0.3, 0.7, 0.1, 0.6, 0.2 };
+    // Bias boosts expert 2 (raw=0.1) to top of selection
+    const bias = [_]f32{ 0.0, 0.0, 0.9, 0.0, 0.0 };
+
+    // Add bias for selection
+    var biased: [5]f32 = undefined;
+    for (0..5) |i| biased[i] = raw_sigmoid[i] + bias[i];
+
+    // Select top-2 using biased scores
+    var top_idx: [2]usize = undefined;
+    var top_unused: [2]f32 = undefined;
+    topKExperts(&biased, 2, &top_idx, &top_unused);
+
+    // Expert 2 (biased=1.0) and expert 1 (biased=0.7) should be selected
+    var selected = [_]bool{false} ** 5;
+    for (0..2) |i| selected[top_idx[i]] = true;
+    try std.testing.expect(selected[2]); // boosted by bias
+    try std.testing.expect(selected[1]); // naturally high
+
+    // Gather RAW sigmoid scores for weighting (NOT biased)
+    var raw_weights: [2]f32 = undefined;
+    for (0..2) |i| raw_weights[i] = raw_sigmoid[top_idx[i]];
+
+    // Expert 2's weight should be 0.1 (raw sigmoid), NOT 1.0 (biased)
+    for (0..2) |i| {
+        if (top_idx[i] == 2)
+            try std.testing.expectApproxEqAbs(@as(f32, 0.1), raw_weights[i], 1e-6);
+        if (top_idx[i] == 1)
+            try std.testing.expectApproxEqAbs(@as(f32, 0.7), raw_weights[i], 1e-6);
+    }
+
+    // Normalized weights should sum to 1.0
+    var sum: f32 = 0;
+    for (0..2) |i| sum += raw_weights[i];
+    for (0..2) |i| raw_weights[i] /= sum;
+    var weight_sum: f32 = 0;
+    for (0..2) |i| weight_sum += raw_weights[i];
+    try std.testing.expectApproxEqAbs(@as(f32, 1.0), weight_sum, 1e-5);
+}
+
+test "topKExperts duplicate scores tie breaking" {
+    const scores = [_]f32{ 0.5, 0.5, 0.1 };
+    var indices: [1]usize = undefined;
+    var values: [1]f32 = undefined;
+    topKExperts(&scores, 1, &indices, &values);
+    // First 0.5 (index 0) wins — ties broken by position
+    try std.testing.expectEqual(@as(usize, 0), indices[0]);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.5), values[0], 1e-6);
+}
+
+test "topKExperts k equals n" {
+    const scores = [_]f32{ 0.3, 0.1, 0.7 };
+    var indices: [3]usize = undefined;
+    var values: [3]f32 = undefined;
+    topKExperts(&scores, 3, &indices, &values);
+    var found = [_]bool{false} ** 3;
+    for (0..3) |i| {
+        found[indices[i]] = true;
+        try std.testing.expectApproxEqAbs(scores[indices[i]], values[i], 1e-6);
+    }
+    try std.testing.expect(found[0]);
+    try std.testing.expect(found[1]);
+    try std.testing.expect(found[2]);
+}
+
+test "topKExperts negative scores" {
+    const scores = [_]f32{ -0.5, -0.1, -0.9, -0.3 };
+    var indices: [2]usize = undefined;
+    var values: [2]f32 = undefined;
+    topKExperts(&scores, 2, &indices, &values);
+    var found = [_]bool{false} ** 4;
+    for (0..2) |i| found[indices[i]] = true;
+    try std.testing.expect(found[1]); // -0.1 (highest)
+    try std.testing.expect(found[3]); // -0.3 (second highest)
+}

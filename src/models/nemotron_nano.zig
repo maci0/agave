@@ -44,6 +44,12 @@ const max_layers: usize = 64;
 /// Stack allocation limit for expert selection arrays (actual per-token count is num_experts_per_tok).
 const max_active_experts: usize = 8;
 
+/// Maximum routed experts for stack-allocated sigmoid buffer in MoE routing.
+const max_routed_experts: usize = 256;
+
+/// Set to true to enable MoE routing diagnostics on stderr (expert indices, score sums).
+const moe_debug = false;
+
 /// Buffer size for tensor name formatting (layer prefix + suffix).
 const name_buf_size: usize = model_mod.tensor_name_buf_size;
 
@@ -356,6 +362,7 @@ pub const NemotronNanoModel = struct {
         for (0..self.n_layers) |li| {
             if (self.cancelled.load(.acquire)) return error.Cancelled;
             const l: u32 = @intCast(li);
+
             switch (self.layer_types[li]) {
                 .ssm => try self.ssmLayer(l),
                 .moe => try self.moeLayer(l),
@@ -556,22 +563,50 @@ pub const NemotronNanoModel = struct {
         const bias_t = self.stLayerTensor(li, "mixer.gate.e_score_correction_bias") orelse return error.MissingTensor;
         // Bias is F32 (not BF16 like other tensors) — read directly
         const bias_ptr: [*]const f32 = @ptrCast(@alignCast(bias_t.data_ptr));
+
+        // Apply sigmoid to all router logits and save raw scores for weighting.
+        std.debug.assert(n_exp <= max_routed_experts);
+        var raw_sigmoid: [max_routed_experts]f32 = undefined;
         for (0..n_exp) |i| {
-            const sig = math_ops.sigmoid(self.router_buf[i]);
-            self.router_buf[i] = sig + bias_ptr[i];
+            raw_sigmoid[i] = math_ops.sigmoid(self.router_buf[i]);
         }
 
-        // 3. Top-k selection
-        var top_experts: [max_active_experts]usize = undefined;
-        var top_scores: [max_active_experts]f32 = undefined;
-        math_ops.topKExperts(self.router_buf[0..n_exp], k_exp, &top_experts, &top_scores);
+        // Use sigmoid + bias for top-k SELECTION only (bias shifts selection, not weights).
+        // Reference: HF NemotronHMoEGate.forward() applies bias only to get_topk_indices,
+        // then gathers raw sigmoid scores for the selected experts.
+        for (0..n_exp) |i| {
+            self.router_buf[i] = raw_sigmoid[i] + bias_ptr[i];
+        }
 
-        // Normalize + scale
+        // 3. Top-k selection (using bias-corrected scores)
+        var top_experts: [max_active_experts]usize = undefined;
+        var top_scores_biased: [max_active_experts]f32 = undefined;
+        math_ops.topKExperts(self.router_buf[0..n_exp], k_exp, &top_experts, &top_scores_biased);
+
+        // Gather raw sigmoid scores for the selected experts (NO bias, NO float round-trip)
+        var top_scores: [max_active_experts]f32 = undefined;
+        for (0..k_exp) |i| {
+            top_scores[i] = raw_sigmoid[top_experts[i]];
+        }
+
+        // Normalize + scale (using raw sigmoid scores)
         var score_sum: f32 = 0;
         for (0..k_exp) |i| score_sum += top_scores[i];
         if (score_sum > 0) {
-            const inv_sum = self.routed_scaling_factor / score_sum;
-            for (0..k_exp) |i| top_scores[i] *= inv_sum;
+            for (0..k_exp) |i| top_scores[i] /= score_sum;
+        }
+        for (0..k_exp) |i| top_scores[i] *= self.routed_scaling_factor;
+
+        // MoE routing diagnostics (compile-time gated, zero cost when disabled)
+        if (comptime moe_debug) {
+            const ds = std.fs.File.stderr();
+            var db: [256]u8 = undefined;
+            ds.writeAll(std.fmt.bufPrint(&db, "[moe] L{d} experts=[{d},{d},{d},{d},{d},{d}] sum={d:.4}\n", .{
+                li,
+                top_experts[0], top_experts[1], top_experts[2],
+                top_experts[3], top_experts[4], top_experts[5],
+                score_sum,
+            }) catch "") catch {};
         }
 
         // 4. Routed expert computation

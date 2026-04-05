@@ -36,6 +36,7 @@ const LineEditor = @import("readline.zig").LineEditor;
 const KvQuantType = @import("ops/kv_quant.zig").KvQuantType;
 const math_ops = @import("ops/math.zig");
 const TieredKvCache = @import("kvcache/tiered.zig").TieredKvCache;
+const pull = @import("pull.zig");
 
 const stdout = std.fs.File.stdout();
 const stderr = std.fs.File.stderr();
@@ -95,9 +96,6 @@ const tiered_fallback_n_kv_heads: u32 = 8;
 /// Fallback n_heads for tiered KV cache sizing when metadata is missing.
 const tiered_fallback_n_heads: u32 = 32;
 const max_eog_ids = arch_mod.max_eog_ids;
-const gemma_fallback_eos = arch_mod.gemma_fallback_eos;
-const default_fallback_eos = arch_mod.default_fallback_eos;
-const default_bos_id = arch_mod.default_bos_id;
 
 // ── Output control ──────────────────────────────────────────────
 
@@ -279,11 +277,14 @@ const cli_params = clap.parseParamsComptime(
     \\    --kv-type <str>        KV cache quantization: f32, f16, q8_0, int8, fp8, nvfp4, turbo2, turbo3, turbo4 [default: f16].
     \\    --cache-type-k <str>  KV cache key quantization (overrides --kv-type for keys).
     \\    --cache-type-v <str>  KV cache value quantization (overrides --kv-type for values).
+    \\    --kv-type-k <str>     Alias for --cache-type-k.
+    \\    --kv-type-v <str>     Alias for --cache-type-v.
     \\    --kv-tiers <str>       Enable tiered KV cache: vram+ram, vram+ram+ssd [default: off].
     \\    --kv-ram-budget <str>  RAM tier budget in GB, requires --kv-tiers [default: 50% of free RAM].
     \\    --kv-ssd-path <str>    SSD tier file path, requires --kv-tiers with ssd.
     \\    --kv-ssd-budget <str>  SSD tier budget in GB, requires --kv-tiers with ssd [default: 10].
     \\    --no-color             Disable colored output.
+    \\    --color <str>          Color mode: auto, always, never [default: auto].
     \\-V, --verbose              Show technical details (params, load times, EOG).
     \\    --allow-cpu-fallback   Allow GPU backends to fall back to CPU for unsupported ops.
     \\-d, --debug                Enable debug logging (token IDs, layer timing).
@@ -332,6 +333,34 @@ const CliArgs = struct {
     user_set: Recipe.Overrides = .{},
 };
 
+/// Check if the first positional arg is a subcommand (e.g. "pull").
+/// Returns true if a subcommand was handled (caller should return).
+fn checkSubcommand(allocator: std.mem.Allocator) bool {
+    var args_iter = std.process.argsWithAllocator(allocator) catch {
+        eprint("Error: out of memory parsing arguments\n", .{});
+        return false;
+    };
+    defer args_iter.deinit();
+    _ = args_iter.next(); // skip argv[0]
+
+    const first = args_iter.next() orelse return false;
+    if (std.mem.eql(u8, first, "pull")) {
+        const exit_code = pull.run(allocator);
+        if (exit_code != 0) std.process.exit(exit_code);
+        return true;
+    }
+    // Support `agave help <subcommand>` (git convention)
+    if (std.mem.eql(u8, first, "help")) {
+        const sub = args_iter.next() orelse return false;
+        if (std.mem.eql(u8, sub, "pull")) {
+            pull.printUsage();
+            return true;
+        }
+        return false; // Unknown subcommand — fall through to normal parsing
+    }
+    return false;
+}
+
 fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
     var diag = clap.Diagnostic{};
     var res = clap.parse(clap.Help, &cli_params, clap.parsers.default, .{
@@ -361,7 +390,22 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
 
     // Auto-detect TTY: disable color when stdout is not a terminal
     g_tty = std.posix.isatty(stdout.handle);
-    g_color = res.args.@"no-color" == 0 and g_tty;
+    g_color = blk: {
+        // --color=always|never|auto takes precedence
+        if (res.args.color) |cm| {
+            if (std.mem.eql(u8, cm, "always")) break :blk true;
+            if (std.mem.eql(u8, cm, "never")) break :blk false;
+            if (!std.mem.eql(u8, cm, "auto")) {
+                eprint("Warning: unknown --color value '{s}', using auto\n", .{cm});
+            }
+        }
+        // --no-color flag
+        if (res.args.@"no-color" != 0) break :blk false;
+        // NO_COLOR env var (https://no-color.org)
+        if (std.posix.getenv("NO_COLOR") != null) break :blk false;
+        // Auto: color only on TTY
+        break :blk g_tty;
+    };
     g_quiet = res.args.quiet != 0;
     g_debug = res.args.debug != 0;
     g_verbose = res.args.verbose != 0 or g_debug;
@@ -454,8 +498,9 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
         .ctx_size = res.args.@"ctx-size" orelse 0,
         .seed = res.args.seed orelse @as(u64, @truncate(@as(u128, @bitCast(std.time.nanoTimestamp())))),
         .kv_type_k = blk: {
-            // --cache-type-k overrides --kv-type for keys
-            if (res.args.@"cache-type-k") |ks| {
+            // --cache-type-k / --kv-type-k overrides --kv-type for keys
+            const ks_override = res.args.@"cache-type-k" orelse res.args.@"kv-type-k";
+            if (ks_override) |ks| {
                 break :blk KvQuantType.fromString(ks) orelse {
                     eprint("Error: unknown cache-type-k '{s}'\n", .{ks});
                     eprint("  Valid options: f32, f16, q8_0, int8, fp8, nvfp4, turbo2, turbo3, turbo4\n", .{});
@@ -470,8 +515,9 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
             };
         },
         .kv_type_v = blk: {
-            // --cache-type-v overrides --kv-type for values
-            if (res.args.@"cache-type-v") |vs| {
+            // --cache-type-v / --kv-type-v overrides --kv-type for values
+            const vs_override = res.args.@"cache-type-v" orelse res.args.@"kv-type-v";
+            if (vs_override) |vs| {
                 break :blk KvQuantType.fromString(vs) orelse {
                     eprint("Error: unknown cache-type-v '{s}'\n", .{vs});
                     eprint("  Valid options: f32, f16, q8_0, int8, fp8, nvfp4, turbo2, turbo3, turbo4\n", .{});
@@ -572,15 +618,16 @@ fn printUsage() void {
         \\      --backend <BE>     Compute backend: auto, cpu, metal, vulkan, cuda, rocm [default: auto]
         \\      --ctx-size <N>     Context window size [default: 4096, 0 = model max]
         \\      --kv-type <TYPE>   KV cache quantization: f32, f16, q8_0, int8, fp8, nvfp4, turbo2/3/4 [default: f16]
-        \\      --cache-type-k <TYPE>  KV key quantization (overrides --kv-type for keys)
-        \\      --cache-type-v <TYPE>  KV value quantization (overrides --kv-type for values)
+        \\      --kv-type-k <TYPE>    KV key quantization (overrides --kv-type for keys)
+        \\      --kv-type-v <TYPE>    KV value quantization (overrides --kv-type for values)
         \\      --kv-tiers <TIERS> Tiered KV cache: vram+ram, vram+ram+ssd [default: off]
         \\      --kv-ram-budget <GB>  RAM tier budget in GB [default: 50% of free RAM]
         \\      --kv-ssd-path <PATH>  SSD tier file path (requires --kv-tiers with ssd)
         \\      --kv-ssd-budget <GB>  SSD tier budget in GB [default: 10]
         \\      --seed <N>         Random seed for sampling [default: random]
         \\  -V, --verbose          Show technical details (params, load times, EOG)
-        \\      --no-color         Disable colored output
+        \\      --no-color         Disable colored output (also respects NO_COLOR env)
+        \\      --color <MODE>     Color mode: auto, always, never [default: auto]
         \\      --allow-cpu-fallback  Allow GPU backends to fall back to CPU for unsupported ops
         \\  -d, --debug            Enable debug logging (token IDs, layer timing)
         \\      --json             Output results as JSON (implies --quiet)
@@ -600,6 +647,11 @@ fn printUsage() void {
         \\  echo "Explain TCP" | agave model.gguf      Pipe prompt from stdin
         \\  agave model.gguf --json "Hello"            JSON output with stats
         \\  agave model.gguf --json --model-info       Model metadata as JSON
+        \\
+        \\SUBCOMMANDS:
+        \\  agave pull <org/repo>                    Download GGUF model from HuggingFace
+        \\  agave pull <org/repo> --list             List available quantizations
+        \\  agave pull --help                        Pull subcommand help
         \\
         \\SUPPORTED ARCHITECTURES:
         \\  gemma3, gemma4, qwen35, gpt-oss, nemotron-h, nemotron-nano, glm4
@@ -661,6 +713,9 @@ pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
+
+    // Check for subcommands before clap parsing
+    if (checkSubcommand(allocator)) return;
 
     var cli = parseCli(allocator) orelse return;
 
@@ -892,20 +947,15 @@ pub fn main() !void {
     });
     const eos_id = fmt.getMetaU32("tokenizer.ggml.eos_token_id") orelse
         fmt.getMetaU32("eos_token_id") orelse
-        if (arch == .gemma3 or arch == .gemma4) gemma_fallback_eos else default_fallback_eos;
+        arch.defaultEos();
     const bos_id: u32 = blk: {
-        // Explicit BOS token ID from metadata takes priority.
         if (fmt.getMetaU32("tokenizer.ggml.bos_token_id")) |id| break :blk id;
         if (fmt.getMetaU32("bos_token_id")) |id| break :blk id;
         // GPT-2 based tokenizers (Qwen, etc.) don't use BOS by default.
         if (fmt.getMetaStr("tokenizer.ggml.model")) |m| {
             if (std.mem.eql(u8, m, "gpt2")) break :blk 0;
         }
-        // Architecture-specific fallbacks
-        if (arch == .glm4) break :blk arch_mod.glm4_fallback_bos;
-        // Qwen3.5 uses GPT-2 tokenizer but SafeTensors lacks the model tag.
-        if (arch == .qwen35) break :blk 0;
-        break :blk default_bos_id;
+        break :blk arch.defaultBos() orelse 0;
     };
     var eog = getEogTokens(fmt, eos_id);
 

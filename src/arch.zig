@@ -96,6 +96,24 @@ pub const Arch = enum {
         };
     }
 
+    /// Fallback BOS token ID when metadata is missing.
+    /// Returns null for architectures that don't prepend BOS (GPT-2 family).
+    pub fn defaultBos(self: Arch) ?u32 {
+        return switch (self) {
+            .glm4 => glm4_fallback_bos,
+            .qwen35, .gpt_oss, .nemotron_h, .nemotron_nano => null,
+            .gemma3, .gemma4 => default_bos_id,
+        };
+    }
+
+    /// Fallback EOS token ID when metadata is missing.
+    pub fn defaultEos(self: Arch) u32 {
+        return switch (self) {
+            .gemma3, .gemma4 => gemma_fallback_eos,
+            else => default_fallback_eos,
+        };
+    }
+
     /// Returns the CLI build flag name for this architecture (e.g. "gpt-oss").
     pub fn buildFlag(self: Arch) []const u8 {
         return switch (self) {
@@ -144,4 +162,24 @@ test "Arch.displayName" {
     try std.testing.expectEqualStrings("Nemotron-H", Arch.nemotron_h.displayName());
     try std.testing.expectEqualStrings("Nemotron-Nano", Arch.nemotron_nano.displayName());
     try std.testing.expectEqualStrings("GLM-4", Arch.glm4.displayName());
+}
+
+test "Arch.defaultBos" {
+    try std.testing.expectEqual(@as(?u32, 2), Arch.gemma3.defaultBos());
+    try std.testing.expectEqual(@as(?u32, 2), Arch.gemma4.defaultBos());
+    try std.testing.expectEqual(@as(?u32, 154822), Arch.glm4.defaultBos());
+    try std.testing.expectEqual(@as(?u32, null), Arch.qwen35.defaultBos());
+    try std.testing.expectEqual(@as(?u32, null), Arch.gpt_oss.defaultBos());
+    try std.testing.expectEqual(@as(?u32, null), Arch.nemotron_h.defaultBos());
+    try std.testing.expectEqual(@as(?u32, null), Arch.nemotron_nano.defaultBos());
+}
+
+test "Arch.defaultEos" {
+    try std.testing.expectEqual(@as(u32, 1), Arch.gemma3.defaultEos());
+    try std.testing.expectEqual(@as(u32, 1), Arch.gemma4.defaultEos());
+    try std.testing.expectEqual(@as(u32, 248046), Arch.qwen35.defaultEos());
+    try std.testing.expectEqual(@as(u32, 248046), Arch.gpt_oss.defaultEos());
+    try std.testing.expectEqual(@as(u32, 248046), Arch.glm4.defaultEos());
+    try std.testing.expectEqual(@as(u32, 248046), Arch.nemotron_h.defaultEos());
+    try std.testing.expectEqual(@as(u32, 248046), Arch.nemotron_nano.defaultEos());
 }
