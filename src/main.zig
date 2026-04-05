@@ -1489,6 +1489,7 @@ fn flushTokenBatch(tok: *BpeTokenizer, tok_kind: TokenizerKind, allocator: std.m
 
 test {
     _ = @import("display.zig");
+    _ = @import("ops/split_attention.zig");
 }
 
 test "cpu backend rms_norm via tagged union dispatch" {

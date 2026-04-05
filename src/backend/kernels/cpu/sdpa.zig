@@ -125,6 +125,61 @@ pub fn sdpaQuantHead(q: [*]const f32, keys: [*]const u8, values: [*]const u8, ou
     }
 }
 
+/// Process all heads sequentially with quantized KV, returning per-head softmax stats.
+/// Same as sdpaQuantHeads but additionally outputs max and sum for online softmax merge.
+pub fn sdpaQuantHeadsWithStats(q: [*]const f32, keys: [*]const u8, values: [*]const u8, output: [*]f32, nh: usize, nkv: usize, hd: usize, sl: usize, scale: f32, kv_type_k: KvQuantType, kv_type_v: KvQuantType, head_max: [*]f32, head_sum: [*]f32) void {
+    for (0..nh) |h| {
+        sdpaQuantHeadWithStats(q, keys, values, output, h, nh, nkv, hd, sl, scale, kv_type_k, kv_type_v, head_max, head_sum);
+    }
+}
+
+/// Process a single query head with quantized KV cache, returning softmax stats.
+/// Same as sdpaQuantHead but additionally outputs max and sum for online softmax merge.
+/// head_max[h] receives the pre-softmax max score, head_sum[h] receives sum(exp(scores - max)).
+pub fn sdpaQuantHeadWithStats(q: [*]const f32, keys: [*]const u8, values: [*]const u8, output: [*]f32, h: usize, nh: usize, nkv: usize, hd: usize, sl: usize, scale: f32, kv_type_k: KvQuantType, kv_type_v: KvQuantType, head_max: [*]f32, head_sum: [*]f32) void {
+    const kvd = nkv * hd;
+    const hpg = nh / nkv;
+    const kvh = h / hpg;
+    const q_base = h * hd;
+    std.debug.assert(sl <= max_sdpa_seq_len);
+    var scores_buf: [max_sdpa_seq_len]f32 = undefined;
+
+    // Cache Q for this head
+    var q_cached: [max_head_dim]f32 = undefined;
+    @memcpy(q_cached[0..hd], q[q_base..][0..hd]);
+
+    // QK dot products using quantized KV (key type)
+    for (0..sl) |t| {
+        const k_byte_off = kv_quant.kvByteOffset(kv_type_k, t * kvd + kvh * hd);
+        scores_buf[t] = kv_quant.kvDot(q_cached[0..hd].ptr, keys + k_byte_off, hd, kv_type_k) * scale;
+    }
+
+    // Softmax — capture max and sum before normalization
+    const scores = scores_buf[0..sl];
+    var max_val: f32 = scores[0];
+    for (scores[1..]) |s| max_val = @max(max_val, s);
+    var sum_val: f32 = 0;
+    for (scores) |*s| {
+        s.* = @exp(s.* - max_val);
+        sum_val += s.*;
+    }
+
+    // Export stats for online softmax merge
+    head_max[h] = max_val;
+    head_sum[h] = sum_val;
+
+    // Normalize
+    const inv_sum: f32 = if (sum_val > 0) 1.0 / sum_val else 0;
+    for (scores) |*s| s.* *= inv_sum;
+
+    // V accumulation using quantized KV (value type)
+    @memset(output[q_base..][0..hd], 0);
+    for (0..sl) |t| {
+        const v_byte_off = kv_quant.kvByteOffset(kv_type_v, t * kvd + kvh * hd);
+        kv_quant.kvMulAccum(output + q_base, scores_buf[t], values + v_byte_off, hd, kv_type_v);
+    }
+}
+
 /// In-place softmax over a score buffer. SIMD-accelerated max, exp+sum, and normalize.
 fn softmax(scores: []f32) void {
     const n = scores.len;

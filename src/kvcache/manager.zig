@@ -5,6 +5,10 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
+/// Block tier enum re-exported from tiered.zig for convenience.
+/// Used by split-attention to classify blocks without importing tiered.zig directly.
+pub const BlockTier = @import("tiered.zig").BlockTier;
+
 /// Default KV cache block size (tokens per block) used across all models.
 /// Shared constant to avoid repeating the literal 16 in every model init.
 pub const default_block_size: u16 = 16;

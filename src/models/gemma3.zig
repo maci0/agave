@@ -18,6 +18,7 @@ const block_alloc_mod = @import("../kvcache/block_allocator.zig");
 const BlockAllocator = block_alloc_mod.BlockAllocator;
 const TieredBlockAllocator = block_alloc_mod.TieredBlockAllocator;
 const TieredKvCache = @import("../kvcache/tiered.zig").TieredKvCache;
+const split_attn = @import("../ops/split_attention.zig");
 const Backend = backend_mod.Backend;
 const Format = format_mod.Format;
 const TensorInfo = format_mod.TensorInfo;
@@ -121,6 +122,10 @@ pub const Gemma3Model = struct {
     block_allocator: BlockAllocator = undefined,
     tiered_cache: ?*TieredKvCache = null,
     tiered_block_allocator: ?TieredBlockAllocator = null,
+    /// Split-attention output buffers (allocated only when tiered cache is active).
+    /// Used by splitAttention() for concurrent GPU + CPU SDPA merge.
+    split_gpu_out: []f32 = &[_]f32{},
+    split_cpu_out: []f32 = &[_]f32{},
     kv_type_k: kv_quant.KvQuantType,
     kv_type_v: kv_quant.KvQuantType,
     kv_seq_len: usize = 0,
@@ -209,6 +214,11 @@ pub const Gemma3Model = struct {
             errdefer ta.freeSeqTable(&self.seq_table);
             try ta.appendBlock(&self.seq_table);
             self.tiered_block_allocator = ta;
+            // Allocate split-attention buffers for concurrent GPU + CPU SDPA
+            self.split_gpu_out = try allocator.alloc(f32, qkv_dim);
+            errdefer allocator.free(self.split_gpu_out);
+            self.split_cpu_out = try allocator.alloc(f32, qkv_dim);
+            errdefer allocator.free(self.split_cpu_out);
         } else {
             // Use full-sequence blocks for contiguous KV access in both prefill and decode.
             // One block per layer, each holding max_sl positions. Same total memory.
@@ -291,6 +301,8 @@ pub const Gemma3Model = struct {
         for (self.norm_cache[0..self.norm_cache_len]) |entry| self.allocator.free(entry.data);
         if (self.tiered_block_allocator) |*ta| {
             ta.freeSeqTable(&self.seq_table);
+            if (self.split_gpu_out.len > 0) self.allocator.free(self.split_gpu_out);
+            if (self.split_cpu_out.len > 0) self.allocator.free(self.split_cpu_out);
         } else {
             self.block_allocator.freeSeqTable(&self.seq_table);
             self.paged_cache.deinit();
@@ -586,31 +598,71 @@ pub const Gemma3Model = struct {
         self.perf.end(.rope, t);
 
         // KV cache append + scaled dot-product attention
-        // For now, use simplified single-block paged access
         t = self.perf.start();
         const kv_view = self.getLayerKvView(li);
         const kv_keys_bytes: []u8 = std.mem.sliceAsBytes(kv_view.keys);
         const kv_values_bytes: []u8 = std.mem.sliceAsBytes(kv_view.values);
 
-        attn_ops.scaledDotProductAttention(
-            self.q_buf.ptr,
-            kv_keys_bytes,
-            kv_values_bytes,
-            self.k_buf,
-            self.v_buf,
-            self.attn_out.ptr,
-            self.scores.ptr,
-            nh,
-            nkv,
-            hd,
-            self.kv_seq_len,
-            self.attn_scale,
-            self.be,
-            null,
-            0,
-            .f32, // PagedKvCache uses f32 blocks
-            .f32,
-        );
+        // Tiered cache path: partition blocks by tier, run split-attention
+        // when KV spans both GPU and CPU memory.
+        if (self.tiered_cache) |tc| {
+            const partition = split_attn.partitionBlocks(
+                self.seq_table.block_table[li],
+                tc.blocks,
+                tc.block_size,
+                self.kv_seq_len + 1,
+            );
+            // Get thread pool from CPU backend (available via BackendState)
+            const pool: ?*@import("../thread_pool.zig").ThreadPool = if (self.tiered_block_allocator) |_| blk: {
+                // The pool is accessible from CpuBackend; for now, pass null
+                // and let splitAttention run CPU heads inline. The thread pool
+                // integration requires passing the pool through the model init.
+                break :blk null;
+            } else null;
+
+            attn_ops.scaledDotProductAttentionTiered(
+                self.q_buf.ptr,
+                kv_keys_bytes,
+                kv_values_bytes,
+                self.k_buf,
+                self.v_buf,
+                self.attn_out.ptr,
+                nh,
+                nkv,
+                hd,
+                self.kv_seq_len,
+                self.attn_scale,
+                self.be,
+                .f32,
+                .f32,
+                .{
+                    .partition = partition,
+                    .pool = pool,
+                    .gpu_out = self.split_gpu_out.ptr,
+                    .cpu_out = self.split_cpu_out.ptr,
+                },
+            );
+        } else {
+            attn_ops.scaledDotProductAttention(
+                self.q_buf.ptr,
+                kv_keys_bytes,
+                kv_values_bytes,
+                self.k_buf,
+                self.v_buf,
+                self.attn_out.ptr,
+                self.scores.ptr,
+                nh,
+                nkv,
+                hd,
+                self.kv_seq_len,
+                self.attn_scale,
+                self.be,
+                null,
+                0,
+                .f32, // PagedKvCache uses f32 blocks
+                .f32,
+            );
+        }
         self.perf.end(.sdpa, t);
 
         // Output projection + post-norm + residual

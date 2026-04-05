@@ -320,6 +320,10 @@ pub const NullBackend = struct {
         unreachable;
     }
 
+    pub fn sdpaWithStats(_: *NullBackend, _: [*]const f32, _: []u8, _: []u8, _: [*]const f32, _: [*]const f32, _: [*]f32, _: [*]f32, _: [*]f32, _: usize, _: usize, _: usize, _: usize, _: f32, _: KvQuantType, _: KvQuantType) void {
+        unreachable;
+    }
+
     pub fn gemvNvfp4St(_: *NullBackend, _: [*]const f32, _: [*]const u8, _: [*]const u8, _: [*]f32, _: usize, _: usize) void {
         unreachable;
     }
@@ -628,6 +632,19 @@ pub const Backend = union(enum) {
     pub inline fn sdpa(self: Backend, q: [*]const f32, keys: []u8, values: []u8, k_new: [*]const f32, v_new: [*]const f32, output: [*]f32, nh: usize, nkv: usize, hd: usize, seq_len: usize, scale: f32, kv_type_k: KvQuantType, kv_type_v: KvQuantType) void {
         switch (self) {
             inline else => |be| be.sdpa(q, keys, values, k_new, v_new, output, nh, nkv, hd, seq_len, scale, kv_type_k, kv_type_v),
+        }
+    }
+
+    /// Scaled dot-product attention with KV cache append, returning per-head
+    /// softmax statistics for online softmax merge in split-attention.
+    /// Same as sdpa() but additionally outputs head_max[nh] and head_sum[nh]:
+    ///   - head_max[h]: max QK score before exp (for each head).
+    ///   - head_sum[h]: sum of exp(scores - max) — the softmax denominator.
+    /// These stats enable exact merging of partial attention outputs from
+    /// different devices (GPU + CPU) via online softmax correction.
+    pub inline fn sdpaWithStats(self: Backend, q: [*]const f32, keys: []u8, values: []u8, k_new: [*]const f32, v_new: [*]const f32, output: [*]f32, head_max: [*]f32, head_sum: [*]f32, nh: usize, nkv: usize, hd: usize, seq_len: usize, scale: f32, kv_type_k: KvQuantType, kv_type_v: KvQuantType) void {
+        switch (self) {
+            inline else => |be| be.sdpaWithStats(q, keys, values, k_new, v_new, output, head_max, head_sum, nh, nkv, hd, seq_len, scale, kv_type_k, kv_type_v),
         }
     }
 

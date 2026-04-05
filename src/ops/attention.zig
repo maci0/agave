@@ -6,6 +6,8 @@ const std = @import("std");
 const Backend = @import("../backend/backend.zig").Backend;
 const kv_quant = @import("kv_quant.zig");
 const KvQuantType = kv_quant.KvQuantType;
+const split_attn = @import("split_attention.zig");
+const ThreadPool = @import("../thread_pool.zig").ThreadPool;
 
 /// SIMD vector width (number of f32 lanes) used for dot-product and accumulation loops.
 const simd_width: usize = 8;
@@ -148,6 +150,72 @@ pub fn scaledDotProductAttention(
             kv_quant.kvMulAccum(attn_out + q_base, scores[score_offset + wi], kv_values.ptr + v_off, hd, kv_type_v);
         }
     }
+}
+
+// ── Tiered split-attention ────────────────────────────────────────
+
+/// Info struct for tiered KV cache split-attention dispatch.
+/// Passed to `scaledDotProductAttentionTiered()` to enable concurrent
+/// GPU + CPU SDPA when KV blocks span VRAM and RAM tiers.
+pub const TieredSdpaInfo = struct {
+    /// Block tier partition for this layer (from partitionBlocks).
+    partition: split_attn.Partition,
+    /// Thread pool for parallel CPU SDPA (null = single-threaded).
+    pool: ?*ThreadPool,
+    /// Pre-allocated GPU output buffer [nh * hd].
+    gpu_out: [*]f32,
+    /// Pre-allocated CPU output buffer [nh * hd].
+    cpu_out: [*]f32,
+};
+
+/// Scaled dot-product attention with tiered KV cache support.
+///
+/// When `tiered_info.partition` has CPU-resident blocks, runs split-attention:
+/// GPU SDPA with stats (deferred) + CPU SDPA on thread pool (concurrent),
+/// merged via online softmax correction. Otherwise, falls through to the
+/// regular backend SDPA path.
+///
+/// This is a separate function to avoid changing the signature of
+/// `scaledDotProductAttention()` and all its existing call sites.
+///
+/// Parameters: Same as scaledDotProductAttention plus tiered_info.
+pub fn scaledDotProductAttentionTiered(
+    q: [*]const f32,
+    kv_keys: []u8,
+    kv_values: []u8,
+    k_buf: []const f32,
+    v_buf: []const f32,
+    attn_out: [*]f32,
+    nh: usize,
+    nkv: usize,
+    hd: usize,
+    seq_len: usize,
+    scale: f32,
+    be: Backend,
+    kv_type_k: KvQuantType,
+    kv_type_v: KvQuantType,
+    tiered_info: TieredSdpaInfo,
+) void {
+    split_attn.splitAttention(
+        q,
+        kv_keys,
+        kv_values,
+        k_buf.ptr,
+        v_buf.ptr,
+        attn_out,
+        tiered_info.gpu_out,
+        tiered_info.cpu_out,
+        nh,
+        nkv,
+        hd,
+        seq_len,
+        scale,
+        be,
+        kv_type_k,
+        kv_type_v,
+        tiered_info.partition,
+        tiered_info.pool,
+    );
 }
 
 // ── PagedAttention ────────────────────────────────────────────────

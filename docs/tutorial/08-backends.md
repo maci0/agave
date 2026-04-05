@@ -84,6 +84,20 @@ On **UMA** platforms (where CPU and GPU share the same physical memory chips, un
 
 All GPU backends use **deferred dispatch** — operations are encoded into **command buffers** (queues of GPU operations) without blocking. Models call `be.sync()` only when CPU code needs to read GPU-produced data.
 
+### sdpaWithStats
+
+Extended SDPA that returns per-head softmax statistics for split-attention merge:
+
+```zig
+be.sdpaWithStats(q, keys, values, k_new, v_new, output,
+                 head_max, head_sum,  // per-head max and sum(exp)
+                 nh, nkv, hd, seq_len, scale, kv_type_k, kv_type_v);
+```
+
+Used by the split-attention path when KV cache spans GPU and CPU tiers. The `head_max` and `head_sum` arrays enable online softmax merging of partial attention outputs from different devices.
+
+Currently all GPU backends fall back to CPU-side computation for stats export. Native GPU stats (exporting max/sum from the SDPA kernel) is future work.
+
 ## Batched Prefill Dispatch
 
 During prefill, the backend dispatches **batched** versions of the core ops — GEMM (instead of GEMV), batched RMSNorm, batched RoPE, and fused causal SDPA:

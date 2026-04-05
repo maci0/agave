@@ -826,6 +826,21 @@ pub const CpuBackend = struct {
         }
     };
 
+    /// CPU scaled dot-product attention with KV cache append, returning per-head
+    /// softmax statistics (max and sum) for online softmax merge in split-attention.
+    /// Same as sdpa() but additionally outputs head_max[nh] and head_sum[nh].
+    pub fn sdpaWithStats(_: *CpuBackend, q: [*]const f32, keys: []u8, values: []u8, k_new: [*]const f32, v_new: [*]const f32, output: [*]f32, head_max: [*]f32, head_sum: [*]f32, nh: usize, nkv: usize, hd: usize, seq_len: usize, scale: f32, kv_type_k: KvQuantType, kv_type_v: KvQuantType) void {
+        const kvd = nkv * hd;
+
+        // KV append: quantize k_new/v_new into cache at position seq_len
+        const k_byte_off = kv_quant.kvByteOffset(kv_type_k, seq_len * kvd);
+        const v_byte_off = kv_quant.kvByteOffset(kv_type_v, seq_len * kvd);
+        kv_quant.kvStore(keys.ptr + k_byte_off, k_new, kvd, kv_type_k);
+        kv_quant.kvStore(values.ptr + v_byte_off, v_new, kvd, kv_type_v);
+
+        sdpa_kernel.sdpaQuantHeadsWithStats(q, keys.ptr, values.ptr, output, nh, nkv, hd, seq_len + 1, scale, kv_type_k, kv_type_v, head_max, head_sum);
+    }
+
     /// DeltaNet SSM recurrence: conv1d + L2 norm + recurrence + gated output.
     /// When a thread pool is available, parallelizes across v-heads.
     pub fn deltaNet(self: *CpuBackend, conv_in: [*]const f32, conv_out: [*]f32, z_buf: [*]const f32, alpha_buf: [*]const f32, beta_buf: [*]const f32, output: [*]f32, conv_state: [*]f32, ssm_state: []f32, ssm_a: [*]const f32, dt_bias: [*]const f32, conv_w: [*]const f32, ssm_norm_w: [*]const f32, p: @import("backend.zig").DeltaNetParams) void {

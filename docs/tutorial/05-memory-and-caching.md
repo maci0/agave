@@ -123,6 +123,28 @@ Each chunk's attention is **causal within the chunk AND attends to all previous 
 
 Prefill buffers are allocated once at model init, sized to `chunk_size × dim`. They are separate from the single-token decode buffers to avoid any regression on the decode path.
 
+## Async Split-Attention (APEX)
+
+When the KV cache spans GPU and CPU memory tiers, Agave uses **split-attention** to run GPU and CPU SDPA concurrently, inspired by [APEX](https://arxiv.org/abs/2506.03296).
+
+```
+Token generation with split KV cache:
+
+1. Linear ops (Q/K/V projections) run on GPU — full batch, full speed
+2. At attention time, scan block tiers:
+   ├─ GPU blocks (recent tokens, VRAM)  → GPU SDPA kernel
+   └─ CPU blocks (cold prefix, RAM)     → CPU SDPA on thread pool
+3. Both run concurrently (async overlap)
+4. Merge partial outputs via online softmax correction
+5. Continue to FFN on GPU
+```
+
+**Online softmax merge:** Each split computes local softmax independently. The merge uses FlashAttention-2's online correction: track per-head `max` and `sum`, then rescale and combine. This is exact — no approximation.
+
+**When it activates:** Automatically when `--kv-tiers vram+ram` is set and KV blocks get demoted to RAM under memory pressure. No extra flag needed — if all blocks are GPU-resident, the fast path runs with zero overhead.
+
+**UMA optimization:** On Apple Silicon and NVIDIA GB10 (unified memory), both GPU and CPU read the same physical memory. No data transfer — just concurrent compute on the same cache.
+
 ---
 
 **In the code:** `src/kvcache/manager.zig` (KvCache, PagedKvCache, RadixTree), `src/kvcache/block_allocator.zig` (block allocation), `src/kvcache/tiered.zig` (VRAM + RAM + SSD tiers), `src/ops/kv_quant.zig` (KV cache quantization — f16, q8_0, fp8, nvfp4, TurboQuant), `src/backend/kernels/cpu/sdpa_prefill.zig` (CPU prefill attention), `src/backend/kernels/metal/sdpa.metal` (`sdpa_prefill_fa2` — GPU prefill FA2)
