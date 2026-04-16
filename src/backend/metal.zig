@@ -765,7 +765,7 @@ pub const MetalBackend = struct {
         return switch (dtype) {
             .q4_0 => (n + q4_0_nr - 1) / q4_0_nr,
             .q8_0 => (n + q8_0_nr - 1) / q8_0_nr,
-            .q4_k => (n + q4_k_nr - 1) / q4_k_nr,
+            .q4_k, .q5_k, .q6_k => (n + q4_k_nr - 1) / q4_k_nr,
             else => n,
         };
     }

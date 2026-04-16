@@ -1,5 +1,5 @@
 //! CPU GEMV kernels for less common quantization formats.
-//! Q4_1, Q5_0, Q2_K, Q3_K — scalar implementations.
+//! Q4_1, Q5_0, Q2_K, Q3_K — scalar implementations with 2-row batching.
 
 const std = @import("std");
 const backend_mod = @import("../../backend.zig");
@@ -16,13 +16,66 @@ const q2_k_bit_mask: u8 = 0x03;
 const q3_k_lo_mask: u8 = 0x03;
 
 /// Q4_1: 32 values per block, 20 bytes (f16 scale + f16 min + 16 nibble-packed bytes)
+/// 2-row batched to share x-vector cache reads.
 pub fn gemvQ4_1(x: [*]const f32, w: [*]const u8, y: [*]f32, n: usize, k: usize) void {
     const bpb = backend_mod.q4_1_block_bytes;
     const qk = backend_mod.quant_block_elems;
     const nb = (k + qk - 1) / qk;
-    for (0..n) |row| {
+    const row_bytes = nb * bpb;
+
+    // Process 2 rows at a time for x-vector cache reuse.
+    var row: usize = 0;
+    while (row + 2 <= n) : (row += 2) {
+        var sum0: f32 = 0.0;
+        var sum1: f32 = 0.0;
+        const rp0 = w + row * row_bytes;
+        const rp1 = w + (row + 1) * row_bytes;
+        for (0..nb) |b| {
+            const bp0 = rp0 + b * bpb;
+            const bp1 = rp1 + b * bpb;
+            const d0: f32 = @floatCast(@as(f16, @bitCast(std.mem.readInt(u16, bp0[0..2], .little))));
+            const d1: f32 = @floatCast(@as(f16, @bitCast(std.mem.readInt(u16, bp1[0..2], .little))));
+            const m0: f32 = @floatCast(@as(f16, @bitCast(std.mem.readInt(u16, bp0[2..4], .little))));
+            const m1: f32 = @floatCast(@as(f16, @bitCast(std.mem.readInt(u16, bp1[2..4], .little))));
+            const bk = b * qk;
+            if (bk + qk - 1 < k) {
+                for (0..qk / 2) |j| {
+                    const byte0 = bp0[4 + j];
+                    const byte1 = bp1[4 + j];
+                    const xlo = x[bk + j];
+                    const xhi = x[bk + j + qk / 2];
+                    sum0 += xlo * (@as(f32, @floatFromInt(@as(u8, byte0 & 0x0F))) * d0 + m0) +
+                        xhi * (@as(f32, @floatFromInt(@as(u8, byte0 >> 4))) * d0 + m0);
+                    sum1 += xlo * (@as(f32, @floatFromInt(@as(u8, byte1 & 0x0F))) * d1 + m1) +
+                        xhi * (@as(f32, @floatFromInt(@as(u8, byte1 >> 4))) * d1 + m1);
+                }
+            } else {
+                for (0..qk / 2) |j| {
+                    const byte0 = bp0[4 + j];
+                    const byte1 = bp1[4 + j];
+                    const gi0 = bk + j;
+                    const gi1 = bk + j + qk / 2;
+                    if (gi0 < k) {
+                        const xv = x[gi0];
+                        sum0 += xv * (@as(f32, @floatFromInt(@as(u8, byte0 & 0x0F))) * d0 + m0);
+                        sum1 += xv * (@as(f32, @floatFromInt(@as(u8, byte1 & 0x0F))) * d1 + m1);
+                    }
+                    if (gi1 < k) {
+                        const xv = x[gi1];
+                        sum0 += xv * (@as(f32, @floatFromInt(@as(u8, byte0 >> 4))) * d0 + m0);
+                        sum1 += xv * (@as(f32, @floatFromInt(@as(u8, byte1 >> 4))) * d1 + m1);
+                    }
+                }
+            }
+        }
+        y[row] = sum0;
+        y[row + 1] = sum1;
+    }
+
+    // Remainder: single row
+    while (row < n) : (row += 1) {
         var sum: f32 = 0.0;
-        const rp = w + row * nb * bpb;
+        const rp = w + row * row_bytes;
         for (0..nb) |b| {
             const bp = rp + b * bpb;
             const d: f32 = @floatCast(@as(f16, @bitCast(std.mem.readInt(u16, bp[0..2], .little))));
@@ -49,13 +102,86 @@ pub fn gemvQ4_1(x: [*]const f32, w: [*]const u8, y: [*]f32, n: usize, k: usize) 
 }
 
 /// Q5_0: 32 values per block, 22 bytes (f16 scale + 4 bytes qh + 16 nibble-packed bytes)
+/// 2-row batched to share x-vector cache reads.
 pub fn gemvQ5_0(x: [*]const f32, w: [*]const u8, y: [*]f32, n: usize, k: usize) void {
     const bpb = backend_mod.q5_0_block_bytes;
     const qk = backend_mod.quant_block_elems;
     const nb = (k + qk - 1) / qk;
-    for (0..n) |row| {
+    const row_bytes = nb * bpb;
+
+    // Process 2 rows at a time for x-vector cache reuse.
+    var row: usize = 0;
+    while (row + 2 <= n) : (row += 2) {
+        var sum0: f32 = 0.0;
+        var sum1: f32 = 0.0;
+        const rp0 = w + row * row_bytes;
+        const rp1 = w + (row + 1) * row_bytes;
+        for (0..nb) |b| {
+            const bp0 = rp0 + b * bpb;
+            const bp1 = rp1 + b * bpb;
+            const d0: f32 = @floatCast(@as(f16, @bitCast(std.mem.readInt(u16, bp0[0..2], .little))));
+            const d1: f32 = @floatCast(@as(f16, @bitCast(std.mem.readInt(u16, bp1[0..2], .little))));
+            const qh0 = std.mem.readInt(u32, bp0[2..6], .little);
+            const qh1 = std.mem.readInt(u32, bp1[2..6], .little);
+            const bk = b * qk;
+            var block_sum0: f32 = 0.0;
+            var block_sum1: f32 = 0.0;
+            if (bk + qk - 1 < k) {
+                for (0..16) |j| {
+                    const byte0 = bp0[6 + j];
+                    const byte1 = bp1[6 + j];
+                    const hb0_0: u8 = @truncate((qh0 >> @intCast(j)) & 1);
+                    const hb1_0: u8 = @truncate((qh0 >> @intCast(j + 16)) & 1);
+                    const hb0_1: u8 = @truncate((qh1 >> @intCast(j)) & 1);
+                    const hb1_1: u8 = @truncate((qh1 >> @intCast(j + 16)) & 1);
+                    const v0_0: i8 = @as(i8, @intCast((byte0 & 0x0F) | (hb0_0 << 4))) + q5_0_dequant_bias;
+                    const v1_0: i8 = @as(i8, @intCast((byte0 >> 4) | (hb1_0 << 4))) + q5_0_dequant_bias;
+                    const v0_1: i8 = @as(i8, @intCast((byte1 & 0x0F) | (hb0_1 << 4))) + q5_0_dequant_bias;
+                    const v1_1: i8 = @as(i8, @intCast((byte1 >> 4) | (hb1_1 << 4))) + q5_0_dequant_bias;
+                    const xlo = x[bk + j];
+                    const xhi = x[bk + j + 16];
+                    block_sum0 += xlo * @as(f32, @floatFromInt(v0_0)) +
+                        xhi * @as(f32, @floatFromInt(v1_0));
+                    block_sum1 += xlo * @as(f32, @floatFromInt(v0_1)) +
+                        xhi * @as(f32, @floatFromInt(v1_1));
+                }
+            } else {
+                for (0..16) |j| {
+                    const byte0 = bp0[6 + j];
+                    const byte1 = bp1[6 + j];
+                    const hb0_0: u8 = @truncate((qh0 >> @intCast(j)) & 1);
+                    const hb1_0: u8 = @truncate((qh0 >> @intCast(j + 16)) & 1);
+                    const hb0_1: u8 = @truncate((qh1 >> @intCast(j)) & 1);
+                    const hb1_1: u8 = @truncate((qh1 >> @intCast(j + 16)) & 1);
+                    const v0_0: i8 = @as(i8, @intCast((byte0 & 0x0F) | (hb0_0 << 4))) + q5_0_dequant_bias;
+                    const v1_0: i8 = @as(i8, @intCast((byte0 >> 4) | (hb1_0 << 4))) + q5_0_dequant_bias;
+                    const v0_1: i8 = @as(i8, @intCast((byte1 & 0x0F) | (hb0_1 << 4))) + q5_0_dequant_bias;
+                    const v1_1: i8 = @as(i8, @intCast((byte1 >> 4) | (hb1_1 << 4))) + q5_0_dequant_bias;
+                    const gi0 = bk + j;
+                    const gi1 = bk + j + 16;
+                    if (gi0 < k) {
+                        const xv = x[gi0];
+                        block_sum0 += xv * @as(f32, @floatFromInt(v0_0));
+                        block_sum1 += xv * @as(f32, @floatFromInt(v0_1));
+                    }
+                    if (gi1 < k) {
+                        const xv = x[gi1];
+                        block_sum0 += xv * @as(f32, @floatFromInt(v1_0));
+                        block_sum1 += xv * @as(f32, @floatFromInt(v1_1));
+                    }
+                }
+            }
+            sum0 += block_sum0 * d0;
+            sum1 += block_sum1 * d1;
+        }
+        y[row] = sum0;
+        y[row + 1] = sum1;
+    }
+
+    // Remainder: single row
+    while (row < n) : (row += 1) {
         var sum: f32 = 0.0;
-        const rp = w + row * nb * bpb;
+        const rp = w + row * row_bytes;
         for (0..nb) |b| {
             const bp = rp + b * bpb;
             const d: f32 = @floatCast(@as(f16, @bitCast(std.mem.readInt(u16, bp[0..2], .little))));
@@ -93,13 +219,85 @@ pub fn gemvQ5_0(x: [*]const f32, w: [*]const u8, y: [*]f32, n: usize, k: usize) 
 
 /// Q2_K: 256 values per super-block, 84 bytes
 /// Layout: scales[16] + qs[64] + d(f16) + dmin(f16)
+/// 2-row batched to share x-vector cache reads.
 pub fn gemvQ2_K(x: [*]const f32, w: [*]const u8, y: [*]f32, n: usize, k: usize) void {
     const bpb = backend_mod.q2_k_block_bytes;
     const bs = backend_mod.quant_super_block_elems;
     const nb = (k + bs - 1) / bs;
-    for (0..n) |row| {
+    const row_bytes = nb * bpb;
+
+    // Process 2 rows at a time for x-vector cache reuse.
+    var row: usize = 0;
+    while (row + 2 <= n) : (row += 2) {
+        var sum0: f32 = 0.0;
+        var sum1: f32 = 0.0;
+        const rp0 = w + row * row_bytes;
+        const rp1 = w + (row + 1) * row_bytes;
+        for (0..nb) |b| {
+            const bp0 = rp0 + b * bpb;
+            const bp1 = rp1 + b * bpb;
+            const scales0 = bp0[0..16];
+            const scales1 = bp1[0..16];
+            const qs0 = bp0 + 16;
+            const qs1 = bp1 + 16;
+            const d_0: f32 = @floatCast(@as(f16, @bitCast(std.mem.readInt(u16, bp0[80..82], .little))));
+            const d_1: f32 = @floatCast(@as(f16, @bitCast(std.mem.readInt(u16, bp1[80..82], .little))));
+            const dmin_0: f32 = @floatCast(@as(f16, @bitCast(std.mem.readInt(u16, bp0[82..84], .little))));
+            const dmin_1: f32 = @floatCast(@as(f16, @bitCast(std.mem.readInt(u16, bp1[82..84], .little))));
+            const bk = b * bs;
+            if (bk + bs - 1 < k) {
+                for (0..16) |sb| {
+                    const sc0: f32 = @floatFromInt(scales0[sb] & 0x0F);
+                    const m_val0: f32 = @floatFromInt(scales0[sb] >> 4);
+                    const sc1: f32 = @floatFromInt(scales1[sb] & 0x0F);
+                    const m_val1: f32 = @floatFromInt(scales1[sb] >> 4);
+                    const d_sc0 = d_0 * sc0;
+                    const dm_m0 = dmin_0 * m_val0;
+                    const d_sc1 = d_1 * sc1;
+                    const dm_m1 = dmin_1 * m_val1;
+                    const sb_base = sb * 4;
+                    for (0..16) |l| {
+                        const shift: u3 = @intCast((l % 4) * 2);
+                        const q0: f32 = @floatFromInt((qs0[sb_base + l / 4] >> shift) & q2_k_bit_mask);
+                        const q1: f32 = @floatFromInt((qs1[sb_base + l / 4] >> shift) & q2_k_bit_mask);
+                        const xv = x[bk + sb * 16 + l];
+                        sum0 += xv * (d_sc0 * q0 - dm_m0);
+                        sum1 += xv * (d_sc1 * q1 - dm_m1);
+                    }
+                }
+            } else {
+                for (0..16) |sb| {
+                    const sc0: f32 = @floatFromInt(scales0[sb] & 0x0F);
+                    const m_val0: f32 = @floatFromInt(scales0[sb] >> 4);
+                    const sc1: f32 = @floatFromInt(scales1[sb] & 0x0F);
+                    const m_val1: f32 = @floatFromInt(scales1[sb] >> 4);
+                    const d_sc0 = d_0 * sc0;
+                    const dm_m0 = dmin_0 * m_val0;
+                    const d_sc1 = d_1 * sc1;
+                    const dm_m1 = dmin_1 * m_val1;
+                    for (0..16) |l| {
+                        const gi = bk + sb * 16 + l;
+                        if (gi >= k) break;
+                        const qi = sb * 16 + l;
+                        const byte_idx = qi / 4;
+                        const shift: u3 = @intCast((qi % 4) * 2);
+                        const q0: f32 = @floatFromInt((qs0[byte_idx] >> shift) & q2_k_bit_mask);
+                        const q1: f32 = @floatFromInt((qs1[byte_idx] >> shift) & q2_k_bit_mask);
+                        const xv = x[gi];
+                        sum0 += xv * (d_sc0 * q0 - dm_m0);
+                        sum1 += xv * (d_sc1 * q1 - dm_m1);
+                    }
+                }
+            }
+        }
+        y[row] = sum0;
+        y[row + 1] = sum1;
+    }
+
+    // Remainder: single row
+    while (row < n) : (row += 1) {
         var sum: f32 = 0.0;
-        const rp = w + row * nb * bpb;
+        const rp = w + row * row_bytes;
         for (0..nb) |b| {
             const bp = rp + b * bpb;
             const scales = bp[0..16];
@@ -144,13 +342,105 @@ pub fn gemvQ2_K(x: [*]const f32, w: [*]const u8, y: [*]f32, n: usize, k: usize) 
 
 /// Q3_K: 256 values per super-block, 110 bytes
 /// Layout: hmask[32] + qs[64] + scales[12] + d(f16)
+/// 2-row batched to share x-vector cache reads.
 pub fn gemvQ3_K(x: [*]const f32, w: [*]const u8, y: [*]f32, n: usize, k: usize) void {
     const bpb = backend_mod.q3_k_block_bytes;
     const bs = backend_mod.quant_super_block_elems;
     const nb = (k + bs - 1) / bs;
-    for (0..n) |row| {
+    const row_bytes = nb * bpb;
+
+    // Process 2 rows at a time for x-vector cache reuse.
+    var row: usize = 0;
+    while (row + 2 <= n) : (row += 2) {
+        var sum0: f32 = 0.0;
+        var sum1: f32 = 0.0;
+        const rp0 = w + row * row_bytes;
+        const rp1 = w + (row + 1) * row_bytes;
+        for (0..nb) |b| {
+            const bp0 = rp0 + b * bpb;
+            const bp1 = rp1 + b * bpb;
+            const hmask0 = bp0[0..32];
+            const hmask1 = bp1[0..32];
+            const qs0 = bp0 + 32;
+            const qs1 = bp1 + 32;
+            const raw_scales0 = bp0[96..108];
+            const raw_scales1 = bp1[96..108];
+            const d_0: f32 = @floatCast(@as(f16, @bitCast(std.mem.readInt(u16, bp0[108..110], .little))));
+            const d_1: f32 = @floatCast(@as(f16, @bitCast(std.mem.readInt(u16, bp1[108..110], .little))));
+            const bk = b * bs;
+
+            var scales0: [16]i8 = undefined;
+            var scales1: [16]i8 = undefined;
+            for (0..8) |j| {
+                scales0[j] = @as(i8, @intCast(raw_scales0[j] & 0x0F)) + q3_k_scale_bias;
+                scales1[j] = @as(i8, @intCast(raw_scales1[j] & 0x0F)) + q3_k_scale_bias;
+            }
+            for (0..8) |j| {
+                scales0[8 + j] = @as(i8, @intCast(raw_scales0[j] >> 4)) + q3_k_scale_bias;
+                scales1[8 + j] = @as(i8, @intCast(raw_scales1[j] >> 4)) + q3_k_scale_bias;
+            }
+
+            if (bk + bs - 1 < k) {
+                for (0..16) |sb| {
+                    const sc0: f32 = d_0 * @as(f32, @floatFromInt(scales0[sb]));
+                    const sc1: f32 = d_1 * @as(f32, @floatFromInt(scales1[sb]));
+                    const hm_bit: u3 = @intCast(sb / 2);
+                    const hm_base: usize = (sb % 2) * 16;
+                    const qs_base: usize = sb * 4;
+                    var block_sum0: f32 = 0.0;
+                    var block_sum1: f32 = 0.0;
+                    for (0..16) |l| {
+                        const shift: u3 = @intCast((l % 4) * 2);
+                        const q_lo0: u8 = (qs0[qs_base + l / 4] >> shift) & q3_k_lo_mask;
+                        const q_hi0: u8 = (hmask0[hm_base + l] >> hm_bit) & 1;
+                        const q_lo1: u8 = (qs1[qs_base + l / 4] >> shift) & q3_k_lo_mask;
+                        const q_hi1: u8 = (hmask1[hm_base + l] >> hm_bit) & 1;
+                        const q3_0: i8 = @as(i8, @intCast(q_lo0 | (q_hi0 << 2))) + q3_k_dequant_bias;
+                        const q3_1: i8 = @as(i8, @intCast(q_lo1 | (q_hi1 << 2))) + q3_k_dequant_bias;
+                        const xv = x[bk + sb * 16 + l];
+                        block_sum0 += xv * @as(f32, @floatFromInt(q3_0));
+                        block_sum1 += xv * @as(f32, @floatFromInt(q3_1));
+                    }
+                    sum0 += block_sum0 * sc0;
+                    sum1 += block_sum1 * sc1;
+                }
+            } else {
+                for (0..16) |sb| {
+                    const sub_bk = bk + sb * 16;
+                    if (sub_bk >= k) break;
+                    const sc0: f32 = d_0 * @as(f32, @floatFromInt(scales0[sb]));
+                    const sc1: f32 = d_1 * @as(f32, @floatFromInt(scales1[sb]));
+                    const hm_bit: u3 = @intCast(sb / 2);
+                    const hm_base: usize = (sb % 2) * 16;
+                    const qs_base: usize = sb * 4;
+                    var block_sum0: f32 = 0.0;
+                    var block_sum1: f32 = 0.0;
+                    for (0..16) |l| {
+                        if (sub_bk + l >= k) break;
+                        const shift: u3 = @intCast((l % 4) * 2);
+                        const q_lo0: u8 = (qs0[qs_base + l / 4] >> shift) & q3_k_lo_mask;
+                        const q_hi0: u8 = (hmask0[hm_base + l] >> hm_bit) & 1;
+                        const q_lo1: u8 = (qs1[qs_base + l / 4] >> shift) & q3_k_lo_mask;
+                        const q_hi1: u8 = (hmask1[hm_base + l] >> hm_bit) & 1;
+                        const q3_0: i8 = @as(i8, @intCast(q_lo0 | (q_hi0 << 2))) + q3_k_dequant_bias;
+                        const q3_1: i8 = @as(i8, @intCast(q_lo1 | (q_hi1 << 2))) + q3_k_dequant_bias;
+                        const xv = x[sub_bk + l];
+                        block_sum0 += xv * @as(f32, @floatFromInt(q3_0));
+                        block_sum1 += xv * @as(f32, @floatFromInt(q3_1));
+                    }
+                    sum0 += block_sum0 * sc0;
+                    sum1 += block_sum1 * sc1;
+                }
+            }
+        }
+        y[row] = sum0;
+        y[row + 1] = sum1;
+    }
+
+    // Remainder: single row
+    while (row < n) : (row += 1) {
         var sum: f32 = 0.0;
-        const rp = w + row * nb * bpb;
+        const rp = w + row * row_bytes;
         for (0..nb) |b| {
             const bp = rp + b * bpb;
             const hmask = bp[0..32];

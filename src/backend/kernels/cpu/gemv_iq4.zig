@@ -1,5 +1,6 @@
 //! CPU GEMV kernels for IQ4 quantization formats.
 //! IQ4_NL (non-linear lookup, 32-element blocks) and IQ4_XS (256-element super-blocks).
+//! 2-row batched to share x-vector cache reads.
 
 const std = @import("std");
 const quant = @import("../../../ops/quant.zig");
@@ -12,13 +13,66 @@ const iq4_xs_scale_hi_mask: u16 = 0x03;
 
 /// IQ4_NL: 32 values per block, 18 bytes (f16 scale + 16 nibble-packed bytes)
 /// Uses a non-linear lookup table instead of linear dequant.
+/// 2-row batched to share x-vector cache reads.
 pub fn gemvIQ4_NL(x: [*]const f32, w: [*]const u8, y: [*]f32, n: usize, k: usize) void {
     const bpb = backend_mod.iq4_nl_block_bytes;
     const qk = backend_mod.quant_block_elems;
     const nb = (k + qk - 1) / qk;
     const row_bytes = nb * bpb;
 
-    for (0..n) |row| {
+    // Process 2 rows at a time for x-vector cache reuse.
+    var row: usize = 0;
+    while (row + 2 <= n) : (row += 2) {
+        var sum0: f32 = 0.0;
+        var sum1: f32 = 0.0;
+        const rp0 = w + row * row_bytes;
+        const rp1 = w + (row + 1) * row_bytes;
+        for (0..nb) |b| {
+            const bp0 = rp0 + b * bpb;
+            const bp1 = rp1 + b * bpb;
+            const d0: f32 = @floatCast(@as(f16, @bitCast(std.mem.readInt(u16, bp0[0..2], .little))));
+            const d1: f32 = @floatCast(@as(f16, @bitCast(std.mem.readInt(u16, bp1[0..2], .little))));
+            const bk = b * qk;
+            var block_sum0: f32 = 0.0;
+            var block_sum1: f32 = 0.0;
+            if (bk + qk - 1 < k) {
+                for (0..qk / 2) |j| {
+                    const byte0 = bp0[2 + j];
+                    const byte1 = bp1[2 + j];
+                    const xlo = x[bk + j];
+                    const xhi = x[bk + j + qk / 2];
+                    block_sum0 += xlo * @as(f32, @floatFromInt(quant.iq4nl_table[byte0 & 0x0F])) +
+                        xhi * @as(f32, @floatFromInt(quant.iq4nl_table[byte0 >> 4]));
+                    block_sum1 += xlo * @as(f32, @floatFromInt(quant.iq4nl_table[byte1 & 0x0F])) +
+                        xhi * @as(f32, @floatFromInt(quant.iq4nl_table[byte1 >> 4]));
+                }
+            } else {
+                for (0..qk / 2) |j| {
+                    const byte0 = bp0[2 + j];
+                    const byte1 = bp1[2 + j];
+                    const gi0 = bk + j;
+                    const gi1 = bk + j + qk / 2;
+                    if (gi0 < k) {
+                        const xv = x[gi0];
+                        block_sum0 += xv * @as(f32, @floatFromInt(quant.iq4nl_table[byte0 & 0x0F]));
+                        block_sum1 += xv * @as(f32, @floatFromInt(quant.iq4nl_table[byte1 & 0x0F]));
+                    }
+                    if (gi1 < k) {
+                        const xv = x[gi1];
+                        block_sum0 += xv * @as(f32, @floatFromInt(quant.iq4nl_table[byte0 >> 4]));
+                        block_sum1 += xv * @as(f32, @floatFromInt(quant.iq4nl_table[byte1 >> 4]));
+                    }
+                }
+            }
+            sum0 += block_sum0 * d0;
+            sum1 += block_sum1 * d1;
+        }
+        y[row] = sum0;
+        y[row + 1] = sum1;
+    }
+
+    // Remainder: single row
+    while (row < n) : (row += 1) {
         var sum: f32 = 0.0;
         const rp = w + row * row_bytes;
         for (0..nb) |b| {
@@ -50,13 +104,91 @@ pub fn gemvIQ4_NL(x: [*]const f32, w: [*]const u8, y: [*]f32, n: usize, k: usize
 /// IQ4_XS: 256 values per super-block, 136 bytes
 /// Layout: f16 d + u16 scales_h + u8 scales_l[4] + qs[128]
 /// 8 sub-blocks of 32 elements; each uses iq4nl_table for dequant.
+/// 2-row batched to share x-vector cache reads.
 pub fn gemvIQ4_XS(x: [*]const f32, w: [*]const u8, y: [*]f32, n: usize, k: usize) void {
     const bpb = backend_mod.iq4_xs_block_bytes;
     const super_block_size = backend_mod.quant_super_block_elems;
     const nb = (k + super_block_size - 1) / super_block_size;
     const row_bytes = nb * bpb;
 
-    for (0..n) |row| {
+    // Process 2 rows at a time for x-vector cache reuse.
+    var row: usize = 0;
+    while (row + 2 <= n) : (row += 2) {
+        var sum0: f32 = 0.0;
+        var sum1: f32 = 0.0;
+        const rp0 = w + row * row_bytes;
+        const rp1 = w + (row + 1) * row_bytes;
+        for (0..nb) |b| {
+            const bp0 = rp0 + b * bpb;
+            const bp1 = rp1 + b * bpb;
+            const d0: f32 = @floatCast(@as(f16, @bitCast(std.mem.readInt(u16, bp0[0..2], .little))));
+            const d1: f32 = @floatCast(@as(f16, @bitCast(std.mem.readInt(u16, bp1[0..2], .little))));
+            const scales_h0 = std.mem.readInt(u16, bp0[2..4], .little);
+            const scales_h1 = std.mem.readInt(u16, bp1[2..4], .little);
+            const scales_l0 = bp0[4..8];
+            const scales_l1 = bp1[4..8];
+            const qs0 = bp0 + 8;
+            const qs1 = bp1 + 8;
+            const bk = b * super_block_size;
+
+            for (0..8) |sb| {
+                const lo4_0: u8 = if (sb % 2 == 0) scales_l0[sb / 2] & 0x0F else scales_l0[sb / 2] >> 4;
+                const hi2_0: u8 = @truncate((scales_h0 >> @intCast(sb * 2)) & @as(u16, iq4_xs_scale_hi_mask));
+                const scale_raw0: i32 = @as(i32, lo4_0 | (@as(u8, hi2_0) << 4)) + iq4_xs_scale_bias;
+                const sub_scale0: f32 = d0 * @as(f32, @floatFromInt(scale_raw0));
+
+                const lo4_1: u8 = if (sb % 2 == 0) scales_l1[sb / 2] & 0x0F else scales_l1[sb / 2] >> 4;
+                const hi2_1: u8 = @truncate((scales_h1 >> @intCast(sb * 2)) & @as(u16, iq4_xs_scale_hi_mask));
+                const scale_raw1: i32 = @as(i32, lo4_1 | (@as(u8, hi2_1) << 4)) + iq4_xs_scale_bias;
+                const sub_scale1: f32 = d1 * @as(f32, @floatFromInt(scale_raw1));
+
+                const sub_qs0 = qs0 + sb * 16;
+                const sub_qs1 = qs1 + sb * 16;
+                const sub_bk = bk + sb * 32;
+                var block_sum0: f32 = 0.0;
+                var block_sum1: f32 = 0.0;
+
+                const sub_block_elems = backend_mod.quant_block_elems;
+                const half_sub = sub_block_elems / 2;
+                if (sub_bk + sub_block_elems - 1 < k) {
+                    for (0..half_sub) |j| {
+                        const byte0 = sub_qs0[j];
+                        const byte1 = sub_qs1[j];
+                        const xlo = x[sub_bk + j];
+                        const xhi = x[sub_bk + j + half_sub];
+                        block_sum0 += xlo * @as(f32, @floatFromInt(quant.iq4nl_table[byte0 & 0x0F])) +
+                            xhi * @as(f32, @floatFromInt(quant.iq4nl_table[byte0 >> 4]));
+                        block_sum1 += xlo * @as(f32, @floatFromInt(quant.iq4nl_table[byte1 & 0x0F])) +
+                            xhi * @as(f32, @floatFromInt(quant.iq4nl_table[byte1 >> 4]));
+                    }
+                } else {
+                    for (0..half_sub) |j| {
+                        const byte0 = sub_qs0[j];
+                        const byte1 = sub_qs1[j];
+                        const gi0 = sub_bk + j;
+                        const gi1 = sub_bk + j + half_sub;
+                        if (gi0 < k) {
+                            const xv = x[gi0];
+                            block_sum0 += xv * @as(f32, @floatFromInt(quant.iq4nl_table[byte0 & 0x0F]));
+                            block_sum1 += xv * @as(f32, @floatFromInt(quant.iq4nl_table[byte1 & 0x0F]));
+                        }
+                        if (gi1 < k) {
+                            const xv = x[gi1];
+                            block_sum0 += xv * @as(f32, @floatFromInt(quant.iq4nl_table[byte0 >> 4]));
+                            block_sum1 += xv * @as(f32, @floatFromInt(quant.iq4nl_table[byte1 >> 4]));
+                        }
+                    }
+                }
+                sum0 += block_sum0 * sub_scale0;
+                sum1 += block_sum1 * sub_scale1;
+            }
+        }
+        y[row] = sum0;
+        y[row + 1] = sum1;
+    }
+
+    // Remainder: single row
+    while (row < n) : (row += 1) {
         var sum: f32 = 0.0;
         const rp = w + row * row_bytes;
         for (0..nb) |b| {

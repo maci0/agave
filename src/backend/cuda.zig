@@ -695,7 +695,12 @@ pub const CudaBackend = struct {
             @ptrCast(&n_u32),
             @ptrCast(&k_u32),
         };
-        self.launch(func, @intCast(n), block_size, reduction_smem, &params);
+        // Q4_K/Q5_K/Q6_K use NR=2 (2 rows per block); others use 1 row per block.
+        const grid_size: u32 = switch (w.dtype) {
+            .q4_k, .q5_k, .q6_k => @intCast((n + 1) / 2),
+            else => @intCast(n),
+        };
+        self.launch(func, grid_size, block_size, reduction_smem, &params);
     }
 
     /// In-place sigmoid-gated multiply: data[i] *= sigmoid(gate[i]).

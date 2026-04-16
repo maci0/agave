@@ -720,6 +720,56 @@ kernel void gemv_q3_k(
 // 256 values per super-block, 210 bytes.
 // Layout: { uchar ql[128]; uchar qh[64]; char scales[16]; half d; }
 
+constant uint q6_k_nr = 2;
+
+inline float q6_k_block_dot(device const uchar* bp, device const float* x, uint k, uint bk) {
+    float d = float(as_type<half>(ushort(bp[208] | (uint(bp[209]) << 8))));
+    float sum = 0.0f;
+
+    for (uint chunk = 0; chunk < 2; chunk++) {
+        device const uchar* ql = bp + chunk * 64;
+        device const uchar* qh = bp + 128 + chunk * 32;
+        device const char* sc = (device const char*)(bp + 192 + chunk * 8);
+        uint base = bk + chunk * 128;
+
+        if (base + 127 < k) {
+            float ds0_a = d * float(sc[0]), ds1_a = d * float(sc[2]);
+            float ds2_a = d * float(sc[4]), ds3_a = d * float(sc[6]);
+            float ds0_b = d * float(sc[1]), ds1_b = d * float(sc[3]);
+            float ds2_b = d * float(sc[5]), ds3_b = d * float(sc[7]);
+
+            for (uint l = 0; l < 16; l++) {
+                float q1 = float(int((ql[l] & 0xF) | ((qh[l] & 3u) << 4)) - 32);
+                float q2 = float(int((ql[l+32] & 0xF) | (((qh[l]>>2)&3u)<<4)) - 32);
+                float q3 = float(int((ql[l] >> 4) | (((qh[l]>>4)&3u)<<4)) - 32);
+                float q4 = float(int((ql[l+32] >> 4) | (((qh[l]>>6)&3u)<<4)) - 32);
+                sum += x[base+l]*ds0_a*q1 + x[base+l+32]*ds1_a*q2
+                     + x[base+l+64]*ds2_a*q3 + x[base+l+96]*ds3_a*q4;
+                uint l2 = l + 16;
+                float q1b = float(int((ql[l2] & 0xF) | ((qh[l2] & 3u) << 4)) - 32);
+                float q2b = float(int((ql[l2+32] & 0xF) | (((qh[l2]>>2)&3u)<<4)) - 32);
+                float q3b = float(int((ql[l2] >> 4) | (((qh[l2]>>4)&3u)<<4)) - 32);
+                float q4b = float(int((ql[l2+32] >> 4) | (((qh[l2]>>6)&3u)<<4)) - 32);
+                sum += x[base+l2]*ds0_b*q1b + x[base+l2+32]*ds1_b*q2b
+                     + x[base+l2+64]*ds2_b*q3b + x[base+l2+96]*ds3_b*q4b;
+            }
+        } else {
+            for (uint l = 0; l < 32; l++) {
+                uint is = l / 16;
+                int q1 = int((ql[l] & 0xF) | ((qh[l] & 3u) << 4)) - 32;
+                int q2 = int((ql[l+32] & 0xF) | (((qh[l]>>2)&3u)<<4)) - 32;
+                int q3 = int((ql[l] >> 4) | (((qh[l]>>4)&3u)<<4)) - 32;
+                int q4 = int((ql[l+32] >> 4) | (((qh[l]>>6)&3u)<<4)) - 32;
+                if (base+l < k) sum += x[base+l] * d * float(sc[is]) * float(q1);
+                if (base+l+32 < k) sum += x[base+l+32] * d * float(sc[is+2]) * float(q2);
+                if (base+l+64 < k) sum += x[base+l+64] * d * float(sc[is+4]) * float(q3);
+                if (base+l+96 < k) sum += x[base+l+96] * d * float(sc[is+6]) * float(q4);
+            }
+        }
+    }
+    return sum;
+}
+
 kernel void gemv_q6_k(
     device const float* x [[buffer(0)]],
     device const uchar* W [[buffer(1)]],
@@ -730,85 +780,83 @@ kernel void gemv_q6_k(
     uint tid      [[thread_index_in_threadgroup]],
     uint tg_size  [[threads_per_threadgroup]])
 {
-    if (tgid >= n) return;
-
     const uint bpb = 210;
     const uint bs = 256;
     uint nb = (k + bs - 1) / bs;
-    float sum = 0.0f;
+    uint row_base = tgid * q6_k_nr;
+    if (row_base >= n) return;
+    uint nr_active = min(q6_k_nr, n - row_base);
+
+    float sum0 = 0.0f, sum1 = 0.0f;
 
     for (uint b = tid; b < nb; b += tg_size) {
-        device const uchar* bp = W + (tgid * nb + b) * bpb;
-        float d = float(as_type<half>(ushort(bp[208] | (uint(bp[209]) << 8))));
         uint bk = b * bs;
-
-        for (uint chunk = 0; chunk < 2; chunk++) {
-            device const uchar* ql = bp + chunk * 64;
-            device const uchar* qh = bp + 128 + chunk * 32;
-            device const char*  sc = (device const char*)(bp + 192 + chunk * 8);
-            uint base = bk + chunk * 128;
-
-            if (base + 127 < k) {
-                // Full chunk — no bounds checks needed.
-                // Pre-compute scales for the two groups of 16 elements:
-                // Group A (l < 16): is=0, indices sc[0], sc[2], sc[4], sc[6]
-                // Group B (l >= 16): is=1, indices sc[1], sc[3], sc[5], sc[7]
-                float ds0_a = d * float(sc[0]);
-                float ds1_a = d * float(sc[2]);
-                float ds2_a = d * float(sc[4]);
-                float ds3_a = d * float(sc[6]);
-                float ds0_b = d * float(sc[1]);
-                float ds1_b = d * float(sc[3]);
-                float ds2_b = d * float(sc[5]);
-                float ds3_b = d * float(sc[7]);
-
-                for (uint l = 0; l < 16; l++) {
-                    // Reconstruct 4 q6 values for l (group A)
-                    float q1 = float(int((ql[l]      & 0xF) | ((qh[l] & 3u) << 4)) - 32);
-                    float q2 = float(int((ql[l + 32] & 0xF) | (((qh[l] >> 2) & 3u) << 4)) - 32);
-                    float q3 = float(int((ql[l]      >> 4)  | (((qh[l] >> 4) & 3u) << 4)) - 32);
-                    float q4 = float(int((ql[l + 32] >> 4)  | (((qh[l] >> 6) & 3u) << 4)) - 32);
-                    sum += x[base + l]      * ds0_a * q1;
-                    sum += x[base + l + 32] * ds1_a * q2;
-                    sum += x[base + l + 64] * ds2_a * q3;
-                    sum += x[base + l + 96] * ds3_a * q4;
-
-                    // Same for l+16 (group B)
-                    uint l2 = l + 16;
-                    float q1b = float(int((ql[l2]      & 0xF) | ((qh[l2] & 3u) << 4)) - 32);
-                    float q2b = float(int((ql[l2 + 32] & 0xF) | (((qh[l2] >> 2) & 3u) << 4)) - 32);
-                    float q3b = float(int((ql[l2]      >> 4)  | (((qh[l2] >> 4) & 3u) << 4)) - 32);
-                    float q4b = float(int((ql[l2 + 32] >> 4)  | (((qh[l2] >> 6) & 3u) << 4)) - 32);
-                    sum += x[base + l2]      * ds0_b * q1b;
-                    sum += x[base + l2 + 32] * ds1_b * q2b;
-                    sum += x[base + l2 + 64] * ds2_b * q3b;
-                    sum += x[base + l2 + 96] * ds3_b * q4b;
-                }
-            } else {
-                // Partial chunk — with bounds checks
-                for (uint l = 0; l < 32; l++) {
-                    uint is = l / 16;
-                    int q1 = int((ql[l]      & 0xF) | ((qh[l] & 3u) << 4)) - 32;
-                    int q2 = int((ql[l + 32] & 0xF) | (((qh[l] >> 2) & 3u) << 4)) - 32;
-                    int q3 = int((ql[l]      >> 4)  | (((qh[l] >> 4) & 3u) << 4)) - 32;
-                    int q4 = int((ql[l + 32] >> 4)  | (((qh[l] >> 6) & 3u) << 4)) - 32;
-                    if (base + l      < k) sum += x[base + l]      * d * float(sc[is + 0]) * float(q1);
-                    if (base + l + 32 < k) sum += x[base + l + 32] * d * float(sc[is + 2]) * float(q2);
-                    if (base + l + 64 < k) sum += x[base + l + 64] * d * float(sc[is + 4]) * float(q3);
-                    if (base + l + 96 < k) sum += x[base + l + 96] * d * float(sc[is + 6]) * float(q4);
-                }
-            }
-        }
+        sum0 += q6_k_block_dot(W + (row_base * nb + b) * bpb, x, k, bk);
+        if (nr_active > 1)
+            sum1 += q6_k_block_dot(W + ((row_base + 1) * nb + b) * bpb, x, k, bk);
     }
 
-    threadgroup float tg_shared[8];
-    sum = threadgroup_reduce_sum(sum, tg_shared, tid, tg_size);
-    if (tid == 0) y[tgid] = sum;
+    threadgroup float shared[8];
+    sum0 = threadgroup_reduce_sum(sum0, shared, tid, tg_size);
+    if (tid == 0) y[row_base] = sum0;
+
+    if (nr_active > 1) {
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        sum1 = threadgroup_reduce_sum(sum1, shared, tid, tg_size);
+        if (tid == 0) y[row_base + 1] = sum1;
+    }
 }
 
 // ── Q5_K GEMV ────────────────────────────────────────────────
 // 256 values per super-block, 176 bytes.
 // Layout: { half d; half dmin; uchar scales[12]; uchar qh[32]; uchar qs[128]; }
+
+constant uint q5_k_nr = 2;
+
+inline float q5_k_block_dot(device const uchar* bp, device const float* x, uint k, uint bk) {
+    float d    = float(as_type<half>(ushort(bp[0] | (uint(bp[1]) << 8))));
+    float dmin = float(as_type<half>(ushort(bp[2] | (uint(bp[3]) << 8))));
+    device const uchar* scales = bp + 4;
+    device const uchar* qh = bp + 16;
+    device const uchar* qs = bp + 48;
+    float sum = 0.0f;
+
+    uint is = 0, ql_off = 0;
+    uchar umask1 = 1, umask2 = 2;
+    for (uint j = 0; j < 256; j += 64) {
+        uint sc1, m1, sc2, m2;
+        getScaleMinK4(is, scales, sc1, m1);
+        getScaleMinK4(is + 1, scales, sc2, m2);
+        float d1 = d * float(sc1), dm1 = dmin * float(m1);
+        float d2 = d * float(sc2), dm2 = dmin * float(m2);
+
+        if (bk + j + 63 < k) {
+            for (uint l = 0; l < 32; l++) {
+                uint qv = (qs[ql_off + l] & 0xF) + ((qh[l] & umask1) != 0 ? 16u : 0u);
+                sum += x[bk + j + l] * (float(qv) * d1 - dm1);
+            }
+            for (uint l = 0; l < 32; l++) {
+                uint qv = (qs[ql_off + l] >> 4) + ((qh[l] & umask2) != 0 ? 16u : 0u);
+                sum += x[bk + j + 32 + l] * (float(qv) * d2 - dm2);
+            }
+        } else {
+            for (uint l = 0; l < 32; l++) {
+                uint gi = bk + j + l;
+                if (gi >= k) break;
+                uint qv = (qs[ql_off + l] & 0xF) + ((qh[l] & umask1) != 0 ? 16u : 0u);
+                sum += x[gi] * (float(qv) * d1 - dm1);
+            }
+            for (uint l = 0; l < 32; l++) {
+                uint gi = bk + j + 32 + l;
+                if (gi >= k) break;
+                uint qv = (qs[ql_off + l] >> 4) + ((qh[l] & umask2) != 0 ? 16u : 0u);
+                sum += x[gi] * (float(qv) * d2 - dm2);
+            }
+        }
+        ql_off += 32; is += 2; umask1 <<= 2; umask2 <<= 2;
+    }
+    return sum;
+}
 
 kernel void gemv_q5_k(
     device const float* x [[buffer(0)]],
@@ -820,69 +868,31 @@ kernel void gemv_q5_k(
     uint tid      [[thread_index_in_threadgroup]],
     uint tg_size  [[threads_per_threadgroup]])
 {
-    if (tgid >= n) return;
-
     const uint bpb = 176;
     const uint bs = 256;
     uint nb = (k + bs - 1) / bs;
-    float sum = 0.0f;
+    uint row_base = tgid * q5_k_nr;
+    if (row_base >= n) return;
+    uint nr_active = min(q5_k_nr, n - row_base);
+
+    float sum0 = 0.0f, sum1 = 0.0f;
 
     for (uint b = tid; b < nb; b += tg_size) {
-        device const uchar* bp = W + (tgid * nb + b) * bpb;
-        float d    = float(as_type<half>(ushort(bp[0] | (uint(bp[1]) << 8))));
-        float dmin = float(as_type<half>(ushort(bp[2] | (uint(bp[3]) << 8))));
-        device const uchar* scales = bp + 4;
-        device const uchar* qh = bp + 16;
-        device const uchar* qs = bp + 48;
         uint bk = b * bs;
-
-        uint is = 0;
-        uint ql_off = 0;
-        uchar umask1 = 1;
-        uchar umask2 = 2;
-        for (uint j = 0; j < 256; j += 64) {
-            uint sc1, m1, sc2, m2;
-            getScaleMinK4(is + 0, scales, sc1, m1);
-            getScaleMinK4(is + 1, scales, sc2, m2);
-            float d1  = d * float(sc1);
-            float dm1 = dmin * float(m1);
-            float d2  = d * float(sc2);
-            float dm2 = dmin * float(m2);
-
-            if (bk + j + 63 < k) {
-                // Full 64-element group — no bounds checks
-                for (uint l = 0; l < 32; l++) {
-                    uint q_val = (qs[ql_off + l] & 0xF) + ((qh[l] & umask1) != 0 ? 16u : 0u);
-                    sum += x[bk + j + l] * (float(q_val) * d1 - dm1);
-                }
-                for (uint l = 0; l < 32; l++) {
-                    uint q_val = (qs[ql_off + l] >> 4) + ((qh[l] & umask2) != 0 ? 16u : 0u);
-                    sum += x[bk + j + 32 + l] * (float(q_val) * d2 - dm2);
-                }
-            } else {
-                for (uint l = 0; l < 32; l++) {
-                    uint gi = bk + j + l;
-                    if (gi >= k) break;
-                    uint q_val = (qs[ql_off + l] & 0xF) + ((qh[l] & umask1) != 0 ? 16u : 0u);
-                    sum += x[gi] * (float(q_val) * d1 - dm1);
-                }
-                for (uint l = 0; l < 32; l++) {
-                    uint gi = bk + j + 32 + l;
-                    if (gi >= k) break;
-                    uint q_val = (qs[ql_off + l] >> 4) + ((qh[l] & umask2) != 0 ? 16u : 0u);
-                    sum += x[gi] * (float(q_val) * d2 - dm2);
-                }
-            }
-            ql_off += 32;
-            is += 2;
-            umask1 <<= 2;
-            umask2 <<= 2;
-        }
+        sum0 += q5_k_block_dot(W + (row_base * nb + b) * bpb, x, k, bk);
+        if (nr_active > 1)
+            sum1 += q5_k_block_dot(W + ((row_base + 1) * nb + b) * bpb, x, k, bk);
     }
 
-    threadgroup float tg_shared[8];
-    sum = threadgroup_reduce_sum(sum, tg_shared, tid, tg_size);
-    if (tid == 0) y[tgid] = sum;
+    threadgroup float shared[8];
+    sum0 = threadgroup_reduce_sum(sum0, shared, tid, tg_size);
+    if (tid == 0) y[row_base] = sum0;
+
+    if (nr_active > 1) {
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        sum1 = threadgroup_reduce_sum(sum1, shared, tid, tg_size);
+        if (tid == 0) y[row_base + 1] = sum1;
+    }
 }
 
 // ── MLX Q6 GEMV ─────────────────────────────────────────────

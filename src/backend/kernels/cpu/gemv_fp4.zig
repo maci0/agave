@@ -1,24 +1,79 @@
 //! CPU GEMV kernels for 4-bit floating-point formats.
 //! MXFP4 (E2M1 microscaling) and NVFP4 (FP8 E4M3 block scale).
+//! 2-row batched to share x-vector cache reads.
 
 const std = @import("std");
 const quant = @import("../../../ops/quant.zig");
 const backend_mod = @import("../../backend.zig");
 
 /// MXFP4: 32 values per block, 17 bytes (1 E8M0 scale + 16 nibble-packed bytes)
+/// 2-row batched to share x-vector cache reads.
 pub fn gemvMXFP4(x: [*]const f32, w: [*]const u8, y: [*]f32, n: usize, k: usize) void {
     const bpb = backend_mod.mxfp4_block_bytes;
     const qk = backend_mod.quant_block_elems;
     const nb = (k + qk - 1) / qk;
-    for (0..n) |row| {
+    const row_bytes = nb * bpb;
+
+    // Process 2 rows at a time for x-vector cache reuse.
+    var row: usize = 0;
+    while (row + 2 <= n) : (row += 2) {
+        var sum0: f32 = 0.0;
+        var sum1: f32 = 0.0;
+        const rp0 = w + row * row_bytes;
+        const rp1 = w + (row + 1) * row_bytes;
+        for (0..nb) |b| {
+            const bp0 = rp0 + b * bpb;
+            const bp1 = rp1 + b * bpb;
+            const d0 = quant.e8m0ToF32(bp0[0]);
+            const d1 = quant.e8m0ToF32(bp1[0]);
+            const bk = b * qk;
+            if (bk + qk - 1 < k) {
+                var block_sum0: f32 = 0.0;
+                var block_sum1: f32 = 0.0;
+                for (0..qk / 2) |j| {
+                    const byte0 = bp0[1 + j];
+                    const byte1 = bp1[1 + j];
+                    const xlo = x[bk + j];
+                    const xhi = x[bk + j + qk / 2];
+                    block_sum0 += xlo * quant.mxfp4Lookup(byte0 & 0x0F) +
+                        xhi * quant.mxfp4Lookup(byte0 >> 4);
+                    block_sum1 += xlo * quant.mxfp4Lookup(byte1 & 0x0F) +
+                        xhi * quant.mxfp4Lookup(byte1 >> 4);
+                }
+                sum0 += block_sum0 * d0;
+                sum1 += block_sum1 * d1;
+            } else {
+                for (0..qk / 2) |j| {
+                    const byte0 = bp0[1 + j];
+                    const byte1 = bp1[1 + j];
+                    const gi0 = bk + j;
+                    const gi1 = bk + j + qk / 2;
+                    if (gi0 < k) {
+                        const xv = x[gi0];
+                        sum0 += xv * quant.mxfp4Lookup(byte0 & 0x0F) * d0;
+                        sum1 += xv * quant.mxfp4Lookup(byte1 & 0x0F) * d1;
+                    }
+                    if (gi1 < k) {
+                        const xv = x[gi1];
+                        sum0 += xv * quant.mxfp4Lookup(byte0 >> 4) * d0;
+                        sum1 += xv * quant.mxfp4Lookup(byte1 >> 4) * d1;
+                    }
+                }
+            }
+        }
+        y[row] = sum0;
+        y[row + 1] = sum1;
+    }
+
+    // Remainder: single row
+    while (row < n) : (row += 1) {
         var sum: f32 = 0.0;
-        const rp = w + row * nb * bpb;
+        const rp = w + row * row_bytes;
         for (0..nb) |b| {
             const bp = rp + b * bpb;
             const d = quant.e8m0ToF32(bp[0]);
             const bk = b * qk;
             if (bk + qk - 1 < k) {
-                // Full block: no bounds checks, factor out scale
                 var block_sum: f32 = 0.0;
                 for (0..qk / 2) |j| {
                     const byte = bp[1 + j];
@@ -44,13 +99,68 @@ pub fn gemvMXFP4(x: [*]const f32, w: [*]const u8, y: [*]f32, n: usize, k: usize)
 
 /// NVFP4: 16-element blocks with FP8 E4M3 block scale.
 /// Block layout: 1 byte FP8 scale + 8 bytes packed nibbles = 9 bytes per block.
+/// 2-row batched to share x-vector cache reads.
 pub fn gemvNVFP4(x: [*]const f32, w: [*]const u8, y: [*]f32, n: usize, k: usize) void {
     const bpb = backend_mod.nvfp4_block_bytes;
     const qk = backend_mod.nvfp4_block_elems;
     const nb = (k + qk - 1) / qk;
-    for (0..n) |row| {
+    const row_bytes = nb * bpb;
+
+    // Process 2 rows at a time for x-vector cache reuse.
+    var row: usize = 0;
+    while (row + 2 <= n) : (row += 2) {
+        var sum0: f32 = 0.0;
+        var sum1: f32 = 0.0;
+        const rp0 = w + row * row_bytes;
+        const rp1 = w + (row + 1) * row_bytes;
+        for (0..nb) |b| {
+            const bp0 = rp0 + b * bpb;
+            const bp1 = rp1 + b * bpb;
+            const scale0 = quant.fp8e4m3ToF32(bp0[0]);
+            const scale1 = quant.fp8e4m3ToF32(bp1[0]);
+            const bk = b * qk;
+            if (bk + qk - 1 < k) {
+                var block_sum0: f32 = 0.0;
+                var block_sum1: f32 = 0.0;
+                for (0..qk / 2) |j| {
+                    const byte0 = bp0[1 + j];
+                    const byte1 = bp1[1 + j];
+                    const xlo = x[bk + j];
+                    const xhi = x[bk + j + qk / 2];
+                    block_sum0 += xlo * quant.mxfp4Lookup(byte0 & 0x0F) +
+                        xhi * quant.mxfp4Lookup(byte0 >> 4);
+                    block_sum1 += xlo * quant.mxfp4Lookup(byte1 & 0x0F) +
+                        xhi * quant.mxfp4Lookup(byte1 >> 4);
+                }
+                sum0 += block_sum0 * scale0;
+                sum1 += block_sum1 * scale1;
+            } else {
+                for (0..qk / 2) |j| {
+                    const byte0 = bp0[1 + j];
+                    const byte1 = bp1[1 + j];
+                    const gi0 = bk + j;
+                    const gi1 = bk + j + qk / 2;
+                    if (gi0 < k) {
+                        const xv = x[gi0];
+                        sum0 += xv * quant.mxfp4Lookup(byte0 & 0x0F) * scale0;
+                        sum1 += xv * quant.mxfp4Lookup(byte1 & 0x0F) * scale1;
+                    }
+                    if (gi1 < k) {
+                        const xv = x[gi1];
+                        sum0 += xv * quant.mxfp4Lookup(byte0 >> 4) * scale0;
+                        sum1 += xv * quant.mxfp4Lookup(byte1 >> 4) * scale1;
+                    }
+                }
+            }
+        }
+        y[row] = sum0;
+        y[row + 1] = sum1;
+    }
+
+    // Remainder: single row
+    while (row < n) : (row += 1) {
         var sum: f32 = 0.0;
-        const rp = w + row * nb * bpb;
+        const rp = w + row * row_bytes;
         for (0..nb) |b| {
             const bp = rp + b * bpb;
             const scale = quant.fp8e4m3ToF32(bp[0]);

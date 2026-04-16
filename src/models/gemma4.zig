@@ -1113,7 +1113,6 @@ pub const Gemma4Model = struct {
         self.perf.end(.gemv_qkv, t);
 
         // 3. K/V projections — only for layers that own their KV cache.
-        // Shared layers skip K/V projection and attend against the source's existing cache.
         if (has_own_kv) {
             t = self.perf.start();
             const kw = self.fmt.layerTensor(li, "attn_k.weight") orelse return error.MissingTensor;
@@ -1122,7 +1121,6 @@ pub const Gemma4Model = struct {
             if (vw) |vw_t| {
                 self.doGemv(self.hidden2.ptr, vw_t, self.v_buf.ptr, kv_dim, e);
             } else {
-                // Tied K=V: copy K to V before K gets normed/rotated.
                 self.be.sync();
                 @memcpy(self.v_buf[0..kv_dim], self.k_buf[0..kv_dim]);
             }
@@ -1137,6 +1135,7 @@ pub const Gemma4Model = struct {
                 self.be.rmsNormMulti(self.k_buf.ptr, self.normAsF32(kn, hd), nkv, hd, self.rms_eps);
             }
             if (vw == null) {
+                // Tied K=V: V was copied from K, apply plain RMSNorm
                 self.be.sync();
                 rmsNormPlainMulti(self.v_buf.ptr, nkv, hd, self.rms_eps);
             }
@@ -1617,6 +1616,56 @@ pub const Gemma4Model = struct {
             k,
             self.mlx_bits,
         );
+    }
+
+    /// Batched GEMV dispatch: multiple ops sharing the same input vector.
+    /// Dispatches all ops in a single batch without barriers, enabling concurrent
+    /// GPU execution (e.g., fused Q+K+V or gate+up projections).
+    const GemvSpec = struct { t: TensorInfo, y: [*]f32, n: usize };
+
+    fn doGemvMulti(self: *Gemma4Model, x: [*]const f32, k: usize, specs: []const GemvSpec) void {
+        const GemvOp = backend_mod.GemvOp;
+        var ops: [4]GemvOp = undefined; // max 4 ops (Q+K+V+output or gate+up+down+...)
+        std.debug.assert(specs.len <= ops.len);
+
+        for (specs, 0..) |spec, i| {
+            if (spec.t.dtype == .mlx_q) {
+                // MLX-Q: resolve companion pointers
+                const key = @intFromPtr(spec.t.data_ptr);
+                const slot = key % mlx_companion_cache_size;
+                var companion: MlxCompanion = undefined;
+                if (self.mlx_cc_keys[slot] == key) {
+                    companion = self.mlx_cc_vals[slot];
+                } else {
+                    const base = spec.t.name;
+                    const plen = if (std.mem.endsWith(u8, base, ".weight")) base.len - 7 else base.len;
+                    var sb: [model_mod.tensor_name_buf_size]u8 = undefined;
+                    var bb: [model_mod.tensor_name_buf_size]u8 = undefined;
+                    const sn = std.fmt.bufPrint(&sb, "{s}.scales", .{base[0..plen]}) catch return;
+                    const bn = std.fmt.bufPrint(&bb, "{s}.biases", .{base[0..plen]}) catch return;
+                    const st = self.fmt.getTensor(sn) orelse return;
+                    const bt = self.fmt.getTensor(bn) orelse return;
+                    companion = .{ .scales = st.data_ptr, .biases = bt.data_ptr };
+                    self.mlx_cc_keys[slot] = key;
+                    self.mlx_cc_vals[slot] = companion;
+                }
+                ops[i] = .{
+                    .w = .{ .data = spec.t.data_ptr, .dtype = spec.t.dtype },
+                    .y = spec.y,
+                    .n = spec.n,
+                    .mlx_scales = companion.scales,
+                    .mlx_biases = companion.biases,
+                    .mlx_bits = self.mlx_bits,
+                };
+            } else {
+                ops[i] = .{
+                    .w = .{ .data = spec.t.data_ptr, .dtype = spec.t.dtype },
+                    .y = spec.y,
+                    .n = spec.n,
+                };
+            }
+        }
+        self.be.gemvMulti(x, ops[0..specs.len], k);
     }
 
     /// Dispatch GEMV for a single expert slice from a packed expert tensor.
