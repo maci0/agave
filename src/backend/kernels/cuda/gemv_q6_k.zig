@@ -7,31 +7,22 @@ const cu = @import("common.zig");
 const bytes_per_block: usize = 210;
 const values_per_block: usize = 256;
 
-/// Helper: convert little-endian f16 (2 bytes) to f32
-inline fn f16tof32(ptr: [*]const u8) f32 {
-    const val = @as(u16, ptr[0]) | (@as(u16, ptr[1]) << 8);
-    const sign: u32 = @as(u32, val >> 15) << 31;
-    const exp_f16: u32 = (val >> 10) & 0x1F;
-    const mant_f16: u32 = val & 0x3FF;
+// Q6_K block layout offsets.
+const q6_k_d_offset: usize = 208; // d(f16) at end of block
+const q6_k_qh_offset: usize = 128; // qh starts after ql(128)
+const q6_k_sc_offset: usize = 192; // scales start after ql(128) + qh(64)
+const q6_k_ql_chunk_bytes: usize = 64;
+const q6_k_qh_chunk_bytes: usize = 32;
+const q6_k_sc_chunk_bytes: usize = 8;
+/// Elements per half super-block chunk (256 / 2).
+const chunk_elems = values_per_block / 2;
 
-    if (exp_f16 == 0 and mant_f16 == 0) return @bitCast(sign);
+/// Q6_K dequant bias: 6-bit unsigned [0..63] centered to signed [-32..31].
+const q6_k_dequant_bias: i32 = -32;
+/// Mask for extracting 2-bit high-order field from qh byte.
+const qh_2bit_mask: u8 = 3;
 
-    if (exp_f16 == 0) {
-        const mant_f32 = mant_f16 << 13;
-        const exp_f32: u32 = (127 - 15) << 23;
-        return @bitCast(sign | exp_f32 | mant_f32);
-    }
-
-    if (exp_f16 == 0x1F) {
-        const exp_f32: u32 = 0xFF << 23;
-        const mant_f32: u32 = mant_f16 << 13;
-        return @bitCast(sign | exp_f32 | mant_f32);
-    }
-
-    const exp_f32: u32 = (exp_f16 + (127 - 15)) << 23;
-    const mant_f32: u32 = mant_f16 << 13;
-    return @bitCast(sign | exp_f32 | mant_f32);
-}
+const f16tof32 = cu.f16tof32;
 
 /// Q6_K GEMV kernel: y[row] = dot(W[row,:], x)
 /// Q6_K uses 6-bit quantization: 4-bit low nibble + 2-bit high bits stored separately.
@@ -57,16 +48,16 @@ export fn gemv_q6_k_kernel(
     var b = tid;
     while (b < num_blocks) : (b += bdim) {
         const bp = row_ptr + b * bytes_per_block;
-        const d = f16tof32(bp + 208); // d is at the end (bytes 208-209)
+        const d = f16tof32(bp + q6_k_d_offset); // d is at the end
         const block_start = b * values_per_block;
 
         // 2 chunks of 128 elements each
         var chunk: u32 = 0;
         while (chunk < 2) : (chunk += 1) {
-            const ql = bp + chunk * 64; // Low 4 bits
-            const qh = bp + 128 + chunk * 32; // High 2 bits
-            const sc: [*]const i8 = @ptrCast(bp + 192 + chunk * 8); // Scales (i8)
-            const base = block_start + chunk * 128;
+            const ql = bp + chunk * q6_k_ql_chunk_bytes; // Low 4 bits
+            const qh = bp + q6_k_qh_offset + chunk * q6_k_qh_chunk_bytes; // High 2 bits
+            const sc: [*]const i8 = @ptrCast(bp + q6_k_sc_offset + chunk * q6_k_sc_chunk_bytes); // Scales (i8)
+            const base = block_start + chunk * chunk_elems;
 
             // 4 scale groups of 32 elements each
             for (0..32) |l| {
@@ -78,10 +69,10 @@ export fn gemv_q6_k_kernel(
 
                 // Extract 6-bit values: low 4 bits from ql, high 2 bits from qh
                 // q = (ql & 0xF) | ((qh >> shift) & 3) << 4, then subtract 32
-                const q1: i8 = @as(i8, @intCast((ql[l] & 0x0F) | ((@as(u8, @truncate(qh[l] >> 0)) & 3) << 4))) - 32;
-                const q2: i8 = @as(i8, @intCast((ql[l + 32] & 0x0F) | ((@as(u8, @truncate(qh[l] >> 2)) & 3) << 4))) - 32;
-                const q3: i8 = @as(i8, @intCast((ql[l] >> 4) | ((@as(u8, @truncate(qh[l] >> 4)) & 3) << 4))) - 32;
-                const q4: i8 = @as(i8, @intCast((ql[l + 32] >> 4) | ((@as(u8, @truncate(qh[l] >> 6)) & 3) << 4))) - 32;
+                const q1: i8 = @as(i8, @intCast((ql[l] & 0x0F) | ((@as(u8, @truncate(qh[l] >> 0)) & qh_2bit_mask) << 4))) + q6_k_dequant_bias;
+                const q2: i8 = @as(i8, @intCast((ql[l + 32] & 0x0F) | ((@as(u8, @truncate(qh[l] >> 2)) & qh_2bit_mask) << 4))) + q6_k_dequant_bias;
+                const q3: i8 = @as(i8, @intCast((ql[l] >> 4) | ((@as(u8, @truncate(qh[l] >> 4)) & qh_2bit_mask) << 4))) + q6_k_dequant_bias;
+                const q4: i8 = @as(i8, @intCast((ql[l + 32] >> 4) | ((@as(u8, @truncate(qh[l] >> 6)) & qh_2bit_mask) << 4))) + q6_k_dequant_bias;
 
                 // Scale and accumulate
                 const ds_q1 = d * @as(f32, @floatFromInt(sc[is + 0]));
@@ -97,18 +88,6 @@ export fn gemv_q6_k_kernel(
         }
     }
 
-    // Warp reduction
-    sum = cu.warpReduceAdd(sum);
-
-    const lane = tid % 32;
-    const warp_id = tid / 32;
-    if (lane == 0) cu.sharedStore(warp_id, sum);
-    cu.syncthreads();
-
-    // Inter-warp reduction
-    const n_warps = (bdim + 31) / 32;
-    var result = if (tid < n_warps) cu.sharedLoad(tid) else 0.0;
-    if (warp_id == 0) result = cu.warpReduceAdd(result);
-
-    if (tid == 0) y[row] = result;
+    sum = cu.blockReduceAdd(sum);
+    if (tid == 0) y[row] = sum;
 }

@@ -4,45 +4,14 @@
 
 const cu = @import("common.zig");
 
+const f16tof32 = cu.f16tof32;
+const getScaleMinK4 = cu.getScaleMinK4;
+
 const bytes_per_block: usize = 176;
 const values_per_block: usize = 256;
 
-/// Helper: convert little-endian f16 (2 bytes) to f32
-inline fn f16tof32(ptr: [*]const u8) f32 {
-    const val = @as(u16, ptr[0]) | (@as(u16, ptr[1]) << 8);
-    const sign: u32 = @as(u32, val >> 15) << 31;
-    const exp_f16: u32 = (val >> 10) & 0x1F;
-    const mant_f16: u32 = val & 0x3FF;
-
-    if (exp_f16 == 0 and mant_f16 == 0) return @bitCast(sign);
-
-    if (exp_f16 == 0) {
-        const mant_f32 = mant_f16 << 13;
-        const exp_f32: u32 = (127 - 15) << 23;
-        return @bitCast(sign | exp_f32 | mant_f32);
-    }
-
-    if (exp_f16 == 0x1F) {
-        const exp_f32: u32 = 0xFF << 23;
-        const mant_f32: u32 = mant_f16 << 13;
-        return @bitCast(sign | exp_f32 | mant_f32);
-    }
-
-    const exp_f32: u32 = (exp_f16 + (127 - 15)) << 23;
-    const mant_f32: u32 = mant_f16 << 13;
-    return @bitCast(sign | exp_f32 | mant_f32);
-}
-
-/// Helper: extract packed scale and min for Q5_K sub-block
-inline fn getScaleMinK4(sb: u32, scales_ptr: [*]const u8, sc: *u8, m: *u8) void {
-    if (sb < 4) {
-        sc.* = scales_ptr[sb] & 63;
-        m.* = scales_ptr[sb + 4] & 63;
-    } else {
-        sc.* = (scales_ptr[sb + 4] & 0xF) | ((scales_ptr[sb - 4] >> 6) << 4);
-        m.* = (scales_ptr[sb + 4] >> 4) | ((scales_ptr[sb] >> 6) << 4);
-    }
-}
+/// Q5_K high-bit contribution: the 5th bit adds 2^4 = 16 to the value.
+const q5_k_high_bit_value: f32 = 16.0;
 
 /// Q5_K GEMV kernel: y[row] = dot(W[row,:], x)
 /// Q5_K uses 5-bit quantization: 4-bit low nibble + 1-bit high bit stored separately.
@@ -105,7 +74,7 @@ export fn gemv_q5_k_kernel(
                 const gi = gi_base + l;
                 if (gi >= k) break;
                 const lo: f32 = @floatFromInt(qs[ql_off + l] & 0x0F);
-                const hi: f32 = if ((qh[l] & umask1) != 0) @as(f32, 16.0) else 0.0;
+                const hi: f32 = if ((qh[l] & umask1) != 0) q5_k_high_bit_value else 0.0;
                 const qv = lo + hi;
                 sum += x[gi] * (d_sc_a * qv - dm_m_a);
             }
@@ -115,25 +84,13 @@ export fn gemv_q5_k_kernel(
                 const gi = gi_base + 32 + l;
                 if (gi >= k) break;
                 const lo: f32 = @floatFromInt(qs[ql_off + l] >> 4);
-                const hi: f32 = if ((qh[l] & umask2) != 0) @as(f32, 16.0) else 0.0;
+                const hi: f32 = if ((qh[l] & umask2) != 0) q5_k_high_bit_value else 0.0;
                 const qv = lo + hi;
                 sum += x[gi] * (d_sc_b * qv - dm_m_b);
             }
         }
     }
 
-    // Warp reduction
-    sum = cu.warpReduceAdd(sum);
-
-    const lane = tid % 32;
-    const warp_id = tid / 32;
-    if (lane == 0) cu.sharedStore(warp_id, sum);
-    cu.syncthreads();
-
-    // Inter-warp reduction
-    const n_warps = (bdim + 31) / 32;
-    var result = if (tid < n_warps) cu.sharedLoad(tid) else 0.0;
-    if (warp_id == 0) result = cu.warpReduceAdd(result);
-
-    if (tid == 0) y[row] = result;
+    sum = cu.blockReduceAdd(sum);
+    if (tid == 0) y[row] = sum;
 }

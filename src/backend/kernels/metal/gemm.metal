@@ -44,6 +44,46 @@ kernel void gemm_f32(
     }
 }
 
+// ── BF16 GEMM ────────────────────────────────────────────────
+
+kernel void gemm_bf16(
+    device const float* X  [[buffer(0)]],
+    device const uchar* W  [[buffer(1)]],
+    device float* Y        [[buffer(2)]],
+    constant uint& n_out   [[buffer(3)]],
+    constant uint& n_in    [[buffer(4)]],
+    constant uint& n_tok   [[buffer(5)]],
+    uint tgid     [[threadgroup_position_in_grid]],
+    uint tid      [[thread_index_in_threadgroup]],
+    uint tg_size  [[threads_per_threadgroup]])
+{
+    if (tgid >= n_out) return;
+
+    uint row_off = tgid * n_in;
+
+    for (uint t = 0; t < n_tok; t++) {
+        float sum = 0.0f;
+        uint x_off = t * n_in;
+        uint k4 = n_in & ~3u;
+        for (uint j = tid * 4; j < k4; j += tg_size * 4) {
+            float4 wv = float4(read_bf16(W, row_off+j),
+                                read_bf16(W, row_off+j+1),
+                                read_bf16(W, row_off+j+2),
+                                read_bf16(W, row_off+j+3));
+            float4 xv = float4(X[x_off+j], X[x_off+j+1], X[x_off+j+2], X[x_off+j+3]);
+            sum += dot(wv, xv);
+        }
+        for (uint j = k4 + tid; j < n_in; j += tg_size) {
+            sum += read_bf16(W, row_off + j) * X[x_off + j];
+        }
+
+        threadgroup float shared[8];
+        sum = threadgroup_reduce_sum(sum, shared, tid, tg_size);
+        if (tid == 0) Y[t * n_out + tgid] = sum;
+        if (t + 1 < n_tok) threadgroup_barrier(mem_flags::mem_threadgroup);
+    }
+}
+
 // ── Q8_0 GEMM ────────────────────────────────────────────────
 // One threadgroup per output row. Weight blocks dequantized once,
 // reused across TILE_T=8 tokens. Uses q8_0_block_dot from GEMV.

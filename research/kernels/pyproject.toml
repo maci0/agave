@@ -6,6 +6,7 @@ requires-python = ">=3.11"
 dependencies = [
     "torch",
     "numpy",
+    "gguf>=0.18.0",
 ]
 
 [project.optional-dependencies]

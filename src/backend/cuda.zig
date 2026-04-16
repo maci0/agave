@@ -26,10 +26,10 @@ const std = @import("std");
 const builtin = @import("builtin");
 const backend_mod = @import("backend.zig");
 const TensorData = backend_mod.TensorData;
-const DType = backend_mod.DType;
 const CpuBackend = @import("cpu.zig").CpuBackend;
 const KvQuantType = backend_mod.KvQuantType;
 const kv_quant = @import("../ops/kv_quant.zig");
+const mlx_ops = @import("../ops/mlx.zig");
 
 // ── Embedded PTX ────────────────────────────────────────────────
 
@@ -57,13 +57,8 @@ const reduction_smem: u32 = 32;
 /// SDPA prefill shared memory layout constants (must match sdpa_prefill.zig).
 const prefill_kv_tile: u32 = 32;
 const prefill_reduce_slots: u32 = 8;
-
-/// TurboQuant 2-bit block: f16 norm (2 bytes) + 8 packed bytes = 10 bytes per 32 elements.
-const turbo2_block_bytes: u32 = 10;
-/// TurboQuant 3-bit block: f16 norm (2 bytes) + 12 packed bytes = 14 bytes per 32 elements.
-const turbo3_block_bytes: u32 = 14;
-/// TurboQuant 4-bit block: f16 norm (2 bytes) + 16 packed bytes = 18 bytes per 32 elements.
-const turbo4_block_bytes: u32 = 18;
+/// Bits per U32 word — used to compute MLX words-per-group from quantization bits.
+const bits_per_u32_word: usize = 32;
 
 /// Size of the buffer for retrieving the CUDA device name.
 const device_name_buf_size: usize = 256;
@@ -256,11 +251,10 @@ pub const CudaBackend = struct {
         is_registered: bool = false,
     };
 
-    /// Device-side KV cache buffer, tracking how many positions have been uploaded.
+    /// Device-side KV cache buffer.
     const KvDevCache = struct {
         dptr: CUdeviceptr,
         capacity: usize,
-        uploaded_sl: usize,
     };
 
     /// Activation buffer state — tracks data freshness between host and device.
@@ -511,7 +505,7 @@ pub const CudaBackend = struct {
                         var dptr: CUdeviceptr = 0;
                         if (getDevPtr(&dptr, @ptrCast(ptr), 0) == CUDA_SUCCESS) {
                             self.buf_cache.put(addr, .{ .dptr = dptr, .size = size, .is_registered = true }) catch |err| {
-                                std.log.warn("cache put failed: {}", .{err});
+                                std.log.warn("weight cache put failed (UMA register, size={d}): {}", .{ size, err });
                             };
                             return dptr;
                         }
@@ -524,7 +518,7 @@ pub const CudaBackend = struct {
 
         const dptr = self.uploadToDevice(@ptrCast(ptr), size);
         self.buf_cache.put(addr, .{ .dptr = dptr, .size = size, .is_registered = false }) catch |err| {
-            std.log.warn("cache put failed: {}", .{err});
+            std.log.warn("weight cache put failed (upload, size={d}): {}", .{ size, err });
         };
         return dptr;
     }
@@ -581,7 +575,7 @@ pub const CudaBackend = struct {
         // New buffer: allocate, upload, cache as clean
         const dptr = self.uploadToDevice(@ptrCast(ptr), size);
         self.act_cache.put(addr, .{ .dptr = dptr, .size = size, .state = .clean }) catch |err| {
-            std.log.warn("cache put failed: {}", .{err});
+            std.log.warn("activation cache put failed (read, size={d}): {}", .{ size, err });
         };
         return dptr;
     }
@@ -604,7 +598,7 @@ pub const CudaBackend = struct {
         var dptr: CUdeviceptr = 0;
         _ = self.cuMemAlloc(&dptr, @max(size, 4));
         self.act_cache.put(addr, .{ .dptr = dptr, .size = size, .state = .dirty }) catch |err| {
-            std.log.warn("cache put failed: {}", .{err});
+            std.log.warn("activation cache put failed (output, size={d}): {}", .{ size, err });
         };
         return dptr;
     }
@@ -629,7 +623,7 @@ pub const CudaBackend = struct {
         // New: allocate, upload (need current data for read), mark dirty
         const dptr = self.uploadToDevice(@ptrCast(ptr), size);
         self.act_cache.put(addr, .{ .dptr = dptr, .size = size, .state = .dirty }) catch |err| {
-            std.log.warn("cache put failed: {}", .{err});
+            std.log.warn("activation cache put failed (in-place, size={d}): {}", .{ size, err });
         };
         return dptr;
     }
@@ -666,7 +660,7 @@ pub const CudaBackend = struct {
 
     // ── Weight size helper ──────────────────────────────────────
 
-    const weightBytes = @import("backend.zig").weightBytes;
+    const weightBytes = backend_mod.weightBytes;
 
     // ── Backend interface ────────────────────────────────────────
 
@@ -1043,9 +1037,9 @@ pub const CudaBackend = struct {
 
     /// MLX affine quantized GEMV: packed int (4/6/8-bit) + BF16 scales/biases, group_size=64.
     pub fn gemvMlxQ(self: *CudaBackend, x: [*]const f32, weight: [*]const u8, scales: [*]const u8, biases: [*]const u8, y: [*]f32, n: usize, k: usize, bits: u32) void {
-        const mlx_group_size: usize = 64;
+        const mlx_group_size: usize = mlx_ops.mlx_group_size;
         const gpr = (k + mlx_group_size - 1) / mlx_group_size;
-        const wpg: usize = mlx_group_size * bits / 32;
+        const wpg: usize = mlx_group_size * bits / bits_per_u32_word;
         const w_bytes = n * gpr * wpg * @sizeOf(u32);
         const sb_bytes = n * gpr * @sizeOf(u16);
 
@@ -1105,7 +1099,7 @@ pub const CudaBackend = struct {
     pub fn endBatch(_: *CudaBackend) void {}
 
     /// Returns backend startup information for display.
-    pub fn backendInfo(self: *const CudaBackend) @import("backend.zig").BackendInfo {
+    pub fn backendInfo(self: *const CudaBackend) backend_mod.BackendInfo {
         return .{
             .name = "CUDA",
             .device_name = self.device_name[0..self.device_name_len],
@@ -1122,21 +1116,17 @@ pub const CudaBackend = struct {
 
     // ── KV cache allocation ────────────────────────────────────
 
-    /// Allocate a KV cache slice.
-    /// On UMA (integrated GPU): uses cuMemAllocManaged so both CPU and GPU
-    /// can access the same pointer directly — no copies needed.
-    /// On discrete GPU: falls back to host allocator; the caller manages
-    /// VRAM mirroring separately via kv_dev_cache during SDPA.
+    /// Allocate a KV cache slice using the host allocator.
+    /// On UMA platforms, the host pointer is later registered for GPU access
+    /// via registerRamKv(). On discrete GPUs, the caller manages VRAM
+    /// mirroring separately via kv_dev_cache during SDPA.
     pub fn allocKvSlice(_: *CudaBackend, allocator: std.mem.Allocator, n: usize) error{OutOfMemory}![]u8 {
         // Use host allocator — cuMemAllocManaged on UMA (GB10) returns pointers
         // that cause data corruption when used as both host and device memory.
-        // TODO: investigate UMA zero-copy KV cache after fixing correctness.
         return allocator.alloc(u8, n);
     }
 
     /// Free a KV cache slice allocated via allocKvSlice.
-    /// Detects whether the slice was allocated via cuMemAllocManaged (UMA)
-    /// or the host allocator, and frees accordingly.
     pub fn freeKvSlice(_: *CudaBackend, allocator: std.mem.Allocator, slice: []u8) void {
         if (slice.len == 0) return;
         allocator.free(slice);
@@ -1144,8 +1134,8 @@ pub const CudaBackend = struct {
 
     /// Register RAM-tier KV block in act_cache without upload.
     /// On UMA platforms (GB10 Blackwell), host memory is GPU-accessible via
-    /// unified addressing — cuMemAllocManaged provides unified pointers that
-    /// work on both CPU and GPU. No copy needed.
+    /// unified addressing — the host pointer is used directly as the device
+    /// pointer. No copy needed.
     ///
     /// On discrete GPUs, allocates device buffer and uploads once. Future
     /// optimization: use cuMemAllocHost for pinned RAM tier (faster transfers).
@@ -1197,36 +1187,10 @@ pub const CudaBackend = struct {
         self.kv_dev_cache.put(addr, .{
             .dptr = dptr,
             .capacity = capacity,
-            .uploaded_sl = 0,
         }) catch |err| {
             std.log.warn("cache put failed: {}", .{err});
         };
         return dptr;
-    }
-
-    /// Return the turbo bit width for a KV quant type, or 0 for non-turbo types.
-    fn turboBits(kv_type: KvQuantType) u32 {
-        return switch (kv_type) {
-            .turbo2 => 2,
-            .turbo3 => 3,
-            .turbo4 => 4,
-            else => 0,
-        };
-    }
-
-    /// Return the byte size per 32-element turbo block, or 0 for non-turbo types.
-    fn turboBlockByteSize(kv_type: KvQuantType) u32 {
-        return switch (kv_type) {
-            .turbo2 => turbo2_block_bytes,
-            .turbo3 => turbo3_block_bytes,
-            .turbo4 => turbo4_block_bytes,
-            else => 0,
-        };
-    }
-
-    /// Check if a KV quant type is a TurboQuant variant.
-    fn isTurbo(kv_type: KvQuantType) bool {
-        return kv_type == .turbo2 or kv_type == .turbo3 or kv_type == .turbo4;
     }
 
     /// Fused scaled dot-product attention on GPU with KV cache append.
@@ -1234,23 +1198,23 @@ pub const CudaBackend = struct {
     /// KV cache (native GPU dequant — no CPU fallback for SDPA compute).
     /// KV append for turbo types uses CPU quantization (once per token per layer,
     /// not the SDPA hot path). Non-turbo quantized types (q8_0, etc.) panic.
-    pub fn sdpa(self: *CudaBackend, q: [*]const f32, keys: []u8, values: []u8, k_new: [*]const f32, v_new: [*]const f32, output: [*]f32, nh: usize, nkv: usize, hd: usize, seq_len: usize, scale: f32, kv_type_k: @import("backend.zig").KvQuantType, kv_type_v: @import("backend.zig").KvQuantType) void {
-        const is_turbo_k = isTurbo(kv_type_k);
-        const is_turbo_v = isTurbo(kv_type_v);
+    pub fn sdpa(self: *CudaBackend, q: [*]const f32, keys: []u8, values: []u8, k_new: [*]const f32, v_new: [*]const f32, output: [*]f32, nh: usize, nkv: usize, hd: usize, seq_len: usize, scale: f32, kv_type_k: backend_mod.KvQuantType, kv_type_v: backend_mod.KvQuantType) void {
+        const is_turbo_k = kv_type_k.isTurbo();
+        const is_turbo_v = kv_type_v.isTurbo();
         const is_f32_k = (kv_type_k == .f32);
         const is_f32_v = (kv_type_v == .f32);
 
         // Non-turbo, non-f32 quantized KV: not yet supported
-        if (!is_f32_k and !is_turbo_k or !is_f32_v and !is_turbo_v)
-            @panic("CUDA SDPA: unsupported KV quant type — use f32 or turbo2/3/4");
+        if ((!is_f32_k and !is_turbo_k) or (!is_f32_v and !is_turbo_v))
+            @panic("CUDA SDPA: unsupported KV type — use --kv-type f32 or turbo2/3/4");
 
         const kvd = nkv * hd;
         var sl: u32 = @intCast(seq_len + 1);
 
         if (is_f32_k and is_f32_v) {
             // Pure f32 path: use original sdpa_kernel
-            const f32_keys: []f32 = @as([*]f32, @ptrCast(@alignCast(keys.ptr)))[0 .. keys.len / 4];
-            const f32_values: []f32 = @as([*]f32, @ptrCast(@alignCast(values.ptr)))[0 .. values.len / 4];
+            const f32_keys: []f32 = @as([*]f32, @ptrCast(@alignCast(keys.ptr)))[0 .. keys.len / @sizeOf(f32)];
+            const f32_values: []f32 = @as([*]f32, @ptrCast(@alignCast(values.ptr)))[0 .. values.len / @sizeOf(f32)];
             const kvd_bytes = kvd * @sizeOf(f32);
 
             var d_keys = self.getOrAllocKvBuf(@intFromPtr(f32_keys.ptr), f32_keys.len * @sizeOf(f32));
@@ -1289,15 +1253,15 @@ pub const CudaBackend = struct {
             kv_quant.kvStore(keys.ptr + k_off, k_new, kvd, kv_type_k);
             kv_quant.kvStore(values.ptr + v_off, v_new, kvd, kv_type_v);
 
-            // Upload entire KV cache to device for GPU SDPA
-            const k_cache_bytes = kv_quant.kvSliceBytes(kv_type_k, @as(usize, sl) * kvd);
-            const v_cache_bytes = kv_quant.kvSliceBytes(kv_type_v, @as(usize, sl) * kvd);
+            // Upload only the newly quantized token to the persistent device KV buffer.
+            // Prior tokens are already on-device from earlier forward passes.
+            const k_new_bytes = kv_quant.kvSliceBytes(kv_type_k, kvd);
+            const v_new_bytes = kv_quant.kvSliceBytes(kv_type_v, kvd);
             var d_keys = self.getOrAllocKvBuf(@intFromPtr(keys.ptr), keys.len);
             var d_vals = self.getOrAllocKvBuf(@intFromPtr(values.ptr), values.len);
 
-            // Re-upload the full cache (turbo data was written by CPU)
-            _ = self.cuMemcpyHtoD(d_keys, @ptrCast(keys.ptr), k_cache_bytes);
-            _ = self.cuMemcpyHtoD(d_vals, @ptrCast(values.ptr), v_cache_bytes);
+            _ = self.cuMemcpyHtoD(d_keys + k_off, @ptrCast(keys.ptr + k_off), k_new_bytes);
+            _ = self.cuMemcpyHtoD(d_vals + v_off, @ptrCast(values.ptr + v_off), v_new_bytes);
 
             var d_q = self.getInputBuf(q, nh * hd * @sizeOf(f32));
             var d_out = self.getOutputBuf(output, nh * hd * @sizeOf(f32));
@@ -1307,10 +1271,10 @@ pub const CudaBackend = struct {
             var hd_u32: u32 = @intCast(hd);
             var kvd_u32: u32 = @intCast(kvd);
             var scale_f32: f32 = scale;
-            var bits_k_u: u32 = turboBits(kv_type_k);
-            var bits_v_u: u32 = turboBits(kv_type_v);
-            var bb_k_u: u32 = turboBlockByteSize(kv_type_k);
-            var bb_v_u: u32 = turboBlockByteSize(kv_type_v);
+            var bits_k_u: u32 = kv_type_k.turboBits();
+            var bits_v_u: u32 = kv_type_v.turboBits();
+            var bb_k_u: u32 = kv_type_k.turboBlockByteSize();
+            var bb_v_u: u32 = kv_type_v.turboBlockByteSize();
 
             var params = [_]?*anyopaque{
                 @ptrCast(&d_q),       @ptrCast(&d_keys),   @ptrCast(&d_vals),
@@ -1410,8 +1374,8 @@ pub const CudaBackend = struct {
     /// For turbo KV: CPU-side KV append + sequential GPU turbo SDPA per token.
     /// For other quantized KV types: panics (not yet supported).
     pub fn sdpaPrefill(self: *CudaBackend, q: [*]const f32, k: [*]const f32, v: [*]const f32, kv_keys: []u8, kv_values: []u8, output: [*]f32, nh: usize, nkv: usize, hd: usize, prev_len: usize, n_tok: usize, scale: f32, kv_type_k: KvQuantType, kv_type_v: KvQuantType) void {
-        const is_turbo_k = isTurbo(kv_type_k);
-        const is_turbo_v = isTurbo(kv_type_v);
+        const is_turbo_k = kv_type_k.isTurbo();
+        const is_turbo_v = kv_type_v.isTurbo();
         const is_f32_k = (kv_type_k == .f32);
         const is_f32_v = (kv_type_v == .f32);
 
@@ -1430,14 +1394,16 @@ pub const CudaBackend = struct {
                 kv_quant.kvStore(kv_values.ptr + dst_byte_v, v + src_off, kvd, kv_type_v);
             }
 
-            // Upload KV cache to device
-            const total_sl = prev_len + n_tok;
-            const k_cache_bytes = kv_quant.kvSliceBytes(kv_type_k, total_sl * kvd);
-            const v_cache_bytes = kv_quant.kvSliceBytes(kv_type_v, total_sl * kvd);
+            // Upload only the newly written tokens to device. Prior tokens
+            // are already on-device from earlier forward passes.
+            const new_start_k = kv_quant.kvByteOffset(kv_type_k, prev_len * kvd);
+            const new_start_v = kv_quant.kvByteOffset(kv_type_v, prev_len * kvd);
+            const new_bytes_k = kv_quant.kvSliceBytes(kv_type_k, n_tok * kvd);
+            const new_bytes_v = kv_quant.kvSliceBytes(kv_type_v, n_tok * kvd);
             var d_keys = self.getOrAllocKvBuf(@intFromPtr(kv_keys.ptr), kv_keys.len);
             var d_vals = self.getOrAllocKvBuf(@intFromPtr(kv_values.ptr), kv_values.len);
-            _ = self.cuMemcpyHtoD(d_keys, @ptrCast(kv_keys.ptr), k_cache_bytes);
-            _ = self.cuMemcpyHtoD(d_vals, @ptrCast(kv_values.ptr), v_cache_bytes);
+            _ = self.cuMemcpyHtoD(d_keys + new_start_k, @ptrCast(kv_keys.ptr + new_start_k), new_bytes_k);
+            _ = self.cuMemcpyHtoD(d_vals + new_start_v, @ptrCast(kv_values.ptr + new_start_v), new_bytes_v);
 
             // Sequential GPU SDPA per token (each uses turbo kernel over full history)
             for (0..n_tok) |t| {
@@ -1453,10 +1419,10 @@ pub const CudaBackend = struct {
                 var hd_u: u32 = @intCast(hd);
                 var kvd_u: u32 = @intCast(kvd);
                 var scale_f: f32 = scale;
-                var bits_k_u: u32 = turboBits(kv_type_k);
-                var bits_v_u: u32 = turboBits(kv_type_v);
-                var bb_k_u: u32 = turboBlockByteSize(kv_type_k);
-                var bb_v_u: u32 = turboBlockByteSize(kv_type_v);
+                var bits_k_u: u32 = kv_type_k.turboBits();
+                var bits_v_u: u32 = kv_type_v.turboBits();
+                var bb_k_u: u32 = kv_type_k.turboBlockByteSize();
+                var bb_v_u: u32 = kv_type_v.turboBlockByteSize();
 
                 var params = [_]?*anyopaque{
                     @ptrCast(&d_q),       @ptrCast(&d_keys),   @ptrCast(&d_vals),
@@ -1474,7 +1440,7 @@ pub const CudaBackend = struct {
 
         // Non-turbo, non-f32 quantized KV: not yet supported
         if (kv_type_k != .f32 or kv_type_v != .f32)
-            @panic("CUDA SDPA prefill: unsupported KV quant type — use f32 or turbo2/3/4");
+            @panic("CUDA SDPA prefill: unsupported KV type — use --kv-type f32 or turbo2/3/4");
 
         // Pure f32 path
         const kvd = nkv * hd;
@@ -1486,8 +1452,8 @@ pub const CudaBackend = struct {
         var d_out = self.getOutputBuf(output, n_tok * nh * hd * @sizeOf(f32));
 
         // Get device pointers for KV cache
-        const f32_keys: []f32 = @as([*]f32, @ptrCast(@alignCast(kv_keys.ptr)))[0 .. kv_keys.len / 4];
-        const f32_values: []f32 = @as([*]f32, @ptrCast(@alignCast(kv_values.ptr)))[0 .. kv_values.len / 4];
+        const f32_keys: []f32 = @as([*]f32, @ptrCast(@alignCast(kv_keys.ptr)))[0 .. kv_keys.len / @sizeOf(f32)];
+        const f32_values: []f32 = @as([*]f32, @ptrCast(@alignCast(kv_values.ptr)))[0 .. kv_values.len / @sizeOf(f32)];
         var d_k_cache = self.getOrAllocKvBuf(@intFromPtr(f32_keys.ptr), f32_keys.len * @sizeOf(f32));
         var d_v_cache = self.getOrAllocKvBuf(@intFromPtr(f32_values.ptr), f32_values.len * @sizeOf(f32));
 

@@ -12,7 +12,6 @@
 //! * All attention projections carry a bias term
 //! * Packed expert weights stored as mxfp4 in GGUF
 const std = @import("std");
-const math = std.math;
 const backend_mod = @import("../backend/backend.zig");
 const format_mod = @import("../format/format.zig");
 const model_mod = @import("model.zig");
@@ -24,10 +23,8 @@ const TieredBlockAllocator = block_alloc_mod.TieredBlockAllocator;
 const TieredKvCache = @import("../kvcache/tiered.zig").TieredKvCache;
 
 const Backend = backend_mod.Backend;
-const TensorData = backend_mod.TensorData;
 const Format = format_mod.Format;
 const TensorInfo = format_mod.TensorInfo;
-const DType = format_mod.DType;
 const Model = model_mod.Model;
 const Allocator = std.mem.Allocator;
 const quant = @import("../ops/quant.zig");
@@ -42,38 +39,10 @@ const max_active_experts: usize = 8;
 const max_sink_heads: usize = 64;
 /// Maximum cached norm weight entries (≥ 3 norms/layer × 24 layers + 1 output norm).
 const max_norm_entries: usize = 128;
-/// Cached f32 norm weight entry, keyed by source data pointer.
-const NormCacheEntry = struct { key: usize, data: []f32 };
+const NormCacheEntry = model_mod.NormCacheEntry;
 
-/// Compute the byte stride between consecutive experts in a packed weight tensor.
-/// Both GGUF (reversed) and SafeTensors store 3D expert tensors as
-/// [n_experts, rows, cols/words]. Per-expert stride uses dims[1] * dims[2].
-fn expertStride(t: TensorInfo) usize {
-    if (t.dtype == .mlx_q) {
-        // SafeTensors MLX: [n_experts, rows, words_per_row] U32
-        // Per-expert: rows * words_per_row * sizeof(u32)
-        std.debug.assert(t.n_dims >= 3);
-        return @as(usize, @intCast(t.dims[1])) * @as(usize, @intCast(t.dims[2])) * @sizeOf(u32);
-    }
-    // GGUF dims (reversed): [n_experts, rows, cols]
-    return expertWeightStride(t);
-}
+const expertStride = model_mod.expertStride;
 
-/// Compute the byte stride between consecutive experts in a companion scale/bias tensor.
-/// MLX companion tensors (scales, biases) have dims [n_experts, rows, groups_per_row],
-/// stored as bf16. This computes the byte offset per expert slice.
-fn expertScaleStride(scale_t: TensorInfo, weight_t: TensorInfo) usize {
-    _ = weight_t;
-    if (scale_t.n_dims >= 3) {
-        // Per-expert: rows * groups_per_row elements, each bf16 (2 bytes)
-        const elems: usize = @as(usize, @intCast(scale_t.dims[1])) * @as(usize, @intCast(scale_t.dims[2]));
-        return elems * @sizeOf(u16); // bf16 = 2 bytes per element
-    }
-    // Fallback: divide total size by number of experts
-    const total = scale_t.numElements() * @sizeOf(u16);
-    const n_experts = if (scale_t.n_dims >= 3) @as(usize, @intCast(scale_t.dims[0])) else 1;
-    return if (n_experts > 0) total / n_experts else total;
-}
 /// Extra score slot reserved for the learned attention sink.
 const attention_sink_slots: usize = 1;
 /// Minimum valid MLX quantization bits.
@@ -81,7 +50,9 @@ const min_mlx_bits: u64 = 1;
 /// Maximum valid MLX quantization bits.
 const max_mlx_bits: u64 = 32;
 /// Default MLX quantization bits when inference fails.
-const default_mlx_bits: u32 = 4;
+const default_mlx_bits = model_mod.default_mlx_bits;
+/// Bits per U32 word — used to compute MLX bit width from packed weight dimensions.
+const bits_per_u32_word: u64 = 32;
 
 /// GPT-OSS 20B model state.
 pub const GptOssModel = struct {
@@ -248,7 +219,7 @@ pub const GptOssModel = struct {
             // GPT-OSS uses inline attention with flat KV pointers — one block must hold
             // the entire sequence. Use max_seq_len as block_size so getLayerKvView returns
             // a single contiguous buffer per layer.
-            const block_size: u16 = @intCast(self.max_seq_len);
+            const block_size: u16 = @intCast(@min(self.max_seq_len, std.math.maxInt(u16)));
             const num_blocks = nl; // one block per layer
             self.paged_cache = try PagedKvCache.init(allocator, nl, kvd, num_blocks, block_size);
             errdefer self.paged_cache.deinit();
@@ -309,7 +280,7 @@ pub const GptOssModel = struct {
         if (emb_t.dtype == .mlx_q) {
             const emb_s = self.fmt.getTensor("token_embd.scales") orelse return error.MissingTensor;
             const emb_b = self.fmt.getTensor("token_embd.biases") orelse return error.MissingTensor;
-            // Embedding scales are BF16 → affine; detect bits from scale dtype
+            // Detect MLX quant bits: .unknown scale dtype = MXFP4 (4-bit), else affine (8-bit)
             const bits: u32 = if (emb_s.dtype == .unknown) 4 else 8;
             mlx_ops.mlxEmbLookup(
                 self.hidden.ptr,
@@ -330,7 +301,8 @@ pub const GptOssModel = struct {
         }
 
         for (0..self.n_layers) |li| {
-            if (self.cancelled.load(.acquire)) return error.Cancelled;
+            if (self.cancelled.load(.monotonic)) return error.Cancelled;
+            self.fmt.prefetchLayer(@intCast(li + 1));
             try self.attentionLayer(@intCast(li));
             try self.moeLayer(@intCast(li));
         }
@@ -340,9 +312,8 @@ pub const GptOssModel = struct {
         const ow = self.fmt.getTensor("output.weight") orelse return error.MissingTensor;
         self.kv_seq_len += 1;
         self.be.rmsNorm(self.hidden.ptr, self.normAsF32(nw, self.n_embd), self.hidden.ptr, self.n_embd, self.rms_eps);
-        self.be.sync();
         self.doGemv(self.hidden.ptr, ow, self.logits_buf.ptr, self.vocab_size, self.n_embd);
-        self.be.sync();
+        self.be.sync(); // GPU gemv wrote logits — sync before CPU argmax
         return math_ops.argmax(self.logits_buf);
     }
 
@@ -569,14 +540,22 @@ pub const GptOssModel = struct {
                 score_off = 1;
             }
 
-            // Compute QK^T dot products for the visible window.
+            // Compute QK^T dot products for the visible window (SIMD).
+            const V8 = @Vector(8, f32);
             const q_base = h * hd;
             for (0..win) |wi| {
                 const t = start + wi;
                 const elem_off = t * kvd + kvh * hd;
-                const k_ptr: [*]const f32 = @ptrCast(@alignCast(ck + elem_off * @sizeOf(f32)));
-                var dot: f32 = 0;
-                for (0..hd) |i| dot += self.q_buf[q_base + i] * k_ptr[i];
+                const k_ptr: [*]const f32 = ck + elem_off;
+                var acc: V8 = @splat(@as(f32, 0.0));
+                var vi: usize = 0;
+                while (vi + 8 <= hd) : (vi += 8) {
+                    const qv: V8 = self.q_buf[q_base + vi ..][0..8].*;
+                    const kv: V8 = k_ptr[vi..][0..8].*;
+                    acc = @mulAdd(V8, qv, kv, acc);
+                }
+                var dot = @reduce(.Add, acc);
+                while (vi < hd) : (vi += 1) dot += self.q_buf[q_base + vi] * k_ptr[vi];
                 self.scores_buf[score_off + wi] = dot * scale;
             }
 
@@ -597,14 +576,21 @@ pub const GptOssModel = struct {
                 for (0..n_scores) |i| self.scores_buf[i] *= inv_sum;
             }
 
-            // Weighted value accumulation (sink contributes no value vector).
+            // Weighted value accumulation (sink contributes no value vector, SIMD).
             @memset(self.attn_out[q_base..][0..hd], 0);
             for (0..win) |wi| {
                 const t = start + wi;
                 const elem_off = t * kvd + kvh * hd;
-                const v_ptr: [*]const f32 = @ptrCast(@alignCast(cv + elem_off * @sizeOf(f32)));
+                const v_ptr: [*]const f32 = cv + elem_off;
                 const weight = self.scores_buf[score_off + wi];
-                for (0..hd) |i| self.attn_out[q_base + i] += weight * v_ptr[i];
+                const w_v: V8 = @splat(weight);
+                var vi: usize = 0;
+                while (vi + 8 <= hd) : (vi += 8) {
+                    const vv: V8 = v_ptr[vi..][0..8].*;
+                    const cur: V8 = self.attn_out[q_base + vi ..][0..8].*;
+                    self.attn_out[q_base + vi ..][0..8].* = @mulAdd(V8, w_v, vv, cur);
+                }
+                while (vi < hd) : (vi += 1) self.attn_out[q_base + vi] += weight * v_ptr[vi];
             }
         }
 
@@ -729,8 +715,8 @@ pub const GptOssModel = struct {
                 addBiasTyped(self.expert_down[0..e], dbt.data_ptr + ei * e * bpe, e, dbt.dtype);
             }
 
-            // Weighted accumulation.
-            for (0..e) |i| self.moe_out[i] += mix_weight * self.expert_down[i];
+            // Weighted accumulation (SIMD via backend addScaled).
+            self.be.addScaled(self.expert_down.ptr, self.moe_out.ptr, mix_weight, e);
         }
 
         // 6. Residual: hidden += moe_out
@@ -761,13 +747,14 @@ pub const GptOssModel = struct {
             if (entry.key == key) return entry.data.ptr;
         }
 
-        // Cache miss: allocate, convert, and store permanently
-        if (self.norm_cache_len >= max_norm_entries) {
-            // Cache full — fall back to raw pointer (BF16 read directly).
-            // This should not happen in practice (max ~73 entries needed).
+        // Cache miss: allocate, convert, and store permanently.
+        // Guard capacity before allocating to avoid leaking uncached buffers.
+        if (self.norm_cache_len >= max_norm_entries)
+            @panic("normAsF32: norm cache overflow — increase max_norm_entries");
+        const buf = self.allocator.alloc(f32, n) catch |err| {
+            std.log.warn("normAsF32: alloc failed ({s}), using unconverted weights", .{@errorName(err)});
             return @ptrCast(@alignCast(t.data_ptr));
-        }
-        const buf = self.allocator.alloc(f32, n) catch return @ptrCast(@alignCast(t.data_ptr));
+        };
         const src: [*]const u16 = @ptrCast(@alignCast(t.data_ptr));
         for (0..n) |i| buf[i] = quant.bf16ToF32(src[i]);
         self.norm_cache[self.norm_cache_len] = .{ .key = key, .data = buf };
@@ -778,14 +765,8 @@ pub const GptOssModel = struct {
 
 // ── Free functions ────────────────────────────────────────────────
 
-/// Add f32 bias (pointed to by `bias_bytes`) into `dst`.
-/// For bf16 bias data, call `addBiasTyped()` directly with `.bf16`.
-inline fn addBias(dst: []f32, bias_bytes: [*]const u8, n: usize) void {
-    addBiasTyped(dst, bias_bytes, n, .f32);
-}
-
 /// Add bias with explicit dtype handling.
-fn addBiasTyped(dst: []f32, bias_bytes: [*]const u8, n: usize, dtype: format_mod.DType) void {
+inline fn addBiasTyped(dst: []f32, bias_bytes: [*]const u8, n: usize, dtype: format_mod.DType) void {
     if (dtype == .bf16) {
         const bias_bf16: [*]const u16 = @ptrCast(@alignCast(bias_bytes));
         for (0..n) |i| dst[i] += quant.bf16ToF32(bias_bf16[i]);
@@ -796,14 +777,14 @@ fn addBiasTyped(dst: []f32, bias_bytes: [*]const u8, n: usize, dtype: format_mod
 }
 
 /// Infer MLX quantization bits from weight tensor dimensions.
-/// bits = last_dim * 32 / k, where last_dim is u32 words per row.
+/// bits = last_dim * bits_per_u32_word / k, where last_dim is u32 words per row.
 /// For 8-bit: 720 words * 32 / 2880 = 8. For 4-bit: 360 * 32 / 2880 = 4.
 fn inferMlxBits(t: TensorInfo, k: u32) u32 {
     if (t.n_dims < 2 or k == 0) return 4;
     // For expert tensors [n_experts, rows, words], use dims[n_dims-1]
     const words_dim = @as(u64, @intCast(t.dims[t.n_dims - 1]));
-    const result = words_dim * 32 / @as(u64, k);
+    const result = words_dim * bits_per_u32_word / @as(u64, k);
     return if (result >= min_mlx_bits and result <= max_mlx_bits) @intCast(result) else default_mlx_bits;
 }
 
-const expertWeightStride = model_mod.expertWeightStride;
+

@@ -7,8 +7,11 @@ const std = @import("std");
 /// Maximum number of worker threads (excludes main thread which also participates).
 const max_workers: usize = 31;
 
-/// Minimum rows per thread to avoid dispatch overhead dominating.
+/// Minimum iterations per thread to avoid dispatch overhead dominating.
 const min_grain: usize = 4;
+
+/// Cache line size for padding to prevent false sharing between hot atomics.
+const cache_line: usize = 64;
 
 /// Futex-based thread pool for parallel GEMV and other data-parallel ops.
 pub const ThreadPool = struct {
@@ -22,6 +25,13 @@ pub const ThreadPool = struct {
     task_total: usize = 0,
     task_grain: usize = 1,
     task_counter: std.atomic.Value(usize) = std.atomic.Value(usize).init(0),
+
+    // Pad task_counter onto its own cache line. task_counter is the hottest
+    // field — every worker does fetchAdd per grain chunk. Without padding,
+    // generation/active share the same cache line, causing cross-core
+    // invalidation traffic when workers finish and decrement active while
+    // remaining workers are still pulling from task_counter.
+    _counter_pad: [cache_line - @sizeOf(std.atomic.Value(usize))]u8 = undefined,
 
     // ── Synchronization ─────────────────────────────────────────
     /// Incremented each time new work is posted. Workers compare against
@@ -48,7 +58,8 @@ pub const ThreadPool = struct {
     pub fn spawn(self: *ThreadPool) void {
         for (0..self.n_workers) |i| {
             self.workers[i] = .{
-                .thread = std.Thread.spawn(.{}, workerLoop, .{self}) catch {
+                .thread = std.Thread.spawn(.{}, workerLoop, .{self}) catch |err| {
+                    std.log.warn("ThreadPool: failed to spawn worker {d}: {s}", .{ i, @errorName(err) });
                     self.n_workers = i;
                     return;
                 },
@@ -68,7 +79,7 @@ pub const ThreadPool = struct {
     }
 
     /// Execute `func(ctx, start, end)` over the range [0, total) in parallel.
-    /// Splits work into chunks of `grain` rows. Main thread participates.
+    /// Splits work into chunks of `grain` items. Main thread participates.
     /// Blocks until all work is complete.
     pub fn parallelFor(
         self: *ThreadPool,
@@ -126,8 +137,7 @@ pub const ThreadPool = struct {
 
     /// Worker thread main loop. Sleeps on generation futex, wakes to do work.
     fn workerLoop(pool: *ThreadPool) void {
-        // Start at 0 so late-starting workers see already-bumped generation
-        // and proceed immediately instead of missing the wake.
+        // Start at 0 to ensure workers wake on the first generation bump (0→1).
         var local_gen: u32 = 0;
 
         while (true) {
@@ -136,7 +146,9 @@ pub const ThreadPool = struct {
 
             if (pool.shutdown.load(.acquire)) return;
 
-            local_gen = pool.generation.load(.acquire);
+            const new_gen = pool.generation.load(.acquire);
+            if (new_gen == local_gen) continue; // spurious wakeup
+            local_gen = new_gen;
 
             // Do work
             pool.doWork();
@@ -193,6 +205,50 @@ test "ThreadPool single item" {
     var ctx = Ctx{ .v = &val };
     pool.parallelFor(1, 1, @ptrCast(&ctx), Ctx.work);
     try std.testing.expectEqual(@as(u32, 42), val);
+}
+
+test "ThreadPool large workload many workers" {
+    var pool = ThreadPool.init(8);
+    pool.spawn();
+    defer pool.deinit();
+
+    // Verify correct parallel accumulation with atomic counter.
+    // Each chunk increments a shared atomic by (end - start).
+    var total = std.atomic.Value(u64).init(0);
+    const Ctx = struct {
+        counter: *std.atomic.Value(u64),
+        fn work(ctx_ptr: *anyopaque, start: usize, end: usize) void {
+            const ctx: *@This() = @ptrCast(@alignCast(ctx_ptr));
+            _ = ctx.counter.fetchAdd(@intCast(end - start), .monotonic);
+        }
+    };
+    var ctx = Ctx{ .counter = &total };
+
+    // Run multiple dispatches to stress wake/sleep cycles
+    for (0..10) |_| {
+        total.store(0, .release);
+        pool.parallelFor(1000, 8, @ptrCast(&ctx), Ctx.work);
+        try std.testing.expectEqual(@as(u64, 1000), total.load(.acquire));
+    }
+}
+
+test "ThreadPool zero total is no-op" {
+    var pool = ThreadPool.init(2);
+    pool.spawn();
+    defer pool.deinit();
+
+    var called = false;
+    const Ctx = struct {
+        flag: *bool,
+        fn work(ctx_ptr: *anyopaque, _: usize, _: usize) void {
+            const ctx: *@This() = @ptrCast(@alignCast(ctx_ptr));
+            ctx.flag.* = true;
+        }
+    };
+    var ctx = Ctx{ .flag = &called };
+    pool.parallelFor(0, 8, @ptrCast(&ctx), Ctx.work);
+    // total=0 should return immediately without calling the work function
+    try std.testing.expect(!called);
 }
 
 test "ThreadPool zero workers (single-threaded)" {

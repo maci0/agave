@@ -3,6 +3,7 @@
 //! 4-row batching with V8 SIMD and vector byte widening.
 
 const std = @import("std");
+const backend_mod = @import("../../backend.zig");
 const V8 = @Vector(8, f32);
 const v8zero: V8 = @splat(0.0);
 
@@ -12,11 +13,12 @@ inline fn widenI8(raw: @Vector(8, u8)) V8 {
 }
 
 /// Q8_0 GEMV: y = W @ x. 4-row batched with V8 fused multiply-accumulate.
-/// Uses vector accumulators (maps to NEON fmla) instead of per-chunk scalar
-/// reduction, deferring @reduce to once per block for ~3× fewer reductions.
+/// Uses vector accumulators instead of per-chunk scalar reduction,
+/// deferring @reduce to once per block.
 pub fn gemvQ8_0(x: [*]const f32, w: [*]const u8, y: [*]f32, n: usize, k: usize) void {
-    const bpb: usize = 34;
-    const nb = (k + 31) / 32;
+    const bpb = backend_mod.q8_0_block_bytes;
+    const qk = backend_mod.quant_block_elems;
+    const nb = (k + qk - 1) / qk;
     const row_bytes = nb * bpb;
 
     var row: usize = 0;
@@ -39,17 +41,17 @@ pub fn gemvQ8_0(x: [*]const f32, w: [*]const u8, y: [*]f32, n: usize, k: usize) 
             const s1: f32 = @floatCast(@as(f16, @bitCast(std.mem.readInt(u16, bp1[0..2], .little))));
             const s2: f32 = @floatCast(@as(f16, @bitCast(std.mem.readInt(u16, bp2[0..2], .little))));
             const s3: f32 = @floatCast(@as(f16, @bitCast(std.mem.readInt(u16, bp3[0..2], .little))));
-            const bk = b * 32;
+            const bk = b * qk;
 
             // V8 accumulators — defers @reduce to end of block.
-            // @mulAdd maps to NEON fmla (1 instruction vs fmul+faddp chain).
+            // @mulAdd maps to hardware FMA (single instruction vs mul+add chain).
             var acc0: V8 = v8zero;
             var acc1: V8 = v8zero;
             var acc2: V8 = v8zero;
             var acc3: V8 = v8zero;
 
             var i: usize = 0;
-            while (i + 8 <= 32) : (i += 8) {
+            while (i + 8 <= qk) : (i += 8) {
                 const ki = bk + i;
                 if (ki + 7 >= k) break;
                 const xv: V8 = x[ki..][0..8].*;
@@ -65,7 +67,7 @@ pub fn gemvQ8_0(x: [*]const f32, w: [*]const u8, y: [*]f32, n: usize, k: usize) 
             var tail1: f32 = 0.0;
             var tail2: f32 = 0.0;
             var tail3: f32 = 0.0;
-            while (i < 32) : (i += 1) {
+            while (i < qk) : (i += 1) {
                 const ki = bk + i;
                 if (ki < k) {
                     const xv = x[ki];
@@ -94,17 +96,17 @@ pub fn gemvQ8_0(x: [*]const f32, w: [*]const u8, y: [*]f32, n: usize, k: usize) 
         for (0..nb) |b| {
             const bp = rp + b * bpb;
             const s: f32 = @floatCast(@as(f16, @bitCast(std.mem.readInt(u16, bp[0..2], .little))));
-            const bk = b * 32;
+            const bk = b * qk;
             var acc: V8 = v8zero;
             var i: usize = 0;
-            while (i + 8 <= 32) : (i += 8) {
+            while (i + 8 <= qk) : (i += 8) {
                 const ki = bk + i;
                 if (ki + 7 >= k) break;
                 const xv: V8 = x[ki..][0..8].*;
                 acc = @mulAdd(V8, xv, widenI8(bp[2 + i ..][0..8].*), acc);
             }
             var tail: f32 = 0.0;
-            while (i < 32) : (i += 1) {
+            while (i < qk) : (i += 1) {
                 const ki = bk + i;
                 if (ki < k) tail += x[ki] * @as(f32, @floatFromInt(@as(i8, @bitCast(bp[2 + i]))));
             }
@@ -112,4 +114,57 @@ pub fn gemvQ8_0(x: [*]const f32, w: [*]const u8, y: [*]f32, n: usize, k: usize) 
         }
         y[row] = sum;
     }
+}
+
+test "gemvQ8_0 uniform weights" {
+    // 4 rows, k=32 (one block per row). scale=1.0, all quant values = 1.
+    // x = all 1.0 → each y[i] = 1.0 * 32 * 1 = 32.0
+    const bpb = backend_mod.q8_0_block_bytes; // 34
+    var w: [4 * bpb]u8 = undefined;
+    for (0..4) |r| {
+        const base = r * bpb;
+        // f16(1.0) = 0x3C00 little-endian
+        w[base] = 0x00;
+        w[base + 1] = 0x3C;
+        for (0..32) |i| w[base + 2 + i] = 1; // i8(1) = u8(1)
+    }
+    var x: [32]f32 = undefined;
+    for (&x) |*v| v.* = 1.0;
+    var y: [4]f32 = undefined;
+    gemvQ8_0(&x, &w, &y, 4, 32);
+    for (0..4) |i| try std.testing.expectApproxEqAbs(@as(f32, 32.0), y[i], 0.01);
+}
+
+test "gemvQ8_0 scale factor" {
+    // 1 row, k=32, scale=2.0, all quant values = 3.
+    // x = all 1.0 → y[0] = 2.0 * 32 * 3 = 192.0
+    const bpb = backend_mod.q8_0_block_bytes;
+    var w: [bpb]u8 = undefined;
+    // f16(2.0) = 0x4000 little-endian
+    w[0] = 0x00;
+    w[1] = 0x40;
+    for (0..32) |i| w[2 + i] = 3; // i8(3)
+    var x: [32]f32 = undefined;
+    for (&x) |*v| v.* = 1.0;
+    var y: [1]f32 = undefined;
+    gemvQ8_0(&x, &w, &y, 1, 32);
+    try std.testing.expectApproxEqAbs(@as(f32, 192.0), y[0], 0.01);
+}
+
+test "gemvQ8_0 negative quant values" {
+    // 1 row, k=32, scale=1.0, quant values alternate +1/-1.
+    // x = all 1.0 → y[0] = 1.0 * (16*1 + 16*(-1)) = 0.0
+    const bpb = backend_mod.q8_0_block_bytes;
+    var w: [bpb]u8 = undefined;
+    w[0] = 0x00;
+    w[1] = 0x3C; // f16(1.0)
+    for (0..32) |i| {
+        // Alternating +1 / -1 as i8: 1 = 0x01, -1 = 0xFF
+        w[2 + i] = if (i % 2 == 0) 1 else @bitCast(@as(i8, -1));
+    }
+    var x: [32]f32 = undefined;
+    for (&x) |*v| v.* = 1.0;
+    var y: [1]f32 = undefined;
+    gemvQ8_0(&x, &w, &y, 1, 32);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.0), y[0], 0.01);
 }

@@ -18,6 +18,7 @@ const CpuBackend = @import("cpu.zig").CpuBackend;
 const KvQuantType = backend_mod.KvQuantType;
 const ThreadPool = @import("../thread_pool.zig").ThreadPool;
 const kv_quant = @import("../ops/kv_quant.zig");
+const mlx_ops = @import("../ops/mlx.zig");
 
 const msl_source = @embedFile("kernels/metal/common.metal") ++
     @embedFile("kernels/metal/elementwise.metal") ++
@@ -46,27 +47,23 @@ const sdpa_max_head_dim: usize = 256;
 const q4_0_nr: usize = 4;
 /// Number of output rows processed per threadgroup in Q8_0 GEMV (must match q8_0_nr in gemv.metal).
 const q8_0_nr: usize = 4;
+/// Number of output rows processed per threadgroup in Q4_K GEMV (must match q4_k_nr in gemv.metal).
+const q4_k_nr: usize = 2;
 /// Elements per small quantization block (Q4_0, Q8_0, etc.).
-const quant_block_elems: usize = 32;
+const quant_block_elems: usize = backend_mod.quant_block_elems;
 /// Bytes per Q8_0 block: 2 bytes f16 scale + 32 bytes i8 data.
-const q8_0_block_bytes: usize = 34;
+const q8_0_block_bytes: usize = backend_mod.q8_0_block_bytes;
 /// Elements per large quantization super-block (Q4_K, Q5_K, Q6_K, etc.).
-const quant_super_block_elems: usize = 256;
+const quant_super_block_elems: usize = backend_mod.quant_super_block_elems;
 /// Elements per MLX group (64-element groups for MLX 4-bit quantization).
-const mlx_group_elems: usize = 64;
+const mlx_group_size: usize = mlx_ops.mlx_group_size;
 /// Elements per MXFP4 group (32-element groups for microscaled FP4 quantization).
-const mxfp4_group_size: usize = 32;
+const mxfp4_group_size: usize = mlx_ops.mxfp4_group_size;
 /// SIMD group width on Apple Silicon GPUs (threads per SIMD group).
 const simd_width: usize = 32;
 /// GPU SDPA threadgroup size (threads per query head, smaller than general threadgroup_size
 /// to fit per-head accumulation state within threadgroup memory).
 const sdpa_threadgroup_size: usize = 128;
-/// TurboQuant 2-bit block: f16 norm (2 bytes) + 8 packed bytes = 10 bytes per 32 elements.
-const turbo2_block_bytes: usize = 10;
-/// TurboQuant 3-bit block: f16 norm (2 bytes) + 12 packed bytes = 14 bytes per 32 elements.
-const turbo3_block_bytes: usize = 14;
-/// TurboQuant 4-bit block: f16 norm (2 bytes) + 16 packed bytes = 18 bytes per 32 elements.
-const turbo4_block_bytes: usize = 18;
 /// Words per group for MLX 4-bit quantization (64 elems / 8 nibbles per word).
 const mlx_words_per_group_q4: usize = 8;
 /// MLX 6-bit: 64 elements × 6 bits / 32 bits per word = 12 words per group.
@@ -130,6 +127,7 @@ pub const MetalBackend = struct {
     pipe_gemv_fp8_e4m3: objc.id,
     pipe_gemv_fp8_e5m2: objc.id,
     pipe_gemm_f32: objc.id,
+    pipe_gemm_bf16: objc.id,
     pipe_gemm_q8_0: objc.id,
     pipe_gemm_q4_0: objc.id,
     pipe_rope_batched: objc.id,
@@ -266,6 +264,7 @@ pub const MetalBackend = struct {
             .pipe_gemv_fp8_e4m3 = undefined,
             .pipe_gemv_fp8_e5m2 = undefined,
             .pipe_gemm_f32 = undefined,
+            .pipe_gemm_bf16 = undefined,
             .pipe_gemm_q8_0 = undefined,
             .pipe_gemm_q4_0 = undefined,
             .pipe_rope_batched = undefined,
@@ -329,6 +328,7 @@ pub const MetalBackend = struct {
         self.pipe_gemv_fp8_e4m3 = try self.makePipeline("gemv_fp8_e4m3");
         self.pipe_gemv_fp8_e5m2 = try self.makePipeline("gemv_fp8_e5m2");
         self.pipe_gemm_f32 = try self.makePipeline("gemm_f32");
+        self.pipe_gemm_bf16 = try self.makePipeline("gemm_bf16");
         self.pipe_gemm_q8_0 = try self.makePipeline("gemm_q8_0");
         self.pipe_gemm_q4_0 = try self.makePipeline("gemm_q4_0");
         self.pipe_rope_batched = try self.makePipeline("rope_batched_f32");
@@ -355,7 +355,7 @@ pub const MetalBackend = struct {
     }
 
     /// Number of MSL compute pipelines compiled at init.
-    pub const n_pipelines: u32 = 55;
+    pub const n_pipelines: u32 = 56;
 
     /// Returns the Metal device name (e.g., "Apple M4 Pro").
     pub fn deviceName(self: *const MetalBackend) []const u8 {
@@ -364,7 +364,7 @@ pub const MetalBackend = struct {
     }
 
     /// Returns backend startup information for display.
-    pub fn backendInfo(self: *const MetalBackend) @import("backend.zig").BackendInfo {
+    pub fn backendInfo(self: *const MetalBackend) backend_mod.BackendInfo {
         const total: u64 = objc.msgSend(u64, self.device, objc.sel("recommendedMaxWorkingSetSize"), .{});
         const allocated: u64 = objc.msgSend(u64, self.device, objc.sel("currentAllocatedSize"), .{});
         return .{
@@ -511,44 +511,6 @@ pub const MetalBackend = struct {
         return .{ .buf = copy_buf, .offset = 0 };
     }
 
-    /// Get Metal buffer wrapping RAM-tier KV block with zero copy.
-    /// On UMA platforms (Apple Silicon), RAM-tier blocks are accessed directly
-    /// by GPU via newBufferWithBytesNoCopy — no copy needed. Host memory and
-    /// VRAM are physically shared.
-    ///
-    /// Uses newBufferWithBytesNoCopy for page-aligned host memory.
-    /// Returns BufRef with offset for non-aligned sub-regions.
-    /// Cached by page-aligned base address — reuses wraps on subsequent calls.
-    pub fn getKvBufRef(self: *MetalBackend, host_ptr: [*]u8, size: usize) !BufRef {
-        const addr = @intFromPtr(host_ptr);
-
-        // Check if already cached
-        const page_base = addr & ~(@as(usize, page_size - 1));
-        if (self.buf_cache.get(page_base)) |info| {
-            const offset = addr - page_base;
-            return .{ .buf = info.metal_buf, .offset = offset };
-        }
-
-        // Wrap page-aligned region with newBufferWithBytesNoCopy
-        const page_ptr: [*]u8 = @ptrFromInt(page_base);
-        const offset = addr - page_base;
-        const total_size = size + offset;
-
-        const metal_buf = objc.msgSend(
-            ?objc.id,
-            self.device,
-            objc.sel("newBufferWithBytesNoCopy:length:options:deallocator:"),
-            .{ page_ptr, total_size, @as(objc.NSUInteger, 0), @as(?objc.id, null) },
-        );
-
-        if (metal_buf == null) return error.MetalBufferCreationFailed;
-
-        // Cache by page-aligned base
-        try self.buf_cache.put(page_base, .{ .metal_buf = metal_buf.?, .len = total_size });
-
-        return .{ .buf = metal_buf.?, .offset = offset };
-    }
-
     /// Bind a BufRef (buffer + offset) at the given argument index.
     fn setBuf(enc: objc.id, ref: BufRef, index: u32) void {
         objc.msgSend(void, enc, objc.sel("setBuffer:offset:atIndex:"), .{
@@ -685,7 +647,7 @@ pub const MetalBackend = struct {
     /// Allocate a KV cache slice using page-aligned memory for zero-copy GPU access.
     /// On Apple Silicon's UMA, page-aligned buffers can be wrapped via
     /// newBufferWithBytesNoCopy without any data copies. Pre-registers the
-    /// allocation in buf_cache so SDPA doesn't create Metal buffers lazily.
+    /// allocation in buf_cache so GPU ops use the buffer without lazy creation.
     pub fn allocKvSlice(self: *MetalBackend, _: std.mem.Allocator, n: usize) error{OutOfMemory}![]u8 {
         const byte_len = n;
         // Round up to page boundary for newBufferWithBytesNoCopy compatibility
@@ -728,7 +690,7 @@ pub const MetalBackend = struct {
 
     // ── Weight size helper ────────────────────────────────────
 
-    const weightBytes = @import("backend.zig").weightBytes;
+    const weightBytes = backend_mod.weightBytes;
 
     // ── GEMV ──────────────────────────────────────────────────
 
@@ -788,7 +750,7 @@ pub const MetalBackend = struct {
             // 256-element superblock formats
             .q4_k, .q5_k, .q6_k, .q2_k, .q3_k, .iq4_xs => (k + quant_super_block_elems - 1) / quant_super_block_elems,
             // MLX 4-bit: 64-element groups, each thread processes one group
-            .mlx_q => (k + mlx_group_elems - 1) / mlx_group_elems,
+            .mlx_q => (k + mlx_group_size - 1) / mlx_group_size,
             // Element-level formats — always fully utilized at 256 threads
             else => threadgroup_size,
         };
@@ -803,6 +765,7 @@ pub const MetalBackend = struct {
         return switch (dtype) {
             .q4_0 => (n + q4_0_nr - 1) / q4_0_nr,
             .q8_0 => (n + q8_0_nr - 1) / q8_0_nr,
+            .q4_k => (n + q4_k_nr - 1) / q4_k_nr,
             else => n,
         };
     }
@@ -1166,7 +1129,7 @@ pub const MetalBackend = struct {
     /// (packed u32 weights + bf16 scales + bf16 biases, group_size=64).
     pub fn gemvMlxQ(self: *MetalBackend, x: [*]const f32, weight: [*]const u8, scales: [*]const u8, biases: [*]const u8, y: [*]f32, n: usize, k: usize, bits: u32) void {
         if (bits != 4 and bits != 6 and bits != 8) @panic("Metal MLX GEMV: unsupported bit width");
-        const gpr = (k + mlx_group_elems - 1) / mlx_group_elems;
+        const gpr = (k + mlx_group_size - 1) / mlx_group_size;
         const wpg: usize = switch (bits) {
             8 => mlx_words_per_group_q8,
             6 => mlx_words_per_group_q6,
@@ -1201,7 +1164,7 @@ pub const MetalBackend = struct {
     }
 
     /// MXFP4 SafeTensors GEMV on GPU.
-    /// U32-packed nibbles with FP8 E4M3 per-group scales and BF16 per-row bias.
+    /// U32-packed nibbles with FP8 E4M3 per-group scales (no bias).
     /// group_size=32, 4 words per group (8 nibbles per word × 4 = 32 values).
     pub fn gemvMxfp4St(self: *MetalBackend, x: [*]const f32, weight: [*]const u8, scale: [*]const u8, y: [*]f32, n: usize, k: usize) void {
         const gpr = (k + mxfp4_group_size - 1) / mxfp4_group_size;
@@ -1241,7 +1204,7 @@ pub const MetalBackend = struct {
             // MLX quantized weights — dispatch MLX-Q kernel with companion buffers
             if (op.mlx_scales != null) {
                 const bits = op.mlx_bits;
-                const gpr = (k + mlx_group_elems - 1) / mlx_group_elems;
+                const gpr = (k + mlx_group_size - 1) / mlx_group_size;
                 const wpg: usize = switch (bits) {
                     8 => mlx_words_per_group_q8,
                     6 => mlx_words_per_group_q6,
@@ -1365,48 +1328,28 @@ pub const MetalBackend = struct {
 
     // ── SDPA ─────────────────────────────────────────────────
 
-    /// Return the turbo bit width for a KV quant type, or 0 for non-turbo types.
-    fn turboBits(kv_type: KvQuantType) u32 {
-        return switch (kv_type) {
-            .turbo2 => 2,
-            .turbo3 => 3,
-            .turbo4 => 4,
-            else => 0,
-        };
-    }
-
-    /// Return the byte size per 32-element turbo block, or 0 for non-turbo types.
-    fn turboBlockByteSize(kv_type: KvQuantType) u32 {
-        return switch (kv_type) {
-            .turbo2 => turbo2_block_bytes,
-            .turbo3 => turbo3_block_bytes,
-            .turbo4 => turbo4_block_bytes,
-            else => 0,
-        };
-    }
-
     /// Scaled dot-product attention with KV cache append.
     /// Appends k_new/v_new to KV cache, then runs FlashAttention-2 on GPU.
     /// Supports f32 KV cache (existing fast path) and TurboQuant 2/3/4-bit
     /// KV cache (native GPU dequant — no CPU fallback for SDPA compute).
     /// KV append for turbo types uses CPU quantization (once per token per layer,
-    /// not the SDPA hot path). Panics on unsupported KV types (q8_0, f16, fp8, etc.).
+    /// not the SDPA hot path). Panics on non-f32, non-turbo KV types.
     /// Panics for sequences > 4096 or head dims > 256.
-    pub fn sdpa(self: *MetalBackend, q: [*]const f32, keys: []u8, values: []u8, k_new: [*]const f32, v_new: [*]const f32, output: [*]f32, nh: usize, nkv: usize, hd: usize, seq_len: usize, scale: f32, kv_type_k: @import("backend.zig").KvQuantType, kv_type_v: @import("backend.zig").KvQuantType) void {
-        const is_turbo_k = (kv_type_k == .turbo2 or kv_type_k == .turbo3 or kv_type_k == .turbo4);
-        const is_turbo_v = (kv_type_v == .turbo2 or kv_type_v == .turbo3 or kv_type_v == .turbo4);
+    pub fn sdpa(self: *MetalBackend, q: [*]const f32, keys: []u8, values: []u8, k_new: [*]const f32, v_new: [*]const f32, output: [*]f32, nh: usize, nkv: usize, hd: usize, seq_len: usize, scale: f32, kv_type_k: backend_mod.KvQuantType, kv_type_v: backend_mod.KvQuantType) void {
+        const is_turbo_k = kv_type_k.isTurbo();
+        const is_turbo_v = kv_type_v.isTurbo();
         const is_f32_k = (kv_type_k == .f32);
         const is_f32_v = (kv_type_v == .f32);
 
         // Non-turbo, non-f32 quantized KV: not supported — add GPU kernel or use --kv-type f32
         if ((!is_f32_k and !is_turbo_k) or (!is_f32_v and !is_turbo_v))
-            @panic("Metal SDPA: unsupported KV type — use f32, turbo2, turbo3, or turbo4");
+            @panic("Metal SDPA: unsupported KV type — use --kv-type f32 or turbo2/3/4");
 
         const kvd = nkv * hd;
         const sl = seq_len + 1;
 
-        if (sl > sdpa_max_seq_len) @panic("Metal SDPA: sequence length exceeds GPU limit (4096) — reduce --ctx-size");
-        if (hd > sdpa_max_head_dim) @panic("Metal SDPA: head_dim exceeds GPU limit (256)");
+        if (sl > sdpa_max_seq_len) @panic("Metal SDPA: sequence length exceeds GPU limit (" ++ std.fmt.comptimePrint("{d}", .{sdpa_max_seq_len}) ++ ") — reduce --ctx-size");
+        if (hd > sdpa_max_head_dim) @panic("Metal SDPA: head_dim exceeds GPU limit (" ++ std.fmt.comptimePrint("{d}", .{sdpa_max_head_dim}) ++ ")");
 
         // ── KV append ──
         if (is_f32_k and is_f32_v) {
@@ -1478,10 +1421,10 @@ pub const MetalBackend = struct {
             var nkv_u: u32 = @intCast(nkv);
             var hd_u: u32 = @intCast(hd);
             var sl_u: u32 = @intCast(sl);
-            var bits_k_u: u32 = turboBits(kv_type_k);
-            var bits_v_u: u32 = turboBits(kv_type_v);
-            var bb_k_u: u32 = turboBlockByteSize(kv_type_k);
-            var bb_v_u: u32 = turboBlockByteSize(kv_type_v);
+            var bits_k_u: u32 = kv_type_k.turboBits();
+            var bits_v_u: u32 = kv_type_v.turboBits();
+            var bb_k_u: u32 = kv_type_k.turboBlockByteSize();
+            var bb_v_u: u32 = kv_type_v.turboBlockByteSize();
             setBytes(enc, @ptrCast(&nh_u), @sizeOf(u32), 4);
             setBytes(enc, @ptrCast(&nkv_u), @sizeOf(u32), 5);
             setBytes(enc, @ptrCast(&hd_u), @sizeOf(u32), 6);
@@ -1522,6 +1465,7 @@ pub const MetalBackend = struct {
 
         const pipeline: objc.id = switch (w.dtype) {
             .f32 => self.pipe_gemm_f32,
+            .bf16, .f16 => self.pipe_gemm_bf16,
             .q8_0 => self.pipe_gemm_q8_0,
             .q4_0 => self.pipe_gemm_q4_0,
             else => @panic("Metal GEMM: unsupported dtype — add GPU kernel"),
@@ -1603,8 +1547,8 @@ pub const MetalBackend = struct {
     /// For turbo KV types: CPU-side KV append + sequential GPU turbo SDPA per token.
     /// For non-turbo quantized types (q8_0, f16, etc.): full CPU fallback.
     pub fn sdpaPrefill(self: *MetalBackend, q: [*]const f32, k: [*]const f32, v: [*]const f32, kv_keys: []u8, kv_values: []u8, output: [*]f32, nh: usize, nkv: usize, hd: usize, prev_len: usize, n_tok: usize, scale: f32, kv_type_k: KvQuantType, kv_type_v: KvQuantType) void {
-        const is_turbo_k = (kv_type_k == .turbo2 or kv_type_k == .turbo3 or kv_type_k == .turbo4);
-        const is_turbo_v = (kv_type_v == .turbo2 or kv_type_v == .turbo3 or kv_type_v == .turbo4);
+        const is_turbo_k = kv_type_k.isTurbo();
+        const is_turbo_v = kv_type_v.isTurbo();
         const is_f32_k = (kv_type_k == .f32);
         const is_f32_v = (kv_type_v == .f32);
 
@@ -1644,10 +1588,10 @@ pub const MetalBackend = struct {
                 var hd_u: u32 = @intCast(hd);
                 var sl_u: u32 = @intCast(sl);
                 var scale_val: f32 = scale;
-                var bits_k_u: u32 = turboBits(kv_type_k);
-                var bits_v_u: u32 = turboBits(kv_type_v);
-                var bb_k_u: u32 = turboBlockByteSize(kv_type_k);
-                var bb_v_u: u32 = turboBlockByteSize(kv_type_v);
+                var bits_k_u: u32 = kv_type_k.turboBits();
+                var bits_v_u: u32 = kv_type_v.turboBits();
+                var bb_k_u: u32 = kv_type_k.turboBlockByteSize();
+                var bb_v_u: u32 = kv_type_v.turboBlockByteSize();
                 setBytes(enc, @ptrCast(&nh_u), @sizeOf(u32), 4);
                 setBytes(enc, @ptrCast(&nkv_u), @sizeOf(u32), 5);
                 setBytes(enc, @ptrCast(&hd_u), @sizeOf(u32), 6);
@@ -1664,7 +1608,7 @@ pub const MetalBackend = struct {
 
         // Non-turbo, non-f32 quantized KV: not supported
         if (kv_type_k != .f32 or kv_type_v != .f32)
-            @panic("Metal SDPA prefill: unsupported KV type — use f32, turbo2, turbo3, or turbo4");
+            @panic("Metal SDPA prefill: unsupported KV type — use --kv-type f32 or turbo2/3/4");
 
         const kvd = nkv * hd;
         const f32_keys: [*]f32 = @ptrCast(@alignCast(kv_keys.ptr));
@@ -1844,7 +1788,10 @@ const builtin = @import("builtin");
 test "Metal backend init and silu" {
     if (comptime builtin.os.tag != .macos) return error.SkipZigTest;
     const allocator = std.testing.allocator;
-    var metal = MetalBackend.init(allocator) catch return error.SkipZigTest;
+    var metal = MetalBackend.init(allocator) catch |err| {
+        if (err == error.NoMetalDevice) return error.SkipZigTest;
+        return err;
+    };
     defer metal.deinit();
 
     var input = [_]f32{ 0.0, 1.0, -1.0, 2.0 };
@@ -1853,34 +1800,45 @@ test "Metal backend init and silu" {
     metal.sync();
 
     // SiLU(0) = 0
-    try std.testing.expectApproxEqAbs(@as(f32, 0.0), output[0], 0.01);
-    // SiLU(1) ≈ 0.731
-    try std.testing.expectApproxEqAbs(@as(f32, 0.731), output[1], 0.02);
-    // SiLU(-1) ≈ -0.269
-    try std.testing.expectApproxEqAbs(@as(f32, -0.269), output[2], 0.02);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.0), output[0], 0.001);
+    // SiLU(1) ≈ 0.7311
+    try std.testing.expectApproxEqAbs(@as(f32, 0.7311), output[1], 0.01);
+    // SiLU(-1) ≈ -0.2689
+    try std.testing.expectApproxEqAbs(@as(f32, -0.2689), output[2], 0.01);
+    // SiLU(2) ≈ 1.7616
+    try std.testing.expectApproxEqAbs(@as(f32, 1.7616), output[3], 0.01);
 }
 
 test "Metal backend rmsNorm" {
     if (comptime builtin.os.tag != .macos) return error.SkipZigTest;
     const allocator = std.testing.allocator;
-    var metal = MetalBackend.init(allocator) catch return error.SkipZigTest;
+    var metal = MetalBackend.init(allocator) catch |err| {
+        if (err == error.NoMetalDevice) return error.SkipZigTest;
+        return err;
+    };
     defer metal.deinit();
 
     var input = [_]f32{ 1.0, 2.0, 3.0, 4.0 };
-    var weight = [_]f32{ 1.0, 1.0, 1.0, 1.0 };
+    var weight = [_]f32{ 1.0, 2.0, 0.5, 3.0 };
     var output: [4]f32 = undefined;
     metal.rmsNorm(&input, &weight, &output, 4, 1e-6);
     metal.sync();
 
     // RMS = sqrt((1+4+9+16)/4) = sqrt(7.5) ≈ 2.7386
-    // output[0] = 1 / 2.7386 ≈ 0.3651
-    try std.testing.expectApproxEqAbs(@as(f32, 0.365), output[0], 0.05);
+    // output[i] = input[i] * weight[i] / RMS
+    try std.testing.expectApproxEqAbs(@as(f32, 0.3651), output[0], 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 1.4606), output[1], 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.5477), output[2], 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 4.3818), output[3], 0.01);
 }
 
 test "Metal backend add" {
     if (comptime builtin.os.tag != .macos) return error.SkipZigTest;
     const allocator = std.testing.allocator;
-    var metal = MetalBackend.init(allocator) catch return error.SkipZigTest;
+    var metal = MetalBackend.init(allocator) catch |err| {
+        if (err == error.NoMetalDevice) return error.SkipZigTest;
+        return err;
+    };
     defer metal.deinit();
 
     var a = [_]f32{ 1.0, 2.0, 3.0, 4.0 };
@@ -1898,7 +1856,10 @@ test "Metal backend add" {
 test "Metal backend gemvNvfp4St basic" {
     if (comptime builtin.os.tag != .macos) return error.SkipZigTest;
     const allocator = std.testing.allocator;
-    var metal = MetalBackend.init(allocator) catch return error.SkipZigTest;
+    var metal = MetalBackend.init(allocator) catch |err| {
+        if (err == error.NoMetalDevice) return error.SkipZigTest;
+        return err;
+    };
     defer metal.deinit();
 
     // 1x16 GEMV: one output row, 16 input elements (one group).
@@ -1918,7 +1879,10 @@ test "Metal backend gemvNvfp4St basic" {
 test "Metal backend gemvNvfp4St multi-row" {
     if (comptime builtin.os.tag != .macos) return error.SkipZigTest;
     const allocator = std.testing.allocator;
-    var metal = MetalBackend.init(allocator) catch return error.SkipZigTest;
+    var metal = MetalBackend.init(allocator) catch |err| {
+        if (err == error.NoMetalDevice) return error.SkipZigTest;
+        return err;
+    };
     defer metal.deinit();
 
     // 2x16 GEMV: two output rows.
@@ -1926,20 +1890,23 @@ test "Metal backend gemvNvfp4St multi-row" {
     // Row 0: byte[0] = 0x42 → low=2 (1.0), high=4 (2.0)
     // Row 1: byte[0] = 0x24 → low=4 (2.0), high=2 (1.0)
     var weight = [16]u8{ 0x42, 0, 0, 0, 0, 0, 0, 0, 0x24, 0, 0, 0, 0, 0, 0, 0 };
-    var scale = [2]u8{ 0x38, 0x38 }; // both rows scale = 1.0
+    var scale = [2]u8{ 0x38, 0x40 }; // row 0 scale=1.0, row 1 scale=2.0
     var y = [2]f32{ 0, 0 };
     metal.gemvNvfp4St(&x, &weight, &scale, &y, 2, 16);
     metal.sync();
-    // Row 0: 1.0*1.0 + 1.0*2.0 = 3.0
+    // Row 0: (1.0*1.0 + 1.0*2.0) * scale(1.0) = 3.0
     try std.testing.expectApproxEqAbs(@as(f32, 3.0), y[0], 1e-6);
-    // Row 1: 1.0*2.0 + 1.0*1.0 = 3.0
-    try std.testing.expectApproxEqAbs(@as(f32, 3.0), y[1], 1e-6);
+    // Row 1: (1.0*2.0 + 1.0*1.0) * scale(2.0) = 6.0
+    try std.testing.expectApproxEqAbs(@as(f32, 6.0), y[1], 1e-6);
 }
 
 test "Metal backend gemvMlxQ4 basic" {
     if (comptime builtin.os.tag != .macos) return error.SkipZigTest;
     const allocator = std.testing.allocator;
-    var metal = MetalBackend.init(allocator) catch return error.SkipZigTest;
+    var metal = MetalBackend.init(allocator) catch |err| {
+        if (err == error.NoMetalDevice) return error.SkipZigTest;
+        return err;
+    };
     defer metal.deinit();
 
     // 1x64 GEMV: one output row, 64 input elements (one group).
@@ -1967,15 +1934,16 @@ test "Metal backend gemvMlxQ4 basic" {
 test "Metal backend gemvMlxQ4 matches CPU" {
     if (comptime builtin.os.tag != .macos) return error.SkipZigTest;
     const allocator = std.testing.allocator;
-    var metal = MetalBackend.init(allocator) catch return error.SkipZigTest;
+    var metal = MetalBackend.init(allocator) catch |err| {
+        if (err == error.NoMetalDevice) return error.SkipZigTest;
+        return err;
+    };
     defer metal.deinit();
-
-    const mlx_ops = @import("../ops/mlx.zig");
 
     // Test with k=128 (2 groups), n=4 rows
     const k = 128;
     const n = 4;
-    const gpr = (k + mlx_group_elems - 1) / mlx_group_elems; // = 2
+    const gpr = (k + mlx_group_size - 1) / mlx_group_size; // = 2
     const wpg = 8;
 
     // Fill x with a pattern
@@ -2011,13 +1979,15 @@ test "Metal backend gemvMlxQ4 matches CPU" {
 test "Metal backend gemvMlxQ4 large matrix" {
     if (comptime builtin.os.tag != .macos) return error.SkipZigTest;
     const al = std.testing.allocator;
-    var metal = MetalBackend.init(al) catch return error.SkipZigTest;
+    var metal = MetalBackend.init(al) catch |err| {
+        if (err == error.NoMetalDevice) return error.SkipZigTest;
+        return err;
+    };
     defer metal.deinit();
-    const mlx_ops = @import("../ops/mlx.zig");
 
     const k = 2560;
     const n = 64;
-    const gpr = (k + mlx_group_elems - 1) / mlx_group_elems; // 40
+    const gpr = (k + mlx_group_size - 1) / mlx_group_size; // 40
     const wpg = 8;
 
     const x = try al.alloc(f32, k);

@@ -6,9 +6,6 @@ const tok_iface = @import("tokenizer.zig");
 const TokenizerIface = tok_iface.Tokenizer;
 const TokenizerKind = @import("tokenizer.zig").TokenizerKind;
 
-const max_path_buf_size: usize = 4096;
-const max_vocab_file_size: usize = 64 * 1024 * 1024;
-const max_config_file_size: usize = 1024 * 1024;
 const merge_key_buf_size: usize = 512;
 const max_spm_token_len: usize = 64;
 const fallback_unknown_token_id: u32 = 3;
@@ -110,96 +107,6 @@ pub const BpeTokenizer = struct {
         return d;
     }
 
-    /// Load tokenizer data (vocabulary, merge rules, and config) from a directory.
-    pub fn loadFromDir(self: *BpeTokenizer, dir: []const u8) !void {
-        var vp: [max_path_buf_size]u8 = undefined;
-        const vocab_path = try std.fmt.bufPrint(&vp, "{s}/vocab.txt", .{dir});
-        var mp: [max_path_buf_size]u8 = undefined;
-        const merges_path = try std.fmt.bufPrint(&mp, "{s}/merges.txt", .{dir});
-        var cp: [max_path_buf_size]u8 = undefined;
-        const config_path = try std.fmt.bufPrint(&cp, "{s}/tokenizer_config.txt", .{dir});
-
-        // Load vocab
-        {
-            const file = try std.fs.cwd().openFile(vocab_path, .{});
-            defer file.close();
-            const content = try file.readToEndAlloc(self.allocator, max_vocab_file_size);
-            defer self.allocator.free(content);
-            // Pre-allocate maps based on line count to avoid repeated rehashing.
-            const line_count = std.mem.count(u8, content, "\n") + 1;
-            try self.token_to_id.ensureTotalCapacity(@intCast(line_count));
-            try self.id_to_token.ensureTotalCapacity(self.allocator, line_count);
-            var id: u32 = 0;
-            var lines = std.mem.splitScalar(u8, content, '\n');
-            while (lines.next()) |raw_line| {
-                var line = raw_line;
-                if (line.len > 0 and line[line.len - 1] == '\r') line = line[0 .. line.len - 1];
-                const tok = try self.own(line);
-                try self.token_to_id.put(tok, id);
-                try self.id_to_token.append(self.allocator, tok);
-                if (tok.len > 0 and tok[0] == '<' and tok[tok.len - 1] == '>') {
-                    try self.special_tokens.put(tok, id);
-                }
-                id += 1;
-            }
-            self.vocab_size = id;
-        }
-
-        // Load merges
-        {
-            const file = try std.fs.cwd().openFile(merges_path, .{});
-            defer file.close();
-            const content = try file.readToEndAlloc(self.allocator, max_vocab_file_size);
-            defer self.allocator.free(content);
-            // Pre-allocate merge map based on line count.
-            const merge_line_count = std.mem.count(u8, content, "\n") + 1;
-            try self.merge_map.ensureTotalCapacity(@intCast(merge_line_count));
-            var priority: u32 = 0;
-            var lines = std.mem.splitScalar(u8, content, '\n');
-            while (lines.next()) |raw_line| {
-                var line = raw_line;
-                if (line.len > 0 and line[line.len - 1] == '\r') line = line[0 .. line.len - 1];
-                if (line.len == 0 or line[0] == '#') continue;
-                const sp = std.mem.indexOf(u8, line, " ") orelse continue;
-                const first = line[0..sp];
-                const second = line[sp + 1 ..];
-                // Key: "first\x00second"
-                var key_buf: [merge_key_buf_size]u8 = undefined;
-                const key_len = first.len + 1 + second.len;
-                if (key_len > key_buf.len) continue;
-                @memcpy(key_buf[0..first.len], first);
-                key_buf[first.len] = 0;
-                @memcpy(key_buf[first.len + 1 ..][0..second.len], second);
-                const key = try self.own(key_buf[0..key_len]);
-                if (!self.merge_map.contains(key)) {
-                    try self.merge_map.put(key, priority);
-                }
-                priority += 1;
-            }
-        }
-
-        // Load tokenizer config
-        {
-            const file = std.fs.cwd().openFile(config_path, .{}) catch return;
-            defer file.close();
-            const content = file.readToEndAlloc(self.allocator, max_config_file_size) catch return;
-            defer self.allocator.free(content);
-            var lines = std.mem.splitScalar(u8, content, '\n');
-            while (lines.next()) |raw_line| {
-                const line = std.mem.trim(u8, raw_line, " \t\r");
-                if (line.len == 0 or line[0] == '#') continue;
-                const eq = std.mem.indexOf(u8, line, "=") orelse continue;
-                const key = std.mem.trim(u8, line[0..eq], " \t");
-                const val = std.mem.trim(u8, line[eq + 1 ..], " \t");
-                if (std.mem.eql(u8, key, "eos_token_id")) self.eos_token_id = std.fmt.parseInt(u32, val, 10) catch continue;
-                // Qwen uses pad_token_id as BOS token in tokenizer_config.txt
-                if (std.mem.eql(u8, key, "pad_token_id")) self.bos_token_id = std.fmt.parseInt(u32, val, 10) catch continue;
-            }
-        }
-
-        try self.initByteMappings();
-    }
-
     fn initByteMappings(self: *BpeTokenizer) !void {
         if (self.byte_mappings_init) return;
         self.byte_mappings_init = true;
@@ -287,9 +194,8 @@ pub const BpeTokenizer = struct {
         var chars: std.ArrayList([]const u8) = .empty;
         var i: usize = 0;
         while (i < text.len) {
-            var cl: usize = 1;
-            if ((text[i] & 0x80) == 0) cl = 1 else if ((text[i] & 0xE0) == 0xC0) cl = 2 else if ((text[i] & 0xF0) == 0xE0) cl = 3 else if ((text[i] & 0xF8) == 0xF0) cl = 4;
-            if (i + cl > text.len) cl = 1;
+            const raw_cl: usize = std.unicode.utf8ByteSequenceLength(text[i]) catch 1;
+            const cl: usize = if (i + raw_cl > text.len) 1 else raw_cl;
             try chars.append(self.allocator, text[i .. i + cl]);
             i += cl;
         }
@@ -441,25 +347,29 @@ pub const BpeTokenizer = struct {
     /// Load vocabulary and merge rules from GGUF-embedded tokenizer data.
     pub fn loadFromGGUF(self: *BpeTokenizer, vocab: []const []const u8, merges: []const []const u8, eos_id: u32) !void {
         self.eos_token_id = eos_id;
+        // Reject vocab/merge counts that overflow u32 (token IDs are u32).
+        const vocab_len: u32 = std.math.cast(u32, vocab.len) orelse return error.VocabTooLarge;
+        const merges_len: u32 = std.math.cast(u32, merges.len) orelse return error.VocabTooLarge;
         // Pre-allocate maps to avoid repeated rehashing during bulk insert.
-        try self.token_to_id.ensureTotalCapacity(@intCast(vocab.len));
+        try self.token_to_id.ensureTotalCapacity(vocab_len);
         try self.id_to_token.ensureTotalCapacity(self.allocator, vocab.len);
-        try self.merge_map.ensureTotalCapacity(@intCast(merges.len));
+        try self.merge_map.ensureTotalCapacity(merges_len);
         var special_count: usize = 0;
         for (vocab, 0..) |tok, i| {
+            const id: u32 = std.math.cast(u32, i) orelse break;
             const owned_tok = try self.own(tok);
-            try self.token_to_id.put(owned_tok, @intCast(i));
+            try self.token_to_id.put(owned_tok, id);
             try self.id_to_token.append(self.allocator, owned_tok);
             if (tok.len > 0 and tok[0] == '<' and tok[tok.len - 1] == '>') {
                 special_count += 1;
                 if (std.mem.indexOf(u8, tok, "im_start") != null or std.mem.indexOf(u8, tok, "im_end") != null) {
-                    std.log.warn("[bpe] Found ChatML special token: '{s}' = {}", .{ tok, i });
+                    std.log.info("[bpe] Found ChatML special token: '{s}' = {}", .{ tok, i });
                 }
-                try self.special_tokens.put(owned_tok, @intCast(i));
+                try self.special_tokens.put(owned_tok, id);
             }
         }
-        self.vocab_size = @intCast(vocab.len);
-        std.log.warn("[bpe] Loaded {} special tokens from GGUF vocab. Token 10='{s}', Token 11='{s}'", .{ special_count, if (10 < self.id_to_token.items.len) self.id_to_token.items[10] else "", if (11 < self.id_to_token.items.len) self.id_to_token.items[11] else "" });
+        self.vocab_size = vocab_len;
+        std.log.info("[bpe] Loaded {} special tokens from GGUF vocab. Token 10='{s}', Token 11='{s}'", .{ special_count, if (10 < self.id_to_token.items.len) self.id_to_token.items[10] else "", if (11 < self.id_to_token.items.len) self.id_to_token.items[11] else "" });
         var priority: u32 = 0;
         for (merges) |merge_line| {
             if (merge_line.len == 0 or merge_line[0] == '#') continue;
@@ -485,21 +395,24 @@ pub const BpeTokenizer = struct {
     /// Uses greedy longest-match encoding instead of BPE merges.
     pub fn loadFromGGUFSpm(self: *BpeTokenizer, vocab: []const []const u8, eos_id: u32) !void {
         self.eos_token_id = eos_id;
+        // Reject vocab counts that overflow u32 (token IDs are u32).
+        const vocab_len: u32 = std.math.cast(u32, vocab.len) orelse return error.VocabTooLarge;
         // Pre-allocate maps to avoid repeated rehashing during bulk insert.
-        try self.token_to_id.ensureTotalCapacity(@intCast(vocab.len));
+        try self.token_to_id.ensureTotalCapacity(vocab_len);
         try self.id_to_token.ensureTotalCapacity(self.allocator, vocab.len);
         var special_count: usize = 0;
         for (vocab, 0..) |tok, i| {
+            const id: u32 = std.math.cast(u32, i) orelse break;
             const owned_tok = try self.own(tok);
-            try self.token_to_id.put(owned_tok, @intCast(i));
+            try self.token_to_id.put(owned_tok, id);
             try self.id_to_token.append(self.allocator, owned_tok);
             if (tok.len > 0 and tok[0] == '<' and tok[tok.len - 1] == '>') {
                 special_count += 1;
-                try self.special_tokens.put(owned_tok, @intCast(i));
+                try self.special_tokens.put(owned_tok, id);
             }
         }
-        self.vocab_size = @intCast(vocab.len);
-        std.log.warn("[bpe] Loaded {} special tokens from GGUF vocab (SPM mode)", .{special_count});
+        self.vocab_size = vocab_len;
+        std.log.info("[bpe] Loaded {} special tokens from GGUF vocab (SPM mode)", .{special_count});
         // No merges for SPM — encode uses greedy longest match
         // No byte mappings needed — SPM tokens are raw UTF-8
     }
@@ -655,15 +568,17 @@ pub const BpeTokenizer = struct {
         for (tokens) |id| {
             if (id >= self.id_to_token.items.len) continue;
             const tok = self.id_to_token.items[id];
-            // Replace ▁ (U+2581) with space
+            // Replace ▁ (U+2581) with space, bulk-copy non-prefix segments
             var i: usize = 0;
             while (i < tok.len) {
                 if (i + spm_prefix.len <= tok.len and std.mem.eql(u8, tok[i..][0..spm_prefix.len], spm_prefix)) {
                     try result.append(self.allocator, ' ');
                     i += spm_prefix.len;
                 } else {
-                    try result.append(self.allocator, tok[i]);
-                    i += 1;
+                    const remaining = tok[i..];
+                    const next = std.mem.indexOf(u8, remaining, spm_prefix) orelse remaining.len;
+                    try result.appendSlice(self.allocator, remaining[0..next]);
+                    i += next;
                 }
             }
         }
@@ -784,4 +699,71 @@ test "BpeTokenizer interface via VTable" {
     // Use the VTable interface
     var iface = tok.tokenizer();
     try std.testing.expectEqual(@as(u32, 2), iface.vocabSize());
+}
+
+test "BPE encode with merge rules" {
+    const allocator = std.testing.allocator;
+    var tok = BpeTokenizer.init(allocator);
+    defer tok.deinit();
+
+    // Vocab in unicode-mapped form (ASCII printable chars map 1:1).
+    // "a"=0, "b"=1, "c"=2, "ab"=3
+    const vocab = [_][]const u8{ "a", "b", "c", "ab" };
+    var vocab_slice: [vocab.len][]const u8 = undefined;
+    for (&vocab, 0..) |v, i| vocab_slice[i] = v;
+
+    // Merge rule: "a b" → priority 0 (merge "a"+"b" into "ab")
+    const merges = [_][]const u8{"a b"};
+    var merges_slice: [merges.len][]const u8 = undefined;
+    for (&merges, 0..) |m, i| merges_slice[i] = m;
+
+    try tok.loadFromGGUF(&vocab_slice, &merges_slice, 0);
+
+    // Encode "ab": bytesToUnicode→"ab", splitUtfChars→["a","b"],
+    // applyBpe merges at pos 0→["ab"], lookup→3
+    const ids = try tok.encode("ab");
+    defer allocator.free(ids);
+    try std.testing.expectEqual(@as(usize, 1), ids.len);
+    try std.testing.expectEqual(@as(u32, 3), ids[0]);
+}
+
+test "BPE encode no merge match falls back to individual tokens" {
+    const allocator = std.testing.allocator;
+    var tok = BpeTokenizer.init(allocator);
+    defer tok.deinit();
+
+    const vocab = [_][]const u8{ "a", "b", "c", "ab" };
+    var vocab_slice: [vocab.len][]const u8 = undefined;
+    for (&vocab, 0..) |v, i| vocab_slice[i] = v;
+    const merges = [_][]const u8{"a b"};
+    var merges_slice: [merges.len][]const u8 = undefined;
+    for (&merges, 0..) |m, i| merges_slice[i] = m;
+
+    try tok.loadFromGGUF(&vocab_slice, &merges_slice, 0);
+
+    // Encode "c": no merge rules for "c" → stays as single char → id 2
+    const ids = try tok.encode("c");
+    defer allocator.free(ids);
+    try std.testing.expectEqual(@as(usize, 1), ids.len);
+    try std.testing.expectEqual(@as(u32, 2), ids[0]);
+}
+
+test "BPE decode reverses encode" {
+    const allocator = std.testing.allocator;
+    var tok = BpeTokenizer.init(allocator);
+    defer tok.deinit();
+
+    const vocab = [_][]const u8{ "a", "b", "c", "ab" };
+    var vocab_slice: [vocab.len][]const u8 = undefined;
+    for (&vocab, 0..) |v, i| vocab_slice[i] = v;
+    const merges = [_][]const u8{"a b"};
+    var merges_slice: [merges.len][]const u8 = undefined;
+    for (&merges, 0..) |m, i| merges_slice[i] = m;
+
+    try tok.loadFromGGUF(&vocab_slice, &merges_slice, 0);
+
+    // Decode [3, 2] → "ab" + "c" → unicodeToBytes → "abc"
+    const decoded = try tok.decode(&.{ 3, 2 });
+    defer allocator.free(decoded);
+    try std.testing.expectEqualStrings("abc", decoded);
 }

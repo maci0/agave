@@ -1,16 +1,15 @@
 //! Background worker thread for async KV block prefetch.
 //!
-//! Prefetches next N KV blocks from lower tiers (SSD→RAM) during attention
-//! compute, overlapping I/O with GPU execution to hide SSD read latency.
+//! Prefetches next N KV blocks from lower tiers (SSD→RAM or RAM→VRAM) during
+//! attention compute, overlapping I/O with GPU execution to hide tier-promotion latency.
 //!
-//! Strategy: Queue next 2 blocks (per decision D-07) during SDPA dispatch.
+//! Strategy: Queue next 2 blocks during SDPA dispatch.
 //! Worker thread restores blocks asynchronously via promoteFromSsd().
 //!
 //! Synchronization: Futex-based sleep/wake (same pattern as ThreadPool).
 //! Worker sleeps when idle, wakes on new work via generation bump.
 
 const std = @import("std");
-const Allocator = std.mem.Allocator;
 const TieredKvCache = @import("tiered.zig").TieredKvCache;
 
 /// Prefetch job: single block ID to restore from lower tier.
@@ -25,9 +24,13 @@ const PrefetchJob = struct {
 pub const Prefetcher = struct {
     /// Pointer to tiered cache (must outlive Prefetcher).
     cache: *TieredKvCache,
-    /// Work queue of blocks to prefetch.
-    work_queue: std.ArrayList(PrefetchJob),
-    /// Mutex protecting work_queue.
+    /// Fixed-size ring buffer for prefetch jobs (O(1) push/pop, no allocator).
+    ring: [max_queue_size]PrefetchJob = undefined,
+    /// Ring buffer head (next slot to dequeue from).
+    ring_head: usize = 0,
+    /// Ring buffer count (number of items in queue).
+    ring_len: usize = 0,
+    /// Mutex protecting ring buffer.
     mutex: std.Thread.Mutex,
     /// Generation counter for futex wake.
     generation: std.atomic.Value(u32),
@@ -35,27 +38,25 @@ pub const Prefetcher = struct {
     shutdown: std.atomic.Value(bool),
     /// Worker thread handle.
     thread: ?std.Thread = null,
-    /// Allocator for work queue.
-    allocator: Allocator,
 
-    /// Number of blocks to prefetch ahead (per decision D-07: next 2 blocks).
+    /// Number of blocks to prefetch ahead.
     const prefetch_count: usize = 2;
+    /// Maximum queued prefetch jobs. Prevents unbounded growth if worker
+    /// falls behind (e.g., slow SSD under burst). Oldest jobs are dropped.
+    const max_queue_size: usize = 32;
 
     /// Initialize prefetcher.
     ///
     /// Parameters:
-    ///   - allocator: Memory allocator for work queue.
     ///   - cache: Pointer to TieredKvCache (must outlive Prefetcher).
     ///
     /// Returns: Prefetcher instance (call start() to spawn worker thread).
-    pub fn init(allocator: Allocator, cache: *TieredKvCache) !Prefetcher {
+    pub fn init(cache: *TieredKvCache) Prefetcher {
         return .{
             .cache = cache,
-            .work_queue = .empty,
             .mutex = .{},
             .generation = std.atomic.Value(u32).init(0),
             .shutdown = std.atomic.Value(bool).init(false),
-            .allocator = allocator,
         };
     }
 
@@ -74,13 +75,11 @@ pub const Prefetcher = struct {
 
         // Wait for worker to exit
         if (self.thread) |t| t.join();
-
-        self.work_queue.deinit(self.allocator);
     }
 
     /// Queue prefetch for next N blocks starting from current index.
     ///
-    /// Called by scheduler during attention compute (per D-07: next 2 blocks).
+    /// Called by scheduler during attention compute.
     /// Only queues blocks that are in lower tier (SSD or RAM → VRAM).
     ///
     /// Parameters:
@@ -88,7 +87,7 @@ pub const Prefetcher = struct {
     ///   - current_idx: Current block index being processed by SDPA.
     ///
     /// Returns: void on success.
-    pub fn prefetchNext(self: *Prefetcher, block_ids: []const u32, current_idx: usize) !void {
+    pub fn prefetchNext(self: *Prefetcher, block_ids: []const u32, current_idx: usize) void {
         const start_idx = current_idx + 1;
         const end = @min(start_idx + prefetch_count, block_ids.len);
 
@@ -101,7 +100,15 @@ pub const Prefetcher = struct {
         for (block_ids[start_idx..end]) |block_id| {
             // Only queue if block is in lower tier (SSD or RAM → VRAM)
             if (self.cache.needsPromotion(block_id)) {
-                try self.work_queue.append(self.allocator, .{ .block_id = block_id });
+                // Drop oldest job if ring is full to prevent unbounded growth
+                if (self.ring_len >= max_queue_size) {
+                    std.log.warn("Prefetch queue full — dropping oldest job (block {d})", .{self.ring[self.ring_head].block_id});
+                    self.ring_head = (self.ring_head + 1) % max_queue_size;
+                    self.ring_len -= 1;
+                }
+                const tail = (self.ring_head + self.ring_len) % max_queue_size;
+                self.ring[tail] = .{ .block_id = block_id };
+                self.ring_len += 1;
                 queued += 1;
             }
         }
@@ -125,8 +132,12 @@ pub const Prefetcher = struct {
 
         while (!self.shutdown.load(.acquire)) {
             self.mutex.lock();
-            const has_work = self.work_queue.items.len > 0;
-            const job = if (has_work) self.work_queue.orderedRemove(0) else null;
+            const job = if (self.ring_len > 0) blk: {
+                const j = self.ring[self.ring_head];
+                self.ring_head = (self.ring_head + 1) % max_queue_size;
+                self.ring_len -= 1;
+                break :blk j;
+            } else null;
             self.mutex.unlock();
 
             if (job) |j| {

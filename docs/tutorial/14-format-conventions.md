@@ -21,30 +21,34 @@ When llama.cpp converts a HuggingFace model to GGUF, it **transforms** the data 
 ## Format Detection
 
 ```zig
-// src/format/format.zig
-pub const Format = union(enum) {
-    gguf: GGUFFile,
-    safetensors: SafeTensorsDir,
+// src/format/format.zig — vtable-based polymorphism
+pub const Format = struct {
+    ptr: *anyopaque,
+    vtable: *const VTable,
+    /// True for SafeTensors (HF conventions), false for GGUF (llama.cpp conventions).
+    is_safetensors: bool = false,
 
-    pub fn init(allocator: Allocator, path: []const u8) !Format {
-        // Detect format by file structure
-        if (std.fs.path.extension(path).len > 0) {
-            // Single file: .gguf
-            const file = try std.fs.cwd().openFile(path, .{});
-            defer file.close();
-            // Check magic bytes
-            var magic: [4]u8 = undefined;
-            _ = try file.readAll(&magic);
-            if (std.mem.eql(u8, &magic, "GGUF")) {
-                return Format{ .gguf = try GGUFFile.init(allocator, path) };
-            }
-        } else {
-            // Directory: SafeTensors
-            return Format{ .safetensors = try SafeTensorsDir.init(allocator, path) };
-        }
-        return error.UnknownFormat;
+    pub const VTable = struct {
+        get_tensor: *const fn (self: *anyopaque, name: []const u8) ?TensorInfo,
+        get_meta_str: *const fn (self: *anyopaque, key: []const u8) ?[]const u8,
+        get_meta_u32: *const fn (self: *anyopaque, key: []const u8) ?u32,
+        // ...
+    };
+
+    pub fn getTensor(self: Format, name: []const u8) ?TensorInfo {
+        return self.vtable.get_tensor(self.ptr, name);
     }
 };
+
+// Usage in main.zig — format detection by path type:
+// Directory → SafeTensors, single file → GGUF
+if (is_dir) {
+    st_dir = try SafeTensorsDir.open(allocator, model_path);
+    fmt = st_dir.?.format(); // returns Format interface
+} else {
+    gguf_file = try GGUFFile.open(allocator, model_path);
+    fmt = gguf_file.?.format(); // returns Format interface
+}
 ```
 
 **Flag:** `is_safetensors` field added to Format interface to decouple format detection from convention selection.
@@ -294,7 +298,7 @@ pub fn normAsF32(self: *Model, bf16_ptr: [*]const u8, n: usize) ![]f32 {
 ### SSM Dimension Mappings
 
 ```zig
-// src/format/gguf.zig
+// src/format/safetensors.zig
 const gguf_hf_meta_map = std.StaticStringMap([]const u8).initComptime(.{
     .{ "full_attn_interval", "full_attention_interval" },
     .{ "ssm.conv_kernel", "linear_conv_kernel_dim" },
@@ -381,36 +385,24 @@ pub fn ggufToHfName(gguf_name: []const u8) []const u8 {
 
 ## Dimension Order Normalization
 
-**GGUF stores dims reversed** (inner dimension first):
-```zig
-// GGUF: dims = [n_embd, vocab_size] (inner, outer)
-const n_rows = dims[1];  // outer
-const n_cols = dims[0];  // inner
-```
+**GGUF stores dims reversed** (inner dimension first), while **SafeTensors stores dims in PyTorch order** (outer dimension first).
 
-**SafeTensors stores dims in PyTorch order** (outer dimension first):
-```zig
-// SafeTensors: dims = [vocab_size, n_embd] (outer, inner)
-const n_rows = dims[0];  // outer
-const n_cols = dims[1];  // inner
-```
-
-**Recommendation (from TUTORIAL_GAPS.md):** Normalize dims during GGUF parsing so `dims[0]` always = output rows. Then remove all `if (is_safetensors) dims[0] else dims[n-1]` checks throughout the codebase.
-
-**Current workaround:**
+Agave normalizes GGUF dimensions during parsing so `dims[0]` always means output rows, regardless of format:
 
 ```zig
-const out_dim = if (self.fmt.is_safetensors) tensor.dims[0] else tensor.dims[1];
-```
-
-**Better (future):**
-
-```zig
-// In gguf.zig init():
-for (tensors) |*t| {
-    std.mem.reverse(usize, &t.dims);  // Reverse to match SafeTensors order
+// src/format/gguf.zig — dims reversed at parse time
+var raw_dims: [4]u64 = .{ 0, 0, 0, 0 };
+for (0..n_dims) |d| {
+    raw_dims[d] = try self.readU64(off);
+    off += 8;
 }
+var dims: [4]u64 = .{ 0, 0, 0, 0 };
+for (0..n_dims) |d| dims[d] = raw_dims[n_dims - 1 - d];
+```
 
+This means all model code can use `dims[0]` uniformly:
+
+```zig
 // In model code (all formats):
 const out_dim = tensor.dims[0];  // Always outer dimension
 ```
@@ -492,6 +484,62 @@ const d_conv = fmt.getMetaU32("ssm.conv_kernel") orelse return error.MissingMeta
 
 **Fix:** Use bidirectional mapping (gguf_hf_meta_map).
 
+## mmproj GGUF — Vision Encoder Weights
+
+Multimodal models store vision encoder weights in a **separate GGUF file** (the "mmproj" file), distinct from the main language model GGUF. This keeps the text model self-contained — vision is an optional add-on.
+
+### Tensor Naming
+
+Vision encoder tensors use a different prefix scheme than the main model:
+
+```
+v.blk.0.attn_q.weight      — Vision transformer block 0, Q projection
+v.blk.0.attn_k.weight      — K projection
+v.blk.0.ffn_up.weight      — FFN up projection
+v.patch_embd.weight         — Patch embedding convolution
+v.position_embd.weight      — Positional embedding
+mm.input_projection.weight  — Final projection into LLM embedding space
+mm.soft_emb_norm.weight     — Soft embedding norm (Gemma 3)
+mm.0.weight, mm.2.weight    — MLP projector layers (Qwen VL)
+```
+
+The `v.` prefix denotes vision encoder layers, while `mm.` denotes the multimodal projection head that maps vision features into the language model's embedding dimension.
+
+### Auto-Detection
+
+Agave auto-detects mmproj files by scanning the model directory for files matching `mmproj*.gguf`:
+
+```zig
+// src/main.zig — mmproj auto-detection
+if (mmproj_path == null and (cli.image != null or cli.serve)) {
+    // Scan model directory for mmproj*.gguf
+    while (dir.next()) |entry| {
+        if (std.mem.startsWith(u8, entry.name, "mmproj") and
+            std.mem.endsWith(u8, entry.name, ".gguf"))
+        {
+            mmproj_path = entry.name;
+        }
+    }
+}
+```
+
+You can also specify the path explicitly with `--mmproj path/to/mmproj.gguf`.
+
+### Key Metadata
+
+The mmproj GGUF carries its own architecture metadata under the `clip.vision` namespace:
+
+| Metadata Key | Description | Example |
+|---|---|---|
+| `clip.vision.image_size` | Input image resolution (pixels) | 768 (Gemma 4), 896 (Gemma 3) |
+| `clip.vision.patch_size` | Patch extraction stride (pixels) | 16 |
+| `clip.vision.projection_dim` | Output embedding dimension (must match LLM) | 2816 |
+| `clip.vision.embedding_length` | Internal ViT hidden dimension | 1152 |
+| `clip.vision.block_count` | Number of ViT transformer blocks | 27 |
+| `clip.vision.attention.head_count` | Number of attention heads | 16 |
+
+The `projection_dim` is the critical interface parameter — it must match the language model's `n_embd` so that visual embeddings can replace token embeddings in the forward pass. The vision encoder auto-detects its architecture variant (Gemma 4 SigLIP-2, Gemma 3 SigLIP, Qwen VL) from the available tensors in the mmproj file.
+
 ## Summary: Format Checklist
 
 When adding support for a new model architecture:
@@ -514,4 +562,4 @@ When adding support for a new model architecture:
 
 **Related:** [Chapter 4: Quantization](04-quantization.md#mlx-affine-quantization) (MLX format details)
 
-**Back:** [Chapter 13: Batched Dispatch and Fusion ←](13-batched-dispatch-and-fusion.md) | **Product docs:** [Models](../MODELS.md)
+**Next:** [Chapter 15: Chat Templates →](15-chat-templates.md) | **Back:** [Chapter 13: Batched Dispatch and Fusion ←](13-batched-dispatch-and-fusion.md) | **Product docs:** [Models](../MODELS.md)

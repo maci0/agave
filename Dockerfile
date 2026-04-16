@@ -18,12 +18,23 @@ ARG ENABLE_GPT_OSS=true
 ARG ENABLE_NEMOTRON_H=true
 ARG ENABLE_NEMOTRON_NANO=true
 ARG ENABLE_GLM4=true
+ARG ENABLE_GEMMA4=true
 
 RUN apt-get update && apt-get install -y --no-install-recommends curl xz-utils ca-certificates && rm -rf /var/lib/apt/lists/*
 
+# Zig toolchain checksums (SHA256) — update when bumping ZIG_VERSION.
+ARG ZIG_SHA256_X86_64=02aa270f183da276e5b5920b1dac44a63f1a49e55050ebde3aecc9eb82f93239
+ARG ZIG_SHA256_AARCH64=958ed7d1e00d0ea76590d27666efbf7a932281b3d7ba0c6b01b0ff26498f667f
+
 RUN ARCH=$(uname -m) && \
-    curl -fsSL "https://ziglang.org/download/${ZIG_VERSION}/zig-linux-${ARCH}-${ZIG_VERSION}.tar.xz" \
-    | tar -xJ -C /usr/local --strip-components=1
+    ZIG_URL="https://ziglang.org/download/${ZIG_VERSION}/zig-linux-${ARCH}-${ZIG_VERSION}.tar.xz" && \
+    if [ "$ARCH" = "x86_64" ]; then EXPECTED_SHA256="$ZIG_SHA256_X86_64"; \
+    elif [ "$ARCH" = "aarch64" ]; then EXPECTED_SHA256="$ZIG_SHA256_AARCH64"; \
+    else echo "Unsupported architecture: $ARCH" && exit 1; fi && \
+    curl -fsSL "$ZIG_URL" -o /tmp/zig.tar.xz && \
+    echo "${EXPECTED_SHA256}  /tmp/zig.tar.xz" | sha256sum -c - && \
+    tar -xJf /tmp/zig.tar.xz -C /usr/local --strip-components=1 && \
+    rm /tmp/zig.tar.xz
 
 WORKDIR /src
 COPY . .
@@ -55,6 +66,7 @@ RUN --mount=type=cache,target=/src/.zig-cache \
         -Denable-nemotron-h="$ENABLE_NEMOTRON_H" \
         -Denable-nemotron-nano="$ENABLE_NEMOTRON_NANO" \
         -Denable-glm4="$ENABLE_GLM4" \
+        -Denable-gemma4="$ENABLE_GEMMA4" \
         --prefix /out
 
 # Runtime image — Debian for glibc dlopen compatibility.
@@ -65,16 +77,16 @@ LABEL org.opencontainers.image.title="agave" \
       org.opencontainers.image.description="High-performance LLM inference engine" \
       org.opencontainers.image.source="https://github.com/anthropics/agave"
 
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && rm -rf /var/lib/apt/lists/* && \
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl && rm -rf /var/lib/apt/lists/* && \
     groupadd -r agave && useradd -r -g agave -s /sbin/nologin agave
 
-COPY --from=build /out/bin/ /usr/local/bin/
+COPY --link --from=build /out/bin/agave /usr/local/bin/agave
 
 USER agave
 
 EXPOSE 49453
 
-HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
-    CMD agave --version || exit 1
+HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=3 \
+    CMD curl -sf http://localhost:49453/health || exit 1
 
-ENTRYPOINT ["agave"]
+ENTRYPOINT ["agave", "--host", "0.0.0.0"]

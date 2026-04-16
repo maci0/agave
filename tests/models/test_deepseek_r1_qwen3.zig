@@ -1,4 +1,4 @@
-const golden = @import("golden_test.zig");
+const golden = @import("golden_harness.zig");
 
 const model_path = "models/lmstudio-community/DeepSeek-R1-0528-Qwen3-8B-GGUF/DeepSeek-R1-0528-Qwen3-8B-Q8_0.gguf";
 const test_prompt = "Write a Python function to calculate factorial.";

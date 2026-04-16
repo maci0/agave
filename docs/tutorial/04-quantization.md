@@ -169,7 +169,7 @@ Unlike integer quantization (Q4_0, Q8_0), floating-point quantization keeps the 
 **Bit layout**: `[sign:1][exponent:4][mantissa:3]`
 
 ```
-Example: 5.75 in FP8 E4M3
+Example: 7.5 in FP8 E4M3
 Binary:  0 1001 110
          │  │    └─ mantissa (0.875)
          │  └────── exponent (bias-adjusted = 2)
@@ -206,7 +206,7 @@ Value = (-1)^0 × 1.875 × 2^2 = 7.5
 **Practical usage in Agave**:
 
 - **E4M3**: Weight quantization, gradient accumulation
-- **E5M2**: KV cache quantization (default: q8_0-K/turbo4-V, FP8 E5M2 option available via `--kv-type fp8_e5m2`)
+- **E4M3**: KV cache quantization (default: q8_0-K/turbo4-V, FP8 option available via `--kv-type fp8_e4m3`)
 - **int8**: Alternative to FP8 for KV cache (simpler, slightly less accurate)
 
 ### Why FP8 instead of int8?
@@ -256,7 +256,7 @@ The WHT is a deterministic rotation (like a Fourier transform but with only addi
 
 ### Asymmetric K/V
 
-A key insight: **V compression is nearly free** — all quality degradation comes from K compression. Agave supports independent K/V cache types:
+A key insight, also explored in [KIVI (Liu et al., 2024)](https://arxiv.org/abs/2402.02750): **V compression is nearly free** — all quality degradation comes from K compression. Agave supports independent K/V cache types:
 
 ```bash
 # Best quality: high-precision K + compressed V
@@ -289,6 +289,58 @@ turbo2: 2B norm + 8B packed 2-bit = 10B per 32 elements
 **Not recommended for:**
 - Short prompts where KV cache is small relative to weights
 - Latency-critical applications (WHT adds ~7-10% decode overhead)
+
+**Stacking with KV eviction:** TurboQuant compresses the *bits per KV entry*, while KV cache eviction (`--kv-eviction`) reduces the *number of entries*. Combined, they can achieve ~40x KV memory reduction vs f16 baseline. See [Chapter 5: Memory and Caching](05-memory-and-caching.md#kv-cache-eviction) for eviction details.
+
+## TurboQuant+ — The `turbo` Preset
+
+The `--kv-type turbo` preset is a curated configuration that combines three TurboQuant optimizations:
+
+```bash
+./agave model.gguf --kv-type turbo "prompt"
+# Equivalent to: --kv-type-k q8_0 --kv-type-v turbo4
+# Plus: boundary V protection (first/last 2 layers at f16)
+```
+
+### Why K Precision Matters More Than V
+
+Keys (K) control **attention routing** — they determine which positions receive weight via the softmax. Small errors in K shift the softmax distribution, causing the model to attend to the wrong tokens. Values (V) are just the payload — they're weighted-summed after softmax, so small errors average out.
+
+Empirically, compressing K below q8_0 causes measurable perplexity degradation, while V can be compressed to turbo4 (4.5 bits) with no measurable quality loss. The `turbo` preset exploits this asymmetry: high-precision K (q8_0, 8.5 bits) + aggressive V compression (turbo4, 4.5 bits).
+
+### Boundary V Protection
+
+The first and last 2 transformer layers keep V at f16 even when the middle layers use turbo4. These boundary layers are disproportionately important — early layers establish token representations, and final layers directly influence the output distribution. The `turbo` preset enables this automatically:
+
+```zig
+// src/models/gemma4.zig — per-layer V type selection
+inline fn layerVType(self: *const Gemma4Model, li: u32) KvQuantType {
+    if (self.kv_boundary_v == 0) return self.kv_type_v;
+    const b = self.kv_boundary_v;
+    if (li < b or li >= self.n_layers - b) return .f16;
+    return self.kv_type_v;
+}
+```
+
+For a 42-layer model with `--kv-type turbo`: layers 0-1 and 40-41 use f16 V, layers 2-39 use turbo4 V. All layers use q8_0 K.
+
+### Sparse V Dequantization
+
+During attention, most softmax weights are near zero — only a handful of positions actually contribute to the output. Sparse V skips the V dequantization and multiply-accumulate for any position where the softmax weight is below 1e-6 (contributing less than 0.0001% to the output):
+
+```zig
+// src/ops/attention.zig
+const sparse_v_threshold: f32 = 1e-6;
+
+for (0..win_len) |wi| {
+    const score = scores[score_offset + wi];
+    if (score < sparse_v_threshold) continue; // Skip negligible positions
+    const t = win_start + wi;
+    kv_quant.kvMulAccum(attn_out + q_base, score, kv_values[v_off..].ptr, hd, kv_type_v);
+}
+```
+
+At 32K context length, the majority of positions have negligible softmax weights. Skipping their V reads yields **+22.8% decode speed** with zero measured perplexity impact. This is especially effective with quantized V formats (turbo4, turbo3) because it avoids both the dequantization arithmetic and the cache-unfriendly memory reads.
 
 ## Key Principle
 
@@ -325,7 +377,7 @@ For a 2560×2560 matrix, that's 6.5M **multiply-accumulates** (multiply two numb
 | GPU with limited VRAM | Q4_K, FP8 E4M3 | Good quality/size tradeoff |
 | KV cache (default) | q8_0-K + turbo4-V | Zero quality loss, 2x compression |
 | KV cache (max compress) | turbo3, turbo4 | 3.6-4.6x compression, ~1% PPL |
-| KV cache (max quality) | f16, FP8 E5M2 | Fast decode, no transform overhead |
+| KV cache (max quality) | f16, FP8 E4M3 | Fast decode, no transform overhead |
 | Reference accuracy | f32 | Full precision |
 
 **Quality hierarchy:** `f32 > bf16 > FP8 > Q6_K > Q5_K > Q4_K > Q4_0 > IQ4_NL > Q3_K > Q2_K`

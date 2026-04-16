@@ -1,4 +1,4 @@
-const golden = @import("golden_test.zig");
+const golden = @import("golden_harness.zig");
 
 const model_path = "models/lmstudio-community/NVIDIA-Nemotron-3-Nano-4B-GGUF/NVIDIA-Nemotron-3-Nano-4B-Q8_0.gguf";
 const test_prompt = "List three benefits of exercise.";

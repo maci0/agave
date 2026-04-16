@@ -16,11 +16,16 @@ const gguf_version_3: u32 = 3;
 /// Minimum valid GGUF file size: 4 magic + 4 version + 8 tensor_count + 8 metadata_kv_count.
 const gguf_min_header_size: usize = 24;
 /// Maximum allowed metadata key-value count (prevents DoS via crafted files).
-const max_metadata_kv_count: usize = 1_000_000;
+/// Real GGUF files have ~50-200 entries; 100K is generous headroom.
+const max_metadata_kv_count: usize = 100_000;
 /// Maximum allowed tensor count.
 const max_tensor_count: usize = 100_000;
 /// Maximum allowed metadata array length.
-const max_array_len: usize = 10_000_000;
+/// Largest real use is tokenizer vocab (~256K tokens); 500K covers that with margin.
+const max_array_len: usize = 1_000_000;
+/// Maximum allowed alignment (prevents arithmetic issues from crafted metadata).
+/// Standard GGUF alignment is 32; values beyond 1 MiB are nonsensical.
+const max_alignment: u32 = 1 << 20;
 /// Buffer size for tensor/metadata name formatting (must fit longest GGUF key).
 const name_buf_size: usize = 256;
 
@@ -125,7 +130,7 @@ pub const GGMLType = enum(u32) {
             .iq1_s => 50, // 256 elements
             .iq1_m => 56, // 256 elements
             .iq4_nl => 18, // f16 scale + 16 bytes (32 nibbles, same as q4_0)
-            .iq4_xs => 138, // f16 scale + 128 qs + 8 scales_h (256 elements)
+            .iq4_xs => 136, // f16 d (2) + u16 scales_h (2) + scales_l[4] (4) + qs[128] (128)
             .tq1_0 => 64, // f16 scale (2) + qs[40] + qh[13] + padding[9]
             .mxfp4 => 17, // 1 byte E8M0 scale + 16 bytes (32 FP4 nibbles)
             else => 1,
@@ -143,8 +148,8 @@ pub const GGMLType = enum(u32) {
     }
 };
 
-/// GGUF metadata value type tags.
-pub const MetaValueType = enum(u32) {
+/// GGUF metadata value type tags (internal to parsing).
+const MetaValueType = enum(u32) {
     uint8 = 0,
     int8 = 1,
     uint16 = 2,
@@ -228,7 +233,7 @@ pub const TensorInfo = struct {
     /// Returns the total number of elements (product of all dimensions).
     pub fn numElements(self: *const TensorInfo) usize {
         var n: usize = 1;
-        for (0..self.n_dims) |i| n = std.math.mul(usize, n, @intCast(self.dims[i])) catch return 0;
+        for (0..self.n_dims) |i| n = std.math.mul(usize, n, std.math.cast(usize, self.dims[i]) orelse return 0) catch return 0;
         return n;
     }
 
@@ -400,22 +405,22 @@ pub const GGUFFile = struct {
     }
 
     fn readU32(self: *const GGUFFile, off: usize) !u32 {
-        if (off + 4 > self.file_size) return error.OffsetOutOfBounds;
+        if (self.file_size < 4 or off > self.file_size - 4) return error.OffsetOutOfBounds;
         return std.mem.readInt(u32, self.mapped_data[off..][0..4], .little);
     }
     fn readU64(self: *const GGUFFile, off: usize) !u64 {
-        if (off + 8 > self.file_size) return error.OffsetOutOfBounds;
+        if (self.file_size < 8 or off > self.file_size - 8) return error.OffsetOutOfBounds;
         return std.mem.readInt(u64, self.mapped_data[off..][0..8], .little);
     }
     fn readI32(self: *const GGUFFile, off: usize) !i32 {
-        if (off + 4 > self.file_size) return error.OffsetOutOfBounds;
+        if (self.file_size < 4 or off > self.file_size - 4) return error.OffsetOutOfBounds;
         return std.mem.readInt(i32, self.mapped_data[off..][0..4], .little);
     }
     fn readF32(self: *const GGUFFile, off: usize) !f32 {
         return @bitCast(try self.readU32(off));
     }
     fn readString(self: *const GGUFFile, off: usize) !struct { str: []const u8, len: usize } {
-        const slen: usize = @intCast(try self.readU64(off));
+        const slen: usize = std.math.cast(usize, try self.readU64(off)) orelse return error.OffsetOutOfBounds;
         // Use subtraction to avoid overflow: readU64(off) succeeded so off+8 <= file_size.
         if (slen > self.file_size - off - 8) return error.OffsetOutOfBounds;
         return .{ .str = self.mapped_data[off + 8 ..][0..slen], .len = 8 + slen };
@@ -457,8 +462,9 @@ pub const GGUFFile = struct {
             .float64 => return .{ .val = .{ .float64 = @bitCast(try self.readU64(pos)) }, .len = 12 },
             .array => {
                 const arr_type: MetaValueType = @enumFromInt(try self.readU32(pos));
-                const arr_len: usize = @intCast(try self.readU64(pos + 4));
-                if (arr_len > max_array_len) return error.ArrayTooLarge;
+                const arr_len_u64 = try self.readU64(pos + 4);
+                if (arr_len_u64 > max_array_len) return error.ArrayTooLarge;
+                const arr_len: usize = std.math.cast(usize, arr_len_u64) orelse return error.ArrayTooLarge;
                 pos += 12;
                 if (arr_type == .string) {
                     const strings = try self.allocator.alloc([]const u8, arr_len);
@@ -502,9 +508,9 @@ pub const GGUFFile = struct {
                         .uint16, .int16 => 2,
                         .uint32, .int32, .float32 => 4,
                         .uint64, .int64, .float64 => 8,
-                        else => 4,
+                        else => return error.UnsupportedGGUFVersion,
                     };
-                    if (pos + elem_size > self.file_size) return error.OffsetOutOfBounds;
+                    if (self.file_size < elem_size or pos > self.file_size - elem_size) return error.OffsetOutOfBounds;
                     pos += elem_size;
                 }
                 return .{ .val = .{ .uint32 = 0 }, .len = pos - off };
@@ -544,7 +550,7 @@ pub const GGUFFile = struct {
         // Check alignment (must be non-zero to avoid division by zero)
         if (self.metadata.get("general.alignment")) |v| {
             if (v.asU32()) |a| {
-                if (a > 0) self.alignment = a;
+                if (a > 0 and a <= max_alignment) self.alignment = a;
             }
         }
 
@@ -584,9 +590,14 @@ pub const GGUFFile = struct {
             });
         }
 
-        // Data section starts after header, aligned
+        // Data section starts after header, aligned.
+        // Use checked arithmetic to prevent overflow from crafted alignment values.
         const rem = off % self.alignment;
-        if (rem != 0) off += self.alignment - rem;
+        if (rem != 0) {
+            off = std.math.add(usize, off, self.alignment - rem) catch
+                return error.OffsetOutOfBounds;
+        }
+        if (off > self.file_size) return error.OffsetOutOfBounds;
         self.data_offset = off;
 
         // Validate all tensor data fits within the mapped file.
@@ -594,9 +605,13 @@ pub const GGUFFile = struct {
         // causing out-of-bounds reads when tensorData() is called later.
         var tensor_it = self.tensors.valueIterator();
         while (tensor_it.next()) |info| {
-            const abs_offset = std.math.add(usize, self.data_offset, @as(usize, @intCast(info.offset))) catch
+            const info_offset = std.math.cast(usize, info.offset) orelse return error.OffsetOutOfBounds;
+            const abs_offset = std.math.add(usize, self.data_offset, info_offset) catch
                 return error.OffsetOutOfBounds;
-            const tensor_end = std.math.add(usize, abs_offset, info.dataBytes()) catch
+            const data_bytes = info.dataBytes();
+            // Detect overflow saturation from tensorBytes() — crafted dimensions.
+            if (data_bytes == std.math.maxInt(usize)) return error.OffsetOutOfBounds;
+            const tensor_end = std.math.add(usize, abs_offset, data_bytes) catch
                 return error.OffsetOutOfBounds;
             if (tensor_end > self.file_size) return error.OffsetOutOfBounds;
         }
@@ -604,11 +619,6 @@ pub const GGUFFile = struct {
 
     /// Returns raw tensor data bytes for the given tensor info.
     pub fn tensorData(self: *const GGUFFile, info: *const TensorInfo) [*]const u8 {
-        return self.mapped_data.ptr + self.data_offset + @as(usize, @intCast(info.offset));
-    }
-
-    /// Returns a mutable pointer to tensor data bytes for the given tensor info.
-    pub fn tensorDataMut(self: *GGUFFile, info: *const TensorInfo) [*]u8 {
         return self.mapped_data.ptr + self.data_offset + @as(usize, @intCast(info.offset));
     }
 
@@ -627,12 +637,6 @@ pub const GGUFFile = struct {
         if (self.metadata.get(key)) |v| return v.asF32();
         return null;
     }
-    /// Looks up a boolean metadata value by key.
-    pub fn getMetaBool(self: *const GGUFFile, key: []const u8) ?bool {
-        if (self.metadata.get(key)) |v| return v.asBool();
-        return null;
-    }
-
     /// Looks up a uint32 array metadata value by key.
     pub fn getMetaU32Array(self: *const GGUFFile, key: []const u8) ?[]const u32 {
         if (self.metadata.get(key)) |v| {
@@ -642,13 +646,6 @@ pub const GGUFFile = struct {
             };
         }
         return null;
-    }
-
-    /// Looks up a uint32 metadata value using a concatenated prefix+suffix key.
-    pub fn getMetaPrefixed(self: *const GGUFFile, prefix: []const u8, suffix: []const u8) ?u32 {
-        var buf: [name_buf_size]u8 = undefined;
-        const key = std.fmt.bufPrint(&buf, "{s}{s}", .{ prefix, suffix }) catch return null;
-        return self.getMetaU32(key);
     }
 
     /// Returns the tokenizer vocabulary as a slice of token strings.
@@ -902,17 +899,26 @@ test "MetaValue conversions" {
 }
 
 test "dequantQ4_0 correctness" {
-    // Build a Q4_0 block: f16 scale = 1.0, all nibbles = 8 (centered at 0)
+    // Build a Q4_0 block: f16 scale = 0.5, varied nibble patterns
     var block: [18]u8 = undefined;
-    // f16 1.0 = 0x3C00
-    std.mem.writeInt(u16, block[0..2], 0x3C00, .little);
-    // All bytes = 0x88 → low nibble = 8, high nibble = 8 → both (8 - 8) = 0
-    @memset(block[2..], 0x88);
+    // f16 0.5 = 0x3800
+    std.mem.writeInt(u16, block[0..2], 0x3800, .little);
+    // byte[0] = 0xA3 → low=3 (3-8=-5)*0.5=-2.5, high=0xA=10 (10-8=2)*0.5=1.0
+    block[2] = 0xA3;
+    // byte[1] = 0x0F → low=0xF=15 (15-8=7)*0.5=3.5, high=0 (0-8=-8)*0.5=-4.0
+    block[3] = 0x0F;
+    // Fill rest with zero-offset nibbles for simpler verification
+    @memset(block[4..], 0x88);
 
     var output: [32]f32 = undefined;
     GGUFFile.dequantQ4_0(&block, &output);
-    // All values should be 0.0 (scale * (8 - 8) = 0)
-    for (output) |v| {
+
+    try std.testing.expectApproxEqAbs(@as(f32, -2.5), output[0], 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 1.0), output[1], 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 3.5), output[2], 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, -4.0), output[3], 0.001);
+    // Remaining elements use zero-offset nibbles (8-8)*0.5 = 0
+    for (output[4..]) |v| {
         try std.testing.expectApproxEqAbs(@as(f32, 0.0), v, 0.001);
     }
 }
@@ -927,10 +933,31 @@ test "dequantQ4_0 nonzero" {
 
     var output: [32]f32 = undefined;
     GGUFFile.dequantQ4_0(&block, &output);
+    // Verify ALL 32 outputs, not just the first two.
     // Even indices (from low nibble): (15 - 8) * 2.0 = 14.0
-    try std.testing.expectApproxEqAbs(@as(f32, 14.0), output[0], 0.001);
     // Odd indices (from high nibble): (0 - 8) * 2.0 = -16.0
-    try std.testing.expectApproxEqAbs(@as(f32, -16.0), output[1], 0.001);
+    for (0..16) |i| {
+        try std.testing.expectApproxEqAbs(@as(f32, 14.0), output[i * 2], 0.001);
+        try std.testing.expectApproxEqAbs(@as(f32, -16.0), output[i * 2 + 1], 0.001);
+    }
+}
+
+test "dequantQ4_0 mixed nibbles" {
+    var block: [18]u8 = undefined;
+    // f16 1.0 = 0x3C00
+    std.mem.writeInt(u16, block[0..2], 0x3C00, .little);
+    // byte[0] = 0x19 → low=9 (9-8=1)*1.0=1.0, high=1 (1-8=-7)*1.0=-7.0
+    block[2] = 0x19;
+    // byte[1] = 0xF0 → low=0 (0-8=-8)*1.0=-8.0, high=15 (15-8=7)*1.0=7.0
+    block[3] = 0xF0;
+    @memset(block[4..], 0x88); // rest = zero
+
+    var output: [32]f32 = undefined;
+    GGUFFile.dequantQ4_0(&block, &output);
+    try std.testing.expectApproxEqAbs(@as(f32, 1.0), output[0], 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, -7.0), output[1], 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, -8.0), output[2], 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 7.0), output[3], 0.001);
 }
 
 test "dequantQ8_0 correctness" {
@@ -940,7 +967,10 @@ test "dequantQ8_0 correctness" {
     // Set quant value 0 = 10 (as i8), value 1 = -5 (as i8)
     block[2] = @bitCast(@as(i8, 10));
     block[3] = @bitCast(@as(i8, -5));
-    @memset(block[4..], 0);
+    // Set boundary values: max i8 = 127, min i8 = -128
+    block[4] = @bitCast(@as(i8, 127));
+    block[5] = @bitCast(@as(i8, -128));
+    @memset(block[6..], 0);
 
     var output: [32]f32 = undefined;
     GGUFFile.dequantQ8_0(&block, &output);
@@ -948,4 +978,10 @@ test "dequantQ8_0 correctness" {
     try std.testing.expectApproxEqAbs(@as(f32, 5.0), output[0], 0.001);
     // -5 * 0.5 = -2.5
     try std.testing.expectApproxEqAbs(@as(f32, -2.5), output[1], 0.001);
+    // 127 * 0.5 = 63.5
+    try std.testing.expectApproxEqAbs(@as(f32, 63.5), output[2], 0.001);
+    // -128 * 0.5 = -64.0
+    try std.testing.expectApproxEqAbs(@as(f32, -64.0), output[3], 0.001);
+    // Remaining zeros: 0 * 0.5 = 0.0
+    for (output[4..]) |v| try std.testing.expectApproxEqAbs(@as(f32, 0.0), v, 0.001);
 }

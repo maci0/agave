@@ -118,7 +118,7 @@ Prefill layer pipeline (Gemma 3):
 
 ## Backend-Specific Notes
 
-**Metal** (`metal.zig`): MSL compute shaders with **threadgroup**-level (a group of threads that execute together and can share fast on-chip memory) `simd_sum` reduction. Buffer caching eliminates ~800 ObjC alloc/release per token. FlashAttention-2 with block_size=16 (fits 32KB threadgroup memory). Prefill: native GEMM (f32/Q8_0/Q4_0), batched RoPE, dual-source FA2, zero per-layer flush.
+**Metal** (`metal.zig`): MSL compute shaders with **threadgroup**-level (a group of threads that execute together and can share fast on-chip memory) `simd_sum` reduction. Buffer caching eliminates ~800 ObjC alloc/release per token. [FlashAttention-2 (Dao, 2023)](https://arxiv.org/abs/2307.08691) with block_size=16 (fits 32KB threadgroup memory). Prefill: native GEMM (f32/Q8_0/Q4_0), batched RoPE, dual-source FA2, zero per-layer flush.
 
 **CUDA** (`cuda.zig`): Zig kernels compiled to PTX via `nvptx64-cuda` target — no CUDA C++ dependency. Driver API loaded dynamically via `dlopen`. Deferred execution with activation caching for zero-sync SDPA. Prefill: native GEMM (Q8_0), batched RMSNorm/RoPE.
 
@@ -130,4 +130,4 @@ Prefill layer pipeline (Gemma 3):
 
 **In the code:** `src/backend/backend.zig` (dispatcher), `src/backend/{cpu,metal,cuda,vulkan,rocm}.zig` (implementations), `src/backend/kernels/` (GPU kernel sources)
 
-**Start over:** [Chapter 1: Tokens and Text →](01-tokens-and-text.md) | **Product docs:** [Architecture](../ARCHITECTURE.md) · [Models](../MODELS.md)
+**Next:** [Chapter 9: CPU SIMD Optimization →](09-cpu-simd-optimization.md) | **Start over:** [Chapter 1: Tokens and Text →](01-tokens-and-text.md) | **Product docs:** [Architecture](../ARCHITECTURE.md) · [Models](../MODELS.md)

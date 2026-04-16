@@ -3,6 +3,8 @@
 //! end-of-generation tokens for each supported model family.
 
 const std = @import("std");
+const arch_mod = @import("arch.zig");
+const ImageTokens = arch_mod.ImageTokens;
 
 /// Role in a conversation message.
 pub const Role = enum { user, assistant };
@@ -47,7 +49,24 @@ pub const ChatTemplate = struct {
     /// If `default_system` is set and no `system_role_override` exists,
     /// user-provided `system_msg` is ignored to avoid duplicate system prompts.
     pub fn formatConversation(self: ChatTemplate, allocator: std.mem.Allocator, system_msg: ?[]const u8, messages: []const Message) ![]u8 {
+        // Pre-calculate total size to avoid ArrayList re-allocations.
+        // Use checked arithmetic to prevent usize overflow from large inputs.
+        var total_len: usize = self.assistant_prefix.len + self.generation_prefix.len;
+        if (self.default_system) |ds| total_len = std.math.add(usize, total_len, self.system_prefix.len + ds.len + self.system_suffix.len) catch return error.OutOfMemory;
+        if (system_msg) |sys| {
+            if (self.system_role_override) |role| {
+                total_len = std.math.add(usize, total_len, role.prefix.len + sys.len + role.suffix.len) catch return error.OutOfMemory;
+            } else if (self.default_system == null) {
+                total_len = std.math.add(usize, total_len, self.system_prefix.len + sys.len + self.system_suffix.len) catch return error.OutOfMemory;
+            }
+        }
+        for (messages) |msg| {
+            const p = if (msg.role == .user) self.user_prefix else self.assistant_prefix;
+            const s = if (msg.role == .user) self.user_suffix else self.assistant_suffix;
+            total_len = std.math.add(usize, total_len, p.len + msg.content.len + s.len) catch return error.OutOfMemory;
+        }
         var result = std.ArrayList(u8).empty;
+        try result.ensureTotalCapacity(allocator, total_len);
         // Fixed default system message (e.g. GPT-OSS reasoning preamble)
         if (self.default_system) |ds| {
             try result.appendSlice(allocator, self.system_prefix);
@@ -88,9 +107,12 @@ pub const ChatTemplate = struct {
     /// Format a continuation prompt for KV cache reuse. Produces only the
     /// tokens needed to bridge from the end of the previous assistant
     /// response to the start of the next generation:
-    /// `assistant_suffix + user_prefix + user_msg + user_suffix + assistant_prefix`
+    /// `assistant_suffix + user_prefix + user_msg + user_suffix + assistant_prefix + generation_prefix`
     pub fn formatContinuation(self: ChatTemplate, allocator: std.mem.Allocator, user_msg: []const u8) ![]u8 {
         var result = std.ArrayList(u8).empty;
+        const total = std.math.add(usize, self.assistant_suffix.len + self.user_prefix.len,
+            std.math.add(usize, user_msg.len, self.user_suffix.len + self.assistant_prefix.len + self.generation_prefix.len) catch return error.OutOfMemory) catch return error.OutOfMemory;
+        try result.ensureTotalCapacity(allocator, total);
         try result.appendSlice(allocator, self.assistant_suffix);
         try result.appendSlice(allocator, self.user_prefix);
         try result.appendSlice(allocator, user_msg);
@@ -127,8 +149,8 @@ pub const ChatTemplate = struct {
         .generation_prefix = "<think>\n\n</think>\n\n",
     };
 
-    /// Gemma 3 (and Gemma 2, which auto-detects as gemma3).
-    /// Gemma 3 — uses `<start_of_turn>`/`<end_of_turn>` markers.
+    /// Gemma 3/2 — uses `<start_of_turn>`/`<end_of_turn>` markers.
+    /// Gemma 2 auto-detects as gemma3 (backward compatible).
     pub const gemma = ChatTemplate{
         .system_prefix = "<start_of_turn>user\n",
         .system_suffix = "\n\n",
@@ -160,7 +182,7 @@ pub const ChatTemplate = struct {
     /// generation_prefix `</think>` disables the model's reasoning mode, forcing
     /// direct answers (matching HuggingFace's enable_thinking=false behavior).
     pub const glm4 = ChatTemplate{
-        .system_prefix = "<sop>",
+        .system_prefix = "[gMASK]<sop>",
         .system_suffix = "",
         .user_prefix = "<|user|>",
         .user_suffix = "",
@@ -168,7 +190,7 @@ pub const ChatTemplate = struct {
         .assistant_suffix = "",
         .eog_tokens = &.{ "<|endoftext|>", "<|user|>", "<|observation|>" },
         .default_system = "",
-        .generation_prefix = "</think>",
+        .generation_prefix = "",
         .system_role_override = .{
             .prefix = "<|system|>\n",
             .suffix = "",
@@ -192,7 +214,155 @@ pub const ChatTemplate = struct {
     };
 };
 
+// ── Image token injection ─────────────────────────────────────────
+
+/// Build a token ID array with image placeholder tokens spliced in after
+/// a given insertion point. The result is:
+///   `prefix_tokens[0..insert_pos] + [start, pad×n_visual, end] + prefix_tokens[insert_pos..]`
+///
+/// This is used after tokenizing the text prompt to inject image token IDs
+/// at the correct position (typically right after the user_prefix tokens).
+///
+/// Parameters:
+///   - allocator: Memory allocator for the returned slice.
+///   - text_tokens: The tokenized text prompt (without image tokens).
+///   - insert_pos: Index in text_tokens where image tokens should be inserted.
+///   - image_tokens: Architecture-specific start/end/pad token IDs.
+///   - n_visual_tokens: Number of pad tokens to insert (from vision encoder).
+///
+/// Returns: New token ID array with image tokens spliced in. Caller owns the slice.
+pub fn injectImageTokens(
+    allocator: std.mem.Allocator,
+    text_tokens: []const u32,
+    insert_pos: usize,
+    image_tokens: ImageTokens,
+    n_visual_tokens: u32,
+) ![]u32 {
+    // When start == pad (e.g. Gemma 4 where both are <img>=219),
+    // skip the start wrapper to avoid the model consuming the start
+    // token as a visual embedding. Just inject pad×N + end.
+    const has_distinct_start = image_tokens.start != image_tokens.pad;
+    const has_distinct_end = image_tokens.end != image_tokens.pad;
+    const prefix_len: usize = if (has_distinct_start) 1 else 0;
+    const suffix_len: usize = if (has_distinct_end) 1 else 0;
+    const image_seq_len: usize = prefix_len + @as(usize, n_visual_tokens) + suffix_len;
+    const total_len = std.math.add(usize, text_tokens.len, image_seq_len) catch return error.OutOfMemory;
+    const result = try allocator.alloc(u32, total_len);
+    errdefer allocator.free(result);
+
+    const pos = @min(insert_pos, text_tokens.len);
+
+    // Copy tokens before insertion point
+    @memcpy(result[0..pos], text_tokens[0..pos]);
+
+    // Insert image token sequence
+    var write_pos = pos;
+    if (has_distinct_start) {
+        result[write_pos] = image_tokens.start;
+        write_pos += 1;
+    }
+    @memset(result[write_pos..][0..n_visual_tokens], image_tokens.pad);
+    write_pos += n_visual_tokens;
+    if (has_distinct_end) {
+        result[write_pos] = image_tokens.end;
+        write_pos += 1;
+    }
+
+    // Copy remaining tokens after insertion point
+    @memcpy(result[pos + image_seq_len ..], text_tokens[pos..]);
+
+    return result;
+}
+
+/// Find the insertion position for image tokens in a tokenized prompt.
+/// Scans the token array for the last occurrence of `prefix_seq` (the full
+/// multi-token sequence, e.g. the user-turn prefix), then returns the
+/// position immediately after that match.
+///
+/// Uses last-match to avoid false positives when individual tokens from the
+/// prefix (like newline) appear earlier in the prompt (e.g. system section).
+///
+/// If `prefix_seq` is empty or not found, returns 0 (insert at the beginning).
+pub fn findImageInsertPos(tokens: []const u32, prefix_seq: []const u32) usize {
+    // Find the LAST occurrence of the full prefix_seq in tokens and return
+    // the position after it. Matching the full sequence avoids false matches
+    // when individual tokens (like \n) appear in earlier parts of the prompt
+    // (e.g., system prompt section).
+    if (prefix_seq.len == 0) return 0;
+    var last_match: usize = 0;
+    if (tokens.len >= prefix_seq.len) {
+        var i: usize = 0;
+        while (i + prefix_seq.len <= tokens.len) : (i += 1) {
+            if (std.mem.eql(u32, tokens[i..][0..prefix_seq.len], prefix_seq)) {
+                last_match = i + prefix_seq.len;
+            }
+        }
+    }
+    return last_match;
+}
+
 // ── Tests ─────────────────────────────────────────────────────────
+
+test "injectImageTokens basic" {
+    const alloc = std.testing.allocator;
+    const text_tokens = [_]u32{ 10, 20, 30, 40, 50 };
+    const img_tokens = ImageTokens{ .start = 219, .end = 230, .pad = 219 };
+
+    // Insert 3 visual tokens at position 2
+    // start == pad → has_distinct_start is false, so no start token inserted.
+    // Sequence: pad×3 + end = 4 image tokens.
+    const result = try injectImageTokens(alloc, &text_tokens, 2, img_tokens, 3);
+    defer alloc.free(result);
+
+    // Expected: [10, 20, 219, 219, 219, 230, 30, 40, 50]
+    //            text     pad  pad  pad  end  text
+    try std.testing.expectEqual(@as(usize, 9), result.len);
+    try std.testing.expectEqual(@as(u32, 10), result[0]);
+    try std.testing.expectEqual(@as(u32, 20), result[1]);
+    try std.testing.expectEqual(@as(u32, 219), result[2]); // pad
+    try std.testing.expectEqual(@as(u32, 219), result[3]); // pad
+    try std.testing.expectEqual(@as(u32, 219), result[4]); // pad
+    try std.testing.expectEqual(@as(u32, 230), result[5]); // end
+    try std.testing.expectEqual(@as(u32, 30), result[6]);
+    try std.testing.expectEqual(@as(u32, 40), result[7]);
+    try std.testing.expectEqual(@as(u32, 50), result[8]);
+}
+
+test "injectImageTokens at start" {
+    const alloc = std.testing.allocator;
+    const text_tokens = [_]u32{ 100, 200 };
+    const img_tokens = ImageTokens{ .start = 5, .end = 6, .pad = 7 };
+
+    const result = try injectImageTokens(alloc, &text_tokens, 0, img_tokens, 2);
+    defer alloc.free(result);
+
+    // Expected: [5, 7, 7, 6, 100, 200]
+    try std.testing.expectEqual(@as(usize, 6), result.len);
+    try std.testing.expectEqual(@as(u32, 5), result[0]); // start
+    try std.testing.expectEqual(@as(u32, 7), result[1]); // pad
+    try std.testing.expectEqual(@as(u32, 7), result[2]); // pad
+    try std.testing.expectEqual(@as(u32, 6), result[3]); // end
+    try std.testing.expectEqual(@as(u32, 100), result[4]);
+    try std.testing.expectEqual(@as(u32, 200), result[5]);
+}
+
+test "findImageInsertPos" {
+    const tokens = [_]u32{ 2, 106, 10, 42, 43 }; // BOS, <start_of_turn>, user, ...
+    // Find position after sequence [106, 10] (user marker)
+    const prefix = [_]u32{ 106, 10 };
+    try std.testing.expectEqual(@as(usize, 3), findImageInsertPos(&tokens, &prefix));
+    // Sequence not found -> 0
+    const missing = [_]u32{ 999, 888 };
+    try std.testing.expectEqual(@as(usize, 0), findImageInsertPos(&tokens, &missing));
+    // Single token sequence
+    const single = [_]u32{42};
+    try std.testing.expectEqual(@as(usize, 4), findImageInsertPos(&tokens, &single));
+    // Last occurrence wins (system prompt has same \n token as user prefix)
+    const with_dup = [_]u32{ 105, 9731, 107, 98, 105, 2364, 107, 3689 };
+    //                        <|turn> system \n  <think> <|turn> user  \n  What
+    const prefix2 = [_]u32{ 2364, 107 }; // user, \n
+    try std.testing.expectEqual(@as(usize, 7), findImageInsertPos(&with_dup, &prefix2));
+}
 
 test "chatml format basic" {
     const result = try ChatTemplate.chatml.format(std.testing.allocator, null, "Hi");
@@ -299,11 +469,11 @@ test "glm4 format includes sop prefix and generation prefix" {
     const result = try ChatTemplate.glm4.format(std.testing.allocator, null, "What is 2+2?");
     defer std.testing.allocator.free(result);
     // Must start with <sop> (system_prefix with empty default_system)
-    try std.testing.expect(std.mem.startsWith(u8, result, "<sop>"));
+    try std.testing.expect(std.mem.startsWith(u8, result, "[gMASK]<sop>"));
     // Must contain user message with correct prefix (no newline before content)
     try std.testing.expect(std.mem.indexOf(u8, result, "<|user|>What is 2+2?") != null);
-    // Must end with assistant prefix + </think> generation prefix
-    try std.testing.expect(std.mem.endsWith(u8, result, "<|assistant|>\n</think>"));
+    // Must end with assistant prefix (no generation prefix for GLM-4.7-Flash)
+    try std.testing.expect(std.mem.endsWith(u8, result, "<|assistant|>\n"));
 }
 
 test "glm4 format with system message uses system_role_override" {
@@ -312,7 +482,7 @@ test "glm4 format with system message uses system_role_override" {
     // system_role_override uses <|system|> prefix
     try std.testing.expect(std.mem.indexOf(u8, result, "<|system|>\nYou are helpful.") != null);
     // Still starts with <sop>
-    try std.testing.expect(std.mem.startsWith(u8, result, "<sop>"));
+    try std.testing.expect(std.mem.startsWith(u8, result, "[gMASK]<sop>"));
 }
 
 test "gemma4 format includes generation prefix for channel 0" {
@@ -328,6 +498,39 @@ test "gemma4 continuation includes generation prefix" {
     const result = try ChatTemplate.gemma4.formatContinuation(std.testing.allocator, "next?");
     defer std.testing.allocator.free(result);
     try std.testing.expect(std.mem.endsWith(u8, result, "<|turn>model\n<|channel>0\n<channel|>"));
+}
+
+test "gpt_oss multi-turn conversation" {
+    const messages = &[_]Message{
+        .{ .role = .user, .content = "hello" },
+        .{ .role = .assistant, .content = "Hi!" },
+        .{ .role = .user, .content = "what is 2+2?" },
+    };
+    const result = try ChatTemplate.gpt_oss.formatConversation(std.testing.allocator, null, messages);
+    defer std.testing.allocator.free(result);
+    // Verify correct ordering
+    const pos_u1 = std.mem.indexOf(u8, result, "hello") orelse return error.TestUnexpectedResult;
+    const pos_a1 = std.mem.indexOf(u8, result, "Hi!") orelse return error.TestUnexpectedResult;
+    const pos_u2 = std.mem.indexOf(u8, result, "what is 2+2?") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(pos_u1 < pos_a1);
+    try std.testing.expect(pos_a1 < pos_u2);
+    try std.testing.expect(std.mem.endsWith(u8, result, "<|end|><|start|>assistant"));
+}
+
+test "glm4 multi-turn conversation" {
+    const messages = &[_]Message{
+        .{ .role = .user, .content = "hello" },
+        .{ .role = .assistant, .content = "Hi!" },
+        .{ .role = .user, .content = "what is 2+2?" },
+    };
+    const result = try ChatTemplate.glm4.formatConversation(std.testing.allocator, null, messages);
+    defer std.testing.allocator.free(result);
+    const pos_u1 = std.mem.indexOf(u8, result, "hello") orelse return error.TestUnexpectedResult;
+    const pos_a1 = std.mem.indexOf(u8, result, "Hi!") orelse return error.TestUnexpectedResult;
+    const pos_u2 = std.mem.indexOf(u8, result, "what is 2+2?") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(pos_u1 < pos_a1);
+    try std.testing.expect(pos_a1 < pos_u2);
+    try std.testing.expect(std.mem.endsWith(u8, result, "<|assistant|>\n"));
 }
 
 test "continuation matches full format suffix" {

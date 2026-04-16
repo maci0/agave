@@ -1,4 +1,4 @@
-const golden = @import("golden_test.zig");
+const golden = @import("golden_harness.zig");
 
 const model_path = "models/lmstudio-community/GLM-4.7-Flash-GGUF/GLM-4.7-Flash-Q8_0.gguf";
 const test_prompt = "What is quantum computing?";

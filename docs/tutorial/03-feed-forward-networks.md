@@ -14,7 +14,7 @@ FFN(x) = down_proj(activation(gate_proj(x)) * up_proj(x))
 
 Three matrix multiplies per FFN call, expanding to a larger **intermediate dimension** (the expanded size between projections, typically 4-8× the hidden size) and projecting back. The **activation function** is a **nonlinear** transformation (output is not proportional to input — e.g., sigmoid curves, not straight lines) applied element-wise (e.g., SiLU, GELU).
 
-**SwiGLU** uses **SiLU** (Sigmoid Linear Unit, also called Swish) as the activation — hence the name (Swish-Gated Linear Unit).
+**SwiGLU**, introduced in [GLU Variants Improve Transformer (Shazeer, 2020)](https://arxiv.org/abs/2002.05202), uses **SiLU** (Sigmoid Linear Unit, also called Swish) as the activation — hence the name (Swish-Gated Linear Unit).
 
 ## Activation Functions
 

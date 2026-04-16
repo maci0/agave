@@ -66,9 +66,9 @@ pub fn build(b: *std.Build) void {
     const ptx_step = b.step("ptx", "Compile CUDA kernels to PTX (nvptx64)");
     {
         const kernel_files = [_][]const u8{
-            "all", "silu", "gelu", "add", "mul",
-            "rms_norm", "softmax", "l2_norm", "rope",
-            "gemv_f32", "gemv_bf16", "gemv_f16", "gemv_q8_0", "gemv_q4_0",
+            "all",       "silu",     "gelu",      "add",       "mul",
+            "rms_norm",  "softmax",  "l2_norm",   "rope",      "gemv_f32",
+            "gemv_bf16", "gemv_f16", "gemv_q8_0", "gemv_q4_0",
         };
 
         for (kernel_files) |name| {
@@ -187,8 +187,92 @@ pub fn build(b: *std.Build) void {
     b.step("run", "Run agave (ReleaseFast)").dependOn(&run_cmd.step);
 
     // ── Test step ────────────────────────────────────────────────
-    const run_tests = b.addRunArtifact(b.addTest(.{ .root_module = mod_rel }));
-    b.step("test", "Run unit tests").dependOn(&run_tests.step);
+    const test_step = b.step("test", "Run unit tests");
+
+    // Main test suite (inline tests from src/)
+    test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = mod_rel })).step);
+
+    // SDPA oracle self-tests (validates ground-truth reference for GPU tests)
+    test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("tests/sdpa_oracle.zig"),
+        .target = target,
+        .optimize = .ReleaseFast,
+    }) })).step);
+
+    // Golden harness unit tests (degenerate output detection)
+    test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("tests/models/golden_harness.zig"),
+        .target = target,
+        .optimize = .ReleaseFast,
+    }) })).step);
+
+    // Shared backend module for SDPA hardware tests (provides named "backend" import).
+    // Rooted at src/test_exports.zig so transitive imports resolve within src/.
+    const backend_test_mod = b.createModule(.{
+        .root_source_file = b.path("src/test_exports.zig"),
+        .target = target,
+        .optimize = .ReleaseFast,
+    });
+    backend_test_mod.addImport("build_options", backend_options.createModule());
+
+    // Shared oracle module for SDPA hardware tests
+    const oracle_mod = b.createModule(.{
+        .root_source_file = b.path("tests/sdpa_oracle.zig"),
+        .target = target,
+        .optimize = .ReleaseFast,
+    });
+
+    // Shared dual-delta test harness for GPU SDPA correctness tests
+    const sdpa_harness_mod = b.createModule(.{
+        .root_source_file = b.path("tests/sdpa_harness.zig"),
+        .target = target,
+        .optimize = .ReleaseFast,
+    });
+    sdpa_harness_mod.addImport("backend", backend_test_mod);
+    sdpa_harness_mod.addImport("sdpa_oracle", oracle_mod);
+
+    // CUDA SDPA correctness tests (skips at runtime if no CUDA hardware)
+    {
+        const mod = b.createModule(.{
+            .root_source_file = b.path("tests/test_cuda_sdpa.zig"),
+            .target = target,
+            .optimize = .ReleaseFast,
+        });
+        mod.addImport("backend", backend_test_mod);
+        mod.addImport("sdpa_harness", sdpa_harness_mod);
+        const t = b.addTest(.{ .root_module = mod });
+        link_platform(mod, t, target);
+        if (link_metal) {
+            t.linkFramework("Metal");
+            t.linkFramework("Foundation");
+        }
+        test_step.dependOn(&b.addRunArtifact(t).step);
+    }
+
+    // Metal SDPA correctness tests (skips at runtime if not macOS)
+    {
+        const mod = b.createModule(.{
+            .root_source_file = b.path("tests/test_metal_sdpa.zig"),
+            .target = target,
+            .optimize = .ReleaseFast,
+        });
+        mod.addImport("backend", backend_test_mod);
+        mod.addImport("sdpa_harness", sdpa_harness_mod);
+        const t = b.addTest(.{ .root_module = mod });
+        link_platform(mod, t, target);
+        if (link_metal) {
+            t.linkFramework("Metal");
+            t.linkFramework("Foundation");
+        }
+        test_step.dependOn(&b.addRunArtifact(t).step);
+    }
+
+    // ROCm kernel tests (placeholder — skips until hardware available)
+    test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("tests/test_rocm_kernel.zig"),
+        .target = target,
+        .optimize = .ReleaseFast,
+    }) })).step);
 
     // ── Benchmark binary (standalone micro-benchmark) ──────────────
     const mod_bench = b.createModule(.{

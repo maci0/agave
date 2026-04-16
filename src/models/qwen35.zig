@@ -20,9 +20,8 @@ const BlockAllocator = block_alloc_mod.BlockAllocator;
 const TieredBlockAllocator = block_alloc_mod.TieredBlockAllocator;
 const TieredKvCache = @import("../kvcache/tiered.zig").TieredKvCache;
 const Backend = backend_mod.Backend;
-const TensorData = backend_mod.TensorData;
 const Format = format_mod.Format;
-const FormatTensorInfo = format_mod.TensorInfo;
+const TensorInfo = format_mod.TensorInfo;
 const Model = model_mod.Model;
 const Allocator = std.mem.Allocator;
 const PagedKvCache = kvcache.PagedKvCache;
@@ -38,13 +37,15 @@ const max_active_experts: usize = 16;
 const default_moe_experts_active: u32 = 8;
 /// Default per-expert FFN dimension for Qwen3.5 MoE.
 const default_moe_expert_ff_dim: u32 = 512;
+/// Default MLX quantization bit width (4-bit). Canonical source: model.zig.
+const default_mlx_bits = model_mod.default_mlx_bits;
 
 /// Qwen3.5 hybrid model with DeltaNet SSM, full attention layers, and optional MoE FFN.
 pub const Qwen35Model = struct {
     /// Norm weight cache: permanently dequantized BF16 norm weights keyed by data pointer.
     /// Avoids reusing dequant_buf for GPU ops (Metal buf_cache would serve stale data).
     const max_norm_entries: usize = 256;
-    const NormCacheEntry = struct { key: usize, data: []f32 };
+    const NormCacheEntry = model_mod.NormCacheEntry;
 
     fmt: Format,
     be: Backend,
@@ -134,6 +135,18 @@ pub const Qwen35Model = struct {
     cancelled: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
     perf: perf.PerfCounters = .{},
 
+    // ── Visual token embeddings (multimodal) ───────────────────
+    /// Visual token embeddings from vision encoder, or null if text-only.
+    image_embeddings: ?[]const f32 = null,
+    /// Number of visual tokens.
+    n_visual_tokens: u32 = 0,
+    /// Image pad token ID — the placeholder token that gets replaced with
+    /// visual embeddings during forward(). Set by setImageEmbeddings().
+    image_pad_token_id: u32 = 0,
+    /// Index into image_embeddings for the next visual token injection.
+    /// Incremented each time a pad token is encountered during forward().
+    visual_token_idx: u32 = 0,
+
     /// Returns the generic Model interface for this Qwen3.5 instance.
     pub fn model(self: *Qwen35Model) Model {
         return Model.from(Qwen35Model, self);
@@ -151,7 +164,15 @@ pub const Qwen35Model = struct {
         if (f.getArchU32(arch, "attention.head_count")) |v| self.n_head = v;
         if (f.getArchU32(arch, "attention.head_count_kv")) |v| self.n_head_kv = v;
         if (f.getArchU32(arch, "attention.key_length")) |v| self.head_dim = v;
-        if (f.getArchU32(arch, "feed_forward_length")) |v| self.n_ff = v;
+        if (f.getArchU32(arch, "feed_forward_length")) |v| {
+            self.n_ff = v;
+        } else if (f.layerTensor(0, "ffn_up.weight")) |t| {
+            // Infer from tensor shape when metadata is missing
+            self.n_ff = @intCast(t.dims[0]);
+        } else {
+            // Pure MoE (no dense FFN) — use shared expert dim or 0
+            self.n_ff = 0;
+        }
         if (f.getArchU32(arch, "full_attention_interval")) |v| self.full_attn_interval = v;
         if (f.getArchU32(arch, "ssm.conv_kernel")) |v| self.ssm_d_conv = v;
         if (f.getArchU32(arch, "ssm.state_size")) |v| self.ssm_d_state = v;
@@ -460,14 +481,14 @@ pub const Qwen35Model = struct {
     fn warmNormCache(self: *Qwen35Model) void {
         const e: usize = self.n_embd;
         const hd: usize = self.head_dim;
-        if (self.fmt.getTensor("output_norm.weight")) |t| _ = self.asF32(t, e);
+        if (self.fmt.getTensor("output_norm.weight")) |t| _ = self.normAsF32(t, e);
         for (0..self.n_layers) |i| {
             const li: u32 = @intCast(i);
-            if (self.fmt.layerTensor(li, "attn_norm.weight")) |t| _ = self.asF32(t, e);
-            if (self.fmt.layerTensor(li, "attn_q_norm.weight")) |t| _ = self.asF32(t, hd);
-            if (self.fmt.layerTensor(li, "attn_k_norm.weight")) |t| _ = self.asF32(t, hd);
-            if (self.fmt.layerTensor(li, "post_attention_norm.weight")) |t| _ = self.asF32(t, e);
-            if (self.fmt.layerTensor(li, "ffn_norm.weight")) |t| _ = self.asF32(t, e);
+            if (self.fmt.layerTensor(li, "attn_norm.weight")) |t| _ = self.normAsF32(t, e);
+            if (self.fmt.layerTensor(li, "attn_q_norm.weight")) |t| _ = self.normAsF32(t, hd);
+            if (self.fmt.layerTensor(li, "attn_k_norm.weight")) |t| _ = self.normAsF32(t, hd);
+            if (self.fmt.layerTensor(li, "post_attention_norm.weight")) |t| _ = self.normAsF32(t, e);
+            if (self.fmt.layerTensor(li, "ffn_norm.weight")) |t| _ = self.normAsF32(t, e);
         }
     }
 
@@ -475,7 +496,7 @@ pub const Qwen35Model = struct {
     /// F32 tensors: returns raw pointer (zero-copy).
     /// BF16 tensors: dequantizes once, caches permanently (GPU-safe — avoids
     /// stale Metal buf_cache entries from reused dequant_buf).
-    fn asF32(self: *Qwen35Model, t: FormatTensorInfo, n: usize) [*]const f32 {
+    fn normAsF32(self: *Qwen35Model, t: TensorInfo, n: usize) [*]const f32 {
         if (t.dtype == .f32) return @ptrCast(@alignCast(t.data_ptr));
 
         // Check cache (linear scan — at most ~200 entries, first-token only on miss)
@@ -484,17 +505,20 @@ pub const Qwen35Model = struct {
             if (entry.key == key) return entry.data.ptr;
         }
 
-        // Cache miss: allocate, convert, store permanently
+        // Cache miss: allocate, convert, store permanently.
+        // Guard capacity before allocating to avoid leaking uncached buffers.
+        if (self.norm_cache_len >= max_norm_entries) {
+            quant.dequantToF32(self.dequant_buf, t.data_ptr, t.dtype, n);
+            return self.dequant_buf.ptr;
+        }
         const buf = self.allocator.alloc(f32, n) catch {
             // Fallback to dequant_buf (CPU-only, not GPU-safe)
             quant.dequantToF32(self.dequant_buf, t.data_ptr, t.dtype, n);
             return self.dequant_buf.ptr;
         };
         quant.dequantToF32(buf, t.data_ptr, t.dtype, n);
-        if (self.norm_cache_len < max_norm_entries) {
-            self.norm_cache[self.norm_cache_len] = .{ .key = key, .data = buf };
-            self.norm_cache_len += 1;
-        }
+        self.norm_cache[self.norm_cache_len] = .{ .key = key, .data = buf };
+        self.norm_cache_len += 1;
         return buf.ptr;
     }
 
@@ -503,7 +527,7 @@ pub const Qwen35Model = struct {
         if (t.dtype == .mlx_q) {
             const st = self.fmt.getTensor("token_embd.scales") orelse return error.MissingTensor;
             const bt = self.fmt.getTensor("token_embd.biases") orelse return error.MissingTensor;
-            const bits: u32 = if (st.dtype == .unknown) 4 else (self.fmt.getMetaU32("bits") orelse 4);
+            const bits: u32 = if (st.dtype == .unknown) default_mlx_bits else (self.fmt.getMetaU32("bits") orelse default_mlx_bits);
             mlx_ops.mlxEmbLookup(self.hidden.ptr, @ptrCast(@alignCast(t.data_ptr)), @ptrCast(@alignCast(st.data_ptr)), @ptrCast(@alignCast(bt.data_ptr)), tok, self.n_embd, bits);
         } else {
             self.be.embLookup(.{ .data = t.data_ptr, .dtype = t.dtype }, tok, self.hidden.ptr, self.n_embd);
@@ -542,14 +566,14 @@ pub const Qwen35Model = struct {
     // ---- MLX-aware GEMV dispatch ----
 
     /// Dispatch GEMV: handles MLX quantized weights via model_mod.dispatchGemv.
-    fn doGemv(self: *Qwen35Model, x: [*]const f32, t: FormatTensorInfo, y: [*]f32, n: usize, k: usize) void {
+    fn doGemv(self: *Qwen35Model, x: [*]const f32, t: TensorInfo, y: [*]f32, n: usize, k: usize) void {
         model_mod.dispatchGemv(self.be, self.fmt, x, t, y, n, k);
     }
 
     /// Build a GemvOp from a TensorInfo, populating MLX companion pointers
     /// when the tensor is MLX-quantized. This enables gemvMulti to dispatch
     /// MLX kernels without barriers between batched ops.
-    fn makeOp(self: *Qwen35Model, t: FormatTensorInfo, y: [*]f32, n: usize, k: usize) backend_mod.GemvOp {
+    fn makeOp(self: *Qwen35Model, t: TensorInfo, y: [*]f32, n: usize, k: usize) backend_mod.GemvOp {
         var op = backend_mod.GemvOp{ .w = .{ .data = t.data_ptr, .dtype = t.dtype }, .y = y, .n = n };
         if (t.dtype == .mlx_q) {
             const comp = model_mod.findMlxCompanion(self.fmt, t, k);
@@ -565,7 +589,7 @@ pub const Qwen35Model = struct {
     /// Batched GEMV: dispatches 2 or 3 ops via gemvMulti.
     /// MLX companion pointers are resolved per-op so all dispatches
     /// (including MLX-Q) run without inter-dispatch barriers.
-    fn doGemvBatch2(self: *Qwen35Model, x: [*]const f32, t0: FormatTensorInfo, y0: [*]f32, n0: usize, t1: FormatTensorInfo, y1: [*]f32, n1: usize, k: usize) void {
+    fn doGemvBatch2(self: *Qwen35Model, x: [*]const f32, t0: TensorInfo, y0: [*]f32, n0: usize, t1: TensorInfo, y1: [*]f32, n1: usize, k: usize) void {
         const ops = [_]backend_mod.GemvOp{
             self.makeOp(t0, y0, n0, k),
             self.makeOp(t1, y1, n1, k),
@@ -573,7 +597,7 @@ pub const Qwen35Model = struct {
         self.be.gemvMulti(x, &ops, k);
     }
 
-    fn doGemvBatch3(self: *Qwen35Model, x: [*]const f32, t0: FormatTensorInfo, y0: [*]f32, n0: usize, t1: FormatTensorInfo, y1: [*]f32, n1: usize, t2: FormatTensorInfo, y2: [*]f32, n2: usize, k: usize) void {
+    fn doGemvBatch3(self: *Qwen35Model, x: [*]const f32, t0: TensorInfo, y0: [*]f32, n0: usize, t1: TensorInfo, y1: [*]f32, n1: usize, t2: TensorInfo, y2: [*]f32, n2: usize, k: usize) void {
         const ops = [_]backend_mod.GemvOp{
             self.makeOp(t0, y0, n0, k),
             self.makeOp(t1, y1, n1, k),
@@ -583,7 +607,7 @@ pub const Qwen35Model = struct {
     }
 
     /// Dispatch expert slice GEMV for MLX quantized expert tensors.
-    fn doGemvExpert(self: *Qwen35Model, x: [*]const f32, exp_t: FormatTensorInfo, ei: usize, stride: usize, y: [*]f32, n: usize, k: usize) void {
+    fn doGemvExpert(self: *Qwen35Model, x: [*]const f32, exp_t: TensorInfo, ei: usize, stride: usize, y: [*]f32, n: usize, k: usize) void {
         const data = exp_t.data_ptr + ei * stride;
         if (exp_t.dtype != .mlx_q) {
             self.be.gemv(x, .{ .data = data, .dtype = exp_t.dtype }, y, n, k);
@@ -625,9 +649,9 @@ pub const Qwen35Model = struct {
         const nw = self.fmt.layerTensor(li, "attn_norm.weight") orelse return;
         if (fuse_ffn_residual) {
             // Fused: hidden += hidden2 (prior FFN residual) + normalize
-            self.be.addRmsNorm(self.hidden.ptr, self.hidden2.ptr, self.asF32(nw, e), self.hidden2.ptr, e, self.rms_eps);
+            self.be.addRmsNorm(self.hidden.ptr, self.hidden2.ptr, self.normAsF32(nw, e), self.hidden2.ptr, e, self.rms_eps);
         } else {
-            self.be.rmsNorm(self.hidden.ptr, self.asF32(nw, e), self.hidden2.ptr, e, self.rms_eps);
+            self.be.rmsNorm(self.hidden.ptr, self.normAsF32(nw, e), self.hidden2.ptr, e, self.rms_eps);
         }
         self.syncProfile();
         self.perf.end(.rms_norm, t);
@@ -665,9 +689,9 @@ pub const Qwen35Model = struct {
         if (self.has_qk_norm) {
             t = self.perf.start();
             const qnw = self.fmt.layerTensor(li, "attn_q_norm.weight") orelse return;
-            const qnd = self.asF32(qnw, hd);
+            const qnd = self.normAsF32(qnw, hd);
             const knw = self.fmt.layerTensor(li, "attn_k_norm.weight") orelse return;
-            const knd = self.asF32(knw, hd);
+            const knd = self.normAsF32(knw, hd);
             self.be.beginBatch();
             self.be.rmsNormMulti(q_ptr, qnd, nh, hd, self.rms_eps);
             self.be.rmsNormMulti(self.k_buf.ptr, knd, nkv, hd, self.rms_eps);
@@ -755,13 +779,12 @@ pub const Qwen35Model = struct {
         var t = self.perf.start();
         const nw = self.fmt.layerTensor(li, "attn_norm.weight") orelse return error.MissingTensor;
         if (fuse_ffn_residual) {
-            self.be.addRmsNorm(self.hidden.ptr, self.hidden2.ptr, self.asF32(nw, e), self.hidden2.ptr, e, self.rms_eps);
+            self.be.addRmsNorm(self.hidden.ptr, self.hidden2.ptr, self.normAsF32(nw, e), self.hidden2.ptr, e, self.rms_eps);
         } else {
-            self.be.rmsNorm(self.hidden.ptr, self.asF32(nw, e), self.hidden2.ptr, e, self.rms_eps);
+            self.be.rmsNorm(self.hidden.ptr, self.normAsF32(nw, e), self.hidden2.ptr, e, self.rms_eps);
         }
         self.syncProfile();
         self.perf.end(.rms_norm, t);
-
 
         // 2. Input projections: QKV, gate(z), alpha, beta
         t = self.perf.start();
@@ -813,8 +836,6 @@ pub const Qwen35Model = struct {
         self.syncProfile();
         self.perf.end(.deltanet, t);
 
-
-
         // 9. Output projection
         t = self.perf.start();
         const out_w = self.fmt.layerTensor(li, "ssm_out.weight") orelse return error.MissingTensor;
@@ -837,10 +858,10 @@ pub const Qwen35Model = struct {
         var t = self.perf.start();
         if (self.has_post_attn_norm) {
             const nw = self.fmt.layerTensor(li, "post_attention_norm.weight") orelse return error.MissingTensor;
-            self.be.addRmsNorm(self.hidden.ptr, self.hidden2.ptr, self.asF32(nw, e), self.hidden2.ptr, e, self.rms_eps);
+            self.be.addRmsNorm(self.hidden.ptr, self.hidden2.ptr, self.normAsF32(nw, e), self.hidden2.ptr, e, self.rms_eps);
         } else {
             const nw = self.fmt.layerTensor(li, "ffn_norm.weight") orelse return error.MissingTensor;
-            self.be.rmsNorm(self.hidden.ptr, self.asF32(nw, e), self.hidden2.ptr, e, self.rms_eps);
+            self.be.rmsNorm(self.hidden.ptr, self.normAsF32(nw, e), self.hidden2.ptr, e, self.rms_eps);
         }
         self.syncProfile();
         self.perf.end(.rms_norm, t);
@@ -885,7 +906,7 @@ pub const Qwen35Model = struct {
         // Post-attention norm
         var t = self.perf.start();
         const nw = self.fmt.layerTensor(li, "post_attention_norm.weight") orelse return error.MissingTensor;
-        self.be.rmsNorm(self.hidden.ptr, self.asF32(nw, e), self.hidden2.ptr, e, self.rms_eps);
+        self.be.rmsNorm(self.hidden.ptr, self.normAsF32(nw, e), self.hidden2.ptr, e, self.rms_eps);
         self.syncProfile();
         self.perf.end(.rms_norm, t);
 
@@ -969,8 +990,8 @@ pub const Qwen35Model = struct {
             self.be.sync();
             self.perf.end(.gemv_ffn, t);
 
-            // Weighted accumulation
-            for (0..e) |i| self.moe_out[i] += mix_weight * self.attn_out[i];
+            // Weighted accumulation (SIMD via backend addScaled).
+            self.be.addScaled(self.attn_out.ptr, self.moe_out.ptr, mix_weight, e);
         }
 
         // 6. Shared expert
@@ -996,9 +1017,9 @@ pub const Qwen35Model = struct {
             var dot: f32 = 0.0;
             for (0..e) |i| dot += gate_ptr[i] * self.hidden2[i];
             const gate_val = math_ops.sigmoid(dot);
-            for (0..e) |i| self.moe_out[i] += gate_val * self.attn_out[i];
+            self.be.addScaled(self.attn_out.ptr, self.moe_out.ptr, gate_val, e);
         } else {
-            for (0..e) |i| self.moe_out[i] += self.attn_out[i];
+            self.be.addScaled(self.attn_out.ptr, self.moe_out.ptr, 1.0, e);
         }
 
         // 7. Residual: hidden += moe_out
@@ -1033,12 +1054,32 @@ pub const Qwen35Model = struct {
         }
 
         const t = self.perf.start();
-        try self.embLookup(token_id);
+        // Check if this is an image pad token — if so, inject the pre-computed
+        // visual embedding instead of looking up from the token embedding table.
+        var is_image_token = false;
+        if (self.image_embeddings) |vis_embd| {
+            if (self.image_pad_token_id != 0 and token_id == self.image_pad_token_id) {
+                const idx = self.visual_token_idx;
+                if (idx < self.n_visual_tokens) {
+                    const offset = @as(usize, idx) * self.n_embd;
+                    const end = offset + self.n_embd;
+                    if (end <= vis_embd.len) {
+                        @memcpy(self.hidden, vis_embd[offset..end]);
+                        is_image_token = true;
+                    }
+                    self.visual_token_idx = idx + 1;
+                }
+            }
+        }
+        if (!is_image_token) {
+            try self.embLookup(token_id);
+        }
         self.syncProfile();
         self.perf.end(.emb_lookup, t);
 
         for (0..self.n_layers) |li| {
-            if (self.cancelled.load(.acquire)) return error.Cancelled;
+            if (self.cancelled.load(.monotonic)) return error.Cancelled;
+            self.fmt.prefetchLayer(@intCast(li + 1));
             const l: u32 = @intCast(li);
             const fuse = li > 0 and !self.is_moe;
             if (self.isFullAttn(l)) try self.fullAttnLayer(l, fuse) else try self.deltaNetLayer(l, fuse);
@@ -1055,7 +1096,7 @@ pub const Qwen35Model = struct {
         self.kv_seq_len += 1;
         self.perf.addToken();
         const e = self.n_embd;
-        const norm_w = self.asF32(nw, e);
+        const norm_w = self.normAsF32(nw, e);
         if (self.is_moe) {
             self.be.rmsNorm(self.hidden.ptr, norm_w, self.hidden.ptr, e, self.rms_eps);
         } else {

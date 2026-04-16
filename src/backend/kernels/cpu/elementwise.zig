@@ -1,4 +1,4 @@
-//! CPU element-wise arithmetic kernels.
+//! CPU element-wise kernels: arithmetic, gating, and layout transforms.
 
 const V8 = @Vector(8, f32);
 
@@ -70,7 +70,7 @@ test "sigmoidMul" {
     // sigmoid(0) = 0.5, so data[i] *= 0.5
     for (0..8) |i| {
         const orig: f32 = @floatFromInt(i + 1);
-        try std.testing.expectApproxEqAbs(orig * 0.5, data[i], 0.001);
+        try std.testing.expectApproxEqAbs(orig * 0.5, data[i], 1e-5);
     }
 }
 
@@ -83,6 +83,51 @@ test "deinterleave" {
     try std.testing.expectApproxEqAbs(@as(f32, 2.0), out_a[1], 1e-6);
     try std.testing.expectApproxEqAbs(@as(f32, 3.0), out_b[0], 1e-6);
     try std.testing.expectApproxEqAbs(@as(f32, 4.0), out_b[1], 1e-6);
+}
+
+test "add non-aligned exercises scalar tail" {
+    // n=5: SIMD processes 0, scalar tail processes 5 elements
+    var a = [_]f32{ 1.0, 2.0, 3.0, 4.0, 5.0 };
+    var b = [_]f32{ 10.0, 20.0, 30.0, 40.0, 50.0 };
+    var out: [5]f32 = undefined;
+    add(&a, &b, &out, 5);
+    const expected = [_]f32{ 11.0, 22.0, 33.0, 44.0, 55.0 };
+    for (0..5) |i| try std.testing.expectApproxEqAbs(expected[i], out[i], 1e-6);
+}
+
+test "mul non-aligned exercises scalar tail" {
+    var a = [_]f32{ 2.0, 3.0, 4.0, 5.0, 6.0 };
+    var b = [_]f32{ 0.5, 2.0, -1.0, 0.1, 3.0 };
+    var out: [5]f32 = undefined;
+    mul(&a, &b, &out, 5);
+    const expected = [_]f32{ 1.0, 6.0, -4.0, 0.5, 18.0 };
+    for (0..5) |i| try std.testing.expectApproxEqAbs(expected[i], out[i], 1e-6);
+}
+
+test "sigmoidMul with non-zero gate" {
+    // Test with positive/negative gate values, not just zero
+    var data = [_]f32{ 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0 };
+    var gate = [_]f32{ 10.0, -10.0, 1.0, -1.0, 0.0, 5.0, -5.0, 2.0 };
+    sigmoidMul(&data, &gate, 8);
+    // sigmoid(10) ≈ 1.0, sigmoid(-10) ≈ 0.0, sigmoid(1) ≈ 0.731, sigmoid(-1) ≈ 0.269
+    try std.testing.expectApproxEqAbs(@as(f32, 1.0), data[0], 1e-4); // 1.0 * sigmoid(10) ≈ 0.99995
+    try std.testing.expectApproxEqAbs(@as(f32, 0.0), data[1], 1e-4); // 2.0 * sigmoid(-10) ≈ 0.00009
+    try std.testing.expectApproxEqAbs(@as(f32, 2.1932), data[2], 1e-3); // 3.0 * sigmoid(1) ≈ 2.1932
+    try std.testing.expectApproxEqAbs(@as(f32, 1.0757), data[3], 1e-3); // 4.0 * sigmoid(-1) ≈ 1.0757
+    try std.testing.expectApproxEqAbs(@as(f32, 2.5), data[4], 1e-5); // 5.0 * sigmoid(0) = 2.5
+}
+
+test "sigmoidMul non-aligned exercises scalar tail" {
+    // n=5 with SIMD width 8: 0 SIMD iterations, 5 scalar iterations
+    var data = [_]f32{ 2.0, 4.0, 6.0, 8.0, 10.0 };
+    var gate = [_]f32{ 0.0, 10.0, -10.0, 1.0, -1.0 };
+    sigmoidMul(&data, &gate, 5);
+    // sigmoid(0)=0.5, sigmoid(10)≈1.0, sigmoid(-10)≈0.0, sigmoid(1)≈0.7311, sigmoid(-1)≈0.2689
+    try std.testing.expectApproxEqAbs(@as(f32, 1.0), data[0], 1e-5); // 2.0 * 0.5
+    try std.testing.expectApproxEqAbs(@as(f32, 4.0), data[1], 1e-3); // 4.0 * ~1.0
+    try std.testing.expectApproxEqAbs(@as(f32, 0.0), data[2], 1e-3); // 6.0 * ~0.0
+    try std.testing.expectApproxEqAbs(@as(f32, 5.849), data[3], 1e-2); // 8.0 * sigmoid(1)
+    try std.testing.expectApproxEqAbs(@as(f32, 2.689), data[4], 1e-2); // 10.0 * sigmoid(-1)
 }
 
 test "deinterleave multi-pair" {

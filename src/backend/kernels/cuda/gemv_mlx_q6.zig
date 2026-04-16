@@ -5,9 +5,7 @@
 
 const cu = @import("common.zig");
 
-inline fn bf16ToF32(val: u16) f32 {
-    return @bitCast(@as(u32, val) << 16);
-}
+const bf16ToF32 = cu.bf16ToF32;
 
 /// Unpack one 6-bit value from packed u32 array at element index.
 inline fn unpackU6(base: [*]const u32, idx: u32) u32 {

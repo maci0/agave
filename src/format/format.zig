@@ -30,7 +30,7 @@ pub const DType = enum {
     unknown,
 };
 
-const arch_key_buf_size: usize = 256;
+pub const arch_key_buf_size: usize = 256;
 const layer_name_buf_size: usize = 128;
 
 /// Tensor metadata from a model file
@@ -44,8 +44,35 @@ pub const TensorInfo = struct {
     /// Returns the total number of elements (product of all dimensions).
     pub fn numElements(self: *const TensorInfo) usize {
         var n: usize = 1;
-        for (0..self.n_dims) |i| n = std.math.mul(usize, n, @intCast(self.dims[i])) catch return 0;
+        for (0..self.n_dims) |i| n = std.math.mul(usize, n, std.math.cast(usize, self.dims[i]) orelse return 0) catch return 0;
         return n;
+    }
+
+    /// Compute the raw byte size of this tensor's data on disk.
+    /// Accounts for quantization block structure (e.g., Q4_K = 144 bytes per
+    /// 256-element super-block). Used by prefetchLayer to size madvise hints.
+    pub fn dataByteLen(self: *const TensorInfo) usize {
+        const n = self.numElements();
+        if (n == 0) return 0;
+        return switch (self.dtype) {
+            .f32 => std.math.mul(usize, n, 4) catch std.math.maxInt(usize),
+            .f16, .bf16 => std.math.mul(usize, n, 2) catch std.math.maxInt(usize),
+            .fp8_e4m3, .fp8_e5m2 => n,
+            .q8_0 => std.math.mul(usize, n / 32, 34) catch std.math.maxInt(usize),
+            .q4_0, .iq4_nl => std.math.mul(usize, n / 32, 18) catch std.math.maxInt(usize),
+            .q4_1 => std.math.mul(usize, n / 32, 20) catch std.math.maxInt(usize),
+            .q5_0 => std.math.mul(usize, n / 32, 22) catch std.math.maxInt(usize),
+            .q4_k => std.math.mul(usize, n / 256, 144) catch std.math.maxInt(usize),
+            .q5_k => std.math.mul(usize, n / 256, 176) catch std.math.maxInt(usize),
+            .q6_k => std.math.mul(usize, n / 256, 210) catch std.math.maxInt(usize),
+            .q2_k => std.math.mul(usize, n / 256, 84) catch std.math.maxInt(usize),
+            .q3_k => std.math.mul(usize, n / 256, 110) catch std.math.maxInt(usize),
+            .iq4_xs => std.math.mul(usize, n / 256, 136) catch std.math.maxInt(usize),
+            .tq1_0 => std.math.mul(usize, n / 256, 64) catch std.math.maxInt(usize),
+            .mxfp4 => std.math.mul(usize, n / 32, 17) catch std.math.maxInt(usize),
+            .nvfp4 => std.math.mul(usize, n / 16, 9) catch std.math.maxInt(usize),
+            .mlx_q, .unknown => std.math.mul(usize, n, 4) catch std.math.maxInt(usize),
+        };
     }
 };
 
@@ -121,6 +148,31 @@ pub const Format = struct {
         return self.getTensor(name);
     }
 
+    /// Weight tensor suffixes to prefetch — covers the most bandwidth-heavy
+    /// tensors (GEMV projections and expert weights). Norms are tiny and
+    /// almost always cache-resident, so they're excluded.
+    const prefetch_suffixes = [_][]const u8{
+        "attn_q.weight",      "attn_k.weight",        "attn_v.weight",
+        "attn_qkv.weight",    "attn_output.weight",
+        "ffn_gate.weight",    "ffn_up.weight",        "ffn_down.weight",
+        "ffn_gate_exps.weight", "ffn_up_exps.weight", "ffn_down_exps.weight",
+        "ssm_in.weight",      "ssm_out.weight",
+    };
+
+    /// Hint the OS to prefetch the next layer's weight tensors into memory.
+    /// Issues madvise(WILL_NEED) on all known weight tensors for the given
+    /// layer index. No-op when tensors are already resident or on non-POSIX.
+    /// Call with `li + 1` at the top of each layer's forward pass to overlap
+    /// I/O with the current layer's computation.
+    pub fn prefetchLayer(self: Format, layer_idx: u32) void {
+        for (prefetch_suffixes) |suffix| {
+            if (self.layerTensor(layer_idx, suffix)) |info| {
+                const byte_len = info.dataByteLen();
+                if (byte_len > 0) prefetchRegion(info.data_ptr, byte_len);
+            }
+        }
+    }
+
     /// Detect the quantization scheme name by probing well-known weight tensors.
     /// Checks for SafeTensors NVFP4 scale tensors first, then probes the dtype
     /// of common layer-0/layer-1 weight tensors.
@@ -161,6 +213,21 @@ pub const Format = struct {
         return "unknown";
     }
 };
+
+/// Issue madvise(WILL_NEED) on a byte range to hint the OS to page it in.
+/// Aligns the range to page boundaries as required by madvise.
+fn prefetchRegion(data: [*]const u8, len: usize) void {
+    if (len == 0) return;
+    const page = std.heap.page_size_min;
+    const addr = @intFromPtr(data);
+    const start = addr & ~(@as(usize, page - 1));
+    const addr_end = std.math.add(usize, addr, len) catch return;
+    const end = std.mem.alignForward(usize, addr_end, page);
+    const aligned_ptr: [*]u8 = @ptrFromInt(start);
+    std.posix.madvise(@alignCast(aligned_ptr), end - start, std.posix.MADV.WILLNEED) catch |err| {
+        std.log.debug("prefetchLayer: madvise failed: {s}", .{@errorName(err)});
+    };
+}
 
 /// GGUF file format implementation — re-exported so callers use format.zig as the single import.
 pub const GGUFFile = @import("gguf.zig").GGUFFile;
@@ -216,4 +283,50 @@ test "TensorInfo numElements 4D" {
         .data_ptr = @as([*]const u8, @ptrCast(&dummy)),
     };
     try std.testing.expectEqual(@as(usize, 120), t.numElements());
+}
+
+test "TensorInfo dataByteLen f32" {
+    var dummy: u8 = 0;
+    const t = TensorInfo{ .name = "w", .n_dims = 1, .dims = .{ 256, 0, 0, 0 }, .dtype = .f32, .data_ptr = @as([*]const u8, @ptrCast(&dummy)) };
+    try std.testing.expectEqual(@as(usize, 256 * 4), t.dataByteLen());
+}
+
+test "TensorInfo dataByteLen f16" {
+    var dummy: u8 = 0;
+    const t = TensorInfo{ .name = "w", .n_dims = 1, .dims = .{ 256, 0, 0, 0 }, .dtype = .f16, .data_ptr = @as([*]const u8, @ptrCast(&dummy)) };
+    try std.testing.expectEqual(@as(usize, 256 * 2), t.dataByteLen());
+}
+
+test "TensorInfo dataByteLen q4_0" {
+    var dummy: u8 = 0;
+    // Q4_0: 18 bytes per 32-element block
+    const t = TensorInfo{ .name = "w", .n_dims = 1, .dims = .{ 256, 0, 0, 0 }, .dtype = .q4_0, .data_ptr = @as([*]const u8, @ptrCast(&dummy)) };
+    try std.testing.expectEqual(@as(usize, (256 / 32) * 18), t.dataByteLen());
+}
+
+test "TensorInfo dataByteLen q4_k" {
+    var dummy: u8 = 0;
+    // Q4_K: 144 bytes per 256-element super-block
+    const t = TensorInfo{ .name = "w", .n_dims = 1, .dims = .{ 256, 0, 0, 0 }, .dtype = .q4_k, .data_ptr = @as([*]const u8, @ptrCast(&dummy)) };
+    try std.testing.expectEqual(@as(usize, 144), t.dataByteLen());
+}
+
+test "TensorInfo dataByteLen q8_0" {
+    var dummy: u8 = 0;
+    // Q8_0: 34 bytes per 32-element block
+    const t = TensorInfo{ .name = "w", .n_dims = 1, .dims = .{ 256, 0, 0, 0 }, .dtype = .q8_0, .data_ptr = @as([*]const u8, @ptrCast(&dummy)) };
+    try std.testing.expectEqual(@as(usize, (256 / 32) * 34), t.dataByteLen());
+}
+
+test "TensorInfo dataByteLen zero elements" {
+    var dummy: u8 = 0;
+    const t = TensorInfo{ .name = "w", .n_dims = 1, .dims = .{ 0, 0, 0, 0 }, .dtype = .f32, .data_ptr = @as([*]const u8, @ptrCast(&dummy)) };
+    try std.testing.expectEqual(@as(usize, 0), t.dataByteLen());
+}
+
+test "TensorInfo dataByteLen q6_k" {
+    var dummy: u8 = 0;
+    // Q6_K: 210 bytes per 256-element super-block
+    const t = TensorInfo{ .name = "w", .n_dims = 1, .dims = .{ 512, 0, 0, 0 }, .dtype = .q6_k, .data_ptr = @as([*]const u8, @ptrCast(&dummy)) };
+    try std.testing.expectEqual(@as(usize, (512 / 256) * 210), t.dataByteLen());
 }

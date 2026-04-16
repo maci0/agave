@@ -1,12 +1,25 @@
 //! CPU activation function kernels: SiLU, SiLU+mul, GELU.
 
 const V8 = @Vector(8, f32);
+const math_ops = @import("../../../ops/math.zig");
+
+const sqrt_2_over_pi = math_ops.sqrt_2_over_pi;
+const gelu_coeff = math_ops.gelu_coeff;
+const gelu_clamp_hi = math_ops.gelu_clamp_hi;
+const gelu_clamp_lo = math_ops.gelu_clamp_lo;
 
 /// Applies SiLU (Swish) activation: x * sigmoid(x).
+/// Dual-vector processing hides exp() latency (~4-7 cycles) by overlapping two independent chains.
 pub fn silu(input: [*]const f32, output: [*]f32, n: usize) void {
-    const one: V8 = @splat(@as(f32, 1.0));
-    const neg: V8 = @splat(@as(f32, -1.0));
+    const one: V8 = @splat(1.0);
+    const neg: V8 = @splat(-1.0);
     var i: usize = 0;
+    while (i + 16 <= n) : (i += 16) {
+        const x0: V8 = input[i..][0..8].*;
+        const x1: V8 = input[i + 8 ..][0..8].*;
+        output[i..][0..8].* = x0 / (one + @exp(neg * x0));
+        output[i + 8 ..][0..8].* = x1 / (one + @exp(neg * x1));
+    }
     while (i + 8 <= n) : (i += 8) {
         const x: V8 = input[i..][0..8].*;
         output[i..][0..8].* = x / (one + @exp(neg * x));
@@ -18,10 +31,19 @@ pub fn silu(input: [*]const f32, output: [*]f32, n: usize) void {
 }
 
 /// Fused SiLU + multiply: out[i] = silu(a[i]) * b[i].
+/// Dual-vector processing hides exp() latency by overlapping two independent chains.
 pub fn siluMul(a: [*]const f32, b: [*]const f32, out: [*]f32, n: usize) void {
     var i: usize = 0;
-    const one: V8 = @splat(@as(f32, 1.0));
-    const neg: V8 = @splat(@as(f32, -1.0));
+    const one: V8 = @splat(1.0);
+    const neg: V8 = @splat(-1.0);
+    while (i + 16 <= n) : (i += 16) {
+        const x0: V8 = a[i..][0..8].*;
+        const y0: V8 = b[i..][0..8].*;
+        const x1: V8 = a[i + 8 ..][0..8].*;
+        const y1: V8 = b[i + 8 ..][0..8].*;
+        out[i..][0..8].* = (x0 / (one + @exp(neg * x0))) * y0;
+        out[i + 8 ..][0..8].* = (x1 / (one + @exp(neg * x1))) * y1;
+    }
     while (i + 8 <= n) : (i += 8) {
         const x: V8 = a[i..][0..8].*;
         const y: V8 = b[i..][0..8].*;
@@ -34,12 +56,60 @@ pub fn siluMul(a: [*]const f32, b: [*]const f32, out: [*]f32, n: usize) void {
 }
 
 /// Applies GELU activation: 0.5 * x * (1 + tanh(sqrt(2/pi) * (x + 0.044715*x^3))).
-/// If input != output, copies input to output first (applyGelu is in-place).
+/// If input != output, copies input to output first (underlying impl is in-place).
 pub fn gelu(input: [*]const f32, output: [*]f32, n: usize) void {
-    const math_ops = @import("../../../ops/math.zig");
     // applyGelu is in-place — copy first if input and output differ
     if (input != output) @memcpy(output[0..n], input[0..n]);
     math_ops.applyGelu(output[0..n]);
+}
+
+/// Fused GELU + multiply: out[i] = gelu(a[i]) * b[i].
+/// Single-pass SIMD avoids a second cache traversal compared to gelu() + mul().
+/// Dual-vector processing hides exp() latency by overlapping two independent chains.
+pub fn geluMul(a: [*]const f32, b: [*]const f32, out: [*]f32, n: usize) void {
+    const half: V8 = @splat(0.5);
+    const one: V8 = @splat(1.0);
+    const two: V8 = @splat(2.0);
+    const coeff_v: V8 = @splat(gelu_coeff);
+    const sqrt_v: V8 = @splat(sqrt_2_over_pi);
+    const clamp_hi: V8 = @splat(gelu_clamp_hi);
+    const clamp_lo: V8 = @splat(gelu_clamp_lo);
+
+    var i: usize = 0;
+    while (i + 16 <= n) : (i += 16) {
+        const x0: V8 = a[i..][0..8].*;
+        const y0: V8 = b[i..][0..8].*;
+        const x1: V8 = a[i + 8 ..][0..8].*;
+        const y1: V8 = b[i + 8 ..][0..8].*;
+        const inner0 = @mulAdd(V8, coeff_v, x0 * x0 * x0, x0);
+        const inner1 = @mulAdd(V8, coeff_v, x1 * x1 * x1, x1);
+        const t0 = @min(clamp_hi, @max(clamp_lo, sqrt_v * inner0));
+        const t1 = @min(clamp_hi, @max(clamp_lo, sqrt_v * inner1));
+        const e2t0 = @exp(two * t0);
+        const e2t1 = @exp(two * t1);
+        const tanh0 = (e2t0 - one) / (e2t0 + one);
+        const tanh1 = (e2t1 - one) / (e2t1 + one);
+        out[i..][0..8].* = half * x0 * (one + tanh0) * y0;
+        out[i + 8 ..][0..8].* = half * x1 * (one + tanh1) * y1;
+    }
+    while (i + 8 <= n) : (i += 8) {
+        const x: V8 = a[i..][0..8].*;
+        const y: V8 = b[i..][0..8].*;
+        const inner = @mulAdd(V8, coeff_v, x * x * x, x);
+        const t = @min(clamp_hi, @max(clamp_lo, sqrt_v * inner));
+        const e2t = @exp(two * t);
+        const tanh_v = (e2t - one) / (e2t + one);
+        out[i..][0..8].* = half * x * (one + tanh_v) * y;
+    }
+    // Scalar tail
+    while (i < n) : (i += 1) {
+        const x = a[i];
+        const inner = @mulAdd(f32, gelu_coeff, x * x * x, x);
+        const t = @min(gelu_clamp_hi, @max(gelu_clamp_lo, sqrt_2_over_pi * inner));
+        const e2t = @exp(2.0 * t);
+        const tanh_v = (e2t - 1.0) / (e2t + 1.0);
+        out[i] = 0.5 * x * (1.0 + tanh_v) * b[i];
+    }
 }
 
 const std = @import("std");
@@ -94,11 +164,11 @@ test "gelu" {
     // GELU(0) = 0
     try std.testing.expectApproxEqAbs(@as(f32, 0.0), output[0], 0.001);
     // GELU(1) ≈ 0.841
-    try std.testing.expectApproxEqAbs(@as(f32, 0.841), output[1], 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.841), output[1], 0.001);
     // GELU(-1) ≈ -0.159
-    try std.testing.expectApproxEqAbs(@as(f32, -0.159), output[2], 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, -0.159), output[2], 0.001);
     // GELU(2) ≈ 1.955
-    try std.testing.expectApproxEqAbs(@as(f32, 1.955), output[3], 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 1.955), output[3], 0.001);
 }
 
 test "silu non-aligned size exercises scalar tail" {
@@ -122,52 +192,38 @@ test "siluMul non-aligned size" {
     for (0..5) |i| try std.testing.expectApproxEqAbs(silu_ref[i] * b[i], out[i], 1e-5);
 }
 
-test "geluMul matches gelu * mul" {
-    const elementwise_kernel = @import("elementwise.zig");
+test "geluMul fused kernel matches gelu then mul" {
+    // Verify the fused geluMul() kernel produces the same result as separate gelu() + mul().
     var a = [_]f32{ 1.0, 2.0, -1.0, 0.5, -2.0, 3.0, 0.0, -0.5 };
     var b = [_]f32{ 2.0, 0.5, 1.0, 3.0, -1.0, 2.0, 5.0, 0.1 };
-    // Compute reference: gelu(a) * b
-    var gelu_ref: [8]f32 = undefined;
-    gelu(&a, &gelu_ref, 8);
-    var expected: [8]f32 = undefined;
-    elementwise_kernel.mul(&gelu_ref, &b, &expected, 8);
-    // Compute via composed path (same as CPU backend geluMul)
-    var out: [8]f32 = undefined;
-    gelu(&a, &out, 8);
-    elementwise_kernel.mul(&out, &b, &out, 8);
-    for (0..8) |i| try std.testing.expectApproxEqAbs(expected[i], out[i], 1e-6);
-}
-
-test "geluMul scaling" {
+    var fused_out: [8]f32 = undefined;
+    geluMul(&a, &b, &fused_out, 8);
+    // Compute reference via separate gelu() + mul()
+    var ref_out: [8]f32 = undefined;
+    gelu(&a, &ref_out, 8);
     const elementwise_kernel = @import("elementwise.zig");
-    var a = [_]f32{ 0.0, 1.0, -1.0, 2.0, -2.0, 0.5, -0.5, 3.0 };
-    // Compute gelu(a) as baseline
-    var gelu_a: [8]f32 = undefined;
-    gelu(&a, &gelu_a, 8);
-    // GELU(0) = 0, GELU(1) ≈ 0.841, GELU(-1) ≈ -0.159
-    try std.testing.expectApproxEqAbs(@as(f32, 0.0), gelu_a[0], 0.001);
-    try std.testing.expectApproxEqAbs(@as(f32, 0.841), gelu_a[1], 0.01);
-    try std.testing.expectApproxEqAbs(@as(f32, -0.159), gelu_a[2], 0.01);
-    // With b=2: geluMul(a, 2) = gelu(a) * 2
-    var b2 = [_]f32{ 2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0 };
-    var out: [8]f32 = undefined;
-    gelu(&a, &out, 8);
-    elementwise_kernel.mul(&out, &b2, &out, 8);
-    for (0..8) |i| try std.testing.expectApproxEqAbs(gelu_a[i] * 2.0, out[i], 1e-5);
+    elementwise_kernel.mul(&ref_out, &b, &ref_out, 8);
+    for (0..8) |i| try std.testing.expectApproxEqAbs(ref_out[i], fused_out[i], 1e-5);
 }
 
-test "geluMul non-aligned size" {
+test "gelu known values" {
+    var a = [_]f32{ 0.0, 1.0, -1.0, 2.0, -2.0, 0.5, -0.5, 3.0 };
+    gelu(&a, &a, 8);
+    // Reference: torch.nn.functional.gelu(tensor)
+    const expected = [_]f32{ 0.0, 0.8412, -0.1588, 1.9545, -0.0455, 0.3457, -0.1543, 2.9960 };
+    for (0..8) |i| try std.testing.expectApproxEqAbs(expected[i], a[i], 0.001);
+}
+
+test "geluMul non-aligned size exercises scalar tail" {
+    // n=5: exercises scalar tail path in fused geluMul (no 8-wide SIMD)
     var a = [_]f32{ 1.0, 2.0, -1.0, 0.5, 3.0 };
     var b = [_]f32{ 2.0, 0.5, 1.0, 3.0, -1.0 };
-    // Reference: gelu(a) * b
-    var gelu_ref: [5]f32 = undefined;
-    gelu(&a, &gelu_ref, 5);
-    var expected: [5]f32 = undefined;
+    var fused_out: [5]f32 = undefined;
+    geluMul(&a, &b, &fused_out, 5);
+    // Cross-reference against separate gelu() + mul()
+    var ref_out: [5]f32 = undefined;
+    gelu(&a, &ref_out, 5);
     const elementwise_kernel = @import("elementwise.zig");
-    elementwise_kernel.mul(&gelu_ref, &b, &expected, 5);
-    // Composed path
-    var out: [5]f32 = undefined;
-    gelu(&a, &out, 5);
-    elementwise_kernel.mul(&out, &b, &out, 5);
-    for (0..5) |i| try std.testing.expectApproxEqAbs(expected[i], out[i], 1e-5);
+    elementwise_kernel.mul(&ref_out, &b, &ref_out, 5);
+    for (0..5) |i| try std.testing.expectApproxEqAbs(ref_out[i], fused_out[i], 1e-5);
 }

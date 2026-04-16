@@ -2,8 +2,8 @@
 //! Provides a type-erased interface via comptime vtable generation, allowing
 //! the engine to work with any model architecture through a uniform API.
 //!
-//! Implementations: gemma3.zig, qwen35.zig, gpt_oss.zig, nemotron_h.zig,
-//! nemotron_nano.zig, glm4.zig
+//! Implementations: gemma3.zig, gemma4.zig, qwen35.zig, gpt_oss.zig,
+//! nemotron_h.zig, nemotron_nano.zig, glm4.zig, vision.zig
 
 const std = @import("std");
 const build_options = @import("build_options");
@@ -15,10 +15,18 @@ const kv_quant = @import("../ops/kv_quant.zig");
 const KvQuantType = kv_quant.KvQuantType;
 const TieredKvCache = @import("../kvcache/tiered.zig").TieredKvCache;
 
+/// Vision encoder for multimodal models (SigLIP-2, CLIP-like image embedding).
+pub const VisionEncoder = @import("vision.zig").VisionEncoder;
+
 /// Buffer size for constructing companion tensor names (e.g., ".scales", ".biases").
 pub const tensor_name_buf_size: usize = 256;
 /// Bits per u32 word — used to compute per-tensor bit width from packed weight dimensions.
 const bits_per_u32_word: u64 = 32;
+/// Default MLX quantization bit width (4-bit).
+pub const default_mlx_bits: u32 = 4;
+/// Cached pointer-keyed entry for converted norm weights.
+/// Used by all model implementations to cache bf16→f32 norm conversions.
+pub const NormCacheEntry = struct { key: usize, data: []f32 };
 
 /// Errors that can occur during model forward pass.
 pub const ForwardError = error{
@@ -57,12 +65,14 @@ pub const Model = struct {
         get_n_head_kv: *const fn (self: *anyopaque) u32,
         get_logits: *const fn (self: *anyopaque) []f32,
         get_block_table: *const fn (self: *anyopaque) []const u32,
+        get_kv_seq_len: *const fn (self: *anyopaque) usize,
+        set_image_embeddings: *const fn (self: *anyopaque, embeddings: ?[]const f32, n_tokens: u32, pad_token_id: u32) void,
     };
 
     /// Construct a Model interface from any concrete model type at comptime.
     /// The concrete type must have: forward(token_id) !u32, prefill(token_ids) !u32,
     /// resetCache(), cancel(), getBlockTable(), and fields: eos_token_id, vocab_size,
-    /// n_layers, n_embd, n_head, n_head_kv, and either `logits` or `logits_buf`.
+    /// n_layers, n_embd, n_head, n_head_kv, kv_seq_len, and `logits_buf`.
     pub fn from(comptime T: type, ptr: *T) Model {
         const vtable = comptime genVTable(T);
         return .{ .ptr = ptr, .vtable = vtable };
@@ -122,12 +132,32 @@ pub const Model = struct {
             }.call),
             .get_logits = @ptrCast(&struct {
                 fn call(self: *T) []f32 {
-                    return if (@hasField(T, "logits")) self.logits else self.logits_buf;
+                    return self.logits_buf;
                 }
             }.call),
             .get_block_table = @ptrCast(&struct {
                 fn call(self: *T) []const u32 {
                     return self.getBlockTable();
+                }
+            }.call),
+            .get_kv_seq_len = @ptrCast(&struct {
+                fn call(self: *T) usize {
+                    return self.kv_seq_len;
+                }
+            }.call),
+            .set_image_embeddings = @ptrCast(&struct {
+                fn call(self: *T, embeddings: ?[]const f32, n_tokens: u32, pad_token_id: u32) void {
+                    if (comptime @hasField(T, "image_embeddings")) {
+                        self.image_embeddings = embeddings;
+                        self.n_visual_tokens = n_tokens;
+                        if (comptime @hasField(T, "image_pad_token_id")) {
+                            self.image_pad_token_id = pad_token_id;
+                        }
+                        // Reset visual token injection counter for new image
+                        if (comptime @hasField(T, "visual_token_idx")) {
+                            self.visual_token_idx = 0;
+                        }
+                    }
                 }
             }.call),
         };
@@ -204,6 +234,21 @@ pub const Model = struct {
     pub fn getBlockTable(self: Model) []const u32 {
         return self.vtable.get_block_table(self.ptr);
     }
+
+    /// Return the current KV cache sequence length (number of tokens processed).
+    pub fn kvSeqLen(self: Model) usize {
+        return self.vtable.get_kv_seq_len(self.ptr);
+    }
+
+    /// Set visual token embeddings for multimodal inference.
+    /// The embeddings slice must contain n_tokens * n_embd f32 values
+    /// (already projected to the model's hidden dimension).
+    /// `pad_token_id` is the token ID used as placeholder in the input sequence
+    /// (the model replaces these with visual embeddings during forward()).
+    /// Pass null embeddings to clear (return to text-only mode).
+    pub fn setImageEmbeddings(self: Model, embeddings: ?[]const f32, n_tokens: u32, pad_token_id: u32) void {
+        self.vtable.set_image_embeddings(self.ptr, embeddings, n_tokens, pad_token_id);
+    }
 };
 
 // ── Shared helpers for model implementations ─────────────────────
@@ -223,6 +268,17 @@ pub fn expertWeightStride(t: format_mod.TensorInfo) usize {
     std.debug.assert(t.n_dims >= 3);
     const elems: usize = @as(usize, @intCast(t.dims[1])) * @as(usize, @intCast(t.dims[2]));
     return backend_mod.weightBytes(t.dtype, 1, elems);
+}
+
+/// Compute the byte stride between consecutive experts, handling both MLX (U32
+/// packed) and GGUF/standard weight formats.
+pub fn expertStride(t: format_mod.TensorInfo) usize {
+    if (t.dtype == .mlx_q) {
+        // SafeTensors MLX dims (not reversed): [n_experts, rows, words_per_row] U32
+        std.debug.assert(t.n_dims >= 3);
+        return @as(usize, @intCast(t.dims[1])) * @as(usize, @intCast(t.dims[2])) * @sizeOf(u32);
+    }
+    return expertWeightStride(t);
 }
 
 /// Dispatch GEMV for an mlx_q tensor through the backend's gemvMlxQ path.
@@ -250,7 +306,7 @@ pub fn mlxGemv(be: backend_mod.Backend, fmt: format_mod.Format, x: [*]const f32,
         const bits: u32 = if (t.n_dims >= 2 and k > 0)
             @intCast(@as(u64, t.dims[t.n_dims - 1]) * bits_per_u32_word / @as(u64, @intCast(k)))
         else
-            fmt.getMetaU32("bits") orelse 4;
+            fmt.getMetaU32("bits") orelse default_mlx_bits;
         be.gemvMlxQ(x, t.data_ptr, st.data_ptr, bt.data_ptr, y, n, k, bits);
     }
     return true;
@@ -275,7 +331,7 @@ pub fn findMlxCompanion(fmt: format_mod.Format, t: format_mod.TensorInfo, k: usi
     const bits: u32 = if (t.n_dims >= 2 and k > 0)
         @intCast(@as(u64, t.dims[t.n_dims - 1]) * bits_per_u32_word / @as(u64, @intCast(k)))
     else
-        fmt.getMetaU32("bits") orelse 4;
+        fmt.getMetaU32("bits") orelse default_mlx_bits;
     return .{ .scales = st.data_ptr, .biases = bt.data_ptr, .bits = bits };
 }
 
@@ -346,12 +402,19 @@ pub const ModelStorage = union(enum) {
 
     /// Initialize a model from its architecture type.
     /// Returns a ModelStorage union holding the initialized concrete model.
-    pub fn initFromArch(arch: Arch, allocator: std.mem.Allocator, fmt: format_mod.Format, be: backend_mod.Backend, ctx_size: u32, kv_type_k: KvQuantType, kv_type_v: KvQuantType, tiered_cache: ?*TieredKvCache) !ModelStorage {
+    pub fn initFromArch(arch: Arch, allocator: std.mem.Allocator, fmt: format_mod.Format, be: backend_mod.Backend, ctx_size: u32, kv_type_k: KvQuantType, kv_type_v: KvQuantType, kv_boundary_v: u32, kv_eviction_budget: u32, tiered_cache: ?*TieredKvCache) !ModelStorage {
         switch (arch) {
             inline .gemma3, .gemma4, .qwen35, .gpt_oss, .nemotron_h, .nemotron_nano, .glm4 => |a| {
                 if (comptime !a.isEnabled()) unreachable;
                 const M = comptime modelType(a);
-                const mdl = try M.init(allocator, fmt, be, ctx_size, kv_type_k, kv_type_v, tiered_cache);
+                var mdl = try M.init(allocator, fmt, be, ctx_size, kv_type_k, kv_type_v, tiered_cache);
+                // Set boundary V protection: first/last N layers use f16 for V
+                if (comptime @hasField(M, "kv_boundary_v")) {
+                    mdl.kv_boundary_v = kv_boundary_v;
+                }
+                if (comptime @hasField(M, "kv_eviction_budget")) {
+                    mdl.kv_eviction_budget = kv_eviction_budget;
+                }
                 return @unionInit(ModelStorage, @tagName(a), mdl);
             },
         }

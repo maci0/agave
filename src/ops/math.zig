@@ -3,20 +3,17 @@
 //! multiple model architectures, avoiding code duplication.
 
 const std = @import("std");
-const backend_mod = @import("../backend/backend.zig");
-const Backend = backend_mod.Backend;
-const TensorData = backend_mod.TensorData;
 
 /// Constant for GELU tanh approximation: sqrt(2/pi).
-const sqrt_2_over_pi: f32 = 0.7978845608028654;
+pub const sqrt_2_over_pi: f32 = 0.7978845608028654;
 /// Cubic coefficient in the GELU tanh approximation.
-const gelu_coeff: f32 = 0.044715;
+pub const gelu_coeff: f32 = 0.044715;
 /// Softplus stability threshold: for x > this value, softplus(x) ≈ x.
 const softplus_threshold: f32 = 20.0;
 /// GELU tanh-argument clamp upper bound (prevents exp overflow).
-const gelu_clamp_hi: f32 = 10.0;
+pub const gelu_clamp_hi: f32 = 10.0;
 /// GELU tanh-argument clamp lower bound (prevents exp overflow).
-const gelu_clamp_lo: f32 = -10.0;
+pub const gelu_clamp_lo: f32 = -10.0;
 /// Maximum top-k value for stack-allocated selection buffer in sampleToken.
 const max_top_k: usize = 1024;
 /// Maximum candidates for top-p nucleus sampling buffer.
@@ -24,22 +21,32 @@ const max_top_k: usize = 1024;
 const nucleus_max_candidates: usize = 1024;
 
 /// Return the index of the maximum element in `buf`.
-/// Single-pass scalar scan tracking both value and index.
+/// Two-phase SIMD: branchless max-reduce, then early-exit index scan.
+/// Faster than scalar for large vocabularies (32K+) because the max-find
+/// phase has no loop-carried data dependency.
 ///
 /// Parameters:
 ///   - buf: Non-empty slice of f32 values to search.
 ///
-/// Returns: Index of the maximum value as u32.
+/// Returns: Index of the maximum value as u32 (first occurrence on ties).
 pub fn argmax(buf: []const f32) u32 {
-    var best_idx: u32 = 0;
-    var best_val: f32 = -std.math.inf(f32);
-    for (buf, 0..) |v, i| {
-        if (v > best_val) {
-            best_val = v;
-            best_idx = @intCast(i);
-        }
+    const V8 = @Vector(8, f32);
+    // Phase 1: SIMD reduction to find maximum value (branchless)
+    var max_v: V8 = @splat(-std.math.inf(f32));
+    var i: usize = 0;
+    while (i + 8 <= buf.len) : (i += 8) {
+        const chunk: V8 = buf[i..][0..8].*;
+        max_v = @max(max_v, chunk);
     }
-    return best_idx;
+    var best_val = @reduce(.Max, max_v);
+    while (i < buf.len) : (i += 1) {
+        best_val = @max(best_val, buf[i]);
+    }
+    // Phase 2: find first occurrence (early-exit scan)
+    for (buf, 0..) |v, idx| {
+        if (v >= best_val) return @intCast(idx);
+    }
+    return 0;
 }
 
 /// Select the top-k elements from `scores` by value.
@@ -167,36 +174,6 @@ pub fn applyGelu(x: []f32) void {
     }
 }
 
-/// Compute final logits: RMS-norm the hidden state, project to vocab via LM head,
-/// sync GPU, and return the argmax token ID.
-///
-/// Parameters:
-///   - hidden: Hidden state buffer [n_embd], modified in-place by rmsNorm.
-///   - norm_weight: RMS norm weight tensor data pointer.
-///   - lm_head: LM head weight tensor (data + dtype).
-///   - logits: Scratch buffer for logit output [vocab_size].
-///   - vocab_size: Vocabulary size.
-///   - n_embd: Embedding dimension.
-///   - rms_eps: RMS norm epsilon.
-///   - be: Backend for rmsNorm and gemv dispatch.
-///
-/// Returns: argmax token ID.
-pub fn finalLogits(
-    hidden: [*]f32,
-    norm_weight: [*]const u8,
-    lm_head: TensorData,
-    logits: []f32,
-    vocab_size: usize,
-    n_embd: usize,
-    rms_eps: f32,
-    be: Backend,
-) u32 {
-    be.rmsNorm(hidden, @ptrCast(@alignCast(norm_weight)), hidden, n_embd, rms_eps);
-    be.gemv(hidden, lm_head, logits.ptr, vocab_size, n_embd);
-    be.sync(); // GPU gemv wrote logits — sync before CPU argmax
-    return argmax(logits);
-}
-
 /// Apply repetition penalty to logits for recently generated tokens.
 /// For each token ID in `recent_ids`, divides its logit by `penalty` if positive,
 /// multiplies if negative. This discourages the model from repeating tokens.
@@ -232,15 +209,23 @@ pub fn applyRepeatPenalty(logits: []f32, recent_ids: []const u32, penalty: f32) 
 pub fn sampleToken(logits: []f32, temperature: f32, top_k: u32, top_p: f32, rng: std.Random) u32 {
     if (temperature == 0) return argmax(logits);
 
+    const V8 = @Vector(8, f32);
     const n = logits.len;
     const neg_inf = -std.math.inf(f32);
 
-    // 1. Temperature scaling
-    const inv_temp = 1.0 / temperature;
-    for (logits) |*v| v.* *= inv_temp;
+    // 1. Temperature scaling (SIMD)
+    {
+        const inv_temp = 1.0 / temperature;
+        const inv_v: V8 = @splat(inv_temp);
+        var si: usize = 0;
+        while (si + 8 <= n) : (si += 8) {
+            logits[si..][0..8].* = @as(V8, logits[si..][0..8].*) * inv_v;
+        }
+        while (si < n) : (si += 1) logits[si] *= inv_temp;
+    }
 
     // 2. Top-k: find k-th largest value via min-replacement scan, mask the rest.
-    // Tracks min index to avoid O(k) rescan per element → O(n) total instead of O(n*k).
+    // Tracks min index; rescans k-buffer only on insertion (not every element).
     if (top_k > 0 and top_k < n) {
         const k: usize = top_k;
         var top_buf: [max_top_k]f32 = undefined;
@@ -260,27 +245,57 @@ pub fn sampleToken(logits: []f32, temperature: f32, top_k: u32, top_p: f32, rng:
             }
         }
         const top_min = top_buf[mi];
-        for (logits) |*v| {
-            if (v.* < top_min) v.* = neg_inf;
+        const min_v: V8 = @splat(top_min);
+        const neg_inf_v: V8 = @splat(neg_inf);
+        {
+            var si: usize = 0;
+            while (si + 8 <= n) : (si += 8) {
+                const chunk: V8 = logits[si..][0..8].*;
+                logits[si..][0..8].* = @select(f32, chunk < min_v, neg_inf_v, chunk);
+            }
+            while (si < n) : (si += 1) {
+                if (logits[si] < top_min) logits[si] = neg_inf;
+            }
         }
     }
 
-    // 3. Softmax
-    var max_val: f32 = neg_inf;
-    for (logits) |v| if (v > max_val) {
-        max_val = v;
+    // 3. Softmax (unnormalized — normalization deferred to sampling)
+    const max_val: f32 = blk: {
+        var max_v: V8 = @splat(neg_inf);
+        var si: usize = 0;
+        while (si + 8 <= n) : (si += 8) {
+            max_v = @max(max_v, @as(V8, logits[si..][0..8].*));
+        }
+        var m = @reduce(.Max, max_v);
+        while (si < n) : (si += 1) m = @max(m, logits[si]);
+        break :blk m;
     };
     var sum: f32 = 0;
-    for (logits) |*v| {
-        v.* = if (v.* == neg_inf) 0 else @exp(v.* - max_val);
-        sum += v.*;
+    {
+        const max_v: V8 = @splat(max_val);
+        const neg_inf_v: V8 = @splat(neg_inf);
+        const zero_v: V8 = @splat(0.0);
+        var sum_v: V8 = zero_v;
+        var si: usize = 0;
+        while (si + 8 <= n) : (si += 8) {
+            const chunk: V8 = logits[si..][0..8].*;
+            const is_neginf = chunk == neg_inf_v;
+            const exp_vals = @exp(chunk - max_v);
+            const result = @select(f32, is_neginf, zero_v, exp_vals);
+            logits[si..][0..8].* = result;
+            sum_v += result;
+        }
+        sum = @reduce(.Add, sum_v);
+        while (si < n) : (si += 1) {
+            logits[si] = if (logits[si] == neg_inf) 0 else @exp(logits[si] - max_val);
+            sum += logits[si];
+        }
     }
-    const inv_sum = 1.0 / sum;
-    for (logits) |*v| v.* *= inv_sum;
 
-    // 4. Top-p (nucleus): threshold-based filtering — O(n) instead of O(n*k).
-    // Collects top candidates via single scan, sorts them, finds the probability
-    // threshold where cumulative probability >= top_p, then zeroes out below it.
+    // 4. Top-p (nucleus): threshold-based filtering.
+    // Collects top candidates via min-replacement scan (O(n + insertions*k)),
+    // sorts them, finds the probability threshold where cumulative
+    // probability >= top_p, then zeroes out tokens below the threshold.
     if (top_p < 1.0 and top_p > 0.0) {
         var top_vals: [nucleus_max_candidates]f32 = undefined;
         var n_top: usize = 0;
@@ -307,24 +322,15 @@ pub fn sampleToken(logits: []f32, temperature: f32, top_k: u32, top_p: f32, rng:
             }
         }
 
-        // Sort candidates descending (insertion sort — small N, cache-friendly)
-        var ci: usize = 1;
-        while (ci < n_top) : (ci += 1) {
-            const val = top_vals[ci];
-            var j = ci;
-            while (j > 0 and top_vals[j - 1] < val) {
-                top_vals[j] = top_vals[j - 1];
-                j -= 1;
-            }
-            top_vals[j] = val;
-        }
+        // Sort candidates descending
+        std.mem.sort(f32, top_vals[0..n_top], {}, std.sort.desc(f32));
 
         // Cumsum scan to find probability threshold
         var cumsum: f32 = 0;
         var threshold: f32 = 0;
         for (top_vals[0..n_top]) |v| {
             cumsum += v;
-            if (cumsum >= top_p) {
+            if (cumsum >= top_p * sum) {
                 threshold = v;
                 break;
             }
@@ -332,25 +338,35 @@ pub fn sampleToken(logits: []f32, temperature: f32, top_k: u32, top_p: f32, rng:
 
         // Apply threshold: zero out tokens below cutoff, recompute sum
         sum = 0;
-        for (logits) |*v| {
-            if (v.* < threshold) {
-                v.* = 0;
-            } else {
-                sum += v.*;
+        {
+            const thresh_v: V8 = @splat(threshold);
+            const zero_v: V8 = @splat(0.0);
+            var sum_v: V8 = zero_v;
+            var si: usize = 0;
+            while (si + 8 <= n) : (si += 8) {
+                const chunk: V8 = logits[si..][0..8].*;
+                const keep = chunk >= thresh_v;
+                const result = @select(f32, keep, chunk, zero_v);
+                logits[si..][0..8].* = result;
+                sum_v += result;
             }
-        }
-        if (sum > 0) {
-            const inv = 1.0 / sum;
-            for (logits) |*v| v.* *= inv;
+            sum = @reduce(.Add, sum_v);
+            while (si < n) : (si += 1) {
+                if (logits[si] < threshold) {
+                    logits[si] = 0;
+                } else {
+                    sum += logits[si];
+                }
+            }
         }
     }
 
-    // 5. Weighted random sampling
-    const r = rng.float(f32);
+    // 5. Weighted random sampling (unnormalized — scale threshold by sum)
     var cumulative: f32 = 0;
+    const sample_threshold = rng.float(f32) * sum;
     for (logits, 0..) |p, i| {
         cumulative += p;
-        if (r < cumulative) return @intCast(i);
+        if (sample_threshold < cumulative) return @intCast(i);
     }
     return @intCast(n - 1);
 }
@@ -439,18 +455,20 @@ test "applyGelu" {
     // 10 elements: 8 via SIMD loop + 2 via scalar tail
     var buf = [_]f32{ 0.0, 1.0, -1.0, 2.0, -2.0, 0.5, -0.5, 3.0, -3.0, 1.5 };
     applyGelu(&buf);
-    // GELU(0) = 0
-    try std.testing.expectApproxEqAbs(@as(f32, 0.0), buf[0], 0.001);
-    // GELU(1) ≈ 0.841
-    try std.testing.expectApproxEqAbs(@as(f32, 0.841), buf[1], 0.01);
-    // GELU(-1) ≈ -0.159
-    try std.testing.expectApproxEqAbs(@as(f32, -0.159), buf[2], 0.01);
-    // GELU(2) ≈ 1.955
-    try std.testing.expectApproxEqAbs(@as(f32, 1.955), buf[3], 0.01);
+    // GELU(0) = 0 exactly
+    try std.testing.expectApproxEqAbs(@as(f32, 0.0), buf[0], 1e-6);
+    // GELU(1) ≈ 0.8412
+    try std.testing.expectApproxEqAbs(@as(f32, 0.8412), buf[1], 0.001);
+    // GELU(-1) ≈ -0.1588
+    try std.testing.expectApproxEqAbs(@as(f32, -0.1588), buf[2], 0.001);
+    // GELU(2) ≈ 1.9546
+    try std.testing.expectApproxEqAbs(@as(f32, 1.9546), buf[3], 0.001);
+    // GELU(-2) ≈ -0.0454
+    try std.testing.expectApproxEqAbs(@as(f32, -0.0454), buf[4], 0.001);
     // Scalar tail: GELU(-3) ≈ -0.00436
-    try std.testing.expectApproxEqAbs(@as(f32, -0.004), buf[8], 0.002);
-    // Scalar tail: GELU(1.5) ≈ 1.399
-    try std.testing.expectApproxEqAbs(@as(f32, 1.399), buf[9], 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, -0.00436), buf[8], 0.001);
+    // Scalar tail: GELU(1.5) ≈ 1.3990
+    try std.testing.expectApproxEqAbs(@as(f32, 1.3990), buf[9], 0.001);
 }
 
 test "sampleToken greedy" {
@@ -461,15 +479,16 @@ test "sampleToken greedy" {
 }
 
 test "sampleToken deterministic with seed" {
-    // Same seed should produce same result
+    // Same seed should produce same result, and result should be valid
     var logits1 = [_]f32{ 1.0, 2.0, 3.0, 2.0 };
     var logits2 = [_]f32{ 1.0, 2.0, 3.0, 2.0 };
     var prng1 = std.Random.DefaultPrng.init(123);
     var prng2 = std.Random.DefaultPrng.init(123);
-    try std.testing.expectEqual(
-        sampleToken(&logits1, 1.0, 0, 1.0, prng1.random()),
-        sampleToken(&logits2, 1.0, 0, 1.0, prng2.random()),
-    );
+    const result1 = sampleToken(&logits1, 1.0, 0, 1.0, prng1.random());
+    const result2 = sampleToken(&logits2, 1.0, 0, 1.0, prng2.random());
+    try std.testing.expectEqual(result1, result2);
+    // Result must be a valid token index
+    try std.testing.expect(result1 < 4);
 }
 
 test "sampleToken top_k filters" {
@@ -485,6 +504,41 @@ test "sampleToken top_k filters" {
     try std.testing.expect(seen[1]); // index 1 (3.0) kept
     try std.testing.expect(!seen[2]); // index 2 (0.2) filtered out
     try std.testing.expect(seen[3]); // index 3 (2.5) kept
+}
+
+test "sampleToken top_p nucleus sampling" {
+    // top_p=0.5 should keep only the highest-probability token(s) until
+    // cumulative probability >= 0.5. With logits [0.1, 5.0, 0.2, 0.3],
+    // index 1 dominates after softmax and should be the only token sampled.
+    var seen = [_]bool{false} ** 4;
+    for (0..50) |seed| {
+        var l = [_]f32{ 0.1, 5.0, 0.2, 0.3 };
+        var p = std.Random.DefaultPrng.init(seed);
+        seen[sampleToken(&l, 1.0, 0, 0.5, p.random())] = true;
+    }
+    // Index 1 should always be selected (softmax(5.0) >> 0.5 cumulative)
+    try std.testing.expect(seen[1]);
+    // Other indices should be filtered out by nucleus
+    try std.testing.expect(!seen[0]);
+    try std.testing.expect(!seen[2]);
+    try std.testing.expect(!seen[3]);
+}
+
+test "sampleToken top_p allows multiple tokens" {
+    // With close logits and top_p=0.9, multiple tokens should be sampled.
+    // logits [2.0, 2.1, 2.0, 2.1] are close → softmax near uniform.
+    var seen = [_]bool{false} ** 4;
+    for (0..200) |seed| {
+        var l = [_]f32{ 2.0, 2.1, 2.0, 2.1 };
+        var p = std.Random.DefaultPrng.init(seed);
+        seen[sampleToken(&l, 1.0, 0, 0.9, p.random())] = true;
+    }
+    // With near-uniform distribution and top_p=0.9, at least 3 tokens should appear
+    var count: usize = 0;
+    for (seen) |s| if (s) {
+        count += 1;
+    };
+    try std.testing.expect(count >= 3);
 }
 
 test "applyRepeatPenalty positive logits divided" {
@@ -606,4 +660,50 @@ test "topKExperts negative scores" {
     for (0..2) |i| found[indices[i]] = true;
     try std.testing.expect(found[1]); // -0.1 (highest)
     try std.testing.expect(found[3]); // -0.3 (second highest)
+}
+
+test "argmax all equal returns first" {
+    const buf = [_]f32{ 5.0, 5.0, 5.0, 5.0 };
+    // Ties broken by first occurrence (> not >=)
+    try std.testing.expectEqual(@as(u32, 0), argmax(&buf));
+}
+
+test "argmax negative values" {
+    const buf = [_]f32{ -10.0, -5.0, -20.0, -1.0 };
+    try std.testing.expectEqual(@as(u32, 3), argmax(&buf));
+}
+
+test "argmax with inf" {
+    const buf = [_]f32{ 1.0, std.math.inf(f32), 2.0, 0.5 };
+    try std.testing.expectEqual(@as(u32, 1), argmax(&buf));
+}
+
+test "argmax with negative inf" {
+    const buf = [_]f32{ -std.math.inf(f32), -1.0, -std.math.inf(f32) };
+    try std.testing.expectEqual(@as(u32, 1), argmax(&buf));
+}
+
+test "argmax exercises SIMD path" {
+    // 16 elements: the 8-wide SIMD reduction loop executes twice.
+    // Max at index 13 ensures SIMD finds it in the second chunk.
+    const buf = [_]f32{ 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2, 1.3, 9.9, 1.5, 1.6 };
+    try std.testing.expectEqual(@as(u32, 13), argmax(&buf));
+}
+
+test "sigmoid symmetry" {
+    // sigmoid(-x) = 1 - sigmoid(x)
+    const x: f32 = 3.7;
+    const pos = sigmoid(x);
+    const neg = sigmoid(-x);
+    try std.testing.expectApproxEqAbs(@as(f32, 1.0), pos + neg, 1e-6);
+}
+
+test "applyGelu extreme values clamped" {
+    // Values beyond clamp range should not produce NaN/Inf
+    var buf = [_]f32{ 100.0, -100.0 };
+    applyGelu(&buf);
+    // GELU(large positive) ≈ x (linear regime)
+    try std.testing.expectApproxEqAbs(@as(f32, 100.0), buf[0], 0.01);
+    // GELU(large negative) ≈ 0
+    try std.testing.expectApproxEqAbs(@as(f32, 0.0), buf[1], 0.01);
 }

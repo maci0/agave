@@ -5,21 +5,14 @@
 
 const cu = @import("common.zig");
 
-/// Extract scale and minimum from Q5_K packed scale byte array.
-inline fn getScaleMinK4(j: usize, q: [*]const u8, sc: *u8, m: *u8) void {
-    if (j < 4) {
-        sc.* = q[j] & 63;
-        m.* = q[j + 4] & 63;
-    } else {
-        sc.* = (q[j + 4] & 0xF) | ((q[j - 4] >> 6) << 4);
-        m.* = (q[j + 4] >> 4) | ((q[j] >> 6) << 4);
-    }
-}
+const getScaleMinK4 = cu.getScaleMinK4;
 
 /// Bytes per Q5_K super-block (256 elements).
 const q5_k_block_size: u32 = 176;
 /// Elements per Q5_K super-block.
 const q5_k_group_size: u32 = 256;
+/// Q5_K high-bit contribution: the 5th bit adds 2^4 = 16 to the value.
+const q5_k_high_bit_int: u8 = 16;
 
 export fn gemv_q5_k_kernel(x: [*]const f32, w: [*]const u8, y: [*]f32, n: u32, k: u32) callconv(.kernel) void {
     const row = cu.blockIdx();
@@ -82,7 +75,7 @@ export fn gemv_q5_k_kernel(x: [*]const f32, w: [*]const u8, y: [*]f32, n: u32, k
             const count1 = @min(32, k - gi_base);
             for (0..count1) |l| {
                 const lo = qs[ql_off + l] & 0x0F;
-                const hi: u8 = if ((qh[l] & umask1) != 0) @as(u8, 16) else 0;
+                const hi: u8 = if ((qh[l] & umask1) != 0) q5_k_high_bit_int else 0;
                 const qval: f32 = @floatFromInt(lo + hi);
                 sum1 += x[gi_base + l] * qval;
                 x_sum1 += x[gi_base + l];
@@ -97,7 +90,7 @@ export fn gemv_q5_k_kernel(x: [*]const f32, w: [*]const u8, y: [*]f32, n: u32, k
                 const count2 = @min(32, k - gi_base2);
                 for (0..count2) |l| {
                     const lo = qs[ql_off + l] >> 4;
-                    const hi: u8 = if ((qh[l] & umask2) != 0) @as(u8, 16) else 0;
+                    const hi: u8 = if ((qh[l] & umask2) != 0) q5_k_high_bit_int else 0;
                     const qval: f32 = @floatFromInt(lo + hi);
                     sum2 += x[gi_base2 + l] * qval;
                     x_sum2 += x[gi_base2 + l];

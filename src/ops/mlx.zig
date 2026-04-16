@@ -26,14 +26,14 @@ pub fn wordsPerGroup(bits: u32) usize {
 }
 
 /// Unpack a single 4-bit value from a packed u32 array.
-pub fn unpackU4(w: [*]const u32, idx: usize) u4 {
+fn unpackU4(w: [*]const u32, idx: usize) u4 {
     const wi = idx / nibbles_per_u32;
     const bo: u5 = @intCast((idx % nibbles_per_u32) * bits_per_nibble);
     return @truncate(w[wi] >> bo);
 }
 
 /// Unpack a single 6-bit value from a packed u32 array.
-pub fn unpackU6(w: [*]const u32, idx: usize) u6 {
+fn unpackU6(w: [*]const u32, idx: usize) u6 {
     const bp = idx * 6;
     const wi = bp / bits_per_u32;
     const bo: u5 = @intCast(bp % bits_per_u32);
@@ -44,7 +44,7 @@ pub fn unpackU6(w: [*]const u32, idx: usize) u6 {
 }
 
 /// Unpack a single 8-bit value from a packed u32 array.
-pub fn unpackU8(w: [*]const u32, idx: usize) u8 {
+fn unpackU8(w: [*]const u32, idx: usize) u8 {
     const wi = idx / bytes_per_u32;
     const bo: u5 = @intCast((idx % bytes_per_u32) * bits_per_byte);
     return @truncate(w[wi] >> bo);
@@ -52,6 +52,16 @@ pub fn unpackU8(w: [*]const u32, idx: usize) u8 {
 
 /// MLX affine GEMV: y[row] = sum_j(dequant(W[row,j]) * x[j])
 /// Dequant: float_val = scale * int_val + bias, per group of 64 elements.
+///
+/// Parameters:
+///   x    — input vector [k]
+///   pw   — packed weight matrix (uint4/6/8 values stored in u32 words)
+///   sc   — per-group scales (bf16, one per 64-element group)
+///   bi   — per-group biases (bf16, one per 64-element group)
+///   y    — output vector [n]
+///   n    — number of output rows
+///   k    — input dimension (columns per row)
+///   bits — quantization width (4, 6, or 8)
 pub fn mlxGemvRaw(
     x: [*]const f32,
     pw: [*]const u32,
@@ -95,7 +105,7 @@ pub fn mlxGemvRows(
 
 /// SIMD-optimized 4-bit MLX GEMV for a range of rows.
 /// Uses factored scale/bias: sum(x*(scale*q+bias)) = scale*dot(x,q) + bias*sum(x).
-/// Accumulates q_dot and x_sum per group, applies scale/bias once.
+/// Accumulates q_dot and x_sum per group, applies scale/bias once per group.
 /// @mulAdd maps to NEON fmla (1 instruction vs fmul+fadd chain).
 /// 2-row batching reuses x vector loads across rows.
 fn mlxGemvQ4Rows(
@@ -302,28 +312,6 @@ fn mlxGemvQ8Rows(
     }
 }
 
-/// GEMV for MLX MXFP4 SafeTensors layout.
-/// Weight: U32-packed 4-bit nibbles (8 nibbles per word), group_size=32.
-/// Scales: E8M0 (pure power-of-2) per group (U8 array). No quantization bias.
-/// Dequant: float_val = mxfp4_lookup(nibble) * fp8_scale.
-pub fn mlxMxfp4Gemv(
-    x: [*]const f32,
-    pw: [*]const u32,
-    scales_u8: [*]const u8,
-    y: [*]f32,
-    n: usize,
-    k: usize,
-) void {
-    mlxMxfp4GemvRows(x, pw, scales_u8, y, 0, n, k);
-}
-
-/// Convert an E8M0 scale byte to f32: val = 2^(byte - 127) for byte > 0; 0.0 for byte == 0.
-/// E8M0 is a pure power-of-2 format used by OCP Microscaling (MX) spec.
-inline fn e8m0ToF32(byte: u8) f32 {
-    if (byte == 0) return 0.0; // Zero exponent → zero scale
-    // Construct IEEE 754 float: exponent = byte - 127 + 127 = byte, mantissa = 0
-    return @bitCast(@as(u32, byte) << 23);
-}
 
 /// Compute a range of rows for MLX MXFP4 GEMV.
 /// Scales are E8M0 (pure power-of-2), NOT FP8 E4M3.
@@ -348,7 +336,7 @@ pub fn mlxMxfp4GemvRows(
         const sr = scales_u8 + row * gpr;
 
         for (0..gpr) |g| {
-            const scale = e8m0ToF32(sr[g]);
+            const scale = quant.e8m0ToF32(sr[g]);
             const sv: V8 = @splat(scale);
             const xo = g * mxfp4_group_size;
             const wo = g * wpg;
@@ -424,6 +412,7 @@ pub fn mlxEmbLookup(
 test "wordsPerGroup" {
     try std.testing.expectEqual(@as(usize, 8), wordsPerGroup(4)); // 64*4/32 = 8
     try std.testing.expectEqual(@as(usize, 12), wordsPerGroup(6)); // 64*6/32 = 12
+    try std.testing.expectEqual(@as(usize, 16), wordsPerGroup(8)); // 64*8/32 = 16
 }
 
 test "unpackU4" {
@@ -445,4 +434,52 @@ test "unpackU6" {
     const cross = [_]u32{ 0b11_000000_000000_000000_000000_000000, 0b0000_0000_0000_0000_0000_0000_0000_1010 };
     // 6-bit value = (word1[3:0] << 2) | (word0[31:30]) = (0b1010 << 2) | 0b11 = 0b101011 = 43
     try std.testing.expectEqual(@as(u6, 43), unpackU6(&cross, 5));
+}
+
+test "mlxGemvRaw 4-bit basic" {
+    // 1 output row, k=8, 4-bit quantization
+    // Weights: nibbles 0..7 packed into first u32 word
+    // scale=1.0 (bf16), bias=0.0 → dequant(val) = val
+    // x = all ones → y[0] = sum(0..7) = 28
+    var pw = [_]u32{ 0x76543210, 0, 0, 0, 0, 0, 0, 0 };
+    const sc = [_]u16{0x3F80}; // bf16(1.0)
+    const bi = [_]u16{0x0000}; // bf16(0.0)
+    const x = [_]f32{ 1, 1, 1, 1, 1, 1, 1, 1 };
+    var y = [_]f32{0};
+
+    mlxGemvRaw(&x, &pw, &sc, &bi, &y, 1, 8, 4);
+
+    try std.testing.expectApproxEqAbs(@as(f32, 28.0), y[0], 1e-3);
+}
+
+test "mlxGemvRaw 4-bit with bias" {
+    // Verify bias is applied: all-zero weights + bias=1.0 → y = sum(x) * bias
+    var pw = [_]u32{ 0, 0, 0, 0, 0, 0, 0, 0 };
+    const sc = [_]u16{0x4000}; // bf16(2.0) — scale doesn't matter, weights are 0
+    const bi = [_]u16{0x3F80}; // bf16(1.0)
+    const x = [_]f32{ 1, 1, 1, 1, 1, 1, 1, 1 };
+    var y = [_]f32{0};
+
+    mlxGemvRaw(&x, &pw, &sc, &bi, &y, 1, 8, 4);
+
+    // Each element: x[j] * (scale*0 + bias) = 1.0 * 1.0 = 1.0, sum = 8.0
+    try std.testing.expectApproxEqAbs(@as(f32, 8.0), y[0], 1e-3);
+}
+
+test "mlxEmbLookup 4-bit basic" {
+    // 2 rows of k=8, look up row 1 (all 5s)
+    // Row 0: nibbles 0..7, Row 1: all 5s
+    var pw: [16]u32 = .{0} ** 16; // 2 rows × 8 words per row
+    pw[0] = 0x76543210; // row 0
+    pw[8] = 0x55555555; // row 1: all nibbles = 5
+    const sc = [_]u16{ 0x3F80, 0x3F80 }; // bf16(1.0) per row
+    const bi = [_]u16{ 0x0000, 0x0000 }; // bf16(0.0)
+    var out: [8]f32 = undefined;
+
+    mlxEmbLookup(&out, &pw, &sc, &bi, 1, 8, 4);
+
+    // Row 1: dequant = 1.0 * 5 + 0.0 = 5.0 for all elements
+    for (0..8) |i| {
+        try std.testing.expectApproxEqAbs(@as(f32, 5.0), out[i], 1e-6);
+    }
 }

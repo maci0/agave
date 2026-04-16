@@ -3,8 +3,9 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
-const TensorData = @import("backend.zig").TensorData;
-const DType = @import("backend.zig").DType;
+const backend_mod = @import("backend.zig");
+const TensorData = backend_mod.TensorData;
+const DType = backend_mod.DType;
 const quant = @import("../ops/quant.zig");
 const ThreadPool = @import("../thread_pool.zig").ThreadPool;
 const gemv_kernel = @import("kernels/cpu/gemv.zig");
@@ -15,8 +16,6 @@ const rope_kernel = @import("kernels/cpu/rope.zig");
 const activation_kernel = @import("kernels/cpu/activation.zig");
 const elementwise_kernel = @import("kernels/cpu/elementwise.zig");
 const sdpa_kernel = @import("kernels/cpu/sdpa.zig");
-const sdpa_prefill_kernel = @import("kernels/cpu/sdpa_prefill.zig");
-const gemm_kernel = @import("kernels/cpu/gemm.zig");
 const deltanet_kernel = @import("kernels/cpu/deltanet.zig");
 
 // ── Buffer sizes for system detection ─────────────────────────────
@@ -156,7 +155,7 @@ pub fn detectAvailMem() usize {
     return 0;
 }
 
-const CacheSizes = @import("backend.zig").CacheSizes;
+const CacheSizes = backend_mod.CacheSizes;
 
 /// Detect CPU cache sizes (L1 data, L2, L3) in bytes.
 pub fn detectCacheSizes() CacheSizes {
@@ -299,49 +298,63 @@ pub const CpuBackend = struct {
     }
 
     /// Applies Root Mean Square Layer Normalization: output[i] = input[i] * weight[i] / rms(input).
-    pub fn rmsNorm(self: *CpuBackend, input: [*]const f32, weight: [*]const f32, output: [*]f32, n: usize, eps: f32) void {
-        _ = self;
+    pub fn rmsNorm(_: *CpuBackend, input: [*]const f32, weight: [*]const f32, output: [*]f32, n: usize, eps: f32) void {
         norm_kernel.rmsNorm(input, weight, output, n, eps);
     }
 
     /// Fused add + rms_norm: a[i] = a[i] + b[i], output = rms_norm(a+b, weight, eps).
-    pub fn addRmsNorm(self: *CpuBackend, a: [*]f32, b: [*]const f32, weight: [*]const f32, output: [*]f32, n: usize, eps: f32) void {
-        _ = self;
+    pub fn addRmsNorm(_: *CpuBackend, a: [*]f32, b: [*]const f32, weight: [*]const f32, output: [*]f32, n: usize, eps: f32) void {
         norm_kernel.addRmsNorm(a, b, weight, output, n, eps);
     }
 
     /// Applies SiLU (Swish) activation: x * sigmoid(x).
-    pub fn silu(self: *CpuBackend, input: [*]const f32, output: [*]f32, n: usize) void {
-        _ = self;
+    pub fn silu(_: *CpuBackend, input: [*]const f32, output: [*]f32, n: usize) void {
         activation_kernel.silu(input, output, n);
     }
 
-    /// Applies GELU activation: 0.5 * x * (1 + tanh(sqrt(2/pi) * (x + 0.044715*x^3))).
-    pub fn gelu(self: *CpuBackend, input: [*]const f32, output: [*]f32, n: usize) void {
-        _ = self;
+    /// Applies GELU activation: 0.5 * x * (1 + tanh(sqrt(2/pi) * (x + 0.044715*x³))).
+    pub fn gelu(_: *CpuBackend, input: [*]const f32, output: [*]f32, n: usize) void {
         activation_kernel.gelu(input, output, n);
     }
 
     /// Element-wise addition: out[i] = a[i] + b[i].
-    pub fn add(self: *CpuBackend, a: [*]const f32, b: [*]const f32, out: [*]f32, n: usize) void {
-        _ = self;
+    pub fn add(_: *CpuBackend, a: [*]const f32, b: [*]const f32, out: [*]f32, n: usize) void {
         elementwise_kernel.add(a, b, out, n);
     }
 
     /// Transposed GEMV: y[out_dim] = W^T @ x[in_dim] for Q8_0 3D weights.
+    /// Block-structured loop reads the Q8_0 scale once per 32-element block
+    /// and uses SIMD for the inner accumulation.
     pub fn gemvT(_: *CpuBackend, x: [*]const f32, w: [*]const u8, y: [*]f32, out_dim: usize, in_dim: usize) void {
-        const blocks_per_row = (out_dim + quant.quant_block_elems - 1) / quant.quant_block_elems;
+        const V8 = @Vector(8, f32);
+        const block_elems = quant.quant_block_elems; // 32
+        const block_bytes = quant.q8_0_block_bytes; // 34
+        const blocks_per_row = (out_dim + block_elems - 1) / block_elems;
         @memset(y[0..out_dim], 0);
         for (0..in_dim) |j| {
             const xj = x[j];
-            const row_base = j * blocks_per_row * quant.q8_0_block_bytes;
-            for (0..out_dim) |i| {
-                const blk_idx = i / quant.quant_block_elems;
-                const blk_off = i % quant.quant_block_elems;
-                const blk_ptr = w + row_base + blk_idx * quant.q8_0_block_bytes;
+            const row_base = j * blocks_per_row * block_bytes;
+            for (0..blocks_per_row) |blk_idx| {
+                const blk_ptr = w + row_base + blk_idx * block_bytes;
                 const scale: f32 = @floatCast(@as(f16, @bitCast(std.mem.readInt(u16, blk_ptr[0..2], .little))));
-                const val: i8 = @bitCast(blk_ptr[2 + blk_off]);
-                y[i] += @as(f32, @floatFromInt(val)) * scale * xj;
+                const scaled_x = xj * scale;
+                const sv: V8 = @splat(scaled_x);
+                const q = blk_ptr + 2;
+                const out_base = blk_idx * block_elems;
+                const count = @min(block_elems, out_dim - out_base);
+                var k: usize = 0;
+                while (k + 8 <= count) : (k += 8) {
+                    var qv: V8 = undefined;
+                    inline for (0..8) |idx| {
+                        qv[idx] = @floatFromInt(@as(i8, @bitCast(q[k + idx])));
+                    }
+                    const cur: V8 = y[out_base + k ..][0..8].*;
+                    y[out_base + k ..][0..8].* = @mulAdd(V8, qv, sv, cur);
+                }
+                while (k < count) : (k += 1) {
+                    const val: f32 = @floatFromInt(@as(i8, @bitCast(q[k])));
+                    y[out_base + k] = @mulAdd(f32, val, scaled_x, y[out_base + k]);
+                }
             }
         }
     }
@@ -362,18 +375,14 @@ pub const CpuBackend = struct {
     }
 
     /// Fused SiLU + multiply: out[i] = silu(a[i]) * b[i].
-    pub fn siluMul(self: *CpuBackend, a: [*]const f32, b: [*]const f32, out: [*]f32, n: usize) void {
-        _ = self;
+    pub fn siluMul(_: *CpuBackend, a: [*]const f32, b: [*]const f32, out: [*]f32, n: usize) void {
         activation_kernel.siluMul(a, b, out, n);
     }
 
-    /// GELU + multiply: out[i] = gelu(a[i]) * b[i].
-    /// Sequential two-pass (gelu then mul) — not fused. Acceptable for CPU
-    /// where elementwise ops are fast relative to GEMV bottleneck.
-    pub fn geluMul(self: *CpuBackend, a: [*]const f32, b: [*]const f32, out: [*]f32, n: usize) void {
-        _ = self;
-        activation_kernel.gelu(a, out, n);
-        elementwise_kernel.mul(out, b, out, n);
+    /// Fused GELU + multiply: out[i] = gelu(a[i]) * b[i].
+    /// Single-pass SIMD avoids a second cache traversal over the output buffer.
+    pub fn geluMul(_: *CpuBackend, a: [*]const f32, b: [*]const f32, out: [*]f32, n: usize) void {
+        activation_kernel.geluMul(a, b, out, n);
     }
 
     /// In-place per-head rmsNorm: applies same weight to n_heads independent heads.
@@ -384,44 +393,37 @@ pub const CpuBackend = struct {
     }
 
     /// Element-wise multiplication: out[i] = a[i] * b[i].
-    pub fn mul(self: *CpuBackend, a: [*]const f32, b: [*]const f32, out: [*]f32, n: usize) void {
-        _ = self;
+    pub fn mul(_: *CpuBackend, a: [*]const f32, b: [*]const f32, out: [*]f32, n: usize) void {
         elementwise_kernel.mul(a, b, out, n);
     }
 
     /// Applies softmax normalization in-place.
-    pub fn softmax(self: *CpuBackend, data: [*]f32, n: usize) void {
-        _ = self;
+    pub fn softmax(_: *CpuBackend, data: [*]f32, n: usize) void {
         softmax_kernel.softmaxSimd(softmax_width, data, n);
     }
 
     /// Applies Rotary Position Embedding (RoPE) in-place.
-    pub fn rope(self: *CpuBackend, x: [*]f32, pos: usize, n_heads: usize, head_dim: usize, rope_dim: usize, theta: f32) void {
-        _ = self;
+    pub fn rope(_: *CpuBackend, x: [*]f32, pos: usize, n_heads: usize, head_dim: usize, rope_dim: usize, theta: f32) void {
         rope_kernel.rope(x, pos, n_heads, head_dim, rope_dim, theta);
     }
 
     /// Looks up a token embedding row and dequantizes to f32.
-    pub fn embLookup(self: *CpuBackend, table: TensorData, token_id: u32, output: [*]f32, dim: usize) void {
-        _ = self;
+    pub fn embLookup(_: *CpuBackend, table: TensorData, token_id: u32, output: [*]f32, dim: usize) void {
         emb_kernel.embLookup(table.data, table.dtype, token_id, output, dim);
     }
 
     /// L2 normalizes a vector in-place: x[i] /= sqrt(sum(x^2) + eps).
-    pub fn l2Norm(self: *CpuBackend, x: [*]f32, n: usize, eps: f32) void {
-        _ = self;
+    pub fn l2Norm(_: *CpuBackend, x: [*]f32, n: usize, eps: f32) void {
         norm_kernel.l2Norm(x, n, eps);
     }
 
     /// In-place sigmoid-gated multiply: data[i] *= sigmoid(gate[i]).
-    pub fn sigmoidMul(self: *CpuBackend, data: [*]f32, gate: [*]const f32, n: usize) void {
-        _ = self;
+    pub fn sigmoidMul(_: *CpuBackend, data: [*]f32, gate: [*]const f32, n: usize) void {
         elementwise_kernel.sigmoidMul(data, gate, n);
     }
 
     /// De-interleave paired blocks on CPU.
-    pub fn deinterleave(self: *CpuBackend, input: [*]const f32, out_a: [*]f32, out_b: [*]f32, stride: usize, n_pairs: usize) void {
-        _ = self;
+    pub fn deinterleave(_: *CpuBackend, input: [*]const f32, out_a: [*]f32, out_b: [*]f32, stride: usize, n_pairs: usize) void {
         elementwise_kernel.deinterleave(input, out_a, out_b, stride, n_pairs);
     }
 
@@ -437,25 +439,18 @@ pub const CpuBackend = struct {
         }
     }
 
-    /// No-op on CPU. GPU backends flush pending commands here;
-    /// CPU ops are immediately visible, so no flush is needed.
-    pub fn sync(self: *CpuBackend) void {
-        _ = self;
-    }
+    /// No-op on CPU — operations are immediately visible.
+    pub fn sync(_: *CpuBackend) void {}
 
-    /// No-op on CPU — no GPU dispatch batching needed.
-    pub fn beginBatch(self: *CpuBackend) void {
-        _ = self;
-    }
+    /// No-op on CPU.
+    pub fn beginBatch(_: *CpuBackend) void {}
 
-    /// No-op on CPU — no GPU dispatch batching needed.
-    pub fn endBatch(self: *CpuBackend) void {
-        _ = self;
-    }
+    /// No-op on CPU.
+    pub fn endBatch(_: *CpuBackend) void {}
 
     /// Returns backend information for display. Cache sizes and total memory
     /// are detected once and cached; available memory is always fresh.
-    pub fn backendInfo(_: *const CpuBackend) @import("backend.zig").BackendInfo {
+    pub fn backendInfo(_: *const CpuBackend) backend_mod.BackendInfo {
         const Static = struct {
             var caches: CacheSizes = .{};
             var sys_mem: usize = 0;
@@ -481,8 +476,7 @@ pub const CpuBackend = struct {
     }
 
     /// NVFP4 SafeTensors GEMV: separate weight nibble + FP8 E4M3 scale arrays.
-    pub fn gemvNvfp4St(self: *CpuBackend, x: [*]const f32, weight: [*]const u8, scale: [*]const u8, y: [*]f32, n: usize, k: usize) void {
-        _ = self;
+    pub fn gemvNvfp4St(_: *CpuBackend, x: [*]const f32, weight: [*]const u8, scale: [*]const u8, y: [*]f32, n: usize, k: usize) void {
         quant.gemvNvfp4St(x, weight, scale, y, n, k);
     }
 
@@ -560,7 +554,7 @@ pub const CpuBackend = struct {
 
     /// Batched GEMV — fuses all ops into a single parallelFor to minimize
     /// thread wake/sleep overhead (~250 GEMV dispatches per token).
-    pub fn gemvMulti(self: *CpuBackend, x: [*]const f32, ops: []const @import("backend.zig").GemvOp, k: usize) void {
+    pub fn gemvMulti(self: *CpuBackend, x: [*]const f32, ops: []const backend_mod.GemvOp, k: usize) void {
         if (ops.len == 0) return;
 
         // Check if all ops can be parallelized (same dtype, known row bytes)
@@ -604,7 +598,7 @@ pub const CpuBackend = struct {
         k: usize,
         row_bytes: usize,
         dtype: DType,
-        ops: []const @import("backend.zig").GemvOp,
+        ops: []const backend_mod.GemvOp,
 
         fn work(ctx_ptr: *anyopaque, start: usize, end: usize) void {
             const ctx: *const GemvMultiCtx = @ptrCast(@alignCast(ctx_ptr));
@@ -829,7 +823,8 @@ pub const CpuBackend = struct {
     /// CPU scaled dot-product attention with KV cache append, returning per-head
     /// softmax statistics (max and sum) for online softmax merge in split-attention.
     /// Same as sdpa() but additionally outputs head_max[nh] and head_sum[nh].
-    pub fn sdpaWithStats(_: *CpuBackend, q: [*]const f32, keys: []u8, values: []u8, k_new: [*]const f32, v_new: [*]const f32, output: [*]f32, head_max: [*]f32, head_sum: [*]f32, nh: usize, nkv: usize, hd: usize, seq_len: usize, scale: f32, kv_type_k: KvQuantType, kv_type_v: KvQuantType) void {
+    /// Parallelizes across query heads when a thread pool is available.
+    pub fn sdpaWithStats(self: *CpuBackend, q: [*]const f32, keys: []u8, values: []u8, k_new: [*]const f32, v_new: [*]const f32, output: [*]f32, head_max: [*]f32, head_sum: [*]f32, nh: usize, nkv: usize, hd: usize, seq_len: usize, scale: f32, kv_type_k: KvQuantType, kv_type_v: KvQuantType) void {
         const kvd = nkv * hd;
 
         // KV append: quantize k_new/v_new into cache at position seq_len
@@ -838,12 +833,57 @@ pub const CpuBackend = struct {
         kv_quant.kvStore(keys.ptr + k_byte_off, k_new, kvd, kv_type_k);
         kv_quant.kvStore(values.ptr + v_byte_off, v_new, kvd, kv_type_v);
 
+        if (self.pool) |pool| {
+            if (nh >= sdpa_parallel_min_heads) {
+                var ctx = SdpaQuantWithStatsCtx{
+                    .q = q,
+                    .keys = keys.ptr,
+                    .values = values.ptr,
+                    .output = output,
+                    .head_max = head_max,
+                    .head_sum = head_sum,
+                    .nh = nh,
+                    .nkv = nkv,
+                    .hd = hd,
+                    .sl = seq_len + 1,
+                    .scale = scale,
+                    .kv_type_k = kv_type_k,
+                    .kv_type_v = kv_type_v,
+                };
+                pool.parallelFor(nh, 1, @ptrCast(&ctx), SdpaQuantWithStatsCtx.work);
+                return;
+            }
+        }
         sdpa_kernel.sdpaQuantHeadsWithStats(q, keys.ptr, values.ptr, output, nh, nkv, hd, seq_len + 1, scale, kv_type_k, kv_type_v, head_max, head_sum);
     }
 
+    /// Context for parallel quantized SDPA with stats dispatch across query heads.
+    const SdpaQuantWithStatsCtx = struct {
+        q: [*]const f32,
+        keys: [*]const u8,
+        values: [*]const u8,
+        output: [*]f32,
+        head_max: [*]f32,
+        head_sum: [*]f32,
+        nh: usize,
+        nkv: usize,
+        hd: usize,
+        sl: usize,
+        scale: f32,
+        kv_type_k: KvQuantType,
+        kv_type_v: KvQuantType,
+
+        fn work(ctx_ptr: *anyopaque, start: usize, end: usize) void {
+            const ctx: *const SdpaQuantWithStatsCtx = @ptrCast(@alignCast(ctx_ptr));
+            for (start..end) |h| {
+                sdpa_kernel.sdpaQuantHeadWithStats(ctx.q, ctx.keys, ctx.values, ctx.output, h, ctx.nh, ctx.nkv, ctx.hd, ctx.sl, ctx.scale, ctx.kv_type_k, ctx.kv_type_v, ctx.head_max, ctx.head_sum);
+            }
+        }
+    };
+
     /// DeltaNet SSM recurrence: conv1d + L2 norm + recurrence + gated output.
     /// When a thread pool is available, parallelizes across v-heads.
-    pub fn deltaNet(self: *CpuBackend, conv_in: [*]const f32, conv_out: [*]f32, z_buf: [*]const f32, alpha_buf: [*]const f32, beta_buf: [*]const f32, output: [*]f32, conv_state: [*]f32, ssm_state: []f32, ssm_a: [*]const f32, dt_bias: [*]const f32, conv_w: [*]const f32, ssm_norm_w: [*]const f32, p: @import("backend.zig").DeltaNetParams) void {
+    pub fn deltaNet(self: *CpuBackend, conv_in: [*]const f32, conv_out: [*]f32, z_buf: [*]const f32, alpha_buf: [*]const f32, beta_buf: [*]const f32, output: [*]f32, conv_state: [*]f32, ssm_state: []f32, ssm_a: [*]const f32, dt_bias: [*]const f32, conv_w: [*]const f32, ssm_norm_w: [*]const f32, p: backend_mod.DeltaNetParams) void {
         const math_ops = @import("../ops/math.zig");
         const ssm_ops = @import("../ops/ssm.zig");
         const num_v_heads: usize = p.num_v_heads;
@@ -914,7 +954,7 @@ pub const CpuBackend = struct {
         ssm_state: [*]f32,
         z_buf: [*]const f32,
         ssm_norm_w: [*]const f32,
-        p: @import("backend.zig").DeltaNetParams,
+        p: backend_mod.DeltaNetParams,
 
         fn work(ctx_ptr: *anyopaque, start: usize, end: usize) void {
             const ctx: *const DeltaNetHeadCtx = @ptrCast(@alignCast(ctx_ptr));

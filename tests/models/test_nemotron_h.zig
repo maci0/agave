@@ -1,4 +1,4 @@
-const golden = @import("golden_test.zig");
+const golden = @import("golden_harness.zig");
 
 // Using Nemotron Nano 30B as Nemotron-H test model (SafeTensors NVFP4)
 const model_path = "models/mlx-community/NVIDIA-Nemotron-3-Nano-30B-A3B-NVFP4";

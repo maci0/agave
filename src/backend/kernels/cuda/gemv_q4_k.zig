@@ -4,51 +4,11 @@
 
 const cu = @import("common.zig");
 
+const f16tof32 = cu.f16tof32;
+const getScaleMinK4 = cu.getScaleMinK4;
+
 const bytes_per_block: usize = 144;
 const values_per_block: usize = 256;
-
-/// Helper: convert little-endian f16 (2 bytes) to f32
-inline fn f16tof32(ptr: [*]const u8) f32 {
-    const val = @as(u16, ptr[0]) | (@as(u16, ptr[1]) << 8);
-    const sign: u32 = @as(u32, val >> 15) << 31;
-    const exp_f16: u32 = (val >> 10) & 0x1F;
-    const mant_f16: u32 = val & 0x3FF;
-
-    // Zero
-    if (exp_f16 == 0 and mant_f16 == 0) return @bitCast(sign);
-
-    // Denormal (simplified: treat as tiny normal)
-    if (exp_f16 == 0) {
-        const mant_f32 = mant_f16 << 13;
-        const exp_f32: u32 = (127 - 15) << 23;
-        return @bitCast(sign | exp_f32 | mant_f32);
-    }
-
-    // Inf/NaN
-    if (exp_f16 == 0x1F) {
-        const exp_f32: u32 = 0xFF << 23;
-        const mant_f32: u32 = mant_f16 << 13;
-        return @bitCast(sign | exp_f32 | mant_f32);
-    }
-
-    // Normal: exp_f32 = exp_f16 + (127 - 15), mant_f32 = mant_f16 << 13
-    const exp_f32: u32 = (exp_f16 + (127 - 15)) << 23;
-    const mant_f32: u32 = mant_f16 << 13;
-    return @bitCast(sign | exp_f32 | mant_f32);
-}
-
-/// Helper: extract packed scale and min for Q4_K sub-block.
-/// Port of quant.getScaleMinK4() for GPU.
-/// Scales are packed in 12 bytes for 8 sub-blocks (6 bits each).
-inline fn getScaleMinK4(sb: u32, scales_ptr: [*]const u8, sc: *u8, m: *u8) void {
-    if (sb < 4) {
-        sc.* = scales_ptr[sb] & 63;
-        m.* = scales_ptr[sb + 4] & 63;
-    } else {
-        sc.* = (scales_ptr[sb + 4] & 0xF) | ((scales_ptr[sb - 4] >> 6) << 4);
-        m.* = (scales_ptr[sb + 4] >> 4) | ((scales_ptr[sb] >> 6) << 4);
-    }
-}
 
 /// Q4_K GEMV kernel: y[row] = dot(W[row,:], x)
 /// Each thread processes a subset of blocks, accumulates per-sub-block,
@@ -126,18 +86,6 @@ export fn gemv_q4_k_kernel(
         }
     }
 
-    // Warp reduction
-    sum = cu.warpReduceAdd(sum);
-
-    const lane = tid % 32;
-    const warp_id = tid / 32;
-    if (lane == 0) cu.sharedStore(warp_id, sum);
-    cu.syncthreads();
-
-    // Inter-warp reduction
-    const n_warps = (bdim + 31) / 32;
-    var result = if (tid < n_warps) cu.sharedLoad(tid) else 0.0;
-    if (warp_id == 0) result = cu.warpReduceAdd(result);
-
-    if (tid == 0) y[row] = result;
+    sum = cu.blockReduceAdd(sum);
+    if (tid == 0) y[row] = sum;
 }

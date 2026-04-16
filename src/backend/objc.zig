@@ -2,11 +2,13 @@
 //! Only the subset needed for device, command queue, buffers, shader compilation,
 //! pipeline creation, and compute dispatch.
 
-const std = @import("std");
-
+/// Opaque pointer to any Objective-C object instance.
 pub const id = *anyopaque;
+/// Opaque pointer to an Objective-C class object.
 pub const Class = *anyopaque;
+/// Opaque pointer to an Objective-C selector (method name).
 pub const SEL = *anyopaque;
+/// Objective-C unsigned integer type (64-bit on all Apple Silicon targets).
 pub const NSUInteger = u64;
 
 /// MTLSize struct — { width, height, depth }

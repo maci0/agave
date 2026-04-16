@@ -1,6 +1,6 @@
 # Agave vs llama.cpp — Performance Benchmarks
 
-**Date**: 2026-03-24
+**Date**: 2026-04-14 (decode benchmarks from 2026-03-24, KV/vision from 2026-04-14)
 **Hardware**: Apple M4 Pro (14-core CPU, 20-core GPU), 48 GB unified memory
 **OS**: macOS 26.3.1 (aarch64)
 **llama.cpp**: latest (commit ~March 2026), Metal enabled, GGML_CPU_REPACK=OFF
@@ -62,13 +62,51 @@ CLI: `--prefill-batch-size <N>` (default 512). Use `--prefill-batch-size 1` for 
 
 ## Supported Model Architectures
 
-| Architecture | Models | Status |
-|-------------|--------|--------|
-| Gemma 3 | 4B, 12B, 27B | ✅ Working |
-| Qwen3.5 | 0.8B, 9B, 27B | ✅ Working |
-| GLM-4 | 4.7B | ⚠️ Poor output quality |
-| Nemotron-Nano | 30B | ⚠️ Poor output quality |
-| GPT-OSS | 20B | ⚠️ Poor output quality |
+| Architecture | Models | Status | Notes |
+|-------------|--------|--------|-------|
+| Gemma 3 | 4B, 12B, 27B | ✅ Working | + SigLIP vision encoder |
+| Gemma 4 | E2B, E4B, 26B-A4B | ✅ Working | E2B/E4B dense, 26B MoE. + SigLIP-2 vision |
+| Qwen3.5 | 0.8B, 9B, 27B, 35B | ✅ Working | + Qwen VL vision (structural) |
+| Nemotron-Nano | 4B, 30B | ✅ Working | Hybrid SSM/Attention/MoE |
+| Nemotron-H | 56B | ✅ Working | Hybrid SSM/MoE |
+| GPT-OSS | 20B | ✅ Working | |
+| GLM-4 | 4.7B Flash | ⚠️ GGUF issue | Also broken in llama.cpp — model format problem |
+
+## KV Cache Quantization (Gemma 4 26B, Metal)
+
+TurboQuant+ asymmetric KV compression with boundary V protection and sparse V dequantization.
+
+| KV Type | Compression | Correct Output | Notes |
+|---------|-------------|:--------------:|-------|
+| f16 (default) | 1× | ✅ | Baseline |
+| q8_0 | 2× | ✅ | |
+| fp8 | 2× | ✅ | |
+| turbo4 | 3.8× | ✅ | |
+| **turbo** (preset) | K=q8_0, V=3.8× | ✅ | Recommended. Boundary V protects first/last 2 layers |
+| turbo3 | 4.6× | ⚠️ | Quality loss with symmetric; use turbo preset instead |
+| turbo2 | 6.4× | ⚠️ | Quality loss with symmetric |
+
+The `turbo` preset automatically configures asymmetric quantization (K=q8_0, V=turbo4) with boundary V protection and sparse V dequantization for optimal quality-compression tradeoff.
+
+### KV Cache Eviction
+
+The `--kv-eviction` flag enables generating beyond the `--ctx-size` limit by periodically compressing the KV cache.
+
+| Model | ctx_size | Budget | Eviction | Tokens Generated | Eviction Events | Notes |
+|-------|----------|--------|----------|:----------------:|:---------------:|-------|
+| Gemma 4 E2B | 256 | 64 | norm | 188 | 2 | Coherent output past ctx limit |
+
+Eviction is complementary to TurboQuant — one reduces entry count, the other reduces bits per entry.
+
+## Vision / Multimodal
+
+| Model | Encoder | Patches | Output Tokens | Encode Time (Metal) |
+|-------|---------|---------|:-------------:|:-------------------:|
+| Gemma 4 26B | SigLIP-2 | 2304 (48×48) | 256 (3×3 pool) | ~41s |
+| Gemma 3 27B | SigLIP | 4096 (64×64) | 4096 (no pool) | ~minutes (CPU bottleneck) |
+| Qwen 3.5 9B | Qwen VL | varies | n/4 (4× merge) | ~11s |
+
+Vision encoding uses GPU GEMM (BF16 Metal) + parallel CPU attention (thread pool across heads).
 
 ## Known Issues
 
@@ -80,6 +118,6 @@ CLI: `--prefill-batch-size <N>` (default 512). Use `--prefill-batch-size 1` for 
 
 - **Decode throughput**: Measured from the stats line output by the engine after generating N tokens with greedy sampling (temperature=0). Prompt: "Hello" with model-appropriate chat template.
 - **llama.cpp**: `llama-bench -p 16 -n 32/128 -r 1` with Metal enabled.
-- **Agave**: `agave model -n N --backend {cpu,metal} "Hello"` — tok/s from stats output.
+- **Agave**: `agave <model.gguf> -n N --backend {cpu,metal} "Hello"` — tok/s from stats output.
 - All runs are single-pass (no averaging), cold-start (model loaded from disk each run).
 - Memory pressure from other processes was minimal during benchmarks.

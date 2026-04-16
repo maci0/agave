@@ -1,6 +1,6 @@
 //! Scaled Dot-Product Attention kernel (fused QK·softmax·V).
 //! Grid: nh workgroups (one per query head), 256 threads per workgroup.
-//! LDS: sl floats for attention scores.
+//! LDS: sl+1 floats for attention scores + broadcast slot.
 //!
 //! Includes TurboQuant variant (sdpa_turbo_kernel) that dequantizes
 //! packed KV cache blocks in-register using WHT + Lloyd-Max codebook.
@@ -124,29 +124,44 @@ export fn sdpa_kernel(
     }
     cu.syncthreads();
 
-    // ── Phase 2: Softmax (thread-0 serial for correctness) ──────
-    if (tid == 0) {
-        // Find max
-        var max_val: f32 = cu.sharedLoad(0);
-        var i: u32 = 1;
-        while (i < sl) : (i += 1) {
-            const s = cu.sharedLoad(i);
-            if (s > max_val) max_val = s;
-        }
-        // Exp + sum
-        var sum_val: f32 = 0.0;
-        i = 0;
-        while (i < sl) : (i += 1) {
-            const e = cu.expf(cu.sharedLoad(i) - max_val);
-            cu.sharedStore(i, e);
-            sum_val += e;
-        }
-        // Normalize
-        const inv = cu.rcpf(sum_val);
-        i = 0;
-        while (i < sl) : (i += 1) {
-            cu.sharedStore(i, cu.sharedLoad(i) * inv);
-        }
+    // ── Phase 2: Wave-parallel softmax ──────────────────────────
+    // Distribute seq_len across first wave (32 threads). Each thread
+    // processes a chunk of scores, then wave-reduces max/sum.
+    // Matches CUDA warp-parallel pattern for 32× speedup over serial.
+    const wave_size: u32 = 32;
+    const chunk = (sl + wave_size - 1) / wave_size;
+    const wstart = tid * chunk;
+    const wend = @min(wstart + chunk, sl);
+
+    // Phase 2a: Wave-parallel max reduction
+    var local_max: f32 = cu.neg_f32_max;
+    var i = wstart;
+    while (i < wend) : (i += 1) {
+        local_max = @max(local_max, cu.sharedLoad(i));
+    }
+    var max_val = cu.waveReduceMax(local_max);
+    if (tid == 0) cu.sharedStore(sl, max_val);
+    cu.syncthreads();
+    max_val = cu.sharedLoad(sl);
+
+    // Phase 2b: Wave-parallel exp and sum
+    var local_sum: f32 = 0.0;
+    i = wstart;
+    while (i < wend) : (i += 1) {
+        const e = cu.expf(cu.sharedLoad(i) - max_val);
+        cu.sharedStore(i, e);
+        local_sum += e;
+    }
+    var sum_val = cu.waveReduceAdd(local_sum);
+    if (tid == 0) cu.sharedStore(sl, sum_val);
+    cu.syncthreads();
+    sum_val = cu.sharedLoad(sl);
+
+    // Phase 2c: Wave-parallel normalization
+    const inv = cu.rcpf(sum_val);
+    i = wstart;
+    while (i < wend) : (i += 1) {
+        cu.sharedStore(i, cu.sharedLoad(i) * inv);
     }
     cu.syncthreads();
 
@@ -229,29 +244,41 @@ export fn sdpa_turbo_kernel(
     }
     cu.syncthreads();
 
-    // ── Phase 2: Softmax (thread-0 serial for correctness) ──────
-    if (tid == 0) {
-        // Find max
-        var max_val: f32 = cu.sharedLoad(0);
-        var i: u32 = 1;
-        while (i < sl) : (i += 1) {
-            const s = cu.sharedLoad(i);
-            if (s > max_val) max_val = s;
-        }
-        // Exp + sum
-        var sum_val: f32 = 0.0;
-        i = 0;
-        while (i < sl) : (i += 1) {
-            const e = cu.expf(cu.sharedLoad(i) - max_val);
-            cu.sharedStore(i, e);
-            sum_val += e;
-        }
-        // Normalize
-        const inv = cu.rcpf(sum_val);
-        i = 0;
-        while (i < sl) : (i += 1) {
-            cu.sharedStore(i, cu.sharedLoad(i) * inv);
-        }
+    // ── Phase 2: Wave-parallel softmax ──────────────────────────
+    const wave_size: u32 = 32;
+    const chunk = (sl + wave_size - 1) / wave_size;
+    const wstart = tid * chunk;
+    const wend = @min(wstart + chunk, sl);
+
+    // Phase 2a: Wave-parallel max reduction
+    var local_max: f32 = cu.neg_f32_max;
+    var i = wstart;
+    while (i < wend) : (i += 1) {
+        local_max = @max(local_max, cu.sharedLoad(i));
+    }
+    var max_val = cu.waveReduceMax(local_max);
+    if (tid == 0) cu.sharedStore(sl, max_val);
+    cu.syncthreads();
+    max_val = cu.sharedLoad(sl);
+
+    // Phase 2b: Wave-parallel exp and sum
+    var local_sum: f32 = 0.0;
+    i = wstart;
+    while (i < wend) : (i += 1) {
+        const e = cu.expf(cu.sharedLoad(i) - max_val);
+        cu.sharedStore(i, e);
+        local_sum += e;
+    }
+    var sum_val = cu.waveReduceAdd(local_sum);
+    if (tid == 0) cu.sharedStore(sl, sum_val);
+    cu.syncthreads();
+    sum_val = cu.sharedLoad(sl);
+
+    // Phase 2c: Wave-parallel normalization
+    const inv = cu.rcpf(sum_val);
+    i = wstart;
+    while (i < wend) : (i += 1) {
+        cu.sharedStore(i, cu.sharedLoad(i) * inv);
     }
     cu.syncthreads();
 

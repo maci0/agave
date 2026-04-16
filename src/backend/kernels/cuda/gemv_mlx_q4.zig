@@ -6,10 +6,7 @@
 
 const cu = @import("common.zig");
 
-/// Convert BF16 (stored as u16) to f32.
-inline fn bf16ToF32(val: u16) f32 {
-    return @bitCast(@as(u32, val) << 16);
-}
+const bf16ToF32 = cu.bf16ToF32;
 
 export fn gemv_mlx_q4_kernel(
     x: [*]const f32,

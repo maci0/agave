@@ -7,7 +7,7 @@
 //!      GPU-resident (VRAM) or CPU-resident (RAM/SSD) based on `TieredBlock.tier`.
 //!   2. `splitAttention()` checks the partition:
 //!      - All GPU → fast path: `be.sdpa()` (zero overhead).
-//!      - All CPU → CPU SDPA on the calling thread.
+//!      - All CPU → CPU SDPA on thread pool (or calling thread if no pool).
 //!      - Mixed → GPU SDPA with stats (deferred) + CPU SDPA on thread pool
 //!        (concurrent on UMA), then `splitSdpaMerge()` to combine.
 //!   3. The merge uses FlashAttention-2 online softmax correction — exact, no
@@ -15,13 +15,15 @@
 
 const std = @import("std");
 const tiered = @import("../kvcache/tiered.zig");
-const BlockTier = tiered.BlockTier;
 const TieredBlock = tiered.TieredBlock;
 const Backend = @import("../backend/backend.zig").Backend;
 const kv_quant = @import("kv_quant.zig");
 const KvQuantType = kv_quant.KvQuantType;
 const ThreadPool = @import("../thread_pool.zig").ThreadPool;
-const sdpa_cpu = @import("../backend/kernels/cpu/sdpa.zig");
+const sdpa_cpu = @import("../backend/backend.zig").CpuSdpa;
+
+/// SIMD vector width (number of f32 lanes) for merge accumulation loops.
+const simd_width: usize = 8;
 
 /// Maximum number of contiguous ranges in a partition.
 /// Bounded by max blocks per sequence (256 blocks × block_size positions each).
@@ -79,23 +81,52 @@ pub fn partitionBlocks(
         const tier = tiered_blocks[block_id].tier;
 
         if (tier == .vram) {
-            if (result.gpu_count < max_ranges) {
+            // Coalesce with previous GPU range if contiguous
+            if (result.gpu_count > 0 and result.gpu[result.gpu_count - 1].start + result.gpu[result.gpu_count - 1].len == pos) {
+                result.gpu[result.gpu_count - 1].len += block_len;
+            } else if (result.gpu_count < max_ranges) {
                 result.gpu[result.gpu_count] = .{ .start = pos, .len = block_len };
                 result.gpu_count += 1;
-                result.total_gpu_positions += block_len;
             }
+            result.total_gpu_positions += block_len;
         } else {
-            // .ram and .ssd both go to CPU path
-            if (result.cpu_count < max_ranges) {
+            // .ram and .ssd both go to CPU path — coalesce if contiguous
+            if (result.cpu_count > 0 and result.cpu[result.cpu_count - 1].start + result.cpu[result.cpu_count - 1].len == pos) {
+                result.cpu[result.cpu_count - 1].len += block_len;
+            } else if (result.cpu_count < max_ranges) {
                 result.cpu[result.cpu_count] = .{ .start = pos, .len = block_len };
                 result.cpu_count += 1;
-                result.total_cpu_positions += block_len;
             }
+            result.total_cpu_positions += block_len;
         }
         pos += block_size;
     }
     return result;
 }
+
+/// Job context for parallelizing CPU-only SDPA across query heads (no stats needed).
+/// Used in the all-CPU fast path where merge is not required.
+const CpuSdpaNoStatsJob = struct {
+    q: [*]const f32,
+    keys: [*]const u8,
+    values: [*]const u8,
+    output: [*]f32,
+    nh: usize,
+    nkv: usize,
+    hd: usize,
+    sl: usize,
+    scale: f32,
+    kv_type_k: KvQuantType,
+    kv_type_v: KvQuantType,
+
+    /// Thread pool work function: process heads [start, end) without stats.
+    fn work(ctx_ptr: *anyopaque, start: usize, end: usize) void {
+        const job: *CpuSdpaNoStatsJob = @ptrCast(@alignCast(ctx_ptr));
+        for (start..end) |h| {
+            sdpa_cpu.sdpaQuantHead(job.q, job.keys, job.values, job.output, h, job.nh, job.nkv, job.hd, job.sl, job.scale, job.kv_type_k, job.kv_type_v);
+        }
+    }
+};
 
 /// Job context for dispatching CPU SDPA across the thread pool.
 /// Each thread processes a subset of query heads independently.
@@ -185,7 +216,7 @@ pub fn splitAttention(
         return;
     }
 
-    // Fast path: all CPU — sync pending GPU ops, run CPU SDPA inline
+    // Fast path: all CPU — sync pending GPU ops, run CPU SDPA (parallel if pool available)
     if (partition.gpu_count == 0) {
         be.sync();
         const kvd = nkv * hd;
@@ -193,7 +224,24 @@ pub fn splitAttention(
         const v_off = kv_quant.kvByteOffset(kv_type_v, seq_len * kvd);
         kv_quant.kvStore(kv_keys.ptr + k_off, k_new, kvd, kv_type_k);
         kv_quant.kvStore(kv_values.ptr + v_off, v_new, kvd, kv_type_v);
-        sdpa_cpu.sdpaQuantHeads(q, kv_keys.ptr, kv_values.ptr, output, nh, nkv, hd, seq_len + 1, scale, kv_type_k, kv_type_v);
+        if (pool) |p| {
+            var ctx = CpuSdpaNoStatsJob{
+                .q = q,
+                .keys = kv_keys.ptr,
+                .values = kv_values.ptr,
+                .output = output,
+                .nh = nh,
+                .nkv = nkv,
+                .hd = hd,
+                .sl = seq_len + 1,
+                .scale = scale,
+                .kv_type_k = kv_type_k,
+                .kv_type_v = kv_type_v,
+            };
+            p.parallelFor(nh, 1, @ptrCast(&ctx), CpuSdpaNoStatsJob.work);
+        } else {
+            sdpa_cpu.sdpaQuantHeads(q, kv_keys.ptr, kv_values.ptr, output, nh, nkv, hd, seq_len + 1, scale, kv_type_k, kv_type_v);
+        }
         return;
     }
 
@@ -289,7 +337,17 @@ pub fn splitSdpaMerge(
         const inv_sum: f32 = if (sum_all > 0) 1.0 / sum_all else 0;
 
         const base = h * hd;
-        for (0..hd) |d| {
+        const SimdVec = @Vector(simd_width, f32);
+        const sa_v: SimdVec = @splat(sa);
+        const sb_v: SimdVec = @splat(sb);
+        const inv_v: SimdVec = @splat(inv_sum);
+        var d: usize = 0;
+        while (d + simd_width <= hd) : (d += simd_width) {
+            const a_v: SimdVec = out_a[base + d ..][0..simd_width].*;
+            const b_v: SimdVec = out_b[base + d ..][0..simd_width].*;
+            merged[base + d ..][0..simd_width].* = @mulAdd(SimdVec, a_v, sa_v, b_v * sb_v) * inv_v;
+        }
+        while (d < hd) : (d += 1) {
             merged[base + d] = (out_a[base + d] * sa + out_b[base + d] * sb) * inv_sum;
         }
     }
@@ -316,17 +374,17 @@ test "splitSdpaMerge correctness" {
 
     splitSdpaMerge(&out_a, &max_a, &sum_a, &out_b, &max_b, &sum_b, &merged, nh, hd);
 
-    // Manual merge computation:
+    // Pre-computed expected values (independent of implementation):
     // max_all = max(0.5, 0.8) = 0.8
-    // corr_a = exp(0.5 - 0.8) = exp(-0.3) ≈ 0.7408
-    // corr_b = exp(0.8 - 0.8) = exp(0) = 1.0
-    // sum_all = 2.0 * 0.7408 + 3.0 * 1.0 = 1.4816 + 3.0 = 4.4816
-    // merged[i] = (out_a[i] * 2.0 * 0.7408 + out_b[i] * 3.0 * 1.0) / 4.4816
-    const corr_a: f32 = @exp(@as(f32, -0.3));
-    const sum_all: f32 = 2.0 * corr_a + 3.0;
+    // corr_a = exp(0.5 - 0.8) = exp(-0.3) ≈ 0.74082
+    // corr_b = exp(0.8 - 0.8) = 1.0
+    // w_a = sum_a * corr_a = 2.0 * 0.74082 = 1.48164
+    // w_b = sum_b * corr_b = 3.0
+    // sum_all = 1.48164 + 3.0 = 4.48164
+    // merged[i] = (out_a[i] * w_a + out_b[i] * w_b) / sum_all
+    const expected = [4]f32{ 3.6777, 4.6777, 5.6777, 6.6777 };
     for (0..hd) |i| {
-        const expected = (out_a[i] * 2.0 * corr_a + out_b[i] * 3.0) / sum_all;
-        try std.testing.expectApproxEqAbs(expected, merged[i], 1e-5);
+        try std.testing.expectApproxEqAbs(expected[i], merged[i], 1e-3);
     }
 }
 
@@ -375,10 +433,13 @@ test "partitionBlocks all gpu" {
     const table = [_]u32{ 0, 1 };
 
     const p = partitionBlocks(&table, &blocks, 16, 32);
-    try std.testing.expectEqual(@as(usize, 2), p.gpu_count);
+    // Adjacent same-tier blocks coalesce into a single range
+    try std.testing.expectEqual(@as(usize, 1), p.gpu_count);
     try std.testing.expectEqual(@as(usize, 0), p.cpu_count);
     try std.testing.expectEqual(@as(usize, 32), p.total_gpu_positions);
     try std.testing.expectEqual(@as(usize, 0), p.total_cpu_positions);
+    try std.testing.expectEqual(@as(usize, 0), p.gpu[0].start);
+    try std.testing.expectEqual(@as(usize, 32), p.gpu[0].len);
 }
 
 test "partitionBlocks all cpu" {
@@ -391,11 +452,13 @@ test "partitionBlocks all cpu" {
 
     const p = partitionBlocks(&table, &blocks, 8, 20);
     try std.testing.expectEqual(@as(usize, 0), p.gpu_count);
-    try std.testing.expectEqual(@as(usize, 3), p.cpu_count);
+    // ram+ssd+ram: all CPU-tier, adjacent blocks coalesce into one range
+    try std.testing.expectEqual(@as(usize, 1), p.cpu_count);
     try std.testing.expectEqual(@as(usize, 0), p.total_gpu_positions);
     try std.testing.expectEqual(@as(usize, 20), p.total_cpu_positions);
-    // Last block is partial: 20 - 16 = 4 positions
-    try std.testing.expectEqual(@as(usize, 4), p.cpu[2].len);
+    // Single coalesced range: 0..20
+    try std.testing.expectEqual(@as(usize, 0), p.cpu[0].start);
+    try std.testing.expectEqual(@as(usize, 20), p.cpu[0].len);
 }
 
 test "partitionBlocks empty" {
@@ -403,6 +466,31 @@ test "partitionBlocks empty" {
     const p = partitionBlocks(&table, &[_]TieredBlock{}, 16, 0);
     try std.testing.expectEqual(@as(usize, 0), p.gpu_count);
     try std.testing.expectEqual(@as(usize, 0), p.cpu_count);
+}
+
+test "splitSdpaMerge equal max scores" {
+    // When max_a == max_b, both corrections are 1.0 → simple weighted average
+    const hd: usize = 4;
+    const nh: usize = 1;
+
+    var out_a = [_]f32{ 1.0, 2.0, 3.0, 4.0 };
+    var max_a = [_]f32{0.5};
+    var sum_a = [_]f32{2.0};
+
+    var out_b = [_]f32{ 5.0, 6.0, 7.0, 8.0 };
+    var max_b = [_]f32{0.5}; // equal to max_a
+    var sum_b = [_]f32{3.0};
+
+    var merged = [_]f32{ 0, 0, 0, 0 };
+
+    splitSdpaMerge(&out_a, &max_a, &sum_a, &out_b, &max_b, &sum_b, &merged, nh, hd);
+
+    // corr_a = corr_b = exp(0) = 1.0, sum_all = 2.0 + 3.0 = 5.0
+    // merged[i] = (out_a[i] * 2.0 + out_b[i] * 3.0) / 5.0
+    const expected = [4]f32{ 3.4, 4.4, 5.4, 6.4 };
+    for (0..hd) |i| {
+        try std.testing.expectApproxEqAbs(expected[i], merged[i], 1e-5);
+    }
 }
 
 test "splitSdpaMerge multi-head" {
@@ -417,33 +505,44 @@ test "splitSdpaMerge multi-head" {
 
     splitSdpaMerge(&out_a, &max_a, &sum_a, &out_b, &max_b, &sum_b, &merged, 2, 2);
 
-    // Head 0: max_all=1.0, corr_a=exp(0)=1.0, corr_b=exp(-0.5)
-    // Head 1: max_all=1.0, corr_a=exp(-0.5), corr_b=exp(0)=1.0
-    // Verify heads are independent (head0 != head1 result)
-    try std.testing.expect(merged[0] != merged[2]);
-    // Verify finite and non-zero
+    // Head 0: max_all=1.0, corr_a=1.0, corr_b=exp(-0.5)≈0.6065
+    //   w_a=1.0, w_b=2.0*0.6065=1.2131, sum=2.2131
+    // Head 1: max_all=1.0, corr_a=exp(-0.5)≈0.6065, corr_b=1.0
+    //   w_a=2.0*0.6065=1.2131, w_b=1.0, sum=2.2131
+    // Pre-computed expected values:
+    // h0d0 = (1*1.0 + 5*1.2131) / 2.2131 ≈ 3.1935
+    // h0d1 = (2*1.0 + 6*1.2131) / 2.2131 ≈ 4.1935
+    // h1d0 = (3*1.2131 + 7*1.0) / 2.2131 ≈ 4.8065
+    // h1d1 = (4*1.2131 + 8*1.0) / 2.2131 ≈ 5.8065
+    const expected = [4]f32{ 3.1935, 4.1935, 4.8065, 5.8065 };
     for (0..4) |i| {
-        try std.testing.expect(std.math.isFinite(merged[i]));
-        try std.testing.expect(merged[i] != 0);
+        try std.testing.expectApproxEqAbs(expected[i], merged[i], 1e-3);
     }
+    // Verify heads are independent (symmetric inputs but swapped → different results)
+    try std.testing.expect(merged[0] != merged[2]);
+}
 
-    // Also verify exact values for head 0
-    const corr_b_h0: f32 = @exp(@as(f32, -0.5));
-    const sa_h0: f32 = 1.0 * 1.0; // sum_a[0] * corr_a (corr_a=1.0)
-    const sb_h0: f32 = 2.0 * corr_b_h0; // sum_b[0] * corr_b
-    const sum_h0: f32 = sa_h0 + sb_h0;
-    const expected_h0_d0 = (out_a[0] * sa_h0 + out_b[0] * sb_h0) / sum_h0;
-    const expected_h0_d1 = (out_a[1] * sa_h0 + out_b[1] * sb_h0) / sum_h0;
-    try std.testing.expectApproxEqAbs(expected_h0_d0, merged[0], 1e-5);
-    try std.testing.expectApproxEqAbs(expected_h0_d1, merged[1], 1e-5);
+test "splitSdpaMerge one split dominates" {
+    // When max_a >> max_b, split A should dominate the merged output.
+    // This tests the numerical stability of the exp(max_a - max_b) correction.
+    const hd: usize = 4;
+    const nh: usize = 1;
 
-    // Verify exact values for head 1
-    const corr_a_h1: f32 = @exp(@as(f32, -0.5));
-    const sa_h1: f32 = 2.0 * corr_a_h1; // sum_a[1] * corr_a
-    const sb_h1: f32 = 1.0 * 1.0; // sum_b[1] * corr_b (corr_b=1.0)
-    const sum_h1: f32 = sa_h1 + sb_h1;
-    const expected_h1_d0 = (out_a[2] * sa_h1 + out_b[2] * sb_h1) / sum_h1;
-    const expected_h1_d1 = (out_a[3] * sa_h1 + out_b[3] * sb_h1) / sum_h1;
-    try std.testing.expectApproxEqAbs(expected_h1_d0, merged[2], 1e-5);
-    try std.testing.expectApproxEqAbs(expected_h1_d1, merged[3], 1e-5);
+    var out_a = [_]f32{ 1.0, 2.0, 3.0, 4.0 };
+    var max_a = [_]f32{10.0}; // much larger
+    var sum_a = [_]f32{1.0};
+
+    var out_b = [_]f32{ 9.0, 9.0, 9.0, 9.0 };
+    var max_b = [_]f32{0.0}; // much smaller
+    var sum_b = [_]f32{1.0};
+
+    var merged = [_]f32{ 0, 0, 0, 0 };
+
+    splitSdpaMerge(&out_a, &max_a, &sum_a, &out_b, &max_b, &sum_b, &merged, nh, hd);
+
+    // corr_a = exp(10-10) = 1.0, corr_b = exp(0-10) ≈ 4.5e-5
+    // Split A dominates: merged ≈ out_a
+    for (0..hd) |i| {
+        try std.testing.expectApproxEqAbs(out_a[i], merged[i], 0.01);
+    }
 }

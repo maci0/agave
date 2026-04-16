@@ -11,8 +11,6 @@ const std = @import("std");
 const builtin = @import("builtin");
 const backend_mod = @import("backend.zig");
 const TensorData = backend_mod.TensorData;
-const DType = backend_mod.DType;
-const CpuBackend = @import("cpu.zig").CpuBackend;
 const KvQuantType = backend_mod.KvQuantType;
 const kv_quant = @import("../ops/kv_quant.zig");
 
@@ -45,7 +43,6 @@ const VkBuffer = ?*anyopaque;
 const VkDeviceMemory = ?*anyopaque;
 const VkSampler = ?*anyopaque;
 const VkBufferView = ?*anyopaque;
-const VkImageView = ?*anyopaque;
 
 // Structure type constants (VkStructureType values from Vulkan spec)
 const VK_STRUCTURE_TYPE_APPLICATION_INFO: c_int = 0;
@@ -667,7 +664,7 @@ pub const VulkanBackend = struct {
     act_pool_count: u32 = 0,
 
     /// Number of SPIR-V compute pipelines compiled at init.
-    pub const n_pipelines: u32 = 20;
+    pub const n_pipelines: u32 = 22;
 
     /// Library name loaded via dlopen at init.
     pub const lib_name = vk_lib_name;
@@ -1299,7 +1296,7 @@ pub const VulkanBackend = struct {
 
     // ── Weight size helper ──────────────────────────────────────
 
-    const weightBytes = @import("backend.zig").weightBytes;
+    const weightBytes = backend_mod.weightBytes;
 
     // ── Backend interface ────────────────────────────────────────
 
@@ -1668,61 +1665,6 @@ pub const VulkanBackend = struct {
     }
 
     /// Create Vulkan buffer wrapping RAM-tier KV block with zero copy.
-    /// On UMA platforms, HOST_VISIBLE | DEVICE_LOCAL memory allows GPU to
-    /// access RAM-tier blocks directly without separate device allocation.
-    /// On discrete GPUs, performs one-time upload to cached device buffer.
-    ///
-    /// Returns cached buffer if already created for this pointer.
-    pub fn createKvBuffer(self: *VulkanBackend, host_ptr: [*]u8, size: usize) !VkBuffer {
-        // Check cache
-        const addr = @intFromPtr(host_ptr);
-        if (self.buf_cache.get(addr)) |cached| return cached.vk_buf.buf;
-
-        // Create buffer info
-        const buffer_info = VkBufferCreateInfo{
-            .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
-            .size = size,
-            .usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-            .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
-        };
-
-        var buffer: VkBuffer = null;
-        const result = self.vkCreateBuffer(self.device, &buffer_info, null, &buffer);
-        if (result != VK_SUCCESS) return error.VulkanBufferCreationFailed;
-
-        // Get memory requirements
-        var mem_reqs: VkMemoryRequirements = undefined;
-        self.vkGetBufferMemoryRequirements(self.device, buffer, &mem_reqs);
-
-        // Use the host-visible memory type selected at init (prefers DEVICE_LOCAL on UMA).
-        const mem_type_index = self.host_mem_type;
-
-        const alloc_info = VkMemoryAllocateInfo{
-            .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
-            .allocationSize = mem_reqs.size,
-            .memoryTypeIndex = mem_type_index,
-        };
-
-        var memory: VkDeviceMemory = null;
-        const alloc_result = self.vkAllocateMemory(self.device, &alloc_info, null, &memory);
-        if (alloc_result != VK_SUCCESS) return error.VulkanMemoryAllocationFailed;
-
-        // Bind buffer to memory
-        _ = self.vkBindBufferMemory(self.device, buffer, memory, 0);
-
-        // Map and copy host data
-        var mapped_ptr: ?*anyopaque = null;
-        _ = self.vkMapMemory(self.device, memory, 0, size, 0, &mapped_ptr);
-        @memcpy(@as([*]u8, @ptrCast(mapped_ptr.?))[0..size], host_ptr[0..size]);
-        self.vkUnmapMemory(self.device, memory);
-
-        // Cache buffer
-        try self.buf_cache.put(addr, .{ .vk_buf = .{ .buf = buffer, .mem = memory }, .size = size });
-
-        std.log.debug("Created Vulkan KV buffer for RAM-tier block at {x}", .{addr});
-        return buffer.?;
-    }
-
     // ── Batched prefill ops (loop-of-single fallback) ──────────
 
     /// GEMM: Y[n_tok × n_out] = X[n_tok × n_in] @ W[n_out × n_in]^T.
@@ -1764,7 +1706,7 @@ pub const VulkanBackend = struct {
     pub fn endBatch(_: *VulkanBackend) void {}
 
     /// Returns backend startup information for display.
-    pub fn backendInfo(self: *const VulkanBackend) @import("backend.zig").BackendInfo {
+    pub fn backendInfo(self: *const VulkanBackend) backend_mod.BackendInfo {
         return .{
             .name = "Vulkan",
             .device_name = self.device_name[0..self.device_name_len],
@@ -1778,47 +1720,20 @@ pub const VulkanBackend = struct {
 
     // ── TurboQuant helpers ────────────────────────────────────
 
-    /// TurboQuant 2-bit block: f16 norm (2 bytes) + 8 packed bytes = 10 bytes per 32 elements.
-    const turbo2_block_bytes: u32 = 10;
-    /// TurboQuant 3-bit block: f16 norm (2 bytes) + 12 packed bytes = 14 bytes per 32 elements.
-    const turbo3_block_bytes: u32 = 14;
-    /// TurboQuant 4-bit block: f16 norm (2 bytes) + 16 packed bytes = 18 bytes per 32 elements.
-    const turbo4_block_bytes: u32 = 18;
-
-    /// Return the turbo bit width for a KV quant type, or 0 for non-turbo types.
-    fn turboBits(kv_type: KvQuantType) u32 {
-        return switch (kv_type) {
-            .turbo2 => 2,
-            .turbo3 => 3,
-            .turbo4 => 4,
-            else => 0,
-        };
-    }
-
-    /// Return the byte size per 32-element turbo block, or 0 for non-turbo types.
-    fn turboBlockByteSize(kv_type: KvQuantType) u32 {
-        return switch (kv_type) {
-            .turbo2 => turbo2_block_bytes,
-            .turbo3 => turbo3_block_bytes,
-            .turbo4 => turbo4_block_bytes,
-            else => 0,
-        };
-    }
-
     /// Fused Scaled Dot-Product Attention.
     /// One workgroup per query head. Supports f32 and TurboQuant 2/3/4-bit KV cache.
     /// TurboQuant dequantization happens in-GPU via the sdpa_turbo shader.
     /// KV append for turbo types uses CPU quantization (once per token per layer).
     /// Panics for non-turbo quantized types (q8_0, f16, etc.) — add GPU shaders.
-    pub fn sdpa(self: *VulkanBackend, q: [*]const f32, keys: []u8, values: []u8, k_new: [*]const f32, v_new: [*]const f32, output: [*]f32, nh: usize, nkv: usize, hd: usize, seq_len: usize, scale: f32, kv_type_k: @import("backend.zig").KvQuantType, kv_type_v: @import("backend.zig").KvQuantType) void {
-        const is_turbo_k = (kv_type_k == .turbo2 or kv_type_k == .turbo3 or kv_type_k == .turbo4);
-        const is_turbo_v = (kv_type_v == .turbo2 or kv_type_v == .turbo3 or kv_type_v == .turbo4);
+    pub fn sdpa(self: *VulkanBackend, q: [*]const f32, keys: []u8, values: []u8, k_new: [*]const f32, v_new: [*]const f32, output: [*]f32, nh: usize, nkv: usize, hd: usize, seq_len: usize, scale: f32, kv_type_k: backend_mod.KvQuantType, kv_type_v: backend_mod.KvQuantType) void {
+        const is_turbo_k = kv_type_k.isTurbo();
+        const is_turbo_v = kv_type_v.isTurbo();
         const is_f32_k = (kv_type_k == .f32);
         const is_f32_v = (kv_type_v == .f32);
 
         // Non-turbo, non-f32 quantized KV: no GPU kernel yet
-        if (!is_f32_k and !is_turbo_k or !is_f32_v and !is_turbo_v) {
-            @panic("Vulkan SDPA: non-turbo quantized KV not yet supported — use --kv-type f32 or turbo2/3/4");
+        if ((!is_f32_k and !is_turbo_k) or (!is_f32_v and !is_turbo_v)) {
+            @panic("Vulkan SDPA: unsupported KV type — use --kv-type f32 or turbo2/3/4");
         }
 
         const kvd = nkv * hd;
@@ -1831,8 +1746,8 @@ pub const VulkanBackend = struct {
 
         if (is_f32_k and is_f32_v) {
             // Pure f32 path: direct memcpy append
-            const f32_keys: []f32 = @as([*]f32, @ptrCast(@alignCast(keys.ptr)))[0 .. keys.len / 4];
-            const f32_values: []f32 = @as([*]f32, @ptrCast(@alignCast(values.ptr)))[0 .. values.len / 4];
+            const f32_keys: []f32 = @as([*]f32, @ptrCast(@alignCast(keys.ptr)))[0 .. keys.len / @sizeOf(f32)];
+            const f32_values: []f32 = @as([*]f32, @ptrCast(@alignCast(values.ptr)))[0 .. values.len / @sizeOf(f32)];
             @memcpy(f32_keys[seq_len * kvd ..][0..kvd], k_new[0..kvd]);
             @memcpy(f32_values[seq_len * kvd ..][0..kvd], v_new[0..kvd]);
 
@@ -1907,10 +1822,10 @@ pub const VulkanBackend = struct {
                 .hd_v = @intCast(hd),
                 .sl_v = @intCast(sl),
                 .scale_v = scale,
-                .bits_k_v = turboBits(kv_type_k),
-                .bits_v_v = turboBits(kv_type_v),
-                .block_bytes_k_v = turboBlockByteSize(kv_type_k),
-                .block_bytes_v_v = turboBlockByteSize(kv_type_v),
+                .bits_k_v = kv_type_k.turboBits(),
+                .bits_v_v = kv_type_v.turboBits(),
+                .block_bytes_k_v = kv_type_k.turboBlockByteSize(),
+                .block_bytes_v_v = kv_type_v.turboBlockByteSize(),
             };
             const bufs = [_]VkBuffer{ q_buf.buf, k_buf.buf, v_buf.buf, o_buf.buf };
             const sizes = [_]usize{ q_sz, k_cache_bytes, v_cache_bytes, o_sz };
@@ -1937,49 +1852,61 @@ pub const VulkanBackend = struct {
 // ── Tests ─────────────────────────────────────────────────────────
 
 test "VulkanBackend init and silu" {
-    var vk_be = VulkanBackend.init(std.testing.allocator) catch {
-        return error.SkipZigTest;
+    var vk_be = VulkanBackend.init(std.testing.allocator) catch |err| {
+        if (err == error.VulkanNotAvailable) return error.SkipZigTest;
+        return err;
     };
     defer vk_be.deinit();
 
     var input = [_]f32{ 0.0, 1.0, -1.0, 2.0 };
     var output: [4]f32 = undefined;
     vk_be.silu(&input, &output, 4);
-    try std.testing.expectApproxEqAbs(@as(f32, 0.0), output[0], 0.01);
-    try std.testing.expectApproxEqAbs(@as(f32, 0.731), output[1], 0.02);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.0), output[0], 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.7311), output[1], 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, -0.2689), output[2], 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 1.7616), output[3], 0.01);
 }
 
 test "VulkanBackend gelu" {
-    var vk_be = VulkanBackend.init(std.testing.allocator) catch {
-        return error.SkipZigTest;
+    var vk_be = VulkanBackend.init(std.testing.allocator) catch |err| {
+        if (err == error.VulkanNotAvailable) return error.SkipZigTest;
+        return err;
     };
     defer vk_be.deinit();
 
     var input = [_]f32{ 0.0, 1.0, -1.0, 2.0 };
     var output: [4]f32 = undefined;
     vk_be.gelu(&input, &output, 4);
-    // GELU(0) = 0, GELU(1) ≈ 0.841
-    try std.testing.expectApproxEqAbs(@as(f32, 0.0), output[0], 0.01);
-    try std.testing.expectApproxEqAbs(@as(f32, 0.841), output[1], 0.02);
+    // GELU(0) = 0, GELU(1) ≈ 0.841, GELU(-1) ≈ -0.159, GELU(2) ≈ 1.955
+    try std.testing.expectApproxEqAbs(@as(f32, 0.0), output[0], 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.841), output[1], 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, -0.159), output[2], 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 1.955), output[3], 0.01);
 }
 
 test "VulkanBackend rmsNorm" {
-    var vk_be = VulkanBackend.init(std.testing.allocator) catch {
-        return error.SkipZigTest;
+    var vk_be = VulkanBackend.init(std.testing.allocator) catch |err| {
+        if (err == error.VulkanNotAvailable) return error.SkipZigTest;
+        return err;
     };
     defer vk_be.deinit();
 
     var input = [_]f32{ 1.0, 2.0, 3.0, 4.0 };
-    var weight = [_]f32{ 1.0, 1.0, 1.0, 1.0 };
+    var weight = [_]f32{ 1.0, 2.0, 0.5, 3.0 };
     var output: [4]f32 = undefined;
     vk_be.rmsNorm(&input, &weight, &output, 4, 1e-6);
-    // RMS = sqrt((1+4+9+16)/4) ≈ 2.7386, output[0] ≈ 0.365
-    try std.testing.expectApproxEqAbs(@as(f32, 0.365), output[0], 0.05);
+    // RMS = sqrt((1+4+9+16)/4) = sqrt(7.5) ≈ 2.7386
+    // output[i] = input[i] * weight[i] / RMS
+    try std.testing.expectApproxEqAbs(@as(f32, 0.3651), output[0], 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 1.4606), output[1], 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.5477), output[2], 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 4.3818), output[3], 0.01);
 }
 
 test "VulkanBackend softmax" {
-    var vk_be = VulkanBackend.init(std.testing.allocator) catch {
-        return error.SkipZigTest;
+    var vk_be = VulkanBackend.init(std.testing.allocator) catch |err| {
+        if (err == error.VulkanNotAvailable) return error.SkipZigTest;
+        return err;
     };
     defer vk_be.deinit();
 
@@ -1996,8 +1923,9 @@ test "VulkanBackend softmax" {
 }
 
 test "VulkanBackend l2Norm" {
-    var vk_be = VulkanBackend.init(std.testing.allocator) catch {
-        return error.SkipZigTest;
+    var vk_be = VulkanBackend.init(std.testing.allocator) catch |err| {
+        if (err == error.VulkanNotAvailable) return error.SkipZigTest;
+        return err;
     };
     defer vk_be.deinit();
 
@@ -2006,11 +1934,14 @@ test "VulkanBackend l2Norm" {
     // L2 = 5, normalized: [0.6, 0.8, 0, 0]
     try std.testing.expectApproxEqAbs(@as(f32, 0.6), data[0], 1e-4);
     try std.testing.expectApproxEqAbs(@as(f32, 0.8), data[1], 1e-4);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.0), data[2], 1e-4);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.0), data[3], 1e-4);
 }
 
 test "VulkanBackend rope" {
-    var vk_be = VulkanBackend.init(std.testing.allocator) catch {
-        return error.SkipZigTest;
+    var vk_be = VulkanBackend.init(std.testing.allocator) catch |err| {
+        if (err == error.VulkanNotAvailable) return error.SkipZigTest;
+        return err;
     };
     defer vk_be.deinit();
 
@@ -2023,4 +1954,7 @@ test "VulkanBackend rope" {
     const mag1 = @sqrt(x[1] * x[1] + x[3] * x[3]);
     try std.testing.expectApproxEqAbs(@as(f32, 1.0), mag0, 0.01);
     try std.testing.expectApproxEqAbs(@as(f32, 1.0), mag1, 0.01);
+    // Verify rotation actually changed the values (not a no-op)
+    try std.testing.expect(x[0] != 1.0);
+    try std.testing.expect(x[2] != 0.0);
 }

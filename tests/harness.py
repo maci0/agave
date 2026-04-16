@@ -94,7 +94,7 @@ AGAVE_ROOT = Path(__file__).resolve().parent.parent
 AGAVE_BIN = AGAVE_ROOT / "zig-out" / "bin" / "agave"
 AGAVE_BENCH_BIN = AGAVE_ROOT / "zig-out" / "bin" / "agave-bench"
 DEFAULT_WEIGHTS_DIR = AGAVE_ROOT / "models"
-GOLDEN_DIR = AGAVE_ROOT / "tests" / "golden_outputs"
+GOLDEN_DIR = AGAVE_ROOT / "tests" / "golden" / "references"
 DEFAULT_PROMPT = "What is 2+2? Answer briefly."
 DEFAULT_MAX_TOKENS = 64
 DEFAULT_TIMEOUT = 120  # seconds
@@ -102,10 +102,12 @@ DEFAULT_TIMEOUT = 120  # seconds
 # Architecture detection from filename patterns
 ARCH_PATTERNS: dict[str, list[str]] = {
     "gemma3": ["gemma-3", "gemma3"],
+    "gemma4": ["gemma-4", "gemma4"],
     "qwen35": ["qwen3.5", "qwen35"],
+    "deepseek_r1_qwen3": ["deepseek-r1", "deepseek_r1"],
     "gpt_oss": ["gpt-oss", "gptoss"],
-    "nemotron_h": ["nemotron-h", "nemotron_h", "nemotron-3-nano-4b"],
-    "nemotron_nano": ["nemotron-nano", "nemotron_nano", "nemotron-3-nano-30b"],
+    "nemotron_h": ["nemotron-h", "nemotron_h", "nemotron-3-nano-30b"],
+    "nemotron_nano": ["nemotron-nano", "nemotron_nano", "nemotron-3-nano-4b"],
     "glm4": ["glm-4", "glm4"],
 }
 
@@ -308,12 +310,12 @@ def detect_arch(name: str) -> Optional[str]:
     lower = name.lower()
     # Check nemotron variants carefully (nano-30b vs nano-4b)
     if "nemotron" in lower:
-        if "30b" in lower or "nano-30b" in lower:
-            return "nemotron_nano"
-        if "nano" in lower:
-            return "nemotron_h"  # Nemotron-H uses the Nano-4B GGUF
         if "nemotron-h" in lower or "nemotron_h" in lower:
             return "nemotron_h"
+        if "30b" in lower or "nano-30b" in lower:
+            return "nemotron_h"  # 30B-A3B is the hybrid SSM+attention arch
+        if "nano" in lower:
+            return "nemotron_nano"  # 4B is the standard Nemotron Nano
     for arch, patterns in ARCH_PATTERNS.items():
         if arch.startswith("nemotron"):
             continue  # Already handled above
@@ -411,7 +413,7 @@ def detect_available_backends() -> list[str]:
         elif be == "metal" and system == "Darwin":
             available.append(be)
         elif be == "vulkan":
-            if shutil.which("vulkaninfo") or system == "Darwin":
+            if shutil.which("vulkaninfo"):
                 available.append(be)
         elif be == "cuda":
             if shutil.which("nvidia-smi"):
@@ -623,8 +625,12 @@ def run_inference(
 
             except json.JSONDecodeError:
                 # Fallback: try parsing human-readable output
-                result.status = "pass"
                 _parse_stats_fallback(proc.stdout, result)
+                if result.tokens_generated > 0:
+                    result.status = "pass"
+                else:
+                    result.status = "fail"
+                    result.error_message = "Non-JSON output with no parseable token stats"
         else:
             result.status = "fail"
             result.error_message = "Empty stdout"
@@ -811,13 +817,9 @@ def run_smoke(
                 else:
                     result.status = "pass"
             except json.JSONDecodeError:
-                # Non-JSON output — check if any text was produced
-                if proc.stdout.strip():
-                    result.status = "pass"
-                    result.tokens_generated = 1  # approximate
-                else:
-                    result.status = "fail"
-                    result.error_message = "Empty output"
+                # Non-JSON output — still a failure for smoke tests that expect JSON
+                result.status = "fail"
+                result.error_message = "Smoke test produced non-JSON output"
         else:
             result.status = "fail"
             result.error_message = "Empty stdout"
@@ -885,11 +887,15 @@ def check_golden(result: RunResult, model: ModelInfo) -> str:
             golden = json.load(f)
         golden_text = golden.get("output_text", "")
         # Fuzzy match: first N chars should match (models may vary slightly due to sampling)
-        # Use first 20 chars as a fingerprint
-        n = min(20, len(golden_text), len(result.output_text))
+        n = min(80, len(golden_text), len(result.output_text))
         if n == 0:
             return "mismatch"
+        # Exact match on prefix
         if golden_text[:n] == result.output_text[:n]:
+            return "match"
+        # Case-insensitive fuzzy match (95% threshold)
+        matches = sum(1 for a, b in zip(golden_text[:n].lower(), result.output_text[:n].lower()) if a == b)
+        if matches / n >= 0.95:
             return "match"
         return "mismatch"
     except Exception:
@@ -1167,6 +1173,7 @@ def print_repeat_table(repeat_results: dict[tuple, RepeatStats]) -> None:
     table.add_column("Architecture", width=14)
     table.add_column("Quant", width=12)
     table.add_column("Backend", width=8)
+    table.add_column("KV", width=10)
     table.add_column("Runs", justify="right", width=5)
     table.add_column("Pass", justify="right", width=5)
     table.add_column("Avg tok/s", justify="right", width=10)
@@ -1175,12 +1182,12 @@ def print_repeat_table(repeat_results: dict[tuple, RepeatStats]) -> None:
     table.add_column("Stddev", justify="right", width=8)
     table.add_column("CV%", justify="right", width=6)
 
-    for (arch, quant, backend), stats in sorted(repeat_results.items()):
+    for (arch, quant, backend, kv_label), stats in sorted(repeat_results.items()):
         n_pass = len(stats.passing)
         avg = stats.tps_avg
         cv = (stats.tps_stddev / avg * 100) if avg > 0 else 0
         table.add_row(
-            arch, quant, backend,
+            arch, quant, backend, kv_label,
             str(stats.n), str(n_pass),
             fmt_tps(avg),
             fmt_tps(stats.tps_min),
@@ -1354,7 +1361,7 @@ def results_to_json(
         ]
     if repeat_results:
         data["repeat_stats"] = {
-            f"{k[0]}_{k[1]}_{k[2]}": {
+            f"{k[0]}_{k[1]}_{k[2]}_{k[3]}": {
                 "n": v.n, "pass": len(v.passing),
                 "tps_avg": v.tps_avg, "tps_min": v.tps_min,
                 "tps_max": v.tps_max, "tps_stddev": v.tps_stddev,
@@ -1432,8 +1439,6 @@ def build_parser() -> argparse.ArgumentParser:
                      help="Only inference, skip benchmarks")
     sel.add_argument("--model-info-only", action="store_true",
                      help="Only validate model metadata (fast, no inference)")
-    sel.add_argument("--smoke", action="store_true", default=True,
-                     help="Run 1-token smoke tests per model/backend (default: on)")
     sel.add_argument("--no-smoke", action="store_true",
                      help="Skip smoke tests")
     sel.add_argument("--zig-test", action="store_true",
@@ -1586,7 +1591,7 @@ def main() -> int:
     total_runs = len(test_matrix) * args.repeat
     do_bench = not args.correctness_only and not args.no_bench and not args.model_info_only
     do_inference = not args.bench_only and not args.model_info_only
-    do_smoke = args.smoke and not args.no_smoke and not args.bench_only
+    do_smoke = not args.no_smoke and not args.bench_only
     do_model_info = args.model_info_only or True  # Always run model-info as fast validation
 
     console.print()

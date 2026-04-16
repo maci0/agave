@@ -10,6 +10,8 @@ const cu = @import("common.zig");
 const q4_0_block_size: u32 = 18;
 /// Elements per Q4_0 block.
 const q4_0_group_size: u32 = 32;
+/// Q4_0 dequant bias: 4-bit unsigned [0..15] centered to signed [-8..7].
+const q4_0_dequant_bias: i8 = -8;
 
 /// Load 4 bytes from an arbitrary address as u32 (unaligned-safe).
 /// Uses align(1) to avoid UB when Q4_0 block boundaries are not 4-byte aligned.
@@ -25,8 +27,8 @@ inline fn accumDword(dw: u32, x: [*]const f32, col_lo: u32, col_hi: u32) f32 {
     inline for (0..4) |bi| {
         const shift: u5 = @intCast(bi * 8);
         const byte: u8 = @truncate(dw >> shift);
-        const lo: f32 = @floatFromInt(@as(i8, @intCast(@as(u4, @truncate(byte)))) - 8);
-        const hi: f32 = @floatFromInt(@as(i8, @intCast(@as(u4, @truncate(byte >> 4)))) - 8);
+        const lo: f32 = @floatFromInt(@as(i8, @intCast(@as(u4, @truncate(byte)))) + q4_0_dequant_bias);
+        const hi: f32 = @floatFromInt(@as(i8, @intCast(@as(u4, @truncate(byte >> 4)))) + q4_0_dequant_bias);
         s += lo * x[col_lo + bi] + hi * x[col_hi + bi];
     }
     return s;

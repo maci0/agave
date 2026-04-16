@@ -15,6 +15,10 @@ const CacheBlock = manager.CacheBlock;
 
 /// VRAM usage threshold for triggering demotion (90% = evict at 10% free).
 const vram_eviction_threshold: f32 = 0.90;
+/// Integer numerator/denominator for threshold check without float division:
+/// vram_used/vram_total > 0.90  ⟺  vram_used * eviction_denom > vram_total * eviction_numer
+const eviction_numer: usize = 9;
+const eviction_denom: usize = 10;
 /// Eviction cost multiplier for shared prefix blocks (ref_count > 1).
 /// Higher cost protects shared prefixes from thrashing.
 const shared_prefix_cost: f32 = 100.0;
@@ -37,7 +41,7 @@ pub const TieredBlock = struct {
     /// Last access timestamp (milliseconds) for LRU within tier.
     last_access_ms: i64 = 0,
 
-    /// SSD tier support (used in Plan 03): file offset for spilled blocks.
+    /// SSD tier support: file offset for spilled blocks.
     ssd_offset: ?u64 = null,
 };
 
@@ -62,6 +66,13 @@ pub const TieredKvCache = struct {
     vram_block_count: usize,
     ram_block_count: usize,
     ssd_block_count: usize,
+
+    /// Number of VRAM blocks currently in use (avoids O(n) scan).
+    /// Atomic: accessed by both scheduler and prefetch worker threads.
+    vram_used: std.atomic.Value(usize),
+    /// Number of RAM blocks currently in use (avoids O(n) scan).
+    /// Atomic: accessed by both scheduler and prefetch worker threads.
+    ram_used: std.atomic.Value(usize),
 
     /// Block size (tokens per block).
     block_size: u16,
@@ -103,7 +114,7 @@ pub const TieredKvCache = struct {
         block_size: u16,
         ssd_path: ?[]const u8,
     ) !TieredKvCache {
-        const total_blocks = vram_blocks + ram_blocks + ssd_blocks;
+        const total_blocks = std.math.add(usize, std.math.add(usize, vram_blocks, ram_blocks) catch return error.OutOfMemory, ssd_blocks) catch return error.OutOfMemory;
         const blocks = try allocator.alloc(TieredBlock, total_blocks);
         errdefer allocator.free(blocks);
 
@@ -120,17 +131,25 @@ pub const TieredKvCache = struct {
         try ssd_free.ensureTotalCapacity(allocator, ssd_blocks);
 
         // Calculate block bytes (keys + values)
-        const slot_size = @as(usize, block_size) * kv_dim;
-        const block_bytes = slot_size * @sizeOf(f32) * 2; // keys + values
+        const slot_size = std.math.mul(usize, @as(usize, block_size), kv_dim) catch return error.OutOfMemory;
+        const block_bytes = std.math.mul(usize, slot_size, @sizeOf(f32) * 2) catch return error.OutOfMemory; // keys + values
 
         // Create sparse file for SSD tier if path provided
         var ssd_file: ?std.fs.File = null;
         if (ssd_path) |path| {
+            // Reject path traversal, null bytes, and absolute paths in user-supplied SSD cache path.
+            if (std.mem.indexOf(u8, path, "..") != null or
+                std.mem.indexOfScalar(u8, path, 0) != null or
+                (path.len > 0 and (path[0] == '/' or path[0] == '\\')))
+                return error.InvalidPath;
             ssd_file = try std.fs.cwd().createFile(path, .{ .read = true, .truncate = false });
-            errdefer ssd_file.?.close();
+            errdefer {
+                ssd_file.?.close();
+                std.fs.cwd().deleteFile(path) catch {};
+            }
 
             // Allocate sparse file (write one byte at end to reserve space)
-            const total_size = ssd_blocks * block_bytes;
+            const total_size = std.math.mul(usize, ssd_blocks, block_bytes) catch return error.OutOfMemory;
             if (total_size > 0) {
                 try ssd_file.?.seekTo(total_size - 1);
                 var write_buf: [1]u8 = .{0};
@@ -154,8 +173,9 @@ pub const TieredKvCache = struct {
             const keys = try allocator.alloc(f32, slot_size);
             errdefer allocator.free(keys);
             const values = try allocator.alloc(f32, slot_size);
+            errdefer allocator.free(values);
             blocks[i] = .{
-                .base = .{ .keys = keys, .values = values },
+                .base = .{ .keys = keys, .values = values, .ref_count = 0 },
                 .tier = .vram,
             };
             vram_free.appendAssumeCapacity(@intCast(i));
@@ -167,8 +187,9 @@ pub const TieredKvCache = struct {
             const keys = try allocator.alloc(f32, slot_size);
             errdefer allocator.free(keys);
             const values = try allocator.alloc(f32, slot_size);
+            errdefer allocator.free(values);
             blocks[i] = .{
-                .base = .{ .keys = keys, .values = values },
+                .base = .{ .keys = keys, .values = values, .ref_count = 0 },
                 .tier = .ram,
             };
             ram_free.appendAssumeCapacity(@intCast(i));
@@ -181,6 +202,7 @@ pub const TieredKvCache = struct {
                 .base = .{
                     .keys = &[_]f32{}, // Empty slice (data on disk)
                     .values = &[_]f32{},
+                    .ref_count = 0,
                 },
                 .tier = .ssd,
                 .ssd_offset = null, // Assigned on first spill
@@ -194,6 +216,8 @@ pub const TieredKvCache = struct {
             .vram_free_list = vram_free,
             .ram_free_list = ram_free,
             .ssd_free_list = ssd_free,
+            .vram_used = std.atomic.Value(usize).init(0),
+            .ram_used = std.atomic.Value(usize).init(0),
             .vram_block_count = vram_blocks,
             .ram_block_count = ram_blocks,
             .ssd_block_count = ssd_blocks,
@@ -235,31 +259,38 @@ pub const TieredKvCache = struct {
     /// 5. Fallback to SSD tier (promote from SSD to RAM before use)
     /// 6. Return error if all tiers exhausted
     ///
-    /// Automatically triggers demotion when VRAM usage exceeds 90% threshold
-    /// (per decision D-03: eviction at 10% free).
+    /// Automatically triggers demotion when VRAM usage exceeds 90% threshold.
     ///
     /// Returns: Physical block ID.
     pub fn allocBlock(self: *TieredKvCache) !u32 {
-        // Try VRAM first
-        if (self.vram_free_list.items.len > 0) {
-            const block_id = self.vram_free_list.pop().?;
-            self.blocks[block_id].tier = .vram;
-            self.blocks[block_id].base.ref_count = 1;
-            self.blocks[block_id].base.used = 0;
-            return block_id;
-        }
+        // Try VRAM first — loop with bounded demotion attempts (avoids unbounded recursion)
+        var demotions: usize = 0;
+        const max_demotions: usize = 16;
+        while (demotions < max_demotions) : (demotions += 1) {
+            if (self.vram_free_list.items.len > 0) {
+                const block_id = self.vram_free_list.pop().?;
+                self.blocks[block_id].tier = .vram;
+                self.blocks[block_id].base.ref_count = 1;
+                self.blocks[block_id].base.used = 0;
+                _ = self.vram_used.fetchAdd(1, .monotonic);
+                return block_id;
+            }
 
-        // VRAM exhausted — check if we can evict (per D-03: trigger at 90% usage)
-        const vram_used = self.vramUsedBlocks();
-        const vram_total = self.vram_block_count;
-        const vram_usage = @as(f32, @floatFromInt(vram_used)) / @as(f32, @floatFromInt(vram_total));
+            // VRAM exhausted — check if we can evict (trigger at vram_eviction_threshold)
+            // Integer comparison avoids float division on allocation path.
+            const vram_used = self.vram_used.load(.monotonic);
+            const vram_total = self.vram_block_count;
 
-        if (vram_usage > vram_eviction_threshold) {
-            // Demote coldest VRAM block to RAM
-            const evicted = try self.demoteToRam();
-            std.log.debug("Demoted block {d} from VRAM to RAM (usage: {d:.1}%)", .{ evicted, vram_usage * 100.0 });
-            // Retry allocation
-            return try self.allocBlock();
+            if (vram_used * eviction_denom > vram_total * eviction_numer) {
+                // Demote coldest VRAM block to RAM (block stays in-use, just re-tagged)
+                const evicted = try self.demoteToRam();
+                std.log.debug("Demoted block {d} from VRAM to RAM (usage: {d:.1}%)", .{
+                    evicted,
+                    @as(f32, @floatFromInt(vram_used)) / @as(f32, @floatFromInt(vram_total)) * 100.0,
+                });
+                continue; // retry — vram_used decreased, eventually falls below threshold
+            }
+            break; // no eviction possible, fall through to RAM/SSD
         }
 
         // Fallback to RAM tier
@@ -268,6 +299,7 @@ pub const TieredKvCache = struct {
             self.blocks[block_id].tier = .ram;
             self.blocks[block_id].base.ref_count = 1;
             self.blocks[block_id].base.used = 0;
+            _ = self.ram_used.fetchAdd(1, .monotonic);
             return block_id;
         }
 
@@ -285,20 +317,10 @@ pub const TieredKvCache = struct {
         return error.OutOfKvMemory;
     }
 
-    /// Count number of VRAM blocks currently in use.
-    fn vramUsedBlocks(self: *const TieredKvCache) usize {
-        var used: usize = 0;
-        for (self.blocks[0..self.vram_block_count]) |*blk| {
-            if (blk.base.ref_count > 0 and blk.tier == .vram) {
-                used += 1;
-            }
-        }
-        return used;
-    }
 
     /// Demote coldest VRAM block to RAM tier.
     ///
-    /// Uses frequency×cost eviction from Plan 01 (access_count × compute_cost).
+    /// Uses frequency×cost eviction (access_count × compute_cost).
     /// Shared prefixes (ref_count > 1) have 100× higher cost to prevent thrashing.
     /// Last block of sequence evicted first (minimize shared prefix eviction).
     ///
@@ -307,7 +329,7 @@ pub const TieredKvCache = struct {
     /// Returns: Block ID of demoted block.
     fn demoteToRam(self: *TieredKvCache) !u32 {
         // Check if RAM is full — if so, demote RAM → SSD first
-        const ram_used = self.ramUsedBlocks();
+        const ram_used = self.ram_used.load(.monotonic);
         if (ram_used >= self.ram_block_count and self.ssd_block_count > 0) {
             const ram_victim = try self.selectColdestRamBlock();
             try self.demoteToSsd(ram_victim);
@@ -316,6 +338,7 @@ pub const TieredKvCache = struct {
 
         var min_score: f32 = std.math.floatMax(f32);
         var victim_id: u32 = 0;
+        var found = false;
 
         for (self.blocks[0..self.vram_block_count], 0..) |*blk, id| {
             if (blk.tier != .vram) continue; // Only demote from VRAM
@@ -328,11 +351,16 @@ pub const TieredKvCache = struct {
             if (score < min_score) {
                 min_score = score;
                 victim_id = @intCast(id);
+                found = true;
             }
         }
 
+        if (!found) return error.NoVramBlocksToDemote;
+
         // Change tier tag (data stays in place for now — zero-copy in Plan 04)
         self.blocks[victim_id].tier = .ram;
+        _ = self.vram_used.fetchSub(1, .monotonic);
+        _ = self.ram_used.fetchAdd(1, .monotonic);
 
         // Block remains allocated (ref_count > 0), so not on free list
         // Tier tag is sufficient for tracking location
@@ -340,18 +368,6 @@ pub const TieredKvCache = struct {
         return victim_id;
     }
 
-    /// Count number of RAM blocks currently in use.
-    fn ramUsedBlocks(self: *const TieredKvCache) usize {
-        var used: usize = 0;
-        const ram_start = self.vram_block_count;
-        const ram_end = ram_start + self.ram_block_count;
-        for (self.blocks[ram_start..ram_end]) |*blk| {
-            if (blk.base.ref_count > 0 and blk.tier == .ram) {
-                used += 1;
-            }
-        }
-        return used;
-    }
 
     /// Select coldest RAM block for SSD demotion.
     /// Uses same frequency×cost metric as demoteToRam.
@@ -393,18 +409,17 @@ pub const TieredKvCache = struct {
         var blk = &self.blocks[block_id];
         std.debug.assert(blk.tier == .ram); // Only demote from RAM
 
-        if (self.ssd_file == null) return error.SsdNotConfigured;
+        const ssd = self.ssd_file orelse return error.SsdNotConfigured;
 
         // Calculate fixed offset for this block
-        const offset = @as(u64, block_id) * @as(u64, self.block_bytes);
+        const offset = std.math.mul(u64, @as(u64, block_id), @as(u64, self.block_bytes)) catch return error.Overflow;
 
-        // Write keys + values to SSD
-        try self.ssd_file.?.seekTo(offset);
-
+        // Write keys + values to SSD using positioned I/O (pwrite) to avoid
+        // seek+write races when prefetcher and scheduler access the file concurrently.
         const keys_bytes = std.mem.sliceAsBytes(blk.base.keys);
         const values_bytes = std.mem.sliceAsBytes(blk.base.values);
-        try self.ssd_file.?.writeAll(keys_bytes);
-        try self.ssd_file.?.writeAll(values_bytes);
+        try ssd.pwriteAll(keys_bytes, offset);
+        try ssd.pwriteAll(values_bytes, offset + keys_bytes.len);
 
         // Free RAM backing
         self.allocator.free(blk.base.keys);
@@ -415,6 +430,7 @@ pub const TieredKvCache = struct {
         // Update tier metadata
         blk.tier = .ssd;
         blk.ssd_offset = offset;
+        _ = self.ram_used.fetchSub(1, .monotonic);
 
         std.log.debug("Demoted block {d} from RAM to SSD (offset: {d})", .{ block_id, offset });
     }
@@ -432,9 +448,9 @@ pub const TieredKvCache = struct {
         var blk = &self.blocks[block_id];
         std.debug.assert(blk.tier == .ssd);
 
-        if (self.ssd_file == null) return error.SsdNotConfigured;
+        const ssd = self.ssd_file orelse return error.SsdNotConfigured;
 
-        const slot_size = @as(usize, self.block_size) * self.kv_dim;
+        const slot_size = std.math.mul(usize, @as(usize, self.block_size), self.kv_dim) catch return error.OutOfMemory;
 
         // Allocate RAM backing
         blk.base.keys = try self.allocator.alloc(f32, slot_size);
@@ -442,39 +458,47 @@ pub const TieredKvCache = struct {
         blk.base.values = try self.allocator.alloc(f32, slot_size);
         errdefer self.allocator.free(blk.base.values);
 
-        // Read from SSD
-        const offset = blk.ssd_offset.?;
-        try self.ssd_file.?.seekTo(offset);
-
+        // Read from SSD using positioned I/O (pread) to avoid
+        // seek+read races when prefetcher and scheduler access the file concurrently.
+        const offset = blk.ssd_offset orelse return error.SsdBlockNotSpilled;
         const keys_bytes = std.mem.sliceAsBytes(blk.base.keys);
         const values_bytes = std.mem.sliceAsBytes(blk.base.values);
-        _ = try self.ssd_file.?.readAll(keys_bytes);
-        _ = try self.ssd_file.?.readAll(values_bytes);
+        _ = try ssd.preadAll(keys_bytes, offset);
+        _ = try ssd.preadAll(values_bytes, offset + keys_bytes.len);
 
         // Update tier metadata
         blk.tier = .ram;
         blk.last_access_ms = std.time.milliTimestamp();
+        _ = self.ram_used.fetchAdd(1, .monotonic);
 
         std.log.debug("Promoted block {d} from SSD to RAM", .{block_id});
     }
 
     /// Free a block and return to appropriate tier free list.
-    pub fn freeBlock(self: *TieredKvCache, block_id: u32) !void {
+    /// Free lists are pre-allocated to tier capacity in init(), so append cannot fail.
+    pub fn freeBlock(self: *TieredKvCache, block_id: u32) void {
+        std.debug.assert(block_id < self.blocks.len);
         var blk = &self.blocks[block_id];
         blk.base.ref_count = 0;
         blk.base.used = 0;
         blk.access_count = 0;
 
         switch (blk.tier) {
-            .vram => try self.vram_free_list.append(self.allocator, block_id),
-            .ram => try self.ram_free_list.append(self.allocator, block_id),
-            .ssd => try self.ssd_free_list.append(self.allocator, block_id),
+            .vram => {
+                _ = self.vram_used.fetchSub(1, .monotonic);
+                self.vram_free_list.appendAssumeCapacity(block_id);
+            },
+            .ram => {
+                _ = self.ram_used.fetchSub(1, .monotonic);
+                self.ram_free_list.appendAssumeCapacity(block_id);
+            },
+            .ssd => self.ssd_free_list.appendAssumeCapacity(block_id),
         }
     }
 
     /// Promote block from RAM or SSD to VRAM tier.
     ///
-    /// On UMA platforms (per D-09), RAM→VRAM is just a tier tag change — no data movement.
+    /// On UMA platforms, RAM→VRAM is just a tier tag change — no data movement.
     /// Physical memory is shared between CPU and GPU, so "RAM" and "VRAM" are the
     /// same memory. Backends use zero-copy access (Metal newBufferWithBytesNoCopy,
     /// CUDA cuMemAllocManaged, Vulkan HOST_VISIBLE|DEVICE_LOCAL).
@@ -508,17 +532,156 @@ pub const TieredKvCache = struct {
         }
 
         // Change tier tag (data stays in place on UMA, uploaded in Plan 04 on discrete)
+        std.debug.assert(blk.tier == .ram);
         blk.tier = .vram;
         blk.last_access_ms = std.time.milliTimestamp();
-        blk.access_count += 1;
+        blk.access_count +|= 1;
+        _ = self.ram_used.fetchSub(1, .monotonic);
+        _ = self.vram_used.fetchAdd(1, .monotonic);
 
         std.log.debug("Promoted block {d} to VRAM", .{block_id});
     }
 
     /// Check if block needs promotion before use in attention.
     ///
-    /// Returns true if block is in lower tier than VRAM.
+    /// Returns true if block is allocated (ref_count > 0) and in a lower tier than VRAM.
+    /// Unallocated blocks in lower tiers are on free lists and must not be promoted.
     pub fn needsPromotion(self: *const TieredKvCache, block_id: u32) bool {
-        return self.blocks[block_id].tier != .vram;
+        const blk = &self.blocks[block_id];
+        return blk.base.ref_count > 0 and blk.tier != .vram;
     }
 };
+
+test "TieredKvCache init and deinit" {
+    const allocator = std.testing.allocator;
+    var cache = try TieredKvCache.init(allocator, 2, 4, 4, 2, 0, 16, null);
+    defer cache.deinit();
+    try std.testing.expectEqual(@as(usize, 4), cache.vram_block_count);
+    try std.testing.expectEqual(@as(usize, 2), cache.ram_block_count);
+    try std.testing.expectEqual(@as(usize, 0), cache.ssd_block_count);
+    try std.testing.expectEqual(@as(usize, 0), cache.vram_used.load(.monotonic));
+}
+
+test "TieredKvCache allocBlock returns VRAM first" {
+    const allocator = std.testing.allocator;
+    var cache = try TieredKvCache.init(allocator, 1, 2, 2, 2, 0, 16, null);
+    defer cache.deinit();
+
+    const b0 = try cache.allocBlock();
+    try std.testing.expectEqual(BlockTier.vram, cache.blocks[b0].tier);
+    try std.testing.expectEqual(@as(usize, 1), cache.vram_used.load(.monotonic));
+
+    const b1 = try cache.allocBlock();
+    try std.testing.expectEqual(BlockTier.vram, cache.blocks[b1].tier);
+    try std.testing.expectEqual(@as(usize, 2), cache.vram_used.load(.monotonic));
+
+    // Free both
+    cache.freeBlock(b0);
+    cache.freeBlock(b1);
+    try std.testing.expectEqual(@as(usize, 0), cache.vram_used.load(.monotonic));
+}
+
+test "TieredKvCache allocBlock falls back to RAM when VRAM full" {
+    const allocator = std.testing.allocator;
+    // 1 VRAM block, 1 RAM block, no SSD
+    var cache = try TieredKvCache.init(allocator, 1, 2, 1, 1, 0, 16, null);
+    defer cache.deinit();
+
+    const b0 = try cache.allocBlock();
+    try std.testing.expectEqual(BlockTier.vram, cache.blocks[b0].tier);
+
+    // VRAM full — next alloc demotes b0 to RAM then falls back to RAM free list
+    const b1 = try cache.allocBlock();
+    try std.testing.expectEqual(BlockTier.ram, cache.blocks[b1].tier);
+
+    cache.freeBlock(b0);
+    cache.freeBlock(b1);
+}
+
+test "TieredKvCache needsPromotion" {
+    const allocator = std.testing.allocator;
+    // 2 VRAM + 3 RAM blocks so we always have a spare unallocated RAM block
+    var cache = try TieredKvCache.init(allocator, 1, 2, 2, 3, 0, 16, null);
+    defer cache.deinit();
+
+    // VRAM block does not need promotion
+    const b0 = try cache.allocBlock();
+    try std.testing.expect(!cache.needsPromotion(b0));
+
+    // Allocate remaining VRAM
+    const b1 = try cache.allocBlock();
+    try std.testing.expect(!cache.needsPromotion(b1));
+
+    // Exhaust VRAM — next alloc falls back to RAM
+    const b2 = try cache.allocBlock();
+    try std.testing.expectEqual(BlockTier.ram, cache.blocks[b2].tier);
+    // Allocated RAM block needs promotion
+    try std.testing.expect(cache.needsPromotion(b2));
+
+    // Block 2 (first RAM block, still on free list) must NOT need promotion
+    // because it has ref_count = 0 (unallocated).
+    try std.testing.expect(!cache.needsPromotion(2));
+
+    cache.freeBlock(b0);
+    cache.freeBlock(b1);
+    cache.freeBlock(b2);
+}
+
+test "TieredKvCache freeBlock returns to correct tier" {
+    const allocator = std.testing.allocator;
+    var cache = try TieredKvCache.init(allocator, 1, 2, 2, 1, 0, 16, null);
+    defer cache.deinit();
+
+    const initial_vram_free = cache.vram_free_list.items.len;
+    const b0 = try cache.allocBlock();
+    try std.testing.expectEqual(initial_vram_free - 1, cache.vram_free_list.items.len);
+
+    cache.freeBlock(b0);
+    try std.testing.expectEqual(initial_vram_free, cache.vram_free_list.items.len);
+    try std.testing.expectEqual(@as(u32, 0), cache.blocks[b0].base.ref_count);
+}
+
+test "TieredKvCache SSD round-trip preserves data" {
+    const allocator = std.testing.allocator;
+    // Use timestamp-based unique name to avoid collisions between parallel test runs.
+    const ts: u64 = @intCast(std.time.milliTimestamp());
+    var path_buf: [128]u8 = undefined;
+    const ssd_path = std.fmt.bufPrint(&path_buf, "test_ssd_{d}.tmp", .{ts}) catch unreachable;
+
+    // 0 VRAM, 1 RAM, 1 SSD — first allocBlock goes to RAM
+    var cache = try TieredKvCache.init(allocator, 1, 4, 0, 1, 1, 16, ssd_path);
+    defer {
+        cache.deinit();
+        std.fs.cwd().deleteFile(ssd_path) catch {};
+    }
+
+    const b0 = try cache.allocBlock();
+    try std.testing.expectEqual(BlockTier.ram, cache.blocks[b0].tier);
+    try std.testing.expectEqual(@as(usize, 1), cache.ram_used.load(.monotonic));
+
+    // Write known pattern to block keys and values
+    const slot_size = @as(usize, cache.block_size) * cache.kv_dim;
+    for (0..slot_size) |i| {
+        cache.blocks[b0].base.keys[i] = @floatFromInt(i + 1);
+        cache.blocks[b0].base.values[i] = @floatFromInt(i + 100);
+    }
+
+    // Demote to SSD: writes data to file, frees RAM backing
+    try cache.demoteToSsd(b0);
+    try std.testing.expectEqual(BlockTier.ssd, cache.blocks[b0].tier);
+    try std.testing.expectEqual(@as(usize, 0), cache.ram_used.load(.monotonic));
+    try std.testing.expectEqual(@as(usize, 0), cache.blocks[b0].base.keys.len);
+
+    // Promote from SSD: reads data from file, allocates new RAM backing
+    try cache.promoteFromSsd(b0);
+    try std.testing.expectEqual(BlockTier.ram, cache.blocks[b0].tier);
+    try std.testing.expectEqual(@as(usize, 1), cache.ram_used.load(.monotonic));
+
+    // Verify data survived the round-trip
+    for (0..slot_size) |i| {
+        try std.testing.expectEqual(@as(f32, @floatFromInt(i + 1)), cache.blocks[b0].base.keys[i]);
+        try std.testing.expectEqual(@as(f32, @floatFromInt(i + 100)), cache.blocks[b0].base.values[i]);
+    }
+
+    cache.freeBlock(b0);
+}

@@ -8,39 +8,69 @@ models/
 *.gguf
 *.safetensors
 
-# Python / research
+# Python / research (not needed in image)
 .venv/
-research/kernels/.venv/
-tests/.venv/
+research/
+tests/
 __pycache__/
-research/kernels/**/*.ptx
-research/kernels/**/*.spv
 
-# IDE / tools
+# IDE / tools / planning
 .opencode/
 .vscode/
 .idea/
 .claude/
+.planning/
+.playwright-mcp/
+
+# Editor temporary files
+*.swp
+*.swo
+*~
+
+# Compiled artifacts (from local builds outside Zig)
+*.o
+*.a
+*.so
+*.dylib
+*.dll
+*.exe
+
+# Kernel compilation temps
+test_*.s
+test_*.ll
+test_*.spv
+
+# Test images
+test_*.png
 
 # OS junk
 .DS_Store
 Thumbs.db
 
-# Git
+# Git / GitHub
 .git/
+.github/
+.gitignore
 
 # Docs (not needed in image)
 docs/
 *.md
 LICENSE
 
-# Test artifacts
-tests/traces/
-tests/results/
+# Log files
 *.log
+
+# Debug tensor dumps
+*.bin
+vision_ref_dumps/
 
 # Environment / secrets
 .env
 .env.*
 *.key
 *.pem
+*.p12
+*.pfx
+
+# Stray files
+pelorus-*.yaml

@@ -4,22 +4,30 @@ A high-performance LLM inference engine written in Zig. Zero external ML librari
 
 ## Features
 
-- **6 Model Architectures**: Gemma 3, Qwen 3.5, GPT-OSS, Nemotron-H, Nemotron Nano, GLM-4
+- **7 Model Architectures**: Gemma 3, Gemma 4, Qwen 3.5, GPT-OSS, Nemotron-H, Nemotron Nano, GLM-4
 - **5 Backends**: CPU (SIMD-optimized), Metal GPU (Apple Silicon), Vulkan, CUDA, ROCm — individually toggleable at build time
 - **Compile-Time Model Selection**: Disable unused model architectures to reduce binary size (1.8 MB → 0.75 MB with all models stripped)
 - **2 Formats**: GGUF, SafeTensors (multi-shard, MLX quantized, NVFP4)
-- **20 Quantization Types**: F32, F16, BF16, Q2_K, Q3_K, Q4_0, Q4_1, Q4_K, Q5_0, Q5_K, Q6_K, Q8_0, TQ1_0, IQ4_XS, IQ4_NL, FP8 E4M3, FP8 E5M2, NVFP4, MXFP4, MLX 4/6-bit
-- **Chat Templates**: Data-driven per-architecture prompt formatting (ChatML, Gemma, GPT-OSS)
+- **20+ Quantization Types**: F32, F16, BF16, Q2_K, Q3_K, Q4_0, Q4_1, Q4_K, Q5_0, Q5_K, Q6_K, Q8_0, TQ1_0, IQ4_XS, IQ4_NL, FP8 E4M3, FP8 E5M2, NVFP4, MXFP4, MLX 4/6/8-bit
+- **9 KV Cache Quantization Types**: F32, F16, Q8_0, INT8, FP8, NVFP4, TurboQuant 2/3/4-bit — with asymmetric K/V support
+- **Tiered KV Cache**: VRAM + RAM + SSD offloading with async prefetch (`--kv-tiers vram+ram+ssd`)
+- **Chat Templates**: Data-driven per-architecture prompt formatting (ChatML, Gemma, Gemma 4, Qwen 3.5, GLM-4, GPT-OSS)
 - **Recipes**: Optional proven-default configs per model/hardware/quant combo
-- **Interactive REPL**: Multi-turn chat with `/help`, `/clear`, `/stats`, `/quit`
-- **HTTP Server**: OpenAI + Anthropic API, chat UI, Prometheus metrics
-- **~34 tok/s** on Gemma 3 1B Q8_0 (Metal, Apple Silicon)
+- **Model Download**: `agave pull <org/repo>` — download GGUF models from HuggingFace Hub with auto quant selection
+- **Interactive REPL**: Multi-turn chat with `/help`, `/clear`, `/stats`, `/model`, `/quit`
+- **HTTP Server**: OpenAI + Anthropic API compatible, built-in chat UI, Prometheus metrics, rate limiting
+- **Multimodal Vision**: Image understanding via Gemma 4 SigLIP-2 and Gemma 3 SigLIP vision encoders — image upload via CLI (`--image`) and HTTP API
+- **Batched Prefill**: Chunked GEMM + fused FlashAttention-2 for fast prompt processing
+- **~183 tok/s** on Qwen3.5 0.8B Q8_0 (Metal, Apple Silicon M4 Pro), **1.2-1.7x faster than llama.cpp**
 
 ## Quick Start
 
 ```bash
 # Build (produces both ReleaseFast and Debug binaries)
 zig build
+
+# Download a model from HuggingFace
+./zig-out/bin/agave pull Qwen/Qwen3.5-0.8B-GGUF
 
 # Interactive REPL
 ./zig-out/bin/agave model.gguf
@@ -39,20 +47,133 @@ zig build
 # SafeTensors directory (MLX models)
 ./zig-out/bin/agave models/mlx-community/gemma-3-4b-it-qat-4bit
 
+# TurboQuant KV cache (2/3/4-bit quantization for longer contexts)
+./zig-out/bin/agave model.gguf --kv-type turbo4
+
+# KV cache eviction (extend context past --ctx-size limit)
+./zig-out/bin/agave model.gguf --kv-eviction norm --kv-budget 2048
+./zig-out/bin/agave model.gguf --kv-eviction tri   # requires .cal file
+
+# Generate TriAttention calibration data
+./zig-out/bin/agave calibrate model.gguf
+
+# Vision: describe an image (requires mmproj or built-in vision encoder)
+./zig-out/bin/agave model.gguf --image photo.png "Describe this image"
+
 # Override recipe defaults (user flags always win)
 ./zig-out/bin/agave model.gguf -t 0.9 --top-p 0.95 "Tell me a story"
 ```
 
 ## Supported Models
 
-| Model | Status | Quant Types | Notes |
-|-------|--------|-------------|-------|
-| Gemma 3 | Working | BF16, Q8_0, Q4_0, Q6_K, MLX 4-bit | SPM tokenizer, GELU activation |
-| Qwen 3.5 | Working | Q4_0, BF16 | Hybrid DeltaNet SSM + attention |
-| GPT-OSS | Working | Q4_0 | MoE, sliding window, attention sinks |
-| Nemotron-H | Working | Q5_0 | Mamba-2 + attention hybrid (GGUF) |
-| Nemotron Nano 30B | In Progress | NVFP4 + BF16 | SSM + MoE + attention hybrid (SafeTensors); tokenizer decode fixed, MoE routing needs tuning |
-| GLM-4 MoE Lite | Partial | MLX 4/6-bit | MLA + MoE (needs debugging) |
+| Model | Sizes | Status | Quant Types | Notes |
+|-------|-------|--------|-------------|-------|
+| Gemma 3 | 1B, 4B, 12B, 27B | Working | BF16, Q8_0, Q4_0, Q4_K, Q5_K, Q6_K, MLX 4-bit | SPM tokenizer, GELU activation, batched prefill |
+| Gemma 4 | E2B, E4B, 26B-A4B | Working | Q8_0, Q4_K, MLX 4-bit | MoE (top-8), channel-based chat template, multimodal vision (SigLIP-2) |
+| Qwen 3.5 | 0.8B, 9B, 27B | Working | Q4_0, Q4_K_M, Q8_0, BF16, MLX 4-bit | Hybrid DeltaNet SSM + attention |
+| GPT-OSS | 20B | Partial | Q4_0 | MoE, sliding window, attention sinks (poor output quality) |
+| Nemotron-H | — | Partial | Q5_0 | Mamba-2 + attention hybrid, GGUF (poor output quality) |
+| Nemotron Nano | 30B | Partial | MLX 4-bit, NVFP4 | SSM + MoE + attention hybrid, SafeTensors (poor output quality) |
+| GLM-4 MoE Lite | 4.7B | Partial | MLX 4/6/8-bit | MLA + MoE (GGUF compatibility issue, poor output quality) |
+
+## Model Download
+
+Download GGUF models from HuggingFace Hub with automatic quantization selection:
+
+```bash
+# Download best available quantization (prefers Q4_K_M)
+./zig-out/bin/agave pull Qwen/Qwen3.5-0.8B-GGUF
+
+# Request specific quantization
+./zig-out/bin/agave pull Qwen/Qwen3.5-0.8B-GGUF --quant Q8_0
+
+# List available GGUF files without downloading
+./zig-out/bin/agave pull Qwen/Qwen3.5-0.8B-GGUF --list
+
+# Private repos
+HF_TOKEN=hf_xxxxx ./zig-out/bin/agave pull org/private-model
+```
+
+Downloads are stored in the standard HuggingFace cache layout with an agave convenience symlink. Supports resume on interrupted downloads.
+
+## Calibration
+
+Generate TriAttention calibration data for frequency-domain KV eviction:
+
+```bash
+# Run calibration (produces model.cal alongside model.gguf)
+./zig-out/bin/agave calibrate model.gguf
+```
+
+The calibration pass records per-head Q/K frequency statistics used by the `--kv-eviction tri` policy. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for details.
+
+## HTTP Server
+
+Start with `--serve`. Supports both synchronous JSON and SSE streaming.
+
+```bash
+./zig-out/bin/agave model.gguf --serve --port 8080 --api-key sk-mykey
+```
+
+**API Endpoints:**
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/v1/chat/completions` | POST | OpenAI chat completion API |
+| `/v1/completions` | POST | OpenAI text completion API |
+| `/v1/messages` | POST | Anthropic Messages API |
+| `/v1/responses` | POST | OpenAI Responses API |
+| `/v1/models` | GET | List loaded models |
+| `/v1/embeddings` | POST | Embedding generation (stub — returns 501) |
+| `/v1/chat` | POST | Built-in web chat UI |
+| `/v1/chat/regenerate` | POST | Regenerate last assistant response |
+| `/v1/conversations` | GET, POST | Conversation management |
+| `/health` | GET | Health check |
+| `/ready` | GET | Readiness check |
+| `/metrics` | GET | Prometheus metrics |
+
+Server features: up to 64 concurrent connections, request scheduler (batch up to 8, 120s timeout), 30s connection read timeout, rate limiting, Bearer token auth, CORS support.
+
+## Interactive REPL
+
+Launch without a prompt argument for multi-turn chat:
+
+```bash
+./zig-out/bin/agave model.gguf
+```
+
+**Commands:**
+
+| Command | Description |
+|---------|-------------|
+| `/clear`, `/reset` | Clear conversation history and KV cache |
+| `/context`, `/ctx` | Show context window usage (tokens used / max) |
+| `/system <text>` | Set system prompt (clears conversation) |
+| `/system` | Show current system prompt |
+| `/stats` | Toggle generation statistics display |
+| `/verbose` | Toggle technical details (params, EOG tokens) |
+| `/debug` | Toggle debug logging (token IDs, layer timing) |
+| `/model` | Show model information |
+| `/help` | Show REPL help |
+| `/quit`, `/exit`, `/q` | Exit |
+
+Keyboard shortcuts: `Ctrl+C` cancel, `Ctrl+D` quit, `Ctrl+L` clear screen, `Ctrl+R` reverse search.
+
+## Benchmarks
+
+Measured on Apple M4 Pro (48 GB unified memory). See [docs/BENCHMARKS.md](docs/BENCHMARKS.md) for full methodology.
+
+| Model | Quant | Backend | Decode (tok/s) | vs llama.cpp |
+|-------|-------|---------|---------------:|-------------:|
+| Qwen3.5 0.8B | Q8_0 | Metal | 183.3 | **1.31x** |
+| Qwen3.5 9B | Q8_0 | Metal | 41.7 | **1.67x** |
+| Gemma 3 4B | MLX-Q4 | Metal | 78.1 | — |
+| Gemma 3 12B | Q8_0 | Metal | 22.3 | **1.19x** |
+| Gemma 4 E2B | — | Metal | 9.7 | — |
+| Gemma 4 E4B | — | Metal | 8.5 | — |
+| Gemma 4 26B-A4B | — | Metal | 5.0 | — |
+| Gemma 3 27B | QAT 4-bit | Metal | 11.6 | — |
+| Qwen3.5 0.8B | MLX-4bit | Metal | 12.7 | — |
 
 ## Prerequisites
 
@@ -77,23 +198,30 @@ agave [OPTIONS] <model> [prompt]
       --repeat-penalty <R> Repetition penalty [default: 1.0]
       --system <TEXT>      System prompt for chat formatting
       --backend <BE>       auto, cpu, metal, vulkan, cuda, rocm [default: auto]
-      --ctx-size <N>       Context window size [default: 4096, 0 = model max]
+      --ctx-size <N>       Context window size [default: min(model, 4096), 0 = model max]
       --seed <N>           Random seed for sampling [default: random]
-      --kv-type <TYPE>     KV cache quantization: f32, f16, q8_0, int8, fp8, nvfp4 [default: f16]
+      --kv-type <TYPE>     KV cache quantization: f32, f16, q8_0/q8, int8/i8, fp8/fp8_e4m3, nvfp4/fp4, turbo2/tq2, turbo3/tq3, turbo4/tq4 [default: f16]
       --kv-tiers <TIERS>   Enable tiered KV cache: vram+ram, vram+ram+ssd [default: off]
-      --kv-ram-budget <GB> RAM tier budget in GB, requires --kv-tiers [default: 50% free]
+      --kv-ram-budget <GB> RAM tier budget in GB, requires --kv-tiers [default: 50% of free RAM]
       --kv-ssd-path <PATH> SSD tier file path, requires --kv-tiers with ssd
       --kv-ssd-budget <GB> SSD tier budget in GB, requires --kv-tiers with ssd [default: 10]
       --host <ADDR>        Server bind address [default: 127.0.0.1]
       --api-key <KEY>      API key for server authentication (Bearer token)
       --prefill-batch-size <N> Prefill chunk size in tokens [default: 512]
-      --no-color           Disable ANSI colors
+      --no-color           Disable colored output (same as --color=never)
+      --color <MODE>       Color mode: auto, always, never [default: auto]
+      --kv-type-k <TYPE>   KV key quantization (overrides --kv-type)
+      --kv-type-v <TYPE>   KV value quantization (overrides --kv-type)
   -V, --verbose            Show technical details (params, load times, EOG)
       --allow-cpu-fallback Allow GPU backends to fall back to CPU
   -d, --debug              Enable debug logging (token IDs, layer timing)
       --json               Output results as JSON (implies --quiet)
       --model-info         Print model metadata and exit (combine with --json)
       --profile            Profile per-op timing (halves throughput)
+      --mmproj <PATH>      Path to vision projector GGUF (mmproj file)
+      --image <PATH>       Path to image file for multimodal inference (PNG or PPM)
+      --kv-eviction <MODE> KV cache eviction policy: none, norm, tri [default: none]
+      --kv-budget <N>      Max KV entries to retain after eviction [default: ctx-size]
       --mmap               Use lazy mmap instead of preloading weights into RAM
 ```
 
@@ -115,9 +243,9 @@ zig build -Denable-cpu=false
 # Disable specific model architectures
 zig build -Denable-glm4=false
 
-# Minimal build: single model + single backend
-zig build -Denable-qwen35=false -Denable-gpt-oss=false -Denable-nemotron-h=false \
-  -Denable-nemotron-nano=false -Denable-glm4=false \
+# Minimal build: single model (Gemma 3) + single backend (Metal)
+zig build -Denable-gemma4=false -Denable-qwen35=false -Denable-gpt-oss=false \
+  -Denable-nemotron-h=false -Denable-nemotron-nano=false -Denable-glm4=false \
   -Denable-vulkan=false -Denable-cuda=false -Denable-rocm=false
 
 # Override GPU architecture targets
@@ -145,6 +273,7 @@ zig build -Dtarget=aarch64-linux-gnu -Denable-metal=false
 | Option | Type | Default | Purpose |
 |--------|------|---------|---------|
 | `enable-gemma3` | bool | true | Gemma 3 model support |
+| `enable-gemma4` | bool | true | Gemma 4 model support |
 | `enable-qwen35` | bool | true | Qwen 3.5 model support |
 | `enable-gpt-oss` | bool | true | GPT-OSS model support |
 | `enable-nemotron-h` | bool | true | Nemotron-H model support |
@@ -164,7 +293,7 @@ recipe: Qwen3.5 Q4 Metal
 ./zig-out/bin/agave model.gguf -t 0  # overrides recipe temperature
 ```
 
-Current presets: Qwen Q4 Metal, Gemma Q4 Metal, GPT-OSS Metal, CPU generic. Add new recipes in `src/recipe.zig`.
+Current presets: Qwen3.5 Q4 Metal, Gemma Q4 Metal, GPT-OSS Metal, GLM-4 generic, CPU generic. Add new recipes in `src/recipe.zig`.
 
 ## Project Structure
 
@@ -172,15 +301,18 @@ Current presets: Qwen Q4 Metal, Gemma Q4 Metal, GPT-OSS Metal, CPU generic. Add 
 src/
 ├── main.zig           # CLI, format detection, model init, REPL, recipe application
 ├── arch.zig           # Architecture enum, detection, chat template mapping
+├── pull.zig           # Model download from HuggingFace Hub (agave pull)
 ├── server/            # HTTP server
 │   ├── server.zig     #   HTTP server (OpenAI + Anthropic API + chat UI)
+│   ├── json.zig       #   Streaming JSON parser for API requests
 │   ├── scheduler.zig  #   Continuous batching request scheduler
 │   ├── metrics.zig    #   Prometheus metrics collector
 │   └── rate_limiter.zig #  Token bucket rate limiter
 ├── display.zig        # Rich CLI output (banner, stats, progress)
-├── chat_template.zig  # Data-driven chat prompt templates (ChatML, Gemma, GPT-OSS)
+├── chat_template.zig  # Data-driven chat prompt templates (ChatML, Gemma, Gemma4, Qwen3.5, GLM-4, GPT-OSS)
 ├── recipe.zig         # Optional preset configs per model/hardware/quant combo
 ├── thread_pool.zig    # Futex-based work-stealing thread pool
+├── image.zig          # PNG/PPM image decoder and resize for multimodal inference
 ├── perf.zig           # Performance timer utilities
 ├── readline.zig       # Line editor for interactive REPL
 ├── micro_bench.zig    # Standalone micro-benchmark binary
@@ -191,18 +323,21 @@ src/
 ├── models/            # Model architectures
 │   ├── model.zig      #   Model interface + shared helpers (expertWeightStride, etc.)
 │   ├── gemma3.zig     #   Gemma 3 (GQA, GELU, post-norms)
+│   ├── gemma4.zig     #   Gemma 4 (MoE, dual attention, PLE)
 │   ├── qwen35.zig     #   Qwen 3.5 (DeltaNet SSM hybrid)
 │   ├── gpt_oss.zig    #   GPT-OSS (MoE, sliding window)
 │   ├── nemotron_h.zig #   Nemotron-H (Mamba-2 hybrid, GGUF)
 │   ├── nemotron_nano.zig # Nemotron Nano (SSM+MoE+attn, SafeTensors NVFP4)
-│   └── glm4.zig       #   GLM-4 MoE Lite (MLA, MoE)
+│   ├── glm4.zig       #   GLM-4 MoE Lite (MLA, MoE)
+│   └── vision.zig     #   SigLIP-2 vision encoder for multimodal models
 ├── ops/               # Shared compute kernels
 │   ├── attention.zig  #   SDPA with SIMD + sliding window + backend dispatch
 │   ├── math.zig       #   argmax, softplus, sigmoid, GELU, sampleToken
 │   ├── ssm.zig        #   SSM ops: causal conv1d, Mamba-2 recurrence, group norm+gate
 │   ├── quant.zig      #   Quantization helpers (bf16, mxfp4, fp8, iq4nl, nvfp4_st)
 │   ├── kv_quant.zig   #   KV cache quantization (f32/f16/q8_0/int8/fp8/nvfp4)
-│   └── mlx.zig        #   MLX 4/6-bit affine dequant
+│   ├── mlx.zig        #   MLX 4/6/8-bit affine dequant
+│   └── split_attention.zig # Split-attention: async CPU-GPU KV offloading
 ├── backend/           # Hardware backends (all individually toggleable)
 │   ├── backend.zig    #   Tagged union dispatcher + NullBackend stub
 │   ├── cpu.zig        #   CPU with SIMD (AVX2, NEON, SVE)
@@ -293,10 +428,12 @@ zig build -Dtarget=aarch64-linux-musl \
 
 ## Documentation
 
-- **[Tutorial: LLM Inference From Scratch](docs/tutorial/README.md)** — 8-chapter progressive tutorial
+- **[Tutorial: LLM Inference From Scratch](docs/tutorial/README.md)** — 16-chapter progressive tutorial + 4 appendixes
 - **[Architecture](docs/ARCHITECTURE.md)** — Project structure, module reference, inference pipeline
-- **[Models](docs/MODELS.md)** — Supported models, parameters, benchmarks
+- **[Models](docs/MODELS.md)** — Supported models, parameters, per-model details
+- **[Benchmarks](docs/BENCHMARKS.md)** — Performance comparisons vs llama.cpp
 - **[Kernel Status](docs/KERNELS.md)** — Per-backend kernel implementation status
+- **[Contributing](docs/CONTRIBUTING.md)** — How to add backends, models, quantization
 - **[CLAUDE.md](CLAUDE.md)** — Engineering standards for contributors
 - **[research/kernels/](research/kernels/)** — Kernel research tools (benchmarks, golden tests)
 

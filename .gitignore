@@ -10,6 +10,7 @@ __pycache__/
 .opencode/
 .vscode/
 .idea/
+.playwright-mcp/
 
 # Model weights (large files)
 /models/
@@ -62,5 +63,16 @@ tests/golden_outputs/
 # Claude code artifacts
 .claude/
 
-/zig-out/
-/zig-out-linux
+# Cross-compiled output directory
+/zig-out-linux/
+
+# Debug tensor dumps (vision / model debugging)
+/*.bin
+/vision_ref_dumps/
+research/kernels/vision_ref_dumps/
+
+# Test images (generated locally, not needed in repo)
+/test_*.png
+
+# Stray operator manifests (not part of this project)
+pelorus-*.yaml

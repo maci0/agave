@@ -24,6 +24,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const build_options = @import("build_options");
 const ThreadPool = @import("../thread_pool.zig").ThreadPool;
+const quant_ops = @import("../ops/quant.zig");
 
 /// Tensor data with type info for backend dispatch
 pub const TensorData = struct {
@@ -143,12 +144,29 @@ pub const detectAvailMem = @import("cpu.zig").detectAvailMem;
 /// Detect OS version string (e.g., "macOS 14.2.1", "Linux 6.5.0"). Re-exported from cpu.zig.
 pub const detectOsVersion = @import("cpu.zig").detectOsVersion;
 
+/// CPU SDPA kernel functions — re-exported for the split-attention module.
+/// Split-attention runs CPU SDPA concurrently with GPU SDPA for tiered KV cache
+/// offloading, so it needs direct access to per-head CPU kernel functions
+/// (bypassing Backend dispatch which would route to the active GPU backend).
+/// Re-exported CPU SDPA kernel functions for split-attention (tiered KV cache).
+/// Split-attention needs direct access to CPU SDPA kernels to run concurrently
+/// with GPU SDPA — the Backend union would route to the active GPU backend instead.
+pub const CpuSdpa = struct {
+    const kernel = @import("kernels/cpu/sdpa.zig");
+    /// Compute one attention head with quantized KV (windowed, single-threaded).
+    pub const sdpaQuantHead = kernel.sdpaQuantHead;
+    /// Same as sdpaQuantHead but also returns softmax stats (max, sum) for online correction.
+    pub const sdpaQuantHeadWithStats = kernel.sdpaQuantHeadWithStats;
+    /// Multi-head dispatch: splits heads across thread pool workers.
+    pub const sdpaQuantHeads = kernel.sdpaQuantHeads;
+};
+
 /// Pre-allocated capacity for GPU buffer caches (weights + activations + KV).
 /// Used by Metal, CUDA, Vulkan, and ROCm backends to avoid OOM during hot-path cache puts.
 pub const buf_cache_initial_capacity: usize = 512;
 
 /// Elements per small quantization block (Q4_0, Q8_0, etc.).
-pub const quant_block_elems: usize = 32;
+pub const quant_block_elems: usize = quant_ops.quant_block_elems;
 /// Elements per large quantization super-block (Q4_K, Q5_K, Q6_K, etc.).
 pub const quant_super_block_elems: usize = 256;
 /// Elements per NVFP4 block (8 nibble pairs + 1 scale byte).
@@ -162,13 +180,13 @@ pub const f32_elem_bytes: usize = 4;
 /// f16 / bf16: 2 bytes per element.
 pub const f16_elem_bytes: usize = 2;
 /// Q4_0: f16 scale + 16B quants = 18 bytes per 32-element block.
-pub const q4_0_block_bytes: usize = 18;
+pub const q4_0_block_bytes: usize = quant_ops.q4_0_block_bytes;
 /// Q4_1: f16 scale + f16 min + 16B quants = 20 bytes per 32-element block.
 pub const q4_1_block_bytes: usize = 20;
 /// Q5_0: f16 scale + 4B high bits + 16B quants = 22 bytes per 32-element block.
 pub const q5_0_block_bytes: usize = 22;
 /// Q8_0: f16 scale + 32B quants = 34 bytes per 32-element block.
-pub const q8_0_block_bytes: usize = 34;
+pub const q8_0_block_bytes: usize = quant_ops.q8_0_block_bytes;
 /// Q2_K: 84 bytes per 256-element super-block.
 pub const q2_k_block_bytes: usize = 84;
 /// Q3_K: 110 bytes per 256-element super-block.
@@ -181,8 +199,9 @@ pub const q5_k_block_bytes: usize = 176;
 pub const q6_k_block_bytes: usize = 210;
 /// IQ4_NL: 18 bytes per 32-element block (same layout as Q4_0).
 pub const iq4_nl_block_bytes: usize = 18;
-/// IQ4_XS: 138 bytes per 256-element super-block.
-pub const iq4_xs_block_bytes: usize = 138;
+/// IQ4_XS: 136 bytes per 256-element super-block.
+/// Layout: f16 d (2) + u16 scales_h (2) + u8 scales_l[4] (4) + u8 qs[128] (128).
+pub const iq4_xs_block_bytes: usize = 136;
 /// MXFP4: 16B quants + 1B scale = 17 bytes per 32-element block.
 pub const mxfp4_block_bytes: usize = 17;
 /// NVFP4: 8B quants + 1B scale = 9 bytes per 16-element block.
@@ -214,7 +233,7 @@ pub fn weightBytes(dtype: DType, n: usize, k: usize) usize {
         .iq4_xs => n * nsb * iq4_xs_block_bytes,
         .tq1_0 => n * nsb * tq1_0_block_bytes,
         .nvfp4 => n * ((k + nvfp4_block_elems - 1) / nvfp4_block_elems) * nvfp4_block_bytes,
-        // Conservative fallback for unsupported dtypes (overestimates at f32).
+        // Unsupported dtypes: assume f32 (4 bytes per element).
         .mlx_q, .unknown => n * k * 4,
     };
 }
@@ -223,8 +242,6 @@ pub fn weightBytes(dtype: DType, n: usize, k: usize) usize {
 /// The tagged union variant exists but can never be instantiated.
 /// init() is a @compileError; methods are unreachable stubs for inline else.
 pub const NullBackend = struct {
-    allow_cpu_fallback: bool = false,
-
     /// Compile error — this backend was disabled at build time.
     pub fn init(_: std.mem.Allocator) error{BackendDisabled}!NullBackend {
         @compileError("this backend was disabled at build time");
@@ -312,6 +329,10 @@ pub const NullBackend = struct {
         unreachable;
     }
 
+    pub fn splitQGate(_: *NullBackend, _: [*]const f32, _: [*]f32, _: [*]f32, _: usize, _: usize) void {
+        unreachable;
+    }
+
     pub fn sync(_: *NullBackend) void {
         unreachable;
     }
@@ -373,35 +394,36 @@ pub const NullBackend = struct {
     }
 };
 
-/// CPU backend — internal to this module; accessed only through Backend union dispatch.
-const CpuBackend = if (build_options.enable_cpu)
+/// CPU backend — accessed through Backend union dispatch.
+/// Public for test access; production code should use Backend union, not concrete types.
+pub const CpuBackend = if (build_options.enable_cpu)
     @import("cpu.zig").CpuBackend
 else
     NullBackend;
 
-/// Metal GPU backend — internal to this module.
+/// Metal GPU backend.
 /// On non-macOS platforms, aliases NullBackend so the tagged union remains valid;
 /// the .metal variant is simply never constructed.
-const MetalBackend = if (build_options.enable_metal and builtin.os.tag == .macos)
+pub const MetalBackend = if (build_options.enable_metal and builtin.os.tag == .macos)
     @import("metal.zig").MetalBackend
 else
     NullBackend;
 
-/// Vulkan GPU backend — internal to this module.
+/// Vulkan GPU backend.
 /// Disabled when cross-compiling without Vulkan headers/libs available.
-const VulkanBackend = if (build_options.enable_vulkan)
+pub const VulkanBackend = if (build_options.enable_vulkan)
     @import("vulkan.zig").VulkanBackend
 else
     NullBackend;
 
-/// CUDA GPU backend — internal to this module.
-const CudaBackend = if (build_options.enable_cuda)
+/// CUDA GPU backend.
+pub const CudaBackend = if (build_options.enable_cuda)
     @import("cuda.zig").CudaBackend
 else
     NullBackend;
 
-/// ROCm GPU backend — internal to this module.
-const RocmBackend = if (build_options.enable_rocm)
+/// ROCm GPU backend.
+pub const RocmBackend = if (build_options.enable_rocm)
     @import("rocm.zig").RocmBackend
 else
     NullBackend;
@@ -625,7 +647,7 @@ pub const Backend = union(enum) {
 
     /// Scaled dot-product attention with KV cache append.
     /// Appends `k_new`/`v_new` at position `seq_len` in the KV cache, then
-    /// computes softmax(Q @ K^T * scale) @ V over `seq_len + 1` positions.
+    /// computes softmax((Q @ K^T) * scale) @ V over `seq_len + 1` positions.
     /// KV cache is stored in `kv_type_k`/`kv_type_v` format (f32, f16, q8_0, etc.).
     /// Keys/values are byte slices; backends quantize on append and dequantize on read.
     /// Each backend handles sync internally. No caller sync needed.
@@ -672,8 +694,7 @@ pub const Backend = union(enum) {
     ///
     /// NVFP4 SafeTensors stores weights as packed nibble pairs and FP8 E4M3
     /// scales in separate tensors, with group_size=16 elements per scale.
-    /// GPU backends that don't yet have a native kernel will error unless
-    /// `--allow-cpu-fallback` was passed, in which case they delegate to CPU.
+    /// GPU backends without a native kernel will @panic at runtime.
     ///
     /// Parameters:
     ///   - x: Input vector [k].
@@ -772,7 +793,6 @@ pub const BackendState = struct {
     ///   - allocator: Used for backend-internal allocations (pipeline caches, etc.).
     ///   - backend_choice: Which backend to initialize (or .auto for auto-detection).
     pub fn init(self: *BackendState, allocator: std.mem.Allocator, backend_choice: BackendChoice) void {
-        // Create thread pool for CPU GEMV parallelism.
         // n_workers = CPU count - 1 (main thread also participates).
         const cpu_count = std.Thread.getCpuCount() catch 1;
         const n_workers = if (cpu_count > 1) cpu_count - 1 else 0;
@@ -812,9 +832,9 @@ pub const BackendState = struct {
                 },
                 .vulkan => {
                     if (comptime build_options.enable_vulkan) {
-                        self.vulkan_be = VulkanBackend.init(allocator) catch {
+                        self.vulkan_be = VulkanBackend.init(allocator) catch |err| {
                             if (comptime build_options.enable_cpu) {
-                                std.log.warn("Vulkan unavailable, falling back to CPU", .{});
+                                std.log.warn("Vulkan unavailable ({s}), falling back to CPU", .{@errorName(err)});
                                 break :blk .{ .cpu = &self.cpu_be };
                             } else {
                                 @panic("Vulkan unavailable and CPU backend disabled");
@@ -828,9 +848,9 @@ pub const BackendState = struct {
                 },
                 .cuda => {
                     if (comptime build_options.enable_cuda) {
-                        self.cuda_be = CudaBackend.init(allocator) catch {
+                        self.cuda_be = CudaBackend.init(allocator) catch |err| {
                             if (comptime build_options.enable_cpu) {
-                                std.log.warn("CUDA unavailable, falling back to CPU", .{});
+                                std.log.warn("CUDA unavailable ({s}), falling back to CPU", .{@errorName(err)});
                                 break :blk .{ .cpu = &self.cpu_be };
                             } else {
                                 @panic("CUDA unavailable and CPU backend disabled");
@@ -844,9 +864,9 @@ pub const BackendState = struct {
                 },
                 .rocm => {
                     if (comptime build_options.enable_rocm) {
-                        self.rocm_be = RocmBackend.init(allocator) catch {
+                        self.rocm_be = RocmBackend.init(allocator) catch |err| {
                             if (comptime build_options.enable_cpu) {
-                                std.log.warn("ROCm unavailable, falling back to CPU", .{});
+                                std.log.warn("ROCm unavailable ({s}), falling back to CPU", .{@errorName(err)});
                                 break :blk .{ .cpu = &self.cpu_be };
                             } else {
                                 @panic("ROCm unavailable and CPU backend disabled");

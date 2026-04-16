@@ -1,8 +1,12 @@
 # Future Ideas
 
+> **Recently Implemented** (2026-04): Vision/multimodal (SigLIP-2 + SigLIP + Qwen VL),
+> TurboQuant+ (asymmetric KV, boundary V, sparse V), BF16 Metal GEMM, split-attention
+> (APEX), Gemma 4 E2B/E4B support, thread-parallel vision attention. See BENCHMARKS.md.
+
 ## Model init/deinit/forward Abstraction
 
-All 6 models (gemma3, qwen35, gpt_oss, nemotron_h, nemotron_nano, glm4) share
+All 7 models (gemma3, gemma4, qwen35, gpt_oss, nemotron_h, nemotron_nano, glm4) share
 near-identical skeletons for init(), deinit(), forward(), resetCache(), and cancel().
 Extracting shared logic could save ~30% LoC per model.
 
@@ -71,43 +75,8 @@ quality loss (output distribution is mathematically identical to the target mode
 - Requires batch prefill for efficient verification pass
 
 ### References
-- Fast Inference from Transformers via Speculative Decoding (Leviathan et al., 2023)
-- SpecInfer: Accelerating LLM Serving with Tree-based Speculative Inference (Miao et al., 2024)
-
-## Batch Prefill
-
-Currently prefill processes prompt tokens one at a time — each token is a separate
-`forward()` call with a GEMV (matrix-vector multiply). For a 512-token prompt, that's
-512 sequential GEMV calls. Batch prefill processes all prompt tokens in one pass using
-GEMM (matrix-matrix multiply), which is compute-bound and much better utilizes GPU
-parallelism.
-
-### Performance impact
-- GEMV (decode, 1 token): bandwidth-bound, ~5-15% compute utilization on GPU
-- GEMM (prefill, N tokens): compute-bound, ~60-80% compute utilization on GPU
-- Expected speedup: 10-50× for prefill phase depending on prompt length and hardware
-- Directly improves TTFT (time-to-first-token)
-
-### What changes
-- **Model forward()**: Accept `[]const u32` (token slice) instead of single `u32`.
-  When slice length > 1, use GEMM paths for all projections (QKV, FFN gate/up/down,
-  output). When length == 1, fall back to current GEMV paths.
-- **Backend**: Add `gemm()` operation alongside existing `gemv()`. CPU: blocked loop
-  with SIMD. Metal: MPSMatrixMultiplication or custom kernel. CUDA: cublas-free Zig
-  PTX GEMM or tiled shared-memory kernel. Vulkan: compute shader GEMM.
-- **KV cache**: Append all K/V vectors for the batch at once instead of one-by-one.
-- **Attention**: Prefill attention is over the full prompt — causal mask needed (each
-  token attends only to previous tokens). This is where FlashAttention is most
-  beneficial (large N×N attention matrix during prefill).
-- **RoPE**: Apply positional embeddings to all positions in the batch simultaneously.
-
-### Considerations
-- Memory: batch prefill needs activations for all N tokens simultaneously —
-  `[N × n_embd]` instead of `[n_embd]`. For 512 tokens × 4096 dim × f32 = 8 MB,
-  manageable even on smaller devices.
-- Chunked prefill: for very long prompts, process in chunks (e.g., 512 tokens at a
-  time) to bound memory usage while still getting GEMM benefits.
-- KV cache must be pre-allocated for the full prompt length before prefill starts.
+- [Fast Inference from Transformers via Speculative Decoding (Leviathan et al., 2023)](https://arxiv.org/abs/2211.17192)
+- [SpecInfer: Accelerating LLM Serving with Tree-based Speculative Inference (Miao et al., 2024)](https://arxiv.org/abs/2305.09781)
 
 ## Structured Output / Grammar-Constrained Decoding
 
@@ -149,6 +118,9 @@ already wants to produce valid output; the constraint just prevents rare failure
 
 ## Direct-to-VRAM Model Loading
 
+> **Partially implemented:** Tiered KV cache (VRAM + RAM + SSD) is available via
+> `--kv-tiers`. Direct-to-VRAM *weight* loading from NVMe remains future work.
+
 Model weights are currently loaded via `mmap` into system RAM, then uploaded to GPU
 memory per-tensor on first use (buffer cache pattern). For large models this means the
 full weight file transits: NVMe → CPU RAM → PCIe/fabric → VRAM. Direct storage APIs
@@ -183,16 +155,11 @@ linearly (4 drives = 28 GB/s). Load time for 15 GB model: ~0.5s vs ~2-4s.
 - UMA platforms (Apple Silicon, NVIDIA GB10): already optimal via zero-copy mmap.
 - Compressed formats: decompression must happen on GPU or fall back to CPU-staged.
 
-## Platform-Specific RAM Detection
-
-`detectFreeRam()` in main.zig currently returns hardcoded 16GB. Should use:
-- **macOS**: `sysctl hw.memsize` or `host_statistics64`
-- **Linux**: parse `/proc/meminfo` for `MemAvailable`
-
-Used by `--kv-ram-budget` default (50% of detected free RAM for tiered KV cache).
-Low effort, high value for correct out-of-box TieredKvCache sizing.
-
 ## Paged SDPA on GPU
+
+> **Partially implemented:** The block allocator (`kvcache/block_allocator.zig`) and
+> `PagedKvCache` (`kvcache/manager.zig`) manage paged blocks on the CPU side. Only
+> the GPU SDPA kernels need updating to dereference the block table.
 
 Current GPU SDPA kernels only support flat (contiguous) KV cache layouts. With
 PagedAttention, KV data is stored in non-contiguous blocks referenced by a block
@@ -204,11 +171,80 @@ adding an indirection layer to the attention kernel.
 - Inner loop iterates over block IDs, loads K/V from physical block addresses
 - Block size alignment (16 tokens) naturally maps to SIMD/warp widths
 
+## TriAttention — Frequency-Domain KV Cache Eviction
+
+> **Phase 1+2 implemented** (`--kv-eviction norm` / `--kv-eviction tri`). Phase 1 uses K-norm
+> scoring; Phase 2 adds trigonometric frequency-domain scoring with `TriCalibration` stats.
+> Periodic compression every 128 tokens. Calibration data generator is future work.
+
+KV cache eviction based on trigonometric frequency analysis of pre-RoPE Q/K vectors.
+Instead of scoring tokens by expensive attention computation, it uses statistical
+properties of Q/K cluster centers to determine which KV entries are important.
+Unimportant entries are pruned from the cache entirely.
+
+### Key results ([Mao et al., 2025](https://github.com/WeianMao/triattention))
+
+- **10.7× KV memory reduction** with accuracy parity on reasoning benchmarks
+- **2.5× throughput boost** on AIME25
+- Works on Qwen3, DeepSeek-R1, GPT-OSS (models we already support)
+- No retraining — inference-only, uses precomputed Q/K frequency statistics
+
+### How it stacks with our existing KV optimizations
+
+| Layer | Technique | Reduction | Status |
+|-------|-----------|-----------|--------|
+| 1. Bits per entry | TurboQuant turbo4 | 3.8× | ✅ Implemented |
+| 2. V-only compression | Asymmetric K=q8_0/V=turbo4 | +quality | ✅ Implemented |
+| 3. Skip negligible V | Sparse V dequant (softmax < 1e-6) | +22% decode | ✅ Implemented |
+| 4. Evict old entries | TriAttention (norm + frequency) | 10.7× | ✅ Phase 1+2 implemented |
+| **Combined** | **1 + 2 + 3 + 4** | **~40×** | |
+
+### Core insight
+
+Pre-RoPE Q and K vectors in reasoning models cluster around fixed frequency centers.
+Token importance can be scored cheaply by measuring distance from these centers (via
+vector norm and cosine similarity), without computing full attention. This is O(n) per
+token vs O(n²) for attention-based importance scoring.
+
+### Implementation plan for agave
+
+**Phase 1 — Heuristic eviction (no precomputed stats):**
+1. Add `KvEvictionPolicy` enum to `kv_quant.zig`: `none`, `norm_based`, `tri_frequency`
+2. In `PagedKvCache`, track per-block importance scores (running average of K norms)
+3. When cache is full, evict the block with lowest importance score
+4. Expose as `--kv-eviction norm` CLI flag
+5. Integrate with sliding window — evict outside the window first
+
+**Phase 2 — Full TriAttention with precomputed statistics:**
+1. Load `.pt` frequency center files per model
+2. Score tokens against frequency centers using cosine similarity
+3. Per-head and per-layer-per-head pruning strategies
+4. In-place KV compaction (shift remaining entries to fill gaps)
+5. Expose as `--kv-eviction tri --kv-stats <path>`
+
+**Phase 3 — Dynamic budget:**
+1. Auto-tune KV budget based on available memory
+2. Adaptive eviction threshold (tighter budget → more aggressive pruning)
+3. Preserve recent tokens unconditionally (attention sink pattern)
+
+### Considerations
+- Precomputed stats add deployment friction (one `.pt` file per model)
+- Phase 1 (norm-based) is simpler and works without stats — good starting point
+- Most impactful for long-context (32K+) reasoning chains
+- Must preserve the sliding window invariant — never evict within the active window
+- Block-level eviction (not token-level) aligns with our paged KV cache design
+
+### References
+- [TriAttention: KV Cache Compression via Trigonometric Frequency-Domain Analysis (Mao et al., 2025)](https://github.com/WeianMao/triattention)
+- [KIVI: A Tuning-Free Asymmetric 2bit Quantization for KV Cache (Liu et al., 2024)](https://arxiv.org/abs/2402.02750)
+- [Scissorhands: Exploiting the Persistence of Importance Hypothesis for LLM KV Cache Compression (Liu et al., 2023)](https://arxiv.org/abs/2305.17118)
+
 ## Missing GPU Kernels
 
 See `docs/KERNELS.md` for the full status matrix. Key gaps:
 - **CUDA/Vulkan**: sigmoidMul, siluMul, deinterleave, rmsNormMulti, DeltaNet
-- **All GPU**: NVFP4 (GGUF), MXFP4 GEMV
+- **All GPU**: NVFP4 (GGUF)
+- **Vulkan/ROCm**: MXFP4 GEMV (available in Metal and CUDA)
 - **CUDA/ROCm**: Additional quant formats (q4_1, q5_0, q2_k, q3_k, iq4_nl, iq4_xs)
 
 These currently `@panic` at runtime if a model needs them on a GPU backend.

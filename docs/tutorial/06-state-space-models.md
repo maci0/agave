@@ -1,6 +1,6 @@
 # Chapter 6: State Space Models
 
-SSMs are an alternative to attention that process tokens in **O(1)** time per step (constant time — doesn't grow with sequence length) instead of O(n²). Instead of re-reading all previous tokens, they maintain a fixed-size **state matrix** that summarizes the past:
+SSMs, as formalized in [Mamba (Gu & Dao, 2023)](https://arxiv.org/abs/2312.00752), are an alternative to attention that process tokens in **O(1)** time per step (constant time — doesn't grow with sequence length) instead of O(n²). Instead of re-reading all previous tokens, they maintain a fixed-size **state matrix** that summarizes the past:
 
 ```
 state[t] = decay * state[t-1] + input[t]    (simplified)
@@ -53,7 +53,7 @@ Agave fuses the convolution with SiLU activation in a single pass.
    out[vi] = sum_ki(S[h, vi, ki] * q[ki]) / sqrt(head_k_dim)
 ```
 
-**GQA in DeltaNet:** Uses **tiling** (repeating K/V heads to match Q head count via modulo wrapping: `kh = h % num_k_heads`), matching `ggml_repeat` semantics — V-heads wrap around K-heads.
+**GQA in DeltaNet:** Head mapping is format-dependent: GGUF uses **tiling** (`kh = h % num_k_heads`, matching `ggml_repeat` semantics), while SafeTensors uses **interleaved grouping** (`kh = h * num_k_heads / num_v_heads`). Controlled by the `kqv_order` flag set at model load time.
 
 **Split order:** After conv1d, output splits as `[Q | K | V]` (llama.cpp convention).
 
@@ -61,7 +61,7 @@ Agave fuses the convolution with SiLU activation in a single pass.
 
 ## Mamba-2 (Nemotron-H)
 
-Mamba-2 learns input-dependent **discretization** (choosing how much time passes between updates) — the `dt` (timestep, delta-time) is computed from the input, making the model selectively remember or forget.
+[Mamba-2 (Dao & Gu, 2024)](https://arxiv.org/abs/2405.21060) learns input-dependent **discretization** (choosing how much time passes between updates) — the `dt` (timestep, delta-time) is computed from the input, making the model selectively remember or forget.
 
 **Per-head recurrence:**
 

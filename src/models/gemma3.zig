@@ -22,7 +22,6 @@ const split_attn = @import("../ops/split_attention.zig");
 const Backend = backend_mod.Backend;
 const Format = format_mod.Format;
 const TensorInfo = format_mod.TensorInfo;
-const DType = backend_mod.DType;
 const Model = model_mod.Model;
 const Allocator = std.mem.Allocator;
 const PagedKvCache = kvcache.PagedKvCache;
@@ -48,11 +47,17 @@ const default_head_dim: u32 = 256;
 const default_n_ff: u32 = 6912;
 /// Fallback vocabulary size for Gemma3.
 const default_vocab_size: u32 = 262144;
+/// Fallback attention head count for Gemma3 1B.
+const default_n_head: u32 = 4;
+/// Fallback KV head count for Gemma3 1B.
+const default_n_head_kv: u32 = 1;
+/// Fallback maximum sequence length when metadata is missing.
+const default_max_seq_len: usize = 4096;
 
 /// Gemma 3 transformer model with GQA, GELU activation, and per-head QK normalization.
 /// Supports both GGUF and SafeTensors/MLX quantized weights.
 pub const Gemma3Model = struct {
-    const NormCacheEntry = struct { key: usize, data: []f32 };
+    const NormCacheEntry = model_mod.NormCacheEntry;
     const max_norm_entries: usize = 256;
 
     // Configuration (read from GGUF metadata)
@@ -74,8 +79,8 @@ pub const Gemma3Model = struct {
     embd_scale: f32,
     final_logit_softcap: f32,
     mlx_bits: u32,
-    /// Whether norm weights need +1.0 offset (SafeTensors Gemma stores raw weights;
-    /// GGUF bakes +1.0 into norm weights).
+    /// Whether to add +1.0 to norm weights during RMS norm (true for SafeTensors/MLX
+    /// which store raw weights; false for GGUF which bakes +1.0 in at conversion time).
     norm_add_one: bool,
     max_seq_len: usize = 4096,
 
@@ -93,7 +98,7 @@ pub const Gemma3Model = struct {
     attn_out: []f32,
     ff_gate: []f32,
     ff_up: []f32,
-    logits: []f32,
+    logits_buf: []f32,
     scores: []f32,
 
     // Prefill buffers (sized to chunk_size × dim, allocated at init)
@@ -139,8 +144,8 @@ pub const Gemma3Model = struct {
         const arch = f.getMetaStr("general.architecture") orelse "gemma3";
         const n_layers = f.getArchU32(arch, "block_count") orelse default_n_layers;
         const n_embd = f.getArchU32(arch, "embedding_length") orelse default_n_embd;
-        const n_head = f.getArchU32(arch, "attention.head_count") orelse 4;
-        const n_head_kv = f.getArchU32(arch, "attention.head_count_kv") orelse 1;
+        const n_head = f.getArchU32(arch, "attention.head_count") orelse default_n_head;
+        const n_head_kv = f.getArchU32(arch, "attention.head_count_kv") orelse default_n_head_kv;
         const head_dim = f.getArchU32(arch, "attention.key_length") orelse default_head_dim;
         const n_ff = f.getArchU32(arch, "feed_forward_length") orelse default_n_ff;
         const rope_dim: u32 = head_dim;
@@ -150,7 +155,7 @@ pub const Gemma3Model = struct {
         const kv_dim = n_head_kv * head_dim;
         const nl: usize = n_layers;
 
-        var max_sl: usize = 4096;
+        var max_sl: usize = default_max_seq_len;
         if (f.getArchU32(arch, "context_length")) |cl| max_sl = cl;
         if (ctx_size > 0) max_sl = ctx_size;
 
@@ -200,7 +205,7 @@ pub const Gemma3Model = struct {
             .attn_out = undefined,
             .ff_gate = undefined,
             .ff_up = undefined,
-            .logits = undefined,
+            .logits_buf = undefined,
             .scores = undefined,
             .tiered_cache = tiered_cache,
             .kv_type_k = kv_type_k,
@@ -249,8 +254,8 @@ pub const Gemma3Model = struct {
         errdefer allocator.free(self.ff_gate);
         self.ff_up = try allocator.alloc(f32, n_ff);
         errdefer allocator.free(self.ff_up);
-        self.logits = try allocator.alloc(f32, vocab_size);
-        errdefer allocator.free(self.logits);
+        self.logits_buf = try allocator.alloc(f32, vocab_size);
+        errdefer allocator.free(self.logits_buf);
         self.scores = try allocator.alloc(f32, max_sl);
         errdefer allocator.free(self.scores);
 
@@ -286,15 +291,15 @@ pub const Gemma3Model = struct {
     /// Release all heap allocations owned by this model.
     pub fn deinit(self: *Gemma3Model) void {
         const bufs = .{
-            &self.hidden, &self.hidden2,  &self.q_buf,   &self.k_buf,
-            &self.v_buf,  &self.attn_out, &self.ff_gate, &self.ff_up,
-            &self.logits, &self.scores,
+            &self.hidden,     &self.hidden2,  &self.q_buf,   &self.k_buf,
+            &self.v_buf,      &self.attn_out, &self.ff_gate, &self.ff_up,
+            &self.logits_buf, &self.scores,
         };
         inline for (bufs) |buf| self.allocator.free(buf.*);
         const pa = std.heap.page_allocator;
         const pf_bufs = .{
-            &self.pf_hidden, &self.pf_hidden2, &self.pf_q, &self.pf_k,
-            &self.pf_v, &self.pf_attn_out, &self.pf_ff_gate, &self.pf_ff_up,
+            &self.pf_hidden, &self.pf_hidden2,  &self.pf_q,       &self.pf_k,
+            &self.pf_v,      &self.pf_attn_out, &self.pf_ff_gate, &self.pf_ff_up,
         };
         inline for (pf_bufs) |buf| if (buf.len > 0) pa.free(buf.*);
         if (self.pf_positions.len > 0) pa.free(self.pf_positions);
@@ -324,11 +329,12 @@ pub const Gemma3Model = struct {
 
         // Embedding lookup + Gemma scaling
         var t = self.perf.start();
-        self.lookupEmbd(token_id);
+        self.embLookup(token_id);
         self.perf.end(.emb_lookup, t);
 
         for (0..self.n_layers) |li| {
-            if (self.cancelled.load(.acquire)) return error.Cancelled;
+            if (self.cancelled.load(.monotonic)) return error.Cancelled;
+            self.fmt.prefetchLayer(@intCast(li + 1));
             try self.attention(@intCast(li));
             try self.feedForward(@intCast(li));
         }
@@ -342,7 +348,7 @@ pub const Gemma3Model = struct {
         t = self.perf.start();
         const out_w = self.fmt.getTensor("output.weight") orelse
             self.fmt.getTensor("token_embd.weight") orelse return error.MissingTensor;
-        self.doGemv(self.hidden.ptr, out_w, self.logits.ptr, self.vocab_size, self.n_embd);
+        self.doGemv(self.hidden.ptr, out_w, self.logits_buf.ptr, self.vocab_size, self.n_embd);
         self.perf.end(.gemv_ffn, t);
 
         self.be.sync();
@@ -350,7 +356,7 @@ pub const Gemma3Model = struct {
 
         self.kv_seq_len += 1;
         self.perf.addToken();
-        return math_ops.argmax(self.logits);
+        return math_ops.argmax(self.logits_buf);
     }
 
     /// Batched prefill: process all token_ids through all layers.
@@ -360,11 +366,8 @@ pub const Gemma3Model = struct {
         if (token_ids.len == 0) return error.MissingTensor;
         if (token_ids.len > self.max_seq_len) return error.KVCacheFull;
 
-        // For chunk_size=1, single token, or MLX-quantized models, use the
-        // decode forward() path. MLX models loop per-token in doGemm anyway
-        // (no batched MLX GEMM kernel), and the mixed CPU/GPU prefill path
-        // has data coherence issues on Metal with MLX weights.
-        const is_mlx = (self.fmt.getTensor("token_embd.weight") orelse unreachable).dtype == .mlx_q;
+        // MLX models: sequential per-token processing (no batched MLX GEMM kernel).
+        const is_mlx = (self.fmt.getTensor("token_embd.weight") orelse return error.MissingTensor).dtype == .mlx_q;
         const cs: usize = if (is_mlx) 1 else self.chunk_size;
         if (cs <= 1 or token_ids.len == 1) {
             var last: u32 = 0;
@@ -389,14 +392,14 @@ pub const Gemma3Model = struct {
 
         const out_w = self.fmt.getTensor("output.weight") orelse
             self.fmt.getTensor("token_embd.weight") orelse return error.MissingTensor;
-        self.doGemv(self.hidden.ptr, out_w, self.logits.ptr, self.vocab_size, e);
+        self.doGemv(self.hidden.ptr, out_w, self.logits_buf.ptr, self.vocab_size, e);
 
         self.be.sync();
         if (self.final_logit_softcap > 0.0) self.applySoftcap();
 
         self.kv_seq_len = token_ids.len;
         self.perf.addToken();
-        return math_ops.argmax(self.logits);
+        return math_ops.argmax(self.logits_buf);
     }
 
     fn prefillChunk(self: *Gemma3Model, token_ids: []const u32, base_pos: u32) !void {
@@ -411,7 +414,7 @@ pub const Gemma3Model = struct {
 
         // Embedding lookup for all tokens
         for (token_ids, 0..) |tid, t| {
-            self.lookupEmbd(tid);
+            self.embLookup(tid);
             @memcpy(self.pf_hidden[t * e ..][0..e], self.hidden);
         }
 
@@ -421,7 +424,8 @@ pub const Gemma3Model = struct {
         }
 
         for (0..self.n_layers) |li| {
-            if (self.cancelled.load(.acquire)) return error.Cancelled;
+            if (self.cancelled.load(.monotonic)) return error.Cancelled;
+            self.fmt.prefetchLayer(@intCast(li + 1));
             try self.prefillAttention(@intCast(li), n_tok);
             try self.prefillFeedForward(@intCast(li), n_tok);
         }
@@ -612,13 +616,11 @@ pub const Gemma3Model = struct {
                 tc.block_size,
                 self.kv_seq_len + 1,
             );
-            // Get thread pool from CPU backend (available via BackendState)
-            const pool: ?*@import("../thread_pool.zig").ThreadPool = if (self.tiered_block_allocator) |_| blk: {
-                // The pool is accessible from CpuBackend; for now, pass null
-                // and let splitAttention run CPU heads inline. The thread pool
-                // integration requires passing the pool through the model init.
-                break :blk null;
-            } else null;
+            // Extract thread pool from CPU backend for parallel CPU SDPA heads
+            const pool: ?*@import("../thread_pool.zig").ThreadPool = switch (self.be) {
+                .cpu => |cpu| cpu.pool,
+                else => null,
+            };
 
             attn_ops.scaledDotProductAttentionTiered(
                 self.q_buf.ptr,
@@ -763,8 +765,14 @@ pub const Gemma3Model = struct {
             if (entry.key == key) return entry.data.ptr;
         }
 
-        // Cache miss: allocate, convert, and store permanently
-        const buf = self.allocator.alloc(f32, n) catch return @ptrCast(@alignCast(t.data_ptr));
+        // Cache miss: allocate, convert, and store permanently.
+        // Guard capacity before allocating to avoid leaking uncached buffers.
+        if (self.norm_cache_len >= max_norm_entries)
+            @panic("normAsF32: norm cache overflow — increase max_norm_entries");
+        const buf = self.allocator.alloc(f32, n) catch |err| {
+            std.log.warn("normAsF32: alloc failed ({s}), using unconverted weights", .{@errorName(err)});
+            return @ptrCast(@alignCast(t.data_ptr));
+        };
         const offset: f32 = if (self.norm_add_one) 1.0 else 0.0;
         if (t.dtype == .bf16) {
             const src: [*]const u16 = @ptrCast(@alignCast(t.data_ptr));
@@ -773,10 +781,8 @@ pub const Gemma3Model = struct {
             const src: [*]const f32 = @ptrCast(@alignCast(t.data_ptr));
             for (0..n) |i| buf[i] = src[i] + offset;
         }
-        if (self.norm_cache_len < max_norm_entries) {
-            self.norm_cache[self.norm_cache_len] = .{ .key = key, .data = buf };
-            self.norm_cache_len += 1;
-        }
+        self.norm_cache[self.norm_cache_len] = .{ .key = key, .data = buf };
+        self.norm_cache_len += 1;
         return buf.ptr;
     }
 
@@ -841,7 +847,7 @@ pub const Gemma3Model = struct {
         self.be.gemm(x, .{ .data = t.data_ptr, .dtype = t.dtype }, y, n_tok, n_out, n_in);
     }
 
-    fn lookupEmbd(self: *Gemma3Model, tok: u32) void {
+    fn embLookup(self: *Gemma3Model, tok: u32) void {
         const t = self.fmt.getTensor("token_embd.weight") orelse {
             @memset(self.hidden, 0);
             return;
@@ -872,9 +878,25 @@ pub const Gemma3Model = struct {
         while (i < n) : (i += 1) self.hidden[i] *= self.embd_scale;
     }
 
+    /// SIMD-vectorized logit softcapping: logits = cap * tanh(logits / cap).
     fn applySoftcap(self: *Gemma3Model) void {
+        const V8 = @Vector(8, f32);
+        const inv_v: V8 = @splat(1.0 / self.final_logit_softcap);
+        const cap_v: V8 = @splat(self.final_logit_softcap);
+        const one: V8 = @splat(1.0);
+        const two: V8 = @splat(2.0);
+        const n = self.logits_buf.len;
+        var i: usize = 0;
+        while (i + 8 <= n) : (i += 8) {
+            const x: V8 = self.logits_buf[i..][0..8].*;
+            const t = x * inv_v;
+            const e2t = @exp(two * t);
+            self.logits_buf[i..][0..8].* = cap_v * (e2t - one) / (e2t + one);
+        }
         const inv = 1.0 / self.final_logit_softcap;
         const cap = self.final_logit_softcap;
-        for (self.logits) |*v| v.* = @as(f32, math.tanh(v.* * inv)) * cap;
+        while (i < n) : (i += 1) {
+            self.logits_buf[i] = cap * @as(f32, math.tanh(self.logits_buf[i] * inv));
+        }
     }
 };

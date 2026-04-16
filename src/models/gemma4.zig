@@ -25,6 +25,7 @@ const mlx_ops = @import("../ops/mlx.zig");
 const quant = @import("../ops/quant.zig");
 const perf = @import("../perf.zig");
 const kv_quant = @import("../ops/kv_quant.zig");
+const kv_evict = @import("../ops/kv_evict.zig");
 const kvcache = @import("../kvcache/manager.zig");
 const block_alloc_mod = @import("../kvcache/block_allocator.zig");
 const BlockAllocator = block_alloc_mod.BlockAllocator;
@@ -33,7 +34,6 @@ const TieredKvCache = @import("../kvcache/tiered.zig").TieredKvCache;
 const Backend = backend_mod.Backend;
 const Format = format_mod.Format;
 const TensorInfo = format_mod.TensorInfo;
-const DType = backend_mod.DType;
 const Model = model_mod.Model;
 const Allocator = std.mem.Allocator;
 const PagedKvCache = kvcache.PagedKvCache;
@@ -49,15 +49,16 @@ const max_active_experts: usize = 16;
 const max_norm_entries: usize = 512;
 /// MLX companion tensor cache size.
 const mlx_companion_cache_size: usize = 512;
-/// Default prefill chunk size (tokens per batch).
-const default_chunk_size: u32 = 512;
-
 // ── Architecture defaults (Gemma 4 26B-A4B) ──────────────────────
 const default_n_layers: u32 = 30;
 const default_n_embd: u32 = 2816;
 const default_vocab_size: u32 = 262144;
 const default_rms_eps: f32 = 1e-6;
 const default_final_logit_softcap: f32 = 30.0;
+/// Fallback maximum sequence length when metadata is missing.
+const default_max_seq_len: usize = 4096;
+/// Default MLX quantization bit width (4-bit). Canonical source: model.zig.
+const default_mlx_bits = model_mod.default_mlx_bits;
 
 // ── Sliding-window attention defaults ────────────────────────────
 const default_sl_n_head: u32 = 16;
@@ -67,8 +68,6 @@ const default_sl_rope_theta: f32 = 10_000.0;
 const default_sliding_window: u32 = 1024;
 
 // ── Global attention defaults ────────────────────────────────────
-const default_gl_n_head: u32 = 16;
-const default_gl_n_kv_head: u32 = 2;
 const default_gl_head_dim: u32 = 512;
 const default_gl_rope_theta: f32 = 1_000_000.0;
 const default_gl_partial_rotary: f32 = 0.25;
@@ -100,16 +99,12 @@ const default_ple_dim: u32 = 0;
 /// PLE combination scale: 1/sqrt(2).
 const ple_combination_scale: f32 = 1.0 / @sqrt(2.0);
 
-/// Bits per u32 word — used to compute per-tensor bit width from packed weight dimensions.
-const bits_per_u32_word: u64 = 32;
-
-/// Cached f32 norm weight entry, keyed by source data pointer.
-const NormCacheEntry = struct { key: usize, data: []f32 };
+const NormCacheEntry = model_mod.NormCacheEntry;
 
 /// MLX companion tensor pointers (scales + biases).
 const MlxCompanion = struct { scales: [*]const u8, biases: [*]const u8 };
 
-/// Gemma 4 26B-A4B MoE model with dual attention, dual FFN, and sigmoid routing.
+/// Gemma 4 model with dual attention, dual FFN (dense + MoE with top-8 softmax routing).
 pub const Gemma4Model = struct {
     // ── Core configuration ───────────────────────────────────────
     n_layers: u32,
@@ -183,6 +178,8 @@ pub const Gemma4Model = struct {
     ple_embd_scale: f32 = 0.0,
     /// PLE model projection scale: 1/sqrt(n_embd).
     ple_proj_scale: f32 = 0.0,
+    /// Precomputed 1/sqrt(n_embd) for MoE router scaling.
+    inv_sqrt_embd: f32 = 0.0,
 
     // ── Dependencies ─────────────────────────────────────────────
     fmt: Format,
@@ -215,7 +212,7 @@ pub const Gemma4Model = struct {
     /// Router input buffer (sized to n_embd): holds rms-normed + scaled residual for MoE routing.
     router_input: []f32 = &.{},
     router_buf: []f32 = &.{},
-    logits: []f32 = &.{},
+    logits_buf: []f32 = &.{},
     scores: []f32 = &.{},
     /// PLE per-layer input vector (sized to ple_dim, one layer's slice at a time).
     ple_buf: []f32 = &.{},
@@ -224,6 +221,10 @@ pub const Gemma4Model = struct {
     /// PLE combined per-layer embeddings: [n_layers * ple_dim].
     /// Computed once per token from token_identity + context_projection.
     ple_combined: []f32 = &.{},
+    /// Reusable buffer for image batch hidden states [n_tokens * n_embd].
+    /// Lazily allocated on first forwardImageBatch call (init-phase, not hot path).
+    /// Persists across images to avoid repeated allocation.
+    image_hidden: []f32 = &.{},
 
     // ── KV cache (raw per-layer allocation with per-layer kvd) ────
     /// Per-layer key cache: keys[layer][max_seq_len * layer_kvd].
@@ -241,10 +242,38 @@ pub const Gemma4Model = struct {
     tiered_block_allocator: ?TieredBlockAllocator = null,
     kv_type_k: kv_quant.KvQuantType = .f32,
     kv_type_v: kv_quant.KvQuantType = .f32,
+    /// Boundary V protection: first N + last N layers use f16 for V cache.
+    kv_boundary_v: u32 = 0,
+    /// KV eviction budget: max positions to keep. 0 = disabled (no eviction).
+    kv_eviction_budget: u32 = 0,
+    /// Scratch buffer for eviction scores [max_seq_len].
+    eviction_scores: []f32 = &.{},
+    /// Scratch buffer for eviction keep mask [max_seq_len].
+    eviction_keep: []bool = &.{},
     kv_seq_len: usize = 0,
     cancelled: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
     max_seq_len: usize = 4096,
     perf: perf.PerfCounters = .{},
+
+    // ── Visual token embeddings (multimodal) ───────────────────
+    /// Visual token embeddings from vision encoder, or null if text-only.
+    image_embeddings: ?[]const f32 = null,
+    /// Number of visual tokens.
+    n_visual_tokens: u32 = 0,
+    /// Image pad token ID — the placeholder token that gets replaced with
+    /// visual embeddings during forward(). Set by setImageEmbeddings().
+    image_pad_token_id: u32 = 0,
+    /// Index into image_embeddings for the next visual token injection.
+    /// Incremented each time a pad token is encountered during forward().
+    visual_token_idx: u32 = 0,
+    /// When true, attention uses non-causal (bidirectional) masking.
+    /// Set during image token processing to match llama.cpp's behavior where
+    /// image patches attend to ALL other patches, not just previous ones.
+    non_causal_attn: bool = false,
+    /// KV cache position where the current image batch ends (exclusive).
+    /// Used during non-causal Pass 2 to define the full attention window:
+    /// each image query attends to all positions [image_start..image_batch_end].
+    image_batch_end: usize = 0,
 
     // ── Public fields required by Model vtable ───────────────────
     eos_token_id: u32 = 1,
@@ -261,8 +290,7 @@ pub const Gemma4Model = struct {
             f.getMetaU32("num_hidden_layers") orelse default_n_layers;
         const n_embd = f.getArchU32(arch, "embedding_length") orelse
             f.getMetaU32("hidden_size") orelse default_n_embd;
-        const vocab_size: u32 = if (f.getVocab()) |v| @intCast(v.len) else
-            f.getArchU32(arch, "vocab_size") orelse default_vocab_size;
+        const vocab_size: u32 = if (f.getVocab()) |v| @intCast(v.len) else f.getArchU32(arch, "vocab_size") orelse default_vocab_size;
 
         // Sliding-window attention params
         const sl_n_head = f.getArchU32(arch, "attention.head_count") orelse
@@ -271,7 +299,7 @@ pub const Gemma4Model = struct {
         const sl_n_kv_head = f.getArchU32(arch, "attention.head_count_kv") orelse
             f.getMetaU32("num_key_value_heads") orelse default_sl_n_kv_head;
         // key_length_swa is the sliding-window head dim; fall back to key_length
-        const sl_head_dim = f.getArchU32(arch, "attention.key_length_swa") orelse
+        var sl_head_dim = f.getArchU32(arch, "attention.key_length_swa") orelse
             f.getArchU32(arch, "attention.key_length") orelse
             f.getMetaU32("head_dim") orelse default_sl_head_dim;
         // Sliding-window uses freq_base_swa (10K); freq_base is the global theta (1M).
@@ -291,9 +319,12 @@ pub const Gemma4Model = struct {
         // shared head_count_kv scalar (E2B/E4B use a single value for all layers).
         const gl_n_kv_head = f.getArchU32(arch, "attention.head_count_kv_global") orelse
             f.getMetaU32("global_num_key_value_heads") orelse sl_n_kv_head;
-        const gl_head_dim = f.getArchU32(arch, "attention.key_length") orelse
+        var gl_head_dim = f.getArchU32(arch, "attention.key_length") orelse
             f.getArchU32(arch, "attention.key_length_global") orelse
             f.getMetaU32("global_head_dim") orelse default_gl_head_dim;
+        // NOTE: metadata key_length may not match actual tensor dims in some GGUF
+        // converters (e.g., E2B metadata says 512 but tensors use 256). Head dim
+        // is validated and corrected after layer type detection below.
         // Global attention uses freq_base (1M); freq_base_global is a fallback alias.
         const gl_rope_theta = f.getArchF32(arch, "rope.freq_base") orelse
             f.getArchF32(arch, "rope.freq_base_global") orelse
@@ -309,11 +340,9 @@ pub const Gemma4Model = struct {
         const n_experts = f.getArchU32(arch, "expert_count") orelse
             f.getMetaU32("num_local_experts") orelse
             if (has_expert_tensors) default_n_experts else 0;
-        const top_k_experts = if (n_experts == 0) @as(u32, 0) else
-            f.getArchU32(arch, "expert_used_count") orelse
+        const top_k_experts = if (n_experts == 0) @as(u32, 0) else f.getArchU32(arch, "expert_used_count") orelse
             f.getMetaU32("num_experts_per_tok") orelse default_top_k_experts;
-        const moe_intermediate = if (n_experts == 0) @as(u32, 0) else
-            f.getArchU32(arch, "expert_feed_forward_length") orelse
+        const moe_intermediate = if (n_experts == 0) @as(u32, 0) else f.getArchU32(arch, "expert_feed_forward_length") orelse
             f.getMetaU32("expert_intermediate_size") orelse default_moe_intermediate;
 
         // Dense FFN intermediate dimension — can be scalar or per-layer array.
@@ -322,14 +351,21 @@ pub const Gemma4Model = struct {
         var dense_ff_dim: u32 = 0;
         {
             const nli: usize = n_layers;
-            var ff_key_buf: [256]u8 = undefined;
+            var ff_key_buf: [format_mod.arch_key_buf_size]u8 = undefined;
             const ff_key = std.fmt.bufPrint(&ff_key_buf, "{s}.feed_forward_length", .{arch}) catch "";
             const ff_arr = f.getMetaU32Array(ff_key);
             if (ff_arr) |arr| {
-                // Per-layer array: use each layer's value, dense_ff_dim = max
+                // Per-layer array: use each layer's value, dense_ff_dim = max.
+                // If array is shorter than n_layers (e.g. scalar stored as 1-element
+                // array in E2B/E4B), broadcast the last value to remaining layers.
                 for (0..@min(nli, arr.len)) |i| {
                     per_layer_ff_dim[i] = arr[i];
                     if (arr[i] > dense_ff_dim) dense_ff_dim = arr[i];
+                }
+                if (arr.len < nli and arr.len > 0) {
+                    const fill_val = arr[arr.len - 1];
+                    for (arr.len..nli) |i| per_layer_ff_dim[i] = fill_val;
+                    if (fill_val > dense_ff_dim) dense_ff_dim = fill_val;
                 }
             } else {
                 // Try scalar metadata
@@ -367,7 +403,7 @@ pub const Gemma4Model = struct {
 
         const eos_token_id = f.getMetaU32("tokenizer.ggml.eos_token_id") orelse 1;
 
-        var max_sl: usize = 4096;
+        var max_sl: usize = default_max_seq_len;
         if (f.getArchU32(arch, "context_length")) |cl| max_sl = cl;
         if (f.getMetaU32("max_position_embeddings")) |cl| max_sl = cl;
         if (ctx_size > 0) max_sl = ctx_size;
@@ -379,16 +415,45 @@ pub const Gemma4Model = struct {
         {
             // Try to read per-layer sliding_window_pattern array from GGUF metadata.
             // Format: arch_key e.g. "gemma4.attention.sliding_window_pattern"
-            // Array values: 0 = sliding, >0 = global (window size).
-            var key_buf: [256]u8 = undefined;
+            // Array values: 0 = global (no window), >0 = sliding (window size).
+            var key_buf: [format_mod.arch_key_buf_size]u8 = undefined;
             const sw_key = std.fmt.bufPrint(&key_buf, "{s}.attention.sliding_window_pattern", .{arch}) catch "";
             const sw_pattern_arr = f.getMetaU32Array(sw_key);
             if (sw_pattern_arr) |arr| {
-                // Per-layer pattern: non-zero = global layer
-                for (0..@min(nl, arr.len)) |i| {
-                    layer_is_global[i] = (arr[i] == 0);
+                if (arr.len >= nl) {
+                    // Full per-layer array — use directly
+                    for (0..nl) |i| layer_is_global[i] = (arr[i] == 0);
                 }
-            } else if (global_layer_interval > 0) {
+                // 1-element arrays are unreliable — fall through to tensor detection
+            }
+            // Tensor-based fallback: infer layer types from Q weight dimensions.
+            // Global layers have larger Q dim (n_heads * gl_head_dim) than sliding.
+            // This handles both GGUF converters with correct metadata and broken ones.
+            const pattern_set = sw_pattern_arr != null and sw_pattern_arr.?.len >= nl;
+            if (!pattern_set and sl_head_dim != gl_head_dim) {
+                const gl_qd = @as(u64, gl_n_head) * gl_head_dim;
+                var any_global = false;
+                for (0..nl) |i| {
+                    if (f.layerTensor(@intCast(i), "attn_q.weight")) |qt| {
+                        if (qt.n_dims >= 2 and qt.dims[0] == gl_qd) {
+                            layer_is_global[i] = true;
+                            any_global = true;
+                        }
+                    }
+                }
+                // If no layers matched gl_head_dim, metadata is wrong — all layers
+                // use sl_head_dim (E4B: metadata says 512 but actual is 256).
+                if (!any_global) {
+                    gl_head_dim = sl_head_dim;
+                    for (0..nl) |i| layer_is_global[i] = true;
+                    std.log.info("gemma4: no global layers found, setting gl_head_dim={d} (all global)", .{gl_head_dim});
+                }
+            } else if (!pattern_set and sl_head_dim == gl_head_dim) {
+                // All layers have the same head dim (E2B/E4B dense models).
+                // Treat all as global — sliding window makes no difference when
+                // sl and gl params are identical.
+                for (0..nl) |i| layer_is_global[i] = true;
+            } else if (!pattern_set and global_layer_interval > 0) {
                 // Fallback: every global_layer_interval-th layer (1-indexed) is global.
                 // For interval=6: layers 5,11,17,23,29 (0-indexed) are global.
                 for (0..nl) |i| {
@@ -397,15 +462,41 @@ pub const Gemma4Model = struct {
             }
         }
 
+        // Validate head dims against actual tensor shapes (after layer types known).
+        // Find a sliding layer and a global layer, check their Q tensor dims.
+        if (f.layerTensor(0, "attn_q.weight")) |qt| {
+            if (qt.n_dims >= 2 and sl_n_head > 0) {
+                const tensor_hd: u32 = @intCast(qt.dims[0] / sl_n_head);
+                if (tensor_hd > 0) {
+                    if (layer_is_global[0]) {
+                        if (tensor_hd != gl_head_dim) {
+                            std.log.info("gemma4: overriding gl_head_dim {d} -> {d} from attn_q[0]", .{ gl_head_dim, tensor_hd });
+                            gl_head_dim = tensor_hd;
+                        }
+                    } else {
+                        if (tensor_hd != sl_head_dim) {
+                            std.log.info("gemma4: overriding sl_head_dim {d} -> {d} from attn_q[0]", .{ sl_head_dim, tensor_hd });
+                            sl_head_dim = tensor_hd;
+                        }
+                    }
+                }
+            }
+        }
+
         // Build per-layer KV head count map
         var per_layer_n_kv_head: [max_layers]u32 = [_]u32{0} ** max_layers;
         {
-            var key_buf: [256]u8 = undefined;
+            var key_buf: [format_mod.arch_key_buf_size]u8 = undefined;
             const kv_key = std.fmt.bufPrint(&key_buf, "{s}.attention.head_count_kv", .{arch}) catch "";
             const kv_arr = f.getMetaU32Array(kv_key);
             if (kv_arr) |arr| {
                 for (0..@min(nl, arr.len)) |i| {
                     per_layer_n_kv_head[i] = arr[i];
+                }
+                // Broadcast last value if array is shorter than n_layers
+                if (arr.len < nl and arr.len > 0) {
+                    const fill_val = arr[arr.len - 1];
+                    for (arr.len..nl) |i| per_layer_n_kv_head[i] = fill_val;
                 }
             } else {
                 // Fill from defaults based on layer type
@@ -482,6 +573,7 @@ pub const Gemma4Model = struct {
             .ple_dim = ple_dim,
             .ple_embd_scale = if (ple_dim > 0) @sqrt(@as(f32, @floatFromInt(ple_dim))) else 0.0,
             .ple_proj_scale = if (ple_dim > 0) 1.0 / @sqrt(@as(f32, @floatFromInt(n_embd))) else 0.0,
+            .inv_sqrt_embd = 1.0 / @sqrt(@as(f32, @floatFromInt(n_embd))),
             .fmt = f,
             .be = be,
             .allocator = allocator,
@@ -492,15 +584,14 @@ pub const Gemma4Model = struct {
             .kv_type_k = kv_type_k,
             .kv_type_v = kv_type_v,
             .tiered_cache = tiered_cache,
-            .mlx_bits = f.getMetaU32("bits") orelse 4,
-            // Gemma4 GGUF converter stores norm weights as-is (norm_shift=0.0), unlike
-            // Gemma3 which bakes +1 (norm_shift=1.0). No +1 needed for GGUF.
-            // SafeTensors (model_type present) also stores raw weights (no +1 needed).
+            .mlx_bits = f.getMetaU32("bits") orelse default_mlx_bits,
+            // Gemma4 always uses norm_add_one=false: both GGUF and SafeTensors store
+            // raw norm weights (unlike Gemma3 where SafeTensors needs +1).
             .norm_add_one = false,
         };
 
         // ── Per-layer KV cache allocation ──────────────────────────
-        // Gemma 4 has per-layer varying kvd (sliding: nkv*hd = 2048, global: nkv*hd = 1024).
+        // Gemma 4 has per-layer varying kvd (sliding and global layers use different nkv*hd).
         // Allocate raw KV buffers per layer with the correct dimensions.
         // Shared layers point to their source layer's buffers.
         {
@@ -562,7 +653,7 @@ pub const Gemma4Model = struct {
         self.attn_out = try allocator.alloc(f32, max_qkv_dim);
         errdefer allocator.free(self.attn_out);
         // MoE expert buffers: ff_buf sized to moe_intermediate (0 for dense-only models),
-        // ff_buf2 reused for up-proj (moe_intermediate) AND down-proj output (n_embd)
+        // ff_buf2 sized to max(moe_intermediate, n_embd) — reused for up-proj and down-proj
         const moe_buf_size = @max(moe_intermediate, 1); // Avoid zero-length alloc
         self.ff_buf = try allocator.alloc(f32, moe_buf_size);
         errdefer allocator.free(self.ff_buf);
@@ -580,8 +671,8 @@ pub const Gemma4Model = struct {
         const router_buf_size = @max(n_experts, 1); // Avoid zero-length alloc
         self.router_buf = try allocator.alloc(f32, router_buf_size);
         errdefer allocator.free(self.router_buf);
-        self.logits = try allocator.alloc(f32, vocab_size);
-        errdefer allocator.free(self.logits);
+        self.logits_buf = try allocator.alloc(f32, vocab_size);
+        errdefer allocator.free(self.logits_buf);
         self.scores = try allocator.alloc(f32, max_sl);
         errdefer allocator.free(self.scores);
 
@@ -626,13 +717,18 @@ pub const Gemma4Model = struct {
         if (self.ple_buf.len > 0) self.allocator.free(self.ple_buf);
         if (self.ple_gate_buf.len > 0) self.allocator.free(self.ple_gate_buf);
         if (self.ple_combined.len > 0) self.allocator.free(self.ple_combined);
+        // Free image batch buffer
+        if (self.image_hidden.len > 0) self.allocator.free(self.image_hidden);
+        // Free eviction scratch buffers
+        if (self.eviction_scores.len > 0) self.allocator.free(self.eviction_scores);
+        if (self.eviction_keep.len > 0) self.allocator.free(self.eviction_keep);
         // Free working buffers
         const bufs = .{
-            &self.hidden,       &self.hidden2,     &self.q_buf,
-            &self.k_buf,        &self.v_buf,       &self.attn_out,
-            &self.ff_buf,       &self.ff_buf2,     &self.dense_gate,
-            &self.dense_up,     &self.dense_out,   &self.router_input,
-            &self.router_buf,   &self.logits,      &self.scores,
+            &self.hidden,     &self.hidden2,    &self.q_buf,
+            &self.k_buf,      &self.v_buf,      &self.attn_out,
+            &self.ff_buf,     &self.ff_buf2,    &self.dense_gate,
+            &self.dense_up,   &self.dense_out,  &self.router_input,
+            &self.router_buf, &self.logits_buf, &self.scores,
         };
         inline for (bufs) |buf| self.allocator.free(buf.*);
     }
@@ -645,27 +741,64 @@ pub const Gemma4Model = struct {
     // ── Forward pass ──────────────────────────────────────────────
 
     /// Run one decode step, returning the argmax next-token ID.
-    /// Processes token through embedding, all layers (dual attention + dual FFN),
+    /// Processes token through embedding, all layers (attention + FFN/MoE),
     /// final norm, LM head, softcapping, and argmax.
     pub fn forward(self: *Gemma4Model, token_id: u32) !u32 {
-        if (self.kv_seq_len >= self.max_seq_len) return error.KVCacheFull;
+        if (self.kv_seq_len >= self.max_seq_len) {
+            if (self.kv_eviction_budget > 0) {
+                try self.evictKvCache();
+            } else {
+                return error.KVCacheFull;
+            }
+        } else if (self.kv_eviction_budget > 0 and
+            self.kv_seq_len > self.kv_eviction_budget and
+            self.kv_seq_len % kv_evict.compression_interval == 0)
+        {
+            // Periodic compression: evict before cache is full (every 128 tokens).
+            // This maintains the budget continuously rather than waiting for overflow.
+            try self.evictKvCache();
+        }
 
         try model_mod.ensureKvBlock(self);
 
-        // Embedding lookup + Gemma scaling
+        // Check if this is an image token — if so, skip embedding lookup
+        // entirely and use the pre-computed visual embedding directly.
+        // This matches llama.cpp's ubatch.token=false path where embedding
+        // lookup and sqrt(n_embd) scaling are both skipped for vision inputs.
         var t = self.perf.start();
-        self.lookupEmbd(token_id);
+        var is_image_token = false;
+        if (self.image_embeddings) |vis_embd| {
+            if (self.image_pad_token_id != 0 and token_id == self.image_pad_token_id) {
+                const idx = self.visual_token_idx;
+                if (idx < self.n_visual_tokens) {
+                    const offset = @as(usize, idx) * self.n_embd;
+                    const end = offset + self.n_embd;
+                    if (end <= vis_embd.len) {
+                        @memcpy(self.hidden, vis_embd[offset..end]);
+                        is_image_token = true;
+                    }
+                    self.visual_token_idx = idx + 1;
+                }
+            }
+        }
+        if (!is_image_token) {
+            self.embLookup(token_id);
+        }
         self.perf.end(.emb_lookup, t);
 
-        // PLE: compute per-layer embeddings from token + context projection
+        // PLE: compute per-layer embeddings from token + context projection.
+        // For image tokens, use padding token (ID=0) — matching llama.cpp
+        // which uses tok_embd_per_layer[0] as fallback for non-token inputs.
         if (self.ple_dim > 0) {
             t = self.perf.start();
-            self.computePleEmbeddings(token_id);
+            const ple_token = if (is_image_token) @as(u32, 0) else token_id;
+            self.computePleEmbeddings(ple_token);
             self.perf.end(.emb_lookup, t);
         }
 
         for (0..self.n_layers) |li| {
-            if (self.cancelled.load(.acquire)) return error.Cancelled;
+            if (self.cancelled.load(.monotonic)) return error.Cancelled;
+            self.fmt.prefetchLayer(@intCast(li + 1));
 
             try self.attention(@intCast(li));
             try self.dualFfnLayer(@intCast(li));
@@ -680,7 +813,7 @@ pub const Gemma4Model = struct {
         t = self.perf.start();
         const out_w = self.fmt.getTensor("output.weight") orelse
             self.fmt.getTensor("token_embd.weight") orelse return error.MissingTensor;
-        self.doGemv(self.hidden.ptr, out_w, self.logits.ptr, self.vocab_size, self.n_embd);
+        self.doGemv(self.hidden.ptr, out_w, self.logits_buf.ptr, self.vocab_size, self.n_embd);
         self.perf.end(.gemv_ffn, t);
 
         self.be.sync();
@@ -688,11 +821,15 @@ pub const Gemma4Model = struct {
 
         self.kv_seq_len += 1;
         self.perf.addToken();
-        return math_ops.argmax(self.logits);
+        return math_ops.argmax(self.logits_buf);
     }
 
     /// Prefill: process all prompt tokens and return argmax of the last
-    /// token's logits. Currently uses sequential per-token forward passes.
+    /// token's logits.
+    ///
+    /// When image embeddings are set, detects contiguous runs of image pad
+    /// tokens and routes them through forwardImageBatch() for non-causal
+    /// (bidirectional) attention. Text tokens use standard causal forward().
     ///
     /// MoE routing selects different experts per token, preventing
     /// straightforward batched FFN. Dual attention configs (different head
@@ -701,9 +838,158 @@ pub const Gemma4Model = struct {
     pub fn prefill(self: *Gemma4Model, token_ids: []const u32) !u32 {
         if (token_ids.len == 0) return error.MissingTensor;
         if (token_ids.len > self.max_seq_len) return error.KVCacheFull;
+
+        const pad_id = self.image_pad_token_id;
+        const has_image = self.image_embeddings != null and pad_id != 0 and self.n_visual_tokens > 0;
+
         var last: u32 = 0;
-        for (token_ids) |tid| last = try self.forward(tid);
+        var i: usize = 0;
+        while (i < token_ids.len) {
+            if (has_image and token_ids[i] == pad_id) {
+                var run_end = i + 1;
+                while (run_end < token_ids.len and token_ids[run_end] == pad_id) : (run_end += 1) {}
+                const n_img: u32 = @intCast(run_end - i);
+                try self.forwardImageBatch(n_img);
+                last = 0;
+                i = run_end;
+            } else {
+                last = try self.forward(token_ids[i]);
+                i += 1;
+            }
+        }
         return last;
+    }
+
+    /// Process a batch of image embeddings through the model with non-causal
+    /// (bidirectional) attention, layer by layer.
+    ///
+    /// For each transformer layer:
+    ///   Phase 1: Compute K/V for ALL image tokens and write to KV cache
+    ///   Phase 2: For each token, compute Q, run full attention against ALL
+    ///            image K/V (non-causal), then output proj + FFN + residual
+    ///
+    /// This matches llama.cpp's batched `llama_decode` with `causal_attn=false`.
+    /// Does NOT compute final logits (image tokens don't predict next tokens).
+    fn forwardImageBatch(self: *Gemma4Model, n_tokens: u32) !void {
+        const np: usize = n_tokens;
+        const ed: usize = self.n_embd;
+        const vis_embd = self.image_embeddings orelse return;
+
+        if (self.kv_seq_len + np > self.max_seq_len) return error.KVCacheFull;
+
+        // Ensure KV cache space
+        const saved_seq_len = self.kv_seq_len;
+        for (0..np) |_| {
+            try model_mod.ensureKvBlock(self);
+            self.kv_seq_len += 1;
+        }
+        self.kv_seq_len = saved_seq_len;
+
+        // Reuse (or grow) the persistent image hidden state buffer: [np, ed]
+        const needed = np * ed;
+        if (self.image_hidden.len < needed) {
+            if (self.image_hidden.len > 0) self.allocator.free(self.image_hidden);
+            self.image_hidden = self.allocator.alloc(f32, needed) catch return error.OutOfMemory;
+        }
+        const all_hidden = self.image_hidden[0..needed];
+
+        // Initialize hidden states from visual embeddings
+        const vis_start_idx = self.visual_token_idx;
+        for (0..np) |i| {
+            const idx = vis_start_idx + @as(u32, @intCast(i));
+            if (idx >= self.n_visual_tokens) break;
+            const src_off = @as(usize, idx) * ed;
+            @memcpy(all_hidden[i * ed ..][0..ed], vis_embd[src_off..][0..ed]);
+        }
+        self.visual_token_idx = vis_start_idx + @as(u32, @intCast(np));
+
+        // PLE: compute once using padding token
+        if (self.ple_dim > 0) self.computePleEmbeddings(0);
+
+        const image_start = self.kv_seq_len;
+        const image_end = image_start + np;
+
+        // Process layer by layer
+        for (0..self.n_layers) |li| {
+            if (self.cancelled.load(.monotonic)) return error.Cancelled;
+            self.fmt.prefetchLayer(@intCast(li + 1));
+
+            const layer_idx: u32 = @intCast(li);
+            const is_global = self.layer_is_global[li];
+            const has_own_kv = (self.kv_source[li] == li);
+            const src_layer = self.kv_source[li];
+            const src_is_global = self.layer_is_global[src_layer];
+            const nkv: usize = self.per_layer_n_kv_head[src_layer];
+            const hd: usize = if (src_is_global) self.gl_head_dim else self.sl_head_dim;
+            const kv_dim = nkv * hd;
+
+            // Phase 1: Write ALL K/V to cache for this layer
+            if (has_own_kv) {
+                const kv_view = self.getLayerKvView(li);
+                const kw = self.fmt.layerTensor(layer_idx, "attn_k.weight") orelse return error.MissingTensor;
+                const vw = self.fmt.layerTensor(layer_idx, "attn_v.weight");
+                const norm_w = self.fmt.layerTensor(layer_idx, "attn_norm.weight") orelse return error.MissingTensor;
+
+                for (0..np) |ti| {
+                    // Norm
+                    const h = all_hidden[ti * ed ..][0..ed];
+                    self.be.rmsNorm(h.ptr, self.normAsF32(norm_w, ed), self.hidden2.ptr, ed, self.rms_eps);
+
+                    // K/V projection
+                    self.doGemv(self.hidden2.ptr, kw, self.k_buf.ptr, kv_dim, ed);
+                    if (vw) |vw_t| {
+                        self.doGemv(self.hidden2.ptr, vw_t, self.v_buf.ptr, kv_dim, ed);
+                    } else {
+                        self.be.sync();
+                        @memcpy(self.v_buf[0..kv_dim], self.k_buf[0..kv_dim]);
+                    }
+
+                    // QK norm for K
+                    if (self.fmt.layerTensor(layer_idx, "attn_k_norm.weight")) |kn| {
+                        self.be.rmsNormMulti(self.k_buf.ptr, self.normAsF32(kn, hd), nkv, hd, self.rms_eps);
+                    }
+                    if (vw == null) {
+                        self.be.sync();
+                        rmsNormPlainMulti(self.v_buf.ptr, nkv, hd, self.rms_eps);
+                    }
+
+                    // RoPE for K
+                    const pos = image_start + ti;
+                    if (is_global) {
+                        const rd: usize = @intFromFloat(@as(f32, @floatFromInt(self.gl_head_dim)) * self.gl_partial_rotary);
+                        const rd_even = rd & ~@as(usize, 1);
+                        if (rd_even > 0) self.be.rope(self.k_buf.ptr, pos, nkv, hd, rd_even, self.gl_rope_theta);
+                    } else {
+                        self.be.rope(self.k_buf.ptr, pos, nkv, hd, self.sl_rope_dim, self.sl_rope_theta);
+                    }
+
+                    // Write K/V to cache
+                    self.be.sync();
+                    const k_off = pos * kv_dim;
+                    const v_off = pos * kv_dim;
+                    @memcpy(kv_view.keys[k_off..][0..kv_dim], self.k_buf[0..kv_dim]);
+                    @memcpy(kv_view.values[v_off..][0..kv_dim], self.v_buf[0..kv_dim]);
+                }
+            }
+
+            // Phase 2: For each token, compute Q, run full attention, FFN
+            for (0..np) |ti| {
+                @memcpy(self.hidden, all_hidden[ti * ed ..][0..ed]);
+
+                self.kv_seq_len = image_start + ti;
+                self.non_causal_attn = true;
+                self.image_batch_end = image_end;
+
+                try self.attention(layer_idx);
+                try self.dualFfnLayer(layer_idx);
+
+                @memcpy(all_hidden[ti * ed ..][0..ed], self.hidden);
+            }
+        }
+
+        self.kv_seq_len = image_end;
+        self.non_causal_attn = false;
+        self.image_batch_end = 0;
     }
 
     /// Reset the KV cache position for a new conversation.
@@ -722,6 +1008,67 @@ pub const Gemma4Model = struct {
     }
 
     // ── Layer implementations ─────────────────────────────────────
+
+    /// Get the effective V cache type for a layer, applying boundary protection.
+    /// First/last `kv_boundary_v` layers use f16 to protect attention quality;
+    /// middle layers use the configured kv_type_v (which may be turbo4/turbo3/etc).
+    inline fn layerVType(self: *const Gemma4Model, li: u32) kv_quant.KvQuantType {
+        if (self.kv_boundary_v == 0) return self.kv_type_v;
+        const b = self.kv_boundary_v;
+        if (li < b or li >= self.n_layers - b) return .f16;
+        return self.kv_type_v;
+    }
+
+    /// Evict low-value positions from the KV cache when it is full.
+    ///
+    /// Scores all cached positions by their layer-0 K-vector L2 norm, then
+    /// selects which positions to keep (always preserving attention sinks and
+    /// recent context), and compacts every per-layer K and V cache in place.
+    /// Updates `kv_seq_len` to reflect the new (shorter) sequence length.
+    ///
+    /// Scratch buffers (`eviction_scores`, `eviction_keep`) are lazy-allocated
+    /// on the first call so models that never trigger eviction pay nothing.
+    fn evictKvCache(self: *Gemma4Model) !void {
+        const seq_len = self.kv_seq_len;
+        if (seq_len == 0) return;
+
+        // Lazy-allocate scratch buffers on first eviction (init-phase allocation, not hot path).
+        if (self.eviction_scores.len == 0) {
+            self.eviction_scores = try self.allocator.alloc(f32, self.max_seq_len);
+        }
+        if (self.eviction_keep.len == 0) {
+            self.eviction_keep = try self.allocator.alloc(bool, self.max_seq_len);
+        }
+
+        // Score positions using layer 0's K cache (representative of overall importance).
+        const layer0_kv = self.getLayerKvView(0);
+        const kvd0 = self.layer_kvd[self.kv_source[0]];
+        kv_evict.scorePositions(layer0_kv.keys.ptr, self.eviction_scores.ptr, seq_len, kvd0);
+
+        // Select which positions to keep.
+        const budget: usize = self.kv_eviction_budget;
+        const new_len = kv_evict.selectVictims(
+            self.eviction_scores.ptr,
+            self.eviction_keep.ptr,
+            seq_len,
+            budget,
+            kv_evict.default_sink_size,
+            kv_evict.default_recent_window,
+        );
+
+        // Compact ALL per-layer K and V caches.
+        for (0..self.n_layers) |li| {
+            // Only compact layers that own their KV (shared layers are aliases).
+            if (self.kv_source[li] != @as(u32, @intCast(li))) continue;
+
+            const kvd = self.layer_kvd[li];
+            _ = kv_evict.compactCache(self.layer_keys[li].ptr, self.eviction_keep.ptr, seq_len, kvd);
+            _ = kv_evict.compactCache(self.layer_values[li].ptr, self.eviction_keep.ptr, seq_len, kvd);
+        }
+
+        std.log.info("gemma4: KV eviction {d} -> {d} positions (budget={d})", .{ seq_len, new_len, budget });
+        self.kv_seq_len = new_len;
+    }
 
     /// Get flat f32 view of KV cache for a layer (resolves shared KV mapping).
     /// Returns the per-layer KV buffers with correct per-layer kvd stride.
@@ -743,8 +1090,8 @@ pub const Gemma4Model = struct {
         const has_own_kv = (self.kv_source[li] == li);
 
         // Select attention dimensions based on layer type.
-        // For shared layers, use the SOURCE layer's KV dimensions (nkv, hd)
-        // because we attend against the source layer's cache.
+        // Query heads (nh) use the CURRENT layer's type; KV dimensions (nkv, hd)
+        // use the SOURCE layer's type because we attend against its cache.
         const src_layer = self.kv_source[li];
         const src_is_global = self.layer_is_global[src_layer];
         const nh: usize = if (is_global) self.gl_n_head else self.sl_n_head;
@@ -855,7 +1202,31 @@ pub const Gemma4Model = struct {
             @memcpy(self.v_buf[0..src_kvd], kv_view.values[v_off..][0..src_kvd]);
         }
 
-        if (!is_global and self.sliding_window > 0) {
+        // Non-causal attention (Pass 2 of image batch): use a window covering
+        // the full image region so each query attends to ALL image positions
+        // bidirectionally. The KV cache already has all entries from Pass 1.
+        // We force the windowed path which does NOT apply a causal mask.
+        if (self.non_causal_attn and self.image_batch_end > 0) {
+            attn_ops.scaledDotProductAttention(
+                self.q_buf.ptr,
+                kv_keys_bytes,
+                kv_values_bytes,
+                self.k_buf[0..kv_dim],
+                self.v_buf[0..kv_dim],
+                self.attn_out.ptr,
+                self.scores.ptr,
+                nh,
+                nkv,
+                hd,
+                self.kv_seq_len,
+                scale,
+                self.be,
+                .{ .start = 0, .len = self.image_batch_end },
+                0,
+                .f32,
+                .f32,
+            );
+        } else if (!is_global and self.sliding_window > 0) {
             const win: usize = @min(sl, self.sliding_window);
             const start: usize = if (sl > self.sliding_window) sl - self.sliding_window else 0;
             attn_ops.scaledDotProductAttention(
@@ -1078,7 +1449,7 @@ pub const Gemma4Model = struct {
         rmsNormPlain(self.router_input.ptr, self.hidden.ptr, e, self.rms_eps);
 
         // Step 2: Scale by 1/sqrt(n_embd) and element-wise multiply with ffn_gate_inp.scale
-        const inv_sqrt_embd: f32 = 1.0 / @sqrt(@as(f32, @floatFromInt(self.n_embd)));
+        const inv_sqrt_embd = self.inv_sqrt_embd;
         if (self.fmt.layerTensor(li, "ffn_gate_inp.scale")) |scale_t| {
             const scale_ptr: [*]const f32 = @ptrCast(@alignCast(scale_t.data_ptr));
             for (0..e) |i| self.router_input[i] *= inv_sqrt_embd * scale_ptr[i];
@@ -1163,18 +1534,15 @@ pub const Gemma4Model = struct {
                 self.doGemvExpert(self.hidden2.ptr, gate_exps.?, ei, gate_stride, self.ff_buf.ptr, ff, e);
                 self.doGemvExpert(self.hidden2.ptr, up_exps.?, ei, up_stride, self.ff_buf2.ptr, ff, e);
             }
-            self.be.sync();
-
-            // GELU activation on gate, then element-wise multiply with up
-            math_ops.applyGelu(self.ff_buf[0..ff]);
-            for (0..ff) |i| self.ff_buf[i] *= self.ff_buf2[i];
+            // GELU activation on gate, then element-wise multiply with up (fused, GPU-accelerated)
+            self.be.geluMul(self.ff_buf.ptr, self.ff_buf2.ptr, self.ff_buf.ptr, ff);
 
             // Down projection
             self.doGemvExpert(self.ff_buf.ptr, down_exps.?, ei, down_stride, self.ff_buf2.ptr, e, ff);
             self.be.sync();
 
-            // Weighted accumulation
-            for (0..e) |i| moe_out[i] += mix_weight * self.ff_buf2[i];
+            // Weighted accumulation (SIMD via backend addScaled).
+            self.be.addScaled(self.ff_buf2.ptr, moe_out.ptr, mix_weight, e);
         }
 
         // Post-MoE norm (post_ffw_norm_2 for the MoE path)
@@ -1187,42 +1555,25 @@ pub const Gemma4Model = struct {
 
     // ── Helpers ───────────────────────────────────────────────────
 
-    /// Look up an individual expert tensor by layer, prefix and expert ID.
-    /// SafeTensors naming: "blk.{layer}.{prefix}_exps.{expert_id}.weight"
-    fn expertTensor(self: *Gemma4Model, li: u32, comptime prefix: []const u8, ei: usize) ?TensorInfo {
-        var buf: [model_mod.tensor_name_buf_size]u8 = undefined;
-        const name = std.fmt.bufPrint(&buf, "blk.{d}." ++ prefix ++ "_exps.{d}.weight", .{ li, ei }) catch return null;
-        return self.fmt.getTensor(name);
-    }
-
-    /// Compute the byte stride between consecutive experts in a packed weight tensor.
-    fn expertStride(t: TensorInfo) usize {
-        if (t.dtype == .mlx_q) {
-            // SafeTensors MLX dims (not reversed): [n_experts, rows, words_per_row] U32
-            // Per-expert stride = rows * words_per_row * sizeof(u32)
-            std.debug.assert(t.n_dims >= 3);
-            return @as(usize, @intCast(t.dims[1])) * @as(usize, @intCast(t.dims[2])) * @sizeOf(u32);
-        }
-        // GGUF dims (reversed): [n_experts, rows, cols]
-        return model_mod.expertWeightStride(t);
-    }
+    const expertStride = model_mod.expertStride;
 
     /// Compute per-row byte size for a given dtype and input dimension k.
     /// For standard types, returns k * element_size.
     /// For quantized types, returns the block-quantized row size.
     fn expertRowBytes(t: TensorInfo, n_rows: usize, k: usize) usize {
+        const be = backend_mod;
         return switch (t.dtype) {
-            .f32 => k * @sizeOf(f32),
-            .f16 => k * @sizeOf(f16),
-            .bf16 => k * 2, // bf16 is 2 bytes
-            .q4_0 => (k / 32) * 18, // 32 elements per block, 18 bytes per block
-            .q4_k => (k / 32) * 18,
-            .q6_k => (k / 16) * 14,
-            .q8_0 => (k / 32) * 34,
+            .f32 => k * be.f32_elem_bytes,
+            .f16 => k * be.f16_elem_bytes,
+            .bf16 => k * be.f16_elem_bytes,
+            .q4_0 => (k / be.quant_block_elems) * be.q4_0_block_bytes,
+            .q4_k => (k / be.quant_super_block_elems) * be.q4_k_block_bytes,
+            .q6_k => (k / be.quant_super_block_elems) * be.q6_k_block_bytes,
+            .q8_0 => (k / be.quant_block_elems) * be.q8_0_block_bytes,
             else => blk: {
                 // Fallback: compute from total expert stride divided by row count.
                 const stride = model_mod.expertWeightStride(t);
-                break :blk if (n_rows > 0) stride / n_rows else k * @sizeOf(f32);
+                break :blk if (n_rows > 0) stride / n_rows else k * be.f32_elem_bytes;
             },
         };
     }
@@ -1321,8 +1672,14 @@ pub const Gemma4Model = struct {
             if (entry.key == key) return entry.data.ptr;
         }
 
-        // Cache miss: allocate, convert, and store permanently
-        const buf = self.allocator.alloc(f32, n) catch return @ptrCast(@alignCast(t.data_ptr));
+        // Cache miss: allocate, convert, and store permanently.
+        // Guard capacity before allocating to avoid leaking uncached buffers.
+        if (self.norm_cache_len >= max_norm_entries)
+            @panic("normAsF32: norm cache overflow — increase max_norm_entries");
+        const buf = self.allocator.alloc(f32, n) catch |err| {
+            std.log.warn("normAsF32: alloc failed ({s}), using unconverted weights", .{@errorName(err)});
+            return @ptrCast(@alignCast(t.data_ptr));
+        };
         const offset: f32 = if (self.norm_add_one) 1.0 else 0.0;
         if (t.dtype == .bf16) {
             const src: [*]const u16 = @ptrCast(@alignCast(t.data_ptr));
@@ -1331,14 +1688,12 @@ pub const Gemma4Model = struct {
             const src: [*]const f32 = @ptrCast(@alignCast(t.data_ptr));
             for (0..n) |i| buf[i] = src[i] + offset;
         }
-        if (self.norm_cache_len < max_norm_entries) {
-            self.norm_cache[self.norm_cache_len] = .{ .key = key, .data = buf };
-            self.norm_cache_len += 1;
-        }
+        self.norm_cache[self.norm_cache_len] = .{ .key = key, .data = buf };
+        self.norm_cache_len += 1;
         return buf.ptr;
     }
 
-    fn lookupEmbd(self: *Gemma4Model, tok: u32) void {
+    fn embLookup(self: *Gemma4Model, tok: u32) void {
         const t = self.fmt.getTensor("token_embd.weight") orelse {
             @memset(self.hidden, 0);
             return;
@@ -1464,10 +1819,26 @@ pub const Gemma4Model = struct {
     }
 
     /// Apply logit softcapping: logits = cap * tanh(logits / cap).
+    /// SIMD-vectorized over 8-wide f32 lanes for the full vocabulary.
     fn applySoftcap(self: *Gemma4Model) void {
+        const V8 = @Vector(8, f32);
+        const inv_v: V8 = @splat(1.0 / self.final_logit_softcap);
+        const cap_v: V8 = @splat(self.final_logit_softcap);
+        const one: V8 = @splat(1.0);
+        const two: V8 = @splat(2.0);
+        const n = self.logits_buf.len;
+        var i: usize = 0;
+        while (i + 8 <= n) : (i += 8) {
+            const x: V8 = self.logits_buf[i..][0..8].*;
+            const t = x * inv_v;
+            const e2t = @exp(two * t);
+            self.logits_buf[i..][0..8].* = cap_v * (e2t - one) / (e2t + one);
+        }
         const inv = 1.0 / self.final_logit_softcap;
         const cap = self.final_logit_softcap;
-        for (self.logits) |*v| v.* = @as(f32, math.tanh(v.* * inv)) * cap;
+        while (i < n) : (i += 1) {
+            self.logits_buf[i] = cap * @as(f32, math.tanh(self.logits_buf[i] * inv));
+        }
     }
 };
 
@@ -1477,24 +1848,46 @@ pub const Gemma4Model = struct {
 /// Computes: output[i] = input[i] / rms(input), where rms = sqrt(mean(x^2) + eps).
 /// Used for tied K=V value normalization and router input normalization.
 fn rmsNormPlain(output: [*]f32, input: [*]const f32, n: usize, eps: f32) void {
-    var sum_sq: f32 = 0.0;
-    for (0..n) |i| sum_sq += input[i] * input[i];
-    const rms = @sqrt(sum_sq / @as(f32, @floatFromInt(n)) + eps);
-    const inv_rms = 1.0 / rms;
-    for (0..n) |i| output[i] = input[i] * inv_rms;
+    const V8 = @Vector(8, f32);
+    var ss_acc: V8 = @splat(0.0);
+    var i: usize = 0;
+    while (i + 8 <= n) : (i += 8) {
+        const v: V8 = input[i..][0..8].*;
+        ss_acc = @mulAdd(V8, v, v, ss_acc);
+    }
+    var sum_sq: f32 = @reduce(.Add, ss_acc);
+    while (i < n) : (i += 1) sum_sq += input[i] * input[i];
+    const inv_rms = 1.0 / @sqrt(sum_sq / @as(f32, @floatFromInt(n)) + eps);
+    const inv_v: V8 = @splat(inv_rms);
+    i = 0;
+    while (i + 8 <= n) : (i += 8) {
+        output[i..][0..8].* = @as(V8, input[i..][0..8].*) * inv_v;
+    }
+    while (i < n) : (i += 1) output[i] = input[i] * inv_rms;
 }
 
 /// Plain RMS normalization for multiple heads without learned weights.
 /// Normalizes each contiguous head of `hd` elements independently.
 /// Used for tied K=V value normalization across KV heads.
 fn rmsNormPlainMulti(x: [*]f32, n_heads: usize, hd: usize, eps: f32) void {
+    const V8 = @Vector(8, f32);
     for (0..n_heads) |h| {
         const base = h * hd;
-        var sum_sq: f32 = 0.0;
-        for (0..hd) |i| sum_sq += x[base + i] * x[base + i];
-        const rms = @sqrt(sum_sq / @as(f32, @floatFromInt(hd)) + eps);
-        const inv_rms = 1.0 / rms;
-        for (0..hd) |i| x[base + i] *= inv_rms;
+        var ss_acc: V8 = @splat(0.0);
+        var i: usize = 0;
+        while (i + 8 <= hd) : (i += 8) {
+            const v: V8 = x[base + i ..][0..8].*;
+            ss_acc = @mulAdd(V8, v, v, ss_acc);
+        }
+        var sum_sq: f32 = @reduce(.Add, ss_acc);
+        while (i < hd) : (i += 1) sum_sq += x[base + i] * x[base + i];
+        const inv_rms = 1.0 / @sqrt(sum_sq / @as(f32, @floatFromInt(hd)) + eps);
+        const inv_v: V8 = @splat(inv_rms);
+        i = 0;
+        while (i + 8 <= hd) : (i += 8) {
+            x[base + i ..][0..8].* = @as(V8, x[base + i ..][0..8].*) * inv_v;
+        }
+        while (i < hd) : (i += 1) x[base + i] *= inv_rms;
     }
 }
 
@@ -1615,17 +2008,16 @@ test "Gemma4 per-layer KV head count defaults" {
 }
 
 test "Gemma4 dense variant detection" {
-    // When n_experts=0, MoE buffers should be zero-sized and MoE path skipped.
-    // This simulates dense variants like Gemma 4 31B and E4B.
-    const n_experts: u32 = 0;
-    const top_k_experts: u32 = if (n_experts == 0) 0 else 8;
-    const moe_intermediate: u32 = if (n_experts == 0) 0 else 704;
-
-    try std.testing.expectEqual(@as(u32, 0), n_experts);
-    try std.testing.expectEqual(@as(u32, 0), top_k_experts);
-    try std.testing.expectEqual(@as(u32, 0), moe_intermediate);
-
-    // Dense models still need dense FFN buffers
-    const dense_ff_dim: u32 = 2816;
-    try std.testing.expect(dense_ff_dim > 0);
+    // Verify that the MoE → dense derivation logic matches what init() computes.
+    // n_experts=0 signals a dense variant (E2B, E4B) vs MoE (26B-A4B).
+    const cases = [_]struct { n_experts: u32, exp_top_k: u32, exp_moe_dim: u32 }{
+        .{ .n_experts = 0, .exp_top_k = 0, .exp_moe_dim = 0 }, // dense
+        .{ .n_experts = default_n_experts, .exp_top_k = default_top_k_experts, .exp_moe_dim = default_moe_intermediate }, // MoE
+    };
+    for (cases) |c| {
+        const top_k: u32 = if (c.n_experts == 0) 0 else default_top_k_experts;
+        const moe_dim: u32 = if (c.n_experts == 0) 0 else default_moe_intermediate;
+        try std.testing.expectEqual(c.exp_top_k, top_k);
+        try std.testing.expectEqual(c.exp_moe_dim, moe_dim);
+    }
 }

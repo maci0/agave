@@ -26,6 +26,8 @@ V = W_v @ x    (Value: "What information do I carry?")
 
 Each token produces its own Q, K, and V by multiplying `x` by three different learned weight matrices. These projections transform the hidden state into three different "views" that serve different roles in the attention mechanism.
 
+This mechanism was introduced in [Attention Is All You Need (Vaswani et al., 2017)](https://arxiv.org/abs/1706.03762), the paper that defined the transformer architecture.
+
 The attention score between positions i and j is `Q_i · K_j / sqrt(d)`. After **softmax** normalization (converts raw scores into probabilities that sum to 1.0), these scores weight the V vectors:
 
 ```
@@ -38,7 +40,7 @@ This is **O(n²)** in sequence length (computational complexity grows quadratica
 
 ### GQA (Grouped Query Attention)
 
-Attention is computed **in parallel** (all heads compute simultaneously, not one after another) across multiple **heads** (independent attention mechanisms, each focusing on different aspects of the input). GQA reduces memory by sharing K/V heads across multiple Q heads. With 20 Q heads and 5 KV heads, each KV head serves 4 Q heads, cutting KV cache memory by 4×.
+Attention is computed **in parallel** (all heads compute simultaneously, not one after another) across multiple **heads** (independent attention mechanisms, each focusing on different aspects of the input). [GQA (Ainslie et al., 2023)](https://arxiv.org/abs/2305.13245) reduces memory by sharing K/V heads across multiple Q heads. With 20 Q heads and 5 KV heads, each KV head serves 4 Q heads, cutting KV cache memory by 4×.
 
 | Model | Q heads | KV heads | Ratio |
 | :--- | :--- | :--- | :--- |
@@ -60,7 +62,7 @@ Each KV head is shared by 4 Q heads (16 / 4 = 4 heads per group)
 Memory: 4× smaller KV cache vs full Multi-Head Attention (MHA)
 ```
 
-**MLA (Multi-head Latent Attention)** goes further — it compresses K/V into a **low-rank latent space** (a smaller intermediate representation with fewer dimensions) before caching, reducing memory even more. Used by GLM-4.
+**MLA (Multi-head Latent Attention)**, introduced in [DeepSeek-V2 (DeepSeek-AI, 2024)](https://arxiv.org/abs/2405.04434), goes further — it compresses K/V into a **low-rank latent space** (a smaller intermediate representation with fewer dimensions) before caching, reducing memory even more. Used by GLM-4.
 
 ### SDPA (Scaled Dot-Product Attention)
 
@@ -72,7 +74,7 @@ SDPA(Q, K, V, scale) = softmax(Q @ K^T * scale) @ V
 
 The implementation handles KV cache append, GQA head mapping, sliding window, attention sinks, and KV cache quantization — all dispatched to the active backend.
 
-**FlashAttention** is an optimization that computes attention in **tiles** (small rectangular blocks of the attention matrix processed one at a time) using **online softmax** (incrementally updating the softmax result as new tiles arrive, avoiding the need to store all scores at once), never **materializing** (allocating memory for and storing) the full scores matrix. Metal and CUDA backends implement FlashAttention-2; the CPU backend uses a **SIMD-vectorized** (using Single Instruction Multiple Data — processing multiple values at once with one CPU instruction) **fallback** (alternative implementation used when the primary method isn't available).
+**[FlashAttention](https://arxiv.org/abs/2307.08691)** is an optimization that computes attention in **tiles** (small rectangular blocks of the attention matrix processed one at a time) using **online softmax** (incrementally updating the softmax result as new tiles arrive, avoiding the need to store all scores at once), never **materializing** (allocating memory for and storing) the full scores matrix. Metal and CUDA backends implement [FlashAttention-2 (Dao, 2023)](https://arxiv.org/abs/2307.08691); the CPU backend uses a **SIMD-vectorized** (using Single Instruction Multiple Data — processing multiple values at once with one CPU instruction) **fallback** (alternative implementation used when the primary method isn't available).
 
 ### Attention Variants
 
@@ -88,7 +90,7 @@ The implementation handles KV cache append, GQA head mapping, sliding window, at
 
 ## RoPE (Rotary Position Encoding)
 
-Transformers are **position-agnostic** by default (they don't know the order of tokens) — without position information, "the cat sat" and "sat the cat" look identical. Earlier models added absolute position embeddings (e.g., "this is position 5"), but RoPE encodes position through **rotation** because it has a key geometric property: **the angle difference between two rotated vectors depends only on their relative distance, not their absolute positions**.
+Transformers are **position-agnostic** by default (they don't know the order of tokens) — without position information, "the cat sat" and "sat the cat" look identical. Earlier models added absolute position embeddings (e.g., "this is position 5"), but [RoPE (Su et al., 2021)](https://arxiv.org/abs/2104.09864) encodes position through **rotation** because it has a key geometric property: **the angle difference between two rotated vectors depends only on their relative distance, not their absolute positions**.
 
 When we rotate Q at position `i` by angle `θ_i` and K at position `j` by angle `θ_j`, their dot product includes a term `cos(θ_i - θ_j)`. Since angles are proportional to position (`θ = pos × freq`), the difference `θ_i - θ_j = (i - j) × freq` captures the *relative* distance `(i - j)` between tokens. This means attention naturally focuses on how far apart tokens are, not where they appear absolutely — which is what matters for language ("the cat" should attend the same way whether it's at the start or middle of a sentence).
 
@@ -168,7 +170,7 @@ With N=200 tokens, GEMM has 200× higher **arithmetic intensity** (compute-to-me
 
 **Chunked prefill** (`--prefill-batch-size N`, default 512) splits long prompts into fixed-size chunks. Each chunk is one batched pass through all layers. Memory overhead is bounded by the chunk size, not the full prompt length.
 
-**In the code:** `src/ops/attention.zig` (SDPA), `src/backend/kernels/cpu/rope.zig` (RoPE), `src/backend/kernels/cpu/norm.zig` (RMSNorm, L2Norm), `src/backend/kernels/cpu/sdpa.zig` (CPU FlashAttention), `src/backend/kernels/cpu/gemm.zig` (CPU GEMM), `src/backend/kernels/metal/gemm.metal` (Metal GEMM), `src/backend/kernels/cuda/gemm_q8_0.zig` (CUDA GEMM)
+**In the code:** `src/ops/attention.zig` (SDPA), `src/backend/kernels/cpu/rope.zig` (RoPE), `src/backend/kernels/cpu/norm.zig` (RMSNorm, L2Norm), `src/backend/kernels/cpu/sdpa.zig` (CPU FlashAttention), `src/backend/cpu.zig` (CPU GEMM), `src/backend/kernels/metal/gemm.metal` (Metal GEMM), `src/backend/kernels/cuda/gemm_q8_0.zig` (CUDA GEMM)
 
 **Math reference:** [Q/K/V projections](appendix-math.md#qkv-projections), [Attention scores](appendix-math.md#attention-score-computation), [Dot product](appendix-math.md#dot-product), [Softmax](appendix-math.md#softmax), [RMSNorm](appendix-math.md#rms-normalization-rmsnorm), [L2 norm](appendix-math.md#l2-normalization)
 

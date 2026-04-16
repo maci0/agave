@@ -154,23 +154,18 @@ pub fn sdpaQuantHeadWithStats(q: [*]const f32, keys: [*]const u8, values: [*]con
         scores_buf[t] = kv_quant.kvDot(q_cached[0..hd].ptr, keys + k_byte_off, hd, kv_type_k) * scale;
     }
 
-    // Softmax — capture max and sum before normalization
+    // Softmax — SIMD-accelerated, capture max and sum before normalization
     const scores = scores_buf[0..sl];
-    var max_val: f32 = scores[0];
-    for (scores[1..]) |s| max_val = @max(max_val, s);
-    var sum_val: f32 = 0;
-    for (scores) |*s| {
-        s.* = @exp(s.* - max_val);
-        sum_val += s.*;
-    }
+    const stats = softmaxWithStats(scores);
 
     // Export stats for online softmax merge
-    head_max[h] = max_val;
-    head_sum[h] = sum_val;
+    head_max[h] = stats.max_val;
+    head_sum[h] = stats.sum_val;
 
     // Normalize
-    const inv_sum: f32 = if (sum_val > 0) 1.0 / sum_val else 0;
-    for (scores) |*s| s.* *= inv_sum;
+    if (stats.sum_val > 0) {
+        softmaxNormalize(scores, stats.sum_val);
+    }
 
     // V accumulation using quantized KV (value type)
     @memset(output[q_base..][0..hd], 0);
@@ -180,10 +175,15 @@ pub fn sdpaQuantHeadWithStats(q: [*]const f32, keys: [*]const u8, values: [*]con
     }
 }
 
-/// In-place softmax over a score buffer. SIMD-accelerated max, exp+sum, and normalize.
-fn softmax(scores: []f32) void {
+/// Pre-normalization softmax stats for online softmax merge.
+const SoftmaxStats = struct { max_val: f32, sum_val: f32 };
+
+/// SIMD-accelerated softmax that returns pre-normalization stats (max, sum).
+/// Computes exp(x - max) in-place but does NOT normalize — caller divides by sum.
+/// Used by sdpaQuantHeadWithStats for online softmax merge across split attention chunks.
+fn softmaxWithStats(scores: []f32) SoftmaxStats {
     const n = scores.len;
-    if (n == 0) return;
+    if (n == 0) return .{ .max_val = 0, .sum_val = 0 };
 
     // Pass 1: find max (SIMD)
     var max_acc: V8 = @splat(scores[0]);
@@ -193,9 +193,7 @@ fn softmax(scores: []f32) void {
         max_acc = @max(max_acc, sv);
     }
     var max_val: f32 = @reduce(.Max, max_acc);
-    while (i < n) : (i += 1) {
-        if (scores[i] > max_val) max_val = scores[i];
-    }
+    while (i < n) : (i += 1) max_val = @max(max_val, scores[i]);
 
     // Pass 2: exp and sum (fused, SIMD)
     const max_v: V8 = @splat(max_val);
@@ -207,20 +205,32 @@ fn softmax(scores: []f32) void {
         scores[i..][0..8].* = ev;
         sum_acc += ev;
     }
-    var sum: f32 = @reduce(.Add, sum_acc);
+    var sum_val: f32 = @reduce(.Add, sum_acc);
     while (i < n) : (i += 1) {
         scores[i] = @exp(scores[i] - max_val);
-        sum += scores[i];
+        sum_val += scores[i];
     }
 
-    // Pass 3: normalize (SIMD)
-    const inv_sum = 1.0 / sum;
+    return .{ .max_val = max_val, .sum_val = sum_val };
+}
+
+/// SIMD normalize: multiply by 1/sum in-place.
+fn softmaxNormalize(scores: []f32, sum_val: f32) void {
+    const n = scores.len;
+    const inv_sum = 1.0 / sum_val;
     const inv_v: V8 = @splat(inv_sum);
-    i = 0;
+    var i: usize = 0;
     while (i + 8 <= n) : (i += 8) {
         scores[i..][0..8].* = @as(V8, scores[i..][0..8].*) * inv_v;
     }
     while (i < n) : (i += 1) scores[i] *= inv_sum;
+}
+
+/// In-place softmax over a score buffer. SIMD-accelerated: max pass, then fused exp+normalize.
+fn softmax(scores: []f32) void {
+    const stats = softmaxWithStats(scores);
+    if (stats.sum_val == 0) return;
+    softmaxNormalize(scores, stats.sum_val);
 }
 
 test "sdpa single head single position" {
@@ -264,12 +274,16 @@ test "sdpa GQA two query heads one KV head" {
     const e = @exp(@as(f32, 1.0));
     const w0 = 1.0 / (1.0 + e);
     const w1 = e / (1.0 + e);
-    // Head 0 output
+    // Head 0 output: w0*v0 + w1*v1 = [w0, w1, 0, 0]
     try std.testing.expectApproxEqAbs(w0, output[0], 1e-4);
     try std.testing.expectApproxEqAbs(w1, output[1], 1e-4);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.0), output[2], 1e-4);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.0), output[3], 1e-4);
     // Head 1 should produce identical output (shares same KV head)
     try std.testing.expectApproxEqAbs(w0, output[4], 1e-4);
     try std.testing.expectApproxEqAbs(w1, output[5], 1e-4);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.0), output[6], 1e-4);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.0), output[7], 1e-4);
 }
 
 test "sdpa single head two positions" {
@@ -310,7 +324,7 @@ test "sdpa quantized f16 roundtrip" {
     const hd = 4;
     const kvd = hd; // 1 KV head
     const max_sl = 4;
-    const kv_bytes = kv_quant.kvSliceBytes(.f16, max_sl * kvd);
+    const kv_bytes = comptime kv_quant.kvSliceBytes(.f16, max_sl * kvd);
     var keys_buf: [kv_bytes]u8 = .{0} ** kv_bytes;
     var vals_buf: [kv_bytes]u8 = .{0} ** kv_bytes;
 
@@ -324,8 +338,98 @@ test "sdpa quantized f16 roundtrip" {
     kv_quant.kvStore(&vals_buf, &v_new, kvd, .f16);
 
     // Run quantized SDPA for 1 position
-    sdpaQuantHeads(&q, &keys_buf, &vals_buf, &output, 1, 1, hd, 1, 1.0, .f16);
+    sdpaQuantHeads(&q, &keys_buf, &vals_buf, &output, 1, 1, hd, 1, 1.0, .f16, .f16);
 
     // Single position: output ≈ v_new (with f16 precision)
     for (0..4) |i| try std.testing.expectApproxEqAbs(v_new[i], output[i], 1e-3);
+}
+
+test "sdpaQuantHeadWithStats returns correct softmax stats" {
+
+    // 2 heads (GQA: 2 Q, 1 KV), hd=4, 2 positions.
+    // Verify head_max and head_sum match manual softmax computation.
+    const hd = 4;
+    const nkv = 1;
+    const nh = 2;
+    const kvd = nkv * hd;
+    const sl = 2;
+    const kv_bytes = comptime kv_quant.kvSliceBytes(.f16, sl * kvd);
+    var keys_buf: [kv_bytes]u8 = .{0} ** kv_bytes;
+    var vals_buf: [kv_bytes]u8 = .{0} ** kv_bytes;
+
+    // Store KV: k0=[1,0,0,0], k1=[0,0,0,1], v0=[1,0,0,0], v1=[0,1,0,0]
+    const k0 = [_]f32{ 1.0, 0.0, 0.0, 0.0 };
+    const v0_ = [_]f32{ 1.0, 0.0, 0.0, 0.0 };
+    kv_quant.kvStore(&keys_buf, &k0, kvd, .f16);
+    kv_quant.kvStore(&vals_buf, &v0_, kvd, .f16);
+    const k1 = [_]f32{ 0.0, 0.0, 0.0, 1.0 };
+    const v1_ = [_]f32{ 0.0, 1.0, 0.0, 0.0 };
+    const off1 = kv_quant.kvByteOffset(.f16, kvd);
+    kv_quant.kvStore(keys_buf[off1..].ptr, &k1, kvd, .f16);
+    kv_quant.kvStore(vals_buf[off1..].ptr, &v1_, kvd, .f16);
+
+    // Q: head 0 = [1,0,0,0] → scores=[1,0], head 1 = [0,0,0,1] → scores=[0,1]
+    var q = [_]f32{ 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0 };
+    var output: [8]f32 = undefined;
+    var head_max: [2]f32 = undefined;
+    var head_sum: [2]f32 = undefined;
+
+    sdpaQuantHeadsWithStats(&q, &keys_buf, &vals_buf, &output, nh, nkv, hd, sl, 1.0, .f16, .f16, &head_max, &head_sum);
+
+    // Head 0: scores=[1,0]*scale → max=1.0, sum=exp(0)+exp(-1)=1+0.368=1.368
+    try std.testing.expectApproxEqAbs(@as(f32, 1.0), head_max[0], 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 1.0 + @exp(@as(f32, -1.0))), head_sum[0], 0.01);
+
+    // Head 1: scores=[0,1]*scale → max=1.0, same sum
+    try std.testing.expectApproxEqAbs(@as(f32, 1.0), head_max[1], 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 1.0 + @exp(@as(f32, -1.0))), head_sum[1], 0.01);
+
+    // Output correctness: both heads should produce valid attention output
+    // Head 0: weighted sum of v0 and v1 with weights [e/(1+e), 1/(1+e)]
+    const e = @exp(@as(f32, 1.0));
+    const w0 = e / (1.0 + e);
+    const w1_val = 1.0 / (1.0 + e);
+    try std.testing.expectApproxEqAbs(w0, output[0], 0.01); // w0*v0[0]
+    try std.testing.expectApproxEqAbs(w1_val, output[1], 0.01); // w1*v1[1]
+}
+
+test "sdpa exercises SIMD dot product path" {
+    // hd=16 ensures the V8 SIMD dot product loop runs (requires hd >= 8).
+    // Previous tests all use hd=4 which only exercises the scalar tail.
+    const hd = 16;
+    var keys: [2 * hd]f32 = undefined; // 2 positions
+    var values: [2 * hd]f32 = undefined;
+    var output: [hd]f32 = undefined;
+
+    // Position 0: k=[1,0,...,0], v=[0.5 repeated]
+    var k_new0: [hd]f32 = .{0} ** hd;
+    k_new0[0] = 1.0;
+    var v_new0: [hd]f32 = undefined;
+    for (&v_new0) |*v| v.* = 0.5;
+
+    // Insert position 0
+    var q0: [hd]f32 = .{0} ** hd;
+    q0[0] = 1.0;
+    sdpa(&q0, &keys, &values, &k_new0, &v_new0, &output, 1, 1, hd, 0, 1.0);
+    // Single position: output = v_new0
+    for (0..hd) |i| try std.testing.expectApproxEqAbs(@as(f32, 0.5), output[i], 1e-5);
+
+    // Position 1: k=[0,1,0,...,0], v=[0.25 repeated]
+    var k_new1: [hd]f32 = .{0} ** hd;
+    k_new1[1] = 1.0;
+    var v_new1: [hd]f32 = undefined;
+    for (&v_new1) |*v| v.* = 0.25;
+
+    // Query aligns with k1: q=[0,1,0,...,0]
+    var q1: [hd]f32 = .{0} ** hd;
+    q1[1] = 1.0;
+    sdpa(&q1, &keys, &values, &k_new1, &v_new1, &output, 1, 1, hd, 1, 1.0);
+
+    // scores=[0, 1] → softmax=[1/(1+e), e/(1+e)]
+    const e = @exp(@as(f32, 1.0));
+    const w0 = 1.0 / (1.0 + e);
+    const w1 = e / (1.0 + e);
+    // output = w0*0.5 + w1*0.25
+    const expected = w0 * 0.5 + w1 * 0.25;
+    for (0..hd) |i| try std.testing.expectApproxEqAbs(expected, output[i], 1e-4);
 }

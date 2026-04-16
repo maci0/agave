@@ -5,26 +5,31 @@
 <div class="sidebar-overlay" id="sidebar-overlay" onclick="toggleSidebar()" role="presentation"></div>
 <header>
 <div class="logo">
-<button class="hdr-btn menu-btn" onclick="toggleSidebar()" title="Menu" aria-label="Toggle sidebar" aria-expanded="false" id="menu-btn">&#9776;</button>
-<h1>&#127797; agave</h1><span class="model-badge" id="model-name">loading...</span></div>
+<button class="hdr-btn menu-btn" onclick="toggleSidebar()" title="Menu" aria-label="Toggle sidebar" aria-expanded="false" aria-controls="sidebar" id="menu-btn">&#9776;</button>
+<h1>&#127797; agave</h1><span class="model-badge" id="model-name">loading...</span><span class="ctx-badge" id="ctx-badge"></span></div>
 <div class="hdr-btns">
 <button class="new-chat-btn" onclick="newConv()" aria-label="New conversation">+ New</button>
-<button class="hdr-btn" onclick="clearChat()" title="Clear chat" aria-label="Clear conversation"><span class="btn-text">Clear </span>&#10005;</button>
+<button class="hdr-btn" onclick="exportConv()" title="Export conversation" aria-label="Export conversation"><span class="btn-text">Export </span>&#8681;</button>
+<button class="hdr-btn" onclick="clearChat()" title="Clear conversation" aria-label="Clear conversation"><span class="btn-text">Clear </span>&#10005;</button>
 <button class="hdr-btn" onclick="showInfo()" title="About" aria-label="About Agave"><span class="btn-text">Info </span>&#9432;</button>
 </div>
 </header>
 <div class="layout">
 <aside class="sidebar" id="sidebar" role="navigation" aria-label="Conversations">
+<div class="sidebar-hdr">
+<span class="sidebar-title">Chats</span>
+<button class="new-chat-btn" onclick="newConv()" aria-label="New conversation">+ New</button>
+</div>
 <div class="conv-list" id="conv-list"><div class="conv-empty">No conversations yet</div></div>
 </aside>
 <div class="main" role="main">
-<div id="chat" role="log" aria-live="polite" aria-relevant="additions">
+<div id="chat" role="log" aria-live="off" tabindex="0">
 <div id="empty">
 <div class="icon">&#127797;</div><h2>agave</h2>
 <p>High-performance LLM inference engine</p>
 <div class="hints">
 <span class="hint">Type a message to start</span>
-<span class="hint">/help for commands</span>
+<button class="hint" type="button" onclick="handleCommand('/help')">/help for commands</button>
 <span class="hint">Shift+Enter for new line</span>
 </div>
 </div>
@@ -32,7 +37,7 @@
 <div class="modal-overlay" id="info-modal" onclick="if(event.target===this)hideInfo()" role="dialog" aria-modal="true" aria-labelledby="modal-title">
 <div class="modal">
 <div class="modal-head">
-<span class="modal-title" id="modal-title">&#127797; About Agave</span>
+<h2 class="modal-title" id="modal-title">&#127797; About Agave</h2>
 <button class="modal-close" onclick="hideInfo()" aria-label="Close dialog">&#10005;</button>
 </div>
 <div class="modal-body">
@@ -57,10 +62,38 @@
 </div>
 <div id="sr-announce" class="sr-only" aria-live="polite" aria-atomic="true"></div>
 <form id="chat-form" onsubmit="return onSubmit(event)">
+<div id="img-preview" class="img-preview" style="display:none">
+<img id="img-thumb" alt="Image preview">
+<button type="button" class="img-remove" onclick="removeImage()" aria-label="Remove image">&times;</button>
+</div>
+<div class="settings-panel" id="settings-panel">
+<div class="settings-grid">
+<div class="setting-group">
+<label for="temperature">Temperature <span class="setting-val" id="temp-val">0.0</span></label>
+<input type="range" id="temperature" min="0" max="2" step="0.1" value="0">
+</div>
+<div class="setting-group">
+<label for="top-p">Top-P <span class="setting-val" id="topp-val">1.00</span></label>
+<input type="range" id="top-p" min="0" max="1" step="0.05" value="1.0">
+</div>
+<div class="setting-group">
+<label for="max-tokens">Max Tokens</label>
+<input type="number" id="max-tokens" min="1" max="4096" value="512" inputmode="numeric">
+</div>
+</div>
+<div class="system-prompt-group">
+<div class="system-prompt-header"><label for="system-prompt">System Prompt</label><button type="button" class="system-prompt-clear" onclick="clearSystemPrompt()" aria-label="Clear system prompt">clear</button></div>
+<textarea id="system-prompt" placeholder="Optional system prompt..." rows="2"></textarea>
+</div>
+</div>
 <div class="input-row">
-<textarea id="msg" placeholder="Send a message..." rows="1" aria-label="Message input" autofocus></textarea>
+<input type="file" id="img-input" accept="image/jpeg,image/png,image/gif,image/webp" style="display:none" onchange="onImageSelect(event)">
+<button type="button" class="hdr-btn img-btn" onclick="document.getElementById('img-input').click()" title="Attach image" aria-label="Attach image">&#128247;</button>
+<textarea id="msg" placeholder="Send a message..." rows="1" aria-label="Message input" enterkeyhint="send" autocomplete="off" autofocus></textarea>
+<button type="button" class="settings-toggle" id="settings-toggle" onclick="toggleSettings()" title="Sampling settings" aria-label="Toggle settings panel" aria-expanded="false" aria-controls="settings-panel">&#9881;</button>
 <button type="submit" class="send-btn" id="send-btn" aria-label="Send message">Send</button>
 <button type="button" class="stop-btn" id="stop-btn" onclick="stopGen()" aria-label="Stop generation">Stop</button>
+<span class="toks-counter" id="toks-counter" aria-label="Generation speed"></span>
 </div>
 <div class="input-hint">Enter to send &middot; Shift+Enter for new line &middot; Escape to stop</div>
 </form>

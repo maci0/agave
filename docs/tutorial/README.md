@@ -62,7 +62,7 @@ Understand how the codebase is structured:
 - [**Chapter 8: Backends**](08-backends.md) — Tagged union dispatch pattern
 - [**Chapter 14: Format Conventions**](14-format-conventions.md) — GGUF vs SafeTensors differences
 - [**Chapter 15: Chat Templates**](15-chat-templates.md) — Data-driven configuration
-- [**Chapter 16: Recipe System**](16-recipe-system.md) — Per-model/hardware defaults
+- [**Chapter 16: Configuration and Recipes**](16-recipe-system.md) — Per-model/hardware defaults
 
 ## Reading Order
 
@@ -83,7 +83,7 @@ Understand how the codebase is structured:
 | 13 | [Batched Dispatch and Fusion](13-batched-dispatch-and-fusion.md) | gemvMulti, fused ops (addRmsNorm, siluMul, splitQGate), batch mode |
 | 14 | [Format Conventions](14-format-conventions.md) | GGUF vs SafeTensors differences, tensor layout, metadata mapping |
 | 15 | [Chat Templates](15-chat-templates.md) | Data-driven role markers, EOG tokens, multi-turn formatting |
-| 16 | [Recipe System](16-recipe-system.md) | Proven defaults per model+hardware, user override semantics |
+| 16 | [Configuration and Recipes](16-recipe-system.md) | Proven defaults per model+hardware, user override semantics |
 
 **Appendices:**
 - [Mathematical Operations Reference](appendix-math.md) — Quick reference for all math operations (dot product, softmax, GEMV, convolution, etc.)

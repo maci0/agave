@@ -4,6 +4,9 @@
 
 const cu = @import("common.zig");
 
+/// FP8 E4M3 denormal scale: 2^(-6) / 8 = 2^(-9).
+const fp8_e4m3_denorm_scale: f32 = 1.0 / 512.0;
+
 /// Precomputed FP8 E4M3 → f32 lookup table (built at comptime on host).
 /// Embedded into the kernel binary — no runtime computation.
 const fp8e4m3_lut = blk: {
@@ -34,7 +37,7 @@ fn fp8e4m3Compute(val: u8) f32 {
     // Denormal: 2^(-6) / 8 = 2^(-9)
     if (exp == 0) {
         const fmant: f32 = @floatFromInt(mant);
-        const val_abs: f32 = fmant * (1.0 / 512.0);
+        const val_abs: f32 = fmant * fp8_e4m3_denorm_scale;
         return @bitCast(sign | @as(u32, @bitCast(val_abs)));
     }
 

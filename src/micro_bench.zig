@@ -5,17 +5,15 @@
 //! and CI regression tracking.
 //!
 //! Usage:
-//!   agave-bench <kernel_name> [--n=N] [--k=K] [--iters=N] [--backend=cpu|metal|vulkan|cuda]
-//!   agave-bench e2e --model=<path> --backend=X -n N
+//!   agave-bench <kernel_name> [--n N] [--k K] [--iters N] [--backend cpu|metal|vulkan|cuda]
+//!   agave-bench e2e --model <path> --backend X -n N
 //!
 //! Examples:
-//!   agave-bench gemv_f32 --n=4096 --k=4096 --iters=50
+//!   agave-bench gemv_f32 --n 4096 --k 4096 --iters 50
 //!   agave-bench rms_norm --n=4096 --backend=metal
-//!   agave-bench sdpa --n=32 --k=128 --iters=20
+//!   agave-bench sdpa --n 32 --k 128 --iters 20
 
 const std = @import("std");
-const builtin = @import("builtin");
-const build_options = @import("build_options");
 
 const backend_mod = @import("backend/backend.zig");
 const Backend = backend_mod.Backend;
@@ -29,7 +27,6 @@ const model_mod = @import("models/model.zig");
 const Model = model_mod.Model;
 const tok_mod = @import("tokenizer/tokenizer.zig");
 const BpeTokenizer = tok_mod.BpeTokenizer;
-const ChatTemplate = @import("chat_template.zig").ChatTemplate;
 const arch_mod = @import("arch.zig");
 const Arch = arch_mod.Arch;
 const TokenizerKind = tok_mod.TokenizerKind;
@@ -76,12 +73,12 @@ const synthetic_w_scale: f32 = 0.001;
 const synthetic_w_offset: f32 = -0.015;
 /// Buffer size for formatted output.
 const output_buf_size: usize = 4096;
-/// Q8_0 block: 2 bytes f16 scale + 32 bytes i8 data = 34 bytes per 32 elements.
-const q8_0_block_bytes: usize = 34;
-/// Q4_0 block: 2 bytes f16 scale + 16 bytes nibble data = 18 bytes per 32 elements.
-const q4_0_block_bytes: usize = 18;
-/// Elements per quantization block (Q8_0, Q4_0).
-const quant_group_size: usize = 32;
+/// Q8_0 block bytes. Canonical source: backend/backend.zig.
+const q8_0_block_bytes = backend_mod.q8_0_block_bytes;
+/// Q4_0 block bytes. Canonical source: backend/backend.zig.
+const q4_0_block_bytes = backend_mod.q4_0_block_bytes;
+/// Elements per quantization block (Q8_0, Q4_0). Canonical source: backend/backend.zig.
+const quant_group_size = backend_mod.quant_block_elems;
 /// Synthetic f16 scale value byte 0 (little-endian f16 ~ 0.00875).
 const synthetic_scale_byte_0: u8 = 0x1E;
 /// Synthetic f16 scale value byte 1 (paired with byte 0 above).
@@ -221,53 +218,53 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
     } else {
         result.kernel = parseKernelName(positional.?) orelse {
             eprint("Error: unknown kernel '{s}'\n", .{positional.?});
-            eprint("Valid kernels: gemv_f32 gemv_bf16 gemv_f16 gemv_q8_0 gemv_q4_0\n", .{});
-            eprint("               rms_norm silu gelu softmax l2_norm add mul rope\n", .{});
-            eprint("               sdpa sdpa_turbo4 sdpa_turbo3 sdpa_turbo2\n", .{});
-            eprint("Run 'agave-bench --help' for usage information.\n", .{});
+            eprint("  Valid kernels: gemv_f32 gemv_bf16 gemv_f16 gemv_q8_0 gemv_q4_0\n", .{});
+            eprint("                 rms_norm silu gelu softmax l2_norm add mul rope\n", .{});
+            eprint("                 sdpa sdpa_turbo4 sdpa_turbo3 sdpa_turbo2\n", .{});
+            eprint("Run 'agave-bench --help' for more information.\n", .{});
             std.process.exit(1);
         };
     }
 
-    // Parse remaining --key=value args
-    for (all_args[1..n_args]) |arg| {
-        if (parseKeyValue(arg, "--n")) |v| {
+    // Parse remaining flags (supports both --key=value and --key value forms).
+    const args_slice = all_args[0..n_args];
+    var i: usize = 1; // skip positional[0] (kernel name)
+    while (i < n_args) : (i += 1) {
+        if (getArgValue(args_slice, &i, "--n") orelse getArgValue(args_slice, &i, "-n")) |v| {
             result.n = std.fmt.parseInt(usize, v, 10) catch {
                 eprint("Error: invalid value for --n: '{s}'\n", .{v});
+                eprint("Run 'agave-bench --help' for more information.\n", .{});
                 std.process.exit(1);
             };
             n_was_set = true;
-        } else if (parseKeyValue(arg, "--k")) |v| {
+        } else if (getArgValue(args_slice, &i, "--k") orelse getArgValue(args_slice, &i, "-k")) |v| {
             result.k = std.fmt.parseInt(usize, v, 10) catch {
                 eprint("Error: invalid value for --k: '{s}'\n", .{v});
+                eprint("Run 'agave-bench --help' for more information.\n", .{});
                 std.process.exit(1);
             };
-        } else if (parseKeyValue(arg, "--iters")) |v| {
+        } else if (getArgValue(args_slice, &i, "--iters")) |v| {
             result.iters = std.fmt.parseInt(usize, v, 10) catch {
                 eprint("Error: invalid value for --iters: '{s}'\n", .{v});
+                eprint("Run 'agave-bench --help' for more information.\n", .{});
                 std.process.exit(1);
             };
             if (result.iters > max_samples) {
                 eprint("Warning: clamping iters to {d}\n", .{max_samples});
                 result.iters = max_samples;
             }
-        } else if (parseKeyValue(arg, "--backend")) |v| {
+        } else if (getArgValue(args_slice, &i, "--backend")) |v| {
             result.backend = parseBackendName(v) orelse {
                 eprint("Error: unknown backend '{s}'\n", .{v});
-                eprint("Valid backends: cpu, metal, vulkan, cuda, rocm\n", .{});
+                eprint("  Valid options: auto, cpu, metal, vulkan, cuda, rocm\n", .{});
+                eprint("Run 'agave-bench --help' for more information.\n", .{});
                 std.process.exit(1);
             };
-        } else if (parseKeyValue(arg, "--model")) |v| {
+        } else if (getArgValue(args_slice, &i, "--model")) |v| {
             result.model_path = v;
-        } else if (parseKeyValue(arg, "-n")) |v| {
-            result.n = std.fmt.parseInt(usize, v, 10) catch {
-                eprint("Error: invalid value for -n: '{s}'\n", .{v});
-                std.process.exit(1);
-            };
-            n_was_set = true;
         } else {
-            eprint("Error: unknown argument '{s}'\n", .{arg});
-            eprint("Run 'agave-bench --help' for usage information.\n", .{});
+            eprint("Error: unknown argument '{s}'\n", .{args_slice[i]});
+            eprint("Run 'agave-bench --help' for more information.\n", .{});
             std.process.exit(1);
         }
     }
@@ -283,6 +280,14 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
         result.n = default_gen_tokens;
     }
 
+    // Validate e2e mode requires --model before we spend time initializing backends
+    if (result.mode == .e2e and result.model_path == null) {
+        eprint("Error: --model is required for e2e mode\n", .{});
+        eprint("  Example: agave-bench e2e --model model.gguf --backend cpu\n", .{});
+        eprint("Run 'agave-bench --help' for more information.\n", .{});
+        std.process.exit(1);
+    }
+
     return result;
 }
 
@@ -296,6 +301,25 @@ fn parseKeyValue(arg: []const u8, key: []const u8) ?[]const u8 {
     };
     if (prefix_eq) {
         return arg[key.len + 1 ..];
+    }
+    return null;
+}
+
+/// Extracts the value for a flag, supporting both `--key=value` and `--key value` forms.
+/// Advances `i` past the consumed value when using the space-separated form.
+fn getArgValue(args: []const []const u8, i: *usize, key: []const u8) ?[]const u8 {
+    const arg = args[i.*];
+    // Try --key=value form first.
+    if (parseKeyValue(arg, key)) |v| return v;
+    // Try --key value (space-separated) form.
+    if (std.mem.eql(u8, arg, key)) {
+        if (i.* + 1 < args.len) {
+            i.* += 1;
+            return args[i.*];
+        }
+        eprint("Error: {s} requires a value\n", .{key});
+        eprint("Run 'agave-bench --help' for more information.\n", .{});
+        std.process.exit(1);
     }
     return null;
 }
@@ -326,19 +350,19 @@ fn printUsage() void {
         \\  sdpa  sdpa_turbo4  sdpa_turbo3  sdpa_turbo2
         \\
         \\OPTIONS:
-        \\  -h, --help     Show this help message
-        \\  -v, --version  Print version
-        \\  --n=N          Kernel: output dimension [default: 4096]
-        \\                 E2E: tokens to generate [default: 10]
-        \\  --k=K          Input dimension for GEMV [default: 4096]
-        \\  --iters=N      Number of timed iterations [default: 100, max: 1000]
-        \\  --backend=X    Compute backend: cpu, metal, vulkan, cuda, rocm [default: cpu]
-        \\  --model=PATH   Model file or directory (required for e2e mode)
+        \\  -h, --help       Show this help message
+        \\  -v, --version    Print version
+        \\  -n, --n <N>      Kernel: output dimension [default: 4096]
+        \\                   E2E: tokens to generate [default: 10]
+        \\  -k, --k <K>      Input dimension for GEMV [default: 4096]
+        \\  --iters <N>      Number of timed iterations [default: 100, max: 1000]
+        \\  --backend <X>    Compute backend: auto, cpu, metal, vulkan, cuda, rocm [default: cpu]
+        \\  --model <PATH>   Model file or directory (required for e2e mode)
         \\
         \\EXAMPLES:
-        \\  agave-bench gemv_f32 --n=4096 --k=4096 --iters=50
+        \\  agave-bench gemv_f32 --n 4096 --k 4096 --iters 50
         \\  agave-bench rms_norm --n=4096 --backend=metal
-        \\  agave-bench e2e --model=model.gguf --backend=cpu -n=10
+        \\  agave-bench e2e --model model.gguf --backend cpu --n 10
         \\
     ;
     stdout_file.writeAll(usage) catch {};
@@ -362,7 +386,7 @@ fn collectMedian(
     // Collect samples
     var samples: [max_samples]u64 = undefined;
     const n = @min(iters, max_samples);
-    var timer = std.time.Timer.start() catch unreachable;
+    var timer = std.time.Timer.start() catch @panic("Timer.start failed — OS timer unavailable");
 
     for (0..n) |i| {
         timer.reset();
@@ -568,7 +592,7 @@ fn benchKernel(kernel: Kernel, be: Backend, be_name: []const u8, n: usize, k: us
                 .td = td,
             };
             const median_ns = collectMedian(runGemv, &ctx, iters);
-            // GEMV: read w[n*k] + x[k], write y[n]. Flops: 2*n*k (multiply + add).
+            // GEMV: read w[n*k] + x[k], write y[n]. Flops: ~2*n*k (k muls + k-1 adds per row).
             const total_bytes = n * k * @sizeOf(f32) + k * @sizeOf(f32) + n * @sizeOf(f32);
             const total_flops = 2 * n * k;
             emitJson("gemv_f32", be_name, median_ns, computeGbps(total_bytes, median_ns), computeGflops(total_flops, median_ns), iters);
@@ -860,8 +884,8 @@ fn benchKernel(kernel: Kernel, be: Backend, be_name: []const u8, n: usize, k: us
             const median_ns = collectMedian(runRope, &ctx, iters);
             // In-place: read + write total elements
             const total_bytes = 2 * total * @sizeOf(f32);
-            // Flops: sin/cos pairs per half-dim per head ~ 6 * total
-            const total_flops = 6 * total;
+            // Flops: ~4 ops per element (2 rotations × 2 muls); sin/cos precomputed
+            const total_flops = 4 * total;
             emitJson("rope", be_name, median_ns, computeGbps(total_bytes, median_ns), computeGflops(total_flops, median_ns), iters);
         },
 
@@ -904,16 +928,14 @@ fn benchKernel(kernel: Kernel, be: Backend, be_name: []const u8, n: usize, k: us
             const dummy = page.alloc(f32, 1) catch return;
             defer page.free(dummy);
 
-            var keys: []u8 = undefined;
-            var values: []u8 = undefined;
+            // Allocate KV buffers at this scope so defers outlive the benchmark.
+            const kv_bytes = if (is_turbo) kv_quant.kvSliceBytes(kv_type, total_kv_elems) else total_kv_elems * @sizeOf(f32);
+            const keys_buf = page.alloc(u8, kv_bytes) catch return;
+            defer page.free(keys_buf);
+            const values_buf = page.alloc(u8, kv_bytes) catch return;
+            defer page.free(values_buf);
 
             if (is_turbo) {
-                // Allocate byte-sized KV cache for turbo types
-                const kv_bytes = kv_quant.kvSliceBytes(kv_type, total_kv_elems);
-                const keys_buf = page.alloc(u8, kv_bytes) catch return;
-                defer page.free(keys_buf);
-                const values_buf = page.alloc(u8, kv_bytes) catch return;
-                defer page.free(values_buf);
                 @memset(keys_buf, 0);
                 @memset(values_buf, 0);
 
@@ -927,19 +949,15 @@ fn benchKernel(kernel: Kernel, be: Backend, be_name: []const u8, n: usize, k: us
                     fillSyntheticF32(tmp, sdpa_v_mod + pos, sdpa_kv_scale, sdpa_v_offset);
                     kv_quant.kvStore(values_buf.ptr + byte_off, tmp.ptr, kv_dim, kv_type);
                 }
-                keys = keys_buf;
-                values = values_buf;
             } else {
-                // f32 path: allocate as f32, reinterpret as bytes
-                const keys_f32 = page.alloc(f32, total_kv_elems) catch return;
-                defer page.free(keys_f32);
-                const values_f32 = page.alloc(f32, total_kv_elems) catch return;
-                defer page.free(values_f32);
+                // f32 path: fill synthetic data via f32 view
+                const keys_f32: []f32 = @alignCast(std.mem.bytesAsSlice(f32, keys_buf));
+                const values_f32: []f32 = @alignCast(std.mem.bytesAsSlice(f32, values_buf));
                 fillSyntheticF32(keys_f32, sdpa_k_mod, sdpa_kv_scale, sdpa_k_offset);
                 fillSyntheticF32(values_f32, sdpa_v_mod, sdpa_kv_scale, sdpa_v_offset);
-                keys = std.mem.sliceAsBytes(keys_f32);
-                values = std.mem.sliceAsBytes(values_f32);
             }
+            const keys = keys_buf;
+            const values = values_buf;
 
             var ctx = BenchCtx{
                 .be = be,
@@ -966,7 +984,7 @@ fn benchKernel(kernel: Kernel, be: Backend, be_name: []const u8, n: usize, k: us
             else
                 2 * total_kv_elems * @sizeOf(f32);
             const total_bytes = 2 * total_q * @sizeOf(f32) + kv_bytes_total;
-            // Flops: per head: 2*sl*hd (QK^T) + 2*sl (softmax approx) + 2*sl*hd (attn@V)
+            // Flops: per head: 2*sl*hd (QK^T) + ~3*sl (softmax: max+exp+norm) + 2*sl*hd (attn@V)
             // Turbo adds WHT overhead: ~5*32 adds per 32-element block for dequant
             const total_flops = n_heads * (4 * seq_len * head_dim + 2 * seq_len);
             const kernel_name = switch (kernel) {
@@ -989,10 +1007,8 @@ fn benchKernel(kernel: Kernel, be: Backend, be_name: []const u8, n: usize, k: us
 ///   - allocator: Memory allocator for model/tokenizer init.
 ///   - cli: Parsed CLI arguments (model_path, backend, n = gen_tokens).
 fn runE2e(allocator: std.mem.Allocator, cli: CliArgs) u8 {
-    const model_path = cli.model_path orelse {
-        eprint("Error: --model=<path> is required for e2e mode\n", .{});
-        return 1;
-    };
+    // model_path guaranteed by parseCli validation
+    const model_path = cli.model_path.?;
     const gen_tokens = cli.n;
 
     // ── Load model format ────────────────────────────────────────
@@ -1107,7 +1123,7 @@ fn runE2eWithArch(
     quant: []const u8,
 ) void {
     const ModelStorage = model_mod.ModelStorage;
-    var mdl = ModelStorage.initFromArch(arch, allocator, fmt, be, 0, .f32, .f32, null) catch |e| {
+    var mdl = ModelStorage.initFromArch(arch, allocator, fmt, be, 0, .f32, .f32, 0, 0, null) catch |e| {
         eprint("Error: failed to initialize {s}: {}\n", .{ arch.displayName(), e });
         return;
     };

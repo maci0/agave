@@ -1,14 +1,13 @@
 //! DeltaNet SSM kernels for ROCm.
-//! Full GPU pipeline will be implemented in future optimization pass.
-//! Currently provides basic infrastructure; models using DeltaNet should
-//! fall back to CPU via rocm.zig wrapper until kernels are fully optimized.
+//! Gate/beta and conv1d kernels are loaded by rocm.zig, but the top-level
+//! deltaNet dispatch still @panics — full recurrence kernel not yet ported.
 
 const cu = @import("common.zig");
 
 /// Softplus stability threshold: for x > this value, softplus(x) ≈ x.
 const softplus_threshold: f32 = 20.0;
 
-/// Placeholder gate/beta computation kernel.
+/// Gate/beta computation kernel (loaded by rocm.zig, used by sub-ops).
 /// gate[h] = ssm_a[h] * softplus(alpha[h] + dt_bias[h])
 /// beta[h] = sigmoid(beta_in[h])
 export fn deltanet_gate_beta_kernel(
@@ -30,7 +29,7 @@ export fn deltanet_gate_beta_kernel(
     beta_out[idx] = cu.sigmoidf(beta_in[idx]);
 }
 
-/// Placeholder conv1d + SiLU kernel.
+/// Conv1d + SiLU kernel.
 /// Each thread handles one channel.
 export fn deltanet_conv1d_kernel(
     conv_in: [*]const f32,

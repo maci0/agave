@@ -25,9 +25,7 @@ const TieredBlockAllocator = block_alloc_mod.TieredBlockAllocator;
 const TieredKvCache = @import("../kvcache/tiered.zig").TieredKvCache;
 
 const Backend = backend_mod.Backend;
-const TensorData = backend_mod.TensorData;
 const Format = format_mod.Format;
-const TensorInfo = format_mod.TensorInfo;
 const Model = model_mod.Model;
 const Allocator = std.mem.Allocator;
 const kv_quant = @import("../ops/kv_quant.zig");
@@ -206,7 +204,7 @@ pub const NemotronHModel = struct {
             n_ffn += 1;
         }
 
-        std.log.warn("[nemotron_h] Detected {} SSM, {} attention, {} ffn_only layers", .{ n_ssm, n_attn, n_ffn });
+        std.log.info("[nemotron_h] Detected {} SSM, {} attention, {} ffn_only layers", .{ n_ssm, n_attn, n_ffn });
 
         // ── Derived sizes ─────────────────────────────────────────
         const qd: usize = @as(usize, self.n_head) * self.head_dim;
@@ -290,11 +288,7 @@ pub const NemotronHModel = struct {
                     self.ssm_states[i] = try allocator.alloc(f32, state_per_layer);
                     @memset(self.ssm_states[i], 0);
                 },
-                .attention => {
-                    self.conv_states[i] = &.{};
-                    self.ssm_states[i] = &.{};
-                },
-                .ffn_only => {
+                .attention, .ffn_only => {
                     self.conv_states[i] = &.{};
                     self.ssm_states[i] = &.{};
                 },
@@ -358,7 +352,8 @@ pub const NemotronHModel = struct {
         );
 
         for (0..self.n_layers) |li| {
-            if (self.cancelled.load(.acquire)) return error.Cancelled;
+            if (self.cancelled.load(.monotonic)) return error.Cancelled;
+            self.fmt.prefetchLayer(@intCast(li + 1));
             const l: u32 = @intCast(li);
 
             switch (self.layer_types[li]) {
@@ -373,18 +368,12 @@ pub const NemotronHModel = struct {
         const ow = self.fmt.getTensor("output.weight") orelse
             self.fmt.getTensor("token_embd.weight") orelse return error.MissingTensor;
         self.kv_seq_len += 1;
-        const result = math_ops.finalLogits(
-            self.hidden.ptr,
-            nw.data_ptr,
-            .{ .data = ow.data_ptr, .dtype = ow.dtype },
-            self.logits_buf,
-            self.vocab_size,
-            self.n_embd,
-            self.rms_eps,
-            self.be,
-        );
 
-        return result;
+        // Final norm → LM head → argmax
+        self.be.rmsNorm(self.hidden.ptr, @ptrCast(@alignCast(nw.data_ptr)), self.hidden.ptr, self.n_embd, self.rms_eps);
+        self.be.gemv(self.hidden.ptr, .{ .data = ow.data_ptr, .dtype = ow.dtype }, self.logits_buf.ptr, self.vocab_size, self.n_embd);
+        self.be.sync(); // GPU wrote logits — sync before CPU argmax
+        return math_ops.argmax(self.logits_buf);
     }
 
     /// Batched prefill — sequential. Mamba-2 SSM layers require sequential
@@ -444,13 +433,13 @@ pub const NemotronHModel = struct {
     fn ssmLayer(self: *NemotronHModel, li: u32) !void {
         const e: usize = self.n_embd;
         const d_inner: usize = self.ssm_d_inner;
-        const num_heads: usize = self.ssm_dt_rank; // = num_mamba_heads = 96
-        const mamba_head_dim: usize = d_inner / num_heads; // 80
-        const d_state: usize = self.ssm_d_state; // 128
-        const n_group: usize = self.ssm_n_group; // 8
-        const heads_per_group: usize = num_heads / n_group; // 12
-        const group_state: usize = d_state; // B/C size per group = 128
-        const conv_ch: usize = self.convChannels(); // 9728
+        const num_heads: usize = self.ssm_dt_rank;
+        const mamba_head_dim: usize = d_inner / num_heads;
+        const d_state: usize = self.ssm_d_state;
+        const n_group: usize = self.ssm_n_group;
+        const heads_per_group: usize = num_heads / n_group;
+        const group_state: usize = d_state; // B/C size per group
+        const conv_ch: usize = self.convChannels();
         const d_conv: usize = self.ssm_d_conv; // 4
 
         std.debug.assert(num_heads % n_group == 0);
@@ -651,7 +640,4 @@ test "NemotronHModel convChannels default" {
     try std.testing.expectEqual(@as(usize, 17504), proj);
 }
 
-test "argmax" {
-    const buf = [_]f32{ 1.0, 3.0, 2.0, 0.5 };
-    try std.testing.expectEqual(@as(u32, 1), math_ops.argmax(&buf));
-}
+// argmax is tested in src/ops/math.zig — no need to duplicate here.

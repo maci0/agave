@@ -336,12 +336,13 @@ Example from `src/backend/kernels/metal/sdpa.metal`:
 kernel void sdpa(
     // ...
 ) {
-    threadgroup float q_local[128];              // 512 bytes
-    threadgroup float kv_block[16 * 256];        // 16 KB (16 positions × 256 max head_dim)
-    threadgroup float scores[128];               // 512 bytes
-    threadgroup float out_acc[128 * 4];          // 2 KB (4 GQA groups × 128 threads)
+    threadgroup float q_local[256];              // 1 KB (sdpa_max_head_dim)
+    threadgroup float kv_block[16 * 256];        // 16 KB (sdpa_block_size × sdpa_max_head_dim)
+    threadgroup float scores[16];                // 64 bytes (sdpa_block_size)
+    threadgroup float out_acc[256];              // 1 KB (sdpa_max_head_dim)
+    threadgroup float shared[8];                 // 32 bytes (SIMD group reduction scratch)
 
-    // Total: 512 + 16384 + 512 + 2048 = 19.5 KB (fits under 32 KB)
+    // Total: 1024 + 16384 + 64 + 1024 + 32 = 18.5 KB (fits under 32 KB)
 }
 ```
 
@@ -394,6 +395,55 @@ fn flush(...) void {
 
 **Example:** Qwen3.5 reduced sync count from 18 → 1 per token by moving Q/gate split to GPU → 15% faster.
 
+## BF16 GEMM Kernel
+
+The Metal backend includes a `gemm_bf16` kernel (in `gemm.metal`) for batched matrix multiplications with bf16 or f16 weights. It is used in two contexts:
+
+1. **Vision encoder:** The vision encoder's linear projections (Q, K, V, FFN) use batched GEMM since they process all patches simultaneously (e.g., 256 patches for a 768x768 image). The `gemm()` function dispatches to `gemm_bf16` when weights are bf16 or f16.
+
+2. **Batched prefill:** During chunked prefill, multiple prompt tokens are processed together. Each chunk's linear projections use GEMM instead of per-token GEMV.
+
+```zig
+// src/backend/metal.zig — GEMM dtype dispatch
+pub fn gemm(self: *MetalBackend, x: [*]const f32, w: TensorData, y: [*]f32,
+            n_tok: usize, n_out: usize, n_in: usize) void {
+    if (n_tok <= 1) {
+        self.gemv(x, w, y, n_out, n_in);  // Single token → GEMV
+        return;
+    }
+    const pipeline: objc.id = switch (w.dtype) {
+        .f32 => self.pipe_gemm_f32,
+        .bf16, .f16 => self.pipe_gemm_bf16,
+        .q8_0 => self.pipe_gemm_q8_0,
+        .q4_0 => self.pipe_gemm_q4_0,
+        else => @panic("Metal GEMM: unsupported dtype — add GPU kernel"),
+    };
+    // ... encode dispatch with one threadgroup per output row
+}
+```
+
+The kernel tiles across tokens (`TILE_T=8`) to reuse weight data loaded into threadgroup memory across multiple input vectors. Each threadgroup handles one output row.
+
+## Vision Encoder GPU Acceleration
+
+When a vision encoder (mmproj) is loaded, its transformer blocks run on the GPU via the standard `gemm()` dispatch. The vision encoder calls `be.gemm()` for all linear projections (Q/K/V/O, FFN up/gate/down, output projection), which dispatches to the appropriate Metal kernel based on weight dtype — f32, bf16, q8_0, or q4_0.
+
+The key synchronization pattern: `be.sync()` is required between GPU GEMM operations and CPU operations (like softmax or activation functions that run on the CPU thread pool). Without it, the CPU reads stale data from shared UMA memory.
+
+```
+Vision encoder forward pass (per transformer block):
+  1. GPU: gemm(hidden, W_q) → q_buf     (Metal dispatch, no sync)
+  2. GPU: gemm(hidden, W_k) → k_buf     (Metal dispatch, no sync)
+  3. GPU: gemm(hidden, W_v) → v_buf     (Metal dispatch, no sync)
+  4. be.sync()                           (flush command buffer)
+  5. CPU: attention scores + softmax     (thread pool)
+  6. GPU: gemm(attn_out, W_o) → hidden  (Metal dispatch)
+  7. be.sync()
+  8. CPU/GPU: FFN layers...
+```
+
+This interleaving is necessary because the vision encoder uses full (non-causal) attention with `n_patches x n_patches` score matrices, which currently runs on the CPU. The GEMM projections — the bulk of the compute — run on the GPU.
+
 ## Best Practices
 
 ### Resource Management
@@ -426,4 +476,4 @@ fn flush(...) void {
 
 **Related:** [Metal Shading Language Specification](https://developer.apple.com/metal/Metal-Shading-Language-Specification.pdf), [Metal Best Practices Guide](https://developer.apple.com/library/archive/documentation/Miscellaneous/Conceptual/MetalProgrammingGuide/)
 
-**Back:** [Chapter 10: Memory Safety ←](10-memory-safety.md) | **Product docs:** [Architecture](../ARCHITECTURE.md)
+**Next:** [Chapter 12: CPU Parallelism →](12-cpu-parallelism.md) | **Back:** [Chapter 10: Memory Safety ←](10-memory-safety.md) | **Product docs:** [Architecture](../ARCHITECTURE.md)

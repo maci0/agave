@@ -27,7 +27,6 @@ const TieredBlockAllocator = block_alloc_mod.TieredBlockAllocator;
 const TieredKvCache = @import("../kvcache/tiered.zig").TieredKvCache;
 
 const Backend = backend_mod.Backend;
-const TensorData = backend_mod.TensorData;
 const Format = format_mod.Format;
 const TensorInfo = format_mod.TensorInfo;
 const Model = model_mod.Model;
@@ -46,9 +45,11 @@ const max_active_experts: usize = 8;
 
 /// Maximum routed experts for stack-allocated sigmoid buffer in MoE routing.
 const max_routed_experts: usize = 256;
+/// Default MLX quantization bit width (4-bit). Canonical source: model.zig.
+const default_mlx_bits = model_mod.default_mlx_bits;
 
-/// Set to true to enable MoE routing diagnostics on stderr (expert indices, score sums).
-const moe_debug = false;
+/// Maximum norm cache entries. 52 layers × up to 4 norms per layer + 1 final = ~209.
+const max_norm_entries: usize = 256;
 
 /// Buffer size for tensor name formatting (layer prefix + suffix).
 const name_buf_size: usize = model_mod.tensor_name_buf_size;
@@ -118,6 +119,15 @@ pub const NemotronNanoModel = struct {
     bf16_buf_large: []f32 = &.{},
     /// Small temp buffer for BF16→f32 conversion (layer norms, biases).
     bf16_buf_small: []f32 = &.{},
+    /// Pre-computed SSM constants per layer (one-time BF16→f32 at init).
+    /// Indexed by layer_idx * mamba_num_heads. Avoids per-token conversion.
+    ssm_a_cache: []f32 = &.{},
+    ssm_d_cache: []f32 = &.{},
+    ssm_dt_bias_cache: []f32 = &.{},
+
+    // ── Norm weight cache (avoids per-token BF16→f32 conversion) ──
+    norm_cache: [max_norm_entries]NormCacheEntry = undefined,
+    norm_cache_len: usize = 0,
 
     // ── Per-layer state ───────────────────────────────────────────
     conv_states: [][]f32 = &.{},
@@ -165,7 +175,7 @@ pub const NemotronNanoModel = struct {
         if (f.getMetaF32("rope_theta")) |v| self.rope_theta = v;
         self.rope_dim = self.head_dim; // partial_rotary_factor = 1.0
         if (f.getMetaF32("routed_scaling_factor")) |v| self.routed_scaling_factor = v;
-        self.mlx_bits = f.getMetaU32("bits") orelse 4;
+        self.mlx_bits = f.getMetaU32("bits") orelse default_mlx_bits;
         if (f.getVocab()) |v| self.vocab_size = @intCast(v.len);
         if (f.getMetaU32("max_position_embeddings")) |v| self.max_seq_len = v;
         if (ctx_size > 0) self.max_seq_len = ctx_size;
@@ -289,6 +299,35 @@ pub const NemotronNanoModel = struct {
             layer_init_count = i + 1;
         }
 
+        // Pre-compute SSM constants (A = -exp(A_log), D, dt_bias) per layer per head
+        // at init to avoid per-token BF16→f32 conversion and -exp() in the hot path.
+        const nh: usize = self.mamba_num_heads;
+        self.ssm_a_cache = try allocator.alloc(f32, nl * nh);
+        errdefer allocator.free(self.ssm_a_cache);
+        self.ssm_d_cache = try allocator.alloc(f32, nl * nh);
+        errdefer allocator.free(self.ssm_d_cache);
+        self.ssm_dt_bias_cache = try allocator.alloc(f32, nl * nh);
+        errdefer allocator.free(self.ssm_dt_bias_cache);
+
+        for (0..nl) |i| {
+            if (self.layer_types[i] != .ssm) continue;
+            const li: u32 = @intCast(i);
+            const off = i * nh;
+            if (self.stLayerTensor(li, "mixer.A_log")) |t| {
+                tensorToF32Buf(t, self.ssm_a_cache[off..][0..nh]);
+                for (self.ssm_a_cache[off..][0..nh]) |*v| v.* = -@exp(v.*);
+            }
+            if (self.stLayerTensor(li, "mixer.D")) |t| {
+                tensorToF32Buf(t, self.ssm_d_cache[off..][0..nh]);
+            }
+            if (self.stLayerTensor(li, "mixer.dt_bias")) |t| {
+                tensorToF32Buf(t, self.ssm_dt_bias_cache[off..][0..nh]);
+            }
+        }
+
+        // Pre-populate norm cache so no BF16→f32 conversions happen during inference.
+        self.warmNormCache();
+
         return self;
     }
 
@@ -301,6 +340,8 @@ pub const NemotronNanoModel = struct {
         }
         self.allocator.free(self.conv_states);
         self.allocator.free(self.ssm_states);
+
+        for (self.norm_cache[0..self.norm_cache_len]) |entry| self.allocator.free(entry.data);
 
         if (self.tiered_block_allocator) |*ta| {
             ta.freeSeqTable(&self.seq_table);
@@ -315,7 +356,8 @@ pub const NemotronNanoModel = struct {
             &self.scores_buf,     &self.ssm_proj_buf, &self.ssm_conv_out,
             &self.ssm_y_buf,      &self.router_buf,   &self.expert_buf,
             &self.moe_out,        &self.logits_buf,   &self.bf16_buf_large,
-            &self.bf16_buf_small,
+            &self.bf16_buf_small, &self.ssm_a_cache,   &self.ssm_d_cache,
+            &self.ssm_dt_bias_cache,
         };
         inline for (bufs) |buf| self.allocator.free(buf.*);
     }
@@ -360,7 +402,8 @@ pub const NemotronNanoModel = struct {
 
         // Transformer layers
         for (0..self.n_layers) |li| {
-            if (self.cancelled.load(.acquire)) return error.Cancelled;
+            if (self.cancelled.load(.monotonic)) return error.Cancelled;
+            self.fmt.prefetchLayer(@intCast(li + 1));
             const l: u32 = @intCast(li);
 
             switch (self.layer_types[li]) {
@@ -370,10 +413,9 @@ pub const NemotronNanoModel = struct {
             }
         }
 
-        // Final norm (BF16) → LM head (BF16) → argmax
+        // Final norm (cached BF16→f32) → LM head → argmax
         const nf = self.fmt.getTensor("backbone.norm_f.weight") orelse return error.MissingTensor;
-        bf16ToF32Buf(nf.data_ptr, self.bf16_buf_small[0..e]);
-        self.be.rmsNorm(self.hidden.ptr, self.bf16_buf_small.ptr, self.hidden.ptr, e, self.rms_eps);
+        self.be.rmsNorm(self.hidden.ptr, self.normAsF32(nf, e), self.hidden.ptr, e, self.rms_eps);
 
         const lm = self.fmt.getTensor("lm_head.weight") orelse return error.MissingTensor;
         if (lm.dtype == .mlx_q) {
@@ -456,11 +498,9 @@ pub const NemotronNanoModel = struct {
         const d_conv: usize = self.ssm_d_conv;
         const proj_size: usize = d_inner + conv_ch + num_heads;
 
-        // 1. Pre-norm (BF16 weights → f32 conversion)
+        // 1. Pre-norm (cached BF16→f32)
         const nw = self.stLayerTensor(li, "norm.weight") orelse return error.MissingTensor;
-        bf16ToF32Buf(nw.data_ptr, self.bf16_buf_small[0..e]);
-        self.be.rmsNorm(self.hidden.ptr, self.bf16_buf_small.ptr, self.hidden2.ptr, e, self.rms_eps);
-        self.be.sync();
+        self.be.rmsNorm(self.hidden.ptr, self.normAsF32(nw, e), self.hidden2.ptr, e, self.rms_eps);
 
         // 2. Input projection (MLX, NVFP4, or BF16 depending on format)
         const ip_w = self.stLayerTensor(li, "mixer.in_proj.weight") orelse return error.MissingTensor;
@@ -478,17 +518,15 @@ pub const NemotronNanoModel = struct {
         const conv_in_ptr = self.ssm_proj_buf.ptr + d_inner;
         const dt_raw_ptr = self.ssm_proj_buf.ptr + d_inner + conv_ch;
 
-        // 3. Causal conv1d (BF16 weights → f32)
+        // 3. Causal conv1d (cached BF16→f32 weights and bias)
         const cw_t = self.stLayerTensor(li, "mixer.conv1d.weight") orelse return error.MissingTensor;
         const cb_t = self.stLayerTensor(li, "mixer.conv1d.bias") orelse return error.MissingTensor;
-        bf16ToF32Buf(cw_t.data_ptr, self.bf16_buf_large[0 .. conv_ch * d_conv]);
-        bf16ToF32Buf(cb_t.data_ptr, self.bf16_buf_small[0..conv_ch]);
         ssm_ops.causalConv1dSilu(
             self.ssm_conv_out.ptr,
             self.conv_states[li].ptr,
             conv_in_ptr,
-            self.bf16_buf_large.ptr,
-            self.bf16_buf_small.ptr,
+            self.normAsF32(cw_t, conv_ch * d_conv),
+            self.normAsF32(cb_t, conv_ch),
             conv_ch,
             d_conv,
         );
@@ -498,18 +536,11 @@ pub const NemotronNanoModel = struct {
         const B_ptr = self.ssm_conv_out.ptr + d_inner;
         const C_ptr = self.ssm_conv_out.ptr + d_inner + n_groups * d_state;
 
-        // 5. Load SSM scalars (BF16 → f32, with A_log → -exp transform)
-        const a_log_t = self.stLayerTensor(li, "mixer.A_log") orelse return error.MissingTensor;
-        const d_t = self.stLayerTensor(li, "mixer.D") orelse return error.MissingTensor;
-        const dt_bias_t = self.stLayerTensor(li, "mixer.dt_bias") orelse return error.MissingTensor;
-        bf16ToF32Buf(a_log_t.data_ptr, self.bf16_buf_large[0..num_heads]);
-        // Convert A_log → A = -exp(A_log)
-        for (0..num_heads) |h| self.bf16_buf_large[h] = -@exp(self.bf16_buf_large[h]);
-        const ssm_a = self.bf16_buf_large.ptr;
-        bf16ToF32Buf(d_t.data_ptr, self.bf16_buf_large[num_heads .. 2 * num_heads]);
-        const ssm_d = self.bf16_buf_large.ptr + num_heads;
-        bf16ToF32Buf(dt_bias_t.data_ptr, self.bf16_buf_large[2 * num_heads .. 3 * num_heads]);
-        const dt_bias = self.bf16_buf_large.ptr + 2 * num_heads;
+        // 5. SSM scalars from init-time cache (no per-token BF16 conversion or -exp)
+        const li_off = @as(usize, li) * num_heads;
+        const ssm_a = self.ssm_a_cache.ptr + li_off;
+        const ssm_d = self.ssm_d_cache.ptr + li_off;
+        const dt_bias = self.ssm_dt_bias_cache.ptr + li_off;
 
         // 6. Mamba-2 autoregressive recurrence
         const state = self.ssm_states[li];
@@ -517,12 +548,9 @@ pub const NemotronNanoModel = struct {
 
         ssm_ops.mamba2Recurrence(y_ptr, state, x_ptr, B_ptr, C_ptr, dt_raw_ptr, dt_bias, ssm_a, ssm_d, num_heads, mhd, d_state, heads_per_group);
 
-        // 7. Group RMS norm + SiLU gate (BF16 norm weight)
+        // 7. Group RMS norm + SiLU gate (cached BF16→f32 norm weight)
         const snw_t = self.stLayerTensor(li, "mixer.norm.weight") orelse return error.MissingTensor;
-        bf16ToF32Buf(snw_t.data_ptr, self.bf16_buf_large[0..d_inner]);
-        const norm_w = self.bf16_buf_large.ptr;
-
-        ssm_ops.groupRmsNormSiluGate(y_ptr, z_ptr, norm_w, d_inner, n_groups, self.rms_eps);
+        ssm_ops.groupRmsNormSiluGate(y_ptr, z_ptr, self.normAsF32(snw_t, d_inner), d_inner, n_groups, self.rms_eps);
 
         // 8. Output projection (MLX, NVFP4, or BF16 depending on format)
         const op_w = self.stLayerTensor(li, "mixer.out_proj.weight") orelse return error.MissingTensor;
@@ -548,10 +576,9 @@ pub const NemotronNanoModel = struct {
         const ff: usize = self.moe_intermediate_size;
         const shared_ff: usize = self.shared_expert_size;
 
-        // 1. Pre-norm (BF16)
+        // 1. Pre-norm (cached BF16→f32)
         const nw = self.stLayerTensor(li, "norm.weight") orelse return error.MissingTensor;
-        bf16ToF32Buf(nw.data_ptr, self.bf16_buf_small[0..e]);
-        self.be.rmsNorm(self.hidden.ptr, self.bf16_buf_small.ptr, self.hidden2.ptr, e, self.rms_eps);
+        self.be.rmsNorm(self.hidden.ptr, self.normAsF32(nw, e), self.hidden2.ptr, e, self.rms_eps);
 
         // 2. Router: GEMV → sigmoid + bias correction
         const gate_w = self.stLayerTensor(li, "mixer.gate.weight") orelse return error.MissingTensor;
@@ -597,18 +624,6 @@ pub const NemotronNanoModel = struct {
         }
         for (0..k_exp) |i| top_scores[i] *= self.routed_scaling_factor;
 
-        // MoE routing diagnostics (compile-time gated, zero cost when disabled)
-        if (comptime moe_debug) {
-            const ds = std.fs.File.stderr();
-            var db: [256]u8 = undefined;
-            ds.writeAll(std.fmt.bufPrint(&db, "[moe] L{d} experts=[{d},{d},{d},{d},{d},{d}] sum={d:.4}\n", .{
-                li,
-                top_experts[0], top_experts[1], top_experts[2],
-                top_experts[3], top_experts[4], top_experts[5],
-                score_sum,
-            }) catch "") catch {};
-        }
-
         // 4. Routed expert computation
         @memset(self.moe_out, 0);
         const fc1_w = self.stLayerTensor(li, "mixer.switch_mlp.fc1.weight") orelse return error.MissingTensor;
@@ -629,8 +644,8 @@ pub const NemotronNanoModel = struct {
             try self.doExpertGemv(li, fc2_w, "mixer.switch_mlp.fc2", self.expert_buf.ptr, self.attn_out.ptr, e, ff, exp_idx);
             self.be.sync(); // CPU reads attn_out next
 
-            // Accumulate weighted output
-            for (0..e) |i| self.moe_out[i] += w * self.attn_out[i];
+            // Accumulate weighted output (SIMD via backend addScaled).
+            self.be.addScaled(self.attn_out.ptr, self.moe_out.ptr, w, e);
         }
 
         // 5. Shared expert
@@ -644,7 +659,7 @@ pub const NemotronNanoModel = struct {
         try self.doSharedExpertGemv(li, sdp_w, "mixer.shared_experts.down_proj", self.expert_buf.ptr, self.attn_out.ptr, e, shared_ff);
         self.be.sync(); // CPU reads attn_out next
 
-        for (0..e) |i| self.moe_out[i] += self.attn_out[i];
+        self.be.addScaled(self.attn_out.ptr, self.moe_out.ptr, 1.0, e);
 
         // 6. Residual
         self.be.add(self.hidden.ptr, self.moe_out.ptr, self.hidden.ptr, e);
@@ -658,10 +673,9 @@ pub const NemotronNanoModel = struct {
         const nkv: usize = self.n_head_kv;
         const hd: usize = self.head_dim;
 
-        // 1. Pre-norm (BF16)
+        // 1. Pre-norm (cached BF16→f32)
         const nw = self.stLayerTensor(li, "norm.weight") orelse return error.MissingTensor;
-        bf16ToF32Buf(nw.data_ptr, self.bf16_buf_small[0..e]);
-        self.be.rmsNorm(self.hidden.ptr, self.bf16_buf_small.ptr, self.hidden2.ptr, e, self.rms_eps);
+        self.be.rmsNorm(self.hidden.ptr, self.normAsF32(nw, e), self.hidden2.ptr, e, self.rms_eps);
 
         // 2. Q/K/V projections (BF16 or MLX quantized)
         const qw = self.stLayerTensor(li, "mixer.q_proj.weight") orelse return error.MissingTensor;
@@ -708,6 +722,61 @@ pub const NemotronNanoModel = struct {
 
     // ── Helpers ───────────────────────────────────────────────────
 
+    const NormCacheEntry = model_mod.NormCacheEntry;
+
+    /// Get norm weights as f32 pointer. Caches converted BF16 weights on first access
+    /// so subsequent tokens return a stable pointer with zero conversion work.
+    fn normAsF32(self: *NemotronNanoModel, t: TensorInfo, n: usize) [*]const f32 {
+        if (t.dtype == .f32) return @ptrCast(@alignCast(t.data_ptr));
+
+        const key = @intFromPtr(t.data_ptr);
+        for (self.norm_cache[0..self.norm_cache_len]) |entry| {
+            if (entry.key == key) return entry.data.ptr;
+        }
+
+        // Cache miss: allocate, convert, store permanently.
+        if (self.norm_cache_len >= max_norm_entries) {
+            // Fallback: convert into bf16_buf_small (no caching)
+            bf16ToF32Buf(t.data_ptr, self.bf16_buf_small[0..n]);
+            return self.bf16_buf_small.ptr;
+        }
+        const buf = self.allocator.alloc(f32, n) catch {
+            bf16ToF32Buf(t.data_ptr, self.bf16_buf_small[0..n]);
+            return self.bf16_buf_small.ptr;
+        };
+        bf16ToF32Buf(t.data_ptr, buf);
+        self.norm_cache[self.norm_cache_len] = .{ .key = key, .data = buf };
+        self.norm_cache_len += 1;
+        return buf.ptr;
+    }
+
+    /// Pre-populate norm cache at init so no allocations happen during inference.
+    fn warmNormCache(self: *NemotronNanoModel) void {
+        const e: usize = self.n_embd;
+        const d_inner: usize = @as(usize, self.mamba_num_heads) * self.mamba_head_dim;
+        const n_groups: usize = self.ssm_n_groups;
+        const d_state: usize = self.ssm_d_state;
+        const conv_ch: usize = d_inner + 2 * n_groups * d_state;
+        const d_conv: usize = self.ssm_d_conv;
+
+        // Final norm
+        if (self.fmt.getTensor("backbone.norm_f.weight")) |t| _ = self.normAsF32(t, e);
+
+        for (0..self.n_layers) |i| {
+            const li: u32 = @intCast(i);
+            // Layer norm (all layer types)
+            if (self.stLayerTensor(li, "norm.weight")) |t| _ = self.normAsF32(t, e);
+
+            if (self.layer_types[i] == .ssm) {
+                // SSM conv1d weights and bias
+                if (self.stLayerTensor(li, "mixer.conv1d.weight")) |t| _ = self.normAsF32(t, conv_ch * d_conv);
+                if (self.stLayerTensor(li, "mixer.conv1d.bias")) |t| _ = self.normAsF32(t, conv_ch);
+                // SSM group norm weight
+                if (self.stLayerTensor(li, "mixer.norm.weight")) |t| _ = self.normAsF32(t, d_inner);
+            }
+        }
+    }
+
     /// Look up a SafeTensors layer tensor by index and suffix.
     /// E.g., stLayerTensor(3, "mixer.q_proj.weight") → "backbone.layers.3.mixer.q_proj.weight"
     fn stLayerTensor(self: *NemotronNanoModel, li: u32, comptime suffix: []const u8) ?TensorInfo {
@@ -716,17 +785,22 @@ pub const NemotronNanoModel = struct {
         return self.fmt.getTensor(name);
     }
 
-    /// GEMV dispatch: MLX quantized path or standard be.gemv for BF16/f32.
-    /// The `prefix` is the layer-relative tensor name prefix without ".weight"
-    /// (used to look up companion ".scales" and ".biases" tensors for MLX
-    /// quantization via stLayerTensor).
+    /// GEMV dispatch: MLX quantized, NVFP4, or standard be.gemv for BF16/f32.
+    /// U32 dtype (`.mlx_q`) is shared by both MLX and NVFP4 packed formats.
+    /// MLX has `.scales` + `.biases` companions; NVFP4 has `.scales` only.
     fn doGemv(self: *NemotronNanoModel, x: [*]const f32, w: TensorInfo, y: [*]f32, n: usize, k: usize, li: u32, comptime prefix: []const u8) !void {
         if (w.dtype == .mlx_q) {
-            const s_t = self.stLayerTensor(li, prefix ++ ".scales") orelse return error.MissingTensor;
-            const b_t = self.stLayerTensor(li, prefix ++ ".biases") orelse return error.MissingTensor;
-            self.be.gemvMlxQ(x, w.data_ptr, s_t.data_ptr, b_t.data_ptr, y, n, k, self.mlx_bits);
+            if (self.stLayerTensor(li, prefix ++ ".biases")) |b_t| {
+                // MLX path: U32 packed weights + BF16 scales + BF16 biases
+                const s_t = self.stLayerTensor(li, prefix ++ ".scales") orelse return error.MissingTensor;
+                self.be.gemvMlxQ(x, w.data_ptr, s_t.data_ptr, b_t.data_ptr, y, n, k, self.mlx_bits);
+            } else if (self.stLayerTensor(li, prefix ++ ".scales")) |s_t| {
+                // NVFP4 path: U32 packed weights + FP8 scales, no biases
+                self.be.gemvNvfp4St(x, w.data_ptr, s_t.data_ptr, y, n, k);
+            } else {
+                self.be.gemv(x, .{ .data = w.data_ptr, .dtype = w.dtype }, y, n, k);
+            }
         } else if (self.stLayerTensor(li, prefix ++ ".scales")) |s_t| {
-            // NVFP4 path: separate scales tensor
             self.be.gemvNvfp4St(x, w.data_ptr, s_t.data_ptr, y, n, k);
         } else {
             self.be.gemv(x, .{ .data = w.data_ptr, .dtype = w.dtype }, y, n, k);
@@ -748,9 +822,10 @@ pub const NemotronNanoModel = struct {
         k: usize,
         exp_idx: usize,
     ) !void {
-        if (w.dtype == .mlx_q) {
+        if (w.dtype == .mlx_q and self.stLayerTensor(li, prefix ++ ".biases") != null) {
+            // MLX path: U32 packed weights + BF16 scales + BF16 biases
             const s_t = self.stLayerTensor(li, prefix ++ ".scales") orelse return error.MissingTensor;
-            const b_t = self.stLayerTensor(li, prefix ++ ".biases") orelse return error.MissingTensor;
+            const b_t = self.stLayerTensor(li, prefix ++ ".biases").?;
             const gs = mlx_group_size;
             const gpr = (k + gs - 1) / gs;
             const wpg = mlx_ops.wordsPerGroup(self.mlx_bits);
@@ -760,7 +835,7 @@ pub const NemotronNanoModel = struct {
             const s_byte_offset = exp_idx * n * gpr * @sizeOf(u16);
             self.be.gemvMlxQ(x, w.data_ptr + w_byte_offset, s_t.data_ptr + s_byte_offset, b_t.data_ptr + s_byte_offset, y, n, k, self.mlx_bits);
         } else {
-            // NVFP4 path: look up separate NVFP4 scale tensor
+            // NVFP4 path: U32 or non-U32 packed weights + FP8/U8 scales
             const s_t = self.stLayerTensor(li, prefix ++ ".scales") orelse return error.MissingTensor;
             const w_stride = n * (k / nvfp4_values_per_byte);
             const s_stride = n * (k / nvfp4_scale_group_size);
@@ -780,9 +855,10 @@ pub const NemotronNanoModel = struct {
         n: usize,
         k: usize,
     ) !void {
-        if (w.dtype == .mlx_q) {
+        if (w.dtype == .mlx_q and self.stLayerTensor(li, prefix ++ ".biases") != null) {
+            // MLX path: U32 packed weights + BF16 scales + BF16 biases
             const s_t = self.stLayerTensor(li, prefix ++ ".scales") orelse return error.MissingTensor;
-            const b_t = self.stLayerTensor(li, prefix ++ ".biases") orelse return error.MissingTensor;
+            const b_t = self.stLayerTensor(li, prefix ++ ".biases").?;
             self.be.gemvMlxQ(x, w.data_ptr, s_t.data_ptr, b_t.data_ptr, y, n, k, self.mlx_bits);
         } else {
             // NVFP4 path
@@ -798,6 +874,19 @@ pub const NemotronNanoModel = struct {
 fn bf16ToF32Buf(data: [*]const u8, out: []f32) void {
     const u16s: [*]const u16 = @ptrCast(@alignCast(data));
     for (0..out.len) |i| out[i] = quant.bf16ToF32(u16s[i]);
+}
+
+/// Convert a tensor's data to f32, dispatching on its dtype.
+/// Handles F32 (direct copy) and BF16 (conversion). Other types
+/// (e.g. unknown scalars) are treated as BF16 since that's the
+/// most common non-f32 scalar type in NemotronH SafeTensors.
+fn tensorToF32Buf(t: TensorInfo, out: []f32) void {
+    if (t.dtype == .f32) {
+        const f32s: [*]const f32 = @ptrCast(@alignCast(t.data_ptr));
+        @memcpy(out, f32s[0..out.len]);
+    } else {
+        bf16ToF32Buf(t.data_ptr, out);
+    }
 }
 
 // ── Tests ─────────────────────────────────────────────────────────

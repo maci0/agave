@@ -1,4 +1,4 @@
-const golden = @import("golden_test.zig");
+const golden = @import("golden_harness.zig");
 
 const model_path = "models/lmstudio-community/Qwen3.5-9B-GGUF/Qwen3.5-9B-Q8_0.gguf";
 const test_prompt = "Explain photosynthesis in simple terms.";

@@ -458,6 +458,68 @@ inline void getScaleMinK4(uint j, device const uchar* q, thread uint& sc, thread
     }
 }
 
+// NR=2: each threadgroup processes 2 output rows, sharing x vector loads.
+// For Q4_K, NR=2 is optimal because each superblock has more work (144 bytes,
+// 4 sub-groups) than Q8_0 (34 bytes), so 2 rows saturate the ALU better than 4.
+constant uint q4_k_nr = 2;
+
+// Inline: compute one superblock's dot product for a single row.
+// x vector is shared across rows (compiler hoists the loads).
+inline float q4_k_block_dot(device const uchar* bp, device const float* x, uint k, uint bk) {
+    float d    = float(as_type<half>(ushort(bp[0] | (uint(bp[1]) << 8))));
+    float dmin = float(as_type<half>(ushort(bp[2] | (uint(bp[3]) << 8))));
+    device const uchar* scales = bp + 4;
+    device const uchar* qs = bp + 16;
+    float sum = 0.0f;
+
+    for (uint g = 0; g < 4; g++) {
+        uint sc_lo, m_lo, sc_hi, m_hi;
+        getScaleMinK4(g * 2, scales, sc_lo, m_lo);
+        getScaleMinK4(g * 2 + 1, scales, sc_hi, m_hi);
+        float d_lo = d * float(sc_lo);
+        float dm_lo = dmin * float(m_lo);
+        float d_hi = d * float(sc_hi);
+        float dm_hi = dmin * float(m_hi);
+        uint ql_off = g * 32;
+        uint gi_lo = bk + g * 64;
+        uint gi_hi = gi_lo + 32;
+
+        if (gi_lo + 63 < k) {
+            float q_dot_lo = 0.0f, x_sum_lo = 0.0f;
+            for (uint l = 0; l < 32; l += 4) {
+                float4 xv = *(device const float4*)(x + gi_lo + l);
+                float4 qv = float4(qs[ql_off + l] & 0xF, qs[ql_off + l + 1] & 0xF,
+                                   qs[ql_off + l + 2] & 0xF, qs[ql_off + l + 3] & 0xF);
+                q_dot_lo += dot(xv, qv);
+                x_sum_lo += xv.x + xv.y + xv.z + xv.w;
+            }
+            sum += d_lo * q_dot_lo - dm_lo * x_sum_lo;
+
+            float q_dot_hi = 0.0f, x_sum_hi = 0.0f;
+            for (uint l = 0; l < 32; l += 4) {
+                float4 xv = *(device const float4*)(x + gi_hi + l);
+                float4 qv = float4(qs[ql_off + l] >> 4, qs[ql_off + l + 1] >> 4,
+                                   qs[ql_off + l + 2] >> 4, qs[ql_off + l + 3] >> 4);
+                q_dot_hi += dot(xv, qv);
+                x_sum_hi += xv.x + xv.y + xv.z + xv.w;
+            }
+            sum += d_hi * q_dot_hi - dm_hi * x_sum_hi;
+        } else {
+            for (uint l = 0; l < 32; l++) {
+                uint gi = gi_lo + l;
+                if (gi >= k) break;
+                sum += x[gi] * (d_lo * float(qs[ql_off + l] & 0xF) - dm_lo);
+            }
+            for (uint l = 0; l < 32; l++) {
+                uint gi = gi_hi + l;
+                if (gi >= k) break;
+                sum += x[gi] * (d_hi * float(qs[ql_off + l] >> 4) - dm_hi);
+            }
+        }
+    }
+    return sum;
+}
+
 kernel void gemv_q4_k(
     device const float* x [[buffer(0)]],
     device const uchar* W [[buffer(1)]],
@@ -468,75 +530,31 @@ kernel void gemv_q4_k(
     uint tid      [[thread_index_in_threadgroup]],
     uint tg_size  [[threads_per_threadgroup]])
 {
-    if (tgid >= n) return;
-
     const uint bpb = 144;
     const uint bs = 256;
     uint nb = (k + bs - 1) / bs;
-    float sum = 0.0f;
+    uint row_base = tgid * q4_k_nr;
+    if (row_base >= n) return;
+    uint nr_active = min(q4_k_nr, n - row_base);
+
+    float sum0 = 0.0f, sum1 = 0.0f;
 
     for (uint b = tid; b < nb; b += tg_size) {
-        device const uchar* bp = W + (tgid * nb + b) * bpb;
-        float d    = float(as_type<half>(ushort(bp[0] | (uint(bp[1]) << 8))));
-        float dmin = float(as_type<half>(ushort(bp[2] | (uint(bp[3]) << 8))));
-        device const uchar* scales = bp + 4;
-        device const uchar* qs = bp + 16;
         uint bk = b * bs;
-
-        // 4 groups of 64 elements: low nibbles (32 elems) then high nibbles (32 elems)
-        for (uint g = 0; g < 4; g++) {
-            uint sc_lo, m_lo, sc_hi, m_hi;
-            getScaleMinK4(g * 2, scales, sc_lo, m_lo);
-            getScaleMinK4(g * 2 + 1, scales, sc_hi, m_hi);
-            float d_lo = d * float(sc_lo);
-            float dm_lo = dmin * float(m_lo);
-            float d_hi = d * float(sc_hi);
-            float dm_hi = dmin * float(m_hi);
-            uint ql_off = g * 32;
-            uint gi_lo = bk + g * 64;
-            uint gi_hi = gi_lo + 32;
-
-            if (gi_lo + 63 < k) {
-                // Full group — low nibbles (elements gi_lo..gi_lo+31)
-                float q_dot_lo = 0.0f, x_sum_lo = 0.0f;
-                for (uint l = 0; l < 32; l += 4) {
-                    float4 xv = *(device const float4*)(x + gi_lo + l);
-                    float4 qv = float4(qs[ql_off + l] & 0xF, qs[ql_off + l + 1] & 0xF,
-                                       qs[ql_off + l + 2] & 0xF, qs[ql_off + l + 3] & 0xF);
-                    q_dot_lo += dot(xv, qv);
-                    x_sum_lo += xv.x + xv.y + xv.z + xv.w;
-                }
-                sum += d_lo * q_dot_lo - dm_lo * x_sum_lo;
-
-                // High nibbles (elements gi_hi..gi_hi+31)
-                float q_dot_hi = 0.0f, x_sum_hi = 0.0f;
-                for (uint l = 0; l < 32; l += 4) {
-                    float4 xv = *(device const float4*)(x + gi_hi + l);
-                    float4 qv = float4(qs[ql_off + l] >> 4, qs[ql_off + l + 1] >> 4,
-                                       qs[ql_off + l + 2] >> 4, qs[ql_off + l + 3] >> 4);
-                    q_dot_hi += dot(xv, qv);
-                    x_sum_hi += xv.x + xv.y + xv.z + xv.w;
-                }
-                sum += d_hi * q_dot_hi - dm_hi * x_sum_hi;
-            } else {
-                // Partial group — scalar fallback
-                for (uint l = 0; l < 32; l++) {
-                    uint gi = gi_lo + l;
-                    if (gi >= k) break;
-                    sum += x[gi] * (d_lo * float(qs[ql_off + l] & 0xF) - dm_lo);
-                }
-                for (uint l = 0; l < 32; l++) {
-                    uint gi = gi_hi + l;
-                    if (gi >= k) break;
-                    sum += x[gi] * (d_hi * float(qs[ql_off + l] >> 4) - dm_hi);
-                }
-            }
-        }
+        sum0 += q4_k_block_dot(W + (row_base * nb + b) * bpb, x, k, bk);
+        if (nr_active > 1)
+            sum1 += q4_k_block_dot(W + ((row_base + 1) * nb + b) * bpb, x, k, bk);
     }
 
-    threadgroup float tg_shared[8];
-    sum = threadgroup_reduce_sum(sum, tg_shared, tid, tg_size);
-    if (tid == 0) y[tgid] = sum;
+    threadgroup float shared[8];
+    sum0 = threadgroup_reduce_sum(sum0, shared, tid, tg_size);
+    if (tid == 0) y[row_base] = sum0;
+
+    if (nr_active > 1) {
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        sum1 = threadgroup_reduce_sum(sum1, shared, tid, tg_size);
+        if (tid == 0) y[row_base + 1] = sum1;
+    }
 }
 
 // ── Q2_K GEMV ────────────────────────────────────────────────
@@ -1266,7 +1284,7 @@ kernel void gemv_iq4_xs(
 {
     if (tgid >= n) return;
 
-    const uint bpb = 138;
+    const uint bpb = 136;
     const uint bs = 256;
     uint nb = (k + bs - 1) / bs;
     float sum = 0.0f;
@@ -1276,7 +1294,7 @@ kernel void gemv_iq4_xs(
         float d = float(as_type<half>(ushort(bp[0] | (uint(bp[1]) << 8))));
         uint scales_h = uint(bp[2]) | (uint(bp[3]) << 8);
         device const uchar* scales_l = bp + 4;
-        device const uchar* qs = bp + 12;
+        device const uchar* qs = bp + 8;
         uint bk = b * bs;
 
         for (uint sb = 0; sb < 8; sb++) {

@@ -190,8 +190,16 @@ pub fn groupRmsNormSiluGate(
         const z_g = z + off;
         const w_g = norm_w + g * elem_per_group;
 
-        // 1. Apply SiLU gate in-place: y = y * silu(z)
-        for (0..elem_per_group) |j| {
+        // 1. Apply SiLU gate in-place: y = y * silu(z) — SIMD vectorized
+        const ones: V8 = @splat(1.0);
+        var j: usize = 0;
+        while (j + 8 <= elem_per_group) : (j += 8) {
+            const yv: V8 = y_g[j..][0..8].*;
+            const zv: V8 = z_g[j..][0..8].*;
+            const sig: V8 = ones / (ones + @exp(-zv));
+            y_g[j..][0..8].* = yv * zv * sig;
+        }
+        while (j < elem_per_group) : (j += 1) {
             y_g[j] *= silu(z_g[j]);
         }
 
@@ -205,10 +213,17 @@ pub fn groupRmsNormSiluGate(
         var ss: f32 = @reduce(.Add, ss_acc);
         while (i < elem_per_group) : (i += 1) ss += y_g[i] * y_g[i];
 
-        // 3. RMS normalize and apply weight
+        // 3. RMS normalize and apply weight — SIMD vectorized
         const inv_rms = 1.0 / @sqrt(ss / @as(f32, @floatFromInt(elem_per_group)) + eps);
-        for (0..elem_per_group) |j| {
-            y_g[j] *= inv_rms * w_g[j];
+        const inv_rms_v: V8 = @splat(inv_rms);
+        var k: usize = 0;
+        while (k + 8 <= elem_per_group) : (k += 8) {
+            const yv: V8 = y_g[k..][0..8].*;
+            const wv: V8 = w_g[k..][0..8].*;
+            y_g[k..][0..8].* = yv * inv_rms_v * wv;
+        }
+        while (k < elem_per_group) : (k += 1) {
+            y_g[k] *= inv_rms * w_g[k];
         }
     }
 }
@@ -226,14 +241,14 @@ test "causalConv1dSilu basic" {
     causalConv1dSilu(&conv_out, &conv_state, &conv_in, &conv_w, null, 2, 2);
 
     // ch0: 1.0*0.5 + 3.0*0.5 = 2.0, SiLU(2.0) ≈ 1.7616
-    try std.testing.expectApproxEqAbs(@as(f32, 1.7616), conv_out[0], 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 1.7616), conv_out[0], 1e-4);
 
     // ch1: 2.0*0.5 + 4.0*0.5 = 3.0, SiLU(3.0) ≈ 2.8577
-    try std.testing.expectApproxEqAbs(@as(f32, 2.8577), conv_out[1], 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 2.8577), conv_out[1], 1e-4);
 
-    // State should now contain the current input
-    try std.testing.expectApproxEqAbs(@as(f32, 3.0), conv_state[0], 0.01);
-    try std.testing.expectApproxEqAbs(@as(f32, 4.0), conv_state[1], 0.01);
+    // State should now contain the current input (direct copy, must be exact)
+    try std.testing.expectApproxEqAbs(@as(f32, 3.0), conv_state[0], 1e-6);
+    try std.testing.expectApproxEqAbs(@as(f32, 4.0), conv_state[1], 1e-6);
 }
 
 test "causalConv1dSilu ring buffer evolution" {
@@ -246,8 +261,8 @@ test "causalConv1dSilu ring buffer evolution" {
     causalConv1dSilu(&conv_out, &conv_state, &[_]f32{1.0}, &conv_w, null, 1, 3);
     const expected1 = silu(1.0);
     try std.testing.expectApproxEqAbs(expected1, conv_out[0], 1e-5);
-    try std.testing.expectApproxEqAbs(@as(f32, 0.0), conv_state[0], 1e-6); // shifted: was state[1]=0
-    try std.testing.expectApproxEqAbs(@as(f32, 1.0), conv_state[1], 1e-6); // current input
+    try std.testing.expectApproxEqAbs(@as(f32, 0.0), conv_state[0], 1e-6); // after shift: previous state[1] now at [0]
+    try std.testing.expectApproxEqAbs(@as(f32, 1.0), conv_state[1], 1e-6); // current input written to tail
 
     // Step 2: input=2.0, state=[0,1] → conv = 0*1 + 1*1 + 2*1 = 3.0
     causalConv1dSilu(&conv_out, &conv_state, &[_]f32{2.0}, &conv_w, null, 1, 3);
@@ -264,6 +279,26 @@ test "causalConv1dSilu ring buffer evolution" {
     try std.testing.expectApproxEqAbs(expected3, conv_out[0], 1e-5);
 }
 
+test "causalConv1dSilu varying weights" {
+    // Previous ring buffer test uses uniform weights [1,1,1], which doesn't
+    // verify that each weight position multiplies the correct history element.
+    var conv_out = [_]f32{0};
+    var conv_state = [_]f32{ 0.0, 0.0 }; // d_conv=3, so 2 history slots
+    const conv_w = [_]f32{ 0.5, 1.0, 2.0 }; // distinct weights per position
+
+    // Step 1: input=1.0, state=[0,0] → conv = 0*0.5 + 0*1.0 + 1*2.0 = 2.0
+    causalConv1dSilu(&conv_out, &conv_state, &[_]f32{1.0}, &conv_w, null, 1, 3);
+    try std.testing.expectApproxEqAbs(silu(2.0), conv_out[0], 1e-5);
+
+    // Step 2: input=3.0, state=[0,1] → conv = 0*0.5 + 1*1.0 + 3*2.0 = 7.0
+    causalConv1dSilu(&conv_out, &conv_state, &[_]f32{3.0}, &conv_w, null, 1, 3);
+    try std.testing.expectApproxEqAbs(silu(7.0), conv_out[0], 1e-5);
+
+    // Step 3: input=2.0, state=[1,3] → conv = 1*0.5 + 3*1.0 + 2*2.0 = 7.5
+    causalConv1dSilu(&conv_out, &conv_state, &[_]f32{2.0}, &conv_w, null, 1, 3);
+    try std.testing.expectApproxEqAbs(silu(7.5), conv_out[0], 1e-5);
+}
+
 test "causalConv1dSilu with bias" {
     var conv_out = [_]f32{ 0, 0 };
     var conv_state = [_]f32{ 0, 0 };
@@ -273,9 +308,159 @@ test "causalConv1dSilu with bias" {
 
     causalConv1dSilu(&conv_out, &conv_state, &conv_in, &conv_w, &conv_b, 2, 2);
 
-    // ch0: bias(0.5) + 0*1 + 1*1 = 1.5, SiLU(1.5) ≈ 1.2262
-    try std.testing.expectApproxEqAbs(@as(f32, 1.2262), conv_out[0], 0.001);
+    // ch0: bias(0.5) + 0*1 + 1*1 = 1.5, SiLU(1.5) ≈ 1.2264
+    try std.testing.expectApproxEqAbs(@as(f32, 1.2264), conv_out[0], 1e-3);
 
     // ch1: bias(-0.5) + 0*1 + 1*1 = 0.5, SiLU(0.5) ≈ 0.3112
-    try std.testing.expectApproxEqAbs(@as(f32, 0.3112), conv_out[1], 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.3112), conv_out[1], 1e-4);
+}
+
+test "mamba2Recurrence basic" {
+    // 1 head, head_dim=2, d_state=2, 1 group, zero initial state
+    var y = [_]f32{ 0, 0 };
+    var state = [_]f32{ 0, 0, 0, 0 }; // [head_dim × d_state]
+    const x = [_]f32{ 1.0, 2.0 };
+    const B = [_]f32{ 0.5, 0.5 };
+    const C = [_]f32{ 1.0, 1.0 };
+    const dt_raw = [_]f32{0.0};
+    const dt_bias = [_]f32{0.0};
+    const ssm_a = [_]f32{-1.0};
+    const ssm_d = [_]f32{1.0};
+
+    mamba2Recurrence(&y, &state, &x, &B, &C, &dt_raw, &dt_bias, &ssm_a, &ssm_d, 1, 2, 2, 1);
+
+    // dt = softplus(0+0) = ln(2), decay = exp(-ln(2)) = 0.5
+    const dt = math_ops.softplus(0.0);
+
+    // Element 0: xd = 1.0 * dt, state = [xd*0.5, xd*0.5], y = D*x + sum(state*C) = 1 + xd
+    const xd0 = 1.0 * dt;
+    try std.testing.expectApproxEqAbs(1.0 + xd0, y[0], 1e-5);
+
+    // Element 1: xd = 2.0 * dt, y = D*x + sum(state*C) = 2 + 2*dt
+    try std.testing.expectApproxEqAbs(2.0 + 2.0 * dt, y[1], 1e-5);
+
+    // Verify state was updated
+    try std.testing.expectApproxEqAbs(xd0 * 0.5, state[0], 1e-5);
+    try std.testing.expectApproxEqAbs(xd0 * 0.5, state[1], 1e-5);
+}
+
+test "mamba2Recurrence state decay" {
+    // Verify decay is applied to existing state on second call
+    var y = [_]f32{ 0, 0 };
+    var state = [_]f32{ 0, 0, 0, 0 };
+    const x = [_]f32{ 1.0, 0.0 };
+    const B = [_]f32{ 1.0, 0.0 }; // Only update state[*][0]
+    const C = [_]f32{ 1.0, 0.0 };
+    const dt_raw = [_]f32{0.0};
+    const dt_bias = [_]f32{0.0};
+    const ssm_a = [_]f32{-1.0}; // decay = exp(-ln(2)) = 0.5
+    const ssm_d = [_]f32{0.0}; // No skip connection
+
+    // Call 1: state starts at 0
+    mamba2Recurrence(&y, &state, &x, &B, &C, &dt_raw, &dt_bias, &ssm_a, &ssm_d, 1, 2, 2, 1);
+    const dt = math_ops.softplus(0.0);
+    const s0_call1 = 1.0 * dt * 1.0; // xd * B[0]
+    try std.testing.expectApproxEqAbs(s0_call1, state[0], 1e-5);
+
+    // Call 2: state[0] should decay by 0.5 then accumulate new input
+    mamba2Recurrence(&y, &state, &x, &B, &C, &dt_raw, &dt_bias, &ssm_a, &ssm_d, 1, 2, 2, 1);
+    const decay: f32 = 0.5; // exp(-1.0 * ln(2))
+    const s0_call2 = decay * s0_call1 + 1.0 * dt * 1.0;
+    try std.testing.expectApproxEqAbs(s0_call2, state[0], 1e-5);
+}
+
+test "groupRmsNormSiluGate basic" {
+    // d_inner=4, n_groups=1: verify SiLU gate + RMS normalization
+    // Using large z so SiLU(z) ≈ z, making expected output analytically clean.
+    var y = [_]f32{ 3.0, 4.0, 0.0, 0.0 };
+    const z = [_]f32{ 100.0, 100.0, 100.0, 100.0 }; // SiLU(100) ≈ 100.0
+    const w = [_]f32{ 1.0, 1.0, 1.0, 1.0 };
+
+    groupRmsNormSiluGate(&y, &z, &w, 4, 1, 1e-6);
+
+    // gated ≈ [300, 400, 0, 0]
+    // RMS = sqrt((300²+400²)/4) = sqrt(62500) = 250
+    // output = gated / 250 * w = [1.2, 1.6, 0.0, 0.0]
+    try std.testing.expectApproxEqAbs(@as(f32, 1.2), y[0], 1e-3);
+    try std.testing.expectApproxEqAbs(@as(f32, 1.6), y[1], 1e-3);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.0), y[2], 1e-6);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.0), y[3], 1e-6);
+}
+
+test "groupRmsNormSiluGate exercises SiLU gate" {
+    // Use moderate z values where SiLU(z) ≠ z, verifying the gate is
+    // actually applied rather than bypassed by large z approximation.
+    var y = [_]f32{ 1.0, 1.0, 1.0, 1.0 };
+    const z = [_]f32{ 0.5, -0.5, 1.0, -1.0 };
+    const w = [_]f32{ 1.0, 1.0, 1.0, 1.0 };
+
+    groupRmsNormSiluGate(&y, &z, &w, 4, 1, 1e-6);
+
+    // SiLU(0.5)≈0.3112, SiLU(-0.5)≈-0.1888, SiLU(1.0)≈0.7311, SiLU(-1.0)≈-0.2689
+    // gated = y * SiLU(z) = [0.3112, -0.1888, 0.7311, -0.2689]
+    // RMS = sqrt(sum_sq / 4)
+    const g0 = silu(0.5);
+    const g1 = silu(-0.5);
+    const g2 = silu(1.0);
+    const g3 = silu(-1.0);
+    const sum_sq = g0 * g0 + g1 * g1 + g2 * g2 + g3 * g3;
+    const rms = @sqrt(sum_sq / 4.0);
+    try std.testing.expectApproxEqAbs(g0 / rms, y[0], 1e-4);
+    try std.testing.expectApproxEqAbs(g1 / rms, y[1], 1e-4);
+    try std.testing.expectApproxEqAbs(g2 / rms, y[2], 1e-4);
+    try std.testing.expectApproxEqAbs(g3 / rms, y[3], 1e-4);
+}
+
+test "groupRmsNormSiluGate multi-group" {
+    // d_inner=4, n_groups=2 (2 elements per group): groups normalize independently
+    var y = [_]f32{ 3.0, 4.0, 5.0, 0.0 };
+    const z = [_]f32{ 100.0, 100.0, 100.0, 100.0 };
+    const w = [_]f32{ 1.0, 1.0, 1.0, 1.0 };
+
+    groupRmsNormSiluGate(&y, &z, &w, 4, 2, 1e-6);
+
+    // Group 0: gated ≈ [300, 400], RMS = sqrt((90000+160000)/2) = sqrt(125000) ≈ 353.55
+    // output = [300/353.55, 400/353.55] ≈ [0.8485, 1.1314]
+    try std.testing.expectApproxEqAbs(@as(f32, 0.8485), y[0], 1e-3);
+    try std.testing.expectApproxEqAbs(@as(f32, 1.1314), y[1], 1e-3);
+
+    // Group 1: gated ≈ [500, 0], RMS = sqrt(250000/2) = sqrt(125000) ≈ 353.55
+    // output = [500/353.55, 0] ≈ [1.4142, 0.0]
+    try std.testing.expectApproxEqAbs(@as(f32, 1.4142), y[2], 1e-3);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.0), y[3], 1e-6);
+}
+
+test "mamba2Recurrence exercises SIMD path" {
+    // d_state=16 ensures the 8-wide SIMD loop executes (requires d_state >= 8).
+    // Previous tests use d_state=2 which only exercises the scalar tail.
+    const num_heads = 1;
+    const head_dim = 1;
+    const d_state = 16;
+
+    var y = [_]f32{0};
+    var state = [_]f32{0} ** (head_dim * d_state);
+    const x = [_]f32{1.0};
+    var B: [d_state]f32 = undefined;
+    var C: [d_state]f32 = undefined;
+    for (0..d_state) |i| {
+        B[i] = 1.0;
+        C[i] = 1.0;
+    }
+    const dt_raw = [_]f32{0.0};
+    const dt_bias = [_]f32{0.0};
+    const ssm_a = [_]f32{-1.0};
+    const ssm_d = [_]f32{0.0}; // No skip, easier to verify
+
+    mamba2Recurrence(&y, &state, &x, &B, &C, &dt_raw, &dt_bias, &ssm_a, &ssm_d, num_heads, head_dim, d_state, 1);
+
+    // dt = softplus(0) = ln(2), xd = 1.0 * ln(2)
+    // Each state[j] = xd * B[j] = ln(2) * 1.0 = ln(2)
+    // y = sum(state[j] * C[j]) = d_state * ln(2) = 16 * ln(2)
+    const dt = math_ops.softplus(0.0);
+    try std.testing.expectApproxEqAbs(dt * @as(f32, d_state), y[0], 1e-4);
+
+    // Verify all state elements are equal (uniform B/C)
+    for (0..d_state) |j| {
+        try std.testing.expectApproxEqAbs(dt, state[j], 1e-5);
+    }
 }

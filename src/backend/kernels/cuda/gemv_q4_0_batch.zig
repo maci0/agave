@@ -10,6 +10,8 @@ const cu = @import("common.zig");
 const q4_0_block_size: u32 = 18;
 /// Elements per Q4_0 block.
 const q4_0_group_size: u32 = 32;
+/// Q4_0 dequant bias: 4-bit unsigned [0..15] centered to signed [-8..7].
+const q4_0_dequant_bias: i8 = -8;
 
 export fn gemv_q4_0_batch_kernel(
     x: [*]const f32,
@@ -74,8 +76,8 @@ export fn gemv_q4_0_batch_kernel(
         var blk_sum: f32 = 0.0;
         for (0..16) |qi| {
             const byte = quants[qi];
-            const lo = @as(i8, @intCast(@as(u4, @truncate(byte)))) - 8;
-            const hi = @as(i8, @intCast(@as(u4, @truncate(byte >> 4)))) - 8;
+            const lo = @as(i8, @intCast(@as(u4, @truncate(byte)))) + q4_0_dequant_bias;
+            const hi = @as(i8, @intCast(@as(u4, @truncate(byte >> 4)))) + q4_0_dequant_bias;
 
             if (base_col + qi < k)
                 blk_sum += @as(f32, @floatFromInt(lo)) * x[base_col + qi];

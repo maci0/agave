@@ -5,8 +5,6 @@
 
 const std = @import("std");
 const clap = @import("clap");
-const build_options = @import("build_options");
-
 const backend_mod = @import("backend/backend.zig");
 const format_mod = @import("format/format.zig");
 const model_mod = @import("models/model.zig");
@@ -37,6 +35,7 @@ const KvQuantType = @import("ops/kv_quant.zig").KvQuantType;
 const math_ops = @import("ops/math.zig");
 const TieredKvCache = @import("kvcache/tiered.zig").TieredKvCache;
 const pull = @import("pull.zig");
+const image = @import("image.zig");
 
 const stdout = std.fs.File.stdout();
 const stderr = std.fs.File.stderr();
@@ -63,7 +62,6 @@ const default_port: u16 = 49453;
 const default_max_tokens: u32 = 512;
 /// Default KV cache context size when user/recipe doesn't specify.
 /// 4096 balances memory usage with practical conversation length.
-/// Matches GPU SDPA kernel limit (threadgroup memory on Metal).
 const default_ctx_size: u32 = 4096;
 /// Default prefill chunk size (tokens per batch).
 const default_chunk_size: u32 = 512;
@@ -73,8 +71,6 @@ const prefill_progress_threshold: usize = 50;
 const default_free_ram: usize = 16 * 1024 * 1024 * 1024;
 /// Minimum pages between progress reports during model preloading.
 const min_report_pages: usize = 256;
-/// Default tiered KV cache RAM budget when unspecified (GB).
-const default_ram_budget_gb: usize = 16;
 /// Default tiered KV cache SSD budget when unspecified (GB).
 const default_ssd_budget_gb: usize = 10;
 /// Bytes per GiB (2^30) for memory budget calculations.
@@ -83,7 +79,7 @@ const gib_bytes: usize = 1024 * 1024 * 1024;
 const tiered_kv_block_size: u16 = 16;
 /// Number of KV tensors per position (key + value).
 const kv_tensors_per_position: usize = 2;
-/// Fraction of free RAM to allocate for KV cache (1/N = 50%).
+/// Fraction of free RAM to allocate for KV cache (N=2 means 1/2 = 50%).
 const ram_budget_divisor: usize = 2;
 /// Buffer size for warmup progress bar formatting.
 const warmup_buf_size: usize = 256;
@@ -96,6 +92,8 @@ const tiered_fallback_n_kv_heads: u32 = 8;
 /// Fallback n_heads for tiered KV cache sizing when metadata is missing.
 const tiered_fallback_n_heads: u32 = 32;
 const max_eog_ids = arch_mod.max_eog_ids;
+/// Valid KV cache quantization type names (shared across all --kv-type* validation).
+const kv_valid_types = "f32, f16, q8_0/q8, int8/i8, fp8/fp8_e4m3, nvfp4/fp4, turbo2/tq2, turbo3/tq3, turbo4/tq4, turbo (preset: K=q8_0 V=turbo4)";
 
 // ── Output control ──────────────────────────────────────────────
 
@@ -121,11 +119,16 @@ fn dbg(comptime fmt: []const u8, args: anytype) void {
     eprint("[dbg] " ++ fmt ++ "\n", args);
 }
 
-/// Print a fatal error message to stderr and exit with status 1.
-fn fatalExit(comptime msg: []const u8) noreturn {
-    eprint("Fatal: " ++ msg ++ "\n", .{});
-    std.process.exit(1);
+/// Parse a KV quantization type from an optional per-component override and
+/// a shared --kv-type fallback. Exits on unrecognized values.
+fn kvTypeOrExit(s: []const u8, flag_name: []const u8) KvQuantType {
+    return KvQuantType.fromString(s) orelse {
+        eprint("Error: unknown {s} value '{s}'\n", .{ flag_name, s });
+        eprint("  Valid options: " ++ kv_valid_types ++ "\n", .{});
+        std.process.exit(1);
+    };
 }
+
 
 /// Detect free system RAM in bytes.
 /// Uses platform-specific detection (sysctl on macOS, /proc/meminfo on Linux).
@@ -157,7 +160,7 @@ fn preloadRegion(data: []align(std.heap.page_size_min) const u8) void {
     std.posix.madvise(@alignCast(@constCast(data.ptr)), data.len, MADV.RANDOM) catch {};
 }
 
-/// Progress bar width for warming display.
+/// Progress bar width for warmup display.
 const warmup_bar_width: u32 = 30;
 
 /// Preload all mmap'd model data into RAM with progress bar.
@@ -195,7 +198,7 @@ fn preloadModel(gguf: ?*GGUFFile, st: ?*SafeTensorsDir, quiet: bool, tty: bool, 
 }
 
 /// Touch every page with progress reporting. Updates `loaded` bytes counter
-/// and prints a progress bar to stderr on each 1% increment.
+/// and prints a progress bar to stderr at ~1% intervals (at least min_report_pages apart).
 fn preloadRegionProgress(data: []align(std.heap.page_size_min) const u8, loaded: *usize, total_bytes: usize, fsize: display_mod.FormattedSize) void {
     const MADV = std.posix.MADV;
     std.posix.madvise(@alignCast(@constCast(data.ptr)), data.len, MADV.SEQUENTIAL) catch {};
@@ -222,7 +225,11 @@ fn preloadRegionProgress(data: []align(std.heap.page_size_min) const u8, loaded:
                     p.* += n;
                 }
             }.f;
-            append(&buf, &pos, "\r\x1b[2m\xe2\x96\x90"); // CR + dim + ▐
+            if (g_color) {
+                append(&buf, &pos, "\r\x1b[2m\xe2\x96\x90"); // CR + dim + ▐
+            } else {
+                append(&buf, &pos, "\r\xe2\x96\x90"); // CR + ▐
+            }
             for (0..warmup_bar_width) |i| {
                 if (i < filled) {
                     append(&buf, &pos, "\xe2\x96\x88"); // █
@@ -231,7 +238,10 @@ fn preloadRegionProgress(data: []align(std.heap.page_size_min) const u8, loaded:
                 }
             }
             append(&buf, &pos, "\xe2\x96\x8c "); // ▌ + space
-            const text = std.fmt.bufPrint(buf[pos..], "loading {d:.1} {s} ({d}%)\x1b[0m", .{ fsize.val, fsize.unit, pct }) catch "";
+            const text = if (g_color)
+                std.fmt.bufPrint(buf[pos..], "loading {d:.1} {s} ({d}%)\x1b[0m", .{ fsize.val, fsize.unit, pct }) catch ""
+            else
+                std.fmt.bufPrint(buf[pos..], "loading {d:.1} {s} ({d}%)", .{ fsize.val, fsize.unit, pct }) catch "";
             pos += text.len;
             stderr.writeAll(buf[0..pos]) catch {};
         }
@@ -243,9 +253,13 @@ fn preloadRegionProgress(data: []align(std.heap.page_size_min) const u8, loaded:
 // ── REPL help (shared between --help and /help) ─────────────────
 
 const repl_help =
-    \\  /clear              Clear conversation and KV cache (stay in chat)
+    \\  /clear, /reset      Clear conversation and KV cache (stay in chat)
+    \\  /context, /ctx      Show context window usage (tokens used / max)
+    \\  /system <text>      Set system prompt (clears conversation)
+    \\  /system             Show current system prompt
     \\  /stats              Toggle generation stats
     \\  /verbose            Toggle technical details
+    \\  /debug              Toggle debug logging
     \\  /model              Show model info
     \\  /help               Show this help
     \\  /quit, /exit, /q    Exit interactive mode
@@ -260,41 +274,52 @@ const repl_help =
 // ── CLI definition ───────────────────────────────────────────────
 
 const cli_params = clap.parseParamsComptime(
+    // General
     \\-h, --help                 Show this help message and exit.
     \\-v, --version              Print version and exit.
-    \\-s, --serve                Start HTTP server (OpenAI + Anthropic compatible).
-    \\-q, --quiet                Suppress banner and stats (output only).
-    \\-p, --port <u16>           Server port [default: 49453].
+    \\-q, --quiet                Suppress banner and stats (raw output only).
+    \\    --color <str>          Color mode: auto, always, never [default: auto].
+    \\    --no-color             Disable colored output (same as --color=never).
+    // Generation
     \\-n, --max-tokens <u32>     Maximum tokens to generate [default: 512].
     \\-t, --temperature <str>    Sampling temperature, 0 = greedy [default: 0].
     \\    --top-p <str>          Nucleus sampling threshold [default: 1.0].
     \\    --top-k <u32>          Top-k sampling, 0 = disabled [default: 0].
     \\    --repeat-penalty <str> Repetition penalty [default: 1.0].
-    \\    --system <str>         System prompt for chat formatting.
-    \\    --backend <str>        Compute backend: auto, cpu, metal, vulkan, cuda, rocm [default: auto].
-    \\    --ctx-size <u32>       Context window size [default: 4096, 0 = model max].
     \\    --seed <u64>           Random seed for sampling [default: random].
-    \\    --kv-type <str>        KV cache quantization: f32, f16, q8_0, int8, fp8, nvfp4, turbo2, turbo3, turbo4 [default: f16].
-    \\    --cache-type-k <str>  KV cache key quantization (overrides --kv-type for keys).
-    \\    --cache-type-v <str>  KV cache value quantization (overrides --kv-type for values).
-    \\    --kv-type-k <str>     Alias for --cache-type-k.
-    \\    --kv-type-v <str>     Alias for --cache-type-v.
-    \\    --kv-tiers <str>       Enable tiered KV cache: vram+ram, vram+ram+ssd [default: off].
-    \\    --kv-ram-budget <str>  RAM tier budget in GB, requires --kv-tiers [default: 50% of free RAM].
-    \\    --kv-ssd-path <str>    SSD tier file path, requires --kv-tiers with ssd.
-    \\    --kv-ssd-budget <str>  SSD tier budget in GB, requires --kv-tiers with ssd [default: 10].
-    \\    --no-color             Disable colored output.
-    \\    --color <str>          Color mode: auto, always, never [default: auto].
-    \\-V, --verbose              Show technical details (params, load times, EOG).
+    \\    --system <str>         System prompt for chat formatting.
+    // Backend & model
+    \\    --backend <str>        Compute backend: auto, cpu, metal, vulkan, cuda, rocm [default: auto].
+    \\    --ctx-size <u32>       Context window size; 0 = full model context [default: min(model, 4096)].
     \\    --allow-cpu-fallback   Allow GPU backends to fall back to CPU for unsupported ops.
-    \\-d, --debug                Enable debug logging (token IDs, layer timing).
-    \\    --json                 Output results as JSON (implies --quiet).
-    \\    --model-info           Print model metadata and exit (combine with --json).
-    \\    --profile              Profile per-op timing (halves throughput).
     \\    --mmap                 Use lazy mmap instead of eagerly paging weights into RAM.
-    \\    --host <str>           Server bind address [default: 127.0.0.1].
-    \\    --api-key <str>        API key for server authentication (Bearer token).
     \\    --prefill-batch-size <u32>  Prefill chunk size in tokens [default: 512].
+    // KV cache
+    \\    --kv-type <str>        KV cache quantization [default: f16]. Options: f32, f16, q8_0, fp8, turbo2/tq2, turbo3/tq3, turbo4/tq4, turbo (preset: K=q8_0 V=turbo4, 3.8× compression).
+    \\    --kv-type-k <str>      KV cache key quantization (overrides --kv-type for keys). K precision is critical — protects attention routing.
+    \\    --kv-type-v <str>      KV cache value quantization (overrides --kv-type for values). V tolerates aggressive compression.
+    \\    --cache-type-k <str>   Alias for --kv-type-k.
+    \\    --cache-type-v <str>   Alias for --kv-type-v.
+    \\    --kv-tiers <str>       Enable tiered KV cache: vram+ram, vram+ram+ssd [default: off].
+    \\    --kv-ram-budget <u32>  RAM tier budget, integer GB, requires --kv-tiers [default: 50% of free RAM].
+    \\    --kv-ssd-path <str>    SSD tier file path, requires --kv-tiers with ssd.
+    \\    --kv-ssd-budget <u32>  SSD tier budget, integer GB, requires --kv-tiers with ssd [default: 10].
+    \\    --kv-eviction <str>    KV eviction policy: none, norm, tri [default: none].
+    \\    --kv-budget <u32>      Max KV positions to keep during eviction [default: 80% of ctx-size].
+    // Server
+    \\-s, --serve                Start HTTP server (OpenAI + Anthropic API).
+    \\-p, --port <u16>           Server port [default: 49453].
+    \\    --host <str>           Server bind address [default: 127.0.0.1].
+    \\    --api-key <str>        API key for server auth (or AGAVE_API_KEY env).
+    // Multimodal
+    \\    --mmproj <str>         Path to vision projector GGUF (mmproj file).
+    \\    --image <str>          Path to image file for multimodal inference (PNG or PPM P6).
+    // Diagnostics
+    \\-V, --verbose              Show technical details (params, load times, EOG).
+    \\-d, --debug                Enable debug logging (token IDs, layer timing); implies --verbose.
+    \\    --json                 Output results as JSON (implies --quiet).
+    \\    --model-info           Print model metadata and exit (supports --json).
+    \\    --profile              Profile per-op timing (halves throughput).
     \\<str>...
     \\
 );
@@ -314,12 +339,18 @@ const CliArgs = struct {
     ctx_size: u32,
     kv_type_k: KvQuantType,
     kv_type_v: KvQuantType,
+    /// Number of boundary layers (first N + last N) that use f16 for V cache
+    /// instead of the configured kv_type_v. Protects attention quality at
+    /// layer boundaries where compression is most harmful. 0 = disabled.
+    kv_boundary_v: u32 = 0,
     seed: u64,
     // Tiered KV cache CLI options
     kv_tiers: ?[]const u8 = null,
-    kv_ram_budget: ?[]const u8 = null,
+    kv_ram_budget: ?u32 = null,
     kv_ssd_path: ?[]const u8 = null,
-    kv_ssd_budget: ?[]const u8 = null,
+    kv_ssd_budget: ?u32 = null,
+    kv_eviction: bool = false,
+    kv_budget: u32 = 0,
     host: [4]u8 = .{ 127, 0, 0, 1 },
     api_key: ?[]const u8 = null,
     allow_cpu_fallback: bool,
@@ -329,7 +360,11 @@ const CliArgs = struct {
     profile: bool,
     use_mmap: bool,
     prefill_batch_size: u32,
-    /// Tracks which sampling/generation args the user explicitly set on the CLI.
+    /// Path to vision projector GGUF (mmproj file) for multimodal inference.
+    mmproj: ?[]const u8 = null,
+    /// Path to image file (PNG or PPM P6) for multimodal inference.
+    image: ?[]const u8 = null,
+    /// Tracks which CLI args the user explicitly set (so recipes don't override them).
     user_set: Recipe.Overrides = .{},
 };
 
@@ -349,14 +384,43 @@ fn checkSubcommand(allocator: std.mem.Allocator) bool {
         if (exit_code != 0) std.process.exit(exit_code);
         return true;
     }
-    // Support `agave help <subcommand>` (git convention)
+    if (std.mem.eql(u8, first, "calibrate")) {
+        const calibrate = @import("calibrate.zig");
+        const exit_code = calibrate.run(allocator);
+        if (exit_code != 0) std.process.exit(exit_code);
+        return true;
+    }
+    // Support `agave help [subcommand]` (git convention)
     if (std.mem.eql(u8, first, "help")) {
-        const sub = args_iter.next() orelse return false;
+        const sub = args_iter.next() orelse {
+            printUsage();
+            return true;
+        };
         if (std.mem.eql(u8, sub, "pull")) {
             pull.printUsage();
             return true;
         }
-        return false; // Unknown subcommand — fall through to normal parsing
+        if (std.mem.eql(u8, sub, "calibrate")) {
+            const calibrate = @import("calibrate.zig");
+            calibrate.printUsage();
+            return true;
+        }
+        // Handle flags and self-referential "help help" gracefully
+        if (std.mem.eql(u8, sub, "help") or
+            std.mem.eql(u8, sub, "--help") or
+            std.mem.eql(u8, sub, "-h"))
+        {
+            printUsage();
+            return true;
+        }
+        if (std.mem.eql(u8, sub, "--version") or std.mem.eql(u8, sub, "-v")) {
+            display_mod.printVersion();
+            return true;
+        }
+        eprint("Error: no help available for '{s}'\n", .{sub});
+        eprint("Available help topics: pull, calibrate\n", .{});
+        eprint("Run 'agave --help' for more information.\n", .{});
+        std.process.exit(1);
     }
     return false;
 }
@@ -368,7 +432,7 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
         .allocator = allocator,
     }) catch |e| {
         diag.reportToFile(stderr, e) catch {};
-        eprint("Run 'agave --help' for usage information.\n", .{});
+        eprint("Run 'agave --help' for more information.\n", .{});
         std.process.exit(1);
     };
 
@@ -379,11 +443,7 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
     }
 
     if (res.args.version != 0) {
-        if (std.posix.isatty(std.fs.File.stdout().handle)) {
-            print("\xf0\x9f\x8c\xb5 agave {s}\n", .{version});
-        } else {
-            print("agave {s}\n", .{version});
-        }
+        display_mod.printVersion();
         res.deinit();
         return null;
     }
@@ -396,7 +456,9 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
             if (std.mem.eql(u8, cm, "always")) break :blk true;
             if (std.mem.eql(u8, cm, "never")) break :blk false;
             if (!std.mem.eql(u8, cm, "auto")) {
-                eprint("Warning: unknown --color value '{s}', using auto\n", .{cm});
+                eprint("Error: unknown --color value '{s}'\n", .{cm});
+                eprint("  Valid options: auto, always, never\n", .{});
+                std.process.exit(1);
             }
         }
         // --no-color flag
@@ -425,15 +487,11 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
 
     const backend_choice: BackendChoice = blk: {
         const be_str = res.args.backend orelse "auto";
-        if (std.mem.eql(u8, be_str, "cpu")) break :blk .cpu;
-        if (std.mem.eql(u8, be_str, "metal")) break :blk .metal;
-        if (std.mem.eql(u8, be_str, "vulkan")) break :blk .vulkan;
-        if (std.mem.eql(u8, be_str, "cuda")) break :blk .cuda;
-        if (std.mem.eql(u8, be_str, "rocm")) break :blk .rocm;
-        if (std.mem.eql(u8, be_str, "auto")) break :blk .auto;
-        eprint("Error: unknown backend '{s}'\n", .{be_str});
-        eprint("  Valid options: auto, cpu, metal, vulkan, cuda, rocm\n", .{});
-        std.process.exit(1);
+        break :blk std.meta.stringToEnum(BackendChoice, be_str) orelse {
+            eprint("Error: unknown backend '{s}'\n", .{be_str});
+            eprint("  Valid options: auto, cpu, metal, vulkan, cuda, rocm\n", .{});
+            std.process.exit(1);
+        };
     };
 
     const temperature = parseF32(res.args.temperature, "temperature") orelse 0.0;
@@ -456,9 +514,12 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
 
     // Validate --kv-tiers value
     if (res.args.@"kv-tiers") |tiers_str| {
-        if (!std.mem.eql(u8, tiers_str, "vram+ram") and !std.mem.eql(u8, tiers_str, "vram+ram+ssd")) {
-            eprint("Error: invalid --kv-tiers value '{s}'\n", .{tiers_str});
-            eprint("  Valid options: vram+ram, vram+ram+ssd\n", .{});
+        if (std.mem.eql(u8, tiers_str, "off")) {
+            // "off" is the documented default — treat as if the flag was not passed
+            res.args.@"kv-tiers" = null;
+        } else if (!std.mem.eql(u8, tiers_str, "vram+ram") and !std.mem.eql(u8, tiers_str, "vram+ram+ssd")) {
+            eprint("Error: unknown --kv-tiers value '{s}'\n", .{tiers_str});
+            eprint("  Valid options: off, vram+ram, vram+ram+ssd\n", .{});
             std.process.exit(1);
         }
     }
@@ -471,6 +532,60 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
             eprint("Warning: --kv-ssd-budget has no effect without --kv-tiers\n", .{});
         if (res.args.@"kv-ssd-path" != null)
             eprint("Warning: --kv-ssd-path has no effect without --kv-tiers\n", .{});
+    } else if (res.args.@"kv-tiers") |tiers_str| {
+        // Warn about SSD flags when --kv-tiers doesn't include ssd
+        if (std.mem.indexOf(u8, tiers_str, "ssd") == null) {
+            if (res.args.@"kv-ssd-path" != null)
+                eprint("Warning: --kv-ssd-path has no effect without ssd in --kv-tiers\n", .{});
+            if (res.args.@"kv-ssd-budget" != null)
+                eprint("Warning: --kv-ssd-budget has no effect without ssd in --kv-tiers\n", .{});
+        }
+    }
+
+    // Validate --kv-eviction value
+    if (res.args.@"kv-eviction") |ev_str| {
+        if (!std.mem.eql(u8, ev_str, "none") and !std.mem.eql(u8, ev_str, "norm") and !std.mem.eql(u8, ev_str, "tri")) {
+            eprint("Error: unknown --kv-eviction value '{s}'\n", .{ev_str});
+            eprint("  Valid options: none, norm, tri\n", .{});
+            std.process.exit(1);
+        }
+    }
+
+    // Warn about --kv-budget without --kv-eviction
+    if (res.args.@"kv-budget" != null) {
+        const has_eviction = if (res.args.@"kv-eviction") |e| (!std.mem.eql(u8, e, "none")) else false;
+        if (!has_eviction)
+            eprint("Warning: --kv-budget has no effect without --kv-eviction\n", .{});
+    }
+
+    // Warn about --kv-type having no effect when both per-component types are set
+    if (res.args.@"kv-type" != null) {
+        const has_k = res.args.@"kv-type-k" != null or res.args.@"cache-type-k" != null;
+        const has_v = res.args.@"kv-type-v" != null or res.args.@"cache-type-v" != null;
+        if (has_k and has_v)
+            eprint("Warning: --kv-type has no effect when both --kv-type-k and --kv-type-v are set\n", .{});
+    }
+
+    // Validate max-tokens
+    if (res.args.@"max-tokens") |mt| {
+        if (mt == 0) {
+            eprint("Error: --max-tokens must be >= 1\n", .{});
+            std.process.exit(1);
+        }
+    }
+
+    // Validate prefill batch size
+    if (res.args.@"prefill-batch-size") |pbs| {
+        if (pbs == 0) {
+            eprint("Error: --prefill-batch-size must be >= 1\n", .{});
+            std.process.exit(1);
+        }
+    }
+
+    // Warn about extra positional arguments (e.g. unquoted multi-word prompt)
+    if (positionals.len > 2) {
+        eprint("Warning: extra arguments after prompt ignored (did you forget to quote it?)\n", .{});
+        eprint("  Usage: agave model.gguf \"multi word prompt\"\n", .{});
     }
 
     // Warn about server-only flags that have no effect without --serve
@@ -481,10 +596,32 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
             eprint("Warning: --host has no effect without --serve\n", .{});
         if (res.args.@"api-key" != null)
             eprint("Warning: --api-key has no effect without --serve\n", .{});
+    } else {
+        // Warn about flags ignored in server mode (early, before model loading)
+        if (positionals.len > 1)
+            eprint("Warning: prompt ignored in server mode (--serve)\n", .{});
+        if (res.args.system != null)
+            eprint("Warning: --system ignored in server mode (system prompt comes from API request)\n", .{});
+        if (res.args.image != null)
+            eprint("Warning: --image ignored in server mode (images come from API request)\n", .{});
+    }
+
+    // Warn about --allow-cpu-fallback with CPU backend (already on CPU, nothing to fall back to)
+    if (res.args.@"allow-cpu-fallback" != 0 and backend_choice == .cpu)
+        eprint("Warning: --allow-cpu-fallback has no effect with --backend cpu\n", .{});
+
+    // JSON mode + interactive REPL would corrupt the JSON output stream
+    if (json_mode and res.args.@"model-info" == 0 and res.args.serve == 0 and positionals.len < 2) {
+        if (std.posix.isatty(std.fs.File.stdin().handle)) {
+            eprint("Error: --json requires a prompt or --model-info\n", .{});
+            eprint("  Usage: agave model.gguf --json \"prompt\"\n", .{});
+            eprint("  Or: echo \"prompt\" | agave model.gguf --json\n", .{});
+            std.process.exit(1);
+        }
     }
 
     return .{
-        .model_path = if (positionals.len > 0) positionals[0] else "",
+        .model_path = positionals[0],
         .prompt = if (positionals.len > 1) positionals[1] else null,
         .serve = res.args.serve != 0,
         .port = res.args.port orelse default_port,
@@ -498,43 +635,29 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
         .ctx_size = res.args.@"ctx-size" orelse 0,
         .seed = res.args.seed orelse @as(u64, @truncate(@as(u128, @bitCast(std.time.nanoTimestamp())))),
         .kv_type_k = blk: {
-            // --cache-type-k / --kv-type-k overrides --kv-type for keys
-            const ks_override = res.args.@"cache-type-k" orelse res.args.@"kv-type-k";
-            if (ks_override) |ks| {
-                break :blk KvQuantType.fromString(ks) orelse {
-                    eprint("Error: unknown cache-type-k '{s}'\n", .{ks});
-                    eprint("  Valid options: f32, f16, q8_0, int8, fp8, nvfp4, turbo2, turbo3, turbo4\n", .{});
-                    std.process.exit(1);
-                };
-            }
-            const kv_str = res.args.@"kv-type" orelse break :blk .f16;
-            break :blk KvQuantType.fromString(kv_str) orelse {
-                eprint("Error: unknown KV type '{s}'\n", .{kv_str});
-                eprint("  Valid options: f32, f16, q8_0, int8, fp8, nvfp4, turbo2, turbo3, turbo4\n", .{});
-                std.process.exit(1);
-            };
+            if (res.args.@"kv-type-k") |s| break :blk kvTypeOrExit(s, "--kv-type-k");
+            if (res.args.@"cache-type-k") |s| break :blk kvTypeOrExit(s, "--cache-type-k");
+            const kv_str = res.args.@"kv-type" orelse break :blk KvQuantType.f16;
+            // "turbo" preset: asymmetric K=q8_0 V=turbo4 (K precision protects attention routing)
+            if (std.mem.eql(u8, kv_str, "turbo")) break :blk KvQuantType.q8_0;
+            break :blk kvTypeOrExit(kv_str, "--kv-type");
         },
         .kv_type_v = blk: {
-            // --cache-type-v / --kv-type-v overrides --kv-type for values
-            const vs_override = res.args.@"cache-type-v" orelse res.args.@"kv-type-v";
-            if (vs_override) |vs| {
-                break :blk KvQuantType.fromString(vs) orelse {
-                    eprint("Error: unknown cache-type-v '{s}'\n", .{vs});
-                    eprint("  Valid options: f32, f16, q8_0, int8, fp8, nvfp4, turbo2, turbo3, turbo4\n", .{});
-                    std.process.exit(1);
-                };
-            }
-            const kv_str = res.args.@"kv-type" orelse break :blk .f16;
-            break :blk KvQuantType.fromString(kv_str) orelse {
-                eprint("Error: unknown KV type '{s}'\n", .{kv_str});
-                eprint("  Valid options: f32, f16, q8_0, int8, fp8, nvfp4, turbo2, turbo3, turbo4\n", .{});
-                std.process.exit(1);
-            };
+            if (res.args.@"kv-type-v") |s| break :blk kvTypeOrExit(s, "--kv-type-v");
+            if (res.args.@"cache-type-v") |s| break :blk kvTypeOrExit(s, "--cache-type-v");
+            const kv_str = res.args.@"kv-type" orelse break :blk KvQuantType.f16;
+            // "turbo" preset: asymmetric K=q8_0 V=turbo4 (V compression is nearly free)
+            if (std.mem.eql(u8, kv_str, "turbo")) break :blk KvQuantType.turbo4;
+            break :blk kvTypeOrExit(kv_str, "--kv-type");
         },
+        // Turbo preset enables boundary V protection (first/last 2 layers at f16-V)
+        .kv_boundary_v = if (res.args.@"kv-type") |kv| (if (std.mem.eql(u8, kv, "turbo")) @as(u32, 2) else 0) else 0,
         .kv_tiers = res.args.@"kv-tiers",
         .kv_ram_budget = res.args.@"kv-ram-budget",
         .kv_ssd_path = res.args.@"kv-ssd-path",
         .kv_ssd_budget = res.args.@"kv-ssd-budget",
+        .kv_eviction = if (res.args.@"kv-eviction") |e| (!std.mem.eql(u8, e, "none")) else false,
+        .kv_budget = res.args.@"kv-budget" orelse 0,
         .host = blk: {
             const host_str = res.args.host orelse break :blk [4]u8{ 127, 0, 0, 1 };
             if (std.mem.eql(u8, host_str, "0.0.0.0")) break :blk [4]u8{ 0, 0, 0, 0 };
@@ -544,15 +667,18 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
             var iter = std.mem.splitScalar(u8, host_str, '.');
             var pi: usize = 0;
             while (iter.next()) |part| {
-                if (pi >= 4) break;
+                if (pi >= 4) {
+                    eprint("Error: invalid host address '{s}' (expected IPv4 address or 'localhost')\n", .{host_str});
+                    std.process.exit(1);
+                }
                 parts[pi] = std.fmt.parseInt(u8, part, 10) catch {
-                    eprint("Error: invalid host address '{s}'\n", .{host_str});
+                    eprint("Error: invalid host address '{s}' (expected IPv4 address or 'localhost')\n", .{host_str});
                     std.process.exit(1);
                 };
                 pi += 1;
             }
             if (pi != 4) {
-                eprint("Error: invalid host address '{s}' (expected IPv4 dotted-quad)\n", .{host_str});
+                eprint("Error: invalid host address '{s}' (expected IPv4 address or 'localhost')\n", .{host_str});
                 std.process.exit(1);
             }
             break :blk parts;
@@ -565,6 +691,8 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
         .profile = res.args.profile != 0,
         .use_mmap = res.args.mmap != 0,
         .prefill_batch_size = res.args.@"prefill-batch-size" orelse default_chunk_size,
+        .mmproj = res.args.mmproj,
+        .image = res.args.image,
         .user_set = .{
             .temperature = res.args.temperature != null,
             .top_p = res.args.@"top-p" != null,
@@ -601,63 +729,90 @@ fn printUsage() void {
         \\  <model.gguf|model-dir/>  Path to GGUF model file or SafeTensors directory
         \\  [prompt]                 Text prompt (omit for interactive REPL)
         \\
-        \\OPTIONS:
+        \\GENERAL:
         \\  -h, --help             Show this help message
         \\  -v, --version          Print version
         \\  -q, --quiet            Suppress banner and stats (raw output only)
+        \\      --color <MODE>     Color mode: auto, always, never [default: auto]
+        \\      --no-color         Disable colored output (same as --color=never, respects NO_COLOR env)
+        \\
+        \\GENERATION:
+        \\  -n, --max-tokens <N>      Maximum tokens to generate [default: 512]
+        \\  -t, --temperature <T>     Sampling temperature, 0 = greedy [default: 0]
+        \\      --top-p <P>           Nucleus sampling threshold [default: 1.0]
+        \\      --top-k <K>           Top-k sampling, 0 = disabled [default: 0]
+        \\      --repeat-penalty <R>  Repetition penalty [default: 1.0]
+        \\      --seed <N>            Random seed for sampling [default: random]
+        \\      --system <TEXT>       System prompt for chat formatting
+        \\
+        \\BACKEND & MODEL:
+        \\      --backend <BE>        Compute backend: auto, cpu, metal, vulkan, cuda, rocm [default: auto]
+        \\      --ctx-size <N>        Context window size; 0 = full model context [default: min(model, 4096)]
+        \\      --allow-cpu-fallback  Allow GPU backends to fall back to CPU for unsupported ops
+        \\      --mmap                Use lazy mmap instead of eagerly paging weights into RAM
+        \\      --prefill-batch-size <N>  Prefill chunk size in tokens [default: 512]
+        \\
+        \\KV CACHE:
+        \\      --kv-type <TYPE>      KV cache quantization [default: f16]
+        \\                            Types: f32, f16, q8_0/q8, int8/i8, fp8/fp8_e4m3, nvfp4/fp4,
+        \\                                   turbo2/tq2, turbo3/tq3, turbo4/tq4
+        \\      --kv-type-k <TYPE>    KV key quantization (overrides --kv-type, alias: --cache-type-k)
+        \\      --kv-type-v <TYPE>    KV value quantization (overrides --kv-type, alias: --cache-type-v)
+        \\      --kv-tiers <TIERS>    Tiered KV cache: vram+ram, vram+ram+ssd [default: off]
+        \\      --kv-ram-budget <GB>  RAM tier budget, integer GB (requires --kv-tiers) [default: 50% of free RAM]
+        \\      --kv-ssd-path <PATH>  SSD tier file path (requires --kv-tiers with ssd)
+        \\      --kv-ssd-budget <GB>  SSD tier budget, integer GB (requires --kv-tiers with ssd) [default: 10]
+        \\      --kv-eviction <POL>   KV eviction policy: none, norm [default: none]
+        \\      --kv-budget <N>       Max KV positions to keep during eviction [default: 80% of ctx-size]
+        \\
+        \\SERVER:
         \\  -s, --serve            Start HTTP server (OpenAI + Anthropic API)
         \\  -p, --port <PORT>      Server port [default: 49453]
-        \\      --host <ADDR>      Server bind address [default: 127.0.0.1]
-        \\      --api-key <KEY>    API key for server authentication (Bearer token)
-        \\  -n, --max-tokens <N>   Maximum tokens to generate [default: 512]
-        \\  -t, --temperature <T>  Sampling temperature, 0 = greedy [default: 0]
-        \\      --top-p <P>        Nucleus sampling threshold [default: 1.0]
-        \\      --top-k <K>        Top-k sampling, 0 = disabled [default: 0]
-        \\      --repeat-penalty <R>  Repetition penalty [default: 1.0]
-        \\      --system <TEXT>     System prompt for chat formatting
-        \\      --backend <BE>     Compute backend: auto, cpu, metal, vulkan, cuda, rocm [default: auto]
-        \\      --ctx-size <N>     Context window size [default: 4096, 0 = model max]
-        \\      --kv-type <TYPE>   KV cache quantization: f32, f16, q8_0, int8, fp8, nvfp4, turbo2/3/4 [default: f16]
-        \\      --kv-type-k <TYPE>    KV key quantization (overrides --kv-type for keys)
-        \\      --kv-type-v <TYPE>    KV value quantization (overrides --kv-type for values)
-        \\      --kv-tiers <TIERS> Tiered KV cache: vram+ram, vram+ram+ssd [default: off]
-        \\      --kv-ram-budget <GB>  RAM tier budget in GB [default: 50% of free RAM]
-        \\      --kv-ssd-path <PATH>  SSD tier file path (requires --kv-tiers with ssd)
-        \\      --kv-ssd-budget <GB>  SSD tier budget in GB [default: 10]
-        \\      --seed <N>         Random seed for sampling [default: random]
+        \\      --host <ADDR>      Bind address: IPv4, localhost, or 0.0.0.0 [default: 127.0.0.1]
+        \\      --api-key <KEY>    API key for server auth (or AGAVE_API_KEY env)
+        \\
+        \\MULTIMODAL:
+        \\      --mmproj <PATH>    Path to vision projector GGUF (mmproj file)
+        \\      --image <PATH>     Path to image file (PNG or PPM P6)
+        \\
+        \\DIAGNOSTICS:
         \\  -V, --verbose          Show technical details (params, load times, EOG)
-        \\      --no-color         Disable colored output (also respects NO_COLOR env)
-        \\      --color <MODE>     Color mode: auto, always, never [default: auto]
-        \\      --allow-cpu-fallback  Allow GPU backends to fall back to CPU for unsupported ops
-        \\  -d, --debug            Enable debug logging (token IDs, layer timing)
+        \\  -d, --debug            Enable debug logging (token IDs, layer timing); implies --verbose
         \\      --json             Output results as JSON (implies --quiet)
-        \\      --model-info       Print model metadata and exit (combine with --json)
+        \\      --model-info       Print model metadata and exit (supports --json)
         \\      --profile          Profile per-op timing (halves throughput)
-        \\      --mmap             Use lazy mmap instead of eagerly paging weights into RAM
-        \\      --prefill-batch-size <N>  Prefill chunk size in tokens [default: 512]
+        \\
+        \\ENVIRONMENT:
+        \\  NO_COLOR             Disable colored output when set (https://no-color.org)
+        \\  AGAVE_API_KEY        API key for server auth (alternative to --api-key)
+        \\  HF_TOKEN             HuggingFace API token for private repos (used by pull)
         \\
         \\EXAMPLES:
         \\  agave model.gguf                          Interactive REPL
         \\  agave model.gguf "What is 2+2?"           Single prompt
         \\  agave model.gguf -q "Hello" > out.txt     Pipe output (no banner)
-        \\  agave model.gguf --serve --port 3000       HTTP server
+        \\  agave model.gguf --serve --port 3000      HTTP server
         \\  agave model.gguf -t 0.7 --top-p 0.9 "Tell me a joke"
-        \\  agave model.gguf --backend cpu "Hello"     Force CPU backend
+        \\  agave model.gguf --backend cpu "Hello"    Force CPU backend
         \\  agave ./glm-4-9b/ "Hello"                 Load SafeTensors directory
-        \\  echo "Explain TCP" | agave model.gguf      Pipe prompt from stdin
-        \\  agave model.gguf --json "Hello"            JSON output with stats
-        \\  agave model.gguf --json --model-info       Model metadata as JSON
+        \\  echo "Explain TCP" | agave model.gguf     Pipe prompt from stdin
+        \\  agave model.gguf --json "Hello"           JSON output with stats
+        \\  agave model.gguf --json --model-info      Model metadata as JSON
+        \\  agave model.gguf --kv-type tq4 "Hello"   TurboQuant KV cache (saves VRAM)
+        \\  agave model.gguf --ctx-size 0 "Hello"    Use full model context window
+        \\  agave model.gguf --image pic.png "What's this?"  Vision (auto-detects mmproj)
         \\
         \\SUBCOMMANDS:
         \\  agave pull <org/repo>                    Download GGUF model from HuggingFace
-        \\  agave pull <org/repo> --list             List available quantizations
-        \\  agave pull --help                        Pull subcommand help
+        \\  agave pull <org/repo> --quant Q4_K_M     Download specific quantization
+        \\  agave pull <org/repo> --list             List available GGUF files
+        \\  agave calibrate <model.gguf>             Generate TriAttention calibration data
+        \\  agave help <topic>                       Show help for a subcommand (e.g. pull, calibrate)
         \\
         \\SUPPORTED ARCHITECTURES:
         \\  gemma3, gemma4, qwen35, gpt-oss, nemotron-h, nemotron-nano, glm4
         \\
         \\REPL COMMANDS:
-        \\
     ++ repl_help;
     stdout.writeAll(usage) catch {};
 }
@@ -668,8 +823,6 @@ fn elapsedMs(start: i64) u64 {
     return @intCast(@max(std.time.milliTimestamp() - start, 0));
 }
 
-const getQuantName = Format.getQuantName;
-
 const EogTokens = struct { ids: [max_eog_ids]u32, len: usize };
 
 /// Collect additional EOS/EOG token IDs from GGUF metadata.
@@ -677,7 +830,7 @@ fn getEogTokens(fmt_iface: Format, primary_eos: u32) EogTokens {
     var result: EogTokens = .{ .ids = undefined, .len = 0 };
     result.ids[0] = primary_eos;
     result.len = 1;
-    // Check for EOG token arrays (e.g., Gemma 3 stores multiple EOG IDs)
+    // Check for EOG token arrays or single-value EOG IDs from GGUF metadata
     const array_keys = [_][]const u8{
         "tokenizer.ggml.eog_token_id",
         "tokenizer.ggml.eot_token_id",
@@ -768,7 +921,7 @@ pub fn main() !void {
         fmt.getMetaStr("model_type") orelse "unknown";
     const name = fmt.getMetaStr("general.name") orelse
         fmt.getMetaStr("model_type") orelse "agave";
-    const quant = getQuantName(fmt);
+    const quant = Format.getQuantName(fmt);
 
     var arch = Arch.detect(arch_str) orelse {
         eprint("Error: unsupported architecture '{s}'\n", .{arch_str});
@@ -776,7 +929,7 @@ pub fn main() !void {
         std.process.exit(1);
     };
 
-    // SafeTensors Nemotron Nano variant: uses backbone.layers.* tensor naming + NVFP4
+    // SafeTensors Nemotron Nano variant: detected by backbone.embeddings.weight tensor
     if (arch == .nemotron_h and fmt.getTensor("backbone.embeddings.weight") != null) {
         arch = .nemotron_nano;
     }
@@ -804,31 +957,23 @@ pub fn main() !void {
     var display = Display.init(output_mode, g_verbose);
 
     // ── Compute file size (needed for banner and progress) ────────
-    const file_size_bytes: usize = if (gguf_file) |g| g.file_size else if (st_dir) |s| blk: {
-        var total: u64 = 0;
-        for (s.shard_data) |shard| total += shard.data.len;
-        break :blk total;
-    } else 0;
+    const file_size_bytes: usize = if (gguf_file) |g| g.file_size else if (st_dir) |s| s.totalBytes() else 0;
 
     // ── Banner (printed before loading so user sees info immediately) ─
+    const meta_n_embed = fmt.getArchU32(arch_str, "embedding_length") orelse fmt.getMetaU32("hidden_size") orelse 0;
+    const meta_n_heads = fmt.getArchU32(arch_str, "attention.head_count") orelse fmt.getMetaU32("num_attention_heads") orelse 0;
     var disp_info = display_mod.ModelInfo{
         .name = name,
         .arch_name = arch.displayName(),
         .quant = quant,
         .be_name = be_name,
         .n_layers = fmt.getArchU32(arch_str, "block_count") orelse fmt.getMetaU32("num_hidden_layers") orelse 0,
-        .n_embed = fmt.getArchU32(arch_str, "embedding_length") orelse fmt.getMetaU32("hidden_size") orelse 0,
-        .n_heads = fmt.getArchU32(arch_str, "attention.head_count") orelse fmt.getMetaU32("num_attention_heads") orelse 0,
+        .n_embed = meta_n_embed,
+        .n_heads = meta_n_heads,
         .n_kv_heads = fmt.getArchU32(arch_str, "attention.head_count_kv") orelse fmt.getMetaU32("num_key_value_heads") orelse 0,
         .head_dim = fmt.getArchU32(arch_str, "attention.key_length") orelse
             fmt.getMetaU32("head_dim") orelse
-            // Compute from n_embed / n_heads when metadata is missing
-            if ((fmt.getArchU32(arch_str, "embedding_length") orelse fmt.getMetaU32("hidden_size") orelse 0) > 0 and
-                (fmt.getArchU32(arch_str, "attention.head_count") orelse fmt.getMetaU32("num_attention_heads") orelse 0) > 0)
-                (fmt.getArchU32(arch_str, "embedding_length") orelse fmt.getMetaU32("hidden_size") orelse 0) /
-                    (fmt.getArchU32(arch_str, "attention.head_count") orelse fmt.getMetaU32("num_attention_heads") orelse 1)
-            else
-                0,
+            if (meta_n_embed > 0 and meta_n_heads > 0) meta_n_embed / meta_n_heads else 0,
         .ff_dim = fmt.getArchU32(arch_str, "feed_forward_length") orelse fmt.getMetaU32("intermediate_size") orelse 0,
         .vocab_size = if (fmt.getVocab()) |v| @intCast(v.len) else fmt.getArchU32(arch_str, "vocab_size") orelse 0,
         .ctx_size = fmt.getArchU32(arch_str, "context_length") orelse fmt.getMetaU32("max_position_embeddings") orelse 0,
@@ -860,9 +1005,10 @@ pub fn main() !void {
     cli.ctx_size = applied.ctx_size;
 
     // ── Context size defaults ────────────────────────────────────
-    // When neither user nor recipe set ctx_size, cap to default_ctx_size
-    // to avoid massive KV cache allocations for models that report very
-    // large context lengths (e.g. 128K). --ctx-size 0 = use model's full context.
+    // When ctx_size is 0, check whether the user explicitly passed --ctx-size 0
+    // (meaning "use full context") or no one set it (apply smart default cap).
+    // This avoids massive KV cache allocations for models with very large
+    // context lengths (e.g. 128K). --ctx-size 0 = use model's full context.
     const model_native_ctx = disp_info.ctx_size; // from model metadata
     if (cli.ctx_size == 0) {
         if (cli.user_set.ctx_size) {
@@ -949,6 +1095,8 @@ pub fn main() !void {
         fmt.getMetaU32("eos_token_id") orelse
         arch.defaultEos();
     const bos_id: u32 = blk: {
+        // GLM-4: template includes [gMASK]<sop> — don't also prepend metadata BOS
+        if (arch == .glm4) break :blk 0;
         if (fmt.getMetaU32("tokenizer.ggml.bos_token_id")) |id| break :blk id;
         if (fmt.getMetaU32("bos_token_id")) |id| break :blk id;
         // GPT-2 based tokenizers (Qwen, etc.) don't use BOS by default.
@@ -1004,7 +1152,7 @@ pub fn main() !void {
         if (!std.posix.isatty(stdin_fd.handle)) {
             piped_prompt = stdin_fd.readToEndAlloc(allocator, max_stdin_prompt_size) catch |e| blk: {
                 if (e == error.StreamTooLong) {
-                    eprint("Error: piped input exceeds {d} bytes limit\n", .{max_stdin_prompt_size});
+                    eprint("Error: piped input exceeds 1 MB limit\n", .{});
                     std.process.exit(1);
                 }
                 break :blk null;
@@ -1018,11 +1166,11 @@ pub fn main() !void {
     else
         null;
 
-    if (cli.serve and effective_prompt != null) {
-        eprint("Warning: prompt ignored in server mode (--serve)\n", .{});
-    }
-    if (cli.serve and cli.system_prompt != null) {
-        eprint("Warning: --system ignored in server mode (system prompt comes from API request)\n", .{});
+    // Warn about piped stdin in server mode (positional prompt and --system
+    // are already warned in parseCli before model loading).
+    // Note: piped_prompt is only read when !cli.serve, so check isatty directly.
+    if (cli.serve and cli.prompt == null and !std.posix.isatty(std.fs.File.stdin().handle)) {
+        eprint("Warning: piped stdin ignored in server mode (--serve)\n", .{});
     }
 
     // ── Construct load info ────────────────────────────────────────
@@ -1033,6 +1181,8 @@ pub fn main() !void {
         "SafeTensors"
     else
         "";
+    disp_info.format_name = format_name;
+
     const load_info = display_mod.LoadInfo{
         .n_tensors = n_tensors,
         .tok_kind = @tagName(tok_kind),
@@ -1049,6 +1199,106 @@ pub fn main() !void {
         std.process.exit(1);
 }
 
+/// Load an image file (PNG, PPM P6, or JPEG) and resize to
+/// target_size x target_size. Returns [target_size * target_size * 3]u8
+/// RGB pixels in row-major, channel-last order.
+///
+/// Format is auto-detected from magic bytes:
+///   - PNG (0x89 P N G): full decode via image.decodePng
+///   - PPM P6 ("P6"): raw RGB parse
+///   - JPEG (0xFF 0xD8): returns error with suggestion to convert
+///
+/// Resize uses bilinear interpolation via image.resize.
+fn loadImage(allocator: std.mem.Allocator, path: []const u8, target_size: u32) ![]u8 {
+    const file = try std.fs.cwd().openFile(path, .{});
+    defer file.close();
+
+    // Read entire file into memory (vision images are small, typically < 10MB)
+    const max_image_file_size: usize = 64 * 1024 * 1024; // 64 MB limit
+    const file_data = try file.readToEndAlloc(allocator, max_image_file_size);
+    defer allocator.free(file_data);
+
+    const format = image.detectFormat(file_data);
+    switch (format) {
+        .png => {
+            var png = try image.decodePng(allocator, file_data);
+            defer png.deinit();
+            return image.resize(allocator, png.pixels, png.width, png.height, target_size, target_size);
+        },
+        .ppm => {
+            return loadPpmData(allocator, file_data, target_size);
+        },
+        .jpeg => {
+            eprint("Error: JPEG images are not supported. Please convert to PNG:\n", .{});
+            eprint("  convert input.jpg input.png   (ImageMagick)\n", .{});
+            eprint("  ffmpeg -i input.jpg input.png  (ffmpeg)\n", .{});
+            return error.InvalidImageFormat;
+        },
+        .unknown => {
+            eprint("Error: unrecognized image format. Supported: PNG, PPM (P6)\n", .{});
+            return error.InvalidImageFormat;
+        },
+    }
+}
+
+/// Parse PPM P6 data from a buffer and resize to target dimensions.
+///
+/// PPM P6 format:
+///   - Magic "P6", optional comments starting with '#'
+///   - "<width> <height>\n", "<maxval>\n" (usually 255)
+///   - width * height * 3 raw bytes (RGB)
+fn loadPpmData(allocator: std.mem.Allocator, file_data: []const u8, target_size: u32) ![]u8 {
+    var pos: usize = 0;
+
+    // Validate magic "P6"
+    if (file_data.len < 3) return error.InvalidImageFormat;
+    if (file_data[0] != 'P' or file_data[1] != '6') return error.InvalidImageFormat;
+    pos = 2;
+    // Skip whitespace after magic
+    while (pos < file_data.len and (file_data[pos] == '\n' or file_data[pos] == '\r' or file_data[pos] == ' ')) : (pos += 1) {}
+
+    // Helper: skip comments and whitespace, read next non-comment token
+    const readToken = struct {
+        fn call(data: []const u8, start: *usize) ?[]const u8 {
+            var p = start.*;
+            while (p < data.len) {
+                while (p < data.len and (data[p] == ' ' or data[p] == '\t' or data[p] == '\n' or data[p] == '\r')) : (p += 1) {}
+                if (p >= data.len) return null;
+                if (data[p] == '#') {
+                    while (p < data.len and data[p] != '\n') : (p += 1) {}
+                    continue;
+                }
+                const tok_start = p;
+                while (p < data.len and data[p] != ' ' and data[p] != '\t' and data[p] != '\n' and data[p] != '\r') : (p += 1) {}
+                start.* = p;
+                return data[tok_start..p];
+            }
+            return null;
+        }
+    }.call;
+
+    const w_str = readToken(file_data, &pos) orelse return error.InvalidImageFormat;
+    const width = std.fmt.parseInt(u32, w_str, 10) catch return error.InvalidImageFormat;
+    const h_str = readToken(file_data, &pos) orelse return error.InvalidImageFormat;
+    const height = std.fmt.parseInt(u32, h_str, 10) catch return error.InvalidImageFormat;
+    const max_str = readToken(file_data, &pos) orelse return error.InvalidImageFormat;
+    _ = std.fmt.parseInt(u32, max_str, 10) catch return error.InvalidImageFormat;
+
+    if (width == 0 or height == 0) return error.InvalidImageFormat;
+
+    // Skip exactly one whitespace character after maxval (part of PPM spec)
+    if (pos < file_data.len) pos += 1;
+
+    // Remaining data is raw pixels (checked arithmetic to prevent overflow with crafted dimensions)
+    const src_pixels: usize = std.math.mul(usize, std.math.mul(usize, @as(usize, width), height) catch
+        return error.InvalidImageSize, 3) catch return error.InvalidImageSize;
+    if (pos + src_pixels > file_data.len) return error.InvalidImageSize;
+    const src_data = file_data[pos..][0..src_pixels];
+
+    // Resize using bilinear interpolation
+    return image.resize(allocator, src_data, width, height, target_size, target_size);
+}
+
 /// Initialize the model and run inference/server/REPL. Returns false on failure.
 fn initAndRun(
     arch: Arch,
@@ -1056,7 +1306,7 @@ fn initAndRun(
     fmt: Format,
     be: Backend,
     tok: *BpeTokenizer,
-    cli: *const CliArgs,
+    cli: *CliArgs,
     tok_kind: TokenizerKind,
     eog: anytype,
     effective_prompt: ?[]const u8,
@@ -1075,18 +1325,12 @@ fn initAndRun(
         const has_ssd = std.mem.indexOf(u8, tiers_str, "ssd") != null;
 
         const ram_gb: usize = if (cli.kv_ram_budget) |b|
-            std.fmt.parseInt(usize, b, 10) catch ram_fb: {
-                eprint("Warning: invalid --kv-ram-budget '{s}', using default {d}GB\n", .{ b, default_ram_budget_gb });
-                break :ram_fb default_ram_budget_gb;
-            }
+            @as(usize, b)
         else
             detectFreeRam() / (ram_budget_divisor * gib_bytes);
 
         const ssd_gb: usize = if (cli.kv_ssd_budget) |b|
-            std.fmt.parseInt(usize, b, 10) catch ssd_fb: {
-                eprint("Warning: invalid --kv-ssd-budget '{s}', using default {d}GB\n", .{ b, default_ssd_budget_gb });
-                break :ssd_fb default_ssd_budget_gb;
-            }
+            @as(usize, b)
         else
             default_ssd_budget_gb;
 
@@ -1101,10 +1345,16 @@ fn initAndRun(
             fmt.getMetaU32("num_attention_heads") orelse tiered_fallback_n_heads;
         const head_dim = fmt.getMetaU32("llama.attention.key_length") orelse
             fmt.getMetaU32("head_dim") orelse (n_embd / n_heads);
-        const kv_dim: usize = @as(usize, n_kv_heads) * head_dim;
+        const kv_dim: usize = std.math.mul(usize, @as(usize, n_kv_heads), head_dim) catch {
+            eprint("Error: KV dimensions overflow (n_kv_heads={d}, head_dim={d})\n", .{ n_kv_heads, head_dim });
+            return false;
+        };
 
         const block_size = tiered_kv_block_size;
-        const bytes_per_block = @as(usize, block_size) * kv_dim * @sizeOf(f32) * kv_tensors_per_position;
+        const bytes_per_block = std.math.mul(usize, @as(usize, block_size) * (@sizeOf(f32) * kv_tensors_per_position), kv_dim) catch {
+            eprint("Error: KV cache block size overflow (block_size={d}, kv_dim={d})\n", .{ block_size, kv_dim });
+            return false;
+        };
         const ctx = if (cli.ctx_size > 0) cli.ctx_size else default_ctx_size;
         const vram_blocks: usize = (@as(usize, ctx) + block_size - 1) / block_size;
         const ram_blocks: usize = if (has_ram and bytes_per_block > 0) (ram_gb * gib_bytes) / bytes_per_block else 0;
@@ -1133,7 +1383,11 @@ fn initAndRun(
 
     // Use ModelStorage to initialize the model without exposing concrete types.
     const init_start = std.time.milliTimestamp();
-    var mdl = ModelStorage.initFromArch(arch, allocator, fmt, be, cli.ctx_size, cli.kv_type_k, cli.kv_type_v, tiered_ptr) catch |e| {
+    const eviction_budget: u32 = if (cli.kv_eviction)
+        (if (cli.kv_budget > 0) cli.kv_budget else @as(u32, @intCast(cli.ctx_size * 4 / 5)))
+    else
+        0;
+    var mdl = ModelStorage.initFromArch(arch, allocator, fmt, be, cli.ctx_size, cli.kv_type_k, cli.kv_type_v, cli.kv_boundary_v, eviction_budget, tiered_ptr) catch |e| {
         eprint("Error: failed to initialize {s}: {}\n", .{ arch.displayName(), e });
         if (e == error.OutOfMemory)
             eprint("  Not enough memory. Try a smaller quantization or model.\n", .{})
@@ -1154,16 +1408,148 @@ fn initAndRun(
     if (cli.profile) mdl.enableProfiling();
 
     var model_if = mdl.model();
+
+    // ── Vision encoder (multimodal) ──────────────────────────────
+    const VisionEncoder = model_mod.VisionEncoder;
+    var mmproj_gguf: ?GGUFFile = null;
+    defer if (mmproj_gguf) |*mf| mf.deinit();
+    var vision_enc: ?VisionEncoder = null;
+    defer if (vision_enc) |*ve| ve.deinit();
+
+    // Auto-detect mmproj file if user didn't specify one.
+    // For GGUF files, check the containing directory; for SafeTensors dirs, check
+    // the directory itself. Uses dirname() which returns null for bare filenames.
+    var auto_mmproj_buf: [std.fs.max_path_bytes]u8 = undefined;
+    var mmproj_path: ?[]const u8 = cli.mmproj;
+    if (mmproj_path == null and (cli.image != null or cli.serve)) {
+        const model_dir: []const u8 = blk: {
+            // Check if model_path is a directory (SafeTensors)
+            var probe = std.fs.cwd().openDir(cli.model_path, .{}) catch break :blk std.fs.path.dirname(cli.model_path) orelse ".";
+            probe.close();
+            break :blk cli.model_path;
+        };
+        var dir = std.fs.cwd().openDir(model_dir, .{ .iterate = true }) catch null;
+        if (dir) |*d| {
+            defer d.close();
+            var best: ?[]const u8 = null;
+            var iter = d.iterate();
+            while (iter.next() catch null) |entry| {
+                if (entry.kind == .file and
+                    std.mem.startsWith(u8, entry.name, "mmproj") and
+                    std.mem.endsWith(u8, entry.name, ".gguf"))
+                {
+                    // Pick first alphabetically (or first found if no best yet)
+                    if (best == null or std.mem.lessThan(u8, entry.name, best.?)) {
+                        const full = std.fmt.bufPrint(&auto_mmproj_buf, "{s}/{s}", .{ model_dir, entry.name }) catch continue;
+                        best = full;
+                    }
+                }
+            }
+            if (best) |b| {
+                mmproj_path = b;
+                if (!g_quiet) eprint("vision: auto-detected {s}\n", .{std.fs.path.basename(b)});
+            }
+        }
+    }
+
+    if (mmproj_path) |mpath| {
+        mmproj_gguf = GGUFFile.open(allocator, mpath) catch |err| {
+            eprint("Error: failed to load mmproj '{s}': {}\n", .{ mpath, err });
+            return false;
+        };
+        const mmproj_fmt = mmproj_gguf.?.format();
+        vision_enc = VisionEncoder.init(allocator, mmproj_fmt, be, pool) catch |err| {
+            eprint("Error: failed to init vision encoder: {}\n", .{err});
+            return false;
+        };
+        {
+            const ve = &vision_enc.?;
+            std.debug.assert(ve.patch_size > 0);
+            std.debug.assert(ve.projection_dim > 0);
+        }
+        if (!g_quiet) {
+            const ve = &vision_enc.?;
+            eprint("vision: {d} layers, {d}x{d} patches -> {d}D\n", .{
+                ve.n_blocks,
+                ve.image_size / ve.patch_size,
+                ve.image_size / ve.patch_size,
+                ve.projection_dim,
+            });
+        }
+    }
+
+    // Resolve image pad token ID for multimodal prompt injection.
+    const img_tokens = arch.imageTokens();
+    var n_visual_tokens: u32 = 0;
+
+    if (vision_enc) |*ve| {
+        if (cli.image) |image_path| {
+            // For Qwen VL, use the original image dimensions aligned to
+            // patch_size * 2 (spatial_merge_size) instead of upscaling to image_size.
+            // This matches llama.cpp which processes at native resolution.
+            const target_size: u32 = if (ve.use_native_resolution) blk: {
+                const grid: u32 = ve.patch_size * 2; // patch_size * spatial_merge
+                const orig = image.getImageDimensions(allocator, image_path) catch break :blk ve.image_size;
+                const side = @max(orig.width, orig.height);
+                break :blk ((side + grid - 1) / grid) * grid;
+            } else ve.image_size;
+            const img_pixels = loadImage(allocator, image_path, target_size) catch |err| {
+                eprint("Error: failed to load image '{s}': {}\n", .{ image_path, err });
+                return false;
+            };
+            defer allocator.free(img_pixels);
+
+            // Update n_patches for the actual processing resolution
+            ve.n_patches = (target_size / ve.patch_size) * (target_size / ve.patch_size);
+            ve.n_output_patches = ve.n_patches / 4; // Qwen 4× merge
+            ve.image_size = target_size;
+
+            const visual_tokens = ve.encode(img_pixels) catch |err| {
+                eprint("Error: vision encode failed: {}\n", .{err});
+                return false;
+            };
+            n_visual_tokens = @intCast(visual_tokens.len / ve.projection_dim);
+            const pad_id: u32 = if (img_tokens) |it| it.pad else 0;
+            model_if.setImageEmbeddings(visual_tokens, n_visual_tokens, pad_id);
+            if (!g_quiet) eprint("vision: encoded {d} visual tokens\n", .{n_visual_tokens});
+        }
+    } else if (cli.image != null) {
+        eprint("Warning: --image ignored (no vision projector found — use --mmproj <path> to specify)\n", .{});
+    }
+
     if (cli.serve) {
         var tok_if = tok.tokenizer();
-        server.run(allocator, &model_if, &tok_if, arch.chatTemplate(), minfo.name, minfo.be_name, cli.port, tok.bos_token_id, eog.ids, eog.len, tiered_ptr, cli.api_key, cli.host) catch |e| {
+        const ve_ptr: ?*VisionEncoder = if (vision_enc != null) &vision_enc.? else null;
+        const srv_pad_id: u32 = if (img_tokens) |it| it.pad else 0;
+        const srv_start_id: u32 = if (img_tokens) |it| it.start else 0;
+        const srv_end_id: u32 = if (img_tokens) |it| it.end else 0;
+        server.run(.{
+            .allocator = allocator,
+            .model = &model_if,
+            .tokenizer = &tok_if,
+            .chat_template = arch.chatTemplate(),
+            .model_name = minfo.name,
+            .backend_name = minfo.be_name,
+            .port = cli.port,
+            .bos_token_id = tok.bos_token_id,
+            .eog_ids = eog.ids,
+            .eog_len = eog.len,
+            .tiered_cache = tiered_ptr,
+            .api_key = cli.api_key,
+            .host = cli.host,
+            .ctx_size = cli.ctx_size,
+            .vision_encoder = ve_ptr,
+            .image_pad_token_id = srv_pad_id,
+            .image_start_token_id = srv_start_id,
+            .image_end_token_id = srv_end_id,
+        }) catch |e| {
             eprint("Error: server failed: {}\n", .{e});
             return false;
         };
     } else if (effective_prompt) |prompt| {
-        generateAndPrint(allocator, &model_if, tok, cli, tok_kind, eog, arch, prompt, !g_quiet, minfo, display);
+        generateAndPrint(allocator, &model_if, tok, cli, tok_kind, eog, arch, prompt, !g_quiet, minfo, display, img_tokens, n_visual_tokens);
     } else {
-        runRepl(allocator, &model_if, tok, cli, tok_kind, eog, arch, minfo, display);
+        runRepl(allocator, &model_if, tok, cli, tok_kind, eog, arch, minfo, display, img_tokens, n_visual_tokens, if (vision_enc != null) &vision_enc.? else null);
     }
     mdl.reportPerf();
     return true;
@@ -1175,13 +1561,18 @@ fn runRepl(
     allocator: std.mem.Allocator,
     mdl: *Model,
     tok: *BpeTokenizer,
-    cli: *const CliArgs,
+    cli: *CliArgs,
     tok_kind: TokenizerKind,
     eog: anytype,
     arch: Arch,
     minfo: display_mod.ModelInfo,
     display_in: Display,
+    img_tokens: ?arch_mod.ImageTokens,
+    n_visual_tokens_init: u32,
+    vision_enc: ?*model_mod.VisionEncoder,
 ) void {
+    var n_visual_tokens: u32 = n_visual_tokens_init;
+    _ = vision_enc;
     var display = display_in;
     print("Type a message, /help for commands, Ctrl+D to quit.\n", .{});
 
@@ -1190,6 +1581,10 @@ fn runRepl(
 
     const repl_prompt = if (g_color) "\x1b[1;32m> \x1b[0m" else "> ";
     var show_stats: bool = !g_quiet;
+
+    // Track REPL-owned system prompt (from /system command)
+    var system_prompt_owned: ?[]const u8 = null;
+    defer if (system_prompt_owned) |sp| allocator.free(sp);
 
     // Conversation history for multi-turn support
     var history: std.ArrayList(Message) = .empty;
@@ -1217,11 +1612,44 @@ fn runRepl(
         if (trimmed[0] == '/') {
             if (std.mem.eql(u8, trimmed, "/quit") or std.mem.eql(u8, trimmed, "/exit") or std.mem.eql(u8, trimmed, "/q")) {
                 return;
-            } else if (std.mem.eql(u8, trimmed, "/clear")) {
+            } else if (std.mem.eql(u8, trimmed, "/clear") or std.mem.eql(u8, trimmed, "/reset")) {
                 mdl.resetCache();
                 for (history.items) |msg| allocator.free(@constCast(msg.content));
                 history.clearRetainingCapacity();
                 print("Conversation and KV cache cleared.\n", .{});
+                continue;
+            } else if (std.mem.eql(u8, trimmed, "/context") or std.mem.eql(u8, trimmed, "/ctx")) {
+                const used = mdl.kvSeqLen();
+                const max_ctx = cli.ctx_size;
+                const pct: f32 = if (max_ctx > 0) @as(f32, @floatFromInt(used)) / @as(f32, @floatFromInt(max_ctx)) * 100.0 else 0.0;
+                print("Context: {d} / {d} tokens ({d:.1}% used)\n", .{ used, max_ctx, pct });
+                continue;
+            } else if (std.mem.startsWith(u8, trimmed, "/system ")) {
+                const new_system = std.mem.trim(u8, trimmed[8..], " \t");
+                if (new_system.len == 0) {
+                    print("Usage: /system <prompt text>\n", .{});
+                    continue;
+                }
+                // Free old system prompt if we own it
+                if (system_prompt_owned) |old| allocator.free(old);
+                const duped = allocator.dupe(u8, new_system) catch {
+                    eprint("Error: out of memory\n", .{});
+                    continue;
+                };
+                system_prompt_owned = duped;
+                cli.system_prompt = duped;
+                // Clear conversation since system prompt is baked into first turn
+                mdl.resetCache();
+                for (history.items) |msg| allocator.free(@constCast(msg.content));
+                history.clearRetainingCapacity();
+                print("System prompt set. Conversation cleared.\n", .{});
+                continue;
+            } else if (std.mem.eql(u8, trimmed, "/system")) {
+                if (cli.system_prompt) |sp| {
+                    print("System prompt: {s}\n", .{sp});
+                } else {
+                    print("No system prompt set. Usage: /system <prompt text>\n", .{});
+                }
                 continue;
             } else if (std.mem.eql(u8, trimmed, "/stats")) {
                 show_stats = !show_stats;
@@ -1231,6 +1659,19 @@ fn runRepl(
                 g_verbose = !g_verbose;
                 display.verbose = g_verbose;
                 print("Verbose {s}.\n", .{if (g_verbose) "on" else "off"});
+                continue;
+            } else if (std.mem.eql(u8, trimmed, "/debug")) {
+                g_debug = !g_debug;
+                // debug implies verbose — turning debug on enables verbose,
+                // but turning debug off leaves verbose unchanged (user may
+                // have enabled it independently via /verbose).
+                if (g_debug) {
+                    g_verbose = true;
+                    display.verbose = true;
+                    print("Debug on (verbose enabled).\n", .{});
+                } else {
+                    print("Debug off.\n", .{});
+                }
                 continue;
             } else if (std.mem.eql(u8, trimmed, "/model")) {
                 display.printModelInfo(minfo);
@@ -1269,7 +1710,11 @@ fn runRepl(
         defer allocator.free(formatted);
 
         if (is_first_turn) mdl.resetCache();
-        const response = generateAndPrintInner(allocator, mdl, tok, cli, tok_kind, eog, template, formatted, false, !is_first_turn, show_stats, minfo, display, true);
+        // Image tokens only on first turn (from --image CLI flag). After first
+        // turn, reset to 0 so continuation turns don't re-inject image tokens.
+        const turn_n_vis = if (is_first_turn) n_visual_tokens else @as(u32, 0);
+        const response = generateAndPrintInner(allocator, mdl, tok, cli, tok_kind, eog, template, formatted, false, !is_first_turn, show_stats, minfo, display, true, img_tokens, turn_n_vis);
+        if (is_first_turn and n_visual_tokens > 0) n_visual_tokens = 0;
 
         // Add assistant response to history
         if (response) |text| {
@@ -1303,16 +1748,18 @@ fn generateAndPrint(
     show_stats: bool,
     minfo: display_mod.ModelInfo,
     display: Display,
+    img_tokens: ?arch_mod.ImageTokens,
+    n_visual_tokens: u32,
 ) void {
     // One-shot mode: pass need_response=false to skip redundant full-sequence decode
-    const response = generateAndPrintInner(allocator, mdl, tok, cli, tok_kind, eog, arch.chatTemplate(), prompt, true, false, show_stats, minfo, display, false);
+    const response = generateAndPrintInner(allocator, mdl, tok, cli, tok_kind, eog, arch.chatTemplate(), prompt, true, false, show_stats, minfo, display, false, img_tokens, n_visual_tokens);
     if (response) |r| allocator.free(r);
 }
 
 /// Core generation: formats (or uses pre-formatted) prompt, prefills, generates, streams output.
 /// When `skip_bos` is true, the BOS token is not sent (for continuation turns with KV cache reuse).
 /// When `need_response` is false, skips the full-sequence decode (avoids allocating
-/// response text the caller will discard).
+/// response text the caller will discard) unless JSON output mode is active.
 /// Returns the generated response text (caller-owned) or null on error.
 fn generateAndPrintInner(
     allocator: std.mem.Allocator,
@@ -1329,6 +1776,8 @@ fn generateAndPrintInner(
     minfo: display_mod.ModelInfo,
     display: Display,
     need_response: bool,
+    img_tokens: ?arch_mod.ImageTokens,
+    n_visual_tokens: u32,
 ) ?[]u8 {
     const formatted = if (format_prompt)
         template.format(allocator, cli.system_prompt, prompt) catch @as([]const u8, prompt)
@@ -1337,22 +1786,52 @@ fn generateAndPrintInner(
     defer if (format_prompt and formatted.ptr != prompt.ptr) allocator.free(formatted);
     if (g_debug) dbg("formatted prompt ({d} bytes): [{s}]", .{ formatted.len, formatted });
 
-    const token_ids = switch (tok_kind) {
-        .spm => tok.encodeSpm(formatted) catch {
-            eprint("Error: failed to encode prompt (tokenizer may not support this input)\n", .{});
-            return null;
-        },
-        .spm_no_dummy => tok.encodeSpmNoDummy(formatted) catch {
-            eprint("Error: failed to encode prompt (tokenizer may not support this input)\n", .{});
-            return null;
-        },
-        .bpe => tok.encode(formatted) catch {
-            eprint("Error: failed to encode prompt (tokenizer may not support this input)\n", .{});
-            return null;
-        },
+    const text_token_ids = switch (tok_kind) {
+        .spm => tok.encodeSpm(formatted),
+        .spm_no_dummy => tok.encodeSpmNoDummy(formatted),
+        .bpe => tok.encode(formatted),
+    } catch {
+        eprint("Error: failed to encode prompt (tokenizer may not support this input)\n", .{});
+        return null;
     };
-    defer allocator.free(token_ids);
-    dbg("encoded {d} tokens, tok_kind={s}", .{ token_ids.len, @tagName(tok_kind) });
+    defer allocator.free(text_token_ids);
+    dbg("encoded {d} tokens, tok_kind={s}", .{ text_token_ids.len, @tagName(tok_kind) });
+
+    // Inject image placeholder token IDs into the token array when an image
+    // is attached. The image tokens (start + pad*N + end) are spliced in
+    // after the user_prefix tokens in the formatted prompt. The model's
+    // forward() detects these pad tokens and replaces their embeddings with
+    // visual embeddings from the vision encoder.
+    var injected_token_ids: ?[]u32 = null;
+    defer if (injected_token_ids) |ids| allocator.free(ids);
+
+    const token_ids: []const u32 = if (n_visual_tokens > 0 and img_tokens != null) blk: {
+        // Find insertion point: right after the user_prefix tokens.
+        const prefix_tokens = switch (tok_kind) {
+            .spm => tok.encodeSpm(template.user_prefix),
+            .spm_no_dummy => tok.encodeSpmNoDummy(template.user_prefix),
+            .bpe => tok.encode(template.user_prefix),
+        } catch break :blk text_token_ids;
+        defer allocator.free(prefix_tokens);
+
+        const insert_pos: usize = chat_tmpl_mod.findImageInsertPos(text_token_ids, prefix_tokens);
+
+        // Use injectImageTokens which handles architecture-specific wrapping:
+        // Gemma 4 (start=end=pad): just pad×N
+        // Qwen 3.5 (distinct start/end): [start, pad×N, end]
+        const result = chat_tmpl_mod.injectImageTokens(
+            allocator,
+            text_token_ids,
+            insert_pos,
+            img_tokens.?,
+            n_visual_tokens,
+        ) catch break :blk text_token_ids;
+
+        injected_token_ids = result;
+        dbg("injected {d} image tokens at pos {d}, total {d}", .{ n_visual_tokens, insert_pos, result.len });
+        if (insert_pos >= 3) dbg("  before: [{d},{d},{d}]", .{ result[insert_pos - 3], result[insert_pos - 2], result[insert_pos - 1] });
+        break :blk injected_token_ids.?;
+    } else text_token_ids;
 
     // Build prefill array: BOS (if needed) + prompt tokens
     const prefill_start = std.time.milliTimestamp();
@@ -1438,14 +1917,15 @@ fn generateAndPrintInner(
             break;
         };
         // Apply repeat penalty to logits for recently generated tokens
+        const logits = mdl.getLogits();
         if (use_repeat_penalty and token_count > 0) {
-            math_ops.applyRepeatPenalty(mdl.getLogits(), gen_ids_buf[0..token_count], cli.repeat_penalty);
+            math_ops.applyRepeatPenalty(logits, gen_ids_buf[0..token_count], cli.repeat_penalty);
         }
         if (use_sampling) {
-            next = math_ops.sampleToken(mdl.getLogits(), cli.temperature, cli.top_k, cli.top_p, prng.random());
+            next = math_ops.sampleToken(logits, cli.temperature, cli.top_k, cli.top_p, prng.random());
         } else if (use_repeat_penalty and token_count > 0) {
             // Greedy decoding with repeat penalty: re-argmax after penalty
-            next = math_ops.argmax(mdl.getLogits());
+            next = math_ops.argmax(logits);
         }
         dbg("gen step {d}: token={d}", .{ gi, next });
         if (isEogToken(next, eog)) {
@@ -1495,7 +1975,7 @@ fn generateAndPrintInner(
         null;
 
     // JSON output — decode all tokens at once and print structured result
-    if (display.mode == .json and token_count > 0) {
+    if (display.mode == .json) {
         const stats = display_mod.GenStats{
             .token_count = token_count,
             .gen_ms = gen_ms,
@@ -1529,7 +2009,6 @@ fn flushTokenBatch(tok: *BpeTokenizer, tok_kind: TokenizerKind, allocator: std.m
     };
     defer allocator.free(decoded);
     var text: []const u8 = decoded;
-    // Skip a single leading newline (common model artifact)
     if (!started.* and text.len > 0 and text[0] == '\n') {
         text = text[1..];
     }
@@ -1538,8 +2017,65 @@ fn flushTokenBatch(tok: *BpeTokenizer, tok_kind: TokenizerKind, allocator: std.m
 }
 
 test {
+    // Force test discovery for all modules with test blocks.
+    // Zig 0.15 uses lazy test discovery — files imported at the top level
+    // but not referenced by any test block are silently excluded.
     _ = @import("display.zig");
     _ = @import("ops/split_attention.zig");
+    _ = @import("arch.zig");
+    _ = @import("perf.zig");
+    _ = @import("recipe.zig");
+    _ = @import("chat_template.zig");
+    _ = @import("pull.zig");
+    _ = @import("calibrate.zig");
+    _ = @import("image.zig");
+    _ = @import("thread_pool.zig");
+    _ = @import("ops/kv_quant.zig");
+    _ = @import("ops/quant.zig");
+    _ = @import("ops/math.zig");
+    _ = @import("ops/attention.zig");
+    _ = @import("ops/kv_evict.zig");
+    _ = @import("ops/ssm.zig");
+    _ = @import("ops/mlx.zig");
+    _ = @import("format/format.zig");
+    _ = @import("format/gguf.zig");
+    _ = @import("format/safetensors.zig");
+    _ = @import("tokenizer/bpe.zig");
+    _ = @import("tokenizer/tokenizer.zig");
+    _ = @import("server/server.zig");
+    _ = @import("server/json.zig");
+    _ = @import("server/rate_limiter.zig");
+    _ = @import("server/metrics.zig");
+    _ = @import("server/scheduler.zig");
+    _ = @import("kvcache/block_allocator.zig");
+    _ = @import("kvcache/manager.zig");
+    _ = @import("kvcache/tiered.zig");
+    _ = @import("models/model.zig");
+    _ = @import("models/gemma4.zig");
+    _ = @import("models/nemotron_nano.zig");
+    _ = @import("models/nemotron_h.zig");
+    _ = @import("models/vision.zig");
+    _ = @import("backend/cpu.zig");
+    _ = @import("backend/metal.zig");
+    _ = @import("backend/vulkan.zig");
+    _ = @import("backend/kernels/cpu/activation.zig");
+    _ = @import("backend/kernels/cpu/elementwise.zig");
+    _ = @import("backend/kernels/cpu/embedding.zig");
+    _ = @import("backend/kernels/cpu/norm.zig");
+    _ = @import("backend/kernels/cpu/rope.zig");
+    _ = @import("backend/kernels/cpu/sdpa.zig");
+    _ = @import("backend/kernels/cpu/softmax.zig");
+    _ = @import("backend/kernels/cpu/gemv_bf16.zig");
+    _ = @import("backend/kernels/cpu/gemv_f16.zig");
+    _ = @import("backend/kernels/cpu/gemv_f32.zig");
+    _ = @import("backend/kernels/cpu/gemv_fp4.zig");
+    _ = @import("backend/kernels/cpu/gemv_iq4.zig");
+    _ = @import("backend/kernels/cpu/gemv_q_small.zig");
+    _ = @import("backend/kernels/cpu/gemv_q4_0.zig");
+    _ = @import("backend/kernels/cpu/gemv_q4_k.zig");
+    _ = @import("backend/kernels/cpu/gemv_q5_k.zig");
+    _ = @import("backend/kernels/cpu/gemv_q6_k.zig");
+    _ = @import("backend/kernels/cpu/gemv_q8_0.zig");
 }
 
 test "cpu backend rms_norm via tagged union dispatch" {

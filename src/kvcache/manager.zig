@@ -13,11 +13,6 @@ pub const BlockTier = @import("tiered.zig").BlockTier;
 /// Shared constant to avoid repeating the literal 16 in every model init.
 pub const default_block_size: u16 = 16;
 
-/// Cost multiplier for shared prefix blocks during LRU eviction.
-/// Blocks with ref_count > 1 are shared across sequences, so evicting them
-/// is 100× more expensive than evicting private blocks.
-const shared_prefix_cost: f32 = 100.0;
-
 /// Result of allocating a KV cache.
 /// Slices are byte arrays — the actual format (f32, f16, q8_0, etc.)
 /// is tracked by the model's `kv_type` field.
@@ -52,6 +47,7 @@ pub fn allocKvCache(allocator: Allocator, n_layers: usize, kv_bytes_per_layer: u
 
     for (0..n_layers) |i| {
         keys[i] = try allocator.alloc(u8, kv_bytes_per_layer);
+        errdefer allocator.free(keys[i]);
         values[i] = try allocator.alloc(u8, kv_bytes_per_layer);
         init_count = i + 1;
     }
@@ -84,7 +80,7 @@ pub const CacheBlock = struct {
     values: []f32,
     /// Number of positions currently filled in this block (0..block_size).
     used: u16 = 0,
-    /// Reference count for copy-on-write sharing.
+    /// Reference count for prefix sharing.
     ref_count: u16 = 1,
     /// Frequency tracking for eviction policy.
     access_count: u32 = 0,
@@ -123,11 +119,11 @@ pub const PagedKvCache = struct {
         }
 
         for (0..num_blocks) |i| {
-            const slot_size = @as(usize, block_size) * kv_dim;
-            blocks[i] = .{
-                .keys = try allocator.alloc(f32, slot_size),
-                .values = try allocator.alloc(f32, slot_size),
-            };
+            const slot_size = std.math.mul(usize, @as(usize, block_size), kv_dim) catch return error.OutOfMemory;
+            const block_keys = try allocator.alloc(f32, slot_size);
+            errdefer allocator.free(block_keys);
+            const block_values = try allocator.alloc(f32, slot_size);
+            blocks[i] = .{ .keys = block_keys, .values = block_values };
             init_count = i + 1;
         }
 
@@ -160,6 +156,13 @@ pub const PagedKvCache = struct {
     /// The free list was pre-allocated to hold all blocks, so append
     /// can only fail if the block was double-freed (exceeding capacity).
     pub fn freeBlock(self: *PagedKvCache, block_id: u32) void {
+        std.debug.assert(block_id < self.blocks.len);
+        // Guard: free list is pre-allocated to exactly num_blocks capacity.
+        // If it's already full, every block is free — this is a double-free.
+        if (self.free_list.items.len >= self.blocks.len) {
+            std.log.err("freeBlock: free list full — double-free of block {d}", .{block_id});
+            return;
+        }
         self.blocks[block_id].used = 0;
         self.blocks[block_id].ref_count = 1;
         self.free_list.appendAssumeCapacity(block_id);
@@ -168,41 +171,6 @@ pub const PagedKvCache = struct {
     /// Number of free blocks available.
     pub fn freeCount(self: *const PagedKvCache) usize {
         return self.free_list.items.len;
-    }
-
-    /// Evict the coldest block based on frequency × cost metric.
-    /// Shared prefixes (ref_count > 1) get 100× cost multiplier to preserve reuse.
-    /// Returns the evicted block ID, or error if no evictable blocks found.
-    pub fn evictColdestBlock(self: *PagedKvCache) !u32 {
-        var min_score: f32 = std.math.floatMax(f32);
-        var victim_id: u32 = 0;
-        var found_victim = false;
-
-        for (self.blocks, 0..) |*blk, id| {
-            if (blk.ref_count == 0) continue; // Skip free blocks
-
-            // Shared prefixes (ref_count > 1) are expensive to evict
-            const cost: f32 = if (blk.ref_count > 1) shared_prefix_cost else 1.0;
-            const score = @as(f32, @floatFromInt(blk.access_count)) * cost;
-
-            if (score < min_score) {
-                min_score = score;
-                victim_id = @intCast(id);
-                found_victim = true;
-            }
-        }
-
-        if (!found_victim) {
-            return error.NoEvictableBlocks;
-        }
-
-        // Free the victim block
-        self.blocks[victim_id].ref_count = 0;
-        self.blocks[victim_id].used = 0;
-        self.blocks[victim_id].access_count = 0;
-        try self.free_list.append(self.allocator, victim_id);
-
-        return victim_id;
     }
 
     /// Free all cache blocks and the free list.
@@ -223,10 +191,17 @@ pub const PagedKvCache = struct {
 // lookup, and LRU tracking (SGLang-style). Built on top of PagedKvCache blocks.
 //
 // Each node represents a prefix of token IDs. Matching prefixes share
-// the same physical cache blocks, with copy-on-write semantics.
+// the same physical cache blocks via reference counting.
 
 /// Maximum children per radix tree node. Token IDs are hashed into buckets.
 const radix_fanout = 256;
+
+/// Hash a token ID to a radix tree child bucket index.
+/// Uses multiplicative hashing (Knuth's golden ratio constant) for uniform
+/// distribution, avoiding clustering from sequential token IDs.
+inline fn tokenBucket(token_id: u32) u8 {
+    return @truncate((token_id *% 0x9E3779B1) >> 24);
+}
 
 /// A single node in the radix tree. Each node owns a span of token IDs
 /// and references the physical blocks that hold those tokens' KV data.
@@ -274,7 +249,7 @@ pub const PrefixMatch = struct { matched: usize, blocks: []const u32 };
 
 /// Radix tree for prefix-aware KV cache management.
 /// Supports insert (cache a token sequence) and match (find longest cached prefix).
-/// LRU eviction is tracked via `last_access` timestamps but not yet implemented.
+/// LRU eviction tracking is implemented via `last_access` timestamps; eviction policy not yet deployed.
 pub const RadixTree = struct {
     root: *RadixNode,
     allocator: Allocator,
@@ -301,7 +276,7 @@ pub const RadixTree = struct {
         var pos: usize = 0;
 
         while (pos < tokens.len) {
-            const bucket = @as(u8, @truncate(tokens[pos] % radix_fanout));
+            const bucket = tokenBucket(tokens[pos]);
             const child = node.children[bucket] orelse break;
 
             // Check if child's tokens match
@@ -323,7 +298,7 @@ pub const RadixTree = struct {
         var pos: usize = 0;
 
         while (pos < tokens.len) {
-            const bucket = @as(u8, @truncate(tokens[pos] % radix_fanout));
+            const bucket = tokenBucket(tokens[pos]);
 
             if (node.children[bucket]) |child| {
                 // Check how many tokens match
@@ -368,8 +343,8 @@ pub const RadixTree = struct {
                     errdefer if (new_leaf) |nl| nl.deinit(self.allocator);
                     if (new_remaining.len > 0) {
                         const new_blocks = if (pos < block_ids.len) block_ids[pos..] else &[_]u32{};
-                        const suffix_bucket = @as(u8, @truncate(new_child_tokens[0] % radix_fanout));
-                        const leaf_bucket = @as(u8, @truncate(new_remaining[0] % radix_fanout));
+                        const suffix_bucket = tokenBucket(new_child_tokens[0]);
+                        const leaf_bucket = tokenBucket(new_remaining[0]);
                         if (leaf_bucket != suffix_bucket) {
                             new_leaf = try RadixNode.init(self.allocator, new_remaining, new_blocks);
                         }
@@ -388,13 +363,13 @@ pub const RadixTree = struct {
                     self.allocator.free(old_blocks);
 
                     // Re-attach shortened child under intermediate node
-                    const child_bucket = @as(u8, @truncate(child.tokens[0] % radix_fanout));
+                    const child_bucket = tokenBucket(child.tokens[0]);
                     mid.children[child_bucket] = child;
 
                     // Attach new leaf if created
                     if (new_leaf) |nl| {
                         self.touchNode(nl);
-                        const leaf_bucket = @as(u8, @truncate(nl.tokens[0] % radix_fanout));
+                        const leaf_bucket = tokenBucket(nl.tokens[0]);
                         mid.children[leaf_bucket] = nl;
                     }
 
@@ -474,9 +449,13 @@ test "RadixTree insert and match" {
     // Insert a sequence [1, 2, 3] with block IDs [10, 11, 12]
     try tree.insert(&.{ 1, 2, 3 }, &.{ 10, 11, 12 });
 
-    // Full prefix match
+    // Full prefix match — verify both count and block IDs
     const m1 = tree.matchPrefix(&.{ 1, 2, 3, 4, 5 });
     try std.testing.expectEqual(@as(usize, 3), m1.matched);
+    try std.testing.expectEqual(@as(usize, 3), m1.blocks.len);
+    try std.testing.expectEqual(@as(u32, 10), m1.blocks[0]);
+    try std.testing.expectEqual(@as(u32, 11), m1.blocks[1]);
+    try std.testing.expectEqual(@as(u32, 12), m1.blocks[2]);
 
     // Partial prefix match
     const m2 = tree.matchPrefix(&.{ 1, 2 });
@@ -486,6 +465,7 @@ test "RadixTree insert and match" {
     // No match
     const m3 = tree.matchPrefix(&.{ 5, 6, 7 });
     try std.testing.expectEqual(@as(usize, 0), m3.matched);
+    try std.testing.expectEqual(@as(usize, 0), m3.blocks.len);
 }
 
 test "RadixTree empty match" {
@@ -506,12 +486,14 @@ test "RadixTree edge splitting" {
     try tree.insert(&.{ 1, 2, 3 }, &.{ 10, 11, 12 });
     try tree.insert(&.{ 1, 2, 4 }, &.{ 10, 11, 14 });
 
-    // Both should match their shared prefix [1, 2]
+    // Both should match their full sequences with correct block IDs
     const m1 = tree.matchPrefix(&.{ 1, 2, 3 });
     try std.testing.expectEqual(@as(usize, 3), m1.matched);
+    try std.testing.expectEqual(@as(u32, 12), m1.blocks[m1.blocks.len - 1]);
 
     const m2 = tree.matchPrefix(&.{ 1, 2, 4 });
     try std.testing.expectEqual(@as(usize, 3), m2.matched);
+    try std.testing.expectEqual(@as(u32, 14), m2.blocks[m2.blocks.len - 1]);
 
     // Shared prefix [1, 2] should match for novel continuations
     const m3 = tree.matchPrefix(&.{ 1, 2, 5 });

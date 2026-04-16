@@ -156,6 +156,24 @@ pub fn sharedLoad(idx: u32) f32 {
     return ldsBase()[idx];
 }
 
+// ── Shared format-conversion helpers ────────────────────────────
+// Used by multiple GEMV kernels. Defined once here to avoid duplication.
+
+/// 6-bit mask for scale extraction in getScaleMinK4.
+pub const scale_6bit_mask: u8 = 63;
+
+/// Extract packed scale and min for Q4_K/Q5_K sub-block.
+/// Scales are packed in 12 bytes for 8 sub-blocks (6 bits each).
+pub inline fn getScaleMinK4(j: usize, q: [*]const u8, sc: *u8, m: *u8) void {
+    if (j < 4) {
+        sc.* = q[j] & scale_6bit_mask;
+        m.* = q[j + 4] & scale_6bit_mask;
+    } else {
+        sc.* = (q[j + 4] & 0xF) | ((q[j - 4] >> 6) << 4);
+        m.* = (q[j + 4] >> 4) | ((q[j] >> 6) << 4);
+    }
+}
+
 // ── Block-level reductions (wave reduction + LDS inter-wave) ────
 // Uses wave-level ds_bpermute for intra-wave reduction (no barriers),
 // then LDS for inter-wave reduction (1 barrier instead of log2(N)).
@@ -165,7 +183,7 @@ pub fn sharedLoad(idx: u32) f32 {
 pub fn blockReduceAdd(val: f32) f32 {
     const tid = threadIdx();
     const lane = tid & (wave_size - 1);
-    const wave_id = tid >> 5;
+    const wave_id = tid / wave_size;
 
     // Phase 1: intra-wave reduction (no barrier needed)
     const wave_sum = waveReduceAdd(val);
@@ -184,7 +202,7 @@ pub fn blockReduceAdd(val: f32) f32 {
 pub fn blockReduceMax(val: f32) f32 {
     const tid = threadIdx();
     const lane = tid & (wave_size - 1);
-    const wave_id = tid >> 5;
+    const wave_id = tid / wave_size;
 
     const wave_max = waveReduceMax(val);
     if (lane == 0) sharedStore(wave_id, wave_max);

@@ -49,19 +49,29 @@ Metal counters:
 
 ```zig
 // src/perf.zig
-pub const PerfCounters = struct {
-    gemv_time: i64 = 0,
-    rmsNorm_time: i64 = 0,
-    rope_time: i64 = 0,
-    sdpa_time: i64 = 0,
-    // ...
+pub const Op = enum {
+    emb_lookup, rms_norm, gemv_qkv, gemv_out, gemv_ffn,
+    deinterleave, rope, sdpa, sigmoid_mul, silu_mul,
+    gelu_mul, add, deltanet, total_layer,
+};
 
-    pub fn record(self: *PerfCounters, op: Operation, elapsed_ns: i64) void {
-        switch (op) {
-            .gemv => self.gemv_time += elapsed_ns,
-            .rmsNorm => self.rmsNorm_time += elapsed_ns,
-            // ...
-        }
+pub const PerfCounters = struct {
+    counts: [n_ops]u64 = [_]u64{0} ** n_ops,
+    times_us: [n_ops]u64 = [_]u64{0} ** n_ops,
+    n_tokens: u64 = 0,
+    enabled: bool = false,
+
+    pub inline fn start(self: *PerfCounters) i128 {
+        if (!self.enabled) return 0;
+        return std.time.nanoTimestamp();
+    }
+
+    pub inline fn end(self: *PerfCounters, op: Op, t0: i128) void {
+        if (!self.enabled) return;
+        const elapsed: u64 = @intCast(@divFloor(std.time.nanoTimestamp() - t0, 1000));
+        const idx = @intFromEnum(op);
+        self.times_us[idx] += elapsed;
+        self.counts[idx] += 1;
     }
 };
 ```
@@ -69,43 +79,43 @@ pub const PerfCounters = struct {
 ### Instrumented Operation
 
 ```zig
-pub fn gemv(self: *Model, x: [*]const f32, w: TensorData, y: [*]f32, n: usize, k: usize) void {
-    const start = if (g_profile) std.time.nanoTimestamp() else 0;
+// In model forward(), e.g. src/models/qwen35.zig
+var t = self.perf.start();
 
-    self.be.gemv(x, w, y, n, k);
+self.be.gemv(x, w, y, n, k);
+self.be.sync();  // Flush GPU work (ensures timing is accurate)
 
-    if (g_profile) {
-        self.be.sync();  // Flush GPU work (ensures timing is accurate)
-        const elapsed = std.time.nanoTimestamp() - start;
-        self.perf.record(.gemv, elapsed);
-    }
-}
+self.perf.end(.gemv_qkv, t);
 ```
 
 **Key:** GPU work is deferred. Without `sync()`, you'd measure only the CPU dispatch time (~5 µs), not the actual GPU execution time.
 
 **Trade-off:** `sync()` per operation serializes execution → 50% throughput loss. This is why profiling is only enabled by the `--profile` flag.
 
-### Per-Layer Aggregation
+### Per-Layer Usage
+
+Each operation in the forward pass is wrapped with `start()`/`end()`:
 
 ```zig
-pub fn forward(self: *Model, token_id: u32) !u32 {
-    // ... embedding lookup ...
+// src/models/qwen35.zig — attention layer
+var t = self.perf.start();
+self.be.rmsNorm(x, w, eps);
+self.perf.end(.rms_norm, t);
 
-    for (0..self.n_layers) |layer| {
-        const layer_start = if (g_profile) std.time.nanoTimestamp() else 0;
+t = self.perf.start();
+self.be.gemvMulti(qkv_ops);
+self.perf.end(.gemv_qkv, t);
 
-        // ... layer ops ...
+t = self.perf.start();
+self.be.rope(q, k, freqs, pos);
+self.perf.end(.rope, t);
 
-        if (g_profile) {
-            const layer_time = std.time.nanoTimestamp() - layer_start;
-            std.log.info("  layer {d}: {d:.1}ms", .{layer, @as(f64, @floatFromInt(layer_time)) / 1e6});
-        }
-    }
-
-    // ... final projection ...
-}
+t = self.perf.start();
+self.be.sdpa(q, k, v, out, ...);
+self.perf.end(.sdpa, t);
 ```
+
+After generation completes, `perf.report()` prints a table with call counts, total time, average time, and percentage breakdown per operation.
 
 ## Backend Dispatch Counters
 

@@ -18,8 +18,16 @@ const DType = format_mod.DType;
 /// Maximum allowed SafeTensors JSON header size (100 MB).
 /// Legitimate models have headers well under 10 MB even with thousands of tensors.
 const max_header_json_size: u64 = 100_000_000;
+/// Maximum allowed auxiliary JSON file size (200 MB — covers large tokenizer.json).
+const max_json_file_size: u64 = 200_000_000;
+/// Maximum vocabulary size to prevent OOM from crafted tokenizer.json with huge IDs.
+const max_vocab_size: usize = 10_000_000;
+/// Maximum allowed shard count (prevents OOM from crafted index.json).
+const max_shard_count: usize = 10_000;
 /// Buffer size for tensor name translation (GGUF↔HuggingFace).
 const name_buf_size: usize = 256;
+/// Maximum JSON nesting depth to prevent stack exhaustion from crafted inputs.
+const max_json_depth: usize = 128;
 
 // ── Shard & tensor storage ────────────────────────────────────────────────────
 
@@ -171,7 +179,8 @@ pub const SafeTensorsDir = struct {
             // Hint sequential access for weight loading — enables OS readahead and reduces page faults.
             std.posix.madvise(mapped.ptr, mapped.len, std.posix.MADV.SEQUENTIAL) catch {};
             const json_len = std.mem.readInt(u64, mapped[0..8], .little);
-            if (json_len > max_header_json_size or 8 + json_len > file_size) {
+            const total_header_size = std.math.add(u64, 8, json_len) catch return error.InvalidSafeTensors;
+            if (total_header_size > max_header_json_size or total_header_size > file_size) {
                 std.posix.munmap(mapped);
                 return error.InvalidSafeTensors;
             }
@@ -244,6 +253,13 @@ pub const SafeTensorsDir = struct {
         return total;
     }
 
+    /// Returns the total mmap'd file size in bytes (sum of all shard lengths).
+    pub fn totalBytes(self: *const SafeTensorsDir) usize {
+        var total: usize = 0;
+        for (self.shard_data) |shard| total += shard.data.len;
+        return total;
+    }
+
     /// Release all resources: unmap shards, free owned strings, deinit maps.
     pub fn deinit(self: *SafeTensorsDir) void {
         for (self.shard_data) |s| std.posix.munmap(s.data);
@@ -271,8 +287,8 @@ pub const SafeTensorsDir = struct {
     fn getTensorImpl(ptr: *anyopaque, name: []const u8) ?TensorInfo {
         const self: *SafeTensorsDir = @ptrCast(@alignCast(ptr));
         if (self.lookupStable(name)) |r| return self.entryToInfo(r.key, r.entry);
-        // Fallback: translate GGUF-style name to HuggingFace-style.
-        // Try both "language_model.model." and "model." prefixes.
+        // Translate GGUF-style name to HuggingFace-style.
+        // Try known prefixes ("language_model.model.", "model.").
         var buf: [name_buf_size]u8 = undefined;
         for (hf_prefixes) |pfx| {
             if (ggufToHfName(name, &buf, pfx)) |hf_name| {
@@ -291,19 +307,27 @@ pub const SafeTensorsDir = struct {
         return .{ .key = e.key_ptr.*, .entry = e.value_ptr.* };
     }
 
-    fn entryToInfo(self: *SafeTensorsDir, name: []const u8, entry: TensorEntry) TensorInfo {
+    fn entryToInfo(self: *SafeTensorsDir, name: []const u8, entry: TensorEntry) ?TensorInfo {
         if (entry.shard_idx >= self.shard_data.len) {
-            std.log.err("Invalid shard index {d} for tensor {s}", .{ entry.shard_idx, name });
-            return TensorInfo{ .name = name, .n_dims = 0, .dims = .{ 0, 0, 0, 0 }, .dtype = .unknown, .data_ptr = self.shard_data[0].data.ptr };
+            std.log.err("Invalid shard index {d} for tensor {s} (have {d} shards)", .{ entry.shard_idx, name, self.shard_data.len });
+            return null;
         }
         const shard = self.shard_data[entry.shard_idx];
         const abs_start = std.math.add(usize, shard.tensor_base, entry.data_start) catch {
             std.log.err("Tensor offset overflow for {s}", .{name});
-            return TensorInfo{ .name = name, .n_dims = 0, .dims = .{ 0, 0, 0, 0 }, .dtype = .unknown, .data_ptr = shard.data.ptr };
+            return null;
         };
-        if (abs_start > shard.data.len) {
-            std.log.err("Tensor offset out of bounds for {s}", .{name});
-            return TensorInfo{ .name = name, .n_dims = 0, .dims = .{ 0, 0, 0, 0 }, .dtype = .unknown, .data_ptr = shard.data.ptr };
+        const data_len = std.math.sub(usize, entry.data_end, entry.data_start) catch {
+            std.log.err("Tensor data_end < data_start for {s}", .{name});
+            return null;
+        };
+        const abs_end = std.math.add(usize, abs_start, data_len) catch {
+            std.log.err("Tensor end overflow for {s}", .{name});
+            return null;
+        };
+        if (abs_end > shard.data.len) {
+            std.log.err("Tensor data exceeds shard bounds for {s} (end={d}, shard_size={d})", .{ name, abs_end, shard.data.len });
+            return null;
         }
         return TensorInfo{
             .name = name,
@@ -352,14 +376,12 @@ pub const SafeTensorsDir = struct {
 
     fn getVocabImpl(ptr: *anyopaque) ?[]const []const u8 {
         const self: *SafeTensorsDir = @ptrCast(@alignCast(ptr));
-        const v = self.vocab orelse return null;
-        return v;
+        return self.vocab;
     }
 
     fn getMergesImpl(ptr: *anyopaque) ?[]const []const u8 {
         const self: *SafeTensorsDir = @ptrCast(@alignCast(ptr));
-        const m = self.merges orelse return null;
-        return m;
+        return self.merges;
     }
 
     const vtable = Format.VTable{
@@ -522,6 +544,18 @@ fn ggufKeyToHf(key: []const u8) ?[]const u8 {
 
 // ── Internal helpers ──────────────────────────────────────────────────────────
 
+/// Reject shard filenames that could escape the model directory.
+/// A safe name is non-empty, contains no path separators or `..` sequences,
+/// and has no null bytes.
+fn isSafeShardName(name: []const u8) bool {
+    if (name.len == 0) return false;
+    if (std.mem.indexOf(u8, name, "..") != null) return false;
+    if (std.mem.indexOfScalar(u8, name, '/') != null) return false;
+    if (std.mem.indexOfScalar(u8, name, '\\') != null) return false;
+    if (std.mem.indexOfScalar(u8, name, 0) != null) return false;
+    return true;
+}
+
 /// Scan a directory for `model-*.safetensors` files (or a single `model.safetensors`).
 /// Populates shard list in sorted order. Used as fallback when the index JSON
 /// is missing or references non-existent shards (e.g. after MLX re-quantization).
@@ -545,6 +579,7 @@ fn discoverShards(
         if (!std.mem.endsWith(u8, entry.name, ".safetensors")) continue;
         // Skip index files.
         if (std.mem.endsWith(u8, entry.name, ".index.json.safetensors")) continue;
+        if (names.items.len >= max_shard_count) return error.InvalidSafeTensors;
         const name_copy = try dupeString(allocator, owned, entry.name);
         try names.append(allocator, name_copy);
     }
@@ -568,7 +603,8 @@ fn readFile(allocator: Allocator, path: []const u8) ![]u8 {
     const file = try std.fs.openFileAbsolute(path, .{});
     defer file.close();
     const size = (try file.stat()).size;
-    const buf = try allocator.alloc(u8, size);
+    if (size > max_json_file_size) return error.FileTooLarge;
+    const buf = try allocator.alloc(u8, @intCast(size));
     errdefer allocator.free(buf);
     const n = try file.readAll(buf);
     if (n != size) return error.UnexpectedEof;
@@ -693,7 +729,10 @@ fn parseString(json: []const u8, pos: usize) !struct { val: []const u8, next: us
     i += 1;
     const start = i;
     while (i < json.len and json[i] != '"') {
-        if (json[i] == '\\') i += 1; // skip the escaped character
+        if (json[i] == '\\') {
+            i += 1;
+            if (i >= json.len) return error.JsonUnterminated;
+        }
         i += 1;
     }
     if (i >= json.len) return error.JsonUnterminated;
@@ -709,7 +748,10 @@ fn skipValue(json: []const u8, start_pos: usize) !usize {
         '"' => {
             i += 1;
             while (i < json.len and json[i] != '"') {
-                if (json[i] == '\\') i += 1;
+                if (json[i] == '\\') {
+                    i += 1;
+                    if (i >= json.len) return error.JsonUnterminated;
+                }
                 i += 1;
             }
             return if (i < json.len) i + 1 else error.JsonUnterminated;
@@ -722,14 +764,19 @@ fn skipValue(json: []const u8, start_pos: usize) !usize {
             while (i < json.len and depth > 0) : (i += 1) {
                 if (json[i] == open) {
                     depth += 1;
+                    if (depth > max_json_depth) return error.JsonUnexpected;
                 } else if (json[i] == close) {
                     depth -= 1;
                 } else if (json[i] == '"') {
                     i += 1;
                     while (i < json.len and json[i] != '"') {
-                        if (json[i] == '\\') i += 1;
+                        if (json[i] == '\\') {
+                            i += 1;
+                            if (i >= json.len) return error.JsonUnterminated;
+                        }
                         i += 1;
                     }
+                    if (i >= json.len) return error.JsonUnterminated;
                 }
             }
             return i;
@@ -747,8 +794,11 @@ fn skipValue(json: []const u8, start_pos: usize) !usize {
 }
 
 /// Parse an unsigned integer from a raw JSON token slice.
+/// Rejects digit sequences longer than 20 chars to prevent CPU exhaustion
+/// from crafted JSON with millions of leading zeros.
 fn parseU64Slice(s: []const u8) !u64 {
     const trimmed = std.mem.trim(u8, s, " \t\r\n,]})");
+    if (trimmed.len > 20) return error.Overflow;
     return std.fmt.parseUnsigned(u64, trimmed, 10);
 }
 
@@ -857,11 +907,12 @@ fn parseShardHeader(
             }
             if (i < json.len and json[i] == '}') i += 1;
 
+            if (data_end < data_start) return error.InvalidSafeTensors;
             const owned_name = try dupeString(allocator, owned, name_res.val);
             try tensors.put(owned_name, TensorEntry{
                 .shard_idx = shard_idx,
-                .data_start = @intCast(data_start),
-                .data_end = @intCast(data_end),
+                .data_start = std.math.cast(usize, data_start) orelse return error.InvalidSafeTensors,
+                .data_end = std.math.cast(usize, data_end) orelse return error.InvalidSafeTensors,
                 .dtype = dtype,
                 .n_dims = n_dims,
                 .dims = dims,
@@ -911,6 +962,9 @@ fn parseIndexJson(
                 i = shard_res.next;
 
                 if (!shard_to_idx.contains(shard_res.val)) {
+                    // Reject shard names with path traversal sequences or separators.
+                    if (!isSafeShardName(shard_res.val)) return error.InvalidSafeTensors;
+                    if (shard_list.items.len >= max_shard_count) return error.InvalidSafeTensors;
                     const owned_shard = try dupeString(allocator, owned, shard_res.val);
                     const idx = shard_list.items.len;
                     try shard_list.append(allocator, owned_shard);
@@ -1135,7 +1189,8 @@ fn parseVocab(
         }
     }
 
-    const vocab_size = max_id + 1;
+    const vocab_size = std.math.add(usize, max_id, 1) catch return error.InvalidSafeTensors;
+    if (vocab_size > max_vocab_size) return error.InvalidSafeTensors;
     // Reuse existing array (from added_tokens parsed earlier) if large enough,
     // otherwise allocate a new one and copy existing entries.
     const vocab_arr = if (out_vocab.*) |old| blk: {
@@ -1268,7 +1323,7 @@ fn parseAddedTokens(
             if (std.mem.eql(u8, fk.val, "id")) {
                 const ns = i;
                 while (i < json.len and json[i] != ',' and json[i] != '}') : (i += 1) {}
-                token_id = @intCast(parseU64Slice(json[ns..i]) catch 0);
+                token_id = std.math.cast(usize, parseU64Slice(json[ns..i]) catch 0);
             } else if (std.mem.eql(u8, fk.val, "content")) {
                 const cr = try parseString(json, i);
                 i = cr.next;
@@ -1294,8 +1349,10 @@ fn parseAddedTokens(
     // Find max id across existing vocab and added tokens.
     var max_id: usize = if (out_vocab.*) |v| v.len else 0;
     for (entries.items) |e| {
-        if (e.id + 1 > max_id) max_id = e.id + 1;
+        const id_end = std.math.add(usize, e.id, 1) catch return error.InvalidSafeTensors;
+        if (id_end > max_id) max_id = id_end;
     }
+    if (max_id > max_vocab_size) return error.InvalidSafeTensors;
 
     // Extend or create vocab array.
     if (out_vocab.*) |old_vocab| {

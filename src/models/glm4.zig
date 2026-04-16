@@ -29,6 +29,8 @@ const quant_ops = @import("../ops/quant.zig");
 const max_active_experts: usize = 8;
 /// Buffer size for tensor name formatting (layer prefix + suffix).
 const name_buf_size: usize = model_mod.tensor_name_buf_size;
+/// Default MLX quantization bit width for GLM-4 (6-bit, unlike 4-bit default for other models).
+const default_glm4_mlx_bits: u32 = 6;
 
 // ── Model struct ─────────────────────────────────────────────────
 
@@ -42,7 +44,7 @@ pub const Glm4Model = struct {
     n_layers: u32 = 47,
     n_embd: u32 = 2048,
     n_head: u32 = 20,
-    n_head_kv: u32 = 20, // not used for internal KV computation (MLA has its own compressed KV path); set equal to n_head for Model vtable reporting
+    n_head_kv: u32 = 20, // Model vtable compatibility; MLA uses compressed KV internally
     vocab_size: u32 = 154880,
     q_lora_rank: u32 = 768,
     kv_lora_rank: u32 = 512,
@@ -78,6 +80,9 @@ pub const Glm4Model = struct {
     expert_buf: []f32 = &.{},
     router_logits: []f32 = &.{},
     logits_buf: []f32 = &.{},
+    /// Scratch buffer for MLA dequantization in multiLinearGemv.
+    /// Sized to max(nope_dim, v_head_dim) * kv_lora_rank to avoid corrupting logits_buf.
+    mla_scratch: []f32 = &.{},
 
     // KV cache (PagedAttention or TieredKvCache): store full reconstructed K and V per layer
     paged_cache: PagedKvCache = undefined,
@@ -121,7 +126,7 @@ pub const Glm4Model = struct {
         if (f.getMetaF32("routed_scaling_factor")) |v| self.routed_scaling_factor = v;
         if (f.getMetaF32("rope_theta")) |v| self.rope_theta = v;
         if (f.getMetaF32("rms_norm_eps")) |v| self.rms_eps = v;
-        self.mlx_bits = f.getMetaU32("bits") orelse 6;
+        self.mlx_bits = f.getMetaU32("bits") orelse default_glm4_mlx_bits;
         if (f.getMetaU32("context_length")) |cl| self.max_seq_len = cl;
         if (ctx_size > 0) self.max_seq_len = ctx_size;
 
@@ -166,6 +171,10 @@ pub const Glm4Model = struct {
         errdefer allocator.free(self.router_logits);
         self.logits_buf = try allocator.alloc(f32, self.vocab_size);
         errdefer allocator.free(self.logits_buf);
+        // MLA scratch: max(nope_dim, v_head_dim) * kv_lora_rank
+        const mla_scratch_size = @max(self.qk_nope_head_dim, self.v_head_dim) * self.kv_lora_rank;
+        self.mla_scratch = try allocator.alloc(f32, mla_scratch_size);
+        errdefer allocator.free(self.mla_scratch);
 
         // KV cache: use TieredKvCache if provided, otherwise flat PagedKvCache.
         // Note: GLM4 uses different k_head_dim and v_head_dim, use larger for cache.
@@ -180,7 +189,7 @@ pub const Glm4Model = struct {
             const max_kv_dim = @max(kvd, vd);
             // One block per layer spanning the full context — MLA attention
             // indexes the KV cache flat (pos * kvd), not via block tables.
-            const block_size: u16 = @intCast(self.max_seq_len);
+            const block_size: u16 = @intCast(@min(self.max_seq_len, std.math.maxInt(u16)));
             const num_blocks = nl;
             self.paged_cache = try PagedKvCache.init(allocator, nl, max_kv_dim, num_blocks, block_size);
             errdefer self.paged_cache.deinit();
@@ -209,7 +218,7 @@ pub const Glm4Model = struct {
             &self.k_buf,      &self.v_buf,      &self.attn_out,
             &self.scores_buf, &self.ff_gate,    &self.ff_up,
             &self.ff_down,    &self.expert_buf, &self.router_logits,
-            &self.logits_buf,
+            &self.logits_buf, &self.mla_scratch,
         };
         inline for (bufs) |buf| self.allocator.free(buf.*);
     }
@@ -231,7 +240,8 @@ pub const Glm4Model = struct {
         try self.embLookup(token_id);
 
         for (0..self.n_layers) |li| {
-            if (self.cancelled.load(.acquire)) return error.Cancelled;
+            if (self.cancelled.load(.monotonic)) return error.Cancelled;
+            self.fmt.prefetchLayer(@intCast(li + 1));
             const l: u32 = @intCast(li);
             try self.mlaAttention(l);
             if (li < self.first_k_dense_replace) {
@@ -478,26 +488,45 @@ pub const Glm4Model = struct {
 
         // Sigmoid + bias correction
         self.be.sync();
-        const bias_t = self.layerTensor(li, "mlp.gate.e_score_correction_bias");
+
+        // Apply sigmoid to all router logits and save raw scores for weighting.
+        std.debug.assert(self.n_routed_experts <= max_active_experts * 16);
+        var raw_sigmoid: [max_active_experts * 16]f32 = undefined;
         for (0..self.n_routed_experts) |i| {
-            var score = math_ops.sigmoid(self.router_logits[i]);
-            if (bias_t) |bt| {
-                const bias_ptr: [*]const f32 = @ptrCast(@alignCast(bt.data_ptr));
-                score += bias_ptr[i];
-            }
-            self.router_logits[i] = score;
+            raw_sigmoid[i] = math_ops.sigmoid(self.router_logits[i]);
         }
 
-        // Top-k selection
+        // Use sigmoid + bias for top-k SELECTION only (bias shifts selection, not weights).
+        // Reference: HF MoEGate.forward() applies bias only to get_topk_indices,
+        // then gathers raw sigmoid scores for the selected experts.
+        const bias_t = self.layerTensor(li, "mlp.gate.e_score_correction_bias");
+        if (bias_t) |bt| {
+            const bias_ptr: [*]const f32 = @ptrCast(@alignCast(bt.data_ptr));
+            for (0..self.n_routed_experts) |i| {
+                self.router_logits[i] = raw_sigmoid[i] + bias_ptr[i];
+            }
+        } else {
+            for (0..self.n_routed_experts) |i| {
+                self.router_logits[i] = raw_sigmoid[i];
+            }
+        }
+
+        // Top-k selection (using bias-corrected scores)
         const top_k = self.num_experts_per_tok;
         var top_experts: [max_active_experts]usize = undefined;
+        var top_scores_biased: [max_active_experts]f32 = undefined;
+        math_ops.topKExperts(self.router_logits[0..self.n_routed_experts], top_k, top_experts[0..top_k], top_scores_biased[0..top_k]);
+
+        // Gather raw sigmoid scores for the selected experts (NO bias)
         var top_scores: [max_active_experts]f32 = undefined;
-        math_ops.topKExperts(self.router_logits[0..self.n_routed_experts], top_k, top_experts[0..top_k], top_scores[0..top_k]);
+        for (0..top_k) |i| {
+            top_scores[i] = raw_sigmoid[top_experts[i]];
+        }
 
         // Normalize scores
         var score_sum: f32 = 0.0;
         for (0..top_k) |ti| score_sum += top_scores[ti];
-        if (score_sum > 0) {
+        if (score_sum > 0.0) {
             for (0..top_k) |ti| top_scores[ti] /= score_sum;
         }
 
@@ -667,8 +696,8 @@ pub const Glm4Model = struct {
                 // Transposed non-Q8_0 — gemvT only supports Q8_0, so CPU dequant
                 // fallback until gemvT gains dtype support.
                 const head_elems = out_dim * in_dim;
-                std.debug.assert(head_elems <= self.logits_buf.len);
-                const scratch = self.logits_buf[0..head_elems];
+                std.debug.assert(head_elems <= self.mla_scratch.len);
+                const scratch = self.mla_scratch[0..head_elems];
                 self.be.sync();
                 for (0..nh) |h| {
                     const w_ptr = w_t.data_ptr + h * head_bytes;
@@ -691,20 +720,36 @@ pub const Glm4Model = struct {
         self.be.siluMul(self.ff_gate.ptr, self.ff_up.ptr, self.ff_gate.ptr, ff);
     }
 
-    /// Apply RoPE only to the rope portion of each head (at offset nope_dim)
+    /// Maximum rope half-dimension for precomputed frequency table.
+    const max_rope_half: usize = 128;
+
+    /// Apply RoPE only to the rope portion of each head (at offset nope_dim).
+    /// Frequencies are precomputed once and reused across all heads.
     fn ropePartial(self: *Glm4Model, x: [*]f32, n_heads: usize, head_dim: usize, nope_dim: usize, rope_dim: usize) void {
         std.debug.assert(rope_dim % 2 == 0);
         const half = rope_dim / 2;
+        std.debug.assert(half <= max_rope_half);
         const p: f32 = @floatFromInt(self.kv_seq_len);
+        const neg_log_theta: f32 = -@log(self.rope_theta);
+        const inv_rd: f32 = 1.0 / @as(f32, @floatFromInt(rope_dim));
+
+        // Precompute cos/sin table (head-independent)
+        var cos_tab: [max_rope_half]f32 = undefined;
+        var sin_tab: [max_rope_half]f32 = undefined;
+        for (0..half) |i| {
+            const freq = @exp(neg_log_theta * @as(f32, @floatFromInt(2 * i)) * inv_rd);
+            const angle = p * freq;
+            cos_tab[i] = @cos(angle);
+            sin_tab[i] = @sin(angle);
+        }
+
         for (0..n_heads) |h| {
             const base = h * head_dim + nope_dim;
             for (0..half) |i| {
-                const freq = @exp(-@log(self.rope_theta) * @as(f32, @floatFromInt(2 * i)) / @as(f32, @floatFromInt(rope_dim)));
-                const angle = p * freq;
                 const r = x[base + i];
                 const im = x[base + i + half];
-                x[base + i] = r * @cos(angle) - im * @sin(angle);
-                x[base + i + half] = r * @sin(angle) + im * @cos(angle);
+                x[base + i] = r * cos_tab[i] - im * sin_tab[i];
+                x[base + i + half] = r * sin_tab[i] + im * cos_tab[i];
             }
         }
     }

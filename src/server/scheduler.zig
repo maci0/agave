@@ -2,7 +2,7 @@
 //!
 //! Implements vLLM-style iteration-level continuous batching: maintains a waiting
 //! queue and running list, processes one decode step across all active requests,
-//! ejects finished/cancelled requests, and fills batch from waiting queue (FIFO).
+//! ejects finished/cancelled requests, and fills batch from waiting queue (cache-aware priority).
 
 const std = @import("std");
 const Model = @import("../models/model.zig").Model;
@@ -17,49 +17,65 @@ const scheduler_poll_ns: u64 = 1_000_000; // 1ms
 
 /// Cache-aware priority coefficient (α in the priority formula).
 /// Higher values give more weight to cached prefix length.
-/// Configurable via future CLI flag.
-const cache_priority_alpha: f32 = 0.5;
+const cache_priority_alpha: f64 = 0.5;
+
+/// Milliseconds per second — converts alpha from per-second to per-millisecond units.
+const ms_per_second: f64 = 1000.0;
+
+/// Maximum number of requests allowed in the waiting queue.
+/// Prevents unbounded memory growth under sustained load.
+const max_waiting_queue_size: usize = 1024;
+
+/// Initial token output buffer capacity per request.
+/// Avoids repeated reallocation during the decode phase.
+const initial_token_capacity: usize = 256;
 
 /// Per-request state for continuous batching.
 pub const Request = struct {
     id: u64,
     tokens: std.ArrayList(u32),
     last_token_id: u32,
-    is_finished: bool,
+    is_finished: std.atomic.Value(bool),
     is_cancelled: std.atomic.Value(bool),
     enqueued_at: i64,
     prompt_tokens: u32,
     cached_prefix_len: u32 = 0,
     cached_blocks: []const u32 = &[_]u32{},
     prompt_tokens_slice: []const u32 = &[_]u32{},
-    block_table: []u32 = &[_]u32{}, // Physical block IDs for this request (placeholder for PagedAttention integration)
+    block_table: []u32 = &[_]u32{}, // Physical block IDs for cache-aware scheduling and prefetching
     /// Current position in prompt prefill. When < prompt_tokens, the scheduler
     /// feeds prompt tokens to the model. When == prompt_tokens, decode begins.
     prefill_pos: u32 = 0,
+    /// Timestamp (milliTimestamp) when prefill completed and decode began.
+    /// Zero until prefill finishes. Used by the server to record TTFT metrics.
+    prefill_done_at: i64 = 0,
     allocator: Allocator,
 
     /// Append a token to the output sequence.
-    /// Sets is_finished if the token matches any EOG (end-of-generation) ID.
+    /// If the token matches any EOG (end-of-generation) ID, sets is_finished
+    /// without appending the token — EOG tokens are stop signals, not output.
     pub fn appendToken(self: *Request, token: u32, eog_ids: []const u32) void {
-        self.tokens.append(self.allocator, token) catch {
-            // OOM: cancel the request instead of silently dropping tokens
-            self.is_cancelled.store(true, .monotonic);
-            return;
-        };
-        self.last_token_id = token;
-
         for (eog_ids) |eog_id| {
             if (token == eog_id) {
-                self.is_finished = true;
+                self.is_finished.store(true, .release);
                 return;
             }
         }
+
+        self.tokens.append(self.allocator, token) catch |err| {
+            std.log.err("req={d} token append failed ({s}), cancelling request", .{ self.id, @errorName(err) });
+            self.is_cancelled.store(true, .release);
+            return;
+        };
+        self.last_token_id = token;
     }
 
     /// Calculate elapsed time since request was enqueued (in seconds).
+    /// Clamps to zero if the clock moved backwards (e.g. NTP adjustment).
     pub fn elapsedSeconds(self: *const Request, now: i64) u32 {
-        const elapsed_ms = now - self.enqueued_at;
-        return @intFromFloat(@as(f64, @floatFromInt(elapsed_ms)) / 1000.0);
+        if (now <= self.enqueued_at) return 0;
+        const elapsed_ms: u64 = @intCast(now - self.enqueued_at);
+        return std.math.cast(u32, elapsed_ms / 1000) orelse std.math.maxInt(u32);
     }
 
     /// Clean up allocated resources.
@@ -70,13 +86,13 @@ pub const Request = struct {
 
 /// Calculate cache-aware priority for a request.
 /// SGLang-style cache-aware scheduling: longer cached prefixes get priority boost.
-/// Formula: priority = -1 × (deadline + α × cached_prefix_length)
+/// Formula: priority = α × cached_prefix_length − elapsed_ms
 /// Higher priority = better (should be scheduled sooner).
 fn requestPriority(req: *const Request, now: i64) i64 {
     const elapsed_ms = now - req.enqueued_at;
     const deadline_penalty = @as(i64, @intCast(elapsed_ms));
-    const cache_bonus = @as(i64, @intCast(req.cached_prefix_len)) * @as(i64, @intFromFloat(cache_priority_alpha * 1000.0));
-    return -1 * (deadline_penalty - cache_bonus); // Higher = better
+    const cache_bonus = @as(i64, @intCast(req.cached_prefix_len)) * @as(i64, @intFromFloat(cache_priority_alpha * ms_per_second));
+    return cache_bonus - deadline_penalty;
 }
 
 /// Scheduler statistics for monitoring.
@@ -101,6 +117,9 @@ pub const RequestManager = struct {
     next_id: std.atomic.Value(u64),
     completed_total: u32 = 0,
     cancelled_total: u32 = 0,
+    /// Dirty flag: set when enqueue adds a new request, cleared after sort.
+    /// Avoids re-sorting an already-sorted waiting queue every 1ms step.
+    queue_dirty: bool = false,
 
     /// Optional tiered KV cache (from Plan 02).
     tiered_cache: ?*TieredKvCache = null,
@@ -112,9 +131,17 @@ pub const RequestManager = struct {
     /// If tiered_cache is provided, Prefetcher is initialized and started.
     /// Otherwise, prefetcher remains null.
     pub fn init(allocator: Allocator, metrics: *Metrics, max_batch_size: usize, timeout_sec: u32, tiered_cache: ?*TieredKvCache) !RequestManager {
+        var waiting: std.ArrayList(*Request) = .empty;
+        try waiting.ensureTotalCapacity(allocator, max_waiting_queue_size);
+        errdefer waiting.deinit(allocator);
+
+        var running: std.ArrayList(*Request) = .empty;
+        try running.ensureTotalCapacity(allocator, max_batch_size);
+        errdefer running.deinit(allocator);
+
         var mgr = RequestManager{
-            .waiting = .{},
-            .running = .{},
+            .waiting = waiting,
+            .running = running,
             .radix_tree = try RadixTree.init(allocator),
             .metrics = metrics,
             .max_batch_size = max_batch_size,
@@ -128,7 +155,7 @@ pub const RequestManager = struct {
 
         // Initialize and start prefetcher if tiered cache available
         if (tiered_cache) |cache| {
-            var prefetcher = try Prefetcher.init(allocator, cache);
+            var prefetcher = Prefetcher.init(cache);
             errdefer prefetcher.deinit();
             try prefetcher.start();
             mgr.prefetcher = prefetcher;
@@ -137,12 +164,21 @@ pub const RequestManager = struct {
         return mgr;
     }
 
-    /// Clean up allocated resources.
-    /// Note: does NOT free individual requests — caller owns them.
+    /// Clean up allocated resources, including any requests still in queues.
     pub fn deinit(self: *RequestManager) void {
         // Stop prefetcher before deinit (shutdown worker thread)
         if (self.prefetcher) |*prefetcher| {
             prefetcher.deinit();
+        }
+
+        // Free any requests still in queues (e.g. on shutdown with pending work)
+        for (self.waiting.items) |req| {
+            req.deinit();
+            self.allocator.destroy(req);
+        }
+        for (self.running.items) |req| {
+            req.deinit();
+            self.allocator.destroy(req);
         }
 
         self.radix_tree.deinit();
@@ -153,6 +189,7 @@ pub const RequestManager = struct {
     /// Enqueue a new request into the waiting queue.
     /// Returns pointer to the request (caller keeps reference for polling).
     /// Queries RadixTree for cached prefix match before allocating new blocks.
+    /// Returns error.Overflow if the waiting queue is full.
     pub fn enqueue(self: *RequestManager, prompt_tokens_slice: []const u32) !*Request {
         const req = try self.allocator.create(Request);
         errdefer self.allocator.destroy(req);
@@ -160,12 +197,21 @@ pub const RequestManager = struct {
         const now = std.time.milliTimestamp();
         const id = self.next_id.fetchAdd(1, .monotonic);
 
-        // Query RadixTree for longest matching prefix
+        // Lock mutex for both RadixTree access and queue append (atomic check-and-insert)
+        self.mutex.lock();
+        defer self.mutex.unlock();
+
+        if (self.waiting.items.len >= max_waiting_queue_size) {
+            return error.Overflow;
+        }
+
+        // Query RadixTree for longest matching prefix (under mutex to prevent
+        // concurrent insert from corrupting tree traversal)
         const prefix_match = self.radix_tree.matchPrefix(prompt_tokens_slice);
 
         // Record cache hit or miss in metrics
         if (prefix_match.matched > 0) {
-            self.metrics.recordCacheHit(@intCast(prefix_match.matched));
+            self.metrics.recordCacheHit(@intCast(prefix_match.matched), @intCast(prompt_tokens_slice.len));
         } else {
             self.metrics.recordCacheMiss(@intCast(prompt_tokens_slice.len));
         }
@@ -174,7 +220,7 @@ pub const RequestManager = struct {
             .id = id,
             .tokens = .{},
             .last_token_id = 0,
-            .is_finished = false,
+            .is_finished = std.atomic.Value(bool).init(false),
             .is_cancelled = std.atomic.Value(bool).init(false),
             .enqueued_at = now,
             .prompt_tokens = @intCast(prompt_tokens_slice.len),
@@ -184,68 +230,97 @@ pub const RequestManager = struct {
             .allocator = self.allocator,
         };
 
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        try req.tokens.ensureTotalCapacity(self.allocator, initial_token_capacity);
+        errdefer req.tokens.deinit(self.allocator);
 
         try self.waiting.append(self.allocator, req);
+        self.queue_dirty = true;
         return req;
     }
 
     /// Execute one scheduler iteration.
     /// 1. Remove finished/cancelled requests from running
     /// 2. Check timeout on all running requests
-    /// 3. Fill batch from waiting queue (FIFO, up to max_batch_size)
+    /// 3. Fill batch from waiting queue (cache-aware priority, up to max_batch_size)
     /// 4. Call model.forward() for each running request
     pub fn step(self: *RequestManager, model: *Model, eog_ids: []const u32) !void {
         const now = std.time.milliTimestamp();
 
-        // Lock during queue manipulation
-        self.mutex.lock();
+        // Lock during queue manipulation (scoped to ensure unlock on all paths)
+        {
+            self.mutex.lock();
+            defer self.mutex.unlock();
 
-        // 1. Remove finished/cancelled from running
-        var i: usize = 0;
-        while (i < self.running.items.len) {
-            const req = self.running.items[i];
-            if (req.is_finished) {
-                _ = self.running.swapRemove(i);
-                self.completed_total += 1;
-            } else if (req.is_cancelled.load(.monotonic)) {
-                _ = self.running.swapRemove(i);
-                self.cancelled_total += 1;
-                self.metrics.recordCancellation();
-            } else {
-                i += 1;
-            }
-        }
-
-        // 2. Check timeout on running requests
-        for (self.running.items) |req| {
-            if (req.elapsedSeconds(now) > self.timeout_sec) {
-                req.is_cancelled.store(true, .monotonic);
-            }
-        }
-
-        // 3. Sort waiting queue by cache-aware priority before filling batch
-        if (self.waiting.items.len > 1) {
-            const SortCtx = struct { now: i64 };
-            std.mem.sort(*Request, self.waiting.items, SortCtx{ .now = now }, struct {
-                fn lessThan(ctx: SortCtx, a: *Request, b: *Request) bool {
-                    return requestPriority(a, ctx.now) < requestPriority(b, ctx.now);
+            // 1. Remove finished/cancelled from running list.
+            // Do NOT free the request here — the HTTP handler thread holds a
+            // pointer to it (via rm.enqueue()) and frees it in its defer block.
+            // Freeing here would cause a double-free race with the handler.
+            var i: usize = 0;
+            while (i < self.running.items.len) {
+                const req = self.running.items[i];
+                if (req.is_finished.load(.acquire)) {
+                    _ = self.running.swapRemove(i);
+                    self.completed_total += 1;
+                } else if (req.is_cancelled.load(.acquire)) {
+                    _ = self.running.swapRemove(i);
+                    self.cancelled_total += 1;
+                } else {
+                    i += 1;
                 }
-            }.lessThan);
+            }
+
+            // 2. Check timeout on running requests
+            for (self.running.items) |req| {
+                if (req.elapsedSeconds(now) > self.timeout_sec) {
+                    std.log.warn("req={d} timed out after {d}s (limit {d}s), cancelling", .{ req.id, req.elapsedSeconds(now), self.timeout_sec });
+                    req.is_cancelled.store(true, .release);
+                    self.metrics.recordTimeout();
+                }
+            }
+
+            // 3. Sort waiting queue by cache-aware priority before filling batch.
+            // Skip sort when no new requests arrived — relative ordering is stable
+            // because priority = α×cache_prefix − elapsed_ms and elapsed_ms changes
+            // uniformly for all waiting requests between steps.
+            if (self.queue_dirty and self.waiting.items.len > 1) {
+                const SortCtx = struct { now: i64 };
+                std.mem.sort(*Request, self.waiting.items, SortCtx{ .now = now }, struct {
+                    fn lessThan(ctx: SortCtx, a: *Request, b: *Request) bool {
+                        return requestPriority(a, ctx.now) < requestPriority(b, ctx.now);
+                    }
+                }.lessThan);
+                self.queue_dirty = false;
+            }
+
+            // 4. Fill batch from waiting queue (ascending sort, pop takes highest priority)
+            while (self.running.items.len < self.max_batch_size and self.waiting.items.len > 0) {
+                const req = self.waiting.pop().?;
+                self.running.append(self.allocator, req) catch |err| {
+                    // Re-queue to prevent request loss on allocation failure.
+                    // If re-queue also fails (OOM), cancel the request so the
+                    // handler thread unblocks instead of spinning forever.
+                    self.waiting.append(self.allocator, req) catch {
+                        req.is_cancelled.store(true, .release);
+                    };
+                    return err;
+                };
+                // Record how long this request waited in the queue
+                const queue_ms: u64 = @intCast(@max(now - req.enqueued_at, 0));
+                self.metrics.recordQueueTime(queue_ms);
+            }
+
+            // Update Prometheus gauges
+            self.metrics.updateQueueDepth(@intCast(self.waiting.items.len));
+            self.metrics.updateActiveRequests(@intCast(self.running.items.len));
         }
 
-        // 4. Fill batch from waiting queue (highest priority first after sort)
-        while (self.running.items.len < self.max_batch_size and self.waiting.items.len > 0) {
-            const req = self.waiting.orderedRemove(self.waiting.items.len - 1); // Take from end (highest priority)
-            try self.running.append(self.allocator, req);
+        // Update KV cache block metrics from tiered cache (outside mutex —
+        // block counts are stable during step since forward() hasn't run yet)
+        if (self.tiered_cache) |cache| {
+            const total: u32 = @intCast(cache.vram_block_count + cache.ram_block_count + cache.ssd_block_count);
+            const free: u32 = @intCast(cache.vram_free_list.items.len + cache.ram_free_list.items.len + cache.ssd_free_list.items.len);
+            self.metrics.updateKvBlocks(total - free, total);
         }
-
-        // Update Prometheus gauges
-        self.metrics.updateQueueDepth(@intCast(self.waiting.items.len));
-        self.metrics.updateActiveRequests(@intCast(self.running.items.len));
-
-        self.mutex.unlock();
 
         // 5. Promote all blocks in running requests' block tables to VRAM (if tiered cache enabled)
         // 6. Prefetch next N blocks during attention compute (if prefetcher enabled)
@@ -264,16 +339,15 @@ pub const RequestManager = struct {
                 // This overlaps SSD I/O with GPU attention compute to hide latency
                 if (self.prefetcher) |*prefetcher| {
                     const current_block_idx = @divFloor(req.tokens.items.len, cache.block_size);
-                    prefetcher.prefetchNext(req.block_table, current_block_idx) catch |err| {
-                        std.log.warn("Prefetch failed for request {d}: {}", .{ req.id, err });
-                    };
+                    prefetcher.prefetchNext(req.block_table, current_block_idx);
                 }
             }
         }
 
         // 7. Execute forward for all running requests (unlocked — model owns its concurrency)
         for (self.running.items) |req| {
-            if (req.is_cancelled.load(.monotonic)) continue;
+            if (req.is_cancelled.load(.acquire)) continue;
+            if (req.is_finished.load(.acquire)) continue;
 
             // Prefill phase: feed prompt tokens one at a time.
             // Note: continuous batching currently processes one request at a time
@@ -282,13 +356,14 @@ pub const RequestManager = struct {
                 const prompt_tid = req.prompt_tokens_slice[req.prefill_pos];
                 const next_token = model.forward(prompt_tid) catch |err| {
                     std.log.err("Request {d} prefill failed: {}", .{ req.id, err });
-                    req.is_cancelled.store(true, .monotonic);
+                    req.is_cancelled.store(true, .release);
                     continue;
                 };
                 req.prefill_pos += 1;
 
                 // Last prefill token produces the first generated token
                 if (req.prefill_pos == req.prompt_tokens) {
+                    req.prefill_done_at = std.time.milliTimestamp();
                     req.last_token_id = next_token;
                     req.appendToken(next_token, eog_ids);
                 }
@@ -298,17 +373,21 @@ pub const RequestManager = struct {
             // Decode phase: generate tokens
             const next_token = model.forward(req.last_token_id) catch |err| {
                 std.log.err("Request {d} forward failed: {}", .{ req.id, err });
-                req.is_cancelled.store(true, .monotonic);
+                req.is_cancelled.store(true, .release);
                 continue;
             };
 
             req.appendToken(next_token, eog_ids);
 
-            // On completion, insert full sequence into RadixTree for future reuse
-            if (req.is_finished and req.tokens.items.len > 0) {
+            // On completion, insert full sequence into RadixTree for future reuse.
+            // Must hold mutex — enqueue() calls matchPrefix() under the same lock
+            // from HTTP handler threads, so concurrent insert would be a data race.
+            if (req.is_finished.load(.acquire) and req.tokens.items.len > 0) {
                 const block_ids = model.getBlockTable();
+                self.mutex.lock();
+                defer self.mutex.unlock();
                 self.radix_tree.insert(req.tokens.items, block_ids) catch |err| {
-                    std.log.warn("Failed to insert sequence into RadixTree: {}", .{err});
+                    std.log.warn("req={d} failed to insert sequence into RadixTree: {}", .{ req.id, err });
                 };
             }
         }
@@ -339,7 +418,8 @@ pub fn runSchedulerLoop(
 ) void {
     while (!shutdown.load(.acquire)) {
         manager.step(model, eog_ids) catch |err| {
-            std.log.err("Scheduler step failed: {}", .{err});
+            std.log.err("Scheduler step failed: {} (waiting={d}, running={d})", .{ err, manager.waiting.items.len, manager.running.items.len });
+            manager.metrics.recordSchedulerError();
         };
         std.Thread.sleep(scheduler_poll_ns); // 1ms between iterations
     }
@@ -354,16 +434,9 @@ test "enqueue increments waiting count" {
 
     const tokens_a = [_]u32{ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 };
     const req1 = try manager.enqueue(&tokens_a);
-    defer {
-        req1.deinit();
-        allocator.destroy(req1);
-    }
+    // Requests in waiting queue are freed by manager.deinit() — no defer needed.
     const tokens_b = [_]u32{ 11, 12, 13, 14, 15, 16, 17, 18, 19, 20 };
-    const req2 = try manager.enqueue(&tokens_b);
-    defer {
-        req2.deinit();
-        allocator.destroy(req2);
-    }
+    _ = try manager.enqueue(&tokens_b);
 
     const stats = manager.getStats();
     try std.testing.expectEqual(@as(u32, 2), stats.waiting_count);
@@ -378,23 +451,11 @@ test "step fills batch from waiting queue" {
     var manager = try RequestManager.init(allocator, &metrics, 2, 30, null);
     defer manager.deinit();
 
-    // Enqueue 3 requests
+    // Enqueue 3 requests — all freed by manager.deinit() (still in queues at test end)
     const dummy_tokens = [_]u32{ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 };
-    const req1 = try manager.enqueue(&dummy_tokens);
-    defer {
-        req1.deinit();
-        allocator.destroy(req1);
-    }
-    const req2 = try manager.enqueue(&dummy_tokens);
-    defer {
-        req2.deinit();
-        allocator.destroy(req2);
-    }
-    const req3 = try manager.enqueue(&dummy_tokens);
-    defer {
-        req3.deinit();
-        allocator.destroy(req3);
-    }
+    _ = try manager.enqueue(&dummy_tokens);
+    _ = try manager.enqueue(&dummy_tokens);
+    _ = try manager.enqueue(&dummy_tokens);
 
     // Create mock model
     var mock_model = MockModel{};
@@ -423,15 +484,13 @@ test "step removes finished requests" {
 
     const dummy_tokens = [_]u32{ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 };
     const req1 = try manager.enqueue(&dummy_tokens);
+    // req1 is removed from running by step() when finished — handler (test) owns cleanup.
     defer {
         req1.deinit();
         allocator.destroy(req1);
     }
-    const req2 = try manager.enqueue(&dummy_tokens);
-    defer {
-        req2.deinit();
-        allocator.destroy(req2);
-    }
+    // req2 stays in running — freed by manager.deinit()
+    _ = try manager.enqueue(&dummy_tokens);
 
     // Create mock model that returns non-EOS
     var mock_model = MockModel{};
@@ -444,9 +503,9 @@ test "step removes finished requests" {
     try std.testing.expectEqual(@as(u32, 2), stats.running_count);
 
     // Mark first request as finished
-    req1.is_finished = true;
+    req1.is_finished.store(true, .release);
 
-    // Step again — should remove only the finished request
+    // Step again — should remove the finished request from running
     try manager.step(&model, &[_]u32{1}); // Pass EOS token ID
 
     stats = manager.getStats();
@@ -461,10 +520,7 @@ test "step cancels timed-out requests" {
 
     const dummy_tokens = [_]u32{ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 };
     const req = try manager.enqueue(&dummy_tokens);
-    defer {
-        req.deinit();
-        allocator.destroy(req);
-    }
+    // req stays in running (cancelled but not removed until next step) — freed by manager.deinit()
 
     // Simulate request enqueued 2 seconds ago
     req.enqueued_at = std.time.milliTimestamp() - 2000;
@@ -479,7 +535,7 @@ test "step cancels timed-out requests" {
     try manager.step(&model, &[_]u32{});
 
     // Should be cancelled due to timeout
-    try std.testing.expect(req.is_cancelled.load(.monotonic));
+    try std.testing.expect(req.is_cancelled.load(.acquire));
 }
 
 // Mock model for testing
@@ -490,6 +546,7 @@ const MockModel = struct {
     n_embd: u32 = 768,
     n_head: u32 = 12,
     n_head_kv: u32 = 12,
+    kv_seq_len: usize = 0,
     logits_buf: []f32 = &.{},
 
     pub fn forward(_: *MockModel, _: u32) !u32 {
@@ -511,31 +568,3 @@ const MockModel = struct {
     }
 };
 
-// Mock model that returns EOS token
-const MockEosModel = struct {
-    eos_token_id: u32 = 1,
-    vocab_size: u32 = 1000,
-    n_layers: u32 = 12,
-    n_embd: u32 = 768,
-    n_head: u32 = 12,
-    n_head_kv: u32 = 12,
-    logits_buf: []f32 = &.{},
-
-    pub fn forward(_: *MockEosModel, _: u32) !u32 {
-        return 1; // Return EOS token
-    }
-
-    pub fn prefill(self: *MockEosModel, token_ids: []const u32) !u32 {
-        var last: u32 = 0;
-        for (token_ids) |tid| last = self.forward(tid) catch return error.Cancelled;
-        return last;
-    }
-
-    pub fn resetCache(_: *MockEosModel) void {}
-
-    pub fn cancel(_: *MockEosModel) void {}
-
-    pub fn getBlockTable(_: *MockEosModel) []const u32 {
-        return &[_]u32{};
-    }
-};

@@ -67,18 +67,7 @@ export fn gemv_fp8_e5m2_kernel(
         sum += wval * x[j];
     }
 
-    // Warp reduction
-    sum = cu.warpReduceAdd(sum);
-
-    const lane = tid % 32;
-    const warp_id = tid / 32;
-    if (lane == 0) cu.sharedStore(warp_id, sum);
-    cu.syncthreads();
-
-    // Inter-warp reduction
-    const n_warps = (bdim + 31) / 32;
-    var result = if (tid < n_warps) cu.sharedLoad(tid) else 0.0;
-    if (warp_id == 0) result = cu.warpReduceAdd(result);
-
-    if (tid == 0) y[row] = result;
+    // Block reduction (warp + inter-warp)
+    sum = cu.blockReduceAdd(sum);
+    if (tid == 0) y[row] = sum;
 }

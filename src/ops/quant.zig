@@ -4,19 +4,32 @@
 //! dequantize during GEMV; GPU backends use native shader/PTX equivalents.
 
 const std = @import("std");
-const DType = @import("../backend/backend.zig").DType;
+const DType = @import("../format/format.zig").DType;
 
+/// IEEE 754 f32 exponent bias.
+const f32_exp_bias: u32 = 127;
+/// IEEE 754 f32 mantissa bit count.
+const f32_mant_bits: u5 = 23;
+/// FP8 E4M3 exponent bias.
+const fp8_e4m3_exp_bias: u32 = 7;
+/// FP8 E4M3 mantissa bit count.
+const fp8_e4m3_mant_bits: u5 = 3;
+/// FP8 E5M2 exponent bias.
+const fp8_e5m2_exp_bias: u32 = 15;
+/// FP8 E5M2 mantissa bit count.
+const fp8_e5m2_mant_bits: u5 = 2;
 /// FP8 E4M3 denormal scale: 2^(-6) / 8 = 2^(-9).
 const fp8_e4m3_denorm_scale: f32 = 1.0 / 512.0;
 /// FP8 E5M2 denormal scale: 2^(-14) / 4 = 2^(-16).
 const fp8_e5m2_denorm_scale: f32 = 1.0 / 65536.0;
-
+/// 6-bit mask for scale extraction in Q4_K/Q5_K getScaleMinK4.
+const scale_6bit_mask: u8 = 63;
 /// Elements per Q8_0 / Q4_0 quantization block.
 pub const quant_block_elems: usize = 32;
-/// Bytes per Q8_0 block: 2-byte f16 scale + 32 int8 values.
+/// Bytes per Q8_0 block: f16 scale (2) + 32 i8 quants = 34.
 pub const q8_0_block_bytes: usize = 34;
-/// Bytes per Q4_0 block: 2-byte f16 scale + 16 nibble bytes.
-const q4_0_block_bytes: usize = 18;
+/// Bytes per Q4_0 block: f16 scale (2) + 16 nibble bytes = 18.
+pub const q4_0_block_bytes: usize = 18;
 
 /// Convert a BF16 value (stored as u16) to f32.
 /// BF16 shares f32's exponent range; conversion is a 16-bit left shift.
@@ -34,18 +47,18 @@ pub inline fn mxfp4Lookup(nibble: u8) f32 {
     return table[nibble];
 }
 
-/// E8M0 scale: pure power-of-2 with bias 127.
-/// Returns 2^(e - 127) for e > 0; for e = 0, returns 2^(-126) (smallest normal f32).
+/// E8M0 scale: pure power-of-2 with bias 127 (OCP Microscaling spec).
+/// Returns 2^(e - 127) for e > 0; for e = 0, returns 0.0 (zero per spec).
 pub inline fn e8m0ToF32(e: u8) f32 {
-    if (e == 0) return @bitCast(@as(u32, 0x00800000)); // 2^(-126) = smallest normal
-    return @bitCast(@as(u32, @intCast(e)) << 23);
+    if (e == 0) return 0.0;
+    return @bitCast(@as(u32, @intCast(e)) << f32_mant_bits);
 }
 
 /// Extract scale and minimum from Q5_K / Q4_K packed scale byte array.
 pub inline fn getScaleMinK4(j: usize, q: []const u8, sc: *u8, m: *u8) void {
     if (j < 4) {
-        sc.* = q[j] & 63;
-        m.* = q[j + 4] & 63;
+        sc.* = q[j] & scale_6bit_mask;
+        m.* = q[j + 4] & scale_6bit_mask;
     } else {
         sc.* = (q[j + 4] & 0xF) | ((q[j - 4] >> 6) << 4);
         m.* = (q[j + 4] >> 4) | ((q[j] >> 6) << 4);
@@ -54,7 +67,7 @@ pub inline fn getScaleMinK4(j: usize, q: []const u8, sc: *u8, m: *u8) void {
 
 /// Dequantize an NVFP4 nibble using the E2M1 lookup (same values as MXFP4),
 /// scaled by an FP8 E4M3 block scale.
-pub inline fn nvfp4Dequant(nibble: u8, block_scale_fp8: u8) f32 {
+inline fn nvfp4Dequant(nibble: u8, block_scale_fp8: u8) f32 {
     return mxfp4Lookup(nibble) * fp8e4m3ToF32(block_scale_fp8);
 }
 
@@ -81,8 +94,8 @@ fn fp8e4m3Compute(val: u8) f32 {
     }
 
     // Normal: value = (-1)^s * 2^(e-7) * (1 + m/8)
-    const exp_f32: u32 = (exp + 120) << 23;
-    const mant_f32: u32 = mant << 20;
+    const exp_f32: u32 = (exp + f32_exp_bias - fp8_e4m3_exp_bias) << f32_mant_bits;
+    const mant_f32: u32 = mant << (f32_mant_bits - fp8_e4m3_mant_bits);
     return @bitCast(sign | exp_f32 | mant_f32);
 }
 
@@ -120,8 +133,8 @@ fn fp8e5m2Compute(val: u8) f32 {
     }
 
     // Normal: value = (-1)^s * 2^(e-15) * (1 + m/4)
-    const exp_f32: u32 = (exp + 112) << 23;
-    const mant_f32: u32 = mant << 21;
+    const exp_f32: u32 = (exp + f32_exp_bias - fp8_e5m2_exp_bias) << f32_mant_bits;
+    const mant_f32: u32 = mant << (f32_mant_bits - fp8_e5m2_mant_bits);
     return @bitCast(sign | exp_f32 | mant_f32);
 }
 
@@ -157,11 +170,25 @@ pub fn dequantToF32(output: []f32, data: [*]const u8, dtype: DType, n: usize) vo
         },
         .bf16 => {
             const src: [*]const u16 = @ptrCast(@alignCast(data));
-            for (0..n) |i| output[i] = bf16ToF32(src[i]);
+            const V8u16 = @Vector(8, u16);
+            const V8u32 = @Vector(8, u32);
+            const shift: V8u32 = @splat(16);
+            var i: usize = 0;
+            while (i + 8 <= n) : (i += 8) {
+                const raw: V8u32 = @intCast(@as(V8u16, src[i..][0..8].*));
+                output[i..][0..8].* = @bitCast(raw << shift);
+            }
+            while (i < n) : (i += 1) output[i] = bf16ToF32(src[i]);
         },
         .f16 => {
             const src: [*]const f16 = @ptrCast(@alignCast(data));
-            for (0..n) |i| output[i] = @floatCast(src[i]);
+            const V8f16 = @Vector(8, f16);
+            const V8f32 = @Vector(8, f32);
+            var i: usize = 0;
+            while (i + 8 <= n) : (i += 8) {
+                output[i..][0..8].* = @as(V8f32, @floatCast(@as(V8f16, src[i..][0..8].*)));
+            }
+            while (i < n) : (i += 1) output[i] = @floatCast(src[i]);
         },
         .q8_0 => {
             const n_blocks = (n + quant_block_elems - 1) / quant_block_elems;
@@ -243,64 +270,6 @@ pub fn gemvNvfp4St(x: [*]const f32, weight: [*]const u8, scale: [*]const u8, y: 
     }
 }
 
-/// GEMV for SafeTensors NVFP4 with per-block scaling for numerical stability.
-///
-/// Instead of applying the FP8 scale to all 16 dequantized values before dot product,
-/// this variant computes the unscaled dot product per block first, then multiplies by
-/// the block scale. This prevents catastrophic error accumulation when router logits
-/// would otherwise overflow (e.g., Nemotron Nano MoE router scores → -2.3e26).
-///
-/// Formula: y[row] = sum_blocks( scale[block] * dot(q_block, x_block) )
-///
-/// Parameters:
-///   - x: Input vector [k].
-///   - weight: Packed nibbles [n * k/2] bytes, row-major.
-///   - scale: FP8 E4M3 block scales [n * k/16] bytes, row-major.
-///   - y: Output vector [n].
-///   - n: Number of output rows.
-///   - k: Number of input columns (must be divisible by 16).
-pub fn gemvNvfp4StPerBlock(x: [*]const f32, weight: [*]const u8, scale: [*]const u8, y: [*]f32, n: usize, k: usize) void {
-    std.debug.assert(k % 16 == 0);
-    const bytes_per_row = k / 2;
-    const scales_per_row = k / 16;
-    const V8 = @Vector(8, f32);
-
-    for (0..n) |row| {
-        var sum_scaled_blocks: f32 = 0.0;
-        const w_row = weight + row * bytes_per_row;
-        const s_row = scale + row * scales_per_row;
-
-        for (0..scales_per_row) |g| {
-            const base = g * 16;
-
-            // Unpack 8 bytes → 16 unscaled f32 values via E2M1 LUT (MXFP4 baseline values)
-            var vals: [16]f32 = undefined;
-            inline for (0..8) |j| {
-                const byte = w_row[g * 8 + j];
-                vals[2 * j] = mxfp4Lookup(byte & 0x0F);
-                vals[2 * j + 1] = mxfp4Lookup(byte >> 4);
-            }
-
-            // Compute unscaled dot product for this block (16 elements)
-            const v0: V8 = vals[0..8].*;
-            const x0: V8 = x[base..][0..8].*;
-            var block_dot: V8 = v0 * x0;
-
-            const v1: V8 = vals[8..16].*;
-            const x1: V8 = x[base + 8 ..][0..8].*;
-            block_dot += v1 * x1;
-
-            const block_sum: f32 = @reduce(.Add, block_dot);
-
-            // Apply FP8 E4M3 scale to the block sum (not to individual values)
-            const block_scale: f32 = fp8e4m3ToF32(s_row[g]);
-            sum_scaled_blocks += block_scale * block_sum;
-        }
-
-        y[row] = sum_scaled_blocks;
-    }
-}
-
 // ── Tests ─────────────────────────────────────────────────────────
 
 test "bf16ToF32" {
@@ -310,6 +279,29 @@ test "bf16ToF32" {
     try std.testing.expectEqual(@as(f32, -1.0), bf16ToF32(0xBF80));
     // BF16 0.0 = 0x0000
     try std.testing.expectEqual(@as(f32, 0.0), bf16ToF32(0x0000));
+    // BF16 2.0 = 0x4000
+    try std.testing.expectEqual(@as(f32, 2.0), bf16ToF32(0x4000));
+    // BF16 0.5 = 0x3F00
+    try std.testing.expectEqual(@as(f32, 0.5), bf16ToF32(0x3F00));
+    // BF16 -0.0 = 0x8000 (negative zero)
+    try std.testing.expectEqual(@as(f32, -0.0), bf16ToF32(0x8000));
+    // BF16 inf = 0x7F80
+    try std.testing.expect(std.math.isInf(bf16ToF32(0x7F80)));
+    // BF16 NaN = 0x7FC0
+    try std.testing.expect(std.math.isNan(bf16ToF32(0x7FC0)));
+}
+
+test "bf16ToF32 non-power-of-2 values" {
+    // 1.5 in bf16: sign=0, exp=127 (biased), mantissa=1000000 → 0x3FC0
+    try std.testing.expectEqual(@as(f32, 1.5), bf16ToF32(0x3FC0));
+    // 3.0 in bf16: sign=0, exp=128 (biased), mantissa=1000000 → 0x4040
+    try std.testing.expectEqual(@as(f32, 3.0), bf16ToF32(0x4040));
+    // -3.5 in bf16: sign=1, exp=128, mantissa=1100000 → 0xC060
+    try std.testing.expectEqual(@as(f32, -3.5), bf16ToF32(0xC060));
+    // Smallest normal bf16: exp=1, mantissa=0 → 2^(-126) = ~1.175e-38
+    const smallest = bf16ToF32(0x0080);
+    try std.testing.expect(smallest > 0.0);
+    try std.testing.expect(smallest < 1e-37);
 }
 
 test "mxfp4Lookup" {
@@ -332,6 +324,10 @@ test "e8m0ToF32" {
     try std.testing.expectEqual(@as(f32, 2.0), e8m0ToF32(128));
     // e=126 → 2^(-1) = 0.5
     try std.testing.expectEqual(@as(f32, 0.5), e8m0ToF32(126));
+    // e=0 → 0.0 (zero per OCP MX spec)
+    try std.testing.expectEqual(@as(f32, 0.0), e8m0ToF32(0));
+    // e=254 → 2^127 (largest)
+    try std.testing.expectEqual(@as(f32, std.math.pow(f32, 2.0, 127.0)), e8m0ToF32(254));
 }
 
 test "getScaleMinK4" {
@@ -351,11 +347,16 @@ test "getScaleMinK4" {
 }
 
 test "iq4nl_table" {
-    // Verify boundary values of the non-linear lookup table
-    try std.testing.expectEqual(@as(i8, -127), iq4nl_table[0]);
-    try std.testing.expectEqual(@as(i8, 1), iq4nl_table[8]);
-    try std.testing.expectEqual(@as(i8, 113), iq4nl_table[15]);
-    try std.testing.expectEqual(@as(i8, -10), iq4nl_table[7]);
+    // Verify all 16 entries of the non-linear lookup table
+    const expected = [16]i8{ -127, -104, -83, -65, -49, -35, -22, -10, 1, 13, 25, 38, 53, 69, 89, 113 };
+    try std.testing.expectEqual(@as(usize, 16), iq4nl_table.len);
+    for (0..16) |i| {
+        try std.testing.expectEqual(expected[i], iq4nl_table[i]);
+    }
+    // Verify table is monotonically increasing
+    for (1..16) |i| {
+        try std.testing.expect(iq4nl_table[i] > iq4nl_table[i - 1]);
+    }
 }
 
 test "nvfp4Dequant" {
@@ -399,7 +400,7 @@ test "fp8e4m3ToF32" {
     // Smallest denorm: e=0, m=1 → 2^(-6) * 1/8 = 2^(-9)
     // Encoding: 0_0000_001 = 0x01
     const smallest = fp8e4m3ToF32(0x01);
-    try std.testing.expectApproxEqAbs(@as(f32, 1.0 / 512.0), smallest, 1e-10);
+    try std.testing.expectEqual(@as(f32, 1.0 / 512.0), smallest);
 }
 
 test "fp8e5m2ToF32" {
@@ -425,7 +426,7 @@ test "fp8e5m2ToF32" {
     // Smallest denorm: e=0, m=1 → 2^(-14) * 1/4 = 2^(-16)
     // Encoding: 0_00000_01 = 0x01
     const smallest = fp8e5m2ToF32(0x01);
-    try std.testing.expectApproxEqAbs(@as(f32, 1.0 / 65536.0), smallest, 1e-12);
+    try std.testing.expectEqual(@as(f32, 1.0 / 65536.0), smallest);
 }
 
 test "gemvNvfp4St basic" {
@@ -443,16 +444,88 @@ test "gemvNvfp4St basic" {
 }
 
 test "gemvNvfp4St multi-row" {
-    // 2x16 GEMV: two output rows.
+    // 2x16 GEMV: two output rows with asymmetric weights to verify row stride.
     const x = [16]f32{ 1.0, 1.0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
     // Row 0: byte[0] = 0x42 → low=2 (1.0), high=4 (2.0)
-    // Row 1: byte[0] = 0x24 → low=4 (2.0), high=2 (1.0)
-    const weight = [16]u8{ 0x42, 0, 0, 0, 0, 0, 0, 0, 0x24, 0, 0, 0, 0, 0, 0, 0 };
+    // Row 1: byte[0] = 0x64 → low=4 (2.0), high=6 (4.0)
+    const weight = [16]u8{ 0x42, 0, 0, 0, 0, 0, 0, 0, 0x64, 0, 0, 0, 0, 0, 0, 0 };
     const scale = [2]u8{ 0x38, 0x38 }; // both rows scale = 1.0
     var y = [2]f32{ 0, 0 };
     gemvNvfp4St(&x, &weight, &scale, &y, 2, 16);
     // Row 0: 1.0*1.0 + 1.0*2.0 = 3.0
     try std.testing.expectApproxEqAbs(@as(f32, 3.0), y[0], 1e-6);
-    // Row 1: 1.0*2.0 + 1.0*1.0 = 3.0
-    try std.testing.expectApproxEqAbs(@as(f32, 3.0), y[1], 1e-6);
+    // Row 1: 1.0*2.0 + 1.0*4.0 = 6.0 (different from row 0)
+    try std.testing.expectApproxEqAbs(@as(f32, 6.0), y[1], 1e-6);
+}
+
+test "dequantToF32 f32 pass-through" {
+    const input = [_]f32{ 1.0, -2.5, 0.0, 3.14 };
+    const data: [*]const u8 = @ptrCast(&input);
+    var output: [4]f32 = undefined;
+    dequantToF32(&output, data, .f32, 4);
+    for (0..4) |i| try std.testing.expectApproxEqAbs(input[i], output[i], 1e-6);
+}
+
+test "dequantToF32 bf16" {
+    // BF16 values: 1.0 (0x3F80), -1.0 (0xBF80), 0.0 (0x0000), 2.0 (0x4000)
+    const input = [_]u16{ 0x3F80, 0xBF80, 0x0000, 0x4000 };
+    const data: [*]const u8 = @ptrCast(&input);
+    var output: [4]f32 = undefined;
+    dequantToF32(&output, data, .bf16, 4);
+    try std.testing.expectEqual(@as(f32, 1.0), output[0]);
+    try std.testing.expectEqual(@as(f32, -1.0), output[1]);
+    try std.testing.expectEqual(@as(f32, 0.0), output[2]);
+    try std.testing.expectEqual(@as(f32, 2.0), output[3]);
+}
+
+test "dequantToF32 q8_0" {
+    // One Q8_0 block: f16 scale + 32 i8 quants. scale=2.0, quants=[1..32].
+    // dequant[i] = 2.0 * (i+1)
+    // f16(2.0) is exact, so dequant error is bounded by f16→f32 conversion precision.
+    var block: [q8_0_block_bytes]u8 align(2) = undefined;
+    std.mem.writeInt(u16, block[0..2], 0x4000, .little); // f16(2.0)
+    for (0..32) |i| block[2 + i] = @intCast(i + 1);
+    var output: [32]f32 = undefined;
+    dequantToF32(&output, &block, .q8_0, 32);
+    for (0..32) |i| {
+        const expected: f32 = 2.0 * @as(f32, @floatFromInt(i + 1));
+        try std.testing.expectApproxEqAbs(expected, output[i], 0.01);
+    }
+}
+
+test "dequantToF32 q8_0 negative values" {
+    // Q8_0 with negative i8 quants: scale=1.5, quants include -128, -1, 0, 127.
+    // dequant[i] = scale * quant[i]
+    var block: [q8_0_block_bytes]u8 align(2) = undefined;
+    std.mem.writeInt(u16, block[0..2], 0x3E00, .little); // f16(1.5)
+    // Fill with specific negative/boundary values
+    block[2] = @bitCast(@as(i8, -128)); // i8 min
+    block[3] = @bitCast(@as(i8, -1));
+    block[4] = @bitCast(@as(i8, 0));
+    block[5] = @bitCast(@as(i8, 127)); // i8 max
+    for (6..34) |i| block[i] = @bitCast(@as(i8, 1));
+    var output: [32]f32 = undefined;
+    dequantToF32(&output, &block, .q8_0, 32);
+    try std.testing.expectApproxEqAbs(@as(f32, -192.0), output[0], 0.1); // 1.5 * -128
+    try std.testing.expectApproxEqAbs(@as(f32, -1.5), output[1], 0.01); // 1.5 * -1
+    try std.testing.expectApproxEqAbs(@as(f32, 0.0), output[2], 0.01); // 1.5 * 0
+    try std.testing.expectApproxEqAbs(@as(f32, 190.5), output[3], 0.1); // 1.5 * 127
+}
+
+test "dequantToF32 q4_0" {
+    // One Q4_0 block: f16 scale + 16 nibble bytes. scale=1.0.
+    // dequantToF32 unpacks interleaved: even i → lo nibble, odd i → hi nibble, biased -8.
+    // Use asymmetric nibbles to verify even/odd extraction is not swapped.
+    // Nibble byte 0xF3: lo=3, hi=0xF(15)
+    //   → even elements dequant to (3-8)*1.0 = -5.0
+    //   → odd elements dequant to (15-8)*1.0 = 7.0
+    var block: [q4_0_block_bytes]u8 align(2) = undefined;
+    std.mem.writeInt(u16, block[0..2], 0x3C00, .little); // f16(1.0)
+    for (2..q4_0_block_bytes) |i| block[i] = 0xF3;
+    var output: [quant_block_elems]f32 = undefined;
+    dequantToF32(&output, &block, .q4_0, quant_block_elems);
+    for (0..quant_block_elems) |i| {
+        const expected: f32 = if (i % 2 == 0) -5.0 else 7.0;
+        try std.testing.expectApproxEqAbs(expected, output[i], 0.01);
+    }
 }

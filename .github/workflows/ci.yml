@@ -3,8 +3,22 @@ name: CI
 on:
   push:
     branches: [ main, develop ]
+    paths-ignore:
+      - '**/*.md'
+      - 'docs/**'
+      - 'LICENSE'
+      - '.planning/**'
   pull_request:
     branches: [ main ]
+    paths-ignore:
+      - '**/*.md'
+      - 'docs/**'
+      - 'LICENSE'
+      - '.planning/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -19,72 +33,106 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
 
       - name: Setup Zig
-        uses: goto-bus-stop/setup-zig@v2
+        uses: goto-bus-stop/setup-zig@abea47f85e598557f500fa1fd2ab7464fcb39406 # v2.2.1
         with:
           version: ${{ env.ZIG_VERSION }}
 
       - name: Check formatting
-        run: zig fmt --check src/ tests/
+        run: zig fmt --check src/ tests/ build.zig build.zig.zon
 
   test-linux-x86:
     name: Test on Linux x86_64
+    needs: fmt-check
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
 
       - name: Setup Zig
-        uses: goto-bus-stop/setup-zig@v2
+        uses: goto-bus-stop/setup-zig@abea47f85e598557f500fa1fd2ab7464fcb39406 # v2.2.1
         with:
           version: ${{ env.ZIG_VERSION }}
 
       - name: Cache Zig build
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: |
             .zig-cache
             ~/.cache/zig
-          key: zig-linux-x86-${{ hashFiles('build.zig', 'build.zig.zon') }}
-          restore-keys: zig-linux-x86-
-
-      - name: Build
-        run: zig build
+          key: zig-${{ env.ZIG_VERSION }}-linux-x86-${{ hashFiles('build.zig', 'build.zig.zon') }}
+          restore-keys: zig-${{ env.ZIG_VERSION }}-linux-x86-
 
       - name: Run tests
         run: zig build test
 
   test-macos:
     name: Test on macOS (Apple Silicon)
+    needs: fmt-check
     runs-on: macos-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
 
       - name: Setup Zig
-        uses: goto-bus-stop/setup-zig@v2
+        uses: goto-bus-stop/setup-zig@abea47f85e598557f500fa1fd2ab7464fcb39406 # v2.2.1
         with:
           version: ${{ env.ZIG_VERSION }}
 
       - name: Cache Zig build
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: |
             .zig-cache
             ~/Library/Caches/zig
-          key: zig-macos-${{ hashFiles('build.zig', 'build.zig.zon') }}
-          restore-keys: zig-macos-
-
-      - name: Build
-        run: zig build
+          key: zig-${{ env.ZIG_VERSION }}-macos-${{ hashFiles('build.zig', 'build.zig.zon') }}
+          restore-keys: zig-${{ env.ZIG_VERSION }}-macos-
 
       - name: Run tests
         run: zig build test
 
+  docker-build:
+    name: Verify Docker build
+    needs: fmt-check
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+
+      - name: Build Docker image (CPU-only, single model)
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+        with:
+          context: .
+          push: false
+          build-args: |
+            ENABLE_CUDA=false
+            ENABLE_VULKAN=false
+            ENABLE_ROCM=false
+            ENABLE_QWEN35=false
+            ENABLE_GPT_OSS=false
+            ENABLE_NEMOTRON_H=false
+            ENABLE_NEMOTRON_NANO=false
+            ENABLE_GLM4=false
+            ENABLE_GEMMA4=false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
   cross-compile-check:
     name: Cross-compilation matrix
+    needs: fmt-check
     runs-on: ubuntu-latest
     timeout-minutes: 30
     strategy:
@@ -93,24 +141,40 @@ jobs:
         target:
           - x86_64-linux
           - aarch64-linux
-          - x86_64-macos
           - aarch64-macos
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
 
       - name: Setup Zig
-        uses: goto-bus-stop/setup-zig@v2
+        uses: goto-bus-stop/setup-zig@abea47f85e598557f500fa1fd2ab7464fcb39406 # v2.2.1
         with:
           version: ${{ env.ZIG_VERSION }}
 
       - name: Cache Zig build
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: |
             .zig-cache
             ~/.cache/zig
-          key: zig-cross-${{ matrix.target }}-${{ hashFiles('build.zig', 'build.zig.zon') }}
-          restore-keys: zig-cross-${{ matrix.target }}-
+          key: zig-${{ env.ZIG_VERSION }}-cross-${{ matrix.target }}-${{ hashFiles('build.zig', 'build.zig.zon') }}
+          restore-keys: zig-${{ env.ZIG_VERSION }}-cross-${{ matrix.target }}-
 
       - name: Build for target
         run: zig build -Dtarget=${{ matrix.target }}
+
+  ci-pass:
+    name: CI passed
+    if: always()
+    needs: [fmt-check, test-linux-x86, test-macos, docker-build, cross-compile-check]
+    runs-on: ubuntu-latest
+    timeout-minutes: 1
+    steps:
+      - name: Verify all jobs passed
+        run: |
+          if [[ "${{ contains(needs.*.result, 'failure') }}" == "true" ]] || \
+             [[ "${{ contains(needs.*.result, 'cancelled') }}" == "true" ]]; then
+            echo "::error::One or more CI jobs failed or were cancelled"
+            exit 1
+          fi

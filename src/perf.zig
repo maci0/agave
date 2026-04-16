@@ -127,12 +127,11 @@ test "PerfCounters enabled tracks calls" {
     try std.testing.expectEqual(@as(u64, 1), pc.n_tokens);
     pc.addToken();
     try std.testing.expectEqual(@as(u64, 2), pc.n_tokens);
-    // Verify start/end actually accumulates timing
+    // Verify start/end actually accumulates count (timing may be 0 on fast hardware)
     const t0 = pc.start();
     try std.testing.expect(t0 != 0); // enabled → non-zero timestamp
     pc.end(.rope, t0);
     try std.testing.expectEqual(@as(u64, 1), pc.counts[@intFromEnum(Op.rope)]);
-    try std.testing.expect(pc.times_us[@intFromEnum(Op.rope)] > 0);
     // Second end call should increment count
     const t1 = pc.start();
     pc.end(.rope, t1);

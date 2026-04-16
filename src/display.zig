@@ -11,6 +11,21 @@ const erase_line = "\x1b[K";
 /// Engine version string, shared across all output modes.
 pub const version = "0.1.0";
 
+/// Brand emoji for version/banner output (🌵).
+pub const cactus = "\xf0\x9f\x8c\xb5";
+
+/// Print version to stdout, with cactus emoji on TTY.
+pub fn printVersion() void {
+    const stdout = std.fs.File.stdout();
+    const text = if (std.posix.isatty(stdout.handle))
+        cactus ++ " agave " ++ version ++ "\n"
+    else
+        "agave " ++ version ++ "\n";
+    stdout.writeAll(text) catch |err| {
+        std.log.warn("printVersion: stdout write failed: {s}", .{@errorName(err)});
+    };
+}
+
 /// Bits per byte, used for bits-per-weight (bpw) calculation.
 const bits_per_byte: f32 = 8.0;
 /// Show available memory when available is less than this percentage of total.
@@ -25,6 +40,11 @@ const bytes_per_gib: usize = 1024 * 1024 * 1024;
 const bytes_per_mib: usize = 1024 * 1024;
 /// Buffer size for per-line content in TTY banner and progress bar.
 const line_buf_size: usize = 256;
+/// Buffer size for JSON prompt output (must hold full response text + metadata).
+/// 32 KB handles up to ~4096 tokens (the gen_ids_buf limit) comfortably.
+const json_out_buf_size: usize = 32768;
+/// Maximum length of a sanitized metadata string.
+const max_meta_len: usize = 256;
 /// Duration threshold (ms) above which seconds are shown without fraction.
 const duration_whole_seconds_threshold: u64 = 10_000;
 /// Divisor for extracting tenths-of-a-second from a millisecond remainder.
@@ -35,8 +55,6 @@ const default_terminal_width: usize = 80;
 const box_horizontal_margin: usize = 4;
 /// Padding (chars) added on each side of box content.
 const box_side_padding: usize = 2;
-/// Width (chars) of the token generation progress bar.
-const progress_bar_width: u32 = 30;
 /// Buffer size for human-readable file size formatting.
 const file_size_buf_size: usize = 32;
 
@@ -124,14 +142,6 @@ pub const GenStats = struct {
     }
 };
 
-/// Single benchmark result for a compute operation.
-pub const BenchResult = struct {
-    op: []const u8,
-    dimensions: []const u8,
-    ms: f64,
-    gbps: f64,
-};
-
 /// Output mode for all display operations.
 pub const OutputMode = enum {
     tty,
@@ -211,6 +221,17 @@ fn truncateToWidth(s: []const u8, max_cols: usize) []const u8 {
     return s[0..i];
 }
 
+/// Strip control characters (including ANSI escapes) from untrusted metadata.
+/// Replaces bytes 0x00-0x1F and 0x7F with '?' to prevent terminal injection
+/// via crafted GGUF model metadata (CWE-150).
+fn sanitizeMetadata(buf: *[max_meta_len]u8, s: []const u8) []const u8 {
+    const len = @min(s.len, buf.len);
+    for (s[0..len], 0..) |c, i| {
+        buf[i] = if (c < 0x20 or c == 0x7F) '?' else c;
+    }
+    return buf[0..len];
+}
+
 // ── Display Struct ───────────────────────────────────────────────
 
 /// Main display controller. Dispatches all output through the selected
@@ -247,10 +268,13 @@ pub const Display = struct {
     /// Verbose mode appends full model dimensions and timing.
     pub fn printBannerPlain(self: Display, info: ModelInfo) void {
         const fsize = formatSize(info.file_size_bytes);
+        // Sanitize model name — GGUF metadata is untrusted (CWE-150).
+        var name_san_buf: [max_meta_len]u8 = undefined;
+        const safe_name = sanitizeMetadata(&name_san_buf, info.name);
         var buf: [out_buf_size]u8 = undefined;
         const text = if (self.verbose)
             std.fmt.bufPrint(&buf, "agave {s} \xc2\xb7 {s} \xc2\xb7 {s} \xc2\xb7 {d:.1}{s} \xc2\xb7 {s} \xc2\xb7 {d}L/{d}E/{d}FFN/{d}H/{d}KV/hd{d} ({d}+{d}ms)\n", .{
-                info.name,
+                safe_name,
                 info.arch_name,
                 info.quant,
                 fsize.val,
@@ -267,7 +291,7 @@ pub const Display = struct {
             }) catch return
         else
             std.fmt.bufPrint(&buf, "agave {s} \xc2\xb7 {s} \xc2\xb7 {s} \xc2\xb7 {d:.1}{s} \xc2\xb7 {s}\n", .{
-                info.name,
+                safe_name,
                 info.arch_name,
                 info.quant,
                 fsize.val,
@@ -301,8 +325,9 @@ pub const Display = struct {
         var lines: [max_content_lines][]const u8 = undefined;
         var n_lines: usize = 0;
 
-        // Line 0: model name
-        lines[n_lines] = info.name;
+        // Line 0: model name (sanitized — metadata is untrusted)
+        var name_san_buf: [max_meta_len]u8 = undefined;
+        lines[n_lines] = sanitizeMetadata(&name_san_buf, info.name);
         n_lines += 1;
 
         // Line 1: arch · quant · params · size · bits/weight
@@ -361,7 +386,7 @@ pub const Display = struct {
                 }
                 var nb: [16]u8 = undefined;
                 const ns = fmtCompact(&nb, info.ctx_size);
-                // Estimate KV cache memory: ctx * n_kv_heads * head_dim * n_layers * 2(K+V) * bytes_per_elem
+                // Estimate KV cache memory: ctx * n_kv_heads * head_dim * n_layers * 2 (K and V) * bytes_per_elem
                 const kv_elems: u64 = @as(u64, info.ctx_size) * info.n_kv_heads * info.head_dim * info.n_layers * 2;
                 const kv_bytes: u64 = @intFromFloat(@as(f64, @floatFromInt(kv_elems)) * @as(f64, info.kv_bpe) / 8.0);
                 if (kv_bytes > 0) {
@@ -437,7 +462,7 @@ pub const Display = struct {
 
         // ╭─ 🌵 agave v0.1.0 ──────╮
         const green = comptime std.fmt.comptimePrint(ctl.fg_base, .{2});
-        const cactus = "\xf0\x9f\x8c\xb5"; // 🌵
+        // cactus emoji from module-level constant
         const title = " agave v" ++ version ++ " ";
         const title_w = displayWidth(cactus) + displayWidth(title); // 🌵 + title text
         const rule_after = if (box_w > title_w + 1) box_w - title_w - 1 else 0;
@@ -615,69 +640,22 @@ pub const Display = struct {
     }
 
     /// Clear the prefill progress message (carriage return + erase line).
-    pub fn clearPrefillProgress(_: Display) void {
-        stderr.writeAll("\r" ++ erase_line) catch {};
+    pub fn clearPrefillProgress(self: Display) void {
+        if (self.mode == .tty) {
+            stderr.writeAll("\r" ++ erase_line) catch {};
+        } else if (self.mode == .plain) {
+            stderr.writeAll("\r") catch {};
+        }
     }
 
     // ── Generation Progress ──────────────────────────────────
-
-    /// Update the generation progress display with a live progress bar.
-    /// Uses Unicode block characters to show progress visually in TTY mode.
-    pub fn updateProgress(self: Display, tokens_generated: u32, max_tokens: u32, elapsed_ms: u64) void {
-        if (self.mode != .tty) return;
-        const ctl = vaxis.ctlseqs;
-        const tps: f32 = if (elapsed_ms > 0)
-            @as(f32, @floatFromInt(tokens_generated)) / (@as(f32, @floatFromInt(elapsed_ms)) / ms_per_second)
-        else
-            0.0;
-
-        const bar_width: u32 = progress_bar_width;
-        const filled: u32 = if (max_tokens > 0)
-            @intCast(@min(@as(u64, tokens_generated) * bar_width / max_tokens, bar_width))
-        else
-            0;
-
-        var buf: [line_buf_size]u8 = undefined;
-        var pos: usize = 0;
-        const append = struct {
-            fn f(b: []u8, p: *usize, s: []const u8) void {
-                const n = @min(s.len, b.len - p.*);
-                @memcpy(b[p.*..][0..n], s[0..n]);
-                p.* += n;
-            }
-        }.f;
-
-        append(&buf, &pos, "\r" ++ erase_line ++ ctl.dim_set ++ "\xe2\x96\x90"); // CR, clear, dim, ▐
-        for (0..bar_width) |i| {
-            if (i < filled) {
-                append(&buf, &pos, "\xe2\x96\x88"); // █
-            } else {
-                append(&buf, &pos, "\xe2\x96\x91"); // ░
-            }
-        }
-        append(&buf, &pos, "\xe2\x96\x8c "); // ▌ + space
-
-        // Append text stats
-        const text = std.fmt.bufPrint(buf[pos..], "{d}/{d} tok \xc2\xb7 {d:.1} tok/s" ++ ctl.sgr_reset, .{
-            tokens_generated, max_tokens, tps,
-        }) catch "";
-        pos += text.len;
-
-        stderr.writeAll(buf[0..pos]) catch {};
-    }
-
-    /// Clear the progress line.
-    pub fn clearProgress(_: Display) void {
-        stderr.writeAll("\r" ++ erase_line) catch {};
-    }
 
     // ── Stats ────────────────────────────────────────────────
 
     /// Print generation statistics, dispatching to TTY or plain format.
     pub fn printStats(self: Display, stats: GenStats) void {
         switch (self.mode) {
-            .tty => self.printStatsTty(stats),
-            .plain => self.printStatsPlain(stats),
+            .tty, .plain => self.printStatsPlain(stats),
             .json => {}, // JSON stats are printed via printJsonPrompt
         }
     }
@@ -702,16 +680,11 @@ pub const Display = struct {
         stderr.writeAll(text) catch {};
     }
 
-    /// TTY stats display (currently delegates to plain-text output).
-    pub fn printStatsTty(self: Display, stats: GenStats) void {
-        self.printStatsPlain(stats);
-    }
-
     // ── JSON Output ──────────────────────────────────────────
 
     /// Print full JSON output for a prompt response (model info + generated text + stats).
     pub fn printJsonPrompt(_: Display, info: ModelInfo, output_text: []const u8, stats: GenStats) void {
-        var buf: [out_buf_size]u8 = undefined;
+        var buf: [json_out_buf_size]u8 = undefined;
         var writer = std.io.Writer.fixed(&buf);
         var jw: std.json.Stringify = .{ .writer = &writer };
         jw.beginObject() catch return;
@@ -725,6 +698,8 @@ pub const Display = struct {
         jw.write(info.quant) catch return;
         jw.objectField("backend") catch return;
         jw.write(info.be_name) catch return;
+        jw.objectField("version") catch return;
+        jw.write(version) catch return;
 
         // Output
         jw.objectField("output") catch return;
@@ -739,6 +714,8 @@ pub const Display = struct {
         jw.write(stats.prefill_token_count) catch return;
         jw.objectField("prefill_ms") catch return;
         jw.write(stats.prefill_ms) catch return;
+        jw.objectField("prefill_tok_per_sec") catch return;
+        jw.write(stats.prefillTokPerSec()) catch return;
         jw.objectField("gen_ms") catch return;
         jw.write(stats.gen_ms) catch return;
 
@@ -757,6 +734,8 @@ pub const Display = struct {
         var jw: std.json.Stringify = .{ .writer = &writer };
         jw.beginObject() catch return;
 
+        jw.objectField("version") catch return;
+        jw.write(version) catch return;
         jw.objectField("name") catch return;
         jw.write(info.name) catch return;
         jw.objectField("arch") catch return;
@@ -765,6 +744,10 @@ pub const Display = struct {
         jw.write(info.quant) catch return;
         jw.objectField("backend") catch return;
         jw.write(info.be_name) catch return;
+        if (info.format_name.len > 0) {
+            jw.objectField("format") catch return;
+            jw.write(info.format_name) catch return;
+        }
         jw.objectField("layers") catch return;
         jw.write(info.n_layers) catch return;
         jw.objectField("embed") catch return;
@@ -816,39 +799,6 @@ pub const Display = struct {
         stdout.writeAll("\n") catch {};
     }
 
-    /// Print JSON benchmark results.
-    pub fn printJsonBench(_: Display, be_name: []const u8, results: []const BenchResult) void {
-        var buf: [out_buf_size]u8 = undefined;
-        var writer = std.io.Writer.fixed(&buf);
-        var jw: std.json.Stringify = .{ .writer = &writer };
-        jw.beginObject() catch return;
-
-        jw.objectField("backend") catch return;
-        jw.write(be_name) catch return;
-
-        jw.objectField("results") catch return;
-        jw.beginArray() catch return;
-        for (results) |r| {
-            jw.beginObject() catch return;
-            jw.objectField("op") catch return;
-            jw.write(r.op) catch return;
-            jw.objectField("dimensions") catch return;
-            jw.write(r.dimensions) catch return;
-            jw.objectField("ms") catch return;
-            jw.write(r.ms) catch return;
-            jw.objectField("gbps") catch return;
-            jw.write(r.gbps) catch return;
-            jw.endObject() catch return;
-        }
-        jw.endArray() catch return;
-
-        jw.endObject() catch return;
-
-        const written = writer.buffer[0..writer.end];
-        stdout.writeAll(written) catch {};
-        stdout.writeAll("\n") catch {};
-    }
-
     // ── Human-Readable Model Info ────────────────────────────
 
     /// Print human-readable model information (for --model-info and REPL /model).
@@ -873,6 +823,7 @@ pub const Display = struct {
             w(&buf, &pos, "  Params:   {d} ({s}, {d:.2} bpw)\n", .{ info.n_params, ps, bpw });
         }
         w(&buf, &pos, "  Backend:  {s}\n", .{info.be_name});
+        if (info.format_name.len > 0) w(&buf, &pos, "  Format:   {s}\n", .{info.format_name});
         w(&buf, &pos, "  Layers:   {d}\n", .{info.n_layers});
         w(&buf, &pos, "  Embed:    {d}\n", .{info.n_embed});
         if (info.ff_dim > 0) w(&buf, &pos, "  FFN:      {d}\n", .{info.ff_dim});
@@ -881,6 +832,7 @@ pub const Display = struct {
         if (info.n_experts > 0) w(&buf, &pos, "  Experts:  {d} used / {d} total\n", .{ info.n_experts_used, info.n_experts });
         if (info.vocab_size > 0) w(&buf, &pos, "  Vocab:    {d}\n", .{info.vocab_size});
         if (info.ctx_size > 0) w(&buf, &pos, "  Context:  {d}\n", .{info.ctx_size});
+        w(&buf, &pos, "  KV type:  {s}\n", .{info.kv_type_name});
         if (info.rope_theta > 0) w(&buf, &pos, "  RoPE:     {d}\n", .{@as(u64, @intFromFloat(info.rope_theta))});
         w(&buf, &pos, "  Size:     {d:.1} {s}\n", .{ fsize.val, fsize.unit });
         w(&buf, &pos, "  Loaded:   {d}ms\n", .{info.load_ms});

@@ -193,7 +193,9 @@ const msl_source = @embedFile("kernels/metal/common.metal") ++
     @embedFile("kernels/metal/norm.metal") ++
     @embedFile("kernels/metal/rope.metal") ++
     @embedFile("kernels/metal/gemv.metal") ++
-    @embedFile("kernels/metal/sdpa.metal");
+    @embedFile("kernels/metal/gemm.metal") ++
+    @embedFile("kernels/metal/sdpa.metal") ++
+    @embedFile("kernels/metal/deltanet.metal");
 
 pub fn init(allocator: Allocator) !MetalBackend {
     // Compile MSL source at runtime (driver compiles to GPU bytecode)

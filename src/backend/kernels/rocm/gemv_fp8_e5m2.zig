@@ -4,6 +4,9 @@
 
 const cu = @import("common.zig");
 
+/// FP8 E5M2 denormal scale: 2^(-14) / 4 = 2^(-16).
+const fp8_e5m2_denorm_scale: f32 = 1.0 / 65536.0;
+
 /// Precomputed FP8 E5M2 → f32 lookup table (built at comptime on host).
 const fp8e5m2_lut = blk: {
     @setEvalBranchQuota(10000);
@@ -38,7 +41,7 @@ fn fp8e5m2Compute(val: u8) f32 {
     // Denormal: 2^(-14) / 4 = 2^(-16)
     if (exp == 0) {
         const fmant: f32 = @floatFromInt(mant);
-        const val_abs: f32 = fmant * (1.0 / 65536.0);
+        const val_abs: f32 = fmant * fp8_e5m2_denorm_scale;
         return @bitCast(sign | @as(u32, @bitCast(val_abs)));
     }
 
