@@ -5,6 +5,27 @@
 
 const std = @import("std");
 
+/// Simple atomic spinlock replacing Mutex (removed in Zig 0.16).
+const Mutex = struct {
+    locked: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+
+    pub fn lock(self: *Mutex) void {
+        while (self.locked.cmpxchgWeak(false, true, .acquire, .monotonic) != null)
+            std.atomic.spinLoopHint();
+    }
+
+    pub fn unlock(self: *Mutex) void {
+        self.locked.store(false, .release);
+    }
+};
+
+/// Millisecond timestamp via raw C clock_gettime (Zig 0.16 idiom).
+fn milliTimestamp() i64 {
+    var ts: std.posix.timespec = undefined;
+    _ = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+    return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
+}
+
 /// Milliseconds per second — used for elapsed-time calculations.
 const ms_per_second: f64 = 1000.0;
 /// Seconds per minute — used for per-minute refill rate calculations.
@@ -44,12 +65,12 @@ pub const TokenBucket = struct {
 pub const RateLimiter = struct {
     request_bucket: TokenBucket,
     token_bucket: TokenBucket,
-    mutex: std.Thread.Mutex = .{},
+    mutex: Mutex = .{},
 
     /// Initialize rate limiter with per-minute limits.
     /// Both buckets start at full capacity.
     pub fn init(req_per_min: u32, tokens_per_min: u32) RateLimiter {
-        const now = std.time.milliTimestamp();
+        const now = milliTimestamp();
         const req_capacity = @as(f64, @floatFromInt(req_per_min));
         const token_capacity = @as(f64, @floatFromInt(tokens_per_min));
 
@@ -71,7 +92,7 @@ pub const RateLimiter = struct {
 
     /// Refill both buckets based on elapsed time since last refill.
     /// Must be called under mutex. Caller should obtain `now` via
-    /// `std.time.milliTimestamp()` *before* acquiring the lock to keep
+    /// `milliTimestamp()` *before* acquiring the lock to keep
     /// the syscall outside the critical section.
     fn refillBuckets(self: *RateLimiter, now: i64) void {
         self.request_bucket.refill(now);
@@ -84,7 +105,7 @@ pub const RateLimiter = struct {
     /// capacity when one bucket is exhausted.
     /// Thread-safe: acquires mutex to protect bucket state.
     pub fn tryConsumeRequest(self: *RateLimiter, token_count: u32) bool {
-        const now = std.time.milliTimestamp();
+        const now = milliTimestamp();
         self.mutex.lock();
         defer self.mutex.unlock();
 
@@ -105,7 +126,7 @@ pub const RateLimiter = struct {
     /// Single lock acquisition — avoids the TOCTOU gap and double-lock overhead
     /// of calling tryConsumeRequest() then retryAfter() separately.
     pub fn tryConsumeOrRetryAfter(self: *RateLimiter, token_count: u32) ?u32 {
-        const now = std.time.milliTimestamp();
+        const now = milliTimestamp();
         self.mutex.lock();
         defer self.mutex.unlock();
 
@@ -130,7 +151,7 @@ pub const RateLimiter = struct {
     /// Returns the maximum of the two bucket retry times.
     /// Thread-safe: acquires mutex to read consistent bucket state.
     pub fn retryAfter(self: *RateLimiter, token_count: u32) u32 {
-        const now = std.time.milliTimestamp();
+        const now = milliTimestamp();
         self.mutex.lock();
         defer self.mutex.unlock();
 

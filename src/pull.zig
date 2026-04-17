@@ -30,7 +30,18 @@ const progress_bar_width: usize = 30;
 const bytes_per_mb: f64 = 1024.0 * 1024.0;
 const bytes_per_gb: f64 = 1024.0 * 1024.0 * 1024.0;
 
-const stderr_file = std.fs.File.stderr();
+const Io = std.Io;
+const stderr_file = Io.File.stderr();
+
+/// Module-level Io instance, set by run() from caller.
+var mod_io: Io = undefined;
+
+/// Nanosecond timestamp via raw C call.
+fn nanoTimestamp() i128 {
+    var ts: std.posix.timespec = undefined;
+    _ = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+    return @as(i128, ts.sec) * 1_000_000_000 + ts.nsec;
+}
 
 /// Validate that a filename from the API has no path traversal components
 /// and no URL-special characters that could inject query/fragment into
@@ -155,15 +166,30 @@ pub const PullError = error{
 /// Print a formatted message to stderr.
 fn eprint(comptime fmt: []const u8, args: anytype) void {
     var buf: [print_buf_size]u8 = undefined;
-    stderr_file.writeAll(std.fmt.bufPrint(&buf, fmt, args) catch return) catch {};
+    const text = std.fmt.bufPrint(&buf, fmt, args) catch return;
+    _ = std.c.write(stderr_file.handle, text.ptr, text.len);
+}
+
+/// Write bytes to a file handle via C write.
+fn fileWrite(file: Io.File, bytes: []const u8) void {
+    _ = std.c.write(file.handle, bytes.ptr, bytes.len);
+}
+
+/// Get an environment variable (Zig 0.16 idiom via C getenv).
+fn getenv(name: []const u8) ?[]const u8 {
+    var buf: [256]u8 = undefined;
+    if (name.len >= buf.len) return null;
+    @memcpy(buf[0..name.len], name);
+    buf[name.len] = 0;
+    const result = std.c.getenv(@ptrCast(buf[0..name.len :0])) orelse return null;
+    return std.mem.span(result);
 }
 
 // ── Argument parsing ─────────────────────────────────────────────────────────
 
 /// Print usage information to stdout (pipeable: agave pull --help | less).
 pub fn printUsage() void {
-    const stdout = std.fs.File.stdout();
-    stdout.writeAll(
+    const usage =
         \\agave pull — Download GGUF models from HuggingFace Hub
         \\
         \\USAGE:
@@ -193,7 +219,8 @@ pub fn printUsage() void {
         \\  MODEL=$(agave pull org/repo 2>/dev/null)
         \\  agave "$MODEL" "prompt"
         \\
-    ) catch {};
+    ;
+    fileWrite(Io.File.stdout(), usage);
 }
 
 /// Parse command-line arguments for the `pull` sub-command.
@@ -203,13 +230,13 @@ pub fn printUsage() void {
 /// the environment.
 ///
 /// Returns `null` if `--help` was requested (caller should exit cleanly).
-pub fn parseArgs(args_iter: *std.process.ArgIterator) PullError!?PullArgs {
+pub fn parseArgs(args_iter: *std.process.Args.Iterator) PullError!?PullArgs {
     var result = PullArgs{
         .repo = "",
     };
     var have_repo = false;
 
-    result.token = std.posix.getenv("HF_TOKEN");
+    result.token = getenv("HF_TOKEN");
 
     var past_options = false;
 
@@ -450,14 +477,14 @@ pub fn selectFile(files: []const GgufFile, quant: ?[]const u8) PullError!GgufFil
 
 /// Print a formatted list of available GGUF files with sizes to stdout (pipeable).
 pub fn printFileList(files: []const GgufFile) void {
-    const stdout = std.fs.File.stdout();
+    const stdout = Io.File.stdout();
     for (files) |f| {
         const size_gb = @as(f64, @floatFromInt(f.size)) / bytes_per_gb;
         var buf: [print_buf_size]u8 = undefined;
         if (f.size > 0) {
-            stdout.writeAll(std.fmt.bufPrint(&buf, "{s}  ({d:.1} GB)\n", .{ f.filename, size_gb }) catch continue) catch {};
+            fileWrite(stdout, std.fmt.bufPrint(&buf, "{s}  ({d:.1} GB)\n", .{ f.filename, size_gb }) catch continue);
         } else {
-            stdout.writeAll(std.fmt.bufPrint(&buf, "{s}\n", .{f.filename}) catch continue) catch {};
+            fileWrite(stdout, std.fmt.bufPrint(&buf, "{s}\n", .{f.filename}) catch continue);
         }
     }
 }
@@ -469,7 +496,7 @@ pub fn printFileList(files: []const GgufFile) void {
 /// Handles HTTP status codes: 404 -> RepoNotFound, 401/403 -> AuthenticationFailed.
 /// The caller owns the returned slice and must free it with `allocator`.
 fn httpGet(allocator: Allocator, url: []const u8, token: ?[]const u8) (PullError || Allocator.Error)![]u8 {
-    var client: std.http.Client = .{ .allocator = allocator };
+    var client: std.http.Client = .{ .allocator = allocator, .io = mod_io };
     defer client.deinit();
 
     // Build extra headers for auth token. Formatted header buffer is zeroed
@@ -537,19 +564,19 @@ pub fn hfCacheDir(allocator: Allocator, repo: []const u8) (PullError || Allocato
     defer allocator.free(repo_escaped);
 
     // HF_HOME takes highest precedence (e.g. /data/huggingface)
-    if (std.posix.getenv("HF_HOME")) |hf_home| {
+    if (getenv("HF_HOME")) |hf_home| {
         return std.fmt.allocPrint(allocator, "{s}/hub/models--{s}", .{ hf_home, repo_escaped }) catch
             return error.OutOfMemory;
     }
 
     // XDG_CACHE_HOME overrides default cache location
-    if (std.posix.getenv("XDG_CACHE_HOME")) |xdg| {
+    if (getenv("XDG_CACHE_HOME")) |xdg| {
         return std.fmt.allocPrint(allocator, "{s}/huggingface/hub/models--{s}", .{ xdg, repo_escaped }) catch
             return error.OutOfMemory;
     }
 
     // Default: $HOME/.cache/huggingface/hub/
-    const home = std.posix.getenv("HOME") orelse {
+    const home = getenv("HOME") orelse {
         eprint("Error: HOME environment variable not set\n", .{});
         return PullError.HomeNotSet;
     };
@@ -584,10 +611,23 @@ fn replaceSlashes(allocator: Allocator, input: []const u8) Allocator.Error![]u8 
 
 /// Create a directory path, ignoring if it already exists.
 fn ensureDir(path: []const u8) PullError!void {
-    std.fs.cwd().makePath(path) catch |err| {
+    Io.Dir.cwd().createDirPath(mod_io, path) catch |err| {
         eprint("Error: could not create directory '{s}': {}\n", .{ path, err });
         return PullError.DownloadFailed;
     };
+}
+
+/// Create a symbolic link using the C library (std.posix.symlink removed in Zig 0.16).
+fn createSymlink(allocator: Allocator, target: []const u8, link_path: []const u8) !void {
+    const target_z = try allocator.dupeZ(u8, target);
+    defer allocator.free(target_z);
+    const link_z = try allocator.dupeZ(u8, link_path);
+    defer allocator.free(link_z);
+    const ret = std.c.symlink(target_z, link_z);
+    const e = std.c.errno(ret);
+    if (e != .SUCCESS) {
+        return std.posix.unexpectedErrno(e);
+    }
 }
 
 /// Create the agave convenience symlink.
@@ -595,7 +635,7 @@ fn ensureDir(path: []const u8) PullError!void {
 /// Creates `$HOME/.cache/agave/models/{org}/{repo}` pointing to the
 /// snapshot directory containing the downloaded model.
 fn createAgaveSymlink(allocator: Allocator, repo: []const u8, snapshot_dir: []const u8) void {
-    const home = std.posix.getenv("HOME") orelse return;
+    const home = getenv("HOME") orelse return;
 
     // Split repo into org and name.
     const slash_idx = std.mem.indexOfScalar(u8, repo, '/') orelse return;
@@ -614,19 +654,19 @@ fn createAgaveSymlink(allocator: Allocator, repo: []const u8, snapshot_dir: []co
     // Atomic symlink replacement: create at temp path with random suffix to
     // prevent TOCTOU races (CWE-367), then rename over target.
     var rand_buf: [8]u8 = undefined;
-    std.crypto.random.bytes(&rand_buf);
+    mod_io.random(&rand_buf);
     const tmp_path = std.fmt.allocPrint(allocator, "{s}.tmp.{x}", .{
         link_path, std.mem.readInt(u64, &rand_buf, .little),
     }) catch return;
     defer allocator.free(tmp_path);
 
-    std.posix.symlink(snapshot_dir, tmp_path) catch |err| {
+    createSymlink(allocator, snapshot_dir, tmp_path) catch |err| {
         eprint("Warning: could not create agave symlink: {}\n", .{err});
         return;
     };
-    std.fs.cwd().rename(tmp_path, link_path) catch |err| {
+    Io.Dir.rename(Io.Dir.cwd(), tmp_path, Io.Dir.cwd(), link_path, mod_io) catch |err| {
         eprint("Warning: could not finalize agave symlink: {}\n", .{err});
-        std.fs.cwd().deleteFile(tmp_path) catch {};
+        Io.Dir.cwd().deleteFile(mod_io,tmp_path) catch {};
     };
 }
 
@@ -675,7 +715,7 @@ fn downloadFile(
 
     // Detect TTY once for all attempts — progress bars use \r which
     // produces garbled output when stderr is redirected to a file.
-    const is_tty = std.posix.isatty(stderr_file.handle);
+    const is_tty = std.c.isatty(stderr_file.handle) != 0;
 
     var attempt: u32 = 0;
     while (attempt < max_retries) : (attempt += 1) {
@@ -685,7 +725,7 @@ fn downloadFile(
             } else {
                 eprint("Retrying download (attempt {d}/{d})...\n", .{ attempt + 1, max_retries });
             }
-            std.Thread.sleep(retry_base_delay_ns << @intCast(attempt));
+            mod_io.sleep(Io.Duration.fromNanoseconds(@intCast(retry_base_delay_ns << @intCast(attempt))), .awake) catch {};
         }
 
         downloadFileOnce(allocator, url, blob_path, token, is_tty) catch |err| {
@@ -716,11 +756,11 @@ fn downloadFileOnce(
 ) PullError!void {
     // Check for existing partial download.
     var existing_size: u64 = 0;
-    if (std.fs.cwd().statFile(blob_path)) |stat| {
+    if (Io.Dir.cwd().statFile(mod_io, blob_path, .{})) |stat| {
         existing_size = stat.size;
     } else |_| {}
 
-    var client: std.http.Client = .{ .allocator = allocator };
+    var client: std.http.Client = .{ .allocator = allocator, .io = mod_io };
     defer client.deinit();
 
     const uri = std.Uri.parse(url) catch return PullError.DownloadFailed;
@@ -812,18 +852,18 @@ fn downloadFileOnce(
         os_flags.CREAT = true;
         os_flags.TRUNC = true;
     }
-    const fd = std.posix.openat(std.fs.cwd().fd, blob_path, os_flags, 0o644) catch |err| {
+    const fd = std.posix.openat(Io.Dir.cwd().handle, blob_path, os_flags, 0o644) catch |err| {
         if (err == error.SymLinkLoop) {
             eprint("Error: blob path is a symlink — refusing to write (possible symlink attack)\n", .{});
         }
         return PullError.DownloadFailed;
     };
-    const file: std.fs.File = .{ .handle = fd };
-    defer file.close();
+    const file: Io.File = .{ .handle = fd, .flags = .{ .nonblocking = false } };
+    defer _ = std.c.close(file.handle);
 
     // Seek to end for append.
     if (start_offset > 0) {
-        file.seekTo(start_offset) catch return PullError.DownloadFailed;
+        _ = std.c.lseek(file.handle, @intCast(start_offset), std.c.SEEK.SET);
     }
 
     // Get a reader from the response body.
@@ -832,7 +872,7 @@ fn downloadFileOnce(
 
     // Download with progress reporting.
     var downloaded: u64 = start_offset;
-    var last_progress_time: i128 = std.time.nanoTimestamp();
+    var last_progress_time: i128 = nanoTimestamp();
     var last_progress_bytes: u64 = downloaded;
 
     if (start_offset > 0) {
@@ -851,7 +891,7 @@ fn downloadFileOnce(
         };
         if (bytes_read == 0) break;
 
-        file.writeAll(read_buf[0..bytes_read]) catch |err| {
+        file.writePositionalAll(mod_io, read_buf[0..bytes_read], downloaded) catch |err| {
             eprint("\nError: failed to write to disk: {}\n", .{err});
             if (err == error.NoSpaceLeft or err == error.DiskQuota)
                 eprint("  Disk is full. Free space and re-run to resume.\n", .{});
@@ -862,7 +902,7 @@ fn downloadFileOnce(
         // Update progress bar periodically (TTY only — \r produces garbled
         // output when stderr is redirected to a file or pipe).
         if (is_tty) {
-            const now = std.time.nanoTimestamp();
+            const now = nanoTimestamp();
             const elapsed_ns: u64 = @intCast(@max(now - last_progress_time, 0));
             if (elapsed_ns >= progress_interval_ns or downloaded == total_size) {
                 const elapsed_secs = @as(f64, @floatFromInt(elapsed_ns)) / @as(f64, @floatFromInt(std.time.ns_per_s));
@@ -966,7 +1006,7 @@ pub fn pullModel(allocator: Allocator, args: PullArgs) (PullError || Allocator.E
     const blob_path = std.fmt.allocPrint(pa, "{s}/{s}", .{ blobs_dir, selected.filename }) catch return error.OutOfMemory;
 
     var already_complete = false;
-    if (std.fs.cwd().statFile(blob_path)) |stat| {
+    if (Io.Dir.cwd().statFile(mod_io, blob_path, .{})) |stat| {
         if (selected.size > 0 and stat.size == selected.size) {
             eprint("File already downloaded: {s}\n", .{blob_path});
             already_complete = true;
@@ -985,10 +1025,10 @@ pub fn pullModel(allocator: Allocator, args: PullArgs) (PullError || Allocator.E
 
     // Step 6b: Verify GGUF magic bytes (catches truncation and corruption).
     if (std.mem.endsWith(u8, selected.filename, ".gguf")) {
-        if (std.fs.cwd().openFile(blob_path, .{})) |f| {
-            defer f.close();
+        if (Io.Dir.cwd().openFile(mod_io, blob_path, .{})) |f| {
+            defer f.close(mod_io);
             var magic: [4]u8 = undefined;
-            const n = f.readAll(&magic) catch 0;
+            const n = f.readPositionalAll(mod_io, &magic, 0) catch 0;
             if (n < 4 or !std.mem.eql(u8, &magic, "GGUF")) {
                 eprint("Error: downloaded file does not have valid GGUF header — corrupt or truncated\n", .{});
                 eprint("  Delete and re-download: rm {s}\n", .{blob_path});
@@ -1007,26 +1047,26 @@ pub fn pullModel(allocator: Allocator, args: PullArgs) (PullError || Allocator.E
     // Atomic symlink replacement: create at temp path with random suffix to
     // prevent TOCTOU races (CWE-367), then rename over target.
     var snap_rand_buf: [8]u8 = undefined;
-    std.crypto.random.bytes(&snap_rand_buf);
+    mod_io.random(&snap_rand_buf);
     const tmp_snapshot_link = std.fmt.allocPrint(pa, "{s}.tmp.{x}", .{
         snapshot_link, std.mem.readInt(u64, &snap_rand_buf, .little),
     }) catch return error.OutOfMemory;
-    std.posix.symlink(relative_blob, tmp_snapshot_link) catch |err| {
+    createSymlink(pa, relative_blob, tmp_snapshot_link) catch |err| {
         eprint("Warning: could not create snapshot symlink: {}\n", .{err});
         return;
     };
-    std.fs.cwd().rename(tmp_snapshot_link, snapshot_link) catch |err| {
+    Io.Dir.rename(Io.Dir.cwd(), tmp_snapshot_link, Io.Dir.cwd(), snapshot_link, mod_io) catch |err| {
         eprint("Warning: could not finalize snapshot symlink: {}\n", .{err});
-        std.fs.cwd().deleteFile(tmp_snapshot_link) catch {};
+        Io.Dir.cwd().deleteFile(mod_io,tmp_snapshot_link) catch {};
     };
 
     // Step 8: Write refs/main with commit SHA.
     const refs_main = std.fmt.allocPrint(pa, "{s}/main", .{refs_dir}) catch
         return error.OutOfMemory;
 
-    if (std.fs.cwd().createFile(refs_main, .{})) |f| {
-        defer f.close();
-        f.writeAll(list_result.commit_sha) catch |err| {
+    if (Io.Dir.cwd().createFile(mod_io, refs_main, .{})) |f| {
+        defer f.close(mod_io);
+        f.writePositionalAll(mod_io, list_result.commit_sha, 0) catch |err| {
             eprint("Warning: could not write refs/main: {}\n", .{err});
         };
     } else |_| {}
@@ -1036,9 +1076,8 @@ pub fn pullModel(allocator: Allocator, args: PullArgs) (PullError || Allocator.E
 
     // Step 10: Print final model path.
     // Write path to stdout (scriptable: MODEL=$(agave pull repo 2>/dev/null))
-    const stdout = std.fs.File.stdout();
-    stdout.writeAll(snapshot_link) catch {};
-    stdout.writeAll("\n") catch {};
+    fileWrite(Io.File.stdout(), snapshot_link);
+    fileWrite(Io.File.stdout(), "\n");
 
     // Human-friendly summary on stderr
     eprint("\nModel ready at:\n  {s}\n", .{snapshot_link});
@@ -1050,8 +1089,9 @@ pub fn pullModel(allocator: Allocator, args: PullArgs) (PullError || Allocator.E
 /// Main entry point for the `agave pull` sub-command.
 ///
 /// Parses arguments, runs the pull workflow, and reports errors to stderr.
-pub fn run(allocator: Allocator) u8 {
-    var args_iter = std.process.args();
+pub fn run(allocator: Allocator, process_args: std.process.Args, io: Io) u8 {
+    mod_io = io;
+    var args_iter = process_args.iterate();
     _ = args_iter.skip(); // Skip program name (argv[0]).
     _ = args_iter.skip(); // Skip "pull" subcommand (already verified by main.zig).
 

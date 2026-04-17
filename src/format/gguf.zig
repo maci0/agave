@@ -261,13 +261,16 @@ pub const GGUFFile = struct {
 
     /// Opens and memory-maps a GGUF file, parsing headers, metadata, and tensor info.
     pub fn open(allocator: Allocator, path: []const u8) !GGUFFile {
-        const file = try std.fs.cwd().openFile(path, .{});
-        defer file.close();
-        const stat = try file.stat();
-        const file_size = stat.size;
+        const fd = try posix.openat(posix.AT.FDCWD, path, .{}, 0);
+        defer _ = std.c.close(fd);
+        const file_size: usize = blk: {
+            var s: posix.Stat = undefined;
+            if (std.c.fstat(fd, &s) != 0) return error.FileNotFound;
+            break :blk @intCast(s.size);
+        };
         if (file_size < gguf_min_header_size) return error.FileTooSmall;
 
-        const mapped = try posix.mmap(null, file_size, posix.PROT.READ, .{ .TYPE = .SHARED }, file.handle, 0);
+        const mapped = try posix.mmap(null, file_size, .{ .READ = true }, .{ .TYPE = .SHARED }, fd, 0);
         errdefer posix.munmap(mapped);
         // Hint sequential access for weight loading — enables OS readahead and reduces page faults.
         posix.madvise(mapped.ptr, mapped.len, posix.MADV.SEQUENTIAL) catch {};

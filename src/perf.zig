@@ -7,9 +7,22 @@
 //! The relative percentages are still meaningful for identifying bottlenecks.
 
 const std = @import("std");
+const Io = std.Io;
 
 const us_per_ms: f64 = 1000.0;
 const percent_scale: f64 = 100.0;
+
+/// Stderr file handle via std.Io.File (Zig 0.16 idiom).
+const stderr_file = Io.File.stderr();
+
+/// Nanosecond timestamp via clock_gettime.
+/// Uses raw C call directly for minimal overhead in the hot profiling path,
+/// avoiding Io virtual dispatch.
+fn nanoTimestamp() i128 {
+    var ts: std.posix.timespec = undefined;
+    _ = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+    return @as(i128, ts.sec) * 1_000_000_000 + ts.nsec;
+}
 
 /// Operation categories for profiling.
 pub const Op = enum {
@@ -46,14 +59,14 @@ pub const PerfCounters = struct {
     /// eliminating function-call overhead on the common (disabled) path.
     pub inline fn start(self: *PerfCounters) i128 {
         if (!self.enabled) return 0;
-        return std.time.nanoTimestamp();
+        return nanoTimestamp();
     }
 
     /// End timing for `op`, accumulating elapsed microseconds since `t0`.
     /// Inlined to eliminate per-call overhead when profiling is disabled.
     pub inline fn end(self: *PerfCounters, op: Op, t0: i128) void {
         if (!self.enabled) return;
-        const elapsed: u64 = @intCast(@divFloor(std.time.nanoTimestamp() - t0, 1000));
+        const elapsed: u64 = @intCast(@divFloor(nanoTimestamp() - t0, 1000));
         const idx = @intFromEnum(op);
         self.times_us[idx] += elapsed;
         self.counts[idx] += 1;
@@ -72,20 +85,20 @@ pub const PerfCounters = struct {
         for (self.times_us) |t| total_us += t;
         if (total_us == 0) return;
 
-        const stderr = std.fs.File.stderr();
         var buf: [report_buf_size]u8 = undefined;
-        const write = struct {
-            fn w(f: std.fs.File, b: []u8, comptime fmt: []const u8, args: anytype) void {
-                f.writeAll(std.fmt.bufPrint(b, fmt, args) catch return) catch {};
+        const eprintFn = struct {
+            fn w(b: []u8, comptime fmt: []const u8, args: anytype) void {
+                const text = std.fmt.bufPrint(b, fmt, args) catch return;
+                _ = std.c.write(stderr_file.handle, text.ptr, text.len);
             }
         }.w;
 
-        write(stderr, &buf, "\n\x1b[1m── Profile ({d} tokens, {d:.1}ms avg) ──\x1b[0m\n", .{
+        eprintFn(&buf, "\n\x1b[1m── Profile ({d} tokens, {d:.1}ms avg) ──\x1b[0m\n", .{
             self.n_tokens,
             @as(f64, @floatFromInt(total_us)) / @as(f64, @floatFromInt(self.n_tokens)) / us_per_ms,
         });
-        write(stderr, &buf, "{s:<16} {s:>8} {s:>10} {s:>8} {s:>6}\n", .{ "Operation", "Calls", "Total(ms)", "Avg(µs)", "%" });
-        write(stderr, &buf, "{s}\n", .{"─" ** 54});
+        eprintFn(&buf, "{s:<16} {s:>8} {s:>10} {s:>8} {s:>6}\n", .{ "Operation", "Calls", "Total(ms)", "Avg(µs)", "%" });
+        eprintFn(&buf, "{s}\n", .{"─" ** 54});
 
         const fields = @typeInfo(Op).@"enum".fields;
         inline for (fields) |field| {
@@ -93,7 +106,7 @@ pub const PerfCounters = struct {
             if (self.counts[idx] > 0) {
                 const pct = @as(f64, @floatFromInt(self.times_us[idx])) / @as(f64, @floatFromInt(total_us)) * percent_scale;
                 const avg = @as(f64, @floatFromInt(self.times_us[idx])) / @as(f64, @floatFromInt(self.counts[idx]));
-                write(stderr, &buf, "{s:<16} {d:>8} {d:>10.1} {d:>8.0} {d:>5.1}%\n", .{
+                eprintFn(&buf, "{s:<16} {d:>8} {d:>10.1} {d:>8.0} {d:>5.1}%\n", .{
                     field.name,
                     self.counts[idx],
                     @as(f64, @floatFromInt(self.times_us[idx])) / us_per_ms,
@@ -102,8 +115,8 @@ pub const PerfCounters = struct {
                 });
             }
         }
-        write(stderr, &buf, "{s}\n", .{"─" ** 54});
-        write(stderr, &buf, "{s:<16} {s:>8} {d:>10.1}\n", .{
+        eprintFn(&buf, "{s}\n", .{"─" ** 54});
+        eprintFn(&buf, "{s:<16} {s:>8} {d:>10.1}\n", .{
             "TOTAL",                                    "",
             @as(f64, @floatFromInt(total_us)) / us_per_ms,
         });

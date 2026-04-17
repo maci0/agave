@@ -16,9 +16,13 @@ zig build test                                 # Run all tests
 zig build -Denable-glm4=false                  # Disable a model at compile time
 ```
 
-**Key files:** [build.zig](build.zig), [src/backend/backend.zig](src/backend/backend.zig) (dispatcher), [src/models/model.zig](src/models/model.zig) (model vtable), [src/ops/quant.zig](src/ops/quant.zig), [src/ops/attention.zig](src/ops/attention.zig), [src/ops/ssm.zig](src/ops/ssm.zig), [src/chat_template.zig](src/chat_template.zig), [src/recipe.zig](src/recipe.zig)
+```bash
+agave model.gguf --megakernel "prompt"         # Fused FFN megakernel (3→1 dispatch)
+```
 
-**Docs:** [KERNELS.md](docs/KERNELS.md) (kernel status per backend), [MODELS.md](docs/MODELS.md) (model params), [CONTRIBUTING.md](docs/CONTRIBUTING.md) (how to add backends/models/quants), [DOCUMENTATION.md](docs/DOCUMENTATION.md) (tutorials index)
+**Key files:** [build.zig](build.zig), [src/backend/backend.zig](src/backend/backend.zig) (dispatcher), [src/models/model.zig](src/models/model.zig) (model vtable), [src/ops/quant.zig](src/ops/quant.zig), [src/ops/attention.zig](src/ops/attention.zig), [src/ops/ssm.zig](src/ops/ssm.zig), [src/chat_template.zig](src/chat_template.zig), [src/recipe.zig](src/recipe.zig), [src/backend/mega_compose.zig](src/backend/mega_compose.zig) (megakernel composer), [src/backend/megakernel.zig](src/backend/megakernel.zig) (weight offsets), [src/term.zig](src/term.zig) (terminal I/O, key parsing, display width)
+
+**Docs:** [KERNELS.md](docs/KERNELS.md) (kernel status per backend), [MODELS.md](docs/MODELS.md) (model params), [MEGAKERNEL.md](docs/MEGAKERNEL.md) (megakernel system), [CONTRIBUTING.md](docs/CONTRIBUTING.md) (how to add backends/models/quants), [DOCUMENTATION.md](docs/DOCUMENTATION.md) (tutorials index)
 
 ---
 
@@ -64,6 +68,7 @@ These rules are non-negotiable. Every change must respect all of them.
 
 ### Build System
 - Pure `build.zig` + `build.zig.zon`. No Makefiles, no shell scripts, no external C/C++ libs.
+- Single external dependency: `clap` (CLI parser). Terminal I/O is self-contained (`term.zig`).
 - Every change must maintain cross-compilation for all targets (Linux x86_64/aarch64, macOS aarch64).
 - `ReleaseFast` is production. `Debug` retains full safety checks.
 - Model toggles: `-Denable-<model>=false` (gemma3, gemma4, qwen35, gpt-oss, nemotron-h, nemotron-nano, glm4).
@@ -99,12 +104,23 @@ These rules are non-negotiable. Every change must respect all of them.
 
 **Metal threadgroup memory limit:** Must stay ≤ 32KB. Calculate total: `q_local + kv_block + out_acc + scores + shared`. Pipeline creation fails silently without the error logging in `makePipeline`.
 
-**Zig 0.15.2 API changes:**
-- `std.ArrayList(T).init(allocator)` removed → use `.empty`, pass allocator to `deinit(allocator)`, `append(allocator, val)`, `ensureTotalCapacity(allocator, n)`
-- `ArrayList.pop()` returns `?T` — unwrap with `.?` after checking `.items.len > 0`
-- `std.time.sleep` removed → use `std.Thread.sleep`
-- `File.writer()` requires buffer arg → use `File.write(&buf)` for simple writes
-- `std.Thread.Futex` requires `std.atomic.Value(u32)`, not `u64`
+**Zig 0.16.0 — idiomatic patterns:**
+- **`main()` accepts `std.process.Init`** — provides `init.io` (Io context), `init.gpa` (allocator), `init.minimal.args` (CLI args). Thread `io` to all I/O code.
+- **File I/O via `Io`** — `Io.Dir.cwd().openFile(io, path, .{})`, `file.close(io)`, `file.readPositionalAll(io, buf, offset)`.
+- **Stdout/stderr via `Io.File`** — `Io.File.stdout()`, `Io.File.stderr()`. Write via `posix.system.write(file.handle, ...)`.
+- **Timestamps** — `posix.system.clock_gettime(.REALTIME, &ts)` for hot-path timing (perf counters). Use `Io.Timestamp.now(io, .realtime)` for non-hot-path.
+- **Futex** — `io.futexWaitUncancelable(u32, &atomic.raw, expected)` and `io.futexWake(u32, &atomic.raw, count)`. No raw `__ulock_wait`/`linux.futex_wait`.
+- **Mutex** — `Io.Mutex` with `lockUncancelable(io)`/`unlock(io)`. No custom spinlocks.
+- **Allocators** — `init.gpa` from Init, or `std.heap.DebugAllocator` for standalone tools.
+- **Build system** — `mod.link_libc = true`, `mod.linkFramework("Metal", .{})`. Methods on Module, not Step.Compile.
+- **Type creation** — `@Type()` removed → `@Int()`, `@Enum()`, `@Struct()`, `@Union()`.
+- **ArrayList** — `.empty` initializer, pass allocator to every method: `list.append(allocator, val)`.
+- **Terminal I/O** — `src/term.zig` provides key parsing, display width, ANSI sequences. Pure Zig, no libc, no external deps.
+- **No external deps for terminal** — vaxis/uucode/zigimg removed. Only clap remains as external dependency.
+
+**Megakernel composability:** When adding a new model, define a `ModelDesc` in `mega_compose.zig` to auto-generate the megakernel MSL. No hand-written .metal files needed. See [MEGAKERNEL.md](docs/MEGAKERNEL.md) Tier 3.
+
+**Cross-platform megakernel dispatch:** Use `inline else => |be|` with `comptime @hasDecl(@TypeOf(be.*), "fusedFfnGateUp...")` to avoid compiling Metal-specific fused FFN methods on Linux (where Metal backend is NullBackend). See `qwen35.zig` mlpLayer for the pattern.
 
 **Kernel targets:** NVIDIA = `nvptx64-cuda`, AMD = `amdgcn-amdhsa`. Vulkan kernels are GLSL compute shaders pre-compiled to embedded SPIR-V. Do not use OpenCL or PAL variants.
 
@@ -119,6 +135,9 @@ These rules are non-negotiable. Every change must respect all of them.
 - **No silent error swallowing** — `try` to propagate, `catch` with logging, never `catch undefined`
 - **No inline magic numbers** — extract to named `const` at module level
 - **No manual error-path cleanup** — use `defer`/`errdefer`, never manual cleanup in catch blocks
+- **No compat wrappers** — use native Zig 0.16 `std.Io` APIs. Thread `io` from `main(Init)`
+- **No external deps for terminal** — use `term.zig`, not vaxis or other terminal frameworks
+- **No libc for terminal I/O** — `term.zig` uses `posix.read`/`posix.system.write` and `std.unicode`, no `wcwidth`/libc
 
 ---
 
@@ -148,6 +167,8 @@ Before approving any PR, verify:
 - [ ] KV cache strategy documented and bounded
 - [ ] All kernels are native Zig / IR (no unported prototypes)
 - [ ] No CPU fallbacks in GPU backends unless provably faster
+- [ ] Megakernel fused FFN uses `comptime @hasDecl` for cross-platform dispatch
+- [ ] New models have `megakernel_enabled` field for `setMegakernel()` vtable dispatch
 
 ---
 
@@ -155,7 +176,7 @@ Before approving any PR, verify:
 
 **Agave — Production-Ready LLM Inference Engine**
 
-Supports 5 backends (Metal, CUDA, Vulkan, ROCm, CPU), 7 model architectures (Gemma3/4, Qwen3.5, GPT-OSS, Nemotron-H/Nano, GLM-4), and extensive quantization (Q2-Q8, FP8, bf16, NVFP4, MXFP4, MLX, TurboQuant KV). CLI and HTTP server interfaces.
+Supports 5 backends (Metal, CUDA, Vulkan, ROCm, CPU), 7 model architectures (Gemma3/4, Qwen3.5, GPT-OSS, Nemotron-H/Nano, GLM-4), and extensive quantization (Q2-Q8, FP8, bf16, NVFP4, MXFP4, MLX, TurboQuant KV). Megakernel system with composable building blocks for fused GPU dispatch. CLI and HTTP server interfaces. Built with Zig 0.16.0. Single external dependency (clap for CLI parsing).
 
 **Core Value:** Every supported model must produce correct output on every backend at full GPU speed.
 

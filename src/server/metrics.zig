@@ -5,6 +5,39 @@
 
 const std = @import("std");
 
+// ── FixedBufStream (Zig 0.16 removed FixedBufStream.init) ───
+const FixedBufStream = struct {
+    buf: []u8,
+    pos: usize = 0,
+
+    pub fn init(buf: []u8) FixedBufStream {
+        return .{ .buf = buf };
+    }
+
+    pub fn writer(self: *FixedBufStream) Writer {
+        return .{ .fbs = self };
+    }
+
+    pub fn getWritten(self: *const FixedBufStream) []const u8 {
+        return self.buf[0..self.pos];
+    }
+
+    pub const Writer = struct {
+        fbs: *FixedBufStream,
+
+        pub fn writeAll(self: Writer, data: []const u8) !void {
+            if (self.fbs.pos + data.len > self.fbs.buf.len) return error.NoSpaceLeft;
+            @memcpy(self.fbs.buf[self.fbs.pos..][0..data.len], data);
+            self.fbs.pos += data.len;
+        }
+
+        pub fn print(self: Writer, comptime fmt: []const u8, args: anytype) !void {
+            const written = std.fmt.bufPrint(self.fbs.buf[self.fbs.pos..], fmt, args) catch return error.NoSpaceLeft;
+            self.fbs.pos += written.len;
+        }
+    };
+};
+
 /// Latency histogram bucket boundaries (milliseconds).
 /// These must match the Prometheus `le` labels in renderPrometheus().
 const latency_bucket_10ms: u64 = 10;
@@ -621,7 +654,7 @@ test "Metrics: renderPrometheus outputs valid format" {
 
     // Render to buffer
     var buf: [test_render_buf_size]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buf);
+    var fbs = FixedBufStream.init(&buf);
     const writer = fbs.writer();
 
     try metrics.renderPrometheus(writer);
@@ -669,7 +702,7 @@ test "Metrics: renderPrometheus outputs valid format" {
         var found = false;
         var line_iter = std.mem.splitScalar(u8, output, '\n');
         while (line_iter.next()) |line| {
-            const trimmed = std.mem.trimRight(u8, line, " \t\r");
+            const trimmed = std.mem.trimEnd(u8, line, " \t\r");
             // Comment lines (# HELP) have trailing descriptions — use prefix match.
             // Metric lines must match exactly to catch value errors.
             const is_comment = expected[0] == '#';
@@ -714,7 +747,7 @@ test "Metrics: updateKvBlocks sets gauge values" {
 
     // Verify rendered in Prometheus output
     var buf: [test_render_buf_size]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buf);
+    var fbs = FixedBufStream.init(&buf);
     try metrics.renderPrometheus(fbs.writer());
     const output = fbs.getWritten();
     try std.testing.expect(std.mem.indexOf(u8, output, "agave_kv_blocks_used 42\n") != null);
@@ -729,7 +762,7 @@ test "Metrics: cache counters exposed in Prometheus output" {
     metrics.recordCacheMiss(100);
 
     var buf: [test_render_buf_size]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buf);
+    var fbs = FixedBufStream.init(&buf);
     try metrics.renderPrometheus(fbs.writer());
     const output = fbs.getWritten();
 

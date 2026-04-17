@@ -3,7 +3,9 @@
 //! Single source of truth for all display-related types used across main.zig and server.zig.
 
 const std = @import("std");
-const vaxis = @import("vaxis");
+const Io = std.Io;
+const posix = std.posix;
+const term = @import("term.zig");
 
 /// ANSI escape: erase from cursor to end of line (EL0).
 const erase_line = "\x1b[K";
@@ -14,16 +16,33 @@ pub const version = "0.1.0";
 /// Brand emoji for version/banner output (🌵).
 pub const cactus = "\xf0\x9f\x8c\xb5";
 
+/// Standard I/O file handles via std.Io.File (Zig 0.16 idiom).
+const stderr_file = Io.File.stderr();
+const stdout_file = Io.File.stdout();
+
+/// Check if a file descriptor refers to a terminal. Uses tcgetattr (posix, no libc).
+fn isTty(fd: posix.fd_t) bool {
+    _ = posix.tcgetattr(fd) catch return false;
+    return true;
+}
+
+/// Write bytes to stderr via posix syscall.
+fn writeStderr(text: []const u8) void {
+    _ = posix.system.write(stderr_file.handle, text.ptr, text.len);
+}
+
+/// Write bytes to stdout via posix syscall.
+fn writeStdout(text: []const u8) void {
+    _ = posix.system.write(stdout_file.handle, text.ptr, text.len);
+}
+
 /// Print version to stdout, with cactus emoji on TTY.
 pub fn printVersion() void {
-    const stdout = std.fs.File.stdout();
-    const text = if (std.posix.isatty(stdout.handle))
+    const text = if (isTty(stdout_file.handle))
         cactus ++ " agave " ++ version ++ "\n"
     else
         "agave " ++ version ++ "\n";
-    stdout.writeAll(text) catch |err| {
-        std.log.warn("printVersion: stdout write failed: {s}", .{@errorName(err)});
-    };
+    writeStdout(text);
 }
 
 /// Bits per byte, used for bits-per-weight (bpw) calculation.
@@ -199,10 +218,10 @@ fn fmtDuration(buf: *[16]u8, ms: u64) []const u8 {
 // ── Internal Helpers ─────────────────────────────────────────────
 
 /// Calculates the display width (terminal columns) of a UTF-8 string.
-/// Uses libvaxis grapheme-aware width calculation for correct handling
-/// of multi-byte characters, combining marks, and wide (CJK) glyphs.
+/// Uses the self-contained term module for correct handling of multi-byte
+/// characters, combining marks, and wide (CJK) glyphs.
 fn displayWidth(s: []const u8) usize {
-    return @as(usize, vaxis.gwidth.gwidth(s, .unicode));
+    return term.displayWidth(s);
 }
 
 /// Returns a byte-slice prefix of `s` whose display width does not exceed `max_cols`.
@@ -240,9 +259,6 @@ fn sanitizeMetadata(buf: *[max_meta_len]u8, s: []const u8) []const u8 {
 pub const Display = struct {
     mode: OutputMode,
     verbose: bool,
-
-    const stderr = std.fs.File.stderr();
-    const stdout = std.fs.File.stdout();
 
     /// Buffer size for formatted output.
     const out_buf_size: usize = 8192;
@@ -298,7 +314,7 @@ pub const Display = struct {
                 fsize.unit,
                 info.be_name,
             }) catch return;
-        stderr.writeAll(text) catch {};
+        writeStderr(text);
     }
 
     /// TTY banner with box drawing characters and ANSI colors.
@@ -306,7 +322,7 @@ pub const Display = struct {
     pub fn printBannerTty(_: Display, info: ModelInfo) void {
         const fsize = formatSize(info.file_size_bytes);
 
-        const ctl = vaxis.ctlseqs;
+        const ctl = term.ctlseqs;
         const cyan = comptime std.fmt.comptimePrint(ctl.fg_base, .{6});
         const bold = ctl.bold_set;
         const dim = ctl.dim_set;
@@ -440,8 +456,8 @@ pub const Display = struct {
 
         // Query terminal width, default to 80 if unavailable
         const term_cols: usize = blk: {
-            var ws: std.posix.winsize = undefined;
-            const rc = std.posix.system.ioctl(stderr.handle, std.posix.T.IOCGWINSZ, @intFromPtr(&ws));
+            var ws: posix.winsize = undefined;
+            const rc = posix.system.ioctl(stderr_file.handle, posix.T.IOCGWINSZ, @intFromPtr(&ws));
             if (rc == 0 and ws.col > 0) break :blk @as(usize, ws.col);
             break :blk default_terminal_width;
         };
@@ -519,7 +535,7 @@ pub const Display = struct {
         append(&out_buf, &out_pos, reset);
         append(&out_buf, &out_pos, "\n");
 
-        stderr.writeAll(out_buf[0..out_pos]) catch {};
+        writeStderr(out_buf[0..out_pos]);
     }
 
     // ── System Info ──────────────────────────────────────────
@@ -528,7 +544,7 @@ pub const Display = struct {
     /// Shows platform, device, VRAM, loaded libraries, kernel count, and threads.
     pub fn printSystemInfo(self: Display, info: BackendInfo) void {
         if (self.mode == .json) return;
-        const ctl = vaxis.ctlseqs;
+        const ctl = term.ctlseqs;
         const is_tty = self.mode == .tty;
         var buf: [out_buf_size]u8 = undefined;
         var pos: usize = 0;
@@ -590,7 +606,7 @@ pub const Display = struct {
         if (is_tty) w(&buf, &pos, "{s}", .{ctl.sgr_reset});
         w(&buf, &pos, "\n", .{});
 
-        stderr.writeAll(buf[0..pos]) catch {};
+        writeStderr(buf[0..pos]);
     }
 
     // ── Load Info ────────────────────────────────────────────
@@ -598,7 +614,7 @@ pub const Display = struct {
     /// Print technical loading details (tensors, tokenizer, template, init time).
     pub fn printLoadInfo(self: Display, info: LoadInfo) void {
         if (self.mode == .json) return;
-        const ctl = vaxis.ctlseqs;
+        const ctl = term.ctlseqs;
         const is_tty = self.mode == .tty;
         var buf: [out_buf_size]u8 = undefined;
         var pos: usize = 0;
@@ -626,7 +642,7 @@ pub const Display = struct {
         if (is_tty) w(&buf, &pos, "{s}", .{ctl.sgr_reset});
         w(&buf, &pos, "\n", .{});
 
-        stderr.writeAll(buf[0..pos]) catch {};
+        writeStderr(buf[0..pos]);
     }
 
     // ── Prefill Progress ─────────────────────────────────────
@@ -636,15 +652,15 @@ pub const Display = struct {
         if (self.mode == .json) return;
         var buf: [out_buf_size]u8 = undefined;
         const text = std.fmt.bufPrint(&buf, "prefill {d} tokens...", .{token_count}) catch return;
-        stderr.writeAll(text) catch {};
+        writeStderr(text);
     }
 
     /// Clear the prefill progress message (carriage return + erase line).
     pub fn clearPrefillProgress(self: Display) void {
         if (self.mode == .tty) {
-            stderr.writeAll("\r" ++ erase_line) catch {};
+            writeStderr("\r" ++ erase_line);
         } else if (self.mode == .plain) {
-            stderr.writeAll("\r") catch {};
+            writeStderr("\r");
         }
     }
 
@@ -677,7 +693,7 @@ pub const Display = struct {
                 stats.tokPerSec(),
                 stats.prefill_ms,
             }) catch return;
-        stderr.writeAll(text) catch {};
+        writeStderr(text);
     }
 
     // ── JSON Output ──────────────────────────────────────────
@@ -685,7 +701,7 @@ pub const Display = struct {
     /// Print full JSON output for a prompt response (model info + generated text + stats).
     pub fn printJsonPrompt(_: Display, info: ModelInfo, output_text: []const u8, stats: GenStats) void {
         var buf: [json_out_buf_size]u8 = undefined;
-        var writer = std.io.Writer.fixed(&buf);
+        var writer = Io.Writer.fixed(&buf);
         var jw: std.json.Stringify = .{ .writer = &writer };
         jw.beginObject() catch return;
 
@@ -722,15 +738,15 @@ pub const Display = struct {
         jw.endObject() catch return;
 
         const written = writer.buffer[0..writer.end];
-        stdout.writeAll(written) catch {};
-        stdout.writeAll("\n") catch {};
+        writeStdout(written);
+        writeStdout("\n");
     }
 
     /// Print JSON model info (for --model-info --json).
     pub fn printJsonModelInfo(_: Display, info: ModelInfo) void {
         const fsize = formatSize(info.file_size_bytes);
         var buf: [out_buf_size]u8 = undefined;
-        var writer = std.io.Writer.fixed(&buf);
+        var writer = Io.Writer.fixed(&buf);
         var jw: std.json.Stringify = .{ .writer = &writer };
         jw.beginObject() catch return;
 
@@ -795,8 +811,8 @@ pub const Display = struct {
         jw.endObject() catch return;
 
         const written = writer.buffer[0..writer.end];
-        stdout.writeAll(written) catch {};
-        stdout.writeAll("\n") catch {};
+        writeStdout(written);
+        writeStdout("\n");
     }
 
     // ── Human-Readable Model Info ────────────────────────────
@@ -838,7 +854,7 @@ pub const Display = struct {
         w(&buf, &pos, "  Loaded:   {d}ms\n", .{info.load_ms});
         if (info.warmup_ms > 0) w(&buf, &pos, "  Warmup:   {d}ms\n", .{info.warmup_ms});
 
-        stdout.writeAll(buf[0..pos]) catch {};
+        writeStdout(buf[0..pos]);
     }
 };
 

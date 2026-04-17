@@ -26,7 +26,7 @@ zig build                                          # Build (ReleaseFast + Debug)
 ```
 agave/
 ├── build.zig              # Build config (ReleaseFast default + Debug)
-├── build.zig.zon          # Dependencies (clap CLI parser, vaxis terminal UI)
+├── build.zig.zon          # Dependencies (clap CLI parser — sole external dep)
 ├── src/
 │   ├── main.zig           # CLI: arg parsing, format detection, model init, REPL, recipe application
 │   ├── arch.zig           # Architecture enum, detection, chat template mapping
@@ -43,6 +43,7 @@ agave/
 │   ├── thread_pool.zig    # Futex-based work-stealing thread pool
 │   ├── perf.zig           # Performance timer utilities
 │   ├── readline.zig       # Line editor for interactive REPL
+│   ├── term.zig           # Terminal I/O: key parser, ANSI sequences, display width (pure Zig, no libc)
 │   ├── image.zig          # PNG/PPM image decoder and resize for multimodal inference
 │   ├── micro_bench.zig    # Standalone micro-benchmark binary
 │   ├── format/

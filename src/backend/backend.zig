@@ -792,12 +792,12 @@ pub const BackendState = struct {
     /// Parameters:
     ///   - allocator: Used for backend-internal allocations (pipeline caches, etc.).
     ///   - backend_choice: Which backend to initialize (or .auto for auto-detection).
-    pub fn init(self: *BackendState, allocator: std.mem.Allocator, backend_choice: BackendChoice) void {
+    pub fn init(self: *BackendState, allocator: std.mem.Allocator, backend_choice: BackendChoice, io: std.Io) void {
         // n_workers = CPU count - 1 (main thread also participates).
         const cpu_count = std.Thread.getCpuCount() catch 1;
         const n_workers = if (cpu_count > 1) cpu_count - 1 else 0;
         self.pool = ThreadPool.init(n_workers);
-        self.pool.?.spawn();
+        self.pool.?.spawn(io);
         self.cpu_be.pool = &self.pool.?;
         self.be = blk: {
             switch (backend_choice) {

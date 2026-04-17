@@ -26,8 +26,8 @@ pub fn build(b: *std.Build) void {
     // via std.DynLib — no link-time dependency needed.
     const link_metal = enable_metal and target.result.os.tag == .macos;
     const link_platform = struct {
-        fn apply(_: *std.Build.Module, exe: *std.Build.Step.Compile, _: std.Build.ResolvedTarget) void {
-            exe.linkLibC();
+        fn apply(mod: *std.Build.Module, _: *std.Build.Step.Compile, _: std.Build.ResolvedTarget) void {
+            mod.link_libc = true;
         }
     }.apply;
 
@@ -126,7 +126,6 @@ pub fn build(b: *std.Build) void {
 
     // ── ReleaseFast executable (default) ──────────────────────────
     const clap_rel = b.dependency("clap", .{ .target = target, .optimize = .ReleaseFast });
-    const vaxis_rel = b.dependency("vaxis", .{ .target = target, .optimize = .ReleaseFast });
 
     const backend_options = b.addOptions();
     backend_options.addOption(bool, "enable_cpu", enable_cpu);
@@ -148,20 +147,18 @@ pub fn build(b: *std.Build) void {
         .optimize = .ReleaseFast,
     });
     mod_rel.addImport("clap", clap_rel.module("clap"));
-    mod_rel.addImport("vaxis", vaxis_rel.module("vaxis"));
     mod_rel.addImport("build_options", backend_options.createModule());
 
     const exe_rel = b.addExecutable(.{ .name = "agave", .root_module = mod_rel });
     link_platform(mod_rel, exe_rel, target);
     if (link_metal) {
-        exe_rel.linkFramework("Metal");
-        exe_rel.linkFramework("Foundation");
+        mod_rel.linkFramework("Metal", .{});
+        mod_rel.linkFramework("Foundation", .{});
     }
     b.installArtifact(exe_rel);
 
     // ── Debug executable (also built by default) ─────────────────
     const clap_dbg = b.dependency("clap", .{ .target = target, .optimize = .Debug });
-    const vaxis_dbg = b.dependency("vaxis", .{ .target = target, .optimize = .Debug });
 
     const mod_dbg = b.createModule(.{
         .root_source_file = b.path("src/main.zig"),
@@ -169,14 +166,13 @@ pub fn build(b: *std.Build) void {
         .optimize = .Debug,
     });
     mod_dbg.addImport("clap", clap_dbg.module("clap"));
-    mod_dbg.addImport("vaxis", vaxis_dbg.module("vaxis"));
     mod_dbg.addImport("build_options", backend_options.createModule());
 
     const exe_dbg = b.addExecutable(.{ .name = "agave-debug", .root_module = mod_dbg });
     link_platform(mod_dbg, exe_dbg, target);
     if (link_metal) {
-        exe_dbg.linkFramework("Metal");
-        exe_dbg.linkFramework("Foundation");
+        mod_dbg.linkFramework("Metal", .{});
+        mod_dbg.linkFramework("Foundation", .{});
     }
     b.installArtifact(exe_dbg);
 
@@ -243,8 +239,8 @@ pub fn build(b: *std.Build) void {
         const t = b.addTest(.{ .root_module = mod });
         link_platform(mod, t, target);
         if (link_metal) {
-            t.linkFramework("Metal");
-            t.linkFramework("Foundation");
+            mod.linkFramework("Metal", .{});
+            mod.linkFramework("Foundation", .{});
         }
         test_step.dependOn(&b.addRunArtifact(t).step);
     }
@@ -261,8 +257,8 @@ pub fn build(b: *std.Build) void {
         const t = b.addTest(.{ .root_module = mod });
         link_platform(mod, t, target);
         if (link_metal) {
-            t.linkFramework("Metal");
-            t.linkFramework("Foundation");
+            mod.linkFramework("Metal", .{});
+            mod.linkFramework("Foundation", .{});
         }
         test_step.dependOn(&b.addRunArtifact(t).step);
     }
@@ -285,8 +281,8 @@ pub fn build(b: *std.Build) void {
     const exe_bench = b.addExecutable(.{ .name = "agave-bench", .root_module = mod_bench });
     link_platform(mod_bench, exe_bench, target);
     if (link_metal) {
-        exe_bench.linkFramework("Metal");
-        exe_bench.linkFramework("Foundation");
+        mod_bench.linkFramework("Metal", .{});
+        mod_bench.linkFramework("Foundation", .{});
     }
     b.installArtifact(exe_bench);
 

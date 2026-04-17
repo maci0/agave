@@ -1,18 +1,25 @@
 //! Line editor with history, reverse search (Ctrl-R), and Unicode support.
 //! Supports Ctrl-C (double-tap to quit), Ctrl-L (clear screen), and Ctrl-D (EOF).
-//! Uses vaxis for input parsing, key matching, and text editing (gap buffer).
+//! Uses the self-contained term module for input parsing, key matching, and text editing.
 
 const std = @import("std");
 const posix = std.posix;
-const vaxis = @import("vaxis");
-const Key = vaxis.Key;
-const TextInput = vaxis.widgets.TextInput;
+const term = @import("term.zig");
+const Key = term.Key;
+const TextInput = term.TextInput;
 
 const max_history = 256;
 const search_buf_size = 256;
 const leftover_buf_size = 128;
 const input_read_buf_size = 256;
 const ctrl_c_double_tap_ms: i64 = 1000;
+
+/// Millisecond timestamp via posix clock_gettime syscall (no libc).
+fn milliTimestamp() i64 {
+    var ts: posix.timespec = undefined;
+    _ = posix.system.clock_gettime(posix.system.CLOCK.REALTIME, &ts);
+    return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
+}
 const cursor_buf_size = 32;
 const simple_read_buf_size = 4096;
 /// ASCII control character boundaries for ANSI escape sequence parsing.
@@ -31,7 +38,7 @@ pub const LineEditor = struct {
 
     /// Create a line editor backed by stdin with empty history.
     pub fn init(allocator: std.mem.Allocator) LineEditor {
-        return .{ .allocator = allocator, .fd = std.fs.File.stdin().handle };
+        return .{ .allocator = allocator, .fd = posix.STDIN_FILENO };
     }
 
     /// Free all owned history entries.
@@ -57,7 +64,7 @@ pub const LineEditor = struct {
 
     /// Read a line with editing support. Returns owned slice or null on EOF/Ctrl-D.
     pub fn readline(self: *LineEditor, prompt: []const u8) ?[]const u8 {
-        if (!posix.isatty(self.fd)) return self.readSimple();
+        if (!self.isTty()) return self.readSimple();
 
         self.enableRaw() catch return self.readSimple();
         defer self.disableRaw();
@@ -77,7 +84,7 @@ pub const LineEditor = struct {
         const prompt_w = displayWidth(prompt);
         self.writeAll(prompt);
 
-        var parser: vaxis.Parser = .{};
+        var parser: term.Parser = .{};
         var leftover: [leftover_buf_size]u8 = undefined;
         var leftover_len: usize = 0;
 
@@ -134,7 +141,7 @@ pub const LineEditor = struct {
                             continue;
                         }
                         if (key.matches('c', .{ .ctrl = true })) {
-                            const now = std.time.milliTimestamp();
+                            const now = milliTimestamp();
                             if (self.last_ctrl_c_ms != 0 and now - self.last_ctrl_c_ms < ctrl_c_double_tap_ms) {
                                 self.writeAll("\r\n");
                                 return null;
@@ -196,7 +203,6 @@ pub const LineEditor = struct {
                         input.update(.{ .key_press = key }) catch {};
                         self.refreshLine(prompt, prompt_w, &input);
                     },
-                    else => {},
                 }
             }
         }
@@ -300,9 +306,9 @@ pub const LineEditor = struct {
         self.writeAll(s);
     }
 
-    /// Write data to stdout (for terminal echo and prompt display).
+    /// Write data to stdout via posix syscall.
     fn writeAll(_: *LineEditor, data: []const u8) void {
-        _ = posix.write(posix.STDOUT_FILENO, data) catch {};
+        _ = posix.system.write(posix.STDOUT_FILENO, data.ptr, data.len);
     }
 
     // ── Terminal ────────────────────────────────────────────────
@@ -319,6 +325,12 @@ pub const LineEditor = struct {
             len += 1;
         }
         return self.allocator.dupe(u8, buf[0..len]) catch null;
+    }
+
+    /// Check if the fd refers to a terminal. Uses tcgetattr (posix, no libc).
+    fn isTty(self: *LineEditor) bool {
+        _ = posix.tcgetattr(self.fd) catch return false;
+        return true;
     }
 
     fn enableRaw(self: *LineEditor) !void {
@@ -352,7 +364,8 @@ pub const LineEditor = struct {
         return nr > 0;
     }
 
-    /// Display width using vaxis grapheme-aware width calculation.
+    /// Display width with ANSI escape sequence filtering.
+    /// Uses the self-contained term module for Unicode width calculation.
     fn displayWidth(s: []const u8) usize {
         // Filter out ANSI escape sequences for prompt width calculation
         var cols: usize = 0;
@@ -371,7 +384,7 @@ pub const LineEditor = struct {
                 // Measure the next grapheme cluster
                 const cp_len = std.unicode.utf8ByteSequenceLength(s[i]) catch 1;
                 const end = @min(i + cp_len, s.len);
-                cols += @as(usize, vaxis.gwidth.gwidth(s[i..end], .unicode));
+                cols += term.displayWidth(s[i..end]);
                 i = end;
             }
         }

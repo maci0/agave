@@ -5,6 +5,28 @@
 //! ejects finished/cancelled requests, and fills batch from waiting queue (cache-aware priority).
 
 const std = @import("std");
+
+/// Simple atomic spinlock replacing Mutex (removed in Zig 0.16).
+const Mutex = struct {
+    locked: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+
+    pub fn lock(self: *Mutex) void {
+        while (self.locked.cmpxchgWeak(false, true, .acquire, .monotonic) != null)
+            std.atomic.spinLoopHint();
+    }
+
+    pub fn unlock(self: *Mutex) void {
+        self.locked.store(false, .release);
+    }
+};
+
+/// Millisecond timestamp via raw C clock_gettime (Zig 0.16 idiom).
+fn milliTimestamp() i64 {
+    var ts: std.posix.timespec = undefined;
+    _ = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+    return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
+}
+
 const Model = @import("../models/model.zig").Model;
 const Allocator = std.mem.Allocator;
 const RadixTree = @import("../kvcache/manager.zig").RadixTree;
@@ -113,7 +135,7 @@ pub const RequestManager = struct {
     max_batch_size: usize,
     timeout_sec: u32,
     allocator: Allocator,
-    mutex: std.Thread.Mutex,
+    mutex: Mutex,
     next_id: std.atomic.Value(u64),
     completed_total: u32 = 0,
     cancelled_total: u32 = 0,
@@ -157,7 +179,8 @@ pub const RequestManager = struct {
         if (tiered_cache) |cache| {
             var prefetcher = Prefetcher.init(cache);
             errdefer prefetcher.deinit();
-            try prefetcher.start();
+            var threaded = std.Io.Threaded.init(allocator, .{});
+            try prefetcher.start(threaded.io());
             mgr.prefetcher = prefetcher;
         }
 
@@ -194,7 +217,7 @@ pub const RequestManager = struct {
         const req = try self.allocator.create(Request);
         errdefer self.allocator.destroy(req);
 
-        const now = std.time.milliTimestamp();
+        const now = milliTimestamp();
         const id = self.next_id.fetchAdd(1, .monotonic);
 
         // Lock mutex for both RadixTree access and queue append (atomic check-and-insert)
@@ -218,7 +241,7 @@ pub const RequestManager = struct {
 
         req.* = .{
             .id = id,
-            .tokens = .{},
+            .tokens = .empty,
             .last_token_id = 0,
             .is_finished = std.atomic.Value(bool).init(false),
             .is_cancelled = std.atomic.Value(bool).init(false),
@@ -244,7 +267,7 @@ pub const RequestManager = struct {
     /// 3. Fill batch from waiting queue (cache-aware priority, up to max_batch_size)
     /// 4. Call model.forward() for each running request
     pub fn step(self: *RequestManager, model: *Model, eog_ids: []const u32) !void {
-        const now = std.time.milliTimestamp();
+        const now = milliTimestamp();
 
         // Lock during queue manipulation (scoped to ensure unlock on all paths)
         {
@@ -363,7 +386,7 @@ pub const RequestManager = struct {
 
                 // Last prefill token produces the first generated token
                 if (req.prefill_pos == req.prompt_tokens) {
-                    req.prefill_done_at = std.time.milliTimestamp();
+                    req.prefill_done_at = milliTimestamp();
                     req.last_token_id = next_token;
                     req.appendToken(next_token, eog_ids);
                 }
@@ -421,7 +444,14 @@ pub fn runSchedulerLoop(
             std.log.err("Scheduler step failed: {} (waiting={d}, running={d})", .{ err, manager.waiting.items.len, manager.running.items.len });
             manager.metrics.recordSchedulerError();
         };
-        std.Thread.sleep(scheduler_poll_ns); // 1ms between iterations
+        {
+            // Sleep 1ms between iterations via C nanosleep (std.Thread.sleep removed in Zig 0.16)
+            const ts = std.posix.timespec{
+                .sec = @intCast(scheduler_poll_ns / std.time.ns_per_s),
+                .nsec = @intCast(scheduler_poll_ns % std.time.ns_per_s),
+            };
+            _ = std.c.nanosleep(&ts, null);
+        }
     }
 }
 
@@ -523,7 +553,7 @@ test "step cancels timed-out requests" {
     // req stays in running (cancelled but not removed until next step) — freed by manager.deinit()
 
     // Simulate request enqueued 2 seconds ago
-    req.enqueued_at = std.time.milliTimestamp() - 2000;
+    req.enqueued_at = milliTimestamp() - 2000;
 
     var mock_model = MockModel{};
     var model = Model.from(MockModel, &mock_model);

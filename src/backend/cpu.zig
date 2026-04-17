@@ -87,7 +87,7 @@ fn parseSysfsCacheSize(comptime path: []const u8) usize {
     defer file.close();
     var buf: [32]u8 = undefined;
     const n = file.read(&buf) catch return 0;
-    const data = std.mem.trimRight(u8, buf[0..n], "\n ");
+    const data = std.mem.trimEnd(u8, buf[0..n], "\n ");
     if (data.len == 0) return 0;
     // Parse numeric prefix
     var val: usize = 0;

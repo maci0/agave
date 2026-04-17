@@ -114,17 +114,29 @@ const e2e_repeat_halt_threshold: u32 = 6;
 
 // ── Output helpers ───────────────────────────────────────────────
 
-const stdout_file = std.fs.File.stdout();
-const stderr_file = std.fs.File.stderr();
+/// Standard I/O file handles via std.Io.File (Zig 0.16 idiom).
+const stdout_file = std.Io.File.stdout();
+const stderr_file = std.Io.File.stderr();
+
+/// Writes all bytes to a file descriptor using raw C write.
+fn fdWriteAll(fd: std.posix.fd_t, bytes: []const u8) void {
+    var written: usize = 0;
+    while (written < bytes.len) {
+        const result = std.c.write(fd, bytes[written..].ptr, bytes[written..].len);
+        const n: isize = @bitCast(result);
+        if (n <= 0) break;
+        written += @intCast(n);
+    }
+}
 
 fn print(comptime fmt: []const u8, args: anytype) void {
     var buf: [output_buf_size]u8 = undefined;
-    stdout_file.writeAll(std.fmt.bufPrint(&buf, fmt, args) catch return) catch {};
+    fdWriteAll(stdout_file.handle, std.fmt.bufPrint(&buf, fmt, args) catch return);
 }
 
 fn eprint(comptime fmt: []const u8, args: anytype) void {
     var buf: [output_buf_size]u8 = undefined;
-    stderr_file.writeAll(std.fmt.bufPrint(&buf, fmt, args) catch return) catch {};
+    fdWriteAll(stderr_file.handle, std.fmt.bufPrint(&buf, fmt, args) catch return);
 }
 
 // ── CLI parsing ──────────────────────────────────────────────────
@@ -167,13 +179,10 @@ const CliArgs = struct {
 
 /// Parses CLI arguments from process args.
 /// Returns null on help/version (exit 0) or parse error (exit 1 via std.process.exit).
-fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
-    var args_iter = std.process.argsWithAllocator(allocator) catch {
-        std.process.exit(1);
-    };
-    defer args_iter.deinit();
+fn parseCli(proc_args: std.process.Args) ?CliArgs {
+    var args_iter = proc_args.iterate();
 
-    _ = args_iter.next(); // skip program name
+    _ = args_iter.skip(); // skip program name
 
     var n_was_set = false;
     var result = CliArgs{
@@ -365,14 +374,38 @@ fn printUsage() void {
         \\  agave-bench e2e --model model.gguf --backend cpu --n 10
         \\
     ;
-    stdout_file.writeAll(usage) catch {};
+    fdWriteAll(stdout_file.handle, usage);
 }
 
 // ── Timing utilities ─────────────────────────────────────────────
 
+/// Monotonic nanosecond timer using posix clock_gettime (replaces std.time.Timer
+/// which was removed in Zig 0.16).
+const NanoTimer = struct {
+    start_ts: std.posix.timespec,
+
+    fn start() NanoTimer {
+        var ts: std.posix.timespec = undefined;
+        _ = std.c.clock_gettime(std.c.CLOCK.MONOTONIC, &ts);
+        return .{ .start_ts = ts };
+    }
+
+    fn read(self: *NanoTimer) u64 {
+        var now_ts: std.posix.timespec = undefined;
+        _ = std.c.clock_gettime(std.c.CLOCK.MONOTONIC, &now_ts);
+        const start_ns: i128 = @as(i128, self.start_ts.sec) * 1_000_000_000 + self.start_ts.nsec;
+        const now_ns: i128 = @as(i128, now_ts.sec) * 1_000_000_000 + now_ts.nsec;
+        return @intCast(now_ns - start_ns);
+    }
+
+    fn reset(self: *NanoTimer) void {
+        _ = std.c.clock_gettime(std.c.CLOCK.MONOTONIC, &self.start_ts);
+    }
+};
+
 /// Collects timing samples for a kernel invocation, returning the median in nanoseconds.
 /// Runs warmup_iters untimed iterations, then `iters` timed iterations with per-iteration
-/// timing via std.time.Timer. Returns median of the sorted sample array.
+/// timing via NanoTimer. Returns median of the sorted sample array.
 fn collectMedian(
     comptime runFn: fn (*const BenchCtx) void,
     ctx: *const BenchCtx,
@@ -386,7 +419,7 @@ fn collectMedian(
     // Collect samples
     var samples: [max_samples]u64 = undefined;
     const n = @min(iters, max_samples);
-    var timer = std.time.Timer.start() catch @panic("Timer.start failed — OS timer unavailable");
+    var timer = NanoTimer.start();
 
     for (0..n) |i| {
         timer.reset();
@@ -1013,8 +1046,8 @@ fn runE2e(allocator: std.mem.Allocator, cli: CliArgs) u8 {
 
     // ── Load model format ────────────────────────────────────────
     const is_dir = blk: {
-        var dir = std.fs.cwd().openDir(model_path, .{}) catch break :blk false;
-        dir.close();
+        const fd = std.posix.openat(std.posix.AT.FDCWD, model_path, .{ .DIRECTORY = true }, 0) catch break :blk false;
+        _ = std.c.close(fd);
         break :blk true;
     };
 
@@ -1066,7 +1099,7 @@ fn runE2e(allocator: std.mem.Allocator, cli: CliArgs) u8 {
 
     // ── Initialize backend ───────────────────────────────────────
     var bs = BackendState{};
-    bs.init(allocator, cli.backend);
+    var threaded = std.Io.Threaded.init(allocator, .{}); bs.init(allocator, cli.backend, threaded.io());
     defer if (bs.pool) |*p| p.deinit();
     const be = bs.be;
     const be_name = bs.name;
@@ -1182,10 +1215,7 @@ fn runE2eInference(
     }
 
     // ── Prefill (timed) ──────────────────────────────────────────
-    var prefill_timer = std.time.Timer.start() catch {
-        eprint("Error: timer unavailable\n", .{});
-        return;
-    };
+    var prefill_timer = NanoTimer.start();
     var first_gen_token: u32 = 0;
     for (token_ids) |tid| {
         first_gen_token = mdl.forward(tid) catch |e| {
@@ -1196,10 +1226,7 @@ fn runE2eInference(
     const prefill_ns = prefill_timer.read();
 
     // ── Generation (timed) ───────────────────────────────────────
-    var gen_timer = std.time.Timer.start() catch {
-        eprint("Error: timer unavailable\n", .{});
-        return;
-    };
+    var gen_timer = NanoTimer.start();
     var last = first_gen_token;
     var token_count: u32 = 0;
     var prev_token: u32 = 0;
@@ -1247,12 +1274,12 @@ const getQuantName = Format.getQuantName;
 
 // ── Entry point ──────────────────────────────────────────────────
 
-pub fn main() u8 {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+pub fn main(init: std.process.Init.Minimal) u8 {
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    const cli = parseCli(allocator) orelse return 0;
+    const cli = parseCli(init.args) orelse return 0;
 
     // E2E mode: load model and run end-to-end inference benchmark
     if (cli.mode == .e2e) {
@@ -1261,7 +1288,7 @@ pub fn main() u8 {
 
     // Initialize backend
     var bs = BackendState{};
-    bs.init(allocator, cli.backend);
+    var threaded = std.Io.Threaded.init(allocator, .{}); bs.init(allocator, cli.backend, threaded.io());
     defer if (bs.pool) |*p| p.deinit();
     const be = bs.be;
     const be_name = bs.name;

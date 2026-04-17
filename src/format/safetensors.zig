@@ -131,8 +131,8 @@ pub const SafeTensorsDir = struct {
                 if (shard_name_list.items.len > 0) {
                     const check_path = try std.fs.path.join(allocator, &.{ dir_path, shard_name_list.items[0] });
                     defer allocator.free(check_path);
-                    if (std.fs.openFileAbsolute(check_path, .{})) |f| {
-                        f.close();
+                    if (std.posix.openat(std.posix.AT.FDCWD, check_path, .{}, 0)) |fd| {
+                        _ = std.c.close(fd);
                         index_valid = true;
                     } else |_| {}
                 }
@@ -162,18 +162,22 @@ pub const SafeTensorsDir = struct {
             const shard_path = try std.fs.path.join(allocator, &.{ dir_path, shard_name });
             defer allocator.free(shard_path);
 
-            const file = try std.fs.openFileAbsolute(shard_path, .{});
-            defer file.close();
+            const fd = try std.posix.openat(std.posix.AT.FDCWD, shard_path, .{}, 0);
+            defer _ = std.c.close(fd);
 
-            const file_size = (try file.stat()).size;
+            const file_size: usize = blk: {
+                var s: std.posix.Stat = undefined;
+                if (std.c.fstat(fd, &s) != 0) return error.FileNotFound;
+                break :blk @intCast(s.size);
+            };
             if (file_size < 8) return error.InvalidSafeTensors;
 
             const mapped = try std.posix.mmap(
                 null,
                 file_size,
-                std.posix.PROT.READ,
+                .{ .READ = true },
                 .{ .TYPE = .SHARED },
-                file.handle,
+                fd,
                 0,
             );
             // Hint sequential access for weight loading — enables OS readahead and reduces page faults.
@@ -566,21 +570,23 @@ fn discoverShards(
     shard_to_idx: *std.StringHashMap(usize),
     owned: *std.ArrayList([]u8),
 ) !void {
-    var dir = try std.fs.cwd().openDir(dir_path, .{ .iterate = true });
-    defer dir.close();
+    // Use C opendir/readdir to iterate without Zig Io context (0.16 compat).
+    const dir_z = try allocator.dupeZ(u8, dir_path);
+    defer allocator.free(dir_z);
+    const dirp = std.c.opendir(dir_z.ptr) orelse return;
+    defer _ = std.c.closedir(dirp);
 
     // Collect matching filenames.
     var names: std.ArrayList([]u8) = .empty;
     defer names.deinit(allocator);
 
-    var it = dir.iterate();
-    while (try it.next()) |entry| {
-        if (entry.kind != .file) continue;
-        if (!std.mem.endsWith(u8, entry.name, ".safetensors")) continue;
+    while (std.c.readdir(dirp)) |entry| {
+        const name = std.mem.sliceTo(&entry.name, 0);
+        if (!std.mem.endsWith(u8, name, ".safetensors")) continue;
         // Skip index files.
-        if (std.mem.endsWith(u8, entry.name, ".index.json.safetensors")) continue;
+        if (std.mem.endsWith(u8, name, ".index.json.safetensors")) continue;
         if (names.items.len >= max_shard_count) return error.InvalidSafeTensors;
-        const name_copy = try dupeString(allocator, owned, entry.name);
+        const name_copy = try dupeString(allocator, owned, name);
         try names.append(allocator, name_copy);
     }
 
@@ -599,15 +605,27 @@ fn discoverShards(
 }
 
 /// Read an entire file into a heap-allocated slice (caller must free).
+/// Uses posix openat for Zig 0.16 compatibility (std.fs.openFileAbsolute removed).
 fn readFile(allocator: Allocator, path: []const u8) ![]u8 {
-    const file = try std.fs.openFileAbsolute(path, .{});
-    defer file.close();
-    const size = (try file.stat()).size;
+    const fd = try std.posix.openat(std.posix.AT.FDCWD, path, .{}, 0);
+    defer _ = std.c.close(fd);
+    const size: usize = blk: {
+        var s: std.posix.Stat = undefined;
+        if (std.c.fstat(fd, &s) != 0) return error.FileNotFound;
+        break :blk @intCast(s.size);
+    };
     if (size > max_json_file_size) return error.FileTooLarge;
-    const buf = try allocator.alloc(u8, @intCast(size));
+    const buf = try allocator.alloc(u8, size);
     errdefer allocator.free(buf);
-    const n = try file.readAll(buf);
-    if (n != size) return error.UnexpectedEof;
+    var total: usize = 0;
+    while (total < size) {
+        const n = std.posix.read(fd, buf[total..]) catch |e| switch (e) {
+            error.WouldBlock => continue,
+            else => return e,
+        };
+        if (n == 0) return error.UnexpectedEof;
+        total += n;
+    }
     return buf;
 }
 

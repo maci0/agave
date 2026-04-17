@@ -8,6 +8,7 @@
 //! Scanline filters (None, Sub, Up, Average, Paeth) are reconstructed in-place.
 
 const std = @import("std");
+const Io = std.Io;
 const Allocator = std.mem.Allocator;
 
 // ── Constants ───────────────────────────────────────────────────
@@ -227,11 +228,11 @@ pub const ImageDims = struct { width: u32, height: u32 };
 
 /// Read image dimensions from a file without full decoding.
 /// Supports PNG (reads IHDR) and PPM (reads header).
-pub fn getImageDimensions(allocator: Allocator, path: []const u8) !ImageDims {
-    const file = try std.fs.cwd().openFile(path, .{});
-    defer file.close();
+pub fn getImageDimensions(allocator: Allocator, io: Io, path: []const u8) !ImageDims {
+    const file = try Io.Dir.cwd().openFile(io, path, .{});
+    defer file.close(io);
     var header: [32]u8 = undefined;
-    const n = try file.readAll(&header);
+    const n = try file.readPositionalAll(io, &header, 0);
     if (n < 24) return error.InvalidImageSize;
 
     if (std.mem.eql(u8, header[0..png_signature.len], &png_signature)) {
@@ -245,8 +246,7 @@ pub fn getImageDimensions(allocator: Allocator, path: []const u8) !ImageDims {
         const max_hdr: usize = 256;
         const hdr_buf = try allocator.alloc(u8, max_hdr);
         defer allocator.free(hdr_buf);
-        try file.seekTo(0);
-        const hdr_n = try file.readAll(hdr_buf);
+        const hdr_n = try file.readPositionalAll(io, hdr_buf, 0);
         var pos: usize = 3; // skip "P6\n"
         while (pos < hdr_n and hdr_buf[pos] == '#') { // skip comments
             while (pos < hdr_n and hdr_buf[pos] != '\n') pos += 1;

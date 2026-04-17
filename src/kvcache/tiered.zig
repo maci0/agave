@@ -9,7 +9,48 @@
 //! shared prefix blocks from thrashing.
 
 const std = @import("std");
+const Io = std.Io;
+
+/// Millisecond timestamp via raw C call (avoids Io dispatch in hot path).
+fn milliTimestamp() i64 {
+    var ts: std.posix.timespec = undefined;
+    _ = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+    return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
+}
 const Allocator = std.mem.Allocator;
+
+/// Delete a file by path using C unlink (avoids Io dependency).
+fn deleteFileByPath(path: []const u8) void {
+    var buf: [std.fs.max_path_bytes]u8 = undefined;
+    if (path.len >= buf.len) return;
+    @memcpy(buf[0..path.len], path);
+    buf[path.len] = 0;
+    _ = std.c.unlink(@ptrCast(buf[0..path.len :0]));
+}
+
+/// Write all bytes to a file at the given offset using positioned I/O (pwrite).
+/// This avoids seek+write races when multiple threads access the file.
+fn pwriteAll(file: Io.File, bytes: []const u8, offset: usize) !void {
+    var written: usize = 0;
+    while (written < bytes.len) {
+        const result = std.c.pwrite(file.handle, bytes[written..].ptr, bytes[written..].len, @intCast(offset + written));
+        const n: isize = @bitCast(result);
+        if (n <= 0) return error.WriteError;
+        written += @intCast(n);
+    }
+}
+
+/// Read all bytes from a file at the given offset using positioned I/O (pread).
+fn preadAll(file: Io.File, buf: []u8, offset: usize) !usize {
+    var total: usize = 0;
+    while (total < buf.len) {
+        const result = std.c.pread(file.handle, buf[total..].ptr, buf[total..].len, @intCast(offset + total));
+        const n: isize = @bitCast(result);
+        if (n <= 0) break;
+        total += @intCast(n);
+    }
+    return total;
+}
 const manager = @import("manager.zig");
 const CacheBlock = manager.CacheBlock;
 
@@ -85,7 +126,7 @@ pub const TieredKvCache = struct {
 
     /// SSD tier support (Plan 03).
     /// Sparse file handle for KV block spill/restore.
-    ssd_file: ?std.fs.File = null,
+    ssd_file: ?Io.File = null,
     /// Path to SSD sparse file.
     ssd_path: []const u8,
     /// Bytes per block (kv_dim × block_size × @sizeOf(f32) × 2).
@@ -135,26 +176,28 @@ pub const TieredKvCache = struct {
         const block_bytes = std.math.mul(usize, slot_size, @sizeOf(f32) * 2) catch return error.OutOfMemory; // keys + values
 
         // Create sparse file for SSD tier if path provided
-        var ssd_file: ?std.fs.File = null;
+        var ssd_file: ?Io.File = null;
         if (ssd_path) |path| {
             // Reject path traversal, null bytes, and absolute paths in user-supplied SSD cache path.
             if (std.mem.indexOf(u8, path, "..") != null or
                 std.mem.indexOfScalar(u8, path, 0) != null or
                 (path.len > 0 and (path[0] == '/' or path[0] == '\\')))
                 return error.InvalidPath;
-            ssd_file = try std.fs.cwd().createFile(path, .{ .read = true, .truncate = false });
+            const fd = try std.posix.openat(std.posix.AT.FDCWD, path, .{
+                .ACCMODE = .RDWR,
+                .CREAT = true,
+            }, 0o644);
+            ssd_file = .{ .handle = fd, .flags = .{ .nonblocking = false } };
             errdefer {
-                ssd_file.?.close();
-                std.fs.cwd().deleteFile(path) catch {};
+                _ = std.c.close(ssd_file.?.handle);
+                deleteFileByPath(path);
             }
 
             // Allocate sparse file (write one byte at end to reserve space)
             const total_size = std.math.mul(usize, ssd_blocks, block_bytes) catch return error.OutOfMemory;
             if (total_size > 0) {
-                try ssd_file.?.seekTo(total_size - 1);
-                var write_buf: [1]u8 = .{0};
-                _ = try ssd_file.?.write(&write_buf);
-                try ssd_file.?.seekTo(0);
+                const zero_buf: [1]u8 = .{0};
+                _ = std.c.pwrite(ssd_file.?.handle, &zero_buf, 1, @intCast(total_size - 1));
             }
 
             std.log.debug("Created SSD sparse file: {s} ({d} blocks, {d} bytes)", .{ path, ssd_blocks, total_size });
@@ -235,7 +278,7 @@ pub const TieredKvCache = struct {
     pub fn deinit(self: *TieredKvCache) void {
         // Close SSD file if open
         if (self.ssd_file) |f| {
-            f.close();
+            _ = std.c.close(f.handle);
         }
 
         for (self.blocks) |*blk| {
@@ -418,8 +461,8 @@ pub const TieredKvCache = struct {
         // seek+write races when prefetcher and scheduler access the file concurrently.
         const keys_bytes = std.mem.sliceAsBytes(blk.base.keys);
         const values_bytes = std.mem.sliceAsBytes(blk.base.values);
-        try ssd.pwriteAll(keys_bytes, offset);
-        try ssd.pwriteAll(values_bytes, offset + keys_bytes.len);
+        try pwriteAll(ssd, keys_bytes, @intCast(offset));
+        try pwriteAll(ssd, values_bytes, @intCast(offset + keys_bytes.len));
 
         // Free RAM backing
         self.allocator.free(blk.base.keys);
@@ -463,12 +506,12 @@ pub const TieredKvCache = struct {
         const offset = blk.ssd_offset orelse return error.SsdBlockNotSpilled;
         const keys_bytes = std.mem.sliceAsBytes(blk.base.keys);
         const values_bytes = std.mem.sliceAsBytes(blk.base.values);
-        _ = try ssd.preadAll(keys_bytes, offset);
-        _ = try ssd.preadAll(values_bytes, offset + keys_bytes.len);
+        _ = try preadAll(ssd, keys_bytes, @intCast(offset));
+        _ = try preadAll(ssd, values_bytes, @intCast(offset + keys_bytes.len));
 
         // Update tier metadata
         blk.tier = .ram;
-        blk.last_access_ms = std.time.milliTimestamp();
+        blk.last_access_ms = milliTimestamp();
         _ = self.ram_used.fetchAdd(1, .monotonic);
 
         std.log.debug("Promoted block {d} from SSD to RAM", .{block_id});
@@ -534,7 +577,7 @@ pub const TieredKvCache = struct {
         // Change tier tag (data stays in place on UMA, uploaded in Plan 04 on discrete)
         std.debug.assert(blk.tier == .ram);
         blk.tier = .vram;
-        blk.last_access_ms = std.time.milliTimestamp();
+        blk.last_access_ms = milliTimestamp();
         blk.access_count +|= 1;
         _ = self.ram_used.fetchSub(1, .monotonic);
         _ = self.vram_used.fetchAdd(1, .monotonic);
@@ -644,7 +687,7 @@ test "TieredKvCache freeBlock returns to correct tier" {
 test "TieredKvCache SSD round-trip preserves data" {
     const allocator = std.testing.allocator;
     // Use timestamp-based unique name to avoid collisions between parallel test runs.
-    const ts: u64 = @intCast(std.time.milliTimestamp());
+    const ts: u64 = @intCast(milliTimestamp());
     var path_buf: [128]u8 = undefined;
     const ssd_path = std.fmt.bufPrint(&path_buf, "test_ssd_{d}.tmp", .{ts}) catch unreachable;
 
@@ -652,7 +695,7 @@ test "TieredKvCache SSD round-trip preserves data" {
     var cache = try TieredKvCache.init(allocator, 1, 4, 0, 1, 1, 16, ssd_path);
     defer {
         cache.deinit();
-        std.fs.cwd().deleteFile(ssd_path) catch {};
+        deleteFileByPath(ssd_path);
     }
 
     const b0 = try cache.allocBlock();

@@ -25,6 +25,7 @@
 //!     - Post-encoder LayerNorm (v.post_ln), then MLP projector (mm.0 + GELU + mm.2)
 
 const std = @import("std");
+const Io = std.Io;
 const math = std.math;
 const backend_mod = @import("../backend/backend.zig");
 const format_mod = @import("../format/format.zig");
@@ -258,7 +259,11 @@ pub const VisionEncoder = struct {
         const chunk: usize = @min(np, attention_chunk_size);
 
         // Check environment variable for debug mode
-        const vision_debug = std.posix.getenv("AGAVE_VISION_DEBUG") != null;
+        const vision_debug = blk: {
+            var env_buf = [_]u8{0} ** 20;
+            @memcpy(env_buf[0..18], "AGAVE_VISION_DEBUG");
+            break :blk std.c.getenv(@ptrCast(env_buf[0..18 :0])) != null;
+        };
 
         var self = VisionEncoder{
             .debug = vision_debug,
@@ -466,15 +471,16 @@ pub const VisionEncoder = struct {
     /// Only called when self.debug is true.
     fn dumpBuf(self: *const VisionEncoder, filename: []const u8, data: []const f32) void {
         _ = self;
-        const file = std.fs.cwd().createFile(filename, .{}) catch |err| {
+        const fd = std.posix.openat(std.posix.AT.FDCWD, filename, .{
+            .ACCMODE = .RDWR,
+            .CREAT = true,
+        }, 0o644) catch |err| {
             std.log.warn("vision debug: failed to create {s}: {s}", .{ filename, @errorName(err) });
             return;
         };
-        defer file.close();
+        defer _ = std.c.close(fd);
         const bytes: []const u8 = @as([*]const u8, @ptrCast(data.ptr))[0 .. data.len * @sizeOf(f32)];
-        file.writeAll(bytes) catch |err| {
-            std.log.warn("vision debug: failed to write {s}: {s}", .{ filename, @errorName(err) });
-        };
+        _ = std.c.write(fd, bytes.ptr, bytes.len);
         std.log.info("vision debug: dumped {s} ({d} floats, {d} bytes)", .{ filename, data.len, bytes.len });
     }
 

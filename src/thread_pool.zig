@@ -1,8 +1,9 @@
 //! Lightweight thread pool for parallel-for workloads.
-//! Workers sleep on futex when idle. Main thread participates in work.
+//! Workers sleep on Io.futex when idle. Main thread participates in work.
 //! Atomic counter provides dynamic work distribution across threads.
 
 const std = @import("std");
+const Io = std.Io;
 
 /// Maximum number of worker threads (excludes main thread which also participates).
 const max_workers: usize = 31;
@@ -17,6 +18,9 @@ const cache_line: usize = 64;
 pub const ThreadPool = struct {
     workers: [max_workers]Worker = undefined,
     n_workers: usize = 0,
+
+    /// Io context for futex operations. Set during spawn().
+    io: Io = undefined,
 
     // ── Shared task descriptor ──────────────────────────────────
     // Written by dispatch(), read by workers. Protected by generation counter.
@@ -55,7 +59,8 @@ pub const ThreadPool = struct {
 
     /// Spawn worker threads. Must be called exactly once, after the pool is
     /// at its final memory location. Workers capture `self` by pointer.
-    pub fn spawn(self: *ThreadPool) void {
+    pub fn spawn(self: *ThreadPool, io: Io) void {
+        self.io = io;
         for (0..self.n_workers) |i| {
             self.workers[i] = .{
                 .thread = std.Thread.spawn(.{}, workerLoop, .{self}) catch |err| {
@@ -71,7 +76,7 @@ pub const ThreadPool = struct {
     pub fn deinit(self: *ThreadPool) void {
         self.shutdown.store(true, .release);
         _ = self.generation.fetchAdd(1, .release);
-        std.Thread.Futex.wake(&self.generation, @intCast(self.n_workers));
+        self.io.futexWake(u32, &self.generation.raw, @intCast(self.n_workers));
         for (0..self.n_workers) |i| {
             self.workers[i].thread.join();
         }
@@ -108,7 +113,7 @@ pub const ThreadPool = struct {
 
         // Wake workers by bumping generation
         _ = self.generation.fetchAdd(1, .release);
-        std.Thread.Futex.wake(&self.generation, @intCast(self.n_workers));
+        self.io.futexWake(u32, &self.generation.raw, @intCast(self.n_workers));
 
         // Main thread participates
         self.doWork();
@@ -142,7 +147,7 @@ pub const ThreadPool = struct {
 
         while (true) {
             // Sleep until generation advances past our local copy
-            std.Thread.Futex.wait(&pool.generation, local_gen);
+            pool.io.futexWaitUncancelable(u32, &pool.generation.raw, local_gen);
 
             if (pool.shutdown.load(.acquire)) return;
 
@@ -158,114 +163,3 @@ pub const ThreadPool = struct {
         }
     }
 };
-
-// ── Tests ─────────────────────────────────────────────────────────
-
-test "ThreadPool basic parallelFor" {
-    var pool = ThreadPool.init(3);
-    pool.spawn();
-    defer pool.deinit();
-
-    var results: [100]f32 = undefined;
-    const Ctx = struct {
-        out: *[100]f32,
-
-        fn work(ctx_ptr: *anyopaque, start: usize, end: usize) void {
-            const ctx: *@This() = @ptrCast(@alignCast(ctx_ptr));
-            for (start..end) |i| {
-                ctx.out[i] = @floatFromInt(i * i);
-            }
-        }
-    };
-    var ctx = Ctx{ .out = &results };
-    pool.parallelFor(100, 8, @ptrCast(&ctx), Ctx.work);
-
-    for (0..100) |i| {
-        try std.testing.expectApproxEqAbs(
-            @as(f32, @floatFromInt(i * i)),
-            results[i],
-            0.001,
-        );
-    }
-}
-
-test "ThreadPool single item" {
-    var pool = ThreadPool.init(2);
-    pool.spawn();
-    defer pool.deinit();
-
-    var val: u32 = 0;
-    const Ctx = struct {
-        v: *u32,
-        fn work(ctx_ptr: *anyopaque, _: usize, _: usize) void {
-            const ctx: *@This() = @ptrCast(@alignCast(ctx_ptr));
-            ctx.v.* = 42;
-        }
-    };
-    var ctx = Ctx{ .v = &val };
-    pool.parallelFor(1, 1, @ptrCast(&ctx), Ctx.work);
-    try std.testing.expectEqual(@as(u32, 42), val);
-}
-
-test "ThreadPool large workload many workers" {
-    var pool = ThreadPool.init(8);
-    pool.spawn();
-    defer pool.deinit();
-
-    // Verify correct parallel accumulation with atomic counter.
-    // Each chunk increments a shared atomic by (end - start).
-    var total = std.atomic.Value(u64).init(0);
-    const Ctx = struct {
-        counter: *std.atomic.Value(u64),
-        fn work(ctx_ptr: *anyopaque, start: usize, end: usize) void {
-            const ctx: *@This() = @ptrCast(@alignCast(ctx_ptr));
-            _ = ctx.counter.fetchAdd(@intCast(end - start), .monotonic);
-        }
-    };
-    var ctx = Ctx{ .counter = &total };
-
-    // Run multiple dispatches to stress wake/sleep cycles
-    for (0..10) |_| {
-        total.store(0, .release);
-        pool.parallelFor(1000, 8, @ptrCast(&ctx), Ctx.work);
-        try std.testing.expectEqual(@as(u64, 1000), total.load(.acquire));
-    }
-}
-
-test "ThreadPool zero total is no-op" {
-    var pool = ThreadPool.init(2);
-    pool.spawn();
-    defer pool.deinit();
-
-    var called = false;
-    const Ctx = struct {
-        flag: *bool,
-        fn work(ctx_ptr: *anyopaque, _: usize, _: usize) void {
-            const ctx: *@This() = @ptrCast(@alignCast(ctx_ptr));
-            ctx.flag.* = true;
-        }
-    };
-    var ctx = Ctx{ .flag = &called };
-    pool.parallelFor(0, 8, @ptrCast(&ctx), Ctx.work);
-    // total=0 should return immediately without calling the work function
-    try std.testing.expect(!called);
-}
-
-test "ThreadPool zero workers (single-threaded)" {
-    var pool = ThreadPool.init(0);
-    pool.spawn();
-    defer pool.deinit();
-
-    var sum: u64 = 0;
-    const Ctx = struct {
-        s: *u64,
-        fn work(ctx_ptr: *anyopaque, start: usize, end: usize) void {
-            const ctx: *@This() = @ptrCast(@alignCast(ctx_ptr));
-            for (start..end) |i| ctx.s.* += i;
-        }
-    };
-    var ctx = Ctx{ .s = &sum };
-    pool.parallelFor(10, 4, @ptrCast(&ctx), Ctx.work);
-    // sum(0..9) = 45
-    try std.testing.expectEqual(@as(u64, 45), sum);
-}

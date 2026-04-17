@@ -886,20 +886,24 @@ pub const Qwen35Model = struct {
         const uw = self.fmt.layerTensor(li, "ffn_up.weight") orelse return error.MissingTensor;
         if (self.megakernel_enabled and (gw.dtype == .q8_0 or gw.dtype == .q4_k or gw.dtype == .q4_0 or gw.dtype == .q5_k or gw.dtype == .q6_k)) {
             // Fused: gate GEMV + up GEMV + SiLU*mul in a single dispatch (3→1)
+            // Use inline else to avoid compiling Metal-specific code on Linux
             switch (self.be) {
-                .metal => |be| switch (gw.dtype) {
-                    .q8_0 => be.fusedFfnGateUpSiluQ8(self.hidden2.ptr, gw.data_ptr, uw.data_ptr, self.ff_buf1.ptr, ff, e),
-                    .q4_k => be.fusedFfnGateUpSiluQ4K(self.hidden2.ptr, gw.data_ptr, uw.data_ptr, self.ff_buf1.ptr, ff, e),
-                    .q4_0 => be.fusedFfnGateUpSiluQ40(self.hidden2.ptr, gw.data_ptr, uw.data_ptr, self.ff_buf1.ptr, ff, e),
-                    .q5_k => be.fusedFfnGateUpSiluQ5K(self.hidden2.ptr, gw.data_ptr, uw.data_ptr, self.ff_buf1.ptr, ff, e),
-                    .q6_k => be.fusedFfnGateUpSiluQ6K(self.hidden2.ptr, gw.data_ptr, uw.data_ptr, self.ff_buf1.ptr, ff, e),
-                    else => unreachable,
+                inline else => |be| {
+                    if (comptime @hasDecl(@TypeOf(be.*), "fusedFfnGateUpSiluQ8")) {
+                        switch (gw.dtype) {
+                            .q8_0 => be.fusedFfnGateUpSiluQ8(self.hidden2.ptr, gw.data_ptr, uw.data_ptr, self.ff_buf1.ptr, ff, e),
+                            .q4_k => if (comptime @hasDecl(@TypeOf(be.*), "fusedFfnGateUpSiluQ4K"))
+                                be.fusedFfnGateUpSiluQ4K(self.hidden2.ptr, gw.data_ptr, uw.data_ptr, self.ff_buf1.ptr, ff, e),
+                            .q5_k => if (comptime @hasDecl(@TypeOf(be.*), "fusedFfnGateUpSiluQ5K"))
+                                be.fusedFfnGateUpSiluQ5K(self.hidden2.ptr, gw.data_ptr, uw.data_ptr, self.ff_buf1.ptr, ff, e),
+                            .q6_k => if (comptime @hasDecl(@TypeOf(be.*), "fusedFfnGateUpSiluQ6K"))
+                                be.fusedFfnGateUpSiluQ6K(self.hidden2.ptr, gw.data_ptr, uw.data_ptr, self.ff_buf1.ptr, ff, e),
+                            .q4_0 => if (comptime @hasDecl(@TypeOf(be.*), "fusedFfnGateUpSiluQ40"))
+                                be.fusedFfnGateUpSiluQ40(self.hidden2.ptr, gw.data_ptr, uw.data_ptr, self.ff_buf1.ptr, ff, e),
+                            else => {},
+                        }
+                    }
                 },
-                .cuda => |be| switch (gw.dtype) {
-                    .q8_0 => be.fusedFfnGateUpSiluQ8(self.hidden2.ptr, gw.data_ptr, uw.data_ptr, self.ff_buf1.ptr, ff, e),
-                    else => @panic("CUDA fused FFN: only Q8_0 supported"),
-                },
-                else => @panic("megakernel only supported on Metal/CUDA"),
             }
         } else {
             // Standard path: 3 dispatches (gate GEMV + up GEMV + siluMul)

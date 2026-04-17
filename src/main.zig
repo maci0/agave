@@ -4,6 +4,7 @@
 //! or an HTTP server.
 
 const std = @import("std");
+const Io = std.Io;
 const clap = @import("clap");
 const backend_mod = @import("backend/backend.zig");
 const format_mod = @import("format/format.zig");
@@ -37,8 +38,47 @@ const TieredKvCache = @import("kvcache/tiered.zig").TieredKvCache;
 const pull = @import("pull.zig");
 const image = @import("image.zig");
 
-const stdout = std.fs.File.stdout();
-const stderr = std.fs.File.stderr();
+/// Standard I/O file handles via std.Io.File (Zig 0.16 idiom).
+const stdout_file = Io.File.stdout();
+const stderr_file = Io.File.stderr();
+const stdin_file = Io.File.stdin();
+
+/// Millisecond timestamp from the Io clock (Zig 0.16 idiom).
+fn milliTimestamp(io: Io) i64 {
+    return Io.Clock.real.now(io).toMilliseconds();
+}
+
+/// Nanosecond timestamp from the Io clock (Zig 0.16 idiom).
+fn nanoTimestamp(io: Io) i96 {
+    return Io.Clock.real.now(io).toNanoseconds();
+}
+
+/// Read all piped stdin into an allocated buffer.
+fn readStdinAll(allocator: std.mem.Allocator, max_size: usize) ?[]const u8 {
+    var buf = std.ArrayList(u8).empty;
+    var read_buf: [4096]u8 = undefined;
+    while (true) {
+        const n = std.posix.read(stdin_file.handle, &read_buf) catch break;
+        if (n == 0) break;
+        if (buf.items.len + n > max_size) {
+            eprint("Error: piped input exceeds 1 MB limit\n", .{});
+            buf.deinit(allocator);
+            std.process.exit(1);
+        }
+        buf.appendSlice(allocator, read_buf[0..n]) catch {
+            buf.deinit(allocator);
+            return null;
+        };
+    }
+    if (buf.items.len == 0) {
+        buf.deinit(allocator);
+        return null;
+    }
+    return buf.toOwnedSlice(allocator) catch {
+        buf.deinit(allocator);
+        return null;
+    };
+}
 
 const version = display_mod.version;
 
@@ -102,15 +142,23 @@ var g_quiet: bool = false;
 var g_tty: bool = true;
 var g_debug: bool = false;
 var g_verbose: bool = false;
+/// Global Io instance, set once from std.process.Init in main().
+var g_io: Io = undefined;
+/// Global args, set once from std.process.Init in main().
+var init_args: std.process.Args = undefined;
+/// Global environment map, set once from std.process.Init in main().
+var g_environ: *std.process.Environ.Map = undefined;
 
 fn print(comptime fmt: []const u8, args: anytype) void {
     var buf: [print_buf_size]u8 = undefined;
-    stdout.writeAll(std.fmt.bufPrint(&buf, fmt, args) catch return) catch {};
+    const text = std.fmt.bufPrint(&buf, fmt, args) catch return;
+    _ = std.c.write(stdout_file.handle, text.ptr, text.len);
 }
 
 fn eprint(comptime fmt: []const u8, args: anytype) void {
     var buf: [print_buf_size]u8 = undefined;
-    stderr.writeAll(std.fmt.bufPrint(&buf, fmt, args) catch return) catch {};
+    const text = std.fmt.bufPrint(&buf, fmt, args) catch return;
+    _ = std.c.write(stderr_file.handle, text.ptr, text.len);
 }
 
 /// Debug output. Only printed when --debug is active.
@@ -165,7 +213,7 @@ const warmup_bar_width: u32 = 30;
 
 /// Preload all mmap'd model data into RAM with progress bar.
 fn preloadModel(gguf: ?*GGUFFile, st: ?*SafeTensorsDir, quiet: bool, tty: bool, total_bytes: usize) u64 {
-    const start = std.time.milliTimestamp();
+    const start = milliTimestamp(g_io);
     if (quiet or (gguf == null and st == null)) {
         // Still preload, just don't show progress
         if (gguf) |g| preloadRegion(g.mapped_data);
@@ -243,7 +291,7 @@ fn preloadRegionProgress(data: []align(std.heap.page_size_min) const u8, loaded:
             else
                 std.fmt.bufPrint(buf[pos..], "loading {d:.1} {s} ({d}%)", .{ fsize.val, fsize.unit, pct }) catch "";
             pos += text.len;
-            stderr.writeAll(buf[0..pos]) catch {};
+            _ = std.c.write(stderr_file.handle, buf[0..pos].ptr, pos);
         }
     }
 
@@ -374,22 +422,18 @@ const CliArgs = struct {
 /// Check if the first positional arg is a subcommand (e.g. "pull").
 /// Returns true if a subcommand was handled (caller should return).
 fn checkSubcommand(allocator: std.mem.Allocator) bool {
-    var args_iter = std.process.argsWithAllocator(allocator) catch {
-        eprint("Error: out of memory parsing arguments\n", .{});
-        return false;
-    };
-    defer args_iter.deinit();
+    var args_iter = init_args.iterate();
     _ = args_iter.next(); // skip argv[0]
 
     const first = args_iter.next() orelse return false;
     if (std.mem.eql(u8, first, "pull")) {
-        const exit_code = pull.run(allocator);
+        const exit_code = pull.run(allocator, init_args, g_io);
         if (exit_code != 0) std.process.exit(exit_code);
         return true;
     }
     if (std.mem.eql(u8, first, "calibrate")) {
         const calibrate = @import("calibrate.zig");
-        const exit_code = calibrate.run(allocator);
+        const exit_code = calibrate.run(allocator, g_io, init_args);
         if (exit_code != 0) std.process.exit(exit_code);
         return true;
     }
@@ -430,11 +474,11 @@ fn checkSubcommand(allocator: std.mem.Allocator) bool {
 
 fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
     var diag = clap.Diagnostic{};
-    var res = clap.parse(clap.Help, &cli_params, clap.parsers.default, .{
+    var res = clap.parse(clap.Help, &cli_params, clap.parsers.default, init_args, .{
         .diagnostic = &diag,
         .allocator = allocator,
     }) catch |e| {
-        diag.reportToFile(stderr, e) catch {};
+        diag.reportToFile(g_io, stderr_file, e) catch {};
         eprint("Run 'agave --help' for more information.\n", .{});
         std.process.exit(1);
     };
@@ -452,7 +496,7 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
     }
 
     // Auto-detect TTY: disable color when stdout is not a terminal
-    g_tty = std.posix.isatty(stdout.handle);
+    g_tty = stdout_file.isTty(g_io) catch false;
     g_color = blk: {
         // --color=always|never|auto takes precedence
         if (res.args.color) |cm| {
@@ -467,7 +511,7 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
         // --no-color flag
         if (res.args.@"no-color" != 0) break :blk false;
         // NO_COLOR env var (https://no-color.org)
-        if (std.posix.getenv("NO_COLOR") != null) break :blk false;
+        if (g_environ.get("NO_COLOR") != null) break :blk false;
         // Auto: color only on TTY
         break :blk g_tty;
     };
@@ -615,7 +659,7 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
 
     // JSON mode + interactive REPL would corrupt the JSON output stream
     if (json_mode and res.args.@"model-info" == 0 and res.args.serve == 0 and positionals.len < 2) {
-        if (std.posix.isatty(std.fs.File.stdin().handle)) {
+        if ((stdin_file.isTty(g_io) catch false)) {
             eprint("Error: --json requires a prompt or --model-info\n", .{});
             eprint("  Usage: agave model.gguf --json \"prompt\"\n", .{});
             eprint("  Or: echo \"prompt\" | agave model.gguf --json\n", .{});
@@ -636,7 +680,7 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
         .system_prompt = res.args.system,
         .backend_choice = backend_choice,
         .ctx_size = res.args.@"ctx-size" orelse 0,
-        .seed = res.args.seed orelse @as(u64, @truncate(@as(u128, @bitCast(std.time.nanoTimestamp())))),
+        .seed = res.args.seed orelse @as(u64, @truncate(@as(u96, @bitCast(nanoTimestamp(g_io))))),
         .kv_type_k = blk: {
             if (res.args.@"kv-type-k") |s| break :blk kvTypeOrExit(s, "--kv-type-k");
             if (res.args.@"cache-type-k") |s| break :blk kvTypeOrExit(s, "--cache-type-k");
@@ -686,7 +730,7 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
             }
             break :blk parts;
         },
-        .api_key = res.args.@"api-key" orelse std.posix.getenv("AGAVE_API_KEY"),
+        .api_key = res.args.@"api-key" orelse g_environ.get("AGAVE_API_KEY"),
         .allow_cpu_fallback = res.args.@"allow-cpu-fallback" != 0,
         .debug = res.args.debug != 0,
         .json = json_mode,
@@ -818,13 +862,13 @@ fn printUsage() void {
         \\
         \\REPL COMMANDS:
     ++ repl_help;
-    stdout.writeAll(usage) catch {};
+    _ = std.c.write(stdout_file.handle, usage.ptr, usage.len);
 }
 
 // ── Formatting helpers ───────────────────────────────────────────
 
 fn elapsedMs(start: i64) u64 {
-    return @intCast(@max(std.time.milliTimestamp() - start, 0));
+    return @intCast(@max(milliTimestamp(g_io) - start, 0));
 }
 
 const EogTokens = struct { ids: [max_eog_ids]u32, len: usize };
@@ -866,10 +910,11 @@ fn isEogToken(token: u32, eog: anytype) bool {
 
 // ── Main ─────────────────────────────────────────────────────────
 
-pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
+pub fn main(init: std.process.Init) !void {
+    g_io = init.io;
+    init_args = init.minimal.args;
+    g_environ = init.environ_map;
+    const allocator = init.gpa;
 
     // Check for subcommands before clap parsing
     if (checkSubcommand(allocator)) return;
@@ -877,12 +922,12 @@ pub fn main() !void {
     var cli = parseCli(allocator) orelse return;
 
     // ── Load model format ────────────────────────────────────────
-    const load_start = std.time.milliTimestamp();
+    const load_start = milliTimestamp(g_io);
 
     // Detect format: directory → SafeTensors, else → GGUF
     const is_dir = blk: {
-        var dir = std.fs.cwd().openDir(cli.model_path, .{}) catch break :blk false;
-        dir.close();
+        const dir = Io.Dir.cwd().openDir(g_io, cli.model_path, .{}) catch break :blk false;
+        dir.close(g_io);
         break :blk true;
     };
 
@@ -946,7 +991,7 @@ pub fn main() !void {
 
     // ── Backend selection ─────────────────────────────────────────
     var bs = BackendState{};
-    bs.init(allocator, cli.backend_choice);
+    bs.init(allocator, cli.backend_choice, g_io);
     defer if (bs.pool) |*p| p.deinit();
     const be = bs.be;
     const be_name = bs.name;
@@ -1034,7 +1079,7 @@ pub fn main() !void {
     } else {
         // Asymmetric: show "K-type / V-type" and average bpe
         const kv_label_buf = &disp_info.kv_asym_name_buf;
-        disp_info.kv_asym_name_len = (std.fmt.bufPrint(kv_label_buf, "{s}-K / {s}-V", .{ cli.kv_type_k.name(), cli.kv_type_v.name() }) catch "").len;
+        disp_info.kv_asym_name_len = if (std.fmt.bufPrint(kv_label_buf, "{s}-K / {s}-V", .{ cli.kv_type_k.name(), cli.kv_type_v.name() })) |s| s.len else |_| 0;
         disp_info.kv_type_name = kv_label_buf[0..disp_info.kv_asym_name_len];
         disp_info.kv_bpe = (cli.kv_type_k.bitsPerElement() + cli.kv_type_v.bitsPerElement()) / 2.0;
     }
@@ -1152,15 +1197,8 @@ pub fn main() !void {
     var piped_prompt: ?[]const u8 = null;
     defer if (piped_prompt) |p| allocator.free(p);
     if (cli.prompt == null and !cli.serve) {
-        const stdin_fd = std.fs.File.stdin();
-        if (!std.posix.isatty(stdin_fd.handle)) {
-            piped_prompt = stdin_fd.readToEndAlloc(allocator, max_stdin_prompt_size) catch |e| blk: {
-                if (e == error.StreamTooLong) {
-                    eprint("Error: piped input exceeds 1 MB limit\n", .{});
-                    std.process.exit(1);
-                }
-                break :blk null;
-            };
+        if (!(stdin_file.isTty(g_io) catch false)) {
+            piped_prompt = readStdinAll(allocator, max_stdin_prompt_size);
         }
     }
 
@@ -1173,7 +1211,7 @@ pub fn main() !void {
     // Warn about piped stdin in server mode (positional prompt and --system
     // are already warned in parseCli before model loading).
     // Note: piped_prompt is only read when !cli.serve, so check isatty directly.
-    if (cli.serve and cli.prompt == null and !std.posix.isatty(std.fs.File.stdin().handle)) {
+    if (cli.serve and cli.prompt == null and !(stdin_file.isTty(g_io) catch false)) {
         eprint("Warning: piped stdin ignored in server mode (--serve)\n", .{});
     }
 
@@ -1214,12 +1252,16 @@ pub fn main() !void {
 ///
 /// Resize uses bilinear interpolation via image.resize.
 fn loadImage(allocator: std.mem.Allocator, path: []const u8, target_size: u32) ![]u8 {
-    const file = try std.fs.cwd().openFile(path, .{});
-    defer file.close();
+    const file = try Io.Dir.cwd().openFile(g_io, path, .{});
+    defer file.close(g_io);
 
     // Read entire file into memory (vision images are small, typically < 10MB)
     const max_image_file_size: usize = 64 * 1024 * 1024; // 64 MB limit
-    const file_data = try file.readToEndAlloc(allocator, max_image_file_size);
+    const file_stat = try file.stat(g_io);
+    if (file_stat.size > max_image_file_size) return error.FileTooBig;
+    const file_data = try allocator.alloc(u8, @intCast(file_stat.size));
+    errdefer allocator.free(file_data);
+    _ = try file.readPositionalAll(g_io, file_data, 0);
     defer allocator.free(file_data);
 
     const format = image.detectFormat(file_data);
@@ -1386,7 +1428,7 @@ fn initAndRun(
     const tiered_ptr: ?*TieredKvCache = if (tiered_cache_storage != null) &tiered_cache_storage.? else null;
 
     // Use ModelStorage to initialize the model without exposing concrete types.
-    const init_start = std.time.milliTimestamp();
+    const init_start = milliTimestamp(g_io);
     const eviction_budget: u32 = if (cli.kv_eviction)
         (if (cli.kv_budget > 0) cli.kv_budget else @as(u32, @intCast(cli.ctx_size * 4 / 5)))
     else
@@ -1445,36 +1487,38 @@ fn initAndRun(
     // Auto-detect mmproj file if user didn't specify one.
     // For GGUF files, check the containing directory; for SafeTensors dirs, check
     // the directory itself. Uses dirname() which returns null for bare filenames.
-    var auto_mmproj_buf: [std.fs.max_path_bytes]u8 = undefined;
+    var auto_mmproj_buf: [Io.Dir.max_path_bytes]u8 = undefined;
     var mmproj_path: ?[]const u8 = cli.mmproj;
     if (mmproj_path == null and (cli.image != null or cli.serve)) {
         const model_dir: []const u8 = blk: {
             // Check if model_path is a directory (SafeTensors)
-            var probe = std.fs.cwd().openDir(cli.model_path, .{}) catch break :blk std.fs.path.dirname(cli.model_path) orelse ".";
-            probe.close();
+            const probe_dir = Io.Dir.cwd().openDir(g_io, cli.model_path, .{}) catch break :blk Io.Dir.path.dirname(cli.model_path) orelse ".";
+            probe_dir.close(g_io);
             break :blk cli.model_path;
         };
-        var dir = std.fs.cwd().openDir(model_dir, .{ .iterate = true }) catch null;
-        if (dir) |*d| {
-            defer d.close();
-            var best: ?[]const u8 = null;
-            var iter = d.iterate();
-            while (iter.next() catch null) |entry| {
-                if (entry.kind == .file and
-                    std.mem.startsWith(u8, entry.name, "mmproj") and
-                    std.mem.endsWith(u8, entry.name, ".gguf"))
-                {
-                    // Pick first alphabetically (or first found if no best yet)
-                    if (best == null or std.mem.lessThan(u8, entry.name, best.?)) {
-                        const full = std.fmt.bufPrint(&auto_mmproj_buf, "{s}/{s}", .{ model_dir, entry.name }) catch continue;
-                        best = full;
-                    }
+        // Use Io.Dir.Reader for directory iteration (Zig 0.16 idiom)
+        const scan_dir = Io.Dir.cwd().openDir(g_io, model_dir, .{ .iterate = true }) catch Io.Dir.cwd();
+        var dir_buf: [Io.Dir.Reader.min_buffer_len]u8 align(@alignOf(usize)) = undefined;
+        var reader = Io.Dir.Reader.init(scan_dir, &dir_buf);
+        var best: ?[]const u8 = null;
+        while (true) {
+            var entries: [1]Io.Dir.Entry = undefined;
+            const n = reader.read(g_io, &entries) catch break;
+            if (n == 0) break;
+            const name = entries[0].name;
+            if (std.mem.startsWith(u8, name, "mmproj") and
+                std.mem.endsWith(u8, name, ".gguf"))
+            {
+                if (best == null or std.mem.lessThan(u8, name, best.?)) {
+                    const full = std.fmt.bufPrint(&auto_mmproj_buf, "{s}/{s}", .{ model_dir, name }) catch continue;
+                    best = full;
                 }
             }
-            if (best) |b| {
-                mmproj_path = b;
-                if (!g_quiet) eprint("vision: auto-detected {s}\n", .{std.fs.path.basename(b)});
-            }
+        }
+        if (scan_dir.handle != Io.Dir.cwd().handle) scan_dir.close(g_io);
+        if (best) |b| {
+            mmproj_path = b;
+            if (!g_quiet) eprint("vision: auto-detected {s}\n", .{Io.Dir.path.basename(b)});
         }
     }
 
@@ -1515,7 +1559,7 @@ fn initAndRun(
             // This matches llama.cpp which processes at native resolution.
             const target_size: u32 = if (ve.use_native_resolution) blk: {
                 const grid: u32 = ve.patch_size * 2; // patch_size * spatial_merge
-                const orig = image.getImageDimensions(allocator, image_path) catch break :blk ve.image_size;
+                const orig = image.getImageDimensions(allocator, g_io, image_path) catch break :blk ve.image_size;
                 const side = @max(orig.width, orig.height);
                 break :blk ((side + grid - 1) / grid) * grid;
             } else ve.image_size;
@@ -1568,6 +1612,7 @@ fn initAndRun(
             .image_pad_token_id = srv_pad_id,
             .image_start_token_id = srv_start_id,
             .image_end_token_id = srv_end_id,
+            .io = g_io,
         }) catch |e| {
             eprint("Error: server failed: {}\n", .{e});
             return false;
@@ -1703,7 +1748,7 @@ fn runRepl(
                 display.printModelInfo(minfo);
                 continue;
             } else if (std.mem.eql(u8, trimmed, "/help")) {
-                stdout.writeAll(repl_help) catch {};
+                _ = std.c.write(stdout_file.handle, repl_help.ptr, repl_help.len);
                 continue;
             } else {
                 print("Unknown command: {s} (try /help)\n", .{trimmed});
@@ -1745,7 +1790,7 @@ fn runRepl(
         // Add assistant response to history
         if (response) |text| {
             // Trim trailing whitespace from response for clean history
-            const trimmed_resp = std.mem.trimRight(u8, text, " \t\r\n");
+            const trimmed_resp = std.mem.trimEnd(u8, text, " \t\r\n");
             if (trimmed_resp.len > 0) {
                 const resp_content = allocator.dupe(u8, trimmed_resp) catch {
                     allocator.free(text);
@@ -1860,7 +1905,7 @@ fn generateAndPrintInner(
     } else text_token_ids;
 
     // Build prefill array: BOS (if needed) + prompt tokens
-    const prefill_start = std.time.milliTimestamp();
+    const prefill_start = milliTimestamp(g_io);
     if (!g_quiet and token_ids.len > prefill_progress_threshold) {
         display.showPrefillStart(token_ids.len);
     }
@@ -1916,7 +1961,7 @@ fn generateAndPrintInner(
     // Generate — stream tokens to stdout immediately.
     // Decode in small batches to balance responsiveness vs alloc count.
     // Stop early if the model enters a repetitive loop (same token 6+ times).
-    const gen_start = std.time.milliTimestamp();
+    const gen_start = milliTimestamp(g_io);
     var last = first_gen_token;
     var token_count: u32 = 0;
     var gen_ids_buf: [gen_ids_buf_size]u32 = undefined;
@@ -1986,7 +2031,7 @@ fn generateAndPrintInner(
     }
     // Ensure a trailing newline for piped output (not TTY, not JSON)
     if (!g_tty and display.mode != .json and started_output) {
-        stdout.writeAll("\n") catch {};
+        _ = std.c.write(stdout_file.handle, "\n", 1);
     }
     if (hit_eog and g_verbose) print("\n[EOG]\n", .{});
     const gen_ms = elapsedMs(gen_start);
@@ -2039,7 +2084,7 @@ fn flushTokenBatch(tok: *BpeTokenizer, tok_kind: TokenizerKind, allocator: std.m
         text = text[1..];
     }
     if (text.len > 0) started.* = true;
-    stdout.writeAll(text) catch {};
+    _ = std.c.write(stdout_file.handle, text.ptr, text.len);
 }
 
 test {
@@ -2105,8 +2150,9 @@ test {
 }
 
 test "cpu backend rms_norm via tagged union dispatch" {
+    var threaded = std.Io.Threaded.init(std.testing.allocator, .{});
     var bs = BackendState{};
-    bs.init(std.testing.allocator, .cpu);
+    bs.init(std.testing.allocator, .cpu, threaded.io());
     defer if (bs.pool) |*p| p.deinit();
     const be = bs.be;
     var input = [_]f32{ 1, 2, 3, 4 };

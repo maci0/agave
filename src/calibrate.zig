@@ -46,14 +46,21 @@ const calibration_seed: u64 = 0xCAFE_BABE_DEAD_BEEF;
 /// Number of layer-0 tensor name candidates to probe for Q weight dims.
 const max_q_tensor_probes: usize = 2;
 
-const stderr_file = std.fs.File.stderr();
-const stdout_file = std.fs.File.stdout();
+const Io = std.Io;
+
+/// Standard I/O file handles via std.Io.File (Zig 0.16 idiom).
+const stderr_file = Io.File.stderr();
+const stdout_file = Io.File.stdout();
+
+/// Module-level Io instance, set by run() or readCalFile() from caller.
+var mod_io: Io = undefined;
 
 // ── Stderr helpers ───────────────────────────────────────────────────────────
 
 fn eprint(comptime fmt: []const u8, args: anytype) void {
     var buf: [print_buf_size]u8 = undefined;
-    stderr_file.writeAll(std.fmt.bufPrint(&buf, fmt, args) catch return) catch {};
+    const text = std.fmt.bufPrint(&buf, fmt, args) catch return;
+    _ = std.c.write(stderr_file.handle, text.ptr, text.len);
 }
 
 // ── Argument parsing ─────────────────────────────────────────────────────────
@@ -70,7 +77,7 @@ const CalibrateArgs = struct {
 
 /// Print usage information to stdout.
 pub fn printUsage() void {
-    stdout_file.writeAll(
+    const usage_text =
         \\agave calibrate — Generate TriAttention calibration statistics
         \\
         \\USAGE:
@@ -103,12 +110,13 @@ pub fn printUsage() void {
         \\  agave calibrate model.gguf --tokens 2000 --output model.cal
         \\  agave calibrate ./safetensors-dir/ --output tri.cal
         \\
-    ) catch {};
+    ;
+    _ = std.c.write(stdout_file.handle, usage_text.ptr, usage_text.len);
 }
 
 /// Parse command-line arguments for the `calibrate` sub-command.
 /// Returns null if --help was requested.
-fn parseArgs(args_iter: *std.process.ArgIterator) ?CalibrateArgs {
+fn parseArgs(args_iter: *std.process.Args.Iterator) ?CalibrateArgs {
     var result = CalibrateArgs{ .model_path = "" };
     var have_model = false;
 
@@ -459,45 +467,53 @@ const CalibrationResult = struct {
 ///               [n_layers * n_q_heads * n_bands] f32 — q_expected_norm
 ///               [n_layers * n_q_heads * n_bands] f32 — concentration
 fn writeCalFile(result: *const CalibrationResult, path: []const u8) !void {
-    const file = try std.fs.cwd().createFile(path, .{});
-    defer file.close();
+    const io = mod_io;
+    const file = try Io.Dir.cwd().createFile(io, path, .{ .read = true });
+    defer file.close(io);
 
-    // Write header
-    try file.writeAll(&cal_magic);
-    try file.writeAll(std.mem.asBytes(&cal_version));
-    try file.writeAll(std.mem.asBytes(&result.n_layers));
-    try file.writeAll(std.mem.asBytes(&result.n_q_heads));
-    try file.writeAll(std.mem.asBytes(&result.head_dim));
-    try file.writeAll(std.mem.asBytes(&result.n_bands));
-    try file.writeAll(std.mem.asBytes(&result.rope_theta));
+    var offset: u64 = 0;
+    // Helper: write bytes at current offset and advance
+    const pwrite = struct {
+        fn f(fi: Io.File, iio: Io, data: []const u8, off: *u64) !void {
+            try fi.writePositionalAll(iio, data, off.*);
+            off.* += data.len;
+        }
+    }.f;
 
-    // Write data arrays
-    try file.writeAll(std.mem.sliceAsBytes(result.q_center_norm));
-    try file.writeAll(std.mem.sliceAsBytes(result.q_center_phase));
-    try file.writeAll(std.mem.sliceAsBytes(result.q_expected_norm));
-    try file.writeAll(std.mem.sliceAsBytes(result.concentration));
+    try pwrite(file, io, &cal_magic, &offset);
+    try pwrite(file, io, std.mem.asBytes(&cal_version), &offset);
+    try pwrite(file, io, std.mem.asBytes(&result.n_layers), &offset);
+    try pwrite(file, io, std.mem.asBytes(&result.n_q_heads), &offset);
+    try pwrite(file, io, std.mem.asBytes(&result.head_dim), &offset);
+    try pwrite(file, io, std.mem.asBytes(&result.n_bands), &offset);
+    try pwrite(file, io, std.mem.asBytes(&result.rope_theta), &offset);
+
+    try pwrite(file, io, std.mem.sliceAsBytes(result.q_center_norm), &offset);
+    try pwrite(file, io, std.mem.sliceAsBytes(result.q_center_phase), &offset);
+    try pwrite(file, io, std.mem.sliceAsBytes(result.q_expected_norm), &offset);
+    try pwrite(file, io, std.mem.sliceAsBytes(result.concentration), &offset);
 }
 
 /// Read calibration data from a .cal file and return TriCalibration structs
 /// for each query head. The caller owns all returned memory.
 ///
 /// Returns a slice of [n_layers * n_q_heads] TriCalibration entries.
-pub fn readCalFile(allocator: Allocator, path: []const u8) ![]kv_evict.TriCalibration {
-    const file = try std.fs.cwd().openFile(path, .{});
-    defer file.close();
+pub fn readCalFile(allocator: Allocator, io: Io, path: []const u8) ![]kv_evict.TriCalibration {
+    const file = try Io.Dir.cwd().openFile(io, path, .{});
+    defer file.close(io);
 
     // Read and validate header
     var magic: [4]u8 = undefined;
-    const magic_n = try file.readAll(&magic);
+    const magic_n = try file.readPositionalAll(io, &magic, 0);
     if (magic_n < 4 or !std.mem.eql(u8, &magic, &cal_magic)) return error.InvalidFormat;
 
     var version_buf: [4]u8 = undefined;
-    _ = try file.readAll(&version_buf);
+    _ = try file.readPositionalAll(io, &version_buf, 4);
     const version = std.mem.bytesAsValue(u32, &version_buf).*;
     if (version != cal_version) return error.UnsupportedVersion;
 
     var header_buf: [20]u8 = undefined;
-    _ = try file.readAll(&header_buf);
+    _ = try file.readPositionalAll(io, &header_buf, 8);
     const n_layers = std.mem.bytesAsValue(u32, header_buf[0..4]).*;
     const n_q_heads = std.mem.bytesAsValue(u32, header_buf[4..8]).*;
     _ = std.mem.bytesAsValue(u32, header_buf[8..12]).*; // head_dim
@@ -507,22 +523,25 @@ pub fn readCalFile(allocator: Allocator, path: []const u8) ![]kv_evict.TriCalibr
     const total_heads: usize = @as(usize, n_layers) * n_q_heads;
     const band_count: usize = total_heads * n_bands;
 
-    // Read data arrays
+    // Read data arrays (header is 28 bytes: magic(4) + version(4) + fields(20))
+    const data_offset: u64 = 28;
+    const array_bytes = band_count * @sizeOf(f32);
+
     var q_center_norm = try allocator.alloc(f32, band_count);
     errdefer allocator.free(q_center_norm);
-    _ = try file.readAll(std.mem.sliceAsBytes(q_center_norm));
+    _ = try file.readPositionalAll(io, std.mem.sliceAsBytes(q_center_norm), data_offset);
 
     var q_center_phase = try allocator.alloc(f32, band_count);
     errdefer allocator.free(q_center_phase);
-    _ = try file.readAll(std.mem.sliceAsBytes(q_center_phase));
+    _ = try file.readPositionalAll(io, std.mem.sliceAsBytes(q_center_phase), data_offset + array_bytes);
 
     var q_expected_norm = try allocator.alloc(f32, band_count);
     errdefer allocator.free(q_expected_norm);
-    _ = try file.readAll(std.mem.sliceAsBytes(q_expected_norm));
+    _ = try file.readPositionalAll(io, std.mem.sliceAsBytes(q_expected_norm), data_offset + array_bytes * 2);
 
     var concentration_data = try allocator.alloc(f32, band_count);
     errdefer allocator.free(concentration_data);
-    _ = try file.readAll(std.mem.sliceAsBytes(concentration_data));
+    _ = try file.readPositionalAll(io, std.mem.sliceAsBytes(concentration_data), data_offset + array_bytes * 3);
 
     // Compute RoPE frequencies
     const head_dim: usize = @as(usize, n_bands) * 2;
@@ -552,8 +571,9 @@ pub fn readCalFile(allocator: Allocator, path: []const u8) ![]kv_evict.TriCalibr
 ///
 /// Parses arguments, loads the model format, runs calibration, and writes results.
 /// Returns exit code (0 = success, 1 = error).
-pub fn run(allocator: Allocator) u8 {
-    var args_iter = std.process.args();
+pub fn run(allocator: Allocator, io: Io, process_args: std.process.Args) u8 {
+    mod_io = io;
+    var args_iter = process_args.iterate();
     _ = args_iter.skip(); // Skip program name (argv[0]).
     _ = args_iter.skip(); // Skip "calibrate" subcommand.
 
@@ -562,8 +582,8 @@ pub fn run(allocator: Allocator) u8 {
 
     // Detect format: directory -> SafeTensors, else -> GGUF
     const is_dir = blk: {
-        var dir = std.fs.cwd().openDir(args.model_path, .{}) catch break :blk false;
-        dir.close();
+        const dir = Io.Dir.cwd().openDir(mod_io, args.model_path, .{}) catch break :blk false;
+        dir.close(mod_io);
         break :blk true;
     };
 
@@ -634,7 +654,7 @@ pub fn run(allocator: Allocator) u8 {
 
     // Initialize backend (CPU only — calibration doesn't need GPU)
     var bs = BackendState{};
-    bs.init(allocator, .cpu);
+    bs.init(allocator, .cpu, io);
     defer if (bs.pool) |*p| p.deinit();
     const be = bs.be;
 
@@ -757,6 +777,7 @@ test "fillRandomGaussian produces reasonable values" {
 
 test "writeCalFile and readCalFile roundtrip" {
     const allocator = std.testing.allocator;
+    mod_io = std.testing.io;
 
     // Create test calibration data
     const n_bands: usize = 2;
@@ -811,10 +832,10 @@ test "writeCalFile and readCalFile roundtrip" {
         std.debug.print("writeCalFile failed: {}\n", .{e});
         return error.TestFailed;
     };
-    defer std.fs.cwd().deleteFile(tmp_path) catch {};
+    defer Io.Dir.cwd().deleteFile(std.testing.io, tmp_path) catch {};
 
     // Read back and verify
-    var calibrations = try readCalFile(allocator, tmp_path);
+    var calibrations = try readCalFile(allocator, std.testing.io, tmp_path);
     defer {
         // Free the backing arrays (they are shared across calibrations)
         if (calibrations.len > 0) {
