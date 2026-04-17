@@ -319,6 +319,7 @@ const cli_params = clap.parseParamsComptime(
     \\-d, --debug                Enable debug logging (token IDs, layer timing); implies --verbose.
     \\    --json                 Output results as JSON (implies --quiet).
     \\    --model-info           Print model metadata and exit (supports --json).
+    \\    --megakernel           Use fused megakernel (single GPU dispatch per token).
     \\    --profile              Profile per-op timing (halves throughput).
     \\<str>...
     \\
@@ -364,6 +365,8 @@ const CliArgs = struct {
     mmproj: ?[]const u8 = null,
     /// Path to image file (PNG or PPM P6) for multimodal inference.
     image: ?[]const u8 = null,
+    /// Enable fused megakernel for single-dispatch forward pass.
+    megakernel: bool = false,
     /// Tracks which CLI args the user explicitly set (so recipes don't override them).
     user_set: Recipe.Overrides = .{},
 };
@@ -689,6 +692,7 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
         .json = json_mode,
         .model_info = res.args.@"model-info" != 0,
         .profile = res.args.profile != 0,
+        .megakernel = res.args.megakernel != 0,
         .use_mmap = res.args.mmap != 0,
         .prefill_batch_size = res.args.@"prefill-batch-size" orelse default_chunk_size,
         .mmproj = res.args.mmproj,
@@ -1399,6 +1403,28 @@ fn initAndRun(
     mdl.setPool(pool);
     mdl.fixBlockAllocator();
     mdl.setChunkSize(cli.prefill_batch_size);
+
+    // Megakernel mode: validate support and enable
+    if (cli.megakernel) {
+        const supported = switch (be) {
+            .metal => switch (arch) {
+                .qwen35, .gemma4, .gemma3, .glm4 => true,
+                else => false,
+            },
+            .cuda => switch (arch) {
+                .qwen35 => true,
+                else => false,
+            },
+            else => false,
+        };
+        if (!supported) {
+            eprint("Error: --megakernel not supported for {s} on this backend.\n" ++
+                "Supported: qwen35/gemma4/gemma3 on Metal, qwen35 on CUDA. See docs/MEGAKERNEL.md\n", .{@tagName(arch)});
+            return false;
+        }
+        mdl.setMegakernel(true);
+    }
+
     const init_ms = elapsedMs(init_start);
     if (!g_quiet) {
         var li = load_info_in;

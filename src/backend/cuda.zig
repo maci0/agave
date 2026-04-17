@@ -188,12 +188,16 @@ pub const CudaBackend = struct {
     fn_gemv_mlx_q6: CUfunction = null,
     fn_gemv_mlx_q8: CUfunction = null,
     fn_gemv_mxfp4_st: CUfunction = null,
+    fn_fused_ffn_q8: CUfunction = null,
     fn_sdpa: CUfunction = null,
     fn_sdpa_turbo: CUfunction = null,
     fn_sdpa_prefill: CUfunction = null,
     fn_gemm_q8_0: CUfunction = null,
     fn_rms_norm_batched: CUfunction = null,
     fn_rope_batched: CUfunction = null,
+    fn_mega_qwen35_q8: CUfunction = null,
+    fn_mega_gemma_q4k: CUfunction = null,
+    fn_mega_gemma_q8: CUfunction = null,
 
     /// CPU backend for ops where CPU is genuinely faster than GPU dispatch (embLookup).
     cpu: CpuBackend = .{},
@@ -238,7 +242,7 @@ pub const CudaBackend = struct {
     kv_dev_cache: std.AutoHashMap(usize, KvDevCache) = undefined,
 
     /// Number of PTX kernels loaded at init.
-    pub const n_kernels: u32 = 38;
+    pub const n_kernels: u32 = 41;
 
     /// Library name loaded via dlopen at init.
     pub const lib_name = cuda_lib_name;
@@ -412,12 +416,16 @@ pub const CudaBackend = struct {
         self.fn_gemv_mlx_q6 = try self.getFunction("gemv_mlx_q6_kernel");
         self.fn_gemv_mlx_q8 = try self.getFunction("gemv_mlx_q8_kernel");
         self.fn_gemv_mxfp4_st = try self.getFunction("gemv_mxfp4_st_kernel");
+        self.fn_fused_ffn_q8 = try self.getFunction("fused_ffn_gate_up_silu_q8_0_kernel");
         self.fn_sdpa = try self.getFunction("sdpa_kernel");
         self.fn_sdpa_turbo = try self.getFunction("sdpa_turbo_kernel");
         self.fn_sdpa_prefill = try self.getFunction("sdpa_prefill_kernel");
         self.fn_gemm_q8_0 = try self.getFunction("gemm_q8_0_kernel");
         self.fn_rms_norm_batched = try self.getFunction("rms_norm_batched_kernel");
         self.fn_rope_batched = try self.getFunction("rope_batched_kernel");
+        self.fn_mega_qwen35_q8 = try self.getFunction("megakernel_qwen35_q8_kernel");
+        self.fn_mega_gemma_q4k = try self.getFunction("megakernel_gemma_q4k_kernel");
+        self.fn_mega_gemma_q8 = try self.getFunction("megakernel_gemma_q8_kernel");
 
         return self;
     }
@@ -695,9 +703,10 @@ pub const CudaBackend = struct {
             @ptrCast(&n_u32),
             @ptrCast(&k_u32),
         };
-        // Q4_K/Q5_K/Q6_K use NR=2 (2 rows per block); others use 1 row per block.
+        // Multi-row kernels: Q4_K/Q5_K/Q6_K use NR=2, Q4_0/Q8_0 use NR=4.
         const grid_size: u32 = switch (w.dtype) {
             .q4_k, .q5_k, .q6_k => @intCast((n + 1) / 2),
+            .q4_0, .q8_0 => @intCast((n + 3) / 4),
             else => @intCast(n),
         };
         self.launch(func, grid_size, block_size, reduction_smem, &params);
@@ -739,6 +748,211 @@ pub const CudaBackend = struct {
         var params = [_]?*anyopaque{ @ptrCast(&d_a), @ptrCast(&d_b), @ptrCast(&d_out), @ptrCast(&n_u32) };
         const grid: u32 = @intCast((n + block_size - 1) / block_size);
         self.launch(self.fn_gelu_mul, grid, block_size, 0, &params);
+    }
+
+    // ── Fused FFN Gate+Up+SiLU (megakernel) ──────────────────────
+
+    /// Fused FFN: silu(W_gate @ x) * (W_up @ x) in a single dispatch.
+    /// Q8_0 weights. x is f32[k], output is f32[n_ff].
+    pub fn fusedFfnGateUpSiluQ8(
+        self: *CudaBackend,
+        x: [*]const f32,
+        w_gate: [*]const u8,
+        w_up: [*]const u8,
+        ff_out: [*]f32,
+        n_ff: usize,
+        n_embd: usize,
+    ) void {
+        const w_bytes = weightBytes(.q8_0, n_ff, n_embd);
+        var d_x = self.getInputBuf(x, n_embd * @sizeOf(f32));
+        var d_gate = self.getOrUpload(w_gate, w_bytes);
+        var d_up = self.getOrUpload(w_up, w_bytes);
+        var d_out = self.getOutputBuf(ff_out, n_ff * @sizeOf(f32));
+        var nf: u32 = @intCast(n_ff);
+        var ne: u32 = @intCast(n_embd);
+        var params = [_]?*anyopaque{
+            @ptrCast(&d_x), @ptrCast(&d_gate), @ptrCast(&d_up),
+            @ptrCast(&d_out), @ptrCast(&nf), @ptrCast(&ne),
+        };
+        self.launch(self.fn_fused_ffn_q8, @intCast(n_ff), block_size, reduction_smem, &params);
+    }
+
+    // ── True Megakernel Dispatch ──────────────────────────────────
+
+    /// Dispatch the Qwen 3.5 Q8_0 true megakernel: single launch for all layers.
+    /// Requires cooperative launch (all blocks co-resident for grid sync).
+    /// weights: mmap'd GGUF weight base pointer.
+    /// layer_offsets: [n_layers * 20 * u64] byte offsets per layer.
+    /// kv_keys/kv_values: KV cache buffers (Phase 2).
+    /// hidden: [n_embd] f32 input/output hidden state.
+    /// scratch: [scratch_size] f32 intermediate buffers.
+    /// sync_ctrs: [32] u32 atomic grid sync counters (zero-initialized).
+    /// ss_scratch: [1] u32 sum-of-squares accumulator (zero-initialized).
+    pub fn dispatchMegakernelQwen35Q8(
+        self: *CudaBackend,
+        weights: [*]const u8,
+        layer_offsets: [*]const u8,
+        kv_keys: [*]f32,
+        kv_values: [*]f32,
+        hidden: [*]f32,
+        scratch: [*]f32,
+        sync_ctrs: [*]u32,
+        ss_scratch: *u32,
+        n_layers: u32,
+        n_embd: u32,
+        n_head: u32,
+        n_kv: u32,
+        head_dim: u32,
+        n_ff: u32,
+        rope_dim: u32,
+        rope_theta: f32,
+        rms_eps: f32,
+        full_attn_interval: u32,
+        max_seq_len: u32,
+        seq_pos: u32,
+        n_blocks: u32,
+    ) void {
+        // Weight buffer: register entire mmap'd weight file for GPU access.
+        // On UMA this is zero-copy; on discrete GPU this uploads once and caches.
+        // We use a large size estimate since the megakernel accesses all layer weights.
+        var d_weights = self.getOrUpload(weights, n_layers * n_ff * n_embd);
+        var d_layer_offsets = self.getInputBuf(layer_offsets, n_layers * 160); // 20 fields * 8 bytes
+        var d_kv_keys = self.getInPlaceBuf(kv_keys, n_layers * max_seq_len * n_kv * head_dim * @sizeOf(f32));
+        var d_kv_values = self.getInPlaceBuf(kv_values, n_layers * max_seq_len * n_kv * head_dim * @sizeOf(f32));
+        var d_hidden = self.getInPlaceBuf(hidden, n_embd * @sizeOf(f32));
+
+        // Scratch: hidden2 + ff_gate + ff_up + qkv_buf + ss_scratch
+        const qkv_size = n_head * head_dim * 2 + n_kv * head_dim * 2;
+        const scratch_elems = n_embd + 2 * n_ff + qkv_size + 1;
+        var d_scratch = self.getOutputBuf(scratch, scratch_elems * @sizeOf(f32));
+
+        // Sync counters: 32 u32 values, zero-initialized
+        var d_sync_ctrs = self.getInPlaceBuf(sync_ctrs, 32 * @sizeOf(u32));
+
+        // SS scratch: single u32 for sum-of-squares accumulation
+        var d_ss_scratch = self.getInPlaceBuf(ss_scratch, @sizeOf(u32));
+
+        var p_n_layers: u32 = n_layers;
+        var p_n_embd: u32 = n_embd;
+        var p_n_head: u32 = n_head;
+        var p_n_kv: u32 = n_kv;
+        var p_head_dim: u32 = head_dim;
+        var p_n_ff: u32 = n_ff;
+        var p_rope_dim: u32 = rope_dim;
+        var p_rope_theta: f32 = rope_theta;
+        var p_rms_eps: f32 = rms_eps;
+        var p_full_attn_interval: u32 = full_attn_interval;
+        var p_max_seq_len: u32 = max_seq_len;
+        var p_seq_pos: u32 = seq_pos;
+
+        var params = [_]?*anyopaque{
+            @ptrCast(&d_weights),
+            @ptrCast(&d_layer_offsets),
+            @ptrCast(&d_kv_keys),
+            @ptrCast(&d_kv_values),
+            @ptrCast(&d_hidden),
+            @ptrCast(&d_scratch),
+            @ptrCast(&d_sync_ctrs),
+            @ptrCast(&d_ss_scratch),
+            @ptrCast(&p_n_layers),
+            @ptrCast(&p_n_embd),
+            @ptrCast(&p_n_head),
+            @ptrCast(&p_n_kv),
+            @ptrCast(&p_head_dim),
+            @ptrCast(&p_n_ff),
+            @ptrCast(&p_rope_dim),
+            @ptrCast(&p_rope_theta),
+            @ptrCast(&p_rms_eps),
+            @ptrCast(&p_full_attn_interval),
+            @ptrCast(&p_max_seq_len),
+            @ptrCast(&p_seq_pos),
+        };
+
+        // Launch: n_blocks blocks x 256 threads, shared memory for block reductions.
+        // All blocks must be co-resident for grid sync to work.
+        // cuLaunchKernel is used (standard launch); cooperative launch
+        // (cuLaunchCooperativeKernel) would be preferred but requires
+        // additional driver API symbol. Standard launch works when
+        // n_blocks <= device occupancy limit (typical for models < 10K blocks).
+        self.launch(self.fn_mega_qwen35_q8, n_blocks, block_size, reduction_smem, &params);
+    }
+
+    /// Dispatch the Gemma 3/4 Q4_K true megakernel: single launch for all layers.
+    /// Same cooperative grid sync pattern as Qwen 3.5.
+    pub fn dispatchMegakernelGemmaQ4K(
+        self: *CudaBackend,
+        weights: [*]const u8,
+        layer_offsets: [*]const u8,
+        kv_keys: [*]f32,
+        kv_values: [*]f32,
+        hidden: [*]f32,
+        scratch: [*]f32,
+        sync_ctrs: [*]u32,
+        ss_scratch: *u32,
+        n_layers: u32,
+        n_embd: u32,
+        n_head: u32,
+        n_kv: u32,
+        head_dim: u32,
+        n_ff: u32,
+        rope_dim: u32,
+        rope_theta: f32,
+        rms_eps: f32,
+        embd_scale: f32,
+        max_seq_len: u32,
+        seq_pos: u32,
+        n_blocks: u32,
+    ) void {
+        var d_weights = self.getOrUpload(weights, n_layers * n_ff * n_embd);
+        var d_layer_offsets = self.getInputBuf(layer_offsets, n_layers * 160);
+        var d_kv_keys = self.getInPlaceBuf(kv_keys, n_layers * max_seq_len * n_kv * head_dim * @sizeOf(f32));
+        var d_kv_values = self.getInPlaceBuf(kv_values, n_layers * max_seq_len * n_kv * head_dim * @sizeOf(f32));
+        var d_hidden = self.getInPlaceBuf(hidden, n_embd * @sizeOf(f32));
+
+        const qkv_size = (n_head + 2 * n_kv) * head_dim;
+        const scratch_elems = n_embd + 2 * n_ff + qkv_size + 1;
+        var d_scratch = self.getOutputBuf(scratch, scratch_elems * @sizeOf(f32));
+
+        var d_sync_ctrs = self.getInPlaceBuf(sync_ctrs, 32 * @sizeOf(u32));
+        var d_ss_scratch = self.getInPlaceBuf(ss_scratch, @sizeOf(u32));
+
+        var p_n_layers: u32 = n_layers;
+        var p_n_embd: u32 = n_embd;
+        var p_n_head: u32 = n_head;
+        var p_n_kv: u32 = n_kv;
+        var p_head_dim: u32 = head_dim;
+        var p_n_ff: u32 = n_ff;
+        var p_rope_dim: u32 = rope_dim;
+        var p_rope_theta: f32 = rope_theta;
+        var p_rms_eps: f32 = rms_eps;
+        var p_embd_scale: f32 = embd_scale;
+        var p_max_seq_len: u32 = max_seq_len;
+        var p_seq_pos: u32 = seq_pos;
+
+        var params = [_]?*anyopaque{
+            @ptrCast(&d_weights),
+            @ptrCast(&d_layer_offsets),
+            @ptrCast(&d_kv_keys),
+            @ptrCast(&d_kv_values),
+            @ptrCast(&d_hidden),
+            @ptrCast(&d_scratch),
+            @ptrCast(&d_sync_ctrs),
+            @ptrCast(&d_ss_scratch),
+            @ptrCast(&p_n_layers),
+            @ptrCast(&p_n_embd),
+            @ptrCast(&p_n_head),
+            @ptrCast(&p_n_kv),
+            @ptrCast(&p_head_dim),
+            @ptrCast(&p_n_ff),
+            @ptrCast(&p_rope_dim),
+            @ptrCast(&p_rope_theta),
+            @ptrCast(&p_rms_eps),
+            @ptrCast(&p_embd_scale),
+            @ptrCast(&p_max_seq_len),
+            @ptrCast(&p_seq_pos),
+        };
+
+        self.launch(self.fn_mega_gemma_q4k, n_blocks, block_size, reduction_smem, &params);
     }
 
     /// In-place per-head rmsNorm: n_heads independent heads, each head_dim elements.

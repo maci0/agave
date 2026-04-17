@@ -131,6 +131,8 @@ pub const Qwen35Model = struct {
     tiered_block_allocator: ?TieredBlockAllocator = null,
     kv_type_k: kv_quant.KvQuantType = .f32,
     kv_type_v: kv_quant.KvQuantType = .f32,
+    /// Number of boundary layers (first/last N) that use f16 V to protect attention quality.
+    kv_boundary_v: u32 = 0,
     kv_seq_len: usize = 0,
     cancelled: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
     perf: perf.PerfCounters = .{},
@@ -146,6 +148,9 @@ pub const Qwen35Model = struct {
     /// Index into image_embeddings for the next visual token injection.
     /// Incremented each time a pad token is encountered during forward().
     visual_token_idx: u32 = 0,
+
+    /// Enable fused megakernel for single-dispatch forward pass.
+    megakernel_enabled: bool = false,
 
     /// Returns the generic Model interface for this Qwen3.5 instance.
     pub fn model(self: *Qwen35Model) Model {
@@ -538,6 +543,15 @@ pub const Qwen35Model = struct {
         return ((layer + 1) % self.full_attn_interval) == 0;
     }
 
+    /// First/last `kv_boundary_v` layers use f16 to protect attention quality;
+    /// middle layers use the configured kv_type_v (which may be turbo4/turbo3/etc).
+    inline fn layerVType(self: *const Qwen35Model, li: u32) kv_quant.KvQuantType {
+        if (self.kv_boundary_v == 0) return self.kv_type_v;
+        const b = self.kv_boundary_v;
+        if (li < b or li >= self.n_layers - b) return .f16;
+        return self.kv_type_v;
+    }
+
     /// Flush GPU work for accurate profiling timestamps.
     fn syncProfile(self: *Qwen35Model) void {
         if (self.perf.enabled) self.be.sync();
@@ -866,18 +880,37 @@ pub const Qwen35Model = struct {
         self.syncProfile();
         self.perf.end(.rms_norm, t);
 
-        // SwiGLU FFN — gate+up projections
+        // SwiGLU FFN — gate+up projections + SiLU*mul
         t = self.perf.start();
         const gw = self.fmt.layerTensor(li, "ffn_gate.weight") orelse return error.MissingTensor;
         const uw = self.fmt.layerTensor(li, "ffn_up.weight") orelse return error.MissingTensor;
-        self.doGemvBatch2(self.hidden2.ptr, gw, self.ff_buf1.ptr, ff, uw, self.ff_buf2.ptr, ff, e);
+        if (self.megakernel_enabled and (gw.dtype == .q8_0 or gw.dtype == .q4_k or gw.dtype == .q4_0 or gw.dtype == .q5_k or gw.dtype == .q6_k)) {
+            // Fused: gate GEMV + up GEMV + SiLU*mul in a single dispatch (3→1)
+            switch (self.be) {
+                .metal => |be| switch (gw.dtype) {
+                    .q8_0 => be.fusedFfnGateUpSiluQ8(self.hidden2.ptr, gw.data_ptr, uw.data_ptr, self.ff_buf1.ptr, ff, e),
+                    .q4_k => be.fusedFfnGateUpSiluQ4K(self.hidden2.ptr, gw.data_ptr, uw.data_ptr, self.ff_buf1.ptr, ff, e),
+                    .q4_0 => be.fusedFfnGateUpSiluQ40(self.hidden2.ptr, gw.data_ptr, uw.data_ptr, self.ff_buf1.ptr, ff, e),
+                    .q5_k => be.fusedFfnGateUpSiluQ5K(self.hidden2.ptr, gw.data_ptr, uw.data_ptr, self.ff_buf1.ptr, ff, e),
+                    .q6_k => be.fusedFfnGateUpSiluQ6K(self.hidden2.ptr, gw.data_ptr, uw.data_ptr, self.ff_buf1.ptr, ff, e),
+                    else => unreachable,
+                },
+                .cuda => |be| switch (gw.dtype) {
+                    .q8_0 => be.fusedFfnGateUpSiluQ8(self.hidden2.ptr, gw.data_ptr, uw.data_ptr, self.ff_buf1.ptr, ff, e),
+                    else => @panic("CUDA fused FFN: only Q8_0 supported"),
+                },
+                else => @panic("megakernel only supported on Metal/CUDA"),
+            }
+        } else {
+            // Standard path: 3 dispatches (gate GEMV + up GEMV + siluMul)
+            self.doGemvBatch2(self.hidden2.ptr, gw, self.ff_buf1.ptr, ff, uw, self.ff_buf2.ptr, ff, e);
+            self.syncProfile();
+            self.perf.end(.gemv_ffn, t);
+            t = self.perf.start();
+            self.be.siluMul(self.ff_buf1.ptr, self.ff_buf2.ptr, self.ff_buf1.ptr, ff);
+        }
         self.syncProfile();
         self.perf.end(.gemv_ffn, t);
-
-        t = self.perf.start();
-        self.be.siluMul(self.ff_buf1.ptr, self.ff_buf2.ptr, self.ff_buf1.ptr, ff);
-        self.syncProfile();
-        self.perf.end(.silu_mul, t);
 
         // Down projection
         t = self.perf.start();

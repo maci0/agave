@@ -12,6 +12,10 @@
 
 const cu = @import("common.zig");
 
+/// Sparse V threshold: skip V positions with negligible softmax weight.
+/// At 1e-6, skipped positions contribute < 0.0001% to the output.
+const sparse_v_threshold: f32 = 1e-6;
+
 // ── TurboQuant constants ────────────────────────────────────────────
 
 /// Lloyd-Max optimal centroids for N(0,1) quantized to 2 bits (4 levels).
@@ -263,7 +267,9 @@ export fn sdpa_turbo_kernel(
             const f32_values: [*]const f32 = @ptrCast(@alignCast(values));
             var tt: u32 = 0;
             while (tt < sl) : (tt += 1) {
-                acc += smem[tt] * f32_values[tt * kvd + kvh * hd + d];
+                const score = smem[tt];
+                if (score < sparse_v_threshold) continue; // Sparse V: skip negligible positions
+                acc += score * f32_values[tt * kvd + kvh * hd + d];
             }
         } else {
             // TurboQuant V: dequant the block containing dimension d for each position.
@@ -283,13 +289,15 @@ export fn sdpa_turbo_kernel(
 
             var tt: u32 = 0;
             while (tt < sl) : (tt += 1) {
+                const score = smem[tt];
+                if (score < sparse_v_threshold) continue; // Sparse V: skip negligible positions
                 // turbo block index for position tt at this dimension
                 const n_blocks_per_pos = kvd / turbo_block_size;
                 const turbo_idx = tt * n_blocks_per_pos + blk_idx_base;
                 const byte_off = turbo_idx * block_bytes_v;
                 var dequant_buf: [32]f32 = undefined;
                 turboDequantBlock(values + byte_off, &dequant_buf, bits_v);
-                acc += smem[tt] * dequant_buf[within_blk];
+                acc += score * dequant_buf[within_blk];
             }
         }
         output[q_base + d] = acc;

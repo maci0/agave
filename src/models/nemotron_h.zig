@@ -137,6 +137,8 @@ pub const NemotronHModel = struct {
     kv_seq_len: usize = 0,
     /// Set to true from another thread to abort an in-progress `forward` call.
     cancelled: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+    /// Enable fused megakernel for single-dispatch forward pass.
+    megakernel_enabled: bool = false,
 
     // ── Lifecycle ─────────────────────────────────────────────────
 

@@ -133,9 +133,13 @@ pub const Gemma3Model = struct {
     split_cpu_out: []f32 = &[_]f32{},
     kv_type_k: kv_quant.KvQuantType,
     kv_type_v: kv_quant.KvQuantType,
+    /// Number of boundary layers (first/last N) that use f16 V to protect attention quality.
+    kv_boundary_v: u32 = 0,
     kv_seq_len: usize = 0,
     cancelled: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
     perf: perf.PerfCounters = .{},
+    /// Enable fused megakernel for single-dispatch forward pass.
+    megakernel_enabled: bool = false,
 
     /// Initialize the model from format metadata and allocate all working buffers.
     /// When `tiered_cache` is provided, the model uses tiered block allocation instead
@@ -531,6 +535,15 @@ pub const Gemma3Model = struct {
 
     // ── Layer implementations ─────────────────────────────────────
 
+    /// First/last `kv_boundary_v` layers use f16 to protect attention quality;
+    /// middle layers use the configured kv_type_v (which may be turbo4/turbo3/etc).
+    inline fn layerVType(self: *const Gemma3Model, li: u32) kv_quant.KvQuantType {
+        if (self.kv_boundary_v == 0) return self.kv_type_v;
+        const b = self.kv_boundary_v;
+        if (li < b or li >= self.n_layers - b) return .f16;
+        return self.kv_type_v;
+    }
+
     /// Helper: get flat f32 view of KV cache for a layer (assembled from paged blocks).
     /// Returns slices pointing into paged or tiered cache blocks.
     fn getLayerKvView(self: *Gemma3Model, layer: usize) struct { keys: []f32, values: []f32 } {
@@ -635,7 +648,7 @@ pub const Gemma3Model = struct {
                 self.kv_seq_len,
                 self.attn_scale,
                 self.be,
-                .f32,
+                .f32, // PagedKvCache uses f32 blocks
                 .f32,
                 .{
                     .partition = partition,
@@ -693,13 +706,33 @@ pub const Gemma3Model = struct {
         const gw = self.fmt.layerTensor(li, "ffn_gate.weight") orelse return error.MissingTensor;
         const uw = self.fmt.layerTensor(li, "ffn_up.weight") orelse return error.MissingTensor;
         const dw = self.fmt.layerTensor(li, "ffn_down.weight") orelse return error.MissingTensor;
-        self.doGemv(self.hidden2.ptr, gw, self.ff_gate.ptr, ff, e);
-        self.doGemv(self.hidden2.ptr, uw, self.ff_up.ptr, ff, e);
+        if (self.megakernel_enabled and (gw.dtype == .q8_0 or gw.dtype == .q4_k or gw.dtype == .q4_0 or gw.dtype == .q5_k or gw.dtype == .q6_k)) {
+            switch (self.be) {
+                inline else => |be| {
+                    if (comptime @hasDecl(@TypeOf(be.*), "fusedFfnGateUpGeluQ8")) {
+                        switch (gw.dtype) {
+                            .q8_0 => be.fusedFfnGateUpGeluQ8(self.hidden2.ptr, gw.data_ptr, uw.data_ptr, self.ff_gate.ptr, ff, e),
+                            .q4_k => if (comptime @hasDecl(@TypeOf(be.*), "fusedFfnGateUpGeluQ4K"))
+                                be.fusedFfnGateUpGeluQ4K(self.hidden2.ptr, gw.data_ptr, uw.data_ptr, self.ff_gate.ptr, ff, e),
+                            .q5_k => if (comptime @hasDecl(@TypeOf(be.*), "fusedFfnGateUpGeluQ5K"))
+                                be.fusedFfnGateUpGeluQ5K(self.hidden2.ptr, gw.data_ptr, uw.data_ptr, self.ff_gate.ptr, ff, e),
+                            .q6_k => if (comptime @hasDecl(@TypeOf(be.*), "fusedFfnGateUpGeluQ6K"))
+                                be.fusedFfnGateUpGeluQ6K(self.hidden2.ptr, gw.data_ptr, uw.data_ptr, self.ff_gate.ptr, ff, e),
+                            .q4_0 => if (comptime @hasDecl(@TypeOf(be.*), "fusedFfnGateUpGeluQ40"))
+                                be.fusedFfnGateUpGeluQ40(self.hidden2.ptr, gw.data_ptr, uw.data_ptr, self.ff_gate.ptr, ff, e),
+                            else => {},
+                        }
+                    }
+                },
+            }
+        } else {
+            self.doGemv(self.hidden2.ptr, gw, self.ff_gate.ptr, ff, e);
+            self.doGemv(self.hidden2.ptr, uw, self.ff_up.ptr, ff, e);
+            self.perf.end(.gemv_ffn, t);
+            t = self.perf.start();
+            self.be.geluMul(self.ff_gate.ptr, self.ff_up.ptr, self.ff_gate.ptr, ff);
+        }
         self.perf.end(.gemv_ffn, t);
-
-        t = self.perf.start();
-        self.be.geluMul(self.ff_gate.ptr, self.ff_up.ptr, self.ff_gate.ptr, ff);
-        self.perf.end(.gelu_mul, t);
 
         t = self.perf.start();
         self.doGemv(self.ff_gate.ptr, dw, self.hidden2.ptr, e, ff);

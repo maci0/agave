@@ -254,6 +254,8 @@ pub const Gemma4Model = struct {
     cancelled: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
     max_seq_len: usize = 4096,
     perf: perf.PerfCounters = .{},
+    /// Enable fused megakernel for single-dispatch forward pass.
+    megakernel_enabled: bool = false,
 
     // ── Visual token embeddings (multimodal) ───────────────────
     /// Visual token embeddings from vision encoder, or null if text-only.
@@ -1391,18 +1393,38 @@ pub const Gemma4Model = struct {
         self.be.rmsNorm(self.hidden.ptr, self.normAsF32(norm_w, e), self.hidden2.ptr, e, self.rms_eps);
         self.perf.end(.rms_norm, t);
 
-        // Gate + Up projections
+        // Gate + Up projections + GELU*mul
         t = self.perf.start();
         const gw = self.fmt.layerTensor(li, "ffn_gate.weight") orelse return error.MissingTensor;
         const uw = self.fmt.layerTensor(li, "ffn_up.weight") orelse return error.MissingTensor;
-        self.doGemv(self.hidden2.ptr, gw, self.dense_gate.ptr, ff, e);
-        self.doGemv(self.hidden2.ptr, uw, self.dense_up.ptr, ff, e);
+        if (self.megakernel_enabled and (gw.dtype == .q8_0 or gw.dtype == .q4_k or gw.dtype == .q4_0 or gw.dtype == .q5_k or gw.dtype == .q6_k)) {
+            // Fused: gate GEMV + up GEMV + GELU*mul in a single dispatch (3→1)
+            switch (self.be) {
+                inline else => |be| {
+                    if (comptime @hasDecl(@TypeOf(be.*), "fusedFfnGateUpGeluQ8")) {
+                        switch (gw.dtype) {
+                            .q8_0 => be.fusedFfnGateUpGeluQ8(self.hidden2.ptr, gw.data_ptr, uw.data_ptr, self.dense_gate.ptr, ff, e),
+                            .q4_k => if (comptime @hasDecl(@TypeOf(be.*), "fusedFfnGateUpGeluQ4K"))
+                                be.fusedFfnGateUpGeluQ4K(self.hidden2.ptr, gw.data_ptr, uw.data_ptr, self.dense_gate.ptr, ff, e),
+                            .q5_k => if (comptime @hasDecl(@TypeOf(be.*), "fusedFfnGateUpGeluQ5K"))
+                                be.fusedFfnGateUpGeluQ5K(self.hidden2.ptr, gw.data_ptr, uw.data_ptr, self.dense_gate.ptr, ff, e),
+                            .q6_k => if (comptime @hasDecl(@TypeOf(be.*), "fusedFfnGateUpGeluQ6K"))
+                                be.fusedFfnGateUpGeluQ6K(self.hidden2.ptr, gw.data_ptr, uw.data_ptr, self.dense_gate.ptr, ff, e),
+                            .q4_0 => if (comptime @hasDecl(@TypeOf(be.*), "fusedFfnGateUpGeluQ40"))
+                                be.fusedFfnGateUpGeluQ40(self.hidden2.ptr, gw.data_ptr, uw.data_ptr, self.dense_gate.ptr, ff, e),
+                            else => {},
+                        }
+                    }
+                },
+            }
+        } else {
+            self.doGemv(self.hidden2.ptr, gw, self.dense_gate.ptr, ff, e);
+            self.doGemv(self.hidden2.ptr, uw, self.dense_up.ptr, ff, e);
+            self.perf.end(.gemv_ffn, t);
+            t = self.perf.start();
+            self.be.geluMul(self.dense_gate.ptr, self.dense_up.ptr, self.dense_gate.ptr, ff);
+        }
         self.perf.end(.gemv_ffn, t);
-
-        // GELU(gate) * up — use GPU-accelerated geluMul
-        t = self.perf.start();
-        self.be.geluMul(self.dense_gate.ptr, self.dense_up.ptr, self.dense_gate.ptr, ff);
-        self.perf.end(.gelu_mul, t);
 
         // Down projection
         t = self.perf.start();
@@ -1520,6 +1542,7 @@ pub const Gemma4Model = struct {
             const mix_weight = top_scores[ti];
 
             // Expert input is hidden2 (pre-normed with pre_ffw_norm_2)
+            var used_fused_kernel = false;
             if (has_fused) {
                 const fused_t = fused_gate_up.?;
                 const data = fused_t.data_ptr + ei * fused_stride;
@@ -1527,14 +1550,66 @@ pub const Gemma4Model = struct {
                 const gate_data = data;
                 const up_data = data + ff * row_bytes;
 
-                self.be.gemv(self.hidden2.ptr, .{ .data = gate_data, .dtype = fused_t.dtype }, self.ff_buf.ptr, ff, e);
-                self.be.gemv(self.hidden2.ptr, .{ .data = up_data, .dtype = fused_t.dtype }, self.ff_buf2.ptr, ff, e);
+                if (self.megakernel_enabled and (fused_t.dtype == .q4_k or fused_t.dtype == .q5_k or fused_t.dtype == .q6_k or fused_t.dtype == .q4_0 or fused_t.dtype == .q8_0)) {
+                    switch (self.be) {
+                        inline else => |be| {
+                            if (comptime @hasDecl(@TypeOf(be.*), "fusedFfnGateUpGeluQ8")) {
+                                switch (fused_t.dtype) {
+                                    .q8_0 => be.fusedFfnGateUpGeluQ8(self.hidden2.ptr, gate_data, up_data, self.ff_buf.ptr, ff, e),
+                                    .q4_k => if (comptime @hasDecl(@TypeOf(be.*), "fusedFfnGateUpGeluQ4K"))
+                                        be.fusedFfnGateUpGeluQ4K(self.hidden2.ptr, gate_data, up_data, self.ff_buf.ptr, ff, e),
+                                    .q5_k => if (comptime @hasDecl(@TypeOf(be.*), "fusedFfnGateUpGeluQ5K"))
+                                        be.fusedFfnGateUpGeluQ5K(self.hidden2.ptr, gate_data, up_data, self.ff_buf.ptr, ff, e),
+                                    .q6_k => if (comptime @hasDecl(@TypeOf(be.*), "fusedFfnGateUpGeluQ6K"))
+                                        be.fusedFfnGateUpGeluQ6K(self.hidden2.ptr, gate_data, up_data, self.ff_buf.ptr, ff, e),
+                                    .q4_0 => if (comptime @hasDecl(@TypeOf(be.*), "fusedFfnGateUpGeluQ40"))
+                                        be.fusedFfnGateUpGeluQ40(self.hidden2.ptr, gate_data, up_data, self.ff_buf.ptr, ff, e),
+                                    else => {},
+                                }
+                            }
+                        },
+                    }
+                    used_fused_kernel = true;
+                } else {
+                    self.be.gemv(self.hidden2.ptr, .{ .data = gate_data, .dtype = fused_t.dtype }, self.ff_buf.ptr, ff, e);
+                    self.be.gemv(self.hidden2.ptr, .{ .data = up_data, .dtype = fused_t.dtype }, self.ff_buf2.ptr, ff, e);
+                }
             } else {
-                self.doGemvExpert(self.hidden2.ptr, gate_exps.?, ei, gate_stride, self.ff_buf.ptr, ff, e);
-                self.doGemvExpert(self.hidden2.ptr, up_exps.?, ei, up_stride, self.ff_buf2.ptr, ff, e);
+                // Separate gate/up expert tensors (GGUF path)
+                const gate_data = gate_exps.?.data_ptr + ei * gate_stride;
+                const up_data = up_exps.?.data_ptr + ei * up_stride;
+                const dtype = gate_exps.?.dtype;
+
+                if (self.megakernel_enabled and (dtype == .q4_k or dtype == .q5_k or dtype == .q6_k or dtype == .q4_0 or dtype == .q8_0)) {
+                    switch (self.be) {
+                        inline else => |be| {
+                            if (comptime @hasDecl(@TypeOf(be.*), "fusedFfnGateUpGeluQ8")) {
+                                switch (dtype) {
+                                    .q8_0 => be.fusedFfnGateUpGeluQ8(self.hidden2.ptr, gate_data, up_data, self.ff_buf.ptr, ff, e),
+                                    .q4_k => if (comptime @hasDecl(@TypeOf(be.*), "fusedFfnGateUpGeluQ4K"))
+                                        be.fusedFfnGateUpGeluQ4K(self.hidden2.ptr, gate_data, up_data, self.ff_buf.ptr, ff, e),
+                                    .q5_k => if (comptime @hasDecl(@TypeOf(be.*), "fusedFfnGateUpGeluQ5K"))
+                                        be.fusedFfnGateUpGeluQ5K(self.hidden2.ptr, gate_data, up_data, self.ff_buf.ptr, ff, e),
+                                    .q6_k => if (comptime @hasDecl(@TypeOf(be.*), "fusedFfnGateUpGeluQ6K"))
+                                        be.fusedFfnGateUpGeluQ6K(self.hidden2.ptr, gate_data, up_data, self.ff_buf.ptr, ff, e),
+                                    .q4_0 => if (comptime @hasDecl(@TypeOf(be.*), "fusedFfnGateUpGeluQ40"))
+                                        be.fusedFfnGateUpGeluQ40(self.hidden2.ptr, gate_data, up_data, self.ff_buf.ptr, ff, e),
+                                    else => {},
+                                }
+                            }
+                        },
+                    }
+                    used_fused_kernel = true;
+                } else {
+                    self.doGemvExpert(self.hidden2.ptr, gate_exps.?, ei, gate_stride, self.ff_buf.ptr, ff, e);
+                    self.doGemvExpert(self.hidden2.ptr, up_exps.?, ei, up_stride, self.ff_buf2.ptr, ff, e);
+                }
             }
-            // GELU activation on gate, then element-wise multiply with up (fused, GPU-accelerated)
-            self.be.geluMul(self.ff_buf.ptr, self.ff_buf2.ptr, self.ff_buf.ptr, ff);
+            // GELU activation on gate, then element-wise multiply with up
+            // (skip when fused kernel already includes geluMul)
+            if (!used_fused_kernel) {
+                self.be.geluMul(self.ff_buf.ptr, self.ff_buf2.ptr, self.ff_buf.ptr, ff);
+            }
 
             // Down projection
             self.doGemvExpert(self.ff_buf.ptr, down_exps.?, ei, down_stride, self.ff_buf2.ptr, e, ff);

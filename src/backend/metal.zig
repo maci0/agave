@@ -27,7 +27,14 @@ const msl_source = @embedFile("kernels/metal/common.metal") ++
     @embedFile("kernels/metal/gemv.metal") ++
     @embedFile("kernels/metal/gemm.metal") ++
     @embedFile("kernels/metal/sdpa.metal") ++
-    @embedFile("kernels/metal/deltanet.metal");
+    @embedFile("kernels/metal/deltanet.metal") ++
+    @embedFile("kernels/metal/megakernel.metal") ++
+    @embedFile("kernels/metal/mega_common.metal") ++
+    @embedFile("kernels/metal/mega_qwen35_q8.metal") ++
+    @embedFile("kernels/metal/mega_gemma_q4k.metal") ++
+    @embedFile("kernels/metal/mega_gemma_q8.metal") ++
+    @embedFile("kernels/metal/mega_qwen35_q4k.metal") ++
+    @embedFile("kernels/metal/mega_nemotron_h_q8.metal");
 
 const page_size = std.heap.page_size_min;
 
@@ -47,8 +54,16 @@ const sdpa_max_head_dim: usize = 256;
 const q4_0_nr: usize = 4;
 /// Number of output rows processed per threadgroup in Q8_0 GEMV (must match q8_0_nr in gemv.metal).
 const q8_0_nr: usize = 4;
-/// Number of output rows processed per threadgroup in Q4_K GEMV (must match q4_k_nr in gemv.metal).
+/// Number of output rows processed per threadgroup in Q4_K/Q5_K/Q6_K GEMV (must match q4_k_nr in gemv.metal).
 const q4_k_nr: usize = 2;
+/// Number of output rows processed per threadgroup in Q2_K GEMV (must match q2_k_nr in gemv.metal).
+const q2_k_nr: usize = 2;
+/// Number of output rows processed per threadgroup in Q3_K GEMV (must match q3_k_nr in gemv.metal).
+const q3_k_nr: usize = 2;
+/// Number of output rows processed per threadgroup in BF16 GEMV (must match bf16_nr in gemv.metal).
+const bf16_nr: usize = 2;
+/// Number of output rows processed per threadgroup in F16 GEMV (must match f16_nr in gemv.metal).
+const f16_nr: usize = 2;
 /// Elements per small quantization block (Q4_0, Q8_0, etc.).
 const quant_block_elems: usize = backend_mod.quant_block_elems;
 /// Bytes per Q8_0 block: 2 bytes f16 scale + 32 bytes i8 data.
@@ -149,6 +164,24 @@ pub const MetalBackend = struct {
     pipe_dn_conv1d: objc.id,
     pipe_dn_l2_norm: objc.id,
     pipe_dn_recurrence: objc.id,
+    pipe_fused_ffn_q8: objc.id,
+    pipe_fused_ffn_q4_k: objc.id,
+    pipe_fused_ffn_q4_0: objc.id,
+    pipe_mega_qwen35_q8: objc.id,
+    pipe_mega_gemma_q4k: objc.id,
+    pipe_mega_gemma_q8: objc.id,
+    pipe_mega_qwen35_q4k: objc.id,
+    pipe_mega_nemotron_h_q8: objc.id,
+    /// Auto-composed megakernel pipeline (null until compileComposedMegakernel called).
+    pipe_mega_auto: ?objc.id = null,
+    pipe_fused_ffn_silu_mlx_q4: objc.id,
+    pipe_fused_ffn_gelu_q8: objc.id,
+    pipe_fused_ffn_gelu_q4_k: objc.id,
+    pipe_fused_ffn_gelu_q4_0: objc.id,
+    pipe_fused_ffn_q6_k: objc.id,
+    pipe_fused_ffn_gelu_q6_k: objc.id,
+    pipe_fused_ffn_q5_k: objc.id,
+    pipe_fused_ffn_gelu_q5_k: objc.id,
     /// Scratch buffer for multi-pass reductions: 8 bytes = 2 × f32.
     /// Used by softmax (3-pass: max at offset 0, sum at offset 4)
     /// and l2Norm (2-pass: sum-of-squares at offset 0).
@@ -286,6 +319,22 @@ pub const MetalBackend = struct {
             .pipe_dn_conv1d = undefined,
             .pipe_dn_l2_norm = undefined,
             .pipe_dn_recurrence = undefined,
+            .pipe_fused_ffn_q8 = undefined,
+            .pipe_fused_ffn_q4_k = undefined,
+            .pipe_fused_ffn_q4_0 = undefined,
+            .pipe_mega_qwen35_q8 = undefined,
+            .pipe_mega_gemma_q4k = undefined,
+            .pipe_mega_gemma_q8 = undefined,
+            .pipe_mega_qwen35_q4k = undefined,
+            .pipe_mega_nemotron_h_q8 = undefined,
+            .pipe_fused_ffn_silu_mlx_q4 = undefined,
+            .pipe_fused_ffn_gelu_q8 = undefined,
+            .pipe_fused_ffn_gelu_q4_k = undefined,
+            .pipe_fused_ffn_gelu_q4_0 = undefined,
+            .pipe_fused_ffn_q6_k = undefined,
+            .pipe_fused_ffn_gelu_q6_k = undefined,
+            .pipe_fused_ffn_q5_k = undefined,
+            .pipe_fused_ffn_gelu_q5_k = undefined,
             .scratch_buf = scratch_buf,
             .active_cmd = null,
             .buf_cache = std.AutoHashMap(usize, BufferInfo).init(allocator),
@@ -350,12 +399,28 @@ pub const MetalBackend = struct {
         self.pipe_dn_conv1d = try self.makePipeline("deltanet_conv1d");
         self.pipe_dn_l2_norm = try self.makePipeline("deltanet_l2_norm");
         self.pipe_dn_recurrence = try self.makePipeline("deltanet_recurrence");
+        self.pipe_fused_ffn_q8 = try self.makePipeline("fused_ffn_gate_up_silu_q8");
+        self.pipe_fused_ffn_q4_k = try self.makePipeline("fused_ffn_gate_up_silu_q4_k");
+        self.pipe_fused_ffn_q4_0 = try self.makePipeline("fused_ffn_gate_up_silu_q4_0");
+        self.pipe_mega_qwen35_q8 = try self.makePipeline("megakernel_qwen35_q8");
+        self.pipe_mega_gemma_q4k = try self.makePipeline("megakernel_gemma_q4k");
+        self.pipe_mega_gemma_q8 = try self.makePipeline("megakernel_gemma_q8");
+        self.pipe_mega_qwen35_q4k = try self.makePipeline("megakernel_qwen35_q4k");
+        self.pipe_mega_nemotron_h_q8 = try self.makePipeline("megakernel_nemotron_h_q8");
+        self.pipe_fused_ffn_silu_mlx_q4 = try self.makePipeline("fused_ffn_gate_up_silu_mlx_q4");
+        self.pipe_fused_ffn_gelu_q8 = try self.makePipeline("fused_ffn_gate_up_gelu_q8");
+        self.pipe_fused_ffn_gelu_q4_k = try self.makePipeline("fused_ffn_gate_up_gelu_q4_k");
+        self.pipe_fused_ffn_gelu_q4_0 = try self.makePipeline("fused_ffn_gate_up_gelu_q4_0");
+        self.pipe_fused_ffn_q6_k = try self.makePipeline("fused_ffn_gate_up_silu_q6_k");
+        self.pipe_fused_ffn_gelu_q6_k = try self.makePipeline("fused_ffn_gate_up_gelu_q6_k");
+        self.pipe_fused_ffn_q5_k = try self.makePipeline("fused_ffn_gate_up_silu_q5_k");
+        self.pipe_fused_ffn_gelu_q5_k = try self.makePipeline("fused_ffn_gate_up_gelu_q5_k");
 
         return self;
     }
 
     /// Number of MSL compute pipelines compiled at init.
-    pub const n_pipelines: u32 = 56;
+    pub const n_pipelines: u32 = 70;
 
     /// Returns the Metal device name (e.g., "Apple M4 Pro").
     pub fn deviceName(self: *const MetalBackend) []const u8 {
@@ -766,6 +831,10 @@ pub const MetalBackend = struct {
             .q4_0 => (n + q4_0_nr - 1) / q4_0_nr,
             .q8_0 => (n + q8_0_nr - 1) / q8_0_nr,
             .q4_k, .q5_k, .q6_k => (n + q4_k_nr - 1) / q4_k_nr,
+            .q2_k => (n + q2_k_nr - 1) / q2_k_nr,
+            .q3_k => (n + q3_k_nr - 1) / q3_k_nr,
+            .bf16 => (n + bf16_nr - 1) / bf16_nr,
+            .f16 => (n + f16_nr - 1) / f16_nr,
             else => n,
         };
     }
@@ -868,6 +937,643 @@ pub const MetalBackend = struct {
     /// out[i] = gelu(a[i]) * b[i] — fused GeGLU activation.
     pub fn geluMul(self: *MetalBackend, a: [*]const f32, b: [*]const f32, out: [*]f32, n: usize) void {
         self.dispatchBinaryOp(self.pipe_gelu_mul, a, b, out, n);
+    }
+
+    // ── Fused FFN Gate+Up+SiLU (megakernel) ──────────────────────
+
+    /// Fused FFN: computes silu(W_gate @ x) * (W_up @ x) in a single dispatch.
+    /// Replaces 3 dispatches (gate GEMV + up GEMV + siluMul) with 1.
+    /// Only supports Q8_0 weights. x is f32[k], output is f32[n].
+    pub fn fusedFfnGateUpSiluQ8(
+        self: *MetalBackend,
+        x: [*]const f32,
+        w_gate: [*]const u8,
+        w_up: [*]const u8,
+        ff_out: [*]f32,
+        n_ff: usize,
+        n_embd: usize,
+    ) void {
+        const w_bytes = weightBytes(.q8_0, n_ff, n_embd);
+        const x_ref = self.getBufRef(@ptrCast(x), n_embd * @sizeOf(f32));
+        const gate_ref = self.getBufRef(w_gate, w_bytes);
+        const up_ref = self.getBufRef(w_up, w_bytes);
+        const out_ref = self.getBufRef(@ptrCast(ff_out), n_ff * @sizeOf(f32));
+
+        var nf: u32 = @intCast(n_ff);
+        var ne: u32 = @intCast(n_embd);
+
+        const enc = self.getEncoder(self.pipe_fused_ffn_q8);
+        setBuf(enc, x_ref, 0);
+        setBuf(enc, gate_ref, 1);
+        setBuf(enc, up_ref, 2);
+        setBuf(enc, out_ref, 3);
+        setBytes(enc, @ptrCast(&nf), @sizeOf(u32), 4);
+        setBytes(enc, @ptrCast(&ne), @sizeOf(u32), 5);
+
+        const tg = gemvThreadgroupSize(.q8_0, n_embd);
+        self.endEncodeThreadgroups(enc, n_ff, tg);
+    }
+
+    /// Fused FFN for Q4_K weights. Same as fusedFfnGateUpSiluQ8 but Q4_K quant.
+    pub fn fusedFfnGateUpSiluQ4K(
+        self: *MetalBackend,
+        x: [*]const f32,
+        w_gate: [*]const u8,
+        w_up: [*]const u8,
+        ff_out: [*]f32,
+        n_ff: usize,
+        n_embd: usize,
+    ) void {
+        const w_bytes = weightBytes(.q4_k, n_ff, n_embd);
+        const x_ref = self.getBufRef(@ptrCast(x), n_embd * @sizeOf(f32));
+        const gate_ref = self.getBufRef(w_gate, w_bytes);
+        const up_ref = self.getBufRef(w_up, w_bytes);
+        const out_ref = self.getBufRef(@ptrCast(ff_out), n_ff * @sizeOf(f32));
+
+        var nf: u32 = @intCast(n_ff);
+        var ne: u32 = @intCast(n_embd);
+
+        const enc = self.getEncoder(self.pipe_fused_ffn_q4_k);
+        setBuf(enc, x_ref, 0);
+        setBuf(enc, gate_ref, 1);
+        setBuf(enc, up_ref, 2);
+        setBuf(enc, out_ref, 3);
+        setBytes(enc, @ptrCast(&nf), @sizeOf(u32), 4);
+        setBytes(enc, @ptrCast(&ne), @sizeOf(u32), 5);
+
+        const tg = gemvThreadgroupSize(.q4_k, n_embd);
+        self.endEncodeThreadgroups(enc, n_ff, tg);
+    }
+
+    /// Fused FFN for Q4_0 weights. Same pattern, Q4_0 quant.
+    pub fn fusedFfnGateUpSiluQ40(
+        self: *MetalBackend,
+        x: [*]const f32,
+        w_gate: [*]const u8,
+        w_up: [*]const u8,
+        ff_out: [*]f32,
+        n_ff: usize,
+        n_embd: usize,
+    ) void {
+        const w_bytes = weightBytes(.q4_0, n_ff, n_embd);
+        const x_ref = self.getBufRef(@ptrCast(x), n_embd * @sizeOf(f32));
+        const gate_ref = self.getBufRef(w_gate, w_bytes);
+        const up_ref = self.getBufRef(w_up, w_bytes);
+        const out_ref = self.getBufRef(@ptrCast(ff_out), n_ff * @sizeOf(f32));
+
+        var nf: u32 = @intCast(n_ff);
+        var ne: u32 = @intCast(n_embd);
+
+        const enc = self.getEncoder(self.pipe_fused_ffn_q4_0);
+        setBuf(enc, x_ref, 0);
+        setBuf(enc, gate_ref, 1);
+        setBuf(enc, up_ref, 2);
+        setBuf(enc, out_ref, 3);
+        setBytes(enc, @ptrCast(&nf), @sizeOf(u32), 4);
+        setBytes(enc, @ptrCast(&ne), @sizeOf(u32), 5);
+
+        const tg = gemvThreadgroupSize(.q4_0, n_embd);
+        self.endEncodeThreadgroups(enc, n_ff, tg);
+    }
+
+    /// Fused FFN with GELU for Q4_K (Gemma 3/4). gelu(gate) * up in 1 dispatch.
+    /// Fused FFN with SiLU for MLX Q4 weights (GLM-4, Qwen MLX).
+    /// 10 buffer args: x, gate_w/s/b, up_w/s/b, out, n_ff, n_embd.
+    pub fn fusedFfnGateUpSiluMlxQ4(
+        self: *MetalBackend,
+        x: [*]const f32,
+        gate_w: [*]const u8,
+        gate_s: [*]const u8,
+        gate_b: [*]const u8,
+        up_w: [*]const u8,
+        up_s: [*]const u8,
+        up_b: [*]const u8,
+        ff_out: [*]f32,
+        n_ff: usize,
+        n_embd: usize,
+    ) void {
+        const gpr = (n_embd + mlx_group_size - 1) / mlx_group_size;
+        const w_bytes = n_ff * gpr * mlx_words_per_group_q4 * @sizeOf(u32);
+        const sb_bytes = n_ff * gpr * @sizeOf(u16);
+        const x_ref = self.getBufRef(@ptrCast(x), n_embd * @sizeOf(f32));
+        const gw_ref = self.getBufRef(gate_w, w_bytes);
+        const gs_ref = self.getBufRef(gate_s, sb_bytes);
+        const gb_ref = self.getBufRef(gate_b, sb_bytes);
+        const uw_ref = self.getBufRef(up_w, w_bytes);
+        const us_ref = self.getBufRef(up_s, sb_bytes);
+        const ub_ref = self.getBufRef(up_b, sb_bytes);
+        const out_ref = self.getBufRef(@ptrCast(ff_out), n_ff * @sizeOf(f32));
+        var nf: u32 = @intCast(n_ff);
+        var ne: u32 = @intCast(n_embd);
+        const enc = self.getEncoder(self.pipe_fused_ffn_silu_mlx_q4);
+        setBuf(enc, x_ref, 0);
+        setBuf(enc, gw_ref, 1);
+        setBuf(enc, gs_ref, 2);
+        setBuf(enc, gb_ref, 3);
+        setBuf(enc, uw_ref, 4);
+        setBuf(enc, us_ref, 5);
+        setBuf(enc, ub_ref, 6);
+        setBuf(enc, out_ref, 7);
+        setBytes(enc, @ptrCast(&nf), @sizeOf(u32), 8);
+        setBytes(enc, @ptrCast(&ne), @sizeOf(u32), 9);
+        const tg = gemvThreadgroupSize(.mlx_q, n_embd);
+        self.endEncodeThreadgroups(enc, n_ff, tg);
+    }
+
+    /// Fused FFN with GELU for Q8_0 weights. gelu(gate) * up in 1 dispatch.
+    pub fn fusedFfnGateUpGeluQ8(
+        self: *MetalBackend,
+        x: [*]const f32,
+        w_gate: [*]const u8,
+        w_up: [*]const u8,
+        ff_out: [*]f32,
+        n_ff: usize,
+        n_embd: usize,
+    ) void {
+        const w_bytes = weightBytes(.q8_0, n_ff, n_embd);
+        const x_ref = self.getBufRef(@ptrCast(x), n_embd * @sizeOf(f32));
+        const gate_ref = self.getBufRef(w_gate, w_bytes);
+        const up_ref = self.getBufRef(w_up, w_bytes);
+        const out_ref = self.getBufRef(@ptrCast(ff_out), n_ff * @sizeOf(f32));
+        var nf: u32 = @intCast(n_ff);
+        var ne: u32 = @intCast(n_embd);
+        const enc = self.getEncoder(self.pipe_fused_ffn_gelu_q8);
+        setBuf(enc, x_ref, 0);
+        setBuf(enc, gate_ref, 1);
+        setBuf(enc, up_ref, 2);
+        setBuf(enc, out_ref, 3);
+        setBytes(enc, @ptrCast(&nf), @sizeOf(u32), 4);
+        setBytes(enc, @ptrCast(&ne), @sizeOf(u32), 5);
+        const tg = gemvThreadgroupSize(.q8_0, n_embd);
+        self.endEncodeThreadgroups(enc, n_ff, tg);
+    }
+
+    /// Fused FFN with GELU for Q4_K (Gemma 3/4). gelu(gate) * up in 1 dispatch.
+    pub fn fusedFfnGateUpGeluQ4K(
+        self: *MetalBackend,
+        x: [*]const f32,
+        w_gate: [*]const u8,
+        w_up: [*]const u8,
+        ff_out: [*]f32,
+        n_ff: usize,
+        n_embd: usize,
+    ) void {
+        const w_bytes = weightBytes(.q4_k, n_ff, n_embd);
+        const x_ref = self.getBufRef(@ptrCast(x), n_embd * @sizeOf(f32));
+        const gate_ref = self.getBufRef(w_gate, w_bytes);
+        const up_ref = self.getBufRef(w_up, w_bytes);
+        const out_ref = self.getBufRef(@ptrCast(ff_out), n_ff * @sizeOf(f32));
+        var nf: u32 = @intCast(n_ff);
+        var ne: u32 = @intCast(n_embd);
+        const enc = self.getEncoder(self.pipe_fused_ffn_gelu_q4_k);
+        setBuf(enc, x_ref, 0);
+        setBuf(enc, gate_ref, 1);
+        setBuf(enc, up_ref, 2);
+        setBuf(enc, out_ref, 3);
+        setBytes(enc, @ptrCast(&nf), @sizeOf(u32), 4);
+        setBytes(enc, @ptrCast(&ne), @sizeOf(u32), 5);
+        const tg = gemvThreadgroupSize(.q4_k, n_embd);
+        self.endEncodeThreadgroups(enc, n_ff, tg);
+    }
+
+    /// Fused FFN with GELU for Q4_0 (Gemma 3). gelu(gate) * up in 1 dispatch.
+    pub fn fusedFfnGateUpGeluQ40(
+        self: *MetalBackend,
+        x: [*]const f32,
+        w_gate: [*]const u8,
+        w_up: [*]const u8,
+        ff_out: [*]f32,
+        n_ff: usize,
+        n_embd: usize,
+    ) void {
+        const w_bytes = weightBytes(.q4_0, n_ff, n_embd);
+        const x_ref = self.getBufRef(@ptrCast(x), n_embd * @sizeOf(f32));
+        const gate_ref = self.getBufRef(w_gate, w_bytes);
+        const up_ref = self.getBufRef(w_up, w_bytes);
+        const out_ref = self.getBufRef(@ptrCast(ff_out), n_ff * @sizeOf(f32));
+        var nf: u32 = @intCast(n_ff);
+        var ne: u32 = @intCast(n_embd);
+        const enc = self.getEncoder(self.pipe_fused_ffn_gelu_q4_0);
+        setBuf(enc, x_ref, 0);
+        setBuf(enc, gate_ref, 1);
+        setBuf(enc, up_ref, 2);
+        setBuf(enc, out_ref, 3);
+        setBytes(enc, @ptrCast(&nf), @sizeOf(u32), 4);
+        setBytes(enc, @ptrCast(&ne), @sizeOf(u32), 5);
+        const tg = gemvThreadgroupSize(.q4_0, n_embd);
+        self.endEncodeThreadgroups(enc, n_ff, tg);
+    }
+
+    /// Fused FFN with SiLU for Q6_K weights. silu(gate) * up in 1 dispatch.
+    pub fn fusedFfnGateUpSiluQ6K(
+        self: *MetalBackend,
+        x: [*]const f32,
+        w_gate: [*]const u8,
+        w_up: [*]const u8,
+        ff_out: [*]f32,
+        n_ff: usize,
+        n_embd: usize,
+    ) void {
+        const w_bytes = weightBytes(.q6_k, n_ff, n_embd);
+        const x_ref = self.getBufRef(@ptrCast(x), n_embd * @sizeOf(f32));
+        const gate_ref = self.getBufRef(w_gate, w_bytes);
+        const up_ref = self.getBufRef(w_up, w_bytes);
+        const out_ref = self.getBufRef(@ptrCast(ff_out), n_ff * @sizeOf(f32));
+        var nf: u32 = @intCast(n_ff);
+        var ne: u32 = @intCast(n_embd);
+        const enc = self.getEncoder(self.pipe_fused_ffn_q6_k);
+        setBuf(enc, x_ref, 0);
+        setBuf(enc, gate_ref, 1);
+        setBuf(enc, up_ref, 2);
+        setBuf(enc, out_ref, 3);
+        setBytes(enc, @ptrCast(&nf), @sizeOf(u32), 4);
+        setBytes(enc, @ptrCast(&ne), @sizeOf(u32), 5);
+        const tg = gemvThreadgroupSize(.q6_k, n_embd);
+        self.endEncodeThreadgroups(enc, n_ff, tg);
+    }
+
+    /// Fused FFN with GELU for Q6_K weights. gelu(gate) * up in 1 dispatch.
+    pub fn fusedFfnGateUpGeluQ6K(
+        self: *MetalBackend,
+        x: [*]const f32,
+        w_gate: [*]const u8,
+        w_up: [*]const u8,
+        ff_out: [*]f32,
+        n_ff: usize,
+        n_embd: usize,
+    ) void {
+        const w_bytes = weightBytes(.q6_k, n_ff, n_embd);
+        const x_ref = self.getBufRef(@ptrCast(x), n_embd * @sizeOf(f32));
+        const gate_ref = self.getBufRef(w_gate, w_bytes);
+        const up_ref = self.getBufRef(w_up, w_bytes);
+        const out_ref = self.getBufRef(@ptrCast(ff_out), n_ff * @sizeOf(f32));
+        var nf: u32 = @intCast(n_ff);
+        var ne: u32 = @intCast(n_embd);
+        const enc = self.getEncoder(self.pipe_fused_ffn_gelu_q6_k);
+        setBuf(enc, x_ref, 0);
+        setBuf(enc, gate_ref, 1);
+        setBuf(enc, up_ref, 2);
+        setBuf(enc, out_ref, 3);
+        setBytes(enc, @ptrCast(&nf), @sizeOf(u32), 4);
+        setBytes(enc, @ptrCast(&ne), @sizeOf(u32), 5);
+        const tg = gemvThreadgroupSize(.q6_k, n_embd);
+        self.endEncodeThreadgroups(enc, n_ff, tg);
+    }
+
+    /// Fused FFN with SiLU for Q5_K weights. silu(gate) * up in 1 dispatch.
+    pub fn fusedFfnGateUpSiluQ5K(
+        self: *MetalBackend,
+        x: [*]const f32,
+        w_gate: [*]const u8,
+        w_up: [*]const u8,
+        ff_out: [*]f32,
+        n_ff: usize,
+        n_embd: usize,
+    ) void {
+        const w_bytes = weightBytes(.q5_k, n_ff, n_embd);
+        const x_ref = self.getBufRef(@ptrCast(x), n_embd * @sizeOf(f32));
+        const gate_ref = self.getBufRef(w_gate, w_bytes);
+        const up_ref = self.getBufRef(w_up, w_bytes);
+        const out_ref = self.getBufRef(@ptrCast(ff_out), n_ff * @sizeOf(f32));
+        var nf: u32 = @intCast(n_ff);
+        var ne: u32 = @intCast(n_embd);
+        const enc = self.getEncoder(self.pipe_fused_ffn_q5_k);
+        setBuf(enc, x_ref, 0);
+        setBuf(enc, gate_ref, 1);
+        setBuf(enc, up_ref, 2);
+        setBuf(enc, out_ref, 3);
+        setBytes(enc, @ptrCast(&nf), @sizeOf(u32), 4);
+        setBytes(enc, @ptrCast(&ne), @sizeOf(u32), 5);
+        const tg = gemvThreadgroupSize(.q5_k, n_embd);
+        self.endEncodeThreadgroups(enc, n_ff, tg);
+    }
+
+    /// Fused FFN with GELU for Q5_K weights. gelu(gate) * up in 1 dispatch.
+    pub fn fusedFfnGateUpGeluQ5K(
+        self: *MetalBackend,
+        x: [*]const f32,
+        w_gate: [*]const u8,
+        w_up: [*]const u8,
+        ff_out: [*]f32,
+        n_ff: usize,
+        n_embd: usize,
+    ) void {
+        const w_bytes = weightBytes(.q5_k, n_ff, n_embd);
+        const x_ref = self.getBufRef(@ptrCast(x), n_embd * @sizeOf(f32));
+        const gate_ref = self.getBufRef(w_gate, w_bytes);
+        const up_ref = self.getBufRef(w_up, w_bytes);
+        const out_ref = self.getBufRef(@ptrCast(ff_out), n_ff * @sizeOf(f32));
+        var nf: u32 = @intCast(n_ff);
+        var ne: u32 = @intCast(n_embd);
+        const enc = self.getEncoder(self.pipe_fused_ffn_gelu_q5_k);
+        setBuf(enc, x_ref, 0);
+        setBuf(enc, gate_ref, 1);
+        setBuf(enc, up_ref, 2);
+        setBuf(enc, out_ref, 3);
+        setBytes(enc, @ptrCast(&nf), @sizeOf(u32), 4);
+        setBytes(enc, @ptrCast(&ne), @sizeOf(u32), 5);
+        const tg = gemvThreadgroupSize(.q5_k, n_embd);
+        self.endEncodeThreadgroups(enc, n_ff, tg);
+    }
+
+    // ── True Megakernel Dispatch ──────────────────────────────────
+
+    /// Dispatch the Qwen 3.5 Q8_0 true megakernel: single launch for all layers.
+    /// All 8 buffers bound directly; params passed as constant buffer.
+    /// weights: mmap'd GGUF weight base pointer (buffer 0).
+    /// layer_offsets: [n_layers * 160 bytes] packed LayerOffsets (buffer 1).
+    /// kv_keys/kv_values: KV cache (buffers 2-3, Phase 2).
+    /// hidden: [n_embd] f32 hidden state (buffer 4).
+    /// scratch: intermediate buffers (buffer 5).
+    /// sync_ctrs: [32] atomic_uint grid sync counters (buffer 6).
+    /// params: MegaQwen35Params struct (buffer 7).
+    pub fn dispatchMegakernelQwen35Q8(
+        self: *MetalBackend,
+        weights: [*]const u8,
+        weights_size: usize,
+        layer_offsets: [*]const u8,
+        layer_offsets_size: usize,
+        kv_keys: [*]f32,
+        kv_keys_size: usize,
+        kv_values: [*]f32,
+        kv_values_size: usize,
+        hidden: [*]f32,
+        hidden_size: usize,
+        scratch: [*]f32,
+        scratch_size: usize,
+        sync_ctrs: [*]f32,
+        sync_ctrs_size: usize,
+        params: *const anyopaque,
+        params_size: usize,
+        n_tgs: u32,
+    ) void {
+        const w_ref = self.getBufRef(weights, weights_size);
+        const lo_ref = self.getBufRef(layer_offsets, layer_offsets_size);
+        const kk_ref = self.getBufRef(@ptrCast(kv_keys), kv_keys_size);
+        const kv_ref = self.getBufRef(@ptrCast(kv_values), kv_values_size);
+        const h_ref = self.getBufRef(@ptrCast(hidden), hidden_size);
+        const s_ref = self.getBufRef(@ptrCast(scratch), scratch_size);
+        const sc_ref = self.getBufRef(@ptrCast(sync_ctrs), sync_ctrs_size);
+
+        const enc = self.getEncoder(self.pipe_mega_qwen35_q8);
+        setBuf(enc, w_ref, 0);
+        setBuf(enc, lo_ref, 1);
+        setBuf(enc, kk_ref, 2);
+        setBuf(enc, kv_ref, 3);
+        setBuf(enc, h_ref, 4);
+        setBuf(enc, s_ref, 5);
+        setBuf(enc, sc_ref, 6);
+        setBytes(enc, params, params_size, 7);
+
+        self.endEncodeThreadgroups(enc, n_tgs, threadgroup_size);
+    }
+
+    /// Dispatch the Gemma 3/4 Q4_K true megakernel: single launch for all layers.
+    /// Same 8-buffer binding as Qwen 3.5, but with Gemma-specific params struct.
+    pub fn dispatchMegakernelGemmaQ4K(
+        self: *MetalBackend,
+        weights: [*]const u8,
+        weights_size: usize,
+        layer_offsets: [*]const u8,
+        layer_offsets_size: usize,
+        kv_keys: [*]f32,
+        kv_keys_size: usize,
+        kv_values: [*]f32,
+        kv_values_size: usize,
+        hidden: [*]f32,
+        hidden_size: usize,
+        scratch: [*]f32,
+        scratch_size: usize,
+        sync_ctrs: [*]f32,
+        sync_ctrs_size: usize,
+        params: *const anyopaque,
+        params_size: usize,
+        n_tgs: u32,
+    ) void {
+        const w_ref = self.getBufRef(weights, weights_size);
+        const lo_ref = self.getBufRef(layer_offsets, layer_offsets_size);
+        const kk_ref = self.getBufRef(@ptrCast(kv_keys), kv_keys_size);
+        const kv_ref = self.getBufRef(@ptrCast(kv_values), kv_values_size);
+        const h_ref = self.getBufRef(@ptrCast(hidden), hidden_size);
+        const s_ref = self.getBufRef(@ptrCast(scratch), scratch_size);
+        const sc_ref = self.getBufRef(@ptrCast(sync_ctrs), sync_ctrs_size);
+
+        const enc = self.getEncoder(self.pipe_mega_gemma_q4k);
+        setBuf(enc, w_ref, 0);
+        setBuf(enc, lo_ref, 1);
+        setBuf(enc, kk_ref, 2);
+        setBuf(enc, kv_ref, 3);
+        setBuf(enc, h_ref, 4);
+        setBuf(enc, s_ref, 5);
+        setBuf(enc, sc_ref, 6);
+        setBytes(enc, params, params_size, 7);
+
+        self.endEncodeThreadgroups(enc, n_tgs, threadgroup_size);
+    }
+
+    /// Dispatch the Qwen 3.5 Q4_K true megakernel: single launch for all layers.
+    /// Same structure as Q8_0 variant but with Q4_K dequantization in GEMV stages.
+    pub fn dispatchMegakernelQwen35Q4K(
+        self: *MetalBackend,
+        weights: [*]const u8,
+        weights_size: usize,
+        layer_offsets: [*]const u8,
+        layer_offsets_size: usize,
+        kv_keys: [*]f32,
+        kv_keys_size: usize,
+        kv_values: [*]f32,
+        kv_values_size: usize,
+        hidden: [*]f32,
+        hidden_size: usize,
+        scratch: [*]f32,
+        scratch_size: usize,
+        sync_ctrs: [*]f32,
+        sync_ctrs_size: usize,
+        params: *const anyopaque,
+        params_size: usize,
+        n_tgs: u32,
+    ) void {
+        const w_ref = self.getBufRef(weights, weights_size);
+        const lo_ref = self.getBufRef(layer_offsets, layer_offsets_size);
+        const kk_ref = self.getBufRef(@ptrCast(kv_keys), kv_keys_size);
+        const kv_ref = self.getBufRef(@ptrCast(kv_values), kv_values_size);
+        const h_ref = self.getBufRef(@ptrCast(hidden), hidden_size);
+        const s_ref = self.getBufRef(@ptrCast(scratch), scratch_size);
+        const sc_ref = self.getBufRef(@ptrCast(sync_ctrs), sync_ctrs_size);
+
+        const enc = self.getEncoder(self.pipe_mega_qwen35_q4k);
+        setBuf(enc, w_ref, 0);
+        setBuf(enc, lo_ref, 1);
+        setBuf(enc, kk_ref, 2);
+        setBuf(enc, kv_ref, 3);
+        setBuf(enc, h_ref, 4);
+        setBuf(enc, s_ref, 5);
+        setBuf(enc, sc_ref, 6);
+        setBytes(enc, params, params_size, 7);
+
+        self.endEncodeThreadgroups(enc, n_tgs, threadgroup_size);
+    }
+
+    /// Dispatch the Nemotron-H Q8_0 true megakernel: single launch for
+    /// attention and FFN-only layers. SSM layers break out.
+    /// Buffer 8 carries the per-layer type array (u32 per layer).
+    pub fn dispatchMegakernelNemotronHQ8(
+        self: *MetalBackend,
+        weights: [*]const u8,
+        weights_size: usize,
+        layer_offsets: [*]const u8,
+        layer_offsets_size: usize,
+        kv_keys: [*]f32,
+        kv_keys_size: usize,
+        kv_values: [*]f32,
+        kv_values_size: usize,
+        hidden: [*]f32,
+        hidden_size: usize,
+        scratch: [*]f32,
+        scratch_size: usize,
+        sync_ctrs: [*]f32,
+        sync_ctrs_size: usize,
+        params: *const anyopaque,
+        params_size: usize,
+        layer_types: [*]const u32,
+        layer_types_size: usize,
+        n_tgs: u32,
+    ) void {
+        const w_ref = self.getBufRef(weights, weights_size);
+        const lo_ref = self.getBufRef(layer_offsets, layer_offsets_size);
+        const kk_ref = self.getBufRef(@ptrCast(kv_keys), kv_keys_size);
+        const kv_ref = self.getBufRef(@ptrCast(kv_values), kv_values_size);
+        const h_ref = self.getBufRef(@ptrCast(hidden), hidden_size);
+        const s_ref = self.getBufRef(@ptrCast(scratch), scratch_size);
+        const sc_ref = self.getBufRef(@ptrCast(sync_ctrs), sync_ctrs_size);
+        const lt_ref = self.getBufRef(@ptrCast(layer_types), layer_types_size);
+
+        const enc = self.getEncoder(self.pipe_mega_nemotron_h_q8);
+        setBuf(enc, w_ref, 0);
+        setBuf(enc, lo_ref, 1);
+        setBuf(enc, kk_ref, 2);
+        setBuf(enc, kv_ref, 3);
+        setBuf(enc, h_ref, 4);
+        setBuf(enc, s_ref, 5);
+        setBuf(enc, sc_ref, 6);
+        setBytes(enc, params, params_size, 7);
+        setBuf(enc, lt_ref, 8);
+
+        self.endEncodeThreadgroups(enc, n_tgs, threadgroup_size);
+    }
+
+    // ── Composed Megakernel (auto-generated from model metadata) ──
+
+    /// Compile a composed megakernel from MSL source generated by mega_compose.zig.
+    /// The source is appended to the base MSL (which provides building blocks).
+    /// Call this at model init when --megakernel is enabled.
+    pub fn compileComposedMegakernel(self: *MetalBackend, composed_msl: []const u8) !void {
+        const NSString = objc.getClass("NSString") orelse return error.NoFoundation;
+
+        // Concatenate base MSL (building blocks) + composed kernel
+        const full_source = msl_source ++ composed_msl;
+
+        const source_ns = objc.msgSend(
+            ?objc.id,
+            NSString,
+            objc.sel("stringWithUTF8String:"),
+            .{@as([*:0]const u8, @ptrCast(full_source.ptr))},
+        ) orelse return error.StringFailed;
+
+        var compile_err: ?objc.id = null;
+        const lib = objc.msgSend(
+            ?objc.id,
+            self.device,
+            objc.sel("newLibraryWithSource:options:error:"),
+            .{ source_ns, @as(?objc.id, null), @as(*?objc.id, &compile_err) },
+        ) orelse {
+            if (compile_err) |err_obj| {
+                const desc_ns = objc.msgSend(?objc.id, err_obj, objc.sel("localizedDescription"), .{});
+                if (desc_ns) |ns| {
+                    const cstr = objc.msgSend(?[*:0]const u8, ns, objc.sel("UTF8String"), .{});
+                    if (cstr) |d| std.log.err("Composed megakernel compile error: {s}", .{d});
+                }
+            }
+            return error.ShaderCompileFailed;
+        };
+        defer release(lib);
+
+        // Look up the auto-generated kernel function
+        const fn_name_ns = objc.msgSend(
+            ?objc.id,
+            NSString,
+            objc.sel("stringWithUTF8String:"),
+            .{@as([*:0]const u8, "megakernel_auto")},
+        ) orelse return error.StringFailed;
+
+        const func = objc.msgSend(
+            ?objc.id,
+            lib,
+            objc.sel("newFunctionWithName:"),
+            .{fn_name_ns},
+        ) orelse return error.FunctionNotFound;
+        defer release(func);
+
+        var pipe_err: ?objc.id = null;
+        self.pipe_mega_auto = objc.msgSend(
+            ?objc.id,
+            self.device,
+            objc.sel("newComputePipelineStateWithFunction:error:"),
+            .{ func, @as(*?objc.id, &pipe_err) },
+        ) orelse {
+            if (pipe_err) |err_obj| {
+                const desc_ns = objc.msgSend(?objc.id, err_obj, objc.sel("localizedDescription"), .{});
+                if (desc_ns) |ns| {
+                    const cstr = objc.msgSend(?[*:0]const u8, ns, objc.sel("UTF8String"), .{});
+                    if (cstr) |d| std.log.err("Composed megakernel pipeline error: {s}", .{d});
+                }
+            }
+            return error.PipelineCreationFailed;
+        };
+    }
+
+    /// Dispatch the auto-composed megakernel. Same 8-buffer binding as the
+    /// hand-written megakernels.
+    pub fn dispatchMegakernelAuto(
+        self: *MetalBackend,
+        weights: [*]const u8,
+        weights_size: usize,
+        layer_offsets: [*]const u8,
+        layer_offsets_size: usize,
+        kv_keys: [*]f32,
+        kv_keys_size: usize,
+        kv_values: [*]f32,
+        kv_values_size: usize,
+        hidden: [*]f32,
+        hidden_size: usize,
+        scratch: [*]f32,
+        scratch_size: usize,
+        sync_ctrs: [*]f32,
+        sync_ctrs_size: usize,
+        params: *const anyopaque,
+        params_size: usize,
+        n_tgs: u32,
+    ) void {
+        const pipe = self.pipe_mega_auto orelse @panic("composed megakernel not compiled — call compileComposedMegakernel first");
+        const w_ref = self.getBufRef(weights, weights_size);
+        const lo_ref = self.getBufRef(layer_offsets, layer_offsets_size);
+        const kk_ref = self.getBufRef(@ptrCast(kv_keys), kv_keys_size);
+        const kv_ref = self.getBufRef(@ptrCast(kv_values), kv_values_size);
+        const h_ref = self.getBufRef(@ptrCast(hidden), hidden_size);
+        const s_ref = self.getBufRef(@ptrCast(scratch), scratch_size);
+        const sc_ref = self.getBufRef(@ptrCast(sync_ctrs), sync_ctrs_size);
+
+        const enc = self.getEncoder(pipe);
+        setBuf(enc, w_ref, 0);
+        setBuf(enc, lo_ref, 1);
+        setBuf(enc, kk_ref, 2);
+        setBuf(enc, kv_ref, 3);
+        setBuf(enc, h_ref, 4);
+        setBuf(enc, s_ref, 5);
+        setBuf(enc, sc_ref, 6);
+        setBytes(enc, params, params_size, 7);
+
+        self.endEncodeThreadgroups(enc, n_tgs, threadgroup_size);
     }
 
     // ── Per-Head RMS Norm ──────────────────────────────────────

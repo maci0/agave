@@ -36,5 +36,6 @@ Start here: **[tutorial/README.md](tutorial/README.md)**
 - **[Architecture](ARCHITECTURE.md)** — project structure, module reference, inference pipeline
 - **[Models](MODELS.md)** — supported models, parameters, per-model details, benchmarks
 - **[Kernel Status](KERNELS.md)** — per-backend kernel implementation status
-- **[Contributing](CONTRIBUTING.md)** — how to add backends, models, quantization, chat templates
+- **[Megakernel System](MEGAKERNEL.md)** — three-tier megakernel architecture (fused FFN, true megakernels, composed megakernels)
+- **[Contributing](CONTRIBUTING.md)** — how to add backends, models, quantization, megakernels, chat templates
 - **[Ideas](IDEAS.md)** — future work and optimization ideas

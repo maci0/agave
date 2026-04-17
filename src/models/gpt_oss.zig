@@ -134,6 +134,8 @@ pub const GptOssModel = struct {
     kv_seq_len: usize = 0,
     /// Set to true to abort a running `forward` call from another thread.
     cancelled: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+    /// Enable fused megakernel for single-dispatch forward pass.
+    megakernel_enabled: bool = false,
 
     // ── Norm weight cache (BF16 → f32, converted once) ────────────
     norm_cache: [max_norm_entries]NormCacheEntry = undefined,

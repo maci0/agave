@@ -7,6 +7,10 @@
 
 const cu = @import("common.zig");
 
+/// Sparse V threshold: skip V positions with negligible softmax weight.
+/// At 1e-6, skipped positions contribute < 0.0001% to the output.
+const sparse_v_threshold: f32 = 1e-6;
+
 // ── TurboQuant dequantization helpers ────────────────────────────
 
 /// Lloyd-Max optimal centroids for N(0,1) at 2 bits (4 levels).
@@ -171,7 +175,9 @@ export fn sdpa_kernel(
         var acc: f32 = 0.0;
         var tt: u32 = 0;
         while (tt < sl) : (tt += 1) {
-            acc += cu.sharedLoad(tt) * values[tt * kvd + kvh * hd + d];
+            const score = cu.sharedLoad(tt);
+            if (score < sparse_v_threshold) continue; // Sparse V: skip negligible positions
+            acc += score * values[tt * kvd + kvh * hd + d];
         }
         output[q_base + d] = acc;
     }
@@ -289,6 +295,7 @@ export fn sdpa_turbo_kernel(
         var tt: u32 = 0;
         while (tt < sl) : (tt += 1) {
             const score = cu.sharedLoad(tt);
+            if (score < sparse_v_threshold) continue; // Sparse V: skip negligible positions
 
             if (bits_v == 0) {
                 // f32 passthrough

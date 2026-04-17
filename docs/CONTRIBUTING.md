@@ -76,6 +76,50 @@ pub const YourModel = struct {
 };
 ```
 
+## How to Add Megakernel Support for a New Model
+
+The composable megakernel generator (`src/backend/mega_compose.zig`) auto-generates model-specific Metal megakernels from metadata. No MSL or shader code is needed -- just define a `ModelDesc`.
+
+1. In your model's `init()`, populate a `ModelDesc` from model metadata:
+   ```zig
+   const mega_compose = @import("backend/mega_compose.zig");
+   const desc = mega_compose.ModelDesc{
+       .name = "yourmodel",
+       .n_layers = fmt.getMetaU32("num_hidden_layers"),
+       .n_embd = fmt.getMetaU32("hidden_size"),
+       .n_ff = fmt.getMetaU32("intermediate_size"),
+       .n_head = fmt.getMetaU32("num_attention_heads"),
+       .n_kv = fmt.getMetaU32("num_key_value_heads"),
+       .head_dim = n_embd / n_head,
+       .rope_dim = head_dim,
+       .rope_theta = fmt.getMetaF32("rope_theta"),
+       .rms_eps = fmt.getMetaF32("rms_norm_eps"),
+       .max_seq_len = ctx_size,
+       .activation = .silu,    // or .gelu, .relu_squared
+       .quant = .q4_k,         // detected from weight tensors
+       .layer_types = mega_compose.ModelDesc.uniform(n_layers, .attention),
+   };
+   ```
+2. Generate MSL and compile:
+   ```zig
+   var buf: [32768]u8 = undefined;
+   const msl = mega_compose.composeMSL(&buf, desc);
+   try metal_be.compileComposedMegakernel(msl);
+   ```
+3. Dispatch in `forward()`:
+   ```zig
+   metal_be.dispatchMegakernelAuto(params);
+   ```
+
+**Layer type helpers:**
+- `ModelDesc.uniform(n, .attention)` -- all attention layers (Gemma 3, dense models)
+- `ModelDesc.qwenHybrid(n, interval)` -- DeltaNet + attention hybrid (Qwen 3.5)
+- Custom: populate `layer_types` array directly for mixed architectures (Nemotron-H)
+
+**Optional flags:** `has_gate`, `has_qk_norm`, `has_post_attn_norm`, `fuse_residual` -- set these for model-specific structural variations.
+
+The composer selects the correct GEMV, activation, residual pattern, and SDPA building blocks automatically. See [MEGAKERNEL.md](MEGAKERNEL.md) for the full three-tier architecture.
+
 ## How to Add a New Quantization Scheme
 
 1. Add variant to `DType` enum in `src/format/format.zig` and wire up byte-size calculation in `src/backend/backend.zig` (`weightBytes()`)

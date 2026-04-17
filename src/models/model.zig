@@ -487,6 +487,17 @@ pub const ModelStorage = union(enum) {
         }
     }
 
+    /// Enable megakernel mode for fused single-dispatch forward pass.
+    pub fn setMegakernel(self: *ModelStorage, enabled: bool) void {
+        switch (self.*) {
+            inline else => |*m| {
+                if (@TypeOf(m.*) != void) {
+                    if (comptime @hasField(@TypeOf(m.*), "megakernel_enabled")) m.megakernel_enabled = enabled;
+                }
+            },
+        }
+    }
+
     /// Enable per-layer performance profiling.
     pub fn enableProfiling(self: *ModelStorage) void {
         switch (self.*) {

@@ -437,6 +437,27 @@ fi
 
 **Prevents:** Silent performance regressions from merging.
 
+### Megakernel Profiling
+
+Combining `--profile` with `--megakernel` shows the impact of kernel fusion on dispatch and barrier counts:
+
+```bash
+# Standard dispatch
+./agave model.gguf --profile "Test"
+# Metal: 994 dispatches, 690 barriers, 1 sync
+
+# With fused FFN megakernel (Tier 1)
+./agave model.gguf --profile --megakernel "Test"
+# Metal: 946 dispatches, 642 barriers, 1 sync
+# (48 fewer dispatches = 24 layers x 2 saved per FFN)
+
+# With true megakernel (Tier 2, when available for model+quant)
+# Metal: ~30 dispatches, ~30 barriers, 1 sync
+# (entire layer runs as single dispatch)
+```
+
+True megakernels show the most dramatic reduction -- dispatch count drops from hundreds to roughly `n_layers + overhead`. This is because each layer becomes a single dispatch with internal `mega_grid_sync` atomic barriers replacing Metal memory barriers.
+
 ### Comparative Profiling
 
 ```bash

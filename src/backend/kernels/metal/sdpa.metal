@@ -20,6 +20,7 @@ using namespace metal;
 constant uint sdpa_max_seq_len = 4096;
 constant uint sdpa_max_head_dim = 256;
 constant uint sdpa_block_size = 16;  // Bc: K,V block size (16 to fit 32KB threadgroup limit)
+constant float sparse_v_threshold = 1e-6f;  // Skip V positions with negligible softmax weight
 
 // ── TurboQuant dequantization helpers ─────────────────────────────
 // Lloyd-Max optimal centroids for N(0,1) at 2, 3, and 4 bits.
@@ -222,8 +223,9 @@ kernel void sdpa_fa2(
         threadgroup_barrier(mem_flags::mem_threadgroup);
         l_i += shared[0];
 
-        // ── Load V_block (reuses kv_block memory) ──────────────
+        // ── Load V_block (reuses kv_block memory), skip sparse positions ──
         for (uint t = tid; t < block_len; t += tg_sz) {
+            if (scores[t] < sparse_v_threshold) continue; // Sparse V: skip negligible positions
             uint t_global = block_start + t;
             uint v_base = t_global * kvd + kvh * hd;
             for (uint d = 0; d < hd; d++) {
@@ -236,6 +238,7 @@ kernel void sdpa_fa2(
         for (uint d = tid; d < hd; d += tg_sz) {
             float acc = 0.0f;
             for (uint t = 0; t < block_len; t++) {
+                if (scores[t] < sparse_v_threshold) continue; // Sparse V: skip negligible positions
                 acc += scores[t] * kv_block[t * hd + d];
             }
             out_acc[d] += acc;
@@ -383,8 +386,9 @@ kernel void sdpa_prefill_fa2(
         threadgroup_barrier(mem_flags::mem_threadgroup);
         l_i += shared[0];
 
-        // Load V block — from cache or V_new
+        // Load V block — from cache or V_new, skip sparse positions
         for (uint t = tid; t < block_len; t += tg_sz) {
+            if (scores[t] < sparse_v_threshold) continue; // Sparse V: skip negligible positions
             uint t_global = block_start + t;
             if (t_global < prev_len) {
                 uint v_base = t_global * kvd + kvh * hd;
@@ -398,10 +402,11 @@ kernel void sdpa_prefill_fa2(
         }
         threadgroup_barrier(mem_flags::mem_threadgroup);
 
-        // Accumulate: out_acc += scores @ V_block
+        // Accumulate: out_acc += scores @ V_block, skip sparse positions
         for (uint d = tid; d < hd; d += tg_sz) {
             float acc = 0.0f;
             for (uint t = 0; t < block_len; t++) {
+                if (scores[t] < sparse_v_threshold) continue; // Sparse V: skip negligible positions
                 acc += scores[t] * kv_block[t * hd + d];
             }
             out_acc[d] += acc;
@@ -564,8 +569,9 @@ kernel void sdpa_fa2_turbo(
         threadgroup_barrier(mem_flags::mem_threadgroup);
         l_i += shared[0];
 
-        // ── Load V_block with turbo dequant (reuses kv_block memory) ──
+        // ── Load V_block with turbo dequant (reuses kv_block memory), skip sparse positions ──
         for (uint t = tid; t < block_len; t += tg_sz) {
+            if (scores[t] < sparse_v_threshold) continue; // Sparse V: skip negligible positions
             uint t_global = block_start + t;
             if (bits_v == 0) {
                 // f32 passthrough
@@ -596,6 +602,7 @@ kernel void sdpa_fa2_turbo(
         for (uint d = tid; d < hd; d += tg_sz) {
             float acc = 0.0f;
             for (uint t = 0; t < block_len; t++) {
+                if (scores[t] < sparse_v_threshold) continue; // Sparse V: skip negligible positions
                 acc += scores[t] * kv_block[t * hd + d];
             }
             out_acc[d] += acc;

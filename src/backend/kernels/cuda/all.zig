@@ -53,6 +53,9 @@ comptime {
     _ = @import("gemv_mlx_q8.zig");
     _ = @import("gemv_mxfp4_st.zig");
 
+    // Fused FFN
+    _ = @import("fused_ffn_q8_0.zig");
+
     // Batched GEMV
     _ = @import("gemv_q4_0_batch.zig");
 
@@ -60,4 +63,9 @@ comptime {
     _ = @import("gemm_q8_0.zig");
     _ = @import("rms_norm_batched.zig");
     _ = @import("rope_batched.zig");
+
+    // True megakernels
+    _ = @import("mega_qwen35_q8.zig");
+    _ = @import("mega_gemma_q4k.zig");
+    _ = @import("mega_gemma_q8.zig");
 }

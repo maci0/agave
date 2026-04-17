@@ -13,6 +13,7 @@ zig build                                          # Build (ReleaseFast + Debug)
 ./zig-out/bin/agave model.gguf --serve              # HTTP server (OpenAI + Anthropic API)
 ./zig-out/bin/agave model.gguf -q "Hello" > out.txt # Quiet mode (pipe-friendly)
 ./zig-out/bin/agave model.gguf --backend cpu        # Force CPU backend
+./zig-out/bin/agave model.gguf --megakernel "Hi"    # Fused FFN megakernel (Metal/CUDA)
 ```
 
 `zig build` produces three binaries:
@@ -73,12 +74,14 @@ agave/
 │   │   ├── vulkan.zig     # Vulkan: SPIR-V shaders, subgroup reductions, buffer cache
 │   │   ├── cuda.zig       # CUDA: PTX kernels from Zig, deferred execution, Driver API
 │   │   ├── rocm.zig       # ROCm: HIP Runtime API, HSACO kernels, deferred execution
+│   │   ├── megakernel.zig # Weight offset computation for fused FFN megakernels
+│   │   ├── mega_compose.zig # Composable megakernel generator (ModelDesc → MSL at runtime)
 │   │   ├── objc.zig       # Objective-C runtime bridge for Metal API
 │   │   └── kernels/       # GPU kernel source files
-│   │       ├── metal/     # MSL compute shaders
+│   │       ├── metal/     # MSL compute shaders (incl. megakernel.metal, mega_common.metal, mega_*.metal)
 │   │       ├── vulkan/    # GLSL compute shaders → compiled SPIR-V (.spv)
-│   │       ├── cuda/      # Zig kernels compiled to PTX via nvptx64-cuda target
-│   │       └── rocm/      # Zig kernels compiled to HSACO via amdgcn-amdhsa target
+│   │       ├── cuda/      # Zig kernels compiled to PTX (incl. fused_ffn_q8_0.zig, mega_*.zig)
+│   │       └── rocm/      # Zig kernels compiled to HSACO via amdgcn-amdhsa target (incl. mega_*.zig)
 │   ├── kvcache/
 │   │   ├── manager.zig    # KV cache alloc/free, PagedKvCache, RadixTree
 │   │   ├── block_allocator.zig # Block allocation for paged KV cache

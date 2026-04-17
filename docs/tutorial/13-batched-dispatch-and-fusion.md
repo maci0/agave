@@ -380,6 +380,173 @@ for (active_experts) |expert_id, i| {
 
 **Fused:** Zero syncs. All accumulation happens on GPU.
 
+## Megakernel System (Three-Tier Architecture)
+
+The megakernel system eliminates GPU dispatch overhead at three levels of granularity. All tiers are enabled via the `--megakernel` CLI flag.
+
+### Tier 1: Fused FFN
+
+Combine **gate GEMV + up GEMV + activation** into a single kernel dispatch. Instead of 3 separate dispatches per FFN layer (gate, up, silu/gelu), a single kernel computes all three.
+
+**Standard FFN:**
+```
+Dispatch 1: gate_buf = W_gate @ x     (GEMV)
+Dispatch 2: up_buf = W_up @ x         (GEMV)
+Dispatch 3: out = silu(gate_buf) * up_buf  (siluMul)
+```
+
+**Fused:**
+```
+Dispatch 1: out = silu(W_gate @ x) * (W_up @ x)  (single kernel)
+```
+
+Each threadgroup computes one output element. It loads the same `x` vector once and computes both gate and up dot products in parallel, then applies the activation in registers.
+
+**Activation variants:**
+
+- **SiLU** (Qwen 3.5, GLM-4): `out[i] = silu(gate[i]) * up[i]`
+- **GELU** (Gemma 3/4): `out[i] = gelu(gate[i]) * up[i]`
+
+**Quantization coverage:**
+
+12 Metal MSL kernels in `megakernel.metal`:
+- SiLU: Q8_0, Q4_K, Q5_K, Q6_K, Q4_0, MLX_Q4
+- GELU: Q8_0, Q4_K, Q5_K, Q6_K, Q4_0
+
+1 CUDA kernel: `fused_ffn_q8_0.zig` (Q8_0 SiLU, compiled to PTX).
+
+**Performance:**
+
+For small models (0.8-2B), dispatch overhead is a significant fraction of per-token time. Fusing 3->1 saves ~48 dispatches per token (24 layers x 2 saved):
+
+- Qwen 3.5 0.8B Q8_0: 380 -> 332 dispatches/token, +4-7% decode
+- Gemma 4 E2B Q4_K_M: +93% short decode, -23% prefill
+
+For larger models (4B+), the per-dispatch compute time dominates, so the relative gain is smaller.
+
+**Supported models:** Qwen 3.5, Gemma 3, Gemma 4 (dense+MoE), GLM-4 on Metal. Qwen 3.5 Q8_0 on CUDA.
+
+**Weight offset computation:** The megakernel needs to access both gate and up weight matrices in a single dispatch. `src/backend/megakernel.zig` computes per-layer byte offsets so the kernel can locate both weight tensors without separate buffer bindings.
+
+### Tier 2: True Megakernels
+
+True megakernels go further: execute an **entire transformer layer** (norm, Q/K/V projection, RoPE, KV cache append, SDPA, output projection, FFN) in a single GPU dispatch. This eliminates **all** per-layer dispatches and barriers.
+
+**Composable building blocks** (`mega_common.metal`, 732 lines, 18 primitives):
+
+```
+Primitive categories:
+  Sync:        mega_grid_sync (atomic counter barrier)
+  Norm:        mega_rms_norm, mega_add_rms_norm
+  GEMV:        mega_gemv_q8, mega_gemv_q4k, mega_gemv_q4_0, mega_gemv_q5k, mega_gemv_q6k
+  Activation:  mega_silu_mul, mega_gelu_mul, mega_relu_squared, mega_silu_mul_clamp
+  Transform:   mega_rope, mega_add
+  KV Cache:    mega_kv_append_f32, mega_kv_append_tq (TurboQuant encoding)
+  Attention:   mega_sdpa_inline (TQ+ dequant, sparse V, online softmax, GQA)
+```
+
+**How grid sync works:** True megakernels dispatch all threadgroups at once. Between phases (e.g., after norm, before GEMV), all threadgroups must synchronize. Metal has no built-in grid-level barrier, so `mega_grid_sync` implements one using an atomic counter with `memory_order_relaxed`. Each threadgroup increments the counter and spins until all threadgroups have arrived.
+
+**Execution flow (simplified Qwen Q8 example):**
+
+```
+Single GPU dispatch:
+  1. mega_rms_norm(x, w_norm)          // All TGs cooperate on norm
+  2. mega_grid_sync()                   // Barrier
+  3. mega_gemv_q8(x, w_qkv, qkv_buf)  // Q/K/V projection
+  4. mega_grid_sync()
+  5. mega_rope(q, k, pos, theta)       // RoPE on Q and K
+  6. mega_kv_append_tq(k, v, cache)    // Append to KV with TurboQuant
+  7. mega_grid_sync()
+  8. mega_sdpa_inline(q, cache, out)   // SDPA with TQ+ dequant + sparse V
+  9. mega_grid_sync()
+  10. mega_gemv_q8(attn_out, w_o, proj) // Output projection
+  11. mega_add(residual, proj)           // Residual connection
+  12. mega_add_rms_norm(...)             // FFN pre-norm
+  13. mega_grid_sync()
+  14. mega_gemv_q8(x, w_gate, gate)     // FFN gate
+  15. mega_gemv_q8(x, w_up, up)         // FFN up
+  16. mega_silu_mul(gate, up, ffn_out)   // Activation
+  17. mega_grid_sync()
+  18. mega_gemv_q8(ffn_out, w_down, out) // FFN down
+  19. mega_add(residual, out)            // Final residual
+```
+
+**Implementations:**
+
+| Megakernel | Metal | CUDA | ROCm |
+|------------|:-----:|:----:|:----:|
+| Qwen 3.5 Q8_0 | Yes | Yes | Yes |
+| Qwen 3.5 Q4_K | Yes | -- | -- |
+| Gemma 3/4 Q4_K | Yes | Yes | -- |
+| Gemma 3/4 Q8_0 | Yes | Yes | -- |
+| Nemotron-H Q8_0 | Yes | -- | -- |
+
+**TurboQuant+ in megakernels:** The `mega_kv_append_tq` and `mega_sdpa_inline` building blocks integrate TurboQuant+ directly. KV values are quantized inline during append, and SDPA dequantizes them on-the-fly with sparse V optimization (positions with softmax weight below 1e-6 skip V dequantization).
+
+**Total megakernel code:** ~4,166 lines across 12 files (hand-written) plus ~650 lines in `mega_compose.zig` (auto-generator).
+
+### Tier 3: Composed Megakernels (Auto-Generated)
+
+Tier 3 eliminates the need to hand-write per-model megakernel files. The `src/backend/mega_compose.zig` module generates model-specific MSL source at runtime from a `ModelDesc` struct populated from model metadata.
+
+**Pipeline:**
+
+```
+Model Metadata (GGUF) → ModelDesc → composeMSL() → MSL source → Metal runtime compile
+```
+
+**How it works:**
+
+1. At model init, populate a `ModelDesc` from GGUF/SafeTensors metadata (dimensions, quant, activation, layer types)
+2. Call `mega_compose.composeMSL(&buf, desc)` to generate MSL source into a stack buffer
+3. The generated MSL references the 18 building blocks from `mega_common.metal` (concatenated before it)
+4. Metal backend compiles via `compileComposedMegakernel()` using `newLibraryWithSource`
+5. Dispatch via `dispatchMegakernelAuto()` -- single GPU dispatch for all layers
+
+**What the composer handles automatically:**
+
+- Quant dispatch: Q8_0, Q4_K, Q5_K, Q6_K, Q4_0 -- selects the correct `mega_gemv_*` function
+- Activation: SiLU, GELU, ReLU-squared -- selects the correct activation call
+- Layer types: attention layers get SDPA, DeltaNet/MoE/FFN-only layers skip it
+- Residual pattern: fused (Qwen `addRmsNorm`) or separate (Gemma `add` + `norm`)
+- Post-attention norm: optional fused `addRmsNorm`
+- Inline SDPA with KV cache append, online softmax, sparse V, GQA
+- TurboQuant+ via `mega_kv_append_tq` and `mega_sdpa_inline` building blocks
+
+**Adding a new model** only requires defining a `ModelDesc`:
+
+```zig
+const desc = ModelDesc{
+    .name = "new_model",
+    .n_layers = 32,
+    .n_embd = 4096,
+    .n_ff = 11008,
+    .n_head = 32,
+    .n_kv = 8,
+    .head_dim = 128,
+    .rope_dim = 128,
+    .rope_theta = 10000.0,
+    .rms_eps = 1e-6,
+    .max_seq_len = 4096,
+    .activation = .silu,
+    .quant = .q4_k,
+    .layer_types = ModelDesc.uniform(32, .attention),
+};
+var buf: [32768]u8 = undefined;
+const msl = mega_compose.composeMSL(&buf, desc);
+try metal_be.compileComposedMegakernel(msl);
+```
+
+No MSL or shader code needed -- the composer generates everything from the descriptor.
+
+### CLI
+
+```bash
+agave model.gguf --megakernel "prompt"     # Use megakernel (Tier 1, 2, or 3)
+agave model.gguf "prompt"                  # Standard (default)
+```
+
 ## When to Fuse vs When to Keep Separate
 
 ### Fuse when:
@@ -493,7 +660,7 @@ fn encode(...) void {
 
 ---
 
-**In the code:** [src/backend/backend.zig](../../src/backend/backend.zig) (gemvMulti, siluMul, addRmsNorm interfaces), [src/backend/metal.zig](../../src/backend/metal.zig) (Metal implementations), [src/backend/kernels/metal/elementwise.metal](../../src/backend/kernels/metal/elementwise.metal) (fused kernels), [src/models/qwen35.zig](../../src/models/qwen35.zig) (usage examples)
+**In the code:** [src/backend/backend.zig](../../src/backend/backend.zig) (gemvMulti, siluMul, addRmsNorm interfaces), [src/backend/metal.zig](../../src/backend/metal.zig) (Metal implementations, `compileComposedMegakernel`, `dispatchMegakernelAuto`), [src/backend/megakernel.zig](../../src/backend/megakernel.zig) (weight offset computation), [src/backend/mega_compose.zig](../../src/backend/mega_compose.zig) (Tier 3 composable generator: `ModelDesc`, `composeMSL`), [src/backend/kernels/metal/megakernel.metal](../../src/backend/kernels/metal/megakernel.metal) (Tier 1 fused FFN), [src/backend/kernels/metal/mega_common.metal](../../src/backend/kernels/metal/mega_common.metal) (Tier 2/3 building blocks), [src/backend/kernels/metal/mega_qwen35_q8.metal](../../src/backend/kernels/metal/mega_qwen35_q8.metal) (example true megakernel), [src/models/qwen35.zig](../../src/models/qwen35.zig) (usage examples)
 
 **Related:** [Chapter 11: Metal Backend Internals](11-metal-backend-internals.md#batch-mode-suppressing-intermediate-barriers)
 

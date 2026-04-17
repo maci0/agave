@@ -143,6 +143,8 @@ pub const NemotronNanoModel = struct {
     kv_type_v: kv_quant.KvQuantType = .f32,
     kv_seq_len: usize = 0,
     cancelled: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+    /// Enable fused megakernel for single-dispatch forward pass.
+    megakernel_enabled: bool = false,
 
     // ── Lifecycle ─────────────────────────────────────────────────
 

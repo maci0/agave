@@ -1,6 +1,6 @@
 # Agave vs llama.cpp — Performance Benchmarks
 
-**Date**: 2026-04-14 (decode benchmarks from 2026-03-24, KV/vision from 2026-04-14)
+**Date**: 2026-04-17 (decode benchmarks from 2026-03-24, KV/vision from 2026-04-14, megakernel from 2026-04-17)
 **Hardware**: Apple M4 Pro (14-core CPU, 20-core GPU), 48 GB unified memory
 **OS**: macOS 26.3.1 (aarch64)
 **llama.cpp**: latest (commit ~March 2026), Metal enabled, GGML_CPU_REPACK=OFF
@@ -25,6 +25,31 @@ Single-token autoregressive generation (batch=1). This is the primary metric for
 - MLX-Q4 is a SafeTensors format unique to Agave (not comparable to llama.cpp).
 - llama.cpp numbers include Metal GPU offload; Agave Metal uses native MSL kernels.
 - CPU numbers use all 14 threads (Agave) vs 10 threads (llama.cpp default).
+- Qwen3.5 0.8B Q8_0: +7% decode with `--megakernel` (see Megakernel section below).
+
+## Megakernel System
+
+The megakernel system has two tiers, enabled via `--megakernel`:
+
+### Tier 1: Fused FFN
+
+Fuses gate+up GEMV + activation into a single GPU dispatch per FFN layer, reducing dispatch count by ~48 per token (24 layers x 2 saved dispatches). 12 Metal MSL kernels cover SiLU x {Q8_0, Q4_K, Q5_K, Q6_K, Q4_0, MLX_Q4} and GELU x {Q8_0, Q4_K, Q5_K, Q6_K, Q4_0}. CUDA has 1 kernel (Q8_0 SiLU).
+
+| Model | Quant | Standard | Megakernel | Delta | Notes |
+|-------|-------|----------|------------|-------|-------|
+| Qwen3.5 0.8B | Q8_0 | 111.7 tok/s | 116.3 tok/s | +4% | Short decode |
+| Qwen3.5 0.8B | Q8_0 | 23.8 tok/s | 25.5 tok/s | +7% | Profiled decode |
+| Gemma 4 E2B | Q4_K_M | 9.9 tok/s | 19.1 tok/s | **+93%** | Short decode (9 tok) |
+| Gemma 4 E2B | Q4_K_M | 12.4 tok/s | 12.7 tok/s | +2% | 100 tok decode |
+| Gemma 4 E2B | Q4_K_M | 2206 ms | 1702 ms | **-23%** | Prefill |
+
+Largest gains on models with mixed quantization (Q4_K_M = Q4_K + Q6_K layers) where the fused kernels cover all layer types. Wired into Qwen 3.5, Gemma 3, Gemma 4 (dense+MoE), and GLM-4.
+
+### Tier 2: True Megakernels
+
+True megakernels execute an entire transformer layer in a single GPU dispatch using composable building blocks with atomic grid sync. 18 primitives in `mega_common.metal` (732 lines) include cooperative RMS norm, per-format GEMV, activations, RoPE, KV cache append with TurboQuant encoding, and inline SDPA with TQ+ dequant and sparse V.
+
+**Implementations**: 5 Metal (Qwen Q8/Q4K, Gemma Q4K/Q8, Nemotron-H Q8), 3 CUDA (Qwen Q8, Gemma Q4K/Q8), 1 ROCm (Qwen Q8). Total megakernel code: ~4,166 lines across 12 files.
 
 ## Prefill Throughput
 

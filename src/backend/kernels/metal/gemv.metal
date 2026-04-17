@@ -272,6 +272,7 @@ kernel void gemv_q4_1(
 // ── BF16 GEMV ────────────────────────────────────────────────
 // Weights stored as raw ushort (bfloat16 bit pattern).
 // Read as uchar pairs to handle potentially unaligned SafeTensors data.
+// NR=2: each threadgroup processes 2 output rows, sharing x vector loads.
 
 inline float read_bf16(device const uchar* p, uint idx) {
     uint byte_off = idx * 2;
@@ -280,20 +281,12 @@ inline float read_bf16(device const uchar* p, uint idx) {
     return as_type<float>((hi << 24) | (lo << 16));
 }
 
-kernel void gemv_bf16(
-    device const float* x  [[buffer(0)]],
-    device const uchar* W  [[buffer(1)]],
-    device float* y        [[buffer(2)]],
-    constant uint& n       [[buffer(3)]],
-    constant uint& k       [[buffer(4)]],
-    uint tgid     [[threadgroup_position_in_grid]],
-    uint tid      [[thread_index_in_threadgroup]],
-    uint tg_size  [[threads_per_threadgroup]])
-{
-    if (tgid >= n) return;
+constant uint bf16_nr = 2;
 
+// Inline: compute one row's dot product for BF16 weights.
+inline float bf16_row_dot(device const uchar* W, device const float* x, uint row_off, uint k,
+                          uint tid, uint tg_size) {
     float sum = 0.0f;
-    uint row_off = tgid * k;
     uint k4 = k & ~3u;
     for (uint j = tid * 4; j < k4; j += tg_size * 4) {
         float4 wv = float4(read_bf16(W, row_off+j),
@@ -306,20 +299,67 @@ kernel void gemv_bf16(
     for (uint j = k4 + tid; j < k; j += tg_size) {
         sum += read_bf16(W, row_off + j) * x[j];
     }
+    return sum;
+}
+
+kernel void gemv_bf16(
+    device const float* x  [[buffer(0)]],
+    device const uchar* W  [[buffer(1)]],
+    device float* y        [[buffer(2)]],
+    constant uint& n       [[buffer(3)]],
+    constant uint& k       [[buffer(4)]],
+    uint tgid     [[threadgroup_position_in_grid]],
+    uint tid      [[thread_index_in_threadgroup]],
+    uint tg_size  [[threads_per_threadgroup]])
+{
+    uint row_base = tgid * bf16_nr;
+    if (row_base >= n) return;
+    uint nr_active = min(bf16_nr, n - row_base);
+
+    float sum0 = bf16_row_dot(W, x, row_base * k, k, tid, tg_size);
+    float sum1 = 0.0f;
+    if (nr_active > 1)
+        sum1 = bf16_row_dot(W, x, (row_base + 1) * k, k, tid, tg_size);
 
     threadgroup float shared[8];
-    sum = threadgroup_reduce_sum(sum, shared, tid, tg_size);
-    if (tid == 0) y[tgid] = sum;
+    sum0 = threadgroup_reduce_sum(sum0, shared, tid, tg_size);
+    if (tid == 0) y[row_base] = sum0;
+
+    if (nr_active > 1) {
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        sum1 = threadgroup_reduce_sum(sum1, shared, tid, tg_size);
+        if (tid == 0) y[row_base + 1] = sum1;
+    }
 }
 
 // ── F16 GEMV ─────────────────────────────────────────────────
 // Read as uchar pairs for unaligned SafeTensors data.
+// NR=2: each threadgroup processes 2 output rows, sharing x vector loads.
 
 inline float read_f16(device const uchar* p, uint idx) {
     uint byte_off = idx * 2;
     uint lo = p[byte_off];
     uint hi = p[byte_off + 1];
     return float(as_type<half>(ushort((hi << 8) | lo)));
+}
+
+constant uint f16_nr = 2;
+
+// Inline: compute one row's dot product for F16 weights.
+inline float f16_row_dot(device const uchar* W, device const float* x, uint row_off, uint k,
+                         uint tid, uint tg_size) {
+    float sum = 0.0f;
+    uint k4 = k & ~3u;
+    for (uint j = tid * 4; j < k4; j += tg_size * 4) {
+        float4 wv = float4(read_f16(W, row_off+j), read_f16(W, row_off+j+1),
+                            read_f16(W, row_off+j+2), read_f16(W, row_off+j+3));
+        float4 xv = float4(x[j], x[j+1], x[j+2], x[j+3]);
+        sum += dot(wv, xv);
+    }
+    for (uint j = k4 + tid; j < k; j += tg_size) {
+        sum += read_f16(W, row_off + j) * x[j];
+    }
+    return sum;
 }
 
 kernel void gemv_f16(
@@ -332,24 +372,24 @@ kernel void gemv_f16(
     uint tid      [[thread_index_in_threadgroup]],
     uint tg_size  [[threads_per_threadgroup]])
 {
-    if (tgid >= n) return;
+    uint row_base = tgid * f16_nr;
+    if (row_base >= n) return;
+    uint nr_active = min(f16_nr, n - row_base);
 
-    float sum = 0.0f;
-    uint row_off = tgid * k;
-    uint k4 = k & ~3u;
-    for (uint j = tid * 4; j < k4; j += tg_size * 4) {
-        float4 wv = float4(read_f16(W, row_off+j), read_f16(W, row_off+j+1),
-                            read_f16(W, row_off+j+2), read_f16(W, row_off+j+3));
-        float4 xv = float4(x[j], x[j+1], x[j+2], x[j+3]);
-        sum += dot(wv, xv);
-    }
-    for (uint j = k4 + tid; j < k; j += tg_size) {
-        sum += read_f16(W, row_off + j) * x[j];
-    }
+    float sum0 = f16_row_dot(W, x, row_base * k, k, tid, tg_size);
+    float sum1 = 0.0f;
+    if (nr_active > 1)
+        sum1 = f16_row_dot(W, x, (row_base + 1) * k, k, tid, tg_size);
 
     threadgroup float shared[8];
-    sum = threadgroup_reduce_sum(sum, shared, tid, tg_size);
-    if (tid == 0) y[tgid] = sum;
+    sum0 = threadgroup_reduce_sum(sum0, shared, tid, tg_size);
+    if (tid == 0) y[row_base] = sum0;
+
+    if (nr_active > 1) {
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        sum1 = threadgroup_reduce_sum(sum1, shared, tid, tg_size);
+        if (tid == 0) y[row_base + 1] = sum1;
+    }
 }
 
 // ── NVFP4 SafeTensors GEMV ───────────────────────────────────
@@ -562,6 +602,37 @@ kernel void gemv_q4_k(
 // Layout: { uchar scales[16]; uchar qs[64]; half d; half dmin; }
 // Dequant: 2-bit values packed 4 per byte, per-sub-block (16 values)
 // 4-bit scale (low nibble) and min (high nibble).
+// NR=2: each threadgroup processes 2 output rows, sharing x vector loads.
+
+constant uint q2_k_nr = 2;
+
+// Inline: compute one Q2_K superblock's dot product for a single row.
+inline float q2_k_block_dot(device const uchar* bp, device const float* x, uint k, uint bk) {
+    device const uchar* scales = bp;
+    device const uchar* qs = bp + 16;
+    float d    = float(as_type<half>(ushort(bp[80] | (uint(bp[81]) << 8))));
+    float dmin = float(as_type<half>(ushort(bp[82] | (uint(bp[83]) << 8))));
+    float sum = 0.0f;
+
+    for (uint sb = 0; sb < 16; sb++) {
+        float sc = float(scales[sb] & 0x0F);
+        float m  = float(scales[sb] >> 4);
+        float d_sc = d * sc;
+        float dm_m = dmin * m;
+        uint gi_base = bk + sb * 16;
+
+        for (uint l = 0; l < 16; l++) {
+            uint gi = gi_base + l;
+            if (gi >= k) break;
+            uint qi = sb * 16 + l;
+            uint byte_idx = qi / 4;
+            uint shift = (qi % 4) * 2;
+            float q = float((qs[byte_idx] >> shift) & 0x03);
+            sum += x[gi] * (d_sc * q - dm_m);
+        }
+    }
+    return sum;
+}
 
 kernel void gemv_q2_k(
     device const float* x [[buffer(0)]],
@@ -573,43 +644,31 @@ kernel void gemv_q2_k(
     uint tid      [[thread_index_in_threadgroup]],
     uint tg_size  [[threads_per_threadgroup]])
 {
-    if (tgid >= n) return;
-
     const uint bpb = 84;
     const uint bs = 256;
     uint nb = (k + bs - 1) / bs;
-    float sum = 0.0f;
+    uint row_base = tgid * q2_k_nr;
+    if (row_base >= n) return;
+    uint nr_active = min(q2_k_nr, n - row_base);
+
+    float sum0 = 0.0f, sum1 = 0.0f;
 
     for (uint b = tid; b < nb; b += tg_size) {
-        device const uchar* bp = W + (tgid * nb + b) * bpb;
-        device const uchar* scales = bp;
-        device const uchar* qs = bp + 16;
-        float d    = float(as_type<half>(ushort(bp[80] | (uint(bp[81]) << 8))));
-        float dmin = float(as_type<half>(ushort(bp[82] | (uint(bp[83]) << 8))));
         uint bk = b * bs;
-
-        for (uint sb = 0; sb < 16; sb++) {
-            float sc = float(scales[sb] & 0x0F);
-            float m  = float(scales[sb] >> 4);
-            float d_sc = d * sc;
-            float dm_m = dmin * m;
-            uint gi_base = bk + sb * 16;
-
-            for (uint l = 0; l < 16; l++) {
-                uint gi = gi_base + l;
-                if (gi >= k) break;
-                uint qi = sb * 16 + l;
-                uint byte_idx = qi / 4;
-                uint shift = (qi % 4) * 2;
-                float q = float((qs[byte_idx] >> shift) & 0x03);
-                sum += x[gi] * (d_sc * q - dm_m);
-            }
-        }
+        sum0 += q2_k_block_dot(W + (row_base * nb + b) * bpb, x, k, bk);
+        if (nr_active > 1)
+            sum1 += q2_k_block_dot(W + ((row_base + 1) * nb + b) * bpb, x, k, bk);
     }
 
     threadgroup float tg_shared[8];
-    sum = threadgroup_reduce_sum(sum, tg_shared, tid, tg_size);
-    if (tid == 0) y[tgid] = sum;
+    sum0 = threadgroup_reduce_sum(sum0, tg_shared, tid, tg_size);
+    if (tid == 0) y[row_base] = sum0;
+
+    if (nr_active > 1) {
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        sum1 = threadgroup_reduce_sum(sum1, tg_shared, tid, tg_size);
+        if (tid == 0) y[row_base + 1] = sum1;
+    }
 }
 
 // ── Q5_0 GEMV ────────────────────────────────────────────────
@@ -663,6 +722,40 @@ kernel void gemv_q5_0(
 // Layout: { uchar hmask[32]; uchar qs[64]; uchar scales_raw[12]; half d; }
 // Dequant: q3 = ((qs[qi/4] >> (qi%4)*2) & 3) | ((hmask[qi%32] >> (qi/32)) & 1) << 2) - 4
 // Per-sub-block (16 values) scale: decoded from scales_raw nibbles, biased by -8.
+// NR=2: each threadgroup processes 2 output rows, sharing x vector loads.
+
+constant uint q3_k_nr = 2;
+
+// Inline: compute one Q3_K superblock's dot product for a single row.
+inline float q3_k_block_dot(device const uchar* bp, device const float* x, uint k, uint bk) {
+    device const uchar* hmask = bp;
+    device const uchar* qs = bp + 32;
+    device const uchar* raw_scales = bp + 96;
+    float d = float(as_type<half>(ushort(bp[108] | (uint(bp[109]) << 8))));
+
+    // Decode 16 sub-block scales from 12 packed nibble bytes
+    int scales[16];
+    for (uint j = 0; j < 8; j++) {
+        scales[j]     = int(raw_scales[j] & 0xF) - 8;
+        scales[8 + j] = int(raw_scales[j] >> 4) - 8;
+    }
+
+    float sum = 0.0f;
+    for (uint l = 0; l < 256; l++) {
+        uint gi = bk + l;
+        if (gi >= k) break;
+        uint byte_idx = l / 4;
+        uint shift = (l % 4) * 2;
+        uint q_lo = (qs[byte_idx] >> shift) & 0x03;
+        uint hm_byte = l % 32;
+        uint hm_bit = l / 32;
+        uint q_hi = (hmask[hm_byte] >> hm_bit) & 1;
+        int q3 = int(q_lo | (q_hi << 2)) - 4;
+        uint sb = l / 16;
+        sum += x[gi] * d * float(scales[sb]) * float(q3);
+    }
+    return sum;
+}
 
 kernel void gemv_q3_k(
     device const float* x [[buffer(0)]],
@@ -674,46 +767,31 @@ kernel void gemv_q3_k(
     uint tid      [[thread_index_in_threadgroup]],
     uint tg_size  [[threads_per_threadgroup]])
 {
-    if (tgid >= n) return;
-
     const uint bpb = 110;
     const uint bs = 256;
     uint nb = (k + bs - 1) / bs;
-    float sum = 0.0f;
+    uint row_base = tgid * q3_k_nr;
+    if (row_base >= n) return;
+    uint nr_active = min(q3_k_nr, n - row_base);
+
+    float sum0 = 0.0f, sum1 = 0.0f;
 
     for (uint b = tid; b < nb; b += tg_size) {
-        device const uchar* bp = W + (tgid * nb + b) * bpb;
-        device const uchar* hmask = bp;
-        device const uchar* qs = bp + 32;
-        device const uchar* raw_scales = bp + 96;
-        float d = float(as_type<half>(ushort(bp[108] | (uint(bp[109]) << 8))));
         uint bk = b * bs;
-
-        // Decode 16 sub-block scales from 12 packed nibble bytes
-        int scales[16];
-        for (uint j = 0; j < 8; j++) {
-            scales[j]     = int(raw_scales[j] & 0xF) - 8;
-            scales[8 + j] = int(raw_scales[j] >> 4) - 8;
-        }
-
-        for (uint l = 0; l < 256; l++) {
-            uint gi = bk + l;
-            if (gi >= k) break;
-            uint byte_idx = l / 4;
-            uint shift = (l % 4) * 2;
-            uint q_lo = (qs[byte_idx] >> shift) & 0x03;
-            uint hm_byte = l % 32;
-            uint hm_bit = l / 32;
-            uint q_hi = (hmask[hm_byte] >> hm_bit) & 1;
-            int q3 = int(q_lo | (q_hi << 2)) - 4;
-            uint sb = l / 16;
-            sum += x[gi] * d * float(scales[sb]) * float(q3);
-        }
+        sum0 += q3_k_block_dot(W + (row_base * nb + b) * bpb, x, k, bk);
+        if (nr_active > 1)
+            sum1 += q3_k_block_dot(W + ((row_base + 1) * nb + b) * bpb, x, k, bk);
     }
 
     threadgroup float tg_shared[8];
-    sum = threadgroup_reduce_sum(sum, tg_shared, tid, tg_size);
-    if (tid == 0) y[tgid] = sum;
+    sum0 = threadgroup_reduce_sum(sum0, tg_shared, tid, tg_size);
+    if (tid == 0) y[row_base] = sum0;
+
+    if (nr_active > 1) {
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        sum1 = threadgroup_reduce_sum(sum1, tg_shared, tid, tg_size);
+        if (tid == 0) y[row_base + 1] = sum1;
+    }
 }
 
 // ── Q6_K GEMV ────────────────────────────────────────────────

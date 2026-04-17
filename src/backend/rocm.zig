@@ -145,6 +145,7 @@ pub const RocmBackend = struct {
     fn_deinterleave: HipFunction = null,
     fn_deltanet_gate_beta: HipFunction = null,
     fn_deltanet_conv1d: HipFunction = null,
+    fn_mega_qwen35_q8: HipFunction = null,
 
     /// CPU backend for ops where CPU is genuinely faster than GPU dispatch (embLookup).
     cpu: CpuBackend = .{},
@@ -172,7 +173,7 @@ pub const RocmBackend = struct {
     kv_dev_cache: std.AutoHashMap(usize, KvDevCache) = undefined,
 
     /// Number of AMDGCN kernels loaded at init.
-    pub const n_kernels: u32 = 27;
+    pub const n_kernels: u32 = 28;
 
     /// Library name loaded via dlopen at init.
     pub const lib_name = "libamdhip64.so";
@@ -287,6 +288,7 @@ pub const RocmBackend = struct {
         self.fn_deinterleave = try self.getFunction(hipModuleGetFunction, "deinterleave_kernel");
         self.fn_deltanet_gate_beta = try self.getFunction(hipModuleGetFunction, "deltanet_gate_beta_kernel");
         self.fn_deltanet_conv1d = try self.getFunction(hipModuleGetFunction, "deltanet_conv1d_kernel");
+        self.fn_mega_qwen35_q8 = try self.getFunction(hipModuleGetFunction, "megakernel_qwen35_q8_kernel");
 
         return self;
     }
@@ -513,9 +515,10 @@ pub const RocmBackend = struct {
             @ptrCast(&n_u32),
             @ptrCast(&k_u32),
         };
-        // Q4_K/Q5_K/Q6_K use NR=2 (2 rows per workgroup); others use 1 row per workgroup.
+        // Multi-row kernels: Q4_K/Q5_K/Q6_K use NR=2, Q4_0/Q8_0 use NR=4.
         const grid_size: u32 = switch (w.dtype) {
             .q4_k, .q5_k, .q6_k => @intCast((n + 1) / 2),
+            .q4_0, .q8_0 => @intCast((n + 3) / 4),
             else => @intCast(n),
         };
         self.launch(func, grid_size, block_size, reduction_smem, &params);
@@ -743,6 +746,139 @@ pub const RocmBackend = struct {
     /// Batched GEMV — sequential dispatch.
     pub fn gemvMulti(self: *RocmBackend, x: [*]const f32, ops: []const backend_mod.GemvOp, k: usize) void {
         for (ops) |op| self.gemv(x, op.w, op.y, op.n, k);
+    }
+
+    // ── True megakernels ─────────────────────────────────────────
+
+    /// Dispatch the Qwen 3.5 Q8_0 true megakernel: single launch for all layers.
+    /// Uses cooperative grid sync — all workgroups must be co-resident.
+    pub fn dispatchMegakernelQwen35Q8(
+        self: *RocmBackend,
+        weights: [*]const u8,
+        layer_offsets: [*]const u8,
+        kv_keys: [*]f32,
+        kv_values: [*]f32,
+        hidden: [*]f32,
+        scratch: [*]f32,
+        sync_ctrs: [*]u32,
+        ss_scratch: *u32,
+        n_layers: u32,
+        n_embd: u32,
+        n_head: u32,
+        n_kv: u32,
+        head_dim: u32,
+        n_ff: u32,
+        rope_dim: u32,
+        rope_theta: f32,
+        rms_eps: f32,
+        full_attn_interval: u32,
+        max_seq_len: u32,
+        seq_pos: u32,
+        n_blocks: u32,
+    ) void {
+        var d_weights = self.getOrUpload(weights, n_layers * n_ff * n_embd);
+        var d_layer_offsets = self.getInputBuf(layer_offsets, n_layers * 160);
+        var d_kv_keys = self.getInPlaceBuf(kv_keys, n_layers * max_seq_len * n_kv * head_dim * @sizeOf(f32));
+        var d_kv_values = self.getInPlaceBuf(kv_values, n_layers * max_seq_len * n_kv * head_dim * @sizeOf(f32));
+        var d_hidden = self.getInPlaceBuf(hidden, n_embd * @sizeOf(f32));
+
+        const qkv_size = n_head * head_dim * 2 + n_kv * head_dim * 2;
+        const scratch_elems = n_embd + 2 * n_ff + qkv_size + 1;
+        var d_scratch = self.getOutputBuf(scratch, scratch_elems * @sizeOf(f32));
+
+        var d_sync_ctrs = self.getInPlaceBuf(sync_ctrs, 32 * @sizeOf(u32));
+        var d_ss_scratch = self.getInPlaceBuf(ss_scratch, @sizeOf(u32));
+
+        var p_n_layers: u32 = n_layers;
+        var p_n_embd: u32 = n_embd;
+        var p_n_head: u32 = n_head;
+        var p_n_kv: u32 = n_kv;
+        var p_head_dim: u32 = head_dim;
+        var p_n_ff: u32 = n_ff;
+        var p_rope_dim: u32 = rope_dim;
+        var p_rope_theta: f32 = rope_theta;
+        var p_rms_eps: f32 = rms_eps;
+        var p_full_attn_interval: u32 = full_attn_interval;
+        var p_max_seq_len: u32 = max_seq_len;
+        var p_seq_pos: u32 = seq_pos;
+        var p_n_blocks: u32 = n_blocks;
+
+        var params = [_]?*anyopaque{
+            @ptrCast(&d_weights),
+            @ptrCast(&d_layer_offsets),
+            @ptrCast(&d_kv_keys),
+            @ptrCast(&d_kv_values),
+            @ptrCast(&d_hidden),
+            @ptrCast(&d_scratch),
+            @ptrCast(&d_sync_ctrs),
+            @ptrCast(&d_ss_scratch),
+            @ptrCast(&p_n_layers),
+            @ptrCast(&p_n_embd),
+            @ptrCast(&p_n_head),
+            @ptrCast(&p_n_kv),
+            @ptrCast(&p_head_dim),
+            @ptrCast(&p_n_ff),
+            @ptrCast(&p_rope_dim),
+            @ptrCast(&p_rope_theta),
+            @ptrCast(&p_rms_eps),
+            @ptrCast(&p_full_attn_interval),
+            @ptrCast(&p_max_seq_len),
+            @ptrCast(&p_seq_pos),
+            @ptrCast(&p_n_blocks),
+        };
+
+        self.launch(self.fn_mega_qwen35_q8, n_blocks, block_size, reduction_smem, &params);
+    }
+
+    /// Dispatch the Gemma Q4_K true megakernel.
+    /// Placeholder — kernel not yet compiled for ROCm.
+    pub fn dispatchMegakernelGemmaQ4K(
+        self: *RocmBackend,
+        weights: [*]const u8,
+        layer_offsets: [*]const u8,
+        kv_keys: [*]f32,
+        kv_values: [*]f32,
+        hidden: [*]f32,
+        scratch: [*]f32,
+        sync_ctrs: [*]u32,
+        ss_scratch: *u32,
+        n_layers: u32,
+        n_embd: u32,
+        n_head: u32,
+        n_kv: u32,
+        head_dim: u32,
+        n_ff: u32,
+        rope_dim: u32,
+        rope_theta: f32,
+        rms_eps: f32,
+        embd_scale: f32,
+        max_seq_len: u32,
+        seq_pos: u32,
+        n_blocks: u32,
+    ) void {
+        _ = self;
+        _ = weights;
+        _ = layer_offsets;
+        _ = kv_keys;
+        _ = kv_values;
+        _ = hidden;
+        _ = scratch;
+        _ = sync_ctrs;
+        _ = ss_scratch;
+        _ = n_layers;
+        _ = n_embd;
+        _ = n_head;
+        _ = n_kv;
+        _ = head_dim;
+        _ = n_ff;
+        _ = rope_dim;
+        _ = rope_theta;
+        _ = rms_eps;
+        _ = embd_scale;
+        _ = max_seq_len;
+        _ = seq_pos;
+        _ = n_blocks;
+        @panic("ROCm megakernel_gemma_q4k: not yet implemented — add a ROCm kernel");
     }
 
     /// Commit pending GPU work and download results to host.

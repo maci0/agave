@@ -180,7 +180,9 @@ pub fn gemvF32(x: [*]const f32, w: [*]const f32, y: [*]f32, n: usize, k: usize) 
 
 **Performance gain:** 2-3× faster than 1-row-at-a-time on bandwidth-bound workloads (most GEMV cases).
 
-**Why not 8 rows?** Register pressure. 8 accumulators × V8 = 32 SIMD registers (NEON only has 32, AVX2 has 16). Compiler starts spilling to stack → slower. 4 rows is the sweet spot.
+**Why not 8 rows?** Register pressure. 8 accumulators x V8 = 32 SIMD registers (NEON only has 32, AVX2 has 16). Compiler starts spilling to stack -> slower. 4 rows is the sweet spot.
+
+**NR=2 for quantized formats:** In practice, all CPU GEMV kernels for quantized formats (Q4_0, Q4_K, Q5_K, Q6_K, Q8_0, BF16, F16, etc.) use **NR=2** (2-row batching). The dequantization logic per block consumes more registers than f32 GEMV, so 2 rows is the optimal trade-off between input vector reuse and register pressure. The same NR multi-row pattern is applied across GPU backends as well (Metal, CUDA, ROCm) with NR values tuned per format and hardware.
 
 ## Handling Quantized Data
 

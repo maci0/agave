@@ -94,6 +94,8 @@ pub const Glm4Model = struct {
     kv_type_v: kv_quant.KvQuantType = .f32,
     kv_seq_len: usize = 0,
     cancelled: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+    /// Enable fused megakernel for single-dispatch forward pass.
+    megakernel_enabled: bool = false,
 
     // Name buffer for tensor lookups
     name_buf: [name_buf_size]u8 = undefined,
@@ -462,11 +464,39 @@ pub const Glm4Model = struct {
         self.be.rmsNorm(self.hidden.ptr, @ptrCast(@alignCast(nw.data_ptr)), self.hidden2.ptr, e, self.rms_eps);
 
         self.be.sync();
-        try self.mlxLayerGemv(li, "mlp.gate_proj", self.hidden2, self.ff_gate[0..ff], ff, e);
-        try self.mlxLayerGemv(li, "mlp.up_proj", self.hidden2, self.ff_up[0..ff], ff, e);
 
-        // SwiGLU: silu(gate) * up — chains with preceding GPU gemv ops
-        self.applySwiGlu(ff);
+        // Fused gate+up+SiLU for MLX Q4 when megakernel enabled
+        if (self.megakernel_enabled and self.mlx_bits == 4) blk: {
+            var buf_gw: [name_buf_size]u8 = undefined;
+            var buf_gs: [name_buf_size]u8 = undefined;
+            var buf_gb: [name_buf_size]u8 = undefined;
+            var buf_uw: [name_buf_size]u8 = undefined;
+            var buf_us: [name_buf_size]u8 = undefined;
+            var buf_ub: [name_buf_size]u8 = undefined;
+            const gw = self.fmt.getTensor(std.fmt.bufPrint(&buf_gw, "model.layers.{d}.mlp.gate_proj.weight", .{li}) catch break :blk) orelse break :blk;
+            const gs = self.fmt.getTensor(std.fmt.bufPrint(&buf_gs, "model.layers.{d}.mlp.gate_proj.scales", .{li}) catch break :blk) orelse break :blk;
+            const gb = self.fmt.getTensor(std.fmt.bufPrint(&buf_gb, "model.layers.{d}.mlp.gate_proj.biases", .{li}) catch break :blk) orelse break :blk;
+            const uw = self.fmt.getTensor(std.fmt.bufPrint(&buf_uw, "model.layers.{d}.mlp.up_proj.weight", .{li}) catch break :blk) orelse break :blk;
+            const us = self.fmt.getTensor(std.fmt.bufPrint(&buf_us, "model.layers.{d}.mlp.up_proj.scales", .{li}) catch break :blk) orelse break :blk;
+            const ub = self.fmt.getTensor(std.fmt.bufPrint(&buf_ub, "model.layers.{d}.mlp.up_proj.biases", .{li}) catch break :blk) orelse break :blk;
+            if (gw.dtype == .mlx_q) {
+                switch (self.be) {
+                    inline else => |be| {
+                        if (comptime @hasDecl(@TypeOf(be.*), "fusedFfnGateUpSiluMlxQ4")) {
+                            be.fusedFfnGateUpSiluMlxQ4(
+                                self.hidden2.ptr, gw.data_ptr, gs.data_ptr, gb.data_ptr,
+                                uw.data_ptr, us.data_ptr, ub.data_ptr,
+                                self.ff_gate.ptr, ff, e,
+                            );
+                        } else break :blk;
+                    },
+                }
+            } else break :blk;
+        } else {
+            try self.mlxLayerGemv(li, "mlp.gate_proj", self.hidden2, self.ff_gate[0..ff], ff, e);
+            try self.mlxLayerGemv(li, "mlp.up_proj", self.hidden2, self.ff_up[0..ff], ff, e);
+            self.applySwiGlu(ff);
+        }
 
         try self.mlxLayerGemv(li, "mlp.down_proj", self.ff_gate[0..ff], self.hidden2, e, ff);
         self.be.add(self.hidden.ptr, self.hidden2.ptr, self.hidden.ptr, e);
