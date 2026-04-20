@@ -114,14 +114,14 @@ fn turboDequantBlock(block_ptr: [*]const u8, dst: *[32]f32, bits: u32) void {
         return;
     }
 
-    const packed = block_ptr + 2;
+    const pack_ptr = block_ptr + 2;
 
     // Unpack indices and look up codebook values
     if (bits == 4) {
         // 4-bit: 2 indices per byte (16 bytes for 32 elements)
         var i: u32 = 0;
         while (i < 16) : (i += 1) {
-            const byte = packed[i];
+            const byte = pack_ptr[i];
             dst[i * 2] = codebookLookup(4, byte & 0xF);
             dst[i * 2 + 1] = codebookLookup(4, byte >> 4);
         }
@@ -129,7 +129,7 @@ fn turboDequantBlock(block_ptr: [*]const u8, dst: *[32]f32, bits: u32) void {
         // 2-bit: 4 indices per byte (8 bytes for 32 elements)
         var i: u32 = 0;
         while (i < 8) : (i += 1) {
-            const byte = packed[i];
+            const byte = pack_ptr[i];
             dst[i * 4] = codebookLookup(2, byte & 0x3);
             dst[i * 4 + 1] = codebookLookup(2, (byte >> 2) & 0x3);
             dst[i * 4 + 2] = codebookLookup(2, (byte >> 4) & 0x3);
@@ -142,9 +142,9 @@ fn turboDequantBlock(block_ptr: [*]const u8, dst: *[32]f32, bits: u32) void {
             const bit_pos = i * 3;
             const byte_idx = bit_pos / 8;
             const bit_off: u5 = @intCast(bit_pos % 8);
-            var val: u32 = @as(u32, packed[byte_idx]) >> bit_off;
+            var val: u32 = @as(u32, pack_ptr[byte_idx]) >> bit_off;
             if (bit_off + 3 > 8) {
-                val |= @as(u32, packed[byte_idx + 1]) << @intCast(8 - bit_off);
+                val |= @as(u32, pack_ptr[byte_idx + 1]) << @intCast(8 - bit_off);
             }
             dst[i] = codebookLookup(3, val & 0x7);
         }

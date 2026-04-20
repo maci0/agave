@@ -5,7 +5,7 @@
 
 const std = @import("std");
 const Io = std.Io;
-const clap = @import("clap");
+const cli_mod = @import("cli.zig");
 const backend_mod = @import("backend/backend.zig");
 const format_mod = @import("format/format.zig");
 const model_mod = @import("models/model.zig");
@@ -321,57 +321,55 @@ const repl_help =
 
 // ── CLI definition ───────────────────────────────────────────────
 
-const cli_params = clap.parseParamsComptime(
+const cli_specs = [_]cli_mod.ArgSpec{
     // General
-    \\-h, --help                 Show this help message and exit.
-    \\-v, --version              Print version and exit.
-    \\-q, --quiet                Suppress banner and stats (raw output only).
-    \\    --color <str>          Color mode: auto, always, never [default: auto].
-    \\    --no-color             Disable colored output (same as --color=never).
+    .{ .long = "help", .short = 'h', .help = "Show this help message and exit." },
+    .{ .long = "version", .short = 'v', .help = "Print version and exit." },
+    .{ .long = "quiet", .short = 'q', .help = "Suppress banner and stats (raw output only)." },
+    .{ .long = "color", .kind = .option, .help = "Color mode: auto, always, never [default: auto]." },
+    .{ .long = "no-color", .help = "Disable colored output (same as --color=never)." },
     // Generation
-    \\-n, --max-tokens <u32>     Maximum tokens to generate [default: 512].
-    \\-t, --temperature <str>    Sampling temperature, 0 = greedy [default: 0].
-    \\    --top-p <str>          Nucleus sampling threshold [default: 1.0].
-    \\    --top-k <u32>          Top-k sampling, 0 = disabled [default: 0].
-    \\    --repeat-penalty <str> Repetition penalty [default: 1.0].
-    \\    --seed <u64>           Random seed for sampling [default: random].
-    \\    --system <str>         System prompt for chat formatting.
+    .{ .long = "max-tokens", .short = 'n', .kind = .option, .help = "Maximum tokens to generate [default: 512]." },
+    .{ .long = "temperature", .short = 't', .kind = .option, .help = "Sampling temperature, 0 = greedy [default: 0]." },
+    .{ .long = "top-p", .kind = .option, .help = "Nucleus sampling threshold [default: 1.0]." },
+    .{ .long = "top-k", .kind = .option, .help = "Top-k sampling, 0 = disabled [default: 0]." },
+    .{ .long = "repeat-penalty", .kind = .option, .help = "Repetition penalty [default: 1.0]." },
+    .{ .long = "seed", .kind = .option, .help = "Random seed for sampling [default: random]." },
+    .{ .long = "system", .kind = .option, .help = "System prompt for chat formatting." },
     // Backend & model
-    \\    --backend <str>        Compute backend: auto, cpu, metal, vulkan, cuda, rocm [default: auto].
-    \\    --ctx-size <u32>       Context window size; 0 = full model context [default: min(model, 4096)].
-    \\    --allow-cpu-fallback   Allow GPU backends to fall back to CPU for unsupported ops.
-    \\    --mmap                 Use lazy mmap instead of eagerly paging weights into RAM.
-    \\    --prefill-batch-size <u32>  Prefill chunk size in tokens [default: 512].
+    .{ .long = "backend", .kind = .option, .help = "Compute backend: auto, cpu, metal, vulkan, cuda, rocm [default: auto]." },
+    .{ .long = "ctx-size", .kind = .option, .help = "Context window size; 0 = full model context [default: min(model, 4096)]." },
+    .{ .long = "allow-cpu-fallback", .help = "Allow GPU backends to fall back to CPU for unsupported ops." },
+    .{ .long = "mmap", .help = "Use lazy mmap instead of eagerly paging weights into RAM." },
+    .{ .long = "prefill-batch-size", .kind = .option, .help = "Prefill chunk size in tokens [default: 512]." },
     // KV cache
-    \\    --kv-type <str>        KV cache quantization [default: f16]. Options: f32, f16, q8_0, fp8, turbo2/tq2, turbo3/tq3, turbo4/tq4, turbo (preset: K=q8_0 V=turbo4, 3.8× compression).
-    \\    --kv-type-k <str>      KV cache key quantization (overrides --kv-type for keys). K precision is critical — protects attention routing.
-    \\    --kv-type-v <str>      KV cache value quantization (overrides --kv-type for values). V tolerates aggressive compression.
-    \\    --cache-type-k <str>   Alias for --kv-type-k.
-    \\    --cache-type-v <str>   Alias for --kv-type-v.
-    \\    --kv-tiers <str>       Enable tiered KV cache: vram+ram, vram+ram+ssd [default: off].
-    \\    --kv-ram-budget <u32>  RAM tier budget, integer GB, requires --kv-tiers [default: 50% of free RAM].
-    \\    --kv-ssd-path <str>    SSD tier file path, requires --kv-tiers with ssd.
-    \\    --kv-ssd-budget <u32>  SSD tier budget, integer GB, requires --kv-tiers with ssd [default: 10].
-    \\    --kv-eviction <str>    KV eviction policy: none, norm, tri [default: none].
-    \\    --kv-budget <u32>      Max KV positions to keep during eviction [default: 80% of ctx-size].
+    .{ .long = "kv-type", .kind = .option, .help = "KV cache quantization [default: f16]." },
+    .{ .long = "kv-type-k", .kind = .option, .help = "KV cache key quantization (overrides --kv-type for keys)." },
+    .{ .long = "kv-type-v", .kind = .option, .help = "KV cache value quantization (overrides --kv-type for values)." },
+    .{ .long = "cache-type-k", .kind = .option, .help = "Alias for --kv-type-k." },
+    .{ .long = "cache-type-v", .kind = .option, .help = "Alias for --kv-type-v." },
+    .{ .long = "kv-tiers", .kind = .option, .help = "Enable tiered KV cache: vram+ram, vram+ram+ssd [default: off]." },
+    .{ .long = "kv-ram-budget", .kind = .option, .help = "RAM tier budget, integer GB, requires --kv-tiers [default: 50% of free RAM]." },
+    .{ .long = "kv-ssd-path", .kind = .option, .help = "SSD tier file path, requires --kv-tiers with ssd." },
+    .{ .long = "kv-ssd-budget", .kind = .option, .help = "SSD tier budget, integer GB, requires --kv-tiers with ssd [default: 10]." },
+    .{ .long = "kv-eviction", .kind = .option, .help = "KV eviction policy: none, norm, tri [default: none]." },
+    .{ .long = "kv-budget", .kind = .option, .help = "Max KV positions to keep during eviction [default: 80% of ctx-size]." },
     // Server
-    \\-s, --serve                Start HTTP server (OpenAI + Anthropic API).
-    \\-p, --port <u16>           Server port [default: 49453].
-    \\    --host <str>           Server bind address [default: 127.0.0.1].
-    \\    --api-key <str>        API key for server auth (or AGAVE_API_KEY env).
+    .{ .long = "serve", .short = 's', .help = "Start HTTP server (OpenAI + Anthropic API)." },
+    .{ .long = "port", .short = 'p', .kind = .option, .help = "Server port [default: 49453]." },
+    .{ .long = "host", .kind = .option, .help = "Server bind address [default: 127.0.0.1]." },
+    .{ .long = "api-key", .kind = .option, .help = "API key for server auth (or AGAVE_API_KEY env)." },
     // Multimodal
-    \\    --mmproj <str>         Path to vision projector GGUF (mmproj file).
-    \\    --image <str>          Path to image file for multimodal inference (PNG or PPM P6).
+    .{ .long = "mmproj", .kind = .option, .help = "Path to vision projector GGUF (mmproj file)." },
+    .{ .long = "image", .kind = .option, .help = "Path to image file for multimodal inference (PNG or PPM P6)." },
     // Diagnostics
-    \\-V, --verbose              Show technical details (params, load times, EOG).
-    \\-d, --debug                Enable debug logging (token IDs, layer timing); implies --verbose.
-    \\    --json                 Output results as JSON (implies --quiet).
-    \\    --model-info           Print model metadata and exit (supports --json).
-    \\    --megakernel           Use fused megakernel (single GPU dispatch per token).
-    \\    --profile              Profile per-op timing (halves throughput).
-    \\<str>...
-    \\
-);
+    .{ .long = "verbose", .short = 'V', .help = "Show technical details (params, load times, EOG)." },
+    .{ .long = "debug", .short = 'd', .help = "Enable debug logging (token IDs, layer timing); implies --verbose." },
+    .{ .long = "json", .help = "Output results as JSON (implies --quiet)." },
+    .{ .long = "model-info", .help = "Print model metadata and exit (supports --json)." },
+    .{ .long = "megakernel", .help = "Use fused megakernel (single GPU dispatch per token)." },
+    .{ .long = "profile", .help = "Profile per-op timing (halves throughput)." },
+};
 
 const CliArgs = struct {
     model_path: []const u8,
@@ -473,23 +471,15 @@ fn checkSubcommand(allocator: std.mem.Allocator) bool {
 }
 
 fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
-    var diag = clap.Diagnostic{};
-    var res = clap.parse(clap.Help, &cli_params, clap.parsers.default, init_args, .{
-        .diagnostic = &diag,
-        .allocator = allocator,
-    }) catch |e| {
-        diag.reportToFile(g_io, stderr_file, e) catch {};
-        eprint("Run 'agave --help' for more information.\n", .{});
-        std.process.exit(1);
-    };
+    var res = cli_mod.parse(allocator, init_args, &cli_specs);
 
-    if (res.args.help != 0) {
+    if (res.flag("help")) {
         printUsage();
         res.deinit();
         return null;
     }
 
-    if (res.args.version != 0) {
+    if (res.flag("version")) {
         display_mod.printVersion();
         res.deinit();
         return null;
@@ -499,7 +489,7 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
     g_tty = stdout_file.isTty(g_io) catch false;
     g_color = blk: {
         // --color=always|never|auto takes precedence
-        if (res.args.color) |cm| {
+        if (res.option("color")) |cm| {
             if (std.mem.eql(u8, cm, "always")) break :blk true;
             if (std.mem.eql(u8, cm, "never")) break :blk false;
             if (!std.mem.eql(u8, cm, "auto")) {
@@ -509,23 +499,23 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
             }
         }
         // --no-color flag
-        if (res.args.@"no-color" != 0) break :blk false;
+        if (res.flag("no-color")) break :blk false;
         // NO_COLOR env var (https://no-color.org)
         if (g_environ.get("NO_COLOR") != null) break :blk false;
         // Auto: color only on TTY
         break :blk g_tty;
     };
-    g_quiet = res.args.quiet != 0;
-    g_debug = res.args.debug != 0;
-    g_verbose = res.args.verbose != 0 or g_debug;
+    g_quiet = res.flag("quiet");
+    g_debug = res.flag("debug");
+    g_verbose = res.flag("verbose") or g_debug;
 
-    const json_mode = res.args.json != 0;
+    const json_mode = res.flag("json");
     if (json_mode) {
         g_quiet = true;
     }
 
-    const positionals = res.positionals[0];
-    if (positionals.len == 0) {
+    const n_positionals = res.positionals.items.len;
+    if (n_positionals == 0) {
         eprint("Error: missing model path\n", .{});
         eprint("Usage: agave <model.gguf|model-dir/> [prompt]\n", .{});
         eprint("Run 'agave --help' for more information.\n", .{});
@@ -533,7 +523,7 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
     }
 
     const backend_choice: BackendChoice = blk: {
-        const be_str = res.args.backend orelse "auto";
+        const be_str = res.option("backend") orelse "auto";
         break :blk std.meta.stringToEnum(BackendChoice, be_str) orelse {
             eprint("Error: unknown backend '{s}'\n", .{be_str});
             eprint("  Valid options: auto, cpu, metal, vulkan, cuda, rocm\n", .{});
@@ -541,9 +531,9 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
         };
     };
 
-    const temperature = parseF32(res.args.temperature, "temperature") orelse 0.0;
-    const top_p = parseF32(res.args.@"top-p", "top-p") orelse 1.0;
-    const repeat_penalty = parseF32(res.args.@"repeat-penalty", "repeat-penalty") orelse 1.0;
+    const temperature = parseF32(res.option("temperature"), "temperature") orelse 0.0;
+    const top_p = parseF32(res.option("top-p"), "top-p") orelse 1.0;
+    const repeat_penalty = parseF32(res.option("repeat-penalty"), "repeat-penalty") orelse 1.0;
 
     // Validate sampling parameter ranges
     if (temperature < 0) {
@@ -559,11 +549,12 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
         std.process.exit(1);
     }
 
-    // Validate --kv-tiers value
-    if (res.args.@"kv-tiers") |tiers_str| {
+    // Validate --kv-tiers value (mutable copy needed for "off" → null conversion)
+    var kv_tiers_val = res.option("kv-tiers");
+    if (kv_tiers_val) |tiers_str| {
         if (std.mem.eql(u8, tiers_str, "off")) {
             // "off" is the documented default — treat as if the flag was not passed
-            res.args.@"kv-tiers" = null;
+            kv_tiers_val = null;
         } else if (!std.mem.eql(u8, tiers_str, "vram+ram") and !std.mem.eql(u8, tiers_str, "vram+ram+ssd")) {
             eprint("Error: unknown --kv-tiers value '{s}'\n", .{tiers_str});
             eprint("  Valid options: off, vram+ram, vram+ram+ssd\n", .{});
@@ -572,25 +563,25 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
     }
 
     // Warn about KV tier flags that have no effect without --kv-tiers
-    if (res.args.@"kv-tiers" == null) {
-        if (res.args.@"kv-ram-budget" != null)
+    if (kv_tiers_val == null) {
+        if (res.option("kv-ram-budget") != null)
             eprint("Warning: --kv-ram-budget has no effect without --kv-tiers\n", .{});
-        if (res.args.@"kv-ssd-budget" != null)
+        if (res.option("kv-ssd-budget") != null)
             eprint("Warning: --kv-ssd-budget has no effect without --kv-tiers\n", .{});
-        if (res.args.@"kv-ssd-path" != null)
+        if (res.option("kv-ssd-path") != null)
             eprint("Warning: --kv-ssd-path has no effect without --kv-tiers\n", .{});
-    } else if (res.args.@"kv-tiers") |tiers_str| {
+    } else if (kv_tiers_val) |tiers_str| {
         // Warn about SSD flags when --kv-tiers doesn't include ssd
         if (std.mem.indexOf(u8, tiers_str, "ssd") == null) {
-            if (res.args.@"kv-ssd-path" != null)
+            if (res.option("kv-ssd-path") != null)
                 eprint("Warning: --kv-ssd-path has no effect without ssd in --kv-tiers\n", .{});
-            if (res.args.@"kv-ssd-budget" != null)
+            if (res.option("kv-ssd-budget") != null)
                 eprint("Warning: --kv-ssd-budget has no effect without ssd in --kv-tiers\n", .{});
         }
     }
 
     // Validate --kv-eviction value
-    if (res.args.@"kv-eviction") |ev_str| {
+    if (res.option("kv-eviction")) |ev_str| {
         if (!std.mem.eql(u8, ev_str, "none") and !std.mem.eql(u8, ev_str, "norm") and !std.mem.eql(u8, ev_str, "tri")) {
             eprint("Error: unknown --kv-eviction value '{s}'\n", .{ev_str});
             eprint("  Valid options: none, norm, tri\n", .{});
@@ -599,22 +590,22 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
     }
 
     // Warn about --kv-budget without --kv-eviction
-    if (res.args.@"kv-budget" != null) {
-        const has_eviction = if (res.args.@"kv-eviction") |e| (!std.mem.eql(u8, e, "none")) else false;
+    if (res.option("kv-budget") != null) {
+        const has_eviction = if (res.option("kv-eviction")) |e| (!std.mem.eql(u8, e, "none")) else false;
         if (!has_eviction)
             eprint("Warning: --kv-budget has no effect without --kv-eviction\n", .{});
     }
 
     // Warn about --kv-type having no effect when both per-component types are set
-    if (res.args.@"kv-type" != null) {
-        const has_k = res.args.@"kv-type-k" != null or res.args.@"cache-type-k" != null;
-        const has_v = res.args.@"kv-type-v" != null or res.args.@"cache-type-v" != null;
+    if (res.option("kv-type") != null) {
+        const has_k = res.option("kv-type-k") != null or res.option("cache-type-k") != null;
+        const has_v = res.option("kv-type-v") != null or res.option("cache-type-v") != null;
         if (has_k and has_v)
             eprint("Warning: --kv-type has no effect when both --kv-type-k and --kv-type-v are set\n", .{});
     }
 
     // Validate max-tokens
-    if (res.args.@"max-tokens") |mt| {
+    if (res.optionU32("max-tokens")) |mt| {
         if (mt == 0) {
             eprint("Error: --max-tokens must be >= 1\n", .{});
             std.process.exit(1);
@@ -622,7 +613,7 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
     }
 
     // Validate prefill batch size
-    if (res.args.@"prefill-batch-size") |pbs| {
+    if (res.optionU32("prefill-batch-size")) |pbs| {
         if (pbs == 0) {
             eprint("Error: --prefill-batch-size must be >= 1\n", .{});
             std.process.exit(1);
@@ -630,35 +621,35 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
     }
 
     // Warn about extra positional arguments (e.g. unquoted multi-word prompt)
-    if (positionals.len > 2) {
+    if (n_positionals > 2) {
         eprint("Warning: extra arguments after prompt ignored (did you forget to quote it?)\n", .{});
         eprint("  Usage: agave model.gguf \"multi word prompt\"\n", .{});
     }
 
     // Warn about server-only flags that have no effect without --serve
-    if (res.args.serve == 0) {
-        if (res.args.port != null)
+    if (!res.flag("serve")) {
+        if (res.option("port") != null)
             eprint("Warning: --port has no effect without --serve\n", .{});
-        if (res.args.host != null)
+        if (res.option("host") != null)
             eprint("Warning: --host has no effect without --serve\n", .{});
-        if (res.args.@"api-key" != null)
+        if (res.option("api-key") != null)
             eprint("Warning: --api-key has no effect without --serve\n", .{});
     } else {
         // Warn about flags ignored in server mode (early, before model loading)
-        if (positionals.len > 1)
+        if (n_positionals > 1)
             eprint("Warning: prompt ignored in server mode (--serve)\n", .{});
-        if (res.args.system != null)
+        if (res.option("system") != null)
             eprint("Warning: --system ignored in server mode (system prompt comes from API request)\n", .{});
-        if (res.args.image != null)
+        if (res.option("image") != null)
             eprint("Warning: --image ignored in server mode (images come from API request)\n", .{});
     }
 
     // Warn about --allow-cpu-fallback with CPU backend (already on CPU, nothing to fall back to)
-    if (res.args.@"allow-cpu-fallback" != 0 and backend_choice == .cpu)
+    if (res.flag("allow-cpu-fallback") and backend_choice == .cpu)
         eprint("Warning: --allow-cpu-fallback has no effect with --backend cpu\n", .{});
 
     // JSON mode + interactive REPL would corrupt the JSON output stream
-    if (json_mode and res.args.@"model-info" == 0 and res.args.serve == 0 and positionals.len < 2) {
+    if (json_mode and !res.flag("model-info") and !res.flag("serve") and n_positionals < 2) {
         if ((stdin_file.isTty(g_io) catch false)) {
             eprint("Error: --json requires a prompt or --model-info\n", .{});
             eprint("  Usage: agave model.gguf --json \"prompt\"\n", .{});
@@ -668,45 +659,45 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
     }
 
     return .{
-        .model_path = positionals[0],
-        .prompt = if (positionals.len > 1) positionals[1] else null,
-        .serve = res.args.serve != 0,
-        .port = res.args.port orelse default_port,
-        .max_tokens = res.args.@"max-tokens" orelse default_max_tokens,
+        .model_path = res.positional(0).?,
+        .prompt = res.positional(1),
+        .serve = res.flag("serve"),
+        .port = res.optionU16("port") orelse default_port,
+        .max_tokens = res.optionU32("max-tokens") orelse default_max_tokens,
         .temperature = temperature,
         .top_p = top_p,
-        .top_k = res.args.@"top-k" orelse 0,
+        .top_k = res.optionU32("top-k") orelse 0,
         .repeat_penalty = repeat_penalty,
-        .system_prompt = res.args.system,
+        .system_prompt = res.option("system"),
         .backend_choice = backend_choice,
-        .ctx_size = res.args.@"ctx-size" orelse 0,
-        .seed = res.args.seed orelse @as(u64, @truncate(@as(u96, @bitCast(nanoTimestamp(g_io))))),
+        .ctx_size = res.optionU32("ctx-size") orelse 0,
+        .seed = res.optionU64("seed") orelse @as(u64, @truncate(@as(u96, @bitCast(nanoTimestamp(g_io))))),
         .kv_type_k = blk: {
-            if (res.args.@"kv-type-k") |s| break :blk kvTypeOrExit(s, "--kv-type-k");
-            if (res.args.@"cache-type-k") |s| break :blk kvTypeOrExit(s, "--cache-type-k");
-            const kv_str = res.args.@"kv-type" orelse break :blk KvQuantType.f16;
+            if (res.option("kv-type-k")) |s| break :blk kvTypeOrExit(s, "--kv-type-k");
+            if (res.option("cache-type-k")) |s| break :blk kvTypeOrExit(s, "--cache-type-k");
+            const kv_str = res.option("kv-type") orelse break :blk KvQuantType.f16;
             // "turbo" preset: asymmetric K=q8_0 V=turbo4 (K precision protects attention routing)
             if (std.mem.eql(u8, kv_str, "turbo")) break :blk KvQuantType.q8_0;
             break :blk kvTypeOrExit(kv_str, "--kv-type");
         },
         .kv_type_v = blk: {
-            if (res.args.@"kv-type-v") |s| break :blk kvTypeOrExit(s, "--kv-type-v");
-            if (res.args.@"cache-type-v") |s| break :blk kvTypeOrExit(s, "--cache-type-v");
-            const kv_str = res.args.@"kv-type" orelse break :blk KvQuantType.f16;
+            if (res.option("kv-type-v")) |s| break :blk kvTypeOrExit(s, "--kv-type-v");
+            if (res.option("cache-type-v")) |s| break :blk kvTypeOrExit(s, "--cache-type-v");
+            const kv_str = res.option("kv-type") orelse break :blk KvQuantType.f16;
             // "turbo" preset: asymmetric K=q8_0 V=turbo4 (V compression is nearly free)
             if (std.mem.eql(u8, kv_str, "turbo")) break :blk KvQuantType.turbo4;
             break :blk kvTypeOrExit(kv_str, "--kv-type");
         },
         // Turbo preset enables boundary V protection (first/last 2 layers at f16-V)
-        .kv_boundary_v = if (res.args.@"kv-type") |kv| (if (std.mem.eql(u8, kv, "turbo")) @as(u32, 2) else 0) else 0,
-        .kv_tiers = res.args.@"kv-tiers",
-        .kv_ram_budget = res.args.@"kv-ram-budget",
-        .kv_ssd_path = res.args.@"kv-ssd-path",
-        .kv_ssd_budget = res.args.@"kv-ssd-budget",
-        .kv_eviction = if (res.args.@"kv-eviction") |e| (!std.mem.eql(u8, e, "none")) else false,
-        .kv_budget = res.args.@"kv-budget" orelse 0,
+        .kv_boundary_v = if (res.option("kv-type")) |kv| (if (std.mem.eql(u8, kv, "turbo")) @as(u32, 2) else 0) else 0,
+        .kv_tiers = kv_tiers_val,
+        .kv_ram_budget = res.optionU32("kv-ram-budget"),
+        .kv_ssd_path = res.option("kv-ssd-path"),
+        .kv_ssd_budget = res.optionU32("kv-ssd-budget"),
+        .kv_eviction = if (res.option("kv-eviction")) |e| (!std.mem.eql(u8, e, "none")) else false,
+        .kv_budget = res.optionU32("kv-budget") orelse 0,
         .host = blk: {
-            const host_str = res.args.host orelse break :blk [4]u8{ 127, 0, 0, 1 };
+            const host_str = res.option("host") orelse break :blk [4]u8{ 127, 0, 0, 1 };
             if (std.mem.eql(u8, host_str, "0.0.0.0")) break :blk [4]u8{ 0, 0, 0, 0 };
             if (std.mem.eql(u8, host_str, "127.0.0.1") or std.mem.eql(u8, host_str, "localhost")) break :blk [4]u8{ 127, 0, 0, 1 };
             // Parse dotted-quad IPv4
@@ -730,24 +721,24 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
             }
             break :blk parts;
         },
-        .api_key = res.args.@"api-key" orelse g_environ.get("AGAVE_API_KEY"),
-        .allow_cpu_fallback = res.args.@"allow-cpu-fallback" != 0,
-        .debug = res.args.debug != 0,
+        .api_key = res.option("api-key") orelse g_environ.get("AGAVE_API_KEY"),
+        .allow_cpu_fallback = res.flag("allow-cpu-fallback"),
+        .debug = res.flag("debug"),
         .json = json_mode,
-        .model_info = res.args.@"model-info" != 0,
-        .profile = res.args.profile != 0,
-        .megakernel = res.args.megakernel != 0,
-        .use_mmap = res.args.mmap != 0,
-        .prefill_batch_size = res.args.@"prefill-batch-size" orelse default_chunk_size,
-        .mmproj = res.args.mmproj,
-        .image = res.args.image,
+        .model_info = res.flag("model-info"),
+        .profile = res.flag("profile"),
+        .megakernel = res.flag("megakernel"),
+        .use_mmap = res.flag("mmap"),
+        .prefill_batch_size = res.optionU32("prefill-batch-size") orelse default_chunk_size,
+        .mmproj = res.option("mmproj"),
+        .image = res.option("image"),
         .user_set = .{
-            .temperature = res.args.temperature != null,
-            .top_p = res.args.@"top-p" != null,
-            .top_k = res.args.@"top-k" != null,
-            .repeat_penalty = res.args.@"repeat-penalty" != null,
-            .max_tokens = res.args.@"max-tokens" != null,
-            .ctx_size = res.args.@"ctx-size" != null,
+            .temperature = res.option("temperature") != null,
+            .top_p = res.option("top-p") != null,
+            .top_k = res.option("top-k") != null,
+            .repeat_penalty = res.option("repeat-penalty") != null,
+            .max_tokens = res.option("max-tokens") != null,
+            .ctx_size = res.option("ctx-size") != null,
         },
     };
 }
@@ -916,7 +907,7 @@ pub fn main(init: std.process.Init) !void {
     g_environ = init.environ_map;
     const allocator = init.gpa;
 
-    // Check for subcommands before clap parsing
+    // Check for subcommands before CLI parsing
     if (checkSubcommand(allocator)) return;
 
     var cli = parseCli(allocator) orelse return;
@@ -2091,6 +2082,7 @@ test {
     // Force test discovery for all modules with test blocks.
     // Zig 0.15 uses lazy test discovery — files imported at the top level
     // but not referenced by any test block are silently excluded.
+    _ = @import("cli.zig");
     _ = @import("display.zig");
     _ = @import("ops/split_attention.zig");
     _ = @import("arch.zig");

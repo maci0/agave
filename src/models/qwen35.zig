@@ -940,10 +940,16 @@ pub const Qwen35Model = struct {
         const n_exp: usize = self.n_experts;
         const n_active: usize = self.n_experts_active;
 
-        // Post-attention norm
+        // Post-attention norm: fuse residual add when has_post_attn_norm
+        // (same as mlpLayer — attention output in hidden2 needs residual add to hidden)
         var t = self.perf.start();
-        const nw = self.fmt.layerTensor(li, "post_attention_norm.weight") orelse return error.MissingTensor;
-        self.be.rmsNorm(self.hidden.ptr, self.normAsF32(nw, e), self.hidden2.ptr, e, self.rms_eps);
+        if (self.has_post_attn_norm) {
+            const nw = self.fmt.layerTensor(li, "post_attention_norm.weight") orelse return error.MissingTensor;
+            self.be.addRmsNorm(self.hidden.ptr, self.hidden2.ptr, self.normAsF32(nw, e), self.hidden2.ptr, e, self.rms_eps);
+        } else {
+            const nw = self.fmt.layerTensor(li, "ffn_norm.weight") orelse return error.MissingTensor;
+            self.be.rmsNorm(self.hidden.ptr, self.normAsF32(nw, e), self.hidden2.ptr, e, self.rms_eps);
+        }
         self.syncProfile();
         self.perf.end(.rms_norm, t);
 

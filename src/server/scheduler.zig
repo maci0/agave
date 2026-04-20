@@ -5,20 +5,8 @@
 //! ejects finished/cancelled requests, and fills batch from waiting queue (cache-aware priority).
 
 const std = @import("std");
-
-/// Simple atomic spinlock replacing Mutex (removed in Zig 0.16).
-const Mutex = struct {
-    locked: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
-
-    pub fn lock(self: *Mutex) void {
-        while (self.locked.cmpxchgWeak(false, true, .acquire, .monotonic) != null)
-            std.atomic.spinLoopHint();
-    }
-
-    pub fn unlock(self: *Mutex) void {
-        self.locked.store(false, .release);
-    }
-};
+const Io = std.Io;
+const Mutex = Io.Mutex;
 
 /// Millisecond timestamp via raw C clock_gettime (Zig 0.16 idiom).
 fn milliTimestamp() i64 {
@@ -136,6 +124,7 @@ pub const RequestManager = struct {
     timeout_sec: u32,
     allocator: Allocator,
     mutex: Mutex,
+    io: Io,
     next_id: std.atomic.Value(u64),
     completed_total: u32 = 0,
     cancelled_total: u32 = 0,
@@ -152,7 +141,7 @@ pub const RequestManager = struct {
     ///
     /// If tiered_cache is provided, Prefetcher is initialized and started.
     /// Otherwise, prefetcher remains null.
-    pub fn init(allocator: Allocator, metrics: *Metrics, max_batch_size: usize, timeout_sec: u32, tiered_cache: ?*TieredKvCache) !RequestManager {
+    pub fn init(allocator: Allocator, metrics: *Metrics, max_batch_size: usize, timeout_sec: u32, tiered_cache: ?*TieredKvCache, io: Io) !RequestManager {
         var waiting: std.ArrayList(*Request) = .empty;
         try waiting.ensureTotalCapacity(allocator, max_waiting_queue_size);
         errdefer waiting.deinit(allocator);
@@ -169,7 +158,8 @@ pub const RequestManager = struct {
             .max_batch_size = max_batch_size,
             .timeout_sec = timeout_sec,
             .allocator = allocator,
-            .mutex = .{},
+            .mutex = .init,
+            .io = io,
             .next_id = std.atomic.Value(u64).init(1),
             .tiered_cache = tiered_cache,
             .prefetcher = null,
@@ -179,8 +169,7 @@ pub const RequestManager = struct {
         if (tiered_cache) |cache| {
             var prefetcher = Prefetcher.init(cache);
             errdefer prefetcher.deinit();
-            var threaded = std.Io.Threaded.init(allocator, .{});
-            try prefetcher.start(threaded.io());
+            try prefetcher.start(io);
             mgr.prefetcher = prefetcher;
         }
 
@@ -221,8 +210,8 @@ pub const RequestManager = struct {
         const id = self.next_id.fetchAdd(1, .monotonic);
 
         // Lock mutex for both RadixTree access and queue append (atomic check-and-insert)
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(self.io);
+        defer self.mutex.unlock(self.io);
 
         if (self.waiting.items.len >= max_waiting_queue_size) {
             return error.Overflow;
@@ -271,8 +260,8 @@ pub const RequestManager = struct {
 
         // Lock during queue manipulation (scoped to ensure unlock on all paths)
         {
-            self.mutex.lock();
-            defer self.mutex.unlock();
+            self.mutex.lockUncancelable(self.io);
+            defer self.mutex.unlock(self.io);
 
             // 1. Remove finished/cancelled from running list.
             // Do NOT free the request here — the HTTP handler thread holds a
@@ -407,8 +396,8 @@ pub const RequestManager = struct {
             // from HTTP handler threads, so concurrent insert would be a data race.
             if (req.is_finished.load(.acquire) and req.tokens.items.len > 0) {
                 const block_ids = model.getBlockTable();
-                self.mutex.lock();
-                defer self.mutex.unlock();
+                self.mutex.lockUncancelable(self.io);
+                defer self.mutex.unlock(self.io);
                 self.radix_tree.insert(req.tokens.items, block_ids) catch |err| {
                     std.log.warn("req={d} failed to insert sequence into RadixTree: {}", .{ req.id, err });
                 };
@@ -418,8 +407,8 @@ pub const RequestManager = struct {
 
     /// Get current scheduler statistics.
     pub fn getStats(self: *RequestManager) SchedulerStats {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(self.io);
+        defer self.mutex.unlock(self.io);
 
         return .{
             .waiting_count = @intCast(self.waiting.items.len),
@@ -455,11 +444,17 @@ pub fn runSchedulerLoop(
     }
 }
 
+/// Create a test Io instance for unit tests.
+fn testIo() Io {
+    var threaded = Io.Threaded.init(std.testing.allocator, .{});
+    return threaded.io();
+}
+
 // Unit tests
 test "enqueue increments waiting count" {
     const allocator = std.testing.allocator;
     var metrics = Metrics{};
-    var manager = try RequestManager.init(allocator, &metrics, 4, 30, null);
+    var manager = try RequestManager.init(allocator, &metrics, 4, 30, null, testIo());
     defer manager.deinit();
 
     const tokens_a = [_]u32{ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 };
@@ -478,7 +473,7 @@ test "enqueue increments waiting count" {
 test "step fills batch from waiting queue" {
     const allocator = std.testing.allocator;
     var metrics = Metrics{};
-    var manager = try RequestManager.init(allocator, &metrics, 2, 30, null);
+    var manager = try RequestManager.init(allocator, &metrics, 2, 30, null, testIo());
     defer manager.deinit();
 
     // Enqueue 3 requests — all freed by manager.deinit() (still in queues at test end)
@@ -509,7 +504,7 @@ test "step fills batch from waiting queue" {
 test "step removes finished requests" {
     const allocator = std.testing.allocator;
     var metrics = Metrics{};
-    var manager = try RequestManager.init(allocator, &metrics, 2, 30, null);
+    var manager = try RequestManager.init(allocator, &metrics, 2, 30, null, testIo());
     defer manager.deinit();
 
     const dummy_tokens = [_]u32{ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 };
@@ -545,7 +540,7 @@ test "step removes finished requests" {
 test "step cancels timed-out requests" {
     const allocator = std.testing.allocator;
     var metrics = Metrics{};
-    var manager = try RequestManager.init(allocator, &metrics, 2, 1, null); // 1 second timeout
+    var manager = try RequestManager.init(allocator, &metrics, 2, 1, null, testIo()); // 1 second timeout
     defer manager.deinit();
 
     const dummy_tokens = [_]u32{ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 };

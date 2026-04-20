@@ -28,6 +28,7 @@ const msl_source = @embedFile("kernels/metal/common.metal") ++
     @embedFile("kernels/metal/gemm.metal") ++
     @embedFile("kernels/metal/sdpa.metal") ++
     @embedFile("kernels/metal/deltanet.metal") ++
+    @embedFile("kernels/metal/gemv_tiled.metal") ++
     @embedFile("kernels/metal/megakernel.metal") ++
     @embedFile("kernels/metal/mega_common.metal") ++
     @embedFile("kernels/metal/mega_qwen35_q8.metal") ++
@@ -127,6 +128,8 @@ pub const MetalBackend = struct {
     pipe_gemv_nvfp4_st: objc.id,
     pipe_split_qgate: objc.id,
     pipe_gemv_q4_k: objc.id,
+    pipe_gemv_tiled_q4_k: objc.id,
+    pipe_gemv_tiled_q8_0: objc.id,
     pipe_gemv_q6_k: objc.id,
     pipe_gemv_q2_k: objc.id,
     pipe_gemv_q3_k: objc.id,
@@ -287,6 +290,8 @@ pub const MetalBackend = struct {
             .pipe_gemv_nvfp4_st = undefined,
             .pipe_split_qgate = undefined,
             .pipe_gemv_q4_k = undefined,
+            .pipe_gemv_tiled_q4_k = undefined,
+            .pipe_gemv_tiled_q8_0 = undefined,
             .pipe_gemv_q6_k = undefined,
             .pipe_gemv_q2_k = undefined,
             .pipe_gemv_q3_k = undefined,
@@ -367,6 +372,8 @@ pub const MetalBackend = struct {
         self.pipe_gemv_nvfp4_st = try self.makePipeline("gemv_nvfp4_st");
         self.pipe_split_qgate = try self.makePipeline("split_qgate");
         self.pipe_gemv_q4_k = try self.makePipeline("gemv_q4_k");
+        self.pipe_gemv_tiled_q4_k = try self.makePipeline("gemv_tiled_q4_k");
+        self.pipe_gemv_tiled_q8_0 = try self.makePipeline("gemv_tiled_q8_0");
         self.pipe_gemv_q6_k = try self.makePipeline("gemv_q6_k");
         self.pipe_gemv_q2_k = try self.makePipeline("gemv_q2_k");
         self.pipe_gemv_q3_k = try self.makePipeline("gemv_q3_k");

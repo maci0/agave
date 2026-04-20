@@ -5,7 +5,7 @@
 | Model | Arch ID | Attention | FFN | Special |
 |-------|---------|-----------|-----|---------|
 | **Gemma 3** | `gemma3` | GQA + QK norm + post-norms | GELU + SwiGLU | Embedding scaling, logit softcap, vision (SigLIP) |
-| **Qwen 3.5** | `qwen35` | GQA (every 4th layer) | SiLU + SwiGLU | DeltaNet SSM hybrid |
+| **Qwen 3.5/3.6** | `qwen35` | GQA (every 4th layer) | SiLU + SwiGLU | DeltaNet SSM hybrid, MoE (3.5-35B, 3.6-35B) |
 | **GPT-OSS** | `gpt_oss` | GQA + sliding window + sinks | SiLU + SwiGLU | MoE (top-4 of 32 experts) |
 | **Nemotron-H** | `nemotron_h` | GQA (sparse layers) | SiLU + SwiGLU | Mamba-2 SSM hybrid (GGUF) |
 | **Nemotron Nano** | `nemotron_nano` | GQA (sparse layers) | ReLU² MoE | SSM + MoE + attention hybrid (NVFP4) |
@@ -18,6 +18,7 @@
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
 | Gemma3 1B | 1152 | 4 | 1 | 256 | 6912 | 26 | 1M | 256 |
 | Qwen3.5 0.8B | 1536 | 16 | 4 | 128 | 4096 | 64 | 10M | 64 |
+| Qwen3.6 35B-A3B | 2048 | 16 | 2 | 256 | 512 (MoE×256) | 40 | 10M | 64 |
 | GPT-OSS | 2880 | 64 | 8 | 64 | 2880 (MoE) | 24 | 150K | 64 |
 | Nemotron-H | 3136 | 40 | 8 | 128 | 12544 | 42 | 10K | 78 |
 | Nemotron-Nano | 2688 | 32 | 2 | 128 | 1856 (MoE) | 52 | 10K | 128 |
@@ -30,7 +31,7 @@
 
 **Gemma 3**: GGUF converter bakes +1.0 into RMS norm weights (don't add again). Embeddings scaled by `sqrt(n_embd)`. Uses SPM tokenizer (no merges). Tied output embeddings. Vision supported via SigLIP encoder. Supports `--megakernel` (fused FFN GELU, true megakernel Q4K/Q8 on Metal+CUDA).
 
-**Qwen 3.5**: Hybrid architecture alternating DeltaNet SSM and full attention layers. DeltaNet uses causal conv1d → selective state recurrence with learned decay. Full attention layers have gated output with sigmoid. Supports `--megakernel` (fused FFN SiLU, true megakernel Q8/Q4K on Metal+CUDA+ROCm).
+**Qwen 3.5/3.6**: Hybrid architecture alternating DeltaNet SSM and full attention layers. DeltaNet uses causal conv1d → selective state recurrence with learned decay. Full attention layers have gated output with sigmoid. Qwen 3.6-35B-A3B uses the same architecture with 40 layers, 256 experts (top-8 + shared), hidden_size 2048. Supports `--megakernel` (fused FFN SiLU, true megakernel Q8/Q4K on Metal+CUDA+ROCm).
 
 **GPT-OSS**: Even layers = 128-token sliding window, odd = full sequence. Learned attention sinks per head. Clamped SwiGLU `[-7.0, +7.0]` in MoE experts.
 

@@ -266,7 +266,9 @@ pub inline fn resetInferenceState(kv_seq_len: *usize, cancelled: *std.atomic.Val
 /// Per-expert stride = weightBytes(rows * cols) = dims[1] * dims[2].
 pub fn expertWeightStride(t: format_mod.TensorInfo) usize {
     std.debug.assert(t.n_dims >= 3);
-    const elems: usize = @as(usize, @intCast(t.dims[1])) * @as(usize, @intCast(t.dims[2]));
+    // GGUF 3D expert tensors: [rows, cols, n_experts] — per-expert = rows × cols
+    // dims[2] is the expert count, dims[0] × dims[1] is per-expert weight size
+    const elems: usize = @as(usize, @intCast(t.dims[0])) * @as(usize, @intCast(t.dims[1]));
     return backend_mod.weightBytes(t.dtype, 1, elems);
 }
 

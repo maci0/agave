@@ -6,11 +6,15 @@
 //! Supported architectures (auto-detected from available tensors):
 //!
 //!   Gemma 4 SigLIP-2 (`gemma4_siglip2`):
-//!     - Conv2D patch embedding (16×16 patches from 224×224 image), no bias
+//!     - Conv2D patch embedding (16×16 patches), no bias
 //!     - Learned 2D position encoding [embd_dim, max_pos, 2]
-//!     - Input standardization (scale * x + bias, replaces CLIP mean/std)
 //!     - ViT blocks with: QK RMSNorm, post-attn/FFN RMSNorm, SwiGLU FFN
 //!     - Single linear projection (mm.input_projection.weight)
+//!     - 26B-A4B sub-variant: 768×768 effective image, 3×3 spatial merge → 256 tokens,
+//!       standardization via v.std_scale/v.std_bias (embd=1152, blocks=27, heads=16)
+//!     - E2B/E4B sub-variant: 224×224 image, no merge → 196 tokens,
+//!       no standardization (embd=768, blocks=16, heads=12). mmproj also contains
+//!       a.blk.* audio encoder tensors which are ignored by the vision path.
 //!
 //!   Gemma 3 SigLIP (`gemma3_siglip`):
 //!     - Conv2D patch embedding (14×14 patches from 896×896 image), with bias
@@ -86,13 +90,12 @@ const gelu_cubic_coeff = math_ops.gelu_coeff;
 /// Vision encoder architecture variant, auto-detected from available tensors.
 const VisionVariant = enum {
     /// Gemma 4 SigLIP-2: QK norms, SwiGLU, 2D pos, no bias, mm.input_projection.
+    /// Used by 26B-A4B (with spatial merge + standardization) and E2B/E4B (without).
     gemma4_siglip2,
     /// Gemma 3 SigLIP: bias, GELU FFN, 1D pos, post_ln, mm.soft_emb_norm + mm.input_projection.
     gemma3_siglip,
     /// Qwen VL: fused QKV, bias, GELU FFN, 1D pos, MLP projector mm.0 + mm.2.
     qwen_vl,
-    /// Gemma 4 E2B/E4B: conv-based encoder with depthwise/pointwise convolutions (a.blk.* prefix).
-    gemma4_e2b,
 };
 
 /// Cached pointer-keyed entry for converted norm weights.
@@ -141,8 +144,13 @@ pub const VisionEncoder = struct {
     has_post_ln: bool,
     /// Gemma4: true — 2D position embedding [embd_dim, max_pos, 2]. Others: 1D.
     pos_embd_is_2d: bool,
-    /// Gemma4: true — input standardization via v.std_scale + v.std_bias.
+    /// Gemma4 26B: true — input standardization via v.std_scale + v.std_bias.
     has_standardization: bool,
+    /// Pixel normalization scale: (pixel/255) * pixel_norm_scale + pixel_norm_bias.
+    /// 26B SigLIP-2 (mean=0.5, std=0.5): scale=2.0, bias=-1.0 → [-1,1].
+    /// E2B/E4B SigLIP-2 (mean=0.0, std=1.0): scale=1.0, bias=0.0 → [0,1].
+    pixel_norm_scale: f32,
+    pixel_norm_bias: f32,
 
     // ── Dependencies ─────────────────────────────────────────────
     fmt: Format,
@@ -202,14 +210,19 @@ pub const VisionEncoder = struct {
         const variant = detectVariant(fmt);
 
         // ── Spatial merge and effective resolution ───────────────
-        // Gemma 4 SigLIP-2: 3×3 avg pool after ViT → 9× reduction
+        // Gemma 4 SigLIP-2 (26B): 3×3 avg pool after ViT → 9× reduction
         //   768×768 → 48×48=2304 patches → 3×3 pool → 16×16=256 output tokens
+        // Gemma 4 SigLIP-2 (E2B/E4B): NO spatial merge — 224×224 → 14×14=196 tokens.
+        //   Detected by absence of v.std_scale (standardization tensors).
         // Qwen VL: 4× merge in MLP projector → n_patches/4 output tokens
         //   Process at native resolution (not upscaled). metadata image_size is the MAX.
         //   For 224×224 input: 14×14=196 patches → 4× merge → 49 output tokens.
         // Gemma 3: no merge, process at metadata image_size (896)
-        const n_merge: u32 = if (variant == .gemma4_siglip2) gemma4_merge_kernel else 0;
         const meta_image_size = fmt.getArchU32(arch, "image_size") orelse default_image_size;
+        const has_std_tensors = fmt.getTensor("v.std_scale") != null;
+        // Only apply 3×3 merge when standardization tensors are present (26B-A4B variant).
+        // E2B/E4B SigLIP-2 uses 224×224 without merge — patches_per_side=14 is not divisible by 3.
+        const n_merge: u32 = if (variant == .gemma4_siglip2 and has_std_tensors) gemma4_merge_kernel else 0;
         const image_size: u32 = if (n_merge > 0) gemma4_effective_image_size else meta_image_size;
 
         const patches_per_side = image_size / patch_size;
@@ -221,14 +234,6 @@ pub const VisionEncoder = struct {
         } else n_patches / qwen_merge_factor;
         const head_dim = embd_dim / n_heads;
 
-        // Gemma 4 E2B/E4B uses a completely different conv-based architecture
-        // (depthwise/pointwise convolutions, dual FFN, relative key attention)
-        // that is not yet implemented.
-        if (variant == .gemma4_e2b) {
-            std.log.warn("Gemma 4 E2B/E4B conv-based vision encoder not yet supported", .{});
-            return error.UnsupportedVisionEncoder;
-        }
-
         const has_bias = variant != .gemma4_siglip2;
         const has_qk_norm = variant == .gemma4_siglip2;
         const has_post_norms = variant == .gemma4_siglip2;
@@ -236,7 +241,22 @@ pub const VisionEncoder = struct {
         const ffn_has_gate = variant == .gemma4_siglip2;
         const has_post_ln = variant != .gemma4_siglip2;
         const pos_embd_is_2d = variant == .gemma4_siglip2;
-        const has_standardization = variant == .gemma4_siglip2;
+        // Standardization only when v.std_scale/v.std_bias tensors exist (26B-A4B).
+        // E2B/E4B SigLIP-2 omits these — image_mean=[0,0,0], image_std=[1,1,1].
+        const has_standardization = has_std_tensors;
+
+        // Pixel normalization parameters derived from image_mean/image_std metadata.
+        // 26B/Gemma3 (mean=0.5, std=0.5): (pix/255 - 0.5)/0.5 = 2*pix/255 - 1 → [-1,1]
+        // E2B/E4B (mean=0, std=1): (pix/255 - 0)/1 = pix/255 → [0,1]
+        // Qwen VL also uses mean=0.5, std=0.5 → [-1,1]
+        const pix_scale: f32 = if (variant == .gemma4_siglip2 and !has_std_tensors)
+            pixel_scale // 1/255 → [0,1]
+        else
+            2.0 * pixel_scale; // 2/255 → scale part of [-1,1]
+        const pix_bias: f32 = if (variant == .gemma4_siglip2 and !has_std_tensors)
+            0.0 // no bias → [0,1]
+        else
+            -1.0; // bias part of [-1,1]
 
         // Determine MLP projector intermediate dim for Qwen
         var mlp_intermediate_dim: u32 = 0;
@@ -289,6 +309,8 @@ pub const VisionEncoder = struct {
             .has_post_ln = has_post_ln,
             .pos_embd_is_2d = pos_embd_is_2d,
             .has_standardization = has_standardization,
+            .pixel_norm_scale = pix_scale,
+            .pixel_norm_bias = pix_bias,
             .mlp_intermediate_dim = mlp_intermediate_dim,
             .fmt = fmt,
             .be = be,
@@ -300,7 +322,6 @@ pub const VisionEncoder = struct {
             .gemma4_siglip2 => "Gemma4 SigLIP-2",
             .gemma3_siglip => "Gemma3 SigLIP",
             .qwen_vl => "Qwen VL",
-            .gemma4_e2b => unreachable, // Rejected above
         };
         if (n_merge > 0) {
             std.log.info("vision: detected variant={s} image={d}×{d} patch={d} patches={d} merge={d}×{d} -> {d} tokens embd={d} heads={d}", .{
@@ -354,9 +375,9 @@ pub const VisionEncoder = struct {
 
     /// Detect the vision encoder variant from available tensors in the mmproj file.
     fn detectVariant(fmt: Format) VisionVariant {
-        // Gemma 4 E2B/E4B conv-based encoder: uses "a.blk." prefix with depthwise convolution
-        if (fmt.getTensor("a.blk.0.conv_dw.weight") != null) return .gemma4_e2b;
-        // Gemma 4 SigLIP-2: has per-head QK RMSNorm weights
+        // Gemma 4 SigLIP-2: has per-head QK RMSNorm weights.
+        // Check this FIRST — E2B/E4B mmproj files contain both v.blk.* (SigLIP-2 ViT)
+        // and a.blk.* (audio encoder) tensors. The vision path uses the standard ViT.
         if (fmt.getTensor("v.blk.0.attn_q_norm.weight") != null) return .gemma4_siglip2;
         // Qwen VL: has fused QKV projection
         if (fmt.getTensor("v.blk.0.attn_qkv.weight") != null) return .qwen_vl;
@@ -487,15 +508,14 @@ pub const VisionEncoder = struct {
     // ── Preprocessing ─────────────────────────────────────────────
 
     /// Convert u8 RGB pixels (channel-last, row-major) to f32 channel-first [C, H, W].
-    /// Gemma 4 SigLIP-2: rescale to [-1, 1] via `2*(x/255) - 1` (matches llama.cpp).
-    /// Others: rescale to [0, 1] via `x/255`.
+    /// Normalization is per-instance: pixel_norm_scale * (pixel/255) + pixel_norm_bias.
+    ///   26B/Gemma3/Qwen (mean=0.5, std=0.5): 2/255 * pixel - 1.0 → [-1,1]
+    ///   E2B/E4B (mean=0, std=1): 1/255 * pixel + 0.0 → [0,1]
     fn preprocessImage(self: *VisionEncoder, pixels: []const u8) void {
         const h: usize = self.image_size;
         const w: usize = self.image_size;
-        // All supported vision models use image_mean=0.5, image_std=0.5,
-        // equivalent to rescaling pixels from [0, 255] to [-1, 1].
-        const scale: f32 = 2.0 * pixel_scale;
-        const bias: f32 = -1.0;
+        const scale: f32 = self.pixel_norm_scale;
+        const bias: f32 = self.pixel_norm_bias;
         // Convert from [H, W, 3] (channel-last) to [3, H, W] (channel-first)
         for (0..h) |y| {
             for (0..w) |x| {
@@ -1128,7 +1148,6 @@ pub const VisionEncoder = struct {
                     for (0..pd) |d| self.output[out_base + d] += bias[d];
                 };
             },
-            .gemma4_e2b => unreachable, // Rejected during init
         }
     }
 
@@ -1210,14 +1229,11 @@ pub const VisionEncoder = struct {
     }
 
     /// Batched matrix multiply: Y[np, n] = X[np, k] @ W[n, k]^T.
-    /// Uses backend GEMM for GPU acceleration when the dtype is supported
-    /// (f32, q8_0, q4_0). Falls back to CPU for BF16/F16 (common in mmproj files).
+    /// Uses backend GEMM for GPU acceleration when the dtype is supported.
     inline fn batchGemm(self: *VisionEncoder, x: [*]const f32, t: TensorInfo, y: [*]f32, np: usize, n: usize, k: usize) void {
         switch (t.dtype) {
             .f32, .bf16, .f16, .q8_0, .q4_0 => {
                 self.be.gemm(x, .{ .data = t.data_ptr, .dtype = t.dtype }, y, np, n, k);
-                // Sync GPU→CPU: vision encoder mixes GPU GEMM with CPU operations
-                // (bias addition, norms, attention). Without sync, CPU reads stale data.
                 self.be.sync();
             },
             else => batchedGemvCpu(x, t, y, np, n, k),
@@ -1456,7 +1472,7 @@ inline fn silu(x: f32) f32 {
 /// Scalar GELU activation: 0.5 * x * (1 + tanh(sqrt(2/pi) * (x + 0.044715 * x^3))).
 inline fn geluScalar(x: f32) f32 {
     const inner = @mulAdd(f32, gelu_cubic_coeff, x * x * x, x);
-    const t = gelu_sqrt_2_over_pi * inner;
+    const t = std.math.clamp(gelu_sqrt_2_over_pi * inner, -10.0, 10.0);
     const e2t = @exp(2.0 * t);
     return 0.5 * x * (1.0 + (e2t - 1.0) / (e2t + 1.0));
 }
@@ -1810,9 +1826,6 @@ test "VisionVariant detection constants" {
     try std.testing.expect(@intFromEnum(VisionVariant.gemma4_siglip2) != @intFromEnum(VisionVariant.gemma3_siglip));
     try std.testing.expect(@intFromEnum(VisionVariant.gemma3_siglip) != @intFromEnum(VisionVariant.qwen_vl));
     try std.testing.expect(@intFromEnum(VisionVariant.gemma4_siglip2) != @intFromEnum(VisionVariant.qwen_vl));
-    try std.testing.expect(@intFromEnum(VisionVariant.gemma4_e2b) != @intFromEnum(VisionVariant.gemma4_siglip2));
-    try std.testing.expect(@intFromEnum(VisionVariant.gemma4_e2b) != @intFromEnum(VisionVariant.gemma3_siglip));
-    try std.testing.expect(@intFromEnum(VisionVariant.gemma4_e2b) != @intFromEnum(VisionVariant.qwen_vl));
 }
 
 test "attention_chunk_size guard" {

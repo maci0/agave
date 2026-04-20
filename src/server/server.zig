@@ -29,20 +29,8 @@ const VisionEncoder = @import("../models/model.zig").VisionEncoder;
 const image_mod = @import("../image.zig");
 const engine_version = @import("../display.zig").version;
 
-// ── Mutex (Mutex removed in Zig 0.16) ────────────────
-/// Simple atomic spinlock replacing Mutex.
-const Mutex = struct {
-    locked: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
-
-    pub fn lock(self: *Mutex) void {
-        while (self.locked.cmpxchgWeak(false, true, .acquire, .monotonic) != null)
-            std.atomic.spinLoopHint();
-    }
-
-    pub fn unlock(self: *Mutex) void {
-        self.locked.store(false, .release);
-    }
-};
+// ── Mutex (idiomatic Zig 0.16 std.Io.Mutex) ────────────────
+const Mutex = Io.Mutex;
 
 // ── TcpStream (Zig 0.16 removed convenience methods from TcpStream) ────
 /// Lightweight wrapper providing writeAll/read/close over a raw socket fd.
@@ -287,8 +275,9 @@ const Server = struct {
     next_id: u32 = 1,
     /// Whether the KV cache matches the active conversation's state.
     kv_valid: bool = false,
-    mutex: Mutex = .{},
-    stdout_mutex: Mutex = .{},
+    mutex: Mutex = .init,
+    stdout_mutex: Mutex = .init,
+    io: Io,
     /// Monotonically increasing request counter for unique response IDs.
     request_counter: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
     /// Server start time (unix timestamp, set once in run()).
@@ -383,8 +372,8 @@ var g_server: *Server = undefined;
 threadlocal var log_request_id: u64 = 0;
 
 fn slog(comptime fmt: []const u8, args: anytype) void {
-    g_server.stdout_mutex.lock();
-    defer g_server.stdout_mutex.unlock();
+    g_server.stdout_mutex.lockUncancelable(g_server.io);
+    defer g_server.stdout_mutex.unlock(g_server.io);
     var buf: [slog_buf_size]u8 = undefined;
     const text = std.fmt.bufPrint(&buf, fmt, args) catch return;
     _ = std.c.write(stderr_file.handle, text.ptr, text.len);
@@ -1238,8 +1227,8 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
             // to avoid blocking inference while sending to a slow client.
             var buf: [conv_list_buf_size]u8 = undefined;
             const response = blk: {
-                g_server.mutex.lock();
-                defer g_server.mutex.unlock();
+                g_server.mutex.lockUncancelable(g_server.io);
+                defer g_server.mutex.unlock(g_server.io);
                 var fbs = FixedBufStream.init(&buf);
                 const w = fbs.writer();
                 w.writeByte('[') catch break :blk @as(?[]const u8, null);
@@ -1272,10 +1261,10 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
         const body = req.body;
         const action = json.extractFormField(body,"action") orelse "new";
         if (std.mem.eql(u8, action, "new")) {
-            g_server.mutex.lock();
+            g_server.mutex.lockUncancelable(g_server.io);
             const new_conv = g_server.createConv();
             const new_id: u32 = if (new_conv) |nc| nc.id else 0;
-            g_server.mutex.unlock();
+            g_server.mutex.unlock(g_server.io);
             if (new_conv == null) {
                 sendJsonError(stream, "503 Service Unavailable", "server_error", "Maximum conversation limit reached");
                 g_server.metrics.recordFailure();
@@ -1292,10 +1281,10 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
         } else if (std.mem.eql(u8, action, "select")) {
             const id_str = json.extractFormField(body,"id") orelse "0";
             const id = std.fmt.parseInt(u32, id_str, 10) catch 0;
-            g_server.mutex.lock();
+            g_server.mutex.lockUncancelable(g_server.io);
             const conv = g_server.getConvById(id);
             if (conv == null) {
-                g_server.mutex.unlock();
+                g_server.mutex.unlock(g_server.io);
                 sendJsonError(stream, "404 Not Found", "invalid_request_error", "Conversation not found");
                 g_server.metrics.recordFailure();
                 logRequestDone(method, path, 404, elapsedMs(request_start));
@@ -1324,7 +1313,7 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
                 mw.writeAll("]}") catch break :blk false;
                 break :blk true;
             };
-            g_server.mutex.unlock();
+            g_server.mutex.unlock(g_server.io);
             if (format_ok) {
                 sendJson(stream, mfbs.getWritten());
                 g_server.metrics.recordCompletion();
@@ -1337,9 +1326,9 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
         } else if (std.mem.eql(u8, action, "delete")) {
             const id_str = json.extractFormField(body,"id") orelse "0";
             const id = std.fmt.parseInt(u32, id_str, 10) catch 0;
-            g_server.mutex.lock();
+            g_server.mutex.lockUncancelable(g_server.io);
             if (g_server.getConvById(id) == null) {
-                g_server.mutex.unlock();
+                g_server.mutex.unlock(g_server.io);
                 sendJsonError(stream, "404 Not Found", "invalid_request_error", "Conversation not found");
                 g_server.metrics.recordFailure();
                 logRequestDone(method, path, 404, elapsedMs(request_start));
@@ -1347,7 +1336,7 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
             }
             const was_active = g_server.active_id == id;
             g_server.deleteConv(id);
-            g_server.mutex.unlock();
+            g_server.mutex.unlock(g_server.io);
             var dbuf: [clear_response_buf_size]u8 = undefined;
             const djson = std.fmt.bufPrint(&dbuf,
                 \\{{"ok":true,"cleared":{s}}}
@@ -1390,9 +1379,9 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
             break :blk if (s.len > 0) s else null;
         } else null;
 
-        g_server.mutex.lock();
+        g_server.mutex.lockUncancelable(g_server.io);
         const regen_conv = g_server.getActiveConv() orelse {
-            g_server.mutex.unlock();
+            g_server.mutex.unlock(g_server.io);
             sendJsonError(stream, "400 Bad Request", "invalid_request_error", "No active conversation");
             g_server.metrics.recordFailure();
             logRequestDone(method, path, 400, elapsedMs(request_start));
@@ -1410,7 +1399,7 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
 
         // Must have at least one user message remaining
         if (regen_conv.messages.items.len == 0) {
-            g_server.mutex.unlock();
+            g_server.mutex.unlock(g_server.io);
             sendJsonError(stream, "400 Bad Request", "invalid_request_error", "No user message to regenerate from");
             g_server.metrics.recordFailure();
             logRequestDone(method, path, 400, elapsedMs(request_start));
@@ -1424,14 +1413,14 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
             regen_system_prompt,
             regen_conv.messages.items,
         ) catch {
-            g_server.mutex.unlock();
+            g_server.mutex.unlock(g_server.io);
             sendJsonError(stream, "500 Internal Server Error", "server_error", "Failed to format conversation");
             g_server.metrics.recordFailure();
             logRequestDone(method, path, 500, elapsedMs(request_start));
             return;
         };
         defer g_server.allocator.free(regen_formatted);
-        g_server.mutex.unlock();
+        g_server.mutex.unlock(g_server.io);
 
         slog("  [regenerate] Re-generating from {d} messages\n", .{regen_conv.messages.items.len});
 
@@ -1455,7 +1444,7 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
             const regen_result = chatStreamGenerate(stream, regen_formatted, true, regen_max_tokens, regen_sampling);
             defer g_server.allocator.free(regen_result.data);
 
-            g_server.mutex.lock();
+            g_server.mutex.lockUncancelable(g_server.io);
             g_server.kv_valid = true;
             logGeneration(regen_result.stats.tokens_generated, regen_result.stats.time_ms, regen_result.stats.tokens_per_sec);
             const regen_resp_trimmed = std.mem.trimEnd(u8, regen_result.data, " \t\r\n");
@@ -1474,7 +1463,7 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
                     std.log.warn("req={d} OOM storing regenerated response ({d} bytes)", .{ log_request_id, regen_resp_trimmed.len });
                 }
             }
-            g_server.mutex.unlock();
+            g_server.mutex.unlock(g_server.io);
             logRequestDone(method, path, 200, elapsedMs(request_start));
             return;
         }
@@ -1483,7 +1472,7 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
         const regen_result = generateN(regen_formatted, true, regen_max_tokens, regen_sampling);
         defer g_server.allocator.free(regen_result.data);
 
-        g_server.mutex.lock();
+        g_server.mutex.lockUncancelable(g_server.io);
         g_server.kv_valid = true;
         logGeneration(regen_result.stats.tokens_generated, regen_result.stats.time_ms, regen_result.stats.tokens_per_sec);
         // Re-lookup the active conversation — the `regen_conv` pointer obtained
@@ -1505,7 +1494,7 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
                 std.log.warn("req={d} OOM storing regenerated response ({d} bytes)", .{ log_request_id, regen_resp_trimmed.len });
             }
         }
-        g_server.mutex.unlock();
+        g_server.mutex.unlock(g_server.io);
 
         g_server.metrics.recordLatency(regen_result.stats.time_ms);
         g_server.metrics.recordTokens(regen_result.stats.tokens_generated);
@@ -1602,9 +1591,9 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
         }
 
         // Get or create active conversation (under mutex for kv_valid coherency)
-        g_server.mutex.lock();
+        g_server.mutex.lockUncancelable(g_server.io);
         const conv = g_server.getActiveConv() orelse g_server.createConv() orelse {
-            g_server.mutex.unlock();
+            g_server.mutex.unlock(g_server.io);
             sendJsonError(stream, "503 Service Unavailable", "server_error", "Maximum conversation limit reached");
             g_server.metrics.recordFailure();
             logRequestDone(method, path, 503, elapsedMs(request_start));
@@ -1613,7 +1602,7 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
 
         // Enforce per-conversation message limit
         if (conv.messages.items.len >= max_messages_per_conv) {
-            g_server.mutex.unlock();
+            g_server.mutex.unlock(g_server.io);
             sendJsonError(stream, "400 Bad Request", "invalid_request_error", "Conversation message limit reached");
             g_server.metrics.recordFailure();
             logRequestDone(method, path, 400, elapsedMs(request_start));
@@ -1622,7 +1611,7 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
 
         // Add user message to conversation
         const user_content = g_server.allocator.dupe(u8, trimmed) catch {
-            g_server.mutex.unlock();
+            g_server.mutex.unlock(g_server.io);
             sendJsonError(stream, "500 Internal Server Error", "server_error", "Out of memory");
             g_server.metrics.recordFailure();
             logRequestDone(method, path, 500, elapsedMs(request_start));
@@ -1630,7 +1619,7 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
         };
         conv.messages.append(g_server.allocator, .{ .role = .user, .content = user_content }) catch {
             g_server.allocator.free(user_content);
-            g_server.mutex.unlock();
+            g_server.mutex.unlock(g_server.io);
             sendJsonError(stream, "500 Internal Server Error", "server_error", "Out of memory");
             g_server.metrics.recordFailure();
             logRequestDone(method, path, 500, elapsedMs(request_start));
@@ -1657,7 +1646,7 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
             g_server.chat_template.formatContinuation(g_server.allocator, trimmed) catch trimmed;
         defer if (formatted.ptr != trimmed.ptr) g_server.allocator.free(formatted);
         // Release mutex before generate() — it acquires the mutex internally.
-        g_server.mutex.unlock();
+        g_server.mutex.unlock(g_server.io);
 
         // Rate limit check (matches API endpoint pattern)
         const chat_prompt_ids = g_server.tokenizer.encode(formatted) catch &[_]u32{};
@@ -1684,7 +1673,7 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
             const result = chatStreamGenerate(stream, formatted, need_reset, chat_max_tokens, chat_sampling);
             defer g_server.allocator.free(result.data);
 
-            g_server.mutex.lock();
+            g_server.mutex.lockUncancelable(g_server.io);
             g_server.kv_valid = true;
             logGeneration(result.stats.tokens_generated, result.stats.time_ms, result.stats.tokens_per_sec);
             const resp_trimmed_s = std.mem.trimEnd(u8, result.data, " \t\r\n");
@@ -1703,7 +1692,7 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
                     std.log.warn("req={d} OOM storing chat response ({d} bytes)", .{ log_request_id, resp_trimmed_s.len });
                 }
             }
-            g_server.mutex.unlock();
+            g_server.mutex.unlock(g_server.io);
             logRequestDone(method, path, 200, elapsedMs(request_start));
             return;
         }
@@ -1712,7 +1701,7 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
         defer g_server.allocator.free(result.data);
 
         // Re-acquire mutex to update conversation state
-        g_server.mutex.lock();
+        g_server.mutex.lockUncancelable(g_server.io);
         g_server.kv_valid = true;
         logGeneration(result.stats.tokens_generated, result.stats.time_ms, result.stats.tokens_per_sec);
 
@@ -1736,7 +1725,7 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
                 std.log.warn("req={d} OOM storing chat response ({d} bytes)", .{ log_request_id, resp_trimmed.len });
             }
         }
-        g_server.mutex.unlock();
+        g_server.mutex.unlock(g_server.io);
 
         // Record metrics
         g_server.metrics.recordLatency(result.stats.time_ms);
@@ -1800,20 +1789,20 @@ threadlocal var cmd_buf: [cmd_buf_size]u8 = undefined;
 
 fn handleChatCommand(cmd: []const u8) ?[]const u8 {
     if (std.mem.eql(u8, cmd, "/clear")) {
-        g_server.mutex.lock();
+        g_server.mutex.lockUncancelable(g_server.io);
         g_server.model.resetCache();
         g_server.kv_valid = false;
         if (g_server.getActiveConv()) |conv| conv.clearMessages(g_server.allocator);
-        g_server.mutex.unlock();
+        g_server.mutex.unlock(g_server.io);
         slog("  [command] /clear\n", .{});
         return "<div class=\"msg assistant\" data-tokens=\"0\" data-time=\"0\" data-tps=\"0\">Conversation cleared.</div>";
     }
     if (std.mem.eql(u8, cmd, "/reset")) {
-        g_server.mutex.lock();
+        g_server.mutex.lockUncancelable(g_server.io);
         g_server.model.resetCache();
         g_server.kv_valid = false;
         if (g_server.getActiveConv()) |conv| conv.clearMessages(g_server.allocator);
-        g_server.mutex.unlock();
+        g_server.mutex.unlock(g_server.io);
         slog("  [command] /reset\n", .{});
         return "<div class=\"msg assistant\" data-tokens=\"0\" data-time=\"0\" data-tps=\"0\">Conversation cleared.</div>";
     }
@@ -2067,8 +2056,8 @@ fn generateN(formatted: []const u8, reset: bool, max_tokens: usize, sampling: Sa
     }
 
     // Direct forward path (fallback when scheduler is not active)
-    g_server.mutex.lock();
-    defer g_server.mutex.unlock();
+    g_server.mutex.lockUncancelable(g_server.io);
+    defer g_server.mutex.unlock(g_server.io);
     const model = g_server.model;
     if (reset) model.resetCache();
 
@@ -2291,8 +2280,8 @@ fn chatStreamGenerate(stream: TcpStream, formatted: []const u8, reset: bool, max
     }
 
     // Direct forward path (fallback when scheduler is not active)
-    g_server.mutex.lock();
-    defer g_server.mutex.unlock();
+    g_server.mutex.lockUncancelable(g_server.io);
+    defer g_server.mutex.unlock(g_server.io);
     const model = g_server.model;
     if (reset) model.resetCache();
 
@@ -2605,8 +2594,8 @@ fn generateAnthropicStream(stream: TcpStream, formatted: []const u8, max_tokens:
     }
 
     // Direct forward path (fallback when scheduler is not active)
-    g_server.mutex.lock();
-    defer g_server.mutex.unlock();
+    g_server.mutex.lockUncancelable(g_server.io);
+    defer g_server.mutex.unlock(g_server.io);
     const model = g_server.model;
     model.resetCache();
 
@@ -2898,8 +2887,8 @@ fn generateResponsesStream(stream: TcpStream, prompt: []const u8, max_tokens: us
     }
 
     // Direct forward path (fallback when scheduler is not active)
-    g_server.mutex.lock();
-    defer g_server.mutex.unlock();
+    g_server.mutex.lockUncancelable(g_server.io);
+    defer g_server.mutex.unlock(g_server.io);
     const model = g_server.model;
     model.resetCache();
 
@@ -3182,8 +3171,8 @@ fn generateStream(stream: TcpStream, prompt: []const u8, req_id: u64, created: i
     }
 
     // Direct forward path (fallback when scheduler is not active)
-    g_server.mutex.lock();
-    defer g_server.mutex.unlock();
+    g_server.mutex.lockUncancelable(g_server.io);
+    defer g_server.mutex.unlock(g_server.io);
     const model = g_server.model;
     model.resetCache();
 
@@ -3401,6 +3390,7 @@ pub fn run(config: ServerConfig) !void {
         .image_pad_token_id = image_pad_token_id,
         .image_start_token_id = image_start_token_id,
         .image_end_token_id = image_end_token_id,
+        .io = io,
     };
     server.api_key = api_key;
     server.start_time = timestamp();
@@ -3410,7 +3400,7 @@ pub fn run(config: ServerConfig) !void {
     // Initialize continuous batching scheduler and background thread.
     // The scheduler owns the model forward loop; HTTP handlers enqueue
     // requests and poll for results instead of calling model.forward() directly.
-    var request_manager = try scheduler.RequestManager.init(allocator, &server.metrics, scheduler_max_batch_size, scheduler_timeout_sec, tiered_cache);
+    var request_manager = try scheduler.RequestManager.init(allocator, &server.metrics, scheduler_max_batch_size, scheduler_timeout_sec, tiered_cache, io);
     defer request_manager.deinit();
     server.request_manager = &request_manager;
 

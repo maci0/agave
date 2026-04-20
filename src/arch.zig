@@ -24,6 +24,10 @@ pub const Arch = enum {
             .{ "gemma2", .gemma3 }, // Gemma 2 uses same architecture path as Gemma 3
             .{ "qwen3_5_text", .qwen35 },
             .{ "qwen35moe", .qwen35 },
+            .{ "qwen3_5_moe", .qwen35 },
+            .{ "qwen3_5_moe_text", .qwen35 },
+            .{ "qwen36", .qwen35 },
+            .{ "qwen3_6", .qwen35 },
             .{ "qwen35", .qwen35 },
             .{ "qwen3_5", .qwen35 },
             .{ "qwen3", .qwen35 },
@@ -185,6 +189,10 @@ test "Arch.detect known names" {
     try std.testing.expectEqual(Arch.qwen35, Arch.detect("qwen35").?);
     try std.testing.expectEqual(Arch.qwen35, Arch.detect("qwen3_5_text").?);
     try std.testing.expectEqual(Arch.qwen35, Arch.detect("qwen35moe").?);
+    try std.testing.expectEqual(Arch.qwen35, Arch.detect("qwen3_5_moe").?);
+    try std.testing.expectEqual(Arch.qwen35, Arch.detect("qwen3_5_moe_text").?);
+    try std.testing.expectEqual(Arch.qwen35, Arch.detect("qwen36").?);
+    try std.testing.expectEqual(Arch.qwen35, Arch.detect("qwen3_6").?);
     try std.testing.expectEqual(Arch.qwen35, Arch.detect("qwen3_5").?);
     try std.testing.expectEqual(Arch.qwen35, Arch.detect("qwen3").?);
     try std.testing.expectEqual(Arch.qwen35, Arch.detect("qwen2").?);

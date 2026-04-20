@@ -4,20 +4,8 @@
 //! Tokens refill continuously based on elapsed time, clamped to capacity.
 
 const std = @import("std");
-
-/// Simple atomic spinlock replacing Mutex (removed in Zig 0.16).
-const Mutex = struct {
-    locked: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
-
-    pub fn lock(self: *Mutex) void {
-        while (self.locked.cmpxchgWeak(false, true, .acquire, .monotonic) != null)
-            std.atomic.spinLoopHint();
-    }
-
-    pub fn unlock(self: *Mutex) void {
-        self.locked.store(false, .release);
-    }
-};
+const Io = std.Io;
+const Mutex = Io.Mutex;
 
 /// Millisecond timestamp via raw C clock_gettime (Zig 0.16 idiom).
 fn milliTimestamp() i64 {
@@ -65,11 +53,12 @@ pub const TokenBucket = struct {
 pub const RateLimiter = struct {
     request_bucket: TokenBucket,
     token_bucket: TokenBucket,
-    mutex: Mutex = .{},
+    mutex: Mutex = .init,
+    io: Io,
 
     /// Initialize rate limiter with per-minute limits.
     /// Both buckets start at full capacity.
-    pub fn init(req_per_min: u32, tokens_per_min: u32) RateLimiter {
+    pub fn init(req_per_min: u32, tokens_per_min: u32, io: Io) RateLimiter {
         const now = milliTimestamp();
         const req_capacity = @as(f64, @floatFromInt(req_per_min));
         const token_capacity = @as(f64, @floatFromInt(tokens_per_min));
@@ -87,6 +76,7 @@ pub const RateLimiter = struct {
                 .refill_rate = token_capacity / seconds_per_minute,
                 .last_refill = now,
             },
+            .io = io,
         };
     }
 
@@ -106,8 +96,8 @@ pub const RateLimiter = struct {
     /// Thread-safe: acquires mutex to protect bucket state.
     pub fn tryConsumeRequest(self: *RateLimiter, token_count: u32) bool {
         const now = milliTimestamp();
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(self.io);
+        defer self.mutex.unlock(self.io);
 
         const tokens_f64 = @as(f64, @floatFromInt(token_count));
         self.refillBuckets(now);
@@ -127,8 +117,8 @@ pub const RateLimiter = struct {
     /// of calling tryConsumeRequest() then retryAfter() separately.
     pub fn tryConsumeOrRetryAfter(self: *RateLimiter, token_count: u32) ?u32 {
         const now = milliTimestamp();
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(self.io);
+        defer self.mutex.unlock(self.io);
 
         const tokens_f64 = @as(f64, @floatFromInt(token_count));
         self.refillBuckets(now);
@@ -152,8 +142,8 @@ pub const RateLimiter = struct {
     /// Thread-safe: acquires mutex to read consistent bucket state.
     pub fn retryAfter(self: *RateLimiter, token_count: u32) u32 {
         const now = milliTimestamp();
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(self.io);
+        defer self.mutex.unlock(self.io);
 
         self.refillBuckets(now);
         const tokens_f64 = @as(f64, @floatFromInt(token_count));
@@ -164,9 +154,15 @@ pub const RateLimiter = struct {
     }
 };
 
+/// Create a test Io instance for unit tests.
+fn testIo() Io {
+    var threaded = std.Io.Threaded.init(std.testing.allocator, .{});
+    return threaded.io();
+}
+
 // Unit tests
 test "consume full capacity then fail" {
-    var limiter = RateLimiter.init(10, 100);
+    var limiter = RateLimiter.init(10, 100, testIo());
 
     // Consume all 10 requests
     var i: u32 = 0;
@@ -179,7 +175,7 @@ test "consume full capacity then fail" {
 }
 
 test "refill after 1 second" {
-    var limiter = RateLimiter.init(60, 600);
+    var limiter = RateLimiter.init(60, 600, testIo());
 
     // Consume one request
     try std.testing.expect(limiter.tryConsumeRequest(10));
@@ -193,7 +189,7 @@ test "refill after 1 second" {
 }
 
 test "long idle clamps to capacity" {
-    var limiter = RateLimiter.init(10, 100);
+    var limiter = RateLimiter.init(10, 100, testIo());
 
     // Consume 5 requests
     var i: u32 = 0;
@@ -214,7 +210,7 @@ test "long idle clamps to capacity" {
 }
 
 test "retry after matches calculation" {
-    var limiter = RateLimiter.init(60, 600);
+    var limiter = RateLimiter.init(60, 600, testIo());
 
     // Consume all requests (60)
     var i: u32 = 0;
@@ -230,7 +226,7 @@ test "retry after matches calculation" {
 test "token bucket exhaustion blocks even with requests available" {
     // 100 requests/min but only 5 tokens/min — token bucket should be the bottleneck.
     // Verifies the dual-bucket check: both must have capacity.
-    var limiter = RateLimiter.init(100, 5);
+    var limiter = RateLimiter.init(100, 5, testIo());
 
     // Consume 5 requests with 1 token each — exhausts token bucket
     var i: u32 = 0;
@@ -247,7 +243,7 @@ test "token bucket exhaustion blocks even with requests available" {
 }
 
 test "tryConsumeOrRetryAfter combines check and retry" {
-    var limiter = RateLimiter.init(10, 100);
+    var limiter = RateLimiter.init(10, 100, testIo());
 
     // Should succeed (returns null) when capacity is available
     try std.testing.expectEqual(@as(?u32, null), limiter.tryConsumeOrRetryAfter(1));

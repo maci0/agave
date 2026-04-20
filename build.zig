@@ -125,8 +125,6 @@ pub fn build(b: *std.Build) void {
     }
 
     // ── ReleaseFast executable (default) ──────────────────────────
-    const clap_rel = b.dependency("clap", .{ .target = target, .optimize = .ReleaseFast });
-
     const backend_options = b.addOptions();
     backend_options.addOption(bool, "enable_cpu", enable_cpu);
     backend_options.addOption(bool, "enable_metal", enable_metal);
@@ -146,7 +144,6 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = .ReleaseFast,
     });
-    mod_rel.addImport("clap", clap_rel.module("clap"));
     mod_rel.addImport("build_options", backend_options.createModule());
 
     const exe_rel = b.addExecutable(.{ .name = "agave", .root_module = mod_rel });
@@ -158,14 +155,11 @@ pub fn build(b: *std.Build) void {
     b.installArtifact(exe_rel);
 
     // ── Debug executable (also built by default) ─────────────────
-    const clap_dbg = b.dependency("clap", .{ .target = target, .optimize = .Debug });
-
     const mod_dbg = b.createModule(.{
         .root_source_file = b.path("src/main.zig"),
         .target = target,
         .optimize = .Debug,
     });
-    mod_dbg.addImport("clap", clap_dbg.module("clap"));
     mod_dbg.addImport("build_options", backend_options.createModule());
 
     const exe_dbg = b.addExecutable(.{ .name = "agave-debug", .root_module = mod_dbg });
