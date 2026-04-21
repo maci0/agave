@@ -243,6 +243,12 @@ header {
 .msg ul, .msg ol { margin: 8px 0 8px 24px; }
 .msg li { margin: 4px 0; }
 .msg blockquote { border-left: 3px solid var(--accent); padding-left: 16px; color: var(--text-2); margin: 12px 0; font-style: italic; }
+.msg .think-block { margin: 8px 0; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
+.msg .think-block summary { cursor: pointer; padding: 8px 12px; background: var(--elevated); color: var(--text-3); font-size: 0.85em; user-select: none; }
+.msg .think-block summary:hover { color: var(--text-2); background: var(--border); }
+.msg .think-block summary::marker { color: var(--accent); }
+.msg .think-block[open] summary { border-bottom: 1px solid var(--border); }
+.msg .think-content { padding: 12px; color: var(--text-3); font-size: 0.9em; line-height: 1.5; max-height: 400px; overflow-y: auto; }
 .msg h1, .msg h2, .msg h3 { color: var(--accent); margin: 16px 0 8px; }
 .msg h1 { font-size: 1.4em; }
 .msg h2 { font-size: 1.2em; }

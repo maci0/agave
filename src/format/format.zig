@@ -118,6 +118,11 @@ pub const Format = struct {
     pub fn getMetaU32Array(self: Format, key: []const u8) ?[]const u32 {
         return self.vtable.get_meta_u32_array(self.ptr, key);
     }
+    /// Get the first element of a u32 array metadata value.
+    pub fn getMetaArrayFirstU32(self: Format, key: []const u8) ?u32 {
+        const arr = self.vtable.get_meta_u32_array(self.ptr, key) orelse return null;
+        return if (arr.len > 0) arr[0] else null;
+    }
     /// Get the tokenizer vocabulary array.
     pub fn getVocab(self: Format) ?[]const []const u8 {
         return self.vtable.get_vocab(self.ptr);
@@ -132,6 +137,13 @@ pub const Format = struct {
         var buf: [arch_key_buf_size]u8 = undefined;
         const key = std.fmt.bufPrint(&buf, "{s}.{s}", .{ arch, suffix }) catch return null;
         return self.getMetaU32(key);
+    }
+    /// Get the first element of a u32 array metadata value with architecture-prefixed key.
+    /// Used for per-layer arrays like attention.head_count_kv in Gemma 4.
+    pub fn getArchArrayFirstU32(self: Format, arch: []const u8, suffix: []const u8) ?u32 {
+        var buf: [arch_key_buf_size]u8 = undefined;
+        const key = std.fmt.bufPrint(&buf, "{s}.{s}", .{ arch, suffix }) catch return null;
+        return self.getMetaArrayFirstU32(key);
     }
     /// Get an f32 metadata value with architecture-prefixed key.
     pub fn getArchF32(self: Format, arch: []const u8, suffix: []const u8) ?f32 {

@@ -126,9 +126,20 @@ The composer selects the correct GEMV, activation, residual pattern, and SDPA bu
 2. Implement GEMV kernel: CPU SIMD in `src/backend/kernels/cpu/` and native GPU versions per backend (no CPU fallback in GPU backends). Dequantization happens in-kernel — never pre-dequant to f32
 3. Add conversion helpers in `src/ops/quant.zig` if the format needs custom type conversions (e.g., `fp8e4m3ToF32`)
 4. Update backend dispatch to include new format (add GEMV variant in `backend.zig`)
-5. Benchmark against existing formats
-6. Add to Quantization Types table in `docs/ARCHITECTURE.md`
-7. Golden tests against reference implementation
+5. Add GEMM kernel for batched prefill: Metal in `gemm.metal` (reuse `block_dot` from GEMV), pipeline in `metal.zig`, dispatch in `gemm()`. Pattern: one threadgroup per output row, loop over n_tok tokens
+6. Benchmark against existing formats
+7. Add to Quantization Types table in `docs/ARCHITECTURE.md`
+8. Golden tests against reference implementation
+
+## How to Add CLI Arguments
+
+CLI arguments are parsed by `src/cli.zig` (self-contained, zero dependencies). To add a new flag or option:
+
+1. Add an `ArgSpec` entry to the `cli_specs` array in `src/main.zig`
+2. For flags (bool): `.{ .long = "my-flag", .short = 'f', .kind = .flag }`
+3. For options (string): `.{ .long = "my-option", .kind = .option }`
+4. Access in `parseCli()`: `res.flag("my-flag")`, `res.option("my-option")`, `res.optionU32("my-option")`
+5. Add to `printUsage()` help text
 
 ## How to Add a New Chat Template
 

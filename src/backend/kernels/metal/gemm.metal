@@ -111,7 +111,6 @@ kernel void gemm_q8_0(
         float sums[gemm_q8_tile_t] = {0};
 
         for (uint b = tid; b < nb; b += tg_size) {
-            // Reuse existing q8_0_block_dot — compiler hoists x loads across calls
             for (uint ti = 0; ti < nt; ti++) {
                 sums[ti] += q8_0_block_dot(W[tgid * nb + b],
                                            X + (t_base + ti) * n_in + b * 32);
@@ -128,9 +127,7 @@ kernel void gemm_q8_0(
     }
 }
 
-
 // ── Q4_0 GEMM ────────────────────────────────────────────────
-// 32 values per block, 18 bytes (f16 scale + 16 bytes of packed 4-bit values).
 
 kernel void gemm_q4_0(
     device const float* X       [[buffer(0)]],
@@ -167,6 +164,112 @@ kernel void gemm_q4_0(
 
         threadgroup float shared[8];
         sum = threadgroup_reduce_sum(sum, shared, tid, tg_size);
+        if (tid == 0) Y[t * n_out + tgid] = sum;
+        if (t + 1 < n_tok) threadgroup_barrier(mem_flags::mem_threadgroup);
+    }
+}
+
+// ── Q4_K GEMM ────────────────────────────────────────────────
+// 256 values per super-block, 144 bytes.
+// Token-tiled: weight blocks loaded once, reused across TILE_T tokens.
+// Uses q4_k_block_dot from gemv.metal.
+
+constant uint gemm_q4k_tile_t = 4;
+
+kernel void gemm_q4_k(
+    device const float* X      [[buffer(0)]],
+    device const uchar* W      [[buffer(1)]],
+    device float* Y            [[buffer(2)]],
+    constant uint& n_out       [[buffer(3)]],
+    constant uint& n_in        [[buffer(4)]],
+    constant uint& n_tok       [[buffer(5)]],
+    uint tgid     [[threadgroup_position_in_grid]],
+    uint tid      [[thread_index_in_threadgroup]],
+    uint tg_size  [[threads_per_threadgroup]])
+{
+    if (tgid >= n_out) return;
+    const uint bpb = 144;
+    uint nb = (n_in + 255) / 256;
+
+    for (uint t_base = 0; t_base < n_tok; t_base += gemm_q4k_tile_t) {
+        uint t_end = min(t_base + gemm_q4k_tile_t, n_tok);
+        uint nt = t_end - t_base;
+
+        float sums[gemm_q4k_tile_t] = {0};
+
+        for (uint b = tid; b < nb; b += tg_size) {
+            uint bk = b * 256;
+            device const uchar* bp = W + (tgid * nb + b) * bpb;
+            for (uint ti = 0; ti < nt; ti++) {
+                sums[ti] += q4_k_block_dot(bp, X + (t_base + ti) * n_in, n_in, bk);
+            }
+        }
+
+        threadgroup float shared[8];
+        for (uint ti = 0; ti < nt; ti++) {
+            float s = threadgroup_reduce_sum(sums[ti], shared, tid, tg_size);
+            if (tid == 0) Y[(t_base + ti) * n_out + tgid] = s;
+            if (ti + 1 < nt || t_base + gemm_q4k_tile_t < n_tok)
+                threadgroup_barrier(mem_flags::mem_threadgroup);
+        }
+    }
+}
+
+// ── Q6_K GEMM ────────────────────────────────────────────────
+
+kernel void gemm_q6_k(
+    device const float* X      [[buffer(0)]],
+    device const uchar* W      [[buffer(1)]],
+    device float* Y            [[buffer(2)]],
+    constant uint& n_out       [[buffer(3)]],
+    constant uint& n_in        [[buffer(4)]],
+    constant uint& n_tok       [[buffer(5)]],
+    uint tgid     [[threadgroup_position_in_grid]],
+    uint tid      [[thread_index_in_threadgroup]],
+    uint tg_size  [[threads_per_threadgroup]])
+{
+    if (tgid >= n_out) return;
+    const uint bpb = 210;
+    uint nb = (n_in + 255) / 256;
+
+    for (uint t = 0; t < n_tok; t++) {
+        float sum = 0.0f;
+        for (uint b = tid; b < nb; b += tg_size) {
+            uint bk = b * 256;
+            sum += q6_k_block_dot(W + (tgid * nb + b) * bpb, X + t * n_in, n_in, bk);
+        }
+        threadgroup float shared2[8];
+        sum = threadgroup_reduce_sum(sum, shared2, tid, tg_size);
+        if (tid == 0) Y[t * n_out + tgid] = sum;
+        if (t + 1 < n_tok) threadgroup_barrier(mem_flags::mem_threadgroup);
+    }
+}
+
+// ── Q5_K GEMM ────────────────────────────────────────────────
+
+kernel void gemm_q5_k(
+    device const float* X      [[buffer(0)]],
+    device const uchar* W      [[buffer(1)]],
+    device float* Y            [[buffer(2)]],
+    constant uint& n_out       [[buffer(3)]],
+    constant uint& n_in        [[buffer(4)]],
+    constant uint& n_tok       [[buffer(5)]],
+    uint tgid     [[threadgroup_position_in_grid]],
+    uint tid      [[thread_index_in_threadgroup]],
+    uint tg_size  [[threads_per_threadgroup]])
+{
+    if (tgid >= n_out) return;
+    const uint bpb = 176;
+    uint nb = (n_in + 255) / 256;
+
+    for (uint t = 0; t < n_tok; t++) {
+        float sum = 0.0f;
+        for (uint b = tid; b < nb; b += tg_size) {
+            uint bk = b * 256;
+            sum += q5_k_block_dot(W + (tgid * nb + b) * bpb, X + t * n_in, n_in, bk);
+        }
+        threadgroup float shared3[8];
+        sum = threadgroup_reduce_sum(sum, shared3, tid, tg_size);
         if (tid == 0) Y[t * n_out + tgid] = sum;
         if (t + 1 < n_tok) threadgroup_barrier(mem_flags::mem_threadgroup);
     }

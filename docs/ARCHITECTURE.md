@@ -26,9 +26,10 @@ zig build                                          # Build (ReleaseFast + Debug)
 ```
 agave/
 ├── build.zig              # Build config (ReleaseFast default + Debug)
-├── build.zig.zon          # Dependencies (clap CLI parser — sole external dep)
+├── build.zig.zon          # Package metadata (zero external dependencies)
 ├── src/
 │   ├── main.zig           # CLI: arg parsing, format detection, model init, REPL, recipe application
+│   ├── cli.zig            # Self-contained CLI argument parser (zero deps, replaces clap)
 │   ├── arch.zig           # Architecture enum, detection, chat template mapping
 │   ├── pull.zig           # Model download from HuggingFace Hub (agave pull <org/repo>)
 │   ├── server/

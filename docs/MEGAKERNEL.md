@@ -172,6 +172,13 @@ const desc = ModelDesc{
     .activation = .silu,
     .quant = .q4_k,
     .layer_types = ModelDesc.uniform(32, .attention),
+    // Per-layer overrides (0 = use default). For models with varying dims:
+    // .layer_n_head = ...,      // per-layer Q head count
+    // .layer_n_kv = ...,        // per-layer KV head count
+    // .layer_head_dim = ...,    // per-layer head dimension
+    // .layer_n_ff = ...,        // per-layer FFN dimension
+    // .layer_rope_theta = ...,  // per-layer RoPE theta
+    // .layer_sliding_window = ..., // per-layer sliding window size
 };
 
 // Generate MSL and compile at init

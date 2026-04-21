@@ -1010,11 +1010,16 @@ pub fn main(init: std.process.Init) !void {
         .n_layers = fmt.getArchU32(arch_str, "block_count") orelse fmt.getMetaU32("num_hidden_layers") orelse 0,
         .n_embed = meta_n_embed,
         .n_heads = meta_n_heads,
-        .n_kv_heads = fmt.getArchU32(arch_str, "attention.head_count_kv") orelse fmt.getMetaU32("num_key_value_heads") orelse 0,
+        .n_kv_heads = fmt.getArchU32(arch_str, "attention.head_count_kv") orelse
+            fmt.getArchArrayFirstU32(arch_str, "attention.head_count_kv") orelse
+            fmt.getArchU32(arch_str, "attention.head_count_kv_global") orelse
+            fmt.getMetaU32("num_key_value_heads") orelse 0,
         .head_dim = fmt.getArchU32(arch_str, "attention.key_length") orelse
             fmt.getMetaU32("head_dim") orelse
             if (meta_n_embed > 0 and meta_n_heads > 0) meta_n_embed / meta_n_heads else 0,
-        .ff_dim = fmt.getArchU32(arch_str, "feed_forward_length") orelse fmt.getMetaU32("intermediate_size") orelse 0,
+        .ff_dim = fmt.getArchU32(arch_str, "feed_forward_length") orelse
+            fmt.getArchArrayFirstU32(arch_str, "feed_forward_length") orelse
+            fmt.getMetaU32("intermediate_size") orelse 0,
         .vocab_size = if (fmt.getVocab()) |v| @intCast(v.len) else fmt.getArchU32(arch_str, "vocab_size") orelse 0,
         .ctx_size = fmt.getArchU32(arch_str, "context_length") orelse fmt.getMetaU32("max_position_embeddings") orelse 0,
         .rope_theta = fmt.getArchF32(arch_str, "rope.freq_base") orelse fmt.getMetaF32("rope_theta") orelse 0,
@@ -2160,8 +2165,9 @@ test "cpu backend rms_norm via tagged union dispatch" {
 }
 
 test "cpu backend softmax via tagged union dispatch" {
+    var threaded2 = std.Io.Threaded.init(std.testing.allocator, .{});
     var bs = BackendState{};
-    bs.init(std.testing.allocator, .cpu);
+    bs.init(std.testing.allocator, .cpu, threaded2.io());
     defer if (bs.pool) |*p| p.deinit();
     const be = bs.be;
     var data = [_]f32{ 1.0, 2.0, 3.0 };
@@ -2181,8 +2187,9 @@ test "cpu backend softmax via tagged union dispatch" {
 }
 
 test "cpu backend silu via tagged union dispatch" {
+    var threaded3 = std.Io.Threaded.init(std.testing.allocator, .{});
     var bs = BackendState{};
-    bs.init(std.testing.allocator, .cpu);
+    bs.init(std.testing.allocator, .cpu, threaded3.io());
     defer if (bs.pool) |*p| p.deinit();
     const be = bs.be;
     var input = [_]f32{ 0.0, 1.0, -1.0 };

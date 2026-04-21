@@ -536,12 +536,12 @@ const NemotronNanoModel = if (build_options.enable_nemotron_nano) @import("nemot
 // ── Tests ─────────────────────────────────────────────────────────
 
 test "expertWeightStride f32 2x2 layout" {
-    // After GGUF reversal, dims = [n_experts, rows, cols].
-    // Per-expert stride = rows * cols * sizeof(f32).
+    // GGUF 3D expert tensor: dims = [cols, rows, n_experts].
+    // Per-expert stride = dims[0] * dims[1] elements × sizeof(dtype).
     const t = format_mod.TensorInfo{
         .name = "test",
         .n_dims = 3,
-        .dims = .{ 2, 4, 4, 0 },
+        .dims = .{ 4, 4, 2, 0 }, // 4 cols × 4 rows × 2 experts
         .dtype = .f32,
         .data_ptr = undefined,
     };

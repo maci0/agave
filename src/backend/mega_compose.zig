@@ -54,28 +54,38 @@ pub const ModelDesc = struct {
     n_layers: u32,
     /// Embedding dimension.
     n_embd: u32,
-    /// FFN intermediate dimension (dense layers).
+    /// FFN intermediate dimension (dense layers). Per-layer override via layer_n_ff.
     n_ff: u32,
-    /// Number of query heads.
+    /// Number of query heads (default). Per-layer override via layer_n_head.
     n_head: u32,
-    /// Number of KV heads (for GQA).
+    /// Number of KV heads (default). Per-layer override via layer_n_kv.
     n_kv: u32,
-    /// Per-head dimension.
+    /// Per-head dimension (default). Per-layer override via layer_head_dim.
     head_dim: u32,
     /// RoPE dimension (may be < head_dim for partial rotation).
     rope_dim: u32,
-    /// RoPE base frequency.
+    /// RoPE base frequency (default). Per-layer override via layer_rope_theta.
     rope_theta: f32,
     /// RMS norm epsilon.
     rms_eps: f32,
     /// Maximum sequence length.
     max_seq_len: u32,
+    /// Sliding window size (0 = full attention). Per-layer window via layer_sliding_window.
+    sliding_window: u32 = 0,
     /// FFN activation function.
     activation: Activation,
     /// Weight quantization format.
     quant: QuantKind,
     /// Per-layer type (attention, deltanet, moe, ffn_only).
     layer_types: [max_layers]LayerKind,
+
+    // ── Per-layer overrides (0 = use default) ────────────────
+    layer_n_head: [max_layers]u32 = [_]u32{0} ** max_layers,
+    layer_n_kv: [max_layers]u32 = [_]u32{0} ** max_layers,
+    layer_head_dim: [max_layers]u32 = [_]u32{0} ** max_layers,
+    layer_n_ff: [max_layers]u32 = [_]u32{0} ** max_layers,
+    layer_rope_theta: [max_layers]f32 = [_]f32{0} ** max_layers,
+    layer_sliding_window: [max_layers]u32 = [_]u32{0} ** max_layers,
 
     // ── Model-specific flags ──────────────────────────────────
     /// Q projection includes interleaved gate (Qwen 3.5 only).
@@ -86,6 +96,43 @@ pub const ModelDesc = struct {
     has_post_attn_norm: bool = false,
     /// Fuse residual add into pre-norm (deferred residual pattern).
     fuse_residual: bool = false,
+    /// Gemma-style embedding scaling (hidden *= sqrt(n_embd)).
+    embd_scale: bool = false,
+    /// Logit softcap value (0 = disabled). Gemma uses 30.0.
+    logit_softcap: f32 = 0,
+
+    /// Get effective n_head for layer (uses per-layer override or default).
+    pub fn layerNHead(self: ModelDesc, li: usize) u32 {
+        return if (self.layer_n_head[li] != 0) self.layer_n_head[li] else self.n_head;
+    }
+    /// Get effective n_kv for layer.
+    pub fn layerNKv(self: ModelDesc, li: usize) u32 {
+        return if (self.layer_n_kv[li] != 0) self.layer_n_kv[li] else self.n_kv;
+    }
+    /// Get effective head_dim for layer.
+    pub fn layerHeadDim(self: ModelDesc, li: usize) u32 {
+        return if (self.layer_head_dim[li] != 0) self.layer_head_dim[li] else self.head_dim;
+    }
+    /// Get effective n_ff for layer.
+    pub fn layerNFf(self: ModelDesc, li: usize) u32 {
+        return if (self.layer_n_ff[li] != 0) self.layer_n_ff[li] else self.n_ff;
+    }
+    /// Get effective rope_theta for layer.
+    pub fn layerRopeTheta(self: ModelDesc, li: usize) f32 {
+        return if (self.layer_rope_theta[li] != 0) self.layer_rope_theta[li] else self.rope_theta;
+    }
+    /// Get sliding window for layer (0 = full attention).
+    pub fn layerWindow(self: ModelDesc, li: usize) u32 {
+        return if (self.layer_sliding_window[li] != 0) self.layer_sliding_window[li] else self.sliding_window;
+    }
+    /// Returns true if any layer has per-layer overrides (non-uniform model).
+    pub fn hasPerLayerVariation(self: ModelDesc) bool {
+        for (0..self.n_layers) |i| {
+            if (self.layer_n_head[i] != 0 or self.layer_head_dim[i] != 0 or
+                self.layer_rope_theta[i] != 0 or self.layer_n_ff[i] != 0) return true;
+        }
+        return false;
+    }
 
     /// Create a uniform layer pattern (all layers same type).
     pub fn uniform(n_layers: u32, kind: LayerKind) [max_layers]LayerKind {
@@ -123,10 +170,12 @@ const msl_header =
     \\
 ;
 
-/// Generate the params struct declaration.
+/// Generate the params struct + per-layer constant arrays.
 fn emitParamsStruct(buf: []u8, desc: ModelDesc) []const u8 {
-    return std.fmt.bufPrint(buf,
-        \\struct MegaAutoParams {{
+    var fbs = std.io.fixedBufferStream(buf);
+    const w = fbs.writer();
+    w.writeAll(
+        \\struct MegaAutoParams {
         \\    uint n_layers;
         \\    uint n_embd;
         \\    uint n_head;
@@ -136,13 +185,63 @@ fn emitParamsStruct(buf: []u8, desc: ModelDesc) []const u8 {
         \\    uint rope_dim;
         \\    float rope_theta;
         \\    float rms_eps;
+        \\    float embd_scale;
+        \\    float logit_softcap;
+        \\    uint sliding_window;
         \\    uint max_seq_len;
         \\    uint seq_pos;
         \\    uint n_tgs;
-        \\}};
+        \\};
         \\
         \\
-    , .{}) catch "";
+    ) catch return "";
+
+    if (desc.hasPerLayerVariation()) {
+        w.writeAll("// Per-layer dimension overrides (baked at compile time)\n") catch return "";
+        w.writeAll("constant uint layer_n_head[] = {") catch return "";
+        for (0..desc.n_layers) |i| {
+            if (i > 0) w.writeAll(",") catch {};
+            std.fmt.format(w, "{d}", .{desc.layerNHead(i)}) catch {};
+        }
+        w.writeAll("};\n") catch return "";
+
+        w.writeAll("constant uint layer_n_kv[] = {") catch return "";
+        for (0..desc.n_layers) |i| {
+            if (i > 0) w.writeAll(",") catch {};
+            std.fmt.format(w, "{d}", .{desc.layerNKv(i)}) catch {};
+        }
+        w.writeAll("};\n") catch return "";
+
+        w.writeAll("constant uint layer_head_dim[] = {") catch return "";
+        for (0..desc.n_layers) |i| {
+            if (i > 0) w.writeAll(",") catch {};
+            std.fmt.format(w, "{d}", .{desc.layerHeadDim(i)}) catch {};
+        }
+        w.writeAll("};\n") catch return "";
+
+        w.writeAll("constant uint layer_n_ff[] = {") catch return "";
+        for (0..desc.n_layers) |i| {
+            if (i > 0) w.writeAll(",") catch {};
+            std.fmt.format(w, "{d}", .{desc.layerNFf(i)}) catch {};
+        }
+        w.writeAll("};\n") catch return "";
+
+        w.writeAll("constant float layer_rope_theta[] = {") catch return "";
+        for (0..desc.n_layers) |i| {
+            if (i > 0) w.writeAll(",") catch {};
+            std.fmt.format(w, "{d:.1}", .{desc.layerRopeTheta(i)}) catch {};
+        }
+        w.writeAll("};\n") catch return "";
+
+        w.writeAll("constant uint layer_window[] = {") catch return "";
+        for (0..desc.n_layers) |i| {
+            if (i > 0) w.writeAll(",") catch {};
+            std.fmt.format(w, "{d}", .{desc.layerWindow(i)}) catch {};
+        }
+        w.writeAll("};\n\n") catch return "";
+    }
+
+    return fbs.getWritten();
     _ = desc;
 }
 
@@ -225,6 +324,31 @@ pub fn composeMSL(buf: []u8, desc: ModelDesc) []const u8 {
     append(buf, &pos, "    for (uint li = 0; li < p.n_layers; li++) {\n");
     append(buf, &pos, "        device const MegaLayerOffsets& lo = layer_off[li];\n");
 
+    // Per-layer dimension variables (from baked constant arrays or uniform params)
+    if (desc.hasPerLayerVariation()) {
+        append(buf, &pos,
+            \\        uint cur_n_head = layer_n_head[li];
+            \\        uint cur_n_kv = layer_n_kv[li];
+            \\        uint cur_head_dim = layer_head_dim[li];
+            \\        uint cur_n_ff = layer_n_ff[li];
+            \\        float cur_rope_theta = layer_rope_theta[li];
+            \\        uint cur_window = layer_window[li];
+            \\
+            \\
+        );
+    } else {
+        append(buf, &pos,
+            \\        uint cur_n_head = p.n_head;
+            \\        uint cur_n_kv = p.n_kv;
+            \\        uint cur_head_dim = p.head_dim;
+            \\        uint cur_n_ff = p.n_ff;
+            \\        float cur_rope_theta = p.rope_theta;
+            \\        uint cur_window = p.sliding_window;
+            \\
+            \\
+        );
+    }
+
     // Pre-attention norm
     if (desc.fuse_residual) {
         append(buf, &pos,
@@ -273,8 +397,8 @@ pub fn composeMSL(buf: []u8, desc: ModelDesc) []const u8 {
         append(buf, &pos,
             \\        // Attention: skip if no attention weights for this layer
             \\        if (lo.attn_q != 0) {
-            \\            uint qd = p.n_head * p.head_dim;
-            \\            uint kvd = p.n_kv * p.head_dim;
+            \\            uint qd = cur_n_head * cur_head_dim;
+            \\            uint kvd = cur_n_kv * cur_head_dim;
             \\            device float* q_buf = qkv_buf;
             \\            device float* k_buf = qkv_buf + qd;
             \\            device float* v_buf = qkv_buf + qd + kvd;
@@ -362,9 +486,9 @@ pub fn composeMSL(buf: []u8, desc: ModelDesc) []const u8 {
 
         // RoPE
         append(buf, &pos,
-            \\            mega_rope(q_buf, p.n_head, p.head_dim, p.rope_dim, p.rope_theta, p.seq_pos,
+            \\            mega_rope(q_buf, cur_n_head, cur_head_dim, p.rope_dim, cur_rope_theta, p.seq_pos,
             \\                tgid, tid, tg_size);
-            \\            mega_rope(k_buf, p.n_kv, p.head_dim, p.rope_dim, p.rope_theta, p.seq_pos,
+            \\            mega_rope(k_buf, cur_n_kv, cur_head_dim, p.rope_dim, cur_rope_theta, p.seq_pos,
             \\                tgid, tid, tg_size);
             \\            mega_grid_sync(&sync_ctrs[sync_idx++ % 32], p.n_tgs, tgid, tid);
             \\            mega_sync_reset(&sync_ctrs[(sync_idx-1) % 32], tgid, tid);
@@ -374,19 +498,19 @@ pub fn composeMSL(buf: []u8, desc: ModelDesc) []const u8 {
 
         // KV cache append + inline SDPA
         append(buf, &pos,
-            \\            uint kv_layer_stride = p.max_seq_len * p.n_kv * p.head_dim;
+            \\            uint kv_layer_stride = p.max_seq_len * cur_n_kv * cur_head_dim;
             \\            device float* layer_keys = kv_keys + li * kv_layer_stride;
             \\            device float* layer_values = kv_values + li * kv_layer_stride;
             \\            mega_kv_append_f32(k_buf, v_buf, layer_keys, layer_values,
-            \\                p.n_kv * p.head_dim, p.seq_pos, tgid, tid, tg_size);
+            \\                cur_n_kv * cur_head_dim, p.seq_pos, tgid, tid, tg_size);
             \\            mega_grid_sync(&sync_ctrs[sync_idx++ % 32], p.n_tgs, tgid, tid);
             \\            mega_sync_reset(&sync_ctrs[(sync_idx-1) % 32], tgid, tid);
             \\
             \\            device float* attn_out_buf = qkv_buf;
             \\            mega_sdpa_inline(q_buf, (device const uchar*)layer_keys,
             \\                (device const uchar*)layer_values, attn_out_buf,
-            \\                p.n_head, p.n_kv, p.head_dim, p.seq_pos + 1,
-            \\                1.0f / sqrt(float(p.head_dim)),
+            \\                cur_n_head, cur_n_kv, cur_head_dim, p.seq_pos + 1,
+            \\                1.0f / sqrt(float(cur_head_dim)),
             \\                0, 0, 0, 0, shared, tgid, tid, tg_size);
             \\            mega_grid_sync(&sync_ctrs[sync_idx++ % 32], p.n_tgs, tgid, tid);
             \\            mega_sync_reset(&sync_ctrs[(sync_idx-1) % 32], tgid, tid);
@@ -398,23 +522,23 @@ pub fn composeMSL(buf: []u8, desc: ModelDesc) []const u8 {
         const out_gemv = switch (desc.quant) {
             .q8_0 =>
             \\            mega_gemv_q8(attn_out_buf, (device const block_q8_0*)(weights + lo.attn_output),
-            \\                hidden2, p.n_embd, p.n_head * p.head_dim, shared, tgid, tid, tg_size);
+            \\                hidden2, p.n_embd, cur_n_head * cur_head_dim, shared, tgid, tid, tg_size);
             ,
             .q4_k =>
             \\            mega_gemv_q4k(attn_out_buf, weights + lo.attn_output,
-            \\                hidden2, p.n_embd, p.n_head * p.head_dim, shared, tgid, tid, tg_size);
+            \\                hidden2, p.n_embd, cur_n_head * cur_head_dim, shared, tgid, tid, tg_size);
             ,
             .q5_k =>
             \\            mega_gemv_q5k(attn_out_buf, weights + lo.attn_output,
-            \\                hidden2, p.n_embd, p.n_head * p.head_dim, shared, tgid, tid, tg_size);
+            \\                hidden2, p.n_embd, cur_n_head * cur_head_dim, shared, tgid, tid, tg_size);
             ,
             .q6_k =>
             \\            mega_gemv_q6k(attn_out_buf, weights + lo.attn_output,
-            \\                hidden2, p.n_embd, p.n_head * p.head_dim, shared, tgid, tid, tg_size);
+            \\                hidden2, p.n_embd, cur_n_head * cur_head_dim, shared, tgid, tid, tg_size);
             ,
             .q4_0 =>
             \\            mega_gemv_q4_0(attn_out_buf, (device const block_q4_0*)(weights + lo.attn_output),
-            \\                hidden2, p.n_embd, p.n_head * p.head_dim, shared, tgid, tid, tg_size);
+            \\                hidden2, p.n_embd, cur_n_head * cur_head_dim, shared, tgid, tid, tg_size);
             ,
         };
         append(buf, &pos, out_gemv);
@@ -449,23 +573,23 @@ pub fn composeMSL(buf: []u8, desc: ModelDesc) []const u8 {
         const gate_gemv = switch (desc.quant) {
             .q8_0 =>
             \\        mega_gemv_q8(hidden2, (device const block_q8_0*)(weights + lo.ffn_gate),
-            \\            ff_gate, p.n_ff, p.n_embd, shared, tgid, tid, tg_size);
+            \\            ff_gate, cur_n_ff, p.n_embd, shared, tgid, tid, tg_size);
             ,
             .q4_k =>
             \\        mega_gemv_q4k(hidden2, weights + lo.ffn_gate,
-            \\            ff_gate, p.n_ff, p.n_embd, shared, tgid, tid, tg_size);
+            \\            ff_gate, cur_n_ff, p.n_embd, shared, tgid, tid, tg_size);
             ,
             .q5_k =>
             \\        mega_gemv_q5k(hidden2, weights + lo.ffn_gate,
-            \\            ff_gate, p.n_ff, p.n_embd, shared, tgid, tid, tg_size);
+            \\            ff_gate, cur_n_ff, p.n_embd, shared, tgid, tid, tg_size);
             ,
             .q6_k =>
             \\        mega_gemv_q6k(hidden2, weights + lo.ffn_gate,
-            \\            ff_gate, p.n_ff, p.n_embd, shared, tgid, tid, tg_size);
+            \\            ff_gate, cur_n_ff, p.n_embd, shared, tgid, tid, tg_size);
             ,
             .q4_0 =>
             \\        mega_gemv_q4_0(hidden2, (device const block_q4_0*)(weights + lo.ffn_gate),
-            \\            ff_gate, p.n_ff, p.n_embd, shared, tgid, tid, tg_size);
+            \\            ff_gate, cur_n_ff, p.n_embd, shared, tgid, tid, tg_size);
             ,
         };
         append(buf, &pos, gate_gemv);
@@ -475,23 +599,23 @@ pub fn composeMSL(buf: []u8, desc: ModelDesc) []const u8 {
         const up_gemv = switch (desc.quant) {
             .q8_0 =>
             \\        mega_gemv_q8(hidden2, (device const block_q8_0*)(weights + lo.ffn_up),
-            \\            ff_up, p.n_ff, p.n_embd, shared, tgid, tid, tg_size);
+            \\            ff_up, cur_n_ff, p.n_embd, shared, tgid, tid, tg_size);
             ,
             .q4_k =>
             \\        mega_gemv_q4k(hidden2, weights + lo.ffn_up,
-            \\            ff_up, p.n_ff, p.n_embd, shared, tgid, tid, tg_size);
+            \\            ff_up, cur_n_ff, p.n_embd, shared, tgid, tid, tg_size);
             ,
             .q5_k =>
             \\        mega_gemv_q5k(hidden2, weights + lo.ffn_up,
-            \\            ff_up, p.n_ff, p.n_embd, shared, tgid, tid, tg_size);
+            \\            ff_up, cur_n_ff, p.n_embd, shared, tgid, tid, tg_size);
             ,
             .q6_k =>
             \\        mega_gemv_q6k(hidden2, weights + lo.ffn_up,
-            \\            ff_up, p.n_ff, p.n_embd, shared, tgid, tid, tg_size);
+            \\            ff_up, cur_n_ff, p.n_embd, shared, tgid, tid, tg_size);
             ,
             .q4_0 =>
             \\        mega_gemv_q4_0(hidden2, (device const block_q4_0*)(weights + lo.ffn_up),
-            \\            ff_up, p.n_ff, p.n_embd, shared, tgid, tid, tg_size);
+            \\            ff_up, cur_n_ff, p.n_embd, shared, tgid, tid, tg_size);
             ,
         };
         append(buf, &pos, up_gemv);
@@ -499,8 +623,8 @@ pub fn composeMSL(buf: []u8, desc: ModelDesc) []const u8 {
 
         // Activation
         const act_call = switch (desc.activation) {
-            .silu => "        mega_silu_mul(ff_gate, ff_up, p.n_ff, tgid, tid, tg_size);\n",
-            .gelu => "        mega_gelu_mul(ff_gate, ff_up, p.n_ff, tgid, tid, tg_size);\n",
+            .silu => "        mega_silu_mul(ff_gate, ff_up, cur_n_ff, tgid, tid, tg_size);\n",
+            .gelu => "        mega_gelu_mul(ff_gate, ff_up, cur_n_ff, tgid, tid, tg_size);\n",
             .relu_squared => unreachable,
         };
         append(buf, &pos, act_call);
@@ -510,16 +634,16 @@ pub fn composeMSL(buf: []u8, desc: ModelDesc) []const u8 {
         const up_gemv = switch (desc.quant) {
             .q8_0 =>
             \\        mega_gemv_q8(hidden2, (device const block_q8_0*)(weights + lo.ffn_up),
-            \\            ff_gate, p.n_ff, p.n_embd, shared, tgid, tid, tg_size);
+            \\            ff_gate, cur_n_ff, p.n_embd, shared, tgid, tid, tg_size);
             ,
             else =>
             \\        mega_gemv_q4k(hidden2, weights + lo.ffn_up,
-            \\            ff_gate, p.n_ff, p.n_embd, shared, tgid, tid, tg_size);
+            \\            ff_gate, cur_n_ff, p.n_embd, shared, tgid, tid, tg_size);
             ,
         };
         append(buf, &pos, up_gemv);
         append(buf, &pos, "\n        mega_grid_sync(&sync_ctrs[sync_idx++ % 32], p.n_tgs, tgid, tid);\n        mega_sync_reset(&sync_ctrs[(sync_idx-1) % 32], tgid, tid);\n");
-        append(buf, &pos, "        mega_relu_squared(ff_gate, p.n_ff, tgid, tid, tg_size);\n");
+        append(buf, &pos, "        mega_relu_squared(ff_gate, cur_n_ff, tgid, tid, tg_size);\n");
         append(buf, &pos, "        mega_grid_sync(&sync_ctrs[sync_idx++ % 32], p.n_tgs, tgid, tid);\n        mega_sync_reset(&sync_ctrs[(sync_idx-1) % 32], tgid, tid);\n\n");
     }
 
@@ -527,23 +651,23 @@ pub fn composeMSL(buf: []u8, desc: ModelDesc) []const u8 {
     const down_gemv = switch (desc.quant) {
         .q8_0 =>
         \\        mega_gemv_q8(ff_gate, (device const block_q8_0*)(weights + lo.ffn_down),
-        \\            hidden2, p.n_embd, p.n_ff, shared, tgid, tid, tg_size);
+        \\            hidden2, p.n_embd, cur_n_ff, shared, tgid, tid, tg_size);
         ,
         .q4_k =>
         \\        mega_gemv_q4k(ff_gate, weights + lo.ffn_down,
-        \\            hidden2, p.n_embd, p.n_ff, shared, tgid, tid, tg_size);
+        \\            hidden2, p.n_embd, cur_n_ff, shared, tgid, tid, tg_size);
         ,
         .q5_k =>
         \\        mega_gemv_q5k(ff_gate, weights + lo.ffn_down,
-        \\            hidden2, p.n_embd, p.n_ff, shared, tgid, tid, tg_size);
+        \\            hidden2, p.n_embd, cur_n_ff, shared, tgid, tid, tg_size);
         ,
         .q6_k =>
         \\        mega_gemv_q6k(ff_gate, weights + lo.ffn_down,
-        \\            hidden2, p.n_embd, p.n_ff, shared, tgid, tid, tg_size);
+        \\            hidden2, p.n_embd, cur_n_ff, shared, tgid, tid, tg_size);
         ,
         .q4_0 =>
         \\        mega_gemv_q4_0(ff_gate, (device const block_q4_0*)(weights + lo.ffn_down),
-        \\            hidden2, p.n_embd, p.n_ff, shared, tgid, tid, tg_size);
+        \\            hidden2, p.n_embd, cur_n_ff, shared, tgid, tid, tg_size);
         ,
     };
     append(buf, &pos, down_gemv);

@@ -148,6 +148,9 @@ pub const MetalBackend = struct {
     pipe_gemm_bf16: objc.id,
     pipe_gemm_q8_0: objc.id,
     pipe_gemm_q4_0: objc.id,
+    pipe_gemm_q4_k: objc.id,
+    pipe_gemm_q6_k: objc.id,
+    pipe_gemm_q5_k: objc.id,
     pipe_rope_batched: objc.id,
     pipe_sdpa_prefill: objc.id,
     pipe_copy_f32: objc.id,
@@ -305,6 +308,9 @@ pub const MetalBackend = struct {
             .pipe_gemm_bf16 = undefined,
             .pipe_gemm_q8_0 = undefined,
             .pipe_gemm_q4_0 = undefined,
+            .pipe_gemm_q4_k = undefined,
+            .pipe_gemm_q6_k = undefined,
+            .pipe_gemm_q5_k = undefined,
             .pipe_rope_batched = undefined,
             .pipe_sdpa_prefill = undefined,
             .pipe_copy_f32 = undefined,
@@ -387,6 +393,9 @@ pub const MetalBackend = struct {
         self.pipe_gemm_bf16 = try self.makePipeline("gemm_bf16");
         self.pipe_gemm_q8_0 = try self.makePipeline("gemm_q8_0");
         self.pipe_gemm_q4_0 = try self.makePipeline("gemm_q4_0");
+        self.pipe_gemm_q4_k = try self.makePipeline("gemm_q4_k");
+        self.pipe_gemm_q6_k = try self.makePipeline("gemm_q6_k");
+        self.pipe_gemm_q5_k = try self.makePipeline("gemm_q5_k");
         self.pipe_rope_batched = try self.makePipeline("rope_batched_f32");
         self.pipe_sdpa_prefill = try self.makePipeline("sdpa_prefill_fa2");
         self.pipe_copy_f32 = try self.makePipeline("copy_f32");
@@ -2181,6 +2190,9 @@ pub const MetalBackend = struct {
             .bf16, .f16 => self.pipe_gemm_bf16,
             .q8_0 => self.pipe_gemm_q8_0,
             .q4_0 => self.pipe_gemm_q4_0,
+            .q4_k => self.pipe_gemm_q4_k,
+            .q6_k => self.pipe_gemm_q6_k,
+            .q5_k => self.pipe_gemm_q5_k,
             else => @panic("Metal GEMM: unsupported dtype — add GPU kernel"),
         };
 

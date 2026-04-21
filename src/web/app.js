@@ -330,9 +330,13 @@ function renderContent(el, content, final) {
   var doRender = function() {
     el.classList.remove('thinking');
     el.textContent = '';
+    var thinkIdx = 0;
     var dc = content.replace(/<think>([\s\S]*?)<\/think>\s*/g, function(_, p) {
       var t = p.trim();
-      return t ? '\n> ' + t.replace(/\n/g, '\n> ') + '\n\n' : '';
+      if (!t) return '';
+      thinkIdx++;
+      var escapedThink = t.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\n/g,'<br>');
+      return '<details class="think-block"><summary>Chain of thought ' + thinkIdx + '</summary><div class="think-content">' + escapedThink + '</div></details>';
     });
     if (dc.indexOf('<think>') === 0) dc = dc.substring(7);
     var parsed;
@@ -343,7 +347,7 @@ function renderContent(el, content, final) {
     }
     var sanitized;
     if (typeof DOMPurify !== 'undefined') {
-      sanitized = DOMPurify.sanitize(parsed);
+      sanitized = DOMPurify.sanitize(parsed, {ADD_TAGS: ['details', 'summary']});
     } else if (typeof marked !== 'undefined') {
       // marked produced HTML but DOMPurify is missing — escape to prevent XSS (breaks formatting)
       sanitized = parsed.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
