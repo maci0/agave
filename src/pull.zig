@@ -1,10 +1,17 @@
-//! Download GGUF models from HuggingFace Hub.
+//! Download GGUF and SafeTensors models from HuggingFace Hub.
 //!
 //! Usage: agave pull <org/repo> [--quant Q4_K_M] [--list]
 //!
 //! Fetches the HuggingFace model repository listing via the API, selects the
-//! best GGUF file based on quantization preference, and downloads it into the
-//! standard HuggingFace cache layout with an agave convenience symlink.
+//! best model file(s) based on quantization preference, and downloads them into
+//! the standard HuggingFace cache layout with an agave convenience symlink.
+//!
+//! Supports two model formats:
+//!   - **GGUF**: Single-file models (e.g. `model-Q4_K_M.gguf`). Selected by
+//!     quantization preference.
+//!   - **SafeTensors**: Multi-file models (shards + config.json + tokenizer.json).
+//!     Downloaded as a complete directory. Use `--quant safetensors` to prefer
+//!     SafeTensors when both formats are available.
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
@@ -100,13 +107,19 @@ const quant_preference = [_][]const u8{
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
+/// Model format discriminator for download strategy.
+pub const ModelFormat = enum {
+    gguf,
+    safetensors,
+};
+
 /// Parsed command-line arguments for the `pull` sub-command.
 pub const PullArgs = struct {
     /// Repository identifier in `org/repo` format.
     repo: []const u8,
-    /// Optional quantization filter string (e.g. "Q4_K_M").
+    /// Optional quantization filter string (e.g. "Q4_K_M", "safetensors").
     quant: ?[]const u8 = null,
-    /// If true, list available GGUF files and exit without downloading.
+    /// If true, list available model files and exit without downloading.
     list_only: bool = false,
     /// Optional HuggingFace API token for private repositories.
     token: ?[]const u8 = null,
@@ -120,10 +133,37 @@ pub const GgufFile = struct {
     size: u64,
 };
 
-/// Result from listing GGUF files in a repository.
+/// SafeTensors model metadata: shard files and auxiliary files present in the repo.
+pub const SafeTensorsModel = struct {
+    /// Shard filenames (e.g. "model-00001-of-00005.safetensors" or "model.safetensors").
+    shards: []const []const u8,
+    /// Per-shard file sizes in bytes (parallel to `shards`).
+    shard_sizes: []const u64,
+    /// Total size of all shards combined.
+    total_size: u64,
+    /// Whether `model.safetensors.index.json` exists (multi-shard model).
+    has_index: bool,
+    /// Whether `config.json` exists in the repo.
+    has_config: bool,
+    /// Whether `tokenizer.json` exists in the repo.
+    has_tokenizer: bool,
+    /// Whether `tokenizer_config.json` exists in the repo.
+    has_tokenizer_config: bool,
+};
+
+/// Auxiliary files that should be downloaded alongside SafeTensors shards.
+const safetensors_aux_files = [_][]const u8{
+    "config.json",
+    "tokenizer.json",
+    "tokenizer_config.json",
+};
+
+/// Result from listing model files in a repository.
 pub const ListResult = struct {
-    /// Available GGUF files.
+    /// Available GGUF files (empty slice if none).
     files: []GgufFile,
+    /// SafeTensors model info (null if no SafeTensors files found).
+    safetensors: ?SafeTensorsModel,
     /// Git commit SHA for the repository HEAD.
     commit_sha: []const u8,
     /// Arena allocator that owns all returned memory. Caller must call
@@ -133,6 +173,11 @@ pub const ListResult = struct {
     pub fn deinit(self: *ListResult) void {
         self.arena.deinit();
     }
+
+    /// Returns true if the repository has any downloadable model files.
+    pub fn hasAnyFiles(self: *const ListResult) bool {
+        return self.files.len > 0 or self.safetensors != null;
+    }
 };
 
 /// Errors that can occur during the pull operation.
@@ -141,7 +186,7 @@ pub const PullError = error{
     InvalidArgument,
     /// Repository identifier is not in `org/repo` format.
     InvalidRepoFormat,
-    /// No GGUF files found in the repository.
+    /// No model files (GGUF or SafeTensors) found in the repository.
     NoGgufFiles,
     /// The requested quantization was not found among available files.
     QuantNotFound,
@@ -190,22 +235,22 @@ fn getenv(name: []const u8) ?[]const u8 {
 /// Print usage information to stdout (pipeable: agave pull --help | less).
 pub fn printUsage() void {
     const usage =
-        \\agave pull — Download GGUF models from HuggingFace Hub
+        \\agave pull — Download models from HuggingFace Hub
         \\
         \\USAGE:
         \\  agave pull [OPTIONS] <org/repo>
         \\  agave pull [OPTIONS] -- <org/repo>
         \\
         \\ARGUMENTS:
-        \\  <org/repo>           Repository in org/repo format (e.g. Qwen/Qwen3.5-27B-GGUF)
+        \\  <org/repo>           Repository in org/repo format
         \\
         \\GENERAL:
         \\  -h, --help           Show this help message
         \\  -v, --version        Print version
         \\
         \\OPTIONS:
-        \\      --quant <QUANT>  Select quantization (e.g. Q4_K_M, Q8_0)
-        \\  -l, --list           List available GGUF files and exit
+        \\      --quant <QUANT>  Select quantization (e.g. Q4_K_M, Q8_0, safetensors)
+        \\  -l, --list           List available model files and exit
         \\
         \\ENVIRONMENT:
         \\  HF_TOKEN             HuggingFace API token for private repos
@@ -213,7 +258,14 @@ pub fn printUsage() void {
         \\EXAMPLES:
         \\  agave pull Qwen/Qwen3.5-27B-GGUF
         \\  agave pull Qwen/Qwen3.5-27B-GGUF --quant Q4_K_M
+        \\  agave pull RedHatAI/Qwen3.6-35B-A3B-NVFP4
+        \\  agave pull RedHatAI/Qwen3.6-35B-A3B-NVFP4 --quant safetensors
         \\  agave pull Qwen/Qwen3.5-27B-GGUF --list
+        \\
+        \\FORMATS:
+        \\  GGUF           Single-file quantized models (auto-selected by quant preference)
+        \\  SafeTensors    Multi-file models (shards + config + tokenizer)
+        \\                 Use --quant safetensors to prefer when both formats exist
         \\
         \\SCRIPTING:
         \\  MODEL=$(agave pull org/repo 2>/dev/null)
@@ -327,12 +379,13 @@ pub fn parseArgs(args_iter: *std.process.Args.Iterator) PullError!?PullArgs {
 
 // ── HuggingFace API client ───────────────────────────────────────────────────
 
-/// Fetch the list of GGUF files available in a HuggingFace repository.
+/// Fetch the list of model files available in a HuggingFace repository.
 ///
 /// Makes a GET request to the HuggingFace API and parses the JSON response
-/// to extract filenames, sizes, and the commit SHA. All returned memory is
-/// owned by the `ListResult.arena`; call `ListResult.deinit()` when done.
-pub fn listGgufFiles(allocator: Allocator, repo: []const u8, token: ?[]const u8) (PullError || Allocator.Error)!ListResult {
+/// to extract GGUF filenames, SafeTensors shards, sizes, and the commit SHA.
+/// All returned memory is owned by the `ListResult.arena`; call
+/// `ListResult.deinit()` when done.
+pub fn listModelFiles(allocator: Allocator, repo: []const u8, token: ?[]const u8) (PullError || Allocator.Error)!ListResult {
     var arena = std.heap.ArenaAllocator.init(allocator);
     errdefer arena.deinit();
     const arena_alloc = arena.allocator();
@@ -381,69 +434,195 @@ pub fn listGgufFiles(allocator: Allocator, repo: []const u8, token: ?[]const u8)
         else => "unknown",
     } else "unknown";
 
-    // Extract siblings array and filter for .gguf files.
+    // Extract siblings array.
     const siblings_val = if (root == .object) root.object.get("siblings") else null;
     const siblings = if (siblings_val) |sv| switch (sv) {
         .array => sv.array.items,
         else => &[_]std.json.Value{},
     } else &[_]std.json.Value{};
 
-    // First pass: count GGUF files.
+    // First pass: count GGUF and SafeTensors files.
     var gguf_count: usize = 0;
+    var st_count: usize = 0;
+    var has_st_index = false;
+    var has_config = false;
+    var has_tokenizer = false;
+    var has_tokenizer_config = false;
     for (siblings) |sibling| {
         if (sibling != .object) continue;
         const rfilename = sibling.object.get("rfilename") orelse continue;
         if (rfilename != .string) continue;
-        if (std.mem.endsWith(u8, rfilename.string, ".gguf") and isSafeFilename(rfilename.string)) {
+        const name = rfilename.string;
+        if (std.mem.endsWith(u8, name, ".gguf") and isSafeFilename(name)) {
             gguf_count += 1;
+        } else if (std.mem.endsWith(u8, name, ".safetensors") and isSafeFilename(name)) {
+            st_count += 1;
+        } else if (std.mem.eql(u8, name, "model.safetensors.index.json")) {
+            has_st_index = true;
+        } else if (std.mem.eql(u8, name, "config.json")) {
+            has_config = true;
+        } else if (std.mem.eql(u8, name, "tokenizer.json")) {
+            has_tokenizer = true;
+        } else if (std.mem.eql(u8, name, "tokenizer_config.json")) {
+            has_tokenizer_config = true;
         }
     }
 
-    if (gguf_count == 0) {
-        eprint("Error: no GGUF files found in '{s}'\n", .{repo});
+    if (gguf_count == 0 and st_count == 0) {
+        eprint("Error: no model files (GGUF or SafeTensors) found in '{s}'\n", .{repo});
         return PullError.NoGgufFiles;
     }
 
     // Second pass: collect GGUF file info.
-    var files = try arena_alloc.alloc(GgufFile, gguf_count);
-    var idx: usize = 0;
-    for (siblings) |sibling| {
-        if (sibling != .object) continue;
-        const rfilename = sibling.object.get("rfilename") orelse continue;
-        if (rfilename != .string) continue;
-        if (!std.mem.endsWith(u8, rfilename.string, ".gguf") or !isSafeFilename(rfilename.string)) continue;
+    var gguf_files: []GgufFile = &.{};
+    if (gguf_count > 0) {
+        gguf_files = try arena_alloc.alloc(GgufFile, gguf_count);
+        var idx: usize = 0;
+        for (siblings) |sibling| {
+            if (sibling != .object) continue;
+            const rfilename = sibling.object.get("rfilename") orelse continue;
+            if (rfilename != .string) continue;
+            if (!std.mem.endsWith(u8, rfilename.string, ".gguf") or !isSafeFilename(rfilename.string)) continue;
 
-        // Extract size from the "size" field if available.
-        const size_val = sibling.object.get("size");
-        const size: u64 = if (size_val) |sv| switch (sv) {
-            .integer => |i| if (i >= 0) @intCast(i) else 0,
-            else => 0,
-        } else 0;
+            const size_val = sibling.object.get("size");
+            const size: u64 = if (size_val) |sv| switch (sv) {
+                .integer => |i| if (i >= 0) @intCast(i) else 0,
+                else => 0,
+            } else 0;
 
-        files[idx] = .{
-            .filename = rfilename.string,
-            .size = size,
+            gguf_files[idx] = .{
+                .filename = rfilename.string,
+                .size = size,
+            };
+            idx += 1;
+        }
+        gguf_files = gguf_files[0..idx];
+    }
+
+    // Collect SafeTensors shard info.
+    var st_model: ?SafeTensorsModel = null;
+    if (st_count > 0) {
+        const shards = try arena_alloc.alloc([]const u8, st_count);
+        const shard_sizes = try arena_alloc.alloc(u64, st_count);
+        var st_idx: usize = 0;
+        var total_size: u64 = 0;
+        for (siblings) |sibling| {
+            if (sibling != .object) continue;
+            const rfilename = sibling.object.get("rfilename") orelse continue;
+            if (rfilename != .string) continue;
+            if (!std.mem.endsWith(u8, rfilename.string, ".safetensors") or !isSafeFilename(rfilename.string)) continue;
+
+            const size_val = sibling.object.get("size");
+            const size: u64 = if (size_val) |sv| switch (sv) {
+                .integer => |i| if (i >= 0) @intCast(i) else 0,
+                else => 0,
+            } else 0;
+
+            shards[st_idx] = rfilename.string;
+            shard_sizes[st_idx] = size;
+            total_size = std.math.add(u64, total_size, size) catch total_size;
+            st_idx += 1;
+        }
+
+        st_model = .{
+            .shards = shards[0..st_idx],
+            .shard_sizes = shard_sizes[0..st_idx],
+            .total_size = total_size,
+            .has_index = has_st_index,
+            .has_config = has_config,
+            .has_tokenizer = has_tokenizer,
+            .has_tokenizer_config = has_tokenizer_config,
         };
-        idx += 1;
     }
 
     return ListResult{
-        .files = files[0..idx],
+        .files = gguf_files,
+        .safetensors = st_model,
         .commit_sha = commit_sha,
         .arena = arena,
     };
 }
 
-/// Select the best GGUF file from the list based on quantization preference.
+/// Backward-compatible wrapper: list only GGUF files.
+pub fn listGgufFiles(allocator: Allocator, repo: []const u8, token: ?[]const u8) (PullError || Allocator.Error)!ListResult {
+    return listModelFiles(allocator, repo, token);
+}
+
+/// Discriminated selection result: either a single GGUF file or the SafeTensors model.
+pub const SelectedModel = union(ModelFormat) {
+    gguf: GgufFile,
+    safetensors: SafeTensorsModel,
+};
+
+/// Select the best model file(s) from the listing based on quantization preference.
 ///
-/// If `quant` is provided, returns the first file whose name contains that
-/// string (case-insensitive). Otherwise, ranks files by the built-in quant
-/// preference order and returns the best match.
+/// If `quant` is "safetensors" (case-insensitive), selects the SafeTensors
+/// model if available. If `quant` is provided as a quantization string,
+/// searches GGUF files for a match. Otherwise, selects the best GGUF file
+/// by built-in quant preference, falling back to SafeTensors if no GGUF
+/// files exist.
+pub fn selectModel(result: *const ListResult, quant: ?[]const u8) PullError!SelectedModel {
+    if (!result.hasAnyFiles()) return PullError.NoGgufFiles;
+
+    if (quant) |q| {
+        // Explicit SafeTensors selection.
+        if (std.ascii.eqlIgnoreCase(q, "safetensors")) {
+            if (result.safetensors) |st| {
+                return .{ .safetensors = st };
+            }
+            eprint("Error: no SafeTensors files found in this repository\n", .{});
+            return PullError.QuantNotFound;
+        }
+
+        // User-specified quantization: search GGUF files.
+        for (result.files) |f| {
+            if (std.ascii.indexOfIgnoreCase(f.filename, q) != null) {
+                return .{ .gguf = f };
+            }
+        }
+        eprint("Error: no file found matching '{s}'\n", .{q});
+        eprint("Available files:\n", .{});
+        for (result.files) |f| {
+            if (f.size > 0) {
+                const size_gb = @as(f64, @floatFromInt(f.size)) / bytes_per_gb;
+                eprint("  {s}  ({d:.1} GB)\n", .{ f.filename, size_gb });
+            } else {
+                eprint("  {s}\n", .{f.filename});
+            }
+        }
+        if (result.safetensors != null) {
+            eprint("  (SafeTensors also available — use --quant safetensors)\n", .{});
+        }
+        return PullError.QuantNotFound;
+    }
+
+    // Auto-select: try GGUF by preference order first.
+    if (result.files.len > 0) {
+        for (&quant_preference) |pref| {
+            for (result.files) |f| {
+                if (std.ascii.indexOfIgnoreCase(f.filename, pref) != null) {
+                    return .{ .gguf = f };
+                }
+            }
+        }
+        // Fallback: first GGUF file.
+        return .{ .gguf = result.files[0] };
+    }
+
+    // No GGUF files — use SafeTensors.
+    if (result.safetensors) |st| {
+        return .{ .safetensors = st };
+    }
+
+    return PullError.NoGgufFiles;
+}
+
+/// Select the best GGUF file from the list based on quantization preference.
+/// Legacy wrapper for code that only needs GGUF selection.
 pub fn selectFile(files: []const GgufFile, quant: ?[]const u8) PullError!GgufFile {
     if (files.len == 0) return PullError.NoGgufFiles;
 
     if (quant) |q| {
-        // User-specified quantization: find first file containing the string.
         for (files) |f| {
             if (std.ascii.indexOfIgnoreCase(f.filename, q) != null) {
                 return f;
@@ -462,7 +641,6 @@ pub fn selectFile(files: []const GgufFile, quant: ?[]const u8) PullError!GgufFil
         return PullError.QuantNotFound;
     }
 
-    // Auto-select by preference order.
     for (&quant_preference) |pref| {
         for (files) |f| {
             if (std.ascii.indexOfIgnoreCase(f.filename, pref) != null) {
@@ -471,21 +649,43 @@ pub fn selectFile(files: []const GgufFile, quant: ?[]const u8) PullError!GgufFil
         }
     }
 
-    // Fallback: first file.
     return files[0];
 }
 
-/// Print a formatted list of available GGUF files with sizes to stdout (pipeable).
-pub fn printFileList(files: []const GgufFile) void {
+/// Print a formatted list of available model files with sizes to stdout (pipeable).
+pub fn printFileList(files: []const GgufFile, st_model: ?SafeTensorsModel) void {
     const stdout = Io.File.stdout();
-    for (files) |f| {
-        const size_gb = @as(f64, @floatFromInt(f.size)) / bytes_per_gb;
-        var buf: [print_buf_size]u8 = undefined;
-        if (f.size > 0) {
-            fileWrite(stdout, std.fmt.bufPrint(&buf, "{s}  ({d:.1} GB)\n", .{ f.filename, size_gb }) catch continue);
-        } else {
-            fileWrite(stdout, std.fmt.bufPrint(&buf, "{s}\n", .{f.filename}) catch continue);
+
+    if (files.len > 0) {
+        fileWrite(stdout, "GGUF:\n");
+        for (files) |f| {
+            const size_gb = @as(f64, @floatFromInt(f.size)) / bytes_per_gb;
+            var buf: [print_buf_size]u8 = undefined;
+            if (f.size > 0) {
+                fileWrite(stdout, std.fmt.bufPrint(&buf, "  {s}  ({d:.1} GB)\n", .{ f.filename, size_gb }) catch continue);
+            } else {
+                fileWrite(stdout, std.fmt.bufPrint(&buf, "  {s}\n", .{f.filename}) catch continue);
+            }
         }
+    }
+
+    if (st_model) |st| {
+        if (files.len > 0) fileWrite(stdout, "\n");
+        var buf: [print_buf_size]u8 = undefined;
+        const total_gb = @as(f64, @floatFromInt(st.total_size)) / bytes_per_gb;
+        fileWrite(stdout, std.fmt.bufPrint(&buf, "SafeTensors:  {d} shard(s)  ({d:.1} GB total)\n", .{ st.shards.len, total_gb }) catch "SafeTensors:\n");
+        for (st.shards, st.shard_sizes) |shard, size| {
+            if (size > 0) {
+                const shard_gb = @as(f64, @floatFromInt(size)) / bytes_per_gb;
+                fileWrite(stdout, std.fmt.bufPrint(&buf, "  {s}  ({d:.1} GB)\n", .{ shard, shard_gb }) catch continue);
+            } else {
+                fileWrite(stdout, std.fmt.bufPrint(&buf, "  {s}\n", .{shard}) catch continue);
+            }
+        }
+        // Show auxiliary files.
+        if (st.has_config) fileWrite(stdout, "  config.json\n");
+        if (st.has_tokenizer) fileWrite(stdout, "  tokenizer.json\n");
+        if (st.has_tokenizer_config) fileWrite(stdout, "  tokenizer_config.json\n");
     }
 }
 
@@ -959,36 +1159,49 @@ fn downloadFileOnce(
 
 /// Execute the full model pull workflow.
 ///
-///  1. List GGUF files in the repository
+///  1. List model files in the repository (GGUF + SafeTensors)
 ///  2. If --list, print file list to stdout and return
-///  3. Select the best file matching --quant filter
+///  3. Select the best model based on --quant filter and format preference
 ///  4. Build HuggingFace cache directory structure
-///  5. Check if already downloaded (skip download if complete)
-///  6. Download if needed
-///  7. Verify GGUF magic bytes (integrity check)
-///  8. Create snapshot symlink (relative path)
-///  9. Write refs/main with commit SHA
-/// 10. Create agave convenience symlink
-/// 11. Print the final model path
+///  5. Download model files (single GGUF or multi-file SafeTensors)
+///  6. Verify integrity (GGUF magic bytes, SafeTensors shard count)
+///  7. Create snapshot symlinks
+///  8. Write refs/main with commit SHA
+///  9. Create agave convenience symlink
+/// 10. Print the final model path
 pub fn pullModel(allocator: Allocator, args: PullArgs) (PullError || Allocator.Error)!void {
     // Step 1: List available files.
     eprint("Fetching model info for '{s}'...\n", .{args.repo});
-    var list_result = try listGgufFiles(allocator, args.repo, args.token);
+    var list_result = try listModelFiles(allocator, args.repo, args.token);
     defer list_result.deinit();
 
     // Step 2: If --list, print file list to stdout and return.
     if (args.list_only) {
-        eprint("Available GGUF files in '{s}':\n", .{args.repo});
-        printFileList(list_result.files);
+        eprint("Available model files in '{s}':\n", .{args.repo});
+        printFileList(list_result.files, list_result.safetensors);
         return;
     }
 
-    // Step 3: Select file.
-    const selected = try selectFile(list_result.files, args.quant);
+    // Step 3: Select model.
+    const selected = try selectModel(&list_result, args.quant);
+
+    switch (selected) {
+        .gguf => |gguf| try pullGgufModel(allocator, args, &list_result, gguf),
+        .safetensors => |st| try pullSafeTensorsModel(allocator, args, &list_result, st),
+    }
+}
+
+/// Download a single GGUF model file with cache layout and integrity check.
+fn pullGgufModel(
+    allocator: Allocator,
+    args: PullArgs,
+    list_result: *const ListResult,
+    selected: GgufFile,
+) (PullError || Allocator.Error)!void {
     const size_gb = @as(f64, @floatFromInt(selected.size)) / bytes_per_gb;
     eprint("Selected: {s} ({d:.1} GB)\n", .{ selected.filename, size_gb });
 
-    // Step 4: Build cache paths (arena-allocated — freed together at function exit).
+    // Build cache paths (arena-allocated — freed together at function exit).
     var path_arena = std.heap.ArenaAllocator.init(allocator);
     defer path_arena.deinit();
     const pa = path_arena.allocator();
@@ -1002,7 +1215,7 @@ pub fn pullModel(allocator: Allocator, args: PullArgs) (PullError || Allocator.E
     try ensureDir(snapshots_dir);
     try ensureDir(refs_dir);
 
-    // Step 5: Check if already downloaded.
+    // Check if already downloaded.
     const blob_path = std.fmt.allocPrint(pa, "{s}/{s}", .{ blobs_dir, selected.filename }) catch return error.OutOfMemory;
 
     var already_complete = false;
@@ -1011,19 +1224,18 @@ pub fn pullModel(allocator: Allocator, args: PullArgs) (PullError || Allocator.E
             eprint("File already downloaded: {s}\n", .{blob_path});
             already_complete = true;
         } else if (selected.size == 0 and stat.size > 0) {
-            // Size unknown from API but file exists — assume complete.
             eprint("File already exists: {s}\n", .{blob_path});
             already_complete = true;
         }
     } else |_| {}
 
-    // Step 6: Download if needed.
+    // Download if needed.
     if (!already_complete) {
         try downloadFile(allocator, args.repo, selected.filename, blob_path, args.token);
         eprint("Download complete.\n", .{});
     }
 
-    // Step 6b: Verify GGUF magic bytes (catches truncation and corruption).
+    // Verify GGUF magic bytes (catches truncation and corruption).
     if (std.mem.endsWith(u8, selected.filename, ".gguf")) {
         if (Io.Dir.cwd().openFile(mod_io, blob_path, .{})) |f| {
             defer f.close(mod_io);
@@ -1037,51 +1249,150 @@ pub fn pullModel(allocator: Allocator, args: PullArgs) (PullError || Allocator.E
         } else |_| {}
     }
 
-    // Step 7: Create snapshot symlink (relative path).
+    // Create snapshot symlink (relative path).
     const snapshot_link = std.fmt.allocPrint(pa, "{s}/{s}", .{ snapshots_dir, selected.filename }) catch
         return error.OutOfMemory;
 
     const relative_blob = std.fmt.allocPrint(pa, "../../blobs/{s}", .{selected.filename}) catch
         return error.OutOfMemory;
 
-    // Atomic symlink replacement: create at temp path with random suffix to
-    // prevent TOCTOU races (CWE-367), then rename over target.
-    var snap_rand_buf: [8]u8 = undefined;
-    mod_io.random(&snap_rand_buf);
-    const tmp_snapshot_link = std.fmt.allocPrint(pa, "{s}.tmp.{x}", .{
-        snapshot_link, std.mem.readInt(u64, &snap_rand_buf, .little),
-    }) catch return error.OutOfMemory;
-    createSymlink(pa, relative_blob, tmp_snapshot_link) catch |err| {
-        eprint("Warning: could not create snapshot symlink: {}\n", .{err});
+    atomicSymlink(pa, relative_blob, snapshot_link);
+
+    // Write refs/main and create convenience symlink.
+    writeRefsMain(pa, refs_dir, list_result.commit_sha);
+    createAgaveSymlink(allocator, args.repo, snapshots_dir);
+
+    // Print final model path.
+    fileWrite(Io.File.stdout(), snapshot_link);
+    fileWrite(Io.File.stdout(), "\n");
+    eprint("\nModel ready at:\n  {s}\n", .{snapshot_link});
+    eprint("Run:\n  agave {s} \"your prompt\"\n", .{snapshot_link});
+}
+
+/// Download a SafeTensors model: all shards + config.json + tokenizer files.
+fn pullSafeTensorsModel(
+    allocator: Allocator,
+    args: PullArgs,
+    list_result: *const ListResult,
+    st: SafeTensorsModel,
+) (PullError || Allocator.Error)!void {
+    const total_gb = @as(f64, @floatFromInt(st.total_size)) / bytes_per_gb;
+    eprint("Selected: SafeTensors model ({d} shards, {d:.1} GB total)\n", .{ st.shards.len, total_gb });
+
+    // Build cache paths.
+    var path_arena = std.heap.ArenaAllocator.init(allocator);
+    defer path_arena.deinit();
+    const pa = path_arena.allocator();
+
+    const cache_dir = try hfCacheDir(pa, args.repo);
+    const blobs_dir = std.fmt.allocPrint(pa, "{s}/blobs", .{cache_dir}) catch return error.OutOfMemory;
+    const snapshots_dir = std.fmt.allocPrint(pa, "{s}/snapshots/{s}", .{ cache_dir, list_result.commit_sha }) catch return error.OutOfMemory;
+    const refs_dir = std.fmt.allocPrint(pa, "{s}/refs", .{cache_dir}) catch return error.OutOfMemory;
+
+    try ensureDir(blobs_dir);
+    try ensureDir(snapshots_dir);
+    try ensureDir(refs_dir);
+
+    // Download each shard.
+    for (st.shards, st.shard_sizes, 0..) |shard, expected_size, i| {
+        const blob_path = std.fmt.allocPrint(pa, "{s}/{s}", .{ blobs_dir, shard }) catch return error.OutOfMemory;
+
+        var already_complete = false;
+        if (Io.Dir.cwd().statFile(mod_io, blob_path, .{})) |stat| {
+            if (expected_size > 0 and stat.size == expected_size) {
+                eprint("[{d}/{d}] Already downloaded: {s}\n", .{ i + 1, st.shards.len, shard });
+                already_complete = true;
+            } else if (expected_size == 0 and stat.size > 0) {
+                eprint("[{d}/{d}] Already exists: {s}\n", .{ i + 1, st.shards.len, shard });
+                already_complete = true;
+            }
+        } else |_| {}
+
+        if (!already_complete) {
+            eprint("[{d}/{d}] Downloading {s}...\n", .{ i + 1, st.shards.len, shard });
+            try downloadFile(allocator, args.repo, shard, blob_path, args.token);
+        }
+
+        // Create snapshot symlink for this shard.
+        const snapshot_link = std.fmt.allocPrint(pa, "{s}/{s}", .{ snapshots_dir, shard }) catch continue;
+        const relative_blob = std.fmt.allocPrint(pa, "../../blobs/{s}", .{shard}) catch continue;
+        atomicSymlink(pa, relative_blob, snapshot_link);
+    }
+
+    // Download index file if present.
+    if (st.has_index) {
+        const index_filename = "model.safetensors.index.json";
+        const index_blob = std.fmt.allocPrint(pa, "{s}/{s}", .{ blobs_dir, index_filename }) catch return error.OutOfMemory;
+        if (Io.Dir.cwd().statFile(mod_io, index_blob, .{})) |_| {
+            eprint("Already downloaded: {s}\n", .{index_filename});
+        } else |_| {
+            eprint("Downloading {s}...\n", .{index_filename});
+            downloadFile(allocator, args.repo, index_filename, index_blob, args.token) catch |err| {
+                eprint("Warning: could not download {s}: {}\n", .{ index_filename, err });
+            };
+        }
+        const snapshot_link = std.fmt.allocPrint(pa, "{s}/{s}", .{ snapshots_dir, index_filename }) catch return error.OutOfMemory;
+        const relative_blob = std.fmt.allocPrint(pa, "../../blobs/{s}", .{index_filename}) catch return error.OutOfMemory;
+        atomicSymlink(pa, relative_blob, snapshot_link);
+    }
+
+    // Download auxiliary files (config.json, tokenizer.json, tokenizer_config.json).
+    const aux_flags = [_]bool{ st.has_config, st.has_tokenizer, st.has_tokenizer_config };
+    for (&safetensors_aux_files, aux_flags) |aux_name, has_file| {
+        if (!has_file) continue;
+        const aux_blob = std.fmt.allocPrint(pa, "{s}/{s}", .{ blobs_dir, aux_name }) catch continue;
+        if (Io.Dir.cwd().statFile(mod_io, aux_blob, .{})) |_| {
+            eprint("Already downloaded: {s}\n", .{aux_name});
+        } else |_| {
+            eprint("Downloading {s}...\n", .{aux_name});
+            downloadFile(allocator, args.repo, aux_name, aux_blob, args.token) catch |err| {
+                eprint("Warning: could not download {s}: {}\n", .{ aux_name, err });
+            };
+        }
+        const snapshot_link = std.fmt.allocPrint(pa, "{s}/{s}", .{ snapshots_dir, aux_name }) catch continue;
+        const relative_blob = std.fmt.allocPrint(pa, "../../blobs/{s}", .{aux_name}) catch continue;
+        atomicSymlink(pa, relative_blob, snapshot_link);
+    }
+
+    eprint("Download complete.\n", .{});
+
+    // Write refs/main and create convenience symlink.
+    writeRefsMain(pa, refs_dir, list_result.commit_sha);
+    createAgaveSymlink(allocator, args.repo, snapshots_dir);
+
+    // Print final model path (the snapshot directory for SafeTensors).
+    fileWrite(Io.File.stdout(), snapshots_dir);
+    fileWrite(Io.File.stdout(), "\n");
+    eprint("\nModel ready at:\n  {s}\n", .{snapshots_dir});
+    eprint("Run:\n  agave {s} \"your prompt\"\n", .{snapshots_dir});
+}
+
+/// Create an atomic symlink replacement (temp + rename) to prevent TOCTOU races.
+fn atomicSymlink(pa: Allocator, target: []const u8, link_path: []const u8) void {
+    var rand_buf: [8]u8 = undefined;
+    mod_io.random(&rand_buf);
+    const tmp_link = std.fmt.allocPrint(pa, "{s}.tmp.{x}", .{
+        link_path, std.mem.readInt(u64, &rand_buf, .little),
+    }) catch return;
+    createSymlink(pa, target, tmp_link) catch |err| {
+        eprint("Warning: could not create symlink: {}\n", .{err});
         return;
     };
-    Io.Dir.rename(Io.Dir.cwd(), tmp_snapshot_link, Io.Dir.cwd(), snapshot_link, mod_io) catch |err| {
-        eprint("Warning: could not finalize snapshot symlink: {}\n", .{err});
-        Io.Dir.cwd().deleteFile(mod_io,tmp_snapshot_link) catch {};
+    Io.Dir.rename(Io.Dir.cwd(), tmp_link, Io.Dir.cwd(), link_path, mod_io) catch |err| {
+        eprint("Warning: could not finalize symlink: {}\n", .{err});
+        Io.Dir.cwd().deleteFile(mod_io, tmp_link) catch {};
     };
+}
 
-    // Step 8: Write refs/main with commit SHA.
-    const refs_main = std.fmt.allocPrint(pa, "{s}/main", .{refs_dir}) catch
-        return error.OutOfMemory;
-
+/// Write the commit SHA to refs/main.
+fn writeRefsMain(pa: Allocator, refs_dir: []const u8, commit_sha: []const u8) void {
+    const refs_main = std.fmt.allocPrint(pa, "{s}/main", .{refs_dir}) catch return;
     if (Io.Dir.cwd().createFile(mod_io, refs_main, .{})) |f| {
         defer f.close(mod_io);
-        f.writePositionalAll(mod_io, list_result.commit_sha, 0) catch |err| {
+        f.writePositionalAll(mod_io, commit_sha, 0) catch |err| {
             eprint("Warning: could not write refs/main: {}\n", .{err});
         };
     } else |_| {}
-
-    // Step 9: Create agave convenience symlink.
-    createAgaveSymlink(allocator, args.repo, snapshots_dir);
-
-    // Step 10: Print final model path.
-    // Write path to stdout (scriptable: MODEL=$(agave pull repo 2>/dev/null))
-    fileWrite(Io.File.stdout(), snapshot_link);
-    fileWrite(Io.File.stdout(), "\n");
-
-    // Human-friendly summary on stderr
-    eprint("\nModel ready at:\n  {s}\n", .{snapshot_link});
-    eprint("Run:\n  agave {s} \"your prompt\"\n", .{snapshot_link});
 }
 
 // ── Entry point ──────────────────────────────────────────────────────────────
@@ -1298,4 +1609,158 @@ test "isValidHexSha accepts valid hashes" {
     try std.testing.expect(!isValidHexSha("a" ** 65));
     // Exactly 64 chars (valid)
     try std.testing.expect(isValidHexSha("a" ** 64));
+}
+
+// ── selectModel tests ───────────────────────────────────────────────────────
+
+test "selectModel prefers GGUF by quant preference" {
+    const gguf_files = [_]GgufFile{
+        .{ .filename = "model-Q8_0.gguf", .size = 1000 },
+        .{ .filename = "model-Q4_K_M.gguf", .size = 500 },
+    };
+    const result = ListResult{
+        .files = @constCast(&gguf_files),
+        .safetensors = null,
+        .commit_sha = "abc123",
+        .arena = undefined,
+    };
+    const selected = try selectModel(&result, null);
+    try std.testing.expect(selected == .gguf);
+    try std.testing.expectEqualStrings("model-Q4_K_M.gguf", selected.gguf.filename);
+}
+
+test "selectModel falls back to safetensors when no GGUF" {
+    const shards = [_][]const u8{"model.safetensors"};
+    const shard_sizes = [_]u64{2000};
+    const st = SafeTensorsModel{
+        .shards = &shards,
+        .shard_sizes = &shard_sizes,
+        .total_size = 2000,
+        .has_index = false,
+        .has_config = true,
+        .has_tokenizer = true,
+        .has_tokenizer_config = false,
+    };
+    const result = ListResult{
+        .files = &.{},
+        .safetensors = st,
+        .commit_sha = "abc123",
+        .arena = undefined,
+    };
+    const selected = try selectModel(&result, null);
+    try std.testing.expect(selected == .safetensors);
+    try std.testing.expectEqual(@as(usize, 1), selected.safetensors.shards.len);
+}
+
+test "selectModel explicit safetensors quant" {
+    const gguf_files = [_]GgufFile{
+        .{ .filename = "model-Q4_K_M.gguf", .size = 500 },
+    };
+    const shards = [_][]const u8{ "model-00001-of-00002.safetensors", "model-00002-of-00002.safetensors" };
+    const shard_sizes = [_]u64{ 1000, 1000 };
+    const st = SafeTensorsModel{
+        .shards = &shards,
+        .shard_sizes = &shard_sizes,
+        .total_size = 2000,
+        .has_index = true,
+        .has_config = true,
+        .has_tokenizer = true,
+        .has_tokenizer_config = true,
+    };
+    const result = ListResult{
+        .files = @constCast(&gguf_files),
+        .safetensors = st,
+        .commit_sha = "abc123",
+        .arena = undefined,
+    };
+    // Explicit --quant safetensors selects SafeTensors even when GGUF is available.
+    const selected = try selectModel(&result, "safetensors");
+    try std.testing.expect(selected == .safetensors);
+    try std.testing.expectEqual(@as(usize, 2), selected.safetensors.shards.len);
+}
+
+test "selectModel safetensors quant case insensitive" {
+    const shards = [_][]const u8{"model.safetensors"};
+    const shard_sizes = [_]u64{1000};
+    const st = SafeTensorsModel{
+        .shards = &shards,
+        .shard_sizes = &shard_sizes,
+        .total_size = 1000,
+        .has_index = false,
+        .has_config = true,
+        .has_tokenizer = false,
+        .has_tokenizer_config = false,
+    };
+    const result = ListResult{
+        .files = &.{},
+        .safetensors = st,
+        .commit_sha = "abc123",
+        .arena = undefined,
+    };
+    const selected = try selectModel(&result, "SafeTensors");
+    try std.testing.expect(selected == .safetensors);
+}
+
+test "selectModel safetensors quant fails when no safetensors" {
+    const gguf_files = [_]GgufFile{
+        .{ .filename = "model-Q4_K_M.gguf", .size = 500 },
+    };
+    const result = ListResult{
+        .files = @constCast(&gguf_files),
+        .safetensors = null,
+        .commit_sha = "abc123",
+        .arena = undefined,
+    };
+    const selected = selectModel(&result, "safetensors");
+    try std.testing.expectError(PullError.QuantNotFound, selected);
+}
+
+test "selectModel no files returns error" {
+    const result = ListResult{
+        .files = &.{},
+        .safetensors = null,
+        .commit_sha = "abc123",
+        .arena = undefined,
+    };
+    const selected = selectModel(&result, null);
+    try std.testing.expectError(PullError.NoGgufFiles, selected);
+}
+
+test "selectModel hasAnyFiles" {
+    const empty = ListResult{
+        .files = &.{},
+        .safetensors = null,
+        .commit_sha = "abc123",
+        .arena = undefined,
+    };
+    try std.testing.expect(!empty.hasAnyFiles());
+
+    const gguf_files = [_]GgufFile{
+        .{ .filename = "model.gguf", .size = 100 },
+    };
+    const with_gguf = ListResult{
+        .files = @constCast(&gguf_files),
+        .safetensors = null,
+        .commit_sha = "abc123",
+        .arena = undefined,
+    };
+    try std.testing.expect(with_gguf.hasAnyFiles());
+
+    const shards = [_][]const u8{"model.safetensors"};
+    const shard_sizes = [_]u64{100};
+    const with_st = ListResult{
+        .files = &.{},
+        .safetensors = .{
+            .shards = &shards,
+            .shard_sizes = &shard_sizes,
+            .total_size = 100,
+            .has_index = false,
+            .has_config = false,
+            .has_tokenizer = false,
+            .has_tokenizer_config = false,
+        },
+        .commit_sha = "abc123",
+        .arena = undefined,
+    };
+    try std.testing.expect(with_st.hasAnyFiles());
 }

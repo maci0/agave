@@ -199,7 +199,11 @@ pub const Qwen35Model = struct {
         };
 
         // MoE configuration (e.g., Qwen3.5-35B-A3B uses 256 experts, top-8 + shared expert)
-        if (f.getArchU32(arch, "expert_count")) |ec| {
+        // Also detect from tensor presence (compressed-tensors SafeTensors may not have
+        // expert_count in metadata if the config flattening missed it).
+        const expert_count_meta = f.getArchU32(arch, "expert_count") orelse
+            if (f.layerTensor(0, "ffn_gate_exps.weight") != null) @as(u32, 256) else null;
+        if (expert_count_meta) |ec| {
             self.is_moe = true;
             self.n_experts = ec;
             self.n_experts_active = f.getArchU32(arch, "expert_used_count") orelse default_moe_experts_active;
@@ -604,6 +608,11 @@ pub const Qwen35Model = struct {
     /// MLX companion pointers are resolved per-op so all dispatches
     /// (including MLX-Q) run without inter-dispatch barriers.
     fn doGemvBatch2(self: *Qwen35Model, x: [*]const f32, t0: TensorInfo, y0: [*]f32, n0: usize, t1: TensorInfo, y1: [*]f32, n1: usize, k: usize) void {
+        if (t0.dtype == .nvfp4 or t1.dtype == .nvfp4) {
+            self.doGemv(x, t0, y0, n0, k);
+            self.doGemv(x, t1, y1, n1, k);
+            return;
+        }
         const ops = [_]backend_mod.GemvOp{
             self.makeOp(t0, y0, n0, k),
             self.makeOp(t1, y1, n1, k),
@@ -612,6 +621,12 @@ pub const Qwen35Model = struct {
     }
 
     fn doGemvBatch3(self: *Qwen35Model, x: [*]const f32, t0: TensorInfo, y0: [*]f32, n0: usize, t1: TensorInfo, y1: [*]f32, n1: usize, t2: TensorInfo, y2: [*]f32, n2: usize, k: usize) void {
+        if (t0.dtype == .nvfp4 or t1.dtype == .nvfp4 or t2.dtype == .nvfp4) {
+            self.doGemv(x, t0, y0, n0, k);
+            self.doGemv(x, t1, y1, n1, k);
+            self.doGemv(x, t2, y2, n2, k);
+            return;
+        }
         const ops = [_]backend_mod.GemvOp{
             self.makeOp(t0, y0, n0, k),
             self.makeOp(t1, y1, n1, k),
@@ -844,7 +859,7 @@ pub const Qwen35Model = struct {
                 .head_v_dim = @intCast(head_v_dim),
                 .q_scale = q_scale,
                 .rms_eps = self.rms_eps,
-                .kqv_order = self.is_safetensors,
+                .kqv_order = false, // Q,K,V order for both GGUF and HF SafeTensors
             },
         );
         self.syncProfile();
@@ -1008,6 +1023,19 @@ pub const Qwen35Model = struct {
             if (self.is_mlx and gate_exps.dtype == .mlx_q) {
                 self.doGemvExpert(self.hidden2.ptr, gate_exps, ei, gate_stride, self.ff_buf1.ptr, ff, e);
                 self.doGemvExpert(self.hidden2.ptr, up_exps, ei, up_stride, self.ff_buf2.ptr, ff, e);
+            } else if (gate_exps.dtype == .nvfp4) {
+                // Compressed-tensors NVFP4: GPU dispatch with companion scale tensor
+                const gate_scales = self.fmt.layerTensor(li, "ffn_gate_exps.scales") orelse return error.MissingTensor;
+                const up_scales = self.fmt.layerTensor(li, "ffn_up_exps.scales") orelse return error.MissingTensor;
+                const gate_s_stride = model_mod.expertStride(.{ .dtype = .fp8_e4m3, .n_dims = gate_scales.n_dims, .dims = gate_scales.dims, .name = "", .data_ptr = undefined });
+                const up_s_stride = model_mod.expertStride(.{ .dtype = .fp8_e4m3, .n_dims = up_scales.n_dims, .dims = up_scales.dims, .name = "", .data_ptr = undefined });
+                self.be.gemvNvfp4St(self.hidden2.ptr, gate_data, gate_scales.data_ptr + ei * gate_s_stride, self.ff_buf1.ptr, ff, e);
+                const up_data = up_exps.data_ptr + ei * up_stride;
+                self.be.gemvNvfp4St(self.hidden2.ptr, up_data, up_scales.data_ptr + ei * up_s_stride, self.ff_buf2.ptr, ff, e);
+                self.be.sync();
+                // Apply input_global_scale / weight_global_scale
+                applyNvfp4Scale(self.fmt, self.ff_buf1[0..ff], li, ei, "gate_proj");
+                applyNvfp4Scale(self.fmt, self.ff_buf2[0..ff], li, ei, "up_proj");
             } else {
                 const up_data = up_exps.data_ptr + ei * up_stride;
                 const GemvOp = backend_mod.GemvOp;
@@ -1027,6 +1055,12 @@ pub const Qwen35Model = struct {
             const down_data = down_exps.data_ptr + ei * down_stride;
             if (self.is_mlx and down_exps.dtype == .mlx_q) {
                 self.doGemvExpert(self.ff_buf1.ptr, down_exps, ei, down_stride, self.attn_out.ptr, e, ff);
+            } else if (down_exps.dtype == .nvfp4) {
+                const down_scales = self.fmt.layerTensor(li, "ffn_down_exps.scales") orelse return error.MissingTensor;
+                const down_s_stride = model_mod.expertStride(.{ .dtype = .fp8_e4m3, .n_dims = down_scales.n_dims, .dims = down_scales.dims, .name = "", .data_ptr = undefined });
+                self.be.gemvNvfp4St(self.ff_buf1.ptr, down_data, down_scales.data_ptr + ei * down_s_stride, self.attn_out.ptr, e, ff);
+                self.be.sync();
+                applyNvfp4Scale(self.fmt, self.attn_out[0..e], li, ei, "down_proj");
             } else {
                 self.be.gemv(self.ff_buf1.ptr, .{ .data = down_data, .dtype = down_exps.dtype }, self.attn_out.ptr, e, ff);
             }
@@ -1146,6 +1180,7 @@ pub const Qwen35Model = struct {
             // Fused: hidden += hidden2 (last FFN residual) + output norm
             self.be.addRmsNorm(self.hidden.ptr, self.hidden2.ptr, norm_w, self.hidden.ptr, e, self.rms_eps);
         }
+        self.be.sync();
         if (ow.dtype == .mlx_q) {
             self.doGemv(self.hidden.ptr, ow, self.logits_buf.ptr, self.vocab_size, e);
         } else {
@@ -1185,3 +1220,15 @@ pub const Qwen35Model = struct {
 };
 
 const expertWeightStride = model_mod.expertWeightStride;
+
+/// Apply NVFP4 weight_global_scale to a buffer (DIVIDE).
+/// The fp8 block scales are quantized as scale_fp8 = cast_fp8(max/6/gs),
+/// so the GEMV output needs to be divided by weight_global_scale to
+/// recover the true dot product magnitude.
+fn applyNvfp4Scale(fmt: Format, buf: []f32, layer: u32, expert: usize, proj: []const u8) void {
+    var nb: [256]u8 = undefined;
+    const n = std.fmt.bufPrint(&nb, "model.language_model.layers.{d}.mlp.experts.{d}.{s}.weight_global_scale", .{ layer, expert, proj }) catch return;
+    const t = fmt.getTensor(n) orelse return;
+    const gs = @as(*const f32, @ptrCast(@alignCast(t.data_ptr))).*;
+    if (gs != 1.0 and gs != 0.0) { const inv = 1.0 / gs; for (buf) |*v| { v.* *= inv; } }
+}

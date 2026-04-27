@@ -31,7 +31,7 @@
 
 **Gemma 3**: GGUF converter bakes +1.0 into RMS norm weights (don't add again). Embeddings scaled by `sqrt(n_embd)`. Uses SPM tokenizer (no merges). Tied output embeddings. Vision supported via SigLIP encoder. Supports `--megakernel` (fused FFN GELU, true megakernel Q4K/Q8 on Metal+CUDA).
 
-**Qwen 3.5/3.6**: Hybrid architecture alternating DeltaNet SSM and full attention layers. DeltaNet uses causal conv1d → selective state recurrence with learned decay. Full attention layers have gated output with sigmoid. Qwen 3.6-35B-A3B uses the same architecture with 40 layers, 256 experts (top-8 + shared), hidden_size 2048. Supports `--megakernel` (fused FFN SiLU, true megakernel Q8/Q4K on Metal+CUDA+ROCm).
+**Qwen 3.5/3.6**: Hybrid architecture alternating DeltaNet SSM and full attention layers. DeltaNet uses causal conv1d → selective state recurrence with learned decay. Full attention layers have gated output with sigmoid. Qwen 3.6-35B-A3B uses the same architecture with 40 layers, 256 experts (top-8 + shared), hidden_size 2048. Formats: GGUF (Q4_K_M, Q8_0), SafeTensors (BF16, MLX-4bit, NVFP4 compressed-tensors partial). Supports `--megakernel` (fused FFN SiLU, true megakernel Q8/Q4K on Metal+CUDA+ROCm).
 
 **GPT-OSS**: Even layers = 128-token sliding window, odd = full sequence. Learned attention sinks per head. Clamped SwiGLU `[-7.0, +7.0]` in MoE experts.
 

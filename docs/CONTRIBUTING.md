@@ -127,6 +127,7 @@ The composer selects the correct GEMV, activation, residual pattern, and SDPA bu
 3. Add conversion helpers in `src/ops/quant.zig` if the format needs custom type conversions (e.g., `fp8e4m3ToF32`)
 4. Update backend dispatch to include new format (add GEMV variant in `backend.zig`)
 5. Add GEMM kernel for batched prefill: Metal in `gemm.metal` (reuse `block_dot` from GEMV), pipeline in `metal.zig`, dispatch in `gemm()`. Pattern: one threadgroup per output row, loop over n_tok tokens
+6. For compressed-tensors formats (NVFP4, etc.): add fusion logic in `safetensors.zig` `fuseNvfp4Experts()` to combine per-expert weight_packed/weight_scale/weight_global_scale into GGUF-named entries
 6. Benchmark against existing formats
 7. Add to Quantization Types table in `docs/ARCHITECTURE.md`
 8. Golden tests against reference implementation

@@ -266,6 +266,12 @@ pub inline fn resetInferenceState(kv_seq_len: *usize, cancelled: *std.atomic.Val
 /// Per-expert stride = weightBytes(rows * cols) = dims[1] * dims[2].
 pub fn expertWeightStride(t: format_mod.TensorInfo) usize {
     std.debug.assert(t.n_dims >= 3);
+    // Compressed-tensors NVFP4: dims = [rows, cols_packed, n_experts] where
+    // cols_packed = in_dim/2 (raw U8 bytes). Stride = rows × cols_packed bytes.
+    // Unlike GGUF NVFP4 (interleaved blocks), weight and scale are separate arrays.
+    if (t.dtype == .nvfp4) {
+        return @as(usize, @intCast(t.dims[0])) * @as(usize, @intCast(t.dims[1]));
+    }
     // GGUF 3D expert tensors: [rows, cols, n_experts] — per-expert = rows × cols
     // dims[2] is the expert count, dims[0] × dims[1] is per-expert weight size
     const elems: usize = @as(usize, @intCast(t.dims[0])) * @as(usize, @intCast(t.dims[1]));
@@ -341,6 +347,34 @@ pub fn findMlxCompanion(fmt: format_mod.Format, t: format_mod.TensorInfo, k: usi
 /// Use this in models that support both GGUF and SafeTensors MLX weights.
 pub fn dispatchGemv(be: backend_mod.Backend, fmt: format_mod.Format, x: [*]const f32, t: format_mod.TensorInfo, y: [*]f32, n: usize, k: usize) void {
     if (mlxGemv(be, fmt, x, t, y, n, k)) return;
+    if (t.dtype == .nvfp4) {
+        // Compressed-tensors NVFP4: separate weight + scale tensors.
+        // Build companion scale tensor name: replace ".weight" with ".scales"
+        var name_buf: [tensor_name_buf_size]u8 = undefined;
+        const dot_pos = std.mem.lastIndexOfScalar(u8, t.name, '.') orelse {
+            be.gemv(x, .{ .data = t.data_ptr, .dtype = t.dtype }, y, n, k);
+            return;
+        };
+        const s_name = std.fmt.bufPrint(&name_buf, "{s}.scales", .{t.name[0..dot_pos]}) catch {
+            be.gemv(x, .{ .data = t.data_ptr, .dtype = t.dtype }, y, n, k);
+            return;
+        };
+        if (fmt.getTensor(s_name)) |scales| {
+            be.gemvNvfp4St(x, t.data_ptr, scales.data_ptr, y, n, k);
+            be.sync();
+            // NVFP4: GEMV output = sum(e2m1 * fp8_scale * x), divide by weight_global_scale
+            const gs_name = std.fmt.bufPrint(&name_buf, "{s}.global_scale", .{t.name[0..dot_pos]}) catch "";
+            if (gs_name.len > 0) {
+                if (fmt.getTensor(gs_name)) |gs_t| {
+                    const gs = @as(*const f32, @ptrCast(@alignCast(gs_t.data_ptr))).*;
+                    if (gs != 1.0 and gs != 0.0) { const inv = 1.0 / gs; var yi: usize = 0; while (yi < n) : (yi += 1) { y[yi] *= inv; } }
+                }
+            }
+        } else {
+            be.gemv(x, .{ .data = t.data_ptr, .dtype = t.dtype }, y, n, k);
+        }
+        return;
+    }
     be.gemv(x, .{ .data = t.data_ptr, .dtype = t.dtype }, y, n, k);
 }
 

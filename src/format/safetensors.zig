@@ -84,6 +84,11 @@ pub const SafeTensorsDir = struct {
     /// All heap-allocated strings we own (keys, values, vocab entries, merges).
     owned_strings: std.ArrayList([]u8),
 
+    /// Fused NVFP4 expert tensor entries (GGUF-named, separate from shard-parsed tensors).
+    fused_tensors: std.StringHashMap(TensorEntry),
+    /// Repacked f32 arrays (global_scale, input_scale) allocated during fusion.
+    repacked_f32: std.ArrayList([]f32),
+
     // ── Lifecycle ─────────────────────────────────────────────────────────────
 
     /// Open a directory containing safetensors model shards.
@@ -92,6 +97,13 @@ pub const SafeTensorsDir = struct {
     pub fn open(allocator: Allocator, dir_path: []const u8) !SafeTensorsDir {
         var tensors = std.StringHashMap(TensorEntry).init(allocator);
         errdefer tensors.deinit();
+        var fused_tensors = std.StringHashMap(TensorEntry).init(allocator);
+        errdefer fused_tensors.deinit();
+        var repacked_f32: std.ArrayList([]f32) = .empty;
+        errdefer {
+            for (repacked_f32.items) |s| allocator.free(s);
+            repacked_f32.deinit(allocator);
+        }
 
         var config_meta = std.StringHashMap(MetaValue).init(allocator);
         errdefer config_meta.deinit();
@@ -131,24 +143,32 @@ pub const SafeTensorsDir = struct {
                 if (shard_name_list.items.len > 0) {
                     const check_path = try std.fs.path.join(allocator, &.{ dir_path, shard_name_list.items[0] });
                     defer allocator.free(check_path);
-                    if (std.posix.openat(std.posix.AT.FDCWD, check_path, .{}, 0)) |fd| {
-                        _ = std.c.close(fd);
+                    const check_z = try allocator.dupeZ(u8, check_path);
+                    defer allocator.free(check_z);
+                    const check_fd = std.posix.system.open(check_z.ptr, .{}, @as(std.posix.mode_t, 0));
+                    if (check_fd >= 0) {
+                        _ = std.c.close(check_fd);
                         index_valid = true;
-                    } else |_| {}
+                    }
                 }
             } else |_| {}
 
             // Fallback: scan directory for model-*.safetensors files.
             if (!index_valid) {
+                std.log.debug("[st] index invalid, discovering shards in '{s}'", .{dir_path});
                 shard_name_list.clearRetainingCapacity();
                 shard_name_to_idx.clearRetainingCapacity();
                 try discoverShards(allocator, dir_path, &shard_name_list, &shard_name_to_idx, &owned_strings);
+                std.log.debug("[st] discovered {d} shards", .{shard_name_list.items.len});
+            } else {
+                std.log.debug("[st] index valid with {d} shards", .{shard_name_list.items.len});
             }
 
             if (shard_name_list.items.len == 0) return error.FileNotFound;
         }
 
         // --- 2. mmap each shard file ----------------------------------------
+        std.log.debug("[st] about to mmap {d} shards", .{shard_name_list.items.len});
         const shard_count = shard_name_list.items.len;
         const shard_data = try allocator.alloc(ShardInfo, shard_count);
         errdefer allocator.free(shard_data);
@@ -162,7 +182,15 @@ pub const SafeTensorsDir = struct {
             const shard_path = try std.fs.path.join(allocator, &.{ dir_path, shard_name });
             defer allocator.free(shard_path);
 
-            const fd = try std.posix.openat(std.posix.AT.FDCWD, shard_path, .{}, 0);
+            std.log.debug("[st] opening shard {d}: '{s}'", .{ si, shard_path });
+            const shard_z = try allocator.dupeZ(u8, shard_path);
+            defer allocator.free(shard_z);
+            const fd = std.posix.system.open(shard_z.ptr, .{}, @as(std.posix.mode_t, 0));
+            if (fd < 0) {
+                // Skip missing optional shards (visual, MTP) — only text weights needed
+                shard_data[si] = .{ .data = &.{}, .tensor_base = 0 };
+                continue;
+            }
             defer _ = std.c.close(fd);
 
             const file_size: usize = blk: {
@@ -228,9 +256,20 @@ pub const SafeTensorsDir = struct {
             } else |_| {} // tokenizer.json is optional
         }
 
+        // --- 5. Fuse compressed-tensors NVFP4 per-expert tensors -------
+        // Detects per-expert weight_packed/weight_scale/weight_global_scale
+        // patterns and creates synthetic GGUF-named fused entries.
+        fuseNvfp4Experts(allocator, &tensors, &fused_tensors, &repacked_f32, shard_data, &config_meta, &owned_strings) catch |err| {
+            std.log.warn("NVFP4 expert fusion failed (will use individual lookup): {}", .{err});
+        };
+        if (fused_tensors.count() > 0)
+            std.log.info("[st] fused {d} NVFP4 entries", .{fused_tensors.count()});
+
         return SafeTensorsDir{
             .allocator = allocator,
             .tensors = tensors,
+            .fused_tensors = fused_tensors,
+            .repacked_f32 = repacked_f32,
             .shard_data = shard_data,
             .config_meta = config_meta,
             .vocab = vocab,
@@ -276,6 +315,9 @@ pub const SafeTensorsDir = struct {
         self.owned_strings.deinit(self.allocator);
 
         self.tensors.deinit();
+        self.fused_tensors.deinit();
+        for (self.repacked_f32.items) |s| self.allocator.free(s);
+        self.repacked_f32.deinit(self.allocator);
         self.config_meta.deinit();
     }
 
@@ -290,15 +332,19 @@ pub const SafeTensorsDir = struct {
     /// translates to HuggingFace-style using known prefixes ("language_model.model.", "model.").
     fn getTensorImpl(ptr: *anyopaque, name: []const u8) ?TensorInfo {
         const self: *SafeTensorsDir = @ptrCast(@alignCast(ptr));
+        // Check fused NVFP4 entries first (repacked expert weights)
+        if (self.fused_tensors.getEntry(name)) |e| {
+            return self.entryToInfo(e.key_ptr.*, e.value_ptr.*);
+        }
         if (self.lookupStable(name)) |r| return self.entryToInfo(r.key, r.entry);
-        // Translate GGUF-style name to HuggingFace-style.
-        // Try known prefixes ("language_model.model.", "model.").
         var buf: [name_buf_size]u8 = undefined;
         for (hf_prefixes) |pfx| {
-            if (ggufToHfName(name, &buf, pfx)) |hf_name| {
+            var iter = ggufToHfNameIter(name, pfx);
+            while (iter.next(&buf)) |hf_name| {
                 if (self.lookupStable(hf_name)) |r| return self.entryToInfo(r.key, r.entry);
             }
         }
+        // Log ALL tensor misses
         return null;
     }
 
@@ -312,6 +358,23 @@ pub const SafeTensorsDir = struct {
     }
 
     fn entryToInfo(self: *SafeTensorsDir, name: []const u8, entry: TensorEntry) ?TensorInfo {
+        // Sentinel shard_idx = max_shard_count: data_start is an absolute pointer
+        // to repacked contiguous buffer (used for non-contiguous NVFP4 experts).
+        if (entry.shard_idx == max_shard_count) {
+            const data_ptr: [*]const u8 = @ptrFromInt(entry.data_start);
+            return TensorInfo{
+                .name = name,
+                .n_dims = entry.n_dims,
+                .dims = .{
+                    @intCast(entry.dims[0]),
+                    @intCast(entry.dims[1]),
+                    @intCast(entry.dims[2]),
+                    @intCast(entry.dims[3]),
+                },
+                .dtype = entry.dtype,
+                .data_ptr = data_ptr,
+            };
+        }
         if (entry.shard_idx >= self.shard_data.len) {
             std.log.err("Invalid shard index {d} for tensor {s} (have {d} shards)", .{ entry.shard_idx, name, self.shard_data.len });
             return null;
@@ -345,7 +408,7 @@ pub const SafeTensorsDir = struct {
     fn getMetaStrImpl(ptr: *anyopaque, key: []const u8) ?[]const u8 {
         const self: *SafeTensorsDir = @ptrCast(@alignCast(ptr));
         const lookup = self.config_meta.get(key) orelse
-            self.config_meta.get(ggufKeyToHf(key) orelse return null) orelse return null;
+            lookupMetaAllTranslations(&self.config_meta, key) orelse return null;
         return switch (lookup) {
             .string => |s| s,
             else => null,
@@ -355,7 +418,7 @@ pub const SafeTensorsDir = struct {
     fn getMetaU32Impl(ptr: *anyopaque, key: []const u8) ?u32 {
         const self: *SafeTensorsDir = @ptrCast(@alignCast(ptr));
         const v = self.config_meta.get(key) orelse
-            self.config_meta.get(ggufKeyToHf(key) orelse return null) orelse return null;
+            lookupMetaAllTranslations(&self.config_meta, key) orelse return null;
         return switch (v) {
             .uint => |u| if (u <= std.math.maxInt(u32)) @intCast(u) else null,
             .float => |f| if (f >= 0 and f <= std.math.maxInt(u32)) @intFromFloat(f) else null,
@@ -366,7 +429,7 @@ pub const SafeTensorsDir = struct {
     fn getMetaF32Impl(ptr: *anyopaque, key: []const u8) ?f32 {
         const self: *SafeTensorsDir = @ptrCast(@alignCast(ptr));
         const v = self.config_meta.get(key) orelse
-            self.config_meta.get(ggufKeyToHf(key) orelse return null) orelse return null;
+            lookupMetaAllTranslations(&self.config_meta, key) orelse return null;
         return switch (v) {
             .float => |f| @floatCast(f),
             .uint => |u| @floatFromInt(u),
@@ -421,6 +484,7 @@ const gguf_hf_layer_map = [_]struct { []const u8, []const u8 }{
     .{ "ffn_up_exps", "mlp.experts.up_proj" },
     .{ "ffn_down_exps", "mlp.experts.down_proj" },
     .{ "ffn_gate_inp", "mlp.router" },
+    .{ "ffn_gate_inp", "mlp.gate" },
     // MLA attention (DeepSeek2/GLM-4)
     .{ "attn_q_a", "self_attn.q_a_proj" },
     .{ "attn_q_b", "self_attn.q_b_proj" },
@@ -433,6 +497,10 @@ const gguf_hf_layer_map = [_]struct { []const u8, []const u8 }{
     .{ "ffn_gate_shexp", "mlp.shared_experts.gate_proj" },
     .{ "ffn_up_shexp", "mlp.shared_experts.up_proj" },
     .{ "ffn_down_shexp", "mlp.shared_experts.down_proj" },
+    // Alternate shared expert naming (compressed-tensors: singular "shared_expert")
+    .{ "ffn_gate_shexp", "mlp.shared_expert.gate_proj" },
+    .{ "ffn_up_shexp", "mlp.shared_expert.up_proj" },
+    .{ "ffn_down_shexp", "mlp.shared_expert.down_proj" },
     .{ "exp_probs_b", "mlp.gate.e_score_correction_bias" },
     // DeltaNet SSM (Qwen3.5 linear attention layers)
     .{ "attn_qkv", "linear_attn.in_proj_qkv" },
@@ -447,6 +515,7 @@ const gguf_hf_layer_map = [_]struct { []const u8, []const u8 }{
 
 /// HuggingFace model prefixes to try (multimodal first, then plain).
 const hf_prefixes = [_][]const u8{
+    "model.language_model.",
     "language_model.model.",
     "model.",
 };
@@ -465,12 +534,9 @@ fn ggufToHfName(name: []const u8, buf: *[name_buf_size]u8, prefix: []const u8) ?
     }
     if (std.mem.startsWith(u8, name, "output.")) {
         const attr = name["output.".len..];
-        // lm_head sits one level above "model." — strip that part from prefix
-        const lm_prefix = if (std.mem.endsWith(u8, prefix, "model."))
-            prefix[0 .. prefix.len - "model.".len]
-        else
-            prefix;
-        return std.fmt.bufPrint(buf, "{s}lm_head.{s}", .{ lm_prefix, attr }) catch null;
+        // lm_head is at top level in HF models — try without any prefix first,
+        // then with stripped prefix for nested models (model.language_model. → "")
+        return std.fmt.bufPrint(buf, "lm_head.{s}", .{attr}) catch null;
     }
 
     // Layer tensors: "blk.{i}.{component}.{attr}"
@@ -505,6 +571,70 @@ fn ggufToHfName(name: []const u8, buf: *[name_buf_size]u8, prefix: []const u8) ?
     return null;
 }
 
+/// Iterator over all possible GGUF→HF name translations for a layer tensor.
+/// Handles components with multiple HF mappings (e.g., ffn_gate_inp → mlp.router, mlp.gate).
+const GgufHfNameIter = struct {
+    name: []const u8,
+    prefix: []const u8,
+    map_idx: usize = 0,
+    /// True if this is a top-level tensor (token_embd, output_norm, output).
+    /// Top-level tensors have exactly one translation, so we emit it once and stop.
+    is_toplevel: bool = false,
+    toplevel_emitted: bool = false,
+
+    fn next(self: *GgufHfNameIter, buf: *[name_buf_size]u8) ?[]const u8 {
+        // Top-level tensors: delegate to ggufToHfName (one translation only).
+        if (self.is_toplevel) {
+            if (self.toplevel_emitted) return null;
+            self.toplevel_emitted = true;
+            return ggufToHfName(self.name, buf, self.prefix);
+        }
+
+        // Layer tensors: iterate all matching entries in gguf_hf_layer_map.
+        if (!std.mem.startsWith(u8, self.name, "blk.")) return null;
+        const rest = self.name["blk.".len..];
+        const dot1 = std.mem.indexOfScalar(u8, rest, '.') orelse return null;
+        const layer_str = rest[0..dot1];
+        const suffix = rest[dot1 + 1 ..];
+        const dot2 = std.mem.indexOfScalar(u8, suffix, '.') orelse {
+            // No attribute suffix (e.g., "ssm_a")
+            while (self.map_idx < gguf_hf_layer_map.len) {
+                const mapping = gguf_hf_layer_map[self.map_idx];
+                self.map_idx += 1;
+                if (std.mem.eql(u8, suffix, mapping[0])) {
+                    return std.fmt.bufPrint(buf, "{s}layers.{s}.{s}", .{ self.prefix, layer_str, mapping[1] }) catch null;
+                }
+            }
+            return null;
+        };
+        const component = suffix[0..dot2];
+        const attr = suffix[dot2 + 1 ..];
+
+        // Special case: ssm_dt.bias
+        if (self.map_idx == 0 and std.mem.eql(u8, component, "ssm_dt") and std.mem.eql(u8, attr, "bias")) {
+            self.map_idx = gguf_hf_layer_map.len; // Exhaust after this
+            return std.fmt.bufPrint(buf, "{s}layers.{s}.linear_attn.dt_bias", .{ self.prefix, layer_str }) catch null;
+        }
+
+        while (self.map_idx < gguf_hf_layer_map.len) {
+            const mapping = gguf_hf_layer_map[self.map_idx];
+            self.map_idx += 1;
+            if (std.mem.eql(u8, component, mapping[0])) {
+                return std.fmt.bufPrint(buf, "{s}layers.{s}.{s}.{s}", .{ self.prefix, layer_str, mapping[1], attr }) catch null;
+            }
+        }
+        return null;
+    }
+};
+
+/// Create an iterator over all possible GGUF→HF translations for a tensor name.
+fn ggufToHfNameIter(name: []const u8, prefix: []const u8) GgufHfNameIter {
+    const is_toplevel = std.mem.startsWith(u8, name, "token_embd.") or
+        std.mem.startsWith(u8, name, "output_norm.") or
+        std.mem.startsWith(u8, name, "output.");
+    return .{ .name = name, .prefix = prefix, .is_toplevel = is_toplevel };
+}
+
 // ── GGUF metadata key → HuggingFace config.json key translation ───────────────
 
 /// Map from GGUF-style suffix (after stripping arch prefix) to HF config.json key.
@@ -518,6 +648,12 @@ const gguf_hf_meta_map = [_]struct { []const u8, []const u8 }{
     .{ "context_length", "max_position_embeddings" },
     .{ "rope.freq_base", "rope_theta" },
     .{ "attention.layer_norm_rms_epsilon", "rms_norm_eps" },
+    // MoE configuration
+    .{ "expert_count", "num_experts" },
+    .{ "expert_count", "n_routed_experts" },
+    .{ "expert_used_count", "num_experts_per_tok" },
+    .{ "expert_feed_forward_length", "moe_intermediate_size" },
+    .{ "expert_shared_feed_forward_length", "shared_expert_intermediate_size" },
     // Qwen3.5 DeltaNet SSM
     .{ "full_attention_interval", "full_attention_interval" },
     .{ "ssm.conv_kernel", "linear_conv_kernel_dim" },
@@ -537,13 +673,638 @@ fn ggufKeyToHf(key: []const u8) ?[]const u8 {
     if (std.mem.eql(u8, key, "tokenizer.ggml.eos_token_id")) return "eos_token_id";
 
     // "{arch}.{suffix}" → strip arch prefix and look up suffix.
-    if (std.mem.indexOfScalar(u8, key, '.')) |dot| {
-        const suffix = key[dot + 1 ..];
-        for (gguf_hf_meta_map) |mapping| {
-            if (std.mem.eql(u8, suffix, mapping[0])) return mapping[1];
+    // Try all possible dot positions to handle arch names with dots (e.g. "qwen3_5_moe_text").
+    {
+        var pos: usize = 0;
+        while (std.mem.indexOfScalarPos(u8, key, pos, '.')) |dot| {
+            const suffix = key[dot + 1 ..];
+            for (gguf_hf_meta_map) |mapping| {
+                if (std.mem.eql(u8, suffix, mapping[0])) return mapping[1];
+            }
+            pos = dot + 1;
         }
     }
     return null;
+}
+
+/// GGUF metadata key aliases: alternative HF config.json keys for the same concept.
+/// When the primary translation from gguf_hf_meta_map fails, try these alternatives.
+const gguf_hf_meta_aliases = [_]struct { []const u8, []const u8 }{
+    .{ "expert_count", "num_local_experts" },
+    .{ "expert_count", "num_experts" },
+    .{ "expert_count", "num_experts" },
+};
+
+/// Try all possible GGUF→HF translations for a metadata key, including aliases.
+/// Returns the first matching MetaValue from the config map, or null.
+fn lookupMetaAllTranslations(config_meta: *const std.StringHashMap(MetaValue), key: []const u8) ?MetaValue {
+    // Primary translation
+    if (ggufKeyToHf(key)) |hf_key| {
+        if (config_meta.get(hf_key)) |v| return v;
+    }
+    // Try aliases: extract GGUF suffix at each dot position
+    {
+        var pos2: usize = 0;
+        while (std.mem.indexOfScalarPos(u8, key, pos2, '.')) |dot| {
+            const suffix = key[dot + 1 ..];
+            for (gguf_hf_meta_aliases) |alias| {
+                if (std.mem.eql(u8, suffix, alias[0])) {
+                    if (config_meta.get(alias[1])) |v| return v;
+                }
+            }
+            pos2 = dot + 1;
+        }
+    }
+    return null;
+}
+
+// ── Compressed-tensors NVFP4 expert fusion ──────────────────────────────────
+
+/// NVFP4 packing: 2 elements per byte (4-bit nibbles).
+const nvfp4_values_per_byte: usize = 2;
+/// NVFP4 group size: 1 FP8 scale per 16 elements.
+const nvfp4_scale_group_size: usize = 16;
+
+/// Maximum supported expert count for NVFP4 fusion scan.
+const max_nvfp4_experts: usize = 1024;
+/// Buffer size for composing per-expert tensor names during fusion scan.
+const fusion_name_buf_size: usize = 256;
+
+/// Compressed-tensors projection types to scan for per-expert NVFP4 tensors.
+const ct_projections = [_]struct { hf: []const u8, gguf_weight: []const u8, gguf_scales: []const u8 }{
+    .{ .hf = "gate_proj", .gguf_weight = "ffn_gate_exps.weight", .gguf_scales = "ffn_gate_exps.scales" },
+    .{ .hf = "up_proj", .gguf_weight = "ffn_up_exps.weight", .gguf_scales = "ffn_up_exps.scales" },
+    .{ .hf = "down_proj", .gguf_weight = "ffn_down_exps.weight", .gguf_scales = "ffn_down_exps.scales" },
+};
+
+/// Shared expert projection types — same pattern but no expert index.
+const ct_shared_projections = [_]struct { hf: []const u8, gguf_weight: []const u8, gguf_scales: []const u8 }{
+    .{ .hf = "gate_proj", .gguf_weight = "ffn_gate_shexp.weight", .gguf_scales = "ffn_gate_shexp.scales" },
+    .{ .hf = "up_proj", .gguf_weight = "ffn_up_shexp.weight", .gguf_scales = "ffn_up_shexp.scales" },
+    .{ .hf = "down_proj", .gguf_weight = "ffn_down_shexp.weight", .gguf_scales = "ffn_down_shexp.scales" },
+};
+
+/// Detect compressed-tensors NVFP4 per-expert tensor patterns and create
+/// synthetic GGUF-named fused entries that the model code can look up.
+///
+/// The compressed-tensors format stores each expert as separate tensors:
+///   layers.{l}.mlp.experts.{i}.{proj}.weight_packed   — U8 [out, in/2]
+///   layers.{l}.mlp.experts.{i}.{proj}.weight_scale     — F8_E4M3 [out, in/16]
+///   layers.{l}.mlp.experts.{i}.{proj}.weight_global_scale — F32 [1]
+///
+/// This function creates synthetic fused entries:
+///   blk.{l}.ffn_{proj}_exps.weight — nvfp4 dtype, pointing to expert 0's weight_packed
+///   blk.{l}.ffn_{proj}_exps.scales — fp8_e4m3, pointing to expert 0's weight_scale
+///
+/// Expert stride is embedded in dims as [out, in/2, n_experts] so
+/// expertWeightStride() computes per-expert = dims[0]*dims[1] bytes.
+///
+/// Additionally handles shared expert tensors and stores global_scale values
+/// as f32 tensors accessible via blk.{l}.ffn_{proj}_exps.global_scale.
+fn fuseNvfp4Experts(
+    allocator: Allocator,
+    tensors: *std.StringHashMap(TensorEntry),
+    fused: *std.StringHashMap(TensorEntry),
+    repacked_f32: *std.ArrayList([]f32),
+    shard_data: []ShardInfo,
+    config_meta: *std.StringHashMap(MetaValue),
+    owned: *std.ArrayList([]u8),
+) !void {
+    // Determine number of layers from config metadata.
+    const n_layers: u32 = blk: {
+        if (config_meta.get("num_hidden_layers")) |v| {
+            switch (v) {
+                .uint => |u| break :blk if (u <= std.math.maxInt(u32)) @intCast(u) else return,
+                .float => |f| break :blk if (f >= 0 and f <= std.math.maxInt(u32)) @intFromFloat(f) else return,
+                else => return,
+            }
+        }
+        return; // Can't determine layer count
+    };
+
+    // Detect compressed-tensors NVFP4 by probing for weight_packed tensors.
+    // Try expert (MoE) and dense (non-MoE) tensor patterns with all prefixes.
+    const prefix = for (hf_prefixes) |pfx| {
+        var probe_buf: [fusion_name_buf_size]u8 = undefined;
+        // MoE: experts.0.gate_proj.weight_packed
+        if (std.fmt.bufPrint(&probe_buf, "{s}layers.0.mlp.experts.0.gate_proj.weight_packed", .{pfx}) catch null) |name| {
+            if (tensors.contains(name)) break pfx;
+        }
+        // Dense: gate_proj.weight_packed (no expert index)
+        if (std.fmt.bufPrint(&probe_buf, "{s}layers.0.mlp.gate_proj.weight_packed", .{pfx}) catch null) |name| {
+            if (tensors.contains(name)) break pfx;
+        }
+        // Dense attention: self_attn.q_proj.weight_packed
+        if (std.fmt.bufPrint(&probe_buf, "{s}layers.0.self_attn.q_proj.weight_packed", .{pfx}) catch null) |name| {
+            if (tensors.contains(name)) break pfx;
+        }
+    } else return;
+
+    std.log.info("[st] detected compressed-tensors NVFP4 format, fusing tensors", .{});
+
+    // Determine expert count from config (0 = dense model, no MoE).
+    const n_experts: u32 = blk: {
+        inline for (.{ "n_routed_experts", "num_local_experts", "num_experts" }) |key| {
+            if (config_meta.get(key)) |v| {
+                switch (v) {
+                    .uint => |u| break :blk if (u <= std.math.maxInt(u32)) @intCast(u) else 0,
+                    .float => |fv| break :blk if (fv >= 0 and fv <= std.math.maxInt(u32)) @intFromFloat(fv) else 0,
+                    else => {},
+                }
+            }
+        }
+        break :blk 0; // Dense model (no experts)
+    };
+
+    // Process each layer.
+    for (0..n_layers) |li| {
+        // MoE expert projections (gate/up/down per expert)
+        if (n_experts > 0 and n_experts <= max_nvfp4_experts) {
+            for (ct_projections) |proj| {
+                try fuseOneProjection(allocator, tensors, fused, repacked_f32, shard_data, owned, prefix, @intCast(li), n_experts, proj.hf, proj.gguf_weight, proj.gguf_scales, true);
+            }
+            for (ct_shared_projections) |proj| {
+                try fuseSharedExpertProjection(allocator, tensors, fused, repacked_f32, shard_data, owned, prefix, @intCast(li), proj.hf, proj.gguf_weight, proj.gguf_scales);
+            }
+        }
+
+        // Dense MLP projections (non-MoE gate/up/down)
+        const ct_dense_mlp = [_]struct { hf: []const u8, gguf: []const u8 }{
+            .{ .hf = "mlp.gate_proj", .gguf = "ffn_gate" },
+            .{ .hf = "mlp.up_proj", .gguf = "ffn_up" },
+            .{ .hf = "mlp.down_proj", .gguf = "ffn_down" },
+        };
+        for (ct_dense_mlp) |proj| {
+            try fuseSingleNvfp4Tensor(allocator, tensors, fused, owned, prefix, @intCast(li), proj.hf, proj.gguf);
+        }
+
+        // Attention projections
+        const ct_attn_projs = [_]struct { hf: []const u8, gguf: []const u8 }{
+            .{ .hf = "self_attn.q_proj", .gguf = "attn_q" },
+            .{ .hf = "self_attn.k_proj", .gguf = "attn_k" },
+            .{ .hf = "self_attn.v_proj", .gguf = "attn_v" },
+            .{ .hf = "self_attn.o_proj", .gguf = "attn_output" },
+        };
+        for (ct_attn_projs) |proj| {
+            try fuseSingleNvfp4Tensor(allocator, tensors, fused, owned, prefix, @intCast(li), proj.hf, proj.gguf);
+        }
+
+        // DeltaNet projections
+        const ct_deltanet_projs = [_]struct { hf: []const u8, gguf: []const u8 }{
+            .{ .hf = "linear_attn.in_proj_qkv", .gguf = "attn_qkv" },
+            .{ .hf = "linear_attn.in_proj_z", .gguf = "attn_gate" },
+            .{ .hf = "linear_attn.in_proj_a", .gguf = "ssm_alpha" },
+            .{ .hf = "linear_attn.in_proj_b", .gguf = "ssm_beta" },
+            .{ .hf = "linear_attn.out_proj", .gguf = "ssm_out" },
+        };
+        for (ct_deltanet_projs) |proj| {
+            try fuseSingleNvfp4Tensor(allocator, tensors, fused, owned, prefix, @intCast(li), proj.hf, proj.gguf);
+        }
+    }
+}
+
+/// Fuse a single NVFP4 compressed-tensors weight+scale into a GGUF-named entry.
+/// Used for non-expert tensors (attention projections, DeltaNet projections).
+fn fuseSingleNvfp4Tensor(
+    allocator: Allocator,
+    tensors: *std.StringHashMap(TensorEntry),
+    fused: *std.StringHashMap(TensorEntry),
+    owned: *std.ArrayList([]u8),
+    prefix: []const u8,
+    layer: u32,
+    hf_name: []const u8,
+    gguf_component: []const u8,
+) !void {
+    var name_buf: [fusion_name_buf_size]u8 = undefined;
+    var s_buf: [fusion_name_buf_size]u8 = undefined;
+
+    const w_name = std.fmt.bufPrint(&name_buf, "{s}layers.{d}.{s}.weight_packed", .{ prefix, layer, hf_name }) catch return;
+    const w_entry = tensors.get(w_name) orelse return;
+
+    const s_name = std.fmt.bufPrint(&s_buf, "{s}layers.{d}.{s}.weight_scale", .{ prefix, layer, hf_name }) catch return;
+    const s_entry = tensors.get(s_name) orelse return;
+
+    const w_rows = if (w_entry.n_dims >= 1) w_entry.dims[0] else return;
+    const w_cols = if (w_entry.n_dims >= 2) w_entry.dims[1] else return;
+    const s_rows = if (s_entry.n_dims >= 1) s_entry.dims[0] else return;
+    const s_cols = if (s_entry.n_dims >= 2) s_entry.dims[1] else return;
+
+    // Create GGUF weight entry: blk.{l}.{component}.weight
+    var gguf_w_buf: [fusion_name_buf_size]u8 = undefined;
+    const gguf_w = std.fmt.bufPrint(&gguf_w_buf, "blk.{d}.{s}.weight", .{ layer, gguf_component }) catch return;
+    const owned_w = try dupeString(allocator, owned, gguf_w);
+    try fused.put(owned_w, TensorEntry{
+        .shard_idx = w_entry.shard_idx,
+        .data_start = w_entry.data_start,
+        .data_end = w_entry.data_end,
+        .dtype = .nvfp4,
+        .n_dims = 2,
+        .dims = .{ w_rows, w_cols, 0, 0 },
+    });
+
+    // Create GGUF scale entry: blk.{l}.{component}.scales
+    var gguf_s_buf: [fusion_name_buf_size]u8 = undefined;
+    const gguf_s = std.fmt.bufPrint(&gguf_s_buf, "blk.{d}.{s}.scales", .{ layer, gguf_component }) catch return;
+    const owned_s = try dupeString(allocator, owned, gguf_s);
+    try fused.put(owned_s, TensorEntry{
+        .shard_idx = s_entry.shard_idx,
+        .data_start = s_entry.data_start,
+        .data_end = s_entry.data_end,
+        .dtype = .fp8_e4m3,
+        .n_dims = 2,
+        .dims = .{ s_rows, s_cols, 0, 0 },
+    });
+
+    // Create GGUF global_scale entry: blk.{l}.{component}.global_scale
+    var gs_buf2: [fusion_name_buf_size]u8 = undefined;
+    const gs_name = std.fmt.bufPrint(&gs_buf2, "{s}layers.{d}.{s}.weight_global_scale", .{ prefix, layer, hf_name }) catch return;
+    if (tensors.get(gs_name)) |gs_entry| {
+        var gguf_gs_buf2: [fusion_name_buf_size]u8 = undefined;
+        const gguf_gs = std.fmt.bufPrint(&gguf_gs_buf2, "blk.{d}.{s}.global_scale", .{ layer, gguf_component }) catch return;
+        const owned_gs = try dupeString(allocator, owned, gguf_gs);
+        try fused.put(owned_gs, gs_entry);
+    }
+    // Create GGUF input_scale entry: blk.{l}.{component}.input_scale
+    var is_buf: [fusion_name_buf_size]u8 = undefined;
+    const is_name = std.fmt.bufPrint(&is_buf, "{s}layers.{d}.{s}.input_global_scale", .{ prefix, layer, hf_name }) catch return;
+    if (tensors.get(is_name)) |is_entry| {
+        var gguf_is_buf: [fusion_name_buf_size]u8 = undefined;
+        const gguf_is = std.fmt.bufPrint(&gguf_is_buf, "blk.{d}.{s}.input_scale", .{ layer, gguf_component }) catch return;
+        const owned_is = try dupeString(allocator, owned, gguf_is);
+        try fused.put(owned_is, is_entry);
+    }
+}
+
+/// Fuse one projection (e.g., gate_proj) across all experts for a single layer.
+/// Creates synthetic GGUF-named weight and scale entries.
+fn fuseOneProjection(
+    allocator: Allocator,
+    tensors: *std.StringHashMap(TensorEntry),
+    fused: *std.StringHashMap(TensorEntry),
+    repacked_f32: *std.ArrayList([]f32),
+    shard_data: []ShardInfo,
+    owned: *std.ArrayList([]u8),
+    prefix: []const u8,
+    layer: u32,
+    n_experts: u32,
+    hf_proj: []const u8,
+    gguf_weight_name: []const u8,
+    gguf_scales_name: []const u8,
+    create_global_scale: bool,
+) !void {
+    var name_buf: [fusion_name_buf_size]u8 = undefined;
+
+    // Look up expert 0 weight_packed tensor.
+    const e0_weight_name = std.fmt.bufPrint(&name_buf, "{s}layers.{d}.mlp.experts.0.{s}.weight_packed", .{ prefix, layer, hf_proj }) catch return;
+    const e0_w = tensors.get(e0_weight_name) orelse return;
+
+    // Look up expert 0 weight_scale tensor.
+    var s_buf: [fusion_name_buf_size]u8 = undefined;
+    const e0_scale_name = std.fmt.bufPrint(&s_buf, "{s}layers.{d}.mlp.experts.0.{s}.weight_scale", .{ prefix, layer, hf_proj }) catch return;
+    const e0_s = tensors.get(e0_scale_name) orelse return;
+
+    // Compute per-expert byte sizes.
+    // weight_packed: [out, in/2] U8 bytes → total = out * in/2
+    const w_rows = if (e0_w.n_dims >= 1) e0_w.dims[0] else return;
+    const w_cols = if (e0_w.n_dims >= 2) e0_w.dims[1] else return;
+    const w_bytes: usize = @as(usize, @intCast(w_rows)) * @as(usize, @intCast(w_cols));
+
+    // weight_scale: [out, in/16] FP8 bytes → total = out * in/16
+    const s_rows = if (e0_s.n_dims >= 1) e0_s.dims[0] else return;
+    const s_cols = if (e0_s.n_dims >= 2) e0_s.dims[1] else return;
+    const s_bytes: usize = @as(usize, @intCast(s_rows)) * @as(usize, @intCast(s_cols));
+
+    // Verify all experts are contiguous in memory (same shard, sequential offsets).
+    var contiguous = true;
+    var en_buf: [fusion_name_buf_size]u8 = undefined;
+    var sn_buf: [fusion_name_buf_size]u8 = undefined;
+    for (1..n_experts) |ei| {
+        const ei_w_name = std.fmt.bufPrint(&en_buf, "{s}layers.{d}.mlp.experts.{d}.{s}.weight_packed", .{ prefix, layer, ei, hf_proj }) catch {
+            contiguous = false;
+            break;
+        };
+        const ei_w = tensors.get(ei_w_name) orelse {
+            contiguous = false;
+            break;
+        };
+        // Check same shard and expected offset.
+        if (ei_w.shard_idx != e0_w.shard_idx or
+            ei_w.data_start != e0_w.data_start + ei * w_bytes)
+        {
+            contiguous = false;
+            break;
+        }
+        // Also verify scales are contiguous.
+        const ei_s_name = std.fmt.bufPrint(&sn_buf, "{s}layers.{d}.mlp.experts.{d}.{s}.weight_scale", .{ prefix, layer, ei, hf_proj }) catch {
+            contiguous = false;
+            break;
+        };
+        const ei_s = tensors.get(ei_s_name) orelse {
+            contiguous = false;
+            break;
+        };
+        if (ei_s.shard_idx != e0_s.shard_idx or
+            ei_s.data_start != e0_s.data_start + ei * s_bytes)
+        {
+            contiguous = false;
+            break;
+        }
+    }
+
+    // Experts are typically NOT contiguous in SafeTensors (interleaved with scale tensors).
+    // We still create synthetic fused entries regardless — the model accesses individual
+    // experts via stride, and each expert's data is at the correct shard offset.
+    // For non-contiguous layouts, we store expert 0's start and the actual per-expert
+    // stride as dims[0]*dims[1]. The model's expertWeightStride() returns the stride,
+    // and expert_data = base + expert_idx * stride. For this to work, all experts must
+    // be in the same shard with matching sizes (but not necessarily contiguous offsets).
+    //
+    // If non-contiguous, we allocate a repacked buffer and copy all experts contiguously.
+
+    if (!contiguous) {
+        // Experts are non-contiguous in the SafeTensors file. Allocate contiguous
+        // buffers and copy each expert's data sequentially.
+        const total_w = @as(usize, n_experts) * w_bytes;
+        const total_s = @as(usize, n_experts) * s_bytes;
+        // Use page_allocator for GPU compatibility (Metal newBufferWithBytesNoCopy
+        // requires page-aligned pointers).
+        const pa = std.heap.page_allocator;
+        const repacked_w = try pa.alloc(u8, total_w);
+        errdefer pa.free(repacked_w);
+        const repacked_s = try pa.alloc(u8, total_s);
+        errdefer pa.free(repacked_s);
+
+        for (0..n_experts) |ei| {
+            // Copy weight_packed
+            const ei_w_name2 = std.fmt.bufPrint(&en_buf, "{s}layers.{d}.mlp.experts.{d}.{s}.weight_packed", .{ prefix, layer, ei, hf_proj }) catch return;
+            const ei_w2 = tensors.get(ei_w_name2) orelse return;
+            const w_shard = shard_data[ei_w2.shard_idx];
+            if (w_shard.data.len > 0) {
+                const w_src_start = w_shard.tensor_base + ei_w2.data_start;
+                const w_src_end = w_src_start + w_bytes;
+                if (w_src_end <= w_shard.data.len) {
+                    @memcpy(repacked_w[ei * w_bytes ..][0..w_bytes], w_shard.data[w_src_start..w_src_end]);
+                }
+            }
+            // Copy weight_scale
+            const ei_s_name2 = std.fmt.bufPrint(&sn_buf, "{s}layers.{d}.mlp.experts.{d}.{s}.weight_scale", .{ prefix, layer, ei, hf_proj }) catch return;
+            const ei_s2 = tensors.get(ei_s_name2) orelse return;
+            const s_shard = shard_data[ei_s2.shard_idx];
+            if (s_shard.data.len > 0) {
+                const s_src_start = s_shard.tensor_base + ei_s2.data_start;
+                const s_src_end = s_src_start + s_bytes;
+                if (s_src_end <= s_shard.data.len) {
+                    @memcpy(repacked_s[ei * s_bytes ..][0..s_bytes], s_shard.data[s_src_start..s_src_end]);
+                }
+            }
+        }
+
+        // Create synthetic GGUF entries pointing to repacked buffers
+        var gguf_w_buf2: [fusion_name_buf_size]u8 = undefined;
+        const gguf_w_name2 = std.fmt.bufPrint(&gguf_w_buf2, "blk.{d}.{s}", .{ layer, gguf_weight_name }) catch return;
+        const owned_w_name2 = try dupeString(allocator, owned, gguf_w_name2);
+        // Store as a special shard_idx that signals "use repacked data"
+        // We add a new shard entry with the repacked buffer
+        // Actually: we can't add shards dynamically. Instead, create a TensorEntry
+        // with data_start pointing into the repacked buffer via pointer arithmetic.
+        // The entryToInfo function resolves: shard.data.ptr + shard.tensor_base + entry.data_start
+        // For repacked: we need shard.data = repacked_w, tensor_base = 0, data_start = 0.
+        // But we can't add new ShardInfo entries (shard_data is fixed-size).
+        //
+        // Workaround: store the repacked pointer directly as data_start (abs ptr encoded).
+        // This requires a special dtype flag or shard_idx sentinel.
+        // Simplest: use shard_idx = max_shard_count as sentinel for "repacked" entries,
+        // and store the repacked pointer in data_start/data_end as usize.
+        try fused.put(owned_w_name2, TensorEntry{
+            .shard_idx = max_shard_count, // sentinel: repacked data
+            .data_start = @intFromPtr(repacked_w.ptr),
+            .data_end = @intFromPtr(repacked_w.ptr) + total_w,
+            .dtype = .nvfp4,
+            .n_dims = 3,
+            .dims = .{ w_rows, w_cols, n_experts, 0 },
+        });
+
+        var gguf_s_buf2: [fusion_name_buf_size]u8 = undefined;
+        const gguf_s_name2 = std.fmt.bufPrint(&gguf_s_buf2, "blk.{d}.{s}", .{ layer, gguf_scales_name }) catch return;
+        const owned_s_name2 = try dupeString(allocator, owned, gguf_s_name2);
+        try fused.put(owned_s_name2, TensorEntry{
+            .shard_idx = max_shard_count,
+            .data_start = @intFromPtr(repacked_s.ptr),
+            .data_end = @intFromPtr(repacked_s.ptr) + total_s,
+            .dtype = .fp8_e4m3,
+            .n_dims = 3,
+            .dims = .{ s_rows, s_cols, n_experts, 0 },
+        });
+
+        // Also repack global_scale for non-contiguous experts
+        if (create_global_scale) {
+            const gs_array2 = try allocator.alloc(f32, n_experts);
+            try repacked_f32.append(allocator, gs_array2);
+            var gs_buf3: [fusion_name_buf_size]u8 = undefined;
+            for (0..n_experts) |gi| {
+                const gi_gs = std.fmt.bufPrint(&gs_buf3, "{s}layers.{d}.mlp.experts.{d}.{s}.weight_global_scale", .{ prefix, layer, gi, hf_proj }) catch { gs_array2[gi] = 1.0; continue; };
+                if (tensors.get(gi_gs)) |gs_e| {
+                    if (gs_e.shard_idx < shard_data.len and shard_data[gs_e.shard_idx].data.len > 0) {
+                        const sh = shard_data[gs_e.shard_idx];
+                        const a = sh.tensor_base + gs_e.data_start;
+                        if (a + 4 <= sh.data.len) { gs_array2[gi] = @as(*const f32, @ptrCast(@alignCast(sh.data.ptr + a))).*; continue; }
+                    }
+                }
+                gs_array2[gi] = 1.0;
+            }
+            var gguf_gs3: [fusion_name_buf_size]u8 = undefined;
+            const bn = gguf_weight_name[0..gguf_weight_name.len - ".weight".len];
+            const gsn = std.fmt.bufPrint(&gguf_gs3, "blk.{d}.{s}.global_scale", .{ layer, bn }) catch return;
+            const owned_gsn = try dupeString(allocator, owned, gsn);
+            try fused.put(owned_gsn, TensorEntry{ .shard_idx = max_shard_count, .data_start = @intFromPtr(gs_array2.ptr), .data_end = @intFromPtr(gs_array2.ptr) + n_experts * @sizeOf(f32), .dtype = .f32, .n_dims = 1, .dims = .{ n_experts, 0, 0, 0 } });
+
+            // Also repack input_global_scale
+            const is_array = try allocator.alloc(f32, n_experts);
+            try repacked_f32.append(allocator, is_array);
+            var is_buf3: [fusion_name_buf_size]u8 = undefined;
+            for (0..n_experts) |gi| {
+                const gi_is = std.fmt.bufPrint(&is_buf3, "{s}layers.{d}.mlp.experts.{d}.{s}.input_global_scale", .{ prefix, layer, gi, hf_proj }) catch { is_array[gi] = 1.0; continue; };
+                if (tensors.get(gi_is)) |is_e| {
+                    if (is_e.shard_idx < shard_data.len and shard_data[is_e.shard_idx].data.len > 0) {
+                        const sh2 = shard_data[is_e.shard_idx];
+                        const a2 = sh2.tensor_base + is_e.data_start;
+                        if (a2 + 4 <= sh2.data.len) { is_array[gi] = @as(*const f32, @ptrCast(@alignCast(sh2.data.ptr + a2))).*; continue; }
+                    }
+                }
+                is_array[gi] = 1.0;
+            }
+            var gguf_is3: [fusion_name_buf_size]u8 = undefined;
+            const isn = std.fmt.bufPrint(&gguf_is3, "blk.{d}.{s}.input_scale", .{ layer, bn }) catch return;
+            const owned_isn = try dupeString(allocator, owned, isn);
+            try fused.put(owned_isn, TensorEntry{ .shard_idx = max_shard_count, .data_start = @intFromPtr(is_array.ptr), .data_end = @intFromPtr(is_array.ptr) + n_experts * @sizeOf(f32), .dtype = .f32, .n_dims = 1, .dims = .{ n_experts, 0, 0, 0 } });
+        }
+        return;
+    }
+
+    // Create synthetic GGUF-named weight entry: blk.{l}.ffn_{proj}_exps.weight
+    // dtype = .nvfp4, dims = [out, in/2, n_experts] (expertWeightStride uses dims[0]*dims[1])
+    var gguf_w_buf: [fusion_name_buf_size]u8 = undefined;
+    const gguf_w_name = std.fmt.bufPrint(&gguf_w_buf, "blk.{d}.{s}", .{ layer, gguf_weight_name }) catch return;
+    const owned_w_name = try dupeString(allocator, owned, gguf_w_name);
+    try fused.put(owned_w_name, TensorEntry{
+        .shard_idx = e0_w.shard_idx,
+        .data_start = e0_w.data_start,
+        .data_end = e0_w.data_start + @as(usize, n_experts) * w_bytes,
+        .dtype = .nvfp4,
+        .n_dims = 3,
+        .dims = .{ w_rows, w_cols, n_experts, 0 },
+    });
+
+    // Create synthetic GGUF-named scale entry: blk.{l}.ffn_{proj}_exps.scales
+    // dtype = .fp8_e4m3, dims = [out, in/16, n_experts]
+    var gguf_s_buf: [fusion_name_buf_size]u8 = undefined;
+    const gguf_s_name = std.fmt.bufPrint(&gguf_s_buf, "blk.{d}.{s}", .{ layer, gguf_scales_name }) catch return;
+    const owned_s_name = try dupeString(allocator, owned, gguf_s_name);
+    try fused.put(owned_s_name, TensorEntry{
+        .shard_idx = e0_s.shard_idx,
+        .data_start = e0_s.data_start,
+        .data_end = e0_s.data_start + @as(usize, n_experts) * s_bytes,
+        .dtype = .fp8_e4m3,
+        .n_dims = 3,
+        .dims = .{ s_rows, s_cols, n_experts, 0 },
+    });
+
+    // Create synthetic global_scale entry: blk.{l}.ffn_{proj}_exps.global_scale
+    if (create_global_scale) {
+        const gs_array = try allocator.alloc(f32, n_experts);
+        try repacked_f32.append(allocator, gs_array);
+        var gs_name_buf2: [fusion_name_buf_size]u8 = undefined;
+        for (0..n_experts) |gi| {
+            const gi_gs_name = std.fmt.bufPrint(&gs_name_buf2, "{s}layers.{d}.mlp.experts.{d}.{s}.weight_global_scale", .{ prefix, layer, gi, hf_proj }) catch {
+                gs_array[gi] = 1.0;
+                continue;
+            };
+            if (tensors.get(gi_gs_name)) |gs_entry| {
+                if (gs_entry.shard_idx < shard_data.len and shard_data[gs_entry.shard_idx].data.len > 0) {
+                    const shard = shard_data[gs_entry.shard_idx];
+                    const abs = shard.tensor_base + gs_entry.data_start;
+                    if (abs + 4 <= shard.data.len) {
+                        gs_array[gi] = @as(*const f32, @ptrCast(@alignCast(shard.data.ptr + abs))).*;
+                        continue;
+                    }
+                }
+            }
+            gs_array[gi] = 1.0;
+        }
+
+        // Also repack input_global_scale (contiguous path)
+        const is_array = try allocator.alloc(f32, n_experts);
+        try repacked_f32.append(allocator, is_array);
+        var is_buf_c: [fusion_name_buf_size]u8 = undefined;
+        for (0..n_experts) |gi| {
+            const gi_is = std.fmt.bufPrint(&is_buf_c, "{s}layers.{d}.mlp.experts.{d}.{s}.input_global_scale", .{ prefix, layer, gi, hf_proj }) catch { is_array[gi] = 1.0; continue; };
+            if (tensors.get(gi_is)) |is_e| {
+                if (is_e.shard_idx < shard_data.len and shard_data[is_e.shard_idx].data.len > 0) {
+                    const sh2 = shard_data[is_e.shard_idx];
+                    const a2 = sh2.tensor_base + is_e.data_start;
+                    if (a2 + 4 <= sh2.data.len) { is_array[gi] = @as(*const f32, @ptrCast(@alignCast(sh2.data.ptr + a2))).*; continue; }
+                }
+            }
+            is_array[gi] = 1.0;
+        }
+
+        var gguf_gs_buf: [fusion_name_buf_size]u8 = undefined;
+        const base_name = gguf_weight_name[0 .. gguf_weight_name.len - ".weight".len];
+        const gguf_gs_name = std.fmt.bufPrint(&gguf_gs_buf, "blk.{d}.{s}.global_scale", .{ layer, base_name }) catch return;
+        const owned_gs_name = try dupeString(allocator, owned, gguf_gs_name);
+        try fused.put(owned_gs_name, TensorEntry{
+            .shard_idx = max_shard_count, // sentinel: repacked data
+            .data_start = @intFromPtr(gs_array.ptr),
+            .data_end = @intFromPtr(gs_array.ptr) + n_experts * @sizeOf(f32),
+            .dtype = .f32,
+            .n_dims = 1,
+            .dims = .{ n_experts, 0, 0, 0 },
+        });
+
+        var gguf_is_buf: [fusion_name_buf_size]u8 = undefined;
+        const isn = std.fmt.bufPrint(&gguf_is_buf, "blk.{d}.{s}.input_scale", .{ layer, base_name }) catch return;
+        const owned_isn = try dupeString(allocator, owned, isn);
+        try fused.put(owned_isn, TensorEntry{
+            .shard_idx = max_shard_count,
+            .data_start = @intFromPtr(is_array.ptr),
+            .data_end = @intFromPtr(is_array.ptr) + n_experts * @sizeOf(f32),
+            .dtype = .f32,
+            .n_dims = 1,
+            .dims = .{ n_experts, 0, 0, 0 },
+        });
+    }
+}
+
+/// Fuse shared expert projection (no expert index).
+/// Creates GGUF-named weight and scale entries for the shared expert.
+fn fuseSharedExpertProjection(
+    allocator: Allocator,
+    tensors: *std.StringHashMap(TensorEntry),
+    fused: *std.StringHashMap(TensorEntry),
+    repacked_f32: *std.ArrayList([]f32),
+    shard_data: []ShardInfo,
+    owned: *std.ArrayList([]u8),
+    prefix: []const u8,
+    layer: u32,
+    hf_proj: []const u8,
+    gguf_weight_name: []const u8,
+    gguf_scales_name: []const u8,
+) !void {
+    _ = shard_data;
+    _ = repacked_f32;
+
+    var name_buf: [fusion_name_buf_size]u8 = undefined;
+
+    // Try both "shared_expert" (singular, compressed-tensors) and "shared_experts" (plural, HF default)
+    const shared_prefixes = [_][]const u8{ "shared_expert", "shared_experts" };
+    for (shared_prefixes) |sp| {
+        const w_name = std.fmt.bufPrint(&name_buf, "{s}layers.{d}.mlp.{s}.{s}.weight_packed", .{ prefix, layer, sp, hf_proj }) catch continue;
+        const w_entry = tensors.get(w_name) orelse continue;
+
+        var s_buf: [fusion_name_buf_size]u8 = undefined;
+        const s_name = std.fmt.bufPrint(&s_buf, "{s}layers.{d}.mlp.{s}.{s}.weight_scale", .{ prefix, layer, sp, hf_proj }) catch continue;
+        const s_entry = tensors.get(s_name) orelse continue;
+
+        // Create GGUF-named weight entry: blk.{l}.ffn_{proj}_shexp.weight
+        // For shared expert (single tensor), use 2D dims [out, in/2] with nvfp4 dtype.
+        var gguf_w_buf: [fusion_name_buf_size]u8 = undefined;
+        const gguf_w = std.fmt.bufPrint(&gguf_w_buf, "blk.{d}.{s}", .{ layer, gguf_weight_name }) catch continue;
+        const owned_w = try dupeString(allocator, owned, gguf_w);
+        try fused.put(owned_w, TensorEntry{
+            .shard_idx = w_entry.shard_idx,
+            .data_start = w_entry.data_start,
+            .data_end = w_entry.data_end,
+            .dtype = .nvfp4,
+            .n_dims = w_entry.n_dims,
+            .dims = w_entry.dims,
+        });
+
+        // Create GGUF-named scale entry: blk.{l}.ffn_{proj}_shexp.scales
+        var gguf_s_buf: [fusion_name_buf_size]u8 = undefined;
+        const gguf_s = std.fmt.bufPrint(&gguf_s_buf, "blk.{d}.{s}", .{ layer, gguf_scales_name }) catch continue;
+        const owned_s = try dupeString(allocator, owned, gguf_s);
+        try fused.put(owned_s, TensorEntry{
+            .shard_idx = s_entry.shard_idx,
+            .data_start = s_entry.data_start,
+            .data_end = s_entry.data_end,
+            .dtype = .fp8_e4m3,
+            .n_dims = s_entry.n_dims,
+            .dims = s_entry.dims,
+        });
+
+        // Global scale for shared expert
+        var gs_buf: [fusion_name_buf_size]u8 = undefined;
+        const gs_name = std.fmt.bufPrint(&gs_buf, "{s}layers.{d}.mlp.{s}.{s}.weight_global_scale", .{ prefix, layer, sp, hf_proj }) catch continue;
+        if (tensors.get(gs_name)) |gs_entry| {
+            var gguf_gs_buf: [fusion_name_buf_size]u8 = undefined;
+            const base = gguf_weight_name[0 .. gguf_weight_name.len - ".weight".len];
+            const gguf_gs = std.fmt.bufPrint(&gguf_gs_buf, "blk.{d}.{s}.global_scale", .{ layer, base }) catch continue;
+            const owned_gs = try dupeString(allocator, owned, gguf_gs);
+            try fused.put(owned_gs, gs_entry);
+        }
+
+        break; // Found matching shared expert
+    }
 }
 
 // ── Internal helpers ──────────────────────────────────────────────────────────
@@ -605,9 +1366,11 @@ fn discoverShards(
 }
 
 /// Read an entire file into a heap-allocated slice (caller must free).
-/// Uses posix openat for Zig 0.16 compatibility (std.fs.openFileAbsolute removed).
 fn readFile(allocator: Allocator, path: []const u8) ![]u8 {
-    const fd = try std.posix.openat(std.posix.AT.FDCWD, path, .{}, 0);
+    const path_z = try allocator.dupeZ(u8, path);
+    defer allocator.free(path_z);
+    const fd = std.posix.system.open(path_z.ptr, .{}, @as(std.posix.mode_t, 0));
+    if (fd < 0) return error.FileNotFound;
     defer _ = std.c.close(fd);
     const size: usize = blk: {
         var s: std.posix.Stat = undefined;
@@ -827,6 +1590,10 @@ fn parseDType(s: []const u8) DType {
     if (std.mem.eql(u8, s, "BF16")) return .bf16;
     // SafeTensors U32 dtype indicates MLX-quantized packed weights.
     if (std.mem.eql(u8, s, "U32")) return .mlx_q;
+    // FP8 E4M3 — used by compressed-tensors NVFP4 scale tensors.
+    if (std.mem.eql(u8, s, "F8_E4M3")) return .fp8_e4m3;
+    // U8 — packed FP4 bytes, used by compressed-tensors NVFP4 weight_packed tensors.
+    if (std.mem.eql(u8, s, "U8")) return .nvfp4;
     return .unknown; // unsupported dtypes
 }
 
@@ -1405,7 +2172,9 @@ test "parseDType" {
     try std.testing.expectEqual(DType.bf16, parseDType("BF16"));
     try std.testing.expectEqual(DType.f16, parseDType("F16"));
     try std.testing.expectEqual(DType.mlx_q, parseDType("U32"));
-    try std.testing.expectEqual(DType.unknown, parseDType("U8"));
+    try std.testing.expectEqual(DType.nvfp4, parseDType("U8"));
+    // Compressed-tensors NVFP4 scale dtype
+    try std.testing.expectEqual(DType.fp8_e4m3, parseDType("F8_E4M3"));
 }
 
 test "parseShardHeader basic" {
@@ -1556,4 +2325,106 @@ test "dupeUnescaped basic escapes" {
 
     const result_q = try dupeUnescaped(allocator, &owned, "a\\\"b");
     try std.testing.expectEqualSlices(u8, "a\"b", result_q);
+}
+
+test "ggufToHfNameIter multiple mappings" {
+    // ffn_gate_inp has two mappings: mlp.router and mlp.gate
+    var buf: [name_buf_size]u8 = undefined;
+    var iter = ggufToHfNameIter("blk.0.ffn_gate_inp.weight", "model.");
+    const first = iter.next(&buf);
+    try std.testing.expect(first != null);
+    try std.testing.expectEqualStrings("model.layers.0.mlp.router.weight", first.?);
+    const second = iter.next(&buf);
+    try std.testing.expect(second != null);
+    try std.testing.expectEqualStrings("model.layers.0.mlp.gate.weight", second.?);
+    // No more mappings
+    try std.testing.expect(iter.next(&buf) == null);
+}
+
+test "fuseNvfp4Experts creates synthetic entries" {
+    const allocator = std.testing.allocator;
+
+    var tensors = std.StringHashMap(TensorEntry).init(allocator);
+    defer tensors.deinit();
+    var config_meta = std.StringHashMap(MetaValue).init(allocator);
+    defer config_meta.deinit();
+    var owned: std.ArrayList([]u8) = .empty;
+    defer {
+        for (owned.items) |s| allocator.free(s);
+        owned.deinit(allocator);
+    }
+
+    // Simulate 2 experts, 1 layer, gate_proj only.
+    // weight_packed: [4, 8] U8, weight_scale: [4, 1] FP8
+    // Expert 0 at offset 0, expert 1 at offset 32 (contiguous)
+    const w_bytes: usize = 4 * 8; // 32 bytes per expert
+    const s_bytes: usize = 4 * 1; // 4 bytes per expert
+
+    const e0_w_name = try dupeString(allocator, &owned, "model.layers.0.mlp.experts.0.gate_proj.weight_packed");
+    try tensors.put(e0_w_name, TensorEntry{
+        .shard_idx = 0,
+        .data_start = 0,
+        .data_end = w_bytes,
+        .dtype = .nvfp4,
+        .n_dims = 2,
+        .dims = .{ 4, 8, 0, 0 },
+    });
+    const e1_w_name = try dupeString(allocator, &owned, "model.layers.0.mlp.experts.1.gate_proj.weight_packed");
+    try tensors.put(e1_w_name, TensorEntry{
+        .shard_idx = 0,
+        .data_start = w_bytes,
+        .data_end = 2 * w_bytes,
+        .dtype = .nvfp4,
+        .n_dims = 2,
+        .dims = .{ 4, 8, 0, 0 },
+    });
+    const e0_s_name = try dupeString(allocator, &owned, "model.layers.0.mlp.experts.0.gate_proj.weight_scale");
+    try tensors.put(e0_s_name, TensorEntry{
+        .shard_idx = 0,
+        .data_start = 2 * w_bytes,
+        .data_end = 2 * w_bytes + s_bytes,
+        .dtype = .fp8_e4m3,
+        .n_dims = 2,
+        .dims = .{ 4, 1, 0, 0 },
+    });
+    const e1_s_name = try dupeString(allocator, &owned, "model.layers.0.mlp.experts.1.gate_proj.weight_scale");
+    try tensors.put(e1_s_name, TensorEntry{
+        .shard_idx = 0,
+        .data_start = 2 * w_bytes + s_bytes,
+        .data_end = 2 * w_bytes + 2 * s_bytes,
+        .dtype = .fp8_e4m3,
+        .n_dims = 2,
+        .dims = .{ 4, 1, 0, 0 },
+    });
+
+    // Config metadata
+    try config_meta.put("num_hidden_layers", .{ .uint = 1 });
+    try config_meta.put("num_local_experts", .{ .uint = 2 });
+
+    // Dummy shard_data (not used directly by fusion when contiguous)
+    var shard_data = [_]ShardInfo{.{ .data = &.{}, .tensor_base = 0 }};
+
+    var fused = std.StringHashMap(TensorEntry).init(allocator);
+    defer fused.deinit();
+    var repacked_f32: std.ArrayList([]f32) = .empty;
+    defer {
+        for (repacked_f32.items) |s| allocator.free(s);
+        repacked_f32.deinit(allocator);
+    }
+
+    try fuseNvfp4Experts(allocator, &tensors, &fused, &repacked_f32, &shard_data, &config_meta, &owned);
+
+    // Fused entries go into separate fused map, not tensors
+    const fused_w = fused.get("blk.0.ffn_gate_exps.weight") orelse return error.MissingTensor;
+    try std.testing.expectEqual(DType.nvfp4, fused_w.dtype);
+    try std.testing.expectEqual(@as(u32, 3), fused_w.n_dims);
+    try std.testing.expectEqual(@as(u64, 4), fused_w.dims[0]); // rows
+    try std.testing.expectEqual(@as(u64, 8), fused_w.dims[1]); // cols/2
+    try std.testing.expectEqual(@as(u64, 2), fused_w.dims[2]); // n_experts
+    try std.testing.expectEqual(@as(usize, 0), fused_w.data_start);
+    try std.testing.expectEqual(@as(usize, 2 * w_bytes), fused_w.data_end);
+
+    const fused_s = fused.get("blk.0.ffn_gate_exps.scales") orelse return error.MissingTensor;
+    try std.testing.expectEqual(DType.fp8_e4m3, fused_s.dtype);
+    try std.testing.expectEqual(@as(u32, 3), fused_s.n_dims);
 }
