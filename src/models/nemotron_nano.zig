@@ -142,6 +142,8 @@ pub const NemotronNanoModel = struct {
     kv_type_k: kv_quant.KvQuantType = .f32,
     kv_type_v: kv_quant.KvQuantType = .f32,
     kv_seq_len: usize = 0,
+    layer_skip_start: u32 = 0,
+    layer_skip_end: u32 = 0,
     cancelled: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
     /// Enable fused megakernel for single-dispatch forward pass.
     megakernel_enabled: bool = false,
@@ -405,8 +407,9 @@ pub const NemotronNanoModel = struct {
         // Transformer layers
         for (0..self.n_layers) |li| {
             if (self.cancelled.load(.monotonic)) return error.Cancelled;
-            self.fmt.prefetchLayer(@intCast(li + 1));
             const l: u32 = @intCast(li);
+            if (l >= self.layer_skip_start and l < self.layer_skip_end) continue;
+            self.fmt.prefetchLayer(@intCast(li + 1));
 
             switch (self.layer_types[li]) {
                 .ssm => try self.ssmLayer(l),

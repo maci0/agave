@@ -135,6 +135,8 @@ pub const NemotronHModel = struct {
     kv_type_v: kv_quant.KvQuantType = .f32,
     /// Number of tokens committed to the KV cache.
     kv_seq_len: usize = 0,
+    layer_skip_start: u32 = 0,
+    layer_skip_end: u32 = 0,
     /// Set to true from another thread to abort an in-progress `forward` call.
     cancelled: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
     /// Enable fused megakernel for single-dispatch forward pass.
@@ -355,8 +357,9 @@ pub const NemotronHModel = struct {
 
         for (0..self.n_layers) |li| {
             if (self.cancelled.load(.monotonic)) return error.Cancelled;
-            self.fmt.prefetchLayer(@intCast(li + 1));
             const l: u32 = @intCast(li);
+            if (l >= self.layer_skip_start and l < self.layer_skip_end) continue;
+            self.fmt.prefetchLayer(@intCast(li + 1));
 
             switch (self.layer_types[li]) {
                 .ssm => try self.ssmLayer(l),

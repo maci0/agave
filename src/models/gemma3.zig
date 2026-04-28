@@ -136,6 +136,8 @@ pub const Gemma3Model = struct {
     /// Number of boundary layers (first/last N) that use f16 V to protect attention quality.
     kv_boundary_v: u32 = 0,
     kv_seq_len: usize = 0,
+    layer_skip_start: u32 = 0,
+    layer_skip_end: u32 = 0,
     cancelled: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
     perf: perf.PerfCounters = .{},
     /// Enable fused megakernel for single-dispatch forward pass.
@@ -338,9 +340,11 @@ pub const Gemma3Model = struct {
 
         for (0..self.n_layers) |li| {
             if (self.cancelled.load(.monotonic)) return error.Cancelled;
+            const l: u32 = @intCast(li);
+            if (l >= self.layer_skip_start and l < self.layer_skip_end) continue;
             self.fmt.prefetchLayer(@intCast(li + 1));
-            try self.attention(@intCast(li));
-            try self.feedForward(@intCast(li));
+            try self.attention(l);
+            try self.feedForward(l);
         }
 
         // Final norm → logits → argmax
@@ -515,6 +519,137 @@ pub const Gemma3Model = struct {
         const post_norm = self.fmt.layerTensor(li, "post_ffw_norm.weight") orelse return error.MissingTensor;
         self.be.rmsNormBatched(self.pf_hidden2.ptr, self.normAsF32(post_norm, e), self.pf_hidden2.ptr, n_tok, e, self.rms_eps);
         self.be.add(self.pf_hidden.ptr, self.pf_hidden2.ptr, self.pf_hidden.ptr, n_tok * e);
+    }
+
+    /// Batch tree forward: process B tree nodes through all layers using batched
+    /// GEMM and tree-masked SDPA. Does NOT modify the main KV cache — tree KV
+    /// entries are temporary. After this call, `pf_hidden[i*e..(i+1)*e]` contains
+    /// the final hidden state for tree node i. Use `treeLogits(node_i)` to compute
+    /// logits for a specific node.
+    ///
+    /// Requires f32 KV cache type (no quantized prefix KV support yet).
+    pub fn forwardTree(
+        self: *Gemma3Model,
+        token_ids: []const u32,
+        position_ids: []const u32,
+        ancestor_masks: [*]const [8]u64,
+        n_nodes: u32,
+    ) !void {
+        if (n_nodes == 0) return;
+
+        const e: usize = self.n_embd;
+        const nh: usize = self.n_head;
+        const nkv: usize = self.n_head_kv;
+        const hd: usize = self.head_dim;
+        const prefix_len = self.kv_seq_len;
+        const n: usize = n_nodes;
+
+        // Embedding lookup for all tree nodes
+        for (token_ids[0..n], 0..) |tid, t| {
+            self.embLookup(tid);
+            @memcpy(self.pf_hidden[t * e ..][0..e], self.hidden);
+        }
+
+        // Copy position IDs
+        @memcpy(self.pf_positions[0..n], position_ids[0..n]);
+
+        for (0..self.n_layers) |li| {
+            if (self.cancelled.load(.monotonic)) return error.Cancelled;
+            const l: u32 = @intCast(li);
+            if (l >= self.layer_skip_start and l < self.layer_skip_end) continue;
+
+            // Pre-attention norm
+            const norm_w = self.fmt.layerTensor(l, "attn_norm.weight") orelse return error.MissingTensor;
+            self.be.rmsNormBatched(self.pf_hidden.ptr, self.normAsF32(norm_w, e), self.pf_hidden2.ptr, n, e, self.rms_eps);
+
+            // QKV projections (GEMM)
+            const qw = self.fmt.layerTensor(l, "attn_q.weight") orelse return error.MissingTensor;
+            const kw = self.fmt.layerTensor(l, "attn_k.weight") orelse return error.MissingTensor;
+            const vw = self.fmt.layerTensor(l, "attn_v.weight") orelse return error.MissingTensor;
+            self.doGemm(self.pf_hidden2.ptr, qw, self.pf_q.ptr, n, nh * hd, e);
+            self.doGemm(self.pf_hidden2.ptr, kw, self.pf_k.ptr, n, nkv * hd, e);
+            self.doGemm(self.pf_hidden2.ptr, vw, self.pf_v.ptr, n, nkv * hd, e);
+
+            // QK norms
+            if (self.fmt.layerTensor(l, "attn_q_norm.weight")) |qn| {
+                self.be.rmsNormMulti(self.pf_q.ptr, self.normAsF32(qn, hd), n * nh, hd, self.rms_eps);
+            }
+            if (self.fmt.layerTensor(l, "attn_k_norm.weight")) |kn| {
+                self.be.rmsNormMulti(self.pf_k.ptr, self.normAsF32(kn, hd), n * nkv, hd, self.rms_eps);
+            }
+
+            // RoPE with tree position IDs (local vs global theta)
+            const rd: usize = self.rope_dim;
+            const is_local = self.sliding_window_pattern > 0 and (l + 1) % self.sliding_window_pattern != 0;
+            if (is_local) {
+                self.be.ropeBatched(self.pf_q.ptr, self.pf_positions.ptr, n, nh, hd, rd, self.rope_local_theta);
+                self.be.ropeBatched(self.pf_k.ptr, self.pf_positions.ptr, n, nkv, hd, rd, self.rope_local_theta);
+            } else if (self.rope_freq_scale != 1.0) {
+                self.be.sync();
+                for (0..n) |t| {
+                    applyRopeScaled(self.pf_q.ptr + t * nh * hd, self.pf_positions[t], nh, hd, rd, self.rope_theta, self.rope_freq_scale);
+                    applyRopeScaled(self.pf_k.ptr + t * nkv * hd, self.pf_positions[t], nkv, hd, rd, self.rope_theta, self.rope_freq_scale);
+                }
+            } else {
+                self.be.ropeBatched(self.pf_q.ptr, self.pf_positions.ptr, n, nh, hd, rd, self.rope_theta);
+                self.be.ropeBatched(self.pf_k.ptr, self.pf_positions.ptr, n, nkv, hd, rd, self.rope_theta);
+            }
+
+            // Tree SDPA: prefix KV from cache (possibly quantized), tree KV from GEMM (f32)
+            self.be.sync();
+            const kv_view = self.getLayerKvView(l);
+            const kv_keys_bytes: []u8 = std.mem.sliceAsBytes(kv_view.keys);
+            const kv_values_bytes: []u8 = std.mem.sliceAsBytes(kv_view.values);
+            self.be.sdpaTree(
+                self.pf_q.ptr,
+                kv_keys_bytes.ptr,
+                kv_values_bytes.ptr,
+                self.pf_k.ptr,
+                self.pf_v.ptr,
+                self.pf_attn_out.ptr,
+                ancestor_masks,
+                nh,
+                nkv,
+                hd,
+                prefix_len,
+                n_nodes,
+                self.attn_scale,
+                .f32, // PagedKvCache blocks store f32
+                .f32,
+            );
+
+
+            // Output projection
+            const ow = self.fmt.layerTensor(l, "attn_output.weight") orelse return error.MissingTensor;
+            self.doGemm(self.pf_attn_out.ptr, ow, self.pf_hidden2.ptr, n, e, nh * hd);
+
+            // Post-attention norm + residual
+            if (self.fmt.layerTensor(l, "post_attention_norm.weight")) |pn| {
+                self.be.rmsNormBatched(self.pf_hidden2.ptr, self.normAsF32(pn, e), self.pf_hidden2.ptr, n, e, self.rms_eps);
+            }
+            self.be.add(self.pf_hidden.ptr, self.pf_hidden2.ptr, self.pf_hidden.ptr, n * e);
+
+            // FFN
+            try self.prefillFeedForward(l, n);
+        }
+
+        // Final norm for all nodes (applied in pf_hidden in-place)
+        const final_norm = self.fmt.getTensor("output_norm.weight") orelse return error.MissingTensor;
+        self.be.rmsNormBatched(self.pf_hidden.ptr, self.normAsF32(final_norm, e), self.pf_hidden.ptr, n, e, self.rms_eps);
+        self.be.sync();
+    }
+
+    /// Compute logits for a specific tree node from forwardTree results.
+    /// Reads from `pf_hidden[node_i * e .. (node_i+1) * e]` and writes to `logits_buf`.
+    pub fn treeLogits(self: *Gemma3Model, node_i: u32) u32 {
+        const e: usize = self.n_embd;
+        @memcpy(self.hidden, self.pf_hidden[@as(usize, node_i) * e ..][0..e]);
+        const out_w = self.fmt.getTensor("output.weight") orelse
+            self.fmt.getTensor("token_embd.weight") orelse return 0;
+        self.doGemv(self.hidden.ptr, out_w, self.logits_buf.ptr, self.vocab_size, e);
+        self.be.sync();
+        if (self.final_logit_softcap > 0.0) self.applySoftcap();
+        return math_ops.argmax(self.logits_buf);
     }
 
     /// Reset the KV cache position for a new conversation.

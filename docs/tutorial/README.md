@@ -16,6 +16,7 @@ By the end of this tutorial, you'll understand:
 - **State space models**: Linear-time alternatives to quadratic attention (DeltaNet, Mamba-2)
 - **Sampling strategies**: How temperature, top-k, top-p, and repeat penalty control randomness
 - **Compute backends**: How CPU, GPU (CUDA, Metal, Vulkan, ROCm) backends execute kernels and manage memory
+- **Speculative decoding**: Draft models, DDTree tree construction, self-speculative layer skipping
 
 ## Prerequisites
 
@@ -84,6 +85,7 @@ Understand how the codebase is structured:
 | 14 | [Format Conventions](14-format-conventions.md) | GGUF vs SafeTensors differences, tensor layout, metadata mapping |
 | 15 | [Chat Templates](15-chat-templates.md) | Data-driven role markers, EOG tokens, multi-turn formatting |
 | 16 | [Configuration and Recipes](16-recipe-system.md) | Proven defaults per model+hardware, user override semantics |
+| 17 | [Speculative Decoding & DDTree](17-speculative-decoding.md) | Draft models, tree-structured verification, self-speculative layer skip |
 
 **Appendices:**
 - [Mathematical Operations Reference](appendix-math.md) — Quick reference for all math operations (dot product, softmax, GEMV, convolution, etc.)

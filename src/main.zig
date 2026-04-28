@@ -9,6 +9,7 @@ const cli_mod = @import("cli.zig");
 const backend_mod = @import("backend/backend.zig");
 const format_mod = @import("format/format.zig");
 const model_mod = @import("models/model.zig");
+const spec_decode = @import("spec/spec_decode.zig");
 const tok_mod = @import("tokenizer/tokenizer.zig");
 const server = @import("server/server.zig");
 const display_mod = @import("display.zig");
@@ -362,6 +363,12 @@ const cli_specs = [_]cli_mod.ArgSpec{
     // Multimodal
     .{ .long = "mmproj", .kind = .option, .help = "Path to vision projector GGUF (mmproj file)." },
     .{ .long = "image", .kind = .option, .help = "Path to image file for multimodal inference (PNG or PPM P6)." },
+    // Speculative decoding
+    .{ .long = "draft-model", .kind = .option, .help = "Path to draft model for speculative decoding." },
+    .{ .long = "spec-tokens", .short = 'K', .kind = .option, .help = "Draft tokens per speculation round [default: 5]." },
+    .{ .long = "tree-budget", .kind = .option, .help = "DDTree node budget [default: 64]." },
+    .{ .long = "spec-mode", .kind = .option, .help = "Speculative mode: standard, ddtree, self [default: ddtree]." },
+    .{ .long = "draft-layers", .kind = .option, .help = "Layers for self-speculative draft [default: auto]." },
     // Diagnostics
     .{ .long = "verbose", .short = 'V', .help = "Show technical details (params, load times, EOG)." },
     .{ .long = "debug", .short = 'd', .help = "Enable debug logging (token IDs, layer timing); implies --verbose." },
@@ -370,6 +377,8 @@ const cli_specs = [_]cli_mod.ArgSpec{
     .{ .long = "megakernel", .help = "Use fused megakernel (single GPU dispatch per token)." },
     .{ .long = "profile", .help = "Profile per-op timing (halves throughput)." },
 };
+
+const SpecMode = enum { none, standard, ddtree, self_spec };
 
 const CliArgs = struct {
     model_path: []const u8,
@@ -413,6 +422,12 @@ const CliArgs = struct {
     image: ?[]const u8 = null,
     /// Enable fused megakernel for single-dispatch forward pass.
     megakernel: bool = false,
+    // Speculative decoding
+    draft_model_path: ?[]const u8 = null,
+    spec_tokens: u32 = 5,
+    tree_budget: u32 = 64,
+    spec_mode: SpecMode = .none,
+    draft_layers: ?u32 = null,
     /// Tracks which CLI args the user explicitly set (so recipes don't override them).
     user_set: Recipe.Overrides = .{},
 };
@@ -732,6 +747,22 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
         .prefill_batch_size = res.optionU32("prefill-batch-size") orelse default_chunk_size,
         .mmproj = res.option("mmproj"),
         .image = res.option("image"),
+        .draft_model_path = res.option("draft-model"),
+        .spec_tokens = res.optionU32("spec-tokens") orelse 5,
+        .tree_budget = res.optionU32("tree-budget") orelse 64,
+        .spec_mode = blk: {
+            const dm = res.option("draft-model");
+            const sm = res.option("spec-mode");
+            if (sm) |s| {
+                if (std.mem.eql(u8, s, "standard")) break :blk SpecMode.standard;
+                if (std.mem.eql(u8, s, "ddtree")) break :blk SpecMode.ddtree;
+                if (std.mem.eql(u8, s, "self")) break :blk SpecMode.self_spec;
+                eprint("Error: unknown --spec-mode '{s}' (expected: standard, ddtree, self)\n", .{s});
+                std.process.exit(1);
+            }
+            break :blk if (dm != null) SpecMode.ddtree else SpecMode.none;
+        },
+        .draft_layers = res.optionU32("draft-layers"),
         .user_set = .{
             .temperature = res.option("temperature") != null,
             .top_p = res.option("top-p") != null,
@@ -1614,7 +1645,64 @@ fn initAndRun(
             return false;
         };
     } else if (effective_prompt) |prompt| {
-        generateAndPrint(allocator, &model_if, tok, cli, tok_kind, eog, arch, prompt, !g_quiet, minfo, display, img_tokens, n_visual_tokens);
+        // ── Draft model loading (speculative decoding) ──────────────
+        var draft_gguf: ?GGUFFile = null;
+        var draft_st: ?SafeTensorsDir = null;
+        var draft_mdl_storage: ?ModelStorage = null;
+        defer {
+            if (draft_mdl_storage) |*dm| dm.deinit();
+            if (draft_gguf) |*g| g.deinit();
+            if (draft_st) |*s| s.deinit();
+        }
+
+        var draft_ptr: ?*Model = null;
+        var draft_model_if: Model = undefined;
+
+        if (cli.draft_model_path) |draft_path| {
+            const draft_is_dir = blk: {
+                const d = Io.Dir.cwd().openDir(g_io, draft_path, .{}) catch break :blk false;
+                d.close(g_io);
+                break :blk true;
+            };
+            var draft_fmt: Format = undefined;
+            if (draft_is_dir) {
+                draft_st = SafeTensorsDir.open(allocator, draft_path) catch |e| {
+                    eprint("Error: failed to open draft model '{s}': {}\n", .{ draft_path, e });
+                    return false;
+                };
+                draft_fmt = draft_st.?.format();
+            } else {
+                draft_gguf = GGUFFile.open(allocator, draft_path) catch |e| {
+                    eprint("Error: failed to open draft model '{s}': {}\n", .{ draft_path, e });
+                    return false;
+                };
+                draft_fmt = draft_gguf.?.format();
+            }
+            const draft_arch_str = draft_fmt.getMetaStr("general.architecture") orelse
+                draft_fmt.getMetaStr("model_type") orelse "unknown";
+            var draft_arch = Arch.detect(draft_arch_str) orelse {
+                eprint("Error: unsupported draft model architecture '{s}'\n", .{draft_arch_str});
+                return false;
+            };
+            if (draft_arch == .nemotron_h and draft_fmt.getTensor("backbone.embeddings.weight") != null)
+                draft_arch = .nemotron_nano;
+            if (!draft_arch.isEnabled()) {
+                eprint("Error: draft model arch {s} disabled at compile time\n", .{draft_arch.displayName()});
+                return false;
+            }
+            draft_mdl_storage = ModelStorage.initFromArch(draft_arch, allocator, draft_fmt, be, cli.ctx_size, .f16, .f16, 0, 0, null) catch |e| {
+                eprint("Error: failed to init draft model: {}\n", .{e});
+                return false;
+            };
+            draft_mdl_storage.?.setPool(pool);
+            draft_mdl_storage.?.fixBlockAllocator();
+            draft_model_if = draft_mdl_storage.?.model();
+            draft_ptr = &draft_model_if;
+            eprint("draft: {s} · {s}\n", .{ draft_arch.displayName(), Format.getQuantName(draft_fmt) });
+        } else if (cli.spec_mode != .none) {
+            draft_ptr = &model_if; // self-draft: same model for both
+        }
+        generateAndPrint(allocator, &model_if, tok, cli, tok_kind, eog, arch, prompt, !g_quiet, minfo, display, img_tokens, n_visual_tokens, draft_ptr);
     } else {
         runRepl(allocator, &model_if, tok, cli, tok_kind, eog, arch, minfo, display, img_tokens, n_visual_tokens, if (vision_enc != null) &vision_enc.? else null);
     }
@@ -1817,10 +1905,190 @@ fn generateAndPrint(
     display: Display,
     img_tokens: ?arch_mod.ImageTokens,
     n_visual_tokens: u32,
+    draft_model: ?*Model,
 ) void {
-    // One-shot mode: pass need_response=false to skip redundant full-sequence decode
-    const response = generateAndPrintInner(allocator, mdl, tok, cli, tok_kind, eog, arch.chatTemplate(), prompt, true, false, show_stats, minfo, display, false, img_tokens, n_visual_tokens);
-    if (response) |r| allocator.free(r);
+    if (draft_model) |dm| {
+        generateSpeculative(allocator, mdl, dm, tok, cli, tok_kind, eog, arch, prompt, show_stats);
+    } else {
+        const response = generateAndPrintInner(allocator, mdl, tok, cli, tok_kind, eog, arch.chatTemplate(), prompt, true, false, show_stats, minfo, display, false, img_tokens, n_visual_tokens);
+        if (response) |r| allocator.free(r);
+    }
+}
+
+fn generateSpeculative(
+    allocator: std.mem.Allocator,
+    target: *Model,
+    draft_model: *Model,
+    tok: *BpeTokenizer,
+    cli: *const CliArgs,
+    tok_kind: TokenizerKind,
+    eog: anytype,
+    arch: Arch,
+    prompt: []const u8,
+    show_stats: bool,
+) void {
+    const template = arch.chatTemplate();
+    const formatted = template.format(allocator, cli.system_prompt, prompt) catch @as([]const u8, prompt);
+    defer if (formatted.ptr != prompt.ptr) allocator.free(formatted);
+
+    const token_ids = switch (tok_kind) {
+        .spm => tok.encodeSpm(formatted),
+        .spm_no_dummy => tok.encodeSpmNoDummy(formatted),
+        .bpe => tok.encode(formatted),
+    } catch {
+        eprint("Error: tokenization failed\n", .{});
+        return;
+    };
+    defer allocator.free(token_ids);
+    if (token_ids.len == 0) {
+        eprint("Error: empty token sequence\n", .{});
+        return;
+    }
+
+    // Prepend BOS if needed (same as generateAndPrintInner)
+    var prefill_buf: ?[]u32 = null;
+    defer if (prefill_buf) |ids| allocator.free(ids);
+    const prefill_toks: []const u32 = blk: {
+        if (tok.bos_token_id > 0 and token_ids.len > 0) {
+            var all = allocator.alloc(u32, token_ids.len + 1) catch break :blk token_ids;
+            all[0] = tok.bos_token_id;
+            @memcpy(all[1..], token_ids);
+            prefill_buf = all;
+            break :blk all;
+        }
+        break :blk token_ids;
+    };
+
+    // Prefill both models with the prompt
+    const prefill_start = milliTimestamp(g_io);
+    var first_target = target.prefill(prefill_toks) catch |e| {
+        eprint("Error: target prefill failed: {}\n", .{e});
+        return;
+    };
+    // Only prefill draft model separately when it's a different model
+    if (target.ptr != draft_model.ptr) {
+        _ = draft_model.prefill(prefill_toks) catch |e| {
+            eprint("Error: draft prefill failed: {}\n", .{e});
+            return;
+        };
+    }
+    const prefill_ms = milliTimestamp(g_io) - prefill_start;
+
+    // Sampling setup
+    const use_sampling = cli.temperature > 0;
+    var prng = std.Random.Xoshiro256.init(cli.seed);
+    if (use_sampling) {
+        first_target = math_ops.sampleToken(target.getLogits(), cli.temperature, cli.top_k, cli.top_p, prng.random());
+    }
+
+    // Speculative generation loop
+    var spec_state = spec_decode.SpecState.init(allocator, cli.spec_tokens, target.vocabSize()) catch {
+        eprint("Error: failed to allocate speculative state\n", .{});
+        return;
+    };
+    defer spec_state.deinit(allocator);
+
+    const gen_start = milliTimestamp(g_io);
+    var last = first_target;
+    var token_count: u32 = 0;
+    var gen_ids_buf: [gen_ids_buf_size]u32 = undefined;
+    var batch_start: u32 = 0;
+    var started_output = false;
+    const batch_size: u32 = if (g_tty) tty_batch_size else pipe_batch_size;
+
+    if (!isEogToken(first_target, eog)) {
+        gen_ids_buf[0] = first_target;
+        token_count = 1;
+    }
+
+    const use_ddtree = (cli.spec_mode == .ddtree);
+    const self_spec = (cli.spec_mode == .self_spec);
+
+    // Self-speculative: auto-detect layer skip range (skip middle 50%)
+    const self_spec_skip_divisor = 4; // skip starts at 25% of layers
+    const self_spec_default_skip_fraction = 2; // skip 50% of layers by default
+    const skip_start: u32 = if (self_spec) target.nLayers() / self_spec_skip_divisor else 0;
+    const skip_end: u32 = if (self_spec) blk: {
+        const skip_count = cli.draft_layers orelse (target.nLayers() / self_spec_default_skip_fraction);
+        break :blk skip_start + skip_count;
+    } else 0;
+
+    while (token_count < cli.max_tokens and !isEogToken(last, eog)) {
+        const pre_draft_pos = target.kvSeqLen();
+
+        // Draft phase
+        if (self_spec) target.setLayerSkip(skip_start, skip_end);
+        const is_self_draft = (target.ptr == draft_model.ptr and !self_spec);
+        const n_drafted = if (is_self_draft and !use_sampling)
+            spec_decode.draft(&spec_state, draft_model, last)
+        else
+            spec_decode.draftWithLogits(&spec_state, draft_model, last);
+        if (self_spec) target.setLayerSkip(0, 0);
+        if (n_drafted == 0) break;
+
+        // Verify phase
+        const result = if (is_self_draft) blk: {
+            // Self-draft: draft == target, 100% acceptance. Get bonus token.
+            spec_state.recordRound(spec_state.n_draft);
+            const last_draft = spec_state.draft_tokens[spec_state.n_draft - 1];
+            const bonus = target.forward(last_draft) catch last_draft;
+            break :blk spec_decode.SpecResult{ .accepted = spec_state.n_draft, .next_token = bonus };
+        }
+        else if (use_ddtree or self_spec)
+            spec_decode.verifyDDTree(&spec_state, target, draft_model, last, cli.tree_budget, pre_draft_pos)
+        else if (use_sampling)
+            spec_decode.verifySampling(&spec_state, target, draft_model, last, pre_draft_pos, cli.temperature, prng.random())
+        else
+            spec_decode.verifySequential(&spec_state, target, draft_model, last, pre_draft_pos);
+
+        // Emit accepted draft tokens
+        var hit_eog = false;
+        for (0..result.accepted) |i| {
+            const accepted_tok = spec_state.draft_tokens[i];
+            if (token_count >= gen_ids_buf.len) break;
+            if (isEogToken(accepted_tok, eog)) { hit_eog = true; break; }
+            gen_ids_buf[token_count] = accepted_tok;
+            token_count += 1;
+        }
+
+        // Emit correction/bonus token
+        if (!hit_eog and token_count < gen_ids_buf.len) {
+            if (isEogToken(result.next_token, eog)) {
+                hit_eog = true;
+            } else {
+                gen_ids_buf[token_count] = result.next_token;
+                token_count += 1;
+            }
+        }
+        last = if (hit_eog) target.eosId() else result.next_token;
+
+        // Stream
+        if (token_count - batch_start >= batch_size) {
+            flushTokenBatch(tok, tok_kind, allocator, gen_ids_buf[batch_start..@min(token_count, gen_ids_buf.len)], &started_output);
+            batch_start = token_count;
+        }
+    }
+
+    // Flush remaining
+    if (token_count > batch_start and token_count <= gen_ids_buf.len) {
+        flushTokenBatch(tok, tok_kind, allocator, gen_ids_buf[batch_start..token_count], &started_output);
+    }
+    if (!g_tty and started_output) {
+        _ = std.c.write(stdout_file.handle, "\n", 1);
+    }
+
+    const gen_ms = milliTimestamp(g_io) - gen_start;
+    if (show_stats) {
+        const gen_toks = if (token_count > 0) token_count else 1;
+        const tok_per_sec = if (gen_ms > 0) @as(f32, @floatFromInt(gen_toks)) / @as(f32, @floatFromInt(gen_ms)) * 1000.0 else 0;
+        eprint("\n{d} tok · {d:.1} tok/s · {d}ms prefill · spec: {d:.0}% accept ({d:.1} mean)\n", .{
+            gen_toks,
+            tok_per_sec,
+            prefill_ms,
+            spec_state.acceptanceRate() * 100,
+            spec_state.meanAccepted(),
+        });
+    }
 }
 
 /// Core generation: formats (or uses pre-formatted) prompt, prefills, generates, streams output.
@@ -2144,6 +2412,9 @@ test {
     _ = @import("backend/kernels/cpu/gemv_q5_k.zig");
     _ = @import("backend/kernels/cpu/gemv_q6_k.zig");
     _ = @import("backend/kernels/cpu/gemv_q8_0.zig");
+    _ = @import("spec/spec_decode.zig");
+    _ = @import("spec/ddtree.zig");
+    _ = @import("backend/kernels/cpu/sdpa_tree.zig");
 }
 
 test "cpu backend rms_norm via tagged union dispatch" {

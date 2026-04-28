@@ -345,6 +345,10 @@ pub const NullBackend = struct {
         unreachable;
     }
 
+    pub fn sdpaTree(_: *NullBackend, _: [*]const f32, _: [*]const u8, _: [*]const u8, _: [*]const f32, _: [*]const f32, _: [*]f32, _: [*]const [8]u64, _: usize, _: usize, _: usize, _: usize, _: u32, _: f32, _: KvQuantType, _: KvQuantType) void {
+        unreachable;
+    }
+
     pub fn gemvNvfp4St(_: *NullBackend, _: [*]const f32, _: [*]const u8, _: [*]const u8, _: [*]f32, _: usize, _: usize) void {
         unreachable;
     }
@@ -667,6 +671,14 @@ pub const Backend = union(enum) {
     pub inline fn sdpaWithStats(self: Backend, q: [*]const f32, keys: []u8, values: []u8, k_new: [*]const f32, v_new: [*]const f32, output: [*]f32, head_max: [*]f32, head_sum: [*]f32, nh: usize, nkv: usize, hd: usize, seq_len: usize, scale: f32, kv_type_k: KvQuantType, kv_type_v: KvQuantType) void {
         switch (self) {
             inline else => |be| be.sdpaWithStats(q, keys, values, k_new, v_new, output, head_max, head_sum, nh, nkv, hd, seq_len, scale, kv_type_k, kv_type_v),
+        }
+    }
+
+    /// Tree-masked SDPA for DDTree speculative decoding verification.
+    /// Prefix KV can be quantized (u8 byte array). Tree KV is always f32.
+    pub inline fn sdpaTree(self: Backend, q_all: [*]const f32, prefix_keys: [*]const u8, prefix_values: [*]const u8, tree_keys: [*]const f32, tree_values: [*]const f32, output: [*]f32, ancestor_masks: [*]const [8]u64, nh: usize, nkv: usize, hd: usize, prefix_len: usize, n_nodes: u32, scale: f32, kv_type_k: KvQuantType, kv_type_v: KvQuantType) void {
+        switch (self) {
+            inline else => |be| be.sdpaTree(q_all, prefix_keys, prefix_values, tree_keys, tree_values, output, ancestor_masks, nh, nkv, hd, prefix_len, n_nodes, scale, kv_type_k, kv_type_v),
         }
     }
 

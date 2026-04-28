@@ -175,6 +175,32 @@ image_pad_token_id: u32 = 0,
 visual_token_idx: u32 = 0,
 ```
 
+## How to Add Speculative Decoding Support to a New Model
+
+Layer skip for self-speculative mode is automatic — the `layer_skip_start`/`layer_skip_end` fields and the skip check in `forward()` are required in every model. The pattern is:
+
+```zig
+// In model struct:
+layer_skip_start: u32 = 0,
+layer_skip_end: u32 = 0,
+
+// In forward() layer loop:
+for (0..self.n_layers) |li| {
+    const l: u32 = @intCast(li);
+    if (l >= self.layer_skip_start and l < self.layer_skip_end) continue;
+    // ... layer computation
+}
+```
+
+The `Model` VTable provides `setLayerSkip(start, end)` via `@hasField` detection — no manual wiring needed.
+
+For tree attention support (`forwardTree`), implement a batch forward that:
+1. Processes B queries through all layers with position IDs (not sequential)
+2. Uses `be.sdpaTree()` instead of `be.sdpa()` for ancestor-masked attention
+3. Writes B logit vectors to a tree logits buffer
+
+See `src/spec/ddtree.zig` for the tree construction algorithm and `src/backend/kernels/cpu/sdpa_tree.zig` for the tree SDPA kernel.
+
 ## How to Debug Performance Regressions
 
 1. **Profile per-op timing**: `./zig-out/bin/agave model.gguf --profile "prompt"` (adds GPU syncs, ~50% throughput loss)

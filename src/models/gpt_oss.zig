@@ -132,6 +132,8 @@ pub const GptOssModel = struct {
     kv_type_v: kv_quant.KvQuantType = .f32,
     /// Number of tokens currently stored in the KV cache.
     kv_seq_len: usize = 0,
+    layer_skip_start: u32 = 0,
+    layer_skip_end: u32 = 0,
     /// Set to true to abort a running `forward` call from another thread.
     cancelled: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
     /// Enable fused megakernel for single-dispatch forward pass.
@@ -304,9 +306,11 @@ pub const GptOssModel = struct {
 
         for (0..self.n_layers) |li| {
             if (self.cancelled.load(.monotonic)) return error.Cancelled;
+            const l: u32 = @intCast(li);
+            if (l >= self.layer_skip_start and l < self.layer_skip_end) continue;
             self.fmt.prefetchLayer(@intCast(li + 1));
-            try self.attentionLayer(@intCast(li));
-            try self.moeLayer(@intCast(li));
+            try self.attentionLayer(l);
+            try self.moeLayer(l);
         }
 
         // Final norm → LM head → argmax.

@@ -16,6 +16,7 @@ const rope_kernel = @import("kernels/cpu/rope.zig");
 const activation_kernel = @import("kernels/cpu/activation.zig");
 const elementwise_kernel = @import("kernels/cpu/elementwise.zig");
 const sdpa_kernel = @import("kernels/cpu/sdpa.zig");
+const sdpa_tree_kernel = @import("kernels/cpu/sdpa_tree.zig");
 const deltanet_kernel = @import("kernels/cpu/deltanet.zig");
 
 // ── Buffer sizes for system detection ─────────────────────────────
@@ -880,6 +881,12 @@ pub const CpuBackend = struct {
             }
         }
     };
+
+    /// Tree-masked SDPA for DDTree speculative decoding verification.
+    /// Processes n_nodes tree queries against shared prefix KV + masked tree KV.
+    pub fn sdpaTree(_: *CpuBackend, q_all: [*]const f32, prefix_keys: [*]const u8, prefix_values: [*]const u8, tree_keys: [*]const f32, tree_values: [*]const f32, output: [*]f32, ancestor_masks: [*]const [8]u64, nh: usize, nkv: usize, hd: usize, prefix_len: usize, n_nodes: u32, scale: f32, kv_type_k: KvQuantType, kv_type_v: KvQuantType) void {
+        sdpa_tree_kernel.sdpaTree(q_all, prefix_keys, prefix_values, tree_keys, tree_values, output, ancestor_masks, nh, nkv, hd, prefix_len, n_nodes, scale, kv_type_k, kv_type_v);
+    }
 
     /// DeltaNet SSM recurrence: conv1d + L2 norm + recurrence + gated output.
     /// When a thread pool is available, parallelizes across v-heads.

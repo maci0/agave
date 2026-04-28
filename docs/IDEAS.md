@@ -41,42 +41,24 @@ A reasonable approach would be a `ModelBuilder` in model.zig with:
 
 Estimated savings: ~600 lines across 7 models. Estimated effort: 2-3 days.
 
-## Speculative Decoding
+## Speculative Decoding — IMPLEMENTED
 
-Current decode is autoregressive — one forward pass per token through the full model.
-Speculative decoding uses a small draft model to predict N tokens cheaply, then verifies
-all N in a single forward pass of the large target model. Accepted tokens are free;
-rejected tokens cost only the wasted draft computation. Typical speedup: 2-3× with no
-quality loss (output distribution is mathematically identical to the target model).
+**Status: Complete.** See `src/spec/` for implementation, [tutorial 17](tutorial/17-speculative-decoding.md) for details.
 
-### How it works
-1. Draft model generates N candidate tokens autoregressively (fast, small model)
-2. Target model runs one forward pass on all N candidates (parallel verification)
-3. Compare draft and target distributions at each position. Accept token i if
-   `r < P_target(t_i) / P_draft(t_i)` (rejection sampling). First rejection at
-   position k → accept tokens 0..k-1, resample position k from adjusted distribution.
-4. Repeat from the last accepted position
+Three modes available:
+- `--draft-model path` — separate smaller draft model (best speedup with matched families)
+- `--spec-mode ddtree` — DDTree tree-structured draft with best-first heap (Ringel & Romano, 2026)
+- `--spec-mode self` — self-speculative via layer skipping (no extra model needed)
 
-### Architecture
-- Load two models simultaneously: target (main) and draft (small variant or same
-  architecture with fewer layers / smaller hidden dim)
-- Both models need independent KV caches that stay in sync (rollback draft cache on
-  rejection, advance target cache on acceptance)
-- Draft model can be: same family smaller variant (e.g., 1B drafts for 8B target),
-  same model with early-exit after N layers, or a separate lightweight model
-- `--draft-model <path>` CLI flag to specify draft model path
-- `--draft-tokens <N>` to control speculation depth (default: 5)
-
-### Considerations
-- Memory: two models loaded simultaneously — draft model should be small enough that
-  the combined VRAM fits. Quantized drafts help.
-- Acceptance rate depends on draft/target agreement — higher for similar model families
-- Not beneficial for very short generations (overhead of running two models)
-- Requires batch prefill for efficient verification pass
+### Future optimizations
+- Native Metal/CUDA tree SDPA kernel (currently CPU fallback for tree attention)
+- True batch `forwardTree()` for single-pass verification (currently sequential forward calls)
+- Rejection sampling for non-greedy (temperature > 0) decoding
 
 ### References
 - [Fast Inference from Transformers via Speculative Decoding (Leviathan et al., 2023)](https://arxiv.org/abs/2211.17192)
 - [SpecInfer: Accelerating LLM Serving with Tree-based Speculative Inference (Miao et al., 2024)](https://arxiv.org/abs/2305.09781)
+- [DDTree: Accelerating Speculative Decoding with Block Diffusion Draft Trees (Ringel & Romano, 2026)](https://arxiv.org/abs/2604.12989)
 
 ## Structured Output / Grammar-Constrained Decoding
 

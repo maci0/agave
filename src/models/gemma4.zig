@@ -275,6 +275,8 @@ pub const Gemma4Model = struct {
     /// Scratch buffer for eviction keep mask [max_seq_len].
     eviction_keep: []bool = &.{},
     kv_seq_len: usize = 0,
+    layer_skip_start: u32 = 0,
+    layer_skip_end: u32 = 0,
     cancelled: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
     max_seq_len: usize = 4096,
     perf: perf.PerfCounters = .{},
@@ -855,10 +857,11 @@ pub const Gemma4Model = struct {
 
         for (0..self.n_layers) |li| {
             if (self.cancelled.load(.monotonic)) return error.Cancelled;
+            const l: u32 = @intCast(li);
+            if (l >= self.layer_skip_start and l < self.layer_skip_end) continue;
             self.fmt.prefetchLayer(@intCast(li + 1));
-
-            try self.attention(@intCast(li));
-            try self.dualFfnLayer(@intCast(li));
+            try self.attention(l);
+            try self.dualFfnLayer(l);
         }
 
         // Final RMSNorm → LM head → softcap → argmax

@@ -93,6 +93,8 @@ pub const Glm4Model = struct {
     kv_type_k: kv_quant.KvQuantType = .f32,
     kv_type_v: kv_quant.KvQuantType = .f32,
     kv_seq_len: usize = 0,
+    layer_skip_start: u32 = 0,
+    layer_skip_end: u32 = 0,
     cancelled: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
     /// Enable fused megakernel for single-dispatch forward pass.
     megakernel_enabled: bool = false,
@@ -243,8 +245,9 @@ pub const Glm4Model = struct {
 
         for (0..self.n_layers) |li| {
             if (self.cancelled.load(.monotonic)) return error.Cancelled;
-            self.fmt.prefetchLayer(@intCast(li + 1));
             const l: u32 = @intCast(li);
+            if (l >= self.layer_skip_start and l < self.layer_skip_end) continue;
+            self.fmt.prefetchLayer(@intCast(li + 1));
             try self.mlaAttention(l);
             if (li < self.first_k_dense_replace) {
                 try self.denseFfn(l);

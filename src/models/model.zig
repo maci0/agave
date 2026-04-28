@@ -55,6 +55,8 @@ pub const Model = struct {
     pub const VTable = struct {
         forward: *const fn (self: *anyopaque, token_id: u32) ForwardError!u32,
         prefill: *const fn (self: *anyopaque, token_ids: []const u32) ForwardError!u32,
+        forward_tree: *const fn (self: *anyopaque, token_ids: []const u32, position_ids: []const u32, ancestor_masks: [*]const [8]u64, n_nodes: u32) ForwardError!void,
+        tree_logits: *const fn (self: *anyopaque, node_i: u32) u32,
         reset_cache: *const fn (self: *anyopaque) void,
         cancel: *const fn (self: *anyopaque) void,
         get_eos_id: *const fn (self: *anyopaque) u32,
@@ -66,6 +68,8 @@ pub const Model = struct {
         get_logits: *const fn (self: *anyopaque) []f32,
         get_block_table: *const fn (self: *anyopaque) []const u32,
         get_kv_seq_len: *const fn (self: *anyopaque) usize,
+        set_kv_seq_len: *const fn (self: *anyopaque, len: usize) void,
+        set_layer_skip: *const fn (self: *anyopaque, start: u32, end: u32) void,
         set_image_embeddings: *const fn (self: *anyopaque, embeddings: ?[]const f32, n_tokens: u32, pad_token_id: u32) void,
     };
 
@@ -88,6 +92,20 @@ pub const Model = struct {
             .prefill = @ptrCast(&struct {
                 fn call(self: *T, token_ids: []const u32) ForwardError!u32 {
                     return self.prefill(token_ids);
+                }
+            }.call),
+            .forward_tree = @ptrCast(&struct {
+                fn call(self: *T, token_ids: []const u32, position_ids: []const u32, ancestor_masks: [*]const [8]u64, n_nodes: u32) ForwardError!void {
+                    if (comptime @hasDecl(T, "forwardTree"))
+                        return self.forwardTree(token_ids, position_ids, ancestor_masks, n_nodes);
+                    return error.MissingTensor;
+                }
+            }.call),
+            .tree_logits = @ptrCast(&struct {
+                fn call(self: *T, node_i: u32) u32 {
+                    if (comptime @hasDecl(T, "treeLogits"))
+                        return self.treeLogits(node_i);
+                    return 0;
                 }
             }.call),
             .reset_cache = @ptrCast(&struct {
@@ -145,6 +163,19 @@ pub const Model = struct {
                     return self.kv_seq_len;
                 }
             }.call),
+            .set_kv_seq_len = @ptrCast(&struct {
+                fn call(self: *T, len: usize) void {
+                    self.kv_seq_len = len;
+                }
+            }.call),
+            .set_layer_skip = @ptrCast(&struct {
+                fn call(self: *T, start: u32, end: u32) void {
+                    if (comptime @hasField(T, "layer_skip_start")) {
+                        self.layer_skip_start = start;
+                        self.layer_skip_end = end;
+                    }
+                }
+            }.call),
             .set_image_embeddings = @ptrCast(&struct {
                 fn call(self: *T, embeddings: ?[]const f32, n_tokens: u32, pad_token_id: u32) void {
                     if (comptime @hasField(T, "image_embeddings")) {
@@ -179,6 +210,18 @@ pub const Model = struct {
     /// populating the KV cache. Returns the predicted next-token ID.
     pub fn prefill(self: Model, token_ids: []const u32) ForwardError!u32 {
         return self.vtable.prefill(self.ptr, token_ids);
+    }
+
+    /// Batch tree forward: process B tree nodes through all layers using batched
+    /// GEMM and tree-masked SDPA. Does NOT modify the main KV cache.
+    /// After this call, use `treeLogits(node_i)` to compute logits per node.
+    pub fn forwardTree(self: Model, token_ids: []const u32, position_ids: []const u32, ancestor_masks: [*]const [8]u64, n_nodes: u32) ForwardError!void {
+        return self.vtable.forward_tree(self.ptr, token_ids, position_ids, ancestor_masks, n_nodes);
+    }
+
+    /// Compute logits for a specific tree node (after forwardTree). Returns argmax.
+    pub fn treeLogits(self: Model, node_i: u32) u32 {
+        return self.vtable.tree_logits(self.ptr, node_i);
     }
 
     /// Return the raw logits buffer from the last forward() call.
@@ -238,6 +281,19 @@ pub const Model = struct {
     /// Return the current KV cache sequence length (number of tokens processed).
     pub fn kvSeqLen(self: Model) usize {
         return self.vtable.get_kv_seq_len(self.ptr);
+    }
+
+    /// Roll back KV cache position for speculative decoding rejection.
+    /// Safe because paged blocks stay allocated and are overwritten on next forward().
+    pub fn setKvSeqLen(self: Model, len: usize) void {
+        self.vtable.set_kv_seq_len(self.ptr, len);
+    }
+
+    /// Enable layer skipping for self-speculative draft mode.
+    /// Layers in [start, end) are skipped during forward().
+    /// Call with (0, 0) to disable.
+    pub fn setLayerSkip(self: Model, start: u32, end: u32) void {
+        self.vtable.set_layer_skip(self.ptr, start, end);
     }
 
     /// Set visual token embeddings for multimodal inference.

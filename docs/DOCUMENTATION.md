@@ -22,6 +22,7 @@ A progressive tutorial series that builds understanding layer by layer:
 14. [Format Conventions](tutorial/14-format-conventions.md) — GGUF vs SafeTensors, tensor layout
 15. [Chat Templates](tutorial/15-chat-templates.md) — data-driven role markers, EOG tokens
 16. [Recipe System](tutorial/16-recipe-system.md) — per-model/hardware defaults, user overrides
+17. [Speculative Decoding & DDTree](tutorial/17-speculative-decoding.md) — draft models, tree construction, self-speculative
 
 **Appendices:**
 - [Mathematical Operations Reference](tutorial/appendix-math.md) — dot product, softmax, GEMV, convolution

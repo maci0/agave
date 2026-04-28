@@ -206,6 +206,17 @@ User CLI flags always override recipe defaults.
 | `groupRmsNormSiluGate` | ssm.zig | Group RMS norm followed by SiLU gate |
 | `expertWeightStride` | model.zig | Byte stride between experts in packed weights |
 
+### Speculative Decoding (`src/spec/`)
+
+| Module | Description |
+|--------|-------------|
+| `spec_decode.zig` | Orchestrator: draft, verify, generation loop (standard + DDTree modes) |
+| `ddtree.zig` | DDTree tree construction: best-first heap, compile, acceptance walk |
+
+| Backend Kernel | Description |
+|----------------|-------------|
+| `sdpa_tree.zig` | Tree-masked SDPA: ancestor bitmask attention for tree verification |
+
 ### Quantization Types
 
 | DType | Bits/val | Block | Models |

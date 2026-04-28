@@ -134,6 +134,8 @@ pub const Qwen35Model = struct {
     /// Number of boundary layers (first/last N) that use f16 V to protect attention quality.
     kv_boundary_v: u32 = 0,
     kv_seq_len: usize = 0,
+    layer_skip_start: u32 = 0,
+    layer_skip_end: u32 = 0,
     cancelled: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
     perf: perf.PerfCounters = .{},
 
@@ -1156,8 +1158,9 @@ pub const Qwen35Model = struct {
 
         for (0..self.n_layers) |li| {
             if (self.cancelled.load(.monotonic)) return error.Cancelled;
-            self.fmt.prefetchLayer(@intCast(li + 1));
             const l: u32 = @intCast(li);
+            if (l >= self.layer_skip_start and l < self.layer_skip_end) continue;
+            self.fmt.prefetchLayer(@intCast(li + 1));
             const fuse = li > 0 and !self.is_moe;
             if (self.isFullAttn(l)) try self.fullAttnLayer(l, fuse) else try self.deltaNetLayer(l, fuse);
             if (self.is_moe) {
