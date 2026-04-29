@@ -903,21 +903,15 @@ pub const Gemma4Model = struct {
         const has_image = self.image_embeddings != null and pad_id != 0 and self.n_visual_tokens > 0;
 
         // Check if GEMM is available for this model's weight dtype.
-        // GEMM kernels exist for f32, bf16, f16, q8_0, q4_0.
-        // Others (q4_k, q5_k, q6_k, mlx_q) fall back to sequential GEMV.
+        // MLX-quantized weights fall back to sequential GEMV (no GEMM kernel).
         const emb_dtype = (self.fmt.getTensor("token_embd.weight") orelse return error.MissingTensor).dtype;
-        // TODO: batched prefill has correctness bug (wrong output for Q4_K).
         const has_gemm = switch (emb_dtype) {
             .f32, .bf16, .f16, .q8_0, .q4_0, .q4_k, .q5_k, .q6_k => true,
             else => false,
         };
         const cs: usize = if (has_gemm) self.chunk_size else 1;
 
-        // If images, MoE, PLE, no GEMM, or chunk_size <= 1, fall back to sequential.
-        // Batched prefill has correctness issue — produces wrong output tokens.
-        // Root cause: GEMM fallback to per-token GEMV for Q4_K combined with
-        // batched rmsNorm/RoPE/residual produces divergent hidden states.
-        // All current Gemma 4 E2B/E4B models have PLE, so this gate catches them.
+        // Fall back to sequential for: images, MoE, PLE, no GEMM, or single token.
         if (has_image or self.n_experts > 0 or self.ple_dim > 0 or cs <= 1 or token_ids.len == 1) {
             var last: u32 = 0;
             var i: usize = 0;
@@ -1276,10 +1270,8 @@ pub const Gemma4Model = struct {
     /// GEMM dispatch: Y[n_tok, n_out] = X[n_tok, n_in] @ W[n_out, n_in]^T.
     /// Falls back to sequential GEMV for MLX-quantized weights.
     fn doGemm(self: *Gemma4Model, x: [*]const f32, t: TensorInfo, y: [*]f32, n_tok: usize, n_out: usize, n_in: usize) void {
-        // GEMM supported for f32, bf16, f16, q8_0, q4_0 on Metal.
-        // Others (q4_k, q5_k, q6_k, mlx_q) fall back to per-token GEMV.
         switch (t.dtype) {
-            .f32, .bf16, .f16, .q8_0, .q4_0 => {
+            .f32, .bf16, .f16, .q8_0, .q4_0, .q4_k, .q5_k, .q6_k => {
                 self.be.gemm(x, .{ .data = t.data_ptr, .dtype = t.dtype }, y, n_tok, n_out, n_in);
             },
             else => {

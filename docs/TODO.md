@@ -8,11 +8,11 @@ Comprehensive list of bugs, missing features, and improvement opportunities.
 
 ## Bugs
 
-| # | Issue | File | Severity |
-|---|-------|------|----------|
-| 1 | Gemma 4 Q4_K batched prefill produces wrong output | `src/models/gemma4.zig:909` | High |
-| 2 | GLM-4.7 Flash — degenerate output (also broken in llama.cpp, likely bad GGUF conversion) | `src/models/glm4.zig` | Low (upstream) |
-| 3 | CI/Dockerfile pin Zig 0.15.2 but codebase uses Zig 0.16.0 APIs | `.github/workflows/`, `Dockerfile` | Critical |
+| # | Issue | File | Severity | Status |
+|---|-------|------|----------|--------|
+| 1 | ~~Gemma 4 Q4_K batched prefill produces wrong output~~ | `src/models/gemma4.zig` | ~~High~~ | **Fixed** — doGemm was missing Q4_K/Q5_K/Q6_K dispatch to backend GEMM |
+| 2 | GLM-4.7 Flash — degenerate output (also broken in llama.cpp, likely bad GGUF conversion) | `src/models/glm4.zig` | Low (upstream) | Won't fix |
+| 3 | ~~CI/Dockerfile pin Zig 0.15.2 but codebase uses Zig 0.16.0 APIs~~ | `.github/workflows/`, `Dockerfile` | ~~Critical~~ | **Fixed** |
 
 ---
 
