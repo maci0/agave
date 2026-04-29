@@ -1,6 +1,6 @@
 # Kernel Implementation Status
 
-**Last Updated**: 2026-04-17
+**Last Updated**: 2026-04-29
 
 This document tracks the implementation status of all compute kernels across backends. Each kernel can be:
 - **Native**: Fully implemented on the target hardware (GPU shader or optimized CPU SIMD)
@@ -13,41 +13,41 @@ This document tracks the implementation status of all compute kernels across bac
 
 ## Compute Operations
 
-| Operation | CPU | Metal | Vulkan | CUDA | ROCm |
-| :--- | :---: | :---: | :---: | :---: | :---: |
-| RMS Norm | Native (SIMD) | Native (fused) | Native (fused) | Native | Native |
-| RMS Norm Multi (per-head) | Native | Native | Missing | Native | Disabled⁸ |
-| L2 Norm | Native (SIMD) | Native | Native (fused) | Native | Native |
-| Softmax | Native (SIMD) | Native (3-pass) | Native (fused) | Native | Native |
-| SiLU | Native (SIMD) | Native | Native | Native | Native |
-| SiLU Mul (fused) | Native | Native | Missing | Native | Native |
-| GELU | Native (SIMD) | Native | Native | Native | Native |
-| Add | Native (SIMD) | Native | Native | Native | Native |
-| Mul | Native (SIMD) | Native | Native | Native | Native |
-| Add+RmsNorm (fused) | Native (fused) | Native (fused) | Sequential⁴ | Native (fused) | Sequential⁴ |
-| Add Scaled | Native | Native | CPU perf | Native | CPU perf |
-| GEMV Transposed (Q8_0) | Native | Native | Missing | Native | Missing |
-| RoPE | Native (SIMD) | Native | Native | Native | Native |
-| Sigmoid Mul | Native | Native | Missing | Native | Native |
-| GELU Mul (fused) | Native | Native | Native | Native | Missing |
-| Deinterleave | Native | Native | Missing | Native | Native |
-| Embedding Lookup | Native | CPU perf¹ | Native (f32) | CPU perf¹ | CPU perf¹ |
-| SDPA (FlashAttn-2) | Native (SIMD) | Native² | Native | Native | Native |
-| SDPA with Stats (`sdpaWithStats`) | Native (SIMD) | CPU delegate⁷ | CPU delegate⁷ | CPU delegate⁷ | CPU delegate⁷ |
-| SDPA Tree (DDTree verify) | Native (SIMD) | CPU delegate | CPU delegate | CPU delegate | CPU delegate |
-| Paged SDPA | Missing | Missing | Missing | Missing | Missing |
-| Causal Conv1d | Native | Native (DeltaNet) | Native³ | Missing | Missing |
-| DeltaNet (4 kernels) | Native | Native | Missing | CPU delegate⁶ | Missing |
-| Argmax / Final Logits | Native | CPU perf | CPU perf | CPU perf | CPU perf |
-| **Batched Prefill Ops** | | | | | |
-| GEMM (batched matmul) | Native (SIMD) | Native (f32/Q8_0/Q4_0/BF16) | Loop-of-GEMV | Native (Q8_0) | Loop-of-GEMV |
-| RMS Norm Batched | Native | Native (fused) | Loop-of-single | Native | Loop-of-single |
-| RoPE Batched | Native | Native | Loop-of-single | Native | Loop-of-single |
-| SDPA Prefill (causal FA2) | Native (SIMD) | Native (dual-source FA2) | Loop-of-SDPA | Native | Loop-of-SDPA |
-| **Fused FFN (Megakernel Tier 1)** | | | | | |
-| Fused Gate+Up+SiLU (Q8_0) | N/A | Native | N/A | Native | N/A |
-| Fused Gate+Up+SiLU (Q4_K/Q5_K/Q6_K/Q4_0/MLX_Q4) | N/A | Native | N/A | Missing | N/A |
-| Fused Gate+Up+GELU (Q8_0/Q4_K/Q5_K/Q6_K/Q4_0) | N/A | Native | N/A | Missing | N/A |
+| Operation | CPU | Metal | Vulkan | CUDA | ROCm | WebGPU |
+| :--- | :---: | :---: | :---: | :---: | :---: | :---: |
+| RMS Norm | Native (SIMD) | Native (fused) | Native (fused) | Native | Native | Native |
+| RMS Norm Multi (per-head) | Native | Native | Native | Native | Native | Missing |
+| L2 Norm | Native (SIMD) | Native | Native (fused) | Native | Native | Missing |
+| Softmax | Native (SIMD) | Native (3-pass) | Native (fused) | Native | Native | Native |
+| SiLU | Native (SIMD) | Native | Native | Native | Native | Native |
+| SiLU Mul (fused) | Native | Native | Native | Native | Native | Native |
+| GELU | Native (SIMD) | Native | Native | Native | Native | Native |
+| Add | Native (SIMD) | Native | Native | Native | Native | Native |
+| Mul | Native (SIMD) | Native | Native | Native | Native | Native |
+| Add+RmsNorm (fused) | Native (fused) | Native (fused) | Sequential⁴ | Native (fused) | Sequential⁴ | Missing |
+| Add Scaled | Native | Native | CPU perf | Native | CPU perf | Missing |
+| GEMV Transposed (Q8_0) | Native | Native | Missing | Native | Missing | Missing |
+| RoPE | Native (SIMD) | Native | Native | Native | Native | Native |
+| Sigmoid Mul | Native | Native | Native | Native | Native | Missing |
+| GELU Mul (fused) | Native | Native | Native | Native | Missing | Native |
+| Deinterleave | Native | Native | Native | Native | Native | Missing |
+| Embedding Lookup | Native | CPU perf¹ | Native (f32) | CPU perf¹ | CPU perf¹ | Native |
+| SDPA (FlashAttn-2) | Native (SIMD) | Native² | Native | Native | Native | Missing |
+| SDPA with Stats (`sdpaWithStats`) | Native (SIMD) | CPU delegate⁷ | CPU delegate⁷ | CPU delegate⁷ | CPU delegate⁷ | Missing |
+| SDPA Tree (DDTree verify) | Native (SIMD) | Native (f32 + turbo) | CPU delegate | CPU delegate | CPU delegate | Missing |
+| Paged SDPA | Missing | Missing | Missing | Missing | Missing | Missing |
+| Causal Conv1d | Native | Native (DeltaNet) | Native³ | Missing | Missing | Missing |
+| DeltaNet (4 kernels) | Native | Native | Missing | CPU delegate⁶ | Missing | Missing |
+| Argmax / Final Logits | Native | CPU perf | CPU perf | CPU perf | CPU perf | Missing |
+| **Batched Prefill Ops** | | | | | | |
+| GEMM (batched matmul) | Native (SIMD) | Native (f32/Q8_0/Q4_0/BF16) | Loop-of-GEMV | Native (Q8_0) | Loop-of-GEMV | Missing |
+| RMS Norm Batched | Native | Native (fused) | Loop-of-single | Native | Loop-of-single | Missing |
+| RoPE Batched | Native | Native | Loop-of-single | Native | Loop-of-single | Missing |
+| SDPA Prefill (causal FA2) | Native (SIMD) | Native (dual-source FA2) | Loop-of-SDPA | Native | Loop-of-SDPA | Missing |
+| **Fused FFN (Megakernel Tier 1)** | | | | | | |
+| Fused Gate+Up+SiLU (Q8_0) | N/A | Native | N/A | Native | N/A | N/A |
+| Fused Gate+Up+SiLU (Q4_K/Q5_K/Q6_K/Q4_0/MLX_Q4) | N/A | Native | N/A | Missing | N/A | N/A |
+| Fused Gate+Up+GELU (Q8_0/Q4_K/Q5_K/Q6_K/Q4_0) | N/A | Native | N/A | Missing | N/A | N/A |
 
 ¹ Single-row table read — CPU memcpy is faster than GPU dispatch + sync overhead.
 ² Metal FlashAttention-2 with block_size=16 (fits 32KB threadgroup memory). Online softmax, no blit encoders. **Sparse V threshold** (1e-6) is applied in all GPU SDPA kernels (Metal, CUDA, ROCm): positions where the softmax weight falls below the threshold skip V dequantization entirely, yielding +22.8% decode speed at 32K context with zero measured PPL impact. The CPU windowed-attention fallback path (`src/ops/attention.zig`) also uses sparse V dequantization.
@@ -56,7 +56,7 @@ This document tracks the implementation status of all compute kernels across bac
 ⁵ ROCm kernel file exists (`gemv_mlx_q4.zig`) but backend panics — not yet integrated.
 ⁶ CPU delegate: functional but delegates to CPU backend (no native GPU kernel yet).
 ⁷ GPU backends sync then delegate to CPU SDPA kernel. Used by tiered KV cache split-attention (`--kv-tiers vram+ram`) to compute per-head softmax stats (max, sum) for online merge across tiers.
-⁸ ROCm GPU kernel exists (`rms_norm_multi.zig`) but disabled — needs validation before enabling.
+⁸ Removed — ROCm rmsNormMulti now enabled and validated.
 
 ## True Megakernels (Tier 2)
 
@@ -99,28 +99,28 @@ The composer automatically selects the correct GEMV function (Q8_0/Q4_K/Q5_K/Q6_
 
 **NR multi-row optimization** is applied across all backends and quant formats. Each kernel computes NR output rows per thread/threadgroup, amortizing input vector loads. CPU: all formats use NR=2. Metal: Q4_K/Q5_K/Q6_K use NR=2; Q4_0/Q8_0 use NR=4; Q2_K/Q3_K/BF16/F16 use NR=2. CUDA: Q4_K/Q5_K/Q6_K use NR=2; Q4_0/Q8_0 use NR=4. ROCm: Q4_K/Q5_K/Q6_K use NR=2; Q4_0/Q8_0 use NR=4.
 
-| Data Type | CPU | Metal | Vulkan | CUDA | ROCm |
-| :--- | :---: | :---: | :---: | :---: | :---: |
-| f32 | Native (SIMD) | Native | Native | Native | Native |
-| f16 | Native (SIMD) | Native | Native | Native | Native |
-| bf16 | Native (SIMD) | Native | Native | Native | Native |
-| q8_0 | Native (SIMD) | Native | Native | Native | Native |
-| q4_0 | Native (SIMD) | Native | Native | Native | Native |
-| q4_1 | Native (SIMD) | Native | Missing | Native | Missing |
-| q5_0 | Native (SIMD) | Native | Missing | Missing | Missing |
-| q4_k | Native (SIMD) | Native | Native | Native | Native |
-| q5_k | Native (SIMD) | Native | Native | Native | Native |
-| q6_k | Native (SIMD) | Native | Native | Native | Native |
-| q2_k | Native (SIMD) | Native | Missing | Missing | Missing |
-| q3_k | Native (SIMD) | Native | Missing | Missing | Missing |
-| iq4_nl | Native (SIMD) | Native | Missing | Missing | Missing |
-| iq4_xs | Native (SIMD) | Native | Missing | Missing | Missing |
-| fp8_e4m3 | Native | Native | Native | Native | Native |
-| fp8_e5m2 | Native | Native | Native | Native | Native |
-| nvfp4 (GGUF) | Native | Missing | Missing | Missing | Missing |
-| nvfp4_st (SafeTensors) | Native | Native | Missing | Native | Missing |
-| mxfp4 | Native | Native | Missing | Native | Missing |
-| mlx_q | Native | Native (4/6/8-bit) | Missing | Native (4/6/8-bit) | Missing⁵ |
+| Data Type | CPU | Metal | Vulkan | CUDA | ROCm | WebGPU |
+| :--- | :---: | :---: | :---: | :---: | :---: | :---: |
+| f32 | Native (SIMD) | Native | Native | Native | Native | Native |
+| f16 | Native (SIMD) | Native | Native | Native | Native | Missing |
+| bf16 | Native (SIMD) | Native | Native | Native | Native | Missing |
+| q8_0 | Native (SIMD) | Native | Native | Native | Native | Native |
+| q4_0 | Native (SIMD) | Native | Native | Native | Native | Missing |
+| q4_1 | Native (SIMD) | Native | Missing | Native | Missing | Missing |
+| q5_0 | Native (SIMD) | Native | Missing | Missing | Missing | Missing |
+| q4_k | Native (SIMD) | Native | Native | Native | Native | Missing |
+| q5_k | Native (SIMD) | Native | Native | Native | Native | Missing |
+| q6_k | Native (SIMD) | Native | Native | Native | Native | Missing |
+| q2_k | Native (SIMD) | Native | Missing | Missing | Missing | Missing |
+| q3_k | Native (SIMD) | Native | Missing | Missing | Missing | Missing |
+| iq4_nl | Native (SIMD) | Native | Missing | Missing | Missing | Missing |
+| iq4_xs | Native (SIMD) | Native | Missing | Missing | Missing | Missing |
+| fp8_e4m3 | Native | Native | Native | Native | Native | Missing |
+| fp8_e5m2 | Native | Native | Native | Native | Native | Missing |
+| nvfp4 (GGUF) | Native | Missing | Missing | Missing | Missing | Missing |
+| nvfp4_st (SafeTensors) | Native | Native | Missing | Native | Missing | Missing |
+| mxfp4 | Native | Native | Missing | Native | Missing | Missing |
+| mlx_q | Native | Native (4/6/8-bit) | Missing | Native (4/6/8-bit) | Missing⁵ | Missing |
 
 ## Kernel File Locations
 
@@ -131,8 +131,9 @@ The composer automatically selects the correct GEMV function (Q8_0/Q4_K/Q5_K/Q6_
 | Vulkan | `src/backend/kernels/vulkan/` | `silu.comp`, `gelu.comp`, `add.comp`, `mul.comp`, `rms_norm.comp`, `softmax.comp`, `l2_norm.comp`, `rope.comp`, `sdpa.comp`, `sdpa_turbo.comp`, `embedding.comp`, `conv1d.comp`, `gemv_{f32,q8_0,q4_0,bf16,f16,q4_k,q5_k,q6_k,fp8_e4m3,fp8_e5m2}.comp` (+compiled `.spv`) |
 | CUDA | `src/backend/kernels/cuda/` | `common.zig` (shared primitives), `silu.zig`, `silu_mul.zig`, `gelu.zig`, `gelu_mul.zig`, `add.zig`, `add_scaled.zig`, `add_rms_norm.zig`, `mul.zig`, `rms_norm.zig`, `rms_norm_batched.zig`, `softmax.zig`, `l2_norm.zig`, `rope.zig`, `rope_batched.zig`, `sigmoid_mul.zig`, `deinterleave.zig`, `sdpa.zig`, `sdpa_turbo.zig`, `sdpa_prefill.zig`, `gemv_{f32,bf16,f16,q8_0,q4_0,q4_0_batch,q4_1,q4_k,q5_k,q6_k,fp8_e4m3,fp8_e5m2,mlx_q4,mlx_q6,mlx_q8,nvfp4_st,mxfp4_st}.zig`, `gemv_t_q8_0.zig`, `gemm_q8_0.zig`, `fused_ffn_q8_0.zig` (fused FFN megakernel), `mega_qwen35_q8.zig`, `mega_gemma_q4k.zig`, `mega_gemma_q8.zig` (true megakernels), `all.zig` (aggregator) — compiled to PTX via `zig build ptx` |
 | ROCm | `src/backend/kernels/rocm/` | `common.zig` (shared primitives), `silu.zig`, `gelu.zig`, `add.zig`, `mul.zig`, `rms_norm.zig`, `rms_norm_multi.zig`, `softmax.zig`, `l2_norm.zig`, `rope.zig`, `sdpa.zig`, `gemv_{f32,bf16,f16,q8_0,q4_0,q4_k,q5_k,q6_k,fp8_e4m3,fp8_e5m2,mlx_q4}.zig`, `sigmoid_mul.zig`, `deinterleave.zig`, `deltanet.zig`, `mega_qwen35_q8.zig` (true megakernel), `all.zig` (aggregator) — compiled to HSACO via `zig build amdgcn` |
+| WebGPU | `src/backend/kernels/webgpu/` | `silu.wgsl`, `gelu.wgsl`, `add.wgsl`, `mul.wgsl`, `silu_mul.wgsl`, `gelu_mul.wgsl`, `rms_norm.wgsl`, `softmax.wgsl`, `rope.wgsl`, `embedding.wgsl`, `gemv_f32.wgsl`, `gemv_q8_0.wgsl` |
 
-**Pipeline/kernel counts**: Metal 70+ pipelines (+ 1 runtime-composed), CUDA 41 kernels, ROCm 28+ kernels. Total megakernel code: ~4,166 lines across 12 files plus ~780 lines in `mega_compose.zig` (composable generator).
+**Pipeline/kernel counts**: Metal 70+ pipelines (+ 1 runtime-composed), CUDA 41 kernels, ROCm 28+ kernels, WebGPU 12 shaders. Total megakernel code: ~4,166 lines across 12 files plus ~780 lines in `mega_compose.zig` (composable generator).
 
 ## Vision Encoder
 
@@ -150,13 +151,17 @@ Vision ViT (Vision Transformer) kernels run on CPU for patch embedding, position
 - Paged SDPA
 
 **Vulkan** — medium priority:
-- sigmoidMul, siluMul, deinterleave, rmsNormMulti
 - DeltaNet recurrence
 - GEMV: q4_1, q5_0, q2_k, q3_k, iq4_nl, iq4_xs, nvfp4_st, mxfp4
 - Conv1d bias support, Paged SDPA
 
+**WebGPU** — Phase 1 complete (12 ops), ~37 missing:
+- SDPA, SDPA Prefill, GEMM, all batched ops
+- GEMV: all quantized formats except f32 and q8_0
+- Fused ops: addRmsNorm, addScaled, sigmoidMul, deinterleave, splitQGate
+- DeltaNet, Conv1d, Paged SDPA
+
 **ROCm** — medium priority:
-- rmsNormMulti (GPU kernel exists but disabled — needs validation)
 - DeltaNet recurrence
 - GEMV: q4_1, q5_0, q2_k, q3_k, iq4_nl, iq4_xs, nvfp4_st, mxfp4
 

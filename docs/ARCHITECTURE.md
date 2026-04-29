@@ -79,6 +79,7 @@ agave/
 │   │   ├── vulkan.zig     # Vulkan: SPIR-V shaders, subgroup reductions, buffer cache
 │   │   ├── cuda.zig       # CUDA: PTX kernels from Zig, deferred execution, Driver API
 │   │   ├── rocm.zig       # ROCm: HIP Runtime API, HSACO kernels, deferred execution
+│   │   ├── webgpu.zig     # WebGPU: WGSL shaders, browser + native (wgpu/Dawn)
 │   │   ├── megakernel.zig # Weight offset computation for fused FFN megakernels
 │   │   ├── mega_compose.zig # Composable megakernel generator (ModelDesc → MSL at runtime)
 │   │   ├── objc.zig       # Objective-C runtime bridge for Metal API
@@ -87,7 +88,8 @@ agave/
 │   │       ├── metal/     # MSL compute shaders (incl. megakernel.metal, mega_common.metal, mega_*.metal)
 │   │       ├── vulkan/    # GLSL compute shaders → compiled SPIR-V (.spv)
 │   │       ├── cuda/      # Zig kernels compiled to PTX (incl. fused_ffn_q8_0.zig, mega_*.zig)
-│   │       └── rocm/      # Zig kernels compiled to HSACO via amdgcn-amdhsa target (incl. mega_*.zig)
+│   │       ├── rocm/      # Zig kernels compiled to HSACO via amdgcn-amdhsa target (incl. mega_*.zig)
+│   │       └── webgpu/    # WGSL compute shaders
 │   ├── kvcache/
 │   │   ├── manager.zig    # KV cache alloc/free, PagedKvCache, RadixTree
 │   │   ├── block_allocator.zig # Block allocation for paged KV cache

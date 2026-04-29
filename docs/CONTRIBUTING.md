@@ -4,12 +4,15 @@ Templates and step-by-step guides for extending the inference engine.
 
 ## How to Add a New Backend
 
+Existing backends: CPU (`cpu.zig`), Metal (`metal.zig`), Vulkan (`vulkan.zig`), CUDA (`cuda.zig`), ROCm (`rocm.zig`), WebGPU (`webgpu.zig`).
+
 1. Create `src/backend/yourbackend.zig`
 2. Implement the full backend interface — core ops (`gemv`, `rmsNorm`, `rope`, `sdpa`, `sync`, etc.) plus fused variants (`siluMul`, `addRmsNorm`, `sdpaPrefill`, `gemvMulti`, ...). See `src/backend/backend.zig` for the complete dispatch interface; every function must be implemented or `@panic` on unsupported ops
 3. Add variant to the `Backend` tagged union in `src/backend/backend.zig`
 4. Add backend-specific tests in your implementation file
 5. Update `build.zig` with target-specific compilation flags
 6. Add entry to `docs/KERNELS.md`
+7. Add GPU kernels in `src/backend/kernels/yourbackend/` — shader format depends on backend (MSL for Metal, SPIR-V for Vulkan, PTX for CUDA, HSACO for ROCm, WGSL for WebGPU)
 
 **Template:**
 ```zig

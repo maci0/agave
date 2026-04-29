@@ -19,7 +19,7 @@
 ## Features
 
 - **7 Model Architectures**: Gemma 3, Gemma 4, Qwen 3.5, GPT-OSS, Nemotron-H, Nemotron Nano, GLM-4
-- **5 Backends**: CPU (SIMD-optimized), Metal GPU (Apple Silicon), Vulkan, CUDA, ROCm — individually toggleable at build time
+- **6 Backends**: CPU (SIMD-optimized), Metal GPU (Apple Silicon), Vulkan, CUDA, ROCm, WebGPU — individually toggleable at build time
 - **Compile-Time Model Selection**: Disable unused model architectures to reduce binary size (1.8 MB → 0.75 MB with all models stripped)
 - **2 Formats**: GGUF, SafeTensors (multi-shard, MLX quantized, NVFP4)
 - **20+ Quantization Types**: F32, F16, BF16, Q2_K, Q3_K, Q4_0, Q4_1, Q4_K, Q5_0, Q5_K, Q6_K, Q8_0, TQ1_0, IQ4_XS, IQ4_NL, FP8 E4M3, FP8 E5M2, NVFP4, MXFP4, MLX 4/6/8-bit
@@ -192,7 +192,7 @@ Measured on Apple M4 Pro (48 GB unified memory). See [docs/BENCHMARKS.md](docs/B
 ## Prerequisites
 
 - **Zig 0.16.0**
-- macOS (Metal backend) / Linux (Vulkan, CUDA, ROCm) / any platform (CPU backend)
+- macOS (Metal backend) / Linux (Vulkan, CUDA, ROCm) / any platform (CPU, WebGPU backends)
 - GPU backends load drivers at runtime via dlopen — no SDK needed at build time
 
 ## CLI Options
@@ -211,7 +211,7 @@ agave [OPTIONS] <model> [prompt]
       --top-k <K>          Top-k sampling, 0 = disabled [default: 0]
       --repeat-penalty <R> Repetition penalty [default: 1.0]
       --system <TEXT>      System prompt for chat formatting
-      --backend <BE>       auto, cpu, metal, vulkan, cuda, rocm [default: auto]
+      --backend <BE>       auto, cpu, metal, vulkan, cuda, rocm, webgpu [default: auto]
       --ctx-size <N>       Context window size [default: min(model, 4096), 0 = model max]
       --seed <N>           Random seed for sampling [default: random]
       --kv-type <TYPE>     KV cache quantization: f32, f16, q8_0/q8, int8/i8, fp8/fp8_e4m3, nvfp4/fp4, turbo2/tq2, turbo3/tq3, turbo4/tq4 [default: f16]
@@ -249,7 +249,7 @@ zig build -Denable-vulkan=false
 zig build -Denable-cuda=false -Denable-rocm=false
 
 # CPU-only build (no GPU backends)
-zig build -Denable-metal=false -Denable-vulkan=false -Denable-cuda=false -Denable-rocm=false
+zig build -Denable-metal=false -Denable-vulkan=false -Denable-cuda=false -Denable-rocm=false -Denable-webgpu=false
 
 # GPU-only (disable CPU fallback — compile error if GPU init fails)
 zig build -Denable-cpu=false
@@ -260,7 +260,7 @@ zig build -Denable-glm4=false
 # Minimal build: single model (Gemma 3) + single backend (Metal)
 zig build -Denable-gemma4=false -Denable-qwen35=false -Denable-gpt-oss=false \
   -Denable-nemotron-h=false -Denable-nemotron-nano=false -Denable-glm4=false \
-  -Denable-vulkan=false -Denable-cuda=false -Denable-rocm=false
+  -Denable-vulkan=false -Denable-cuda=false -Denable-rocm=false -Denable-webgpu=false
 
 # Override GPU architecture targets
 zig build -Dcuda-sm=sm_120        # Blackwell
@@ -279,6 +279,7 @@ zig build -Dtarget=aarch64-linux-gnu -Denable-metal=false
 | `enable-vulkan` | bool | true | Vulkan backend (runtime dlopen) |
 | `enable-cuda` | bool | true | CUDA backend (runtime dlopen) |
 | `enable-rocm` | bool | true | ROCm backend (runtime dlopen) |
+| `enable-webgpu` | bool | true | WebGPU backend (WGSL shaders) |
 | `cuda-sm` | enum | sm_90 | CUDA SM target (sm_50..sm_120) |
 | `rocm-arch` | enum | gfx1100 | ROCm GFX target (gfx90a..gfx1151) |
 
@@ -359,12 +360,14 @@ src/
 │   ├── vulkan.zig     #   Vulkan GPU (runtime dlopen)
 │   ├── cuda.zig       #   CUDA GPU (runtime dlopen, Zig PTX kernels)
 │   ├── rocm.zig       #   ROCm GPU (runtime dlopen)
+│   ├── webgpu.zig     #   WebGPU (WGSL shaders, browser + native)
 │   ├── objc.zig       #   Objective-C runtime bridge for Metal
 │   └── kernels/       #   GPU shader/kernel sources
 │       ├── metal/     #     MSL compute shaders
 │       ├── vulkan/    #     SPIR-V compute shaders
 │       ├── cuda/      #     Zig CUDA kernels (compiled to PTX)
-│       └── rocm/      #     AMDGCN kernels (compiled to HSACO)
+│       ├── rocm/      #     AMDGCN kernels (compiled to HSACO)
+│       └── webgpu/    #     WGSL compute shaders
 ├── kvcache/
 │   ├── manager.zig    #   KV cache alloc/free, PagedKvCache, RadixTree
 │   ├── block_allocator.zig # Block allocation for paged KV cache

@@ -11,9 +11,11 @@ zig build                                      # Build (ReleaseFast + Debug)
 zig build test                                 # Run all tests
 ./zig-out/bin/agave model.gguf "prompt"        # Run inference
 ./zig-out/bin/agave model.gguf --serve         # HTTP server
-./zig-out/bin/agave model.gguf --backend cpu   # Force CPU backend
+./zig-out/bin/agave model.gguf --backend cpu     # Force CPU backend
+./zig-out/bin/agave model.gguf --backend webgpu  # Force WebGPU backend
 ./zig-out/bin/agave model.gguf --prefill-batch-size 256  # Chunked prefill
 zig build -Denable-glm4=false                  # Disable a model at compile time
+zig build -Denable-webgpu=false                # Disable WebGPU backend
 ```
 
 ```bash
@@ -29,7 +31,7 @@ agave target.gguf --draft-model draft.gguf --spec-mode ddtree \
 agave model.gguf --megakernel "prompt"         # Fused FFN megakernel (3→1 dispatch)
 ```
 
-**Key files:** [build.zig](build.zig), [src/backend/backend.zig](src/backend/backend.zig) (dispatcher), [src/models/model.zig](src/models/model.zig) (model vtable), [src/ops/quant.zig](src/ops/quant.zig), [src/ops/attention.zig](src/ops/attention.zig), [src/ops/ssm.zig](src/ops/ssm.zig), [src/chat_template.zig](src/chat_template.zig), [src/recipe.zig](src/recipe.zig), [src/backend/mega_compose.zig](src/backend/mega_compose.zig) (megakernel composer), [src/backend/megakernel.zig](src/backend/megakernel.zig) (weight offsets), [src/term.zig](src/term.zig) (terminal I/O, key parsing, display width), [src/cli.zig](src/cli.zig) (CLI argument parser), [src/spec/ddtree.zig](src/spec/ddtree.zig) (DDTree speculative decoding), [src/spec/spec_decode.zig](src/spec/spec_decode.zig) (spec decode orchestrator)
+**Key files:** [build.zig](build.zig), [src/backend/backend.zig](src/backend/backend.zig) (dispatcher), [src/backend/webgpu.zig](src/backend/webgpu.zig) (WebGPU backend), [src/models/model.zig](src/models/model.zig) (model vtable), [src/ops/quant.zig](src/ops/quant.zig), [src/ops/attention.zig](src/ops/attention.zig), [src/ops/ssm.zig](src/ops/ssm.zig), [src/chat_template.zig](src/chat_template.zig), [src/recipe.zig](src/recipe.zig), [src/backend/mega_compose.zig](src/backend/mega_compose.zig) (megakernel composer), [src/backend/megakernel.zig](src/backend/megakernel.zig) (weight offsets), [src/term.zig](src/term.zig) (terminal I/O, key parsing, display width), [src/cli.zig](src/cli.zig) (CLI argument parser), [src/spec/ddtree.zig](src/spec/ddtree.zig) (DDTree speculative decoding), [src/spec/spec_decode.zig](src/spec/spec_decode.zig) (spec decode orchestrator)
 
 **Docs:** [KERNELS.md](docs/KERNELS.md) (kernel status per backend), [MODELS.md](docs/MODELS.md) (model params), [MEGAKERNEL.md](docs/MEGAKERNEL.md) (megakernel system), [CONTRIBUTING.md](docs/CONTRIBUTING.md) (how to add backends/models/quants), [DOCUMENTATION.md](docs/DOCUMENTATION.md) (tutorials index)
 
@@ -81,7 +83,7 @@ These rules are non-negotiable. Every change must respect all of them.
 - Every change must maintain cross-compilation for all targets (Linux x86_64/aarch64, macOS aarch64).
 - `ReleaseFast` is production. `Debug` retains full safety checks.
 - Model toggles: `-Denable-<model>=false` (gemma3, gemma4, qwen35, gpt-oss, nemotron-h, nemotron-nano, glm4).
-- Backend maturity: Level 0 (CPU) → Level 1 (Metal + Vulkan, current goal) → Level 2 (CUDA + ROCm optimized).
+- Backend maturity: Level 0 (CPU) → Level 1 (Metal + Vulkan, current goal) → Level 2 (CUDA + ROCm optimized). WebGPU is Phase 1 (12 core ops).
 
 ### Error Handling & Safety
 - Use explicit Zig error sets and `try`/`catch`. Never swallow errors with `catch {}` except in shutdown paths.
@@ -131,7 +133,7 @@ These rules are non-negotiable. Every change must respect all of them.
 
 **Cross-platform megakernel dispatch:** Use `inline else => |be|` with `comptime @hasDecl(@TypeOf(be.*), "fusedFfnGateUp...")` to avoid compiling Metal-specific fused FFN methods on Linux (where Metal backend is NullBackend). See `qwen35.zig` mlpLayer for the pattern.
 
-**Kernel targets:** NVIDIA = `nvptx64-cuda`, AMD = `amdgcn-amdhsa`. Vulkan kernels are GLSL compute shaders pre-compiled to embedded SPIR-V. Do not use OpenCL or PAL variants.
+**Kernel targets:** NVIDIA = `nvptx64-cuda`, AMD = `amdgcn-amdhsa`. Vulkan kernels are GLSL compute shaders pre-compiled to embedded SPIR-V. WebGPU kernels are WGSL compute shaders. Do not use OpenCL or PAL variants.
 
 ---
 
@@ -185,12 +187,12 @@ Before approving any PR, verify:
 
 **Agave — Production-Ready LLM Inference Engine**
 
-Supports 5 backends (Metal, CUDA, Vulkan, ROCm, CPU), 7 model architectures (Gemma3/4, Qwen3.5, GPT-OSS, Nemotron-H/Nano, GLM-4), and extensive quantization (Q2-Q8, FP8, bf16, NVFP4, MXFP4, MLX, TurboQuant KV). Megakernel system with composable building blocks for fused GPU dispatch. CLI and HTTP server interfaces. Built with Zig 0.16.0. Zero external dependencies.
+Supports 6 backends (Metal, CUDA, Vulkan, ROCm, WebGPU, CPU), 7 model architectures (Gemma3/4, Qwen3.5, GPT-OSS, Nemotron-H/Nano, GLM-4), and extensive quantization (Q2-Q8, FP8, bf16, NVFP4, MXFP4, MLX, TurboQuant KV). Megakernel system with composable building blocks for fused GPU dispatch. CLI and HTTP server interfaces. Built with Zig 0.16.0. Zero external dependencies.
 
 **Core Value:** Every supported model must produce correct output on every backend at full GPU speed.
 
 **Constraints:**
-- **Pure Zig**: No external C/C++ inference libraries. All kernels native Zig, MSL, PTX, SPIR-V
+- **Pure Zig**: No external C/C++ inference libraries. All kernels native Zig, MSL, PTX, SPIR-V, WGSL
 - **Hot Path**: Zero allocations, zero syscalls, zero locks in token generation loop
 - **Cross-Platform**: Must cross-compile for Linux x86_64, Linux aarch64, macOS aarch64
 - **No Regressions**: Performance changes must be benchmarked. >5% regression requires justification

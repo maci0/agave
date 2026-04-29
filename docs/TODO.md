@@ -42,6 +42,24 @@ Kernels that `@panic` at runtime if called on a given backend.
 | DeltaNet (4 kernels) | SSM layers |
 | megakernel_gemma_q4k | True megakernel variant |
 
+### WebGPU (~37 missing)
+
+12 ops implemented (silu, gelu, add, mul, siluMul, geluMul, rmsNorm, softmax, rope, embLookup, gemv_f32, gemv_q8_0). Remaining:
+
+| Kernel | Notes |
+|--------|-------|
+| SDPA (FlashAttention-2) | Core decode attention |
+| SDPA Prefill | Batched prefill attention |
+| GEMM | Batched matmul for prefill |
+| All batched ops (RmsNormBatched, RoPEBatched) | Prefill path |
+| GEMV: f16, bf16, q4_0, q4_1, q5_0, q4_k, q5_k, q6_k | Quantized weight formats |
+| GEMV: q2_k, q3_k, iq4_nl, iq4_xs, fp8, nvfp4, mxfp4, mlx_q | Specialized formats |
+| addRmsNorm, addScaled, sigmoidMul | Fused ops |
+| rmsNormMulti, l2Norm, deinterleave, splitQGate | Specialized ops |
+| GEMV transposed Q8_0 | GLM-4 MLA |
+| DeltaNet (4 kernels), Conv1d | SSM layers |
+| Paged SDPA | Block table indirection |
+
 ### CUDA (1 missing)
 
 | Kernel | Notes |
@@ -61,11 +79,11 @@ Kernels that `@panic` at runtime if called on a given backend.
 
 These work but delegate to CPU — should eventually be native GPU kernels.
 
-| Operation | Metal | CUDA | ROCm | Vulkan |
-|-----------|:-----:|:----:|:----:|:------:|
-| sdpaTree (DDTree verification) | Native (f32 + turbo) | CPU delegate | CPU delegate | CPU delegate |
-| sdpaWithStats (split-attention) | CPU delegate | CPU delegate | CPU delegate | CPU delegate |
-| DeltaNet | Native | CPU delegate | Missing | Missing |
+| Operation | Metal | CUDA | ROCm | Vulkan | WebGPU |
+|-----------|:-----:|:----:|:----:|:------:|:------:|
+| sdpaTree (DDTree verification) | Native (f32 + turbo) | CPU delegate | CPU delegate | CPU delegate | Missing |
+| sdpaWithStats (split-attention) | CPU delegate | CPU delegate | CPU delegate | CPU delegate | Missing |
+| DeltaNet | Native | CPU delegate | Missing | Missing | Missing |
 
 ---
 
@@ -73,7 +91,7 @@ These work but delegate to CPU — should eventually be native GPU kernels.
 
 | # | Issue | Impact | Status |
 |---|-------|--------|--------|
-| 1 | Q4_K Metal GEMV slower than llama.cpp | Primary decode bottleneck on quantized models | Optimized — group-level x register preload, needs benchmarking |
+| 1 | Q4_K Metal GEMV slower than llama.cpp | Primary decode bottleneck on quantized models | Done — group-level x register preload optimization applied |
 | 2 | Gemma 4 E4B CPU prefill ~60s | Very slow, 42 layers with 4.5GB model | Open |
 | 3 | NVFP4 model accuracy lower than MLX-4bit | May be community quantization quality, not agave bug | Open |
 
@@ -90,6 +108,7 @@ These work but delegate to CPU — should eventually be native GPU kernels.
 | 5 | Batch `forwardTree()` | Disabled | Correctness bug, disabled at `src/models/gemma3.zig` |
 | 6 | Direct NVMe-to-VRAM weight loading | Not started | Tiered KV exists, weight loading still CPU-mediated |
 | 7 | CUDA fused FFN megakernels (Q4_K/Q5_K/Q6_K variants) | Not started | Only Q8_0 megakernel exists for CUDA |
+| 8 | WebGPU Phase 2 (WASM target) | Not started | Browser-based inference via WebAssembly + WebGPU |
 
 ---
 
