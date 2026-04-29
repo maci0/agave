@@ -8,11 +8,9 @@ Comprehensive list of bugs, missing features, and improvement opportunities.
 
 ## Bugs
 
-| # | Issue | File | Severity | Status |
-|---|-------|------|----------|--------|
-| 1 | ~~Gemma 4 Q4_K batched prefill produces wrong output~~ | `src/models/gemma4.zig` | ~~High~~ | **Fixed** — doGemm was missing Q4_K/Q5_K/Q6_K dispatch to backend GEMM |
-| 2 | GLM-4.7 Flash — degenerate output (also broken in llama.cpp, likely bad GGUF conversion) | `src/models/glm4.zig` | Low (upstream) | Won't fix |
-| 3 | ~~CI/Dockerfile pin Zig 0.15.2 but codebase uses Zig 0.16.0 APIs~~ | `.github/workflows/`, `Dockerfile` | ~~Critical~~ | **Fixed** |
+| # | Issue | Severity | Status |
+|---|-------|----------|--------|
+| 1 | GLM-4.7 Flash — degenerate output (also broken in llama.cpp, likely bad GGUF conversion) | Low (upstream) | Won't fix |
 
 ---
 
@@ -105,12 +103,10 @@ These work but delegate to CPU — should eventually be native GPU kernels.
 
 ## Build / CI / Infra
 
-| # | Issue | Fix |
-|---|-------|-----|
-| 1 | CI workflows pin `ZIG_VERSION=0.15.2` | Update to `0.16.0` |
-| 2 | Dockerfile pins `ZIG_VERSION=0.15.2` | Update to `0.16.0` |
-| 3 | AGENTS.md is a copy of CLAUDE.md, not a symlink | Risk of drift — make one a symlink |
-| 4 | `tests/` directory has test harness but golden tests need model files | By design — manual trigger only |
+| # | Issue | Status |
+|---|-------|--------|
+| 1 | AGENTS.md is a copy of CLAUDE.md, not a symlink | Risk of drift — make one a symlink |
+| 2 | `tests/` directory has test harness but golden tests need model files | By design — manual trigger only |
 
 ---
 
@@ -118,6 +114,5 @@ These work but delegate to CPU — should eventually be native GPU kernels.
 
 | # | Issue | Status |
 |---|-------|--------|
-| 1 | PARALLELISM.md is design-only, should be clearly labeled in DOCUMENTATION.md index | Fixed |
-| 2 | MODELS.md GLM-4 parameter table missing expert count and dense FFN size | Open |
-| 3 | README performance section has both 1.3x faster and 0.2-0.5x slower benchmarks | Confusing — different quant types, needs clarification |
+| 1 | MODELS.md GLM-4 parameter table missing expert count and dense FFN size | Open |
+| 2 | README performance section has both 1.3x faster and 0.2-0.5x slower benchmarks | Confusing — different quant types, needs clarification |
