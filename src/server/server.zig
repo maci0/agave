@@ -2711,23 +2711,74 @@ fn generateAnthropicStream(stream: TcpStream, formatted: []const u8, max_tokens:
     }
 
     var anth_forward_failed = false;
-    for (0..max_tokens -| 1) |_| {
-        if (anth_disconnected or token_ids.len == 0 or (token_count == 0 and g_server.isEog(first_gen_token))) break;
-        var next = model.forward(last) catch |err| {
-            if (err != error.Cancelled) {
-                std.log.warn("req={d} generation forward failed: {}", .{ log_request_id, err });
-                anth_forward_failed = true;
-            }
-            break;
-        };
-        if (use_sampling_a) {
-            next = math_ops.sampleToken(model.getLogits(), sampling_a.temperature, sampling_a.top_k, sampling_a.top_p, prng_a.random());
-        }
-        if (g_server.isEog(next)) break;
 
-        if (!streamAnthropicDelta(stream, tok, next)) { anth_disconnected = true; break; }
-        last = next;
-        token_count += 1;
+    const a_has_draft = g_server.draft_model != null and token_ids.len > 0 and !(token_count == 0 and g_server.isEog(first_gen_token));
+    var a_spec_storage: spec_decode.SpecState = undefined;
+    var a_spec_valid = false;
+    if (a_has_draft) {
+        a_spec_storage = spec_decode.SpecState.init(g_server.allocator, g_server.spec_tokens, model.vocabSize()) catch spec_decode.SpecState{ .k = 0, .vocab_size = 0 };
+        a_spec_valid = a_spec_storage.k > 0;
+    }
+    defer if (a_spec_valid) a_spec_storage.deinit(g_server.allocator);
+
+    if (a_spec_valid) {
+        var a_draft = g_server.draft_model.?;
+        if (a_draft.ptr != model.ptr) {
+            _ = a_draft.prefill(token_ids) catch {};
+        }
+        const a_spec = &a_spec_storage;
+        while (token_count < max_tokens and !anth_disconnected) {
+            if (token_ids.len == 0 or (token_count == 0 and g_server.isEog(first_gen_token))) break;
+            const pre = model.kvSeqLen();
+            const is_self = (model.ptr == a_draft.ptr);
+            const nd = if (is_self and !use_sampling_a)
+                spec_decode.draft(a_spec, a_draft, last)
+            else
+                spec_decode.draftWithLogits(a_spec, a_draft, last);
+            if (nd == 0) break;
+            const res = if (is_self)
+                spec_decode.SpecResult{ .accepted = a_spec.n_draft, .next_token = blk: {
+                    a_spec.recordRound(a_spec.n_draft);
+                    const ld = a_spec.draft_tokens[a_spec.n_draft - 1];
+                    break :blk model.forward(ld) catch ld;
+                } }
+            else if (use_sampling_a)
+                spec_decode.verifySampling(a_spec, model, a_draft, last, pre, sampling_a.temperature, prng_a.random())
+            else
+                spec_decode.verifySequential(a_spec, model, a_draft, last, pre);
+
+            for (0..res.accepted) |i| {
+                const at = a_spec.draft_tokens[i];
+                if (g_server.isEog(at)) break;
+                if (!streamAnthropicDelta(stream, tok, at)) { anth_disconnected = true; break; }
+                token_count += 1;
+            }
+            if (!anth_disconnected and !g_server.isEog(res.next_token)) {
+                if (!streamAnthropicDelta(stream, tok, res.next_token)) { anth_disconnected = true; }
+                token_count += 1;
+            }
+            last = res.next_token;
+            if (g_server.isEog(res.next_token)) break;
+        }
+    } else {
+        for (0..max_tokens -| 1) |_| {
+            if (anth_disconnected or token_ids.len == 0 or (token_count == 0 and g_server.isEog(first_gen_token))) break;
+            var next = model.forward(last) catch |err| {
+                if (err != error.Cancelled) {
+                    std.log.warn("req={d} generation forward failed: {}", .{ log_request_id, err });
+                    anth_forward_failed = true;
+                }
+                break;
+            };
+            if (use_sampling_a) {
+                next = math_ops.sampleToken(model.getLogits(), sampling_a.temperature, sampling_a.top_k, sampling_a.top_p, prng_a.random());
+            }
+            if (g_server.isEog(next)) break;
+
+            if (!streamAnthropicDelta(stream, tok, next)) { anth_disconnected = true; break; }
+            last = next;
+            token_count += 1;
+        }
     }
 
     if (!anth_disconnected) {
@@ -3005,24 +3056,77 @@ fn generateResponsesStream(stream: TcpStream, prompt: []const u8, max_tokens: us
     }
 
     var resp_forward_failed = false;
-    for (0..max_tokens -| 1) |_| {
-        if (resp_disconnected or token_ids.len == 0 or (token_count == 0 and g_server.isEog(first_gen_token))) break;
-        var next = model.forward(last) catch |err| {
-            if (err != error.Cancelled) {
-                std.log.warn("req={d} generation forward failed: {}", .{ log_request_id, err });
-                resp_forward_failed = true;
-            }
-            break;
-        };
-        if (use_sampling_r) {
-            next = math_ops.sampleToken(model.getLogits(), sampling_r.temperature, sampling_r.top_k, sampling_r.top_p, prng_r.random());
-        }
-        if (g_server.isEog(next)) break;
 
-        if (!streamResponsesDelta(stream, tok, next)) { resp_disconnected = true; break; }
-        gen_tokens[token_count] = next;
-        last = next;
-        token_count += 1;
+    const r_has_draft = g_server.draft_model != null and token_ids.len > 0 and !(token_count == 0 and g_server.isEog(first_gen_token));
+    var r_spec_storage: spec_decode.SpecState = undefined;
+    var r_spec_valid = false;
+    if (r_has_draft) {
+        r_spec_storage = spec_decode.SpecState.init(g_server.allocator, g_server.spec_tokens, model.vocabSize()) catch spec_decode.SpecState{ .k = 0, .vocab_size = 0 };
+        r_spec_valid = r_spec_storage.k > 0;
+    }
+    defer if (r_spec_valid) r_spec_storage.deinit(g_server.allocator);
+
+    if (r_spec_valid) {
+        var r_draft = g_server.draft_model.?;
+        if (r_draft.ptr != model.ptr) {
+            _ = r_draft.prefill(token_ids) catch {};
+        }
+        const r_spec = &r_spec_storage;
+        while (token_count < max_tokens and !resp_disconnected) {
+            if (token_ids.len == 0 or (token_count == 0 and g_server.isEog(first_gen_token))) break;
+            const pre = model.kvSeqLen();
+            const is_self = (model.ptr == r_draft.ptr);
+            const nd = if (is_self and !use_sampling_r)
+                spec_decode.draft(r_spec, r_draft, last)
+            else
+                spec_decode.draftWithLogits(r_spec, r_draft, last);
+            if (nd == 0) break;
+            const res = if (is_self)
+                spec_decode.SpecResult{ .accepted = r_spec.n_draft, .next_token = blk: {
+                    r_spec.recordRound(r_spec.n_draft);
+                    const ld = r_spec.draft_tokens[r_spec.n_draft - 1];
+                    break :blk model.forward(ld) catch ld;
+                } }
+            else if (use_sampling_r)
+                spec_decode.verifySampling(r_spec, model, r_draft, last, pre, sampling_r.temperature, prng_r.random())
+            else
+                spec_decode.verifySequential(r_spec, model, r_draft, last, pre);
+
+            for (0..res.accepted) |i| {
+                const at = r_spec.draft_tokens[i];
+                if (g_server.isEog(at)) break;
+                if (!streamResponsesDelta(stream, tok, at)) { resp_disconnected = true; break; }
+                if (token_count < gen_ids_buf_size) gen_tokens[token_count] = at;
+                token_count += 1;
+            }
+            if (!resp_disconnected and !g_server.isEog(res.next_token)) {
+                if (!streamResponsesDelta(stream, tok, res.next_token)) { resp_disconnected = true; }
+                if (token_count < gen_ids_buf_size) gen_tokens[token_count] = res.next_token;
+                token_count += 1;
+            }
+            last = res.next_token;
+            if (g_server.isEog(res.next_token)) break;
+        }
+    } else {
+        for (0..max_tokens -| 1) |_| {
+            if (resp_disconnected or token_ids.len == 0 or (token_count == 0 and g_server.isEog(first_gen_token))) break;
+            var next = model.forward(last) catch |err| {
+                if (err != error.Cancelled) {
+                    std.log.warn("req={d} generation forward failed: {}", .{ log_request_id, err });
+                    resp_forward_failed = true;
+                }
+                break;
+            };
+            if (use_sampling_r) {
+                next = math_ops.sampleToken(model.getLogits(), sampling_r.temperature, sampling_r.top_k, sampling_r.top_p, prng_r.random());
+            }
+            if (g_server.isEog(next)) break;
+
+            if (!streamResponsesDelta(stream, tok, next)) { resp_disconnected = true; break; }
+            gen_tokens[token_count] = next;
+            last = next;
+            token_count += 1;
+        }
     }
 
     // Send final events — skip if client already disconnected
@@ -3293,23 +3397,75 @@ fn generateStream(stream: TcpStream, prompt: []const u8, req_id: u64, created: i
 
     var stream_forward_failed = false;
     var stream_disconnected = false;
-    for (0..max_tokens -| 1) |_| {
-        if (token_ids.len == 0 or (token_count == 0 and g_server.isEog(first_gen_token))) break;
-        var next = model.forward(last) catch |err| {
-            if (err != error.Cancelled) {
-                std.log.warn("req={d} generation forward failed: {}", .{ log_request_id, err });
-                stream_forward_failed = true;
-            }
-            break;
-        };
-        if (use_sampling_s) {
-            next = math_ops.sampleToken(model.getLogits(), sampling.temperature, sampling.top_k, sampling.top_p, prng_s.random());
-        }
-        if (g_server.isEog(next)) break;
 
-        if (!streamChunk(stream, &chunk_buf, tok, next, req_id, created, is_chat)) { stream_disconnected = true; break; }
-        last = next;
-        token_count += 1;
+    const s_has_draft = g_server.draft_model != null and token_ids.len > 0 and !(token_count == 0 and g_server.isEog(first_gen_token));
+    var s_spec_storage: spec_decode.SpecState = undefined;
+    var s_spec_valid = false;
+    if (s_has_draft) {
+        s_spec_storage = spec_decode.SpecState.init(g_server.allocator, g_server.spec_tokens, model.vocabSize()) catch spec_decode.SpecState{ .k = 0, .vocab_size = 0 };
+        s_spec_valid = s_spec_storage.k > 0;
+    }
+    defer if (s_spec_valid) s_spec_storage.deinit(g_server.allocator);
+
+    if (s_spec_valid) {
+        // Speculative streaming: emit batches of accepted tokens
+        var s_draft = g_server.draft_model.?;
+        if (s_draft.ptr != model.ptr) {
+            _ = s_draft.prefill(token_ids) catch {};
+        }
+        const s_spec = &s_spec_storage;
+        while (token_count < max_tokens and !stream_disconnected) {
+            if (token_ids.len == 0 or (token_count == 0 and g_server.isEog(first_gen_token))) break;
+            const pre = model.kvSeqLen();
+            const is_self = (model.ptr == s_draft.ptr);
+            const nd = if (is_self and !use_sampling_s)
+                spec_decode.draft(s_spec, s_draft, last)
+            else
+                spec_decode.draftWithLogits(s_spec, s_draft, last);
+            if (nd == 0) break;
+            const res = if (is_self)
+                spec_decode.SpecResult{ .accepted = s_spec.n_draft, .next_token = blk: {
+                    s_spec.recordRound(s_spec.n_draft);
+                    const ld = s_spec.draft_tokens[s_spec.n_draft - 1];
+                    break :blk model.forward(ld) catch ld;
+                } }
+            else if (use_sampling_s)
+                spec_decode.verifySampling(s_spec, model, s_draft, last, pre, sampling.temperature, prng_s.random())
+            else
+                spec_decode.verifySequential(s_spec, model, s_draft, last, pre);
+
+            for (0..res.accepted) |i| {
+                const at = s_spec.draft_tokens[i];
+                if (g_server.isEog(at)) break;
+                if (!streamChunk(stream, &chunk_buf, tok, at, req_id, created, is_chat)) { stream_disconnected = true; break; }
+                token_count += 1;
+            }
+            if (!stream_disconnected and !g_server.isEog(res.next_token)) {
+                if (!streamChunk(stream, &chunk_buf, tok, res.next_token, req_id, created, is_chat)) { stream_disconnected = true; }
+                token_count += 1;
+            }
+            last = res.next_token;
+            if (g_server.isEog(res.next_token)) break;
+        }
+    } else {
+        // Standard streaming
+        for (0..max_tokens -| 1) |_| {
+            if (token_ids.len == 0 or (token_count == 0 and g_server.isEog(first_gen_token))) break;
+            var next = model.forward(last) catch |err| {
+                if (err != error.Cancelled) {
+                    std.log.warn("req={d} generation forward failed: {}", .{ log_request_id, err });
+                    stream_forward_failed = true;
+                }
+                break;
+            };
+            if (use_sampling_s) {
+                next = math_ops.sampleToken(model.getLogits(), sampling.temperature, sampling.top_k, sampling.top_p, prng_s.random());
+            }
+            if (g_server.isEog(next)) break;
+            if (!streamChunk(stream, &chunk_buf, tok, next, req_id, created, is_chat)) { stream_disconnected = true; break; }
+            last = next;
+            token_count += 1;
+        }
     }
 
     // Send final chunk, usage chunk, and [DONE] — skip if client already disconnected

@@ -1,4 +1,4 @@
-# Chapter 14: Format Conventions (GGUF vs SafeTensors)
+# Chapter 14: Format Conventions
 
 The same model can be stored in different file formats — **GGUF** (llama.cpp native) and **SafeTensors** (HuggingFace native). They store identical weights but use **different conventions** for tensor layout, metadata keys, and even mathematical transformations.
 

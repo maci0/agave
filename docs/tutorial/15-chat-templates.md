@@ -577,7 +577,7 @@ The visual embeddings are set before generation via `model.setImageEmbeddings()`
 
 - **Jinja2 template support:** Parse HuggingFace's `.jinja` templates directly
 - **Tool/function calling:** Special formatting for function results
-- **Multi-modal:** Image/audio/video markers
+- **Multi-modal:** Audio/video markers (image tokens already supported via SigLIP-2)
 - **Custom templates via CLI:** `--template path/to/template.json`
 
 ---

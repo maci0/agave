@@ -17,10 +17,19 @@ zig build -Denable-glm4=false                  # Disable a model at compile time
 ```
 
 ```bash
+# Speculative decoding
+agave target.gguf --draft-model draft.gguf "prompt"              # Separate draft model
+agave model.gguf --spec-mode ddtree "prompt"                     # DDTree self-draft
+agave model.gguf --spec-mode self --draft-layers 9 "prompt"      # Self-speculative (layer skip)
+agave target.gguf --draft-model draft.gguf --spec-mode ddtree \
+  --spec-tokens 5 --tree-budget 64 "prompt"                      # Full DDTree with draft model
+```
+
+```bash
 agave model.gguf --megakernel "prompt"         # Fused FFN megakernel (3→1 dispatch)
 ```
 
-**Key files:** [build.zig](build.zig), [src/backend/backend.zig](src/backend/backend.zig) (dispatcher), [src/models/model.zig](src/models/model.zig) (model vtable), [src/ops/quant.zig](src/ops/quant.zig), [src/ops/attention.zig](src/ops/attention.zig), [src/ops/ssm.zig](src/ops/ssm.zig), [src/chat_template.zig](src/chat_template.zig), [src/recipe.zig](src/recipe.zig), [src/backend/mega_compose.zig](src/backend/mega_compose.zig) (megakernel composer), [src/backend/megakernel.zig](src/backend/megakernel.zig) (weight offsets), [src/term.zig](src/term.zig) (terminal I/O, key parsing, display width), [src/cli.zig](src/cli.zig) (CLI argument parser)
+**Key files:** [build.zig](build.zig), [src/backend/backend.zig](src/backend/backend.zig) (dispatcher), [src/models/model.zig](src/models/model.zig) (model vtable), [src/ops/quant.zig](src/ops/quant.zig), [src/ops/attention.zig](src/ops/attention.zig), [src/ops/ssm.zig](src/ops/ssm.zig), [src/chat_template.zig](src/chat_template.zig), [src/recipe.zig](src/recipe.zig), [src/backend/mega_compose.zig](src/backend/mega_compose.zig) (megakernel composer), [src/backend/megakernel.zig](src/backend/megakernel.zig) (weight offsets), [src/term.zig](src/term.zig) (terminal I/O, key parsing, display width), [src/cli.zig](src/cli.zig) (CLI argument parser), [src/spec/ddtree.zig](src/spec/ddtree.zig) (DDTree speculative decoding), [src/spec/spec_decode.zig](src/spec/spec_decode.zig) (spec decode orchestrator)
 
 **Docs:** [KERNELS.md](docs/KERNELS.md) (kernel status per backend), [MODELS.md](docs/MODELS.md) (model params), [MEGAKERNEL.md](docs/MEGAKERNEL.md) (megakernel system), [CONTRIBUTING.md](docs/CONTRIBUTING.md) (how to add backends/models/quants), [DOCUMENTATION.md](docs/DOCUMENTATION.md) (tutorials index)
 

@@ -170,8 +170,8 @@ With N=200 tokens, GEMM has 200× higher **arithmetic intensity** (compute-to-me
 
 **Chunked prefill** (`--prefill-batch-size N`, default 512) splits long prompts into fixed-size chunks. Each chunk is one batched pass through all layers. Memory overhead is bounded by the chunk size, not the full prompt length.
 
-**In the code:** `src/ops/attention.zig` (SDPA), `src/backend/kernels/cpu/rope.zig` (RoPE), `src/backend/kernels/cpu/norm.zig` (RMSNorm, L2Norm), `src/backend/kernels/cpu/sdpa.zig` (CPU FlashAttention), `src/backend/cpu.zig` (CPU GEMM), `src/backend/kernels/metal/gemm.metal` (Metal GEMM), `src/backend/kernels/cuda/gemm_q8_0.zig` (CUDA GEMM)
+**In the code:** [src/ops/attention.zig](../../src/ops/attention.zig) (SDPA), [src/backend/kernels/cpu/rope.zig](../../src/backend/kernels/cpu/rope.zig) (RoPE), [src/backend/kernels/cpu/norm.zig](../../src/backend/kernels/cpu/norm.zig) (RMSNorm, L2Norm), [src/backend/kernels/cpu/sdpa.zig](../../src/backend/kernels/cpu/sdpa.zig) (CPU FlashAttention), [src/backend/cpu.zig](../../src/backend/cpu.zig) (CPU GEMM), [src/backend/kernels/metal/gemm.metal](../../src/backend/kernels/metal/gemm.metal) (Metal GEMM), [src/backend/kernels/cuda/gemm_q8_0.zig](../../src/backend/kernels/cuda/gemm_q8_0.zig) (CUDA GEMM)
 
 **Math reference:** [Q/K/V projections](appendix-math.md#qkv-projections), [Attention scores](appendix-math.md#attention-score-computation), [Dot product](appendix-math.md#dot-product), [Softmax](appendix-math.md#softmax), [RMSNorm](appendix-math.md#rms-normalization-rmsnorm), [L2 norm](appendix-math.md#l2-normalization)
 
-**Next:** [Chapter 3: Feed-Forward Networks →](03-feed-forward-networks.md)
+**Next:** [Chapter 3: Feed-Forward Networks →](03-feed-forward-networks.md) | **Back:** [Chapter 1: Tokens and Text ←](01-tokens-and-text.md) | **Product docs:** [Architecture](../ARCHITECTURE.md)

@@ -78,8 +78,8 @@ agave model.gguf -t 0.8 --repeat-penalty 1.1 -n 1000 "Write an essay"
 
 ---
 
-**In the code:** `src/ops/math.zig` (sampleToken — temperature scaling, top-k, top-p, nucleus sampling)
+**In the code:** [src/ops/math.zig](../../src/ops/math.zig) (sampleToken — temperature scaling, top-k, top-p, nucleus sampling)
 
 **Math reference:** [Argmax](appendix-math.md#argmax), [Temperature Scaling](appendix-math.md#temperature-scaling), [Top-K](appendix-math.md#top-k-selection), [Top-P](appendix-math.md#top-p-nucleus-sampling)
 
-**Next:** [Chapter 8: Backends →](08-backends.md)
+**Next:** [Chapter 8: Backends →](08-backends.md) | **Back:** [Chapter 6: State Space Models ←](06-state-space-models.md) | **Product docs:** [Architecture](../ARCHITECTURE.md)

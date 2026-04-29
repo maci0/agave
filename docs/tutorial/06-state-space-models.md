@@ -94,8 +94,8 @@ Layer types are determined at init from model **metadata** (descriptive informat
 
 ---
 
-**In the code:** `src/ops/ssm.zig` (causalConv1dSilu, mamba2Recurrence, groupRmsNormSiluGate), `src/backend/kernels/cpu/deltanet.zig` (DeltaNet recurrence), `src/models/qwen35.zig` (hybrid dispatch)
+**In the code:** [src/ops/ssm.zig](../../src/ops/ssm.zig) (causalConv1dSilu, mamba2Recurrence, groupRmsNormSiluGate), [src/backend/kernels/cpu/deltanet.zig](../../src/backend/kernels/cpu/deltanet.zig) (DeltaNet recurrence), [src/models/qwen35.zig](../../src/models/qwen35.zig) (hybrid dispatch)
 
 **Math reference:** [Convolution (1D Causal)](appendix-math.md#convolution-1d-causal), [Outer Product](appendix-math.md#outer-product), [Softplus](appendix-math.md#softplus)
 
-**Next:** [Chapter 7: Sampling →](07-sampling.md)
+**Next:** [Chapter 7: Sampling →](07-sampling.md) | **Back:** [Chapter 5: Memory and Caching ←](05-memory-and-caching.md) | **Product docs:** [Architecture](../ARCHITECTURE.md)

@@ -1,4 +1,4 @@
-# Chapter 10: Memory Safety in Zig
+# Chapter 10: Memory Safety
 
 Zig's approach to memory management: **explicit allocation, guaranteed cleanup**. No garbage collector, no hidden allocations, no surprises. When you call `allocator.alloc()`, you must call `allocator.free()` — and Zig provides tools to make this **automatic and bulletproof**.
 
@@ -385,10 +385,8 @@ zig build test
 
 ---
 
-**In the code:** Every file with allocations (`src/main.zig`, `src/models/*.zig`, `src/backend/*.zig`, `src/kvcache/*.zig`)
+**In the code:** Every file with allocations ([src/main.zig](../../src/main.zig), [src/models/](../../src/models/), [src/backend/](../../src/backend/), [src/kvcache/](../../src/kvcache/))
 
 **Related:** [Zig Language Reference — defer](https://ziglang.org/documentation/master/#defer), [Zig Language Reference — errdefer](https://ziglang.org/documentation/master/#errdefer)
 
-**Next:** [Chapter 11: Metal Backend Internals →](11-metal-backend-internals.md)
-
-**Back:** [Chapter 9: CPU SIMD Optimization ←](09-cpu-simd-optimization.md) | **Product docs:** [Architecture](../ARCHITECTURE.md)
+**Next:** [Chapter 11: Metal Backend Internals →](11-metal-backend-internals.md) | **Back:** [Chapter 9: CPU SIMD Optimization ←](09-cpu-simd-optimization.md) | **Product docs:** [Architecture](../ARCHITECTURE.md)

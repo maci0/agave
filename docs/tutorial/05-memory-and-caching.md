@@ -199,6 +199,6 @@ Token generation with split KV cache:
 
 ---
 
-**In the code:** `src/kvcache/manager.zig` (KvCache, PagedKvCache, RadixTree, KV eviction), `src/kvcache/block_allocator.zig` (block allocation), `src/kvcache/tiered.zig` (VRAM + RAM + SSD tiers), `src/ops/kv_quant.zig` (KV cache quantization — f16, q8_0, fp8, nvfp4, TurboQuant), `src/backend/cpu.zig` (CPU prefill attention), `src/backend/kernels/metal/sdpa.metal` (`sdpa_prefill_fa2` — GPU prefill FA2)
+**In the code:** [src/kvcache/manager.zig](../../src/kvcache/manager.zig) (KvCache, PagedKvCache, RadixTree, KV eviction), [src/kvcache/block_allocator.zig](../../src/kvcache/block_allocator.zig) (block allocation), [src/kvcache/tiered.zig](../../src/kvcache/tiered.zig) (VRAM + RAM + SSD tiers), [src/ops/kv_quant.zig](../../src/ops/kv_quant.zig) (KV cache quantization — f16, q8_0, fp8, nvfp4, TurboQuant), [src/backend/cpu.zig](../../src/backend/cpu.zig) (CPU prefill attention), [src/backend/kernels/metal/sdpa.metal](../../src/backend/kernels/metal/sdpa.metal) (GPU prefill FA2)
 
-**Next:** [Chapter 6: State Space Models →](06-state-space-models.md)
+**Next:** [Chapter 6: State Space Models →](06-state-space-models.md) | **Back:** [Chapter 4: Quantization ←](04-quantization.md) | **Product docs:** [Architecture](../ARCHITECTURE.md)

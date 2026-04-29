@@ -206,8 +206,8 @@ pub fn gemvQ4_0(x: [*]const f32, w: [*]const u8, y: [*]f32, n: usize, k: usize) 
             const block_offset = row_offset + ib * 18;
 
             // Decode scale (first 2 bytes, f16 format)
-            const scale_u16 = @as(*const u16, @ptrCast(@alignCast(&w[block_offset]))).*;
-            const scale = quant.bf16ToF32(scale_u16);  // Convert f16 → f32
+            const scale_ptr = @as(*const f16, @ptrCast(@alignCast(&w[block_offset])));
+            const scale: f32 = @floatCast(scale_ptr.*);
 
             // Dequantize and accumulate 32 elements
             const quant_data = w[block_offset + 2 ..];
@@ -446,6 +446,4 @@ pub fn rmsNorm(input: [*]const f32, weight: [*]const f32, output: [*]f32, n: usi
 
 **In the code:** [src/backend/kernels/cpu/gemv_f32.zig](../../src/backend/kernels/cpu/gemv_f32.zig), [src/backend/kernels/cpu/gemv_bf16.zig](../../src/backend/kernels/cpu/gemv_bf16.zig), [src/backend/kernels/cpu/norm.zig](../../src/backend/kernels/cpu/norm.zig), [src/ops/mlx.zig](../../src/ops/mlx.zig) (MLX GEMV with factored dequant)
 
-**Next:** [Chapter 10: Memory Safety →](10-memory-safety.md)
-
-**Back:** [Chapter 8: Backends ←](08-backends.md) | **Product docs:** [Architecture](../ARCHITECTURE.md) · [Models](../MODELS.md)
+**Next:** [Chapter 10: Memory Safety →](10-memory-safety.md) | **Back:** [Chapter 8: Backends ←](08-backends.md) | **Product docs:** [Architecture](../ARCHITECTURE.md) · [Models](../MODELS.md)

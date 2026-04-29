@@ -384,6 +384,6 @@ For a 2560×2560 matrix, that's 6.5M **multiply-accumulates** (multiply two numb
 
 ---
 
-**In the code:** `src/ops/quant.zig` (dequantization helpers), `src/ops/mlx.zig` (MLX format), `src/backend/kernels/cpu/gemv*.zig` (per-format GEMV kernels)
+**In the code:** [src/ops/quant.zig](../../src/ops/quant.zig) (dequantization helpers), [src/ops/mlx.zig](../../src/ops/mlx.zig) (MLX format), [src/backend/kernels/cpu/](../../src/backend/kernels/cpu/) (per-format GEMV kernels)
 
-**Next:** [Chapter 5: Memory and Caching →](05-memory-and-caching.md)
+**Next:** [Chapter 5: Memory and Caching →](05-memory-and-caching.md) | **Back:** [Chapter 3: Feed-Forward Networks ←](03-feed-forward-networks.md) | **Product docs:** [Architecture](../ARCHITECTURE.md)

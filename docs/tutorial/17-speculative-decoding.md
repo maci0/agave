@@ -1,4 +1,4 @@
-# 17. Speculative Decoding & DDTree
+# Chapter 17: Speculative Decoding & DDTree
 
 Standard autoregressive decoding generates one token per forward pass. For large models, each pass takes tens of milliseconds — the token generation rate is bottlenecked by model size, not memory bandwidth. Speculative decoding breaks this bottleneck by using a cheap draft model to propose multiple candidate tokens, then verifying them against the full target model.
 
@@ -138,11 +138,13 @@ For sampling (temperature > 0), rejection sampling (Leviathan et al. 2023) prese
 | `--draft-layers` | Layers skipped (self-spec) | 25-50% of total layers |
 | Draft model size | Acceptance rate vs speed | 1/4 to 1/8 of target size |
 
-### Current Limitations
+### Batch Tree Verification
 
-Verification currently uses sequential `forward()` calls (one per tree node). This means the total compute per speculation round is `K_draft + K_verify` forward calls, vs `K` forward calls without speculation. Speculative decoding is only faster when the draft model is significantly cheaper per forward call AND the acceptance rate is high enough to offset the verification overhead.
+Models with `forwardTree()` support (currently Gemma3) can verify the entire draft tree in a **single** target forward pass using tree-masked SDPA (`sdpaTree`). This reduces verification from O(K) sequential forwards to O(1), making speculative decoding significantly faster.
 
-**Planned optimization**: Batch tree verification via `forwardTree()` would process all tree nodes in a single target forward pass using tree attention (`sdpaTree`), reducing verification to O(1) target forwards per round regardless of tree size.
+The `sdpaTree` kernel is available on both CPU and Metal GPU. The Metal kernel uses FlashAttention-2 with ancestor bitmask masking — one threadgroup per (node, head) pair.
+
+Models without `forwardTree()` (Qwen3.5, Nemotron, etc.) fall back to sequential verification, which still works but doesn't benefit from batching.
 
 **When to use speculative decoding:**
 - Long generations (100+ tokens) — amortizes dual-model overhead
@@ -174,8 +176,31 @@ The key insight: DFlash wastes information by collapsing the draft distributions
 
 **In agave's implementation**, we use autoregressive drafting (not block diffusion) since agave doesn't include a diffusion model. The DDTree tree construction algorithm works identically — it takes per-position logit distributions (however produced) and builds the optimal tree. The draft distributions come from K sequential forward passes of the draft model rather than one block diffusion pass.
 
+## Server Mode
+
+Speculative decoding works with `--serve`. All API endpoints (OpenAI, Anthropic, Responses) support it in both streaming and non-streaming modes.
+
+```bash
+agave model.gguf --draft-model draft.gguf --serve
+agave model.gguf --draft-model draft.gguf --spec-mode ddtree --serve
+agave model.gguf --spec-mode self --serve
+```
+
+```bash
+curl http://localhost:49453/v1/chat/completions \
+  -d '{"messages":[{"role":"user","content":"Hello"}],"stream":true}'
+```
+
+The server uses the same speculative decoding loop as CLI mode. Draft model prefill runs once per request, then the spec dec loop emits accepted tokens in batches via SSE streaming.
+
 ### References
 
 - [DDTree: Accelerating Speculative Decoding with Block Diffusion Draft Trees (Ringel & Romano, 2026)](https://arxiv.org/abs/2604.12989)
 - [Fast Inference from Transformers via Speculative Decoding (Leviathan et al., 2023)](https://arxiv.org/abs/2211.17192)
 - [SpecInfer: Accelerating LLM Serving with Tree-based Speculative Inference (Miao et al., 2024)](https://arxiv.org/abs/2305.09781)
+
+---
+
+**In the code:** [src/spec/spec_decode.zig](../../src/spec/spec_decode.zig) (orchestrator), [src/spec/ddtree.zig](../../src/spec/ddtree.zig) (DDTree construction), [src/backend/kernels/cpu/sdpa_tree.zig](../../src/backend/kernels/cpu/sdpa_tree.zig) (tree-masked attention)
+
+**Next:** [Appendix: Mathematical Operations →](appendix-math.md) | **Back:** [Chapter 16: Recipe System ←](16-recipe-system.md) | **Product docs:** [Models](../MODELS.md)

@@ -56,8 +56,8 @@ Expert selection uses **stack-allocated** arrays (fixed-size buffers on the call
 
 ---
 
-**In the code:** `src/backend/kernels/cpu/activation.zig` (SiLU, GELU), `src/ops/math.zig` (softplus, sigmoid, topKExperts), `src/models/gpt_oss.zig` (MoE implementation)
+**In the code:** [src/backend/kernels/cpu/activation.zig](../../src/backend/kernels/cpu/activation.zig) (SiLU, GELU), [src/ops/math.zig](../../src/ops/math.zig) (softplus, sigmoid, topKExperts), [src/models/gpt_oss.zig](../../src/models/gpt_oss.zig) (MoE implementation)
 
 **Math reference:** [SiLU](appendix-math.md#silu-swish), [GELU](appendix-math.md#gelu-gaussian-error-linear-unit), [Sigmoid](appendix-math.md#sigmoid), [Softplus](appendix-math.md#softplus)
 
-**Next:** [Chapter 4: Quantization →](04-quantization.md)
+**Next:** [Chapter 4: Quantization →](04-quantization.md) | **Back:** [Chapter 2: The Transformer ←](02-the-transformer.md) | **Product docs:** [Architecture](../ARCHITECTURE.md)

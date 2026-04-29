@@ -128,6 +128,6 @@ Prefill layer pipeline (Gemma 3):
 
 ---
 
-**In the code:** `src/backend/backend.zig` (dispatcher), `src/backend/{cpu,metal,cuda,vulkan,rocm}.zig` (implementations), `src/backend/kernels/` (GPU kernel sources)
+**In the code:** [src/backend/backend.zig](../../src/backend/backend.zig) (dispatcher), [src/backend/](../../src/backend/) (cpu, metal, cuda, vulkan, rocm implementations), [src/backend/kernels/](../../src/backend/kernels/) (GPU kernel sources)
 
-**Next:** [Chapter 9: CPU SIMD Optimization →](09-cpu-simd-optimization.md) | **Start over:** [Chapter 1: Tokens and Text →](01-tokens-and-text.md) | **Product docs:** [Architecture](../ARCHITECTURE.md) · [Models](../MODELS.md)
+**Next:** [Chapter 9: CPU SIMD Optimization →](09-cpu-simd-optimization.md) | **Back:** [Chapter 7: Sampling ←](07-sampling.md) | **Product docs:** [Architecture](../ARCHITECTURE.md) · [Models](../MODELS.md)

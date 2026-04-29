@@ -58,6 +58,6 @@ After projection, **argmax** (the operation that finds the index of the maximum 
 
 ---
 
-**In the code:** `src/tokenizer/bpe.zig` (tokenizer), `src/backend/kernels/cpu/embedding.zig` (embedding lookup), `src/ops/math.zig` (argmax, sampleToken)
+**In the code:** [src/tokenizer/bpe.zig](../../src/tokenizer/bpe.zig) (tokenizer), [src/backend/kernels/cpu/embedding.zig](../../src/backend/kernels/cpu/embedding.zig) (embedding lookup), [src/ops/math.zig](../../src/ops/math.zig) (argmax, sampleToken)
 
-**Next:** [Chapter 2: The Transformer →](02-the-transformer.md)
+**Next:** [Chapter 2: The Transformer →](02-the-transformer.md) | **Product docs:** [Architecture](../ARCHITECTURE.md)
