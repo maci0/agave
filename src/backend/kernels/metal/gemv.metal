@@ -503,63 +503,6 @@ inline void getScaleMinK4(uint j, device const uchar* q, thread uint& sc, thread
 // 4 sub-groups) than Q8_0 (34 bytes), so 2 rows saturate the ALU better than 4.
 constant uint q4_k_nr = 2;
 
-// Inline: compute one superblock's dot product for a single row.
-// x vector is shared across rows (compiler hoists the loads).
-inline float q4_k_block_dot(device const uchar* bp, device const float* x, uint k, uint bk) {
-    float d    = float(as_type<half>(ushort(bp[0] | (uint(bp[1]) << 8))));
-    float dmin = float(as_type<half>(ushort(bp[2] | (uint(bp[3]) << 8))));
-    device const uchar* scales = bp + 4;
-    device const uchar* qs = bp + 16;
-    float sum = 0.0f;
-
-    for (uint g = 0; g < 4; g++) {
-        uint sc_lo, m_lo, sc_hi, m_hi;
-        getScaleMinK4(g * 2, scales, sc_lo, m_lo);
-        getScaleMinK4(g * 2 + 1, scales, sc_hi, m_hi);
-        float d_lo = d * float(sc_lo);
-        float dm_lo = dmin * float(m_lo);
-        float d_hi = d * float(sc_hi);
-        float dm_hi = dmin * float(m_hi);
-        uint ql_off = g * 32;
-        uint gi_lo = bk + g * 64;
-        uint gi_hi = gi_lo + 32;
-
-        if (gi_lo + 63 < k) {
-            float q_dot_lo = 0.0f, x_sum_lo = 0.0f;
-            for (uint l = 0; l < 32; l += 4) {
-                float4 xv = *(device const float4*)(x + gi_lo + l);
-                float4 qv = float4(qs[ql_off + l] & 0xF, qs[ql_off + l + 1] & 0xF,
-                                   qs[ql_off + l + 2] & 0xF, qs[ql_off + l + 3] & 0xF);
-                q_dot_lo += dot(xv, qv);
-                x_sum_lo += xv.x + xv.y + xv.z + xv.w;
-            }
-            sum += d_lo * q_dot_lo - dm_lo * x_sum_lo;
-
-            float q_dot_hi = 0.0f, x_sum_hi = 0.0f;
-            for (uint l = 0; l < 32; l += 4) {
-                float4 xv = *(device const float4*)(x + gi_hi + l);
-                float4 qv = float4(qs[ql_off + l] >> 4, qs[ql_off + l + 1] >> 4,
-                                   qs[ql_off + l + 2] >> 4, qs[ql_off + l + 3] >> 4);
-                q_dot_hi += dot(xv, qv);
-                x_sum_hi += xv.x + xv.y + xv.z + xv.w;
-            }
-            sum += d_hi * q_dot_hi - dm_hi * x_sum_hi;
-        } else {
-            for (uint l = 0; l < 32; l++) {
-                uint gi = gi_lo + l;
-                if (gi >= k) break;
-                sum += x[gi] * (d_lo * float(qs[ql_off + l] & 0xF) - dm_lo);
-            }
-            for (uint l = 0; l < 32; l++) {
-                uint gi = gi_hi + l;
-                if (gi >= k) break;
-                sum += x[gi] * (d_hi * float(qs[ql_off + l] >> 4) - dm_hi);
-            }
-        }
-    }
-    return sum;
-}
-
 kernel void gemv_q4_k(
     device const float* x [[buffer(0)]],
     device const uchar* W [[buffer(1)]],
@@ -581,9 +524,109 @@ kernel void gemv_q4_k(
 
     for (uint b = tid; b < nb; b += tg_size) {
         uint bk = b * bs;
-        sum0 += q4_k_block_dot(W + (row_base * nb + b) * bpb, x, k, bk);
-        if (nr_active > 1)
-            sum1 += q4_k_block_dot(W + ((row_base + 1) * nb + b) * bpb, x, k, bk);
+        device const uchar* bp0 = W + (row_base * nb + b) * bpb;
+        device const uchar* bp1 = W + ((row_base + 1) * nb + b) * bpb;
+
+        float d0    = float(as_type<half>(ushort(bp0[0] | (uint(bp0[1]) << 8))));
+        float dmin0 = float(as_type<half>(ushort(bp0[2] | (uint(bp0[3]) << 8))));
+        device const uchar* sc0 = bp0 + 4;
+        device const uchar* qs0 = bp0 + 16;
+
+        float d1 = 0.0f, dmin1 = 0.0f;
+        device const uchar* sc1 = bp0 + 4;
+        device const uchar* qs1 = bp0 + 16;
+        if (nr_active > 1) {
+            d1    = float(as_type<half>(ushort(bp1[0] | (uint(bp1[1]) << 8))));
+            dmin1 = float(as_type<half>(ushort(bp1[2] | (uint(bp1[3]) << 8))));
+            sc1 = bp1 + 4;
+            qs1 = bp1 + 16;
+        }
+
+        for (uint g = 0; g < 4; g++) {
+            uint gi_lo = bk + g * 64;
+            uint gi_hi = gi_lo + 32;
+            uint ql_off = g * 32;
+
+            if (gi_lo + 63 < k) {
+                // Preload x into registers — shared between both rows
+                float4 xv_lo[8], xv_hi[8];
+                float x_sum_lo = 0.0f, x_sum_hi = 0.0f;
+                for (uint l = 0; l < 32; l += 4) {
+                    float4 v = *(device const float4*)(x + gi_lo + l);
+                    xv_lo[l / 4] = v;
+                    x_sum_lo += v.x + v.y + v.z + v.w;
+                }
+                for (uint l = 0; l < 32; l += 4) {
+                    float4 v = *(device const float4*)(x + gi_hi + l);
+                    xv_hi[l / 4] = v;
+                    x_sum_hi += v.x + v.y + v.z + v.w;
+                }
+
+                // Row 0
+                uint sc0_lo, m0_lo, sc0_hi, m0_hi;
+                getScaleMinK4(g * 2, sc0, sc0_lo, m0_lo);
+                getScaleMinK4(g * 2 + 1, sc0, sc0_hi, m0_hi);
+                float q_dot_lo = 0.0f, q_dot_hi = 0.0f;
+                for (uint l = 0; l < 32; l += 4) {
+                    float4 qv = float4(qs0[ql_off + l] & 0xF, qs0[ql_off + l + 1] & 0xF,
+                                       qs0[ql_off + l + 2] & 0xF, qs0[ql_off + l + 3] & 0xF);
+                    q_dot_lo += dot(xv_lo[l / 4], qv);
+                }
+                for (uint l = 0; l < 32; l += 4) {
+                    float4 qv = float4(qs0[ql_off + l] >> 4, qs0[ql_off + l + 1] >> 4,
+                                       qs0[ql_off + l + 2] >> 4, qs0[ql_off + l + 3] >> 4);
+                    q_dot_hi += dot(xv_hi[l / 4], qv);
+                }
+                sum0 += d0 * float(sc0_lo) * q_dot_lo - dmin0 * float(m0_lo) * x_sum_lo
+                      + d0 * float(sc0_hi) * q_dot_hi - dmin0 * float(m0_hi) * x_sum_hi;
+
+                // Row 1 — reuse preloaded x registers + x_sum
+                if (nr_active > 1) {
+                    uint sc1_lo, m1_lo, sc1_hi, m1_hi;
+                    getScaleMinK4(g * 2, sc1, sc1_lo, m1_lo);
+                    getScaleMinK4(g * 2 + 1, sc1, sc1_hi, m1_hi);
+                    q_dot_lo = 0.0f; q_dot_hi = 0.0f;
+                    for (uint l = 0; l < 32; l += 4) {
+                        float4 qv = float4(qs1[ql_off + l] & 0xF, qs1[ql_off + l + 1] & 0xF,
+                                           qs1[ql_off + l + 2] & 0xF, qs1[ql_off + l + 3] & 0xF);
+                        q_dot_lo += dot(xv_lo[l / 4], qv);
+                    }
+                    for (uint l = 0; l < 32; l += 4) {
+                        float4 qv = float4(qs1[ql_off + l] >> 4, qs1[ql_off + l + 1] >> 4,
+                                           qs1[ql_off + l + 2] >> 4, qs1[ql_off + l + 3] >> 4);
+                        q_dot_hi += dot(xv_hi[l / 4], qv);
+                    }
+                    sum1 += d1 * float(sc1_lo) * q_dot_lo - dmin1 * float(m1_lo) * x_sum_lo
+                          + d1 * float(sc1_hi) * q_dot_hi - dmin1 * float(m1_hi) * x_sum_hi;
+                }
+            } else {
+                // Boundary: scalar fallback
+                for (uint l = 0; l < 32; l++) {
+                    uint gi = gi_lo + l;
+                    if (gi >= k) break;
+                    uint sc_lo0, m_lo0;
+                    getScaleMinK4(g * 2, sc0, sc_lo0, m_lo0);
+                    sum0 += x[gi] * (d0 * float(sc_lo0) * float(qs0[ql_off + l] & 0xF) - dmin0 * float(m_lo0));
+                    if (nr_active > 1) {
+                        uint sc_lo1, m_lo1;
+                        getScaleMinK4(g * 2, sc1, sc_lo1, m_lo1);
+                        sum1 += x[gi] * (d1 * float(sc_lo1) * float(qs1[ql_off + l] & 0xF) - dmin1 * float(m_lo1));
+                    }
+                }
+                for (uint l = 0; l < 32; l++) {
+                    uint gi = gi_hi + l;
+                    if (gi >= k) break;
+                    uint sc_hi0, m_hi0;
+                    getScaleMinK4(g * 2 + 1, sc0, sc_hi0, m_hi0);
+                    sum0 += x[gi] * (d0 * float(sc_hi0) * float(qs0[ql_off + l] >> 4) - dmin0 * float(m_hi0));
+                    if (nr_active > 1) {
+                        uint sc_hi1, m_hi1;
+                        getScaleMinK4(g * 2 + 1, sc1, sc_hi1, m_hi1);
+                        sum1 += x[gi] * (d1 * float(sc_hi1) * float(qs1[ql_off + l] >> 4) - dmin1 * float(m_hi1));
+                    }
+                }
+            }
+        }
     }
 
     threadgroup float shared[8];

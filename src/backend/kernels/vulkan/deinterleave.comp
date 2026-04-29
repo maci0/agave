@@ -1,0 +1,15 @@
+#version 450
+layout(local_size_x = 256) in;
+layout(set = 0, binding = 0) readonly buffer In { float inp[]; };
+layout(set = 0, binding = 1) writeonly buffer OA { float out_a[]; };
+layout(set = 0, binding = 2) writeonly buffer OB { float out_b[]; };
+layout(push_constant) uniform Params { uint stride; uint n_pairs; };
+void main() {
+    uint idx = gl_GlobalInvocationID.x;
+    uint total = n_pairs * stride;
+    if (idx >= total) return;
+    uint pair = idx / stride;
+    uint off = idx % stride;
+    out_a[idx] = inp[pair * 2 * stride + off];
+    out_b[idx] = inp[(pair * 2 + 1) * stride + off];
+}

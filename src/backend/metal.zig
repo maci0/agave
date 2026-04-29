@@ -167,6 +167,7 @@ pub const MetalBackend = struct {
     pipe_kv_append: objc.id,
     pipe_sdpa: objc.id,
     pipe_sdpa_tree: objc.id,
+    pipe_sdpa_tree_turbo: objc.id,
     pipe_sdpa_turbo: objc.id,
     pipe_dn_gate_beta: objc.id,
     pipe_dn_conv1d: objc.id,
@@ -328,6 +329,7 @@ pub const MetalBackend = struct {
             .pipe_kv_append = undefined,
             .pipe_sdpa = undefined,
             .pipe_sdpa_tree = undefined,
+            .pipe_sdpa_tree_turbo = undefined,
             .pipe_sdpa_turbo = undefined,
             .pipe_dn_gate_beta = undefined,
             .pipe_dn_conv1d = undefined,
@@ -414,6 +416,7 @@ pub const MetalBackend = struct {
         self.pipe_kv_append = try self.makePipeline("kv_append");
         self.pipe_sdpa = try self.makePipeline("sdpa_fa2");
         self.pipe_sdpa_tree = try self.makePipeline("sdpa_tree_fa2");
+        self.pipe_sdpa_tree_turbo = try self.makePipeline("sdpa_tree_fa2_turbo");
         self.pipe_sdpa_turbo = try self.makePipeline("sdpa_fa2_turbo");
         self.pipe_dn_gate_beta = try self.makePipeline("deltanet_gate_beta");
         self.pipe_dn_conv1d = try self.makePipeline("deltanet_conv1d");
@@ -2271,14 +2274,21 @@ pub const MetalBackend = struct {
     /// Prefill SDPA: zero-flush GPU pipeline.
     /// FA2 reads old K/V from cache, new K/V from pf_k/pf_v (no copy needed
     /// for attention). Then GPU copy kernel writes pf_k/pf_v into the KV cache
-    /// Tree-masked SDPA for DDTree verification. Falls back to CPU kernel.
+    /// Tree-masked SDPA for DDTree verification. GPU-accelerated for f32 and TurboQuant KV.
     pub fn sdpaTree(self: *MetalBackend, q_all: [*]const f32, prefix_keys: [*]const u8, prefix_values: [*]const u8, tree_keys: [*]const f32, tree_values: [*]const f32, output: [*]f32, ancestor_masks: [*]const [8]u64, nh: usize, nkv: usize, hd: usize, prefix_len: usize, n_nodes: u32, scale: f32, kv_type_k: backend_mod.KvQuantType, kv_type_v: backend_mod.KvQuantType) void {
-        // GPU path: f32 prefix KV only (Metal kernel reads float*)
-        if (kv_type_k == .f32 and kv_type_v == .f32 and n_nodes > 0) {
+        if (n_nodes == 0) return;
+        const is_turbo_k = kv_type_k.isTurbo();
+        const is_turbo_v = kv_type_v.isTurbo();
+        const is_f32_k = (kv_type_k == .f32);
+        const is_f32_v = (kv_type_v == .f32);
+
+        if ((is_f32_k or is_turbo_k) and (is_f32_v or is_turbo_v)) {
             const kvd = nkv * hd;
             const q_ref = self.getBufRef(@ptrCast(q_all), n_nodes * nh * hd * @sizeOf(f32));
-            const pk_ref = self.getBufRef(@ptrCast(prefix_keys), prefix_len * kvd * @sizeOf(f32));
-            const pv_ref = self.getBufRef(@ptrCast(prefix_values), prefix_len * kvd * @sizeOf(f32));
+            const pk_sz = if (is_f32_k) prefix_len * kvd * @sizeOf(f32) else kv_quant.kvSliceBytes(kv_type_k, prefix_len * kvd);
+            const pv_sz = if (is_f32_v) prefix_len * kvd * @sizeOf(f32) else kv_quant.kvSliceBytes(kv_type_v, prefix_len * kvd);
+            const pk_ref = self.getBufRef(@ptrCast(prefix_keys), pk_sz);
+            const pv_ref = self.getBufRef(@ptrCast(prefix_values), pv_sz);
             const tk_ref = self.getBufRef(@ptrCast(tree_keys), n_nodes * kvd * @sizeOf(f32));
             const tv_ref = self.getBufRef(@ptrCast(tree_values), n_nodes * kvd * @sizeOf(f32));
             const out_ref = self.getBufRef(@ptrCast(output), n_nodes * nh * hd * @sizeOf(f32));
@@ -2291,24 +2301,50 @@ pub const MetalBackend = struct {
             var nn_val: u32 = n_nodes;
             var sc_val: f32 = scale;
 
-            const enc = self.getEncoder(self.pipe_sdpa_tree);
-            setBuf(enc, q_ref, 0);
-            setBuf(enc, pk_ref, 1);
-            setBuf(enc, pv_ref, 2);
-            setBuf(enc, tk_ref, 3);
-            setBuf(enc, tv_ref, 4);
-            setBuf(enc, out_ref, 5);
-            setBuf(enc, mask_ref, 6);
-            setBytes(enc, @ptrCast(&nh_val), @sizeOf(u32), 7);
-            setBytes(enc, @ptrCast(&nkv_val), @sizeOf(u32), 8);
-            setBytes(enc, @ptrCast(&hd_val), @sizeOf(u32), 9);
-            setBytes(enc, @ptrCast(&pl_val), @sizeOf(u32), 10);
-            setBytes(enc, @ptrCast(&nn_val), @sizeOf(u32), 11);
-            setBytes(enc, @ptrCast(&sc_val), @sizeOf(f32), 12);
-            self.endEncodeThreadgroups(enc, n_nodes * nh, threadgroup_size);
+            if (is_f32_k and is_f32_v) {
+                const enc = self.getEncoder(self.pipe_sdpa_tree);
+                setBuf(enc, q_ref, 0);
+                setBuf(enc, pk_ref, 1);
+                setBuf(enc, pv_ref, 2);
+                setBuf(enc, tk_ref, 3);
+                setBuf(enc, tv_ref, 4);
+                setBuf(enc, out_ref, 5);
+                setBuf(enc, mask_ref, 6);
+                setBytes(enc, @ptrCast(&nh_val), @sizeOf(u32), 7);
+                setBytes(enc, @ptrCast(&nkv_val), @sizeOf(u32), 8);
+                setBytes(enc, @ptrCast(&hd_val), @sizeOf(u32), 9);
+                setBytes(enc, @ptrCast(&pl_val), @sizeOf(u32), 10);
+                setBytes(enc, @ptrCast(&nn_val), @sizeOf(u32), 11);
+                setBytes(enc, @ptrCast(&sc_val), @sizeOf(f32), 12);
+                self.endEncodeThreadgroups(enc, n_nodes * nh, threadgroup_size);
+            } else {
+                var bits_k_val: u32 = if (is_turbo_k) kv_type_k.turboBits() else 0;
+                var bits_v_val: u32 = if (is_turbo_v) kv_type_v.turboBits() else 0;
+                var bbk_val: u32 = if (is_turbo_k) kv_type_k.turboBlockByteSize() else 0;
+                var bbv_val: u32 = if (is_turbo_v) kv_type_v.turboBlockByteSize() else 0;
+                const enc = self.getEncoder(self.pipe_sdpa_tree_turbo);
+                setBuf(enc, q_ref, 0);
+                setBuf(enc, pk_ref, 1);
+                setBuf(enc, pv_ref, 2);
+                setBuf(enc, tk_ref, 3);
+                setBuf(enc, tv_ref, 4);
+                setBuf(enc, out_ref, 5);
+                setBuf(enc, mask_ref, 6);
+                setBytes(enc, @ptrCast(&nh_val), @sizeOf(u32), 7);
+                setBytes(enc, @ptrCast(&nkv_val), @sizeOf(u32), 8);
+                setBytes(enc, @ptrCast(&hd_val), @sizeOf(u32), 9);
+                setBytes(enc, @ptrCast(&pl_val), @sizeOf(u32), 10);
+                setBytes(enc, @ptrCast(&nn_val), @sizeOf(u32), 11);
+                setBytes(enc, @ptrCast(&sc_val), @sizeOf(f32), 12);
+                setBytes(enc, @ptrCast(&bits_k_val), @sizeOf(u32), 13);
+                setBytes(enc, @ptrCast(&bits_v_val), @sizeOf(u32), 14);
+                setBytes(enc, @ptrCast(&bbk_val), @sizeOf(u32), 15);
+                setBytes(enc, @ptrCast(&bbv_val), @sizeOf(u32), 16);
+                self.endEncodeThreadgroups(enc, n_nodes * nh, threadgroup_size);
+            }
             return;
         }
-        // CPU fallback for quantized prefix KV
+        // CPU fallback for non-turbo quantized prefix KV
         @import("kernels/cpu/sdpa_tree.zig").sdpaTree(q_all, prefix_keys, prefix_values, tree_keys, tree_values, output, ancestor_masks, nh, nkv, hd, prefix_len, n_nodes, scale, kv_type_k, kv_type_v);
     }
 

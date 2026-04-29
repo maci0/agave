@@ -1,0 +1,15 @@
+#version 450
+layout(local_size_x = 256) in;
+layout(set = 0, binding = 0) readonly buffer QG { float qg[]; };
+layout(set = 0, binding = 1) writeonly buffer QO { float q_out[]; };
+layout(set = 0, binding = 2) writeonly buffer GO { float g_out[]; };
+layout(push_constant) uniform Params { uint hd; uint nh; };
+void main() {
+    uint idx = gl_GlobalInvocationID.x;
+    uint total = nh * hd;
+    if (idx >= total) return;
+    uint h = idx / hd;
+    uint d = idx % hd;
+    q_out[idx] = qg[h * hd * 2 + d];
+    g_out[idx] = qg[h * hd * 2 + hd + d];
+}

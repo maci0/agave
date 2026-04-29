@@ -712,8 +712,21 @@ pub const RocmBackend = struct {
     }
 
     /// In-place per-head rmsNorm.
-    pub fn rmsNormMulti(_: *RocmBackend, _: [*]f32, _: [*]const f32, _: usize, _: usize, _: f32) void {
-        @panic("ROCm rmsNormMulti: no GPU kernel — add a ROCm kernel");
+    pub fn rmsNormMulti(self: *RocmBackend, data: [*]f32, weight: [*]const f32, n_heads: usize, head_dim: usize, eps: f32) void {
+        const sz = n_heads * head_dim * @sizeOf(f32);
+        var d_data = self.getInPlaceBuf(data, sz);
+        var d_w = self.getOrUpload(@ptrCast(weight), head_dim * @sizeOf(f32));
+        var n_heads_u32: u32 = @intCast(n_heads);
+        var head_dim_u32: u32 = @intCast(head_dim);
+        var eps_f32: f32 = eps;
+        var params = [_]?*anyopaque{
+            @ptrCast(&d_data),
+            @ptrCast(&d_w),
+            @ptrCast(&n_heads_u32),
+            @ptrCast(&head_dim_u32),
+            @ptrCast(&eps_f32),
+        };
+        self.launch(self.fn_rms_norm_multi, @intCast(n_heads), block_size, reduction_smem, &params);
     }
 
     /// Deinterleave paired data: [A0(stride), B0(stride), ...] → [A0, A1, ...] [B0, B1, ...]

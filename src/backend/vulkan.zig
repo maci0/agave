@@ -481,9 +481,15 @@ const spv_silu = @embedFile("kernels/vulkan/silu.spv");
 const spv_gelu = @embedFile("kernels/vulkan/gelu.spv");
 const spv_add = @embedFile("kernels/vulkan/add.spv");
 const spv_mul = @embedFile("kernels/vulkan/mul.spv");
+const spv_silu_mul = @embedFile("kernels/vulkan/silu_mul.spv");
+const spv_gelu_mul = @embedFile("kernels/vulkan/gelu_mul.spv");
+const spv_sigmoid_mul = @embedFile("kernels/vulkan/sigmoid_mul.spv");
+const spv_deinterleave = @embedFile("kernels/vulkan/deinterleave.spv");
+const spv_split_qgate = @embedFile("kernels/vulkan/split_qgate.spv");
 
 // Normalization
 const spv_rms_norm = @embedFile("kernels/vulkan/rms_norm.spv");
+const spv_rms_norm_multi = @embedFile("kernels/vulkan/rms_norm_multi.spv");
 const spv_softmax = @embedFile("kernels/vulkan/softmax.spv");
 const spv_l2_norm = @embedFile("kernels/vulkan/l2_norm.spv");
 
@@ -554,9 +560,15 @@ pub const VulkanBackend = struct {
     pipe_gelu: PipelineInfo = .{},
     pipe_add: PipelineInfo = .{},
     pipe_mul: PipelineInfo = .{},
+    pipe_silu_mul: PipelineInfo = .{},
+    pipe_gelu_mul: PipelineInfo = .{},
+    pipe_sigmoid_mul: PipelineInfo = .{},
+    pipe_deinterleave: PipelineInfo = .{},
+    pipe_split_qgate: PipelineInfo = .{},
 
     // Normalization pipelines
     pipe_rms_norm: PipelineInfo = .{},
+    pipe_rms_norm_multi: PipelineInfo = .{},
     pipe_softmax: PipelineInfo = .{},
     pipe_l2_norm: PipelineInfo = .{},
 
@@ -961,8 +973,19 @@ pub const VulkanBackend = struct {
         // Binary: 3 bufs (a, b, out), 4 bytes push (n)
         self.pipe_add = try self.createPipeline(spv_add, 3, 4);
         self.pipe_mul = try self.createPipeline(spv_mul, 3, 4);
+        // Fused activation*mul: 3 bufs (a, b, out), 4 bytes push (n)
+        self.pipe_silu_mul = try self.createPipeline(spv_silu_mul, 3, 4);
+        self.pipe_gelu_mul = try self.createPipeline(spv_gelu_mul, 3, 4);
+        // Sigmoid*mul: 2 bufs (data in-place, gate), 4 bytes push (n)
+        self.pipe_sigmoid_mul = try self.createPipeline(spv_sigmoid_mul, 2, 4);
+        // Deinterleave: 3 bufs (in, out_a, out_b), 8 bytes push (stride, n_pairs)
+        self.pipe_deinterleave = try self.createPipeline(spv_deinterleave, 3, 8);
+        // Split Q+gate: 3 bufs (qg, q_out, g_out), 8 bytes push (hd, nh)
+        self.pipe_split_qgate = try self.createPipeline(spv_split_qgate, 3, 8);
         // Normalization: rmsNorm 3 bufs, 8 bytes push (n, eps)
         self.pipe_rms_norm = try self.createPipeline(spv_rms_norm, 3, 8);
+        // Per-head rmsNorm: 2 bufs (data in-place, weight), 12 bytes push (n_heads, head_dim, eps)
+        self.pipe_rms_norm_multi = try self.createPipeline(spv_rms_norm_multi, 2, 12);
         // Softmax: 1 buf (in-place), 4 bytes push (n)
         self.pipe_softmax = try self.createPipeline(spv_softmax, 1, 4);
         // L2 norm: 1 buf (in-place), 8 bytes push (n, eps)
@@ -1620,33 +1643,115 @@ pub const VulkanBackend = struct {
     }
 
     /// In-place sigmoid-gated multiply.
-    pub fn sigmoidMul(_: *VulkanBackend, _: [*]f32, _: [*]const f32, _: usize) void {
-        @panic("Vulkan sigmoidMul: no GPU shader — add a Vulkan compute shader");
+    pub fn sigmoidMul(self: *VulkanBackend, data: [*]f32, gate: [*]const f32, n: usize) void {
+        const sz = n * @sizeOf(f32);
+        const d_buf = self.getPooledBuf(sz);
+        defer self.releasePooledBuf(d_buf);
+        const g_buf = self.getPooledBuf(sz);
+        defer self.releasePooledBuf(g_buf);
+        self.uploadBuffer(d_buf.mem, @ptrCast(data), sz);
+        self.uploadBuffer(g_buf.mem, @ptrCast(gate), sz);
+        const params = [1]u32{@intCast(n)};
+        const bufs = [_]VkBuffer{ d_buf.buf, g_buf.buf };
+        const sizes = [_]usize{ sz, sz };
+        self.dispatch(self.pipe_sigmoid_mul, &bufs, &sizes, @ptrCast(&params), 4, @intCast((n + workgroup_size - 1) / workgroup_size));
+        self.downloadF32(d_buf.mem, data, n);
     }
 
     /// Fused SiLU + multiply.
-    pub fn siluMul(_: *VulkanBackend, _: [*]const f32, _: [*]const f32, _: [*]f32, _: usize) void {
-        @panic("Vulkan siluMul: no GPU shader — add a Vulkan compute shader");
+    pub fn siluMul(self: *VulkanBackend, a: [*]const f32, b: [*]const f32, out: [*]f32, n: usize) void {
+        const sz = n * @sizeOf(f32);
+        const a_buf = self.getPooledBuf(sz);
+        defer self.releasePooledBuf(a_buf);
+        const b_buf = self.getPooledBuf(sz);
+        defer self.releasePooledBuf(b_buf);
+        const o_buf = self.getPooledBuf(sz);
+        defer self.releasePooledBuf(o_buf);
+        self.uploadBuffer(a_buf.mem, @ptrCast(a), sz);
+        self.uploadBuffer(b_buf.mem, @ptrCast(b), sz);
+        const params = [1]u32{@intCast(n)};
+        const bufs = [_]VkBuffer{ a_buf.buf, b_buf.buf, o_buf.buf };
+        const sizes = [_]usize{ sz, sz, sz };
+        self.dispatch(self.pipe_silu_mul, &bufs, &sizes, @ptrCast(&params), 4, @intCast((n + workgroup_size - 1) / workgroup_size));
+        self.downloadF32(o_buf.mem, out, n);
     }
 
     /// Fused GELU + multiply.
-    pub fn geluMul(_: *VulkanBackend, _: [*]const f32, _: [*]const f32, _: [*]f32, _: usize) void {
-        @panic("Vulkan geluMul: no GPU shader — add a Vulkan compute shader");
+    pub fn geluMul(self: *VulkanBackend, a: [*]const f32, b: [*]const f32, out: [*]f32, n: usize) void {
+        const sz = n * @sizeOf(f32);
+        const a_buf = self.getPooledBuf(sz);
+        defer self.releasePooledBuf(a_buf);
+        const b_buf = self.getPooledBuf(sz);
+        defer self.releasePooledBuf(b_buf);
+        const o_buf = self.getPooledBuf(sz);
+        defer self.releasePooledBuf(o_buf);
+        self.uploadBuffer(a_buf.mem, @ptrCast(a), sz);
+        self.uploadBuffer(b_buf.mem, @ptrCast(b), sz);
+        const params = [1]u32{@intCast(n)};
+        const bufs = [_]VkBuffer{ a_buf.buf, b_buf.buf, o_buf.buf };
+        const sizes = [_]usize{ sz, sz, sz };
+        self.dispatch(self.pipe_gelu_mul, &bufs, &sizes, @ptrCast(&params), 4, @intCast((n + workgroup_size - 1) / workgroup_size));
+        self.downloadF32(o_buf.mem, out, n);
     }
 
     /// In-place per-head rmsNorm.
-    pub fn rmsNormMulti(_: *VulkanBackend, _: [*]f32, _: [*]const f32, _: usize, _: usize, _: f32) void {
-        @panic("Vulkan rmsNormMulti: no GPU shader — add a Vulkan compute shader");
+    pub fn rmsNormMulti(self: *VulkanBackend, data: [*]f32, weight: [*]const f32, n_heads: usize, head_dim: usize, eps: f32) void {
+        const total = n_heads * head_dim;
+        const sz = total * @sizeOf(f32);
+        const wsz = head_dim * @sizeOf(f32);
+        const d_buf = self.getPooledBuf(sz);
+        defer self.releasePooledBuf(d_buf);
+        const w_buf = self.getPooledBuf(wsz);
+        defer self.releasePooledBuf(w_buf);
+        self.uploadBuffer(d_buf.mem, @ptrCast(data), sz);
+        self.uploadBuffer(w_buf.mem, @ptrCast(weight), wsz);
+        const params = extern struct { n_heads: u32, head_dim: u32, eps: f32 }{
+            .n_heads = @intCast(n_heads),
+            .head_dim = @intCast(head_dim),
+            .eps = eps,
+        };
+        const bufs = [_]VkBuffer{ d_buf.buf, w_buf.buf };
+        const sizes = [_]usize{ sz, wsz };
+        self.dispatch(self.pipe_rms_norm_multi, &bufs, &sizes, @ptrCast(&params), 12, @intCast(n_heads));
+        self.downloadF32(d_buf.mem, data, total);
     }
 
     /// Deinterleave paired data into two separate output buffers.
-    pub fn deinterleave(_: *VulkanBackend, _: [*]const f32, _: [*]f32, _: [*]f32, _: usize, _: usize) void {
-        @panic("Vulkan deinterleave: no GPU shader — add a Vulkan compute shader");
+    pub fn deinterleave(self: *VulkanBackend, input: [*]const f32, out_a: [*]f32, out_b: [*]f32, stride: usize, n_pairs: usize) void {
+        const total = n_pairs * stride;
+        const sz = total * @sizeOf(f32);
+        const in_buf = self.getPooledBuf(sz * 2);
+        defer self.releasePooledBuf(in_buf);
+        const a_buf = self.getPooledBuf(sz);
+        defer self.releasePooledBuf(a_buf);
+        const b_buf = self.getPooledBuf(sz);
+        defer self.releasePooledBuf(b_buf);
+        self.uploadBuffer(in_buf.mem, @ptrCast(input), sz * 2);
+        const params = [2]u32{ @intCast(stride), @intCast(n_pairs) };
+        const bufs = [_]VkBuffer{ in_buf.buf, a_buf.buf, b_buf.buf };
+        const buf_sizes = [_]usize{ sz * 2, sz, sz };
+        self.dispatch(self.pipe_deinterleave, &bufs, &buf_sizes, @ptrCast(&params), 8, @intCast((total + workgroup_size - 1) / workgroup_size));
+        self.downloadF32(a_buf.mem, out_a, total);
+        self.downloadF32(b_buf.mem, out_b, total);
     }
 
     /// Split concatenated Q+gate per-head data into separate arrays.
-    pub fn splitQGate(_: *VulkanBackend, _: [*]const f32, _: [*]f32, _: [*]f32, _: usize, _: usize) void {
-        @panic("Vulkan splitQGate: no GPU shader — add a Vulkan compute shader");
+    pub fn splitQGate(self: *VulkanBackend, qg: [*]const f32, q_out: [*]f32, g_out: [*]f32, head_dim: usize, n_heads: usize) void {
+        const total = n_heads * head_dim;
+        const sz = total * @sizeOf(f32);
+        const qg_buf = self.getPooledBuf(sz * 2);
+        defer self.releasePooledBuf(qg_buf);
+        const q_buf = self.getPooledBuf(sz);
+        defer self.releasePooledBuf(q_buf);
+        const g_buf = self.getPooledBuf(sz);
+        defer self.releasePooledBuf(g_buf);
+        self.uploadBuffer(qg_buf.mem, @ptrCast(qg), sz * 2);
+        const params = [2]u32{ @intCast(head_dim), @intCast(n_heads) };
+        const bufs = [_]VkBuffer{ qg_buf.buf, q_buf.buf, g_buf.buf };
+        const buf_sizes = [_]usize{ sz * 2, sz, sz };
+        self.dispatch(self.pipe_split_qgate, &bufs, &buf_sizes, @ptrCast(&params), 8, @intCast((total + workgroup_size - 1) / workgroup_size));
+        self.downloadF32(q_buf.mem, q_out, total);
+        self.downloadF32(g_buf.mem, g_out, total);
     }
 
     /// Batched GEMV — sequential dispatch on Vulkan.

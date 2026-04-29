@@ -32,7 +32,7 @@
 - **HTTP Server**: OpenAI + Anthropic API compatible, built-in chat UI, Prometheus metrics, rate limiting
 - **Multimodal Vision**: Image understanding via Gemma 4 SigLIP-2 and Gemma 3 SigLIP vision encoders — image upload via CLI (`--image`) and HTTP API
 - **Batched Prefill**: Chunked GEMM + fused FlashAttention-2 for fast prompt processing
-- **~183 tok/s** on Qwen3.5 0.8B Q8_0 (Metal, Apple Silicon M4 Pro), **1.2-1.7x faster than llama.cpp**
+- **~183 tok/s** on Qwen3.5 0.8B Q8_0 (Metal, Apple Silicon M4 Pro), **1.2-1.7x faster than llama.cpp on Q8_0** (Q4_K performance is a [known gap](docs/TODO.md#performance) — active optimization target)
 
 ## Quick Start
 
