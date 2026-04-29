@@ -1,6 +1,20 @@
-# Agave
+<p align="center">
+  <img src="docs/logo.svg" alt="Agave" width="480">
+</p>
 
-A high-performance LLM inference engine written in Zig. Zero external ML libraries — all kernels, quantization, and model logic implemented from scratch.
+<p align="center">
+  A high-performance LLM inference engine written in Zig.<br>
+  Zero external ML libraries — all kernels, quantization, and model logic from scratch.
+</p>
+
+<p align="center">
+  <a href="#quick-start">Quick Start</a> •
+  <a href="#features">Features</a> •
+  <a href="docs/CONTRIBUTING.md">Contributing</a> •
+  <a href="docs/DOCUMENTATION.md">Docs</a>
+</p>
+
+---
 
 ## Features
 
