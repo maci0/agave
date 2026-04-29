@@ -11,6 +11,7 @@ pub fn build(b: *std.Build) void {
     const enable_rocm = b.option(bool, "enable-rocm", "Enable ROCm backend (default: true)") orelse true;
 
     const enable_vulkan = b.option(bool, "enable-vulkan", "Enable Vulkan backend (default: true)") orelse true;
+    const enable_webgpu = b.option(bool, "enable-webgpu", "Enable WebGPU backend via wgpu-native (default: false)") orelse false;
 
     // ── Model enable/disable flags (all default to true) ─────────
     const enable_gemma3 = b.option(bool, "enable-gemma3", "Enable Gemma3 model support (default: true)") orelse true;
@@ -131,6 +132,7 @@ pub fn build(b: *std.Build) void {
     backend_options.addOption(bool, "enable_vulkan", enable_vulkan);
     backend_options.addOption(bool, "enable_cuda", enable_cuda);
     backend_options.addOption(bool, "enable_rocm", enable_rocm);
+    backend_options.addOption(bool, "enable_webgpu", enable_webgpu);
     backend_options.addOption(bool, "enable_gemma3", enable_gemma3);
     backend_options.addOption(bool, "enable_qwen35", enable_qwen35);
     backend_options.addOption(bool, "enable_gpt_oss", enable_gpt_oss);

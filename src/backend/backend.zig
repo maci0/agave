@@ -432,6 +432,12 @@ pub const RocmBackend = if (build_options.enable_rocm)
 else
     NullBackend;
 
+/// WebGPU backend via wgpu-native.
+pub const WebGpuBackend = if (build_options.enable_webgpu)
+    @import("webgpu.zig").WebGpuBackend
+else
+    NullBackend;
+
 /// Backend interface — all compute goes through this tagged union.
 /// Dispatch is resolved via `inline else`, giving the compiler full visibility
 /// into each backend's implementation for inlining and optimization.
@@ -442,6 +448,7 @@ pub const Backend = union(enum) {
     vulkan: *VulkanBackend,
     cuda: *CudaBackend,
     rocm: *RocmBackend,
+    webgpu: *WebGpuBackend,
 
     /// Allocate a KV cache slice using backend-optimal memory.
     /// `n` is the byte count (caller computes via kvSliceBytes).
@@ -780,7 +787,7 @@ pub const Backend = union(enum) {
 };
 
 /// Backend selection from CLI or micro-bench argument.
-pub const BackendChoice = enum { auto, cpu, metal, vulkan, cuda, rocm };
+pub const BackendChoice = enum { auto, cpu, metal, vulkan, cuda, rocm, webgpu };
 
 /// Holds the mutable backend storage alongside the tagged-union interface.
 /// The backend variables must outlive the `Backend` union (which holds pointers
@@ -793,6 +800,7 @@ pub const BackendState = struct {
     vulkan_be: VulkanBackend = undefined,
     cuda_be: CudaBackend = undefined,
     rocm_be: RocmBackend = undefined,
+    webgpu_be: WebGpuBackend = undefined,
     pool: ?ThreadPool = null,
     be: Backend = undefined,
     name: []const u8 = "CPU",
@@ -888,6 +896,22 @@ pub const BackendState = struct {
                         break :blk .{ .rocm = &self.rocm_be };
                     } else {
                         @panic("ROCm backend disabled at build time");
+                    }
+                },
+                .webgpu => {
+                    if (comptime build_options.enable_webgpu) {
+                        self.webgpu_be = WebGpuBackend.init(allocator) catch |err| {
+                            if (comptime build_options.enable_cpu) {
+                                std.log.warn("WebGPU unavailable ({s}), falling back to CPU", .{@errorName(err)});
+                                break :blk .{ .cpu = &self.cpu_be };
+                            } else {
+                                @panic("WebGPU unavailable and CPU backend disabled");
+                            }
+                        };
+                        self.name = "WebGPU";
+                        break :blk .{ .webgpu = &self.webgpu_be };
+                    } else {
+                        @panic("WebGPU backend disabled at build time");
                     }
                 },
                 .auto => {

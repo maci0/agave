@@ -337,7 +337,7 @@ const cli_specs = [_]cli_mod.ArgSpec{
     .{ .long = "seed", .kind = .option, .help = "Random seed for sampling [default: random]." },
     .{ .long = "system", .kind = .option, .help = "System prompt for chat formatting." },
     // Backend & model
-    .{ .long = "backend", .kind = .option, .help = "Compute backend: auto, cpu, metal, vulkan, cuda, rocm [default: auto]." },
+    .{ .long = "backend", .kind = .option, .help = "Compute backend: auto, cpu, metal, vulkan, cuda, rocm, webgpu [default: auto]." },
     .{ .long = "ctx-size", .kind = .option, .help = "Context window size; 0 = full model context [default: min(model, 4096)]." },
     .{ .long = "allow-cpu-fallback", .help = "Allow GPU backends to fall back to CPU for unsupported ops." },
     .{ .long = "mmap", .help = "Use lazy mmap instead of eagerly paging weights into RAM." },
@@ -540,7 +540,7 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
         const be_str = res.option("backend") orelse "auto";
         break :blk std.meta.stringToEnum(BackendChoice, be_str) orelse {
             eprint("Error: unknown backend '{s}'\n", .{be_str});
-            eprint("  Valid options: auto, cpu, metal, vulkan, cuda, rocm\n", .{});
+            eprint("  Valid options: auto, cpu, metal, vulkan, cuda, rocm, webgpu\n", .{});
             std.process.exit(1);
         };
     };
@@ -815,7 +815,7 @@ fn printUsage() void {
         \\      --system <TEXT>       System prompt for chat formatting
         \\
         \\BACKEND & MODEL:
-        \\      --backend <BE>        Compute backend: auto, cpu, metal, vulkan, cuda, rocm [default: auto]
+        \\      --backend <BE>        Compute backend: auto, cpu, metal, vulkan, cuda, rocm, webgpu [default: auto]
         \\      --ctx-size <N>        Context window size; 0 = full model context [default: min(model, 4096)]
         \\      --allow-cpu-fallback  Allow GPU backends to fall back to CPU for unsupported ops
         \\      --mmap                Use lazy mmap instead of eagerly paging weights into RAM
