@@ -13,6 +13,7 @@ Each hardware **vendor** (manufacturer — NVIDIA, Apple, AMD, etc.) has its own
 | **Metal** | Apple | MSL | Metal IR | Apple Silicon only |
 | **ROCm/HIP** | AMD | Zig → HSACO | AMDGCN | AMD GPUs only |
 | **Vulkan** | Khronos | GLSL | SPIR-V | All vendors (cross-platform) |
+| **WebGPU** | W3C | WGSL | WGSL source | All vendors (browser + native) |
 
 The "Compiled Format" column shows the **IR** (Intermediate Representation — compiled bytecode that the GPU driver converts to native machine code at runtime, not final executable code).
 
@@ -22,9 +23,10 @@ Vendor-specific:  CUDA ──→ PTX ──→ NVIDIA only
                   ROCm/HIP ──→ AMDGCN ──→ AMD only
 
 Cross-platform:   Vulkan ──→ SPIR-V ──→ All vendors
+                  WebGPU ──→ WGSL ──→ All vendors (browser + native via wgpu)
 ```
 
-**Agave's strategy**: Use vendor-specific APIs for maximum performance, with Vulkan as the universal fallback. The `Backend` interface abstracts all of these behind a single dispatch.
+**Agave's strategy**: Use vendor-specific APIs for maximum performance, with Vulkan and WebGPU as cross-platform fallbacks. The `Backend` interface abstracts all six behind a single dispatch.
 
 | Platform | Primary | Fallback |
 |----------|---------|----------|
@@ -32,6 +34,7 @@ Cross-platform:   Vulkan ──→ SPIR-V ──→ All vendors
 | Linux + NVIDIA | CUDA | Vulkan → CPU |
 | Linux + AMD | ROCm | Vulkan → CPU |
 | Linux + Intel | Vulkan | CPU |
+| Browser (any GPU) | WebGPU | N/A |
 
 ## Kernels
 
@@ -62,7 +65,9 @@ pub const Backend = union(enum) {
     cpu: *CpuBackend,
     metal: *MetalBackend,
     cuda: *CudaBackend,
-    // ...
+    vulkan: *VulkanBackend,
+    rocm: *RocmBackend,
+    webgpu: *WebGpuBackend,
 
     pub fn gemv(self: Backend, ...) void {
         switch (self) {

@@ -15,7 +15,7 @@ By the end of this tutorial, you'll understand:
 - **Memory management**: KV caching strategies (flat, paged, radix tree) and why they matter for performance
 - **State space models**: Linear-time alternatives to quadratic attention (DeltaNet, Mamba-2)
 - **Sampling strategies**: How temperature, top-k, top-p, and repeat penalty control randomness
-- **Compute backends**: How CPU, GPU (CUDA, Metal, Vulkan, ROCm) backends execute kernels and manage memory
+- **Compute backends**: How CPU, GPU (CUDA, Metal, Vulkan, ROCm, WebGPU) backends execute kernels and manage memory
 - **Speculative decoding**: Draft models, DDTree tree construction, self-speculative layer skipping
 
 ## Prerequisites
@@ -76,7 +76,7 @@ Understand how the codebase is structured:
 | 5 | [Memory and Caching](05-memory-and-caching.md) | KV cache, PagedAttention, and RadixAttention |
 | 6 | [State Space Models](06-state-space-models.md) | Linear-time alternatives to attention: DeltaNet and Mamba-2 |
 | 7 | [Sampling](07-sampling.md) | Controlling randomness: temperature, top-k, top-p |
-| 8 | [Backends](08-backends.md) | CPU, CUDA, Metal, Vulkan, ROCm — how compute backends work |
+| 8 | [Backends](08-backends.md) | CPU, CUDA, Metal, Vulkan, ROCm, WebGPU — how compute backends work |
 | 9 | [CPU SIMD Optimization](09-cpu-simd-optimization.md) | @Vector, @reduce, @mulAdd, multi-row batching, quantized GEMV |
 | 10 | [Memory Safety](10-memory-safety.md) | defer, errdefer, guaranteed cleanup, leak detection |
 | 11 | [Metal Backend Internals](11-metal-backend-internals.md) | UMA, buffer caching, command buffers, batch mode, threadgroup limits |
