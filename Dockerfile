@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 FROM --platform=$BUILDPLATFORM debian:bookworm-slim AS build
 
-ARG ZIG_VERSION=0.15.2
+ARG ZIG_VERSION=0.16.0
 ARG TARGETARCH
 
 # Backend enable flags — Metal disabled by default (macOS-only, not usable in Docker).
@@ -23,11 +23,11 @@ ARG ENABLE_GEMMA4=true
 RUN apt-get update && apt-get install -y --no-install-recommends curl xz-utils ca-certificates && rm -rf /var/lib/apt/lists/*
 
 # Zig toolchain checksums (SHA256) — update when bumping ZIG_VERSION.
-ARG ZIG_SHA256_X86_64=02aa270f183da276e5b5920b1dac44a63f1a49e55050ebde3aecc9eb82f93239
-ARG ZIG_SHA256_AARCH64=958ed7d1e00d0ea76590d27666efbf7a932281b3d7ba0c6b01b0ff26498f667f
+ARG ZIG_SHA256_X86_64=70e49664a74374b48b51e6f3fdfbf437f6395d42509050588bd49abe52ba3d00
+ARG ZIG_SHA256_AARCH64=ea4b09bfb22ec6f6c6ceac57ab63efb6b46e17ab08d21f69f3a48b38e1534f17
 
 RUN ARCH=$(uname -m) && \
-    ZIG_URL="https://ziglang.org/download/${ZIG_VERSION}/zig-linux-${ARCH}-${ZIG_VERSION}.tar.xz" && \
+    ZIG_URL="https://ziglang.org/download/${ZIG_VERSION}/zig-${ARCH}-linux-${ZIG_VERSION}.tar.xz" && \
     if [ "$ARCH" = "x86_64" ]; then EXPECTED_SHA256="$ZIG_SHA256_X86_64"; \
     elif [ "$ARCH" = "aarch64" ]; then EXPECTED_SHA256="$ZIG_SHA256_AARCH64"; \
     else echo "Unsupported architecture: $ARCH" && exit 1; fi && \
