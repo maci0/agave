@@ -19,6 +19,7 @@ comptime {
     _ = @import("sigmoid_mul.zig");
     _ = @import("gelu_mul.zig");
     _ = @import("deinterleave.zig");
+    _ = @import("split_qgate.zig");
 
     // Normalization
     _ = @import("rms_norm.zig");

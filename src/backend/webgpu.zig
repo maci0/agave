@@ -25,6 +25,12 @@ const wgsl_rope = @embedFile("kernels/webgpu/rope.wgsl");
 const wgsl_embedding = @embedFile("kernels/webgpu/embedding.wgsl");
 const wgsl_gemv_f32 = @embedFile("kernels/webgpu/gemv_f32.wgsl");
 const wgsl_gemv_q8_0 = @embedFile("kernels/webgpu/gemv_q8_0.wgsl");
+const wgsl_sigmoid_mul = @embedFile("kernels/webgpu/sigmoid_mul.wgsl");
+const wgsl_l2_norm = @embedFile("kernels/webgpu/l2_norm.wgsl");
+const wgsl_rms_norm_multi = @embedFile("kernels/webgpu/rms_norm_multi.wgsl");
+const wgsl_deinterleave = @embedFile("kernels/webgpu/deinterleave.wgsl");
+const wgsl_split_qgate = @embedFile("kernels/webgpu/split_qgate.wgsl");
+const wgsl_add_rms_norm = @embedFile("kernels/webgpu/add_rms_norm.wgsl");
 
 // ── WebGPU C API types ──────────────────────────────────────────────
 
@@ -174,6 +180,12 @@ pub const WebGpuBackend = struct {
     pipe_embedding: PipelineInfo = .{},
     pipe_gemv_f32: PipelineInfo = .{},
     pipe_gemv_q8_0: PipelineInfo = .{},
+    pipe_sigmoid_mul: PipelineInfo = .{},
+    pipe_l2_norm: PipelineInfo = .{},
+    pipe_rms_norm_multi: PipelineInfo = .{},
+    pipe_deinterleave: PipelineInfo = .{},
+    pipe_split_qgate: PipelineInfo = .{},
+    pipe_add_rms_norm: PipelineInfo = .{},
 
     // Buffer management
     buf_cache: std.AutoHashMap(usize, CachedBuf) = undefined,
@@ -348,6 +360,12 @@ pub const WebGpuBackend = struct {
         self.pipe_embedding = try self.createPipeline(wgsl_embedding);
         self.pipe_gemv_f32 = try self.createPipeline(wgsl_gemv_f32);
         self.pipe_gemv_q8_0 = try self.createPipeline(wgsl_gemv_q8_0);
+        self.pipe_sigmoid_mul = try self.createPipeline(wgsl_sigmoid_mul);
+        self.pipe_l2_norm = try self.createPipeline(wgsl_l2_norm);
+        self.pipe_rms_norm_multi = try self.createPipeline(wgsl_rms_norm_multi);
+        self.pipe_deinterleave = try self.createPipeline(wgsl_deinterleave);
+        self.pipe_split_qgate = try self.createPipeline(wgsl_split_qgate);
+        self.pipe_add_rms_norm = try self.createPipeline(wgsl_add_rms_norm);
     }
 
     fn createPipeline(self: *WebGpuBackend, wgsl_source: [:0]const u8) !PipelineInfo {

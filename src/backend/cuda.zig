@@ -182,6 +182,7 @@ pub const CudaBackend = struct {
     fn_sigmoid_mul: CUfunction = null,
     fn_gelu_mul: CUfunction = null,
     fn_deinterleave: CUfunction = null,
+    fn_split_qgate: CUfunction = null,
     fn_gemv_t_q8_0: CUfunction = null,
     fn_gemv_nvfp4_st: CUfunction = null,
     fn_gemv_mlx_q4: CUfunction = null,
@@ -410,6 +411,7 @@ pub const CudaBackend = struct {
         self.fn_sigmoid_mul = try self.getFunction("sigmoid_mul_kernel");
         self.fn_gelu_mul = try self.getFunction("gelu_mul_kernel");
         self.fn_deinterleave = try self.getFunction("deinterleave_kernel");
+        self.fn_split_qgate = try self.getFunction("split_qgate_kernel");
         self.fn_gemv_t_q8_0 = try self.getFunction("gemv_t_q8_0_kernel");
         self.fn_gemv_nvfp4_st = try self.getFunction("gemv_nvfp4_st_kernel");
         self.fn_gemv_mlx_q4 = try self.getFunction("gemv_mlx_q4_kernel");
@@ -989,8 +991,20 @@ pub const CudaBackend = struct {
     }
 
     /// Split concatenated Q+gate per-head data into separate arrays.
-    pub fn splitQGate(_: *CudaBackend, _: [*]const f32, _: [*]f32, _: [*]f32, _: usize, _: usize) void {
-        @panic("CUDA splitQGate: no GPU kernel — add a CUDA kernel");
+    pub fn splitQGate(self: *CudaBackend, qg: [*]const f32, q_out: [*]f32, g_out: [*]f32, hd: usize, nh: usize) void {
+        const total = nh * hd;
+        const sz = total * @sizeOf(f32);
+        var d_qg = self.getInputBuf(qg, sz * 2);
+        var d_q = self.getOutputBuf(q_out, sz);
+        var d_g = self.getOutputBuf(g_out, sz);
+        var hd_u32: u32 = @intCast(hd);
+        var nh_u32: u32 = @intCast(nh);
+        var params = [_]?*anyopaque{
+            @ptrCast(&d_qg),   @ptrCast(&d_q),    @ptrCast(&d_g),
+            @ptrCast(&hd_u32), @ptrCast(&nh_u32),
+        };
+        const grid: u32 = @intCast((total + block_size - 1) / block_size);
+        self.launch(self.fn_split_qgate, grid, block_size, 0, &params);
     }
 
     /// Batched GEMV: fuse multiple GEMV ops sharing the same input into a single

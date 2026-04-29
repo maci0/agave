@@ -142,6 +142,7 @@ pub const RocmBackend = struct {
     fn_sigmoid_mul: HipFunction = null,
     fn_silu_mul: HipFunction = null,
     fn_deinterleave: HipFunction = null,
+    fn_split_qgate: HipFunction = null,
     fn_deltanet_gate_beta: HipFunction = null,
     fn_deltanet_conv1d: HipFunction = null,
     fn_mega_qwen35_q8: HipFunction = null,
@@ -285,6 +286,7 @@ pub const RocmBackend = struct {
         self.fn_sigmoid_mul = try self.getFunction(hipModuleGetFunction, "sigmoid_mul_kernel");
         self.fn_silu_mul = try self.getFunction(hipModuleGetFunction, "silu_mul_kernel");
         self.fn_deinterleave = try self.getFunction(hipModuleGetFunction, "deinterleave_kernel");
+        self.fn_split_qgate = try self.getFunction(hipModuleGetFunction, "split_qgate_kernel");
         self.fn_deltanet_gate_beta = try self.getFunction(hipModuleGetFunction, "deltanet_gate_beta_kernel");
         self.fn_deltanet_conv1d = try self.getFunction(hipModuleGetFunction, "deltanet_conv1d_kernel");
         self.fn_mega_qwen35_q8 = try self.getFunction(hipModuleGetFunction, "megakernel_qwen35_q8_kernel");
@@ -751,8 +753,20 @@ pub const RocmBackend = struct {
     }
 
     /// Split concatenated Q+gate per-head data into separate arrays.
-    pub fn splitQGate(_: *RocmBackend, _: [*]const f32, _: [*]f32, _: [*]f32, _: usize, _: usize) void {
-        @panic("ROCm splitQGate: no GPU kernel — add a ROCm kernel");
+    pub fn splitQGate(self: *RocmBackend, qg: [*]const f32, q_out: [*]f32, g_out: [*]f32, hd: usize, nh: usize) void {
+        const total = nh * hd;
+        const sz = total * @sizeOf(f32);
+        var d_qg = self.getInputBuf(qg, sz * 2);
+        var d_q = self.getOutputBuf(q_out, sz);
+        var d_g = self.getOutputBuf(g_out, sz);
+        var hd_u32: u32 = @intCast(hd);
+        var nh_u32: u32 = @intCast(nh);
+        var params = [_]?*anyopaque{
+            @ptrCast(&d_qg),   @ptrCast(&d_q),    @ptrCast(&d_g),
+            @ptrCast(&hd_u32), @ptrCast(&nh_u32),
+        };
+        const grid: u32 = @intCast((total + block_size - 1) / block_size);
+        self.launch(self.fn_split_qgate, grid, block_size, 0, &params);
     }
 
     /// Batched GEMV — sequential dispatch.
