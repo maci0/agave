@@ -178,7 +178,6 @@ fn kvTypeOrExit(s: []const u8, flag_name: []const u8) KvQuantType {
     };
 }
 
-
 /// Detect free system RAM in bytes.
 /// Uses platform-specific detection (sysctl on macOS, /proc/meminfo on Linux).
 /// Falls back to default_free_ram on unsupported platforms.
@@ -2037,8 +2036,7 @@ fn generateSpeculative(
             const last_draft = spec_state.draft_tokens[spec_state.n_draft - 1];
             const bonus = target.forward(last_draft) catch last_draft;
             break :blk spec_decode.SpecResult{ .accepted = spec_state.n_draft, .next_token = bonus };
-        }
-        else if (use_ddtree or self_spec)
+        } else if (use_ddtree or self_spec)
             spec_decode.verifyDDTree(&spec_state, target, draft_model, last, cli.tree_budget, pre_draft_pos)
         else if (use_sampling)
             spec_decode.verifySampling(&spec_state, target, draft_model, last, pre_draft_pos, cli.temperature, prng.random())
@@ -2050,7 +2048,10 @@ fn generateSpeculative(
         for (0..result.accepted) |i| {
             const accepted_tok = spec_state.draft_tokens[i];
             if (token_count >= gen_ids_buf.len) break;
-            if (isEogToken(accepted_tok, eog)) { hit_eog = true; break; }
+            if (isEogToken(accepted_tok, eog)) {
+                hit_eog = true;
+                break;
+            }
             gen_ids_buf[token_count] = accepted_tok;
             token_count += 1;
         }

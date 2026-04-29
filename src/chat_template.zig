@@ -110,8 +110,7 @@ pub const ChatTemplate = struct {
     /// `assistant_suffix + user_prefix + user_msg + user_suffix + assistant_prefix + generation_prefix`
     pub fn formatContinuation(self: ChatTemplate, allocator: std.mem.Allocator, user_msg: []const u8) ![]u8 {
         var result = std.ArrayList(u8).empty;
-        const total = std.math.add(usize, self.assistant_suffix.len + self.user_prefix.len,
-            std.math.add(usize, user_msg.len, self.user_suffix.len + self.assistant_prefix.len + self.generation_prefix.len) catch return error.OutOfMemory) catch return error.OutOfMemory;
+        const total = std.math.add(usize, self.assistant_suffix.len + self.user_prefix.len, std.math.add(usize, user_msg.len, self.user_suffix.len + self.assistant_prefix.len + self.generation_prefix.len) catch return error.OutOfMemory) catch return error.OutOfMemory;
         try result.ensureTotalCapacity(allocator, total);
         try result.appendSlice(allocator, self.assistant_suffix);
         try result.appendSlice(allocator, self.user_prefix);

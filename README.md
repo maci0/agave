@@ -191,7 +191,7 @@ Measured on Apple M4 Pro (48 GB unified memory). See [docs/BENCHMARKS.md](docs/B
 
 ## Prerequisites
 
-- **Zig 0.15.2**
+- **Zig 0.16.0**
 - macOS (Metal backend) / Linux (Vulkan, CUDA, ROCm) / any platform (CPU backend)
 - GPU backends load drivers at runtime via dlopen — no SDK needed at build time
 
@@ -235,7 +235,7 @@ agave [OPTIONS] <model> [prompt]
       --mmproj <PATH>      Path to vision projector GGUF (mmproj file)
       --image <PATH>       Path to image file for multimodal inference (PNG or PPM)
       --kv-eviction <MODE> KV cache eviction policy: none, norm, tri [default: none]
-      --kv-budget <N>      Max KV entries to retain after eviction [default: ctx-size]
+      --kv-budget <N>      Max KV entries to retain after eviction [default: 80% of ctx-size]
       --mmap               Use lazy mmap instead of preloading weights into RAM
 ```
 
@@ -442,7 +442,7 @@ zig build -Dtarget=aarch64-linux-musl \
 
 ## Documentation
 
-- **[Tutorial: LLM Inference From Scratch](docs/tutorial/README.md)** — 16-chapter progressive tutorial + 4 appendixes
+- **[Tutorial: LLM Inference From Scratch](docs/tutorial/README.md)** — 17-chapter progressive tutorial + 4 appendixes
 - **[Architecture](docs/ARCHITECTURE.md)** — Project structure, module reference, inference pipeline
 - **[Models](docs/MODELS.md)** — Supported models, parameters, per-model details
 - **[Benchmarks](docs/BENCHMARKS.md)** — Performance comparisons vs llama.cpp

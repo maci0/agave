@@ -243,7 +243,7 @@ The composed megakernel (`mega_compose.zig`) generates an additional Metal pipel
 
 | File | Lines | Purpose |
 |------|-------|---------|
-| `src/backend/mega_compose.zig` | ~650 | Composable megakernel generator (ModelDesc, composeMSL) |
+| `src/backend/mega_compose.zig` | ~780 | Composable megakernel generator (ModelDesc, composeMSL) |
 | `src/backend/megakernel.zig` | — | Weight offset computation for fused FFN megakernels |
 | `src/backend/kernels/metal/mega_common.metal` | 732 | 18 composable building blocks |
 | `src/backend/kernels/metal/megakernel.metal` | — | 12 fused FFN kernels (Tier 1) |

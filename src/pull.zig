@@ -866,7 +866,7 @@ fn createAgaveSymlink(allocator: Allocator, repo: []const u8, snapshot_dir: []co
     };
     Io.Dir.rename(Io.Dir.cwd(), tmp_path, Io.Dir.cwd(), link_path, mod_io) catch |err| {
         eprint("Warning: could not finalize agave symlink: {}\n", .{err});
-        Io.Dir.cwd().deleteFile(mod_io,tmp_path) catch {};
+        Io.Dir.cwd().deleteFile(mod_io, tmp_path) catch {};
     };
 }
 
@@ -1489,7 +1489,7 @@ test "progressBar 50 percent" {
     const mid = progress_bar_width / 2;
     try std.testing.expect(bar[mid + 1] == '>');
     // Chars before cursor must be '=', chars after must be ' '
-    for (bar[1..mid + 1]) |c| {
+    for (bar[1 .. mid + 1]) |c| {
         try std.testing.expect(c == '=');
     }
     for (bar[mid + 2 .. bar.len - 1]) |c| {

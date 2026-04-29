@@ -41,6 +41,8 @@ agave/
 │   ├── display.zig        # Rich CLI output (banner, stats, progress)
 │   ├── chat_template.zig  # Data-driven chat prompt templates (ChatML, Gemma, Gemma 4, Qwen35, GLM-4, GPT-OSS)
 │   ├── recipe.zig         # Optional preset configs per model/hardware/quant combo
+│   ├── calibrate.zig      # TriAttention calibration subcommand (agave calibrate)
+│   ├── test_exports.zig   # Test bridge re-exporting backend types for out-of-tree tests
 │   ├── thread_pool.zig    # Futex-based work-stealing thread pool
 │   ├── perf.zig           # Performance timer utilities
 │   ├── readline.zig       # Line editor for interactive REPL
@@ -68,6 +70,7 @@ agave/
 │   │   ├── quant.zig      # Quantization helpers (bf16, mxfp4, fp8, iq4nl, nvfp4_st)
 │   │   ├── kv_quant.zig   # KV cache quantization (f32/f16/q8_0/int8/fp8/nvfp4)
 │   │   ├── mlx.zig        # MLX 4/6/8-bit dequant (mlxGemvRaw, mlxGemvRows, mlxEmbLookup)
+│   │   ├── kv_evict.zig   # KV eviction: norm-based scoring, cache compaction
 │   │   └── split_attention.zig # Split-attention: async CPU-GPU KV cache offloading
 │   ├── backend/
 │   │   ├── backend.zig    # Backend interface (gemv, rmsNorm, softmax, ...)
@@ -79,7 +82,8 @@ agave/
 │   │   ├── megakernel.zig # Weight offset computation for fused FFN megakernels
 │   │   ├── mega_compose.zig # Composable megakernel generator (ModelDesc → MSL at runtime)
 │   │   ├── objc.zig       # Objective-C runtime bridge for Metal API
-│   │   └── kernels/       # GPU kernel source files
+│   │   └── kernels/       # Kernel source files
+│   │       ├── cpu/       # CPU SIMD kernels (gemv_*.zig, sdpa.zig, softmax.zig, norm.zig, rope.zig, ...)
 │   │       ├── metal/     # MSL compute shaders (incl. megakernel.metal, mega_common.metal, mega_*.metal)
 │   │       ├── vulkan/    # GLSL compute shaders → compiled SPIR-V (.spv)
 │   │       ├── cuda/      # Zig kernels compiled to PTX (incl. fused_ffn_q8_0.zig, mega_*.zig)

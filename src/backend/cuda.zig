@@ -771,8 +771,8 @@ pub const CudaBackend = struct {
         var nf: u32 = @intCast(n_ff);
         var ne: u32 = @intCast(n_embd);
         var params = [_]?*anyopaque{
-            @ptrCast(&d_x), @ptrCast(&d_gate), @ptrCast(&d_up),
-            @ptrCast(&d_out), @ptrCast(&nf), @ptrCast(&ne),
+            @ptrCast(&d_x),   @ptrCast(&d_gate), @ptrCast(&d_up),
+            @ptrCast(&d_out), @ptrCast(&nf),     @ptrCast(&ne),
         };
         self.launch(self.fn_fused_ffn_q8, @intCast(n_ff), block_size, reduction_smem, &params);
     }
@@ -965,7 +965,7 @@ pub const CudaBackend = struct {
         var dim_u: u32 = @intCast(head_dim);
         var eps_v: f32 = eps;
         var params = [_]?*anyopaque{
-            @ptrCast(&d_data), @ptrCast(&d_w), @ptrCast(&d_data),
+            @ptrCast(&d_data),  @ptrCast(&d_w),   @ptrCast(&d_data),
             @ptrCast(&n_tok_u), @ptrCast(&dim_u), @ptrCast(&eps_v),
         };
         self.launch(self.fn_rms_norm_batched, @intCast(n_heads), block_size, reduction_smem, &params);
@@ -981,7 +981,7 @@ pub const CudaBackend = struct {
         var stride_u32: u32 = @intCast(stride);
         var n_pairs_u32: u32 = @intCast(n_pairs);
         var params = [_]?*anyopaque{
-            @ptrCast(&d_in), @ptrCast(&d_a), @ptrCast(&d_b),
+            @ptrCast(&d_in),       @ptrCast(&d_a),         @ptrCast(&d_b),
             @ptrCast(&stride_u32), @ptrCast(&n_pairs_u32),
         };
         const grid: u32 = @intCast((total + block_size - 1) / block_size);
@@ -1053,10 +1053,18 @@ pub const CudaBackend = struct {
         var k_u32: u32 = @intCast(k);
         var params = [_]?*anyopaque{
             @ptrCast(&d_x),
-            @ptrCast(&d_w0), @ptrCast(&d_y0), @ptrCast(&n0),
-            @ptrCast(&d_w1), @ptrCast(&d_y1), @ptrCast(&n1),
-            @ptrCast(&d_w2), @ptrCast(&d_y2), @ptrCast(&n2),
-            @ptrCast(&d_w3), @ptrCast(&d_y3), @ptrCast(&n3),
+            @ptrCast(&d_w0),
+            @ptrCast(&d_y0),
+            @ptrCast(&n0),
+            @ptrCast(&d_w1),
+            @ptrCast(&d_y1),
+            @ptrCast(&n1),
+            @ptrCast(&d_w2),
+            @ptrCast(&d_y2),
+            @ptrCast(&n2),
+            @ptrCast(&d_w3),
+            @ptrCast(&d_y3),
+            @ptrCast(&n3),
             @ptrCast(&k_u32),
         };
 
@@ -1142,7 +1150,7 @@ pub const CudaBackend = struct {
         var n_u32: u32 = @intCast(n);
         var eps_f32: f32 = eps;
         var params = [_]?*anyopaque{
-            @ptrCast(&d_a), @ptrCast(&d_b), @ptrCast(&d_w),
+            @ptrCast(&d_a),   @ptrCast(&d_b),   @ptrCast(&d_w),
             @ptrCast(&d_out), @ptrCast(&n_u32), @ptrCast(&eps_f32),
         };
         self.launch(self.fn_add_rms_norm, 1, block_size, reduction_smem, &params);
@@ -1159,7 +1167,7 @@ pub const CudaBackend = struct {
         var out_u32: u32 = @intCast(out_dim);
         var in_u32: u32 = @intCast(in_dim);
         var params = [_]?*anyopaque{
-            @ptrCast(&d_x), @ptrCast(&d_w), @ptrCast(&d_y),
+            @ptrCast(&d_x),     @ptrCast(&d_w),    @ptrCast(&d_y),
             @ptrCast(&out_u32), @ptrCast(&in_u32),
         };
         self.launch(self.fn_gemv_t_q8_0, @intCast(out_dim), block_size, reduction_smem, &params);
@@ -1174,7 +1182,7 @@ pub const CudaBackend = struct {
         var scale_f32: f32 = scale;
         var n_u32: u32 = @intCast(n);
         var params = [_]?*anyopaque{
-            @ptrCast(&d_src), @ptrCast(&d_dst),
+            @ptrCast(&d_src),     @ptrCast(&d_dst),
             @ptrCast(&scale_f32), @ptrCast(&n_u32),
         };
         const grid: u32 = @intCast((n + block_size - 1) / block_size);
@@ -1248,7 +1256,7 @@ pub const CudaBackend = struct {
         var n_u32: u32 = @intCast(n);
         var k_u32: u32 = @intCast(k);
         var params = [_]?*anyopaque{
-            @ptrCast(&d_x), @ptrCast(&d_w), @ptrCast(&d_s),
+            @ptrCast(&d_x), @ptrCast(&d_w),   @ptrCast(&d_s),
             @ptrCast(&d_y), @ptrCast(&n_u32), @ptrCast(&k_u32),
         };
         self.launch(self.fn_gemv_nvfp4_st, @intCast(n), block_size, reduction_smem, &params);
@@ -1271,8 +1279,8 @@ pub const CudaBackend = struct {
         var n_u32: u32 = @intCast(n);
         var k_u32: u32 = @intCast(k);
         var params = [_]?*anyopaque{
-            @ptrCast(&d_x), @ptrCast(&d_w), @ptrCast(&d_s),
-            @ptrCast(&d_b), @ptrCast(&d_y), @ptrCast(&n_u32),
+            @ptrCast(&d_x),   @ptrCast(&d_w), @ptrCast(&d_s),
+            @ptrCast(&d_b),   @ptrCast(&d_y), @ptrCast(&n_u32),
             @ptrCast(&k_u32),
         };
         const func = switch (bits) {
@@ -1298,7 +1306,7 @@ pub const CudaBackend = struct {
         var n_u32: u32 = @intCast(n);
         var k_u32: u32 = @intCast(k);
         var params = [_]?*anyopaque{
-            @ptrCast(&d_x), @ptrCast(&d_w), @ptrCast(&d_s),
+            @ptrCast(&d_x), @ptrCast(&d_w),   @ptrCast(&d_s),
             @ptrCast(&d_y), @ptrCast(&n_u32), @ptrCast(&k_u32),
         };
         self.launch(self.fn_gemv_mxfp4_st, @intCast(n), block_size, reduction_smem, &params);
@@ -1455,9 +1463,9 @@ pub const CudaBackend = struct {
             var scale_f32: f32 = scale;
 
             var params = [_]?*anyopaque{
-                @ptrCast(&d_q),      @ptrCast(&d_keys),  @ptrCast(&d_vals),
-                @ptrCast(&d_out),    @ptrCast(&nh_u32),   @ptrCast(&nkv_u32),
-                @ptrCast(&hd_u32),   @ptrCast(&sl),       @ptrCast(&kvd_u32),
+                @ptrCast(&d_q),       @ptrCast(&d_keys), @ptrCast(&d_vals),
+                @ptrCast(&d_out),     @ptrCast(&nh_u32), @ptrCast(&nkv_u32),
+                @ptrCast(&hd_u32),    @ptrCast(&sl),     @ptrCast(&kvd_u32),
                 @ptrCast(&scale_f32),
             };
 
@@ -1497,9 +1505,9 @@ pub const CudaBackend = struct {
 
             var params = [_]?*anyopaque{
                 @ptrCast(&d_q),       @ptrCast(&d_keys),   @ptrCast(&d_vals),
-                @ptrCast(&d_out),     @ptrCast(&nh_u32),    @ptrCast(&nkv_u32),
-                @ptrCast(&hd_u32),    @ptrCast(&sl),         @ptrCast(&kvd_u32),
-                @ptrCast(&scale_f32), @ptrCast(&bits_k_u),   @ptrCast(&bits_v_u),
+                @ptrCast(&d_out),     @ptrCast(&nh_u32),   @ptrCast(&nkv_u32),
+                @ptrCast(&hd_u32),    @ptrCast(&sl),       @ptrCast(&kvd_u32),
+                @ptrCast(&scale_f32), @ptrCast(&bits_k_u), @ptrCast(&bits_v_u),
                 @ptrCast(&bb_k_u),    @ptrCast(&bb_v_u),
             };
 
@@ -1539,7 +1547,7 @@ pub const CudaBackend = struct {
             var n_in_u: u32 = @intCast(n_in);
             var n_tok_u: u32 = @intCast(n_tok);
             var params = [_]?*anyopaque{
-                @ptrCast(&d_x), @ptrCast(&d_w), @ptrCast(&d_y),
+                @ptrCast(&d_x),     @ptrCast(&d_w),    @ptrCast(&d_y),
                 @ptrCast(&n_out_u), @ptrCast(&n_in_u), @ptrCast(&n_tok_u),
             };
             self.launch(self.fn_gemm_q8_0, @intCast(n_out), block_size, reduction_smem, &params);
@@ -1560,7 +1568,7 @@ pub const CudaBackend = struct {
         var dim_u: u32 = @intCast(dim);
         var eps_v: f32 = eps;
         var params = [_]?*anyopaque{
-            @ptrCast(&d_in), @ptrCast(&d_w), @ptrCast(&d_out),
+            @ptrCast(&d_in),    @ptrCast(&d_w),   @ptrCast(&d_out),
             @ptrCast(&n_tok_u), @ptrCast(&dim_u), @ptrCast(&eps_v),
         };
         self.launch(self.fn_rms_norm_batched, @intCast(n_tok), block_size, reduction_smem, &params);
@@ -1579,9 +1587,10 @@ pub const CudaBackend = struct {
         var rd_u: u32 = @intCast(rope_dim);
         var theta_v: f32 = theta;
         var params = [_]?*anyopaque{
-            @ptrCast(&d_x), @ptrCast(&d_pos),
-            @ptrCast(&n_tok_u), @ptrCast(&nh_u), @ptrCast(&hd_u),
-            @ptrCast(&rd_u), @ptrCast(&theta_v),
+            @ptrCast(&d_x),     @ptrCast(&d_pos),
+            @ptrCast(&n_tok_u), @ptrCast(&nh_u),
+            @ptrCast(&hd_u),    @ptrCast(&rd_u),
+            @ptrCast(&theta_v),
         };
         const grid = @as(u32, @intCast((total + block_size - 1) / block_size));
         self.launch(self.fn_rope_batched, grid, block_size, 0, &params);
@@ -1648,11 +1657,11 @@ pub const CudaBackend = struct {
                 var bb_v_u: u32 = kv_type_v.turboBlockByteSize();
 
                 var params = [_]?*anyopaque{
-                    @ptrCast(&d_q),       @ptrCast(&d_keys),   @ptrCast(&d_vals),
-                    @ptrCast(&d_out),     @ptrCast(&nh_u),      @ptrCast(&nkv_u),
-                    @ptrCast(&hd_u),      @ptrCast(&sl),         @ptrCast(&kvd_u),
-                    @ptrCast(&scale_f),   @ptrCast(&bits_k_u),   @ptrCast(&bits_v_u),
-                    @ptrCast(&bb_k_u),    @ptrCast(&bb_v_u),
+                    @ptrCast(&d_q),     @ptrCast(&d_keys),   @ptrCast(&d_vals),
+                    @ptrCast(&d_out),   @ptrCast(&nh_u),     @ptrCast(&nkv_u),
+                    @ptrCast(&hd_u),    @ptrCast(&sl),       @ptrCast(&kvd_u),
+                    @ptrCast(&scale_f), @ptrCast(&bits_k_u), @ptrCast(&bits_v_u),
+                    @ptrCast(&bb_k_u),  @ptrCast(&bb_v_u),
                 };
 
                 const smem: u32 = (sl + 1) * @sizeOf(f32);
@@ -1692,10 +1701,10 @@ pub const CudaBackend = struct {
         const smem: u32 = (hd_u + prefill_kv_tile * hd_u + prefill_kv_tile + hd_u + prefill_reduce_slots + 1) * @sizeOf(f32);
 
         var params = [_]?*anyopaque{
-            @ptrCast(&d_q),       @ptrCast(&d_k_cache), @ptrCast(&d_v_cache),
-            @ptrCast(&d_k_new),   @ptrCast(&d_v_new),   @ptrCast(&d_out),
-            @ptrCast(&nh_u),      @ptrCast(&nkv_u),     @ptrCast(&hd_u),
-            @ptrCast(&prev_u),    @ptrCast(&ntok_u),     @ptrCast(&scale_f),
+            @ptrCast(&d_q),     @ptrCast(&d_k_cache), @ptrCast(&d_v_cache),
+            @ptrCast(&d_k_new), @ptrCast(&d_v_new),   @ptrCast(&d_out),
+            @ptrCast(&nh_u),    @ptrCast(&nkv_u),     @ptrCast(&hd_u),
+            @ptrCast(&prev_u),  @ptrCast(&ntok_u),    @ptrCast(&scale_f),
         };
 
         const grid: u32 = ntok_u * nh_u;

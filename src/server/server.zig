@@ -904,7 +904,7 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
             g_server.pending_visual_tokens = 0;
         };
 
-        if (json.extractBoolField(body,"stream")) {
+        if (json.extractBoolField(body, "stream")) {
             startStream(stream, formatted, true, false, max_tokens, sampling);
             logRequestDone(method, path, 200, elapsedMs(request_start));
             return;
@@ -958,7 +958,7 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
         g_server.metrics.recordRequest();
 
         const body = req.body;
-        const prompt_raw = json.extractField(body,"prompt") orelse {
+        const prompt_raw = json.extractField(body, "prompt") orelse {
             sendJsonError(stream, "400 Bad Request", "invalid_request_error", "Missing required field: prompt");
             g_server.metrics.recordFailure();
             logRequestDone(method, path, 400, elapsedMs(request_start));
@@ -982,7 +982,7 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
             return;
         }
 
-        if (json.extractBoolField(body,"stream")) {
+        if (json.extractBoolField(body, "stream")) {
             startStreamRaw(stream, prompt, max_tokens, sampling_c);
             logRequestDone(method, path, 200, elapsedMs(request_start));
             return;
@@ -1049,7 +1049,7 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
         g_server.metrics.recordRequest();
 
         const body = req.body;
-        const input_raw = json.extractField(body,"input") orelse {
+        const input_raw = json.extractField(body, "input") orelse {
             sendJsonError(stream, "400 Bad Request", "invalid_request_error", "Missing required field: input");
             g_server.metrics.recordFailure();
             logRequestDone(method, path, 400, elapsedMs(request_start));
@@ -1075,7 +1075,7 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
             return;
         }
 
-        if (json.extractBoolField(body,"stream")) {
+        if (json.extractBoolField(body, "stream")) {
             startResponsesStream(stream, input, max_tokens, sampling_r);
             logRequestDone(method, path, 200, elapsedMs(request_start));
             return;
@@ -1134,7 +1134,7 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
         const max_tokens_m = @max(1, @min(json.extractIntField(body, "max_tokens") orelse default_max_gen_tokens, gen_ids_buf_size));
         const sampling_m = json.parseSampling(body);
         // Anthropic: system message is a top-level field, not in messages array
-        const system_msg_raw = json.extractField(body,"system");
+        const system_msg_raw = json.extractField(body, "system");
         const system_msg = if (system_msg_raw) |s| (json.jsonUnescape(g_server.allocator, s) catch @constCast(s)) else null;
         defer if (system_msg) |s| if (system_msg_raw) |r| {
             if (s.ptr != r.ptr) g_server.allocator.free(s);
@@ -1175,7 +1175,7 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
             return;
         }
 
-        if (json.extractBoolField(body,"stream")) {
+        if (json.extractBoolField(body, "stream")) {
             startAnthropicStream(stream, formatted_m, max_tokens_m, prompt_tokens_m, sampling_m);
             logRequestDone(method, path, 200, elapsedMs(request_start));
             return;
@@ -1264,7 +1264,7 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
         // All conversation mutations must be mutex-protected to prevent
         // races with concurrent generate() calls that read kv_valid.
         const body = req.body;
-        const action = json.extractFormField(body,"action") orelse "new";
+        const action = json.extractFormField(body, "action") orelse "new";
         if (std.mem.eql(u8, action, "new")) {
             g_server.mutex.lockUncancelable(g_server.io);
             const new_conv = g_server.createConv();
@@ -1284,7 +1284,7 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
             g_server.metrics.recordCompletion();
             logRequestDone(method, path, 200, elapsedMs(request_start));
         } else if (std.mem.eql(u8, action, "select")) {
-            const id_str = json.extractFormField(body,"id") orelse "0";
+            const id_str = json.extractFormField(body, "id") orelse "0";
             const id = std.fmt.parseInt(u32, id_str, 10) catch 0;
             g_server.mutex.lockUncancelable(g_server.io);
             const conv = g_server.getConvById(id);
@@ -1309,7 +1309,7 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
                         .user => "user",
                         .assistant => "assistant",
                     };
-                    const esc_content = json.jsonEscape(g_server.allocator,msg.content) catch msg.content;
+                    const esc_content = json.jsonEscape(g_server.allocator, msg.content) catch msg.content;
                     defer if (esc_content.ptr != msg.content.ptr) g_server.allocator.free(esc_content);
                     mw.print(
                         \\{{"role":"{s}","content":"{s}"}}
@@ -1329,7 +1329,7 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
                 logRequestDone(method, path, 500, elapsedMs(request_start));
             }
         } else if (std.mem.eql(u8, action, "delete")) {
-            const id_str = json.extractFormField(body,"id") orelse "0";
+            const id_str = json.extractFormField(body, "id") orelse "0";
             const id = std.fmt.parseInt(u32, id_str, 10) catch 0;
             g_server.mutex.lockUncancelable(g_server.io);
             if (g_server.getConvById(id) == null) {
@@ -1527,7 +1527,7 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
         g_server.metrics.recordRequest();
 
         const body = req.body;
-        const msg = json.extractFormField(body,"message") orelse {
+        const msg = json.extractFormField(body, "message") orelse {
             sendJsonError(stream, "400 Bad Request", "invalid_request_error", "Missing required field: message");
             g_server.metrics.recordFailure();
             logRequestDone(method, path, 400, elapsedMs(request_start));
@@ -1539,7 +1539,7 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
             logRequestDone(method, path, 400, elapsedMs(request_start));
             return;
         }
-        const decoded = json.urlDecode(g_server.allocator,msg) catch g_server.allocator.dupe(u8, msg) catch return;
+        const decoded = json.urlDecode(g_server.allocator, msg) catch g_server.allocator.dupe(u8, msg) catch return;
         defer g_server.allocator.free(decoded);
         if (decoded.len > max_message_len) {
             sendJsonError(stream, "400 Bad Request", "invalid_request_error", "Message too long");
@@ -1813,7 +1813,7 @@ fn handleChatCommand(cmd: []const u8) ?[]const u8 {
     }
     if (std.mem.eql(u8, cmd, "/model")) {
         slog("  [command] /model\n", .{});
-        const escaped_name = json.htmlEscape(g_server.allocator,g_server.model_name) catch g_server.model_name;
+        const escaped_name = json.htmlEscape(g_server.allocator, g_server.model_name) catch g_server.model_name;
         defer if (escaped_name.ptr != g_server.model_name.ptr) g_server.allocator.free(escaped_name);
         return std.fmt.bufPrint(&cmd_buf,
             \\<div class="msg assistant" data-tokens="0" data-time="0" data-tps="0">Model: {s}</div>
@@ -1947,7 +1947,7 @@ const GeneratedEscaped = struct {
 fn generateEscapedN(prompt: []const u8, reset: bool, max_tokens: usize, sampling: SamplingParams) GeneratedEscaped {
     const result = generateN(prompt, reset, max_tokens, sampling);
     logGeneration(result.stats.tokens_generated, result.stats.time_ms, result.stats.tokens_per_sec);
-    const escaped = json.jsonEscape(g_server.allocator,result.data) catch result.data;
+    const escaped = json.jsonEscape(g_server.allocator, result.data) catch result.data;
     return .{
         .raw = result.data,
         .escaped = escaped,
@@ -2158,7 +2158,10 @@ fn generateN(formatted: []const u8, reset: bool, max_tokens: usize, sampling: Sa
 
             for (0..result.accepted) |i| {
                 const accepted_tok = spec_state.draft_tokens[i];
-                if (g_server.isEog(accepted_tok)) { hit_eog = true; break; }
+                if (g_server.isEog(accepted_tok)) {
+                    hit_eog = true;
+                    break;
+                }
                 if (token_count >= effective_max) break;
                 gen_tokens[token_count] = accepted_tok;
                 token_count += 1;
@@ -2420,7 +2423,10 @@ fn chatStreamGenerate(stream: TcpStream, formatted: []const u8, reset: bool, max
         gen_tokens[token_count] = next;
         last = next;
         token_count += 1;
-        if (!streamToken(stream, tok, next)) { client_disconnected = true; break; }
+        if (!streamToken(stream, tok, next)) {
+            client_disconnected = true;
+            break;
+        }
     }
 
     const gen_end = milliTimestamp();
@@ -2750,11 +2756,16 @@ fn generateAnthropicStream(stream: TcpStream, formatted: []const u8, max_tokens:
             for (0..res.accepted) |i| {
                 const at = a_spec.draft_tokens[i];
                 if (g_server.isEog(at)) break;
-                if (!streamAnthropicDelta(stream, tok, at)) { anth_disconnected = true; break; }
+                if (!streamAnthropicDelta(stream, tok, at)) {
+                    anth_disconnected = true;
+                    break;
+                }
                 token_count += 1;
             }
             if (!anth_disconnected and !g_server.isEog(res.next_token)) {
-                if (!streamAnthropicDelta(stream, tok, res.next_token)) { anth_disconnected = true; }
+                if (!streamAnthropicDelta(stream, tok, res.next_token)) {
+                    anth_disconnected = true;
+                }
                 token_count += 1;
             }
             last = res.next_token;
@@ -2775,7 +2786,10 @@ fn generateAnthropicStream(stream: TcpStream, formatted: []const u8, max_tokens:
             }
             if (g_server.isEog(next)) break;
 
-            if (!streamAnthropicDelta(stream, tok, next)) { anth_disconnected = true; break; }
+            if (!streamAnthropicDelta(stream, tok, next)) {
+                anth_disconnected = true;
+                break;
+            }
             last = next;
             token_count += 1;
         }
@@ -2976,7 +2990,7 @@ fn generateResponsesStream(stream: TcpStream, prompt: []const u8, max_tokens: us
                 break :d g_server.allocator.dupe(u8, "") catch @constCast("");
             };
             defer g_server.allocator.free(decoded);
-            const escaped = json.jsonEscape(g_server.allocator,decoded) catch decoded;
+            const escaped = json.jsonEscape(g_server.allocator, decoded) catch decoded;
             defer if (escaped.ptr != decoded.ptr) g_server.allocator.free(escaped);
 
             const stop_reason: []const u8 = if (token_count >= max_tokens) "max_tokens" else "stop";
@@ -3095,12 +3109,17 @@ fn generateResponsesStream(stream: TcpStream, prompt: []const u8, max_tokens: us
             for (0..res.accepted) |i| {
                 const at = r_spec.draft_tokens[i];
                 if (g_server.isEog(at)) break;
-                if (!streamResponsesDelta(stream, tok, at)) { resp_disconnected = true; break; }
+                if (!streamResponsesDelta(stream, tok, at)) {
+                    resp_disconnected = true;
+                    break;
+                }
                 if (token_count < gen_ids_buf_size) gen_tokens[token_count] = at;
                 token_count += 1;
             }
             if (!resp_disconnected and !g_server.isEog(res.next_token)) {
-                if (!streamResponsesDelta(stream, tok, res.next_token)) { resp_disconnected = true; }
+                if (!streamResponsesDelta(stream, tok, res.next_token)) {
+                    resp_disconnected = true;
+                }
                 if (token_count < gen_ids_buf_size) gen_tokens[token_count] = res.next_token;
                 token_count += 1;
             }
@@ -3122,7 +3141,10 @@ fn generateResponsesStream(stream: TcpStream, prompt: []const u8, max_tokens: us
             }
             if (g_server.isEog(next)) break;
 
-            if (!streamResponsesDelta(stream, tok, next)) { resp_disconnected = true; break; }
+            if (!streamResponsesDelta(stream, tok, next)) {
+                resp_disconnected = true;
+                break;
+            }
             gen_tokens[token_count] = next;
             last = next;
             token_count += 1;
@@ -3136,7 +3158,7 @@ fn generateResponsesStream(stream: TcpStream, prompt: []const u8, max_tokens: us
             break :d g_server.allocator.dupe(u8, "") catch @constCast("");
         };
         defer g_server.allocator.free(decoded);
-        const escaped = json.jsonEscape(g_server.allocator,decoded) catch decoded;
+        const escaped = json.jsonEscape(g_server.allocator, decoded) catch decoded;
         defer if (escaped.ptr != decoded.ptr) g_server.allocator.free(escaped);
 
         const stop_reason: []const u8 = if (token_count >= max_tokens) "max_tokens" else "stop";
@@ -3437,11 +3459,16 @@ fn generateStream(stream: TcpStream, prompt: []const u8, req_id: u64, created: i
             for (0..res.accepted) |i| {
                 const at = s_spec.draft_tokens[i];
                 if (g_server.isEog(at)) break;
-                if (!streamChunk(stream, &chunk_buf, tok, at, req_id, created, is_chat)) { stream_disconnected = true; break; }
+                if (!streamChunk(stream, &chunk_buf, tok, at, req_id, created, is_chat)) {
+                    stream_disconnected = true;
+                    break;
+                }
                 token_count += 1;
             }
             if (!stream_disconnected and !g_server.isEog(res.next_token)) {
-                if (!streamChunk(stream, &chunk_buf, tok, res.next_token, req_id, created, is_chat)) { stream_disconnected = true; }
+                if (!streamChunk(stream, &chunk_buf, tok, res.next_token, req_id, created, is_chat)) {
+                    stream_disconnected = true;
+                }
                 token_count += 1;
             }
             last = res.next_token;
@@ -3462,7 +3489,10 @@ fn generateStream(stream: TcpStream, prompt: []const u8, req_id: u64, created: i
                 next = math_ops.sampleToken(model.getLogits(), sampling.temperature, sampling.top_k, sampling.top_p, prng_s.random());
             }
             if (g_server.isEog(next)) break;
-            if (!streamChunk(stream, &chunk_buf, tok, next, req_id, created, is_chat)) { stream_disconnected = true; break; }
+            if (!streamChunk(stream, &chunk_buf, tok, next, req_id, created, is_chat)) {
+                stream_disconnected = true;
+                break;
+            }
             last = next;
             token_count += 1;
         }
@@ -3490,7 +3520,6 @@ fn generateStream(stream: TcpStream, prompt: []const u8, req_id: u64, created: i
 }
 
 // JSON field extraction, encoding, and form-parsing utilities are in json.zig.
-
 
 // ── Connection handler & server entry point ─────────────────────
 
@@ -3779,4 +3808,3 @@ test "parseContentLength non-numeric rejects" {
 test "parseContentLength empty headers returns zero" {
     try std.testing.expectEqual(@as(?usize, 0), parseContentLength(""));
 }
-

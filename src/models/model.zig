@@ -423,7 +423,13 @@ pub fn dispatchGemv(be: backend_mod.Backend, fmt: format_mod.Format, x: [*]const
             if (gs_name.len > 0) {
                 if (fmt.getTensor(gs_name)) |gs_t| {
                     const gs = @as(*const f32, @ptrCast(@alignCast(gs_t.data_ptr))).*;
-                    if (gs != 1.0 and gs != 0.0) { const inv = 1.0 / gs; var yi: usize = 0; while (yi < n) : (yi += 1) { y[yi] *= inv; } }
+                    if (gs != 1.0 and gs != 0.0) {
+                        const inv = 1.0 / gs;
+                        var yi: usize = 0;
+                        while (yi < n) : (yi += 1) {
+                            y[yi] *= inv;
+                        }
+                    }
                 }
             }
         } else {

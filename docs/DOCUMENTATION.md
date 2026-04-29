@@ -38,5 +38,8 @@ Start here: **[tutorial/README.md](tutorial/README.md)**
 - **[Models](MODELS.md)** — supported models, parameters, per-model details, benchmarks
 - **[Kernel Status](KERNELS.md)** — per-backend kernel implementation status
 - **[Megakernel System](MEGAKERNEL.md)** — three-tier megakernel architecture (fused FFN, true megakernels, composed megakernels)
+- **[Benchmarks](BENCHMARKS.md)** — performance data across models, backends, and quantization types
 - **[Contributing](CONTRIBUTING.md)** — how to add backends, models, quantization, megakernels, chat templates
+- **[Test Matrix](TEST_MATRIX.md)** — model × backend test status and known issues
+- **[Parallelism](PARALLELISM.md)** — tensor/pipeline parallelism design (pre-implementation)
 - **[Ideas](IDEAS.md)** — future work and optimization ideas

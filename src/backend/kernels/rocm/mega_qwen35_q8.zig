@@ -38,7 +38,6 @@ const n_sync_slots: u32 = 32;
 /// On AMDGCN the grid size is passed as an implicit argument, but
 /// for the megakernel we pass n_blocks explicitly as a kernel parameter
 /// instead. This function is not used — we pass grid_dim directly.
-
 /// Atomic grid sync: all workgroups arrive before any proceed.
 /// Uses a global atomic counter; thread 0 of each workgroup increments,
 /// then spins until all workgroups have arrived. syncthreads() ensures

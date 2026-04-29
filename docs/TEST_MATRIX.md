@@ -3,7 +3,7 @@
 **Date**: 2026-04-15
 **Hardware**:
 - Metal/CPU: Apple M4 Pro (14-core CPU, 20-core GPU), 48 GB unified memory, macOS 26.4
-- CUDA: NVIDIA GB10 (Blackwell sm_121), aarch64, Ubuntu 24.04, CUDA 13.0 (maci@10.10.10.211)
+- CUDA: NVIDIA GB10 (Blackwell sm_121), aarch64, Ubuntu 24.04, CUDA 13.0 (maci@10.10.10.212)
 
 **Methodology**: Each test runs `agave model.gguf --backend X --max-tokens 10 "What is 2+2?"` with greedy sampling. Pass = coherent answer. tok/s from stderr stats line.
 
@@ -110,7 +110,7 @@
 | Gemma 4 E2B (bartowski) | Q4_K_M | PASS | PASS | Different converter, also works |
 | Gemma 4 E4B (bartowski) | Q4_K_M | PASS | PASS | |
 | Gemma 3 12B | Q8_0 | PASS | PASS | |
-| Qwen 3.5 35B-A3B | Q4_K_M | FAIL | FAIL | MoE+SSM hybrid — needs shared expert FFN implementation |
+| Qwen 3.5 35B-A3B | Q4_K_M | PASS | PASS | MoE+SSM hybrid — fixed: addRmsNorm residual in moeLayer |
 
 ## Performance Comparison vs llama.cpp (2026-04-16, Metal, M4 Pro)
 
@@ -145,5 +145,5 @@
 ## Known Issues
 
 1. **GLM-4.7 Flash** — degenerate output on both agave and llama.cpp. Likely broken GGUF conversion. The older ChatGLM-4 9B (`chatglm` arch) is a different architecture not currently supported.
-2. **Qwen 3.5 35B-A3B** — garbage output. This is a MoE+SSM hybrid that needs shared expert routing implementation (different from standard Qwen 3.5 dense models).
+2. **Qwen 3.5 35B-A3B** — FIXED. Was missing addRmsNorm residual in moeLayer. Now producing coherent output.
 3. **Gemma 4 E4B CPU** — works but extremely slow (~60s prefill for 4.5GB model with 42 layers).

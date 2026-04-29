@@ -1102,18 +1102,24 @@ fn fuseOneProjection(
             try repacked_f32.append(allocator, gs_array2);
             var gs_buf3: [fusion_name_buf_size]u8 = undefined;
             for (0..n_experts) |gi| {
-                const gi_gs = std.fmt.bufPrint(&gs_buf3, "{s}layers.{d}.mlp.experts.{d}.{s}.weight_global_scale", .{ prefix, layer, gi, hf_proj }) catch { gs_array2[gi] = 1.0; continue; };
+                const gi_gs = std.fmt.bufPrint(&gs_buf3, "{s}layers.{d}.mlp.experts.{d}.{s}.weight_global_scale", .{ prefix, layer, gi, hf_proj }) catch {
+                    gs_array2[gi] = 1.0;
+                    continue;
+                };
                 if (tensors.get(gi_gs)) |gs_e| {
                     if (gs_e.shard_idx < shard_data.len and shard_data[gs_e.shard_idx].data.len > 0) {
                         const sh = shard_data[gs_e.shard_idx];
                         const a = sh.tensor_base + gs_e.data_start;
-                        if (a + 4 <= sh.data.len) { gs_array2[gi] = @as(*const f32, @ptrCast(@alignCast(sh.data.ptr + a))).*; continue; }
+                        if (a + 4 <= sh.data.len) {
+                            gs_array2[gi] = @as(*const f32, @ptrCast(@alignCast(sh.data.ptr + a))).*;
+                            continue;
+                        }
                     }
                 }
                 gs_array2[gi] = 1.0;
             }
             var gguf_gs3: [fusion_name_buf_size]u8 = undefined;
-            const bn = gguf_weight_name[0..gguf_weight_name.len - ".weight".len];
+            const bn = gguf_weight_name[0 .. gguf_weight_name.len - ".weight".len];
             const gsn = std.fmt.bufPrint(&gguf_gs3, "blk.{d}.{s}.global_scale", .{ layer, bn }) catch return;
             const owned_gsn = try dupeString(allocator, owned, gsn);
             try fused.put(owned_gsn, TensorEntry{ .shard_idx = max_shard_count, .data_start = @intFromPtr(gs_array2.ptr), .data_end = @intFromPtr(gs_array2.ptr) + n_experts * @sizeOf(f32), .dtype = .f32, .n_dims = 1, .dims = .{ n_experts, 0, 0, 0 } });
@@ -1123,12 +1129,18 @@ fn fuseOneProjection(
             try repacked_f32.append(allocator, is_array);
             var is_buf3: [fusion_name_buf_size]u8 = undefined;
             for (0..n_experts) |gi| {
-                const gi_is = std.fmt.bufPrint(&is_buf3, "{s}layers.{d}.mlp.experts.{d}.{s}.input_global_scale", .{ prefix, layer, gi, hf_proj }) catch { is_array[gi] = 1.0; continue; };
+                const gi_is = std.fmt.bufPrint(&is_buf3, "{s}layers.{d}.mlp.experts.{d}.{s}.input_global_scale", .{ prefix, layer, gi, hf_proj }) catch {
+                    is_array[gi] = 1.0;
+                    continue;
+                };
                 if (tensors.get(gi_is)) |is_e| {
                     if (is_e.shard_idx < shard_data.len and shard_data[is_e.shard_idx].data.len > 0) {
                         const sh2 = shard_data[is_e.shard_idx];
                         const a2 = sh2.tensor_base + is_e.data_start;
-                        if (a2 + 4 <= sh2.data.len) { is_array[gi] = @as(*const f32, @ptrCast(@alignCast(sh2.data.ptr + a2))).*; continue; }
+                        if (a2 + 4 <= sh2.data.len) {
+                            is_array[gi] = @as(*const f32, @ptrCast(@alignCast(sh2.data.ptr + a2))).*;
+                            continue;
+                        }
                     }
                 }
                 is_array[gi] = 1.0;
@@ -1197,12 +1209,18 @@ fn fuseOneProjection(
         try repacked_f32.append(allocator, is_array);
         var is_buf_c: [fusion_name_buf_size]u8 = undefined;
         for (0..n_experts) |gi| {
-            const gi_is = std.fmt.bufPrint(&is_buf_c, "{s}layers.{d}.mlp.experts.{d}.{s}.input_global_scale", .{ prefix, layer, gi, hf_proj }) catch { is_array[gi] = 1.0; continue; };
+            const gi_is = std.fmt.bufPrint(&is_buf_c, "{s}layers.{d}.mlp.experts.{d}.{s}.input_global_scale", .{ prefix, layer, gi, hf_proj }) catch {
+                is_array[gi] = 1.0;
+                continue;
+            };
             if (tensors.get(gi_is)) |is_e| {
                 if (is_e.shard_idx < shard_data.len and shard_data[is_e.shard_idx].data.len > 0) {
                     const sh2 = shard_data[is_e.shard_idx];
                     const a2 = sh2.tensor_base + is_e.data_start;
-                    if (a2 + 4 <= sh2.data.len) { is_array[gi] = @as(*const f32, @ptrCast(@alignCast(sh2.data.ptr + a2))).*; continue; }
+                    if (a2 + 4 <= sh2.data.len) {
+                        is_array[gi] = @as(*const f32, @ptrCast(@alignCast(sh2.data.ptr + a2))).*;
+                        continue;
+                    }
                 }
             }
             is_array[gi] = 1.0;

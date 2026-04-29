@@ -792,5 +792,3 @@ fn inferMlxBits(t: TensorInfo, k: u32) u32 {
     const result = words_dim * bits_per_u32_word / @as(u64, k);
     return if (result >= min_mlx_bits and result <= max_mlx_bits) @intCast(result) else default_mlx_bits;
 }
-
-

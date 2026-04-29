@@ -62,7 +62,6 @@ pub const CompiledTree = struct {
         return null;
     }
 
-
     /// Test whether bit j is set in an ancestor mask.
     pub inline fn isAncestor(mask: [8]u64, j: usize) bool {
         return mask[j / 64] & (@as(u64, 1) << @intCast(@as(u6, @truncate(j)))) != 0;

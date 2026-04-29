@@ -344,7 +344,9 @@ fn sampleResidual(target_probs: []const f32, draft_log_probs: []const f32, vs: u
 /// Two-pass log-softmax: v_i = v_i - max - log(sum(exp(v - max))).
 fn logSoftmax(logits: []f32) void {
     var max_val: f32 = logits[0];
-    for (logits[1..]) |v| if (v > max_val) { max_val = v; };
+    for (logits[1..]) |v| if (v > max_val) {
+        max_val = v;
+    };
     var sum_exp: f32 = 0;
     for (logits) |*v| {
         v.* -= max_val;

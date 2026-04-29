@@ -88,13 +88,13 @@ pub fn computeOffsets(fmt: Format, n_layers: u32) WeightPack {
     var base_addr: usize = std.math.maxInt(usize);
 
     const layer_names = .{
-        "attn_norm.weight",   "attn_q.weight",      "attn_k.weight",
-        "attn_v.weight",      "attn_q_norm.weight",  "attn_k_norm.weight",
-        "attn_output.weight", "attn_qkv.weight",    "attn_gate.weight",
-        "ssm_alpha.weight",   "ssm_beta.weight",    "ssm_a",
-        "ssm_dt.bias",        "ssm_conv1d.weight",  "ssm_norm.weight",
-        "ssm_out.weight",     "post_attention_norm.weight",
-        "ffn_gate.weight",    "ffn_up.weight",      "ffn_down.weight",
+        "attn_norm.weight",   "attn_q.weight",              "attn_k.weight",
+        "attn_v.weight",      "attn_q_norm.weight",         "attn_k_norm.weight",
+        "attn_output.weight", "attn_qkv.weight",            "attn_gate.weight",
+        "ssm_alpha.weight",   "ssm_beta.weight",            "ssm_a",
+        "ssm_dt.bias",        "ssm_conv1d.weight",          "ssm_norm.weight",
+        "ssm_out.weight",     "post_attention_norm.weight", "ffn_gate.weight",
+        "ffn_up.weight",      "ffn_down.weight",
     };
 
     for (0..n_layers) |li| {

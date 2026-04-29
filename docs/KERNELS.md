@@ -16,7 +16,7 @@ This document tracks the implementation status of all compute kernels across bac
 | Operation | CPU | Metal | Vulkan | CUDA | ROCm |
 | :--- | :---: | :---: | :---: | :---: | :---: |
 | RMS Norm | Native (SIMD) | Native (fused) | Native (fused) | Native | Native |
-| RMS Norm Multi (per-head) | Native | Native | Missing | Native | Missing |
+| RMS Norm Multi (per-head) | Native | Native | Missing | Native | Disabled⁸ |
 | L2 Norm | Native (SIMD) | Native | Native (fused) | Native | Native |
 | Softmax | Native (SIMD) | Native (3-pass) | Native (fused) | Native | Native |
 | SiLU | Native (SIMD) | Native | Native | Native | Native |
@@ -56,6 +56,7 @@ This document tracks the implementation status of all compute kernels across bac
 ⁵ ROCm kernel file exists (`gemv_mlx_q4.zig`) but backend panics — not yet integrated.
 ⁶ CPU delegate: functional but delegates to CPU backend (no native GPU kernel yet).
 ⁷ GPU backends sync then delegate to CPU SDPA kernel. Used by tiered KV cache split-attention (`--kv-tiers vram+ram`) to compute per-head softmax stats (max, sum) for online merge across tiers.
+⁸ ROCm GPU kernel exists (`rms_norm_multi.zig`) but disabled — needs validation before enabling.
 
 ## True Megakernels (Tier 2)
 
@@ -126,12 +127,12 @@ The composer automatically selects the correct GEMV function (Q8_0/Q4_K/Q5_K/Q6_
 | Backend | Directory | Files |
 | :--- | :--- | :--- |
 | CPU | `src/backend/kernels/cpu/` | `gemv.zig` (dispatcher), `gemv_*.zig` (per-format), `norm.zig`, `activation.zig`, `elementwise.zig`, `rope.zig`, `softmax.zig`, `sdpa.zig`, `sdpa_tree.zig` (DDTree), `embedding.zig`, `deltanet.zig` |
-| Metal | `src/backend/kernels/metal/` | `common.metal`, `elementwise.metal` (incl. `copy_f32`), `norm.metal`, `rope.metal` (incl. `rope_batched_f32`), `gemv.metal`, `gemm.metal` (f32/Q8_0/Q4_0/BF16), `sdpa.metal` (incl. `sdpa_prefill_fa2`), `deltanet.metal`, `megakernel.metal` (12 fused FFN kernels: SiLU x {Q8_0, Q4_K, Q5_K, Q6_K, Q4_0, MLX_Q4} + GELU x {Q8_0, Q4_K, Q5_K, Q6_K, Q4_0}), `mega_common.metal` (18 composable building blocks, 732 lines), `mega_qwen35_q8.metal`, `mega_qwen35_q4k.metal`, `mega_gemma_q4k.metal`, `mega_gemma_q8.metal`, `mega_nemotron_h_q8.metal` (true megakernels) |
+| Metal | `src/backend/kernels/metal/` | `common.metal`, `elementwise.metal` (incl. `copy_f32`), `norm.metal`, `rope.metal` (incl. `rope_batched_f32`), `gemv.metal`, `gemm.metal` (f32/Q8_0/Q4_0/BF16), `sdpa.metal` (incl. `sdpa_prefill_fa2`), `deltanet.metal`, `megakernel.metal` (11 fused FFN kernels: SiLU x {Q8_0, Q4_K, Q5_K, Q6_K, Q4_0, MLX_Q4} + GELU x {Q8_0, Q4_K, Q5_K, Q6_K, Q4_0}), `mega_common.metal` (18 composable building blocks, 732 lines), `mega_qwen35_q8.metal`, `mega_qwen35_q4k.metal`, `mega_gemma_q4k.metal`, `mega_gemma_q8.metal`, `mega_nemotron_h_q8.metal` (true megakernels) |
 | Vulkan | `src/backend/kernels/vulkan/` | `silu.comp`, `gelu.comp`, `add.comp`, `mul.comp`, `rms_norm.comp`, `softmax.comp`, `l2_norm.comp`, `rope.comp`, `sdpa.comp`, `sdpa_turbo.comp`, `embedding.comp`, `conv1d.comp`, `gemv_{f32,q8_0,q4_0,bf16,f16,q4_k,q5_k,q6_k,fp8_e4m3,fp8_e5m2}.comp` (+compiled `.spv`) |
 | CUDA | `src/backend/kernels/cuda/` | `common.zig` (shared primitives), `silu.zig`, `silu_mul.zig`, `gelu.zig`, `gelu_mul.zig`, `add.zig`, `add_scaled.zig`, `add_rms_norm.zig`, `mul.zig`, `rms_norm.zig`, `rms_norm_batched.zig`, `softmax.zig`, `l2_norm.zig`, `rope.zig`, `rope_batched.zig`, `sigmoid_mul.zig`, `deinterleave.zig`, `sdpa.zig`, `sdpa_turbo.zig`, `sdpa_prefill.zig`, `gemv_{f32,bf16,f16,q8_0,q4_0,q4_0_batch,q4_1,q4_k,q5_k,q6_k,fp8_e4m3,fp8_e5m2,mlx_q4,mlx_q6,mlx_q8,nvfp4_st,mxfp4_st}.zig`, `gemv_t_q8_0.zig`, `gemm_q8_0.zig`, `fused_ffn_q8_0.zig` (fused FFN megakernel), `mega_qwen35_q8.zig`, `mega_gemma_q4k.zig`, `mega_gemma_q8.zig` (true megakernels), `all.zig` (aggregator) — compiled to PTX via `zig build ptx` |
 | ROCm | `src/backend/kernels/rocm/` | `common.zig` (shared primitives), `silu.zig`, `gelu.zig`, `add.zig`, `mul.zig`, `rms_norm.zig`, `rms_norm_multi.zig`, `softmax.zig`, `l2_norm.zig`, `rope.zig`, `sdpa.zig`, `gemv_{f32,bf16,f16,q8_0,q4_0,q4_k,q5_k,q6_k,fp8_e4m3,fp8_e5m2,mlx_q4}.zig`, `sigmoid_mul.zig`, `deinterleave.zig`, `deltanet.zig`, `mega_qwen35_q8.zig` (true megakernel), `all.zig` (aggregator) — compiled to HSACO via `zig build amdgcn` |
 
-**Pipeline/kernel counts**: Metal 70+ pipelines (+ 1 runtime-composed), CUDA 41 kernels, ROCm 28+ kernels. Total megakernel code: ~4,166 lines across 12 files plus ~650 lines in `mega_compose.zig` (composable generator).
+**Pipeline/kernel counts**: Metal 70+ pipelines (+ 1 runtime-composed), CUDA 41 kernels, ROCm 28+ kernels. Total megakernel code: ~4,166 lines across 12 files plus ~780 lines in `mega_compose.zig` (composable generator).
 
 ## Vision Encoder
 

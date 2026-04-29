@@ -45,10 +45,23 @@ pub fn sdpaTree(
     for (0..n_nodes) |node_i| {
         for (0..nh) |h| {
             sdpaTreeNodeHead(
-                q_all, prefix_keys, prefix_values,
-                tree_keys, tree_values, output, ancestor_masks,
-                node_i, h, nh, nkv, hd, prefix_len, n_nodes, scale,
-                kv_type_k, kv_type_v,
+                q_all,
+                prefix_keys,
+                prefix_values,
+                tree_keys,
+                tree_values,
+                output,
+                ancestor_masks,
+                node_i,
+                h,
+                nh,
+                nkv,
+                hd,
+                prefix_len,
+                n_nodes,
+                scale,
+                kv_type_k,
+                kv_type_v,
             );
         }
     }
@@ -150,7 +163,9 @@ inline fn mulAccumF32(out: [*]f32, weight: f32, v: [*]const f32, hd: usize) void
 inline fn softmax(data: []f32) void {
     if (data.len == 0) return;
     var max_val: f32 = data[0];
-    for (data[1..]) |v| if (v > max_val) { max_val = v; };
+    for (data[1..]) |v| if (v > max_val) {
+        max_val = v;
+    };
     var sum: f32 = 0;
     for (data) |*v| {
         v.* = @exp(v.* - max_val);

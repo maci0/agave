@@ -365,7 +365,10 @@ pub fn urlDecode(allocator: Allocator, input: []const u8) ![]u8 {
             const lo = hexVal(input[i + 2]);
             if (hi != null and lo != null) {
                 const byte = hi.? * 16 + lo.?;
-                if (byte == 0) { i += 3; continue; } // Strip null bytes
+                if (byte == 0) {
+                    i += 3;
+                    continue;
+                } // Strip null bytes
                 result.appendAssumeCapacity(byte);
                 i += 3;
             } else {

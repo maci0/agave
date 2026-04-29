@@ -360,7 +360,6 @@ pub const TieredKvCache = struct {
         return error.OutOfKvMemory;
     }
 
-
     /// Demote coldest VRAM block to RAM tier.
     ///
     /// Uses frequency×cost eviction (access_count × compute_cost).
@@ -410,7 +409,6 @@ pub const TieredKvCache = struct {
 
         return victim_id;
     }
-
 
     /// Select coldest RAM block for SSD demotion.
     /// Uses same frequency×cost metric as demoteToRam.

@@ -58,7 +58,6 @@ const block_size: u32 = 256;
 /// LDS bytes for block reductions (8 waves x 4 bytes).
 const reduction_smem: u32 = 32;
 
-
 /// Size of the buffer for retrieving the HIP device name.
 const device_name_buf_size: usize = 256;
 

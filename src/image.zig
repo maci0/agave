@@ -491,9 +491,9 @@ test "resize 2x2 to 1x1 averages pixels" {
     const allocator = std.testing.allocator;
     // 2x2 image: red, green, blue, white
     const src = [_]u8{
-        255, 0,   0, // red
-        0,   255, 0, // green
-        0,   0,   255, // blue
+        255, 0, 0, // red
+        0, 255, 0, // green
+        0, 0, 255, // blue
         255, 255, 255, // white
     };
     const result = try resize(allocator, &src, 2, 2, 1, 1);
@@ -523,7 +523,12 @@ test "unfilterScanlines None filter" {
     // 2x1 RGB image with None filter
     var data = [_]u8{
         0, // filter=None
-        10, 20, 30, 40, 50, 60,
+        10,
+        20,
+        30,
+        40,
+        50,
+        60,
     };
     try unfilterScanlines(&data, 2, 1, 3);
     // None filter: data unchanged
@@ -536,7 +541,12 @@ test "unfilterScanlines Sub filter" {
     // For bpp=3: first 3 bytes unchanged, next 3 add previous pixel
     var data = [_]u8{
         1, // filter=Sub
-        10, 20, 30, 5, 5, 5,
+        10,
+        20,
+        30,
+        5,
+        5,
+        5,
     };
     try unfilterScanlines(&data, 2, 1, 3);
     // First pixel: 10, 20, 30 (unchanged)
@@ -550,7 +560,7 @@ test "unfilterScanlines Up filter" {
         0, // filter=None (first row)
         10, 20, 30, // first row pixels
         2, // filter=Up (second row)
-        5,  10, 15, // second row raw
+        5, 10, 15, // second row raw
     };
     try unfilterScanlines(&data, 1, 2, 3);
     // First row: unchanged (10, 20, 30)
@@ -564,7 +574,7 @@ test "unfilterScanlines Average filter" {
         0, // filter=None (first row)
         10, 20, 30, // first row pixels
         3, // filter=Average (second row)
-        4,  6,  8, // second row raw
+        4, 6, 8, // second row raw
     };
     try unfilterScanlines(&data, 1, 2, 3);
     // First row: unchanged
@@ -581,7 +591,7 @@ test "unfilterScanlines Paeth filter" {
         0, // filter=None (first row)
         10, 20, 30, 40, 50, 60, // first row: pixel0=[10,20,30], pixel1=[40,50,60]
         4, // filter=Paeth (second row)
-        5,  3,  2,  1,  2,  3, // second row raw
+        5, 3, 2, 1, 2, 3, // second row raw
     };
     try unfilterScanlines(&data, 2, 2, 3);
     // First row: unchanged

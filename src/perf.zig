@@ -117,7 +117,7 @@ pub const PerfCounters = struct {
         }
         eprintFn(&buf, "{s}\n", .{"─" ** 54});
         eprintFn(&buf, "{s:<16} {s:>8} {d:>10.1}\n", .{
-            "TOTAL",                                    "",
+            "TOTAL",                                       "",
             @as(f64, @floatFromInt(total_us)) / us_per_ms,
         });
     }

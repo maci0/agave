@@ -45,16 +45,14 @@ inline fn gridDim() u32 {
 fn gridSync(sync_counter: *u32) void {
     if (cu.threadIdx() == 0) {
         // Signal arrival
-        _ = asm volatile (
-            "atom.global.add.u32 %[ret], [%[ptr]], 1;"
+        _ = asm volatile ("atom.global.add.u32 %[ret], [%[ptr]], 1;"
             : [ret] "=r" (-> u32),
             : [ptr] "l" (sync_counter),
         );
         // Spin until all blocks arrive
         const n_blocks = gridDim();
         while (true) {
-            const val = asm volatile (
-                "ld.global.acquire.gpu.u32 %[ret], [%[ptr]];"
+            const val = asm volatile ("ld.global.acquire.gpu.u32 %[ret], [%[ptr]];"
                 : [ret] "=r" (-> u32),
                 : [ptr] "l" (sync_counter),
             );
@@ -67,8 +65,7 @@ fn gridSync(sync_counter: *u32) void {
 /// Reset sync counter for reuse. Only block 0, thread 0 writes.
 fn gridSyncReset(sync_counter: *u32) void {
     if (cu.blockIdx() == 0 and cu.threadIdx() == 0) {
-        asm volatile (
-            "st.global.release.gpu.u32 [%[ptr]], 0;"
+        asm volatile ("st.global.release.gpu.u32 [%[ptr]], 0;"
             :
             : [ptr] "l" (sync_counter),
         );
@@ -131,8 +128,7 @@ fn rmsNormStage(
     // Atomic add to global sum (reinterpret as u32 for atomic)
     if (tid == 0 and local_ss != 0.0) {
         const bits: u32 = @bitCast(local_ss);
-        _ = asm volatile (
-            "atom.global.add.u32 %[ret], [%[ptr]], %[val];"
+        _ = asm volatile ("atom.global.add.u32 %[ret], [%[ptr]], %[val];"
             : [ret] "=r" (-> u32),
             : [ptr] "l" (ss_buf),
               [val] "r" (bits),
@@ -143,8 +139,7 @@ fn rmsNormStage(
     gridSync(sync_ctr);
 
     // Phase 2: normalize (all blocks read the shared sum)
-    const ss_bits = asm volatile (
-        "ld.global.acquire.gpu.u32 %[ret], [%[ptr]];"
+    const ss_bits = asm volatile ("ld.global.acquire.gpu.u32 %[ret], [%[ptr]];"
         : [ret] "=r" (-> u32),
         : [ptr] "l" (ss_buf),
     );
@@ -158,8 +153,7 @@ fn rmsNormStage(
 
     // Reset ss for next norm
     if (bid == 0 and tid == 0) {
-        asm volatile (
-            "st.global.release.gpu.u32 [%[ptr]], 0;"
+        asm volatile ("st.global.release.gpu.u32 [%[ptr]], 0;"
             :
             : [ptr] "l" (ss_buf),
         );
@@ -200,8 +194,7 @@ fn addRmsNormStage(
 
     if (tid == 0 and local_ss != 0.0) {
         const bits: u32 = @bitCast(local_ss);
-        _ = asm volatile (
-            "atom.global.add.u32 %[ret], [%[ptr]], %[val];"
+        _ = asm volatile ("atom.global.add.u32 %[ret], [%[ptr]], %[val];"
             : [ret] "=r" (-> u32),
             : [ptr] "l" (ss_buf),
               [val] "r" (bits),
@@ -210,8 +203,7 @@ fn addRmsNormStage(
 
     gridSync(sync_ctr);
 
-    const ss_bits = asm volatile (
-        "ld.global.acquire.gpu.u32 %[ret], [%[ptr]];"
+    const ss_bits = asm volatile ("ld.global.acquire.gpu.u32 %[ret], [%[ptr]];"
         : [ret] "=r" (-> u32),
         : [ptr] "l" (ss_buf),
     );
@@ -224,8 +216,7 @@ fn addRmsNormStage(
     }
 
     if (bid == 0 and tid == 0) {
-        asm volatile (
-            "st.global.release.gpu.u32 [%[ptr]], 0;"
+        asm volatile ("st.global.release.gpu.u32 [%[ptr]], 0;"
             :
             : [ptr] "l" (ss_buf),
         );

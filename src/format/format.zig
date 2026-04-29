@@ -165,10 +165,10 @@ pub const Format = struct {
     /// almost always cache-resident, so they're excluded.
     const prefetch_suffixes = [_][]const u8{
         "attn_q.weight",      "attn_k.weight",        "attn_v.weight",
-        "attn_qkv.weight",    "attn_output.weight",
-        "ffn_gate.weight",    "ffn_up.weight",        "ffn_down.weight",
-        "ffn_gate_exps.weight", "ffn_up_exps.weight", "ffn_down_exps.weight",
-        "ssm_in.weight",      "ssm_out.weight",
+        "attn_qkv.weight",    "attn_output.weight",   "ffn_gate.weight",
+        "ffn_up.weight",      "ffn_down.weight",      "ffn_gate_exps.weight",
+        "ffn_up_exps.weight", "ffn_down_exps.weight", "ssm_in.weight",
+        "ssm_out.weight",
     };
 
     /// Hint the OS to prefetch the next layer's weight tensors into memory.

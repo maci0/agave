@@ -637,7 +637,8 @@ pub const VisionEncoder = struct {
         if (self.debug) {
             std.log.info("vision debug: pos_embd dims=[{d},{d},{d}] first 5 values: {d:.6},{d:.6},{d:.6},{d:.6},{d:.6}", .{
                 pos_t.dims[0], pos_t.dims[1], pos_t.dims[2],
-                pos_data[0], pos_data[1], pos_data[2], pos_data[3], pos_data[4],
+                pos_data[0],   pos_data[1],   pos_data[2],
+                pos_data[3],   pos_data[4],
             });
         }
 
@@ -986,9 +987,9 @@ pub const VisionEncoder = struct {
                 .q_count = q_end - q_start,
             };
             if (self.pool) |p| {
-                p.parallelFor(nh, 1, @constCast(@ptrCast(&ctx)), &attnChunkWorker);
+                p.parallelFor(nh, 1, @ptrCast(@constCast(&ctx)), &attnChunkWorker);
             } else {
-                attnChunkWorker(@constCast(@ptrCast(&ctx)), 0, nh);
+                attnChunkWorker(@ptrCast(@constCast(&ctx)), 0, nh);
             }
 
             q_start = q_end;

@@ -128,9 +128,9 @@ The composer selects the correct GEMV, activation, residual pattern, and SDPA bu
 4. Update backend dispatch to include new format (add GEMV variant in `backend.zig`)
 5. Add GEMM kernel for batched prefill: Metal in `gemm.metal` (reuse `block_dot` from GEMV), pipeline in `metal.zig`, dispatch in `gemm()`. Pattern: one threadgroup per output row, loop over n_tok tokens
 6. For compressed-tensors formats (NVFP4, etc.): add fusion logic in `safetensors.zig` `fuseNvfp4Experts()` to combine per-expert weight_packed/weight_scale/weight_global_scale into GGUF-named entries
-6. Benchmark against existing formats
-7. Add to Quantization Types table in `docs/ARCHITECTURE.md`
-8. Golden tests against reference implementation
+7. Benchmark against existing formats
+8. Add to Quantization Types table in `docs/ARCHITECTURE.md`
+9. Golden tests against reference implementation
 
 ## How to Add CLI Arguments
 
@@ -159,7 +159,7 @@ CLI arguments are parsed by `src/cli.zig` (self-contained, zero dependencies). T
 
 ### How to Add Vision Support
 
-1. Add a variant to `VisionVariant` enum in `src/vision.zig`
+1. Add a variant to `VisionVariant` enum in `src/models/vision.zig`
 2. Implement `patchEmbed`, `projectToLlm`, and any variant-specific steps (e.g., pooling, learned positional embeddings)
 3. Add image token IDs (`image_pad_token_id`, `image_start_token_id`, etc.) to the arch config in `src/arch.zig`
 4. Wire `setImageEmbeddings` in the `model.zig` vtable (detected via `@hasField`)

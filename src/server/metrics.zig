@@ -293,8 +293,8 @@ pub const Metrics = struct {
             "latency_10ms", "latency_50ms", "latency_100ms", "latency_500ms",
             "latency_1s",   "latency_5s",   "latency_10s",   "latency_30s",
         }, .{
-            latency_bucket_10ms,  latency_bucket_50ms,  latency_bucket_100ms, latency_bucket_500ms,
-            latency_bucket_1s,    latency_bucket_5s,    latency_bucket_10s,   latency_bucket_30s,
+            latency_bucket_10ms, latency_bucket_50ms, latency_bucket_100ms, latency_bucket_500ms,
+            latency_bucket_1s,   latency_bucket_5s,   latency_bucket_10s,   latency_bucket_30s,
         }, "latency_inf");
     }
 
@@ -331,8 +331,8 @@ pub const Metrics = struct {
             "ttft_10ms", "ttft_50ms", "ttft_100ms", "ttft_500ms",
             "ttft_1s",   "ttft_5s",   "ttft_10s",   "ttft_30s",
         }, .{
-            latency_bucket_10ms,  latency_bucket_50ms,  latency_bucket_100ms, latency_bucket_500ms,
-            latency_bucket_1s,    latency_bucket_5s,    latency_bucket_10s,   latency_bucket_30s,
+            latency_bucket_10ms, latency_bucket_50ms, latency_bucket_100ms, latency_bucket_500ms,
+            latency_bucket_1s,   latency_bucket_5s,   latency_bucket_10s,   latency_bucket_30s,
         }, "ttft_inf");
     }
 
@@ -385,8 +385,8 @@ pub const Metrics = struct {
             "queue_time_10ms", "queue_time_50ms", "queue_time_100ms", "queue_time_500ms",
             "queue_time_1s",   "queue_time_5s",   "queue_time_10s",   "queue_time_30s",
         }, .{
-            latency_bucket_10ms,  latency_bucket_50ms,  latency_bucket_100ms, latency_bucket_500ms,
-            latency_bucket_1s,    latency_bucket_5s,    latency_bucket_10s,   latency_bucket_30s,
+            latency_bucket_10ms, latency_bucket_50ms, latency_bucket_100ms, latency_bucket_500ms,
+            latency_bucket_1s,   latency_bucket_5s,   latency_bucket_10s,   latency_bucket_30s,
         }, "queue_time_inf");
     }
 
@@ -397,8 +397,8 @@ pub const Metrics = struct {
             "prompt_tok_16",  "prompt_tok_64",   "prompt_tok_128",  "prompt_tok_256",
             "prompt_tok_512", "prompt_tok_1024", "prompt_tok_2048", "prompt_tok_4096",
         }, .{
-            token_bucket_16,   token_bucket_64,   token_bucket_128,  token_bucket_256,
-            token_bucket_512,  token_bucket_1024, token_bucket_2048, token_bucket_4096,
+            token_bucket_16,  token_bucket_64,   token_bucket_128,  token_bucket_256,
+            token_bucket_512, token_bucket_1024, token_bucket_2048, token_bucket_4096,
         }, "prompt_tok_inf");
     }
 
@@ -409,8 +409,8 @@ pub const Metrics = struct {
             "gen_tok_16",  "gen_tok_64",   "gen_tok_128",  "gen_tok_256",
             "gen_tok_512", "gen_tok_1024", "gen_tok_2048", "gen_tok_4096",
         }, .{
-            token_bucket_16,   token_bucket_64,   token_bucket_128,  token_bucket_256,
-            token_bucket_512,  token_bucket_1024, token_bucket_2048, token_bucket_4096,
+            token_bucket_16,  token_bucket_64,   token_bucket_128,  token_bucket_256,
+            token_bucket_512, token_bucket_1024, token_bucket_2048, token_bucket_4096,
         }, "gen_tok_inf");
     }
 
@@ -461,12 +461,14 @@ pub const Metrics = struct {
         // Histograms — Prometheus requires cumulative buckets (each includes all lower)
         try self.renderHistogram(writer, "agave_request_duration_seconds", "Request latency histogram", .{
             "latency_10ms", "latency_50ms", "latency_100ms", "latency_500ms",
-            "latency_1s",   "latency_5s",   "latency_10s",   "latency_30s",   "latency_inf",
+            "latency_1s",   "latency_5s",   "latency_10s",   "latency_30s",
+            "latency_inf",
         }, .{ "0.01", "0.05", "0.1", "0.5", "1", "5", "10", "30", "+Inf" }, "latency_sum", true);
 
         try self.renderHistogram(writer, "agave_ttft_seconds", "Time-to-first-token histogram", .{
             "ttft_10ms", "ttft_50ms", "ttft_100ms", "ttft_500ms",
-            "ttft_1s",   "ttft_5s",   "ttft_10s",   "ttft_30s",   "ttft_inf",
+            "ttft_1s",   "ttft_5s",   "ttft_10s",   "ttft_30s",
+            "ttft_inf",
         }, .{ "0.01", "0.05", "0.1", "0.5", "1", "5", "10", "30", "+Inf" }, "ttft_sum", true);
 
         // Prefill tokens
@@ -590,17 +592,20 @@ pub const Metrics = struct {
 
         try self.renderHistogram(writer, "agave_request_queue_time_seconds", "Request queue wait time histogram", .{
             "queue_time_10ms", "queue_time_50ms", "queue_time_100ms", "queue_time_500ms",
-            "queue_time_1s",   "queue_time_5s",   "queue_time_10s",   "queue_time_30s",   "queue_time_inf",
+            "queue_time_1s",   "queue_time_5s",   "queue_time_10s",   "queue_time_30s",
+            "queue_time_inf",
         }, .{ "0.01", "0.05", "0.1", "0.5", "1", "5", "10", "30", "+Inf" }, "queue_time_sum", true);
 
         try self.renderHistogram(writer, "agave_request_prompt_tokens", "Prompt token count distribution", .{
             "prompt_tok_16",  "prompt_tok_64",   "prompt_tok_128",  "prompt_tok_256",
-            "prompt_tok_512", "prompt_tok_1024", "prompt_tok_2048", "prompt_tok_4096", "prompt_tok_inf",
+            "prompt_tok_512", "prompt_tok_1024", "prompt_tok_2048", "prompt_tok_4096",
+            "prompt_tok_inf",
         }, .{ "16", "64", "128", "256", "512", "1024", "2048", "4096", "+Inf" }, "prompt_tok_sum", false);
 
         try self.renderHistogram(writer, "agave_request_generation_tokens", "Generation token count distribution", .{
             "gen_tok_16",  "gen_tok_64",   "gen_tok_128",  "gen_tok_256",
-            "gen_tok_512", "gen_tok_1024", "gen_tok_2048", "gen_tok_4096", "gen_tok_inf",
+            "gen_tok_512", "gen_tok_1024", "gen_tok_2048", "gen_tok_4096",
+            "gen_tok_inf",
         }, .{ "16", "64", "128", "256", "512", "1024", "2048", "4096", "+Inf" }, "gen_tok_sum", false);
     }
 };

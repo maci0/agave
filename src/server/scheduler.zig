@@ -592,4 +592,3 @@ const MockModel = struct {
         return &[_]u32{};
     }
 };
-

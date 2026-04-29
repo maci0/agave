@@ -1024,7 +1024,7 @@ pub const VulkanBackend = struct {
             // Normalization
             &self.pipe_rms_norm,      &self.pipe_softmax,
             &self.pipe_l2_norm,
-            // Position
+                // Position
                   &self.pipe_rope,
             // GEMV
             &self.pipe_gemv_f32,      &self.pipe_gemv_q8_0,
@@ -1035,9 +1035,9 @@ pub const VulkanBackend = struct {
             // Attention
             &self.pipe_sdpa,          &self.pipe_sdpa_turbo,
             // Embedding
-                     &self.pipe_embedding,
-            // SSM
-            &self.pipe_conv1d,
+            &self.pipe_embedding,
+                // SSM
+                &self.pipe_conv1d,
         };
         for (pipelines) |p| {
             if (p.pipeline != null) self.vkDestroyPipeline(self.device, p.pipeline, null);

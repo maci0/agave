@@ -312,7 +312,6 @@ fn mlxGemvQ8Rows(
     }
 }
 
-
 /// Compute a range of rows for MLX MXFP4 GEMV.
 /// Scales are E8M0 (pure power-of-2), NOT FP8 E4M3.
 pub fn mlxMxfp4GemvRows(

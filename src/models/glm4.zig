@@ -217,11 +217,11 @@ pub const Glm4Model = struct {
         }
 
         const bufs = .{
-            &self.hidden,     &self.hidden2,    &self.q_compressed,
-            &self.q_full,     &self.kv_proj,    &self.kv_latent,
-            &self.k_buf,      &self.v_buf,      &self.attn_out,
-            &self.scores_buf, &self.ff_gate,    &self.ff_up,
-            &self.ff_down,    &self.expert_buf, &self.router_logits,
+            &self.hidden,     &self.hidden2,     &self.q_compressed,
+            &self.q_full,     &self.kv_proj,     &self.kv_latent,
+            &self.k_buf,      &self.v_buf,       &self.attn_out,
+            &self.scores_buf, &self.ff_gate,     &self.ff_up,
+            &self.ff_down,    &self.expert_buf,  &self.router_logits,
             &self.logits_buf, &self.mla_scratch,
         };
         inline for (bufs) |buf| self.allocator.free(buf.*);
@@ -487,9 +487,16 @@ pub const Glm4Model = struct {
                     inline else => |be| {
                         if (comptime @hasDecl(@TypeOf(be.*), "fusedFfnGateUpSiluMlxQ4")) {
                             be.fusedFfnGateUpSiluMlxQ4(
-                                self.hidden2.ptr, gw.data_ptr, gs.data_ptr, gb.data_ptr,
-                                uw.data_ptr, us.data_ptr, ub.data_ptr,
-                                self.ff_gate.ptr, ff, e,
+                                self.hidden2.ptr,
+                                gw.data_ptr,
+                                gs.data_ptr,
+                                gb.data_ptr,
+                                uw.data_ptr,
+                                us.data_ptr,
+                                ub.data_ptr,
+                                self.ff_gate.ptr,
+                                ff,
+                                e,
                             );
                         } else break :blk;
                     },

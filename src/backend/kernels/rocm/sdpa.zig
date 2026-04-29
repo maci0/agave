@@ -57,20 +57,20 @@ fn turboDequantBlock(block_ptr: [*]const u8, dst: *[32]f32, bits: u32) void {
         for (0..32) |i| dst[i] = 0.0;
         return;
     }
-    const packed = block_ptr + 2;
+    const pack_data = block_ptr + 2;
 
     // Unpack indices and look up codebook values
     if (bits == 4) {
         // 4-bit: 2 indices per byte (16 bytes for 32 elements)
         for (0..16) |i| {
-            const byte = packed[i];
+            const byte = pack_data[i];
             dst[i * 2] = lloyd_max_4bit[byte & 0xF];
             dst[i * 2 + 1] = lloyd_max_4bit[byte >> 4];
         }
     } else if (bits == 2) {
         // 2-bit: 4 indices per byte (8 bytes for 32 elements)
         for (0..8) |i| {
-            const byte = packed[i];
+            const byte = pack_data[i];
             dst[i * 4] = lloyd_max_2bit[byte & 0x3];
             dst[i * 4 + 1] = lloyd_max_2bit[(byte >> 2) & 0x3];
             dst[i * 4 + 2] = lloyd_max_2bit[(byte >> 4) & 0x3];
@@ -82,9 +82,9 @@ fn turboDequantBlock(block_ptr: [*]const u8, dst: *[32]f32, bits: u32) void {
             const bit_pos: u32 = @as(u32, @intCast(i)) * 3;
             const byte_idx = bit_pos / 8;
             const bit_off: u5 = @intCast(bit_pos % 8);
-            var val: u32 = @as(u32, packed[byte_idx]) >> bit_off;
+            var val: u32 = @as(u32, pack_data[byte_idx]) >> bit_off;
             if (bit_off + 3 > 8) {
-                val |= @as(u32, packed[byte_idx + 1]) << @as(u5, @intCast(8 - bit_off));
+                val |= @as(u32, pack_data[byte_idx + 1]) << @as(u5, @intCast(8 - bit_off));
             }
             dst[i] = lloyd_max_3bit[val & 0x7];
         }

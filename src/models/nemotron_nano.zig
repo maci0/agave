@@ -355,12 +355,12 @@ pub const NemotronNanoModel = struct {
         }
 
         const bufs = .{
-            &self.hidden,         &self.hidden2,      &self.q_buf,
-            &self.k_buf,          &self.v_buf,        &self.attn_out,
-            &self.scores_buf,     &self.ssm_proj_buf, &self.ssm_conv_out,
-            &self.ssm_y_buf,      &self.router_buf,   &self.expert_buf,
-            &self.moe_out,        &self.logits_buf,   &self.bf16_buf_large,
-            &self.bf16_buf_small, &self.ssm_a_cache,   &self.ssm_d_cache,
+            &self.hidden,            &self.hidden2,      &self.q_buf,
+            &self.k_buf,             &self.v_buf,        &self.attn_out,
+            &self.scores_buf,        &self.ssm_proj_buf, &self.ssm_conv_out,
+            &self.ssm_y_buf,         &self.router_buf,   &self.expert_buf,
+            &self.moe_out,           &self.logits_buf,   &self.bf16_buf_large,
+            &self.bf16_buf_small,    &self.ssm_a_cache,  &self.ssm_d_cache,
             &self.ssm_dt_bias_cache,
         };
         inline for (bufs) |buf| self.allocator.free(buf.*);

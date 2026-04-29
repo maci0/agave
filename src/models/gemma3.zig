@@ -618,7 +618,6 @@ pub const Gemma3Model = struct {
                 .f32,
             );
 
-
             // Output projection
             const ow = self.fmt.layerTensor(l, "attn_output.weight") orelse return error.MissingTensor;
             self.doGemm(self.pf_attn_out.ptr, ow, self.pf_hidden2.ptr, n, e, nh * hd);

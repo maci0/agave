@@ -1099,7 +1099,8 @@ fn runE2e(allocator: std.mem.Allocator, cli: CliArgs) u8 {
 
     // ── Initialize backend ───────────────────────────────────────
     var bs = BackendState{};
-    var threaded = std.Io.Threaded.init(allocator, .{}); bs.init(allocator, cli.backend, threaded.io());
+    var threaded = std.Io.Threaded.init(allocator, .{});
+    bs.init(allocator, cli.backend, threaded.io());
     defer if (bs.pool) |*p| p.deinit();
     const be = bs.be;
     const be_name = bs.name;
@@ -1288,7 +1289,8 @@ pub fn main(init: std.process.Init.Minimal) u8 {
 
     // Initialize backend
     var bs = BackendState{};
-    var threaded = std.Io.Threaded.init(allocator, .{}); bs.init(allocator, cli.backend, threaded.io());
+    var threaded = std.Io.Threaded.init(allocator, .{});
+    bs.init(allocator, cli.backend, threaded.io());
     defer if (bs.pool) |*p| p.deinit();
     const be = bs.be;
     const be_name = bs.name;

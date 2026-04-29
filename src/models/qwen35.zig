@@ -1233,5 +1233,10 @@ fn applyNvfp4Scale(fmt: Format, buf: []f32, layer: u32, expert: usize, proj: []c
     const n = std.fmt.bufPrint(&nb, "model.language_model.layers.{d}.mlp.experts.{d}.{s}.weight_global_scale", .{ layer, expert, proj }) catch return;
     const t = fmt.getTensor(n) orelse return;
     const gs = @as(*const f32, @ptrCast(@alignCast(t.data_ptr))).*;
-    if (gs != 1.0 and gs != 0.0) { const inv = 1.0 / gs; for (buf) |*v| { v.* *= inv; } }
+    if (gs != 1.0 and gs != 0.0) {
+        const inv = 1.0 / gs;
+        for (buf) |*v| {
+            v.* *= inv;
+        }
+    }
 }
