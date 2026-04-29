@@ -10,7 +10,7 @@
 | **Nemotron-H** | `nemotron_h` | GQA (sparse layers) | SiLU + SwiGLU | Mamba-2 SSM hybrid (GGUF) |
 | **Nemotron Nano** | `nemotron_nano` | GQA (sparse layers) | ReLU² MoE | SSM + MoE + attention hybrid (NVFP4) |
 | **Gemma 4** | `gemma4` | GQA + QK norm + post-norms | GELU + SwiGLU | MoE (top-8) or dense, PLE (E2B/E4B), vision (SigLIP-2), Q4_K/Q5_K/Q6_K GEMM |
-| **GLM-4** | `glm4` | MLA (compressed KV) | SiLU + SwiGLU | MoE + sigmoid routing |
+| **GLM-4** | `glm4` | MLA (compressed KV) | SiLU + SwiGLU | MoE (64 experts, top-4, sigmoid routing) |
 
 ## Model Parameters
 
@@ -25,7 +25,7 @@
 | Gemma4 E2B | 2304 | 8 | 4 | 256 | 9216 | 28 | 10K | 256 |
 | Gemma4 E4B | 2816 | 16 | 8 | 256 | 11264 | 30 | 10K | 256 |
 | Gemma4 26B-A4B | 2816 | 16 | 8/2 (sl/gl) | 256/512 (sl/gl) | 2816 + 704/expert (MoE) | 30 | 10K/1M (sl/gl) | 256/128 (sl/gl) |
-| GLM-4 | 2048 | 20 | 20 (MLA) | 256 | 1536 (MoE) | 47 | 1M | 64 |
+| GLM-4 | 2048 | 20 | 20 (MLA) | 256 (qk_nope=192 + qk_rope=64) | 10240 (dense) / 1536 (MoE, 64 experts top-4) | 47 | 1M | 64 |
 
 ## Model-Specific Details
 

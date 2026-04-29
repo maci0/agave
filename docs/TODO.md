@@ -116,8 +116,7 @@ These work but delegate to CPU — should eventually be native GPU kernels.
 
 | # | Issue | Status |
 |---|-------|--------|
-| 1 | AGENTS.md is a copy of CLAUDE.md, not a symlink | Risk of drift — make one a symlink |
-| 2 | `tests/` directory has test harness but golden tests need model files | By design — manual trigger only |
+| 1 | `tests/` directory has test harness but golden tests need model files | By design — manual trigger only |
 
 ---
 
@@ -125,4 +124,4 @@ These work but delegate to CPU — should eventually be native GPU kernels.
 
 | # | Issue | Status |
 |---|-------|--------|
-| 1 | MODELS.md GLM-4 parameter table missing expert count and dense FFN size | Open |
+No open documentation issues.
