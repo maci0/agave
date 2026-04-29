@@ -35,6 +35,7 @@ research/kernels/**/*.ptx
 research/kernels/**/*.spv
 research/kernels/**/*.cubin
 research/kernels/**/*.fatbin
+research/kernels/golden/*.bin
 
 # OS-specific
 .DS_Store
