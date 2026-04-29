@@ -1614,6 +1614,64 @@ fn initAndRun(
         eprint("Warning: --image ignored (no vision projector found — use --mmproj <path> to specify)\n", .{});
     }
 
+    // ── Draft model loading (speculative decoding) ──────────────
+    var draft_gguf: ?GGUFFile = null;
+    var draft_st: ?SafeTensorsDir = null;
+    var draft_mdl_storage: ?ModelStorage = null;
+    defer {
+        if (draft_mdl_storage) |*dm| dm.deinit();
+        if (draft_gguf) |*g| g.deinit();
+        if (draft_st) |*s| s.deinit();
+    }
+
+    var draft_ptr: ?*Model = null;
+    var draft_model_if: Model = undefined;
+
+    if (cli.draft_model_path) |draft_path| {
+        const draft_is_dir = blk: {
+            const d = Io.Dir.cwd().openDir(g_io, draft_path, .{}) catch break :blk false;
+            d.close(g_io);
+            break :blk true;
+        };
+        var draft_fmt: Format = undefined;
+        if (draft_is_dir) {
+            draft_st = SafeTensorsDir.open(allocator, draft_path) catch |e| {
+                eprint("Error: failed to open draft model '{s}': {}\n", .{ draft_path, e });
+                return false;
+            };
+            draft_fmt = draft_st.?.format();
+        } else {
+            draft_gguf = GGUFFile.open(allocator, draft_path) catch |e| {
+                eprint("Error: failed to open draft model '{s}': {}\n", .{ draft_path, e });
+                return false;
+            };
+            draft_fmt = draft_gguf.?.format();
+        }
+        const draft_arch_str = draft_fmt.getMetaStr("general.architecture") orelse
+            draft_fmt.getMetaStr("model_type") orelse "unknown";
+        var draft_arch = Arch.detect(draft_arch_str) orelse {
+            eprint("Error: unsupported draft model architecture '{s}'\n", .{draft_arch_str});
+            return false;
+        };
+        if (draft_arch == .nemotron_h and draft_fmt.getTensor("backbone.embeddings.weight") != null)
+            draft_arch = .nemotron_nano;
+        if (!draft_arch.isEnabled()) {
+            eprint("Error: draft model arch {s} disabled at compile time\n", .{draft_arch.displayName()});
+            return false;
+        }
+        draft_mdl_storage = ModelStorage.initFromArch(draft_arch, allocator, draft_fmt, be, cli.ctx_size, .f16, .f16, 0, 0, null) catch |e| {
+            eprint("Error: failed to init draft model: {}\n", .{e});
+            return false;
+        };
+        draft_mdl_storage.?.setPool(pool);
+        draft_mdl_storage.?.fixBlockAllocator();
+        draft_model_if = draft_mdl_storage.?.model();
+        draft_ptr = &draft_model_if;
+        eprint("draft: {s} · {s}\n", .{ draft_arch.displayName(), Format.getQuantName(draft_fmt) });
+    } else if (cli.spec_mode != .none) {
+        draft_ptr = &model_if;
+    }
+
     if (cli.serve) {
         var tok_if = tok.tokenizer();
         const ve_ptr: ?*VisionEncoder = if (vision_enc != null) &vision_enc.? else null;
@@ -1640,68 +1698,14 @@ fn initAndRun(
             .image_start_token_id = srv_start_id,
             .image_end_token_id = srv_end_id,
             .io = g_io,
+            .draft_model = draft_ptr,
+            .spec_tokens = cli.spec_tokens,
+            .tree_budget = cli.tree_budget,
         }) catch |e| {
             eprint("Error: server failed: {}\n", .{e});
             return false;
         };
     } else if (effective_prompt) |prompt| {
-        // ── Draft model loading (speculative decoding) ──────────────
-        var draft_gguf: ?GGUFFile = null;
-        var draft_st: ?SafeTensorsDir = null;
-        var draft_mdl_storage: ?ModelStorage = null;
-        defer {
-            if (draft_mdl_storage) |*dm| dm.deinit();
-            if (draft_gguf) |*g| g.deinit();
-            if (draft_st) |*s| s.deinit();
-        }
-
-        var draft_ptr: ?*Model = null;
-        var draft_model_if: Model = undefined;
-
-        if (cli.draft_model_path) |draft_path| {
-            const draft_is_dir = blk: {
-                const d = Io.Dir.cwd().openDir(g_io, draft_path, .{}) catch break :blk false;
-                d.close(g_io);
-                break :blk true;
-            };
-            var draft_fmt: Format = undefined;
-            if (draft_is_dir) {
-                draft_st = SafeTensorsDir.open(allocator, draft_path) catch |e| {
-                    eprint("Error: failed to open draft model '{s}': {}\n", .{ draft_path, e });
-                    return false;
-                };
-                draft_fmt = draft_st.?.format();
-            } else {
-                draft_gguf = GGUFFile.open(allocator, draft_path) catch |e| {
-                    eprint("Error: failed to open draft model '{s}': {}\n", .{ draft_path, e });
-                    return false;
-                };
-                draft_fmt = draft_gguf.?.format();
-            }
-            const draft_arch_str = draft_fmt.getMetaStr("general.architecture") orelse
-                draft_fmt.getMetaStr("model_type") orelse "unknown";
-            var draft_arch = Arch.detect(draft_arch_str) orelse {
-                eprint("Error: unsupported draft model architecture '{s}'\n", .{draft_arch_str});
-                return false;
-            };
-            if (draft_arch == .nemotron_h and draft_fmt.getTensor("backbone.embeddings.weight") != null)
-                draft_arch = .nemotron_nano;
-            if (!draft_arch.isEnabled()) {
-                eprint("Error: draft model arch {s} disabled at compile time\n", .{draft_arch.displayName()});
-                return false;
-            }
-            draft_mdl_storage = ModelStorage.initFromArch(draft_arch, allocator, draft_fmt, be, cli.ctx_size, .f16, .f16, 0, 0, null) catch |e| {
-                eprint("Error: failed to init draft model: {}\n", .{e});
-                return false;
-            };
-            draft_mdl_storage.?.setPool(pool);
-            draft_mdl_storage.?.fixBlockAllocator();
-            draft_model_if = draft_mdl_storage.?.model();
-            draft_ptr = &draft_model_if;
-            eprint("draft: {s} · {s}\n", .{ draft_arch.displayName(), Format.getQuantName(draft_fmt) });
-        } else if (cli.spec_mode != .none) {
-            draft_ptr = &model_if; // self-draft: same model for both
-        }
         generateAndPrint(allocator, &model_if, tok, cli, tok_kind, eog, arch, prompt, !g_quiet, minfo, display, img_tokens, n_visual_tokens, draft_ptr);
     } else {
         runRepl(allocator, &model_if, tok, cli, tok_kind, eog, arch, minfo, display, img_tokens, n_visual_tokens, if (vision_enc != null) &vision_enc.? else null);

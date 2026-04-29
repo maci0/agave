@@ -11,6 +11,7 @@ const net = Io.net;
 const Allocator = std.mem.Allocator;
 
 const Model = @import("../models/model.zig").Model;
+const spec_decode = @import("../spec/spec_decode.zig");
 const Tokenizer = @import("../tokenizer/tokenizer.zig").Tokenizer;
 const chat_tmpl_mod = @import("../chat_template.zig");
 const ChatTemplate = chat_tmpl_mod.ChatTemplate;
@@ -302,6 +303,10 @@ const Server = struct {
     image_start_token_id: u32 = 0,
     /// Image end token ID (e.g. </img> = 230 for Gemma).
     image_end_token_id: u32 = 0,
+    /// Draft model for speculative decoding (null = no spec dec).
+    draft_model: ?*Model = null,
+    spec_tokens: u32 = 5,
+    tree_budget: u32 = 64,
     /// Number of visual tokens from the last processVisionImage call.
     pending_visual_tokens: u32 = 0,
     /// Graceful shutdown flag (set by SIGTERM/SIGINT).
@@ -2111,27 +2116,87 @@ fn generateN(formatted: []const u8, reset: bool, max_tokens: usize, sampling: Sa
     var hit_eog = first_is_eog;
     var forward_failed = false;
     const effective_max = @min(max_tokens, gen_ids_buf_size);
-    for (0..effective_max -| 1) |_| {
-        if (first_is_eog or token_ids.len == 0) break;
-        var next = model.forward(last) catch |err| {
-            if (err == error.Cancelled) {
-                cancelled = true;
-            } else {
-                std.log.warn("req={d} generation forward failed: {}", .{ log_request_id, err });
-                forward_failed = true;
+
+    const has_draft = g_server.draft_model != null and !first_is_eog and token_ids.len > 0;
+    var spec_state_storage: spec_decode.SpecState = undefined;
+    var spec_state_valid = false;
+    if (has_draft) {
+        spec_state_storage = spec_decode.SpecState.init(g_server.allocator, g_server.spec_tokens, model.vocabSize()) catch spec_decode.SpecState{ .k = 0, .vocab_size = 0 };
+        spec_state_valid = spec_state_storage.k > 0;
+    }
+    defer if (spec_state_valid) spec_state_storage.deinit(g_server.allocator);
+
+    if (spec_state_valid) {
+        var spec_state = &spec_state_storage;
+        var draft_model = g_server.draft_model.?;
+
+        // Prefill draft model if separate
+        if (draft_model.ptr != model.ptr) {
+            _ = draft_model.prefill(token_ids) catch {};
+        }
+
+        while (token_count < effective_max and !hit_eog) {
+            const pre_draft_pos = model.kvSeqLen();
+            const is_self = (model.ptr == draft_model.ptr);
+
+            const n_drafted = if (is_self and !use_sampling)
+                spec_decode.draft(spec_state, draft_model, last)
+            else
+                spec_decode.draftWithLogits(spec_state, draft_model, last);
+            if (n_drafted == 0) break;
+
+            const result = if (is_self)
+                spec_decode.SpecResult{ .accepted = spec_state.n_draft, .next_token = blk: {
+                    spec_state.recordRound(spec_state.n_draft);
+                    const ld = spec_state.draft_tokens[spec_state.n_draft - 1];
+                    break :blk model.forward(ld) catch ld;
+                } }
+            else if (use_sampling)
+                spec_decode.verifySampling(spec_state, model, draft_model, last, pre_draft_pos, sampling.temperature, prng.random())
+            else
+                spec_decode.verifySequential(spec_state, model, draft_model, last, pre_draft_pos);
+
+            for (0..result.accepted) |i| {
+                const accepted_tok = spec_state.draft_tokens[i];
+                if (g_server.isEog(accepted_tok)) { hit_eog = true; break; }
+                if (token_count >= effective_max) break;
+                gen_tokens[token_count] = accepted_tok;
+                token_count += 1;
             }
-            break;
-        };
-        if (use_sampling) {
-            next = math_ops.sampleToken(model.getLogits(), sampling.temperature, sampling.top_k, sampling.top_p, prng.random());
+            if (!hit_eog and token_count < effective_max) {
+                if (g_server.isEog(result.next_token)) {
+                    hit_eog = true;
+                } else {
+                    gen_tokens[token_count] = result.next_token;
+                    token_count += 1;
+                }
+            }
+            last = if (hit_eog) model.eosId() else result.next_token;
         }
-        if (g_server.isEog(next)) {
-            hit_eog = true;
-            break;
+    } else {
+        // Standard single-token generation
+        for (0..effective_max -| 1) |_| {
+            if (first_is_eog or token_ids.len == 0) break;
+            var next = model.forward(last) catch |err| {
+                if (err == error.Cancelled) {
+                    cancelled = true;
+                } else {
+                    std.log.warn("req={d} generation forward failed: {}", .{ log_request_id, err });
+                    forward_failed = true;
+                }
+                break;
+            };
+            if (use_sampling) {
+                next = math_ops.sampleToken(model.getLogits(), sampling.temperature, sampling.top_k, sampling.top_p, prng.random());
+            }
+            if (g_server.isEog(next)) {
+                hit_eog = true;
+                break;
+            }
+            gen_tokens[token_count] = next;
+            last = next;
+            token_count += 1;
         }
-        gen_tokens[token_count] = next;
-        last = next;
-        token_count += 1;
     }
 
     const gen_end = milliTimestamp();
@@ -3330,6 +3395,9 @@ pub const ServerConfig = struct {
     image_start_token_id: u32,
     image_end_token_id: u32,
     io: Io,
+    draft_model: ?*Model = null,
+    spec_tokens: u32 = 5,
+    tree_budget: u32 = 64,
 };
 
 /// Start the HTTP server with OpenAI-compatible API endpoints.
@@ -3391,6 +3459,9 @@ pub fn run(config: ServerConfig) !void {
         .image_start_token_id = image_start_token_id,
         .image_end_token_id = image_end_token_id,
         .io = io,
+        .draft_model = config.draft_model,
+        .spec_tokens = config.spec_tokens,
+        .tree_budget = config.tree_budget,
     };
     server.api_key = api_key;
     server.start_time = timestamp();
