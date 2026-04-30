@@ -1038,7 +1038,7 @@ pub const VulkanBackend = struct {
         // (nh, nkv, hd, sl, scale, bits_k, bits_v, block_bytes_k, block_bytes_v)
         self.pipe_sdpa_turbo = try self.createPipeline(spv_sdpa_turbo, 4, 36);
         // Embedding: 3 bufs (token_id, emb_table, output), 8 bytes push (vocab_size, n_embd)
-        self.pipe_embedding = try self.createPipeline(spv_embedding, 3, 8);
+        self.pipe_embedding = try self.createPipeline(spv_embedding, 3, 12);
         // Conv1d: 4 bufs (input, state, conv_w, output), 8 bytes push (conv_ch, d_conv)
         self.pipe_conv1d = try self.createPipeline(spv_conv1d, 5, 12);
         // DeltaNet recurrence: 9 bufs, 24 bytes push (6 x u32/f32)
@@ -1591,45 +1591,37 @@ pub const VulkanBackend = struct {
 
     /// Embedding lookup via GPU shader (eliminates CPU fallback).
     pub fn embLookup(self: *VulkanBackend, table: TensorData, token_id: u32, output: [*]f32, dim: usize) void {
-        // Only f32 embeddings supported on GPU.
-        if (table.dtype != .f32) @panic("Vulkan embLookup: non-f32 dtype not supported — add GPU shader");
-
-        // For f32 embeddings, we use the buffer cache to avoid re-uploading
-        // the entire embedding table every token. We only know one row size (dim),
-        // so estimate a reasonable table size for caching.
-        const table_sz = dim * @sizeOf(f32) * emb_max_vocab_size;
-
-        // Get or upload cached buffer for embedding table
+        const dtype_id: u32 = switch (table.dtype) {
+            .f32 => 0,
+            .bf16 => 1,
+            .f16 => 2,
+            else => @panic("Vulkan embLookup: unsupported dtype"),
+        };
+        const bytes_per_elem: usize = switch (table.dtype) {
+            .f32 => 4,
+            .bf16, .f16 => 2,
+            else => 4,
+        };
+        const table_sz = dim * bytes_per_elem * emb_max_vocab_size;
         const table_buf = self.getOrUpload(table.data, table_sz);
 
-        // Create token_id buffer (single u32)
         const token_id_sz = @sizeOf(u32);
         const token_id_buf = self.getPooledBuf(token_id_sz);
         defer self.releasePooledBuf(token_id_buf);
-
-        // Create output buffer
         const output_sz = dim * @sizeOf(f32);
         const output_buf = self.getPooledBuf(output_sz);
         defer self.releasePooledBuf(output_buf);
 
-        // Upload token_id
         self.uploadBuffer(token_id_buf.mem, @ptrCast(&token_id), token_id_sz);
 
-        // Push constants: vocab_size (unused, set to 0), n_embd
-        // vocab_size is not actually needed by the shader since the offset
-        // is computed directly as token_id * n_embd
-        const params = extern struct { vocab_size_val: u32, n_embd_val: u32 }{
-            .vocab_size_val = 0,
-            .n_embd_val = @intCast(dim),
-        };
+        const Params = extern struct { vocab_size_val: u32, n_embd_val: u32, dtype_val: u32 };
+        const params = Params{ .vocab_size_val = 0, .n_embd_val = @intCast(dim), .dtype_val = dtype_id };
 
         const bufs = [_]VkBuffer{ token_id_buf.buf, table_buf.buf, output_buf.buf };
         const sizes = [_]usize{ token_id_sz, table_sz, output_sz };
         const n_groups = (dim + workgroup_size - 1) / workgroup_size;
 
-        self.dispatch(self.pipe_embedding, &bufs, &sizes, @ptrCast(&params), 8, @intCast(n_groups));
-
-        // Download result
+        self.dispatch(self.pipe_embedding, &bufs, &sizes, @ptrCast(&params), @sizeOf(Params), @intCast(n_groups));
         self.downloadF32(output_buf.mem, output, dim);
     }
 

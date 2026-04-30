@@ -3,18 +3,44 @@
 layout(local_size_x = 256) in;
 
 layout(set = 0, binding = 0) readonly buffer TokenId { uint token_id; };
-layout(set = 0, binding = 1) readonly buffer Embeddings { float data[]; } emb;
+layout(set = 0, binding = 1) readonly buffer Embeddings { uint data[]; } emb;
 layout(set = 0, binding = 2) writeonly buffer Output { float data[]; } out_buf;
 
 layout(push_constant) uniform Params {
     uint vocab_size;
     uint n_embd;
+    uint dtype; // 0=f32, 1=bf16, 2=f16
 } params;
+
+float bf16_to_f32(uint val16) {
+    return uintBitsToFloat(val16 << 16u);
+}
+
+float f16_to_f32(uint val16) {
+    return unpackHalf2x16(val16).x;
+}
 
 void main() {
     uint tid = gl_GlobalInvocationID.x;
     if (tid >= params.n_embd) return;
 
-    uint offset = token_id * params.n_embd + tid;
-    out_buf.data[tid] = emb.data[offset];
+    if (params.dtype == 0u) {
+        // f32: direct read
+        uint offset = token_id * params.n_embd + tid;
+        out_buf.data[tid] = uintBitsToFloat(emb.data[offset]);
+    } else if (params.dtype == 1u) {
+        // bf16: 2 values per u32 word
+        uint elem_idx = token_id * params.n_embd + tid;
+        uint word_idx = elem_idx / 2u;
+        uint word = emb.data[word_idx];
+        uint half_val = (elem_idx % 2u == 0u) ? (word & 0xFFFFu) : (word >> 16u);
+        out_buf.data[tid] = bf16_to_f32(half_val);
+    } else {
+        // f16: 2 values per u32 word
+        uint elem_idx = token_id * params.n_embd + tid;
+        uint word_idx = elem_idx / 2u;
+        uint word = emb.data[word_idx];
+        uint half_val = (elem_idx % 2u == 0u) ? (word & 0xFFFFu) : (word >> 16u);
+        out_buf.data[tid] = f16_to_f32(half_val);
+    }
 }
