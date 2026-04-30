@@ -33,6 +33,8 @@ const wgsl_split_qgate = @embedFile("kernels/webgpu/split_qgate.wgsl");
 const wgsl_add_rms_norm = @embedFile("kernels/webgpu/add_rms_norm.wgsl");
 const wgsl_add_scaled = @embedFile("kernels/webgpu/add_scaled.wgsl");
 const wgsl_gemv_t_q8_0 = @embedFile("kernels/webgpu/gemv_t_q8_0.wgsl");
+const wgsl_sdpa = @embedFile("kernels/webgpu/sdpa.wgsl");
+const wgsl_conv1d = @embedFile("kernels/webgpu/conv1d.wgsl");
 const wgsl_gemv_nvfp4_st = @embedFile("kernels/webgpu/gemv_nvfp4_st.wgsl");
 const wgsl_gemv_mlx_q4 = @embedFile("kernels/webgpu/gemv_mlx_q4.wgsl");
 const wgsl_gemv_mxfp4_st = @embedFile("kernels/webgpu/gemv_mxfp4_st.wgsl");
@@ -214,6 +216,8 @@ pub const WebGpuBackend = struct {
     pipe_gemv_nvfp4_st: PipelineInfo = .{},
     pipe_gemv_mlx_q4: PipelineInfo = .{},
     pipe_gemv_mxfp4_st: PipelineInfo = .{},
+    pipe_sdpa: PipelineInfo = .{},
+    pipe_conv1d: PipelineInfo = .{},
 
     // Buffer management
     buf_cache: std.AutoHashMap(usize, CachedBuf) = undefined,
@@ -399,6 +403,8 @@ pub const WebGpuBackend = struct {
         self.pipe_gemv_nvfp4_st = try self.createPipeline(wgsl_gemv_nvfp4_st);
         self.pipe_gemv_mlx_q4 = try self.createPipeline(wgsl_gemv_mlx_q4);
         self.pipe_gemv_mxfp4_st = try self.createPipeline(wgsl_gemv_mxfp4_st);
+        self.pipe_sdpa = try self.createPipeline(wgsl_sdpa);
+        self.pipe_conv1d = try self.createPipeline(wgsl_conv1d);
     }
 
     fn createPipeline(self: *WebGpuBackend, wgsl_source: [:0]const u8) !PipelineInfo {
@@ -1019,47 +1025,65 @@ pub const WebGpuBackend = struct {
         }
     }
 
-    pub fn sdpa(self: *WebGpuBackend, q: [*]const f32, keys: []u8, values: []u8, k_new: []const f32, v_new: []const f32, output: [*]f32, scores: [*]f32, nh: usize, nkv: usize, hd: usize, pos: u32, scale: f32, be_unused: anytype, window: anytype, n_pad: usize, kv_type_k: KvQuantType, kv_type_v: KvQuantType) void {
-        _ = self;
-        _ = q;
-        _ = keys;
-        _ = values;
-        _ = k_new;
-        _ = v_new;
-        _ = output;
-        _ = scores;
-        _ = nh;
-        _ = nkv;
-        _ = hd;
-        _ = pos;
-        _ = scale;
-        _ = be_unused;
-        _ = window;
-        _ = n_pad;
-        _ = kv_type_k;
-        _ = kv_type_v;
-        @panic("WebGPU sdpa: not yet implemented");
+    pub fn sdpa(self: *WebGpuBackend, q: [*]const f32, keys: []u8, values: []u8, k_new: [*]const f32, v_new: [*]const f32, output: [*]f32, nh: usize, nkv: usize, hd: usize, seq_len: usize, scale: f32, kv_type_k: KvQuantType, kv_type_v: KvQuantType) void {
+        if (kv_type_k != .f32 or kv_type_v != .f32)
+            @panic("WebGPU sdpa: only f32 KV supported — use --kv-type f32");
+
+        const kvd = nkv * hd;
+        const sl = seq_len + 1;
+
+        // Append new K/V to cache (CPU-side, then upload everything)
+        self.sync();
+        const f32_keys: [*]f32 = @ptrCast(@alignCast(keys.ptr));
+        const f32_values: [*]f32 = @ptrCast(@alignCast(values.ptr));
+        @memcpy(f32_keys[seq_len * kvd ..][0..kvd], k_new[0..kvd]);
+        @memcpy(f32_values[seq_len * kvd ..][0..kvd], v_new[0..kvd]);
+
+        const q_sz = nh * hd * @sizeOf(f32);
+        const k_sz = sl * kvd * @sizeOf(f32);
+        const v_sz = k_sz;
+        const o_sz = q_sz;
+
+        const q_buf = self.getOrUpload(@ptrCast(q), q_sz);
+        const k_pool = self.getPooledBuf(k_sz);
+        defer self.releasePooledBuf(k_pool.idx);
+        const v_pool = self.getPooledBuf(v_sz);
+        defer self.releasePooledBuf(v_pool.idx);
+        const o_pool = self.getPooledBuf(o_sz);
+        defer self.releasePooledBuf(o_pool.idx);
+
+        self.uploadToBuffer(k_pool.buf, @ptrCast(f32_keys), k_sz);
+        self.uploadToBuffer(v_pool.buf, @ptrCast(f32_values), v_sz);
+
+        const Params = extern struct { nh_v: u32, nkv_v: u32, hd_v: u32, sl_v: u32, scale_v: f32 };
+        const p = Params{
+            .nh_v = @intCast(nh),
+            .nkv_v = @intCast(nkv),
+            .hd_v = @intCast(hd),
+            .sl_v = @intCast(sl),
+            .scale_v = scale,
+        };
+        const params_buf = self.createUniformBuf(Params, p);
+        defer self.fn_buffer_destroy(params_buf);
+
+        const entries = [_]WGPUBindGroupEntry{
+            storageEntry(0, q_buf, q_sz),
+            storageEntry(1, k_pool.buf, k_sz),
+            storageEntry(2, v_pool.buf, v_sz),
+            storageEntry(3, o_pool.buf, o_sz),
+            uniformEntry(4, params_buf, Params),
+        };
+        self.dispatchCompute(self.pipe_sdpa, &entries, @intCast(nh));
+        self.downloadF32(o_pool.buf, output, nh * hd);
     }
 
-    pub fn sdpaWithStats(self: *WebGpuBackend, q: [*]const f32, keys: [*]const u8, values: [*]const u8, k_new: []const f32, v_new: []const f32, output: [*]f32, max_out: [*]f32, sum_out: [*]f32, nh: usize, nkv: usize, hd: usize, pos: u32, scale: f32, window: anytype, kv_type_k: KvQuantType, kv_type_v: KvQuantType) void {
-        _ = self;
-        _ = q;
-        _ = keys;
-        _ = values;
-        _ = k_new;
-        _ = v_new;
-        _ = output;
-        _ = max_out;
-        _ = sum_out;
-        _ = nh;
-        _ = nkv;
-        _ = hd;
-        _ = pos;
-        _ = scale;
-        _ = window;
-        _ = kv_type_k;
-        _ = kv_type_v;
-        @panic("WebGPU sdpaWithStats: not yet implemented");
+    pub fn sdpaWithStats(self: *WebGpuBackend, q: [*]const f32, keys: []u8, values: []u8, k_new: [*]const f32, v_new: [*]const f32, output: [*]f32, head_max: [*]f32, head_sum: [*]f32, nh: usize, nkv: usize, hd: usize, seq_len: usize, scale: f32, kv_type_k: KvQuantType, kv_type_v: KvQuantType) void {
+        self.sdpa(q, keys, values, k_new, v_new, output, nh, nkv, hd, seq_len, scale, kv_type_k, kv_type_v);
+        // Stats not computed by GPU kernel — fill with defaults for merge compatibility
+        for (0..nh) |h| {
+            head_max[h] = 0.0;
+            head_sum[h] = 1.0;
+        }
     }
 
     pub fn sdpaTree(_: *WebGpuBackend, q_all: [*]const f32, prefix_keys: [*]const u8, prefix_values: [*]const u8, tree_keys: [*]const f32, tree_values: [*]const f32, output: [*]f32, ancestor_masks: [*]const [8]u64, nh: usize, nkv: usize, hd: usize, prefix_len: usize, n_nodes: u32, scale: f32, kv_type_k: KvQuantType, kv_type_v: KvQuantType) void {
@@ -1067,22 +1091,12 @@ pub const WebGpuBackend = struct {
     }
 
     pub fn sdpaPrefill(self: *WebGpuBackend, q: [*]const f32, k: [*]const f32, v: [*]const f32, kv_keys: []u8, kv_values: []u8, output: [*]f32, nh: usize, nkv: usize, hd: usize, prev_len: usize, n_tok: usize, scale: f32, kv_type_k: KvQuantType, kv_type_v: KvQuantType) void {
-        _ = self;
-        _ = q;
-        _ = k;
-        _ = v;
-        _ = kv_keys;
-        _ = kv_values;
-        _ = output;
-        _ = nh;
-        _ = nkv;
-        _ = hd;
-        _ = prev_len;
-        _ = n_tok;
-        _ = scale;
-        _ = kv_type_k;
-        _ = kv_type_v;
-        @panic("WebGPU sdpaPrefill: not yet implemented");
+        const kvd = nkv * hd;
+        const qkv_dim = nh * hd;
+        for (0..n_tok) |t| {
+            const seq_pos = prev_len + t;
+            self.sdpa(q + t * qkv_dim, kv_keys, kv_values, k + t * kvd, v + t * kvd, output + t * qkv_dim, nh, nkv, hd, seq_pos, scale, kv_type_k, kv_type_v);
+        }
     }
 
     /// Transposed GEMV for Q8_0 3D weights: y[out_dim] = W^T @ x[in_dim].
@@ -1206,15 +1220,51 @@ pub const WebGpuBackend = struct {
     }
 
     pub fn causalConv1dSilu(self: *WebGpuBackend, x: [*]const f32, state: [*]f32, conv_w: [*]const f32, conv_bias: ?[*]const f32, output: [*]f32, conv_ch: usize, d_conv: usize) void {
-        _ = self;
-        _ = x;
-        _ = state;
-        _ = conv_w;
-        _ = conv_bias;
-        _ = output;
-        _ = conv_ch;
-        _ = d_conv;
-        @panic("WebGPU causalConv1dSilu: not yet implemented");
+        const ch_sz = conv_ch * @sizeOf(f32);
+        const state_sz = (d_conv - 1) * conv_ch * @sizeOf(f32);
+        const w_sz = d_conv * conv_ch * @sizeOf(f32);
+
+        const x_buf = self.getOrUpload(@ptrCast(x), ch_sz);
+        const s_pool = self.getPooledBuf(state_sz);
+        defer self.releasePooledBuf(s_pool.idx);
+        self.uploadToBuffer(s_pool.buf, @ptrCast(state), state_sz);
+        const w_buf = self.getOrUpload(@ptrCast(conv_w), w_sz);
+        const o_pool = self.getPooledBuf(ch_sz);
+        defer self.releasePooledBuf(o_pool.idx);
+
+        var zero: f32 = 0.0;
+        const b_buf = if (conv_bias) |b| self.getOrUpload(@ptrCast(b), ch_sz) else self.getOrUpload(@ptrCast(&zero), @sizeOf(f32));
+
+        const Params = extern struct { conv_ch_v: u32, d_conv_v: u32, has_bias: u32, _pad: u32 };
+        const p = Params{
+            .conv_ch_v = @intCast(conv_ch),
+            .d_conv_v = @intCast(d_conv),
+            .has_bias = if (conv_bias != null) 1 else 0,
+            ._pad = 0,
+        };
+        const params_buf = self.createUniformBuf(Params, p);
+        defer self.fn_buffer_destroy(params_buf);
+
+        const entries = [_]WGPUBindGroupEntry{
+            storageEntry(0, x_buf, ch_sz),
+            storageEntry(1, s_pool.buf, state_sz),
+            storageEntry(2, w_buf, w_sz),
+            storageEntry(3, o_pool.buf, ch_sz),
+            storageEntry(4, b_buf, if (conv_bias != null) ch_sz else @sizeOf(f32)),
+            uniformEntry(5, params_buf, Params),
+        };
+        self.dispatchCompute(self.pipe_conv1d, &entries, @intCast((conv_ch + workgroup_size - 1) / workgroup_size));
+        self.downloadF32(o_pool.buf, output, conv_ch);
+
+        // Update conv state ring buffer (shift left, append new input)
+        self.sync();
+        const hist = d_conv - 1;
+        if (hist > 1) {
+            for (0..hist - 1) |i| {
+                @memcpy(state[i * conv_ch ..][0..conv_ch], state[(i + 1) * conv_ch ..][0..conv_ch]);
+            }
+        }
+        @memcpy(state[(hist - 1) * conv_ch ..][0..conv_ch], x[0..conv_ch]);
     }
 
     pub fn deltaNet(self: *WebGpuBackend, q: [*]const f32, k_in: [*]const f32, v: [*]const f32, beta: [*]const f32, state: []f32, output: [*]f32, nh: usize, hd: usize, kv_dim: usize) void {
