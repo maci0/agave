@@ -487,6 +487,10 @@ const spv_sigmoid_mul = @embedFile("kernels/vulkan/sigmoid_mul.spv");
 const spv_deinterleave = @embedFile("kernels/vulkan/deinterleave.spv");
 const spv_split_qgate = @embedFile("kernels/vulkan/split_qgate.spv");
 
+// Fused
+const spv_add_scaled = @embedFile("kernels/vulkan/add_scaled.spv");
+const spv_add_rms_norm = @embedFile("kernels/vulkan/add_rms_norm.spv");
+
 // Normalization
 const spv_rms_norm = @embedFile("kernels/vulkan/rms_norm.spv");
 const spv_rms_norm_multi = @embedFile("kernels/vulkan/rms_norm_multi.spv");
@@ -565,6 +569,8 @@ pub const VulkanBackend = struct {
     pipe_sigmoid_mul: PipelineInfo = .{},
     pipe_deinterleave: PipelineInfo = .{},
     pipe_split_qgate: PipelineInfo = .{},
+    pipe_add_scaled: PipelineInfo = .{},
+    pipe_add_rms_norm: PipelineInfo = .{},
 
     // Normalization pipelines
     pipe_rms_norm: PipelineInfo = .{},
@@ -982,6 +988,10 @@ pub const VulkanBackend = struct {
         self.pipe_deinterleave = try self.createPipeline(spv_deinterleave, 3, 8);
         // Split Q+gate: 3 bufs (qg, q_out, g_out), 8 bytes push (hd, nh)
         self.pipe_split_qgate = try self.createPipeline(spv_split_qgate, 3, 8);
+        // Add scaled: 2 bufs (src, dst in-place), 8 bytes push (n, scale)
+        self.pipe_add_scaled = try self.createPipeline(spv_add_scaled, 2, 8);
+        // Fused add+rmsNorm: 4 bufs (data in-place, residual, weight, out), 8 bytes push (n, eps)
+        self.pipe_add_rms_norm = try self.createPipeline(spv_add_rms_norm, 4, 8);
         // Normalization: rmsNorm 3 bufs, 8 bytes push (n, eps)
         self.pipe_rms_norm = try self.createPipeline(spv_rms_norm, 3, 8);
         // Per-head rmsNorm: 2 bufs (data in-place, weight), 12 bytes push (n_heads, head_dim, eps)
@@ -1441,14 +1451,43 @@ pub const VulkanBackend = struct {
     /// Scaled accumulate: dst[i] += src[i] * scale.
     /// CPU fallback — n_embd-sized, negligible vs GPU dispatch overhead.
     /// Safe without flush: Vulkan dispatches are synchronous (fence-waited).
-    pub fn addScaled(_: *VulkanBackend, src: [*]const f32, dst: [*]f32, scale: f32, n: usize) void {
-        for (0..n) |i| dst[i] += src[i] * scale;
+    pub fn addScaled(self: *VulkanBackend, src: [*]const f32, dst: [*]f32, scale: f32, n: usize) void {
+        const sz = n * @sizeOf(f32);
+        const s_buf = self.getPooledBuf(sz);
+        defer self.releasePooledBuf(s_buf);
+        const d_buf = self.getPooledBuf(sz);
+        defer self.releasePooledBuf(d_buf);
+        self.uploadBuffer(s_buf.mem, @ptrCast(src), sz);
+        self.uploadBuffer(d_buf.mem, @ptrCast(dst), sz);
+        const Params = extern struct { n: u32, scale: f32 };
+        const params = Params{ .n = @intCast(n), .scale = scale };
+        const bufs = [_]VkBuffer{ s_buf.buf, d_buf.buf };
+        const sizes = [_]usize{ sz, sz };
+        self.dispatch(self.pipe_add_scaled, &bufs, &sizes, @ptrCast(&params), @sizeOf(Params), @intCast((n + workgroup_size - 1) / workgroup_size));
+        self.downloadF32(d_buf.mem, dst, n);
     }
 
-    /// Fused add + rmsNorm (sequential fallback — no fused Vulkan kernel yet).
+    /// Fused add + rmsNorm.
     pub fn addRmsNorm(self: *VulkanBackend, a: [*]f32, b: [*]const f32, weight: [*]const f32, output: [*]f32, n: usize, eps: f32) void {
-        self.add(a, b, a, n);
-        self.rmsNorm(a, weight, output, n, eps);
+        const sz = n * @sizeOf(f32);
+        const a_buf = self.getPooledBuf(sz);
+        defer self.releasePooledBuf(a_buf);
+        const b_buf = self.getPooledBuf(sz);
+        defer self.releasePooledBuf(b_buf);
+        const w_buf = self.getPooledBuf(sz);
+        defer self.releasePooledBuf(w_buf);
+        const o_buf = self.getPooledBuf(sz);
+        defer self.releasePooledBuf(o_buf);
+        self.uploadBuffer(a_buf.mem, @ptrCast(a), sz);
+        self.uploadBuffer(b_buf.mem, @ptrCast(b), sz);
+        self.uploadBuffer(w_buf.mem, @ptrCast(weight), sz);
+        const Params = extern struct { n: u32, eps: f32 };
+        const params = Params{ .n = @intCast(n), .eps = eps };
+        const bufs = [_]VkBuffer{ a_buf.buf, b_buf.buf, w_buf.buf, o_buf.buf };
+        const buf_sizes = [_]usize{ sz, sz, sz, sz };
+        self.dispatch(self.pipe_add_rms_norm, &bufs, &buf_sizes, @ptrCast(&params), @sizeOf(Params), 1);
+        self.downloadF32(a_buf.mem, a, n);
+        self.downloadF32(o_buf.mem, output, n);
     }
 
     /// out[i] = a[i] * b[i]
