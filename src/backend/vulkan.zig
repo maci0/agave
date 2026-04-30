@@ -511,6 +511,7 @@ const spv_gemv_q5_k = @embedFile("kernels/vulkan/gemv_q5_k.spv");
 const spv_gemv_q6_k = @embedFile("kernels/vulkan/gemv_q6_k.spv");
 const spv_gemv_fp8_e4m3 = @embedFile("kernels/vulkan/gemv_fp8_e4m3.spv");
 const spv_gemv_fp8_e5m2 = @embedFile("kernels/vulkan/gemv_fp8_e5m2.spv");
+const spv_gemv_t_q8_0 = @embedFile("kernels/vulkan/gemv_t_q8_0.spv");
 
 // Attention
 const spv_sdpa = @embedFile("kernels/vulkan/sdpa.spv");
@@ -592,6 +593,7 @@ pub const VulkanBackend = struct {
     pipe_gemv_q6_k: PipelineInfo = .{},
     pipe_gemv_fp8_e4m3: PipelineInfo = .{},
     pipe_gemv_fp8_e5m2: PipelineInfo = .{},
+    pipe_gemv_t_q8_0: PipelineInfo = .{},
 
     // Attention pipelines
     pipe_sdpa: PipelineInfo = .{},
@@ -1013,6 +1015,7 @@ pub const VulkanBackend = struct {
         self.pipe_gemv_q6_k = try self.createPipeline(spv_gemv_q6_k, 3, 8);
         self.pipe_gemv_fp8_e4m3 = try self.createPipeline(spv_gemv_fp8_e4m3, 3, 8);
         self.pipe_gemv_fp8_e5m2 = try self.createPipeline(spv_gemv_fp8_e5m2, 3, 8);
+        self.pipe_gemv_t_q8_0 = try self.createPipeline(spv_gemv_t_q8_0, 3, 8);
         // SDPA: 4 bufs (Q, K, V, out), 20 bytes push (nh, nkv, hd, sl, scale)
         self.pipe_sdpa = try self.createPipeline(spv_sdpa, 4, 20);
         // SDPA TurboQuant: 4 bufs (Q, K_raw, V_raw, out), 36 bytes push
@@ -1065,12 +1068,14 @@ pub const VulkanBackend = struct {
             &self.pipe_gemv_f16,      &self.pipe_gemv_q4_k,
             &self.pipe_gemv_q5_k,     &self.pipe_gemv_q6_k,
             &self.pipe_gemv_fp8_e4m3, &self.pipe_gemv_fp8_e5m2,
-            // Attention
-            &self.pipe_sdpa,          &self.pipe_sdpa_turbo,
-            // Embedding
-            &self.pipe_embedding,
-                // SSM
-                &self.pipe_conv1d,
+            &self.pipe_gemv_t_q8_0,
+                // Attention
+              &self.pipe_sdpa,
+            &self.pipe_sdpa_turbo,
+                // Embedding
+               &self.pipe_embedding,
+            // SSM
+            &self.pipe_conv1d,
         };
         for (pipelines) |p| {
             if (p.pipeline != null) self.vkDestroyPipeline(self.device, p.pipeline, null);
@@ -1443,9 +1448,30 @@ pub const VulkanBackend = struct {
         self.downloadF32(o_buf.mem, out, n);
     }
 
-    /// Transposed GEMV for Q8_0 3D weights — not yet implemented.
-    pub fn gemvT(_: *VulkanBackend, _: [*]const f32, _: [*]const u8, _: [*]f32, _: usize, _: usize) void {
-        @panic("Vulkan gemvT: no GPU shader — add a Vulkan compute shader");
+    /// Transposed GEMV for Q8_0 3D weights: y[out_dim] = W^T @ x[in_dim].
+    /// W is stored as [in_dim rows, out_dim cols] in Q8_0 blocks.
+    /// One workgroup per output element, threads stride over input rows.
+    pub fn gemvT(self: *VulkanBackend, x: [*]const f32, w: [*]const u8, y: [*]f32, out_dim: usize, in_dim: usize) void {
+        const blocks_per_row = (out_dim + 31) / 32;
+        const row_bytes = blocks_per_row * 34; // 34 bytes per Q8_0 block
+        const x_sz = in_dim * @sizeOf(f32);
+        const w_sz = in_dim * row_bytes;
+        const y_sz = out_dim * @sizeOf(f32);
+
+        const x_buf = self.getPooledBuf(x_sz);
+        defer self.releasePooledBuf(x_buf);
+        const y_buf = self.getPooledBuf(y_sz);
+        defer self.releasePooledBuf(y_buf);
+
+        const w_vk = self.getOrUpload(@ptrCast(w), w_sz);
+
+        self.uploadBuffer(x_buf.mem, @ptrCast(x), x_sz);
+
+        const params = [2]u32{ @intCast(out_dim), @intCast(in_dim) };
+        const bufs = [_]VkBuffer{ x_buf.buf, w_vk.buf, y_buf.buf };
+        const sizes = [_]usize{ x_sz, w_sz, y_sz };
+        self.dispatch(self.pipe_gemv_t_q8_0, &bufs, &sizes, @ptrCast(&params), 8, @intCast(out_dim));
+        self.downloadF32(y_buf.mem, y, out_dim);
     }
 
     /// Scaled accumulate: dst[i] += src[i] * scale.

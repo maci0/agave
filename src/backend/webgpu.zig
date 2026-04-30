@@ -32,6 +32,7 @@ const wgsl_deinterleave = @embedFile("kernels/webgpu/deinterleave.wgsl");
 const wgsl_split_qgate = @embedFile("kernels/webgpu/split_qgate.wgsl");
 const wgsl_add_rms_norm = @embedFile("kernels/webgpu/add_rms_norm.wgsl");
 const wgsl_add_scaled = @embedFile("kernels/webgpu/add_scaled.wgsl");
+const wgsl_gemv_t_q8_0 = @embedFile("kernels/webgpu/gemv_t_q8_0.wgsl");
 
 // ── WebGPU C API types ──────────────────────────────────────────────
 
@@ -206,6 +207,7 @@ pub const WebGpuBackend = struct {
     pipe_split_qgate: PipelineInfo = .{},
     pipe_add_rms_norm: PipelineInfo = .{},
     pipe_add_scaled: PipelineInfo = .{},
+    pipe_gemv_t_q8_0: PipelineInfo = .{},
 
     // Buffer management
     buf_cache: std.AutoHashMap(usize, CachedBuf) = undefined,
@@ -387,6 +389,7 @@ pub const WebGpuBackend = struct {
         self.pipe_split_qgate = try self.createPipeline(wgsl_split_qgate);
         self.pipe_add_rms_norm = try self.createPipeline(wgsl_add_rms_norm);
         self.pipe_add_scaled = try self.createPipeline(wgsl_add_scaled);
+        self.pipe_gemv_t_q8_0 = try self.createPipeline(wgsl_gemv_t_q8_0);
     }
 
     fn createPipeline(self: *WebGpuBackend, wgsl_source: [:0]const u8) !PipelineInfo {
@@ -1073,14 +1076,38 @@ pub const WebGpuBackend = struct {
         @panic("WebGPU sdpaPrefill: not yet implemented");
     }
 
-    pub fn gemvT(self: *WebGpuBackend, x: [*]const f32, w: TensorData, y: [*]f32, n: usize, k: usize) void {
-        _ = self;
-        _ = x;
-        _ = w;
-        _ = y;
-        _ = n;
-        _ = k;
-        @panic("WebGPU gemvT: not yet implemented");
+    /// Transposed GEMV for Q8_0 3D weights: y[out_dim] = W^T @ x[in_dim].
+    /// W is stored as [in_dim rows, out_dim cols] in Q8_0 blocks.
+    /// One workgroup per output element, threads stride over input rows.
+    pub fn gemvT(self: *WebGpuBackend, x: [*]const f32, w: [*]const u8, y: [*]f32, out_dim: usize, in_dim: usize) void {
+        const blocks_per_row = (out_dim + 31) / 32;
+        const row_bytes = blocks_per_row * 34; // 34 bytes per Q8_0 block
+        const x_size = in_dim * @sizeOf(f32);
+        const w_size = in_dim * row_bytes;
+        const y_size = out_dim * @sizeOf(f32);
+
+        const x_pool = self.getPooledBuf(x_size);
+        defer self.releasePooledBuf(x_pool.idx);
+        self.uploadToBuffer(x_pool.buf, @ptrCast(x), x_size);
+
+        const w_buf = self.getOrUpload(@ptrCast(w), w_size);
+
+        const out = self.getPooledBuf(y_size);
+        defer self.releasePooledBuf(out.idx);
+
+        const Params = extern struct { out_dim_val: u32, in_dim_val: u32, _pad: [8]u8 = .{0} ** 8 };
+        var params = Params{ .out_dim_val = @intCast(out_dim), .in_dim_val = @intCast(in_dim) };
+        const params_buf = self.createUniformBuf(Params, &params);
+        defer self.fn_buffer_destroy(params_buf);
+
+        const entries = [_]WGPUBindGroupEntry{
+            storageEntry(0, x_pool.buf, x_size),
+            storageEntry(1, w_buf, w_size),
+            storageEntry(2, out.buf, y_size),
+            uniformEntry(3, params_buf, Params),
+        };
+        self.dispatchCompute(self.pipe_gemv_t_q8_0, &entries, @intCast(out_dim));
+        self.downloadF32(out.buf, y, out_dim);
     }
 
     pub fn gemvNvfp4St(self: *WebGpuBackend, x: [*]const f32, w_packed: [*]const u8, w_scales: [*]const u8, global_scale: f32, y: [*]f32, n: usize, k: usize) void {

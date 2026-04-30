@@ -1,0 +1,86 @@
+#version 450
+#extension GL_KHR_shader_subgroup_arithmetic : require
+
+// Transposed GEMV for Q8_0 3D weights: y[out_dim] = W^T @ x[in_dim].
+// W is stored as [in_dim rows, out_dim cols] in Q8_0 blocks (row-major).
+// Each row has ceil(out_dim / 32) blocks of 34 bytes (f16 scale + 32 x i8).
+// One workgroup per output element j. Threads stride over input rows i,
+// dequantizing W[i, j] from Q8_0 and accumulating x[i] * W[i, j] into y[j].
+
+layout(local_size_x = 256) in;
+
+layout(set = 0, binding = 0) readonly buffer X { float x[]; };
+layout(set = 0, binding = 1) readonly buffer W { uint w_raw[]; };  // raw bytes as u32
+layout(set = 0, binding = 2) writeonly buffer Y { float y[]; };
+layout(push_constant) uniform Params { uint out_dim; uint in_dim; };
+
+shared float shared_sums[8];  // one slot per subgroup (256 threads / 32 lanes)
+
+void main() {
+    uint col = gl_WorkGroupID.x;  // output element index
+    uint tid = gl_LocalInvocationID.x;
+    uint tg_size = gl_WorkGroupSize.x;
+    if (col >= out_dim) return;
+
+    // Q8_0 layout constants
+    const uint BLOCK_ELEMS = 32;
+    const uint BLOCK_BYTES = 34;
+    uint blocks_per_row = (out_dim + BLOCK_ELEMS - 1) / BLOCK_ELEMS;
+    uint row_bytes = blocks_per_row * BLOCK_BYTES;
+
+    // Which block and offset within the block does column 'col' land in?
+    uint blk_idx = col / BLOCK_ELEMS;
+    uint elem_in_blk = col % BLOCK_ELEMS;
+
+    // Byte offset within a row to the target block
+    uint blk_byte_off = blk_idx * BLOCK_BYTES;
+    // Byte offset of the scale (first 2 bytes of the block)
+    uint scale_byte_off = blk_byte_off;
+    // Byte offset of the quant value within the block
+    uint quant_byte_off = blk_byte_off + 2 + elem_in_blk;
+
+    float sum = 0.0;
+
+    // Each thread processes rows in stride
+    for (uint row = tid; row < in_dim; row += tg_size) {
+        uint row_base = row * row_bytes;
+
+        // Read f16 scale from first 2 bytes of the block
+        uint s_byte = row_base + scale_byte_off;
+        uint s_word = s_byte / 4;
+        uint s_shift = s_byte % 4;
+        uint raw_word = w_raw[s_word];
+        uint scale_bits;
+        if (s_shift <= 2) {
+            scale_bits = (raw_word >> (s_shift * 8)) & 0xFFFF;
+        } else {
+            // Straddles two u32 words
+            uint lo = (raw_word >> 24) & 0xFF;
+            uint hi = w_raw[s_word + 1] & 0xFF;
+            scale_bits = lo | (hi << 8);
+        }
+        float d = unpackHalf2x16(scale_bits).x;
+
+        // Read single i8 quant value
+        uint q_byte = row_base + quant_byte_off;
+        uint q_word = w_raw[q_byte / 4];
+        uint q_shift = (q_byte % 4) * 8;
+        int qval = int((q_word >> q_shift) & 0xFF);
+        if (qval > 127) qval -= 256;  // sign extend i8
+
+        sum += d * float(qval) * x[row];
+    }
+
+    // Subgroup + shared memory reduction
+    sum = subgroupAdd(sum);
+    uint sg_id = gl_SubgroupID;
+    uint sg_lane = gl_SubgroupInvocationID;
+    if (sg_lane == 0) shared_sums[sg_id] = sum;
+    barrier();
+    uint num_sg = (tg_size + gl_SubgroupSize - 1) / gl_SubgroupSize;
+    if (tid < num_sg) sum = shared_sums[tid]; else sum = 0.0;
+    if (tid < gl_SubgroupSize) {
+        sum = subgroupAdd(sum);
+        if (tid == 0) y[col] = sum;
+    }
+}
