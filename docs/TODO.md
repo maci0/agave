@@ -109,6 +109,7 @@ These work but delegate to CPU — should eventually be native GPU kernels.
 | 6 | Direct NVMe-to-VRAM weight loading | Not started | Tiered KV exists, weight loading still CPU-mediated |
 | 7 | CUDA fused FFN megakernels (Q4_K/Q5_K/Q6_K variants) | Not started | Only Q8_0 megakernel exists for CUDA |
 | 8 | WebGPU Phase 2 (WASM target) | Not started | Browser-based inference via WebAssembly + WebGPU |
+| 9 | Native FP4 tensor cores on Blackwell SM121 | Research | GB10 has native FP4 via `mma.sync.m16n8k64` — 129 TFLOPS demonstrated. Needs Zig PTX inline asm + CUTLASS fragment layout port. See [forum thread](https://forums.developer.nvidia.com/t/custom-fp4-cuda-kernel-129-tflops-on-dgx-spark-with-pre-quantized-weight-cache/361600) |
 
 ---
 
