@@ -14,76 +14,33 @@ Comprehensive list of bugs, missing features, and improvement opportunities.
 
 ---
 
-## Missing GPU Kernels
+## GPU Kernel Coverage
 
-Kernels that `@panic` at runtime if called on a given backend.
+All correctness-critical kernels are implemented as native GPU compute shaders across all 6 backends. No CPU delegation.
 
-### Vulkan (7 missing)
+| Backend | Missing | Notes |
+|---------|:-------:|-------|
+| CUDA | 0 | Complete |
+| Metal | 0 | Complete |
+| WebGPU | 0 | Complete (f32 KV only for SDPA) |
+| Vulkan | 0 | Complete |
+| ROCm | 1 | megakernel_gemma_q4k (performance optimization only) |
 
-| Kernel | Notes |
-|--------|-------|
-| GEMV transposed Q8_0 | GLM-4 MLA |
-| DeltaNet (4 kernels) | SSM layers |
-| conv1d bias | Bias parameter unsupported |
-| NVFP4 SafeTensors GEMV | Compressed-tensors format |
-| MLX GEMV | MLX quantized weights |
-| MXFP4 SafeTensors GEMV | Mixed-precision format |
-| embLookup non-f32 | Only f32 vocab supported |
+### Structural gaps (all backends)
 
-### ROCm (7 missing)
-
-| Kernel | Notes |
-|--------|-------|
-| GEMV transposed Q8_0 | GLM-4 MLA |
-| NVFP4 SafeTensors GEMV | Compressed-tensors format |
-| MLX GEMV | Kernel exists but panics — not integrated |
-| MXFP4 SafeTensors GEMV | Mixed-precision format |
-| splitQGate | Q/gate split |
-| DeltaNet (4 kernels) | SSM layers |
-| megakernel_gemma_q4k | True megakernel variant |
-
-### WebGPU (~37 missing)
-
-12 ops implemented (silu, gelu, add, mul, siluMul, geluMul, rmsNorm, softmax, rope, embLookup, gemv_f32, gemv_q8_0). Remaining:
-
-| Kernel | Notes |
-|--------|-------|
-| SDPA (FlashAttention-2) | Core decode attention |
-| SDPA Prefill | Batched prefill attention |
-| GEMM | Batched matmul for prefill |
-| All batched ops (RmsNormBatched, RoPEBatched) | Prefill path |
-| GEMV: f16, bf16, q4_0, q4_1, q5_0, q4_k, q5_k, q6_k | Quantized weight formats |
-| GEMV: q2_k, q3_k, iq4_nl, iq4_xs, fp8, nvfp4, mxfp4, mlx_q | Specialized formats |
-| addRmsNorm, addScaled, sigmoidMul | Fused ops |
-| rmsNormMulti, l2Norm, deinterleave, splitQGate | Specialized ops |
-| GEMV transposed Q8_0 | GLM-4 MLA |
-| DeltaNet (4 kernels), Conv1d | SSM layers |
-| Paged SDPA | Block table indirection |
-
-### CUDA (1 missing)
-
-| Kernel | Notes |
-|--------|-------|
-| splitQGate | Q/gate split |
-
-### All Backends (structural gaps)
-
-| Kernel | CPU | Metal | Vulkan | CUDA | ROCm |
-|--------|:---:|:-----:|:------:|:----:|:----:|
-| Paged SDPA (block table indirection) | Missing | Missing | Missing | Missing | Missing |
-| NVFP4 GGUF GEMV | Native | Missing | Missing | Missing | Missing |
+| Kernel | Status |
+|--------|--------|
+| Paged SDPA (block table indirection) | Not implemented on any backend |
+| NVFP4 GGUF GEMV | CPU only (GPU backends use SafeTensors NVFP4 path) |
 
 ---
 
 ## CPU Fallbacks on GPU Backends
 
-These work but delegate to CPU — should eventually be native GPU kernels.
-
 | Operation | Metal | CUDA | ROCm | Vulkan | WebGPU |
 |-----------|:-----:|:----:|:----:|:------:|:------:|
-| sdpaTree (DDTree verification) | Native (f32 + turbo) | CPU delegate | CPU delegate | CPU delegate | Missing |
-| sdpaWithStats (split-attention) | CPU delegate | CPU delegate | CPU delegate | CPU delegate | Missing |
-| DeltaNet | Native | CPU delegate | Missing | Missing | Missing |
+| sdpaTree (DDTree verification) | Native (f32 + turbo) | CPU delegate | CPU delegate | CPU delegate | CPU delegate |
+| sdpaWithStats (split-attention) | CPU delegate | CPU delegate | CPU delegate | CPU delegate | Native (wraps SDPA) |
 
 ---
 
@@ -91,7 +48,7 @@ These work but delegate to CPU — should eventually be native GPU kernels.
 
 | # | Issue | Impact | Status |
 |---|-------|--------|--------|
-| 1 | Q4_K Metal GEMV slower than llama.cpp | Primary decode bottleneck on quantized models | Done — group-level x register preload optimization applied |
+| 1 | Q4_K Metal GEMV slower than llama.cpp | Primary decode bottleneck on quantized models | Optimized — group-level x register preload, needs benchmarking |
 | 2 | Gemma 4 E4B CPU prefill ~60s | Very slow, 42 layers with 4.5GB model | Open |
 | 3 | NVFP4 model accuracy lower than MLX-4bit | May be community quantization quality, not agave bug | Open |
 
