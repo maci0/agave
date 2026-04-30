@@ -1,0 +1,62 @@
+#version 450
+layout(local_size_x = 256) in;
+layout(set = 0, binding = 0) readonly buffer X { float x[]; };
+layout(set = 0, binding = 1) readonly buffer W { uint w_packed[]; };
+layout(set = 0, binding = 2) readonly buffer Sc { uint sc_packed[]; };
+layout(set = 0, binding = 3) readonly buffer Bi { uint bi_packed[]; };
+layout(set = 0, binding = 4) writeonly buffer Y { float y[]; };
+layout(push_constant) uniform Params { uint n; uint k; };
+
+// MLX affine Q4: group_size=64, 8 nibbles per u32 word, bf16 scale+bias per group
+// dequant = scale * nibble_val + bias
+
+float bf16_to_f32(uint val16) {
+    return uintBitsToFloat(val16 << 16u);
+}
+
+shared float partial[256];
+
+void main() {
+    uint row = gl_WorkGroupID.x;
+    uint tid = gl_LocalInvocationID.x;
+    if (row >= n) return;
+
+    uint group_size = 64u;
+    uint gpr = (k + group_size - 1u) / group_size;
+    uint words_per_group = group_size / 8u; // 8 nibbles per u32
+    uint wpr = gpr * words_per_group;
+
+    float sum = 0.0;
+    for (uint g = tid; g < gpr; g += 256u) {
+        // Read bf16 scale and bias for this group
+        uint sc_word = sc_packed[row * gpr / 2u + g / 2u];
+        float scale = bf16_to_f32((g % 2u == 0u) ? (sc_word & 0xFFFFu) : (sc_word >> 16u));
+        uint bi_word = bi_packed[row * gpr / 2u + g / 2u];
+        float bias = bf16_to_f32((g % 2u == 0u) ? (bi_word & 0xFFFFu) : (bi_word >> 16u));
+
+        uint xo = g * group_size;
+        uint wo = row * wpr + g * words_per_group;
+        uint elems = min(group_size, k - xo);
+
+        float q_dot = 0.0;
+        float x_sum = 0.0;
+        for (uint wi = 0u; wi < elems / 8u; wi++) {
+            uint word = w_packed[wo + wi];
+            for (uint ni = 0u; ni < 8u; ni++) {
+                uint nibble = (word >> (ni * 4u)) & 0xFu;
+                float xv = x[xo + wi * 8u + ni];
+                q_dot += float(nibble) * xv;
+                x_sum += xv;
+            }
+        }
+        sum += scale * q_dot + bias * x_sum;
+    }
+
+    partial[tid] = sum;
+    barrier();
+    for (uint s = 128u; s > 0u; s >>= 1u) {
+        if (tid < s) partial[tid] += partial[tid + s];
+        barrier();
+    }
+    if (tid == 0u) y[row] = partial[0];
+}

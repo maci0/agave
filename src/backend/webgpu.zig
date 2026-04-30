@@ -33,6 +33,9 @@ const wgsl_split_qgate = @embedFile("kernels/webgpu/split_qgate.wgsl");
 const wgsl_add_rms_norm = @embedFile("kernels/webgpu/add_rms_norm.wgsl");
 const wgsl_add_scaled = @embedFile("kernels/webgpu/add_scaled.wgsl");
 const wgsl_gemv_t_q8_0 = @embedFile("kernels/webgpu/gemv_t_q8_0.wgsl");
+const wgsl_gemv_nvfp4_st = @embedFile("kernels/webgpu/gemv_nvfp4_st.wgsl");
+const wgsl_gemv_mlx_q4 = @embedFile("kernels/webgpu/gemv_mlx_q4.wgsl");
+const wgsl_gemv_mxfp4_st = @embedFile("kernels/webgpu/gemv_mxfp4_st.wgsl");
 
 // ── WebGPU C API types ──────────────────────────────────────────────
 
@@ -208,6 +211,9 @@ pub const WebGpuBackend = struct {
     pipe_add_rms_norm: PipelineInfo = .{},
     pipe_add_scaled: PipelineInfo = .{},
     pipe_gemv_t_q8_0: PipelineInfo = .{},
+    pipe_gemv_nvfp4_st: PipelineInfo = .{},
+    pipe_gemv_mlx_q4: PipelineInfo = .{},
+    pipe_gemv_mxfp4_st: PipelineInfo = .{},
 
     // Buffer management
     buf_cache: std.AutoHashMap(usize, CachedBuf) = undefined,
@@ -390,6 +396,9 @@ pub const WebGpuBackend = struct {
         self.pipe_add_rms_norm = try self.createPipeline(wgsl_add_rms_norm);
         self.pipe_add_scaled = try self.createPipeline(wgsl_add_scaled);
         self.pipe_gemv_t_q8_0 = try self.createPipeline(wgsl_gemv_t_q8_0);
+        self.pipe_gemv_nvfp4_st = try self.createPipeline(wgsl_gemv_nvfp4_st);
+        self.pipe_gemv_mlx_q4 = try self.createPipeline(wgsl_gemv_mlx_q4);
+        self.pipe_gemv_mxfp4_st = try self.createPipeline(wgsl_gemv_mxfp4_st);
     }
 
     fn createPipeline(self: *WebGpuBackend, wgsl_source: [:0]const u8) !PipelineInfo {
@@ -1111,39 +1120,85 @@ pub const WebGpuBackend = struct {
     }
 
     pub fn gemvNvfp4St(self: *WebGpuBackend, x: [*]const f32, w_packed: [*]const u8, w_scales: [*]const u8, global_scale: f32, y: [*]f32, n: usize, k: usize) void {
-        _ = self;
-        _ = x;
-        _ = w_packed;
-        _ = w_scales;
         _ = global_scale;
-        _ = y;
-        _ = n;
-        _ = k;
-        @panic("WebGPU gemvNvfp4St: not yet implemented");
+        const x_sz = k * @sizeOf(f32);
+        const w_sz = n * k / 2;
+        const s_sz = n * k / 16;
+        const y_sz = n * @sizeOf(f32);
+        const x_buf = self.getOrUpload(@ptrCast(x), x_sz);
+        const w_buf = self.getOrUpload(@ptrCast(w_packed), w_sz);
+        const s_buf = self.getOrUpload(@ptrCast(w_scales), s_sz);
+        const y_pool = self.getPooledBuf(y_sz);
+        defer self.releasePooledBuf(y_pool.idx);
+        const Params = extern struct { n: u32, k: u32 };
+        const p = Params{ .n = @intCast(n), .k = @intCast(k) };
+        const params_buf = self.createUniformBuf(Params, p);
+        defer self.fn_buffer_destroy(params_buf);
+        const entries = [_]WGPUBindGroupEntry{
+            storageEntry(0, x_buf, x_sz),
+            storageEntry(1, w_buf, w_sz),
+            storageEntry(2, s_buf, s_sz),
+            storageEntry(3, y_pool.buf, y_sz),
+            uniformEntry(4, params_buf, Params),
+        };
+        self.dispatchCompute(self.pipe_gemv_nvfp4_st, &entries, @intCast(n));
+        self.downloadF32(y_pool.buf, y, n);
     }
 
     pub fn gemvMlxQ(self: *WebGpuBackend, x: [*]const f32, w_packed: [*]const u8, w_scales: [*]const u8, w_biases: [*]const u8, y: [*]f32, n: usize, k: usize, bits: u32) void {
-        _ = self;
-        _ = x;
-        _ = w_packed;
-        _ = w_scales;
-        _ = w_biases;
-        _ = y;
-        _ = n;
-        _ = k;
         _ = bits;
-        @panic("WebGPU gemvMlxQ: not yet implemented");
+        const x_sz = k * @sizeOf(f32);
+        const gpr = (k + 63) / 64;
+        const wpr = gpr * 8;
+        const w_sz = n * wpr * @sizeOf(u32);
+        const s_sz = n * gpr * @sizeOf(u16);
+        const b_sz = s_sz;
+        const y_sz = n * @sizeOf(f32);
+        const x_buf = self.getOrUpload(@ptrCast(x), x_sz);
+        const w_buf = self.getOrUpload(@ptrCast(w_packed), w_sz);
+        const s_buf = self.getOrUpload(@ptrCast(w_scales), s_sz);
+        const b_buf = self.getOrUpload(@ptrCast(w_biases), b_sz);
+        const y_pool = self.getPooledBuf(y_sz);
+        defer self.releasePooledBuf(y_pool.idx);
+        const Params = extern struct { n: u32, k: u32 };
+        const p = Params{ .n = @intCast(n), .k = @intCast(k) };
+        const params_buf = self.createUniformBuf(Params, p);
+        defer self.fn_buffer_destroy(params_buf);
+        const entries = [_]WGPUBindGroupEntry{
+            storageEntry(0, x_buf, x_sz),
+            storageEntry(1, w_buf, w_sz),
+            storageEntry(2, s_buf, s_sz),
+            storageEntry(3, b_buf, b_sz),
+            storageEntry(4, y_pool.buf, y_sz),
+            uniformEntry(5, params_buf, Params),
+        };
+        self.dispatchCompute(self.pipe_gemv_mlx_q4, &entries, @intCast(n));
+        self.downloadF32(y_pool.buf, y, n);
     }
 
     pub fn gemvMxfp4St(self: *WebGpuBackend, x: [*]const f32, w_packed: [*]const u8, w_scales: [*]const u8, y: [*]f32, n: usize, k: usize) void {
-        _ = self;
-        _ = x;
-        _ = w_packed;
-        _ = w_scales;
-        _ = y;
-        _ = n;
-        _ = k;
-        @panic("WebGPU gemvMxfp4St: not yet implemented");
+        const x_sz = k * @sizeOf(f32);
+        const w_sz = n * k / 2;
+        const s_sz = n * k / 32;
+        const y_sz = n * @sizeOf(f32);
+        const x_buf = self.getOrUpload(@ptrCast(x), x_sz);
+        const w_buf = self.getOrUpload(@ptrCast(w_packed), w_sz);
+        const s_buf = self.getOrUpload(@ptrCast(w_scales), s_sz);
+        const y_pool = self.getPooledBuf(y_sz);
+        defer self.releasePooledBuf(y_pool.idx);
+        const Params = extern struct { n: u32, k: u32 };
+        const p = Params{ .n = @intCast(n), .k = @intCast(k) };
+        const params_buf = self.createUniformBuf(Params, p);
+        defer self.fn_buffer_destroy(params_buf);
+        const entries = [_]WGPUBindGroupEntry{
+            storageEntry(0, x_buf, x_sz),
+            storageEntry(1, w_buf, w_sz),
+            storageEntry(2, s_buf, s_sz),
+            storageEntry(3, y_pool.buf, y_sz),
+            uniformEntry(4, params_buf, Params),
+        };
+        self.dispatchCompute(self.pipe_gemv_mxfp4_st, &entries, @intCast(n));
+        self.downloadF32(y_pool.buf, y, n);
     }
 
     pub fn gemvMulti(self: *WebGpuBackend, x: [*]const f32, ops: []const backend_mod.GemvOp, k: usize) void {

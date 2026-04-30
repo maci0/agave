@@ -1,0 +1,60 @@
+#version 450
+layout(local_size_x = 256) in;
+layout(set = 0, binding = 0) readonly buffer X { float x[]; };
+layout(set = 0, binding = 1) readonly buffer W { uint w_packed[]; };
+layout(set = 0, binding = 2) readonly buffer S { uint s_packed[]; };
+layout(set = 0, binding = 3) writeonly buffer Y { float y[]; };
+layout(push_constant) uniform Params { uint n; uint k; };
+
+// MXFP4 E2M1 dequant + E8M0 scale
+// Block size = 32 elements, 16 weight bytes, 1 E8M0 scale byte per block
+
+float mxfp4_lut(uint nibble) {
+    float t[16] = float[16](0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0,
+                            0.0, -0.5, -1.0, -1.5, -2.0, -3.0, -4.0, -6.0);
+    return t[nibble & 0xFu];
+}
+
+float e8m0_to_f32(uint e) {
+    if (e == 0u) return 0.0;
+    return uintBitsToFloat(e << 23u); // 2^(e-127)
+}
+
+shared float partial[256];
+
+void main() {
+    uint row = gl_WorkGroupID.x;
+    uint tid = gl_LocalInvocationID.x;
+    if (row >= n) return;
+
+    uint blocks_per_row = k / 32u;
+    uint bytes_per_row = k / 2u;
+
+    float sum = 0.0;
+    for (uint blk = tid; blk < blocks_per_row; blk += 256u) {
+        // E8M0 scale for this 32-element block
+        uint s_idx = row * blocks_per_row + blk;
+        uint s_word = s_packed[s_idx / 4u];
+        float sc = e8m0_to_f32((s_word >> ((s_idx % 4u) * 8u)) & 0xFFu);
+
+        uint base = blk * 32u;
+        uint w_byte_base = row * bytes_per_row + blk * 16u;
+
+        for (uint j = 0u; j < 16u; j++) {
+            uint w_idx = (w_byte_base + j) / 4u;
+            uint w_shift = ((w_byte_base + j) % 4u) * 8u;
+            uint byte_val = (w_packed[w_idx] >> w_shift) & 0xFFu;
+            float v0 = mxfp4_lut(byte_val & 0xFu) * sc;
+            float v1 = mxfp4_lut(byte_val >> 4u) * sc;
+            sum += v0 * x[base + 2u * j] + v1 * x[base + 2u * j + 1u];
+        }
+    }
+
+    partial[tid] = sum;
+    barrier();
+    for (uint s = 128u; s > 0u; s >>= 1u) {
+        if (tid < s) partial[tid] += partial[tid + s];
+        barrier();
+    }
+    if (tid == 0u) y[row] = partial[0];
+}

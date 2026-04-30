@@ -1,0 +1,70 @@
+#version 450
+layout(local_size_x = 256) in;
+layout(set = 0, binding = 0) readonly buffer X { float x[]; };
+layout(set = 0, binding = 1) readonly buffer W { uint w_packed[]; };
+layout(set = 0, binding = 2) readonly buffer S { uint s_packed[]; };
+layout(set = 0, binding = 3) writeonly buffer Y { float y[]; };
+layout(push_constant) uniform Params { uint n; uint k; };
+
+// MXFP4 E2M1 dequant lookup: {0, 0.5, 1, 1.5, 2, 3, 4, 6, -0, -0.5, -1, -1.5, -2, -3, -4, -6}
+float mxfp4_lut(uint nibble) {
+    float t[16] = float[16](0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0,
+                            0.0, -0.5, -1.0, -1.5, -2.0, -3.0, -4.0, -6.0);
+    return t[nibble & 0xFu];
+}
+
+// FP8 E4M3 → f32
+float fp8e4m3(uint val) {
+    uint s = (val >> 7) & 1u;
+    uint e = (val >> 3) & 0xFu;
+    uint m = val & 0x7u;
+    if (e == 0u) {
+        if (m == 0u) return 0.0;
+        float fv = float(m) / 8.0 * exp2(-6.0);
+        return s == 1u ? -fv : fv;
+    }
+    if (e == 15u) return 0.0; // NaN → 0
+    float fv = (1.0 + float(m) / 8.0) * exp2(float(e) - 7.0);
+    return s == 1u ? -fv : fv;
+}
+
+shared float partial[256];
+
+void main() {
+    uint row = gl_WorkGroupID.x;
+    uint tid = gl_LocalInvocationID.x;
+    if (row >= n) return;
+
+    uint bytes_per_row = k / 2u;
+    uint scales_per_row = k / 16u;
+    uint w_row_u32 = row * bytes_per_row / 4u;
+    uint s_row_u32 = row * scales_per_row / 4u;
+
+    float sum = 0.0;
+    // Each group: 16 elements, 8 weight bytes, 1 scale byte
+    for (uint g = tid; g < scales_per_row; g += 256u) {
+        // Read scale (1 byte from packed u32)
+        uint s_word = s_packed[s_row_u32 + g / 4u];
+        uint s_byte = (s_word >> ((g % 4u) * 8u)) & 0xFFu;
+        float sc = fp8e4m3(s_byte);
+
+        uint base = g * 16u;
+        // Read 8 weight bytes (2 nibbles each = 16 elements)
+        for (uint j = 0u; j < 8u; j++) {
+            uint w_idx = (row * bytes_per_row + g * 8u + j) / 4u;
+            uint w_shift = ((g * 8u + j) % 4u) * 8u;
+            uint byte_val = (w_packed[w_idx] >> w_shift) & 0xFFu;
+            float v0 = mxfp4_lut(byte_val & 0xFu) * sc;
+            float v1 = mxfp4_lut(byte_val >> 4u) * sc;
+            sum += v0 * x[base + 2u * j] + v1 * x[base + 2u * j + 1u];
+        }
+    }
+
+    partial[tid] = sum;
+    barrier();
+    for (uint s = 128u; s > 0u; s >>= 1u) {
+        if (tid < s) partial[tid] += partial[tid + s];
+        barrier();
+    }
+    if (tid == 0u) y[row] = partial[0];
+}

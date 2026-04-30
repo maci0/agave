@@ -512,6 +512,9 @@ const spv_gemv_q6_k = @embedFile("kernels/vulkan/gemv_q6_k.spv");
 const spv_gemv_fp8_e4m3 = @embedFile("kernels/vulkan/gemv_fp8_e4m3.spv");
 const spv_gemv_fp8_e5m2 = @embedFile("kernels/vulkan/gemv_fp8_e5m2.spv");
 const spv_gemv_t_q8_0 = @embedFile("kernels/vulkan/gemv_t_q8_0.spv");
+const spv_gemv_nvfp4_st = @embedFile("kernels/vulkan/gemv_nvfp4_st.spv");
+const spv_gemv_mlx_q4 = @embedFile("kernels/vulkan/gemv_mlx_q4.spv");
+const spv_gemv_mxfp4_st = @embedFile("kernels/vulkan/gemv_mxfp4_st.spv");
 
 // Attention
 const spv_sdpa = @embedFile("kernels/vulkan/sdpa.spv");
@@ -594,6 +597,9 @@ pub const VulkanBackend = struct {
     pipe_gemv_fp8_e4m3: PipelineInfo = .{},
     pipe_gemv_fp8_e5m2: PipelineInfo = .{},
     pipe_gemv_t_q8_0: PipelineInfo = .{},
+    pipe_gemv_nvfp4_st: PipelineInfo = .{},
+    pipe_gemv_mlx_q4: PipelineInfo = .{},
+    pipe_gemv_mxfp4_st: PipelineInfo = .{},
 
     // Attention pipelines
     pipe_sdpa: PipelineInfo = .{},
@@ -1016,6 +1022,12 @@ pub const VulkanBackend = struct {
         self.pipe_gemv_fp8_e4m3 = try self.createPipeline(spv_gemv_fp8_e4m3, 3, 8);
         self.pipe_gemv_fp8_e5m2 = try self.createPipeline(spv_gemv_fp8_e5m2, 3, 8);
         self.pipe_gemv_t_q8_0 = try self.createPipeline(spv_gemv_t_q8_0, 3, 8);
+        // NVFP4: 4 bufs (x, w_packed, scale, y), 8 bytes push (n, k)
+        self.pipe_gemv_nvfp4_st = try self.createPipeline(spv_gemv_nvfp4_st, 4, 8);
+        // MLX Q4: 5 bufs (x, w, scale, bias, y), 8 bytes push (n, k)
+        self.pipe_gemv_mlx_q4 = try self.createPipeline(spv_gemv_mlx_q4, 5, 8);
+        // MXFP4: 4 bufs (x, w_packed, scale, y), 8 bytes push (n, k)
+        self.pipe_gemv_mxfp4_st = try self.createPipeline(spv_gemv_mxfp4_st, 4, 8);
         // SDPA: 4 bufs (Q, K, V, out), 20 bytes push (nh, nkv, hd, sl, scale)
         self.pipe_sdpa = try self.createPipeline(spv_sdpa, 4, 20);
         // SDPA TurboQuant: 4 bufs (Q, K_raw, V_raw, out), 36 bytes push
@@ -1693,18 +1705,68 @@ pub const VulkanBackend = struct {
     }
 
     /// NVFP4 SafeTensors GEMV.
-    pub fn gemvNvfp4St(_: *VulkanBackend, _: [*]const f32, _: [*]const u8, _: [*]const u8, _: [*]f32, _: usize, _: usize) void {
-        @panic("Vulkan NVFP4 SafeTensors GEMV: no GPU shader — add a Vulkan compute shader");
+    pub fn gemvNvfp4St(self: *VulkanBackend, x: [*]const f32, w_packed: [*]const u8, w_scale: [*]const u8, y: [*]f32, n: usize, k: usize) void {
+        const x_sz = k * @sizeOf(f32);
+        const w_sz = n * k / 2;
+        const s_sz = n * k / 16;
+        const y_sz = n * @sizeOf(f32);
+        const x_pool = self.getPooledBuf(x_sz);
+        defer self.releasePooledBuf(x_pool);
+        const w_vk = self.getOrUpload(@ptrCast(w_packed), w_sz);
+        const s_vk = self.getOrUpload(@ptrCast(w_scale), s_sz);
+        const y_pool = self.getPooledBuf(y_sz);
+        defer self.releasePooledBuf(y_pool);
+        self.uploadBuffer(x_pool.mem, @ptrCast(x), x_sz);
+        const params = [2]u32{ @intCast(n), @intCast(k) };
+        const bufs = [_]VkBuffer{ x_pool.buf, w_vk.buf, s_vk.buf, y_pool.buf };
+        const sizes = [_]usize{ x_sz, w_sz, s_sz, y_sz };
+        self.dispatch(self.pipe_gemv_nvfp4_st, &bufs, &sizes, @ptrCast(&params), 8, @intCast(n));
+        self.downloadF32(y_pool.mem, y, n);
     }
 
     /// MLX affine quantized GEMV.
-    pub fn gemvMlxQ(_: *VulkanBackend, _: [*]const f32, _: [*]const u8, _: [*]const u8, _: [*]const u8, _: [*]f32, _: usize, _: usize, _: u32) void {
-        @panic("Vulkan MLX GEMV: no GPU shader — add a Vulkan compute shader");
+    pub fn gemvMlxQ(self: *VulkanBackend, x: [*]const f32, w_packed: [*]const u8, w_scales: [*]const u8, w_biases: [*]const u8, y: [*]f32, n: usize, k: usize, bits: u32) void {
+        _ = bits;
+        const x_sz = k * @sizeOf(f32);
+        const gpr = (k + 63) / 64;
+        const wpr = gpr * 8;
+        const w_sz = n * wpr * @sizeOf(u32);
+        const s_sz = n * gpr * @sizeOf(u16);
+        const b_sz = s_sz;
+        const y_sz = n * @sizeOf(f32);
+        const x_pool = self.getPooledBuf(x_sz);
+        defer self.releasePooledBuf(x_pool);
+        const w_vk = self.getOrUpload(@ptrCast(w_packed), w_sz);
+        const s_vk = self.getOrUpload(@ptrCast(w_scales), s_sz);
+        const b_vk = self.getOrUpload(@ptrCast(w_biases), b_sz);
+        const y_pool = self.getPooledBuf(y_sz);
+        defer self.releasePooledBuf(y_pool);
+        self.uploadBuffer(x_pool.mem, @ptrCast(x), x_sz);
+        const params = [2]u32{ @intCast(n), @intCast(k) };
+        const bufs = [_]VkBuffer{ x_pool.buf, w_vk.buf, s_vk.buf, b_vk.buf, y_pool.buf };
+        const buf_sizes = [_]usize{ x_sz, w_sz, s_sz, b_sz, y_sz };
+        self.dispatch(self.pipe_gemv_mlx_q4, &bufs, &buf_sizes, @ptrCast(&params), 8, @intCast(n));
+        self.downloadF32(y_pool.mem, y, n);
     }
 
     /// MXFP4 SafeTensors GEMV.
-    pub fn gemvMxfp4St(_: *VulkanBackend, _: [*]const f32, _: [*]const u8, _: [*]const u8, _: [*]f32, _: usize, _: usize) void {
-        @panic("Vulkan MXFP4 SafeTensors GEMV: no GPU shader — add a Vulkan compute shader");
+    pub fn gemvMxfp4St(self: *VulkanBackend, x: [*]const f32, w_packed: [*]const u8, w_scale: [*]const u8, y: [*]f32, n: usize, k: usize) void {
+        const x_sz = k * @sizeOf(f32);
+        const w_sz = n * k / 2;
+        const s_sz = n * k / 32;
+        const y_sz = n * @sizeOf(f32);
+        const x_pool = self.getPooledBuf(x_sz);
+        defer self.releasePooledBuf(x_pool);
+        const w_vk = self.getOrUpload(@ptrCast(w_packed), w_sz);
+        const s_vk = self.getOrUpload(@ptrCast(w_scale), s_sz);
+        const y_pool = self.getPooledBuf(y_sz);
+        defer self.releasePooledBuf(y_pool);
+        self.uploadBuffer(x_pool.mem, @ptrCast(x), x_sz);
+        const params = [2]u32{ @intCast(n), @intCast(k) };
+        const bufs = [_]VkBuffer{ x_pool.buf, w_vk.buf, s_vk.buf, y_pool.buf };
+        const sizes = [_]usize{ x_sz, w_sz, s_sz, y_sz };
+        self.dispatch(self.pipe_gemv_mxfp4_st, &bufs, &sizes, @ptrCast(&params), 8, @intCast(n));
+        self.downloadF32(y_pool.mem, y, n);
     }
 
     /// In-place sigmoid-gated multiply.

@@ -137,6 +137,8 @@ pub const RocmBackend = struct {
     fn_gemv_fp8_e5m2: HipFunction = null,
     fn_gemv_mlx_q4: HipFunction = null,
     fn_gemv_t_q8_0: HipFunction = null,
+    fn_gemv_nvfp4_st: HipFunction = null,
+    fn_gemv_mxfp4_st: HipFunction = null,
     fn_rms_norm_multi: HipFunction = null,
     fn_sdpa: HipFunction = null,
     fn_sdpa_turbo: HipFunction = null,
@@ -282,6 +284,8 @@ pub const RocmBackend = struct {
         self.fn_gemv_fp8_e5m2 = try self.getFunction(hipModuleGetFunction, "gemv_fp8_e5m2_kernel");
         self.fn_gemv_mlx_q4 = try self.getFunction(hipModuleGetFunction, "gemv_mlx_q4_kernel");
         self.fn_gemv_t_q8_0 = try self.getFunction(hipModuleGetFunction, "gemv_t_q8_0_kernel");
+        self.fn_gemv_nvfp4_st = try self.getFunction(hipModuleGetFunction, "gemv_nvfp4_st_kernel");
+        self.fn_gemv_mxfp4_st = try self.getFunction(hipModuleGetFunction, "gemv_mxfp4_st_kernel");
         self.fn_rms_norm_multi = try self.getFunction(hipModuleGetFunction, "rms_norm_multi_kernel"); // loaded but rmsNormMulti() panics — GPU kernel not yet validated
         self.fn_sdpa = try self.getFunction(hipModuleGetFunction, "sdpa_kernel");
         self.fn_sdpa_turbo = try self.getFunction(hipModuleGetFunction, "sdpa_turbo_kernel");
@@ -677,18 +681,52 @@ pub const RocmBackend = struct {
     }
 
     /// NVFP4 SafeTensors GEMV.
-    pub fn gemvNvfp4St(_: *RocmBackend, _: [*]const f32, _: [*]const u8, _: [*]const u8, _: [*]f32, _: usize, _: usize) void {
-        @panic("ROCm NVFP4 SafeTensors GEMV: no GPU kernel — add a ROCm kernel");
+    pub fn gemvNvfp4St(self: *RocmBackend, x: [*]const f32, w_packed: [*]const u8, w_scale: [*]const u8, y: [*]f32, n: usize, k: usize) void {
+        var d_x = self.getInputBuf(x, k * @sizeOf(f32));
+        var d_w = self.getOrUpload(@ptrCast(w_packed), n * k / 2);
+        var d_s = self.getOrUpload(@ptrCast(w_scale), n * k / 16);
+        var d_y = self.getOutputBuf(y, n * @sizeOf(f32));
+        var n_u32: u32 = @intCast(n);
+        var k_u32: u32 = @intCast(k);
+        var params = [_]?*anyopaque{
+            @ptrCast(&d_x),   @ptrCast(&d_w),   @ptrCast(&d_s), @ptrCast(&d_y),
+            @ptrCast(&n_u32), @ptrCast(&k_u32),
+        };
+        self.launch(self.fn_gemv_nvfp4_st, @intCast(n), block_size, reduction_smem, &params);
     }
 
-    /// MLX affine quantized GEMV.
-    pub fn gemvMlxQ(_: *RocmBackend, _: [*]const f32, _: [*]const u8, _: [*]const u8, _: [*]const u8, _: [*]f32, _: usize, _: usize, _: u32) void {
-        @panic("ROCm MLX GEMV: no GPU kernel — add a ROCm kernel");
+    /// MLX affine quantized GEMV — uses existing ROCm MLX Q4 kernel.
+    pub fn gemvMlxQ(self: *RocmBackend, x: [*]const f32, w_packed: [*]const u8, w_scales: [*]const u8, w_biases: [*]const u8, y: [*]f32, n: usize, k: usize, bits: u32) void {
+        _ = bits;
+        const gpr = (k + 63) / 64;
+        const wpr = gpr * 8;
+        var d_x = self.getInputBuf(x, k * @sizeOf(f32));
+        var d_w = self.getOrUpload(@ptrCast(w_packed), n * wpr * @sizeOf(u32));
+        var d_s = self.getOrUpload(@ptrCast(w_scales), n * gpr * @sizeOf(u16));
+        var d_b = self.getOrUpload(@ptrCast(w_biases), n * gpr * @sizeOf(u16));
+        var d_y = self.getOutputBuf(y, n * @sizeOf(f32));
+        var n_u32: u32 = @intCast(n);
+        var k_u32: u32 = @intCast(k);
+        var params = [_]?*anyopaque{
+            @ptrCast(&d_x),   @ptrCast(&d_w),   @ptrCast(&d_s), @ptrCast(&d_b), @ptrCast(&d_y),
+            @ptrCast(&n_u32), @ptrCast(&k_u32),
+        };
+        self.launch(self.fn_gemv_mlx_q4, @intCast(n), block_size, reduction_smem, &params);
     }
 
     /// MXFP4 SafeTensors GEMV.
-    pub fn gemvMxfp4St(_: *RocmBackend, _: [*]const f32, _: [*]const u8, _: [*]const u8, _: [*]f32, _: usize, _: usize) void {
-        @panic("ROCm MXFP4 SafeTensors GEMV: no GPU kernel — add a ROCm kernel");
+    pub fn gemvMxfp4St(self: *RocmBackend, x: [*]const f32, w_packed: [*]const u8, w_scale: [*]const u8, y: [*]f32, n: usize, k: usize) void {
+        var d_x = self.getInputBuf(x, k * @sizeOf(f32));
+        var d_w = self.getOrUpload(@ptrCast(w_packed), n * k / 2);
+        var d_s = self.getOrUpload(@ptrCast(w_scale), n * k / 32);
+        var d_y = self.getOutputBuf(y, n * @sizeOf(f32));
+        var n_u32: u32 = @intCast(n);
+        var k_u32: u32 = @intCast(k);
+        var params = [_]?*anyopaque{
+            @ptrCast(&d_x),   @ptrCast(&d_w),   @ptrCast(&d_s), @ptrCast(&d_y),
+            @ptrCast(&n_u32), @ptrCast(&k_u32),
+        };
+        self.launch(self.fn_gemv_mxfp4_st, @intCast(n), block_size, reduction_smem, &params);
     }
 
     /// In-place sigmoid-gated multiply: data[i] *= sigmoid(gate[i])

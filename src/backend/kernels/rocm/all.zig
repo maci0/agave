@@ -44,6 +44,8 @@ comptime {
     _ = @import("gemv_fp8_e5m2.zig");
     _ = @import("gemv_mlx_q4.zig");
     _ = @import("gemv_t_q8_0.zig");
+    _ = @import("gemv_nvfp4_st.zig");
+    _ = @import("gemv_mxfp4_st.zig");
 
     // True megakernels
     _ = @import("mega_qwen35_q8.zig");
