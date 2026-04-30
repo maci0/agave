@@ -1036,7 +1036,7 @@ pub const VulkanBackend = struct {
         // Embedding: 3 bufs (token_id, emb_table, output), 8 bytes push (vocab_size, n_embd)
         self.pipe_embedding = try self.createPipeline(spv_embedding, 3, 8);
         // Conv1d: 4 bufs (input, state, conv_w, output), 8 bytes push (conv_ch, d_conv)
-        self.pipe_conv1d = try self.createPipeline(spv_conv1d, 4, 8);
+        self.pipe_conv1d = try self.createPipeline(spv_conv1d, 5, 12);
 
         return self;
     }
@@ -1639,42 +1639,37 @@ pub const VulkanBackend = struct {
         conv_ch: usize,
         d_conv: usize,
     ) void {
-        // Note: This kernel does NOT handle conv_b (bias). The CPU reference
-        // causalConv1dSilu in ops/ssm.zig supports optional bias, but the GPU
-        // shader currently does not. For models that need bias, we fall back to CPU.
-        if (conv_b != null) @panic("Vulkan conv1d: bias not supported — add GPU shader support for conv bias");
-
-        // Buffer sizes
         const conv_ch_sz = conv_ch * @sizeOf(f32);
         const state_sz = (d_conv - 1) * conv_ch * @sizeOf(f32);
         const conv_w_sz = d_conv * conv_ch * @sizeOf(f32);
 
-        // Create buffers for input, state, weights, output
         const input_buf = self.getPooledBuf(conv_ch_sz);
         defer self.releasePooledBuf(input_buf);
         const state_buf = self.getPooledBuf(state_sz);
         defer self.releasePooledBuf(state_buf);
         const output_buf = self.getPooledBuf(conv_ch_sz);
         defer self.releasePooledBuf(output_buf);
-
-        // Get or upload cached buffer for conv_w (immutable weights)
         const conv_w_buf = self.getOrUpload(@ptrCast(conv_w), conv_w_sz);
 
-        // Upload input and state
+        // Bias buffer — use zeros if no bias
+        var zero_buf: [1]f32 = .{0.0};
+        const bias_vk = if (conv_b) |b| self.getOrUpload(@ptrCast(b), conv_ch_sz) else self.getOrUpload(@ptrCast(&zero_buf), @sizeOf(f32));
+
         self.uploadBuffer(input_buf.mem, @ptrCast(conv_in), conv_ch_sz);
         self.uploadBuffer(state_buf.mem, @ptrCast(conv_state), state_sz);
 
-        // Push constants: conv_ch, d_conv
-        const params = extern struct { conv_ch_val: u32, d_conv_val: u32 }{
+        const Params = extern struct { conv_ch_val: u32, d_conv_val: u32, has_bias: u32 };
+        const params = Params{
             .conv_ch_val = @intCast(conv_ch),
             .d_conv_val = @intCast(d_conv),
+            .has_bias = if (conv_b != null) 1 else 0,
         };
 
-        const bufs = [_]VkBuffer{ input_buf.buf, state_buf.buf, conv_w_buf.buf, output_buf.buf };
-        const sizes = [_]usize{ conv_ch_sz, state_sz, conv_w_sz, conv_ch_sz };
+        const bufs = [_]VkBuffer{ input_buf.buf, state_buf.buf, conv_w_buf.buf, output_buf.buf, bias_vk.buf };
+        const sizes = [_]usize{ conv_ch_sz, state_sz, conv_w_sz, conv_ch_sz, if (conv_b != null) conv_ch_sz else @sizeOf(f32) };
         const n_groups = (conv_ch + workgroup_size - 1) / workgroup_size;
 
-        self.dispatch(self.pipe_conv1d, &bufs, &sizes, @ptrCast(&params), 8, @intCast(n_groups));
+        self.dispatch(self.pipe_conv1d, &bufs, &sizes, @ptrCast(&params), @sizeOf(Params), @intCast(n_groups));
 
         // Download result
         self.downloadF32(output_buf.mem, conv_out, conv_ch);
