@@ -1,0 +1,65 @@
+#version 450
+layout(local_size_x = 1) in;
+
+layout(set = 0, binding = 0) readonly buffer Q { float q_ptr[]; };
+layout(set = 0, binding = 1) readonly buffer K { float k_ptr[]; };
+layout(set = 0, binding = 2) readonly buffer V { float v_ptr[]; };
+layout(set = 0, binding = 3) readonly buffer Gate { float gate_vals[]; };
+layout(set = 0, binding = 4) readonly buffer Beta { float beta_vals[]; };
+layout(set = 0, binding = 5) readonly buffer Z { float z_buf[]; };
+layout(set = 0, binding = 6) readonly buffer Norm { float ssm_norm_w[]; };
+layout(set = 0, binding = 7) buffer State { float ssm_state[]; };
+layout(set = 0, binding = 8) buffer Out { float out_buf[]; };
+
+layout(push_constant) uniform Params {
+    uint num_v_heads;
+    uint num_k_heads;
+    uint head_k_dim;
+    uint head_v_dim;
+    float q_scale;
+    float rms_eps;
+};
+
+void main() {
+    uint h = gl_WorkGroupID.x;
+    if (h >= num_v_heads) return;
+
+    float decay_val = exp(gate_vals[h]);
+    float beta_h = beta_vals[h];
+    uint kh = (num_k_heads == num_v_heads) ? h : (h * num_k_heads / num_v_heads);
+    uint s_off = h * head_v_dim * head_k_dim;
+    uint k_base = kh * head_k_dim;
+
+    float kq = 0.0;
+    for (uint ki = 0; ki < head_k_dim; ki++) {
+        kq += k_ptr[k_base + ki] * q_ptr[k_base + ki];
+    }
+
+    for (uint vi = 0; vi < head_v_dim; vi++) {
+        uint row_off = s_off + vi * head_k_dim;
+        float sk = 0.0, sq_dec = 0.0;
+        for (uint ki = 0; ki < head_k_dim; ki++) {
+            float s_dec = ssm_state[row_off + ki] * decay_val;
+            ssm_state[row_off + ki] = s_dec;
+            sk += s_dec * k_ptr[k_base + ki];
+            sq_dec += s_dec * q_ptr[k_base + ki];
+        }
+        float delta = beta_h * (v_ptr[h * head_v_dim + vi] - sk);
+        out_buf[h * head_v_dim + vi] = (sq_dec + delta * kq) * q_scale;
+        for (uint ki = 0; ki < head_k_dim; ki++) {
+            ssm_state[row_off + ki] += k_ptr[k_base + ki] * delta;
+        }
+    }
+
+    // Gated output: RMSNorm + SiLU
+    uint off = h * head_v_dim;
+    float ss = 0.0;
+    for (uint vi = 0; vi < head_v_dim; vi++) ss += out_buf[off + vi] * out_buf[off + vi];
+    float inv_rms = inversesqrt(ss / float(head_v_dim) + rms_eps);
+    for (uint vi = 0; vi < head_v_dim; vi++) {
+        float normed = out_buf[off + vi] * ssm_norm_w[vi] * inv_rms;
+        float z = z_buf[off + vi];
+        float silu_z = z / (1.0 + exp(-z));
+        out_buf[off + vi] = normed * silu_z;
+    }
+}

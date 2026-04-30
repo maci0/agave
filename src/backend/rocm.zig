@@ -148,6 +148,7 @@ pub const RocmBackend = struct {
     fn_split_qgate: HipFunction = null,
     fn_deltanet_gate_beta: HipFunction = null,
     fn_deltanet_conv1d: HipFunction = null,
+    fn_deltanet_recurrence: HipFunction = null,
     fn_mega_qwen35_q8: HipFunction = null,
 
     /// CPU backend for ops where CPU is genuinely faster than GPU dispatch (embLookup).
@@ -295,6 +296,7 @@ pub const RocmBackend = struct {
         self.fn_split_qgate = try self.getFunction(hipModuleGetFunction, "split_qgate_kernel");
         self.fn_deltanet_gate_beta = try self.getFunction(hipModuleGetFunction, "deltanet_gate_beta_kernel");
         self.fn_deltanet_conv1d = try self.getFunction(hipModuleGetFunction, "deltanet_conv1d_kernel");
+        self.fn_deltanet_recurrence = try self.getFunction(hipModuleGetFunction, "deltanet_recurrence_kernel");
         self.fn_mega_qwen35_q8 = try self.getFunction(hipModuleGetFunction, "megakernel_qwen35_q8_kernel");
 
         return self;
@@ -1201,7 +1203,69 @@ pub const RocmBackend = struct {
     }
 
     /// DeltaNet SSM recurrence.
-    pub fn deltaNet(_: *RocmBackend, _: [*]const f32, _: [*]f32, _: [*]const f32, _: [*]const f32, _: [*]const f32, _: [*]f32, _: [*]f32, _: []f32, _: [*]const f32, _: [*]const f32, _: [*]const f32, _: [*]const f32, _: backend_mod.DeltaNetParams) void {
-        @panic("ROCm DeltaNet: no GPU kernel — add a ROCm kernel");
+    pub fn deltaNet(self: *RocmBackend, conv_in: [*]const f32, conv_out: [*]f32, z_buf: [*]const f32, alpha_buf: [*]const f32, beta_buf: [*]const f32, output: [*]f32, conv_state: [*]f32, ssm_state: []f32, ssm_a: [*]const f32, dt_bias: [*]const f32, conv_w: [*]const f32, ssm_norm_w: [*]const f32, p: backend_mod.DeltaNetParams) void {
+        const math_ops = @import("../ops/math.zig");
+        const num_v = p.num_v_heads;
+        const num_k = p.num_k_heads;
+        const hkd = p.head_k_dim;
+        const hvd = p.head_v_dim;
+
+        self.flushActivations();
+        var gate_arr: [64]f32 = undefined;
+        var beta_arr: [64]f32 = undefined;
+        for (0..num_v) |h| {
+            gate_arr[h] = ssm_a[h] * math_ops.softplus(alpha_buf[h] + dt_bias[h]);
+            beta_arr[h] = math_ops.sigmoid(beta_buf[h]);
+        }
+
+        @import("../ops/ssm.zig").causalConv1dSilu(conv_out, conv_state, conv_in, conv_w, null, p.conv_ch, p.d_conv);
+        self.flushActivations();
+
+        const q_off: usize = if (p.kqv_order) num_k * hkd else 0;
+        const k_off: usize = if (p.kqv_order) 0 else num_k * hkd;
+        for (0..num_k) |h| {
+            self.l2Norm(conv_out + q_off + h * hkd, hkd, p.rms_eps);
+            self.l2Norm(conv_out + k_off + h * hkd, hkd, p.rms_eps);
+        }
+        self.flushActivations();
+
+        const q_ptr = conv_out + q_off;
+        const k_ptr = conv_out + k_off;
+        const v_off: usize = 2 * num_k * hkd;
+        const v_ptr = conv_out + v_off;
+
+        const q_sz = num_k * hkd * @sizeOf(f32);
+        const v_sz = num_v * hvd * @sizeOf(f32);
+        const gate_sz = num_v * @sizeOf(f32);
+        const state_sz = ssm_state.len * @sizeOf(f32);
+        const norm_sz = hvd * @sizeOf(f32);
+
+        var d_q = self.getInputBuf(q_ptr, q_sz);
+        var d_k = self.getInputBuf(k_ptr, q_sz);
+        var d_v = self.getInputBuf(v_ptr, v_sz);
+        var d_gate = self.getInputBuf(@as([*]const f32, &gate_arr), gate_sz);
+        var d_beta = self.getInputBuf(@as([*]const f32, &beta_arr), gate_sz);
+        var d_z = self.getInputBuf(z_buf, v_sz);
+        var d_norm = self.getOrUpload(@ptrCast(ssm_norm_w), norm_sz);
+        var d_state = self.getInputBuf(@as([*]const f32, @ptrCast(ssm_state.ptr)), state_sz);
+        var d_out = self.getOutputBuf(output, v_sz);
+
+        var nvh: u32 = @intCast(num_v);
+        var nkh: u32 = @intCast(num_k);
+        var hkd_u: u32 = @intCast(hkd);
+        var hvd_u: u32 = @intCast(hvd);
+        var q_sc: f32 = p.q_scale;
+        var eps: f32 = p.rms_eps;
+
+        var params = [_]?*anyopaque{
+            @ptrCast(&d_q),    @ptrCast(&d_k),     @ptrCast(&d_v),
+            @ptrCast(&d_gate), @ptrCast(&d_beta),  @ptrCast(&d_z),
+            @ptrCast(&d_norm), @ptrCast(&d_state), @ptrCast(&d_out),
+            @ptrCast(&nvh),    @ptrCast(&nkh),     @ptrCast(&hkd_u),
+            @ptrCast(&hvd_u),  @ptrCast(&q_sc),    @ptrCast(&eps),
+        };
+        self.launch(self.fn_deltanet_recurrence, @intCast(num_v), 1, 0, &params);
+        self.invalidateAct(output);
+        self.invalidateAct(@as([*]f32, @ptrCast(ssm_state.ptr)));
     }
 };

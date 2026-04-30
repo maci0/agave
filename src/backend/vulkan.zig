@@ -516,6 +516,9 @@ const spv_gemv_nvfp4_st = @embedFile("kernels/vulkan/gemv_nvfp4_st.spv");
 const spv_gemv_mlx_q4 = @embedFile("kernels/vulkan/gemv_mlx_q4.spv");
 const spv_gemv_mxfp4_st = @embedFile("kernels/vulkan/gemv_mxfp4_st.spv");
 
+// DeltaNet SSM
+const spv_deltanet = @embedFile("kernels/vulkan/deltanet_recurrence.spv");
+
 // Attention
 const spv_sdpa = @embedFile("kernels/vulkan/sdpa.spv");
 const spv_sdpa_turbo = @embedFile("kernels/vulkan/sdpa_turbo.spv");
@@ -610,6 +613,7 @@ pub const VulkanBackend = struct {
 
     // SSM (State Space Model) pipelines
     pipe_conv1d: PipelineInfo = .{},
+    pipe_deltanet: PipelineInfo = .{},
 
     /// Device name retrieved from VkPhysicalDeviceProperties (e.g., "Apple M4 Pro").
     device_name: [256]u8 = undefined,
@@ -1037,6 +1041,8 @@ pub const VulkanBackend = struct {
         self.pipe_embedding = try self.createPipeline(spv_embedding, 3, 8);
         // Conv1d: 4 bufs (input, state, conv_w, output), 8 bytes push (conv_ch, d_conv)
         self.pipe_conv1d = try self.createPipeline(spv_conv1d, 5, 12);
+        // DeltaNet recurrence: 9 bufs, 24 bytes push (6 x u32/f32)
+        self.pipe_deltanet = try self.createPipeline(spv_deltanet, 9, 24);
 
         return self;
     }
@@ -1924,8 +1930,76 @@ pub const VulkanBackend = struct {
     }
 
     /// DeltaNet SSM recurrence.
-    pub fn deltaNet(_: *VulkanBackend, _: [*]const f32, _: [*]f32, _: [*]const f32, _: [*]const f32, _: [*]const f32, _: [*]f32, _: [*]f32, _: []f32, _: [*]const f32, _: [*]const f32, _: [*]const f32, _: [*]const f32, _: backend_mod.DeltaNetParams) void {
-        @panic("Vulkan DeltaNet: no GPU shader — add a Vulkan compute shader");
+    pub fn deltaNet(self: *VulkanBackend, conv_in: [*]const f32, conv_out: [*]f32, z_buf: [*]const f32, alpha_buf: [*]const f32, beta_buf: [*]const f32, output: [*]f32, conv_state: [*]f32, ssm_state: []f32, ssm_a: [*]const f32, dt_bias: [*]const f32, conv_w: [*]const f32, ssm_norm_w: [*]const f32, p: backend_mod.DeltaNetParams) void {
+        const math_ops = @import("../ops/math.zig");
+        const num_v = p.num_v_heads;
+        const num_k = p.num_k_heads;
+        const hkd = p.head_k_dim;
+        const hvd = p.head_v_dim;
+
+        self.sync();
+        var gate_arr: [64]f32 = undefined;
+        var beta_arr: [64]f32 = undefined;
+        for (0..num_v) |h| {
+            gate_arr[h] = ssm_a[h] * math_ops.softplus(alpha_buf[h] + dt_bias[h]);
+            beta_arr[h] = math_ops.sigmoid(beta_buf[h]);
+        }
+
+        self.causalConv1dSilu(conv_out, conv_state, conv_in, conv_w, null, p.conv_ch, p.d_conv);
+        self.sync();
+
+        const q_off: usize = if (p.kqv_order) num_k * hkd else 0;
+        const k_off: usize = if (p.kqv_order) 0 else num_k * hkd;
+        for (0..num_k) |h| {
+            self.l2Norm(conv_out + q_off + h * hkd, hkd, p.rms_eps);
+            self.l2Norm(conv_out + k_off + h * hkd, hkd, p.rms_eps);
+        }
+        self.sync();
+
+        const q_ptr = conv_out + q_off;
+        const k_ptr = conv_out + k_off;
+        const v_off: usize = 2 * num_k * hkd;
+        const v_ptr = conv_out + v_off;
+
+        const q_sz = num_k * hkd * @sizeOf(f32);
+        const v_sz = num_v * hvd * @sizeOf(f32);
+        const gate_sz = num_v * @sizeOf(f32);
+        const state_sz = ssm_state.len * @sizeOf(f32);
+        const norm_sz = hvd * @sizeOf(f32);
+
+        const q_pool = self.getPooledBuf(q_sz);
+        defer self.releasePooledBuf(q_pool);
+        const k_pool = self.getPooledBuf(q_sz);
+        defer self.releasePooledBuf(k_pool);
+        const v_pool = self.getPooledBuf(v_sz);
+        defer self.releasePooledBuf(v_pool);
+        const gate_pool = self.getPooledBuf(gate_sz);
+        defer self.releasePooledBuf(gate_pool);
+        const beta_pool = self.getPooledBuf(gate_sz);
+        defer self.releasePooledBuf(beta_pool);
+        const z_pool = self.getPooledBuf(v_sz);
+        defer self.releasePooledBuf(z_pool);
+        const norm_vk = self.getOrUpload(@ptrCast(ssm_norm_w), norm_sz);
+        const state_pool = self.getPooledBuf(state_sz);
+        defer self.releasePooledBuf(state_pool);
+        const out_pool = self.getPooledBuf(v_sz);
+        defer self.releasePooledBuf(out_pool);
+
+        self.uploadBuffer(q_pool.mem, @ptrCast(q_ptr), q_sz);
+        self.uploadBuffer(k_pool.mem, @ptrCast(k_ptr), q_sz);
+        self.uploadBuffer(v_pool.mem, @ptrCast(v_ptr), v_sz);
+        self.uploadBuffer(gate_pool.mem, @ptrCast(&gate_arr), gate_sz);
+        self.uploadBuffer(beta_pool.mem, @ptrCast(&beta_arr), gate_sz);
+        self.uploadBuffer(z_pool.mem, @ptrCast(z_buf), v_sz);
+        self.uploadBuffer(state_pool.mem, @ptrCast(ssm_state.ptr), state_sz);
+
+        const Params = extern struct { nvh: u32, nkh: u32, hkd_v: u32, hvd_v: u32, q_scale: f32, rms_eps: f32 };
+        const params = Params{ .nvh = @intCast(num_v), .nkh = @intCast(num_k), .hkd_v = @intCast(hkd), .hvd_v = @intCast(hvd), .q_scale = p.q_scale, .rms_eps = p.rms_eps };
+        const bufs = [_]VkBuffer{ q_pool.buf, k_pool.buf, v_pool.buf, gate_pool.buf, beta_pool.buf, z_pool.buf, norm_vk.buf, state_pool.buf, out_pool.buf };
+        const sizes = [_]usize{ q_sz, q_sz, v_sz, gate_sz, gate_sz, v_sz, norm_sz, state_sz, v_sz };
+        self.dispatch(self.pipe_deltanet, &bufs, &sizes, @ptrCast(&params), @sizeOf(Params), @intCast(num_v));
+        self.downloadF32(out_pool.mem, output, num_v * hvd);
+        self.downloadF32(state_pool.mem, @ptrCast(ssm_state.ptr), ssm_state.len);
     }
 
     /// No-op — each Vulkan dispatch already submits and waits on a fence.

@@ -35,6 +35,7 @@ const wgsl_add_scaled = @embedFile("kernels/webgpu/add_scaled.wgsl");
 const wgsl_gemv_t_q8_0 = @embedFile("kernels/webgpu/gemv_t_q8_0.wgsl");
 const wgsl_sdpa = @embedFile("kernels/webgpu/sdpa.wgsl");
 const wgsl_conv1d = @embedFile("kernels/webgpu/conv1d.wgsl");
+const wgsl_deltanet = @embedFile("kernels/webgpu/deltanet_recurrence.wgsl");
 const wgsl_gemv_nvfp4_st = @embedFile("kernels/webgpu/gemv_nvfp4_st.wgsl");
 const wgsl_gemv_mlx_q4 = @embedFile("kernels/webgpu/gemv_mlx_q4.wgsl");
 const wgsl_gemv_mxfp4_st = @embedFile("kernels/webgpu/gemv_mxfp4_st.wgsl");
@@ -218,6 +219,7 @@ pub const WebGpuBackend = struct {
     pipe_gemv_mxfp4_st: PipelineInfo = .{},
     pipe_sdpa: PipelineInfo = .{},
     pipe_conv1d: PipelineInfo = .{},
+    pipe_deltanet: PipelineInfo = .{},
 
     // Buffer management
     buf_cache: std.AutoHashMap(usize, CachedBuf) = undefined,
@@ -405,6 +407,7 @@ pub const WebGpuBackend = struct {
         self.pipe_gemv_mxfp4_st = try self.createPipeline(wgsl_gemv_mxfp4_st);
         self.pipe_sdpa = try self.createPipeline(wgsl_sdpa);
         self.pipe_conv1d = try self.createPipeline(wgsl_conv1d);
+        self.pipe_deltanet = try self.createPipeline(wgsl_deltanet);
     }
 
     fn createPipeline(self: *WebGpuBackend, wgsl_source: [:0]const u8) !PipelineInfo {
@@ -1267,18 +1270,93 @@ pub const WebGpuBackend = struct {
         @memcpy(state[(hist - 1) * conv_ch ..][0..conv_ch], x[0..conv_ch]);
     }
 
-    pub fn deltaNet(self: *WebGpuBackend, q: [*]const f32, k_in: [*]const f32, v: [*]const f32, beta: [*]const f32, state: []f32, output: [*]f32, nh: usize, hd: usize, kv_dim: usize) void {
-        _ = self;
-        _ = q;
-        _ = k_in;
-        _ = v;
-        _ = beta;
-        _ = state;
-        _ = output;
-        _ = nh;
-        _ = hd;
-        _ = kv_dim;
-        @panic("WebGPU deltaNet: not yet implemented");
+    pub fn deltaNet(self: *WebGpuBackend, conv_in: [*]const f32, conv_out: [*]f32, z_buf: [*]const f32, alpha_buf: [*]const f32, beta_buf: [*]const f32, output: [*]f32, conv_state: [*]f32, ssm_state: []f32, ssm_a: [*]const f32, dt_bias: [*]const f32, conv_w: [*]const f32, ssm_norm_w: [*]const f32, p: backend_mod.DeltaNetParams) void {
+        const math_ops = @import("../ops/math.zig");
+        const num_v_heads = p.num_v_heads;
+        const num_k_heads = p.num_k_heads;
+        const head_k_dim = p.head_k_dim;
+        const head_v_dim = p.head_v_dim;
+
+        // 1. Gate & beta computation (small, on CPU)
+        self.sync();
+        var gate_arr: [64]f32 = undefined;
+        var beta_arr: [64]f32 = undefined;
+        for (0..num_v_heads) |h| {
+            const alpha_biased = alpha_buf[h] + dt_bias[h];
+            gate_arr[h] = ssm_a[h] * math_ops.softplus(alpha_biased);
+            beta_arr[h] = math_ops.sigmoid(beta_buf[h]);
+        }
+
+        // 2. Conv1d + SiLU (GPU dispatch via existing kernel)
+        self.causalConv1dSilu(conv_in, conv_state, conv_w, null, conv_out, p.conv_ch, p.d_conv);
+        self.sync();
+
+        // 3. L2 normalize Q and K per head (GPU dispatch)
+        const q_off: usize = if (p.kqv_order) num_k_heads * head_k_dim else 0;
+        const k_off: usize = if (p.kqv_order) 0 else num_k_heads * head_k_dim;
+        for (0..num_k_heads) |h| {
+            self.l2Norm(conv_out + q_off + h * head_k_dim, head_k_dim, p.rms_eps);
+            self.l2Norm(conv_out + k_off + h * head_k_dim, head_k_dim, p.rms_eps);
+        }
+        self.sync();
+
+        // 4. Recurrence + gated output (GPU kernel — 1 thread per head)
+        const q_ptr = conv_out + q_off;
+        const k_ptr = conv_out + k_off;
+        const v_off: usize = 2 * num_k_heads * head_k_dim;
+        const v_ptr = conv_out + v_off;
+
+        const q_sz = num_k_heads * head_k_dim * @sizeOf(f32);
+        const v_sz = num_v_heads * head_v_dim * @sizeOf(f32);
+        const gate_sz = num_v_heads * @sizeOf(f32);
+        const state_sz = ssm_state.len * @sizeOf(f32);
+        const norm_sz = head_v_dim * @sizeOf(f32);
+        const z_sz = v_sz;
+
+        const q_buf = self.getOrUpload(@ptrCast(q_ptr), q_sz);
+        const k_buf = self.getOrUpload(@ptrCast(k_ptr), q_sz);
+        const v_buf = self.getOrUpload(@ptrCast(v_ptr), v_sz);
+        const gate_pool = self.getPooledBuf(gate_sz);
+        defer self.releasePooledBuf(gate_pool.idx);
+        self.uploadToBuffer(gate_pool.buf, @ptrCast(&gate_arr), gate_sz);
+        const beta_pool = self.getPooledBuf(gate_sz);
+        defer self.releasePooledBuf(beta_pool.idx);
+        self.uploadToBuffer(beta_pool.buf, @ptrCast(&beta_arr), gate_sz);
+        const z_buf_gpu = self.getOrUpload(@ptrCast(z_buf), z_sz);
+        const norm_buf = self.getOrUpload(@ptrCast(ssm_norm_w), norm_sz);
+        const state_pool = self.getPooledBuf(state_sz);
+        defer self.releasePooledBuf(state_pool.idx);
+        self.uploadToBuffer(state_pool.buf, @ptrCast(ssm_state.ptr), state_sz);
+        const out_pool = self.getPooledBuf(v_sz);
+        defer self.releasePooledBuf(out_pool.idx);
+
+        const Params = extern struct { num_v_heads_v: u32, num_k_heads_v: u32, head_k_dim_v: u32, head_v_dim_v: u32, q_scale_v: f32, rms_eps_v: f32 };
+        const params = Params{
+            .num_v_heads_v = @intCast(num_v_heads),
+            .num_k_heads_v = @intCast(num_k_heads),
+            .head_k_dim_v = @intCast(head_k_dim),
+            .head_v_dim_v = @intCast(head_v_dim),
+            .q_scale_v = p.q_scale,
+            .rms_eps_v = p.rms_eps,
+        };
+        const params_buf = self.createUniformBuf(Params, params);
+        defer self.fn_buffer_destroy(params_buf);
+
+        const entries = [_]WGPUBindGroupEntry{
+            storageEntry(0, q_buf, q_sz),
+            storageEntry(1, k_buf, q_sz),
+            storageEntry(2, v_buf, v_sz),
+            storageEntry(3, gate_pool.buf, gate_sz),
+            storageEntry(4, beta_pool.buf, gate_sz),
+            storageEntry(5, z_buf_gpu, z_sz),
+            storageEntry(6, norm_buf, norm_sz),
+            storageEntry(7, state_pool.buf, state_sz),
+            storageEntry(8, out_pool.buf, v_sz),
+            uniformEntry(9, params_buf, Params),
+        };
+        self.dispatchCompute(self.pipe_deltanet, &entries, @intCast(num_v_heads));
+        self.downloadF32(out_pool.buf, output, num_v_heads * head_v_dim);
+        self.downloadF32(state_pool.buf, @ptrCast(ssm_state.ptr), ssm_state.len);
     }
 
     // ── Sync + Batch + Memory ───────────────────────────────────
