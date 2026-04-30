@@ -538,7 +538,7 @@ pub const WebGpuBackend = struct {
     fn getOrUpload(self: *WebGpuBackend, ptr: *const anyopaque, size: usize) WGPUBuffer {
         const key = @intFromPtr(ptr);
         if (self.buf_cache.get(key)) |cached| return cached.buffer;
-        const buf = self.createBuffer(size, wgpu_buffer_usage_storage | wgpu_buffer_usage_copy_src);
+        const buf = self.createBuffer(size, wgpu_buffer_usage_storage | wgpu_buffer_usage_copy_src | wgpu_buffer_usage_copy_dst);
         self.uploadToBuffer(buf, ptr, size);
         self.buf_cache.put(key, .{ .buffer = buf, .size = size }) catch {};
         return buf;
@@ -861,16 +861,31 @@ pub const WebGpuBackend = struct {
     }
 
     pub fn embLookup(self: *WebGpuBackend, table: TensorData, token_id: u32, output: [*]f32, dim: usize) void {
-        if (table.dtype != .f32) @panic("WebGPU embLookup: only f32 embedding tables supported");
-        const emb_max_vocab: usize = 256000;
+        // For non-f32 tables, dequant the single row on host and upload f32.
+        // This avoids uploading the entire multi-hundred-MB vocab table to GPU.
+        if (table.dtype != .f32) {
+            const quant = @import("../ops/quant.zig");
+            const DType = @import("../format/format.zig").DType;
+            const row_dtype: DType = switch (table.dtype) {
+                .q8_0 => .q8_0,
+                .bf16 => .bf16,
+                .f16 => .f16,
+                else => @panic("WebGPU embLookup: unsupported dtype"),
+            };
+            const bpe = backend_mod.weightBytes(row_dtype, 1, dim);
+            const row_offset = @as(usize, token_id) * bpe;
+            quant.dequantToF32(output[0..dim], table.data + row_offset, row_dtype, dim);
+            return;
+        }
+        const emb_max_vocab: usize = 64000; // conservative to stay within 256MB buffer limit
         const table_size = dim * @sizeOf(f32) * emb_max_vocab;
         const table_buf = self.getOrUpload(table.data, table_size);
         const out_size = dim * @sizeOf(f32);
         const out = self.getPooledBuf(out_size);
         defer self.releasePooledBuf(out.idx);
 
-        const Params = extern struct { token_id_v: u32, n_embd: u32, _pad: [8]u8 = .{0} ** 8 };
-        const params = Params{ .token_id_v = token_id, .n_embd = @intCast(dim) };
+        const Params = extern struct { n_embd: u32, dtype: u32, token_id_v: u32, _pad: u32 };
+        const params = Params{ .n_embd = @intCast(dim), .dtype = 0, .token_id_v = token_id, ._pad = 0 };
         const params_buf = self.createUniformBuf(Params, params);
         defer self.fn_buffer_destroy(params_buf);
 
@@ -886,7 +901,10 @@ pub const WebGpuBackend = struct {
     pub fn gemv(self: *WebGpuBackend, x: [*]const f32, w: TensorData, y: [*]f32, n: usize, k: usize) void {
         const x_size = k * @sizeOf(f32);
         const y_size = n * @sizeOf(f32);
-        const x_buf = self.getOrUpload(@ptrCast(x), x_size);
+        const x_pool = self.getPooledBuf(x_size);
+        defer self.releasePooledBuf(x_pool.idx);
+        self.uploadToBuffer(x_pool.buf, @ptrCast(x), x_size);
+        const x_buf = x_pool.buf;
         const out = self.getPooledBuf(y_size);
         defer self.releasePooledBuf(out.idx);
 
