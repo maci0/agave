@@ -31,6 +31,7 @@ const wgsl_rms_norm_multi = @embedFile("kernels/webgpu/rms_norm_multi.wgsl");
 const wgsl_deinterleave = @embedFile("kernels/webgpu/deinterleave.wgsl");
 const wgsl_split_qgate = @embedFile("kernels/webgpu/split_qgate.wgsl");
 const wgsl_add_rms_norm = @embedFile("kernels/webgpu/add_rms_norm.wgsl");
+const wgsl_add_scaled = @embedFile("kernels/webgpu/add_scaled.wgsl");
 
 // ── WebGPU C API types ──────────────────────────────────────────────
 
@@ -204,6 +205,7 @@ pub const WebGpuBackend = struct {
     pipe_deinterleave: PipelineInfo = .{},
     pipe_split_qgate: PipelineInfo = .{},
     pipe_add_rms_norm: PipelineInfo = .{},
+    pipe_add_scaled: PipelineInfo = .{},
 
     // Buffer management
     buf_cache: std.AutoHashMap(usize, CachedBuf) = undefined,
@@ -384,6 +386,7 @@ pub const WebGpuBackend = struct {
         self.pipe_deinterleave = try self.createPipeline(wgsl_deinterleave);
         self.pipe_split_qgate = try self.createPipeline(wgsl_split_qgate);
         self.pipe_add_rms_norm = try self.createPipeline(wgsl_add_rms_norm);
+        self.pipe_add_scaled = try self.createPipeline(wgsl_add_scaled);
     }
 
     fn createPipeline(self: *WebGpuBackend, wgsl_source: [:0]const u8) !PipelineInfo {
@@ -821,14 +824,9 @@ pub const WebGpuBackend = struct {
     }
 
     pub fn gemm(self: *WebGpuBackend, x: [*]const f32, w: TensorData, y: [*]f32, n_tok: usize, n_out: usize, n_in: usize) void {
-        _ = self;
-        _ = x;
-        _ = w;
-        _ = y;
-        _ = n_tok;
-        _ = n_out;
-        _ = n_in;
-        @panic("WebGPU gemm: not yet implemented");
+        for (0..n_tok) |i| {
+            self.gemv(x + i * n_in, w, y + i * n_out, n_out, n_in);
+        }
     }
 
     pub fn l2Norm(self: *WebGpuBackend, data: [*]f32, n: usize, eps: f32) void {
@@ -879,13 +877,23 @@ pub const WebGpuBackend = struct {
         self.downloadF32(out_pool.buf, out, n);
     }
 
-    pub fn addScaled(self: *WebGpuBackend, a: [*]f32, b: [*]const f32, out: [*]f32, n: usize) void {
-        _ = self;
-        _ = a;
-        _ = b;
-        _ = out;
-        _ = n;
-        @panic("WebGPU addScaled: not yet implemented");
+    pub fn addScaled(self: *WebGpuBackend, src: [*]const f32, dst: [*]f32, scale: f32, n: usize) void {
+        const size = n * @sizeOf(f32);
+        const src_buf = self.getOrUpload(@ptrCast(src), size);
+        const dst_pool = self.getPooledBuf(size);
+        defer self.releasePooledBuf(dst_pool.idx);
+        self.uploadToBuffer(dst_pool.buf, @ptrCast(dst), size);
+        const Params = extern struct { n: u32, scale: f32 };
+        const params = Params{ .n = @intCast(n), .scale = scale };
+        const params_buf = self.createUniformBuf(Params, params);
+        defer self.fn_buffer_destroy(params_buf);
+        const entries = [_]WGPUBindGroupEntry{
+            storageEntry(0, src_buf, size),
+            storageEntry(1, dst_pool.buf, size),
+            uniformEntry(2, params_buf, Params),
+        };
+        self.dispatchCompute(self.pipe_add_scaled, &entries, @intCast((n + workgroup_size - 1) / workgroup_size));
+        self.downloadF32(dst_pool.buf, dst, n);
     }
 
     pub fn sigmoidMul(self: *WebGpuBackend, data: [*]f32, gate: [*]const f32, n: usize) void {
@@ -987,26 +995,16 @@ pub const WebGpuBackend = struct {
     }
 
     pub fn rmsNormBatched(self: *WebGpuBackend, input: [*]const f32, weight: [*]const f32, output: [*]f32, n_tok: usize, dim: usize, eps: f32) void {
-        _ = self;
-        _ = input;
-        _ = weight;
-        _ = output;
-        _ = n_tok;
-        _ = dim;
-        _ = eps;
-        @panic("WebGPU rmsNormBatched: not yet implemented");
+        for (0..n_tok) |t| {
+            self.rmsNorm(input + t * dim, weight, output + t * dim, dim, eps);
+        }
     }
 
     pub fn ropeBatched(self: *WebGpuBackend, data: [*]f32, positions: [*]const u32, n_tok: usize, n_heads: usize, head_dim: usize, rope_dim: usize, theta: f32) void {
-        _ = self;
-        _ = data;
-        _ = positions;
-        _ = n_tok;
-        _ = n_heads;
-        _ = head_dim;
-        _ = rope_dim;
-        _ = theta;
-        @panic("WebGPU ropeBatched: not yet implemented");
+        const stride = n_heads * head_dim;
+        for (0..n_tok) |t| {
+            self.rope(data + t * stride, positions[t], n_heads, head_dim, rope_dim, theta);
+        }
     }
 
     pub fn sdpa(self: *WebGpuBackend, q: [*]const f32, keys: []u8, values: []u8, k_new: []const f32, v_new: []const f32, output: [*]f32, scores: [*]f32, nh: usize, nkv: usize, hd: usize, pos: u32, scale: f32, be_unused: anytype, window: anytype, n_pad: usize, kv_type_k: KvQuantType, kv_type_v: KvQuantType) void {
