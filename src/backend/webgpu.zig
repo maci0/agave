@@ -127,6 +127,24 @@ const WGPUComputePipelineDescriptor = extern struct {
     } = .{},
 };
 
+const WGPUBindGroupEntry = extern struct {
+    next_in_chain: ?*anyopaque = null,
+    binding: u32 = 0,
+    buffer: WGPUBuffer = null,
+    offset: u64 = 0,
+    size: u64 = 0,
+    sampler: ?*anyopaque = null,
+    texture_view: ?*anyopaque = null,
+};
+
+const WGPUBindGroupDescriptor = extern struct {
+    next_in_chain: ?*anyopaque = null,
+    label: ?[*:0]const u8 = null,
+    layout: WGPUBindGroupLayout = null,
+    entry_count: usize = 0,
+    entries: ?[*]const WGPUBindGroupEntry = null,
+};
+
 // ── Tuning constants ────────────────────────────────────────────────
 
 const workgroup_size: u32 = 256;
@@ -205,7 +223,7 @@ pub const WebGpuBackend = struct {
     fn_device_create_shader_module: *const fn (WGPUDevice, *const WGPUShaderModuleDescriptor) callconv(.c) WGPUShaderModule = undefined,
     fn_device_create_compute_pipeline: *const fn (WGPUDevice, *const WGPUComputePipelineDescriptor) callconv(.c) WGPUComputePipeline = undefined,
     fn_device_create_command_encoder: *const fn (WGPUDevice, ?*anyopaque) callconv(.c) WGPUCommandEncoder = undefined,
-    fn_device_create_bind_group: *const fn (WGPUDevice, ?*anyopaque) callconv(.c) WGPUBindGroup = undefined,
+    fn_device_create_bind_group: *const fn (WGPUDevice, *const WGPUBindGroupDescriptor) callconv(.c) WGPUBindGroup = undefined,
     fn_device_poll: *const fn (WGPUDevice, u32, ?*anyopaque) callconv(.c) u32 = undefined,
     fn_compute_pipeline_get_bind_group_layout: *const fn (WGPUComputePipeline, u32) callconv(.c) WGPUBindGroupLayout = undefined,
     fn_command_encoder_begin_compute_pass: *const fn (WGPUCommandEncoder, ?*anyopaque) callconv(.c) WGPUComputePassEncoder = undefined,
@@ -488,115 +506,318 @@ pub const WebGpuBackend = struct {
 
     // ── Dispatch Helpers ────────────────────────────────────────
 
-    fn dispatch2BufParams(self: *WebGpuBackend, pipe: PipelineInfo, buf_a: WGPUBuffer, buf_b: WGPUBuffer, params_buf: WGPUBuffer, workgroups: u32) void {
-        _ = self;
-        _ = pipe;
-        _ = buf_a;
-        _ = buf_b;
-        _ = params_buf;
-        _ = workgroups;
-        @panic("WebGPU dispatch2BufParams: not yet implemented");
+    /// Align size up to 16 bytes (WebGPU minimum uniform buffer alignment).
+    fn alignUniform(size: usize) usize {
+        return (size + 15) & ~@as(usize, 15);
+    }
+
+    /// Create a uniform buffer, upload params data, return GPU buffer handle.
+    fn createUniformBuf(self: *WebGpuBackend, comptime T: type, params: *const T) WGPUBuffer {
+        const aligned_size = alignUniform(@sizeOf(T));
+        const buf = self.createBuffer(aligned_size, wgpu_buffer_usage_uniform | wgpu_buffer_usage_copy_dst);
+        self.fn_queue_write_buffer(self.queue, buf, 0, @ptrCast(params), @sizeOf(T));
+        return buf;
+    }
+
+    /// Central dispatch: create bind group from entries, encode + submit compute pass.
+    fn dispatchCompute(self: *WebGpuBackend, pipe: PipelineInfo, entries: []const WGPUBindGroupEntry, workgroups_x: u32) void {
+        var bg_desc = WGPUBindGroupDescriptor{
+            .layout = pipe.bind_group_layout,
+            .entry_count = entries.len,
+            .entries = entries.ptr,
+        };
+        const bind_group = self.fn_device_create_bind_group(self.device, &bg_desc);
+        defer self.fn_bind_group_release(bind_group);
+
+        const encoder = self.fn_device_create_command_encoder(self.device, null);
+        const pass = self.fn_command_encoder_begin_compute_pass(encoder, null);
+        self.fn_compute_pass_set_pipeline(pass, pipe.pipeline);
+        self.fn_compute_pass_set_bind_group(pass, 0, bind_group, 0, null);
+        self.fn_compute_pass_dispatch(pass, workgroups_x, 1, 1);
+        self.fn_compute_pass_end(pass);
+        const cmd = self.fn_command_encoder_finish(encoder, null);
+        self.fn_queue_submit(self.queue, 1, &cmd);
+        self.fn_command_buffer_release(cmd);
+        self.fn_command_encoder_release(encoder);
+    }
+
+    /// Create a WGPUBindGroupEntry for a storage buffer at the given binding slot.
+    fn storageEntry(binding: u32, buf: WGPUBuffer, size: u64) WGPUBindGroupEntry {
+        return .{ .binding = binding, .buffer = buf, .size = size };
+    }
+
+    /// Create a WGPUBindGroupEntry for a uniform buffer at the given binding slot.
+    fn uniformEntry(binding: u32, buf: WGPUBuffer, comptime T: type) WGPUBindGroupEntry {
+        return .{ .binding = binding, .buffer = buf, .size = alignUniform(@sizeOf(T)) };
     }
 
     // ── Core Compute Operations ─────────────────────────────────
 
     pub fn silu(self: *WebGpuBackend, input: [*]const f32, output: [*]f32, n: usize) void {
-        _ = self;
-        _ = input;
-        _ = output;
-        _ = n;
-        @panic("WebGPU silu: not yet implemented");
+        const size = n * @sizeOf(f32);
+        const in_buf = self.getOrUpload(@ptrCast(input), size);
+        const out = self.getPooledBuf(size);
+        defer self.releasePooledBuf(out.idx);
+
+        const Params = extern struct { n: u32, _pad: [12]u8 = .{0} ** 12 };
+        var params = Params{ .n = @intCast(n) };
+        const params_buf = self.createUniformBuf(Params, &params);
+        defer self.fn_buffer_destroy(params_buf);
+
+        const entries = [_]WGPUBindGroupEntry{
+            storageEntry(0, in_buf, size),
+            storageEntry(1, out.buf, size),
+            uniformEntry(2, params_buf, Params),
+        };
+        self.dispatchCompute(self.pipe_silu, &entries, @intCast((n + workgroup_size - 1) / workgroup_size));
+        self.downloadF32(out.buf, output, n);
     }
 
     pub fn gelu(self: *WebGpuBackend, input: [*]const f32, output: [*]f32, n: usize) void {
-        _ = self;
-        _ = input;
-        _ = output;
-        _ = n;
-        @panic("WebGPU gelu: not yet implemented");
+        const size = n * @sizeOf(f32);
+        const in_buf = self.getOrUpload(@ptrCast(input), size);
+        const out = self.getPooledBuf(size);
+        defer self.releasePooledBuf(out.idx);
+
+        const Params = extern struct { n: u32, _pad: [12]u8 = .{0} ** 12 };
+        var params = Params{ .n = @intCast(n) };
+        const params_buf = self.createUniformBuf(Params, &params);
+        defer self.fn_buffer_destroy(params_buf);
+
+        const entries = [_]WGPUBindGroupEntry{
+            storageEntry(0, in_buf, size),
+            storageEntry(1, out.buf, size),
+            uniformEntry(2, params_buf, Params),
+        };
+        self.dispatchCompute(self.pipe_gelu, &entries, @intCast((n + workgroup_size - 1) / workgroup_size));
+        self.downloadF32(out.buf, output, n);
     }
 
     pub fn add(self: *WebGpuBackend, a: [*]const f32, b: [*]const f32, out: [*]f32, n: usize) void {
-        _ = self;
-        _ = a;
-        _ = b;
-        _ = out;
-        _ = n;
-        @panic("WebGPU add: not yet implemented");
+        const size = n * @sizeOf(f32);
+        const buf_a = self.getOrUpload(@ptrCast(a), size);
+        const buf_b = self.getOrUpload(@ptrCast(b), size);
+        const out_pool = self.getPooledBuf(size);
+        defer self.releasePooledBuf(out_pool.idx);
+
+        const Params = extern struct { n: u32, _pad: [12]u8 = .{0} ** 12 };
+        var params = Params{ .n = @intCast(n) };
+        const params_buf = self.createUniformBuf(Params, &params);
+        defer self.fn_buffer_destroy(params_buf);
+
+        const entries = [_]WGPUBindGroupEntry{
+            storageEntry(0, buf_a, size),
+            storageEntry(1, buf_b, size),
+            storageEntry(2, out_pool.buf, size),
+            uniformEntry(3, params_buf, Params),
+        };
+        self.dispatchCompute(self.pipe_add, &entries, @intCast((n + workgroup_size - 1) / workgroup_size));
+        self.downloadF32(out_pool.buf, out, n);
     }
 
     pub fn mul(self: *WebGpuBackend, a: [*]const f32, b: [*]const f32, out: [*]f32, n: usize) void {
-        _ = self;
-        _ = a;
-        _ = b;
-        _ = out;
-        _ = n;
-        @panic("WebGPU mul: not yet implemented");
+        const size = n * @sizeOf(f32);
+        const buf_a = self.getOrUpload(@ptrCast(a), size);
+        const buf_b = self.getOrUpload(@ptrCast(b), size);
+        const out_pool = self.getPooledBuf(size);
+        defer self.releasePooledBuf(out_pool.idx);
+
+        const Params = extern struct { n: u32, _pad: [12]u8 = .{0} ** 12 };
+        var params = Params{ .n = @intCast(n) };
+        const params_buf = self.createUniformBuf(Params, &params);
+        defer self.fn_buffer_destroy(params_buf);
+
+        const entries = [_]WGPUBindGroupEntry{
+            storageEntry(0, buf_a, size),
+            storageEntry(1, buf_b, size),
+            storageEntry(2, out_pool.buf, size),
+            uniformEntry(3, params_buf, Params),
+        };
+        self.dispatchCompute(self.pipe_mul, &entries, @intCast((n + workgroup_size - 1) / workgroup_size));
+        self.downloadF32(out_pool.buf, out, n);
     }
 
     pub fn siluMul(self: *WebGpuBackend, a: [*]const f32, b: [*]const f32, out: [*]f32, n: usize) void {
-        _ = self;
-        _ = a;
-        _ = b;
-        _ = out;
-        _ = n;
-        @panic("WebGPU siluMul: not yet implemented");
+        const size = n * @sizeOf(f32);
+        const buf_a = self.getOrUpload(@ptrCast(a), size);
+        const buf_b = self.getOrUpload(@ptrCast(b), size);
+        const out_pool = self.getPooledBuf(size);
+        defer self.releasePooledBuf(out_pool.idx);
+
+        const Params = extern struct { n: u32, _pad: [12]u8 = .{0} ** 12 };
+        var params = Params{ .n = @intCast(n) };
+        const params_buf = self.createUniformBuf(Params, &params);
+        defer self.fn_buffer_destroy(params_buf);
+
+        const entries = [_]WGPUBindGroupEntry{
+            storageEntry(0, buf_a, size),
+            storageEntry(1, buf_b, size),
+            storageEntry(2, out_pool.buf, size),
+            uniformEntry(3, params_buf, Params),
+        };
+        self.dispatchCompute(self.pipe_silu_mul, &entries, @intCast((n + workgroup_size - 1) / workgroup_size));
+        self.downloadF32(out_pool.buf, out, n);
     }
 
     pub fn geluMul(self: *WebGpuBackend, a: [*]const f32, b: [*]const f32, out: [*]f32, n: usize) void {
-        _ = self;
-        _ = a;
-        _ = b;
-        _ = out;
-        _ = n;
-        @panic("WebGPU geluMul: not yet implemented");
+        const size = n * @sizeOf(f32);
+        const buf_a = self.getOrUpload(@ptrCast(a), size);
+        const buf_b = self.getOrUpload(@ptrCast(b), size);
+        const out_pool = self.getPooledBuf(size);
+        defer self.releasePooledBuf(out_pool.idx);
+
+        const Params = extern struct { n: u32, _pad: [12]u8 = .{0} ** 12 };
+        var params = Params{ .n = @intCast(n) };
+        const params_buf = self.createUniformBuf(Params, &params);
+        defer self.fn_buffer_destroy(params_buf);
+
+        const entries = [_]WGPUBindGroupEntry{
+            storageEntry(0, buf_a, size),
+            storageEntry(1, buf_b, size),
+            storageEntry(2, out_pool.buf, size),
+            uniformEntry(3, params_buf, Params),
+        };
+        self.dispatchCompute(self.pipe_gelu_mul, &entries, @intCast((n + workgroup_size - 1) / workgroup_size));
+        self.downloadF32(out_pool.buf, out, n);
     }
 
     pub fn rmsNorm(self: *WebGpuBackend, input: [*]const f32, weight: [*]const f32, output: [*]f32, n: usize, eps: f32) void {
-        _ = self;
-        _ = input;
-        _ = weight;
-        _ = output;
-        _ = n;
-        _ = eps;
-        @panic("WebGPU rmsNorm: not yet implemented");
+        const size = n * @sizeOf(f32);
+        const in_buf = self.getOrUpload(@ptrCast(input), size);
+        const w_buf = self.getOrUpload(@ptrCast(weight), size);
+        const out = self.getPooledBuf(size);
+        defer self.releasePooledBuf(out.idx);
+
+        const Params = extern struct { n: u32, _pad0: u32 = 0, eps: f32, _pad1: u32 = 0 };
+        var params = Params{ .n = @intCast(n), .eps = eps };
+        const params_buf = self.createUniformBuf(Params, &params);
+        defer self.fn_buffer_destroy(params_buf);
+
+        const entries = [_]WGPUBindGroupEntry{
+            storageEntry(0, in_buf, size),
+            storageEntry(1, w_buf, size),
+            storageEntry(2, out.buf, size),
+            uniformEntry(3, params_buf, Params),
+        };
+        self.dispatchCompute(self.pipe_rms_norm, &entries, 1);
+        self.downloadF32(out.buf, output, n);
     }
 
     pub fn softmax(self: *WebGpuBackend, data: [*]f32, n: usize) void {
-        _ = self;
-        _ = data;
-        _ = n;
-        @panic("WebGPU softmax: not yet implemented");
+        const size = n * @sizeOf(f32);
+        const data_pool = self.getPooledBuf(size);
+        defer self.releasePooledBuf(data_pool.idx);
+        self.uploadToBuffer(data_pool.buf, @ptrCast(data), size);
+
+        const Params = extern struct { n: u32, _pad: [12]u8 = .{0} ** 12 };
+        var params = Params{ .n = @intCast(n) };
+        const params_buf = self.createUniformBuf(Params, &params);
+        defer self.fn_buffer_destroy(params_buf);
+
+        const entries = [_]WGPUBindGroupEntry{
+            storageEntry(0, data_pool.buf, size),
+            uniformEntry(1, params_buf, Params),
+        };
+        self.dispatchCompute(self.pipe_softmax, &entries, 1);
+        self.downloadF32(data_pool.buf, data, n);
     }
 
     pub fn rope(self: *WebGpuBackend, data: [*]f32, pos: u32, n_heads: usize, head_dim: usize, rope_dim: usize, theta: f32) void {
-        _ = self;
-        _ = data;
-        _ = pos;
-        _ = n_heads;
-        _ = head_dim;
-        _ = rope_dim;
-        _ = theta;
-        @panic("WebGPU rope: not yet implemented");
+        const total_elems = n_heads * head_dim;
+        const size = total_elems * @sizeOf(f32);
+        const data_pool = self.getPooledBuf(size);
+        defer self.releasePooledBuf(data_pool.idx);
+        self.uploadToBuffer(data_pool.buf, @ptrCast(data), size);
+
+        const Params = extern struct {
+            pos: u32,
+            n_heads: u32,
+            head_dim: u32,
+            rope_dim: u32,
+            theta: f32,
+            _pad: [12]u8 = .{0} ** 12,
+        };
+        var params = Params{
+            .pos = pos,
+            .n_heads = @intCast(n_heads),
+            .head_dim = @intCast(head_dim),
+            .rope_dim = @intCast(rope_dim),
+            .theta = theta,
+        };
+        const params_buf = self.createUniformBuf(Params, &params);
+        defer self.fn_buffer_destroy(params_buf);
+
+        const half_rope = n_heads * rope_dim / 2;
+        const entries = [_]WGPUBindGroupEntry{
+            storageEntry(0, data_pool.buf, size),
+            uniformEntry(1, params_buf, Params),
+        };
+        self.dispatchCompute(self.pipe_rope, &entries, @intCast((half_rope + workgroup_size - 1) / workgroup_size));
+        self.downloadF32(data_pool.buf, data, total_elems);
     }
 
     pub fn embLookup(self: *WebGpuBackend, table: TensorData, output: [*]f32, n_embd: usize, token_id: u32) void {
-        _ = self;
-        _ = table;
-        _ = output;
-        _ = n_embd;
-        _ = token_id;
-        @panic("WebGPU embLookup: not yet implemented");
+        if (table.dtype != .f32) @panic("WebGPU embLookup: only f32 embedding tables supported");
+        const table_size = table.n_elements * @sizeOf(f32);
+        const table_buf = self.getOrUpload(table.data_ptr, table_size);
+        const out_size = n_embd * @sizeOf(f32);
+        const out = self.getPooledBuf(out_size);
+        defer self.releasePooledBuf(out.idx);
+
+        const Params = extern struct { token_id: u32, n_embd: u32, _pad: [8]u8 = .{0} ** 8 };
+        var params = Params{ .token_id = token_id, .n_embd = @intCast(n_embd) };
+        const params_buf = self.createUniformBuf(Params, &params);
+        defer self.fn_buffer_destroy(params_buf);
+
+        const entries = [_]WGPUBindGroupEntry{
+            storageEntry(0, table_buf, table_size),
+            storageEntry(1, out.buf, out_size),
+            uniformEntry(2, params_buf, Params),
+        };
+        self.dispatchCompute(self.pipe_embedding, &entries, @intCast((n_embd + workgroup_size - 1) / workgroup_size));
+        self.downloadF32(out.buf, output, n_embd);
     }
 
     pub fn gemv(self: *WebGpuBackend, x: [*]const f32, w: TensorData, y: [*]f32, n: usize, k: usize) void {
-        _ = self;
-        _ = x;
-        _ = w;
-        _ = y;
-        _ = n;
-        _ = k;
-        @panic("WebGPU gemv: not yet implemented");
+        const x_size = k * @sizeOf(f32);
+        const y_size = n * @sizeOf(f32);
+        const x_buf = self.getOrUpload(@ptrCast(x), x_size);
+        const out = self.getPooledBuf(y_size);
+        defer self.releasePooledBuf(out.idx);
+
+        const Params = extern struct { n: u32, k: u32, _pad: [8]u8 = .{0} ** 8 };
+        var params = Params{ .n = @intCast(n), .k = @intCast(k) };
+        const params_buf = self.createUniformBuf(Params, &params);
+        defer self.fn_buffer_destroy(params_buf);
+
+        switch (w.dtype) {
+            .f32 => {
+                const w_size = n * k * @sizeOf(f32);
+                const w_buf = self.getOrUpload(w.data_ptr, w_size);
+                const entries = [_]WGPUBindGroupEntry{
+                    storageEntry(0, x_buf, x_size),
+                    storageEntry(1, w_buf, w_size),
+                    storageEntry(2, out.buf, y_size),
+                    uniformEntry(3, params_buf, Params),
+                };
+                self.dispatchCompute(self.pipe_gemv_f32, &entries, @intCast(n));
+            },
+            .q8_0 => {
+                const block_size: usize = 34; // 32 quants (i8) + 1 scale (f16) = 34 bytes per block
+                const blocks_per_row = (k + 31) / 32;
+                const w_size = n * blocks_per_row * block_size;
+                const w_buf = self.getOrUpload(w.data_ptr, w_size);
+                const entries = [_]WGPUBindGroupEntry{
+                    storageEntry(0, x_buf, x_size),
+                    storageEntry(1, w_buf, w_size),
+                    storageEntry(2, out.buf, y_size),
+                    uniformEntry(3, params_buf, Params),
+                };
+                self.dispatchCompute(self.pipe_gemv_q8_0, &entries, @intCast(n));
+            },
+            else => @panic("WebGPU gemv: unsupported weight dtype"),
+        }
+        self.downloadF32(out.buf, y, n);
     }
 
     pub fn gemm(self: *WebGpuBackend, x: [*]const f32, w: TensorData, y: [*]f32, n_tok: usize, n_out: usize, n_in: usize) void {
@@ -611,22 +832,51 @@ pub const WebGpuBackend = struct {
     }
 
     pub fn l2Norm(self: *WebGpuBackend, data: [*]f32, n: usize, eps: f32) void {
-        _ = self;
-        _ = data;
-        _ = n;
-        _ = eps;
-        @panic("WebGPU l2Norm: not yet implemented");
+        const size = n * @sizeOf(f32);
+        const data_pool = self.getPooledBuf(size);
+        defer self.releasePooledBuf(data_pool.idx);
+        self.uploadToBuffer(data_pool.buf, @ptrCast(data), size);
+
+        const Params = extern struct { n: u32, _pad0: u32 = 0, eps: f32, _pad1: u32 = 0 };
+        var params = Params{ .n = @intCast(n), .eps = eps };
+        const params_buf = self.createUniformBuf(Params, &params);
+        defer self.fn_buffer_destroy(params_buf);
+
+        const entries = [_]WGPUBindGroupEntry{
+            storageEntry(0, data_pool.buf, size),
+            uniformEntry(1, params_buf, Params),
+        };
+        self.dispatchCompute(self.pipe_l2_norm, &entries, 1);
+        self.downloadF32(data_pool.buf, data, n);
     }
 
     pub fn addRmsNorm(self: *WebGpuBackend, data: [*]f32, residual: [*]const f32, weight: [*]const f32, out: [*]f32, n: usize, eps: f32) void {
-        _ = self;
-        _ = data;
-        _ = residual;
-        _ = weight;
-        _ = out;
-        _ = n;
-        _ = eps;
-        @panic("WebGPU addRmsNorm: not yet implemented");
+        const size = n * @sizeOf(f32);
+        // data is read_write: add residual in-place, then normalize into out
+        const data_pool = self.getPooledBuf(size);
+        defer self.releasePooledBuf(data_pool.idx);
+        self.uploadToBuffer(data_pool.buf, @ptrCast(data), size);
+        const res_buf = self.getOrUpload(@ptrCast(residual), size);
+        const w_buf = self.getOrUpload(@ptrCast(weight), size);
+        const out_pool = self.getPooledBuf(size);
+        defer self.releasePooledBuf(out_pool.idx);
+
+        const Params = extern struct { n: u32, _pad0: u32 = 0, eps: f32, _pad1: u32 = 0 };
+        var params = Params{ .n = @intCast(n), .eps = eps };
+        const params_buf = self.createUniformBuf(Params, &params);
+        defer self.fn_buffer_destroy(params_buf);
+
+        const entries = [_]WGPUBindGroupEntry{
+            storageEntry(0, data_pool.buf, size),
+            storageEntry(1, res_buf, size),
+            storageEntry(2, w_buf, size),
+            storageEntry(3, out_pool.buf, size),
+            uniformEntry(4, params_buf, Params),
+        };
+        self.dispatchCompute(self.pipe_add_rms_norm, &entries, 1);
+        // Download both data (modified in-place with residual add) and normalized output
+        self.downloadF32(data_pool.buf, data, n);
+        self.downloadF32(out_pool.buf, out, n);
     }
 
     pub fn addScaled(self: *WebGpuBackend, a: [*]f32, b: [*]const f32, out: [*]f32, n: usize) void {
@@ -639,41 +889,101 @@ pub const WebGpuBackend = struct {
     }
 
     pub fn sigmoidMul(self: *WebGpuBackend, data: [*]f32, gate: [*]const f32, n: usize) void {
-        _ = self;
-        _ = data;
-        _ = gate;
-        _ = n;
-        @panic("WebGPU sigmoidMul: not yet implemented");
+        const size = n * @sizeOf(f32);
+        // data is read_write (result written back in place)
+        const data_pool = self.getPooledBuf(size);
+        defer self.releasePooledBuf(data_pool.idx);
+        self.uploadToBuffer(data_pool.buf, @ptrCast(data), size);
+        const gate_buf = self.getOrUpload(@ptrCast(gate), size);
+
+        const Params = extern struct { n: u32, _pad: [12]u8 = .{0} ** 12 };
+        var params = Params{ .n = @intCast(n) };
+        const params_buf = self.createUniformBuf(Params, &params);
+        defer self.fn_buffer_destroy(params_buf);
+
+        const entries = [_]WGPUBindGroupEntry{
+            storageEntry(0, data_pool.buf, size),
+            storageEntry(1, gate_buf, size),
+            uniformEntry(2, params_buf, Params),
+        };
+        self.dispatchCompute(self.pipe_sigmoid_mul, &entries, @intCast((n + workgroup_size - 1) / workgroup_size));
+        self.downloadF32(data_pool.buf, data, n);
     }
 
     pub fn deinterleave(self: *WebGpuBackend, input: [*]const f32, out_a: [*]f32, out_b: [*]f32, stride: usize, n_pairs: usize) void {
-        _ = self;
-        _ = input;
-        _ = out_a;
-        _ = out_b;
-        _ = stride;
-        _ = n_pairs;
-        @panic("WebGPU deinterleave: not yet implemented");
+        const in_size = n_pairs * stride * 2 * @sizeOf(f32);
+        const out_size = n_pairs * stride * @sizeOf(f32);
+        const in_buf = self.getOrUpload(@ptrCast(input), in_size);
+        const out_a_pool = self.getPooledBuf(out_size);
+        defer self.releasePooledBuf(out_a_pool.idx);
+        const out_b_pool = self.getPooledBuf(out_size);
+        defer self.releasePooledBuf(out_b_pool.idx);
+
+        const Params = extern struct { stride: u32, n_pairs: u32, _pad: [8]u8 = .{0} ** 8 };
+        var params = Params{ .stride = @intCast(stride), .n_pairs = @intCast(n_pairs) };
+        const params_buf = self.createUniformBuf(Params, &params);
+        defer self.fn_buffer_destroy(params_buf);
+
+        const total_elems = n_pairs * stride;
+        const entries = [_]WGPUBindGroupEntry{
+            storageEntry(0, in_buf, in_size),
+            storageEntry(1, out_a_pool.buf, out_size),
+            storageEntry(2, out_b_pool.buf, out_size),
+            uniformEntry(3, params_buf, Params),
+        };
+        self.dispatchCompute(self.pipe_deinterleave, &entries, @intCast((total_elems + workgroup_size - 1) / workgroup_size));
+        self.downloadF32(out_a_pool.buf, out_a, total_elems);
+        self.downloadF32(out_b_pool.buf, out_b, total_elems);
     }
 
     pub fn splitQGate(self: *WebGpuBackend, qg: [*]const f32, q_out: [*]f32, g_out: [*]f32, head_dim: usize, n_heads: usize) void {
-        _ = self;
-        _ = qg;
-        _ = q_out;
-        _ = g_out;
-        _ = head_dim;
-        _ = n_heads;
-        @panic("WebGPU splitQGate: not yet implemented");
+        const total_elems = n_heads * head_dim;
+        const in_size = total_elems * 2 * @sizeOf(f32);
+        const out_size = total_elems * @sizeOf(f32);
+        const in_buf = self.getOrUpload(@ptrCast(qg), in_size);
+        const q_pool = self.getPooledBuf(out_size);
+        defer self.releasePooledBuf(q_pool.idx);
+        const g_pool = self.getPooledBuf(out_size);
+        defer self.releasePooledBuf(g_pool.idx);
+
+        const Params = extern struct { hd: u32, nh: u32, _pad: [8]u8 = .{0} ** 8 };
+        var params = Params{ .hd = @intCast(head_dim), .nh = @intCast(n_heads) };
+        const params_buf = self.createUniformBuf(Params, &params);
+        defer self.fn_buffer_destroy(params_buf);
+
+        const entries = [_]WGPUBindGroupEntry{
+            storageEntry(0, in_buf, in_size),
+            storageEntry(1, q_pool.buf, out_size),
+            storageEntry(2, g_pool.buf, out_size),
+            uniformEntry(3, params_buf, Params),
+        };
+        self.dispatchCompute(self.pipe_split_qgate, &entries, @intCast((total_elems + workgroup_size - 1) / workgroup_size));
+        self.downloadF32(q_pool.buf, q_out, total_elems);
+        self.downloadF32(g_pool.buf, g_out, total_elems);
     }
 
     pub fn rmsNormMulti(self: *WebGpuBackend, data: [*]f32, weight: [*]const f32, n_heads: usize, head_dim: usize, eps: f32) void {
-        _ = self;
-        _ = data;
-        _ = weight;
-        _ = n_heads;
-        _ = head_dim;
-        _ = eps;
-        @panic("WebGPU rmsNormMulti: not yet implemented");
+        const total_elems = n_heads * head_dim;
+        const size = total_elems * @sizeOf(f32);
+        const w_size = head_dim * @sizeOf(f32);
+        // data is read_write (normalized in-place)
+        const data_pool = self.getPooledBuf(size);
+        defer self.releasePooledBuf(data_pool.idx);
+        self.uploadToBuffer(data_pool.buf, @ptrCast(data), size);
+        const w_buf = self.getOrUpload(@ptrCast(weight), w_size);
+
+        const Params = extern struct { n_heads: u32, head_dim: u32, eps: f32, _pad: u32 = 0 };
+        var params = Params{ .n_heads = @intCast(n_heads), .head_dim = @intCast(head_dim), .eps = eps };
+        const params_buf = self.createUniformBuf(Params, &params);
+        defer self.fn_buffer_destroy(params_buf);
+
+        const entries = [_]WGPUBindGroupEntry{
+            storageEntry(0, data_pool.buf, size),
+            storageEntry(1, w_buf, w_size),
+            uniformEntry(2, params_buf, Params),
+        };
+        self.dispatchCompute(self.pipe_rms_norm_multi, &entries, @intCast(n_heads));
+        self.downloadF32(data_pool.buf, data, total_elems);
     }
 
     pub fn rmsNormBatched(self: *WebGpuBackend, input: [*]const f32, weight: [*]const f32, output: [*]f32, n_tok: usize, dim: usize, eps: f32) void {
