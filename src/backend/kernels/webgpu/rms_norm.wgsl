@@ -1,6 +1,6 @@
 // RMS normalization: out[i] = x[i] * w[i] * rsqrt(mean(x^2) + eps)
 // One workgroup processes one normalization. Threads stride over n.
-// Uses shared memory tree reduction (no subgroup intrinsics).
+// Uses sdata memory tree reduction (no subgroup intrinsics).
 
 const WG_SIZE: u32 = 256u;
 
@@ -14,7 +14,7 @@ struct Params {
 @group(0) @binding(2) var<storage, read_write> out_data: array<f32>;
 @group(0) @binding(3) var<uniform> params: Params;
 
-var<workgroup> shared: array<f32, 256>;
+var<workgroup> sdata: array<f32, 256>;
 
 @compute @workgroup_size(256)
 fn main(
@@ -28,19 +28,19 @@ fn main(
         let v = inp[i];
         ss += v * v;
     }
-    shared[tid] = ss;
+    sdata[tid] = ss;
     workgroupBarrier();
 
-    // Tree reduction in shared memory
+    // Tree reduction in sdata memory
     for (var stride = WG_SIZE / 2u; stride > 0u; stride >>= 1u) {
         if (tid < stride) {
-            shared[tid] += shared[tid + stride];
+            sdata[tid] += sdata[tid + stride];
         }
         workgroupBarrier();
     }
 
     // Pass 2: normalize with weight
-    let inv_rms = inverseSqrt(shared[0] / f32(params.n) + params.eps);
+    let inv_rms = inverseSqrt(sdata[0] / f32(params.n) + params.eps);
     for (var i = tid; i < params.n; i += WG_SIZE) {
         out_data[i] = inp[i] * wt[i] * inv_rms;
     }

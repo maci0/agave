@@ -92,7 +92,7 @@ fn main(
     partial_sums[tid] = sum;
     workgroupBarrier();
 
-    // Tree reduction in shared memory
+    // Tree reduction in sdata memory
     for (var stride = WG_SIZE / 2u; stride > 0u; stride >>= 1u) {
         if (tid < stride) {
             partial_sums[tid] += partial_sums[tid + stride];

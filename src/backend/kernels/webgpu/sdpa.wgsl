@@ -22,7 +22,7 @@ const MAX_HD: u32 = 256u;
 var<workgroup> q_local: array<f32, 256>;
 var<workgroup> kv_block: array<f32, 4096>; // BLOCK_SIZE * MAX_HD
 var<workgroup> scores: array<f32, 16>;
-var<workgroup> shared: array<f32, 8>;
+var<workgroup> sdata: array<f32, 8>;
 var<workgroup> out_acc: array<f32, 256>;
 
 @compute @workgroup_size(256)
@@ -86,17 +86,17 @@ fn main(
             block_max = max(block_max, scores[t]);
         }
         // Workgroup reduce max
-        shared[tid % 8u] = block_max;
+        sdata[tid % 8u] = block_max;
         workgroupBarrier();
         if (tid < 8u) {
-            var v = shared[tid];
+            var v = sdata[tid];
             for (var i = 0u; i < 8u; i = i + 1u) {
-                v = max(v, shared[i]);
+                v = max(v, sdata[i]);
             }
-            shared[0] = v;
+            sdata[0] = v;
         }
         workgroupBarrier();
-        let m_new = shared[0];
+        let m_new = sdata[0];
 
         // Rescale existing accumulator
         let m_prev = m_i;
@@ -115,17 +115,17 @@ fn main(
             scores[t] = w;
             block_sum = block_sum + w;
         }
-        shared[tid % 8u] = block_sum;
+        sdata[tid % 8u] = block_sum;
         workgroupBarrier();
         if (tid < 8u) {
-            var v = shared[tid];
+            var v = sdata[tid];
             for (var i = 0u; i < 8u; i = i + 1u) {
-                v = v + shared[i];
+                v = v + sdata[i];
             }
-            shared[0] = v;
+            sdata[0] = v;
         }
         workgroupBarrier();
-        l_i = l_i + shared[0];
+        l_i = l_i + sdata[0];
 
         // Load V block and accumulate weighted values
         for (var t = 0u; t < block_len; t = t + 1u) {

@@ -1,5 +1,5 @@
 // Matrix-vector multiply for f32 weights: y[row] = dot(W[row, :], x)
-// One workgroup per output row. Threads stride over k, then reduce via shared memory.
+// One workgroup per output row. Threads stride over k, then reduce via sdata memory.
 
 const WG_SIZE: u32 = 256u;
 
@@ -35,7 +35,7 @@ fn main(
     partial_sums[tid] = sum;
     workgroupBarrier();
 
-    // Tree reduction in shared memory
+    // Tree reduction in sdata memory
     for (var stride = WG_SIZE / 2u; stride > 0u; stride >>= 1u) {
         if (tid < stride) {
             partial_sums[tid] += partial_sums[tid + stride];

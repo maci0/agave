@@ -12,16 +12,17 @@ struct Params {
     rms_eps: f32,
 }
 
-@group(0) @binding(0) var<storage, read> q_ptr: array<f32>;
-@group(0) @binding(1) var<storage, read> k_ptr: array<f32>;
-@group(0) @binding(2) var<storage, read> v_ptr: array<f32>;
-@group(0) @binding(3) var<storage, read> gate_vals: array<f32>;
-@group(0) @binding(4) var<storage, read> beta_vals: array<f32>;
-@group(0) @binding(5) var<storage, read> z_buf: array<f32>;
-@group(0) @binding(6) var<storage, read> ssm_norm_w: array<f32>;
-@group(0) @binding(7) var<storage, read_write> ssm_state: array<f32>;
-@group(0) @binding(8) var<storage, read_write> output: array<f32>;
-@group(0) @binding(9) var<uniform> params: Params;
+// Combined buffers to stay within 8 storage buffer limit:
+// qk_ptr: [0..nkh*hkd) = Q, [nkh*hkd..2*nkh*hkd) = K
+// gate_beta: [0..nvh) = gates, [nvh..2*nvh) = betas
+@group(0) @binding(0) var<storage, read> qk_ptr: array<f32>;
+@group(0) @binding(1) var<storage, read> v_ptr: array<f32>;
+@group(0) @binding(2) var<storage, read> gate_beta: array<f32>;
+@group(0) @binding(3) var<storage, read> z_buf: array<f32>;
+@group(0) @binding(4) var<storage, read> ssm_norm_w: array<f32>;
+@group(0) @binding(5) var<storage, read_write> ssm_state: array<f32>;
+@group(0) @binding(6) var<storage, read_write> output: array<f32>;
+@group(0) @binding(7) var<uniform> params: Params;
 
 @compute @workgroup_size(1)
 fn main(@builtin(workgroup_id) wgid: vec3<u32>) {
@@ -33,16 +34,17 @@ fn main(@builtin(workgroup_id) wgid: vec3<u32>) {
     let nkh = params.num_k_heads;
     let nvh = params.num_v_heads;
 
-    let decay = exp(gate_vals[h]);
-    let beta_h = beta_vals[h];
+    let decay = exp(gate_beta[h]);
+    let beta_h = gate_beta[nvh + h];
     let kh = select(h % nkh, h * nkh / nvh, nkh == nvh);
     let s_off = h * hvd * hkd;
     let k_base = kh * hkd;
+    let qk_stride = nkh * hkd; // Q at [0..stride), K at [stride..2*stride)
 
     // dot(K, Q)
     var kq: f32 = 0.0;
     for (var ki = 0u; ki < hkd; ki = ki + 1u) {
-        kq = kq + k_ptr[k_base + ki] * q_ptr[k_base + ki];
+        kq = kq + qk_ptr[qk_stride + k_base + ki] * qk_ptr[k_base + ki];
     }
 
     // Recurrence per v-dim element
@@ -54,8 +56,8 @@ fn main(@builtin(workgroup_id) wgid: vec3<u32>) {
         for (var ki = 0u; ki < hkd; ki = ki + 1u) {
             let s_dec = ssm_state[row_off + ki] * decay;
             ssm_state[row_off + ki] = s_dec;
-            sk = sk + s_dec * k_ptr[k_base + ki];
-            sq_dec = sq_dec + s_dec * q_ptr[k_base + ki];
+            sk = sk + s_dec * qk_ptr[qk_stride + k_base + ki];
+            sq_dec = sq_dec + s_dec * qk_ptr[k_base + ki];
         }
 
         let delta = beta_h * (v_ptr[h * hvd + vi] - sk);
@@ -63,7 +65,7 @@ fn main(@builtin(workgroup_id) wgid: vec3<u32>) {
 
         // Update state: S += delta * k
         for (var ki = 0u; ki < hkd; ki = ki + 1u) {
-            ssm_state[row_off + ki] = ssm_state[row_off + ki] + k_ptr[k_base + ki] * delta;
+            ssm_state[row_off + ki] = ssm_state[row_off + ki] + qk_ptr[qk_stride + k_base + ki] * delta;
         }
     }
 

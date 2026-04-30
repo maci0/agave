@@ -1,6 +1,6 @@
 // In-place softmax over n elements.
 // Three phases: (1) find max, (2) exp(x - max) and sum, (3) normalize.
-// One workgroup, all threads cooperate via shared memory reduction.
+// One workgroup, all threads cooperate via sdata memory reduction.
 
 const WG_SIZE: u32 = 256u;
 const NEG_INF: f32 = -3.402823466e+38;
@@ -12,7 +12,7 @@ struct Params {
 @group(0) @binding(0) var<storage, read_write> data: array<f32>;
 @group(0) @binding(1) var<uniform> params: Params;
 
-var<workgroup> shared: array<f32, 256>;
+var<workgroup> sdata: array<f32, 256>;
 
 @compute @workgroup_size(256)
 fn main(
@@ -25,16 +25,16 @@ fn main(
     for (var i = tid; i < params.n; i += WG_SIZE) {
         mx = max(mx, data[i]);
     }
-    shared[tid] = mx;
+    sdata[tid] = mx;
     workgroupBarrier();
 
     for (var stride = WG_SIZE / 2u; stride > 0u; stride >>= 1u) {
         if (tid < stride) {
-            shared[tid] = max(shared[tid], shared[tid + stride]);
+            sdata[tid] = max(sdata[tid], sdata[tid + stride]);
         }
         workgroupBarrier();
     }
-    let max_val = shared[0];
+    let max_val = sdata[0];
     workgroupBarrier();
 
     // Phase 2: exp(x - max) and sum
@@ -44,16 +44,16 @@ fn main(
         data[i] = v;
         local_sum += v;
     }
-    shared[tid] = local_sum;
+    sdata[tid] = local_sum;
     workgroupBarrier();
 
     for (var stride = WG_SIZE / 2u; stride > 0u; stride >>= 1u) {
         if (tid < stride) {
-            shared[tid] += shared[tid + stride];
+            sdata[tid] += sdata[tid + stride];
         }
         workgroupBarrier();
     }
-    let inv_sum = 1.0 / shared[0];
+    let inv_sum = 1.0 / sdata[0];
     workgroupBarrier();
 
     // Phase 3: normalize

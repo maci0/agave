@@ -74,6 +74,26 @@ const wgpu_map_mode_read = 1;
 const WGPURequestAdapterStatus = u32;
 const WGPURequestDeviceStatus = u32;
 const WGPUBufferMapAsyncStatus = u32;
+const WGPUCallbackMode = u32;
+const wgpu_callback_mode_allow_process_events: WGPUCallbackMode = 2;
+
+const WGPUStringView = extern struct {
+    data: ?[*]const u8 = null,
+    length: usize = 0,
+
+    fn fromSlice(s: [:0]const u8) WGPUStringView {
+        return .{ .data = s.ptr, .length = s.len };
+    }
+};
+
+const WGPUChainedStruct = extern struct {
+    next: ?*anyopaque = null,
+    s_type: u32 = 0,
+};
+
+const WGPUFuture = extern struct {
+    id: u64 = 0,
+};
 
 const WGPUInstanceDescriptor = extern struct {
     next_in_chain: ?*anyopaque = null,
@@ -84,29 +104,70 @@ const WGPUInstanceDescriptor = extern struct {
 
 const WGPURequestAdapterOptions = extern struct {
     next_in_chain: ?*anyopaque = null,
-    feature_level: u32 = 0, // WGPUFeatureLevel_Undefined
-    power_preference: u32 = 0, // WGPUPowerPreference_Undefined
-    force_fallback_adapter: u32 = 0, // WGPUBool = WGPU_FALSE
-    backend_type: u32 = 0, // WGPUBackendType_Undefined
+    feature_level: u32 = 0,
+    power_preference: u32 = 0,
+    force_fallback_adapter: u32 = 0,
+    backend_type: u32 = 0,
+};
+
+const WGPURequestAdapterCallbackInfo = extern struct {
+    next_in_chain: ?*anyopaque = null,
+    mode: WGPUCallbackMode = wgpu_callback_mode_allow_process_events,
+    callback: ?*const fn (WGPURequestAdapterStatus, WGPUAdapter, WGPUStringView, ?*anyopaque, ?*anyopaque) callconv(.c) void = null,
+    userdata1: ?*anyopaque = null,
+    userdata2: ?*anyopaque = null,
+};
+
+const WGPURequestDeviceCallbackInfo = extern struct {
+    next_in_chain: ?*anyopaque = null,
+    mode: WGPUCallbackMode = wgpu_callback_mode_allow_process_events,
+    callback: ?*const fn (WGPURequestDeviceStatus, WGPUDevice, WGPUStringView, ?*anyopaque, ?*anyopaque) callconv(.c) void = null,
+    userdata1: ?*anyopaque = null,
+    userdata2: ?*anyopaque = null,
+};
+
+const WGPUBufferMapCallbackInfo = extern struct {
+    next_in_chain: ?*anyopaque = null,
+    mode: WGPUCallbackMode = wgpu_callback_mode_allow_process_events,
+    callback: ?*const fn (WGPUBufferMapAsyncStatus, ?*anyopaque, ?*anyopaque) callconv(.c) void = null,
+    userdata1: ?*anyopaque = null,
+    userdata2: ?*anyopaque = null,
+};
+
+const WGPUQueueDescriptor = extern struct {
+    next_in_chain: ?*anyopaque = null,
+    label: WGPUStringView = .{},
+};
+
+const WGPUDeviceLostCallbackInfo = extern struct {
+    next_in_chain: ?*anyopaque = null,
+    mode: WGPUCallbackMode = 0,
+    callback: ?*anyopaque = null,
+    userdata1: ?*anyopaque = null,
+    userdata2: ?*anyopaque = null,
+};
+
+const WGPUUncapturedErrorCallbackInfo = extern struct {
+    next_in_chain: ?*anyopaque = null,
+    callback: ?*anyopaque = null,
+    userdata1: ?*anyopaque = null,
+    userdata2: ?*anyopaque = null,
 };
 
 const WGPUDeviceDescriptor = extern struct {
     next_in_chain: ?*anyopaque = null,
-    label: ?[*:0]const u8 = null,
+    label: WGPUStringView = .{},
     required_feature_count: usize = 0,
     required_features: ?*anyopaque = null,
     required_limits: ?*anyopaque = null,
-    default_queue: extern struct {
-        next_in_chain: ?*anyopaque = null,
-        label: ?[*:0]const u8 = null,
-    } = .{},
-    device_lost_callback: ?*anyopaque = null,
-    device_lost_userdata: ?*anyopaque = null,
+    default_queue: WGPUQueueDescriptor = .{},
+    device_lost_callback_info: WGPUDeviceLostCallbackInfo = .{},
+    uncaptured_error_callback_info: WGPUUncapturedErrorCallbackInfo = .{},
 };
 
 const WGPUBufferDescriptor = extern struct {
     next_in_chain: ?*anyopaque = null,
-    label: ?[*:0]const u8 = null,
+    label: WGPUStringView = .{},
     usage: WGPUBufferUsage = 0,
     size: u64 = 0,
     mapped_at_creation: u32 = 0,
@@ -114,25 +175,22 @@ const WGPUBufferDescriptor = extern struct {
 
 const WGPUShaderModuleDescriptor = extern struct {
     next_in_chain: ?*anyopaque = null,
-    label: ?[*:0]const u8 = null,
+    label: WGPUStringView = .{},
 };
 
-const WGPUShaderModuleWGSLDescriptor = extern struct {
-    chain: extern struct {
-        next: ?*anyopaque = null,
-        s_type: u32 = 6, // SType_ShaderModuleWGSLDescriptor
-    } = .{},
-    code: [*:0]const u8,
+const WGPUShaderSourceWGSL = extern struct {
+    chain: WGPUChainedStruct = .{ .s_type = 2 }, // WGPUSType_ShaderSourceWGSL
+    code: WGPUStringView = .{},
 };
 
 const WGPUComputePipelineDescriptor = extern struct {
     next_in_chain: ?*anyopaque = null,
-    label: ?[*:0]const u8 = null,
+    label: WGPUStringView = .{},
     layout: WGPUPipelineLayout = null,
     compute: extern struct {
         next_in_chain: ?*anyopaque = null,
         module: WGPUShaderModule = null,
-        entry_point: [*:0]const u8 = "main",
+        entry_point: WGPUStringView = .{},
         constant_count: usize = 0,
         constants: ?*anyopaque = null,
     } = .{},
@@ -235,8 +293,9 @@ pub const WebGpuBackend = struct {
 
     // WebGPU C function pointers
     fn_create_instance: *const fn (?*const WGPUInstanceDescriptor) callconv(.c) WGPUInstance = undefined,
-    fn_instance_request_adapter: *const fn (WGPUInstance, ?*const WGPURequestAdapterOptions, *const fn (WGPURequestAdapterStatus, WGPUAdapter, ?[*:0]const u8, ?*anyopaque) callconv(.c) void, ?*anyopaque) callconv(.c) void = undefined,
-    fn_adapter_request_device: *const fn (WGPUAdapter, ?*const WGPUDeviceDescriptor, *const fn (WGPURequestDeviceStatus, WGPUDevice, ?[*:0]const u8, ?*anyopaque) callconv(.c) void, ?*anyopaque) callconv(.c) void = undefined,
+    fn_instance_request_adapter: *const fn (WGPUInstance, ?*const WGPURequestAdapterOptions, WGPURequestAdapterCallbackInfo) callconv(.c) WGPUFuture = undefined,
+    fn_adapter_request_device: *const fn (WGPUAdapter, ?*const WGPUDeviceDescriptor, WGPURequestDeviceCallbackInfo) callconv(.c) WGPUFuture = undefined,
+    fn_instance_process_events: *const fn (WGPUInstance) callconv(.c) void = undefined,
     fn_device_get_queue: *const fn (WGPUDevice) callconv(.c) WGPUQueue = undefined,
     fn_device_create_buffer: *const fn (WGPUDevice, *const WGPUBufferDescriptor) callconv(.c) WGPUBuffer = undefined,
     fn_device_create_shader_module: *const fn (WGPUDevice, *const WGPUShaderModuleDescriptor) callconv(.c) WGPUShaderModule = undefined,
@@ -254,7 +313,7 @@ pub const WebGpuBackend = struct {
     fn_compute_pass_end: *const fn (WGPUComputePassEncoder) callconv(.c) void = undefined,
     fn_queue_submit: *const fn (WGPUQueue, usize, *const WGPUCommandBuffer) callconv(.c) void = undefined,
     fn_queue_write_buffer: *const fn (WGPUQueue, WGPUBuffer, u64, ?*const anyopaque, usize) callconv(.c) void = undefined,
-    fn_buffer_map_async: *const fn (WGPUBuffer, WGPUMapMode, usize, usize, *const fn (WGPUBufferMapAsyncStatus, ?*anyopaque) callconv(.c) void, ?*anyopaque) callconv(.c) void = undefined,
+    fn_buffer_map_async: *const fn (WGPUBuffer, WGPUMapMode, usize, usize, WGPUBufferMapCallbackInfo) callconv(.c) WGPUFuture = undefined,
     fn_buffer_get_mapped_range: *const fn (WGPUBuffer, usize, usize) callconv(.c) ?*anyopaque = undefined,
     fn_buffer_unmap: *const fn (WGPUBuffer) callconv(.c) void = undefined,
     fn_buffer_destroy: *const fn (WGPUBuffer) callconv(.c) void = undefined,
@@ -318,6 +377,7 @@ pub const WebGpuBackend = struct {
         self.fn_create_instance = self.lib.lookup(@TypeOf(self.fn_create_instance), "wgpuCreateInstance") orelse return error.WebGpuNotAvailable;
         self.fn_instance_request_adapter = self.lib.lookup(@TypeOf(self.fn_instance_request_adapter), "wgpuInstanceRequestAdapter") orelse return error.WebGpuNotAvailable;
         self.fn_adapter_request_device = self.lib.lookup(@TypeOf(self.fn_adapter_request_device), "wgpuAdapterRequestDevice") orelse return error.WebGpuNotAvailable;
+        self.fn_instance_process_events = self.lib.lookup(@TypeOf(self.fn_instance_process_events), "wgpuInstanceProcessEvents") orelse return error.WebGpuNotAvailable;
         self.fn_device_get_queue = self.lib.lookup(@TypeOf(self.fn_device_get_queue), "wgpuDeviceGetQueue") orelse return error.WebGpuNotAvailable;
         self.fn_device_create_buffer = self.lib.lookup(@TypeOf(self.fn_device_create_buffer), "wgpuDeviceCreateBuffer") orelse return error.WebGpuNotAvailable;
         self.fn_device_create_shader_module = self.lib.lookup(@TypeOf(self.fn_device_create_shader_module), "wgpuDeviceCreateShaderModule") orelse return error.WebGpuNotAvailable;
@@ -352,37 +412,45 @@ pub const WebGpuBackend = struct {
     }
 
     fn requestAdapter(self: *WebGpuBackend) !void {
-        const AdapterCtx = struct {
-            adapter: WGPUAdapter = null,
-            ready: bool = false,
-        };
+        const AdapterCtx = struct { adapter: WGPUAdapter = null, ready: bool = false };
         var ctx = AdapterCtx{};
         const opts = WGPURequestAdapterOptions{};
-        self.fn_instance_request_adapter(self.instance, &opts, struct {
-            fn cb(_: WGPURequestAdapterStatus, adapter: WGPUAdapter, _: ?[*:0]const u8, userdata: ?*anyopaque) callconv(.c) void {
-                const c: *AdapterCtx = @ptrCast(@alignCast(userdata));
-                c.adapter = adapter;
-                c.ready = true;
-            }
-        }.cb, @ptrCast(&ctx));
+        const cb_info = WGPURequestAdapterCallbackInfo{
+            .mode = wgpu_callback_mode_allow_process_events,
+            .callback = struct {
+                fn cb(_: WGPURequestAdapterStatus, adapter: WGPUAdapter, _: WGPUStringView, userdata1: ?*anyopaque, _: ?*anyopaque) callconv(.c) void {
+                    const c: *AdapterCtx = @ptrCast(@alignCast(userdata1));
+                    c.adapter = adapter;
+                    c.ready = true;
+                }
+            }.cb,
+            .userdata1 = @ptrCast(&ctx),
+        };
+        const future = self.fn_instance_request_adapter(self.instance, &opts, cb_info);
+        _ = future;
+        self.fn_instance_process_events(self.instance);
         if (!ctx.ready or ctx.adapter == null) return error.WebGpuNotAvailable;
         self.adapter = ctx.adapter;
     }
 
     fn requestDevice(self: *WebGpuBackend) !void {
-        const DeviceCtx = struct {
-            device: WGPUDevice = null,
-            ready: bool = false,
-        };
+        const DeviceCtx = struct { device: WGPUDevice = null, ready: bool = false };
         var ctx = DeviceCtx{};
         const desc = WGPUDeviceDescriptor{};
-        self.fn_adapter_request_device(self.adapter, &desc, struct {
-            fn cb(_: WGPURequestDeviceStatus, device: WGPUDevice, _: ?[*:0]const u8, userdata: ?*anyopaque) callconv(.c) void {
-                const c: *DeviceCtx = @ptrCast(@alignCast(userdata));
-                c.device = device;
-                c.ready = true;
-            }
-        }.cb, @ptrCast(&ctx));
+        const cb_info = WGPURequestDeviceCallbackInfo{
+            .mode = wgpu_callback_mode_allow_process_events,
+            .callback = struct {
+                fn cb(_: WGPURequestDeviceStatus, device: WGPUDevice, _: WGPUStringView, userdata1: ?*anyopaque, _: ?*anyopaque) callconv(.c) void {
+                    const c: *DeviceCtx = @ptrCast(@alignCast(userdata1));
+                    c.device = device;
+                    c.ready = true;
+                }
+            }.cb,
+            .userdata1 = @ptrCast(&ctx),
+        };
+        const future = self.fn_adapter_request_device(self.adapter, &desc, cb_info);
+        _ = future;
+        self.fn_instance_process_events(self.instance);
         if (!ctx.ready or ctx.device == null) return error.WebGpuNotAvailable;
         self.device = ctx.device;
     }
@@ -417,15 +485,18 @@ pub const WebGpuBackend = struct {
     }
 
     fn createPipeline(self: *WebGpuBackend, wgsl_source: [:0]const u8) !PipelineInfo {
-        var wgsl_desc = WGPUShaderModuleWGSLDescriptor{ .code = wgsl_source };
-        var shader_desc = WGPUShaderModuleDescriptor{ .next_in_chain = @ptrCast(&wgsl_desc) };
+        var wgsl_src = WGPUShaderSourceWGSL{
+            .chain = .{ .s_type = 2 }, // WGPUSType_ShaderSourceWGSL
+            .code = .{ .data = wgsl_source.ptr, .length = wgsl_source.len },
+        };
+        var shader_desc = WGPUShaderModuleDescriptor{ .next_in_chain = @ptrCast(&wgsl_src) };
         const shader = self.fn_device_create_shader_module(self.device, &shader_desc);
         if (shader == null) return error.WebGpuShaderCompilationFailed;
         defer self.fn_shader_module_release(shader);
 
         var pipeline_desc = WGPUComputePipelineDescriptor{};
         pipeline_desc.compute.module = shader;
-        pipeline_desc.compute.entry_point = "main";
+        pipeline_desc.compute.entry_point = WGPUStringView.fromSlice("main");
         const pipeline = self.fn_device_create_compute_pipeline(self.device, &pipeline_desc);
         if (pipeline == null) return error.WebGpuPipelineCreationFailed;
 
@@ -516,15 +587,18 @@ pub const WebGpuBackend = struct {
 
         // Map staging → CPU
         var mapped = false;
-        self.fn_buffer_map_async(self.staging_buf, wgpu_map_mode_read, 0, size, struct {
-            fn cb(_: WGPUBufferMapAsyncStatus, userdata: ?*anyopaque) callconv(.c) void {
-                const m: *bool = @ptrCast(@alignCast(userdata));
-                m.* = true;
-            }
-        }.cb, @ptrCast(&mapped));
-        while (!mapped) {
-            _ = self.fn_device_poll(self.device, 1, null);
-        }
+        const map_cb_info = WGPUBufferMapCallbackInfo{
+            .mode = wgpu_callback_mode_allow_process_events,
+            .callback = struct {
+                fn cb(_: WGPUBufferMapAsyncStatus, userdata1: ?*anyopaque, _: ?*anyopaque) callconv(.c) void {
+                    const m: *bool = @ptrCast(@alignCast(userdata1));
+                    m.* = true;
+                }
+            }.cb,
+            .userdata1 = @ptrCast(&mapped),
+        };
+        _ = self.fn_buffer_map_async(self.staging_buf, wgpu_map_mode_read, 0, size, map_cb_info);
+        self.fn_instance_process_events(self.instance);
         const mapped_ptr = self.fn_buffer_get_mapped_range(self.staging_buf, 0, size);
         if (mapped_ptr) |p| {
             const src_slice: [*]const f32 = @ptrCast(@alignCast(p));
@@ -1312,22 +1386,29 @@ pub const WebGpuBackend = struct {
         const v_off: usize = 2 * num_k_heads * head_k_dim;
         const v_ptr = conv_out + v_off;
 
-        const q_sz = num_k_heads * head_k_dim * @sizeOf(f32);
         const v_sz = num_v_heads * head_v_dim * @sizeOf(f32);
-        const gate_sz = num_v_heads * @sizeOf(f32);
         const state_sz = ssm_state.len * @sizeOf(f32);
         const norm_sz = head_v_dim * @sizeOf(f32);
         const z_sz = v_sz;
 
-        const q_buf = self.getOrUpload(@ptrCast(q_ptr), q_sz);
-        const k_buf = self.getOrUpload(@ptrCast(k_ptr), q_sz);
+        // Combine Q+K into one buffer to stay within 8 storage buffer limit
+        var qk_combined: [8192]f32 = undefined;
+        const qk_elems = num_k_heads * head_k_dim;
+        @memcpy(qk_combined[0..qk_elems], q_ptr[0..qk_elems]);
+        @memcpy(qk_combined[qk_elems..][0..qk_elems], k_ptr[0..qk_elems]);
+        const qk_sz = qk_elems * 2 * @sizeOf(f32);
+        const qk_pool = self.getPooledBuf(qk_sz);
+        defer self.releasePooledBuf(qk_pool.idx);
+        self.uploadToBuffer(qk_pool.buf, @ptrCast(&qk_combined), qk_sz);
         const v_buf = self.getOrUpload(@ptrCast(v_ptr), v_sz);
-        const gate_pool = self.getPooledBuf(gate_sz);
-        defer self.releasePooledBuf(gate_pool.idx);
-        self.uploadToBuffer(gate_pool.buf, @ptrCast(&gate_arr), gate_sz);
-        const beta_pool = self.getPooledBuf(gate_sz);
-        defer self.releasePooledBuf(beta_pool.idx);
-        self.uploadToBuffer(beta_pool.buf, @ptrCast(&beta_arr), gate_sz);
+        // Merge gate+beta into one buffer: [gates..., betas...]
+        var gate_beta_arr: [128]f32 = undefined;
+        @memcpy(gate_beta_arr[0..num_v_heads], gate_arr[0..num_v_heads]);
+        @memcpy(gate_beta_arr[num_v_heads..][0..num_v_heads], beta_arr[0..num_v_heads]);
+        const gb_sz = num_v_heads * 2 * @sizeOf(f32);
+        const gb_pool = self.getPooledBuf(gb_sz);
+        defer self.releasePooledBuf(gb_pool.idx);
+        self.uploadToBuffer(gb_pool.buf, @ptrCast(&gate_beta_arr), gb_sz);
         const z_buf_gpu = self.getOrUpload(@ptrCast(z_buf), z_sz);
         const norm_buf = self.getOrUpload(@ptrCast(ssm_norm_w), norm_sz);
         const state_pool = self.getPooledBuf(state_sz);
@@ -1349,16 +1430,14 @@ pub const WebGpuBackend = struct {
         defer self.fn_buffer_destroy(params_buf);
 
         const entries = [_]WGPUBindGroupEntry{
-            storageEntry(0, q_buf, q_sz),
-            storageEntry(1, k_buf, q_sz),
-            storageEntry(2, v_buf, v_sz),
-            storageEntry(3, gate_pool.buf, gate_sz),
-            storageEntry(4, beta_pool.buf, gate_sz),
-            storageEntry(5, z_buf_gpu, z_sz),
-            storageEntry(6, norm_buf, norm_sz),
-            storageEntry(7, state_pool.buf, state_sz),
-            storageEntry(8, out_pool.buf, v_sz),
-            uniformEntry(9, params_buf, Params),
+            storageEntry(0, qk_pool.buf, qk_sz),
+            storageEntry(1, v_buf, v_sz),
+            storageEntry(2, gb_pool.buf, gb_sz),
+            storageEntry(3, z_buf_gpu, z_sz),
+            storageEntry(4, norm_buf, norm_sz),
+            storageEntry(5, state_pool.buf, state_sz),
+            storageEntry(6, out_pool.buf, v_sz),
+            uniformEntry(7, params_buf, Params),
         };
         self.dispatchCompute(self.pipe_deltanet, &entries, @intCast(num_v_heads));
         self.downloadF32(out_pool.buf, output, num_v_heads * head_v_dim);
