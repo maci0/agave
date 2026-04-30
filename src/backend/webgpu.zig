@@ -77,14 +77,17 @@ const WGPUBufferMapAsyncStatus = u32;
 
 const WGPUInstanceDescriptor = extern struct {
     next_in_chain: ?*anyopaque = null,
+    required_feature_count: usize = 0,
+    required_features: ?*anyopaque = null,
+    required_limits: ?*anyopaque = null,
 };
 
 const WGPURequestAdapterOptions = extern struct {
     next_in_chain: ?*anyopaque = null,
-    compatible_surface: ?*anyopaque = null,
-    power_preference: u32 = 2, // high-performance
-    backend_type: u32 = 0, // undefined = auto
-    force_fallback_adapter: u32 = 0,
+    feature_level: u32 = 0, // WGPUFeatureLevel_Undefined
+    power_preference: u32 = 0, // WGPUPowerPreference_Undefined
+    force_fallback_adapter: u32 = 0, // WGPUBool = WGPU_FALSE
+    backend_type: u32 = 0, // WGPUBackendType_Undefined
 };
 
 const WGPUDeviceDescriptor = extern struct {
@@ -268,27 +271,42 @@ pub const WebGpuBackend = struct {
 
     // ── Initialization ──────────────────────────────────────────
 
-    pub fn init(allocator: std.mem.Allocator) !*WebGpuBackend {
-        var self = try allocator.create(WebGpuBackend);
-        self.* = .{ .allocator = allocator, .lib = undefined };
+    pub fn init(allocator: std.mem.Allocator) !WebGpuBackend {
+        var self = WebGpuBackend{ .allocator = allocator, .lib = undefined };
         self.buf_cache = std.AutoHashMap(usize, CachedBuf).init(allocator);
 
-        const lib_name = switch (@import("builtin").os.tag) {
-            .macos => "libwgpu_native.dylib",
-            .linux => "libwgpu_native.so",
-            .windows => "wgpu_native.dll",
+        const lib_names = switch (@import("builtin").os.tag) {
+            .macos => [_][:0]const u8{ "libwgpu_native.dylib", "/opt/homebrew/lib/libwgpu_native.dylib", "/usr/local/lib/libwgpu_native.dylib" },
+            .linux => [_][:0]const u8{ "libwgpu_native.so", "/usr/lib/libwgpu_native.so", "/usr/local/lib/libwgpu_native.so" },
+            .windows => [_][:0]const u8{ "wgpu_native.dll", "wgpu_native.dll", "wgpu_native.dll" },
             else => return error.WebGpuNotAvailable,
         };
-        self.lib = std.DynLib.open(lib_name) catch return error.WebGpuNotAvailable;
+        self.lib = for (lib_names) |name| {
+            break std.DynLib.open(name) catch continue;
+        } else return error.WebGpuNotAvailable;
+        std.log.warn("WebGPU: library loaded", .{});
 
-        self.loadFunctions() catch return error.WebGpuNotAvailable;
+        self.loadFunctions() catch |err| {
+            std.log.warn("WebGPU: loadFunctions failed: {s}", .{@errorName(err)});
+            return error.WebGpuNotAvailable;
+        };
+        std.log.warn("WebGPU: functions loaded", .{});
 
         const desc = WGPUInstanceDescriptor{};
         self.instance = self.fn_create_instance(&desc);
-        if (self.instance == null) return error.WebGpuNotAvailable;
+        if (self.instance == null) {
+            std.log.warn("WebGPU: wgpuCreateInstance returned null", .{});
+            return error.WebGpuNotAvailable;
+        }
 
-        try self.requestAdapter();
-        try self.requestDevice();
+        self.requestAdapter() catch |err| {
+            std.log.warn("WebGPU: requestAdapter failed: {s}", .{@errorName(err)});
+            return err;
+        };
+        self.requestDevice() catch |err| {
+            std.log.warn("WebGPU: requestDevice failed: {s}", .{@errorName(err)});
+            return err;
+        };
         self.queue = self.fn_device_get_queue(self.device);
 
         try self.createPipelines();
@@ -297,46 +315,40 @@ pub const WebGpuBackend = struct {
     }
 
     fn loadFunctions(self: *WebGpuBackend) !void {
-        inline for (@typeInfo(WebGpuBackend).@"struct".fields) |field| {
-            if (comptime std.mem.startsWith(u8, field.name, "fn_")) {
-                const c_name = comptime cFunctionName(field.name);
-                const ptr = self.lib.lookup(@TypeOf(@field(self.*, field.name)), c_name) orelse return error.WebGpuNotAvailable;
-                @field(self.*, field.name) = ptr;
-            }
-        }
-    }
-
-    fn cFunctionName(comptime field_name: []const u8) [:0]const u8 {
-        comptime {
-            const name = field_name["fn_".len..];
-            var result: [128]u8 = undefined;
-            var i: usize = 0;
-            // fn_create_instance → wgpuCreateInstance
-            result[i] = 'w';
-            i += 1;
-            result[i] = 'g';
-            i += 1;
-            result[i] = 'p';
-            i += 1;
-            result[i] = 'u';
-            i += 1;
-            var capitalize_next = true;
-            for (name) |c| {
-                if (c == '_') {
-                    capitalize_next = true;
-                    continue;
-                }
-                if (capitalize_next) {
-                    result[i] = std.ascii.toUpper(c);
-                    capitalize_next = false;
-                } else {
-                    result[i] = c;
-                }
-                i += 1;
-            }
-            result[i] = 0;
-            return result[0..i :0];
-        }
+        self.fn_create_instance = self.lib.lookup(@TypeOf(self.fn_create_instance), "wgpuCreateInstance") orelse return error.WebGpuNotAvailable;
+        self.fn_instance_request_adapter = self.lib.lookup(@TypeOf(self.fn_instance_request_adapter), "wgpuInstanceRequestAdapter") orelse return error.WebGpuNotAvailable;
+        self.fn_adapter_request_device = self.lib.lookup(@TypeOf(self.fn_adapter_request_device), "wgpuAdapterRequestDevice") orelse return error.WebGpuNotAvailable;
+        self.fn_device_get_queue = self.lib.lookup(@TypeOf(self.fn_device_get_queue), "wgpuDeviceGetQueue") orelse return error.WebGpuNotAvailable;
+        self.fn_device_create_buffer = self.lib.lookup(@TypeOf(self.fn_device_create_buffer), "wgpuDeviceCreateBuffer") orelse return error.WebGpuNotAvailable;
+        self.fn_device_create_shader_module = self.lib.lookup(@TypeOf(self.fn_device_create_shader_module), "wgpuDeviceCreateShaderModule") orelse return error.WebGpuNotAvailable;
+        self.fn_device_create_compute_pipeline = self.lib.lookup(@TypeOf(self.fn_device_create_compute_pipeline), "wgpuDeviceCreateComputePipeline") orelse return error.WebGpuNotAvailable;
+        self.fn_device_create_command_encoder = self.lib.lookup(@TypeOf(self.fn_device_create_command_encoder), "wgpuDeviceCreateCommandEncoder") orelse return error.WebGpuNotAvailable;
+        self.fn_device_create_bind_group = self.lib.lookup(@TypeOf(self.fn_device_create_bind_group), "wgpuDeviceCreateBindGroup") orelse return error.WebGpuNotAvailable;
+        self.fn_device_poll = self.lib.lookup(@TypeOf(self.fn_device_poll), "wgpuDevicePoll") orelse return error.WebGpuNotAvailable;
+        self.fn_compute_pipeline_get_bind_group_layout = self.lib.lookup(@TypeOf(self.fn_compute_pipeline_get_bind_group_layout), "wgpuComputePipelineGetBindGroupLayout") orelse return error.WebGpuNotAvailable;
+        self.fn_command_encoder_begin_compute_pass = self.lib.lookup(@TypeOf(self.fn_command_encoder_begin_compute_pass), "wgpuCommandEncoderBeginComputePass") orelse return error.WebGpuNotAvailable;
+        self.fn_command_encoder_copy_buffer_to_buffer = self.lib.lookup(@TypeOf(self.fn_command_encoder_copy_buffer_to_buffer), "wgpuCommandEncoderCopyBufferToBuffer") orelse return error.WebGpuNotAvailable;
+        self.fn_command_encoder_finish = self.lib.lookup(@TypeOf(self.fn_command_encoder_finish), "wgpuCommandEncoderFinish") orelse return error.WebGpuNotAvailable;
+        self.fn_compute_pass_set_pipeline = self.lib.lookup(@TypeOf(self.fn_compute_pass_set_pipeline), "wgpuComputePassEncoderSetPipeline") orelse return error.WebGpuNotAvailable;
+        self.fn_compute_pass_set_bind_group = self.lib.lookup(@TypeOf(self.fn_compute_pass_set_bind_group), "wgpuComputePassEncoderSetBindGroup") orelse return error.WebGpuNotAvailable;
+        self.fn_compute_pass_dispatch = self.lib.lookup(@TypeOf(self.fn_compute_pass_dispatch), "wgpuComputePassEncoderDispatchWorkgroups") orelse return error.WebGpuNotAvailable;
+        self.fn_compute_pass_end = self.lib.lookup(@TypeOf(self.fn_compute_pass_end), "wgpuComputePassEncoderEnd") orelse return error.WebGpuNotAvailable;
+        self.fn_queue_submit = self.lib.lookup(@TypeOf(self.fn_queue_submit), "wgpuQueueSubmit") orelse return error.WebGpuNotAvailable;
+        self.fn_queue_write_buffer = self.lib.lookup(@TypeOf(self.fn_queue_write_buffer), "wgpuQueueWriteBuffer") orelse return error.WebGpuNotAvailable;
+        self.fn_buffer_map_async = self.lib.lookup(@TypeOf(self.fn_buffer_map_async), "wgpuBufferMapAsync") orelse return error.WebGpuNotAvailable;
+        self.fn_buffer_get_mapped_range = self.lib.lookup(@TypeOf(self.fn_buffer_get_mapped_range), "wgpuBufferGetMappedRange") orelse return error.WebGpuNotAvailable;
+        self.fn_buffer_unmap = self.lib.lookup(@TypeOf(self.fn_buffer_unmap), "wgpuBufferUnmap") orelse return error.WebGpuNotAvailable;
+        self.fn_buffer_destroy = self.lib.lookup(@TypeOf(self.fn_buffer_destroy), "wgpuBufferDestroy") orelse return error.WebGpuNotAvailable;
+        self.fn_buffer_release = self.lib.lookup(@TypeOf(self.fn_buffer_release), "wgpuBufferRelease") orelse return error.WebGpuNotAvailable;
+        self.fn_instance_release = self.lib.lookup(@TypeOf(self.fn_instance_release), "wgpuInstanceRelease") orelse return error.WebGpuNotAvailable;
+        self.fn_adapter_release = self.lib.lookup(@TypeOf(self.fn_adapter_release), "wgpuAdapterRelease") orelse return error.WebGpuNotAvailable;
+        self.fn_device_release = self.lib.lookup(@TypeOf(self.fn_device_release), "wgpuDeviceRelease") orelse return error.WebGpuNotAvailable;
+        self.fn_shader_module_release = self.lib.lookup(@TypeOf(self.fn_shader_module_release), "wgpuShaderModuleRelease") orelse return error.WebGpuNotAvailable;
+        self.fn_pipeline_release = self.lib.lookup(@TypeOf(self.fn_pipeline_release), "wgpuComputePipelineRelease") orelse return error.WebGpuNotAvailable;
+        self.fn_bind_group_release = self.lib.lookup(@TypeOf(self.fn_bind_group_release), "wgpuBindGroupRelease") orelse return error.WebGpuNotAvailable;
+        self.fn_bind_group_layout_release = self.lib.lookup(@TypeOf(self.fn_bind_group_layout_release), "wgpuBindGroupLayoutRelease") orelse return error.WebGpuNotAvailable;
+        self.fn_command_encoder_release = self.lib.lookup(@TypeOf(self.fn_command_encoder_release), "wgpuCommandEncoderRelease") orelse return error.WebGpuNotAvailable;
+        self.fn_command_buffer_release = self.lib.lookup(@TypeOf(self.fn_command_buffer_release), "wgpuCommandBufferRelease") orelse return error.WebGpuNotAvailable;
     }
 
     fn requestAdapter(self: *WebGpuBackend) !void {
@@ -353,7 +365,6 @@ pub const WebGpuBackend = struct {
                 c.ready = true;
             }
         }.cb, @ptrCast(&ctx));
-        self.fn_device_poll(self.device orelse self.instance, 1, null);
         if (!ctx.ready or ctx.adapter == null) return error.WebGpuNotAvailable;
         self.adapter = ctx.adapter;
     }
@@ -372,11 +383,6 @@ pub const WebGpuBackend = struct {
                 c.ready = true;
             }
         }.cb, @ptrCast(&ctx));
-        // Poll instance to drive adapter request callback
-        if (self.device == null) {
-            // No device yet — poll instance (wgpu-native processes callbacks during poll)
-            _ = self.fn_device_poll(self.instance, 1, null);
-        }
         if (!ctx.ready or ctx.device == null) return error.WebGpuNotAvailable;
         self.device = ctx.device;
     }
@@ -442,7 +448,6 @@ pub const WebGpuBackend = struct {
         if (self.adapter != null) self.fn_adapter_release(self.adapter);
         if (self.instance != null) self.fn_instance_release(self.instance);
         self.lib.close();
-        self.allocator.destroy(self);
     }
 
     // ── Buffer Management ───────────────────────────────────────
@@ -536,10 +541,11 @@ pub const WebGpuBackend = struct {
     }
 
     /// Create a uniform buffer, upload params data, return GPU buffer handle.
-    fn createUniformBuf(self: *WebGpuBackend, comptime T: type, params: *const T) WGPUBuffer {
+    fn createUniformBuf(self: *WebGpuBackend, comptime T: type, params: T) WGPUBuffer {
         const aligned_size = alignUniform(@sizeOf(T));
         const buf = self.createBuffer(aligned_size, wgpu_buffer_usage_uniform | wgpu_buffer_usage_copy_dst);
-        self.fn_queue_write_buffer(self.queue, buf, 0, @ptrCast(params), @sizeOf(T));
+        const p = params;
+        self.fn_queue_write_buffer(self.queue, buf, 0, @ptrCast(&p), @sizeOf(T));
         return buf;
     }
 
@@ -584,8 +590,8 @@ pub const WebGpuBackend = struct {
         defer self.releasePooledBuf(out.idx);
 
         const Params = extern struct { n: u32, _pad: [12]u8 = .{0} ** 12 };
-        var params = Params{ .n = @intCast(n) };
-        const params_buf = self.createUniformBuf(Params, &params);
+        const params = Params{ .n = @intCast(n) };
+        const params_buf = self.createUniformBuf(Params, params);
         defer self.fn_buffer_destroy(params_buf);
 
         const entries = [_]WGPUBindGroupEntry{
@@ -604,8 +610,8 @@ pub const WebGpuBackend = struct {
         defer self.releasePooledBuf(out.idx);
 
         const Params = extern struct { n: u32, _pad: [12]u8 = .{0} ** 12 };
-        var params = Params{ .n = @intCast(n) };
-        const params_buf = self.createUniformBuf(Params, &params);
+        const params = Params{ .n = @intCast(n) };
+        const params_buf = self.createUniformBuf(Params, params);
         defer self.fn_buffer_destroy(params_buf);
 
         const entries = [_]WGPUBindGroupEntry{
@@ -625,8 +631,8 @@ pub const WebGpuBackend = struct {
         defer self.releasePooledBuf(out_pool.idx);
 
         const Params = extern struct { n: u32, _pad: [12]u8 = .{0} ** 12 };
-        var params = Params{ .n = @intCast(n) };
-        const params_buf = self.createUniformBuf(Params, &params);
+        const params = Params{ .n = @intCast(n) };
+        const params_buf = self.createUniformBuf(Params, params);
         defer self.fn_buffer_destroy(params_buf);
 
         const entries = [_]WGPUBindGroupEntry{
@@ -647,8 +653,8 @@ pub const WebGpuBackend = struct {
         defer self.releasePooledBuf(out_pool.idx);
 
         const Params = extern struct { n: u32, _pad: [12]u8 = .{0} ** 12 };
-        var params = Params{ .n = @intCast(n) };
-        const params_buf = self.createUniformBuf(Params, &params);
+        const params = Params{ .n = @intCast(n) };
+        const params_buf = self.createUniformBuf(Params, params);
         defer self.fn_buffer_destroy(params_buf);
 
         const entries = [_]WGPUBindGroupEntry{
@@ -669,8 +675,8 @@ pub const WebGpuBackend = struct {
         defer self.releasePooledBuf(out_pool.idx);
 
         const Params = extern struct { n: u32, _pad: [12]u8 = .{0} ** 12 };
-        var params = Params{ .n = @intCast(n) };
-        const params_buf = self.createUniformBuf(Params, &params);
+        const params = Params{ .n = @intCast(n) };
+        const params_buf = self.createUniformBuf(Params, params);
         defer self.fn_buffer_destroy(params_buf);
 
         const entries = [_]WGPUBindGroupEntry{
@@ -691,8 +697,8 @@ pub const WebGpuBackend = struct {
         defer self.releasePooledBuf(out_pool.idx);
 
         const Params = extern struct { n: u32, _pad: [12]u8 = .{0} ** 12 };
-        var params = Params{ .n = @intCast(n) };
-        const params_buf = self.createUniformBuf(Params, &params);
+        const params = Params{ .n = @intCast(n) };
+        const params_buf = self.createUniformBuf(Params, params);
         defer self.fn_buffer_destroy(params_buf);
 
         const entries = [_]WGPUBindGroupEntry{
@@ -713,8 +719,8 @@ pub const WebGpuBackend = struct {
         defer self.releasePooledBuf(out.idx);
 
         const Params = extern struct { n: u32, _pad0: u32 = 0, eps: f32, _pad1: u32 = 0 };
-        var params = Params{ .n = @intCast(n), .eps = eps };
-        const params_buf = self.createUniformBuf(Params, &params);
+        const params = Params{ .n = @intCast(n), .eps = eps };
+        const params_buf = self.createUniformBuf(Params, params);
         defer self.fn_buffer_destroy(params_buf);
 
         const entries = [_]WGPUBindGroupEntry{
@@ -734,8 +740,8 @@ pub const WebGpuBackend = struct {
         self.uploadToBuffer(data_pool.buf, @ptrCast(data), size);
 
         const Params = extern struct { n: u32, _pad: [12]u8 = .{0} ** 12 };
-        var params = Params{ .n = @intCast(n) };
-        const params_buf = self.createUniformBuf(Params, &params);
+        const params = Params{ .n = @intCast(n) };
+        const params_buf = self.createUniformBuf(Params, params);
         defer self.fn_buffer_destroy(params_buf);
 
         const entries = [_]WGPUBindGroupEntry{
@@ -746,7 +752,7 @@ pub const WebGpuBackend = struct {
         self.downloadF32(data_pool.buf, data, n);
     }
 
-    pub fn rope(self: *WebGpuBackend, data: [*]f32, pos: u32, n_heads: usize, head_dim: usize, rope_dim: usize, theta: f32) void {
+    pub fn rope(self: *WebGpuBackend, data: [*]f32, pos: usize, n_heads: usize, head_dim: usize, rope_dim: usize, theta: f32) void {
         const total_elems = n_heads * head_dim;
         const size = total_elems * @sizeOf(f32);
         const data_pool = self.getPooledBuf(size);
@@ -761,14 +767,14 @@ pub const WebGpuBackend = struct {
             theta: f32,
             _pad: [12]u8 = .{0} ** 12,
         };
-        var params = Params{
-            .pos = pos,
+        const params = Params{
+            .pos = @intCast(pos),
             .n_heads = @intCast(n_heads),
             .head_dim = @intCast(head_dim),
             .rope_dim = @intCast(rope_dim),
             .theta = theta,
         };
-        const params_buf = self.createUniformBuf(Params, &params);
+        const params_buf = self.createUniformBuf(Params, params);
         defer self.fn_buffer_destroy(params_buf);
 
         const half_rope = n_heads * rope_dim / 2;
@@ -780,17 +786,18 @@ pub const WebGpuBackend = struct {
         self.downloadF32(data_pool.buf, data, total_elems);
     }
 
-    pub fn embLookup(self: *WebGpuBackend, table: TensorData, output: [*]f32, n_embd: usize, token_id: u32) void {
+    pub fn embLookup(self: *WebGpuBackend, table: TensorData, token_id: u32, output: [*]f32, dim: usize) void {
         if (table.dtype != .f32) @panic("WebGPU embLookup: only f32 embedding tables supported");
-        const table_size = table.n_elements * @sizeOf(f32);
-        const table_buf = self.getOrUpload(table.data_ptr, table_size);
-        const out_size = n_embd * @sizeOf(f32);
+        const emb_max_vocab: usize = 256000;
+        const table_size = dim * @sizeOf(f32) * emb_max_vocab;
+        const table_buf = self.getOrUpload(table.data, table_size);
+        const out_size = dim * @sizeOf(f32);
         const out = self.getPooledBuf(out_size);
         defer self.releasePooledBuf(out.idx);
 
-        const Params = extern struct { token_id: u32, n_embd: u32, _pad: [8]u8 = .{0} ** 8 };
-        var params = Params{ .token_id = token_id, .n_embd = @intCast(n_embd) };
-        const params_buf = self.createUniformBuf(Params, &params);
+        const Params = extern struct { token_id_v: u32, n_embd: u32, _pad: [8]u8 = .{0} ** 8 };
+        const params = Params{ .token_id_v = token_id, .n_embd = @intCast(dim) };
+        const params_buf = self.createUniformBuf(Params, params);
         defer self.fn_buffer_destroy(params_buf);
 
         const entries = [_]WGPUBindGroupEntry{
@@ -798,8 +805,8 @@ pub const WebGpuBackend = struct {
             storageEntry(1, out.buf, out_size),
             uniformEntry(2, params_buf, Params),
         };
-        self.dispatchCompute(self.pipe_embedding, &entries, @intCast((n_embd + workgroup_size - 1) / workgroup_size));
-        self.downloadF32(out.buf, output, n_embd);
+        self.dispatchCompute(self.pipe_embedding, &entries, @intCast((dim + workgroup_size - 1) / workgroup_size));
+        self.downloadF32(out.buf, output, dim);
     }
 
     pub fn gemv(self: *WebGpuBackend, x: [*]const f32, w: TensorData, y: [*]f32, n: usize, k: usize) void {
@@ -810,14 +817,14 @@ pub const WebGpuBackend = struct {
         defer self.releasePooledBuf(out.idx);
 
         const Params = extern struct { n: u32, k: u32, _pad: [8]u8 = .{0} ** 8 };
-        var params = Params{ .n = @intCast(n), .k = @intCast(k) };
-        const params_buf = self.createUniformBuf(Params, &params);
+        const params = Params{ .n = @intCast(n), .k = @intCast(k) };
+        const params_buf = self.createUniformBuf(Params, params);
         defer self.fn_buffer_destroy(params_buf);
 
         switch (w.dtype) {
             .f32 => {
                 const w_size = n * k * @sizeOf(f32);
-                const w_buf = self.getOrUpload(w.data_ptr, w_size);
+                const w_buf = self.getOrUpload(w.data, w_size);
                 const entries = [_]WGPUBindGroupEntry{
                     storageEntry(0, x_buf, x_size),
                     storageEntry(1, w_buf, w_size),
@@ -830,7 +837,7 @@ pub const WebGpuBackend = struct {
                 const block_size: usize = 34; // 32 quants (i8) + 1 scale (f16) = 34 bytes per block
                 const blocks_per_row = (k + 31) / 32;
                 const w_size = n * blocks_per_row * block_size;
-                const w_buf = self.getOrUpload(w.data_ptr, w_size);
+                const w_buf = self.getOrUpload(w.data, w_size);
                 const entries = [_]WGPUBindGroupEntry{
                     storageEntry(0, x_buf, x_size),
                     storageEntry(1, w_buf, w_size),
@@ -857,8 +864,8 @@ pub const WebGpuBackend = struct {
         self.uploadToBuffer(data_pool.buf, @ptrCast(data), size);
 
         const Params = extern struct { n: u32, _pad0: u32 = 0, eps: f32, _pad1: u32 = 0 };
-        var params = Params{ .n = @intCast(n), .eps = eps };
-        const params_buf = self.createUniformBuf(Params, &params);
+        const params = Params{ .n = @intCast(n), .eps = eps };
+        const params_buf = self.createUniformBuf(Params, params);
         defer self.fn_buffer_destroy(params_buf);
 
         const entries = [_]WGPUBindGroupEntry{
@@ -881,8 +888,8 @@ pub const WebGpuBackend = struct {
         defer self.releasePooledBuf(out_pool.idx);
 
         const Params = extern struct { n: u32, _pad0: u32 = 0, eps: f32, _pad1: u32 = 0 };
-        var params = Params{ .n = @intCast(n), .eps = eps };
-        const params_buf = self.createUniformBuf(Params, &params);
+        const params = Params{ .n = @intCast(n), .eps = eps };
+        const params_buf = self.createUniformBuf(Params, params);
         defer self.fn_buffer_destroy(params_buf);
 
         const entries = [_]WGPUBindGroupEntry{
@@ -926,8 +933,8 @@ pub const WebGpuBackend = struct {
         const gate_buf = self.getOrUpload(@ptrCast(gate), size);
 
         const Params = extern struct { n: u32, _pad: [12]u8 = .{0} ** 12 };
-        var params = Params{ .n = @intCast(n) };
-        const params_buf = self.createUniformBuf(Params, &params);
+        const params = Params{ .n = @intCast(n) };
+        const params_buf = self.createUniformBuf(Params, params);
         defer self.fn_buffer_destroy(params_buf);
 
         const entries = [_]WGPUBindGroupEntry{
@@ -949,8 +956,8 @@ pub const WebGpuBackend = struct {
         defer self.releasePooledBuf(out_b_pool.idx);
 
         const Params = extern struct { stride: u32, n_pairs: u32, _pad: [8]u8 = .{0} ** 8 };
-        var params = Params{ .stride = @intCast(stride), .n_pairs = @intCast(n_pairs) };
-        const params_buf = self.createUniformBuf(Params, &params);
+        const params = Params{ .stride = @intCast(stride), .n_pairs = @intCast(n_pairs) };
+        const params_buf = self.createUniformBuf(Params, params);
         defer self.fn_buffer_destroy(params_buf);
 
         const total_elems = n_pairs * stride;
@@ -976,8 +983,8 @@ pub const WebGpuBackend = struct {
         defer self.releasePooledBuf(g_pool.idx);
 
         const Params = extern struct { hd: u32, nh: u32, _pad: [8]u8 = .{0} ** 8 };
-        var params = Params{ .hd = @intCast(head_dim), .nh = @intCast(n_heads) };
-        const params_buf = self.createUniformBuf(Params, &params);
+        const params = Params{ .hd = @intCast(head_dim), .nh = @intCast(n_heads) };
+        const params_buf = self.createUniformBuf(Params, params);
         defer self.fn_buffer_destroy(params_buf);
 
         const entries = [_]WGPUBindGroupEntry{
@@ -1002,8 +1009,8 @@ pub const WebGpuBackend = struct {
         const w_buf = self.getOrUpload(@ptrCast(weight), w_size);
 
         const Params = extern struct { n_heads: u32, head_dim: u32, eps: f32, _pad: u32 = 0 };
-        var params = Params{ .n_heads = @intCast(n_heads), .head_dim = @intCast(head_dim), .eps = eps };
-        const params_buf = self.createUniformBuf(Params, &params);
+        const params = Params{ .n_heads = @intCast(n_heads), .head_dim = @intCast(head_dim), .eps = eps };
+        const params_buf = self.createUniformBuf(Params, params);
         defer self.fn_buffer_destroy(params_buf);
 
         const entries = [_]WGPUBindGroupEntry{
@@ -1122,8 +1129,8 @@ pub const WebGpuBackend = struct {
         defer self.releasePooledBuf(out.idx);
 
         const Params = extern struct { out_dim_val: u32, in_dim_val: u32, _pad: [8]u8 = .{0} ** 8 };
-        var params = Params{ .out_dim_val = @intCast(out_dim), .in_dim_val = @intCast(in_dim) };
-        const params_buf = self.createUniformBuf(Params, &params);
+        const params = Params{ .out_dim_val = @intCast(out_dim), .in_dim_val = @intCast(in_dim) };
+        const params_buf = self.createUniformBuf(Params, params);
         defer self.fn_buffer_destroy(params_buf);
 
         const entries = [_]WGPUBindGroupEntry{
@@ -1136,8 +1143,7 @@ pub const WebGpuBackend = struct {
         self.downloadF32(out.buf, y, out_dim);
     }
 
-    pub fn gemvNvfp4St(self: *WebGpuBackend, x: [*]const f32, w_packed: [*]const u8, w_scales: [*]const u8, global_scale: f32, y: [*]f32, n: usize, k: usize) void {
-        _ = global_scale;
+    pub fn gemvNvfp4St(self: *WebGpuBackend, x: [*]const f32, w_packed: [*]const u8, w_scales: [*]const u8, y: [*]f32, n: usize, k: usize) void {
         const x_sz = k * @sizeOf(f32);
         const w_sz = n * k / 2;
         const s_sz = n * k / 16;
@@ -1380,8 +1386,7 @@ pub const WebGpuBackend = struct {
     pub fn backendInfo(_: *WebGpuBackend) backend_mod.BackendInfo {
         return .{
             .name = "WebGPU",
-            .is_gpu = true,
-            .is_uma = false,
+            .kernel_type = "WGSL",
         };
     }
 };
