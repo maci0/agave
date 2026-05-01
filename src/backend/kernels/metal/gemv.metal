@@ -498,6 +498,42 @@ inline void getScaleMinK4(uint j, device const uchar* q, thread uint& sc, thread
     }
 }
 
+// Standalone block dot function — used by GEMM, megakernel, and tiled GEMV.
+inline float q4_k_block_dot(device const uchar* bp, device const float* x, uint k, uint bk) {
+    float d    = float(as_type<half>(ushort(bp[0] | (uint(bp[1]) << 8))));
+    float dmin = float(as_type<half>(ushort(bp[2] | (uint(bp[3]) << 8))));
+    device const uchar* scales = bp + 4;
+    device const uchar* qs = bp + 16;
+    float sum = 0.0f;
+    for (uint g = 0; g < 4; g++) {
+        uint sc_lo, m_lo, sc_hi, m_hi;
+        getScaleMinK4(g * 2, scales, sc_lo, m_lo);
+        getScaleMinK4(g * 2 + 1, scales, sc_hi, m_hi);
+        float d_lo = d * float(sc_lo), dm_lo = dmin * float(m_lo);
+        float d_hi = d * float(sc_hi), dm_hi = dmin * float(m_hi);
+        uint ql_off = g * 32, gi_lo = bk + g * 64, gi_hi = gi_lo + 32;
+        if (gi_lo + 63 < k) {
+            float q_dot_lo = 0.0f, x_sum_lo = 0.0f;
+            for (uint l = 0; l < 32; l += 4) {
+                float4 xv = *(device const float4*)(x + gi_lo + l);
+                float4 qv = float4(qs[ql_off+l]&0xF, qs[ql_off+l+1]&0xF, qs[ql_off+l+2]&0xF, qs[ql_off+l+3]&0xF);
+                q_dot_lo += dot(xv, qv); x_sum_lo += xv.x+xv.y+xv.z+xv.w;
+            }
+            float q_dot_hi = 0.0f, x_sum_hi = 0.0f;
+            for (uint l = 0; l < 32; l += 4) {
+                float4 xv = *(device const float4*)(x + gi_hi + l);
+                float4 qv = float4(qs[ql_off+l]>>4, qs[ql_off+l+1]>>4, qs[ql_off+l+2]>>4, qs[ql_off+l+3]>>4);
+                q_dot_hi += dot(xv, qv); x_sum_hi += xv.x+xv.y+xv.z+xv.w;
+            }
+            sum += d_lo*q_dot_lo - dm_lo*x_sum_lo + d_hi*q_dot_hi - dm_hi*x_sum_hi;
+        } else {
+            for (uint l = 0; l < 32; l++) { uint gi = gi_lo+l; if (gi >= k) break; sum += x[gi]*(d_lo*float(qs[ql_off+l]&0xF)-dm_lo); }
+            for (uint l = 0; l < 32; l++) { uint gi = gi_hi+l; if (gi >= k) break; sum += x[gi]*(d_hi*float(qs[ql_off+l]>>4)-dm_hi); }
+        }
+    }
+    return sum;
+}
+
 // NR=2: each threadgroup processes 2 output rows, sharing x vector loads.
 // For Q4_K, NR=2 is optimal because each superblock has more work (144 bytes,
 // 4 sub-groups) than Q8_0 (34 bytes), so 2 rows saturate the ALU better than 4.
