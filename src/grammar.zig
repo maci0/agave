@@ -118,7 +118,7 @@ pub const Grammar = struct {
 
     /// Strip BPE byte-level encoding prefix to get actual text.
     /// Qwen/GPT uses Ġ (0xC4 0xA0) for space, Ċ (0xC4 0x8A) for newline, etc.
-    fn getEffectiveText(text: []const u8) []const u8 {
+    pub fn getEffectiveText(text: []const u8) []const u8 {
         if (text.len >= 2 and text[0] == 0xC4) {
             // Ġ = space prefix (0xC4 0xA0), Ċ = newline (0xC4 0x8A)
             return text[2..];

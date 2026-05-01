@@ -338,6 +338,7 @@ const cli_specs = [_]cli_mod.ArgSpec{
     .{ .long = "seed", .kind = .option, .help = "Random seed for sampling [default: random]." },
     .{ .long = "grammar", .kind = .option, .help = "GBNF grammar file for constrained decoding." },
     .{ .long = "grammar-string", .kind = .option, .help = "Inline GBNF grammar string." },
+    .{ .long = "json-output", .kind = .flag, .help = "Force valid JSON object output via grammar constraint." },
     .{ .long = "system", .kind = .option, .help = "System prompt for chat formatting." },
     // Backend & model
     .{ .long = "backend", .kind = .option, .help = "Compute backend: auto, cpu, metal, vulkan, cuda, rocm, webgpu [default: auto]." },
@@ -394,6 +395,7 @@ const CliArgs = struct {
     repeat_penalty: f32,
     grammar_path: ?[]const u8,
     grammar_string: ?[]const u8,
+    json_output: bool,
     system_prompt: ?[]const u8,
     backend_choice: BackendChoice,
     ctx_size: u32,
@@ -691,6 +693,7 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
         .repeat_penalty = repeat_penalty,
         .grammar_path = grammar_path,
         .grammar_string = grammar_string,
+        .json_output = res.flag("json-output"),
         .system_prompt = res.option("system"),
         .backend_choice = backend_choice,
         .ctx_size = res.optionU32("ctx-size") orelse 0,
@@ -2234,7 +2237,12 @@ fn generateAndPrintInner(
     // Grammar-constrained decoding
     var grammar: ?grammar_mod.Grammar = null;
     var grammar_state: ?grammar_mod.GrammarState = null;
-    if (cli.grammar_string) |gs| {
+    var json_depth: i32 = 0;
+    const json_mode_active = cli.json_output;
+    if (json_mode_active) {
+        // JSON mode uses brace-depth tracking instead of GBNF grammar
+        // Force first token to contain '{', stop when depth returns to 0
+    } else if (cli.grammar_string) |gs| {
         grammar = grammar_mod.Grammar.parse(allocator, gs) catch null;
         if (grammar) |*g| grammar_state = g.initState();
     } else if (cli.grammar_path) |_| {
@@ -2247,14 +2255,24 @@ fn generateAndPrintInner(
     if (token_ids.len > 0) {
         const first_logits = mdl.getLogits();
         // Grammar masking for first token
+        // Grammar masking
         if (grammar_state) |*gs| {
             if (!gs.isComplete()) {
                 gs.grammar.maskLogits(gs, first_logits, tok.id_to_token.items);
             }
         }
+        // JSON mode: force first token to start with {
+        if (json_mode_active) {
+            const vocab_texts = tok.id_to_token.items;
+            for (first_logits, 0..) |*logit, tid| {
+                if (tid >= vocab_texts.len) break;
+                const t = grammar_mod.Grammar.getEffectiveText(vocab_texts[tid]);
+                if (t.len == 0 or t[0] != '{') logit.* = -std.math.inf(f32);
+            }
+        }
         if (use_sampling) {
             first_gen_token = math_ops.sampleToken(first_logits, cli.temperature, cli.top_k, cli.top_p, prng.random());
-        } else if (grammar_state != null) {
+        } else if (grammar_state != null or json_mode_active) {
             first_gen_token = math_ops.argmax(first_logits);
         }
         // Update grammar state with first accepted token
@@ -2262,6 +2280,15 @@ fn generateAndPrintInner(
             const tok_slice = [1]u32{first_gen_token};
             const text = tok.decode(&tok_slice) catch "";
             gs.acceptToken(text);
+        }
+        // Track JSON brace depth
+        if (json_mode_active) {
+            const tok_slice = [1]u32{first_gen_token};
+            const text = tok.decode(&tok_slice) catch "";
+            for (text) |c| {
+                if (c == '{' or c == '[') json_depth += 1;
+                if (c == '}' or c == ']') json_depth -= 1;
+            }
         }
     }
 
@@ -2331,6 +2358,20 @@ fn generateAndPrintInner(
             const text = tok.decode(&tok_slice) catch "";
             gs.acceptToken(text);
             if (gs.isComplete()) {
+                hit_eog = true;
+                token_count += 1;
+                break;
+            }
+        }
+        // Track JSON brace depth and stop at balanced close
+        if (json_mode_active) {
+            const tok_slice2 = [1]u32{next};
+            const text2 = tok.decode(&tok_slice2) catch "";
+            for (text2) |c| {
+                if (c == '{' or c == '[') json_depth += 1;
+                if (c == '}' or c == ']') json_depth -= 1;
+            }
+            if (json_depth <= 0) {
                 hit_eog = true;
                 token_count += 1;
                 break;
