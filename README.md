@@ -31,6 +31,7 @@
 - **Interactive REPL**: Multi-turn chat with `/help`, `/clear`, `/stats`, `/model`, `/quit`
 - **HTTP Server**: OpenAI + Anthropic API compatible, built-in chat UI, Prometheus metrics, rate limiting
 - **Multimodal Vision**: Image understanding via Gemma 4 SigLIP-2 and Gemma 3 SigLIP vision encoders — image upload via CLI (`--image`) and HTTP API
+- **Structured Output**: GBNF grammar-constrained decoding (`--grammar-string`, `--grammar`), JSON mode (`--json-output`), server `response_format: json_object`
 - **Batched Prefill**: Chunked GEMM + fused FlashAttention-2 for fast prompt processing
 - **~183 tok/s** on Qwen3.5 0.8B Q8_0 (Metal, Apple Silicon M4 Pro), **1.2-1.7x faster than llama.cpp on Q8_0** (Q4_K performance is a [known gap](docs/TODO.md#performance) — active optimization target)
 
@@ -76,6 +77,13 @@ zig build
 
 # Override recipe defaults (user flags always win)
 ./zig-out/bin/agave model.gguf -t 0.9 --top-p 0.95 "Tell me a story"
+
+# Structured output: force JSON
+./zig-out/bin/agave model.gguf --json-output "Generate a user profile with name and age"
+
+# Grammar-constrained decoding (GBNF format)
+./zig-out/bin/agave model.gguf --grammar-string 'root ::= "yes" | "no"' "Is the sky blue?"
+./zig-out/bin/agave model.gguf --grammar grammar.gbnf "Generate structured data"
 ```
 
 ## Supported Models
