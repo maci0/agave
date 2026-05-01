@@ -60,7 +60,7 @@ All correctness-critical kernels are implemented as native GPU compute shaders a
 | # | Feature | Status | Notes |
 |---|---------|--------|-------|
 | 1 | Tensor/Pipeline parallelism | Design only | `docs/PARALLELISM.md` has 24-section design doc, no code |
-| 2 | Structured output / grammar-constrained decoding | Not started | Design sketched in IDEAS.md |
+| 2 | Structured output / grammar-constrained decoding | Partial | GBNF parser + CLI `--grammar-string` + logit masking wired. State machine needs repetition/alternation refinement |
 | 3 | TriAttention Phase 3 | Not started | Dynamic budget, auto-tune, calibration data generator |
 | 4 | Native GPU tree SDPA for CUDA/ROCm/Vulkan | Not started | Metal done (f32 + turbo), others still CPU fallback |
 | 5 | Batch `forwardTree()` | Disabled | Correctness bug, disabled at `src/models/gemma3.zig` |
