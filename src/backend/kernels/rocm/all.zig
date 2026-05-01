@@ -48,6 +48,7 @@ comptime {
     _ = @import("gemv_mxfp4_st.zig");
 
     _ = @import("deltanet_recurrence.zig");
+    _ = @import("sdpa_tree.zig");
 
     // True megakernels
     _ = @import("mega_qwen35_q8.zig");

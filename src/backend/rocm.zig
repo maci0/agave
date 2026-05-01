@@ -142,6 +142,7 @@ pub const RocmBackend = struct {
     fn_rms_norm_multi: HipFunction = null,
     fn_sdpa: HipFunction = null,
     fn_sdpa_turbo: HipFunction = null,
+    fn_sdpa_tree: HipFunction = null,
     fn_sigmoid_mul: HipFunction = null,
     fn_silu_mul: HipFunction = null,
     fn_deinterleave: HipFunction = null,
@@ -290,6 +291,7 @@ pub const RocmBackend = struct {
         self.fn_rms_norm_multi = try self.getFunction(hipModuleGetFunction, "rms_norm_multi_kernel"); // loaded but rmsNormMulti() panics — GPU kernel not yet validated
         self.fn_sdpa = try self.getFunction(hipModuleGetFunction, "sdpa_kernel");
         self.fn_sdpa_turbo = try self.getFunction(hipModuleGetFunction, "sdpa_turbo_kernel");
+        self.fn_sdpa_tree = try self.getFunction(hipModuleGetFunction, "sdpa_tree_kernel");
         self.fn_sigmoid_mul = try self.getFunction(hipModuleGetFunction, "sigmoid_mul_kernel");
         self.fn_silu_mul = try self.getFunction(hipModuleGetFunction, "silu_mul_kernel");
         self.fn_deinterleave = try self.getFunction(hipModuleGetFunction, "deinterleave_kernel");
@@ -1190,7 +1192,33 @@ pub const RocmBackend = struct {
         for (0..n_tok) |t| self.rope(x + t * stride, positions[t], n_heads, head_dim, rope_dim, theta);
     }
 
-    pub fn sdpaTree(_: *RocmBackend, q_all: [*]const f32, prefix_keys: [*]const u8, prefix_values: [*]const u8, tree_keys: [*]const f32, tree_values: [*]const f32, output: [*]f32, ancestor_masks: [*]const [8]u64, nh: usize, nkv: usize, hd: usize, prefix_len: usize, n_nodes: u32, scale: f32, kv_type_k: KvQuantType, kv_type_v: KvQuantType) void {
+    pub fn sdpaTree(self: *RocmBackend, q_all: [*]const f32, prefix_keys: [*]const u8, prefix_values: [*]const u8, tree_keys: [*]const f32, tree_values: [*]const f32, output: [*]f32, ancestor_masks: [*]const [8]u64, nh: usize, nkv: usize, hd: usize, prefix_len: usize, n_nodes: u32, scale: f32, kv_type_k: KvQuantType, kv_type_v: KvQuantType) void {
+        if (kv_type_k == .f32 and kv_type_v == .f32 and n_nodes > 0) {
+            self.flushActivations();
+            const kvd = nkv * hd;
+            var d_q = self.getInputBuf(q_all, n_nodes * nh * hd * @sizeOf(f32));
+            var d_pk = self.getInputBuf(@as([*]const f32, @ptrCast(@alignCast(prefix_keys))), prefix_len * kvd * @sizeOf(f32));
+            var d_pv = self.getInputBuf(@as([*]const f32, @ptrCast(@alignCast(prefix_values))), prefix_len * kvd * @sizeOf(f32));
+            var d_tk = self.getInputBuf(tree_keys, n_nodes * kvd * @sizeOf(f32));
+            var d_tv = self.getInputBuf(tree_values, n_nodes * kvd * @sizeOf(f32));
+            var d_out = self.getOutputBuf(output, n_nodes * nh * hd * @sizeOf(f32));
+            var d_masks = self.getInputBuf(@as([*]const u64, @ptrCast(ancestor_masks)), n_nodes * 8 * @sizeOf(u64));
+            var nh_u: u32 = @intCast(nh);
+            var nkv_u: u32 = @intCast(nkv);
+            var hd_u: u32 = @intCast(hd);
+            var pl_u: u32 = @intCast(prefix_len);
+            var nn_u: u32 = n_nodes;
+            var sc: f32 = scale;
+            var params = [_]?*anyopaque{
+                @ptrCast(&d_q),     @ptrCast(&d_pk), @ptrCast(&d_pv),
+                @ptrCast(&d_tk),    @ptrCast(&d_tv), @ptrCast(&d_out),
+                @ptrCast(&d_masks), @ptrCast(&nh_u), @ptrCast(&nkv_u),
+                @ptrCast(&hd_u),    @ptrCast(&pl_u), @ptrCast(&nn_u),
+                @ptrCast(&sc),
+            };
+            self.launch(self.fn_sdpa_tree, n_nodes * @as(u32, @intCast(nh)), block_size, reduction_smem, &params);
+            return;
+        }
         @import("kernels/cpu/sdpa_tree.zig").sdpaTree(q_all, prefix_keys, prefix_values, tree_keys, tree_values, output, ancestor_masks, nh, nkv, hd, prefix_len, n_nodes, scale, kv_type_k, kv_type_v);
     }
 

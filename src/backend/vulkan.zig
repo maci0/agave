@@ -518,6 +518,7 @@ const spv_gemv_mxfp4_st = @embedFile("kernels/vulkan/gemv_mxfp4_st.spv");
 
 // DeltaNet SSM
 const spv_deltanet = @embedFile("kernels/vulkan/deltanet_recurrence.spv");
+const spv_sdpa_tree = @embedFile("kernels/vulkan/sdpa_tree.spv");
 
 // Attention
 const spv_sdpa = @embedFile("kernels/vulkan/sdpa.spv");
@@ -614,6 +615,7 @@ pub const VulkanBackend = struct {
     // SSM (State Space Model) pipelines
     pipe_conv1d: PipelineInfo = .{},
     pipe_deltanet: PipelineInfo = .{},
+    pipe_sdpa_tree: PipelineInfo = .{},
 
     /// Device name retrieved from VkPhysicalDeviceProperties (e.g., "Apple M4 Pro").
     device_name: [256]u8 = undefined,
@@ -1043,6 +1045,8 @@ pub const VulkanBackend = struct {
         self.pipe_conv1d = try self.createPipeline(spv_conv1d, 5, 12);
         // DeltaNet recurrence: 9 bufs, 24 bytes push (6 x u32/f32)
         self.pipe_deltanet = try self.createPipeline(spv_deltanet, 9, 24);
+        // sdpaTree: 7 bufs, 24 bytes push (nh, nkv, hd, prefix_len, n_nodes, scale)
+        self.pipe_sdpa_tree = try self.createPipeline(spv_sdpa_tree, 7, 24);
 
         return self;
     }
@@ -1909,7 +1913,41 @@ pub const VulkanBackend = struct {
         for (0..n_tok) |t| self.rope(x + t * stride, positions[t], n_heads, head_dim, rope_dim, theta);
     }
 
-    pub fn sdpaTree(_: *VulkanBackend, q_all: [*]const f32, prefix_keys: [*]const u8, prefix_values: [*]const u8, tree_keys: [*]const f32, tree_values: [*]const f32, output: [*]f32, ancestor_masks: [*]const [8]u64, nh: usize, nkv: usize, hd: usize, prefix_len: usize, n_nodes: u32, scale: f32, kv_type_k: KvQuantType, kv_type_v: KvQuantType) void {
+    pub fn sdpaTree(self: *VulkanBackend, q_all: [*]const f32, prefix_keys: [*]const u8, prefix_values: [*]const u8, tree_keys: [*]const f32, tree_values: [*]const f32, output: [*]f32, ancestor_masks: [*]const [8]u64, nh: usize, nkv: usize, hd: usize, prefix_len: usize, n_nodes: u32, scale: f32, kv_type_k: KvQuantType, kv_type_v: KvQuantType) void {
+        if (kv_type_k == .f32 and kv_type_v == .f32 and n_nodes > 0) {
+            const kvd = nkv * hd;
+            const q_sz = n_nodes * nh * hd * @sizeOf(f32);
+            const kv_sz = prefix_len * kvd * @sizeOf(f32);
+            const tk_sz = n_nodes * kvd * @sizeOf(f32);
+            const mask_sz = n_nodes * 8 * @sizeOf(u64);
+            const q_pool = self.getPooledBuf(q_sz);
+            defer self.releasePooledBuf(q_pool);
+            const pk_pool = self.getPooledBuf(kv_sz);
+            defer self.releasePooledBuf(pk_pool);
+            const pv_pool = self.getPooledBuf(kv_sz);
+            defer self.releasePooledBuf(pv_pool);
+            const tk_pool = self.getPooledBuf(tk_sz);
+            defer self.releasePooledBuf(tk_pool);
+            const tv_pool = self.getPooledBuf(tk_sz);
+            defer self.releasePooledBuf(tv_pool);
+            const o_pool = self.getPooledBuf(q_sz);
+            defer self.releasePooledBuf(o_pool);
+            const m_pool = self.getPooledBuf(mask_sz);
+            defer self.releasePooledBuf(m_pool);
+            self.uploadBuffer(q_pool.mem, @ptrCast(q_all), q_sz);
+            self.uploadBuffer(pk_pool.mem, @ptrCast(prefix_keys), kv_sz);
+            self.uploadBuffer(pv_pool.mem, @ptrCast(prefix_values), kv_sz);
+            self.uploadBuffer(tk_pool.mem, @ptrCast(tree_keys), tk_sz);
+            self.uploadBuffer(tv_pool.mem, @ptrCast(tree_values), tk_sz);
+            self.uploadBuffer(m_pool.mem, @ptrCast(ancestor_masks), mask_sz);
+            const Params = extern struct { nh_v: u32, nkv_v: u32, hd_v: u32, prefix_len_v: u32, n_nodes_v: u32, scale_v: f32 };
+            const params = Params{ .nh_v = @intCast(nh), .nkv_v = @intCast(nkv), .hd_v = @intCast(hd), .prefix_len_v = @intCast(prefix_len), .n_nodes_v = n_nodes, .scale_v = scale };
+            const bufs = [_]VkBuffer{ q_pool.buf, pk_pool.buf, pv_pool.buf, tk_pool.buf, tv_pool.buf, o_pool.buf, m_pool.buf };
+            const sizes = [_]usize{ q_sz, kv_sz, kv_sz, tk_sz, tk_sz, q_sz, mask_sz };
+            self.dispatch(self.pipe_sdpa_tree, &bufs, &sizes, @ptrCast(&params), @sizeOf(Params), @intCast(n_nodes * nh));
+            self.downloadF32(o_pool.mem, output, n_nodes * nh * hd);
+            return;
+        }
         @import("kernels/cpu/sdpa_tree.zig").sdpaTree(q_all, prefix_keys, prefix_values, tree_keys, tree_values, output, ancestor_masks, nh, nkv, hd, prefix_len, n_nodes, scale, kv_type_k, kv_type_v);
     }
 

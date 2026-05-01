@@ -1,0 +1,146 @@
+#version 450
+#extension GL_KHR_shader_subgroup_arithmetic : require
+
+layout(local_size_x = 256) in;
+
+layout(set = 0, binding = 0) readonly buffer Q { float q_all[]; };
+layout(set = 0, binding = 1) readonly buffer PK { float prefix_k[]; };
+layout(set = 0, binding = 2) readonly buffer PV { float prefix_v[]; };
+layout(set = 0, binding = 3) readonly buffer TK { float tree_k[]; };
+layout(set = 0, binding = 4) readonly buffer TV { float tree_v[]; };
+layout(set = 0, binding = 5) buffer Out { float out_buf[]; };
+layout(set = 0, binding = 6) readonly buffer Masks { uvec2 ancestor_masks[]; };
+
+layout(push_constant) uniform Params {
+    uint nh;
+    uint nkv;
+    uint hd;
+    uint prefix_len;
+    uint n_nodes;
+    float scale;
+};
+
+shared float sdata[8];
+
+void main() {
+    uint flat_id = gl_WorkGroupID.x;
+    uint tid = gl_LocalInvocationID.x;
+    uint tg_sz = gl_WorkGroupSize.x;
+
+    uint node_i = flat_id / nh;
+    uint h = flat_id % nh;
+    if (node_i >= n_nodes || h >= nh) return;
+
+    uint hpg = nh / nkv;
+    uint kvh = h / hpg;
+    uint kvd = nkv * hd;
+    uint q_base = node_i * nh * hd + h * hd;
+
+    float m_i = -3.402823466e+38;
+    float l_i = 0.0;
+
+    // Phase 1: Prefix blocks
+    uint prefix_blocks = (prefix_len + 15u) / 16u;
+    for (uint block = 0u; block < prefix_blocks; block++) {
+        uint block_start = block * 16u;
+        uint block_len = min(16u, prefix_len - block_start);
+
+        // Compute scores
+        float block_max = -3.402823466e+38;
+        float score_local = -3.402823466e+38;
+        if (tid < block_len) {
+            uint t_global = block_start + tid;
+            uint k_base = t_global * kvd + kvh * hd;
+            float dot_val = 0.0;
+            for (uint d = 0u; d < hd; d++) dot_val += q_all[q_base + d] * prefix_k[k_base + d];
+            score_local = dot_val * scale;
+            block_max = score_local;
+        }
+        block_max = subgroupMax(block_max);
+        uint sg_id = gl_SubgroupID;
+        uint sg_lane = gl_SubgroupInvocationID;
+        if (sg_lane == 0u) sdata[sg_id] = block_max;
+        barrier();
+        uint num_sg = (tg_sz + gl_SubgroupSize - 1u) / gl_SubgroupSize;
+        if (tid < num_sg) block_max = sdata[tid]; else block_max = -3.402823466e+38;
+        if (tid < gl_SubgroupSize) { block_max = subgroupMax(block_max); if (tid == 0u) sdata[0] = block_max; }
+        barrier();
+        float m_new = sdata[0];
+
+        float m_prev = m_i;
+        m_i = max(m_i, m_new);
+        float rescale = exp(m_prev - m_i);
+        l_i *= rescale;
+
+        float block_sum = 0.0;
+        float w = 0.0;
+        if (tid < block_len) {
+            w = exp(score_local - m_i);
+            block_sum = w;
+        }
+        block_sum = subgroupAdd(block_sum);
+        if (sg_lane == 0u) sdata[sg_id] = block_sum;
+        barrier();
+        if (tid < num_sg) block_sum = sdata[tid]; else block_sum = 0.0;
+        if (tid < gl_SubgroupSize) { block_sum = subgroupAdd(block_sum); if (tid == 0u) sdata[0] = block_sum; }
+        barrier();
+        l_i += sdata[0];
+
+        // V accumulate (all threads cooperate on head_dim)
+        for (uint t = 0u; t < block_len; t++) {
+            // Broadcast weight for token t
+            float wt = 0.0;
+            if (t < 16u) {
+                // Only thread t computed this weight
+                // Need shared memory broadcast — simplified: recompute
+                uint t_global = block_start + t;
+                uint k_base = t_global * kvd + kvh * hd;
+                float dot_val = 0.0;
+                for (uint d = 0u; d < hd; d++) dot_val += q_all[q_base + d] * prefix_k[k_base + d];
+                wt = exp(dot_val * scale - m_i);
+            }
+            if (wt < 1e-6) continue;
+            uint v_base = (block_start + t) * kvd + kvh * hd;
+            for (uint d = tid; d < hd; d += tg_sz) {
+                out_buf[node_i * nh * hd + h * hd + d] += wt * prefix_v[v_base + d] * rescale;
+            }
+        }
+    }
+
+    // Phase 2: Tree nodes
+    for (uint j = 0u; j < n_nodes; j++) {
+        uint mask_idx = node_i * 8u + j / 64u;
+        uvec2 mask_pair = ancestor_masks[mask_idx];
+        uint word = (j % 64u < 32u) ? mask_pair.x : mask_pair.y;
+        uint bit = j % 32u;
+        if ((word & (1u << bit)) == 0u) continue;
+
+        float dot_val = 0.0;
+        if (tid == 0u) {
+            for (uint d = 0u; d < hd; d++) dot_val += q_all[q_base + d] * tree_k[j * kvd + kvh * hd + d];
+            sdata[0] = dot_val * scale;
+        }
+        barrier();
+        float tree_score = sdata[0];
+
+        float m_prev = m_i;
+        m_i = max(m_i, tree_score);
+        float resc = exp(m_prev - m_i);
+        l_i *= resc;
+
+        float wt = exp(tree_score - m_i);
+        l_i += wt;
+
+        for (uint d = tid; d < hd; d += tg_sz) {
+            uint out_idx = node_i * nh * hd + h * hd + d;
+            out_buf[out_idx] = out_buf[out_idx] * resc + wt * tree_v[j * kvd + kvh * hd + d];
+        }
+    }
+
+    // Normalize
+    float inv_l = (l_i > 0.0) ? (1.0 / l_i) : 0.0;
+    for (uint d = tid; d < hd; d += tg_sz) {
+        uint out_idx = node_i * nh * hd + h * hd + d;
+        out_buf[out_idx] *= inv_l;
+    }
+}

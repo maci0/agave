@@ -192,6 +192,7 @@ pub const CudaBackend = struct {
     fn_fused_ffn_q8: CUfunction = null,
     fn_sdpa: CUfunction = null,
     fn_sdpa_turbo: CUfunction = null,
+    fn_sdpa_tree: CUfunction = null,
     fn_sdpa_prefill: CUfunction = null,
     fn_gemm_q8_0: CUfunction = null,
     fn_rms_norm_batched: CUfunction = null,
@@ -421,6 +422,7 @@ pub const CudaBackend = struct {
         self.fn_fused_ffn_q8 = try self.getFunction("fused_ffn_gate_up_silu_q8_0_kernel");
         self.fn_sdpa = try self.getFunction("sdpa_kernel");
         self.fn_sdpa_turbo = try self.getFunction("sdpa_turbo_kernel");
+        self.fn_sdpa_tree = try self.getFunction("sdpa_tree_kernel");
         self.fn_sdpa_prefill = try self.getFunction("sdpa_prefill_kernel");
         self.fn_gemm_q8_0 = try self.getFunction("gemm_q8_0_kernel");
         self.fn_rms_norm_batched = try self.getFunction("rms_norm_batched_kernel");
@@ -1613,7 +1615,32 @@ pub const CudaBackend = struct {
     /// Prefill SDPA — FlashAttention-2 with causal masking.
     /// Attends to both cached KV (prev_len positions) and new KV (n_tok positions).
     /// For f32 KV: native FA2 GPU kernel (single dispatch for all tokens).
-    pub fn sdpaTree(_: *CudaBackend, q_all: [*]const f32, prefix_keys: [*]const u8, prefix_values: [*]const u8, tree_keys: [*]const f32, tree_values: [*]const f32, output: [*]f32, ancestor_masks: [*]const [8]u64, nh: usize, nkv: usize, hd: usize, prefix_len: usize, n_nodes: u32, scale: f32, kv_type_k: KvQuantType, kv_type_v: KvQuantType) void {
+    pub fn sdpaTree(self: *CudaBackend, q_all: [*]const f32, prefix_keys: [*]const u8, prefix_values: [*]const u8, tree_keys: [*]const f32, tree_values: [*]const f32, output: [*]f32, ancestor_masks: [*]const [8]u64, nh: usize, nkv: usize, hd: usize, prefix_len: usize, n_nodes: u32, scale: f32, kv_type_k: KvQuantType, kv_type_v: KvQuantType) void {
+        if (kv_type_k == .f32 and kv_type_v == .f32 and n_nodes > 0) {
+            const kvd = nkv * hd;
+            var d_q = self.getInputBuf(q_all, n_nodes * nh * hd * @sizeOf(f32));
+            var d_pk = self.getInputBuf(@as([*]const f32, @ptrCast(@alignCast(prefix_keys))), prefix_len * kvd * @sizeOf(f32));
+            var d_pv = self.getInputBuf(@as([*]const f32, @ptrCast(@alignCast(prefix_values))), prefix_len * kvd * @sizeOf(f32));
+            var d_tk = self.getInputBuf(tree_keys, n_nodes * kvd * @sizeOf(f32));
+            var d_tv = self.getInputBuf(tree_values, n_nodes * kvd * @sizeOf(f32));
+            var d_out = self.getOutputBuf(output, n_nodes * nh * hd * @sizeOf(f32));
+            var d_masks = self.getInputBuf(@as([*]const u64, @ptrCast(ancestor_masks)), n_nodes * 8 * @sizeOf(u64));
+            var nh_u: u32 = @intCast(nh);
+            var nkv_u: u32 = @intCast(nkv);
+            var hd_u: u32 = @intCast(hd);
+            var pl_u: u32 = @intCast(prefix_len);
+            var nn_u: u32 = n_nodes;
+            var sc: f32 = scale;
+            var params = [_]?*anyopaque{
+                @ptrCast(&d_q),     @ptrCast(&d_pk), @ptrCast(&d_pv),
+                @ptrCast(&d_tk),    @ptrCast(&d_tv), @ptrCast(&d_out),
+                @ptrCast(&d_masks), @ptrCast(&nh_u), @ptrCast(&nkv_u),
+                @ptrCast(&hd_u),    @ptrCast(&pl_u), @ptrCast(&nn_u),
+                @ptrCast(&sc),
+            };
+            self.launch(self.fn_sdpa_tree, n_nodes * @as(u32, @intCast(nh)), block_size, reduction_smem, &params);
+            return;
+        }
         @import("kernels/cpu/sdpa_tree.zig").sdpaTree(q_all, prefix_keys, prefix_values, tree_keys, tree_values, output, ancestor_masks, nh, nkv, hd, prefix_len, n_nodes, scale, kv_type_k, kv_type_v);
     }
 
