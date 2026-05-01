@@ -2245,8 +2245,23 @@ fn generateAndPrintInner(
     } else if (cli.grammar_string) |gs| {
         grammar = grammar_mod.Grammar.parse(allocator, gs) catch null;
         if (grammar) |*g| grammar_state = g.initState();
-    } else if (cli.grammar_path) |_| {
-        eprint("Error: --grammar file loading not yet supported, use --grammar-string\n", .{});
+    } else if (cli.grammar_path) |path| {
+        const gf = Io.Dir.cwd().openFile(g_io, path, .{}) catch |err| blk: {
+            eprint("Error: could not open grammar file '{s}': {}\n", .{ path, err });
+            break :blk null;
+        };
+        if (gf) |file| {
+            defer file.close(g_io);
+            const stat = file.stat(g_io) catch null;
+            if (stat) |s| {
+                const buf = allocator.alloc(u8, s.size) catch null;
+                if (buf) |b| {
+                    _ = file.readPositionalAll(g_io, b, 0) catch {};
+                    grammar = grammar_mod.Grammar.parse(allocator, b) catch null;
+                    if (grammar) |*g| grammar_state = g.initState();
+                }
+            }
+        }
     }
     defer {
         if (grammar_state) |*gs| gs.deinit();
