@@ -214,6 +214,8 @@ agave [OPTIONS] <model> [prompt]
       --backend <BE>       auto, cpu, metal, vulkan, cuda, rocm, webgpu [default: auto]
       --ctx-size <N>       Context window size [default: min(model, 4096), 0 = model max]
       --seed <N>           Random seed for sampling [default: random]
+      --grammar-string <G> GBNF grammar for constrained decoding
+      --json-output        Force valid JSON object output
       --kv-type <TYPE>     KV cache quantization: f32, f16, q8_0/q8, int8/i8, fp8/fp8_e4m3, nvfp4/fp4, turbo2/tq2, turbo3/tq3, turbo4/tq4 [default: f16]
       --kv-tiers <TIERS>   Enable tiered KV cache: vram+ram, vram+ram+ssd [default: off]
       --kv-ram-budget <GB> RAM tier budget in GB, requires --kv-tiers [default: 50% of free RAM]

@@ -24,6 +24,7 @@ pub const SamplingParams = struct {
     temperature: f32 = 0,
     top_k: u32 = 0,
     top_p: f32 = 1.0,
+    json_mode: bool = false,
 };
 
 /// Result of extracting messages from an OpenAI/Anthropic-format JSON body.
@@ -167,10 +168,15 @@ pub fn parseSampling(body: []const u8) SamplingParams {
     const raw_temp = extractFloatField(body, "temperature") orelse 0;
     const raw_top_p = extractFloatField(body, "top_p") orelse 1.0;
     const raw_top_k = extractIntField(body, "top_k") orelse 0;
+    const json_mode = if (extractField(body, "response_format")) |rf|
+        std.mem.indexOf(u8, rf, "json_object") != null
+    else
+        false;
     return .{
         .temperature = if (std.math.isFinite(raw_temp)) std.math.clamp(raw_temp, 0, max_temperature) else 0,
         .top_k = @intCast(@min(raw_top_k, max_top_k)),
         .top_p = if (std.math.isFinite(raw_top_p)) std.math.clamp(raw_top_p, 0, 1.0) else 1.0,
+        .json_mode = json_mode,
     };
 }
 
