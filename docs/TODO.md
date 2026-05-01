@@ -2,7 +2,7 @@
 
 Comprehensive list of bugs, missing features, and improvement opportunities.
 
-**Last updated**: 2026-04-29
+**Last updated**: 2026-05-01
 
 ---
 
@@ -22,7 +22,7 @@ All correctness-critical kernels are implemented as native GPU compute shaders a
 |---------|:-------:|-------|
 | CUDA | 0 | Complete |
 | Metal | 0 | Complete |
-| WebGPU | 0 | Complete (f32 KV only for SDPA) |
+| WebGPU | 0 | Complete — verified correct output (Qwen 3.5 0.8B Q8_0) |
 | Vulkan | 0 | Complete |
 | ROCm | 1 | megakernel_gemma_q4k (performance optimization only) |
 
@@ -49,8 +49,9 @@ All correctness-critical kernels are implemented as native GPU compute shaders a
 | # | Issue | Impact | Status |
 |---|-------|--------|--------|
 | 1 | Q4_K Metal GEMV slower than llama.cpp | Primary decode bottleneck on quantized models | Optimized — group-level x register preload, needs benchmarking |
-| 2 | Gemma 4 E4B CPU prefill ~60s | Very slow, 42 layers with 4.5GB model | Open |
-| 3 | NVFP4 model accuracy lower than MLX-4bit | May be community quantization quality, not agave bug | Open |
+| 2 | WebGPU decode 0.7 tok/s | Synchronous per-op dispatch overhead | Open — needs batched command encoding |
+| 3 | Gemma 4 E4B CPU prefill ~60s | Very slow, 42 layers with 4.5GB model | Open |
+| 4 | NVFP4 model accuracy lower than MLX-4bit | May be community quantization quality, not agave bug | Open |
 
 ---
 
@@ -80,6 +81,4 @@ All correctness-critical kernels are implemented as native GPU compute shaders a
 
 ## Documentation
 
-| # | Issue | Status |
-|---|-------|--------|
 No open documentation issues.
