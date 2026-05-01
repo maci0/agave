@@ -165,6 +165,42 @@ const WGPUDeviceDescriptor = extern struct {
     uncaptured_error_callback_info: WGPUUncapturedErrorCallbackInfo = .{},
 };
 
+const WGPULimits = extern struct {
+    nextInChain: ?*anyopaque = null,
+    maxTextureDimension1D: u32 = std.math.maxInt(u32),
+    maxTextureDimension2D: u32 = std.math.maxInt(u32),
+    maxTextureDimension3D: u32 = std.math.maxInt(u32),
+    maxTextureArrayLayers: u32 = std.math.maxInt(u32),
+    maxBindGroups: u32 = std.math.maxInt(u32),
+    maxBindGroupsPlusVertexBuffers: u32 = std.math.maxInt(u32),
+    maxBindingsPerBindGroup: u32 = std.math.maxInt(u32),
+    maxDynamicUniformBuffersPerPipelineLayout: u32 = std.math.maxInt(u32),
+    maxDynamicStorageBuffersPerPipelineLayout: u32 = std.math.maxInt(u32),
+    maxSampledTexturesPerShaderStage: u32 = std.math.maxInt(u32),
+    maxSamplersPerShaderStage: u32 = std.math.maxInt(u32),
+    maxStorageBuffersPerShaderStage: u32 = std.math.maxInt(u32),
+    maxStorageTexturesPerShaderStage: u32 = std.math.maxInt(u32),
+    maxUniformBuffersPerShaderStage: u32 = std.math.maxInt(u32),
+    maxUniformBufferBindingSize: u64 = std.math.maxInt(u64),
+    maxStorageBufferBindingSize: u64 = std.math.maxInt(u64),
+    minUniformBufferOffsetAlignment: u32 = std.math.maxInt(u32),
+    minStorageBufferOffsetAlignment: u32 = std.math.maxInt(u32),
+    maxVertexBuffers: u32 = std.math.maxInt(u32),
+    maxBufferSize: u64 = std.math.maxInt(u64),
+    maxVertexAttributes: u32 = std.math.maxInt(u32),
+    maxVertexBufferArrayStride: u32 = std.math.maxInt(u32),
+    maxInterStageShaderVariables: u32 = std.math.maxInt(u32),
+    maxColorAttachments: u32 = std.math.maxInt(u32),
+    maxColorAttachmentBytesPerSample: u32 = std.math.maxInt(u32),
+    maxComputeWorkgroupStorageSize: u32 = std.math.maxInt(u32),
+    maxComputeInvocationsPerWorkgroup: u32 = std.math.maxInt(u32),
+    maxComputeWorkgroupSizeX: u32 = std.math.maxInt(u32),
+    maxComputeWorkgroupSizeY: u32 = std.math.maxInt(u32),
+    maxComputeWorkgroupSizeZ: u32 = std.math.maxInt(u32),
+    maxComputeWorkgroupsPerDimension: u32 = std.math.maxInt(u32),
+    maxImmediateSize: u32 = std.math.maxInt(u32),
+};
+
 const WGPUBufferDescriptor = extern struct {
     next_in_chain: ?*anyopaque = null,
     label: WGPUStringView = .{},
@@ -436,7 +472,14 @@ pub const WebGpuBackend = struct {
     fn requestDevice(self: *WebGpuBackend) !void {
         const DeviceCtx = struct { device: WGPUDevice = null, ready: bool = false };
         var ctx = DeviceCtx{};
-        const desc = WGPUDeviceDescriptor{};
+        var limits = WGPULimits{
+            .maxBufferSize = 1024 * 1024 * 1024, // 1GB
+            .maxStorageBufferBindingSize = 1024 * 1024 * 1024,
+            .maxStorageBuffersPerShaderStage = 10,
+        };
+        var desc = WGPUDeviceDescriptor{
+            .required_limits = @ptrCast(&limits),
+        };
         const cb_info = WGPURequestDeviceCallbackInfo{
             .mode = wgpu_callback_mode_allow_process_events,
             .callback = struct {
@@ -535,7 +578,7 @@ pub const WebGpuBackend = struct {
         self.fn_queue_write_buffer(self.queue, buf, 0, data, size);
     }
 
-    const max_buffer_size: usize = 128 * 1024 * 1024; // WebGPU max_storage_buffer_binding_size
+    const max_buffer_size: usize = 1024 * 1024 * 1024; // 1GB — requested via device limits
 
     fn getOrUpload(self: *WebGpuBackend, ptr: *const anyopaque, size: usize) WGPUBuffer {
         const key = @intFromPtr(ptr);
