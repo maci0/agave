@@ -335,6 +335,8 @@ const cli_specs = [_]cli_mod.ArgSpec{
     .{ .long = "top-k", .kind = .option, .help = "Top-k sampling, 0 = disabled [default: 0]." },
     .{ .long = "repeat-penalty", .kind = .option, .help = "Repetition penalty [default: 1.0]." },
     .{ .long = "seed", .kind = .option, .help = "Random seed for sampling [default: random]." },
+    .{ .long = "grammar", .kind = .option, .help = "GBNF grammar file for constrained decoding." },
+    .{ .long = "grammar-string", .kind = .option, .help = "Inline GBNF grammar string." },
     .{ .long = "system", .kind = .option, .help = "System prompt for chat formatting." },
     // Backend & model
     .{ .long = "backend", .kind = .option, .help = "Compute backend: auto, cpu, metal, vulkan, cuda, rocm, webgpu [default: auto]." },
