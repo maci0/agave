@@ -97,7 +97,7 @@ pub const Grammar = struct {
         if (top.elem_idx >= rule.elements.len) return &.{};
 
         // Find current alternative's elements starting from elem_idx
-        var start = top.elem_idx;
+        const start = top.elem_idx;
         var end = start;
         while (end < rule.elements.len and rule.elements[end].type != .alt and rule.elements[end].type != .end) : (end += 1) {}
 
@@ -145,7 +145,7 @@ pub const GrammarState = struct {
     pub fn init(grammar: *const Grammar) GrammarState {
         var state = GrammarState{
             .grammar = grammar,
-            .stack = std.ArrayList(StackEntry).init(grammar.allocator),
+            .stack = std.ArrayList(StackEntry).empty,
         };
         state.stack.append(grammar.allocator, .{ .rule_id = grammar.root_id, .elem_idx = 0 }) catch {};
         return state;
@@ -214,9 +214,9 @@ const Parser = struct {
         return .{
             .allocator = allocator,
             .input = input,
-            .rules = std.ArrayList(Rule).init(allocator),
+            .rules = std.ArrayList(Rule).empty,
             .rule_names = std.StringHashMap(u32).init(allocator),
-            .elements = std.ArrayList(Element).init(allocator),
+            .elements = std.ArrayList(Element).empty,
         };
     }
 
@@ -256,7 +256,7 @@ const Parser = struct {
         } else return;
 
         const rule_id: u32 = @intCast(self.rules.items.len);
-        try self.rule_names.put(self.allocator, name, rule_id);
+        try self.rule_names.put(name, rule_id);
 
         const elem_start = self.elements.items.len;
         try self.parseAlternatives();
@@ -268,7 +268,9 @@ const Parser = struct {
         try self.rules.append(self.allocator, .{ .name = name, .elements = elems });
     }
 
-    fn parseAlternatives(self: *Parser) !void {
+    const ParseError = error{OutOfMemory};
+
+    fn parseAlternatives(self: *Parser) ParseError!void {
         try self.parseSequence();
         while (self.pos < self.input.len) {
             self.skipWs();
@@ -280,7 +282,7 @@ const Parser = struct {
         }
     }
 
-    fn parseSequence(self: *Parser) !void {
+    fn parseSequence(self: *Parser) ParseError!void {
         while (self.pos < self.input.len) {
             self.skipWs();
             if (self.pos >= self.input.len) break;
@@ -294,7 +296,7 @@ const Parser = struct {
         }
     }
 
-    fn parseElement(self: *Parser) !void {
+    fn parseElement(self: *Parser) ParseError!void {
         self.skipWs();
         if (self.pos >= self.input.len) return;
 
@@ -374,7 +376,7 @@ const Parser = struct {
         const rule_id = self.rule_names.get(name) orelse blk: {
             // Forward reference — assign next ID
             const id: u32 = @intCast(self.rules.items.len + self.rule_names.count());
-            self.rule_names.put(self.allocator, name, id) catch {};
+            self.rule_names.put(name, id) catch {};
             break :blk id;
         };
         try self.elements.append(self.allocator, .{ .type = .rule_ref, .lo = rule_id });

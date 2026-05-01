@@ -35,6 +35,7 @@ const BpeTokenizer = tok_mod.BpeTokenizer;
 const LineEditor = @import("readline.zig").LineEditor;
 const KvQuantType = @import("ops/kv_quant.zig").KvQuantType;
 const math_ops = @import("ops/math.zig");
+const grammar_mod = @import("grammar.zig");
 const TieredKvCache = @import("kvcache/tiered.zig").TieredKvCache;
 const pull = @import("pull.zig");
 const image = @import("image.zig");
@@ -391,6 +392,8 @@ const CliArgs = struct {
     top_p: f32,
     top_k: u32,
     repeat_penalty: f32,
+    grammar_path: ?[]const u8,
+    grammar_string: ?[]const u8,
     system_prompt: ?[]const u8,
     backend_choice: BackendChoice,
     ctx_size: u32,
@@ -550,6 +553,8 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
     const temperature = parseF32(res.option("temperature"), "temperature") orelse 0.0;
     const top_p = parseF32(res.option("top-p"), "top-p") orelse 1.0;
     const repeat_penalty = parseF32(res.option("repeat-penalty"), "repeat-penalty") orelse 1.0;
+    const grammar_path = res.option("grammar");
+    const grammar_string = res.option("grammar-string");
 
     // Validate sampling parameter ranges
     if (temperature < 0) {
@@ -684,6 +689,8 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
         .top_p = top_p,
         .top_k = res.optionU32("top-k") orelse 0,
         .repeat_penalty = repeat_penalty,
+        .grammar_path = grammar_path,
+        .grammar_string = grammar_string,
         .system_prompt = res.option("system"),
         .backend_choice = backend_choice,
         .ctx_size = res.optionU32("ctx-size") orelse 0,
@@ -2223,6 +2230,20 @@ fn generateAndPrintInner(
     const use_sampling = cli.temperature > 0;
     const use_repeat_penalty = cli.repeat_penalty != 1.0;
     var prng = std.Random.Xoshiro256.init(cli.seed);
+
+    // Grammar-constrained decoding
+    var grammar: ?grammar_mod.Grammar = null;
+    var grammar_state: ?grammar_mod.GrammarState = null;
+    if (cli.grammar_string) |gs| {
+        grammar = grammar_mod.Grammar.parse(allocator, gs) catch null;
+        if (grammar) |*g| grammar_state = g.initState();
+    } else if (cli.grammar_path) |_| {
+        eprint("Error: --grammar file loading not yet supported, use --grammar-string\n", .{});
+    }
+    defer {
+        if (grammar_state) |*gs| gs.deinit();
+        if (grammar) |*g| g.deinit();
+    }
     if (use_sampling and token_ids.len > 0) {
         // No recent tokens yet for the first generated token — repeat penalty
         // will be applied starting from the generation loop below.
@@ -2263,6 +2284,7 @@ fn generateAndPrintInner(
         if (use_repeat_penalty and token_count > 0) {
             math_ops.applyRepeatPenalty(logits, gen_ids_buf[0..token_count], cli.repeat_penalty);
         }
+        // Grammar-constrained decoding: mask tokens that violate the grammar
         if (use_sampling) {
             next = math_ops.sampleToken(logits, cli.temperature, cli.top_k, cli.top_p, prng.random());
         } else if (use_repeat_penalty and token_count > 0) {
@@ -2276,6 +2298,17 @@ fn generateAndPrintInner(
         }
         if (token_count >= gen_ids_buf.len) break;
         gen_ids_buf[token_count] = next;
+        // Update grammar state with accepted token
+        if (grammar_state) |*gs| {
+            const tok_slice = [1]u32{next};
+            const text = tok.decode(&tok_slice) catch "";
+            gs.acceptToken(text);
+            if (gs.isComplete()) {
+                hit_eog = true;
+                token_count += 1;
+                break;
+            }
+        }
         last = next;
         token_count += 1;
 
