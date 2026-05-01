@@ -882,6 +882,8 @@ fn printUsage() void {
         \\  agave model.gguf --kv-type tq4 "Hello"   TurboQuant KV cache (saves VRAM)
         \\  agave model.gguf --ctx-size 0 "Hello"    Use full model context window
         \\  agave model.gguf --image pic.png "What's this?"  Vision (auto-detects mmproj)
+        \\  agave model.gguf --json-output "Generate a user profile"  Force JSON output
+        \\  agave model.gguf --grammar-string 'root ::= "yes" | "no"' "Is sky blue?"
         \\
         \\SUBCOMMANDS:
         \\  agave pull <org/repo>                    Download GGUF model from HuggingFace
