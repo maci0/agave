@@ -276,6 +276,7 @@ const PoolEntry = struct {
 const CachedBuf = struct {
     buffer: WGPUBuffer,
     size: usize,
+    generation: u32 = 0,
 };
 
 // ── WebGPU Backend ──────────────────────────────────────────────────
@@ -326,6 +327,7 @@ pub const WebGpuBackend = struct {
     // Staging buffer for readbacks
     staging_buf: WGPUBuffer = null,
     staging_size: usize = 0,
+    upload_generation: u32 = 0,
 
     // WebGPU C function pointers
     fn_create_instance: *const fn (?*const WGPUInstanceDescriptor) callconv(.c) WGPUInstance = undefined,
@@ -582,14 +584,17 @@ pub const WebGpuBackend = struct {
 
     fn getOrUpload(self: *WebGpuBackend, ptr: *const anyopaque, size: usize) WGPUBuffer {
         const key = @intFromPtr(ptr);
-        if (self.buf_cache.get(key)) |cached| {
-            // Always re-upload: activation buffers reuse pointers with new data
+        if (self.buf_cache.getPtr(key)) |cached| {
+            if (cached.generation == self.upload_generation and cached.size >= size) {
+                return cached.buffer;
+            }
             self.uploadToBuffer(cached.buffer, ptr, @min(size, cached.size));
+            cached.generation = self.upload_generation;
             return cached.buffer;
         }
         const buf = self.createBuffer(size, wgpu_buffer_usage_storage | wgpu_buffer_usage_copy_src | wgpu_buffer_usage_copy_dst);
         self.uploadToBuffer(buf, ptr, size);
-        self.buf_cache.put(key, .{ .buffer = buf, .size = size }) catch {};
+        self.buf_cache.put(key, .{ .buffer = buf, .size = size, .generation = self.upload_generation }) catch {};
         return buf;
     }
 
@@ -659,6 +664,7 @@ pub const WebGpuBackend = struct {
             @memcpy(dst[0..count], src_slice[0..count]);
         }
         self.fn_buffer_unmap(self.staging_buf);
+        self.upload_generation +%= 1;
     }
 
     // ── Dispatch Helpers ────────────────────────────────────────
@@ -1540,6 +1546,7 @@ pub const WebGpuBackend = struct {
 
     pub fn sync(self: *WebGpuBackend) void {
         _ = self.fn_device_poll(self.device, 1, null);
+        self.upload_generation +%= 1;
     }
 
     pub fn beginBatch(_: *WebGpuBackend) void {}
