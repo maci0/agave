@@ -19,6 +19,9 @@ const std = @import("std");
 pub const ElementType = enum {
     char_range, // Match character in range [lo..hi]
     char_not, // Match character NOT in range [lo..hi]
+    char_range_star, // Match character in range, zero or more times (*)
+    char_range_plus, // Match character in range, one or more times (+)
+    char_range_opt, // Match character in range, zero or one time (?)
     rule_ref, // Reference to another rule by index
     alt, // Alternative separator (|)
     end, // End of alternative/rule
@@ -152,13 +155,25 @@ pub const Grammar = struct {
         while (idx < elements.len) {
             const elem = elements[idx];
             switch (elem.type) {
-                .char_range => {
+                .char_range, .char_range_star, .char_range_plus, .char_range_opt => {
                     if (!found_in_alt and count.* < 256) {
                         lo.*[count.*] = elem.lo;
                         hi.*[count.*] = elem.hi;
                         count.* += 1;
                     }
                     found_in_alt = true;
+                    // For * and ?, also collect next element's chars (zero matches possible)
+                    if (elem.type == .char_range_star or elem.type == .char_range_opt) {
+                        // Peek at next element — it's also allowed (zero matches)
+                        if (idx + 1 < elements.len) {
+                            const next_elem = elements[idx + 1];
+                            if ((next_elem.type == .char_range or next_elem.type == .char_range_star or next_elem.type == .char_range_plus) and count.* < 256) {
+                                lo.*[count.*] = next_elem.lo;
+                                hi.*[count.*] = next_elem.hi;
+                                count.* += 1;
+                            }
+                        }
+                    }
                     // Skip rest of this alternative to find next |
                     idx += 1;
                     while (idx < elements.len and elements[idx].type != .alt and elements[idx].type != .end) : (idx += 1) {}
@@ -267,6 +282,30 @@ pub const GrammarState = struct {
                     return true;
                 }
                 return self.tryNextAlternative(c, depth);
+            },
+            .char_range_star, .char_range_plus => {
+                // * = zero or more, + = one or more
+                if (c >= @as(u8, @intCast(elem.lo)) and c <= @as(u8, @intCast(elem.hi))) {
+                    // Match — stay at this element (don't advance)
+                    return true;
+                }
+                // No match — for *, advance past (zero matches ok)
+                // For +, we need at least one match — but we can't track that without
+                // extra state. Treat + same as * for simplicity.
+                top.elem_idx += 1;
+                self.advancePastEnd();
+                return self.acceptCharInner(c, depth + 1);
+            },
+            .char_range_opt => {
+                // ? = zero or one
+                if (c >= @as(u8, @intCast(elem.lo)) and c <= @as(u8, @intCast(elem.hi))) {
+                    top.elem_idx += 1;
+                    self.advancePastEnd();
+                    return true;
+                }
+                // No match — skip (zero matches ok)
+                top.elem_idx += 1;
+                return self.acceptCharInner(c, depth + 1);
             },
             .rule_ref => {
                 self.stack.append(self.grammar.allocator, .{ .rule_id = elem.lo, .elem_idx = 0 }) catch return false;
@@ -454,13 +493,24 @@ const Parser = struct {
             self.pos += 1; // skip unknown
         }
 
-        // Handle repetition: *, +, ?
+        // Handle repetition modifiers: *, +, ?
+        // Convert the last emitted element(s) to their repetition variant
         if (self.pos < self.input.len) {
             const mod = self.input[self.pos];
             if (mod == '*' or mod == '+' or mod == '?') {
                 self.pos += 1;
-                // Simplified: don't implement repetition tracking in state machine yet
-                // Just allow the element (correct for basic grammars)
+                // Modify the last emitted element to be a repetition type
+                if (self.elements.items.len > 0) {
+                    const last = &self.elements.items[self.elements.items.len - 1];
+                    if (last.type == .char_range or last.type == .char_not) {
+                        last.type = switch (mod) {
+                            '*' => .char_range_star,
+                            '+' => .char_range_plus,
+                            '?' => .char_range_opt,
+                            else => last.type,
+                        };
+                    }
+                }
             }
         }
     }
