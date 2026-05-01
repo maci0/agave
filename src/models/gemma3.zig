@@ -614,8 +614,8 @@ pub const Gemma3Model = struct {
                 prefix_len,
                 n_nodes,
                 self.attn_scale,
-                .f32, // PagedKvCache blocks store f32
-                .f32,
+                self.kv_type_k,
+                self.kv_type_v,
             );
 
             // Output projection
