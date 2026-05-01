@@ -56,20 +56,20 @@ const WGPUComputePassEncoder = ?*anyopaque;
 const WGPUCommandBuffer = ?*anyopaque;
 const WGPUPipelineLayout = ?*anyopaque;
 
-const WGPUBufferUsage = u32;
-const wgpu_buffer_usage_storage = 0x0080;
-const wgpu_buffer_usage_copy_src = 0x0004;
-const wgpu_buffer_usage_copy_dst = 0x0008;
-const wgpu_buffer_usage_map_read = 0x0001;
-const wgpu_buffer_usage_uniform = 0x0040;
+const WGPUBufferUsage = u64;
+const wgpu_buffer_usage_storage: WGPUBufferUsage = 0x0080;
+const wgpu_buffer_usage_copy_src: WGPUBufferUsage = 0x0004;
+const wgpu_buffer_usage_copy_dst: WGPUBufferUsage = 0x0008;
+const wgpu_buffer_usage_map_read: WGPUBufferUsage = 0x0001;
+const wgpu_buffer_usage_uniform: WGPUBufferUsage = 0x0040;
 
 const WGPUBufferBindingType = u32;
 const wgpu_buffer_binding_storage = 7;
 const wgpu_buffer_binding_read_only_storage = 6;
 const wgpu_buffer_binding_uniform = 1;
 
-const WGPUMapMode = u32;
-const wgpu_map_mode_read = 1;
+const WGPUMapMode = u64;
+const wgpu_map_mode_read: WGPUMapMode = 1;
 
 const WGPURequestAdapterStatus = u32;
 const WGPURequestDeviceStatus = u32;
@@ -129,7 +129,7 @@ const WGPURequestDeviceCallbackInfo = extern struct {
 const WGPUBufferMapCallbackInfo = extern struct {
     next_in_chain: ?*anyopaque = null,
     mode: WGPUCallbackMode = wgpu_callback_mode_allow_process_events,
-    callback: ?*const fn (WGPUBufferMapAsyncStatus, ?*anyopaque, ?*anyopaque) callconv(.c) void = null,
+    callback: ?*const fn (WGPUBufferMapAsyncStatus, WGPUStringView, ?*anyopaque, ?*anyopaque) callconv(.c) void = null,
     userdata1: ?*anyopaque = null,
     userdata2: ?*anyopaque = null,
 };
@@ -208,7 +208,7 @@ const WGPUBindGroupEntry = extern struct {
 
 const WGPUBindGroupDescriptor = extern struct {
     next_in_chain: ?*anyopaque = null,
-    label: ?[*:0]const u8 = null,
+    label: WGPUStringView = .{},
     layout: WGPUBindGroupLayout = null,
     entry_count: usize = 0,
     entries: ?[*]const WGPUBindGroupEntry = null,
@@ -535,12 +535,15 @@ pub const WebGpuBackend = struct {
         self.fn_queue_write_buffer(self.queue, buf, 0, data, size);
     }
 
+    const max_buffer_size: usize = 128 * 1024 * 1024; // WebGPU max_storage_buffer_binding_size
+
     fn getOrUpload(self: *WebGpuBackend, ptr: *const anyopaque, size: usize) WGPUBuffer {
         const key = @intFromPtr(ptr);
         if (self.buf_cache.get(key)) |cached| return cached.buffer;
-        const buf = self.createBuffer(size, wgpu_buffer_usage_storage | wgpu_buffer_usage_copy_src | wgpu_buffer_usage_copy_dst);
-        self.uploadToBuffer(buf, ptr, size);
-        self.buf_cache.put(key, .{ .buffer = buf, .size = size }) catch {};
+        const capped = @min(size, max_buffer_size);
+        const buf = self.createBuffer(capped, wgpu_buffer_usage_storage | wgpu_buffer_usage_copy_src | wgpu_buffer_usage_copy_dst);
+        self.uploadToBuffer(buf, ptr, capped);
+        self.buf_cache.put(key, .{ .buffer = buf, .size = capped }) catch {};
         return buf;
     }
 
@@ -590,7 +593,7 @@ pub const WebGpuBackend = struct {
         const map_cb_info = WGPUBufferMapCallbackInfo{
             .mode = wgpu_callback_mode_allow_process_events,
             .callback = struct {
-                fn cb(_: WGPUBufferMapAsyncStatus, userdata1: ?*anyopaque, _: ?*anyopaque) callconv(.c) void {
+                fn cb(_: WGPUBufferMapAsyncStatus, _: WGPUStringView, userdata1: ?*anyopaque, _: ?*anyopaque) callconv(.c) void {
                     const m: *bool = @ptrCast(@alignCast(userdata1));
                     m.* = true;
                 }
@@ -598,7 +601,12 @@ pub const WebGpuBackend = struct {
             .userdata1 = @ptrCast(&mapped),
         };
         _ = self.fn_buffer_map_async(self.staging_buf, wgpu_map_mode_read, 0, size, map_cb_info);
-        self.fn_instance_process_events(self.instance);
+        // Poll device until map completes
+        var polls: u32 = 0;
+        while (!mapped and polls < 10000) : (polls += 1) {
+            _ = self.fn_device_poll(self.device, 1, null);
+            self.fn_instance_process_events(self.instance);
+        }
         const mapped_ptr = self.fn_buffer_get_mapped_range(self.staging_buf, 0, size);
         if (mapped_ptr) |p| {
             const src_slice: [*]const f32 = @ptrCast(@alignCast(p));
@@ -631,13 +639,14 @@ pub const WebGpuBackend = struct {
             .entries = entries.ptr,
         };
         const bind_group = self.fn_device_create_bind_group(self.device, &bg_desc);
+        if (bind_group == null) @panic("WebGPU: bind group creation failed — layout/entry mismatch");
         defer self.fn_bind_group_release(bind_group);
 
         const encoder = self.fn_device_create_command_encoder(self.device, null);
         const pass = self.fn_command_encoder_begin_compute_pass(encoder, null);
         self.fn_compute_pass_set_pipeline(pass, pipe.pipeline);
         self.fn_compute_pass_set_bind_group(pass, 0, bind_group, 0, null);
-        self.fn_compute_pass_dispatch(pass, workgroups_x, 1, 1);
+        self.fn_compute_pass_dispatch(pass, @min(workgroups_x, 65535), 1, 1);
         self.fn_compute_pass_end(pass);
         const cmd = self.fn_command_encoder_finish(encoder, null);
         self.fn_queue_submit(self.queue, 1, &cmd);
@@ -917,22 +926,24 @@ pub const WebGpuBackend = struct {
             .f32 => {
                 const w_size = n * k * @sizeOf(f32);
                 const w_buf = self.getOrUpload(w.data, w_size);
+                const w_bound = @min(w_size, max_buffer_size);
                 const entries = [_]WGPUBindGroupEntry{
                     storageEntry(0, x_buf, x_size),
-                    storageEntry(1, w_buf, w_size),
+                    storageEntry(1, w_buf, w_bound),
                     storageEntry(2, out.buf, y_size),
                     uniformEntry(3, params_buf, Params),
                 };
                 self.dispatchCompute(self.pipe_gemv_f32, &entries, @intCast(n));
             },
             .q8_0 => {
-                const block_size: usize = 34; // 32 quants (i8) + 1 scale (f16) = 34 bytes per block
+                const block_size_bytes: usize = 34;
                 const blocks_per_row = (k + 31) / 32;
-                const w_size = n * blocks_per_row * block_size;
+                const w_size = n * blocks_per_row * block_size_bytes;
                 const w_buf = self.getOrUpload(w.data, w_size);
+                const w_bound = @min(w_size, max_buffer_size);
                 const entries = [_]WGPUBindGroupEntry{
                     storageEntry(0, x_buf, x_size),
-                    storageEntry(1, w_buf, w_size),
+                    storageEntry(1, w_buf, w_bound),
                     storageEntry(2, out.buf, y_size),
                     uniformEntry(3, params_buf, Params),
                 };
