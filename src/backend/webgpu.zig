@@ -868,7 +868,7 @@ pub const WebGpuBackend = struct {
         const out = self.getPooledBuf(size);
         defer self.releasePooledBuf(out.idx);
 
-        const Params = extern struct { n: u32, _pad0: u32 = 0, eps: f32, _pad1: u32 = 0 };
+        const Params = extern struct { n: u32, eps: f32, _pad: [8]u8 = .{0} ** 8 };
         const params = Params{ .n = @intCast(n), .eps = eps };
         const params_buf = self.createUniformBuf(Params, params);
         defer self.fn_buffer_destroy(params_buf);
@@ -1029,7 +1029,7 @@ pub const WebGpuBackend = struct {
         defer self.releasePooledBuf(data_pool.idx);
         self.uploadToBuffer(data_pool.buf, @ptrCast(data), size);
 
-        const Params = extern struct { n: u32, _pad0: u32 = 0, eps: f32, _pad1: u32 = 0 };
+        const Params = extern struct { n: u32, eps: f32, _pad: [8]u8 = .{0} ** 8 };
         const params = Params{ .n = @intCast(n), .eps = eps };
         const params_buf = self.createUniformBuf(Params, params);
         defer self.fn_buffer_destroy(params_buf);
@@ -1053,7 +1053,7 @@ pub const WebGpuBackend = struct {
         const out_pool = self.getPooledBuf(size);
         defer self.releasePooledBuf(out_pool.idx);
 
-        const Params = extern struct { n: u32, _pad0: u32 = 0, eps: f32, _pad1: u32 = 0 };
+        const Params = extern struct { n: u32, eps: f32, _pad: [8]u8 = .{0} ** 8 };
         const params = Params{ .n = @intCast(n), .eps = eps };
         const params_buf = self.createUniformBuf(Params, params);
         defer self.fn_buffer_destroy(params_buf);
