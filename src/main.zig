@@ -2244,10 +2244,25 @@ fn generateAndPrintInner(
         if (grammar_state) |*gs| gs.deinit();
         if (grammar) |*g| g.deinit();
     }
-    if (use_sampling and token_ids.len > 0) {
-        // No recent tokens yet for the first generated token — repeat penalty
-        // will be applied starting from the generation loop below.
-        first_gen_token = math_ops.sampleToken(mdl.getLogits(), cli.temperature, cli.top_k, cli.top_p, prng.random());
+    if (token_ids.len > 0) {
+        const first_logits = mdl.getLogits();
+        // Grammar masking for first token
+        if (grammar_state) |*gs| {
+            if (!gs.isComplete()) {
+                gs.grammar.maskLogits(gs, first_logits, tok.id_to_token.items);
+            }
+        }
+        if (use_sampling) {
+            first_gen_token = math_ops.sampleToken(first_logits, cli.temperature, cli.top_k, cli.top_p, prng.random());
+        } else if (grammar_state != null) {
+            first_gen_token = math_ops.argmax(first_logits);
+        }
+        // Update grammar state with first accepted token
+        if (grammar_state) |*gs| {
+            const tok_slice = [1]u32{first_gen_token};
+            const text = tok.decode(&tok_slice) catch "";
+            gs.acceptToken(text);
+        }
     }
 
     // Generate — stream tokens to stdout immediately.
@@ -2264,13 +2279,20 @@ fn generateAndPrintInner(
     const batch_size: u32 = if (g_tty) tty_batch_size else pipe_batch_size;
 
     // Handle first generated token (from prefill's last forward call)
-    const first_is_eog = token_ids.len > 0 and isEogToken(first_gen_token, eog);
-    var hit_eog = first_is_eog;
-    if (!first_is_eog and token_ids.len > 0) {
+    var first_is_eog = token_ids.len > 0 and isEogToken(first_gen_token, eog);
+    // Grammar completion after first token
+    if (grammar_state) |*gs| {
+        if (gs.isComplete()) first_is_eog = true;
+    }
+    // For grammar completion, still output the token that completed the grammar
+    const grammar_completed_first = if (grammar_state) |*gs| gs.isComplete() else false;
+    var hit_eog = first_is_eog and !grammar_completed_first;
+    if (token_ids.len > 0 and (!first_is_eog or grammar_completed_first)) {
         gen_ids_buf[0] = first_gen_token;
         token_count = 1;
         prev_token = first_gen_token;
         repeat_count = 1;
+        if (grammar_completed_first) hit_eog = true;
     }
 
     for (0..cli.max_tokens -| 1) |gi| {
@@ -2285,16 +2307,15 @@ fn generateAndPrintInner(
             math_ops.applyRepeatPenalty(logits, gen_ids_buf[0..token_count], cli.repeat_penalty);
         }
         // Grammar-constrained decoding: mask disallowed tokens
-        if (grammar_state) |*gs| {
-            if (!gs.isComplete()) {
-                const vocab_texts = tok.id_to_token.items;
-                gs.grammar.maskLogits(gs, logits, vocab_texts);
-            }
+        const has_grammar = if (grammar_state) |*gs| !gs.isComplete() else false;
+        if (has_grammar) {
+            const vocab_texts = tok.id_to_token.items;
+            grammar_state.?.grammar.maskLogits(&grammar_state.?, logits, vocab_texts);
         }
         if (use_sampling) {
             next = math_ops.sampleToken(logits, cli.temperature, cli.top_k, cli.top_p, prng.random());
-        } else if (use_repeat_penalty and token_count > 0) {
-            // Greedy decoding with repeat penalty: re-argmax after penalty
+        } else if (has_grammar or (use_repeat_penalty and token_count > 0)) {
+            // Re-argmax after masking or penalty
             next = math_ops.argmax(logits);
         }
         dbg("gen step {d}: token={d}", .{ gi, next });

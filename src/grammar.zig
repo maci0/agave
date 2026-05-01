@@ -81,28 +81,53 @@ pub const Grammar = struct {
         if (state.completed) return;
         if (state.stack.items.len == 0) return;
 
-        // Collect all allowed first-chars from current grammar position
-        var allowed_lo: [256]u32 = undefined;
-        var allowed_hi: [256]u32 = undefined;
-        var n_allowed: usize = 0;
-        self.collectAllowedChars(state, &allowed_lo, &allowed_hi, &n_allowed);
-
-        if (n_allowed == 0) return; // No constraints
-
         for (logits, 0..) |*logit, token_id| {
             if (token_id >= vocab.len) break;
             const text = vocab[token_id];
             if (text.len == 0) continue;
-            const first: u32 = text[0];
-            var ok = false;
-            for (0..n_allowed) |i| {
-                if (first >= allowed_lo[i] and first <= allowed_hi[i]) {
-                    ok = true;
-                    break;
-                }
+
+            const effective = getEffectiveText(text);
+            if (effective.len == 0) continue;
+
+            // Try accepting entire token in a copy of the state
+            // If any byte fails, the token is disallowed
+            if (!self.isTokenValidPrefix(state, effective)) {
+                logit.* = -std.math.inf(f32);
             }
-            if (!ok) logit.* = -std.math.inf(f32);
         }
+    }
+
+    fn isTokenValidPrefix(self: *const Grammar, state: *const GrammarState, text: []const u8) bool {
+        // Clone the state stack to test without modifying the original
+        var test_state = GrammarState{
+            .grammar = self,
+            .stack = std.ArrayList(StackEntry).empty,
+            .completed = state.completed,
+        };
+        for (state.stack.items) |entry| {
+            test_state.stack.append(self.allocator, entry) catch return true;
+        }
+        defer test_state.stack.deinit(self.allocator);
+
+        for (text) |c| {
+            if (test_state.completed) return true;
+            if (!test_state.acceptChar(c)) return false;
+        }
+        return true;
+    }
+
+    /// Strip BPE byte-level encoding prefix to get actual text.
+    /// Qwen/GPT uses Ġ (0xC4 0xA0) for space, Ċ (0xC4 0x8A) for newline, etc.
+    fn getEffectiveText(text: []const u8) []const u8 {
+        if (text.len >= 2 and text[0] == 0xC4) {
+            // Ġ = space prefix (0xC4 0xA0), Ċ = newline (0xC4 0x8A)
+            return text[2..];
+        }
+        if (text.len >= 3 and text[0] == 0xC3) {
+            // Other byte-level BPE encodings
+            return text[2..];
+        }
+        return text;
     }
 
     fn collectAllowedChars(self: *const Grammar, state: *const GrammarState, lo: *[256]u32, hi: *[256]u32, count: *usize) void {
@@ -299,7 +324,8 @@ pub const GrammarState = struct {
     }
 
     pub fn acceptToken(self: *GrammarState, text: []const u8) void {
-        for (text) |c| {
+        const effective = Grammar.getEffectiveText(text);
+        for (effective) |c| {
             if (!self.acceptChar(c)) break;
         }
     }
