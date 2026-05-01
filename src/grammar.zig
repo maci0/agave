@@ -79,54 +79,100 @@ pub const Grammar = struct {
     /// Sets disallowed token logits to -inf.
     pub fn maskLogits(self: *const Grammar, state: *GrammarState, logits: []f32, vocab: []const []const u8) void {
         if (state.completed) return;
-        const allowed = self.getAllowedChars(state);
+        if (state.stack.items.len == 0) return;
+
+        // Collect all allowed first-chars from current grammar position
+        var allowed_lo: [256]u32 = undefined;
+        var allowed_hi: [256]u32 = undefined;
+        var n_allowed: usize = 0;
+        self.collectAllowedChars(state, &allowed_lo, &allowed_hi, &n_allowed);
+
+        if (n_allowed == 0) return; // No constraints
+
         for (logits, 0..) |*logit, token_id| {
             if (token_id >= vocab.len) break;
             const text = vocab[token_id];
             if (text.len == 0) continue;
-            if (!isTokenAllowed(text, allowed)) {
-                logit.* = -std.math.inf(f32);
+            const first: u32 = text[0];
+            var ok = false;
+            for (0..n_allowed) |i| {
+                if (first >= allowed_lo[i] and first <= allowed_hi[i]) {
+                    ok = true;
+                    break;
+                }
             }
+            if (!ok) logit.* = -std.math.inf(f32);
         }
     }
 
-    fn getAllowedChars(self: *const Grammar, state: *const GrammarState) []const Element {
-        if (state.stack.items.len == 0) return &.{};
+    fn collectAllowedChars(self: *const Grammar, state: *const GrammarState, lo: *[256]u32, hi: *[256]u32, count: *usize) void {
+        if (state.stack.items.len == 0) return;
         const top = state.stack.items[state.stack.items.len - 1];
+        if (top.rule_id >= self.rules.len) return;
         const rule = self.rules[top.rule_id];
-        if (top.elem_idx >= rule.elements.len) return &.{};
-
-        // Find current alternative's elements starting from elem_idx
-        const start = top.elem_idx;
-        var end = start;
-        while (end < rule.elements.len and rule.elements[end].type != .alt and rule.elements[end].type != .end) : (end += 1) {}
-
-        if (start >= end) return &.{};
-        const elem = rule.elements[start];
-        if (elem.type == .char_range or elem.type == .char_not) {
-            return rule.elements[start..end];
-        }
-        return &.{};
+        self.collectFromRule(rule.elements, top.elem_idx, lo, hi, count, 0);
     }
 
-    fn isTokenAllowed(text: []const u8, allowed: []const Element) bool {
-        if (allowed.len == 0) return true; // No constraints = allow all
-        if (text.len == 0) return false;
+    fn collectFromRule(self: *const Grammar, elements: []const Element, start_idx: u32, lo: *[256]u32, hi: *[256]u32, count: *usize, depth: u32) void {
+        if (depth > 16 or count.* >= 256) return;
+        if (start_idx >= elements.len) return;
 
-        // Check first byte against allowed char ranges
-        const first_char: u32 = text[0];
-        for (allowed) |elem| {
+        // Collect first chars from current alternative and all alternatives after |
+        var idx = start_idx;
+        var found_in_alt = false;
+        while (idx < elements.len) {
+            const elem = elements[idx];
             switch (elem.type) {
                 .char_range => {
-                    if (first_char >= elem.lo and first_char <= elem.hi) return true;
+                    if (!found_in_alt and count.* < 256) {
+                        lo.*[count.*] = elem.lo;
+                        hi.*[count.*] = elem.hi;
+                        count.* += 1;
+                    }
+                    found_in_alt = true;
+                    // Skip rest of this alternative to find next |
+                    idx += 1;
+                    while (idx < elements.len and elements[idx].type != .alt and elements[idx].type != .end) : (idx += 1) {}
+                    found_in_alt = false;
+                    continue;
                 },
                 .char_not => {
-                    if (first_char < elem.lo or first_char > elem.hi) return true;
+                    if (!found_in_alt and count.* + 2 <= 256) {
+                        if (elem.lo > 0) {
+                            lo.*[count.*] = 0;
+                            hi.*[count.*] = elem.lo - 1;
+                            count.* += 1;
+                        }
+                        if (elem.hi < 255) {
+                            lo.*[count.*] = elem.hi + 1;
+                            hi.*[count.*] = 255;
+                            count.* += 1;
+                        }
+                    }
+                    found_in_alt = true;
+                    idx += 1;
+                    while (idx < elements.len and elements[idx].type != .alt and elements[idx].type != .end) : (idx += 1) {}
+                    found_in_alt = false;
+                    continue;
                 },
-                else => {},
+                .rule_ref => {
+                    if (!found_in_alt and elem.lo < self.rules.len) {
+                        self.collectFromRule(self.rules[elem.lo].elements, 0, lo, hi, count, depth + 1);
+                    }
+                    found_in_alt = true;
+                    idx += 1;
+                    while (idx < elements.len and elements[idx].type != .alt and elements[idx].type != .end) : (idx += 1) {}
+                    found_in_alt = false;
+                    continue;
+                },
+                .alt => {
+                    idx += 1;
+                    found_in_alt = false;
+                    continue;
+                },
+                .end => return,
             }
         }
-        return false;
     }
 };
 
@@ -156,13 +202,22 @@ pub const GrammarState = struct {
     }
 
     pub fn acceptChar(self: *GrammarState, c: u8) bool {
-        if (self.completed or self.stack.items.len == 0) return false;
+        return self.acceptCharInner(c, 0);
+    }
+
+    fn acceptCharInner(self: *GrammarState, c: u8, depth: u32) bool {
+        if (depth > 32 or self.completed or self.stack.items.len == 0) return false;
 
         const top = &self.stack.items[self.stack.items.len - 1];
+        if (top.rule_id >= self.grammar.rules.len) return false;
         const rule = self.grammar.rules[top.rule_id];
         if (top.elem_idx >= rule.elements.len) {
-            self.completed = true;
-            return false;
+            _ = self.stack.pop();
+            if (self.stack.items.len == 0) {
+                self.completed = true;
+                return false;
+            }
+            return self.acceptCharInner(c, depth + 1);
         }
 
         const elem = rule.elements[top.elem_idx];
@@ -170,23 +225,77 @@ pub const GrammarState = struct {
             .char_range => {
                 if (c >= @as(u8, @intCast(elem.lo)) and c <= @as(u8, @intCast(elem.hi))) {
                     top.elem_idx += 1;
-                    // Check if we reached end of rule
-                    if (top.elem_idx >= rule.elements.len or rule.elements[top.elem_idx].type == .end) {
-                        _ = self.stack.pop();
-                        if (self.stack.items.len == 0) self.completed = true;
-                    }
+                    self.advancePastEnd();
                     return true;
                 }
-                return false;
+                // Try next alternative in this rule
+                return self.tryNextAlternative(c, depth);
+            },
+            .char_not => {
+                if (c < @as(u8, @intCast(elem.lo)) or c > @as(u8, @intCast(elem.hi))) {
+                    top.elem_idx += 1;
+                    self.advancePastEnd();
+                    return true;
+                }
+                return self.tryNextAlternative(c, depth);
             },
             .rule_ref => {
-                // Push referenced rule
                 self.stack.append(self.grammar.allocator, .{ .rule_id = elem.lo, .elem_idx = 0 }) catch return false;
                 top.elem_idx += 1;
-                return self.acceptChar(c);
+                return self.acceptCharInner(c, depth + 1);
             },
-            else => return false,
+            .alt => {
+                // Skip past this alt marker
+                top.elem_idx += 1;
+                return self.acceptCharInner(c, depth + 1);
+            },
+            .end => {
+                _ = self.stack.pop();
+                if (self.stack.items.len == 0) {
+                    self.completed = true;
+                    return false;
+                }
+                return self.acceptCharInner(c, depth + 1);
+            },
         }
+    }
+
+    fn advancePastEnd(self: *GrammarState) void {
+        while (self.stack.items.len > 0) {
+            const t = &self.stack.items[self.stack.items.len - 1];
+            if (t.rule_id >= self.grammar.rules.len) break;
+            const r = self.grammar.rules[t.rule_id];
+            if (t.elem_idx < r.elements.len and r.elements[t.elem_idx].type != .end and r.elements[t.elem_idx].type != .alt) break;
+            // Skip past end/alt markers
+            if (t.elem_idx < r.elements.len and r.elements[t.elem_idx].type == .alt) {
+                // Skip remaining alternatives (we already matched one)
+                while (t.elem_idx < r.elements.len and r.elements[t.elem_idx].type != .end) : (t.elem_idx += 1) {}
+            }
+            if (t.elem_idx >= r.elements.len or r.elements[t.elem_idx].type == .end) {
+                _ = self.stack.pop();
+                if (self.stack.items.len == 0) {
+                    self.completed = true;
+                    return;
+                }
+            } else break;
+        }
+    }
+
+    fn tryNextAlternative(self: *GrammarState, c: u8, depth: u32) bool {
+        if (self.stack.items.len == 0) return false;
+        const top = &self.stack.items[self.stack.items.len - 1];
+        if (top.rule_id >= self.grammar.rules.len) return false;
+        const rule = self.grammar.rules[top.rule_id];
+        // Scan forward to find next | in this rule
+        var idx = top.elem_idx;
+        while (idx < rule.elements.len) : (idx += 1) {
+            if (rule.elements[idx].type == .alt) {
+                top.elem_idx = idx + 1;
+                return self.acceptCharInner(c, depth + 1);
+            }
+            if (rule.elements[idx].type == .end) break;
+        }
+        return false;
     }
 
     pub fn acceptToken(self: *GrammarState, text: []const u8) void {
