@@ -2094,8 +2094,35 @@ fn generateN(formatted: []const u8, reset: bool, max_tokens: usize, sampling: Sa
     // Apply sampling to first generated token (from prefill's last forward call)
     const use_sampling = sampling.temperature > 0;
     var prng = std.Random.Xoshiro256.init(@as(u64, @truncate(@as(u96, @bitCast(nanoTimestamp())))));
-    if (use_sampling and token_ids.len > 0) {
-        first_gen_token = math_ops.sampleToken(model.getLogits(), sampling.temperature, sampling.top_k, sampling.top_p, prng.random());
+    var json_depth: i32 = 0;
+
+    if (token_ids.len > 0) {
+        const first_logits = model.getLogits();
+        // JSON mode: force first token to start with {
+        if (sampling.json_mode) {
+            const bpe: *@import("../tokenizer/bpe.zig").BpeTokenizer = @ptrCast(@alignCast(g_server.tokenizer.ptr));
+            const vocab_texts = bpe.id_to_token.items;
+            const grammar_mod = @import("../grammar.zig");
+            for (first_logits, 0..) |*logit, tid| {
+                if (tid >= vocab_texts.len) break;
+                const t = grammar_mod.Grammar.getEffectiveText(vocab_texts[tid]);
+                if (t.len == 0 or t[0] != '{') logit.* = -std.math.inf(f32);
+            }
+        }
+        if (use_sampling) {
+            first_gen_token = math_ops.sampleToken(first_logits, sampling.temperature, sampling.top_k, sampling.top_p, prng.random());
+        } else if (sampling.json_mode) {
+            first_gen_token = math_ops.argmax(first_logits);
+        }
+        // Track JSON depth for first token
+        if (sampling.json_mode) {
+            const tok_slice = [1]u32{first_gen_token};
+            const text = g_server.tokenizer.decode(@constCast(&tok_slice)) catch "";
+            for (text) |ch| {
+                if (ch == '{' or ch == '[') json_depth += 1;
+                if (ch == '}' or ch == ']') json_depth -= 1;
+            }
+        }
     }
 
     // Generation phase (timed) — collect token IDs, batch-decode once at the end
@@ -2197,6 +2224,20 @@ fn generateN(formatted: []const u8, reset: bool, max_tokens: usize, sampling: Sa
                 break;
             }
             gen_tokens[token_count] = next;
+            // JSON mode: stop at balanced braces
+            if (sampling.json_mode) {
+                const tok_slice = [1]u32{next};
+                const text = g_server.tokenizer.decode(@constCast(&tok_slice)) catch "";
+                for (text) |ch| {
+                    if (ch == '{' or ch == '[') json_depth += 1;
+                    if (ch == '}' or ch == ']') json_depth -= 1;
+                }
+                if (json_depth <= 0) {
+                    token_count += 1;
+                    hit_eog = true;
+                    break;
+                }
+            }
             last = next;
             token_count += 1;
         }
