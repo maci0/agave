@@ -582,11 +582,14 @@ pub const WebGpuBackend = struct {
 
     fn getOrUpload(self: *WebGpuBackend, ptr: *const anyopaque, size: usize) WGPUBuffer {
         const key = @intFromPtr(ptr);
-        if (self.buf_cache.get(key)) |cached| return cached.buffer;
-        const capped = @min(size, max_buffer_size);
-        const buf = self.createBuffer(capped, wgpu_buffer_usage_storage | wgpu_buffer_usage_copy_src | wgpu_buffer_usage_copy_dst);
-        self.uploadToBuffer(buf, ptr, capped);
-        self.buf_cache.put(key, .{ .buffer = buf, .size = capped }) catch {};
+        if (self.buf_cache.get(key)) |cached| {
+            // Always re-upload: activation buffers reuse pointers with new data
+            self.uploadToBuffer(cached.buffer, ptr, @min(size, cached.size));
+            return cached.buffer;
+        }
+        const buf = self.createBuffer(size, wgpu_buffer_usage_storage | wgpu_buffer_usage_copy_src | wgpu_buffer_usage_copy_dst);
+        self.uploadToBuffer(buf, ptr, size);
+        self.buf_cache.put(key, .{ .buffer = buf, .size = size }) catch {};
         return buf;
     }
 
@@ -711,7 +714,10 @@ pub const WebGpuBackend = struct {
 
     pub fn silu(self: *WebGpuBackend, input: [*]const f32, output: [*]f32, n: usize) void {
         const size = n * @sizeOf(f32);
-        const in_buf = self.getOrUpload(@ptrCast(input), size);
+        const in_pool = self.getPooledBuf(size);
+        self.uploadToBuffer(in_pool.buf, @ptrCast(input), size);
+        const in_buf = in_pool.buf;
+        defer self.releasePooledBuf(in_pool.idx);
         const out = self.getPooledBuf(size);
         defer self.releasePooledBuf(out.idx);
 
@@ -731,7 +737,10 @@ pub const WebGpuBackend = struct {
 
     pub fn gelu(self: *WebGpuBackend, input: [*]const f32, output: [*]f32, n: usize) void {
         const size = n * @sizeOf(f32);
-        const in_buf = self.getOrUpload(@ptrCast(input), size);
+        const in_pool = self.getPooledBuf(size);
+        self.uploadToBuffer(in_pool.buf, @ptrCast(input), size);
+        const in_buf = in_pool.buf;
+        defer self.releasePooledBuf(in_pool.idx);
         const out = self.getPooledBuf(size);
         defer self.releasePooledBuf(out.idx);
 
@@ -751,7 +760,10 @@ pub const WebGpuBackend = struct {
 
     pub fn add(self: *WebGpuBackend, a: [*]const f32, b: [*]const f32, out: [*]f32, n: usize) void {
         const size = n * @sizeOf(f32);
-        const buf_a = self.getOrUpload(@ptrCast(a), size);
+        const a_pool = self.getPooledBuf(size);
+        self.uploadToBuffer(a_pool.buf, @ptrCast(a), size);
+        const buf_a = a_pool.buf;
+        defer self.releasePooledBuf(a_pool.idx);
         const buf_b = self.getOrUpload(@ptrCast(b), size);
         const out_pool = self.getPooledBuf(size);
         defer self.releasePooledBuf(out_pool.idx);
@@ -773,7 +785,10 @@ pub const WebGpuBackend = struct {
 
     pub fn mul(self: *WebGpuBackend, a: [*]const f32, b: [*]const f32, out: [*]f32, n: usize) void {
         const size = n * @sizeOf(f32);
-        const buf_a = self.getOrUpload(@ptrCast(a), size);
+        const a_pool = self.getPooledBuf(size);
+        self.uploadToBuffer(a_pool.buf, @ptrCast(a), size);
+        const buf_a = a_pool.buf;
+        defer self.releasePooledBuf(a_pool.idx);
         const buf_b = self.getOrUpload(@ptrCast(b), size);
         const out_pool = self.getPooledBuf(size);
         defer self.releasePooledBuf(out_pool.idx);
@@ -795,7 +810,10 @@ pub const WebGpuBackend = struct {
 
     pub fn siluMul(self: *WebGpuBackend, a: [*]const f32, b: [*]const f32, out: [*]f32, n: usize) void {
         const size = n * @sizeOf(f32);
-        const buf_a = self.getOrUpload(@ptrCast(a), size);
+        const a_pool = self.getPooledBuf(size);
+        self.uploadToBuffer(a_pool.buf, @ptrCast(a), size);
+        const buf_a = a_pool.buf;
+        defer self.releasePooledBuf(a_pool.idx);
         const buf_b = self.getOrUpload(@ptrCast(b), size);
         const out_pool = self.getPooledBuf(size);
         defer self.releasePooledBuf(out_pool.idx);
@@ -817,7 +835,10 @@ pub const WebGpuBackend = struct {
 
     pub fn geluMul(self: *WebGpuBackend, a: [*]const f32, b: [*]const f32, out: [*]f32, n: usize) void {
         const size = n * @sizeOf(f32);
-        const buf_a = self.getOrUpload(@ptrCast(a), size);
+        const a_pool = self.getPooledBuf(size);
+        self.uploadToBuffer(a_pool.buf, @ptrCast(a), size);
+        const buf_a = a_pool.buf;
+        defer self.releasePooledBuf(a_pool.idx);
         const buf_b = self.getOrUpload(@ptrCast(b), size);
         const out_pool = self.getPooledBuf(size);
         defer self.releasePooledBuf(out_pool.idx);
@@ -839,7 +860,10 @@ pub const WebGpuBackend = struct {
 
     pub fn rmsNorm(self: *WebGpuBackend, input: [*]const f32, weight: [*]const f32, output: [*]f32, n: usize, eps: f32) void {
         const size = n * @sizeOf(f32);
-        const in_buf = self.getOrUpload(@ptrCast(input), size);
+        const in_pool = self.getPooledBuf(size);
+        self.uploadToBuffer(in_pool.buf, @ptrCast(input), size);
+        const in_buf = in_pool.buf;
+        defer self.releasePooledBuf(in_pool.idx);
         const w_buf = self.getOrUpload(@ptrCast(weight), size);
         const out = self.getPooledBuf(size);
         defer self.releasePooledBuf(out.idx);
@@ -973,7 +997,6 @@ pub const WebGpuBackend = struct {
             else => unreachable,
         };
         const w_buf = self.getOrUpload(w.data, w_size);
-        const w_bound = @min(w_size, max_buffer_size);
 
         const max_dispatch: u32 = 65535;
         var row_offset: u32 = 0;
@@ -984,7 +1007,7 @@ pub const WebGpuBackend = struct {
             defer self.fn_buffer_destroy(params_buf);
             const entries = [_]WGPUBindGroupEntry{
                 storageEntry(0, x_buf, x_size),
-                storageEntry(1, w_buf, w_bound),
+                storageEntry(1, w_buf, w_size),
                 storageEntry(2, out.buf, y_size),
                 uniformEntry(3, params_buf, Params),
             };
