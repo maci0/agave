@@ -63,7 +63,7 @@ All correctness-critical kernels are implemented as native GPU compute shaders a
 | 2 | Structured output / grammar-constrained decoding | Working | GBNF parser, `--grammar-string`, `--json-output` (brace tracking), full-token validation, BPE encoding handled. Repetition (`*`/`+`) not yet in state machine |
 | 3 | TriAttention Phase 3 | Not started | Dynamic budget, auto-tune, calibration data generator |
 | 4 | Native GPU tree SDPA for CUDA/ROCm/Vulkan | Not started | Metal done (f32 + turbo), others still CPU fallback |
-| 5 | Batch `forwardTree()` | Disabled | Correctness bug, disabled at `src/models/gemma3.zig` |
+| 5 | Batch `forwardTree()` | Fixed | Was hardcoding KV type as f32, now uses model's kv_type_k/v |
 | 6 | Direct NVMe-to-VRAM weight loading | Not started | Tiered KV exists, weight loading still CPU-mediated |
 | 7 | CUDA fused FFN megakernels (Q4_K/Q5_K/Q6_K variants) | Not started | Only Q8_0 megakernel exists for CUDA |
 | 8 | WebGPU Phase 2 (WASM target) | Not started | Browser-based inference via WebAssembly + WebGPU |
