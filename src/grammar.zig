@@ -87,7 +87,11 @@ pub const Grammar = struct {
             if (text.len == 0) continue;
 
             const effective = getEffectiveText(text);
-            if (effective.len == 0) continue;
+            if (effective.len == 0) {
+                // BPE prefix-only tokens (spaces, newlines) — mask them too
+                logit.* = -std.math.inf(f32);
+                continue;
+            }
 
             // Try accepting entire token in a copy of the state
             // If any byte fails, the token is disallowed
