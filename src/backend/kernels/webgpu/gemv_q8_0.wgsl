@@ -10,6 +10,8 @@ const BLOCK_BYTES: u32 = 34u;
 struct Params {
     n: u32,
     k: u32,
+    row_offset: u32,
+    _pad: u32,
 }
 
 @group(0) @binding(0) var<storage, read> x: array<f32>;
@@ -43,7 +45,7 @@ fn main(
     @builtin(workgroup_id) wg_id: vec3<u32>,
     @builtin(local_invocation_id) lid: vec3<u32>,
 ) {
-    let row = wg_id.x;
+    let row = wg_id.x + params.row_offset;
     let tid = lid.x;
     if (row >= params.n) {
         return;

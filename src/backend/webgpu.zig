@@ -917,39 +917,36 @@ pub const WebGpuBackend = struct {
         const out = self.getPooledBuf(y_size);
         defer self.releasePooledBuf(out.idx);
 
-        const Params = extern struct { n: u32, k: u32, _pad: [8]u8 = .{0} ** 8 };
-        const params = Params{ .n = @intCast(n), .k = @intCast(k) };
-        const params_buf = self.createUniformBuf(Params, params);
-        defer self.fn_buffer_destroy(params_buf);
+        const Params = extern struct { n: u32, k: u32, row_offset: u32, _pad: u32 };
 
-        switch (w.dtype) {
-            .f32 => {
-                const w_size = n * k * @sizeOf(f32);
-                const w_buf = self.getOrUpload(w.data, w_size);
-                const w_bound = @min(w_size, max_buffer_size);
-                const entries = [_]WGPUBindGroupEntry{
-                    storageEntry(0, x_buf, x_size),
-                    storageEntry(1, w_buf, w_bound),
-                    storageEntry(2, out.buf, y_size),
-                    uniformEntry(3, params_buf, Params),
-                };
-                self.dispatchCompute(self.pipe_gemv_f32, &entries, @intCast(n));
-            },
-            .q8_0 => {
-                const block_size_bytes: usize = 34;
-                const blocks_per_row = (k + 31) / 32;
-                const w_size = n * blocks_per_row * block_size_bytes;
-                const w_buf = self.getOrUpload(w.data, w_size);
-                const w_bound = @min(w_size, max_buffer_size);
-                const entries = [_]WGPUBindGroupEntry{
-                    storageEntry(0, x_buf, x_size),
-                    storageEntry(1, w_buf, w_bound),
-                    storageEntry(2, out.buf, y_size),
-                    uniformEntry(3, params_buf, Params),
-                };
-                self.dispatchCompute(self.pipe_gemv_q8_0, &entries, @intCast(n));
-            },
+        const pipe = switch (w.dtype) {
+            .f32 => self.pipe_gemv_f32,
+            .q8_0 => self.pipe_gemv_q8_0,
             else => @panic("WebGPU gemv: unsupported weight dtype"),
+        };
+        const w_size = switch (w.dtype) {
+            .f32 => n * k * @sizeOf(f32),
+            .q8_0 => n * ((k + 31) / 32) * 34,
+            else => unreachable,
+        };
+        const w_buf = self.getOrUpload(w.data, w_size);
+        const w_bound = @min(w_size, max_buffer_size);
+
+        const max_dispatch: u32 = 65535;
+        var row_offset: u32 = 0;
+        while (row_offset < n) {
+            const chunk = @min(@as(u32, @intCast(n)) - row_offset, max_dispatch);
+            const params = Params{ .n = @intCast(n), .k = @intCast(k), .row_offset = row_offset, ._pad = 0 };
+            const params_buf = self.createUniformBuf(Params, params);
+            defer self.fn_buffer_destroy(params_buf);
+            const entries = [_]WGPUBindGroupEntry{
+                storageEntry(0, x_buf, x_size),
+                storageEntry(1, w_buf, w_bound),
+                storageEntry(2, out.buf, y_size),
+                uniformEntry(3, params_buf, Params),
+            };
+            self.dispatchCompute(pipe, &entries, chunk);
+            row_offset += chunk;
         }
         self.downloadF32(out.buf, y, n);
     }
