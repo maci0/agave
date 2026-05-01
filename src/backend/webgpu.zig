@@ -36,6 +36,7 @@ const wgsl_gemv_t_q8_0 = @embedFile("kernels/webgpu/gemv_t_q8_0.wgsl");
 const wgsl_sdpa = @embedFile("kernels/webgpu/sdpa.wgsl");
 const wgsl_conv1d = @embedFile("kernels/webgpu/conv1d.wgsl");
 const wgsl_deltanet = @embedFile("kernels/webgpu/deltanet_recurrence.wgsl");
+const wgsl_sdpa_tree = @embedFile("kernels/webgpu/sdpa_tree.wgsl");
 const wgsl_gemv_nvfp4_st = @embedFile("kernels/webgpu/gemv_nvfp4_st.wgsl");
 const wgsl_gemv_mlx_q4 = @embedFile("kernels/webgpu/gemv_mlx_q4.wgsl");
 const wgsl_gemv_mxfp4_st = @embedFile("kernels/webgpu/gemv_mxfp4_st.wgsl");
@@ -318,6 +319,7 @@ pub const WebGpuBackend = struct {
     pipe_sdpa: PipelineInfo = .{},
     pipe_conv1d: PipelineInfo = .{},
     pipe_deltanet: PipelineInfo = .{},
+    pipe_sdpa_tree: PipelineInfo = .{},
 
     // Buffer management
     buf_cache: std.AutoHashMap(usize, CachedBuf) = undefined,
@@ -532,6 +534,7 @@ pub const WebGpuBackend = struct {
         self.pipe_sdpa = try self.createPipeline(wgsl_sdpa);
         self.pipe_conv1d = try self.createPipeline(wgsl_conv1d);
         self.pipe_deltanet = try self.createPipeline(wgsl_deltanet);
+        self.pipe_sdpa_tree = try self.createPipeline(wgsl_sdpa_tree);
     }
 
     fn createPipeline(self: *WebGpuBackend, wgsl_source: [:0]const u8) !PipelineInfo {
@@ -1274,7 +1277,42 @@ pub const WebGpuBackend = struct {
         }
     }
 
-    pub fn sdpaTree(_: *WebGpuBackend, q_all: [*]const f32, prefix_keys: [*]const u8, prefix_values: [*]const u8, tree_keys: [*]const f32, tree_values: [*]const f32, output: [*]f32, ancestor_masks: [*]const [8]u64, nh: usize, nkv: usize, hd: usize, prefix_len: usize, n_nodes: u32, scale: f32, kv_type_k: KvQuantType, kv_type_v: KvQuantType) void {
+    pub fn sdpaTree(self: *WebGpuBackend, q_all: [*]const f32, prefix_keys: [*]const u8, prefix_values: [*]const u8, tree_keys: [*]const f32, tree_values: [*]const f32, output: [*]f32, ancestor_masks: [*]const [8]u64, nh: usize, nkv: usize, hd: usize, prefix_len: usize, n_nodes: u32, scale: f32, kv_type_k: KvQuantType, kv_type_v: KvQuantType) void {
+        if (kv_type_k == .f32 and kv_type_v == .f32 and n_nodes > 0) {
+            const kvd = nkv * hd;
+            const q_sz = n_nodes * nh * hd * @sizeOf(f32);
+            const kv_sz = prefix_len * kvd * @sizeOf(f32);
+            const tk_sz = n_nodes * kvd * @sizeOf(f32);
+            const mask_sz = n_nodes * 8 * @sizeOf(u64);
+
+            const q_buf = self.getOrUpload(@ptrCast(q_all), q_sz);
+            const pk_buf = self.getOrUpload(@ptrCast(prefix_keys), kv_sz);
+            const pv_buf = self.getOrUpload(@ptrCast(prefix_values), kv_sz);
+            const tk_buf = self.getOrUpload(@ptrCast(tree_keys), tk_sz);
+            const tv_buf = self.getOrUpload(@ptrCast(tree_values), tk_sz);
+            const o_pool = self.getPooledBuf(q_sz);
+            defer self.releasePooledBuf(o_pool.idx);
+            const m_buf = self.getOrUpload(@ptrCast(ancestor_masks), mask_sz);
+
+            const Params = extern struct { nh_v: u32, nkv_v: u32, hd_v: u32, prefix_len_v: u32, n_nodes_v: u32, scale_v: f32, _pad: [8]u8 = .{0} ** 8 };
+            const p = Params{ .nh_v = @intCast(nh), .nkv_v = @intCast(nkv), .hd_v = @intCast(hd), .prefix_len_v = @intCast(prefix_len), .n_nodes_v = n_nodes, .scale_v = scale };
+            const params_buf = self.createUniformBuf(Params, p);
+            defer self.fn_buffer_destroy(params_buf);
+
+            const entries = [_]WGPUBindGroupEntry{
+                storageEntry(0, q_buf, q_sz),
+                storageEntry(1, pk_buf, kv_sz),
+                storageEntry(2, pv_buf, kv_sz),
+                storageEntry(3, tk_buf, tk_sz),
+                storageEntry(4, tv_buf, tk_sz),
+                storageEntry(5, o_pool.buf, q_sz),
+                storageEntry(6, m_buf, mask_sz),
+                uniformEntry(7, params_buf, Params),
+            };
+            self.dispatchCompute(self.pipe_sdpa_tree, &entries, n_nodes * @as(u32, @intCast(nh)));
+            self.downloadF32(o_pool.buf, output, n_nodes * nh * hd);
+            return;
+        }
         @import("kernels/cpu/sdpa_tree.zig").sdpaTree(q_all, prefix_keys, prefix_values, tree_keys, tree_values, output, ancestor_masks, nh, nkv, hd, prefix_len, n_nodes, scale, kv_type_k, kv_type_v);
     }
 

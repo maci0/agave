@@ -39,7 +39,7 @@ All correctness-critical kernels are implemented as native GPU compute shaders a
 
 | Operation | Metal | CUDA | ROCm | Vulkan | WebGPU |
 |-----------|:-----:|:----:|:----:|:------:|:------:|
-| sdpaTree (DDTree verification) | Native (f32 + turbo) | CPU delegate | CPU delegate | CPU delegate | CPU delegate |
+| sdpaTree (DDTree verification) | Native (f32 + turbo) | Native (f32) | Native (f32) | Native (f32) | Native (f32) |
 | sdpaWithStats (split-attention) | CPU delegate | CPU delegate | CPU delegate | CPU delegate | Native (wraps SDPA) |
 
 ---
