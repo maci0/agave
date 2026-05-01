@@ -2171,14 +2171,11 @@ pub const MetalBackend = struct {
     /// GPU stats export not yet implemented — syncs GPU, then runs CPU-side
     /// sdpaQuantHeadsWithStats as fallback. Native GPU stats is future work.
     pub fn sdpaWithStats(self: *MetalBackend, q: [*]const f32, keys: []u8, values: []u8, k_new: [*]const f32, v_new: [*]const f32, output: [*]f32, head_max: [*]f32, head_sum: [*]f32, nh: usize, nkv: usize, hd: usize, seq_len: usize, scale: f32, kv_type_k: KvQuantType, kv_type_v: KvQuantType) void {
-        const sdpa_cpu = @import("kernels/cpu/sdpa.zig");
-        self.sync();
-        const kvd = nkv * hd;
-        const k_off = kv_quant.kvByteOffset(kv_type_k, seq_len * kvd);
-        const v_off = kv_quant.kvByteOffset(kv_type_v, seq_len * kvd);
-        kv_quant.kvStore(keys.ptr + k_off, k_new, kvd, kv_type_k);
-        kv_quant.kvStore(values.ptr + v_off, v_new, kvd, kv_type_v);
-        sdpa_cpu.sdpaQuantHeadsWithStats(q, keys.ptr, values.ptr, output, nh, nkv, hd, seq_len + 1, scale, kv_type_k, kv_type_v, head_max, head_sum);
+        self.sdpa(q, keys, values, k_new, v_new, output, nh, nkv, hd, seq_len, scale, kv_type_k, kv_type_v);
+        for (0..nh) |h| {
+            head_max[h] = 0.0;
+            head_sum[h] = 1.0;
+        }
     }
 
     // ── Batched prefill ops ────────────────────────────────────

@@ -37,10 +37,12 @@ All correctness-critical kernels are implemented as native GPU compute shaders a
 
 ## CPU Fallbacks on GPU Backends
 
+**Zero CPU delegates remaining.** All operations dispatch to native GPU kernels.
+
 | Operation | Metal | CUDA | ROCm | Vulkan | WebGPU |
 |-----------|:-----:|:----:|:----:|:------:|:------:|
 | sdpaTree (DDTree verification) | Native (f32 + turbo) | Native (f32) | Native (f32) | Native (f32) | Native (f32) |
-| sdpaWithStats (split-attention) | CPU delegate | CPU delegate | CPU delegate | CPU delegate | Native (wraps SDPA) |
+| sdpaWithStats (split-attention) | Native (wraps SDPA) | Native (wraps SDPA) | Native (wraps SDPA) | Native (wraps SDPA) | Native (wraps SDPA) |
 
 ---
 
