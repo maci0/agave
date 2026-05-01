@@ -329,6 +329,11 @@ pub const WebGpuBackend = struct {
     staging_size: usize = 0,
     upload_generation: u32 = 0,
 
+    // Batched command encoding
+    batch_encoder: WGPUCommandEncoder = null,
+    batch_pass: WGPUComputePassEncoder = null,
+    in_batch: bool = false,
+
     // WebGPU C function pointers
     fn_create_instance: *const fn (?*const WGPUInstanceDescriptor) callconv(.c) WGPUInstance = undefined,
     fn_instance_request_adapter: *const fn (WGPUInstance, ?*const WGPURequestAdapterOptions, WGPURequestAdapterCallbackInfo) callconv(.c) WGPUFuture = undefined,
@@ -683,7 +688,8 @@ pub const WebGpuBackend = struct {
         return buf;
     }
 
-    /// Central dispatch: create bind group from entries, encode + submit compute pass.
+    /// Central dispatch: create bind group from entries, encode compute pass.
+    /// In batch mode, accumulates in shared encoder. Otherwise immediate submit.
     fn dispatchCompute(self: *WebGpuBackend, pipe: PipelineInfo, entries: []const WGPUBindGroupEntry, workgroups_x: u32) void {
         var bg_desc = WGPUBindGroupDescriptor{
             .layout = pipe.bind_group_layout,
