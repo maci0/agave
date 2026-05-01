@@ -2284,7 +2284,13 @@ fn generateAndPrintInner(
         if (use_repeat_penalty and token_count > 0) {
             math_ops.applyRepeatPenalty(logits, gen_ids_buf[0..token_count], cli.repeat_penalty);
         }
-        // Grammar-constrained decoding: mask tokens that violate the grammar
+        // Grammar-constrained decoding: mask disallowed tokens
+        if (grammar_state) |*gs| {
+            if (!gs.isComplete()) {
+                const vocab_texts = tok.id_to_token.items;
+                gs.grammar.maskLogits(gs, logits, vocab_texts);
+            }
+        }
         if (use_sampling) {
             next = math_ops.sampleToken(logits, cli.temperature, cli.top_k, cli.top_p, prng.random());
         } else if (use_repeat_penalty and token_count > 0) {
