@@ -739,3 +739,40 @@ test "applyGelu extreme values clamped" {
     // GELU(large negative) ≈ 0
     try std.testing.expectApproxEqAbs(@as(f32, 0.0), buf[1], 0.01);
 }
+
+test "applyPenalties frequency" {
+    var logits = [_]f32{ 1.0, 2.0, 3.0, 4.0 };
+    const tokens = [_]u32{ 1, 1, 2 }; // token 1 appears 2x, token 2 appears 1x
+    applyPenalties(&logits, &tokens, 0.5, 0);
+    try std.testing.expectApproxEqAbs(@as(f32, 1.0), logits[0], 0.001); // unchanged
+    try std.testing.expectApproxEqAbs(@as(f32, 1.0), logits[1], 0.001); // 2.0 - 2*0.5
+    try std.testing.expectApproxEqAbs(@as(f32, 2.5), logits[2], 0.001); // 3.0 - 1*0.5
+    try std.testing.expectApproxEqAbs(@as(f32, 4.0), logits[3], 0.001); // unchanged
+}
+
+test "applyPenalties presence" {
+    var logits = [_]f32{ 1.0, 2.0, 3.0, 4.0 };
+    const tokens = [_]u32{ 1, 1, 2 };
+    applyPenalties(&logits, &tokens, 0, 1.0);
+    try std.testing.expectApproxEqAbs(@as(f32, 1.0), logits[0], 0.001); // unchanged
+    try std.testing.expectApproxEqAbs(@as(f32, 1.0), logits[1], 0.001); // 2.0 - 1.0 (once)
+    try std.testing.expectApproxEqAbs(@as(f32, 2.0), logits[2], 0.001); // 3.0 - 1.0 (once)
+    try std.testing.expectApproxEqAbs(@as(f32, 4.0), logits[3], 0.001); // unchanged
+}
+
+test "applyRepeatPenalty positive logit" {
+    var logits = [_]f32{ 1.0, 2.0, 3.0 };
+    const tokens = [_]u32{1};
+    applyRepeatPenalty(&logits, &tokens, 2.0);
+    try std.testing.expectApproxEqAbs(@as(f32, 1.0), logits[0], 0.001); // unchanged
+    try std.testing.expectApproxEqAbs(@as(f32, 1.0), logits[1], 0.001); // 2.0 / 2.0
+    try std.testing.expectApproxEqAbs(@as(f32, 3.0), logits[2], 0.001); // unchanged
+}
+
+test "applyRepeatPenalty negative logit" {
+    var logits = [_]f32{ -2.0, 1.0 };
+    const tokens = [_]u32{0};
+    applyRepeatPenalty(&logits, &tokens, 2.0);
+    try std.testing.expectApproxEqAbs(@as(f32, -4.0), logits[0], 0.001); // -2.0 * 2.0
+    try std.testing.expectApproxEqAbs(@as(f32, 1.0), logits[1], 0.001); // unchanged
+}

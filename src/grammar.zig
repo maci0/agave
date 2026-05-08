@@ -1204,3 +1204,25 @@ test "json schema object" {
     // Should accept opening brace
     try std.testing.expect(state.acceptChar('{'));
 }
+
+test "json schema array" {
+    const allocator = std.testing.allocator;
+    var grammar = try Grammar.fromJsonSchema(allocator, "{\"type\": \"array\", \"items\": {\"type\": \"integer\"}}");
+    defer grammar.deinit();
+    var state = grammar.initState();
+    defer state.deinit();
+
+    try std.testing.expect(state.acceptChar('['));
+}
+
+test "json schema integer" {
+    const allocator = std.testing.allocator;
+    var grammar = try Grammar.fromJsonSchema(allocator, "{\"type\": \"integer\"}");
+    defer grammar.deinit();
+    var state = grammar.initState();
+    defer state.deinit();
+
+    try std.testing.expect(state.acceptChar('-'));
+    try std.testing.expect(state.acceptChar('5'));
+    try std.testing.expect(state.acceptChar('a') == false);
+}
