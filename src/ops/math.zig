@@ -237,6 +237,53 @@ pub fn applyPenalties(logits: []f32, gen_tokens: []const u32, frequency_penalty:
     }
 }
 
+/// Compute log probability of a specific token from raw logits.
+/// Returns log(softmax(logits)[token_id]).
+pub fn tokenLogProb(logits: []const f32, token_id: u32) f32 {
+    if (token_id >= logits.len) return -std.math.inf(f32);
+    var max_val: f32 = -std.math.inf(f32);
+    for (logits) |v| max_val = @max(max_val, v);
+    var log_sum: f32 = 0;
+    for (logits) |v| log_sum += @exp(v - max_val);
+    return (logits[token_id] - max_val) - @log(log_sum);
+}
+
+/// Compute top-N tokens by logit value and their log probabilities.
+/// Writes to provided output slices. Returns actual count written (<= n).
+pub fn topLogProbs(logits: []const f32, n: u32, out_ids: []u32, out_logprobs: []f32) u32 {
+    const limit = @min(n, @as(u32, @intCast(out_ids.len)));
+    if (limit == 0) return 0;
+
+    // Find max for log-sum-exp
+    var max_val: f32 = -std.math.inf(f32);
+    for (logits) |v| max_val = @max(max_val, v);
+    var log_sum: f32 = 0;
+    for (logits) |v| log_sum += @exp(v - max_val);
+    const log_norm = @log(log_sum);
+
+    // Find top-N by min-replacement scan
+    var top_vals: [20]f32 = .{-std.math.inf(f32)} ** 20;
+    var top_ids: [20]u32 = .{0} ** 20;
+    var mi: usize = 0;
+
+    for (logits, 0..) |v, i| {
+        if (v > top_vals[mi]) {
+            top_vals[mi] = v;
+            top_ids[mi] = @intCast(i);
+            mi = 0;
+            for (1..limit) |j| {
+                if (top_vals[j] < top_vals[mi]) mi = j;
+            }
+        }
+    }
+
+    for (0..limit) |i| {
+        out_ids[i] = top_ids[i];
+        out_logprobs[i] = (top_vals[i] - max_val) - log_norm;
+    }
+    return limit;
+}
+
 /// Apply min_p filtering: zero out tokens with probability < min_p * max_probability.
 /// Must be called AFTER temperature scaling (logits are still pre-softmax).
 /// Converts to probabilities, finds max, masks below threshold, restores to logits.
@@ -806,4 +853,35 @@ test "applyRepeatPenalty negative logit" {
     applyRepeatPenalty(&logits, &tokens, 2.0);
     try std.testing.expectApproxEqAbs(@as(f32, -4.0), logits[0], 0.001); // -2.0 * 2.0
     try std.testing.expectApproxEqAbs(@as(f32, 1.0), logits[1], 0.001); // unchanged
+}
+
+test "tokenLogProb" {
+    // logits [0, 0, 0] → uniform → each has prob 1/3 → logprob = ln(1/3) ≈ -1.0986
+    const logits = [_]f32{ 0, 0, 0 };
+    const lp = tokenLogProb(&logits, 0);
+    try std.testing.expectApproxEqAbs(@as(f32, -1.0986), lp, 0.01);
+}
+
+test "tokenLogProb dominant" {
+    // logits [10, 0, 0] → token 0 dominates → logprob ≈ 0
+    const logits = [_]f32{ 10, 0, 0 };
+    const lp = tokenLogProb(&logits, 0);
+    try std.testing.expect(lp > -0.001);
+}
+
+test "topLogProbs returns correct ids" {
+    const logits = [_]f32{ 1.0, 5.0, 3.0, 2.0 };
+    var ids: [2]u32 = undefined;
+    var probs: [2]f32 = undefined;
+    const n = topLogProbs(&logits, 2, &ids, &probs);
+    try std.testing.expectEqual(@as(u32, 2), n);
+    // Top 2 should be indices 1 (5.0) and 2 (3.0)
+    var has_1 = false;
+    var has_2 = false;
+    for (ids[0..n]) |id| {
+        if (id == 1) has_1 = true;
+        if (id == 2) has_2 = true;
+    }
+    try std.testing.expect(has_1);
+    try std.testing.expect(has_2);
 }

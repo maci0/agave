@@ -32,6 +32,8 @@ pub const SamplingParams = struct {
     presence_penalty: f32 = 0,
     repetition_penalty: f32 = 1.0,
     seed: ?u64 = null,
+    logprobs: bool = false,
+    top_logprobs: u32 = 0,
     json_mode: bool = false,
     grammar_string: ?[]const u8 = null,
     json_schema: ?[]const u8 = null,
@@ -221,6 +223,8 @@ pub fn parseSampling(body: []const u8) SamplingParams {
             break :blk if (std.math.isFinite(raw) and raw > 0) raw else 1.0;
         },
         .seed = if (extractIntField(body, "seed")) |s| @as(u64, @intCast(s)) else null,
+        .logprobs = extractBoolField(body, "logprobs"),
+        .top_logprobs = @intCast(@min(extractIntField(body, "top_logprobs") orelse 0, 20)),
         .json_mode = json_mode,
         .grammar_string = extractField(body, "grammar"),
         .json_schema = extractField(body, "json_schema") orelse schema_from_rf,
