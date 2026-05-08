@@ -2096,13 +2096,36 @@ fn generateN(formatted: []const u8, reset: bool, max_tokens: usize, sampling: Sa
     var prng = std.Random.Xoshiro256.init(@as(u64, @truncate(@as(u96, @bitCast(nanoTimestamp())))));
     var json_depth: i32 = 0;
 
+    // Grammar-constrained decoding: parse GBNF and init state
+    const grammar_mod = @import("../grammar.zig");
+    var grammar_storage: ?grammar_mod.Grammar = null;
+    var grammar_state_storage: ?grammar_mod.GrammarState = null;
+    defer {
+        if (grammar_state_storage) |*gs| gs.deinit();
+        if (grammar_storage) |*g| g.deinit();
+    }
+    const use_grammar = sampling.grammar_string != null and !sampling.json_mode;
+    if (sampling.grammar_string) |gs| {
+        grammar_storage = grammar_mod.Grammar.parse(g_server.allocator, gs) catch null;
+        if (grammar_storage) |*g| grammar_state_storage = g.initState();
+    }
+
     if (token_ids.len > 0) {
         const first_logits = model.getLogits();
+        const bpe: *@import("../tokenizer/bpe.zig").BpeTokenizer = @ptrCast(@alignCast(g_server.tokenizer.ptr));
+        const vocab_texts = bpe.id_to_token.items;
+
+        // Grammar masking on first token
+        if (use_grammar) {
+            if (grammar_storage) |*g| {
+                if (grammar_state_storage) |*gs| {
+                    g.maskLogits(gs, first_logits, vocab_texts);
+                }
+            }
+        }
+
         // JSON mode: force first token to start with {
         if (sampling.json_mode) {
-            const bpe: *@import("../tokenizer/bpe.zig").BpeTokenizer = @ptrCast(@alignCast(g_server.tokenizer.ptr));
-            const vocab_texts = bpe.id_to_token.items;
-            const grammar_mod = @import("../grammar.zig");
             for (first_logits, 0..) |*logit, tid| {
                 if (tid >= vocab_texts.len) break;
                 const t = grammar_mod.Grammar.getEffectiveText(vocab_texts[tid]);
@@ -2111,8 +2134,14 @@ fn generateN(formatted: []const u8, reset: bool, max_tokens: usize, sampling: Sa
         }
         if (use_sampling) {
             first_gen_token = math_ops.sampleToken(first_logits, sampling.temperature, sampling.top_k, sampling.top_p, prng.random());
-        } else if (sampling.json_mode) {
+        } else if (sampling.json_mode or use_grammar) {
             first_gen_token = math_ops.argmax(first_logits);
+        }
+        // Accept first token in grammar state
+        if (use_grammar and grammar_state_storage != null) {
+            const tok_slice = [1]u32{first_gen_token};
+            const text = g_server.tokenizer.decode(@constCast(&tok_slice)) catch "";
+            grammar_state_storage.?.acceptToken(text);
         }
         // Track JSON depth for first token
         if (sampling.json_mode) {
@@ -2216,7 +2245,17 @@ fn generateN(formatted: []const u8, reset: bool, max_tokens: usize, sampling: Sa
                 }
                 break;
             };
-            if (use_sampling) {
+            // Grammar masking before sampling
+            if (use_grammar) {
+                if (grammar_storage) |*g| {
+                    if (grammar_state_storage) |*gs| {
+                        const bpe_inner: *@import("../tokenizer/bpe.zig").BpeTokenizer = @ptrCast(@alignCast(g_server.tokenizer.ptr));
+                        g.maskLogits(gs, model.getLogits(), bpe_inner.id_to_token.items);
+                        next = math_ops.argmax(model.getLogits());
+                    }
+                }
+            }
+            if (use_sampling and !use_grammar) {
                 next = math_ops.sampleToken(model.getLogits(), sampling.temperature, sampling.top_k, sampling.top_p, prng.random());
             }
             if (g_server.isEog(next)) {
@@ -2224,6 +2263,17 @@ fn generateN(formatted: []const u8, reset: bool, max_tokens: usize, sampling: Sa
                 break;
             }
             gen_tokens[token_count] = next;
+            // Accept token in grammar state
+            if (use_grammar and grammar_state_storage != null) {
+                const gtok_slice = [1]u32{next};
+                const gtext = g_server.tokenizer.decode(@constCast(&gtok_slice)) catch "";
+                grammar_state_storage.?.acceptToken(gtext);
+                if (grammar_state_storage.?.isComplete()) {
+                    token_count += 1;
+                    hit_eog = true;
+                    break;
+                }
+            }
             // JSON mode: stop at balanced braces
             if (sampling.json_mode) {
                 const tok_slice = [1]u32{next};
@@ -3418,6 +3468,20 @@ fn generateStream(stream: TcpStream, prompt: []const u8, req_id: u64, created: i
         };
     }
 
+    // Grammar-constrained streaming
+    const grammar_mod_s = @import("../grammar.zig");
+    var s_grammar: ?grammar_mod_s.Grammar = null;
+    var s_grammar_state: ?grammar_mod_s.GrammarState = null;
+    defer {
+        if (s_grammar_state) |*gs| gs.deinit();
+        if (s_grammar) |*g| g.deinit();
+    }
+    const use_grammar_s = sampling.grammar_string != null and !sampling.json_mode;
+    if (sampling.grammar_string) |gs| {
+        s_grammar = grammar_mod_s.Grammar.parse(g_server.allocator, gs) catch null;
+        if (s_grammar) |*g| s_grammar_state = g.initState();
+    }
+
     // Prefill — capture the last forward's return value (first generated token)
     const use_sampling_s = sampling.temperature > 0;
     var prng_s = std.Random.Xoshiro256.init(@as(u64, @truncate(@as(u96, @bitCast(nanoTimestamp())))));
@@ -3438,8 +3502,23 @@ fn generateStream(stream: TcpStream, prompt: []const u8, req_id: u64, created: i
     }
     const stream_prefill_ms: u64 = @intCast(@max(milliTimestamp() - prefill_start, 0));
     g_server.metrics.recordTTFT(stream_prefill_ms, @intCast(token_ids.len));
-    if (use_sampling_s and token_ids.len > 0) {
+    // Grammar masking on first token
+    if (use_grammar_s and token_ids.len > 0) {
+        if (s_grammar) |*g| {
+            if (s_grammar_state) |*gs| {
+                const bpe_s: *@import("../tokenizer/bpe.zig").BpeTokenizer = @ptrCast(@alignCast(g_server.tokenizer.ptr));
+                g.maskLogits(gs, model.getLogits(), bpe_s.id_to_token.items);
+                first_gen_token = math_ops.argmax(model.getLogits());
+            }
+        }
+    } else if (use_sampling_s and token_ids.len > 0) {
         first_gen_token = math_ops.sampleToken(model.getLogits(), sampling.temperature, sampling.top_k, sampling.top_p, prng_s.random());
+    }
+    // Accept first token in grammar
+    if (use_grammar_s and s_grammar_state != null and token_ids.len > 0) {
+        const ft_slice = [1]u32{first_gen_token};
+        const ft_text = g_server.tokenizer.decode(@constCast(&ft_slice)) catch "";
+        s_grammar_state.?.acceptToken(ft_text);
     }
 
     // Generate and stream tokens
@@ -3526,10 +3605,29 @@ fn generateStream(stream: TcpStream, prompt: []const u8, req_id: u64, created: i
                 }
                 break;
             };
-            if (use_sampling_s) {
+            if (use_grammar_s) {
+                if (s_grammar) |*g| {
+                    if (s_grammar_state) |*gs| {
+                        const bpe_inner_s: *@import("../tokenizer/bpe.zig").BpeTokenizer = @ptrCast(@alignCast(g_server.tokenizer.ptr));
+                        g.maskLogits(gs, model.getLogits(), bpe_inner_s.id_to_token.items);
+                        next = math_ops.argmax(model.getLogits());
+                    }
+                }
+            } else if (use_sampling_s) {
                 next = math_ops.sampleToken(model.getLogits(), sampling.temperature, sampling.top_k, sampling.top_p, prng_s.random());
             }
             if (g_server.isEog(next)) break;
+            // Accept in grammar
+            if (use_grammar_s and s_grammar_state != null) {
+                const stok_slice = [1]u32{next};
+                const stext = g_server.tokenizer.decode(@constCast(&stok_slice)) catch "";
+                s_grammar_state.?.acceptToken(stext);
+                if (s_grammar_state.?.isComplete()) {
+                    if (!streamChunk(stream, &chunk_buf, tok, next, req_id, created, is_chat)) stream_disconnected = true;
+                    token_count += 1;
+                    break;
+                }
+            }
             if (!streamChunk(stream, &chunk_buf, tok, next, req_id, created, is_chat)) {
                 stream_disconnected = true;
                 break;
