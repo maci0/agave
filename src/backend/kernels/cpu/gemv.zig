@@ -66,7 +66,7 @@ pub fn gemvRowBytes(dtype: DType, k: usize) usize {
         .f16, .bf16 => k * backend_mod.f16_elem_bytes,
         .f32 => k * backend_mod.f32_elem_bytes,
         .fp8_e4m3, .fp8_e5m2 => k,
-        .tq1_0, .mlx_q, .unknown => 0, // tq1_0/mlx_q: not applicable
+        .tq1_0, .mlx_q, .gptq, .unknown => 0, // tq1_0/mlx_q: not applicable
     };
 }
 
@@ -91,7 +91,7 @@ pub fn gemvSeq(x: [*]const f32, w_data: [*]const u8, dtype: DType, y: [*]f32, n:
         .fp8_e4m3 => gemvFP8_E4M3(x, w_data, y, n, k),
         .fp8_e5m2 => gemvFP8_E5M2(x, w_data, y, n, k),
         .nvfp4 => gemvNVFP4(x, w_data, y, n, k),
-        .tq1_0, .mlx_q, .unknown => {
+        .tq1_0, .mlx_q, .gptq, .unknown => {
             std.log.warn("GEMV: unsupported dtype {s}, output zeroed", .{@tagName(dtype)});
             @memset(y[0..n], 0);
         },

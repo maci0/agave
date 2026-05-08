@@ -1612,6 +1612,8 @@ fn parseDType(s: []const u8) DType {
     if (std.mem.eql(u8, s, "F8_E4M3")) return .fp8_e4m3;
     // U8 — packed FP4 bytes, used by compressed-tensors NVFP4 weight_packed tensors.
     if (std.mem.eql(u8, s, "U8")) return .nvfp4;
+    // I32 — GPTQ packed INT4 weights (8 nibbles per i32 word).
+    if (std.mem.eql(u8, s, "I32")) return .gptq;
     return .unknown; // unsupported dtypes
 }
 

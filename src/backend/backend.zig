@@ -233,6 +233,8 @@ pub fn weightBytes(dtype: DType, n: usize, k: usize) usize {
         .iq4_xs => n * nsb * iq4_xs_block_bytes,
         .tq1_0 => n * nsb * tq1_0_block_bytes,
         .nvfp4 => n * ((k + nvfp4_block_elems - 1) / nvfp4_block_elems) * nvfp4_block_bytes,
+        // GPTQ: 8 INT4 nibbles per u32 word
+        .gptq => n * k / 2,
         // Unsupported dtypes: assume f32 (4 bytes per element).
         .mlx_q, .unknown => n * k * 4,
     };

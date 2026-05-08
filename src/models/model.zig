@@ -437,6 +437,38 @@ pub fn dispatchGemv(be: backend_mod.Backend, fmt: format_mod.Format, x: [*]const
         }
         return;
     }
+    if (t.dtype == .gptq) {
+        // GPTQ: INT4 packed weights + FP16 scales + INT4 packed zeros
+        var name_buf2: [tensor_name_buf_size]u8 = undefined;
+        const base_name = blk: {
+            // GPTQ tensor names: model.layers.N.mlp.gate_proj.qweight → base = model.layers.N.mlp.gate_proj
+            if (std.mem.endsWith(u8, t.name, ".qweight")) {
+                break :blk t.name[0 .. t.name.len - ".qweight".len];
+            }
+            // Fallback: strip last component
+            break :blk t.name[0..(std.mem.lastIndexOfScalar(u8, t.name, '.') orelse t.name.len)];
+        };
+        const s_name = std.fmt.bufPrint(&name_buf2, "{s}.scales", .{base_name}) catch "";
+        const z_name = std.fmt.bufPrint(&name_buf2, "{s}.qzeros", .{base_name}) catch "";
+        _ = z_name;
+        if (s_name.len > 0) {
+            if (fmt.getTensor(s_name)) |scales_t| {
+                const gptq_ops = @import("../ops/gptq.zig");
+                const group_size = fmt.getMetaU32("group_size") orelse 128;
+                gptq_ops.gptqGemv(
+                    x,
+                    @ptrCast(@alignCast(t.data_ptr)),
+                    @ptrCast(@alignCast(scales_t.data_ptr)),
+                    @ptrCast(@alignCast(scales_t.data_ptr)), // TODO: use qzeros tensor
+                    y,
+                    n,
+                    k,
+                    group_size,
+                );
+                return;
+            }
+        }
+    }
     be.gemv(x, .{ .data = t.data_ptr, .dtype = t.dtype }, y, n, k);
 }
 

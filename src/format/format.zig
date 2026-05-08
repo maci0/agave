@@ -27,6 +27,8 @@ pub const DType = enum {
     tq1_0,
     /// MLX quantized weights (U32-packed); needs companion scales/biases tensors for dequant.
     mlx_q,
+    /// GPTQ INT4 packed in INT32; needs companion scales/qzeros tensors.
+    gptq,
     unknown,
 };
 
@@ -71,7 +73,7 @@ pub const TensorInfo = struct {
             .tq1_0 => std.math.mul(usize, n / 256, 64) catch std.math.maxInt(usize),
             .mxfp4 => std.math.mul(usize, n / 32, 17) catch std.math.maxInt(usize),
             .nvfp4 => std.math.mul(usize, n / 16, 9) catch std.math.maxInt(usize),
-            .mlx_q, .unknown => std.math.mul(usize, n, 4) catch std.math.maxInt(usize),
+            .mlx_q, .gptq, .unknown => std.math.mul(usize, n, 4) catch std.math.maxInt(usize),
         };
     }
 };
@@ -218,6 +220,7 @@ pub const Format = struct {
                     .mxfp4 => "MXFP4",
                     .tq1_0 => "TQ1_0",
                     .mlx_q => "MLX-Q",
+                    .gptq => "GPTQ",
                     .unknown => "unknown",
                 };
             }
