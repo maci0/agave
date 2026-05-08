@@ -452,13 +452,12 @@ pub fn dispatchGemv(be: backend_mod.Backend, fmt: format_mod.Format, x: [*]const
         const scales_t = if (s_name.len > 0) fmt.getTensor(s_name) else null;
         const zeros_t = if (z_name.len > 0) fmt.getTensor(z_name) else null;
         if (scales_t) |st| {
-            const gptq_ops = @import("../ops/gptq.zig");
             const group_size = fmt.getMetaU32("group_size") orelse 128;
             const zeros_ptr: [*]const u32 = if (zeros_t) |zt|
                 @ptrCast(@alignCast(zt.data_ptr))
             else
-                @ptrCast(@alignCast(st.data_ptr)); // fallback: no zeros
-            gptq_ops.gptqGemv(
+                @ptrCast(@alignCast(st.data_ptr));
+            be.gemvGptq(
                 x,
                 @ptrCast(@alignCast(t.data_ptr)),
                 @ptrCast(@alignCast(st.data_ptr)),

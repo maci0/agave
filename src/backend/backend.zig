@@ -762,6 +762,21 @@ pub const Backend = union(enum) {
         }
     }
 
+    /// GPTQ INT4 GEMV: y[n] = dequant(qweight[n,k/8]) @ x[k].
+    /// Weights packed 8 nibbles per u32, FP16 per-group scales, INT4 packed zero-points.
+    pub inline fn gemvGptq(self: Backend, x: [*]const f32, qweight: [*]const u32, scales: [*]const u16, qzeros: [*]const u32, y: [*]f32, n: usize, k: usize, group_size: u32) void {
+        switch (self) {
+            inline else => |be| {
+                if (comptime @hasDecl(@TypeOf(be.*), "gemvGptq")) {
+                    be.gemvGptq(x, qweight, scales, qzeros, y, n, k, group_size);
+                } else {
+                    const gptq_ops = @import("../ops/gptq.zig");
+                    gptq_ops.gptqGemv(x, qweight, scales, qzeros, y, n, k, group_size);
+                }
+            },
+        }
+    }
+
     /// Begin a batch of independent GPU dispatches. While active, memory barriers
     /// between dispatches are suppressed so the GPU can overlap execution.
     /// Call endBatch() after the last independent op to insert a single barrier.

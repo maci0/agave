@@ -553,6 +553,36 @@ pub const CpuBackend = struct {
         }
     };
 
+    /// GPTQ INT4 GEMV with thread pool parallelism.
+    pub fn gemvGptq(self: *CpuBackend, x: [*]const f32, qweight: [*]const u32, scales: [*]const u16, qzeros: [*]const u32, y: [*]f32, n: usize, k: usize, group_size: u32) void {
+        if (self.pool) |pool| {
+            if (n >= parallel_min_rows) {
+                var ctx = GptqCtx{ .x = x, .qw = qweight, .scales = scales, .qzeros = qzeros, .y = y, .n = n, .k = k, .gs = group_size };
+                pool.parallelFor(n, parallel_grain, @ptrCast(&ctx), GptqCtx.work);
+                return;
+            }
+        }
+        const gptq_ops = @import("../ops/gptq.zig");
+        gptq_ops.gptqGemv(x, qweight, scales, qzeros, y, n, k, group_size);
+    }
+
+    const GptqCtx = struct {
+        x: [*]const f32,
+        qw: [*]const u32,
+        scales: [*]const u16,
+        qzeros: [*]const u32,
+        y: [*]f32,
+        n: usize,
+        k: usize,
+        gs: u32,
+
+        fn work(ctx_ptr: *anyopaque, start: usize, end: usize) void {
+            const ctx: *const GptqCtx = @ptrCast(@alignCast(ctx_ptr));
+            const gptq_ops = @import("../ops/gptq.zig");
+            gptq_ops.gptqGemvRows(ctx.x, ctx.qw, ctx.scales, ctx.qzeros, ctx.y, start, end - start, ctx.k, ctx.gs);
+        }
+    };
+
     /// Batched GEMV — fuses all ops into a single parallelFor to minimize
     /// thread wake/sleep overhead (~250 GEMV dispatches per token).
     pub fn gemvMulti(self: *CpuBackend, x: [*]const f32, ops: []const backend_mod.GemvOp, k: usize) void {
