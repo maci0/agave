@@ -199,6 +199,8 @@ const known_endpoints = [_]KnownEndpoint{
     .{ .path = "/v1/chat", .allow = "POST, OPTIONS", .msg = "Use POST." },
     .{ .path = "/v1/chat/regenerate", .allow = "POST, OPTIONS", .msg = "Use POST." },
     .{ .path = "/v1/conversations", .allow = "GET, POST, OPTIONS", .msg = "Use GET or POST." },
+    .{ .path = "/v1/tokenize", .allow = "POST, OPTIONS", .msg = "Use POST." },
+    .{ .path = "/v1/detokenize", .allow = "POST, OPTIONS", .msg = "Use POST." },
     .{ .path = "/v1/models", .allow = "GET, OPTIONS", .msg = "Use GET." },
     .{ .path = "/health", .allow = "GET, OPTIONS", .msg = "Use GET." },
     .{ .path = "/ready", .allow = "GET, OPTIONS", .msg = "Use GET." },
