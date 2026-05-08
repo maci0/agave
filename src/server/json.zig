@@ -20,6 +20,9 @@ const max_top_k: u32 = 1024;
 
 /// Per-request sampling parameters. Defaults match greedy decoding.
 /// Values are clamped to safe ranges by `parseSampling()`.
+/// Maximum number of stop sequences per request.
+const max_stop_sequences: usize = 4;
+
 pub const SamplingParams = struct {
     temperature: f32 = 0,
     top_k: u32 = 0,
@@ -27,6 +30,21 @@ pub const SamplingParams = struct {
     json_mode: bool = false,
     grammar_string: ?[]const u8 = null,
     json_schema: ?[]const u8 = null,
+    stop: [max_stop_sequences]?[]const u8 = .{null} ** max_stop_sequences,
+    n_stop: u32 = 0,
+
+    pub fn hasStop(self: *const SamplingParams) bool {
+        return self.n_stop > 0;
+    }
+
+    pub fn matchesStop(self: *const SamplingParams, text: []const u8) bool {
+        for (self.stop[0..self.n_stop]) |s| {
+            if (s) |seq| {
+                if (text.len >= seq.len and std.mem.endsWith(u8, text, seq)) return true;
+            }
+        }
+        return false;
+    }
 };
 
 /// Result of extracting messages from an OpenAI/Anthropic-format JSON body.
@@ -170,18 +188,63 @@ pub fn parseSampling(body: []const u8) SamplingParams {
     const raw_temp = extractFloatField(body, "temperature") orelse 0;
     const raw_top_p = extractFloatField(body, "top_p") orelse 1.0;
     const raw_top_k = extractIntField(body, "top_k") orelse 0;
-    const json_mode = if (extractField(body, "response_format")) |rf|
-        std.mem.indexOf(u8, rf, "json_object") != null
-    else
-        false;
-    return .{
+    // OpenAI response_format: {"type": "json_object"} or {"type": "json_schema", "json_schema": {"schema": {...}}}
+    var json_mode = false;
+    var schema_from_rf: ?[]const u8 = null;
+    if (extractField(body, "response_format")) |rf| {
+        if (std.mem.indexOf(u8, rf, "json_object") != null) {
+            json_mode = true;
+        } else if (std.mem.indexOf(u8, rf, "json_schema") != null) {
+            // Extract schema from nested json_schema.schema object
+            if (extractField(body, "schema")) |s| {
+                schema_from_rf = s;
+            }
+        }
+    }
+    var result = SamplingParams{
         .temperature = if (std.math.isFinite(raw_temp)) std.math.clamp(raw_temp, 0, max_temperature) else 0,
         .top_k = @intCast(@min(raw_top_k, max_top_k)),
         .top_p = if (std.math.isFinite(raw_top_p)) std.math.clamp(raw_top_p, 0, 1.0) else 1.0,
         .json_mode = json_mode,
         .grammar_string = extractField(body, "grammar"),
-        .json_schema = extractField(body, "json_schema"),
+        .json_schema = extractField(body, "json_schema") orelse schema_from_rf,
     };
+
+    // Parse stop sequences: "stop": "string" or "stop": ["s1", "s2"]
+    if (extractField(body, "stop")) |stop_str| {
+        result.stop[0] = stop_str;
+        result.n_stop = 1;
+    } else {
+        // Try array form: scan for "stop" followed by [
+        var sbuf: [64]u8 = undefined;
+        const needle = std.fmt.bufPrint(&sbuf, "\"stop\"", .{}) catch "";
+        if (needle.len > 0) {
+            if (std.mem.indexOf(u8, body, needle)) |idx| {
+                var si = idx + needle.len;
+                while (si < body.len and (body[si] == ' ' or body[si] == ':')) : (si += 1) {}
+                if (si < body.len and body[si] == '[') {
+                    si += 1;
+                    while (si < body.len and result.n_stop < max_stop_sequences) {
+                        while (si < body.len and (body[si] == ' ' or body[si] == ',')) : (si += 1) {}
+                        if (si >= body.len or body[si] == ']') break;
+                        if (body[si] == '"') {
+                            si += 1;
+                            const str_start = si;
+                            while (si < body.len and body[si] != '"') {
+                                if (body[si] == '\\') si += 1;
+                                si += 1;
+                            }
+                            result.stop[result.n_stop] = body[str_start..si];
+                            result.n_stop += 1;
+                            if (si < body.len) si += 1;
+                        } else break;
+                    }
+                }
+            }
+        }
+    }
+
+    return result;
 }
 
 /// Extract all messages from an OpenAI-format `"messages"` JSON array.

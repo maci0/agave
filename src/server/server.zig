@@ -2266,11 +2266,16 @@ fn generateN(formatted: []const u8, reset: bool, max_tokens: usize, sampling: Sa
                 break;
             }
             gen_tokens[token_count] = next;
+            // Decode token text for grammar/JSON/stop checks
+            const needs_text = use_grammar or sampling.json_mode or sampling.hasStop();
+            var tok_text: []const u8 = "";
+            if (needs_text) {
+                const tok_slice = [1]u32{next};
+                tok_text = g_server.tokenizer.decode(@constCast(&tok_slice)) catch "";
+            }
             // Accept token in grammar state
             if (use_grammar and grammar_state_storage != null) {
-                const gtok_slice = [1]u32{next};
-                const gtext = g_server.tokenizer.decode(@constCast(&gtok_slice)) catch "";
-                grammar_state_storage.?.acceptToken(gtext);
+                grammar_state_storage.?.acceptToken(tok_text);
                 if (grammar_state_storage.?.isComplete()) {
                     token_count += 1;
                     hit_eog = true;
@@ -2279,13 +2284,24 @@ fn generateN(formatted: []const u8, reset: bool, max_tokens: usize, sampling: Sa
             }
             // JSON mode: stop at balanced braces
             if (sampling.json_mode) {
-                const tok_slice = [1]u32{next};
-                const text = g_server.tokenizer.decode(@constCast(&tok_slice)) catch "";
-                for (text) |ch| {
+                for (tok_text) |ch| {
                     if (ch == '{' or ch == '[') json_depth += 1;
                     if (ch == '}' or ch == ']') json_depth -= 1;
                 }
                 if (json_depth <= 0) {
+                    token_count += 1;
+                    hit_eog = true;
+                    break;
+                }
+            }
+            // Stop sequence check
+            if (sampling.hasStop() and tok_text.len > 0) {
+                // Check accumulated text ending for stop sequences
+                // Build trailing window from recent tokens
+                const window_start = if (token_count > 8) token_count - 8 else 0;
+                const window_tokens = gen_tokens[window_start .. token_count + 1];
+                const window_text = g_server.tokenizer.decode(@constCast(window_tokens)) catch "";
+                if (sampling.matchesStop(window_text)) {
                     token_count += 1;
                     hit_eog = true;
                     break;
@@ -3630,6 +3646,15 @@ fn generateStream(stream: TcpStream, prompt: []const u8, req_id: u64, created: i
                 s_grammar_state.?.acceptToken(stext);
                 if (s_grammar_state.?.isComplete()) {
                     if (!streamChunk(stream, &chunk_buf, tok, next, req_id, created, is_chat)) stream_disconnected = true;
+                    token_count += 1;
+                    break;
+                }
+            }
+            // Stop sequence check (decode token, check trailing text)
+            if (sampling.hasStop()) {
+                const stok = [1]u32{next};
+                const stext = g_server.tokenizer.decode(@constCast(&stok)) catch "";
+                if (stext.len > 0 and sampling.matchesStop(stext)) {
                     token_count += 1;
                     break;
                 }

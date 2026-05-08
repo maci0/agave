@@ -2,7 +2,7 @@
 
 Comprehensive list of bugs, missing features, and improvement opportunities.
 
-**Last updated**: 2026-05-01
+**Last updated**: 2026-05-08
 
 ---
 
@@ -52,7 +52,7 @@ All correctness-critical kernels are implemented as native GPU compute shaders a
 |---|-------|--------|--------|
 | 1 | Q4_K Metal GEMV slower than llama.cpp | Primary decode bottleneck on quantized models | Optimized — group-level x register preload, needs benchmarking |
 | 2 | WebGPU decode 0.7 tok/s | Synchronous per-op dispatch overhead | Optimized — lazy readback cache eliminates CPU↔GPU round-trips, needs benchmarking |
-| 3 | Gemma 4 E4B CPU prefill ~60s | Very slow, 42 layers with 4.5GB model | Open |
+| 3 | Gemma 4 E4B CPU prefill ~60s | Very slow, 42 layers with 4.5GB model | Partially optimized — MoE expert gate+up batched via gemvMulti |
 | 4 | NVFP4 model accuracy lower than MLX-4bit | May be community quantization quality, not agave bug | Open |
 
 ---
@@ -62,7 +62,7 @@ All correctness-critical kernels are implemented as native GPU compute shaders a
 | # | Feature | Status | Notes |
 |---|---------|--------|-------|
 | 1 | Tensor/Pipeline parallelism | Design only | `docs/PARALLELISM.md` has 24-section design doc, no code |
-| 2 | Structured output / grammar-constrained decoding | Working | GBNF parser, `--grammar-string`, `--json-output` (brace tracking), full-token validation, BPE encoding handled. Full repetition support: `*`/`+`/`?` on char ranges, rule refs, and `(...)` groups |
+| 2 | Structured output / grammar-constrained decoding | Working | GBNF parser, `--grammar-string`, `--grammar`, `--json-output`, `--json-schema`. Full repetition (`*`/`+`/`?`), grouped expressions, JSON schema→GBNF conversion. HTTP API: `grammar` and `json_schema` fields |
 | 3 | TriAttention Phase 3 | Not started | Dynamic budget, auto-tune, calibration data generator |
 | 4 | Native GPU tree SDPA for CUDA/ROCm/Vulkan | Done | All backends now have native f32 sdpaTree (CPU fallback only for quantized KV) |
 | 5 | Batch `forwardTree()` | Fixed | Was hardcoding KV type as f32, now uses model's kv_type_k/v |
