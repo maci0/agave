@@ -35,6 +35,7 @@ comptime {
     _ = @import("sdpa_turbo.zig");
     _ = @import("sdpa_prefill.zig");
     _ = @import("sdpa_tree.zig");
+    _ = @import("gemv_fp4_tc.zig");
 
     // GEMV
     _ = @import("gemv_f32.zig");

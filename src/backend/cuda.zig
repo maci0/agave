@@ -185,6 +185,7 @@ pub const CudaBackend = struct {
     fn_split_qgate: CUfunction = null,
     fn_gemv_t_q8_0: CUfunction = null,
     fn_gemv_nvfp4_st: CUfunction = null,
+    fn_gemv_fp4_tc: CUfunction = null,
     fn_gemv_mlx_q4: CUfunction = null,
     fn_gemv_mlx_q6: CUfunction = null,
     fn_gemv_mlx_q8: CUfunction = null,
@@ -415,6 +416,7 @@ pub const CudaBackend = struct {
         self.fn_split_qgate = try self.getFunction("split_qgate_kernel");
         self.fn_gemv_t_q8_0 = try self.getFunction("gemv_t_q8_0_kernel");
         self.fn_gemv_nvfp4_st = try self.getFunction("gemv_nvfp4_st_kernel");
+        self.fn_gemv_fp4_tc = try self.getFunction("gemv_fp4_tc_fallback_kernel");
         self.fn_gemv_mlx_q4 = try self.getFunction("gemv_mlx_q4_kernel");
         self.fn_gemv_mlx_q6 = try self.getFunction("gemv_mlx_q6_kernel");
         self.fn_gemv_mlx_q8 = try self.getFunction("gemv_mlx_q8_kernel");
@@ -1275,7 +1277,9 @@ pub const CudaBackend = struct {
             @ptrCast(&d_x), @ptrCast(&d_w),   @ptrCast(&d_s),
             @ptrCast(&d_y), @ptrCast(&n_u32), @ptrCast(&k_u32),
         };
-        self.launch(self.fn_gemv_nvfp4_st, @intCast(n), block_size, reduction_smem, &params);
+        // Use tensor core path on SM120+ (Blackwell), fallback on older
+        const kernel = if (self.sm_major >= 12) self.fn_gemv_fp4_tc else self.fn_gemv_nvfp4_st;
+        self.launch(kernel, @intCast(n), block_size, reduction_smem, &params);
     }
 
     /// MLX affine quantized GEMV: packed int (4/6/8-bit) + BF16 scales/biases, group_size=64.
