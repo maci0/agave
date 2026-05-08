@@ -68,8 +68,9 @@ All correctness-critical kernels are implemented as native GPU compute shaders a
 | 5 | Batch `forwardTree()` | Fixed | Was hardcoding KV type as f32, now uses model's kv_type_k/v |
 | 6 | Direct NVMe-to-VRAM weight loading | Not started | Tiered KV exists, weight loading still CPU-mediated |
 | 7 | CUDA fused FFN megakernels (Q4_K/Q5_K/Q6_K variants) | Not started | Only Q8_0 megakernel exists for CUDA |
-| 8 | WebGPU Phase 2 (WASM target) | Not started | Browser-based inference via WebAssembly + WebGPU |
-| 9 | Native FP4 tensor cores on Blackwell SM121 | Research | GB10 has native FP4 via `mma.sync.m16n8k64` — 129 TFLOPS demonstrated. Needs Zig PTX inline asm + CUTLASS fragment layout port. See [forum thread](https://forums.developer.nvidia.com/t/custom-fp4-cuda-kernel-129-tflops-on-dgx-spark-with-pre-quantized-weight-cache/361600) |
+| 8 | WebGPU Phase 2 (WASM target) | Scaffold done | `zig build wasm` produces agave.wasm + web/index.html. Full model integration pending |
+| 9 | Native FP4 tensor cores on Blackwell SM121 | Software fallback done | SM121 routing in CUDA backend. Software FP4 GEMV kernel ready. Tensor core MMA path needs hardware testing |
+| 10 | GPTQ SafeTensors support | Basic | Parser + CPU dequant kernel. GPU kernels + model arch integration pending |
 
 ---
 
