@@ -997,3 +997,44 @@ test "parseFormSampling handles extreme values" {
     const s = parseFormSampling("temperature=999.0");
     try std.testing.expectEqual(max_temperature, s.temperature);
 }
+
+test "parseSampling stop string" {
+    const s = parseSampling("{\"stop\": \"\\n\"}");
+    try std.testing.expectEqual(@as(u32, 1), s.n_stop);
+    try std.testing.expect(s.hasStop());
+}
+
+test "parseSampling stop array" {
+    const s = parseSampling("{\"stop\": [\"end\", \"quit\"]}");
+    try std.testing.expectEqual(@as(u32, 2), s.n_stop);
+    try std.testing.expect(s.hasStop());
+    try std.testing.expectEqualStrings("end", s.stop[0].?);
+    try std.testing.expectEqualStrings("quit", s.stop[1].?);
+}
+
+test "parseSampling penalties" {
+    const s = parseSampling("{\"frequency_penalty\": 0.5, \"presence_penalty\": -1.0, \"repetition_penalty\": 1.2}");
+    try std.testing.expectApproxEqAbs(@as(f32, 0.5), s.frequency_penalty, 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, -1.0), s.presence_penalty, 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 1.2), s.repetition_penalty, 0.01);
+}
+
+test "parseSampling min_p and seed" {
+    const s = parseSampling("{\"min_p\": 0.05, \"seed\": 42}");
+    try std.testing.expectApproxEqAbs(@as(f32, 0.05), s.min_p, 0.001);
+    try std.testing.expectEqual(@as(u64, 42), s.seed.?);
+}
+
+test "parseSampling json_schema" {
+    const s = parseSampling("{\"json_schema\": \"{\\\"type\\\": \\\"string\\\"}\"}");
+    try std.testing.expect(s.json_schema != null);
+}
+
+test "matchesStop" {
+    var s = SamplingParams{};
+    s.stop[0] = "END";
+    s.n_stop = 1;
+    try std.testing.expect(s.matchesStop("hello world END"));
+    try std.testing.expect(!s.matchesStop("hello world"));
+    try std.testing.expect(s.matchesStop("END"));
+}
