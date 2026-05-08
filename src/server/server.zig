@@ -849,7 +849,7 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
         g_server.metrics.recordRequest();
 
         const body = req.body;
-        const max_tokens = @max(1, @min(json.extractIntField(body, "max_tokens") orelse default_max_gen_tokens, gen_ids_buf_size));
+        const max_tokens = @max(1, @min(json.extractIntField(body, "max_tokens") orelse json.extractIntField(body, "max_completion_tokens") orelse default_max_gen_tokens, gen_ids_buf_size));
         const sampling = json.parseSampling(body);
 
         // 2. Extract full messages array (system + conversation history)
