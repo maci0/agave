@@ -243,7 +243,7 @@ pub const Qwen35Model = struct {
         // Detect gate in Q: Qwen3.5 Q weight output dim = n_head * head_dim * 2.
         // GGUF stores dims reversed (dim[n-1] = output rows); SafeTensors uses dim[0].
         if (f.layerTensor(check_layer, "attn_q.weight")) |qw| {
-            const q_out_dim: usize = if (qw.n_dims >= 1) qw.dims[0] else 0;
+            const q_out_dim: usize = if (qw.n_dims >= 1) @intCast(qw.dims[0]) else 0;
             const expected_gate = @as(usize, self.n_head) * @as(usize, self.head_dim) * 2;
             self.has_gate = (q_out_dim == expected_gate);
         }

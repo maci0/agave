@@ -9,18 +9,26 @@
 //! shared prefix blocks from thrashing.
 
 const std = @import("std");
-const Io = std.Io;
+const builtin = @import("builtin");
+const is_freestanding = builtin.os.tag == .freestanding;
+const Io = if (is_freestanding) struct { pub const File = void; } else std.Io;
+const SsdFile = if (is_freestanding) void else Io.File;
 
 /// Millisecond timestamp via raw C call (avoids Io dispatch in hot path).
 fn milliTimestamp() i64 {
-    var ts: std.posix.timespec = undefined;
-    _ = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
-    return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
+    if (comptime is_freestanding) {
+        return 0;
+    } else {
+        var ts: std.posix.timespec = undefined;
+        _ = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
+    }
 }
 const Allocator = std.mem.Allocator;
 
 /// Delete a file by path using C unlink (avoids Io dependency).
 fn deleteFileByPath(path: []const u8) void {
+    if (comptime is_freestanding) return;
     var buf: [std.fs.max_path_bytes]u8 = undefined;
     if (path.len >= buf.len) return;
     @memcpy(buf[0..path.len], path);
@@ -30,7 +38,8 @@ fn deleteFileByPath(path: []const u8) void {
 
 /// Write all bytes to a file at the given offset using positioned I/O (pwrite).
 /// This avoids seek+write races when multiple threads access the file.
-fn pwriteAll(file: Io.File, bytes: []const u8, offset: usize) !void {
+fn pwriteAll(file: anytype, bytes: []const u8, offset: usize) !void {
+    if (comptime is_freestanding) return error.WriteError;
     var written: usize = 0;
     while (written < bytes.len) {
         const result = std.c.pwrite(file.handle, bytes[written..].ptr, bytes[written..].len, @intCast(offset + written));
@@ -41,7 +50,8 @@ fn pwriteAll(file: Io.File, bytes: []const u8, offset: usize) !void {
 }
 
 /// Read all bytes from a file at the given offset using positioned I/O (pread).
-fn preadAll(file: Io.File, buf: []u8, offset: usize) !usize {
+fn preadAll(file: anytype, buf: []u8, offset: usize) !usize {
+    if (comptime is_freestanding) return 0;
     var total: usize = 0;
     while (total < buf.len) {
         const result = std.c.pread(file.handle, buf[total..].ptr, buf[total..].len, @intCast(offset + total));
@@ -126,7 +136,7 @@ pub const TieredKvCache = struct {
 
     /// SSD tier support (Plan 03).
     /// Sparse file handle for KV block spill/restore.
-    ssd_file: ?Io.File = null,
+    ssd_file: ?SsdFile = null,
     /// Path to SSD sparse file.
     ssd_path: []const u8,
     /// Bytes per block (kv_dim × block_size × @sizeOf(f32) × 2).
@@ -176,7 +186,7 @@ pub const TieredKvCache = struct {
         const block_bytes = std.math.mul(usize, slot_size, @sizeOf(f32) * 2) catch return error.OutOfMemory; // keys + values
 
         // Create sparse file for SSD tier if path provided
-        var ssd_file: ?Io.File = null;
+        var ssd_file: ?SsdFile = null;
         if (ssd_path) |path| {
             // Reject path traversal, null bytes, and absolute paths in user-supplied SSD cache path.
             if (std.mem.indexOf(u8, path, "..") != null or

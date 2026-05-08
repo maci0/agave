@@ -245,13 +245,15 @@ pub const TensorInfo = struct {
 
 /// A memory-mapped GGUF file providing access to tensors and metadata.
 pub const GGUFFile = struct {
-    mapped_data: []align(std.heap.page_size_min) u8,
+    mapped_data: []align(std.heap.page_size_min) u8 = &.{},
+    raw_data: []const u8 = &.{},
+    is_buffer: bool = false,
     file_size: usize,
     version: u32 = 0,
     tensor_count: u64 = 0,
     metadata: std.StringHashMap(MetaValue),
     tensors: std.StringHashMap(TensorInfo),
-    data_offset: usize = 0, // where tensor data starts
+    data_offset: usize = 0,
     alignment: usize = 32,
     allocator: Allocator,
     owned_strings: std.ArrayList([]const u8) = .empty,
@@ -284,6 +286,26 @@ pub const GGUFFile = struct {
         };
         try self.parseHeader();
         return self;
+    }
+
+    /// Open from a raw byte buffer (no file I/O — for WASM or embedded use).
+    pub fn fromBuffer(allocator: Allocator, buf: []const u8) !GGUFFile {
+        if (buf.len < gguf_min_header_size) return error.FileTooSmall;
+        var self = GGUFFile{
+            .raw_data = buf,
+            .file_size = buf.len,
+            .metadata = std.StringHashMap(MetaValue).init(allocator),
+            .tensors = std.StringHashMap(TensorInfo).init(allocator),
+            .allocator = allocator,
+            .is_buffer = true,
+        };
+        try self.parseHeader();
+        return self;
+    }
+
+    /// Get the underlying data bytes (works for both mmap and buffer paths).
+    inline fn data(self: *const GGUFFile) []const u8 {
+        return if (self.is_buffer) self.raw_data else self.mapped_data;
     }
 
     /// Returns a Format interface backed by this GGUF file.
@@ -397,7 +419,9 @@ pub const GGUFFile = struct {
         self.owned_array_lens.deinit(self.allocator);
         for (self.owned_u32_arrays.items) |s| self.allocator.free(s);
         self.owned_u32_arrays.deinit(self.allocator);
-        posix.munmap(self.mapped_data);
+        if (comptime @import("builtin").os.tag != .freestanding) {
+            if (!self.is_buffer) posix.munmap(self.mapped_data);
+        }
     }
 
     fn own(self: *GGUFFile, s: []const u8) ![]const u8 {
@@ -409,15 +433,15 @@ pub const GGUFFile = struct {
 
     fn readU32(self: *const GGUFFile, off: usize) !u32 {
         if (self.file_size < 4 or off > self.file_size - 4) return error.OffsetOutOfBounds;
-        return std.mem.readInt(u32, self.mapped_data[off..][0..4], .little);
+        return std.mem.readInt(u32, self.data()[off..][0..4], .little);
     }
     fn readU64(self: *const GGUFFile, off: usize) !u64 {
         if (self.file_size < 8 or off > self.file_size - 8) return error.OffsetOutOfBounds;
-        return std.mem.readInt(u64, self.mapped_data[off..][0..8], .little);
+        return std.mem.readInt(u64, self.data()[off..][0..8], .little);
     }
     fn readI32(self: *const GGUFFile, off: usize) !i32 {
         if (self.file_size < 4 or off > self.file_size - 4) return error.OffsetOutOfBounds;
-        return std.mem.readInt(i32, self.mapped_data[off..][0..4], .little);
+        return std.mem.readInt(i32, self.data()[off..][0..4], .little);
     }
     fn readF32(self: *const GGUFFile, off: usize) !f32 {
         return @bitCast(try self.readU32(off));
@@ -426,7 +450,7 @@ pub const GGUFFile = struct {
         const slen: usize = std.math.cast(usize, try self.readU64(off)) orelse return error.OffsetOutOfBounds;
         // Use subtraction to avoid overflow: readU64(off) succeeded so off+8 <= file_size.
         if (slen > self.file_size - off - 8) return error.OffsetOutOfBounds;
-        return .{ .str = self.mapped_data[off + 8 ..][0..slen], .len = 8 + slen };
+        return .{ .str = self.data()[off + 8 ..][0..slen], .len = 8 + slen };
     }
 
     fn readMetaValue(self: *GGUFFile, off: usize) !struct { val: MetaValue, len: usize } {
@@ -435,26 +459,26 @@ pub const GGUFFile = struct {
         switch (vtype) {
             .uint8 => {
                 if (pos + 1 > self.file_size) return error.OffsetOutOfBounds;
-                return .{ .val = .{ .uint8 = self.mapped_data[pos] }, .len = 5 };
+                return .{ .val = .{ .uint8 = self.data()[pos] }, .len = 5 };
             },
             .int8 => {
                 if (pos + 1 > self.file_size) return error.OffsetOutOfBounds;
-                return .{ .val = .{ .int8 = @bitCast(self.mapped_data[pos]) }, .len = 5 };
+                return .{ .val = .{ .int8 = @bitCast(self.data()[pos]) }, .len = 5 };
             },
             .uint16 => {
                 if (pos + 2 > self.file_size) return error.OffsetOutOfBounds;
-                return .{ .val = .{ .uint16 = std.mem.readInt(u16, self.mapped_data[pos..][0..2], .little) }, .len = 6 };
+                return .{ .val = .{ .uint16 = std.mem.readInt(u16, self.data()[pos..][0..2], .little) }, .len = 6 };
             },
             .int16 => {
                 if (pos + 2 > self.file_size) return error.OffsetOutOfBounds;
-                return .{ .val = .{ .int16 = std.mem.readInt(i16, self.mapped_data[pos..][0..2], .little) }, .len = 6 };
+                return .{ .val = .{ .int16 = std.mem.readInt(i16, self.data()[pos..][0..2], .little) }, .len = 6 };
             },
             .uint32 => return .{ .val = .{ .uint32 = try self.readU32(pos) }, .len = 8 },
             .int32 => return .{ .val = .{ .int32 = try self.readI32(pos) }, .len = 8 },
             .float32 => return .{ .val = .{ .float32 = try self.readF32(pos) }, .len = 8 },
             .bool_type => {
                 if (pos + 1 > self.file_size) return error.OffsetOutOfBounds;
-                return .{ .val = .{ .bool_val = self.mapped_data[pos] != 0 }, .len = 5 };
+                return .{ .val = .{ .bool_val = self.data()[pos] != 0 }, .len = 5 };
             },
             .string => {
                 const s = try self.readString(pos);
@@ -499,7 +523,7 @@ pub const GGUFFile = struct {
                     try self.owned_u32_arrays.append(self.allocator, ids);
                     for (0..arr_len) |i| {
                         if (pos >= self.file_size) return error.OffsetOutOfBounds;
-                        ids[i] = self.mapped_data[pos];
+                        ids[i] = self.data()[pos];
                         pos += 1;
                     }
                     return .{ .val = .{ .array_u32 = ids }, .len = pos - off };
@@ -622,7 +646,7 @@ pub const GGUFFile = struct {
 
     /// Returns raw tensor data bytes for the given tensor info.
     pub fn tensorData(self: *const GGUFFile, info: *const TensorInfo) [*]const u8 {
-        return self.mapped_data.ptr + self.data_offset + @as(usize, @intCast(info.offset));
+        return self.data().ptr + self.data_offset + @as(usize, @intCast(info.offset));
     }
 
     /// Looks up a string metadata value by key.

@@ -297,12 +297,12 @@ pub fn build(b: *std.Build) void {
     wasm_options.addOption(bool, "enable_rocm", false);
     wasm_options.addOption(bool, "enable_webgpu", false);
     wasm_options.addOption(bool, "enable_gemma3", enable_gemma3);
-    wasm_options.addOption(bool, "enable_qwen35", enable_qwen35);
+    wasm_options.addOption(bool, "enable_qwen35", false); // disabled: Zig+LLVM wasm32 codegen bug in DeltaNet SSM
     wasm_options.addOption(bool, "enable_gpt_oss", false);
     wasm_options.addOption(bool, "enable_nemotron_h", false);
     wasm_options.addOption(bool, "enable_nemotron_nano", false);
     wasm_options.addOption(bool, "enable_glm4", false);
-    wasm_options.addOption(bool, "enable_gemma4", enable_gemma4);
+    wasm_options.addOption(bool, "enable_gemma4", false); // disabled: test isolation
 
     const wasm_target = b.resolveTargetQuery(.{
         .cpu_arch = .wasm32,

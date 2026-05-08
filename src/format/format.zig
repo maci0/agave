@@ -232,6 +232,7 @@ pub const Format = struct {
 /// Issue madvise(WILL_NEED) on a byte range to hint the OS to page it in.
 /// Aligns the range to page boundaries as required by madvise.
 fn prefetchRegion(data: [*]const u8, len: usize) void {
+    if (comptime @import("builtin").os.tag == .freestanding) return;
     if (len == 0) return;
     const page = std.heap.page_size_min;
     const addr = @intFromPtr(data);

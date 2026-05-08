@@ -71,7 +71,15 @@ class AgaveEngine {
     this.ctx = this.wasm.exports.agave_init(ptr, data.byteLength);
     if (this.ctx === 0) throw new Error('Failed to initialize model');
 
-    console.log(`Model loaded: ${(data.byteLength / 1024 / 1024).toFixed(1)} MB`);
+    // Read init status message
+    const statusBufSize = 4096;
+    const statusPtr = this.wasm.exports.agave_alloc(statusBufSize);
+    const statusLen = this.wasm.exports.agave_get_output(this.ctx, statusPtr, statusBufSize);
+    const statusMem = new Uint8Array(this.wasm.exports.memory.buffer, statusPtr, statusLen);
+    this.initMessage = new TextDecoder().decode(statusMem);
+    this.wasm.exports.agave_dealloc(statusPtr, statusBufSize);
+
+    console.log(`Model loaded: ${(data.byteLength / 1024 / 1024).toFixed(1)} MB — ${this.initMessage}`);
   }
 
   /**

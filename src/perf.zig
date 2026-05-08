@@ -7,18 +7,21 @@
 //! The relative percentages are still meaningful for identifying bottlenecks.
 
 const std = @import("std");
-const Io = std.Io;
+const builtin = @import("builtin");
+const is_freestanding = builtin.os.tag == .freestanding;
+const Io = if (is_freestanding) void else std.Io;
 
 const us_per_ms: f64 = 1000.0;
 const percent_scale: f64 = 100.0;
 
 /// Stderr file handle via std.Io.File (Zig 0.16 idiom).
-const stderr_file = Io.File.stderr();
+const stderr_file = if (is_freestanding) {} else Io.File.stderr();
 
 /// Nanosecond timestamp via clock_gettime.
 /// Uses raw C call directly for minimal overhead in the hot profiling path,
 /// avoiding Io virtual dispatch.
 fn nanoTimestamp() i128 {
+    if (comptime is_freestanding) return 0;
     var ts: std.posix.timespec = undefined;
     _ = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
     return @as(i128, ts.sec) * 1_000_000_000 + ts.nsec;
