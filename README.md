@@ -31,7 +31,8 @@
 - **Interactive REPL**: Multi-turn chat with `/help`, `/clear`, `/stats`, `/model`, `/quit`
 - **HTTP Server**: OpenAI + Anthropic API compatible, built-in chat UI, Prometheus metrics, rate limiting
 - **Multimodal Vision**: Image understanding via Gemma 4 SigLIP-2 and Gemma 3 SigLIP vision encoders — image upload via CLI (`--image`) and HTTP API
-- **Structured Output**: GBNF grammar-constrained decoding (`--grammar-string`, `--grammar`), JSON mode (`--json-output`), server `response_format: json_object`
+- **Structured Output**: GBNF grammar (`--grammar-string`, `--grammar`), JSON schema (`--json-schema`), JSON mode (`--json-output`), server `response_format: json_object/json_schema`
+- **Full Sampling**: temperature, top-k, top-p, min-p, repeat/frequency/presence penalties, seed, stop sequences
 - **Batched Prefill**: Chunked GEMM + fused FlashAttention-2 for fast prompt processing
 - **~183 tok/s** on Qwen3.5 0.8B Q8_0 (Metal, Apple Silicon M4 Pro), **1.2-1.7x faster than llama.cpp on Q8_0** (Q4_K performance is a [known gap](docs/TODO.md#performance) — active optimization target)
 
@@ -83,7 +84,12 @@ zig build
 
 # Grammar-constrained decoding (GBNF format)
 ./zig-out/bin/agave model.gguf --grammar-string 'root ::= "yes" | "no"' "Is the sky blue?"
-./zig-out/bin/agave model.gguf --grammar grammar.gbnf "Generate structured data"
+
+# JSON schema → structured output
+./zig-out/bin/agave model.gguf --json-schema '{"type":"object","properties":{"name":{"type":"string"}}}' "User info"
+
+# Sampling parameters
+./zig-out/bin/agave model.gguf -t 0.7 --top-p 0.9 --min-p 0.05 "Tell me a story"
 ```
 
 ## Supported Models
@@ -217,12 +223,15 @@ agave [OPTIONS] <model> [prompt]
   -t, --temperature <T>    Sampling temperature, 0 = greedy [default: 0]
       --top-p <P>          Nucleus sampling threshold [default: 1.0]
       --top-k <K>          Top-k sampling, 0 = disabled [default: 0]
+      --min-p <P>          Min-p sampling threshold [default: 0]
       --repeat-penalty <R> Repetition penalty [default: 1.0]
       --system <TEXT>      System prompt for chat formatting
       --backend <BE>       auto, cpu, metal, vulkan, cuda, rocm, webgpu [default: auto]
       --ctx-size <N>       Context window size [default: min(model, 4096), 0 = model max]
       --seed <N>           Random seed for sampling [default: random]
-      --grammar-string <G> GBNF grammar for constrained decoding
+      --grammar <FILE>     GBNF grammar file for constrained decoding
+      --grammar-string <G> Inline GBNF grammar string
+      --json-schema <S>    JSON schema for structured output
       --json-output        Force valid JSON object output
       --kv-type <TYPE>     KV cache quantization: f32, f16, q8_0/q8, int8/i8, fp8/fp8_e4m3, nvfp4/fp4, turbo2/tq2, turbo3/tq3, turbo4/tq4 [default: f16]
       --kv-tiers <TIERS>   Enable tiered KV cache: vram+ram, vram+ram+ssd [default: off]
