@@ -64,6 +64,17 @@ pub const Grammar = struct {
     pub const bool_grammar = "root ::= \"true\" | \"false\"";
     pub const integer_grammar = "root ::= \"-\"? [0-9]+";
 
+    /// Convert a JSON schema to GBNF grammar and parse it.
+    /// Supports: object (with properties), string, number, integer, boolean,
+    /// array (with items), enum, and nested schemas.
+    pub fn fromJsonSchema(allocator: std.mem.Allocator, schema_json: []const u8) !Grammar {
+        var converter = SchemaConverter.init(allocator);
+        defer converter.deinit();
+        const gbnf = try converter.convert(schema_json);
+        defer allocator.free(gbnf);
+        return parse(allocator, gbnf);
+    }
+
     pub fn parse(allocator: std.mem.Allocator, input: []const u8) !Grammar {
         var parser = Parser.init(allocator, input);
         return parser.parseGrammar();
@@ -744,6 +755,289 @@ const Parser = struct {
     }
 };
 
+// ── JSON Schema → GBNF Converter ────────────────────────────────
+
+const SchemaConverter = struct {
+    allocator: std.mem.Allocator,
+    rules: std.ArrayList(u8),
+    rule_count: u32 = 0,
+
+    fn init(allocator: std.mem.Allocator) SchemaConverter {
+        return .{
+            .allocator = allocator,
+            .rules = std.ArrayList(u8).empty,
+        };
+    }
+
+    fn deinit(self: *SchemaConverter) void {
+        self.rules.deinit(self.allocator);
+    }
+
+    fn convert(self: *SchemaConverter, schema_json: []const u8) ![]u8 {
+        // Shared primitive rules
+        try self.emit("string ::= \"\\\"\" ([^\"\\\\] | \"\\\\\" [\"\\\\/bfnrt])* \"\\\"\"\n");
+        try self.emit("number ::= \"-\"? [0-9]+ (\".\" [0-9]+)?\n");
+        try self.emit("integer ::= \"-\"? [0-9]+\n");
+        try self.emit("boolean ::= \"true\" | \"false\"\n");
+        try self.emit("null ::= \"null\"\n");
+        try self.emit("ws ::= [ \\t\\n\\r]*\n");
+        try self.emit("value ::= string | number | boolean | null\n");
+
+        try self.emitRule("root", schema_json);
+        return self.rules.toOwnedSlice(self.allocator);
+    }
+
+    const ConvertError = error{OutOfMemory};
+    fn emitRule(self: *SchemaConverter, name: []const u8, schema: []const u8) ConvertError!void {
+        const type_str = extractJsonStr(schema, "type");
+
+        // Check for enum first
+        if (findJsonArray(schema, "enum")) |enum_content| {
+            try self.emit(name);
+            try self.emit(" ::= ");
+            try self.emitEnum(enum_content);
+            try self.emit("\n");
+            return;
+        }
+
+        if (type_str) |t| {
+            if (std.mem.eql(u8, t, "object")) {
+                try self.emitObject(name, schema);
+            } else if (std.mem.eql(u8, t, "array")) {
+                try self.emitArray(name, schema);
+            } else if (std.mem.eql(u8, t, "string")) {
+                try self.emit(name);
+                try self.emit(" ::= string\n");
+            } else if (std.mem.eql(u8, t, "number")) {
+                try self.emit(name);
+                try self.emit(" ::= number\n");
+            } else if (std.mem.eql(u8, t, "integer")) {
+                try self.emit(name);
+                try self.emit(" ::= integer\n");
+            } else if (std.mem.eql(u8, t, "boolean")) {
+                try self.emit(name);
+                try self.emit(" ::= boolean\n");
+            } else if (std.mem.eql(u8, t, "null")) {
+                try self.emit(name);
+                try self.emit(" ::= null\n");
+            } else {
+                try self.emit(name);
+                try self.emit(" ::= value\n");
+            }
+        } else {
+            try self.emit(name);
+            try self.emit(" ::= value\n");
+        }
+    }
+
+    fn emitObject(self: *SchemaConverter, name: []const u8, schema: []const u8) ConvertError!void {
+        const props_content = findJsonObject(schema, "properties") orelse {
+            try self.emit(name);
+            try self.emit(" ::= \"{\" ws \"}\" | \"{\" ws string ws \":\" ws value (ws \",\" ws string ws \":\" ws value)* ws \"}\"\n");
+            return;
+        };
+
+        // Parse property names and their schemas
+        var prop_names: [32][]const u8 = undefined;
+        var prop_schemas: [32][]const u8 = undefined;
+        var n_props: usize = 0;
+
+        var pi: usize = 0;
+        while (pi < props_content.len and n_props < 32) {
+            // Skip to next property key
+            pi = skipWsSchema(props_content, pi);
+            if (pi >= props_content.len or props_content[pi] != '"') break;
+
+            const key_start = pi + 1;
+            pi = key_start;
+            while (pi < props_content.len and props_content[pi] != '"') : (pi += 1) {}
+            const key_end = pi;
+            if (pi < props_content.len) pi += 1; // skip closing "
+
+            // Skip to colon + value
+            pi = skipWsSchema(props_content, pi);
+            if (pi < props_content.len and props_content[pi] == ':') pi += 1;
+            pi = skipWsSchema(props_content, pi);
+
+            // Find the schema object for this property
+            const val_start = pi;
+            pi = skipJsonValue(props_content, pi);
+            const val_end = pi;
+
+            prop_names[n_props] = props_content[key_start..key_end];
+            prop_schemas[n_props] = props_content[val_start..val_end];
+            n_props += 1;
+
+            // Skip comma
+            pi = skipWsSchema(props_content, pi);
+            if (pi < props_content.len and props_content[pi] == ',') pi += 1;
+        }
+
+        if (n_props == 0) {
+            try self.emit(name);
+            try self.emit(" ::= \"{\" ws \"}\"\n");
+            return;
+        }
+
+        // Emit: root ::= "{" ws "\"key1\"" ws ":" ws val1 "," ... "}"
+        try self.emit(name);
+        try self.emit(" ::= \"{\" ws ");
+        for (0..n_props) |i| {
+            if (i > 0) try self.emit(" \",\" ws ");
+            try self.emit("\"\\\"");
+            try self.emit(prop_names[i]);
+            try self.emit("\\\"\" ws \":\" ws ");
+
+            // Generate sub-rule for this property's value
+            var sub_name_buf: [64]u8 = undefined;
+            const sub_name = std.fmt.bufPrint(&sub_name_buf, "{s}-{s}", .{ name, prop_names[i] }) catch "prop";
+            try self.emitRule(sub_name, prop_schemas[i]);
+            try self.emit(sub_name);
+        }
+        try self.emit(" ws \"}\"\n");
+    }
+
+    fn emitArray(self: *SchemaConverter, name: []const u8, schema: []const u8) ConvertError!void {
+        const items_schema = findJsonObject(schema, "items");
+
+        var item_rule: []const u8 = "value";
+        var sub_name_buf: [64]u8 = undefined;
+        if (items_schema) |is| {
+            const sub = std.fmt.bufPrint(&sub_name_buf, "{s}-item", .{name}) catch "item";
+            try self.emitRule(sub, is);
+            item_rule = sub;
+        }
+
+        try self.emit(name);
+        try self.emit(" ::= \"[\" ws (");
+        try self.emit(item_rule);
+        try self.emit(" (\",\" ws ");
+        try self.emit(item_rule);
+        try self.emit(")*)? ws \"]\"\n");
+    }
+
+    fn emitEnum(self: *SchemaConverter, content: []const u8) ConvertError!void {
+        var ei: usize = 0;
+        var first = true;
+        while (ei < content.len) {
+            ei = skipWsSchema(content, ei);
+            if (ei >= content.len) break;
+            if (content[ei] == '"') {
+                const str_start = ei + 1;
+                ei = str_start;
+                while (ei < content.len and content[ei] != '"') : (ei += 1) {}
+                const str_end = ei;
+                if (ei < content.len) ei += 1;
+                if (!first) try self.emit(" | ");
+                try self.emit("\"");
+                try self.emit(content[str_start..str_end]);
+                try self.emit("\"");
+                first = false;
+            } else if (content[ei] == ',') {
+                ei += 1;
+            } else {
+                ei += 1;
+            }
+        }
+    }
+
+    fn emit(self: *SchemaConverter, s: []const u8) ConvertError!void {
+        try self.rules.appendSlice(self.allocator, s);
+    }
+
+    // Simple JSON field extraction for schema parsing
+    fn extractJsonStr(json: []const u8, field: []const u8) ?[]const u8 {
+        var buf: [64]u8 = undefined;
+        const needle = std.fmt.bufPrint(&buf, "\"{s}\"", .{field}) catch return null;
+        const idx = std.mem.indexOf(u8, json, needle) orelse return null;
+        var i = idx + needle.len;
+        while (i < json.len and (json[i] == ' ' or json[i] == ':')) : (i += 1) {}
+        if (i >= json.len or json[i] != '"') return null;
+        i += 1;
+        const start = i;
+        while (i < json.len and json[i] != '"') : (i += 1) {}
+        return json[start..i];
+    }
+
+    fn findJsonObject(json: []const u8, field: []const u8) ?[]const u8 {
+        var buf: [64]u8 = undefined;
+        const needle = std.fmt.bufPrint(&buf, "\"{s}\"", .{field}) catch return null;
+        const idx = std.mem.indexOf(u8, json, needle) orelse return null;
+        var i = idx + needle.len;
+        while (i < json.len and (json[i] == ' ' or json[i] == ':')) : (i += 1) {}
+        if (i >= json.len or json[i] != '{') return null;
+        const start = i + 1;
+        var depth: i32 = 1;
+        i += 1;
+        while (i < json.len and depth > 0) : (i += 1) {
+            if (json[i] == '{') depth += 1;
+            if (json[i] == '}') depth -= 1;
+        }
+        return json[start .. i - 1];
+    }
+
+    fn findJsonArray(json: []const u8, field: []const u8) ?[]const u8 {
+        var buf: [64]u8 = undefined;
+        const needle = std.fmt.bufPrint(&buf, "\"{s}\"", .{field}) catch return null;
+        const idx = std.mem.indexOf(u8, json, needle) orelse return null;
+        var i = idx + needle.len;
+        while (i < json.len and (json[i] == ' ' or json[i] == ':')) : (i += 1) {}
+        if (i >= json.len or json[i] != '[') return null;
+        const start = i + 1;
+        var depth: i32 = 1;
+        i += 1;
+        while (i < json.len and depth > 0) : (i += 1) {
+            if (json[i] == '[') depth += 1;
+            if (json[i] == ']') depth -= 1;
+        }
+        return json[start .. i - 1];
+    }
+
+    fn skipWsSchema(json: []const u8, start: usize) usize {
+        var i = start;
+        while (i < json.len and (json[i] == ' ' or json[i] == '\t' or json[i] == '\n' or json[i] == '\r')) : (i += 1) {}
+        return i;
+    }
+
+    fn skipJsonValue(json: []const u8, start: usize) usize {
+        if (start >= json.len) return start;
+        var i = start;
+        switch (json[i]) {
+            '{' => {
+                var depth: i32 = 1;
+                i += 1;
+                while (i < json.len and depth > 0) : (i += 1) {
+                    if (json[i] == '{') depth += 1;
+                    if (json[i] == '}') depth -= 1;
+                }
+                return i;
+            },
+            '[' => {
+                var depth: i32 = 1;
+                i += 1;
+                while (i < json.len and depth > 0) : (i += 1) {
+                    if (json[i] == '[') depth += 1;
+                    if (json[i] == ']') depth -= 1;
+                }
+                return i;
+            },
+            '"' => {
+                i += 1;
+                while (i < json.len and json[i] != '"') {
+                    if (json[i] == '\\') i += 1;
+                    i += 1;
+                }
+                if (i < json.len) i += 1;
+                return i;
+            },
+            else => {
+                while (i < json.len and json[i] != ',' and json[i] != '}' and json[i] != ']') : (i += 1) {}
+                return i;
+            },
+        }
+    }
+};
+
 // ── Tests ───────────────────────────────────────────────────────
 
 test "parse simple grammar" {
@@ -857,4 +1151,56 @@ test "integer grammar negative" {
     try std.testing.expect(state.acceptChar('-'));
     try std.testing.expect(state.acceptChar('7'));
     try std.testing.expect(state.acceptChar('x') == false);
+}
+
+test "json schema string type" {
+    const allocator = std.testing.allocator;
+    var grammar = try Grammar.fromJsonSchema(allocator, "{\"type\": \"string\"}");
+    defer grammar.deinit();
+    var state = grammar.initState();
+    defer state.deinit();
+
+    try std.testing.expect(state.acceptChar('"'));
+    try std.testing.expect(state.acceptChar('h'));
+    try std.testing.expect(state.acceptChar('i'));
+    try std.testing.expect(state.acceptChar('"'));
+}
+
+test "json schema boolean type" {
+    const allocator = std.testing.allocator;
+    var grammar = try Grammar.fromJsonSchema(allocator, "{\"type\": \"boolean\"}");
+    defer grammar.deinit();
+    var state = grammar.initState();
+    defer state.deinit();
+
+    try std.testing.expect(state.acceptChar('t'));
+    try std.testing.expect(state.acceptChar('r'));
+    try std.testing.expect(state.acceptChar('u'));
+    try std.testing.expect(state.acceptChar('e'));
+}
+
+test "json schema enum" {
+    const allocator = std.testing.allocator;
+    var grammar = try Grammar.fromJsonSchema(allocator, "{\"enum\": [\"red\", \"green\", \"blue\"]}");
+    defer grammar.deinit();
+    var state = grammar.initState();
+    defer state.deinit();
+
+    try std.testing.expect(state.acceptChar('r'));
+    try std.testing.expect(state.acceptChar('e'));
+    try std.testing.expect(state.acceptChar('d'));
+}
+
+test "json schema object" {
+    const allocator = std.testing.allocator;
+    const schema =
+        \\{"type": "object", "properties": {"name": {"type": "string"}, "age": {"type": "integer"}}}
+    ;
+    var grammar = try Grammar.fromJsonSchema(allocator, schema);
+    defer grammar.deinit();
+    var state = grammar.initState();
+    defer state.deinit();
+
+    // Should accept opening brace
+    try std.testing.expect(state.acceptChar('{'));
 }

@@ -339,6 +339,7 @@ const cli_specs = [_]cli_mod.ArgSpec{
     .{ .long = "grammar", .kind = .option, .help = "GBNF grammar file for constrained decoding." },
     .{ .long = "grammar-string", .kind = .option, .help = "Inline GBNF grammar string." },
     .{ .long = "json-output", .kind = .flag, .help = "Force valid JSON object output via grammar constraint." },
+    .{ .long = "json-schema", .kind = .option, .help = "JSON schema for structured output (converts to GBNF grammar)." },
     .{ .long = "system", .kind = .option, .help = "System prompt for chat formatting." },
     // Backend & model
     .{ .long = "backend", .kind = .option, .help = "Compute backend: auto, cpu, metal, vulkan, cuda, rocm, webgpu [default: auto]." },
@@ -395,6 +396,7 @@ const CliArgs = struct {
     repeat_penalty: f32,
     grammar_path: ?[]const u8,
     grammar_string: ?[]const u8,
+    json_schema: ?[]const u8,
     json_output: bool,
     system_prompt: ?[]const u8,
     backend_choice: BackendChoice,
@@ -557,6 +559,7 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
     const repeat_penalty = parseF32(res.option("repeat-penalty"), "repeat-penalty") orelse 1.0;
     const grammar_path = res.option("grammar");
     const grammar_string = res.option("grammar-string");
+    const json_schema = res.option("json-schema");
 
     // Validate sampling parameter ranges
     if (temperature < 0) {
@@ -693,6 +696,7 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
         .repeat_penalty = repeat_penalty,
         .grammar_path = grammar_path,
         .grammar_string = grammar_string,
+        .json_schema = json_schema,
         .json_output = res.flag("json-output"),
         .system_prompt = res.option("system"),
         .backend_choice = backend_choice,
@@ -884,6 +888,7 @@ fn printUsage() void {
         \\  agave model.gguf --image pic.png "What's this?"  Vision (auto-detects mmproj)
         \\  agave model.gguf --json-output "Generate a user profile"  Force JSON output
         \\  agave model.gguf --grammar-string 'root ::= "yes" | "no"' "Is sky blue?"
+        \\  agave model.gguf --json-schema '{"type":"object","properties":{"name":{"type":"string"}}}' "User info"
         \\
         \\SUBCOMMANDS:
         \\  agave pull <org/repo>                    Download GGUF model from HuggingFace
@@ -2244,6 +2249,12 @@ fn generateAndPrintInner(
     if (json_mode_active) {
         // JSON mode uses brace-depth tracking instead of GBNF grammar
         // Force first token to contain '{', stop when depth returns to 0
+    } else if (cli.json_schema) |schema| {
+        grammar = grammar_mod.Grammar.fromJsonSchema(allocator, schema) catch |err| blk: {
+            eprint("Error: failed to parse JSON schema: {}\n", .{err});
+            break :blk null;
+        };
+        if (grammar) |*g| grammar_state = g.initState();
     } else if (cli.grammar_string) |gs| {
         grammar = grammar_mod.Grammar.parse(allocator, gs) catch null;
         if (grammar) |*g| grammar_state = g.initState();

@@ -26,6 +26,7 @@ pub const SamplingParams = struct {
     top_p: f32 = 1.0,
     json_mode: bool = false,
     grammar_string: ?[]const u8 = null,
+    json_schema: ?[]const u8 = null,
 };
 
 /// Result of extracting messages from an OpenAI/Anthropic-format JSON body.
@@ -179,6 +180,7 @@ pub fn parseSampling(body: []const u8) SamplingParams {
         .top_p = if (std.math.isFinite(raw_top_p)) std.math.clamp(raw_top_p, 0, 1.0) else 1.0,
         .json_mode = json_mode,
         .grammar_string = extractField(body, "grammar"),
+        .json_schema = extractField(body, "json_schema"),
     };
 }
 

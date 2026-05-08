@@ -2104,8 +2104,11 @@ fn generateN(formatted: []const u8, reset: bool, max_tokens: usize, sampling: Sa
         if (grammar_state_storage) |*gs| gs.deinit();
         if (grammar_storage) |*g| g.deinit();
     }
-    const use_grammar = sampling.grammar_string != null and !sampling.json_mode;
-    if (sampling.grammar_string) |gs| {
+    const use_grammar = (sampling.grammar_string != null or sampling.json_schema != null) and !sampling.json_mode;
+    if (sampling.json_schema) |schema| {
+        grammar_storage = grammar_mod.Grammar.fromJsonSchema(g_server.allocator, schema) catch null;
+        if (grammar_storage) |*g| grammar_state_storage = g.initState();
+    } else if (sampling.grammar_string) |gs| {
         grammar_storage = grammar_mod.Grammar.parse(g_server.allocator, gs) catch null;
         if (grammar_storage) |*g| grammar_state_storage = g.initState();
     }
@@ -3476,8 +3479,11 @@ fn generateStream(stream: TcpStream, prompt: []const u8, req_id: u64, created: i
         if (s_grammar_state) |*gs| gs.deinit();
         if (s_grammar) |*g| g.deinit();
     }
-    const use_grammar_s = sampling.grammar_string != null and !sampling.json_mode;
-    if (sampling.grammar_string) |gs| {
+    const use_grammar_s = (sampling.grammar_string != null or sampling.json_schema != null) and !sampling.json_mode;
+    if (sampling.json_schema) |schema| {
+        s_grammar = grammar_mod_s.Grammar.fromJsonSchema(g_server.allocator, schema) catch null;
+        if (s_grammar) |*g| s_grammar_state = g.initState();
+    } else if (sampling.grammar_string) |gs| {
         s_grammar = grammar_mod_s.Grammar.parse(g_server.allocator, gs) catch null;
         if (s_grammar) |*g| s_grammar_state = g.initState();
     }
