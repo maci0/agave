@@ -81,6 +81,24 @@ curl http://localhost:8080/v1/responses -d '{
 }'
 ```
 
+### POST /v1/tokenize
+
+Count tokens for a text string.
+
+```bash
+curl http://localhost:8080/v1/tokenize -d '{"text": "Hello world"}'
+# {"count": 2, "model": "model-name"}
+```
+
+### POST /v1/detokenize
+
+Convert token IDs back to text.
+
+```bash
+curl http://localhost:8080/v1/detokenize -d '{"tokens": [9906, 1917]}'
+# {"text": "Hello world"}
+```
+
 ### GET /v1/models
 
 List available models.

@@ -1024,6 +1024,111 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
         return;
     }
 
+    if (is_post and std.mem.eql(u8, path, "/v1/tokenize")) {
+        logRequest(method, path);
+        if (!validateAuth(g_server, req.headers)) {
+            send401(stream);
+            logRequestDone(method, path, 401, elapsedMs(request_start));
+            return;
+        }
+        g_server.metrics.recordRequest();
+        const text = json.extractField(req.body, "text") orelse json.extractField(req.body, "content") orelse {
+            sendJsonError(stream, "400 Bad Request", "invalid_request_error", "Missing required field: text");
+            g_server.metrics.recordFailure();
+            logRequestDone(method, path, 400, elapsedMs(request_start));
+            return;
+        };
+        const unescaped = json.jsonUnescape(g_server.allocator, text) catch @constCast(text);
+        defer if (unescaped.ptr != text.ptr) g_server.allocator.free(unescaped);
+        const token_ids = g_server.tokenizer.encode(unescaped) catch {
+            sendJsonError(stream, "500 Internal Server Error", "internal_error", "Tokenization failed");
+            g_server.metrics.recordFailure();
+            logRequestDone(method, path, 500, elapsedMs(request_start));
+            return;
+        };
+        defer g_server.allocator.free(token_ids);
+
+        // Build JSON response with token count and IDs
+        var resp_buf: [response_buf_size]u8 = undefined;
+        const resp = std.fmt.bufPrint(&resp_buf,
+            \\{{"count":{d},"model":"{s}"}}
+        , .{ token_ids.len, g_server.model_name }) catch {
+            sendJsonError(stream, "500 Internal Server Error", "internal_error", "Response too large");
+            g_server.metrics.recordFailure();
+            logRequestDone(method, path, 500, elapsedMs(request_start));
+            return;
+        };
+        sendJson(stream, resp);
+        g_server.metrics.recordCompletion();
+        logRequestDone(method, path, 200, elapsedMs(request_start));
+        return;
+    }
+
+    if (is_post and std.mem.eql(u8, path, "/v1/detokenize")) {
+        logRequest(method, path);
+        if (!validateAuth(g_server, req.headers)) {
+            send401(stream);
+            logRequestDone(method, path, 401, elapsedMs(request_start));
+            return;
+        }
+        g_server.metrics.recordRequest();
+
+        // Parse token IDs from JSON array: {"tokens": [1, 2, 3]}
+        var tok_ids: [gen_ids_buf_size]u32 = undefined;
+        var n_toks: usize = 0;
+        if (std.mem.indexOf(u8, req.body, "\"tokens\"")) |ti| {
+            var di = ti + "\"tokens\"".len;
+            while (di < req.body.len and (req.body[di] == ' ' or req.body[di] == ':')) : (di += 1) {}
+            if (di < req.body.len and req.body[di] == '[') {
+                di += 1;
+                while (di < req.body.len and n_toks < gen_ids_buf_size) {
+                    while (di < req.body.len and (req.body[di] == ' ' or req.body[di] == ',' or req.body[di] == '\n')) : (di += 1) {}
+                    if (di >= req.body.len or req.body[di] == ']') break;
+                    const num_start = di;
+                    while (di < req.body.len and req.body[di] >= '0' and req.body[di] <= '9') : (di += 1) {}
+                    if (di > num_start) {
+                        tok_ids[n_toks] = std.fmt.parseInt(u32, req.body[num_start..di], 10) catch break;
+                        n_toks += 1;
+                    } else break;
+                }
+            }
+        }
+        if (n_toks == 0) {
+            sendJsonError(stream, "400 Bad Request", "invalid_request_error", "Missing or empty tokens array");
+            g_server.metrics.recordFailure();
+            logRequestDone(method, path, 400, elapsedMs(request_start));
+            return;
+        }
+        const decoded = g_server.tokenizer.decode(tok_ids[0..n_toks]) catch {
+            sendJsonError(stream, "500 Internal Server Error", "internal_error", "Detokenization failed");
+            g_server.metrics.recordFailure();
+            logRequestDone(method, path, 500, elapsedMs(request_start));
+            return;
+        };
+        defer g_server.allocator.free(decoded);
+
+        const escaped = json.jsonEscape(g_server.allocator, decoded) catch {
+            sendJsonError(stream, "500 Internal Server Error", "internal_error", "Response too large");
+            g_server.metrics.recordFailure();
+            logRequestDone(method, path, 500, elapsedMs(request_start));
+            return;
+        };
+        defer g_server.allocator.free(escaped);
+        var final_buf: [response_buf_size]u8 = undefined;
+        const resp = std.fmt.bufPrint(&final_buf,
+            \\{{"text":"{s}"}}
+        , .{escaped}) catch {
+            sendJsonError(stream, "500 Internal Server Error", "internal_error", "Response too large");
+            g_server.metrics.recordFailure();
+            logRequestDone(method, path, 500, elapsedMs(request_start));
+            return;
+        };
+        sendJson(stream, resp);
+        g_server.metrics.recordCompletion();
+        logRequestDone(method, path, 200, elapsedMs(request_start));
+        return;
+    }
+
     if (is_post and std.mem.eql(u8, path, "/v1/embeddings")) {
         logRequest(method, path);
         if (!validateAuth(g_server, req.headers)) {
