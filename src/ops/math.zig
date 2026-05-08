@@ -292,26 +292,13 @@ pub fn applyMinP(logits: []f32, min_p: f32) void {
     const n = logits.len;
     const neg_inf = -std.math.inf(f32);
 
-    // Find max logit for stable softmax
+    // Find max logit — exp(max - max) = 1.0, so threshold in logit space is max + ln(min_p)
     var max_val: f32 = neg_inf;
     for (logits) |v| max_val = @max(max_val, v);
+    const log_threshold = max_val + @log(min_p);
 
-    // Find max probability and threshold
-    var max_prob: f32 = 0;
-    for (logits) |v| {
-        if (v > neg_inf) {
-            const p = @exp(v - max_val);
-            max_prob = @max(max_prob, p);
-        }
-    }
-    const threshold = min_p * max_prob;
-
-    // Mask tokens below threshold
     for (0..n) |i| {
-        if (logits[i] > neg_inf) {
-            const p = @exp(logits[i] - max_val);
-            if (p < threshold) logits[i] = neg_inf;
-        }
+        if (logits[i] < log_threshold) logits[i] = neg_inf;
     }
 }
 
