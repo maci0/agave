@@ -319,6 +319,7 @@ pub fn build(b: *std.Build) void {
         .root_module = wasm_mod,
     });
     wasm_lib.entry = .disabled;
+    wasm_lib.rdynamic = true;
     const install_wasm = b.addInstallArtifact(wasm_lib, .{
         .dest_dir = .{ .override = .{ .custom = "web" } },
     });
