@@ -433,3 +433,87 @@ test "sdpa exercises SIMD dot product path" {
     const expected = w0 * 0.5 + w1 * 0.25;
     for (0..hd) |i| try std.testing.expectApproxEqAbs(expected, output[i], 1e-4);
 }
+
+// ── Paged SDPA (block-table-indexed) ────────────────────────────
+
+const PagedKvView = @import("../../../kvcache/manager.zig").PagedKvView;
+
+/// Paged SDPA: append k_new/v_new, then compute attention over block-table-indexed KV cache.
+/// Uses PagedKvView for non-contiguous blocks. f32 path only.
+pub fn sdpaPagedHeads(q: [*]const f32, kv_view: PagedKvView, k_new: [*]const f32, v_new: [*]const f32, output: [*]f32, nh: usize, nkv: usize, hd: usize, scale: f32) void {
+    const kvd = nkv * hd;
+    const seq_len = kv_view.seq_len;
+
+    // Append k_new/v_new at current seq_len position
+    const k_dst = kv_view.keyPtrMut(seq_len);
+    const v_dst = kv_view.valuePtrMut(seq_len);
+    @memcpy(k_dst[0..kvd], k_new[0..kvd]);
+    @memcpy(v_dst[0..kvd], v_new[0..kvd]);
+
+    const sl = seq_len + 1;
+
+    for (0..nh) |h| {
+        sdpaPagedHead(q, kv_view, output, h, nh, nkv, hd, sl, scale);
+    }
+}
+
+pub fn sdpaPagedHead(q: [*]const f32, kv_view: PagedKvView, output: [*]f32, h: usize, nh: usize, nkv: usize, hd: usize, sl: usize, scale: f32) void {
+    const kvd = nkv * hd;
+    const hpg = nh / nkv;
+    const kvh = h / hpg;
+    const q_base = h * hd;
+    const bs: usize = kv_view.block_size;
+    std.debug.assert(sl <= max_sdpa_seq_len);
+    var scores_buf: [max_sdpa_seq_len]f32 = undefined;
+
+    var q_cached: [max_head_dim]f32 = undefined;
+    @memcpy(q_cached[0..hd], q[q_base..][0..hd]);
+
+    // QK dot products — walk block table
+    for (0..sl) |t| {
+        const block_idx = t / bs;
+        const pos_in_block = t % bs;
+        const phys_id = kv_view.block_table[block_idx];
+        const block_keys = kv_view.blocks[phys_id].keys;
+        const k_base = pos_in_block * kvd + kvh * hd;
+
+        var acc: V8 = v8zero;
+        var d: usize = 0;
+        while (d + 8 <= hd) : (d += 8) {
+            const qv: V8 = q_cached[d..][0..8].*;
+            const kv: V8 = block_keys[k_base + d ..][0..8].*;
+            acc = @mulAdd(V8, qv, kv, acc);
+        }
+        var dot = @reduce(.Add, acc);
+        while (d < hd) : (d += 1) dot = @mulAdd(f32, q_cached[d], block_keys[k_base + d], dot);
+        scores_buf[t] = dot * scale;
+    }
+
+    softmax(scores_buf[0..sl]);
+
+    // V accumulation — walk block table
+    {
+        var d: usize = 0;
+        while (d + 8 <= hd) : (d += 8) output[q_base + d ..][0..8].* = v8zero;
+        while (d < hd) : (d += 1) output[q_base + d] = 0;
+
+        for (0..sl) |t| {
+            const block_idx = t / bs;
+            const pos_in_block = t % bs;
+            const phys_id = kv_view.block_table[block_idx];
+            const block_values = kv_view.blocks[phys_id].values;
+            const v_base = pos_in_block * kvd + kvh * hd;
+
+            const sv: V8 = @splat(scores_buf[t]);
+            d = 0;
+            while (d + 8 <= hd) : (d += 8) {
+                const vv: V8 = block_values[v_base + d ..][0..8].*;
+                const cur: V8 = output[q_base + d ..][0..8].*;
+                output[q_base + d ..][0..8].* = @mulAdd(V8, sv, vv, cur);
+            }
+            while (d < hd) : (d += 1) {
+                output[q_base + d] = @mulAdd(f32, scores_buf[t], block_values[v_base + d], output[q_base + d]);
+            }
+        }
+    }
+}

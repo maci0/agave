@@ -231,13 +231,13 @@ pub const Gemma3Model = struct {
             self.split_cpu_out = try allocator.alloc(f32, qkv_dim);
             errdefer allocator.free(self.split_cpu_out);
         } else {
-            // Use full-sequence blocks for contiguous KV access in both prefill and decode.
-            // One block per layer, each holding max_sl positions. Same total memory.
-            const block_size: u16 = @intCast(@min(max_sl, std.math.maxInt(u16)));
-            const num_blocks = nl;
-            self.paged_cache = try PagedKvCache.init(allocator, nl, kv_dim, num_blocks, block_size);
+            // Paged KV cache: small fixed-size blocks allocated on demand.
+            // Memory scales with actual sequence length, not max context.
+            const paged_block_size: u16 = 256;
+            const blocks_per_layer = (max_sl + paged_block_size - 1) / paged_block_size;
+            const num_blocks = nl * blocks_per_layer;
+            self.paged_cache = try PagedKvCache.init(allocator, nl, kv_dim, num_blocks, paged_block_size);
             errdefer self.paged_cache.deinit();
-            // BlockAllocator stores a pointer — must point to self.paged_cache (not a local copy).
             self.block_allocator = BlockAllocator.init(&self.paged_cache, allocator);
             self.seq_table = try self.block_allocator.allocateSeqTable(nl);
             errdefer self.block_allocator.freeSeqTable(&self.seq_table);
@@ -684,7 +684,6 @@ pub const Gemma3Model = struct {
         const num_blocks = self.seq_table.block_table[layer].len;
         if (num_blocks == 0) return .{ .keys = &[_]f32{}, .values = &[_]f32{} };
 
-        // For now, assume single block (will extend for multi-block later)
         const block_id = self.seq_table.block_table[layer][0];
         if (self.tiered_cache) |tc| {
             return .{
@@ -696,6 +695,22 @@ pub const Gemma3Model = struct {
             .keys = self.paged_cache.blocks[block_id].keys,
             .values = self.paged_cache.blocks[block_id].values,
         };
+    }
+
+    const PagedKvView = @import("../kvcache/manager.zig").PagedKvView;
+
+    fn getPagedKvView(self: *Gemma3Model, layer: usize) PagedKvView {
+        return .{
+            .block_table = self.seq_table.block_table[layer],
+            .blocks = self.paged_cache.blocks,
+            .block_size = self.paged_cache.block_size,
+            .kv_dim = self.paged_cache.kv_dim,
+            .seq_len = self.kv_seq_len,
+        };
+    }
+
+    fn isMultiBlock(self: *Gemma3Model, layer: usize) bool {
+        return self.seq_table.block_table[layer].len > 1;
     }
 
     fn attention(self: *Gemma3Model, li: u32) !void {
@@ -791,6 +806,21 @@ pub const Gemma3Model = struct {
                     .cpu_out = self.split_cpu_out.ptr,
                 },
             );
+        } else if (self.isMultiBlock(li)) {
+            // Paged SDPA: multi-block KV cache with block-table indirection
+            self.be.sdpaPaged(
+                self.q_buf.ptr,
+                self.getPagedKvView(li),
+                self.k_buf.ptr,
+                self.v_buf.ptr,
+                self.attn_out.ptr,
+                nh,
+                nkv,
+                hd,
+                self.attn_scale,
+                .f32,
+                .f32,
+            );
         } else {
             attn_ops.scaledDotProductAttention(
                 self.q_buf.ptr,
@@ -808,7 +838,7 @@ pub const Gemma3Model = struct {
                 self.be,
                 null,
                 0,
-                .f32, // PagedKvCache uses f32 blocks
+                .f32,
                 .f32,
             );
         }

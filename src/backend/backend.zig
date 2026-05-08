@@ -52,6 +52,9 @@ pub const DType = @import("../format/format.zig").DType;
 /// KV cache quantization type — re-exported for backend consumers.
 pub const KvQuantType = @import("../ops/kv_quant.zig").KvQuantType;
 
+/// Paged KV cache view for block-table-indexed SDPA.
+pub const PagedKvView = @import("../kvcache/manager.zig").PagedKvView;
+
 /// Parameters for DeltaNet SSM recurrence (Qwen3.5 hybrid model).
 /// Passed to `Backend.deltaNet()` to keep the function signature manageable.
 pub const DeltaNetParams = struct {
@@ -667,6 +670,23 @@ pub const Backend = union(enum) {
     pub inline fn sdpa(self: Backend, q: [*]const f32, keys: []u8, values: []u8, k_new: [*]const f32, v_new: [*]const f32, output: [*]f32, nh: usize, nkv: usize, hd: usize, seq_len: usize, scale: f32, kv_type_k: KvQuantType, kv_type_v: KvQuantType) void {
         switch (self) {
             inline else => |be| be.sdpa(q, keys, values, k_new, v_new, output, nh, nkv, hd, seq_len, scale, kv_type_k, kv_type_v),
+        }
+    }
+
+    /// Paged SDPA: block-table-indexed attention for non-contiguous KV cache.
+    /// Uses PagedKvView to walk block table instead of flat byte slices.
+    /// Backends without native paged kernels fall back to CPU.
+    pub inline fn sdpaPaged(self: Backend, q: [*]const f32, kv_view: PagedKvView, k_new: [*]const f32, v_new: [*]const f32, output: [*]f32, nh: usize, nkv: usize, hd: usize, scale: f32, kv_type_k: KvQuantType, kv_type_v: KvQuantType) void {
+        switch (self) {
+            inline else => |be| {
+                if (comptime @hasDecl(@TypeOf(be.*), "sdpaPaged")) {
+                    be.sdpaPaged(q, kv_view, k_new, v_new, output, nh, nkv, hd, scale, kv_type_k, kv_type_v);
+                } else {
+                    // CPU fallback for backends without native paged SDPA
+                    const cpu_sdpa = @import("kernels/cpu/sdpa.zig");
+                    cpu_sdpa.sdpaPagedHeads(q, kv_view, k_new, v_new, output, nh, nkv, hd, scale);
+                }
+            },
         }
     }
 

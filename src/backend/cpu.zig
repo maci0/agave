@@ -855,6 +855,53 @@ pub const CpuBackend = struct {
     /// softmax statistics (max and sum) for online softmax merge in split-attention.
     /// Same as sdpa() but additionally outputs head_max[nh] and head_sum[nh].
     /// Parallelizes across query heads when a thread pool is available.
+    /// Paged SDPA: block-table-indexed attention for non-contiguous KV cache.
+    pub fn sdpaPaged(self: *CpuBackend, q: [*]const f32, kv_view: backend_mod.PagedKvView, k_new: [*]const f32, v_new: [*]const f32, output: [*]f32, nh: usize, nkv: usize, hd: usize, scale: f32, _: KvQuantType, _: KvQuantType) void {
+        // Thread-parallel dispatch across query heads
+        if (self.pool) |pool| {
+            if (nh >= sdpa_parallel_min_heads) {
+                // Append KV first (single-threaded — one position)
+                const kvd = nkv * hd;
+                const k_dst = kv_view.keyPtrMut(kv_view.seq_len);
+                const v_dst = kv_view.valuePtrMut(kv_view.seq_len);
+                @memcpy(k_dst[0..kvd], k_new[0..kvd]);
+                @memcpy(v_dst[0..kvd], v_new[0..kvd]);
+
+                var ctx = SdpaPagedCtx{
+                    .q = q,
+                    .kv_view = kv_view,
+                    .output = output,
+                    .nh = nh,
+                    .nkv = nkv,
+                    .hd = hd,
+                    .sl = kv_view.seq_len + 1,
+                    .scale = scale,
+                };
+                pool.parallelFor(nh, 1, @ptrCast(&ctx), SdpaPagedCtx.work);
+                return;
+            }
+        }
+        sdpa_kernel.sdpaPagedHeads(q, kv_view, k_new, v_new, output, nh, nkv, hd, scale);
+    }
+
+    const SdpaPagedCtx = struct {
+        q: [*]const f32,
+        kv_view: backend_mod.PagedKvView,
+        output: [*]f32,
+        nh: usize,
+        nkv: usize,
+        hd: usize,
+        sl: usize,
+        scale: f32,
+
+        fn work(ctx_ptr: *anyopaque, start: usize, end: usize) void {
+            const ctx: *const SdpaPagedCtx = @ptrCast(@alignCast(ctx_ptr));
+            for (start..end) |h| {
+                sdpa_kernel.sdpaPagedHead(ctx.q, ctx.kv_view, ctx.output, h, ctx.nh, ctx.nkv, ctx.hd, ctx.sl, ctx.scale);
+            }
+        }
+    };
+
     pub fn sdpaWithStats(self: *CpuBackend, q: [*]const f32, keys: []u8, values: []u8, k_new: [*]const f32, v_new: [*]const f32, output: [*]f32, head_max: [*]f32, head_sum: [*]f32, nh: usize, nkv: usize, hd: usize, seq_len: usize, scale: f32, kv_type_k: KvQuantType, kv_type_v: KvQuantType) void {
         const kvd = nkv * hd;
 

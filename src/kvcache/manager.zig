@@ -96,6 +96,49 @@ pub const SeqBlockTable = struct {
     seq_len: usize = 0,
 };
 
+/// View into paged KV cache for one layer — passed to SDPA kernels.
+/// Enables block-table indirection: kernel walks block_table to find
+/// physical blocks instead of assuming contiguous memory.
+pub const PagedKvView = struct {
+    block_table: []const u32,
+    blocks: []const CacheBlock,
+    block_size: u16,
+    kv_dim: usize,
+    seq_len: usize,
+
+    /// Get key pointer for a specific position within the paged cache.
+    pub inline fn keyPtr(self: PagedKvView, position: usize) [*]const f32 {
+        const block_idx = position / self.block_size;
+        const pos_in_block = position % self.block_size;
+        const phys_id = self.block_table[block_idx];
+        return self.blocks[phys_id].keys.ptr + pos_in_block * self.kv_dim;
+    }
+
+    /// Get value pointer for a specific position within the paged cache.
+    pub inline fn valuePtr(self: PagedKvView, position: usize) [*]const f32 {
+        const block_idx = position / self.block_size;
+        const pos_in_block = position % self.block_size;
+        const phys_id = self.block_table[block_idx];
+        return self.blocks[phys_id].values.ptr + pos_in_block * self.kv_dim;
+    }
+
+    /// Get mutable key pointer for writing (KV append).
+    pub inline fn keyPtrMut(self: PagedKvView, position: usize) [*]f32 {
+        const block_idx = position / self.block_size;
+        const pos_in_block = position % self.block_size;
+        const phys_id = self.block_table[block_idx];
+        return self.blocks[phys_id].keys.ptr + pos_in_block * self.kv_dim;
+    }
+
+    /// Get mutable value pointer for writing (KV append).
+    pub inline fn valuePtrMut(self: PagedKvView, position: usize) [*]f32 {
+        const block_idx = position / self.block_size;
+        const pos_in_block = position % self.block_size;
+        const phys_id = self.block_table[block_idx];
+        return self.blocks[phys_id].values.ptr + pos_in_block * self.kv_dim;
+    }
+};
+
 /// Block-based paged KV cache allocator.
 pub const PagedKvCache = struct {
     blocks: []CacheBlock,
