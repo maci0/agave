@@ -286,4 +286,41 @@ pub fn build(b: *std.Build) void {
     bench_run.step.dependOn(b.getInstallStep());
     if (b.args) |args| bench_run.addArgs(args);
     b.step("bench", "Run micro-benchmarks (ReleaseFast)").dependOn(&bench_run.step);
+
+    // ── WASM build (browser inference) ──────────────────────────
+    const wasm_step = b.step("wasm", "Build WebAssembly module for browser inference");
+    const wasm_options = b.addOptions();
+    wasm_options.addOption(bool, "enable_cpu", true);
+    wasm_options.addOption(bool, "enable_metal", false);
+    wasm_options.addOption(bool, "enable_vulkan", false);
+    wasm_options.addOption(bool, "enable_cuda", false);
+    wasm_options.addOption(bool, "enable_rocm", false);
+    wasm_options.addOption(bool, "enable_webgpu", false);
+    wasm_options.addOption(bool, "enable_gemma3", enable_gemma3);
+    wasm_options.addOption(bool, "enable_qwen35", enable_qwen35);
+    wasm_options.addOption(bool, "enable_gpt_oss", false);
+    wasm_options.addOption(bool, "enable_nemotron_h", false);
+    wasm_options.addOption(bool, "enable_nemotron_nano", false);
+    wasm_options.addOption(bool, "enable_glm4", false);
+    wasm_options.addOption(bool, "enable_gemma4", enable_gemma4);
+
+    const wasm_target = b.resolveTargetQuery(.{
+        .cpu_arch = .wasm32,
+        .os_tag = .freestanding,
+    });
+    const wasm_mod = b.createModule(.{
+        .root_source_file = b.path("src/wasm_entry.zig"),
+        .target = wasm_target,
+        .optimize = .ReleaseSmall,
+    });
+    wasm_mod.addImport("build_options", wasm_options.createModule());
+    const wasm_lib = b.addExecutable(.{
+        .name = "agave",
+        .root_module = wasm_mod,
+    });
+    wasm_lib.entry = .disabled;
+    const install_wasm = b.addInstallArtifact(wasm_lib, .{
+        .dest_dir = .{ .override = .{ .custom = "web" } },
+    });
+    wasm_step.dependOn(&install_wasm.step);
 }
