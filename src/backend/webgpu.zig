@@ -692,7 +692,11 @@ pub const WebGpuBackend = struct {
             cached.size = size;
             cached.generation = self.upload_generation;
         } else {
-            self.buf_cache.put(key, .{ .buffer = buf, .size = size, .generation = self.upload_generation }) catch {};
+            self.buf_cache.put(key, .{ .buffer = buf, .size = size, .generation = self.upload_generation }) catch {
+                self.downloadF32(buf, ptr, size / @sizeOf(f32));
+                self.fn_buffer_destroy(buf);
+                return;
+            };
         }
         if (self.dirty_count < max_dirty_entries) {
             self.dirty_bufs[self.dirty_count] = .{ .buf = buf, .ptr = ptr, .count = size / @sizeOf(f32) };
