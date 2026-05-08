@@ -27,6 +27,7 @@ pub const SamplingParams = struct {
     temperature: f32 = 0,
     top_k: u32 = 0,
     top_p: f32 = 1.0,
+    min_p: f32 = 0,
     frequency_penalty: f32 = 0,
     presence_penalty: f32 = 0,
     repetition_penalty: f32 = 1.0,
@@ -207,10 +208,12 @@ pub fn parseSampling(body: []const u8) SamplingParams {
             }
         }
     }
+    const raw_min_p = extractFloatField(body, "min_p") orelse 0;
     var result = SamplingParams{
         .temperature = if (std.math.isFinite(raw_temp)) std.math.clamp(raw_temp, 0, max_temperature) else 0,
         .top_k = @intCast(@min(raw_top_k, max_top_k)),
         .top_p = if (std.math.isFinite(raw_top_p)) std.math.clamp(raw_top_p, 0, 1.0) else 1.0,
+        .min_p = if (std.math.isFinite(raw_min_p)) std.math.clamp(raw_min_p, 0, 1.0) else 0,
         .frequency_penalty = if (std.math.isFinite(raw_freq_pen)) std.math.clamp(raw_freq_pen, -2.0, 2.0) else 0,
         .presence_penalty = if (std.math.isFinite(raw_pres_pen)) std.math.clamp(raw_pres_pen, -2.0, 2.0) else 0,
         .repetition_penalty = blk: {

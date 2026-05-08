@@ -237,6 +237,37 @@ pub fn applyPenalties(logits: []f32, gen_tokens: []const u32, frequency_penalty:
     }
 }
 
+/// Apply min_p filtering: zero out tokens with probability < min_p * max_probability.
+/// Must be called AFTER temperature scaling (logits are still pre-softmax).
+/// Converts to probabilities, finds max, masks below threshold, restores to logits.
+pub fn applyMinP(logits: []f32, min_p: f32) void {
+    if (min_p <= 0 or min_p >= 1.0) return;
+    const n = logits.len;
+    const neg_inf = -std.math.inf(f32);
+
+    // Find max logit for stable softmax
+    var max_val: f32 = neg_inf;
+    for (logits) |v| max_val = @max(max_val, v);
+
+    // Find max probability and threshold
+    var max_prob: f32 = 0;
+    for (logits) |v| {
+        if (v > neg_inf) {
+            const p = @exp(v - max_val);
+            max_prob = @max(max_prob, p);
+        }
+    }
+    const threshold = min_p * max_prob;
+
+    // Mask tokens below threshold
+    for (0..n) |i| {
+        if (logits[i] > neg_inf) {
+            const p = @exp(logits[i] - max_val);
+            if (p < threshold) logits[i] = neg_inf;
+        }
+    }
+}
+
 /// Modifies the logits buffer in-place.
 pub fn sampleToken(logits: []f32, temperature: f32, top_k: u32, top_p: f32, rng: std.Random) u32 {
     if (temperature == 0) return argmax(logits);

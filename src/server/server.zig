@@ -2374,6 +2374,7 @@ fn generateN(formatted: []const u8, reset: bool, max_tokens: usize, sampling: Sa
                 next = math_ops.argmax(model.getLogits());
             }
             if (use_sampling and !use_grammar) {
+                if (sampling.min_p > 0) math_ops.applyMinP(model.getLogits(), sampling.min_p);
                 next = math_ops.sampleToken(model.getLogits(), sampling.temperature, sampling.top_k, sampling.top_p, prng.random());
             }
             if (g_server.isEog(next)) {
@@ -3650,6 +3651,7 @@ fn generateStream(stream: TcpStream, prompt: []const u8, req_id: u64, created: i
             }
         }
     } else if (use_sampling_s and token_ids.len > 0) {
+        if (sampling.min_p > 0) math_ops.applyMinP(model.getLogits(), sampling.min_p);
         first_gen_token = math_ops.sampleToken(model.getLogits(), sampling.temperature, sampling.top_k, sampling.top_p, prng_s.random());
     }
     // Accept first token in grammar
@@ -3766,6 +3768,7 @@ fn generateStream(stream: TcpStream, prompt: []const u8, req_id: u64, created: i
                     }
                 }
             } else if (use_sampling_s) {
+                if (sampling.min_p > 0) math_ops.applyMinP(model.getLogits(), sampling.min_p);
                 next = math_ops.sampleToken(model.getLogits(), sampling.temperature, sampling.top_k, sampling.top_p, prng_s.random());
             }
             if (g_server.isEog(next)) break;

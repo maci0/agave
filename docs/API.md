@@ -32,6 +32,7 @@ curl http://localhost:8080/v1/chat/completions -d '{
 | temperature | float | 0 | 0 = greedy, >0 = sampling |
 | top_k | int | 0 | Top-k filtering, 0 = disabled |
 | top_p | float | 1.0 | Nucleus sampling threshold |
+| min_p | float | 0 | Min-p sampling: keep tokens with prob >= min_p * max_prob [0, 1] |
 | frequency_penalty | float | 0 | Penalize by token frequency in output [-2, 2] |
 | presence_penalty | float | 0 | Penalize tokens that appeared at all [-2, 2] |
 | repetition_penalty | float | 1.0 | Multiplicative penalty for repeated tokens (>1 = penalize) |

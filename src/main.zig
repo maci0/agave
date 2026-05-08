@@ -334,6 +334,7 @@ const cli_specs = [_]cli_mod.ArgSpec{
     .{ .long = "temperature", .short = 't', .kind = .option, .help = "Sampling temperature, 0 = greedy [default: 0]." },
     .{ .long = "top-p", .kind = .option, .help = "Nucleus sampling threshold [default: 1.0]." },
     .{ .long = "top-k", .kind = .option, .help = "Top-k sampling, 0 = disabled [default: 0]." },
+    .{ .long = "min-p", .kind = .option, .help = "Min-p sampling threshold [default: 0]." },
     .{ .long = "repeat-penalty", .kind = .option, .help = "Repetition penalty [default: 1.0]." },
     .{ .long = "seed", .kind = .option, .help = "Random seed for sampling [default: random]." },
     .{ .long = "grammar", .kind = .option, .help = "GBNF grammar file for constrained decoding." },
@@ -393,6 +394,7 @@ const CliArgs = struct {
     temperature: f32,
     top_p: f32,
     top_k: u32,
+    min_p: f32,
     repeat_penalty: f32,
     grammar_path: ?[]const u8,
     grammar_string: ?[]const u8,
@@ -693,6 +695,7 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
         .temperature = temperature,
         .top_p = top_p,
         .top_k = res.optionU32("top-k") orelse 0,
+        .min_p = parseF32(res.option("min-p"), "min-p") orelse 0.0,
         .repeat_penalty = repeat_penalty,
         .grammar_path = grammar_path,
         .grammar_string = grammar_string,
@@ -2368,6 +2371,7 @@ fn generateAndPrintInner(
             grammar_state.?.grammar.maskLogits(&grammar_state.?, logits, vocab_texts);
         }
         if (use_sampling) {
+            if (cli.min_p > 0) math_ops.applyMinP(logits, cli.min_p);
             next = math_ops.sampleToken(logits, cli.temperature, cli.top_k, cli.top_p, prng.random());
         } else if (has_grammar or (use_repeat_penalty and token_count > 0)) {
             // Re-argmax after masking or penalty
