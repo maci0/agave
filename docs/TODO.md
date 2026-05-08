@@ -30,7 +30,7 @@ All correctness-critical kernels are implemented as native GPU compute shaders a
 
 | Kernel | Status |
 |--------|--------|
-| Paged SDPA (block table indirection) | Not implemented on any backend |
+| Paged SDPA (block table indirection) | CPU done — PagedKvView + sdpaPagedHeads. GPU backends use CPU fallback |
 | NVFP4 GGUF GEMV | CPU only (GPU backends use SafeTensors NVFP4 path) |
 
 ---
