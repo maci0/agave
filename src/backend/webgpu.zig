@@ -283,7 +283,7 @@ const CachedBuf = struct {
 // ── WebGPU Backend ──────────────────────────────────────────────────
 
 pub const WebGpuBackend = struct {
-    const max_dirty_entries: usize = 128;
+    const max_dirty_entries: usize = 512;
     const DirtyEntry = struct { buf: WGPUBuffer, ptr: [*]f32, count: usize };
 
     allocator: std.mem.Allocator,
@@ -1549,9 +1549,23 @@ pub const WebGpuBackend = struct {
     // ── Sync + Batch + Memory ───────────────────────────────────
 
     pub fn sync(self: *WebGpuBackend) void {
-        // Flush dirty buffers: download GPU results to CPU
-        for (self.dirty_bufs[0..self.dirty_count]) |entry| {
-            self.downloadF32(entry.buf, entry.ptr, entry.count);
+        // Flush dirty buffers: download GPU results to CPU.
+        // Deduplicate by pointer — only download the latest buffer for each CPU address.
+        var di: u32 = self.dirty_count;
+        while (di > 0) {
+            di -= 1;
+            const entry = self.dirty_bufs[di];
+            // Check if a later entry overwrote this pointer
+            var superseded = false;
+            for (self.dirty_bufs[di + 1 .. self.dirty_count]) |later| {
+                if (later.ptr == entry.ptr) {
+                    superseded = true;
+                    break;
+                }
+            }
+            if (!superseded) {
+                self.downloadF32(entry.buf, entry.ptr, entry.count);
+            }
         }
         self.dirty_count = 0;
         _ = self.fn_device_poll(self.device, 1, null);
