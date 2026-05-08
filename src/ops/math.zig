@@ -842,6 +842,26 @@ test "applyRepeatPenalty negative logit" {
     try std.testing.expectApproxEqAbs(@as(f32, 1.0), logits[1], 0.001); // unchanged
 }
 
+test "applyMinP filters low probability tokens" {
+    // min_p=0.01, max=10, threshold = 10 + ln(0.01) = 5.395
+    // logit=10 ≥ 5.395 → kept, logit=5 < 5.395 → masked
+    var logits = [_]f32{ 10, 5, 0, -5 };
+    applyMinP(&logits, 0.01);
+    try std.testing.expect(logits[0] == 10);
+    try std.testing.expect(logits[1] == -std.math.inf(f32));
+    try std.testing.expect(logits[2] == -std.math.inf(f32));
+    try std.testing.expect(logits[3] == -std.math.inf(f32));
+}
+
+test "applyMinP keeps multiple tokens" {
+    var logits = [_]f32{ 10, 9, 8, 0 };
+    applyMinP(&logits, 0.1); // threshold = 10 + ln(0.1) = 10 - 2.303 = 7.697
+    try std.testing.expect(logits[0] == 10); // kept
+    try std.testing.expect(logits[1] == 9); // kept
+    try std.testing.expect(logits[2] == 8); // kept
+    try std.testing.expect(logits[3] == -std.math.inf(f32)); // masked
+}
+
 test "tokenLogProb" {
     // logits [0, 0, 0] → uniform → each has prob 1/3 → logprob = ln(1/3) ≈ -1.0986
     const logits = [_]f32{ 0, 0, 0 };
