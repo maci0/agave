@@ -29,6 +29,7 @@ pub const SamplingParams = struct {
     top_p: f32 = 1.0,
     frequency_penalty: f32 = 0,
     presence_penalty: f32 = 0,
+    repetition_penalty: f32 = 1.0,
     seed: ?u64 = null,
     json_mode: bool = false,
     grammar_string: ?[]const u8 = null,
@@ -212,6 +213,10 @@ pub fn parseSampling(body: []const u8) SamplingParams {
         .top_p = if (std.math.isFinite(raw_top_p)) std.math.clamp(raw_top_p, 0, 1.0) else 1.0,
         .frequency_penalty = if (std.math.isFinite(raw_freq_pen)) std.math.clamp(raw_freq_pen, -2.0, 2.0) else 0,
         .presence_penalty = if (std.math.isFinite(raw_pres_pen)) std.math.clamp(raw_pres_pen, -2.0, 2.0) else 0,
+        .repetition_penalty = blk: {
+            const raw = extractFloatField(body, "repetition_penalty") orelse 1.0;
+            break :blk if (std.math.isFinite(raw) and raw > 0) raw else 1.0;
+        },
         .seed = if (extractIntField(body, "seed")) |s| @as(u64, @intCast(s)) else null,
         .json_mode = json_mode,
         .grammar_string = extractField(body, "grammar"),

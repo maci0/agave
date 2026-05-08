@@ -2259,9 +2259,14 @@ fn generateN(formatted: []const u8, reset: bool, max_tokens: usize, sampling: Sa
                     }
                 }
             }
+            if (sampling.repetition_penalty != 1.0 and token_count > 0) {
+                math_ops.applyRepeatPenalty(model.getLogits(), gen_tokens[0..token_count], sampling.repetition_penalty);
+            }
             if (sampling.frequency_penalty != 0 or sampling.presence_penalty != 0) {
                 math_ops.applyPenalties(model.getLogits(), gen_tokens[0..token_count], sampling.frequency_penalty, sampling.presence_penalty);
-                if (!use_grammar and !use_sampling) next = math_ops.argmax(model.getLogits());
+            }
+            if ((sampling.repetition_penalty != 1.0 or sampling.frequency_penalty != 0 or sampling.presence_penalty != 0) and !use_grammar and !use_sampling) {
+                next = math_ops.argmax(model.getLogits());
             }
             if (use_sampling and !use_grammar) {
                 next = math_ops.sampleToken(model.getLogits(), sampling.temperature, sampling.top_k, sampling.top_p, prng.random());
@@ -3641,6 +3646,9 @@ fn generateStream(stream: TcpStream, prompt: []const u8, req_id: u64, created: i
                 }
                 break;
             };
+            if (sampling.repetition_penalty != 1.0 and s_gen_count > 0) {
+                math_ops.applyRepeatPenalty(model.getLogits(), s_gen_tokens[0..s_gen_count], sampling.repetition_penalty);
+            }
             if (use_penalties_s) {
                 math_ops.applyPenalties(model.getLogits(), s_gen_tokens[0..s_gen_count], sampling.frequency_penalty, sampling.presence_penalty);
             }
