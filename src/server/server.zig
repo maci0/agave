@@ -2093,7 +2093,8 @@ fn generateN(formatted: []const u8, reset: bool, max_tokens: usize, sampling: Sa
 
     // Apply sampling to first generated token (from prefill's last forward call)
     const use_sampling = sampling.temperature > 0;
-    var prng = std.Random.Xoshiro256.init(@as(u64, @truncate(@as(u96, @bitCast(nanoTimestamp())))));
+    const prng_seed = sampling.seed orelse @as(u64, @truncate(@as(u96, @bitCast(nanoTimestamp()))));
+    var prng = std.Random.Xoshiro256.init(prng_seed);
     var json_depth: i32 = 0;
 
     // Grammar-constrained decoding: parse GBNF and init state
@@ -3510,7 +3511,8 @@ fn generateStream(stream: TcpStream, prompt: []const u8, req_id: u64, created: i
 
     // Prefill — capture the last forward's return value (first generated token)
     const use_sampling_s = sampling.temperature > 0;
-    var prng_s = std.Random.Xoshiro256.init(@as(u64, @truncate(@as(u96, @bitCast(nanoTimestamp())))));
+    const prng_seed_s = sampling.seed orelse @as(u64, @truncate(@as(u96, @bitCast(nanoTimestamp()))));
+    var prng_s = std.Random.Xoshiro256.init(prng_seed_s);
     const prefill_start = milliTimestamp();
     var first_gen_token: u32 = 0;
     for (token_ids) |tid| {
