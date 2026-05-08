@@ -51,7 +51,7 @@ All correctness-critical kernels are implemented as native GPU compute shaders a
 | # | Issue | Impact | Status |
 |---|-------|--------|--------|
 | 1 | Q4_K Metal GEMV slower than llama.cpp | Primary decode bottleneck on quantized models | Optimized — group-level x register preload, needs benchmarking |
-| 2 | WebGPU decode 0.7 tok/s | Synchronous per-op dispatch overhead | Open — needs batched command encoding |
+| 2 | WebGPU decode 0.7 tok/s | Synchronous per-op dispatch overhead | Optimized — lazy readback cache eliminates CPU↔GPU round-trips, needs benchmarking |
 | 3 | Gemma 4 E4B CPU prefill ~60s | Very slow, 42 layers with 4.5GB model | Open |
 | 4 | NVFP4 model accuracy lower than MLX-4bit | May be community quantization quality, not agave bug | Open |
 
