@@ -62,7 +62,7 @@ All correctness-critical kernels are implemented as native GPU compute shaders a
 | # | Feature | Status | Notes |
 |---|---------|--------|-------|
 | 1 | Tensor/Pipeline parallelism | Design only | `docs/PARALLELISM.md` has 24-section design doc, no code |
-| 2 | Structured output / grammar-constrained decoding | Working | GBNF parser, `--grammar-string`, `--json-output` (brace tracking), full-token validation, BPE encoding handled. Repetition (`*`/`+`) not yet in state machine |
+| 2 | Structured output / grammar-constrained decoding | Working | GBNF parser, `--grammar-string`, `--json-output` (brace tracking), full-token validation, BPE encoding handled. Full repetition support: `*`/`+`/`?` on char ranges, rule refs, and `(...)` groups |
 | 3 | TriAttention Phase 3 | Not started | Dynamic budget, auto-tune, calibration data generator |
 | 4 | Native GPU tree SDPA for CUDA/ROCm/Vulkan | Done | All backends now have native f32 sdpaTree (CPU fallback only for quantized KV) |
 | 5 | Batch `forwardTree()` | Fixed | Was hardcoding KV type as f32, now uses model's kv_type_k/v |

@@ -23,6 +23,9 @@ pub const ElementType = enum {
     char_range_plus, // Match character in range, one or more times (+)
     char_range_opt, // Match character in range, zero or one time (?)
     rule_ref, // Reference to another rule by index
+    rule_ref_star, // Reference to another rule, zero or more times (*)
+    rule_ref_plus, // Reference to another rule, one or more times (+)
+    rule_ref_opt, // Reference to another rule, zero or one time (?)
     alt, // Alternative separator (|)
     end, // End of alternative/rule
 };
@@ -35,7 +38,7 @@ pub const Element = struct {
 
 pub const Rule = struct {
     name: []const u8,
-    elements: []const Element,
+    elements: []Element,
 };
 
 // ── Grammar ─────────────────────────────────────────────────────
@@ -164,7 +167,6 @@ pub const Grammar = struct {
                     found_in_alt = true;
                     // For * and ?, also collect next element's chars (zero matches possible)
                     if (elem.type == .char_range_star or elem.type == .char_range_opt) {
-                        // Peek at next element — it's also allowed (zero matches)
                         if (idx + 1 < elements.len) {
                             const next_elem = elements[idx + 1];
                             if ((next_elem.type == .char_range or next_elem.type == .char_range_star or next_elem.type == .char_range_plus) and count.* < 256) {
@@ -174,7 +176,6 @@ pub const Grammar = struct {
                             }
                         }
                     }
-                    // Skip rest of this alternative to find next |
                     idx += 1;
                     while (idx < elements.len and elements[idx].type != .alt and elements[idx].type != .end) : (idx += 1) {}
                     found_in_alt = false;
@@ -199,11 +200,32 @@ pub const Grammar = struct {
                     found_in_alt = false;
                     continue;
                 },
-                .rule_ref => {
+                .rule_ref, .rule_ref_star, .rule_ref_opt, .rule_ref_plus => {
                     if (!found_in_alt and elem.lo < self.rules.len) {
                         self.collectFromRule(self.rules[elem.lo].elements, 0, lo, hi, count, depth + 1);
                     }
                     found_in_alt = true;
+                    // For rule_ref_star/opt, also collect next element (zero matches possible)
+                    if (elem.type == .rule_ref_star or elem.type == .rule_ref_opt) {
+                        if (idx + 1 < elements.len) {
+                            const next_elem = elements[idx + 1];
+                            switch (next_elem.type) {
+                                .char_range, .char_range_star, .char_range_plus => {
+                                    if (count.* < 256) {
+                                        lo.*[count.*] = next_elem.lo;
+                                        hi.*[count.*] = next_elem.hi;
+                                        count.* += 1;
+                                    }
+                                },
+                                .rule_ref, .rule_ref_star, .rule_ref_opt, .rule_ref_plus => {
+                                    if (next_elem.lo < self.rules.len) {
+                                        self.collectFromRule(self.rules[next_elem.lo].elements, 0, lo, hi, count, depth + 1);
+                                    }
+                                },
+                                else => {},
+                            }
+                        }
+                    }
                     idx += 1;
                     while (idx < elements.len and elements[idx].type != .alt and elements[idx].type != .end) : (idx += 1) {}
                     found_in_alt = false;
@@ -283,19 +305,16 @@ pub const GrammarState = struct {
                 }
                 return self.tryNextAlternative(c, depth);
             },
-            .char_range_star, .char_range_plus => {
-                // * = zero or more, + = one or more
+            .char_range_star => {
                 if (c >= @as(u8, @intCast(elem.lo)) and c <= @as(u8, @intCast(elem.hi))) {
-                    // Match — stay at this element (don't advance)
-                    return true;
+                    return true; // match — stay at this element
                 }
-                // No match — for *, advance past (zero matches ok)
-                // For +, we need at least one match — but we can't track that without
-                // extra state. Treat + same as * for simplicity.
+                // no match — advance past (zero matches ok)
                 top.elem_idx += 1;
                 self.advancePastEnd();
                 return self.acceptCharInner(c, depth + 1);
             },
+            .char_range_plus => unreachable, // decomposed to char_range + char_range_star by parser
             .char_range_opt => {
                 // ? = zero or one
                 if (c >= @as(u8, @intCast(elem.lo)) and c <= @as(u8, @intCast(elem.hi))) {
@@ -308,10 +327,37 @@ pub const GrammarState = struct {
                 return self.acceptCharInner(c, depth + 1);
             },
             .rule_ref => {
-                self.stack.append(self.grammar.allocator, .{ .rule_id = elem.lo, .elem_idx = 0 }) catch return false;
                 top.elem_idx += 1;
+                self.stack.append(self.grammar.allocator, .{ .rule_id = elem.lo, .elem_idx = 0 }) catch return false;
                 return self.acceptCharInner(c, depth + 1);
             },
+            .rule_ref_star => {
+                // Try matching the subrule; if it fails, skip (zero matches ok)
+                const saved_len = self.stack.items.len;
+                const saved_completed = self.completed;
+                self.stack.append(self.grammar.allocator, .{ .rule_id = elem.lo, .elem_idx = 0 }) catch return false;
+                if (self.acceptCharInner(c, depth + 1)) return true;
+                // Subrule didn't match — restore and advance past
+                self.stack.shrinkRetainingCapacity(saved_len);
+                self.completed = saved_completed;
+                top.elem_idx += 1;
+                self.advancePastEnd();
+                return self.acceptCharInner(c, depth + 1);
+            },
+            .rule_ref_opt => {
+                // Try matching subrule once; if fails, skip
+                const saved_len = self.stack.items.len;
+                const saved_completed = self.completed;
+                top.elem_idx += 1; // advance past regardless
+                self.stack.append(self.grammar.allocator, .{ .rule_id = elem.lo, .elem_idx = 0 }) catch return false;
+                if (self.acceptCharInner(c, depth + 1)) return true;
+                // Didn't match — restore and try without
+                self.stack.shrinkRetainingCapacity(saved_len);
+                self.completed = saved_completed;
+                self.advancePastEnd();
+                return self.acceptCharInner(c, depth + 1);
+            },
+            .rule_ref_plus => unreachable, // decomposed to rule_ref + rule_ref_star by parser
             .alt => {
                 // Skip past this alt marker
                 top.elem_idx += 1;
@@ -380,6 +426,12 @@ pub const GrammarState = struct {
 
 // ── GBNF Parser ─────────────────────────────────────────────────
 
+const UnresolvedRef = struct {
+    rule_idx: u32, // which rule this ref is in
+    elem_idx: u32, // which element within the rule
+    name: []const u8, // name to resolve
+};
+
 const Parser = struct {
     allocator: std.mem.Allocator,
     input: []const u8,
@@ -387,6 +439,7 @@ const Parser = struct {
     rules: std.ArrayList(Rule),
     rule_names: std.StringHashMap(u32),
     elements: std.ArrayList(Element),
+    unresolved: std.ArrayList(UnresolvedRef) = .empty,
 
     fn init(allocator: std.mem.Allocator, input: []const u8) Parser {
         return .{
@@ -399,16 +452,71 @@ const Parser = struct {
     }
 
     fn parseGrammar(self: *Parser) !Grammar {
+        // Pass 1: collect all rule names so forward references resolve correctly
+        {
+            var scan_pos: usize = 0;
+            while (scan_pos < self.input.len) {
+                // Skip whitespace
+                while (scan_pos < self.input.len and (self.input[scan_pos] == ' ' or self.input[scan_pos] == '\t' or self.input[scan_pos] == '\r')) : (scan_pos += 1) {}
+                if (scan_pos >= self.input.len) break;
+                if (self.input[scan_pos] == '#' or self.input[scan_pos] == '\n') {
+                    while (scan_pos < self.input.len and self.input[scan_pos] != '\n') : (scan_pos += 1) {}
+                    if (scan_pos < self.input.len) scan_pos += 1;
+                    continue;
+                }
+                // Read rule name
+                const name_start = scan_pos;
+                while (scan_pos < self.input.len and (std.ascii.isAlphanumeric(self.input[scan_pos]) or self.input[scan_pos] == '_' or self.input[scan_pos] == '-')) : (scan_pos += 1) {}
+                const name = self.input[name_start..scan_pos];
+                if (name.len == 0) {
+                    scan_pos += 1;
+                    continue;
+                }
+                // Skip to ::=
+                while (scan_pos < self.input.len and (self.input[scan_pos] == ' ' or self.input[scan_pos] == '\t')) : (scan_pos += 1) {}
+                if (scan_pos + 3 <= self.input.len and std.mem.eql(u8, self.input[scan_pos..][0..3], "::=")) {
+                    // Pre-register with placeholder — actual ID assigned in pass 2
+                    if (!self.rule_names.contains(name)) {
+                        try self.rule_names.put(name, 0xFFFF);
+                    }
+                }
+                // Skip to next line
+                while (scan_pos < self.input.len and self.input[scan_pos] != '\n') : (scan_pos += 1) {}
+                if (scan_pos < self.input.len) scan_pos += 1;
+            }
+        }
+
+        // Pass 2: parse rule bodies (synthetic rules from groups get real IDs)
         while (self.pos < self.input.len) {
             self.skipWs();
             if (self.pos >= self.input.len) break;
-            if (self.input[self.pos] == '#') {
+            if (self.input[self.pos] == '#' or self.input[self.pos] == '\n') {
                 self.skipLine();
                 continue;
             }
             try self.parseRule();
         }
 
+        self.elements.deinit(self.allocator);
+
+        // Resolve forward references: each has a unique placeholder 0xFF00+i
+        for (self.unresolved.items, 0..) |ref, i| {
+            const placeholder: u32 = 0xFF00 + @as(u32, @intCast(i));
+            const resolved_id = self.rule_names.get(ref.name) orelse continue;
+            if (resolved_id == 0xFFFF) continue;
+            for (self.rules.items) |rule| {
+                for (rule.elements) |*elem| {
+                    switch (elem.type) {
+                        .rule_ref, .rule_ref_star, .rule_ref_opt, .rule_ref_plus => {
+                            if (elem.lo == placeholder) elem.lo = resolved_id;
+                        },
+                        else => {},
+                    }
+                }
+            }
+        }
+
+        self.unresolved.deinit(self.allocator);
         const root_id = self.rule_names.get("root") orelse 0;
         return Grammar{
             .allocator = self.allocator,
@@ -433,8 +541,11 @@ const Parser = struct {
             self.pos += 3;
         } else return;
 
-        const rule_id: u32 = @intCast(self.rules.items.len);
-        try self.rule_names.put(name, rule_id);
+        // Reserve a slot for this rule (pre-registered name points here).
+        // Synthetic rules from (...) groups may be inserted during body parsing,
+        // so we need to fix up the ID after parsing.
+        const pre_id: u32 = @intCast(self.rules.items.len);
+        try self.rule_names.put(name, pre_id);
 
         const elem_start = self.elements.items.len;
         try self.parseAlternatives();
@@ -443,6 +554,11 @@ const Parser = struct {
         const elems = try self.allocator.dupe(Element, self.elements.items[elem_start..]);
         self.elements.shrinkRetainingCapacity(elem_start);
 
+        // Actual rule ID may differ if synthetic rules were inserted
+        const actual_id: u32 = @intCast(self.rules.items.len);
+        if (actual_id != pre_id) {
+            try self.rule_names.put(name, actual_id);
+        }
         try self.rules.append(self.allocator, .{ .name = name, .elements = elems });
     }
 
@@ -485,8 +601,28 @@ const Parser = struct {
             try self.parseCharClass();
         } else if (c == '(') {
             self.pos += 1;
+            // Save current elements, parse group into separate buffer, create synthetic rule
+            const group_start = self.elements.items.len;
             try self.parseAlternatives();
             if (self.pos < self.input.len and self.input[self.pos] == ')') self.pos += 1;
+            const group_end = self.elements.items.len;
+
+            // Extract group elements into a synthetic rule
+            const group_elems_src = self.elements.items[group_start..group_end];
+            const n_group = group_elems_src.len + 1; // +1 for end marker
+            const group_elems = try self.allocator.alloc(Element, n_group);
+            @memcpy(group_elems[0..group_elems_src.len], group_elems_src);
+            group_elems[n_group - 1] = .{ .type = .end };
+
+            // Remove group elements from inline position
+            self.elements.shrinkRetainingCapacity(group_start);
+
+            // Add synthetic rule
+            const synth_id: u32 = @intCast(self.rules.items.len);
+            try self.rules.append(self.allocator, .{ .name = "_group", .elements = group_elems });
+
+            // Emit rule_ref to the synthetic rule
+            try self.elements.append(self.allocator, .{ .type = .rule_ref, .lo = synth_id });
         } else if (std.ascii.isAlphanumeric(c) or c == '_' or c == '-') {
             try self.parseRuleRef();
         } else {
@@ -494,21 +630,42 @@ const Parser = struct {
         }
 
         // Handle repetition modifiers: *, +, ?
-        // Convert the last emitted element(s) to their repetition variant
         if (self.pos < self.input.len) {
             const mod = self.input[self.pos];
             if (mod == '*' or mod == '+' or mod == '?') {
                 self.pos += 1;
-                // Modify the last emitted element to be a repetition type
                 if (self.elements.items.len > 0) {
                     const last = &self.elements.items[self.elements.items.len - 1];
-                    if (last.type == .char_range or last.type == .char_not) {
-                        last.type = switch (mod) {
-                            '*' => .char_range_star,
-                            '+' => .char_range_plus,
-                            '?' => .char_range_opt,
-                            else => last.type,
-                        };
+                    switch (last.type) {
+                        .char_range, .char_not => {
+                            if (mod == '+') {
+                                // x+ → x x* (one mandatory + zero or more)
+                                const lo = last.lo;
+                                const hi = last.hi;
+                                const star_type: ElementType = if (last.type == .char_not) .char_range_star else .char_range_star;
+                                try self.elements.append(self.allocator, .{ .type = star_type, .lo = lo, .hi = hi });
+                            } else {
+                                last.type = switch (mod) {
+                                    '*' => .char_range_star,
+                                    '?' => .char_range_opt,
+                                    else => last.type,
+                                };
+                            }
+                        },
+                        .rule_ref => {
+                            if (mod == '+') {
+                                // rule+ → rule rule* (one mandatory + zero or more)
+                                const rule_id = last.lo;
+                                try self.elements.append(self.allocator, .{ .type = .rule_ref_star, .lo = rule_id });
+                            } else {
+                                last.type = switch (mod) {
+                                    '*' => .rule_ref_star,
+                                    '?' => .rule_ref_opt,
+                                    else => last.type,
+                                };
+                            }
+                        },
+                        else => {},
                     }
                 }
             }
@@ -562,13 +719,19 @@ const Parser = struct {
         const start = self.pos;
         while (self.pos < self.input.len and (std.ascii.isAlphanumeric(self.input[self.pos]) or self.input[self.pos] == '_' or self.input[self.pos] == '-')) : (self.pos += 1) {}
         const name = self.input[start..self.pos];
-        const rule_id = self.rule_names.get(name) orelse blk: {
-            // Forward reference — assign next ID
-            const id: u32 = @intCast(self.rules.items.len + self.rule_names.count());
-            self.rule_names.put(name, id) catch {};
-            break :blk id;
-        };
-        try self.elements.append(self.allocator, .{ .type = .rule_ref, .lo = rule_id });
+        const rule_id = self.rule_names.get(name) orelse 0;
+        if (rule_id != 0xFFFF) {
+            try self.elements.append(self.allocator, .{ .type = .rule_ref, .lo = rule_id });
+        } else {
+            // Forward reference — unique placeholder per ref
+            const placeholder: u32 = 0xFF00 + @as(u32, @intCast(self.unresolved.items.len));
+            try self.elements.append(self.allocator, .{ .type = .rule_ref, .lo = placeholder });
+            try self.unresolved.append(self.allocator, .{
+                .rule_idx = 0,
+                .elem_idx = 0,
+                .name = name,
+            });
+        }
     }
 
     fn skipWs(self: *Parser) void {
@@ -596,4 +759,102 @@ test "parse bool grammar" {
     var grammar = try Grammar.parse(allocator, Grammar.bool_grammar);
     defer grammar.deinit();
     try std.testing.expect(grammar.rules.len >= 1);
+}
+
+test "char repetition star" {
+    const allocator = std.testing.allocator;
+    var grammar = try Grammar.parse(allocator, "root ::= [a-z]*");
+    defer grammar.deinit();
+    var state = grammar.initState();
+    defer state.deinit();
+
+    // Zero matches — should complete immediately (empty string valid)
+    try std.testing.expect(state.acceptChar('1') == false);
+}
+
+test "char repetition plus" {
+    const allocator = std.testing.allocator;
+    var grammar = try Grammar.parse(allocator, "root ::= [0-9]+");
+    defer grammar.deinit();
+    var state = grammar.initState();
+    defer state.deinit();
+
+    // Must match at least one digit
+    try std.testing.expect(state.acceptChar('5'));
+    try std.testing.expect(state.acceptChar('3'));
+    try std.testing.expect(state.acceptChar('a') == false); // stops
+}
+
+test "char repetition plus rejects zero matches" {
+    const allocator = std.testing.allocator;
+    var grammar = try Grammar.parse(allocator, "root ::= [0-9]+ \"x\"");
+    defer grammar.deinit();
+    var state = grammar.initState();
+    defer state.deinit();
+
+    // Cannot start with 'x' — need at least one digit first
+    try std.testing.expect(state.acceptChar('x') == false);
+}
+
+test "grouped repetition star" {
+    const allocator = std.testing.allocator;
+    // ("ab")* should match "", "ab", "abab", etc.
+    var grammar = try Grammar.parse(allocator, "root ::= (\"ab\")*");
+    defer grammar.deinit();
+
+    // Verify parse structure: should have 2 rules (synthetic _group + root)
+    // _group rule: char_range('a'), char_range('b'), end
+    // root rule: rule_ref_star(_group), end
+    try std.testing.expectEqual(@as(usize, 2), grammar.rules.len);
+
+    var state = grammar.initState();
+    defer state.deinit();
+
+    // First match
+    try std.testing.expect(state.acceptChar('a'));
+    try std.testing.expect(state.acceptChar('b'));
+    // Second match (repetition)
+    try std.testing.expect(state.acceptChar('a'));
+    try std.testing.expect(state.acceptChar('b'));
+    // 'c' should fail (not 'a' or end)
+    try std.testing.expect(state.acceptChar('c') == false);
+}
+
+test "json grammar parses" {
+    const allocator = std.testing.allocator;
+    var grammar = try Grammar.parse(allocator, Grammar.json_grammar);
+    defer grammar.deinit();
+    try std.testing.expect(grammar.rules.len >= 6);
+
+    var state = grammar.initState();
+    defer state.deinit();
+
+    // Should accept start of valid JSON
+    try std.testing.expect(state.acceptChar('{'));
+}
+
+test "integer grammar" {
+    const allocator = std.testing.allocator;
+    var grammar = try Grammar.parse(allocator, Grammar.integer_grammar);
+    defer grammar.deinit();
+    var state = grammar.initState();
+    defer state.deinit();
+
+    // Positive integer
+    try std.testing.expect(state.acceptChar('4'));
+    try std.testing.expect(state.acceptChar('2'));
+    try std.testing.expect(state.acceptChar('a') == false);
+}
+
+test "integer grammar negative" {
+    const allocator = std.testing.allocator;
+    var grammar = try Grammar.parse(allocator, Grammar.integer_grammar);
+    defer grammar.deinit();
+    var state = grammar.initState();
+    defer state.deinit();
+
+    // Negative integer
+    try std.testing.expect(state.acceptChar('-'));
+    try std.testing.expect(state.acceptChar('7'));
+    try std.testing.expect(state.acceptChar('x') == false);
 }
