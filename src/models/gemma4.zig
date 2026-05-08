@@ -1991,8 +1991,12 @@ pub const Gemma4Model = struct {
                     }
                     used_fused_kernel = true;
                 } else {
-                    self.be.gemv(self.hidden2.ptr, .{ .data = gate_data, .dtype = fused_t.dtype }, self.ff_buf.ptr, ff, e);
-                    self.be.gemv(self.hidden2.ptr, .{ .data = up_data, .dtype = fused_t.dtype }, self.ff_buf2.ptr, ff, e);
+                    // Batch gate+up into single thread pool dispatch
+                    const ops = [_]backend_mod.GemvOp{
+                        .{ .w = .{ .data = gate_data, .dtype = fused_t.dtype }, .y = self.ff_buf.ptr, .n = ff },
+                        .{ .w = .{ .data = up_data, .dtype = fused_t.dtype }, .y = self.ff_buf2.ptr, .n = ff },
+                    };
+                    self.be.gemvMulti(self.hidden2.ptr, &ops, e);
                 }
             } else {
                 // Separate gate/up expert tensors (GGUF path)
@@ -2021,8 +2025,14 @@ pub const Gemma4Model = struct {
                     }
                     used_fused_kernel = true;
                 } else {
-                    self.doGemvExpert(self.hidden2.ptr, gate_exps.?, ei, gate_stride, self.ff_buf.ptr, ff, e);
-                    self.doGemvExpert(self.hidden2.ptr, up_exps.?, ei, up_stride, self.ff_buf2.ptr, ff, e);
+                    // Batch gate+up into single thread pool dispatch
+                    const gate_d = gate_exps.?.data_ptr + ei * gate_stride;
+                    const up_d = up_exps.?.data_ptr + ei * up_stride;
+                    const ops = [_]backend_mod.GemvOp{
+                        .{ .w = .{ .data = gate_d, .dtype = dtype }, .y = self.ff_buf.ptr, .n = ff },
+                        .{ .w = .{ .data = up_d, .dtype = dtype }, .y = self.ff_buf2.ptr, .n = ff },
+                    };
+                    self.be.gemvMulti(self.hidden2.ptr, &ops, e);
                 }
             }
             // GELU activation on gate, then element-wise multiply with up
