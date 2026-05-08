@@ -205,6 +205,38 @@ pub fn applyRepeatPenalty(logits: []f32, recent_ids: []const u32, penalty: f32) 
 ///   4. If top_p < 1.0, keep smallest set of tokens with cumulative probability >= top_p.
 ///   5. Sample from the filtered distribution.
 ///
+/// Apply OpenAI-compatible frequency and presence penalties to logits.
+/// frequency_penalty: penalize by count(token_in_output) * penalty
+/// presence_penalty: penalize by 1 * penalty if token appeared at all
+pub fn applyPenalties(logits: []f32, gen_tokens: []const u32, frequency_penalty: f32, presence_penalty: f32) void {
+    if (frequency_penalty == 0 and presence_penalty == 0) return;
+    if (gen_tokens.len == 0) return;
+
+    // Frequency penalty: subtract once per occurrence in history
+    if (frequency_penalty != 0) {
+        for (gen_tokens) |tid| {
+            if (tid < logits.len) logits[tid] -= frequency_penalty;
+        }
+    }
+    // Presence penalty: subtract once per unique token in history
+    if (presence_penalty != 0) {
+        var seen: [256]u32 = undefined;
+        var n_seen: usize = 0;
+        for (gen_tokens) |tid| {
+            if (tid >= logits.len) continue;
+            var found = false;
+            for (seen[0..n_seen]) |s| {
+                if (s == tid) { found = true; break; }
+            }
+            if (!found and n_seen < 256) {
+                seen[n_seen] = tid;
+                n_seen += 1;
+                logits[tid] -= presence_penalty;
+            }
+        }
+    }
+}
+
 /// Modifies the logits buffer in-place.
 pub fn sampleToken(logits: []f32, temperature: f32, top_k: u32, top_p: f32, rng: std.Random) u32 {
     if (temperature == 0) return argmax(logits);

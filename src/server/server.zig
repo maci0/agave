@@ -2258,6 +2258,10 @@ fn generateN(formatted: []const u8, reset: bool, max_tokens: usize, sampling: Sa
                     }
                 }
             }
+            if (sampling.frequency_penalty != 0 or sampling.presence_penalty != 0) {
+                math_ops.applyPenalties(model.getLogits(), gen_tokens[0..token_count], sampling.frequency_penalty, sampling.presence_penalty);
+                if (!use_grammar and !use_sampling) next = math_ops.argmax(model.getLogits());
+            }
             if (use_sampling and !use_grammar) {
                 next = math_ops.sampleToken(model.getLogits(), sampling.temperature, sampling.top_k, sampling.top_p, prng.random());
             }
@@ -3617,7 +3621,15 @@ fn generateStream(stream: TcpStream, prompt: []const u8, req_id: u64, created: i
             if (g_server.isEog(res.next_token)) break;
         }
     } else {
-        // Standard streaming
+        // Standard streaming — token history for penalty tracking
+        const use_penalties_s = sampling.frequency_penalty != 0 or sampling.presence_penalty != 0;
+        var s_gen_tokens: [gen_ids_buf_size]u32 = undefined;
+        var s_gen_count: u32 = 0;
+        if (use_penalties_s and token_ids.len > 0 and !g_server.isEog(first_gen_token)) {
+            s_gen_tokens[0] = first_gen_token;
+            s_gen_count = 1;
+        }
+
         for (0..max_tokens -| 1) |_| {
             if (token_ids.len == 0 or (token_count == 0 and g_server.isEog(first_gen_token))) break;
             var next = model.forward(last) catch |err| {
@@ -3627,6 +3639,9 @@ fn generateStream(stream: TcpStream, prompt: []const u8, req_id: u64, created: i
                 }
                 break;
             };
+            if (use_penalties_s) {
+                math_ops.applyPenalties(model.getLogits(), s_gen_tokens[0..s_gen_count], sampling.frequency_penalty, sampling.presence_penalty);
+            }
             if (use_grammar_s) {
                 if (s_grammar) |*g| {
                     if (s_grammar_state) |*gs| {
@@ -3662,6 +3677,10 @@ fn generateStream(stream: TcpStream, prompt: []const u8, req_id: u64, created: i
             if (!streamChunk(stream, &chunk_buf, tok, next, req_id, created, is_chat)) {
                 stream_disconnected = true;
                 break;
+            }
+            if (use_penalties_s and s_gen_count < gen_ids_buf_size) {
+                s_gen_tokens[s_gen_count] = next;
+                s_gen_count += 1;
             }
             last = next;
             token_count += 1;

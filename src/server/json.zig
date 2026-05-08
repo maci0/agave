@@ -27,6 +27,8 @@ pub const SamplingParams = struct {
     temperature: f32 = 0,
     top_k: u32 = 0,
     top_p: f32 = 1.0,
+    frequency_penalty: f32 = 0,
+    presence_penalty: f32 = 0,
     json_mode: bool = false,
     grammar_string: ?[]const u8 = null,
     json_schema: ?[]const u8 = null,
@@ -188,6 +190,8 @@ pub fn parseSampling(body: []const u8) SamplingParams {
     const raw_temp = extractFloatField(body, "temperature") orelse 0;
     const raw_top_p = extractFloatField(body, "top_p") orelse 1.0;
     const raw_top_k = extractIntField(body, "top_k") orelse 0;
+    const raw_freq_pen = extractFloatField(body, "frequency_penalty") orelse 0;
+    const raw_pres_pen = extractFloatField(body, "presence_penalty") orelse 0;
     // OpenAI response_format: {"type": "json_object"} or {"type": "json_schema", "json_schema": {"schema": {...}}}
     var json_mode = false;
     var schema_from_rf: ?[]const u8 = null;
@@ -205,6 +209,8 @@ pub fn parseSampling(body: []const u8) SamplingParams {
         .temperature = if (std.math.isFinite(raw_temp)) std.math.clamp(raw_temp, 0, max_temperature) else 0,
         .top_k = @intCast(@min(raw_top_k, max_top_k)),
         .top_p = if (std.math.isFinite(raw_top_p)) std.math.clamp(raw_top_p, 0, 1.0) else 1.0,
+        .frequency_penalty = if (std.math.isFinite(raw_freq_pen)) std.math.clamp(raw_freq_pen, -2.0, 2.0) else 0,
+        .presence_penalty = if (std.math.isFinite(raw_pres_pen)) std.math.clamp(raw_pres_pen, -2.0, 2.0) else 0,
         .json_mode = json_mode,
         .grammar_string = extractField(body, "grammar"),
         .json_schema = extractField(body, "json_schema") orelse schema_from_rf,
