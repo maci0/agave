@@ -34,6 +34,7 @@ Start here: **[tutorial/README.md](tutorial/README.md)**
 
 ## Product Documentation
 
+- **[HTTP API](API.md)** — server endpoints, sampling parameters, structured output, streaming
 - **[Architecture](ARCHITECTURE.md)** — project structure, module reference, inference pipeline
 - **[Models](MODELS.md)** — supported models, parameters, per-model details, benchmarks
 - **[Kernel Status](KERNELS.md)** — per-backend kernel implementation status
