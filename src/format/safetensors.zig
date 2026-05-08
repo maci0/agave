@@ -1828,7 +1828,8 @@ fn parseConfigObject(
 
         // Recurse into text_config / quantization to flatten important nested values.
         if (!is_override and (std.mem.eql(u8, key_res.val, "text_config") or
-            std.mem.eql(u8, key_res.val, "quantization")) and json[i] == '{')
+            std.mem.eql(u8, key_res.val, "quantization") or
+            std.mem.eql(u8, key_res.val, "quantization_config")) and json[i] == '{')
         {
             i = try parseConfigObject(allocator, json, i, meta, owned, true);
         } else {
