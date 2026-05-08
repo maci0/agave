@@ -657,8 +657,10 @@ pub const Gemma4Model = struct {
             try ta.appendBlock(&self.seq_table);
             self.tiered_block_allocator = ta;
         } else {
-            const block_size: u16 = @intCast(@min(max_sl, std.math.maxInt(u16)));
-            const num_blocks = nl;
+            const paged_block_size: u16 = 256;
+            const blocks_per_layer = (max_sl + paged_block_size - 1) / paged_block_size;
+            const num_blocks = nl * blocks_per_layer;
+            const block_size = paged_block_size;
             self.paged_cache = try PagedKvCache.init(allocator, nl, kv_dim_for_cache, num_blocks, block_size);
             errdefer self.paged_cache.deinit();
             self.block_allocator = BlockAllocator.init(&self.paged_cache, allocator);
@@ -1502,6 +1504,22 @@ pub const Gemma4Model = struct {
         };
     }
 
+    const PagedKvView = @import("../kvcache/manager.zig").PagedKvView;
+
+    fn getPagedKvView(self: *Gemma4Model, layer: usize) PagedKvView {
+        return .{
+            .block_table = self.seq_table.block_table[self.kv_source[layer]],
+            .blocks = self.paged_cache.blocks,
+            .block_size = self.paged_cache.block_size,
+            .kv_dim = self.paged_cache.kv_dim,
+            .seq_len = self.kv_seq_len,
+        };
+    }
+
+    fn isMultiBlock(self: *Gemma4Model, layer: usize) bool {
+        return self.seq_table.block_table[self.kv_source[layer]].len > 1;
+    }
+
     /// One attention layer: pre-norm → QKV → QK norm → V norm (tied K=V) → RoPE →
     /// KV append + SDPA → output proj → post-attention norm → residual.
     /// Dispatches to sliding-window or global attention based on layer type.
@@ -1686,6 +1704,20 @@ pub const Gemma4Model = struct {
                 self.be,
                 .{ .start = 0, .len = sl },
                 0,
+                .f32,
+                .f32,
+            );
+        } else if (self.isMultiBlock(li)) {
+            self.be.sdpaPaged(
+                self.q_buf.ptr,
+                self.getPagedKvView(li),
+                self.k_buf.ptr,
+                self.v_buf.ptr,
+                self.attn_out.ptr,
+                nh,
+                nkv,
+                hd,
+                scale,
                 .f32,
                 .f32,
             );

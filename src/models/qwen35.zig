@@ -339,10 +339,12 @@ pub const Qwen35Model = struct {
             self.tiered_cache = tc;
             self.tiered_block_allocator = ta;
         } else {
-            // Use full-sequence blocks for contiguous KV access in both prefill and decode.
-            // One block per layer, each holding max_sl positions. Same total memory.
-            const block_size: u16 = @intCast(@min(self.max_seq_len, std.math.maxInt(u16)));
-            const num_blocks = nl;
+            // Paged KV cache: small fixed-size blocks allocated on demand.
+            // Memory scales with actual sequence length, not max context.
+            const paged_block_size: u16 = 256;
+            const blocks_per_layer = (self.max_seq_len + paged_block_size - 1) / paged_block_size;
+            const num_blocks = nl * blocks_per_layer;
+            const block_size = paged_block_size;
             self.paged_cache = try PagedKvCache.init(allocator, nl, nkv_dim, num_blocks, block_size);
             errdefer self.paged_cache.deinit();
             // BlockAllocator stores a pointer — must point to self.paged_cache (not a local copy).
@@ -583,6 +585,22 @@ pub const Qwen35Model = struct {
         };
     }
 
+    const PagedKvView = @import("../kvcache/manager.zig").PagedKvView;
+
+    fn getPagedKvView(self: *Qwen35Model, layer: usize) PagedKvView {
+        return .{
+            .block_table = self.seq_table.block_table[layer],
+            .blocks = self.paged_cache.blocks,
+            .block_size = self.paged_cache.block_size,
+            .kv_dim = self.paged_cache.kv_dim,
+            .seq_len = self.kv_seq_len,
+        };
+    }
+
+    fn isMultiBlock(self: *Qwen35Model, layer: usize) bool {
+        return self.seq_table.block_table[layer].len > 1;
+    }
+
     // ---- MLX-aware GEMV dispatch ----
 
     /// Dispatch GEMV: handles MLX quantized weights via model_mod.dispatchGemv.
@@ -743,25 +761,41 @@ pub const Qwen35Model = struct {
         // SDPA
         t = self.perf.start();
         const kv_view = self.getLayerKvView(li);
-        attn_ops.scaledDotProductAttention(
-            q_ptr,
-            kv_view.keys,
-            kv_view.values,
-            self.k_buf,
-            self.v_buf,
-            self.attn_out.ptr,
-            self.scores_buf.ptr,
-            nh,
-            nkv,
-            hd,
-            self.kv_seq_len,
-            1.0 / @sqrt(@as(f32, @floatFromInt(hd))),
-            self.be,
-            null,
-            0,
-            .f32, // PagedKvCache uses f32 blocks
-            .f32,
-        );
+        if (self.isMultiBlock(li)) {
+            self.be.sdpaPaged(
+                q_ptr,
+                self.getPagedKvView(li),
+                self.k_buf.ptr,
+                self.v_buf.ptr,
+                self.attn_out.ptr,
+                nh,
+                nkv,
+                hd,
+                1.0 / @sqrt(@as(f32, @floatFromInt(hd))),
+                .f32,
+                .f32,
+            );
+        } else {
+            attn_ops.scaledDotProductAttention(
+                q_ptr,
+                kv_view.keys,
+                kv_view.values,
+                self.k_buf,
+                self.v_buf,
+                self.attn_out.ptr,
+                self.scores_buf.ptr,
+                nh,
+                nkv,
+                hd,
+                self.kv_seq_len,
+                1.0 / @sqrt(@as(f32, @floatFromInt(hd))),
+                self.be,
+                null,
+                0,
+                .f32, // PagedKvCache uses f32 blocks
+                .f32,
+            );
+        }
         self.syncProfile();
         self.perf.end(.sdpa, t);
 

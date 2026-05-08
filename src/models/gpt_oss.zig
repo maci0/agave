@@ -220,11 +220,12 @@ pub const GptOssModel = struct {
             self.tiered_cache = tc;
             self.tiered_block_allocator = ta;
         } else {
-            // GPT-OSS uses inline attention with flat KV pointers — one block must hold
-            // the entire sequence. Use max_seq_len as block_size so getLayerKvView returns
-            // a single contiguous buffer per layer.
-            const block_size: u16 = @intCast(@min(self.max_seq_len, std.math.maxInt(u16)));
-            const num_blocks = nl; // one block per layer
+            // Paged KV cache: small fixed-size blocks allocated on demand.
+            // Memory scales with actual sequence length, not max context.
+            const paged_block_size: u16 = 256;
+            const blocks_per_layer = (self.max_seq_len + paged_block_size - 1) / paged_block_size;
+            const num_blocks = nl * blocks_per_layer;
+            const block_size = paged_block_size;
             self.paged_cache = try PagedKvCache.init(allocator, nl, kvd, num_blocks, block_size);
             errdefer self.paged_cache.deinit();
             // BlockAllocator stores a pointer — must point to self.paged_cache (not a local copy).
@@ -366,6 +367,22 @@ pub const GptOssModel = struct {
             .keys = self.paged_cache.blocks[block_id].keys,
             .values = self.paged_cache.blocks[block_id].values,
         };
+    }
+
+    const PagedKvView = @import("../kvcache/manager.zig").PagedKvView;
+
+    fn getPagedKvView(self: *GptOssModel, layer: usize) PagedKvView {
+        return .{
+            .block_table = self.seq_table.block_table[layer],
+            .blocks = self.paged_cache.blocks,
+            .block_size = self.paged_cache.block_size,
+            .kv_dim = self.paged_cache.kv_dim,
+            .seq_len = self.kv_seq_len,
+        };
+    }
+
+    fn isMultiBlock(self: *GptOssModel, layer: usize) bool {
+        return self.seq_table.block_table[layer].len > 1;
     }
 
     /// Dispatch GEMV through the backend. For mlx_q weights, looks up companion

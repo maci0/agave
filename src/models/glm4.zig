@@ -191,10 +191,12 @@ pub const Glm4Model = struct {
             self.tiered_block_allocator = ta;
         } else {
             const max_kv_dim = @max(kvd, vd);
-            // One block per layer spanning the full context — MLA attention
-            // indexes the KV cache flat (pos * kvd), not via block tables.
-            const block_size: u16 = @intCast(@min(self.max_seq_len, std.math.maxInt(u16)));
-            const num_blocks = nl;
+            // Paged KV cache: small fixed-size blocks allocated on demand.
+            // Memory scales with actual sequence length, not max context.
+            const paged_block_size: u16 = 256;
+            const blocks_per_layer = (self.max_seq_len + paged_block_size - 1) / paged_block_size;
+            const num_blocks = nl * blocks_per_layer;
+            const block_size = paged_block_size;
             self.paged_cache = try PagedKvCache.init(allocator, nl, max_kv_dim, num_blocks, block_size);
             errdefer self.paged_cache.deinit();
             // BlockAllocator stores a pointer — must point to self.paged_cache (not a local copy).
@@ -310,6 +312,22 @@ pub const Glm4Model = struct {
             .keys = self.paged_cache.blocks[block_id].keys,
             .values = self.paged_cache.blocks[block_id].values,
         };
+    }
+
+    const PagedKvView = @import("../kvcache/manager.zig").PagedKvView;
+
+    fn getPagedKvView(self: *Glm4Model, layer: usize) PagedKvView {
+        return .{
+            .block_table = self.seq_table.block_table[layer],
+            .blocks = self.paged_cache.blocks,
+            .block_size = self.paged_cache.block_size,
+            .kv_dim = self.paged_cache.kv_dim,
+            .seq_len = self.kv_seq_len,
+        };
+    }
+
+    fn isMultiBlock(self: *Glm4Model, layer: usize) bool {
+        return self.seq_table.block_table[layer].len > 1;
     }
 
     // ── Embedding ────────────────────────────────────────────────
