@@ -85,3 +85,16 @@ All correctness-critical kernels are implemented as native GPU compute shaders a
 ## Documentation
 
 No open documentation issues.
+
+---
+
+## KV Cache Quantization Methods
+
+| Method | Rotation | FMAs (d=128) | Params | Storage | CLI |
+|--------|----------|:------------:|:------:|---------|-----|
+| TurboQuant | WHT-32 butterfly | 16,384 | 16,384 | f16 norm + packed indices | `tq2/tq3/tq4` |
+| **PlanarQuant** | Givens 2D | **256** | 128 | same | `pq2/pq3/pq4` |
+| **IsoQuant** | Quaternion 4D | **512** | 128 | same | `iq2/iq3/iq4` |
+| **RotorQuant** | Cl(3,0) rotor 3D | **~2,400** | 372 | same | `rq2/rq3/rq4` |
+
+PlanarQuant uses 64x fewer FMAs than TurboQuant. All methods share the same Lloyd-Max codebook and storage format (2.5/3.5/4.5 bits per element).
