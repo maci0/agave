@@ -45,13 +45,13 @@ const fp8_e4m3_max_biased_exp: u8 = 15;
 
 // ── TurboQuant constants ─────────────────────────────────────────
 
-/// TurboQuant block size: 32 elements (matches WHT-32 transform).
+/// TurboQuant / PlanarQuant / IsoQuant block size: 32 elements.
 const turbo_block_size: usize = 32;
-/// TurboQuant 2-bit block: f16 norm (2 bytes) + 64 packed bits = 10 bytes.
+/// 2-bit block: f16 norm (2 bytes) + 64 packed bits = 10 bytes.
 pub const turbo2_block_bytes: usize = 10;
-/// TurboQuant 3-bit block: f16 norm (2 bytes) + 96 packed bits = 14 bytes.
+/// 3-bit block: f16 norm (2 bytes) + 96 packed bits = 14 bytes.
 pub const turbo3_block_bytes: usize = 14;
-/// TurboQuant 4-bit block: f16 norm (2 bytes) + 128 packed bits = 18 bytes.
+/// 4-bit block: f16 norm (2 bytes) + 128 packed bits = 18 bytes.
 pub const turbo4_block_bytes: usize = 18;
 /// WHT normalization factor: 1 / sqrt(32).
 const wht_inv_sqrt: f32 = 1.0 / @sqrt(@as(f32, @floatFromInt(turbo_block_size)));
@@ -107,6 +107,112 @@ inline fn wht32(buf: *[32]f32) void {
     }
 }
 
+// ── PlanarQuant: Givens 2D rotation ─────────────────────────────
+
+/// Fixed Givens rotation angles for 16 pairs in a 32-element block.
+/// Deterministic (not random) — same angles for all blocks.
+/// Chosen to decorrelate adjacent coordinate pairs.
+const planar_angles: [16]f32 = blk: {
+    var a: [16]f32 = undefined;
+    for (0..16) |i| {
+        a[i] = @as(f32, @floatFromInt(i)) * 0.19634954 + 0.3927; // spread across [0.39, 3.53]
+    }
+    break :blk a;
+};
+
+/// Apply forward Givens rotation to pairs of elements in buf[0..32].
+/// Each pair (buf[2i], buf[2i+1]) is rotated by angle[i].
+inline fn givensRotateForward(buf: *[32]f32) void {
+    inline for (0..16) |i| {
+        const c = @cos(planar_angles[i]);
+        const s = @sin(planar_angles[i]);
+        const x = buf[2 * i];
+        const y = buf[2 * i + 1];
+        buf[2 * i] = c * x - s * y;
+        buf[2 * i + 1] = s * x + c * y;
+    }
+}
+
+/// Apply inverse Givens rotation (negate angle).
+inline fn givensRotateInverse(buf: *[32]f32) void {
+    inline for (0..16) |i| {
+        const c = @cos(planar_angles[i]);
+        const s = @sin(planar_angles[i]);
+        const x = buf[2 * i];
+        const y = buf[2 * i + 1];
+        buf[2 * i] = c * x + s * y;
+        buf[2 * i + 1] = -s * x + c * y;
+    }
+}
+
+// ── IsoQuant: Quaternion 4D rotation ────────────────────────────
+
+/// Fixed quaternion parameters for 8 quartets in a 32-element block.
+/// Each quaternion (w, x, y, z) is unit-normalized.
+const iso_quaternions: [8][4]f32 = blk: {
+    var q: [8][4]f32 = undefined;
+    for (0..8) |i| {
+        const angle: f32 = @as(f32, @floatFromInt(i)) * 0.3927 + 0.5;
+        const half = angle * 0.5;
+        const c = @cos(half);
+        const s = @sin(half);
+        // Rotate in the (x,y) plane: q = cos(θ/2) + sin(θ/2) * k
+        q[i] = .{ c, 0, 0, s };
+    }
+    break :blk q;
+};
+
+/// Apply forward quaternion rotation to quartets buf[4i..4i+4].
+/// v' = q * v * conj(q) for each quartet.
+inline fn quatRotateForward(buf: *[32]f32) void {
+    inline for (0..8) |i| {
+        const w = iso_quaternions[i][0];
+        const qx = iso_quaternions[i][1];
+        const qy = iso_quaternions[i][2];
+        const qz = iso_quaternions[i][3];
+        const vx = buf[4 * i];
+        const vy = buf[4 * i + 1];
+        const vz = buf[4 * i + 2];
+        const vw_unused = buf[4 * i + 3];
+
+        // q * v * conj(q) for pure quaternion v = (vx, vy, vz)
+        // Fourth element treated as independent scalar (rotated separately)
+        const t0 = w * vx + qy * vz - qz * vy;
+        const t1 = w * vy + qz * vx - qx * vz;
+        const t2 = w * vz + qx * vy - qy * vx;
+        const t3 = -qx * vx - qy * vy - qz * vz;
+
+        buf[4 * i] = t0 * w + t3 * (-qx) + t1 * (-qz) - t2 * (-qy);
+        buf[4 * i + 1] = t1 * w + t3 * (-qy) + t2 * (-qx) - t0 * (-qz);
+        buf[4 * i + 2] = t2 * w + t3 * (-qz) + t0 * (-qy) - t1 * (-qx);
+        buf[4 * i + 3] = vw_unused; // pass through
+    }
+}
+
+/// Apply inverse quaternion rotation (conjugate quaternion).
+inline fn quatRotateInverse(buf: *[32]f32) void {
+    inline for (0..8) |i| {
+        const w = iso_quaternions[i][0];
+        const qx = -iso_quaternions[i][1];
+        const qy = -iso_quaternions[i][2];
+        const qz = -iso_quaternions[i][3];
+        const vx = buf[4 * i];
+        const vy = buf[4 * i + 1];
+        const vz = buf[4 * i + 2];
+        const vw_unused = buf[4 * i + 3];
+
+        const t0 = w * vx + qy * vz - qz * vy;
+        const t1 = w * vy + qz * vx - qx * vz;
+        const t2 = w * vz + qx * vy - qy * vx;
+        const t3 = -qx * vx - qy * vy - qz * vz;
+
+        buf[4 * i] = t0 * w + t3 * (-qx) + t1 * (-qz) - t2 * (-qy);
+        buf[4 * i + 1] = t1 * w + t3 * (-qy) + t2 * (-qx) - t0 * (-qz);
+        buf[4 * i + 2] = t2 * w + t3 * (-qz) + t0 * (-qy) - t1 * (-qx);
+        buf[4 * i + 3] = vw_unused;
+    }
+}
+
 /// Quantization type for KV cache storage.
 pub const KvQuantType = enum {
     f32,
@@ -118,8 +224,13 @@ pub const KvQuantType = enum {
     turbo2,
     turbo3,
     turbo4,
+    planar2,
+    planar3,
+    planar4,
+    iso2,
+    iso3,
+    iso4,
 
-    /// Human-readable name for display.
     pub fn name(self: KvQuantType) []const u8 {
         return switch (self) {
             .f32 => "F32",
@@ -131,6 +242,12 @@ pub const KvQuantType = enum {
             .turbo2 => "TQ2",
             .turbo3 => "TQ3",
             .turbo4 => "TQ4",
+            .planar2 => "PQ2",
+            .planar3 => "PQ3",
+            .planar4 => "PQ4",
+            .iso2 => "IQ2",
+            .iso3 => "IQ3",
+            .iso4 => "IQ4",
         };
     }
 
@@ -143,23 +260,33 @@ pub const KvQuantType = enum {
             .int8 => 9.0,
             .fp8_e4m3 => 8.0,
             .nvfp4 => 4.5,
-            .turbo2 => 2.5,
-            .turbo3 => 3.5,
-            .turbo4 => 4.5,
+            .turbo2, .planar2, .iso2 => 2.5,
+            .turbo3, .planar3, .iso3 => 3.5,
+            .turbo4, .planar4, .iso4 => 4.5,
         };
     }
 
-    /// Whether this is a TurboQuant variant (turbo2, turbo3, or turbo4).
     pub fn isTurbo(self: KvQuantType) bool {
         return self == .turbo2 or self == .turbo3 or self == .turbo4;
     }
 
-    /// Return the turbo bit width, or 0 for non-turbo types.
+    pub fn isPlanar(self: KvQuantType) bool {
+        return self == .planar2 or self == .planar3 or self == .planar4;
+    }
+
+    pub fn isIso(self: KvQuantType) bool {
+        return self == .iso2 or self == .iso3 or self == .iso4;
+    }
+
+    pub fn isRotationQuant(self: KvQuantType) bool {
+        return self.isTurbo() or self.isPlanar() or self.isIso();
+    }
+
     pub fn turboBits(self: KvQuantType) u32 {
         return switch (self) {
-            .turbo2 => 2,
-            .turbo3 => 3,
-            .turbo4 => 4,
+            .turbo2, .planar2, .iso2 => 2,
+            .turbo3, .planar3, .iso3 => 3,
+            .turbo4, .planar4, .iso4 => 4,
             else => 0,
         };
     }
@@ -186,6 +313,12 @@ pub const KvQuantType = enum {
         if (eql(s, "turbo2") or eql(s, "tq2")) return .turbo2;
         if (eql(s, "turbo3") or eql(s, "tq3")) return .turbo3;
         if (eql(s, "turbo4") or eql(s, "tq4")) return .turbo4;
+        if (eql(s, "planar2") or eql(s, "pq2")) return .planar2;
+        if (eql(s, "planar3") or eql(s, "pq3")) return .planar3;
+        if (eql(s, "planar4") or eql(s, "pq4")) return .planar4;
+        if (eql(s, "iso2") or eql(s, "iq2")) return .iso2;
+        if (eql(s, "iso3") or eql(s, "iq3")) return .iso3;
+        if (eql(s, "iso4") or eql(s, "iq4")) return .iso4;
         return null;
     }
 };
@@ -201,9 +334,9 @@ pub fn kvSliceBytes(kv_type: KvQuantType, n: usize) usize {
         .int8 => ((n + block_size - 1) / block_size) * int8_block_bytes,
         .fp8_e4m3 => n,
         .nvfp4 => ((n + nvfp4_block - 1) / nvfp4_block) * nvfp4_block_bytes,
-        .turbo2 => ((n + turbo_block_size - 1) / turbo_block_size) * turbo2_block_bytes,
-        .turbo3 => ((n + turbo_block_size - 1) / turbo_block_size) * turbo3_block_bytes,
-        .turbo4 => ((n + turbo_block_size - 1) / turbo_block_size) * turbo4_block_bytes,
+        .turbo2, .planar2, .iso2 => ((n + turbo_block_size - 1) / turbo_block_size) * turbo2_block_bytes,
+        .turbo3, .planar3, .iso3 => ((n + turbo_block_size - 1) / turbo_block_size) * turbo3_block_bytes,
+        .turbo4, .planar4, .iso4 => ((n + turbo_block_size - 1) / turbo_block_size) * turbo4_block_bytes,
     };
 }
 
@@ -220,9 +353,9 @@ pub fn kvByteOffset(kv_type: KvQuantType, i: usize) usize {
         .int8 => (i / block_size) * int8_block_bytes,
         .fp8_e4m3 => i,
         .nvfp4 => (i / nvfp4_block) * nvfp4_block_bytes,
-        .turbo2 => (i / turbo_block_size) * turbo2_block_bytes,
-        .turbo3 => (i / turbo_block_size) * turbo3_block_bytes,
-        .turbo4 => (i / turbo_block_size) * turbo4_block_bytes,
+        .turbo2, .planar2, .iso2 => (i / turbo_block_size) * turbo2_block_bytes,
+        .turbo3, .planar3, .iso3 => (i / turbo_block_size) * turbo3_block_bytes,
+        .turbo4, .planar4, .iso4 => (i / turbo_block_size) * turbo4_block_bytes,
     };
 }
 
@@ -240,6 +373,12 @@ pub fn kvStore(dst: [*]u8, src: [*]const f32, n: usize, kv_type: KvQuantType) vo
         .turbo2 => turboStore(2, dst, src, n),
         .turbo3 => turboStore(3, dst, src, n),
         .turbo4 => turboStore(4, dst, src, n),
+        .planar2 => planarStore(2, dst, src, n),
+        .planar3 => planarStore(3, dst, src, n),
+        .planar4 => planarStore(4, dst, src, n),
+        .iso2 => isoStore(2, dst, src, n),
+        .iso3 => isoStore(3, dst, src, n),
+        .iso4 => isoStore(4, dst, src, n),
     }
 }
 
@@ -381,6 +520,12 @@ pub fn kvDot(q_vec: [*]const f32, kv_data: [*]const u8, n: usize, kv_type: KvQua
         .turbo2 => turboDot(2, q_vec, kv_data, n),
         .turbo3 => turboDot(3, q_vec, kv_data, n),
         .turbo4 => turboDot(4, q_vec, kv_data, n),
+        .planar2 => planarDot(2, q_vec, kv_data, n),
+        .planar3 => planarDot(3, q_vec, kv_data, n),
+        .planar4 => planarDot(4, q_vec, kv_data, n),
+        .iso2 => isoDot(2, q_vec, kv_data, n),
+        .iso3 => isoDot(3, q_vec, kv_data, n),
+        .iso4 => isoDot(4, q_vec, kv_data, n),
     };
 }
 
@@ -537,6 +682,12 @@ pub fn kvMulAccum(acc: [*]f32, weight: f32, kv_data: [*]const u8, n: usize, kv_t
         .turbo2 => turboMulAccum(2, acc, weight, kv_data, n),
         .turbo3 => turboMulAccum(3, acc, weight, kv_data, n),
         .turbo4 => turboMulAccum(4, acc, weight, kv_data, n),
+        .planar2 => planarMulAccum(2, acc, weight, kv_data, n),
+        .planar3 => planarMulAccum(3, acc, weight, kv_data, n),
+        .planar4 => planarMulAccum(4, acc, weight, kv_data, n),
+        .iso2 => isoMulAccum(2, acc, weight, kv_data, n),
+        .iso3 => isoMulAccum(3, acc, weight, kv_data, n),
+        .iso4 => isoMulAccum(4, acc, weight, kv_data, n),
     }
 }
 
@@ -733,6 +884,88 @@ fn turboStore(comptime bits: u3, dst: [*]u8, src: [*]const f32, n: usize) void {
     }
 }
 
+/// PlanarQuant store: Givens 2D rotation + Lloyd-Max quantization.
+/// Same block format as TurboQuant (f16 norm + packed indices).
+fn planarStore(comptime bits: u3, dst: [*]u8, src: [*]const f32, n: usize) void {
+    const bb = comptime turboBlockBytes(bits);
+    const nb = (n + turbo_block_size - 1) / turbo_block_size;
+
+    for (0..nb) |blk| {
+        const base = blk * turbo_block_size;
+        const count = @min(turbo_block_size, n - base);
+        var buf: [turbo_block_size]f32 = undefined;
+        @memcpy(buf[0..count], src[base..][0..count]);
+        for (count..turbo_block_size) |i| buf[i] = 0;
+
+        const V8n = @Vector(8, f32);
+        var norm_acc: V8n = @splat(@as(f32, 0.0));
+        inline for (0..4) |qi| {
+            const bv: V8n = buf[qi * 8 ..][0..8].*;
+            norm_acc = @mulAdd(V8n, bv, bv, norm_acc);
+        }
+        const norm = @sqrt(@reduce(.Add, norm_acc));
+        const bp = dst + blk * bb;
+
+        if (norm == 0) {
+            @as(*align(1) u16, @ptrCast(bp)).* = @bitCast(@as(f16, 0));
+            @memset(bp[2..bb], 0);
+            continue;
+        }
+
+        // Normalize
+        const inv_norm = 1.0 / norm;
+        for (0..turbo_block_size) |i| buf[i] *= inv_norm;
+
+        // Givens rotation (instead of WHT)
+        givensRotateForward(&buf);
+
+        var indices: [turbo_block_size]u8 = undefined;
+        for (0..turbo_block_size) |i| indices[i] = nearestCentroid(bits, buf[i]);
+        @as(*align(1) u16, @ptrCast(bp)).* = @bitCast(@as(f16, @floatCast(norm)));
+        packIndices(bits, bp[2..bb], &indices);
+    }
+}
+
+/// IsoQuant store: quaternion 4D rotation + Lloyd-Max quantization.
+fn isoStore(comptime bits: u3, dst: [*]u8, src: [*]const f32, n: usize) void {
+    const bb = comptime turboBlockBytes(bits);
+    const nb = (n + turbo_block_size - 1) / turbo_block_size;
+
+    for (0..nb) |blk| {
+        const base = blk * turbo_block_size;
+        const count = @min(turbo_block_size, n - base);
+        var buf: [turbo_block_size]f32 = undefined;
+        @memcpy(buf[0..count], src[base..][0..count]);
+        for (count..turbo_block_size) |i| buf[i] = 0;
+
+        const V8n = @Vector(8, f32);
+        var norm_acc: V8n = @splat(@as(f32, 0.0));
+        inline for (0..4) |qi| {
+            const bv: V8n = buf[qi * 8 ..][0..8].*;
+            norm_acc = @mulAdd(V8n, bv, bv, norm_acc);
+        }
+        const norm = @sqrt(@reduce(.Add, norm_acc));
+        const bp = dst + blk * bb;
+
+        if (norm == 0) {
+            @as(*align(1) u16, @ptrCast(bp)).* = @bitCast(@as(f16, 0));
+            @memset(bp[2..bb], 0);
+            continue;
+        }
+
+        const inv_norm = 1.0 / norm;
+        for (0..turbo_block_size) |i| buf[i] *= inv_norm;
+
+        // Quaternion rotation (instead of WHT)
+        quatRotateForward(&buf);
+
+        var indices: [turbo_block_size]u8 = undefined;
+        for (0..turbo_block_size) |i| indices[i] = nearestCentroid(bits, buf[i]);
+        @as(*align(1) u16, @ptrCast(bp)).* = @bitCast(@as(f16, @floatCast(norm)));
+        packIndices(bits, bp[2..bb], &indices);
+    }
+}
+
 /// Find the nearest centroid index via binary search over precomputed boundaries.
 /// Decision boundaries (midpoints between adjacent centroids) are resolved at
 /// comptime, so each search iteration is a single load + compare.
@@ -881,6 +1114,84 @@ fn turboDot(comptime bits: u3, q_vec: [*]const f32, kv_data: [*]const u8, n: usi
     return sum;
 }
 
+/// PlanarQuant dot: forward Givens rotation on query, dot with codebook values.
+fn planarDot(comptime bits: u3, q_vec: [*]const f32, kv_data: [*]const u8, n: usize) f32 {
+    const bb = comptime turboBlockBytes(bits);
+    const codebook = comptime lloydMaxCodebook(bits);
+    const nb = (n + turbo_block_size - 1) / turbo_block_size;
+    const data_bytes = comptime bb - 2;
+    var sum: f32 = 0;
+
+    for (0..nb) |blk| {
+        const base = blk * turbo_block_size;
+        const bp = kv_data + blk * bb;
+        const norm: f32 = @floatCast(@as(f16, @bitCast(@as(*align(1) const u16, @ptrCast(bp)).*)));
+        if (norm == 0) continue;
+
+        var q_buf: [turbo_block_size]f32 = undefined;
+        const count = @min(turbo_block_size, n - base);
+        for (0..count) |i| q_buf[i] = q_vec[base + i];
+        for (count..turbo_block_size) |i| q_buf[i] = 0;
+        givensRotateForward(&q_buf);
+
+        var indices: [turbo_block_size]u8 = undefined;
+        unpackIndices(bits, bp[2..][0..data_bytes], &indices);
+
+        var vals: [turbo_block_size]f32 = undefined;
+        for (0..turbo_block_size) |i| vals[i] = codebook[indices[i]];
+
+        const V8 = @Vector(8, f32);
+        var acc: V8 = @splat(@as(f32, 0.0));
+        comptime var si: usize = 0;
+        inline while (si + 8 <= turbo_block_size) : (si += 8) {
+            const qv: V8 = q_buf[si..][0..8].*;
+            const cv: V8 = vals[si..][0..8].*;
+            acc = @mulAdd(V8, qv, cv, acc);
+        }
+        sum += norm * @reduce(.Add, acc);
+    }
+    return sum;
+}
+
+/// IsoQuant dot: forward quaternion rotation on query, dot with codebook values.
+fn isoDot(comptime bits: u3, q_vec: [*]const f32, kv_data: [*]const u8, n: usize) f32 {
+    const bb = comptime turboBlockBytes(bits);
+    const codebook = comptime lloydMaxCodebook(bits);
+    const nb = (n + turbo_block_size - 1) / turbo_block_size;
+    const data_bytes = comptime bb - 2;
+    var sum: f32 = 0;
+
+    for (0..nb) |blk| {
+        const base = blk * turbo_block_size;
+        const bp = kv_data + blk * bb;
+        const norm: f32 = @floatCast(@as(f16, @bitCast(@as(*align(1) const u16, @ptrCast(bp)).*)));
+        if (norm == 0) continue;
+
+        var q_buf: [turbo_block_size]f32 = undefined;
+        const count = @min(turbo_block_size, n - base);
+        for (0..count) |i| q_buf[i] = q_vec[base + i];
+        for (count..turbo_block_size) |i| q_buf[i] = 0;
+        quatRotateForward(&q_buf);
+
+        var indices: [turbo_block_size]u8 = undefined;
+        unpackIndices(bits, bp[2..][0..data_bytes], &indices);
+
+        var vals: [turbo_block_size]f32 = undefined;
+        for (0..turbo_block_size) |i| vals[i] = codebook[indices[i]];
+
+        const V8 = @Vector(8, f32);
+        var acc: V8 = @splat(@as(f32, 0.0));
+        comptime var si: usize = 0;
+        inline while (si + 8 <= turbo_block_size) : (si += 8) {
+            const qv: V8 = q_buf[si..][0..8].*;
+            const cv: V8 = vals[si..][0..8].*;
+            acc = @mulAdd(V8, qv, cv, acc);
+        }
+        sum += norm * @reduce(.Add, acc);
+    }
+    return sum;
+}
+
 /// Full dequant accumulate: acc[0..n] += weight * dequant(turbo_data).
 ///
 /// Per block: unpack → codebook lookup → inverse WHT → rescale by weight * norm / sqrt(32).
@@ -914,6 +1225,80 @@ fn turboMulAccum(comptime bits: u3, acc: [*]f32, weight: f32, kv_data: [*]const 
         // Accumulate: rescale by weight * norm / sqrt(32) (orthonormal WHT inverse + denormalization)
         const V8 = @Vector(8, f32);
         const scale = weight * norm * wht_inv_sqrt;
+        const scale_v: V8 = @splat(scale);
+        const count = @min(turbo_block_size, n - base);
+        var si: usize = 0;
+        while (si + 8 <= count) : (si += 8) {
+            const bv: V8 = buf[si..][0..8].*;
+            const cv: V8 = acc[base + si ..][0..8].*;
+            acc[base + si ..][0..8].* = @mulAdd(V8, bv, scale_v, cv);
+        }
+        while (si < count) : (si += 1) {
+            acc[base + si] = @mulAdd(f32, buf[si], scale, acc[base + si]);
+        }
+    }
+}
+
+/// PlanarQuant dequant accumulate: unpack → codebook → inverse Givens → accumulate.
+fn planarMulAccum(comptime bits: u3, acc: [*]f32, weight: f32, kv_data: [*]const u8, n: usize) void {
+    const bb = comptime turboBlockBytes(bits);
+    const codebook = comptime lloydMaxCodebook(bits);
+    const nb = (n + turbo_block_size - 1) / turbo_block_size;
+    const data_bytes = comptime bb - 2;
+
+    for (0..nb) |blk| {
+        const base = blk * turbo_block_size;
+        const bp = kv_data + blk * bb;
+        const norm: f32 = @floatCast(@as(f16, @bitCast(@as(*align(1) const u16, @ptrCast(bp)).*)));
+        if (norm == 0) continue;
+
+        var indices: [turbo_block_size]u8 = undefined;
+        unpackIndices(bits, bp[2..][0..data_bytes], &indices);
+
+        var buf: [turbo_block_size]f32 = undefined;
+        for (0..turbo_block_size) |i| buf[i] = codebook[indices[i]];
+
+        givensRotateInverse(&buf);
+
+        const V8 = @Vector(8, f32);
+        const scale = weight * norm;
+        const scale_v: V8 = @splat(scale);
+        const count = @min(turbo_block_size, n - base);
+        var si: usize = 0;
+        while (si + 8 <= count) : (si += 8) {
+            const bv: V8 = buf[si..][0..8].*;
+            const cv: V8 = acc[base + si ..][0..8].*;
+            acc[base + si ..][0..8].* = @mulAdd(V8, bv, scale_v, cv);
+        }
+        while (si < count) : (si += 1) {
+            acc[base + si] = @mulAdd(f32, buf[si], scale, acc[base + si]);
+        }
+    }
+}
+
+/// IsoQuant dequant accumulate: unpack → codebook → inverse quaternion → accumulate.
+fn isoMulAccum(comptime bits: u3, acc: [*]f32, weight: f32, kv_data: [*]const u8, n: usize) void {
+    const bb = comptime turboBlockBytes(bits);
+    const codebook = comptime lloydMaxCodebook(bits);
+    const nb = (n + turbo_block_size - 1) / turbo_block_size;
+    const data_bytes = comptime bb - 2;
+
+    for (0..nb) |blk| {
+        const base = blk * turbo_block_size;
+        const bp = kv_data + blk * bb;
+        const norm: f32 = @floatCast(@as(f16, @bitCast(@as(*align(1) const u16, @ptrCast(bp)).*)));
+        if (norm == 0) continue;
+
+        var indices: [turbo_block_size]u8 = undefined;
+        unpackIndices(bits, bp[2..][0..data_bytes], &indices);
+
+        var buf: [turbo_block_size]f32 = undefined;
+        for (0..turbo_block_size) |i| buf[i] = codebook[indices[i]];
+
+        quatRotateInverse(&buf);
+
+        const V8 = @Vector(8, f32);
+        const scale = weight * norm;
         const scale_v: V8 = @splat(scale);
         const count = @min(turbo_block_size, n - base);
         var si: usize = 0;
