@@ -213,6 +213,201 @@ inline fn quatRotateInverse(buf: *[32]f32) void {
     }
 }
 
+// ── RotorQuant: Clifford Cl(3,0) rotor rotation ─────────────────
+
+/// RotorQuant block size: groups of 3 dimensions (Cl(3,0) vectors).
+/// For a 32-element block: 10 groups of 3 + 2 remainder (scalar pass-through).
+const rotor_group_size: usize = 3;
+const rotor_groups_per_block: usize = turbo_block_size / rotor_group_size;
+
+/// Fixed Cl(3,0) rotors for each group. Format: [s, b12, b13, b23].
+/// Each rotor R = s + b12*e12 + b13*e13 + b23*e23, normalized RR̃ = 1.
+const rotor_params: [rotor_groups_per_block][4]f32 = blk: {
+    var r: [rotor_groups_per_block][4]f32 = undefined;
+    for (0..rotor_groups_per_block) |i| {
+        const angle: f32 = @as(f32, @floatFromInt(i)) * 0.314159 + 0.5;
+        const half = angle * 0.5;
+        const c = @cos(half);
+        const s = @sin(half);
+        // Rotor in the e12 plane: R = cos(θ/2) + sin(θ/2)*e12
+        r[i] = .{ c, s, 0, 0 };
+    }
+    break :blk r;
+};
+
+/// Apply forward Cl(3,0) rotor sandwich product: v' = RvR̃ for 3D groups.
+/// Exploits sparsity: rotor has 4 components but many are zero.
+inline fn rotorForward(buf: *[32]f32) void {
+    inline for (0..rotor_groups_per_block) |g| {
+        const base = g * 3;
+        if (base + 2 >= 32) break;
+        const s = rotor_params[g][0];
+        const b12 = rotor_params[g][1];
+        const b13 = rotor_params[g][2];
+        const b23 = rotor_params[g][3];
+        const x = buf[base];
+        const y = buf[base + 1];
+        const z = buf[base + 2];
+
+        // RvR̃ for grade-1 vector v = x*e1 + y*e2 + z*e3:
+        // v1' = (s²+b12²-b13²-b23²)*x + 2(b12*b13-s*b23)*z + 2(s*b13+b12*b23)*y ... simplified:
+        // For rotor in e12 plane only (b13=0, b23=0):
+        //   x' = (s²-b12²)*x + 2*s*b12*y
+        //   y' = -2*s*b12*x + (s²-b12²)*y
+        //   z' = z (unchanged — rotation is in xy plane)
+        const ss = s * s;
+        const bb = b12 * b12;
+        const sb2 = 2.0 * s * b12;
+        const diag = ss - bb;
+
+        // General 3D rotor (all bivector components)
+        const bb13 = b13 * b13;
+        const bb23 = b23 * b23;
+
+        buf[base] = diag * x + sb2 * y + 2.0 * (b12 * b13 - s * b23) * z;
+        buf[base + 1] = -sb2 * x + diag * y + 2.0 * (s * b13 + b12 * b23) * z;
+        buf[base + 2] = 2.0 * (s * b23 - b12 * b13) * x + 2.0 * (-s * b13 - b12 * b23) * y + (ss + bb - bb13 - bb23) * z;
+    }
+}
+
+/// Apply inverse Cl(3,0) rotor: R̃vR.
+inline fn rotorInverse(buf: *[32]f32) void {
+    inline for (0..rotor_groups_per_block) |g| {
+        const base = g * 3;
+        if (base + 2 >= 32) break;
+        // Inverse = conjugate: negate bivector components
+        const s = rotor_params[g][0];
+        const b12 = -rotor_params[g][1];
+        const b13 = -rotor_params[g][2];
+        const b23 = -rotor_params[g][3];
+        const x = buf[base];
+        const y = buf[base + 1];
+        const z = buf[base + 2];
+
+        const ss = s * s;
+        const bb = b12 * b12;
+        const sb2 = 2.0 * s * b12;
+        const diag = ss - bb;
+        const bb13 = b13 * b13;
+        const bb23 = b23 * b23;
+
+        buf[base] = diag * x + sb2 * y + 2.0 * (b12 * b13 - s * b23) * z;
+        buf[base + 1] = -sb2 * x + diag * y + 2.0 * (s * b13 + b12 * b23) * z;
+        buf[base + 2] = 2.0 * (s * b23 - b12 * b13) * x + 2.0 * (-s * b13 - b12 * b23) * y + (ss + bb - bb13 - bb23) * z;
+    }
+}
+
+/// RotorQuant store: Cl(3,0) rotor rotation + Lloyd-Max quantization.
+fn rotorStore(comptime bits: u3, dst: [*]u8, src: [*]const f32, n: usize) void {
+    const bb = comptime turboBlockBytes(bits);
+    const nb = (n + turbo_block_size - 1) / turbo_block_size;
+
+    for (0..nb) |blk_i| {
+        const base = blk_i * turbo_block_size;
+        const count = @min(turbo_block_size, n - base);
+        var buf: [turbo_block_size]f32 = undefined;
+        @memcpy(buf[0..count], src[base..][0..count]);
+        for (count..turbo_block_size) |i| buf[i] = 0;
+
+        const V8n = @Vector(8, f32);
+        var norm_acc: V8n = @splat(@as(f32, 0.0));
+        inline for (0..4) |qi| {
+            const bv: V8n = buf[qi * 8 ..][0..8].*;
+            norm_acc = @mulAdd(V8n, bv, bv, norm_acc);
+        }
+        const norm = @sqrt(@reduce(.Add, norm_acc));
+        const bp = dst + blk_i * bb;
+
+        if (norm == 0) {
+            @as(*align(1) u16, @ptrCast(bp)).* = @bitCast(@as(f16, 0));
+            @memset(bp[2..bb], 0);
+            continue;
+        }
+
+        const inv_norm = 1.0 / norm;
+        for (0..turbo_block_size) |i| buf[i] *= inv_norm;
+        rotorForward(&buf);
+
+        var indices: [turbo_block_size]u8 = undefined;
+        for (0..turbo_block_size) |i| indices[i] = nearestCentroid(bits, buf[i]);
+        @as(*align(1) u16, @ptrCast(bp)).* = @bitCast(@as(f16, @floatCast(norm)));
+        packIndices(bits, bp[2..bb], &indices);
+    }
+}
+
+fn rotorDot(comptime bits: u3, q_vec: [*]const f32, kv_data: [*]const u8, n: usize) f32 {
+    const bb = comptime turboBlockBytes(bits);
+    const codebook = comptime lloydMaxCodebook(bits);
+    const nb = (n + turbo_block_size - 1) / turbo_block_size;
+    const data_bytes = comptime bb - 2;
+    var sum: f32 = 0;
+
+    for (0..nb) |blk_i| {
+        const base = blk_i * turbo_block_size;
+        const bp = kv_data + blk_i * bb;
+        const norm: f32 = @floatCast(@as(f16, @bitCast(@as(*align(1) const u16, @ptrCast(bp)).*)));
+        if (norm == 0) continue;
+
+        var q_buf: [turbo_block_size]f32 = undefined;
+        const count = @min(turbo_block_size, n - base);
+        for (0..count) |i| q_buf[i] = q_vec[base + i];
+        for (count..turbo_block_size) |i| q_buf[i] = 0;
+        rotorForward(&q_buf);
+
+        var indices: [turbo_block_size]u8 = undefined;
+        unpackIndices(bits, bp[2..][0..data_bytes], &indices);
+
+        var vals: [turbo_block_size]f32 = undefined;
+        for (0..turbo_block_size) |i| vals[i] = codebook[indices[i]];
+
+        const V8 = @Vector(8, f32);
+        var acc: V8 = @splat(@as(f32, 0.0));
+        comptime var si: usize = 0;
+        inline while (si + 8 <= turbo_block_size) : (si += 8) {
+            const qv: V8 = q_buf[si..][0..8].*;
+            const cv: V8 = vals[si..][0..8].*;
+            acc = @mulAdd(V8, qv, cv, acc);
+        }
+        sum += norm * @reduce(.Add, acc);
+    }
+    return sum;
+}
+
+fn rotorMulAccum(comptime bits: u3, acc: [*]f32, weight: f32, kv_data: [*]const u8, n: usize) void {
+    const bb = comptime turboBlockBytes(bits);
+    const codebook = comptime lloydMaxCodebook(bits);
+    const nb = (n + turbo_block_size - 1) / turbo_block_size;
+    const data_bytes = comptime bb - 2;
+
+    for (0..nb) |blk_i| {
+        const base = blk_i * turbo_block_size;
+        const bp = kv_data + blk_i * bb;
+        const norm: f32 = @floatCast(@as(f16, @bitCast(@as(*align(1) const u16, @ptrCast(bp)).*)));
+        if (norm == 0) continue;
+
+        var indices: [turbo_block_size]u8 = undefined;
+        unpackIndices(bits, bp[2..][0..data_bytes], &indices);
+
+        var buf: [turbo_block_size]f32 = undefined;
+        for (0..turbo_block_size) |i| buf[i] = codebook[indices[i]];
+        rotorInverse(&buf);
+
+        const V8 = @Vector(8, f32);
+        const scale = weight * norm;
+        const scale_v: V8 = @splat(scale);
+        const count = @min(turbo_block_size, n - base);
+        var si: usize = 0;
+        while (si + 8 <= count) : (si += 8) {
+            const bv: V8 = buf[si..][0..8].*;
+            const cv: V8 = acc[base + si ..][0..8].*;
+            acc[base + si ..][0..8].* = @mulAdd(V8, bv, scale_v, cv);
+        }
+        while (si < count) : (si += 1) {
+            acc[base + si] = @mulAdd(f32, buf[si], scale, acc[base + si]);
+        }
+    }
+}
+
 /// Quantization type for KV cache storage.
 pub const KvQuantType = enum {
     f32,
@@ -230,6 +425,9 @@ pub const KvQuantType = enum {
     iso2,
     iso3,
     iso4,
+    rotor2,
+    rotor3,
+    rotor4,
 
     pub fn name(self: KvQuantType) []const u8 {
         return switch (self) {
@@ -248,6 +446,9 @@ pub const KvQuantType = enum {
             .iso2 => "IQ2",
             .iso3 => "IQ3",
             .iso4 => "IQ4",
+            .rotor2 => "RQ2",
+            .rotor3 => "RQ3",
+            .rotor4 => "RQ4",
         };
     }
 
@@ -260,9 +461,9 @@ pub const KvQuantType = enum {
             .int8 => 9.0,
             .fp8_e4m3 => 8.0,
             .nvfp4 => 4.5,
-            .turbo2, .planar2, .iso2 => 2.5,
-            .turbo3, .planar3, .iso3 => 3.5,
-            .turbo4, .planar4, .iso4 => 4.5,
+            .turbo2, .planar2, .iso2, .rotor2 => 2.5,
+            .turbo3, .planar3, .iso3, .rotor3 => 3.5,
+            .turbo4, .planar4, .iso4, .rotor4 => 4.5,
         };
     }
 
@@ -278,15 +479,19 @@ pub const KvQuantType = enum {
         return self == .iso2 or self == .iso3 or self == .iso4;
     }
 
+    pub fn isRotor(self: KvQuantType) bool {
+        return self == .rotor2 or self == .rotor3 or self == .rotor4;
+    }
+
     pub fn isRotationQuant(self: KvQuantType) bool {
-        return self.isTurbo() or self.isPlanar() or self.isIso();
+        return self.isTurbo() or self.isPlanar() or self.isIso() or self.isRotor();
     }
 
     pub fn turboBits(self: KvQuantType) u32 {
         return switch (self) {
-            .turbo2, .planar2, .iso2 => 2,
-            .turbo3, .planar3, .iso3 => 3,
-            .turbo4, .planar4, .iso4 => 4,
+            .turbo2, .planar2, .iso2, .rotor2 => 2,
+            .turbo3, .planar3, .iso3, .rotor3 => 3,
+            .turbo4, .planar4, .iso4, .rotor4 => 4,
             else => 0,
         };
     }
@@ -319,6 +524,9 @@ pub const KvQuantType = enum {
         if (eql(s, "iso2") or eql(s, "iq2")) return .iso2;
         if (eql(s, "iso3") or eql(s, "iq3")) return .iso3;
         if (eql(s, "iso4") or eql(s, "iq4")) return .iso4;
+        if (eql(s, "rotor2") or eql(s, "rq2")) return .rotor2;
+        if (eql(s, "rotor3") or eql(s, "rq3")) return .rotor3;
+        if (eql(s, "rotor4") or eql(s, "rq4")) return .rotor4;
         return null;
     }
 };
@@ -334,9 +542,9 @@ pub fn kvSliceBytes(kv_type: KvQuantType, n: usize) usize {
         .int8 => ((n + block_size - 1) / block_size) * int8_block_bytes,
         .fp8_e4m3 => n,
         .nvfp4 => ((n + nvfp4_block - 1) / nvfp4_block) * nvfp4_block_bytes,
-        .turbo2, .planar2, .iso2 => ((n + turbo_block_size - 1) / turbo_block_size) * turbo2_block_bytes,
-        .turbo3, .planar3, .iso3 => ((n + turbo_block_size - 1) / turbo_block_size) * turbo3_block_bytes,
-        .turbo4, .planar4, .iso4 => ((n + turbo_block_size - 1) / turbo_block_size) * turbo4_block_bytes,
+        .turbo2, .planar2, .iso2, .rotor2 => ((n + turbo_block_size - 1) / turbo_block_size) * turbo2_block_bytes,
+        .turbo3, .planar3, .iso3, .rotor3 => ((n + turbo_block_size - 1) / turbo_block_size) * turbo3_block_bytes,
+        .turbo4, .planar4, .iso4, .rotor4 => ((n + turbo_block_size - 1) / turbo_block_size) * turbo4_block_bytes,
     };
 }
 
@@ -353,9 +561,9 @@ pub fn kvByteOffset(kv_type: KvQuantType, i: usize) usize {
         .int8 => (i / block_size) * int8_block_bytes,
         .fp8_e4m3 => i,
         .nvfp4 => (i / nvfp4_block) * nvfp4_block_bytes,
-        .turbo2, .planar2, .iso2 => (i / turbo_block_size) * turbo2_block_bytes,
-        .turbo3, .planar3, .iso3 => (i / turbo_block_size) * turbo3_block_bytes,
-        .turbo4, .planar4, .iso4 => (i / turbo_block_size) * turbo4_block_bytes,
+        .turbo2, .planar2, .iso2, .rotor2 => (i / turbo_block_size) * turbo2_block_bytes,
+        .turbo3, .planar3, .iso3, .rotor3 => (i / turbo_block_size) * turbo3_block_bytes,
+        .turbo4, .planar4, .iso4, .rotor4 => (i / turbo_block_size) * turbo4_block_bytes,
     };
 }
 
@@ -379,6 +587,9 @@ pub fn kvStore(dst: [*]u8, src: [*]const f32, n: usize, kv_type: KvQuantType) vo
         .iso2 => isoStore(2, dst, src, n),
         .iso3 => isoStore(3, dst, src, n),
         .iso4 => isoStore(4, dst, src, n),
+        .rotor2 => rotorStore(2, dst, src, n),
+        .rotor3 => rotorStore(3, dst, src, n),
+        .rotor4 => rotorStore(4, dst, src, n),
     }
 }
 
@@ -526,6 +737,9 @@ pub fn kvDot(q_vec: [*]const f32, kv_data: [*]const u8, n: usize, kv_type: KvQua
         .iso2 => isoDot(2, q_vec, kv_data, n),
         .iso3 => isoDot(3, q_vec, kv_data, n),
         .iso4 => isoDot(4, q_vec, kv_data, n),
+        .rotor2 => rotorDot(2, q_vec, kv_data, n),
+        .rotor3 => rotorDot(3, q_vec, kv_data, n),
+        .rotor4 => rotorDot(4, q_vec, kv_data, n),
     };
 }
 
@@ -688,6 +902,9 @@ pub fn kvMulAccum(acc: [*]f32, weight: f32, kv_data: [*]const u8, n: usize, kv_t
         .iso2 => isoMulAccum(2, acc, weight, kv_data, n),
         .iso3 => isoMulAccum(3, acc, weight, kv_data, n),
         .iso4 => isoMulAccum(4, acc, weight, kv_data, n),
+        .rotor2 => rotorMulAccum(2, acc, weight, kv_data, n),
+        .rotor3 => rotorMulAccum(3, acc, weight, kv_data, n),
+        .rotor4 => rotorMulAccum(4, acc, weight, kv_data, n),
     }
 }
 

@@ -135,7 +135,7 @@ const tiered_fallback_n_kv_heads: u32 = 8;
 const tiered_fallback_n_heads: u32 = 32;
 const max_eog_ids = arch_mod.max_eog_ids;
 /// Valid KV cache quantization type names (shared across all --kv-type* validation).
-const kv_valid_types = "f32, f16, q8_0/q8, int8/i8, fp8/fp8_e4m3, nvfp4/fp4, turbo2/tq2, turbo3/tq3, turbo4/tq4, planar2/pq2, planar3/pq3, planar4/pq4, iso2/iq2, iso3/iq3, iso4/iq4, turbo (preset: K=q8_0 V=turbo4)";
+const kv_valid_types = "f32, f16, q8_0/q8, int8/i8, fp8/fp8_e4m3, nvfp4/fp4, turbo2-4/tq2-4, planar2-4/pq2-4, iso2-4/iq2-4, rotor2-4/rq2-4, turbo (preset: K=q8_0 V=turbo4)";
 
 // ── Output control ──────────────────────────────────────────────
 
