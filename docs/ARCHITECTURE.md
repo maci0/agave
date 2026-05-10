@@ -213,6 +213,7 @@ HTTP server activated via `--serve` (default port 8080, override with `--port`).
 | `/v1/chat/completions` | POST | Chat completions (streaming SSE or batch) |
 | `/v1/completions` | POST | Text completions |
 | `/v1/responses` | POST | Responses API |
+| `/v1/messages` | POST | Anthropic Messages API format |
 | `/v1/models` | GET | List available models |
 | `/tokenize` | POST | Tokenize text to token IDs |
 | `/detokenize` | POST | Detokenize token IDs to text |

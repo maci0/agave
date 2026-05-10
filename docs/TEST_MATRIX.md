@@ -112,7 +112,9 @@
 | Gemma 3 12B | Q8_0 | PASS | PASS | |
 | Qwen 3.5 35B-A3B | Q4_K_M | PASS | PASS | MoE+SSM hybrid — fixed: addRmsNorm residual in moeLayer |
 
-## Performance Comparison vs llama.cpp (2026-04-16, Metal, M4 Pro)
+## Performance Regression Analysis (2026-04-16, Metal, M4 Pro)
+
+> **Note:** These numbers are from a diagnostic run that identified a GEMV kernel throughput regression. They do NOT supersede the benchmark results above (which were measured at commit 7e3314a with the optimized kernel). The gap is due to a different build configuration used during profiling. See "Key Performance Improvement Opportunities" below for the optimization plan.
 
 | Model | Quant | llama.cpp (tok/s) | agave (tok/s) | Ratio | Bottleneck |
 |-------|-------|:-----------------:|:-------------:|:-----:|------------|

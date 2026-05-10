@@ -1,8 +1,10 @@
 # Future Ideas
 
-> **Recently Implemented** (2026-04): Vision/multimodal (SigLIP-2 + SigLIP + Qwen VL),
+> **Recently Implemented** (2026-04/05): Vision/multimodal (SigLIP-2 + SigLIP + Qwen VL),
 > TurboQuant+ (asymmetric KV, boundary V, sparse V), BF16 Metal GEMM, split-attention
-> (APEX), Gemma 4 E2B/E4B support, thread-parallel vision attention. See BENCHMARKS.md.
+> (APEX), Gemma 4 E2B/E4B support, thread-parallel vision attention, speculative decoding
+> (3 modes: draft model, DDTree, self-speculative), grammar-constrained decoding (GBNF +
+> JSON schema), TriAttention KV eviction (Phase 1+2). See BENCHMARKS.md.
 
 ## Model init/deinit/forward Abstraction
 
@@ -41,62 +43,6 @@ A reasonable approach would be a `ModelBuilder` in model.zig with:
 
 Estimated savings: ~600 lines across 7 models. Estimated effort: 2-3 days.
 
-## Speculative Decoding — IMPLEMENTED
-
-**Status: Complete.** See `src/spec/` for implementation, [tutorial 17](tutorial/17-speculative-decoding.md) for details.
-
-Three modes available:
-- `--draft-model path` — separate smaller draft model (best speedup with matched families)
-- `--spec-mode ddtree` — DDTree tree-structured draft with best-first heap (Ringel & Romano, 2026)
-- `--spec-mode self` — self-speculative via layer skipping (no extra model needed)
-
-### Future optimizations
-- Native Metal/CUDA tree SDPA kernel (currently CPU fallback for tree attention)
-- True batch `forwardTree()` for single-pass verification (currently sequential forward calls)
-- Rejection sampling for non-greedy (temperature > 0) decoding
-
-### References
-- [Fast Inference from Transformers via Speculative Decoding (Leviathan et al., 2023)](https://arxiv.org/abs/2211.17192)
-- [SpecInfer: Accelerating LLM Serving with Tree-based Speculative Inference (Miao et al., 2024)](https://arxiv.org/abs/2305.09781)
-- [DDTree: Accelerating Speculative Decoding with Block Diffusion Draft Trees (Ringel & Romano, 2026)](https://arxiv.org/abs/2604.12989)
-
-## Structured Output / Grammar-Constrained Decoding
-
-Constrain model generation to produce valid output matching a schema (JSON, regex, CFG).
-Works by masking logits before sampling — at each token position, only tokens that keep
-the output on a valid path are allowed. Output quality doesn't degrade because the model
-already wants to produce valid output; the constraint just prevents rare failures.
-
-### Supported constraint types
-- **JSON Schema**: Generate valid JSON matching a provided schema (required fields,
-  types, enums, nested objects). Highest user demand — enables reliable tool calling
-  and structured extraction.
-- **Regex**: Constrain output to match a regular expression. Useful for dates, IDs,
-  formatted strings.
-- **Context-Free Grammar (CFG)**: Full grammar support via PDA (pushdown automaton).
-  JSON and regex are special cases of CFG.
-- **Choice / Enum**: Simple case — restrict output to one of N literal strings.
-
-### Algorithm
-1. Pre-compile the grammar/schema into a state machine (DFA for regex, PDA for CFG,
-   specialized FSM for JSON schema)
-2. Before each token generation, query the FSM: given current state, which tokens
-   can lead to a valid continuation? Build a bitmask over the vocabulary.
-3. Apply the mask to logits (set disallowed tokens to -inf) before softmax/sampling.
-4. After sampling, advance the FSM state with the chosen token's text.
-
-### Considerations
-- Vocabulary-aware FSM: tokens are multi-character, so the FSM must handle partial
-  matches (a token may partially match the next valid production). Libraries like
-  Outlines/lm-format-enforcer solve this with token-level precomputation.
-- Performance: bitmask lookup is O(1) per token, but precomputation can be expensive
-  for large grammars × large vocabularies. Lazy state expansion helps.
-- Server API: `response_format: { "type": "json_schema", "json_schema": {...} }` in
-  the OpenAI-compatible chat completion endpoint
-
-### References
-- Outlines: Structured Text Generation (Willard & Louf, 2023)
-- Efficient Guided Generation for Large Language Models (2024)
 
 ## Direct-to-VRAM Model Loading
 

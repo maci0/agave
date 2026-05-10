@@ -233,6 +233,34 @@ See `src/spec/ddtree.zig` for the tree construction algorithm and `src/backend/k
 4. **Check allocations**: Use `std.testing.allocator` in tests (detects leaks automatically)
 5. **Verify comptime dispatch**: Ensure `inline else` dispatch is still used in `backend.zig`
 
+## How to Run Tests
+
+```bash
+# Run all tests (includes leak detection via std.testing.allocator)
+zig build test
+
+# Full build (needed after changing backend/model interfaces — test target doesn't build agave-bench)
+zig build
+
+# Run a specific test file
+zig build test --test-filter "wht32"
+
+# Run with a specific backend (tests that need GPU use target guards)
+zig build test -Denable-webgpu=false    # skip WebGPU tests
+
+# Golden tests (require model files, manual trigger only)
+./zig-out/bin/agave model.gguf --backend cpu -n 10 -t 0 "What is 2+2?"
+# Compare output against reference (llama.cpp or HuggingFace)
+```
+
+**Test categories:**
+- **Unit tests**: `test` blocks at the bottom of each source file (run via `zig build test`)
+- **Leak detection**: All tests use `std.testing.allocator` — any unfreed allocation fails the test
+- **Golden tests**: Manual comparison against reference implementations (llama.cpp, HuggingFace)
+- **Model × Backend matrix**: See [TEST_MATRIX.md](TEST_MATRIX.md)
+
+---
+
 ## Code Examples
 
 ### Proper Resource Management

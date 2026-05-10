@@ -251,6 +251,26 @@ Final event: `data: [DONE]`. Usage chunk sent before `[DONE]`.
 
 ---
 
+## Error Responses
+
+All endpoints return JSON error bodies on failure:
+
+```json
+{"error": {"message": "Invalid request: missing 'messages' field", "type": "invalid_request_error"}}
+```
+
+| Status | When |
+|--------|------|
+| `400 Bad Request` | Malformed JSON, missing required fields, invalid parameter values |
+| `401 Unauthorized` | Missing or invalid `Authorization: Bearer <key>` when `--api-key` is set |
+| `404 Not Found` | Unknown endpoint |
+| `413 Payload Too Large` | Request body exceeds server limit |
+| `429 Too Many Requests` | Rate limit exceeded (when rate limiter is active) |
+| `500 Internal Server Error` | Model forward error, OOM, or unexpected server failure |
+| `503 Service Unavailable` | Model not loaded yet (server still initializing) |
+
+---
+
 ## Authentication
 
 ```bash

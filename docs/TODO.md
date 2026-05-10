@@ -16,33 +16,23 @@ Comprehensive list of bugs, missing features, and improvement opportunities.
 
 ## GPU Kernel Coverage
 
-All correctness-critical kernels are implemented as native GPU compute shaders across all 6 backends. No CPU delegation.
+All **correctness-critical** kernels for supported model×quant combinations are implemented. Some specialized ops delegate to CPU where noted. See [KERNELS.md](KERNELS.md) for the full per-backend matrix.
 
-| Backend | Missing | Notes |
-|---------|:-------:|-------|
-| CUDA | 0 | Complete |
-| Metal | 0 | Complete |
-| WebGPU | 0 | Complete — verified correct output (Qwen 3.5 0.8B Q8_0) |
-| Vulkan | 0 | Complete |
-| ROCm | 1 | megakernel_gemma_q4k (performance optimization only) |
+| Backend | Core ops | Notes |
+|---------|:--------:|-------|
+| Metal | Complete | Paged SDPA via CPU fallback |
+| CUDA | Complete | DeltaNet delegates to CPU; paged SDPA via CPU fallback |
+| Vulkan | Complete | Paged SDPA via CPU fallback; conv1d lacks bias support |
+| WebGPU | Core 12 | Phase 1 ops complete; many specialized ops pending (see KERNELS.md) |
+| ROCm | Complete | Paged SDPA via CPU fallback |
 
-### Structural gaps (all backends)
+### Known CPU fallbacks on GPU backends
 
-| Kernel | Status |
-|--------|--------|
-| Paged SDPA (block table indirection) | Done — native GPU kernels on all backends (Metal/CUDA/Vulkan/WebGPU) |
-| NVFP4 GGUF GEMV | CPU only (GPU backends use SafeTensors NVFP4 path) |
-
----
-
-## CPU Fallbacks on GPU Backends
-
-**Zero CPU delegates remaining.** All operations dispatch to native GPU kernels.
-
-| Operation | Metal | CUDA | ROCm | Vulkan | WebGPU |
-|-----------|:-----:|:----:|:----:|:------:|:------:|
-| sdpaTree (DDTree verification) | Native (f32 + turbo) | Native (f32) | Native (f32) | Native (f32) | Native (f32) |
-| sdpaWithStats (split-attention) | Native (wraps SDPA) | Native (wraps SDPA) | Native (wraps SDPA) | Native (wraps SDPA) | Native (wraps SDPA) |
+| Operation | Backends affected | Rationale |
+|-----------|-------------------|----------|
+| Paged SDPA | All GPU | Native GPU paged SDPA kernels pending |
+| DeltaNet recurrence | CUDA, ROCm | Sequential recurrence is register-heavy, not memory-bound |
+| NVFP4 GGUF GEMV | All GPU | GPU backends use SafeTensors NVFP4 path instead |
 
 ---
 
@@ -92,9 +82,9 @@ No open documentation issues.
 
 | Method | Rotation | FMAs (d=128) | Params | Storage | CLI |
 |--------|----------|:------------:|:------:|---------|-----|
-| TurboQuant | WHT-32 butterfly | 16,384 | 16,384 | f16 norm + packed indices | `tq2/tq3/tq4` |
+| TurboQuant | WHT-32 butterfly | ~640 | ~640 | f16 norm + packed indices | `tq2/tq3/tq4` |
 | **PlanarQuant** | Givens 2D | **256** | 128 | same | `pq2/pq3/pq4` |
 | **IsoQuant** | Quaternion 4D | **512** | 128 | same | `iq2/iq3/iq4` |
 | **RotorQuant** | Cl(3,0) rotor 3D | **~2,400** | 372 | same | `rq2/rq3/rq4` |
 
-PlanarQuant uses 64x fewer FMAs than TurboQuant. All methods share the same Lloyd-Max codebook and storage format (2.5/3.5/4.5 bits per element).
+PlanarQuant uses ~2.5x fewer FMAs than TurboQuant. All methods share the same Lloyd-Max codebook and storage format (2.5/3.5/4.5 bits per element). RotorQuant (~2400 FMAs) is more expensive than WHT due to the Clifford algebra sandwich product, but preserves geometric structure.

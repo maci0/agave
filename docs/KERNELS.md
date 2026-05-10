@@ -56,7 +56,6 @@ This document tracks the implementation status of all compute kernels across bac
 ⁵ ROCm kernel file exists (`gemv_mlx_q4.zig`) but backend panics — not yet integrated.
 ⁶ CPU delegate: functional but delegates to CPU backend (no native GPU kernel yet).
 ⁷ GPU backends sync then delegate to CPU SDPA kernel. Used by tiered KV cache split-attention (`--kv-tiers vram+ram`) to compute per-head softmax stats (max, sum) for online merge across tiers.
-⁸ Removed — ROCm rmsNormMulti now enabled and validated.
 
 ## True Megakernels (Tier 2)
 

@@ -33,7 +33,7 @@ The megakernel system has two tiers, enabled via `--megakernel`:
 
 ### Tier 1: Fused FFN
 
-Fuses gate+up GEMV + activation into a single GPU dispatch per FFN layer, reducing dispatch count by ~48 per token (24 layers x 2 saved dispatches). 12 Metal MSL kernels cover SiLU x {Q8_0, Q4_K, Q5_K, Q6_K, Q4_0, MLX_Q4} and GELU x {Q8_0, Q4_K, Q5_K, Q6_K, Q4_0}. CUDA has 1 kernel (Q8_0 SiLU).
+Fuses gate+up GEMV + activation into a single GPU dispatch per FFN layer, reducing dispatch count by ~48 per token (24 layers x 2 saved dispatches). 11 Metal MSL kernels cover SiLU x {Q8_0, Q4_K, Q5_K, Q6_K, Q4_0, MLX_Q4} and GELU x {Q8_0, Q4_K, Q5_K, Q6_K, Q4_0}. CUDA has 1 kernel (Q8_0 SiLU).
 
 | Model | Quant | Standard | Megakernel | Delta | Notes |
 |-------|-------|----------|------------|-------|-------|
