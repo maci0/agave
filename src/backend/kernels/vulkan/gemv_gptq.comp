@@ -1,0 +1,61 @@
+#version 450
+#extension GL_KHR_shader_subgroup_arithmetic : require
+
+layout(local_size_x = 256) in;
+
+layout(set = 0, binding = 0) readonly buffer X  { float x_data[]; };
+layout(set = 0, binding = 1) readonly buffer QW { uint qweight[]; };
+layout(set = 0, binding = 2) readonly buffer SC { uint scales_raw[]; };
+layout(set = 0, binding = 3) readonly buffer QZ { uint qzeros[]; };
+layout(set = 0, binding = 4) writeonly buffer Y { float y_data[]; };
+layout(push_constant) uniform Params { uint n; uint k; uint group_size; };
+
+shared float shared_sums[8];
+
+void main() {
+    uint row = gl_WorkGroupID.x;
+    uint tid = gl_LocalInvocationID.x;
+    uint tg_size = gl_WorkGroupSize.x;
+    if (row >= n) return;
+
+    uint words_per_row = k / 8;
+    uint n_groups = (k + group_size - 1) / group_size;
+    float sum = 0.0;
+
+    for (uint wi = tid; wi < words_per_row; wi += tg_size) {
+        uint word = qweight[row * words_per_row + wi];
+        uint elem_base = wi * 8;
+        uint g = elem_base / group_size;
+
+        // Read f16 scale from packed u16 array (stored as uint)
+        uint scale_idx = row * n_groups + g;
+        uint scale_word = scales_raw[scale_idx / 2];
+        uint scale_bits = (scale_idx % 2 == 0) ? (scale_word & 0xFFFF) : (scale_word >> 16);
+        float scale_val = unpackHalf2x16(scale_bits).x;
+
+        // Zero-point
+        uint z_word_idx = g * ((n + 7) / 8) + row / 8;
+        uint z_nibble = row % 8;
+        float zero = float((qzeros[z_word_idx] >> (z_nibble * 4)) & 0xFu);
+
+        float local_sum = 0.0;
+        for (uint ni = 0; ni < 8; ni++) {
+            float nibble_val = float((word >> (ni * 4)) & 0xFu);
+            local_sum += (nibble_val - zero) * scale_val * x_data[elem_base + ni];
+        }
+        sum += local_sum;
+    }
+
+    // Subgroup + shared memory reduction
+    sum = subgroupAdd(sum);
+    uint sg_lane = gl_SubgroupInvocationID;
+    uint sg_id = gl_SubgroupID;
+    uint num_sg = (tg_size + gl_SubgroupSize - 1) / gl_SubgroupSize;
+    if (sg_lane == 0) shared_sums[sg_id] = sum;
+    barrier();
+    if (tid < num_sg) sum = shared_sums[tid]; else sum = 0.0;
+    if (tid < gl_SubgroupSize) {
+        sum = subgroupAdd(sum);
+        if (tid == 0) y_data[row] = sum;
+    }
+}
