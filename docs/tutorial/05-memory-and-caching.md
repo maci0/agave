@@ -10,7 +10,7 @@ Token 2: compute K₂, V₂, store in cache, attend to [K₁,K₂], [V₁,V₂]
 Token 3: compute K₃, V₃, store in cache, attend to [K₁,K₂,K₃], [V₁,V₂,V₃]
 ```
 
-The cache grows linearly with sequence length. For a model with 30 layers, 5 KV heads, 128-dim heads, and 4096 max tokens:
+The cache grows linearly with sequence length. For example, a model with 30 layers, 5 KV heads, 128-dim heads, and 4096 max tokens (roughly comparable to Qwen3.5 3B):
 
 ```
 30 × 5 × 128 × 4096 × 2 (K+V) × 4 bytes = 600 MB
@@ -37,8 +37,8 @@ turbo2     2.5         47 MB  (6.4x vs f16)                       WHT-32
 ```
 
 Four rotation-based quantizers are available, differing only in the decorrelation transform:
-- **TurboQuant** (`tq2/3/4`): Walsh-Hadamard butterfly network — 16,384 FMAs
-- **PlanarQuant** (`pq2/3/4`): Givens 2D rotation — 256 FMAs (64x fewer)
+- **TurboQuant** (`tq2/3/4`): Walsh-Hadamard butterfly network — ~640 FMAs (32-element blocks)
+- **PlanarQuant** (`pq2/3/4`): Givens 2D rotation — 256 FMAs (2.5x fewer)
 - **IsoQuant** (`iq2/3/4`): Quaternion 4D rotation — 512 FMAs
 - **RotorQuant** (`rq2/3/4`): Clifford Cl(3,0) rotor — ~2,400 FMAs
 
@@ -64,7 +64,7 @@ The preset also enables **boundary V protection** — the first and last 2 trans
 
 ## PagedAttention
 
-Allocating a **contiguous** (single continuous memory region) KV cache per **sequence** (a single request or conversation — the tokens for one prompt and its generated response) wastes memory when sequences have different lengths. PagedAttention breaks the cache into fixed-size **blocks** (default 16 positions):
+Introduced in [Efficient Memory Management for Large Language Model Serving with PagedAttention (Kwon et al., 2023)](https://arxiv.org/abs/2309.06180), PagedAttention addresses the problem that allocating a **contiguous** (single continuous memory region) KV cache per **sequence** (a single request or conversation — the tokens for one prompt and its generated response) wastes memory when sequences have different lengths. PagedAttention breaks the cache into fixed-size **blocks** (default 16 positions):
 
 ```
 physical_block = block_table[position / block_size]
@@ -189,7 +189,7 @@ Combined:            4.5 bits × N/10 entries  (~36× reduction)
 
 ## Async Split-Attention (APEX)
 
-When the KV cache spans GPU and CPU memory tiers, Agave uses **split-attention** to run GPU and CPU SDPA concurrently, inspired by [APEX](https://arxiv.org/abs/2506.03296).
+When a model's KV cache grows too large to fit entirely in VRAM, older entries can be demoted to CPU RAM. But attention still needs to read them. Rather than stalling the GPU to fetch cold data from RAM, Agave uses **split-attention** — running GPU and CPU SDPA concurrently and merging results — inspired by [APEX](https://arxiv.org/abs/2506.03296).
 
 ```
 Token generation with split KV cache:

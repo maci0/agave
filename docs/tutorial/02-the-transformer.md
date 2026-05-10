@@ -6,11 +6,22 @@ The forward pass is the core computation: given a token, predict the next one.
 Token ID → Embedding → N Transformer Layers → Final Norm → Logits → Argmax → Next Token
 ```
 
+Concrete example (Gemma4 E2B, 2.6B parameters):
+```
+Token 15496     → embed → [2304 floats]  → 28 layers → [2304 floats]  → norm → [2304 floats]
+("Hello")          lookup    hidden state     attention+FFN    hidden state            
+                                                              → vocab proj → [262144 floats] → argmax → Token 11
+                                                                 logits (one per vocab entry)            (",")
+```
+The hidden state is a fixed-size vector (2304 floats = 9 KB) that flows through every layer. Each layer reads its weight matrices (~180 MB total for this model) to transform it.
+
 Each **transformer layer** has two sublayers:
 1. **Attention** — lets the model look at previous tokens
 2. **FFN** (Feed-Forward Network) — processes each position independently
 
-Both use **residual connections** (`output = input + sublayer(input)`) so information flows through unchanged, preventing the **vanishing gradient problem** (where gradients get exponentially smaller in deep networks during training, making learning impossible) in deep networks.
+A model has N layers stacked in sequence (e.g., 28 for Gemma4 E2B, 64 for Qwen3.5 0.8B). Each layer has its own **independent weight matrices** — layer 0's attention weights are completely different from layer 15's. The hidden state vector passes through all N layers, getting progressively refined. Early layers tend to learn basic features (syntax, word relationships), later layers learn more abstract ones (reasoning, facts).
+
+Both sublayers use **residual connections** (`output = input + sublayer(input)`) so information flows through unchanged, preventing the **vanishing gradient problem** (where gradients get exponentially smaller in deep networks during training, making learning impossible) in deep networks.
 
 ## Attention
 
@@ -37,6 +48,8 @@ output = softmax(Q @ K^T / sqrt(d)) @ V
 ```
 
 This is **O(n²)** in sequence length (computational complexity grows quadratically with the number of tokens) — every token attends to every previous token.
+
+**Causal masking:** During generation, token at position `i` must only attend to positions `≤ i` — it cannot look at future tokens that haven't been generated yet. This is enforced by setting attention scores for future positions to `-∞` before softmax, which zeroes them out. The resulting lower-triangular attention matrix is called a **causal mask**. (Some models like GPT-OSS use a sliding window variant where even-numbered layers only attend to the most recent 128 tokens.)
 
 ### GQA (Grouped Query Attention)
 
@@ -74,9 +87,17 @@ SDPA(Q, K, V, scale) = softmax(Q @ K^T * scale) @ V
 
 The implementation handles KV cache append, GQA head mapping, sliding window, attention sinks, and KV cache quantization — all dispatched to the active backend.
 
-**[FlashAttention](https://arxiv.org/abs/2307.08691)** is an optimization that computes attention in **tiles** (small rectangular blocks of the attention matrix processed one at a time) using **online softmax** (incrementally updating the softmax result as new tiles arrive, avoiding the need to store all scores at once), never **materializing** (allocating memory for and storing) the full scores matrix. Metal and CUDA backends implement [FlashAttention-2 (Dao, 2023)](https://arxiv.org/abs/2307.08691); the CPU backend uses a **SIMD-vectorized** (using Single Instruction Multiple Data — processing multiple values at once with one CPU instruction) **fallback** (alternative implementation used when the primary method isn't available).
+**[FlashAttention (Dao et al., 2022)](https://arxiv.org/abs/2205.14135)** is an optimization that computes attention in **tiles** (small rectangular blocks of the attention matrix processed one at a time) using **online softmax** (incrementally updating the softmax result as new tiles arrive, avoiding the need to store all scores at once), never **materializing** (allocating memory for and storing) the full scores matrix. Metal and CUDA backends implement [FlashAttention-2 (Dao, 2023)](https://arxiv.org/abs/2307.08691); the CPU backend uses a **SIMD-vectorized** (using Single Instruction Multiple Data — processing multiple values at once with one CPU instruction) **fallback** (alternative implementation used when the primary method isn't available).
 
 ### Attention Variants
+
+| Variant | Models | Where | What it does |
+|---------|--------|-------|-------------|
+| Per-Head QK Norm | Gemma3, Qwen3.5 | Before SDPA | RMS-normalizes Q and K per head |
+| Sliding Window | GPT-OSS | Even layers | Attend only to most recent 128 tokens |
+| Attention Sinks | GPT-OSS | Before softmax | Learned sink absorbs excess attention |
+| Sigmoid Gate | Qwen3.5 | After SDPA | Element-wise gate on attention output |
+| Logit Softcapping | Gemma3 | After logits | Smooth clamp to [−cap, +cap] |
 
 **Per-Head QK Normalization** (Gemma3, Qwen3.5): RMS-normalizes Q and K per head before computing scores, stabilizing attention regardless of embedding **magnitude** (the size/scale of the values — how large the numbers are).
 
@@ -156,7 +177,7 @@ Unlike **LayerNorm** (an older normalization method that also subtracts the mean
 
 ## GEMV vs GEMM (Decode vs Prefill)
 
-During **decode** (one token at a time), each weight matrix computes one output vector: `y = W @ x`. This is a **GEMV** (General Matrix-Vector multiply) — bandwidth-bound because each weight element is loaded from memory, multiplied once, and discarded.
+During **decode** (one token at a time), each weight matrix computes one output vector: `y = W @ x`. This is a **GEMV** (General Matrix-Vector multiply) — bandwidth-bound because each weight element is loaded from memory, multiplied once, and discarded. For a 2560×2560 matrix in Q4_0 (4-bit), that's ~3.3 MB of weights read for a single GEMV, producing just 2560 output floats. On a system with 400 GB/s memory bandwidth, this takes ~8 µs — during which the CPU/GPU does only 6.5M multiply-adds. The hardware could do 100× more math in the same time, but it's starved for data.
 
 During **prefill** (processing the entire prompt), all N prompt tokens can be processed through each layer together. The GEMV becomes a **GEMM** (General Matrix-Matrix multiply): `Y[N×out] = X[N×in] @ W[out×in]^T`. The key difference: each weight row is loaded once and multiplied against N input vectors. This gives **N× bandwidth savings** — the same weight data does N× more useful work.
 

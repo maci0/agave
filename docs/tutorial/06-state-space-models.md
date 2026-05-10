@@ -1,6 +1,6 @@
 # Chapter 6: State Space Models
 
-SSMs, as formalized in [Mamba (Gu & Dao, 2023)](https://arxiv.org/abs/2312.00752), are an alternative to attention that process tokens in **O(1)** time per step (constant time — doesn't grow with sequence length) instead of O(n²). Instead of re-reading all previous tokens, they maintain a fixed-size **state matrix** that summarizes the past:
+SSMs are a family of sequence models based on state-space theory. [Mamba (Gu & Dao, 2023)](https://arxiv.org/abs/2312.00752) introduced **selective** state spaces — input-dependent parameters that give SSMs content-aware reasoning ability. SSMs are an alternative to attention that process tokens in **O(1) with respect to sequence length** per step (constant time — doesn't grow with the number of previous tokens) instead of O(n²). Instead of re-reading all previous tokens, they maintain a fixed-size **state matrix** that summarizes the past:
 
 ```
 state[t] = decay * state[t-1] + input[t]    (simplified)
@@ -31,6 +31,8 @@ Shift left:  buffer becomes [input[t-2], input[t-1], input[t]]
 Agave fuses the convolution with SiLU activation in a single pass.
 
 ## DeltaNet (Qwen3.5)
+
+DeltaNet builds on the delta rule for associative memory, first explored in the context of linear transformers by [Schlag et al. (2021)](https://arxiv.org/abs/2102.11174) and developed into the DeltaNet architecture by [Yang et al. (2024)](https://arxiv.org/abs/2406.06484).
 
 **The problem**: Standard attention is O(n²) — for a 100K-token context, that's 10 billion pairwise comparisons. Computationally expensive and memory-intensive.
 
@@ -92,7 +94,9 @@ The core difference comes down to how each approach handles history:
 | At 100K tokens | 100K dot products per head | Same as at 100 tokens |
 | Long-range memory | Exact — every past token accessible | Lossy — old information decays |
 
-The tradeoff: SSMs are faster but lose exact long-range recall. Hybrid models get the best of both: SSM layers for speed on most positions, attention layers every Nth layer for precise long-range access.
+The tradeoff: SSMs are faster but lose exact long-range recall. The state matrix has fixed size (e.g., 64×64 = 4096 floats), so it acts as a lossy compression of all past tokens. If the model saw "The capital of France is" 10,000 tokens ago, the relevant information may have decayed from the state. Attention doesn't have this problem — it stores every past K/V explicitly and can look them up exactly.
+
+Hybrid models get the best of both: SSM layers for speed on most positions, attention layers every Nth layer for precise long-range access. For example, Qwen3.5 uses attention every 4th layer — so 48 of its 64 layers are cheap SSM layers, and 16 are full-attention layers that maintain exact recall.
 
 ## State Matrix Visualization
 

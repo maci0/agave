@@ -9,7 +9,7 @@ Standard autoregressive decoding generates one token per forward pass. For large
 3. **Accept**: Matching tokens are accepted for free (no extra target compute)
 4. **Correct**: At the first disagreement, the target's prediction replaces the draft's
 
-With a good draft model (70-80% acceptance rate), speculative decoding generates 2-3× more tokens per second with **zero quality loss** — the output distribution is mathematically identical to running the target model alone.
+With a good draft model (70-80% acceptance rate), speculative decoding generates 2-3× more tokens per second with **no quality loss** — for greedy decoding (temperature=0), the output is byte-identical to the target model alone; for sampling (temperature>0), the output distribution is mathematically preserved via rejection sampling.
 
 ## Modes in Agave
 

@@ -561,4 +561,4 @@ pub fn getNextId() usize {
 
 **Related:** [Zig Language Reference — comptime](https://ziglang.org/documentation/master/#comptime), [Chapter 9: CPU SIMD Optimization](09-cpu-simd-optimization.md#real-world-example-rmsnorm) (uses comptime LUTs)
 
-**Back:** [Chapter 16: Recipe System ←](16-recipe-system.md)
+**Next:** [Appendix: Profiling and Debugging →](appendix-profiling.md) | **Back:** [Appendix: Mathematical Operations ←](appendix-math.md)

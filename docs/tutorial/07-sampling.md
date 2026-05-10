@@ -35,7 +35,7 @@ Sort tokens by score, keep the top K, **renormalize** probabilities (rescale so 
 
 ## Top-P (Nucleus Sampling)
 
-Restricts sampling to the smallest set of tokens whose **cumulative probability** (running sum of probabilities in sorted order) exceeds P:
+Introduced in [The Curious Case of Neural Text Degeneration (Holtzman et al., 2019)](https://arxiv.org/abs/1904.09751), nucleus sampling restricts sampling to the smallest set of tokens whose **cumulative probability** (running sum of probabilities in sorted order) exceeds P:
 
 ```
 --top-p 0.9    Keep tokens until cumulative probability reaches 90%
@@ -112,7 +112,24 @@ Supported: GBNF strings, GBNF files (`--grammar`), JSON schemas (`--json-schema`
 
 ## Combining Parameters
 
-Applied in order: **penalties → grammar mask → temperature → min-p → top-k → softmax → top-p → sample**.
+Applied in order:
+
+```
+logits (raw scores, one per vocab token)
+  │
+  ├─ repeat/frequency/presence penalties    [modify logit values]
+  ├─ grammar mask (set invalid tokens to -∞) [hard constraint]
+  ├─ temperature scaling (logits /= temp)    [control sharpness]
+  ├─ min-p filter (drop tokens < min_p * max) [adaptive threshold]
+  ├─ top-k filter (keep only top K tokens)    [hard cutoff]
+  │
+  ├─ softmax → probabilities                  [logits → probabilities that sum to 1.0]
+  │
+  ├─ top-p filter (keep smallest set ≥ P)     [nucleus cutoff, renormalize]
+  │
+  └─ sample from distribution                 [weighted random pick]
+       → next token ID
+```
 
 ```bash
 # Deterministic

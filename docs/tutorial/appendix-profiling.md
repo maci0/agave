@@ -509,4 +509,4 @@ When investigating slow performance:
 
 **Related:** [Chapter 11: Metal Backend Internals](11-metal-backend-internals.md#profiling-counters), [Chapter 13: Batched Dispatch and Fusion](13-batched-dispatch-and-fusion.md#real-world-example-qwen35-optimization-journey)
 
-**Back:** [Appendix: Compile-Time Optimization ←](appendix-compile-time.md)
+**Next:** [Appendix: Atomic Operations →](appendix-atomics.md) | **Back:** [Appendix: Compile-Time Optimization ←](appendix-compile-time.md)

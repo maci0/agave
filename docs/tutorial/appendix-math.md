@@ -391,3 +391,5 @@ Inference hot path is allocation-free — all buffers pre-allocated, operations 
 - Chapter 4 (GEMV, quantization)
 - Chapter 6 (convolution, outer product, SSM recurrence)
 - Chapter 7 (sampling operations)
+
+**Next:** [Appendix: Compile-Time Optimization →](appendix-compile-time.md) | **Back:** [Chapter 17: Speculative Decoding ←](17-speculative-decoding.md)

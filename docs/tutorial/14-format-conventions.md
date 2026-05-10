@@ -1,6 +1,6 @@
 # Chapter 14: Format Conventions
 
-The same model can be stored in different file formats — **GGUF** (llama.cpp native) and **SafeTensors** (HuggingFace native). They store identical weights but use **different conventions** for tensor layout, metadata keys, and even mathematical transformations.
+The same model can be stored in different file formats — **GGUF** (a single-file binary format designed by the llama.cpp project, optimized for mmap and quantized inference) and **SafeTensors** (a multi-file format from HuggingFace, the standard for PyTorch model distribution). They store identical weights but use **different conventions** for tensor layout, metadata keys, and even mathematical transformations.
 
 **Critical insight:** Using GGUF conventions on SafeTensors data (or vice versa) produces **silent correctness failures** — the model runs but outputs garbage. Agave found **6 separate bugs** when adding SafeTensors support for Qwen3.5.
 

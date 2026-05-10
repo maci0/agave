@@ -4,7 +4,7 @@ Model weights are trained in float32 (32 bits per value) but stored compressed f
 
 ## Why Quantize?
 
-A 7B parameter model in float32 needs 28 GB of memory. In 4-bit quantization, it needs ~4 GB — small enough to fit in a laptop's GPU memory. Inference is almost always **memory-bandwidth bound** (the bottleneck is reading weights from RAM/VRAM, not arithmetic operations), so smaller weights = faster inference.
+A 7B parameter model (7 billion weight values — the "B" in model names like "Qwen3.5-7B") in float32 needs 28 GB of memory (`7 × 10⁹ × 4 bytes = 28 GB`). In 4-bit quantization, it needs ~3.5 GB (`7 × 10⁹ × 0.5 bytes = 3.5 GB`) — small enough to fit in a laptop's GPU memory. Inference is almost always **memory-bandwidth bound** (the bottleneck is reading weights from RAM/VRAM, not arithmetic operations), so smaller weights = faster inference: half the bits means half the bytes to read from memory, which roughly doubles throughput.
 
 ## Block Quantization
 
@@ -233,7 +233,7 @@ Value = (-1)^0 × 1.875 × 2^2 = 7.5
 
 ## TurboQuant — KV Cache Quantization
 
-TurboQuant ([arXiv 2504.19874](https://arxiv.org/abs/2504.19874), ICLR 2026) is a KV cache-specific quantization method that achieves 3.6-6.4x compression vs f16 with minimal quality loss. Unlike weight quantization formats (Q4_0, Q8_0), TurboQuant is applied at runtime to the KV cache during inference.
+TurboQuant ([Zandieh et al., 2025](https://arxiv.org/abs/2504.19874)) is a KV cache-specific quantization method that achieves 3.6-6.4x compression vs f16 with minimal quality loss. Unlike weight quantization formats (Q4_0, Q8_0), TurboQuant is applied at runtime to the KV cache during inference.
 
 ### How It Works
 
@@ -344,7 +344,7 @@ At 32K context length, the majority of positions have negligible softmax weights
 
 ## Geometric KV Cache Quantization
 
-The TurboQuant family uses a Walsh-Hadamard Transform (WHT) to decorrelate KV vectors before quantization. WHT works well but requires 16384 FMAs for a 128-dim head (O(n log n) butterfly). The **geometric** methods achieve comparable or better quality with far fewer FMAs by exploiting low-dimensional rotations.
+The TurboQuant family uses a Walsh-Hadamard Transform (WHT) to decorrelate KV vectors before quantization. WHT works well but operates on 32-element blocks — each block requires a 5-stage butterfly (O(n log n)), costing ~160 FMAs. For a 128-dim head (4 blocks), that's ~640 FMAs total. The **geometric** methods achieve comparable or better quality with fewer FMAs by exploiting low-dimensional rotations.
 
 All three geometric methods share TurboQuant's storage format (f16 norm + Lloyd-Max packed indices) and support the same 2/3/4-bit variants. The key difference is how they decorrelate the input before quantization.
 
@@ -357,7 +357,7 @@ All three geometric methods share TurboQuant's storage format (f16 norm + Lloyd-
 [x'_1] = [sin(theta)   cos(theta)] [x_1]
 ```
 
-For a 128-dim head, 64 coordinate pairs are rotated independently. Total cost: **256 FMAs** (4 per pair x 64 pairs) — 64x fewer than WHT.
+For a 128-dim head, 64 coordinate pairs are rotated independently. Total cost: **256 FMAs** (4 per pair x 64 pairs) — 2.5x fewer than WHT.
 
 PlanarQuant achieves the **best 3-bit perplexity** among all geometric methods because the per-pair rotation angles are optimized offline to minimize quantization error for typical KV distributions.
 
@@ -393,7 +393,7 @@ R = cos(theta/2) + sin(theta/2)(e12 B12 + e23 B23 + e31 B31)
 x' = R x R~    (rotor sandwich product)
 ```
 
-Coordinates are grouped into triples (with padding for the 128 -> 129 case). Total cost: **~2400 FMAs** — more expensive than PlanarQuant/IsoQuant but still 7x cheaper than WHT. The Clifford rotor preserves geometric structure (lengths, angles) exactly, which can matter for models that encode positional information in KV vector geometry.
+Coordinates are grouped into triples (with padding for the 128 -> 129 case). Total cost: **~2400 FMAs** — more expensive than WHT and the other geometric methods, but the Clifford rotor preserves geometric structure (lengths, angles) exactly, which can matter for models that encode positional information in KV vector geometry.
 
 ```bash
 # RotorQuant 3-bit KV cache
@@ -404,7 +404,7 @@ Coordinates are grouped into triples (with padding for the 128 -> 129 case). Tot
 
 | Method | Transform | Group Size | FMAs (128-dim) | Best Use Case |
 |--------|-----------|-----------|----------------|---------------|
-| TurboQuant | Walsh-Hadamard | full vector | 16384 | Maximum decorrelation, any distribution |
+| TurboQuant | Walsh-Hadamard | 32 (block) | ~640 | Maximum decorrelation, any distribution |
 | PlanarQuant | Givens 2D rotation | 2 | 256 | Fastest encode/decode, best 3-bit PPL |
 | IsoQuant | Quaternion 4D rotation | 4 | 512 | Balanced speed/quality |
 | RotorQuant | Clifford Cl(3,0) rotor | 3 | ~2400 | Structure-preserving, geometric models |

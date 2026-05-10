@@ -26,25 +26,28 @@ for (n_rows) |row| {
 
 A **futex** (fast userspace mutex) is a kernel primitive that lets threads sleep/wake efficiently:
 
-- **`Futex.wait(addr, expected)`**: Sleep until `*addr != expected`
-- **`Futex.wake(addr, n)`**: Wake up to `n` threads waiting on `addr`
+- **`futexWait(addr, expected)`**: Sleep until `*addr != expected`
+- **`futexWake(addr, n)`**: Wake up to `n` threads waiting on `addr`
 
 **Cost:** ~1-2 µs to wake a sleeping thread (vs 50+ µs to spawn a new thread).
+
+In Zig 0.16, futex operations go through the `Io` context (threaded from `main(Init)` via `init.io`). The thread pool stores `io` at spawn time and uses `io.futexWaitUncancelable()` / `io.futexWake()` instead of the old `std.Thread.Futex` API.
 
 ### Generation Counter Pattern
 
 ```zig
-generation: std.atomic.Value(u32) = std.atomic.Value(u32).init(0);
+generation: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
+io: Io,  // stored at spawn() time
 
 // Post work
 _ = generation.fetchAdd(1, .release);  // Bump generation
-std.Thread.Futex.wake(&generation, n_workers);  // Wake all workers
+io.futexWake(u32, &generation.raw, n_workers);  // Wake all workers
 
 // Worker loop
 var local_gen: u32 = 0;
 while (true) {
-    std.Thread.Futex.wait(&generation, local_gen);  // Sleep until gen changes
-    local_gen = generation.load(.acquire);          // Update local copy
+    pool.io.futexWaitUncancelable(u32, &pool.generation.raw, local_gen);  // Sleep until gen changes
+    local_gen = pool.generation.load(.acquire);          // Update local copy
     // ... do work ...
 }
 ```
@@ -94,7 +97,7 @@ pub fn parallelFor(pool: *ThreadPool, total: usize, grain: usize, ctx: *anyopaqu
     pool.task_counter.store(0, .release);
     pool.active.store(@intCast(pool.n_workers), .release);
     _ = pool.generation.fetchAdd(1, .release);
-    std.Thread.Futex.wake(&pool.generation, @intCast(pool.n_workers));
+    pool.io.futexWake(u32, &pool.generation.raw, @intCast(pool.n_workers));
 
     // Main thread participates
     pool.doWork();
@@ -118,6 +121,7 @@ From `src/thread_pool.zig`:
 pub const ThreadPool = struct {
     workers: [max_workers]Worker = undefined,
     n_workers: usize = 0,
+    io: Io = undefined,  // Stored at spawn() for futex operations
 
     // Task descriptor
     task_func: ?*const fn (*anyopaque, usize, usize) void = null,
@@ -125,6 +129,11 @@ pub const ThreadPool = struct {
     task_total: usize = 0,
     task_grain: usize = 1,
     task_counter: std.atomic.Value(usize) = std.atomic.Value(usize).init(0),
+
+    // Cache-line pad: task_counter is the hottest field (fetchAdd per chunk).
+    // Without padding, generation/active share its cache line, causing
+    // cross-core invalidation when workers finish vs. pull new chunks.
+    _counter_pad: [cache_line - @sizeOf(std.atomic.Value(usize))]u8 = undefined,
 
     // Synchronization
     generation: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
@@ -135,7 +144,8 @@ pub const ThreadPool = struct {
         return .{ .n_workers = @min(n, max_workers) };
     }
 
-    pub fn spawn(self: *ThreadPool) void {
+    pub fn spawn(self: *ThreadPool, io: Io) void {
+        self.io = io;  // Store Io for futex operations
         for (0..self.n_workers) |i| {
             self.workers[i] = .{
                 .thread = std.Thread.spawn(.{}, workerLoop, .{self}) catch {
@@ -149,7 +159,7 @@ pub const ThreadPool = struct {
     pub fn deinit(self: *ThreadPool) void {
         self.shutdown.store(true, .release);
         _ = self.generation.fetchAdd(1, .release);
-        std.Thread.Futex.wake(&self.generation, @intCast(self.n_workers));
+        self.io.futexWake(u32, &self.generation.raw, @intCast(self.n_workers));
 
         for (0..self.n_workers) |i| {
             self.workers[i].thread.join();
@@ -183,7 +193,7 @@ pub const ThreadPool = struct {
 
         // Wake workers
         _ = self.generation.fetchAdd(1, .release);
-        std.Thread.Futex.wake(&self.generation, @intCast(self.n_workers));
+        self.io.futexWake(u32, &self.generation.raw, @intCast(self.n_workers));
 
         // Main thread participates
         self.doWork();
@@ -213,7 +223,7 @@ pub const ThreadPool = struct {
 
         while (true) {
             // Sleep until generation changes
-            std.Thread.Futex.wait(&pool.generation, local_gen);
+            pool.io.futexWaitUncancelable(u32, &pool.generation.raw, local_gen);
 
             if (pool.shutdown.load(.acquire)) return;
 
@@ -405,16 +415,16 @@ var pool = ThreadPool.init(7);  // Just sets n_workers
 pool.parallelFor(...);  // No workers exist! Runs inline on main thread
 ```
 
-**Fix:** Call `spawn()` after the pool is at its final memory location:
+**Fix:** Call `spawn(io)` after the pool is at its final memory location:
 
 ```zig
 // GOOD
 var pool = ThreadPool.init(7);
-pool.spawn();  // Actually creates worker threads
+pool.spawn(io);  // Actually creates worker threads (io from main(Init))
 defer pool.deinit();
 ```
 
-**Why separate?** Workers capture `pool` by pointer. If you spawn before the pool is at its final location (e.g., it's a stack local that gets moved), the pointer becomes invalid.
+**Why separate?** Workers capture `pool` by pointer. If you spawn before the pool is at its final location (e.g., it's a stack local that gets moved), the pointer becomes invalid. The `io` parameter is the Zig 0.16 `Io` context needed for futex operations.
 
 ## Performance Characteristics
 

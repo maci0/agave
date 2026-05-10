@@ -83,7 +83,11 @@ The first operation in the forward pass converts a token ID into a **vector** (a
 
 **Note on terminology:** Machine learning uses the term **tensor** for multi-dimensional arrays — a **scalar** (single number, 0D), vector (1D), matrix (2D), or higher-dimensional array (3D, 4D, etc.) are all tensors. Throughout this tutorial we use the more specific terms (scalar/vector/matrix) since nearly all operations are 0D, 1D, or 2D, but you'll see "tensor" in the code and documentation referring to these same arrays.
 
-Embedding lookup is just a table read: take row `token_id` from the matrix. It's so simple that CPU memcpy is faster than GPU **dispatch** overhead (the cost of sending work to the GPU and synchronizing), which is why all backends run this on the CPU.
+Embedding lookup is just a table read: take row `token_id` from the matrix.
+
+**Why vectors, not just integer IDs?** Because vectors let the model represent *relationships*. During training, words that appear in similar contexts end up with similar vectors — "cat" and "dog" are close together, while "cat" and "database" are far apart. The distance and direction between vectors encode meaning. Integer IDs can't do this — ID 4517 and ID 4518 have no meaningful relationship. Vectors give the model a continuous space where it can generalize: if it knows about "cat" and "dog", it can infer things about "kitten" because its vector is nearby.
+
+Embedding lookup is so simple that CPU memcpy is faster than GPU **dispatch** overhead (the cost of sending work to the GPU and synchronizing), which is why all backends run this on the CPU.
 
 The table may be **quantized** (compressed to lower **precision** — fewer bits per number, less accurate — formats like Q4_0 or BF16 to save memory) — the implementation **dequantizes** (converts back to full precision) on the fly during the lookup. Gemma3 scales embeddings by `sqrt(n_embd)` after lookup, **amplifying the signal** (making the values larger to increase their influence) for its architecture.
 
@@ -94,6 +98,24 @@ At the end of the forward pass, we need to go back from a vector to token probab
 This is the **largest single GEMV** (matrix-vector multiply — multiplying a weight matrix by a single hidden state vector) in the model — for a 128K-token vocabulary, it's 128K output rows. For models with **tied embeddings** (Gemma3), the output weight matrix is the same as the embedding table (reusing the same parameters for both input and output), saving memory.
 
 After projection, **argmax** (the operation that finds the index of the maximum value) over the logits gives the predicted next token ID.
+
+## The Generation Loop
+
+Text generation is **autoregressive** — each generated token becomes the input for the next step:
+
+```
+tokens = tokenize("The capital of France is")
+for each token in tokens:
+    logits = forward(token)           // process prompt tokens one at a time
+
+while not done:
+    next_token = argmax(logits)       // pick highest-scoring token
+    if next_token == EOS: break       // stop at end-of-sequence
+    print(decode(next_token))         // output: " Paris"
+    logits = forward(next_token)      // feed output back as input
+```
+
+This is why inference speed matters — generating 100 tokens requires 100 sequential forward passes through the entire model. Each pass is dominated by GEMV (matrix-vector multiply), which is memory-bandwidth bound. The rest of this tutorial series explains every component of that forward pass and how Agave optimizes it.
 
 ---
 

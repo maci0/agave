@@ -144,7 +144,7 @@ self.task_func = func;
 self.task_ctx = ctx;
 self.task_total = total;
 _ = self.generation.fetchAdd(1, .release);  // All writes happen-before this
-std.Thread.Futex.wake(&self.generation, n_workers);
+self.io.futexWake(u32, &self.generation.raw, n_workers);  // Zig 0.16 Io-based futex
 
 // Worker thread: subscribe
 local_gen = self.generation.load(.acquire);  // See all writes before release
@@ -209,7 +209,7 @@ self.task_total = total;
 self.task_counter.store(0, .release);  // Reset counter
 self.active.store(@intCast(self.n_workers), .release);
 _ = self.generation.fetchAdd(1, .release);  // Publish: all task fields valid
-std.Thread.Futex.wake(&self.generation, @intCast(self.n_workers));
+self.io.futexWake(u32, &self.generation.raw, @intCast(self.n_workers));
 ```
 
 **Why `.release`?**
@@ -222,7 +222,7 @@ std.Thread.Futex.wake(&self.generation, @intCast(self.n_workers));
 fn workerLoop(pool: *ThreadPool) void {
     var local_gen: u32 = 0;
     while (true) {
-        std.Thread.Futex.wait(&pool.generation, local_gen);
+        pool.io.futexWaitUncancelable(u32, &pool.generation.raw, local_gen);
         if (pool.shutdown.load(.acquire)) return;
 
         local_gen = pool.generation.load(.acquire);  // See all task fields
@@ -265,7 +265,7 @@ shutdown: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
 // Main thread: signal shutdown
 self.shutdown.store(true, .release);
 _ = self.generation.fetchAdd(1, .release);
-std.Thread.Futex.wake(&self.generation, @intCast(self.n_workers));
+self.io.futexWake(u32, &self.generation.raw, @intCast(self.n_workers));
 
 // Worker: check shutdown
 if (pool.shutdown.load(.acquire)) return;
