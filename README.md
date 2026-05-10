@@ -22,8 +22,8 @@
 - **6 Backends**: CPU (SIMD-optimized), Metal GPU (Apple Silicon), Vulkan, CUDA, ROCm, WebGPU — individually toggleable at build time
 - **Compile-Time Model Selection**: Disable unused model architectures to reduce binary size (1.8 MB → 0.75 MB with all models stripped)
 - **2 Formats**: GGUF, SafeTensors (multi-shard, MLX quantized, NVFP4)
-- **20+ Quantization Types**: F32, F16, BF16, Q2_K, Q3_K, Q4_0, Q4_1, Q4_K, Q5_0, Q5_K, Q6_K, Q8_0, TQ1_0, IQ4_XS, IQ4_NL, FP8 E4M3, FP8 E5M2, NVFP4, MXFP4, MLX 4/6/8-bit
-- **9 KV Cache Quantization Types**: F32, F16, Q8_0, INT8, FP8, NVFP4, TurboQuant 2/3/4-bit — with asymmetric K/V support
+- **20+ Quantization Types**: F32, F16, BF16, Q2_K, Q3_K, Q4_0, Q4_1, Q4_K, Q5_0, Q5_K, Q6_K, Q8_0, TQ1_0, IQ4_XS, IQ4_NL, FP8 E4M3, FP8 E5M2, NVFP4, MXFP4, MLX 4/6/8-bit, PlanarQuant, IsoQuant, RotorQuant
+- **18 KV Cache Quantization Types**: F32, F16, Q8_0, INT8, FP8, NVFP4, TurboQuant 2/3/4-bit, PlanarQuant 2/3/4-bit, IsoQuant 2/3/4-bit, RotorQuant 2/3/4-bit — with asymmetric K/V support and paged SDPA
 - **Tiered KV Cache**: VRAM + RAM + SSD offloading with async prefetch (`--kv-tiers vram+ram+ssd`)
 - **Chat Templates**: Data-driven per-architecture prompt formatting (ChatML, Gemma, Gemma 4, Qwen 3.5, GLM-4, GPT-OSS)
 - **Recipes**: Optional proven-default configs per model/hardware/quant combo
@@ -233,7 +233,7 @@ agave [OPTIONS] <model> [prompt]
       --grammar-string <G> Inline GBNF grammar string
       --json-schema <S>    JSON schema for structured output
       --json-output        Force valid JSON object output
-      --kv-type <TYPE>     KV cache quantization: f32, f16, q8_0/q8, int8/i8, fp8/fp8_e4m3, nvfp4/fp4, turbo2/tq2, turbo3/tq3, turbo4/tq4 [default: f16]
+      --kv-type <TYPE>     KV cache quantization: f32, f16, q8_0/q8, int8/i8, fp8/fp8_e4m3, nvfp4/fp4, turbo2/tq2, turbo3/tq3, turbo4/tq4, planar2-4/pq2-4, iso2-4/iq2-4, rotor2-4/rq2-4 [default: f16]
       --kv-tiers <TIERS>   Enable tiered KV cache: vram+ram, vram+ram+ssd [default: off]
       --kv-ram-budget <GB> RAM tier budget in GB, requires --kv-tiers [default: 50% of free RAM]
       --kv-ssd-path <PATH> SSD tier file path, requires --kv-tiers with ssd

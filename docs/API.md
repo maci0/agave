@@ -38,6 +38,8 @@ curl http://localhost:8080/v1/chat/completions -d '{
 | repetition_penalty | float | 1.0 | Multiplicative penalty for repeated tokens (>1 = penalize) |
 | seed | int | random | PRNG seed for reproducible output |
 | stop | string/array | null | Stop sequence(s): `"stop": "\n"` or `"stop": ["\n", "END"]` |
+| logprobs | bool | false | Return log probabilities for output tokens (parsed, response integration pending) |
+| top_logprobs | int | null | Number of top token log probabilities to return per position, 0-20 (parsed, response integration pending) |
 | stream | bool | false | Server-Sent Events streaming |
 | grammar | string | null | GBNF grammar for constrained decoding |
 | json_schema | string | null | JSON schema for structured output |
@@ -80,6 +82,76 @@ curl http://localhost:8080/v1/responses -d '{
   "input": "Explain quantum computing",
   "max_tokens": 200
 }'
+```
+
+### POST /v1/messages
+
+Anthropic Messages API format.
+
+```bash
+curl http://localhost:8080/v1/messages -d '{
+  "system": "You are a helpful assistant.",
+  "messages": [{"role": "user", "content": "Hello"}],
+  "max_tokens": 100
+}'
+```
+
+**Request fields:**
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| messages | array | required | `[{"role": "user/assistant", "content": "..."}]` |
+| system | string | null | System prompt (separate from messages, per Anthropic format) |
+| max_tokens | int | 1024 | Maximum tokens to generate |
+| temperature | float | 0 | 0 = greedy, >0 = sampling |
+| top_k | int | 0 | Top-k filtering, 0 = disabled |
+| top_p | float | 1.0 | Nucleus sampling threshold |
+| stop_sequences | array | null | Stop sequence(s) |
+| stream | bool | false | Server-Sent Events streaming |
+
+**Response:**
+```json
+{
+  "id": "msg-12345",
+  "type": "message",
+  "role": "assistant",
+  "content": [{"type": "text", "text": "..."}],
+  "model": "model-name",
+  "stop_reason": "end_turn",
+  "usage": {"input_tokens": 10, "output_tokens": 50}
+}
+```
+
+### POST /v1/chat/regenerate
+
+Regenerate the last assistant response in an active conversation.
+
+```bash
+curl -X POST http://localhost:8080/v1/chat/regenerate -d '{
+  "conversation_id": "conv-12345"
+}'
+```
+
+Rolls back the last assistant message and generates a new response using the same conversation context. Useful for "retry" functionality in chat UIs.
+
+### POST /v1/conversations
+
+Manage conversations.
+
+**GET** — List active conversations:
+
+```bash
+curl http://localhost:8080/v1/conversations
+# [{"id": "conv-12345", "created": 1715000000, "message_count": 4}]
+```
+
+**POST** — Create a new conversation:
+
+```bash
+curl -X POST http://localhost:8080/v1/conversations -d '{
+  "system": "You are a helpful assistant."
+}'
+# {"id": "conv-67890", "created": 1715000001}
 ```
 
 ### POST /v1/tokenize

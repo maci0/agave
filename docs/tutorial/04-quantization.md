@@ -342,6 +342,75 @@ for (0..win_len) |wi| {
 
 At 32K context length, the majority of positions have negligible softmax weights. Skipping their V reads yields **+22.8% decode speed** with zero measured perplexity impact. This is especially effective with quantized V formats (turbo4, turbo3) because it avoids both the dequantization arithmetic and the cache-unfriendly memory reads.
 
+## Geometric KV Cache Quantization
+
+The TurboQuant family uses a Walsh-Hadamard Transform (WHT) to decorrelate KV vectors before quantization. WHT works well but requires 16384 FMAs for a 128-dim head (O(n log n) butterfly). The **geometric** methods achieve comparable or better quality with far fewer FMAs by exploiting low-dimensional rotations.
+
+All three geometric methods share TurboQuant's storage format (f16 norm + Lloyd-Max packed indices) and support the same 2/3/4-bit variants. The key difference is how they decorrelate the input before quantization.
+
+### PlanarQuant
+
+**Givens 2D rotation** applied to consecutive coordinate pairs. Each rotation decorrelates two dimensions using a single 2x2 orthogonal matrix:
+
+```
+[x'_0]   [cos(theta)  -sin(theta)] [x_0]
+[x'_1] = [sin(theta)   cos(theta)] [x_1]
+```
+
+For a 128-dim head, 64 coordinate pairs are rotated independently. Total cost: **256 FMAs** (4 per pair x 64 pairs) — 64x fewer than WHT.
+
+PlanarQuant achieves the **best 3-bit perplexity** among all geometric methods because the per-pair rotation angles are optimized offline to minimize quantization error for typical KV distributions.
+
+```bash
+# PlanarQuant 3-bit KV cache
+./agave model.gguf --kv-type pq3 "prompt"
+
+# Asymmetric: high-precision K + PlanarQuant V
+./agave model.gguf --kv-type-k q8_0 --kv-type-v pq3 "prompt"
+```
+
+### IsoQuant
+
+**Quaternion 4D rotation** decorrelates groups of 4 elements. A unit quaternion q = a + bi + cj + dk defines a 4D rotation via the sandwich product:
+
+```
+x' = q x q*    (quaternion conjugation in 4D)
+```
+
+For a 128-dim head, 32 groups of 4 elements are rotated. Total cost: **512 FMAs** (16 per group x 32 groups). The 4D rotation provides deeper decorrelation than PlanarQuant's 2D pairs — it can remove correlations between all 4 coordinates simultaneously, not just pairwise.
+
+```bash
+# IsoQuant 3-bit KV cache
+./agave model.gguf --kv-type iq3 "prompt"
+```
+
+### RotorQuant
+
+**Clifford algebra Cl(3,0) rotor** applies a structure-preserving 3D rotation via the sandwich product RxR-tilde. The rotor R is an element of the even subalgebra of Cl(3,0), parameterized by 3 bivector components:
+
+```
+R = cos(theta/2) + sin(theta/2)(e12 B12 + e23 B23 + e31 B31)
+x' = R x R~    (rotor sandwich product)
+```
+
+Coordinates are grouped into triples (with padding for the 128 -> 129 case). Total cost: **~2400 FMAs** — more expensive than PlanarQuant/IsoQuant but still 7x cheaper than WHT. The Clifford rotor preserves geometric structure (lengths, angles) exactly, which can matter for models that encode positional information in KV vector geometry.
+
+```bash
+# RotorQuant 3-bit KV cache
+./agave model.gguf --kv-type rq3 "prompt"
+```
+
+### Comparison
+
+| Method | Transform | Group Size | FMAs (128-dim) | Best Use Case |
+|--------|-----------|-----------|----------------|---------------|
+| TurboQuant | Walsh-Hadamard | full vector | 16384 | Maximum decorrelation, any distribution |
+| PlanarQuant | Givens 2D rotation | 2 | 256 | Fastest encode/decode, best 3-bit PPL |
+| IsoQuant | Quaternion 4D rotation | 4 | 512 | Balanced speed/quality |
+| RotorQuant | Clifford Cl(3,0) rotor | 3 | ~2400 | Structure-preserving, geometric models |
+
+All geometric methods use the same CLI pattern: `--kv-type <prefix><bits>` where prefix is `pq` (PlanarQuant), `iq` (IsoQuant), or `rq` (RotorQuant) and bits is 2, 3, or 4. Full names (`planar3`, `iso3`, `rotor3`) are also accepted.
+
 ## Key Principle
 
 Dequantization happens *inside* the GEMV kernel, not before it. This avoids materializing the full-precision weight matrix:

@@ -178,6 +178,27 @@ image_pad_token_id: u32 = 0,
 visual_token_idx: u32 = 0,
 ```
 
+## How to Add a KV Cache Quantization Type
+
+KV cache quantization compresses stored K/V vectors. The pipeline is: normalize → rotate → quantize → pack. To add a new rotation-based scheme (like PlanarQuant, IsoQuant, RotorQuant):
+
+1. Add variant to `KvQuantType` enum in `src/ops/kv_quant.zig`
+2. Add entries to: `name()`, `bitsPerElement()`, `turboBits()`, `fromString()`, `kvSliceBytes()`, `kvByteOffset()`
+3. Implement `myStore()`: normalize → forward rotation → Lloyd-Max quantize → pack indices
+4. Implement `myDot()`: forward rotation on query → dot with codebook values (K cache path)
+5. Implement `myMulAccum()`: unpack → codebook → **inverse rotation** → accumulate (V cache path — inverse rotation critical for correctness)
+6. Wire into `kvStore()`, `kvDot()`, `kvMulAccum()` switch statements
+7. All rotation-based types share the same storage format (f16 norm + packed indices) and Lloyd-Max codebook
+
+Existing examples: `turboStore/turboDot/turboMulAccum` (WHT), `planarStore/planarDot/planarMulAccum` (Givens 2D), `isoStore/isoDot/isoMulAccum` (quaternion 4D), `rotorStore/rotorDot/rotorMulAccum` (Clifford rotor).
+
+## How to Add a Grammar/Structured Output Format
+
+1. For new GBNF features: extend `Parser` and `ElementType` in `src/grammar.zig`
+2. For new schema types: extend `SchemaConverter.emitRule()` in `src/grammar.zig`
+3. CLI: add flag to `cli_specs` in `main.zig`, wire in grammar init section
+4. Server API: parse from `SamplingParams` in `src/server/json.zig`, apply in generation loop in `src/server/server.zig` (both streaming and non-streaming paths)
+
 ## How to Add Speculative Decoding Support to a New Model
 
 Layer skip for self-speculative mode is automatic — the `layer_skip_start`/`layer_skip_end` fields and the skip check in `forward()` are required in every model. The pattern is:

@@ -1,6 +1,6 @@
 # Kernel Implementation Status
 
-**Last Updated**: 2026-04-29
+**Last Updated**: 2026-05-10
 
 This document tracks the implementation status of all compute kernels across backends. Each kernel can be:
 - **Native**: Fully implemented on the target hardware (GPU shader or optimized CPU SIMD)
@@ -35,7 +35,7 @@ This document tracks the implementation status of all compute kernels across bac
 | SDPA (FlashAttn-2) | Native (SIMD) | Native² | Native | Native | Native | Missing |
 | SDPA with Stats (`sdpaWithStats`) | Native (SIMD) | CPU delegate⁷ | CPU delegate⁷ | CPU delegate⁷ | CPU delegate⁷ | Missing |
 | SDPA Tree (DDTree verify) | Native (SIMD) | Native (f32 + turbo) | CPU delegate | CPU delegate | CPU delegate | Missing |
-| Paged SDPA | Missing | Missing | Missing | Missing | Missing | Missing |
+| Paged SDPA | Native | CPU Fallback | CPU Fallback | CPU Fallback | CPU Fallback | CPU Fallback |
 | Causal Conv1d | Native | Native (DeltaNet) | Native³ | Missing | Missing | Missing |
 | DeltaNet (4 kernels) | Native | Native | Missing | CPU delegate⁶ | Missing | Missing |
 | Argmax / Final Logits | Native | CPU perf | CPU perf | CPU perf | CPU perf | Missing |
@@ -148,18 +148,17 @@ Vision ViT (Vision Transformer) kernels run on CPU for patch embedding, position
 **CUDA** — remaining gaps:
 - DeltaNet native GPU kernels (currently delegates to CPU)
 - Causal Conv1d
-- Paged SDPA
 
 **Vulkan** — medium priority:
 - DeltaNet recurrence
 - GEMV: q4_1, q5_0, q2_k, q3_k, iq4_nl, iq4_xs, nvfp4_st, mxfp4
-- Conv1d bias support, Paged SDPA
+- Conv1d bias support
 
 **WebGPU** — Phase 1 complete (12 ops), ~37 missing:
 - SDPA, SDPA Prefill, GEMM, all batched ops
 - GEMV: all quantized formats except f32 and q8_0
 - Fused ops: addRmsNorm, addScaled, sigmoidMul, deinterleave, splitQGate
-- DeltaNet, Conv1d, Paged SDPA
+- DeltaNet, Conv1d
 
 **ROCm** — medium priority:
 - DeltaNet recurrence
@@ -167,4 +166,3 @@ Vision ViT (Vision Transformer) kernels run on CPU for patch embedding, position
 
 **Metal** — near-complete:
 - GEMV: nvfp4 (GGUF)
-- Paged SDPA

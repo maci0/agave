@@ -41,6 +41,7 @@ agave/
 │   ├── display.zig        # Rich CLI output (banner, stats, progress)
 │   ├── chat_template.zig  # Data-driven chat prompt templates (ChatML, Gemma, Gemma 4, Qwen35, GLM-4, GPT-OSS)
 │   ├── recipe.zig         # Optional preset configs per model/hardware/quant combo
+│   ├── grammar.zig        # GBNF parser, JSON schema -> grammar converter, constrained decoding
 │   ├── calibrate.zig      # TriAttention calibration subcommand (agave calibrate)
 │   ├── test_exports.zig   # Test bridge re-exporting backend types for out-of-tree tests
 │   ├── thread_pool.zig    # Futex-based work-stealing thread pool
@@ -48,6 +49,7 @@ agave/
 │   ├── readline.zig       # Line editor for interactive REPL
 │   ├── term.zig           # Terminal I/O: key parser, ANSI sequences, display width (pure Zig, no libc)
 │   ├── image.zig          # PNG/PPM image decoder and resize for multimodal inference
+│   ├── wasm_entry.zig     # Browser inference entry point, GGUF parsing from buffer
 │   ├── micro_bench.zig    # Standalone micro-benchmark binary
 │   ├── format/
 │   │   ├── format.zig     # Format interface (getTensor, getMetaStr, ...)
@@ -173,6 +175,7 @@ When you run `agave model.gguf "Hello"`:
 | `splitQGate(qg, q, g, hd, nh)` | Split concatenated Q+gate (Qwen3.5) | Yes |
 | `deltaNet(...)` | DeltaNet SSM recurrence | Yes |
 | `sdpaWithStats(q, keys, vals, ..., max, sum)` | SDPA returning softmax stats (split-attention) | Yes |
+| `sdpaPaged(q, page_table, kv_pool, ...)` | Paged SDPA with block table indirection (256-token blocks) | Yes |
 | **Infrastructure** | | |
 | `sync()` | Flush GPU work | At sync points |
 | `beginBatch()` / `endBatch()` | Suppress/restore GPU memory barriers | GPU only |
@@ -201,6 +204,36 @@ When you run `agave model.gguf "Hello"`:
 
 User CLI flags always override recipe defaults.
 
+### Server (`src/server/`)
+
+HTTP server activated via `--serve` (default port 8080, override with `--port`). Provides a full OpenAI-compatible API plus health and metrics endpoints.
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/v1/chat/completions` | POST | Chat completions (streaming SSE or batch) |
+| `/v1/completions` | POST | Text completions |
+| `/v1/responses` | POST | Responses API |
+| `/v1/models` | GET | List available models |
+| `/tokenize` | POST | Tokenize text to token IDs |
+| `/detokenize` | POST | Detokenize token IDs to text |
+| `/health` | GET | Health check |
+| `/metrics` | GET | Prometheus metrics (tokens/s, latency, queue depth) |
+
+**Sampling parameters** (accepted in chat/completions request body):
+- `temperature` -- sampling temperature (0 = greedy)
+- `top_k` -- top-K filtering
+- `top_p` -- nucleus sampling threshold
+- `min_p` -- minimum probability cutoff
+- `frequency_penalty` -- penalize tokens by frequency in generated text
+- `presence_penalty` -- penalize tokens already present in generated text
+- `repetition_penalty` -- multiplicative repetition penalty
+- `seed` -- deterministic sampling seed
+- `stop` -- stop sequences (string or array)
+- `grammar` -- GBNF grammar string for constrained decoding
+- `json_schema` -- JSON Schema object for structured output (converted to GBNF internally)
+
+**Architecture**: `server.zig` handles HTTP parsing and routing, `scheduler.zig` implements continuous batching for concurrent requests, `rate_limiter.zig` provides token-bucket rate limiting, and `metrics.zig` collects Prometheus-format telemetry. A built-in chat UI is served from `src/web/`.
+
 ### Shared Ops (`src/ops/`)
 
 | Function | File | Description |
@@ -211,6 +244,22 @@ User CLI flags always override recipe defaults.
 | `mamba2Recurrence` | ssm.zig | Mamba-2 per-head state update + output |
 | `groupRmsNormSiluGate` | ssm.zig | Group RMS norm followed by SiLU gate |
 | `expertWeightStride` | model.zig | Byte stride between experts in packed weights |
+
+### Grammar (`src/grammar.zig`)
+
+Constrained decoding via GBNF grammars and JSON schema. The module provides:
+
+| Component | Description |
+|-----------|-------------|
+| GBNF Parser | Parses GBNF grammar strings into rule sets with alternation, repetition, and character classes |
+| JSON Schema Converter | Converts JSON Schema objects into equivalent GBNF grammars for structured output |
+| Decoding State Machine | Tracks valid next-token sets during generation, masking logits to enforce grammar constraints |
+
+Activated via `--grammar <file.gbnf>` or `--json_schema <schema>` CLI flags, or via the server API's `grammar` / `json_schema` sampling parameters.
+
+### WASM (`src/wasm_entry.zig`)
+
+Browser inference entry point for running Agave in WebAssembly environments. Provides GGUF parsing from an in-memory buffer and connects to the WebGPU backend for GPU-accelerated inference in the browser.
 
 ### Speculative Decoding (`src/spec/`)
 
@@ -261,6 +310,15 @@ User CLI flags always override recipe defaults.
 | `turbo2` | 2.5 | TurboQuant 2-bit (WHT-32 + Lloyd-Max codebook) |
 | `turbo3` | 3.5 | TurboQuant 3-bit (WHT-32 + Lloyd-Max codebook) |
 | `turbo4` | 4.5 | TurboQuant 4-bit (WHT-32 + Lloyd-Max codebook) |
+| `pq2` | 2.5 | PlanarQuant 2-bit (Givens 2D rotation, 256 FMAs per block) |
+| `pq3` | 3.5 | PlanarQuant 3-bit (Givens 2D rotation, 256 FMAs per block) |
+| `pq4` | 4.5 | PlanarQuant 4-bit (Givens 2D rotation, 256 FMAs per block) |
+| `iq2` | 2.5 | IsoQuant 2-bit (quaternion 4D rotation, 512 FMAs per block) |
+| `iq3` | 3.5 | IsoQuant 3-bit (quaternion 4D rotation, 512 FMAs per block) |
+| `iq4` | 4.5 | IsoQuant 4-bit (quaternion 4D rotation, 512 FMAs per block) |
+| `rq2` | 2.5 | RotorQuant 2-bit (Cl(3,0) rotor 3D rotation, ~2400 FMAs per block) |
+| `rq3` | 3.5 | RotorQuant 3-bit (Cl(3,0) rotor 3D rotation, ~2400 FMAs per block) |
+| `rq4` | 4.5 | RotorQuant 4-bit (Cl(3,0) rotor 3D rotation, ~2400 FMAs per block) |
 
 **TurboQuant+ features:**
 - **`turbo` preset** (`--kv-type turbo`): asymmetric K=q8\_0, V=turbo4. Higher K precision protects attention routing accuracy while V compression (3.8x) is nearly free.
@@ -273,6 +331,12 @@ User CLI flags always override recipe defaults.
 - **Fast path**: when all blocks are on GPU, dispatches a single `be.sdpa()` with zero overhead.
 - **Mixed path**: GPU SDPA with softmax statistics runs concurrently with CPU SDPA on the thread pool, then partial outputs are merged via [FlashAttention-2 (Dao, 2023)](https://arxiv.org/abs/2307.08691) online softmax correction (exact, no approximation).
 - **CPU-only path**: falls back to CPU SDPA on the thread pool when all blocks have been offloaded.
+
+**Paged KV cache and paged SDPA** (`src/kvcache/manager.zig`, `src/backend/kernels/cpu/sdpa.zig`):
+- KV cache is organized into 256-token blocks managed by `PagedKvCache` with `RadixTree` prefix sharing and `BlockAllocator` for efficient allocation.
+- `PagedKvView` provides block table indirection, translating logical token positions to physical block locations.
+- `sdpaPagedHeads` computes attention over paged blocks with thread-pool parallelism across heads.
+- CPU backend has a native paged SDPA kernel; GPU backends (Metal, CUDA, Vulkan, ROCm, WebGPU) dispatch through `Backend.sdpaPaged()` which falls back to the CPU kernel.
 
 ### KV Cache Eviction
 
