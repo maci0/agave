@@ -28,7 +28,7 @@ const qh_2bit_mask: u8 = 3;
 const f16tof32 = cu.f16tof32;
 
 /// Compute one super-block's dot product for a single row.
-pub inline fn q6kBlockDot(
+inline fn q6kBlockDot(
     x: [*]const f32,
     bp: [*]const u8,
     k: u32,
