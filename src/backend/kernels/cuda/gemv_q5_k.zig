@@ -17,7 +17,7 @@ const nr: u32 = 2;
 const q5_k_high_bit_value: f32 = 16.0;
 
 /// Compute one super-block's dot product for a single row.
-inline fn q5kBlockDot(
+pub inline fn q5kBlockDot(
     x: [*]const f32,
     bp: [*]const u8,
     k: u32,
