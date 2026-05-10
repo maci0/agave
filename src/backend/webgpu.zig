@@ -10,6 +10,7 @@ const kv_quant = @import("../ops/kv_quant.zig");
 
 const TensorData = backend_mod.TensorData;
 const KvQuantType = backend_mod.KvQuantType;
+const PagedKvView = backend_mod.PagedKvView;
 
 // ── WGSL shader sources (embedded at compile time) ──────────────────
 
@@ -37,6 +38,7 @@ const wgsl_sdpa = @embedFile("kernels/webgpu/sdpa.wgsl");
 const wgsl_conv1d = @embedFile("kernels/webgpu/conv1d.wgsl");
 const wgsl_deltanet = @embedFile("kernels/webgpu/deltanet_recurrence.wgsl");
 const wgsl_sdpa_tree = @embedFile("kernels/webgpu/sdpa_tree.wgsl");
+const wgsl_sdpa_paged = @embedFile("kernels/webgpu/sdpa_paged.wgsl");
 const wgsl_gemv_nvfp4_st = @embedFile("kernels/webgpu/gemv_nvfp4_st.wgsl");
 const wgsl_gemv_mlx_q4 = @embedFile("kernels/webgpu/gemv_mlx_q4.wgsl");
 const wgsl_gemv_mxfp4_st = @embedFile("kernels/webgpu/gemv_mxfp4_st.wgsl");
@@ -323,6 +325,7 @@ pub const WebGpuBackend = struct {
     pipe_conv1d: PipelineInfo = .{},
     pipe_deltanet: PipelineInfo = .{},
     pipe_sdpa_tree: PipelineInfo = .{},
+    pipe_sdpa_paged: PipelineInfo = .{},
 
     // Buffer management
     buf_cache: std.AutoHashMap(usize, CachedBuf) = undefined,
@@ -542,6 +545,7 @@ pub const WebGpuBackend = struct {
         self.pipe_conv1d = try self.createPipeline(wgsl_conv1d);
         self.pipe_deltanet = try self.createPipeline(wgsl_deltanet);
         self.pipe_sdpa_tree = try self.createPipeline(wgsl_sdpa_tree);
+        self.pipe_sdpa_paged = try self.createPipeline(wgsl_sdpa_paged);
     }
 
     fn createPipeline(self: *WebGpuBackend, wgsl_source: [:0]const u8) !PipelineInfo {
@@ -1250,6 +1254,82 @@ pub const WebGpuBackend = struct {
             head_max[h] = 0.0;
             head_sum[h] = 1.0;
         }
+    }
+
+    /// Paged SDPA: block-table-indexed attention for non-contiguous KV cache.
+    /// Appends k_new/v_new to paged cache, gathers blocks into flat contiguous
+    /// buffers, uploads to GPU, then dispatches the paged SDPA WGSL kernel.
+    /// f32 KV only (paged cache stores f32).
+    pub fn sdpaPaged(self: *WebGpuBackend, q: [*]const f32, kv_view: PagedKvView, k_new: [*]const f32, v_new: [*]const f32, output: [*]f32, nh: usize, nkv: usize, hd: usize, scale: f32, _: KvQuantType, _: KvQuantType) void {
+        const kvd = nkv * hd;
+        const sl = kv_view.seq_len + 1;
+
+        // Flush pending GPU work so CPU memcpy is safe
+        self.sync();
+
+        // Append k_new/v_new at current seq_len position
+        @memcpy(kv_view.keyPtrMut(kv_view.seq_len)[0..kvd], k_new[0..kvd]);
+        @memcpy(kv_view.valuePtrMut(kv_view.seq_len)[0..kvd], v_new[0..kvd]);
+
+        // Gather scattered blocks into flat contiguous buffers.
+        const n_logical_blocks = (sl + @as(usize, kv_view.block_size) - 1) / @as(usize, kv_view.block_size);
+        var max_phys: u32 = 0;
+        for (kv_view.block_table[0..n_logical_blocks]) |phys_id| max_phys = @max(max_phys, phys_id);
+        const n_phys_blocks: usize = @as(usize, max_phys) + 1;
+        const block_stride = @as(usize, kv_view.block_size) * kvd;
+        const flat_elems = n_phys_blocks * block_stride;
+        const flat_bytes = flat_elems * @sizeOf(f32);
+
+        const flat_keys = std.heap.page_allocator.alloc(f32, flat_elems) catch
+            @panic("WebGPU sdpaPaged: out of memory for flat key staging buffer");
+        defer std.heap.page_allocator.free(flat_keys);
+        const flat_vals = std.heap.page_allocator.alloc(f32, flat_elems) catch
+            @panic("WebGPU sdpaPaged: out of memory for flat value staging buffer");
+        defer std.heap.page_allocator.free(flat_vals);
+
+        for (kv_view.block_table[0..n_logical_blocks]) |phys_id| {
+            const dst_off = @as(usize, phys_id) * block_stride;
+            const blk = kv_view.blocks[phys_id];
+            @memcpy(flat_keys[dst_off..][0..block_stride], blk.keys[0..block_stride]);
+            @memcpy(flat_vals[dst_off..][0..block_stride], blk.values[0..block_stride]);
+        }
+
+        // GPU dispatch
+        const q_sz = nh * hd * @sizeOf(f32);
+        const bt_sz = n_logical_blocks * @sizeOf(u32);
+        const o_sz = q_sz;
+
+        const q_buf = self.getOrUpload(@ptrCast(q), q_sz);
+        const k_buf = self.createOutputBuf(flat_bytes);
+        self.uploadToBuffer(k_buf, @ptrCast(flat_keys.ptr), flat_bytes);
+        const v_buf = self.createOutputBuf(flat_bytes);
+        self.uploadToBuffer(v_buf, @ptrCast(flat_vals.ptr), flat_bytes);
+        const o_buf = self.createOutputBuf(o_sz);
+        const bt_buf = self.createOutputBuf(bt_sz);
+        self.uploadToBuffer(bt_buf, @ptrCast(kv_view.block_table.ptr), bt_sz);
+
+        const Params = extern struct { nh_v: u32, nkv_v: u32, hd_v: u32, sl_v: u32, scale_v: f32, paged_bs_v: u32 };
+        const p = Params{
+            .nh_v = @intCast(nh),
+            .nkv_v = @intCast(nkv),
+            .hd_v = @intCast(hd),
+            .sl_v = @intCast(sl),
+            .scale_v = scale,
+            .paged_bs_v = kv_view.block_size,
+        };
+        const params_buf = self.createUniformBuf(Params, p);
+        defer self.fn_buffer_destroy(params_buf);
+
+        const entries = [_]WGPUBindGroupEntry{
+            storageEntry(0, q_buf, q_sz),
+            storageEntry(1, k_buf, flat_bytes),
+            storageEntry(2, v_buf, flat_bytes),
+            storageEntry(3, o_buf, o_sz),
+            storageEntry(4, bt_buf, bt_sz),
+            uniformEntry(5, params_buf, Params),
+        };
+        self.dispatchCompute(self.pipe_sdpa_paged, &entries, @intCast(nh));
+        self.cacheGpuResult(output, o_buf, o_sz);
     }
 
     pub fn sdpaTree(self: *WebGpuBackend, q_all: [*]const f32, prefix_keys: [*]const u8, prefix_values: [*]const u8, tree_keys: [*]const f32, tree_values: [*]const f32, output: [*]f32, ancestor_masks: [*]const [8]u64, nh: usize, nkv: usize, hd: usize, prefix_len: usize, n_nodes: u32, scale: f32, kv_type_k: KvQuantType, kv_type_v: KvQuantType) void {

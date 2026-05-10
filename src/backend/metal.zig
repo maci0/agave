@@ -16,6 +16,7 @@ const TensorData = backend_mod.TensorData;
 const DType = backend_mod.DType;
 const CpuBackend = @import("cpu.zig").CpuBackend;
 const KvQuantType = backend_mod.KvQuantType;
+const PagedKvView = backend_mod.PagedKvView;
 const ThreadPool = @import("../thread_pool.zig").ThreadPool;
 const kv_quant = @import("../ops/kv_quant.zig");
 const mlx_ops = @import("../ops/mlx.zig");
@@ -169,6 +170,7 @@ pub const MetalBackend = struct {
     pipe_sdpa_tree: objc.id,
     pipe_sdpa_tree_turbo: objc.id,
     pipe_sdpa_turbo: objc.id,
+    pipe_sdpa_paged: objc.id,
     pipe_dn_gate_beta: objc.id,
     pipe_dn_conv1d: objc.id,
     pipe_dn_l2_norm: objc.id,
@@ -331,6 +333,7 @@ pub const MetalBackend = struct {
             .pipe_sdpa_tree = undefined,
             .pipe_sdpa_tree_turbo = undefined,
             .pipe_sdpa_turbo = undefined,
+            .pipe_sdpa_paged = undefined,
             .pipe_dn_gate_beta = undefined,
             .pipe_dn_conv1d = undefined,
             .pipe_dn_l2_norm = undefined,
@@ -418,6 +421,7 @@ pub const MetalBackend = struct {
         self.pipe_sdpa_tree = try self.makePipeline("sdpa_tree_fa2");
         self.pipe_sdpa_tree_turbo = try self.makePipeline("sdpa_tree_fa2_turbo");
         self.pipe_sdpa_turbo = try self.makePipeline("sdpa_fa2_turbo");
+        self.pipe_sdpa_paged = try self.makePipeline("sdpa_fa2_paged");
         self.pipe_dn_gate_beta = try self.makePipeline("deltanet_gate_beta");
         self.pipe_dn_conv1d = try self.makePipeline("deltanet_conv1d");
         self.pipe_dn_l2_norm = try self.makePipeline("deltanet_l2_norm");
@@ -2165,6 +2169,79 @@ pub const MetalBackend = struct {
             setBytes(enc, @ptrCast(&bb_v_u), @sizeOf(u32), 12);
             self.endEncodeThreadgroups(enc, nh, sdpa_threadgroup_size);
         }
+    }
+
+    /// Paged SDPA: block-table-indexed attention for non-contiguous KV cache.
+    /// Appends k_new/v_new to paged cache, gathers blocks into flat contiguous
+    /// buffers, then dispatches the GPU sdpa_fa2_paged kernel.
+    /// f32 KV only (paged cache stores f32).
+    pub fn sdpaPaged(self: *MetalBackend, q: [*]const f32, kv_view: PagedKvView, k_new: [*]const f32, v_new: [*]const f32, output: [*]f32, nh: usize, nkv: usize, hd: usize, scale: f32, _: KvQuantType, _: KvQuantType) void {
+        const kvd = nkv * hd;
+        const sl = kv_view.seq_len + 1;
+
+        if (sl > sdpa_max_seq_len) @panic("Metal sdpaPaged: sequence length exceeds GPU limit (" ++ std.fmt.comptimePrint("{d}", .{sdpa_max_seq_len}) ++ ")");
+        if (hd > sdpa_max_head_dim) @panic("Metal sdpaPaged: head_dim exceeds GPU limit (" ++ std.fmt.comptimePrint("{d}", .{sdpa_max_head_dim}) ++ ")");
+
+        // Flush pending GPU work so CPU memcpy is safe
+        self.sync();
+
+        // Append k_new/v_new at current seq_len position (CPU-side via PagedKvView)
+        @memcpy(kv_view.keyPtrMut(kv_view.seq_len)[0..kvd], k_new[0..kvd]);
+        @memcpy(kv_view.valuePtrMut(kv_view.seq_len)[0..kvd], v_new[0..kvd]);
+
+        // Gather scattered blocks into flat contiguous buffers for the GPU kernel.
+        // K_flat/V_flat layout: block i at [i * block_size * kvd .. (i+1) * block_size * kvd].
+        const n_logical_blocks = (sl + @as(usize, kv_view.block_size) - 1) / @as(usize, kv_view.block_size);
+        var max_phys: u32 = 0;
+        for (kv_view.block_table[0..n_logical_blocks]) |phys_id| max_phys = @max(max_phys, phys_id);
+        const n_phys_blocks: usize = @as(usize, max_phys) + 1;
+        const block_stride = @as(usize, kv_view.block_size) * kvd;
+        const flat_elems = n_phys_blocks * block_stride;
+        const flat_bytes = flat_elems * @sizeOf(f32);
+
+        // Use page_allocator for the flat staging buffers.
+        // This is NOT the token-generation hot path inner loop — it's called once
+        // per layer per token, same as KV append in non-paged sdpa.
+        const flat_keys = std.heap.page_allocator.alloc(f32, flat_elems) catch
+            @panic("Metal sdpaPaged: out of memory for flat key staging buffer");
+        defer std.heap.page_allocator.free(flat_keys);
+        const flat_vals = std.heap.page_allocator.alloc(f32, flat_elems) catch
+            @panic("Metal sdpaPaged: out of memory for flat value staging buffer");
+        defer std.heap.page_allocator.free(flat_vals);
+
+        for (kv_view.block_table[0..n_logical_blocks]) |phys_id| {
+            const dst_off = @as(usize, phys_id) * block_stride;
+            const blk = kv_view.blocks[phys_id];
+            @memcpy(flat_keys[dst_off..][0..block_stride], blk.keys[0..block_stride]);
+            @memcpy(flat_vals[dst_off..][0..block_stride], blk.values[0..block_stride]);
+        }
+
+        // GPU dispatch: sdpa_fa2_paged kernel
+        const q_ref = self.getBufRef(@ptrCast(q), nh * hd * @sizeOf(f32));
+        const k_ref = self.getBufRef(@ptrCast(flat_keys.ptr), flat_bytes);
+        const v_ref = self.getBufRef(@ptrCast(flat_vals.ptr), flat_bytes);
+        const out_ref = self.getBufRef(@ptrCast(output), nh * hd * @sizeOf(f32));
+        const bt_ref = self.getBufRef(@ptrCast(kv_view.block_table.ptr), n_logical_blocks * @sizeOf(u32));
+
+        var nh_u: u32 = @intCast(nh);
+        var nkv_u: u32 = @intCast(nkv);
+        var hd_u: u32 = @intCast(hd);
+        var sl_u: u32 = @intCast(sl);
+        var paged_bs_u: u32 = kv_view.block_size;
+
+        const enc = self.getEncoder(self.pipe_sdpa_paged);
+        setBuf(enc, q_ref, 0);
+        setBuf(enc, k_ref, 1);
+        setBuf(enc, v_ref, 2);
+        setBuf(enc, out_ref, 3);
+        setBuf(enc, bt_ref, 4);
+        setBytes(enc, @ptrCast(&nh_u), @sizeOf(u32), 5);
+        setBytes(enc, @ptrCast(&nkv_u), @sizeOf(u32), 6);
+        setBytes(enc, @ptrCast(&hd_u), @sizeOf(u32), 7);
+        setBytes(enc, @ptrCast(&sl_u), @sizeOf(u32), 8);
+        setBytes(enc, @ptrCast(&scale), @sizeOf(f32), 9);
+        setBytes(enc, @ptrCast(&paged_bs_u), @sizeOf(u32), 10);
+        self.endEncodeThreadgroups(enc, nh, sdpa_threadgroup_size);
     }
 
     /// SDPA with per-head softmax stats for split-attention merge.

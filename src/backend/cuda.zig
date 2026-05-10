@@ -28,6 +28,7 @@ const backend_mod = @import("backend.zig");
 const TensorData = backend_mod.TensorData;
 const CpuBackend = @import("cpu.zig").CpuBackend;
 const KvQuantType = backend_mod.KvQuantType;
+const PagedKvView = backend_mod.PagedKvView;
 const kv_quant = @import("../ops/kv_quant.zig");
 const mlx_ops = @import("../ops/mlx.zig");
 
@@ -194,6 +195,7 @@ pub const CudaBackend = struct {
     fn_sdpa: CUfunction = null,
     fn_sdpa_turbo: CUfunction = null,
     fn_sdpa_tree: CUfunction = null,
+    fn_sdpa_paged: CUfunction = null,
     fn_sdpa_prefill: CUfunction = null,
     fn_gemm_q8_0: CUfunction = null,
     fn_rms_norm_batched: CUfunction = null,
@@ -425,6 +427,7 @@ pub const CudaBackend = struct {
         self.fn_sdpa = try self.getFunction("sdpa_kernel");
         self.fn_sdpa_turbo = try self.getFunction("sdpa_turbo_kernel");
         self.fn_sdpa_tree = try self.getFunction("sdpa_tree_kernel");
+        self.fn_sdpa_paged = self.getFunction("sdpa_paged_kernel") catch null;
         self.fn_sdpa_prefill = try self.getFunction("sdpa_prefill_kernel");
         self.fn_gemm_q8_0 = try self.getFunction("gemm_q8_0_kernel");
         self.fn_rms_norm_batched = try self.getFunction("rms_norm_batched_kernel");
@@ -1643,6 +1646,84 @@ pub const CudaBackend = struct {
             return;
         }
         @import("kernels/cpu/sdpa_tree.zig").sdpaTree(q_all, prefix_keys, prefix_values, tree_keys, tree_values, output, ancestor_masks, nh, nkv, hd, prefix_len, n_nodes, scale, kv_type_k, kv_type_v);
+    }
+
+    /// Paged SDPA: block-table-indexed attention for non-contiguous KV cache.
+    /// Appends k_new/v_new to paged cache, gathers blocks into flat contiguous
+    /// buffers, uploads to GPU, then dispatches the paged SDPA kernel.
+    /// Falls back to CPU kernel if PTX was not rebuilt with sdpa_paged_kernel.
+    pub fn sdpaPaged(self: *CudaBackend, q: [*]const f32, kv_view: PagedKvView, k_new: [*]const f32, v_new: [*]const f32, output: [*]f32, nh: usize, nkv: usize, hd: usize, scale: f32, _: KvQuantType, _: KvQuantType) void {
+        const kvd = nkv * hd;
+        var sl: u32 = @intCast(kv_view.seq_len + 1);
+
+        // Flush pending GPU ops so CPU can safely write to paged cache
+        self.flushActivations();
+
+        // Append k_new/v_new at current seq_len position
+        @memcpy(kv_view.keyPtrMut(kv_view.seq_len)[0..kvd], k_new[0..kvd]);
+        @memcpy(kv_view.valuePtrMut(kv_view.seq_len)[0..kvd], v_new[0..kvd]);
+
+        // Fall back to CPU if paged kernel not in PTX (needs `zig build ptx` to regenerate)
+        if (self.fn_sdpa_paged == null) {
+            const cpu_sdpa = @import("kernels/cpu/sdpa.zig");
+            for (0..nh) |h| {
+                cpu_sdpa.sdpaPagedHead(q, kv_view, output, h, nh, nkv, hd, sl, scale);
+            }
+            return;
+        }
+
+        // Gather scattered blocks into flat contiguous staging buffers.
+        // K_flat/V_flat layout: block i at [i * block_size * kvd .. (i+1) * block_size * kvd].
+        const n_logical_blocks = (sl + kv_view.block_size - 1) / kv_view.block_size;
+        var max_phys: u32 = 0;
+        for (kv_view.block_table[0..n_logical_blocks]) |phys_id| max_phys = @max(max_phys, phys_id);
+        const n_phys_blocks: usize = @as(usize, max_phys) + 1;
+        const block_stride = @as(usize, kv_view.block_size) * kvd;
+        const flat_elems = n_phys_blocks * block_stride;
+        const flat_bytes = flat_elems * @sizeOf(f32);
+
+        const flat_keys = std.heap.page_allocator.alloc(f32, flat_elems) catch
+            @panic("CUDA sdpaPaged: out of memory for flat key staging buffer");
+        defer std.heap.page_allocator.free(flat_keys);
+        const flat_vals = std.heap.page_allocator.alloc(f32, flat_elems) catch
+            @panic("CUDA sdpaPaged: out of memory for flat value staging buffer");
+        defer std.heap.page_allocator.free(flat_vals);
+
+        for (kv_view.block_table[0..n_logical_blocks]) |phys_id| {
+            const dst_off = @as(usize, phys_id) * block_stride;
+            const blk = kv_view.blocks[phys_id];
+            @memcpy(flat_keys[dst_off..][0..block_stride], blk.keys[0..block_stride]);
+            @memcpy(flat_vals[dst_off..][0..block_stride], blk.values[0..block_stride]);
+        }
+
+        // Upload flat buffers, block_table, Q to device and launch kernel
+        var d_q = self.getInputBuf(q, nh * hd * @sizeOf(f32));
+        var d_k = self.uploadToDevice(@ptrCast(flat_keys.ptr), flat_bytes);
+        var d_v = self.uploadToDevice(@ptrCast(flat_vals.ptr), flat_bytes);
+        var d_out = self.getOutputBuf(output, nh * hd * @sizeOf(f32));
+        var d_bt = self.uploadToDevice(@ptrCast(kv_view.block_table.ptr), n_logical_blocks * @sizeOf(u32));
+
+        var nh_u: u32 = @intCast(nh);
+        var nkv_u: u32 = @intCast(nkv);
+        var hd_u: u32 = @intCast(hd);
+        var kvd_u: u32 = @intCast(kvd);
+        var scale_f: f32 = scale;
+        var paged_bs_u: u32 = kv_view.block_size;
+
+        var params = [_]?*anyopaque{
+            @ptrCast(&d_q),       @ptrCast(&d_k),     @ptrCast(&d_v),
+            @ptrCast(&d_out),     @ptrCast(&d_bt),    @ptrCast(&nh_u),
+            @ptrCast(&nkv_u),     @ptrCast(&hd_u),    @ptrCast(&sl),
+            @ptrCast(&kvd_u),     @ptrCast(&scale_f), @ptrCast(&paged_bs_u),
+        };
+
+        const smem: u32 = (sl + 1) * @sizeOf(f32);
+        self.launch(self.fn_sdpa_paged.?, @intCast(nh), block_size, smem, &params);
+
+        // Free temporary device buffers (not cached — staging data changes every call)
+        _ = self.cuMemFree(d_k);
+        _ = self.cuMemFree(d_v);
+        _ = self.cuMemFree(d_bt);
     }
 
     /// For turbo KV: CPU-side KV append + sequential GPU turbo SDPA per token.

@@ -12,6 +12,7 @@ const builtin = @import("builtin");
 const backend_mod = @import("backend.zig");
 const TensorData = backend_mod.TensorData;
 const KvQuantType = backend_mod.KvQuantType;
+const PagedKvView = backend_mod.PagedKvView;
 const kv_quant = @import("../ops/kv_quant.zig");
 
 // ── Vulkan types (native Zig definitions) ───────────────────────
@@ -523,6 +524,7 @@ const spv_sdpa_tree = @embedFile("kernels/vulkan/sdpa_tree.spv");
 // Attention
 const spv_sdpa = @embedFile("kernels/vulkan/sdpa.spv");
 const spv_sdpa_turbo = @embedFile("kernels/vulkan/sdpa_turbo.spv");
+const spv_sdpa_paged = @embedFile("kernels/vulkan/sdpa_paged.spv");
 
 // Embedding
 const spv_embedding = @embedFile("kernels/vulkan/embedding.spv");
@@ -608,6 +610,7 @@ pub const VulkanBackend = struct {
     // Attention pipelines
     pipe_sdpa: PipelineInfo = .{},
     pipe_sdpa_turbo: PipelineInfo = .{},
+    pipe_sdpa_paged: PipelineInfo = .{},
 
     // Embedding pipeline
     pipe_embedding: PipelineInfo = .{},
@@ -1039,6 +1042,9 @@ pub const VulkanBackend = struct {
         // SDPA TurboQuant: 4 bufs (Q, K_raw, V_raw, out), 36 bytes push
         // (nh, nkv, hd, sl, scale, bits_k, bits_v, block_bytes_k, block_bytes_v)
         self.pipe_sdpa_turbo = try self.createPipeline(spv_sdpa_turbo, 4, 36);
+        // SDPA paged: 5 bufs (Q, K_flat, V_flat, out, block_table), 24 bytes push
+        // (nh, nkv, hd, sl, scale, paged_bs)
+        self.pipe_sdpa_paged = try self.createPipeline(spv_sdpa_paged, 5, 24);
         // Embedding: 3 bufs (token_id, emb_table, output), 8 bytes push (vocab_size, n_embd)
         self.pipe_embedding = try self.createPipeline(spv_embedding, 3, 12);
         // Conv1d: 4 bufs (input, state, conv_w, output), 8 bytes push (conv_ch, d_conv)
@@ -1094,6 +1100,7 @@ pub const VulkanBackend = struct {
                 // Attention
               &self.pipe_sdpa,
             &self.pipe_sdpa_turbo,
+            &self.pipe_sdpa_paged,
                 // Embedding
                &self.pipe_embedding,
             // SSM
@@ -2167,6 +2174,82 @@ pub const VulkanBackend = struct {
             self.dispatch(self.pipe_sdpa_turbo, &bufs, &sizes, @ptrCast(&params), 36, @intCast(nh));
             self.downloadF32(o_buf.mem, output, nh * hd);
         }
+    }
+
+    /// Paged SDPA: block-table-indexed attention for non-contiguous KV cache.
+    /// Appends k_new/v_new to paged cache, gathers blocks into flat contiguous
+    /// buffers, uploads to GPU, then dispatches the paged SDPA SPIR-V kernel.
+    /// f32 KV only (paged cache stores f32).
+    pub fn sdpaPaged(self: *VulkanBackend, q: [*]const f32, kv_view: PagedKvView, k_new: [*]const f32, v_new: [*]const f32, output: [*]f32, nh: usize, nkv: usize, hd: usize, scale: f32, _: KvQuantType, _: KvQuantType) void {
+        const kvd = nkv * hd;
+        const sl = kv_view.seq_len + 1;
+
+        if (sl > sdpa_max_seq_len or hd > sdpa_max_head_dim)
+            @panic("Vulkan sdpaPaged: sequence or head dim exceeds GPU limit — reduce --ctx-size");
+
+        // Flush pending GPU work so CPU memcpy is safe
+        self.sync();
+
+        // Append k_new/v_new at current seq_len position
+        @memcpy(kv_view.keyPtrMut(kv_view.seq_len)[0..kvd], k_new[0..kvd]);
+        @memcpy(kv_view.valuePtrMut(kv_view.seq_len)[0..kvd], v_new[0..kvd]);
+
+        // Gather scattered blocks into flat contiguous buffers.
+        const n_logical_blocks = (sl + @as(usize, kv_view.block_size) - 1) / @as(usize, kv_view.block_size);
+        var max_phys: u32 = 0;
+        for (kv_view.block_table[0..n_logical_blocks]) |phys_id| max_phys = @max(max_phys, phys_id);
+        const n_phys_blocks: usize = @as(usize, max_phys) + 1;
+        const block_stride = @as(usize, kv_view.block_size) * kvd;
+        const flat_elems = n_phys_blocks * block_stride;
+        const flat_bytes = flat_elems * @sizeOf(f32);
+
+        const flat_keys = std.heap.page_allocator.alloc(f32, flat_elems) catch
+            @panic("Vulkan sdpaPaged: out of memory for flat key staging buffer");
+        defer std.heap.page_allocator.free(flat_keys);
+        const flat_vals = std.heap.page_allocator.alloc(f32, flat_elems) catch
+            @panic("Vulkan sdpaPaged: out of memory for flat value staging buffer");
+        defer std.heap.page_allocator.free(flat_vals);
+
+        for (kv_view.block_table[0..n_logical_blocks]) |phys_id| {
+            const dst_off = @as(usize, phys_id) * block_stride;
+            const blk = kv_view.blocks[phys_id];
+            @memcpy(flat_keys[dst_off..][0..block_stride], blk.keys[0..block_stride]);
+            @memcpy(flat_vals[dst_off..][0..block_stride], blk.values[0..block_stride]);
+        }
+
+        // GPU dispatch
+        const q_sz = nh * hd * @sizeOf(f32);
+        const bt_sz = n_logical_blocks * @sizeOf(u32);
+        const o_sz = nh * hd * @sizeOf(f32);
+
+        const q_buf = self.getPooledBuf(q_sz);
+        defer self.releasePooledBuf(q_buf);
+        const k_buf = self.getPooledBuf(flat_bytes);
+        defer self.releasePooledBuf(k_buf);
+        const v_buf = self.getPooledBuf(flat_bytes);
+        defer self.releasePooledBuf(v_buf);
+        const o_buf = self.getPooledBuf(o_sz);
+        defer self.releasePooledBuf(o_buf);
+        const bt_buf = self.getPooledBuf(bt_sz);
+        defer self.releasePooledBuf(bt_buf);
+
+        self.uploadBuffer(q_buf.mem, @ptrCast(q), q_sz);
+        self.uploadBuffer(k_buf.mem, @ptrCast(flat_keys.ptr), flat_bytes);
+        self.uploadBuffer(v_buf.mem, @ptrCast(flat_vals.ptr), flat_bytes);
+        self.uploadBuffer(bt_buf.mem, @ptrCast(kv_view.block_table.ptr), bt_sz);
+
+        const params = extern struct { nh_v: u32, nkv_v: u32, hd_v: u32, sl_v: u32, scale_v: f32, paged_bs_v: u32 }{
+            .nh_v = @intCast(nh),
+            .nkv_v = @intCast(nkv),
+            .hd_v = @intCast(hd),
+            .sl_v = @intCast(sl),
+            .scale_v = scale,
+            .paged_bs_v = kv_view.block_size,
+        };
+        const bufs = [_]VkBuffer{ q_buf.buf, k_buf.buf, v_buf.buf, o_buf.buf, bt_buf.buf };
+        const sizes = [_]usize{ q_sz, flat_bytes, flat_bytes, o_sz, bt_sz };
+        self.dispatch(self.pipe_sdpa_paged, &bufs, &sizes, @ptrCast(&params), 24, @intCast(nh));
+        self.downloadF32(o_buf.mem, output, nh * hd);
     }
 
     /// SDPA with per-head softmax stats for split-attention merge.
