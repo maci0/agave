@@ -12,7 +12,7 @@ export fn add_rms_norm_kernel(
     output: [*]f32,
     n: u32,
     eps: f32,
-) callconv(.kernel) void {
+) callconv(.c) void {
     const tid = cu.threadIdx();
     const bdim = cu.blockDim();
 

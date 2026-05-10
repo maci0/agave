@@ -20,7 +20,7 @@ export fn sdpa_tree_kernel(
     prefix_len: u32,
     n_nodes: u32,
     scale: f32,
-) callconv(.kernel) void {
+) callconv(.c) void {
     const flat_id = cu.blockIdx();
     const tid = cu.threadIdx();
     const tg_sz = cu.blockDim();
@@ -72,7 +72,7 @@ export fn sdpa_tree_kernel(
         // Rescale
         const m_prev = m_i;
         m_i = @max(m_i, block_max);
-        const rescale = @exp(m_prev - m_i);
+        const rescale = cu.expf(m_prev - m_i);
         l_i *= rescale;
         var oi: u32 = 0;
         while (oi < max_out_per_thread) : (oi += 1) out_acc[oi] *= rescale;
@@ -81,7 +81,7 @@ export fn sdpa_tree_kernel(
         var block_sum: f32 = 0.0;
         t = tid;
         while (t < block_len) : (t += tg_sz) {
-            const w = @exp(score_buf[t] - m_i);
+            const w = cu.expf(score_buf[t] - m_i);
             score_buf[t] = w;
             block_sum += w;
         }
@@ -125,12 +125,12 @@ export fn sdpa_tree_kernel(
         // Online softmax update
         const m_prev = m_i;
         m_i = @max(m_i, tree_score);
-        const rescale = @exp(m_prev - m_i);
+        const rescale = cu.expf(m_prev - m_i);
         l_i *= rescale;
         var oi2: u32 = 0;
         while (oi2 < max_out_per_thread) : (oi2 += 1) out_acc[oi2] *= rescale;
 
-        const w = @exp(tree_score - m_i);
+        const w = cu.expf(tree_score - m_i);
         l_i += w;
 
         // V accumulate

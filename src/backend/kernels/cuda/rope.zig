@@ -6,7 +6,7 @@ const cu = @import("common.zig");
 /// ln(2), used for base conversion: ln(x) = log2(x) * ln(2)
 const ln2: f32 = 0.6931471805599453;
 
-export fn rope_kernel(x: [*]f32, pos: u32, n_heads: u32, head_dim: u32, rope_dim: u32, theta: f32) callconv(.kernel) void {
+export fn rope_kernel(x: [*]f32, pos: u32, n_heads: u32, head_dim: u32, rope_dim: u32, theta: f32) callconv(.c) void {
     const idx = cu.globalIdx();
     const half_rope = rope_dim / 2;
     const total_pairs = n_heads * half_rope;

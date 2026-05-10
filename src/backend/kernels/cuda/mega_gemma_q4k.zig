@@ -338,7 +338,7 @@ export fn megakernel_gemma_q4k_kernel(
     embd_scale: f32,
     max_seq_len: u32,
     seq_pos: u32,
-) callconv(.kernel) void {
+) callconv(.c) void {
     _ = kv_keys;
     _ = kv_values;
     _ = max_seq_len;

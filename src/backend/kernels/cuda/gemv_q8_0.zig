@@ -32,7 +32,7 @@ inline fn q8_0BlockDot(x: [*]const f32, block_ptr: [*]const u8, k: u32, base_col
 
 /// Q8_0 GEMV kernel: NR=4 rows per block.
 /// Each block processes rows [blockIdx*4 .. blockIdx*4+3].
-export fn gemv_q8_0_kernel(x: [*]const f32, w: [*]const u8, y: [*]f32, n: u32, k: u32) callconv(.kernel) void {
+export fn gemv_q8_0_kernel(x: [*]const f32, w: [*]const u8, y: [*]f32, n: u32, k: u32) callconv(.c) void {
     const row_base = cu.blockIdx() * nr;
     if (row_base >= n) return;
     const tid = cu.threadIdx();

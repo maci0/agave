@@ -21,7 +21,7 @@ const q6_k_sc_chunk_bytes: usize = 8;
 const chunk_elems = values_per_block / 2;
 
 /// Q6_K dequant bias: 6-bit unsigned [0..63] centered to signed [-32..31].
-const q6_k_dequant_bias: i32 = -32;
+const q6_k_dequant_bias: i8 = -32;
 /// Mask for extracting 2-bit high-order field from qh byte.
 const qh_2bit_mask: u8 = 3;
 
@@ -80,7 +80,7 @@ export fn gemv_q6_k_kernel(
     y: [*]f32,
     n: u32,
     k: u32,
-) callconv(.kernel) void {
+) callconv(.c) void {
     const row_base = cu.blockIdx() * nr;
     if (row_base >= n) return;
     const tid = cu.threadIdx();

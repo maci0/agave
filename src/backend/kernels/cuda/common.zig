@@ -200,7 +200,7 @@ pub fn blockReduceAdd(val: f32) f32 {
 
 /// Convert little-endian f16 (2 bytes at `ptr`) to f32.
 /// Full IEEE 754 half-precision handling: zero, denormal, normal, inf/NaN.
-pub inline fn f16tof32(ptr: [*]const u8) f32 {
+pub fn f16tof32(ptr: [*]const u8) f32 {
     const val = @as(u16, ptr[0]) | (@as(u16, ptr[1]) << 8);
     const sign: u32 = @as(u32, val >> 15) << 31;
     const exp_f16: u32 = (val >> 10) & 0x1F;
@@ -230,7 +230,7 @@ pub inline fn f16tof32(ptr: [*]const u8) f32 {
 }
 
 /// Convert BF16 (stored as u16) to f32: zero-extend lower 16 bits.
-pub inline fn bf16ToF32(val: u16) f32 {
+pub fn bf16ToF32(val: u16) f32 {
     return @bitCast(@as(u32, val) << 16);
 }
 
@@ -239,7 +239,7 @@ pub const scale_6bit_mask: u8 = 63;
 
 /// Extract packed scale and min for Q4_K/Q5_K sub-block.
 /// Scales are packed in 12 bytes for 8 sub-blocks (6 bits each).
-pub inline fn getScaleMinK4(sb: u32, scales_ptr: [*]const u8, sc: *u8, m: *u8) void {
+pub fn getScaleMinK4(sb: u32, scales_ptr: [*]const u8, sc: *u8, m: *u8) void {
     if (sb < 4) {
         sc.* = scales_ptr[sb] & scale_6bit_mask;
         m.* = scales_ptr[sb + 4] & scale_6bit_mask;

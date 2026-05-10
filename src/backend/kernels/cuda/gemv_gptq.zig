@@ -14,7 +14,7 @@ export fn gemv_gptq_kernel(
     n: u32,
     k: u32,
     group_size: u32,
-) callconv(.kernel) void {
+) callconv(.c) void {
     const row = cu.blockIdx();
     if (row >= n) return;
     const tid = cu.threadIdx();

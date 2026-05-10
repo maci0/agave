@@ -5,7 +5,7 @@
 
 const cu = @import("common.zig");
 
-export fn deinterleave_kernel(input: [*]const f32, out_a: [*]f32, out_b: [*]f32, stride: u32, n_pairs: u32) callconv(.kernel) void {
+export fn deinterleave_kernel(input: [*]const f32, out_a: [*]f32, out_b: [*]f32, stride: u32, n_pairs: u32) callconv(.c) void {
     const idx = cu.globalIdx();
     const total = n_pairs * stride;
     if (idx >= total) return;

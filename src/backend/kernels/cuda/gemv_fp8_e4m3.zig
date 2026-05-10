@@ -51,7 +51,7 @@ export fn gemv_fp8_e4m3_kernel(
     y: [*]f32,
     n: u32,
     k: u32,
-) callconv(.kernel) void {
+) callconv(.c) void {
     const row = cu.blockIdx();
     if (row >= n) return;
     const tid = cu.threadIdx();

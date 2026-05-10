@@ -3,7 +3,7 @@
 
 const cu = @import("common.zig");
 
-export fn softmax_kernel(data: [*]f32, n: u32) callconv(.kernel) void {
+export fn softmax_kernel(data: [*]f32, n: u32) callconv(.c) void {
     const tid = cu.threadIdx();
     const bdim = cu.blockDim();
 

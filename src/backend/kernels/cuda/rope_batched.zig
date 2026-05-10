@@ -5,7 +5,7 @@ const cu = @import("common.zig");
 
 const ln2: f32 = 0.6931471805599453;
 
-export fn rope_batched_kernel(x: [*]f32, positions: [*]const u32, n_tok: u32, n_heads: u32, head_dim: u32, rope_dim: u32, theta: f32) callconv(.kernel) void {
+export fn rope_batched_kernel(x: [*]f32, positions: [*]const u32, n_tok: u32, n_heads: u32, head_dim: u32, rope_dim: u32, theta: f32) callconv(.c) void {
     const idx = cu.globalIdx();
     const half_rope = rope_dim / 2;
     const pairs_per_tok = n_heads * half_rope;
