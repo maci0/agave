@@ -54,6 +54,46 @@ Expert selection uses **stack-allocated** arrays (fixed-size buffers on the call
 
 **Shared expert** (Nemotron-Nano): One expert is always active regardless of router output, providing a stable **baseline** (consistent minimum contribution that all tokens receive, ensuring basic functionality).
 
+### MoE Performance
+
+MoE's key advantage is **sparse activation** — only K of N experts run per token:
+
+```
+Dense 30B model:   30B multiplies per token
+MoE 30B (top-2/128): ~0.5B multiplies per token (2 experts × 704-dim FFN)
+```
+
+This gives large-model quality at small-model compute cost. The tradeoff: all expert weights must fit in memory even though most are idle. A 128-expert MoE model stores 128× the FFN weights but only activates 2× per token.
+
+### Expert Weight Layout
+
+Expert weights are stored as 3D tensors: `[n_experts, rows, cols]`. The **expert stride** is the byte offset between consecutive experts. For quantized formats (Q4_K, Q8_0), the stride accounts for block structure:
+
+```
+expert_stride = dims[0] * dims[1]    (for 3D: per-expert = rows × cols)
+expert_data = base_ptr + expert_id * stride
+```
+
+Some models store fused `gate_up_exps` (gate and up projections concatenated per expert) to reduce tensor count. The GEMV dispatch slices the fused tensor into gate and up halves.
+
+### Batched Expert Dispatch
+
+When multiple experts share the same input vector (common in decode), Agave batches their gate+up GEMVs into a single `gemvMulti` dispatch. This parallelizes all output rows across both experts in one thread pool call instead of two separate dispatches:
+
+```zig
+const ops = [_]GemvOp{
+    .{ .w = gate_data, .y = gate_buf, .n = ff },
+    .{ .w = up_data,   .y = up_buf,   .n = ff },
+};
+be.gemvMulti(input, &ops, k);
+```
+
+## Megakernel Fusion
+
+On Metal GPU, the three FFN GEMVs (gate + up + down) can be fused into a single dispatch via the **megakernel** system. Instead of 3 separate GPU launches with memory round-trips, one kernel reads the input once, computes all three projections plus the activation, and writes the final output. This eliminates inter-kernel memory traffic and reduces dispatch overhead.
+
+Enable with `--megakernel`. See [Chapter 13](13-batched-dispatch-and-fusion.md) for details.
+
 ---
 
 **In the code:** [src/backend/kernels/cpu/activation.zig](../../src/backend/kernels/cpu/activation.zig) (SiLU, GELU), [src/ops/math.zig](../../src/ops/math.zig) (softplus, sigmoid, topKExperts), [src/models/gpt_oss.zig](../../src/models/gpt_oss.zig) (MoE implementation)

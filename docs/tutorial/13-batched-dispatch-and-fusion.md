@@ -652,6 +652,15 @@ fn encode(...) void {
 2. **Benchmark impact:** Some "optimizations" don't help (e.g., barriers on Apple Silicon)
 3. **Keep unfused fallback:** For debugging, keep the sequential version
 
+### Supported Models
+
+| Model | Backend | Quant Types | Enable |
+|-------|---------|-------------|--------|
+| Qwen 3.5 | Metal, CUDA | Q8_0, Q4_K, Q5_K, Q6_K, Q4_0 | `--megakernel` |
+| Gemma 4 | Metal | Q8_0, Q4_K, Q5_K, Q6_K, Q4_0 | `--megakernel` |
+| Gemma 3 | Metal | Q8_0, Q4_K, Q5_K, Q6_K, Q4_0 | `--megakernel` |
+| GLM-4 | Metal | Q8_0, Q4_K, Q5_K, Q6_K, Q4_0 | `--megakernel` |
+
 ### Debugging
 
 1. **Validate output:** Fused kernel must match unfused output exactly

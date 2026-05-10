@@ -34,9 +34,48 @@ Token ID 128000: (last valid token)
 
 The **vocabulary size** (vocab_size) is the total number of distinct tokens. Modern models have vocabularies of 32K–256K tokens. Larger vocabularies encode text more efficiently (fewer tokens per sentence) but increase memory and compute costs.
 
-Agave's BPE tokenizer (`src/tokenizer/bpe.zig`) supports two modes:
-- **BPE mode** — uses merge rules (Qwen, GPT)
-- **SPM mode** — **greedy** (always picks the best option at each step without backtracking) longest-match without merges (Gemma)
+### Tokenizer Strategies
+
+| Strategy | Algorithm | Models | Merge Table |
+|----------|-----------|--------|-------------|
+| **BPE** | Iterative pair merging | Qwen, GPT | Required — learned merge priority list |
+| **SPM** | Greedy longest-match | Gemma | Not needed — matches vocabulary entries directly |
+
+Agave's tokenizer (`src/tokenizer/bpe.zig`) supports both:
+- **BPE mode** — uses merge rules to decide which byte pairs to combine first
+- **SPM mode** — greedy longest-match without merges, including a "no dummy" variant for Gemma
+
+### Token Statistics
+
+| Model | Vocab Size | Avg Tokens/Word | Encoding |
+|-------|:----------:|:---------------:|----------|
+| Qwen 3.5 | 151,936 | ~1.3 | BPE (GPT-2 style, byte-level) |
+| Gemma 3/4 | 262,144 | ~1.1 | SentencePiece |
+| GPT-OSS | 200,064 | ~1.3 | BPE |
+| GLM-4 | 151,552 | ~1.3 | BPE |
+
+Larger vocabularies encode text more efficiently (fewer tokens per sentence) but increase the embedding table size — a 256K vocabulary with 4096-dim embeddings takes 4 GB in FP32.
+
+### Special Tokens
+
+Every vocabulary includes reserved tokens with structural meaning:
+
+| Token | Purpose | Typical ID |
+|-------|---------|:----------:|
+| `<bos>` | Beginning of sequence — signals the model to start generating | 1 |
+| `<eos>` | End of sequence — signals generation should stop | 2 |
+| `<pad>` | Padding — fills unused positions in batched inputs | 0 |
+| `<|im_start|>` | Chat role marker (Qwen) — marks the beginning of a message | varies |
+| `<start_of_turn>` | Chat role marker (Gemma) | varies |
+
+The tokenizer tracks these IDs for chat template formatting and end-of-generation detection. Some models define additional **end-of-generation (EOG)** tokens beyond `<eos>` — for example, Qwen uses `<|endoftext|>` and `<|im_end|>`.
+
+### Byte-Level BPE Encoding
+
+Qwen/GPT-style tokenizers use **byte-level** encoding where every possible byte (0x00–0xFF) maps to a printable Unicode character. For example, a space (0x20) is represented as `Ġ` (U+0120). This means:
+- Every text can be tokenized (no unknown characters)
+- Token text looks odd in raw form: `"Ġhello"` = `" hello"` (space prefix)
+- Grammar-constrained decoding must strip these prefixes via `getEffectiveText()`
 
 ## Embedding Lookup
 

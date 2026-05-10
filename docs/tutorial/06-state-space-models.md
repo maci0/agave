@@ -81,6 +81,49 @@ For each state element [i, j]:
 - **Group structure**: B and C are shared within head groups
 - **Group RMS norm** on output (not per-head)
 
+## Why SSMs are Faster
+
+The core difference comes down to how each approach handles history:
+
+| Aspect | Transformer Attention | SSM Recurrence |
+|--------|----------------------|----------------|
+| Memory per token | O(n) — stores all K/V vectors | O(1) — fixed state matrix |
+| Compute per token | O(n) — dot product with all keys | O(d²) — state update (constant) |
+| At 100K tokens | 100K dot products per head | Same as at 100 tokens |
+| Long-range memory | Exact — every past token accessible | Lossy — old information decays |
+
+The tradeoff: SSMs are faster but lose exact long-range recall. Hybrid models get the best of both: SSM layers for speed on most positions, attention layers every Nth layer for precise long-range access.
+
+## State Matrix Visualization
+
+For DeltaNet with `head_v_dim=64` and `head_k_dim=64`:
+
+```
+State S[h]: 64×64 matrix = 4,096 floats per head
+           ┌─────────────────────────┐
+    v_dim  │ Accumulated K→V mapping │ 64 rows
+     ↓     │ via outer product       │
+           │ updates with decay      │
+           └─────────────────────────┘
+                   k_dim → 64 cols
+
+Each timestep:
+  1. Decay entire matrix by exp(a * softplus(alpha))
+  2. Compute error: delta = beta * (v - S^T @ k)
+  3. Update: S += outer(delta, k)
+  4. Output: o = S @ q / sqrt(k_dim)
+```
+
+Total state per layer: `num_v_heads × v_dim × k_dim × 4 bytes`. For Qwen3.5 0.8B: 16 heads × 64 × 64 × 4 = 256 KB per SSM layer — negligible vs KV cache.
+
+## Hardware Considerations
+
+SSM recurrence is **inherently sequential** — each timestep depends on the previous state. This limits parallelism:
+
+- **Prefill**: Cannot batch SSM layers across tokens (unlike attention with GEMM). Each token must be processed sequentially through SSM layers.
+- **Decode**: SSM layers are fast (one state update per token) — the bottleneck shifts to attention layers.
+- **GPU dispatch**: SSM recurrence runs on CPU for Qwen3.5 DeltaNet (the state update loop is register-heavy, not memory-bound). GPU backends dispatch `conv1d` and `deltaNet` but the recurrence itself is scalar.
+
 ## Hybrid Layer Patterns
 
 | Model | Pattern | Rule |
