@@ -5,8 +5,8 @@
 
 const cu = @import("common.zig");
 
-const bytes_per_block: usize = 210;
-const values_per_block: usize = 256;
+const bytes_per_block: u32 = 210;
+const values_per_block: u32 = 256;
 /// Number of output rows per CUDA block.
 const nr: u32 = 2;
 

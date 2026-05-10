@@ -8,8 +8,8 @@ const cu = @import("common.zig");
 const f16tof32 = cu.f16tof32;
 const getScaleMinK4 = cu.getScaleMinK4;
 
-const bytes_per_block: usize = 176;
-const values_per_block: usize = 256;
+const bytes_per_block: u32 = 176;
+const values_per_block: u32 = 256;
 /// Number of output rows per CUDA block.
 const nr: u32 = 2;
 
