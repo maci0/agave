@@ -147,7 +147,7 @@ pub const SafeTensorsDir = struct {
                     defer allocator.free(check_z);
                     const check_fd = std.posix.system.open(check_z.ptr, .{}, @as(std.posix.mode_t, 0));
                     if (check_fd >= 0) {
-                        _ = std.c.close(check_fd);
+                        closeFd(check_fd);
                         index_valid = true;
                     }
                 }
@@ -191,13 +191,9 @@ pub const SafeTensorsDir = struct {
                 shard_data[si] = .{ .data = &.{}, .tensor_base = 0 };
                 continue;
             }
-            defer _ = std.c.close(fd);
+            defer closeFd(fd);
 
-            const file_size: usize = blk: {
-                var s: std.posix.Stat = undefined;
-                if (std.c.fstat(fd, &s) != 0) return error.FileNotFound;
-                break :blk @intCast(s.size);
-            };
+            const file_size: usize = fileSizeFd(fd) orelse return error.FileNotFound;
             if (file_size < 8) return error.InvalidSafeTensors;
 
             const mapped = try std.posix.mmap(
@@ -1383,18 +1379,37 @@ fn discoverShards(
     }
 }
 
+/// Cross-platform close: std.c.close on macOS, posix.system.close on Linux.
+fn closeFd(fd: std.posix.fd_t) void {
+    if (comptime @import("builtin").os.tag == .linux) {
+        _ = std.posix.system.close(fd);
+    } else {
+        _ = std.c.close(fd);
+    }
+}
+
+/// Cross-platform fstat: uses std.c.fstat on macOS, statx on Linux aarch64.
+fn fileSizeFd(fd: std.posix.fd_t) ?usize {
+    if (comptime @import("builtin").os.tag == .linux) {
+        var buf: std.os.linux.Statx = undefined;
+        const rc = std.os.linux.statx(fd, @ptrCast(""), std.os.linux.AT.EMPTY_PATH, std.os.linux.STATX{ .SIZE = true }, &buf);
+        if (rc != 0) return null;
+        return @intCast(buf.size);
+    } else {
+        var s: std.posix.Stat = undefined;
+        if (std.c.fstat(fd, &s) != 0) return null;
+        return @intCast(s.size);
+    }
+}
+
 /// Read an entire file into a heap-allocated slice (caller must free).
 fn readFile(allocator: Allocator, path: []const u8) ![]u8 {
     const path_z = try allocator.dupeZ(u8, path);
     defer allocator.free(path_z);
     const fd = std.posix.system.open(path_z.ptr, .{}, @as(std.posix.mode_t, 0));
     if (fd < 0) return error.FileNotFound;
-    defer _ = std.c.close(fd);
-    const size: usize = blk: {
-        var s: std.posix.Stat = undefined;
-        if (std.c.fstat(fd, &s) != 0) return error.FileNotFound;
-        break :blk @intCast(s.size);
-    };
+    defer _ = closeFd(fd);
+    const size: usize = fileSizeFd(fd) orelse return error.FileNotFound;
     if (size > max_json_file_size) return error.FileTooLarge;
     const buf = try allocator.alloc(u8, size);
     errdefer allocator.free(buf);

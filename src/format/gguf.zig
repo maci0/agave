@@ -264,11 +264,24 @@ pub const GGUFFile = struct {
     /// Opens and memory-maps a GGUF file, parsing headers, metadata, and tensor info.
     pub fn open(allocator: Allocator, path: []const u8) !GGUFFile {
         const fd = try posix.openat(posix.AT.FDCWD, path, .{}, 0);
-        defer _ = std.c.close(fd);
+        defer {
+            if (comptime @import("builtin").os.tag == .linux) {
+                _ = posix.system.close(fd);
+            } else {
+                _ = std.c.close(fd);
+            }
+        }
         const file_size: usize = blk: {
-            var s: posix.Stat = undefined;
-            if (std.c.fstat(fd, &s) != 0) return error.FileNotFound;
-            break :blk @intCast(s.size);
+            if (comptime @import("builtin").os.tag == .linux) {
+                var buf: std.os.linux.Statx = undefined;
+                const rc = std.os.linux.statx(fd, @ptrCast(""), std.os.linux.AT.EMPTY_PATH, std.os.linux.STATX{ .SIZE = true }, &buf);
+                if (rc != 0) return error.FileNotFound;
+                break :blk @intCast(buf.size);
+            } else {
+                var s: posix.Stat = undefined;
+                if (std.c.fstat(fd, &s) != 0) return error.FileNotFound;
+                break :blk @intCast(s.size);
+            }
         };
         if (file_size < gguf_min_header_size) return error.FileTooSmall;
 
