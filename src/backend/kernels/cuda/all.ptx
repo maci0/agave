@@ -6,7 +6,7 @@
 .target sm_100
 .address_size 64
 
-.func silu_kernel
+.entry silu_kernel
 (
 	.param .b64 silu_$_silu_kernel_param_0,
 	.param .b64 silu_$_silu_kernel_param_1,
@@ -85,7 +85,7 @@
 	.param .b32 mega_qwen35_q8_$_megakernel_qwen35_q8_kernel_param_19
 )
 ;
-.func rope_batched_kernel
+.entry rope_batched_kernel
 (
 	.param .b64 rope_batched_$_rope_batched_kernel_param_0,
 	.param .b64 rope_batched_$_rope_batched_kernel_param_1,
@@ -96,7 +96,7 @@
 	.param .b32 rope_batched_$_rope_batched_kernel_param_6
 )
 ;
-.func rms_norm_batched_kernel
+.entry rms_norm_batched_kernel
 (
 	.param .b64 rms_norm_batched_$_rms_norm_batched_kernel_param_0,
 	.param .b64 rms_norm_batched_$_rms_norm_batched_kernel_param_1,
@@ -154,7 +154,7 @@
 	.param .b32 fused_ffn_q8_0_$_fused_ffn_gate_up_silu_q8_0_kernel_param_5
 )
 ;
-.func gemv_gptq_kernel
+.entry gemv_gptq_kernel
 (
 	.param .b64 gemv_gptq_$_gemv_gptq_kernel_param_0,
 	.param .b64 gemv_gptq_$_gemv_gptq_kernel_param_1,
@@ -337,7 +337,7 @@
 	.param .b32 gemv_fp4_tc_$_gemv_fp4_tc_fallback_kernel_param_5
 )
 ;
-.func sdpa_tree_kernel
+.entry sdpa_tree_kernel
 (
 	.param .b64 sdpa_tree_$_sdpa_tree_kernel_param_0,
 	.param .b64 sdpa_tree_$_sdpa_tree_kernel_param_1,
@@ -354,7 +354,7 @@
 	.param .b32 sdpa_tree_$_sdpa_tree_kernel_param_12
 )
 ;
-.func sdpa_prefill_kernel
+.entry sdpa_prefill_kernel
 (
 	.param .b64 sdpa_prefill_$_sdpa_prefill_kernel_param_0,
 	.param .b64 sdpa_prefill_$_sdpa_prefill_kernel_param_1,
@@ -370,7 +370,7 @@
 	.param .b32 sdpa_prefill_$_sdpa_prefill_kernel_param_11
 )
 ;
-.func sdpa_turbo_kernel
+.entry sdpa_turbo_kernel
 (
 	.param .b64 sdpa_turbo_$_sdpa_turbo_kernel_param_0,
 	.param .b64 sdpa_turbo_$_sdpa_turbo_kernel_param_1,
@@ -388,7 +388,7 @@
 	.param .b32 sdpa_turbo_$_sdpa_turbo_kernel_param_13
 )
 ;
-.func sdpa_paged_kernel
+.entry sdpa_paged_kernel
 (
 	.param .b64 sdpa_$_sdpa_paged_kernel_param_0,
 	.param .b64 sdpa_$_sdpa_paged_kernel_param_1,
@@ -404,7 +404,7 @@
 	.param .b32 sdpa_$_sdpa_paged_kernel_param_11
 )
 ;
-.func sdpa_kernel
+.entry sdpa_kernel
 (
 	.param .b64 sdpa_$_sdpa_kernel_param_0,
 	.param .b64 sdpa_$_sdpa_kernel_param_1,
@@ -418,7 +418,7 @@
 	.param .b32 sdpa_$_sdpa_kernel_param_9
 )
 ;
-.func rope_kernel
+.entry rope_kernel
 (
 	.param .b64 rope_$_rope_kernel_param_0,
 	.param .b32 rope_$_rope_kernel_param_1,
@@ -435,13 +435,13 @@
 	.param .b32 l2_norm_$_l2_norm_kernel_param_2
 )
 ;
-.func softmax_kernel
+.entry softmax_kernel
 (
 	.param .b64 softmax_$_softmax_kernel_param_0,
 	.param .b32 softmax_$_softmax_kernel_param_1
 )
 ;
-.func add_rms_norm_kernel
+.entry add_rms_norm_kernel
 (
 	.param .b64 add_rms_norm_$_add_rms_norm_kernel_param_0,
 	.param .b64 add_rms_norm_$_add_rms_norm_kernel_param_1,
@@ -451,7 +451,7 @@
 	.param .b32 add_rms_norm_$_add_rms_norm_kernel_param_5
 )
 ;
-.func rms_norm_kernel
+.entry rms_norm_kernel
 (
 	.param .b64 rms_norm_$_rms_norm_kernel_param_0,
 	.param .b64 rms_norm_$_rms_norm_kernel_param_1,
@@ -460,7 +460,7 @@
 	.param .b32 rms_norm_$_rms_norm_kernel_param_4
 )
 ;
-.func split_qgate_kernel
+.entry split_qgate_kernel
 (
 	.param .b64 split_qgate_$_split_qgate_kernel_param_0,
 	.param .b64 split_qgate_$_split_qgate_kernel_param_1,
@@ -469,7 +469,7 @@
 	.param .b32 split_qgate_$_split_qgate_kernel_param_4
 )
 ;
-.func deinterleave_kernel
+.entry deinterleave_kernel
 (
 	.param .b64 deinterleave_$_deinterleave_kernel_param_0,
 	.param .b64 deinterleave_$_deinterleave_kernel_param_1,
@@ -478,7 +478,7 @@
 	.param .b32 deinterleave_$_deinterleave_kernel_param_4
 )
 ;
-.func gelu_mul_kernel
+.entry gelu_mul_kernel
 (
 	.param .b64 gelu_mul_$_gelu_mul_kernel_param_0,
 	.param .b64 gelu_mul_$_gelu_mul_kernel_param_1,
@@ -486,14 +486,14 @@
 	.param .b32 gelu_mul_$_gelu_mul_kernel_param_3
 )
 ;
-.func sigmoid_mul_kernel
+.entry sigmoid_mul_kernel
 (
 	.param .b64 sigmoid_mul_$_sigmoid_mul_kernel_param_0,
 	.param .b64 sigmoid_mul_$_sigmoid_mul_kernel_param_1,
 	.param .b32 sigmoid_mul_$_sigmoid_mul_kernel_param_2
 )
 ;
-.func mul_kernel
+.entry mul_kernel
 (
 	.param .b64 mul_$_mul_kernel_param_0,
 	.param .b64 mul_$_mul_kernel_param_1,
@@ -501,7 +501,7 @@
 	.param .b32 mul_$_mul_kernel_param_3
 )
 ;
-.func add_scaled_kernel
+.entry add_scaled_kernel
 (
 	.param .b64 add_scaled_$_add_scaled_kernel_param_0,
 	.param .b64 add_scaled_$_add_scaled_kernel_param_1,
@@ -509,7 +509,7 @@
 	.param .b32 add_scaled_$_add_scaled_kernel_param_3
 )
 ;
-.func add_kernel
+.entry add_kernel
 (
 	.param .b64 add_$_add_kernel_param_0,
 	.param .b64 add_$_add_kernel_param_1,
@@ -517,14 +517,14 @@
 	.param .b32 add_$_add_kernel_param_3
 )
 ;
-.func gelu_kernel
+.entry gelu_kernel
 (
 	.param .b64 gelu_$_gelu_kernel_param_0,
 	.param .b64 gelu_$_gelu_kernel_param_1,
 	.param .b32 gelu_$_gelu_kernel_param_2
 )
 ;
-.func silu_mul_kernel
+.entry silu_mul_kernel
 (
 	.param .b64 silu_mul_$_silu_mul_kernel_param_0,
 	.param .b64 silu_mul_$_silu_mul_kernel_param_1,
