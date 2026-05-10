@@ -55,6 +55,7 @@ comptime {
     _ = @import("gemv_mlx_q6.zig");
     _ = @import("gemv_mlx_q8.zig");
     _ = @import("gemv_mxfp4_st.zig");
+    _ = @import("gemv_gptq.zig");
 
     // Fused FFN
     _ = @import("fused_ffn_q8_0.zig");
