@@ -1604,3 +1604,51 @@ kernel void gemv_t_q8_0(
     sum = threadgroup_reduce_sum(sum, shared, tid, tg_size);
     if (tid == 0) y[tgid] = sum;
 }
+
+// ── GPTQ INT4 GEMV ──────────────────────────────────────────────
+// GPTQ format: 8 INT4 nibbles packed per u32.
+// qweight[n, k/8], scales[n, n_groups] f16, qzeros[n_groups, n/8] u32.
+// Dequant: val = (nibble - zero) * scale
+
+kernel void gemv_gptq(
+    device const float* x          [[buffer(0)]],
+    device const uint*  qweight    [[buffer(1)]],
+    device const half*  scales     [[buffer(2)]],
+    device const uint*  qzeros     [[buffer(3)]],
+    device float* y                [[buffer(4)]],
+    constant uint& n               [[buffer(5)]],
+    constant uint& k               [[buffer(6)]],
+    constant uint& group_size      [[buffer(7)]],
+    uint tgid     [[threadgroup_position_in_grid]],
+    uint tid      [[thread_index_in_threadgroup]],
+    uint tg_size  [[threads_per_threadgroup]])
+{
+    uint row = tgid;
+    if (row >= n) return;
+
+    uint words_per_row = k / 8;
+    uint n_groups = (k + group_size - 1) / group_size;
+    float sum = 0.0f;
+
+    for (uint wi = tid; wi < words_per_row; wi += tg_size) {
+        uint word = qweight[row * words_per_row + wi];
+        uint elem_base = wi * 8;
+        uint g = elem_base / group_size;
+        float scale_val = float(scales[row * n_groups + g]);
+
+        uint z_word_idx = g * ((n + 7) / 8) + row / 8;
+        uint z_nibble = row % 8;
+        float zero = float((qzeros[z_word_idx] >> (z_nibble * 4)) & 0xFu);
+
+        float local_sum = 0.0f;
+        for (uint ni = 0; ni < 8; ni++) {
+            float nibble_val = float((word >> (ni * 4)) & 0xFu);
+            local_sum += (nibble_val - zero) * scale_val * x[elem_base + ni];
+        }
+        sum += local_sum;
+    }
+
+    threadgroup float shmem[8];
+    sum = threadgroup_reduce_sum(sum, shmem, tid, tg_size);
+    if (tid == 0) y[row] = sum;
+}
