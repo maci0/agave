@@ -3,8 +3,12 @@
 //! Bug: `export fn ... callconv(.kernel)` triggers:
 //!   LLVM ERROR: NVPTX aliasee must be a non-kernel function definition
 //!
-//! Upstream: https://github.com/ziglang/zig/issues/XXXXX (Zig)
-//!           https://github.com/llvm/llvm-project/issues/XXXXX (LLVM)
+//! Upstream: Not yet filed on github.com/ziglang/zig (NVPTX is Tier 4)
+//!   LLVM root cause: PR #81170 (github.com/llvm/llvm-project/pull/81170)
+//!     Added alias support to NVPTX but rejects aliases to kernel functions.
+//!     emitAliasDeclaration in NVPTXAsmPrinter.cpp checks isKernelFunction()
+//!     and calls report_fatal_error. Zig's export mechanism creates an alias
+//!     from clean name → mangled name, triggering the check.
 //!   Root cause: LLVM 21 NVPTX backend rejects .alias directives that
 //!   reference kernel (.entry) functions. Zig's export mechanism creates
 //!   an alias from the clean name to the mangled name, which triggers
