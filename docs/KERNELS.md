@@ -35,7 +35,7 @@ This document tracks the implementation status of all compute kernels across bac
 | SDPA (FlashAttn-2) | Native (SIMD) | Native² | Native | Native | Native | Missing |
 | SDPA with Stats (`sdpaWithStats`) | Native (SIMD) | CPU delegate⁷ | CPU delegate⁷ | CPU delegate⁷ | CPU delegate⁷ | Missing |
 | SDPA Tree (DDTree verify) | Native (SIMD) | Native (f32 + turbo) | CPU delegate | CPU delegate | CPU delegate | Missing |
-| Paged SDPA | Native | CPU Fallback | CPU Fallback | CPU Fallback | CPU Fallback | CPU Fallback |
+| Paged SDPA | Native | Native | Native | Native | Native | CPU Fallback |
 | Causal Conv1d | Native | Native (DeltaNet) | Native³ | Missing | Missing | Missing |
 | DeltaNet (4 kernels) | Native | Native | Missing | CPU delegate⁶ | Missing | Missing |
 | Argmax / Final Logits | Native | CPU perf | CPU perf | CPU perf | CPU perf | Missing |
