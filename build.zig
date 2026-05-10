@@ -87,7 +87,25 @@ pub fn build(b: *std.Build) void {
                 }),
             });
             ptx.root_module.strip = true;
-            const install = b.addInstallFile(ptx.getEmittedAsm(), b.fmt("ptx/{s}.ptx", .{name}));
+
+            // Post-process PTX: work around Zig 0.16 + LLVM 21 aliasee bug.
+            // callconv(.kernel) crashes LLVM (NVPTXAsmPrinter rejects aliases to
+            // kernel functions, LLVM PR #81170). Kernels use callconv(.c) which
+            // generates .func. Post-processing renames definitions using alias
+            // mappings (.alias clean, mangled → .entry clean replacing .func mangled),
+            // then promotes forward declarations and removes .alias directives.
+            const fixup = b.addSystemCommand(&.{ "python3", "-c",
+                \\import re, sys
+                \\ptx = open(sys.argv[1]).read()
+                \\for clean, mangled in re.findall(r'\.alias (\w+_kernel), ([^;]+);', ptx):
+                \\    ptx = ptx.replace(f'.func {mangled}(', f'.entry {clean}(')
+                \\ptx = re.sub(r'\.alias \w+_kernel, [^;]+;\n', '', ptx)
+                \\ptx = re.sub(r'^\.func (\w+_kernel)$', r'.entry \1', ptx, flags=re.MULTILINE)
+                \\sys.stdout.write(ptx)
+            });
+            fixup.addFileArg(ptx.getEmittedAsm());
+            const fixed_ptx = fixup.captureStdOut(.{});
+            const install = b.addInstallFile(fixed_ptx, b.fmt("ptx/{s}.ptx", .{name}));
             ptx_step.dependOn(&install.step);
         }
     }
