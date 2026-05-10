@@ -9,7 +9,7 @@ const backend_mod = @import("backend.zig");
 /// Read a small file into buf via raw posix syscalls (no std.fs dependency).
 fn readSmallFile(comptime path: []const u8, buf: []u8) []const u8 {
     const fd = posix.openat(posix.AT.FDCWD, path, .{}, 0) catch return "";
-    defer posix.close(fd);
+    defer _ = posix.system.close(fd);
     const n = posix.read(fd, buf) catch return "";
     return buf[0..n];
 }
