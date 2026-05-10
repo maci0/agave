@@ -146,6 +146,7 @@ pub const MetalBackend = struct {
     pipe_gemv_mxfp4_st: objc.id,
     pipe_gemv_fp8_e4m3: objc.id,
     pipe_gemv_fp8_e5m2: objc.id,
+    pipe_gemv_gptq: objc.id,
     pipe_gemm_f32: objc.id,
     pipe_gemm_bf16: objc.id,
     pipe_gemm_q8_0: objc.id,
@@ -309,6 +310,7 @@ pub const MetalBackend = struct {
             .pipe_gemv_q5_k = undefined,
             .pipe_gemv_fp8_e4m3 = undefined,
             .pipe_gemv_fp8_e5m2 = undefined,
+            .pipe_gemv_gptq = undefined,
             .pipe_gemm_f32 = undefined,
             .pipe_gemm_bf16 = undefined,
             .pipe_gemm_q8_0 = undefined,
@@ -397,6 +399,7 @@ pub const MetalBackend = struct {
         self.pipe_gemv_q5_k = try self.makePipeline("gemv_q5_k");
         self.pipe_gemv_fp8_e4m3 = try self.makePipeline("gemv_fp8_e4m3");
         self.pipe_gemv_fp8_e5m2 = try self.makePipeline("gemv_fp8_e5m2");
+        self.pipe_gemv_gptq = try self.makePipeline("gemv_gptq");
         self.pipe_gemm_f32 = try self.makePipeline("gemm_f32");
         self.pipe_gemm_bf16 = try self.makePipeline("gemm_bf16");
         self.pipe_gemm_q8_0 = try self.makePipeline("gemm_q8_0");
@@ -1921,6 +1924,33 @@ pub const MetalBackend = struct {
         setBytes(enc_m, @ptrCast(&n_val), @sizeOf(u32), 4);
         setBytes(enc_m, @ptrCast(&k_val), @sizeOf(u32), 5);
         self.endEncodeThreadgroups(enc_m, n, gemvThreadgroupSize(.mxfp4, k));
+    }
+
+    /// GPTQ INT4 GEMV on Metal GPU.
+    pub fn gemvGptq(self: *MetalBackend, x: [*]const f32, qweight: [*]const u32, scales: [*]const u16, qzeros: [*]const u32, y: [*]f32, n: usize, k: usize, group_size: u32) void {
+        const words_per_row = k / 8;
+        const n_groups = (k + group_size - 1) / group_size;
+
+        const x_ref = self.getBufRef(@ptrCast(x), k * @sizeOf(f32));
+        const w_ref = self.getBufRef(@ptrCast(qweight), n * words_per_row * @sizeOf(u32));
+        const s_ref = self.getBufRef(@ptrCast(scales), n * n_groups * @sizeOf(u16));
+        const z_ref = self.getBufRef(@ptrCast(qzeros), n_groups * ((n + 7) / 8) * @sizeOf(u32));
+        const y_ref = self.getBufRef(@ptrCast(y), n * @sizeOf(f32));
+
+        var n_val: u32 = @intCast(n);
+        var k_val: u32 = @intCast(k);
+        var gs_val: u32 = group_size;
+
+        const enc = self.getEncoder(self.pipe_gemv_gptq);
+        setBuf(enc, x_ref, 0);
+        setBuf(enc, w_ref, 1);
+        setBuf(enc, s_ref, 2);
+        setBuf(enc, z_ref, 3);
+        setBuf(enc, y_ref, 4);
+        setBytes(enc, @ptrCast(&n_val), @sizeOf(u32), 5);
+        setBytes(enc, @ptrCast(&k_val), @sizeOf(u32), 6);
+        setBytes(enc, @ptrCast(&gs_val), @sizeOf(u32), 7);
+        self.endEncodeThreadgroups(enc, n, 256);
     }
 
     /// Batched GEMV: dispatches all ops sharing input x without inter-dispatch
