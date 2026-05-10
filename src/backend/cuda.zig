@@ -389,7 +389,11 @@ pub const CudaBackend = struct {
         @memcpy(ptx_buf[0..ptx_source.len], ptx_source);
         ptx_buf[ptx_source.len] = 0;
 
-        if (cuModuleLoadData(&self.module, &ptx_buf) != CUDA_SUCCESS) return error.PtxLoadFailed;
+        const load_rc = cuModuleLoadData(&self.module, &ptx_buf);
+        if (load_rc != CUDA_SUCCESS) {
+            std.log.warn("CUDA PTX load failed with error code {d}", .{load_rc});
+            return error.PtxLoadFailed;
+        }
         errdefer _ = self.cuModuleUnload(self.module);
 
         // Get kernel function handles
