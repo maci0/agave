@@ -22,7 +22,7 @@ Supported: Qwen 3.5, Gemma 3/4, GLM-4 on Metal. Qwen 3.5 on CUDA.
 
 Fuses gate GEMV + up GEMV + activation into a single dispatch per FFN layer. Saves 2 dispatches per layer (48-84 saved per token depending on model).
 
-### Metal — 12 kernels in `megakernel.metal`
+### Metal — 11 kernels in `megakernel.metal`
 
 | Kernel | Activation | Quant | Models |
 |--------|-----------|-------|--------|
@@ -246,7 +246,7 @@ The composed megakernel (`mega_compose.zig`) generates an additional Metal pipel
 | `src/backend/mega_compose.zig` | ~780 | Composable megakernel generator (ModelDesc, composeMSL) |
 | `src/backend/megakernel.zig` | — | Weight offset computation for fused FFN megakernels |
 | `src/backend/kernels/metal/mega_common.metal` | 732 | 18 composable building blocks |
-| `src/backend/kernels/metal/megakernel.metal` | — | 12 fused FFN kernels (Tier 1) |
+| `src/backend/kernels/metal/megakernel.metal` | — | 11 fused FFN kernels (Tier 1) |
 | `src/backend/kernels/metal/mega_*.metal` | — | 5 hand-written true megakernels (Tier 2) |
 | `src/backend/metal.zig` | — | `compileComposedMegakernel()`, `dispatchMegakernelAuto()` |
 

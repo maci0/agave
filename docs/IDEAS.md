@@ -134,33 +134,11 @@ Token importance can be scored cheaply by measuring distance from these centers 
 vector norm and cosine similarity), without computing full attention. This is O(n) per
 token vs O(n²) for attention-based importance scoring.
 
-### Implementation plan for agave
+### Implementation status
 
-**Phase 1 — Heuristic eviction (no precomputed stats):**
-1. Add `KvEvictionPolicy` enum to `kv_quant.zig`: `none`, `norm_based`, `tri_frequency`
-2. In `PagedKvCache`, track per-block importance scores (running average of K norms)
-3. When cache is full, evict the block with lowest importance score
-4. Expose as `--kv-eviction norm` CLI flag
-5. Integrate with sliding window — evict outside the window first
-
-**Phase 2 — Full TriAttention with precomputed statistics:**
-1. Load `.pt` frequency center files per model
-2. Score tokens against frequency centers using cosine similarity
-3. Per-head and per-layer-per-head pruning strategies
-4. In-place KV compaction (shift remaining entries to fill gaps)
-5. Expose as `--kv-eviction tri --kv-stats <path>`
-
-**Phase 3 — Dynamic budget:**
-1. Auto-tune KV budget based on available memory
-2. Adaptive eviction threshold (tighter budget → more aggressive pruning)
-3. Preserve recent tokens unconditionally (attention sink pattern)
-
-### Considerations
-- Precomputed stats add deployment friction (one `.pt` file per model)
-- Phase 1 (norm-based) is simpler and works without stats — good starting point
-- Most impactful for long-context (32K+) reasoning chains
-- Must preserve the sliding window invariant — never evict within the active window
-- Block-level eviction (not token-level) aligns with our paged KV cache design
+- **Phase 1 — Norm-based eviction**: ✅ Implemented (`--kv-eviction norm`). K-norm scoring, periodic compression every 128 tokens, attention sink preservation (first 4 positions never evicted).
+- **Phase 2 — Trigonometric frequency scoring**: ✅ Implemented (`--kv-eviction tri`). Uses `.cal` calibration files with per-head Q/K frequency statistics. Generated via `agave calibrate model.gguf`.
+- **Phase 3 — Dynamic budget**: Not started. Auto-tune KV budget based on available memory, adaptive eviction threshold.
 
 ### References
 - [TriAttention: KV Cache Compression via Trigonometric Frequency-Domain Analysis (Mao et al., 2025)](https://github.com/WeianMao/triattention)
@@ -169,10 +147,8 @@ token vs O(n²) for attention-based importance scoring.
 
 ## Missing GPU Kernels
 
-See `docs/KERNELS.md` for the full status matrix. Key gaps:
-- **CUDA/Vulkan**: sigmoidMul, siluMul, deinterleave, rmsNormMulti, DeltaNet
-- **All GPU**: NVFP4 (GGUF)
-- **Vulkan/ROCm**: MXFP4 GEMV (available in Metal and CUDA)
-- **CUDA/ROCm**: Additional quant formats (q4_1, q5_0, q2_k, q3_k, iq4_nl, iq4_xs)
-
-These currently `@panic` at runtime if a model needs them on a GPU backend.
+See [KERNELS.md](KERNELS.md) for the full, current per-backend matrix. Remaining key gaps:
+- **All GPU**: NVFP4 (GGUF) — GPU backends use SafeTensors NVFP4 path instead
+- **All GPU**: Paged SDPA (block table indirection) — CPU fallback
+- **CUDA, ROCm**: DeltaNet recurrence (delegates to CPU)
+- **WebGPU**: ~37 specialized ops (Phase 1 core 12 ops complete)

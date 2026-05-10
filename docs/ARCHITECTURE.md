@@ -215,9 +215,12 @@ HTTP server activated via `--serve` (default port 8080, override with `--port`).
 | `/v1/responses` | POST | Responses API |
 | `/v1/messages` | POST | Anthropic Messages API format |
 | `/v1/models` | GET | List available models |
+| `/v1/chat/regenerate` | POST | Regenerate last assistant response |
+| `/v1/conversations` | GET/POST | List or create conversations |
 | `/tokenize` | POST | Tokenize text to token IDs |
 | `/detokenize` | POST | Detokenize token IDs to text |
 | `/health` | GET | Health check |
+| `/ready` | GET | Readiness check (model loaded) |
 | `/metrics` | GET | Prometheus metrics (tokens/s, latency, queue depth) |
 
 **Sampling parameters** (accepted in chat/completions request body):

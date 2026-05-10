@@ -516,6 +516,7 @@ const spv_gemv_t_q8_0 = @embedFile("kernels/vulkan/gemv_t_q8_0.spv");
 const spv_gemv_nvfp4_st = @embedFile("kernels/vulkan/gemv_nvfp4_st.spv");
 const spv_gemv_mlx_q4 = @embedFile("kernels/vulkan/gemv_mlx_q4.spv");
 const spv_gemv_mxfp4_st = @embedFile("kernels/vulkan/gemv_mxfp4_st.spv");
+const spv_gemv_gptq = @embedFile("kernels/vulkan/gemv_gptq.spv");
 
 // DeltaNet SSM
 const spv_deltanet = @embedFile("kernels/vulkan/deltanet_recurrence.spv");
@@ -606,6 +607,7 @@ pub const VulkanBackend = struct {
     pipe_gemv_nvfp4_st: PipelineInfo = .{},
     pipe_gemv_mlx_q4: PipelineInfo = .{},
     pipe_gemv_mxfp4_st: PipelineInfo = .{},
+    pipe_gemv_gptq: PipelineInfo = .{},
 
     // Attention pipelines
     pipe_sdpa: PipelineInfo = .{},
@@ -1037,6 +1039,8 @@ pub const VulkanBackend = struct {
         self.pipe_gemv_mlx_q4 = try self.createPipeline(spv_gemv_mlx_q4, 5, 8);
         // MXFP4: 4 bufs (x, w_packed, scale, y), 8 bytes push (n, k)
         self.pipe_gemv_mxfp4_st = try self.createPipeline(spv_gemv_mxfp4_st, 4, 8);
+        // GPTQ: 5 bufs (x, qweight, scales, qzeros, y), 12 bytes push (n, k, group_size)
+        self.pipe_gemv_gptq = try self.createPipeline(spv_gemv_gptq, 5, 12);
         // SDPA: 4 bufs (Q, K, V, out), 20 bytes push (nh, nkv, hd, sl, scale)
         self.pipe_sdpa = try self.createPipeline(spv_sdpa, 4, 20);
         // SDPA TurboQuant: 4 bufs (Q, K_raw, V_raw, out), 36 bytes push
@@ -1770,6 +1774,32 @@ pub const VulkanBackend = struct {
         const bufs = [_]VkBuffer{ x_pool.buf, w_vk.buf, s_vk.buf, y_pool.buf };
         const sizes = [_]usize{ x_sz, w_sz, s_sz, y_sz };
         self.dispatch(self.pipe_gemv_mxfp4_st, &bufs, &sizes, @ptrCast(&params), 8, @intCast(n));
+        self.downloadF32(y_pool.mem, y, n);
+    }
+
+    /// GPTQ INT4 GEMV on Vulkan GPU.
+    pub fn gemvGptq(self: *VulkanBackend, x: [*]const f32, qweight: [*]const u32, scales: [*]const u16, qzeros: [*]const u32, y: [*]f32, n: usize, k: usize, group_size: u32) void {
+        const words_per_row = k / 8;
+        const n_groups = (k + group_size - 1) / group_size;
+        const x_sz = k * @sizeOf(f32);
+        const w_sz = n * words_per_row * @sizeOf(u32);
+        const s_sz = n * n_groups * @sizeOf(u16);
+        const z_sz = n_groups * ((n + 7) / 8) * @sizeOf(u32);
+        const y_sz = n * @sizeOf(f32);
+
+        const x_pool = self.getPooledBuf(x_sz);
+        defer self.releasePooledBuf(x_pool);
+        const w_vk = self.getOrUpload(@ptrCast(qweight), w_sz);
+        const s_vk = self.getOrUpload(@ptrCast(scales), s_sz);
+        const z_vk = self.getOrUpload(@ptrCast(qzeros), z_sz);
+        const y_pool = self.getPooledBuf(y_sz);
+        defer self.releasePooledBuf(y_pool);
+        self.uploadBuffer(x_pool.mem, @ptrCast(x), x_sz);
+
+        const params = [3]u32{ @intCast(n), @intCast(k), group_size };
+        const bufs = [_]VkBuffer{ x_pool.buf, w_vk.buf, s_vk.buf, z_vk.buf, y_pool.buf };
+        const sizes = [_]usize{ x_sz, w_sz, s_sz, z_sz, y_sz };
+        self.dispatch(self.pipe_gemv_gptq, &bufs, &sizes, @ptrCast(&params), 12, @intCast(n));
         self.downloadF32(y_pool.mem, y, n);
     }
 
