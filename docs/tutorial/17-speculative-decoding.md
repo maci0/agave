@@ -146,6 +146,21 @@ The `sdpaTree` kernel is available on both CPU and Metal GPU. The Metal kernel u
 
 Models without `forwardTree()` (Qwen3.5, Nemotron, etc.) fall back to sequential verification, which still works but doesn't benefit from batching.
 
+### Example Speedup
+
+```
+Without spec dec:  1 forward pass per token  → 15 tok/s (Qwen 3.5 8B, Metal)
+With DDTree:       ~3 tokens per verify pass → ~35 tok/s (2.3x speedup)
+
+Breakdown per step:
+  Draft (5 tokens):     2 ms  (small model, fast)
+  Tree build (64 nodes): 0.1 ms  (CPU, O(B log B))
+  Verify (1 pass):       65 ms  (full model, tree attention)
+  Accepted:             ~3 tokens average
+  Effective:            3 tokens / 67 ms ≈ 45 tok/s theoretical
+  Overhead:             Draft prefill, KV rollback → ~35 tok/s actual
+```
+
 **When to use speculative decoding:**
 - Long generations (100+ tokens) — amortizes dual-model overhead
 - Large target models (8B+) — more room for speedup

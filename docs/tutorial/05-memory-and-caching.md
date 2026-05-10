@@ -23,16 +23,26 @@ Quantizing the KV cache (e.g., to f16 or fp8) halves or quarters this cost with 
 The KV cache can be quantized to reduce memory usage:
 
 ```
-Format     Bits/elem  Memory for 30L × 5KV × 128d × 4096 tokens
-f32        32         600 MB
-f16        16         300 MB
-q8_0       8.5        159 MB
-turbo4     4.5         84 MB  (3.6x vs f16)
-turbo3     3.5         66 MB  (4.6x vs f16)
-turbo2     2.5         47 MB  (6.4x vs f16)
+Format     Bits/elem  Memory for 30L × 5KV × 128d × 4096 tokens  Rotation
+f32        32         600 MB                                      —
+f16        16         300 MB                                      —
+q8_0       8.5        159 MB                                      —
+turbo4     4.5         84 MB  (3.6x vs f16)                       WHT-32
+planar4    4.5         84 MB  (3.6x vs f16)                       Givens 2D
+iso4       4.5         84 MB  (3.6x vs f16)                       Quaternion 4D
+turbo3     3.5         66 MB  (4.6x vs f16)                       WHT-32
+planar3    3.5         66 MB  (4.6x vs f16)                       Givens 2D
+iso3       3.5         66 MB  (4.6x vs f16)                       Quaternion 4D
+turbo2     2.5         47 MB  (6.4x vs f16)                       WHT-32
 ```
 
-TurboQuant achieves the lowest KV cache sizes by applying a Walsh-Hadamard Transform before quantization (see [Chapter 4: Quantization](04-quantization.md#turboquant--kv-cache-quantization)).
+Four rotation-based quantizers are available, differing only in the decorrelation transform:
+- **TurboQuant** (`tq2/3/4`): Walsh-Hadamard butterfly network — 16,384 FMAs
+- **PlanarQuant** (`pq2/3/4`): Givens 2D rotation — 256 FMAs (64x fewer)
+- **IsoQuant** (`iq2/3/4`): Quaternion 4D rotation — 512 FMAs
+- **RotorQuant** (`rq2/3/4`): Clifford Cl(3,0) rotor — ~2,400 FMAs
+
+All share the same storage format (f16 norm + Lloyd-Max packed indices) and codebook. See [Chapter 4: Quantization](04-quantization.md#geometric-kv-cache-quantization) for mathematical details.
 
 **Asymmetric K/V:** As demonstrated in [KIVI (Liu et al., 2024)](https://arxiv.org/abs/2402.02750), keys and values have different sensitivity — value compression is nearly free while key compression drives quality loss. Agave supports independent types via `--kv-type-k` and `--kv-type-v`:
 

@@ -453,6 +453,14 @@ For a 2560×2560 matrix, that's 6.5M **multiply-accumulates** (multiply two numb
 
 ---
 
-**In the code:** [src/ops/quant.zig](../../src/ops/quant.zig) (dequantization helpers), [src/ops/mlx.zig](../../src/ops/mlx.zig) (MLX format), [src/backend/kernels/cpu/](../../src/backend/kernels/cpu/) (per-format GEMV kernels)
+## Common Pitfalls
+
+**numElements() for packed weights**: MLX-quantized weights store packed u32 words. `numElements()` returns the word count, not the actual element count. Always check the dtype before interpreting dimensions.
+
+**SafeTensors U32 ambiguity**: Both MLX and NVFP4 formats use U32 dtype. Distinguish them by checking for `.biases` companion tensor (MLX has biases, NVFP4 doesn't).
+
+**V cache inverse rotation**: For rotation-based KV quantization (TurboQuant, PlanarQuant, IsoQuant, RotorQuant), the V cache dequantization **must** apply the inverse rotation. K cache can rotate the query instead (orthogonality trick). Omitting the V inverse rotation produces garbage output.
+
+**In the code:** [src/ops/quant.zig](../../src/ops/quant.zig) (dequantization helpers), [src/ops/mlx.zig](../../src/ops/mlx.zig) (MLX format), [src/ops/kv_quant.zig](../../src/ops/kv_quant.zig) (KV cache quantization: TurboQuant/PlanarQuant/IsoQuant/RotorQuant), [src/backend/kernels/cpu/](../../src/backend/kernels/cpu/) (per-format GEMV kernels)
 
 **Next:** [Chapter 5: Memory and Caching →](05-memory-and-caching.md) | **Back:** [Chapter 3: Feed-Forward Networks ←](03-feed-forward-networks.md) | **Product docs:** [Architecture](../ARCHITECTURE.md)

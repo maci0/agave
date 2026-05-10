@@ -103,6 +103,18 @@ Used by the split-attention path when KV cache spans GPU and CPU tiers. The `hea
 
 Currently all GPU backends fall back to CPU-side computation for stats export. Native GPU stats (exporting max/sum from the SDPA kernel) is future work.
 
+### sdpaPaged
+
+Paged SDPA handles non-contiguous KV cache blocks via `PagedKvView` — a block table that maps logical positions to physical blocks:
+
+```zig
+be.sdpaPaged(q, kv_view, k_new, v_new, output, nh, nkv, hd, scale, kv_type_k, kv_type_v);
+```
+
+Instead of flat `keys[t * kvd]` offset arithmetic, the kernel computes `block_table[t / block_size]` → physical block → `keys[pos_in_block * kvd]`. Models use 256-token blocks allocated on demand, so memory scales with actual sequence length rather than maximum context window.
+
+CPU backend has native paged SDPA with thread-pool parallelism across query heads. GPU backends use CPU fallback via `@hasDecl` detection.
+
 ## Batched Prefill Dispatch
 
 During prefill, the backend dispatches **batched** versions of the core ops — GEMM (instead of GEMV), batched RMSNorm, batched RoPE, and fused causal SDPA:
@@ -127,11 +139,23 @@ Prefill layer pipeline (Gemma 3):
 
 **CUDA** (`cuda.zig`): Zig kernels compiled to PTX via `nvptx64-cuda` target — no CUDA C++ dependency. Driver API loaded dynamically via `dlopen`. Deferred execution with activation caching for zero-sync SDPA. Prefill: native GEMM (Q8_0), batched RMSNorm/RoPE. **Megakernel**: 41 kernels including 1 fused FFN kernel and 3 true megakernels. Sparse V threshold in SDPA.
 
+**WebGPU** (`webgpu.zig`): WGSL compute shaders loaded via wgpu-native C API. Dynamic library loading (`dlopen`). **Lazy readback cache**: activation buffers stay on GPU between operations — `cacheGpuResult` registers GPU output in `buf_cache`, and `getOrUpload` finds it on next access. Downloads only happen on `sync()`. This eliminates ~200 CPU↔GPU round-trips per token. 30+ WGSL shader pipelines covering all core ops.
+
 **Vulkan** (`vulkan.zig`): Pre-compiled SPIR-V compute shaders. Subgroup arithmetic for reductions. Fused single-dispatch normalization/softmax. Works on all vendors including Apple (via MoltenVK). No megakernel support.
 
 **ROCm** (`rocm.zig`): HIP Runtime API loaded dynamically. AMDGCN kernels compiled from Zig via `amdgcn-amdhsa` target. Same deferred execution pattern as CUDA. **Megakernel**: 28+ kernels including 1 true megakernel (Qwen Q8). Sparse V threshold in SDPA.
 
 ---
+
+## Common Pitfalls
+
+**Never import backend implementations directly**: Model code uses `@import("backend/backend.zig")`, never `@import("backend/cuda.zig")`. Backend-specific types (`CUcontext`, `MTLDevice`) stay private to their backend file.
+
+**Missing `be.sync()` before CPU reads**: GPU operations are asynchronous. If you need to read GPU-produced data on CPU (e.g., argmax on logits), call `be.sync()` first. On CPU backend, sync is a no-op.
+
+**Metal threadgroup memory limit**: Must stay under 32KB total. Calculate: `q_local + kv_block + out_acc + scores + shared`. Pipeline creation fails silently without the error logging in `makePipeline`.
+
+**WebGPU buffer cache generation**: The lazy readback cache uses `upload_generation` to track freshness. Every `sync()` bumps the generation, invalidating all cached activation buffers. Weight buffers survive (they're uploaded once and never invalidated).
 
 **In the code:** [src/backend/backend.zig](../../src/backend/backend.zig) (dispatcher), [src/backend/](../../src/backend/) (cpu, metal, cuda, vulkan, rocm implementations), [src/backend/kernels/](../../src/backend/kernels/) (GPU kernel sources)
 

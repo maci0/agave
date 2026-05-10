@@ -170,6 +170,14 @@ With N=200 tokens, GEMM has 200× higher **arithmetic intensity** (compute-to-me
 
 **Chunked prefill** (`--prefill-batch-size N`, default 512) splits long prompts into fixed-size chunks. Each chunk is one batched pass through all layers. Memory overhead is bounded by the chunk size, not the full prompt length.
 
+## Common Pitfalls
+
+**GPU sync before argmax**: After the final GEMV (vocab projection), logits are written by the GPU. CPU argmax must call `be.sync()` first — without it, you read stale data on UMA platforms.
+
+**KV cache overflow**: The cache has a fixed context size. Models must call `ensureKvBlock()` before each forward to allocate new blocks. If the cache is full, return `error.KVCacheFull` (or evict via `--kv-eviction`).
+
+**RoPE partial rotation**: Some models rotate only a fraction of head_dim (Gemma4 global layers: 25%). The non-rotated dimensions carry non-positional features — don't zero them.
+
 **In the code:** [src/ops/attention.zig](../../src/ops/attention.zig) (SDPA), [src/backend/kernels/cpu/rope.zig](../../src/backend/kernels/cpu/rope.zig) (RoPE), [src/backend/kernels/cpu/norm.zig](../../src/backend/kernels/cpu/norm.zig) (RMSNorm, L2Norm), [src/backend/kernels/cpu/sdpa.zig](../../src/backend/kernels/cpu/sdpa.zig) (CPU FlashAttention), [src/backend/cpu.zig](../../src/backend/cpu.zig) (CPU GEMM), [src/backend/kernels/metal/gemm.metal](../../src/backend/kernels/metal/gemm.metal) (Metal GEMM), [src/backend/kernels/cuda/gemm_q8_0.zig](../../src/backend/kernels/cuda/gemm_q8_0.zig) (CUDA GEMM)
 
 **Math reference:** [Q/K/V projections](appendix-math.md#qkv-projections), [Attention scores](appendix-math.md#attention-score-computation), [Dot product](appendix-math.md#dot-product), [Softmax](appendix-math.md#softmax), [RMSNorm](appendix-math.md#rms-normalization-rmsnorm), [L2 norm](appendix-math.md#l2-normalization)

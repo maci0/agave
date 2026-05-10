@@ -67,25 +67,25 @@ Understand how the codebase is structured:
 
 ## Reading Order
 
-| # | Chapter | What You'll Learn |
-| --- | --------- | ------------------- |
-| 1 | [Tokens and Text](01-tokens-and-text.md) | How text becomes numbers the model can process |
-| 2 | [The Transformer](02-the-transformer.md) | The core architecture: attention, position encoding, normalization |
-| 3 | [Feed-Forward Networks](03-feed-forward-networks.md) | Activation functions, SwiGLU, and Mixture of Experts |
-| 4 | [Quantization](04-quantization.md) | Compressing weights from 32 bits to 4 bits; MLX factored dequantization |
-| 5 | [Memory and Caching](05-memory-and-caching.md) | KV cache, PagedAttention, and RadixAttention |
-| 6 | [State Space Models](06-state-space-models.md) | Linear-time alternatives to attention: DeltaNet and Mamba-2 |
-| 7 | [Sampling](07-sampling.md) | Controlling randomness: temperature, top-k, top-p |
-| 8 | [Backends](08-backends.md) | CPU, CUDA, Metal, Vulkan, ROCm, WebGPU — how compute backends work |
-| 9 | [CPU SIMD Optimization](09-cpu-simd-optimization.md) | @Vector, @reduce, @mulAdd, multi-row batching, quantized GEMV |
-| 10 | [Memory Safety](10-memory-safety.md) | defer, errdefer, guaranteed cleanup, leak detection |
-| 11 | [Metal Backend Internals](11-metal-backend-internals.md) | UMA, buffer caching, command buffers, batch mode, threadgroup limits |
-| 12 | [CPU Parallelism](12-cpu-parallelism.md) | Futex-based thread pool, work-stealing, atomic counters, main thread participation |
-| 13 | [Batched Dispatch and Fusion](13-batched-dispatch-and-fusion.md) | gemvMulti, fused ops (addRmsNorm, siluMul, splitQGate), batch mode |
-| 14 | [Format Conventions](14-format-conventions.md) | GGUF vs SafeTensors differences, tensor layout, metadata mapping |
-| 15 | [Chat Templates](15-chat-templates.md) | Data-driven role markers, EOG tokens, multi-turn formatting |
-| 16 | [Recipe System](16-recipe-system.md) | Proven defaults per model+hardware, user override semantics |
-| 17 | [Speculative Decoding & DDTree](17-speculative-decoding.md) | Draft models, tree-structured verification, self-speculative layer skip |
+| # | Chapter | What You'll Learn | ~Time |
+| --- | --------- | ------------------- | :---: |
+| 1 | [Tokens and Text](01-tokens-and-text.md) | How text becomes numbers the model can process | 10 min |
+| 2 | [The Transformer](02-the-transformer.md) | The core architecture: attention, position encoding, normalization | 20 min |
+| 3 | [Feed-Forward Networks](03-feed-forward-networks.md) | Activation functions, SwiGLU, MoE, megakernel fusion | 10 min |
+| 4 | [Quantization](04-quantization.md) | Compressing weights from 32 bits to 4 bits; MLX, TurboQuant, PlanarQuant | 30 min |
+| 5 | [Memory and Caching](05-memory-and-caching.md) | KV cache, PagedAttention, paged SDPA, RadixAttention | 15 min |
+| 6 | [State Space Models](06-state-space-models.md) | Linear-time alternatives to attention: DeltaNet and Mamba-2 | 15 min |
+| 7 | [Sampling](07-sampling.md) | Temperature, top-k, top-p, min-p, penalties, grammar constraints | 10 min |
+| 8 | [Backends](08-backends.md) | CPU, CUDA, Metal, Vulkan, ROCm, WebGPU — dispatchers and paged SDPA | 15 min |
+| 9 | [CPU SIMD Optimization](09-cpu-simd-optimization.md) | @Vector, @reduce, @mulAdd, multi-row batching, quantized GEMV | 25 min |
+| 10 | [Memory Safety](10-memory-safety.md) | defer, errdefer, guaranteed cleanup, leak detection | 25 min |
+| 11 | [Metal Backend Internals](11-metal-backend-internals.md) | UMA, buffer caching, command buffers, batch mode, threadgroup limits | 30 min |
+| 12 | [CPU Parallelism](12-cpu-parallelism.md) | Futex-based thread pool, work-stealing, atomic counters | 25 min |
+| 13 | [Batched Dispatch and Fusion](13-batched-dispatch-and-fusion.md) | gemvMulti, fused ops, megakernel system (3 tiers) | 35 min |
+| 14 | [Format Conventions](14-format-conventions.md) | GGUF vs SafeTensors differences, tensor layout, metadata mapping | 30 min |
+| 15 | [Chat Templates](15-chat-templates.md) | Data-driven role markers, EOG tokens, multi-turn formatting | 30 min |
+| 16 | [Recipe System](16-recipe-system.md) | Proven defaults per model+hardware, user override semantics | 25 min |
+| 17 | [Speculative Decoding & DDTree](17-speculative-decoding.md) | Draft models, tree-structured verification, self-speculative layer skip | 20 min |
 
 **Appendices:**
 - [Mathematical Operations Reference](appendix-math.md) — Quick reference for all math operations (dot product, softmax, GEMV, convolution, etc.)
