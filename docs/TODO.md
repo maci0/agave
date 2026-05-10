@@ -20,17 +20,16 @@ All **correctness-critical** kernels for supported model×quant combinations are
 
 | Backend | Core ops | Notes |
 |---------|:--------:|-------|
-| Metal | Complete | Paged SDPA via CPU fallback |
-| CUDA | Complete | DeltaNet delegates to CPU; paged SDPA via CPU fallback |
-| Vulkan | Complete | Paged SDPA via CPU fallback; conv1d lacks bias support |
-| WebGPU | Core 12 | Phase 1 ops complete; many specialized ops pending (see KERNELS.md) |
+| Metal | Complete | Native paged SDPA, GPTQ GEMV |
+| CUDA | Complete | Native paged SDPA, GPTQ GEMV, fused FFN Q4_K/Q5_K/Q6_K |
+| Vulkan | Complete | Native paged SDPA |
+| WebGPU | Complete | Native paged SDPA, lazy readback cache |
 | ROCm | Complete | Paged SDPA via CPU fallback |
 
 ### Known CPU fallbacks on GPU backends
 
 | Operation | Backends affected | Rationale |
 |-----------|-------------------|----------|
-| Paged SDPA | All GPU | Native GPU paged SDPA kernels pending |
 | DeltaNet recurrence | CUDA, ROCm | Sequential recurrence is register-heavy, not memory-bound |
 | NVFP4 GGUF GEMV | All GPU | GPU backends use SafeTensors NVFP4 path instead |
 
