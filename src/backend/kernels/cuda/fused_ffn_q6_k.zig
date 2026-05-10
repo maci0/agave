@@ -3,8 +3,8 @@
 const cu = @import("common.zig");
 const gemv_q6k = @import("gemv_q6_k.zig");
 
-const bytes_per_block: usize = 210;
-const values_per_block: usize = 256;
+const bytes_per_block: u32 = 210;
+const values_per_block: u32 = 256;
 
 export fn fused_ffn_gate_up_silu_q6_k_kernel(
     x: [*]const f32,

@@ -8,8 +8,8 @@ const cu = @import("common.zig");
 const f16tof32 = cu.f16tof32;
 const getScaleMinK4 = cu.getScaleMinK4;
 
-const bytes_per_block: usize = 144;
-const values_per_block: usize = 256;
+const bytes_per_block: u32 = 144;
+const values_per_block: u32 = 256;
 
 inline fn q4kBlockDot(x: [*]const f32, bp: [*]const u8, k: u32, block_start: u32) f32 {
     const d = f16tof32(bp);
