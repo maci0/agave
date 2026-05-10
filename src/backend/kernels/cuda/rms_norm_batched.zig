@@ -4,7 +4,7 @@
 
 const cu = @import("common.zig");
 
-export fn rms_norm_batched_kernel(input: [*]const f32, weight: [*]const f32, output: [*]volatile f32, n_tok: u32, dim: u32, eps: f32) callconv(.c) void {
+export fn rms_norm_batched_kernel(input: [*]const f32, weight: [*]const f32, output: [*]f32, n_tok: u32, dim: u32, eps: f32) callconv(.kernel) void {
     const row = cu.blockIdx();
     if (row >= n_tok) return;
     const tid = cu.threadIdx();

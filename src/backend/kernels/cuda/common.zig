@@ -5,7 +5,7 @@
 //! and compiled together to PTX via nvptx64-cuda target.
 
 /// Memory fence — prevents LLVM from optimizing away global memory stores.
-/// Required when using callconv(.c) instead of .kernel (Zig 0.16 LLVM workaround).
+/// Required when using callconv(.kernel) instead of .kernel (Zig 0.16 LLVM workaround).
 pub fn memoryFence() void {
     asm volatile ("" ::: "memory");
 }

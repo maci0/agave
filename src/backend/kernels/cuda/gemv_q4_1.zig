@@ -11,10 +11,10 @@ const q4_1_block_elems: u32 = 32;
 export fn gemv_q4_1_kernel(
     x: [*]const f32,
     w: [*]const u8,
-    y: [*]volatile f32,
+    y: [*]f32,
     n: u32,
     k: u32,
-) callconv(.c) void {
+) callconv(.kernel) void {
     const row = cu.blockIdx();
     if (row >= n) return;
     const tid = cu.threadIdx();

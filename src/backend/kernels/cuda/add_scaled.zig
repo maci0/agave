@@ -4,7 +4,7 @@
 
 const cu = @import("common.zig");
 
-export fn add_scaled_kernel(src: [*]const f32, dst: [*]f32, scale: f32, n: u32) callconv(.c) void {
+export fn add_scaled_kernel(src: [*]const f32, dst: [*]f32, scale: f32, n: u32) callconv(.kernel) void {
     const idx = cu.globalIdx();
     if (idx >= n) return;
     dst[idx] += src[idx] * scale;

@@ -17,14 +17,14 @@ export fn sdpa_kernel(
     q: [*]const f32,
     keys: [*]const f32,
     values: [*]const f32,
-    output: [*]volatile f32,
+    output: [*]f32,
     nh: u32,
     nkv: u32,
     hd: u32,
     sl: u32,
     kvd: u32,
     scale: f32,
-) callconv(.c) void {
+) callconv(.kernel) void {
     const tid = cu.threadIdx();
     const head = cu.blockIdx();
     const bdim = cu.blockDim();
@@ -110,7 +110,7 @@ export fn sdpa_paged_kernel(
     q: [*]const f32,
     k_flat: [*]const f32,
     v_flat: [*]const f32,
-    output: [*]volatile f32,
+    output: [*]f32,
     block_table: [*]const u32,
     nh: u32,
     nkv: u32,
@@ -119,7 +119,7 @@ export fn sdpa_paged_kernel(
     kvd: u32,
     scale: f32,
     paged_bs: u32,
-) callconv(.c) void {
+) callconv(.kernel) void {
     const tid = cu.threadIdx();
     const head = cu.blockIdx();
     const bdim = cu.blockDim();

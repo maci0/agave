@@ -23,10 +23,10 @@ export fn gemv_mlx_q6_kernel(
     pw: [*]const u32,
     sc: [*]const u16,
     bi: [*]const u16,
-    y: [*]volatile f32,
+    y: [*]f32,
     n: u32,
     k: u32,
-) callconv(.c) void {
+) callconv(.kernel) void {
     const row = cu.blockIdx();
     if (row >= n) return;
     const tid = cu.threadIdx();

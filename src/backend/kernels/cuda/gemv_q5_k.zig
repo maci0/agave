@@ -82,10 +82,10 @@ inline fn q5kBlockDot(
 export fn gemv_q5_k_kernel(
     x: [*]const f32,
     w: [*]const u8,
-    y: [*]volatile f32,
+    y: [*]f32,
     n: u32,
     k: u32,
-) callconv(.c) void {
+) callconv(.kernel) void {
     const row_base = cu.blockIdx() * nr;
     if (row_base >= n) return;
     const tid = cu.threadIdx();

@@ -12,7 +12,7 @@ export fn sdpa_tree_kernel(
     prefix_v: [*]const f32,
     tree_k: [*]const f32,
     tree_v: [*]const f32,
-    output: [*]volatile f32,
+    output: [*]f32,
     ancestor_masks: [*]const u64,
     nh: u32,
     nkv: u32,
@@ -20,7 +20,7 @@ export fn sdpa_tree_kernel(
     prefix_len: u32,
     n_nodes: u32,
     scale: f32,
-) callconv(.c) void {
+) callconv(.kernel) void {
     const flat_id = cu.blockIdx();
     const tid = cu.threadIdx();
     const tg_sz = cu.blockDim();

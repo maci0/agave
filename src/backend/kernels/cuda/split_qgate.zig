@@ -5,7 +5,7 @@
 
 const cu = @import("common.zig");
 
-export fn split_qgate_kernel(qg: [*]const f32, q_out: [*]f32, g_out: [*]f32, hd: u32, nh: u32) callconv(.c) void {
+export fn split_qgate_kernel(qg: [*]const f32, q_out: [*]f32, g_out: [*]f32, hd: u32, nh: u32) callconv(.kernel) void {
     const idx = cu.globalIdx();
     const total = nh * hd;
     if (idx >= total) return;

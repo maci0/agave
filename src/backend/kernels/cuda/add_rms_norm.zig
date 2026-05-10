@@ -9,10 +9,10 @@ export fn add_rms_norm_kernel(
     a: [*]f32,
     b: [*]const f32,
     weight: [*]const f32,
-    output: [*]volatile f32,
+    output: [*]f32,
     n: u32,
     eps: f32,
-) callconv(.c) void {
+) callconv(.kernel) void {
     const tid = cu.threadIdx();
     const bdim = cu.blockDim();
 

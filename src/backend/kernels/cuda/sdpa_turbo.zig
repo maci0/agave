@@ -165,7 +165,7 @@ export fn sdpa_turbo_kernel(
     q: [*]const f32,
     keys: [*]const u8,
     values: [*]const u8,
-    output: [*]volatile f32,
+    output: [*]f32,
     nh: u32,
     nkv: u32,
     hd: u32,
@@ -176,7 +176,7 @@ export fn sdpa_turbo_kernel(
     bits_v: u32,
     block_bytes_k: u32,
     block_bytes_v: u32,
-) callconv(.c) void {
+) callconv(.kernel) void {
     const tid = cu.threadIdx();
     const head = cu.blockIdx();
     const bdim = cu.blockDim();

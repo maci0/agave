@@ -3,7 +3,7 @@
 
 const cu = @import("common.zig");
 
-export fn l2_norm_kernel(data: [*]f32, n: u32, eps: f32) callconv(.c) void {
+export fn l2_norm_kernel(data: [*]f32, n: u32, eps: f32) callconv(.kernel) void {
     const tid = cu.threadIdx();
     const bdim = cu.blockDim();
 

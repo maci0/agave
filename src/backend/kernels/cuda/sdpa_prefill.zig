@@ -29,14 +29,14 @@ export fn sdpa_prefill_kernel(
     v_cache: [*]const f32, // [capacity * kvd]
     k_new: [*]const f32, // [n_tok * kvd]
     v_new: [*]const f32, // [n_tok * kvd]
-    output: [*]volatile f32, // [n_tok * nh * hd]
+    output: [*]f32, // [n_tok * nh * hd]
     nh: u32,
     nkv: u32,
     hd: u32,
     prev_len: u32,
     n_tok: u32,
     scale: f32,
-) callconv(.c) void {
+) callconv(.kernel) void {
     const block_id = cu.blockIdx();
     const tok = block_id / nh;
     const h = block_id % nh;

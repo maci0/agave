@@ -66,10 +66,10 @@ export fn fused_ffn_gate_up_silu_q4_k_kernel(
     x: [*]const f32,
     w_gate: [*]const u8,
     w_up: [*]const u8,
-    ff_out: [*]volatile f32,
+    ff_out: [*]f32,
     n_ff: u32,
     n_embd: u32,
-) callconv(.c) void {
+) callconv(.kernel) void {
     const row = cu.blockIdx();
     if (row >= n_ff) return;
     const tid = cu.threadIdx();

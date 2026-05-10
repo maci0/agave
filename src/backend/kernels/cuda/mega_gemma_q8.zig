@@ -82,7 +82,7 @@ inline fn q8BlockDot(x: [*]const f32, block_ptr: [*]const u8, k: u32, base_col: 
 fn rmsNormStage(
     input: [*]const f32,
     weight: [*]const f32,
-    output: [*]volatile f32,
+    output: [*]f32,
     ss_buf: *u32,
     sync_ctr: *u32,
     n_dim: u32,
@@ -155,7 +155,7 @@ fn addStage(
 fn gemvQ8Stage(
     x: [*]const f32,
     w: [*]const u8,
-    y: [*]volatile f32,
+    y: [*]f32,
     n_out: u32,
     k: u32,
 ) void {
@@ -283,7 +283,7 @@ export fn megakernel_gemma_q8_kernel(
     embd_scale: f32,
     max_seq_len: u32,
     seq_pos: u32,
-) callconv(.c) void {
+) callconv(.kernel) void {
     _ = kv_keys;
     _ = kv_values;
     _ = max_seq_len;

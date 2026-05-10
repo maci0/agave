@@ -22,10 +22,10 @@ export fn gemv_mxfp4_st_kernel(
     x: [*]const f32,
     w: [*]const u32,
     s: [*]const u8,
-    y: [*]volatile f32,
+    y: [*]f32,
     n: u32,
     k: u32,
-) callconv(.c) void {
+) callconv(.kernel) void {
     const row = cu.blockIdx();
     if (row >= n) return;
     const tid = cu.threadIdx();

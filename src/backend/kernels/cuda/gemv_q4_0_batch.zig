@@ -28,14 +28,14 @@ export fn gemv_q4_0_batch_kernel(
     y3: [*]f32,
     n3: u32,
     k: u32,
-) callconv(.c) void {
+) callconv(.kernel) void {
     const global_row = cu.blockIdx();
     const total = n0 + n1 + n2 + n3;
     if (global_row >= total) return;
 
     // Select weight matrix and output based on block index
     var w: [*]const u8 = undefined;
-    var y: [*]volatile f32 = undefined;
+    var y: [*]f32 = undefined;
     var row: u32 = undefined;
 
     if (global_row < n0) {
