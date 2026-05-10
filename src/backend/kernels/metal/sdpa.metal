@@ -252,6 +252,159 @@ kernel void sdpa_fa2(
     }
 }
 
+// ── Paged SDPA — block-table-indexed FlashAttention-2 ────────────
+// Same algorithm as sdpa_fa2 but K/V access uses block-table indirection.
+// K_flat and V_flat store all physical blocks concatenated:
+//   block i occupies [i * paged_bs * kvd .. (i+1) * paged_bs * kvd]
+// block_table maps logical block → physical block ID.
+
+kernel void sdpa_fa2_paged(
+    device const float* Q,
+    device const float* K_flat,
+    device const float* V_flat,
+    device float* output,
+    device const uint* block_table,
+    constant uint& nh,
+    constant uint& nkv,
+    constant uint& hd,
+    constant uint& sl,
+    constant float& scale,
+    constant uint& paged_bs,
+    uint h     [[threadgroup_position_in_grid]],
+    uint tid   [[thread_index_in_threadgroup]],
+    uint tg_sz [[threads_per_threadgroup]])
+{
+    if (h >= nh) return;
+
+    uint hpg = nh / nkv;
+    uint kvh = h / hpg;
+    uint kvd = nkv * hd;
+    uint num_blocks = (sl + sdpa_block_size - 1) / sdpa_block_size;
+
+    threadgroup float q_local[sdpa_max_head_dim];
+    threadgroup float kv_block[sdpa_block_size * sdpa_max_head_dim];
+    threadgroup float scores[sdpa_block_size];
+    threadgroup float shared[8];
+
+    for (uint d = tid; d < hd; d += tg_sz) {
+        q_local[d] = Q[h * hd + d];
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    float m_i = -INFINITY;
+    float l_i = 0.0f;
+    threadgroup float out_acc[sdpa_max_head_dim];
+    for (uint d = tid; d < hd; d += tg_sz) {
+        out_acc[d] = 0.0f;
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    for (uint block = 0; block < num_blocks; block++) {
+        uint block_start = block * sdpa_block_size;
+        uint block_len = min(sdpa_block_size, sl - block_start);
+
+        // Load K_block via block-table indirection
+        for (uint t = tid; t < block_len; t += tg_sz) {
+            uint t_global = block_start + t;
+            uint bt_idx = t_global / paged_bs;
+            uint pos_in_bt = t_global % paged_bs;
+            uint phys_id = block_table[bt_idx];
+            uint k_base = (phys_id * paged_bs + pos_in_bt) * kvd + kvh * hd;
+            for (uint d = 0; d < hd; d++) {
+                kv_block[t * hd + d] = K_flat[k_base + d];
+            }
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+
+        for (uint t = tid; t < block_len; t += tg_sz) {
+            float dot_val = 0.0f;
+            for (uint d = 0; d < hd; d++) {
+                dot_val += q_local[d] * kv_block[t * hd + d];
+            }
+            scores[t] = dot_val * scale;
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+
+        // Online softmax
+        uint simd_lane  = tid % 32;
+        uint simd_group = tid / 32;
+        uint num_sg = (tg_sz + 31) / 32;
+
+        float block_max = -INFINITY;
+        for (uint t = tid; t < block_len; t += tg_sz) {
+            block_max = max(block_max, scores[t]);
+        }
+        block_max = simd_max(block_max);
+        if (simd_lane == 0) shared[simd_group] = block_max;
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        if (tid == 0) {
+            float mx = shared[0];
+            for (uint s = 1; s < num_sg; s++) mx = max(mx, shared[s]);
+            shared[0] = mx;
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        float new_max = shared[0];
+
+        float correction = exp(m_i - new_max);
+        for (uint d = tid; d < hd; d += tg_sz) {
+            out_acc[d] *= correction;
+        }
+        l_i *= correction;
+        m_i = new_max;
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+
+        for (uint t = tid; t < block_len; t += tg_sz) {
+            scores[t] = exp(scores[t] - m_i);
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+
+        {
+            float local_sum = 0.0f;
+            for (uint t = tid; t < block_len; t += tg_sz) {
+                local_sum += scores[t];
+            }
+            local_sum = simd_sum(local_sum);
+            if (simd_lane == 0) shared[simd_group] = local_sum;
+            threadgroup_barrier(mem_flags::mem_threadgroup);
+            if (tid == 0) {
+                float s = 0;
+                for (uint i = 0; i < num_sg; i++) s += shared[i];
+                shared[0] = s;
+            }
+            threadgroup_barrier(mem_flags::mem_threadgroup);
+            l_i += shared[0];
+        }
+
+        // Load V_block via block-table indirection
+        for (uint t = tid; t < block_len; t += tg_sz) {
+            if (scores[t] < sparse_v_threshold) continue;
+            uint t_global = block_start + t;
+            uint bt_idx = t_global / paged_bs;
+            uint pos_in_bt = t_global % paged_bs;
+            uint phys_id = block_table[bt_idx];
+            uint v_base = (phys_id * paged_bs + pos_in_bt) * kvd + kvh * hd;
+            for (uint d = 0; d < hd; d++) {
+                kv_block[t * hd + d] = V_flat[v_base + d];
+            }
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+
+        for (uint d = tid; d < hd; d += tg_sz) {
+            float acc = 0.0f;
+            for (uint t = 0; t < block_len; t++) {
+                if (scores[t] < sparse_v_threshold) continue;
+                acc += scores[t] * kv_block[t * hd + d];
+            }
+            out_acc[d] += acc;
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+    }
+
+    for (uint d = tid; d < hd; d += tg_sz) {
+        output[h * hd + d] = out_acc[d] / l_i;
+    }
+}
+
 // ── Prefill SDPA (causal, multi-token) ───────────────────────────
 // Processes n_tok query tokens in a single dispatch, each with causal masking.
 // Grid: n_tok * nh threadgroups. Each threadgroup handles one query head for
