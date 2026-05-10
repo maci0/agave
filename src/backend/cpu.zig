@@ -3,7 +3,16 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
+const posix = std.posix;
 const backend_mod = @import("backend.zig");
+
+/// Read a small file into buf via raw posix syscalls (no std.fs dependency).
+fn readSmallFile(comptime path: []const u8, buf: []u8) []const u8 {
+    const fd = posix.openat(posix.AT.FDCWD, path, .{}, 0) catch return "";
+    defer posix.close(fd);
+    const n = posix.read(fd, buf) catch return "";
+    return buf[0..n];
+}
 const TensorData = backend_mod.TensorData;
 const DType = backend_mod.DType;
 const quant = @import("../ops/quant.zig");
@@ -51,11 +60,9 @@ fn detectCpuModel() []const u8 {
         }
     } else if (comptime builtin.os.tag == .linux) {
         // Linux: parse /proc/cpuinfo for "model name"
-        const file = std.fs.openFileAbsolute("/proc/cpuinfo", .{}) catch return "";
-        defer file.close();
         var read_buf: [cpuinfo_read_buf_size]u8 = undefined;
-        const n = file.read(&read_buf) catch return "";
-        const data = read_buf[0..n];
+        const data = readSmallFile("/proc/cpuinfo", &read_buf);
+        if (data.len == 0) return "";
         const needle = "model name\t: ";
         if (std.mem.indexOf(u8, data, needle)) |pos| {
             const start = pos + needle.len;
@@ -84,11 +91,10 @@ fn sysctlU64(comptime name: [*:0]const u8) usize {
 /// Parse a Linux sysfs cache size file (e.g., "32K", "4096K", "16M").
 fn parseSysfsCacheSize(comptime path: []const u8) usize {
     if (comptime builtin.os.tag != .linux) return 0;
-    const file = std.fs.openFileAbsolute(path, .{}) catch return 0;
-    defer file.close();
     var buf: [32]u8 = undefined;
-    const n = file.read(&buf) catch return 0;
-    const data = std.mem.trimEnd(u8, buf[0..n], "\n ");
+    const raw = readSmallFile(path, &buf);
+    if (raw.len == 0) return 0;
+    const data = std.mem.trimEnd(u8, raw, "\n ");
     if (data.len == 0) return 0;
     // Parse numeric prefix
     var val: usize = 0;
@@ -109,11 +115,9 @@ pub fn detectSystemMem() usize {
     if (comptime builtin.os.tag == .macos) {
         return sysctlU64("hw.memsize");
     } else if (comptime builtin.os.tag == .linux) {
-        const file = std.fs.openFileAbsolute("/proc/meminfo", .{}) catch return 0;
-        defer file.close();
         var read_buf: [meminfo_read_buf_size]u8 = undefined;
-        const n = file.read(&read_buf) catch return 0;
-        const data = read_buf[0..n];
+        const data = readSmallFile("/proc/meminfo", &read_buf);
+        if (data.len == 0) return 0;
         const needle = "MemTotal:";
         if (std.mem.indexOf(u8, data, needle)) |pos| {
             var i = pos + needle.len;
@@ -137,11 +141,9 @@ pub fn detectAvailMem() usize {
         if (free_pages > 0 and page_size > 0) return free_pages * page_size;
         return 0;
     } else if (comptime builtin.os.tag == .linux) {
-        const file = std.fs.openFileAbsolute("/proc/meminfo", .{}) catch return 0;
-        defer file.close();
         var read_buf: [memavail_read_buf_size]u8 = undefined;
-        const n = file.read(&read_buf) catch return 0;
-        const data = read_buf[0..n];
+        const data = readSmallFile("/proc/meminfo", &read_buf);
+        if (data.len == 0) return 0;
         const needle = "MemAvailable:";
         if (std.mem.indexOf(u8, data, needle)) |pos| {
             var i = pos + needle.len;
