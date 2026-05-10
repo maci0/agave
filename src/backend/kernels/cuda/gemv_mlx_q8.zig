@@ -12,7 +12,7 @@ export fn gemv_mlx_q8_kernel(
     pw: [*]const u32,
     sc: [*]const u16,
     bi: [*]const u16,
-    y: [*]f32,
+    y: [*]volatile f32,
     n: u32,
     k: u32,
 ) callconv(.c) void {

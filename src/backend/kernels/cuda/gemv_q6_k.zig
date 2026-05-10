@@ -77,7 +77,7 @@ inline fn q6kBlockDot(
 export fn gemv_q6_k_kernel(
     x: [*]const f32,
     w: [*]const u8,
-    y: [*]f32,
+    y: [*]volatile f32,
     n: u32,
     k: u32,
 ) callconv(.c) void {

@@ -165,7 +165,7 @@ export fn sdpa_turbo_kernel(
     q: [*]const f32,
     keys: [*]const u8,
     values: [*]const u8,
-    output: [*]f32,
+    output: [*]volatile f32,
     nh: u32,
     nkv: u32,
     hd: u32,

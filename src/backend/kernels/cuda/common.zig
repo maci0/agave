@@ -4,6 +4,12 @@
 //! Imported by individual kernel files (silu.zig, rms_norm.zig, etc.)
 //! and compiled together to PTX via nvptx64-cuda target.
 
+/// Memory fence — prevents LLVM from optimizing away global memory stores.
+/// Required when using callconv(.c) instead of .kernel (Zig 0.16 LLVM workaround).
+pub fn memoryFence() void {
+    asm volatile ("" ::: "memory");
+}
+
 // ── Thread indexing ─────────────────────────────────────────────
 
 /// Returns the thread index within the current block (PTX %tid.x).

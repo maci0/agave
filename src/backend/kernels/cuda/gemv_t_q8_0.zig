@@ -10,7 +10,7 @@ const cu = @import("common.zig");
 const q8_0_block_bytes: u32 = 34;
 const q8_0_block_elems: u32 = 32;
 
-export fn gemv_t_q8_0_kernel(x: [*]const f32, w: [*]const u8, y: [*]f32, out_dim: u32, in_dim: u32) callconv(.c) void {
+export fn gemv_t_q8_0_kernel(x: [*]const f32, w: [*]const u8, y: [*]volatile f32, out_dim: u32, in_dim: u32) callconv(.c) void {
     const col = cu.blockIdx(); // output element index
     if (col >= out_dim) return;
 

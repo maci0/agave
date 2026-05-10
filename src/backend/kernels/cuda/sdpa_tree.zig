@@ -12,7 +12,7 @@ export fn sdpa_tree_kernel(
     prefix_v: [*]const f32,
     tree_k: [*]const f32,
     tree_v: [*]const f32,
-    output: [*]f32,
+    output: [*]volatile f32,
     ancestor_masks: [*]const u64,
     nh: u32,
     nkv: u32,

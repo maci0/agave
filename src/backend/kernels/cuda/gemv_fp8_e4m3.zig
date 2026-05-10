@@ -48,7 +48,7 @@ inline fn fp8e4m3ToF32(val: u8) f32 {
 export fn gemv_fp8_e4m3_kernel(
     x: [*]const f32,
     w: [*]const u8,
-    y: [*]f32,
+    y: [*]volatile f32,
     n: u32,
     k: u32,
 ) callconv(.c) void {

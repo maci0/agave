@@ -3,7 +3,7 @@
 
 const cu = @import("common.zig");
 
-export fn silu_kernel(input: [*]const f32, output: [*]f32, n: u32) callconv(.c) void {
+export fn silu_kernel(input: [*]const f32, output: [*]volatile f32, n: u32) callconv(.c) void {
     const idx = cu.globalIdx();
     if (idx >= n) return;
     const x = input[idx];

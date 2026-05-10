@@ -3,7 +3,7 @@
 
 const cu = @import("common.zig");
 
-export fn gemv_bf16_kernel(x: [*]const f32, w: [*]const u16, y: [*]f32, n: u32, k: u32) callconv(.c) void {
+export fn gemv_bf16_kernel(x: [*]const f32, w: [*]const u16, y: [*]volatile f32, n: u32, k: u32) callconv(.c) void {
     const row = cu.blockIdx();
     if (row >= n) return;
     const tid = cu.threadIdx();

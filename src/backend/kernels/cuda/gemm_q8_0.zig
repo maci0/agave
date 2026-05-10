@@ -8,7 +8,7 @@ const q8_0_block_size: u32 = 34;
 const q8_0_group_size: u32 = 32;
 const tile_t: u32 = 8;
 
-export fn gemm_q8_0_kernel(x: [*]const f32, w: [*]const u8, y: [*]f32, n_out: u32, n_in: u32, n_tok: u32) callconv(.c) void {
+export fn gemm_q8_0_kernel(x: [*]const f32, w: [*]const u8, y: [*]volatile f32, n_out: u32, n_in: u32, n_tok: u32) callconv(.c) void {
     const row = cu.blockIdx();
     if (row >= n_out) return;
     const tid = cu.threadIdx();

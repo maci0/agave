@@ -47,7 +47,7 @@ export fn gemv_fp4_tc_fallback_kernel(
     x: [*]const f32,
     weight: [*]const u8,
     scale: [*]const u8,
-    y: [*]f32,
+    y: [*]volatile f32,
     n: u32,
     k: u32,
 ) callconv(.c) void {

@@ -29,7 +29,7 @@ export fn sdpa_prefill_kernel(
     v_cache: [*]const f32, // [capacity * kvd]
     k_new: [*]const f32, // [n_tok * kvd]
     v_new: [*]const f32, // [n_tok * kvd]
-    output: [*]f32, // [n_tok * nh * hd]
+    output: [*]volatile f32, // [n_tok * nh * hd]
     nh: u32,
     nkv: u32,
     hd: u32,
