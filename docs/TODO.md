@@ -60,7 +60,7 @@ All **correctness-critical** kernels for supported model×quant combinations are
 | 7 | CUDA fused FFN megakernels (Q4_K/Q5_K/Q6_K variants) | Not started | Only Q8_0 megakernel exists for CUDA |
 | 8 | WebGPU Phase 2 (WASM target) | GGUF+tokenizer done | `zig build wasm` parses GGUF, loads tokenizer, inits model. Forward pass blocked by Zig 0.16 + LLVM 21 wasm32 SIMD codegen bug |
 | 9 | Native FP4 tensor cores on Blackwell SM121 | Software fallback done | SM121 routing in CUDA backend. Software FP4 GEMV kernel ready. Tensor core MMA path needs hardware testing |
-| 10 | GPTQ SafeTensors support | Working | Parser + dequant kernel + backend dispatch. Metal GPU GEMV kernel wired. CUDA pending |
+| 10 | GPTQ SafeTensors support | Working | Parser + dequant kernel + GPU GEMV on Metal + CUDA. CPU thread-pool fallback |
 
 ---
 
