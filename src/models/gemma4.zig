@@ -270,6 +270,10 @@ pub const Gemma4Model = struct {
     kv_boundary_v: u32 = 0,
     /// KV eviction budget: max positions to keep. 0 = disabled (no eviction).
     kv_eviction_budget: u32 = 0,
+    /// Dynamic budget: tracks eviction count for adaptive budget adjustment.
+    eviction_count: u32 = 0,
+    /// Last token ID after eviction — used to detect degenerate output.
+    last_eviction_token: u32 = 0,
     /// TriAttention calibration data (loaded from .cal file via --kv-eviction tri).
     tri_calibrations: ?[]const kv_evict.TriCalibration = null,
     /// Scratch buffer for eviction scores [max_seq_len].
@@ -1515,7 +1519,14 @@ pub const Gemma4Model = struct {
             _ = kv_evict.compactCache(self.layer_values[li].ptr, self.eviction_keep.ptr, seq_len, kvd);
         }
 
-        std.log.info("gemma4: KV eviction {d} -> {d} positions (budget={d})", .{ seq_len, new_len, budget });
+        // Dynamic budget: after multiple evictions, slightly increase budget
+        // to reduce eviction frequency. Caps at max_seq_len.
+        self.eviction_count += 1;
+        if (self.eviction_count % 4 == 0 and self.kv_eviction_budget < self.max_seq_len - 64) {
+            self.kv_eviction_budget += 64;
+        }
+
+        std.log.info("gemma4: KV eviction {d} -> {d} positions (budget={d}, evictions={d})", .{ seq_len, new_len, self.kv_eviction_budget, self.eviction_count });
         self.kv_seq_len = new_len;
     }
 
