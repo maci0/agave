@@ -270,10 +270,14 @@ pub const Gemma4Model = struct {
     kv_boundary_v: u32 = 0,
     /// KV eviction budget: max positions to keep. 0 = disabled (no eviction).
     kv_eviction_budget: u32 = 0,
+    /// TriAttention calibration data (loaded from .cal file via --kv-eviction tri).
+    tri_calibrations: ?[]const kv_evict.TriCalibration = null,
     /// Scratch buffer for eviction scores [max_seq_len].
     eviction_scores: []f32 = &.{},
     /// Scratch buffer for eviction keep mask [max_seq_len].
     eviction_keep: []bool = &.{},
+    /// Scratch buffer for per-head tri scores [n_head × max_seq_len].
+    tri_scratch: []f32 = &.{},
     kv_seq_len: usize = 0,
     layer_skip_start: u32 = 0,
     layer_skip_end: u32 = 0,
@@ -1464,10 +1468,31 @@ pub const Gemma4Model = struct {
             self.eviction_keep = try self.allocator.alloc(bool, self.max_seq_len);
         }
 
-        // Score positions using layer 0's K cache (representative of overall importance).
+        // Score positions using layer 0's K cache.
         const layer0_kv = self.getLayerKvView(0);
         const kvd0 = self.layer_kvd[self.kv_source[0]];
-        kv_evict.scorePositions(layer0_kv.keys.ptr, self.eviction_scores.ptr, seq_len, kvd0);
+
+        if (self.tri_calibrations) |cals| {
+            // TriAttention: frequency-domain scoring with calibration data
+            if (self.tri_scratch.len == 0) {
+                self.tri_scratch = try self.allocator.alloc(f32, self.n_head * self.max_seq_len);
+            }
+            const hd = kvd0 / self.n_head_kv;
+            kv_evict.scorePositionsTri(
+                layer0_kv.keys.ptr,
+                self.eviction_scores.ptr,
+                seq_len,
+                hd,
+                self.n_head_kv,
+                self.n_head,
+                self.kv_seq_len,
+                cals,
+                self.tri_scratch,
+            );
+        } else {
+            // Norm-based scoring (Phase 1 fallback)
+            kv_evict.scorePositions(layer0_kv.keys.ptr, self.eviction_scores.ptr, seq_len, kvd0);
+        }
 
         // Select which positions to keep.
         const budget: usize = self.kv_eviction_budget;

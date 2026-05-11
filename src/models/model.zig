@@ -629,6 +629,21 @@ pub const ModelStorage = union(enum) {
         }
     }
 
+    /// Set TriAttention calibration data for frequency-domain KV eviction.
+    const TriCalibration = @import("../ops/kv_evict.zig").TriCalibration;
+
+    pub fn setTriCalibration(self: *ModelStorage, cals: []const TriCalibration) void {
+        switch (self.*) {
+            inline else => |*m| {
+                if (@TypeOf(m.*) != void) {
+                    if (comptime @hasField(@TypeOf(m.*), "tri_calibrations")) {
+                        m.tri_calibrations = cals;
+                    }
+                }
+            },
+        }
+    }
+
     /// Enable per-layer performance profiling.
     pub fn enableProfiling(self: *ModelStorage) void {
         switch (self.*) {

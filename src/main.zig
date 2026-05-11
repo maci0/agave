@@ -415,7 +415,7 @@ const CliArgs = struct {
     kv_ram_budget: ?u32 = null,
     kv_ssd_path: ?[]const u8 = null,
     kv_ssd_budget: ?u32 = null,
-    kv_eviction: bool = false,
+    kv_eviction: enum { none, norm, tri } = .none,
     kv_budget: u32 = 0,
     host: [4]u8 = .{ 127, 0, 0, 1 },
     api_key: ?[]const u8 = null,
@@ -727,7 +727,11 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
         .kv_ram_budget = res.optionU32("kv-ram-budget"),
         .kv_ssd_path = res.option("kv-ssd-path"),
         .kv_ssd_budget = res.optionU32("kv-ssd-budget"),
-        .kv_eviction = if (res.option("kv-eviction")) |e| (!std.mem.eql(u8, e, "none")) else false,
+        .kv_eviction = if (res.option("kv-eviction")) |e| blk: {
+            if (std.mem.eql(u8, e, "tri")) break :blk .tri;
+            if (std.mem.eql(u8, e, "norm")) break :blk .norm;
+            break :blk .none;
+        } else .none,
         .kv_budget = res.optionU32("kv-budget") orelse 0,
         .host = blk: {
             const host_str = res.option("host") orelse break :blk [4]u8{ 127, 0, 0, 1 };
@@ -1477,7 +1481,7 @@ fn initAndRun(
 
     // Use ModelStorage to initialize the model without exposing concrete types.
     const init_start = milliTimestamp(g_io);
-    const eviction_budget: u32 = if (cli.kv_eviction)
+    const eviction_budget: u32 = if (cli.kv_eviction != .none)
         (if (cli.kv_budget > 0) cli.kv_budget else @as(u32, @intCast(cli.ctx_size * 4 / 5)))
     else
         0;
@@ -1493,6 +1497,30 @@ fn initAndRun(
     mdl.setPool(pool);
     mdl.fixBlockAllocator();
     mdl.setChunkSize(cli.prefill_batch_size);
+
+    // TriAttention: load calibration data when --kv-eviction tri
+    if (cli.kv_eviction == .tri) {
+        const cal_path = blk: {
+            // Auto-detect .cal file next to model: model.gguf → model.cal
+            if (std.mem.endsWith(u8, cli.model_path, ".gguf")) {
+                var buf: [1024]u8 = undefined;
+                const stem = cli.model_path[0 .. cli.model_path.len - 5];
+                const cal = std.fmt.bufPrint(&buf, "{s}.cal", .{stem}) catch break :blk @as(?[]const u8, null);
+                break :blk cal;
+            }
+            break :blk @as(?[]const u8, null);
+        };
+        if (cal_path) |cp| {
+            const calibrate = @import("calibrate.zig");
+            if (calibrate.readCalFile(allocator, g_io, cp)) |cals| {
+                mdl.setTriCalibration(cals);
+                if (!g_quiet) eprint("tri-attention: loaded {d} calibrations from {s}\n", .{ cals.len, cp });
+            } else |_| {
+                eprint("Warning: --kv-eviction tri but no .cal file found ({s})\n", .{cp});
+                eprint("  Generate with: agave calibrate {s}\n", .{cli.model_path});
+            }
+        }
+    }
 
     // Megakernel mode: validate support and enable
     if (cli.megakernel) {
