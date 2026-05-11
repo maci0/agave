@@ -30,6 +30,7 @@ const backend_mod = @import("backend.zig");
 const TensorData = backend_mod.TensorData;
 const CpuBackend = @import("cpu.zig").CpuBackend;
 const KvQuantType = backend_mod.KvQuantType;
+const PagedKvView = backend_mod.PagedKvView;
 const kv_quant = @import("../ops/kv_quant.zig");
 
 // ── Embedded HSACO ────────────────────────────────────────────────
@@ -143,6 +144,8 @@ pub const RocmBackend = struct {
     fn_sdpa: HipFunction = null,
     fn_sdpa_turbo: HipFunction = null,
     fn_sdpa_tree: HipFunction = null,
+    fn_sdpa_paged: HipFunction = null,
+    fn_gemv_gptq: HipFunction = null,
     fn_sigmoid_mul: HipFunction = null,
     fn_silu_mul: HipFunction = null,
     fn_deinterleave: HipFunction = null,
@@ -292,6 +295,8 @@ pub const RocmBackend = struct {
         self.fn_sdpa = try self.getFunction(hipModuleGetFunction, "sdpa_kernel");
         self.fn_sdpa_turbo = try self.getFunction(hipModuleGetFunction, "sdpa_turbo_kernel");
         self.fn_sdpa_tree = try self.getFunction(hipModuleGetFunction, "sdpa_tree_kernel");
+        self.fn_sdpa_paged = try self.getFunction(hipModuleGetFunction, "sdpa_paged_kernel");
+        self.fn_gemv_gptq = try self.getFunction(hipModuleGetFunction, "gemv_gptq_kernel");
         self.fn_sigmoid_mul = try self.getFunction(hipModuleGetFunction, "sigmoid_mul_kernel");
         self.fn_silu_mul = try self.getFunction(hipModuleGetFunction, "silu_mul_kernel");
         self.fn_deinterleave = try self.getFunction(hipModuleGetFunction, "deinterleave_kernel");
@@ -533,6 +538,28 @@ pub const RocmBackend = struct {
             else => @intCast(n),
         };
         self.launch(func, grid_size, block_size, reduction_smem, &params);
+    }
+
+    /// GPTQ INT4 GEMV: y[row] = dot(dequant(qweight[row,:]), x)
+    pub fn gemvGptq(self: *RocmBackend, x: [*]const f32, qweight: [*]const u32, scales: [*]const u16, qzeros: [*]const u32, y: [*]f32, n: usize, k: usize, group_size: u32) void {
+        const words_per_row = k / 8;
+        var d_x = self.getInputBuf(x, k * @sizeOf(f32));
+        var d_qw = self.getOrUpload(@ptrCast(qweight), n * words_per_row * @sizeOf(u32));
+        const n_groups = (k + group_size - 1) / group_size;
+        var d_sc = self.getOrUpload(@ptrCast(scales), n * n_groups * @sizeOf(u16));
+        const z_words = n_groups * ((n + 7) / 8);
+        var d_qz = self.getOrUpload(@ptrCast(qzeros), z_words * @sizeOf(u32));
+        var d_y = self.getOutputBuf(y, n * @sizeOf(f32));
+
+        var n_u32: u32 = @intCast(n);
+        var k_u32: u32 = @intCast(k);
+        var gs_u32: u32 = group_size;
+        var params = [_]?*anyopaque{
+            @ptrCast(&d_x),  @ptrCast(&d_qw), @ptrCast(&d_sc),
+            @ptrCast(&d_qz), @ptrCast(&d_y),  @ptrCast(&n_u32),
+            @ptrCast(&k_u32), @ptrCast(&gs_u32),
+        };
+        self.launch(self.fn_gemv_gptq.?, @intCast(n), block_size, reduction_smem, &params);
     }
 
     /// output[i] = input[i] * weight[i] * rsqrt(mean(x^2) + eps)
@@ -1168,6 +1195,66 @@ pub const RocmBackend = struct {
             head_max[h] = 0.0;
             head_sum[h] = 1.0;
         }
+    }
+
+    /// Paged SDPA: block-table-indexed attention for non-contiguous KV cache.
+    pub fn sdpaPaged(self: *RocmBackend, q: [*]const f32, kv_view: PagedKvView, k_new: [*]const f32, v_new: [*]const f32, output: [*]f32, nh: usize, nkv: usize, hd: usize, scale: f32, _: KvQuantType, _: KvQuantType) void {
+        const kvd = nkv * hd;
+        var sl: u32 = @intCast(kv_view.seq_len + 1);
+
+        self.flushActivations();
+
+        @memcpy(kv_view.keyPtrMut(kv_view.seq_len)[0..kvd], k_new[0..kvd]);
+        @memcpy(kv_view.valuePtrMut(kv_view.seq_len)[0..kvd], v_new[0..kvd]);
+
+        const n_logical_blocks = (sl + kv_view.block_size - 1) / kv_view.block_size;
+        var max_phys: u32 = 0;
+        for (kv_view.block_table[0..n_logical_blocks]) |phys_id| max_phys = @max(max_phys, phys_id);
+        const n_phys_blocks: usize = @as(usize, max_phys) + 1;
+        const block_stride = @as(usize, kv_view.block_size) * kvd;
+        const flat_elems = n_phys_blocks * block_stride;
+        const flat_bytes = flat_elems * @sizeOf(f32);
+
+        const flat_keys = std.heap.page_allocator.alloc(f32, flat_elems) catch
+            @panic("ROCm sdpaPaged: OOM for key staging");
+        defer std.heap.page_allocator.free(flat_keys);
+        const flat_vals = std.heap.page_allocator.alloc(f32, flat_elems) catch
+            @panic("ROCm sdpaPaged: OOM for value staging");
+        defer std.heap.page_allocator.free(flat_vals);
+
+        for (kv_view.block_table[0..n_logical_blocks]) |phys_id| {
+            const dst_off = @as(usize, phys_id) * block_stride;
+            const blk = kv_view.blocks[phys_id];
+            @memcpy(flat_keys[dst_off..][0..block_stride], blk.keys[0..block_stride]);
+            @memcpy(flat_vals[dst_off..][0..block_stride], blk.values[0..block_stride]);
+        }
+
+        var d_q = self.getInputBuf(q, nh * hd * @sizeOf(f32));
+        var d_k = self.uploadToDevice(@ptrCast(flat_keys.ptr), flat_bytes);
+        var d_v = self.uploadToDevice(@ptrCast(flat_vals.ptr), flat_bytes);
+        var d_out = self.getOutputBuf(output, nh * hd * @sizeOf(f32));
+        var d_bt = self.uploadToDevice(@ptrCast(kv_view.block_table.ptr), n_logical_blocks * @sizeOf(u32));
+
+        var nh_u: u32 = @intCast(nh);
+        var nkv_u: u32 = @intCast(nkv);
+        var hd_u: u32 = @intCast(hd);
+        var kvd_u: u32 = @intCast(kvd);
+        var scale_f: f32 = scale;
+        var paged_bs_u: u32 = kv_view.block_size;
+
+        var params = [_]?*anyopaque{
+            @ptrCast(&d_q),       @ptrCast(&d_k),     @ptrCast(&d_v),
+            @ptrCast(&d_out),     @ptrCast(&d_bt),    @ptrCast(&nh_u),
+            @ptrCast(&nkv_u),     @ptrCast(&hd_u),    @ptrCast(&sl),
+            @ptrCast(&kvd_u),     @ptrCast(&scale_f), @ptrCast(&paged_bs_u),
+        };
+
+        const smem: u32 = (sl + 1) * @sizeOf(f32);
+        self.launch(self.fn_sdpa_paged.?, @intCast(nh), block_size, smem, &params);
+
+        _ = self.hipFree(@ptrFromInt(d_k));
+        _ = self.hipFree(@ptrFromInt(d_v));
+        _ = self.hipFree(@ptrFromInt(d_bt));
     }
 
     // ── Batched prefill ops (loop-of-single fallback) ──────────

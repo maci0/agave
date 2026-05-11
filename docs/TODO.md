@@ -24,7 +24,7 @@ All **correctness-critical** kernels for supported model×quant combinations are
 | CUDA | Complete | Native paged SDPA, GPTQ GEMV, fused FFN Q4_K/Q5_K/Q6_K |
 | Vulkan | Complete | Native paged SDPA |
 | WebGPU | Complete | Native paged SDPA, lazy readback cache |
-| ROCm | Complete | Paged SDPA via CPU fallback |
+| ROCm | Complete | Native paged SDPA, GPTQ GEMV |
 
 ### Known CPU fallbacks on GPU backends
 

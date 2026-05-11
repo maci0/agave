@@ -254,6 +254,17 @@ pub const CudaBackend = struct {
     /// KV cache: device mirrors of per-layer KV buffers with incremental upload.
     kv_dev_cache: std.AutoHashMap(usize, KvDevCache) = undefined,
 
+    /// Registered UMA host memory regions (mmap'd weight files).
+    /// Pointers within registered regions can use cuMemHostGetDevicePointer.
+    uma_regions: [max_uma_regions]UmaRegion = @splat(.{}),
+    uma_region_count: u32 = 0,
+
+    const max_uma_regions: usize = 8;
+    const UmaRegion = struct {
+        base: usize = 0,
+        size: usize = 0,
+    };
+
     /// Number of PTX kernels loaded at init.
     pub const n_kernels: u32 = 41;
 
@@ -520,10 +531,43 @@ pub const CudaBackend = struct {
         _ = self.cuMemcpyDtoH(ptr, dptr, size);
     }
 
+    // ── UMA host region registration ────────────────────────────
+
+    /// Register a contiguous host memory region (e.g. mmap'd GGUF file) for
+    /// GPU zero-copy access on UMA platforms. After registration, any pointer
+    /// within the region can be mapped to a device pointer via
+    /// cuMemHostGetDevicePointer without per-tensor registration.
+    /// No-op on discrete GPUs or if cuMemHostRegister is unavailable.
+    pub fn registerHostRegion(self: *CudaBackend, base: [*]const u8, size: usize) void {
+        if (!self.is_uma) return;
+        const reg = self.cuMemHostRegister orelse return;
+        if (self.uma_region_count >= max_uma_regions) return;
+
+        const addr = @intFromPtr(base);
+        const page = std.heap.page_size_min;
+        const aligned_base = addr & ~@as(usize, page - 1);
+        const aligned_size = ((addr + size + page - 1) & ~@as(usize, page - 1)) - aligned_base;
+
+        if (reg(@ptrFromInt(aligned_base), aligned_size, CU_MEMHOSTREGISTER_DEVICEMAP) == CUDA_SUCCESS) {
+            self.uma_regions[self.uma_region_count] = .{ .base = aligned_base, .size = aligned_size };
+            self.uma_region_count += 1;
+        } else {
+            std.log.warn("UMA cuMemHostRegister failed for region {x}+{d}", .{ aligned_base, aligned_size });
+        }
+    }
+
+    /// Check if addr falls within a registered UMA region.
+    fn isInUmaRegion(self: *const CudaBackend, addr: usize) bool {
+        for (self.uma_regions[0..self.uma_region_count]) |r| {
+            if (addr >= r.base and addr < r.base + r.size) return true;
+        }
+        return false;
+    }
+
     // ── Weight cache (permanent, read-only) ─────────────────────
 
     /// Get device pointer for a weight buffer. Uploads once, reused forever.
-    /// On UMA: registers host memory for GPU access (zero-copy, no allocation).
+    /// On UMA: uses cuMemHostGetDevicePointer for zero-copy if region registered.
     /// On discrete GPU: allocates device memory and uploads.
     fn getOrUpload(self: *CudaBackend, ptr: [*]const u8, size: usize) CUdeviceptr {
         const addr = @intFromPtr(ptr);
@@ -538,23 +582,14 @@ pub const CudaBackend = struct {
             _ = self.buf_cache.remove(addr);
         }
 
-        if (self.is_uma) {
-            if (self.cuMemHostRegister) |reg| {
-                if (self.cuMemHostGetDevicePointer) |getDevPtr| {
-                    // Pin host mmap'd memory for GPU access — zero copy.
-                    // cuMemHostRegister requires page-aligned pointers (mmap'd weights are page-aligned).
-                    std.debug.assert(std.mem.isAligned(@intFromPtr(ptr), std.heap.page_size_min));
-                    if (reg(@ptrCast(ptr), size, CU_MEMHOSTREGISTER_DEVICEMAP) == CUDA_SUCCESS) {
-                        var dptr: CUdeviceptr = 0;
-                        if (getDevPtr(&dptr, @ptrCast(ptr), 0) == CUDA_SUCCESS) {
-                            self.buf_cache.put(addr, .{ .dptr = dptr, .size = size, .is_registered = true }) catch |err| {
-                                std.log.warn("weight cache put failed (UMA register, size={d}): {}", .{ size, err });
-                            };
-                            return dptr;
-                        }
-                    }
-                    // Registration failed — fall through to upload path
-                    std.log.warn("UMA cuMemHostRegister failed for {x}, falling back to upload", .{addr});
+        if (self.is_uma and self.isInUmaRegion(addr)) {
+            if (self.cuMemHostGetDevicePointer) |getDevPtr| {
+                var dptr: CUdeviceptr = 0;
+                if (getDevPtr(&dptr, @ptrCast(ptr), 0) == CUDA_SUCCESS) {
+                    self.buf_cache.put(addr, .{ .dptr = dptr, .size = size, .is_registered = true }) catch |err| {
+                        std.log.warn("weight cache put failed (UMA zero-copy, size={d}): {}", .{ size, err });
+                    };
+                    return dptr;
                 }
             }
         }

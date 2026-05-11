@@ -354,6 +354,14 @@ pub const NullBackend = struct {
         unreachable;
     }
 
+    pub fn sdpaPaged(_: *NullBackend, _: [*]const f32, _: PagedKvView, _: [*]const f32, _: [*]const f32, _: [*]f32, _: usize, _: usize, _: usize, _: f32, _: KvQuantType, _: KvQuantType) void {
+        unreachable;
+    }
+
+    pub fn gemvGptq(_: *NullBackend, _: [*]const f32, _: [*]const u32, _: [*]const u16, _: [*]const u32, _: [*]f32, _: usize, _: usize, _: u32) void {
+        unreachable;
+    }
+
     pub fn gemvNvfp4St(_: *NullBackend, _: [*]const f32, _: [*]const u8, _: [*]const u8, _: [*]f32, _: usize, _: usize) void {
         unreachable;
     }
@@ -678,15 +686,7 @@ pub const Backend = union(enum) {
     /// Backends without native paged kernels fall back to CPU.
     pub inline fn sdpaPaged(self: Backend, q: [*]const f32, kv_view: PagedKvView, k_new: [*]const f32, v_new: [*]const f32, output: [*]f32, nh: usize, nkv: usize, hd: usize, scale: f32, kv_type_k: KvQuantType, kv_type_v: KvQuantType) void {
         switch (self) {
-            inline else => |be| {
-                if (comptime @hasDecl(@TypeOf(be.*), "sdpaPaged")) {
-                    be.sdpaPaged(q, kv_view, k_new, v_new, output, nh, nkv, hd, scale, kv_type_k, kv_type_v);
-                } else {
-                    // CPU fallback for backends without native paged SDPA
-                    const cpu_sdpa = @import("kernels/cpu/sdpa.zig");
-                    cpu_sdpa.sdpaPagedHeads(q, kv_view, k_new, v_new, output, nh, nkv, hd, scale);
-                }
-            },
+            inline else => |be| be.sdpaPaged(q, kv_view, k_new, v_new, output, nh, nkv, hd, scale, kv_type_k, kv_type_v),
         }
     }
 
@@ -786,14 +786,7 @@ pub const Backend = union(enum) {
     /// Weights packed 8 nibbles per u32, FP16 per-group scales, INT4 packed zero-points.
     pub inline fn gemvGptq(self: Backend, x: [*]const f32, qweight: [*]const u32, scales: [*]const u16, qzeros: [*]const u32, y: [*]f32, n: usize, k: usize, group_size: u32) void {
         switch (self) {
-            inline else => |be| {
-                if (comptime @hasDecl(@TypeOf(be.*), "gemvGptq")) {
-                    be.gemvGptq(x, qweight, scales, qzeros, y, n, k, group_size);
-                } else {
-                    const gptq_ops = @import("../ops/gptq.zig");
-                    gptq_ops.gptqGemv(x, qweight, scales, qzeros, y, n, k, group_size);
-                }
-            },
+            inline else => |be| be.gemvGptq(x, qweight, scales, qzeros, y, n, k, group_size),
         }
     }
 
@@ -819,6 +812,19 @@ pub const Backend = union(enum) {
     pub inline fn backendInfo(self: Backend) BackendInfo {
         switch (self) {
             inline else => |be| return be.backendInfo(),
+        }
+    }
+
+    /// Register a host memory region for UMA zero-copy GPU access.
+    /// Call once per mmap'd file (GGUF, SafeTensors) after loading.
+    /// No-op on backends that don't support UMA host registration.
+    pub inline fn registerHostRegion(self: Backend, base: [*]const u8, size: usize) void {
+        switch (self) {
+            inline else => |be| {
+                if (comptime @hasDecl(@TypeOf(be.*), "registerHostRegion")) {
+                    be.registerHostRegion(base, size);
+                }
+            },
         }
     }
 };

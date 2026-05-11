@@ -854,7 +854,7 @@ fn printUsage() void {
         \\      --kv-ram-budget <GB>  RAM tier budget, integer GB (requires --kv-tiers) [default: 50% of free RAM]
         \\      --kv-ssd-path <PATH>  SSD tier file path (requires --kv-tiers with ssd)
         \\      --kv-ssd-budget <GB>  SSD tier budget, integer GB (requires --kv-tiers with ssd) [default: 10]
-        \\      --kv-eviction <POL>   KV eviction policy: none, norm [default: none]
+        \\      --kv-eviction <POL>   KV eviction policy: none, norm, tri [default: none]
         \\      --kv-budget <N>       Max KV positions to keep during eviction [default: 80% of ctx-size]
         \\
         \\SERVER:
@@ -1042,6 +1042,16 @@ pub fn main(init: std.process.Init) !void {
     defer if (bs.pool) |*p| p.deinit();
     const be = bs.be;
     const be_name = bs.name;
+
+    // Register mmap'd weight regions for UMA zero-copy GPU access
+    if (gguf_file) |g| {
+        if (g.mapped_data.len > 0) be.registerHostRegion(g.mapped_data.ptr, g.mapped_data.len);
+    }
+    if (st_dir) |s| {
+        for (s.shard_data) |shard| {
+            if (shard.data.len > 0) be.registerHostRegion(shard.data.ptr, shard.data.len);
+        }
+    }
 
     // ── Display setup ──────────────────────────────────────────────
     const output_mode: display_mod.OutputMode = if (cli.json)
