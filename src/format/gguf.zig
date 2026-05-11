@@ -248,6 +248,9 @@ pub const GGUFFile = struct {
     mapped_data: []align(std.heap.page_size_min) u8 = &.{},
     raw_data: []const u8 = &.{},
     is_buffer: bool = false,
+    /// File descriptor for GPUDirect Storage (cuFile) direct NVMe→VRAM transfer.
+    /// -1 if not available (buffer mode or already closed).
+    file_fd: i32 = -1,
     file_size: usize,
     version: u32 = 0,
     tensor_count: u64 = 0,
@@ -264,7 +267,7 @@ pub const GGUFFile = struct {
     /// Opens and memory-maps a GGUF file, parsing headers, metadata, and tensor info.
     pub fn open(allocator: Allocator, path: []const u8) !GGUFFile {
         const fd = try posix.openat(posix.AT.FDCWD, path, .{}, 0);
-        defer {
+        errdefer {
             if (comptime @import("builtin").os.tag == .linux) {
                 _ = posix.system.close(fd);
             } else {
@@ -292,6 +295,7 @@ pub const GGUFFile = struct {
 
         var self = GGUFFile{
             .mapped_data = mapped,
+            .file_fd = fd,
             .file_size = file_size,
             .metadata = std.StringHashMap(MetaValue).init(allocator),
             .tensors = std.StringHashMap(TensorInfo).init(allocator),
@@ -434,6 +438,13 @@ pub const GGUFFile = struct {
         self.owned_u32_arrays.deinit(self.allocator);
         if (comptime @import("builtin").os.tag != .freestanding) {
             if (!self.is_buffer) posix.munmap(self.mapped_data);
+            if (self.file_fd >= 0) {
+                if (comptime @import("builtin").os.tag == .linux) {
+                    _ = posix.system.close(self.file_fd);
+                } else {
+                    _ = std.c.close(self.file_fd);
+                }
+            }
         }
     }
 

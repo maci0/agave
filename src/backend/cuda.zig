@@ -156,6 +156,10 @@ pub const CudaBackend = struct {
     cuMemAllocManaged: ?FnMemAllocManaged = null,
     cuLaunchKernel: FnLaunchKernel = undefined,
 
+    // GPUDirect Storage (cuFile) — optional, loaded via dlopen
+    cufile_lib: ?std.DynLib = null,
+    has_gds: bool = false,
+
     // Kernel function handles
     fn_silu: CUfunction = null,
     fn_gelu: CUfunction = null,
@@ -448,6 +452,15 @@ pub const CudaBackend = struct {
         self.fn_mega_gemma_q4k = try self.getFunction("megakernel_gemma_q4k_kernel");
         self.fn_mega_gemma_q8 = try self.getFunction("megakernel_gemma_q8_kernel");
 
+        // Detect GPUDirect Storage (cuFile) for NVMe→VRAM direct transfer
+        if (!self.is_uma) {
+            if (std.DynLib.open("libcufile.so")) |lib| {
+                self.cufile_lib = lib;
+                self.has_gds = true;
+                std.log.info("GPUDirect Storage available (libcufile.so)", .{});
+            } else |_| {}
+        }
+
         return self;
     }
 
@@ -479,6 +492,7 @@ pub const CudaBackend = struct {
             _ = self.cuCtxSynchronize();
             _ = self.cuCtxDestroy(self.context);
         }
+        if (self.cufile_lib) |*lib| lib.close();
         self.lib.close();
     }
 
