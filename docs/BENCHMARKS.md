@@ -133,6 +133,24 @@ Eviction is complementary to TurboQuant — one reduces entry count, the other r
 
 Vision encoding uses GPU GEMM (BF16 Metal) + parallel CPU attention (thread pool across heads).
 
+## CUDA Benchmarks (NVIDIA GB10 Blackwell)
+
+**Hardware**: NVIDIA GB10 (Blackwell sm_121), 128 GB unified memory, aarch64
+**OS**: Ubuntu 24.04, CUDA 13.0, Driver 580.142
+
+| Model | Quant | Size | CUDA tok/s | CPU tok/s | Speedup |
+|-------|-------|------|:----------:|:---------:|:-------:|
+| Qwen3 0.6B | Q8_0 | 610 MB | 97.1 | 84.0 | 1.16x |
+| Qwen3 1.7B | Q8_0 | 1.7 GB | 48.7 | 26.8 | **1.82x** |
+| Qwen3 4B | Q8_0 | 4.0 GB | 23.6 | 13.4 | **1.76x** |
+| Qwen3 8B | Q8_0 | 8.1 GB | 12.1 | 8.1 | **1.49x** |
+
+Notes:
+- Q4_K/Q6_K currently fall back to CPU (Zig LLVM nvptx aliasee bug prevents PTX recompilation)
+- GB10 uses UMA (shared CPU/GPU memory) — CPU is unusually competitive vs discrete GPUs
+- 41 CUDA PTX kernels loaded via sm_90 forward compatibility to sm_121
+- Server mode (--serve) crashes on Linux aarch64 — CLI works fine
+
 ## Known Issues
 
 1. **Metal large-context hang**: With default context sizes (2048–4096) and many layers, the PagedKV block pre-allocation is slow. Workaround: use `--ctx-size 128` for benchmarks. Does not affect CPU backend.
