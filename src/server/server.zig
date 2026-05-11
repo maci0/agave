@@ -4035,7 +4035,7 @@ pub fn run(config: ServerConfig) !void {
         const net_stream = tcp.accept(io) catch |err| {
             if (g_server.shutdown_requested.load(.acquire)) break;
             // Timeout is expected — allows periodic shutdown check
-            if (err == error.WouldBlock) continue;
+            if (err == error.WouldBlock or err == error.Unexpected) continue;
             std.log.err("Accept failed: {}", .{err});
             continue;
         };
