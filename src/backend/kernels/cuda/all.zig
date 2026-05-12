@@ -60,7 +60,8 @@ comptime {
     // Fused FFN
     _ = @import("fused_ffn_q8_0.zig");
     _ = @import("fused_ffn_q4_k.zig");
-    // fused_ffn_q5_k and q6_k are stubs (nvptx64 LLVM aliasee issue)
+    _ = @import("fused_ffn_q5_k.zig");
+    _ = @import("fused_ffn_q6_k.zig");
 
     // Batched GEMV
     _ = @import("gemv_q4_0_batch.zig");
