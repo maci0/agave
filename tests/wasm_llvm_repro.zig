@@ -38,6 +38,20 @@
 //! Related: LLVM PR #81170 (nvptx64 aliasee bug is the same class of
 //! Zig codegen → LLVM IR incompatibility)
 //!
+//! Workarounds tried and failed:
+//!   - wasm64-freestanding: same error
+//!   - wasm32 MVP (no SIMD): same error (LLVM scalarizes @Vector, still fails)
+//!   - -ODebug, -OReleaseSafe, -OReleaseFast: all fail
+//!   - Zig self-hosted backend (-fno-llvm): crashes (BUS/SEGV) on complex code
+//!   - Disabling specific models: ALL models trigger it
+//!   - Standalone SIMD code + vtable: compiles fine (not enough code to trigger)
+//!
+//! Related upstream bugs:
+//!   - Rust #110707: exact same "Invalid cast" in LTO with portable_simd
+//!     (fixed by LLVM upgrade, not a code workaround)
+//!   - Zig #23414: "Invalid cast" with extern unions (different trigger)
+//!   - LLVM #87329: castIsValid assertion in SLP vectorizer
+//!
 //! Status: Blocked. Needs Zig compiler fix (likely LLVM 22 / Zig 0.17).
 //!
 //! Minimal trigger (in the agave codebase):
