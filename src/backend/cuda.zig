@@ -101,6 +101,7 @@ const FnDeviceGetAttribute = *const fn (*c_int, c_int, CUdevice) callconv(.c) CU
 const FnCtxCreate = *const fn (*CUcontext, c_uint, CUdevice) callconv(.c) CUresult;
 const FnCtxDestroy = *const fn (CUcontext) callconv(.c) CUresult;
 const FnCtxSync = *const fn () callconv(.c) CUresult;
+const FnCtxSetCurrent = *const fn (CUcontext) callconv(.c) CUresult;
 const FnModuleLoadData = *const fn (*CUmodule, [*]const u8) callconv(.c) CUresult;
 const FnModuleUnload = *const fn (CUmodule) callconv(.c) CUresult;
 const FnModuleGetFunction = *const fn (*CUfunction, CUmodule, [*:0]const u8) callconv(.c) CUresult;
@@ -143,6 +144,7 @@ pub const CudaBackend = struct {
     // Function pointers (loaded from libcuda)
     cuCtxDestroy: FnCtxDestroy = undefined,
     cuCtxSynchronize: FnCtxSync = undefined,
+    cuCtxSetCurrent: ?FnCtxSetCurrent = null,
     cuModuleUnload: FnModuleUnload = undefined,
     cuModuleGetFunction: FnModuleGetFunction = undefined,
     cuMemAlloc: FnMemAlloc = undefined,
@@ -330,6 +332,7 @@ pub const CudaBackend = struct {
         const cuCtxCreate = self.lookup(FnCtxCreate, "cuCtxCreate_v2") orelse return error.CudaNotAvailable;
         self.cuCtxDestroy = self.lookup(FnCtxDestroy, "cuCtxDestroy_v2") orelse return error.CudaNotAvailable;
         self.cuCtxSynchronize = self.lookup(FnCtxSync, "cuCtxSynchronize") orelse return error.CudaNotAvailable;
+        self.cuCtxSetCurrent = self.lookup(FnCtxSetCurrent, "cuCtxSetCurrent");
         const cuModuleLoadData = self.lookup(FnModuleLoadData, "cuModuleLoadData") orelse return error.CudaNotAvailable;
         self.cuModuleUnload = self.lookup(FnModuleUnload, "cuModuleUnload") orelse return error.CudaNotAvailable;
         self.cuModuleGetFunction = self.lookup(FnModuleGetFunction, "cuModuleGetFunction") orelse return error.CudaNotAvailable;
@@ -529,6 +532,15 @@ pub const CudaBackend = struct {
 
     fn downloadFromDevice(self: *CudaBackend, dptr: CUdeviceptr, ptr: *anyopaque, size: usize) void {
         _ = self.cuMemcpyDtoH(ptr, dptr, size);
+    }
+
+    /// Make CUDA context current on the calling thread.
+    /// Required when model.forward() runs on a different thread than init
+    /// (e.g. scheduler thread in server mode).
+    pub fn setThreadContext(self: *CudaBackend) void {
+        if (self.cuCtxSetCurrent) |setCurrent| {
+            _ = setCurrent(self.context);
+        }
     }
 
     // ── UMA host region registration ────────────────────────────

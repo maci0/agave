@@ -815,6 +815,17 @@ pub const Backend = union(enum) {
         }
     }
 
+    /// Make GPU context current on calling thread (for multi-threaded use).
+    pub inline fn setThreadContext(self: Backend) void {
+        switch (self) {
+            inline else => |be| {
+                if (comptime @hasDecl(@TypeOf(be.*), "setThreadContext")) {
+                    be.setThreadContext();
+                }
+            },
+        }
+    }
+
     /// Register a host memory region for UMA zero-copy GPU access.
     /// Call once per mmap'd file (GGUF, SafeTensors) after loading.
     /// No-op on backends that don't support UMA host registration.

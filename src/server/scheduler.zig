@@ -428,6 +428,7 @@ pub fn runSchedulerLoop(
     eog_ids: []const u32,
     shutdown: *std.atomic.Value(bool),
 ) void {
+    model.setThreadContext();
     while (!shutdown.load(.acquire)) {
         manager.step(model, eog_ids) catch |err| {
             std.log.err("Scheduler step failed: {} (waiting={d}, running={d})", .{ err, manager.waiting.items.len, manager.running.items.len });

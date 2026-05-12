@@ -71,6 +71,7 @@ pub const Model = struct {
         set_kv_seq_len: *const fn (self: *anyopaque, len: usize) void,
         set_layer_skip: *const fn (self: *anyopaque, start: u32, end: u32) void,
         set_image_embeddings: *const fn (self: *anyopaque, embeddings: ?[]const f32, n_tokens: u32, pad_token_id: u32) void,
+        set_thread_context: *const fn (self: *anyopaque) void,
     };
 
     /// Construct a Model interface from any concrete model type at comptime.
@@ -191,6 +192,11 @@ pub const Model = struct {
                     }
                 }
             }.call),
+            .set_thread_context = @ptrCast(&struct {
+                fn call(self: *T) void {
+                    self.be.setThreadContext();
+                }
+            }.call),
         };
     }
 
@@ -233,6 +239,12 @@ pub const Model = struct {
     /// Reset the KV cache position to zero, allowing a fresh conversation.
     pub fn resetCache(self: Model) void {
         self.vtable.reset_cache(self.ptr);
+    }
+
+    /// Make GPU context current on calling thread. Required when forward()
+    /// runs on a different thread than the one that initialized the backend.
+    pub fn setThreadContext(self: Model) void {
+        self.vtable.set_thread_context(self.ptr);
     }
 
     /// Signal the model to cancel the current forward pass.
