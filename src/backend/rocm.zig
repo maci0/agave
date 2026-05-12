@@ -805,6 +805,7 @@ pub const RocmBackend = struct {
     pub fn siluMul(self: *RocmBackend, a: [*]const f32, b: [*]const f32, out: [*]f32, n: usize) void {
         if (self.fn_silu_mul == null) {
             self.silu(a, out, n);
+            _ = self.hipDeviceSynchronize();
             self.mul(out, b, out, n);
             return;
         }
