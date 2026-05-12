@@ -191,8 +191,9 @@ pub const Format = struct {
     /// Checks for SafeTensors NVFP4 scale tensors first, then probes the dtype
     /// of common layer-0/layer-1 weight tensors.
     pub fn getQuantName(self: Format) []const u8 {
-        // SafeTensors NVFP4: scale tensors present alongside U32 weights
-        if (self.getTensor("backbone.layers.0.mixer.in_proj.scales") != null) return "NVFP4";
+        // SafeTensors NVFP4: scale tensors present alongside U8/U32 weights
+        if (self.getTensor("backbone.layers.0.mixer.in_proj.scales") != null or
+            self.getTensor("backbone.layers.0.mixer.in_proj.weight_scale") != null) return "NVFP4";
 
         // MoE expert weights first — they dominate model size and represent
         // the primary quantization for MoE architectures (GPT-OSS, Nemotron-Nano, GLM-4).

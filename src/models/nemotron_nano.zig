@@ -530,8 +530,10 @@ pub const NemotronNanoModel = struct {
         const ip_w = self.stLayerTensor(li, "mixer.in_proj.weight") orelse return error.MissingTensor;
         if (ip_w.dtype == .mlx_q) {
             try self.doGemv(self.hidden2.ptr, ip_w, self.ssm_proj_buf.ptr, proj_size, e, li, "mixer.in_proj");
-        } else if (self.stLayerTensor(li, "mixer.in_proj.scales")) |ip_s| {
+        } else if (self.findScaleTensor(li, "mixer.in_proj")) |ip_s| {
             self.be.gemvNvfp4St(self.hidden2.ptr, ip_w.data_ptr, ip_s.data_ptr, self.ssm_proj_buf.ptr, proj_size, e);
+            self.be.sync();
+            self.applyGlobalScale(self.ssm_proj_buf.ptr, proj_size, li, "mixer.in_proj");
         } else {
             self.be.gemv(self.hidden2.ptr, .{ .data = ip_w.data_ptr, .dtype = ip_w.dtype }, self.ssm_proj_buf.ptr, proj_size, e);
         }
@@ -580,8 +582,10 @@ pub const NemotronNanoModel = struct {
         const op_w = self.stLayerTensor(li, "mixer.out_proj.weight") orelse return error.MissingTensor;
         if (op_w.dtype == .mlx_q) {
             try self.doGemv(y_ptr, op_w, self.hidden2.ptr, e, d_inner, li, "mixer.out_proj");
-        } else if (self.stLayerTensor(li, "mixer.out_proj.scales")) |op_s| {
+        } else if (self.findScaleTensor(li, "mixer.out_proj")) |op_s| {
             self.be.gemvNvfp4St(y_ptr, op_w.data_ptr, op_s.data_ptr, self.hidden2.ptr, e, d_inner);
+            self.be.sync();
+            self.applyGlobalScale(self.hidden2.ptr, e, li, "mixer.out_proj");
         } else {
             self.be.gemv(y_ptr, .{ .data = op_w.data_ptr, .dtype = op_w.dtype }, self.hidden2.ptr, e, d_inner);
         }
@@ -650,38 +654,46 @@ pub const NemotronNanoModel = struct {
 
         // 4. Routed expert computation
         @memset(self.moe_out, 0);
-        const fc1_w = self.stLayerTensor(li, "mixer.switch_mlp.fc1.weight") orelse return error.MissingTensor;
-        const fc2_w = self.stLayerTensor(li, "mixer.switch_mlp.fc2.weight") orelse return error.MissingTensor;
+        const stacked_fc1 = self.stLayerTensor(li, "mixer.switch_mlp.fc1.weight");
+        const stacked_fc2 = self.stLayerTensor(li, "mixer.switch_mlp.fc2.weight");
 
         for (0..k_exp) |t| {
             const exp_idx = top_experts[t];
             const w = top_scores[t];
 
             // fc1: up projection [ff, e] → expert_buf [ff]
-            try self.doExpertGemv(li, fc1_w, "mixer.switch_mlp.fc1", self.hidden2.ptr, self.expert_buf.ptr, ff, e, exp_idx);
-            self.be.sync(); // CPU reads expert_buf next
+            if (stacked_fc1) |fc1_w| {
+                try self.doExpertGemv(li, fc1_w, "mixer.switch_mlp.fc1", self.hidden2.ptr, self.expert_buf.ptr, ff, e, exp_idx);
+            } else {
+                try self.doPerExpertGemv(li, exp_idx, "up_proj", self.hidden2.ptr, self.expert_buf.ptr, ff, e);
+            }
+            self.be.sync();
 
-            // relu²
             math_ops.applyReluSquared(self.expert_buf[0..ff]);
 
             // fc2: down projection [e, ff] → attn_out [e]
-            try self.doExpertGemv(li, fc2_w, "mixer.switch_mlp.fc2", self.expert_buf.ptr, self.attn_out.ptr, e, ff, exp_idx);
-            self.be.sync(); // CPU reads attn_out next
+            if (stacked_fc2) |fc2_w| {
+                try self.doExpertGemv(li, fc2_w, "mixer.switch_mlp.fc2", self.expert_buf.ptr, self.attn_out.ptr, e, ff, exp_idx);
+            } else {
+                try self.doPerExpertGemv(li, exp_idx, "down_proj", self.expert_buf.ptr, self.attn_out.ptr, e, ff);
+            }
+            self.be.sync();
 
-            // Accumulate weighted output (SIMD via backend addScaled).
             self.be.addScaled(self.attn_out.ptr, self.moe_out.ptr, w, e);
         }
 
         // 5. Shared expert
-        const sup_w = self.stLayerTensor(li, "mixer.shared_experts.up_proj.weight") orelse return error.MissingTensor;
-        try self.doSharedExpertGemv(li, sup_w, "mixer.shared_experts.up_proj", self.hidden2.ptr, self.expert_buf.ptr, shared_ff, e);
-        self.be.sync(); // CPU reads expert_buf next
+        if (self.stLayerTensor(li, "mixer.shared_experts.up_proj.weight")) |sup_w| {
+            try self.doSharedExpertGemv(li, sup_w, "mixer.shared_experts.up_proj", self.hidden2.ptr, self.expert_buf.ptr, shared_ff, e);
+        } else return error.MissingTensor;
+        self.be.sync();
 
         math_ops.applyReluSquared(self.expert_buf[0..shared_ff]);
 
-        const sdp_w = self.stLayerTensor(li, "mixer.shared_experts.down_proj.weight") orelse return error.MissingTensor;
-        try self.doSharedExpertGemv(li, sdp_w, "mixer.shared_experts.down_proj", self.expert_buf.ptr, self.attn_out.ptr, e, shared_ff);
-        self.be.sync(); // CPU reads attn_out next
+        if (self.stLayerTensor(li, "mixer.shared_experts.down_proj.weight")) |sdp_w| {
+            try self.doSharedExpertGemv(li, sdp_w, "mixer.shared_experts.down_proj", self.expert_buf.ptr, self.attn_out.ptr, e, shared_ff);
+        } else return error.MissingTensor;
+        self.be.sync();
 
         self.be.addScaled(self.attn_out.ptr, self.moe_out.ptr, 1.0, e);
 
@@ -825,23 +837,47 @@ pub const NemotronNanoModel = struct {
         return self.fmt.getTensor(name);
     }
 
+    /// Look up a SafeTensors tensor by full runtime name.
+    fn stTensor(self: *NemotronNanoModel, name: []const u8) ?TensorInfo {
+        return self.fmt.getTensor(name);
+    }
+
+    /// Look up scale companion for a tensor: tries `.weight_scale` then `.scales`.
+    fn findScaleTensor(self: *NemotronNanoModel, li: u32, comptime prefix: []const u8) ?TensorInfo {
+        return self.stLayerTensor(li, prefix ++ ".scales") orelse
+            self.stLayerTensor(li, prefix ++ ".weight_scale");
+    }
+
+    /// Apply NVFP4 global scale (weight_scale_2 or global_scale) after GEMV.
+    /// NVFP4 GEMV output = sum(e2m1 * fp8_scale * x). Must divide by global_scale.
+    fn applyGlobalScale(self: *NemotronNanoModel, y: [*]f32, n: usize, li: u32, comptime prefix: []const u8) void {
+        const gs_t = self.stLayerTensor(li, prefix ++ ".global_scale") orelse
+            self.stLayerTensor(li, prefix ++ ".weight_scale_2") orelse return;
+        const gs = @as(*const f32, @ptrCast(@alignCast(gs_t.data_ptr))).*;
+        if (gs != 0 and gs != 1.0) {
+            for (0..n) |i| y[i] *= gs;
+        }
+    }
+
     /// GEMV dispatch: MLX quantized, NVFP4, or standard be.gemv for BF16/f32.
     /// U32 dtype (`.mlx_q`) is shared by both MLX and NVFP4 packed formats.
     /// MLX has `.scales` + `.biases` companions; NVFP4 has `.scales` only.
     fn doGemv(self: *NemotronNanoModel, x: [*]const f32, w: TensorInfo, y: [*]f32, n: usize, k: usize, li: u32, comptime prefix: []const u8) !void {
         if (w.dtype == .mlx_q) {
             if (self.stLayerTensor(li, prefix ++ ".biases")) |b_t| {
-                // MLX path: U32 packed weights + BF16 scales + BF16 biases
                 const s_t = self.stLayerTensor(li, prefix ++ ".scales") orelse return error.MissingTensor;
                 self.be.gemvMlxQ(x, w.data_ptr, s_t.data_ptr, b_t.data_ptr, y, n, k, self.mlx_bits);
-            } else if (self.stLayerTensor(li, prefix ++ ".scales")) |s_t| {
-                // NVFP4 path: U32 packed weights + FP8 scales, no biases
+            } else if (self.findScaleTensor(li, prefix)) |s_t| {
                 self.be.gemvNvfp4St(x, w.data_ptr, s_t.data_ptr, y, n, k);
+                self.be.sync();
+                self.applyGlobalScale(y, n, li, prefix);
             } else {
                 self.be.gemv(x, .{ .data = w.data_ptr, .dtype = w.dtype }, y, n, k);
             }
-        } else if (self.stLayerTensor(li, prefix ++ ".scales")) |s_t| {
+        } else if (self.findScaleTensor(li, prefix)) |s_t| {
             self.be.gemvNvfp4St(x, w.data_ptr, s_t.data_ptr, y, n, k);
+            self.be.sync();
+            self.applyGlobalScale(y, n, li, prefix);
         } else {
             self.be.gemv(x, .{ .data = w.data_ptr, .dtype = w.dtype }, y, n, k);
         }
@@ -875,11 +911,45 @@ pub const NemotronNanoModel = struct {
             const s_byte_offset = exp_idx * n * gpr * @sizeOf(u16);
             self.be.gemvMlxQ(x, w.data_ptr + w_byte_offset, s_t.data_ptr + s_byte_offset, b_t.data_ptr + s_byte_offset, y, n, k, self.mlx_bits);
         } else {
-            // NVFP4 path: U32 or non-U32 packed weights + FP8/U8 scales
-            const s_t = self.stLayerTensor(li, prefix ++ ".scales") orelse return error.MissingTensor;
+            const s_t = self.findScaleTensor(li, prefix) orelse return error.MissingTensor;
             const w_stride = n * (k / nvfp4_values_per_byte);
             const s_stride = n * (k / nvfp4_scale_group_size);
             self.be.gemvNvfp4St(x, w.data_ptr + exp_idx * w_stride, s_t.data_ptr + exp_idx * s_stride, y, n, k);
+        }
+    }
+
+    /// GEMV dispatch for per-expert tensors (NVIDIA official NVFP4 format).
+    /// Looks up individual expert tensor by index instead of using stacked stride.
+    fn doPerExpertGemv(
+        self: *NemotronNanoModel,
+        li: u32,
+        exp_idx: usize,
+        comptime proj: []const u8,
+        x: [*]const f32,
+        y: [*]f32,
+        n: usize,
+        k: usize,
+    ) !void {
+        var name_buf: [name_buf_size]u8 = undefined;
+        const w_name = std.fmt.bufPrint(&name_buf, "backbone.layers.{d}.mixer.experts.{d}.{s}.weight", .{ li, exp_idx, proj }) catch return error.MissingTensor;
+        const w_t = self.fmt.getTensor(w_name) orelse return error.MissingTensor;
+
+        var s_buf: [name_buf_size]u8 = undefined;
+        const s_name = std.fmt.bufPrint(&s_buf, "backbone.layers.{d}.mixer.experts.{d}.{s}.weight_scale", .{ li, exp_idx, proj }) catch return error.MissingTensor;
+        if (self.fmt.getTensor(s_name)) |s_t| {
+            self.be.gemvNvfp4St(x, w_t.data_ptr, s_t.data_ptr, y, n, k);
+            self.be.sync();
+            // Apply per-expert global scale (weight_scale_2)
+            var gs_buf: [name_buf_size]u8 = undefined;
+            const gs_name = std.fmt.bufPrint(&gs_buf, "backbone.layers.{d}.mixer.experts.{d}.{s}.weight_scale_2", .{ li, exp_idx, proj }) catch return;
+            if (self.fmt.getTensor(gs_name)) |gs_t| {
+                const gs = @as(*const f32, @ptrCast(@alignCast(gs_t.data_ptr))).*;
+                if (gs != 0 and gs != 1.0) {
+                    for (0..n) |i| y[i] *= gs;
+                }
+            }
+        } else {
+            self.be.gemv(x, .{ .data = w_t.data_ptr, .dtype = w_t.dtype }, y, n, k);
         }
     }
 
@@ -896,14 +966,14 @@ pub const NemotronNanoModel = struct {
         k: usize,
     ) !void {
         if (w.dtype == .mlx_q and self.stLayerTensor(li, prefix ++ ".biases") != null) {
-            // MLX path: U32 packed weights + BF16 scales + BF16 biases
             const s_t = self.stLayerTensor(li, prefix ++ ".scales") orelse return error.MissingTensor;
             const b_t = self.stLayerTensor(li, prefix ++ ".biases").?;
             self.be.gemvMlxQ(x, w.data_ptr, s_t.data_ptr, b_t.data_ptr, y, n, k, self.mlx_bits);
         } else {
-            // NVFP4 path
-            const s_t = self.stLayerTensor(li, prefix ++ ".scales") orelse return error.MissingTensor;
+            const s_t = self.findScaleTensor(li, prefix) orelse return error.MissingTensor;
             self.be.gemvNvfp4St(x, w.data_ptr, s_t.data_ptr, y, n, k);
+            self.be.sync();
+            self.applyGlobalScale(y, n, li, prefix);
         }
     }
 };
