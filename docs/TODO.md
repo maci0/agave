@@ -55,10 +55,10 @@ All **correctness-critical** kernels for supported model×quant combinations are
 | 3 | TriAttention Phase 3 | Wired | CLI `--kv-eviction tri`, .cal auto-loading, scorePositionsTri in evictKvCache. Dynamic budget pending |
 | 4 | Native GPU tree SDPA for CUDA/ROCm/Vulkan | Done | All backends now have native f32 sdpaTree (CPU fallback only for quantized KV) |
 | 5 | Batch `forwardTree()` | Fixed | Was hardcoding KV type as f32, now uses model's kv_type_k/v |
-| 6 | Direct NVMe-to-VRAM weight loading | Infrastructure | cuFile dlopen detection in CUDA backend, GGUF fd exposed. cuFileRead path needs discrete GPU testing |
+| 6 | Direct NVMe-to-VRAM weight loading | N/A on UMA | cuFile dlopen detection in CUDA backend, GGUF fd exposed. GB10 UMA uses zero-copy mmap (cuMemHostRegister). cuFileRead only benefits discrete GPUs |
 | 7 | CUDA fused FFN megakernels (Q4_K/Q5_K/Q6_K variants) | Done | Q8_0 + Q4_K + Q5_K + Q6_K fused gate+up+SiLU kernels |
 | 8 | WebGPU Phase 2 (WASM target) | GGUF+tokenizer done | `zig build wasm` parses GGUF, loads tokenizer, inits model. Forward pass blocked by Zig 0.16 + LLVM 21 wasm32 SIMD codegen bug |
-| 9 | Native FP4 tensor cores on Blackwell SM121 | Software fallback done | SM121 routing in CUDA backend. Software FP4 GEMV kernel ready. Tensor core MMA path needs hardware testing |
+| 9 | Native FP4 tensor cores on Blackwell SM121 | Software fallback done | SM121 routing in CUDA backend. Software FP4 GEMV kernel ready. Tested on GB10: NVFP4 compressed-tensors format needs parser work (weight_packed/weight_scale names) |
 | 10 | GPTQ SafeTensors support | Working | Parser + dequant kernel + GPU GEMV on Metal + CUDA. CPU thread-pool fallback |
 
 ---

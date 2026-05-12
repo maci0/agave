@@ -987,12 +987,15 @@ fn downloadFileOnce(
         priv_idx += 1;
     }
     // Range stays in extra_headers (needed on CDN redirect).
-    var extra_storage: [1]std.http.Header = undefined;
+    // Accept-Encoding: identity prevents server from gzipping JSON files.
+    var extra_storage: [2]std.http.Header = undefined;
     var ext_idx: usize = 0;
     if (range_value) |rv| {
         extra_storage[ext_idx] = .{ .name = "Range", .value = rv };
         ext_idx += 1;
     }
+    extra_storage[ext_idx] = .{ .name = "Accept-Encoding", .value = "identity" };
+    ext_idx += 1;
 
     var req = client.request(.GET, uri, .{
         .extra_headers = extra_storage[0..ext_idx],
