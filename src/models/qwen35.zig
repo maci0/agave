@@ -76,6 +76,7 @@ pub const Qwen35Model = struct {
     has_gate: bool = true, // Q projection includes interleaved gate (Qwen3.5 only)
     has_qk_norm: bool = true, // Per-head Q/K RMS norms (Qwen3/3.5 only, not Qwen2)
     has_post_attn_norm: bool = true, // Qwen3.5 fused addRmsNorm; Qwen3 uses separate ffn_norm
+    has_attn_bias: bool = false, // Q/K/V bias (Qwen2/2.5 only, not Qwen3/3.5)
 
     /// True when weights are MLX quantized (SafeTensors U32 packed).
     is_mlx: bool = false,
@@ -170,7 +171,11 @@ pub const Qwen35Model = struct {
         if (f.getArchU32(arch, "embedding_length")) |v| self.n_embd = v;
         if (f.getArchU32(arch, "attention.head_count")) |v| self.n_head = v;
         if (f.getArchU32(arch, "attention.head_count_kv")) |v| self.n_head_kv = v;
-        if (f.getArchU32(arch, "attention.key_length")) |v| self.head_dim = v;
+        if (f.getArchU32(arch, "attention.key_length")) |v| {
+            self.head_dim = v;
+        } else if (self.n_embd > 0 and self.n_head > 0) {
+            self.head_dim = self.n_embd / self.n_head;
+        }
         if (f.getArchU32(arch, "feed_forward_length")) |v| {
             self.n_ff = v;
         } else if (f.layerTensor(0, "ffn_up.weight")) |t| {
@@ -250,6 +255,9 @@ pub const Qwen35Model = struct {
 
         // Detect Q/K per-head norms (present in Qwen3/3.5, absent in Qwen2).
         self.has_qk_norm = f.layerTensor(check_layer, "attn_q_norm.weight") != null;
+
+        // Detect attention Q/K/V biases (present in Qwen2/2.5, absent in Qwen3/3.5).
+        self.has_attn_bias = f.layerTensor(check_layer, "attn_q.bias") != null;
 
         // Detect Qwen3.5 vs Qwen3 residual structure.
         // Qwen3.5: "post_attention_norm" (fused addRmsNorm before MLP).
@@ -715,6 +723,17 @@ pub const Qwen35Model = struct {
         self.doGemvBatch3(self.hidden2.ptr, qw, self.q_buf.ptr, q_out, kw, self.k_buf.ptr, nkv * hd, vw, self.v_buf.ptr, nkv * hd, e);
         self.syncProfile();
         self.perf.end(.gemv_qkv, t);
+
+        // Attention Q/K/V biases (Qwen2/2.5)
+        if (self.has_attn_bias) {
+            const kvd = nkv * hd;
+            if (self.fmt.layerTensor(li, "attn_q.bias")) |qb|
+                self.be.addScaled(self.normAsF32(qb, q_out), self.q_buf.ptr, 1.0, q_out);
+            if (self.fmt.layerTensor(li, "attn_k.bias")) |kb|
+                self.be.addScaled(self.normAsF32(kb, kvd), self.k_buf.ptr, 1.0, kvd);
+            if (self.fmt.layerTensor(li, "attn_v.bias")) |vb|
+                self.be.addScaled(self.normAsF32(vb, kvd), self.v_buf.ptr, 1.0, kvd);
+        }
 
         // Q processing: with gate (Qwen3.5) → split Q+gate; without → use q_buf directly
         const q_ptr: [*]f32 = if (self.has_gate) blk: {
