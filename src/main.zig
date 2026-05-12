@@ -344,6 +344,10 @@ const cli_specs = [_]cli_mod.ArgSpec{
     .{ .long = "system", .kind = .option, .help = "System prompt for chat formatting." },
     // Backend & model
     .{ .long = "backend", .kind = .option, .help = "Compute backend: auto, cpu, metal, vulkan, cuda, rocm, webgpu [default: auto]." },
+    .{ .long = "list-devices", .help = "List available compute devices and exit." },
+    .{ .long = "tp", .kind = .option, .help = "Tensor parallelism degree [default: 1]." },
+    .{ .long = "pp", .kind = .option, .help = "Pipeline parallelism stages [default: 1]." },
+    .{ .long = "devices", .kind = .option, .help = "Device selection (e.g. cuda:0,cuda:1)." },
     .{ .long = "ctx-size", .kind = .option, .help = "Context window size; 0 = full model context [default: min(model, 4096)]." },
     .{ .long = "allow-cpu-fallback", .help = "Allow GPU backends to fall back to CPU for unsupported ops." },
     .{ .long = "mmap", .help = "Use lazy mmap instead of eagerly paging weights into RAM." },
@@ -537,6 +541,14 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
     const json_mode = res.flag("json");
     if (json_mode) {
         g_quiet = true;
+    }
+
+    // --list-devices: enumerate and print available compute devices
+    if (res.flag("list-devices")) {
+        const discovery = @import("devices/discovery.zig");
+        const device_list = discovery.enumerate();
+        discovery.printDeviceTable(&device_list);
+        std.process.exit(0);
     }
 
     const n_positionals = res.positionals.items.len;
@@ -862,6 +874,12 @@ fn printUsage() void {
         \\  -p, --port <PORT>      Server port [default: 49453]
         \\      --host <ADDR>      Bind address: IPv4, localhost, or 0.0.0.0 [default: 127.0.0.1]
         \\      --api-key <KEY>    API key for server auth (or AGAVE_API_KEY env)
+        \\
+        \\PARALLELISM:
+        \\      --list-devices         List available compute devices and exit
+        \\      --tp <N>               Tensor parallelism degree [default: 1]
+        \\      --pp <N>               Pipeline parallelism stages [default: 1]
+        \\      --devices <SPEC>       Device selection (e.g. cuda:0,cuda:1)
         \\
         \\MULTIMODAL:
         \\      --mmproj <PATH>    Path to vision projector GGUF (mmproj file)
