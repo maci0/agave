@@ -1,6 +1,6 @@
 # Agave vs llama.cpp — Performance Benchmarks
 
-**Date**: 2026-04-17 (decode benchmarks from 2026-03-24, KV/vision from 2026-04-14, megakernel from 2026-04-17)
+**Date**: 2026-05-12 (M4 Pro benchmarks from 2026-03-24, CUDA GB10 from 2026-05-12)
 **Hardware**: Apple M4 Pro (14-core CPU, 20-core GPU), 48 GB unified memory
 **OS**: macOS 26.3.1 (aarch64)
 **llama.cpp**: latest (commit ~March 2026), Metal enabled, GGML_CPU_REPACK=OFF
@@ -91,6 +91,7 @@ CLI: `--prefill-batch-size <N>` (default 512). Use `--prefill-batch-size 1` for 
 |-------------|--------|--------|-------|
 | Gemma 3 | 4B, 12B, 27B | ✅ Working | + SigLIP vision encoder |
 | Gemma 4 | E2B, E4B, 26B-A4B | ✅ Working | E2B/E4B dense, 26B MoE. + SigLIP-2 vision |
+| Qwen2/2.5 | 0.5B, 1.5B, 3B, 7B, 14B, 32B, 72B | ✅ Working | Q/K/V biases auto-detected |
 | Qwen3.5 | 0.8B, 9B, 27B, 35B | ✅ Working | + Qwen VL vision (structural) |
 | Nemotron-Nano | 4B, 30B | ✅ Working | Hybrid SSM/Attention/MoE |
 | Nemotron-H | 56B | ✅ Working | Hybrid SSM/MoE |
@@ -137,19 +138,21 @@ Vision encoding uses GPU GEMM (BF16 Metal) + parallel CPU attention (thread pool
 
 **Hardware**: NVIDIA GB10 (Blackwell sm_121), 128 GB unified memory, aarch64
 **OS**: Ubuntu 24.04, CUDA 13.0, Driver 580.142
+**Date**: 2026-05-12 (Zig 0.16.0, UMA zero-copy via cuMemHostRegister)
 
-| Model | Quant | Size | CUDA tok/s | CPU tok/s | Speedup |
-|-------|-------|------|:----------:|:---------:|:-------:|
-| Qwen3 0.6B | Q8_0 | 610 MB | 97.1 | 84.0 | 1.16x |
-| Qwen3 1.7B | Q8_0 | 1.7 GB | 48.7 | 26.8 | **1.82x** |
-| Qwen3 4B | Q8_0 | 4.0 GB | 23.6 | 13.4 | **1.76x** |
-| Qwen3 8B | Q8_0 | 8.1 GB | 12.1 | 8.1 | **1.49x** |
+| Model | Quant | Size | CUDA tok/s | CPU tok/s | Speedup | Prefill (CUDA) |
+|-------|-------|------|:----------:|:---------:|:-------:|:--------------:|
+| Qwen2.5 0.5B | Q8_0 | 644 MB | 95.2 | — | — | 232ms |
+| Qwen3 0.6B | Q8_0 | 610 MB | 89.3 | 71.4 | 1.25x | 245ms |
+| Qwen3 1.7B | Q8_0 | 1.7 GB | 44.7 | 28.6 | **1.56x** | 488ms |
+| Qwen3 4B | Q8_0 | 4.0 GB | 21.4 | 13.9 | **1.54x** | 1031ms |
+| Qwen3 8B | Q8_0 | 8.1 GB | 12.4 | 8.2 | **1.51x** | 1769ms |
 
 Notes:
-- Q4_K/Q6_K currently fall back to CPU (Zig LLVM nvptx aliasee bug prevents PTX recompilation)
-- GB10 uses UMA (shared CPU/GPU memory) — CPU is unusually competitive vs discrete GPUs
+- UMA zero-copy: mmap'd weights registered via `cuMemHostRegister`, accessed directly by GPU
+- Q4_K/Q6_K fall back to CPU (Zig LLVM nvptx aliasee bug prevents PTX recompilation)
 - 41 CUDA PTX kernels loaded via sm_90 forward compatibility to sm_121
-- Server mode (--serve) crashes on Linux aarch64 — CLI works fine
+- Server mode (`--serve`) works correctly (cuCtxSetCurrent on scheduler thread)
 
 ## Known Issues
 
