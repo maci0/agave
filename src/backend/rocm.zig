@@ -292,10 +292,10 @@ pub const RocmBackend = struct {
         self.fn_gemv_fp8_e4m3 = try self.getFunction(hipModuleGetFunction, "gemv_fp8_e4m3_kernel");
         self.fn_gemv_fp8_e5m2 = try self.getFunction(hipModuleGetFunction, "gemv_fp8_e5m2_kernel");
         self.fn_gemv_mlx_q4 = try self.getFunction(hipModuleGetFunction, "gemv_mlx_q4_kernel");
-        self.fn_gemv_q4_1 = try self.getFunction(hipModuleGetFunction, "gemv_q4_1_kernel");
-        self.fn_gemv_q5_0 = try self.getFunction(hipModuleGetFunction, "gemv_q5_0_kernel");
-        self.fn_gemv_q2_k = try self.getFunction(hipModuleGetFunction, "gemv_q2_k_kernel");
-        self.fn_gemv_q3_k = try self.getFunction(hipModuleGetFunction, "gemv_q3_k_kernel");
+        self.fn_gemv_q4_1 = self.getFunction(hipModuleGetFunction, "gemv_q4_1_kernel") catch null;
+        self.fn_gemv_q5_0 = self.getFunction(hipModuleGetFunction, "gemv_q5_0_kernel") catch null;
+        self.fn_gemv_q2_k = self.getFunction(hipModuleGetFunction, "gemv_q2_k_kernel") catch null;
+        self.fn_gemv_q3_k = self.getFunction(hipModuleGetFunction, "gemv_q3_k_kernel") catch null;
         self.fn_gemv_t_q8_0 = try self.getFunction(hipModuleGetFunction, "gemv_t_q8_0_kernel");
         self.fn_gemv_nvfp4_st = try self.getFunction(hipModuleGetFunction, "gemv_nvfp4_st_kernel");
         self.fn_gemv_mxfp4_st = try self.getFunction(hipModuleGetFunction, "gemv_mxfp4_st_kernel");
@@ -303,8 +303,8 @@ pub const RocmBackend = struct {
         self.fn_sdpa = try self.getFunction(hipModuleGetFunction, "sdpa_kernel");
         self.fn_sdpa_turbo = try self.getFunction(hipModuleGetFunction, "sdpa_turbo_kernel");
         self.fn_sdpa_tree = try self.getFunction(hipModuleGetFunction, "sdpa_tree_kernel");
-        self.fn_sdpa_paged = try self.getFunction(hipModuleGetFunction, "sdpa_paged_kernel");
-        self.fn_gemv_gptq = try self.getFunction(hipModuleGetFunction, "gemv_gptq_kernel");
+        self.fn_sdpa_paged = self.getFunction(hipModuleGetFunction, "sdpa_paged_kernel") catch null;
+        self.fn_gemv_gptq = self.getFunction(hipModuleGetFunction, "gemv_gptq_kernel") catch null;
         self.fn_sigmoid_mul = try self.getFunction(hipModuleGetFunction, "sigmoid_mul_kernel");
         self.fn_silu_mul = try self.getFunction(hipModuleGetFunction, "silu_mul_kernel");
         self.fn_deinterleave = try self.getFunction(hipModuleGetFunction, "deinterleave_kernel");
@@ -554,6 +554,12 @@ pub const RocmBackend = struct {
 
     /// GPTQ INT4 GEMV: y[row] = dot(dequant(qweight[row,:]), x)
     pub fn gemvGptq(self: *RocmBackend, x: [*]const f32, qweight: [*]const u32, scales: [*]const u16, qzeros: [*]const u32, y: [*]f32, n: usize, k: usize, group_size: u32) void {
+        if (self.fn_gemv_gptq == null) {
+            self.flushActivations();
+            const gptq_ops = @import("../ops/gptq.zig");
+            gptq_ops.gptqGemv(x, qweight, scales, qzeros, y, n, k, group_size);
+            return;
+        }
         const words_per_row = k / 8;
         var d_x = self.getInputBuf(x, k * @sizeOf(f32));
         var d_qw = self.getOrUpload(@ptrCast(qweight), n * words_per_row * @sizeOf(u32));
@@ -1213,6 +1219,15 @@ pub const RocmBackend = struct {
     pub fn sdpaPaged(self: *RocmBackend, q: [*]const f32, kv_view: PagedKvView, k_new: [*]const f32, v_new: [*]const f32, output: [*]f32, nh: usize, nkv: usize, hd: usize, scale: f32, _: KvQuantType, _: KvQuantType) void {
         const kvd = nkv * hd;
         var sl: u32 = @intCast(kv_view.seq_len + 1);
+
+        if (self.fn_sdpa_paged == null) {
+            self.flushActivations();
+            @memcpy(kv_view.keyPtrMut(kv_view.seq_len)[0..kvd], k_new[0..kvd]);
+            @memcpy(kv_view.valuePtrMut(kv_view.seq_len)[0..kvd], v_new[0..kvd]);
+            const cpu_sdpa = @import("kernels/cpu/sdpa.zig");
+            for (0..nh) |h| cpu_sdpa.sdpaPagedHead(q, kv_view, output, h, nh, nkv, hd, sl, scale);
+            return;
+        }
 
         self.flushActivations();
 
