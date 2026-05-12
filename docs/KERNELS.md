@@ -104,14 +104,14 @@ The composer automatically selects the correct GEMV function (Q8_0/Q4_K/Q5_K/Q6_
 | f16 | Native (SIMD) | Native | Native | Native | Native | Missing |
 | bf16 | Native (SIMD) | Native | Native | Native | Native | Missing |
 | q8_0 | Native (SIMD) | Native | Native | Native | Native | Native |
-| q4_0 | Native (SIMD) | Native | Native | Native | Native | Missing |
-| q4_1 | Native (SIMD) | Native | Missing | Native | Missing | Missing |
-| q5_0 | Native (SIMD) | Native | Missing | Missing | Missing | Missing |
-| q4_k | Native (SIMD) | Native | Native | Native | Native | Missing |
-| q5_k | Native (SIMD) | Native | Native | Native | Native | Missing |
-| q6_k | Native (SIMD) | Native | Native | Native | Native | Missing |
-| q2_k | Native (SIMD) | Native | Missing | Missing | Missing | Missing |
-| q3_k | Native (SIMD) | Native | Missing | Missing | Missing | Missing |
+| q4_0 | Native (SIMD) | Native | Native | Native | Native | Native |
+| q4_1 | Native (SIMD) | Native | Missing | Native | Native | Missing |
+| q5_0 | Native (SIMD) | Native | Missing | Missing | Native | Missing |
+| q4_k | Native (SIMD) | Native | Native | Native | Native | Native |
+| q5_k | Native (SIMD) | Native | Native | Native | Native | Native |
+| q6_k | Native (SIMD) | Native | Native | Native | Native | Native |
+| q2_k | Native (SIMD) | Native | Missing | Missing | Native | Missing |
+| q3_k | Native (SIMD) | Native | Missing | Missing | Native | Missing |
 | iq4_nl | Native (SIMD) | Native | Missing | Missing | Missing | Missing |
 | iq4_xs | Native (SIMD) | Native | Missing | Missing | Missing | Missing |
 | fp8_e4m3 | Native | Native | Native | Native | Native | Missing |
@@ -129,10 +129,10 @@ The composer automatically selects the correct GEMV function (Q8_0/Q4_K/Q5_K/Q6_
 | Metal | `src/backend/kernels/metal/` | `common.metal`, `elementwise.metal` (incl. `copy_f32`), `norm.metal`, `rope.metal` (incl. `rope_batched_f32`), `gemv.metal`, `gemm.metal` (f32/Q8_0/Q4_0/BF16), `sdpa.metal` (incl. `sdpa_prefill_fa2`), `deltanet.metal`, `megakernel.metal` (11 fused FFN kernels: SiLU x {Q8_0, Q4_K, Q5_K, Q6_K, Q4_0, MLX_Q4} + GELU x {Q8_0, Q4_K, Q5_K, Q6_K, Q4_0}), `mega_common.metal` (18 composable building blocks, 732 lines), `mega_qwen35_q8.metal`, `mega_qwen35_q4k.metal`, `mega_gemma_q4k.metal`, `mega_gemma_q8.metal`, `mega_nemotron_h_q8.metal` (true megakernels) |
 | Vulkan | `src/backend/kernels/vulkan/` | `silu.comp`, `gelu.comp`, `add.comp`, `mul.comp`, `rms_norm.comp`, `softmax.comp`, `l2_norm.comp`, `rope.comp`, `sdpa.comp`, `sdpa_turbo.comp`, `embedding.comp`, `conv1d.comp`, `gemv_{f32,q8_0,q4_0,bf16,f16,q4_k,q5_k,q6_k,fp8_e4m3,fp8_e5m2}.comp` (+compiled `.spv`) |
 | CUDA | `src/backend/kernels/cuda/` | `common.zig` (shared primitives), `silu.zig`, `silu_mul.zig`, `gelu.zig`, `gelu_mul.zig`, `add.zig`, `add_scaled.zig`, `add_rms_norm.zig`, `mul.zig`, `rms_norm.zig`, `rms_norm_batched.zig`, `softmax.zig`, `l2_norm.zig`, `rope.zig`, `rope_batched.zig`, `sigmoid_mul.zig`, `deinterleave.zig`, `sdpa.zig`, `sdpa_turbo.zig`, `sdpa_prefill.zig`, `gemv_{f32,bf16,f16,q8_0,q4_0,q4_0_batch,q4_1,q4_k,q5_k,q6_k,fp8_e4m3,fp8_e5m2,mlx_q4,mlx_q6,mlx_q8,nvfp4_st,mxfp4_st}.zig`, `gemv_t_q8_0.zig`, `gemm_q8_0.zig`, `fused_ffn_q8_0.zig` (fused FFN megakernel), `mega_qwen35_q8.zig`, `mega_gemma_q4k.zig`, `mega_gemma_q8.zig` (true megakernels), `all.zig` (aggregator) — compiled to PTX via `zig build ptx` |
-| ROCm | `src/backend/kernels/rocm/` | `common.zig` (shared primitives), `silu.zig`, `gelu.zig`, `add.zig`, `mul.zig`, `rms_norm.zig`, `rms_norm_multi.zig`, `softmax.zig`, `l2_norm.zig`, `rope.zig`, `sdpa.zig`, `sdpa_paged.zig`, `gemv_{f32,bf16,f16,q8_0,q4_0,q4_k,q5_k,q6_k,fp8_e4m3,fp8_e5m2,mlx_q4}.zig`, `gemv_gptq.zig`, `sigmoid_mul.zig`, `deinterleave.zig`, `deltanet.zig`, `mega_qwen35_q8.zig` (true megakernel), `all.zig` (aggregator) — compiled to HSACO via `zig build amdgcn` |
-| WebGPU | `src/backend/kernels/webgpu/` | `silu.wgsl`, `silu_mul.wgsl`, `gelu.wgsl`, `gelu_mul.wgsl`, `add.wgsl`, `add_rms_norm.wgsl`, `add_scaled.wgsl`, `mul.wgsl`, `rms_norm.wgsl`, `rms_norm_multi.wgsl`, `softmax.wgsl`, `l2_norm.wgsl`, `rope.wgsl`, `sigmoid_mul.wgsl`, `deinterleave.wgsl`, `split_qgate.wgsl`, `embedding.wgsl`, `sdpa.wgsl`, `sdpa_paged.wgsl`, `sdpa_tree.wgsl`, `conv1d.wgsl`, `deltanet_recurrence.wgsl`, `gemv_f32.wgsl`, `gemv_q8_0.wgsl`, `gemv_t_q8_0.wgsl`, `gemv_gptq.wgsl`, `gemv_mlx_q4.wgsl`, `gemv_nvfp4_st.wgsl`, `gemv_mxfp4_st.wgsl` |
+| ROCm | `src/backend/kernels/rocm/` | `common.zig` (shared primitives), `silu.zig`, `gelu.zig`, `add.zig`, `mul.zig`, `rms_norm.zig`, `rms_norm_multi.zig`, `softmax.zig`, `l2_norm.zig`, `rope.zig`, `sdpa.zig`, `sdpa_paged.zig`, `gemv_{f32,bf16,f16,q8_0,q4_0,q4_1,q5_0,q4_k,q5_k,q6_k,q2_k,q3_k,fp8_e4m3,fp8_e5m2,mlx_q4}.zig`, `gemv_gptq.zig`, `sigmoid_mul.zig`, `deinterleave.zig`, `deltanet.zig`, `mega_qwen35_q8.zig` (true megakernel), `all.zig` (aggregator) — compiled to HSACO via `zig build amdgcn` |
+| WebGPU | `src/backend/kernels/webgpu/` | `silu.wgsl`, `silu_mul.wgsl`, `gelu.wgsl`, `gelu_mul.wgsl`, `add.wgsl`, `add_rms_norm.wgsl`, `add_scaled.wgsl`, `mul.wgsl`, `rms_norm.wgsl`, `rms_norm_multi.wgsl`, `softmax.wgsl`, `l2_norm.wgsl`, `rope.wgsl`, `sigmoid_mul.wgsl`, `deinterleave.wgsl`, `split_qgate.wgsl`, `embedding.wgsl`, `sdpa.wgsl`, `sdpa_paged.wgsl`, `sdpa_tree.wgsl`, `conv1d.wgsl`, `deltanet_recurrence.wgsl`, `gemv_f32.wgsl`, `gemv_q8_0.wgsl`, `gemv_q4_0.wgsl`, `gemv_q4_k.wgsl`, `gemv_q5_k.wgsl`, `gemv_q6_k.wgsl`, `gemv_t_q8_0.wgsl`, `gemv_gptq.wgsl`, `gemv_mlx_q4.wgsl`, `gemv_nvfp4_st.wgsl`, `gemv_mxfp4_st.wgsl` |
 
-**Pipeline/kernel counts**: Metal 70+ pipelines (+ 1 runtime-composed), CUDA 41 kernels, ROCm 30+ kernels, WebGPU 29 shaders. Total megakernel code: ~4,166 lines across 12 files plus ~780 lines in `mega_compose.zig` (composable generator).
+**Pipeline/kernel counts**: Metal 70+ pipelines (+ 1 runtime-composed), CUDA 43 kernels, ROCm 34+ kernels, WebGPU 33 shaders. Total megakernel code: ~4,166 lines across 12 files plus ~780 lines in `mega_compose.zig` (composable generator).
 
 ## Vision Encoder
 
@@ -153,13 +153,13 @@ Vision ViT (Vision Transformer) kernels run on CPU for patch embedding, position
 - GEMV: q4_1, q5_0, q2_k, q3_k, iq4_nl, iq4_xs, nvfp4_st, mxfp4
 - Conv1d bias support
 
-**WebGPU** — 29 ops, most core ops complete:
-- GEMV: q4_0, q4_k, q5_k, q6_k, bf16, f16, fp8 formats
+**WebGPU** — 33 ops, near-complete:
+- GEMV: bf16, f16, fp8 formats
 - Argmax (currently CPU)
 
 **ROCm** — medium priority:
 - DeltaNet recurrence
-- GEMV: q4_1, q5_0, q2_k, q3_k, iq4_nl, iq4_xs, nvfp4_st, mxfp4
+- GEMV: iq4_nl, iq4_xs
 
 **Metal** — near-complete:
 - GEMV: nvfp4 (GGUF)
