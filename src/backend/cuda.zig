@@ -268,7 +268,7 @@ pub const CudaBackend = struct {
     };
 
     /// Number of PTX kernels loaded at init.
-    pub const n_kernels: u32 = 41;
+    pub const n_kernels: u32 = 43;
 
     /// Library name loaded via dlopen at init.
     pub const lib_name = cuda_lib_name;
