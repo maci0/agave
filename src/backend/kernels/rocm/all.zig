@@ -48,6 +48,10 @@ comptime {
     _ = @import("gemv_nvfp4_st.zig");
     _ = @import("gemv_mxfp4_st.zig");
     _ = @import("gemv_gptq.zig");
+    _ = @import("gemv_q4_1.zig");
+    _ = @import("gemv_q5_0.zig");
+    _ = @import("gemv_q2_k.zig");
+    _ = @import("gemv_q3_k.zig");
 
     _ = @import("deltanet_recurrence.zig");
     _ = @import("sdpa_tree.zig");

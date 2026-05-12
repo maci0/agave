@@ -1,0 +1,49 @@
+//! GEMV Q5_0 kernel: y[row] = dot(W_q5_0[row,:], x)
+//! Q5_0 block: 22 bytes = 2 bytes (f16 d) + 4 bytes (qh high bits) + 16 bytes (32 x 4-bit low quants).
+//! Dequant: val = ((lo_nibble | (qh_bit << 4)) - 16) * d
+
+const cu = @import("common.zig");
+
+const bytes_per_block: u32 = 22;
+const values_per_block: u32 = 32;
+const dequant_bias: f32 = -16.0;
+
+inline fn q50BlockDot(x: [*]const f32, bp: [*]const u8, k: u32, block_start: u32) f32 {
+    const d: f32 = @floatCast(@as(f16, @bitCast(@as(*align(1) const u16, @ptrCast(bp)).*)));
+    const qh = @as(*align(1) const u32, @ptrCast(bp + 2)).*;
+    const qs = bp + 6;
+    var sum: f32 = 0.0;
+
+    for (0..16) |i| {
+        const gi_lo = block_start + i;
+        const gi_hi = block_start + i + 16;
+        if (gi_lo >= k) break;
+        const byte = qs[i];
+        const lo_nibble: f32 = @floatFromInt(byte & 0x0F);
+        const hi_nibble: f32 = @floatFromInt(byte >> 4);
+        const qh_lo: f32 = if ((qh >> @as(u5, @intCast(i))) & 1 != 0) 16.0 else 0.0;
+        const qh_hi: f32 = if ((qh >> @as(u5, @intCast(i + 16))) & 1 != 0) 16.0 else 0.0;
+        sum += x[gi_lo] * ((lo_nibble + qh_lo + dequant_bias) * d);
+        if (gi_hi < k) {
+            sum += x[gi_hi] * ((hi_nibble + qh_hi + dequant_bias) * d);
+        }
+    }
+    return sum;
+}
+
+export fn gemv_q5_0_kernel(x: [*]const f32, w: [*]const u8, y: [*]f32, n: u32, k: u32) callconv(.kernel) void {
+    const row = cu.blockIdx();
+    if (row >= n) return;
+    const tid = cu.threadIdx();
+    const bdim = cu.blockDim();
+    const blocks_per_row = (k + values_per_block - 1) / values_per_block;
+    const row_bytes = blocks_per_row * bytes_per_block;
+
+    var sum: f32 = 0.0;
+    var blk = tid;
+    while (blk < blocks_per_row) : (blk += bdim) {
+        sum += q50BlockDot(x, w + row * row_bytes + blk * bytes_per_block, k, blk * values_per_block);
+    }
+    sum = cu.blockReduceAdd(sum);
+    if (tid == 0) y[row] = sum;
+}
