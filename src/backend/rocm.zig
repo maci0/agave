@@ -781,8 +781,9 @@ pub const RocmBackend = struct {
     /// In-place sigmoid-gated multiply: data[i] *= sigmoid(gate[i])
     pub fn sigmoidMul(self: *RocmBackend, data: [*]f32, gate: [*]const f32, n: usize) void {
         if (self.fn_sigmoid_mul == null) {
-            self.flushActivations();
+            self.sync();
             for (0..n) |i| data[i] *= 1.0 / (1.0 + @exp(-gate[i]));
+            self.invalidateAct(data);
             return;
         }
         const sz = n * @sizeOf(f32);
@@ -803,11 +804,8 @@ pub const RocmBackend = struct {
     /// Fused SiLU + multiply: out[i] = silu(a[i]) * b[i]
     pub fn siluMul(self: *RocmBackend, a: [*]const f32, b: [*]const f32, out: [*]f32, n: usize) void {
         if (self.fn_silu_mul == null) {
-            self.flushActivations();
-            for (0..n) |i| {
-                const s = a[i] / (1.0 + @exp(-a[i]));
-                out[i] = s * b[i];
-            }
+            self.silu(a, out, n);
+            self.mul(out, b, out, n);
             return;
         }
         const sz = n * @sizeOf(f32);
