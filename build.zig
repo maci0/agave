@@ -135,26 +135,10 @@ pub fn build(b: *std.Build) void {
         const install_obj = b.addInstallFile(obj.getEmittedBin(), "rocm/kernels.o");
         amdgcn_step.dependOn(&install_obj.step);
 
-        // Post-process: fix Zig 0.16 amdgcn target triple in msgpack metadata.
-        // Zig generates 'amdhsa5.0.0-unknown-gfx1100' instead of 'amdhsa--gfx1100'.
-        // ROCm 7.x rejects the malformed triple (hipError 209).
-        const fixup_obj = b.addSystemCommand(&.{ "python3", "-c",
-            \\import sys; d=bytearray(open(sys.argv[1],'rb').read())
-            \\bad=b'amdhsa5.0.0-unknown-'
-            \\good=b'amdhsa--'
-            \\i=d.find(bad)
-            \\if i>=0:
-            \\    n=d[i-1]; d[i-1]=n-(len(bad)-len(good))
-            \\    d[i:i+len(bad)]=good; d=d[:i+len(good)]+d[i+len(bad):]
-            \\sys.stdout.buffer.write(d)
-        });
-        fixup_obj.addFileArg(obj.getEmittedBin());
-        const fixed_obj = fixup_obj.captureStdOut(.{});
-
         // Link into shared ELF (HSACO) for hipModuleLoadData
         const link = b.addSystemCommand(&.{ "ld.lld", "-shared", "-o" });
         const hsaco_out = link.addOutputFileArg("kernels.hsaco");
-        link.addFileArg(fixed_obj);
+        link.addFileArg(obj.getEmittedBin());
         const install_hsaco = b.addInstallFile(hsaco_out, "rocm/kernels.hsaco");
         amdgcn_step.dependOn(&install_hsaco.step);
     }
