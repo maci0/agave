@@ -36,7 +36,7 @@ inline fn q3kBlockDot(x: [*]const f32, bp: [*]const u8, k: u32, block_start: u32
             const q_lo: u8 = (qs[qs_byte_idx] >> qs_bit_shift) & 0x3;
 
             const hm_byte_idx = flat_idx % 32;
-            const hm_bit: u5 = @intCast(flat_idx / 32);
+            const hm_bit: u3 = @intCast(flat_idx / 32);
             const q_hi: u8 = (hmask[hm_byte_idx] >> hm_bit) & 1;
 
             const q3: i8 = @as(i8, @intCast(q_lo | (q_hi << 2))) + dequant_bias;
