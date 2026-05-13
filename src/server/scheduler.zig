@@ -332,6 +332,10 @@ pub const RequestManager = struct {
             const total: u32 = @intCast(cache.vram_block_count + cache.ram_block_count + cache.ssd_block_count);
             const free: u32 = @intCast(cache.vram_free_list.items.len + cache.ram_free_list.items.len + cache.ssd_free_list.items.len);
             self.metrics.updateKvBlocks(total - free, total);
+            // GPU-specific KV cache usage
+            const gpu_total: u32 = @intCast(cache.vram_block_count);
+            const gpu_free: u32 = @intCast(cache.vram_free_list.items.len);
+            self.metrics.updateGpuKvBlocks(gpu_total - gpu_free, gpu_total);
         }
 
         // 5. Promote all blocks in running requests' block tables to VRAM (if tiered cache enabled)
