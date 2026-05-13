@@ -1538,7 +1538,12 @@ fn initAndRun(
         if (n_embd > 0 and n_ff > 0) {
             const gemv_kern = @import("backend/kernels/cpu/gemv.zig");
             const local_ff = n_ff / cli.tp_degree;
-            const row_bytes = gemv_kern.gemvRowBytes(.q4_0, local_ff);
+            // Use f32 row bytes (largest possible) to cover any quant format
+            const row_bytes = @max(
+                gemv_kern.gemvRowBytes(.f32, local_ff),
+                @max(gemv_kern.gemvRowBytes(.q8_0, local_ff),
+                     gemv_kern.gemvRowBytes(.q4_k, local_ff)),
+            );
             const shard_size = n_embd * row_bytes;
             if (shard_size > 0) {
                 const shard_buf = allocator.alloc(u8, shard_size) catch null;

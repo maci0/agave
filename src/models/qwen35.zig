@@ -977,6 +977,29 @@ pub const Qwen35Model = struct {
         self.perf.end(.gemv_out, t);
     }
 
+    /// FFN compute without norm: gate/up GEMV → SiLU → down GEMV → hidden2.
+    /// Input: hidden2 (normed). Output: hidden2 (partial FFN output for this rank).
+    fn ffnCompute(self: *Qwen35Model, li: u32) !void {
+        const e: usize = self.n_embd;
+        const ff: usize = if (self.tp_degree > 1) self.n_ff / self.tp_degree else self.n_ff;
+
+        const gw_raw = self.fmt.layerTensor(li, "ffn_gate.weight") orelse return error.MissingTensor;
+        const uw_raw = self.fmt.layerTensor(li, "ffn_up.weight") orelse return error.MissingTensor;
+        const gw = self.shardColumnWeight(gw_raw, self.n_ff, e);
+        const uw = self.shardColumnWeight(uw_raw, self.n_ff, e);
+
+        self.doGemvBatch2(self.hidden2.ptr, gw, self.ff_buf1.ptr, ff, uw, self.ff_buf2.ptr, ff, e);
+        self.be.siluMul(self.ff_buf1.ptr, self.ff_buf2.ptr, self.ff_buf1.ptr, ff);
+
+        const dw_raw = self.fmt.layerTensor(li, "ffn_down.weight") orelse return error.MissingTensor;
+        if (self.tp_degree > 1 and self.tp_row_shard_buf.len > 0) {
+            const dw = self.shardRowWeight(dw_raw, e, self.n_ff, self.tp_row_shard_buf);
+            self.doGemv(self.ff_buf1.ptr, dw, self.hidden2.ptr, e, ff);
+        } else {
+            self.doGemv(self.ff_buf1.ptr, dw_raw, self.hidden2.ptr, e, ff);
+        }
+    }
+
     /// MLP layer with post-attention norm applied to the residual stream.
     /// Fuses the attention residual add with the post-attention norm into a
     /// single addRmsNorm dispatch (saves one GPU kernel launch per layer).
@@ -1271,11 +1294,61 @@ pub const Qwen35Model = struct {
             if (l >= self.layer_skip_start and l < self.layer_skip_end) continue;
             self.fmt.prefetchLayer(@intCast(li + 1));
             const fuse = li > 0 and !self.is_moe;
-            if (self.isFullAttn(l)) try self.fullAttnLayer(l, fuse) else try self.deltaNetLayer(l, fuse);
-            if (self.is_moe) {
-                try self.moeLayer(l);
+
+            if (self.tp_degree > 1 and self.tp_row_shard_buf.len > 0 and !self.is_moe) {
+                // TP: attention runs on rank 0 only (full heads, no sharding)
+                // FFN runs on both ranks with all-reduce
+                const saved_tp = self.tp_degree;
+                self.tp_degree = 1; // disable TP for attention
+                if (self.isFullAttn(l)) try self.fullAttnLayer(l, fuse) else try self.deltaNetLayer(l, fuse);
+                self.tp_degree = saved_tp; // re-enable for FFN
+
+                // FFN TP: run norm once, then gate/up+silu+down per rank, all-reduce
+                const e = self.n_embd;
+
+                // Step 1: Pre-MLP norm (shared, not rank-specific)
+                {
+                    const nt = self.perf.start();
+                    if (self.has_post_attn_norm) {
+                        const nw = self.fmt.layerTensor(l, "post_attention_norm.weight") orelse return error.MissingTensor;
+                        self.be.addRmsNorm(self.hidden.ptr, self.hidden2.ptr, self.normAsF32(nw, e), self.hidden2.ptr, e, self.rms_eps);
+                    } else {
+                        const nw = self.fmt.layerTensor(l, "ffn_norm.weight") orelse return error.MissingTensor;
+                        self.be.rmsNorm(self.hidden.ptr, self.normAsF32(nw, e), self.hidden2.ptr, e, self.rms_eps);
+                    }
+                    self.syncProfile();
+                    self.perf.end(.rms_norm, nt);
+                }
+                self.be.sync();
+
+                // Save normed hidden2 for rank 1 (use scores_buf — unused during FFN)
+                @memcpy(self.scores_buf[0..e], self.hidden2[0..e]);
+
+                // Step 2: Rank 0 FFN compute (gate/up → silu → down → hidden2)
+                self.tp_rank = 0;
+                try self.ffnCompute(l);
+                self.be.sync();
+                // Save rank 0's partial output in attn_out (unused during FFN)
+                @memcpy(self.attn_out[0..e], self.hidden2[0..e]);
+
+                // Restore normed hidden2 for rank 1
+                @memcpy(self.hidden2[0..e], self.scores_buf[0..e]);
+
+                // Step 3: Rank 1 FFN compute
+                self.tp_rank = 1;
+                try self.ffnCompute(l);
+                self.be.sync();
+
+                // Step 4: All-reduce: hidden2 += rank0_partial
+                for (0..e) |i| self.hidden2[i] += self.attn_out[i];
+                self.tp_rank = 0;
             } else {
-                try self.mlpLayer(l, true);
+                if (self.isFullAttn(l)) try self.fullAttnLayer(l, fuse) else try self.deltaNetLayer(l, fuse);
+                if (self.is_moe) {
+                    try self.moeLayer(l);
+                } else {
+                    try self.mlpLayer(l, true);
+                }
             }
         }
 
