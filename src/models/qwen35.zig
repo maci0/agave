@@ -1373,6 +1373,8 @@ pub const Qwen35Model = struct {
 
                 // Restore normed hidden2 for rank 1
                 @memcpy(self.hidden2[0..e], self.scores_buf[0..e]);
+                // Invalidate GPU cache so rank 1 reads the restored host data
+                self.be.invalidateActivation(self.hidden2.ptr);
 
                 // Step 3: Rank 1 FFN compute
                 self.tp_rank = 1;
@@ -1381,6 +1383,7 @@ pub const Qwen35Model = struct {
 
                 // Step 4: All-reduce: hidden2 += rank0_partial
                 for (0..e) |i| self.hidden2[i] += self.attn_out[i];
+                self.be.invalidateActivation(self.hidden2.ptr);
                 self.tp_rank = 0;
             } else {
                 if (self.isFullAttn(l)) try self.fullAttnLayer(l, fuse) else try self.deltaNetLayer(l, fuse);

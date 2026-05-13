@@ -826,6 +826,18 @@ pub const Backend = union(enum) {
         }
     }
 
+    /// Invalidate cached device copy of a host buffer.
+    /// Forces re-upload on next GPU access. Used after CPU writes to activation buffers.
+    pub inline fn invalidateActivation(self: Backend, ptr: [*]f32) void {
+        switch (self) {
+            inline else => |be| {
+                if (comptime @hasDecl(@TypeOf(be.*), "invalidateAct")) {
+                    be.invalidateAct(ptr);
+                }
+            },
+        }
+    }
+
     /// All-reduce sum for tensor parallelism: dst[i] += src[i].
     pub inline fn allReduceAdd(self: Backend, dst: [*]f32, src: [*]const f32, n: usize) void {
         switch (self) {
