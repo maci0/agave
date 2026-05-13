@@ -490,7 +490,7 @@ pub const RocmBackend = struct {
     }
 
     /// Remove a specific activation from cache after CPU writes.
-    fn invalidateAct(self: *RocmBackend, ptr: anytype) void {
+    pub fn invalidateAct(self: *RocmBackend, ptr: anytype) void {
         const addr = @intFromPtr(ptr);
         if (self.act_cache.fetchRemove(addr)) |kv| {
             _ = self.hipFree(@ptrFromInt(kv.value.dptr));

@@ -735,7 +735,7 @@ pub const CudaBackend = struct {
     /// Remove a specific activation buffer from the cache.
     /// Called after CPU fallback ops write to a host buffer, so the next
     /// GPU use will re-upload the CPU-written data.
-    fn invalidateAct(self: *CudaBackend, ptr: anytype) void {
+    pub fn invalidateAct(self: *CudaBackend, ptr: anytype) void {
         const addr = @intFromPtr(ptr);
         if (self.act_cache.fetchRemove(addr)) |kv| {
             _ = self.cuMemFree(kv.value.dptr);
