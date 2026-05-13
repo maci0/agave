@@ -345,6 +345,7 @@ const cli_specs = [_]cli_mod.ArgSpec{
     // Backend & model
     .{ .long = "backend", .kind = .option, .help = "Compute backend: auto, cpu, metal, vulkan, cuda, rocm, webgpu [default: auto]." },
     .{ .long = "list-devices", .help = "List available compute devices and exit." },
+    .{ .long = "disagg", .help = "Disaggregated inference: rank 0 prefills, sends KV to rank 1 for decode." },
     .{ .long = "tp", .kind = .option, .help = "Tensor parallelism degree [default: 1]." },
     .{ .long = "pp", .kind = .option, .help = "Pipeline parallelism stages [default: 1]." },
     .{ .long = "devices", .kind = .option, .help = "Device selection (e.g. cuda:0,cuda:1)." },
@@ -445,6 +446,7 @@ const CliArgs = struct {
     pp_degree: u32 = 1,
     pp_rank: u32 = 0,
     pp_peers: ?[]const u8 = null,
+    disagg: bool = false,
     // Speculative decoding
     draft_model_path: ?[]const u8 = null,
     spec_tokens: u32 = 5,
@@ -790,6 +792,7 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
         .tp_rank = res.optionU32("rank") orelse 0,
         .tp_peers = res.option("peers"),
         .pp_degree = res.optionU32("pp") orelse 1,
+        .disagg = res.flag("disagg"),
         .use_mmap = res.flag("mmap"),
         .prefill_batch_size = res.optionU32("prefill-batch-size") orelse default_chunk_size,
         .mmproj = res.option("mmproj"),
@@ -1917,6 +1920,60 @@ fn initAndRun(
             eprint("Error: server failed: {}\n", .{e});
             return false;
         };
+    } else if (cli.disagg and cli.tp_peers != null) {
+        // Disaggregated inference: rank 0 prefills + sends KV, rank 1 receives KV + decodes
+        const TransportMod = @import("parallel/transport.zig");
+        if (allocator.create(TransportMod.Transport) catch null) |dtr| disagg_blk: {
+            const peers_str = cli.tp_peers orelse break :disagg_blk;
+            dtr.* = TransportMod.Transport.init(allocator, .tcp, cli.tp_rank, 2) catch break :disagg_blk;
+            var host: [4]u8 = .{ 0, 0, 0, 0 };
+            var port: u16 = 49456;
+            if (std.mem.indexOfScalar(u8, peers_str, ':')) |colon| {
+                port = std.fmt.parseInt(u16, peers_str[colon + 1 ..], 10) catch 49456;
+                parseIpv4(peers_str[0..colon], &host);
+            } else {
+                parseIpv4(peers_str, &host);
+            }
+            if (cli.tp_rank == 0) {
+                // Prefill node: tokenize, prefill, send KV
+                var la: std.posix.sockaddr.in = .{ .port = std.mem.nativeToBig(u16, port), .addr = 0 };
+                const ls = std.c.socket(std.posix.AF.INET, std.posix.SOCK.STREAM, 0);
+                if (ls < 0) break :disagg_blk;
+                defer _ = std.c.close(ls);
+                var one: c_int = 1;
+                _ = std.c.setsockopt(ls, std.posix.SOL.SOCKET, std.posix.SO.REUSEADDR, @ptrCast(&one), @sizeOf(c_int));
+                if (std.c.bind(ls, @ptrCast(&la), @sizeOf(@TypeOf(la))) != 0) break :disagg_blk;
+                if (std.c.listen(ls, 1) != 0) break :disagg_blk;
+                std.log.info("Disagg prefill: waiting for decode node on port {d}...", .{port});
+                dtr.acceptPeer(ls) catch break :disagg_blk;
+                std.log.info("Decode node connected. Prefilling...", .{});
+
+                if (effective_prompt) |prompt| {
+                    const tmpl = arch.chatTemplate();
+                    const formatted = tmpl.format(allocator, null, prompt) catch prompt;
+                    const tok_iface = tok.tokenizer();
+                    const token_ids = tok_iface.encode(formatted) catch break :disagg_blk;
+                    defer allocator.free(token_ids);
+
+                    _ = mdl.model().forward(token_ids[0]) catch break :disagg_blk;
+                    for (token_ids[1..]) |tid| _ = mdl.model().forward(tid) catch break :disagg_blk;
+                    std.log.info("Prefill done ({d} tokens). Sending KV cache...", .{token_ids.len});
+                    mdl.sendKvCache(dtr);
+                    std.log.info("KV cache sent. Prefill node done.", .{});
+                }
+            } else {
+                // Decode node: receive KV, generate tokens
+                std.log.info("Disagg decode: connecting to prefill node...", .{});
+                dtr.connectPeer(host, port) catch break :disagg_blk;
+                std.log.info("Connected. Waiting for KV cache...", .{});
+                mdl.recvKvCache(dtr);
+                std.log.info("KV cache received ({d} positions). Generating...", .{mdl.model().kvSeqLen()});
+
+                if (effective_prompt) |prompt| {
+                    generateAndPrint(allocator, &model_if, tok, cli, tok_kind, eog, arch, prompt, !g_quiet, minfo, display, img_tokens, n_visual_tokens, draft_ptr);
+                }
+            }
+        }
     } else if (effective_prompt) |prompt| {
         generateAndPrint(allocator, &model_if, tok, cli, tok_kind, eog, arch, prompt, !g_quiet, minfo, display, img_tokens, n_visual_tokens, draft_ptr);
     } else {

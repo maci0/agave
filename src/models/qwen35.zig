@@ -1460,6 +1460,59 @@ pub const Qwen35Model = struct {
         return last;
     }
 
+    /// Send KV cache to a peer via transport (for disaggregated prefill/decode).
+    pub fn sendKvCache(self: *Qwen35Model, transport: *@import("../parallel/transport.zig").Transport) void {
+        const kvd = self.paged_cache.kv_dim;
+        const bs = self.paged_cache.block_size;
+        const elems_per_block = @as(usize, bs) * kvd;
+        // Send seq_len and n_layers
+        var meta = [2]f32{ @floatFromInt(self.kv_seq_len), @floatFromInt(self.n_layers) };
+        transport.sendBuf(&meta, 2);
+        // Send block data for each layer
+        for (0..self.n_layers) |li| {
+            const bt = self.seq_table.block_table[li];
+            const n_blocks = (self.kv_seq_len + bs - 1) / bs;
+            for (0..n_blocks) |bi| {
+                const block_id = bt[bi];
+                const blk = self.paged_cache.blocks[block_id];
+                transport.sendBuf(blk.keys.ptr, elems_per_block);
+                transport.sendBuf(blk.values.ptr, elems_per_block);
+            }
+        }
+    }
+
+    /// Receive KV cache from a peer via transport.
+    pub fn recvKvCache(self: *Qwen35Model, transport: *@import("../parallel/transport.zig").Transport) void {
+        const kvd = self.paged_cache.kv_dim;
+        const bs = self.paged_cache.block_size;
+        const elems_per_block = @as(usize, bs) * kvd;
+        // Receive seq_len and n_layers
+        var meta: [2]f32 = undefined;
+        transport.recvBuf(&meta, 2);
+        const seq_len: usize = @intFromFloat(meta[0]);
+        // Allocate blocks for the received sequence
+        const n_blocks = (seq_len + bs - 1) / bs;
+        // Ensure we have enough blocks
+        while (self.kv_seq_len < seq_len) {
+            if (self.kv_seq_len > 0 and self.kv_seq_len % bs == 0) {
+                self.block_allocator.appendBlock(&self.seq_table) catch break;
+            }
+            self.kv_seq_len += 1;
+        }
+        self.kv_seq_len = seq_len;
+        // Receive block data
+        for (0..self.n_layers) |li| {
+            const bt = self.seq_table.block_table[li];
+            for (0..n_blocks) |bi| {
+                const block_id = bt[bi];
+                const blk = &self.paged_cache.blocks[block_id];
+                transport.recvBuf(blk.keys.ptr, elems_per_block);
+                transport.recvBuf(blk.values.ptr, elems_per_block);
+                blk.used = if (bi < n_blocks - 1) bs else @intCast(seq_len % bs);
+            }
+        }
+    }
+
     /// Reset all KV cache and SSM state for a new conversation.
     pub fn resetCache(self: *Qwen35Model) void {
         for (0..self.n_layers) |i| {

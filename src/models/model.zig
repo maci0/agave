@@ -634,6 +634,28 @@ pub const ModelStorage = union(enum) {
         }
     }
 
+    /// Send KV cache via transport (disaggregated prefill).
+    pub fn sendKvCache(self: *ModelStorage, transport: *@import("../parallel/transport.zig").Transport) void {
+        switch (self.*) {
+            inline else => |*m| {
+                if (@TypeOf(m.*) != void) {
+                    if (comptime @hasDecl(@TypeOf(m.*), "sendKvCache")) m.sendKvCache(transport);
+                }
+            },
+        }
+    }
+
+    /// Receive KV cache via transport (disaggregated decode).
+    pub fn recvKvCache(self: *ModelStorage, transport: *@import("../parallel/transport.zig").Transport) void {
+        switch (self.*) {
+            inline else => |*m| {
+                if (@TypeOf(m.*) != void) {
+                    if (comptime @hasDecl(@TypeOf(m.*), "recvKvCache")) m.recvKvCache(transport);
+                }
+            },
+        }
+    }
+
     /// Set PP config and transport.
     pub fn setPpConfig(self: *ModelStorage, rank: u32, degree: u32, transport: ?*@import("../parallel/transport.zig").Transport) void {
         switch (self.*) {
