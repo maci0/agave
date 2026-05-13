@@ -87,4 +87,32 @@ pub const Transport = struct {
         // Sum
         for (0..n) |i| buf[i] += recv[i];
     }
+
+    /// Point-to-point send: send buffer to peer.
+    pub fn sendBuf(self: *Transport, buf: [*]const f32, n: usize) void {
+        if (self.tcp_connected == 0) return;
+        const byte_len = n * @sizeOf(f32);
+        const fd = self.tcp_fds[0];
+        const data: [*]const u8 = @ptrCast(buf);
+        var sent: usize = 0;
+        while (sent < byte_len) {
+            const rc = c.send(fd, data + sent, byte_len - sent, 0);
+            if (rc <= 0) return;
+            sent += @intCast(rc);
+        }
+    }
+
+    /// Point-to-point recv: receive buffer from peer.
+    pub fn recvBuf(self: *Transport, buf: [*]f32, n: usize) void {
+        if (self.tcp_connected == 0) return;
+        const byte_len = n * @sizeOf(f32);
+        const fd = self.tcp_fds[0];
+        const data: [*]u8 = @ptrCast(buf);
+        var got: usize = 0;
+        while (got < byte_len) {
+            const rc = c.recv(fd, data + got, byte_len - got, 0);
+            if (rc <= 0) return;
+            got += @intCast(rc);
+        }
+    }
 };

@@ -442,6 +442,9 @@ const CliArgs = struct {
     tp_degree: u32 = 1,
     tp_rank: u32 = 0,
     tp_peers: ?[]const u8 = null,
+    pp_degree: u32 = 1,
+    pp_rank: u32 = 0,
+    pp_peers: ?[]const u8 = null,
     // Speculative decoding
     draft_model_path: ?[]const u8 = null,
     spec_tokens: u32 = 5,
@@ -786,6 +789,7 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
         .tp_degree = res.optionU32("tp") orelse 1,
         .tp_rank = res.optionU32("rank") orelse 0,
         .tp_peers = res.option("peers"),
+        .pp_degree = res.optionU32("pp") orelse 1,
         .use_mmap = res.flag("mmap"),
         .prefill_batch_size = res.optionU32("prefill-batch-size") orelse default_chunk_size,
         .mmproj = res.option("mmproj"),
@@ -1615,6 +1619,45 @@ fn initAndRun(
                 };
                 if (connected) mdl.setTpTransport(tr);
             }
+        }
+    }
+
+    // PP: pipeline parallelism setup (uses --pp, --rank, --peers)
+    if (cli.pp_degree > 1) {
+        std.log.info("PP={d} rank={d}", .{ cli.pp_degree, cli.tp_rank });
+        if (cli.tp_peers) |peers_str| pp_setup: {
+            const TransportMod = @import("parallel/transport.zig");
+            const t = allocator.create(TransportMod.Transport) catch break :pp_setup;
+            t.* = TransportMod.Transport.init(allocator, .tcp, cli.tp_rank, cli.pp_degree) catch break :pp_setup;
+            var host: [4]u8 = .{ 0, 0, 0, 0 };
+            var port: u16 = 49455; // different port from TP
+            if (std.mem.indexOfScalar(u8, peers_str, ':')) |colon| {
+                port = std.fmt.parseInt(u16, peers_str[colon + 1 ..], 10) catch 49455;
+                parseIpv4(peers_str[0..colon], &host);
+            } else {
+                parseIpv4(peers_str, &host);
+            }
+            const ok = blk: {
+                if (cli.tp_rank == 0) {
+                    var la: std.posix.sockaddr.in = .{ .port = std.mem.nativeToBig(u16, port), .addr = 0 };
+                    const ls = std.c.socket(std.posix.AF.INET, std.posix.SOCK.STREAM, 0);
+                    if (ls < 0) break :blk false;
+                    defer _ = std.c.close(ls);
+                    var one: c_int = 1;
+                    _ = std.c.setsockopt(ls, std.posix.SOL.SOCKET, std.posix.SO.REUSEADDR, @ptrCast(&one), @sizeOf(c_int));
+                    if (std.c.bind(ls, @ptrCast(&la), @sizeOf(@TypeOf(la))) != 0) break :blk false;
+                    if (std.c.listen(ls, 1) != 0) break :blk false;
+                    std.log.info("PP: waiting for rank 1 on port {d}...", .{port});
+                    t.acceptPeer(ls) catch break :blk false;
+                    std.log.info("PP: rank 1 connected", .{});
+                } else {
+                    std.log.info("PP: connecting to rank 0...", .{});
+                    t.connectPeer(host, port) catch break :blk false;
+                    std.log.info("PP: connected", .{});
+                }
+                break :blk true;
+            };
+            if (ok) mdl.setPpConfig(cli.tp_rank, cli.pp_degree, t);
         }
     }
 

@@ -634,6 +634,21 @@ pub const ModelStorage = union(enum) {
         }
     }
 
+    /// Set PP config and transport.
+    pub fn setPpConfig(self: *ModelStorage, rank: u32, degree: u32, transport: ?*@import("../parallel/transport.zig").Transport) void {
+        switch (self.*) {
+            inline else => |*m| {
+                if (@TypeOf(m.*) != void) {
+                    if (comptime @hasField(@TypeOf(m.*), "pp_rank")) {
+                        m.pp_rank = rank;
+                        m.pp_degree = degree;
+                        m.pp_transport = transport;
+                    }
+                }
+            },
+        }
+    }
+
     /// Fix the block allocator's cache pointer after the struct has been moved.
     pub fn fixBlockAllocator(self: *ModelStorage) void {
         switch (self.*) {

@@ -84,6 +84,10 @@ pub const Qwen35Model = struct {
     tp_peer_buf: ?[*]const f32 = null, // peer rank's partial output for all-reduce
     tp_row_shard_buf: []u8 = &.{}, // scratch for row-split weight column extraction
     tp_transport: ?*@import("../parallel/transport.zig").Transport = null, // network transport for distributed TP
+    // Pipeline parallelism
+    pp_rank: u32 = 0,
+    pp_degree: u32 = 1,
+    pp_transport: ?*@import("../parallel/transport.zig").Transport = null,
     tp_kv_cache_rank1: ?PagedKvCache = null, // second KV cache for TP rank 1
     tp_seq_table_rank1: ?kvcache.SeqBlockTable = null,
 
@@ -1291,10 +1295,26 @@ pub const Qwen35Model = struct {
         self.syncProfile();
         self.perf.end(.emb_lookup, t);
 
+        // Pipeline parallelism: determine this rank's layer range
+        const pp_layers_per_rank = if (self.pp_degree > 1) self.n_layers / self.pp_degree else self.n_layers;
+        const pp_layer_start = self.pp_rank * pp_layers_per_rank;
+        const pp_layer_end = if (self.pp_rank == self.pp_degree - 1) self.n_layers else pp_layer_start + pp_layers_per_rank;
+
+        // PP: receive activations from previous stage
+        if (self.pp_degree > 1 and self.pp_rank > 0) {
+            if (self.pp_transport) |transport| {
+                const e = self.n_embd;
+                transport.recvBuf(self.hidden.ptr, e);
+                transport.recvBuf(self.hidden2.ptr, e);
+            }
+        }
+
         for (0..self.n_layers) |li| {
             if (self.cancelled.load(.monotonic)) return error.Cancelled;
             const l: u32 = @intCast(li);
             if (l >= self.layer_skip_start and l < self.layer_skip_end) continue;
+            // PP: skip layers not owned by this rank
+            if (self.pp_degree > 1 and (li < pp_layer_start or li >= pp_layer_end)) continue;
             self.fmt.prefetchLayer(@intCast(li + 1));
             const fuse = li > 0 and !self.is_moe;
 
@@ -1372,6 +1392,24 @@ pub const Qwen35Model = struct {
             }
         }
 
+        // PP: send activations to next stage / receive logits
+        if (self.pp_degree > 1 and self.pp_transport != null) {
+            const transport = self.pp_transport.?;
+            const e = self.n_embd;
+            self.be.sync();
+            if (self.pp_rank < self.pp_degree - 1) {
+                // Not last stage: send hidden+hidden2 to next rank, receive token back
+                transport.sendBuf(self.hidden.ptr, e);
+                transport.sendBuf(self.hidden2.ptr, e);
+                // Receive the argmax'd token from last rank
+                var result_token: [1]f32 = undefined;
+                transport.recvBuf(&result_token, 1);
+                self.kv_seq_len += 1;
+                return @intFromFloat(result_token[0]);
+            }
+            // Last stage: runs output projection below, sends token back to rank 0
+        }
+
         // Fuse final FFN residual (hidden2) into output norm.
         const nw = self.fmt.getTensor("output_norm.weight") orelse return error.MissingTensor;
         const ow = self.fmt.getTensor("output.weight") orelse self.fmt.getTensor("token_embd.weight") orelse return error.MissingTensor;
@@ -1401,7 +1439,15 @@ pub const Qwen35Model = struct {
                 else => {},
             };
         }
-        return math_ops.argmax(self.logits_buf);
+        const result = math_ops.argmax(self.logits_buf);
+        // PP: last rank sends result token back to rank 0
+        if (self.pp_degree > 1 and self.pp_rank == self.pp_degree - 1) {
+            if (self.pp_transport) |transport| {
+                var tok_f32 = [1]f32{@floatFromInt(result)};
+                transport.sendBuf(&tok_f32, 1);
+            }
+        }
+        return result;
     }
 
     /// Batched prefill — sequential. DeltaNet SSM layers require sequential
