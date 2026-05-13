@@ -69,6 +69,17 @@ const token_bucket_1024: u32 = 1024;
 const token_bucket_2048: u32 = 2048;
 const token_bucket_4096: u32 = 4096;
 
+/// Inter-token latency (ITL) histogram bucket boundaries (milliseconds).
+/// Measures wall-clock time between consecutive tokens as seen by client.
+const itl_bucket_5ms: u64 = 5;
+const itl_bucket_10ms: u64 = 10;
+const itl_bucket_20ms: u64 = 20;
+const itl_bucket_50ms: u64 = 50;
+const itl_bucket_100ms: u64 = 100;
+const itl_bucket_200ms: u64 = 200;
+const itl_bucket_500ms: u64 = 500;
+const itl_bucket_1s: u64 = 1000;
+
 /// Cache line size for padding to prevent false sharing between atomic groups.
 const cache_line: usize = 64;
 
@@ -106,6 +117,8 @@ pub const Metrics = struct {
     preemptions_total: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
     kv_blocks_used: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
     kv_blocks_total: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
+    gpu_kv_blocks_used: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
+    gpu_kv_blocks_total: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
     _pad2: [cache_line]u8 = undefined,
 
     // ── Group 4: Latency histogram (per-request completion) ──
@@ -203,6 +216,19 @@ pub const Metrics = struct {
     gen_tok_4096: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
     gen_tok_inf: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
     gen_tok_sum: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
+    _pad12: [cache_line]u8 = undefined,
+
+    // ── Group 13: Inter-token latency histogram ──
+    itl_5ms: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
+    itl_10ms: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
+    itl_20ms: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
+    itl_50ms: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
+    itl_100ms: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
+    itl_200ms: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
+    itl_500ms: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
+    itl_1s: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
+    itl_inf: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
+    itl_sum: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
 
     /// Increment total request counter.
     pub fn recordRequest(self: *Metrics) void {
@@ -256,6 +282,22 @@ pub const Metrics = struct {
 
     pub fn recordPreemption(self: *Metrics) void {
         _ = self.preemptions_total.fetchAdd(1, .monotonic);
+    }
+
+    pub fn recordInterTokenLatency(self: *Metrics, duration_ms: u64) void {
+        self.recordToBuckets(duration_ms, .{
+            "itl_5ms", "itl_10ms", "itl_20ms", "itl_50ms",
+            "itl_100ms", "itl_200ms", "itl_500ms", "itl_1s",
+        }, .{
+            itl_bucket_5ms, itl_bucket_10ms, itl_bucket_20ms, itl_bucket_50ms,
+            itl_bucket_100ms, itl_bucket_200ms, itl_bucket_500ms, itl_bucket_1s,
+        }, "itl_inf");
+        _ = self.itl_sum.fetchAdd(duration_ms, .monotonic);
+    }
+
+    pub fn updateGpuKvBlocks(self: *Metrics, used: u32, total: u32) void {
+        self.gpu_kv_blocks_used.store(used, .monotonic);
+        self.gpu_kv_blocks_total.store(total, .monotonic);
     }
 
     /// Increment tokens generated counter.
@@ -612,6 +654,21 @@ pub const Metrics = struct {
             "gen_tok_512", "gen_tok_1024", "gen_tok_2048", "gen_tok_4096",
             "gen_tok_inf",
         }, .{ "16", "64", "128", "256", "512", "1024", "2048", "4096", "+Inf" }, "gen_tok_sum", false);
+
+        // GPU KV cache usage (separate from combined kv_cache_usage_perc)
+        const gpu_kv_used = self.gpu_kv_blocks_used.load(.monotonic);
+        const gpu_kv_total = self.gpu_kv_blocks_total.load(.monotonic);
+        const gpu_kv_perc: f64 = if (gpu_kv_total > 0) @as(f64, @floatFromInt(gpu_kv_used)) / @as(f64, @floatFromInt(gpu_kv_total)) else 0.0;
+        try writer.writeAll("# HELP agave_gpu_cache_usage_perc Fraction of GPU KV cache blocks in use (0-1)\n");
+        try writer.writeAll("# TYPE agave_gpu_cache_usage_perc gauge\n");
+        try writer.print("agave_gpu_cache_usage_perc {d:.4}\n", .{gpu_kv_perc});
+
+        // Inter-token latency histogram
+        try self.renderHistogram(writer, "agave_inter_token_latency_seconds", "Inter-token latency — wall-clock time between consecutive tokens", .{
+            "itl_5ms", "itl_10ms", "itl_20ms", "itl_50ms",
+            "itl_100ms", "itl_200ms", "itl_500ms", "itl_1s",
+            "itl_inf",
+        }, .{ "0.005", "0.01", "0.02", "0.05", "0.1", "0.2", "0.5", "1.0", "+Inf" }, "itl_sum", true);
 
         // Build info (static label-only metric, always 1)
         try writer.writeAll("# HELP agave_build_info Agave server build information\n");
