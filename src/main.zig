@@ -877,9 +877,10 @@ fn printUsage() void {
         \\
         \\PARALLELISM:
         \\      --list-devices         List available compute devices and exit
-        \\      --tp <N>               Tensor parallelism degree [default: 1]
-        \\      --pp <N>               Pipeline parallelism stages [default: 1]
+        \\      --tp <N>               Tensor parallelism: split weight matrices across N devices [default: 1]
+        \\      --pp <N>               Pipeline parallelism: split layers across N stages [default: 1]
         \\      --devices <SPEC>       Device selection (e.g. cuda:0,cuda:1)
+        \\      --list-devices         List available compute devices and exit
         \\
         \\MULTIMODAL:
         \\      --mmproj <PATH>    Path to vision projector GGUF (mmproj file)

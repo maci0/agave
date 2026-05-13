@@ -620,6 +620,19 @@ pub const Qwen35Model = struct {
         model_mod.dispatchGemv(self.be, self.fmt, x, t, y, n, k);
     }
 
+    /// Column-shard a weight tensor for TP: returns TensorInfo pointing to
+    /// this rank's slice of rows. n_local = n_total / tp_degree rows starting
+    /// at rank * n_local. No-op when tp_degree == 1.
+    fn shardColumnWeight(self: *const Qwen35Model, t: TensorInfo, n_total: usize, k: usize) TensorInfo {
+        if (self.tp_degree <= 1) return t;
+        const n_local = n_total / self.tp_degree;
+        const row_bytes = @import("../backend/kernels/cpu/gemv.zig").gemvRowBytes(t.dtype, k);
+        if (row_bytes == 0) return t;
+        var shard = t;
+        shard.data_ptr = t.data_ptr + self.tp_rank * n_local * row_bytes;
+        return shard;
+    }
+
     /// Build a GemvOp from a TensorInfo, populating MLX companion pointers
     /// when the tensor is MLX-quantized. This enables gemvMulti to dispatch
     /// MLX kernels without barriers between batched ops.
@@ -701,8 +714,8 @@ pub const Qwen35Model = struct {
     /// hidden via addRmsNorm instead of a separate add + rmsNorm.
     fn fullAttnLayer(self: *Qwen35Model, li: u32, fuse_ffn_residual: bool) !void {
         const e: usize = self.n_embd;
-        const nh: usize = self.n_head;
-        const nkv: usize = self.n_head_kv;
+        const nh: usize = if (self.tp_degree > 1) self.n_head / self.tp_degree else self.n_head;
+        const nkv: usize = if (self.tp_degree > 1) self.n_head_kv / self.tp_degree else self.n_head_kv;
         const hd: usize = self.head_dim;
         const qd: usize = nh * hd;
 
@@ -724,7 +737,10 @@ pub const Qwen35Model = struct {
         const vw = self.fmt.layerTensor(li, "attn_v.weight") orelse return;
 
         const q_out: usize = if (self.has_gate) qd * 2 else qd;
-        self.doGemvBatch3(self.hidden2.ptr, qw, self.q_buf.ptr, q_out, kw, self.k_buf.ptr, nkv * hd, vw, self.v_buf.ptr, nkv * hd, e);
+        const qw_s = self.shardColumnWeight(qw, if (self.has_gate) self.n_head * hd * 2 else self.n_head * hd, e);
+        const kw_s = self.shardColumnWeight(kw, self.n_head_kv * hd, e);
+        const vw_s = self.shardColumnWeight(vw, self.n_head_kv * hd, e);
+        self.doGemvBatch3(self.hidden2.ptr, qw_s, self.q_buf.ptr, q_out, kw_s, self.k_buf.ptr, nkv * hd, vw_s, self.v_buf.ptr, nkv * hd, e);
         self.syncProfile();
         self.perf.end(.gemv_qkv, t);
 
@@ -836,6 +852,8 @@ pub const Qwen35Model = struct {
         self.doGemv(self.attn_out.ptr, ow, self.hidden2.ptr, e, qd);
         self.syncProfile();
         self.perf.end(.gemv_out, t);
+
+        // TODO: TP all-reduce after output projection (requires row-split weight sharding)
 
         // Qwen3/2: standard residual after attention (no fused addRmsNorm in MLP).
         if (!self.has_post_attn_norm) {
