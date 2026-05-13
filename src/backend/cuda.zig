@@ -737,8 +737,20 @@ pub const CudaBackend = struct {
     /// GPU use will re-upload the CPU-written data.
     pub fn invalidateAct(self: *CudaBackend, ptr: anytype) void {
         const addr = @intFromPtr(ptr);
-        if (self.act_cache.fetchRemove(addr)) |kv| {
-            _ = self.cuMemFree(kv.value.dptr);
+        // Mark as stale so next GPU access re-uploads from host
+        if (self.act_cache.getPtr(addr)) |act| {
+            act.state = .stale;
+            return;
+        }
+        // Also check if ptr falls within a parent buffer
+        var it = self.act_cache.iterator();
+        while (it.next()) |entry| {
+            const base = entry.key_ptr.*;
+            const act = entry.value_ptr;
+            if (addr >= base and addr < base + act.size) {
+                act.state = .stale;
+                return;
+            }
         }
     }
 
