@@ -228,7 +228,11 @@ fn enumerateRocm(list: *DeviceList) void {
     const FnGetCount = *const fn (*c_int) callconv(.c) HipResult;
 
     const lib_name = "libamdhip64.so";
-    var lib = std.DynLib.open(lib_name) catch return;
+    var lib = std.DynLib.open(lib_name) catch
+        std.DynLib.open("/opt/rocm/lib/" ++ lib_name) catch
+        std.DynLib.open("/usr/lib/x86_64-linux-gnu/" ++ lib_name) catch
+        std.DynLib.open("/usr/lib/aarch64-linux-gnu/" ++ lib_name) catch
+        return;
     defer lib.close();
 
     const hipInit = lib.lookup(FnInit, "hipInit") orelse return;

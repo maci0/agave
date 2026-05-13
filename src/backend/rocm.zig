@@ -224,8 +224,12 @@ pub const RocmBackend = struct {
         self.kv_dev_cache = std.AutoHashMap(usize, KvDevCache).init(allocator);
         errdefer self.kv_dev_cache.deinit();
 
-        // Dynamically load HIP runtime
-        self.lib = std.DynLib.open("libamdhip64.so") catch return error.RocmNotAvailable;
+        // Dynamically load HIP runtime (try standard name, then platform-specific paths)
+        self.lib = std.DynLib.open("libamdhip64.so") catch
+            std.DynLib.open("/opt/rocm/lib/libamdhip64.so") catch
+            std.DynLib.open("/usr/lib/x86_64-linux-gnu/libamdhip64.so") catch
+            std.DynLib.open("/usr/lib/aarch64-linux-gnu/libamdhip64.so") catch
+            return error.RocmNotAvailable;
         errdefer self.lib.close();
 
         // Resolve all function pointers
@@ -478,7 +482,7 @@ pub const RocmBackend = struct {
     }
 
     /// Sync GPU, download dirty buffers to host, mark all entries stale.
-    fn flushActivations(self: *RocmBackend) void {
+    pub fn flushActivations(self: *RocmBackend) void {
         _ = self.hipDeviceSynchronize();
         var it = self.act_cache.iterator();
         while (it.next()) |entry| {
@@ -493,6 +497,16 @@ pub const RocmBackend = struct {
     pub fn invalidateAct(self: *RocmBackend, ptr: anytype) void {
         const addr = @intFromPtr(ptr);
         if (self.act_cache.fetchRemove(addr)) |kv| {
+            _ = self.hipFree(@ptrFromInt(kv.value.dptr));
+        }
+    }
+
+    /// Evict a weight buffer from the permanent cache so the next getOrUpload
+    /// re-reads from host. Used when host-side weight data at the same address
+    /// changes between TP ranks (e.g. tp_row_shard_buf is reused per rank).
+    pub fn invalidateWeight(self: *RocmBackend, ptr: anytype) void {
+        const addr = @intFromPtr(ptr);
+        if (self.buf_cache.fetchRemove(addr)) |kv| {
             _ = self.hipFree(@ptrFromInt(kv.value.dptr));
         }
     }

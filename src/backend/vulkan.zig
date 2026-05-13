@@ -780,8 +780,11 @@ pub const VulkanBackend = struct {
         errdefer self.buf_cache.deinit();
         errdefer self.deinitCachedBuffers();
 
-        // Dynamically load Vulkan library
-        self.lib = std.DynLib.open(vk_lib_name) catch return error.VulkanNotAvailable;
+        // Dynamically load Vulkan library (try standard name, then platform-specific paths)
+        self.lib = std.DynLib.open(vk_lib_name) catch
+            std.DynLib.open("/usr/lib/x86_64-linux-gnu/" ++ vk_lib_name) catch
+            std.DynLib.open("/usr/lib/aarch64-linux-gnu/" ++ vk_lib_name) catch
+            return error.VulkanNotAvailable;
         errdefer self.lib.close();
 
         // Resolve all function pointers
