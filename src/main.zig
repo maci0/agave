@@ -1513,7 +1513,7 @@ fn initAndRun(
         (if (cli.kv_budget > 0) cli.kv_budget else @as(u32, @intCast(cli.ctx_size * 4 / 5)))
     else
         0;
-    var mdl = ModelStorage.initFromArch(arch, allocator, fmt, be, cli.ctx_size, cli.kv_type_k, cli.kv_type_v, cli.kv_boundary_v, eviction_budget, tiered_ptr) catch |e| {
+    var mdl = ModelStorage.initFromArch(arch, allocator, fmt, be, cli.ctx_size, cli.kv_type_k, cli.kv_type_v, cli.kv_boundary_v, eviction_budget, tiered_ptr, 0, 1) catch |e| {
         eprint("Error: failed to initialize {s}: {}\n", .{ arch.displayName(), e });
         if (e == error.OutOfMemory)
             eprint("  Not enough memory. Try a smaller quantization or model.\n", .{})
@@ -1736,7 +1736,7 @@ fn initAndRun(
             eprint("Error: draft model arch {s} disabled at compile time\n", .{draft_arch.displayName()});
             return false;
         }
-        draft_mdl_storage = ModelStorage.initFromArch(draft_arch, allocator, draft_fmt, be, cli.ctx_size, .f16, .f16, 0, 0, null) catch |e| {
+        draft_mdl_storage = ModelStorage.initFromArch(draft_arch, allocator, draft_fmt, be, cli.ctx_size, .f16, .f16, 0, 0, null, 0, 1) catch |e| {
             eprint("Error: failed to init draft model: {}\n", .{e});
             return false;
         };

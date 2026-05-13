@@ -826,6 +826,17 @@ pub const Backend = union(enum) {
         }
     }
 
+    /// All-reduce sum for tensor parallelism: dst[i] += src[i].
+    pub inline fn allReduceAdd(self: Backend, dst: [*]f32, src: [*]const f32, n: usize) void {
+        switch (self) {
+            inline else => |be| {
+                if (comptime @hasDecl(@TypeOf(be.*), "allReduceAdd")) {
+                    be.allReduceAdd(dst, src, n);
+                }
+            },
+        }
+    }
+
     /// Register a host memory region for UMA zero-copy GPU access.
     /// Call once per mmap'd file (GGUF, SafeTensors) after loading.
     /// No-op on backends that don't support UMA host registration.

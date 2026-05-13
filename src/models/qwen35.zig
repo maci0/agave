@@ -78,6 +78,10 @@ pub const Qwen35Model = struct {
     has_post_attn_norm: bool = true, // Qwen3.5 fused addRmsNorm; Qwen3 uses separate ffn_norm
     has_attn_bias: bool = false, // Q/K/V bias (Qwen2/2.5 only, not Qwen3/3.5)
 
+    // Tensor parallelism
+    tp_rank: u32 = 0,
+    tp_degree: u32 = 1,
+
     /// True when weights are MLX quantized (SafeTensors U32 packed).
     is_mlx: bool = false,
     /// True when loaded from SafeTensors (HF conventions for Q/K/V split, GQA, A_log).

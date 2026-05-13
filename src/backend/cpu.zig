@@ -362,6 +362,18 @@ pub const CpuBackend = struct {
         }
     }
 
+    /// All-reduce sum: dst[i] += src[i]. Used for tensor parallelism partial result accumulation.
+    pub fn allReduceAdd(_: *CpuBackend, dst: [*]f32, src: [*]const f32, n: usize) void {
+        const V8 = @Vector(8, f32);
+        var i: usize = 0;
+        while (i + 8 <= n) : (i += 8) {
+            const d: V8 = dst[i..][0..8].*;
+            const s: V8 = src[i..][0..8].*;
+            dst[i..][0..8].* = d + s;
+        }
+        while (i < n) : (i += 1) dst[i] += src[i];
+    }
+
     /// Scaled accumulate: dst[i] += src[i] * scale. SIMD-optimized with V8.
     pub fn addScaled(_: *CpuBackend, src: [*]const f32, dst: [*]f32, scale: f32, n: usize) void {
         const V8 = @Vector(8, f32);

@@ -1157,7 +1157,7 @@ fn runE2eWithArch(
     quant: []const u8,
 ) void {
     const ModelStorage = model_mod.ModelStorage;
-    var mdl = ModelStorage.initFromArch(arch, allocator, fmt, be, 0, .f32, .f32, 0, 0, null) catch |e| {
+    var mdl = ModelStorage.initFromArch(arch, allocator, fmt, be, 0, .f32, .f32, 0, 0, null, 0, 1) catch |e| {
         eprint("Error: failed to initialize {s}: {}\n", .{ arch.displayName(), e });
         return;
     };

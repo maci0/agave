@@ -545,7 +545,7 @@ pub const ModelStorage = union(enum) {
 
     /// Initialize a model from its architecture type.
     /// Returns a ModelStorage union holding the initialized concrete model.
-    pub fn initFromArch(arch: Arch, allocator: std.mem.Allocator, fmt: format_mod.Format, be: backend_mod.Backend, ctx_size: u32, kv_type_k: KvQuantType, kv_type_v: KvQuantType, kv_boundary_v: u32, kv_eviction_budget: u32, tiered_cache: ?*TieredKvCache) !ModelStorage {
+    pub fn initFromArch(arch: Arch, allocator: std.mem.Allocator, fmt: format_mod.Format, be: backend_mod.Backend, ctx_size: u32, kv_type_k: KvQuantType, kv_type_v: KvQuantType, kv_boundary_v: u32, kv_eviction_budget: u32, tiered_cache: ?*TieredKvCache, tp_rank: u32, tp_degree: u32) !ModelStorage {
         switch (arch) {
             inline .gemma3, .gemma4, .qwen35, .gpt_oss, .nemotron_h, .nemotron_nano, .glm4 => |a| {
                 if (comptime !a.isEnabled()) unreachable;
@@ -557,6 +557,10 @@ pub const ModelStorage = union(enum) {
                 }
                 if (comptime @hasField(M, "kv_eviction_budget")) {
                     mdl.kv_eviction_budget = kv_eviction_budget;
+                }
+                if (comptime @hasField(M, "tp_rank")) {
+                    mdl.tp_rank = tp_rank;
+                    mdl.tp_degree = tp_degree;
                 }
                 return @unionInit(ModelStorage, @tagName(a), mdl);
             },

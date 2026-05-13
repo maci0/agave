@@ -110,7 +110,7 @@ export fn agave_init(model_ptr: [*]const u8, model_len: usize) usize {
     ctx.n_layers = fmt.getArchU32(arch_str, "block_count") orelse 0;
     ctx.n_embd = fmt.getArchU32(arch_str, "embedding_length") orelse 0;
 
-    ctx.mdl = ModelStorage.initFromArch(ctx.arch, gpa, fmt, be, capped_ctx, .f16, .f16, 0, 0, null) catch |e| {
+    ctx.mdl = ModelStorage.initFromArch(ctx.arch, gpa, fmt, be, capped_ctx, .f16, .f16, 0, 0, null, 0, 1) catch |e| {
         const msg = std.fmt.bufPrint(&ctx.output_buf, "Model init error: {s}", .{@errorName(e)}) catch "";
         ctx.output_len = msg.len;
         return @intFromPtr(ctx);
