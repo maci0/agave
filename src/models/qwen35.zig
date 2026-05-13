@@ -83,6 +83,7 @@ pub const Qwen35Model = struct {
     tp_degree: u32 = 1,
     tp_peer_buf: ?[*]const f32 = null, // peer rank's partial output for all-reduce
     tp_row_shard_buf: []u8 = &.{}, // scratch for row-split weight column extraction
+    tp_transport: ?*@import("../parallel/transport.zig").Transport = null, // network transport for distributed TP
     tp_kv_cache_rank1: ?PagedKvCache = null, // second KV cache for TP rank 1
     tp_seq_table_rank1: ?kvcache.SeqBlockTable = null,
 
@@ -1307,9 +1308,25 @@ pub const Qwen35Model = struct {
                 if (self.isFullAttn(l)) try self.fullAttnLayer(l, fuse) else try self.deltaNetLayer(l, fuse);
                 self.tp_degree = saved_tp;
 
-                // FFN TP: run norm once, then gate/up+silu+down per rank, all-reduce
+                // FFN TP: norm → per-rank compute → all-reduce
+                // Distributed path: single rank + network all-reduce
+                if (self.tp_transport) |transport| {
+                    if (self.has_post_attn_norm) {
+                        const nw = self.fmt.layerTensor(l, "post_attention_norm.weight") orelse return error.MissingTensor;
+                        self.be.addRmsNorm(self.hidden.ptr, self.hidden2.ptr, self.normAsF32(nw, e), self.hidden2.ptr, e, self.rms_eps);
+                    } else {
+                        const nw = self.fmt.layerTensor(l, "ffn_norm.weight") orelse return error.MissingTensor;
+                        self.be.rmsNorm(self.hidden.ptr, self.normAsF32(nw, e), self.hidden2.ptr, e, self.rms_eps);
+                    }
+                    self.be.sync();
+                    try self.ffnCompute(l);
+                    self.be.sync();
+                    transport.allReduceAdd(self.hidden2.ptr, e) catch {};
+                    continue;
+                }
 
-                // Step 1: Pre-MLP norm (shared, not rank-specific)
+                // Local TP: dual-rank sequential + local all-reduce
+                // Step 1: Pre-MLP norm (shared)
                 {
                     const nt = self.perf.start();
                     if (self.has_post_attn_norm) {

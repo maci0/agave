@@ -623,6 +623,17 @@ pub const ModelStorage = union(enum) {
         }
     }
 
+    /// Set the network transport for distributed TP all-reduce.
+    pub fn setTpTransport(self: *ModelStorage, transport: *@import("../parallel/transport.zig").Transport) void {
+        switch (self.*) {
+            inline else => |*m| {
+                if (@TypeOf(m.*) != void) {
+                    if (comptime @hasField(@TypeOf(m.*), "tp_transport")) m.tp_transport = transport;
+                }
+            },
+        }
+    }
+
     /// Fix the block allocator's cache pointer after the struct has been moved.
     pub fn fixBlockAllocator(self: *ModelStorage) void {
         switch (self.*) {

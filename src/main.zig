@@ -440,6 +440,8 @@ const CliArgs = struct {
     megakernel: bool = false,
     /// Tensor parallelism degree (split weights across ranks).
     tp_degree: u32 = 1,
+    tp_rank: u32 = 0,
+    tp_peers: ?[]const u8 = null,
     // Speculative decoding
     draft_model_path: ?[]const u8 = null,
     spec_tokens: u32 = 5,
@@ -782,6 +784,8 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
         .profile = res.flag("profile"),
         .megakernel = res.flag("megakernel"),
         .tp_degree = res.optionU32("tp") orelse 1,
+        .tp_rank = res.optionU32("rank") orelse 0,
+        .tp_peers = res.option("peers"),
         .use_mmap = res.flag("mmap"),
         .prefill_batch_size = res.optionU32("prefill-batch-size") orelse default_chunk_size,
         .mmproj = res.option("mmproj"),
@@ -811,6 +815,23 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
             .ctx_size = res.option("ctx-size") != null,
         },
     };
+}
+
+fn parseIpv4(s: []const u8, out: *[4]u8) void {
+    var parts: [4]u8 = .{ 0, 0, 0, 0 };
+    var part_idx: usize = 0;
+    var acc: u16 = 0;
+    for (s) |c| {
+        if (c == '.') {
+            if (part_idx < 4) parts[part_idx] = @intCast(acc);
+            part_idx += 1;
+            acc = 0;
+        } else if (c >= '0' and c <= '9') {
+            acc = acc * 10 + (c - '0');
+        }
+    }
+    if (part_idx < 4) parts[part_idx] = @intCast(acc);
+    out.* = parts;
 }
 
 fn parseF32(s: ?[]const u8, comptime flag: []const u8) ?f32 {
@@ -1521,7 +1542,7 @@ fn initAndRun(
         (if (cli.kv_budget > 0) cli.kv_budget else @as(u32, @intCast(cli.ctx_size * 4 / 5)))
     else
         0;
-    var mdl = ModelStorage.initFromArch(arch, allocator, fmt, be, cli.ctx_size, cli.kv_type_k, cli.kv_type_v, cli.kv_boundary_v, eviction_budget, tiered_ptr, 0, cli.tp_degree) catch |e| {
+    var mdl = ModelStorage.initFromArch(arch, allocator, fmt, be, cli.ctx_size, cli.kv_type_k, cli.kv_type_v, cli.kv_boundary_v, eviction_budget, tiered_ptr, cli.tp_rank, cli.tp_degree) catch |e| {
         eprint("Error: failed to initialize {s}: {}\n", .{ arch.displayName(), e });
         if (e == error.OutOfMemory)
             eprint("  Not enough memory. Try a smaller quantization or model.\n", .{})
@@ -1556,7 +1577,45 @@ fn initAndRun(
                 }
             }
         }
-        std.log.info("TP={d} rank=0 active", .{cli.tp_degree});
+        std.log.info("TP={d} rank={d} active", .{ cli.tp_degree, cli.tp_rank });
+
+        // Distributed TP: connect to peers via TCP
+        if (cli.tp_peers) |peers_str| {
+            const TransportMod = @import("parallel/transport.zig");
+            const t = allocator.create(TransportMod.Transport) catch null;
+            if (t) |tr| init_transport: {
+                tr.* = TransportMod.Transport.init(allocator, .tcp, cli.tp_rank, cli.tp_degree) catch break :init_transport;
+                var host: [4]u8 = .{ 0, 0, 0, 0 };
+                var port: u16 = 49454;
+                if (std.mem.indexOfScalar(u8, peers_str, ':')) |colon| {
+                    port = std.fmt.parseInt(u16, peers_str[colon + 1 ..], 10) catch 49454;
+                    parseIpv4(peers_str[0..colon], &host);
+                } else {
+                    parseIpv4(peers_str, &host);
+                }
+                const connected = blk: {
+                    if (cli.tp_rank == 0) {
+                        var la: std.posix.sockaddr.in = .{ .port = std.mem.nativeToBig(u16, port), .addr = 0 };
+                        const ls = std.c.socket(std.posix.AF.INET, std.posix.SOCK.STREAM, 0);
+                        if (ls < 0) break :blk false;
+                        defer _ = std.c.close(ls);
+                        var one: c_int = 1;
+                        _ = std.c.setsockopt(ls, std.posix.SOL.SOCKET, std.posix.SO.REUSEADDR, @ptrCast(&one), @sizeOf(c_int));
+                        if (std.c.bind(ls, @ptrCast(&la), @sizeOf(@TypeOf(la))) != 0) break :blk false;
+                        if (std.c.listen(ls, 1) != 0) break :blk false;
+                        std.log.info("Waiting for rank 1 on port {d}...", .{port});
+                        tr.acceptPeer(ls) catch break :blk false;
+                        std.log.info("Rank 1 connected", .{});
+                    } else {
+                        std.log.info("Connecting to rank 0 at {d}.{d}.{d}.{d}:{d}...", .{ host[0], host[1], host[2], host[3], port });
+                        tr.connectPeer(host, port) catch break :blk false;
+                        std.log.info("Connected to rank 0", .{});
+                    }
+                    break :blk true;
+                };
+                if (connected) mdl.setTpTransport(tr);
+            }
+        }
     }
 
     // TriAttention: load calibration data when --kv-eviction tri
