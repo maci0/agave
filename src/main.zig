@@ -1955,10 +1955,14 @@ fn initAndRun(
                     const token_ids = tok_iface.encode(formatted) catch break :disagg_blk;
                     defer allocator.free(token_ids);
 
-                    _ = mdl.model().forward(token_ids[0]) catch break :disagg_blk;
-                    for (token_ids[1..]) |tid| _ = mdl.model().forward(tid) catch break :disagg_blk;
-                    std.log.info("Prefill done ({d} tokens). Sending KV cache...", .{token_ids.len});
+                    var first_tok: u32 = 0;
+                    first_tok = mdl.model().forward(token_ids[0]) catch break :disagg_blk;
+                    for (token_ids[1..]) |tid| first_tok = mdl.model().forward(tid) catch break :disagg_blk;
+                    std.log.info("Prefill done ({d} tokens, first_gen={d}). Sending KV cache...", .{ token_ids.len, first_tok });
                     mdl.sendKvCache(dtr);
+                    // Send first generated token
+                    var first_f32 = [1]f32{@floatFromInt(first_tok)};
+                    dtr.sendBuf(&first_f32, 1);
                     std.log.info("KV cache sent. Prefill node done.", .{});
                 }
             } else {
@@ -1968,11 +1972,11 @@ fn initAndRun(
                 std.log.info("Connected. Waiting for KV cache...", .{});
                 mdl.recvKvCache(dtr);
                 const kv_len = mdl.model().kvSeqLen();
-                std.log.info("KV cache received ({d} positions). Generating...", .{kv_len});
-
-                // Generate tokens from received KV state (no prefill needed)
-                const logits = mdl.model().getLogits();
-                var next = math_ops.argmax(logits);
+                // Receive first generated token from prefill node
+                var first_tok_f32: [1]f32 = undefined;
+                dtr.recvBuf(&first_tok_f32, 1);
+                var next: u32 = @intFromFloat(first_tok_f32[0]);
+                std.log.info("KV cache received ({d} positions, first_gen={d}). Generating...", .{ kv_len, next });
                 var gen_count: u32 = 0;
                 const max_gen: u32 = @intCast(cli.max_tokens);
                 while (gen_count < max_gen) {
