@@ -543,6 +543,7 @@ const max_queue_families: u32 = 16;
 
 /// Maximum descriptor sets / descriptor count for the descriptor pool.
 const max_descriptor_sets: u32 = 128;
+const max_descriptors: u32 = max_descriptor_sets * 4;
 
 /// Workgroup size for all compute shaders.
 const workgroup_size: u32 = 256;
@@ -962,7 +963,7 @@ pub const VulkanBackend = struct {
 
         // Descriptor pool (increased for more shader pipelines)
         const pool_sizes = [_]VkDescriptorPoolSize{
-            .{ .type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, .descriptorCount = max_descriptor_sets },
+            .{ .type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, .descriptorCount = max_descriptors },
         };
         const dp_ci = VkDescriptorPoolCreateInfo{
             .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
@@ -1214,7 +1215,8 @@ pub const VulkanBackend = struct {
             .descriptorSetCount = 1,
             .pSetLayouts = &desc_layout,
         };
-        _ = self.vkAllocateDescriptorSets(self.device, &ds_ai, &desc_set);
+        if (self.vkAllocateDescriptorSets(self.device, &ds_ai, &desc_set) != VK_SUCCESS)
+            return error.VulkanInitFailed;
 
         return .{
             .pipeline = pipeline,
@@ -1309,8 +1311,8 @@ pub const VulkanBackend = struct {
         const desc_set = pipe.desc_set;
 
         // Update descriptor set with buffer bindings
-        var buf_infos: [4]VkDescriptorBufferInfo = undefined;
-        var writes: [4]VkWriteDescriptorSet = undefined;
+        var buf_infos: [8]VkDescriptorBufferInfo = undefined;
+        var writes: [8]VkWriteDescriptorSet = undefined;
         for (0..bufs.len) |i| {
             buf_infos[i] = .{
                 .buffer = bufs[i],
