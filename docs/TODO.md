@@ -50,7 +50,7 @@ All **correctness-critical** kernels for supported model×quant combinations are
 
 | # | Feature | Status | Notes |
 |---|---------|--------|-------|
-| 1 | Tensor/Pipeline parallelism | Design only | `docs/PARALLELISM.md` has 24-section design doc, no code |
+| 1 | Tensor/Pipeline parallelism | TP FFN working | `--tp 2` splits FFN weights, all-reduce verified correct on CPU. `--list-devices` enumerates Metal/CUDA/ROCm. Attention TP pending (needs sharded KV cache). PP not started |
 | 2 | Structured output / grammar-constrained decoding | Working | GBNF parser, `--grammar-string`, `--grammar`, `--json-output`, `--json-schema`. Full repetition (`*`/`+`/`?`), grouped expressions, JSON schema→GBNF conversion. HTTP API: `grammar` and `json_schema` fields |
 | 3 | TriAttention Phase 3 | Wired | CLI `--kv-eviction tri`, .cal auto-loading, scorePositionsTri in evictKvCache. Dynamic budget pending |
 | 4 | Native GPU tree SDPA for CUDA/ROCm/Vulkan | Done | All backends now have native f32 sdpaTree (CPU fallback only for quantized KV) |
