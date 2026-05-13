@@ -436,6 +436,8 @@ const CliArgs = struct {
     image: ?[]const u8 = null,
     /// Enable fused megakernel for single-dispatch forward pass.
     megakernel: bool = false,
+    /// Tensor parallelism degree (split weights across ranks).
+    tp_degree: u32 = 1,
     // Speculative decoding
     draft_model_path: ?[]const u8 = null,
     spec_tokens: u32 = 5,
@@ -777,6 +779,7 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
         .model_info = res.flag("model-info"),
         .profile = res.flag("profile"),
         .megakernel = res.flag("megakernel"),
+        .tp_degree = res.optionU32("tp") orelse 1,
         .use_mmap = res.flag("mmap"),
         .prefill_batch_size = res.optionU32("prefill-batch-size") orelse default_chunk_size,
         .mmproj = res.option("mmproj"),
@@ -1514,7 +1517,7 @@ fn initAndRun(
         (if (cli.kv_budget > 0) cli.kv_budget else @as(u32, @intCast(cli.ctx_size * 4 / 5)))
     else
         0;
-    var mdl = ModelStorage.initFromArch(arch, allocator, fmt, be, cli.ctx_size, cli.kv_type_k, cli.kv_type_v, cli.kv_boundary_v, eviction_budget, tiered_ptr, 0, 1) catch |e| {
+    var mdl = ModelStorage.initFromArch(arch, allocator, fmt, be, cli.ctx_size, cli.kv_type_k, cli.kv_type_v, cli.kv_boundary_v, eviction_budget, tiered_ptr, 0, cli.tp_degree) catch |e| {
         eprint("Error: failed to initialize {s}: {}\n", .{ arch.displayName(), e });
         if (e == error.OutOfMemory)
             eprint("  Not enough memory. Try a smaller quantization or model.\n", .{})
@@ -1526,6 +1529,26 @@ fn initAndRun(
     mdl.setPool(pool);
     mdl.fixBlockAllocator();
     mdl.setChunkSize(cli.prefill_batch_size);
+
+    // TP: allocate row-shard scratch buffer for weight column extraction
+    if (cli.tp_degree > 1) {
+        const n_embd = mdl.model().nEmbd();
+        const a_str = fmt.getMetaStr("general.architecture") orelse "unknown";
+        const n_ff = fmt.getArchU32(a_str, "feed_forward_length") orelse 0;
+        if (n_embd > 0 and n_ff > 0) {
+            const gemv_kern = @import("backend/kernels/cpu/gemv.zig");
+            const local_ff = n_ff / cli.tp_degree;
+            const row_bytes = gemv_kern.gemvRowBytes(.q4_0, local_ff);
+            const shard_size = n_embd * row_bytes;
+            if (shard_size > 0) {
+                const shard_buf = allocator.alloc(u8, shard_size) catch null;
+                if (shard_buf) |buf| {
+                    mdl.setTpRowShardBuf(buf);
+                }
+            }
+        }
+        std.log.info("TP={d} rank=0 active", .{cli.tp_degree});
+    }
 
     // TriAttention: load calibration data when --kv-eviction tri
     if (cli.kv_eviction == .tri) {

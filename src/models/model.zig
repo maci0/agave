@@ -610,6 +610,17 @@ pub const ModelStorage = union(enum) {
         }
     }
 
+    /// Set the TP row-shard scratch buffer for weight column extraction.
+    pub fn setTpRowShardBuf(self: *ModelStorage, buf: []u8) void {
+        switch (self.*) {
+            inline else => |*m| {
+                if (@TypeOf(m.*) != void) {
+                    if (comptime @hasField(@TypeOf(m.*), "tp_row_shard_buf")) m.tp_row_shard_buf = buf;
+                }
+            },
+        }
+    }
+
     /// Fix the block allocator's cache pointer after the struct has been moved.
     pub fn fixBlockAllocator(self: *ModelStorage) void {
         switch (self.*) {
