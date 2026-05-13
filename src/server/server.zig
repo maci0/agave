@@ -3746,6 +3746,7 @@ fn generateStream(stream: TcpStream, prompt: []const u8, req_id: u64, created: i
             s_gen_count = 1;
         }
 
+        var last_token_time: i64 = milliTimestamp();
         for (0..max_tokens -| 1) |_| {
             if (token_ids.len == 0 or (token_count == 0 and g_server.isEog(first_gen_token))) break;
             var next = model.forward(last) catch |err| {
@@ -3802,6 +3803,12 @@ fn generateStream(stream: TcpStream, prompt: []const u8, req_id: u64, created: i
                 s_gen_tokens[s_gen_count] = next;
                 s_gen_count += 1;
             }
+            // Record inter-token latency
+            const now_itl = milliTimestamp();
+            const itl_ms: u64 = @intCast(@max(now_itl - last_token_time, 0));
+            g_server.metrics.recordInterTokenLatency(itl_ms);
+            last_token_time = now_itl;
+
             last = next;
             token_count += 1;
         }
