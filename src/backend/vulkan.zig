@@ -1613,7 +1613,10 @@ pub const VulkanBackend = struct {
             .f32 => 0,
             .bf16 => 1,
             .f16 => 2,
-            else => @panic("Vulkan embLookup: unsupported dtype"),
+            else => {
+                @import("kernels/cpu/embedding.zig").embLookup(table.data, table.dtype, token_id, output, dim);
+                return;
+            },
         };
         const bytes_per_elem: usize = switch (table.dtype) {
             .f32 => 4,
