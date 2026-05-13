@@ -1466,8 +1466,8 @@ pub const Qwen35Model = struct {
         const bs = self.paged_cache.block_size;
         const elems_per_block = @as(usize, bs) * kvd;
         // Send seq_len and n_layers
-        var meta = [2]f32{ @floatFromInt(self.kv_seq_len), @floatFromInt(self.n_layers) };
-        transport.sendBuf(&meta, 2);
+        var meta = [3]f32{ @floatFromInt(self.kv_seq_len), @floatFromInt(self.n_layers), 0 };
+        transport.sendBuf(&meta, 3);
         // Send block data for each layer
         for (0..self.n_layers) |li| {
             const bt = self.seq_table.block_table[li];
@@ -1487,8 +1487,8 @@ pub const Qwen35Model = struct {
         const bs = self.paged_cache.block_size;
         const elems_per_block = @as(usize, bs) * kvd;
         // Receive seq_len and n_layers
-        var meta: [2]f32 = undefined;
-        transport.recvBuf(&meta, 2);
+        var meta: [3]f32 = undefined;
+        transport.recvBuf(&meta, 3);
         const seq_len: usize = @intFromFloat(meta[0]);
         // Allocate blocks for the received sequence
         const n_blocks = (seq_len + bs - 1) / bs;

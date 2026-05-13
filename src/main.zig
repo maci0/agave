@@ -1967,11 +1967,28 @@ fn initAndRun(
                 dtr.connectPeer(host, port) catch break :disagg_blk;
                 std.log.info("Connected. Waiting for KV cache...", .{});
                 mdl.recvKvCache(dtr);
-                std.log.info("KV cache received ({d} positions). Generating...", .{mdl.model().kvSeqLen()});
+                const kv_len = mdl.model().kvSeqLen();
+                std.log.info("KV cache received ({d} positions). Generating...", .{kv_len});
 
-                if (effective_prompt) |prompt| {
-                    generateAndPrint(allocator, &model_if, tok, cli, tok_kind, eog, arch, prompt, !g_quiet, minfo, display, img_tokens, n_visual_tokens, draft_ptr);
+                // Generate tokens from received KV state (no prefill needed)
+                const logits = mdl.model().getLogits();
+                var next = math_ops.argmax(logits);
+                var gen_count: u32 = 0;
+                const max_gen: u32 = @intCast(cli.max_tokens);
+                while (gen_count < max_gen) {
+                    const tok_slice = [1]u32{next};
+                    const text = tok.tokenizer().decode(@constCast(&tok_slice)) catch break;
+                    defer allocator.free(text);
+                    _ = std.posix.system.write(1, text.ptr, text.len);
+                    gen_count += 1;
+                    var is_eog = false;
+                    for (eog.ids[0..eog.len]) |e_id| {
+                        if (next == e_id) { is_eog = true; break; }
+                    }
+                    if (is_eog) break;
+                    next = mdl.model().forward(next) catch break;
                 }
+                _ = std.posix.system.write(1, "\n", 1);
             }
         }
     } else if (effective_prompt) |prompt| {
