@@ -752,6 +752,7 @@ pub const CudaBackend = struct {
                 return;
             }
         }
+        // Not in cache — nothing to invalidate (will be uploaded fresh)
     }
 
     // ── Launch helper ───────────────────────────────────────────

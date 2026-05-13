@@ -1373,8 +1373,15 @@ pub const Qwen35Model = struct {
 
                 // Restore normed hidden2 for rank 1
                 @memcpy(self.hidden2[0..e], self.scores_buf[0..e]);
-                // Invalidate GPU cache so rank 1 reads the restored host data
-                self.be.invalidateActivation(self.hidden2.ptr);
+                // Flush all GPU activation caches so rank 1 reads fresh host data
+                self.be.sync();
+                switch (self.be) {
+                    inline else => |be| {
+                        if (comptime @hasDecl(@TypeOf(be.*), "flushActivations")) {
+                            be.flushActivations();
+                        }
+                    },
+                }
 
                 // Step 3: Rank 1 FFN compute
                 self.tp_rank = 1;
