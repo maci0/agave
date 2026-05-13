@@ -348,6 +348,8 @@ const cli_specs = [_]cli_mod.ArgSpec{
     .{ .long = "tp", .kind = .option, .help = "Tensor parallelism degree [default: 1]." },
     .{ .long = "pp", .kind = .option, .help = "Pipeline parallelism stages [default: 1]." },
     .{ .long = "devices", .kind = .option, .help = "Device selection (e.g. cuda:0,cuda:1)." },
+    .{ .long = "peers", .kind = .option, .help = "TP peer addresses for distributed inference (e.g. 192.168.0.212:9999)." },
+    .{ .long = "rank", .kind = .option, .help = "This node's TP rank [default: 0]." },
     .{ .long = "ctx-size", .kind = .option, .help = "Context window size; 0 = full model context [default: min(model, 4096)]." },
     .{ .long = "allow-cpu-fallback", .help = "Allow GPU backends to fall back to CPU for unsupported ops." },
     .{ .long = "mmap", .help = "Use lazy mmap instead of eagerly paging weights into RAM." },
@@ -883,6 +885,8 @@ fn printUsage() void {
         \\      --tp <N>               Tensor parallelism: split weight matrices across N devices [default: 1]
         \\      --pp <N>               Pipeline parallelism: split layers across N stages [default: 1]
         \\      --devices <SPEC>       Device selection (e.g. cuda:0,cuda:1)
+        \\      --peers <ADDR>         Peer addresses for distributed TP (e.g. 192.168.0.212:9999)
+        \\      --rank <N>             This node's TP rank [default: 0]
         \\      --list-devices         List available compute devices and exit
         \\
         \\MULTIMODAL:
