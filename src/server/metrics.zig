@@ -103,6 +103,7 @@ pub const Metrics = struct {
     active_requests: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
     active_connections: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
     scheduler_errors: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
+    preemptions_total: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
     kv_blocks_used: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
     kv_blocks_total: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
     _pad2: [cache_line]u8 = undefined,
@@ -251,6 +252,10 @@ pub const Metrics = struct {
     /// Tracks scheduler.step() failures that are otherwise only visible in logs.
     pub fn recordSchedulerError(self: *Metrics) void {
         _ = self.scheduler_errors.fetchAdd(1, .monotonic);
+    }
+
+    pub fn recordPreemption(self: *Metrics) void {
+        _ = self.preemptions_total.fetchAdd(1, .monotonic);
     }
 
     /// Increment tokens generated counter.
@@ -607,6 +612,16 @@ pub const Metrics = struct {
             "gen_tok_512", "gen_tok_1024", "gen_tok_2048", "gen_tok_4096",
             "gen_tok_inf",
         }, .{ "16", "64", "128", "256", "512", "1024", "2048", "4096", "+Inf" }, "gen_tok_sum", false);
+
+        // Build info (static label-only metric, always 1)
+        try writer.writeAll("# HELP agave_build_info Agave server build information\n");
+        try writer.writeAll("# TYPE agave_build_info gauge\n");
+        try writer.writeAll("agave_build_info{version=\"0.1.0\",language=\"zig\",parallelism=\"tp+pp+disagg\"} 1\n");
+
+        // Preemptions (KV cache eviction under memory pressure)
+        try writer.writeAll("# HELP agave_num_preemptions_total Requests preempted due to KV cache pressure\n");
+        try writer.writeAll("# TYPE agave_num_preemptions_total counter\n");
+        try writer.print("agave_num_preemptions_total {d}\n", .{self.preemptions_total.load(.monotonic)});
     }
 };
 
