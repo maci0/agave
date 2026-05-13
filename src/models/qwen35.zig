@@ -83,6 +83,8 @@ pub const Qwen35Model = struct {
     tp_degree: u32 = 1,
     tp_peer_buf: ?[*]const f32 = null, // peer rank's partial output for all-reduce
     tp_row_shard_buf: []u8 = &.{}, // scratch for row-split weight column extraction
+    tp_kv_cache_rank1: ?PagedKvCache = null, // second KV cache for TP rank 1
+    tp_seq_table_rank1: ?kvcache.SeqBlockTable = null,
 
     /// True when weights are MLX quantized (SafeTensors U32 packed).
     is_mlx: bool = false,
@@ -1296,15 +1298,16 @@ pub const Qwen35Model = struct {
             const fuse = li > 0 and !self.is_moe;
 
             if (self.tp_degree > 1 and self.tp_row_shard_buf.len > 0 and !self.is_moe) {
-                // TP: attention runs on rank 0 only (full heads, no sharding)
-                // FFN runs on both ranks with all-reduce
+                const e = self.n_embd;
+
+                // Attention: run with TP=1 (full heads, single KV cache)
+                // Full attention TP pending — needs per-rank KV cache refactor
                 const saved_tp = self.tp_degree;
-                self.tp_degree = 1; // disable TP for attention
+                self.tp_degree = 1;
                 if (self.isFullAttn(l)) try self.fullAttnLayer(l, fuse) else try self.deltaNetLayer(l, fuse);
-                self.tp_degree = saved_tp; // re-enable for FFN
+                self.tp_degree = saved_tp;
 
                 // FFN TP: run norm once, then gate/up+silu+down per rank, all-reduce
-                const e = self.n_embd;
 
                 // Step 1: Pre-MLP norm (shared, not rank-specific)
                 {

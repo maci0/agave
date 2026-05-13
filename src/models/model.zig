@@ -561,6 +561,8 @@ pub const ModelStorage = union(enum) {
                 if (comptime @hasField(M, "tp_rank")) {
                     mdl.tp_rank = tp_rank;
                     mdl.tp_degree = tp_degree;
+                    // Note: attention TP needs per-rank KV caches (not yet implemented).
+                    // FFN TP works with the shared KV cache (attention runs TP=1).
                 }
                 return @unionInit(ModelStorage, @tagName(a), mdl);
             },
