@@ -144,7 +144,11 @@ fn enumerateCuda(list: *DeviceList) void {
     const FnCtxDestroy = *const fn (?*anyopaque) callconv(.c) CUresult;
 
     const cuda_lib_name = if (builtin.os.tag == .linux) "libcuda.so.1" else "libcuda.dylib";
-    var lib = std.DynLib.open(cuda_lib_name) catch return;
+    var lib = std.DynLib.open(cuda_lib_name) catch
+        std.DynLib.open("/lib/aarch64-linux-gnu/" ++ cuda_lib_name) catch
+        std.DynLib.open("/usr/lib/aarch64-linux-gnu/" ++ cuda_lib_name) catch
+        std.DynLib.open("/usr/lib/x86_64-linux-gnu/" ++ cuda_lib_name) catch
+        return;
     defer lib.close();
 
     const cuInit = lib.lookup(FnInit, "cuInit") orelse return;

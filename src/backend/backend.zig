@@ -838,6 +838,19 @@ pub const Backend = union(enum) {
         }
     }
 
+    /// Evict a weight buffer from GPU cache so next access re-uploads from host.
+    /// Used when the same host buffer (e.g. tp_row_shard_buf) is reused with
+    /// different data between TP rank switches.
+    pub inline fn invalidateWeight(self: Backend, ptr: anytype) void {
+        switch (self) {
+            inline else => |be| {
+                if (comptime @hasDecl(@TypeOf(be.*), "invalidateWeight")) {
+                    be.invalidateWeight(ptr);
+                }
+            },
+        }
+    }
+
     /// All-reduce sum for tensor parallelism: dst[i] += src[i].
     pub inline fn allReduceAdd(self: Backend, dst: [*]f32, src: [*]const f32, n: usize) void {
         switch (self) {

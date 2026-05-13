@@ -320,8 +320,12 @@ pub const CudaBackend = struct {
         self.kv_dev_cache = std.AutoHashMap(usize, KvDevCache).init(allocator);
         errdefer self.kv_dev_cache.deinit();
 
-        // Dynamically load libcuda
-        self.lib = std.DynLib.open(cuda_lib_name) catch return error.CudaNotAvailable;
+        // Dynamically load libcuda (try standard name, then platform-specific paths)
+        self.lib = std.DynLib.open(cuda_lib_name) catch
+            std.DynLib.open("/lib/aarch64-linux-gnu/" ++ cuda_lib_name) catch
+            std.DynLib.open("/usr/lib/aarch64-linux-gnu/" ++ cuda_lib_name) catch
+            std.DynLib.open("/usr/lib/x86_64-linux-gnu/" ++ cuda_lib_name) catch
+            return error.CudaNotAvailable;
         errdefer self.lib.close();
 
         // Resolve all function pointers
@@ -402,12 +406,13 @@ pub const CudaBackend = struct {
         if (cuCtxCreate(&self.context, 0, dev) != CUDA_SUCCESS) return error.CudaInitFailed;
         errdefer _ = self.cuCtxDestroy(self.context);
 
-        // Load PTX module — must be null-terminated
-        var ptx_buf: [ptx_source.len + 1]u8 = undefined;
+        // Load PTX module — must be null-terminated (heap-allocated, too large for stack)
+        const ptx_buf = try allocator.alloc(u8, ptx_source.len + 1);
+        defer allocator.free(ptx_buf);
         @memcpy(ptx_buf[0..ptx_source.len], ptx_source);
         ptx_buf[ptx_source.len] = 0;
 
-        const load_rc = cuModuleLoadData(&self.module, &ptx_buf);
+        const load_rc = cuModuleLoadData(&self.module, ptx_buf.ptr);
         if (load_rc != CUDA_SUCCESS) {
             std.log.warn("CUDA PTX load failed with error code {d}", .{load_rc});
             return error.PtxLoadFailed;
@@ -720,7 +725,7 @@ pub const CudaBackend = struct {
 
     /// Sync GPU, download dirty buffers to host, then mark all entries stale.
     /// Called before CPU code that may read or modify activation buffers.
-    fn flushActivations(self: *CudaBackend) void {
+    pub fn flushActivations(self: *CudaBackend) void {
         _ = self.cuCtxSynchronize();
         var it = self.act_cache.iterator();
         while (it.next()) |entry| {
@@ -753,6 +758,17 @@ pub const CudaBackend = struct {
             }
         }
         // Not in cache — nothing to invalidate (will be uploaded fresh)
+    }
+
+    /// Evict a weight buffer from the permanent cache so the next getOrUpload
+    /// re-reads from host. Used when host-side weight data at the same address
+    /// changes between TP ranks (e.g. tp_row_shard_buf is reused per rank).
+    pub fn invalidateWeight(self: *CudaBackend, ptr: anytype) void {
+        const addr = @intFromPtr(ptr);
+        if (self.buf_cache.getPtr(addr)) |cached| {
+            if (!cached.is_registered) _ = self.cuMemFree(cached.dptr);
+            _ = self.buf_cache.remove(addr);
+        }
     }
 
     // ── Launch helper ───────────────────────────────────────────

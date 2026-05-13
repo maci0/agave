@@ -647,7 +647,7 @@ pub const Qwen35Model = struct {
     /// a pre-allocated contiguous buffer. For weight W[n, k], rank r gets
     /// columns r*local_k:(r+1)*local_k from each row.
     /// Returns a TensorInfo pointing to the contiguous shard buffer.
-    fn shardRowWeight(self: *const Qwen35Model, t: TensorInfo, n: usize, k_total: usize, shard_buf: []u8) TensorInfo {
+    fn shardRowWeight(self: *Qwen35Model, t: TensorInfo, n: usize, k_total: usize, shard_buf: []u8) TensorInfo {
         if (self.tp_degree <= 1) return t;
         const local_k = k_total / self.tp_degree;
         const full_row_bytes = gemv_kernel.gemvRowBytes(t.dtype, k_total);
@@ -659,6 +659,8 @@ pub const Qwen35Model = struct {
             const dst_off = row * local_row_bytes;
             @memcpy(shard_buf[dst_off..][0..local_row_bytes], src[0..local_row_bytes]);
         }
+        // Evict GPU weight cache — shard_buf address reused with different data per rank
+        self.be.invalidateWeight(shard_buf.ptr);
         var shard = t;
         shard.data_ptr = shard_buf.ptr;
         return shard;
@@ -1361,27 +1363,18 @@ pub const Qwen35Model = struct {
                 }
                 self.be.sync();
 
-                // Save normed hidden2 for rank 1 (use scores_buf — unused during FFN)
+                // Save normed hidden2 for rank 1
                 @memcpy(self.scores_buf[0..e], self.hidden2[0..e]);
 
-                // Step 2: Rank 0 FFN compute (gate/up → silu → down → hidden2)
+                // Step 2: Rank 0 FFN compute
                 self.tp_rank = 0;
                 try self.ffnCompute(l);
                 self.be.sync();
-                // Save rank 0's partial output in attn_out (unused during FFN)
                 @memcpy(self.attn_out[0..e], self.hidden2[0..e]);
 
                 // Restore normed hidden2 for rank 1
                 @memcpy(self.hidden2[0..e], self.scores_buf[0..e]);
-                // Flush all GPU activation caches so rank 1 reads fresh host data
-                self.be.sync();
-                switch (self.be) {
-                    inline else => |be| {
-                        if (comptime @hasDecl(@TypeOf(be.*), "flushActivations")) {
-                            be.flushActivations();
-                        }
-                    },
-                }
+                self.be.invalidateActivation(self.hidden2.ptr);
 
                 // Step 3: Rank 1 FFN compute
                 self.tp_rank = 1;
