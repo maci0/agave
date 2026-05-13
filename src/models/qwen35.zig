@@ -81,6 +81,8 @@ pub const Qwen35Model = struct {
     // Tensor parallelism
     tp_rank: u32 = 0,
     tp_degree: u32 = 1,
+    tp_peer_buf: ?[*]const f32 = null, // peer rank's partial output for all-reduce
+    tp_row_shard_buf: []u8 = &.{}, // scratch for row-split weight column extraction
 
     /// True when weights are MLX quantized (SafeTensors U32 packed).
     is_mlx: bool = false,
@@ -620,16 +622,38 @@ pub const Qwen35Model = struct {
         model_mod.dispatchGemv(self.be, self.fmt, x, t, y, n, k);
     }
 
-    /// Column-shard a weight tensor for TP: returns TensorInfo pointing to
-    /// this rank's slice of rows. n_local = n_total / tp_degree rows starting
-    /// at rank * n_local. No-op when tp_degree == 1.
+    const gemv_kernel = @import("../backend/kernels/cpu/gemv.zig");
+
+    /// Column-shard (output-dim split): returns TensorInfo pointing to
+    /// this rank's slice of rows. Each rank gets n_total/tp_degree consecutive rows.
     fn shardColumnWeight(self: *const Qwen35Model, t: TensorInfo, n_total: usize, k: usize) TensorInfo {
         if (self.tp_degree <= 1) return t;
         const n_local = n_total / self.tp_degree;
-        const row_bytes = @import("../backend/kernels/cpu/gemv.zig").gemvRowBytes(t.dtype, k);
+        const row_bytes = gemv_kernel.gemvRowBytes(t.dtype, k);
         if (row_bytes == 0) return t;
         var shard = t;
         shard.data_ptr = t.data_ptr + self.tp_rank * n_local * row_bytes;
+        return shard;
+    }
+
+    /// Row-shard (input-dim split): extracts this rank's column slice into
+    /// a pre-allocated contiguous buffer. For weight W[n, k], rank r gets
+    /// columns r*local_k:(r+1)*local_k from each row.
+    /// Returns a TensorInfo pointing to the contiguous shard buffer.
+    fn shardRowWeight(self: *const Qwen35Model, t: TensorInfo, n: usize, k_total: usize, shard_buf: []u8) TensorInfo {
+        if (self.tp_degree <= 1) return t;
+        const local_k = k_total / self.tp_degree;
+        const full_row_bytes = gemv_kernel.gemvRowBytes(t.dtype, k_total);
+        const local_row_bytes = gemv_kernel.gemvRowBytes(t.dtype, local_k);
+        if (full_row_bytes == 0 or local_row_bytes == 0) return t;
+        const col_offset = self.tp_rank * local_row_bytes;
+        for (0..n) |row| {
+            const src = t.data_ptr + row * full_row_bytes + col_offset;
+            const dst_off = row * local_row_bytes;
+            @memcpy(shard_buf[dst_off..][0..local_row_bytes], src[0..local_row_bytes]);
+        }
+        var shard = t;
+        shard.data_ptr = shard_buf.ptr;
         return shard;
     }
 
@@ -846,14 +870,17 @@ pub const Qwen35Model = struct {
             self.perf.end(.sigmoid_mul, t);
         }
 
-        // Output projection
+        // Output projection (row-split for TP: each rank uses local_qd input columns)
         t = self.perf.start();
-        const ow = self.fmt.layerTensor(li, "attn_output.weight") orelse return;
-        self.doGemv(self.attn_out.ptr, ow, self.hidden2.ptr, e, qd);
+        const ow_raw = self.fmt.layerTensor(li, "attn_output.weight") orelse return;
+        if (self.tp_degree > 1 and self.tp_row_shard_buf.len > 0) {
+            const ow_s = self.shardRowWeight(ow_raw, e, self.n_head * hd, self.tp_row_shard_buf);
+            self.doGemv(self.attn_out.ptr, ow_s, self.hidden2.ptr, e, qd);
+        } else {
+            self.doGemv(self.attn_out.ptr, ow_raw, self.hidden2.ptr, e, qd);
+        }
         self.syncProfile();
         self.perf.end(.gemv_out, t);
-
-        // TODO: TP all-reduce after output projection (requires row-split weight sharding)
 
         // Qwen3/2: standard residual after attention (no fused addRmsNorm in MLP).
         if (!self.has_post_attn_norm) {
@@ -957,7 +984,7 @@ pub const Qwen35Model = struct {
     /// the caller fuses it with the next layer's pre-attention norm.
     fn mlpLayer(self: *Qwen35Model, li: u32, defer_residual: bool) !void {
         const e: usize = self.n_embd;
-        const ff: usize = self.n_ff;
+        const ff: usize = if (self.tp_degree > 1) self.n_ff / self.tp_degree else self.n_ff;
 
         // Pre-MLP norm: Qwen3.5 fuses residual add + norm (addRmsNorm with post_attention_norm),
         // Qwen3/2 uses standard separate pre-norm (rmsNorm with ffn_norm).
@@ -974,9 +1001,11 @@ pub const Qwen35Model = struct {
 
         // SwiGLU FFN — gate+up projections + SiLU*mul
         t = self.perf.start();
-        const gw = self.fmt.layerTensor(li, "ffn_gate.weight") orelse return error.MissingTensor;
-        const uw = self.fmt.layerTensor(li, "ffn_up.weight") orelse return error.MissingTensor;
-        if (self.megakernel_enabled and (gw.dtype == .q8_0 or gw.dtype == .q4_k or gw.dtype == .q4_0 or gw.dtype == .q5_k or gw.dtype == .q6_k)) {
+        const gw_raw = self.fmt.layerTensor(li, "ffn_gate.weight") orelse return error.MissingTensor;
+        const uw_raw = self.fmt.layerTensor(li, "ffn_up.weight") orelse return error.MissingTensor;
+        const gw = self.shardColumnWeight(gw_raw, self.n_ff, e);
+        const uw = self.shardColumnWeight(uw_raw, self.n_ff, e);
+        if (self.megakernel_enabled and self.tp_degree <= 1 and (gw.dtype == .q8_0 or gw.dtype == .q4_k or gw.dtype == .q4_0 or gw.dtype == .q5_k or gw.dtype == .q6_k)) {
             // Fused: gate GEMV + up GEMV + SiLU*mul in a single dispatch (3→1)
             // Use inline else to avoid compiling Metal-specific code on Linux
             switch (self.be) {
@@ -1008,10 +1037,15 @@ pub const Qwen35Model = struct {
         self.syncProfile();
         self.perf.end(.gemv_ffn, t);
 
-        // Down projection
+        // Down projection (row-split for TP)
         t = self.perf.start();
-        const dw = self.fmt.layerTensor(li, "ffn_down.weight") orelse return error.MissingTensor;
-        self.doGemv(self.ff_buf1.ptr, dw, self.hidden2.ptr, e, ff);
+        const dw_raw = self.fmt.layerTensor(li, "ffn_down.weight") orelse return error.MissingTensor;
+        if (self.tp_degree > 1 and self.tp_row_shard_buf.len > 0) {
+            const dw = self.shardRowWeight(dw_raw, e, self.n_ff, self.tp_row_shard_buf);
+            self.doGemv(self.ff_buf1.ptr, dw, self.hidden2.ptr, e, ff);
+        } else {
+            self.doGemv(self.ff_buf1.ptr, dw_raw, self.hidden2.ptr, e, ff);
+        }
         self.syncProfile();
         self.perf.end(.gemv_ffn, t);
 
