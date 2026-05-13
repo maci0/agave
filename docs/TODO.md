@@ -2,7 +2,7 @@
 
 Comprehensive list of bugs, missing features, and improvement opportunities.
 
-**Last updated**: 2026-05-12
+**Last updated**: 2026-05-14
 
 ---
 
@@ -11,6 +11,8 @@ Comprehensive list of bugs, missing features, and improvement opportunities.
 | # | Issue | Severity | Status |
 |---|-------|----------|--------|
 | 1 | GLM-4.7 Flash — degenerate output (also broken in llama.cpp, likely bad GGUF conversion) | Low (upstream) | Won't fix |
+| 2 | ROCm GEMV/SDPA produce wrong logits (non-zero but incorrect, picks wrong tokens) | High | Open — HSACO codegen issue in Zig/LLVM, 28 kernels load but accumulation differs from CPU |
+| 3 | Vulkan segfault on RADV NAVI31 (RX 7900 XTX) after embLookup | Medium | Open — crashes during forward pass, no debug symbols (GCC 16 linker blocks debug build) |
 
 ---
 
@@ -50,7 +52,7 @@ All **correctness-critical** kernels for supported model×quant combinations are
 
 | # | Feature | Status | Notes |
 |---|---------|--------|-------|
-| 1 | Tensor/Pipeline parallelism | Working | 5 modes: local TP, distributed TP, distributed PP, hybrid TP+PP, disaggregated prefill/decode. TCP transport. Verified across 2 heterogeneous machines (x86_64+aarch64). NCCL/RCCL stubs for GPU collectives |
+| 1 | Tensor/Pipeline parallelism | Working | 5 modes: local TP, distributed TP, distributed PP, hybrid TP+PP, disaggregated prefill/decode. TCP transport. Verified on CPU+Metal+CUDA (TP=2 correct on all three). Tested across heterogeneous machines (x86_64+aarch64). NCCL/RCCL stubs for GPU collectives |
 | 2 | Structured output / grammar-constrained decoding | Working | GBNF parser, `--grammar-string`, `--grammar`, `--json-output`, `--json-schema`. Full repetition (`*`/`+`/`?`), grouped expressions, JSON schema→GBNF conversion. HTTP API: `grammar` and `json_schema` fields |
 | 3 | TriAttention Phase 3 | Wired | CLI `--kv-eviction tri`, .cal auto-loading, scorePositionsTri in evictKvCache. Dynamic budget pending |
 | 4 | Native GPU tree SDPA for CUDA/ROCm/Vulkan | Done | All backends now have native f32 sdpaTree (CPU fallback only for quantized KV) |
