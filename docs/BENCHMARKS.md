@@ -154,6 +154,28 @@ Notes:
 - 41 CUDA PTX kernels loaded via sm_90 forward compatibility to sm_121
 - Server mode (`--serve`) works correctly (cuCtxSetCurrent on scheduler thread)
 
+## Distributed Inference (Multi-Node)
+
+**Hardware**: Node A: AMD Ryzen 9950X (x86_64, CachyOS), Node B: NVIDIA GB10 (aarch64, Ubuntu)
+**Network**: TCP over LAN (~1ms RTT)
+**Model**: Qwen2.5 0.5B Q8_0 (24 layers, 896 embd, 2 KV heads)
+**Date**: 2026-05-13
+
+| Mode | Command | tok/s | Network per token | Notes |
+|------|---------|:-----:|:-----------------:|-------|
+| Single (baseline) | `--backend cpu` | 72.5 | None | M4 Pro local |
+| Local TP=2 | `--tp 2` | 49.0 | None | Sequential dual-rank |
+| Distributed PP=2 | `--pp 2 --rank N --peers addr` | **28.2** | ~7 KB | 1 activation transfer |
+| Distributed TP=2 | `--tp 2 --rank N --peers addr` | 16.2 | ~82 KB | 24 all-reduces |
+| Hybrid TP+PP | `--tp 2 --pp 2 --rank N --peers addr` | 16.8 | ~48 KB | Local TP + remote PP |
+| Disaggregated | `--disagg --rank N --peers addr` | 39.4 | ~2.4 MB once | Prefill→KV transfer→decode |
+
+Notes:
+- PP is 1.7× faster than TP over network (less traffic per token)
+- Disaggregated is fastest for decode (no per-token network overhead after KV transfer)
+- Heterogeneous architectures (x86_64 + aarch64) work seamlessly
+- NCCL/RCCL GPU-optimized collectives planned (TCP-only for now)
+
 ## Known Issues
 
 1. **Metal large-context hang**: With default context sizes (2048–4096) and many layers, the PagedKV block pre-allocation is slow. Workaround: use `--ctx-size 128` for benchmarks. Does not affect CPU backend.
