@@ -1583,8 +1583,8 @@ fn initAndRun(
         }
         std.log.info("TP={d} rank={d} active", .{ cli.tp_degree, cli.tp_rank });
 
-        // Distributed TP: connect to peers via TCP
-        if (cli.tp_peers) |peers_str| {
+        // Distributed TP: connect to peers via TCP (only when PP is not active — hybrid uses local TP)
+        if (cli.pp_degree <= 1) if (cli.tp_peers) |peers_str| {
             const TransportMod = @import("parallel/transport.zig");
             const t = allocator.create(TransportMod.Transport) catch null;
             if (t) |tr| init_transport: {
@@ -1619,7 +1619,7 @@ fn initAndRun(
                 };
                 if (connected) mdl.setTpTransport(tr);
             }
-        }
+        };
     }
 
     // PP: pipeline parallelism setup (uses --pp, --rank, --peers)
@@ -1657,7 +1657,7 @@ fn initAndRun(
                 }
                 break :blk true;
             };
-            if (ok) mdl.setPpConfig(cli.tp_rank, cli.pp_degree, t);
+            if (ok) mdl.setPpConfig(cli.tp_rank, cli.pp_degree, t); // --rank controls PP rank
         }
     }
 
