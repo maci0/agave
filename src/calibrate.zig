@@ -654,7 +654,7 @@ pub fn run(allocator: Allocator, io: Io, process_args: std.process.Args) u8 {
 
     // Initialize backend (CPU only — calibration doesn't need GPU)
     var bs = BackendState{};
-    bs.init(allocator, .cpu, io);
+    bs.init(allocator, .cpu, io, 0);
     defer if (bs.pool) |*p| p.deinit();
     const be = bs.be;
 

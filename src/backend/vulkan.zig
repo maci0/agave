@@ -790,7 +790,7 @@ pub const VulkanBackend = struct {
     // ── Init ─────────────────────────────────────────────────────
 
     /// Initialize the Vulkan backend: load library, create instance/device, compile SPIR-V pipelines.
-    pub fn init(allocator: std.mem.Allocator) !VulkanBackend {
+    pub fn init(allocator: std.mem.Allocator, device_id: u32) !VulkanBackend {
         var self = VulkanBackend{};
         self.allocator = allocator;
         self.buf_cache = std.AutoHashMap(usize, CachedBuf).init(allocator);
@@ -880,9 +880,10 @@ pub const VulkanBackend = struct {
         var dev_count: u32 = 0;
         _ = self.vkEnumeratePhysicalDevices(self.instance, &dev_count, null);
         if (dev_count == 0) return error.NoVulkanDevice;
+        if (device_id >= dev_count) return error.NoVulkanDevice;
         var devs: [max_physical_devices]VkPhysicalDevice = undefined;
         _ = self.vkEnumeratePhysicalDevices(self.instance, &dev_count, &devs);
-        self.phys_device = devs[0];
+        self.phys_device = devs[device_id];
 
         // Query device properties (name, API version)
         if (self.lookup(FnGetPhysicalDeviceProperties, "vkGetPhysicalDeviceProperties")) |getProps| {

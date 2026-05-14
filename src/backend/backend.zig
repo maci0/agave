@@ -248,7 +248,7 @@ pub fn weightBytes(dtype: DType, n: usize, k: usize) usize {
 /// init() is a @compileError; methods are unreachable stubs for inline else.
 pub const NullBackend = struct {
     /// Compile error — this backend was disabled at build time.
-    pub fn init(_: std.mem.Allocator) error{BackendDisabled}!NullBackend {
+    pub fn init(_: std.mem.Allocator, _: u32) error{BackendDisabled}!NullBackend {
         @compileError("this backend was disabled at build time");
     }
 
@@ -902,7 +902,7 @@ pub const BackendState = struct {
     /// Parameters:
     ///   - allocator: Used for backend-internal allocations (pipeline caches, etc.).
     ///   - backend_choice: Which backend to initialize (or .auto for auto-detection).
-    pub fn init(self: *BackendState, allocator: std.mem.Allocator, backend_choice: BackendChoice, io: std.Io) void {
+    pub fn init(self: *BackendState, allocator: std.mem.Allocator, backend_choice: BackendChoice, io: std.Io, device_id: u32) void {
         // n_workers = CPU count - 1 (main thread also participates).
         const cpu_count = std.Thread.getCpuCount() catch 1;
         const n_workers = if (cpu_count > 1) cpu_count - 1 else 0;
@@ -942,7 +942,7 @@ pub const BackendState = struct {
                 },
                 .vulkan => {
                     if (comptime build_options.enable_vulkan) {
-                        self.vulkan_be = VulkanBackend.init(allocator) catch |err| {
+                        self.vulkan_be = VulkanBackend.init(allocator, device_id) catch |err| {
                             if (comptime build_options.enable_cpu) {
                                 std.log.warn("Vulkan unavailable ({s}), falling back to CPU", .{@errorName(err)});
                                 break :blk .{ .cpu = &self.cpu_be };
@@ -958,7 +958,7 @@ pub const BackendState = struct {
                 },
                 .cuda => {
                     if (comptime build_options.enable_cuda) {
-                        self.cuda_be = CudaBackend.init(allocator) catch |err| {
+                        self.cuda_be = CudaBackend.init(allocator, device_id) catch |err| {
                             if (comptime build_options.enable_cpu) {
                                 std.log.warn("CUDA unavailable ({s}), falling back to CPU", .{@errorName(err)});
                                 break :blk .{ .cpu = &self.cpu_be };
@@ -974,7 +974,7 @@ pub const BackendState = struct {
                 },
                 .rocm => {
                     if (comptime build_options.enable_rocm) {
-                        self.rocm_be = RocmBackend.init(allocator) catch |err| {
+                        self.rocm_be = RocmBackend.init(allocator, device_id) catch |err| {
                             if (comptime build_options.enable_cpu) {
                                 std.log.warn("ROCm unavailable ({s}), falling back to CPU", .{@errorName(err)});
                                 break :blk .{ .cpu = &self.cpu_be };
@@ -1009,9 +1009,9 @@ pub const BackendState = struct {
                     if (comptime build_options.enable_metal and builtin.os.tag == .macos) {
                         self.metal_be = MetalBackend.init(allocator) catch {
                             if (comptime build_options.enable_cuda) {
-                                self.cuda_be = CudaBackend.init(allocator) catch {
+                                self.cuda_be = CudaBackend.init(allocator, device_id) catch {
                                     if (comptime build_options.enable_vulkan) {
-                                        self.vulkan_be = VulkanBackend.init(allocator) catch {
+                                        self.vulkan_be = VulkanBackend.init(allocator, device_id) catch {
                                             if (comptime build_options.enable_cpu) break :blk .{ .cpu = &self.cpu_be } else @panic("All GPU backends failed and CPU disabled");
                                         };
                                         self.name = "Vulkan";
@@ -1022,7 +1022,7 @@ pub const BackendState = struct {
                                 self.name = "CUDA";
                                 break :blk .{ .cuda = &self.cuda_be };
                             } else if (comptime build_options.enable_vulkan) {
-                                self.vulkan_be = VulkanBackend.init(allocator) catch {
+                                self.vulkan_be = VulkanBackend.init(allocator, device_id) catch {
                                     if (comptime build_options.enable_cpu) break :blk .{ .cpu = &self.cpu_be } else @panic("Vulkan failed and CPU disabled");
                                 };
                                 self.name = "Vulkan";
@@ -1039,11 +1039,11 @@ pub const BackendState = struct {
                     }
                     // Try CUDA
                     if (comptime build_options.enable_cuda) {
-                        self.cuda_be = CudaBackend.init(allocator) catch {
+                        self.cuda_be = CudaBackend.init(allocator, device_id) catch {
                             if (comptime build_options.enable_rocm) {
-                                self.rocm_be = RocmBackend.init(allocator) catch {
+                                self.rocm_be = RocmBackend.init(allocator, device_id) catch {
                                     if (comptime build_options.enable_vulkan) {
-                                        self.vulkan_be = VulkanBackend.init(allocator) catch {
+                                        self.vulkan_be = VulkanBackend.init(allocator, device_id) catch {
                                             if (comptime build_options.enable_cpu) break :blk .{ .cpu = &self.cpu_be } else @panic("All GPU backends failed and CPU disabled");
                                         };
                                         self.name = "Vulkan";
@@ -1055,7 +1055,7 @@ pub const BackendState = struct {
                                 break :blk .{ .rocm = &self.rocm_be };
                             }
                             if (comptime build_options.enable_vulkan) {
-                                self.vulkan_be = VulkanBackend.init(allocator) catch {
+                                self.vulkan_be = VulkanBackend.init(allocator, device_id) catch {
                                     if (comptime build_options.enable_cpu) break :blk .{ .cpu = &self.cpu_be } else @panic("All GPU backends failed and CPU disabled");
                                 };
                                 self.name = "Vulkan";
@@ -1068,9 +1068,9 @@ pub const BackendState = struct {
                     }
                     // Try ROCm
                     if (comptime build_options.enable_rocm) {
-                        self.rocm_be = RocmBackend.init(allocator) catch {
+                        self.rocm_be = RocmBackend.init(allocator, device_id) catch {
                             if (comptime build_options.enable_vulkan) {
-                                self.vulkan_be = VulkanBackend.init(allocator) catch {
+                                self.vulkan_be = VulkanBackend.init(allocator, device_id) catch {
                                     if (comptime build_options.enable_cpu) break :blk .{ .cpu = &self.cpu_be } else @panic("All GPU backends failed and CPU disabled");
                                 };
                                 self.name = "Vulkan";
@@ -1083,7 +1083,7 @@ pub const BackendState = struct {
                     }
                     // Try Vulkan
                     if (comptime build_options.enable_vulkan) {
-                        self.vulkan_be = VulkanBackend.init(allocator) catch {
+                        self.vulkan_be = VulkanBackend.init(allocator, device_id) catch {
                             if (comptime build_options.enable_cpu) break :blk .{ .cpu = &self.cpu_be } else @panic("Vulkan failed and CPU disabled");
                         };
                         self.name = "Vulkan";

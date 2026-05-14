@@ -344,6 +344,7 @@ const cli_specs = [_]cli_mod.ArgSpec{
     .{ .long = "system", .kind = .option, .help = "System prompt for chat formatting." },
     // Backend & model
     .{ .long = "backend", .kind = .option, .help = "Compute backend: auto, cpu, metal, vulkan, cuda, rocm, webgpu [default: auto]." },
+    .{ .long = "device", .kind = .option, .help = "GPU device index for CUDA/ROCm/Vulkan [default: 0]. Use --list-devices to see available." },
     .{ .long = "list-devices", .help = "List available compute devices and exit." },
     .{ .long = "disagg", .help = "Disaggregated inference: rank 0 prefills, sends KV to rank 1 for decode." },
     .{ .long = "tp", .kind = .option, .help = "Tensor parallelism degree [default: 1]." },
@@ -409,6 +410,7 @@ const CliArgs = struct {
     json_output: bool,
     system_prompt: ?[]const u8,
     backend_choice: BackendChoice,
+    device_id: u32,
     ctx_size: u32,
     kv_type_k: KvQuantType,
     kv_type_v: KvQuantType,
@@ -578,6 +580,10 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
             std.process.exit(1);
         };
     };
+    const device_id: u32 = if (res.option("device")) |d| std.fmt.parseInt(u32, d, 10) catch {
+        eprint("Error: --device must be a non-negative integer\n", .{});
+        std.process.exit(1);
+    } else 0;
 
     const temperature = parseF32(res.option("temperature"), "temperature") orelse 0.0;
     const top_p = parseF32(res.option("top-p"), "top-p") orelse 1.0;
@@ -726,6 +732,7 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
         .json_output = res.flag("json-output"),
         .system_prompt = res.option("system"),
         .backend_choice = backend_choice,
+        .device_id = device_id,
         .ctx_size = res.optionU32("ctx-size") orelse 0,
         .seed = res.optionU64("seed") orelse @as(u64, @truncate(@as(u96, @bitCast(nanoTimestamp(g_io))))),
         .kv_type_k = blk: {
@@ -910,12 +917,14 @@ fn printUsage() void {
         \\
         \\PARALLELISM:
         \\      --list-devices         List available compute devices and exit
+        \\      --device <N>           GPU device index for CUDA/ROCm/Vulkan [default: 0]
         \\      --tp <N>               Tensor parallelism: split weight matrices across N devices [default: 1]
         \\      --pp <N>               Pipeline parallelism: split layers across N stages [default: 1]
         \\      --devices <SPEC>       Device selection (e.g. cuda:0,cuda:1)
         \\      --peers <ADDR>         Peer addresses for distributed TP (e.g. 192.168.0.212:9999)
         \\      --rank <N>             This node's TP rank [default: 0]
         \\      --list-devices         List available compute devices and exit
+        \\      --device <N>           GPU device index for CUDA/ROCm/Vulkan [default: 0]
         \\
         \\MULTIMODAL:
         \\      --mmproj <PATH>    Path to vision projector GGUF (mmproj file)
@@ -1092,7 +1101,7 @@ pub fn main(init: std.process.Init) !void {
 
     // ── Backend selection ─────────────────────────────────────────
     var bs = BackendState{};
-    bs.init(allocator, cli.backend_choice, g_io);
+    bs.init(allocator, cli.backend_choice, g_io, cli.device_id);
     defer if (bs.pool) |*p| p.deinit();
     const be = bs.be;
     const be_name = bs.name;
@@ -2829,7 +2838,7 @@ test {
 test "cpu backend rms_norm via tagged union dispatch" {
     var threaded = std.Io.Threaded.init(std.testing.allocator, .{});
     var bs = BackendState{};
-    bs.init(std.testing.allocator, .cpu, threaded.io());
+    bs.init(std.testing.allocator, .cpu, threaded.io(), 0);
     defer if (bs.pool) |*p| p.deinit();
     const be = bs.be;
     var input = [_]f32{ 1, 2, 3, 4 };
@@ -2847,7 +2856,7 @@ test "cpu backend rms_norm via tagged union dispatch" {
 test "cpu backend softmax via tagged union dispatch" {
     var threaded2 = std.Io.Threaded.init(std.testing.allocator, .{});
     var bs = BackendState{};
-    bs.init(std.testing.allocator, .cpu, threaded2.io());
+    bs.init(std.testing.allocator, .cpu, threaded2.io(), 0);
     defer if (bs.pool) |*p| p.deinit();
     const be = bs.be;
     var data = [_]f32{ 1.0, 2.0, 3.0 };
@@ -2869,7 +2878,7 @@ test "cpu backend softmax via tagged union dispatch" {
 test "cpu backend silu via tagged union dispatch" {
     var threaded3 = std.Io.Threaded.init(std.testing.allocator, .{});
     var bs = BackendState{};
-    bs.init(std.testing.allocator, .cpu, threaded3.io());
+    bs.init(std.testing.allocator, .cpu, threaded3.io(), 0);
     defer if (bs.pool) |*p| p.deinit();
     const be = bs.be;
     var input = [_]f32{ 0.0, 1.0, -1.0 };

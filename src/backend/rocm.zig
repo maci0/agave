@@ -213,7 +213,7 @@ pub const RocmBackend = struct {
     // ── Init / Deinit ───────────────────────────────────────────
 
     /// Initialize the ROCm backend: load libamdhip64, create context, load HSACO kernels.
-    pub fn init(allocator: std.mem.Allocator) !RocmBackend {
+    pub fn init(allocator: std.mem.Allocator, device_id: u32) !RocmBackend {
         var self = RocmBackend{};
         self.allocator = allocator;
         self.buf_cache = std.AutoHashMap(usize, CachedBuf).init(allocator);
@@ -247,10 +247,10 @@ pub const RocmBackend = struct {
 
         // Initialize HIP
         if (hipInit(0) != HIP_SUCCESS) return error.RocmInitFailed;
-        if (hipSetDevice(0) != HIP_SUCCESS) return error.NoRocmDevice;
+        if (hipSetDevice(@intCast(device_id)) != HIP_SUCCESS) return error.NoRocmDevice;
 
         // Store device name for display
-        if (hipDeviceGetName(&self.device_name, @intCast(device_name_buf_size), 0) == HIP_SUCCESS) {
+        if (hipDeviceGetName(&self.device_name, @intCast(device_name_buf_size), @intCast(device_id)) == HIP_SUCCESS) {
             self.device_name_len = std.mem.indexOfScalar(u8, &self.device_name, 0) orelse device_name_buf_size;
         }
 

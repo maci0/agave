@@ -309,7 +309,7 @@ pub const CudaBackend = struct {
     // ── Init / Deinit ───────────────────────────────────────────
 
     /// Initialize the CUDA backend: load libcuda, create context, load PTX kernels.
-    pub fn init(allocator: std.mem.Allocator) !CudaBackend {
+    pub fn init(allocator: std.mem.Allocator, device_id: u32) !CudaBackend {
         var self = CudaBackend{};
         self.allocator = allocator;
         self.buf_cache = std.AutoHashMap(usize, CachedBuf).init(allocator);
@@ -356,7 +356,7 @@ pub const CudaBackend = struct {
         if (cuInit(0) != CUDA_SUCCESS) return error.CudaInitFailed;
 
         var dev: CUdevice = 0;
-        if (cuDeviceGet(&dev, 0) != CUDA_SUCCESS) return error.NoCudaDevice;
+        if (cuDeviceGet(&dev, @intCast(device_id)) != CUDA_SUCCESS) return error.NoCudaDevice;
 
         // Store device name for display
         if (cuDeviceGetName(&self.device_name, @intCast(device_name_buf_size), dev) == CUDA_SUCCESS) {
