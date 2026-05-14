@@ -52,7 +52,7 @@ All **correctness-critical** kernels for supported model×quant combinations are
 
 | # | Feature | Status | Notes |
 |---|---------|--------|-------|
-| 1 | Tensor/Pipeline parallelism | Working | 5 modes: local TP, distributed TP, distributed PP, hybrid TP+PP, disaggregated prefill/decode. TCP transport. Verified on CPU+Metal+CUDA (TP=2 correct on all three). Tested across heterogeneous machines (x86_64+aarch64). NCCL/RCCL stubs for GPU collectives |
+| 1 | Tensor/Pipeline parallelism | Working | 5 modes: local TP, distributed TP, distributed PP, hybrid TP+PP, disaggregated prefill/decode. TCP (cross-node) + POSIX shm (same-node, zero-copy) transports. `--peers localhost` auto-selects shm. `--device N` for GPU selection. Verified on CPU+Metal+CUDA+Vulkan (TP=2 correct on all). Tested: CUDA↔CPU, Vulkan↔Vulkan (dual-GPU dGPU+iGPU), heterogeneous x86_64+aarch64 |
 | 2 | Structured output / grammar-constrained decoding | Working | GBNF parser, `--grammar-string`, `--grammar`, `--json-output`, `--json-schema`. Full repetition (`*`/`+`/`?`), grouped expressions, JSON schema→GBNF conversion. HTTP API: `grammar` and `json_schema` fields |
 | 3 | TriAttention Phase 3 | Wired | CLI `--kv-eviction tri`, .cal auto-loading, scorePositionsTri in evictKvCache. Dynamic budget pending |
 | 4 | Native GPU tree SDPA for CUDA/ROCm/Vulkan | Done | All backends now have native f32 sdpaTree (CPU fallback only for quantized KV) |

@@ -34,6 +34,9 @@
 - **Structured Output**: GBNF grammar (`--grammar-string`, `--grammar`), JSON schema (`--json-schema`), JSON mode (`--json-output`), server `response_format: json_object/json_schema`
 - **Full Sampling**: temperature, top-k, top-p, min-p, repeat/frequency/presence penalties, seed, stop sequences
 - **Batched Prefill**: Chunked GEMM + fused FlashAttention-2 for fast prompt processing
+- **Distributed Inference**: Tensor parallelism (TP), pipeline parallelism (PP), disaggregated prefill/decode. Same-node multi-GPU via POSIX shm (zero-copy IPC), cross-node via TCP. Heterogeneous: mix CUDA + Vulkan + CPU across x86_64 + aarch64
+- **Speculative Decoding**: Draft model, self-speculative (layer skip), DDTree with configurable tree budget
+- **Fused Megakernels**: Composable GPU megakernels — gate+up+SiLU fused into single dispatch (3→1)
 - **~183 tok/s** on Qwen3.5 0.8B Q8_0 (Metal, Apple Silicon M4 Pro), **1.2-1.7x faster than llama.cpp on Q8_0** (Q4_K performance is a [known gap](docs/TODO.md#performance) — active optimization target)
 
 ## Quick Start
@@ -90,7 +93,45 @@ zig build
 
 # Sampling parameters
 ./zig-out/bin/agave model.gguf -t 0.7 --top-p 0.9 --min-p 0.05 "Tell me a story"
+
+# GPU device selection
+./zig-out/bin/agave model.gguf --list-devices                      # Show available GPUs
+./zig-out/bin/agave model.gguf --backend vulkan --device 1          # Use second GPU
+
+# Speculative decoding
+./zig-out/bin/agave target.gguf --draft-model draft.gguf "prompt"   # Separate draft model
+./zig-out/bin/agave model.gguf --spec-mode self --draft-layers 9    # Self-speculative
+./zig-out/bin/agave model.gguf --spec-mode ddtree "prompt"          # DDTree self-draft
+
+# Fused megakernel (3→1 GPU dispatch for FFN)
+./zig-out/bin/agave model.gguf --megakernel "prompt"
 ```
+
+## Distributed Inference
+
+Split models across multiple GPUs or machines via tensor parallelism (TP) and pipeline parallelism (PP).
+
+```bash
+# Same-node multi-GPU (shared memory IPC, zero-copy)
+# Terminal 1: rank 0 on GPU 0
+./zig-out/bin/agave model.gguf --backend vulkan --device 0 --pp 2 --rank 0 --peers localhost "prompt"
+# Terminal 2: rank 1 on GPU 1
+./zig-out/bin/agave model.gguf --backend vulkan --device 1 --pp 2 --rank 1 --peers localhost "prompt"
+
+# Cross-node pipeline parallelism (TCP transport)
+# Machine A (first half of layers):
+./zig-out/bin/agave model.gguf --backend cuda --pp 2 --rank 0 --peers 192.168.0.2 "prompt"
+# Machine B (second half + logits):
+./zig-out/bin/agave model.gguf --backend cpu --pp 2 --rank 1 --peers 192.168.0.1 "prompt"
+
+# Distributed tensor parallelism (weight sharding + all-reduce)
+# Machine A:
+./zig-out/bin/agave model.gguf --tp 2 --rank 0 --peers 192.168.0.2 "prompt"
+# Machine B:
+./zig-out/bin/agave model.gguf --tp 2 --rank 1 --peers 192.168.0.1 "prompt"
+```
+
+Supports heterogeneous setups: different backends (CUDA + Vulkan + CPU), architectures (aarch64 + x86_64), and GPU vendors (NVIDIA + AMD) in the same cluster. When `--peers` is `localhost` or `127.0.0.1`, POSIX shared memory is used instead of TCP for zero-copy IPC.
 
 ## Supported Models
 
