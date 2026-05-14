@@ -11,8 +11,9 @@ Comprehensive list of bugs, missing features, and improvement opportunities.
 | # | Issue | Severity | Status |
 |---|-------|----------|--------|
 | 1 | GLM-4.7 Flash — degenerate output (also broken in llama.cpp, likely bad GGUF conversion) | Low (upstream) | Won't fix |
-| 2 | ROCm GEMV/SDPA produce wrong logits (non-zero but incorrect, picks wrong tokens) | High | Open — HSACO codegen issue in Zig/LLVM, 28 kernels load but accumulation differs from CPU |
-| 3 | Vulkan segfault on RADV NAVI31 (RX 7900 XTX) after embLookup | Medium | Open — crashes during forward pass, no debug symbols (GCC 16 linker blocks debug build) |
+| 2 | ROCm produces garbage output even with ALL CPU fallbacks | High | Open — not a kernel accuracy issue. Even with every op delegated to CPU, ROCm backend path produces garbage. Issue is in the ROCm backend dispatch routing or model init, not HSACO codegen. Needs step-by-step state comparison between CPU and ROCm backends |
+| 3 | Vulkan segfault on RADV NAVI31 | Fixed | Was descriptor buffer overflow in dispatch() — [4]→[16] for 9-binding pipelines |
+| 4 | Vulkan deferred dispatch produces garbage | Medium | Per-dispatch descriptor sets + deferred command buffer recording breaks correctness. Reverted. Root cause unclear — no validation errors |
 
 ---
 
