@@ -481,6 +481,7 @@ const FnCmdBindDescriptorSets = *const fn (VkCommandBuffer, c_int, VkPipelineLay
 const FnCmdPushConstants = *const fn (VkCommandBuffer, VkPipelineLayout, VkFlags, u32, u32, [*]const u8) callconv(.c) void;
 const FnCmdDispatch = *const fn (VkCommandBuffer, u32, u32, u32) callconv(.c) void;
 const FnCmdPipelineBarrier = *const fn (VkCommandBuffer, VkFlags, VkFlags, VkFlags, u32, ?*const VkMemoryBarrier, u32, ?*const anyopaque, u32, ?*const anyopaque) callconv(.c) void;
+const FnCmdPushDescriptorSet = *const fn (VkCommandBuffer, c_int, VkPipelineLayout, u32, u32, [*]const VkWriteDescriptorSet) callconv(.c) void;
 
 // ── Library name ────────────────────────────────────────────────
 
@@ -586,6 +587,7 @@ pub const VulkanBackend = struct {
     cmd_buf: VkCommandBuffer = null,
     fence: VkFence = null,
     desc_pool: VkDescriptorPool = null,
+    cmd_recording: bool = false,
 
     // Elementwise pipelines
     pipe_silu: PipelineInfo = .{},
@@ -717,6 +719,7 @@ pub const VulkanBackend = struct {
     vkCmdPushConstants: FnCmdPushConstants = undefined,
     vkCmdDispatch: FnCmdDispatch = undefined,
     vkCmdPipelineBarrier: FnCmdPipelineBarrier = undefined,
+    vkCmdPushDescriptorSet: ?FnCmdPushDescriptorSet = null,
 
     // Activation buffer pool
     act_pool: [act_pool_capacity]PoolEntry = [_]PoolEntry{.{}} ** act_pool_capacity,
@@ -865,6 +868,7 @@ pub const VulkanBackend = struct {
         self.vkCmdPushConstants = self.lookup(FnCmdPushConstants, "vkCmdPushConstants") orelse return error.VulkanNotAvailable;
         self.vkCmdDispatch = self.lookup(FnCmdDispatch, "vkCmdDispatch") orelse return error.VulkanNotAvailable;
         self.vkCmdPipelineBarrier = self.lookup(FnCmdPipelineBarrier, "vkCmdPipelineBarrier") orelse return error.VulkanNotAvailable;
+        self.vkCmdPushDescriptorSet = self.lookup(FnCmdPushDescriptorSet, "vkCmdPushDescriptorSetKHR");
 
         // Create instance
         const app_info = VkApplicationInfo{
@@ -955,12 +959,27 @@ pub const VulkanBackend = struct {
             .pQueueCreateInfos = &queue_ci,
             .enabledLayerCount = 0,
             .ppEnabledLayerNames = null,
-            .enabledExtensionCount = 0,
-            .ppEnabledExtensionNames = null,
+            .enabledExtensionCount = 1,
+            .ppEnabledExtensionNames = &[_][*:0]const u8{"VK_KHR_push_descriptor"},
             .pEnabledFeatures = null,
         };
-        if (self.vkCreateDevice(self.phys_device, &dev_ci, null, &self.device) != VK_SUCCESS)
-            return error.VulkanInitFailed;
+        if (self.vkCreateDevice(self.phys_device, &dev_ci, null, &self.device) != VK_SUCCESS) {
+            // Retry without push descriptor (not all drivers support it)
+            const dev_ci_fallback = VkDeviceCreateInfo{
+                .sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
+                .pNext = null,
+                .flags = 0,
+                .queueCreateInfoCount = 1,
+                .pQueueCreateInfos = &queue_ci,
+                .enabledLayerCount = 0,
+                .ppEnabledLayerNames = null,
+                .enabledExtensionCount = 0,
+                .ppEnabledExtensionNames = null,
+                .pEnabledFeatures = null,
+            };
+            if (self.vkCreateDevice(self.phys_device, &dev_ci_fallback, null, &self.device) != VK_SUCCESS)
+                return error.VulkanInitFailed;
+        }
 
         self.vkGetDeviceQueue(self.device, self.queue_family, 0, &self.queue);
 
@@ -1165,7 +1184,7 @@ pub const VulkanBackend = struct {
 
     /// Download all dirty GPU buffers to host, mark everything stale.
     pub fn flushActivations(self: *VulkanBackend) void {
-        _ = self.vkDeviceWaitIdle(self.device);
+        self.submitPending();
         var it = self.act_cache.iterator();
         while (it.next()) |entry| {
             if (entry.value_ptr.state == .dirty) {
@@ -1440,9 +1459,6 @@ pub const VulkanBackend = struct {
     // ── Dispatch helper ──────────────────────────────────────────
 
     fn dispatch(self: *VulkanBackend, pipe: PipelineInfo, bufs: []const VkBuffer, buf_sizes: []const usize, push_data: [*]const u8, push_size: u32, n_groups: u32) void {
-        const desc_set = pipe.desc_set;
-
-        // Update descriptor set with buffer bindings
         var buf_infos: [16]VkDescriptorBufferInfo = undefined;
         var writes: [16]VkWriteDescriptorSet = undefined;
         for (0..bufs.len) |i| {
@@ -1454,7 +1470,7 @@ pub const VulkanBackend = struct {
             writes[i] = .{
                 .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
                 .pNext = null,
-                .dstSet = desc_set,
+                .dstSet = null,
                 .dstBinding = @intCast(i),
                 .dstArrayElement = 0,
                 .descriptorCount = 1,
@@ -1464,42 +1480,71 @@ pub const VulkanBackend = struct {
                 .pTexelBufferView = null,
             };
         }
-        self.vkUpdateDescriptorSets(self.device, @intCast(bufs.len), &writes, 0, null);
 
-        // Record command buffer
-        const begin_info = VkCommandBufferBeginInfo{
-            .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
-            .pNext = null,
-            .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
-            .pInheritanceInfo = null,
-        };
-        _ = self.vkResetCommandBuffer(self.cmd_buf, 0);
-        _ = self.vkBeginCommandBuffer(self.cmd_buf, &begin_info);
+        if (self.vkCmdPushDescriptorSet) |pushDesc| {
+            // Deferred path: push descriptors into command buffer (no descriptor set reuse issues)
+            if (!self.cmd_recording) {
+                _ = self.vkResetCommandBuffer(self.cmd_buf, 0);
+                _ = self.vkBeginCommandBuffer(self.cmd_buf, &.{
+                    .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+                    .pNext = null,
+                    .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
+                    .pInheritanceInfo = null,
+                });
+                self.cmd_recording = true;
+            } else {
+                self.vkCmdPipelineBarrier(self.cmd_buf, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, &VkMemoryBarrier{
+                    .srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT,
+                    .dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT,
+                }, 0, null, 0, null);
+            }
 
-        self.vkCmdBindPipeline(self.cmd_buf, VK_PIPELINE_BIND_POINT_COMPUTE, pipe.pipeline);
-        self.vkCmdBindDescriptorSets(self.cmd_buf, VK_PIPELINE_BIND_POINT_COMPUTE, pipe.layout, 0, 1, &desc_set, 0, null);
-        self.vkCmdPushConstants(self.cmd_buf, pipe.layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, push_size, push_data);
-        self.vkCmdDispatch(self.cmd_buf, n_groups, 1, 1);
+            self.vkCmdBindPipeline(self.cmd_buf, VK_PIPELINE_BIND_POINT_COMPUTE, pipe.pipeline);
+            pushDesc(self.cmd_buf, VK_PIPELINE_BIND_POINT_COMPUTE, pipe.layout, 0, @intCast(bufs.len), &writes);
+            self.vkCmdPushConstants(self.cmd_buf, pipe.layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, push_size, push_data);
+            self.vkCmdDispatch(self.cmd_buf, n_groups, 1, 1);
+        } else {
+            // Synchronous fallback: traditional descriptor set update + per-op submit
+            const desc_set = pipe.desc_set;
+            for (0..bufs.len) |i| writes[i].dstSet = desc_set;
+            self.vkUpdateDescriptorSets(self.device, @intCast(bufs.len), &writes, 0, null);
 
+            _ = self.vkResetCommandBuffer(self.cmd_buf, 0);
+            _ = self.vkBeginCommandBuffer(self.cmd_buf, &.{
+                .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+                .pNext = null,
+                .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
+                .pInheritanceInfo = null,
+            });
+            self.vkCmdBindPipeline(self.cmd_buf, VK_PIPELINE_BIND_POINT_COMPUTE, pipe.pipeline);
+            self.vkCmdBindDescriptorSets(self.cmd_buf, VK_PIPELINE_BIND_POINT_COMPUTE, pipe.layout, 0, 1, &desc_set, 0, null);
+            self.vkCmdPushConstants(self.cmd_buf, pipe.layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, push_size, push_data);
+            self.vkCmdDispatch(self.cmd_buf, n_groups, 1, 1);
+            _ = self.vkEndCommandBuffer(self.cmd_buf);
+
+            _ = self.vkResetFences(self.device, 1, &self.fence);
+            _ = self.vkQueueSubmit(self.queue, 1, &.{
+                .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO, .pNext = null,
+                .waitSemaphoreCount = 0, .pWaitSemaphores = null, .pWaitDstStageMask = null,
+                .commandBufferCount = 1, .pCommandBuffers = &self.cmd_buf,
+                .signalSemaphoreCount = 0, .pSignalSemaphores = null,
+            }, self.fence);
+            _ = self.vkWaitForFences(self.device, 1, &self.fence, VK_TRUE, ~@as(u64, 0));
+        }
+    }
+
+    fn submitPending(self: *VulkanBackend) void {
+        if (!self.cmd_recording) return;
         _ = self.vkEndCommandBuffer(self.cmd_buf);
-
-        // Submit and wait
-        const submit_info = VkSubmitInfo{
-            .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
-            .pNext = null,
-            .waitSemaphoreCount = 0,
-            .pWaitSemaphores = null,
-            .pWaitDstStageMask = null,
-            .commandBufferCount = 1,
-            .pCommandBuffers = &self.cmd_buf,
-            .signalSemaphoreCount = 0,
-            .pSignalSemaphores = null,
-        };
         _ = self.vkResetFences(self.device, 1, &self.fence);
-        _ = self.vkQueueSubmit(self.queue, 1, &submit_info, self.fence);
+        _ = self.vkQueueSubmit(self.queue, 1, &.{
+            .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO, .pNext = null,
+            .waitSemaphoreCount = 0, .pWaitSemaphores = null, .pWaitDstStageMask = null,
+            .commandBufferCount = 1, .pCommandBuffers = &self.cmd_buf,
+            .signalSemaphoreCount = 0, .pSignalSemaphores = null,
+        }, self.fence);
         _ = self.vkWaitForFences(self.device, 1, &self.fence, VK_TRUE, ~@as(u64, 0));
-
-        // Descriptor set is pre-allocated per pipeline — no alloc/free per dispatch.
+        self.cmd_recording = false;
     }
 
     // ── Weight size helper ──────────────────────────────────────
