@@ -2210,31 +2210,30 @@ pub const VulkanBackend = struct {
 
         if (sl > sdpa_max_seq_len or hd > sdpa_max_head_dim) @panic("Vulkan SDPA: sequence or head dim exceeds GPU limit — reduce --ctx-size");
 
-        // Flush pending GPU work so k_new/v_new are readable, then append to KV cache
-        self.sync();
+        // Flush pending GPU work so k_new/v_new host data is readable
+        self.flushActivations();
 
         if (is_f32_k and is_f32_v) {
-            // Pure f32 path: direct memcpy append
+            // Pure f32 path: CPU append to host KV cache, then GPU SDPA
             const f32_keys: []f32 = @as([*]f32, @ptrCast(@alignCast(keys.ptr)))[0 .. keys.len / @sizeOf(f32)];
             const f32_values: []f32 = @as([*]f32, @ptrCast(@alignCast(values.ptr)))[0 .. values.len / @sizeOf(f32)];
             @memcpy(f32_keys[seq_len * kvd ..][0..kvd], k_new[0..kvd]);
             @memcpy(f32_values[seq_len * kvd ..][0..kvd], v_new[0..kvd]);
 
             const q_sz = nh * hd * @sizeOf(f32);
-            const k_sz = f32_keys.len * @sizeOf(f32);
-            const v_sz = f32_values.len * @sizeOf(f32);
+            const k_sz = sl * kvd * @sizeOf(f32);
+            const v_sz = sl * kvd * @sizeOf(f32);
             const o_sz = nh * hd * @sizeOf(f32);
 
-            const q_buf = self.getPooledBuf(q_sz);
-            defer self.releasePooledBuf(q_buf);
+            // Use activation cache for Q and output; upload KV directly (grows each token)
+            const q_buf = self.getInputBuf(q, q_sz);
+            const o_buf = self.getOutputBuf(output, o_sz);
+
+            // KV cache: upload the used portion (sl tokens, not full allocation)
             const k_buf = self.getPooledBuf(k_sz);
             defer self.releasePooledBuf(k_buf);
             const v_buf = self.getPooledBuf(v_sz);
             defer self.releasePooledBuf(v_buf);
-            const o_buf = self.getPooledBuf(o_sz);
-            defer self.releasePooledBuf(o_buf);
-
-            self.uploadBuffer(q_buf.mem, @ptrCast(q), q_sz);
             self.uploadBuffer(k_buf.mem, @ptrCast(f32_keys.ptr), k_sz);
             self.uploadBuffer(v_buf.mem, @ptrCast(f32_values.ptr), v_sz);
 
@@ -2248,7 +2247,6 @@ pub const VulkanBackend = struct {
             const bufs = [_]VkBuffer{ q_buf.buf, k_buf.buf, v_buf.buf, o_buf.buf };
             const sizes = [_]usize{ q_sz, k_sz, v_sz, o_sz };
             self.dispatch(self.pipe_sdpa, &bufs, &sizes, @ptrCast(&params), 20, @intCast(nh));
-            self.downloadF32(o_buf.mem, output, nh * hd);
         } else {
             // Turbo or mixed path: CPU quantization for KV append (once per token,
             // not the SDPA hot path), then GPU turbo SDPA.
@@ -2314,8 +2312,8 @@ pub const VulkanBackend = struct {
         if (sl > sdpa_max_seq_len or hd > sdpa_max_head_dim)
             @panic("Vulkan sdpaPaged: sequence or head dim exceeds GPU limit — reduce --ctx-size");
 
-        // Flush pending GPU work so CPU memcpy is safe
-        self.sync();
+        // Flush pending GPU work so CPU can read k_new/v_new
+        self.flushActivations();
 
         // Append k_new/v_new at current seq_len position
         @memcpy(kv_view.keyPtrMut(kv_view.seq_len)[0..kvd], k_new[0..kvd]);
@@ -2349,18 +2347,15 @@ pub const VulkanBackend = struct {
         const bt_sz = n_logical_blocks * @sizeOf(u32);
         const o_sz = nh * hd * @sizeOf(f32);
 
-        const q_buf = self.getPooledBuf(q_sz);
-        defer self.releasePooledBuf(q_buf);
+        const q_buf = self.getInputBuf(q, q_sz);
+        const o_buf = self.getOutputBuf(output, o_sz);
         const k_buf = self.getPooledBuf(flat_bytes);
         defer self.releasePooledBuf(k_buf);
         const v_buf = self.getPooledBuf(flat_bytes);
         defer self.releasePooledBuf(v_buf);
-        const o_buf = self.getPooledBuf(o_sz);
-        defer self.releasePooledBuf(o_buf);
         const bt_buf = self.getPooledBuf(bt_sz);
         defer self.releasePooledBuf(bt_buf);
 
-        self.uploadBuffer(q_buf.mem, @ptrCast(q), q_sz);
         self.uploadBuffer(k_buf.mem, @ptrCast(flat_keys.ptr), flat_bytes);
         self.uploadBuffer(v_buf.mem, @ptrCast(flat_vals.ptr), flat_bytes);
         self.uploadBuffer(bt_buf.mem, @ptrCast(kv_view.block_table.ptr), bt_sz);
@@ -2376,7 +2371,6 @@ pub const VulkanBackend = struct {
         const bufs = [_]VkBuffer{ q_buf.buf, k_buf.buf, v_buf.buf, o_buf.buf, bt_buf.buf };
         const sizes = [_]usize{ q_sz, flat_bytes, flat_bytes, o_sz, bt_sz };
         self.dispatch(self.pipe_sdpa_paged, &bufs, &sizes, @ptrCast(&params), 24, @intCast(nh));
-        self.downloadF32(o_buf.mem, output, nh * hd);
     }
 
     /// SDPA with per-head softmax stats for split-attention merge.
