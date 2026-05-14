@@ -658,6 +658,10 @@ pub const VulkanBackend = struct {
     /// Allocator for internal data structures (buffer cache).
     allocator: std.mem.Allocator = undefined,
 
+    /// Activation cache: GPU copies of host activation buffers with dirty/stale tracking.
+    /// Eliminates redundant upload/download between consecutive GPU ops on the same data.
+    act_cache: std.AutoHashMap(usize, ActBuf) = undefined,
+
     /// Cache of GPU buffers keyed by host pointer address.
     /// Used for immutable data (mmap'd weights, norm weights). Buffer is
     /// created and uploaded once on first use, then reused on subsequent calls.
@@ -729,6 +733,14 @@ pub const VulkanBackend = struct {
         size: usize,
     };
 
+    const BufState = enum { clean, dirty, stale };
+
+    const ActBuf = struct {
+        vk_buf: VkBuf,
+        size: usize,
+        state: BufState,
+    };
+
     /// Pool of reusable activation buffers to avoid per-op vkAllocateMemory/vkFreeMemory.
     const act_pool_capacity = 32;
 
@@ -795,6 +807,7 @@ pub const VulkanBackend = struct {
         self.allocator = allocator;
         self.buf_cache = std.AutoHashMap(usize, CachedBuf).init(allocator);
         try self.buf_cache.ensureTotalCapacity(backend_mod.buf_cache_initial_capacity);
+        self.act_cache = std.AutoHashMap(usize, ActBuf).init(allocator);
         errdefer self.buf_cache.deinit();
         errdefer self.deinitCachedBuffers();
 
@@ -1094,6 +1107,101 @@ pub const VulkanBackend = struct {
         self.buf_cache.clearRetainingCapacity();
     }
 
+    /// Get GPU buffer for a read-only input. Re-uploads from host if stale.
+    fn getInputBuf(self: *VulkanBackend, ptr: anytype, size: usize) VkBuf {
+        const addr = @intFromPtr(ptr);
+        if (self.act_cache.getPtr(addr)) |act| {
+            if (act.size >= size) {
+                if (act.state == .stale) {
+                    self.uploadBuffer(act.vk_buf.mem, @ptrCast(ptr), size);
+                    act.state = .clean;
+                }
+                return act.vk_buf;
+            }
+            self.destroyBuffer(act.vk_buf);
+            _ = self.act_cache.remove(addr);
+        }
+        if (self.buf_cache.get(addr)) |cached| {
+            if (cached.size >= size) return cached.vk_buf;
+        }
+        const buf = self.createBuffer(size);
+        self.uploadBuffer(buf.mem, @ptrCast(ptr), size);
+        self.act_cache.put(addr, .{ .vk_buf = buf, .size = size, .state = .clean }) catch {};
+        return buf;
+    }
+
+    /// Get GPU buffer for a write-only output. Reuses existing allocation.
+    fn getOutputBuf(self: *VulkanBackend, ptr: anytype, size: usize) VkBuf {
+        const addr = @intFromPtr(ptr);
+        if (self.act_cache.getPtr(addr)) |act| {
+            if (act.size >= size) {
+                act.state = .dirty;
+                return act.vk_buf;
+            }
+            self.destroyBuffer(act.vk_buf);
+        }
+        const buf = self.createBuffer(size);
+        self.act_cache.put(addr, .{ .vk_buf = buf, .size = size, .state = .dirty }) catch {};
+        return buf;
+    }
+
+    /// Get GPU buffer for in-place read+write. Re-uploads if stale, marks dirty.
+    fn getInPlaceBuf(self: *VulkanBackend, ptr: anytype, size: usize) VkBuf {
+        const addr = @intFromPtr(ptr);
+        if (self.act_cache.getPtr(addr)) |act| {
+            if (act.size >= size) {
+                if (act.state == .stale)
+                    self.uploadBuffer(act.vk_buf.mem, @ptrCast(ptr), size);
+                act.state = .dirty;
+                return act.vk_buf;
+            }
+            self.destroyBuffer(act.vk_buf);
+        }
+        const buf = self.createBuffer(size);
+        self.uploadBuffer(buf.mem, @ptrCast(ptr), size);
+        self.act_cache.put(addr, .{ .vk_buf = buf, .size = size, .state = .dirty }) catch {};
+        return buf;
+    }
+
+    /// Download all dirty GPU buffers to host, mark everything stale.
+    pub fn flushActivations(self: *VulkanBackend) void {
+        _ = self.vkDeviceWaitIdle(self.device);
+        var it = self.act_cache.iterator();
+        while (it.next()) |entry| {
+            if (entry.value_ptr.state == .dirty) {
+                const host_ptr: [*]u8 = @ptrFromInt(entry.key_ptr.*);
+                self.downloadBuf(entry.value_ptr.vk_buf.mem, host_ptr, entry.value_ptr.size);
+            }
+            entry.value_ptr.state = .stale;
+        }
+    }
+
+    /// Mark activation buffer as stale so next GPU access re-uploads from host.
+    pub fn invalidateAct(self: *VulkanBackend, ptr: anytype) void {
+        const addr = @intFromPtr(ptr);
+        if (self.act_cache.getPtr(addr)) |act| {
+            act.state = .stale;
+        }
+    }
+
+    /// Evict a weight buffer from the cache so next access re-uploads.
+    pub fn invalidateWeight(self: *VulkanBackend, ptr: anytype) void {
+        const addr = @intFromPtr(ptr);
+        if (self.buf_cache.getPtr(addr)) |cached| {
+            self.destroyBuffer(cached.vk_buf);
+            _ = self.buf_cache.remove(addr);
+        }
+    }
+
+    fn downloadBuf(self: *VulkanBackend, mem: VkDeviceMemory, data: [*]u8, size: usize) void {
+        var mapped: ?*anyopaque = null;
+        _ = self.vkMapMemory(self.device, mem, 0, size, 0, &mapped);
+        if (mapped) |ptr| {
+            @memcpy(data[0..size], @as([*]const u8, @ptrCast(ptr))[0..size]);
+            self.vkUnmapMemory(self.device, mem);
+        }
+    }
+
     /// Release all Vulkan resources: cached buffers, pipelines, descriptor pool, device, and instance.
     pub fn deinit(self: *VulkanBackend) void {
         if (self.device == null) return;
@@ -1103,6 +1211,11 @@ pub const VulkanBackend = struct {
         for (0..self.act_pool_count) |i| {
             self.destroyBuffer(self.act_pool[i].buf);
         }
+
+        // Release activation cache
+        var act_it = self.act_cache.valueIterator();
+        while (act_it.next()) |act| self.destroyBuffer(act.vk_buf);
+        self.act_cache.deinit();
 
         // Release all cached weight buffers
         self.deinitCachedBuffers();
@@ -1415,94 +1528,64 @@ pub const VulkanBackend = struct {
         const w_sz = weightBytes(w.dtype, n, k);
         const y_sz = n * @sizeOf(f32);
 
-        // Activation buffers: pooled to avoid per-op alloc/free overhead
-        const x_buf = self.getPooledBuf(x_sz);
-        defer self.releasePooledBuf(x_buf);
-        const y_buf = self.getPooledBuf(y_sz);
-        defer self.releasePooledBuf(y_buf);
-
-        // Weight buffer: cached (large, immutable mmap'd data)
+        const x_buf = self.getInputBuf(x, x_sz);
         const w_vk = self.getOrUpload(w.data, w_sz);
-
-        self.uploadBuffer(x_buf.mem, @ptrCast(x), x_sz);
+        const y_buf = self.getOutputBuf(y, y_sz);
 
         const params = [2]u32{ @intCast(n), @intCast(k) };
         const bufs = [_]VkBuffer{ x_buf.buf, w_vk.buf, y_buf.buf };
         const sizes = [_]usize{ x_sz, w_sz, y_sz };
         self.dispatch(pipe, &bufs, &sizes, @ptrCast(&params), 8, @intCast(n));
-        self.downloadF32(y_buf.mem, y, n);
     }
 
     /// output[i] = input[i] * weight[i] * rsqrt(sum_sq / n + eps)
     pub fn rmsNorm(self: *VulkanBackend, input: [*]const f32, weight: [*]const f32, output: [*]f32, n: usize, eps: f32) void {
         const sz = n * @sizeOf(f32);
-
-        const in_buf = self.getPooledBuf(sz);
-        defer self.releasePooledBuf(in_buf);
-        const o_buf = self.getPooledBuf(sz);
-        defer self.releasePooledBuf(o_buf);
-
-        // Norm weights are stable pointers — cache them
+        const in_buf = self.getInputBuf(input, sz);
         const w_vk = self.getOrUpload(@ptrCast(weight), sz);
-
-        self.uploadBuffer(in_buf.mem, @ptrCast(input), sz);
+        const o_buf = self.getOutputBuf(output, sz);
 
         const params = extern struct { n_val: u32, eps_val: f32 }{ .n_val = @intCast(n), .eps_val = eps };
         const bufs = [_]VkBuffer{ in_buf.buf, w_vk.buf, o_buf.buf };
         const sizes = [_]usize{ sz, sz, sz };
         self.dispatch(self.pipe_rms_norm, &bufs, &sizes, @ptrCast(&params), 8, 1);
-        self.downloadF32(o_buf.mem, output, n);
     }
 
     /// SiLU activation: output[i] = input[i] * sigmoid(input[i])
     pub fn silu(self: *VulkanBackend, input: [*]const f32, output: [*]f32, n: usize) void {
         const sz = n * @sizeOf(f32);
-        const a_buf = self.getPooledBuf(sz);
-        defer self.releasePooledBuf(a_buf);
-        const o_buf = self.getPooledBuf(sz);
-        defer self.releasePooledBuf(o_buf);
+        const a_buf = self.getInputBuf(input, sz);
+        const o_buf = self.getOutputBuf(output, sz);
 
-        self.uploadBuffer(a_buf.mem, @ptrCast(input), sz);
         const params = [1]u32{@intCast(n)};
         const bufs = [_]VkBuffer{ a_buf.buf, o_buf.buf };
         const sizes = [_]usize{ sz, sz };
         self.dispatch(self.pipe_silu, &bufs, &sizes, @ptrCast(&params), 4, @intCast((n + workgroup_size - 1) / workgroup_size));
-        self.downloadF32(o_buf.mem, output, n);
     }
 
     /// GELU activation: output[i] = 0.5 * x * (1 + tanh(sqrt(2/pi) * (x + 0.044715 * x^3)))
     pub fn gelu(self: *VulkanBackend, input: [*]const f32, output: [*]f32, n: usize) void {
         const sz = n * @sizeOf(f32);
-        const a_buf = self.getPooledBuf(sz);
-        defer self.releasePooledBuf(a_buf);
-        const o_buf = self.getPooledBuf(sz);
-        defer self.releasePooledBuf(o_buf);
+        const a_buf = self.getInputBuf(input, sz);
+        const o_buf = self.getOutputBuf(output, sz);
 
-        self.uploadBuffer(a_buf.mem, @ptrCast(input), sz);
         const params = [1]u32{@intCast(n)};
         const bufs = [_]VkBuffer{ a_buf.buf, o_buf.buf };
         const sizes = [_]usize{ sz, sz };
         self.dispatch(self.pipe_gelu, &bufs, &sizes, @ptrCast(&params), 4, @intCast((n + workgroup_size - 1) / workgroup_size));
-        self.downloadF32(o_buf.mem, output, n);
     }
 
     /// out[i] = a[i] + b[i]
     pub fn add(self: *VulkanBackend, a: [*]const f32, b: [*]const f32, out: [*]f32, n: usize) void {
         const sz = n * @sizeOf(f32);
-        const a_buf = self.getPooledBuf(sz);
-        defer self.releasePooledBuf(a_buf);
-        const b_buf = self.getPooledBuf(sz);
-        defer self.releasePooledBuf(b_buf);
-        const o_buf = self.getPooledBuf(sz);
-        defer self.releasePooledBuf(o_buf);
+        const a_buf = self.getInputBuf(a, sz);
+        const b_buf = self.getInputBuf(b, sz);
+        const o_buf = self.getOutputBuf(out, sz);
 
-        self.uploadBuffer(a_buf.mem, @ptrCast(a), sz);
-        self.uploadBuffer(b_buf.mem, @ptrCast(b), sz);
         const params = [1]u32{@intCast(n)};
         const bufs = [_]VkBuffer{ a_buf.buf, b_buf.buf, o_buf.buf };
         const sizes = [_]usize{ sz, sz, sz };
         self.dispatch(self.pipe_add, &bufs, &sizes, @ptrCast(&params), 4, @intCast((n + workgroup_size - 1) / workgroup_size));
-        self.downloadF32(o_buf.mem, out, n);
     }
 
     /// Transposed GEMV for Q8_0 3D weights: y[out_dim] = W^T @ x[in_dim].
@@ -1532,88 +1615,61 @@ pub const VulkanBackend = struct {
     }
 
     /// Scaled accumulate: dst[i] += src[i] * scale.
-    /// CPU fallback — n_embd-sized, negligible vs GPU dispatch overhead.
-    /// Safe without flush: Vulkan dispatches are synchronous (fence-waited).
     pub fn addScaled(self: *VulkanBackend, src: [*]const f32, dst: [*]f32, scale: f32, n: usize) void {
         const sz = n * @sizeOf(f32);
-        const s_buf = self.getPooledBuf(sz);
-        defer self.releasePooledBuf(s_buf);
-        const d_buf = self.getPooledBuf(sz);
-        defer self.releasePooledBuf(d_buf);
-        self.uploadBuffer(s_buf.mem, @ptrCast(src), sz);
-        self.uploadBuffer(d_buf.mem, @ptrCast(dst), sz);
+        const s_buf = self.getInputBuf(src, sz);
+        const d_buf = self.getInPlaceBuf(dst, sz);
         const Params = extern struct { n: u32, scale: f32 };
         const params = Params{ .n = @intCast(n), .scale = scale };
         const bufs = [_]VkBuffer{ s_buf.buf, d_buf.buf };
         const sizes = [_]usize{ sz, sz };
         self.dispatch(self.pipe_add_scaled, &bufs, &sizes, @ptrCast(&params), @sizeOf(Params), @intCast((n + workgroup_size - 1) / workgroup_size));
-        self.downloadF32(d_buf.mem, dst, n);
     }
 
     /// Fused add + rmsNorm.
     pub fn addRmsNorm(self: *VulkanBackend, a: [*]f32, b: [*]const f32, weight: [*]const f32, output: [*]f32, n: usize, eps: f32) void {
         const sz = n * @sizeOf(f32);
-        const a_buf = self.getPooledBuf(sz);
-        defer self.releasePooledBuf(a_buf);
-        const b_buf = self.getPooledBuf(sz);
-        defer self.releasePooledBuf(b_buf);
-        const w_buf = self.getPooledBuf(sz);
-        defer self.releasePooledBuf(w_buf);
-        const o_buf = self.getPooledBuf(sz);
-        defer self.releasePooledBuf(o_buf);
-        self.uploadBuffer(a_buf.mem, @ptrCast(a), sz);
-        self.uploadBuffer(b_buf.mem, @ptrCast(b), sz);
-        self.uploadBuffer(w_buf.mem, @ptrCast(weight), sz);
+        const a_buf = self.getInPlaceBuf(a, sz);
+        const b_buf = self.getInputBuf(b, sz);
+        const w_vk = self.getOrUpload(@ptrCast(weight), sz);
+        const o_buf = self.getOutputBuf(output, sz);
         const Params = extern struct { n: u32, eps: f32 };
         const params = Params{ .n = @intCast(n), .eps = eps };
-        const bufs = [_]VkBuffer{ a_buf.buf, b_buf.buf, w_buf.buf, o_buf.buf };
+        const bufs = [_]VkBuffer{ a_buf.buf, b_buf.buf, w_vk.buf, o_buf.buf };
         const buf_sizes = [_]usize{ sz, sz, sz, sz };
         self.dispatch(self.pipe_add_rms_norm, &bufs, &buf_sizes, @ptrCast(&params), @sizeOf(Params), 1);
-        self.downloadF32(a_buf.mem, a, n);
-        self.downloadF32(o_buf.mem, output, n);
     }
 
     /// out[i] = a[i] * b[i]
     pub fn mul(self: *VulkanBackend, a: [*]const f32, b: [*]const f32, out: [*]f32, n: usize) void {
         const sz = n * @sizeOf(f32);
-        const a_buf = self.getPooledBuf(sz);
-        defer self.releasePooledBuf(a_buf);
-        const b_buf = self.getPooledBuf(sz);
-        defer self.releasePooledBuf(b_buf);
-        const o_buf = self.getPooledBuf(sz);
-        defer self.releasePooledBuf(o_buf);
+        const a_buf = self.getInputBuf(a, sz);
+        const b_buf = self.getInputBuf(b, sz);
+        const o_buf = self.getOutputBuf(out, sz);
 
-        self.uploadBuffer(a_buf.mem, @ptrCast(a), sz);
-        self.uploadBuffer(b_buf.mem, @ptrCast(b), sz);
         const params = [1]u32{@intCast(n)};
         const bufs = [_]VkBuffer{ a_buf.buf, b_buf.buf, o_buf.buf };
         const sizes = [_]usize{ sz, sz, sz };
         self.dispatch(self.pipe_mul, &bufs, &sizes, @ptrCast(&params), 4, @intCast((n + workgroup_size - 1) / workgroup_size));
-        self.downloadF32(o_buf.mem, out, n);
     }
 
     /// In-place softmax. Single-dispatch fused kernel with subgroup reduction.
     pub fn softmax(self: *VulkanBackend, data: [*]f32, n: usize) void {
         const sz = n * @sizeOf(f32);
-        const d_buf = self.getPooledBuf(sz);
-        defer self.releasePooledBuf(d_buf);
+        const d_buf = self.getInPlaceBuf(data, sz);
 
-        self.uploadBuffer(d_buf.mem, @ptrCast(data), sz);
         const params = [1]u32{@intCast(n)};
         const bufs = [_]VkBuffer{d_buf.buf};
         const sizes = [_]usize{sz};
         self.dispatch(self.pipe_softmax, &bufs, &sizes, @ptrCast(&params), 4, 1);
-        self.downloadF32(d_buf.mem, data, n);
     }
 
     /// Rotary Position Embedding (in-place).
     pub fn rope(self: *VulkanBackend, x: [*]f32, pos: usize, n_heads: usize, head_dim: usize, rope_dim: usize, theta: f32) void {
         const total = n_heads * head_dim;
         const sz = total * @sizeOf(f32);
-        const x_buf = self.getPooledBuf(sz);
-        defer self.releasePooledBuf(x_buf);
+        const x_buf = self.getInPlaceBuf(x, sz);
 
-        self.uploadBuffer(x_buf.mem, @ptrCast(x), sz);
         const params = extern struct { pos: u32, n_heads: u32, head_dim: u32, rope_dim: u32, theta: f32 }{
             .pos = @intCast(pos),
             .n_heads = @intCast(n_heads),
@@ -1625,7 +1681,6 @@ pub const VulkanBackend = struct {
         const bufs = [_]VkBuffer{x_buf.buf};
         const sizes = [_]usize{sz};
         self.dispatch(self.pipe_rope, &bufs, &sizes, @ptrCast(&params), 20, @intCast(grid));
-        self.downloadF32(x_buf.mem, x, total);
     }
 
     /// Embedding lookup via GPU shader (eliminates CPU fallback).
@@ -1728,15 +1783,12 @@ pub const VulkanBackend = struct {
     /// L2 normalize in-place. Single-dispatch fused kernel.
     pub fn l2Norm(self: *VulkanBackend, x: [*]f32, n: usize, eps: f32) void {
         const sz = n * @sizeOf(f32);
-        const x_buf = self.getPooledBuf(sz);
-        defer self.releasePooledBuf(x_buf);
+        const x_buf = self.getInPlaceBuf(x, sz);
 
-        self.uploadBuffer(x_buf.mem, @ptrCast(x), sz);
         const params = extern struct { n_val: u32, eps_val: f32 }{ .n_val = @intCast(n), .eps_val = eps };
         const bufs = [_]VkBuffer{x_buf.buf};
         const sizes = [_]usize{sz};
         self.dispatch(self.pipe_l2_norm, &bufs, &sizes, @ptrCast(&params), 8, 1);
-        self.downloadF32(x_buf.mem, x, n);
     }
 
     /// NVFP4 SafeTensors GEMV.
@@ -1833,53 +1885,36 @@ pub const VulkanBackend = struct {
     /// In-place sigmoid-gated multiply.
     pub fn sigmoidMul(self: *VulkanBackend, data: [*]f32, gate: [*]const f32, n: usize) void {
         const sz = n * @sizeOf(f32);
-        const d_buf = self.getPooledBuf(sz);
-        defer self.releasePooledBuf(d_buf);
-        const g_buf = self.getPooledBuf(sz);
-        defer self.releasePooledBuf(g_buf);
-        self.uploadBuffer(d_buf.mem, @ptrCast(data), sz);
-        self.uploadBuffer(g_buf.mem, @ptrCast(gate), sz);
+        const d_buf = self.getInPlaceBuf(data, sz);
+        const g_buf = self.getInputBuf(gate, sz);
         const params = [1]u32{@intCast(n)};
         const bufs = [_]VkBuffer{ d_buf.buf, g_buf.buf };
         const sizes = [_]usize{ sz, sz };
         self.dispatch(self.pipe_sigmoid_mul, &bufs, &sizes, @ptrCast(&params), 4, @intCast((n + workgroup_size - 1) / workgroup_size));
-        self.downloadF32(d_buf.mem, data, n);
     }
 
     /// Fused SiLU + multiply.
     pub fn siluMul(self: *VulkanBackend, a: [*]const f32, b: [*]const f32, out: [*]f32, n: usize) void {
         const sz = n * @sizeOf(f32);
-        const a_buf = self.getPooledBuf(sz);
-        defer self.releasePooledBuf(a_buf);
-        const b_buf = self.getPooledBuf(sz);
-        defer self.releasePooledBuf(b_buf);
-        const o_buf = self.getPooledBuf(sz);
-        defer self.releasePooledBuf(o_buf);
-        self.uploadBuffer(a_buf.mem, @ptrCast(a), sz);
-        self.uploadBuffer(b_buf.mem, @ptrCast(b), sz);
+        const a_buf = self.getInputBuf(a, sz);
+        const b_buf = self.getInputBuf(b, sz);
+        const o_buf = self.getOutputBuf(out, sz);
         const params = [1]u32{@intCast(n)};
         const bufs = [_]VkBuffer{ a_buf.buf, b_buf.buf, o_buf.buf };
         const sizes = [_]usize{ sz, sz, sz };
         self.dispatch(self.pipe_silu_mul, &bufs, &sizes, @ptrCast(&params), 4, @intCast((n + workgroup_size - 1) / workgroup_size));
-        self.downloadF32(o_buf.mem, out, n);
     }
 
     /// Fused GELU + multiply.
     pub fn geluMul(self: *VulkanBackend, a: [*]const f32, b: [*]const f32, out: [*]f32, n: usize) void {
         const sz = n * @sizeOf(f32);
-        const a_buf = self.getPooledBuf(sz);
-        defer self.releasePooledBuf(a_buf);
-        const b_buf = self.getPooledBuf(sz);
-        defer self.releasePooledBuf(b_buf);
-        const o_buf = self.getPooledBuf(sz);
-        defer self.releasePooledBuf(o_buf);
-        self.uploadBuffer(a_buf.mem, @ptrCast(a), sz);
-        self.uploadBuffer(b_buf.mem, @ptrCast(b), sz);
+        const a_buf = self.getInputBuf(a, sz);
+        const b_buf = self.getInputBuf(b, sz);
+        const o_buf = self.getOutputBuf(out, sz);
         const params = [1]u32{@intCast(n)};
         const bufs = [_]VkBuffer{ a_buf.buf, b_buf.buf, o_buf.buf };
         const sizes = [_]usize{ sz, sz, sz };
         self.dispatch(self.pipe_gelu_mul, &bufs, &sizes, @ptrCast(&params), 4, @intCast((n + workgroup_size - 1) / workgroup_size));
-        self.downloadF32(o_buf.mem, out, n);
     }
 
     /// In-place per-head rmsNorm.
@@ -1908,38 +1943,26 @@ pub const VulkanBackend = struct {
     pub fn deinterleave(self: *VulkanBackend, input: [*]const f32, out_a: [*]f32, out_b: [*]f32, stride: usize, n_pairs: usize) void {
         const total = n_pairs * stride;
         const sz = total * @sizeOf(f32);
-        const in_buf = self.getPooledBuf(sz * 2);
-        defer self.releasePooledBuf(in_buf);
-        const a_buf = self.getPooledBuf(sz);
-        defer self.releasePooledBuf(a_buf);
-        const b_buf = self.getPooledBuf(sz);
-        defer self.releasePooledBuf(b_buf);
-        self.uploadBuffer(in_buf.mem, @ptrCast(input), sz * 2);
+        const in_buf = self.getInputBuf(input, sz * 2);
+        const a_buf = self.getOutputBuf(out_a, sz);
+        const b_buf = self.getOutputBuf(out_b, sz);
         const params = [2]u32{ @intCast(stride), @intCast(n_pairs) };
         const bufs = [_]VkBuffer{ in_buf.buf, a_buf.buf, b_buf.buf };
         const buf_sizes = [_]usize{ sz * 2, sz, sz };
         self.dispatch(self.pipe_deinterleave, &bufs, &buf_sizes, @ptrCast(&params), 8, @intCast((total + workgroup_size - 1) / workgroup_size));
-        self.downloadF32(a_buf.mem, out_a, total);
-        self.downloadF32(b_buf.mem, out_b, total);
     }
 
     /// Split concatenated Q+gate per-head data into separate arrays.
     pub fn splitQGate(self: *VulkanBackend, qg: [*]const f32, q_out: [*]f32, g_out: [*]f32, head_dim: usize, n_heads: usize) void {
         const total = n_heads * head_dim;
         const sz = total * @sizeOf(f32);
-        const qg_buf = self.getPooledBuf(sz * 2);
-        defer self.releasePooledBuf(qg_buf);
-        const q_buf = self.getPooledBuf(sz);
-        defer self.releasePooledBuf(q_buf);
-        const g_buf = self.getPooledBuf(sz);
-        defer self.releasePooledBuf(g_buf);
-        self.uploadBuffer(qg_buf.mem, @ptrCast(qg), sz * 2);
+        const qg_buf = self.getInputBuf(qg, sz * 2);
+        const q_buf = self.getOutputBuf(q_out, sz);
+        const g_buf = self.getOutputBuf(g_out, sz);
         const params = [2]u32{ @intCast(head_dim), @intCast(n_heads) };
         const bufs = [_]VkBuffer{ qg_buf.buf, q_buf.buf, g_buf.buf };
         const buf_sizes = [_]usize{ sz * 2, sz, sz };
         self.dispatch(self.pipe_split_qgate, &bufs, &buf_sizes, @ptrCast(&params), 8, @intCast((total + workgroup_size - 1) / workgroup_size));
-        self.downloadF32(q_buf.mem, q_out, total);
-        self.downloadF32(g_buf.mem, g_out, total);
     }
 
     /// Batched GEMV — sequential dispatch on Vulkan.
@@ -2098,7 +2121,9 @@ pub const VulkanBackend = struct {
 
     /// No-op — each Vulkan dispatch already submits and waits on a fence.
     /// Exists for API consistency with other backends.
-    pub fn sync(_: *VulkanBackend) void {}
+    pub fn sync(self: *VulkanBackend) void {
+        self.flushActivations();
+    }
     /// No-op — Vulkan dispatches are not batched.
     pub fn beginBatch(_: *VulkanBackend) void {}
     /// No-op — Vulkan dispatches are not batched.
