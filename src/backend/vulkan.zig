@@ -82,6 +82,12 @@ const VK_PIPELINE_BIND_POINT_COMPUTE: c_int = 1;
 const VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT: VkFlags = 1;
 const VK_MEMORY_HEAP_DEVICE_LOCAL_BIT: VkFlags = 1;
 const VK_TRUE: VkBool32 = 1;
+const VK_ACCESS_HOST_WRITE_BIT: VkFlags = 0x4000;
+const VK_ACCESS_HOST_READ_BIT: VkFlags = 0x2000;
+const VK_ACCESS_SHADER_READ_BIT: VkFlags = 0x20;
+const VK_ACCESS_SHADER_WRITE_BIT: VkFlags = 0x40;
+const VK_PIPELINE_STAGE_HOST_BIT: VkFlags = 0x4000;
+const VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT: VkFlags = 0x800;
 
 // VK_API_VERSION_1_1 = VK_MAKE_API_VERSION(0, 1, 1, 0)
 const VK_API_VERSION_1_1: u32 = (0 << 29) | (1 << 22) | (1 << 12) | 0;
@@ -212,6 +218,15 @@ const VkCommandBufferBeginInfo = extern struct {
     flags: VkFlags = 0,
     pInheritanceInfo: ?*const anyopaque = null,
 };
+
+const VkMemoryBarrier = extern struct {
+    sType: c_int = VK_STRUCTURE_TYPE_MEMORY_BARRIER,
+    pNext: ?*const anyopaque = null,
+    srcAccessMask: VkFlags = 0,
+    dstAccessMask: VkFlags = 0,
+};
+
+const VK_STRUCTURE_TYPE_MEMORY_BARRIER: c_int = 46;
 
 const VkFenceCreateInfo = extern struct {
     sType: c_int = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO,
@@ -465,6 +480,7 @@ const FnCmdBindPipeline = *const fn (VkCommandBuffer, c_int, VkPipeline) callcon
 const FnCmdBindDescriptorSets = *const fn (VkCommandBuffer, c_int, VkPipelineLayout, u32, u32, *const VkDescriptorSet, u32, ?*const u32) callconv(.c) void;
 const FnCmdPushConstants = *const fn (VkCommandBuffer, VkPipelineLayout, VkFlags, u32, u32, [*]const u8) callconv(.c) void;
 const FnCmdDispatch = *const fn (VkCommandBuffer, u32, u32, u32) callconv(.c) void;
+const FnCmdPipelineBarrier = *const fn (VkCommandBuffer, VkFlags, VkFlags, VkFlags, u32, ?*const VkMemoryBarrier, u32, ?*const anyopaque, u32, ?*const anyopaque) callconv(.c) void;
 
 // ── Library name ────────────────────────────────────────────────
 
@@ -696,6 +712,7 @@ pub const VulkanBackend = struct {
     vkCmdBindDescriptorSets: FnCmdBindDescriptorSets = undefined,
     vkCmdPushConstants: FnCmdPushConstants = undefined,
     vkCmdDispatch: FnCmdDispatch = undefined,
+    vkCmdPipelineBarrier: FnCmdPipelineBarrier = undefined,
 
     // Activation buffer pool
     act_pool: [act_pool_capacity]PoolEntry = [_]PoolEntry{.{}} ** act_pool_capacity,
@@ -834,6 +851,7 @@ pub const VulkanBackend = struct {
         self.vkCmdBindDescriptorSets = self.lookup(FnCmdBindDescriptorSets, "vkCmdBindDescriptorSets") orelse return error.VulkanNotAvailable;
         self.vkCmdPushConstants = self.lookup(FnCmdPushConstants, "vkCmdPushConstants") orelse return error.VulkanNotAvailable;
         self.vkCmdDispatch = self.lookup(FnCmdDispatch, "vkCmdDispatch") orelse return error.VulkanNotAvailable;
+        self.vkCmdPipelineBarrier = self.lookup(FnCmdPipelineBarrier, "vkCmdPipelineBarrier") orelse return error.VulkanNotAvailable;
 
         // Create instance
         const app_info = VkApplicationInfo{
