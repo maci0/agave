@@ -986,8 +986,9 @@ pub const VulkanBackend = struct {
 
         self.vkGetDeviceQueue(self.device, self.queue_family, 0, &self.queue);
 
-        // Push descriptor deferred dispatch: disabled pending RADV segfault investigation.
-        // Extension resolves correctly but crashes during command buffer recording.
+        // Push descriptor: disabled — RADV crashes during command buffer execution.
+        // Descriptor set layout flag and function are correct but GPU segfaults.
+        // Needs RenderDoc / RADV debug build for further investigation.
         // self.vkCmdPushDescriptorSet = self.lookup(FnCmdPushDescriptorSet, "vkCmdPushDescriptorSetKHR");
 
         // Command pool + buffer
@@ -1311,10 +1312,11 @@ pub const VulkanBackend = struct {
                 .pImmutableSamplers = null,
             };
         }
+        const push_desc_flag: VkFlags = if (self.vkCmdPushDescriptorSet != null) 0x1 else 0; // VK_DESCRIPTOR_SET_LAYOUT_CREATE_PUSH_DESCRIPTOR_BIT_KHR
         const dsl_ci = VkDescriptorSetLayoutCreateInfo{
             .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
             .pNext = null,
-            .flags = 0,
+            .flags = push_desc_flag,
             .bindingCount = n_bindings,
             .pBindings = @ptrCast(&bindings),
         };
@@ -1366,17 +1368,19 @@ pub const VulkanBackend = struct {
 
         self.vkDestroyShaderModule(self.device, shader_mod, null);
 
-        // Pre-allocate descriptor set — reused across dispatches (synchronous execution).
+        // Pre-allocate descriptor set for synchronous path (push descriptor path doesn't use it)
         var desc_set: VkDescriptorSet = null;
-        const ds_ai = VkDescriptorSetAllocateInfo{
-            .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
-            .pNext = null,
-            .descriptorPool = self.desc_pool,
-            .descriptorSetCount = 1,
-            .pSetLayouts = &desc_layout,
-        };
-        if (self.vkAllocateDescriptorSets(self.device, &ds_ai, &desc_set) != VK_SUCCESS)
-            return error.VulkanInitFailed;
+        if (push_desc_flag == 0) {
+            const ds_ai = VkDescriptorSetAllocateInfo{
+                .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
+                .pNext = null,
+                .descriptorPool = self.desc_pool,
+                .descriptorSetCount = 1,
+                .pSetLayouts = &desc_layout,
+            };
+            if (self.vkAllocateDescriptorSets(self.device, &ds_ai, &desc_set) != VK_SUCCESS)
+                return error.VulkanInitFailed;
+        }
 
         return .{
             .pipeline = pipeline,
