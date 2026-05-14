@@ -871,7 +871,7 @@ pub const VulkanBackend = struct {
         self.vkCmdPushConstants = self.lookup(FnCmdPushConstants, "vkCmdPushConstants") orelse return error.VulkanNotAvailable;
         self.vkCmdDispatch = self.lookup(FnCmdDispatch, "vkCmdDispatch") orelse return error.VulkanNotAvailable;
         self.vkCmdPipelineBarrier = self.lookup(FnCmdPipelineBarrier, "vkCmdPipelineBarrier") orelse return error.VulkanNotAvailable;
-        self.vkCmdPushDescriptorSet = self.lookup(FnCmdPushDescriptorSet, "vkCmdPushDescriptorSetKHR");
+        // Push descriptor resolved after device creation (see below)
 
         // Create instance
         const app_info = VkApplicationInfo{
@@ -985,6 +985,10 @@ pub const VulkanBackend = struct {
         }
 
         self.vkGetDeviceQueue(self.device, self.queue_family, 0, &self.queue);
+
+        // Push descriptor deferred dispatch: disabled pending RADV segfault investigation.
+        // Extension resolves correctly but crashes during command buffer recording.
+        // self.vkCmdPushDescriptorSet = self.lookup(FnCmdPushDescriptorSet, "vkCmdPushDescriptorSetKHR");
 
         // Command pool + buffer
         const pool_ci = VkCommandPoolCreateInfo{
