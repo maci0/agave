@@ -588,6 +588,9 @@ pub const VulkanBackend = struct {
     fence: VkFence = null,
     desc_pool: VkDescriptorPool = null,
     cmd_recording: bool = false,
+    // Persistent staging for paged SDPA (avoids per-call page_allocator alloc/free)
+    sdpa_flat_keys: ?[]f32 = null,
+    sdpa_flat_vals: ?[]f32 = null,
 
     // Elementwise pipelines
     pipe_silu: PipelineInfo = .{},
@@ -1225,6 +1228,8 @@ pub const VulkanBackend = struct {
     pub fn deinit(self: *VulkanBackend) void {
         if (self.device == null) return;
         _ = self.vkDeviceWaitIdle(self.device);
+        if (self.sdpa_flat_keys) |buf| self.allocator.free(buf);
+        if (self.sdpa_flat_vals) |buf| self.allocator.free(buf);
 
         // Release pooled activation buffers
         for (0..self.act_pool_count) |i| {
@@ -2328,12 +2333,19 @@ pub const VulkanBackend = struct {
         const flat_elems = n_phys_blocks * block_stride;
         const flat_bytes = flat_elems * @sizeOf(f32);
 
-        const flat_keys = std.heap.page_allocator.alloc(f32, flat_elems) catch
-            @panic("Vulkan sdpaPaged: out of memory for flat key staging buffer");
-        defer std.heap.page_allocator.free(flat_keys);
-        const flat_vals = std.heap.page_allocator.alloc(f32, flat_elems) catch
-            @panic("Vulkan sdpaPaged: out of memory for flat value staging buffer");
-        defer std.heap.page_allocator.free(flat_vals);
+        // Reuse persistent staging buffers (grow as needed, never shrink)
+        if (self.sdpa_flat_keys == null or self.sdpa_flat_keys.?.len < flat_elems) {
+            if (self.sdpa_flat_keys) |old| self.allocator.free(old);
+            self.sdpa_flat_keys = self.allocator.alloc(f32, flat_elems) catch
+                @panic("Vulkan sdpaPaged: out of memory for flat key staging buffer");
+        }
+        if (self.sdpa_flat_vals == null or self.sdpa_flat_vals.?.len < flat_elems) {
+            if (self.sdpa_flat_vals) |old| self.allocator.free(old);
+            self.sdpa_flat_vals = self.allocator.alloc(f32, flat_elems) catch
+                @panic("Vulkan sdpaPaged: out of memory for flat value staging buffer");
+        }
+        const flat_keys = self.sdpa_flat_keys.?;
+        const flat_vals = self.sdpa_flat_vals.?;
 
         for (kv_view.block_table[0..n_logical_blocks]) |phys_id| {
             const dst_off = @as(usize, phys_id) * block_stride;
