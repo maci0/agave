@@ -244,6 +244,27 @@ Measured on Apple M4 Pro (48 GB unified memory). See [docs/BENCHMARKS.md](docs/B
 | Gemma 3 27B | QAT 4-bit | Metal | 11.6 | — |
 | Qwen3.5 0.8B | MLX-4bit | Metal | 12.7 | — |
 
+### Multi-Backend (Qwen3.5 0.8B Q8_0)
+
+| Backend | Hardware | Decode (tok/s) |
+|---------|----------|---------------:|
+| Metal | Apple M4 Pro | 183.3 |
+| CUDA | NVIDIA GB10 (aarch64) | 66.4 |
+| CPU | Ryzen 9 9950X (32T) | 47.1 |
+| CPU | Apple M4 Pro (14T) | 53.2 |
+| Vulkan | AMD RX 7900 XTX | 2.7 |
+| Vulkan | AMD Ryzen 9950X iGPU | 3.2 |
+
+### Distributed Inference (Qwen3.5 4B Q8_0)
+
+| Config | Backend(s) | Nodes | Decode (tok/s) |
+|--------|-----------|------:|---------------:|
+| Single GPU | CUDA GB10 | 1 | 18.4 |
+| Single CPU | Ryzen 9950X | 1 | 9.2 |
+| PP=2 (TCP) | CUDA + CPU | 2 | 11.5 |
+| PP=2 (shm) | Vulkan dGPU + iGPU | 1 | 2.7 |
+| TP=2 local | CUDA GB10 | 1 | 6.5 |
+
 ## Prerequisites
 
 - **Zig 0.16.0**
