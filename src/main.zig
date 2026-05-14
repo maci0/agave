@@ -25,6 +25,7 @@ const Recipe = @import("recipe.zig").Recipe;
 const Backend = backend_mod.Backend;
 const BackendState = backend_mod.BackendState;
 const BackendChoice = backend_mod.BackendChoice;
+const TransportChoice = enum { auto, tcp, shm, rdma, udp, grpc };
 const ThreadPool = @import("thread_pool.zig").ThreadPool;
 const Format = format_mod.Format;
 const GGUFFile = format_mod.GGUFFile;
@@ -352,6 +353,7 @@ const cli_specs = [_]cli_mod.ArgSpec{
     .{ .long = "devices", .kind = .option, .help = "Device selection (e.g. cuda:0,cuda:1)." },
     .{ .long = "peers", .kind = .option, .help = "TP peer addresses for distributed inference (e.g. 192.168.0.212:9999)." },
     .{ .long = "rank", .kind = .option, .help = "This node's TP rank [default: 0]." },
+    .{ .long = "transport", .kind = .option, .help = "IPC transport: auto, tcp, shm, rdma, udp, grpc [default: auto]." },
     .{ .long = "ctx-size", .kind = .option, .help = "Context window size; 0 = full model context [default: min(model, 4096)]." },
     .{ .long = "allow-cpu-fallback", .help = "Allow GPU backends to fall back to CPU for unsupported ops." },
     .{ .long = "mmap", .help = "Use lazy mmap instead of eagerly paging weights into RAM." },
@@ -445,6 +447,7 @@ const CliArgs = struct {
     tp_degree: u32 = 1,
     tp_rank: u32 = 0,
     tp_peers: ?[]const u8 = null,
+    transport: TransportChoice = .auto,
     pp_degree: u32 = 1,
     pp_rank: u32 = 0,
     pp_peers: ?[]const u8 = null,
@@ -798,6 +801,11 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
         .tp_degree = res.optionU32("tp") orelse 1,
         .tp_rank = res.optionU32("rank") orelse 0,
         .tp_peers = res.option("peers"),
+        .transport = if (res.option("transport")) |t| std.meta.stringToEnum(TransportChoice, t) orelse {
+            eprint("Error: unknown transport '{s}'\n", .{t});
+            eprint("  Valid options: auto, tcp, shm, rdma, udp, grpc\n", .{});
+            std.process.exit(1);
+        } else .auto,
         .pp_degree = res.optionU32("pp") orelse 1,
         .disagg = res.flag("disagg"),
         .use_mmap = res.flag("mmap"),
@@ -846,6 +854,69 @@ fn parseIpv4(s: []const u8, out: *[4]u8) void {
     }
     if (part_idx < 4) parts[part_idx] = @intCast(acc);
     out.* = parts;
+}
+
+const TransportMod = @import("parallel/transport.zig");
+
+fn resolveTransportKind(choice: TransportChoice, peers_str: []const u8) TransportMod.TransportKind {
+    return switch (choice) {
+        .tcp => .tcp,
+        .shm => .shm,
+        .rdma, .udp, .grpc => {
+            std.log.warn("transport '{s}' not yet implemented, using tcp", .{@tagName(choice)});
+            return .tcp;
+        },
+        .auto => {
+            const is_local = std.mem.eql(u8, peers_str, "localhost") or std.mem.eql(u8, peers_str, "127.0.0.1");
+            const resolved: TransportMod.TransportKind = if (is_local) .shm else .tcp;
+            std.log.info("transport: auto → {s}", .{@tagName(resolved)});
+            return resolved;
+        },
+    };
+}
+
+fn setupTransport(allocator: std.mem.Allocator, peers_str: []const u8, rank: u32, world_size: u32, choice: TransportChoice, port_base: u16) ?*TransportMod.Transport {
+    const t = allocator.create(TransportMod.Transport) catch return null;
+    var kind = resolveTransportKind(choice, peers_str);
+    t.* = TransportMod.Transport.init(allocator, kind, rank, world_size) catch return null;
+
+    if (kind == .shm) {
+        t.setupShm() catch {
+            std.log.warn("shm setup failed, falling back to tcp", .{});
+            t.kind = .tcp;
+            kind = .tcp;
+        };
+    }
+
+    if (kind == .shm) return t;
+
+    // TCP path
+    var host: [4]u8 = .{ 0, 0, 0, 0 };
+    var port: u16 = port_base;
+    if (std.mem.indexOfScalar(u8, peers_str, ':')) |colon| {
+        port = std.fmt.parseInt(u16, peers_str[colon + 1 ..], 10) catch port_base;
+        parseIpv4(peers_str[0..colon], &host);
+    } else {
+        parseIpv4(peers_str, &host);
+    }
+    if (rank == 0) {
+        var la: std.posix.sockaddr.in = .{ .port = std.mem.nativeToBig(u16, port), .addr = 0 };
+        const ls = std.c.socket(std.posix.AF.INET, std.posix.SOCK.STREAM, 0);
+        if (ls < 0) return null;
+        defer _ = std.c.close(ls);
+        var one: c_int = 1;
+        _ = std.c.setsockopt(ls, std.posix.SOL.SOCKET, std.posix.SO.REUSEADDR, @ptrCast(&one), @sizeOf(c_int));
+        if (std.c.bind(ls, @ptrCast(&la), @sizeOf(@TypeOf(la))) != 0) return null;
+        if (std.c.listen(ls, 1) != 0) return null;
+        std.log.info("waiting for rank 1 on port {d}...", .{port});
+        t.acceptPeer(ls) catch return null;
+        std.log.info("rank 1 connected", .{});
+    } else {
+        std.log.info("connecting to rank 0 at {d}.{d}.{d}.{d}:{d}...", .{ host[0], host[1], host[2], host[3], port });
+        t.connectPeer(host, port) catch return null;
+        std.log.info("connected to rank 0", .{});
+    }
+    return t;
 }
 
 fn parseF32(s: ?[]const u8, comptime flag: []const u8) ?f32 {
@@ -918,13 +989,12 @@ fn printUsage() void {
         \\PARALLELISM:
         \\      --list-devices         List available compute devices and exit
         \\      --device <N>           GPU device index for CUDA/ROCm/Vulkan [default: 0]
-        \\      --tp <N>               Tensor parallelism: split weight matrices across N devices [default: 1]
-        \\      --pp <N>               Pipeline parallelism: split layers across N stages [default: 1]
-        \\      --devices <SPEC>       Device selection (e.g. cuda:0,cuda:1)
-        \\      --peers <ADDR>         Peer addresses for distributed TP (e.g. 192.168.0.212:9999)
-        \\      --rank <N>             This node's TP rank [default: 0]
-        \\      --list-devices         List available compute devices and exit
-        \\      --device <N>           GPU device index for CUDA/ROCm/Vulkan [default: 0]
+        \\      --tp <N>               Tensor parallelism degree [default: 1]
+        \\      --pp <N>               Pipeline parallelism stages [default: 1]
+        \\      --peers <ADDR>         Peer address (e.g. 192.168.0.2 or localhost for same-node)
+        \\      --rank <N>             This node's rank [default: 0]
+        \\      --transport <TYPE>     IPC transport: auto, tcp, shm, rdma, udp, grpc [default: auto]
+        \\      --disagg               Disaggregated prefill/decode (rank 0 prefills, rank 1 decodes)
         \\
         \\MULTIMODAL:
         \\      --mmproj <PATH>    Path to vision projector GGUF (mmproj file)
@@ -1595,55 +1665,10 @@ fn initAndRun(
         }
         std.log.info("TP={d} rank={d} active", .{ cli.tp_degree, cli.tp_rank });
 
-        // Distributed TP: connect to peers via shm (same-node) or TCP (cross-node)
+        // Distributed TP: connect to peers
         if (cli.pp_degree <= 1) if (cli.tp_peers) |peers_str| {
-            const TransportMod = @import("parallel/transport.zig");
-            const t = allocator.create(TransportMod.Transport) catch null;
-            if (t) |tr| init_transport: {
-                const is_local = std.mem.eql(u8, peers_str, "localhost") or std.mem.eql(u8, peers_str, "127.0.0.1");
-                const kind: TransportMod.TransportKind = if (is_local) .shm else .tcp;
-                tr.* = TransportMod.Transport.init(allocator, kind, cli.tp_rank, cli.tp_degree) catch break :init_transport;
-
-                if (is_local) {
-                    tr.setupShm() catch {
-                        std.log.warn("shm setup failed, falling back to TCP", .{});
-                        tr.kind = .tcp;
-                    };
-                }
-
-                if (tr.kind == .shm) {
-                    mdl.setTpTransport(tr);
-                } else {
-                    var host: [4]u8 = .{ 0, 0, 0, 0 };
-                    var port: u16 = 49454;
-                    if (std.mem.indexOfScalar(u8, peers_str, ':')) |colon| {
-                        port = std.fmt.parseInt(u16, peers_str[colon + 1 ..], 10) catch 49454;
-                        parseIpv4(peers_str[0..colon], &host);
-                    } else {
-                        parseIpv4(peers_str, &host);
-                    }
-                    const connected = blk: {
-                        if (cli.tp_rank == 0) {
-                            var la: std.posix.sockaddr.in = .{ .port = std.mem.nativeToBig(u16, port), .addr = 0 };
-                            const ls = std.c.socket(std.posix.AF.INET, std.posix.SOCK.STREAM, 0);
-                            if (ls < 0) break :blk false;
-                            defer _ = std.c.close(ls);
-                            var one: c_int = 1;
-                            _ = std.c.setsockopt(ls, std.posix.SOL.SOCKET, std.posix.SO.REUSEADDR, @ptrCast(&one), @sizeOf(c_int));
-                            if (std.c.bind(ls, @ptrCast(&la), @sizeOf(@TypeOf(la))) != 0) break :blk false;
-                            if (std.c.listen(ls, 1) != 0) break :blk false;
-                            std.log.info("Waiting for rank 1 on port {d}...", .{port});
-                            tr.acceptPeer(ls) catch break :blk false;
-                            std.log.info("Rank 1 connected", .{});
-                        } else {
-                            std.log.info("Connecting to rank 0 at {d}.{d}.{d}.{d}:{d}...", .{ host[0], host[1], host[2], host[3], port });
-                            tr.connectPeer(host, port) catch break :blk false;
-                            std.log.info("Connected to rank 0", .{});
-                        }
-                        break :blk true;
-                    };
-                    if (connected) mdl.setTpTransport(tr);
-                }
+            if (setupTransport(allocator, peers_str, cli.tp_rank, cli.tp_degree, cli.transport, 49454)) |tr| {
+                mdl.setTpTransport(tr);
             }
         };
     }
@@ -1651,50 +1676,10 @@ fn initAndRun(
     // PP: pipeline parallelism setup (uses --pp, --rank, --peers)
     if (cli.pp_degree > 1) {
         std.log.info("PP={d} rank={d}", .{ cli.pp_degree, cli.tp_rank });
-        if (cli.tp_peers) |peers_str| pp_setup: {
-            const TransportMod = @import("parallel/transport.zig");
-            const t = allocator.create(TransportMod.Transport) catch break :pp_setup;
-            const is_local = std.mem.eql(u8, peers_str, "localhost") or std.mem.eql(u8, peers_str, "127.0.0.1");
-            const kind: TransportMod.TransportKind = if (is_local) .shm else .tcp;
-            t.* = TransportMod.Transport.init(allocator, kind, cli.tp_rank, cli.pp_degree) catch break :pp_setup;
-
-            if (is_local) {
-                t.setupShm() catch {
-                    std.log.warn("PP shm setup failed, falling back to TCP", .{});
-                    t.kind = .tcp;
-                };
+        if (cli.tp_peers) |peers_str| {
+            if (setupTransport(allocator, peers_str, cli.tp_rank, cli.pp_degree, cli.transport, 49455)) |t| {
+                mdl.setPpConfig(cli.tp_rank, cli.pp_degree, t);
             }
-
-            const ok = blk: {
-                if (t.kind == .shm) break :blk true;
-                var host: [4]u8 = .{ 0, 0, 0, 0 };
-                var port: u16 = 49455;
-                if (std.mem.indexOfScalar(u8, peers_str, ':')) |colon| {
-                    port = std.fmt.parseInt(u16, peers_str[colon + 1 ..], 10) catch 49455;
-                    parseIpv4(peers_str[0..colon], &host);
-                } else {
-                    parseIpv4(peers_str, &host);
-                }
-                if (cli.tp_rank == 0) {
-                    var la: std.posix.sockaddr.in = .{ .port = std.mem.nativeToBig(u16, port), .addr = 0 };
-                    const ls = std.c.socket(std.posix.AF.INET, std.posix.SOCK.STREAM, 0);
-                    if (ls < 0) break :blk false;
-                    defer _ = std.c.close(ls);
-                    var one: c_int = 1;
-                    _ = std.c.setsockopt(ls, std.posix.SOL.SOCKET, std.posix.SO.REUSEADDR, @ptrCast(&one), @sizeOf(c_int));
-                    if (std.c.bind(ls, @ptrCast(&la), @sizeOf(@TypeOf(la))) != 0) break :blk false;
-                    if (std.c.listen(ls, 1) != 0) break :blk false;
-                    std.log.info("PP: waiting for rank 1 on port {d}...", .{port});
-                    t.acceptPeer(ls) catch break :blk false;
-                    std.log.info("PP: rank 1 connected", .{});
-                } else {
-                    std.log.info("PP: connecting to rank 0...", .{});
-                    t.connectPeer(host, port) catch break :blk false;
-                    std.log.info("PP: connected", .{});
-                }
-                break :blk true;
-            };
-            if (ok) mdl.setPpConfig(cli.tp_rank, cli.pp_degree, t); // --rank controls PP rank
         }
     }
 
@@ -1956,7 +1941,6 @@ fn initAndRun(
         };
     } else if (cli.disagg and cli.tp_peers != null) {
         // Disaggregated inference: rank 0 prefills + sends KV, rank 1 receives KV + decodes
-        const TransportMod = @import("parallel/transport.zig");
         if (allocator.create(TransportMod.Transport) catch null) |dtr| disagg_blk: {
             const peers_str = cli.tp_peers orelse break :disagg_blk;
             dtr.* = TransportMod.Transport.init(allocator, .tcp, cli.tp_rank, 2) catch break :disagg_blk;
