@@ -1329,8 +1329,8 @@ pub const VulkanBackend = struct {
         const desc_set = pipe.desc_set;
 
         // Update descriptor set with buffer bindings
-        var buf_infos: [8]VkDescriptorBufferInfo = undefined;
-        var writes: [8]VkWriteDescriptorSet = undefined;
+        var buf_infos: [16]VkDescriptorBufferInfo = undefined;
+        var writes: [16]VkWriteDescriptorSet = undefined;
         for (0..bufs.len) |i| {
             buf_infos[i] = .{
                 .buffer = bufs[i],
