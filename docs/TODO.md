@@ -16,7 +16,7 @@ Comprehensive list of bugs, missing features, and improvement opportunities.
 | 3 | Vulkan segfault on RADV NAVI31 | Fixed | Was descriptor buffer overflow in dispatch() — [4]→[16] for 9-binding pipelines |
 | 4 | Vulkan push descriptor crashes on RADV gfx1100 | Medium | VK_KHR_push_descriptor resolves + device created with extension. Descriptor layouts correctly flagged with PUSH_DESCRIPTOR_BIT. GPU crashes during command buffer execution — no validation errors. Suspected RADV driver issue. Infrastructure in place, disabled pending fix |
 | 5 | Vulkan synchronous dispatch bottleneck (2.7 tok/s) | Low | Per-op vkQueueSubmit + vkWaitForFences. Activation cache + persistent staging implemented but can't batch — both push descriptors and per-dispatch descriptor sets produce garbage on RADV |
-| 7 | CUDA Q4_K GEMV produces garbage on large models (9B+) | High | 0.8B Q4_K works, 9B Q4_K produces garbage. Q8_0 works for all sizes. PTX kernel codegen issue for super-block K-quant format on sm_121 (GB10) |
+| 7 | CUDA K-quant PTX register spilling on sm_121 | Fixed (workaround) | Q4_K/Q5_K/Q6_K PTX kernels spill registers on GB10's sm_121 JIT, causing data corruption (9B) and 10x slowdown (all sizes). Even NR=1 (single row) spills. CPU fallback with thread pool: 6.8 tok/s 9B, 12.3 tok/s 4B. Q8_0/Q4_0 GPU kernels unaffected |
 
 ---
 
