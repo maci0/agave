@@ -967,6 +967,7 @@ pub const BackendState = struct {
                             }
                         };
                         self.name = "CUDA";
+                        self.cuda_be.cpu.pool = &self.pool.?;
                         break :blk .{ .cuda = &self.cuda_be };
                     } else {
                         @panic("CUDA backend disabled at build time");
@@ -983,7 +984,7 @@ pub const BackendState = struct {
                             }
                         };
                         self.name = "ROCm";
-                        break :blk .{ .rocm = &self.rocm_be };
+                        self.rocm_be.cpu.pool = &self.pool.?; break :blk .{ .rocm = &self.rocm_be };
                     } else {
                         @panic("ROCm backend disabled at build time");
                     }
@@ -1020,6 +1021,7 @@ pub const BackendState = struct {
                                     if (comptime build_options.enable_cpu) break :blk .{ .cpu = &self.cpu_be } else @panic("CUDA failed, no other backends enabled");
                                 };
                                 self.name = "CUDA";
+                                self.cuda_be.cpu.pool = &self.pool.?;
                                 break :blk .{ .cuda = &self.cuda_be };
                             } else if (comptime build_options.enable_vulkan) {
                                 self.vulkan_be = VulkanBackend.init(allocator, device_id) catch {
@@ -1052,7 +1054,7 @@ pub const BackendState = struct {
                                     if (comptime build_options.enable_cpu) break :blk .{ .cpu = &self.cpu_be } else @panic("All GPU backends failed and CPU disabled");
                                 };
                                 self.name = "ROCm";
-                                break :blk .{ .rocm = &self.rocm_be };
+                                self.rocm_be.cpu.pool = &self.pool.?; break :blk .{ .rocm = &self.rocm_be };
                             }
                             if (comptime build_options.enable_vulkan) {
                                 self.vulkan_be = VulkanBackend.init(allocator, device_id) catch {
@@ -1064,6 +1066,7 @@ pub const BackendState = struct {
                             if (comptime build_options.enable_cpu) break :blk .{ .cpu = &self.cpu_be } else @panic("CUDA failed, no other backends enabled");
                         };
                         self.name = "CUDA";
+                        self.cuda_be.cpu.pool = &self.pool.?;
                         break :blk .{ .cuda = &self.cuda_be };
                     }
                     // Try ROCm
@@ -1079,7 +1082,7 @@ pub const BackendState = struct {
                             if (comptime build_options.enable_cpu) break :blk .{ .cpu = &self.cpu_be } else @panic("ROCm failed, no other backends enabled");
                         };
                         self.name = "ROCm";
-                        break :blk .{ .rocm = &self.rocm_be };
+                        self.rocm_be.cpu.pool = &self.pool.?; break :blk .{ .rocm = &self.rocm_be };
                     }
                     // Try Vulkan
                     if (comptime build_options.enable_vulkan) {

@@ -793,9 +793,15 @@ pub const CudaBackend = struct {
             .q8_0 => self.fn_gemv_q8_0,
             .q4_0 => self.fn_gemv_q4_0,
             .q4_1 => self.fn_gemv_q4_1,
-            .q4_k => self.fn_gemv_q4_k,
-            .q5_k => self.fn_gemv_q5_k,
-            .q6_k => self.fn_gemv_q6_k,
+            .q4_k, .q5_k, .q6_k => {
+                // CPU fallback: K-quant PTX kernels have severe register pressure on sm_121,
+                // causing 10x slowdown and incorrect output on large models (9B+).
+                // CPU GEMV with thread pool is faster than the degraded GPU kernel.
+                self.flushActivations();
+                self.cpu.gemv(x, w, y, n, k);
+                self.invalidateAct(y);
+                return;
+            },
             .fp8_e4m3 => self.fn_gemv_fp8_e4m3,
             .fp8_e5m2 => self.fn_gemv_fp8_e5m2,
             else => @panic("CUDA GEMV: unsupported dtype — add a GPU kernel"),
