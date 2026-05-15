@@ -273,7 +273,11 @@ pub const RocmBackend = struct {
 
         // Load HSACO module
         if (hsaco_data.len == 0) return error.HsacoEmpty;
-        if (hipModuleLoadData(&self.module, hsaco_data.ptr) != HIP_SUCCESS) return error.HsacoLoadFailed;
+        const load_rc = hipModuleLoadData(&self.module, hsaco_data.ptr);
+        if (load_rc != HIP_SUCCESS) {
+            std.log.warn("hipModuleLoadData failed (error {d}). HSACO target triple may be incompatible with this kernel/driver.", .{load_rc});
+            return error.HsacoLoadFailed;
+        }
         errdefer _ = self.hipModuleUnload(self.module);
 
         // Get kernel function handles
