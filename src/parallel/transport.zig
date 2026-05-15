@@ -62,6 +62,12 @@ pub const Transport = struct {
     nccl_send: ?FnNcclSend = null,
     nccl_recv: ?FnNcclRecv = null,
     nccl_destroy: ?FnNcclCommDestroy = null,
+    cuda_sync: ?*const fn () callconv(.c) c_int = null,
+    cuda_mem_alloc: ?*const fn (*u64, usize) callconv(.c) c_int = null,
+    cuda_memcpy_htod: ?*const fn (u64, *const anyopaque, usize) callconv(.c) c_int = null,
+    cuda_memcpy_dtoh: ?*const fn (*anyopaque, u64, usize) callconv(.c) c_int = null,
+    nccl_dev_buf: u64 = 0, // Device-allocated staging buffer for NCCL
+    nccl_dev_buf_size: usize = 0,
 
     pub fn init(allocator: Allocator, kind: TransportKind, rank: u32, world_size: u32) !Transport {
         if (kind != .tcp and kind != .shm and kind != .nccl) return error.NotImplemented;
@@ -225,10 +231,35 @@ pub const Transport = struct {
 
     pub fn allReduceAdd(self: *Transport, buf: [*]f32, n: usize) !void {
         if (self.kind == .nccl) {
-            if (self.nccl_allreduce) |allreduce| {
-                if (allreduce(@ptrCast(buf), @ptrCast(buf), n, ncclFloat, ncclSum, self.nccl_comm, null) != ncclSuccess)
-                    std.log.warn("NCCL allReduce failed", .{});
+            const byte_len = n * @sizeOf(f32);
+            // Ensure device staging buffer is large enough
+            if (self.nccl_dev_buf_size < byte_len) {
+                if (self.cuda_mem_alloc) |alloc| {
+                    _ = alloc(&self.nccl_dev_buf, byte_len);
+                    self.nccl_dev_buf_size = byte_len;
+                }
             }
+            if (self.nccl_dev_buf == 0) {
+                // No device buffer — fall back to TCP
+                std.log.warn("NCCL: no device buffer, falling back to TCP allReduce", .{});
+                self.kind = .tcp;
+                return self.allReduceAdd(buf, n);
+            }
+            // Sync CUDA, copy host→device, NCCL allReduce on device, copy device→host
+            if (self.cuda_sync) |sync| _ = sync();
+            if (self.cuda_memcpy_htod) |htod| _ = htod(self.nccl_dev_buf, @ptrCast(buf), byte_len);
+            if (n == 4096) std.log.info("NCCL: buf[0..2]={d:.4},{d:.4} dev=0x{x}", .{ buf[0], buf[1], self.nccl_dev_buf });
+            if (self.nccl_allreduce) |allreduce| {
+                const d = self.nccl_dev_buf;
+                const rc = allreduce(@ptrFromInt(d), @ptrFromInt(d), n, ncclFloat, ncclSum, self.nccl_comm, null);
+                if (rc != ncclSuccess)
+                    std.log.warn("NCCL allReduce failed: rc={d} n={d} dev_buf=0x{x}", .{ rc, n, d })
+                else if (n < 10)
+                    std.log.info("NCCL allReduce OK: n={d}", .{n});
+            }
+            if (self.cuda_sync) |sync| _ = sync();
+            if (self.cuda_memcpy_dtoh) |dtoh| _ = dtoh(@ptrCast(buf), self.nccl_dev_buf, byte_len);
+            if (n == 4096) std.log.info("NCCL: after[0..2]={d:.4},{d:.4}", .{ buf[0], buf[1] });
             return;
         }
         if (self.kind == .shm) {

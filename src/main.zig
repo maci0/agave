@@ -1681,6 +1681,16 @@ fn initAndRun(
         // Distributed TP: connect to peers
         if (cli.pp_degree <= 1) if (cli.tp_peers) |peers_str| {
             if (setupTransport(allocator, peers_str, cli.tp_rank, cli.tp_degree, cli.transport, 49454)) |tr| {
+                // Wire CUDA interop for NCCL
+                if (tr.kind == .nccl) switch (be) {
+                    .cuda => |cuda_be| {
+                        tr.cuda_sync = cuda_be.cuCtxSynchronize;
+                        tr.cuda_mem_alloc = cuda_be.cuMemAlloc;
+                        tr.cuda_memcpy_htod = cuda_be.cuMemcpyHtoD;
+                        tr.cuda_memcpy_dtoh = cuda_be.cuMemcpyDtoH;
+                    },
+                    else => {},
+                };
                 mdl.setTpTransport(tr);
             }
         };
