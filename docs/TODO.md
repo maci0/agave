@@ -15,7 +15,8 @@ Comprehensive list of bugs, missing features, and improvement opportunities.
 | 6 | ROCm HSACO target triple rejected by kernel 7.0.6+ | High | Zig generates `amdgcn-amd-amdhsa5.0.0-unknown-gfx1100` instead of `amdgcn-amd-amdhsa--gfx1100`. Kernel 7.0.5 accepted it, 7.0.6 rejects consistently. GEMV kernels are correct (verified at 47-55 tok/s on 7.0.5). Fix needs Zig std library patch for amdgcn target triple |
 | 3 | Vulkan segfault on RADV NAVI31 | Fixed | Was descriptor buffer overflow in dispatch() — [4]→[16] for 9-binding pipelines |
 | 4 | Vulkan push descriptor crashes on RADV gfx1100 | Medium | VK_KHR_push_descriptor resolves + device created with extension. Descriptor layouts correctly flagged with PUSH_DESCRIPTOR_BIT. GPU crashes during command buffer execution — no validation errors. Suspected RADV driver issue. Infrastructure in place, disabled pending fix |
-| 5 | Vulkan synchronous dispatch bottleneck (2.7 tok/s) | Low | Per-op vkQueueSubmit + vkWaitForFences. Activation cache + persistent staging implemented but can't batch without push descriptors. CPU is 17x faster on same machine |
+| 5 | Vulkan synchronous dispatch bottleneck (2.7 tok/s) | Low | Per-op vkQueueSubmit + vkWaitForFences. Activation cache + persistent staging implemented but can't batch — both push descriptors and per-dispatch descriptor sets produce garbage on RADV |
+| 7 | CUDA Q4_K GEMV produces garbage on large models (9B+) | High | 0.8B Q4_K works, 9B Q4_K produces garbage. Q8_0 works for all sizes. PTX kernel codegen issue for super-block K-quant format on sm_121 (GB10) |
 
 ---
 
