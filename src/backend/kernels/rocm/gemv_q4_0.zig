@@ -1,9 +1,7 @@
 //! GEMV Q4_0 kernel: y[row] = dot(W_q4[row,:], x)
-//! Q4_0 block: 18 bytes = 2 bytes (f16 scale) + 16 bytes (32 x 4-bit quants).
+//! Q4_0 block: 18 bytes = 2 bytes (f16 scale) + 16 bytes (32 nibble-packed quants: byte[i] holds elements [i] and [i+16]).
 //! NR=4: Launch with ceil(n/4) workgroups, each processes 4 output rows.
 //! The x vector is shared across all rows for cache reuse.
-//!
-//! Optimized for RDNA3: uses dword (4-byte) global loads for quant data.
 
 const cu = @import("common.zig");
 
@@ -16,53 +14,24 @@ const q4_0_dequant_bias: i8 = -8;
 /// Number of output rows per workgroup.
 const nr: u32 = 4;
 
-/// Load 4 bytes from an arbitrary address as u32 (unaligned-safe).
-/// Uses align(1) to avoid UB when Q4_0 block boundaries are not 4-byte aligned.
-inline fn loadU32(addr: usize) u32 {
-    return @as(*align(1) const u32, @ptrFromInt(addr)).*;
-}
+/// Compute one Q4_0 block's dot product for a single row.
+inline fn q4_0BlockDot(x: [*]const f32, block_ptr: [*]const u8, k: u32, base_col: u32) f32 {
+    const scale_bits = @as(u16, block_ptr[0]) | (@as(u16, block_ptr[1]) << 8);
+    const scale: f32 = @floatCast(@as(f16, @bitCast(scale_bits)));
 
-/// Process a packed dword of 4 quant bytes: accumulate into sum.
-/// Low nibbles are elements [col_lo..col_lo+3],
-/// high nibbles are elements [col_hi..col_hi+3].
-inline fn accumDword(dw: u32, x: [*]const f32, col_lo: u32, col_hi: u32) f32 {
-    var s: f32 = 0.0;
-    inline for (0..4) |bi| {
-        const shift: u5 = @intCast(bi * 8);
-        const byte: u8 = @truncate(dw >> shift);
-        const lo: f32 = @floatFromInt(@as(i8, @intCast(@as(u4, @truncate(byte)))) + q4_0_dequant_bias);
-        const hi: f32 = @floatFromInt(@as(i8, @intCast(@as(u4, @truncate(byte >> 4)))) + q4_0_dequant_bias);
-        s += lo * x[col_lo + bi] + hi * x[col_hi + bi];
-    }
-    return s;
-}
-
-/// Compute one Q4_0 block's dot product for a single row using dword loads.
-inline fn q4_0BlockDot(x: [*]const f32, row_start: usize, blk: u32, k: u32) f32 {
-    const blk_addr = row_start + blk * q4_0_block_size;
-
-    // Scale: f16 (2 bytes) at block start
-    const scale: f32 = @floatCast(@as(f16, @bitCast(@as(
-        *const u16,
-        @ptrFromInt(blk_addr),
-    ).*)));
-
-    // Quants: 16 bytes at offset +2, load as 4 x dword
-    const q_addr = blk_addr + 2;
-    const q0 = loadU32(q_addr);
-    const q1 = loadU32(q_addr + 4);
-    const q2 = loadU32(q_addr + 8);
-    const q3 = loadU32(q_addr + 12);
-
-    const base_col = blk * q4_0_group_size;
+    const quants = block_ptr + 2;
 
     var blk_sum: f32 = 0.0;
-    blk_sum += accumDword(q0, x, base_col, base_col + 16);
-    blk_sum += accumDword(q1, x, base_col + 4, base_col + 20);
-    blk_sum += accumDword(q2, x, base_col + 8, base_col + 24);
-    blk_sum += accumDword(q3, x, base_col + 12, base_col + 28);
+    for (0..16) |qi| {
+        const byte = quants[qi];
+        const lo = @as(i8, @intCast(@as(u4, @truncate(byte)))) + q4_0_dequant_bias;
+        const hi = @as(i8, @intCast(@as(u4, @truncate(byte >> 4)))) + q4_0_dequant_bias;
 
-    _ = k;
+        if (base_col + qi < k)
+            blk_sum += @as(f32, @floatFromInt(lo)) * x[base_col + qi];
+        if (base_col + qi + 16 < k)
+            blk_sum += @as(f32, @floatFromInt(hi)) * x[base_col + qi + 16];
+    }
     return scale * blk_sum;
 }
 
@@ -83,13 +52,15 @@ export fn gemv_q4_0_kernel(x: [*]const f32, w: [*]const u8, y: [*]f32, n: u32, k
 
     var blk = tid;
     while (blk < blocks_per_row) : (blk += bdim) {
-        sum0 += q4_0BlockDot(x, @intFromPtr(w) + row_base * row_bytes, blk, k);
+        const base_col = blk * q4_0_group_size;
+
+        sum0 += q4_0BlockDot(x, w + row_base * row_bytes + blk * q4_0_block_size, k, base_col);
         if (nr_active > 1)
-            sum1 += q4_0BlockDot(x, @intFromPtr(w) + (row_base + 1) * row_bytes, blk, k);
+            sum1 += q4_0BlockDot(x, w + (row_base + 1) * row_bytes + blk * q4_0_block_size, k, base_col);
         if (nr_active > 2)
-            sum2 += q4_0BlockDot(x, @intFromPtr(w) + (row_base + 2) * row_bytes, blk, k);
+            sum2 += q4_0BlockDot(x, w + (row_base + 2) * row_bytes + blk * q4_0_block_size, k, base_col);
         if (nr_active > 3)
-            sum3 += q4_0BlockDot(x, @intFromPtr(w) + (row_base + 3) * row_bytes, blk, k);
+            sum3 += q4_0BlockDot(x, w + (row_base + 3) * row_bytes + blk * q4_0_block_size, k, base_col);
     }
 
     sum0 = cu.blockReduceAdd(sum0);
