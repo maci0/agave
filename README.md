@@ -250,7 +250,8 @@ Measured on Apple M4 Pro (48 GB unified memory). See [docs/BENCHMARKS.md](docs/B
 |---------|----------|---------------:|
 | Metal | Apple M4 Pro | 183.3 |
 | CUDA | NVIDIA GB10 (aarch64) | 66.4 |
-| CPU | Ryzen 9 9950X (32T) | 47.1 |
+| ROCm | AMD RX 7900 XTX | 50.8 |
+| CPU | Ryzen 9 9950X (32T) | 46.2 |
 | CPU | Apple M4 Pro (14T) | 53.2 |
 | Vulkan | AMD RX 7900 XTX | 2.7 |
 | Vulkan | AMD Ryzen 9950X iGPU | 3.2 |
