@@ -11,7 +11,8 @@ Comprehensive list of bugs, missing features, and improvement opportunities.
 | # | Issue | Severity | Status |
 |---|-------|----------|--------|
 | 1 | GLM-4.7 Flash — degenerate output (also broken in llama.cpp, likely bad GGUF conversion) | Low (upstream) | Won't fix |
-| 2 | ROCm HSACO GEMV kernels produce wrong results | High | Open — Zig→AMDGCN LLVM codegen issue. GEMV Q8_0 (and likely others) produce numerically incorrect accumulation. Earlier "CPU fallback still broken" finding was because sdpaPaged kernel was loaded (not null) and took GPU path. With fn_sdpa_paged forced null + GPU GEMV: still garbage → confirms GEMV is broken. ROCm GEMV source differs from CUDA. Fix requires either LLVM amdgcn codegen fix or rewrite kernels in HIP C++ |
+| 2 | ROCm GEMV Q8_0 produced wrong results | Fixed | Was using dword-packed loads (loadDword + inline for + accumDword) that had incorrect AMDGCN codegen. Replaced with byte-by-byte implementation (same as CUDA). Now 47-55 tok/s on RX 7900 XTX. Other quant types (Q4_K etc) may have similar dword-packed issues |
+| 6 | ROCm HSACO loading flaky in multi-process | Low | HsacoLoadFailed when 2nd process on same node tries to init ROCm. Standalone works fine. Known Zig LLVM amdhsa target triple issue |
 | 3 | Vulkan segfault on RADV NAVI31 | Fixed | Was descriptor buffer overflow in dispatch() — [4]→[16] for 9-binding pipelines |
 | 4 | Vulkan push descriptor crashes on RADV gfx1100 | Medium | VK_KHR_push_descriptor resolves + device created with extension. Descriptor layouts correctly flagged with PUSH_DESCRIPTOR_BIT. GPU crashes during command buffer execution — no validation errors. Suspected RADV driver issue. Infrastructure in place, disabled pending fix |
 | 5 | Vulkan synchronous dispatch bottleneck (2.7 tok/s) | Low | Per-op vkQueueSubmit + vkWaitForFences. Activation cache + persistent staging implemented but can't batch without push descriptors. CPU is 17x faster on same machine |
