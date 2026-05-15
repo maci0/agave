@@ -248,23 +248,21 @@ Measured on Apple M4 Pro (48 GB unified memory). See [docs/BENCHMARKS.md](docs/B
 
 | Backend | Hardware | Decode (tok/s) |
 |---------|----------|---------------:|
-| Metal | Apple M4 Pro | 183.3 |
-| CUDA | NVIDIA GB10 (aarch64) | 66.4 |
+| Metal | Apple M4 Pro | 129 |
 | ROCm | AMD RX 7900 XTX | 50.8 |
-| CPU | Ryzen 9 9950X (32T) | 46.2 |
-| CPU | Apple M4 Pro (14T) | 53.2 |
+| CPU | Ryzen 9 9950X (32T) | 44 |
+| CUDA | NVIDIA GB10 (aarch64) | 35 |
 | Vulkan | AMD RX 7900 XTX | 2.7 |
-| Vulkan | AMD Ryzen 9950X iGPU | 3.2 |
 
-### Distributed Inference (Qwen3.5 4B Q8_0)
+### Larger Models (Qwen3.5 9B Q8_0)
 
-| Config | Backend(s) | Nodes | Decode (tok/s) |
-|--------|-----------|------:|---------------:|
-| Single GPU | CUDA GB10 | 1 | 18.4 |
-| Single CPU | Ryzen 9950X | 1 | 9.2 |
-| PP=2 (TCP) | CUDA + CPU | 2 | 11.5 |
-| PP=2 (shm) | Vulkan dGPU + iGPU | 1 | 2.7 |
-| TP=2 local | CUDA GB10 | 1 | 6.5 |
+| Config | Backend(s) | Decode (tok/s) |
+|--------|-----------|---------------:|
+| Single GPU | CUDA GB10 | 9.1 |
+| PP=2 (TCP) | CUDA + CPU (cross-node) | 6.1 |
+| Single CPU | Ryzen 9 9950X | 5.3 |
+
+All quant formats supported on all backends: Q8_0 (GPU), Q4_0/Q4_K/Q5_K/Q6_K (GPU or CPU fallback on UMA). See [docs/KERNELS.md](docs/KERNELS.md) for details.
 
 ## Prerequisites
 
