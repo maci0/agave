@@ -19,6 +19,20 @@ const shm_MAP_SHARED: c_int = 0x01;
 
 pub const TransportKind = enum { tcp, shm, nccl, rccl };
 
+// NCCL types and constants
+const NcclComm = ?*anyopaque;
+const NcclUniqueId = [128]u8;
+const NcclResult = c_int;
+const ncclSuccess: NcclResult = 0;
+const ncclFloat: c_int = 7;
+const ncclSum: c_int = 0;
+const FnNcclGetUniqueId = *const fn (*NcclUniqueId) callconv(.c) NcclResult;
+const FnNcclCommInitRank = *const fn (*NcclComm, c_int, *const NcclUniqueId, c_int) callconv(.c) NcclResult;
+const FnNcclAllReduce = *const fn (*const anyopaque, *anyopaque, usize, c_int, c_int, NcclComm, ?*anyopaque) callconv(.c) NcclResult;
+const FnNcclSend = *const fn (*const anyopaque, usize, c_int, c_int, NcclComm, ?*anyopaque) callconv(.c) NcclResult;
+const FnNcclRecv = *const fn (*anyopaque, usize, c_int, c_int, NcclComm, ?*anyopaque) callconv(.c) NcclResult;
+const FnNcclCommDestroy = *const fn (NcclComm) callconv(.c) NcclResult;
+
 /// Shared memory region header (64-byte aligned).
 const ShmHeader = extern struct {
     ready: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
@@ -41,13 +55,24 @@ pub const Transport = struct {
     shm_recv_fd: c_int = -1,
     shm_name_send: [32:0]u8 = [_:0]u8{0} ** 32,
     shm_name_recv: [32:0]u8 = [_:0]u8{0} ** 32,
+    // NCCL communicator + function pointers
+    nccl_comm: NcclComm = null,
+    nccl_lib: ?std.DynLib = null,
+    nccl_allreduce: ?FnNcclAllReduce = null,
+    nccl_send: ?FnNcclSend = null,
+    nccl_recv: ?FnNcclRecv = null,
+    nccl_destroy: ?FnNcclCommDestroy = null,
 
     pub fn init(allocator: Allocator, kind: TransportKind, rank: u32, world_size: u32) !Transport {
-        if (kind != .tcp and kind != .shm) return error.NotImplemented;
+        if (kind != .tcp and kind != .shm and kind != .nccl) return error.NotImplemented;
         return .{ .kind = kind, .rank = rank, .world_size = world_size, .allocator = allocator };
     }
 
     pub fn deinit(self: *Transport) void {
+        if (self.nccl_comm != null) {
+            if (self.nccl_destroy) |destroy| _ = destroy(self.nccl_comm);
+        }
+        if (self.nccl_lib) |*lib| lib.close();
         for (self.tcp_fds[0..self.tcp_connected]) |fd| {
             if (fd >= 0) _ = c.close(fd);
         }
@@ -149,7 +174,63 @@ pub const Transport = struct {
         hdr.ready.store(0, .release);
     }
 
+    /// Initialize NCCL communicator. Requires TCP connection for unique ID exchange.
+    /// Call after connectPeer/acceptPeer establishes TCP link.
+    pub fn setupNccl(self: *Transport) !void {
+        var lib = std.DynLib.open("libnccl.so.2") catch
+            std.DynLib.open("libnccl.so") catch
+            std.DynLib.open("/usr/lib/aarch64-linux-gnu/libnccl.so.2") catch
+            std.DynLib.open("/usr/lib/x86_64-linux-gnu/libnccl.so.2") catch
+            return error.NcclNotAvailable;
+
+        const getUniqueId = lib.lookup(FnNcclGetUniqueId, "ncclGetUniqueId") orelse return error.NcclNotAvailable;
+        const commInitRank = lib.lookup(FnNcclCommInitRank, "ncclCommInitRank") orelse return error.NcclNotAvailable;
+        self.nccl_allreduce = lib.lookup(FnNcclAllReduce, "ncclAllReduce");
+        self.nccl_send = lib.lookup(FnNcclSend, "ncclSend");
+        self.nccl_recv = lib.lookup(FnNcclRecv, "ncclRecv");
+        self.nccl_destroy = lib.lookup(FnNcclCommDestroy, "ncclCommDestroy");
+
+        if (self.nccl_allreduce == null) return error.NcclNotAvailable;
+
+        // Exchange unique ID: rank 0 generates, sends to rank 1 via TCP
+        var unique_id: NcclUniqueId = undefined;
+        if (self.rank == 0) {
+            if (getUniqueId(&unique_id) != ncclSuccess) return error.NcclInitFailed;
+            // Send ID to peer via TCP
+            const id_bytes: [*]const u8 = @ptrCast(&unique_id);
+            var sent: usize = 0;
+            while (sent < 128) {
+                const rc = c.send(self.tcp_fds[0], id_bytes + sent, 128 - sent, 0);
+                if (rc <= 0) return error.NcclInitFailed;
+                sent += @intCast(rc);
+            }
+        } else {
+            // Receive ID from peer via TCP
+            const id_bytes: [*]u8 = @ptrCast(&unique_id);
+            var got: usize = 0;
+            while (got < 128) {
+                const rc = c.recv(self.tcp_fds[0], id_bytes + got, 128 - got, 0);
+                if (rc <= 0) return error.NcclInitFailed;
+                got += @intCast(rc);
+            }
+        }
+
+        // Initialize communicator
+        if (commInitRank(&self.nccl_comm, @intCast(self.world_size), &unique_id, @intCast(self.rank)) != ncclSuccess)
+            return error.NcclInitFailed;
+
+        self.nccl_lib = lib;
+        std.log.info("NCCL: rank {d}/{d} initialized", .{ self.rank, self.world_size });
+    }
+
     pub fn allReduceAdd(self: *Transport, buf: [*]f32, n: usize) !void {
+        if (self.kind == .nccl) {
+            if (self.nccl_allreduce) |allreduce| {
+                if (allreduce(@ptrCast(buf), @ptrCast(buf), n, ncclFloat, ncclSum, self.nccl_comm, null) != ncclSuccess)
+                    std.log.warn("NCCL allReduce failed", .{});
+            }
+            return;
+        }
         if (self.kind == .shm) {
             const byte_len = n * @sizeOf(f32);
             if (byte_len > shm_buf_size) return error.BufferTooLarge;
@@ -196,6 +277,10 @@ pub const Transport = struct {
     /// Point-to-point send: send buffer to peer.
     pub fn sendBuf(self: *Transport, buf: [*]const f32, n: usize) void {
         const byte_len = n * @sizeOf(f32);
+        if (self.kind == .nccl) {
+            if (self.nccl_send) |send_fn| _ = send_fn(@ptrCast(buf), n, ncclFloat, if (self.rank == 0) 1 else 0, self.nccl_comm, null);
+            return;
+        }
         if (self.kind == .shm) { self.shmSend(@ptrCast(buf), byte_len); return; }
         if (self.tcp_connected == 0) return;
         const fd = self.tcp_fds[0];
@@ -211,6 +296,10 @@ pub const Transport = struct {
     /// Point-to-point recv: receive buffer from peer.
     pub fn recvBuf(self: *Transport, buf: [*]f32, n: usize) void {
         const byte_len = n * @sizeOf(f32);
+        if (self.kind == .nccl) {
+            if (self.nccl_recv) |recv_fn| _ = recv_fn(@ptrCast(buf), n, ncclFloat, if (self.rank == 0) 1 else 0, self.nccl_comm, null);
+            return;
+        }
         if (self.kind == .shm) { self.shmRecv(@ptrCast(buf), byte_len); return; }
         if (self.tcp_connected == 0) return;
         const fd = self.tcp_fds[0];

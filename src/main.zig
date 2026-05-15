@@ -25,7 +25,7 @@ const Recipe = @import("recipe.zig").Recipe;
 const Backend = backend_mod.Backend;
 const BackendState = backend_mod.BackendState;
 const BackendChoice = backend_mod.BackendChoice;
-const TransportChoice = enum { auto, tcp, shm, rdma, udp, grpc };
+const TransportChoice = enum { auto, tcp, shm, nccl, rdma, udp, grpc };
 const ThreadPool = @import("thread_pool.zig").ThreadPool;
 const Format = format_mod.Format;
 const GGUFFile = format_mod.GGUFFile;
@@ -353,7 +353,7 @@ const cli_specs = [_]cli_mod.ArgSpec{
     .{ .long = "devices", .kind = .option, .help = "Device selection (e.g. cuda:0,cuda:1)." },
     .{ .long = "peers", .kind = .option, .help = "TP peer addresses for distributed inference (e.g. 192.168.0.212:9999)." },
     .{ .long = "rank", .kind = .option, .help = "This node's TP rank [default: 0]." },
-    .{ .long = "transport", .kind = .option, .help = "IPC transport: auto, tcp, shm, rdma, udp, grpc [default: auto]." },
+    .{ .long = "transport", .kind = .option, .help = "IPC transport: auto, tcp, shm, nccl, rdma, udp, grpc [default: auto]." },
     .{ .long = "ctx-size", .kind = .option, .help = "Context window size; 0 = full model context [default: min(model, 4096)]." },
     .{ .long = "allow-cpu-fallback", .help = "Allow GPU backends to fall back to CPU for unsupported ops." },
     .{ .long = "mmap", .help = "Use lazy mmap instead of eagerly paging weights into RAM." },
@@ -803,7 +803,7 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
         .tp_peers = res.option("peers"),
         .transport = if (res.option("transport")) |t| std.meta.stringToEnum(TransportChoice, t) orelse {
             eprint("Error: unknown transport '{s}'\n", .{t});
-            eprint("  Valid options: auto, tcp, shm, rdma, udp, grpc\n", .{});
+            eprint("  Valid options: auto, tcp, shm, nccl, rdma, udp, grpc\n", .{});
             std.process.exit(1);
         } else .auto,
         .pp_degree = res.optionU32("pp") orelse 1,
@@ -862,6 +862,7 @@ fn resolveTransportKind(choice: TransportChoice, peers_str: []const u8) Transpor
     return switch (choice) {
         .tcp => .tcp,
         .shm => .shm,
+        .nccl => .nccl,
         .rdma, .udp, .grpc => {
             std.log.warn("transport '{s}' not yet implemented, using tcp", .{@tagName(choice)});
             return .tcp;
@@ -890,6 +891,9 @@ fn setupTransport(allocator: std.mem.Allocator, peers_str: []const u8, rank: u32
 
     if (kind == .shm) return t;
 
+    // NCCL: establish TCP first (for unique ID exchange), then init NCCL
+    const want_nccl = (kind == .nccl);
+
     // TCP path
     var host: [4]u8 = .{ 0, 0, 0, 0 };
     var port: u16 = port_base;
@@ -915,6 +919,15 @@ fn setupTransport(allocator: std.mem.Allocator, peers_str: []const u8, rank: u32
         std.log.info("connecting to rank 0 at {d}.{d}.{d}.{d}:{d}...", .{ host[0], host[1], host[2], host[3], port });
         t.connectPeer(host, port) catch return null;
         std.log.info("connected to rank 0", .{});
+    }
+
+    // NCCL: init communicator over the established TCP link
+    if (want_nccl) {
+        t.setupNccl() catch |err| {
+            std.log.warn("NCCL init failed ({s}), using TCP", .{@errorName(err)});
+            t.kind = .tcp;
+            return t;
+        };
     }
     return t;
 }
@@ -993,7 +1006,7 @@ fn printUsage() void {
         \\      --pp <N>               Pipeline parallelism stages [default: 1]
         \\      --peers <ADDR>         Peer address (e.g. 192.168.0.2 or localhost for same-node)
         \\      --rank <N>             This node's rank [default: 0]
-        \\      --transport <TYPE>     IPC transport: auto, tcp, shm, rdma, udp, grpc [default: auto]
+        \\      --transport <TYPE>     IPC transport: auto, tcp, shm, nccl, rdma, udp, grpc [default: auto]
         \\      --disagg               Disaggregated prefill/decode (rank 0 prefills, rank 1 decodes)
         \\
         \\MULTIMODAL:
