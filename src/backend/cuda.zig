@@ -773,6 +773,13 @@ pub const CudaBackend = struct {
 
     // ── Launch helper ───────────────────────────────────────────
 
+    /// CPU fallback for GEMV on UMA (sm_121) where PTX register spilling corrupts output.
+    fn cpuGemvFallback(self: *CudaBackend, x: [*]const f32, w: TensorData, y: [*]f32, n: usize, k: usize) void {
+        self.flushActivations();
+        self.cpu.gemv(x, w, y, n, k);
+        self.invalidateAct(y);
+    }
+
     fn launch(self: *CudaBackend, func: CUfunction, grid: u32, block: u32, smem: u32, params: [*]?*anyopaque) void {
         _ = self.cuLaunchKernel(func, grid, 1, 1, block, 1, 1, smem, null, params, null);
     }
@@ -791,17 +798,11 @@ pub const CudaBackend = struct {
             .bf16 => self.fn_gemv_bf16,
             .f16 => self.fn_gemv_f16,
             .q8_0 => self.fn_gemv_q8_0,
-            .q4_0 => self.fn_gemv_q4_0,
-            .q4_1 => self.fn_gemv_q4_1,
-            .q4_k, .q5_k, .q6_k => {
-                // CPU fallback: K-quant PTX kernels have severe register pressure on sm_121,
-                // causing 10x slowdown and incorrect output on large models (9B+).
-                // CPU GEMV with thread pool is faster than the degraded GPU kernel.
-                self.flushActivations();
-                self.cpu.gemv(x, w, y, n, k);
-                self.invalidateAct(y);
-                return;
-            },
+            .q4_0 => if (self.is_uma) return self.cpuGemvFallback(x, w, y, n, k) else self.fn_gemv_q4_0,
+            .q4_1 => if (self.is_uma) return self.cpuGemvFallback(x, w, y, n, k) else self.fn_gemv_q4_1,
+            .q4_k => if (self.is_uma) return self.cpuGemvFallback(x, w, y, n, k) else self.fn_gemv_q4_k,
+            .q5_k => if (self.is_uma) return self.cpuGemvFallback(x, w, y, n, k) else self.fn_gemv_q5_k,
+            .q6_k => if (self.is_uma) return self.cpuGemvFallback(x, w, y, n, k) else self.fn_gemv_q6_k,
             .fp8_e4m3 => self.fn_gemv_fp8_e4m3,
             .fp8_e5m2 => self.fn_gemv_fp8_e5m2,
             else => @panic("CUDA GEMV: unsupported dtype — add a GPU kernel"),
