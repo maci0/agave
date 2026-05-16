@@ -1685,9 +1685,7 @@ fn initAndRun(
                 if (tr.kind == .nccl) switch (be) {
                     .cuda => |cuda_be| {
                         tr.cuda_sync = cuda_be.cuCtxSynchronize;
-                        tr.cuda_mem_alloc = cuda_be.cuMemAlloc;
-                        tr.cuda_memcpy_htod = cuda_be.cuMemcpyHtoD;
-                        tr.cuda_memcpy_dtoh = cuda_be.cuMemcpyDtoH;
+                        tr.cuda_host_register = cuda_be.cuMemHostRegister;
                     },
                     else => {},
                 };
