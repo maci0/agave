@@ -63,11 +63,13 @@ pub const Transport = struct {
     nccl_recv: ?FnNcclRecv = null,
     nccl_destroy: ?FnNcclCommDestroy = null,
     cuda_sync: ?*const fn () callconv(.c) c_int = null,
+    cuda_ctx: ?*anyopaque = null,
+    cuda_ctx_set: ?*const fn (?*anyopaque) callconv(.c) c_int = null,
     cuda_host_register: ?*const fn (*const anyopaque, usize, c_uint) callconv(.c) c_int = null,
     cuda_mem_alloc: ?*const fn (*u64, usize) callconv(.c) c_int = null,
     cuda_memcpy_htod: ?*const fn (u64, *const anyopaque, usize) callconv(.c) c_int = null,
     cuda_memcpy_dtoh: ?*const fn (*anyopaque, u64, usize) callconv(.c) c_int = null,
-    nccl_dev_buf: u64 = 0, // Device-allocated staging buffer for NCCL
+    nccl_dev_buf: u64 = 0,
     nccl_dev_buf_size: usize = 0,
 
     pub fn init(allocator: Allocator, kind: TransportKind, rank: u32, world_size: u32) !Transport {
@@ -227,20 +229,33 @@ pub const Transport = struct {
             return error.NcclInitFailed;
 
         self.nccl_lib = lib;
+        // NCCL init may change CUDA context — restore it
+        if (self.cuda_ctx_set) |setCtx| _ = setCtx(self.cuda_ctx);
         std.log.info("NCCL: rank {d}/{d} initialized", .{ self.rank, self.world_size });
     }
 
     pub fn allReduceAdd(self: *Transport, buf: [*]f32, n: usize) !void {
         if (self.kind == .nccl) {
+            const byte_len = n * @sizeOf(f32);
             if (self.cuda_sync) |sync| _ = sync();
-            // Register host buffer with CUDA so NCCL can access it
-            if (self.cuda_host_register) |reg| _ = reg(@ptrCast(buf), n * @sizeOf(f32), 0x02);
-            if (self.nccl_allreduce) |allreduce| {
-                const rc = allreduce(@ptrCast(buf), @ptrCast(buf), n, ncclFloat, ncclSum, self.nccl_comm, null);
-                if (rc != ncclSuccess)
-                    std.log.warn("NCCL allReduce failed: {d}", .{rc});
+            // Allocate device staging buffer if needed
+            if (self.nccl_dev_buf_size < byte_len) {
+                if (self.cuda_mem_alloc) |alloc| _ = alloc(&self.nccl_dev_buf, byte_len);
+                self.nccl_dev_buf_size = byte_len;
             }
-            if (self.cuda_sync) |sync| _ = sync();
+            if (self.nccl_dev_buf != 0) {
+                // Copy host→device
+                const htod_rc = if (self.cuda_memcpy_htod) |htod| htod(self.nccl_dev_buf, @ptrCast(buf), byte_len) else -1;
+                // NCCL allReduce on device
+                const nccl_rc = if (self.nccl_allreduce) |allreduce|
+                    allreduce(@ptrFromInt(self.nccl_dev_buf), @ptrFromInt(self.nccl_dev_buf), n, ncclFloat, ncclSum, self.nccl_comm, null)
+                else
+                    -1;
+                if (self.cuda_sync) |sync| _ = sync();
+                // Copy device→host
+                const dtoh_rc = if (self.cuda_memcpy_dtoh) |dtoh| dtoh(@ptrCast(buf), self.nccl_dev_buf, byte_len) else -1;
+                if (n <= 4096) std.log.info("NCCL: htod={d} nccl={d} dtoh={d} buf[0]={d:.4}", .{ htod_rc, nccl_rc, dtoh_rc, buf[0] });
+            }
             return;
         }
         if (self.kind == .shm) {
