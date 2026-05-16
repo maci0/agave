@@ -262,6 +262,14 @@ Measured on Apple M4 Pro (48 GB unified memory). See [docs/BENCHMARKS.md](docs/B
 | PP=2 (TCP) | CUDA + CPU (cross-node) | 6.1 |
 | Single CPU | Ryzen 9 9950X | 5.3 |
 
+### 27B Model (Qwen3.5 27B Q4_K_M, 15.6GB)
+
+| Config | Decode (tok/s) |
+|--------|---------------:|
+| CPU Ryzen 9950X | 2.8 |
+| PP=2 CUDA+CPU (cross-node) | 2.4 |
+| PP=2 CUDA+CUDA (cross-node) | 2.2 |
+
 All quant formats supported on all backends: Q8_0 (GPU), Q4_0/Q4_K/Q5_K/Q6_K (GPU or CPU fallback on UMA). See [docs/KERNELS.md](docs/KERNELS.md) for details.
 
 ## Prerequisites
