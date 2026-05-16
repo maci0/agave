@@ -238,23 +238,17 @@ pub const Transport = struct {
         if (self.kind == .nccl) {
             const byte_len = n * @sizeOf(f32);
             if (self.cuda_sync) |sync| _ = sync();
-            // Allocate device staging buffer if needed
+            // Allocate device staging buffer on first use
             if (self.nccl_dev_buf_size < byte_len) {
                 if (self.cuda_mem_alloc) |alloc| _ = alloc(&self.nccl_dev_buf, byte_len);
                 self.nccl_dev_buf_size = byte_len;
             }
             if (self.nccl_dev_buf != 0) {
-                // Copy host→device
-                const htod_rc = if (self.cuda_memcpy_htod) |htod| htod(self.nccl_dev_buf, @ptrCast(buf), byte_len) else -1;
-                // NCCL allReduce on device
-                const nccl_rc = if (self.nccl_allreduce) |allreduce|
-                    allreduce(@ptrFromInt(self.nccl_dev_buf), @ptrFromInt(self.nccl_dev_buf), n, ncclFloat, ncclSum, self.nccl_comm, null)
-                else
-                    -1;
+                if (self.cuda_memcpy_htod) |htod| _ = htod(self.nccl_dev_buf, @ptrCast(buf), byte_len);
+                if (self.nccl_allreduce) |allreduce|
+                    _ = allreduce(@ptrFromInt(self.nccl_dev_buf), @ptrFromInt(self.nccl_dev_buf), n, ncclFloat, ncclSum, self.nccl_comm, null);
                 if (self.cuda_sync) |sync| _ = sync();
-                // Copy device→host
-                const dtoh_rc = if (self.cuda_memcpy_dtoh) |dtoh| dtoh(@ptrCast(buf), self.nccl_dev_buf, byte_len) else -1;
-                if (n <= 4096) std.log.info("NCCL: htod={d} nccl={d} dtoh={d} buf[0]={d:.4}", .{ htod_rc, nccl_rc, dtoh_rc, buf[0] });
+                if (self.cuda_memcpy_dtoh) |dtoh| _ = dtoh(@ptrCast(buf), self.nccl_dev_buf, byte_len);
             }
             return;
         }
