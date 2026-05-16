@@ -62,6 +62,9 @@ pub const Transport = struct {
     nccl_send: ?FnNcclSend = null,
     nccl_recv: ?FnNcclRecv = null,
     nccl_destroy: ?FnNcclCommDestroy = null,
+    nccl_get_unique_id: ?FnNcclGetUniqueId = null,
+    nccl_comm_init_rank: ?FnNcclCommInitRank = null,
+    nccl_unique_id: NcclUniqueId = undefined,
     cuda_sync: ?*const fn () callconv(.c) c_int = null,
     cuda_ctx: ?*anyopaque = null,
     cuda_ctx_set: ?*const fn (?*anyopaque) callconv(.c) c_int = null,
@@ -200,13 +203,13 @@ pub const Transport = struct {
         self.nccl_destroy = lib.lookup(FnNcclCommDestroy, "ncclCommDestroy");
 
         if (self.nccl_allreduce == null) return error.NcclNotAvailable;
+        self.nccl_get_unique_id = getUniqueId;
+        self.nccl_comm_init_rank = commInitRank;
 
-        // Exchange unique ID: rank 0 generates, sends to rank 1 via TCP
-        var unique_id: NcclUniqueId = undefined;
+        // Exchange unique ID over TCP (both ranks must do this synchronously)
         if (self.rank == 0) {
-            if (getUniqueId(&unique_id) != ncclSuccess) return error.NcclInitFailed;
-            // Send ID to peer via TCP
-            const id_bytes: [*]const u8 = @ptrCast(&unique_id);
+            if (getUniqueId(&self.nccl_unique_id) != ncclSuccess) return error.NcclInitFailed;
+            const id_bytes: [*]const u8 = @ptrCast(&self.nccl_unique_id);
             var sent: usize = 0;
             while (sent < 128) {
                 const rc = c.send(self.tcp_fds[0], id_bytes + sent, 128 - sent, 0);
@@ -214,8 +217,7 @@ pub const Transport = struct {
                 sent += @intCast(rc);
             }
         } else {
-            // Receive ID from peer via TCP
-            const id_bytes: [*]u8 = @ptrCast(&unique_id);
+            const id_bytes: [*]u8 = @ptrCast(&self.nccl_unique_id);
             var got: usize = 0;
             while (got < 128) {
                 const rc = c.recv(self.tcp_fds[0], id_bytes + got, 128 - got, 0);
@@ -224,18 +226,27 @@ pub const Transport = struct {
             }
         }
 
-        // Initialize communicator
-        if (commInitRank(&self.nccl_comm, @intCast(self.world_size), &unique_id, @intCast(self.rank)) != ncclSuccess)
-            return error.NcclInitFailed;
-
+        // Defer ncclCommInitRank to first allReduceAdd (avoids corrupting CUDA context at init)
         self.nccl_lib = lib;
-        // NCCL init may change CUDA context — restore it
-        if (self.cuda_ctx_set) |setCtx| _ = setCtx(self.cuda_ctx);
-        std.log.info("NCCL: rank {d}/{d} initialized", .{ self.rank, self.world_size });
+        std.log.info("NCCL: rank {d}/{d} ready (deferred init)", .{ self.rank, self.world_size });
     }
 
     pub fn allReduceAdd(self: *Transport, buf: [*]f32, n: usize) !void {
         if (self.kind == .nccl) {
+            // Lazy init: create communicator on first use (after CUDA kernels have run)
+            if (self.nccl_comm == null) {
+                if (self.nccl_comm_init_rank) |initRank| {
+                    if (self.cuda_sync) |sync| _ = sync();
+                    const rc = initRank(&self.nccl_comm, @intCast(self.world_size), &self.nccl_unique_id, @intCast(self.rank));
+                    if (rc != ncclSuccess) {
+                        std.log.warn("NCCL ncclCommInitRank failed: {d}", .{rc});
+                        self.kind = .tcp;
+                        return self.allReduceAdd(buf, n);
+                    }
+                    if (self.cuda_ctx_set) |setCtx| _ = setCtx(self.cuda_ctx);
+                    std.log.info("NCCL: communicator initialized (lazy)", .{});
+                }
+            }
             const byte_len = n * @sizeOf(f32);
             if (self.cuda_sync) |sync| _ = sync();
             // Allocate device staging buffer on first use
