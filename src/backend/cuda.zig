@@ -779,9 +779,13 @@ pub const CudaBackend = struct {
         return self.getDevicePtr(ptr);
     }
 
+    /// Get device pointer if the GPU has current data (dirty state).
+    /// Returns 0 if buffer is not cached or is stale (host has newer data).
     pub fn getDevicePtr(self: *CudaBackend, ptr: anytype) u64 {
         const addr = @intFromPtr(ptr);
-        if (self.act_cache.getPtr(addr)) |act| return act.dptr;
+        if (self.act_cache.getPtr(addr)) |act| {
+            if (act.state == .dirty) return act.dptr;
+        }
         return 0;
     }
 

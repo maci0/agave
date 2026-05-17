@@ -1342,9 +1342,8 @@ pub const Qwen35Model = struct {
                     }
                     // For NCCL: no sync needed — data stays on GPU throughout.
                     // For TCP/shm: sync after norm so ffnCompute reads correct host data.
-                    if (transport.kind != .nccl) self.be.sync();
+                    self.be.sync();
                     try self.ffnCompute(l);
-                    if (transport.kind != .nccl) self.be.sync();
                     transport.allReduceAdd(self.hidden2.ptr, e) catch {};
                     continue;
                 }

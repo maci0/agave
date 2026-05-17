@@ -256,22 +256,20 @@ pub const Transport = struct {
                     std.log.info("NCCL: rank {d}/{d} communicator ready (allReduce on device pointers)", .{ self.rank, self.world_size });
                 }
             }
-            // Get CUDA device pointer — data stays on GPU, no host download needed
+            // Get CUDA device pointer — if buf is dirty on device, use it directly.
+            // If stale (CPU fallback wrote to host), fall back to TCP for this call.
             const dptr: u64 = if (self.cuda_get_dev_ptr) |getPtr|
                 if (self.cuda_backend) |be| getPtr(be, buf) else 0
             else
                 0;
-            if (dptr == 0) std.log.warn("NCCL: device ptr is 0 for buf", .{});
             if (dptr != 0) {
-                if (self.nccl_allreduce) |allreduce| {
-                    const rc = allreduce(@ptrFromInt(dptr), @ptrFromInt(dptr), n, ncclFloat, ncclSum, self.nccl_comm, null);
-                    if (rc != ncclSuccess) std.log.warn("NCCL allReduce failed: {d}", .{rc});
-                }
-                // No sync — NCCL allReduce on stream null serializes with subsequent CUDA kernels.
+                // GPU path: allReduce directly on device memory (fastest)
+                if (self.nccl_allreduce) |allreduce|
+                    _ = allreduce(@ptrFromInt(dptr), @ptrFromInt(dptr), n, ncclFloat, ncclSum, self.nccl_comm, null);
             } else {
-                std.log.warn("NCCL: no device pointer for buf, falling back to TCP", .{});
-                self.kind = .tcp;
-                return self.allReduceAdd(buf, n);
+                // CPU fallback wrote to host (K-quant models) — use TCP for this call
+                if (self.cuda_sync) |sync| _ = sync();
+                self.tcpAllReduce(buf, n);
             }
             return;
         }
@@ -288,12 +286,20 @@ pub const Transport = struct {
             for (0..n) |i| buf[i] += recv[i];
             return;
         }
-        if (self.kind != .tcp or self.tcp_connected == 0) return;
+        if (self.kind == .nccl or self.kind == .tcp) {
+            if (self.tcp_connected > 0) self.tcpAllReduce(buf, n);
+            return;
+        }
+        return;
+    }
+
+    fn tcpAllReduce(self: *Transport, buf: [*]f32, n: usize) void {
+        if (self.tcp_connected == 0) return;
         const byte_len = n * @sizeOf(f32);
 
         if (self.recv_buf == null or self.recv_buf.?.len < n) {
             if (self.recv_buf) |old| self.allocator.free(old);
-            self.recv_buf = try self.allocator.alloc(f32, n);
+            self.recv_buf = self.allocator.alloc(f32, n) catch return;
         }
         const recv = self.recv_buf.?;
         const fd = self.tcp_fds[0];
@@ -321,10 +327,8 @@ pub const Transport = struct {
     /// Point-to-point send: send buffer to peer.
     pub fn sendBuf(self: *Transport, buf: [*]const f32, n: usize) void {
         const byte_len = n * @sizeOf(f32);
-        if (self.kind == .nccl) {
-            if (self.nccl_send) |send_fn| _ = send_fn(@ptrCast(buf), n, ncclFloat, if (self.rank == 0) 1 else 0, self.nccl_comm, null);
-            return;
-        }
+        // NCCL send/recv for PP not yet implemented (needs device pointers).
+        // Fall through to TCP which is established alongside NCCL.
         if (self.kind == .shm) { self.shmSend(@ptrCast(buf), byte_len); return; }
         if (self.tcp_connected == 0) return;
         const fd = self.tcp_fds[0];
@@ -340,10 +344,6 @@ pub const Transport = struct {
     /// Point-to-point recv: receive buffer from peer.
     pub fn recvBuf(self: *Transport, buf: [*]f32, n: usize) void {
         const byte_len = n * @sizeOf(f32);
-        if (self.kind == .nccl) {
-            if (self.nccl_recv) |recv_fn| _ = recv_fn(@ptrCast(buf), n, ncclFloat, if (self.rank == 0) 1 else 0, self.nccl_comm, null);
-            return;
-        }
         if (self.kind == .shm) { self.shmRecv(@ptrCast(buf), byte_len); return; }
         if (self.tcp_connected == 0) return;
         const fd = self.tcp_fds[0];
