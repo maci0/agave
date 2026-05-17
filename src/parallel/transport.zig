@@ -69,7 +69,11 @@ pub const Transport = struct {
     cuda_ctx: ?*anyopaque = null,
     cuda_ctx_set: ?*const fn (?*anyopaque) callconv(.c) c_int = null,
     cuda_host_register: ?*const fn (*const anyopaque, usize, c_uint) callconv(.c) c_int = null,
+    cuda_mem_alloc: ?*const fn (*u64, usize) callconv(.c) c_int = null,
+    cuda_memcpy_htod: ?*const fn (u64, *const anyopaque, usize) callconv(.c) c_int = null,
     cuda_memcpy_dtoh: ?*const fn (*anyopaque, u64, usize) callconv(.c) c_int = null,
+    nccl_dev_buf: u64 = 0,
+    nccl_dev_buf_size: usize = 0,
     /// Opaque backend pointer for device pointer lookup.
     cuda_backend: ?*anyopaque = null,
     /// Function to get device pointer: fn(backend, host_ptr) -> device_ptr.
@@ -267,9 +271,20 @@ pub const Transport = struct {
                 if (self.nccl_allreduce) |allreduce|
                     _ = allreduce(@ptrFromInt(dptr), @ptrFromInt(dptr), n, ncclFloat, ncclSum, self.nccl_comm, null);
             } else {
-                // CPU fallback wrote to host (K-quant models) — use TCP for this call
+                // CPU fallback wrote to host — upload to device staging, NCCL allReduce, download
                 if (self.cuda_sync) |sync| _ = sync();
-                self.tcpAllReduce(buf, n);
+                const byte_len = n * @sizeOf(f32);
+                if (self.nccl_dev_buf_size < byte_len) {
+                    if (self.cuda_mem_alloc) |alloc| _ = alloc(&self.nccl_dev_buf, byte_len);
+                    self.nccl_dev_buf_size = byte_len;
+                }
+                if (self.nccl_dev_buf != 0) {
+                    if (self.cuda_memcpy_htod) |htod| _ = htod(self.nccl_dev_buf, @ptrCast(buf), byte_len);
+                    if (self.nccl_allreduce) |allreduce|
+                        _ = allreduce(@ptrFromInt(self.nccl_dev_buf), @ptrFromInt(self.nccl_dev_buf), n, ncclFloat, ncclSum, self.nccl_comm, null);
+                    if (self.cuda_sync) |sync| _ = sync();
+                    if (self.cuda_memcpy_dtoh) |dtoh| _ = dtoh(@ptrCast(buf), self.nccl_dev_buf, byte_len);
+                }
             }
             return;
         }
@@ -286,11 +301,7 @@ pub const Transport = struct {
             for (0..n) |i| buf[i] += recv[i];
             return;
         }
-        if (self.kind == .nccl or self.kind == .tcp) {
-            if (self.tcp_connected > 0) self.tcpAllReduce(buf, n);
-            return;
-        }
-        return;
+        if (self.tcp_connected > 0) self.tcpAllReduce(buf, n);
     }
 
     fn tcpAllReduce(self: *Transport, buf: [*]f32, n: usize) void {
@@ -327,8 +338,20 @@ pub const Transport = struct {
     /// Point-to-point send: send buffer to peer.
     pub fn sendBuf(self: *Transport, buf: [*]const f32, n: usize) void {
         const byte_len = n * @sizeOf(f32);
-        // NCCL send/recv for PP not yet implemented (needs device pointers).
-        // Fall through to TCP which is established alongside NCCL.
+        if (self.kind == .nccl and self.nccl_send != null and self.nccl_comm != null) {
+            const peer: c_int = if (self.rank == 0) 1 else 0;
+            if (self.cuda_sync) |sync| _ = sync();
+            if (self.nccl_dev_buf_size < byte_len) {
+                if (self.cuda_mem_alloc) |alloc| _ = alloc(&self.nccl_dev_buf, byte_len);
+                self.nccl_dev_buf_size = byte_len;
+            }
+            if (self.nccl_dev_buf != 0) {
+                if (self.cuda_memcpy_htod) |htod| _ = htod(self.nccl_dev_buf, @ptrCast(buf), byte_len);
+                _ = self.nccl_send.?(@ptrFromInt(self.nccl_dev_buf), n, ncclFloat, peer, self.nccl_comm, null);
+                if (self.cuda_sync) |sync| _ = sync();
+            }
+            return;
+        }
         if (self.kind == .shm) { self.shmSend(@ptrCast(buf), byte_len); return; }
         if (self.tcp_connected == 0) return;
         const fd = self.tcp_fds[0];
@@ -344,6 +367,19 @@ pub const Transport = struct {
     /// Point-to-point recv: receive buffer from peer.
     pub fn recvBuf(self: *Transport, buf: [*]f32, n: usize) void {
         const byte_len = n * @sizeOf(f32);
+        if (self.kind == .nccl and self.nccl_recv != null and self.nccl_comm != null) {
+            const peer: c_int = if (self.rank == 0) 1 else 0;
+            if (self.nccl_dev_buf_size < byte_len) {
+                if (self.cuda_mem_alloc) |alloc| _ = alloc(&self.nccl_dev_buf, byte_len);
+                self.nccl_dev_buf_size = byte_len;
+            }
+            if (self.nccl_dev_buf != 0) {
+                _ = self.nccl_recv.?(@ptrFromInt(self.nccl_dev_buf), n, ncclFloat, peer, self.nccl_comm, null);
+                if (self.cuda_sync) |sync| _ = sync();
+                if (self.cuda_memcpy_dtoh) |dtoh| _ = dtoh(@ptrCast(buf), self.nccl_dev_buf, byte_len);
+            }
+            return;
+        }
         if (self.kind == .shm) { self.shmRecv(@ptrCast(buf), byte_len); return; }
         if (self.tcp_connected == 0) return;
         const fd = self.tcp_fds[0];

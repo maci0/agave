@@ -1689,6 +1689,9 @@ fn initAndRun(
                         tr.cuda_ctx_set = if (cuda_be.cuCtxSetCurrent) |f| f else null;
                         tr.cuda_backend = @ptrCast(cuda_be);
                         tr.cuda_get_dev_ptr = @import("backend/cuda.zig").CudaBackend.getDevicePtrOpaque;
+                        tr.cuda_mem_alloc = cuda_be.cuMemAlloc;
+                        tr.cuda_memcpy_htod = cuda_be.cuMemcpyHtoD;
+                        tr.cuda_memcpy_dtoh = cuda_be.cuMemcpyDtoH;
                     },
                     else => {},
                 };
