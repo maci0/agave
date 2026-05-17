@@ -226,9 +226,18 @@ pub const Transport = struct {
             }
         }
 
-        // Defer ncclCommInitRank to first allReduceAdd (avoids corrupting CUDA context at init)
         self.nccl_lib = lib;
-        std.log.info("NCCL: rank {d}/{d} ready (deferred init)", .{ self.rank, self.world_size });
+
+        // Query NCCL version for display
+        const FnNcclGetVersion = *const fn (*c_int) callconv(.c) NcclResult;
+        var nccl_ver: c_int = 0;
+        if (lib.lookup(FnNcclGetVersion, "ncclGetVersion")) |getVer| _ = getVer(&nccl_ver);
+        const major = @as(u32, @intCast(nccl_ver)) / 10000;
+        const minor = (@as(u32, @intCast(nccl_ver)) % 10000) / 100;
+        const patch = @as(u32, @intCast(nccl_ver)) % 100;
+        std.log.info("NCCL: rank {d}/{d} ready — v{d}.{d}.{d}, deferred init, ID exchanged over TCP fd={d}", .{
+            self.rank, self.world_size, major, minor, patch, self.tcp_fds[0],
+        });
     }
 
     pub fn allReduceAdd(self: *Transport, buf: [*]f32, n: usize) !void {
@@ -243,12 +252,8 @@ pub const Transport = struct {
                         return self.allReduceAdd(buf, n);
                     }
                     // Restore CUDA context — NCCL may have changed the current context
-                    if (self.cuda_ctx_set) |setCtx| {
-                        const ctx_rc = setCtx(self.cuda_ctx);
-                        std.log.info("NCCL: communicator initialized, ctx restore={d}", .{ctx_rc});
-                    } else {
-                        std.log.info("NCCL: communicator initialized (no ctx restore)", .{});
-                    }
+                    if (self.cuda_ctx_set) |setCtx| _ = setCtx(self.cuda_ctx);
+                    std.log.info("NCCL: rank {d}/{d} communicator ready (allReduce on device pointers)", .{ self.rank, self.world_size });
                 }
             }
             // Get CUDA device pointer — data stays on GPU, no host download needed

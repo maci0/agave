@@ -1340,10 +1340,10 @@ pub const Qwen35Model = struct {
                         const nw = self.fmt.layerTensor(l, "ffn_norm.weight") orelse return error.MissingTensor;
                         self.be.rmsNorm(self.hidden.ptr, self.normAsF32(nw, e), self.hidden2.ptr, e, self.rms_eps);
                     }
-                    self.be.sync();
+                    // For NCCL: no sync needed — data stays on GPU throughout.
+                    // For TCP/shm: sync after norm so ffnCompute reads correct host data.
+                    if (transport.kind != .nccl) self.be.sync();
                     try self.ffnCompute(l);
-                    // For NCCL: don't sync — keep data on GPU, allReduce uses device pointer directly.
-                    // For TCP/shm: sync downloads hidden2 to host for send.
                     if (transport.kind != .nccl) self.be.sync();
                     transport.allReduceAdd(self.hidden2.ptr, e) catch {};
                     continue;
