@@ -92,6 +92,10 @@ agave/
 │   │       ├── cuda/      # Zig kernels compiled to PTX (incl. fused_ffn_q8_0.zig, mega_*.zig)
 │   │       ├── rocm/      # Zig kernels compiled to HSACO via amdgcn-amdhsa target (incl. mega_*.zig)
 │   │       └── webgpu/    # WGSL compute shaders
+│   ├── parallel/
+│   │   └── transport.zig  # Distributed transport: TCP, POSIX shm, NCCL (RoCE RDMA)
+│   ├── devices/
+│   │   └── discovery.zig  # GPU device enumeration (--list-devices, --device N)
 │   ├── kvcache/
 │   │   ├── manager.zig    # KV cache alloc/free, PagedKvCache, RadixTree
 │   │   ├── block_allocator.zig # Block allocation for paged KV cache
@@ -275,6 +279,14 @@ Browser inference entry point for running Agave in WebAssembly environments. Pro
 | Backend Kernel | Description |
 |----------------|-------------|
 | `sdpa_tree.zig` | Tree-masked SDPA: ancestor bitmask attention for tree verification |
+
+### Distributed Inference (`src/parallel/`)
+
+| Module | Description |
+|--------|-------------|
+| `transport.zig` | Transport layer: TCP (cross-node), POSIX shm (same-node zero-copy), NCCL (GPU-optimized RoCE RDMA) |
+
+**Modes**: Tensor Parallelism (`--tp N`), Pipeline Parallelism (`--pp N`), Hybrid TP+PP, Disaggregated Prefill/Decode (`--disagg`). Transport auto-selects shm for localhost, tcp otherwise; NCCL via `--transport nccl`. NCCL loaded at runtime via `dlopen("libnccl.so.2")` — no compile-time dependencies. Device pointer allReduceAdd passes GPU activation cache pointers directly to NCCL when data is dirty on device. See [PARALLELISM.md](PARALLELISM.md).
 
 ### Quantization Types
 

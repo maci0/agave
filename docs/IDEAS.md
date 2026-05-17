@@ -4,7 +4,10 @@
 > TurboQuant+ (asymmetric KV, boundary V, sparse V), BF16 Metal GEMM, split-attention
 > (APEX), Gemma 4 E2B/E4B support, thread-parallel vision attention, speculative decoding
 > (3 modes: draft model, DDTree, self-speculative), grammar-constrained decoding (GBNF +
-> JSON schema), TriAttention KV eviction (Phase 1+2). See BENCHMARKS.md.
+> JSON schema), TriAttention KV eviction (Phase 1+2), distributed inference (TP/PP with
+> TCP + POSIX shm + NCCL RoCE RDMA transports, dual GB10 PP=2 at 93% of single GPU),
+> `agave pull` (HF Hub download with resume), PlanarQuant/IsoQuant/RotorQuant KV cache
+> quantization, native GPU sdpaTree for all backends. See BENCHMARKS.md.
 
 ## Model init/deinit/forward Abstraction
 

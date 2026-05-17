@@ -1,6 +1,6 @@
 # Agave Test Matrix — Model × Backend × Quant
 
-**Date**: 2026-04-15
+**Date**: 2026-05-18
 **Hardware**:
 - Metal/CPU: Apple M4 Pro (14-core CPU, 20-core GPU), 48 GB unified memory, macOS 26.4
 - CUDA: NVIDIA GB10 (Blackwell sm_121), aarch64, Ubuntu 24.04, CUDA 13.0 (maci@10.10.10.212)
@@ -68,13 +68,30 @@
 
 **Result: Vision working. Encode ~41s on Metal (BF16 GEMM + parallel attention).**
 
-## CUDA Backend Status
+## CUDA Backend Status (GB10 Blackwell, 2026-05-18)
 
 | Feature | Status | Notes |
 |---------|:------:|-------|
-| CPU fallback | PASS | Works correctly when CUDA kernels unavailable |
-| CUDA native | SKIP | GB10 sm_121 PTX kernels need build-time CUDA toolkit |
+| Q8_0 native GPU | PASS | 95.2 tok/s (0.5B), 12.4 tok/s (8B) |
+| Q4_K/Q5_K/Q6_K | CPU fb | PTX register spilling on sm_121 JIT — CPU thread pool fallback |
+| Q4_0 native GPU | PASS | GPU kernels unaffected by K-quant spill |
+| UMA zero-copy | PASS | cuMemHostRegister for mmap'd weights |
 | Cross-compiled binary | PASS | Statically linked, runs on aarch64 Linux |
+| NCCL RoCE RDMA | PASS | PP=2 8.5 tok/s (93% of single GPU), TP=2 5.1 tok/s |
+| Server mode | PASS | cuCtxSetCurrent on scheduler thread |
+
+## Distributed Inference (2026-05-18)
+
+| Config | Transport | Model | Status | Notes |
+|--------|-----------|-------|:------:|-------|
+| PP=2 dual GB10 | NCCL RoCE | 0.8B Q8_0 | PASS | 8.5 tok/s, 93% of single GPU |
+| TP=2 dual GB10 | NCCL RoCE | 0.8B Q8_0 | PASS | 5.1 tok/s |
+| PP=2 dual GB10 | NCCL RoCE | 9B Q4_K_M | PASS | 2.2 tok/s (CPU fb for K-quant) |
+| TP=2 dual GB10 | NCCL RoCE | 9B Q4_K_M | PASS | 1.7 tok/s |
+| PP=2 hetero | TCP | 0.5B Q8_0 | PASS | x86_64 + aarch64 |
+| TP=2 hetero | TCP | 0.5B Q8_0 | PASS | x86_64 + aarch64 |
+| Same-node TP=2 | POSIX shm | 0.5B Q8_0 | PASS | Zero-copy IPC |
+| Disaggregated | TCP | 0.5B Q8_0 | PASS | KV transfer then decode |
 
 ## llama.cpp Comparison (Metal, M4 Pro)
 
@@ -94,14 +111,15 @@
 |----------|:------:|:------:|:-----:|
 | Model × Metal | 8 | 1 (GLM-4) | 9 |
 | Model × CPU | 8 | 1 (GLM-4) | 9 |
-| Model × CUDA (CPU fb) | 1 | 0 | 1 |
+| Model × CUDA | 5 | 0 | 5 |
 | KV Quantization | 7 | 0 | 7 |
 | KV Eviction | 2 | 0 | 2 |
 | Vision | 1 | 0 | 1 |
 | Linux KV types | 5 | 0 | 5 |
-| **Total** | **32** | **2** | **34** |
+| Distributed | 8 | 0 | 8 |
+| **Total** | **44** | **2** | **46** |
 
-**Overall: 32/34 tests pass (94%). The 2 failures are GLM-4 which also fails in llama.cpp (broken GGUF conversion).**
+**Overall: 44/46 tests pass (96%). The 2 failures are GLM-4 which also fails in llama.cpp (broken GGUF conversion).**
 
 ## Additional Quant Format Tests (2026-04-16)
 

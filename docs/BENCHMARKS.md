@@ -1,6 +1,6 @@
 # Agave vs llama.cpp — Performance Benchmarks
 
-**Date**: 2026-05-12 (M4 Pro benchmarks from 2026-03-24, CUDA GB10 from 2026-05-12)
+**Date**: 2026-05-18 (M4 Pro benchmarks from 2026-03-24, CUDA GB10 from 2026-05-12, NCCL RoCE from 2026-05-18)
 **Hardware**: Apple M4 Pro (14-core CPU, 20-core GPU), 48 GB unified memory
 **OS**: macOS 26.3.1 (aarch64)
 **llama.cpp**: latest (commit ~March 2026), Metal enabled, GGML_CPU_REPACK=OFF
@@ -156,6 +156,25 @@ Notes:
 
 ## Distributed Inference (Multi-Node)
 
+### NCCL RoCE RDMA (dual NVIDIA GB10 Blackwell)
+
+**Hardware**: 2× NVIDIA GB10 (Blackwell sm_121, aarch64, Ubuntu 24.04), 4× ConnectX NICs each
+**Network**: RoCE RDMA via NCCL
+**Date**: 2026-05-18
+
+| Model | Config | Transport | tok/s | vs Single GPU |
+|-------|--------|-----------|:-----:|:-------------:|
+| Qwen3.5 0.8B Q8_0 | Single GPU | — | 9.2 | 100% |
+| Qwen3.5 0.8B Q8_0 | PP=2 | NCCL RoCE | **8.5** | 93% |
+| Qwen3.5 0.8B Q8_0 | TP=2 | NCCL RoCE | 5.1 | 56% |
+| Qwen3.5 9B Q4_K_M | Single GPU | — | 2.2 | 100% |
+| Qwen3.5 9B Q4_K_M | PP=2 | NCCL RoCE | 2.2 | 100% |
+| Qwen3.5 9B Q4_K_M | TP=2 | NCCL RoCE | 1.7 | 77% |
+
+NCCL loaded at runtime via `dlopen("libnccl.so.2")`. Unique ID exchanged over TCP, then all collectives run over RoCE RDMA. Device pointer allReduceAdd passes GPU activation cache pointers directly to NCCL — no host↔device copy for GPU-dirty buffers.
+
+### TCP (Heterogeneous x86_64 + aarch64)
+
 **Hardware**: Node A: AMD Ryzen 9950X (x86_64, CachyOS), Node B: NVIDIA GB10 (aarch64, Ubuntu)
 **Network**: TCP over LAN (~1ms RTT)
 **Model**: Qwen2.5 0.5B Q8_0 (24 layers, 896 embd, 2 KV heads)
@@ -174,7 +193,7 @@ Notes:
 - PP is 1.7× faster than TP over network (less traffic per token)
 - Disaggregated is fastest for decode (no per-token network overhead after KV transfer)
 - Heterogeneous architectures (x86_64 + aarch64) work seamlessly
-- NCCL/RCCL GPU-optimized collectives planned (TCP-only for now)
+- POSIX shm auto-selected for same-node peers (`--transport auto`)
 
 ## Known Issues
 
