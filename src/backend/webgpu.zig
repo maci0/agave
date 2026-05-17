@@ -658,6 +658,7 @@ pub const WebGpuBackend = struct {
     }
 
     fn downloadF32(self: *WebGpuBackend, src: WGPUBuffer, dst: [*]f32, count: usize) void {
+        self.submitPending();
         const size = count * @sizeOf(f32);
         // Ensure staging buffer is large enough
         if (self.staging_buf == null or self.staging_size < size) {
@@ -746,8 +747,8 @@ pub const WebGpuBackend = struct {
         return buf;
     }
 
-    /// Central dispatch: create bind group from entries, encode compute pass.
-    /// In batch mode, accumulates in shared encoder. Otherwise immediate submit.
+    /// Central dispatch: create bind group, encode compute pass into deferred encoder.
+    /// Accumulates dispatches — submit happens at submitPending()/sync().
     fn dispatchCompute(self: *WebGpuBackend, pipe: PipelineInfo, entries: []const WGPUBindGroupEntry, workgroups_x: u32) void {
         var bg_desc = WGPUBindGroupDescriptor{
             .layout = pipe.bind_group_layout,
@@ -758,16 +759,24 @@ pub const WebGpuBackend = struct {
         if (bind_group == null) @panic("WebGPU: bind group creation failed — layout/entry mismatch");
         defer self.fn_bind_group_release(bind_group);
 
-        const encoder = self.fn_device_create_command_encoder(self.device, null);
-        const pass = self.fn_command_encoder_begin_compute_pass(encoder, null);
+        if (self.batch_encoder == null)
+            self.batch_encoder = self.fn_device_create_command_encoder(self.device, null);
+
+        const pass = self.fn_command_encoder_begin_compute_pass(self.batch_encoder, null);
         self.fn_compute_pass_set_pipeline(pass, pipe.pipeline);
         self.fn_compute_pass_set_bind_group(pass, 0, bind_group, 0, null);
         self.fn_compute_pass_dispatch(pass, @min(workgroups_x, 65535), 1, 1);
         self.fn_compute_pass_end(pass);
-        const cmd = self.fn_command_encoder_finish(encoder, null);
+    }
+
+    /// Submit all pending compute dispatches.
+    fn submitPending(self: *WebGpuBackend) void {
+        if (self.batch_encoder == null) return;
+        const cmd = self.fn_command_encoder_finish(self.batch_encoder, null);
         self.fn_queue_submit(self.queue, 1, &cmd);
         self.fn_command_buffer_release(cmd);
-        self.fn_command_encoder_release(encoder);
+        self.fn_command_encoder_release(self.batch_encoder);
+        self.batch_encoder = null;
     }
 
     /// Create a WGPUBindGroupEntry for a storage buffer at the given binding slot.
@@ -1690,6 +1699,7 @@ pub const WebGpuBackend = struct {
     // ── Sync + Batch + Memory ───────────────────────────────────
 
     pub fn sync(self: *WebGpuBackend) void {
+        self.submitPending();
         // Flush dirty buffers: download GPU results to CPU.
         // Deduplicate by pointer — only download the latest buffer for each CPU address.
         var di: u32 = self.dirty_count;
