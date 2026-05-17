@@ -2,7 +2,7 @@
 
 Comprehensive list of bugs, missing features, and improvement opportunities.
 
-**Last updated**: 2026-05-14
+**Last updated**: 2026-05-18
 
 ---
 
@@ -56,7 +56,7 @@ All **correctness-critical** kernels for supported model×quant combinations are
 
 | # | Feature | Status | Notes |
 |---|---------|--------|-------|
-| 1 | Tensor/Pipeline parallelism | Working | 6 modes: local TP, distributed TP, distributed PP, hybrid TP+PP, disaggregated prefill/decode, dual-GPU same-node. Transports: TCP (cross-node), POSIX shm (same-node zero-copy), NCCL (blocked — ncclCommInitRank corrupts CUDA context on GB10 UMA, tested with RoCE RDMA + socket + GDR disable — all fail). `--transport auto/tcp/shm/nccl`, `--device N`, `--peers`. RoCE/RDMA hardware working (4x ConnectX RoCE interfaces detected by NCCL, IB+GDAKI transport selected). Verified: 27B Q4_K PP=2 CUDA↔CUDA 2.2 tok/s, 9B Q8_0 PP 8.9 tok/s / TP 4.7 tok/s, heterogeneous x86_64+aarch64 |
+| 1 | Tensor/Pipeline parallelism | Working | 6 modes: local TP, distributed TP, distributed PP, hybrid TP+PP, disaggregated prefill/decode, dual-GPU same-node. Transports: TCP, POSIX shm (same-node zero-copy), NCCL (RoCE RDMA, 4x ConnectX, IB+GDAKI). `--transport auto/tcp/shm/nccl`, `--device N`, `--peers`. Fix: `cuDevicePrimaryCtxRetain` for NCCL compatibility. Best results: 9B Q8_0 PP=2 NCCL 8.5 tok/s (93% of single GPU), TP=2 NCCL 5.1 tok/s. 27B Q4_K_M PP=2 2.2 tok/s, TP=2 1.7 tok/s. Heterogeneous x86_64+aarch64 |
 | 2 | Structured output / grammar-constrained decoding | Working | GBNF parser, `--grammar-string`, `--grammar`, `--json-output`, `--json-schema`. Full repetition (`*`/`+`/`?`), grouped expressions, JSON schema→GBNF conversion. HTTP API: `grammar` and `json_schema` fields |
 | 3 | TriAttention Phase 3 | Wired | CLI `--kv-eviction tri`, .cal auto-loading, scorePositionsTri in evictKvCache. Dynamic budget pending |
 | 4 | Native GPU tree SDPA for CUDA/ROCm/Vulkan | Done | All backends now have native f32 sdpaTree (CPU fallback only for quantized KV) |

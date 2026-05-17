@@ -312,3 +312,45 @@ test "KVCache allocation and cleanup" {
     try std.testing.expectEqual(1, cache.num_entries);
 }
 ```
+
+## How to Add a New Transport
+
+Existing transports: TCP, POSIX shared memory (shm), NCCL (RoCE RDMA).
+
+Transports are implemented in `src/parallel/transport.zig`. Each transport must implement:
+
+1. **allReduceAdd(buf, n)** — Sum partial results across ranks (TP)
+2. **sendBuf(buf, n)** — Point-to-point send (PP)
+3. **recvBuf(buf, n)** — Point-to-point receive (PP)
+
+### Transport Selection
+
+Transports are selected via `--transport auto|tcp|shm|nccl|rdma|udp|grpc`:
+- `auto`: shm for localhost, tcp for remote
+- `nccl`: NCCL over RoCE RDMA (requires libnccl2, ConnectX NICs)
+
+### NCCL Architecture
+
+NCCL uses the CUDA primary context (`cuDevicePrimaryCtxRetain`) — NOT `cuCtxCreate`. This ensures NCCL's internal runtime API operations share the same context as our driver API kernel launches.
+
+```
+setupNccl():
+  1. dlopen("libnccl.so.2")
+  2. Resolve: ncclGetUniqueId, ncclCommInitRank, ncclAllReduce, ncclSend, ncclRecv
+  3. Exchange unique ID over TCP (rank 0 generates, sends to rank 1)
+  4. Defer ncclCommInitRank to first allReduceAdd call (lazy init)
+
+allReduceAdd(buf, n):
+  1. Lazy init ncclCommInitRank if first call
+  2. Get device pointer via getDevicePtr(buf)
+  3. If dirty (GPU data current): ncclAllReduce directly on device pointer
+  4. If stale (CPU fallback): upload to staging → ncclAllReduce → download
+```
+
+### Adding a New Transport
+
+1. Add variant to `TransportKind` enum
+2. Add `--transport yourname` to `TransportChoice` in `main.zig`
+3. Implement setup function (e.g., `setupYourTransport`)
+4. Add transport-specific paths in `allReduceAdd`, `sendBuf`, `recvBuf`
+5. Wire in `resolveTransportKind` and `setupTransport` in `main.zig`

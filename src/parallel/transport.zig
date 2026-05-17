@@ -1,6 +1,6 @@
 //! Network transport for distributed tensor/pipeline parallelism.
-//! Supports TCP (cross-node) and POSIX shared memory (same-node, zero-copy).
-//! NCCL/RCCL stubs for future GPU-optimized collectives.
+//! Supports TCP (cross-node), POSIX shared memory (same-node, zero-copy),
+//! and NCCL (GPU-optimized collectives over RoCE RDMA / TCP sockets).
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
