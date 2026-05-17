@@ -267,8 +267,7 @@ pub const Transport = struct {
                     const rc = allreduce(@ptrFromInt(dptr), @ptrFromInt(dptr), n, ncclFloat, ncclSum, self.nccl_comm, null);
                     if (rc != ncclSuccess) std.log.warn("NCCL allReduce failed: {d}", .{rc});
                 }
-                // Sync to ensure NCCL result is ready before next CUDA kernel reads it
-                if (self.cuda_sync) |sync| _ = sync();
+                // No sync — NCCL allReduce on stream null serializes with subsequent CUDA kernels.
             } else {
                 std.log.warn("NCCL: no device pointer for buf, falling back to TCP", .{});
                 self.kind = .tcp;
