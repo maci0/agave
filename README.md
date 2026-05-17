@@ -254,21 +254,17 @@ Measured on Apple M4 Pro (48 GB unified memory). See [docs/BENCHMARKS.md](docs/B
 | CUDA | NVIDIA GB10 (aarch64) | 35 |
 | Vulkan | AMD RX 7900 XTX | 2.7 |
 
-### Larger Models (Qwen3.5 9B Q8_0)
+### Distributed Inference (dual NVIDIA GB10 over RoCE RDMA)
 
-| Config | Backend(s) | Decode (tok/s) |
-|--------|-----------|---------------:|
-| Single GPU | CUDA GB10 | 9.1 |
-| PP=2 (TCP) | CUDA + CPU (cross-node) | 6.1 |
-| Single CPU | Ryzen 9 9950X | 5.3 |
-
-### 27B Model (Qwen3.5 27B Q4_K_M, 15.6GB)
-
-| Config | Decode (tok/s) |
-|--------|---------------:|
-| CPU Ryzen 9950X | 2.8 |
-| PP=2 CUDA+CPU (cross-node) | 2.4 |
-| PP=2 CUDA+CUDA (cross-node) | 2.2 |
+| Model | Config | Transport | Decode (tok/s) |
+|-------|--------|-----------|---------------:|
+| 9B Q8_0 | Single GPU | — | 9.1 |
+| 9B Q8_0 | TP=2 | NCCL RoCE | 5.1 |
+| 9B Q8_0 | TP=2 | TCP RoCE | 4.9 |
+| 9B Q8_0 | PP=2 | TCP RoCE | 3.6 |
+| 27B Q4_K_M | Single GPU | — | 2.2 |
+| 27B Q4_K_M | TP=2 | NCCL RoCE | 1.7 |
+| 27B Q4_K_M | PP=2 | TCP | 2.2 |
 
 All quant formats supported on all backends: Q8_0 (GPU), Q4_0/Q4_K/Q5_K/Q6_K (GPU or CPU fallback on UMA). See [docs/KERNELS.md](docs/KERNELS.md) for details.
 
