@@ -952,7 +952,7 @@ pub const CudaBackend = struct {
         }
     }
 
-    pub fn fusedFfnGateUpGeluQ4K(self: *CudaBackend, x: [*]const f32, w_gate: [*]const u8, w_up: [*]const u8, ff_out: [*]f32, n_ff: usize, n_embd: usize) void {
+    pub fn fusedFfnGateUpSiluQ4K(self: *CudaBackend, x: [*]const f32, w_gate: [*]const u8, w_up: [*]const u8, ff_out: [*]f32, n_ff: usize, n_embd: usize) void {
         if (self.fn_fused_ffn_q4k) |func| {
             const w_bytes = weightBytes(.q4_k, n_ff, n_embd);
             var d_x = self.getInputBuf(x, n_embd * @sizeOf(f32));
@@ -969,7 +969,7 @@ pub const CudaBackend = struct {
         }
     }
 
-    pub fn fusedFfnGateUpGeluQ5K(self: *CudaBackend, x: [*]const f32, w_gate: [*]const u8, w_up: [*]const u8, ff_out: [*]f32, n_ff: usize, n_embd: usize) void {
+    pub fn fusedFfnGateUpSiluQ5K(self: *CudaBackend, x: [*]const f32, w_gate: [*]const u8, w_up: [*]const u8, ff_out: [*]f32, n_ff: usize, n_embd: usize) void {
         if (self.fn_fused_ffn_q5k) |func| {
             const w_bytes = weightBytes(.q5_k, n_ff, n_embd);
             var d_x = self.getInputBuf(x, n_embd * @sizeOf(f32));
@@ -986,7 +986,7 @@ pub const CudaBackend = struct {
         }
     }
 
-    pub fn fusedFfnGateUpGeluQ6K(self: *CudaBackend, x: [*]const f32, w_gate: [*]const u8, w_up: [*]const u8, ff_out: [*]f32, n_ff: usize, n_embd: usize) void {
+    pub fn fusedFfnGateUpSiluQ6K(self: *CudaBackend, x: [*]const f32, w_gate: [*]const u8, w_up: [*]const u8, ff_out: [*]f32, n_ff: usize, n_embd: usize) void {
         if (self.fn_fused_ffn_q6k) |func| {
             const w_bytes = weightBytes(.q6_k, n_ff, n_embd);
             var d_x = self.getInputBuf(x, n_embd * @sizeOf(f32));
