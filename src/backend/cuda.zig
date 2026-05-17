@@ -204,6 +204,7 @@ pub const CudaBackend = struct {
     fn_fused_ffn_q4k: CUfunction = null,
     fn_fused_ffn_q5k: CUfunction = null,
     fn_fused_ffn_q6k: CUfunction = null,
+    fn_fused_ffn_gelu_q8: CUfunction = null,
     fn_sdpa: CUfunction = null,
     fn_sdpa_turbo: CUfunction = null,
     fn_sdpa_tree: CUfunction = null,
@@ -470,6 +471,7 @@ pub const CudaBackend = struct {
         self.fn_fused_ffn_q4k = self.getFunction("fused_ffn_gate_up_silu_q4_k_kernel") catch null;
         self.fn_fused_ffn_q5k = self.getFunction("fused_ffn_gate_up_silu_q5_k_kernel") catch null;
         self.fn_fused_ffn_q6k = self.getFunction("fused_ffn_gate_up_silu_q6_k_kernel") catch null;
+        self.fn_fused_ffn_gelu_q8 = self.getFunction("fused_ffn_gate_up_gelu_q8_0_kernel") catch null;
         self.fn_sdpa = try self.getFunction("sdpa_kernel");
         self.fn_sdpa_turbo = try self.getFunction("sdpa_turbo_kernel");
         self.fn_sdpa_tree = try self.getFunction("sdpa_tree_kernel");
@@ -922,6 +924,32 @@ pub const CudaBackend = struct {
             @ptrCast(&d_out), @ptrCast(&nf),     @ptrCast(&ne),
         };
         self.launch(self.fn_fused_ffn_q8, @intCast(n_ff), block_size, reduction_smem, &params);
+    }
+
+    /// Fused FFN: gelu(W_gate @ x) * (W_up @ x) in a single dispatch (Gemma 3/4).
+    pub fn fusedFfnGateUpGeluQ8(
+        self: *CudaBackend,
+        x: [*]const f32,
+        w_gate: [*]const u8,
+        w_up: [*]const u8,
+        ff_out: [*]f32,
+        n_ff: usize,
+        n_embd: usize,
+    ) void {
+        if (self.fn_fused_ffn_gelu_q8) |func| {
+            const w_bytes = weightBytes(.q8_0, n_ff, n_embd);
+            var d_x = self.getInputBuf(x, n_embd * @sizeOf(f32));
+            var d_gate = self.getOrUpload(w_gate, w_bytes);
+            var d_up = self.getOrUpload(w_up, w_bytes);
+            var d_out = self.getOutputBuf(ff_out, n_ff * @sizeOf(f32));
+            var nf: u32 = @intCast(n_ff);
+            var ne: u32 = @intCast(n_embd);
+            var params = [_]?*anyopaque{
+                @ptrCast(&d_x),   @ptrCast(&d_gate), @ptrCast(&d_up),
+                @ptrCast(&d_out), @ptrCast(&nf),     @ptrCast(&ne),
+            };
+            self.launch(func, @intCast(n_ff), block_size, reduction_smem, &params);
+        }
     }
 
     pub fn fusedFfnGateUpGeluQ4K(self: *CudaBackend, x: [*]const f32, w_gate: [*]const u8, w_up: [*]const u8, ff_out: [*]f32, n_ff: usize, n_embd: usize) void {
