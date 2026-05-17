@@ -259,12 +259,12 @@ Measured on Apple M4 Pro (48 GB unified memory). See [docs/BENCHMARKS.md](docs/B
 | Model | Config | Transport | Decode (tok/s) |
 |-------|--------|-----------|---------------:|
 | 9B Q8_0 | Single GPU | — | 9.1 |
+| 9B Q8_0 | PP=2 | NCCL RoCE | **8.5** |
 | 9B Q8_0 | TP=2 | NCCL RoCE | 5.1 |
 | 9B Q8_0 | TP=2 | TCP RoCE | 4.9 |
-| 9B Q8_0 | PP=2 | TCP RoCE | 3.6 |
 | 27B Q4_K_M | Single GPU | — | 2.2 |
+| 27B Q4_K_M | PP=2 | NCCL RoCE | 2.2 |
 | 27B Q4_K_M | TP=2 | NCCL RoCE | 1.7 |
-| 27B Q4_K_M | PP=2 | TCP | 2.2 |
 
 All quant formats supported on all backends: Q8_0 (GPU), Q4_0/Q4_K/Q5_K/Q6_K (GPU or CPU fallback on UMA). See [docs/KERNELS.md](docs/KERNELS.md) for details.
 
