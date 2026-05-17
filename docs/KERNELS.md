@@ -33,7 +33,7 @@ This document tracks the implementation status of all compute kernels across bac
 | Deinterleave | Native | Native | Native | Native | Native | Native |
 | Embedding Lookup | Native | CPU perf¹ | Native (f32) | CPU perf¹ | CPU perf¹ | Native |
 | SDPA (FlashAttn-2) | Native (SIMD) | Native² | Native | Native | Native | Native |
-| SDPA with Stats (`sdpaWithStats`) | Native (SIMD) | CPU delegate⁷ | CPU delegate⁷ | CPU delegate⁷ | CPU delegate⁷ | CPU delegate⁷ |
+| SDPA with Stats (`sdpaWithStats`) | Native (SIMD) | Native (wraps SDPA) | Native (wraps SDPA) | Native (wraps SDPA) | Native (wraps SDPA) | Native (wraps SDPA) |
 | SDPA Tree (DDTree verify) | Native (SIMD) | Native (f32 + turbo) | Native (f32) | Native (f32) | Native (f32) | Native (f32) |
 | Paged SDPA | Native | Native | Native | Native | Native | Native |
 | Causal Conv1d | Native | Native (DeltaNet) | Native³ | In DeltaNet | In DeltaNet | Native |
@@ -54,7 +54,7 @@ This document tracks the implementation status of all compute kernels across bac
 ³ Vulkan conv1d does not support bias parameter — models with conv bias will panic.
 ⁴ Sequential: dispatches separate `add` then `rmsNorm` (no fused GPU kernel yet).
 ⁶ CPU delegate: functional but delegates to CPU backend (no native GPU kernel yet).
-⁷ GPU backends sync then delegate to CPU SDPA kernel. Used by tiered KV cache split-attention (`--kv-tiers vram+ram`) to compute per-head softmax stats (max, sum) for online merge across tiers.
+⁷ `sdpaWithStats` wraps the native GPU SDPA kernel and fills dummy stats (max=0, sum=1). Used by tiered KV cache split-attention (`--kv-tiers vram+ram`) for online softmax merge across tiers. No CPU delegate — runs entirely on GPU.
 ⁸ CUDA Q5_K/Q6_K fused FFN blocked by Zig LLVM nvptx64 aliasee bug (cross-file kernel imports create forbidden GlobalAlias).
 
 ## True Megakernels (Tier 2)

@@ -15,7 +15,7 @@ Comprehensive list of bugs, missing features, and improvement opportunities.
 | 6 | ROCm HSACO target triple rejected by kernel 7.0.6+ | High | Zig generates `amdgcn-amd-amdhsa5.0.0-unknown-gfx1100` instead of `amdgcn-amd-amdhsa--gfx1100`. Kernel 7.0.5 accepted it, 7.0.6 rejects consistently. GEMV kernels are correct (verified at 47-55 tok/s on 7.0.5). Fix needs Zig std library patch for amdgcn target triple |
 | 3 | Vulkan segfault on RADV NAVI31 | Fixed | Was descriptor buffer overflow in dispatch() — [4]→[16] for 9-binding pipelines |
 | 4 | Vulkan push descriptor crashes on RADV gfx1100 | Medium | VK_KHR_push_descriptor resolves + device created with extension. Descriptor layouts correctly flagged with PUSH_DESCRIPTOR_BIT. GPU crashes during command buffer execution — no validation errors. Suspected RADV driver issue. Infrastructure in place, disabled pending fix |
-| 5 | Vulkan synchronous dispatch bottleneck (2.7 tok/s) | Low | Per-op vkQueueSubmit + vkWaitForFences. Activation cache + persistent staging implemented but can't batch — both push descriptors and per-dispatch descriptor sets produce garbage on RADV |
+| 5 | Vulkan synchronous dispatch bottleneck (2.7 tok/s) | Fixed | Deferred dispatch: per-op descriptor set allocation from pool, single command buffer with compute→compute barriers, submit only at sync(). Push descriptors disabled (RADV crash). Needs benchmarking |
 | 7 | CUDA K-quant PTX register spilling on sm_121 | Fixed (workaround) | Q4_K/Q5_K/Q6_K PTX kernels spill registers on GB10's sm_121 JIT, causing data corruption (9B) and 10x slowdown (all sizes). Even NR=1 (single row) spills. CPU fallback with thread pool: 6.8 tok/s 9B, 12.3 tok/s 4B. Q8_0/Q4_0 GPU kernels unaffected |
 
 ---
