@@ -47,7 +47,38 @@ output = softmax(Q @ K^T / sqrt(d)) @ V
              sqrt(d) = scale factor = 1/sqrt(head_dim)
 ```
 
-This is **O(n²)** in sequence length (computational complexity grows quadratically with the number of tokens) — every token attends to every previous token.
+This is **O(n²)** in sequence length — every token attends to every previous token. At 1K tokens that's 1M score computations per head; at 32K tokens it's 1 billion. This is why long-context models are expensive.
+
+**Worked example** — 3 tokens, head_dim=4, 1 head:
+
+```
+Tokens: "The cat sat"
+After Q/K/V projection (each token × its weight matrix):
+
+  Q₁ = [1.0, 0.2, -0.5, 0.3]    K₁ = [0.8, 0.1, -0.3, 0.5]    V₁ = [0.1, 0.9, 0.2, 0.4]
+  Q₂ = [0.3, 0.7,  0.1, 0.8]    K₂ = [0.2, 0.6,  0.0, 0.7]    V₂ = [0.5, 0.3, 0.8, 0.1]
+  Q₃ = [0.5, 0.4,  0.2, 0.1]    K₃ = [0.4, 0.3,  0.1, 0.2]    V₃ = [0.7, 0.1, 0.4, 0.6]
+
+Step 1: Compute attention scores for token 3 ("sat")
+  Q₃ · K₁ = 0.5×0.8 + 0.4×0.1 + 0.2×(-0.3) + 0.1×0.5 = 0.43
+  Q₃ · K₂ = 0.5×0.2 + 0.4×0.6 + 0.2×0.0   + 0.1×0.7 = 0.41
+  Q₃ · K₃ = 0.5×0.4 + 0.4×0.3 + 0.2×0.1   + 0.1×0.2 = 0.36
+
+Step 2: Scale by 1/√d = 1/√4 = 0.5
+  scores = [0.215, 0.205, 0.180]
+
+Step 3: Softmax (convert to probabilities summing to 1.0)
+  exp(scores) = [1.240, 1.228, 1.197]   sum = 3.665
+  weights     = [0.338, 0.335, 0.327]   ← nearly uniform (scores were close)
+
+Step 4: Weighted sum of V vectors
+  output = 0.338×V₁ + 0.335×V₂ + 0.327×V₃
+         = [0.430, 0.437, 0.466, 0.365]
+
+This output is what token 3 "learned" from attending to all previous tokens.
+With 20 heads, 20 independent versions of this run in parallel, each
+learning different relationships (syntax, semantics, position, etc.)
+```
 
 **Causal masking:** During generation, token at position `i` must only attend to positions `≤ i` — it cannot look at future tokens that haven't been generated yet. This is enforced by setting attention scores for future positions to `-∞` before softmax, which zeroes them out. The resulting lower-triangular attention matrix is called a **causal mask**. (Some models like GPT-OSS use a sliding window variant where even-numbered layers only attend to the most recent 128 tokens.)
 

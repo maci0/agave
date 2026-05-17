@@ -10,11 +10,22 @@ Token 2: compute K₂, V₂, store in cache, attend to [K₁,K₂], [V₁,V₂]
 Token 3: compute K₃, V₃, store in cache, attend to [K₁,K₂,K₃], [V₁,V₂,V₃]
 ```
 
-The cache grows linearly with sequence length. For example, a model with 30 layers, 5 KV heads, 128-dim heads, and 4096 max tokens (roughly comparable to Qwen3.5 3B):
+The cache grows linearly with sequence length. Each new token adds one K vector and one V vector per layer per KV head:
 
 ```
-30 × 5 × 128 × 4096 × 2 (K+V) × 4 bytes = 600 MB
+Per-token KV cost = n_layers × n_kv_heads × head_dim × 2 (K+V) × bytes_per_element
+
+Example: Qwen3.5 9B at f16 precision
+  = 64 layers × 4 KV heads × 128 dim × 2 × 2 bytes = 128 KB per token
+
+How this scales:
+  128 tokens:   16 MB    (fits in GPU cache)
+  2K tokens:   256 MB    (fits in VRAM easily)
+  32K tokens:    4 GB    (starts competing with model weights for VRAM)
+  128K tokens:  16 GB    (larger than the model weights themselves)
 ```
+
+This is why long-context inference is memory-bound: generating token 100,001 requires the GPU to scan 100,000 cached K vectors per head per layer during attention. The KV cache often exceeds the model weights in memory at long contexts.
 
 Quantizing the KV cache (e.g., to f16 or fp8) halves or quarters this cost with minimal quality loss.
 
@@ -64,7 +75,9 @@ The preset also enables **boundary V protection** — the first and last 2 trans
 
 ## PagedAttention
 
-Introduced in [Efficient Memory Management for Large Language Model Serving with PagedAttention (Kwon et al., 2023)](https://arxiv.org/abs/2309.06180), PagedAttention addresses the problem that allocating a **contiguous** (single continuous memory region) KV cache per **sequence** (a single request or conversation — the tokens for one prompt and its generated response) wastes memory when sequences have different lengths. PagedAttention breaks the cache into fixed-size **blocks** (default 16 positions):
+**The problem with contiguous allocation:** Without paging, you must pre-allocate the maximum context length for each sequence. If max_ctx=4096 and a request only generates 50 tokens, you've wasted 99% of that allocation. Worse, with 10 concurrent requests you need 10 × 4096 × 128 KB/token = 5 GB reserved — even if total actual usage is 50 MB. You can't reclaim the unused space because each sequence's cache must be contiguous in memory.
+
+[PagedAttention (Kwon et al., 2023)](https://arxiv.org/abs/2309.06180) solves this the same way an OS handles virtual memory — by breaking the cache into fixed-size **blocks** (default 16 positions) allocated on demand:
 
 ```
 physical_block = block_table[position / block_size]

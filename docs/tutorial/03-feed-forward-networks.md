@@ -2,7 +2,9 @@
 
 The **FFN (Feed-Forward Network)** is the second **sublayer** (component within a transformer layer) in each transformer layer. "Feed-forward" means data flows in one direction through the network — input → hidden layer → output, with no loops or **recurrence** (unlike **RNNs** — Recurrent Neural Networks — which cycle back on themselves, feeding outputs back as inputs).
 
-While attention lets tokens communicate with each other, the FFN processes each position **independently** — it's a separate computation per token that doesn't look at neighboring tokens. This is where most of the model's "knowledge" lives — the learned weights in these projections encode facts, patterns, and transformations.
+While attention lets tokens communicate with each other, the FFN processes each position **independently** — it's a separate computation per token that doesn't look at neighboring tokens.
+
+**Why does the FFN store "knowledge"?** The FFN expands the hidden state to a much larger intermediate dimension (e.g., 2304 → 12,288 in Gemma4 E2B), applies a nonlinear activation, then compresses back. Research ([Geva et al., 2021](https://arxiv.org/abs/2012.14913)) showed that rows of the up-projection act as **pattern detectors** — each row activates strongly for specific input patterns (e.g., "capital of [country]", "past tense verb", "python function definition"). The corresponding down-projection row then adds the associated output (e.g., the embedding direction for the country's capital). The gate controls which patterns fire. With 12,288 intermediate neurons, the FFN has 12,288 independent "if pattern X, then add Y" slots — this is where factual associations live. Attention routes information between positions; the FFN transforms it at each position.
 
 ## SwiGLU
 
@@ -41,6 +43,31 @@ Standard transformers use the same FFN weights for every token. MoE models have 
 ```
 
 This gives the **capacity** (total model size/knowledge) of a large model (30B total parameters) with the compute cost of a small one (3B active per token).
+
+**Worked example** — Nemotron-Nano with 128 experts, top-6 routing, and 1 shared expert:
+
+```
+Input: hidden state for the word "Python" (after attention)
+
+1. Router scores = sigmoid(hidden @ gate_weight)   # 128 scores
+   Expert scores: [0.02, 0.85, 0.11, 0.91, 0.03, ..., 0.78, ..., 0.44]
+                          ↑exp1        ↑exp3                ↑exp87
+
+2. Top-6 by score: experts [3, 1, 87, 120, 15, 42]
+   Raw scores:     [0.91, 0.85, 0.78, 0.72, 0.68, 0.55]
+
+3. Normalize: weights = softmax([0.91, 0.85, 0.78, 0.72, 0.68, 0.55])
+              weights = [0.193, 0.182, 0.169, 0.160, 0.153, 0.134]
+
+4. Run each expert's FFN:
+   out = 0.193 × expert_3(hidden) + 0.182 × expert_1(hidden) + ...
+
+5. Add shared expert (always active):
+   out += shared_expert(hidden)
+
+Result: 7 FFN evaluations (6 routed + 1 shared) instead of 128.
+        Expert 3 might specialize in "programming", expert 87 in "nouns".
+```
 
 Expert selection uses **stack-allocated** arrays (fixed-size buffers on the call stack, automatically freed when the function returns) — zero **heap allocation** (dynamic memory from the system allocator, requires explicit free) in the hot path.
 

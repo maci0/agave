@@ -9,6 +9,32 @@ output[t] = state[t] @ query[t]
 
 The **decay** factor controls how quickly old information fades — like a leaky bucket where new information flows in and old information gradually drains out.
 
+**What does the state matrix actually store?** Think of it as a compressed lookup table mapping keys to values. After seeing the sentence "The capital of France is Paris", the state contains an approximate mapping from the key-direction for "capital of France" to the value-direction for "Paris". When a new query asks something related (e.g., "What is the capital of France?"), the output `state @ query` retrieves the stored value — approximately, because the matrix has fixed size and multiple associations overlap. Older or weaker associations decay away as new ones are written. This is fundamentally different from attention, which stores every K/V explicitly and retrieves them exactly.
+
+**Concrete example** — a tiny 2×2 state matrix tracking two tokens:
+
+```
+State starts empty:     S = [[0, 0],
+                              [0, 0]]
+
+Token 1: k=[1, 0], v=[0.8, 0.2], decay=0.9
+  After decay:          S = 0.9 * S = [[0, 0], [0, 0]]   (nothing to decay)
+  Error:                delta = v - S^T @ k = [0.8, 0.2] - [0, 0] = [0.8, 0.2]
+  Update:               S += outer(delta, k) = [[0.8, 0], [0.2, 0]]
+  Retrieve with q=[1,0]: output = S @ q = [0.8, 0.2]  ✓ recovers v₁
+
+Token 2: k=[0, 1], v=[0.3, 0.9], decay=0.9
+  After decay:          S = 0.9 * S = [[0.72, 0], [0.18, 0]]
+  Error:                delta = v - S^T @ k = [0.3, 0.9] - [0, 0] = [0.3, 0.9]
+  Update:               S += outer(delta, k) = [[0.72, 0.3], [0.18, 0.9]]
+  Retrieve with q=[1,0]: output = S @ q = [0.72, 0.18]  ≈ decayed v₁
+  Retrieve with q=[0,1]: output = S @ q = [0.3, 0.9]    ✓ recovers v₂
+
+Token 1's information has decayed by 10%. After 100 more tokens, it would
+be multiplied by 0.9^100 ≈ 0.00003 — effectively gone. This is the
+fundamental tradeoff: constant memory, but lossy recall.
+```
+
 **Hybrid models** combine attention and SSM layers: attention every N layers for global context, SSM for the rest for speed.
 
 ## Causal Convolution
@@ -85,7 +111,7 @@ For each state element [i, j]:
 
 ## Why SSMs are Faster
 
-The core difference comes down to how each approach handles history:
+The core difference: attention re-reads all previous tokens every time, SSMs update a fixed-size summary.
 
 | Aspect | Transformer Attention | SSM Recurrence |
 |--------|----------------------|----------------|
@@ -94,9 +120,28 @@ The core difference comes down to how each approach handles history:
 | At 100K tokens | 100K dot products per head | Same as at 100 tokens |
 | Long-range memory | Exact — every past token accessible | Lossy — old information decays |
 
-The tradeoff: SSMs are faster but lose exact long-range recall. The state matrix has fixed size (e.g., 64×64 = 4096 floats), so it acts as a lossy compression of all past tokens. If the model saw "The capital of France is" 10,000 tokens ago, the relevant information may have decayed from the state. Attention doesn't have this problem — it stores every past K/V explicitly and can look them up exactly.
+**Concrete cost comparison** — generating token 32,001 in a model with 16 heads, head_dim=64:
 
-Hybrid models get the best of both: SSM layers for speed on most positions, attention layers every Nth layer for precise long-range access. For example, Qwen3.5 uses attention every 4th layer — so 48 of its 64 layers are cheap SSM layers, and 16 are full-attention layers that maintain exact recall.
+```
+Attention layer:
+  Per head: Q (64 floats) dot-product with 32,000 cached K vectors
+  = 32,000 × 64 = 2,048,000 multiply-adds per head
+  × 16 heads = 32.8M multiply-adds
+  KV cache read: 32,000 × 128 × 16 × 2 bytes ≈ 125 MB scanned
+
+SSM layer:
+  Per head: decay state (64×64 = 4096 muls), outer product update (4096 muls)
+  = ~8,192 multiply-adds per head
+  × 16 heads = 131K multiply-adds
+  State read: 64 × 64 × 16 × 4 bytes = 256 KB
+
+Ratio: attention does 250× more work at 32K context.
+         At 128K context, it's 1000× more.
+```
+
+The tradeoff: SSMs are faster but lose exact long-range recall. The state matrix has fixed size (64×64 = 4096 floats per head), so it acts as a lossy compression of all past tokens — like a 256 KB "summary" trying to represent 125 MB of cached history. If the model saw "The capital of France is" 10,000 tokens ago, the relevant information has been multiplied by decay^10,000 and is effectively gone. Attention doesn't have this problem — it stores every K/V and can look them up exactly, at the cost of scanning all of them every token.
+
+Hybrid models get the best of both: SSM layers for speed on most positions, attention layers every Nth layer for precise long-range access. Qwen3.5 uses attention every 4th layer — 48 of its 64 layers are cheap SSM layers, and 16 are full-attention layers that maintain exact recall. The attention layers act as "checkpoints" that periodically refresh the model's access to the full history.
 
 ## State Matrix Visualization
 
