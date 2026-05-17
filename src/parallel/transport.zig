@@ -69,11 +69,11 @@ pub const Transport = struct {
     cuda_ctx: ?*anyopaque = null,
     cuda_ctx_set: ?*const fn (?*anyopaque) callconv(.c) c_int = null,
     cuda_host_register: ?*const fn (*const anyopaque, usize, c_uint) callconv(.c) c_int = null,
-    cuda_mem_alloc: ?*const fn (*u64, usize) callconv(.c) c_int = null,
-    cuda_memcpy_htod: ?*const fn (u64, *const anyopaque, usize) callconv(.c) c_int = null,
     cuda_memcpy_dtoh: ?*const fn (*anyopaque, u64, usize) callconv(.c) c_int = null,
-    nccl_dev_buf: u64 = 0,
-    nccl_dev_buf_size: usize = 0,
+    /// Opaque backend pointer for device pointer lookup.
+    cuda_backend: ?*anyopaque = null,
+    /// Function to get device pointer: fn(backend, host_ptr) -> device_ptr.
+    cuda_get_dev_ptr: ?*const fn (*anyopaque, [*]const f32) u64 = null,
 
     pub fn init(allocator: Allocator, kind: TransportKind, rank: u32, world_size: u32) !Transport {
         if (kind != .tcp and kind != .shm and kind != .nccl) return error.NotImplemented;
@@ -236,30 +236,38 @@ pub const Transport = struct {
             // Lazy init: create communicator on first use (after CUDA kernels have run)
             if (self.nccl_comm == null) {
                 if (self.nccl_comm_init_rank) |initRank| {
-                    if (self.cuda_sync) |sync| _ = sync();
                     const rc = initRank(&self.nccl_comm, @intCast(self.world_size), &self.nccl_unique_id, @intCast(self.rank));
                     if (rc != ncclSuccess) {
                         std.log.warn("NCCL ncclCommInitRank failed: {d}", .{rc});
                         self.kind = .tcp;
                         return self.allReduceAdd(buf, n);
                     }
-                    if (self.cuda_ctx_set) |setCtx| _ = setCtx(self.cuda_ctx);
-                    std.log.info("NCCL: communicator initialized (lazy)", .{});
+                    // Restore CUDA context — NCCL may have changed the current context
+                    if (self.cuda_ctx_set) |setCtx| {
+                        const ctx_rc = setCtx(self.cuda_ctx);
+                        std.log.info("NCCL: communicator initialized, ctx restore={d}", .{ctx_rc});
+                    } else {
+                        std.log.info("NCCL: communicator initialized (no ctx restore)", .{});
+                    }
                 }
             }
-            const byte_len = n * @sizeOf(f32);
-            if (self.cuda_sync) |sync| _ = sync();
-            // Allocate device staging buffer on first use
-            if (self.nccl_dev_buf_size < byte_len) {
-                if (self.cuda_mem_alloc) |alloc| _ = alloc(&self.nccl_dev_buf, byte_len);
-                self.nccl_dev_buf_size = byte_len;
-            }
-            if (self.nccl_dev_buf != 0) {
-                if (self.cuda_memcpy_htod) |htod| _ = htod(self.nccl_dev_buf, @ptrCast(buf), byte_len);
-                if (self.nccl_allreduce) |allreduce|
-                    _ = allreduce(@ptrFromInt(self.nccl_dev_buf), @ptrFromInt(self.nccl_dev_buf), n, ncclFloat, ncclSum, self.nccl_comm, null);
+            // Get CUDA device pointer — data stays on GPU, no host download needed
+            const dptr: u64 = if (self.cuda_get_dev_ptr) |getPtr|
+                if (self.cuda_backend) |be| getPtr(be, buf) else 0
+            else
+                0;
+            if (dptr == 0) std.log.warn("NCCL: device ptr is 0 for buf", .{});
+            if (dptr != 0) {
+                if (self.nccl_allreduce) |allreduce| {
+                    const rc = allreduce(@ptrFromInt(dptr), @ptrFromInt(dptr), n, ncclFloat, ncclSum, self.nccl_comm, null);
+                    if (rc != ncclSuccess) std.log.warn("NCCL allReduce failed: {d}", .{rc});
+                }
+                // Sync to ensure NCCL result is ready before next CUDA kernel reads it
                 if (self.cuda_sync) |sync| _ = sync();
-                if (self.cuda_memcpy_dtoh) |dtoh| _ = dtoh(@ptrCast(buf), self.nccl_dev_buf, byte_len);
+            } else {
+                std.log.warn("NCCL: no device pointer for buf, falling back to TCP", .{});
+                self.kind = .tcp;
+                return self.allReduceAdd(buf, n);
             }
             return;
         }

@@ -841,6 +841,18 @@ pub const Backend = union(enum) {
     /// Evict a weight buffer from GPU cache so next access re-uploads from host.
     /// Used when the same host buffer (e.g. tp_row_shard_buf) is reused with
     /// different data between TP rank switches.
+    /// Get the CUDA device pointer for a host activation buffer.
+    /// Returns 0 if not available or not a CUDA backend.
+    pub inline fn getDevicePtr(self: Backend, ptr: anytype) u64 {
+        return switch (self) {
+            inline else => |be| {
+                if (comptime @hasDecl(@TypeOf(be.*), "getDevicePtr"))
+                    return be.getDevicePtr(ptr);
+                return 0;
+            },
+        };
+    }
+
     pub inline fn invalidateWeight(self: Backend, ptr: anytype) void {
         switch (self) {
             inline else => |be| {

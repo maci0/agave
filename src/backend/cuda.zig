@@ -760,6 +760,20 @@ pub const CudaBackend = struct {
         // Not in cache — nothing to invalidate (will be uploaded fresh)
     }
 
+    /// Get the device pointer for a host activation buffer (for NCCL direct GPU access).
+    /// Returns 0 if the buffer is not in the activation cache.
+    /// Wrapper for transport function pointer (takes opaque self).
+    pub fn getDevicePtrOpaque(self_opaque: *anyopaque, ptr: [*]const f32) u64 {
+        const self: *CudaBackend = @ptrCast(@alignCast(self_opaque));
+        return self.getDevicePtr(ptr);
+    }
+
+    pub fn getDevicePtr(self: *CudaBackend, ptr: anytype) u64 {
+        const addr = @intFromPtr(ptr);
+        if (self.act_cache.getPtr(addr)) |act| return act.dptr;
+        return 0;
+    }
+
     /// Evict a weight buffer from the permanent cache so the next getOrUpload
     /// re-reads from host. Used when host-side weight data at the same address
     /// changes between TP ranks (e.g. tp_row_shard_buf is reused per rank).

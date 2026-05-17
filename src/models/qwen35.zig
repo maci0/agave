@@ -1342,7 +1342,9 @@ pub const Qwen35Model = struct {
                     }
                     self.be.sync();
                     try self.ffnCompute(l);
-                    self.be.sync();
+                    // For NCCL: don't sync — keep data on GPU, allReduce uses device pointer directly.
+                    // For TCP/shm: sync downloads hidden2 to host for send.
+                    if (transport.kind != .nccl) self.be.sync();
                     transport.allReduceAdd(self.hidden2.ptr, e) catch {};
                     continue;
                 }
