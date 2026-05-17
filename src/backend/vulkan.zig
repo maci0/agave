@@ -452,6 +452,7 @@ const FnCreateDescriptorPool = *const fn (VkDevice, *const VkDescriptorPoolCreat
 const FnDestroyDescriptorPool = *const fn (VkDevice, VkDescriptorPool, ?*const anyopaque) callconv(.c) void;
 const FnAllocateDescriptorSets = *const fn (VkDevice, *const VkDescriptorSetAllocateInfo, *VkDescriptorSet) callconv(.c) VkResult;
 const FnFreeDescriptorSets = *const fn (VkDevice, VkDescriptorPool, u32, *const VkDescriptorSet) callconv(.c) VkResult;
+const FnResetDescriptorPool = *const fn (VkDevice, VkDescriptorPool, VkFlags) callconv(.c) VkResult;
 const FnUpdateDescriptorSets = *const fn (VkDevice, u32, [*]const VkWriteDescriptorSet, u32, ?*const anyopaque) callconv(.c) void;
 
 const FnCreateDescriptorSetLayout = *const fn (VkDevice, *const VkDescriptorSetLayoutCreateInfo, ?*const anyopaque, *VkDescriptorSetLayout) callconv(.c) VkResult;
@@ -559,7 +560,7 @@ const max_physical_devices: u32 = 8;
 const max_queue_families: u32 = 16;
 
 /// Maximum descriptor sets / descriptor count for the descriptor pool.
-const max_descriptor_sets: u32 = 128;
+const max_descriptor_sets: u32 = 512;
 const max_descriptors: u32 = max_descriptor_sets * 4;
 
 /// Workgroup size for all compute shaders.
@@ -700,6 +701,7 @@ pub const VulkanBackend = struct {
     vkDestroyDescriptorPool: FnDestroyDescriptorPool = undefined,
     vkAllocateDescriptorSets: FnAllocateDescriptorSets = undefined,
     vkFreeDescriptorSets: FnFreeDescriptorSets = undefined,
+    vkResetDescriptorPool: FnResetDescriptorPool = undefined,
     vkUpdateDescriptorSets: FnUpdateDescriptorSets = undefined,
     vkCreateDescriptorSetLayout: FnCreateDescriptorSetLayout = undefined,
     vkDestroyDescriptorSetLayout: FnDestroyDescriptorSetLayout = undefined,
@@ -849,6 +851,7 @@ pub const VulkanBackend = struct {
         self.vkDestroyDescriptorPool = self.lookup(FnDestroyDescriptorPool, "vkDestroyDescriptorPool") orelse return error.VulkanNotAvailable;
         self.vkAllocateDescriptorSets = self.lookup(FnAllocateDescriptorSets, "vkAllocateDescriptorSets") orelse return error.VulkanNotAvailable;
         self.vkFreeDescriptorSets = self.lookup(FnFreeDescriptorSets, "vkFreeDescriptorSets") orelse return error.VulkanNotAvailable;
+        self.vkResetDescriptorPool = self.lookup(FnResetDescriptorPool, "vkResetDescriptorPool") orelse return error.VulkanNotAvailable;
         self.vkUpdateDescriptorSets = self.lookup(FnUpdateDescriptorSets, "vkUpdateDescriptorSets") orelse return error.VulkanNotAvailable;
         self.vkCreateDescriptorSetLayout = self.lookup(FnCreateDescriptorSetLayout, "vkCreateDescriptorSetLayout") orelse return error.VulkanNotAvailable;
         self.vkDestroyDescriptorSetLayout = self.lookup(FnDestroyDescriptorSetLayout, "vkDestroyDescriptorSetLayout") orelse return error.VulkanNotAvailable;
@@ -1368,25 +1371,10 @@ pub const VulkanBackend = struct {
 
         self.vkDestroyShaderModule(self.device, shader_mod, null);
 
-        // Pre-allocate descriptor set for synchronous path (push descriptor path doesn't use it)
-        var desc_set: VkDescriptorSet = null;
-        if (push_desc_flag == 0) {
-            const ds_ai = VkDescriptorSetAllocateInfo{
-                .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
-                .pNext = null,
-                .descriptorPool = self.desc_pool,
-                .descriptorSetCount = 1,
-                .pSetLayouts = &desc_layout,
-            };
-            if (self.vkAllocateDescriptorSets(self.device, &ds_ai, &desc_set) != VK_SUCCESS)
-                return error.VulkanInitFailed;
-        }
-
         return .{
             .pipeline = pipeline,
             .layout = pipe_layout,
             .desc_layout = desc_layout,
-            .desc_set = desc_set,
         };
     }
 
@@ -1517,32 +1505,45 @@ pub const VulkanBackend = struct {
             self.vkCmdPushConstants(self.cmd_buf, pipe.layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, push_size, push_data);
             self.vkCmdDispatch(self.cmd_buf, n_groups, 1, 1);
         } else {
-            // Synchronous fallback: traditional descriptor set update + per-op submit
-            const desc_set = pipe.desc_set;
+            // Deferred path: allocate fresh descriptor set per dispatch, record into open command buffer
+            var desc_set: VkDescriptorSet = null;
+            const ds_ai = VkDescriptorSetAllocateInfo{
+                .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
+                .pNext = null,
+                .descriptorPool = self.desc_pool,
+                .descriptorSetCount = 1,
+                .pSetLayouts = &pipe.desc_layout,
+            };
+            if (self.vkAllocateDescriptorSets(self.device, &ds_ai, &desc_set) != VK_SUCCESS) {
+                // Pool exhausted — flush pending work, reset pool, retry
+                self.submitPending();
+                _ = self.vkResetDescriptorPool(self.device, self.desc_pool, 0);
+                if (self.vkAllocateDescriptorSets(self.device, &ds_ai, &desc_set) != VK_SUCCESS)
+                    return;
+            }
             for (0..bufs.len) |i| writes[i].dstSet = desc_set;
             self.vkUpdateDescriptorSets(self.device, @intCast(bufs.len), &writes, 0, null);
 
-            _ = self.vkResetCommandBuffer(self.cmd_buf, 0);
-            _ = self.vkBeginCommandBuffer(self.cmd_buf, &.{
-                .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
-                .pNext = null,
-                .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
-                .pInheritanceInfo = null,
-            });
+            if (!self.cmd_recording) {
+                _ = self.vkResetCommandBuffer(self.cmd_buf, 0);
+                _ = self.vkBeginCommandBuffer(self.cmd_buf, &.{
+                    .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+                    .pNext = null,
+                    .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
+                    .pInheritanceInfo = null,
+                });
+                self.cmd_recording = true;
+            } else {
+                self.vkCmdPipelineBarrier(self.cmd_buf, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, &VkMemoryBarrier{
+                    .srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT,
+                    .dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT,
+                }, 0, null, 0, null);
+            }
+
             self.vkCmdBindPipeline(self.cmd_buf, VK_PIPELINE_BIND_POINT_COMPUTE, pipe.pipeline);
             self.vkCmdBindDescriptorSets(self.cmd_buf, VK_PIPELINE_BIND_POINT_COMPUTE, pipe.layout, 0, 1, &desc_set, 0, null);
             self.vkCmdPushConstants(self.cmd_buf, pipe.layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, push_size, push_data);
             self.vkCmdDispatch(self.cmd_buf, n_groups, 1, 1);
-            _ = self.vkEndCommandBuffer(self.cmd_buf);
-
-            _ = self.vkResetFences(self.device, 1, &self.fence);
-            _ = self.vkQueueSubmit(self.queue, 1, &.{
-                .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO, .pNext = null,
-                .waitSemaphoreCount = 0, .pWaitSemaphores = null, .pWaitDstStageMask = null,
-                .commandBufferCount = 1, .pCommandBuffers = &self.cmd_buf,
-                .signalSemaphoreCount = 0, .pSignalSemaphores = null,
-            }, self.fence);
-            _ = self.vkWaitForFences(self.device, 1, &self.fence, VK_TRUE, ~@as(u64, 0));
         }
     }
 
@@ -1558,6 +1559,8 @@ pub const VulkanBackend = struct {
         }, self.fence);
         _ = self.vkWaitForFences(self.device, 1, &self.fence, VK_TRUE, ~@as(u64, 0));
         self.cmd_recording = false;
+        // Free all per-dispatch descriptor sets at once
+        _ = self.vkResetDescriptorPool(self.device, self.desc_pool, 0);
     }
 
     // ── Weight size helper ──────────────────────────────────────
@@ -2177,14 +2180,11 @@ pub const VulkanBackend = struct {
         self.downloadF32(state_pool.mem, @ptrCast(ssm_state.ptr), ssm_state.len);
     }
 
-    /// No-op — each Vulkan dispatch already submits and waits on a fence.
-    /// Exists for API consistency with other backends.
+    /// Submit all pending dispatches and download dirty activations to host.
     pub fn sync(self: *VulkanBackend) void {
         self.flushActivations();
     }
-    /// No-op — Vulkan dispatches are not batched.
     pub fn beginBatch(_: *VulkanBackend) void {}
-    /// No-op — Vulkan dispatches are not batched.
     pub fn endBatch(_: *VulkanBackend) void {}
 
     /// Returns backend startup information for display.
