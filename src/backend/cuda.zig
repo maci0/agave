@@ -100,6 +100,8 @@ const FnDeviceGetName = *const fn ([*]u8, c_int, CUdevice) callconv(.c) CUresult
 const FnDeviceGetAttribute = *const fn (*c_int, c_int, CUdevice) callconv(.c) CUresult;
 const FnCtxCreate = *const fn (*CUcontext, c_uint, CUdevice) callconv(.c) CUresult;
 const FnCtxDestroy = *const fn (CUcontext) callconv(.c) CUresult;
+const FnDevicePrimaryCtxRetain = *const fn (*CUcontext, CUdevice) callconv(.c) CUresult;
+const FnDevicePrimaryCtxRelease = *const fn (CUdevice) callconv(.c) CUresult;
 const FnCtxSync = *const fn () callconv(.c) CUresult;
 const FnCtxSetCurrent = *const fn (CUcontext) callconv(.c) CUresult;
 const FnModuleLoadData = *const fn (*CUmodule, [*]const u8) callconv(.c) CUresult;
@@ -403,7 +405,16 @@ pub const CudaBackend = struct {
             _ = std.fmt.bufPrint(&self.drv_str, "CUDA {d}.{d}", .{ self.driver_version / cuda_version_major_divisor, (self.driver_version % cuda_version_major_divisor) / cuda_version_minor_divisor }) catch {};
         }
 
-        if (cuCtxCreate(&self.context, 0, dev) != CUDA_SUCCESS) return error.CudaInitFailed;
+        // Use primary context (shared with NCCL/runtime API) instead of cuCtxCreate
+        if (self.lookup(FnDevicePrimaryCtxRetain, "cuDevicePrimaryCtxRetain")) |retain| {
+            if (retain(&self.context, dev) == CUDA_SUCCESS) {
+                if (self.cuCtxSetCurrent) |setCurrent| _ = setCurrent(self.context);
+            } else {
+                if (cuCtxCreate(&self.context, 0, dev) != CUDA_SUCCESS) return error.CudaInitFailed;
+            }
+        } else {
+            if (cuCtxCreate(&self.context, 0, dev) != CUDA_SUCCESS) return error.CudaInitFailed;
+        }
         errdefer _ = self.cuCtxDestroy(self.context);
 
         // Load PTX module — must be null-terminated (heap-allocated, too large for stack)
