@@ -9,7 +9,9 @@
 comptime {
     // Elementwise
     _ = @import("silu.zig");
+    _ = @import("silu_mul.zig");
     _ = @import("gelu.zig");
+    _ = @import("gelu_mul.zig");
     _ = @import("add.zig");
     _ = @import("mul.zig");
     _ = @import("sigmoid_mul.zig");

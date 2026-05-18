@@ -152,6 +152,7 @@ pub const RocmBackend = struct {
     fn_gemv_gptq: HipFunction = null,
     fn_sigmoid_mul: HipFunction = null,
     fn_silu_mul: HipFunction = null,
+    fn_gelu_mul: HipFunction = null,
     fn_deinterleave: HipFunction = null,
     fn_split_qgate: HipFunction = null,
     fn_deltanet_gate_beta: HipFunction = null,
@@ -319,6 +320,7 @@ pub const RocmBackend = struct {
         self.fn_gemv_gptq = self.getFunction(hipModuleGetFunction, "gemv_gptq_kernel") catch null;
         self.fn_sigmoid_mul = self.getFunction(hipModuleGetFunction, "sigmoid_mul_kernel") catch null;
         self.fn_silu_mul = self.getFunction(hipModuleGetFunction, "silu_mul_kernel") catch null;
+        self.fn_gelu_mul = self.getFunction(hipModuleGetFunction, "gelu_mul_kernel") catch null;
         self.fn_deinterleave = self.getFunction(hipModuleGetFunction, "deinterleave_kernel") catch null;
         self.fn_split_qgate = self.getFunction(hipModuleGetFunction, "split_qgate_kernel") catch null;
         self.fn_deltanet_gate_beta = self.getFunction(hipModuleGetFunction, "deltanet_gate_beta_kernel") catch null;
@@ -851,8 +853,24 @@ pub const RocmBackend = struct {
 
     /// Sequential GELU + multiply: out[i] = gelu(a[i]) * b[i] (two dispatches, not fused).
     pub fn geluMul(self: *RocmBackend, a: [*]const f32, b: [*]const f32, out: [*]f32, n: usize) void {
-        self.gelu(a, out, n);
-        self.mul(out, b, out, n);
+        if (self.fn_gelu_mul == null) {
+            self.gelu(a, out, n);
+            self.mul(out, b, out, n);
+            return;
+        }
+        const sz = n * @sizeOf(f32);
+        var d_a = self.getInputBuf(a, sz);
+        var d_b = self.getInputBuf(b, sz);
+        var d_out = self.getOutputBuf(out, sz);
+        var n_u32: u32 = @intCast(n);
+        var params = [_]?*anyopaque{
+            @ptrCast(&d_a),
+            @ptrCast(&d_b),
+            @ptrCast(&d_out),
+            @ptrCast(&n_u32),
+        };
+        const grid: u32 = @intCast((n + block_size - 1) / block_size);
+        self.launch(self.fn_gelu_mul.?, grid, block_size, 0, &params);
     }
 
     /// In-place per-head rmsNorm.

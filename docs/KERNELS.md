@@ -29,7 +29,7 @@ This document tracks the implementation status of all compute kernels across bac
 | GEMV Transposed (Q8_0) | Native | Native | Missing | Native | Missing | Native |
 | RoPE | Native (SIMD) | Native | Native | Native | Native | Native |
 | Sigmoid Mul | Native | Native | Native | Native | Native | Native |
-| GELU Mul (fused) | Native | Native | Native | Native | Sequential⁴ | Native |
+| GELU Mul (fused) | Native | Native | Native | Native | Native | Native |
 | Deinterleave | Native | Native | Native | Native | Native | Native |
 | Embedding Lookup | Native | CPU perf¹ | Native (f32) | CPU perf¹ | CPU perf¹ | Native |
 | SDPA (FlashAttn-2) | Native (SIMD) | Native² | Native | Native | Native | Native |
