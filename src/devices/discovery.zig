@@ -282,10 +282,106 @@ fn enumerateRocm(list: *DeviceList) void {
 // ── Vulkan ───────────────────────────────────────────────────────────
 
 fn enumerateVulkan(list: *DeviceList) void {
-    // Vulkan enumeration requires instance creation which is heavyweight.
-    // Skip for now — Vulkan devices are detected at backend init time.
-    // TODO: lightweight vkEnumeratePhysicalDevices probe
-    _ = list;
+    const VkResult = c_int;
+    const VK_SUCCESS: VkResult = 0;
+    const VkInstance = ?*anyopaque;
+    const VkPhysicalDevice = ?*anyopaque;
+
+    const VkApplicationInfo = extern struct {
+        sType: u32 = 0, // VK_STRUCTURE_TYPE_APPLICATION_INFO
+        pNext: ?*const anyopaque = null,
+        pApplicationName: ?[*:0]const u8 = null,
+        applicationVersion: u32 = 0,
+        pEngineName: ?[*:0]const u8 = null,
+        engineVersion: u32 = 0,
+        apiVersion: u32 = 0,
+    };
+    const VkInstanceCreateInfo = extern struct {
+        sType: u32 = 1, // VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO
+        pNext: ?*const anyopaque = null,
+        flags: u32 = 0,
+        pApplicationInfo: ?*const VkApplicationInfo = null,
+        enabledLayerCount: u32 = 0,
+        ppEnabledLayerNames: ?*const ?[*:0]const u8 = null,
+        enabledExtensionCount: u32 = 0,
+        ppEnabledExtensionNames: ?*const ?[*:0]const u8 = null,
+    };
+    const VkPhysicalDeviceProperties = extern struct {
+        apiVersion: u32 = 0,
+        driverVersion: u32 = 0,
+        vendorID: u32 = 0,
+        deviceID: u32 = 0,
+        deviceType: u32 = 0,
+        deviceName: [256]u8 = .{0} ** 256,
+        pipelineCacheUUID: [16]u8 = .{0} ** 16,
+        limits: [504]u8 = .{0} ** 504,
+        sparseProperties: [20]u8 = .{0} ** 20,
+    };
+    const VkPhysicalDeviceMemoryProperties = extern struct {
+        memoryTypeCount: u32 = 0,
+        memoryTypes: [32 * 8]u8 = .{0} ** (32 * 8),
+        memoryHeapCount: u32 = 0,
+        memoryHeaps: [16 * 16]u8 = .{0} ** (16 * 16),
+    };
+
+    const FnCreateInstance = *const fn (*const VkInstanceCreateInfo, ?*const anyopaque, *VkInstance) callconv(.c) VkResult;
+    const FnDestroyInstance = *const fn (VkInstance, ?*const anyopaque) callconv(.c) void;
+    const FnEnumPhysDevices = *const fn (VkInstance, *u32, ?[*]VkPhysicalDevice) callconv(.c) VkResult;
+    const FnGetPhysDevProps = *const fn (VkPhysicalDevice, *VkPhysicalDeviceProperties) callconv(.c) void;
+    const FnGetPhysDevMemProps = *const fn (VkPhysicalDevice, *VkPhysicalDeviceMemoryProperties) callconv(.c) void;
+
+    const vk_lib_name = if (builtin.os.tag == .macos) "libvulkan.1.dylib" else "libvulkan.so.1";
+    var lib = std.DynLib.open(vk_lib_name) catch
+        std.DynLib.open("/usr/lib/x86_64-linux-gnu/libvulkan.so.1") catch
+        std.DynLib.open("/usr/lib/aarch64-linux-gnu/libvulkan.so.1") catch
+        return;
+    defer lib.close();
+
+    const vkCreateInstance = lib.lookup(FnCreateInstance, "vkCreateInstance") orelse return;
+    const vkDestroyInstance = lib.lookup(FnDestroyInstance, "vkDestroyInstance") orelse return;
+    const vkEnumeratePhysicalDevices = lib.lookup(FnEnumPhysDevices, "vkEnumeratePhysicalDevices") orelse return;
+    const vkGetPhysicalDeviceProperties = lib.lookup(FnGetPhysDevProps, "vkGetPhysicalDeviceProperties") orelse return;
+
+    const app_info = VkApplicationInfo{ .pApplicationName = "agave-probe", .apiVersion = (1 << 22) | (0 << 12) };
+    const ci = VkInstanceCreateInfo{ .pApplicationInfo = &app_info };
+    var instance: VkInstance = null;
+    if (vkCreateInstance(&ci, null, &instance) != VK_SUCCESS) return;
+    defer vkDestroyInstance(instance, null);
+
+    var count: u32 = 0;
+    if (vkEnumeratePhysicalDevices(instance, &count, null) != VK_SUCCESS) return;
+    if (count == 0) return;
+
+    var phys_devs: [max_devices]VkPhysicalDevice = .{null} ** max_devices;
+    var n: u32 = @intCast(@min(count, max_devices));
+    if (vkEnumeratePhysicalDevices(instance, &n, &phys_devs) != VK_SUCCESS) return;
+
+    const vkGetPhysicalDeviceMemoryProperties = lib.lookup(FnGetPhysDevMemProps, "vkGetPhysicalDeviceMemoryProperties");
+
+    for (0..n) |i| {
+        var props: VkPhysicalDeviceProperties = .{};
+        vkGetPhysicalDeviceProperties(phys_devs[i], &props);
+
+        var dev = DeviceInfo{ .backend = .vulkan, .device_id = @intCast(i) };
+        dev.name_len = std.mem.indexOfScalar(u8, &props.deviceName, 0) orelse props.deviceName.len;
+        @memcpy(dev.name[0..@min(dev.name_len, name_buf_size)], props.deviceName[0..@min(dev.name_len, name_buf_size)]);
+        if (dev.name_len > name_buf_size) dev.name_len = name_buf_size;
+
+        // Memory — sum device-local heaps
+        if (vkGetPhysicalDeviceMemoryProperties) |getMemProps| {
+            var mem_props: VkPhysicalDeviceMemoryProperties = .{};
+            getMemProps(phys_devs[i], &mem_props);
+            const heap_count = @min(mem_props.memoryHeapCount, 16);
+            for (0..heap_count) |hi| {
+                const heap_base = hi * 16;
+                const heap_size = std.mem.readInt(u64, mem_props.memoryHeaps[heap_base..][0..8], .little);
+                const heap_flags = std.mem.readInt(u32, mem_props.memoryHeaps[heap_base + 8 ..][0..4], .little);
+                if (heap_flags & 1 != 0) dev.total_mem += heap_size; // VK_MEMORY_HEAP_DEVICE_LOCAL_BIT
+            }
+        }
+
+        list.add(dev);
+    }
 }
 
 // ── Display ──────────────────────────────────────────────────────────
