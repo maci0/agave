@@ -141,15 +141,18 @@ Vision ViT (Vision Transformer) kernels run on CPU for patch embedding, position
 
 ## Priority Roadmap
 
-### Missing Kernels (will @panic if model needs them)
+### Remaining Gaps
 
-**CUDA** — remaining gaps:
-- DeltaNet native GPU kernels (currently delegates to CPU)
-- Causal Conv1d
+**All backends**: Every quantized GEMV format (q2_k through q8_0, q4_0/q4_1/q5_0, q4_k/q5_k/q6_k, iq4_nl/iq4_xs, f16/bf16/fp8, nvfp4_st/mxfp4, mlx_q, gptq) is native on all 6 backends.
 
-**Vulkan** — complete for all quant formats
+**CUDA** — functional gaps (CPU fallback):
+- DeltaNet native GPU kernels (sequential recurrence delegates to CPU)
+- Causal Conv1d (delegates to CPU)
 
-**ROCm** — complete for all quant formats
+**Metal** — format gap:
+- GEMV: nvfp4 (GGUF) — GPU backends use SafeTensors NVFP4 (`nvfp4_st`) path instead
 
-**Metal** — near-complete:
-- GEMV: nvfp4 (GGUF)
+**Megakernel ports** (optimization, not correctness):
+- ROCm: gemma_q4k, gemma_q8, qwen35_q4k, nemotron_h_q8 (requires Metal→AMDGCN porting)
+- CUDA: qwen35_q4k, nemotron_h_q8 (requires Metal→PTX porting)
+- Each megakernel is 200-500 lines of inline GPU assembly — not a simple format translation
