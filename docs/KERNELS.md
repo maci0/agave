@@ -37,7 +37,7 @@ This document tracks the implementation status of all compute kernels across bac
 | SDPA Tree (DDTree verify) | Native (SIMD) | Native (f32 + turbo) | Native (f32) | Native (f32) | Native (f32) | Native (f32) |
 | Paged SDPA | Native | Native | Native | Native | Native | Native |
 | Causal Conv1d | Native | Native (DeltaNet) | Native³ | In DeltaNet | In DeltaNet | Native |
-| DeltaNet (4 kernels) | Native | Native | Missing | CPU delegate⁶ | CPU delegate⁶ | Native |
+| DeltaNet (4 kernels) | Native | Native | Missing | CPU delegate⁶ | Hybrid (GPU norm+recur)⁹ | Native |
 | Argmax / Final Logits | Native | CPU perf | CPU perf | CPU perf | CPU perf | CPU perf |
 | **Batched Prefill Ops** | | | | | | |
 | GEMM (batched matmul) | Native (SIMD) | Native (f32/Q8_0/Q4_0/BF16) | Loop-of-GEMV | Native (Q8_0) | Loop-of-GEMV | Loop-of-GEMV |
@@ -56,6 +56,7 @@ This document tracks the implementation status of all compute kernels across bac
 ⁶ CPU delegate: functional but delegates to CPU backend (no native GPU kernel yet).
 ⁷ `sdpaWithStats` wraps the native GPU SDPA kernel and fills dummy stats (max=0, sum=1). Used by tiered KV cache split-attention (`--kv-tiers vram+ram`) for online softmax merge across tiers. No CPU delegate — runs entirely on GPU.
 ⁸ CUDA Q5_K/Q6_K fused FFN blocked by Zig LLVM nvptx64 aliasee bug (cross-file kernel imports create forbidden GlobalAlias).
+⁹ ROCm DeltaNet: conv1d on CPU, L2 norm + recurrence kernel on GPU. Gate/beta computed on CPU. Not fully native but recurrence (the expensive part) runs on GPU.
 
 ## True Megakernels (Tier 2)
 
@@ -157,7 +158,6 @@ Vision ViT (Vision Transformer) kernels run on CPU for patch embedding, position
 - GEMV: bf16, f16, fp8 formats
 
 **ROCm** — medium priority:
-- DeltaNet recurrence
 - GEMV: iq4_nl, iq4_xs
 
 **Metal** — near-complete:
