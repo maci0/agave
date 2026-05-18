@@ -152,6 +152,53 @@ token vs O(n²) for attention-based importance scoring.
 
 See [KERNELS.md](KERNELS.md) for the full, current per-backend matrix. Remaining key gaps:
 - **All GPU**: NVFP4 (GGUF) — GPU backends use SafeTensors NVFP4 path instead
-- **All GPU**: Paged SDPA (block table indirection) — CPU fallback
 - **CUDA, ROCm**: DeltaNet recurrence (delegates to CPU)
-- **WebGPU**: ~37 specialized ops (Phase 1 core 12 ops complete)
+- **WebGPU**: bf16/f16/fp8 GEMV formats
+
+## Pre-Sharded Weight Files
+
+> Inspired by [Mesh-LLM](https://github.com/Mesh-LLM/mesh-llm)'s zero-transfer weight loading.
+
+Current TP setup: each rank mmap's the full model file and shards at init via
+`shardColumnWeight`/`shardRowWeight`. Peak memory = full model size during init.
+
+Pre-sharded files (`model-tp0.gguf`, `model-tp1.gguf`) would let each rank load
+only its shard. Benefits:
+- Zero init-time sharding overhead
+- Peak memory = shard size (not full model)
+- Faster startup for large models over slow storage
+
+Implementation: offline `agave shard` subcommand that reads GGUF, splits weight
+tensors by TP degree respecting block alignment, writes per-rank GGUF files.
+Model code auto-detects sharded format via GGUF metadata (`tp_rank`, `tp_degree`).
+
+## QUIC Transport
+
+> Inspired by Mesh-LLM's QUIC-based inter-node RPC.
+
+QUIC (RFC 9000) over UDP with built-in encryption, 0-RTT connection setup, and
+multiplexed streams. Benefits over TCP for distributed inference:
+- Lower connection setup latency (1 RTT vs 3 RTT)
+- Built-in TLS 1.3 (secure by default)
+- Stream multiplexing (activation transfer + control messages on one connection)
+- Better performance over lossy/high-latency links (WAN inference)
+
+Low priority since NCCL handles high-perf LAN case. Useful for cross-datacenter
+or edge-to-cloud inference. `--transport quic` placeholder already in
+`TransportChoice` (currently mapped to `udp`).
+
+## Inter-Model Collaboration (Mixture of Models)
+
+> Inspired by Mesh-LLM's inter-model routing during inference.
+
+Models consult each other during generation:
+- **Vision fallback**: text model receives image → routes to vision peer for
+  captioning → injects caption into context
+- **Uncertainty routing**: model with low-confidence output → second model
+  provides alternative → best response selected
+- **Loop recovery**: repetition detected → different model generates continuation
+
+Architecture: HTTP server already supports multiple models via scheduler. Add
+model-to-model routing rules (e.g., "if image input and no vision encoder,
+forward to model X"). Orthogonal to kernel-level perf — purely server/scheduler
+layer.

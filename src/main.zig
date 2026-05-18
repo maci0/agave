@@ -921,6 +921,10 @@ fn setupTransport(allocator: std.mem.Allocator, peers_str: []const u8, rank: u32
         std.log.info("connected to rank 0", .{});
     }
 
+    // Measure peer RTT via TCP ping-pong (4-byte round-trip)
+    const rtt_us = measurePeerRtt(t, rank);
+    if (rtt_us > 0) std.log.info("peer RTT: {d} µs", .{rtt_us});
+
     // NCCL: init communicator over the established TCP link
     if (want_nccl) {
         t.setupNccl() catch |err| {
@@ -930,6 +934,32 @@ fn setupTransport(allocator: std.mem.Allocator, peers_str: []const u8, rank: u32
         };
     }
     return t;
+}
+
+/// Measure round-trip time to peer via TCP ping-pong. Returns µs, or 0 on failure.
+fn measurePeerRtt(t: *TransportMod.Transport, rank: u32) u64 {
+    if (t.tcp_connected == 0) return 0;
+    const fd = t.tcp_fds[0];
+    var ping: [4]u8 = .{ 'P', 'I', 'N', 'G' };
+    var pong: [4]u8 = undefined;
+    var ts_start: std.posix.system.timespec = undefined;
+    var ts_end: std.posix.system.timespec = undefined;
+    if (rank == 0) {
+        _ = std.posix.system.clock_gettime(.REALTIME, &ts_start);
+        _ = std.c.send(fd, &ping, 4, 0);
+        _ = std.c.recv(fd, &pong, 4, 0);
+        _ = std.posix.system.clock_gettime(.REALTIME, &ts_end);
+    } else {
+        _ = std.c.recv(fd, &pong, 4, 0);
+        _ = std.c.send(fd, &ping, 4, 0);
+        _ = std.posix.system.clock_gettime(.REALTIME, &ts_start);
+        _ = std.c.send(fd, &ping, 4, 0);
+        _ = std.c.recv(fd, &pong, 4, 0);
+        _ = std.posix.system.clock_gettime(.REALTIME, &ts_end);
+    }
+    const start_us: u64 = @intCast(ts_start.sec * 1_000_000 + @divTrunc(ts_start.nsec, 1000));
+    const end_us: u64 = @intCast(ts_end.sec * 1_000_000 + @divTrunc(ts_end.nsec, 1000));
+    return end_us -| start_us;
 }
 
 fn parseF32(s: ?[]const u8, comptime flag: []const u8) ?f32 {
