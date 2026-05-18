@@ -1,0 +1,83 @@
+#version 450
+#extension GL_KHR_shader_subgroup_arithmetic : require
+
+layout(local_size_x = 256) in;
+
+layout(set = 0, binding = 0) readonly buffer X { float x[]; };
+layout(set = 0, binding = 1) readonly buffer W { uint w_raw[]; };
+layout(set = 0, binding = 2) writeonly buffer Y { float y[]; };
+layout(push_constant) uniform Params { uint n; uint k; };
+
+shared float shared_sums[8];
+
+// Q5_0 block: 22 bytes = f16 d (2B) + u32 qh (4B) + 16 nibble bytes (32 elems)
+// Dequant: value = ((lo_nibble | (qh_bit << 4)) - 16) * d
+
+void main() {
+    uint row = gl_WorkGroupID.x;
+    uint tid = gl_LocalInvocationID.x;
+    uint tg_size = gl_WorkGroupSize.x;
+    if (row >= n) return;
+
+    uint nb = (k + 31) / 32;
+    float sum = 0.0;
+
+    for (uint b = tid; b < nb; b += tg_size) {
+        uint block_byte_off = row * nb * 22 + b * 22;
+
+        // Read f16 scale (2 bytes)
+        uint scale_word = w_raw[block_byte_off / 4];
+        uint scale_shift = (block_byte_off % 4) * 8;
+        uint scale_bits = (scale_word >> scale_shift) & 0xFFFF;
+        if (scale_shift > 16) {
+            scale_bits = (scale_word >> scale_shift) | (w_raw[block_byte_off / 4 + 1] << (32 - scale_shift));
+            scale_bits &= 0xFFFF;
+        }
+        float d = unpackHalf2x16(scale_bits).x;
+
+        // Read qh (4 bytes at offset 2)
+        uint qh_byte_off = block_byte_off + 2;
+        uint qh_word = w_raw[qh_byte_off / 4];
+        uint qh_shift = (qh_byte_off % 4) * 8;
+        uint qh;
+        if (qh_shift == 0) {
+            qh = qh_word;
+        } else {
+            qh = (qh_word >> qh_shift) | (w_raw[qh_byte_off / 4 + 1] << (32 - qh_shift));
+        }
+
+        float block_sum = 0.0;
+        uint bk = b * 32;
+
+        for (uint j = 0; j < 16; j++) {
+            uint qbyte_off = block_byte_off + 6 + j;
+            uint qword = w_raw[qbyte_off / 4];
+            uint qshift = (qbyte_off % 4) * 8;
+            uint byte_val = (qword >> qshift) & 0xFF;
+
+            uint lo_nibble = byte_val & 0xF;
+            uint hi_nibble = byte_val >> 4;
+            uint qh_lo = (qh >> j) & 1;
+            uint qh_hi = (qh >> (j + 16)) & 1;
+
+            float val_lo = float(int((lo_nibble | (qh_lo << 4))) - 16) * d;
+            float val_hi = float(int((hi_nibble | (qh_hi << 4))) - 16) * d;
+
+            if (bk + j < k) block_sum += val_lo * x[bk + j];
+            if (bk + j + 16 < k) block_sum += val_hi * x[bk + j + 16];
+        }
+        sum += block_sum;
+    }
+
+    sum = subgroupAdd(sum);
+    uint sg_id = gl_SubgroupID;
+    uint sg_lane = gl_SubgroupInvocationID;
+    if (sg_lane == 0) shared_sums[sg_id] = sum;
+    barrier();
+    uint num_sg = (tg_size + gl_SubgroupSize - 1) / gl_SubgroupSize;
+    if (tid < num_sg) sum = shared_sums[tid]; else sum = 0.0;
+    if (tid < gl_SubgroupSize) {
+        sum = subgroupAdd(sum);
+        if (tid == 0) y[row] = sum;
+    }
+}

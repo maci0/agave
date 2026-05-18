@@ -523,6 +523,8 @@ const spv_rope = @embedFile("kernels/vulkan/rope.spv");
 const spv_gemv_f32 = @embedFile("kernels/vulkan/gemv_f32.spv");
 const spv_gemv_q8_0 = @embedFile("kernels/vulkan/gemv_q8_0.spv");
 const spv_gemv_q4_0 = @embedFile("kernels/vulkan/gemv_q4_0.spv");
+const spv_gemv_q4_1 = @embedFile("kernels/vulkan/gemv_q4_1.spv");
+const spv_gemv_q5_0 = @embedFile("kernels/vulkan/gemv_q5_0.spv");
 const spv_gemv_bf16 = @embedFile("kernels/vulkan/gemv_bf16.spv");
 const spv_gemv_f16 = @embedFile("kernels/vulkan/gemv_f16.spv");
 const spv_gemv_q4_k = @embedFile("kernels/vulkan/gemv_q4_k.spv");
@@ -619,6 +621,8 @@ pub const VulkanBackend = struct {
     pipe_gemv_f32: PipelineInfo = .{},
     pipe_gemv_q8_0: PipelineInfo = .{},
     pipe_gemv_q4_0: PipelineInfo = .{},
+    pipe_gemv_q4_1: PipelineInfo = .{},
+    pipe_gemv_q5_0: PipelineInfo = .{},
     pipe_gemv_bf16: PipelineInfo = .{},
     pipe_gemv_f16: PipelineInfo = .{},
     pipe_gemv_q4_k: PipelineInfo = .{},
@@ -1091,6 +1095,8 @@ pub const VulkanBackend = struct {
         self.pipe_gemv_f32 = try self.createPipeline(spv_gemv_f32, 3, 8);
         self.pipe_gemv_q8_0 = try self.createPipeline(spv_gemv_q8_0, 3, 8);
         self.pipe_gemv_q4_0 = try self.createPipeline(spv_gemv_q4_0, 3, 8);
+        self.pipe_gemv_q4_1 = try self.createPipeline(spv_gemv_q4_1, 3, 8);
+        self.pipe_gemv_q5_0 = try self.createPipeline(spv_gemv_q5_0, 3, 8);
         self.pipe_gemv_bf16 = try self.createPipeline(spv_gemv_bf16, 3, 8);
         self.pipe_gemv_f16 = try self.createPipeline(spv_gemv_f16, 3, 8);
         self.pipe_gemv_q4_k = try self.createPipeline(spv_gemv_q4_k, 3, 8);
@@ -1264,7 +1270,8 @@ pub const VulkanBackend = struct {
                   &self.pipe_rope,
             // GEMV
             &self.pipe_gemv_f32,      &self.pipe_gemv_q8_0,
-            &self.pipe_gemv_q4_0,     &self.pipe_gemv_bf16,
+            &self.pipe_gemv_q4_0,     &self.pipe_gemv_q4_1,
+            &self.pipe_gemv_q5_0,     &self.pipe_gemv_bf16,
             &self.pipe_gemv_f16,      &self.pipe_gemv_q4_k,
             &self.pipe_gemv_q5_k,     &self.pipe_gemv_q6_k,
             &self.pipe_gemv_fp8_e4m3, &self.pipe_gemv_fp8_e5m2,
@@ -1575,6 +1582,8 @@ pub const VulkanBackend = struct {
             .f32 => self.pipe_gemv_f32,
             .q8_0 => self.pipe_gemv_q8_0,
             .q4_0 => self.pipe_gemv_q4_0,
+            .q4_1 => self.pipe_gemv_q4_1,
+            .q5_0 => self.pipe_gemv_q5_0,
             .bf16 => self.pipe_gemv_bf16,
             .f16 => self.pipe_gemv_f16,
             .q4_k => self.pipe_gemv_q4_k,

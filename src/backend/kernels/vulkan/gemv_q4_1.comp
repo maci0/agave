@@ -1,0 +1,74 @@
+#version 450
+#extension GL_KHR_shader_subgroup_arithmetic : require
+
+layout(local_size_x = 256) in;
+
+layout(set = 0, binding = 0) readonly buffer X { float x[]; };
+layout(set = 0, binding = 1) readonly buffer W { uint w_raw[]; };
+layout(set = 0, binding = 2) writeonly buffer Y { float y[]; };
+layout(push_constant) uniform Params { uint n; uint k; };
+
+shared float shared_sums[8];
+
+// Q4_1 block: 20 bytes = f16 d (2B) + f16 m (2B) + 16 nibble bytes (32 elems)
+// Dequant: value = nibble * d + m
+
+void main() {
+    uint row = gl_WorkGroupID.x;
+    uint tid = gl_LocalInvocationID.x;
+    uint tg_size = gl_WorkGroupSize.x;
+    if (row >= n) return;
+
+    uint nb = k / 32;
+    float sum = 0.0;
+
+    for (uint b = tid; b < nb; b += tg_size) {
+        uint block_byte_off = row * nb * 20 + b * 20;
+        uint hdr_word_off = block_byte_off / 4;
+        uint hdr_byte_in = block_byte_off % 4;
+
+        // Read header: d (f16) + m (f16) = 4 bytes
+        uint raw0 = w_raw[hdr_word_off];
+        uint raw1 = w_raw[hdr_word_off + 1];
+        uint hdr_bits;
+        if (hdr_byte_in == 0) {
+            hdr_bits = raw0;
+        } else {
+            hdr_bits = (raw0 >> (hdr_byte_in * 8)) | (raw1 << ((4 - hdr_byte_in) * 8));
+        }
+        float d = unpackHalf2x16(hdr_bits & 0xFFFF).x;
+        float m = unpackHalf2x16(hdr_bits >> 16).x;
+
+        float qx_sum = 0.0;
+        float x_sum = 0.0;
+        uint bk = b * 32;
+
+        for (uint j = 0; j < 16; j++) {
+            uint qbyte_off = block_byte_off + 4 + j;
+            uint qword = w_raw[qbyte_off / 4];
+            uint qshift = (qbyte_off % 4) * 8;
+            uint byte_val = (qword >> qshift) & 0xFF;
+
+            uint col_lo = bk + j;
+            uint col_hi = bk + j + 16;
+            float lo = float(byte_val & 0xF);
+            float hi = float(byte_val >> 4);
+
+            if (col_lo < k) { qx_sum += lo * x[col_lo]; x_sum += x[col_lo]; }
+            if (col_hi < k) { qx_sum += hi * x[col_hi]; x_sum += x[col_hi]; }
+        }
+        sum += qx_sum * d + x_sum * m;
+    }
+
+    sum = subgroupAdd(sum);
+    uint sg_id = gl_SubgroupID;
+    uint sg_lane = gl_SubgroupInvocationID;
+    if (sg_lane == 0) shared_sums[sg_id] = sum;
+    barrier();
+    uint num_sg = (tg_size + gl_SubgroupSize - 1) / gl_SubgroupSize;
+    if (tid < num_sg) sum = shared_sums[tid]; else sum = 0.0;
+    if (tid < gl_SubgroupSize) {
+        sum = subgroupAdd(sum);
+        if (tid == 0) y[row] = sum;
+    }
+}
