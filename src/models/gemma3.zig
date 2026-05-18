@@ -729,9 +729,11 @@ pub const Gemma3Model = struct {
         const qw = self.fmt.layerTensor(li, "attn_q.weight") orelse return error.MissingTensor;
         const kw = self.fmt.layerTensor(li, "attn_k.weight") orelse return error.MissingTensor;
         const vw = self.fmt.layerTensor(li, "attn_v.weight") orelse return error.MissingTensor;
+        self.be.beginBatch();
         self.doGemv(self.hidden2.ptr, qw, self.q_buf.ptr, nh * hd, e);
         self.doGemv(self.hidden2.ptr, kw, self.k_buf.ptr, nkv * hd, e);
         self.doGemv(self.hidden2.ptr, vw, self.v_buf.ptr, nkv * hd, e);
+        self.be.endBatch();
         self.perf.end(.gemv_qkv, t);
 
         // Per-head QK norms (single dispatch per Q/K, not per-head)

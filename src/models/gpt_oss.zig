@@ -501,13 +501,15 @@ pub const GptOssModel = struct {
         // 1. Pre-attention RMS norm: hidden2 = norm(hidden, attn_norm)
         const nw = self.fmt.layerTensor(li, "attn_norm.weight") orelse return error.MissingTensor;
         self.be.rmsNorm(self.hidden.ptr, self.normAsF32(nw, e), self.hidden2.ptr, e, self.rms_eps);
-        // 2. QKV projections.
+        // 2. QKV projections — independent outputs, batch without barriers.
         const qw = self.fmt.layerTensor(li, "attn_q.weight") orelse return error.MissingTensor;
         const kw = self.fmt.layerTensor(li, "attn_k.weight") orelse return error.MissingTensor;
         const vw = self.fmt.layerTensor(li, "attn_v.weight") orelse return error.MissingTensor;
+        self.be.beginBatch();
         self.doGemv(self.hidden2.ptr, qw, self.q_buf.ptr, qd, e);
         self.doGemv(self.hidden2.ptr, kw, self.k_buf.ptr, kvd, e);
         self.doGemv(self.hidden2.ptr, vw, self.v_buf.ptr, kvd, e);
+        self.be.endBatch();
 
         // 3. Add projection biases.
         const qb = self.fmt.layerTensor(li, "attn_q.bias") orelse return error.MissingTensor;

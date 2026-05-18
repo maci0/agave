@@ -1582,21 +1582,20 @@ pub const Gemma4Model = struct {
         self.be.rmsNorm(self.hidden.ptr, self.normAsF32(norm_w, e), self.hidden2.ptr, e, self.rms_eps);
         self.perf.end(.rms_norm, t);
 
-        // 2. Q projection (always computed)
+        // 2. Q projection (always computed) + 3. K/V projections (for KV-owning layers)
         t = self.perf.start();
         const qw = self.fmt.layerTensor(li, "attn_q.weight") orelse return error.MissingTensor;
-        self.doGemv(self.hidden2.ptr, qw, self.q_buf.ptr, qkv_dim, e);
-        self.perf.end(.gemv_qkv, t);
-
-        // 3. K/V projections — only for layers that own their KV cache.
         if (has_own_kv) {
-            t = self.perf.start();
             const kw = self.fmt.layerTensor(li, "attn_k.weight") orelse return error.MissingTensor;
             const vw = self.fmt.layerTensor(li, "attn_v.weight");
+            self.be.beginBatch();
+            self.doGemv(self.hidden2.ptr, qw, self.q_buf.ptr, qkv_dim, e);
             self.doGemv(self.hidden2.ptr, kw, self.k_buf.ptr, kv_dim, e);
             if (vw) |vw_t| {
                 self.doGemv(self.hidden2.ptr, vw_t, self.v_buf.ptr, kv_dim, e);
+                self.be.endBatch();
             } else {
+                self.be.endBatch();
                 self.be.sync();
                 @memcpy(self.v_buf[0..kv_dim], self.k_buf[0..kv_dim]);
             }

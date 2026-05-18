@@ -717,9 +717,11 @@ pub const NemotronNanoModel = struct {
         const qw = self.stLayerTensor(li, "mixer.q_proj.weight") orelse return error.MissingTensor;
         const kw = self.stLayerTensor(li, "mixer.k_proj.weight") orelse return error.MissingTensor;
         const vw = self.stLayerTensor(li, "mixer.v_proj.weight") orelse return error.MissingTensor;
+        self.be.beginBatch();
         try self.doGemv(self.hidden2.ptr, qw, self.q_buf.ptr, nh * hd, e, li, "mixer.q_proj");
         try self.doGemv(self.hidden2.ptr, kw, self.k_buf.ptr, nkv * hd, e, li, "mixer.k_proj");
         try self.doGemv(self.hidden2.ptr, vw, self.v_buf.ptr, nkv * hd, e, li, "mixer.v_proj");
+        self.be.endBatch();
 
         // 3. RoPE — Q and K write to independent buffers, batch without barriers
         self.be.beginBatch();
