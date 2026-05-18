@@ -970,8 +970,13 @@ fn printUsage() void {
         \\      --top-p <P>           Nucleus sampling threshold [default: 1.0]
         \\      --top-k <K>           Top-k sampling, 0 = disabled [default: 0]
         \\      --repeat-penalty <R>  Repetition penalty [default: 1.0]
+        \\      --min-p <P>           Min-p sampling: keep tokens with prob >= P * max_prob [default: 0]
         \\      --seed <N>            Random seed for sampling [default: random]
         \\      --system <TEXT>       System prompt for chat formatting
+        \\      --grammar <FILE>      GBNF grammar file for constrained decoding
+        \\      --grammar-string <G>  Inline GBNF grammar string
+        \\      --json-output         Force JSON output (auto-generates grammar)
+        \\      --json-schema <JSON>  JSON schema for structured output
         \\
         \\BACKEND & MODEL:
         \\      --backend <BE>        Compute backend: auto, cpu, metal, vulkan, cuda, rocm, webgpu [default: auto]
@@ -1009,6 +1014,16 @@ fn printUsage() void {
         \\      --transport <TYPE>     IPC transport: auto, tcp, shm, nccl, rdma, udp, grpc [default: auto]
         \\      --disagg               Disaggregated prefill/decode (rank 0 prefills, rank 1 decodes)
         \\
+        \\SPECULATIVE DECODING:
+        \\      --draft-model <PATH>   Draft model GGUF for speculative decoding
+        \\      --spec-mode <MODE>     Speculative mode: standard, ddtree, self [default: ddtree]
+        \\  -K, --spec-tokens <N>      Draft tokens per speculation round [default: 5]
+        \\      --tree-budget <N>      DDTree node budget [default: 64]
+        \\      --draft-layers <N>     Layers for self-speculative draft [default: auto]
+        \\
+        \\OPTIMIZATION:
+        \\      --megakernel           Enable fused FFN megakernels (3→1 dispatch per layer)
+        \\
         \\MULTIMODAL:
         \\      --mmproj <PATH>    Path to vision projector GGUF (mmproj file)
         \\      --image <PATH>     Path to image file (PNG or PPM P6)
@@ -1042,6 +1057,9 @@ fn printUsage() void {
         \\  agave model.gguf --json-output "Generate a user profile"  Force JSON output
         \\  agave model.gguf --grammar-string 'root ::= "yes" | "no"' "Is sky blue?"
         \\  agave model.gguf --json-schema '{"type":"object","properties":{"name":{"type":"string"}}}' "User info"
+        \\  agave target.gguf --draft-model draft.gguf "Hello"    Speculative decoding (DDTree)
+        \\  agave model.gguf --spec-mode self --draft-layers 9 "Hello"  Self-speculative
+        \\  agave model.gguf --megakernel "Hello"                 Fused FFN megakernel
         \\
         \\SUBCOMMANDS:
         \\  agave pull <org/repo>                    Download GGUF model from HuggingFace

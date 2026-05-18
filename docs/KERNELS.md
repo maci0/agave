@@ -38,7 +38,7 @@ This document tracks the implementation status of all compute kernels across bac
 | Paged SDPA | Native | Native | Native | Native | Native | Native |
 | Causal Conv1d | Native | Native (DeltaNet) | Native³ | In DeltaNet | In DeltaNet | Native |
 | DeltaNet (4 kernels) | Native | Native | Missing | CPU delegate⁶ | CPU delegate⁶ | Native |
-| Argmax / Final Logits | Native | CPU perf | CPU perf | CPU perf | CPU perf | Missing |
+| Argmax / Final Logits | Native | CPU perf | CPU perf | CPU perf | CPU perf | CPU perf |
 | **Batched Prefill Ops** | | | | | | |
 | GEMM (batched matmul) | Native (SIMD) | Native (f32/Q8_0/Q4_0/BF16) | Loop-of-GEMV | Native (Q8_0) | Loop-of-GEMV | Loop-of-GEMV |
 | RMS Norm Batched | Native | Native (fused) | Loop-of-single | Native | Loop-of-single | Loop-of-single |
@@ -155,7 +155,6 @@ Vision ViT (Vision Transformer) kernels run on CPU for patch embedding, position
 
 **WebGPU** — 33 ops, near-complete:
 - GEMV: bf16, f16, fp8 formats
-- Argmax (currently CPU)
 
 **ROCm** — medium priority:
 - DeltaNet recurrence
