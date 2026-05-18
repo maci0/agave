@@ -1,0 +1,75 @@
+#version 450
+#extension GL_KHR_shader_subgroup_arithmetic : require
+
+layout(local_size_x = 256) in;
+
+layout(set = 0, binding = 0) readonly buffer X { float x[]; };
+layout(set = 0, binding = 1) readonly buffer W { uint w_raw[]; };
+layout(set = 0, binding = 2) writeonly buffer Y { float y[]; };
+layout(push_constant) uniform Params { uint n; uint k; };
+
+shared float shared_sums[8];
+
+// Q2_K super-block: 84 bytes = 16B scales + 64B qs + 2B f16 d + 2B f16 dmin
+// 256 values per super-block, 16 groups of 16 elements
+// Dequant: val = d * sc * q - dmin * m
+
+uint readByte(uint byte_off) {
+    return (w_raw[byte_off / 4] >> ((byte_off % 4) * 8)) & 0xFF;
+}
+
+float readF16(uint byte_off) {
+    uint word = w_raw[byte_off / 4];
+    uint shift = (byte_off % 4) * 8;
+    uint bits = (word >> shift) & 0xFFFF;
+    if (shift > 16) {
+        bits = (word >> shift) | (w_raw[byte_off / 4 + 1] << (32 - shift));
+        bits &= 0xFFFF;
+    }
+    return unpackHalf2x16(bits).x;
+}
+
+void main() {
+    uint row = gl_WorkGroupID.x;
+    uint tid = gl_LocalInvocationID.x;
+    uint tg_size = gl_WorkGroupSize.x;
+    if (row >= n) return;
+
+    uint nb = (k + 255) / 256;
+    float sum = 0.0;
+
+    for (uint b = tid; b < nb; b += tg_size) {
+        uint bp = row * nb * 84 + b * 84;
+        float d = readF16(bp + 80);
+        float dmin = readF16(bp + 82);
+        uint bk = b * 256;
+
+        for (uint g = 0; g < 16; g++) {
+            uint sc_byte = readByte(bp + g);
+            float sc = float(sc_byte & 0xF);
+            float m = float(sc_byte >> 4);
+            float d_sc = d * sc;
+            float dm_m = dmin * m;
+            uint base = bk + g * 16;
+
+            for (uint l = 0; l < 16 && base + l < k; l++) {
+                uint qs_byte_idx = g * 4 + l / 4;
+                uint bit_shift = (l % 4) * 2;
+                uint q = (readByte(bp + 16 + qs_byte_idx) >> bit_shift) & 0x3;
+                sum += x[base + l] * (d_sc * float(q) - dm_m);
+            }
+        }
+    }
+
+    sum = subgroupAdd(sum);
+    uint sg_id = gl_SubgroupID;
+    uint sg_lane = gl_SubgroupInvocationID;
+    if (sg_lane == 0) shared_sums[sg_id] = sum;
+    barrier();
+    uint num_sg = (tg_size + gl_SubgroupSize - 1) / gl_SubgroupSize;
+    if (tid < num_sg) sum = shared_sums[tid]; else sum = 0.0;
+    if (tid < gl_SubgroupSize) {
+        sum = subgroupAdd(sum);
+        if (tid == 0) y[row] = sum;
+    }
+}

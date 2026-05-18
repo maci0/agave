@@ -109,8 +109,8 @@ The composer automatically selects the correct GEMV function (Q8_0/Q4_K/Q5_K/Q6_
 | q4_k | Native (SIMD) | Native | Native | Native | Native | Native |
 | q5_k | Native (SIMD) | Native | Native | Native | Native | Native |
 | q6_k | Native (SIMD) | Native | Native | Native | Native | Native |
-| q2_k | Native (SIMD) | Native | Missing | Native | Native | Missing |
-| q3_k | Native (SIMD) | Native | Missing | Native | Native | Missing |
+| q2_k | Native (SIMD) | Native | Native | Native | Native | Native |
+| q3_k | Native (SIMD) | Native | Native | Native | Native | Native |
 | iq4_nl | Native (SIMD) | Native | Missing | Missing | Missing | Missing |
 | iq4_xs | Native (SIMD) | Native | Missing | Missing | Missing | Missing |
 | fp8_e4m3 | Native | Native | Native | Native | Native | Native |
@@ -131,7 +131,7 @@ The composer automatically selects the correct GEMV function (Q8_0/Q4_K/Q5_K/Q6_
 | ROCm | `src/backend/kernels/rocm/` | `common.zig` (shared primitives), `silu.zig`, `silu_mul.zig`, `gelu.zig`, `gelu_mul.zig`, `add.zig`, `add_rms_norm.zig`, `mul.zig`, `rms_norm.zig`, `rms_norm_multi.zig`, `softmax.zig`, `l2_norm.zig`, `rope.zig`, `sigmoid_mul.zig`, `deinterleave.zig`, `split_qgate.zig`, `sdpa.zig`, `sdpa_paged.zig`, `sdpa_tree.zig`, `deltanet.zig`, `deltanet_recurrence.zig`, `gemv_{f32,bf16,f16,q8_0,q4_0,q4_1,q5_0,q4_k,q5_k,q6_k,q2_k,q3_k,fp8_e4m3,fp8_e5m2,mlx_q4,nvfp4_st,mxfp4_st,t_q8_0}.zig`, `gemv_gptq.zig`, `mega_qwen35_q8.zig` (true megakernel), `all.zig` (aggregator) — compiled to HSACO via `zig build amdgcn` |
 | WebGPU | `src/backend/kernels/webgpu/` | `silu.wgsl`, `silu_mul.wgsl`, `gelu.wgsl`, `gelu_mul.wgsl`, `add.wgsl`, `add_rms_norm.wgsl`, `add_scaled.wgsl`, `mul.wgsl`, `rms_norm.wgsl`, `rms_norm_multi.wgsl`, `softmax.wgsl`, `l2_norm.wgsl`, `rope.wgsl`, `sigmoid_mul.wgsl`, `deinterleave.wgsl`, `split_qgate.wgsl`, `embedding.wgsl`, `sdpa.wgsl`, `sdpa_paged.wgsl`, `sdpa_tree.wgsl`, `conv1d.wgsl`, `deltanet_recurrence.wgsl`, `gemv_f32.wgsl`, `gemv_bf16.wgsl`, `gemv_f16.wgsl`, `gemv_fp8_e4m3.wgsl`, `gemv_fp8_e5m2.wgsl`, `gemv_q4_1.wgsl`, `gemv_q5_0.wgsl`, `gemv_q8_0.wgsl`, `gemv_q4_0.wgsl`, `gemv_q4_k.wgsl`, `gemv_q5_k.wgsl`, `gemv_q6_k.wgsl`, `gemv_t_q8_0.wgsl`, `gemv_gptq.wgsl`, `gemv_mlx_q4.wgsl`, `gemv_nvfp4_st.wgsl`, `gemv_mxfp4_st.wgsl` |
 
-**Pipeline/kernel counts**: Metal 70+ pipelines (+ 1 runtime-composed), CUDA 51 kernels, ROCm 42 kernels, Vulkan 40 shaders, WebGPU 39 shaders. Total megakernel code: ~4,166 lines across 12 files plus ~780 lines in `mega_compose.zig` (composable generator).
+**Pipeline/kernel counts**: Metal 70+ pipelines (+ 1 runtime-composed), CUDA 54 kernels, ROCm 42 kernels, Vulkan 42 shaders, WebGPU 41 shaders. Total megakernel code: ~4,166 lines across 12 files plus ~780 lines in `mega_compose.zig` (composable generator).
 
 ## Vision Encoder
 
@@ -148,7 +148,7 @@ Vision ViT (Vision Transformer) kernels run on CPU for patch embedding, position
 - Causal Conv1d
 
 **Vulkan** — low priority:
-- GEMV: q2_k, q3_k, iq4_nl, iq4_xs
+- GEMV: iq4_nl, iq4_xs
 
 **ROCm** — medium priority:
 - GEMV: iq4_nl, iq4_xs
