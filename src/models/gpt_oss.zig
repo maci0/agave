@@ -703,8 +703,10 @@ pub const GptOssModel = struct {
             // Gate + Up projections. Use batched gemvMulti for non-MLX,
             // sequential doGemvExpert for MLX (needs companion tensors).
             if (gate_exps.dtype == .mlx_q and self.mlx_bits > 0) {
+                self.be.beginBatch();
                 self.doGemvExpert(self.hidden2.ptr, gate_exps, ei, gate_stride, self.expert_gate.ptr, ff, e);
                 self.doGemvExpert(self.hidden2.ptr, up_exps, ei, up_stride, self.expert_up.ptr, ff, e);
+                self.be.endBatch();
             } else {
                 const gate_data = gate_exps.data_ptr + ei * gate_stride;
                 const up_data = up_exps.data_ptr + ei * up_stride;

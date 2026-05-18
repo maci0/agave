@@ -898,8 +898,10 @@ pub const Gemma3Model = struct {
                 },
             }
         } else {
+            self.be.beginBatch();
             self.doGemv(self.hidden2.ptr, gw, self.ff_gate.ptr, ff, e);
             self.doGemv(self.hidden2.ptr, uw, self.ff_up.ptr, ff, e);
+            self.be.endBatch();
             self.perf.end(.gemv_ffn, t);
             t = self.perf.start();
             self.be.geluMul(self.ff_gate.ptr, self.ff_up.ptr, self.ff_gate.ptr, ff);
