@@ -111,7 +111,7 @@ The composer automatically selects the correct GEMV function (Q8_0/Q4_K/Q5_K/Q6_
 | q6_k | Native (SIMD) | Native | Native | Native | Native | Native |
 | q2_k | Native (SIMD) | Native | Native | Native | Native | Native |
 | q3_k | Native (SIMD) | Native | Native | Native | Native | Native |
-| iq4_nl | Native (SIMD) | Native | Missing | Missing | Missing | Missing |
+| iq4_nl | Native (SIMD) | Native | Native | Native | Native | Native |
 | iq4_xs | Native (SIMD) | Native | Missing | Missing | Missing | Missing |
 | fp8_e4m3 | Native | Native | Native | Native | Native | Native |
 | fp8_e5m2 | Native | Native | Native | Native | Native | Native |
@@ -148,10 +148,10 @@ Vision ViT (Vision Transformer) kernels run on CPU for patch embedding, position
 - Causal Conv1d
 
 **Vulkan** — low priority:
-- GEMV: iq4_nl, iq4_xs
+- GEMV: iq4_xs
 
-**ROCm** — medium priority:
-- GEMV: iq4_nl, iq4_xs
+**ROCm** — low priority:
+- GEMV: iq4_xs
 
 **Metal** — near-complete:
 - GEMV: nvfp4 (GGUF)

@@ -55,6 +55,7 @@ comptime {
     _ = @import("gemv_q5_0.zig");
     _ = @import("gemv_q2_k.zig");
     _ = @import("gemv_q3_k.zig");
+    _ = @import("gemv_iq4_nl.zig");
 
     _ = @import("deltanet_recurrence.zig");
     _ = @import("sdpa_tree.zig");
