@@ -218,6 +218,10 @@ pub const MetalBackend = struct {
     /// Set by the caller after init — Metal doesn't own the pool.
     pool: ?*ThreadPool = null,
 
+    /// Cached staging buffers for paged SDPA (avoid hot-path allocation).
+    sdpa_flat_keys: ?[]f32 = null,
+    sdpa_flat_vals: ?[]f32 = null,
+
     /// Dispatch/barrier/sync counters — active only when profiling is enabled.
     dispatch_count: u32 = 0,
     barrier_count: u32 = 0,
@@ -559,6 +563,8 @@ pub const MetalBackend = struct {
     /// Call this when the MetalBackend is no longer needed.
     pub fn deinit(self: *MetalBackend) void {
         release(self.scratch_buf);
+        if (self.sdpa_flat_keys) |buf| std.heap.page_allocator.free(buf);
+        if (self.sdpa_flat_vals) |buf| std.heap.page_allocator.free(buf);
         var it = self.buf_cache.valueIterator();
         while (it.next()) |info| release(info.metal_buf);
         self.buf_cache.deinit();
@@ -2229,15 +2235,18 @@ pub const MetalBackend = struct {
         const flat_elems = n_phys_blocks * block_stride;
         const flat_bytes = flat_elems * @sizeOf(f32);
 
-        // Use page_allocator for the flat staging buffers.
-        // This is NOT the token-generation hot path inner loop — it's called once
-        // per layer per token, same as KV append in non-paged sdpa.
-        const flat_keys = std.heap.page_allocator.alloc(f32, flat_elems) catch
-            @panic("Metal sdpaPaged: out of memory for flat key staging buffer");
-        defer std.heap.page_allocator.free(flat_keys);
-        const flat_vals = std.heap.page_allocator.alloc(f32, flat_elems) catch
-            @panic("Metal sdpaPaged: out of memory for flat value staging buffer");
-        defer std.heap.page_allocator.free(flat_vals);
+        if (self.sdpa_flat_keys == null or self.sdpa_flat_keys.?.len < flat_elems) {
+            if (self.sdpa_flat_keys) |old| std.heap.page_allocator.free(old);
+            self.sdpa_flat_keys = std.heap.page_allocator.alloc(f32, flat_elems) catch
+                @panic("Metal sdpaPaged: out of memory for flat key staging buffer");
+        }
+        if (self.sdpa_flat_vals == null or self.sdpa_flat_vals.?.len < flat_elems) {
+            if (self.sdpa_flat_vals) |old| std.heap.page_allocator.free(old);
+            self.sdpa_flat_vals = std.heap.page_allocator.alloc(f32, flat_elems) catch
+                @panic("Metal sdpaPaged: out of memory for flat value staging buffer");
+        }
+        const flat_keys = self.sdpa_flat_keys.?;
+        const flat_vals = self.sdpa_flat_vals.?;
 
         for (kv_view.block_table[0..n_logical_blocks]) |phys_id| {
             const dst_off = @as(usize, phys_id) * block_stride;

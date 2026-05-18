@@ -162,6 +162,10 @@ pub const RocmBackend = struct {
     /// CPU backend for ops where CPU is genuinely faster than GPU dispatch (embLookup).
     cpu: CpuBackend = .{},
 
+    /// Cached staging buffers for paged SDPA (avoid hot-path allocation).
+    sdpa_flat_keys: ?[]f32 = null,
+    sdpa_flat_vals: ?[]f32 = null,
+
     /// Device name retrieved during initialization.
     device_name: [device_name_buf_size]u8 = undefined,
     device_name_len: usize = 0,
@@ -342,6 +346,8 @@ pub const RocmBackend = struct {
         while (wt_it.next()) |cached| _ = self.hipFree(@ptrFromInt(cached.dptr));
         self.buf_cache.deinit();
 
+        if (self.sdpa_flat_keys) |buf| std.heap.page_allocator.free(buf);
+        if (self.sdpa_flat_vals) |buf| std.heap.page_allocator.free(buf);
         if (self.module != null) _ = self.hipModuleUnload(self.module);
         _ = self.hipDeviceSynchronize();
         self.lib.close();
@@ -1272,12 +1278,18 @@ pub const RocmBackend = struct {
         const flat_elems = n_phys_blocks * block_stride;
         const flat_bytes = flat_elems * @sizeOf(f32);
 
-        const flat_keys = std.heap.page_allocator.alloc(f32, flat_elems) catch
-            @panic("ROCm sdpaPaged: OOM for key staging");
-        defer std.heap.page_allocator.free(flat_keys);
-        const flat_vals = std.heap.page_allocator.alloc(f32, flat_elems) catch
-            @panic("ROCm sdpaPaged: OOM for value staging");
-        defer std.heap.page_allocator.free(flat_vals);
+        if (self.sdpa_flat_keys == null or self.sdpa_flat_keys.?.len < flat_elems) {
+            if (self.sdpa_flat_keys) |old| std.heap.page_allocator.free(old);
+            self.sdpa_flat_keys = std.heap.page_allocator.alloc(f32, flat_elems) catch
+                @panic("ROCm sdpaPaged: OOM for key staging");
+        }
+        if (self.sdpa_flat_vals == null or self.sdpa_flat_vals.?.len < flat_elems) {
+            if (self.sdpa_flat_vals) |old| std.heap.page_allocator.free(old);
+            self.sdpa_flat_vals = std.heap.page_allocator.alloc(f32, flat_elems) catch
+                @panic("ROCm sdpaPaged: OOM for value staging");
+        }
+        const flat_keys = self.sdpa_flat_keys.?;
+        const flat_vals = self.sdpa_flat_vals.?;
 
         for (kv_view.block_table[0..n_logical_blocks]) |phys_id| {
             const dst_off = @as(usize, phys_id) * block_stride;
