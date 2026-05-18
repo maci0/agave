@@ -321,6 +321,20 @@ agave [OPTIONS] <model> [prompt]
       --kv-eviction <MODE> KV cache eviction policy: none, norm, tri [default: none]
       --kv-budget <N>      Max KV entries to retain after eviction [default: 80% of ctx-size]
       --mmap               Use lazy mmap instead of preloading weights into RAM
+      --megakernel         Enable fused FFN megakernels (3→1 dispatch per layer)
+      --draft-model <PATH> Draft model GGUF for speculative decoding
+      --spec-mode <MODE>   Speculative mode: standard, ddtree, self [default: ddtree]
+  -K, --spec-tokens <N>    Draft tokens per speculation round [default: 5]
+      --tree-budget <N>    DDTree node budget [default: 64]
+      --draft-layers <N>   Layers for self-speculative draft [default: auto]
+      --list-devices       List available compute devices and exit
+      --device <N>         GPU device index for CUDA/ROCm/Vulkan [default: 0]
+      --tp <N>             Tensor parallelism degree [default: 1]
+      --pp <N>             Pipeline parallelism stages [default: 1]
+      --peers <ADDR>       Peer address for distributed inference
+      --rank <N>           This node's rank [default: 0]
+      --transport <TYPE>   IPC transport: auto, tcp, shm, nccl [default: auto]
+      --disagg             Disaggregated prefill/decode
 ```
 
 ## Build Options
