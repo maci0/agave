@@ -38,8 +38,8 @@ curl http://localhost:8080/v1/chat/completions -d '{
 | repetition_penalty | float | 1.0 | Multiplicative penalty for repeated tokens (>1 = penalize) |
 | seed | int | random | PRNG seed for reproducible output |
 | stop | string/array | null | Stop sequence(s): `"stop": "\n"` or `"stop": ["\n", "END"]` |
-| logprobs | bool | false | Return log probabilities for output tokens (parsed, response integration pending) |
-| top_logprobs | int | null | Number of top token log probabilities to return per position, 0-20 (parsed, response integration pending) |
+| logprobs | bool | false | Return log probabilities for output tokens |
+| top_logprobs | int | null | Number of top token log probabilities to return per position, 0-20 |
 | stream | bool | false | Server-Sent Events streaming |
 | grammar | string | null | GBNF grammar for constrained decoding |
 | json_schema | string | null | JSON schema for structured output |

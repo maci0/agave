@@ -3435,20 +3435,86 @@ fn startStreamRaw(stream: TcpStream, prompt: []const u8, max_tokens: usize, samp
     generateStream(stream, prompt, nextRequestId(), timestamp(), false, false, max_tokens, sampling);
 }
 
+const max_top_logprobs: u32 = 20;
+
+/// Per-token logprob info for OpenAI API response.
+const LogprobInfo = struct {
+    token_logprob: f32 = 0,
+    top_ids: [max_top_logprobs]u32 = undefined,
+    top_logprobs: [max_top_logprobs]f32 = undefined,
+    count: u32 = 0,
+};
+
+/// Compute logprobs for a token from logits. Returns null if not requested.
+fn computeLogprobs(logits: []const f32, token_id: u32, n_top: u32) ?LogprobInfo {
+    if (n_top == 0) return null;
+    var info: LogprobInfo = .{};
+    info.count = math_ops.topLogProbs(logits, n_top, &info.top_ids, &info.top_logprobs);
+    // Find the selected token's logprob
+    var max_val: f32 = -std.math.inf(f32);
+    for (logits) |v| max_val = @max(max_val, v);
+    var log_sum: f32 = 0;
+    for (logits) |v| log_sum += @exp(v - max_val);
+    info.token_logprob = (logits[token_id] - max_val) - @log(log_sum);
+    return info;
+}
+
+/// Format logprobs JSON into buffer. Returns slice or empty on overflow.
+fn formatLogprobs(buf: []u8, tok: *Tokenizer, token_text: []const u8, info: LogprobInfo) []const u8 {
+    var pos: usize = 0;
+    const header = std.fmt.bufPrint(buf, "\"logprobs\":{{\"content\":[{{\"token\":\"{s}\",\"logprob\":{d:.6},\"top_logprobs\":[", .{ token_text, info.token_logprob }) catch return "";
+    pos = header.len;
+    for (0..info.count) |i| {
+        const dt = decodeAndEscape(tok, info.top_ids[i]) orelse continue;
+        defer dt.deinit();
+        const prefix: []const u8 = if (i > 0) "," else "";
+        const entry = std.fmt.bufPrint(buf[pos..], "{s}{{\"token\":\"{s}\",\"logprob\":{d:.6}}}", .{ prefix, dt.escaped, info.top_logprobs[i] }) catch return "";
+        pos += entry.len;
+    }
+    const tail = "]}]}";
+    if (pos + tail.len > buf.len) return "";
+    @memcpy(buf[pos..][0..tail.len], tail);
+    pos += tail.len;
+    pos += tail.len;
+    return buf[0..pos];
+}
+
 /// Stream a single token as an SSE chunk in OpenAI format.
 /// Returns false if the write failed (client disconnected).
 fn streamChunk(stream: TcpStream, chunk_buf: *[response_buf_size]u8, tok: *Tokenizer, token_id: u32, req_id: u64, created: i64, is_chat: bool) bool {
+    return streamChunkLogprobs(stream, chunk_buf, tok, token_id, req_id, created, is_chat, null);
+}
+
+fn streamChunkLogprobs(stream: TcpStream, chunk_buf: *[response_buf_size]u8, tok: *Tokenizer, token_id: u32, req_id: u64, created: i64, is_chat: bool, lp_info: ?LogprobInfo) bool {
     const dt = decodeAndEscape(tok, token_id) orelse return true;
     defer dt.deinit();
 
-    const chunk = if (is_chat)
-        std.fmt.bufPrint(chunk_buf,
-            \\{{"id":"chatcmpl-{d}","object":"chat.completion.chunk","created":{d},"model":"{s}","choices":[{{"index":0,"delta":{{"content":"{s}"}},"finish_reason":null}}]}}
-        , .{ req_id, created, g_server.model_name, dt.escaped })
+    var lp_buf: [4096]u8 = undefined;
+    const lp_json: []const u8 = if (lp_info) |info|
+        formatLogprobs(&lp_buf, tok, dt.escaped, info)
     else
-        std.fmt.bufPrint(chunk_buf,
-            \\{{"id":"cmpl-{d}","object":"text_completion","created":{d},"model":"{s}","choices":[{{"text":"{s}","index":0,"finish_reason":null}}]}}
-        , .{ req_id, created, g_server.model_name, dt.escaped });
+        "";
+    const has_lp = lp_json.len > 0;
+
+    const chunk = if (is_chat) blk: {
+        break :blk if (has_lp)
+            std.fmt.bufPrint(chunk_buf,
+                \\{{"id":"chatcmpl-{d}","object":"chat.completion.chunk","created":{d},"model":"{s}","choices":[{{"index":0,"delta":{{"content":"{s}"}},{s},"finish_reason":null}}]}}
+            , .{ req_id, created, g_server.model_name, dt.escaped, lp_json })
+        else
+            std.fmt.bufPrint(chunk_buf,
+                \\{{"id":"chatcmpl-{d}","object":"chat.completion.chunk","created":{d},"model":"{s}","choices":[{{"index":0,"delta":{{"content":"{s}"}},"finish_reason":null}}]}}
+            , .{ req_id, created, g_server.model_name, dt.escaped });
+    } else blk: {
+        break :blk if (has_lp)
+            std.fmt.bufPrint(chunk_buf,
+                \\{{"id":"cmpl-{d}","object":"text_completion","created":{d},"model":"{s}","choices":[{{"text":"{s}","index":0,{s},"finish_reason":null}}]}}
+            , .{ req_id, created, g_server.model_name, dt.escaped, lp_json })
+        else
+            std.fmt.bufPrint(chunk_buf,
+                \\{{"id":"cmpl-{d}","object":"text_completion","created":{d},"model":"{s}","choices":[{{"text":"{s}","index":0,"finish_reason":null}}]}}
+            , .{ req_id, created, g_server.model_name, dt.escaped });
+    };
 
     if (chunk) |c| {
         return sseWriteData(stream, c);
@@ -3774,6 +3840,9 @@ fn generateStream(stream: TcpStream, prompt: []const u8, req_id: u64, created: i
                 if (sampling.min_p > 0) math_ops.applyMinP(model.getLogits(), sampling.min_p);
                 next = math_ops.sampleToken(model.getLogits(), sampling.temperature, sampling.top_k, sampling.top_p, prng_s.random());
             }
+            // Compute logprobs before EOG/stop checks (logits still valid)
+            const lp = if (sampling.logprobs) computeLogprobs(model.getLogits(), next, sampling.top_logprobs) else null;
+
             if (g_server.isEog(next)) break;
             // Accept in grammar
             if (use_grammar_s and s_grammar_state != null) {
@@ -3781,7 +3850,7 @@ fn generateStream(stream: TcpStream, prompt: []const u8, req_id: u64, created: i
                 const stext = g_server.tokenizer.decode(@constCast(&stok_slice)) catch "";
                 s_grammar_state.?.acceptToken(stext);
                 if (s_grammar_state.?.isComplete()) {
-                    if (!streamChunk(stream, &chunk_buf, tok, next, req_id, created, is_chat)) stream_disconnected = true;
+                    if (!streamChunkLogprobs(stream, &chunk_buf, tok, next, req_id, created, is_chat, lp)) stream_disconnected = true;
                     token_count += 1;
                     break;
                 }
@@ -3795,7 +3864,7 @@ fn generateStream(stream: TcpStream, prompt: []const u8, req_id: u64, created: i
                     break;
                 }
             }
-            if (!streamChunk(stream, &chunk_buf, tok, next, req_id, created, is_chat)) {
+            if (!streamChunkLogprobs(stream, &chunk_buf, tok, next, req_id, created, is_chat, lp)) {
                 stream_disconnected = true;
                 break;
             }
