@@ -223,6 +223,10 @@ pub const CudaBackend = struct {
     /// Whether the GPU uses unified memory architecture (integrated GPU).
     is_uma: bool = false,
 
+    /// Cached staging buffers for paged SDPA (avoid hot-path allocation).
+    sdpa_flat_keys: ?[]f32 = null,
+    sdpa_flat_vals: ?[]f32 = null,
+
     /// Device name retrieved during initialization (e.g., "NVIDIA GB10").
     device_name: [device_name_buf_size]u8 = undefined,
     device_name_len: usize = 0,
@@ -519,6 +523,8 @@ pub const CudaBackend = struct {
         }
         self.buf_cache.deinit();
 
+        if (self.sdpa_flat_keys) |buf| std.heap.page_allocator.free(buf);
+        if (self.sdpa_flat_vals) |buf| std.heap.page_allocator.free(buf);
         if (self.module != null) _ = self.cuModuleUnload(self.module);
         if (self.context != null) {
             _ = self.cuCtxSynchronize();
@@ -1926,12 +1932,18 @@ pub const CudaBackend = struct {
         const flat_elems = n_phys_blocks * block_stride;
         const flat_bytes = flat_elems * @sizeOf(f32);
 
-        const flat_keys = std.heap.page_allocator.alloc(f32, flat_elems) catch
-            @panic("CUDA sdpaPaged: out of memory for flat key staging buffer");
-        defer std.heap.page_allocator.free(flat_keys);
-        const flat_vals = std.heap.page_allocator.alloc(f32, flat_elems) catch
-            @panic("CUDA sdpaPaged: out of memory for flat value staging buffer");
-        defer std.heap.page_allocator.free(flat_vals);
+        if (self.sdpa_flat_keys == null or self.sdpa_flat_keys.?.len < flat_elems) {
+            if (self.sdpa_flat_keys) |old| std.heap.page_allocator.free(old);
+            self.sdpa_flat_keys = std.heap.page_allocator.alloc(f32, flat_elems) catch
+                @panic("CUDA sdpaPaged: out of memory for flat key staging buffer");
+        }
+        if (self.sdpa_flat_vals == null or self.sdpa_flat_vals.?.len < flat_elems) {
+            if (self.sdpa_flat_vals) |old| std.heap.page_allocator.free(old);
+            self.sdpa_flat_vals = std.heap.page_allocator.alloc(f32, flat_elems) catch
+                @panic("CUDA sdpaPaged: out of memory for flat value staging buffer");
+        }
+        const flat_keys = self.sdpa_flat_keys.?;
+        const flat_vals = self.sdpa_flat_vals.?;
 
         for (kv_view.block_table[0..n_logical_blocks]) |phys_id| {
             const dst_off = @as(usize, phys_id) * block_stride;

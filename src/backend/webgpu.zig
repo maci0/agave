@@ -345,6 +345,10 @@ pub const WebGpuBackend = struct {
     // Staging buffer for readbacks
     staging_buf: WGPUBuffer = null,
     staging_size: usize = 0,
+
+    // Cached staging buffers for paged SDPA (avoid hot-path allocation)
+    sdpa_flat_keys: ?[]f32 = null,
+    sdpa_flat_vals: ?[]f32 = null,
     upload_generation: u32 = 0,
 
     // Batched command encoding
@@ -594,6 +598,8 @@ pub const WebGpuBackend = struct {
         self.buf_cache.deinit();
 
         if (self.staging_buf != null) self.fn_buffer_destroy(self.staging_buf);
+        if (self.sdpa_flat_keys) |buf| std.heap.page_allocator.free(buf);
+        if (self.sdpa_flat_vals) |buf| std.heap.page_allocator.free(buf);
         if (self.device != null) self.fn_device_release(self.device);
         if (self.adapter != null) self.fn_adapter_release(self.adapter);
         if (self.instance != null) self.fn_instance_release(self.instance);
@@ -1314,12 +1320,18 @@ pub const WebGpuBackend = struct {
         const flat_elems = n_phys_blocks * block_stride;
         const flat_bytes = flat_elems * @sizeOf(f32);
 
-        const flat_keys = std.heap.page_allocator.alloc(f32, flat_elems) catch
-            @panic("WebGPU sdpaPaged: out of memory for flat key staging buffer");
-        defer std.heap.page_allocator.free(flat_keys);
-        const flat_vals = std.heap.page_allocator.alloc(f32, flat_elems) catch
-            @panic("WebGPU sdpaPaged: out of memory for flat value staging buffer");
-        defer std.heap.page_allocator.free(flat_vals);
+        if (self.sdpa_flat_keys == null or self.sdpa_flat_keys.?.len < flat_elems) {
+            if (self.sdpa_flat_keys) |old| std.heap.page_allocator.free(old);
+            self.sdpa_flat_keys = std.heap.page_allocator.alloc(f32, flat_elems) catch
+                @panic("WebGPU sdpaPaged: out of memory for flat key staging buffer");
+        }
+        if (self.sdpa_flat_vals == null or self.sdpa_flat_vals.?.len < flat_elems) {
+            if (self.sdpa_flat_vals) |old| std.heap.page_allocator.free(old);
+            self.sdpa_flat_vals = std.heap.page_allocator.alloc(f32, flat_elems) catch
+                @panic("WebGPU sdpaPaged: out of memory for flat value staging buffer");
+        }
+        const flat_keys = self.sdpa_flat_keys.?;
+        const flat_vals = self.sdpa_flat_vals.?;
 
         for (kv_view.block_table[0..n_logical_blocks]) |phys_id| {
             const dst_off = @as(usize, phys_id) * block_stride;
