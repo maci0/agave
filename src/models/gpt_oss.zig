@@ -519,8 +519,10 @@ pub const GptOssModel = struct {
         addBiasTyped(self.v_buf[0..kvd], vb.data_ptr, kvd, vb.dtype);
 
         // 4. Rotary position embeddings (full head rotation).
+        self.be.beginBatch();
         self.be.rope(self.q_buf.ptr, self.kv_seq_len, nh, hd, hd, self.rope_theta);
         self.be.rope(self.k_buf.ptr, self.kv_seq_len, nkv, hd, hd, self.rope_theta);
+        self.be.endBatch();
 
         // 5. Append current token to KV cache.
         self.be.sync();

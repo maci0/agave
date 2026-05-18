@@ -721,9 +721,11 @@ pub const NemotronNanoModel = struct {
         try self.doGemv(self.hidden2.ptr, kw, self.k_buf.ptr, nkv * hd, e, li, "mixer.k_proj");
         try self.doGemv(self.hidden2.ptr, vw, self.v_buf.ptr, nkv * hd, e, li, "mixer.v_proj");
 
-        // 3. RoPE
+        // 3. RoPE — Q and K write to independent buffers, batch without barriers
+        self.be.beginBatch();
         self.be.rope(self.q_buf.ptr, self.kv_seq_len, nh, hd, self.rope_dim, self.rope_theta);
         self.be.rope(self.k_buf.ptr, self.kv_seq_len, nkv, hd, self.rope_dim, self.rope_theta);
+        self.be.endBatch();
 
         // 4. KV cache + scaled dot-product attention
         // (backend handles sync and KV append internally)

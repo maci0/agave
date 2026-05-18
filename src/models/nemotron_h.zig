@@ -572,8 +572,10 @@ pub const NemotronHModel = struct {
         self.be.gemv(self.hidden2.ptr, .{ .data = vw.data_ptr, .dtype = vw.dtype }, self.v_buf.ptr, kvd, e);
 
         // 3. Partial RoPE: rotate only the first rope_dim dimensions of each head.
+        self.be.beginBatch();
         self.be.rope(self.q_buf.ptr, self.kv_seq_len, nh, hd, self.rope_dim, self.rope_theta);
         self.be.rope(self.k_buf.ptr, self.kv_seq_len, nkv, hd, self.rope_dim, self.rope_theta);
+        self.be.endBatch();
 
         // 4/5. KV cache append + scaled dot-product attention.
         // (backend handles sync and KV append internally)

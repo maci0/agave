@@ -1604,12 +1604,12 @@ pub const Gemma4Model = struct {
 
             // Per-head QK RMSNorm (with learned weights) and V norm
             t = self.perf.start();
-            if (self.fmt.layerTensor(li, "attn_q_norm.weight")) |qn| {
-                self.be.rmsNormMulti(self.q_buf.ptr, self.normAsF32(qn, hd), nh, hd, self.rms_eps);
-            }
-            if (self.fmt.layerTensor(li, "attn_k_norm.weight")) |kn| {
-                self.be.rmsNormMulti(self.k_buf.ptr, self.normAsF32(kn, hd), nkv, hd, self.rms_eps);
-            }
+            const qn_t = self.fmt.layerTensor(li, "attn_q_norm.weight");
+            const kn_t = self.fmt.layerTensor(li, "attn_k_norm.weight");
+            if (qn_t != null and kn_t != null) self.be.beginBatch();
+            if (qn_t) |qn| self.be.rmsNormMulti(self.q_buf.ptr, self.normAsF32(qn, hd), nh, hd, self.rms_eps);
+            if (kn_t) |kn| self.be.rmsNormMulti(self.k_buf.ptr, self.normAsF32(kn, hd), nkv, hd, self.rms_eps);
+            if (qn_t != null and kn_t != null) self.be.endBatch();
             if (vw == null) {
                 // Tied K=V: V was copied from K, apply plain RMSNorm
                 self.be.sync();
@@ -1617,19 +1617,23 @@ pub const Gemma4Model = struct {
             }
             self.perf.end(.rms_norm, t);
 
-            // RoPE for K
+            // RoPE for Q and K — independent buffers, batch without barriers
             t = self.perf.start();
             if (is_global) {
                 const rd: usize = @intFromFloat(@as(f32, @floatFromInt(self.gl_head_dim)) * self.gl_partial_rotary);
                 const rd_even = rd & ~@as(usize, 1);
                 if (rd_even > 0) {
+                    self.be.beginBatch();
                     self.be.rope(self.q_buf.ptr, self.kv_seq_len, nh, hd, rd_even, self.gl_rope_theta);
                     self.be.rope(self.k_buf.ptr, self.kv_seq_len, nkv, hd, rd_even, self.gl_rope_theta);
+                    self.be.endBatch();
                 }
             } else {
                 const rd: usize = self.sl_rope_dim;
+                self.be.beginBatch();
                 self.be.rope(self.q_buf.ptr, self.kv_seq_len, nh, hd, rd, self.sl_rope_theta);
                 self.be.rope(self.k_buf.ptr, self.kv_seq_len, nkv, hd, rd, self.sl_rope_theta);
+                self.be.endBatch();
             }
             self.perf.end(.rope, t);
         } else {

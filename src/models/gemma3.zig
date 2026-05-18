@@ -738,10 +738,12 @@ pub const Gemma3Model = struct {
         t = self.perf.start();
         const qn = self.fmt.layerTensor(li, "attn_q_norm.weight") orelse return error.MissingTensor;
         const qn_w = self.normAsF32(qn, hd);
-        self.be.rmsNormMulti(self.q_buf.ptr, qn_w, nh, hd, self.rms_eps);
         const kn = self.fmt.layerTensor(li, "attn_k_norm.weight") orelse return error.MissingTensor;
         const kn_w = self.normAsF32(kn, hd);
+        self.be.beginBatch();
+        self.be.rmsNormMulti(self.q_buf.ptr, qn_w, nh, hd, self.rms_eps);
         self.be.rmsNormMulti(self.k_buf.ptr, kn_w, nkv, hd, self.rms_eps);
+        self.be.endBatch();
         self.perf.end(.rms_norm, t);
 
         // RoPE — partial rotation (rope_dim may be < head_dim)
@@ -750,16 +752,20 @@ pub const Gemma3Model = struct {
         const rd: usize = self.rope_dim;
         const is_local = self.sliding_window_pattern > 0 and (li + 1) % self.sliding_window_pattern != 0;
         if (is_local) {
+            self.be.beginBatch();
             self.be.rope(self.q_buf.ptr, self.kv_seq_len, nh, hd, rd, self.rope_local_theta);
             self.be.rope(self.k_buf.ptr, self.kv_seq_len, nkv, hd, rd, self.rope_local_theta);
+            self.be.endBatch();
         } else if (self.rope_freq_scale != 1.0) {
             // CPU RoPE with frequency scaling — must sync before reading GPU-written q_buf/k_buf.
             self.be.sync();
             applyRopeScaled(self.q_buf.ptr, self.kv_seq_len, nh, hd, rd, self.rope_theta, self.rope_freq_scale);
             applyRopeScaled(self.k_buf.ptr, self.kv_seq_len, nkv, hd, rd, self.rope_theta, self.rope_freq_scale);
         } else {
+            self.be.beginBatch();
             self.be.rope(self.q_buf.ptr, self.kv_seq_len, nh, hd, rd, self.rope_theta);
             self.be.rope(self.k_buf.ptr, self.kv_seq_len, nkv, hd, rd, self.rope_theta);
+            self.be.endBatch();
         }
         self.perf.end(.rope, t);
 
