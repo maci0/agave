@@ -19,6 +19,7 @@ comptime {
     _ = @import("split_qgate.zig");
 
     // Normalization
+    _ = @import("add_rms_norm.zig");
     _ = @import("rms_norm.zig");
     _ = @import("rms_norm_multi.zig");
     _ = @import("softmax.zig");

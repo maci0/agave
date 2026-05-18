@@ -24,7 +24,7 @@ This document tracks the implementation status of all compute kernels across bac
 | GELU | Native (SIMD) | Native | Native | Native | Native | Native |
 | Add | Native (SIMD) | Native | Native | Native | Native | Native |
 | Mul | Native (SIMD) | Native | Native | Native | Native | Native |
-| Add+RmsNorm (fused) | Native (fused) | Native (fused) | Sequential⁴ | Native (fused) | Sequential⁴ | Native (fused) |
+| Add+RmsNorm (fused) | Native (fused) | Native (fused) | Native (fused) | Native (fused) | Native (fused) | Native (fused) |
 | Add Scaled | Native | Native | CPU perf | Native | CPU perf | Native |
 | GEMV Transposed (Q8_0) | Native | Native | Missing | Native | Missing | Native |
 | RoPE | Native (SIMD) | Native | Native | Native | Native | Native |
@@ -52,7 +52,6 @@ This document tracks the implementation status of all compute kernels across bac
 ¹ Single-row table read — CPU memcpy is faster than GPU dispatch + sync overhead.
 ² Metal FlashAttention-2 with block_size=16 (fits 32KB threadgroup memory). Online softmax, no blit encoders. **Sparse V threshold** (1e-6) is applied in all GPU SDPA kernels (Metal, CUDA, ROCm): positions where the softmax weight falls below the threshold skip V dequantization entirely, yielding +22.8% decode speed at 32K context with zero measured PPL impact. The CPU windowed-attention fallback path (`src/ops/attention.zig`) also uses sparse V dequantization.
 ³ Vulkan conv1d does not support bias parameter — models with conv bias will panic.
-⁴ Sequential: dispatches separate `add` then `rmsNorm` (no fused GPU kernel yet).
 ⁶ CPU delegate: functional but delegates to CPU backend (no native GPU kernel yet).
 ⁷ `sdpaWithStats` wraps the native GPU SDPA kernel and fills dummy stats (max=0, sum=1). Used by tiered KV cache split-attention (`--kv-tiers vram+ram`) for online softmax merge across tiers. No CPU delegate — runs entirely on GPU.
 ⁸ CUDA Q5_K/Q6_K fused FFN blocked by Zig LLVM nvptx64 aliasee bug (cross-file kernel imports create forbidden GlobalAlias).

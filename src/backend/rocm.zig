@@ -123,6 +123,7 @@ pub const RocmBackend = struct {
     fn_add: HipFunction = null,
     fn_mul: HipFunction = null,
     fn_rms_norm: HipFunction = null,
+    fn_add_rms_norm: HipFunction = null,
     fn_softmax: HipFunction = null,
     fn_l2_norm: HipFunction = null,
     fn_rope: HipFunction = null,
@@ -291,6 +292,7 @@ pub const RocmBackend = struct {
         self.fn_add = self.getFunction(hipModuleGetFunction, "add_kernel") catch null;
         self.fn_mul = self.getFunction(hipModuleGetFunction, "mul_kernel") catch null;
         self.fn_rms_norm = self.getFunction(hipModuleGetFunction, "rms_norm_kernel") catch null;
+        self.fn_add_rms_norm = self.getFunction(hipModuleGetFunction, "add_rms_norm_kernel") catch null;
         self.fn_softmax = self.getFunction(hipModuleGetFunction, "softmax_kernel") catch null;
         self.fn_l2_norm = self.getFunction(hipModuleGetFunction, "l2_norm_kernel") catch null;
         self.fn_rope = self.getFunction(hipModuleGetFunction, "rope_kernel") catch null;
@@ -662,10 +664,24 @@ pub const RocmBackend = struct {
         self.launch(self.fn_add, grid, block_size, 0, &params);
     }
 
-    /// Fused add + rmsNorm (sequential fallback — no fused ROCm kernel yet).
     pub fn addRmsNorm(self: *RocmBackend, a: [*]f32, b: [*]const f32, weight: [*]const f32, output: [*]f32, n: usize, eps: f32) void {
-        self.add(a, b, a, n);
-        self.rmsNorm(a, weight, output, n, eps);
+        if (self.fn_add_rms_norm == null) {
+            self.add(a, b, a, n);
+            self.rmsNorm(a, weight, output, n, eps);
+            return;
+        }
+        const sz = n * @sizeOf(f32);
+        var d_a = self.getInPlaceBuf(a, sz);
+        var d_b = self.getInputBuf(b, sz);
+        var d_w = self.getOrUpload(@ptrCast(weight), sz);
+        var d_out = self.getOutputBuf(output, sz);
+        var n_u32: u32 = @intCast(n);
+        var eps_f32: f32 = eps;
+        var params = [_]?*anyopaque{
+            @ptrCast(&d_a), @ptrCast(&d_b), @ptrCast(&d_w),
+            @ptrCast(&d_out), @ptrCast(&n_u32), @ptrCast(&eps_f32),
+        };
+        self.launch(self.fn_add_rms_norm.?, 1, block_size, reduction_smem, &params);
     }
 
     /// Transposed GEMV for Q8_0 3D weights: y[out_dim] = W^T @ x[in_dim].
