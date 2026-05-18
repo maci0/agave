@@ -570,6 +570,10 @@ test "step cancels timed-out requests" {
 
 // Mock model for testing
 const MockModel = struct {
+    const MockBackend = struct {
+        pub fn setThreadContext(_: *MockBackend) void {}
+    };
+    be: MockBackend = .{},
     eos_token_id: u32 = 1,
     vocab_size: u32 = 1000,
     n_layers: u32 = 12,

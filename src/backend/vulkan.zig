@@ -2408,7 +2408,7 @@ pub const VulkanBackend = struct {
 // ── Tests ─────────────────────────────────────────────────────────
 
 test "VulkanBackend init and silu" {
-    var vk_be = VulkanBackend.init(std.testing.allocator) catch |err| {
+    var vk_be = VulkanBackend.init(std.testing.allocator, 0) catch |err| {
         if (err == error.VulkanNotAvailable) return error.SkipZigTest;
         return err;
     };
@@ -2424,7 +2424,7 @@ test "VulkanBackend init and silu" {
 }
 
 test "VulkanBackend gelu" {
-    var vk_be = VulkanBackend.init(std.testing.allocator) catch |err| {
+    var vk_be = VulkanBackend.init(std.testing.allocator, 0) catch |err| {
         if (err == error.VulkanNotAvailable) return error.SkipZigTest;
         return err;
     };
@@ -2441,7 +2441,7 @@ test "VulkanBackend gelu" {
 }
 
 test "VulkanBackend rmsNorm" {
-    var vk_be = VulkanBackend.init(std.testing.allocator) catch |err| {
+    var vk_be = VulkanBackend.init(std.testing.allocator, 0) catch |err| {
         if (err == error.VulkanNotAvailable) return error.SkipZigTest;
         return err;
     };
@@ -2460,7 +2460,7 @@ test "VulkanBackend rmsNorm" {
 }
 
 test "VulkanBackend softmax" {
-    var vk_be = VulkanBackend.init(std.testing.allocator) catch |err| {
+    var vk_be = VulkanBackend.init(std.testing.allocator, 0) catch |err| {
         if (err == error.VulkanNotAvailable) return error.SkipZigTest;
         return err;
     };
@@ -2479,7 +2479,7 @@ test "VulkanBackend softmax" {
 }
 
 test "VulkanBackend l2Norm" {
-    var vk_be = VulkanBackend.init(std.testing.allocator) catch |err| {
+    var vk_be = VulkanBackend.init(std.testing.allocator, 0) catch |err| {
         if (err == error.VulkanNotAvailable) return error.SkipZigTest;
         return err;
     };
@@ -2495,7 +2495,7 @@ test "VulkanBackend l2Norm" {
 }
 
 test "VulkanBackend rope" {
-    var vk_be = VulkanBackend.init(std.testing.allocator) catch |err| {
+    var vk_be = VulkanBackend.init(std.testing.allocator, 0) catch |err| {
         if (err == error.VulkanNotAvailable) return error.SkipZigTest;
         return err;
     };

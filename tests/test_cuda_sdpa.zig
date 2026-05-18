@@ -6,7 +6,7 @@ const sdpa_harness = @import("sdpa_harness");
 
 test "CUDA SDPA warp-parallel dual-delta correctness" {
     // Skip if CUDA not available
-    var cuda_be = CudaBackend.init(std.testing.allocator) catch |err| {
+    var cuda_be = CudaBackend.init(std.testing.allocator, 0) catch |err| {
         if (err == error.CudaNotAvailable or err == error.DeviceNotFound) {
             return error.SkipZigTest;
         }

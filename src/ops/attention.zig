@@ -365,7 +365,7 @@ test "sdpa single head single token" {
     const BackendState = @import("../backend/backend.zig").BackendState;
     var threaded = std.Io.Threaded.init(std.testing.allocator, .{});
     var bs = BackendState{};
-    bs.init(std.testing.allocator, .cpu, threaded.io());
+    bs.init(std.testing.allocator, .cpu, threaded.io(), 0);
     defer if (bs.pool) |*p| p.deinit();
     const be = bs.be;
 
@@ -408,7 +408,7 @@ test "sdpa multi-token with GQA" {
     const BackendState = @import("../backend/backend.zig").BackendState;
     var threaded = std.Io.Threaded.init(std.testing.allocator, .{});
     var bs = BackendState{};
-    bs.init(std.testing.allocator, .cpu, threaded.io());
+    bs.init(std.testing.allocator, .cpu, threaded.io(), 0);
     defer if (bs.pool) |*p| p.deinit();
     const be = bs.be;
 
@@ -457,7 +457,7 @@ test "paged attention single head single token" {
     const BackendState = @import("../backend/backend.zig").BackendState;
     var threaded = std.Io.Threaded.init(std.testing.allocator, .{});
     var bs = BackendState{};
-    bs.init(std.testing.allocator, .cpu, threaded.io());
+    bs.init(std.testing.allocator, .cpu, threaded.io(), 0);
     defer if (bs.pool) |*p| p.deinit();
     const be = bs.be;
 
@@ -507,7 +507,7 @@ test "sdpa asymmetric kv types" {
     const BackendState = @import("../backend/backend.zig").BackendState;
     var threaded = std.Io.Threaded.init(std.testing.allocator, .{});
     var bs = BackendState{};
-    bs.init(std.testing.allocator, .cpu, threaded.io());
+    bs.init(std.testing.allocator, .cpu, threaded.io(), 0);
     defer if (bs.pool) |*p| p.deinit();
     const be = bs.be;
 
@@ -557,7 +557,7 @@ test "sdpa exercises SIMD path with hd=16" {
     const BackendState = @import("../backend/backend.zig").BackendState;
     var threaded = std.Io.Threaded.init(std.testing.allocator, .{});
     var bs = BackendState{};
-    bs.init(std.testing.allocator, .cpu, threaded.io());
+    bs.init(std.testing.allocator, .cpu, threaded.io(), 0);
     defer if (bs.pool) |*p| p.deinit();
     const be = bs.be;
 
@@ -602,7 +602,7 @@ test "sdpa windowed attention excludes tokens outside window" {
     const BackendState = @import("../backend/backend.zig").BackendState;
     var threaded = std.Io.Threaded.init(std.testing.allocator, .{});
     var bs = BackendState{};
-    bs.init(std.testing.allocator, .cpu, threaded.io());
+    bs.init(std.testing.allocator, .cpu, threaded.io(), 0);
     defer if (bs.pool) |*p| p.deinit();
     const be = bs.be;
 
