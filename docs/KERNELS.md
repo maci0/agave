@@ -112,7 +112,7 @@ The composer automatically selects the correct GEMV function (Q8_0/Q4_K/Q5_K/Q6_
 | q2_k | Native (SIMD) | Native | Native | Native | Native | Native |
 | q3_k | Native (SIMD) | Native | Native | Native | Native | Native |
 | iq4_nl | Native (SIMD) | Native | Native | Native | Native | Native |
-| iq4_xs | Native (SIMD) | Native | Missing | Missing | Missing | Missing |
+| iq4_xs | Native (SIMD) | Native | Native | Native | Native | Native |
 | fp8_e4m3 | Native | Native | Native | Native | Native | Native |
 | fp8_e5m2 | Native | Native | Native | Native | Native | Native |
 | nvfp4 (GGUF) | Native | Missing | Missing | Missing | Missing | Missing |
@@ -147,11 +147,9 @@ Vision ViT (Vision Transformer) kernels run on CPU for patch embedding, position
 - DeltaNet native GPU kernels (currently delegates to CPU)
 - Causal Conv1d
 
-**Vulkan** — low priority:
-- GEMV: iq4_xs
+**Vulkan** — complete for all quant formats
 
-**ROCm** — low priority:
-- GEMV: iq4_xs
+**ROCm** — complete for all quant formats
 
 **Metal** — near-complete:
 - GEMV: nvfp4 (GGUF)

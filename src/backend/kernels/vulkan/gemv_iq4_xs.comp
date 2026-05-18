@@ -1,0 +1,77 @@
+#version 450
+#extension GL_KHR_shader_subgroup_arithmetic : require
+
+layout(local_size_x = 256) in;
+
+layout(set = 0, binding = 0) readonly buffer X { float x[]; };
+layout(set = 0, binding = 1) readonly buffer W { uint w_raw[]; };
+layout(set = 0, binding = 2) writeonly buffer Y { float y[]; };
+layout(push_constant) uniform Params { uint n; uint k; };
+
+shared float shared_sums[8];
+
+// IQ4_XS: 136 bytes = f16 d + u16 scales_h + u8 scales_l[4] + u8 qs[128]
+// 256 values per super-block, 8 sub-blocks of 32
+const float IQ4NL_LUT[16] = float[16](
+    -127.0, -104.0, -83.0, -65.0, -49.0, -35.0, -22.0, -10.0,
+    1.0, 13.0, 25.0, 38.0, 53.0, 69.0, 89.0, 113.0
+);
+const int SCALE_BIAS = -32;
+
+uint readByte(uint off) { return (w_raw[off / 4] >> ((off % 4) * 8)) & 0xFF; }
+
+float readF16(uint off) {
+    uint word = w_raw[off / 4]; uint shift = (off % 4) * 8;
+    uint bits = (word >> shift) & 0xFFFF;
+    if (shift > 16) { bits = ((word >> shift) | (w_raw[off / 4 + 1] << (32 - shift))) & 0xFFFF; }
+    return unpackHalf2x16(bits).x;
+}
+
+uint readU16(uint off) {
+    uint word = w_raw[off / 4]; uint shift = (off % 4) * 8;
+    uint bits = (word >> shift) & 0xFFFF;
+    if (shift > 16) { bits = ((word >> shift) | (w_raw[off / 4 + 1] << (32 - shift))) & 0xFFFF; }
+    return bits;
+}
+
+void main() {
+    uint row = gl_WorkGroupID.x;
+    uint tid = gl_LocalInvocationID.x;
+    uint tg_size = gl_WorkGroupSize.x;
+    if (row >= n) return;
+
+    uint nb = (k + 255) / 256;
+    float sum = 0.0;
+
+    for (uint b = tid; b < nb; b += tg_size) {
+        uint bp = row * nb * 136 + b * 136;
+        float d = readF16(bp);
+        uint scales_h = readU16(bp + 2);
+        uint bk = b * 256;
+
+        for (uint sb = 0; sb < 8; sb++) {
+            uint lo4 = (sb % 2 == 0) ? (readByte(bp + 4 + sb / 2) & 0xF) : (readByte(bp + 4 + sb / 2) >> 4);
+            uint hi2 = (scales_h >> (sb * 2)) & 0x3;
+            float sub_scale = d * float(int(lo4 | (hi2 << 4)) + SCALE_BIAS);
+            uint sub_bk = bk + sb * 32;
+            float block_sum = 0.0;
+
+            for (uint j = 0; j < 16; j++) {
+                uint byte_val = readByte(bp + 8 + sb * 16 + j);
+                uint col_lo = sub_bk + j;
+                uint col_hi = sub_bk + j + 16;
+                if (col_lo < k) block_sum += x[col_lo] * IQ4NL_LUT[byte_val & 0xF];
+                if (col_hi < k) block_sum += x[col_hi] * IQ4NL_LUT[byte_val >> 4];
+            }
+            sum += block_sum * sub_scale;
+        }
+    }
+
+    sum = subgroupAdd(sum);
+    uint sg_id = gl_SubgroupID; uint sg_lane = gl_SubgroupInvocationID;
+    if (sg_lane == 0) shared_sums[sg_id] = sum;
+    barrier();
+    uint num_sg = (tg_size + gl_SubgroupSize - 1) / gl_SubgroupSize;
+    if (tid < num_sg) sum = shared_sums[tid]; else sum = 0.0;
+    if (tid < gl_SubgroupSize) { sum = subgroupAdd(sum); if (tid == 0) y[row] = sum; }
+}
