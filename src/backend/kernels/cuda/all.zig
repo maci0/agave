@@ -44,6 +44,7 @@ comptime {
     _ = @import("gemv_q8_0.zig");
     _ = @import("gemv_q4_0.zig");
     _ = @import("gemv_q4_1.zig");
+    _ = @import("gemv_q5_0.zig");
     _ = @import("gemv_q4_k.zig");
     _ = @import("gemv_q5_k.zig");
     _ = @import("gemv_q6_k.zig");
