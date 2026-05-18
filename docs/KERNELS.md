@@ -109,8 +109,8 @@ The composer automatically selects the correct GEMV function (Q8_0/Q4_K/Q5_K/Q6_
 | q4_k | Native (SIMD) | Native | Native | Native | Native | Native |
 | q5_k | Native (SIMD) | Native | Native | Native | Native | Native |
 | q6_k | Native (SIMD) | Native | Native | Native | Native | Native |
-| q2_k | Native (SIMD) | Native | Missing | Missing | Native | Missing |
-| q3_k | Native (SIMD) | Native | Missing | Missing | Native | Missing |
+| q2_k | Native (SIMD) | Native | Missing | Native | Native | Missing |
+| q3_k | Native (SIMD) | Native | Missing | Native | Native | Missing |
 | iq4_nl | Native (SIMD) | Native | Missing | Missing | Missing | Missing |
 | iq4_xs | Native (SIMD) | Native | Missing | Missing | Missing | Missing |
 | fp8_e4m3 | Native | Native | Native | Native | Native | Native |
