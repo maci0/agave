@@ -297,13 +297,23 @@ pub const RadixTree = struct {
     root: *RadixNode,
     allocator: Allocator,
     access_counter: i64 = 0,
+    /// xxHash fast-path cache: maps hash(tokens) → (matched_len, node pointer).
+    /// Avoids full tree walk for repeated prefix queries (e.g., same system prompt).
+    hash_cache: std.AutoHashMap(u64, HashCacheEntry) = undefined,
+    hash_cache_inited: bool = false,
+
+    const HashCacheEntry = struct { matched: usize, node: *RadixNode };
+    const hash_cache_max_entries: usize = 64;
 
     /// Create an empty radix tree with a root node.
     pub fn init(allocator: Allocator) !RadixTree {
-        return .{
+        var tree = RadixTree{
             .root = try RadixNode.init(allocator, &.{}, &.{}),
             .allocator = allocator,
         };
+        tree.hash_cache = std.AutoHashMap(u64, HashCacheEntry).init(allocator);
+        tree.hash_cache_inited = true;
+        return tree;
     }
 
     /// Mark a node as recently accessed and advance the global counter.
@@ -312,9 +322,27 @@ pub const RadixTree = struct {
         self.access_counter +%= 1;
     }
 
+    /// Hash a token sequence using xxHash64 for prefix cache lookup.
+    fn hashTokens(tokens: []const u32) u64 {
+        return std.hash.XxHash64.hash(0, std.mem.sliceAsBytes(tokens));
+    }
+
     /// Find the longest prefix of `tokens` that exists in the tree.
-    /// Returns the number of tokens matched and the block IDs for those tokens.
+    /// Uses xxHash fast path for repeated queries (same system prompt).
     pub fn matchPrefix(self: *RadixTree, tokens: []const u32) PrefixMatch {
+        // Fast path: check hash cache for exact prefix match
+        if (self.hash_cache_inited and tokens.len > 0) {
+            const h = hashTokens(tokens);
+            if (self.hash_cache.get(h)) |entry| {
+                // Verify the cached node is still valid (tokens match)
+                if (entry.matched <= tokens.len) {
+                    self.touchNode(entry.node);
+                    return .{ .matched = entry.matched, .blocks = entry.node.block_ids };
+                }
+            }
+        }
+
+        // Full tree walk
         var node = self.root;
         var pos: usize = 0;
 
@@ -322,7 +350,6 @@ pub const RadixTree = struct {
             const bucket = tokenBucket(tokens[pos]);
             const child = node.children[bucket] orelse break;
 
-            // Check if child's tokens match
             const remaining = tokens[pos..];
             if (remaining.len < child.tokens.len) break;
             if (!std.mem.eql(u32, remaining[0..child.tokens.len], child.tokens)) break;
@@ -332,11 +359,20 @@ pub const RadixTree = struct {
             node = child;
         }
 
+        // Cache result for future lookups
+        if (self.hash_cache_inited and pos > 0 and tokens.len > 0) {
+            const h = hashTokens(tokens);
+            if (self.hash_cache.count() < hash_cache_max_entries) {
+                self.hash_cache.put(h, .{ .matched = pos, .node = node }) catch {};
+            }
+        }
+
         return .{ .matched = pos, .blocks = node.block_ids };
     }
 
     /// Insert a token sequence with its associated block IDs into the tree.
     pub fn insert(self: *RadixTree, tokens: []const u32, block_ids: []const u32) !void {
+        self.invalidateHashCache();
         var node = self.root;
         var pos: usize = 0;
 
@@ -432,8 +468,14 @@ pub const RadixTree = struct {
         }
     }
 
+    /// Invalidate hash cache (call after tree structure changes).
+    pub fn invalidateHashCache(self: *RadixTree) void {
+        if (self.hash_cache_inited) self.hash_cache.clearRetainingCapacity();
+    }
+
     /// Free the entire radix tree (all nodes and their token/block arrays).
     pub fn deinit(self: *RadixTree) void {
+        if (self.hash_cache_inited) self.hash_cache.deinit();
         self.root.deinit(self.allocator);
     }
 };

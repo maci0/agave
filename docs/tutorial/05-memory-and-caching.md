@@ -159,6 +159,19 @@ Each chunk's attention is **causal within the chunk AND attends to all previous 
 
 Prefill buffers are allocated once at model init, sized to `chunk_size × dim`. They are separate from the single-token decode buffers to avoid any regression on the decode path.
 
+## Automatic Context Sizing
+
+`--ctx-size auto` probes available system memory and picks the largest safe context window:
+
+```bash
+./agave model.gguf --ctx-size auto "long prompt..."
+# info: ctx-size: auto → 16384 (48000 MB available, 128 B/token KV)
+```
+
+The formula: `max_ctx = (available_memory * 0.8 - model_size) / per_token_kv_bytes`. Per-token KV bytes depend on `n_layers × n_kv_heads × head_dim × 2 (K+V) × kv_type_bits / 8`. For a 28-layer model with 4 KV heads, 128-dim heads, and f16 KV cache: `28 × 4 × 128 × 2 × 2 = 57 KB per token`. With 40 GB available and a 15 GB model, auto computes `(40G×0.8 - 15G) / 57K ≈ 300K tokens` — clamped to the model's max context.
+
+Use `--ctx-size auto` to avoid OOM at startup without manually calculating how much context your hardware can handle.
+
 ## KV Cache Eviction
 
 When context grows beyond a fixed budget, **KV cache eviction** compresses the cache by removing low-value entries instead of failing or truncating the prompt. This allows generation to continue past the `--ctx-size` limit.
