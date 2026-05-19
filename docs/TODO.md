@@ -1,8 +1,8 @@
-# Agave TODO
+# Agave TODO & Roadmap
 
-Comprehensive list of bugs, missing features, and improvement opportunities.
+Bugs, performance issues, and future work. Detailed designs inline.
 
-**Last updated**: 2026-05-18
+**Last updated**: 2026-05-19
 
 ---
 
@@ -10,148 +10,215 @@ Comprehensive list of bugs, missing features, and improvement opportunities.
 
 | # | Issue | Severity | Status |
 |---|-------|----------|--------|
-| 1 | GLM-4.7 Flash — degenerate output (also broken in llama.cpp, likely bad GGUF conversion) | Low (upstream) | Won't fix |
-| 2 | ROCm GEMV Q8_0 produced wrong results | Fixed | Was using dword-packed loads (loadDword + inline for + accumDword) that had incorrect AMDGCN codegen. Replaced with byte-by-byte implementation (same as CUDA). Now 47-55 tok/s on RX 7900 XTX. Other quant types (Q4_K etc) may have similar dword-packed issues |
-| 6 | ROCm HSACO target triple rejected by kernel 7.0.6+ | High | Zig generates `amdgcn-amd-amdhsa5.0.0-unknown-gfx1100` instead of `amdgcn-amd-amdhsa--gfx1100`. Kernel 7.0.5 accepted it, 7.0.6 rejects consistently. GEMV kernels are correct (verified at 47-55 tok/s on 7.0.5). Fix needs Zig std library patch for amdgcn target triple |
-| 3 | Vulkan segfault on RADV NAVI31 | Fixed | Was descriptor buffer overflow in dispatch() — [4]→[16] for 9-binding pipelines |
-| 4 | Vulkan push descriptor crashes on RADV gfx1100 | Medium | VK_KHR_push_descriptor resolves + device created with extension. Descriptor layouts correctly flagged with PUSH_DESCRIPTOR_BIT. GPU crashes during command buffer execution — no validation errors. Suspected RADV driver issue. Infrastructure in place, disabled pending fix |
-| 5 | Vulkan synchronous dispatch bottleneck (2.7 tok/s) | Fixed | Deferred dispatch: per-op descriptor set allocation from pool, single command buffer with compute→compute barriers, submit only at sync(). Push descriptors disabled (RADV crash). Needs benchmarking |
-| 7 | CUDA K-quant PTX register spilling on sm_121 | Fixed (workaround) | Q4_K/Q5_K/Q6_K PTX kernels spill registers on GB10's sm_121 JIT, causing data corruption (9B) and 10x slowdown (all sizes). Even NR=1 (single row) spills. CPU fallback with thread pool: 6.8 tok/s 9B, 12.3 tok/s 4B. Q8_0/Q4_0 GPU kernels unaffected |
+| 1 | GLM-4.7 Flash — degenerate output (also broken in llama.cpp) | Low (upstream) | Won't fix |
+| 6 | ROCm HSACO target triple rejected by kernel 7.0.6+ | High | Needs Zig std library patch for amdgcn target triple |
+| 4 | Vulkan push descriptor crashes on RADV gfx1100 | Medium | Suspected RADV driver issue. Infrastructure in place, disabled |
+
+<details><summary>Fixed bugs</summary>
+
+| # | Issue | Fix |
+|---|-------|-----|
+| 2 | ROCm GEMV Q8_0 wrong results | Replaced dword-packed with byte-by-byte (same as CUDA) |
+| 3 | Vulkan segfault on RADV NAVI31 | Descriptor buffer overflow [4]→[16] |
+| 5 | Vulkan 2.7 tok/s dispatch bottleneck | Deferred dispatch with per-op descriptor sets |
+| 7 | CUDA K-quant PTX spilling on sm_121 | CPU fallback with thread pool |
+</details>
 
 ---
 
 ## GPU Kernel Coverage
 
-All **correctness-critical** kernels for supported model×quant combinations are implemented. Some specialized ops delegate to CPU where noted. See [KERNELS.md](KERNELS.md) for the full per-backend matrix.
+All quantized GEMV formats native on all 6 backends. See [KERNELS.md](KERNELS.md).
 
-| Backend | Core ops | Notes |
-|---------|:--------:|-------|
-| Metal | Complete | Native paged SDPA, GPTQ GEMV |
-| CUDA | Complete | Native paged SDPA, GPTQ GEMV, fused FFN Q4_K/Q5_K/Q6_K |
-| Vulkan | Complete | Native paged SDPA |
-| WebGPU | Complete | Native paged SDPA, lazy readback cache |
-| ROCm | Complete | Native paged SDPA, GPTQ GEMV |
-
-### Known CPU fallbacks on GPU backends
-
-| Operation | Backends affected | Rationale |
-|-----------|-------------------|----------|
-| DeltaNet recurrence | CUDA, ROCm | Sequential recurrence is register-heavy, not memory-bound |
-| NVFP4 GGUF GEMV | All GPU | GPU backends use SafeTensors NVFP4 path instead |
+| Backend | Status | Notes |
+|---------|:------:|-------|
+| Metal | Complete | 70+ pipelines, GPTQ, paged SDPA |
+| CUDA | Complete | 54 kernels, fused FFN, 3 megakernels |
+| Vulkan | Complete | 42 shaders, deferred dispatch |
+| WebGPU | Complete | 39 shaders, lazy readback |
+| ROCm | Complete | 42 kernels, GPTQ, 1 megakernel |
 
 ---
 
 ## Performance
 
-| # | Issue | Impact | Status |
-|---|-------|--------|--------|
-| 1 | Q4_K Metal GEMV slower than llama.cpp | Primary decode bottleneck on quantized models | Optimized — group-level x register preload, needs benchmarking |
-| 2 | WebGPU decode 0.7 tok/s | Synchronous per-op dispatch overhead | Optimized — lazy readback cache eliminates CPU↔GPU round-trips, needs benchmarking |
-| 3 | Gemma 4 E4B CPU prefill ~60s | Very slow, 42 layers with 4.5GB model | Partially optimized — MoE expert gate+up batched via gemvMulti |
-| 4 | NVFP4 model accuracy lower than MLX-4bit | May be community quantization quality, not agave bug | Open |
+| # | Issue | Status |
+|---|-------|--------|
+| 1 | Q4_K Metal GEMV slower than llama.cpp | Optimized — needs benchmarking |
+| 2 | WebGPU decode 0.7 tok/s | Optimized — deferred dispatch + lazy readback |
+| 3 | Gemma 4 E4B CPU prefill ~60s | Partial — MoE batched via gemvMulti |
+| 4 | NVFP4 accuracy lower than MLX-4bit | Open — may be community quant quality |
 
 ---
 
-## Feature Gaps
+## Roadmap
 
-| # | Feature | Status | Notes |
-|---|---------|--------|-------|
-| 1 | Tensor/Pipeline parallelism | Working | 6 modes: local TP, distributed TP, distributed PP, hybrid TP+PP, disaggregated prefill/decode, dual-GPU same-node. Transports: TCP, POSIX shm (same-node zero-copy), NCCL (RoCE RDMA, 4x ConnectX, IB+GDAKI). `--transport auto/tcp/shm/nccl`, `--device N`, `--peers`. Fix: `cuDevicePrimaryCtxRetain` for NCCL compatibility. Best results: 9B Q8_0 PP=2 NCCL 8.5 tok/s (93% of single GPU), TP=2 NCCL 5.1 tok/s. 27B Q4_K_M PP=2 2.2 tok/s, TP=2 1.7 tok/s. Heterogeneous x86_64+aarch64 |
-| 2 | Structured output / grammar-constrained decoding | Working | GBNF parser, `--grammar-string`, `--grammar`, `--json-output`, `--json-schema`. Full repetition (`*`/`+`/`?`), grouped expressions, JSON schema→GBNF conversion. HTTP API: `grammar` and `json_schema` fields |
-| 3 | TriAttention Phase 3 | Wired | CLI `--kv-eviction tri`, .cal auto-loading, scorePositionsTri in evictKvCache. Dynamic budget pending |
-| 4 | Native GPU tree SDPA for CUDA/ROCm/Vulkan | Done | All backends now have native f32 sdpaTree (CPU fallback only for quantized KV) |
-| 5 | Batch `forwardTree()` | Fixed | Was hardcoding KV type as f32, now uses model's kv_type_k/v |
-| 6 | Direct NVMe-to-VRAM weight loading | N/A on UMA | cuFile dlopen detection in CUDA backend, GGUF fd exposed. GB10 UMA uses zero-copy mmap (cuMemHostRegister). cuFileRead only benefits discrete GPUs |
-| 7 | CUDA fused FFN megakernels (Q4_K/Q5_K/Q6_K variants) | Done | Q8_0 + Q4_K + Q5_K + Q6_K fused gate+up+SiLU. Q5_K/Q6_K use inlined dequant (aliasee workaround). PTX needs regeneration |
-| 8 | WebGPU Phase 2 (WASM target) | GGUF+tokenizer done | `zig build wasm` parses GGUF, loads tokenizer, inits model. Forward pass blocked by Zig 0.16 + LLVM 21 wasm32 SIMD codegen bug |
-| 9 | Native FP4 tensor cores on Blackwell SM121 | Working | SM121 routing, software FP4 GEMV. NVIDIA official NVFP4 format supported (per-expert loading + weight_scale/weight_scale_2). Tested: Nemotron-Nano-30B NVFP4 @ 26.4 tok/s CUDA GB10 |
-| 10 | GPTQ SafeTensors support | Working | Parser + dequant kernel + GPU GEMV on Metal + CUDA. CPU thread-pool fallback |
+### Done
 
----
-
-## vLLM-Inspired Roadmap
-
-Extracted from vLLM v0.8.0–v0.21.0 changelogs. Prioritized by impact and implementation complexity.
+| Feature | Source |
+|---------|--------|
+| `--ctx-size auto` (memory-safe context fitting) | vLLM |
+| xxHash prefix cache (RadixTree fast path) | vLLM |
+| N-gram speculative decoding (`--spec-mode ngram`) | vLLM |
+| XTC sampling (`xtc_probability`, `xtc_threshold`) | llama.cpp |
+| Downstream-first stage startup (RTT handshake) | Mesh-LLM |
+| Peer RTT measurement | Mesh-LLM |
+| Pre-sharded weight files (design) | Mesh-LLM |
 
 ### High Priority
 
-| # | Feature | Impact | Status |
+| # | Feature | Impact | Source |
 |---|---------|--------|--------|
-| 1 | SSM state prefix caching | ~2x speedup for Qwen3.5/Nemotron with shared prefixes (cache DeltaNet/Mamba state matrices) | Design |
-| 2 | Async scheduler + PP overlap | 30% E2E throughput improvement (overlap prefill compute with network I/O) | Design |
-| 3 | Batched KV swap via cuMemcpyBatchAsync | Reduce API overhead for tiered KV cache block transfers | Open |
-| 4 | Prefix cache xxHash | High-performance hash for prefix lookup vs token-sequence matching | Done |
-| 5 | `--ctx-size auto` | Probe available memory, pick largest safe context (no OOM at startup) | Done |
+| 1 | SSM state prefix caching | ~2x prefill speedup for hybrid SSM models | vLLM |
+| 2 | Async scheduler + PP overlap | 30% E2E throughput improvement | vLLM |
+| 3 | Batched KV swap (cuMemcpyBatchAsync) | Reduce tiered cache API overhead | vLLM |
+| 4 | Mirostat sampling | Target-entropy adaptive sampling | llama.cpp |
+| 5 | MTP (Multi-Token Prediction) heads | Native multi-token output for Qwen3.6/DeepSeek | llama.cpp |
 
 ### Medium Priority
 
-| # | Feature | Impact | Status |
+| # | Feature | Impact | Source |
 |---|---------|--------|--------|
-| 6 | TurboQuant in SDPA kernel | Skip decode-time dequant by integrating turbo2 directly into FlashAttention | Open |
-| 7 | Spec decode thinking budget | Improve acceptance rates on reasoning models with `<think>` tokens | Open |
-| 8 | Multi-stream pre-attention GEMM | Overlap QKV of layer N+1 with SDPA of layer N | Open |
-| 9 | Conditional compilation | `-Denable-<quant>=false` to shrink binary and build time | Open |
-| 10 | N-gram speculative decoding | Zero-overhead spec decode from output history (code, lists) | Done |
-| 11 | gRPC server (HTTP/2) | Lower overhead than HTTP/1.1 for high-throughput serving | Open |
+| 6 | TurboQuant in SDPA kernel | Skip decode-time dequant | vLLM |
+| 7 | Spec decode thinking budget | Better acceptance on reasoning models | vLLM |
+| 8 | Multi-stream pre-attention GEMM | Overlap QKV(N+1) with SDPA(N) | vLLM |
+| 9 | Profile-guided speculative decoding | Adaptive K per step | llama.cpp |
+| 10 | Router mode (multi-model server) | Switch models per request | llama.cpp |
+| 11 | Hybrid memory abstraction | Unified KV+SSM cache | llama.cpp |
+| 12 | Topology-aware auto partitioning | Weighted PP layer assignment | Exo |
+| 13 | Zero-config P2P discovery (UDP) | No `--peers` needed on LAN | Exo |
+| 14 | gRPC server (HTTP/2) | Lower overhead serving | vLLM |
 
 ### Low Priority
 
-| # | Feature | Impact | Status |
-|---|---------|--------|--------|
-| 12 | Flash Linear Attention kernels | Alternative kernels for linear attention models | Open |
-| 13 | Fused GPU rejection sampling | GPU kernel for spec decode verification (currently CPU) | Open |
-| 14 | Cross-layer KV sharing | Reduce KV memory for models with shared attention layers | Open |
-| 15 | Heterogeneous TP | Mixed-capacity devices for tensor parallelism | Open |
-
-### From llama.cpp
-
-| # | Feature | Source | Status |
-|---|---------|--------|--------|
-| 16 | Profile-guided speculative decoding | llama.cpp Nov 2025 | Open |
-| 17 | XTC sampling (exclude top choices) | llama.cpp sampling | Open |
-| 18 | Mirostat sampling (target-entropy) | llama.cpp sampling | Open |
-| 19 | MTP (Multi-Token Prediction) heads | llama.cpp active dev | Open |
-| 20 | Router mode (multi-model server) | llama.cpp server | Open |
-| 21 | Hybrid memory abstraction (KV+SSM unified) | llama.cpp memory | Open |
-
-### From Exo
-
-| # | Feature | Source | Status |
-|---|---------|--------|--------|
-| 22 | Topology-aware auto partitioning | Exo partitioner | Open |
-| 23 | Zero-config P2P discovery (UDP broadcast) | Exo discovery | Open |
-| 24 | Coordinator-only nodes (`--no-worker`) | Exo architecture | Open |
-
-### From Mesh-LLM
-
-| # | Feature | Source | Status |
-|---|---------|--------|--------|
-| 25 | Demand-aware model rebalancing | Mesh-LLM gossip | Open |
-| 26 | Downstream-first stage startup | Mesh-LLM planner | Done (RTT handshake) |
+| # | Feature | Source |
+|---|---------|--------|
+| 15 | Conditional compilation (`-Denable-<quant>`) | vLLM |
+| 16 | Flash Linear Attention kernels | vLLM |
+| 17 | Fused GPU rejection sampling | vLLM |
+| 18 | Cross-layer KV sharing | vLLM |
+| 19 | Heterogeneous TP (mixed devices) | vLLM/Exo |
+| 20 | Coordinator-only nodes (`--no-worker`) | Exo |
+| 21 | Demand-aware model rebalancing | Mesh-LLM |
+| 22 | QUIC transport | Mesh-LLM |
+| 23 | Nostr-based discovery | Mesh-LLM |
+| 24 | RDMA over Thunderbolt 5 | Exo |
+| 25 | Inter-model collaboration (MoM) | Mesh-LLM |
 
 ---
 
-## Build / CI / Infra
+## Design Notes
 
-| # | Issue | Status |
-|---|-------|--------|
-| 1 | `tests/` directory has test harness but golden tests need model files | By design — manual trigger only |
+### SSM State Prefix Caching (#1)
+
+> vLLM v0.15.0: ~2x speedup by caching Mamba states directly.
+
+DeltaNet (Qwen3.5) and Mamba-2 (Nemotron-H) maintain per-head state matrices computed sequentially. For shared prefixes, the SSM state is deterministic and cacheable.
+
+- Extend `RadixTree` to store SSM state snapshots alongside KV block IDs
+- After prefill, save per-layer state (`state_matrix[n_v_heads][v_dim][k_dim]`)
+- On cache hit: restore state, skip SSM prefill for cached prefix
+- Memory: Qwen3.5 0.8B = 48 layers × 16 heads × 64×64 × 4B = 12 MB/snapshot
+- Complexity: model forward must accept "start from saved state" parameter
+
+### Async Scheduler (#2)
+
+> vLLM v0.16.0: 30.8% E2E throughput, 31.8% TPOT improvement.
+
+Current `runSchedulerLoop` calls `step()` synchronously. Proposed:
+- Prefill/decode interleaving across requests
+- PP overlap: stage 0 processes request B while stage 1 finishes A
+- Double-buffer activations tagged by request ID
+- High complexity — touches scheduler, model forward, KV cache, transport
+
+### MTP Heads (#5)
+
+> llama.cpp active development. Qwen3.6, DeepSeek models.
+
+Models with built-in multi-token prediction heads output K tokens per forward pass natively. Unlike spec decode, MTP is part of the model architecture. Requires:
+- GGUF metadata detection for MTP head count
+- Modified forward pass to return K logit vectors
+- Acceptance logic similar to spec decode verification
+
+### Profile-Guided Spec Decode (#9)
+
+> llama.cpp Nov 2025.
+
+Instead of fixed K draft tokens, measure actual batch-verify cost at each K during warmup. Choose K dynamically: `E[accepted] × token_value - cost_of_verify(K)`.
+
+### Router Mode (#10)
+
+> llama.cpp server: switch models per request.
+
+Model registry with load/unload on demand. Requires per-model KV cache isolation and reference counting. The `model` field in API requests selects which model to route to.
+
+### Topology-Aware Partitioning (#12)
+
+> Exo: optimal split based on device topology.
+
+At transport setup, exchange device capabilities. Weighted layer assignment: `layers[i] = total × (speed[i] / Σspeeds)`. Store as layer→rank map in PP config.
+
+### Mirostat Sampling (#4)
+
+> llama.cpp: target-entropy sampling.
+
+Controls perplexity by adjusting sampling threshold to maintain target entropy (tau). Track running surprise estimate, adjust mu parameter. When active, top-k/top-p ignored. Two modes: Mirostat 1 and Mirostat 2.0.
 
 ---
 
-## Documentation
+## Implemented Features
 
-No open documentation issues.
+| Feature | Status |
+|---------|--------|
+| Tensor/Pipeline parallelism (6 modes, TCP/shm/NCCL) | Working |
+| Grammar-constrained decoding (GBNF + JSON schema) | Working |
+| TriAttention KV eviction (norm + frequency) | Phase 1+2 |
+| Speculative decoding (DDTree, self-spec, draft, n-gram) | Working |
+| CUDA fused FFN megakernels | Done |
+| GPTQ SafeTensors support | Working |
+| Native FP4 on Blackwell SM121 | Working |
+| WebGPU Phase 2 WASM | Blocked by Zig 0.16 codegen bug |
+
+---
+
+## Model Abstraction (Deferred)
+
+All 7 models share near-identical skeletons. A `ModelBuilder` could save ~600 lines but adds comptime complexity. Deferred because:
+1. Models rarely change once working
+2. Each has unique quirks (Gemma scaling, GPT-OSS sinks, Qwen DeltaNet, GLM4 MLA)
+3. Self-contained files are easier to debug
+
+---
+
+## Direct-to-VRAM Loading
+
+> Partially implemented: tiered KV cache via `--kv-tiers`. Weight loading via cuFile is future work.
+
+UMA platforms (Apple Silicon, GB10) already optimal via zero-copy mmap. Discrete GPUs would benefit from GPUDirect Storage (`cuFileRead`) bypassing CPU RAM. Low priority since most targets are UMA.
+
+---
+
+## Pre-Sharded Weights
+
+`agave shard` subcommand: split GGUF by TP degree → `model-tp0.gguf`, `model-tp1.gguf`. Zero init-time sharding, peak memory = shard size. Auto-detect via GGUF metadata.
 
 ---
 
 ## KV Cache Quantization Methods
 
-| Method | Rotation | FMAs (d=128) | Params | Storage | CLI |
-|--------|----------|:------------:|:------:|---------|-----|
-| TurboQuant | WHT-32 butterfly | ~640 | ~640 | f16 norm + packed indices | `tq2/tq3/tq4` |
-| **PlanarQuant** | Givens 2D | **256** | 128 | same | `pq2/pq3/pq4` |
-| **IsoQuant** | Quaternion 4D | **512** | 128 | same | `iq2/iq3/iq4` |
-| **RotorQuant** | Cl(3,0) rotor 3D | **~2,400** | 372 | same | `rq2/rq3/rq4` |
+| Method | Rotation | FMAs (d=128) | Storage | CLI |
+|--------|----------|:------------:|---------|-----|
+| TurboQuant | WHT-32 | ~640 | f16 norm + packed indices | `tq2/tq3/tq4` |
+| PlanarQuant | Givens 2D | 256 | same | `pq2/pq3/pq4` |
+| IsoQuant | Quaternion 4D | 512 | same | `iq2/iq3/iq4` |
+| RotorQuant | Cl(3,0) rotor | ~2,400 | same | `rq2/rq3/rq4` |
 
-PlanarQuant uses ~2.5x fewer FMAs than TurboQuant. All methods share the same Lloyd-Max codebook and storage format (2.5/3.5/4.5 bits per element). RotorQuant (~2400 FMAs) is more expensive than WHT due to the Clifford algebra sandwich product, but preserves geometric structure.
+PlanarQuant uses ~2.5x fewer FMAs than TurboQuant. All share Lloyd-Max codebook (2.5/3.5/4.5 bpe).
+
+---
+
+## Build / CI
+
+| Issue | Status |
+|-------|--------|
+| Golden tests need model files | By design — manual trigger |
