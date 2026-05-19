@@ -906,7 +906,7 @@ fn resolveTransportKind(choice: TransportChoice, peers_str: []const u8) Transpor
     };
 }
 
-fn setupTransport(allocator: std.mem.Allocator, peers_str: []const u8, rank: u32, world_size: u32, choice: TransportChoice, port_base: u16) ?*TransportMod.Transport {
+fn setupTransport(allocator: std.mem.Allocator, peers_str: []const u8, rank: u32, world_size: u32, choice: TransportChoice, port_base: u16, be_union: anytype) ?*TransportMod.Transport {
     const t = allocator.create(TransportMod.Transport) catch return null;
     var kind = resolveTransportKind(choice, peers_str);
     t.* = TransportMod.Transport.init(allocator, kind, rank, world_size) catch return null;
@@ -964,15 +964,29 @@ fn setupTransport(allocator: std.mem.Allocator, peers_str: []const u8, rank: u32
         t.local_mem = local_mem;
     }
 
-    // NCCL: init communicator over the established TCP link
+    // NCCL: wire CUDA interop BEFORE init so ncclCommInitRank has a valid context
     if (want_nccl) {
+        switch (be_union) {
+            .cuda => |cuda_be| {
+                t.cuda_sync = cuda_be.cuCtxSynchronize;
+                t.cuda_ctx = cuda_be.context;
+                t.cuda_ctx_set = if (cuda_be.cuCtxSetCurrent) |f| f else null;
+                t.cuda_backend = @ptrCast(cuda_be);
+                t.cuda_get_dev_ptr = @import("backend/cuda.zig").CudaBackend.getDevicePtrOpaque;
+                t.cuda_mem_alloc = cuda_be.cuMemAlloc;
+                t.cuda_memcpy_htod = cuda_be.cuMemcpyHtoD;
+                t.cuda_memcpy_dtoh = cuda_be.cuMemcpyDtoH;
+            },
+            else => {},
+        }
         t.setupNccl() catch |err| {
             std.log.warn("NCCL init failed ({s}), using TCP", .{@errorName(err)});
             t.kind = .tcp;
             return t;
         };
-        // NCCL comm init is lazy — triggered on first sendBuf/recvBuf/allReduceAdd
-        // when both ranks are executing model forward simultaneously
+        // Both ranks are synchronized after setupNccl (TCP ID exchange).
+        // Init comm NOW while both are at the same point.
+        t.ensureNcclComm();
     }
     return t;
 }
@@ -1898,21 +1912,7 @@ fn initAndRun(
 
         // Distributed TP: connect to peers
         if (cli.pp_degree <= 1) if (cli.tp_peers) |peers_str| {
-            if (setupTransport(allocator, peers_str, cli.tp_rank, cli.tp_degree, cli.transport, 49454)) |tr| {
-                // Wire CUDA interop for NCCL
-                if (tr.kind == .nccl) switch (be) {
-                    .cuda => |cuda_be| {
-                        tr.cuda_sync = cuda_be.cuCtxSynchronize;
-                        tr.cuda_ctx = cuda_be.context;
-                        tr.cuda_ctx_set = if (cuda_be.cuCtxSetCurrent) |f| f else null;
-                        tr.cuda_backend = @ptrCast(cuda_be);
-                        tr.cuda_get_dev_ptr = @import("backend/cuda.zig").CudaBackend.getDevicePtrOpaque;
-                        tr.cuda_mem_alloc = cuda_be.cuMemAlloc;
-                        tr.cuda_memcpy_htod = cuda_be.cuMemcpyHtoD;
-                        tr.cuda_memcpy_dtoh = cuda_be.cuMemcpyDtoH;
-                    },
-                    else => {},
-                };
+            if (setupTransport(allocator, peers_str, cli.tp_rank, cli.tp_degree, cli.transport, 49454, be)) |tr| {
                 mdl.setTpTransport(tr);
             }
         };
@@ -1931,21 +1931,7 @@ fn initAndRun(
             }
         }
         if (cli.tp_peers) |peers_str| {
-            if (setupTransport(allocator, peers_str, cli.tp_rank, cli.pp_degree, cli.transport, 49455)) |t| {
-                // Wire CUDA interop for NCCL PP
-                if (t.kind == .nccl) switch (be) {
-                    .cuda => |cuda_be| {
-                        t.cuda_sync = cuda_be.cuCtxSynchronize;
-                        t.cuda_ctx = cuda_be.context;
-                        t.cuda_ctx_set = if (cuda_be.cuCtxSetCurrent) |f| f else null;
-                        t.cuda_backend = @ptrCast(cuda_be);
-                        t.cuda_get_dev_ptr = @import("backend/cuda.zig").CudaBackend.getDevicePtrOpaque;
-                        t.cuda_mem_alloc = cuda_be.cuMemAlloc;
-                        t.cuda_memcpy_htod = cuda_be.cuMemcpyHtoD;
-                        t.cuda_memcpy_dtoh = cuda_be.cuMemcpyDtoH;
-                    },
-                    else => {},
-                };
+            if (setupTransport(allocator, peers_str, cli.tp_rank, cli.pp_degree, cli.transport, 49455, be)) |t| {
                 mdl.setPpConfig(cli.tp_rank, cli.pp_degree, t);
             }
         }
