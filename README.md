@@ -292,7 +292,7 @@ agave [OPTIONS] <model> [prompt]
       --repeat-penalty <R> Repetition penalty [default: 1.0]
       --system <TEXT>      System prompt for chat formatting
       --backend <BE>       auto, cpu, metal, vulkan, cuda, rocm, webgpu [default: auto]
-      --ctx-size <N>       Context window size [default: min(model, 4096), 0 = model max]
+      --ctx-size <N|auto>  Context window size [default: min(model, 4096), 0 = model max, auto = fit to memory]
       --seed <N>           Random seed for sampling [default: random]
       --grammar <FILE>     GBNF grammar file for constrained decoding
       --grammar-string <G> Inline GBNF grammar string
@@ -323,7 +323,7 @@ agave [OPTIONS] <model> [prompt]
       --mmap               Use lazy mmap instead of preloading weights into RAM
       --megakernel         Enable fused FFN megakernels (3→1 dispatch per layer)
       --draft-model <PATH> Draft model GGUF for speculative decoding
-      --spec-mode <MODE>   Speculative mode: standard, ddtree, self [default: ddtree]
+      --spec-mode <MODE>   Speculative mode: standard, ddtree, self, ngram [default: ddtree]
   -K, --spec-tokens <N>    Draft tokens per speculation round [default: 5]
       --tree-budget <N>    DDTree node budget [default: 64]
       --draft-layers <N>   Layers for self-speculative draft [default: auto]

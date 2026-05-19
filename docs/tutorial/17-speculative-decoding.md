@@ -57,12 +57,46 @@ agave model.gguf --spec-mode self --draft-layers 9 "prompt"  # skip 9 layers
 
 The `--draft-layers` flag controls how many layers to skip (default: 50% of model layers, skipping the middle). Fewer skipped layers = higher acceptance rate but less speedup per draft token.
 
+### N-gram Mode (`--spec-mode ngram`)
+
+Uses output history as its own draft — no draft model, no extra forward passes for drafting. Searches the last 2048 generated tokens for n-gram matches (n=3..10) of the most recent tokens. When a match is found, the tokens that followed that match in history are proposed as draft tokens.
+
+```bash
+agave model.gguf --spec-mode ngram "Write a Python function to sort a list"
+agave model.gguf --spec-mode ngram --spec-tokens 8 "Generate a JSON schema"
+```
+
+**How it works:** If the model has generated "```python\ndef sort_list" earlier and the current output ends with "```python\ndef", the n-gram matcher finds the earlier occurrence and proposes "sort_list" as draft tokens. The target model verifies these — accepted tokens skip forward passes.
+
+**Best for**: code generation (repeated patterns, imports, boilerplate), structured output (JSON, XML), templates, lists with repeated structure. **Not useful for**: creative writing, conversation, reasoning (low repetition).
+
+**Worked example** — generating a list:
+
+```
+Generated so far: "1. Apple\n2. Banana\n3. Cherry\n4. "
+Last 3 tokens: ["\n", "4", ". "]
+
+N-gram search finds "\n" + "2" + ". " earlier in history
+→ proposes continuation: ["B", "anana", "\n", "3"]
+
+Target model verifies:
+  - "D" (reject — target wants "Date" not "Banana")
+  - 0 tokens accepted, correction token = "D"
+
+Next attempt after "Date\n5. ":
+  N-gram finds "\n" + "5" + ". " — no earlier match with "5"
+  Falls back to single-token decode
+```
+
+Zero memory overhead (no draft model weights). The ring buffer uses 8 KB.
+
 ## Architecture
 
 ```
 src/spec/
 ├── spec_decode.zig   — orchestrator: draft, verify, generation loop
-└── ddtree.zig        — DDTree: heap, tree build, compile, acceptance walk
+├── ddtree.zig        — DDTree: heap, tree build, compile, acceptance walk
+└── ngram.zig         — N-gram: history ring buffer, n-gram matching, proposal
 
 src/backend/kernels/cpu/
 └── sdpa_tree.zig     — tree-masked SDPA kernel (ancestor bitmask attention)

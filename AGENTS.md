@@ -23,6 +23,7 @@ zig build -Denable-webgpu=false                # Disable WebGPU backend
 agave target.gguf --draft-model draft.gguf "prompt"              # Separate draft model
 agave model.gguf --spec-mode ddtree "prompt"                     # DDTree self-draft
 agave model.gguf --spec-mode self --draft-layers 9 "prompt"      # Self-speculative (layer skip)
+agave model.gguf --spec-mode ngram "prompt"                      # N-gram (history-based, no draft model)
 agave target.gguf --draft-model draft.gguf --spec-mode ddtree \
   --spec-tokens 5 --tree-budget 64 "prompt"                      # Full DDTree with draft model
 ```
