@@ -354,3 +354,24 @@ allReduceAdd(buf, n):
 3. Implement setup function (e.g., `setupYourTransport`)
 4. Add transport-specific paths in `allReduceAdd`, `sendBuf`, `recvBuf`
 5. Wire in `resolveTransportKind` and `setupTransport` in `main.zig`
+
+## How to Add a New Sampler
+
+1. **Implement** in `src/ops/math.zig`: add `pub fn applyYourSampler(logits, params)` or `pub fn sampleYourMethod(logits, params, rng)`. Operate on pre-softmax logits in-place.
+
+2. **API params**: add fields to `SamplingParams` in `src/server/json.zig`. Add parsing in `parseSampling()`.
+
+3. **Server wiring**: apply in ALL generation paths in `src/server/server.zig`:
+   - Non-streaming: `generateBlocking()` (~line 2378)
+   - Streaming first token: `generateStream()` (~line 3730)
+   - Streaming decode: `generateStream()` (~line 3852)
+   Order: repeat_penalty → DRY → grammar mask → mirostat OR (min_p → XTC → sampleToken)
+
+4. **CLI flags**: add to `cli_specs` array in `main.zig`, add fields to CLI struct, parse in init block. Wire into:
+   - Standard decode loop (~line 2985)
+   - First-token sampling (~line 2923)
+   - Spec decode fallback paths (cooldown + ngram no-match)
+
+5. **Tests**: add unit tests in `src/ops/math.zig`, fuzz test in `src/fuzz_tests.zig`
+
+6. **Docs**: update `docs/API.md` (parameter table), `docs/tutorial/07-sampling.md`, `--help` text, `README.md`

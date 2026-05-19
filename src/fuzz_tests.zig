@@ -9,6 +9,7 @@ const Smith = std.testing.Smith;
 const math_ops = @import("ops/math.zig");
 const json = @import("server/json.zig");
 const grammar_mod = @import("grammar.zig");
+const kv_quant = @import("ops/kv_quant.zig");
 
 // ── JSON Parser Fuzzing ─────────────────────────────────────────
 
@@ -142,6 +143,50 @@ test "fuzz: sampleMirostat no crash" {
             var prng = std.Random.Xoshiro256.init(smith.valueWithHash(u64, 104));
             const result = math_ops.sampleMirostat(&logits, tau, eta, &mu, temp, prng.random());
             try std.testing.expect(result < 32);
+        }
+    }.f, .{});
+}
+
+// ── N-gram Fuzzing ──────────────────────────────────────────────
+
+// ── KV Cache Quantization Fuzzing ────────────────────────────────
+
+test "fuzz: kvStore + kvDot roundtrip" {
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *Smith) !void {
+            const n: usize = 32;
+            var src: [n]f32 = undefined;
+            for (&src, 0..) |*v, i| v.* = @as(f32, @floatFromInt(smith.valueWithHash(i8, @truncate(i)))) / 10.0;
+
+            const kv_types = [_]kv_quant.KvQuantType{ .f16, .q8_0, .fp8_e4m3 };
+            const kv_type = kv_types[smith.indexWithHash(kv_types.len, 100)];
+
+            var kv_buf: [256]u8 = undefined;
+            const needed = kv_quant.kvSliceBytes(kv_type, n);
+            if (needed > kv_buf.len) return;
+            kv_quant.kvStore(&kv_buf, &src, n, kv_type);
+
+            var query: [n]f32 = undefined;
+            for (&query, 0..) |*v, i| v.* = @as(f32, @floatFromInt(smith.valueWithHash(i8, @truncate(i + 50)))) / 10.0;
+            const dot = kv_quant.kvDot(&query, &kv_buf, n, kv_type);
+            try std.testing.expect(std.math.isFinite(dot));
+        }
+    }.f, .{});
+}
+
+test "fuzz: kvDot with random bytes" {
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *Smith) !void {
+            const n: usize = 16;
+            var kv_buf: [128]u8 = undefined;
+            smith.bytesWithHash(&kv_buf, 0);
+
+            var query: [n]f32 = undefined;
+            for (&query, 0..) |*v, i| v.* = @as(f32, @floatFromInt(smith.valueWithHash(i8, @truncate(i + 50)))) / 10.0;
+
+            // Should not crash even with garbage KV data
+            _ = kv_quant.kvDot(&query, &kv_buf, n, .f16);
+            _ = kv_quant.kvDot(&query, &kv_buf, n, .q8_0);
         }
     }.f, .{});
 }
