@@ -70,7 +70,7 @@ All quantized GEMV formats native on all 6 backends. See [KERNELS.md](KERNELS.md
 | # | Feature | Impact | Source |
 |---|---------|--------|--------|
 | 1 | ~~SSM state prefix caching~~ | ~~~2x prefill speedup for hybrid SSM models~~ | Done |
-| 2 | Async scheduler + PP overlap | 30% E2E throughput improvement | vLLM |
+| 2 | ~~Async scheduler + PP overlap~~ | ~~Decode-first + chunked prefill~~ | Done |
 | 3 | Batched KV swap (cuMemcpyBatchAsync) | Reduce tiered cache API overhead | vLLM |
 | 4 | ~~Mirostat sampling~~ | ~~Target-entropy adaptive sampling~~ | Done |
 | 5 | MTP (Multi-Token Prediction) heads | Native multi-token output for Qwen3.6/DeepSeek | llama.cpp |
