@@ -105,6 +105,7 @@ pub const ModelInfo = struct {
     file_size_bytes: usize,
     load_ms: u64,
     warmup_ms: u64,
+    system_mem: usize = 0, // Available system memory in bytes
     // Optional extended info
     format_name: []const u8 = "", // "GGUF v3", "SafeTensors"
     attention_desc: []const u8 = "", // "full", "sliding (128)", "hybrid: attn every 4"
@@ -807,6 +808,10 @@ pub const Display = struct {
         jw.write(info.load_ms) catch return;
         jw.objectField("warmup_ms") catch return;
         jw.write(info.warmup_ms) catch return;
+        if (info.system_mem > 0) {
+            jw.objectField("system_mem_bytes") catch return;
+            jw.write(info.system_mem) catch return;
+        }
 
         jw.endObject() catch return;
 

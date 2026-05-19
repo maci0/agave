@@ -1083,16 +1083,21 @@ fn runBenchmark(model: *Model, tok_state: anytype, tok_kind: anytype, allocator:
     const prefill_ms = @as(f64, @floatFromInt(prefill_us)) / 1000.0;
     const decode_ms = @as(f64, @floatFromInt(decode_us)) / 1000.0;
 
-    var buf: [512]u8 = undefined;
-    const msg = std.fmt.bufPrint(&buf,
-        \\
-        \\Benchmark Results:
-        \\  Prefill: {d} tokens in {d:.1} ms ({d:.1} tok/s)
-        \\  Decode:  {d} tokens in {d:.1} ms ({d:.1} tok/s)
-        \\  TTFT:    {d:.1} ms
-        \\
-    , .{ n_prompt, prefill_ms, prefill_tps, gen_count, decode_ms, decode_tps, prefill_ms }) catch "";
-    _ = std.posix.system.write(stdout_file.handle, msg.ptr, msg.len);
+    var buf: [1024]u8 = undefined;
+    const msg = if (cli.json)
+        std.fmt.bufPrint(&buf,
+            \\{{"prefill_tokens":{d},"prefill_ms":{d:.1},"prefill_tps":{d:.1},"decode_tokens":{d},"decode_ms":{d:.1},"decode_tps":{d:.1},"ttft_ms":{d:.1}}}
+        , .{ n_prompt, prefill_ms, prefill_tps, gen_count, decode_ms, decode_tps, prefill_ms })
+    else
+        std.fmt.bufPrint(&buf,
+            \\
+            \\Benchmark Results:
+            \\  Prefill: {d} tokens in {d:.1} ms ({d:.1} tok/s)
+            \\  Decode:  {d} tokens in {d:.1} ms ({d:.1} tok/s)
+            \\  TTFT:    {d:.1} ms
+            \\
+        , .{ n_prompt, prefill_ms, prefill_tps, gen_count, decode_ms, decode_tps, prefill_ms });
+    if (msg) |m| _ = std.posix.system.write(stdout_file.handle, m.ptr, m.len) else |_| {}
 }
 
 fn printUsage() void {
@@ -1417,6 +1422,7 @@ pub fn main(init: std.process.Init) !void {
         .file_size_bytes = file_size_bytes,
         .load_ms = load_ms,
         .warmup_ms = 0, // updated after preload
+        .system_mem = backend_mod.detectSystemMem(),
     };
 
     // ── Recipe defaults ─────────────────────────────────────────
@@ -2921,7 +2927,13 @@ fn generateAndPrintInner(
             }
         }
         if (use_sampling) {
-            first_gen_token = math_ops.sampleToken(first_logits, cli.temperature, cli.top_k, cli.top_p, prng.random());
+            if (cli.mirostat_mode >= 2) {
+                first_gen_token = math_ops.sampleMirostat(first_logits, cli.mirostat_tau, cli.mirostat_eta, &cli_mirostat_mu, cli.temperature, prng.random());
+            } else {
+                if (cli.min_p > 0) math_ops.applyMinP(first_logits, cli.min_p);
+                if (cli.xtc_probability > 0) math_ops.applyXtc(first_logits, cli.xtc_probability, cli.xtc_threshold, prng.random());
+                first_gen_token = math_ops.sampleToken(first_logits, cli.temperature, cli.top_k, cli.top_p, prng.random());
+            }
         } else if (grammar_state != null or json_mode_active) {
             first_gen_token = math_ops.argmax(first_logits);
         }
