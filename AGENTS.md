@@ -24,6 +24,9 @@ agave target.gguf --draft-model draft.gguf "prompt"              # Separate draf
 agave model.gguf --spec-mode ddtree "prompt"                     # DDTree self-draft
 agave model.gguf --spec-mode self --draft-layers 9 "prompt"      # Self-speculative (layer skip)
 agave model.gguf --spec-mode ngram "prompt"                      # N-gram (history-based, no draft model)
+agave model.gguf --ctx-size auto "prompt"                        # Auto-fit context to available memory
+agave model.gguf -t 0.8 --mirostat-mode 2 "prompt"              # Mirostat target-entropy sampling
+agave model.gguf -t 0.8 --dry-multiplier 1.5 "prompt"           # DRY n-gram repetition penalty
 agave target.gguf --draft-model draft.gguf --spec-mode ddtree \
   --spec-tokens 5 --tree-budget 64 "prompt"                      # Full DDTree with draft model
 ```

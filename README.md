@@ -290,6 +290,9 @@ agave [OPTIONS] <model> [prompt]
       --top-k <K>          Top-k sampling, 0 = disabled [default: 0]
       --min-p <P>          Min-p sampling threshold [default: 0]
       --repeat-penalty <R> Repetition penalty [default: 1.0]
+      --dry-multiplier <M> DRY n-gram repetition penalty [default: 0]
+      --xtc-probability <P> XTC diversity sampling [default: 0]
+      --mirostat-mode <N>  Mirostat target-entropy sampling: 0=off, 2=on [default: 0]
       --system <TEXT>      System prompt for chat formatting
       --backend <BE>       auto, cpu, metal, vulkan, cuda, rocm, webgpu [default: auto]
       --ctx-size <N|auto>  Context window size [default: min(model, 4096), 0 = model max, auto = fit to memory]
@@ -324,6 +327,7 @@ agave [OPTIONS] <model> [prompt]
       --megakernel         Enable fused FFN megakernels (3→1 dispatch per layer)
       --draft-model <PATH> Draft model GGUF for speculative decoding
       --spec-mode <MODE>   Speculative mode: standard, ddtree, self, ngram [default: ddtree]
+                           ngram uses output history (no draft model needed)
   -K, --spec-tokens <N>    Draft tokens per speculation round [default: 5]
       --tree-budget <N>    DDTree node budget [default: 64]
       --draft-layers <N>   Layers for self-speculative draft [default: auto]
