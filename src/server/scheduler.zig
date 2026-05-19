@@ -40,6 +40,10 @@ const max_waiting_queue_size: usize = 1024;
 /// Avoids repeated reallocation during the decode phase.
 const initial_token_capacity: usize = 256;
 
+/// Maximum prefill tokens processed per scheduler step per request.
+/// Limits prefill blocking so decode requests get timely service.
+const prefill_chunk_size: u32 = 32;
+
 /// Per-request state for continuous batching.
 pub const Request = struct {
     id: u64,
@@ -59,6 +63,8 @@ pub const Request = struct {
     /// Timestamp (milliTimestamp) when prefill completed and decode began.
     /// Zero until prefill finishes. Used by the server to record TTFT metrics.
     prefill_done_at: i64 = 0,
+    /// KV cache position for this request (for multi-request interleaving).
+    kv_position: usize = 0,
     allocator: Allocator,
 
     /// Append a token to the output sequence.
@@ -382,49 +388,30 @@ pub const RequestManager = struct {
             }
         }
 
-        // 7. Execute forward for all running requests (unlocked — model owns its concurrency)
+        // 7. Execute forward for all running requests.
+        // Decode-first scheduling: process all decode requests before prefill.
+        // This ensures low TPOT for actively generating requests while new
+        // requests' prefill is chunked to avoid blocking.
+
+        // Phase A: decode all requests that finished prefill (one token each)
         for (self.running.items) |req| {
             if (req.is_cancelled.load(.acquire)) continue;
             if (req.is_finished.load(.acquire)) continue;
+            if (req.prefill_pos < req.prompt_tokens) continue;
 
-            // Prefill phase: feed prompt tokens one at a time.
-            // SSM state restore: on first prefill step with cached prefix, restore SSM state
-            if (req.prefill_pos == 0 and req.cached_prefix_len > 0 and self.ssm_cache_inited) {
-                const h = std.hash.XxHash64.hash(0, std.mem.sliceAsBytes(req.prompt_tokens_slice[0..req.cached_prefix_len]));
-                if (self.ssm_state_cache.get(h)) |snapshot| {
-                    model.restoreSsmState(snapshot);
-                }
-            }
-            if (req.prefill_pos < req.prompt_tokens) {
-                const prompt_tid = req.prompt_tokens_slice[req.prefill_pos];
-                const next_token = model.forward(prompt_tid) catch |err| {
-                    std.log.err("Request {d} prefill failed: {}", .{ req.id, err });
-                    req.is_cancelled.store(true, .release);
-                    continue;
-                };
-                req.prefill_pos += 1;
+            // Restore KV position for this request
+            model.setKvSeqLen(req.kv_position);
 
-                // Last prefill token produces the first generated token
-                if (req.prefill_pos == req.prompt_tokens) {
-                    req.prefill_done_at = milliTimestamp();
-                    req.last_token_id = next_token;
-                    req.appendToken(next_token, eog_ids);
-                }
-                continue;
-            }
-
-            // Decode phase: generate tokens
             const next_token = model.forward(req.last_token_id) catch |err| {
                 std.log.err("Request {d} forward failed: {}", .{ req.id, err });
                 req.is_cancelled.store(true, .release);
                 continue;
             };
 
+            req.kv_position = model.kvSeqLen();
             req.appendToken(next_token, eog_ids);
 
-            // On completion, insert full sequence into RadixTree for future reuse.
-            // Must hold mutex — enqueue() calls matchPrefix() under the same lock
-            // from HTTP handler threads, so concurrent insert would be a data race.
+            // On completion: RadixTree insert + SSM state cache
             if (req.is_finished.load(.acquire) and req.tokens.items.len > 0) {
                 const block_ids = model.getBlockTable();
                 self.mutex.lockUncancelable(self.io);
@@ -432,7 +419,6 @@ pub const RequestManager = struct {
                 self.radix_tree.insert(req.tokens.items, block_ids) catch |err| {
                     std.log.warn("req={d} failed to insert sequence into RadixTree: {}", .{ req.id, err });
                 };
-                // Cache SSM state alongside KV blocks for hybrid models
                 if (self.ssm_cache_inited) {
                     if (model.saveSsmState(self.allocator)) |snapshot| {
                         const h = std.hash.XxHash64.hash(0, std.mem.sliceAsBytes(req.prompt_tokens_slice));
@@ -442,6 +428,50 @@ pub const RequestManager = struct {
                     }
                 }
             }
+        }
+
+        // Phase B: advance ONE prefilling request by chunk_size tokens
+        // Only one prefill chunk per step to minimize decode latency impact
+        for (self.running.items) |req| {
+            if (req.is_cancelled.load(.acquire)) continue;
+            if (req.is_finished.load(.acquire)) continue;
+            if (req.prefill_pos >= req.prompt_tokens) continue;
+
+            // SSM state restore on first prefill step
+            if (req.prefill_pos == 0 and req.cached_prefix_len > 0 and self.ssm_cache_inited) {
+                const h = std.hash.XxHash64.hash(0, std.mem.sliceAsBytes(req.prompt_tokens_slice[0..req.cached_prefix_len]));
+                if (self.ssm_state_cache.get(h)) |snapshot| {
+                    model.restoreSsmState(snapshot);
+                }
+            }
+
+            // Restore KV position
+            model.setKvSeqLen(req.kv_position);
+
+            // Process up to prefill_chunk_size tokens
+            const remaining = req.prompt_tokens - req.prefill_pos;
+            const chunk = @min(remaining, prefill_chunk_size);
+            var last_token: u32 = 0;
+            var i: u32 = 0;
+            while (i < chunk) : (i += 1) {
+                last_token = model.forward(req.prompt_tokens_slice[req.prefill_pos]) catch |err| {
+                    std.log.err("Request {d} prefill failed: {}", .{ req.id, err });
+                    req.is_cancelled.store(true, .release);
+                    break;
+                };
+                req.prefill_pos += 1;
+            }
+
+            req.kv_position = model.kvSeqLen();
+
+            // Prefill complete — emit first generated token
+            if (req.prefill_pos >= req.prompt_tokens and !req.is_cancelled.load(.acquire)) {
+                req.prefill_done_at = milliTimestamp();
+                req.last_token_id = last_token;
+                req.appendToken(last_token, eog_ids);
+            }
+
+            break; // Only one prefill chunk per step
         }
     }
 
