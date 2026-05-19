@@ -1756,6 +1756,16 @@ fn initAndRun(
         }
         std.log.info("TP={d} rank={d} active", .{ cli.tp_degree, cli.tp_rank });
 
+        // Auto-discover peers via UDP broadcast if --peers not specified
+        if (cli.tp_peers == null and cli.tp_degree > 1) {
+            const peer_discovery = @import("parallel/discovery.zig");
+            if (peer_discovery.discoverPeer(cli.tp_rank, cli.tp_degree, 49454)) |ip| {
+                var ip_buf: [16]u8 = undefined;
+                const ip_str = std.fmt.bufPrint(&ip_buf, "{d}.{d}.{d}.{d}", .{ ip[0], ip[1], ip[2], ip[3] }) catch "";
+                if (ip_str.len > 0) cli.tp_peers = ip_str;
+            }
+        }
+
         // Distributed TP: connect to peers
         if (cli.pp_degree <= 1) if (cli.tp_peers) |peers_str| {
             if (setupTransport(allocator, peers_str, cli.tp_rank, cli.tp_degree, cli.transport, 49454)) |tr| {
@@ -1781,6 +1791,15 @@ fn initAndRun(
     // PP: pipeline parallelism setup (uses --pp, --rank, --peers)
     if (cli.pp_degree > 1) {
         std.log.info("PP={d} rank={d}", .{ cli.pp_degree, cli.tp_rank });
+        // Auto-discover peers for PP if --peers not specified
+        if (cli.tp_peers == null) {
+            const peer_discovery = @import("parallel/discovery.zig");
+            if (peer_discovery.discoverPeer(cli.tp_rank, cli.pp_degree, 49455)) |ip| {
+                var ip_buf2: [16]u8 = undefined;
+                const ip_str = std.fmt.bufPrint(&ip_buf2, "{d}.{d}.{d}.{d}", .{ ip[0], ip[1], ip[2], ip[3] }) catch "";
+                if (ip_str.len > 0) cli.tp_peers = ip_str;
+            }
+        }
         if (cli.tp_peers) |peers_str| {
             if (setupTransport(allocator, peers_str, cli.tp_rank, cli.pp_degree, cli.transport, 49455)) |t| {
                 mdl.setPpConfig(cli.tp_rank, cli.pp_degree, t);
@@ -2437,8 +2456,30 @@ fn generateSpeculative(
         break :blk skip_start + skip_count;
     } else 0;
 
+    // Adaptive spec decode: skip drafting when acceptance rate drops below threshold
+    // (e.g., during reasoning/thinking sections where predictions are unreliable)
+    const adaptive_window: u32 = 8;
+    const adaptive_threshold: f32 = 0.25;
+    var recent_accepted: u32 = 0;
+    var recent_drafted: u32 = 0;
+    var draft_cooldown: u32 = 0;
+
     while (token_count < cli.max_tokens and !isEogToken(last, eog)) {
         const pre_draft_pos = target.kvSeqLen();
+
+        // Adaptive: skip drafting during cooldown (low acceptance period)
+        if (draft_cooldown > 0) {
+            draft_cooldown -= 1;
+            last = target.forward(last) catch break;
+            if (use_sampling) last = math_ops.sampleToken(target.getLogits(), cli.temperature, cli.top_k, cli.top_p, prng.random());
+            if (isEogToken(last, eog)) break;
+            if (use_ngram) ngram_state.push(last);
+            if (token_count < gen_ids_buf.len) {
+                gen_ids_buf[token_count] = last;
+                token_count += 1;
+            }
+            continue;
+        }
 
         // Draft phase
         if (self_spec) target.setLayerSkip(skip_start, skip_end);
@@ -2505,6 +2546,18 @@ fn generateSpeculative(
             }
         }
         last = if (hit_eog) target.eosId() else result.next_token;
+
+        // Adaptive spec decode: track acceptance rate, enter cooldown if low
+        recent_accepted += result.accepted;
+        recent_drafted += spec_state.n_draft;
+        if (recent_drafted >= adaptive_window) {
+            const rate = @as(f32, @floatFromInt(recent_accepted)) / @as(f32, @floatFromInt(recent_drafted));
+            if (rate < adaptive_threshold) {
+                draft_cooldown = adaptive_window;
+            }
+            recent_accepted = 0;
+            recent_drafted = 0;
+        }
 
         // Update n-gram history with accepted tokens
         if (use_ngram) {
