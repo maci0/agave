@@ -302,6 +302,35 @@ pub fn applyMinP(logits: []f32, min_p: f32) void {
     }
 }
 
+/// XTC sampling: with probability `xtc_probability`, exclude top tokens that
+/// exceed `xtc_threshold` probability. Increases diversity by preventing mode collapse.
+/// Must be called AFTER temperature scaling. Operates on pre-softmax logits.
+pub fn applyXtc(logits: []f32, xtc_probability: f32, xtc_threshold: f32, rng: std.Random) void {
+    if (xtc_probability <= 0 or xtc_threshold <= 0) return;
+    if (rng.float(f32) > xtc_probability) return;
+
+    var max_val: f32 = -std.math.inf(f32);
+    for (logits) |v| max_val = @max(max_val, v);
+    const log_threshold = max_val + @log(xtc_threshold);
+    const neg_inf = -std.math.inf(f32);
+
+    // Count tokens above threshold — keep at least one
+    var n_above: usize = 0;
+    for (logits) |v| {
+        if (v >= log_threshold) n_above += 1;
+    }
+    if (n_above <= 1) return;
+
+    // Exclude all but the last above-threshold token (keep one for valid sampling)
+    var kept: usize = 0;
+    for (0..logits.len) |i| {
+        if (logits[i] >= log_threshold) {
+            kept += 1;
+            if (kept < n_above) logits[i] = neg_inf;
+        }
+    }
+}
+
 /// Modifies the logits buffer in-place.
 pub fn sampleToken(logits: []f32, temperature: f32, top_k: u32, top_p: f32, rng: std.Random) u32 {
     if (temperature == 0) return argmax(logits);

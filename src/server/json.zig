@@ -31,6 +31,8 @@ pub const SamplingParams = struct {
     frequency_penalty: f32 = 0,
     presence_penalty: f32 = 0,
     repetition_penalty: f32 = 1.0,
+    xtc_probability: f32 = 0,
+    xtc_threshold: f32 = 0.1,
     seed: ?u64 = null,
     logprobs: bool = false,
     top_logprobs: u32 = 0,
@@ -216,6 +218,14 @@ pub fn parseSampling(body: []const u8) SamplingParams {
         .top_k = @intCast(@min(raw_top_k, max_top_k)),
         .top_p = if (std.math.isFinite(raw_top_p)) std.math.clamp(raw_top_p, 0, 1.0) else 1.0,
         .min_p = if (std.math.isFinite(raw_min_p)) std.math.clamp(raw_min_p, 0, 1.0) else 0,
+        .xtc_probability = blk: {
+            const raw = extractFloatField(body, "xtc_probability") orelse 0;
+            break :blk if (std.math.isFinite(raw)) std.math.clamp(raw, 0, 1.0) else 0;
+        },
+        .xtc_threshold = blk: {
+            const raw = extractFloatField(body, "xtc_threshold") orelse 0.1;
+            break :blk if (std.math.isFinite(raw)) std.math.clamp(raw, 0, 1.0) else 0.1;
+        },
         .frequency_penalty = if (std.math.isFinite(raw_freq_pen)) std.math.clamp(raw_freq_pen, -2.0, 2.0) else 0,
         .presence_penalty = if (std.math.isFinite(raw_pres_pen)) std.math.clamp(raw_pres_pen, -2.0, 2.0) else 0,
         .repetition_penalty = blk: {
