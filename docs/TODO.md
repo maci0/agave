@@ -69,6 +69,42 @@ All **correctness-critical** kernels for supported model×quant combinations are
 
 ---
 
+## vLLM-Inspired Roadmap
+
+Extracted from vLLM v0.8.0–v0.21.0 changelogs. Prioritized by impact and implementation complexity.
+
+### High Priority
+
+| # | Feature | Impact | Status |
+|---|---------|--------|--------|
+| 1 | SSM state prefix caching | ~2x speedup for Qwen3.5/Nemotron with shared prefixes (cache DeltaNet/Mamba state matrices) | Design |
+| 2 | Async scheduler + PP overlap | 30% E2E throughput improvement (overlap prefill compute with network I/O) | Design |
+| 3 | Batched KV swap via cuMemcpyBatchAsync | Reduce API overhead for tiered KV cache block transfers | Open |
+| 4 | Prefix cache xxHash | High-performance hash for prefix lookup vs token-sequence matching | Open |
+| 5 | `--ctx-size auto` | Probe available memory, pick largest safe context (no OOM at startup) | Implementing |
+
+### Medium Priority
+
+| # | Feature | Impact | Status |
+|---|---------|--------|--------|
+| 6 | TurboQuant in SDPA kernel | Skip decode-time dequant by integrating turbo2 directly into FlashAttention | Open |
+| 7 | Spec decode thinking budget | Improve acceptance rates on reasoning models with `<think>` tokens | Open |
+| 8 | Multi-stream pre-attention GEMM | Overlap QKV of layer N+1 with SDPA of layer N | Open |
+| 9 | Conditional compilation | `-Denable-<quant>=false` to shrink binary and build time | Open |
+| 10 | N-gram speculative decoding | Zero-overhead spec decode from output history (code, lists) | Implementing |
+| 11 | gRPC server (HTTP/2) | Lower overhead than HTTP/1.1 for high-throughput serving | Open |
+
+### Low Priority
+
+| # | Feature | Impact | Status |
+|---|---------|--------|--------|
+| 12 | Flash Linear Attention kernels | Alternative kernels for linear attention models | Open |
+| 13 | Fused GPU rejection sampling | GPU kernel for spec decode verification (currently CPU) | Open |
+| 14 | Cross-layer KV sharing | Reduce KV memory for models with shared attention layers | Open |
+| 15 | Heterogeneous TP | Mixed-capacity devices for tensor parallelism | Open |
+
+---
+
 ## Build / CI / Infra
 
 | # | Issue | Status |

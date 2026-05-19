@@ -202,3 +202,48 @@ Architecture: HTTP server already supports multiple models via scheduler. Add
 model-to-model routing rules (e.g., "if image input and no vision encoder,
 forward to model X"). Orthogonal to kernel-level perf — purely server/scheduler
 layer.
+
+## SSM State Prefix Caching
+
+> Inspired by vLLM v0.15.0 "Mamba prefix caching" (~2x speedup).
+
+DeltaNet (Qwen3.5) and Mamba-2 (Nemotron-H) maintain per-head state matrices
+that must be computed sequentially. For shared prefixes (e.g., system prompt),
+the SSM state after the prefix is deterministic and can be cached.
+
+### Current behavior
+Each request recomputes SSM state from scratch through the full prefix. For a
+1000-token system prompt with 48 SSM layers, that's 48,000 sequential state
+updates — the slowest part of Qwen3.5 prefill.
+
+### Proposed design
+- Extend `RadixTree` to store SSM state snapshots alongside KV cache block IDs
+- After prefill, save per-layer SSM state (`state_matrix[n_v_heads][v_dim][k_dim]`)
+- On cache hit: restore SSM state from snapshot, skip SSM prefill for cached prefix
+- Memory: Qwen3.5 0.8B = 48 layers × 16 heads × 64×64 × 4B = 12 MB per snapshot
+- Cache eviction: same LRU as KV blocks, shared eviction cost multiplier
+
+### Complexity
+- Model forward pass must accept "start from saved state" parameter
+- DeltaNet `ssm_state` buffers must be serializable/restorable
+- State depends on token sequence (no partial restore — all-or-nothing per prefix)
+
+## Async Scheduler with PP Overlap
+
+> Inspired by vLLM v0.16.0: 30.8% E2E throughput, 31.8% TPOT improvement.
+
+### Current behavior
+`runSchedulerLoop` calls `manager.step()` synchronously — one request's forward
+pass blocks all others. With PP, stage 0 is idle while stage 1 computes.
+
+### Proposed design
+- **Prefill/decode interleaving**: while one request is in decode (layer-by-layer),
+  start prefilling the next request's tokens
+- **PP overlap**: stage 0 processes request B while stage 1 finishes request A
+- Implementation: double-buffer activations, tag each buffer with request ID
+- Scheduler tracks per-request pipeline stage position
+- Requires careful KV cache isolation between concurrent requests
+
+### Complexity
+High — touches scheduler, model forward, KV cache manager, and transport layer.
+Best approached after continuous batching is proven stable.

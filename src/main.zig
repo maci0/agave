@@ -10,6 +10,7 @@ const backend_mod = @import("backend/backend.zig");
 const format_mod = @import("format/format.zig");
 const model_mod = @import("models/model.zig");
 const spec_decode = @import("spec/spec_decode.zig");
+const ngram_mod = @import("spec/ngram.zig");
 const tok_mod = @import("tokenizer/tokenizer.zig");
 const server = @import("server/server.zig");
 const display_mod = @import("display.zig");
@@ -393,7 +394,7 @@ const cli_specs = [_]cli_mod.ArgSpec{
     .{ .long = "profile", .help = "Profile per-op timing (halves throughput)." },
 };
 
-const SpecMode = enum { none, standard, ddtree, self_spec };
+const SpecMode = enum { none, standard, ddtree, self_spec, ngram };
 
 const CliArgs = struct {
     model_path: []const u8,
@@ -736,7 +737,11 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
         .system_prompt = res.option("system"),
         .backend_choice = backend_choice,
         .device_id = device_id,
-        .ctx_size = res.optionU32("ctx-size") orelse 0,
+        .ctx_size = blk: {
+            const raw = res.option("ctx-size") orelse break :blk 0;
+            if (std.mem.eql(u8, raw, "auto")) break :blk std.math.maxInt(u32);
+            break :blk std.fmt.parseInt(u32, raw, 10) catch 0;
+        },
         .seed = res.optionU64("seed") orelse @as(u64, @truncate(@as(u96, @bitCast(nanoTimestamp(g_io))))),
         .kv_type_k = blk: {
             if (res.option("kv-type-k")) |s| break :blk kvTypeOrExit(s, "--kv-type-k");
@@ -822,7 +827,8 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
                 if (std.mem.eql(u8, s, "standard")) break :blk SpecMode.standard;
                 if (std.mem.eql(u8, s, "ddtree")) break :blk SpecMode.ddtree;
                 if (std.mem.eql(u8, s, "self")) break :blk SpecMode.self_spec;
-                eprint("Error: unknown --spec-mode '{s}' (expected: standard, ddtree, self)\n", .{s});
+                if (std.mem.eql(u8, s, "ngram")) break :blk SpecMode.ngram;
+                eprint("Error: unknown --spec-mode '{s}' (expected: standard, ddtree, self, ngram)\n", .{s});
                 std.process.exit(1);
             }
             break :blk if (dm != null) SpecMode.ddtree else SpecMode.none;
@@ -1010,7 +1016,7 @@ fn printUsage() void {
         \\
         \\BACKEND & MODEL:
         \\      --backend <BE>        Compute backend: auto, cpu, metal, vulkan, cuda, rocm, webgpu [default: auto]
-        \\      --ctx-size <N>        Context window size; 0 = full model context [default: min(model, 4096)]
+        \\      --ctx-size <N|auto>    Context window size; 0 = full, auto = fit to memory [default: min(model, 4096)]
         \\      --allow-cpu-fallback  Allow GPU backends to fall back to CPU for unsupported ops
         \\      --mmap                Use lazy mmap instead of eagerly paging weights into RAM
         \\      --prefill-batch-size <N>  Prefill chunk size in tokens [default: 512]
@@ -1046,7 +1052,7 @@ fn printUsage() void {
         \\
         \\SPECULATIVE DECODING:
         \\      --draft-model <PATH>   Draft model GGUF for speculative decoding
-        \\      --spec-mode <MODE>     Speculative mode: standard, ddtree, self [default: ddtree]
+        \\      --spec-mode <MODE>     Speculative mode: standard, ddtree, self, ngram [default: ddtree]
         \\  -K, --spec-tokens <N>      Draft tokens per speculation round [default: 5]
         \\      --tree-budget <N>      DDTree node budget [default: 64]
         \\      --draft-layers <N>     Layers for self-speculative draft [default: auto]
@@ -1315,7 +1321,31 @@ pub fn main(init: std.process.Init) !void {
     // This avoids massive KV cache allocations for models with very large
     // context lengths (e.g. 128K). --ctx-size 0 = use model's full context.
     const model_native_ctx = disp_info.ctx_size; // from model metadata
-    if (cli.ctx_size == 0) {
+    const ctx_auto_sentinel = std.math.maxInt(u32);
+    if (cli.ctx_size == ctx_auto_sentinel) {
+        // --ctx-size auto: probe available memory and fit largest safe context
+        const avail_mem = backend_mod.detectSystemMem();
+        const n_kv = disp_info.n_kv_heads;
+        const hd = disp_info.head_dim;
+        const nl = disp_info.n_layers;
+        if (n_kv > 0 and hd > 0 and nl > 0 and avail_mem > 0) {
+            const kv_bpe = cli.kv_type_k.bitsPerElement() + cli.kv_type_v.bitsPerElement();
+            const per_token_bytes: usize = @as(usize, nl) * @as(usize, n_kv) * @as(usize, hd) * @as(usize, @intFromFloat(kv_bpe)) / 8;
+            const model_bytes = disp_info.file_size_bytes;
+            const usable = if (avail_mem > model_bytes * 2) avail_mem - model_bytes * 2 else avail_mem / 4;
+            const fit_ctx = if (per_token_bytes > 0) usable * 8 / (per_token_bytes * 10) else default_ctx_size;
+            const max_ctx = if (model_native_ctx > 0) @as(usize, model_native_ctx) else 131072;
+            cli.ctx_size = @intCast(@max(128, @min(fit_ctx, max_ctx)));
+            std.log.info("ctx-size: auto → {d} ({d} MB available, {d} B/token KV)", .{
+                cli.ctx_size,
+                avail_mem / (1024 * 1024),
+                per_token_bytes,
+            });
+        } else {
+            cli.ctx_size = default_ctx_size;
+            std.log.info("ctx-size: auto → {d} (insufficient metadata for auto-fit)", .{cli.ctx_size});
+        }
+    } else if (cli.ctx_size == 0) {
         if (cli.user_set.ctx_size) {
             // User explicitly passed --ctx-size 0 → use model's full context
             cli.ctx_size = if (model_native_ctx > 0) model_native_ctx else default_ctx_size;
@@ -2390,6 +2420,13 @@ fn generateSpeculative(
 
     const use_ddtree = (cli.spec_mode == .ddtree);
     const self_spec = (cli.spec_mode == .self_spec);
+    const use_ngram = (cli.spec_mode == .ngram);
+    var ngram_state = ngram_mod.NgramState{};
+    if (use_ngram) {
+        // Seed n-gram history with prefill tokens
+        for (token_ids) |tid| ngram_state.push(tid);
+        if (!isEogToken(first_target, eog)) ngram_state.push(first_target);
+    }
 
     // Self-speculative: auto-detect layer skip range (skip middle 50%)
     const self_spec_skip_divisor = 4; // skip starts at 25% of layers
@@ -2405,13 +2442,31 @@ fn generateSpeculative(
 
         // Draft phase
         if (self_spec) target.setLayerSkip(skip_start, skip_end);
-        const is_self_draft = (target.ptr == draft_model.ptr and !self_spec);
-        const n_drafted = if (is_self_draft and !use_sampling)
+        const is_self_draft = (target.ptr == draft_model.ptr and !self_spec and !use_ngram);
+        const n_drafted = if (use_ngram) blk: {
+            const n = ngram_state.propose(cli.spec_tokens, &spec_state.draft_tokens);
+            spec_state.n_draft = @intCast(n);
+            break :blk @as(u32, @intCast(n));
+        } else if (is_self_draft and !use_sampling)
             spec_decode.draft(&spec_state, draft_model, last)
         else
             spec_decode.draftWithLogits(&spec_state, draft_model, last);
         if (self_spec) target.setLayerSkip(0, 0);
-        if (n_drafted == 0) break;
+        if (n_drafted == 0) {
+            // N-gram: no match — fall back to single-token decode
+            if (use_ngram) {
+                last = target.forward(last) catch break;
+                if (use_sampling) last = math_ops.sampleToken(target.getLogits(), cli.temperature, cli.top_k, cli.top_p, prng.random());
+                if (isEogToken(last, eog)) break;
+                ngram_state.push(last);
+                if (token_count < gen_ids_buf.len) {
+                    gen_ids_buf[token_count] = last;
+                    token_count += 1;
+                }
+                continue;
+            }
+            break;
+        }
 
         // Verify phase
         const result = if (is_self_draft) blk: {
@@ -2450,6 +2505,15 @@ fn generateSpeculative(
             }
         }
         last = if (hit_eog) target.eosId() else result.next_token;
+
+        // Update n-gram history with accepted tokens
+        if (use_ngram) {
+            for (0..result.accepted) |i| {
+                if (isEogToken(spec_state.draft_tokens[i], eog)) break;
+                ngram_state.push(spec_state.draft_tokens[i]);
+            }
+            if (!hit_eog) ngram_state.push(result.next_token);
+        }
 
         // Stream
         if (token_count - batch_start >= batch_size) {
@@ -2915,6 +2979,7 @@ test {
     _ = @import("backend/kernels/cpu/gemv_q6_k.zig");
     _ = @import("backend/kernels/cpu/gemv_q8_0.zig");
     _ = @import("spec/spec_decode.zig");
+    _ = @import("spec/ngram.zig");
     _ = @import("spec/ddtree.zig");
     _ = @import("backend/kernels/cpu/sdpa_tree.zig");
 }
