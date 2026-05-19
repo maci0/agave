@@ -971,8 +971,8 @@ fn setupTransport(allocator: std.mem.Allocator, peers_str: []const u8, rank: u32
             t.kind = .tcp;
             return t;
         };
-        // Note: NCCL comm init deferred until CUDA interop is wired
-        // (ensureNcclComm called after cuda_ctx/cuda_sync are set)
+        // NCCL comm init is lazy — triggered on first sendBuf/recvBuf/allReduceAdd
+        // when both ranks are executing model forward simultaneously
     }
     return t;
 }
@@ -1913,8 +1913,6 @@ fn initAndRun(
                     },
                     else => {},
                 };
-                // Eager NCCL comm init now that CUDA context is available
-                tr.ensureNcclComm();
                 mdl.setTpTransport(tr);
             }
         };
@@ -1948,7 +1946,6 @@ fn initAndRun(
                     },
                     else => {},
                 };
-                t.ensureNcclComm();
                 mdl.setPpConfig(cli.tp_rank, cli.pp_degree, t);
             }
         }
