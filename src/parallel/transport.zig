@@ -249,7 +249,7 @@ pub const Transport = struct {
     }
 
     /// Lazily initialize NCCL communicator. Called on first NCCL operation.
-    fn ensureNcclComm(self: *Transport) void {
+    pub fn ensureNcclComm(self: *Transport) void {
         if (self.nccl_comm != null) return;
         if (self.nccl_comm_init_rank) |initRank| {
             const rc = initRank(&self.nccl_comm, @intCast(self.world_size), &self.nccl_unique_id, @intCast(self.rank));

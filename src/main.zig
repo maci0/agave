@@ -971,6 +971,9 @@ fn setupTransport(allocator: std.mem.Allocator, peers_str: []const u8, rank: u32
             t.kind = .tcp;
             return t;
         };
+        // Eager comm init — both ranks reach here after TCP handshake,
+        // so ncclCommInitRank collective call will succeed synchronously.
+        t.ensureNcclComm();
     }
     return t;
 }
