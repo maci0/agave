@@ -19,6 +19,16 @@ const shm_MAP_SHARED: c_int = 0x01;
 
 pub const TransportKind = enum { tcp, shm, nccl, rccl };
 
+fn getenv(name: []const u8) ?[]const u8 {
+    var buf: [128:0]u8 = undefined;
+    @memcpy(buf[0..name.len], name);
+    buf[name.len] = 0;
+    const val = c.getenv(&buf);
+    if (val == null) return null;
+    const ptr: [*:0]const u8 = @ptrCast(val.?);
+    return std.mem.sliceTo(ptr, 0);
+}
+
 // NCCL types and constants
 const NcclComm = ?*anyopaque;
 const NcclUniqueId = [128]u8;
@@ -252,6 +262,19 @@ pub const Transport = struct {
         std.log.info("NCCL: rank {d}/{d} ready — v{d}.{d}.{d}, deferred init, ID exchanged over TCP fd={d}", .{
             self.rank, self.world_size, major, minor, patch, self.tcp_fds[0],
         });
+
+        // Log NCCL environment variables for debugging transport selection
+        const nccl_env_vars = [_][]const u8{
+            "NCCL_SOCKET_IFNAME", "NCCL_IB_HCA", "NCCL_IB_GID_INDEX",
+            "NCCL_NET_GDR_LEVEL", "NCCL_IB_AR_THRESHOLD", "NCCL_IB_PCI_RELAXED_ORDERING",
+            "NCCL_IB_TIMEOUT", "NCCL_IB_RETRY_CNT", "NCCL_DEBUG",
+            "NCCL_P2P_LEVEL", "NCCL_SHM_DISABLE", "NCCL_ALGO", "NCCL_PROTO",
+        };
+        for (nccl_env_vars) |name| {
+            if (getenv(name)) |val| {
+                std.log.info("NCCL env: {s}={s}", .{ name, val });
+            }
+        }
     }
 
     /// Lazily initialize NCCL communicator. Called on first NCCL operation.
