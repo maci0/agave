@@ -30,6 +30,12 @@ pub const SpecState = struct {
     total_drafted: u64 = 0,
     total_rounds: u64 = 0,
 
+    /// Profile-guided adaptive K: adjust draft length based on acceptance history.
+    /// Tracks per-K acceptance rates to find optimal draft length.
+    k_accept_counts: [max_draft_tokens]u32 = .{0} ** max_draft_tokens,
+    k_total_counts: [max_draft_tokens]u32 = .{0} ** max_draft_tokens,
+    adaptive_k_enabled: bool = false,
+
     pub fn init(allocator: std.mem.Allocator, k: u32, vocab_size: u32) !SpecState {
         return .{
             .k = k,
@@ -58,6 +64,39 @@ pub const SpecState = struct {
         self.total_accepted += accepted;
         self.total_drafted += self.n_draft;
         self.total_rounds += 1;
+
+        // Profile-guided: record per-K acceptance for adaptive tuning
+        if (self.adaptive_k_enabled and self.n_draft > 0 and self.n_draft <= max_draft_tokens) {
+            const ki = self.n_draft - 1;
+            self.k_total_counts[ki] += 1;
+            self.k_accept_counts[ki] += accepted;
+        }
+    }
+
+    /// Compute optimal K based on acceptance history.
+    /// Expected value: E[tokens] = k × accept_rate(k) + 1 (bonus token).
+    /// Cost model: verify cost ≈ 1 forward pass regardless of k (tree verify).
+    /// Optimal k maximizes E[tokens] / cost = k × accept_rate(k) + 1.
+    /// Returns the configured k if insufficient data for profiling.
+    pub fn optimalK(self: *const SpecState) u32 {
+        if (!self.adaptive_k_enabled or self.total_rounds < 10) return self.k;
+
+        var best_k: u32 = self.k;
+        var best_ev: f32 = 0;
+        const min_samples: u32 = 3;
+
+        for (0..@min(self.k, max_draft_tokens)) |ki| {
+            if (self.k_total_counts[ki] < min_samples) continue;
+            const accept_rate = @as(f32, @floatFromInt(self.k_accept_counts[ki])) /
+                @as(f32, @floatFromInt(self.k_total_counts[ki] * (@as(u32, @intCast(ki)) + 1)));
+            const k_val: f32 = @floatFromInt(ki + 1);
+            const ev = k_val * accept_rate + 1.0;
+            if (ev > best_ev) {
+                best_ev = ev;
+                best_k = @intCast(ki + 1);
+            }
+        }
+        return best_k;
     }
 };
 

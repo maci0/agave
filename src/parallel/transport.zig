@@ -74,6 +74,10 @@ pub const Transport = struct {
     cuda_memcpy_dtoh: ?*const fn (*anyopaque, u64, usize) callconv(.c) c_int = null,
     nccl_dev_buf: u64 = 0,
     nccl_dev_buf_size: usize = 0,
+    /// Device capabilities for topology-aware partitioning.
+    local_mem: usize = 0,
+    peer_mem: usize = 0,
+
     /// Opaque backend pointer for device pointer lookup.
     cuda_backend: ?*anyopaque = null,
     /// Function to get device pointer: fn(backend, host_ptr) -> device_ptr.

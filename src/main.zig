@@ -931,6 +931,15 @@ fn setupTransport(allocator: std.mem.Allocator, peers_str: []const u8, rank: u32
     const rtt_us = measurePeerRtt(t, rank);
     if (rtt_us > 0) std.log.info("peer RTT: {d} µs", .{rtt_us});
 
+    // Exchange device capabilities for topology-aware partitioning
+    const local_mem = backend_mod.detectSystemMem();
+    const peer_mem = exchangeDeviceCaps(t, rank, local_mem);
+    if (peer_mem > 0) {
+        // Store for topology-aware PP layer assignment
+        t.peer_mem = peer_mem;
+        t.local_mem = local_mem;
+    }
+
     // NCCL: init communicator over the established TCP link
     if (want_nccl) {
         t.setupNccl() catch |err| {
@@ -940,6 +949,31 @@ fn setupTransport(allocator: std.mem.Allocator, peers_str: []const u8, rank: u32
         };
     }
     return t;
+}
+
+/// Exchange device capabilities with peer for topology-aware partitioning.
+/// Returns peer's available memory in bytes, or 0 on failure.
+fn exchangeDeviceCaps(t: *TransportMod.Transport, rank: u32, local_mem: usize) usize {
+    if (t.tcp_connected == 0) return 0;
+    const fd = t.tcp_fds[0];
+    var local_bytes: [8]u8 = undefined;
+    std.mem.writeInt(u64, &local_bytes, @intCast(local_mem), .little);
+    var remote_bytes: [8]u8 = undefined;
+
+    if (rank == 0) {
+        _ = std.c.send(fd, &local_bytes, 8, 0);
+        _ = std.c.recv(fd, &remote_bytes, 8, 0);
+    } else {
+        _ = std.c.recv(fd, &remote_bytes, 8, 0);
+        _ = std.c.send(fd, &local_bytes, 8, 0);
+    }
+    const peer_mem = std.mem.readInt(u64, &remote_bytes, .little);
+    if (peer_mem > 0) {
+        std.log.info("topology: local {d} MB, peer {d} MB", .{
+            local_mem / (1024 * 1024), peer_mem / (1024 * 1024),
+        });
+    }
+    return @intCast(peer_mem);
 }
 
 /// Measure round-trip time to peer via TCP ping-pong. Returns µs, or 0 on failure.
@@ -2422,6 +2456,7 @@ fn generateSpeculative(
         eprint("Error: failed to allocate speculative state\n", .{});
         return;
     };
+    spec_state.adaptive_k_enabled = true;
     defer spec_state.deinit(allocator);
 
     const gen_start = milliTimestamp(g_io);
@@ -2484,8 +2519,9 @@ fn generateSpeculative(
         // Draft phase
         if (self_spec) target.setLayerSkip(skip_start, skip_end);
         const is_self_draft = (target.ptr == draft_model.ptr and !self_spec and !use_ngram);
+        const effective_k = spec_state.optimalK();
         const n_drafted = if (use_ngram) blk: {
-            const n = ngram_state.propose(cli.spec_tokens, &spec_state.draft_tokens);
+            const n = ngram_state.propose(effective_k, &spec_state.draft_tokens);
             spec_state.n_draft = @intCast(n);
             break :blk @as(u32, @intCast(n));
         } else if (is_self_draft and !use_sampling)
