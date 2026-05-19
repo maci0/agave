@@ -91,6 +91,42 @@ logits[token] -= presence_penalty * (1 if token appeared, 0 otherwise)
 
 Positive values reduce repetition. Negative values encourage it (useful for rhyming, alliteration). Available in HTTP API; CLI uses `--repeat-penalty` (multiplicative style) instead.
 
+## XTC (eXclude Top Choices)
+
+XTC randomly excludes high-probability tokens to increase diversity. With probability `xtc_probability`, all tokens above `xtc_threshold` probability (except one) are zeroed out, forcing the model to pick a less obvious continuation.
+
+```json
+{"xtc_probability": 0.5, "xtc_threshold": 0.1, "temperature": 0.8}
+```
+
+Combats **mode collapse** where the model repeatedly generates the same high-probability sequences. Most useful for creative writing and brainstorming. Unlike temperature which scales all probabilities, XTC specifically removes the top choices while keeping the rest of the distribution intact.
+
+## DRY (Don't Repeat Yourself)
+
+DRY penalizes tokens that would continue a repeated n-gram sequence. If the model has generated "the cat sat on" earlier and is about to generate it again, DRY applies increasing penalty proportional to the match length.
+
+```json
+{"dry_multiplier": 1.5, "dry_allowed_length": 3}
+```
+
+`dry_multiplier` scales the penalty (0 = disabled). `dry_allowed_length` sets the minimum n-gram length to trigger (default 2 — penalize repeated bigrams and longer). More effective than `repeat_penalty` because it detects repeated **sequences**, not just individual tokens. A token might be fine to repeat (e.g., "the") unless it's part of a repeated phrase.
+
+## Mirostat
+
+Mirostat maintains consistent **perplexity** (unpredictability) during generation by dynamically adjusting the sampling threshold. Instead of fixed temperature, it targets a specific entropy level (tau) and adapts via learning rate (eta):
+
+```json
+{"mirostat": 2, "mirostat_tau": 5.0, "mirostat_eta": 0.1, "temperature": 0.8}
+```
+
+| Parameter | Default | Effect |
+|-----------|---------|--------|
+| `mirostat` | 0 | Mode: 0=disabled, 2=Mirostat 2.0 |
+| `mirostat_tau` | 5.0 | Target entropy — lower = more focused, higher = more creative |
+| `mirostat_eta` | 0.1 | Learning rate — how fast to adapt |
+
+When Mirostat is active, top-k and top-p are bypassed — Mirostat controls its own truncation. It works by tracking a running "surprise" estimate and adjusting which tokens are eligible for sampling. Produces more consistently readable output than fixed temperature across varying prompt types.
+
 ## Grammar-Constrained Decoding
 
 Forces output to match a formal grammar (GBNF format):
