@@ -399,6 +399,7 @@ const cli_specs = [_]cli_mod.ArgSpec{
     .{ .long = "model-info", .help = "Print model metadata and exit (supports --json)." },
     .{ .long = "megakernel", .help = "Use fused megakernel (single GPU dispatch per token)." },
     .{ .long = "profile", .help = "Profile per-op timing (halves throughput)." },
+    .{ .long = "benchmark", .help = "Run decode benchmark: 32-token prefill + N decode tokens, print stats." },
 };
 
 const SpecMode = enum { none, standard, ddtree, self_spec, ngram };
@@ -449,6 +450,7 @@ const CliArgs = struct {
     debug: bool,
     json: bool,
     model_info: bool,
+    benchmark: bool = false,
     profile: bool,
     use_mmap: bool,
     prefill_batch_size: u32,
@@ -822,6 +824,7 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
         .debug = res.flag("debug"),
         .json = json_mode,
         .model_info = res.flag("model-info"),
+        .benchmark = res.flag("benchmark"),
         .profile = res.flag("profile"),
         .megakernel = res.flag("megakernel"),
         .tp_degree = res.optionU32("tp") orelse 1,
@@ -1036,6 +1039,62 @@ fn parseF32(s: ?[]const u8, comptime flag: []const u8) ?f32 {
     return val;
 }
 
+/// Built-in benchmark: prefill a short prompt, decode N tokens, report stats.
+fn runBenchmark(model: *Model, tok_state: anytype, tok_kind: anytype, allocator: std.mem.Allocator, cli: anytype, eog: anytype) void {
+    _ = tok_kind;
+    const bench_prompt = "The quick brown fox jumps over the lazy dog. Once upon a time";
+    var tok_if = tok_state.*.tokenizer();
+    const token_ids = tok_if.encode(bench_prompt) catch {
+        eprint("Benchmark: tokenizer encode failed\n", .{});
+        return;
+    };
+    defer allocator.free(token_ids);
+    const n_prompt = token_ids.len;
+    const n_gen = cli.max_tokens;
+
+    // Prefill
+    var ts_start: std.posix.system.timespec = undefined;
+    _ = std.posix.system.clock_gettime(.REALTIME, &ts_start);
+    for (token_ids) |tid| {
+        _ = model.forward(tid) catch {
+            eprint("Benchmark: prefill failed\n", .{});
+            return;
+        };
+    }
+    var ts_prefill: std.posix.system.timespec = undefined;
+    _ = std.posix.system.clock_gettime(.REALTIME, &ts_prefill);
+
+    // Decode
+    var last: u32 = math_ops.argmax(model.getLogits());
+    var gen_count: u32 = 0;
+    while (gen_count < n_gen) {
+        if (isEogToken(last, eog)) break;
+        last = model.forward(last) catch break;
+        last = math_ops.argmax(model.getLogits());
+        gen_count += 1;
+    }
+    var ts_end: std.posix.system.timespec = undefined;
+    _ = std.posix.system.clock_gettime(.REALTIME, &ts_end);
+
+    const prefill_us = (@as(i64, ts_prefill.sec) - @as(i64, ts_start.sec)) * 1_000_000 + @divTrunc(@as(i64, ts_prefill.nsec) - @as(i64, ts_start.nsec), 1000);
+    const decode_us = (@as(i64, ts_end.sec) - @as(i64, ts_prefill.sec)) * 1_000_000 + @divTrunc(@as(i64, ts_end.nsec) - @as(i64, ts_prefill.nsec), 1000);
+    const prefill_tps: f64 = if (prefill_us > 0) @as(f64, @floatFromInt(n_prompt)) / (@as(f64, @floatFromInt(prefill_us)) / 1e6) else 0;
+    const decode_tps: f64 = if (decode_us > 0) @as(f64, @floatFromInt(gen_count)) / (@as(f64, @floatFromInt(decode_us)) / 1e6) else 0;
+    const prefill_ms = @as(f64, @floatFromInt(prefill_us)) / 1000.0;
+    const decode_ms = @as(f64, @floatFromInt(decode_us)) / 1000.0;
+
+    var buf: [512]u8 = undefined;
+    const msg = std.fmt.bufPrint(&buf,
+        \\
+        \\Benchmark Results:
+        \\  Prefill: {d} tokens in {d:.1} ms ({d:.1} tok/s)
+        \\  Decode:  {d} tokens in {d:.1} ms ({d:.1} tok/s)
+        \\  TTFT:    {d:.1} ms
+        \\
+    , .{ n_prompt, prefill_ms, prefill_tps, gen_count, decode_ms, decode_tps, prefill_ms }) catch "";
+    _ = std.posix.system.write(stdout_file.handle, msg.ptr, msg.len);
+}
+
 fn printUsage() void {
     const usage =
         \\agave — Zig LLM inference engine
@@ -1132,6 +1191,7 @@ fn printUsage() void {
         \\      --json             Output results as JSON (implies --quiet)
         \\      --model-info       Print model metadata and exit (supports --json)
         \\      --profile          Profile per-op timing (halves throughput)
+        \\      --benchmark        Run decode benchmark with built-in prompt
         \\
         \\ENVIRONMENT:
         \\  NO_COLOR             Disable colored output when set (https://no-color.org)
@@ -2090,6 +2150,11 @@ fn initAndRun(
         eprint("draft: {s} · {s}\n", .{ draft_arch.displayName(), Format.getQuantName(draft_fmt) });
     } else if (cli.spec_mode != .none) {
         draft_ptr = &model_if;
+    }
+
+    if (cli.benchmark) {
+        runBenchmark(&model_if, &tok, tok_kind, allocator, cli, eog);
+        return true;
     }
 
     if (cli.serve) {
