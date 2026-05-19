@@ -338,6 +338,13 @@ const cli_specs = [_]cli_mod.ArgSpec{
     .{ .long = "top-k", .kind = .option, .help = "Top-k sampling, 0 = disabled [default: 0]." },
     .{ .long = "min-p", .kind = .option, .help = "Min-p sampling threshold [default: 0]." },
     .{ .long = "repeat-penalty", .kind = .option, .help = "Repetition penalty [default: 1.0]." },
+    .{ .long = "dry-multiplier", .kind = .option, .help = "DRY n-gram repetition penalty multiplier [default: 0]." },
+    .{ .long = "dry-length", .kind = .option, .help = "DRY minimum n-gram length to penalize [default: 2]." },
+    .{ .long = "xtc-probability", .kind = .option, .help = "XTC exclude-top-choices probability [default: 0]." },
+    .{ .long = "xtc-threshold", .kind = .option, .help = "XTC probability threshold for exclusion [default: 0.1]." },
+    .{ .long = "mirostat-mode", .kind = .option, .help = "Mirostat mode: 0=disabled, 2=Mirostat 2.0 [default: 0]." },
+    .{ .long = "mirostat-tau", .kind = .option, .help = "Mirostat target entropy [default: 5.0]." },
+    .{ .long = "mirostat-eta", .kind = .option, .help = "Mirostat learning rate [default: 0.1]." },
     .{ .long = "seed", .kind = .option, .help = "Random seed for sampling [default: random]." },
     .{ .long = "grammar", .kind = .option, .help = "GBNF grammar file for constrained decoding." },
     .{ .long = "grammar-string", .kind = .option, .help = "Inline GBNF grammar string." },
@@ -407,6 +414,13 @@ const CliArgs = struct {
     top_k: u32,
     min_p: f32,
     repeat_penalty: f32,
+    dry_multiplier: f32 = 0,
+    dry_length: u32 = 2,
+    xtc_probability: f32 = 0,
+    xtc_threshold: f32 = 0.1,
+    mirostat_mode: u32 = 0,
+    mirostat_tau: f32 = 5.0,
+    mirostat_eta: f32 = 0.1,
     grammar_path: ?[]const u8,
     grammar_string: ?[]const u8,
     json_schema: ?[]const u8,
@@ -730,6 +744,13 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
         .top_k = res.optionU32("top-k") orelse 0,
         .min_p = parseF32(res.option("min-p"), "min-p") orelse 0.0,
         .repeat_penalty = repeat_penalty,
+        .dry_multiplier = parseF32(res.option("dry-multiplier"), "dry-multiplier") orelse 0,
+        .dry_length = res.optionU32("dry-length") orelse 2,
+        .xtc_probability = parseF32(res.option("xtc-probability"), "xtc-probability") orelse 0,
+        .xtc_threshold = parseF32(res.option("xtc-threshold"), "xtc-threshold") orelse 0.1,
+        .mirostat_mode = res.optionU32("mirostat-mode") orelse 0,
+        .mirostat_tau = parseF32(res.option("mirostat-tau"), "mirostat-tau") orelse 5.0,
+        .mirostat_eta = parseF32(res.option("mirostat-eta"), "mirostat-eta") orelse 0.1,
         .grammar_path = grammar_path,
         .grammar_string = grammar_string,
         .json_schema = json_schema,
@@ -1041,6 +1062,13 @@ fn printUsage() void {
         \\      --top-k <K>           Top-k sampling, 0 = disabled [default: 0]
         \\      --repeat-penalty <R>  Repetition penalty [default: 1.0]
         \\      --min-p <P>           Min-p sampling: keep tokens with prob >= P * max_prob [default: 0]
+        \\      --dry-multiplier <M>  DRY n-gram repetition penalty [default: 0 = disabled]
+        \\      --dry-length <N>      DRY minimum n-gram length [default: 2]
+        \\      --xtc-probability <P> XTC exclude-top-choices probability [default: 0]
+        \\      --xtc-threshold <T>   XTC probability threshold [default: 0.1]
+        \\      --mirostat-mode <N>   Mirostat sampling: 0=off, 2=Mirostat 2.0 [default: 0]
+        \\      --mirostat-tau <T>    Mirostat target entropy [default: 5.0]
+        \\      --mirostat-eta <E>    Mirostat learning rate [default: 0.1]
         \\      --seed <N>            Random seed for sampling [default: random]
         \\      --system <TEXT>       System prompt for chat formatting
         \\      --grammar <FILE>      GBNF grammar file for constrained decoding
@@ -2758,6 +2786,7 @@ fn generateAndPrintInner(
     const use_sampling = cli.temperature > 0;
     const use_repeat_penalty = cli.repeat_penalty != 1.0;
     var prng = std.Random.Xoshiro256.init(cli.seed);
+    var cli_mirostat_mu: f32 = cli.mirostat_tau * 2.0;
 
     // Grammar-constrained decoding
     var grammar: ?grammar_mod.Grammar = null;
@@ -2879,16 +2908,22 @@ fn generateAndPrintInner(
         if (use_repeat_penalty and token_count > 0) {
             math_ops.applyRepeatPenalty(logits, gen_ids_buf[0..token_count], cli.repeat_penalty);
         }
+        if (cli.dry_multiplier > 0 and token_count > 0) {
+            math_ops.applyDry(logits, gen_ids_buf[0..token_count], cli.dry_multiplier, cli.dry_length);
+        }
         // Grammar-constrained decoding: mask disallowed tokens
         const has_grammar = if (grammar_state) |*gs| !gs.isComplete() else false;
         if (has_grammar) {
             const vocab_texts = tok.id_to_token.items;
             grammar_state.?.grammar.maskLogits(&grammar_state.?, logits, vocab_texts);
         }
-        if (use_sampling) {
+        if (cli.mirostat_mode >= 2 and use_sampling) {
+            next = math_ops.sampleMirostat(logits, cli.mirostat_tau, cli.mirostat_eta, &cli_mirostat_mu, cli.temperature, prng.random());
+        } else if (use_sampling) {
             if (cli.min_p > 0) math_ops.applyMinP(logits, cli.min_p);
+            if (cli.xtc_probability > 0) math_ops.applyXtc(logits, cli.xtc_probability, cli.xtc_threshold, prng.random());
             next = math_ops.sampleToken(logits, cli.temperature, cli.top_k, cli.top_p, prng.random());
-        } else if (has_grammar or (use_repeat_penalty and token_count > 0)) {
+        } else if (has_grammar or (use_repeat_penalty and token_count > 0) or cli.dry_multiplier > 0) {
             // Re-argmax after masking or penalty
             next = math_ops.argmax(logits);
         }
