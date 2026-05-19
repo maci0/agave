@@ -1518,6 +1518,49 @@ pub const Qwen35Model = struct {
     }
 
     /// Reset all KV cache and SSM state for a new conversation.
+    /// Save all SSM states (conv + recurrence) for prefix caching.
+    /// Returns owned memory that must be freed by the caller.
+    pub fn saveSsmState(self: *const Qwen35Model, allocator: std.mem.Allocator) ![]u8 {
+        var total_bytes: usize = 0;
+        for (0..self.n_layers) |i| {
+            total_bytes += self.conv_states[i].len * @sizeOf(f32);
+            total_bytes += self.ssm_states[i].len * @sizeOf(f32);
+        }
+        if (total_bytes == 0) return &.{};
+        const buf = try allocator.alloc(u8, total_bytes);
+        var pos: usize = 0;
+        for (0..self.n_layers) |i| {
+            const conv_bytes = self.conv_states[i].len * @sizeOf(f32);
+            if (conv_bytes > 0) {
+                @memcpy(buf[pos..][0..conv_bytes], std.mem.sliceAsBytes(self.conv_states[i]));
+                pos += conv_bytes;
+            }
+            const ssm_bytes = self.ssm_states[i].len * @sizeOf(f32);
+            if (ssm_bytes > 0) {
+                @memcpy(buf[pos..][0..ssm_bytes], std.mem.sliceAsBytes(self.ssm_states[i]));
+                pos += ssm_bytes;
+            }
+        }
+        return buf;
+    }
+
+    /// Restore SSM states from a previously saved snapshot.
+    pub fn restoreSsmState(self: *Qwen35Model, snapshot: []const u8) void {
+        var pos: usize = 0;
+        for (0..self.n_layers) |i| {
+            const conv_bytes = self.conv_states[i].len * @sizeOf(f32);
+            if (conv_bytes > 0 and pos + conv_bytes <= snapshot.len) {
+                @memcpy(std.mem.sliceAsBytes(self.conv_states[i]), snapshot[pos..][0..conv_bytes]);
+                pos += conv_bytes;
+            }
+            const ssm_bytes = self.ssm_states[i].len * @sizeOf(f32);
+            if (ssm_bytes > 0 and pos + ssm_bytes <= snapshot.len) {
+                @memcpy(std.mem.sliceAsBytes(self.ssm_states[i]), snapshot[pos..][0..ssm_bytes]);
+                pos += ssm_bytes;
+            }
+        }
+    }
+
     pub fn resetCache(self: *Qwen35Model) void {
         for (0..self.n_layers) |i| {
             if (self.conv_states[i].len > 0) @memset(self.conv_states[i], 0);
