@@ -2599,7 +2599,12 @@ fn generateSpeculative(
         if (draft_cooldown > 0) {
             draft_cooldown -= 1;
             last = target.forward(last) catch break;
-            if (use_sampling) last = math_ops.sampleToken(target.getLogits(), cli.temperature, cli.top_k, cli.top_p, prng.random());
+            if (use_sampling) {
+                const cl = target.getLogits();
+                if (cli.min_p > 0) math_ops.applyMinP(cl, cli.min_p);
+                if (cli.xtc_probability > 0) math_ops.applyXtc(cl, cli.xtc_probability, cli.xtc_threshold, prng.random());
+                last = math_ops.sampleToken(cl, cli.temperature, cli.top_k, cli.top_p, prng.random());
+            }
             if (isEogToken(last, eog)) break;
             if (use_ngram) ngram_state.push(last);
             if (token_count < gen_ids_buf.len) {
@@ -2626,7 +2631,12 @@ fn generateSpeculative(
             // N-gram: no match — fall back to single-token decode
             if (use_ngram) {
                 last = target.forward(last) catch break;
-                if (use_sampling) last = math_ops.sampleToken(target.getLogits(), cli.temperature, cli.top_k, cli.top_p, prng.random());
+                if (use_sampling) {
+                    const cl2 = target.getLogits();
+                    if (cli.min_p > 0) math_ops.applyMinP(cl2, cli.min_p);
+                    if (cli.xtc_probability > 0) math_ops.applyXtc(cl2, cli.xtc_probability, cli.xtc_threshold, prng.random());
+                    last = math_ops.sampleToken(cl2, cli.temperature, cli.top_k, cli.top_p, prng.random());
+                }
                 if (isEogToken(last, eog)) break;
                 ngram_state.push(last);
                 if (token_count < gen_ids_buf.len) {

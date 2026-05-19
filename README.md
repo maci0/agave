@@ -319,6 +319,7 @@ agave [OPTIONS] <model> [prompt]
       --json               Output results as JSON (implies --quiet)
       --model-info         Print model metadata and exit (combine with --json)
       --profile            Profile per-op timing (halves throughput)
+      --benchmark          Run decode benchmark with built-in prompt
       --mmproj <PATH>      Path to vision projector GGUF (mmproj file)
       --image <PATH>       Path to image file for multimodal inference (PNG or PPM)
       --kv-eviction <MODE> KV cache eviction policy: none, norm, tri [default: none]
