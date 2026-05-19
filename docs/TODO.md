@@ -103,6 +103,32 @@ Extracted from vLLM v0.8.0–v0.21.0 changelogs. Prioritized by impact and imple
 | 14 | Cross-layer KV sharing | Reduce KV memory for models with shared attention layers | Open |
 | 15 | Heterogeneous TP | Mixed-capacity devices for tensor parallelism | Open |
 
+### From llama.cpp
+
+| # | Feature | Source | Status |
+|---|---------|--------|--------|
+| 16 | Profile-guided speculative decoding | llama.cpp Nov 2025 | Open |
+| 17 | XTC sampling (exclude top choices) | llama.cpp sampling | Open |
+| 18 | Mirostat sampling (target-entropy) | llama.cpp sampling | Open |
+| 19 | MTP (Multi-Token Prediction) heads | llama.cpp active dev | Open |
+| 20 | Router mode (multi-model server) | llama.cpp server | Open |
+| 21 | Hybrid memory abstraction (KV+SSM unified) | llama.cpp memory | Open |
+
+### From Exo
+
+| # | Feature | Source | Status |
+|---|---------|--------|--------|
+| 22 | Topology-aware auto partitioning | Exo partitioner | Open |
+| 23 | Zero-config P2P discovery (UDP broadcast) | Exo discovery | Open |
+| 24 | Coordinator-only nodes (`--no-worker`) | Exo architecture | Open |
+
+### From Mesh-LLM
+
+| # | Feature | Source | Status |
+|---|---------|--------|--------|
+| 25 | Demand-aware model rebalancing | Mesh-LLM gossip | Open |
+| 26 | Downstream-first stage startup | Mesh-LLM planner | Done (RTT handshake) |
+
 ---
 
 ## Build / CI / Infra

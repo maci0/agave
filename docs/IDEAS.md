@@ -247,3 +247,105 @@ pass blocks all others. With PP, stage 0 is idle while stage 1 computes.
 ### Complexity
 High — touches scheduler, model forward, KV cache manager, and transport layer.
 Best approached after continuous batching is proven stable.
+
+## llama.cpp-Inspired Ideas
+
+### Profile-Guided Speculative Decoding
+> llama.cpp (Nov 2025): uses empirically measured batch cost profiles to guide spec drafting.
+
+Instead of fixed K draft tokens, measure actual cost of batch-verify at each K
+and choose K dynamically to maximize expected value: `E[accepted] × token_value -
+cost_of_verify(K)`. Record per-model cost profiles during warmup, use them to
+pick optimal K per generation step.
+
+### XTC Sampling (eXclude Top Choices)
+> llama.cpp sampling: randomly excludes high-probability tokens to increase diversity.
+
+Combats mode collapse where the model repeatedly generates the same high-prob
+sequences. After computing logits, with probability `xtc_probability`, zero out
+the top `xtc_threshold` fraction of tokens. Simple to implement — add as a
+sampler stage after temperature but before top-k/top-p.
+
+### Mirostat Sampling
+> llama.cpp: target-entropy sampling that adapts dynamically.
+
+Controls perplexity during generation by adjusting the sampling threshold
+to maintain a target entropy (tau). When Mirostat is active, top-k/top-p are
+ignored. Two modes: Mirostat 1 (original) and Mirostat 2.0 (simplified).
+Implementation: track running surprise estimate, adjust mu parameter.
+
+### Hybrid Memory (Attention + Recurrent)
+> llama.cpp: `llama_memory_hybrid` for models mixing attention and recurrent layers.
+
+Agave already handles hybrid models (Qwen3.5 DeltaNet + attention, Nemotron
+Mamba-2 + attention) but stores SSM state separately from KV cache. A unified
+hybrid memory abstraction could simplify model code and enable cross-layer
+optimizations (e.g., SSM state prefix caching alongside KV prefix caching).
+
+### Router Mode (Multi-Model Server)
+> llama.cpp server: switch between models on a per-request basis without restart.
+
+Currently Agave's server loads one model. Router mode would maintain a model
+registry, load/unload models on demand based on the `model` field in API
+requests. Requires model-specific KV cache isolation and reference counting.
+
+### MTP (Multi-Token Prediction)
+> llama.cpp (active development): models with built-in multi-token prediction heads.
+
+Some newer models (Qwen3.6, DeepSeek) include auxiliary prediction heads that
+output multiple tokens per forward pass natively. Unlike spec decode, MTP is
+part of the model architecture — no separate draft model. Requires GGUF
+metadata for MTP head detection and modified forward pass.
+
+## Exo-Inspired Ideas
+
+### Topology-Aware Auto Partitioning
+> Exo: automatically determines optimal model split based on device topology.
+
+Exo's partitioner considers device memory, compute capability, and inter-device
+network bandwidth/latency to determine layer-to-device assignment. Agave's PP
+uses uniform layer split. A topology-aware partitioner could assign more layers
+to faster devices and fewer to slower ones.
+
+**Implementation**: at transport setup, exchange device capabilities (VRAM, compute
+speed estimate). Compute weighted layer assignment: `layers_for_device[i] =
+total_layers × (device_speed[i] / sum(device_speeds))`. Store as a layer→rank
+map in the model's PP config.
+
+### Zero-Config P2P Discovery
+> Exo: devices automatically discover each other via UDP broadcast / Tailscale.
+
+Agave requires `--peers <addr>`. Auto-discovery via UDP broadcast on LAN would
+eliminate manual configuration for same-network setups. Broadcast a "agave-peer"
+beacon packet, listen for responses, auto-connect.
+
+### RDMA over Thunderbolt 5
+> Exo: "99% latency reduction" via RDMA over Thunderbolt 5 (macOS).
+
+For Apple Silicon clusters connected via Thunderbolt, RDMA bypasses the TCP/IP
+stack entirely. Relevant for Mac Studio/Mac Pro multi-machine setups. Would
+need IOKit/Network.framework integration on macOS.
+
+### Coordinator-Only Nodes
+> Exo: `--no-worker` for nodes that handle networking but don't run inference.
+
+Useful for lightweight routing/load-balancing nodes (e.g., a Raspberry Pi
+fronting a cluster of GPU machines). The coordinator handles API requests
+and forwards to workers. Agave could add a `--coordinator-only` flag.
+
+## Mesh-LLM-Inspired Ideas (continued)
+
+### Demand-Aware Rebalancing
+> Mesh-LLM: unified demand map via gossip, standby nodes promote for hot models.
+
+For multi-model serving: track request frequency per model, gossip demand
+data between nodes. Standby nodes with idle GPU can proactively load popular
+models. Dead hosts replaced within 60 seconds via health probes.
+
+### Nostr-Based Discovery
+> Mesh-LLM: public mesh discovery via Nostr relays.
+
+For public/community inference clusters: advertise available models and
+capacity on Nostr relays. Clients discover clusters by querying relays
+with smart scoring (region match, VRAM, health probe). More relevant for
+community/edge deployment than enterprise.
