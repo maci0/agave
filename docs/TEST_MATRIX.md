@@ -1,6 +1,6 @@
 # Agave Test Matrix — Model × Backend × Quant
 
-**Date**: 2026-05-18
+**Date**: 2026-05-19
 **Hardware**:
 - Metal/CPU: Apple M4 Pro (14-core CPU, 20-core GPU), 48 GB unified memory, macOS 26.4
 - CUDA: NVIDIA GB10 (Blackwell sm_121), aarch64, Ubuntu 24.04, CUDA 13.0 (maci@10.10.10.212)
@@ -161,6 +161,26 @@
 3. **Metal GEMM for single-token decode** (est. 1.3×): Even single-token decode can benefit from GEMM-style tiling when the weight matrix is large (>4K rows). Current `gemv` kernel is suboptimal for this case.
 
 4. **Fused QKV projection** (est. 1.1×): Combine Q, K, V projections into one kernel launch with shared weight loading. Qwen already has fused QKV weights (`attn_qkv.weight`).
+
+## New Features (2026-05-19, compile-verified)
+
+| Feature | Type | Status |
+|---------|------|:------:|
+| --ctx-size auto | CLI | Compiles, needs model test |
+| --spec-mode ngram | CLI | Compiles + unit tests pass |
+| --benchmark | CLI | Compiles, needs model test |
+| XTC sampling (API + CLI) | Sampler | Compiles + unit tests pass |
+| DRY sampling (API + CLI) | Sampler | Compiles + unit tests pass |
+| Mirostat 2.0 (API + CLI) | Sampler | Compiles + unit tests pass |
+| Logprobs streaming API | Server | Compiles |
+| UDP peer discovery | Distributed | Compiles |
+| SSM state prefix caching | Server | Compiles |
+| xxHash RadixTree cache | Server | Compiles |
+| Vulkan deferred dispatch | Backend | Compiles, needs GPU test |
+| WebGPU deferred dispatch | Backend | Compiles, needs GPU test |
+| 32 new GEMV kernels | Kernels | Compiles |
+| Profile-guided spec K | Spec decode | Compiles + unit tests |
+| Adaptive cooldown | Spec decode | Compiles |
 
 ## Known Issues
 
