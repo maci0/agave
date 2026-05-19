@@ -291,6 +291,8 @@ pub const Transport = struct {
             std.log.info("NCCL: rank {d} barrier passed, initializing comm", .{self.rank});
         }
         if (self.nccl_comm_init_rank) |initRank| {
+            // Set CUDA context current BEFORE ncclCommInitRank
+            if (self.cuda_ctx_set) |setCtx| _ = setCtx(self.cuda_ctx);
             const rc = initRank(&self.nccl_comm, @intCast(self.world_size), &self.nccl_unique_id, @intCast(self.rank));
             if (rc != ncclSuccess) {
                 std.log.warn("NCCL ncclCommInitRank failed: rc={d} (cuda_ctx={}, cuda_mem_alloc={})", .{
@@ -299,6 +301,7 @@ pub const Transport = struct {
                 self.kind = .tcp;
                 return;
             }
+            // Restore context after NCCL init (may have changed it)
             if (self.cuda_ctx_set) |setCtx| _ = setCtx(self.cuda_ctx);
             std.log.info("NCCL: rank {d}/{d} communicator ready (group_ops={}, dev_buf={})", .{
                 self.rank, self.world_size,
