@@ -248,21 +248,27 @@ pub const Transport = struct {
         });
     }
 
+    /// Lazily initialize NCCL communicator. Called on first NCCL operation.
+    fn ensureNcclComm(self: *Transport) void {
+        if (self.nccl_comm != null) return;
+        if (self.nccl_comm_init_rank) |initRank| {
+            const rc = initRank(&self.nccl_comm, @intCast(self.world_size), &self.nccl_unique_id, @intCast(self.rank));
+            if (rc != ncclSuccess) {
+                std.log.warn("NCCL ncclCommInitRank failed: {d}", .{rc});
+                self.kind = .tcp;
+                return;
+            }
+            if (self.cuda_ctx_set) |setCtx| _ = setCtx(self.cuda_ctx);
+            std.log.info("NCCL: rank {d}/{d} communicator ready", .{ self.rank, self.world_size });
+        }
+    }
+
     pub fn allReduceAdd(self: *Transport, buf: [*]f32, n: usize) !void {
         if (self.kind == .nccl) {
             // Lazy init: create communicator on first use (after CUDA kernels have run)
+            self.ensureNcclComm();
             if (self.nccl_comm == null) {
-                if (self.nccl_comm_init_rank) |initRank| {
-                    const rc = initRank(&self.nccl_comm, @intCast(self.world_size), &self.nccl_unique_id, @intCast(self.rank));
-                    if (rc != ncclSuccess) {
-                        std.log.warn("NCCL ncclCommInitRank failed: {d}", .{rc});
-                        self.kind = .tcp;
-                        return self.allReduceAdd(buf, n);
-                    }
-                    // Restore CUDA context — NCCL may have changed the current context
-                    if (self.cuda_ctx_set) |setCtx| _ = setCtx(self.cuda_ctx);
-                    std.log.info("NCCL: rank {d}/{d} communicator ready (allReduce on device pointers)", .{ self.rank, self.world_size });
-                }
+                return self.allReduceAdd(buf, n);
             }
             // Get CUDA device pointer — if buf is dirty on device, use it directly.
             // If stale (CPU fallback wrote to host), fall back to TCP for this call.
@@ -342,7 +348,9 @@ pub const Transport = struct {
     /// Point-to-point send: send buffer to peer.
     pub fn sendBuf(self: *Transport, buf: [*]const f32, n: usize) void {
         const byte_len = n * @sizeOf(f32);
-        if (self.kind == .nccl and self.nccl_send != null and self.nccl_comm != null) {
+        if (self.kind == .nccl and self.nccl_send != null) {
+            self.ensureNcclComm();
+            if (self.nccl_comm == null) { self.tcpSend(buf, byte_len); return; }
             const peer: c_int = if (self.rank == 0) 1 else 0;
             if (self.cuda_sync) |sync| _ = sync();
             if (self.nccl_dev_buf_size < byte_len) {
@@ -369,9 +377,23 @@ pub const Transport = struct {
     }
 
     /// Point-to-point recv: receive buffer from peer.
+    fn tcpSend(self: *Transport, buf: [*]const f32, byte_len: usize) void {
+        if (self.tcp_connected == 0) return;
+        const fd = self.tcp_fds[0];
+        const data: [*]const u8 = @ptrCast(buf);
+        var sent: usize = 0;
+        while (sent < byte_len) {
+            const rc = c.send(fd, data + sent, byte_len - sent, 0);
+            if (rc <= 0) return;
+            sent += @intCast(rc);
+        }
+    }
+
     pub fn recvBuf(self: *Transport, buf: [*]f32, n: usize) void {
         const byte_len = n * @sizeOf(f32);
-        if (self.kind == .nccl and self.nccl_recv != null and self.nccl_comm != null) {
+        if (self.kind == .nccl and self.nccl_recv != null) {
+            self.ensureNcclComm();
+            if (self.nccl_comm == null) { self.tcpRecv(buf, byte_len); return; }
             const peer: c_int = if (self.rank == 0) 1 else 0;
             if (self.nccl_dev_buf_size < byte_len) {
                 if (self.cuda_mem_alloc) |alloc| _ = alloc(&self.nccl_dev_buf, byte_len);
@@ -385,6 +407,10 @@ pub const Transport = struct {
             return;
         }
         if (self.kind == .shm) { self.shmRecv(@ptrCast(buf), byte_len); return; }
+        self.tcpRecv(buf, byte_len);
+    }
+
+    fn tcpRecv(self: *Transport, buf: [*]f32, byte_len: usize) void {
         if (self.tcp_connected == 0) return;
         const fd = self.tcp_fds[0];
         const data: [*]u8 = @ptrCast(buf);
