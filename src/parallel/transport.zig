@@ -280,6 +280,16 @@ pub const Transport = struct {
     /// Lazily initialize NCCL communicator. Called on first NCCL operation.
     pub fn ensureNcclComm(self: *Transport) void {
         if (self.nccl_comm != null) return;
+        // TCP barrier: both ranks must reach this point before ncclCommInitRank
+        // (which is a blocking collective requiring all ranks to participate)
+        if (self.tcp_connected > 0) {
+            var sync_byte: [1]u8 = .{0x42};
+            var recv_byte: [1]u8 = undefined;
+            const fd = self.tcp_fds[0];
+            _ = c.send(fd, &sync_byte, 1, 0);
+            _ = c.recv(fd, &recv_byte, 1, 0);
+            std.log.info("NCCL: rank {d} barrier passed, initializing comm", .{self.rank});
+        }
         if (self.nccl_comm_init_rank) |initRank| {
             const rc = initRank(&self.nccl_comm, @intCast(self.world_size), &self.nccl_unique_id, @intCast(self.rank));
             if (rc != ncclSuccess) {
