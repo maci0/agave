@@ -72,6 +72,8 @@ pub const Model = struct {
         set_layer_skip: *const fn (self: *anyopaque, start: u32, end: u32) void,
         set_image_embeddings: *const fn (self: *anyopaque, embeddings: ?[]const f32, n_tokens: u32, pad_token_id: u32) void,
         set_thread_context: *const fn (self: *anyopaque) void,
+        save_ssm_state: *const fn (self: *anyopaque, allocator: std.mem.Allocator) ?[]u8,
+        restore_ssm_state: *const fn (self: *anyopaque, snapshot: []const u8) void,
     };
 
     /// Construct a Model interface from any concrete model type at comptime.
@@ -197,6 +199,19 @@ pub const Model = struct {
                     self.be.setThreadContext();
                 }
             }.call),
+            .save_ssm_state = @ptrCast(&struct {
+                fn call(self: *T, allocator: std.mem.Allocator) ?[]u8 {
+                    if (comptime @hasDecl(T, "saveSsmState"))
+                        return self.saveSsmState(allocator) catch null;
+                    return null;
+                }
+            }.call),
+            .restore_ssm_state = @ptrCast(&struct {
+                fn call(self: *T, snapshot: []const u8) void {
+                    if (comptime @hasDecl(T, "restoreSsmState"))
+                        self.restoreSsmState(snapshot);
+                }
+            }.call),
         };
     }
 
@@ -245,6 +260,16 @@ pub const Model = struct {
     /// runs on a different thread than the one that initialized the backend.
     pub fn setThreadContext(self: Model) void {
         self.vtable.set_thread_context(self.ptr);
+    }
+
+    /// Save SSM state for prefix caching (returns null if model has no SSM layers).
+    pub fn saveSsmState(self: Model, allocator: std.mem.Allocator) ?[]u8 {
+        return self.vtable.save_ssm_state(self.ptr, allocator);
+    }
+
+    /// Restore SSM state from a cached snapshot.
+    pub fn restoreSsmState(self: Model, snapshot: []const u8) void {
+        self.vtable.restore_ssm_state(self.ptr, snapshot);
     }
 
     /// Signal the model to cancel the current forward pass.
