@@ -32,6 +32,8 @@ const FnNcclAllReduce = *const fn (*const anyopaque, *anyopaque, usize, c_int, c
 const FnNcclSend = *const fn (*const anyopaque, usize, c_int, c_int, NcclComm, ?*anyopaque) callconv(.c) NcclResult;
 const FnNcclRecv = *const fn (*anyopaque, usize, c_int, c_int, NcclComm, ?*anyopaque) callconv(.c) NcclResult;
 const FnNcclCommDestroy = *const fn (NcclComm) callconv(.c) NcclResult;
+const FnNcclGroupStart = *const fn () callconv(.c) NcclResult;
+const FnNcclGroupEnd = *const fn () callconv(.c) NcclResult;
 
 /// Shared memory region header (64-byte aligned).
 const ShmHeader = extern struct {
@@ -62,6 +64,8 @@ pub const Transport = struct {
     nccl_send: ?FnNcclSend = null,
     nccl_recv: ?FnNcclRecv = null,
     nccl_destroy: ?FnNcclCommDestroy = null,
+    nccl_group_start: ?FnNcclGroupStart = null,
+    nccl_group_end: ?FnNcclGroupEnd = null,
     nccl_get_unique_id: ?FnNcclGetUniqueId = null,
     nccl_comm_init_rank: ?FnNcclCommInitRank = null,
     nccl_unique_id: NcclUniqueId = undefined,
@@ -209,6 +213,8 @@ pub const Transport = struct {
         self.nccl_send = lib.lookup(FnNcclSend, "ncclSend");
         self.nccl_recv = lib.lookup(FnNcclRecv, "ncclRecv");
         self.nccl_destroy = lib.lookup(FnNcclCommDestroy, "ncclCommDestroy");
+        self.nccl_group_start = lib.lookup(FnNcclGroupStart, "ncclGroupStart");
+        self.nccl_group_end = lib.lookup(FnNcclGroupEnd, "ncclGroupEnd");
 
         if (self.nccl_allreduce == null) return error.NcclNotAvailable;
         self.nccl_get_unique_id = getUniqueId;
@@ -254,12 +260,18 @@ pub const Transport = struct {
         if (self.nccl_comm_init_rank) |initRank| {
             const rc = initRank(&self.nccl_comm, @intCast(self.world_size), &self.nccl_unique_id, @intCast(self.rank));
             if (rc != ncclSuccess) {
-                std.log.warn("NCCL ncclCommInitRank failed: {d}", .{rc});
+                std.log.warn("NCCL ncclCommInitRank failed: rc={d} (cuda_ctx={}, cuda_mem_alloc={})", .{
+                    rc, self.cuda_ctx != null, self.cuda_mem_alloc != null,
+                });
                 self.kind = .tcp;
                 return;
             }
             if (self.cuda_ctx_set) |setCtx| _ = setCtx(self.cuda_ctx);
-            std.log.info("NCCL: rank {d}/{d} communicator ready", .{ self.rank, self.world_size });
+            std.log.info("NCCL: rank {d}/{d} communicator ready (group_ops={}, dev_buf={})", .{
+                self.rank, self.world_size,
+                self.nccl_group_start != null,
+                self.nccl_dev_buf != 0,
+            });
         }
     }
 
@@ -352,16 +364,26 @@ pub const Transport = struct {
             self.ensureNcclComm();
             if (self.nccl_comm == null) { self.tcpSend(buf, byte_len); return; }
             const peer: c_int = if (self.rank == 0) 1 else 0;
+            // Try device pointer first (avoids host→device copy)
+            const dptr: u64 = if (self.cuda_get_dev_ptr) |getPtr|
+                if (self.cuda_backend) |be| getPtr(be, buf) else 0
+            else
+                0;
+            if (dptr != 0) {
+                _ = self.nccl_send.?(@ptrFromInt(dptr), n, ncclFloat, peer, self.nccl_comm, null);
+            } else {
+                // Host staging: upload then send
+                if (self.nccl_dev_buf_size < byte_len) {
+                    if (self.cuda_mem_alloc) |alloc| _ = alloc(&self.nccl_dev_buf, byte_len);
+                    self.nccl_dev_buf_size = byte_len;
+                }
+                if (self.nccl_dev_buf != 0) {
+                    if (self.cuda_memcpy_htod) |htod| _ = htod(self.nccl_dev_buf, @ptrCast(buf), byte_len);
+                    _ = self.nccl_send.?(@ptrFromInt(self.nccl_dev_buf), n, ncclFloat, peer, self.nccl_comm, null);
+                }
+            }
+            // Single sync after all sends (not per-send)
             if (self.cuda_sync) |sync| _ = sync();
-            if (self.nccl_dev_buf_size < byte_len) {
-                if (self.cuda_mem_alloc) |alloc| _ = alloc(&self.nccl_dev_buf, byte_len);
-                self.nccl_dev_buf_size = byte_len;
-            }
-            if (self.nccl_dev_buf != 0) {
-                if (self.cuda_memcpy_htod) |htod| _ = htod(self.nccl_dev_buf, @ptrCast(buf), byte_len);
-                _ = self.nccl_send.?(@ptrFromInt(self.nccl_dev_buf), n, ncclFloat, peer, self.nccl_comm, null);
-                if (self.cuda_sync) |sync| _ = sync();
-            }
             return;
         }
         if (self.kind == .shm) { self.shmSend(@ptrCast(buf), byte_len); return; }
@@ -377,6 +399,59 @@ pub const Transport = struct {
     }
 
     /// Point-to-point recv: receive buffer from peer.
+    /// Batched send: send multiple buffers in a single NCCL group.
+    /// Reduces per-transfer overhead for PP activation transfers.
+    pub fn sendBufs(self: *Transport, bufs: []const [*]const f32, lens: []const usize) void {
+        if (bufs.len == 0) return;
+        if (self.kind == .nccl and self.nccl_send != null and self.nccl_comm != null) {
+            const peer: c_int = if (self.rank == 0) 1 else 0;
+            if (self.nccl_group_start) |gs| _ = gs();
+            for (bufs, lens) |buf, n| {
+                const byte_len = n * @sizeOf(f32);
+                if (self.nccl_dev_buf_size < byte_len) {
+                    if (self.cuda_mem_alloc) |alloc| _ = alloc(&self.nccl_dev_buf, byte_len);
+                    self.nccl_dev_buf_size = byte_len;
+                }
+                if (self.nccl_dev_buf != 0) {
+                    if (self.cuda_memcpy_htod) |htod| _ = htod(self.nccl_dev_buf, @ptrCast(buf), byte_len);
+                    _ = self.nccl_send.?(@ptrFromInt(self.nccl_dev_buf), n, ncclFloat, peer, self.nccl_comm, null);
+                }
+            }
+            if (self.nccl_group_end) |ge| _ = ge();
+            if (self.cuda_sync) |sync| _ = sync();
+            return;
+        }
+        for (bufs, lens) |buf, n| self.sendBuf(buf, n);
+    }
+
+    /// Batched recv: receive multiple buffers in a single NCCL group.
+    pub fn recvBufs(self: *Transport, bufs: []const [*]f32, lens: []const usize) void {
+        if (bufs.len == 0) return;
+        if (self.kind == .nccl and self.nccl_recv != null and self.nccl_comm != null) {
+            const peer: c_int = if (self.rank == 0) 1 else 0;
+            if (self.nccl_group_start) |gs| _ = gs();
+            for (lens) |n| {
+                const byte_len = n * @sizeOf(f32);
+                if (self.nccl_dev_buf_size < byte_len) {
+                    if (self.cuda_mem_alloc) |alloc| _ = alloc(&self.nccl_dev_buf, byte_len);
+                    self.nccl_dev_buf_size = byte_len;
+                }
+                if (self.nccl_dev_buf != 0) {
+                    _ = self.nccl_recv.?(@ptrFromInt(self.nccl_dev_buf), n, ncclFloat, peer, self.nccl_comm, null);
+                }
+            }
+            if (self.nccl_group_end) |ge| _ = ge();
+            if (self.cuda_sync) |sync| _ = sync();
+            // Download all received data
+            for (bufs, lens) |buf, n| {
+                const byte_len = n * @sizeOf(f32);
+                if (self.cuda_memcpy_dtoh) |dtoh| _ = dtoh(@ptrCast(buf), self.nccl_dev_buf, byte_len);
+            }
+            return;
+        }
+        for (bufs, lens) |buf, n| self.recvBuf(buf, n);
+    }
+
     fn tcpSend(self: *Transport, buf: [*]const f32, byte_len: usize) void {
         if (self.tcp_connected == 0) return;
         const fd = self.tcp_fds[0];

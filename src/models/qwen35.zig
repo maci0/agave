@@ -1302,12 +1302,13 @@ pub const Qwen35Model = struct {
         const pp_layer_start = self.pp_rank * pp_layers_per_rank;
         const pp_layer_end = if (self.pp_rank == self.pp_degree - 1) self.n_layers else pp_layer_start + pp_layers_per_rank;
 
-        // PP: receive activations from previous stage
+        // PP: receive activations from previous stage (batched NCCL group)
         if (self.pp_degree > 1 and self.pp_rank > 0) {
             if (self.pp_transport) |transport| {
                 const e = self.n_embd;
-                transport.recvBuf(self.hidden.ptr, e);
-                transport.recvBuf(self.hidden2.ptr, e);
+                const recv_bufs = [_][*]f32{ self.hidden.ptr, self.hidden2.ptr };
+                const recv_lens = [_]usize{ e, e };
+                transport.recvBufs(&recv_bufs, &recv_lens);
             }
         }
 
@@ -1402,9 +1403,10 @@ pub const Qwen35Model = struct {
             const e = self.n_embd;
             self.be.sync();
             if (self.pp_rank < self.pp_degree - 1) {
-                // Not last stage: send hidden+hidden2 to next rank, receive token back
-                transport.sendBuf(self.hidden.ptr, e);
-                transport.sendBuf(self.hidden2.ptr, e);
+                // Not last stage: send hidden+hidden2 to next rank (batched), receive token back
+                const send_bufs = [_][*]const f32{ self.hidden.ptr, self.hidden2.ptr };
+                const send_lens = [_]usize{ e, e };
+                transport.sendBufs(&send_bufs, &send_lens);
                 // Receive the argmax'd token from last rank
                 var result_token: [1]f32 = undefined;
                 transport.recvBuf(&result_token, 1);
