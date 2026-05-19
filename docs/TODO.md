@@ -69,7 +69,7 @@ All quantized GEMV formats native on all 6 backends. See [KERNELS.md](KERNELS.md
 
 | # | Feature | Impact | Source |
 |---|---------|--------|--------|
-| 1 | SSM state prefix caching | ~2x prefill speedup for hybrid SSM models | vLLM |
+| 1 | ~~SSM state prefix caching~~ | ~~~2x prefill speedup for hybrid SSM models~~ | Done |
 | 2 | Async scheduler + PP overlap | 30% E2E throughput improvement | vLLM |
 | 3 | Batched KV swap (cuMemcpyBatchAsync) | Reduce tiered cache API overhead | vLLM |
 | 4 | ~~Mirostat sampling~~ | ~~Target-entropy adaptive sampling~~ | Done |
