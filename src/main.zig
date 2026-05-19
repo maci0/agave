@@ -3191,6 +3191,7 @@ test {
     _ = @import("backend/kernels/cpu/gemv_q8_0.zig");
     _ = @import("spec/spec_decode.zig");
     _ = @import("spec/ngram.zig");
+    _ = @import("fuzz_tests.zig");
     _ = @import("spec/ddtree.zig");
     _ = @import("backend/kernels/cpu/sdpa_tree.zig");
 }
