@@ -82,10 +82,10 @@ All quantized GEMV formats native on all 6 backends. See [KERNELS.md](KERNELS.md
 | 6 | TurboQuant in SDPA kernel | Skip decode-time dequant | vLLM |
 | 7 | ~~Spec decode thinking budget~~ | ~~Adaptive cooldown on low acceptance~~ | Done |
 | 8 | Multi-stream pre-attention GEMM | Overlap QKV(N+1) with SDPA(N) | vLLM |
-| 9 | Profile-guided speculative decoding | Adaptive K per step | llama.cpp |
+| 9 | ~~Profile-guided speculative decoding~~ | ~~Adaptive K per step~~ | Done |
 | 10 | Router mode (multi-model server) | Switch models per request | llama.cpp |
 | 11 | Hybrid memory abstraction | Unified KV+SSM cache | llama.cpp |
-| 12 | Topology-aware auto partitioning | Weighted PP layer assignment | Exo |
+| 12 | ~~Topology-aware auto partitioning~~ | ~~Device cap exchange done, weighted split pending~~ | Partial |
 | 13 | ~~Zero-config P2P discovery (UDP)~~ | ~~No --peers needed on LAN~~ | Done |
 | 14 | gRPC server (HTTP/2) | Lower overhead serving | vLLM |
 
