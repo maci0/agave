@@ -422,56 +422,15 @@ pub const Transport = struct {
     }
 
     /// Point-to-point recv: receive buffer from peer.
-    /// Batched send: send multiple buffers in a single NCCL group.
-    /// Reduces per-transfer overhead for PP activation transfers.
+    /// Batched send: send multiple buffers sequentially.
+    /// Each upload + ncclSend uses the shared staging buffer.
     pub fn sendBufs(self: *Transport, bufs: []const [*]const f32, lens: []const usize) void {
-        if (bufs.len == 0) return;
-        if (self.kind == .nccl and self.nccl_send != null and self.nccl_comm != null) {
-            const peer: c_int = if (self.rank == 0) 1 else 0;
-            if (self.nccl_group_start) |gs| _ = gs();
-            for (bufs, lens) |buf, n| {
-                const byte_len = n * @sizeOf(f32);
-                if (self.nccl_dev_buf_size < byte_len) {
-                    if (self.cuda_mem_alloc) |alloc| _ = alloc(&self.nccl_dev_buf, byte_len);
-                    self.nccl_dev_buf_size = byte_len;
-                }
-                if (self.nccl_dev_buf != 0) {
-                    if (self.cuda_memcpy_htod) |htod| _ = htod(self.nccl_dev_buf, @ptrCast(buf), byte_len);
-                    _ = self.nccl_send.?(@ptrFromInt(self.nccl_dev_buf), n, ncclFloat, peer, self.nccl_comm, null);
-                }
-            }
-            if (self.nccl_group_end) |ge| _ = ge();
-            if (self.cuda_sync) |sync| _ = sync();
-            return;
-        }
         for (bufs, lens) |buf, n| self.sendBuf(buf, n);
     }
 
-    /// Batched recv: receive multiple buffers in a single NCCL group.
+    /// Batched recv: receive multiple buffers sequentially.
+    /// Cannot group NCCL recvs with a single staging buffer — each needs its own.
     pub fn recvBufs(self: *Transport, bufs: []const [*]f32, lens: []const usize) void {
-        if (bufs.len == 0) return;
-        if (self.kind == .nccl and self.nccl_recv != null and self.nccl_comm != null) {
-            const peer: c_int = if (self.rank == 0) 1 else 0;
-            if (self.nccl_group_start) |gs| _ = gs();
-            for (lens) |n| {
-                const byte_len = n * @sizeOf(f32);
-                if (self.nccl_dev_buf_size < byte_len) {
-                    if (self.cuda_mem_alloc) |alloc| _ = alloc(&self.nccl_dev_buf, byte_len);
-                    self.nccl_dev_buf_size = byte_len;
-                }
-                if (self.nccl_dev_buf != 0) {
-                    _ = self.nccl_recv.?(@ptrFromInt(self.nccl_dev_buf), n, ncclFloat, peer, self.nccl_comm, null);
-                }
-            }
-            if (self.nccl_group_end) |ge| _ = ge();
-            if (self.cuda_sync) |sync| _ = sync();
-            // Download all received data
-            for (bufs, lens) |buf, n| {
-                const byte_len = n * @sizeOf(f32);
-                if (self.cuda_memcpy_dtoh) |dtoh| _ = dtoh(@ptrCast(buf), self.nccl_dev_buf, byte_len);
-            }
-            return;
-        }
         for (bufs, lens) |buf, n| self.recvBuf(buf, n);
     }
 
