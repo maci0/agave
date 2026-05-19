@@ -1054,3 +1054,53 @@ test "topLogProbs returns correct ids" {
     try std.testing.expect(has_1);
     try std.testing.expect(has_2);
 }
+
+test "applyXtc excludes top tokens" {
+    var logits = [_]f32{ 10.0, 9.0, 1.0, 0.5 };
+    var prng = std.Random.Xoshiro256.init(42);
+    // Force XTC to trigger (probability=1.0, threshold=0.01)
+    applyXtc(&logits, 1.0, 0.01, prng.random());
+    // At least one of the top tokens should be -inf
+    var n_neg_inf: u32 = 0;
+    for (logits) |v| {
+        if (v == -std.math.inf(f32)) n_neg_inf += 1;
+    }
+    try std.testing.expect(n_neg_inf >= 1);
+}
+
+test "applyXtc no-op at probability 0" {
+    var logits = [_]f32{ 10.0, 9.0, 1.0 };
+    const original = logits;
+    var prng = std.Random.Xoshiro256.init(42);
+    applyXtc(&logits, 0.0, 0.1, prng.random());
+    try std.testing.expectEqualSlices(f32, &original, &logits);
+}
+
+test "applyDry penalizes repeated sequence" {
+    var logits = [_]f32{ 0.0, 0.0, 0.0, 0.0, 0.0 };
+    // History: [1, 2, 3, 1, 2] — token 3 would continue the repeat
+    const history = [_]u32{ 1, 2, 3, 1, 2 };
+    const hist_slice: []const u32 = &history;
+    applyDry(&logits, hist_slice, 1.0, 2);
+    // Token 3 should be penalized (repeating "1 2 3")
+    try std.testing.expect(logits[3] < 0);
+}
+
+test "applyDry no-op with no repeats" {
+    var logits = [_]f32{ 0.0, 0.0, 0.0, 0.0 };
+    const history = [_]u32{ 1, 2, 3 };
+    const hist_slice: []const u32 = &history;
+    applyDry(&logits, hist_slice, 1.0, 2);
+    // No repeated bigrams → no penalty
+    for (logits) |v| try std.testing.expectEqual(@as(f32, 0.0), v);
+}
+
+test "sampleMirostat returns valid token" {
+    var logits = [_]f32{ 1.0, 2.0, 3.0, 0.5 };
+    var mu: f32 = 10.0;
+    var prng = std.Random.Xoshiro256.init(42);
+    const token = sampleMirostat(&logits, 5.0, 0.1, &mu, 1.0, prng.random());
+    try std.testing.expect(token < 4);
+    // mu should have been updated
+    try std.testing.expect(mu != 10.0);
+}
