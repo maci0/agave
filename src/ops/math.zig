@@ -196,6 +196,50 @@ pub fn applyRepeatPenalty(logits: []f32, recent_ids: []const u32, penalty: f32) 
     }
 }
 
+/// DRY (Don't Repeat Yourself) sampling: penalize tokens that would continue
+/// a repeated n-gram sequence. For each candidate token, check if appending it
+/// would create an n-gram that already appeared in the recent output.
+/// `multiplier` scales the penalty; `allowed_length` sets minimum repeat length.
+/// Inspired by llama.cpp's DRY sampler.
+pub fn applyDry(logits: []f32, recent_ids: []const u32, multiplier: f32, allowed_length: u32) void {
+    if (multiplier <= 0 or recent_ids.len < allowed_length + 1) return;
+    const n = recent_ids.len;
+
+    // For each candidate token, check: if we appended it to recent_ids,
+    // would the last (allowed_length+1) tokens match an earlier subsequence?
+    for (0..logits.len) |token_id| {
+        if (logits[token_id] == -std.math.inf(f32)) continue;
+
+        // Check all possible match lengths starting from allowed_length
+        var max_match: u32 = 0;
+        const tid: u32 = @intCast(token_id);
+
+        // The pattern to match: recent_ids[n-allowed_length..n] ++ tid
+        // Search for this pattern earlier in recent_ids
+        var search_pos: usize = 0;
+        while (search_pos + allowed_length < n) : (search_pos += 1) {
+            // Check if recent_ids[search_pos..] matches the tail
+            if (recent_ids[search_pos + allowed_length] != tid) continue;
+
+            var match_len: u32 = 0;
+            var j: usize = 0;
+            while (j <= allowed_length and search_pos + j < n) : (j += 1) {
+                const tail_idx = n - allowed_length + j;
+                if (tail_idx >= n) break;
+                if (search_pos + j >= n) break;
+                if (recent_ids[search_pos + j] != recent_ids[tail_idx]) break;
+                match_len += 1;
+            }
+            if (match_len > max_match) max_match = match_len;
+        }
+
+        if (max_match >= allowed_length) {
+            const penalty = multiplier * @as(f32, @floatFromInt(max_match));
+            logits[token_id] -= penalty;
+        }
+    }
+}
+
 /// Sample a token from logits using temperature, top-k, and top-p (nucleus) filtering.
 ///
 /// When temperature == 0, returns argmax (greedy). Otherwise:

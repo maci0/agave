@@ -33,6 +33,8 @@ pub const SamplingParams = struct {
     repetition_penalty: f32 = 1.0,
     xtc_probability: f32 = 0,
     xtc_threshold: f32 = 0.1,
+    dry_multiplier: f32 = 0,
+    dry_allowed_length: u32 = 2,
     mirostat: u32 = 0,
     mirostat_tau: f32 = 5.0,
     mirostat_eta: f32 = 0.1,
@@ -229,6 +231,11 @@ pub fn parseSampling(body: []const u8) SamplingParams {
             const raw = extractFloatField(body, "xtc_threshold") orelse 0.1;
             break :blk if (std.math.isFinite(raw)) std.math.clamp(raw, 0, 1.0) else 0.1;
         },
+        .dry_multiplier = blk: {
+            const raw = extractFloatField(body, "dry_multiplier") orelse 0;
+            break :blk if (std.math.isFinite(raw)) @max(raw, 0) else 0;
+        },
+        .dry_allowed_length = @intCast(@min(extractIntField(body, "dry_allowed_length") orelse 2, 16)),
         .mirostat = @intCast(@min(extractIntField(body, "mirostat") orelse 0, 2)),
         .mirostat_tau = blk: {
             const raw = extractFloatField(body, "mirostat_tau") orelse 5.0;

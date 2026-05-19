@@ -40,6 +40,8 @@ curl http://localhost:8080/v1/chat/completions -d '{
 | stop | string/array | null | Stop sequence(s): `"stop": "\n"` or `"stop": ["\n", "END"]` |
 | xtc_probability | float | 0 | XTC sampling: probability of excluding top tokens [0, 1] |
 | xtc_threshold | float | 0.1 | XTC sampling: probability threshold for exclusion [0, 1] |
+| dry_multiplier | float | 0 | DRY sampling: penalty multiplier for repeated n-grams (0=disabled) |
+| dry_allowed_length | int | 2 | DRY sampling: minimum n-gram length to penalize |
 | mirostat | int | 0 | Mirostat sampling mode: 0=disabled, 2=Mirostat 2.0 |
 | mirostat_tau | float | 5.0 | Mirostat target entropy (surprise) |
 | mirostat_eta | float | 0.1 | Mirostat learning rate |
