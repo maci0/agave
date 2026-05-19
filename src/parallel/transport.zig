@@ -350,7 +350,13 @@ pub const Transport = struct {
         const byte_len = n * @sizeOf(f32);
         if (self.kind == .nccl and self.nccl_send != null) {
             self.ensureNcclComm();
-            if (self.nccl_comm == null) { self.tcpSend(buf, byte_len); return; }
+            if (self.nccl_comm == null) {
+                std.log.warn("NCCL sendBuf: comm init failed, TCP fallback (cuda_mem_alloc={}, cuda_ctx={})", .{
+                    self.cuda_mem_alloc != null, self.cuda_ctx != null,
+                });
+                self.tcpSend(buf, byte_len);
+                return;
+            }
             const peer: c_int = if (self.rank == 0) 1 else 0;
             if (self.cuda_sync) |sync| _ = sync();
             if (self.nccl_dev_buf_size < byte_len) {
