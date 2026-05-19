@@ -331,6 +331,95 @@ pub fn applyXtc(logits: []f32, xtc_probability: f32, xtc_threshold: f32, rng: st
     }
 }
 
+/// Mirostat 2.0 sampling: maintain target surprise (entropy) during generation.
+/// `mu` tracks the running surprise estimate, adjusted by learning rate `eta`.
+/// Returns the sampled token ID. `mu` is updated in place for the next step.
+/// When Mirostat is active, top-k/top-p are bypassed — Mirostat controls its own truncation.
+pub fn sampleMirostat(logits: []f32, tau: f32, eta: f32, mu: *f32, temperature: f32, rng: std.Random) u32 {
+    const n = logits.len;
+    if (n == 0) return 0;
+
+    // Temperature scaling
+    if (temperature > 0 and temperature != 1.0) {
+        const inv_temp = 1.0 / temperature;
+        for (0..n) |i| logits[i] *= inv_temp;
+    }
+
+    // Softmax
+    var max_val: f32 = -std.math.inf(f32);
+    for (logits) |v| max_val = @max(max_val, v);
+    var sum_exp: f32 = 0;
+    for (0..n) |i| {
+        logits[i] = @exp(logits[i] - max_val);
+        sum_exp += logits[i];
+    }
+    const inv_sum = if (sum_exp > 0) 1.0 / sum_exp else 0;
+    for (0..n) |i| logits[i] *= inv_sum;
+
+    // Sort indices by probability descending (partial — only need until we exceed mu threshold)
+    // Mirostat 2.0: keep tokens where -ln(p) <= mu (surprise <= target)
+    const surprise_threshold = mu.*;
+    var cum_prob: f32 = 0;
+    // Simple approach: scan in descending probability order
+    // Since we need sorted order, find max repeatedly (vocab is large but this runs once per token)
+    var mask: [32768]bool = undefined;
+    const mask_n = @min(n, 32768);
+    @memset(mask[0..mask_n], false);
+
+    for (0..mask_n) |_| {
+        // Find highest unmasked probability
+        var best_idx: usize = 0;
+        var best_val: f32 = -1;
+        for (0..mask_n) |j| {
+            if (!mask[j] and logits[j] > best_val) {
+                best_val = logits[j];
+                best_idx = j;
+            }
+        }
+        if (best_val <= 0) break;
+        mask[best_idx] = true;
+
+        const surprise = -@log(best_val + 1e-10);
+        if (surprise > surprise_threshold and cum_prob > 0) break;
+        cum_prob += best_val;
+    }
+
+    // Zero out tokens with surprise > mu
+    for (0..mask_n) |i| {
+        const p = logits[i];
+        if (p > 0) {
+            const surprise = -@log(p + 1e-10);
+            if (surprise > surprise_threshold) logits[i] = 0;
+        }
+    }
+
+    // Re-normalize
+    var new_sum: f32 = 0;
+    for (0..n) |i| new_sum += logits[i];
+    if (new_sum > 0) {
+        const inv = 1.0 / new_sum;
+        for (0..n) |i| logits[i] *= inv;
+    }
+
+    // Sample from filtered distribution
+    var r = rng.float(f32);
+    var chosen: u32 = 0;
+    for (0..n) |i| {
+        r -= logits[i];
+        if (r <= 0) {
+            chosen = @intCast(i);
+            break;
+        }
+    }
+
+    // Update mu: mu = mu - eta * (surprise(chosen) - tau)
+    const chosen_p = logits[chosen];
+    const chosen_surprise = -@log(if (chosen_p > 1e-10) chosen_p else 1e-10);
+    mu.* -= eta * (chosen_surprise - tau);
+
+    return chosen;
+}
+
 /// Modifies the logits buffer in-place.
 pub fn sampleToken(logits: []f32, temperature: f32, top_k: u32, top_p: f32, rng: std.Random) u32 {
     if (temperature == 0) return argmax(logits);

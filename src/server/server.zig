@@ -2202,6 +2202,7 @@ fn generateN(formatted: []const u8, reset: bool, max_tokens: usize, sampling: Sa
     const use_sampling = sampling.temperature > 0;
     const prng_seed = sampling.seed orelse @as(u64, @truncate(@as(u96, @bitCast(nanoTimestamp()))));
     var prng = std.Random.Xoshiro256.init(prng_seed);
+    var mirostat_mu: f32 = sampling.mirostat_tau * 2.0;
     var json_depth: i32 = 0;
 
     // Grammar-constrained decoding: parse GBNF and init state
@@ -2376,9 +2377,13 @@ fn generateN(formatted: []const u8, reset: bool, max_tokens: usize, sampling: Sa
                 next = math_ops.argmax(model.getLogits());
             }
             if (use_sampling and !use_grammar) {
-                if (sampling.min_p > 0) math_ops.applyMinP(model.getLogits(), sampling.min_p);
-                if (sampling.xtc_probability > 0) math_ops.applyXtc(model.getLogits(), sampling.xtc_probability, sampling.xtc_threshold, prng.random());
-                next = math_ops.sampleToken(model.getLogits(), sampling.temperature, sampling.top_k, sampling.top_p, prng.random());
+                if (sampling.mirostat >= 2) {
+                    next = math_ops.sampleMirostat(model.getLogits(), sampling.mirostat_tau, sampling.mirostat_eta, &mirostat_mu, sampling.temperature, prng.random());
+                } else {
+                    if (sampling.min_p > 0) math_ops.applyMinP(model.getLogits(), sampling.min_p);
+                    if (sampling.xtc_probability > 0) math_ops.applyXtc(model.getLogits(), sampling.xtc_probability, sampling.xtc_threshold, prng.random());
+                    next = math_ops.sampleToken(model.getLogits(), sampling.temperature, sampling.top_k, sampling.top_p, prng.random());
+                }
             }
             if (g_server.isEog(next)) {
                 hit_eog = true;
@@ -3693,6 +3698,7 @@ fn generateStream(stream: TcpStream, prompt: []const u8, req_id: u64, created: i
     const use_sampling_s = sampling.temperature > 0;
     const prng_seed_s = sampling.seed orelse @as(u64, @truncate(@as(u96, @bitCast(nanoTimestamp()))));
     var prng_s = std.Random.Xoshiro256.init(prng_seed_s);
+    var mirostat_mu_s: f32 = sampling.mirostat_tau * 2.0;
     const prefill_start = milliTimestamp();
     var first_gen_token: u32 = 0;
     for (token_ids) |tid| {
@@ -3720,9 +3726,13 @@ fn generateStream(stream: TcpStream, prompt: []const u8, req_id: u64, created: i
             }
         }
     } else if (use_sampling_s and token_ids.len > 0) {
-        if (sampling.min_p > 0) math_ops.applyMinP(model.getLogits(), sampling.min_p);
-        if (sampling.xtc_probability > 0) math_ops.applyXtc(model.getLogits(), sampling.xtc_probability, sampling.xtc_threshold, prng_s.random());
-        first_gen_token = math_ops.sampleToken(model.getLogits(), sampling.temperature, sampling.top_k, sampling.top_p, prng_s.random());
+        if (sampling.mirostat >= 2) {
+            first_gen_token = math_ops.sampleMirostat(model.getLogits(), sampling.mirostat_tau, sampling.mirostat_eta, &mirostat_mu_s, sampling.temperature, prng_s.random());
+        } else {
+            if (sampling.min_p > 0) math_ops.applyMinP(model.getLogits(), sampling.min_p);
+            if (sampling.xtc_probability > 0) math_ops.applyXtc(model.getLogits(), sampling.xtc_probability, sampling.xtc_threshold, prng_s.random());
+            first_gen_token = math_ops.sampleToken(model.getLogits(), sampling.temperature, sampling.top_k, sampling.top_p, prng_s.random());
+        }
     }
     // Accept first token in grammar
     if (use_grammar_s and s_grammar_state != null and token_ids.len > 0) {
@@ -3839,9 +3849,13 @@ fn generateStream(stream: TcpStream, prompt: []const u8, req_id: u64, created: i
                     }
                 }
             } else if (use_sampling_s) {
-                if (sampling.min_p > 0) math_ops.applyMinP(model.getLogits(), sampling.min_p);
-                if (sampling.xtc_probability > 0) math_ops.applyXtc(model.getLogits(), sampling.xtc_probability, sampling.xtc_threshold, prng_s.random());
-                next = math_ops.sampleToken(model.getLogits(), sampling.temperature, sampling.top_k, sampling.top_p, prng_s.random());
+                if (sampling.mirostat >= 2) {
+                    next = math_ops.sampleMirostat(model.getLogits(), sampling.mirostat_tau, sampling.mirostat_eta, &mirostat_mu_s, sampling.temperature, prng_s.random());
+                } else {
+                    if (sampling.min_p > 0) math_ops.applyMinP(model.getLogits(), sampling.min_p);
+                    if (sampling.xtc_probability > 0) math_ops.applyXtc(model.getLogits(), sampling.xtc_probability, sampling.xtc_threshold, prng_s.random());
+                    next = math_ops.sampleToken(model.getLogits(), sampling.temperature, sampling.top_k, sampling.top_p, prng_s.random());
+                }
             }
             // Compute logprobs before EOG/stop checks (logits still valid)
             const lp = if (sampling.logprobs) computeLogprobs(model.getLogits(), next, sampling.top_logprobs) else null;

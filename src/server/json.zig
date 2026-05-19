@@ -33,6 +33,9 @@ pub const SamplingParams = struct {
     repetition_penalty: f32 = 1.0,
     xtc_probability: f32 = 0,
     xtc_threshold: f32 = 0.1,
+    mirostat: u32 = 0,
+    mirostat_tau: f32 = 5.0,
+    mirostat_eta: f32 = 0.1,
     seed: ?u64 = null,
     logprobs: bool = false,
     top_logprobs: u32 = 0,
@@ -225,6 +228,15 @@ pub fn parseSampling(body: []const u8) SamplingParams {
         .xtc_threshold = blk: {
             const raw = extractFloatField(body, "xtc_threshold") orelse 0.1;
             break :blk if (std.math.isFinite(raw)) std.math.clamp(raw, 0, 1.0) else 0.1;
+        },
+        .mirostat = @intCast(@min(extractIntField(body, "mirostat") orelse 0, 2)),
+        .mirostat_tau = blk: {
+            const raw = extractFloatField(body, "mirostat_tau") orelse 5.0;
+            break :blk if (std.math.isFinite(raw) and raw > 0) raw else 5.0;
+        },
+        .mirostat_eta = blk: {
+            const raw = extractFloatField(body, "mirostat_eta") orelse 0.1;
+            break :blk if (std.math.isFinite(raw) and raw > 0) raw else 0.1;
         },
         .frequency_penalty = if (std.math.isFinite(raw_freq_pen)) std.math.clamp(raw_freq_pen, -2.0, 2.0) else 0,
         .presence_penalty = if (std.math.isFinite(raw_pres_pen)) std.math.clamp(raw_pres_pen, -2.0, 2.0) else 0,

@@ -40,6 +40,9 @@ curl http://localhost:8080/v1/chat/completions -d '{
 | stop | string/array | null | Stop sequence(s): `"stop": "\n"` or `"stop": ["\n", "END"]` |
 | xtc_probability | float | 0 | XTC sampling: probability of excluding top tokens [0, 1] |
 | xtc_threshold | float | 0.1 | XTC sampling: probability threshold for exclusion [0, 1] |
+| mirostat | int | 0 | Mirostat sampling mode: 0=disabled, 2=Mirostat 2.0 |
+| mirostat_tau | float | 5.0 | Mirostat target entropy (surprise) |
+| mirostat_eta | float | 0.1 | Mirostat learning rate |
 | logprobs | bool | false | Return log probabilities for output tokens |
 | top_logprobs | int | null | Number of top token log probabilities to return per position, 0-20 |
 | stream | bool | false | Server-Sent Events streaming |
