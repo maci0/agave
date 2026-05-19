@@ -971,9 +971,8 @@ fn setupTransport(allocator: std.mem.Allocator, peers_str: []const u8, rank: u32
             t.kind = .tcp;
             return t;
         };
-        // Eager comm init — both ranks reach here after TCP handshake,
-        // so ncclCommInitRank collective call will succeed synchronously.
-        t.ensureNcclComm();
+        // Note: NCCL comm init deferred until CUDA interop is wired
+        // (ensureNcclComm called after cuda_ctx/cuda_sync are set)
     }
     return t;
 }
@@ -1914,6 +1913,8 @@ fn initAndRun(
                     },
                     else => {},
                 };
+                // Eager NCCL comm init now that CUDA context is available
+                tr.ensureNcclComm();
                 mdl.setTpTransport(tr);
             }
         };
@@ -1933,6 +1934,21 @@ fn initAndRun(
         }
         if (cli.tp_peers) |peers_str| {
             if (setupTransport(allocator, peers_str, cli.tp_rank, cli.pp_degree, cli.transport, 49455)) |t| {
+                // Wire CUDA interop for NCCL PP
+                if (t.kind == .nccl) switch (be) {
+                    .cuda => |cuda_be| {
+                        t.cuda_sync = cuda_be.cuCtxSynchronize;
+                        t.cuda_ctx = cuda_be.context;
+                        t.cuda_ctx_set = if (cuda_be.cuCtxSetCurrent) |f| f else null;
+                        t.cuda_backend = @ptrCast(cuda_be);
+                        t.cuda_get_dev_ptr = @import("backend/cuda.zig").CudaBackend.getDevicePtrOpaque;
+                        t.cuda_mem_alloc = cuda_be.cuMemAlloc;
+                        t.cuda_memcpy_htod = cuda_be.cuMemcpyHtoD;
+                        t.cuda_memcpy_dtoh = cuda_be.cuMemcpyDtoH;
+                    },
+                    else => {},
+                };
+                t.ensureNcclComm();
                 mdl.setPpConfig(cli.tp_rank, cli.pp_degree, t);
             }
         }
