@@ -80,8 +80,8 @@ Extracted from vLLM v0.8.0–v0.21.0 changelogs. Prioritized by impact and imple
 | 1 | SSM state prefix caching | ~2x speedup for Qwen3.5/Nemotron with shared prefixes (cache DeltaNet/Mamba state matrices) | Design |
 | 2 | Async scheduler + PP overlap | 30% E2E throughput improvement (overlap prefill compute with network I/O) | Design |
 | 3 | Batched KV swap via cuMemcpyBatchAsync | Reduce API overhead for tiered KV cache block transfers | Open |
-| 4 | Prefix cache xxHash | High-performance hash for prefix lookup vs token-sequence matching | Open |
-| 5 | `--ctx-size auto` | Probe available memory, pick largest safe context (no OOM at startup) | Implementing |
+| 4 | Prefix cache xxHash | High-performance hash for prefix lookup vs token-sequence matching | Done |
+| 5 | `--ctx-size auto` | Probe available memory, pick largest safe context (no OOM at startup) | Done |
 
 ### Medium Priority
 
@@ -91,7 +91,7 @@ Extracted from vLLM v0.8.0–v0.21.0 changelogs. Prioritized by impact and imple
 | 7 | Spec decode thinking budget | Improve acceptance rates on reasoning models with `<think>` tokens | Open |
 | 8 | Multi-stream pre-attention GEMM | Overlap QKV of layer N+1 with SDPA of layer N | Open |
 | 9 | Conditional compilation | `-Denable-<quant>=false` to shrink binary and build time | Open |
-| 10 | N-gram speculative decoding | Zero-overhead spec decode from output history (code, lists) | Implementing |
+| 10 | N-gram speculative decoding | Zero-overhead spec decode from output history (code, lists) | Done |
 | 11 | gRPC server (HTTP/2) | Lower overhead than HTTP/1.1 for high-throughput serving | Open |
 
 ### Low Priority
