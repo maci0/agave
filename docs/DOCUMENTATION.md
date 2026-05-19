@@ -43,4 +43,5 @@ Start here: **[tutorial/README.md](tutorial/README.md)**
 - **[Contributing](CONTRIBUTING.md)** — how to add backends, models, quantization, megakernels, chat templates
 - **[Test Matrix](TEST_MATRIX.md)** — model × backend test status and known issues
 - **[Parallelism](PARALLELISM.md)** — distributed inference: TP, PP, NCCL, transports
-- **[TODO & Roadmap](TODO.md)** — bugs, roadmap, design notes (merged from IDEAS.md)
+- **[TODO & Roadmap](TODO.md)** — bugs, roadmap, design notes
+- **[Changelog](../CHANGELOG.md)** — release history and feature summaries
