@@ -165,7 +165,7 @@ Notes:
 | Model | Config | Transport | tok/s | vs Single GPU |
 |-------|--------|-----------|:-----:|:-------------:|
 | Qwen3.5 0.8B Q8_0 | Single GPU | — | 9.2 | 100% |
-| Qwen3.5 0.8B Q8_0 | PP=2 | NCCL RoCE | **8.5** | 93% |
+| Qwen3.5 0.8B Q8_0 | PP=2 | NCCL RoCE | **40.2** | 112% |
 | Qwen3.5 0.8B Q8_0 | TP=2 | NCCL RoCE | 5.1 | 56% |
 | Qwen3.5 9B Q4_K_M | Single GPU | — | 2.2 | 100% |
 | Qwen3.5 9B Q4_K_M | PP=2 | NCCL RoCE | 2.2 | 100% |

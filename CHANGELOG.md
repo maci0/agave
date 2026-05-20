@@ -1,5 +1,27 @@
 # Changelog
 
+## 2026-05-20 — NCCL RoCE RDMA Performance Fix
+
+**PP=2 NCCL over RoCE: 4.2 → 40.2 tok/s (9.6x speedup)**
+
+Root cause: CUDA interop (context, mem_alloc, memcpy) was not wired for PP transport — NCCL couldn't allocate device staging buffers and fell back to TCP sockets silently.
+
+Fixes:
+- Wire CUDA interop inside `setupTransport` before `setupNccl`
+- Set CUDA context current before `ncclCommInitRank`
+- Eager comm init at TCP sync point (post unique ID exchange)
+- NCCL env var logging (17 variables) + comm diagnostics
+- Device pointer path in sendBuf (skip host→device when data on GPU)
+- Test script (`scripts/test-pp-nccl.sh`) with ConnectX RoCE config
+
+Hardware-verified on dual NVIDIA GB10 over ConnectX RoCE RDMA:
+- `NET/IB : Using rocep1s0f1:1/RoCE` confirmed
+- `GIN_IB_GDAKI` (GPUDirect) assigned
+- 16 p2p channels, 0.27s init time
+- PP=2 now **faster than single GPU** (40.2 vs 36.0 tok/s)
+
+---
+
 ## 2026-05-19 — Major Feature Release (59 commits)
 
 ### GPU Kernels (32 new files)
