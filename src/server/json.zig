@@ -260,33 +260,37 @@ pub fn parseSampling(body: []const u8) SamplingParams {
     };
 
     // Parse stop sequences: "stop": "string" or "stop": ["s1", "s2"]
-    if (extractField(body, "stop")) |stop_str| {
-        result.stop[0] = stop_str;
-        result.n_stop = 1;
-    } else {
-        // Try array form: scan for "stop" followed by [
-        var sbuf: [64]u8 = undefined;
-        const needle = std.fmt.bufPrint(&sbuf, "\"stop\"", .{}) catch "";
-        if (needle.len > 0) {
-            if (std.mem.indexOf(u8, body, needle)) |idx| {
-                var si = idx + needle.len;
-                while (si < body.len and (body[si] == ' ' or body[si] == ':')) : (si += 1) {}
-                if (si < body.len and body[si] == '[') {
-                    si += 1;
-                    while (si < body.len and result.n_stop < max_stop_sequences) {
-                        while (si < body.len and (body[si] == ' ' or body[si] == ',')) : (si += 1) {}
-                        if (si >= body.len or body[si] == ']') break;
-                        if (body[si] == '"') {
-                            si += 1;
-                            const str_start = si;
-                            while (si < body.len and body[si] != '"') {
-                                if (body[si] == '\\') si += 1;
+    // Also accepts "stop_sequences" (Anthropic API field name).
+    const stop_field_names = [_][]const u8{ "stop", "stop_sequences" };
+    for (stop_field_names) |stop_field| {
+        if (result.n_stop > 0) break;
+        if (extractField(body, stop_field)) |stop_str| {
+            result.stop[0] = stop_str;
+            result.n_stop = 1;
+        } else {
+            var sbuf: [64]u8 = undefined;
+            const needle = std.fmt.bufPrint(&sbuf, "\"{s}\"", .{stop_field}) catch "";
+            if (needle.len > 0) {
+                if (std.mem.indexOf(u8, body, needle)) |idx| {
+                    var si = idx + needle.len;
+                    while (si < body.len and (body[si] == ' ' or body[si] == ':')) : (si += 1) {}
+                    if (si < body.len and body[si] == '[') {
+                        si += 1;
+                        while (si < body.len and result.n_stop < max_stop_sequences) {
+                            while (si < body.len and (body[si] == ' ' or body[si] == ',')) : (si += 1) {}
+                            if (si >= body.len or body[si] == ']') break;
+                            if (body[si] == '"') {
                                 si += 1;
-                            }
-                            result.stop[result.n_stop] = body[str_start..si];
-                            result.n_stop += 1;
-                            if (si < body.len) si += 1;
-                        } else break;
+                                const str_start = si;
+                                while (si < body.len and body[si] != '"') {
+                                    if (body[si] == '\\') si += 1;
+                                    si += 1;
+                                }
+                                result.stop[result.n_stop] = body[str_start..si];
+                                result.n_stop += 1;
+                                if (si < body.len) si += 1;
+                            } else break;
+                        }
                     }
                 }
             }

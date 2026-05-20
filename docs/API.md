@@ -2,7 +2,7 @@
 
 Start the server:
 ```bash
-agave model.gguf --serve                    # default port 8080
+agave model.gguf --serve                    # default port 49453
 agave model.gguf --serve --port 9090        # custom port
 agave model.gguf --serve --api-key mysecret  # bearer token auth
 ```
@@ -16,7 +16,7 @@ agave model.gguf --serve --api-key mysecret  # bearer token auth
 OpenAI-compatible chat completions.
 
 ```bash
-curl http://localhost:8080/v1/chat/completions -d '{
+curl http://localhost:49453/v1/chat/completions -d '{
   "messages": [{"role": "user", "content": "Hello"}],
   "max_tokens": 100,
   "temperature": 0.7
@@ -28,7 +28,7 @@ curl http://localhost:8080/v1/chat/completions -d '{
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | messages | array | required | `[{"role": "user/system/assistant", "content": "..."}]` |
-| max_tokens | int | 1024 | Maximum tokens to generate |
+| max_tokens | int | 512 | Maximum tokens to generate |
 | temperature | float | 0 | 0 = greedy, >0 = sampling |
 | top_k | int | 0 | Top-k filtering, 0 = disabled |
 | top_p | float | 1.0 | Nucleus sampling threshold |
@@ -72,7 +72,7 @@ curl http://localhost:8080/v1/chat/completions -d '{
 Text completions (non-chat).
 
 ```bash
-curl http://localhost:8080/v1/completions -d '{
+curl http://localhost:49453/v1/completions -d '{
   "prompt": "The capital of France is",
   "max_tokens": 20
 }'
@@ -80,15 +80,44 @@ curl http://localhost:8080/v1/completions -d '{
 
 Same sampling parameters as chat completions. Prompt is raw text (no chat template).
 
+**Response:**
+```json
+{
+  "id": "cmpl-12345",
+  "object": "text_completion",
+  "created": 1700000000,
+  "model": "model-name",
+  "choices": [{"text": "Paris.", "index": 0, "finish_reason": "stop"}],
+  "usage": {"completion_tokens": 2, "prompt_tokens": 7, "total_tokens": 9}
+}
+```
+
 ### POST /v1/responses
 
 OpenAI Responses API format.
 
 ```bash
-curl http://localhost:8080/v1/responses -d '{
+curl http://localhost:49453/v1/responses -d '{
   "input": "Explain quantum computing",
   "max_tokens": 200
 }'
+```
+
+Same sampling parameters as chat completions.
+
+**Response:**
+```json
+{
+  "id": "resp-12345",
+  "object": "response",
+  "created_at": 1700000000,
+  "status": "completed",
+  "model": "model-name",
+  "stop_reason": "stop",
+  "output": [{"type": "message", "id": "msg_0", "status": "completed", "role": "assistant",
+    "content": [{"type": "output_text", "text": "..."}]}],
+  "usage": {"input_tokens": 5, "output_tokens": 50, "total_tokens": 55}
+}
 ```
 
 ### POST /v1/messages
@@ -96,7 +125,7 @@ curl http://localhost:8080/v1/responses -d '{
 Anthropic Messages API format.
 
 ```bash
-curl http://localhost:8080/v1/messages -d '{
+curl http://localhost:49453/v1/messages -d '{
   "system": "You are a helpful assistant.",
   "messages": [{"role": "user", "content": "Hello"}],
   "max_tokens": 100
@@ -109,7 +138,7 @@ curl http://localhost:8080/v1/messages -d '{
 |-------|------|---------|-------------|
 | messages | array | required | `[{"role": "user/assistant", "content": "..."}]` |
 | system | string | null | System prompt (separate from messages, per Anthropic format) |
-| max_tokens | int | 1024 | Maximum tokens to generate |
+| max_tokens | int | 512 | Maximum tokens to generate |
 | temperature | float | 0 | 0 = greedy, >0 = sampling |
 | top_k | int | 0 | Top-k filtering, 0 = disabled |
 | top_p | float | 1.0 | Nucleus sampling threshold |
@@ -119,7 +148,7 @@ curl http://localhost:8080/v1/messages -d '{
 **Response:**
 ```json
 {
-  "id": "msg-12345",
+  "id": "msg_12345",
   "type": "message",
   "role": "assistant",
   "content": [{"type": "text", "text": "..."}],
@@ -131,15 +160,13 @@ curl http://localhost:8080/v1/messages -d '{
 
 ### POST /v1/chat/regenerate
 
-Regenerate the last assistant response in an active conversation.
+Regenerate the last assistant response in the active conversation. Rolls back the last assistant message, resets the KV cache, and generates a new response. Supports streaming via `stream=1`.
 
 ```bash
-curl -X POST http://localhost:8080/v1/chat/regenerate -d '{
-  "conversation_id": "conv-12345"
-}'
+curl -X POST http://localhost:49453/v1/chat/regenerate -d 'stream=1&max_tokens=200'
 ```
 
-Rolls back the last assistant message and generates a new response using the same conversation context. Useful for "retry" functionality in chat UIs.
+Uses form-encoded body. Accepts `max_tokens`, `temperature`, `stream`, and `system` fields. Always operates on the currently active conversation.
 
 ### POST /v1/conversations
 
@@ -148,25 +175,36 @@ Manage conversations.
 **GET** — List active conversations:
 
 ```bash
-curl http://localhost:8080/v1/conversations
-# [{"id": "conv-12345", "created": 1715000000, "message_count": 4}]
+curl http://localhost:49453/v1/conversations
+# [{"id":1,"title":"Hello world","active":true,"count":4}]
 ```
 
-**POST** — Create a new conversation:
+**POST** — Create, select, or delete conversations via form-encoded `action` field:
 
 ```bash
-curl -X POST http://localhost:8080/v1/conversations -d '{
-  "system": "You are a helpful assistant."
-}'
-# {"id": "conv-67890", "created": 1715000001}
+# Create a new conversation
+curl -X POST http://localhost:49453/v1/conversations -d 'action=new'
+# {"ok":true,"id":2}
+
+# Select a conversation (returns its messages)
+curl -X POST http://localhost:49453/v1/conversations -d 'action=select&id=1'
+# {"messages":[{"role":"user","content":"Hello"},{"role":"assistant","content":"Hi!"}]}
+
+# Delete a conversation
+curl -X POST http://localhost:49453/v1/conversations -d 'action=delete&id=1'
+# {"ok":true,"cleared":false}
 ```
+
+### POST /v1/embeddings
+
+Not implemented. Returns 501.
 
 ### POST /v1/tokenize
 
 Count tokens for a text string.
 
 ```bash
-curl http://localhost:8080/v1/tokenize -d '{"text": "Hello world"}'
+curl http://localhost:49453/v1/tokenize -d '{"text": "Hello world"}'
 # {"count": 2, "model": "model-name"}
 ```
 
@@ -175,7 +213,7 @@ curl http://localhost:8080/v1/tokenize -d '{"text": "Hello world"}'
 Convert token IDs back to text.
 
 ```bash
-curl http://localhost:8080/v1/detokenize -d '{"tokens": [9906, 1917]}'
+curl http://localhost:49453/v1/detokenize -d '{"tokens": [9906, 1917]}'
 # {"text": "Hello world"}
 ```
 
@@ -184,18 +222,29 @@ curl http://localhost:8080/v1/detokenize -d '{"tokens": [9906, 1917]}'
 List available models.
 
 ```bash
-curl http://localhost:8080/v1/models
+curl http://localhost:49453/v1/models
 ```
 
 Returns model name, backend, context size, KV cache position.
 
 ### GET /health
 
-Health check. Returns `{"status": "ok"}`.
+Health check (no auth required). Returns status, uptime, active connections, KV cache utilization, and request counters. Status is `"ok"`, `"degraded"` (KV pressure or high error rate), or `"shutting_down"`.
+
+```json
+{"status":"ok","reason":"none","version":"0.1.0","model":"model-name","backend":"metal",
+ "uptime_s":120,"active_connections":1,"requests_total":5,"requests_completed":5,
+ "requests_failed":0,"requests_cancelled":0,"queue_depth":0,
+ "kv_cache_used":100,"kv_cache_total":8192,"kv_seq_len":42,"ctx_size":4096}
+```
 
 ### GET /ready
 
-Readiness check. Returns 200 when model is loaded and ready.
+Readiness probe (no auth required). Returns 200 with `"status":"ready"` when healthy. Returns 503 with `"status":"degraded"` (KV cache pressure or high error rate) or `"status":"shutting_down"` during shutdown.
+
+```json
+{"status":"ready","queue_depth":0,"kv_cache_used":100,"kv_cache_total":8192}
+```
 
 ### GET /metrics
 
@@ -209,7 +258,7 @@ Three ways to constrain output:
 
 **1. JSON mode** — forces valid JSON object:
 ```bash
-curl localhost:8080/v1/chat/completions -d '{
+curl localhost:49453/v1/chat/completions -d '{
   "messages": [{"role": "user", "content": "Generate a user profile"}],
   "response_format": {"type": "json_object"}
 }'
@@ -217,7 +266,7 @@ curl localhost:8080/v1/chat/completions -d '{
 
 **2. JSON schema** — constrains to specific structure:
 ```bash
-curl localhost:8080/v1/chat/completions -d '{
+curl localhost:49453/v1/chat/completions -d '{
   "messages": [{"role": "user", "content": "User info for Alice"}],
   "json_schema": "{\"type\":\"object\",\"properties\":{\"name\":{\"type\":\"string\"},\"age\":{\"type\":\"integer\"}}}"
 }'
@@ -225,7 +274,7 @@ curl localhost:8080/v1/chat/completions -d '{
 
 Or via OpenAI response_format:
 ```bash
-curl localhost:8080/v1/chat/completions -d '{
+curl localhost:49453/v1/chat/completions -d '{
   "messages": [{"role": "user", "content": "User info"}],
   "response_format": {"type": "json_schema", "json_schema": {"schema": {"type": "object", "properties": {"name": {"type": "string"}}}}}
 }'
@@ -233,7 +282,7 @@ curl localhost:8080/v1/chat/completions -d '{
 
 **3. GBNF grammar** — arbitrary format constraints:
 ```bash
-curl localhost:8080/v1/chat/completions -d '{
+curl localhost:49453/v1/chat/completions -d '{
   "messages": [{"role": "user", "content": "Is the sky blue?"}],
   "grammar": "root ::= \"yes\" | \"no\""
 }'
@@ -246,7 +295,7 @@ curl localhost:8080/v1/chat/completions -d '{
 Set `"stream": true` for Server-Sent Events:
 
 ```bash
-curl -N http://localhost:8080/v1/chat/completions -d '{
+curl -N http://localhost:49453/v1/chat/completions -d '{
   "messages": [{"role": "user", "content": "Hello"}],
   "stream": true,
   "max_tokens": 100
@@ -271,6 +320,7 @@ All endpoints return JSON error bodies on failure:
 | `400 Bad Request` | Malformed JSON, missing required fields, invalid parameter values |
 | `401 Unauthorized` | Missing or invalid `Authorization: Bearer <key>` when `--api-key` is set |
 | `404 Not Found` | Unknown endpoint |
+| `405 Method Not Allowed` | Known endpoint with wrong HTTP method (includes `Allow` header) |
 | `413 Payload Too Large` | Request body exceeds server limit |
 | `429 Too Many Requests` | Rate limit exceeded (when rate limiter is active) |
 | `500 Internal Server Error` | Model forward error, OOM, or unexpected server failure |
@@ -282,7 +332,7 @@ All endpoints return JSON error bodies on failure:
 
 ```bash
 agave model.gguf --serve --api-key mysecret
-curl -H "Authorization: Bearer mysecret" http://localhost:8080/v1/chat/completions -d '...'
+curl -H "Authorization: Bearer mysecret" http://localhost:49453/v1/chat/completions -d '...'
 ```
 
 Returns 401 if key missing or wrong. No auth required when `--api-key` not set.

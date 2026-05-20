@@ -358,11 +358,10 @@ const cli_specs = [_]cli_mod.ArgSpec{
     .{ .long = "disagg", .help = "Disaggregated inference: rank 0 prefills, sends KV to rank 1 for decode." },
     .{ .long = "tp", .kind = .option, .help = "Tensor parallelism degree [default: 1]." },
     .{ .long = "pp", .kind = .option, .help = "Pipeline parallelism stages [default: 1]." },
-    .{ .long = "devices", .kind = .option, .help = "Device selection (e.g. cuda:0,cuda:1)." },
     .{ .long = "peers", .kind = .option, .help = "TP peer addresses for distributed inference (e.g. 192.168.0.212:9999)." },
-    .{ .long = "rank", .kind = .option, .help = "This node's TP rank [default: 0]." },
+    .{ .long = "rank", .kind = .option, .help = "This node's rank for TP/PP/disagg [default: 0]." },
     .{ .long = "transport", .kind = .option, .help = "IPC transport: auto, tcp, shm, nccl, rdma, udp, grpc [default: auto]." },
-    .{ .long = "ctx-size", .kind = .option, .help = "Context window size; 0 = full model context [default: min(model, 4096)]." },
+    .{ .long = "ctx-size", .kind = .option, .help = "Context window size; 0 = full, auto = fit to memory [default: min(model, 4096)]." },
     .{ .long = "allow-cpu-fallback", .help = "Allow GPU backends to fall back to CPU for unsupported ops." },
     .{ .long = "mmap", .help = "Use lazy mmap instead of eagerly paging weights into RAM." },
     .{ .long = "prefill-batch-size", .kind = .option, .help = "Prefill chunk size in tokens [default: 512]." },
@@ -381,7 +380,7 @@ const cli_specs = [_]cli_mod.ArgSpec{
     // Server
     .{ .long = "serve", .short = 's', .help = "Start HTTP server (OpenAI + Anthropic API)." },
     .{ .long = "port", .short = 'p', .kind = .option, .help = "Server port [default: 49453]." },
-    .{ .long = "host", .kind = .option, .help = "Server bind address [default: 127.0.0.1]." },
+    .{ .long = "host", .kind = .option, .help = "Server bind address: IPv4, localhost, or 0.0.0.0 [default: 127.0.0.1]." },
     .{ .long = "api-key", .kind = .option, .help = "API key for server auth (or AGAVE_API_KEY env)." },
     // Multimodal
     .{ .long = "mmproj", .kind = .option, .help = "Path to vision projector GGUF (mmproj file)." },
@@ -390,7 +389,7 @@ const cli_specs = [_]cli_mod.ArgSpec{
     .{ .long = "draft-model", .kind = .option, .help = "Path to draft model for speculative decoding." },
     .{ .long = "spec-tokens", .short = 'K', .kind = .option, .help = "Draft tokens per speculation round [default: 5]." },
     .{ .long = "tree-budget", .kind = .option, .help = "DDTree node budget [default: 64]." },
-    .{ .long = "spec-mode", .kind = .option, .help = "Speculative mode: standard, ddtree, self [default: ddtree]." },
+    .{ .long = "spec-mode", .kind = .option, .help = "Speculative mode: standard, ddtree, self, ngram [default: ddtree]." },
     .{ .long = "draft-layers", .kind = .option, .help = "Layers for self-speculative draft [default: auto]." },
     // Diagnostics
     .{ .long = "verbose", .short = 'V', .help = "Show technical details (params, load times, EOG)." },
@@ -625,6 +624,11 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
         eprint("Error: --repeat-penalty must be > 0 (got {d:.2})\n", .{repeat_penalty});
         std.process.exit(1);
     }
+    const min_p = parseF32(res.option("min-p"), "min-p") orelse 0.0;
+    if (min_p < 0 or min_p > 1.0) {
+        eprint("Error: --min-p must be in [0, 1.0] (got {d:.2})\n", .{min_p});
+        std.process.exit(1);
+    }
 
     // Validate --kv-tiers value (mutable copy needed for "off" → null conversion)
     var kv_tiers_val = res.option("kv-tiers");
@@ -682,7 +686,7 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
     }
 
     // Validate max-tokens
-    if (res.optionU32("max-tokens")) |mt| {
+    if (parseU32(res.option("max-tokens"), "max-tokens")) |mt| {
         if (mt == 0) {
             eprint("Error: --max-tokens must be >= 1\n", .{});
             std.process.exit(1);
@@ -690,9 +694,17 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
     }
 
     // Validate prefill batch size
-    if (res.optionU32("prefill-batch-size")) |pbs| {
+    if (parseU32(res.option("prefill-batch-size"), "prefill-batch-size")) |pbs| {
         if (pbs == 0) {
             eprint("Error: --prefill-batch-size must be >= 1\n", .{});
+            std.process.exit(1);
+        }
+    }
+
+    // Validate mirostat-mode (only 0 and 2 are supported)
+    if (parseU32(res.option("mirostat-mode"), "mirostat-mode")) |mm| {
+        if (mm != 0 and mm != 2) {
+            eprint("Error: --mirostat-mode must be 0 (disabled) or 2 (Mirostat 2.0), got {d}\n", .{mm});
             std.process.exit(1);
         }
     }
@@ -739,18 +751,18 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
         .model_path = res.positional(0).?,
         .prompt = res.positional(1),
         .serve = res.flag("serve"),
-        .port = res.optionU16("port") orelse default_port,
-        .max_tokens = res.optionU32("max-tokens") orelse default_max_tokens,
+        .port = parseU16(res.option("port"), "port") orelse default_port,
+        .max_tokens = parseU32(res.option("max-tokens"), "max-tokens") orelse default_max_tokens,
         .temperature = temperature,
         .top_p = top_p,
-        .top_k = res.optionU32("top-k") orelse 0,
-        .min_p = parseF32(res.option("min-p"), "min-p") orelse 0.0,
+        .top_k = parseU32(res.option("top-k"), "top-k") orelse 0,
+        .min_p = min_p,
         .repeat_penalty = repeat_penalty,
         .dry_multiplier = parseF32(res.option("dry-multiplier"), "dry-multiplier") orelse 0,
-        .dry_length = res.optionU32("dry-length") orelse 2,
+        .dry_length = parseU32(res.option("dry-length"), "dry-length") orelse 2,
         .xtc_probability = parseF32(res.option("xtc-probability"), "xtc-probability") orelse 0,
         .xtc_threshold = parseF32(res.option("xtc-threshold"), "xtc-threshold") orelse 0.1,
-        .mirostat_mode = res.optionU32("mirostat-mode") orelse 0,
+        .mirostat_mode = parseU32(res.option("mirostat-mode"), "mirostat-mode") orelse 0,
         .mirostat_tau = parseF32(res.option("mirostat-tau"), "mirostat-tau") orelse 5.0,
         .mirostat_eta = parseF32(res.option("mirostat-eta"), "mirostat-eta") orelse 0.1,
         .grammar_path = grammar_path,
@@ -763,9 +775,12 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
         .ctx_size = blk: {
             const raw = res.option("ctx-size") orelse break :blk 0;
             if (std.mem.eql(u8, raw, "auto")) break :blk std.math.maxInt(u32);
-            break :blk std.fmt.parseInt(u32, raw, 10) catch 0;
+            break :blk std.fmt.parseInt(u32, raw, 10) catch {
+                eprint("Error: --ctx-size must be a non-negative integer or 'auto', got '{s}'\n", .{raw});
+                std.process.exit(1);
+            };
         },
-        .seed = res.optionU64("seed") orelse @as(u64, @truncate(@as(u96, @bitCast(nanoTimestamp(g_io))))),
+        .seed = parseU64(res.option("seed"), "seed") orelse @as(u64, @truncate(@as(u96, @bitCast(nanoTimestamp(g_io))))),
         .kv_type_k = blk: {
             if (res.option("kv-type-k")) |s| break :blk kvTypeOrExit(s, "--kv-type-k");
             if (res.option("cache-type-k")) |s| break :blk kvTypeOrExit(s, "--cache-type-k");
@@ -785,15 +800,15 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
         // Turbo preset enables boundary V protection (first/last 2 layers at f16-V)
         .kv_boundary_v = if (res.option("kv-type")) |kv| (if (std.mem.eql(u8, kv, "turbo")) @as(u32, 2) else 0) else 0,
         .kv_tiers = kv_tiers_val,
-        .kv_ram_budget = res.optionU32("kv-ram-budget"),
+        .kv_ram_budget = parseU32(res.option("kv-ram-budget"), "kv-ram-budget"),
         .kv_ssd_path = res.option("kv-ssd-path"),
-        .kv_ssd_budget = res.optionU32("kv-ssd-budget"),
+        .kv_ssd_budget = parseU32(res.option("kv-ssd-budget"), "kv-ssd-budget"),
         .kv_eviction = if (res.option("kv-eviction")) |e| blk: {
             if (std.mem.eql(u8, e, "tri")) break :blk .tri;
             if (std.mem.eql(u8, e, "norm")) break :blk .norm;
             break :blk .none;
         } else .none,
-        .kv_budget = res.optionU32("kv-budget") orelse 0,
+        .kv_budget = parseU32(res.option("kv-budget"), "kv-budget") orelse 0,
         .host = blk: {
             const host_str = res.option("host") orelse break :blk [4]u8{ 127, 0, 0, 1 };
             if (std.mem.eql(u8, host_str, "0.0.0.0")) break :blk [4]u8{ 0, 0, 0, 0 };
@@ -827,23 +842,23 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
         .benchmark = res.flag("benchmark"),
         .profile = res.flag("profile"),
         .megakernel = res.flag("megakernel"),
-        .tp_degree = res.optionU32("tp") orelse 1,
-        .tp_rank = res.optionU32("rank") orelse 0,
+        .tp_degree = parseU32(res.option("tp"), "tp") orelse 1,
+        .tp_rank = parseU32(res.option("rank"), "rank") orelse 0,
         .tp_peers = res.option("peers"),
         .transport = if (res.option("transport")) |t| std.meta.stringToEnum(TransportChoice, t) orelse {
             eprint("Error: unknown transport '{s}'\n", .{t});
             eprint("  Valid options: auto, tcp, shm, nccl, rdma, udp, grpc\n", .{});
             std.process.exit(1);
         } else .auto,
-        .pp_degree = res.optionU32("pp") orelse 1,
+        .pp_degree = parseU32(res.option("pp"), "pp") orelse 1,
         .disagg = res.flag("disagg"),
         .use_mmap = res.flag("mmap"),
-        .prefill_batch_size = res.optionU32("prefill-batch-size") orelse default_chunk_size,
+        .prefill_batch_size = parseU32(res.option("prefill-batch-size"), "prefill-batch-size") orelse default_chunk_size,
         .mmproj = res.option("mmproj"),
         .image = res.option("image"),
         .draft_model_path = res.option("draft-model"),
-        .spec_tokens = res.optionU32("spec-tokens") orelse 5,
-        .tree_budget = res.optionU32("tree-budget") orelse 64,
+        .spec_tokens = parseU32(res.option("spec-tokens"), "spec-tokens") orelse 5,
+        .tree_budget = parseU32(res.option("tree-budget"), "tree-budget") orelse 64,
         .spec_mode = blk: {
             const dm = res.option("draft-model");
             const sm = res.option("spec-mode");
@@ -857,7 +872,7 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
             }
             break :blk if (dm != null) SpecMode.ddtree else SpecMode.none;
         },
-        .draft_layers = res.optionU32("draft-layers"),
+        .draft_layers = parseU32(res.option("draft-layers"), "draft-layers"),
         .user_set = .{
             .temperature = res.option("temperature") != null,
             .top_p = res.option("top-p") != null,
@@ -972,7 +987,7 @@ fn setupTransport(allocator: std.mem.Allocator, peers_str: []const u8, rank: u32
                 t.cuda_ctx = cuda_be.context;
                 t.cuda_ctx_set = if (cuda_be.cuCtxSetCurrent) |f| f else null;
                 t.cuda_backend = @ptrCast(cuda_be);
-                t.cuda_get_dev_ptr = @import("backend/cuda.zig").CudaBackend.getDevicePtrOpaque;
+                t.cuda_get_dev_ptr = backend_mod.CudaBackend.getDevicePtrOpaque;
                 t.cuda_mem_alloc = cuda_be.cuMemAlloc;
                 t.cuda_memcpy_htod = cuda_be.cuMemcpyHtoD;
                 t.cuda_memcpy_dtoh = cuda_be.cuMemcpyDtoH;
@@ -1040,6 +1055,30 @@ fn measurePeerRtt(t: *TransportMod.Transport, rank: u32) u64 {
     const start_us: u64 = @intCast(ts_start.sec * 1_000_000 + @divTrunc(ts_start.nsec, 1000));
     const end_us: u64 = @intCast(ts_end.sec * 1_000_000 + @divTrunc(ts_end.nsec, 1000));
     return end_us -| start_us;
+}
+
+fn parseU32(s: ?[]const u8, comptime flag: []const u8) ?u32 {
+    const str = s orelse return null;
+    return std.fmt.parseInt(u32, str, 10) catch {
+        eprint("Error: invalid value for --" ++ flag ++ ": '{s}' is not a valid integer\n", .{str});
+        std.process.exit(1);
+    };
+}
+
+fn parseU64(s: ?[]const u8, comptime flag: []const u8) ?u64 {
+    const str = s orelse return null;
+    return std.fmt.parseInt(u64, str, 10) catch {
+        eprint("Error: invalid value for --" ++ flag ++ ": '{s}' is not a valid integer\n", .{str});
+        std.process.exit(1);
+    };
+}
+
+fn parseU16(s: ?[]const u8, comptime flag: []const u8) ?u16 {
+    const str = s orelse return null;
+    return std.fmt.parseInt(u16, str, 10) catch {
+        eprint("Error: invalid value for --" ++ flag ++ ": '{s}' is not a valid integer\n", .{str});
+        std.process.exit(1);
+    };
 }
 
 fn parseF32(s: ?[]const u8, comptime flag: []const u8) ?f32 {
@@ -1166,7 +1205,8 @@ fn printUsage() void {
         \\KV CACHE:
         \\      --kv-type <TYPE>      KV cache quantization [default: f16]
         \\                            Types: f32, f16, q8_0/q8, int8/i8, fp8/fp8_e4m3, nvfp4/fp4,
-        \\                                   turbo2/tq2, turbo3/tq3, turbo4/tq4
+        \\                                   turbo2-4/tq2-4, planar2-4/pq2-4, iso2-4/iq2-4, rotor2-4/rq2-4
+        \\                            Preset: turbo (K=q8_0, V=turbo4)
         \\      --kv-type-k <TYPE>    KV key quantization (overrides --kv-type, alias: --cache-type-k)
         \\      --kv-type-v <TYPE>    KV value quantization (overrides --kv-type, alias: --cache-type-v)
         \\      --kv-tiers <TIERS>    Tiered KV cache: vram+ram, vram+ram+ssd [default: off]
@@ -1188,7 +1228,7 @@ fn printUsage() void {
         \\      --tp <N>               Tensor parallelism degree [default: 1]
         \\      --pp <N>               Pipeline parallelism stages [default: 1]
         \\      --peers <ADDR>         Peer address (e.g. 192.168.0.2 or localhost for same-node)
-        \\      --rank <N>             This node's rank [default: 0]
+        \\      --rank <N>             This node's rank for TP/PP/disagg [default: 0]
         \\      --transport <TYPE>     IPC transport: auto, tcp, shm, nccl, rdma, udp, grpc [default: auto]
         \\      --disagg               Disaggregated prefill/decode (rank 0 prefills, rank 1 decodes)
         \\
@@ -2942,14 +2982,13 @@ fn generateAndPrintInner(
         // Update grammar state with first accepted token
         if (grammar_state) |*gs| {
             const tok_slice = [1]u32{first_gen_token};
-            const text = tok.decode(&tok_slice) catch "";
-            gs.acceptToken(text);
+            const text = tok.decode(&tok_slice) catch null;
+            defer if (text) |t| allocator.free(t);
+            gs.acceptToken(text orelse "");
         }
-        // Track JSON brace depth
-        if (json_mode_active) {
-            const tok_slice = [1]u32{first_gen_token};
-            const text = tok.decode(&tok_slice) catch "";
-            for (text) |c| {
+        // Track JSON brace depth (scan raw token text — avoids allocation)
+        if (json_mode_active and first_gen_token < tok.id_to_token.items.len) {
+            for (tok.id_to_token.items[first_gen_token]) |c| {
                 if (c == '{' or c == '[') json_depth += 1;
                 if (c == '}' or c == ']') json_depth -= 1;
             }
@@ -3026,8 +3065,9 @@ fn generateAndPrintInner(
         // Update grammar state with accepted token
         if (grammar_state) |*gs| {
             const tok_slice = [1]u32{next};
-            const text = tok.decode(&tok_slice) catch "";
-            gs.acceptToken(text);
+            const text = tok.decode(&tok_slice) catch null;
+            defer if (text) |t| allocator.free(t);
+            gs.acceptToken(text orelse "");
             if (gs.isComplete()) {
                 hit_eog = true;
                 token_count += 1;
@@ -3035,10 +3075,9 @@ fn generateAndPrintInner(
             }
         }
         // Track JSON brace depth and stop at balanced close
-        if (json_mode_active) {
-            const tok_slice2 = [1]u32{next};
-            const text2 = tok.decode(&tok_slice2) catch "";
-            for (text2) |c| {
+        // (scan raw token text directly — avoids per-token allocation)
+        if (json_mode_active and next < tok.id_to_token.items.len) {
+            for (tok.id_to_token.items[next]) |c| {
                 if (c == '{' or c == '[') json_depth += 1;
                 if (c == '}' or c == ']') json_depth -= 1;
             }

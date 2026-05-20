@@ -173,7 +173,7 @@ pub const ImageTokens = struct {
 /// Note: 255999 is <|image> (without trailing |) — different token.
 /// 219 is <img> — used in Gemma 3, not Gemma 4.
 const gemma4_image_start: u32 = 258880;
-/// Gemma 3 uses the same SentencePiece token IDs as Gemma 4.
+/// Gemma 3 uses <img> (219) as the image placeholder token.
 const gemma3_image_start: u32 = 219;
 /// Qwen 3.5 VL image token IDs.
 const qwen35_image_start: u32 = 248053;
@@ -207,7 +207,7 @@ test "Arch.detect known names" {
     try std.testing.expectEqual(Arch.glm4, Arch.detect("glm4").?);
     try std.testing.expectEqual(Arch.glm4, Arch.detect("deepseek2").?);
     try std.testing.expectEqual(Arch.glm4, Arch.detect("glm4_moe_lite").?);
-    try std.testing.expect(Arch.detect("unknown_model") == null);
+    try std.testing.expectEqual(@as(?Arch, null), Arch.detect("unknown_model"));
 }
 
 test "Arch.displayName" {
@@ -259,8 +259,8 @@ test "Arch.imageTokens multimodal" {
     try std.testing.expectEqual(@as(u32, 248056), qw.pad);
 
     // Text-only architectures should return null
-    try std.testing.expect(Arch.gpt_oss.imageTokens() == null);
-    try std.testing.expect(Arch.nemotron_h.imageTokens() == null);
-    try std.testing.expect(Arch.nemotron_nano.imageTokens() == null);
-    try std.testing.expect(Arch.glm4.imageTokens() == null);
+    try std.testing.expectEqual(@as(?ImageTokens, null), Arch.gpt_oss.imageTokens());
+    try std.testing.expectEqual(@as(?ImageTokens, null), Arch.nemotron_h.imageTokens());
+    try std.testing.expectEqual(@as(?ImageTokens, null), Arch.nemotron_nano.imageTokens());
+    try std.testing.expectEqual(@as(?ImageTokens, null), Arch.glm4.imageTokens());
 }

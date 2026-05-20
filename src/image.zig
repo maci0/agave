@@ -511,11 +511,10 @@ test "resize identity (same dimensions)" {
     const src = [_]u8{ 100, 150, 200, 50, 75, 100, 200, 100, 50, 25, 30, 35 };
     const result = try resize(allocator, &src, 2, 2, 2, 2);
     defer allocator.free(result);
-    // Same dimensions should produce very similar output (not necessarily identical due to bilinear)
+    // Same dimensions: bilinear at exact grid points produces identical output
     try std.testing.expectEqual(@as(usize, 12), result.len);
-    // Pixel values should be close to originals (bilinear at same grid points)
     for (0..12) |i| {
-        try std.testing.expectApproxEqAbs(@as(f32, @floatFromInt(src[i])), @as(f32, @floatFromInt(result[i])), 10.0);
+        try std.testing.expectEqual(src[i], result[i]);
     }
 }
 

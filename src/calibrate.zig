@@ -115,7 +115,7 @@ pub fn printUsage() void {
 }
 
 /// Parse command-line arguments for the `calibrate` sub-command.
-/// Returns null if --help was requested.
+/// Returns null if --help or --version was requested (caller exits 0).
 fn parseArgs(args_iter: *std.process.Args.Iterator) ?CalibrateArgs {
     var result = CalibrateArgs{ .model_path = "" };
     var have_model = false;
@@ -131,32 +131,32 @@ fn parseArgs(args_iter: *std.process.Args.Iterator) ?CalibrateArgs {
             const val = args_iter.next() orelse {
                 eprint("Error: --tokens requires a value\n", .{});
                 eprint("Run 'agave calibrate --help' for more information.\n", .{});
-                return null;
+                std.process.exit(1);
             };
             result.n_tokens = std.fmt.parseInt(u32, val, 10) catch {
                 eprint("Error: --tokens value '{s}' is not a valid integer\n", .{val});
-                return null;
+                std.process.exit(1);
             };
             if (result.n_tokens == 0) {
                 eprint("Error: --tokens must be >= 1\n", .{});
-                return null;
+                std.process.exit(1);
             }
         } else if (std.mem.eql(u8, arg, "--output")) {
             const val = args_iter.next() orelse {
                 eprint("Error: --output requires a path\n", .{});
                 eprint("Run 'agave calibrate --help' for more information.\n", .{});
-                return null;
+                std.process.exit(1);
             };
             result.output = val;
         } else if (arg.len > 0 and arg[0] == '-') {
             eprint("Error: unknown option '{s}'\n", .{arg});
             eprint("Run 'agave calibrate --help' for more information.\n", .{});
-            return null;
+            std.process.exit(1);
         } else {
             if (have_model) {
                 eprint("Error: unexpected argument '{s}'\n", .{arg});
                 eprint("Run 'agave calibrate --help' for more information.\n", .{});
-                return null;
+                std.process.exit(1);
             }
             result.model_path = arg;
             have_model = true;
@@ -167,7 +167,7 @@ fn parseArgs(args_iter: *std.process.Args.Iterator) ?CalibrateArgs {
         eprint("Error: model path required\n", .{});
         eprint("Usage: agave calibrate <model.gguf|model-dir/>\n", .{});
         eprint("Run 'agave calibrate --help' for more information.\n", .{});
-        return null;
+        std.process.exit(1);
     }
 
     return result;
@@ -578,7 +578,7 @@ pub fn run(allocator: Allocator, io: Io, process_args: std.process.Args) u8 {
     _ = args_iter.skip(); // Skip "calibrate" subcommand.
 
     const maybe_args = parseArgs(&args_iter);
-    const args = maybe_args orelse return 1;
+    const args = maybe_args orelse return 0; // --help or --version shown
 
     // Detect format: directory -> SafeTensors, else -> GGUF
     const is_dir = blk: {

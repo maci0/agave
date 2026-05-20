@@ -1043,7 +1043,7 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
         const unescaped = json.jsonUnescape(g_server.allocator, text) catch @constCast(text);
         defer if (unescaped.ptr != text.ptr) g_server.allocator.free(unescaped);
         const token_ids = g_server.tokenizer.encode(unescaped) catch {
-            sendJsonError(stream, "500 Internal Server Error", "internal_error", "Tokenization failed");
+            sendJsonError(stream, "500 Internal Server Error", "server_error", "Tokenization failed");
             g_server.metrics.recordFailure();
             logRequestDone(method, path, 500, elapsedMs(request_start));
             return;
@@ -1055,7 +1055,7 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
         const resp = std.fmt.bufPrint(&resp_buf,
             \\{{"count":{d},"model":"{s}"}}
         , .{ token_ids.len, g_server.model_name }) catch {
-            sendJsonError(stream, "500 Internal Server Error", "internal_error", "Response too large");
+            sendJsonError(stream, "500 Internal Server Error", "server_error", "Response too large");
             g_server.metrics.recordFailure();
             logRequestDone(method, path, 500, elapsedMs(request_start));
             return;
@@ -1102,7 +1102,7 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
             return;
         }
         const decoded = g_server.tokenizer.decode(tok_ids[0..n_toks]) catch {
-            sendJsonError(stream, "500 Internal Server Error", "internal_error", "Detokenization failed");
+            sendJsonError(stream, "500 Internal Server Error", "server_error", "Detokenization failed");
             g_server.metrics.recordFailure();
             logRequestDone(method, path, 500, elapsedMs(request_start));
             return;
@@ -1110,7 +1110,7 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
         defer g_server.allocator.free(decoded);
 
         const escaped = json.jsonEscape(g_server.allocator, decoded) catch {
-            sendJsonError(stream, "500 Internal Server Error", "internal_error", "Response too large");
+            sendJsonError(stream, "500 Internal Server Error", "server_error", "Response too large");
             g_server.metrics.recordFailure();
             logRequestDone(method, path, 500, elapsedMs(request_start));
             return;
@@ -1120,7 +1120,7 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
         const resp = std.fmt.bufPrint(&final_buf,
             \\{{"text":"{s}"}}
         , .{escaped}) catch {
-            sendJsonError(stream, "500 Internal Server Error", "internal_error", "Response too large");
+            sendJsonError(stream, "500 Internal Server Error", "server_error", "Response too large");
             g_server.metrics.recordFailure();
             logRequestDone(method, path, 500, elapsedMs(request_start));
             return;
@@ -2300,7 +2300,9 @@ fn generateN(formatted: []const u8, reset: bool, max_tokens: usize, sampling: Sa
 
         // Prefill draft model if separate
         if (draft_model.ptr != model.ptr) {
-            _ = draft_model.prefill(token_ids) catch {};
+            _ = draft_model.prefill(token_ids) catch |err| {
+                std.log.warn("req={d} draft model prefill failed: {s}", .{ log_request_id, @errorName(err) });
+            };
         }
 
         while (token_count < effective_max and !hit_eog) {
@@ -2967,7 +2969,9 @@ fn generateAnthropicStream(stream: TcpStream, formatted: []const u8, max_tokens:
     if (a_spec_valid) {
         var a_draft = g_server.draft_model.?;
         if (a_draft.ptr != model.ptr) {
-            _ = a_draft.prefill(token_ids) catch {};
+            _ = a_draft.prefill(token_ids) catch |err| {
+                std.log.warn("req={d} draft model prefill failed: {s}", .{ log_request_id, @errorName(err) });
+            };
         }
         const a_spec = &a_spec_storage;
         while (token_count < max_tokens and !anth_disconnected) {
@@ -3320,7 +3324,9 @@ fn generateResponsesStream(stream: TcpStream, prompt: []const u8, max_tokens: us
     if (r_spec_valid) {
         var r_draft = g_server.draft_model.?;
         if (r_draft.ptr != model.ptr) {
-            _ = r_draft.prefill(token_ids) catch {};
+            _ = r_draft.prefill(token_ids) catch |err| {
+                std.log.warn("req={d} draft model prefill failed: {s}", .{ log_request_id, @errorName(err) });
+            };
         }
         const r_spec = &r_spec_storage;
         while (token_count < max_tokens and !resp_disconnected) {
@@ -3776,7 +3782,9 @@ fn generateStream(stream: TcpStream, prompt: []const u8, req_id: u64, created: i
         // Speculative streaming: emit batches of accepted tokens
         var s_draft = g_server.draft_model.?;
         if (s_draft.ptr != model.ptr) {
-            _ = s_draft.prefill(token_ids) catch {};
+            _ = s_draft.prefill(token_ids) catch |err| {
+                std.log.warn("req={d} draft model prefill failed: {s}", .{ log_request_id, @errorName(err) });
+            };
         }
         const s_spec = &s_spec_storage;
         while (token_count < max_tokens and !stream_disconnected) {

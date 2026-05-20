@@ -363,7 +363,9 @@ pub const RadixTree = struct {
         if (self.hash_cache_inited and pos > 0 and tokens.len > 0) {
             const h = hashTokens(tokens);
             if (self.hash_cache.count() < hash_cache_max_entries) {
-                self.hash_cache.put(h, .{ .matched = pos, .node = node }) catch {};
+                self.hash_cache.put(h, .{ .matched = pos, .node = node }) catch |err| {
+                    std.log.debug("prefix cache hash insert failed: {s}", .{@errorName(err)});
+                };
             }
         }
 
@@ -522,7 +524,7 @@ test "PagedKvCache exhaustion" {
         try std.testing.expect(paged.allocBlock() != null);
     }
     // Should be exhausted
-    try std.testing.expect(paged.allocBlock() == null);
+    try std.testing.expectEqual(@as(?u32, null), paged.allocBlock());
     try std.testing.expectEqual(@as(usize, 0), paged.freeCount());
 }
 

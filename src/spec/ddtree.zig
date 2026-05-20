@@ -330,7 +330,7 @@ test "DDTree build small tree" {
     builder.presort(&logits);
     builder.buildTree();
 
-    try std.testing.expect(builder.n_nodes == 5);
+    try std.testing.expectEqual(@as(u32, 5), builder.n_nodes);
 
     // First node should be (depth=0, rank=0, token=0) with cum_lp = -0.1
     try std.testing.expectEqual(@as(u32, 0), builder.nodes[0].token_id);

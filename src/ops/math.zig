@@ -1009,19 +1009,19 @@ test "applyMinP filters low probability tokens" {
     // logit=10 ≥ 5.395 → kept, logit=5 < 5.395 → masked
     var logits = [_]f32{ 10, 5, 0, -5 };
     applyMinP(&logits, 0.01);
-    try std.testing.expect(logits[0] == 10);
-    try std.testing.expect(logits[1] == -std.math.inf(f32));
-    try std.testing.expect(logits[2] == -std.math.inf(f32));
-    try std.testing.expect(logits[3] == -std.math.inf(f32));
+    try std.testing.expectEqual(@as(f32, 10), logits[0]);
+    try std.testing.expectEqual(-std.math.inf(f32), logits[1]);
+    try std.testing.expectEqual(-std.math.inf(f32), logits[2]);
+    try std.testing.expectEqual(-std.math.inf(f32), logits[3]);
 }
 
 test "applyMinP keeps multiple tokens" {
     var logits = [_]f32{ 10, 9, 8, 0 };
     applyMinP(&logits, 0.1); // threshold = 10 + ln(0.1) = 10 - 2.303 = 7.697
-    try std.testing.expect(logits[0] == 10); // kept
-    try std.testing.expect(logits[1] == 9); // kept
-    try std.testing.expect(logits[2] == 8); // kept
-    try std.testing.expect(logits[3] == -std.math.inf(f32)); // masked
+    try std.testing.expectEqual(@as(f32, 10), logits[0]); // kept
+    try std.testing.expectEqual(@as(f32, 9), logits[1]); // kept
+    try std.testing.expectEqual(@as(f32, 8), logits[2]); // kept
+    try std.testing.expectEqual(-std.math.inf(f32), logits[3]); // masked
 }
 
 test "tokenLogProb" {

@@ -11,7 +11,7 @@
   --accent-hover: #e0b88a;
   --accent-bg: rgba(212, 165, 116, 0.1);
   --green: #8faa7b;
-  --red: #c75050;
+  --red: #e57373;
   --red-bg: rgba(199, 80, 80, 0.1);
   --mono: 'IBM Plex Mono', ui-monospace, 'Cascadia Code', Menlo, monospace;
   --sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
@@ -295,7 +295,7 @@ body.show-stats .stats { display: flex; }
 .send-btn:disabled:hover { background: var(--accent-bg); color: var(--accent); }
 
 .stop-btn { font-family: var(--mono); padding: 12px 20px; border-radius: var(--r); border: 1px solid var(--red); background: var(--red-bg); color: var(--red); font-size: 14px; font-weight: 500; cursor: pointer; transition: all .2s; white-space: nowrap; display: none; }
-.stop-btn:hover { background: var(--red); color: white; }
+.stop-btn:hover { background: var(--red); color: var(--bg); }
 
 .input-hint { font-family: var(--mono); font-size: 11px; color: var(--text-3); text-align: center; margin-top: 8px; }
 

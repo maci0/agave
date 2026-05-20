@@ -287,7 +287,9 @@ pub fn verifyDDTree(
         } else {
             // Commit root token to KV cache (forwardTree didn't modify cache)
             target_model.setKvSeqLen(pre_draft_pos);
-            _ = target_model.forward(last_accepted_token) catch {};
+            _ = target_model.forward(last_accepted_token) catch |err| {
+                std.log.warn("spec verify: target forward failed: {s}", .{@errorName(err)});
+            };
             return finishRound(state, target_model, draft_model, 0, pre_draft_pos, first_target);
         }
 
@@ -295,7 +297,10 @@ pub fn verifyDDTree(
         target_model.setKvSeqLen(pre_draft_pos);
         var commit_tok = last_accepted_token;
         for (0..accepted) |i| {
-            _ = target_model.forward(commit_tok) catch break;
+            _ = target_model.forward(commit_tok) catch |err| {
+                std.log.warn("spec commit: target forward failed at token {d}/{d}: {s}", .{ i, accepted, @errorName(err) });
+                break;
+            };
             commit_tok = state.draft_tokens[i];
         }
         const bonus = target_model.forward(commit_tok) catch commit_tok;

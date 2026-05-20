@@ -327,6 +327,7 @@ pub fn pagedAttention(
             @memset(attn_out[q_base..][0..hd], 0);
 
             for (0..sl) |t| {
+                if (scores[t] < sparse_v_threshold) continue;
                 const lb = t / block_size;
                 const bo = t % block_size;
                 const phys = block_table[lb];

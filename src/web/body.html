@@ -22,7 +22,7 @@
 </div>
 <div class="conv-list" id="conv-list"><div class="conv-empty">No conversations yet</div></div>
 </aside>
-<div class="main" role="main">
+<main class="main">
 <div id="chat" role="log" aria-live="off" tabindex="0">
 <div id="empty">
 <div class="icon">&#127797;</div><h2>agave</h2>
@@ -61,7 +61,7 @@
 </div>
 </div>
 <div id="sr-announce" class="sr-only" aria-live="polite" aria-atomic="true"></div>
-<form id="chat-form" onsubmit="return onSubmit(event)">
+<form id="chat-form" onsubmit="return onSubmit(event)" aria-label="Chat">
 <div id="img-preview" class="img-preview" style="display:none">
 <img id="img-thumb" alt="Image preview">
 <button type="button" class="img-remove" onclick="removeImage()" aria-label="Remove image">&times;</button>
@@ -97,6 +97,6 @@
 </div>
 <div class="input-hint">Enter to send &middot; Shift+Enter for new line &middot; Escape to stop</div>
 </form>
-</div>
+</main>
 </div>
 <script>

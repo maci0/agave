@@ -4,13 +4,13 @@
 //! then provides token-level constraint checking during generation.
 //!
 //! Usage:
-//!   const grammar = try Grammar.parse(allocator, gbnf_text);
+//!   var grammar = try Grammar.parse(allocator, gbnf_text);
 //!   defer grammar.deinit();
 //!   var state = grammar.initState();
 //!   // In generation loop:
-//!   grammar.maskLogits(&state, logits, tokenizer);
+//!   grammar.maskLogits(&state, logits, vocab);
 //!   // After sampling:
-//!   grammar.acceptToken(&state, token_text);
+//!   state.acceptToken(token_text);
 
 const std = @import("std");
 
@@ -151,106 +151,6 @@ pub const Grammar = struct {
         return text;
     }
 
-    fn collectAllowedChars(self: *const Grammar, state: *const GrammarState, lo: *[256]u32, hi: *[256]u32, count: *usize) void {
-        if (state.stack.items.len == 0) return;
-        const top = state.stack.items[state.stack.items.len - 1];
-        if (top.rule_id >= self.rules.len) return;
-        const rule = self.rules[top.rule_id];
-        self.collectFromRule(rule.elements, top.elem_idx, lo, hi, count, 0);
-    }
-
-    fn collectFromRule(self: *const Grammar, elements: []const Element, start_idx: u32, lo: *[256]u32, hi: *[256]u32, count: *usize, depth: u32) void {
-        if (depth > 16 or count.* >= 256) return;
-        if (start_idx >= elements.len) return;
-
-        // Collect first chars from current alternative and all alternatives after |
-        var idx = start_idx;
-        var found_in_alt = false;
-        while (idx < elements.len) {
-            const elem = elements[idx];
-            switch (elem.type) {
-                .char_range, .char_range_star, .char_range_plus, .char_range_opt => {
-                    if (!found_in_alt and count.* < 256) {
-                        lo.*[count.*] = elem.lo;
-                        hi.*[count.*] = elem.hi;
-                        count.* += 1;
-                    }
-                    found_in_alt = true;
-                    // For * and ?, also collect next element's chars (zero matches possible)
-                    if (elem.type == .char_range_star or elem.type == .char_range_opt) {
-                        if (idx + 1 < elements.len) {
-                            const next_elem = elements[idx + 1];
-                            if ((next_elem.type == .char_range or next_elem.type == .char_range_star or next_elem.type == .char_range_plus) and count.* < 256) {
-                                lo.*[count.*] = next_elem.lo;
-                                hi.*[count.*] = next_elem.hi;
-                                count.* += 1;
-                            }
-                        }
-                    }
-                    idx += 1;
-                    while (idx < elements.len and elements[idx].type != .alt and elements[idx].type != .end) : (idx += 1) {}
-                    found_in_alt = false;
-                    continue;
-                },
-                .char_not => {
-                    if (!found_in_alt and count.* + 2 <= 256) {
-                        if (elem.lo > 0) {
-                            lo.*[count.*] = 0;
-                            hi.*[count.*] = elem.lo - 1;
-                            count.* += 1;
-                        }
-                        if (elem.hi < 255) {
-                            lo.*[count.*] = elem.hi + 1;
-                            hi.*[count.*] = 255;
-                            count.* += 1;
-                        }
-                    }
-                    found_in_alt = true;
-                    idx += 1;
-                    while (idx < elements.len and elements[idx].type != .alt and elements[idx].type != .end) : (idx += 1) {}
-                    found_in_alt = false;
-                    continue;
-                },
-                .rule_ref, .rule_ref_star, .rule_ref_opt, .rule_ref_plus => {
-                    if (!found_in_alt and elem.lo < self.rules.len) {
-                        self.collectFromRule(self.rules[elem.lo].elements, 0, lo, hi, count, depth + 1);
-                    }
-                    found_in_alt = true;
-                    // For rule_ref_star/opt, also collect next element (zero matches possible)
-                    if (elem.type == .rule_ref_star or elem.type == .rule_ref_opt) {
-                        if (idx + 1 < elements.len) {
-                            const next_elem = elements[idx + 1];
-                            switch (next_elem.type) {
-                                .char_range, .char_range_star, .char_range_plus => {
-                                    if (count.* < 256) {
-                                        lo.*[count.*] = next_elem.lo;
-                                        hi.*[count.*] = next_elem.hi;
-                                        count.* += 1;
-                                    }
-                                },
-                                .rule_ref, .rule_ref_star, .rule_ref_opt, .rule_ref_plus => {
-                                    if (next_elem.lo < self.rules.len) {
-                                        self.collectFromRule(self.rules[next_elem.lo].elements, 0, lo, hi, count, depth + 1);
-                                    }
-                                },
-                                else => {},
-                            }
-                        }
-                    }
-                    idx += 1;
-                    while (idx < elements.len and elements[idx].type != .alt and elements[idx].type != .end) : (idx += 1) {}
-                    found_in_alt = false;
-                    continue;
-                },
-                .alt => {
-                    idx += 1;
-                    found_in_alt = false;
-                    continue;
-                },
-                .end => return,
-            }
-        }
-    }
 };
 
 // ── Grammar State ───────────────────────────────────────────────
@@ -438,8 +338,6 @@ pub const GrammarState = struct {
 // ── GBNF Parser ─────────────────────────────────────────────────
 
 const UnresolvedRef = struct {
-    rule_idx: u32, // which rule this ref is in
-    elem_idx: u32, // which element within the rule
     name: []const u8, // name to resolve
 };
 
@@ -653,8 +551,7 @@ const Parser = struct {
                                 // x+ → x x* (one mandatory + zero or more)
                                 const lo = last.lo;
                                 const hi = last.hi;
-                                const star_type: ElementType = if (last.type == .char_not) .char_range_star else .char_range_star;
-                                try self.elements.append(self.allocator, .{ .type = star_type, .lo = lo, .hi = hi });
+                                try self.elements.append(self.allocator, .{ .type = .char_range_star, .lo = lo, .hi = hi });
                             } else {
                                 last.type = switch (mod) {
                                     '*' => .char_range_star,
@@ -738,8 +635,6 @@ const Parser = struct {
             const placeholder: u32 = 0xFF00 + @as(u32, @intCast(self.unresolved.items.len));
             try self.elements.append(self.allocator, .{ .type = .rule_ref, .lo = placeholder });
             try self.unresolved.append(self.allocator, .{
-                .rule_idx = 0,
-                .elem_idx = 0,
                 .name = name,
             });
         }
@@ -760,7 +655,6 @@ const Parser = struct {
 const SchemaConverter = struct {
     allocator: std.mem.Allocator,
     rules: std.ArrayList(u8),
-    rule_count: u32 = 0,
 
     fn init(allocator: std.mem.Allocator) SchemaConverter {
         return .{
@@ -1052,7 +946,7 @@ test "parse bool grammar" {
     const allocator = std.testing.allocator;
     var grammar = try Grammar.parse(allocator, Grammar.bool_grammar);
     defer grammar.deinit();
-    try std.testing.expect(grammar.rules.len >= 1);
+    try std.testing.expectEqual(@as(usize, 1), grammar.rules.len);
 }
 
 test "char repetition star" {

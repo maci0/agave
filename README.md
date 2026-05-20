@@ -55,7 +55,7 @@ zig build
 ./zig-out/bin/agave model.gguf "What is the capital of France?"
 
 # HTTP server
-./zig-out/bin/agave model.gguf --serve --port 8080
+./zig-out/bin/agave model.gguf --serve
 
 # Quiet mode (pipe-friendly, no banner/stats)
 ./zig-out/bin/agave model.gguf -q "Hello" > output.txt
@@ -181,7 +181,7 @@ The calibration pass records per-head Q/K frequency statistics used by the `--kv
 Start with `--serve`. Supports both synchronous JSON and SSE streaming.
 
 ```bash
-./zig-out/bin/agave model.gguf --serve --port 8080 --api-key sk-mykey
+./zig-out/bin/agave model.gguf --serve --api-key sk-mykey
 ```
 
 **API Endpoints:**

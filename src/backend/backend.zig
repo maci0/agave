@@ -151,9 +151,6 @@ pub const detectOsVersion = @import("cpu.zig").detectOsVersion;
 /// Split-attention runs CPU SDPA concurrently with GPU SDPA for tiered KV cache
 /// offloading, so it needs direct access to per-head CPU kernel functions
 /// (bypassing Backend dispatch which would route to the active GPU backend).
-/// Re-exported CPU SDPA kernel functions for split-attention (tiered KV cache).
-/// Split-attention needs direct access to CPU SDPA kernels to run concurrently
-/// with GPU SDPA — the Backend union would route to the active GPU backend instead.
 pub const CpuSdpa = struct {
     const kernel = @import("kernels/cpu/sdpa.zig");
     /// Compute one attention head with quantized KV (windowed, single-threaded).
@@ -838,9 +835,6 @@ pub const Backend = union(enum) {
         }
     }
 
-    /// Evict a weight buffer from GPU cache so next access re-uploads from host.
-    /// Used when the same host buffer (e.g. tp_row_shard_buf) is reused with
-    /// different data between TP rank switches.
     /// Get the CUDA device pointer for a host activation buffer.
     /// Returns 0 if not available or not a CUDA backend.
     pub inline fn getDevicePtr(self: Backend, ptr: anytype) u64 {
@@ -853,6 +847,9 @@ pub const Backend = union(enum) {
         };
     }
 
+    /// Evict a weight buffer from GPU cache so next access re-uploads from host.
+    /// Used when the same host buffer (e.g. tp_row_shard_buf) is reused with
+    /// different data between TP rank switches.
     pub inline fn invalidateWeight(self: Backend, ptr: anytype) void {
         switch (self) {
             inline else => |be| {

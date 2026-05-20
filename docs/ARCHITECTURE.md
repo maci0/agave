@@ -210,7 +210,7 @@ User CLI flags always override recipe defaults.
 
 ### Server (`src/server/`)
 
-HTTP server activated via `--serve` (default port 8080, override with `--port`). Provides a full OpenAI-compatible API plus health and metrics endpoints.
+HTTP server activated via `--serve` (default port 49453, override with `--port`). Provides a full OpenAI-compatible API plus health and metrics endpoints.
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|

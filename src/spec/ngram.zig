@@ -86,10 +86,13 @@ test "ngram basic proposal" {
     var draft: [8]u32 = undefined;
     const n = state.propose(5, &draft);
 
-    // Last 3 tokens are "1 2 3" — should match earlier "1 2 3" and propose "4 5"
-    try std.testing.expect(n >= 2);
+    // Last 8 tokens "1 2 3 4 5 1 2 3" match hist[0..8] → propose hist[8..13] = "4 5 1 2 3"
+    try std.testing.expectEqual(@as(usize, 5), n);
     try std.testing.expectEqual(@as(u32, 4), draft[0]);
     try std.testing.expectEqual(@as(u32, 5), draft[1]);
+    try std.testing.expectEqual(@as(u32, 1), draft[2]);
+    try std.testing.expectEqual(@as(u32, 2), draft[3]);
+    try std.testing.expectEqual(@as(u32, 3), draft[4]);
 }
 
 test "ngram no match" {
