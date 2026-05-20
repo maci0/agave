@@ -20,15 +20,8 @@ const max_top_k: usize = 1024;
 /// Caps the number of probabilities tracked during threshold computation.
 const nucleus_max_candidates: usize = 1024;
 
-/// Return the index of the maximum element in `buf`.
-/// Two-phase SIMD: branchless max-reduce, then early-exit index scan.
-/// Faster than scalar for large vocabularies (32K+) because the max-find
-/// phase has no loop-carried data dependency.
-///
-/// Parameters:
-///   - buf: Non-empty slice of f32 values to search.
-///
-/// Returns: Index of the maximum value as u32 (first occurrence on ties).
+/// Return index of maximum element. Two-phase SIMD: branchless max-reduce,
+/// then early-exit index scan. First occurrence on ties.
 pub fn argmax(buf: []const f32) u32 {
     const V8 = @Vector(8, f32);
     // Phase 1: SIMD reduction to find maximum value (branchless)
@@ -94,22 +87,12 @@ pub fn topKExperts(
 }
 
 /// Numerically stable softplus: log(1 + exp(x)).
-/// For large x (> 20), softplus(x) ≈ x (1 + exp(x) ≈ exp(x) in float precision).
-///
-/// Parameters:
-///   - x: Input value.
-///
-/// Returns: softplus(x) = log(1 + exp(x)), clamped for numerical stability.
+/// For large x (> 20), softplus(x) ≈ x since 1 + exp(x) ≈ exp(x) in float precision.
 pub inline fn softplus(x: f32) f32 {
     return if (x > softplus_threshold) x else @log(1.0 + @exp(x));
 }
 
 /// Standard sigmoid activation: 1 / (1 + exp(-x)).
-///
-/// Parameters:
-///   - x: Input value.
-///
-/// Returns: sigmoid(x) in range (0, 1).
 pub inline fn sigmoid(x: f32) f32 {
     return 1.0 / (1.0 + @exp(-x));
 }
@@ -120,11 +103,7 @@ pub inline fn silu(x: f32) f32 {
     return x * sigmoid(x);
 }
 
-/// Squared ReLU activation in-place: x[i] = max(0, x[i])².
-/// SIMD-optimized with 8-wide vectors.
-///
-/// Parameters:
-///   - x: Mutable slice of f32 values to transform in-place.
+/// Squared ReLU activation in-place: x[i] = max(0, x[i])². SIMD-optimized.
 pub fn applyReluSquared(x: []f32) void {
     const V8 = @Vector(8, f32);
     const zero: V8 = @splat(0.0);
@@ -140,12 +119,8 @@ pub fn applyReluSquared(x: []f32) void {
     }
 }
 
-/// GELU (Gaussian Error Linear Unit) activation, applied in-place.
-/// Uses the tanh approximation: 0.5 * x * (1 + tanh(sqrt(2/pi) * (x + 0.044715 * x³))).
-/// SIMD-optimized with 8-wide vectors; tanh computed via clamped exp to avoid overflow.
-///
-/// Parameters:
-///   - x: Mutable slice of f32 values to transform in-place.
+/// GELU activation in-place (tanh approximation), SIMD-optimized.
+/// Tanh computed via clamped exp to avoid overflow.
 pub fn applyGelu(x: []f32) void {
     const V8 = @Vector(8, f32);
     const half: V8 = @splat(0.5);
@@ -174,15 +149,8 @@ pub fn applyGelu(x: []f32) void {
     }
 }
 
-/// Apply repetition penalty to logits for recently generated tokens.
-/// For each token ID in `recent_ids`, divides its logit by `penalty` if positive,
-/// multiplies if negative. This discourages the model from repeating tokens.
-/// Standard repeat penalty from the Transformer paper (Keskar et al. 2019).
-///
-/// Parameters:
-///   - logits: Mutable logit buffer [vocab_size], modified in-place.
-///   - recent_ids: Slice of recently generated token IDs to penalize.
-///   - penalty: Repetition penalty factor (> 1.0 = more penalty, 1.0 = no penalty).
+/// Apply repetition penalty: divide positive logits, multiply negative by `penalty`.
+/// Standard repeat penalty (Keskar et al. 2019). penalty > 1.0 = more suppression.
 pub fn applyRepeatPenalty(logits: []f32, recent_ids: []const u32, penalty: f32) void {
     std.debug.assert(penalty > 0);
     for (recent_ids) |tok_id| {
