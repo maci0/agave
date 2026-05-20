@@ -269,6 +269,7 @@ pub const Transport = struct {
             "NCCL_NET_GDR_LEVEL", "NCCL_IB_AR_THRESHOLD", "NCCL_IB_PCI_RELAXED_ORDERING",
             "NCCL_IB_TIMEOUT", "NCCL_IB_RETRY_CNT", "NCCL_DEBUG",
             "NCCL_P2P_LEVEL", "NCCL_SHM_DISABLE", "NCCL_ALGO", "NCCL_PROTO",
+            "NCCL_CROSS_NIC", "NCCL_NET_GDR_READ", "NCCL_BUFFSIZE", "NCCL_NTHREADS",
         };
         for (nccl_env_vars) |name| {
             if (getenv(name)) |val| {
@@ -296,6 +297,16 @@ pub const Transport = struct {
             }
             // Restore context after NCCL init (may have changed it)
             if (self.cuda_ctx_set) |setCtx| _ = setCtx(self.cuda_ctx);
+            // Query NCCL comm details
+            const FnCommCount = *const fn (NcclComm, *c_int) callconv(.c) NcclResult;
+            const FnCommCuDevice = *const fn (NcclComm, *c_int) callconv(.c) NcclResult;
+            if (self.nccl_lib) |*lib| {
+                var comm_count: c_int = 0;
+                var comm_dev: c_int = -1;
+                if (lib.lookup(FnCommCount, "ncclCommCount")) |f| _ = f(self.nccl_comm, &comm_count);
+                if (lib.lookup(FnCommCuDevice, "ncclCommCuDevice")) |f| _ = f(self.nccl_comm, &comm_dev);
+                std.log.info("NCCL: comm nranks={d} cuda_dev={d}", .{ comm_count, comm_dev });
+            }
             std.log.info("NCCL: rank {d}/{d} communicator ready (group_ops={}, dev_buf={})", .{
                 self.rank, self.world_size,
                 self.nccl_group_start != null,
