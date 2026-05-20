@@ -1,6 +1,7 @@
 //! Network transport for distributed tensor/pipeline parallelism.
 //! Supports TCP (cross-node), POSIX shared memory (same-node, zero-copy),
-//! and NCCL (GPU-optimized collectives over RoCE RDMA / TCP sockets).
+//! and NCCL (NVIDIA GPU collectives over RoCE RDMA / TCP sockets).
+//! RCCL (AMD ROCm) is declared in TransportKind but not yet implemented.
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
@@ -9,7 +10,7 @@ const posix = std.posix;
 
 const max_peers: usize = 8;
 const shm_buf_size: usize = 16 * 1024 * 1024; // 16MB max per transfer
-const shm_region_size: usize = shm_buf_size + 64; // data + header
+const shm_region_size: usize = shm_buf_size + @sizeOf(ShmHeader);
 
 const builtin = @import("builtin");
 const shm_O_CREAT: c_int = if (builtin.os.tag == .macos) 0x200 else 0o100;
@@ -18,6 +19,16 @@ const shm_PROT_RW: c_int = 0x1 | 0x2;
 const shm_MAP_SHARED: c_int = 0x01;
 
 pub const TransportKind = enum { tcp, shm, nccl, rccl };
+
+/// SIMD-accelerated element-wise add: dst[i] += src[i] for n floats.
+fn simdAddF32(dst: [*]f32, src: [*]const f32, n: usize) void {
+    const V8 = @Vector(8, f32);
+    var i: usize = 0;
+    while (i + 8 <= n) : (i += 8) {
+        dst[i..][0..8].* = @as(V8, dst[i..][0..8].*) + @as(V8, src[i..][0..8].*);
+    }
+    while (i < n) : (i += 1) dst[i] += src[i];
+}
 
 fn getenv(name: []const u8) ?[]const u8 {
     var buf: [128:0]u8 = undefined;
@@ -161,7 +172,7 @@ pub const Transport = struct {
         @memcpy(self.shm_name_recv[0..recv_name.len], recv_name);
 
         // Create send region
-        self.shm_send_fd = std.c.shm_open(&self.shm_name_send, shm_O_CREAT | shm_O_RDWR, @as(c.mode_t, 0o666));
+        self.shm_send_fd = std.c.shm_open(&self.shm_name_send, shm_O_CREAT | shm_O_RDWR, @as(c.mode_t, 0o600));
         if (self.shm_send_fd < 0) return error.ShmOpenFailed;
         _ = std.c.ftruncate(self.shm_send_fd, @intCast(shm_region_size));
         const send_ptr = posix.system.mmap(null, shm_region_size, @bitCast(shm_PROT_RW), @bitCast(shm_MAP_SHARED), self.shm_send_fd, 0);
@@ -175,7 +186,7 @@ pub const Transport = struct {
         // Wait for peer to create their send region (our recv), then open it
         var retry: u32 = 0;
         while (retry < 5000) : (retry += 1) {
-            self.shm_recv_fd = std.c.shm_open(&self.shm_name_recv, shm_O_RDWR, @as(c.mode_t, 0o666));
+            self.shm_recv_fd = std.c.shm_open(&self.shm_name_recv, shm_O_RDWR, @as(c.mode_t, 0o600));
             if (self.shm_recv_fd >= 0) break;
             var ts = posix.system.timespec{ .sec = 0, .nsec = 1_000_000 };
             _ = posix.system.nanosleep(&ts, null);
@@ -189,10 +200,11 @@ pub const Transport = struct {
 
     fn shmSend(self: *Transport, data: [*]const u8, byte_len: usize) void {
         const send = self.shm_send orelse return;
+        std.debug.assert(byte_len <= shm_buf_size);
         const hdr: *ShmHeader = @ptrCast(@alignCast(send));
         // Spin until receiver consumed previous message
         while (hdr.ready.load(.acquire) != 0) std.atomic.spinLoopHint();
-        const payload = send + 64;
+        const payload = send + @sizeOf(ShmHeader);
         @memcpy(payload[0..byte_len], data[0..byte_len]);
         hdr.size = @intCast(byte_len);
         hdr.ready.store(1, .release);
@@ -200,10 +212,11 @@ pub const Transport = struct {
 
     fn shmRecv(self: *Transport, data: [*]u8, byte_len: usize) void {
         const recv = self.shm_recv orelse return;
+        std.debug.assert(byte_len <= shm_buf_size);
         const hdr: *ShmHeader = @ptrCast(@alignCast(recv));
         // Spin until sender has data ready
         while (hdr.ready.load(.acquire) == 0) std.atomic.spinLoopHint();
-        const payload = recv + 64;
+        const payload = recv + @sizeOf(ShmHeader);
         @memcpy(data[0..byte_len], payload[0..byte_len]);
         hdr.ready.store(0, .release);
     }
@@ -235,16 +248,16 @@ pub const Transport = struct {
             if (getUniqueId(&self.nccl_unique_id) != ncclSuccess) return error.NcclInitFailed;
             const id_bytes: [*]const u8 = @ptrCast(&self.nccl_unique_id);
             var sent: usize = 0;
-            while (sent < 128) {
-                const rc = c.send(self.tcp_fds[0], id_bytes + sent, 128 - sent, 0);
+            while (sent < @sizeOf(NcclUniqueId)) {
+                const rc = c.send(self.tcp_fds[0], id_bytes + sent, @sizeOf(NcclUniqueId) - sent, 0);
                 if (rc <= 0) return error.NcclInitFailed;
                 sent += @intCast(rc);
             }
         } else {
             const id_bytes: [*]u8 = @ptrCast(&self.nccl_unique_id);
             var got: usize = 0;
-            while (got < 128) {
-                const rc = c.recv(self.tcp_fds[0], id_bytes + got, 128 - got, 0);
+            while (got < @sizeOf(NcclUniqueId)) {
+                const rc = c.recv(self.tcp_fds[0], id_bytes + got, @sizeOf(NcclUniqueId) - got, 0);
                 if (rc <= 0) return error.NcclInitFailed;
                 got += @intCast(rc);
             }
@@ -317,10 +330,11 @@ pub const Transport = struct {
 
     pub fn allReduceAdd(self: *Transport, buf: [*]f32, n: usize) !void {
         if (self.kind == .nccl) {
-            // Lazy init: create communicator on first use (after CUDA kernels have run)
             self.ensureNcclComm();
             if (self.nccl_comm == null) {
-                return self.allReduceAdd(buf, n);
+                // ensureNcclComm sets kind=.tcp on failure — fall through to TCP path
+                if (self.tcp_connected > 0) self.tcpAllReduce(buf, n);
+                return;
             }
             // Get CUDA device pointer — if buf is dirty on device, use it directly.
             // If stale (CPU fallback wrote to host), fall back to TCP for this call.
@@ -336,10 +350,7 @@ pub const Transport = struct {
                 // CPU fallback wrote to host — upload to device staging, NCCL allReduce, download
                 if (self.cuda_sync) |sync| _ = sync();
                 const byte_len = n * @sizeOf(f32);
-                if (self.nccl_dev_buf_size < byte_len) {
-                    if (self.cuda_mem_alloc) |alloc| _ = alloc(&self.nccl_dev_buf, byte_len);
-                    self.nccl_dev_buf_size = byte_len;
-                }
+                self.ensureStagingBuf(byte_len);
                 if (self.nccl_dev_buf != 0) {
                     if (self.cuda_memcpy_htod) |htod| _ = htod(self.nccl_dev_buf, @ptrCast(buf), byte_len);
                     if (self.nccl_allreduce) |allreduce|
@@ -353,14 +364,10 @@ pub const Transport = struct {
         if (self.kind == .shm) {
             const byte_len = n * @sizeOf(f32);
             if (byte_len > shm_buf_size) return error.BufferTooLarge;
-            if (self.recv_buf == null or self.recv_buf.?.len < n) {
-                if (self.recv_buf) |old| self.allocator.free(old);
-                self.recv_buf = try self.allocator.alloc(f32, n);
-            }
-            const recv = self.recv_buf.?;
+            const recv = try self.ensureRecvBuf(n);
             self.shmSend(@ptrCast(buf), byte_len);
             self.shmRecv(@ptrCast(recv.ptr), byte_len);
-            for (0..n) |i| buf[i] += recv[i];
+            simdAddF32(buf, recv.ptr, n);
             return;
         }
         if (self.tcp_connected > 0) self.tcpAllReduce(buf, n);
@@ -370,11 +377,7 @@ pub const Transport = struct {
         if (self.tcp_connected == 0) return;
         const byte_len = n * @sizeOf(f32);
 
-        if (self.recv_buf == null or self.recv_buf.?.len < n) {
-            if (self.recv_buf) |old| self.allocator.free(old);
-            self.recv_buf = self.allocator.alloc(f32, n) catch return;
-        }
-        const recv = self.recv_buf.?;
+        const recv = self.ensureRecvBuf(n) catch return;
         const fd = self.tcp_fds[0];
         const buf_u8: [*]const u8 = @ptrCast(buf);
         const recv_u8: [*]u8 = @ptrCast(recv.ptr);
@@ -394,7 +397,7 @@ pub const Transport = struct {
             got += @intCast(rc);
         }
         // Sum
-        for (0..n) |i| buf[i] += recv[i];
+        simdAddF32(buf, recv.ptr, n);
     }
 
     /// Point-to-point send: send buffer to peer.
@@ -413,10 +416,7 @@ pub const Transport = struct {
                 _ = self.nccl_send.?(@ptrFromInt(dptr), n, ncclFloat, peer, self.nccl_comm, null);
             } else {
                 // Host staging: upload then send
-                if (self.nccl_dev_buf_size < byte_len) {
-                    if (self.cuda_mem_alloc) |alloc| _ = alloc(&self.nccl_dev_buf, byte_len);
-                    self.nccl_dev_buf_size = byte_len;
-                }
+                self.ensureStagingBuf(byte_len);
                 if (self.nccl_dev_buf != 0) {
                     if (self.cuda_memcpy_htod) |htod| _ = htod(self.nccl_dev_buf, @ptrCast(buf), byte_len);
                     _ = self.nccl_send.?(@ptrFromInt(self.nccl_dev_buf), n, ncclFloat, peer, self.nccl_comm, null);
@@ -427,28 +427,32 @@ pub const Transport = struct {
             return;
         }
         if (self.kind == .shm) { self.shmSend(@ptrCast(buf), byte_len); return; }
-        if (self.tcp_connected == 0) return;
-        const fd = self.tcp_fds[0];
-        const data: [*]const u8 = @ptrCast(buf);
-        var sent: usize = 0;
-        while (sent < byte_len) {
-            const rc = c.send(fd, data + sent, byte_len - sent, 0);
-            if (rc <= 0) return;
-            sent += @intCast(rc);
-        }
+        self.tcpSend(buf, byte_len);
     }
 
-    /// Point-to-point recv: receive buffer from peer.
     /// Batched send: send multiple buffers sequentially.
-    /// Each upload + ncclSend uses the shared staging buffer.
     pub fn sendBufs(self: *Transport, bufs: []const [*]const f32, lens: []const usize) void {
         for (bufs, lens) |buf, n| self.sendBuf(buf, n);
     }
 
     /// Batched recv: receive multiple buffers sequentially.
-    /// Cannot group NCCL recvs with a single staging buffer — each needs its own.
     pub fn recvBufs(self: *Transport, bufs: []const [*]f32, lens: []const usize) void {
         for (bufs, lens) |buf, n| self.recvBuf(buf, n);
+    }
+
+    fn ensureRecvBuf(self: *Transport, n: usize) ![]f32 {
+        if (self.recv_buf == null or self.recv_buf.?.len < n) {
+            if (self.recv_buf) |old| self.allocator.free(old);
+            self.recv_buf = try self.allocator.alloc(f32, n);
+        }
+        return self.recv_buf.?;
+    }
+
+    fn ensureStagingBuf(self: *Transport, byte_len: usize) void {
+        if (self.nccl_dev_buf_size < byte_len) {
+            if (self.cuda_mem_alloc) |alloc| _ = alloc(&self.nccl_dev_buf, byte_len);
+            self.nccl_dev_buf_size = byte_len;
+        }
     }
 
     fn tcpSend(self: *Transport, buf: [*]const f32, byte_len: usize) void {
@@ -469,10 +473,7 @@ pub const Transport = struct {
             self.ensureNcclComm();
             if (self.nccl_comm == null) { self.tcpRecv(buf, byte_len); return; }
             const peer: c_int = if (self.rank == 0) 1 else 0;
-            if (self.nccl_dev_buf_size < byte_len) {
-                if (self.cuda_mem_alloc) |alloc| _ = alloc(&self.nccl_dev_buf, byte_len);
-                self.nccl_dev_buf_size = byte_len;
-            }
+            self.ensureStagingBuf(byte_len);
             if (self.nccl_dev_buf != 0) {
                 _ = self.nccl_recv.?(@ptrFromInt(self.nccl_dev_buf), n, ncclFloat, peer, self.nccl_comm, null);
                 if (self.cuda_sync) |sync| _ = sync();

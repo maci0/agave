@@ -22,7 +22,9 @@ const ImageTokens = arch_mod.ImageTokens;
 const math_ops = @import("../ops/math.zig");
 const scheduler = @import("scheduler.zig");
 const RateLimiter = @import("rate_limiter.zig").RateLimiter;
-const Metrics = @import("metrics.zig").Metrics;
+const metrics_mod = @import("metrics.zig");
+const Metrics = metrics_mod.Metrics;
+const FixedBufStream = metrics_mod.FixedBufStream;
 const json = @import("json.zig");
 const SamplingParams = json.SamplingParams;
 const TieredKvCache = @import("../kvcache/tiered.zig").TieredKvCache;
@@ -30,10 +32,8 @@ const VisionEncoder = @import("../models/model.zig").VisionEncoder;
 const image_mod = @import("../image.zig");
 const engine_version = @import("../display.zig").version;
 
-// ── Mutex (idiomatic Zig 0.16 std.Io.Mutex) ────────────────
 const Mutex = Io.Mutex;
 
-// ── TcpStream (Zig 0.16 removed convenience methods from TcpStream) ────
 /// Lightweight wrapper providing writeAll/read/close over a raw socket fd.
 const TcpStream = struct {
     handle: std.posix.fd_t,
@@ -58,45 +58,6 @@ const TcpStream = struct {
     }
 };
 
-// ── FixedBufStream (Zig 0.16 removed FixedBufStream.init) ───
-/// Minimal fixed-buffer writer providing writeAll/print/getWritten.
-const FixedBufStream = struct {
-    buf: []u8,
-    pos: usize = 0,
-
-    pub fn init(buf: []u8) FixedBufStream {
-        return .{ .buf = buf };
-    }
-
-    pub fn writer(self: *FixedBufStream) Writer {
-        return .{ .fbs = self };
-    }
-
-    pub fn getWritten(self: *const FixedBufStream) []const u8 {
-        return self.buf[0..self.pos];
-    }
-
-    pub const Writer = struct {
-        fbs: *FixedBufStream,
-
-        pub fn writeAll(self: Writer, data: []const u8) !void {
-            if (self.fbs.pos + data.len > self.fbs.buf.len) return error.NoSpaceLeft;
-            @memcpy(self.fbs.buf[self.fbs.pos..][0..data.len], data);
-            self.fbs.pos += data.len;
-        }
-
-        pub fn print(self: Writer, comptime fmt: []const u8, args: anytype) !void {
-            const written = std.fmt.bufPrint(self.fbs.buf[self.fbs.pos..], fmt, args) catch return error.NoSpaceLeft;
-            self.fbs.pos += written.len;
-        }
-
-        pub fn writeByte(self: Writer, byte: u8) !void {
-            if (self.fbs.pos >= self.fbs.buf.len) return error.NoSpaceLeft;
-            self.fbs.buf[self.fbs.pos] = byte;
-            self.fbs.pos += 1;
-        }
-    };
-};
 
 // ── Server constants ────────────────────────────────────────────
 const slog_buf_size: usize = 4096;
@@ -118,7 +79,7 @@ const short_hdr_buf_size: usize = 512;
 const error_body_buf_size: usize = 256;
 /// Maximum path length logged per request (truncates longer paths).
 const max_log_path_len: usize = 256;
-const health_buf_size: usize = 512;
+const health_buf_size: usize = 768;
 const metrics_render_buf_size: usize = 65536;
 const stats_buf_size: usize = 512;
 const sse_event_buf_size: usize = 1024;
@@ -146,11 +107,10 @@ const accept_timeout_sec: i64 = 1;
 /// Milliseconds per second (for ms-to-seconds TPS calculations).
 const ms_per_second: f32 = 1000.0;
 
-/// Standard I/O file handles via std.Io.File (Zig 0.16 idiom).
 const stderr_file = Io.File.stderr();
 const stdout_file = Io.File.stdout();
 
-/// Millisecond timestamp via raw C clock_gettime (avoids Io dispatch).
+/// Millisecond timestamp via raw clock_gettime (avoids Io dispatch overhead).
 fn milliTimestamp() i64 {
     var ts: std.posix.timespec = undefined;
     _ = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
@@ -164,7 +124,7 @@ fn nanoTimestamp() i96 {
     return @as(i96, ts.sec) * 1_000_000_000 + ts.nsec;
 }
 
-/// Sleep for nanoseconds via C nanosleep (Zig 0.16 idiom — std.Thread.sleep removed).
+/// Sleep for nanoseconds via C nanosleep.
 fn sleepNs(ns: u64) void {
     const ts = std.posix.timespec{
         .sec = @intCast(ns / std.time.ns_per_s),
@@ -568,7 +528,7 @@ const security_headers =
     "Cache-Control: no-store\r\n" ++
     "Strict-Transport-Security: max-age=31536000; includeSubDomains\r\n" ++
     "Permissions-Policy: geolocation=(), microphone=(), camera=(), accelerometer=(), gyroscope=()\r\n" ++
-    "Content-Security-Policy: default-src 'none'; script-src 'unsafe-inline' https://cdn.jsdelivr.net; style-src 'unsafe-inline' https://cdn.jsdelivr.net https://fonts.googleapis.com; font-src https://fonts.gstatic.com; connect-src 'self'; img-src 'self' data: blob:; frame-ancestors 'none'\r\n";
+    "Content-Security-Policy: default-src 'none'; script-src 'unsafe-inline' https://cdn.jsdelivr.net; style-src 'unsafe-inline' https://cdn.jsdelivr.net https://fonts.googleapis.com; font-src https://fonts.gstatic.com; connect-src 'self'; img-src 'self' data: blob:; frame-ancestors 'none'; base-uri 'none'; form-action 'self'\r\n";
 
 /// Validate Authorization header against configured API key.
 /// Supports both OpenAI-style `Authorization: Bearer <key>` and
@@ -730,9 +690,11 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
         const reason: []const u8 = if (is_shutting_down) "shutting_down" else if (kv_pressure and high_error_rate) "kv_pressure,high_error_rate" else if (kv_pressure) "kv_pressure" else if (high_error_rate) "high_error_rate" else "none";
         const http_status: []const u8 = if (is_shutting_down) "503 Service Unavailable" else "200 OK";
         const kv_seq_len = g_server.model.kvSeqLen();
+        const sched_errs = g_server.metrics.scheduler_errors.load(.monotonic);
+        const preemptions = g_server.metrics.preemptions_total.load(.monotonic);
         const json_body = std.fmt.bufPrint(&buf,
-            \\{{"status":"{s}","reason":"{s}","version":"{s}","model":"{s}","backend":"{s}","uptime_s":{d},"active_connections":{d},"requests_total":{d},"requests_completed":{d},"requests_failed":{d},"requests_cancelled":{d},"queue_depth":{d},"kv_cache_used":{d},"kv_cache_total":{d},"kv_seq_len":{d},"ctx_size":{d}}}
-        , .{ status, reason, engine_version, g_server.model_name, g_server.backend_name, uptime, g_server.metrics.active_connections.load(.monotonic), g_server.metrics.requests_total.load(.monotonic), completed, failed, cancelled, queue, kv_used, kv_total, kv_seq_len, g_server.ctx_size }) catch
+            \\{{"status":"{s}","reason":"{s}","version":"{s}","model":"{s}","backend":"{s}","uptime_s":{d},"active_connections":{d},"requests_total":{d},"requests_completed":{d},"requests_failed":{d},"requests_cancelled":{d},"queue_depth":{d},"kv_cache_used":{d},"kv_cache_total":{d},"kv_seq_len":{d},"ctx_size":{d},"scheduler_errors":{d},"preemptions":{d}}}
+        , .{ status, reason, engine_version, g_server.model_name, g_server.backend_name, uptime, g_server.metrics.active_connections.load(.monotonic), g_server.metrics.requests_total.load(.monotonic), completed, failed, cancelled, queue, kv_used, kv_total, kv_seq_len, g_server.ctx_size, sched_errs, preemptions }) catch
             std.fmt.bufPrint(&buf, "{{\"status\":\"{s}\"}}", .{status}) catch return;
         sendResponse(stream, http_status, "application/json", json_body);
         return;
@@ -789,7 +751,7 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
             return;
         };
         // Build info metric — standard Prometheus pattern for version tracking
-        writer.print("# HELP agave_build_info Agave server version and configuration\n# TYPE agave_build_info gauge\nagave_build_info{{version=\"{s}\",backend=\"{s}\"}} 1\n", .{ engine_version, g_server.backend_name }) catch {
+        writer.print("# HELP agave_build_info Agave server version and configuration\n# TYPE agave_build_info gauge\nagave_build_info{{version=\"{s}\",backend=\"{s}\",language=\"zig\"}} 1\n", .{ engine_version, g_server.backend_name }) catch {
             std.log.warn("metrics buffer overflow: build_info metric truncated ({d} bytes available)", .{metrics_render_buf_size});
         };
         sendResponse(stream, "200 OK", "text/plain; version=0.0.4; charset=utf-8", fbs.getWritten());
@@ -1042,7 +1004,8 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
         };
         const unescaped = json.jsonUnescape(g_server.allocator, text) catch @constCast(text);
         defer if (unescaped.ptr != text.ptr) g_server.allocator.free(unescaped);
-        const token_ids = g_server.tokenizer.encode(unescaped) catch {
+        const token_ids = g_server.tokenizer.encode(unescaped) catch |err| {
+            std.log.err("req={d} tokenizer encode failed ({d} bytes input): {}", .{ log_request_id, unescaped.len, err });
             sendJsonError(stream, "500 Internal Server Error", "server_error", "Tokenization failed");
             g_server.metrics.recordFailure();
             logRequestDone(method, path, 500, elapsedMs(request_start));
@@ -1101,7 +1064,8 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
             logRequestDone(method, path, 400, elapsedMs(request_start));
             return;
         }
-        const decoded = g_server.tokenizer.decode(tok_ids[0..n_toks]) catch {
+        const decoded = g_server.tokenizer.decode(tok_ids[0..n_toks]) catch |err| {
+            std.log.err("req={d} detokenizer decode failed ({d} tokens): {}", .{ log_request_id, n_toks, err });
             sendJsonError(stream, "500 Internal Server Error", "server_error", "Detokenization failed");
             g_server.metrics.recordFailure();
             logRequestDone(method, path, 500, elapsedMs(request_start));
@@ -1115,7 +1079,7 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
             logRequestDone(method, path, 500, elapsedMs(request_start));
             return;
         };
-        defer g_server.allocator.free(escaped);
+        defer if (escaped.ptr != decoded.ptr) g_server.allocator.free(escaped);
         var final_buf: [response_buf_size]u8 = undefined;
         const resp = std.fmt.bufPrint(&final_buf,
             \\{{"text":"{s}"}}
@@ -1524,7 +1488,8 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
             g_server.allocator,
             regen_system_prompt,
             regen_conv.messages.items,
-        ) catch {
+        ) catch |err| {
+            std.log.err("req={d} conversation format failed: {}", .{ log_request_id, err });
             g_server.mutex.unlock(g_server.io);
             sendJsonError(stream, "500 Internal Server Error", "server_error", "Failed to format conversation");
             g_server.metrics.recordFailure();
@@ -3490,7 +3455,6 @@ fn formatLogprobs(buf: []u8, tok: *Tokenizer, token_text: []const u8, info: Logp
     if (pos + tail.len > buf.len) return "";
     @memcpy(buf[pos..][0..tail.len], tail);
     pos += tail.len;
-    pos += tail.len;
     return buf[0..pos];
 }
 
@@ -3950,6 +3914,10 @@ fn handleConnection(stream: TcpStream) void {
     std.posix.setsockopt(stream.handle, std.posix.SOL.SOCKET, std.posix.SO.SNDTIMEO, std.mem.asBytes(&timeout)) catch |err| {
         std.log.warn("Failed to set connection write timeout: {}", .{err});
     };
+    // Disable Nagle's algorithm — SSE streaming writes small token chunks (~20-100 bytes)
+    // that Nagle would buffer for up to 200ms waiting for ACK coalescing.
+    const nodelay: [1]u8 = .{1};
+    std.posix.setsockopt(stream.handle, std.posix.IPPROTO.TCP, std.posix.TCP.NODELAY, &nodelay) catch {};
 
     _ = g_server.metrics.active_connections.fetchAdd(1, .monotonic);
     defer {
@@ -3962,12 +3930,14 @@ fn handleConnection(stream: TcpStream) void {
         .ok => |req| handleRequest(stream, req),
         .body_too_large => {
             g_server.metrics.recordRequest();
+            g_server.metrics.recordFailure();
             const t = getTimeComponents();
             slog("[{d:0>2}:{d:0>2}:{d:0>2}] req={d} Rejected oversized request body (>{d} bytes) -> 413\n", .{ t.hours, t.minutes, t.seconds, log_request_id, max_request_body_size });
             sendJsonError(stream, "413 Payload Too Large", "invalid_request_error", "Request body too large");
         },
         .malformed => {
             g_server.metrics.recordRequest();
+            g_server.metrics.recordFailure();
             const t = getTimeComponents();
             slog("[{d:0>2}:{d:0>2}:{d:0>2}] req={d} Malformed HTTP request -> 400\n", .{ t.hours, t.minutes, t.seconds, log_request_id });
             sendJsonError(stream, "400 Bad Request", "invalid_request_error", "Malformed HTTP request");
@@ -4151,6 +4121,7 @@ pub fn run(config: ServerConfig) !void {
             log_request_id = g_server.request_counter.fetchAdd(1, .monotonic);
             g_server.metrics.recordRequest();
             g_server.metrics.recordConnectionRejection();
+            g_server.metrics.recordFailure();
             const tc = getTimeComponents();
             slog("[{d:0>2}:{d:0>2}:{d:0>2}] req={d} Connection rejected: at capacity ({d}/{d}) -> 503\n", .{ tc.hours, tc.minutes, tc.seconds, log_request_id, max_concurrent_connections, max_concurrent_connections });
             sendResponse(stream, "503 Service Unavailable", "application/json", "{\"error\":{\"message\":\"Server at capacity\",\"type\":\"server_error\",\"param\":null,\"code\":\"server_overloaded\"}}");
@@ -4223,4 +4194,9 @@ test "parseContentLength non-numeric rejects" {
 
 test "parseContentLength empty headers returns zero" {
     try std.testing.expectEqual(@as(?usize, 0), parseContentLength(""));
+}
+
+test "parseContentLength case insensitive" {
+    try std.testing.expectEqual(@as(?usize, 99), parseContentLength("content-length: 99\r\nHost: x"));
+    try std.testing.expectEqual(@as(?usize, 7), parseContentLength("CONTENT-LENGTH: 7\r\nHost: x"));
 }

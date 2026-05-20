@@ -32,7 +32,11 @@ test "fuzz: JSON sampling params parser" {
             var buf: [512]u8 = undefined;
             smith.bytesWithHash(&buf, 0);
             const len = smith.indexWithHash(buf.len + 1, 1);
-            _ = json.parseSampling(buf[0..len]);
+            const s = json.parseSampling(buf[0..len]);
+            // Invariant: all numeric fields must be finite and clamped
+            try std.testing.expect(std.math.isFinite(s.temperature) and s.temperature >= 0);
+            try std.testing.expect(std.math.isFinite(s.top_p) and s.top_p >= 0 and s.top_p <= 1.0);
+            try std.testing.expect(s.top_k <= 1024);
         }
     }.f, .{});
 }
@@ -43,8 +47,9 @@ test "fuzz: JSON escape" {
             var buf: [128]u8 = undefined;
             smith.bytesWithHash(&buf, 0);
             const len = smith.indexWithHash(buf.len + 1, 1);
-            const result = json.jsonEscape(std.testing.allocator, buf[0..len]) catch return;
-            std.testing.allocator.free(result);
+            const input = buf[0..len];
+            const result = json.jsonEscape(std.testing.allocator, input) catch return;
+            if (result.ptr != input.ptr) std.testing.allocator.free(result);
         }
     }.f, .{});
 }
@@ -88,6 +93,8 @@ test "fuzz: sampleToken no crash" {
             var prng = std.Random.Xoshiro256.init(smith.valueWithHash(u64, 5));
             const result = math_ops.sampleToken(&logits, temp, top_k, top_p, prng.random());
             try std.testing.expect(result < 64);
+            // Sampling must not corrupt logits to NaN
+            for (logits) |v| try std.testing.expect(!std.math.isNan(v));
         }
     }.f, .{});
 }
@@ -99,6 +106,12 @@ test "fuzz: applyMinP no crash" {
             for (&logits, 0..) |*v, i| v.* = @as(f32, @floatFromInt(smith.valueWithHash(i8, @truncate(i))));
             const min_p: f32 = @as(f32, @floatFromInt(smith.valueWithHash(u8, 100))) / 255.0;
             math_ops.applyMinP(&logits, min_p);
+            // Invariant: max logit always survives — at least one token must remain
+            var n_alive: u32 = 0;
+            for (logits) |v| {
+                if (v != -std.math.inf(f32)) n_alive += 1;
+            }
+            try std.testing.expect(n_alive >= 1);
         }
     }.f, .{});
 }
@@ -112,6 +125,12 @@ test "fuzz: applyXtc no crash" {
             const thresh: f32 = @as(f32, @floatFromInt(smith.valueWithHash(u8, 101))) / 255.0;
             var prng = std.Random.Xoshiro256.init(smith.valueWithHash(u64, 102));
             math_ops.applyXtc(&logits, prob, thresh, prng.random());
+            // Invariant: XTC always keeps at least one token
+            var n_alive: u32 = 0;
+            for (logits) |v| {
+                if (v != -std.math.inf(f32)) n_alive += 1;
+            }
+            try std.testing.expect(n_alive >= 1);
         }
     }.f, .{});
 }
@@ -127,6 +146,8 @@ test "fuzz: applyDry no crash" {
             const mult: f32 = @as(f32, @floatFromInt(smith.valueWithHash(u8, 201))) / 50.0;
             const allowed: u32 = smith.valueWithHash(u4, 202);
             math_ops.applyDry(&logits, history[0..len], mult, allowed);
+            // Invariant: DRY only subtracts penalties — no NaN/Inf introduced
+            for (logits) |v| try std.testing.expect(std.math.isFinite(v));
         }
     }.f, .{});
 }
@@ -143,11 +164,11 @@ test "fuzz: sampleMirostat no crash" {
             var prng = std.Random.Xoshiro256.init(smith.valueWithHash(u64, 104));
             const result = math_ops.sampleMirostat(&logits, tau, eta, &mu, temp, prng.random());
             try std.testing.expect(result < 32);
+            // Invariant: mu must remain finite after update
+            try std.testing.expect(std.math.isFinite(mu));
         }
     }.f, .{});
 }
-
-// ── N-gram Fuzzing ──────────────────────────────────────────────
 
 // ── KV Cache Quantization Fuzzing ────────────────────────────────
 

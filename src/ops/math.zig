@@ -1,6 +1,6 @@
-//! Shared mathematical utility functions for model implementations.
-//! Provides common operations (argmax, softplus, sigmoid, GELU) used across
-//! multiple model architectures, avoiding code duplication.
+//! Math primitives (argmax, softplus, sigmoid, GELU), sampling strategies
+//! (top-k/top-p/min-p/XTC/Mirostat), repetition penalties (frequency/presence/DRY),
+//! and log-probability extraction — shared across model architectures and the HTTP server.
 
 const std = @import("std");
 
@@ -19,22 +19,26 @@ const max_top_k: usize = 1024;
 /// Maximum candidates for top-p nucleus sampling buffer.
 /// Caps the number of probabilities tracked during threshold computation.
 const nucleus_max_candidates: usize = 1024;
+/// Maximum top-N for stack-allocated logprob selection buffer in topLogProbs.
+const max_top_logprobs: usize = 20;
+
+/// SIMD max-reduce over f32 slice. Used by argmax, softmax, log-sum-exp, and sampling.
+inline fn simdMaxF32(buf: []const f32) f32 {
+    const V8 = @Vector(8, f32);
+    var max_v: V8 = @splat(-std.math.inf(f32));
+    var i: usize = 0;
+    while (i + 8 <= buf.len) : (i += 8) {
+        max_v = @max(max_v, @as(V8, buf[i..][0..8].*));
+    }
+    var m = @reduce(.Max, max_v);
+    while (i < buf.len) : (i += 1) m = @max(m, buf[i]);
+    return m;
+}
 
 /// Return index of maximum element. Two-phase SIMD: branchless max-reduce,
 /// then early-exit index scan. First occurrence on ties.
 pub fn argmax(buf: []const f32) u32 {
-    const V8 = @Vector(8, f32);
-    // Phase 1: SIMD reduction to find maximum value (branchless)
-    var max_v: V8 = @splat(-std.math.inf(f32));
-    var i: usize = 0;
-    while (i + 8 <= buf.len) : (i += 8) {
-        const chunk: V8 = buf[i..][0..8].*;
-        max_v = @max(max_v, chunk);
-    }
-    var best_val = @reduce(.Max, max_v);
-    while (i < buf.len) : (i += 1) {
-        best_val = @max(best_val, buf[i]);
-    }
+    const best_val = simdMaxF32(buf);
     // Phase 2: find first occurrence (early-exit scan)
     for (buf, 0..) |v, idx| {
         if (v >= best_val) return @intCast(idx);
@@ -172,38 +176,29 @@ pub fn applyRepeatPenalty(logits: []f32, recent_ids: []const u32, penalty: f32) 
 pub fn applyDry(logits: []f32, recent_ids: []const u32, multiplier: f32, allowed_length: u32) void {
     if (multiplier <= 0 or recent_ids.len < allowed_length + 1) return;
     const n = recent_ids.len;
+    const al: usize = allowed_length;
 
-    // For each candidate token, check: if we appended it to recent_ids,
-    // would the last (allowed_length+1) tokens match an earlier subsequence?
-    for (0..logits.len) |token_id| {
-        if (logits[token_id] == -std.math.inf(f32)) continue;
-
-        // Check all possible match lengths starting from allowed_length
-        var max_match: u32 = 0;
-        const tid: u32 = @intCast(token_id);
-
-        // The pattern to match: recent_ids[n-allowed_length..n] ++ tid
-        // Search for this pattern earlier in recent_ids
-        var search_pos: usize = 0;
-        while (search_pos + allowed_length < n) : (search_pos += 1) {
-            // Check if recent_ids[search_pos..] matches the tail
-            if (recent_ids[search_pos + allowed_length] != tid) continue;
-
-            var match_len: u32 = 0;
-            var j: usize = 0;
-            while (j <= allowed_length and search_pos + j < n) : (j += 1) {
-                const tail_idx = n - allowed_length + j;
-                if (tail_idx >= n) break;
-                if (search_pos + j >= n) break;
-                if (recent_ids[search_pos + j] != recent_ids[tail_idx]) break;
-                match_len += 1;
-            }
-            if (match_len > max_match) max_match = match_len;
+    // Scan recent_ids to find which token would continue an existing n-gram.
+    // For each position, check if the suffix ending there matches the tail of
+    // recent_ids. If so, the token at (position + match_len) would extend the
+    // repetition — penalize it. O(seq^2) instead of O(vocab * seq).
+    for (0..n - al) |search_pos| {
+        var match_len: usize = 0;
+        var j: usize = 0;
+        while (j < al and search_pos + j < n) : (j += 1) {
+            const tail_idx = n - al + j;
+            if (recent_ids[search_pos + j] != recent_ids[tail_idx]) break;
+            match_len += 1;
         }
+        if (match_len < al) continue;
 
-        if (max_match >= allowed_length) {
-            const penalty = multiplier * @as(f32, @floatFromInt(max_match));
-            logits[token_id] -= penalty;
+        // The token at search_pos + match_len would continue the repeat
+        const continuation_pos = search_pos + match_len;
+        if (continuation_pos >= n) continue;
+        const tid = recent_ids[continuation_pos];
+        if (tid < logits.len and logits[tid] != -std.math.inf(f32)) {
+            const penalty = multiplier * @as(f32, @floatFromInt(@as(u32, @intCast(match_len))));
+            logits[tid] -= penalty;
         }
     }
 }
@@ -224,18 +219,13 @@ pub fn applyPenalties(logits: []f32, gen_tokens: []const u32, frequency_penalty:
     if (frequency_penalty == 0 and presence_penalty == 0) return;
     if (gen_tokens.len == 0) return;
 
-    // Frequency penalty: subtract once per occurrence in history
-    if (frequency_penalty != 0) {
-        for (gen_tokens) |tid| {
-            if (tid < logits.len) logits[tid] -= frequency_penalty;
-        }
-    }
-    // Presence penalty: subtract once per unique token in history
-    if (presence_penalty != 0) {
-        var seen: [256]u32 = undefined;
-        var n_seen: usize = 0;
-        for (gen_tokens) |tid| {
-            if (tid >= logits.len) continue;
+    // Single pass: frequency penalty per occurrence + presence penalty per unique token.
+    var seen: [256]u32 = undefined;
+    var n_seen: usize = 0;
+    for (gen_tokens) |tid| {
+        if (tid >= logits.len) continue;
+        if (frequency_penalty != 0) logits[tid] -= frequency_penalty;
+        if (presence_penalty != 0) {
             var found = false;
             for (seen[0..n_seen]) |s| {
                 if (s == tid) { found = true; break; }
@@ -253,29 +243,49 @@ pub fn applyPenalties(logits: []f32, gen_tokens: []const u32, frequency_penalty:
 /// Returns log(softmax(logits)[token_id]).
 pub fn tokenLogProb(logits: []const f32, token_id: u32) f32 {
     if (token_id >= logits.len) return -std.math.inf(f32);
-    var max_val: f32 = -std.math.inf(f32);
-    for (logits) |v| max_val = @max(max_val, v);
-    var log_sum: f32 = 0;
-    for (logits) |v| log_sum += @exp(v - max_val);
+    const V8 = @Vector(8, f32);
+    const n = logits.len;
+    const max_val = simdMaxF32(logits);
+    // SIMD exp-sum
+    const log_sum: f32 = blk: {
+        const max_v: V8 = @splat(max_val);
+        var sum_v: V8 = @splat(@as(f32, 0.0));
+        var si: usize = 0;
+        while (si + 8 <= n) : (si += 8) {
+            sum_v += @exp(@as(V8, logits[si..][0..8].*) - max_v);
+        }
+        var s = @reduce(.Add, sum_v);
+        while (si < n) : (si += 1) s += @exp(logits[si] - max_val);
+        break :blk s;
+    };
     return (logits[token_id] - max_val) - @log(log_sum);
 }
 
 /// Compute top-N tokens by logit value and their log probabilities.
 /// Writes to provided output slices. Returns actual count written (<= n).
 pub fn topLogProbs(logits: []const f32, n: u32, out_ids: []u32, out_logprobs: []f32) u32 {
-    const limit = @min(n, @as(u32, @intCast(out_ids.len)));
+    const V8 = @Vector(8, f32);
+    const limit = @min(n, @min(@as(u32, max_top_logprobs), @as(u32, @intCast(out_ids.len))));
     if (limit == 0) return 0;
+    const len = logits.len;
 
-    // Find max for log-sum-exp
-    var max_val: f32 = -std.math.inf(f32);
-    for (logits) |v| max_val = @max(max_val, v);
-    var log_sum: f32 = 0;
-    for (logits) |v| log_sum += @exp(v - max_val);
-    const log_norm = @log(log_sum);
+    const max_val = simdMaxF32(logits);
+    // SIMD exp-sum
+    const log_norm: f32 = blk: {
+        const max_v: V8 = @splat(max_val);
+        var sum_v: V8 = @splat(@as(f32, 0.0));
+        var si: usize = 0;
+        while (si + 8 <= len) : (si += 8) {
+            sum_v += @exp(@as(V8, logits[si..][0..8].*) - max_v);
+        }
+        var s = @reduce(.Add, sum_v);
+        while (si < len) : (si += 1) s += @exp(logits[si] - max_val);
+        break :blk @log(s);
+    };
 
     // Find top-N by min-replacement scan
-    var top_vals: [20]f32 = .{-std.math.inf(f32)} ** 20;
-    var top_ids: [20]u32 = .{0} ** 20;
+    var top_vals: [max_top_logprobs]f32 = .{-std.math.inf(f32)} ** max_top_logprobs;
+    var top_ids: [max_top_logprobs]u32 = .{0} ** max_top_logprobs;
     var mi: usize = 0;
 
     for (logits, 0..) |v, i| {
@@ -301,16 +311,23 @@ pub fn topLogProbs(logits: []const f32, n: u32, out_ids: []u32, out_logprobs: []
 /// Converts to probabilities, finds max, masks below threshold, restores to logits.
 pub fn applyMinP(logits: []f32, min_p: f32) void {
     if (min_p <= 0 or min_p >= 1.0) return;
+    const V8 = @Vector(8, f32);
     const n = logits.len;
     const neg_inf = -std.math.inf(f32);
 
-    // Find max logit — exp(max - max) = 1.0, so threshold in logit space is max + ln(min_p)
-    var max_val: f32 = neg_inf;
-    for (logits) |v| max_val = @max(max_val, v);
+    const max_val = simdMaxF32(logits);
     const log_threshold = max_val + @log(min_p);
 
-    for (0..n) |i| {
-        if (logits[i] < log_threshold) logits[i] = neg_inf;
+    // SIMD threshold masking
+    const thresh_v: V8 = @splat(log_threshold);
+    const neg_inf_v: V8 = @splat(neg_inf);
+    var si: usize = 0;
+    while (si + 8 <= n) : (si += 8) {
+        const chunk: V8 = logits[si..][0..8].*;
+        logits[si..][0..8].* = @select(f32, chunk < thresh_v, neg_inf_v, chunk);
+    }
+    while (si < n) : (si += 1) {
+        if (logits[si] < log_threshold) logits[si] = neg_inf;
     }
 }
 
@@ -321,10 +338,11 @@ pub fn applyXtc(logits: []f32, xtc_probability: f32, xtc_threshold: f32, rng: st
     if (xtc_probability <= 0 or xtc_threshold <= 0) return;
     if (rng.float(f32) > xtc_probability) return;
 
-    var max_val: f32 = -std.math.inf(f32);
-    for (logits) |v| max_val = @max(max_val, v);
-    const log_threshold = max_val + @log(xtc_threshold);
+    const n = logits.len;
     const neg_inf = -std.math.inf(f32);
+
+    const max_val = simdMaxF32(logits);
+    const log_threshold = max_val + @log(xtc_threshold);
 
     // Count tokens above threshold — keep at least one
     var n_above: usize = 0;
@@ -335,7 +353,7 @@ pub fn applyXtc(logits: []f32, xtc_probability: f32, xtc_threshold: f32, rng: st
 
     // Exclude all but the last above-threshold token (keep one for valid sampling)
     var kept: usize = 0;
-    for (0..logits.len) |i| {
+    for (0..n) |i| {
         if (logits[i] >= log_threshold) {
             kept += 1;
             if (kept < n_above) logits[i] = neg_inf;
@@ -348,69 +366,85 @@ pub fn applyXtc(logits: []f32, xtc_probability: f32, xtc_threshold: f32, rng: st
 /// Returns the sampled token ID. `mu` is updated in place for the next step.
 /// When Mirostat is active, top-k/top-p are bypassed — Mirostat controls its own truncation.
 pub fn sampleMirostat(logits: []f32, tau: f32, eta: f32, mu: *f32, temperature: f32, rng: std.Random) u32 {
+    const V8 = @Vector(8, f32);
     const n = logits.len;
     if (n == 0) return 0;
 
-    // Temperature scaling
+    // Temperature scaling (SIMD)
     if (temperature > 0 and temperature != 1.0) {
         const inv_temp = 1.0 / temperature;
-        for (0..n) |i| logits[i] *= inv_temp;
+        const inv_v: V8 = @splat(inv_temp);
+        var si: usize = 0;
+        while (si + 8 <= n) : (si += 8) {
+            logits[si..][0..8].* = @as(V8, logits[si..][0..8].*) * inv_v;
+        }
+        while (si < n) : (si += 1) logits[si] *= inv_temp;
     }
 
-    // Softmax
-    var max_val: f32 = -std.math.inf(f32);
-    for (logits) |v| max_val = @max(max_val, v);
+    // Softmax (SIMD)
+    const max_val = simdMaxF32(logits);
     var sum_exp: f32 = 0;
-    for (0..n) |i| {
-        logits[i] = @exp(logits[i] - max_val);
-        sum_exp += logits[i];
+    {
+        const max_v: V8 = @splat(max_val);
+        var sum_v: V8 = @splat(@as(f32, 0.0));
+        var si: usize = 0;
+        while (si + 8 <= n) : (si += 8) {
+            const exp_v = @exp(@as(V8, logits[si..][0..8].*) - max_v);
+            logits[si..][0..8].* = exp_v;
+            sum_v += exp_v;
+        }
+        sum_exp = @reduce(.Add, sum_v);
+        while (si < n) : (si += 1) {
+            logits[si] = @exp(logits[si] - max_val);
+            sum_exp += logits[si];
+        }
     }
-    const inv_sum = if (sum_exp > 0) 1.0 / sum_exp else 0;
-    for (0..n) |i| logits[i] *= inv_sum;
+    if (sum_exp > 0) {
+        const inv_sum = 1.0 / sum_exp;
+        const inv_v: V8 = @splat(inv_sum);
+        var si: usize = 0;
+        while (si + 8 <= n) : (si += 8) {
+            logits[si..][0..8].* = @as(V8, logits[si..][0..8].*) * inv_v;
+        }
+        while (si < n) : (si += 1) logits[si] *= inv_sum;
+    }
 
-    // Sort indices by probability descending (partial — only need until we exceed mu threshold)
-    // Mirostat 2.0: keep tokens where -ln(p) <= mu (surprise <= target)
+    // Mirostat 2.0: keep tokens where -ln(p) <= mu (surprise <= target).
+    // Direct threshold: p >= exp(-mu) passes. Single O(n) pass, no sorting needed.
     const surprise_threshold = mu.*;
-    var cum_prob: f32 = 0;
-    // Simple approach: scan in descending probability order
-    // Since we need sorted order, find max repeatedly (vocab is large but this runs once per token)
-    var mask: [32768]bool = undefined;
-    const mask_n = @min(n, 32768);
-    @memset(mask[0..mask_n], false);
-
-    for (0..mask_n) |_| {
-        // Find highest unmasked probability
-        var best_idx: usize = 0;
-        var best_val: f32 = -1;
-        for (0..mask_n) |j| {
-            if (!mask[j] and logits[j] > best_val) {
-                best_val = logits[j];
-                best_idx = j;
-            }
+    const min_prob = @exp(-surprise_threshold);
+    {
+        const min_v: V8 = @splat(min_prob);
+        const zero_v: V8 = @splat(@as(f32, 0.0));
+        var si: usize = 0;
+        while (si + 8 <= n) : (si += 8) {
+            const chunk: V8 = logits[si..][0..8].*;
+            logits[si..][0..8].* = @select(f32, chunk < min_v, zero_v, chunk);
         }
-        if (best_val <= 0) break;
-        mask[best_idx] = true;
-
-        const surprise = -@log(best_val + 1e-10);
-        if (surprise > surprise_threshold and cum_prob > 0) break;
-        cum_prob += best_val;
-    }
-
-    // Zero out tokens with surprise > mu
-    for (0..mask_n) |i| {
-        const p = logits[i];
-        if (p > 0) {
-            const surprise = -@log(p + 1e-10);
-            if (surprise > surprise_threshold) logits[i] = 0;
+        while (si < n) : (si += 1) {
+            if (logits[si] < min_prob) logits[si] = 0;
         }
     }
 
-    // Re-normalize
+    // Re-normalize (SIMD)
     var new_sum: f32 = 0;
-    for (0..n) |i| new_sum += logits[i];
+    {
+        var sum_v: V8 = @splat(@as(f32, 0.0));
+        var si: usize = 0;
+        while (si + 8 <= n) : (si += 8) {
+            sum_v += @as(V8, logits[si..][0..8].*);
+        }
+        new_sum = @reduce(.Add, sum_v);
+        while (si < n) : (si += 1) new_sum += logits[si];
+    }
     if (new_sum > 0) {
         const inv = 1.0 / new_sum;
-        for (0..n) |i| logits[i] *= inv;
+        const inv_v: V8 = @splat(inv);
+        var si: usize = 0;
+        while (si + 8 <= n) : (si += 8) {
+            logits[si..][0..8].* = @as(V8, logits[si..][0..8].*) * inv_v;
+        }
+        while (si < n) : (si += 1) logits[si] *= inv;
     }
 
     // Sample from filtered distribution
@@ -487,16 +521,7 @@ pub fn sampleToken(logits: []f32, temperature: f32, top_k: u32, top_p: f32, rng:
     }
 
     // 3. Softmax (unnormalized — normalization deferred to sampling)
-    const max_val: f32 = blk: {
-        var max_v: V8 = @splat(neg_inf);
-        var si: usize = 0;
-        while (si + 8 <= n) : (si += 8) {
-            max_v = @max(max_v, @as(V8, logits[si..][0..8].*));
-        }
-        var m = @reduce(.Max, max_v);
-        while (si < n) : (si += 1) m = @max(m, logits[si]);
-        break :blk m;
-    };
+    const max_val = simdMaxF32(logits);
     var sum: f32 = 0;
     {
         const max_v: V8 = @splat(max_val);
@@ -1000,10 +1025,11 @@ test "tokenLogProb" {
 }
 
 test "tokenLogProb dominant" {
-    // logits [10, 0, 0] → token 0 dominates → logprob ≈ 0
+    // logits [10, 0, 0] → token 0 dominates → logprob ≈ 0 (must be ≤ 0)
     const logits = [_]f32{ 10, 0, 0 };
     const lp = tokenLogProb(&logits, 0);
     try std.testing.expect(lp > -0.001);
+    try std.testing.expect(lp <= 0);
 }
 
 test "topLogProbs returns correct ids" {
@@ -1021,6 +1047,11 @@ test "topLogProbs returns correct ids" {
     }
     try std.testing.expect(has_1);
     try std.testing.expect(has_2);
+    // Log probabilities must be finite and non-positive
+    for (probs[0..n]) |p| {
+        try std.testing.expect(std.math.isFinite(p));
+        try std.testing.expect(p <= 0);
+    }
 }
 
 test "applyXtc excludes top tokens" {
@@ -1034,6 +1065,12 @@ test "applyXtc excludes top tokens" {
         if (v == -std.math.inf(f32)) n_neg_inf += 1;
     }
     try std.testing.expect(n_neg_inf >= 1);
+    // At least one token must survive (XTC always keeps one)
+    var n_alive: u32 = 0;
+    for (logits) |v| {
+        if (v != -std.math.inf(f32)) n_alive += 1;
+    }
+    try std.testing.expect(n_alive >= 1);
 }
 
 test "applyXtc no-op at probability 0" {
@@ -1052,6 +1089,9 @@ test "applyDry penalizes repeated sequence" {
     applyDry(&logits, hist_slice, 1.0, 2);
     // Token 3 should be penalized (repeating "1 2 3")
     try std.testing.expect(logits[3] < 0);
+    // Non-continuation tokens must remain unpenalized
+    try std.testing.expectEqual(@as(f32, 0.0), logits[0]);
+    try std.testing.expectEqual(@as(f32, 0.0), logits[4]);
 }
 
 test "applyDry no-op with no repeats" {
@@ -1069,6 +1109,7 @@ test "sampleMirostat returns valid token" {
     var prng = std.Random.Xoshiro256.init(42);
     const token = sampleMirostat(&logits, 5.0, 0.1, &mu, 1.0, prng.random());
     try std.testing.expect(token < 4);
-    // mu should have been updated
+    // mu should have been updated and remain finite
     try std.testing.expect(mu != 10.0);
+    try std.testing.expect(std.math.isFinite(mu));
 }

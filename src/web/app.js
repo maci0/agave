@@ -82,7 +82,15 @@ function showToast(text, type) {
   announceToSR(text);
   var timeout = isError ? 12000 : 5000;
   if (!window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
-    setTimeout(function() { if (toast.parentNode) toast.remove(); }, timeout);
+    var timerId = setTimeout(function() { if (toast.parentNode) toast.remove(); }, timeout);
+    toast.addEventListener('mouseenter', function() { clearTimeout(timerId); });
+    toast.addEventListener('mouseleave', function() {
+      timerId = setTimeout(function() { if (toast.parentNode) toast.remove(); }, timeout);
+    });
+    toast.addEventListener('focusin', function() { clearTimeout(timerId); });
+    toast.addEventListener('focusout', function() {
+      timerId = setTimeout(function() { if (toast.parentNode) toast.remove(); }, timeout);
+    });
   }
 }
 
@@ -301,6 +309,7 @@ function processCode(el) {
       pre.appendChild(l);
     }
     var c = document.createElement('button'); c.className = 'copy-btn'; c.textContent = 'Copy';
+    c.setAttribute('aria-label', lang ? 'Copy ' + lang + ' code' : 'Copy code');
     c.onclick = function() {
       navigator.clipboard.writeText(b.textContent).then(function() {
         c.textContent = 'Copied!';
@@ -330,15 +339,18 @@ function renderContent(el, content, final) {
   var doRender = function() {
     el.classList.remove('thinking');
     el.textContent = '';
-    var thinkIdx = 0;
-    var dc = content.replace(/<think>([\s\S]*?)<\/think>\s*/g, function(_, p) {
-      var t = p.trim();
-      if (!t) return '';
-      thinkIdx++;
-      var escapedThink = t.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\n/g,'<br>');
-      return '<details class="think-block"><summary>Chain of thought ' + thinkIdx + '</summary><div class="think-content">' + escapedThink + '</div></details>';
-    });
-    if (dc.indexOf('<think>') === 0) dc = dc.substring(7);
+    var dc = content;
+    if (content.indexOf('<think>') !== -1) {
+      var thinkIdx = 0;
+      dc = content.replace(/<think>([\s\S]*?)<\/think>\s*/g, function(_, p) {
+        var t = p.trim();
+        if (!t) return '';
+        thinkIdx++;
+        var escapedThink = t.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\n/g,'<br>');
+        return '<details class="think-block"><summary>Chain of thought ' + thinkIdx + '</summary><div class="think-content">' + escapedThink + '</div></details>';
+      });
+      if (dc.indexOf('<think>') === 0) dc = dc.substring(7);
+    }
     var parsed;
     if (typeof marked !== 'undefined') {
       try { parsed = marked.parse(dc); } catch(e) { parsed = dc.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\n/g,'<br>'); }
@@ -365,6 +377,7 @@ function renderContent(el, content, final) {
     if (final) {
       el.setAttribute('data-content', content);
       var cb = document.createElement('button'); cb.className = 'msg-copy'; cb.textContent = 'Copy';
+      cb.setAttribute('aria-label', 'Copy response');
       cb.onclick = function() {
         navigator.clipboard.writeText(content).then(function() {
           cb.textContent = 'Copied!';

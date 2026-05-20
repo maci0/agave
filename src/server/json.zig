@@ -1,6 +1,5 @@
 //! JSON field extraction, encoding, and form-parsing utilities for the HTTP server.
-//! Pure functions with no server state dependencies — extracted from server.zig
-//! to keep each module single-concern.
+//! Pure functions with no server state dependencies.
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
@@ -13,16 +12,18 @@ const extract_field_buf_size: usize = 256;
 const max_api_messages: usize = 128;
 /// Maximum valid sampling temperature (prevents numerical instability in softmax).
 const max_temperature: f32 = 100.0;
+/// Scan window (bytes after key) for response_format value detection.
+const response_format_scan_window: usize = 200;
 /// Maximum valid top_k value (larger values are clamped, not rejected).
 const max_top_k: u32 = 1024;
 
 // ── Types ───────────────────────────────────────────────────────
 
-/// Per-request sampling parameters. Defaults match greedy decoding.
-/// Values are clamped to safe ranges by `parseSampling()`.
 /// Maximum number of stop sequences per request.
 const max_stop_sequences: usize = 4;
 
+/// Per-request sampling parameters. Defaults match greedy decoding.
+/// Values are clamped to safe ranges by `parseSampling()`.
 pub const SamplingParams = struct {
     temperature: f32 = 0,
     top_k: u32 = 0,
@@ -204,14 +205,18 @@ pub fn parseSampling(body: []const u8) SamplingParams {
     const raw_top_k = extractIntField(body, "top_k") orelse 0;
     const raw_freq_pen = extractFloatField(body, "frequency_penalty") orelse 0;
     const raw_pres_pen = extractFloatField(body, "presence_penalty") orelse 0;
-    // OpenAI response_format: {"type": "json_object"} or {"type": "json_schema", "json_schema": {"schema": {...}}}
+    // OpenAI response_format: {"type": "json_object"} or {"type": "json_schema", ...}
+    // Uses bounded text search because extractField only handles string values,
+    // not the nested object format that OpenAI clients send.
     var json_mode = false;
     var schema_from_rf: ?[]const u8 = null;
-    if (extractField(body, "response_format")) |rf| {
-        if (std.mem.indexOf(u8, rf, "json_object") != null) {
+    const rf_key = "\"response_format\"";
+    if (std.mem.indexOf(u8, body, rf_key)) |rf_pos| {
+        const rf_end = @min(rf_pos + rf_key.len + response_format_scan_window, body.len);
+        const rf_window = body[rf_pos..rf_end];
+        if (std.mem.indexOf(u8, rf_window, "json_object") != null) {
             json_mode = true;
-        } else if (std.mem.indexOf(u8, rf, "json_schema") != null) {
-            // Extract schema from nested json_schema.schema object
+        } else if (std.mem.indexOf(u8, rf_window, "json_schema") != null) {
             if (extractField(body, "schema")) |s| {
                 schema_from_rf = s;
             }
@@ -560,9 +565,7 @@ fn jsonEscapeChar(c: u8) ?[]const u8 {
         '\t' => "\\t",
         0x08 => "\\b",
         0x0C => "\\f",
-        // Remaining control chars (0x00-0x07, 0x0E-0x1F) are escaped as
-        // \\uXXXX by the caller via escapeWith's fallback. We handle them
-        // here with a fixed-table approach for the most common ones.
+        // All control chars (0x00-0x1F) handled here via fixed \\uXXXX table.
         0x00 => "\\u0000",
         0x01 => "\\u0001",
         0x02 => "\\u0002",
@@ -600,6 +603,7 @@ fn htmlEscapeChar(c: u8) ?[]const u8 {
         '>' => "&gt;",
         '&' => "&amp;",
         '"' => "&quot;",
+        '\'' => "&#39;",
         else => null,
     };
 }
@@ -624,46 +628,16 @@ pub fn jsonUnescape(allocator: Allocator, input: []const u8) ![]u8 {
         if (input[i] == '\\' and i + 1 < input.len) {
             i += 1;
             switch (input[i]) {
-                '"' => {
-                    buf[out] = '"';
+                '"', '\\', '/' => {
+                    buf[out] = input[i];
                     out += 1;
                     i += 1;
                 },
-                '\\' => {
-                    buf[out] = '\\';
-                    out += 1;
-                    i += 1;
-                },
-                '/' => {
-                    buf[out] = '/';
-                    out += 1;
-                    i += 1;
-                },
-                'n' => {
-                    buf[out] = '\n';
-                    out += 1;
-                    i += 1;
-                },
-                'r' => {
-                    buf[out] = '\r';
-                    out += 1;
-                    i += 1;
-                },
-                't' => {
-                    buf[out] = '\t';
-                    out += 1;
-                    i += 1;
-                },
-                'b' => {
-                    buf[out] = 0x08;
-                    out += 1;
-                    i += 1;
-                },
-                'f' => {
-                    buf[out] = 0x0C;
-                    out += 1;
-                    i += 1;
-                },
+                'n' => { buf[out] = '\n'; out += 1; i += 1; },
+                'r' => { buf[out] = '\r'; out += 1; i += 1; },
+                't' => { buf[out] = '\t'; out += 1; i += 1; },
+                'b' => { buf[out] = 0x08; out += 1; i += 1; },
+                'f' => { buf[out] = 0x0C; out += 1; i += 1; },
                 'u' => {
                     if (i + 5 <= input.len) {
                         const cp = std.fmt.parseInt(u21, input[i + 1 .. i + 5], 16) catch {
@@ -932,8 +906,8 @@ test "extractFormImage with unencoded comma" {
 test "parseFormSampling clamps values" {
     // Within range
     const s1 = parseFormSampling("temperature=0.8&top_p=0.95&top_k=50");
-    try std.testing.expect(@abs(s1.temperature - 0.8) < 0.001);
-    try std.testing.expect(@abs(s1.top_p - 0.95) < 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.8), s1.temperature, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.95), s1.top_p, 0.001);
     try std.testing.expectEqual(@as(u32, 50), s1.top_k);
 
     // Defaults when missing
@@ -1000,7 +974,7 @@ test "extractIntField handles negative and zero" {
 }
 
 test "extractFloatField handles edge values" {
-    try std.testing.expect(extractFloatField("{\"t\": 0.0}", "t") != null);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.0), extractFloatField("{\"t\": 0.0}", "t").?, 0.001);
     try std.testing.expect(extractFloatField("{\"t\": not_a_number}", "t") == null);
 }
 
@@ -1015,14 +989,11 @@ test "extractJsonImage handles truncated base64 marker" {
 
 test "extractFormFloat handles boundary values" {
     const zero = extractFormFloat("v=0", "v");
-    try std.testing.expect(zero != null);
-    try std.testing.expect(@abs(zero.? - 0.0) < 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.0), zero.?, 0.001);
     const large = extractFormFloat("v=1e10", "v");
-    try std.testing.expect(large != null);
-    try std.testing.expect(@abs(large.? - 1e10) < 1e6);
+    try std.testing.expectApproxEqAbs(@as(f32, 1e10), large.?, 1e6);
     const half = extractFormFloat("v=.5", "v");
-    try std.testing.expect(half != null);
-    try std.testing.expect(@abs(half.? - 0.5) < 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.5), half.?, 0.001);
 }
 
 test "parseFormSampling handles extreme values" {
@@ -1061,6 +1032,22 @@ test "parseSampling min_p and seed" {
 test "parseSampling json_schema" {
     const s = parseSampling("{\"json_schema\": \"{\\\"type\\\": \\\"string\\\"}\"}");
     try std.testing.expect(s.json_schema != null);
+    try std.testing.expect(std.mem.indexOf(u8, s.json_schema.?, "string") != null);
+}
+
+test "parseSampling response_format object json_object" {
+    const s = parseSampling("{\"response_format\": {\"type\": \"json_object\"}, \"temperature\": 0.5}");
+    try std.testing.expect(s.json_mode);
+}
+
+test "parseSampling response_format object json_object compact" {
+    const s = parseSampling("{\"response_format\":{\"type\":\"json_object\"},\"max_tokens\":100}");
+    try std.testing.expect(s.json_mode);
+}
+
+test "parseSampling no response_format" {
+    const s = parseSampling("{\"temperature\": 0.5}");
+    try std.testing.expect(!s.json_mode);
 }
 
 test "matchesStop" {

@@ -1,5 +1,4 @@
 //! Self-contained CLI argument parser for Agave.
-//! Replaces external `clap` dependency — zero external dependencies.
 //!
 //! Supports:
 //!   - `--flag` boolean flags
@@ -69,6 +68,14 @@ pub const ParseResult = struct {
     pub fn optionU64(self: *const ParseResult, name: []const u8) ?u64 {
         const s = self.options.get(name) orelse return null;
         return std.fmt.parseInt(u64, s, 10) catch null;
+    }
+
+    /// Parse a named option as f32, returning null if absent or invalid.
+    pub fn optionF32(self: *const ParseResult, name: []const u8) ?f32 {
+        const s = self.options.get(name) orelse return null;
+        const val = std.fmt.parseFloat(f32, s) catch return null;
+        if (!std.math.isFinite(val)) return null;
+        return val;
     }
 };
 
@@ -238,6 +245,8 @@ test "ParseResult typed accessors" {
     r.options.put("port", "8080") catch unreachable;
     r.options.put("seed", "42") catch unreachable;
     r.options.put("bad", "notanumber") catch unreachable;
+    r.options.put("temp", "0.7") catch unreachable;
+    r.options.put("inf", "inf") catch unreachable;
     r.positionals.append(std.testing.allocator, "model.gguf") catch unreachable;
 
     try std.testing.expect(r.flag("help"));
@@ -251,6 +260,11 @@ test "ParseResult typed accessors" {
     try std.testing.expectEqual(@as(?u64, 42), r.optionU64("seed"));
     try std.testing.expect(r.optionU32("bad") == null);
     try std.testing.expect(r.optionU32("missing") == null);
+
+    try std.testing.expectEqual(@as(?f32, 0.7), r.optionF32("temp"));
+    try std.testing.expect(r.optionF32("bad") == null);
+    try std.testing.expect(r.optionF32("inf") == null);
+    try std.testing.expect(r.optionF32("missing") == null);
 
     try std.testing.expectEqualStrings("model.gguf", r.positional(0).?);
     try std.testing.expect(r.positional(1) == null);

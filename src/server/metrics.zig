@@ -5,8 +5,9 @@
 
 const std = @import("std");
 
-// ── FixedBufStream (Zig 0.16 removed FixedBufStream.init) ───
-const FixedBufStream = struct {
+/// Minimal fixed-buffer writer (Zig 0.16 removed std FixedBufStream).
+/// Shared across server modules via `@import("metrics.zig").FixedBufStream`.
+pub const FixedBufStream = struct {
     buf: []u8,
     pos: usize = 0,
 
@@ -34,6 +35,12 @@ const FixedBufStream = struct {
         pub fn print(self: Writer, comptime fmt: []const u8, args: anytype) !void {
             const written = std.fmt.bufPrint(self.fbs.buf[self.fbs.pos..], fmt, args) catch return error.NoSpaceLeft;
             self.fbs.pos += written.len;
+        }
+
+        pub fn writeByte(self: Writer, byte: u8) !void {
+            if (self.fbs.pos >= self.fbs.buf.len) return error.NoSpaceLeft;
+            self.fbs.buf[self.fbs.pos] = byte;
+            self.fbs.pos += 1;
         }
     };
 };
@@ -216,7 +223,7 @@ pub const Metrics = struct {
     gen_tok_4096: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
     gen_tok_inf: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
     gen_tok_sum: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
-    _pad12: [cache_line]u8 = undefined,
+    _pad11: [cache_line]u8 = undefined,
 
     // ── Group 13: Inter-token latency histogram ──
     itl_5ms: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
@@ -280,6 +287,7 @@ pub const Metrics = struct {
         _ = self.scheduler_errors.fetchAdd(1, .monotonic);
     }
 
+    /// Increment KV cache preemption counter (eviction under memory pressure).
     pub fn recordPreemption(self: *Metrics) void {
         _ = self.preemptions_total.fetchAdd(1, .monotonic);
     }
@@ -669,11 +677,6 @@ pub const Metrics = struct {
             "itl_100ms", "itl_200ms", "itl_500ms", "itl_1s",
             "itl_inf",
         }, .{ "0.005", "0.01", "0.02", "0.05", "0.1", "0.2", "0.5", "1.0", "+Inf" }, "itl_sum", true);
-
-        // Build info (static label-only metric, always 1)
-        try writer.writeAll("# HELP agave_build_info Agave server build information\n");
-        try writer.writeAll("# TYPE agave_build_info gauge\n");
-        try writer.writeAll("agave_build_info{version=\"0.1.0\",language=\"zig\",parallelism=\"tp+pp+disagg\"} 1\n");
 
         // Preemptions (KV cache eviction under memory pressure)
         try writer.writeAll("# HELP agave_num_preemptions_total Requests preempted due to KV cache pressure\n");

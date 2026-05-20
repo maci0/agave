@@ -42,17 +42,14 @@ const TieredKvCache = @import("kvcache/tiered.zig").TieredKvCache;
 const pull = @import("pull.zig");
 const image = @import("image.zig");
 
-/// Standard I/O file handles via std.Io.File (Zig 0.16 idiom).
 const stdout_file = Io.File.stdout();
 const stderr_file = Io.File.stderr();
 const stdin_file = Io.File.stdin();
 
-/// Millisecond timestamp from the Io clock (Zig 0.16 idiom).
 fn milliTimestamp(io: Io) i64 {
     return Io.Clock.real.now(io).toMilliseconds();
 }
 
-/// Nanosecond timestamp from the Io clock (Zig 0.16 idiom).
 fn nanoTimestamp(io: Io) i96 {
     return Io.Clock.real.now(io).toNanoseconds();
 }
@@ -146,11 +143,8 @@ var g_quiet: bool = false;
 var g_tty: bool = true;
 var g_debug: bool = false;
 var g_verbose: bool = false;
-/// Global Io instance, set once from std.process.Init in main().
 var g_io: Io = undefined;
-/// Global args, set once from std.process.Init in main().
 var init_args: std.process.Args = undefined;
-/// Global environment map, set once from std.process.Init in main().
 var g_environ: *std.process.Environ.Map = undefined;
 
 fn print(comptime fmt: []const u8, args: anytype) void {
@@ -348,7 +342,7 @@ const cli_specs = [_]cli_mod.ArgSpec{
     .{ .long = "seed", .kind = .option, .help = "Random seed for sampling [default: random]." },
     .{ .long = "grammar", .kind = .option, .help = "GBNF grammar file for constrained decoding." },
     .{ .long = "grammar-string", .kind = .option, .help = "Inline GBNF grammar string." },
-    .{ .long = "json-output", .kind = .flag, .help = "Force valid JSON object output via grammar constraint." },
+    .{ .long = "json-output", .help = "Force valid JSON object output via grammar constraint." },
     .{ .long = "json-schema", .kind = .option, .help = "JSON schema for structured output (converts to GBNF grammar)." },
     .{ .long = "system", .kind = .option, .help = "System prompt for chat formatting." },
     // Backend & model
@@ -360,7 +354,7 @@ const cli_specs = [_]cli_mod.ArgSpec{
     .{ .long = "pp", .kind = .option, .help = "Pipeline parallelism stages [default: 1]." },
     .{ .long = "peers", .kind = .option, .help = "TP peer addresses for distributed inference (e.g. 192.168.0.212:9999)." },
     .{ .long = "rank", .kind = .option, .help = "This node's rank for TP/PP/disagg [default: 0]." },
-    .{ .long = "transport", .kind = .option, .help = "IPC transport: auto, tcp, shm, nccl, rdma, udp, grpc [default: auto]." },
+    .{ .long = "transport", .kind = .option, .help = "IPC transport: auto, tcp, shm, nccl [default: auto]. Also accepts rdma, udp, grpc (not yet implemented, falls back to tcp)." },
     .{ .long = "ctx-size", .kind = .option, .help = "Context window size; 0 = full, auto = fit to memory [default: min(model, 4096)]." },
     .{ .long = "allow-cpu-fallback", .help = "Allow GPU backends to fall back to CPU for unsupported ops." },
     .{ .long = "mmap", .help = "Use lazy mmap instead of eagerly paging weights into RAM." },
@@ -465,8 +459,6 @@ const CliArgs = struct {
     tp_peers: ?[]const u8 = null,
     transport: TransportChoice = .auto,
     pp_degree: u32 = 1,
-    pp_rank: u32 = 0,
-    pp_peers: ?[]const u8 = null,
     disagg: bool = false,
     // Speculative decoding
     draft_model_path: ?[]const u8 = null,
@@ -629,6 +621,31 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
         eprint("Error: --min-p must be in [0, 1.0] (got {d:.2})\n", .{min_p});
         std.process.exit(1);
     }
+    const dry_multiplier = parseF32(res.option("dry-multiplier"), "dry-multiplier") orelse 0;
+    if (dry_multiplier < 0) {
+        eprint("Error: --dry-multiplier must be >= 0 (got {d:.2})\n", .{dry_multiplier});
+        std.process.exit(1);
+    }
+    const xtc_probability = parseF32(res.option("xtc-probability"), "xtc-probability") orelse 0;
+    if (xtc_probability < 0 or xtc_probability > 1.0) {
+        eprint("Error: --xtc-probability must be in [0, 1.0] (got {d:.2})\n", .{xtc_probability});
+        std.process.exit(1);
+    }
+    const xtc_threshold = parseF32(res.option("xtc-threshold"), "xtc-threshold") orelse 0.1;
+    if (xtc_threshold < 0 or xtc_threshold > 1.0) {
+        eprint("Error: --xtc-threshold must be in [0, 1.0] (got {d:.2})\n", .{xtc_threshold});
+        std.process.exit(1);
+    }
+    const mirostat_tau = parseF32(res.option("mirostat-tau"), "mirostat-tau") orelse 5.0;
+    if (mirostat_tau <= 0) {
+        eprint("Error: --mirostat-tau must be > 0 (got {d:.2})\n", .{mirostat_tau});
+        std.process.exit(1);
+    }
+    const mirostat_eta = parseF32(res.option("mirostat-eta"), "mirostat-eta") orelse 0.1;
+    if (mirostat_eta <= 0) {
+        eprint("Error: --mirostat-eta must be > 0 (got {d:.2})\n", .{mirostat_eta});
+        std.process.exit(1);
+    }
 
     // Validate --kv-tiers value (mutable copy needed for "off" → null conversion)
     var kv_tiers_val = res.option("kv-tiers");
@@ -709,6 +726,42 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
         }
     }
 
+    // Validate parallelism degrees (must be >= 1)
+    if (parseU32(res.option("tp"), "tp")) |tp| {
+        if (tp == 0) {
+            eprint("Error: --tp must be >= 1\n", .{});
+            std.process.exit(1);
+        }
+    }
+    if (parseU32(res.option("pp"), "pp")) |pp| {
+        if (pp == 0) {
+            eprint("Error: --pp must be >= 1\n", .{});
+            std.process.exit(1);
+        }
+    }
+
+    // Validate speculative decoding parameters
+    if (parseU32(res.option("spec-tokens"), "spec-tokens")) |st| {
+        if (st == 0) {
+            eprint("Error: --spec-tokens must be >= 1\n", .{});
+            std.process.exit(1);
+        }
+    }
+    if (parseU32(res.option("tree-budget"), "tree-budget")) |tb| {
+        if (tb == 0) {
+            eprint("Error: --tree-budget must be >= 1\n", .{});
+            std.process.exit(1);
+        }
+    }
+
+    // Validate port range
+    if (parseU16(res.option("port"), "port")) |p| {
+        if (p == 0) {
+            eprint("Error: --port must be >= 1\n", .{});
+            std.process.exit(1);
+        }
+    }
+
     // Warn about extra positional arguments (e.g. unquoted multi-word prompt)
     if (n_positionals > 2) {
         eprint("Warning: extra arguments after prompt ignored (did you forget to quote it?)\n", .{});
@@ -737,6 +790,30 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
     if (res.flag("allow-cpu-fallback") and backend_choice == .cpu)
         eprint("Warning: --allow-cpu-fallback has no effect with --backend cpu\n", .{});
 
+    // Warn about --disagg without --peers (disagg requires a peer to send/receive KV)
+    if (res.flag("disagg") and res.option("peers") == null)
+        eprint("Warning: --disagg has no effect without --peers\n", .{});
+
+    // Warn about --tp > 1 without --peers (need peers for tensor parallelism)
+    if ((parseU32(res.option("tp"), "tp") orelse 1) > 1 and res.option("peers") == null)
+        eprint("Warning: --tp > 1 has no effect without --peers (peer discovery only works for --pp)\n", .{});
+
+    // Warn about speculative decoding flags that have no effect without a spec mode
+    {
+        const has_spec = res.option("draft-model") != null or res.option("spec-mode") != null;
+        if (!has_spec) {
+            if (res.option("spec-tokens") != null)
+                eprint("Warning: --spec-tokens has no effect without --draft-model or --spec-mode\n", .{});
+            if (res.option("tree-budget") != null)
+                eprint("Warning: --tree-budget has no effect without --draft-model or --spec-mode\n", .{});
+        }
+        if (res.option("draft-layers") != null) {
+            const sm = res.option("spec-mode");
+            if (sm == null or !std.mem.eql(u8, sm.?, "self"))
+                eprint("Warning: --draft-layers only applies to --spec-mode self\n", .{});
+        }
+    }
+
     // JSON mode + interactive REPL would corrupt the JSON output stream
     if (json_mode and !res.flag("model-info") and !res.flag("serve") and n_positionals < 2) {
         if ((stdin_file.isTty(g_io) catch false)) {
@@ -758,13 +835,13 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
         .top_k = parseU32(res.option("top-k"), "top-k") orelse 0,
         .min_p = min_p,
         .repeat_penalty = repeat_penalty,
-        .dry_multiplier = parseF32(res.option("dry-multiplier"), "dry-multiplier") orelse 0,
+        .dry_multiplier = dry_multiplier,
         .dry_length = parseU32(res.option("dry-length"), "dry-length") orelse 2,
-        .xtc_probability = parseF32(res.option("xtc-probability"), "xtc-probability") orelse 0,
-        .xtc_threshold = parseF32(res.option("xtc-threshold"), "xtc-threshold") orelse 0.1,
+        .xtc_probability = xtc_probability,
+        .xtc_threshold = xtc_threshold,
         .mirostat_mode = parseU32(res.option("mirostat-mode"), "mirostat-mode") orelse 0,
-        .mirostat_tau = parseF32(res.option("mirostat-tau"), "mirostat-tau") orelse 5.0,
-        .mirostat_eta = parseF32(res.option("mirostat-eta"), "mirostat-eta") orelse 0.1,
+        .mirostat_tau = mirostat_tau,
+        .mirostat_eta = mirostat_eta,
         .grammar_path = grammar_path,
         .grammar_string = grammar_string,
         .json_schema = json_schema,
@@ -1168,8 +1245,8 @@ fn printUsage() void {
         \\  [prompt]                 Text prompt (omit for interactive REPL)
         \\
         \\GENERAL:
-        \\  -h, --help             Show this help message
-        \\  -v, --version          Print version
+        \\  -h, --help             Show this help message and exit
+        \\  -v, --version          Print version and exit
         \\  -q, --quiet            Suppress banner and stats (raw output only)
         \\      --color <MODE>     Color mode: auto, always, never [default: auto]
         \\      --no-color         Disable colored output (same as --color=never, respects NO_COLOR env)
@@ -1192,12 +1269,12 @@ fn printUsage() void {
         \\      --system <TEXT>       System prompt for chat formatting
         \\      --grammar <FILE>      GBNF grammar file for constrained decoding
         \\      --grammar-string <G>  Inline GBNF grammar string
-        \\      --json-output         Force JSON output (auto-generates grammar)
+        \\      --json-output         Constrain generation to valid JSON via grammar (not output format; see --json)
         \\      --json-schema <JSON>  JSON schema for structured output
         \\
         \\BACKEND & MODEL:
         \\      --backend <BE>        Compute backend: auto, cpu, metal, vulkan, cuda, rocm, webgpu [default: auto]
-        \\      --ctx-size <N|auto>    Context window size; 0 = full, auto = fit to memory [default: min(model, 4096)]
+        \\      --ctx-size <N|auto>   Context window size; 0 = full, auto = fit to memory [default: min(model, 4096)]
         \\      --allow-cpu-fallback  Allow GPU backends to fall back to CPU for unsupported ops
         \\      --mmap                Use lazy mmap instead of eagerly paging weights into RAM
         \\      --prefill-batch-size <N>  Prefill chunk size in tokens [default: 512]
@@ -1229,7 +1306,7 @@ fn printUsage() void {
         \\      --pp <N>               Pipeline parallelism stages [default: 1]
         \\      --peers <ADDR>         Peer address (e.g. 192.168.0.2 or localhost for same-node)
         \\      --rank <N>             This node's rank for TP/PP/disagg [default: 0]
-        \\      --transport <TYPE>     IPC transport: auto, tcp, shm, nccl, rdma, udp, grpc [default: auto]
+        \\      --transport <TYPE>     IPC transport: auto, tcp, shm, nccl [default: auto]
         \\      --disagg               Disaggregated prefill/decode (rank 0 prefills, rank 1 decodes)
         \\
         \\SPECULATIVE DECODING:
@@ -1252,7 +1329,7 @@ fn printUsage() void {
         \\      --json             Output results as JSON (implies --quiet)
         \\      --model-info       Print model metadata and exit (supports --json)
         \\      --profile          Profile per-op timing (halves throughput)
-        \\      --benchmark        Run decode benchmark with built-in prompt
+        \\      --benchmark        Run decode benchmark: prefill + decode, print stats (supports --json)
         \\
         \\ENVIRONMENT:
         \\  NO_COLOR             Disable colored output when set (https://no-color.org)
@@ -1279,6 +1356,7 @@ fn printUsage() void {
         \\  agave target.gguf --draft-model draft.gguf "Hello"    Speculative decoding (DDTree)
         \\  agave model.gguf --spec-mode self --draft-layers 9 "Hello"  Self-speculative
         \\  agave model.gguf --megakernel "Hello"                 Fused FFN megakernel
+        \\  agave model.gguf --benchmark --json                   Benchmark with JSON output
         \\
         \\SUBCOMMANDS:
         \\  agave pull <org/repo>                    Download GGUF model from HuggingFace

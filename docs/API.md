@@ -28,7 +28,7 @@ curl http://localhost:49453/v1/chat/completions -d '{
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | messages | array | required | `[{"role": "user/system/assistant", "content": "..."}]` |
-| max_tokens | int | 512 | Maximum tokens to generate |
+| max_tokens | int | 512 | Maximum tokens to generate, capped at 4096 (also accepts `max_completion_tokens`) |
 | temperature | float | 0 | 0 = greedy, >0 = sampling |
 | top_k | int | 0 | Top-k filtering, 0 = disabled |
 | top_p | float | 1.0 | Nucleus sampling threshold |
@@ -57,6 +57,7 @@ curl http://localhost:49453/v1/chat/completions -d '{
 {
   "id": "chatcmpl-12345",
   "object": "chat.completion",
+  "created": 1700000000,
   "model": "model-name",
   "choices": [{
     "index": 0,
@@ -138,12 +139,11 @@ curl http://localhost:49453/v1/messages -d '{
 |-------|------|---------|-------------|
 | messages | array | required | `[{"role": "user/assistant", "content": "..."}]` |
 | system | string | null | System prompt (separate from messages, per Anthropic format) |
-| max_tokens | int | 512 | Maximum tokens to generate |
-| temperature | float | 0 | 0 = greedy, >0 = sampling |
-| top_k | int | 0 | Top-k filtering, 0 = disabled |
-| top_p | float | 1.0 | Nucleus sampling threshold |
+| max_tokens | int | 512 | Maximum tokens to generate, capped at 4096 |
 | stop_sequences | array | null | Stop sequence(s) |
 | stream | bool | false | Server-Sent Events streaming |
+
+All sampling parameters from `/v1/chat/completions` (temperature, top_k, top_p, min_p, penalties, seed, etc.) are also accepted.
 
 **Response:**
 ```json
@@ -158,6 +158,10 @@ curl http://localhost:49453/v1/messages -d '{
 }
 ```
 
+### POST /v1/chat
+
+Built-in web UI chat endpoint (form-encoded). Used by the web interface at `/` when the server is running. Accepts `message`, `max_tokens`, `temperature`, `top_p`, `stream`, `system`, and `image` fields. Returns HTML fragments for the web UI.
+
 ### POST /v1/chat/regenerate
 
 Regenerate the last assistant response in the active conversation. Rolls back the last assistant message, resets the KV cache, and generates a new response. Supports streaming via `stream=1`.
@@ -166,9 +170,9 @@ Regenerate the last assistant response in the active conversation. Rolls back th
 curl -X POST http://localhost:49453/v1/chat/regenerate -d 'stream=1&max_tokens=200'
 ```
 
-Uses form-encoded body. Accepts `max_tokens`, `temperature`, `stream`, and `system` fields. Always operates on the currently active conversation.
+Uses form-encoded body. Accepts `max_tokens`, `temperature`, `top_k`, `top_p`, `stream`, and `system` fields. Always operates on the currently active conversation.
 
-### POST /v1/conversations
+### GET|POST /v1/conversations
 
 Manage conversations.
 
@@ -201,7 +205,7 @@ Not implemented. Returns 501.
 
 ### POST /v1/tokenize
 
-Count tokens for a text string.
+Count tokens for a text string. Accepts `text` or `content` as the field name.
 
 ```bash
 curl http://localhost:49453/v1/tokenize -d '{"text": "Hello world"}'
@@ -225,7 +229,10 @@ List available models.
 curl http://localhost:49453/v1/models
 ```
 
-Returns model name, backend, context size, KV cache position.
+**Response:**
+```json
+{"object":"list","data":[{"id":"model-name","object":"model","created":1700000000,"owned_by":"agave","backend":"metal","kv_seq_len":0,"ctx_size":4096}]}
+```
 
 ### GET /health
 
@@ -302,8 +309,12 @@ curl -N http://localhost:49453/v1/chat/completions -d '{
 }'
 ```
 
-Events follow OpenAI format: `data: {"choices": [{"delta": {"content": "..."}}]}`.
+**OpenAI endpoints** (`/v1/chat/completions`, `/v1/completions`): `data: {"choices": [{"delta": {"content": "..."}}]}`.
 Final event: `data: [DONE]`. Usage chunk sent before `[DONE]`.
+
+**Anthropic endpoint** (`/v1/messages`): SSE events with `event: content_block_delta` / `event: message_delta` / `event: message_stop` following the Anthropic Messages API streaming format.
+
+**Responses endpoint** (`/v1/responses`): SSE events with `event: response.output_text.delta` / `event: response.completed` following the OpenAI Responses API streaming format.
 
 ---
 
@@ -324,6 +335,7 @@ All endpoints return JSON error bodies on failure:
 | `413 Payload Too Large` | Request body exceeds server limit |
 | `429 Too Many Requests` | Rate limit exceeded (when rate limiter is active) |
 | `500 Internal Server Error` | Model forward error, OOM, or unexpected server failure |
+| `501 Not Implemented` | Endpoint exists but is not yet implemented (e.g., `/v1/embeddings`) |
 | `503 Service Unavailable` | Model not loaded yet (server still initializing) |
 
 ---

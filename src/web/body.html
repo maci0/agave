@@ -6,7 +6,7 @@
 <header>
 <div class="logo">
 <button class="hdr-btn menu-btn" onclick="toggleSidebar()" title="Menu" aria-label="Toggle sidebar" aria-expanded="false" aria-controls="sidebar" id="menu-btn">&#9776;</button>
-<h1>&#127797; agave</h1><span class="model-badge" id="model-name">loading...</span><span class="ctx-badge" id="ctx-badge"></span></div>
+<h1>&#127797; agave</h1><span class="model-badge" id="model-name">loading...</span><span class="ctx-badge" id="ctx-badge" aria-live="polite"></span></div>
 <div class="hdr-btns">
 <button class="new-chat-btn" onclick="newConv()" aria-label="New conversation">+ New</button>
 <button class="hdr-btn" onclick="exportConv()" title="Export conversation" aria-label="Export conversation"><span class="btn-text">Export </span>&#8681;</button>
@@ -48,7 +48,7 @@
 <div class="info-row"><span class="info-label">API</span><span class="info-val">OpenAI-compatible</span></div>
 <h3>Features</h3>
 <ul>
-<li>Multi-backend: CPU, Metal, Vulkan, CUDA</li>
+<li>Multi-backend: CPU, Metal, Vulkan, CUDA, ROCm, WebGPU</li>
 <li>GGUF &amp; SafeTensors support</li>
 <li>SSE streaming responses</li>
 <li>Zero-copy weight loading via mmap</li>
@@ -66,7 +66,7 @@
 <img id="img-thumb" alt="Image preview">
 <button type="button" class="img-remove" onclick="removeImage()" aria-label="Remove image">&times;</button>
 </div>
-<div class="settings-panel" id="settings-panel">
+<div class="settings-panel" id="settings-panel" role="region" aria-label="Sampling settings">
 <div class="settings-grid">
 <div class="setting-group">
 <label for="temperature">Temperature <span class="setting-val" id="temp-val">0.0</span></label>
@@ -93,7 +93,7 @@
 <button type="button" class="settings-toggle" id="settings-toggle" onclick="toggleSettings()" title="Sampling settings" aria-label="Toggle settings panel" aria-expanded="false" aria-controls="settings-panel">&#9881;</button>
 <button type="submit" class="send-btn" id="send-btn" aria-label="Send message">Send</button>
 <button type="button" class="stop-btn" id="stop-btn" onclick="stopGen()" aria-label="Stop generation">Stop</button>
-<span class="toks-counter" id="toks-counter" aria-label="Generation speed"></span>
+<span class="toks-counter" id="toks-counter" role="status" aria-label="Generation speed"></span>
 </div>
 <div class="input-hint">Enter to send &middot; Shift+Enter for new line &middot; Escape to stop</div>
 </form>

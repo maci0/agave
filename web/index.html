@@ -15,6 +15,7 @@
         .msg.user { background: #1a3a5c; margin-left: auto; }
         .msg.assistant { background: #2a2a3e; }
         .msg.system { background: #2a3e2a; color: #8c8; font-size: 0.9rem; max-width: 100%; }
+        .msg.error { background: #3e2a2a; color: #e88; font-size: 0.9rem; max-width: 100%; }
         #controls { padding: 1rem 2rem; background: #16213e; border-top: 1px solid #333; display: flex; gap: 0.5rem; }
         #prompt { flex: 1; padding: 0.75rem; border: 1px solid #444; border-radius: 8px; background: #1a1a2e; color: #e0e0e0; font-size: 1rem; }
         button { padding: 0.75rem 1.5rem; border: none; border-radius: 8px; background: #4a8c2a; color: white; cursor: pointer; font-size: 1rem; }
@@ -22,30 +23,40 @@
         #status { padding: 0.5rem 2rem; background: #111; color: #888; font-size: 0.85rem; }
         #model-input { padding: 1rem 2rem; background: #16213e; display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; }
         #model-input input[type="text"] { flex: 1; min-width: 200px; padding: 0.5rem; border: 1px solid #444; border-radius: 4px; background: #1a1a2e; color: #e0e0e0; }
-        #drop-zone { border: 2px dashed #444; border-radius: 8px; padding: 0.5rem 1rem; color: #666; cursor: pointer; font-size: 0.9rem; }
+        #drop-zone { border: 2px dashed #444; border-radius: 8px; padding: 0.5rem 1rem; color: #999; cursor: pointer; font-size: 0.9rem; }
         #drop-zone.dragover { border-color: #4a8c2a; color: #4a8c2a; }
         #file-input { display: none; }
+        button:focus-visible, input:focus-visible { outline: 2px solid #4a8c2a; outline-offset: 2px; }
+        #drop-zone:focus-visible { outline: 2px solid #4a8c2a; outline-offset: 2px; border-color: #4a8c2a; }
+        .skip-link { position: absolute; top: -100%; left: 16px; z-index: 200; font-size: 13px; padding: 8px 16px; background: #4a8c2a; color: white; border-radius: 4px; text-decoration: none; transition: top .2s; }
+        .skip-link:focus { top: 8px; }
+        @media (prefers-reduced-motion: reduce) { .skip-link { transition: none; } }
     </style>
+    <meta name="theme-color" content="#1a1a2e">
 </head>
 <body>
+    <a href="#prompt" class="skip-link">Skip to message input</a>
     <header>
         <h1>agave</h1>
         <small>LLM inference in the browser via WebAssembly</small>
     </header>
     <div id="model-input">
-        <input type="text" id="model-url" placeholder="Model URL (GGUF)..." />
+        <input type="text" id="model-url" placeholder="Model URL (GGUF)..." aria-label="Model URL" autocomplete="off" />
         <button onclick="loadModelFromUrl()" id="load-btn">Load URL</button>
-        <div id="drop-zone" onclick="document.getElementById('file-input').click()">
+        <div id="drop-zone" role="button" tabindex="0" aria-label="Drop GGUF file or click to browse" onclick="document.getElementById('file-input').click()" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();document.getElementById('file-input').click();}">
             Drop GGUF file or click
         </div>
         <input type="file" id="file-input" accept=".gguf" onchange="loadModelFromFile(event)" />
     </div>
-    <div id="status">Status: Not initialized</div>
-    <div id="chat"></div>
+    <div id="status" role="status" aria-live="polite">Status: Not initialized</div>
+    <main>
+    <div id="chat" role="log" aria-live="polite"></div>
     <div id="controls">
-        <input type="text" id="prompt" placeholder="Type a message..." disabled />
-        <button onclick="send()" id="send-btn" disabled>Send</button>
+        <input type="text" id="prompt" placeholder="Load a model to start..." aria-label="Message input" enterkeyhint="send" autocomplete="off" disabled />
+        <button onclick="send()" id="send-btn" aria-label="Send message" disabled>Send</button>
     </div>
+    <div id="input-hint" style="text-align:center;padding:4px;color:#888;font-size:0.8rem;display:none;">Enter to send</div>
+    </main>
 
     <script src="agave.js"></script>
     <script>
@@ -95,10 +106,12 @@
                 addMessage('system', engine.initMessage || 'Model loaded');
                 status.textContent = 'Status: Ready';
                 promptInput.disabled = false;
+                promptInput.placeholder = 'Type a message...';
                 document.getElementById('send-btn').disabled = false;
+                document.getElementById('input-hint').style.display = '';
             } catch (e) {
                 status.textContent = `Error: ${e.message}`;
-                addMessage('system', `Error: ${e.message}`);
+                addMessage('error', `Error: ${e.message}`);
             }
         }
 
@@ -109,16 +122,18 @@
             addMessage('user', text);
             promptInput.value = '';
             promptInput.disabled = true;
+            chat.setAttribute('aria-busy', 'true');
             status.textContent = 'Status: Processing...';
 
             try {
                 const output = await engine.generate(text, { maxTokens: 200 });
                 addMessage('assistant', output);
             } catch (e) {
-                addMessage('assistant', `Error: ${e.message}`);
+                addMessage('error', `Error: ${e.message}`);
             }
 
             promptInput.disabled = false;
+            chat.setAttribute('aria-busy', 'false');
             status.textContent = 'Status: Ready';
             promptInput.focus();
         }
@@ -133,6 +148,10 @@
 
         promptInput.addEventListener('keydown', (e) => {
             if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
+        });
+
+        document.getElementById('model-url').addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') { e.preventDefault(); loadModelFromUrl(); }
         });
     </script>
 </body>
