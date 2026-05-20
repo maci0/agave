@@ -18,7 +18,7 @@
 //! code reads GPU-produced data. On discrete GPUs, `sync()` must also copy
 //! results back; on UMA, results are already visible in CPU address space.
 //!
-//! Implementations: cpu.zig, metal.zig, vulkan.zig, cuda.zig, rocm.zig
+//! Implementations: cpu.zig, metal.zig, vulkan.zig, cuda.zig, rocm.zig, webgpu.zig
 
 const std = @import("std");
 const builtin = @import("builtin");
