@@ -2624,8 +2624,8 @@ fn generateSpeculative(
     }
 
     // Self-speculative: auto-detect layer skip range (skip middle 50%)
-    const self_spec_skip_divisor = 4; // skip starts at 25% of layers
-    const self_spec_default_skip_fraction = 2; // skip 50% of layers by default
+    const self_spec_skip_divisor = 4;
+    const self_spec_default_skip_fraction = 2;
     const skip_start: u32 = if (self_spec) target.nLayers() / self_spec_skip_divisor else 0;
     const skip_end: u32 = if (self_spec) blk: {
         const skip_count = cli.draft_layers orelse (target.nLayers() / self_spec_default_skip_fraction);

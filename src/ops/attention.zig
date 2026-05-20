@@ -14,8 +14,8 @@ const softmax_kernel = @import("../backend/kernels/cpu/softmax.zig");
 const simd_width: usize = 8;
 
 /// Sparse V threshold: skip V dequantization for positions where softmax weight
-/// is below this value. At 1e-6, the skipped positions contribute < 0.0001% to
-/// the output — zero measured PPL impact. Yields +22.8% decode speed at 32K context.
+/// is below this value. At 1e-6, skipped positions contribute < 0.0001% to
+/// the output — zero measured PPL impact across tested models.
 const sparse_v_threshold: f32 = 1e-6;
 
 /// CPU-only softmax for the windowed attention fallback path.
