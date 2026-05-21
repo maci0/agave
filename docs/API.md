@@ -48,7 +48,10 @@ curl http://localhost:49453/v1/chat/completions -d '{
 | logit_bias | object | null | Token ID → bias mapping: `{"123": 5.0, "456": -2.0}` (max 16 entries) |
 | logprobs | bool | false | Return log probabilities for output tokens |
 | top_logprobs | int | null | Number of top token log probabilities to return per position, 0-20 |
+| n | int | 1 | Number of completions (only n=1 supported, n>1 returns 400) |
+| user | string | null | User identifier for request tracking (logged server-side) |
 | stream | bool | false | Server-Sent Events streaming |
+| stream_options | object | null | `{"include_usage": true/false}` — gate usage chunk in streaming |
 | grammar | string | null | GBNF grammar for constrained decoding |
 | json_schema | string | null | JSON schema for structured output |
 | response_format | object | null | `{"type": "json_object"}` or `{"type": "json_schema", "json_schema": {"schema": {...}}}` |

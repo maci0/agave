@@ -46,6 +46,9 @@ pub const SamplingParams = struct {
     logit_bias_ids: [16]u32 = .{0} ** 16,
     logit_bias_vals: [16]f32 = .{0} ** 16,
     logit_bias_count: u32 = 0,
+    stream_include_usage: bool = true,
+    user: ?[]const u8 = null,
+    n: u32 = 1,
     json_mode: bool = false,
     grammar_string: ?[]const u8 = null,
     json_schema: ?[]const u8 = null,
@@ -263,6 +266,15 @@ pub fn parseSampling(body: []const u8) SamplingParams {
         .seed = if (extractIntField(body, "seed")) |s| @as(u64, @intCast(s)) else null,
         .logprobs = extractBoolField(body, "logprobs"),
         .top_logprobs = @intCast(@min(extractIntField(body, "top_logprobs") orelse 0, 20)),
+        .stream_include_usage = blk: {
+            // stream_options.include_usage — default true for compat
+            if (extractField(body, "stream_options")) |so| {
+                break :blk extractBoolField(so, "include_usage");
+            }
+            break :blk true;
+        },
+        .user = extractField(body, "user"),
+        .n = @intCast(@max(1, @min(extractIntField(body, "n") orelse 1, 1))),
         .json_mode = json_mode,
         .grammar_string = extractField(body, "grammar"),
         .json_schema = extractField(body, "json_schema") orelse schema_from_rf,

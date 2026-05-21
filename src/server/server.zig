@@ -822,8 +822,16 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
         g_server.metrics.recordRequest();
 
         const body = req.body;
+        // Reject n > 1 (multiple completions not supported)
+        if ((json.extractIntField(body, "n") orelse 1) > 1) {
+            sendJsonError(stream, "400 Bad Request", "invalid_request_error", "n > 1 is not supported; only single completions are available");
+            g_server.metrics.recordFailure();
+            logRequestDone(method, path, 400, elapsedMs(request_start));
+            return;
+        }
         const max_tokens = @max(1, @min(json.extractIntField(body, "max_tokens") orelse json.extractIntField(body, "max_completion_tokens") orelse default_max_gen_tokens, gen_ids_buf_size));
         const sampling = json.parseSampling(body);
+        if (sampling.user) |u| std.log.info("req={d} user={s}", .{ log_request_id, u });
 
         // 2. Extract full messages array (system + conversation history)
         const extracted = json.extractMessages(body, g_server.allocator);
@@ -3900,7 +3908,8 @@ fn generateStream(stream: TcpStream, prompt: []const u8, req_id: u64, created: i
     if (!stream_disconnected) {
         const direct_finish: []const u8 = if (token_count >= max_tokens) "length" else "stop";
         sendFinalChunk(stream, &chunk_buf, req_id, created, is_chat, direct_finish);
-        sendUsageChunk(stream, &chunk_buf, req_id, created, is_chat, @intCast(token_ids.len), token_count);
+        if (sampling.stream_include_usage)
+            sendUsageChunk(stream, &chunk_buf, req_id, created, is_chat, @intCast(token_ids.len), token_count);
         _ = sseWriteData(stream, "[DONE]");
     }
 
