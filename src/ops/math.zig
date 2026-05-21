@@ -171,6 +171,14 @@ pub fn applyRepeatPenalty(logits: []f32, recent_ids: []const u32, penalty: f32) 
 /// DRY (Don't Repeat Yourself) sampling: penalize tokens that would continue
 /// a repeated n-gram sequence. For each candidate token, check if appending it
 /// would create an n-gram that already appeared in the recent output.
+/// Apply logit bias: add bias values to specific token logits.
+/// OpenAI API `logit_bias` parameter: {"token_id": bias, ...}.
+pub fn applyLogitBias(logits: []f32, ids: []const u32, biases: []const f32, count: u32) void {
+    for (0..count) |i| {
+        if (ids[i] < logits.len) logits[ids[i]] += biases[i];
+    }
+}
+
 /// `multiplier` scales the penalty; `allowed_length` sets minimum repeat length.
 /// Inspired by llama.cpp's DRY sampler.
 pub fn applyDry(logits: []f32, recent_ids: []const u32, multiplier: f32, allowed_length: u32) void {
@@ -344,19 +352,13 @@ pub fn applyXtc(logits: []f32, xtc_probability: f32, xtc_threshold: f32, rng: st
     const max_val = simdMaxF32(logits);
     const log_threshold = max_val + @log(xtc_threshold);
 
-    // Count tokens above threshold — keep at least one
-    var n_above: usize = 0;
-    for (logits) |v| {
-        if (v >= log_threshold) n_above += 1;
-    }
-    if (n_above <= 1) return;
-
-    // Exclude all but the last above-threshold token (keep one for valid sampling)
-    var kept: usize = 0;
+    // Single pass: mask all above-threshold tokens except the last one.
+    // When a new above-threshold token is found, mask the previous one.
+    var prev_above: ?usize = null;
     for (0..n) |i| {
         if (logits[i] >= log_threshold) {
-            kept += 1;
-            if (kept < n_above) logits[i] = neg_inf;
+            if (prev_above) |prev| logits[prev] = neg_inf;
+            prev_above = i;
         }
     }
 }

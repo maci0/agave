@@ -42,6 +42,10 @@ pub const SamplingParams = struct {
     seed: ?u64 = null,
     logprobs: bool = false,
     top_logprobs: u32 = 0,
+    /// Logit bias: up to 16 token_id→bias pairs from {"logit_bias": {"123": 5.0}}
+    logit_bias_ids: [16]u32 = .{0} ** 16,
+    logit_bias_vals: [16]f32 = .{0} ** 16,
+    logit_bias_count: u32 = 0,
     json_mode: bool = false,
     grammar_string: ?[]const u8 = null,
     json_schema: ?[]const u8 = null,
@@ -129,7 +133,7 @@ fn findJsonStringEnd(json: []const u8, start: usize) usize {
 fn skipToJsonValue(json: []const u8, pos: usize) ?usize {
     var i = pos;
     var saw_colon = false;
-    while (i < json.len and (json[i] == ':' or json[i] == ' ')) : (i += 1) {
+    while (i < json.len and (json[i] == ':' or json[i] == ' ' or json[i] == '\t' or json[i] == '\n' or json[i] == '\r')) : (i += 1) {
         if (json[i] == ':') saw_colon = true;
     }
     if (!saw_colon) return null;
@@ -148,7 +152,7 @@ fn findFieldValuePos(json_buf: []const u8, needle: []const u8, search_start: *us
         search_start.* = after;
         var i = after;
         var saw_colon = false;
-        while (i < json_buf.len and (json_buf[i] == ':' or json_buf[i] == ' ')) : (i += 1) {
+        while (i < json_buf.len and (json_buf[i] == ':' or json_buf[i] == ' ' or json_buf[i] == '\t' or json_buf[i] == '\n' or json_buf[i] == '\r')) : (i += 1) {
             if (json_buf[i] == ':') saw_colon = true;
         }
         if (saw_colon) return i;
@@ -274,31 +278,59 @@ pub fn parseSampling(body: []const u8) SamplingParams {
             result.n_stop = 1;
         } else {
             var sbuf: [64]u8 = undefined;
-            const needle = std.fmt.bufPrint(&sbuf, "\"{s}\"", .{stop_field}) catch "";
-            if (needle.len > 0) {
-                if (std.mem.indexOf(u8, body, needle)) |idx| {
-                    var si = idx + needle.len;
-                    while (si < body.len and (body[si] == ' ' or body[si] == ':')) : (si += 1) {}
-                    if (si < body.len and body[si] == '[') {
-                        si += 1;
-                        while (si < body.len and result.n_stop < max_stop_sequences) {
-                            while (si < body.len and (body[si] == ' ' or body[si] == ',')) : (si += 1) {}
-                            if (si >= body.len or body[si] == ']') break;
-                            if (body[si] == '"') {
+            const needle = std.fmt.bufPrint(&sbuf, "\"{s}\"", .{stop_field}) catch continue;
+            if (std.mem.indexOf(u8, body, needle)) |idx| {
+                var si = idx + needle.len;
+                while (si < body.len and (body[si] == ' ' or body[si] == ':')) : (si += 1) {}
+                if (si < body.len and body[si] == '[') {
+                    si += 1;
+                    while (si < body.len and result.n_stop < max_stop_sequences) {
+                        while (si < body.len and (body[si] == ' ' or body[si] == ',')) : (si += 1) {}
+                        if (si >= body.len or body[si] == ']') break;
+                        if (body[si] == '"') {
+                            si += 1;
+                            const str_start = si;
+                            while (si < body.len and body[si] != '"') {
+                                if (body[si] == '\\') si += 1;
                                 si += 1;
-                                const str_start = si;
-                                while (si < body.len and body[si] != '"') {
-                                    if (body[si] == '\\') si += 1;
-                                    si += 1;
-                                }
-                                result.stop[result.n_stop] = body[str_start..si];
-                                result.n_stop += 1;
-                                if (si < body.len) si += 1;
-                            } else break;
-                        }
+                            }
+                            result.stop[result.n_stop] = body[str_start..si];
+                            result.n_stop += 1;
+                            if (si < body.len) si += 1;
+                        } else break;
                     }
                 }
             }
+        }
+    }
+
+    // Parse logit_bias: {"logit_bias": {"123": 5.0, "456": -2.0}}
+    if (extractField(body, "logit_bias")) |lb_str| {
+        var i: usize = 0;
+        while (i < lb_str.len and result.logit_bias_count < 16) {
+            // Find quoted key (token ID)
+            if (std.mem.indexOfScalarPos(u8, lb_str, i, '"')) |q1| {
+                if (std.mem.indexOfScalarPos(u8, lb_str, q1 + 1, '"')) |q2| {
+                    const key = lb_str[q1 + 1 .. q2];
+                    const tid = std.fmt.parseInt(u32, key, 10) catch { i = q2 + 1; continue; };
+                    // Find colon then value
+                    if (std.mem.indexOfScalarPos(u8, lb_str, q2 + 1, ':')) |colon| {
+                        var vi = colon + 1;
+                        while (vi < lb_str.len and lb_str[vi] == ' ') vi += 1;
+                        // Find end of number
+                        var ve = vi;
+                        while (ve < lb_str.len and (lb_str[ve] == '-' or lb_str[ve] == '.' or (lb_str[ve] >= '0' and lb_str[ve] <= '9'))) ve += 1;
+                        if (ve > vi) {
+                            const bias = std.fmt.parseFloat(f32, lb_str[vi..ve]) catch { i = ve; continue; };
+                            const idx = result.logit_bias_count;
+                            result.logit_bias_ids[idx] = tid;
+                            result.logit_bias_vals[idx] = bias;
+                            result.logit_bias_count += 1;
+                        }
+                        i = ve;
+                    } else i = q2 + 1;
+                } else break;
+            } else break;
         }
     }
 
@@ -610,6 +642,7 @@ fn htmlEscapeChar(c: u8) ?[]const u8 {
 
 /// Escape a string for safe embedding in JSON (quotes, backslashes, control chars).
 /// Returns the input pointer unchanged (no allocation) when no escaping is needed.
+/// Callers must compare `result.ptr != input.ptr` before freeing the result.
 pub fn jsonEscape(allocator: Allocator, input: []const u8) ![]u8 {
     return escapeWith(allocator, input, jsonEscapeChar);
 }
@@ -731,6 +764,7 @@ pub fn jsonUnescapeOwned(allocator: Allocator, input: []const u8) ![]u8 {
 
 /// Escape a string for safe embedding in HTML (`<`, `>`, `&`, `"`).
 /// Returns the input pointer unchanged (no allocation) when no escaping is needed.
+/// Callers must compare `result.ptr != input.ptr` before freeing the result.
 pub fn htmlEscape(allocator: Allocator, input: []const u8) ![]u8 {
     return escapeWith(allocator, input, htmlEscapeChar);
 }

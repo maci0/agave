@@ -81,6 +81,7 @@ const health_buf_size: usize = 768;
 const metrics_render_buf_size: usize = 65536;
 const stats_buf_size: usize = 512;
 const sse_event_buf_size: usize = 1024;
+const logprob_buf_size: usize = 4096;
 /// Buffer size for short JSON responses (e.g., clear conversation result).
 const clear_response_buf_size: usize = 128;
 /// Maximum declared Content-Length before early rejection.
@@ -748,8 +749,9 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
         var fbs = FixedBufStream.init(&buf);
         const writer = fbs.writer();
         g_server.metrics.renderPrometheus(writer) catch {
-            std.log.err("metrics render failed: buffer overflow ({d} bytes available)", .{metrics_render_buf_size});
+            std.log.err("req={d} metrics render failed: buffer overflow ({d} bytes available)", .{ log_request_id, metrics_render_buf_size });
             sendJsonError(stream, "500 Internal Server Error", "server_error", "Metrics rendering failed");
+            logRequestDone(method, path, 500, elapsedMs(request_start));
             return;
         };
         // Build info metric — standard Prometheus pattern for version tracking
@@ -795,7 +797,12 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
         const kv_pos = g_server.model.kvSeqLen();
         const json_body = std.fmt.bufPrint(&buf,
             \\{{"object":"list","data":[{{"id":"{s}","object":"model","created":{d},"owned_by":"agave","backend":"{s}","kv_seq_len":{d},"ctx_size":{d}}}]}}
-        , .{ g_server.model_name, g_server.start_time, g_server.backend_name, kv_pos, g_server.ctx_size }) catch return;
+        , .{ g_server.model_name, g_server.start_time, g_server.backend_name, kv_pos, g_server.ctx_size }) catch {
+            sendJsonError(stream, "500 Internal Server Error", "server_error", "Response too large");
+            g_server.metrics.recordFailure();
+            logRequestDone(method, path, 500, elapsedMs(request_start));
+            return;
+        };
         sendJson(stream, json_body);
         g_server.metrics.recordCompletion();
         logRequestDone(method, path, 200, elapsedMs(request_start));
@@ -894,7 +901,7 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
         const total = gen.stats.tokens_generated + gen.stats.prompt_tokens;
         var resp_buf: [response_buf_size]u8 = undefined;
         const json_body = std.fmt.bufPrint(&resp_buf,
-            \\{{"id":"chatcmpl-{d}","object":"chat.completion","created":{d},"model":"{s}","choices":[{{"index":0,"message":{{"role":"assistant","content":"{s}"}},"finish_reason":"{s}"}}],"usage":{{"completion_tokens":{d},"prompt_tokens":{d},"total_tokens":{d}}}}}
+            \\{{"id":"chatcmpl-{d}","object":"chat.completion","created":{d},"model":"{s}","system_fingerprint":"agave-v0.1","choices":[{{"index":0,"message":{{"role":"assistant","content":"{s}"}},"finish_reason":"{s}"}}],"usage":{{"completion_tokens":{d},"prompt_tokens":{d},"total_tokens":{d}}}}}
         , .{ req_id, created, g_server.model_name, gen.escaped, gen.finish_reason, gen.stats.tokens_generated, gen.stats.prompt_tokens, total }) catch {
             sendJsonError(stream, "500 Internal Server Error", "server_error", "Response too large");
             g_server.metrics.recordFailure();
@@ -1834,11 +1841,17 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
             const body = if (ep.is_anthropic)
                 std.fmt.bufPrint(&body_buf,
                     \\{{"type":"error","error":{{"type":"invalid_request_error","message":"Method not allowed. {s}"}}}}
-                , .{ep.msg}) catch return
+                , .{ep.msg}) catch {
+                    logRequestDone(method, path, 405, elapsedMs(request_start));
+                    return;
+                }
             else
                 std.fmt.bufPrint(&body_buf,
                     \\{{"error":{{"message":"Method not allowed. {s}","type":"invalid_request_error","param":null,"code":null}}}}
-                , .{ep.msg}) catch return;
+                , .{ep.msg}) catch {
+                    logRequestDone(method, path, 405, elapsedMs(request_start));
+                    return;
+                };
             const cors_405: []const u8 = if (g_server.api_key != null) "" else cors_allow_headers;
             const hdr = std.fmt.bufPrint(&hdr_buf, "HTTP/1.1 405 Method Not Allowed\r\nContent-Type: application/json\r\nContent-Length: {d}\r\nAllow: {s}\r\nX-Request-Id: {d}\r\n{s}" ++ security_headers ++ "Connection: close\r\n\r\n", .{ body.len, ep.allow, log_request_id, cors_405 }) catch return;
             stream.writeAll(hdr) catch return;
@@ -2332,6 +2345,9 @@ fn generateN(formatted: []const u8, reset: bool, max_tokens: usize, sampling: Sa
                         next = math_ops.argmax(model.getLogits());
                     }
                 }
+            }
+            if (sampling.logit_bias_count > 0) {
+                math_ops.applyLogitBias(model.getLogits(), &sampling.logit_bias_ids, &sampling.logit_bias_vals, sampling.logit_bias_count);
             }
             if (sampling.repetition_penalty != 1.0 and token_count > 0) {
                 math_ops.applyRepeatPenalty(model.getLogits(), gen_tokens[0..token_count], sampling.repetition_penalty);
@@ -3431,12 +3447,7 @@ fn computeLogprobs(logits: []const f32, token_id: u32, n_top: u32) ?LogprobInfo 
     if (n_top == 0) return null;
     var info: LogprobInfo = .{};
     info.count = math_ops.topLogProbs(logits, n_top, &info.top_ids, &info.top_logprobs);
-    // Find the selected token's logprob
-    var max_val: f32 = -std.math.inf(f32);
-    for (logits) |v| max_val = @max(max_val, v);
-    var log_sum: f32 = 0;
-    for (logits) |v| log_sum += @exp(v - max_val);
-    info.token_logprob = (logits[token_id] - max_val) - @log(log_sum);
+    info.token_logprob = math_ops.tokenLogProb(logits, token_id);
     return info;
 }
 
@@ -3469,7 +3480,7 @@ fn streamChunkLogprobs(stream: TcpStream, chunk_buf: *[response_buf_size]u8, tok
     const dt = decodeAndEscape(tok, token_id) orelse return true;
     defer dt.deinit();
 
-    var lp_buf: [4096]u8 = undefined;
+    var lp_buf: [logprob_buf_size]u8 = undefined;
     const lp_json: []const u8 = if (lp_info) |info|
         formatLogprobs(&lp_buf, tok, dt.escaped, info)
     else
@@ -3811,6 +3822,9 @@ fn generateStream(stream: TcpStream, prompt: []const u8, req_id: u64, created: i
                 }
                 break;
             };
+            if (sampling.logit_bias_count > 0) {
+                math_ops.applyLogitBias(model.getLogits(), &sampling.logit_bias_ids, &sampling.logit_bias_vals, sampling.logit_bias_count);
+            }
             if (sampling.repetition_penalty != 1.0 and s_gen_count > 0) {
                 math_ops.applyRepeatPenalty(model.getLogits(), s_gen_tokens[0..s_gen_count], sampling.repetition_penalty);
             }
@@ -3925,9 +3939,9 @@ fn handleConnection(stream: TcpStream) void {
         std.log.warn("Failed to set TCP_NODELAY: {}", .{err});
     };
 
-    _ = g_server.metrics.active_connections.fetchAdd(1, .monotonic);
+    // active_connections already incremented by accept loop before thread spawn.
     defer {
-        _ = g_server.metrics.active_connections.fetchSub(1, .monotonic);
+        _ = g_server.metrics.active_connections.fetchSub(1, .release);
         stream.close();
     }
     log_request_id = g_server.request_counter.fetchAdd(1, .monotonic);
@@ -4123,7 +4137,11 @@ pub fn run(config: ServerConfig) !void {
             continue;
         };
         const stream = TcpStream{ .handle = net_stream.socket.handle };
-        if (g_server.metrics.active_connections.load(.monotonic) >= max_concurrent_connections) {
+        // Atomically increment before capacity check to prevent TOCTOU race
+        // where multiple accept() calls pass the check before any thread increments.
+        const prev = g_server.metrics.active_connections.fetchAdd(1, .acquire);
+        if (prev >= max_concurrent_connections) {
+            _ = g_server.metrics.active_connections.fetchSub(1, .release);
             log_request_id = g_server.request_counter.fetchAdd(1, .monotonic);
             g_server.metrics.recordRequest();
             g_server.metrics.recordConnectionRejection();
@@ -4135,6 +4153,7 @@ pub fn run(config: ServerConfig) !void {
             continue;
         }
         const thread = std.Thread.spawn(.{}, handleConnection, .{stream}) catch |err| {
+            _ = g_server.metrics.active_connections.fetchSub(1, .release);
             log_request_id = g_server.request_counter.fetchAdd(1, .monotonic);
             g_server.metrics.recordRequest();
             g_server.metrics.recordFailure();

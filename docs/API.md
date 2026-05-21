@@ -45,6 +45,7 @@ curl http://localhost:49453/v1/chat/completions -d '{
 | mirostat | int | 0 | Mirostat sampling mode: 0=disabled, 2=Mirostat 2.0 |
 | mirostat_tau | float | 5.0 | Mirostat target entropy (surprise) |
 | mirostat_eta | float | 0.1 | Mirostat learning rate |
+| logit_bias | object | null | Token ID → bias mapping: `{"123": 5.0, "456": -2.0}` (max 16 entries) |
 | logprobs | bool | false | Return log probabilities for output tokens |
 | top_logprobs | int | null | Number of top token log probabilities to return per position, 0-20 |
 | stream | bool | false | Server-Sent Events streaming |
@@ -59,6 +60,7 @@ curl http://localhost:49453/v1/chat/completions -d '{
   "object": "chat.completion",
   "created": 1700000000,
   "model": "model-name",
+  "system_fingerprint": "agave-v0.1",
   "choices": [{
     "index": 0,
     "message": {"role": "assistant", "content": "..."},
@@ -67,6 +69,8 @@ curl http://localhost:49453/v1/chat/completions -d '{
   "usage": {"prompt_tokens": 10, "completion_tokens": 50, "total_tokens": 60}
 }
 ```
+
+`finish_reason` is `"stop"` (natural stop or stop sequence) or `"length"` (max_tokens reached).
 
 ### POST /v1/completions
 
@@ -121,6 +125,8 @@ Same sampling parameters as chat completions.
 }
 ```
 
+`stop_reason` is `"stop"` (natural stop) or `"max_tokens"` (limit reached).
+
 ### POST /v1/messages
 
 Anthropic Messages API format.
@@ -154,9 +160,12 @@ All sampling parameters from `/v1/chat/completions` (temperature, top_k, top_p, 
   "content": [{"type": "text", "text": "..."}],
   "model": "model-name",
   "stop_reason": "end_turn",
+  "stop_sequence": null,
   "usage": {"input_tokens": 10, "output_tokens": 50}
 }
 ```
+
+`stop_reason` is `"end_turn"` (natural stop) or `"max_tokens"` (limit reached).
 
 ### POST /v1/chat
 
@@ -242,7 +251,8 @@ Health check (no auth required). Returns status, uptime, active connections, KV 
 {"status":"ok","reason":"none","version":"0.1.0","model":"model-name","backend":"metal",
  "uptime_s":120,"active_connections":1,"requests_total":5,"requests_completed":5,
  "requests_failed":0,"requests_cancelled":0,"queue_depth":0,
- "kv_cache_used":100,"kv_cache_total":8192,"kv_seq_len":42,"ctx_size":4096}
+ "kv_cache_used":100,"kv_cache_total":8192,"kv_seq_len":42,"ctx_size":4096,
+ "scheduler_errors":0,"preemptions":0}
 ```
 
 ### GET /ready
@@ -251,6 +261,16 @@ Readiness probe (no auth required). Returns 200 with `"status":"ready"` when hea
 
 ```json
 {"status":"ready","queue_depth":0,"kv_cache_used":100,"kv_cache_total":8192}
+```
+
+Degraded response (503):
+```json
+{"status":"degraded","reason":"kv_pressure","queue_depth":0,"kv_cache_used":7500,"kv_cache_total":8192}
+```
+
+Shutdown response (503):
+```json
+{"status":"shutting_down","queue_depth":2,"kv_cache_used":100,"kv_cache_total":8192}
 ```
 
 ### GET /metrics
@@ -345,6 +365,11 @@ All endpoints return JSON error bodies on failure:
 ```bash
 agave model.gguf --serve --api-key mysecret
 curl -H "Authorization: Bearer mysecret" http://localhost:49453/v1/chat/completions -d '...'
+```
+
+Also accepts Anthropic-style `X-API-Key` header:
+```bash
+curl -H "X-API-Key: mysecret" http://localhost:49453/v1/messages -d '...'
 ```
 
 Returns 401 if key missing or wrong. No auth required when `--api-key` not set.
