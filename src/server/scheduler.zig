@@ -38,7 +38,7 @@ const max_waiting_queue_size: usize = 1024;
 
 /// Initial token output buffer capacity per request.
 /// Avoids repeated reallocation during the decode phase.
-const initial_token_capacity: usize = 256;
+const initial_token_capacity: usize = 4096;
 
 /// Maximum prefill tokens processed per scheduler step per request.
 /// Limits prefill blocking so decode requests get timely service.
@@ -51,6 +51,7 @@ pub const Request = struct {
     last_token_id: u32,
     is_finished: std.atomic.Value(bool),
     is_cancelled: std.atomic.Value(bool),
+    visible_len: std.atomic.Value(u32),
     enqueued_at: i64,
     prompt_tokens: u32,
     cached_prefix_len: u32 = 0,
@@ -84,6 +85,7 @@ pub const Request = struct {
             return;
         };
         self.last_token_id = token;
+        self.visible_len.store(@intCast(self.tokens.items.len), .release);
     }
 
     /// Calculate elapsed time since request was enqueued (in seconds).
@@ -262,6 +264,7 @@ pub const RequestManager = struct {
             .last_token_id = 0,
             .is_finished = std.atomic.Value(bool).init(false),
             .is_cancelled = std.atomic.Value(bool).init(false),
+            .visible_len = std.atomic.Value(u32).init(0),
             .enqueued_at = now,
             .prompt_tokens = @intCast(prompt_tokens_slice.len),
             .cached_prefix_len = @intCast(prefix_match.matched),

@@ -33,11 +33,11 @@ This document tracks the implementation status of all compute kernels across bac
 | Deinterleave | Native | Native | Native | Native | Native | Native |
 | Embedding Lookup | Native | CPU perf¹ | Native (f32) | CPU perf¹ | CPU perf¹ | Native |
 | SDPA (FlashAttn-2) | Native (SIMD) | Native² | Native | Native | Native | Native |
-| SDPA with Stats (`sdpaWithStats`) | Native (SIMD) | Native (wraps SDPA) | Native (wraps SDPA) | Native (wraps SDPA) | Native (wraps SDPA) | Native (wraps SDPA) |
+| SDPA with Stats (`sdpaWithStats`) | Native (SIMD) | Native (wraps SDPA)³ | Native (wraps SDPA)³ | Native (wraps SDPA)³ | Native (wraps SDPA)³ | Native (wraps SDPA)³ |
 | SDPA Tree (DDTree verify) | Native (SIMD) | Native (f32 + turbo) | Native (f32) | Native (f32) | Native (f32) | Native (f32) |
 | Paged SDPA | Native | Native | Native | Native | Native | Native |
 | Causal Conv1d | Native | Native (DeltaNet) | Native | In DeltaNet | In DeltaNet | Native |
-| DeltaNet (4 kernels) | Native | Native | Native | CPU delegate⁶ | Hybrid (GPU norm+recur)⁹ | Native |
+| DeltaNet (4 kernels) | Native | Native | Native | CPU delegate⁴ | Hybrid (GPU norm+recur)⁶ | Native |
 | Argmax / Final Logits | Native | CPU perf | CPU perf | CPU perf | CPU perf | CPU perf |
 | **Batched Prefill Ops** | | | | | | |
 | GEMM (batched matmul) | Native (SIMD) | Native (f32/Q8_0/Q4_0/BF16) | Loop-of-GEMV | Native (Q8_0) | Loop-of-GEMV | Loop-of-GEMV |
@@ -46,15 +46,15 @@ This document tracks the implementation status of all compute kernels across bac
 | SDPA Prefill (causal FA2) | Native (SIMD) | Native (dual-source FA2) | Loop-of-SDPA | Native | Loop-of-SDPA | Loop-of-SDPA |
 | **Fused FFN (Megakernel Tier 1)** | | | | | | |
 | Fused Gate+Up+SiLU (Q8_0) | N/A | Native | N/A | Native | N/A | N/A |
-| Fused Gate+Up+SiLU (Q4_K/Q5_K/Q6_K/Q4_0/MLX_Q4) | N/A | Native | N/A | Native (Q4_K only)⁸ | N/A | N/A |
+| Fused Gate+Up+SiLU (Q4_K/Q5_K/Q6_K/Q4_0/MLX_Q4) | N/A | Native | N/A | Native (Q4_K only)⁵ | N/A | N/A |
 | Fused Gate+Up+GELU (Q8_0/Q4_K/Q5_K/Q6_K/Q4_0) | N/A | Native | N/A | Native (Q8_0) | N/A | N/A |
 
 ¹ Single-row table read — CPU memcpy is faster than GPU dispatch + sync overhead.
 ² Metal FlashAttention-2 with block_size=16 (fits 32KB threadgroup memory). Online softmax, no blit encoders. **Sparse V threshold** (1e-6) is applied in all GPU SDPA kernels (Metal, CUDA, ROCm): positions where the softmax weight falls below the threshold skip V dequantization entirely, yielding +22.8% decode speed at 32K context with zero measured PPL impact. The CPU windowed-attention fallback path (`src/ops/attention.zig`) also uses sparse V dequantization.
-⁶ CPU delegate: functional but delegates to CPU backend (no native GPU kernel yet).
-⁷ `sdpaWithStats` wraps the native GPU SDPA kernel and fills dummy stats (max=0, sum=1). Used by tiered KV cache split-attention (`--kv-tiers vram+ram`) for online softmax merge across tiers. No CPU delegate — runs entirely on GPU.
-⁸ CUDA Q5_K/Q6_K fused FFN blocked by Zig LLVM nvptx64 aliasee bug (cross-file kernel imports create forbidden GlobalAlias).
-⁹ ROCm DeltaNet: conv1d on CPU, L2 norm + recurrence kernel on GPU. Gate/beta computed on CPU. Not fully native but recurrence (the expensive part) runs on GPU.
+³ `sdpaWithStats` wraps the native GPU SDPA kernel and fills dummy stats (max=0, sum=1). Used by tiered KV cache split-attention (`--kv-tiers vram+ram`) for online softmax merge across tiers. No CPU delegate — runs entirely on GPU.
+⁴ CPU delegate: functional but delegates to CPU backend (no native GPU kernel yet).
+⁵ CUDA Q5_K/Q6_K fused FFN blocked by Zig LLVM nvptx64 aliasee bug (cross-file kernel imports create forbidden GlobalAlias).
+⁶ ROCm DeltaNet: conv1d on CPU, L2 norm + recurrence kernel on GPU. Gate/beta computed on CPU. Not fully native but recurrence (the expensive part) runs on GPU.
 
 ## True Megakernels (Tier 2)
 

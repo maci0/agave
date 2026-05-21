@@ -726,6 +726,14 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
         }
     }
 
+    // Validate DRY minimum n-gram length (0 would match everything)
+    if (parseU32(res.option("dry-length"), "dry-length")) |dl| {
+        if (dl == 0) {
+            eprint("Error: --dry-length must be >= 1\n", .{});
+            std.process.exit(1);
+        }
+    }
+
     // Validate parallelism degrees (must be >= 1)
     if (parseU32(res.option("tp"), "tp")) |tp| {
         if (tp == 0) {
@@ -754,10 +762,10 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
         }
     }
 
-    // Validate port range
+    // Validate port range (1-65535, u16 parse already enforces upper bound)
     if (parseU16(res.option("port"), "port")) |p| {
         if (p == 0) {
-            eprint("Error: --port must be >= 1\n", .{});
+            eprint("Error: --port must be in range 1-65535\n", .{});
             std.process.exit(1);
         }
     }
@@ -784,6 +792,10 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
             eprint("Warning: --system ignored in server mode (system prompt comes from API request)\n", .{});
         if (res.option("image") != null)
             eprint("Warning: --image ignored in server mode (images come from API request)\n", .{});
+        if (res.flag("benchmark"))
+            eprint("Warning: --benchmark exits before server starts; remove --serve or --benchmark\n", .{});
+        if (res.flag("model-info"))
+            eprint("Warning: --model-info exits before server starts; remove --serve or --model-info\n", .{});
     }
 
     // Warn about --allow-cpu-fallback with CPU backend (already on CPU, nothing to fall back to)
@@ -811,6 +823,24 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
             const sm = res.option("spec-mode");
             if (sm == null or !std.mem.eql(u8, sm.?, "self"))
                 eprint("Warning: --draft-layers only applies to --spec-mode self\n", .{});
+        }
+    }
+
+    // Warn about conflicting constrained-decoding flags (only one takes effect)
+    {
+        const json_out = res.flag("json-output");
+        const has_schema = json_schema != null;
+        const has_grammar_s = grammar_string != null;
+        const has_grammar_f = grammar_path != null;
+        const constraint_count = @as(u32, @intFromBool(json_out)) + @as(u32, @intFromBool(has_schema)) +
+            @as(u32, @intFromBool(has_grammar_s)) + @as(u32, @intFromBool(has_grammar_f));
+        if (constraint_count > 1) {
+            if (json_out)
+                eprint("Warning: --json-output active; --grammar/--grammar-string/--json-schema ignored\n", .{})
+            else if (has_schema)
+                eprint("Warning: --json-schema active; --grammar/--grammar-string ignored\n", .{})
+            else
+                eprint("Warning: both --grammar and --grammar-string given; only --grammar-string takes effect\n", .{});
         }
     }
 
@@ -1000,6 +1030,8 @@ fn resolveTransportKind(choice: TransportChoice, peers_str: []const u8) Transpor
 
 fn setupTransport(allocator: std.mem.Allocator, peers_str: []const u8, rank: u32, world_size: u32, choice: TransportChoice, port_base: u16, be_union: anytype) ?*TransportMod.Transport {
     const t = allocator.create(TransportMod.Transport) catch return null;
+    var transport_ok = false;
+    defer if (!transport_ok) allocator.destroy(t);
     var kind = resolveTransportKind(choice, peers_str);
     t.* = TransportMod.Transport.init(allocator, kind, rank, world_size) catch return null;
 
@@ -1011,7 +1043,10 @@ fn setupTransport(allocator: std.mem.Allocator, peers_str: []const u8, rank: u32
         };
     }
 
-    if (kind == .shm) return t;
+    if (kind == .shm) {
+        transport_ok = true;
+        return t;
+    }
 
     // NCCL: establish TCP first (for unique ID exchange), then init NCCL
     const want_nccl = (kind == .nccl);
@@ -1074,12 +1109,14 @@ fn setupTransport(allocator: std.mem.Allocator, peers_str: []const u8, rank: u32
         t.setupNccl() catch |err| {
             std.log.warn("NCCL init failed ({s}), using TCP", .{@errorName(err)});
             t.kind = .tcp;
+            transport_ok = true;
             return t;
         };
         // Both ranks are synchronized after setupNccl (TCP ID exchange).
         // Init comm NOW while both are at the same point.
         t.ensureNcclComm();
     }
+    transport_ok = true;
     return t;
 }
 
@@ -1938,7 +1975,10 @@ fn initAndRun(
         const n_heads = fmt.getMetaU32("llama.attention.head_count") orelse
             fmt.getMetaU32("num_attention_heads") orelse tiered_fallback_n_heads;
         const head_dim = fmt.getMetaU32("llama.attention.key_length") orelse
-            fmt.getMetaU32("head_dim") orelse (n_embd / n_heads);
+            fmt.getMetaU32("head_dim") orelse if (n_heads > 0) (n_embd / n_heads) else {
+            eprint("Error: n_heads=0 and no head_dim in model metadata\n", .{});
+            return false;
+        };
         const kv_dim: usize = std.math.mul(usize, @as(usize, n_kv_heads), head_dim) catch {
             eprint("Error: KV dimensions overflow (n_kv_heads={d}, head_dim={d})\n", .{ n_kv_heads, head_dim });
             return false;
@@ -2319,6 +2359,7 @@ fn initAndRun(
     } else if (cli.disagg and cli.tp_peers != null) {
         // Disaggregated inference: rank 0 prefills + sends KV, rank 1 receives KV + decodes
         if (allocator.create(TransportMod.Transport) catch null) |dtr| disagg_blk: {
+            defer allocator.destroy(dtr);
             const peers_str = cli.tp_peers orelse break :disagg_blk;
             dtr.* = TransportMod.Transport.init(allocator, .tcp, cli.tp_rank, 2) catch break :disagg_blk;
             var host: [4]u8 = .{ 0, 0, 0, 0 };
@@ -3002,10 +3043,10 @@ fn generateAndPrintInner(
             eprint("Error: failed to parse JSON schema: {}\n", .{err});
             break :blk null;
         };
-        if (grammar) |*g| grammar_state = g.initState();
+        if (grammar) |*g| grammar_state = g.initState() catch null;
     } else if (cli.grammar_string) |gs| {
         grammar = grammar_mod.Grammar.parse(allocator, gs) catch null;
-        if (grammar) |*g| grammar_state = g.initState();
+        if (grammar) |*g| grammar_state = g.initState() catch null;
     } else if (cli.grammar_path) |path| {
         const gf = Io.Dir.cwd().openFile(g_io, path, .{}) catch |err| blk: {
             eprint("Error: could not open grammar file '{s}': {}\n", .{ path, err });
@@ -3017,9 +3058,12 @@ fn generateAndPrintInner(
             if (stat) |s| {
                 const buf = allocator.alloc(u8, s.size) catch null;
                 if (buf) |b| {
-                    _ = file.readPositionalAll(g_io, b, 0) catch {};
-                    grammar = grammar_mod.Grammar.parse(allocator, b) catch null;
-                    if (grammar) |*g| grammar_state = g.initState();
+                    if (file.readPositionalAll(g_io, b, 0)) |_| {
+                        grammar = grammar_mod.Grammar.parse(allocator, b) catch null;
+                        if (grammar) |*g| grammar_state = g.initState() catch null;
+                    } else |err| {
+                        eprint("Error: could not read grammar file '{s}': {}\n", .{ path, err });
+                    }
                 }
             }
         }

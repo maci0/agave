@@ -1,7 +1,8 @@
 //! HTTP server with OpenAI-compatible and Anthropic-compatible API endpoints.
 //! Provides /v1/chat/completions, /v1/completions, /v1/models, /v1/responses,
 //! /v1/messages (Anthropic Messages API), /v1/embeddings, /v1/conversations,
-//! /v1/chat (built-in web UI), /v1/chat/regenerate, /health, /ready, and /metrics.
+//! /v1/chat (built-in web UI), /v1/chat/regenerate, /v1/tokenize, /v1/detokenize,
+//! /health, /ready, and /metrics.
 //! Supports both synchronous JSON responses and SSE streaming.
 //! Uses std.net with per-connection threads; inference is mutex-serialized.
 
@@ -58,13 +59,10 @@ const TcpStream = struct {
     }
 };
 
-
 // ── Server constants ────────────────────────────────────────────
 const slog_buf_size: usize = 4096;
 const models_json_buf_size: usize = 1024;
 const response_buf_size: usize = 65536;
-const msg_preview_buf_size: usize = 100;
-const msg_preview_max_len: usize = 80;
 const cmd_buf_size: usize = 1024;
 /// Buffer for collecting generated token IDs.
 const gen_ids_buf_size: usize = 4096;
@@ -207,13 +205,17 @@ const Conversation = struct {
         self.title_len = len;
     }
 
-    fn clearMessages(self: *Conversation, allocator: Allocator) void {
+    fn freeMessageContents(self: *Conversation, allocator: Allocator) void {
         for (self.messages.items) |msg| allocator.free(@constCast(msg.content));
+    }
+
+    fn clearMessages(self: *Conversation, allocator: Allocator) void {
+        self.freeMessageContents(allocator);
         self.messages.clearRetainingCapacity();
     }
 
     fn freeMessages(self: *Conversation, allocator: Allocator) void {
-        for (self.messages.items) |msg| allocator.free(@constCast(msg.content));
+        self.freeMessageContents(allocator);
         self.messages.deinit(allocator);
     }
 };
@@ -1104,6 +1106,7 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
         }
         g_server.metrics.recordRequest();
         sendJsonError(stream, "501 Not Implemented", "not_implemented", "Embeddings endpoint not implemented");
+        g_server.metrics.recordFailure();
         logRequestDone(method, path, 501, elapsedMs(request_start));
         return;
     }
@@ -1620,18 +1623,8 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
             return;
         }
 
-        // Log the user's message (truncate if too long, sanitize newlines to prevent log injection)
-        var msg_preview: [msg_preview_buf_size]u8 = undefined;
-        const src = if (decoded.len > msg_preview_max_len) decoded[0..msg_preview_max_len] else decoded;
-        var sanitized_len: usize = 0;
-        for (src) |c| {
-            if (sanitized_len >= msg_preview.len) break;
-            msg_preview[sanitized_len] = if (c == '\n' or c == '\r') ' ' else c;
-            sanitized_len += 1;
-        }
-        const preview = msg_preview[0..sanitized_len];
-        const suffix: []const u8 = if (decoded.len > msg_preview_max_len) "..." else "";
-        slog("  User: {s}{s}\n", .{ preview, suffix });
+        // Log message receipt without content (avoid leaking prompts in shared deployments)
+        slog("  User message ({d} chars)\n", .{decoded.len});
 
         // Check for attached image data (base64-encoded data URI from web UI)
         // If a vision encoder is available, decode and encode the image into
@@ -1850,6 +1843,7 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
             const hdr = std.fmt.bufPrint(&hdr_buf, "HTTP/1.1 405 Method Not Allowed\r\nContent-Type: application/json\r\nContent-Length: {d}\r\nAllow: {s}\r\nX-Request-Id: {d}\r\n{s}" ++ security_headers ++ "Connection: close\r\n\r\n", .{ body.len, ep.allow, log_request_id, cors_405 }) catch return;
             stream.writeAll(hdr) catch return;
             stream.writeAll(body) catch return;
+            g_server.metrics.recordFailure();
             logRequestDone(method, path, 405, elapsedMs(request_start));
             return;
         }
@@ -1858,6 +1852,7 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
     logRequest(method, path);
     g_server.metrics.recordRequest();
     sendJsonError(stream, "404 Not Found", "invalid_request_error", "Unknown endpoint");
+    g_server.metrics.recordFailure();
     logRequestDone(method, path, 404, elapsedMs(request_start));
 }
 
@@ -2091,7 +2086,7 @@ fn generateN(formatted: []const u8, reset: bool, max_tokens: usize, sampling: Sa
 
         // Block until request completes
         while (!req.is_finished.load(.acquire) and !req.is_cancelled.load(.acquire)) {
-            if (req.tokens.items.len >= max_tokens) {
+            if (req.visible_len.load(.acquire) >= max_tokens) {
                 req.is_cancelled.store(true, .release);
                 break;
             }
@@ -2100,7 +2095,7 @@ fn generateN(formatted: []const u8, reset: bool, max_tokens: usize, sampling: Sa
 
         const gen_end = milliTimestamp();
         const time_ms = @as(u64, @intCast(@max(gen_end - gen_start, 0)));
-        const token_count: u32 = @intCast(req.tokens.items.len);
+        const token_count: u32 = req.visible_len.load(.acquire);
         const tokens_per_sec: f32 = tokensPerSec(token_count, time_ms);
 
         const decoded = tok.decode(req.tokens.items) catch |err| d: {
@@ -2120,7 +2115,7 @@ fn generateN(formatted: []const u8, reset: bool, max_tokens: usize, sampling: Sa
 
         return .{
             .data = decoded,
-            .finish_reason = if (req.is_finished.load(.acquire)) "stop" else if (req.tokens.items.len >= max_tokens) "length" else "error",
+            .finish_reason = if (req.is_finished.load(.acquire)) "stop" else if (token_count >= max_tokens) "length" else "error",
             .stats = .{
                 .tokens_generated = token_count,
                 .prompt_tokens = prompt_token_count,
@@ -2181,10 +2176,10 @@ fn generateN(formatted: []const u8, reset: bool, max_tokens: usize, sampling: Sa
     const use_grammar = (sampling.grammar_string != null or sampling.json_schema != null) and !sampling.json_mode;
     if (sampling.json_schema) |schema| {
         grammar_storage = grammar_mod.Grammar.fromJsonSchema(g_server.allocator, schema) catch null;
-        if (grammar_storage) |*g| grammar_state_storage = g.initState();
+        if (grammar_storage) |*g| grammar_state_storage = g.initState() catch null;
     } else if (sampling.grammar_string) |gs| {
         grammar_storage = grammar_mod.Grammar.parse(g_server.allocator, gs) catch null;
-        if (grammar_storage) |*g| grammar_state_storage = g.initState();
+        if (grammar_storage) |*g| grammar_state_storage = g.initState() catch null;
     }
 
     if (token_ids.len > 0) {
@@ -2217,16 +2212,20 @@ fn generateN(formatted: []const u8, reset: bool, max_tokens: usize, sampling: Sa
         // Accept first token in grammar state
         if (use_grammar and grammar_state_storage != null) {
             const tok_slice = [1]u32{first_gen_token};
-            const text = g_server.tokenizer.decode(@constCast(&tok_slice)) catch "";
-            grammar_state_storage.?.acceptToken(text);
+            const text = g_server.tokenizer.decode(@constCast(&tok_slice)) catch null;
+            defer if (text) |t| g_server.allocator.free(t);
+            grammar_state_storage.?.acceptToken(text orelse "");
         }
         // Track JSON depth for first token
         if (sampling.json_mode) {
             const tok_slice = [1]u32{first_gen_token};
-            const text = g_server.tokenizer.decode(@constCast(&tok_slice)) catch "";
-            for (text) |ch| {
-                if (ch == '{' or ch == '[') json_depth += 1;
-                if (ch == '}' or ch == ']') json_depth -= 1;
+            const text = g_server.tokenizer.decode(@constCast(&tok_slice)) catch null;
+            defer if (text) |t| g_server.allocator.free(t);
+            if (text) |t| {
+                for (t) |ch| {
+                    if (ch == '{' or ch == '[') json_depth += 1;
+                    if (ch == '}' or ch == ']') json_depth -= 1;
+                }
             }
         }
     }
@@ -2362,11 +2361,12 @@ fn generateN(formatted: []const u8, reset: bool, max_tokens: usize, sampling: Sa
             gen_tokens[token_count] = next;
             // Decode token text for grammar/JSON/stop checks
             const needs_text = use_grammar or sampling.json_mode or sampling.hasStop();
-            var tok_text: []const u8 = "";
-            if (needs_text) {
+            const tok_text_alloc: ?[]u8 = if (needs_text) blk: {
                 const tok_slice = [1]u32{next};
-                tok_text = g_server.tokenizer.decode(@constCast(&tok_slice)) catch "";
-            }
+                break :blk g_server.tokenizer.decode(@constCast(&tok_slice)) catch null;
+            } else null;
+            defer if (tok_text_alloc) |t| g_server.allocator.free(t);
+            const tok_text: []const u8 = tok_text_alloc orelse "";
             // Accept token in grammar state
             if (use_grammar and grammar_state_storage != null) {
                 grammar_state_storage.?.acceptToken(tok_text);
@@ -2394,8 +2394,9 @@ fn generateN(formatted: []const u8, reset: bool, max_tokens: usize, sampling: Sa
                 // Build trailing window from recent tokens
                 const window_start = if (token_count > 8) token_count - 8 else 0;
                 const window_tokens = gen_tokens[window_start .. token_count + 1];
-                const window_text = g_server.tokenizer.decode(@constCast(window_tokens)) catch "";
-                if (sampling.matchesStop(window_text)) {
+                const window_text = g_server.tokenizer.decode(@constCast(window_tokens)) catch null;
+                defer if (window_text) |wt| g_server.allocator.free(wt);
+                if (sampling.matchesStop(window_text orelse "")) {
                     token_count += 1;
                     hit_eog = true;
                     break;
@@ -2818,7 +2819,7 @@ fn generateAnthropicStream(stream: TcpStream, formatted: []const u8, max_tokens:
 
         var anth_client_connected = true;
         while (!req.is_finished.load(.acquire) and !req.is_cancelled.load(.acquire)) {
-            const current_len = req.tokens.items.len;
+            const current_len = req.visible_len.load(.acquire);
             while (streamed_count < current_len) {
                 if (!streamAnthropicDelta(stream, tok, req.tokens.items[streamed_count])) {
                     anth_client_connected = false;
@@ -2837,7 +2838,7 @@ fn generateAnthropicStream(stream: TcpStream, formatted: []const u8, max_tokens:
         }
 
         // Drain remaining tokens
-        const final_len = req.tokens.items.len;
+        const final_len = req.visible_len.load(.acquire);
         while (anth_client_connected and streamed_count < final_len and token_count < max_tokens) {
             if (!streamAnthropicDelta(stream, tok, req.tokens.items[streamed_count])) break;
             streamed_count += 1;
@@ -3163,7 +3164,7 @@ fn generateResponsesStream(stream: TcpStream, prompt: []const u8, max_tokens: us
 
         var resp_client_connected = true;
         while (!req.is_finished.load(.acquire) and !req.is_cancelled.load(.acquire)) {
-            const current_len = req.tokens.items.len;
+            const current_len = req.visible_len.load(.acquire);
             while (streamed_count < current_len) {
                 if (!streamResponsesDelta(stream, tok, req.tokens.items[streamed_count])) {
                     resp_client_connected = false;
@@ -3182,7 +3183,7 @@ fn generateResponsesStream(stream: TcpStream, prompt: []const u8, max_tokens: us
         }
 
         // Drain remaining tokens
-        const final_len = req.tokens.items.len;
+        const final_len = req.visible_len.load(.acquire);
         while (resp_client_connected and streamed_count < final_len and token_count < max_tokens) {
             if (!streamResponsesDelta(stream, tok, req.tokens.items[streamed_count])) break;
             streamed_count += 1;
@@ -3579,7 +3580,7 @@ fn generateStream(stream: TcpStream, prompt: []const u8, req_id: u64, created: i
         var chunk_client_connected = true;
         while (!req.is_finished.load(.acquire) and !req.is_cancelled.load(.acquire)) {
             // Stream any new tokens since last poll
-            const current_len = req.tokens.items.len;
+            const current_len = req.visible_len.load(.acquire);
             while (streamed_count < current_len) {
                 const token_id = req.tokens.items[streamed_count];
                 if (!streamChunk(stream, &chunk_buf, tok, token_id, req_id, created, is_chat)) {
@@ -3599,7 +3600,7 @@ fn generateStream(stream: TcpStream, prompt: []const u8, req_id: u64, created: i
         }
 
         // Drain any remaining tokens after completion
-        const final_len = req.tokens.items.len;
+        const final_len = req.visible_len.load(.acquire);
         while (chunk_client_connected and streamed_count < final_len and token_count < max_tokens) {
             const token_id = req.tokens.items[streamed_count];
             if (!streamChunk(stream, &chunk_buf, tok, token_id, req_id, created, is_chat)) break;
@@ -3661,10 +3662,10 @@ fn generateStream(stream: TcpStream, prompt: []const u8, req_id: u64, created: i
     const use_grammar_s = (sampling.grammar_string != null or sampling.json_schema != null) and !sampling.json_mode;
     if (sampling.json_schema) |schema| {
         s_grammar = grammar_mod_s.Grammar.fromJsonSchema(g_server.allocator, schema) catch null;
-        if (s_grammar) |*g| s_grammar_state = g.initState();
+        if (s_grammar) |*g| s_grammar_state = g.initState() catch null;
     } else if (sampling.grammar_string) |gs| {
         s_grammar = grammar_mod_s.Grammar.parse(g_server.allocator, gs) catch null;
-        if (s_grammar) |*g| s_grammar_state = g.initState();
+        if (s_grammar) |*g| s_grammar_state = g.initState() catch null;
     }
 
     // Prefill — capture the last forward's return value (first generated token)
@@ -3710,8 +3711,9 @@ fn generateStream(stream: TcpStream, prompt: []const u8, req_id: u64, created: i
     // Accept first token in grammar
     if (use_grammar_s and s_grammar_state != null and token_ids.len > 0) {
         const ft_slice = [1]u32{first_gen_token};
-        const ft_text = g_server.tokenizer.decode(@constCast(&ft_slice)) catch "";
-        s_grammar_state.?.acceptToken(ft_text);
+        const ft_text = g_server.tokenizer.decode(@constCast(&ft_slice)) catch null;
+        defer if (ft_text) |t| g_server.allocator.free(t);
+        s_grammar_state.?.acceptToken(ft_text orelse "");
     }
 
     // Generate and stream tokens
@@ -3842,8 +3844,9 @@ fn generateStream(stream: TcpStream, prompt: []const u8, req_id: u64, created: i
             // Accept in grammar
             if (use_grammar_s and s_grammar_state != null) {
                 const stok_slice = [1]u32{next};
-                const stext = g_server.tokenizer.decode(@constCast(&stok_slice)) catch "";
-                s_grammar_state.?.acceptToken(stext);
+                const stext = g_server.tokenizer.decode(@constCast(&stok_slice)) catch null;
+                defer if (stext) |st| g_server.allocator.free(st);
+                s_grammar_state.?.acceptToken(stext orelse "");
                 if (s_grammar_state.?.isComplete()) {
                     if (!streamChunkLogprobs(stream, &chunk_buf, tok, next, req_id, created, is_chat, lp)) stream_disconnected = true;
                     token_count += 1;
@@ -3853,8 +3856,9 @@ fn generateStream(stream: TcpStream, prompt: []const u8, req_id: u64, created: i
             // Stop sequence check (decode token, check trailing text)
             if (sampling.hasStop()) {
                 const stok = [1]u32{next};
-                const stext = g_server.tokenizer.decode(@constCast(&stok)) catch "";
-                if (stext.len > 0 and sampling.matchesStop(stext)) {
+                const stext = g_server.tokenizer.decode(@constCast(&stok)) catch null;
+                defer if (stext) |st| g_server.allocator.free(st);
+                if (stext != null and stext.?.len > 0 and sampling.matchesStop(stext.?)) {
                     token_count += 1;
                     break;
                 }
@@ -3917,7 +3921,9 @@ fn handleConnection(stream: TcpStream) void {
     // Disable Nagle's algorithm — SSE streaming writes small token chunks (~20-100 bytes)
     // that Nagle would buffer for up to 200ms waiting for ACK coalescing.
     const nodelay: [1]u8 = .{1};
-    std.posix.setsockopt(stream.handle, std.posix.IPPROTO.TCP, std.posix.TCP.NODELAY, &nodelay) catch {};
+    std.posix.setsockopt(stream.handle, std.posix.IPPROTO.TCP, std.posix.TCP.NODELAY, &nodelay) catch |err| {
+        std.log.warn("Failed to set TCP_NODELAY: {}", .{err});
+    };
 
     _ = g_server.metrics.active_connections.fetchAdd(1, .monotonic);
     defer {

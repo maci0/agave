@@ -63,7 +63,7 @@
 <div id="sr-announce" class="sr-only" aria-live="polite" aria-atomic="true"></div>
 <form id="chat-form" onsubmit="return onSubmit(event)" aria-label="Chat">
 <div id="img-preview" class="img-preview" style="display:none">
-<img id="img-thumb" alt="Image preview">
+<img id="img-thumb" alt="Attached image preview">
 <button type="button" class="img-remove" onclick="removeImage()" aria-label="Remove image">&times;</button>
 </div>
 <div class="settings-panel" id="settings-panel" role="region" aria-label="Sampling settings">
@@ -78,7 +78,7 @@
 </div>
 <div class="setting-group">
 <label for="max-tokens">Max Tokens</label>
-<input type="number" id="max-tokens" min="1" max="4096" value="512" inputmode="numeric">
+<input type="number" id="max-tokens" min="1" max="4096" value="512" inputmode="numeric" aria-describedby="max-tokens-range"><span id="max-tokens-range" class="sr-only">Range: 1 to 4096</span>
 </div>
 </div>
 <div class="system-prompt-group">

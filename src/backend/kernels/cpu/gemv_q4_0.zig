@@ -160,7 +160,7 @@ test "gemvQ4_0 all zeros (nibble 8 bias cancels)" {
     for (&x) |*v| v.* = 1.0;
     var y: [4]f32 = undefined;
     gemvQ4_0(&x, &w, &y, 4, 32);
-    for (0..4) |i| try std.testing.expectApproxEqAbs(@as(f32, 0.0), y[i], 0.01);
+    for (0..4) |i| try std.testing.expectApproxEqAbs(@as(f32, 0.0), y[i], 1e-4);
 }
 
 test "gemvQ4_0 uniform positive weights" {
@@ -180,7 +180,7 @@ test "gemvQ4_0 uniform positive weights" {
     for (&x) |*v| v.* = 1.0;
     var y: [4]f32 = undefined;
     gemvQ4_0(&x, &w, &y, 4, 32);
-    for (0..4) |i| try std.testing.expectApproxEqAbs(@as(f32, 32.0), y[i], 0.01);
+    for (0..4) |i| try std.testing.expectApproxEqAbs(@as(f32, 32.0), y[i], 1e-4);
 }
 
 test "gemvQ4_0 negative weights" {
@@ -200,7 +200,7 @@ test "gemvQ4_0 negative weights" {
     for (&x) |*v| v.* = 1.0;
     var y: [2]f32 = undefined;
     gemvQ4_0(&x, &w, &y, 2, 32);
-    for (0..2) |i| try std.testing.expectApproxEqAbs(@as(f32, -96.0), y[i], 0.01);
+    for (0..2) |i| try std.testing.expectApproxEqAbs(@as(f32, -96.0), y[i], 1e-4);
 }
 
 test "gemvQ4_0 single row scalar tail" {
@@ -218,5 +218,5 @@ test "gemvQ4_0 single row scalar tail" {
     for (&x) |*v| v.* = 1.0;
     var y: [1]f32 = undefined;
     gemvQ4_0(&x, &w, &y, 1, 32);
-    try std.testing.expectApproxEqAbs(@as(f32, 32.0), y[0], 0.1);
+    try std.testing.expectApproxEqAbs(@as(f32, 32.0), y[0], 0.01);
 }

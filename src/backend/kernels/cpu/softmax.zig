@@ -145,6 +145,12 @@ test "softmax all-negative underflow stability" {
     for (1..4) |i| try std.testing.expect(data[i] < data[i - 1]);
 }
 
+test "softmax all zeros produces uniform distribution" {
+    var data = [_]f32{ 0.0, 0.0, 0.0, 0.0 };
+    softmaxSimd(4, &data, 4);
+    for (&data) |v| try std.testing.expectApproxEqAbs(@as(f32, 0.25), v, 1e-6);
+}
+
 test "softmax two elements verifies exact ratio" {
     // softmax([a, b]) = [1/(1+exp(b-a)), exp(b-a)/(1+exp(b-a))]
     // For [0, ln(2)]: ratio p1/p0 = exp(ln(2)) = 2, so p0 = 1/3, p1 = 2/3.

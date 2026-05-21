@@ -18,7 +18,27 @@ fetch('/v1/models').then(function(r) { return r.json(); }).then(function(d) {
     badge.title = modelName;
     updateCtxBadge(d.data[0]);
   }
-}).catch(function() { document.getElementById('model-name').textContent = 'offline'; });
+}).catch(function() { setOfflineBadge(); });
+
+function setOfflineBadge() {
+  var badge = document.getElementById('model-name');
+  badge.textContent = 'offline — click to retry';
+  badge.style.cursor = 'pointer';
+  badge.onclick = function() {
+    badge.textContent = 'loading...';
+    badge.style.cursor = '';
+    badge.onclick = null;
+    fetch('/v1/models').then(function(r) { return r.json(); }).then(function(d) {
+      if (d.data && d.data[0]) {
+        modelName = d.data[0].id;
+        backendName = d.data[0].backend || '';
+        badge.textContent = modelName;
+        badge.title = modelName;
+        updateCtxBadge(d.data[0]);
+      } else { setOfflineBadge(); }
+    }).catch(function() { setOfflineBadge(); });
+  };
+}
 
 // Load system prompt from localStorage
 var savedSystemPrompt = localStorage.getItem('agave_system_prompt');
@@ -190,8 +210,10 @@ function setStreaming(s) {
   if (s) {
     streamTokenCount = 0; streamStartTime = performance.now();
     tc.textContent = '0.0 tok/s'; tc.classList.add('visible');
+    announceToSR('Generating response…');
   } else {
     tc.classList.remove('visible');
+    announceToSR('Response complete.');
   }
 }
 
@@ -224,6 +246,7 @@ function toggleSettings() {
   var open = panel.classList.toggle('open');
   btn.classList.toggle('active', open);
   btn.setAttribute('aria-expanded', open);
+  announceToSR('Settings panel ' + (open ? 'opened' : 'closed'));
 }
 
 function clearSystemPrompt() {
@@ -687,8 +710,10 @@ function deleteConv(id) {
   });
 }
 
+var infoTrigger = null;
 function showInfo() {
   var m = document.getElementById('info-modal'); m.classList.add('show');
+  infoTrigger = document.activeElement;
   document.getElementById('info-model').textContent = modelName || '-';
   document.getElementById('info-backend').textContent = backendName || '-';
   var cb = m.querySelector('.modal-close'); if (cb) cb.focus();
@@ -706,7 +731,9 @@ function showInfo() {
 function hideInfo() {
   var m = document.getElementById('info-modal'); m.classList.remove('show');
   if (m._trapFocus) { m.removeEventListener('keydown', m._trapFocus); m._trapFocus = null; }
-  inp.focus();
+  if (infoTrigger && infoTrigger.offsetParent !== null) infoTrigger.focus();
+  else inp.focus();
+  infoTrigger = null;
 }
 
 loadConvs();

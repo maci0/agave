@@ -16,7 +16,7 @@ agave model.gguf --megakernel "prompt"     # Fused FFN (active)
 agave model.gguf "prompt"                  # Standard dispatch (default)
 ```
 
-Supported: Qwen 3.5, Gemma 3/4, GLM-4 on Metal. Qwen 3.5 on CUDA.
+Supported: Qwen 3.5, Gemma 3/4, Nemotron-H, GLM-4 on Metal. Qwen 3.5, Gemma 3/4 on CUDA. Qwen 3.5 on ROCm.
 
 ## Tier 1: Fused FFN Kernels (Active)
 
@@ -38,9 +38,9 @@ Fuses gate GEMV + up GEMV + activation into a single dispatch per FFN layer. Sav
 | `fused_ffn_gate_up_gelu_q6_k` | GELU | Q6_K | Gemma 3/4 |
 | `fused_ffn_gate_up_gelu_q4_0` | GELU | Q4_0 | Gemma 3/4 |
 
-### CUDA — 1 kernel in `fused_ffn_q8_0.zig`
+### CUDA — 4 kernel files (Q8_0, Q4_K, Q5_K, Q6_K)
 
-Q8_0 SiLU variant. PTX compiled and appended to `all.ptx`.
+SiLU + GELU variants per quant format. PTX compiled and appended to `all.ptx`.
 
 ### Performance (M4 Pro 48GB)
 

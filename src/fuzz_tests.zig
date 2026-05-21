@@ -48,8 +48,12 @@ test "fuzz: JSON escape" {
             smith.bytesWithHash(&buf, 0);
             const len = smith.indexWithHash(buf.len + 1, 1);
             const input = buf[0..len];
-            const result = json.jsonEscape(std.testing.allocator, input) catch return;
-            if (result.ptr != input.ptr) std.testing.allocator.free(result);
+            const escaped = json.jsonEscape(std.testing.allocator, input) catch return;
+            defer if (escaped.ptr != input.ptr) std.testing.allocator.free(escaped);
+            // Roundtrip invariant: unescape(escape(x)) == x
+            const unescaped = json.jsonUnescape(std.testing.allocator, escaped) catch return;
+            defer if (unescaped.ptr != escaped.ptr) std.testing.allocator.free(unescaped);
+            try std.testing.expectEqualSlices(u8, input, unescaped);
         }
     }.f, .{});
 }
@@ -191,6 +195,13 @@ test "fuzz: kvStore + kvDot roundtrip" {
             for (&query, 0..) |*v, i| v.* = @as(f32, @floatFromInt(smith.valueWithHash(i8, @truncate(i + 50)))) / 10.0;
             const dot = kv_quant.kvDot(&query, &kv_buf, n, kv_type);
             try std.testing.expect(std.math.isFinite(dot));
+            // Reference f32 dot product for approximate correctness
+            var ref: f32 = 0;
+            for (0..n) |i| ref += query[i] * src[i];
+            // Quantization error scales with magnitude; allow 20% relative or 1.0 absolute
+            const err = @abs(dot - ref);
+            const threshold = @max(1.0, @abs(ref) * 0.2);
+            try std.testing.expect(err < threshold);
         }
     }.f, .{});
 }

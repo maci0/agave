@@ -13,8 +13,6 @@ const Allocator = std.mem.Allocator;
 const backend_mod = @import("backend/backend.zig");
 const format_mod = @import("format/format.zig");
 const model_mod = @import("models/model.zig");
-const arch_mod = @import("arch.zig");
-const Arch = arch_mod.Arch;
 const display_mod = @import("display.zig");
 const kv_evict = @import("ops/kv_evict.zig");
 
@@ -23,9 +21,6 @@ const BackendState = backend_mod.BackendState;
 const Format = format_mod.Format;
 const GGUFFile = format_mod.GGUFFile;
 const SafeTensorsDir = format_mod.SafeTensorsDir;
-
-const kv_quant = @import("ops/kv_quant.zig");
-const KvQuantType = kv_quant.KvQuantType;
 
 // ── Named constants ──────────────────────────────────────────────────────────
 
@@ -39,13 +34,8 @@ const default_output_filename: []const u8 = "calibration.cal";
 const cal_magic: [4]u8 = .{ 'A', 'C', 'A', 'L' };
 /// File format version.
 const cal_version: u32 = 1;
-/// Number of random input vectors per layer for weight-based calibration.
-const calibration_vectors_per_layer: usize = 512;
 /// Seed for the calibration PRNG.
 const calibration_seed: u64 = 0xCAFE_BABE_DEAD_BEEF;
-/// Number of layer-0 tensor name candidates to probe for Q weight dims.
-const max_q_tensor_probes: usize = 2;
-
 const Io = std.Io;
 
 /// Standard I/O file handles via std.Io.File (Zig 0.16 idiom).
@@ -119,8 +109,25 @@ pub fn printUsage() void {
 fn parseArgs(args_iter: *std.process.Args.Iterator) ?CalibrateArgs {
     var result = CalibrateArgs{ .model_path = "" };
     var have_model = false;
+    var past_double_dash = false;
 
     while (args_iter.next()) |arg| {
+        if (past_double_dash) {
+            if (have_model) {
+                eprint("Error: unexpected argument '{s}'\n", .{arg});
+                eprint("Run 'agave calibrate --help' for more information.\n", .{});
+                std.process.exit(1);
+            }
+            result.model_path = arg;
+            have_model = true;
+            continue;
+        }
+
+        if (std.mem.eql(u8, arg, "--")) {
+            past_double_dash = true;
+            continue;
+        }
+
         if (std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h") or std.mem.eql(u8, arg, "help")) {
             printUsage();
             return null;
@@ -275,7 +282,6 @@ fn runCalibration(
     allocator: Allocator,
     fmt: Format,
     be: Backend,
-    arch_str: []const u8,
     n_tokens: u32,
     n_layers: u32,
     n_q_heads: u32,
@@ -393,8 +399,6 @@ fn runCalibration(
     // Clean up accumulators
     for (accumulators) |*acc| acc.deinit(allocator);
     allocator.free(accumulators);
-
-    _ = arch_str;
 
     return .{
         .n_layers = n_layers,
@@ -663,7 +667,6 @@ pub fn run(allocator: Allocator, io: Io, process_args: std.process.Args) u8 {
         allocator,
         fmt,
         be,
-        arch_str,
         args.n_tokens,
         n_layers,
         n_q_heads,

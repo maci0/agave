@@ -1345,7 +1345,10 @@ pub const Qwen35Model = struct {
                     // For TCP/shm: sync after norm so ffnCompute reads correct host data.
                     self.be.sync();
                     try self.ffnCompute(l);
-                    transport.allReduceAdd(self.hidden2.ptr, e) catch {};
+                    transport.allReduceAdd(self.hidden2.ptr, e) catch |err| {
+                        std.log.err("allReduceAdd failed: {}", .{err});
+                        return error.MissingTensor;
+                    };
                     continue;
                 }
 

@@ -463,6 +463,34 @@ test "embQ4_K dequantizes zero nibbles" {
     }
 }
 
+test "embQ4_K dequantizes non-zero nibbles" {
+    // Q4_K: d=2.0, dmin=0.0, sc=1, all nibbles=5.
+    // Dequant: d * sc * nibble - dmin * m = 2.0 * 1 * 5 = 10.0
+    const dim = quant_super_block_elems;
+    var block: [q4_k_block_bytes]u8 = @splat(0);
+    // d = f16(2.0) = 0x4000 LE
+    block[0] = 0x00;
+    block[1] = 0x40;
+    // dmin = f16(0.0) (already zero)
+    // scales: sc=1, m=0
+    block[4] = 1;
+    block[5] = 1;
+    block[6] = 1;
+    block[7] = 1;
+    block[12] = 1;
+    block[13] = 1;
+    block[14] = 1;
+    block[15] = 1;
+    // qs[128]: all nibbles = 5 → each byte = 0x55
+    for (16..144) |i| block[i] = 0x55;
+
+    var out: [dim]f32 = undefined;
+    embQ4_K(&block, 0, &out, dim);
+    for (0..dim) |i| {
+        try std.testing.expectApproxEqAbs(@as(f32, 10.0), out[i], 1e-2);
+    }
+}
+
 test "embLookup f32 smoke" {
     const dim = 4;
     var dummy_data = [_]u8{0} ** 256;

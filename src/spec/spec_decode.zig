@@ -415,3 +415,22 @@ test "SpecState init and stats" {
     try std.testing.expectApproxEqAbs(@as(f32, 0.8), s.acceptanceRate(), 0.01);
     try std.testing.expectApproxEqAbs(@as(f32, 4.0), s.meanAccepted(), 0.01);
 }
+
+test "SpecState recordRound updates stats" {
+    var s = try SpecState.init(std.testing.allocator, 5, 100);
+    defer s.deinit(std.testing.allocator);
+
+    s.n_draft = 5;
+    s.recordRound(4);
+    try std.testing.expectEqual(@as(u32, 4), s.total_accepted);
+    try std.testing.expectEqual(@as(u32, 5), s.total_drafted);
+    try std.testing.expectEqual(@as(u32, 1), s.total_rounds);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.8), s.acceptanceRate(), 0.01);
+
+    s.n_draft = 3;
+    s.recordRound(3);
+    try std.testing.expectEqual(@as(u32, 7), s.total_accepted);
+    try std.testing.expectEqual(@as(u32, 8), s.total_drafted);
+    try std.testing.expectEqual(@as(u32, 2), s.total_rounds);
+    try std.testing.expectApproxEqAbs(@as(f32, 3.5), s.meanAccepted(), 0.01);
+}

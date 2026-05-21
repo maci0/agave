@@ -9,9 +9,10 @@
 //!   - int8:      Block-quantized INT8 with f32 scale per 32 elements (1.125 B/elem)
 //!   - fp8_e4m3:  FP8 E4M3 format (1 byte/element, hardware-native on Hopper+)
 //!   - nvfp4:     NVFP4 E2M1 with FP8 scale per 16 elements (0.5625 B/elem)
-//!   - turbo2:    TurboQuant 2-bit — WHT + Lloyd-Max codebook (2.5 bits/elem)
-//!   - turbo3:    TurboQuant 3-bit — WHT + Lloyd-Max codebook (3.5 bits/elem)
-//!   - turbo4:    TurboQuant 4-bit — WHT + Lloyd-Max codebook (4.5 bits/elem)
+//!   - turbo2-4:  TurboQuant — WHT + Lloyd-Max codebook (2.5/3.5/4.5 bits/elem)
+//!   - planar2-4: PlanarQuant — Givens 2D rotation + Lloyd-Max (same sizes as turbo)
+//!   - iso2-4:    IsoQuant — Quaternion 4D rotation + Lloyd-Max (same sizes as turbo)
+//!   - rotor2-4:  RotorQuant — Clifford Cl(3,0) rotor rotation + Lloyd-Max (same sizes as turbo)
 
 const std = @import("std");
 const quant = @import("quant.zig");
@@ -45,7 +46,7 @@ const fp8_e4m3_max_biased_exp: u8 = 15;
 
 // ── TurboQuant constants ─────────────────────────────────────────
 
-/// TurboQuant / PlanarQuant / IsoQuant block size: 32 elements.
+/// TurboQuant / PlanarQuant / IsoQuant / RotorQuant block size: 32 elements.
 const turbo_block_size: usize = 32;
 /// 2-bit block: f16 norm (2 bytes) + 64 packed bits = 10 bytes.
 pub const turbo2_block_bytes: usize = 10;
