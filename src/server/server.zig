@@ -883,9 +883,11 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
 
         var buf: [models_json_buf_size]u8 = undefined;
         const kv_pos = g_server.model.kvSeqLen();
+        const has_vision = g_server.vision_encoder != null;
+        const mtp_depth = g_server.model.getMtpDepth();
         const json_body = std.fmt.bufPrint(&buf,
-            \\{{"object":"list","data":[{{"id":"{s}","object":"model","created":{d},"owned_by":"agave","backend":"{s}","kv_seq_len":{d},"ctx_size":{d}}}]}}
-        , .{ g_server.model_name, g_server.start_time, g_server.backend_name, kv_pos, g_server.ctx_size }) catch {
+            \\{{"object":"list","data":[{{"id":"{s}","object":"model","created":{d},"owned_by":"agave","backend":"{s}","kv_seq_len":{d},"ctx_size":{d},"n_layers":{d},"n_embd":{d},"vocab_size":{d},"vision":{s},"mtp_depth":{d}}}]}}
+        , .{ g_server.model_name, g_server.start_time, g_server.backend_name, kv_pos, g_server.ctx_size, g_server.model.nLayers(), g_server.model.nEmbd(), g_server.model.vocabSize(), if (has_vision) "true" else "false", mtp_depth }) catch {
             sendJsonError(stream, "500 Internal Server Error", "server_error", "Response too large");
             g_server.metrics.recordFailure();
             logRequestDone(method, path, 500, elapsedMs(request_start));

@@ -245,8 +245,12 @@ curl http://localhost:49453/v1/models
 
 **Response:**
 ```json
-{"object":"list","data":[{"id":"model-name","object":"model","created":1700000000,"owned_by":"agave","backend":"metal","kv_seq_len":0,"ctx_size":4096}]}
+{"object":"list","data":[{"id":"model-name","object":"model","created":1700000000,"owned_by":"agave",
+  "backend":"metal","kv_seq_len":0,"ctx_size":4096,"n_layers":64,"n_embd":4096,
+  "vocab_size":248320,"vision":false,"mtp_depth":0}]}
 ```
+
+Additional fields beyond OpenAI spec: `backend` (compute backend), `kv_seq_len` (current KV cache position), `ctx_size` (max context), `n_layers`/`n_embd`/`vocab_size` (model dimensions), `vision` (multimodal support), `mtp_depth` (MTP prediction depth, 0=none).
 
 ### GET /health
 
