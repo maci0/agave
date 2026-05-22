@@ -497,7 +497,10 @@ pub fn extractMessages(json: []const u8, allocator: Allocator) ?ExtractedMessage
         const obj_slice = json[obj_start..obj_end];
 
         const role_str = extractField(obj_slice, "role") orelse continue;
-        const content = extractField(obj_slice, "content") orelse continue;
+        // Content can be a string or an array of content parts (OpenAI vision format).
+        // Array format: [{"type":"text","text":"..."}, {"type":"image_url",...}]
+        const content = extractField(obj_slice, "content") orelse
+            extractTextFromContentArray(obj_slice) orelse continue;
         const owned_content = jsonUnescapeOwned(allocator, content) catch continue;
 
         if (std.mem.eql(u8, role_str, "system")) {
@@ -609,23 +612,59 @@ pub fn extractFormImage(body: []const u8) ?[]const u8 {
     return null;
 }
 
-/// Extract base64 image data from an OpenAI-format JSON body.
-/// Searches for a data URI pattern "data:image/...;base64,..." inside the JSON,
-/// typically within an "image_url" content part. Returns the raw base64 string
-/// between the "base64," marker and the next quote, or null if not found.
-/// The returned slice points into the original body — valid for the request lifetime.
+/// Extract text from an OpenAI-format content array.
+/// Handles `"content": [{"type":"text","text":"What's in this image?"}, ...]`
+/// Returns the "text" field from the first text-type content part, or null.
+fn extractTextFromContentArray(obj: []const u8) ?[]const u8 {
+    const arr = extractObjectField(obj, "content") orelse return null;
+    if (arr.len == 0 or arr[0] != '[') return null;
+    const text_type = "\"text\"";
+    var pos: usize = 0;
+    while (pos < arr.len) {
+        const type_pos = std.mem.indexOfPos(u8, arr, pos, "\"type\"") orelse break;
+        pos = type_pos + 6;
+        // Check if this part is type "text"
+        const val_start = skipToJsonValue(arr, pos) orelse continue;
+        const val_end = findJsonStringEnd(arr, val_start);
+        const type_val = arr[val_start..val_end];
+        if (std.mem.eql(u8, type_val, "text")) {
+            // Found text type — extract its "text" field
+            const remaining = arr[val_end..];
+            _ = text_type;
+            return extractField(remaining, "text");
+        }
+        pos = val_end;
+    }
+    return null;
+}
+
+/// Extract base64 image data from a JSON body.
+/// Supports two formats:
+/// - OpenAI: `"image_url": {"url": "data:image/png;base64,..."}`
+/// - Anthropic: `"source": {"type": "base64", "data": "..."}`
+/// Returns the raw base64 string, or null if no image found.
 pub fn extractJsonImage(body: []const u8) ?[]const u8 {
+    // OpenAI format: data URI with base64
     const marker = "data:image/";
-    const idx = std.mem.indexOf(u8, body, marker) orelse return null;
-    const after = body[idx + marker.len ..];
-    const b64_marker = ";base64,";
-    const b64_idx = std.mem.indexOf(u8, after, b64_marker) orelse return null;
-    const start = idx + marker.len + b64_idx + b64_marker.len;
-    const remaining = body[start..];
-    // Find end — next quote (JSON string boundary) or end-of-string
-    const end = std.mem.indexOfScalar(u8, remaining, '"') orelse return null;
-    if (end == 0) return null;
-    return body[start .. start + end];
+    if (std.mem.indexOf(u8, body, marker)) |idx| {
+        const after = body[idx + marker.len ..];
+        const b64_marker = ";base64,";
+        if (std.mem.indexOf(u8, after, b64_marker)) |b64_idx| {
+            const start = idx + marker.len + b64_idx + b64_marker.len;
+            const remaining = body[start..];
+            const end = std.mem.indexOfScalar(u8, remaining, '"') orelse return null;
+            if (end > 0) return body[start .. start + end];
+        }
+    }
+    // Anthropic format: {"type": "base64", ..., "data": "..."}
+    if (std.mem.indexOf(u8, body, "\"base64\"")) |_| {
+        if (extractField(body, "data")) |data| {
+            if (data.len > 100 and std.mem.indexOf(u8, data[0..10], "image") == null) {
+                return data;
+            }
+        }
+    }
+    return null;
 }
 
 // ── URL decoding ────────────────────────────────────────────────
@@ -1248,4 +1287,18 @@ test "parseTools no tools" {
     const tp = parseTools(body);
     try std.testing.expectEqual(@as(u32, 0), tp.tool_count);
     try std.testing.expectEqualStrings("auto", tp.tool_choice);
+}
+
+test "extractTextFromContentArray" {
+    const obj =
+        \\{"role":"user","content":[{"type":"text","text":"What is in this image?"},{"type":"image_url","image_url":{"url":"data:image/png;base64,abc"}}]}
+    ;
+    const text = extractTextFromContentArray(obj) orelse unreachable;
+    try std.testing.expectEqualStrings("What is in this image?", text);
+}
+
+test "extractTextFromContentArray string content" {
+    const obj = \\{"role":"user","content":"hello"}
+    ;
+    try std.testing.expect(extractTextFromContentArray(obj) == null);
 }

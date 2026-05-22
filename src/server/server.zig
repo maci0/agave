@@ -1372,6 +1372,21 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
             return;
         }
 
+        // Vision: extract base64 image from content array (Anthropic format)
+        var anthropic_image_embedded = false;
+        if (json.extractJsonImage(body)) |b64_data| {
+            if (g_server.vision_encoder) |ve| {
+                if (processVisionImage(b64_data, ve)) {
+                    anthropic_image_embedded = true;
+                    slog("  Image attached and encoded\n", .{});
+                }
+            }
+        }
+        defer if (anthropic_image_embedded) {
+            g_server.model.setImageEmbeddings(null, 0, 0);
+            g_server.pending_visual_tokens = 0;
+        };
+
         if (json.extractBoolField(body, "stream")) {
             startAnthropicStream(stream, formatted_m, max_tokens_m, prompt_tokens_m, sampling_m);
             logRequestDone(method, path, 200, elapsedMs(request_start));

@@ -27,7 +27,7 @@ curl http://localhost:49453/v1/chat/completions -d '{
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| messages | array | required | `[{"role": "user/system/assistant", "content": "..."}]` |
+| messages | array | required | `[{"role": "user/system/assistant", "content": "..."}]` — content can be a string or an array of content parts (see [Vision](#vision)) |
 | max_tokens | int | 512 | Maximum tokens to generate, capped at 4096 (also accepts `max_completion_tokens`) |
 | temperature | float | 0 | 0 = greedy, >0 = sampling |
 | top_k | int | 0 | Top-k filtering, 0 = disabled |
@@ -319,6 +319,29 @@ curl localhost:49453/v1/chat/completions -d '{
   "grammar": "root ::= \"yes\" | \"no\""
 }'
 ```
+
+---
+
+## Vision
+
+Send images to multimodal models via base64 data URIs in the OpenAI content array format. Requires a model with vision support (Gemma 3/4, Qwen VL) loaded with `--mmproj` or a model that includes a built-in vision encoder.
+
+```bash
+curl http://localhost:49453/v1/chat/completions -d '{
+  "messages": [{
+    "role": "user",
+    "content": [
+      {"type": "text", "text": "What is in this image?"},
+      {"type": "image_url", "image_url": {"url": "data:image/png;base64,iVBORw0KGgo..."}}
+    ]
+  }],
+  "max_tokens": 200
+}'
+```
+
+The `content` field can be either a string (text only) or an array of content parts. Text parts (`"type": "text"`) provide the prompt; image parts (`"type": "image_url"`) provide the image as a base64 data URI. Only one image per request is supported. The image is processed by the vision encoder (SigLIP-2) and injected as visual tokens at the appropriate position in the prompt.
+
+Supported image formats: PNG, JPEG. Maximum resolution depends on the model (Gemma 4 E2B: 224×224, Gemma 4 26B: 768×768, Qwen VL: 448×448).
 
 ---
 

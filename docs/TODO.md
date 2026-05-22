@@ -75,13 +75,13 @@ All quantized GEMV formats native on all 6 backends. See [KERNELS.md](KERNELS.md
 | `agave pull` (HF Hub model download with resume) | — |
 | Deferred dispatch (Vulkan/WebGPU single-submit) | — |
 | All quantized GEMV kernel gaps closed (32 new kernel files) | — |
+| MTP speculative decoding (`--spec-mode mtp`, nextn heads) | llama.cpp |
 
 ### High Priority
 
 | # | Feature | Impact | Source |
 |---|---------|--------|--------|
 | 3 | Batched KV swap (cuMemcpyBatchAsync) | Reduce tiered cache API overhead | vLLM |
-| 5 | MTP (Multi-Token Prediction) heads | Native multi-token output for Qwen3.6/DeepSeek | llama.cpp |
 
 ### Medium Priority
 
