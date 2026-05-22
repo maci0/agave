@@ -79,7 +79,7 @@ Qwen/GPT-style tokenizers use **byte-level** encoding where every possible byte 
 
 ## Embedding Lookup
 
-The first operation in the forward pass converts a token ID into a **vector** (a 1D array of numbers). The model has an **embedding table** — a **matrix** (a 2D array) of shape `[vocab_size × n_embd]` where `vocab_size` is the total number of tokens in the vocabulary (e.g., 128K) and `n_embd` is the **embedding dimension** (the size/length of each vector — how many numbers it contains, typically 1024–8192 floating-point numbers). Each row is the learned representation of one token.
+The first operation in the forward pass converts a token ID into a **vector** (a 1D array of numbers). The model has an **embedding** (a learned numerical representation — a fixed-size array of floats that encodes the token's meaning) **table** — a **matrix** (a 2D array) of shape `[vocab_size × n_embd]` where `vocab_size` is the total number of tokens in the vocabulary (e.g., 128K) and `n_embd` is the **embedding dimension** (the size/length of each vector — how many numbers it contains, typically 1024–8192 floating-point numbers). Each row is the learned representation of one token.
 
 **Note on terminology:** Machine learning uses the term **tensor** for multi-dimensional arrays — a **scalar** (single number, 0D), vector (1D), matrix (2D), or higher-dimensional array (3D, 4D, etc.) are all tensors. Throughout this tutorial we use the more specific terms (scalar/vector/matrix) since nearly all operations are 0D, 1D, or 2D, but you'll see "tensor" in the code and documentation referring to these same arrays.
 

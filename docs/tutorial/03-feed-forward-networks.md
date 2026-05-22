@@ -73,6 +73,7 @@ Expert selection uses **stack-allocated** arrays (fixed-size buffers on the call
 
 | Model | Routed Experts | Top-K | Shared Expert | Routing |
 | :--- | :--- | :--- | :--- | :--- |
+| Qwen 3.5/3.6 MoE | 128/256 | 8 | Yes (1) | Softmax |
 | GPT-OSS | 32 | 4 | No | Softmax |
 | GLM-4 | varies | varies | No | Sigmoid (independent gates) |
 | Nemotron-Nano | 128 | 6 | Yes (1, 2× hidden dim) | Softmax |

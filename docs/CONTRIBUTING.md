@@ -325,9 +325,12 @@ Transports are implemented in `src/parallel/transport.zig`. Each transport must 
 
 ### Transport Selection
 
-Transports are selected via `--transport auto|tcp|shm|nccl|rdma|udp|grpc`:
+Transports are selected via `--transport auto|tcp|shm|nccl`:
 - `auto`: shm for localhost, tcp for remote
 - `nccl`: NCCL over RoCE RDMA (requires libnccl2, ConnectX NICs)
+- `rccl`: AMD's NCCL equivalent (declared, not yet implemented)
+
+UDP peer discovery (`src/parallel/discovery.zig`) is a separate mechanism — rank 0 broadcasts a beacon on port 49460, other ranks discover it automatically on the same subnet.
 
 ### NCCL Architecture
 

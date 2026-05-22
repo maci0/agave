@@ -168,6 +168,15 @@ pub const Qwen35Model = struct {
     /// Enable fused megakernel for single-dispatch forward pass.
     megakernel_enabled: bool = false,
 
+    // ── MTP (Multi-Token Prediction) ──────────────────────────
+    n_mtp_layers: u32 = 0,
+    mtp_hidden_pre_norm: []f32 = &.{},
+    mtp_concat_buf: []f32 = &.{},
+    mtp_logits_buf: []f32 = &.{},
+    mtp_kv_keys: []u8 = &.{},
+    mtp_kv_values: []u8 = &.{},
+    mtp_kv_seq_len: usize = 0,
+
     /// Returns the generic Model interface for this Qwen3.5 instance.
     pub fn model(self: *Qwen35Model) Model {
         return Model.from(Qwen35Model, self);
@@ -290,6 +299,11 @@ pub const Qwen35Model = struct {
             if (self.is_mlx) break;
         }
 
+        // MTP: detect nextn tensors at layer n_layers (first MTP head)
+        if (f.layerTensor(self.n_layers, "nextn.eh_proj")) |_| {
+            self.n_mtp_layers = f.getArchU32(arch, "nextn_predict_layers") orelse 1;
+        }
+
         std.debug.assert(self.n_head % self.n_head_kv == 0);
         std.debug.assert(self.ssm_d_inner % self.ssm_dt_rank == 0);
         std.debug.assert(self.rope_dim <= self.head_dim);
@@ -343,6 +357,21 @@ pub const Qwen35Model = struct {
             errdefer allocator.free(self.router_logits);
             self.moe_out = try allocator.alloc(f32, self.n_embd);
             errdefer allocator.free(self.moe_out);
+        }
+
+        // MTP buffers: flat KV cache for single transformer layer
+        if (self.n_mtp_layers > 0) {
+            self.mtp_hidden_pre_norm = try allocator.alloc(f32, self.n_embd);
+            errdefer allocator.free(self.mtp_hidden_pre_norm);
+            self.mtp_concat_buf = try allocator.alloc(f32, self.n_embd * 2);
+            errdefer allocator.free(self.mtp_concat_buf);
+            self.mtp_logits_buf = try allocator.alloc(f32, self.vocab_size);
+            errdefer allocator.free(self.mtp_logits_buf);
+            const kvd_bytes = @as(usize, self.n_head_kv) * @as(usize, self.head_dim) * @sizeOf(f32);
+            self.mtp_kv_keys = try allocator.alloc(u8, self.max_seq_len * kvd_bytes);
+            errdefer allocator.free(self.mtp_kv_keys);
+            self.mtp_kv_values = try allocator.alloc(u8, self.max_seq_len * kvd_bytes);
+            errdefer allocator.free(self.mtp_kv_values);
         }
 
         const nl: usize = self.n_layers;
@@ -486,6 +515,13 @@ pub const Qwen35Model = struct {
         if (self.is_moe) {
             self.allocator.free(self.router_logits);
             self.allocator.free(self.moe_out);
+        }
+        if (self.n_mtp_layers > 0) {
+            self.allocator.free(self.mtp_hidden_pre_norm);
+            self.allocator.free(self.mtp_concat_buf);
+            self.allocator.free(self.mtp_logits_buf);
+            self.allocator.free(self.mtp_kv_keys);
+            self.allocator.free(self.mtp_kv_values);
         }
         for (0..self.n_layers) |i| {
             if (self.conv_states[i].len > 0) self.allocator.free(self.conv_states[i]);
@@ -1260,6 +1296,160 @@ pub const Qwen35Model = struct {
         return self.seq_table.block_table[0];
     }
 
+    /// RMSNorm with +1 weight offset: output[i] = (1 + w[i]) * x[i] / rms(x)
+    fn rmsNormPlusOne(input: []const f32, output: []f32, weight: [*]const f32, n: usize, eps: f32) void {
+        var sum_sq: f32 = 0;
+        for (0..n) |i| sum_sq += input[i] * input[i];
+        const rms = @sqrt(sum_sq / @as(f32, @floatFromInt(n)) + eps);
+        const inv_rms = 1.0 / rms;
+        for (0..n) |i| {
+            output[i] = (1.0 + weight[i]) * input[i] * inv_rms;
+        }
+    }
+
+    /// MTP head forward: run token through a single MTP transformer layer.
+    /// Uses saved pre-norm hidden state from the main model's last forward().
+    /// Returns argmax of MTP logits. `depth` selects which MTP head (0-based).
+    pub fn mtpForward(self: *Qwen35Model, token_id: u32, depth: u32) !u32 {
+        if (self.n_mtp_layers == 0 or depth >= self.n_mtp_layers) return error.MissingTensor;
+        if (self.mtp_kv_seq_len >= self.max_seq_len) return error.KVCacheFull;
+
+        const e: usize = self.n_embd;
+        const nh: usize = self.n_head;
+        const nkv: usize = self.n_head_kv;
+        const hd: usize = self.head_dim;
+        const qd: usize = nh * hd;
+        const mtp_lid: u32 = self.n_layers + depth;
+
+        // 1. Embed the token using MTP-specific embedding table
+        const emb_t = self.fmt.layerTensor(mtp_lid, "nextn.embed_tokens") orelse return error.MissingTensor;
+        self.be.embLookup(.{ .data = emb_t.data_ptr, .dtype = emb_t.dtype }, token_id, self.hidden2.ptr, e);
+
+        // 2. RMSNorm both branches with +1 offset: output = (1 + w) * rmsNorm(x)
+        // Standard rmsNorm computes w * x / rms. We need (1 + w) * x / rms.
+        // Strategy: rmsNorm with weight w → result, then add x / rms (unweighted).
+        // Equivalently: compute rms, apply (1+w) manually on CPU.
+        const enorm_t = self.fmt.layerTensor(mtp_lid, "nextn.enorm") orelse return error.MissingTensor;
+        const hnorm_t = self.fmt.layerTensor(mtp_lid, "nextn.hnorm") orelse return error.MissingTensor;
+        const enorm_w = self.normAsF32(enorm_t, e);
+        const hnorm_w = self.normAsF32(hnorm_t, e);
+        self.be.sync();
+
+        // Embed branch → first half of concat buf
+        rmsNormPlusOne(self.hidden2, self.mtp_concat_buf[0..e], enorm_w, e, self.rms_eps);
+        // Hidden branch → second half of concat buf
+        rmsNormPlusOne(self.mtp_hidden_pre_norm, self.mtp_concat_buf[e..][0..e], hnorm_w, e, self.rms_eps);
+
+        // 3. eh_proj: [2*n_embd] → [n_embd]
+        const eh_proj = self.fmt.layerTensor(mtp_lid, "nextn.eh_proj") orelse return error.MissingTensor;
+        self.doGemv(self.mtp_concat_buf.ptr, eh_proj, self.hidden.ptr, e, e * 2);
+
+        // 4. Transformer block: attention + FFN at mtp_lid
+        // Pre-attention norm
+        const attn_nw = self.fmt.layerTensor(mtp_lid, "attn_norm.weight") orelse return error.MissingTensor;
+        self.be.rmsNorm(self.hidden.ptr, self.normAsF32(attn_nw, e), self.hidden2.ptr, e, self.rms_eps);
+
+        // Q/K/V projections
+        const qw = self.fmt.layerTensor(mtp_lid, "attn_q.weight") orelse return error.MissingTensor;
+        const kw = self.fmt.layerTensor(mtp_lid, "attn_k.weight") orelse return error.MissingTensor;
+        const vw = self.fmt.layerTensor(mtp_lid, "attn_v.weight") orelse return error.MissingTensor;
+        const q_out: usize = if (self.has_gate) qd * 2 else qd;
+        self.doGemvBatch3(self.hidden2.ptr, qw, self.q_buf.ptr, q_out, kw, self.k_buf.ptr, nkv * hd, vw, self.v_buf.ptr, nkv * hd, e);
+        self.be.sync();
+
+        // Q gate split (Qwen3.5 has gated Q)
+        const q_ptr: [*]f32 = if (self.has_gate) blk: {
+            const gate_buf = self.ff_buf1.ptr;
+            const q_deint = self.ff_buf2.ptr;
+            if (self.is_safetensors) {
+                self.be.splitQGate(self.q_buf.ptr, q_deint, gate_buf, hd, nh);
+            } else {
+                self.be.deinterleave(self.q_buf.ptr, q_deint, gate_buf, hd, nh);
+            }
+            self.be.sync();
+            break :blk q_deint;
+        } else self.q_buf.ptr;
+
+        // Q/K norms
+        if (self.has_qk_norm) {
+            const qnw = self.fmt.layerTensor(mtp_lid, "attn_q_norm.weight") orelse return error.MissingTensor;
+            const knw = self.fmt.layerTensor(mtp_lid, "attn_k_norm.weight") orelse return error.MissingTensor;
+            self.be.rmsNormMulti(q_ptr, self.normAsF32(qnw, hd), nh, hd, self.rms_eps);
+            self.be.rmsNormMulti(self.k_buf.ptr, self.normAsF32(knw, hd), nkv, hd, self.rms_eps);
+        }
+
+        // RoPE at MTP KV position
+        self.be.rope(q_ptr, self.mtp_kv_seq_len, nh, hd, self.rope_dim, self.rope_theta);
+        self.be.rope(self.k_buf.ptr, self.mtp_kv_seq_len, nkv, hd, self.rope_dim, self.rope_theta);
+
+        // SDPA with MTP flat KV cache
+        attn_ops.scaledDotProductAttention(
+            q_ptr,
+            self.mtp_kv_keys,
+            self.mtp_kv_values,
+            self.k_buf,
+            self.v_buf,
+            self.attn_out.ptr,
+            self.scores_buf.ptr,
+            nh,
+            nkv,
+            hd,
+            self.mtp_kv_seq_len,
+            1.0 / @sqrt(@as(f32, @floatFromInt(hd))),
+            self.be,
+            null,
+            0,
+            .f32,
+            .f32,
+        );
+        self.mtp_kv_seq_len += 1;
+
+        // Gate: attn_out *= sigmoid(gate)
+        if (self.has_gate) {
+            self.be.sigmoidMul(self.attn_out.ptr, self.ff_buf1.ptr, qd);
+        }
+
+        // Output projection → hidden2 (residual target)
+        const ow = self.fmt.layerTensor(mtp_lid, "attn_output.weight") orelse return error.MissingTensor;
+        self.doGemv(self.attn_out.ptr, ow, self.hidden2.ptr, e, qd);
+
+        // Residual add: hidden += attn_out
+        self.be.addScaled(self.hidden2.ptr, self.hidden.ptr, 1.0, e);
+
+        // FFN: pre-norm + gate/up + silu*mul + down
+        const ffn_nw = self.fmt.layerTensor(mtp_lid, "ffn_norm.weight") orelse
+            self.fmt.layerTensor(mtp_lid, "post_attention_norm.weight") orelse return error.MissingTensor;
+        self.be.rmsNorm(self.hidden.ptr, self.normAsF32(ffn_nw, e), self.hidden2.ptr, e, self.rms_eps);
+
+        const gw = self.fmt.layerTensor(mtp_lid, "ffn_gate.weight") orelse return error.MissingTensor;
+        const uw = self.fmt.layerTensor(mtp_lid, "ffn_up.weight") orelse return error.MissingTensor;
+        const ff: usize = self.n_ff;
+        self.doGemvBatch2(self.hidden2.ptr, gw, self.ff_buf1.ptr, ff, uw, self.ff_buf2.ptr, ff, e);
+        self.be.siluMul(self.ff_buf1.ptr, self.ff_buf2.ptr, self.ff_buf1.ptr, ff);
+        const dw = self.fmt.layerTensor(mtp_lid, "ffn_down.weight") orelse return error.MissingTensor;
+        self.doGemv(self.ff_buf1.ptr, dw, self.hidden2.ptr, e, ff);
+
+        // Residual add: hidden += ffn_out
+        self.be.addScaled(self.hidden2.ptr, self.hidden.ptr, 1.0, e);
+
+        // 5. Output head: shared_head_norm → shared_head_head → logits
+        const sh_norm = self.fmt.layerTensor(mtp_lid, "nextn.shared_head_norm") orelse return error.MissingTensor;
+        self.be.rmsNorm(self.hidden.ptr, self.normAsF32(sh_norm, e), self.hidden.ptr, e, self.rms_eps);
+        const sh_head = self.fmt.layerTensor(mtp_lid, "nextn.shared_head_head") orelse return error.MissingTensor;
+        self.doGemv(self.hidden.ptr, sh_head, self.mtp_logits_buf.ptr, self.vocab_size, e);
+        self.be.sync();
+
+        return math_ops.argmax(self.mtp_logits_buf);
+    }
+
+    pub fn getMtpLogits(self: *Qwen35Model) []f32 {
+        return self.mtp_logits_buf;
+    }
+
+    pub fn resetMtpCache(self: *Qwen35Model) void {
+        self.mtp_kv_seq_len = 0;
+    }
+
     /// Run one token through the model, returning the argmax next token ID.
     pub fn forward(self: *Qwen35Model, token_id: u32) !u32 {
         if (self.kv_seq_len >= self.max_seq_len) return error.KVCacheFull;
@@ -1417,6 +1607,12 @@ pub const Qwen35Model = struct {
                 return @intFromFloat(result_token[0]);
             }
             // Last stage: runs output projection below, sends token back to rank 0
+        }
+
+        // Save pre-norm hidden state for MTP heads before final norm destroys it
+        if (self.n_mtp_layers > 0) {
+            self.be.sync();
+            @memcpy(self.mtp_hidden_pre_norm, self.hidden[0..self.n_embd]);
         }
 
         // Fuse final FFN residual (hidden2) into output norm.

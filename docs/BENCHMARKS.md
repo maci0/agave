@@ -33,7 +33,7 @@ The megakernel system has two tiers, enabled via `--megakernel`:
 
 ### Tier 1: Fused FFN
 
-Fuses gate+up GEMV + activation into a single GPU dispatch per FFN layer, reducing dispatch count by ~48 per token (24 layers x 2 saved dispatches). 11 Metal MSL kernels cover SiLU x {Q8_0, Q4_K, Q5_K, Q6_K, Q4_0, MLX_Q4} and GELU x {Q8_0, Q4_K, Q5_K, Q6_K, Q4_0}. CUDA has 1 kernel (Q8_0 SiLU).
+Fuses gate+up GEMV + activation into a single GPU dispatch per FFN layer, reducing dispatch count by ~48 per token (24 layers x 2 saved dispatches). 11 Metal MSL kernels cover SiLU x {Q8_0, Q4_K, Q5_K, Q6_K, Q4_0, MLX_Q4} and GELU x {Q8_0, Q4_K, Q5_K, Q6_K, Q4_0}. CUDA has 4 kernels (SiLU x {Q8_0, Q4_K, Q5_K, Q6_K}). ROCm has 1 kernel (Q8_0 SiLU).
 
 | Model | Quant | Standard | Megakernel | Delta | Notes |
 |-------|-------|----------|------------|-------|-------|
@@ -151,7 +151,7 @@ Vision encoding uses GPU GEMM (BF16 Metal) + parallel CPU attention (thread pool
 Notes:
 - UMA zero-copy: mmap'd weights registered via `cuMemHostRegister`, accessed directly by GPU
 - Q4_K/Q6_K fall back to CPU (Zig LLVM nvptx aliasee bug prevents PTX recompilation)
-- 41 CUDA PTX kernels loaded via sm_90 forward compatibility to sm_121
+- 56 CUDA PTX kernels loaded via sm_90 forward compatibility to sm_121
 - Server mode (`--serve`) works correctly (cuCtxSetCurrent on scheduler thread)
 
 ## Distributed Inference (Multi-Node)

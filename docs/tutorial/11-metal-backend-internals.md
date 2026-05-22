@@ -416,6 +416,9 @@ pub fn gemm(self: *MetalBackend, x: [*]const f32, w: TensorData, y: [*]f32,
         .bf16, .f16 => self.pipe_gemm_bf16,
         .q8_0 => self.pipe_gemm_q8_0,
         .q4_0 => self.pipe_gemm_q4_0,
+        .q4_k => self.pipe_gemm_q4_k,
+        .q5_k => self.pipe_gemm_q5_k,
+        .q6_k => self.pipe_gemm_q6_k,
         else => @panic("Metal GEMM: unsupported dtype — add GPU kernel"),
     };
     // ... encode dispatch with one threadgroup per output row
@@ -426,7 +429,7 @@ The kernel tiles across tokens (`TILE_T=8`) to reuse weight data loaded into thr
 
 ## Vision Encoder GPU Acceleration
 
-When a vision encoder (mmproj) is loaded, its transformer blocks run on the GPU via the standard `gemm()` dispatch. The vision encoder calls `be.gemm()` for all linear projections (Q/K/V/O, FFN up/gate/down, output projection), which dispatches to the appropriate Metal kernel based on weight dtype — f32, bf16, q8_0, or q4_0.
+When a vision encoder (mmproj) is loaded, its transformer blocks run on the GPU via the standard `gemm()` dispatch. The vision encoder calls `be.gemm()` for all linear projections (Q/K/V/O, FFN up/gate/down, output projection), which dispatches to the appropriate Metal kernel based on weight dtype — f32, bf16, q8_0, q4_0, q4_k, q5_k, or q6_k.
 
 The key synchronization pattern: `be.sync()` is required between GPU GEMM operations and CPU operations (like softmax or activation functions that run on the CPU thread pool). Without it, the CPU reads stale data from shared UMA memory.
 

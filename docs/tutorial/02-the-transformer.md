@@ -13,7 +13,7 @@ Token 15496     → embed → [2304 floats]  → 28 layers → [2304 floats]  �
                                                               → vocab proj → [262144 floats] → argmax → Token 11
                                                                  logits (one per vocab entry)            (",")
 ```
-The hidden state is a fixed-size vector (2304 floats = 9 KB) that flows through every layer. Each layer reads its weight matrices (~180 MB total for this model) to transform it.
+The **hidden state** (the internal vector representation flowing through each layer) is a fixed-size vector (2304 floats = 9 KB) that flows through every layer. Each layer reads its weight matrices (~180 MB total for this model) to transform it.
 
 Each **transformer layer** has two sublayers:
 1. **Attention** — lets the model look at previous tokens
@@ -44,7 +44,7 @@ The attention score between positions i and j is `Q_i · K_j / sqrt(d)`. After *
 ```
 output = softmax(Q @ K^T / sqrt(d)) @ V
        where K^T = transpose of K (flip rows and columns)
-             sqrt(d) = scale factor = 1/sqrt(head_dim)
+             sqrt(d) = scale factor = 1/sqrt(head_dim, the number of floats per attention head)
 ```
 
 This is **O(n²)** in sequence length — every token attends to every previous token. At 1K tokens that's 1M score computations per head; at 32K tokens it's 1 billion. This is why long-context models are expensive.

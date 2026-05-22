@@ -127,6 +127,16 @@ Mirostat maintains consistent **perplexity** (unpredictability) during generatio
 
 When Mirostat is active, top-k and top-p are bypassed — Mirostat controls its own truncation. It works by tracking a running "surprise" estimate and adjusting which tokens are eligible for sampling. Produces more consistently readable output than fixed temperature across varying prompt types.
 
+## Logit Bias
+
+Direct per-token adjustments to logits via the API. Specify token IDs and additive bias values:
+
+```json
+{"logit_bias": {"123": 5.0, "456": -100.0}}
+```
+
+Positive values increase the token's chance of being selected; large negative values effectively ban it. Applied before any other sampling — useful for steering output without changing the model. Max 16 entries per request.
+
 ## Grammar-Constrained Decoding
 
 Forces output to match a formal grammar (GBNF format):
@@ -153,15 +163,20 @@ Applied in order:
 ```
 logits (raw scores, one per vocab token)
   │
-  ├─ repeat/frequency/presence penalties    [modify logit values]
-  ├─ grammar mask (set invalid tokens to -∞) [hard constraint]
-  ├─ temperature scaling (logits /= temp)    [control sharpness]
-  ├─ min-p filter (drop tokens < min_p * max) [adaptive threshold]
+  ├─ logit bias (per-token additive adjust)   [API steering]
+  ├─ repeat/frequency/presence penalties      [per-token logit modification]
+  ├─ DRY penalty (repeated n-gram sequences)  [sequence-aware penalty]
+  ├─ grammar mask (set invalid tokens to -∞)  [hard constraint]
+  ├─ temperature scaling (logits /= temp)     [control sharpness]
+  ├─ XTC exclusion (drop top tokens randomly) [diversity injection]
+  ├─ min-p filter (drop < min_p × max)        [adaptive threshold]
   ├─ top-k filter (keep only top K tokens)    [hard cutoff]
   │
-  ├─ softmax → probabilities                  [logits → probabilities that sum to 1.0]
+  ├─ softmax → probabilities                  [logits → probabilities]
   │
   ├─ top-p filter (keep smallest set ≥ P)     [nucleus cutoff, renormalize]
+  │
+  ├─ Mirostat (if active, replaces top-k/p)   [entropy-targeted truncation]
   │
   └─ sample from distribution                 [weighted random pick]
        → next token ID
@@ -186,7 +201,7 @@ agave model.gguf --json-schema '{"type":"object","properties":{"answer":{"type":
 
 ---
 
-**In the code:** [src/ops/math.zig](../../src/ops/math.zig) (sampleToken, applyPenalties, applyMinP, applyRepeatPenalty), [src/grammar.zig](../../src/grammar.zig) (GBNF parser, state machine, JSON schema converter)
+**In the code:** [src/ops/math.zig](../../src/ops/math.zig) (sampleToken, applyPenalties, applyMinP, applyRepeatPenalty, applyXtc, applyDry, sampleMirostat, applyLogitBias), [src/grammar.zig](../../src/grammar.zig) (GBNF parser, state machine, JSON schema converter)
 
 **Math reference:** [Argmax](appendix-math.md#argmax), [Temperature Scaling](appendix-math.md#temperature-scaling), [Top-K](appendix-math.md#top-k-selection), [Top-P](appendix-math.md#top-p-nucleus-sampling)
 

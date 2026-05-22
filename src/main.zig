@@ -99,6 +99,12 @@ const pipe_batch_size: u32 = 32;
 const max_stdin_prompt_size: usize = 1024 * 1024;
 /// Default HTTP server port.
 const default_port: u16 = 49453;
+/// Default UDP port for tensor-parallel peer discovery.
+const tp_discovery_port: u16 = 49454;
+/// Default UDP port for pipeline-parallel peer discovery.
+const pp_discovery_port: u16 = 49455;
+/// Default TCP port for disaggregated prefill/decode transport.
+const disagg_default_port: u16 = 49456;
 /// Default maximum tokens to generate per request.
 const default_max_tokens: u32 = 512;
 /// Default KV cache context size when user/recipe doesn't specify.
@@ -176,8 +182,7 @@ fn kvTypeOrExit(s: []const u8, flag_name: []const u8) KvQuantType {
 }
 
 /// Detect free system RAM in bytes.
-/// Uses platform-specific detection (sysctl on macOS, /proc/meminfo on Linux).
-/// Falls back to default_free_ram on unsupported platforms.
+/// Delegates to backend_mod.detectAvailMem(); falls back to default_free_ram.
 fn detectFreeRam() usize {
     const avail = backend_mod.detectAvailMem();
     return if (avail > 0) avail else default_free_ram;
@@ -383,7 +388,7 @@ const cli_specs = [_]cli_mod.ArgSpec{
     .{ .long = "draft-model", .kind = .option, .help = "Path to draft model for speculative decoding." },
     .{ .long = "spec-tokens", .short = 'K', .kind = .option, .help = "Draft tokens per speculation round [default: 5]." },
     .{ .long = "tree-budget", .kind = .option, .help = "DDTree node budget [default: 64]." },
-    .{ .long = "spec-mode", .kind = .option, .help = "Speculative mode: standard, ddtree, self, ngram [default: ddtree]." },
+    .{ .long = "spec-mode", .kind = .option, .help = "Speculative mode: standard, ddtree, self, ngram, mtp [default: ddtree]." },
     .{ .long = "draft-layers", .kind = .option, .help = "Layers for self-speculative draft [default: auto]." },
     // Diagnostics
     .{ .long = "verbose", .short = 'V', .help = "Show technical details (params, load times, EOG)." },
@@ -392,10 +397,10 @@ const cli_specs = [_]cli_mod.ArgSpec{
     .{ .long = "model-info", .help = "Print model metadata and exit (supports --json)." },
     .{ .long = "megakernel", .help = "Use fused megakernel (single GPU dispatch per token)." },
     .{ .long = "profile", .help = "Profile per-op timing (halves throughput)." },
-    .{ .long = "benchmark", .help = "Run decode benchmark: 32-token prefill + N decode tokens, print stats." },
+    .{ .long = "benchmark", .help = "Run decode benchmark: prefill + decode, print stats (supports --json)." },
 };
 
-const SpecMode = enum { none, standard, ddtree, self_spec, ngram };
+const SpecMode = enum { none, standard, ddtree, self_spec, ngram, mtp };
 
 const CliArgs = struct {
     model_path: []const u8,
@@ -926,17 +931,17 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
             var pi: usize = 0;
             while (iter.next()) |part| {
                 if (pi >= 4) {
-                    eprint("Error: invalid host address '{s}' (expected IPv4 address or 'localhost')\n", .{host_str});
+                    eprint("Error: invalid host address '{s}' (expected IPv4 dotted-quad, 'localhost', or '0.0.0.0')\n", .{host_str});
                     std.process.exit(1);
                 }
                 parts[pi] = std.fmt.parseInt(u8, part, 10) catch {
-                    eprint("Error: invalid host address '{s}' (expected IPv4 address or 'localhost')\n", .{host_str});
+                    eprint("Error: invalid host address '{s}' (expected IPv4 dotted-quad, 'localhost', or '0.0.0.0')\n", .{host_str});
                     std.process.exit(1);
                 };
                 pi += 1;
             }
             if (pi != 4) {
-                eprint("Error: invalid host address '{s}' (expected IPv4 address or 'localhost')\n", .{host_str});
+                eprint("Error: invalid host address '{s}' (expected IPv4 dotted-quad, 'localhost', or '0.0.0.0')\n", .{host_str});
                 std.process.exit(1);
             }
             break :blk parts;
@@ -974,7 +979,8 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
                 if (std.mem.eql(u8, s, "ddtree")) break :blk SpecMode.ddtree;
                 if (std.mem.eql(u8, s, "self")) break :blk SpecMode.self_spec;
                 if (std.mem.eql(u8, s, "ngram")) break :blk SpecMode.ngram;
-                eprint("Error: unknown --spec-mode '{s}' (expected: standard, ddtree, self, ngram)\n", .{s});
+                if (std.mem.eql(u8, s, "mtp")) break :blk SpecMode.mtp;
+                eprint("Error: unknown --spec-mode '{s}' (expected: standard, ddtree, self, ngram, mtp)\n", .{s});
                 std.process.exit(1);
             }
             break :blk if (dm != null) SpecMode.ddtree else SpecMode.none;
@@ -1256,6 +1262,7 @@ fn runBenchmark(model: *Model, tok_state: anytype, tok_kind: anytype, allocator:
     const msg = if (cli.json)
         std.fmt.bufPrint(&buf,
             \\{{"prefill_tokens":{d},"prefill_ms":{d:.1},"prefill_tps":{d:.1},"decode_tokens":{d},"decode_ms":{d:.1},"decode_tps":{d:.1},"ttft_ms":{d:.1}}}
+            \\
         , .{ n_prompt, prefill_ms, prefill_tps, gen_count, decode_ms, decode_tps, prefill_ms })
     else
         std.fmt.bufPrint(&buf,
@@ -1311,6 +1318,8 @@ fn printUsage() void {
         \\
         \\BACKEND & MODEL:
         \\      --backend <BE>        Compute backend: auto, cpu, metal, vulkan, cuda, rocm, webgpu [default: auto]
+        \\      --device <N>           GPU device index for CUDA/ROCm/Vulkan [default: 0]
+        \\      --list-devices         List available compute devices and exit
         \\      --ctx-size <N|auto>   Context window size; 0 = full, auto = fit to memory [default: min(model, 4096)]
         \\      --allow-cpu-fallback  Allow GPU backends to fall back to CPU for unsupported ops
         \\      --mmap                Use lazy mmap instead of eagerly paging weights into RAM
@@ -1337,8 +1346,6 @@ fn printUsage() void {
         \\      --api-key <KEY>    API key for server auth (or AGAVE_API_KEY env)
         \\
         \\PARALLELISM:
-        \\      --list-devices         List available compute devices and exit
-        \\      --device <N>           GPU device index for CUDA/ROCm/Vulkan [default: 0]
         \\      --tp <N>               Tensor parallelism degree [default: 1]
         \\      --pp <N>               Pipeline parallelism stages [default: 1]
         \\      --peers <ADDR>         Peer address (e.g. 192.168.0.2 or localhost for same-node)
@@ -1348,7 +1355,7 @@ fn printUsage() void {
         \\
         \\SPECULATIVE DECODING:
         \\      --draft-model <PATH>   Draft model GGUF for speculative decoding
-        \\      --spec-mode <MODE>     Speculative mode: standard, ddtree, self, ngram [default: ddtree]
+        \\      --spec-mode <MODE>     Speculative mode: standard, ddtree, self, ngram, mtp [default: ddtree]
         \\  -K, --spec-tokens <N>      Draft tokens per speculation round [default: 5]
         \\      --tree-budget <N>      DDTree node budget [default: 64]
         \\      --draft-layers <N>     Layers for self-speculative draft [default: auto]
@@ -2050,7 +2057,10 @@ fn initAndRun(
             );
             const shard_size = n_embd * row_bytes;
             if (shard_size > 0) {
-                const shard_buf = allocator.alloc(u8, shard_size) catch null;
+                const shard_buf = allocator.alloc(u8, shard_size) catch |err| blk: {
+                    std.log.err("TP shard buffer alloc failed ({d} bytes): {}", .{ shard_size, err });
+                    break :blk null;
+                };
                 if (shard_buf) |buf| {
                     mdl.setTpRowShardBuf(buf);
                 }
@@ -2061,7 +2071,7 @@ fn initAndRun(
         // Auto-discover peers via UDP broadcast if --peers not specified
         if (cli.tp_peers == null and cli.tp_degree > 1) {
             const peer_discovery = @import("parallel/discovery.zig");
-            if (peer_discovery.discoverPeer(cli.tp_rank, cli.tp_degree, 49454)) |ip| {
+            if (peer_discovery.discoverPeer(cli.tp_rank, cli.tp_degree, tp_discovery_port)) |ip| {
                 var ip_buf: [16]u8 = undefined;
                 const ip_str = std.fmt.bufPrint(&ip_buf, "{d}.{d}.{d}.{d}", .{ ip[0], ip[1], ip[2], ip[3] }) catch "";
                 if (ip_str.len > 0) cli.tp_peers = ip_str;
@@ -2070,7 +2080,7 @@ fn initAndRun(
 
         // Distributed TP: connect to peers
         if (cli.pp_degree <= 1) if (cli.tp_peers) |peers_str| {
-            if (setupTransport(allocator, peers_str, cli.tp_rank, cli.tp_degree, cli.transport, 49454, be)) |tr| {
+            if (setupTransport(allocator, peers_str, cli.tp_rank, cli.tp_degree, cli.transport, tp_discovery_port, be)) |tr| {
                 mdl.setTpTransport(tr);
             }
         };
@@ -2082,14 +2092,14 @@ fn initAndRun(
         // Auto-discover peers for PP if --peers not specified
         if (cli.tp_peers == null) {
             const peer_discovery = @import("parallel/discovery.zig");
-            if (peer_discovery.discoverPeer(cli.tp_rank, cli.pp_degree, 49455)) |ip| {
+            if (peer_discovery.discoverPeer(cli.tp_rank, cli.pp_degree, pp_discovery_port)) |ip| {
                 var ip_buf2: [16]u8 = undefined;
                 const ip_str = std.fmt.bufPrint(&ip_buf2, "{d}.{d}.{d}.{d}", .{ ip[0], ip[1], ip[2], ip[3] }) catch "";
                 if (ip_str.len > 0) cli.tp_peers = ip_str;
             }
         }
         if (cli.tp_peers) |peers_str| {
-            if (setupTransport(allocator, peers_str, cli.tp_rank, cli.pp_degree, cli.transport, 49455, be)) |t| {
+            if (setupTransport(allocator, peers_str, cli.tp_rank, cli.pp_degree, cli.transport, pp_discovery_port, be)) |t| {
                 mdl.setPpConfig(cli.tp_rank, cli.pp_degree, t);
             }
         }
@@ -2363,9 +2373,9 @@ fn initAndRun(
             const peers_str = cli.tp_peers orelse break :disagg_blk;
             dtr.* = TransportMod.Transport.init(allocator, .tcp, cli.tp_rank, 2) catch break :disagg_blk;
             var host: [4]u8 = .{ 0, 0, 0, 0 };
-            var port: u16 = 49456;
+            var port: u16 = disagg_default_port;
             if (std.mem.indexOfScalar(u8, peers_str, ':')) |colon| {
-                port = std.fmt.parseInt(u16, peers_str[colon + 1 ..], 10) catch 49456;
+                port = std.fmt.parseInt(u16, peers_str[colon + 1 ..], 10) catch disagg_default_port;
                 parseIpv4(peers_str[0..colon], &host);
             } else {
                 parseIpv4(peers_str, &host);
@@ -2735,6 +2745,7 @@ fn generateSpeculative(
     const use_ddtree = (cli.spec_mode == .ddtree);
     const self_spec = (cli.spec_mode == .self_spec);
     const use_ngram = (cli.spec_mode == .ngram);
+    const use_mtp = (cli.spec_mode == .mtp);
     var ngram_state = ngram_mod.NgramState{};
     if (use_ngram) {
         // Seed n-gram history with prefill tokens
@@ -2783,9 +2794,11 @@ fn generateSpeculative(
 
         // Draft phase
         if (self_spec) target.setLayerSkip(skip_start, skip_end);
-        const is_self_draft = (target.ptr == draft_model.ptr and !self_spec and !use_ngram);
+        const is_self_draft = (target.ptr == draft_model.ptr and !self_spec and !use_ngram and !use_mtp);
         const effective_k = spec_state.optimalK();
-        const n_drafted = if (use_ngram) blk: {
+        const n_drafted = if (use_mtp) blk: {
+            break :blk spec_decode.draftMtp(&spec_state, target, last);
+        } else if (use_ngram) blk: {
             const n = ngram_state.propose(effective_k, &spec_state.draft_tokens);
             spec_state.n_draft = @intCast(n);
             break :blk @as(u32, @intCast(n));
@@ -2863,6 +2876,11 @@ fn generateSpeculative(
             }
             recent_accepted = 0;
             recent_drafted = 0;
+        }
+
+        // MTP: sync KV cache position (reset to match target on partial rejection)
+        if (use_mtp) {
+            target.resetMtpCache();
         }
 
         // Update n-gram history with accepted tokens
@@ -3045,7 +3063,10 @@ fn generateAndPrintInner(
         };
         if (grammar) |*g| grammar_state = g.initState() catch null;
     } else if (cli.grammar_string) |gs| {
-        grammar = grammar_mod.Grammar.parse(allocator, gs) catch null;
+        grammar = grammar_mod.Grammar.parse(allocator, gs) catch |err| blk: {
+            eprint("Error: failed to parse grammar string: {}\n", .{err});
+            break :blk null;
+        };
         if (grammar) |*g| grammar_state = g.initState() catch null;
     } else if (cli.grammar_path) |path| {
         const gf = Io.Dir.cwd().openFile(g_io, path, .{}) catch |err| blk: {
@@ -3054,12 +3075,21 @@ fn generateAndPrintInner(
         };
         if (gf) |file| {
             defer file.close(g_io);
-            const stat = file.stat(g_io) catch null;
+            const stat = file.stat(g_io) catch |err| blk: {
+                eprint("Error: could not stat grammar file '{s}': {}\n", .{ path, err });
+                break :blk null;
+            };
             if (stat) |s| {
-                const buf = allocator.alloc(u8, s.size) catch null;
+                const buf = allocator.alloc(u8, s.size) catch |err| blk: {
+                    eprint("Error: could not allocate {d} bytes for grammar file '{s}': {}\n", .{ s.size, path, err });
+                    break :blk null;
+                };
                 if (buf) |b| {
                     if (file.readPositionalAll(g_io, b, 0)) |_| {
-                        grammar = grammar_mod.Grammar.parse(allocator, b) catch null;
+                        grammar = grammar_mod.Grammar.parse(allocator, b) catch |err| blk: {
+                            eprint("Error: failed to parse grammar file '{s}': {}\n", .{ path, err });
+                            break :blk null;
+                        };
                         if (grammar) |*g| grammar_state = g.initState() catch null;
                     } else |err| {
                         eprint("Error: could not read grammar file '{s}': {}\n", .{ path, err });

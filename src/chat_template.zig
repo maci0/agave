@@ -7,12 +7,13 @@ const arch_mod = @import("arch.zig");
 const ImageTokens = arch_mod.ImageTokens;
 
 /// Role in a conversation message.
-pub const Role = enum { user, assistant };
+pub const Role = enum { user, assistant, tool };
 
 /// A single message in a conversation.
 pub const Message = struct {
     role: Role,
     content: []const u8,
+    tool_call_id: ?[]const u8 = null,
 };
 
 /// Chat template definition for a model architecture.
@@ -61,9 +62,10 @@ pub const ChatTemplate = struct {
             }
         }
         for (messages) |msg| {
+            const extra: usize = if (msg.role == .tool) 64 else 0; // tool formatting overhead
             const p = if (msg.role == .user) self.user_prefix else self.assistant_prefix;
             const s = if (msg.role == .user) self.user_suffix else self.assistant_suffix;
-            total_len = std.math.add(usize, total_len, p.len + msg.content.len + s.len) catch return error.OutOfMemory;
+            total_len = std.math.add(usize, total_len, p.len + msg.content.len + s.len + extra) catch return error.OutOfMemory;
         }
         var result = std.ArrayList(u8).empty;
         try result.ensureTotalCapacity(allocator, total_len);
@@ -95,6 +97,24 @@ pub const ChatTemplate = struct {
                     try result.appendSlice(allocator, self.assistant_prefix);
                     try result.appendSlice(allocator, msg.content);
                     try result.appendSlice(allocator, self.assistant_suffix);
+                },
+                .tool => {
+                    // Tool results use ChatML tool role: <|im_start|>tool\n...<|im_end|>
+                    // For non-ChatML models, fall back to user prefix with [Tool Result] label
+                    if (std.mem.indexOf(u8, self.user_prefix, "<|im_start|>") != null) {
+                        try result.appendSlice(allocator, "<|im_start|>tool\n");
+                        if (msg.tool_call_id) |tcid| {
+                            try result.appendSlice(allocator, tcid);
+                            try result.appendSlice(allocator, "\n");
+                        }
+                        try result.appendSlice(allocator, msg.content);
+                        try result.appendSlice(allocator, "<|im_end|>\n");
+                    } else {
+                        try result.appendSlice(allocator, self.user_prefix);
+                        try result.appendSlice(allocator, "[Tool Result] ");
+                        try result.appendSlice(allocator, msg.content);
+                        try result.appendSlice(allocator, self.user_suffix);
+                    }
                 },
             }
         }

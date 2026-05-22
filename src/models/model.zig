@@ -74,6 +74,10 @@ pub const Model = struct {
         set_thread_context: *const fn (self: *anyopaque) void,
         save_ssm_state: *const fn (self: *anyopaque, allocator: std.mem.Allocator) ?[]u8,
         restore_ssm_state: *const fn (self: *anyopaque, snapshot: []const u8) void,
+        mtp_forward: *const fn (self: *anyopaque, token_id: u32, depth: u32) ForwardError!u32,
+        get_mtp_depth: *const fn (self: *anyopaque) u32,
+        get_mtp_logits: *const fn (self: *anyopaque) []f32,
+        reset_mtp_cache: *const fn (self: *anyopaque) void,
     };
 
     /// Construct a Model interface from any concrete model type at comptime.
@@ -212,6 +216,33 @@ pub const Model = struct {
                         self.restoreSsmState(snapshot);
                 }
             }.call),
+            .mtp_forward = @ptrCast(&struct {
+                fn call(self: *T, token_id: u32, depth: u32) ForwardError!u32 {
+                    if (comptime @hasDecl(T, "mtpForward"))
+                        return self.mtpForward(token_id, depth);
+                    return error.MissingTensor;
+                }
+            }.call),
+            .get_mtp_depth = @ptrCast(&struct {
+                fn call(self: *T) u32 {
+                    if (comptime @hasField(T, "n_mtp_layers"))
+                        return self.n_mtp_layers;
+                    return 0;
+                }
+            }.call),
+            .get_mtp_logits = @ptrCast(&struct {
+                fn call(self: *T) []f32 {
+                    if (comptime @hasField(T, "mtp_logits_buf"))
+                        return self.mtp_logits_buf;
+                    return &.{};
+                }
+            }.call),
+            .reset_mtp_cache = @ptrCast(&struct {
+                fn call(self: *T) void {
+                    if (comptime @hasDecl(T, "resetMtpCache"))
+                        self.resetMtpCache();
+                }
+            }.call),
         };
     }
 
@@ -270,6 +301,26 @@ pub const Model = struct {
     /// Restore SSM state from a cached snapshot.
     pub fn restoreSsmState(self: Model, snapshot: []const u8) void {
         self.vtable.restore_ssm_state(self.ptr, snapshot);
+    }
+
+    /// Run one MTP head forward pass at the given depth.
+    pub fn mtpForward(self: Model, token_id: u32, depth: u32) ForwardError!u32 {
+        return self.vtable.mtp_forward(self.ptr, token_id, depth);
+    }
+
+    /// Number of MTP prediction depths (0 = no MTP support).
+    pub fn getMtpDepth(self: Model) u32 {
+        return self.vtable.get_mtp_depth(self.ptr);
+    }
+
+    /// Get MTP head logits buffer (valid after mtpForward).
+    pub fn getMtpLogits(self: Model) []f32 {
+        return self.vtable.get_mtp_logits(self.ptr);
+    }
+
+    /// Reset MTP KV cache (on speculation rejection).
+    pub fn resetMtpCache(self: Model) void {
+        self.vtable.reset_mtp_cache(self.ptr);
     }
 
     /// Signal the model to cancel the current forward pass.

@@ -51,6 +51,7 @@ agave/
 │   ├── image.zig          # PNG/PPM image decoder and resize for multimodal inference
 │   ├── wasm_entry.zig     # Browser inference entry point, GGUF parsing from buffer
 │   ├── micro_bench.zig    # Standalone micro-benchmark binary
+│   ├── fuzz_tests.zig     # Fuzz tests (tokenizer, grammar, JSON parser, quantization)
 │   ├── format/
 │   │   ├── format.zig     # Format interface (getTensor, getMetaStr, ...)
 │   │   ├── gguf.zig       # GGUF v2/v3 parser with mmap
@@ -93,7 +94,13 @@ agave/
 │   │       ├── rocm/      # Zig kernels compiled to HSACO via amdgcn-amdhsa target (incl. mega_*.zig)
 │   │       └── webgpu/    # WGSL compute shaders
 │   ├── parallel/
-│   │   └── transport.zig  # Distributed transport: TCP, POSIX shm, NCCL (RoCE RDMA)
+│   │   ├── transport.zig  # Distributed transport: TCP, POSIX shm, NCCL (RoCE RDMA)
+│   │   ├── tp.zig         # Tensor parallelism utilities (shard/gather, rank mapping)
+│   │   └── discovery.zig  # UDP peer discovery (LAN broadcast, auto-connect)
+│   ├── spec/
+│   │   ├── spec_decode.zig # Speculative decoding orchestrator (draft, verify, accept)
+│   │   ├── ddtree.zig     # DDTree tree construction (best-first heap, compile, walk)
+│   │   └── ngram.zig      # N-gram speculative decoding (history-based, no draft model)
 │   ├── devices/
 │   │   └── discovery.zig  # GPU device enumeration (--list-devices, --device N)
 │   ├── kvcache/
@@ -221,8 +228,10 @@ HTTP server activated via `--serve` (default port 49453, override with `--port`)
 | `/v1/models` | GET | List available models |
 | `/v1/chat/regenerate` | POST | Regenerate last assistant response |
 | `/v1/conversations` | GET/POST | List or create conversations |
-| `/tokenize` | POST | Tokenize text to token IDs |
-| `/detokenize` | POST | Detokenize token IDs to text |
+| `/v1/tokenize` | POST | Tokenize text to token IDs |
+| `/v1/detokenize` | POST | Detokenize token IDs to text |
+| `/v1/chat` | POST | Built-in chat web UI endpoint |
+| `/v1/embeddings` | POST | Text embeddings (501 stub) |
 | `/health` | GET | Health check |
 | `/ready` | GET | Readiness check (model loaded) |
 | `/metrics` | GET | Prometheus metrics (tokens/s, latency, queue depth) |
@@ -237,10 +246,24 @@ HTTP server activated via `--serve` (default port 49453, override with `--port`)
 - `repetition_penalty` -- multiplicative repetition penalty
 - `seed` -- deterministic sampling seed
 - `stop` -- stop sequences (string or array)
+- `xtc_probability` -- XTC sampling probability
+- `xtc_threshold` -- XTC sampling threshold
+- `dry_multiplier` -- DRY n-gram repetition penalty multiplier (0 = disabled)
+- `dry_allowed_length` -- DRY minimum n-gram length before penalty applies
+- `mirostat` -- Mirostat mode (0 = disabled, 1 = Mirostat, 2 = Mirostat 2.0)
+- `mirostat_tau` -- Mirostat target entropy
+- `mirostat_eta` -- Mirostat learning rate
+- `logit_bias` -- Token ID to bias map (e.g. `{"123": 5.0}`)
+- `logprobs` -- Return log probabilities of output tokens
+- `top_logprobs` -- Number of top log probabilities to return per token
 - `grammar` -- GBNF grammar string for constrained decoding
 - `json_schema` -- JSON Schema object for structured output (converted to GBNF internally)
+- `tools` -- Array of tool/function definitions (OpenAI-compatible)
+- `tool_choice` -- Tool selection mode (`"auto"`, `"required"`, `"none"`)
 
 **Architecture**: `server.zig` handles HTTP parsing and routing, `scheduler.zig` implements continuous batching for concurrent requests, `rate_limiter.zig` provides token-bucket rate limiting, and `metrics.zig` collects Prometheus-format telemetry. A built-in chat UI is served from `src/web/`.
+
+**Tool/function calling**: OpenAI-compatible tool use is supported via system prompt injection and output parsing. When `tools` are provided in a request, tool definitions are injected into the system prompt and the model's output is parsed for `<tool_call>` tags. Multiple tool calls per response are supported. Controlled by the `tool_choice` parameter (`"auto"`, `"required"`, `"none"`).
 
 ### Shared Ops (`src/ops/`)
 
@@ -275,6 +298,7 @@ Browser inference entry point for running Agave in WebAssembly environments. Pro
 |--------|-------------|
 | `spec_decode.zig` | Orchestrator: draft, verify, generation loop (standard + DDTree modes) |
 | `ddtree.zig` | DDTree tree construction: best-first heap, compile, acceptance walk |
+| `ngram.zig` | N-gram speculative decoding: history-based draft from token patterns (no draft model) |
 
 | Backend Kernel | Description |
 |----------------|-------------|

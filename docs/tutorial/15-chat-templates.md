@@ -426,6 +426,16 @@ pub fn formatConversation(
                 try result.appendSlice(allocator, msg.content);
                 try result.appendSlice(allocator, self.assistant_suffix);
             },
+            .tool => {
+                // Tool results formatted as ChatML tool role
+                try result.appendSlice(allocator, "<|im_start|>tool\n");
+                if (msg.tool_call_id) |tcid| {
+                    try result.appendSlice(allocator, tcid);
+                    try result.appendSlice(allocator, "\n");
+                }
+                try result.appendSlice(allocator, msg.content);
+                try result.appendSlice(allocator, "<|im_end|>\n");
+            },
         }
     }
 
@@ -571,12 +581,34 @@ if (!is_image_token) {
 
 The visual embeddings are set before generation via `model.setImageEmbeddings()`, which stores the vision encoder's output buffer and the pad token ID. The `visual_token_idx` counter advances through the visual embeddings one token at a time, ensuring each pad token gets the correct patch embedding.
 
+## Tool Calling
+
+Tool/function calling is supported via the HTTP API. When tools are present in a request, tool definitions are injected into the system prompt. The model outputs tool calls wrapped in `<tool_call>` tags, which the server parses into structured `tool_calls` responses.
+
+Tool results are sent back as messages with `role: "tool"` and a `tool_call_id` field. The `Message` struct includes:
+
+```zig
+pub const Message = struct {
+    role: Role,
+    content: []const u8,
+    tool_call_id: ?[]const u8 = null,
+};
+```
+
+For ChatML models (Qwen3.5, Nemotron), tool results are formatted as:
+```
+<|im_start|>tool
+call_123_0
+{"temp": 18, "condition": "cloudy"}<|im_end|>
+```
+
+See [API.md — Tool Calling](../API.md#tool-calling) for request/response format and usage examples.
+
 ## Future Extensions
 
 **Potential additions** (not yet implemented):
 
 - **Jinja2 template support:** Parse HuggingFace's `.jinja` templates directly
-- **Tool/function calling:** Special formatting for function results
 - **Multi-modal:** Audio/video markers (image tokens already supported via SigLIP-2)
 - **Custom templates via CLI:** `--template path/to/template.json`
 

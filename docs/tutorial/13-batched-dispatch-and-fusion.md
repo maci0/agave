@@ -413,7 +413,7 @@ Each threadgroup computes one output element. It loads the same `x` vector once 
 - SiLU: Q8_0, Q4_K, Q5_K, Q6_K, Q4_0, MLX_Q4
 - GELU: Q8_0, Q4_K, Q5_K, Q6_K, Q4_0
 
-1 CUDA kernel: `fused_ffn_q8_0.zig` (Q8_0 SiLU, compiled to PTX).
+4 CUDA kernels: `fused_ffn_{q8_0,q4_k,q5_k,q6_k}.zig` (SiLU, compiled to PTX). 1 ROCm kernel (Q8_0 SiLU).
 
 **Performance:**
 
@@ -424,7 +424,7 @@ For small models (0.8-2B), dispatch overhead is a significant fraction of per-to
 
 For larger models (4B+), the per-dispatch compute time dominates, so the relative gain is smaller.
 
-**Supported models:** Qwen 3.5, Gemma 3, Gemma 4 (dense+MoE), GLM-4 on Metal. Qwen 3.5 Q8_0 on CUDA.
+**Supported models:** Qwen 3.5, Gemma 3, Gemma 4 (dense+MoE), GLM-4 on Metal. Qwen 3.5 on CUDA (Q8_0, Q4_K, Q5_K, Q6_K) and ROCm (Q8_0).
 
 **Weight offset computation:** The megakernel needs to access both gate and up weight matrices in a single dispatch. `src/backend/megakernel.zig` computes per-layer byte offsets so the kernel can locate both weight tensors without separate buffer bindings.
 
@@ -656,9 +656,9 @@ fn encode(...) void {
 
 | Model | Backend | Quant Types | Enable |
 |-------|---------|-------------|--------|
-| Qwen 3.5 | Metal, CUDA | Q8_0, Q4_K, Q5_K, Q6_K, Q4_0 | `--megakernel` |
-| Gemma 4 | Metal | Q8_0, Q4_K, Q5_K, Q6_K, Q4_0 | `--megakernel` |
-| Gemma 3 | Metal | Q8_0, Q4_K, Q5_K, Q6_K, Q4_0 | `--megakernel` |
+| Qwen 3.5 | Metal, CUDA, ROCm | Q8_0, Q4_K, Q5_K, Q6_K, Q4_0 | `--megakernel` |
+| Gemma 4 | Metal, CUDA | Q8_0, Q4_K, Q5_K, Q6_K, Q4_0 | `--megakernel` |
+| Gemma 3 | Metal, CUDA | Q8_0, Q4_K, Q5_K, Q6_K, Q4_0 | `--megakernel` |
 | GLM-4 | Metal | Q8_0, Q4_K, Q5_K, Q6_K, Q4_0 | `--megakernel` |
 
 ### Debugging

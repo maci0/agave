@@ -1,11 +1,18 @@
 # Supported Models
 
+Download models directly from Hugging Face Hub:
+
+```bash
+agave pull Qwen/Qwen3.5-9B-GGUF --quant Q4_K_M    # download specific quant
+agave pull google/gemma-4-4b-it-gguf --list          # list available files
+```
+
 ## Overview
 
 | Model | Arch ID | Attention | FFN | Special |
 |-------|---------|-----------|-----|---------|
 | **Gemma 3** | `gemma3` | GQA + QK norm + post-norms | GELU + SwiGLU | Embedding scaling, logit softcap, vision (SigLIP) |
-| **Qwen 3.5/3.6** | `qwen35` | GQA (every 4th layer) | SiLU + SwiGLU | DeltaNet SSM hybrid, MoE (3.5-35B, 3.6-35B) |
+| **Qwen 3.5/3.6** | `qwen35` | GQA (every 4th layer) | SiLU + SwiGLU | DeltaNet SSM hybrid, MoE (3.5-35B, 3.6-35B), MTP heads |
 | **GPT-OSS** | `gpt_oss` | GQA + sliding window + sinks | SiLU + SwiGLU | MoE (top-4 of 32 experts) |
 | **Nemotron-H** | `nemotron_h` | GQA (sparse layers) | SiLU + SwiGLU | Mamba-2 SSM hybrid (GGUF) |
 | **Nemotron Nano** | `nemotron_nano` | GQA (sparse layers) | ReLU² MoE | SSM + MoE + attention hybrid (NVFP4) |
@@ -54,7 +61,12 @@
 |-------|-------|---------|-------|
 | Qwen3.5 0.8B | Q8_0 | Metal | 183 |
 | Qwen3.5 0.8B | Q4_0 | Metal | 110 |
+| Qwen3.5 9B | Q4_K_M | Metal | 7.2 |
+| Qwen3.5 9B | MLX-4bit | Metal | 12.7 |
 | Qwen3.5 9B | Q4_0 | Metal | 34.5 |
+| Gemma4 E2B | Q4_K | Metal | 9.5 |
+| Gemma4 E4B | Q4_K | Metal | 9.0 |
+| Gemma4 26B-A4B | Q4_K | Metal | 6.8 |
 | Gemma3 27B | QAT 4-bit | Metal | 11.6 |
 | Gemma3 27B | QAT 4-bit | CPU | 3.2 |
 

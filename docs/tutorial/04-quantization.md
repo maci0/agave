@@ -260,10 +260,10 @@ A key insight, also explored in [KIVI (Liu et al., 2024)](https://arxiv.org/abs/
 
 ```bash
 # Best quality: high-precision K + compressed V
-./agave model.gguf --cache-type-k q8_0 --cache-type-v turbo4 "prompt"
+./agave model.gguf --kv-type-k q8_0 --kv-type-v turbo4 "prompt"
 
 # Maximum compression
-./agave model.gguf --cache-type-k turbo3 --cache-type-v turbo2 "prompt"
+./agave model.gguf --kv-type-k turbo3 --kv-type-v turbo2 "prompt"
 
 # Symmetric (shorthand via --kv-type)
 ./agave model.gguf --kv-type turbo4 "prompt"

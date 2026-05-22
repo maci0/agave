@@ -2,7 +2,7 @@
 
 Bugs, performance issues, and future work. Detailed designs inline.
 
-**Last updated**: 2026-05-19
+**Last updated**: 2026-05-22
 
 ---
 
@@ -33,10 +33,10 @@ All quantized GEMV formats native on all 6 backends. See [KERNELS.md](KERNELS.md
 | Backend | Status | Notes |
 |---------|:------:|-------|
 | Metal | Complete | 70+ pipelines, GPTQ, paged SDPA |
-| CUDA | Complete | 54 kernels, fused FFN, 3 megakernels |
-| Vulkan | Complete | 42 shaders, deferred dispatch |
+| CUDA | Complete | 56 kernels, fused FFN, 3 megakernels |
+| Vulkan | Complete | 44 shaders, deferred dispatch |
 | WebGPU | Complete | 43 shaders, lazy readback |
-| ROCm | Complete | 42 kernels, GPTQ, 1 megakernel |
+| ROCm | Complete | 44 kernels, GPTQ, 1 megakernel |
 
 ---
 
@@ -60,19 +60,27 @@ All quantized GEMV formats native on all 6 backends. See [KERNELS.md](KERNELS.md
 | `--ctx-size auto` (memory-safe context fitting) | vLLM |
 | xxHash prefix cache (RadixTree fast path) | vLLM |
 | N-gram speculative decoding (`--spec-mode ngram`) | vLLM |
+| SSM state prefix caching | vLLM |
+| Async scheduler + PP overlap | vLLM |
+| Profile-guided speculative decoding (adaptive K) | llama.cpp |
+| Mirostat sampling (target-entropy adaptive) | llama.cpp |
 | XTC sampling (`xtc_probability`, `xtc_threshold`) | llama.cpp |
+| DRY sampling (n-gram repetition penalty) | llama.cpp |
+| Tool/function calling (OpenAI-compatible, streaming + non-streaming) | llama.cpp |
+| Logit bias support | llama.cpp |
+| Zero-config P2P discovery (UDP) | Mesh-LLM |
 | Downstream-first stage startup (RTT handshake) | Mesh-LLM |
 | Peer RTT measurement | Mesh-LLM |
 | Pre-sharded weight files (design) | Mesh-LLM |
+| `agave pull` (HF Hub model download with resume) | — |
+| Deferred dispatch (Vulkan/WebGPU single-submit) | — |
+| All quantized GEMV kernel gaps closed (32 new kernel files) | — |
 
 ### High Priority
 
 | # | Feature | Impact | Source |
 |---|---------|--------|--------|
-| 1 | ~~SSM state prefix caching~~ | ~~~2x prefill speedup for hybrid SSM models~~ | Done |
-| 2 | ~~Async scheduler + PP overlap~~ | ~~Decode-first + chunked prefill~~ | Done |
 | 3 | Batched KV swap (cuMemcpyBatchAsync) | Reduce tiered cache API overhead | vLLM |
-| 4 | ~~Mirostat sampling~~ | ~~Target-entropy adaptive sampling~~ | Done |
 | 5 | MTP (Multi-Token Prediction) heads | Native multi-token output for Qwen3.6/DeepSeek | llama.cpp |
 
 ### Medium Priority
@@ -82,11 +90,9 @@ All quantized GEMV formats native on all 6 backends. See [KERNELS.md](KERNELS.md
 | 6 | TurboQuant in SDPA kernel | Skip decode-time dequant | vLLM |
 | 7 | ~~Spec decode thinking budget~~ | ~~Adaptive cooldown on low acceptance~~ | Done |
 | 8 | Multi-stream pre-attention GEMM | Overlap QKV(N+1) with SDPA(N) | vLLM |
-| 9 | ~~Profile-guided speculative decoding~~ | ~~Adaptive K per step~~ | Done |
 | 10 | Router mode (multi-model server) | Switch models per request | llama.cpp |
 | 11 | Hybrid memory abstraction | Unified KV+SSM cache | llama.cpp |
 | 12 | ~~Topology-aware auto partitioning~~ | ~~Device cap exchange done, weighted split pending~~ | Partial |
-| 13 | ~~Zero-config P2P discovery (UDP)~~ | ~~No --peers needed on LAN~~ | Done |
 | 14 | gRPC server (HTTP/2) | Lower overhead serving | vLLM |
 
 ### Low Priority

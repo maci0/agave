@@ -55,6 +55,8 @@ curl http://localhost:49453/v1/chat/completions -d '{
 | grammar | string | null | GBNF grammar for constrained decoding |
 | json_schema | string | null | JSON schema for structured output |
 | response_format | object | null | `{"type": "json_object"}` or `{"type": "json_schema", "json_schema": {"schema": {...}}}` |
+| tools | array | null | Tool/function definitions (see [Tool Calling](#tool-calling)) |
+| tool_choice | string | "auto" | `"auto"`, `"none"`, or `"required"` |
 
 **Response:**
 ```json
@@ -317,6 +319,68 @@ curl localhost:49453/v1/chat/completions -d '{
   "grammar": "root ::= \"yes\" | \"no\""
 }'
 ```
+
+---
+
+## Tool Calling
+
+OpenAI-compatible function/tool calling. Tools are injected into the system prompt; the model decides when to call them.
+
+**Request with tools:**
+```bash
+curl http://localhost:49453/v1/chat/completions -d '{
+  "messages": [{"role": "user", "content": "What is the weather in Paris?"}],
+  "tools": [{
+    "type": "function",
+    "function": {
+      "name": "get_weather",
+      "description": "Get current weather for a city",
+      "parameters": {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]}
+    }
+  }],
+  "max_tokens": 200
+}'
+```
+
+**Tool call response:**
+```json
+{
+  "choices": [{
+    "message": {
+      "role": "assistant",
+      "content": null,
+      "tool_calls": [{
+        "id": "call_123_0",
+        "type": "function",
+        "function": {"name": "get_weather", "arguments": "{\"city\":\"Paris\"}"}
+      }]
+    },
+    "finish_reason": "tool_calls"
+  }]
+}
+```
+
+**Sending tool results back:**
+```bash
+curl http://localhost:49453/v1/chat/completions -d '{
+  "messages": [
+    {"role": "user", "content": "What is the weather in Paris?"},
+    {"role": "assistant", "content": null, "tool_calls": [{"id": "call_123_0", "type": "function", "function": {"name": "get_weather", "arguments": "{\"city\":\"Paris\"}"}}]},
+    {"role": "tool", "tool_call_id": "call_123_0", "content": "{\"temp\": 18, \"condition\": \"cloudy\"}"}
+  ],
+  "max_tokens": 200
+}'
+```
+
+**tool_choice values:**
+
+| Value | Behavior |
+|-------|----------|
+| `"auto"` (default) | Model decides whether to call tools |
+| `"none"` | Tools stripped from prompt, no tool calls |
+| `"required"` | Model instructed to call at least one tool |
+
+Streaming with tools is supported — tool calls are emitted as delta chunks with `tool_calls` array, followed by `finish_reason: "tool_calls"`.
 
 ---
 

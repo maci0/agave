@@ -2,7 +2,7 @@
 
 **Status**: Implemented  
 **Scope**: Tensor Parallelism (TP), Pipeline Parallelism (PP), Hybrid TP+PP, Disaggregated Prefill/Decode  
-**Transports**: TCP, POSIX Shared Memory, NCCL (RoCE RDMA)  
+**Transports**: TCP, POSIX Shared Memory, NCCL (RoCE RDMA), RCCL (declared, not yet implemented)  
 **Backends**: All GPU backends (Metal, CUDA, Vulkan, ROCm, WebGPU) + CPU
 
 ---
@@ -47,6 +47,9 @@ All distributed communication goes through `src/parallel/transport.zig`. Three t
 | **TCP** | BSD sockets, full send/recv loops | Cross-node, no RDMA | ~10 Gbps |
 | **POSIX shm** | `shm_open` + `mmap`, atomic spin-wait | Same-node, zero-copy | Memory bandwidth |
 | **NCCL** | `dlopen("libnccl.so.2")`, GPU-direct | CUDA multi-GPU, RoCE RDMA | Up to 400 Gbps |
+| **RCCL** | AMD's NCCL equivalent | ROCm multi-GPU | — |
+
+RCCL (`rccl`) is declared in `TransportKind` but not yet fully implemented. It shares the same API as NCCL and will use `dlopen("librccl.so")` when available.
 
 Auto-selection (`--transport auto`): same-node peers (`localhost`/`127.0.0.1`) → shm, otherwise → tcp.
 
@@ -146,13 +149,28 @@ Tested on dual NVIDIA GB10 (Blackwell sm_121) nodes with 4× ConnectX NICs each,
 
 | Model | Config | Transport | tok/s | vs Single GPU |
 | :--- | :--- | :--- | :--- | :--- |
-| Qwen3.5 0.8B Q8_0 | PP=2 | TCP | 5.1 | 54% |
-| Qwen3.5 0.8B Q8_0 | PP=2 | NCCL | 8.5 | 93% |
-| Qwen3.5 0.8B Q8_0 | TP=2 | TCP | 3.2 | 34% |
-| Qwen3.5 0.8B Q8_0 | TP=2 | NCCL | 5.1 | 56% |
 | Qwen3.5 0.8B Q8_0 | Single | — | 9.2 | 100% |
+| Qwen3.5 0.8B Q8_0 | PP=2 | NCCL RoCE | **40.2** | 112% |
+| Qwen3.5 0.8B Q8_0 | TP=2 | NCCL RoCE | 5.1 | 56% |
+| Qwen3.5 9B Q4_K_M | Single | — | 2.2 | 100% |
+| Qwen3.5 9B Q4_K_M | PP=2 | NCCL RoCE | 2.2 | 100% |
+| Qwen3.5 9B Q4_K_M | TP=2 | NCCL RoCE | 1.7 | 77% |
 
-PP=2 with NCCL achieves 93% of single-GPU throughput. TP=2 has higher overhead due to 2 all-reduces per layer.
+PP=2 with NCCL RoCE RDMA achieves superlinear throughput on the 0.8B model (40.2 tok/s vs 9.2 single-GPU) due to doubled memory bandwidth. TP=2 has higher overhead due to 2 all-reduces per layer.
+
+---
+
+## UDP Peer Discovery
+
+Automatic peer discovery via UDP broadcast on LAN. Rank 0 broadcasts a beacon on port 49460; other ranks respond with join messages. Eliminates manual `--peers` configuration for same-subnet deployments.
+
+```bash
+# Rank 0 broadcasts, rank 1 auto-discovers
+agave model.gguf --tp 2 --rank 0 "prompt"     # broadcasts beacon
+agave model.gguf --tp 2 --rank 1 "prompt"     # discovers rank 0
+```
+
+Implemented in `src/parallel/discovery.zig`.
 
 ---
 
@@ -178,6 +196,8 @@ PP=2 with NCCL achieves 93% of single-GPU throughput. TP=2 has higher overhead d
 | File | Purpose |
 | :--- | :--- |
 | `src/parallel/transport.zig` | Transport layer: TCP, shm, NCCL |
+| `src/parallel/tp.zig` | Tensor parallelism weight sharding and all-reduce logic |
+| `src/parallel/discovery.zig` | UDP peer discovery (LAN broadcast/join) |
 | `src/main.zig` | CLI parsing, transport setup, NCCL wiring |
 | `src/models/qwen35.zig` | TP/PP model integration (sharding, all-reduce, send/recv) |
 | `src/backend/cuda.zig` | CUDA primary context, device pointer lookup for NCCL |
@@ -190,6 +210,7 @@ PP=2 with NCCL achieves 93% of single-GPU throughput. TP=2 has higher overhead d
 
 - **TP degree**: must divide `n_heads` and `n_kv_heads`
 - **NCCL**: requires `libnccl.so.2` at runtime (not bundled)
+- **RCCL**: declared in `TransportKind` but not yet implemented — ROCm multi-GPU requires future work
 - **NCCL primary context**: CUDA must use `cuDevicePrimaryCtxRetain` — `cuCtxCreate` will cause context corruption after `ncclCommInitRank`
 - **K-quant CPU fallback on UMA**: Q4_K/Q5_K/Q6_K delegate to CPU on GB10 sm_121 (PTX register spilling). CPU allReduceAdd uploads to device staging buffer for NCCL
 - **PP bubble**: single-token decode has `1/pp_degree` utilization; only worthwhile for fitting larger models
@@ -203,4 +224,4 @@ PP=2 with NCCL achieves 93% of single-GPU throughput. TP=2 has higher overhead d
 - Expert parallelism for MoE models
 - Quantized communication (bf16/fp8 all-reduce)
 - KV cache sharing over RDMA for disaggregated serving
-- RCCL support for ROCm multi-GPU (same API as NCCL)
+- RCCL implementation for ROCm multi-GPU (transport kind declared, needs runtime integration)

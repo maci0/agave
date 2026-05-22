@@ -234,8 +234,8 @@ Helper constructors simplify common patterns:
 | Backend | Pipelines/Kernels | Megakernel Files | Composed |
 |---------|:-----------------:|:----------------:|:--------:|
 | Metal | 70+ | 7 (5 true + megakernel.metal + mega_common.metal) | Yes (runtime MSL) |
-| CUDA | 41 | 4 (3 true + fused FFN) | No |
-| ROCm | 28+ | 1 (true Qwen Q8_0) | No |
+| CUDA | 56 | 4 (3 true + fused FFN) | No |
+| ROCm | 44 | 1 (true Qwen Q8_0) | No |
 
 The composed megakernel (`mega_compose.zig`) generates an additional Metal pipeline at runtime via `compileComposedMegakernel()`. This pipeline is not counted in the static file totals above.
 

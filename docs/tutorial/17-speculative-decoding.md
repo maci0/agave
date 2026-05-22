@@ -163,6 +163,28 @@ For greedy decoding (temperature=0), speculative decoding produces **byte-identi
 
 For sampling (temperature > 0), rejection sampling (Leviathan et al. 2023) preserves the target model's output distribution. Each draft token is accepted with probability min(1, p_target/p_draft); on rejection, a correction is sampled from the residual distribution max(0, p_target - p_draft).
 
+## Adaptive K (Profile-Guided)
+
+Agave tracks per-K acceptance statistics during generation. The `optimalK()` function in `spec_decode.zig` computes the expected tokens per step for each K value and selects the one with the highest throughput:
+
+```
+expected_tokens(K) = Σ(i=1..K) i × P(accept exactly i)
+optimal_K = argmax over K of expected_tokens(K) / cost(K)
+```
+
+Enable with:
+```bash
+agave model.gguf --draft-model draft.gguf --adaptive-k "prompt"
+```
+
+Early in generation (first ~50 tokens), the system uses the default K. As statistics accumulate, it adjusts K per-step based on observed acceptance rates. If acceptance drops (poor draft quality), K shrinks to reduce wasted drafts. If acceptance is high, K grows.
+
+### Cooldown
+
+When the acceptance rate drops below a threshold (e.g., all K tokens rejected), speculative decoding temporarily falls back to standard single-token decode for a cooldown period. This avoids wasting compute on bad draft proposals during challenging output segments (reasoning, novel vocabulary, code switches).
+
+The cooldown counter decrements each step and re-enables speculation when it expires.
+
 ## Performance Tuning
 
 | Parameter | Effect | Recommendation |
@@ -170,13 +192,14 @@ For sampling (temperature > 0), rejection sampling (Leviathan et al. 2023) prese
 | `--spec-tokens` | Draft depth K | 3-8 for most models |
 | `--tree-budget` | Tree width B | 32-128 (diminishing returns beyond 256) |
 | `--draft-layers` | Layers skipped (self-spec) | 25-50% of total layers |
+| `--adaptive-k` | Auto-tune K at runtime | Enable for long generations |
 | Draft model size | Acceptance rate vs speed | 1/4 to 1/8 of target size |
 
 ### Batch Tree Verification
 
 Models with `forwardTree()` support (currently Gemma3) can verify the entire draft tree in a **single** target forward pass using tree-masked SDPA (`sdpaTree`). This reduces verification from O(K) sequential forwards to O(1), making speculative decoding significantly faster.
 
-The `sdpaTree` kernel is available on both CPU and Metal GPU. The Metal kernel uses FlashAttention-2 with ancestor bitmask masking — one threadgroup per (node, head) pair.
+The `sdpaTree` kernel has native implementations on all 6 backends: CPU, Metal, CUDA, Vulkan, ROCm, and WebGPU. GPU kernels use FlashAttention-2 with ancestor bitmask masking — one threadgroup per (node, head) pair.
 
 Models without `forwardTree()` (Qwen3.5, Nemotron, etc.) fall back to sequential verification, which still works but doesn't benefit from batching.
 
@@ -225,6 +248,16 @@ The key insight: DFlash wastes information by collapsing the draft distributions
 
 **In agave's implementation**, we use autoregressive drafting (not block diffusion) since agave doesn't include a diffusion model. The DDTree tree construction algorithm works identically — it takes per-position logit distributions (however produced) and builds the optimal tree. The draft distributions come from K sequential forward passes of the draft model rather than one block diffusion pass.
 
+## MTP (Multi-Token Prediction)
+
+MTP uses prediction heads trained jointly with the main model — no separate draft model needed. Each head is a single transformer layer that takes the main model's hidden state + the current token embedding, and predicts the next token at ~5% the cost of a full forward pass. Acceptance rates are 70-85% (vs ~50% for separate draft models).
+
+```bash
+agave model-mtp.gguf --spec-mode mtp "prompt"
+```
+
+MTP requires GGUF files with nextn tensors (look for "-MTP" in the filename). See [Chapter 18: Multi-Token Prediction](18-multi-token-prediction.md) for full architectural details, including the +1 offset norm, concatenation projection, and which models support MTP.
+
 ## Server Mode
 
 Speculative decoding works with `--serve`. All API endpoints (OpenAI, Anthropic, Responses) support it in both streaming and non-streaming modes.
@@ -233,6 +266,7 @@ Speculative decoding works with `--serve`. All API endpoints (OpenAI, Anthropic,
 agave model.gguf --draft-model draft.gguf --serve
 agave model.gguf --draft-model draft.gguf --spec-mode ddtree --serve
 agave model.gguf --spec-mode self --serve
+agave model-mtp.gguf --spec-mode mtp --serve
 ```
 
 ```bash
@@ -250,6 +284,6 @@ The server uses the same speculative decoding loop as CLI mode. Draft model pref
 
 ---
 
-**In the code:** [src/spec/spec_decode.zig](../../src/spec/spec_decode.zig) (orchestrator), [src/spec/ddtree.zig](../../src/spec/ddtree.zig) (DDTree construction), [src/backend/kernels/cpu/sdpa_tree.zig](../../src/backend/kernels/cpu/sdpa_tree.zig) (tree-masked attention)
+**In the code:** [src/spec/spec_decode.zig](../../src/spec/spec_decode.zig) (orchestrator, adaptive K, cooldown), [src/spec/ddtree.zig](../../src/spec/ddtree.zig) (DDTree construction), [src/spec/ngram.zig](../../src/spec/ngram.zig) (n-gram history matching), [src/backend/kernels/cpu/sdpa_tree.zig](../../src/backend/kernels/cpu/sdpa_tree.zig) (tree-masked attention)
 
 **Next:** [Appendix: Mathematical Operations →](appendix-math.md) | **Back:** [Chapter 16: Recipe System ←](16-recipe-system.md) | **Product docs:** [Models](../MODELS.md)

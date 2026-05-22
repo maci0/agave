@@ -22,6 +22,29 @@ const max_top_k: u32 = 1024;
 /// Maximum number of stop sequences per request.
 const max_stop_sequences: usize = 4;
 
+/// Maximum number of tool definitions per request.
+const max_tools: usize = 8;
+
+/// A tool/function definition from the OpenAI tools array.
+pub const ToolDef = struct {
+    name: []const u8,
+    description: []const u8,
+    parameters_json: []const u8,
+};
+
+/// Parsed tool call result from model output.
+pub const ToolCallResult = struct {
+    name: []const u8,
+    arguments: []const u8,
+};
+
+/// Tool definitions extracted from request.
+pub const ToolParams = struct {
+    tools: [max_tools]?ToolDef = .{null} ** max_tools,
+    tool_count: u32 = 0,
+    tool_choice: []const u8 = "auto",
+};
+
 /// Per-request sampling parameters. Defaults match greedy decoding.
 /// Values are clamped to safe ranges by `parseSampling()`.
 pub const SamplingParams = struct {
@@ -182,6 +205,37 @@ pub fn extractField(json: []const u8, field: []const u8) ?[]const u8 {
         };
         const end = findJsonStringEnd(json, start);
         return json[start..end];
+    }
+    return null;
+}
+
+/// Extract a JSON object or array value for a given field key.
+/// Returns the raw slice including braces/brackets (e.g., `{"city":"Paris"}`).
+pub fn extractObjectField(json_buf: []const u8, field: []const u8) ?[]const u8 {
+    var buf: [extract_field_buf_size]u8 = undefined;
+    const needle = std.fmt.bufPrint(&buf, "\"{s}\"", .{field}) catch return null;
+    var search_start: usize = 0;
+    while (search_start < json_buf.len) {
+        const pos = findFieldValuePos(json_buf, needle, &search_start) orelse return null;
+        if (pos >= json_buf.len) continue;
+        const ch = json_buf[pos];
+        if (ch != '{' and ch != '[') continue;
+        const close: u8 = if (ch == '{') '}' else ']';
+        var depth: usize = 1;
+        var i = pos + 1;
+        while (i < json_buf.len and depth > 0) : (i += 1) {
+            if (json_buf[i] == ch) {
+                depth += 1;
+            } else if (json_buf[i] == close) {
+                depth -= 1;
+            } else if (json_buf[i] == '"') {
+                i += 1;
+                while (i < json_buf.len and json_buf[i] != '"') : (i += 1) {
+                    if (json_buf[i] == '\\' and i + 1 < json_buf.len) i += 1;
+                }
+            }
+        }
+        return json_buf[pos..i];
     }
     return null;
 }
@@ -349,6 +403,55 @@ pub fn parseSampling(body: []const u8) SamplingParams {
     return result;
 }
 
+/// Parse tool definitions from "tools" array in request body.
+/// Extracts function name, description, and parameters JSON for each tool.
+pub fn parseTools(body: []const u8) ToolParams {
+    var result = ToolParams{};
+
+    // Find the tools array in the body
+    const tools_arr = extractObjectField(body, "tools") orelse return result;
+
+    // Parse tool_choice — can be string ("auto"/"none"/"required") or object
+    result.tool_choice = extractField(body, "tool_choice") orelse "auto";
+
+    // Extract each function definition from the tools array.
+    // Look for "function" keys (not values) by requiring a colon after.
+    var search_pos: usize = 0;
+    while (result.tool_count < max_tools) {
+        const fn_key = "\"function\"";
+        // Use findFieldValuePos which requires a colon after the key
+        const val_pos = findFieldValuePos(tools_arr, fn_key, &search_pos) orelse break;
+        if (val_pos >= tools_arr.len or tools_arr[val_pos] != '{') continue;
+
+        // Find the end of this function object
+        var depth: usize = 1;
+        var fn_end: usize = val_pos + 1;
+        while (fn_end < tools_arr.len and depth > 0) : (fn_end += 1) {
+            if (tools_arr[fn_end] == '{') {
+                depth += 1;
+            } else if (tools_arr[fn_end] == '}') {
+                depth -= 1;
+            } else if (tools_arr[fn_end] == '"') {
+                fn_end += 1;
+                while (fn_end < tools_arr.len and tools_arr[fn_end] != '"') : (fn_end += 1) {
+                    if (tools_arr[fn_end] == '\\' and fn_end + 1 < tools_arr.len) fn_end += 1;
+                }
+            }
+        }
+        const fn_obj = tools_arr[val_pos..fn_end];
+        search_pos = fn_end;
+
+        const name = extractField(fn_obj, "name") orelse continue;
+        const desc = extractField(fn_obj, "description") orelse "";
+        const params = extractObjectField(fn_obj, "parameters") orelse "{}";
+
+        const idx = result.tool_count;
+        result.tools[idx] = .{ .name = name, .description = desc, .parameters_json = params };
+        result.tool_count += 1;
+    }
+    return result;
+}
+
 /// Extract all messages from an OpenAI-format `"messages"` JSON array.
 /// Returns conversation messages (user/assistant) and an optional system message.
 /// Message content slices point into the original JSON body — valid for the request lifetime.
@@ -405,6 +508,11 @@ pub fn extractMessages(json: []const u8, allocator: Allocator) ?ExtractedMessage
             count += 1;
         } else if (std.mem.eql(u8, role_str, "assistant")) {
             messages_buf[count] = .{ .role = .assistant, .content = owned_content };
+            count += 1;
+        } else if (std.mem.eql(u8, role_str, "tool")) {
+            // Tool result message — extract tool_call_id and include content
+            const tcid = extractField(obj_slice, "tool_call_id");
+            messages_buf[count] = .{ .role = .tool, .content = owned_content, .tool_call_id = tcid };
             count += 1;
         } else {
             allocator.free(owned_content);
@@ -1103,4 +1211,41 @@ test "matchesStop" {
     try std.testing.expect(s.matchesStop("hello world END"));
     try std.testing.expect(!s.matchesStop("hello world"));
     try std.testing.expect(s.matchesStop("END"));
+}
+
+test "extractObjectField" {
+    const j = \\{"name":"test","params":{"type":"object","props":{"x":1}},"other":"val"}
+    ;
+    const obj = extractObjectField(j, "params") orelse unreachable;
+    try std.testing.expectEqualStrings("{\"type\":\"object\",\"props\":{\"x\":1}}", obj);
+    try std.testing.expect(extractObjectField(j, "name") == null);
+    try std.testing.expect(extractObjectField(j, "missing") == null);
+}
+
+test "extractObjectField array" {
+    const j = \\{"items":[1,2,3],"name":"x"}
+    ;
+    const arr = extractObjectField(j, "items") orelse unreachable;
+    try std.testing.expectEqualStrings("[1,2,3]", arr);
+}
+
+test "parseTools basic" {
+    const body =
+        \\{"messages":[],"tools":[{"type":"function","function":{"name":"get_weather","description":"Get weather","parameters":{"type":"object","properties":{"city":{"type":"string"}}}}}],"tool_choice":"required"}
+    ;
+    const tp = parseTools(body);
+    try std.testing.expectEqual(@as(u32, 1), tp.tool_count);
+    try std.testing.expectEqualStrings("required", tp.tool_choice);
+    const tool = tp.tools[0].?;
+    try std.testing.expectEqualStrings("get_weather", tool.name);
+    try std.testing.expectEqualStrings("Get weather", tool.description);
+    try std.testing.expect(std.mem.indexOf(u8, tool.parameters_json, "object") != null);
+}
+
+test "parseTools no tools" {
+    const body = \\{"messages":[]}
+    ;
+    const tp = parseTools(body);
+    try std.testing.expectEqual(@as(u32, 0), tp.tool_count);
+    try std.testing.expectEqualStrings("auto", tp.tool_choice);
 }

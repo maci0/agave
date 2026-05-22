@@ -105,6 +105,22 @@ pub const SpecResult = struct {
     next_token: u32,
 };
 
+/// Generate draft tokens using MTP (Multi-Token Prediction) heads.
+/// Each depth produces one draft token from a lightweight single-layer forward pass.
+pub fn draftMtp(state: *SpecState, model: *Model, last_token: u32) u32 {
+    const max_depth = model.getMtpDepth();
+    if (max_depth == 0) return 0;
+    var n: u32 = 0;
+    const effective_k = @min(state.k, max_depth);
+    while (n < effective_k and n < max_draft_tokens) {
+        const tok = model.mtpForward(last_token, n) catch break;
+        state.draft_tokens[n] = tok;
+        n += 1;
+    }
+    state.n_draft = n;
+    return n;
+}
+
 /// Generate K draft tokens without saving logits (fastest for self-draft).
 pub fn draft(state: *SpecState, draft_model: *Model, last_token: u32) u32 {
     var tok = last_token;

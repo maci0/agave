@@ -601,6 +601,94 @@ fn sendHtml(stream: TcpStream, body: []const u8) void {
 
 /// Send a JSON error response following the OpenAI error format.
 /// Message and type are JSON-escaped to prevent injection (CWE-116).
+/// Build system prompt with tool definitions injected.
+fn buildToolSystemPrompt(allocator: Allocator, tp: *const json.ToolParams, existing_system: ?[]const u8) ![]u8 {
+    var buf = std.ArrayList(u8).empty;
+    errdefer buf.deinit(allocator);
+    if (existing_system) |sys| {
+        try buf.appendSlice(allocator, sys);
+        try buf.appendSlice(allocator, "\n\n");
+    }
+    try buf.appendSlice(allocator, "You have access to the following tools:\n\n");
+    for (0..tp.tool_count) |i| {
+        if (tp.tools[i]) |tool| {
+            try buf.appendSlice(allocator, "- ");
+            try buf.appendSlice(allocator, tool.name);
+            if (tool.description.len > 0) {
+                try buf.appendSlice(allocator, ": ");
+                try buf.appendSlice(allocator, tool.description);
+            }
+            try buf.appendSlice(allocator, "\n  Parameters: ");
+            try buf.appendSlice(allocator, tool.parameters_json);
+            try buf.appendSlice(allocator, "\n");
+        }
+    }
+    try buf.appendSlice(allocator,
+        \\
+        \\To call a tool, output a JSON object wrapped in <tool_call> tags:
+        \\<tool_call>{"name": "tool_name", "arguments": {"param": "value"}}</tool_call>
+        \\You may call multiple tools.
+    );
+    if (std.mem.eql(u8, tp.tool_choice, "required")) {
+        try buf.appendSlice(allocator, " You MUST call at least one tool.");
+    } else {
+        try buf.appendSlice(allocator, " Only call tools when needed.");
+    }
+    return buf.toOwnedSlice(allocator);
+}
+
+/// Parse tool calls from model output. Looks for <tool_call>...</tool_call> patterns.
+/// Returns true if tool calls found and writes response. Otherwise returns false.
+fn hasToolCalls(text: []const u8) bool {
+    return std.mem.indexOf(u8, text, "<tool_call>") != null;
+}
+
+/// Build tool_calls JSON response from model output containing <tool_call> tags.
+/// Supports multiple tool calls. Arguments are JSON-escaped strings per OpenAI spec.
+fn buildToolCallResponse(buf: []u8, raw_text: []const u8, req_id: u64, created: i64, prompt_tokens: u32, completion_tokens: u32) []const u8 {
+    const tc_start_tag = "<tool_call>";
+    const tc_end_tag = "</tool_call>";
+    const total = prompt_tokens + completion_tokens;
+
+    // Build tool_calls array entries
+    var tc_buf: [4096]u8 = undefined;
+    var tc_pos: usize = 0;
+    var search_pos: usize = 0;
+    var call_idx: usize = 0;
+
+    while (search_pos < raw_text.len) {
+        const tc_start = std.mem.indexOfPos(u8, raw_text, search_pos, tc_start_tag) orelse break;
+        const json_start = tc_start + tc_start_tag.len;
+        const tc_end = std.mem.indexOfPos(u8, raw_text, json_start, tc_end_tag) orelse break;
+        const tc_json = raw_text[json_start..tc_end];
+        search_pos = tc_end + tc_end_tag.len;
+
+        const name = json.extractField(tc_json, "name") orelse continue;
+        const args = json.extractObjectField(tc_json, "arguments") orelse
+            (json.extractField(tc_json, "arguments") orelse "{}");
+
+        // Escape arguments JSON for embedding as string value
+        const escaped_args = json.jsonEscape(g_server.allocator, args) catch args;
+        defer if (escaped_args.ptr != args.ptr) g_server.allocator.free(escaped_args);
+
+        if (call_idx > 0 and tc_pos < tc_buf.len) {
+            tc_buf[tc_pos] = ',';
+            tc_pos += 1;
+        }
+        const entry = std.fmt.bufPrint(tc_buf[tc_pos..],
+            \\{{"id":"call_{d}_{d}","type":"function","function":{{"name":"{s}","arguments":"{s}"}}}}
+        , .{ req_id, call_idx, name, escaped_args }) catch break;
+        tc_pos += entry.len;
+        call_idx += 1;
+    }
+
+    if (call_idx == 0) return "";
+
+    return std.fmt.bufPrint(buf,
+        \\{{"id":"chatcmpl-{d}","object":"chat.completion","created":{d},"model":"{s}","system_fingerprint":"agave-v0.1","choices":[{{"index":0,"message":{{"role":"assistant","content":null,"tool_calls":[{s}]}},"finish_reason":"tool_calls"}}],"usage":{{"completion_tokens":{d},"prompt_tokens":{d},"total_tokens":{d}}}}}
+    , .{ req_id, created, g_server.model_name, tc_buf[0..tc_pos], completion_tokens, prompt_tokens, total }) catch "";
+}
+
 fn sendJsonError(stream: TcpStream, status: []const u8, err_type: []const u8, message: []const u8) void {
     const escaped_msg = json.jsonEscape(g_server.allocator, message) catch message;
     defer if (escaped_msg.ptr != message.ptr) g_server.allocator.free(escaped_msg);
@@ -833,7 +921,8 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
         const sampling = json.parseSampling(body);
         if (sampling.user) |u| std.log.info("req={d} user={s}", .{ log_request_id, u });
 
-        // 2. Extract full messages array (system + conversation history)
+        // 2. Parse tools and extract messages
+        const tool_params = json.parseTools(body);
         const extracted = json.extractMessages(body, g_server.allocator);
         defer if (extracted) |ex| ex.deinit(g_server.allocator);
         const fallback_raw = json.extractLastMessage(body);
@@ -847,9 +936,17 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
         const fallback_content = json.jsonUnescape(g_server.allocator, fallback_str) catch @constCast(fallback_str);
         defer if (fallback_content.ptr != fallback_str.ptr) g_server.allocator.free(fallback_content);
 
+        // Inject tool definitions into system prompt
+        var tool_system: ?[]u8 = null;
+        defer if (tool_system) |ts| g_server.allocator.free(ts);
+        if (tool_params.tool_count > 0 and !std.mem.eql(u8, tool_params.tool_choice, "none")) {
+            tool_system = buildToolSystemPrompt(g_server.allocator, &tool_params, if (extracted) |ex| ex.system else null) catch null;
+        }
+        const effective_system = if (tool_system) |ts| @as(?[]const u8, ts) else if (extracted) |ex| ex.system else null;
+
         // Format with full conversation context when available
         const formatted = if (extracted) |ex|
-            g_server.chat_template.formatConversation(g_server.allocator, ex.system, ex.messages) catch
+            g_server.chat_template.formatConversation(g_server.allocator, effective_system, ex.messages) catch
                 g_server.chat_template.format(g_server.allocator, null, fallback_content) catch fallback_content
         else
             g_server.chat_template.format(g_server.allocator, null, fallback_content) catch fallback_content;
@@ -886,7 +983,11 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
         };
 
         if (json.extractBoolField(body, "stream")) {
-            startStream(stream, formatted, true, false, max_tokens, sampling);
+            if (tool_params.tool_count > 0) {
+                startStreamWithTools(stream, formatted, max_tokens, sampling, &tool_params);
+            } else {
+                startStream(stream, formatted, true, false, max_tokens, sampling);
+            }
             logRequestDone(method, path, 200, elapsedMs(request_start));
             return;
         }
@@ -908,7 +1009,14 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
         const created = timestamp();
         const total = gen.stats.tokens_generated + gen.stats.prompt_tokens;
         var resp_buf: [response_buf_size]u8 = undefined;
-        const json_body = std.fmt.bufPrint(&resp_buf,
+
+        // Check if output contains tool calls
+        const json_body = if (tool_params.tool_count > 0 and hasToolCalls(gen.raw)) blk: {
+            const tc_resp = buildToolCallResponse(&resp_buf, gen.raw, req_id, created, gen.stats.prompt_tokens, gen.stats.tokens_generated);
+            break :blk if (tc_resp.len > 0) tc_resp else std.fmt.bufPrint(&resp_buf,
+                \\{{"id":"chatcmpl-{d}","object":"chat.completion","created":{d},"model":"{s}","system_fingerprint":"agave-v0.1","choices":[{{"index":0,"message":{{"role":"assistant","content":"{s}"}},"finish_reason":"{s}"}}],"usage":{{"completion_tokens":{d},"prompt_tokens":{d},"total_tokens":{d}}}}}
+            , .{ req_id, created, g_server.model_name, gen.escaped, gen.finish_reason, gen.stats.tokens_generated, gen.stats.prompt_tokens, total }) catch "";
+        } else std.fmt.bufPrint(&resp_buf,
             \\{{"id":"chatcmpl-{d}","object":"chat.completion","created":{d},"model":"{s}","system_fingerprint":"agave-v0.1","choices":[{{"index":0,"message":{{"role":"assistant","content":"{s}"}},"finish_reason":"{s}"}}],"usage":{{"completion_tokens":{d},"prompt_tokens":{d},"total_tokens":{d}}}}}
         , .{ req_id, created, g_server.model_name, gen.escaped, gen.finish_reason, gen.stats.tokens_generated, gen.stats.prompt_tokens, total }) catch {
             sendJsonError(stream, "500 Internal Server Error", "server_error", "Response too large");
@@ -1397,6 +1505,7 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
                     const role_str: []const u8 = switch (msg.role) {
                         .user => "user",
                         .assistant => "assistant",
+                        .tool => "tool",
                     };
                     const esc_content = json.jsonEscape(g_server.allocator, msg.content) catch msg.content;
                     defer if (esc_content.ptr != msg.content.ptr) g_server.allocator.free(esc_content);
@@ -3429,6 +3538,93 @@ fn startStream(stream: TcpStream, prompt: []const u8, is_chat: bool, format_prom
         return;
     }
     generateStream(stream, prompt, nextRequestId(), timestamp(), is_chat, format_prompt, max_tokens, sampling);
+}
+
+/// Streaming with tool call support. Generates full output first, then emits
+/// tool_calls delta chunks if tool calls detected, otherwise streams content.
+fn startStreamWithTools(stream: TcpStream, prompt: []const u8, max_tokens: usize, sampling: SamplingParams, tp: *const json.ToolParams) void {
+    _ = tp;
+    if (!sendSseHeaders(stream)) {
+        g_server.metrics.recordCancellation();
+        return;
+    }
+
+    const req_id = nextRequestId();
+    const created = timestamp();
+    const gen = generateEscapedN(prompt, true, max_tokens, sampling);
+    defer gen.deinit();
+
+    if (std.mem.eql(u8, gen.finish_reason, "error")) {
+        _ = sseWriteData(stream, "data: {\"error\":\"Generation failed\"}\n\n");
+        _ = sseWriteData(stream, "data: [DONE]\n\n");
+        g_server.metrics.recordFailure();
+        return;
+    }
+
+    var chunk_buf: [response_buf_size]u8 = undefined;
+
+    if (hasToolCalls(gen.raw)) {
+        // Emit tool calls as delta chunks
+        const tc_start_tag = "<tool_call>";
+        const tc_end_tag = "</tool_call>";
+        var search_pos: usize = 0;
+        var call_idx: usize = 0;
+
+        while (search_pos < gen.raw.len) {
+            const tc_start = std.mem.indexOfPos(u8, gen.raw, search_pos, tc_start_tag) orelse break;
+            const json_start = tc_start + tc_start_tag.len;
+            const tc_end = std.mem.indexOfPos(u8, gen.raw, json_start, tc_end_tag) orelse break;
+            const tc_json = gen.raw[json_start..tc_end];
+            search_pos = tc_end + tc_end_tag.len;
+
+            const name = json.extractField(tc_json, "name") orelse continue;
+            const args = json.extractObjectField(tc_json, "arguments") orelse
+                (json.extractField(tc_json, "arguments") orelse "{}");
+            const escaped_args = json.jsonEscape(g_server.allocator, args) catch args;
+            defer if (escaped_args.ptr != args.ptr) g_server.allocator.free(escaped_args);
+
+            // First chunk: role + tool call header
+            const role_chunk = std.fmt.bufPrint(&chunk_buf,
+                \\data: {{"id":"chatcmpl-{d}","object":"chat.completion.chunk","created":{d},"model":"{s}","choices":[{{"index":0,"delta":{{"role":"assistant","tool_calls":[{{"index":{d},"id":"call_{d}_{d}","type":"function","function":{{"name":"{s}","arguments":"{s}"}}}}]}},"finish_reason":null}}]}}
+            , .{ req_id, created, g_server.model_name, call_idx, req_id, call_idx, name, escaped_args }) catch continue;
+            _ = sseWriteData(stream, role_chunk);
+            _ = sseWriteData(stream, "\n\n");
+            call_idx += 1;
+        }
+
+        // Final chunk with finish_reason
+        const finish = std.fmt.bufPrint(&chunk_buf,
+            \\data: {{"id":"chatcmpl-{d}","object":"chat.completion.chunk","created":{d},"model":"{s}","choices":[{{"index":0,"delta":{{}},"finish_reason":"tool_calls"}}]}}
+        , .{ req_id, created, g_server.model_name }) catch "";
+        if (finish.len > 0) {
+            _ = sseWriteData(stream, finish);
+            _ = sseWriteData(stream, "\n\n");
+        }
+    } else {
+        // No tool calls — emit content as single delta chunk
+        const chunk = std.fmt.bufPrint(&chunk_buf,
+            \\data: {{"id":"chatcmpl-{d}","object":"chat.completion.chunk","created":{d},"model":"{s}","choices":[{{"index":0,"delta":{{"role":"assistant","content":"{s}"}},"finish_reason":"{s}"}}]}}
+        , .{ req_id, created, g_server.model_name, gen.escaped, gen.finish_reason }) catch "";
+        if (chunk.len > 0) {
+            _ = sseWriteData(stream, chunk);
+            _ = sseWriteData(stream, "\n\n");
+        }
+    }
+
+    // Usage chunk + DONE
+    const total = gen.stats.tokens_generated + gen.stats.prompt_tokens;
+    const usage = std.fmt.bufPrint(&chunk_buf,
+        \\data: {{"id":"chatcmpl-{d}","object":"chat.completion.chunk","created":{d},"model":"{s}","choices":[],"usage":{{"completion_tokens":{d},"prompt_tokens":{d},"total_tokens":{d}}}}}
+    , .{ req_id, created, g_server.model_name, gen.stats.tokens_generated, gen.stats.prompt_tokens, total }) catch "";
+    if (usage.len > 0) {
+        _ = sseWriteData(stream, usage);
+        _ = sseWriteData(stream, "\n\n");
+    }
+    _ = sseWriteData(stream, "data: [DONE]\n\n");
+
+    g_server.metrics.recordLatency(elapsedMs(milliTimestamp()));
+    g_server.metrics.recordTokens(@intCast(gen.stats.tokens_generated));
+    g_server.metrics.recordCompletion();
 }
 
 /// Start an SSE streaming response without chat template wrapping (for /v1/completions).
