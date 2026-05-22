@@ -87,7 +87,7 @@ All quantized GEMV formats native on all 6 backends. See [KERNELS.md](KERNELS.md
 
 | # | Feature | Impact | Source |
 |---|---------|--------|--------|
-| 6 | TurboQuant in SDPA kernel | Skip decode-time dequant | vLLM |
+| 6 | ~~TurboQuant in SDPA kernel~~ | ~~Skip decode-time dequant~~ | Done (sdpa_fa2_turbo) |
 | 7 | ~~Spec decode thinking budget~~ | ~~Adaptive cooldown on low acceptance~~ | Done |
 | 8 | Multi-stream pre-attention GEMM | Overlap QKV(N+1) with SDPA(N) | vLLM |
 | 10 | Router mode (multi-model server) | Switch models per request | llama.cpp |
