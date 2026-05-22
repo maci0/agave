@@ -743,7 +743,7 @@ pub const VulkanBackend = struct {
     act_pool_count: u32 = 0,
 
     /// Number of SPIR-V compute pipelines compiled at init.
-    pub const n_pipelines: u32 = 22;
+    pub const n_pipelines: u32 = 44;
 
     /// Library name loaded via dlopen at init.
     pub const lib_name = vk_lib_name;
@@ -1174,7 +1174,8 @@ pub const VulkanBackend = struct {
         }
         const buf = self.createBuffer(size);
         self.uploadBuffer(buf.mem, @ptrCast(ptr), size);
-        self.act_cache.put(addr, .{ .vk_buf = buf, .size = size, .state = .clean }) catch {};
+        self.act_cache.put(addr, .{ .vk_buf = buf, .size = size, .state = .clean }) catch |err|
+            std.log.warn("Vulkan activation cache insert failed: {}", .{err});
         return buf;
     }
 
@@ -1189,7 +1190,8 @@ pub const VulkanBackend = struct {
             self.destroyBuffer(act.vk_buf);
         }
         const buf = self.createBuffer(size);
-        self.act_cache.put(addr, .{ .vk_buf = buf, .size = size, .state = .dirty }) catch {};
+        self.act_cache.put(addr, .{ .vk_buf = buf, .size = size, .state = .dirty }) catch |err|
+            std.log.warn("Vulkan activation cache insert failed: {}", .{err});
         return buf;
     }
 
@@ -1207,7 +1209,8 @@ pub const VulkanBackend = struct {
         }
         const buf = self.createBuffer(size);
         self.uploadBuffer(buf.mem, @ptrCast(ptr), size);
-        self.act_cache.put(addr, .{ .vk_buf = buf, .size = size, .state = .dirty }) catch {};
+        self.act_cache.put(addr, .{ .vk_buf = buf, .size = size, .state = .dirty }) catch |err|
+            std.log.warn("Vulkan activation cache insert failed: {}", .{err});
         return buf;
     }
 

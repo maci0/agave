@@ -24,10 +24,16 @@ function setOfflineBadge() {
   var badge = document.getElementById('model-name');
   badge.textContent = 'offline — click to retry';
   badge.style.cursor = 'pointer';
+  badge.setAttribute('role', 'button');
+  badge.setAttribute('tabindex', '0');
+  badge.onkeydown = function(e) { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); badge.click(); } };
   badge.onclick = function() {
     badge.textContent = 'loading...';
     badge.style.cursor = '';
     badge.onclick = null;
+    badge.onkeydown = null;
+    badge.removeAttribute('role');
+    badge.removeAttribute('tabindex');
     fetch('/v1/models').then(function(r) { return r.json(); }).then(function(d) {
       if (d.data && d.data[0]) {
         modelName = d.data[0].id;
@@ -57,13 +63,17 @@ var savedMaxTok = localStorage.getItem('agave_max_tokens');
 if (savedTemp !== null) { tempEl.value = savedTemp; document.getElementById('temp-val').textContent = parseFloat(savedTemp).toFixed(1); }
 if (savedTopP !== null) { topPEl.value = savedTopP; document.getElementById('topp-val').textContent = parseFloat(savedTopP).toFixed(2); }
 if (savedMaxTok !== null) { maxTokEl.value = savedMaxTok; }
+tempEl.setAttribute('aria-valuetext', parseFloat(tempEl.value).toFixed(1));
+topPEl.setAttribute('aria-valuetext', parseFloat(topPEl.value).toFixed(2));
 
 tempEl.addEventListener('input', function() {
   document.getElementById('temp-val').textContent = parseFloat(this.value).toFixed(1);
+  this.setAttribute('aria-valuetext', parseFloat(this.value).toFixed(1));
   localStorage.setItem('agave_temperature', this.value);
 });
 topPEl.addEventListener('input', function() {
   document.getElementById('topp-val').textContent = parseFloat(this.value).toFixed(2);
+  this.setAttribute('aria-valuetext', parseFloat(this.value).toFixed(2));
   localStorage.setItem('agave_top_p', this.value);
 });
 maxTokEl.addEventListener('input', function() {
@@ -246,6 +256,12 @@ function toggleSettings() {
   var open = panel.classList.toggle('open');
   btn.classList.toggle('active', open);
   btn.setAttribute('aria-expanded', open);
+  if (open) {
+    var first = panel.querySelector('input');
+    if (first) first.focus();
+  } else {
+    btn.focus();
+  }
   announceToSR('Settings panel ' + (open ? 'opened' : 'closed'));
 }
 
@@ -302,7 +318,7 @@ function addUser(text, imageSrc) {
   var e = document.getElementById('empty'); if (e) e.remove();
   var w = document.createElement('div'); w.className = 'msg-wrap user';
   var r = document.createElement('span'); r.className = 'role user'; r.textContent = 'You';
-  var m = document.createElement('div'); m.className = 'msg user';
+  var m = document.createElement('div'); m.className = 'msg user'; m.dir = 'auto';
   if (imageSrc) {
     var img = document.createElement('img'); img.className = 'msg-img'; img.src = imageSrc; img.alt = 'Attached image';
     m.appendChild(img);
@@ -317,7 +333,7 @@ function addAssistant() {
   var e = document.getElementById('empty'); if (e) e.remove();
   var w = document.createElement('div'); w.className = 'msg-wrap assistant';
   var r = document.createElement('span'); r.className = 'role assistant'; r.textContent = 'agave';
-  var m = document.createElement('div'); m.className = 'msg assistant thinking';
+  var m = document.createElement('div'); m.className = 'msg assistant thinking'; m.dir = 'auto';
   m.textContent = '\u2026';
   w.appendChild(r); w.appendChild(m); chat.appendChild(w); scrollBottom();
   return m;
@@ -336,8 +352,9 @@ function processCode(el) {
     c.onclick = function() {
       navigator.clipboard.writeText(b.textContent).then(function() {
         c.textContent = 'Copied!';
+        announceToSR('Code copied to clipboard');
         setTimeout(function() { c.textContent = 'Copy'; }, 2000);
-      }).catch(function() { c.textContent = 'Failed'; setTimeout(function() { c.textContent = 'Copy'; }, 2000); });
+      }).catch(function() { c.textContent = 'Failed'; announceToSR('Copy failed'); setTimeout(function() { c.textContent = 'Copy'; }, 2000); });
     };
     pre.appendChild(c);
   });
@@ -404,8 +421,9 @@ function renderContent(el, content, final) {
       cb.onclick = function() {
         navigator.clipboard.writeText(content).then(function() {
           cb.textContent = 'Copied!';
+          announceToSR('Response copied to clipboard');
           setTimeout(function() { cb.textContent = 'Copy'; }, 2000);
-        }).catch(function() { cb.textContent = 'Failed'; setTimeout(function() { cb.textContent = 'Copy'; }, 2000); });
+        }).catch(function() { cb.textContent = 'Failed'; announceToSR('Copy failed'); setTimeout(function() { cb.textContent = 'Copy'; }, 2000); });
       };
       el.appendChild(cb);
       var plain = el.textContent.substring(0, 200);
@@ -700,6 +718,7 @@ function deleteConv(id) {
   fetch('/v1/conversations', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: 'action=delete&id=' + encodeURIComponent(id) })
   .then(function(r) { return r.json(); }).then(function(data) {
     loadConvs(); if (data.cleared) showEmpty(); inp.focus();
+    announceToSR('Conversation deleted');
   }).catch(function() {
     var errMsg = 'Failed to delete conversation.';
     var err = document.createElement('div'); err.className = 'error-msg';

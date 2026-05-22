@@ -142,6 +142,20 @@ pub const TieredKvCache = struct {
     /// Bytes per block (kv_dim × block_size × @sizeOf(f32) × 2).
     block_bytes: usize,
 
+    /// Tier-mutation lock: serializes promoteFromSsd/promoteToVram/demoteToRam
+    /// across scheduler and prefetch worker threads. Short critical sections
+    /// (microseconds) make spin-wait acceptable.
+    tier_lock: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
+
+    fn lockTier(self: *TieredKvCache) void {
+        while (self.tier_lock.cmpxchgWeak(0, 1, .acquire, .monotonic) != null)
+            std.atomic.spinLoopHint();
+    }
+
+    fn unlockTier(self: *TieredKvCache) void {
+        self.tier_lock.store(0, .release);
+    }
+
     /// Initialize tiered cache with VRAM, RAM, and SSD budgets.
     ///
     /// Parameters:
@@ -495,9 +509,10 @@ pub const TieredKvCache = struct {
     ///   - block_id: Physical block ID to promote.
     ///
     /// Returns: void on success.
-    pub fn promoteFromSsd(self: *TieredKvCache, block_id: u32) !void {
+    /// Promote SSD block to RAM. Caller must hold tier_lock.
+    fn promoteFromSsdInner(self: *TieredKvCache, block_id: u32) !void {
         var blk = &self.blocks[block_id];
-        std.debug.assert(blk.tier == .ssd);
+        if (blk.tier != .ssd) return; // Already promoted by another thread
 
         const ssd = self.ssd_file orelse return error.SsdNotConfigured;
 
@@ -523,6 +538,12 @@ pub const TieredKvCache = struct {
         _ = self.ram_used.fetchAdd(1, .monotonic);
 
         std.log.debug("Promoted block {d} from SSD to RAM", .{block_id});
+    }
+
+    pub fn promoteFromSsd(self: *TieredKvCache, block_id: u32) !void {
+        self.lockTier();
+        defer self.unlockTier();
+        return self.promoteFromSsdInner(block_id);
     }
 
     /// Free a block and return to appropriate tier free list.
@@ -565,14 +586,16 @@ pub const TieredKvCache = struct {
     /// Parameters:
     ///   - block_id: Physical block ID to promote.
     pub fn promoteToVram(self: *TieredKvCache, block_id: u32) !void {
+        self.lockTier();
+        defer self.unlockTier();
+
         var blk = &self.blocks[block_id];
 
         if (blk.tier == .vram) return; // Already in VRAM
 
-        // If block is in SSD, promote to RAM first
+        // If block is in SSD, promote to RAM first (inner: lock already held)
         if (blk.tier == .ssd) {
-            try self.promoteFromSsd(block_id);
-            // Block is now in RAM, continue to VRAM promotion below
+            try self.promoteFromSsdInner(block_id);
         }
 
         // Check if VRAM has space

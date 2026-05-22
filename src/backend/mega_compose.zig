@@ -200,49 +200,48 @@ fn emitParamsStruct(buf: []u8, desc: ModelDesc) []const u8 {
         w.writeAll("// Per-layer dimension overrides (baked at compile time)\n") catch return "";
         w.writeAll("constant uint layer_n_head[] = {") catch return "";
         for (0..desc.n_layers) |i| {
-            if (i > 0) w.writeAll(",") catch {};
-            std.fmt.format(w, "{d}", .{desc.layerNHead(i)}) catch {};
+            if (i > 0) w.writeAll(",") catch return "";
+            std.fmt.format(w, "{d}", .{desc.layerNHead(i)}) catch return "";
         }
         w.writeAll("};\n") catch return "";
 
         w.writeAll("constant uint layer_n_kv[] = {") catch return "";
         for (0..desc.n_layers) |i| {
-            if (i > 0) w.writeAll(",") catch {};
-            std.fmt.format(w, "{d}", .{desc.layerNKv(i)}) catch {};
+            if (i > 0) w.writeAll(",") catch return "";
+            std.fmt.format(w, "{d}", .{desc.layerNKv(i)}) catch return "";
         }
         w.writeAll("};\n") catch return "";
 
         w.writeAll("constant uint layer_head_dim[] = {") catch return "";
         for (0..desc.n_layers) |i| {
-            if (i > 0) w.writeAll(",") catch {};
-            std.fmt.format(w, "{d}", .{desc.layerHeadDim(i)}) catch {};
+            if (i > 0) w.writeAll(",") catch return "";
+            std.fmt.format(w, "{d}", .{desc.layerHeadDim(i)}) catch return "";
         }
         w.writeAll("};\n") catch return "";
 
         w.writeAll("constant uint layer_n_ff[] = {") catch return "";
         for (0..desc.n_layers) |i| {
-            if (i > 0) w.writeAll(",") catch {};
-            std.fmt.format(w, "{d}", .{desc.layerNFf(i)}) catch {};
+            if (i > 0) w.writeAll(",") catch return "";
+            std.fmt.format(w, "{d}", .{desc.layerNFf(i)}) catch return "";
         }
         w.writeAll("};\n") catch return "";
 
         w.writeAll("constant float layer_rope_theta[] = {") catch return "";
         for (0..desc.n_layers) |i| {
-            if (i > 0) w.writeAll(",") catch {};
-            std.fmt.format(w, "{d:.1}", .{desc.layerRopeTheta(i)}) catch {};
+            if (i > 0) w.writeAll(",") catch return "";
+            std.fmt.format(w, "{d:.1}", .{desc.layerRopeTheta(i)}) catch return "";
         }
         w.writeAll("};\n") catch return "";
 
         w.writeAll("constant uint layer_window[] = {") catch return "";
         for (0..desc.n_layers) |i| {
-            if (i > 0) w.writeAll(",") catch {};
-            std.fmt.format(w, "{d}", .{desc.layerWindow(i)}) catch {};
+            if (i > 0) w.writeAll(",") catch return "";
+            std.fmt.format(w, "{d}", .{desc.layerWindow(i)}) catch return "";
         }
         w.writeAll("};\n\n") catch return "";
     }
 
     return fbs.getWritten();
-    _ = desc;
 }
 
 /// GEMV function name for the given quant kind.
@@ -388,8 +387,6 @@ pub fn composeMSL(buf: []u8, desc: ModelDesc) []const u8 {
 
     if (has_attn) {
         // Attention: Q/K/V GEMV → RoPE → KV append → SDPA → output
-        const gemv = gemvFn(desc.quant);
-        _ = gemv;
 
         // Use a runtime layer-type check since we can't comptime-unroll in MSL
         // The layer_types are encoded as a bitfield in the params or checked via

@@ -9,8 +9,9 @@ const c = std.c;
 const posix = std.posix;
 
 const max_peers: usize = 8;
-const shm_buf_size: usize = 16 * 1024 * 1024; // 16MB max per transfer
+const shm_buf_size: usize = 16 * 1024 * 1024;
 const shm_region_size: usize = shm_buf_size + @sizeOf(ShmHeader);
+const shm_peer_retries: u32 = 5000;
 
 const builtin = @import("builtin");
 const shm_O_CREAT: c_int = if (builtin.os.tag == .macos) 0x200 else 0o100;
@@ -99,7 +100,7 @@ pub const Transport = struct {
     cuda_memcpy_dtoh: ?*const fn (*anyopaque, u64, usize) callconv(.c) c_int = null,
     nccl_dev_buf: u64 = 0,
     nccl_dev_buf_size: usize = 0,
-    /// Device capabilities for topology-aware partitioning.
+    /// Device memory for topology-aware partitioning (populated, not yet consumed).
     local_mem: usize = 0,
     peer_mem: usize = 0,
 
@@ -185,7 +186,7 @@ pub const Transport = struct {
 
         // Wait for peer to create their send region (our recv), then open it
         var retry: u32 = 0;
-        while (retry < 5000) : (retry += 1) {
+        while (retry < shm_peer_retries) : (retry += 1) {
             self.shm_recv_fd = std.c.shm_open(&self.shm_name_recv, shm_O_RDWR, @as(c.mode_t, 0o600));
             if (self.shm_recv_fd >= 0) break;
             var ts = posix.system.timespec{ .sec = 0, .nsec = 1_000_000 };
@@ -344,8 +345,10 @@ pub const Transport = struct {
                 0;
             if (dptr != 0) {
                 // GPU path: allReduce directly on device memory (fastest)
-                if (self.nccl_allreduce) |allreduce|
-                    _ = allreduce(@ptrFromInt(dptr), @ptrFromInt(dptr), n, ncclFloat, ncclSum, self.nccl_comm, null);
+                if (self.nccl_allreduce) |allreduce| {
+                    const rc = allreduce(@ptrFromInt(dptr), @ptrFromInt(dptr), n, ncclFloat, ncclSum, self.nccl_comm, null);
+                    if (rc != ncclSuccess) std.log.err("NCCL allReduce (GPU) failed: rc={d}", .{rc});
+                }
             } else {
                 // CPU fallback wrote to host — upload to device staging, NCCL allReduce, download
                 if (self.cuda_sync) |sync| _ = sync();
@@ -353,8 +356,10 @@ pub const Transport = struct {
                 self.ensureStagingBuf(byte_len);
                 if (self.nccl_dev_buf != 0) {
                     if (self.cuda_memcpy_htod) |htod| _ = htod(self.nccl_dev_buf, @ptrCast(buf), byte_len);
-                    if (self.nccl_allreduce) |allreduce|
-                        _ = allreduce(@ptrFromInt(self.nccl_dev_buf), @ptrFromInt(self.nccl_dev_buf), n, ncclFloat, ncclSum, self.nccl_comm, null);
+                    if (self.nccl_allreduce) |allreduce| {
+                        const rc = allreduce(@ptrFromInt(self.nccl_dev_buf), @ptrFromInt(self.nccl_dev_buf), n, ncclFloat, ncclSum, self.nccl_comm, null);
+                        if (rc != ncclSuccess) std.log.err("NCCL allReduce (staging) failed: rc={d}", .{rc});
+                    }
                     if (self.cuda_sync) |sync| _ = sync();
                     if (self.cuda_memcpy_dtoh) |dtoh| _ = dtoh(@ptrCast(buf), self.nccl_dev_buf, byte_len);
                 }
@@ -413,13 +418,15 @@ pub const Transport = struct {
             else
                 0;
             if (dptr != 0) {
-                _ = self.nccl_send.?(@ptrFromInt(dptr), n, ncclFloat, peer, self.nccl_comm, null);
+                const rc = self.nccl_send.?(@ptrFromInt(dptr), n, ncclFloat, peer, self.nccl_comm, null);
+                if (rc != ncclSuccess) std.log.err("NCCL send (GPU) failed: rc={d}", .{rc});
             } else {
                 // Host staging: upload then send
                 self.ensureStagingBuf(byte_len);
                 if (self.nccl_dev_buf != 0) {
                     if (self.cuda_memcpy_htod) |htod| _ = htod(self.nccl_dev_buf, @ptrCast(buf), byte_len);
-                    _ = self.nccl_send.?(@ptrFromInt(self.nccl_dev_buf), n, ncclFloat, peer, self.nccl_comm, null);
+                    const rc = self.nccl_send.?(@ptrFromInt(self.nccl_dev_buf), n, ncclFloat, peer, self.nccl_comm, null);
+                    if (rc != ncclSuccess) std.log.err("NCCL send (staging) failed: rc={d}", .{rc});
                 }
             }
             // Single sync after all sends (not per-send)
@@ -475,7 +482,8 @@ pub const Transport = struct {
             const peer: c_int = if (self.rank == 0) 1 else 0;
             self.ensureStagingBuf(byte_len);
             if (self.nccl_dev_buf != 0) {
-                _ = self.nccl_recv.?(@ptrFromInt(self.nccl_dev_buf), n, ncclFloat, peer, self.nccl_comm, null);
+                const rc = self.nccl_recv.?(@ptrFromInt(self.nccl_dev_buf), n, ncclFloat, peer, self.nccl_comm, null);
+                if (rc != ncclSuccess) std.log.err("NCCL recv failed: rc={d}", .{rc});
                 if (self.cuda_sync) |sync| _ = sync();
                 if (self.cuda_memcpy_dtoh) |dtoh| _ = dtoh(@ptrCast(buf), self.nccl_dev_buf, byte_len);
             }

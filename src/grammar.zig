@@ -15,6 +15,14 @@
 
 const std = @import("std");
 
+// ── Parser Constants ───────────────────────────────────────────
+
+const unresolved_rule_id: u32 = 0xFFFF;
+const forward_ref_base: u32 = 0xFF00;
+const max_json_properties: usize = 32;
+const bpe_two_byte_prefix: u8 = 0xC4;
+const bpe_three_byte_prefix: u8 = 0xC3;
+
 // ── Grammar Elements ────────────────────────────────────────────
 
 pub const ElementType = enum {
@@ -100,7 +108,7 @@ pub const Grammar = struct {
         if (state.stack.items.len == 0) return;
 
         // Pre-allocate a reusable test state — avoids per-token heap allocation.
-        // acceptCharInner recursion capped at 32, each level pushes at most 1 entry.
+        // acceptCharInner recursion allows depth 0..32 (33 levels), each pushes at most 1 entry.
         const required_cap = state.stack.items.len + 33;
         var test_state = GrammarState{
             .grammar = self,
@@ -145,12 +153,10 @@ pub const Grammar = struct {
     /// Strip BPE byte-level encoding prefix to get actual text.
     /// Qwen/GPT uses Ġ (0xC4 0xA0) for space, Ċ (0xC4 0x8A) for newline, etc.
     pub fn getEffectiveText(text: []const u8) []const u8 {
-        if (text.len >= 2 and text[0] == 0xC4) {
-            // Ġ = space prefix (0xC4 0xA0), Ċ = newline (0xC4 0x8A)
+        if (text.len >= 2 and text[0] == bpe_two_byte_prefix) {
             return text[2..];
         }
-        if (text.len >= 3 and text[0] == 0xC3) {
-            // Other byte-level BPE encodings
+        if (text.len >= 2 and text[0] == bpe_three_byte_prefix) {
             return text[2..];
         }
         return text;
@@ -366,6 +372,13 @@ const Parser = struct {
     }
 
     fn parseGrammar(self: *Parser) !Grammar {
+        errdefer {
+            for (self.rules.items) |rule| self.allocator.free(rule.elements);
+            self.rules.deinit(self.allocator);
+            self.elements.deinit(self.allocator);
+            self.unresolved.deinit(self.allocator);
+            self.rule_names.deinit();
+        }
         // Pass 1: collect all rule names so forward references resolve correctly
         {
             var scan_pos: usize = 0;
@@ -391,7 +404,7 @@ const Parser = struct {
                 if (scan_pos + 3 <= self.input.len and std.mem.eql(u8, self.input[scan_pos..][0..3], "::=")) {
                     // Pre-register with placeholder — actual ID assigned in pass 2
                     if (!self.rule_names.contains(name)) {
-                        try self.rule_names.put(name, 0xFFFF);
+                        try self.rule_names.put(name, unresolved_rule_id);
                     }
                 }
                 // Skip to next line
@@ -413,11 +426,10 @@ const Parser = struct {
 
         self.elements.deinit(self.allocator);
 
-        // Resolve forward references: each has a unique placeholder 0xFF00+i
         for (self.unresolved.items, 0..) |ref, i| {
-            const placeholder: u32 = 0xFF00 + @as(u32, @intCast(i));
+            const placeholder: u32 = forward_ref_base + @as(u32, @intCast(i));
             const resolved_id = self.rule_names.get(ref.name) orelse continue;
-            if (resolved_id == 0xFFFF) continue;
+            if (resolved_id == unresolved_rule_id) continue;
             for (self.rules.items) |rule| {
                 for (rule.elements) |*elem| {
                     switch (elem.type) {
@@ -633,11 +645,11 @@ const Parser = struct {
         while (self.pos < self.input.len and (std.ascii.isAlphanumeric(self.input[self.pos]) or self.input[self.pos] == '_' or self.input[self.pos] == '-')) : (self.pos += 1) {}
         const name = self.input[start..self.pos];
         const rule_id = self.rule_names.get(name) orelse 0;
-        if (rule_id != 0xFFFF) {
+        if (rule_id != unresolved_rule_id) {
             try self.elements.append(self.allocator, .{ .type = .rule_ref, .lo = rule_id });
         } else {
             // Forward reference — unique placeholder per ref
-            const placeholder: u32 = 0xFF00 + @as(u32, @intCast(self.unresolved.items.len));
+            const placeholder: u32 = forward_ref_base + @as(u32, @intCast(self.unresolved.items.len));
             try self.elements.append(self.allocator, .{ .type = .rule_ref, .lo = placeholder });
             try self.unresolved.append(self.allocator, .{
                 .name = name,
@@ -729,12 +741,12 @@ const SchemaConverter = struct {
         };
 
         // Parse property names and their schemas
-        var prop_names: [32][]const u8 = undefined;
-        var prop_schemas: [32][]const u8 = undefined;
+        var prop_names: [max_json_properties][]const u8 = undefined;
+        var prop_schemas: [max_json_properties][]const u8 = undefined;
         var n_props: usize = 0;
 
         var pi: usize = 0;
-        while (pi < props_content.len and n_props < 32) {
+        while (pi < props_content.len and n_props < max_json_properties) {
             // Skip to next property key
             pi = skipWsSchema(props_content, pi);
             if (pi >= props_content.len or props_content[pi] != '"') break;
