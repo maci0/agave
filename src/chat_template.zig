@@ -231,6 +231,17 @@ pub const ChatTemplate = struct {
             .suffix = "<|end|>",
         },
     };
+
+    pub const llama4 = ChatTemplate{
+        .system_prefix = "<|header_start|>system<|header_end|>\n\n",
+        .system_suffix = "<|eot|>\n",
+        .user_prefix = "<|header_start|>user<|header_end|>\n\n",
+        .user_suffix = "",
+        .assistant_prefix = "<|eot|>\n<|header_start|>assistant<|header_end|>\n\n",
+        .assistant_suffix = "<|eot|>\n",
+        .eog_tokens = &.{ "<|eot|>", "<|end_of_text|>" },
+        .default_system = "You are a helpful assistant.",
+    };
 };
 
 // ── Image token injection ─────────────────────────────────────────

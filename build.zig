@@ -21,6 +21,7 @@ pub fn build(b: *std.Build) void {
     const enable_nemotron_nano = b.option(bool, "enable-nemotron-nano", "Enable Nemotron-Nano model support (default: true)") orelse true;
     const enable_glm4 = b.option(bool, "enable-glm4", "Enable GLM-4 model support (default: true)") orelse true;
     const enable_gemma4 = b.option(bool, "enable-gemma4", "Enable Gemma4 model support (default: true)") orelse true;
+    const enable_llama4 = b.option(bool, "enable-llama4", "Enable Llama 4 model support (default: true)") orelse true;
 
     // ── Helper: link frameworks for macOS ─────────────────────────
     // Note: Vulkan (libvulkan.so / libMoltenVK.dylib) is loaded at runtime
@@ -158,6 +159,7 @@ pub fn build(b: *std.Build) void {
     backend_options.addOption(bool, "enable_nemotron_nano", enable_nemotron_nano);
     backend_options.addOption(bool, "enable_glm4", enable_glm4);
     backend_options.addOption(bool, "enable_gemma4", enable_gemma4);
+    backend_options.addOption(bool, "enable_llama4", enable_llama4);
 
     const mod_rel = b.createModule(.{
         .root_source_file = b.path("src/main.zig"),
@@ -321,6 +323,7 @@ pub fn build(b: *std.Build) void {
     wasm_options.addOption(bool, "enable_nemotron_nano", false);
     wasm_options.addOption(bool, "enable_glm4", false);
     wasm_options.addOption(bool, "enable_gemma4", false); // disabled: test isolation
+    wasm_options.addOption(bool, "enable_llama4", false);
 
     const wasm_target = b.resolveTargetQuery(.{
         .cpu_arch = .wasm32,

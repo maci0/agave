@@ -13,6 +13,7 @@ pub const Arch = enum {
     nemotron_h,
     nemotron_nano,
     glm4,
+    llama4,
 
     /// Detect model architecture from GGUF/SafeTensors arch string.
     pub fn detect(name: []const u8) ?Arch {
@@ -43,6 +44,8 @@ pub const Arch = enum {
             .{ "glm4_moe_lite", .glm4 },
             .{ "glm4", .glm4 },
             .{ "deepseek2", .glm4 },
+            .{ "llama4", .llama4 },
+            .{ "llama4_text", .llama4 },
         };
         inline for (map) |entry| {
             if (std.mem.eql(u8, name, entry[0])) return entry[1];
@@ -60,6 +63,7 @@ pub const Arch = enum {
             .nemotron_h => "Nemotron-H",
             .nemotron_nano => "Nemotron-Nano",
             .glm4 => "GLM-4",
+            .llama4 => "Llama 4",
         };
     }
 
@@ -71,6 +75,7 @@ pub const Arch = enum {
             .gpt_oss => ChatTemplate.gpt_oss,
             .qwen35 => ChatTemplate.qwen35,
             .glm4 => ChatTemplate.glm4,
+            .llama4 => ChatTemplate.llama4,
             else => ChatTemplate.chatml,
         };
     }
@@ -83,6 +88,7 @@ pub const Arch = enum {
             .gpt_oss => "gpt-oss",
             .qwen35 => "qwen35",
             .glm4 => "glm4",
+            .llama4 => "llama4",
             else => "chatml",
         };
     }
@@ -97,6 +103,7 @@ pub const Arch = enum {
             .nemotron_h => build_options.enable_nemotron_h,
             .nemotron_nano => build_options.enable_nemotron_nano,
             .glm4 => build_options.enable_glm4,
+            .llama4 => build_options.enable_llama4,
         };
     }
 
@@ -106,6 +113,7 @@ pub const Arch = enum {
         return switch (self) {
             .glm4 => glm4_fallback_bos,
             .qwen35, .gpt_oss, .nemotron_h, .nemotron_nano => null,
+            .llama4 => llama4_fallback_bos,
             .gemma3, .gemma4 => default_bos_id,
         };
     }
@@ -114,6 +122,7 @@ pub const Arch = enum {
     pub fn defaultEos(self: Arch) u32 {
         return switch (self) {
             .gemma3, .gemma4 => gemma_fallback_eos,
+            .llama4 => llama4_fallback_eos,
             else => default_fallback_eos,
         };
     }
@@ -138,6 +147,7 @@ pub const Arch = enum {
             .nemotron_h => "nemotron-h",
             .nemotron_nano => "nemotron-nano",
             .glm4 => "glm4",
+            .llama4 => "llama4",
         };
     }
 };
@@ -150,6 +160,10 @@ pub const gemma_fallback_eos: u32 = 1;
 pub const default_fallback_eos: u32 = 248046;
 /// GLM-4 fallback BOS token ID (`[gMASK]`, used when metadata is missing).
 pub const glm4_fallback_bos: u32 = 154822;
+/// Llama 4 fallback BOS token ID.
+pub const llama4_fallback_bos: u32 = 128000;
+/// Llama 4 fallback EOS token ID.
+pub const llama4_fallback_eos: u32 = 128009;
 /// Default BOS token ID when metadata is missing (SentencePiece convention).
 pub const default_bos_id: u32 = 2;
 /// Maximum end-of-generation token IDs tracked simultaneously.
@@ -207,6 +221,8 @@ test "Arch.detect known names" {
     try std.testing.expectEqual(Arch.glm4, Arch.detect("glm4").?);
     try std.testing.expectEqual(Arch.glm4, Arch.detect("deepseek2").?);
     try std.testing.expectEqual(Arch.glm4, Arch.detect("glm4_moe_lite").?);
+    try std.testing.expectEqual(Arch.llama4, Arch.detect("llama4").?);
+    try std.testing.expectEqual(Arch.llama4, Arch.detect("llama4_text").?);
     try std.testing.expectEqual(@as(?Arch, null), Arch.detect("unknown_model"));
 }
 
@@ -218,6 +234,7 @@ test "Arch.displayName" {
     try std.testing.expectEqualStrings("Nemotron-H", Arch.nemotron_h.displayName());
     try std.testing.expectEqualStrings("Nemotron-Nano", Arch.nemotron_nano.displayName());
     try std.testing.expectEqualStrings("GLM-4", Arch.glm4.displayName());
+    try std.testing.expectEqualStrings("Llama 4", Arch.llama4.displayName());
 }
 
 test "Arch.defaultBos" {
@@ -228,6 +245,7 @@ test "Arch.defaultBos" {
     try std.testing.expectEqual(@as(?u32, null), Arch.gpt_oss.defaultBos());
     try std.testing.expectEqual(@as(?u32, null), Arch.nemotron_h.defaultBos());
     try std.testing.expectEqual(@as(?u32, null), Arch.nemotron_nano.defaultBos());
+    try std.testing.expectEqual(@as(?u32, 128000), Arch.llama4.defaultBos());
 }
 
 test "Arch.defaultEos" {
@@ -238,6 +256,7 @@ test "Arch.defaultEos" {
     try std.testing.expectEqual(@as(u32, 248046), Arch.glm4.defaultEos());
     try std.testing.expectEqual(@as(u32, 248046), Arch.nemotron_h.defaultEos());
     try std.testing.expectEqual(@as(u32, 248046), Arch.nemotron_nano.defaultEos());
+    try std.testing.expectEqual(@as(u32, 128009), Arch.llama4.defaultEos());
 }
 
 test "Arch.imageTokens multimodal" {
