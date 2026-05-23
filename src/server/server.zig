@@ -241,6 +241,8 @@ const Server = struct {
     next_id: u32 = 1,
     /// Whether the KV cache matches the active conversation's state.
     kv_valid: bool = false,
+    /// Cached prompt token IDs from the last API generation (for prefix reuse).
+    cached_prompt_ids: []u32 = &.{},
     mutex: Mutex = .init,
     stdout_mutex: Mutex = .init,
     io: Io,
@@ -297,6 +299,10 @@ const Server = struct {
         self.active_id = self.next_id;
         self.next_id += 1;
         self.kv_valid = false;
+        if (self.cached_prompt_ids.len > 0) {
+            self.allocator.free(self.cached_prompt_ids);
+            self.cached_prompt_ids = &.{};
+        }
         return &self.conversations.items[self.conversations.items.len - 1];
     }
 
@@ -2278,10 +2284,31 @@ fn generateN(formatted: []const u8, reset: bool, max_tokens: usize, sampling: Sa
     g_server.mutex.lockUncancelable(g_server.io);
     defer g_server.mutex.unlock(g_server.io);
     const model = g_server.model;
-    if (reset) model.resetCache();
+
+    // Prompt prefix caching: find longest common prefix with cached state.
+    // If the new prompt shares a prefix with the previous one, skip re-prefilling
+    // those tokens (KV cache already has them). Roll back KV to the shared prefix
+    // length and only process new tokens.
+    var prefix_len: usize = 0;
+    if (reset and g_server.cached_prompt_ids.len > 0 and token_ids.len > 0) {
+        const max_match = @min(g_server.cached_prompt_ids.len, token_ids.len);
+        while (prefix_len < max_match and g_server.cached_prompt_ids[prefix_len] == token_ids[prefix_len]) {
+            prefix_len += 1;
+        }
+        if (prefix_len > 0 and prefix_len < token_ids.len) {
+            // Shared prefix found — rollback KV cache to prefix boundary
+            const bos_offset: usize = if (g_server.bos_token_id > 0) 1 else 0;
+            model.setKvSeqLen(prefix_len + bos_offset);
+            slog("  Prefix cache hit: {d}/{d} tokens reused\n", .{ prefix_len, token_ids.len });
+        } else {
+            prefix_len = 0;
+        }
+    }
+
+    if (prefix_len == 0 and reset) model.resetCache();
 
     // BOS token — required by models like Gemma to initialize state correctly
-    if (reset and g_server.bos_token_id > 0) {
+    if (prefix_len == 0 and reset and g_server.bos_token_id > 0) {
         _ = model.forward(g_server.bos_token_id) catch |err| {
             std.log.warn("req={d} BOS forward failed: {}", .{ log_request_id, err });
             return .{ .data = g_server.allocator.dupe(u8, "[BOS forward error]") catch &.{}, .finish_reason = "error", .stats = zero_stats };
@@ -2289,10 +2316,10 @@ fn generateN(formatted: []const u8, reset: bool, max_tokens: usize, sampling: Sa
     }
 
     // Prefill phase — timed separately for TTFT stats.
-    // Capture the return value of the last forward() — it's the first generated token.
+    // Skip tokens already in KV cache (prefix_len > 0 = cache hit).
     const prefill_start = milliTimestamp();
     var first_gen_token: u32 = 0;
-    for (token_ids) |tid| {
+    for (token_ids[prefix_len..]) |tid| {
         first_gen_token = model.forward(tid) catch |err| {
             if (err == error.Cancelled) {
                 return .{ .data = g_server.allocator.dupe(u8, "[cancelled]") catch &.{}, .finish_reason = "error", .stats = .{ .tokens_generated = 0, .prompt_tokens = prompt_token_count, .time_ms = 0, .tokens_per_sec = 0, .prefill_ms = 0, .prefill_tps = 0 } };
@@ -2301,6 +2328,10 @@ fn generateN(formatted: []const u8, reset: bool, max_tokens: usize, sampling: Sa
             return .{ .data = g_server.allocator.dupe(u8, "[prefill error]") catch &.{}, .finish_reason = "error", .stats = zero_stats };
         };
     }
+
+    // Cache the prompt token IDs for next request's prefix matching
+    if (g_server.cached_prompt_ids.len > 0) g_server.allocator.free(g_server.cached_prompt_ids);
+    g_server.cached_prompt_ids = g_server.allocator.dupe(u32, token_ids) catch &.{};
     const prefill_ms: u64 = @intCast(@max(milliTimestamp() - prefill_start, 0));
     const prefill_tps: f32 = tokensPerSec(prompt_token_count, prefill_ms);
     g_server.metrics.recordTTFT(prefill_ms, prompt_token_count);
@@ -3892,10 +3923,25 @@ fn generateStream(stream: TcpStream, prompt: []const u8, req_id: u64, created: i
     g_server.mutex.lockUncancelable(g_server.io);
     defer g_server.mutex.unlock(g_server.io);
     const model = g_server.model;
-    model.resetCache();
+
+    // Prompt prefix caching (streaming): reuse KV cache for shared prefix
+    var s_prefix_len: usize = 0;
+    if (g_server.cached_prompt_ids.len > 0 and token_ids.len > 0) {
+        const s_max_match = @min(g_server.cached_prompt_ids.len, token_ids.len);
+        while (s_prefix_len < s_max_match and g_server.cached_prompt_ids[s_prefix_len] == token_ids[s_prefix_len]) {
+            s_prefix_len += 1;
+        }
+        if (s_prefix_len > 0 and s_prefix_len < token_ids.len) {
+            const s_bos_off: usize = if (g_server.bos_token_id > 0) 1 else 0;
+            model.setKvSeqLen(s_prefix_len + s_bos_off);
+        } else {
+            s_prefix_len = 0;
+        }
+    }
+    if (s_prefix_len == 0) model.resetCache();
 
     // BOS token — required by models like Gemma to initialize state correctly
-    if (g_server.bos_token_id > 0) {
+    if (s_prefix_len == 0 and g_server.bos_token_id > 0) {
         _ = model.forward(g_server.bos_token_id) catch |err| {
             std.log.err("req={d} BOS forward failed: {}", .{ log_request_id, err });
             g_server.metrics.recordFailure();
@@ -3928,7 +3974,7 @@ fn generateStream(stream: TcpStream, prompt: []const u8, req_id: u64, created: i
     var mirostat_mu_s: f32 = sampling.mirostat_tau * 2.0;
     const prefill_start = milliTimestamp();
     var first_gen_token: u32 = 0;
-    for (token_ids) |tid| {
+    for (token_ids[s_prefix_len..]) |tid| {
         first_gen_token = model.forward(tid) catch |err| {
             if (err == error.Cancelled) {
                 g_server.metrics.recordCancellation();
@@ -4182,6 +4228,10 @@ fn generateStream(stream: TcpStream, prompt: []const u8, req_id: u64, created: i
     g_server.metrics.recordLatency(time_ms);
     g_server.metrics.recordTokens(token_count);
     if (stream_disconnected) g_server.metrics.recordCancellation() else if (stream_forward_failed) g_server.metrics.recordFailure() else g_server.metrics.recordCompletion();
+
+    // Update prompt prefix cache for next request
+    if (g_server.cached_prompt_ids.len > 0) g_server.allocator.free(g_server.cached_prompt_ids);
+    g_server.cached_prompt_ids = g_server.allocator.dupe(u32, token_ids) catch &.{};
 }
 
 // JSON field extraction, encoding, and form-parsing utilities are in json.zig.
