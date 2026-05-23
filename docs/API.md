@@ -411,6 +411,19 @@ Streaming with tools is supported — tool calls are emitted as delta chunks wit
 
 ---
 
+## Prompt Prefix Caching
+
+Consecutive API requests that share a common token prefix automatically reuse the KV cache from the previous request. When a chat application sends the full conversation history with each request (the standard OpenAI API pattern), only the new messages are prefilled — the system prompt and earlier messages remain in cache.
+
+This is automatic and transparent — no API changes needed. The server logs prefix cache hits:
+```
+Prefix cache hit: 1847/2103 tokens reused
+```
+
+Cache is invalidated when the prompt prefix changes (e.g., switching conversations or modifying the system prompt). Works with both streaming and non-streaming requests.
+
+---
+
 ## Streaming
 
 Set `"stream": true` for Server-Sent Events:
