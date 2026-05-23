@@ -78,6 +78,7 @@ All quantized GEMV formats native on all 6 backends. See [KERNELS.md](KERNELS.md
 | MTP speculative decoding (`--spec-mode mtp`, nextn heads) | llama.cpp |
 | Llama 4 architecture (iRoPE, chunked attention, top-1 MoE, temperature scaling) | — |
 | Jump decoding (skip forward pass for deterministic grammar tokens) | vLLM |
+| API prompt prefix caching (KV reuse for shared conversation prefix) | vLLM |
 
 ### High Priority
 
