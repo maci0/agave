@@ -76,6 +76,7 @@ All quantized GEMV formats native on all 6 backends. See [KERNELS.md](KERNELS.md
 | Deferred dispatch (Vulkan/WebGPU single-submit) | — |
 | All quantized GEMV kernel gaps closed (32 new kernel files) | — |
 | MTP speculative decoding (`--spec-mode mtp`, nextn heads) | llama.cpp |
+| Llama 4 architecture (iRoPE, chunked attention, top-1 MoE, temperature scaling) | — |
 
 ### High Priority
 

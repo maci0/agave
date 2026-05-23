@@ -65,6 +65,7 @@ agave/
 │   │   ├── nemotron_h.zig # Nemotron-H (Mamba-2 + attention hybrid)
 │   │   ├── glm4.zig       # GLM-4 MoE Lite (MLA (DeepSeek-V2) + MoE, MLX 4/6/8-bit)
 │   │   ├── nemotron_nano.zig # Nemotron Nano (SSM + MoE + attention, NVFP4)
+│   │   ├── llama4.zig       # Llama 4 (iRoPE, chunked attention, top-1 MoE)
 │   │   └── vision.zig       # SigLIP-2 vision encoder (Gemma 4 multimodal)
 │   ├── ops/
 │   │   ├── attention.zig  # Shared SDPA kernel (SIMD, sliding window, backend dispatch)

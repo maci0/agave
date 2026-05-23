@@ -18,6 +18,7 @@ agave pull google/gemma-4-4b-it-gguf --list          # list available files
 | **Nemotron Nano** | `nemotron_nano` | GQA (sparse layers) | ReLU² MoE | SSM + MoE + attention hybrid (NVFP4) |
 | **Gemma 4** | `gemma4` | GQA + QK norm + post-norms | GELU + SwiGLU | MoE (top-8) or dense, PLE (E2B/E4B), vision (SigLIP-2), Q4_K/Q5_K/Q6_K GEMM |
 | **GLM-4** | `glm4` | MLA (compressed KV) | SiLU + SwiGLU | MoE (64 experts, top-4, sigmoid routing) |
+| **Llama 4** | `llama4` | iRoPE (local+global, chunked) | SiLU + SwiGLU | MoE (top-1) + shared expert, temperature scaling, 10M context |
 
 ## Model Parameters
 
