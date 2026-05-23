@@ -2461,6 +2461,27 @@ fn generateN(formatted: []const u8, reset: bool, max_tokens: usize, sampling: Sa
         // Standard single-token generation
         for (0..effective_max -| 1) |_| {
             if (first_is_eog or token_ids.len == 0) break;
+
+            // Jump decoding: if grammar allows exactly one token, skip forward pass
+            if (use_grammar and !use_sampling) {
+                if (grammar_storage) |*g| {
+                    if (grammar_state_storage) |*gs| {
+                        const bpe_jmp: *@import("../tokenizer/bpe.zig").BpeTokenizer = @ptrCast(@alignCast(g_server.tokenizer.ptr));
+                        if (g.singleValidToken(gs, bpe_jmp.id_to_token.items)) |jump_tok| {
+                            const jt_slice = [1]u32{jump_tok};
+                            const jt_text = g_server.tokenizer.decode(@constCast(&jt_slice)) catch null;
+                            defer if (jt_text) |t| g_server.allocator.free(t);
+                            gs.acceptToken(jt_text orelse "");
+                            gen_tokens[token_count] = jump_tok;
+                            token_count += 1;
+                            last = jump_tok;
+                            if (gs.isComplete()) { hit_eog = true; break; }
+                            continue;
+                        }
+                    }
+                }
+            }
+
             var next = model.forward(last) catch |err| {
                 if (err == error.Cancelled) {
                     cancelled = true;
@@ -4036,6 +4057,30 @@ fn generateStream(stream: TcpStream, prompt: []const u8, req_id: u64, created: i
         var last_token_time: i64 = milliTimestamp();
         for (0..max_tokens -| 1) |_| {
             if (token_ids.len == 0 or (token_count == 0 and g_server.isEog(first_gen_token))) break;
+
+            // Jump decoding (streaming): skip forward pass when grammar has single valid token
+            if (use_grammar_s and !use_sampling_s) {
+                if (s_grammar) |*g| {
+                    if (s_grammar_state) |*gs| {
+                        const bpe_jmp_s: *@import("../tokenizer/bpe.zig").BpeTokenizer = @ptrCast(@alignCast(g_server.tokenizer.ptr));
+                        if (g.singleValidToken(gs, bpe_jmp_s.id_to_token.items)) |jump_tok| {
+                            const jt_s = [1]u32{jump_tok};
+                            const jt_text = g_server.tokenizer.decode(@constCast(&jt_s)) catch null;
+                            defer if (jt_text) |t| g_server.allocator.free(t);
+                            gs.acceptToken(jt_text orelse "");
+                            if (!streamChunk(stream, &chunk_buf, tok, jump_tok, req_id, created, is_chat)) {
+                                stream_disconnected = true;
+                                break;
+                            }
+                            last = jump_tok;
+                            token_count += 1;
+                            if (gs.isComplete()) break;
+                            continue;
+                        }
+                    }
+                }
+            }
+
             var next = model.forward(last) catch |err| {
                 if (err != error.Cancelled) {
                     std.log.warn("req={d} generation forward failed: {}", .{ log_request_id, err });

@@ -150,6 +150,50 @@ pub const Grammar = struct {
         }
     }
 
+    /// Jump decoding: if the grammar allows exactly one token at the current state,
+    /// return that token ID without needing a forward pass. Returns null if
+    /// multiple tokens are valid (need model to choose) or zero tokens (grammar error).
+    pub fn singleValidToken(self: *const Grammar, state: *GrammarState, vocab: []const []const u8) ?u32 {
+        if (state.completed) return null;
+        if (state.stack.items.len == 0) return null;
+
+        const required_cap = state.stack.items.len + 33;
+        var test_state = GrammarState{
+            .grammar = self,
+            .stack = std.ArrayList(StackEntry).empty,
+            .completed = state.completed,
+        };
+        test_state.stack.ensureTotalCapacity(self.allocator, required_cap) catch return null;
+        defer test_state.stack.deinit(self.allocator);
+
+        var valid_id: ?u32 = null;
+        for (vocab, 0..) |text, token_id| {
+            if (text.len == 0) continue;
+            const effective = getEffectiveText(text);
+            if (effective.len == 0) continue;
+
+            test_state.stack.shrinkRetainingCapacity(0);
+            for (state.stack.items) |entry| {
+                test_state.stack.appendAssumeCapacity(entry);
+            }
+            test_state.completed = state.completed;
+
+            var valid = true;
+            for (effective) |c| {
+                if (test_state.completed) break;
+                if (!test_state.acceptChar(c)) {
+                    valid = false;
+                    break;
+                }
+            }
+            if (valid) {
+                if (valid_id != null) return null;
+                valid_id = @intCast(token_id);
+            }
+        }
+        return valid_id;
+    }
+
     /// Strip BPE byte-level encoding prefix to get actual text.
     /// Qwen/GPT uses Ġ (0xC4 0xA0) for space, Ċ (0xC4 0x8A) for newline, etc.
     pub fn getEffectiveText(text: []const u8) []const u8 {
@@ -1133,4 +1177,33 @@ test "parse nonsense input produces no rules" {
     var grammar = try Grammar.parse(allocator, "!@#$%^&*()");
     defer grammar.deinit();
     try std.testing.expectEqual(@as(usize, 0), grammar.rules.len);
+}
+
+test "singleValidToken with bool grammar" {
+    const allocator = std.testing.allocator;
+    var grammar = try Grammar.parse(allocator, Grammar.bool_grammar);
+    defer grammar.deinit();
+    var state = try grammar.initState();
+    defer state.deinit();
+    // Vocab: ["t", "r", "true", "false", "f"]
+    const vocab = [_][]const u8{ "t", "r", "true", "false", "f" };
+    // Initially, both "true" and "false" (and "t" and "f") are valid prefixes
+    // so singleValidToken should return null
+    try std.testing.expect(grammar.singleValidToken(&state, &vocab) == null);
+}
+
+test "singleValidToken with fixed literal" {
+    const allocator = std.testing.allocator;
+    var grammar = try Grammar.parse(allocator, "root ::= \"yes\"");
+    defer grammar.deinit();
+    var state = try grammar.initState();
+    defer state.deinit();
+    // Vocab: "y", "e", "s", "yes", "no"
+    const vocab = [_][]const u8{ "y", "e", "s", "yes", "no" };
+    // "yes" (idx 3) and "y" (idx 0) are both valid prefixes → null
+    try std.testing.expect(grammar.singleValidToken(&state, &vocab) == null);
+    // After accepting "y", only "e" (idx 1) is valid
+    state.acceptToken("y");
+    const result = grammar.singleValidToken(&state, &vocab);
+    try std.testing.expectEqual(@as(?u32, 1), result);
 }

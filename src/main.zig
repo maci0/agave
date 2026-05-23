@@ -3179,6 +3179,26 @@ fn generateAndPrintInner(
 
     for (0..cli.max_tokens -| 1) |gi| {
         if (first_is_eog or token_ids.len == 0) break;
+
+        // Jump decoding: if grammar allows exactly one token, skip forward pass
+        if (grammar_state != null and !use_sampling) {
+            if (grammar) |*g| {
+                if (grammar_state) |*gs| {
+                    if (g.singleValidToken(gs, tok.id_to_token.items)) |jump_tok| {
+                        const jt_slice = [1]u32{jump_tok};
+                        const jt_text = tok.decode(@constCast(&jt_slice)) catch null;
+                        defer if (jt_text) |t| allocator.free(t);
+                        gs.acceptToken(jt_text orelse "");
+                        gen_ids_buf[token_count] = jump_tok;
+                        token_count += 1;
+                        last = jump_tok;
+                        if (gs.isComplete()) { hit_eog = true; break; }
+                        continue;
+                    }
+                }
+            }
+        }
+
         var next = mdl.forward(last) catch |e| {
             eprint("Error: generation failed at token {d}: {}\n", .{ gi + 1, e });
             break;
