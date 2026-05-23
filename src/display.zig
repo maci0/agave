@@ -113,6 +113,8 @@ pub const ModelInfo = struct {
     server_mode: bool = false,
     server_port: u16 = 0,
     batch_size: u32 = 0,
+    mtp_depth: u32 = 0,
+    has_vision: bool = false,
 };
 
 /// Re-export BackendInfo from backend.zig for display consumers.
@@ -812,6 +814,10 @@ pub const Display = struct {
             jw.objectField("system_mem_bytes") catch return;
             jw.write(info.system_mem) catch return;
         }
+        jw.objectField("mtp_depth") catch return;
+        jw.write(info.mtp_depth) catch return;
+        jw.objectField("vision") catch return;
+        jw.write(info.has_vision) catch return;
 
         jw.endObject() catch return;
 
@@ -855,6 +861,8 @@ pub const Display = struct {
         if (info.ctx_size > 0) w(&buf, &pos, "  Context:  {d}\n", .{info.ctx_size});
         w(&buf, &pos, "  KV type:  {s}\n", .{info.kv_type_name});
         if (info.rope_theta > 0) w(&buf, &pos, "  RoPE:     {d}\n", .{@as(u64, @intFromFloat(info.rope_theta))});
+        if (info.mtp_depth > 0) w(&buf, &pos, "  MTP:      {d} head(s)\n", .{info.mtp_depth});
+        if (info.has_vision) w(&buf, &pos, "  Vision:   yes\n", .{});
         w(&buf, &pos, "  Size:     {d:.1} {s}\n", .{ fsize.val, fsize.unit });
         w(&buf, &pos, "  Loaded:   {d}ms\n", .{info.load_ms});
         if (info.warmup_ms > 0) w(&buf, &pos, "  Warmup:   {d}ms\n", .{info.warmup_ms});

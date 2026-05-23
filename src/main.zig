@@ -1702,6 +1702,9 @@ pub fn main(init: std.process.Init) !void {
     else
         0;
     disp_info.warmup_ms = warmup_ms;
+    disp_info.mtp_depth = fmt.getArchU32(arch_str, "nextn_predict_layers") orelse
+        if (fmt.layerTensor(disp_info.n_layers, "nextn.eh_proj") != null) @as(u32, 1) else @as(u32, 0);
+    disp_info.has_vision = arch.imageTokens() != null;
 
     if (recipe.name.len > 0 and !std.mem.eql(u8, recipe.name, "default") and !cli.model_info and !g_quiet) {
         eprint("recipe: {s}\n", .{recipe.name});
