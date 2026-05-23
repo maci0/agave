@@ -1227,15 +1227,13 @@ fn runBenchmark(model: *Model, tok_state: anytype, tok_kind: anytype, allocator:
     const n_prompt = token_ids.len;
     const n_gen = cli.max_tokens;
 
-    // Prefill
+    // Prefill (batched when model supports it, sequential fallback)
     var ts_start: std.posix.system.timespec = undefined;
     _ = std.posix.system.clock_gettime(.REALTIME, &ts_start);
-    for (token_ids) |tid| {
-        _ = model.forward(tid) catch {
-            eprint("Benchmark: prefill failed\n", .{});
-            return;
-        };
-    }
+    _ = model.prefill(token_ids) catch {
+        eprint("Benchmark: prefill failed\n", .{});
+        return;
+    };
     var ts_prefill: std.posix.system.timespec = undefined;
     _ = std.posix.system.clock_gettime(.REALTIME, &ts_prefill);
 
