@@ -96,6 +96,29 @@ pub const TieredBlock = struct {
     ssd_offset: ?u64 = null,
 };
 
+/// Callback for physical data transfer between tiers on discrete GPUs.
+/// UMA platforms (Apple Silicon, NVIDIA GB10) use null (no-op — shared memory).
+/// Discrete GPUs implement this to copy data via cuMemcpyAsync / hipMemcpyAsync.
+pub const TransferCallback = struct {
+    /// Copy block data from host (RAM) to device (VRAM).
+    /// Called during promoteToVram on discrete GPUs.
+    upload: ?*const fn (ctx: *anyopaque, dst_dev: [*]u8, src_host: [*]const u8, bytes: usize) void = null,
+    /// Copy block data from device (VRAM) to host (RAM).
+    /// Called during demoteToRam on discrete GPUs.
+    download: ?*const fn (ctx: *anyopaque, dst_host: [*]u8, src_dev: [*]const u8, bytes: usize) void = null,
+    /// Flush all pending async transfers (batch sync point).
+    sync: ?*const fn (ctx: *anyopaque) void = null,
+    /// Opaque backend context (e.g., CUDA stream, HIP stream).
+    ctx: ?*anyopaque = null,
+
+    /// No-op transfer for UMA platforms (default).
+    pub const uma_noop = TransferCallback{};
+
+    pub fn isActive(self: TransferCallback) bool {
+        return self.upload != null;
+    }
+};
+
 /// Tiered KV cache allocator supporting VRAM, RAM, and SSD tiers.
 /// Blocks are allocated from highest available tier, with automatic demotion
 /// when VRAM usage exceeds threshold (90%).
@@ -141,6 +164,9 @@ pub const TieredKvCache = struct {
     ssd_path: []const u8,
     /// Bytes per block (kv_dim × block_size × @sizeOf(f32) × 2).
     block_bytes: usize,
+
+    /// GPU transfer callback for discrete GPUs (null = UMA zero-copy).
+    transfer: TransferCallback = TransferCallback.uma_noop,
 
     /// Tier-mutation lock: serializes promoteFromSsd/promoteToVram/demoteToRam
     /// across scheduler and prefetch worker threads. Short critical sections
@@ -434,13 +460,18 @@ pub const TieredKvCache = struct {
 
         if (!found) return error.NoVramBlocksToDemote;
 
-        // Change tier tag (data stays in place for now — zero-copy in Plan 04)
+        // Download data from VRAM → RAM on discrete GPUs (no-op on UMA)
+        if (self.transfer.isActive()) {
+            const vblk = &self.blocks[victim_id];
+            const key_bytes = std.mem.sliceAsBytes(vblk.base.keys);
+            const val_bytes = std.mem.sliceAsBytes(vblk.base.values);
+            self.transfer.download.?(self.transfer.ctx.?, key_bytes.ptr, key_bytes.ptr, key_bytes.len);
+            self.transfer.download.?(self.transfer.ctx.?, val_bytes.ptr, val_bytes.ptr, val_bytes.len);
+        }
+
         self.blocks[victim_id].tier = .ram;
         _ = self.vram_used.fetchSub(1, .monotonic);
         _ = self.ram_used.fetchAdd(1, .monotonic);
-
-        // Block remains allocated (ref_count > 0), so not on free list
-        // Tier tag is sufficient for tracking location
 
         return victim_id;
     }
@@ -623,7 +654,14 @@ pub const TieredKvCache = struct {
             std.log.debug("Evicted block {d} to make room for promotion of {d}", .{ evicted, block_id });
         }
 
-        // Change tier tag (data stays in place on UMA, uploaded in Plan 04 on discrete)
+        // Transfer data from RAM → VRAM on discrete GPUs (no-op on UMA)
+        if (self.transfer.isActive()) {
+            const key_bytes = std.mem.sliceAsBytes(blk.base.keys);
+            const val_bytes = std.mem.sliceAsBytes(blk.base.values);
+            self.transfer.upload.?(self.transfer.ctx.?, key_bytes.ptr, key_bytes.ptr, key_bytes.len);
+            self.transfer.upload.?(self.transfer.ctx.?, val_bytes.ptr, val_bytes.ptr, val_bytes.len);
+        }
+
         std.debug.assert(blk.tier == .ram);
         blk.tier = .vram;
         blk.last_access_ms = milliTimestamp();
@@ -632,6 +670,42 @@ pub const TieredKvCache = struct {
         _ = self.vram_used.fetchAdd(1, .monotonic);
 
         std.log.debug("Promoted block {d} to VRAM", .{block_id});
+    }
+
+    /// Batch promote multiple blocks to VRAM with a single sync point.
+    /// More efficient than individual promoteToVram calls on discrete GPUs
+    /// because async transfers are batched and synced once at the end.
+    pub fn batchPromoteToVram(self: *TieredKvCache, block_ids: []const u32) !void {
+        self.lockTier();
+        defer self.unlockTier();
+
+        for (block_ids) |bid| {
+            var blk = &self.blocks[bid];
+            if (blk.tier == .vram) continue;
+            if (blk.tier == .ssd) try self.promoteFromSsdInner(bid);
+
+            if (self.vram_free_list.items.len == 0) {
+                _ = try self.demoteToRam();
+            }
+
+            if (self.transfer.isActive()) {
+                const key_bytes = std.mem.sliceAsBytes(blk.base.keys);
+                const val_bytes = std.mem.sliceAsBytes(blk.base.values);
+                self.transfer.upload.?(self.transfer.ctx.?, key_bytes.ptr, key_bytes.ptr, key_bytes.len);
+                self.transfer.upload.?(self.transfer.ctx.?, val_bytes.ptr, val_bytes.ptr, val_bytes.len);
+            }
+
+            blk.tier = .vram;
+            blk.last_access_ms = milliTimestamp();
+            blk.access_count +|= 1;
+            _ = self.ram_used.fetchSub(1, .monotonic);
+            _ = self.vram_used.fetchAdd(1, .monotonic);
+        }
+
+        // Single sync for all batched transfers
+        if (self.transfer.isActive()) {
+            if (self.transfer.sync) |sync_fn| sync_fn(self.transfer.ctx.?);
+        }
     }
 
     /// Check if block needs promotion before use in attention.
