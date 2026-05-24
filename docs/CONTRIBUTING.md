@@ -63,11 +63,16 @@ pub const YourModel = struct {
     be: Backend,
     allocator: Allocator,
 
-    // Optional fields for multimodal (vtable detects via @hasField):
-    // image_embeddings: ?[]const f32 = null,
+    // Optional fields (vtable detects via @hasField/@hasDecl):
+    // image_embeddings: ?[]const f32 = null,   // multimodal vision
     // n_visual_tokens: u32 = 0,
     // image_pad_token_id: u32 = 0,
     // visual_token_idx: u32 = 0,
+    // n_mtp_layers: u32 = 0,                   // MTP speculation
+    // mtp_logits_buf: []f32 = &.{},
+    // layer_skip_start: u32 = 0,               // self-speculative
+    // layer_skip_end: u32 = 0,
+    // megakernel_enabled: bool = false,         // fused FFN dispatch
 
     pub fn init(allocator: Allocator, fmt: Format, be: Backend, ctx_size: u32, kv_type_k: KvQuantType, kv_type_v: KvQuantType, tiered_cache: ?*TieredKvCache) !YourModel { }
     pub fn deinit(self: *YourModel) void { }
