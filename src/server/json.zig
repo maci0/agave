@@ -1419,3 +1419,29 @@ test "extractFormField empty value" {
     try std.testing.expect(result != null);
     try std.testing.expectEqualStrings("", result.?);
 }
+
+test "extractJsonImage OpenAI data URI" {
+    const body =
+        \\{"messages":[{"role":"user","content":[{"type":"image_url","image_url":{"url":"data:image/png;base64,iVBORw0KGgo"}}]}]}
+    ;
+    const img = extractJsonImage(body) orelse unreachable;
+    try std.testing.expectEqualStrings("iVBORw0KGgo", img);
+}
+
+test "extractJsonImage no image" {
+    const body = \\{"messages":[{"role":"user","content":"hello"}]}
+    ;
+    try std.testing.expect(extractJsonImage(body) == null);
+}
+
+test "parseTools multiple tools" {
+    const body =
+        \\{"tools":[{"type":"function","function":{"name":"add","description":"Add numbers","parameters":{"type":"object"}}},{"type":"function","function":{"name":"sub","description":"Subtract","parameters":{"type":"object"}}}]}
+    ;
+    const tp = parseTools(body);
+    try std.testing.expectEqual(@as(u32, 2), tp.tool_count);
+    const t0 = tp.tools[0].?;
+    try std.testing.expectEqualStrings("add", t0.name);
+    const t1 = tp.tools[1].?;
+    try std.testing.expectEqualStrings("sub", t1.name);
+}
