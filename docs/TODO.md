@@ -94,7 +94,7 @@ All quantized GEMV formats native on all 6 backends. See [KERNELS.md](KERNELS.md
 | # | Feature | Impact | Source |
 |---|---------|--------|--------|
 | 8 | Multi-stream pre-attention GEMM | Overlap QKV(N+1) with SDPA(N) | vLLM |
-| 10 | Router mode (multi-model server) | Switch models per request | llama.cpp |
+| ~~10~~ | ~~Router mode~~ | ~~External routing (LiteLLM, inference gateways)~~ | Removed |
 | 11 | Hybrid memory abstraction | Unified KV+SSM cache | llama.cpp |
 | 14 | gRPC server (HTTP/2) | Lower overhead serving | vLLM |
 
@@ -117,14 +117,6 @@ All quantized GEMV formats native on all 6 backends. See [KERNELS.md](KERNELS.md
 ---
 
 ## Design Notes
-
-### Router Mode (#10)
-
-> llama.cpp server: switch models per request.
-
-Model registry with load/unload on demand. Requires per-model KV cache isolation and reference counting. The `model` field in API requests selects which model to route to.
-
----
 
 ## Implemented Features
 
