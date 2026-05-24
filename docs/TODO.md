@@ -79,24 +79,20 @@ All quantized GEMV formats native on all 6 backends. See [KERNELS.md](KERNELS.md
 | Llama 4 architecture (iRoPE, chunked attention, top-1 MoE, temperature scaling) | — |
 | Jump decoding (skip forward pass for deterministic grammar tokens) | vLLM |
 | API prompt prefix caching (KV reuse for shared conversation prefix) | vLLM |
+| Batched KV swap (TransferCallback + batchPromoteToVram) | vLLM |
 | TurboQuant in SDPA kernel (sdpa_fa2_turbo) | — |
 | Spec decode thinking budget (adaptive cooldown) | — |
 | Topology-aware auto partitioning (device cap exchange) | Partial |
 
 ### High Priority
 
-| # | Feature | Impact | Source |
-|---|---------|--------|--------|
-| 3 | Batched KV swap (cuMemcpyBatchAsync) | Reduce tiered cache API overhead | vLLM |
+(empty — all high priority items done)
 
 ### Medium Priority
 
 | # | Feature | Impact | Source |
 |---|---------|--------|--------|
-| 8 | Multi-stream pre-attention GEMM | Overlap QKV(N+1) with SDPA(N) | vLLM |
-| ~~10~~ | ~~Router mode~~ | ~~External routing (LiteLLM, inference gateways)~~ | Removed |
-| 11 | Hybrid memory abstraction | Unified KV+SSM cache | llama.cpp |
-| 14 | gRPC server (HTTP/2) | Lower overhead serving | vLLM |
+| 14 | gRPC server (HTTP/2) | Lower overhead serving — use nginx/envoy for now | vLLM |
 
 ### Low Priority
 
