@@ -38,7 +38,11 @@ const max_waiting_queue_size: usize = 1024;
 
 /// Initial token output buffer capacity per request.
 /// Avoids repeated reallocation during the decode phase.
-const initial_token_capacity: usize = 4096;
+/// +8 margin: handler cancel via is_cancelled poll has up to 1 scheduler
+/// step latency, so the scheduler may append beyond max_tokens before
+/// cancellation takes effect. Pre-allocating margin prevents ArrayList
+/// reallocation, which would race with handler threads reading .items.
+const initial_token_capacity: usize = 4096 + 8;
 
 /// Maximum prefill tokens processed per scheduler step per request.
 /// Limits prefill blocking so decode requests get timely service.
@@ -52,6 +56,10 @@ pub const Request = struct {
     is_finished: std.atomic.Value(bool),
     is_cancelled: std.atomic.Value(bool),
     visible_len: std.atomic.Value(u32),
+    /// Set by the scheduler when the request is removed from its queues.
+    /// The HTTP handler must wait on this before freeing the Request to
+    /// prevent use-after-free when the scheduler is still iterating.
+    scheduler_done: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
     enqueued_at: i64,
     prompt_tokens: u32,
     cached_prefix_len: u32 = 0,
@@ -107,10 +115,8 @@ pub const Request = struct {
 /// Formula: priority = α × cached_prefix_length − elapsed_ms
 /// Higher priority = better (should be scheduled sooner).
 fn requestPriority(req: *const Request, now: i64) i64 {
-    const elapsed_ms = now - req.enqueued_at;
-    const deadline_penalty = @as(i64, @intCast(elapsed_ms));
-    const cache_bonus = @as(i64, @intCast(req.cached_prefix_len)) * @as(i64, @intFromFloat(cache_priority_alpha * ms_per_second));
-    return cache_bonus - deadline_penalty;
+    const cache_factor = comptime @as(i64, @intFromFloat(cache_priority_alpha * ms_per_second));
+    return @as(i64, @intCast(req.cached_prefix_len)) * cache_factor - (now - req.enqueued_at);
 }
 
 /// Scheduler statistics for monitoring.
@@ -164,10 +170,13 @@ pub const RequestManager = struct {
         try running.ensureTotalCapacity(allocator, max_batch_size);
         errdefer running.deinit(allocator);
 
+        var radix_tree = try RadixTree.init(allocator);
+        errdefer radix_tree.deinit();
+
         var mgr = RequestManager{
             .waiting = waiting,
             .running = running,
-            .radix_tree = try RadixTree.init(allocator),
+            .radix_tree = radix_tree,
             .metrics = metrics,
             .max_batch_size = max_batch_size,
             .timeout_sec = timeout_sec,
@@ -242,15 +251,6 @@ pub const RequestManager = struct {
         // concurrent insert from corrupting tree traversal)
         const prefix_match = self.radix_tree.matchPrefix(prompt_tokens_slice);
 
-        // SSM state restore: if prefix cached, restore SSM state for ~2x prefill speedup
-        if (prefix_match.matched > 0 and self.ssm_cache_inited) {
-            const h = std.hash.XxHash64.hash(0, std.mem.sliceAsBytes(prompt_tokens_slice[0..prefix_match.matched]));
-            if (self.ssm_state_cache.get(h)) |snapshot| {
-                // Will be restored by the scheduler step when this request starts prefill
-                _ = snapshot; // Restored via model.restoreSsmState in step()
-            }
-        }
-
         // Record cache hit or miss in metrics
         if (prefix_match.matched > 0) {
             self.metrics.recordCacheHit(@intCast(prefix_match.matched), @intCast(prompt_tokens_slice.len));
@@ -304,18 +304,36 @@ pub const RequestManager = struct {
                 if (req.is_finished.load(.acquire)) {
                     _ = self.running.swapRemove(i);
                     self.completed_total += 1;
+                    req.scheduler_done.store(true, .release);
                 } else if (req.is_cancelled.load(.acquire)) {
                     _ = self.running.swapRemove(i);
                     self.cancelled_total += 1;
+                    req.scheduler_done.store(true, .release);
                 } else {
                     i += 1;
                 }
             }
 
+            // Remove cancelled requests from waiting queue. Without this,
+            // a handler blocking on scheduler_done deadlocks when the
+            // cancelled request is never admitted to running.
+            var j: usize = 0;
+            while (j < self.waiting.items.len) {
+                const req_w = self.waiting.items[j];
+                if (req_w.is_cancelled.load(.acquire)) {
+                    _ = self.waiting.swapRemove(j);
+                    self.cancelled_total += 1;
+                    req_w.scheduler_done.store(true, .release);
+                } else {
+                    j += 1;
+                }
+            }
+
             // 2. Check timeout on running requests
             for (self.running.items) |req| {
-                if (req.elapsedSeconds(now) > self.timeout_sec) {
-                    std.log.warn("req={d} timed out after {d}s (limit {d}s), cancelling", .{ req.id, req.elapsedSeconds(now), self.timeout_sec });
+                const elapsed = req.elapsedSeconds(now);
+                if (elapsed > self.timeout_sec) {
+                    std.log.warn("req={d} timed out after {d}s (limit {d}s), cancelling", .{ req.id, elapsed, self.timeout_sec });
                     req.is_cancelled.store(true, .release);
                     self.metrics.recordTimeout();
                 }
@@ -343,7 +361,9 @@ pub const RequestManager = struct {
                     // If re-queue also fails (OOM), cancel the request so the
                     // handler thread unblocks instead of spinning forever.
                     self.waiting.append(self.allocator, req) catch {
+                        std.log.err("req={d} OOM re-queuing after batch-fill failure, cancelling", .{req.id});
                         req.is_cancelled.store(true, .release);
+                        req.scheduler_done.store(true, .release);
                     };
                     return err;
                 };
@@ -357,15 +377,20 @@ pub const RequestManager = struct {
             self.metrics.updateActiveRequests(@intCast(self.running.items.len));
         }
 
-        // Update KV cache block metrics from tiered cache (outside mutex —
-        // block counts are stable during step since forward() hasn't run yet)
+        // Update KV cache block metrics from tiered cache under tier_lock
+        // (prefetcher worker thread may be modifying free lists concurrently)
         if (self.tiered_cache) |cache| {
-            const total: u32 = @intCast(cache.vram_block_count + cache.ram_block_count + cache.ssd_block_count);
-            const free: u32 = @intCast(cache.vram_free_list.items.len + cache.ram_free_list.items.len + cache.ssd_free_list.items.len);
+            const total, const free, const gpu_total, const gpu_free = blk: {
+                cache.lockTier();
+                defer cache.unlockTier();
+                break :blk .{
+                    @as(u32, @intCast(cache.vram_block_count + cache.ram_block_count + cache.ssd_block_count)),
+                    @as(u32, @intCast(cache.vram_free_list.items.len + cache.ram_free_list.items.len + cache.ssd_free_list.items.len)),
+                    @as(u32, @intCast(cache.vram_block_count)),
+                    @as(u32, @intCast(cache.vram_free_list.items.len)),
+                };
+            };
             self.metrics.updateKvBlocks(total - free, total);
-            // GPU-specific KV cache usage
-            const gpu_total: u32 = @intCast(cache.vram_block_count);
-            const gpu_free: u32 = @intCast(cache.vram_free_list.items.len);
             self.metrics.updateGpuKvBlocks(gpu_total - gpu_free, gpu_total);
         }
 
@@ -377,7 +402,7 @@ pub const RequestManager = struct {
                 for (req.block_table) |block_id| {
                     if (cache.needsPromotion(block_id)) {
                         cache.promoteToVram(block_id) catch |err| {
-                            std.log.warn("Failed to promote block {d} for request {d}: {}", .{ block_id, req.id, err });
+                            std.log.warn("req={d} block {d} promote failed: {}", .{ req.id, block_id, err });
                         };
                     }
                 }
@@ -385,7 +410,7 @@ pub const RequestManager = struct {
                 // Prefetch next blocks asynchronously (per D-07: next 2 blocks)
                 // This overlaps SSD I/O with GPU attention compute to hide latency
                 if (self.prefetcher) |*prefetcher| {
-                    const current_block_idx = @divFloor(req.tokens.items.len, cache.block_size);
+                    const current_block_idx = @divFloor(req.kv_position, cache.block_size);
                     prefetcher.prefetchNext(req.block_table, current_block_idx);
                 }
             }
@@ -406,12 +431,18 @@ pub const RequestManager = struct {
             model.setKvSeqLen(req.kv_position);
 
             const next_token = model.forward(req.last_token_id) catch |err| {
-                std.log.err("Request {d} forward failed: {}", .{ req.id, err });
+                std.log.err("req={d} forward failed: {}", .{ req.id, err });
                 req.is_cancelled.store(true, .release);
                 continue;
             };
 
             req.kv_position = model.kvSeqLen();
+
+            // Re-check after forward(): handler thread may have set is_cancelled
+            // while forward() was running. Appending to a cancelled request races
+            // with the handler reading req.tokens.items.
+            if (req.is_cancelled.load(.acquire)) continue;
+
             req.appendToken(next_token, eog_ids);
 
             // On completion: RadixTree insert + SSM state cache
@@ -425,7 +456,8 @@ pub const RequestManager = struct {
                 if (self.ssm_cache_inited) {
                     if (model.saveSsmState(self.allocator)) |snapshot| {
                         const h = std.hash.XxHash64.hash(0, std.mem.sliceAsBytes(req.prompt_tokens_slice));
-                        self.ssm_state_cache.put(h, snapshot) catch {
+                        self.ssm_state_cache.put(h, snapshot) catch |err| {
+                            std.log.warn("req={d} SSM state cache insert failed: {}", .{ req.id, err });
                             self.allocator.free(snapshot);
                         };
                     }
@@ -458,7 +490,7 @@ pub const RequestManager = struct {
             var i: u32 = 0;
             while (i < chunk) : (i += 1) {
                 last_token = model.forward(req.prompt_tokens_slice[req.prefill_pos]) catch |err| {
-                    std.log.err("Request {d} prefill failed: {}", .{ req.id, err });
+                    std.log.err("req={d} prefill failed: {}", .{ req.id, err });
                     req.is_cancelled.store(true, .release);
                     break;
                 };
@@ -467,7 +499,8 @@ pub const RequestManager = struct {
 
             req.kv_position = model.kvSeqLen();
 
-            // Prefill complete — emit first generated token
+            // Prefill complete — emit first generated token.
+            // Re-check is_cancelled: handler may have cancelled during prefill.
             if (req.prefill_pos >= req.prompt_tokens and !req.is_cancelled.load(.acquire)) {
                 req.prefill_done_at = milliTimestamp();
                 req.last_token_id = last_token;
@@ -504,7 +537,7 @@ pub fn runSchedulerLoop(
     model.setThreadContext();
     while (!shutdown.load(.acquire)) {
         manager.step(model, eog_ids) catch |err| {
-            std.log.err("Scheduler step failed: {} (waiting={d}, running={d})", .{ err, manager.waiting.items.len, manager.running.items.len });
+            std.log.err("Scheduler step failed: {}", .{err});
             manager.metrics.recordSchedulerError();
         };
         {

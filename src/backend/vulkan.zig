@@ -828,6 +828,7 @@ pub const VulkanBackend = struct {
         self.buf_cache = std.AutoHashMap(usize, CachedBuf).init(allocator);
         try self.buf_cache.ensureTotalCapacity(backend_mod.buf_cache_initial_capacity);
         self.act_cache = std.AutoHashMap(usize, ActBuf).init(allocator);
+        errdefer self.act_cache.deinit();
         errdefer self.buf_cache.deinit();
         errdefer self.deinitCachedBuffers();
 
@@ -931,7 +932,9 @@ pub const VulkanBackend = struct {
             // Format "Vulkan X.Y" from VK_API_VERSION
             const vk_major = (props.apiVersion >> 22) & 0x7F;
             const vk_minor = (props.apiVersion >> 12) & 0x3FF;
-            _ = std.fmt.bufPrint(&self.vk_ver_str, "Vulkan {d}.{d}", .{ vk_major, vk_minor }) catch {};
+            _ = std.fmt.bufPrint(&self.vk_ver_str, "Vulkan {d}.{d}", .{ vk_major, vk_minor }) catch {
+                @memcpy(self.vk_ver_str[0..6], "Vulkan");
+            };
         }
 
         // Query total device-local VRAM
@@ -2425,8 +2428,8 @@ pub const VulkanBackend = struct {
     }
 
     /// SDPA with per-head softmax stats for split-attention merge.
-    /// GPU stats export not yet implemented — syncs GPU, then runs CPU-side
-    /// sdpaQuantHeadsWithStats as fallback. Native GPU stats is future work.
+    /// Fills identity stats (max=0, sum=1) — GPU SDPA already produces
+    /// normalized output, so the merge formula treats it as-is.
     pub fn sdpaWithStats(self: *VulkanBackend, q: [*]const f32, keys: []u8, values: []u8, k_new: [*]const f32, v_new: [*]const f32, output: [*]f32, head_max: [*]f32, head_sum: [*]f32, nh: usize, nkv: usize, hd: usize, seq_len: usize, scale: f32, kv_type_k: KvQuantType, kv_type_v: KvQuantType) void {
         self.sdpa(q, keys, values, k_new, v_new, output, nh, nkv, hd, seq_len, scale, kv_type_k, kv_type_v);
         for (0..nh) |h| {

@@ -186,8 +186,9 @@ var buf: [32768]u8 = undefined;
 const msl = mega_compose.composeMSL(&buf, desc);
 try metal_be.compileComposedMegakernel(msl);
 
-// Dispatch in forward pass
-metal_be.dispatchMegakernelAuto(params);
+// Dispatch in forward pass (see metal.zig for full parameter list:
+// weights, layer_offsets, kv_keys, kv_values, hidden, scratch, sync_ctrs, params, n_tgs)
+metal_be.dispatchMegakernelAuto(weights, weights_size, layer_offsets, ...);
 ```
 
 Helper constructors simplify common patterns:

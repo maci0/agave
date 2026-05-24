@@ -273,6 +273,8 @@ const WGPUBindGroupDescriptor = extern struct {
 const workgroup_size: u32 = 256;
 const act_pool_capacity: u32 = 32;
 const max_bindings: u32 = 8;
+/// Maximum device poll iterations for buffer map completion.
+const max_map_poll_iterations: u32 = 10000;
 
 // ── Pipeline info ───────────────────────────────────────────────────
 
@@ -432,6 +434,7 @@ pub const WebGpuBackend = struct {
         self.lib = for (lib_names) |name| {
             break std.DynLib.open(name) catch continue;
         } else return error.WebGpuNotAvailable;
+        errdefer self.lib.close();
         std.log.warn("WebGPU: library loaded", .{});
 
         self.loadFunctions() catch |err| {
@@ -446,15 +449,18 @@ pub const WebGpuBackend = struct {
             std.log.warn("WebGPU: wgpuCreateInstance returned null", .{});
             return error.WebGpuNotAvailable;
         }
+        errdefer self.fn_instance_release(self.instance);
 
         self.requestAdapter() catch |err| {
             std.log.warn("WebGPU: requestAdapter failed: {s}", .{@errorName(err)});
             return err;
         };
+        errdefer self.fn_adapter_release(self.adapter);
         self.requestDevice() catch |err| {
             std.log.warn("WebGPU: requestDevice failed: {s}", .{@errorName(err)});
             return err;
         };
+        errdefer self.fn_device_release(self.device);
         self.queue = self.fn_device_get_queue(self.device);
 
         try self.createPipelines();
@@ -664,7 +670,9 @@ pub const WebGpuBackend = struct {
         }
         const buf = self.createBuffer(size, wgpu_buffer_usage_storage | wgpu_buffer_usage_copy_src | wgpu_buffer_usage_copy_dst);
         self.uploadToBuffer(buf, ptr, size);
-        self.buf_cache.put(key, .{ .buffer = buf, .size = size, .generation = self.upload_generation }) catch {};
+        self.buf_cache.put(key, .{ .buffer = buf, .size = size, .generation = self.upload_generation }) catch |err| {
+            std.log.warn("webgpu: buf_cache.put failed (key={d}): {s}", .{ key, @errorName(err) });
+        };
         return buf;
     }
 
@@ -725,7 +733,7 @@ pub const WebGpuBackend = struct {
         _ = self.fn_buffer_map_async(self.staging_buf, wgpu_map_mode_read, 0, size, map_cb_info);
         // Poll device until map completes
         var polls: u32 = 0;
-        while (!mapped and polls < 10000) : (polls += 1) {
+        while (!mapped and polls < max_map_poll_iterations) : (polls += 1) {
             _ = self.fn_device_poll(self.device, 1, null);
             self.fn_instance_process_events(self.instance);
         }
@@ -1329,7 +1337,7 @@ pub const WebGpuBackend = struct {
 
     pub fn sdpaWithStats(self: *WebGpuBackend, q: [*]const f32, keys: []u8, values: []u8, k_new: [*]const f32, v_new: [*]const f32, output: [*]f32, head_max: [*]f32, head_sum: [*]f32, nh: usize, nkv: usize, hd: usize, seq_len: usize, scale: f32, kv_type_k: KvQuantType, kv_type_v: KvQuantType) void {
         self.sdpa(q, keys, values, k_new, v_new, output, nh, nkv, hd, seq_len, scale, kv_type_k, kv_type_v);
-        // Stats not computed by GPU kernel — fill with defaults for merge compatibility
+        // Identity stats (max=0, sum=1) — GPU SDPA output is already normalized
         for (0..nh) |h| {
             head_max[h] = 0.0;
             head_sum[h] = 1.0;

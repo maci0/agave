@@ -15,10 +15,7 @@ const mlx_group_size: u32 = 64;
 /// u32 words per group (64 nibbles / 8 nibbles per word).
 const words_per_group: u32 = 8;
 
-/// Convert BF16 (stored as u16) to f32: shift left 16 bits.
-inline fn bf16ToF32(v: u16) f32 {
-    return @bitCast(@as(u32, v) << 16);
-}
+const bf16ToF32 = cu.bf16ToF32;
 
 /// Process one u32 word (8 packed 4-bit values) against 8 x values.
 /// Returns (dot, xsum) where dot = sum(nibble_i * x_i), xsum = sum(x_i).

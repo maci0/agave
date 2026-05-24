@@ -5,25 +5,25 @@
 <div class="sidebar-overlay" id="sidebar-overlay" onclick="toggleSidebar()" role="presentation"></div>
 <header>
 <div class="logo">
-<button class="hdr-btn menu-btn" onclick="toggleSidebar()" title="Menu" aria-label="Toggle sidebar" aria-expanded="false" aria-controls="sidebar" id="menu-btn">&#9776;</button>
-<h1>&#127797; agave</h1><span class="model-badge" id="model-name">loading...</span><span class="ctx-badge" id="ctx-badge" aria-live="polite"></span></div>
+<button type="button" class="hdr-btn menu-btn" onclick="toggleSidebar()" title="Menu" aria-label="Toggle sidebar" aria-expanded="false" aria-controls="sidebar" id="menu-btn">&#9776;</button>
+<h1>&#127797; agave</h1><span class="model-badge" id="model-name" aria-live="polite">loading...</span><span class="ctx-badge" id="ctx-badge" aria-live="polite"></span></div>
 <div class="hdr-btns">
-<button class="new-chat-btn" onclick="newConv()" aria-label="New conversation">+ New</button>
-<button class="hdr-btn" onclick="exportConv()" title="Export conversation" aria-label="Export conversation"><span class="btn-text">Export </span>&#8681;</button>
-<button class="hdr-btn" onclick="clearChat()" title="Clear conversation" aria-label="Clear conversation"><span class="btn-text">Clear </span>&#10005;</button>
-<button class="hdr-btn" onclick="showInfo()" title="About" aria-label="About Agave"><span class="btn-text">Info </span>&#9432;</button>
+<button type="button" class="new-chat-btn" onclick="newConv()" aria-label="New conversation">+ New</button>
+<button type="button" class="hdr-btn" onclick="exportConv()" title="Export conversation" aria-label="Export conversation"><span class="btn-text">Export </span>&#8681;</button>
+<button type="button" class="hdr-btn" onclick="clearChat()" title="Clear conversation" aria-label="Clear conversation"><span class="btn-text">Clear </span>&#10005;</button>
+<button type="button" class="hdr-btn" onclick="showInfo()" title="About" aria-label="About Agave"><span class="btn-text">Info </span>&#9432;</button>
 </div>
 </header>
 <div class="layout">
-<aside class="sidebar" id="sidebar" role="navigation" aria-label="Conversations">
+<aside class="sidebar" id="sidebar" aria-label="Conversations">
 <div class="sidebar-hdr">
-<span class="sidebar-title">Chats</span>
-<button class="new-chat-btn" onclick="newConv()" aria-label="New conversation">+ New</button>
+<h2 class="sidebar-title">Chats</h2>
+<button type="button" class="new-chat-btn" onclick="newConv()" aria-label="New conversation">+ New</button>
 </div>
-<div class="conv-list" id="conv-list"><div class="conv-empty">No conversations yet</div></div>
+<div class="conv-list" id="conv-list" role="list" aria-label="Conversations"><div class="conv-empty">No conversations yet</div></div>
 </aside>
 <main class="main">
-<div id="chat" role="log" aria-live="off" tabindex="0">
+<div id="chat" role="log" aria-label="Chat messages" aria-live="off" tabindex="0">
 <div id="empty">
 <div class="icon">&#127797;</div><h2>agave</h2>
 <p>High-performance LLM inference engine</p>
@@ -64,7 +64,7 @@
 <form id="chat-form" onsubmit="return onSubmit(event)" aria-label="Chat">
 <div id="img-preview" class="img-preview" style="display:none">
 <img id="img-thumb" alt="Attached image preview">
-<button type="button" class="img-remove" onclick="removeImage()" aria-label="Remove image">&times;</button>
+<button type="button" class="img-remove" onclick="removeImage()" aria-label="Remove image" title="Remove image">&times;</button>
 </div>
 <div class="settings-panel" id="settings-panel" role="region" aria-label="Sampling settings">
 <div class="settings-grid">
@@ -78,12 +78,12 @@
 </div>
 <div class="setting-group">
 <label for="max-tokens">Max Tokens</label>
-<input type="number" id="max-tokens" min="1" max="4096" value="512" inputmode="numeric" aria-describedby="max-tokens-range"><span id="max-tokens-range" class="sr-only">Range: 1 to 4096</span>
+<input type="number" id="max-tokens" min="1" max="4096" value="512" inputmode="numeric" aria-describedby="max-tokens-range"><span id="max-tokens-range" class="setting-range-hint">1–4096</span>
 </div>
 </div>
 <div class="system-prompt-group">
 <div class="system-prompt-header"><label for="system-prompt">System Prompt</label><button type="button" class="system-prompt-clear" onclick="clearSystemPrompt()" aria-label="Clear system prompt">clear</button></div>
-<textarea id="system-prompt" placeholder="Optional system prompt..." rows="2"></textarea>
+<textarea id="system-prompt" placeholder="Optional system prompt..." rows="2" spellcheck="false" autocapitalize="off" dir="auto"></textarea>
 </div>
 </div>
 <div class="input-row">

@@ -79,6 +79,9 @@ topPEl.addEventListener('input', function() {
 maxTokEl.addEventListener('input', function() {
   localStorage.setItem('agave_max_tokens', this.value);
 });
+maxTokEl.addEventListener('keydown', function(e) {
+  if (e.key === 'Enter') e.preventDefault();
+});
 maxTokEl.addEventListener('blur', function() {
   var v = parseInt(this.value);
   if (isNaN(v) || v < 1) this.value = 1;
@@ -99,6 +102,7 @@ function showToast(text, type) {
   span.textContent = text;
   span.style.flex = '1';
   var close = document.createElement('button');
+  close.type = 'button';
   close.className = 'toast-dismiss';
   close.textContent = '\u00d7';
   close.setAttribute('aria-label', 'Dismiss');
@@ -110,18 +114,18 @@ function showToast(text, type) {
   chat.appendChild(toast);
   scrollBottom();
   announceToSR(text);
+  var reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
   var timeout = isError ? 12000 : 5000;
-  if (!window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
-    var timerId = setTimeout(function() { if (toast.parentNode) toast.remove(); }, timeout);
-    toast.addEventListener('mouseenter', function() { clearTimeout(timerId); });
-    toast.addEventListener('mouseleave', function() {
-      timerId = setTimeout(function() { if (toast.parentNode) toast.remove(); }, timeout);
-    });
-    toast.addEventListener('focusin', function() { clearTimeout(timerId); });
-    toast.addEventListener('focusout', function() {
-      timerId = setTimeout(function() { if (toast.parentNode) toast.remove(); }, timeout);
-    });
-  }
+  if (reducedMotion) timeout *= 2;
+  var timerId = setTimeout(function() { if (toast.parentNode) toast.remove(); }, timeout);
+  toast.addEventListener('mouseenter', function() { clearTimeout(timerId); });
+  toast.addEventListener('mouseleave', function() {
+    timerId = setTimeout(function() { if (toast.parentNode) toast.remove(); }, timeout);
+  });
+  toast.addEventListener('focusin', function() { clearTimeout(timerId); });
+  toast.addEventListener('focusout', function() {
+    timerId = setTimeout(function() { if (toast.parentNode) toast.remove(); }, timeout);
+  });
 }
 
 function loadImageFile(file, label) {
@@ -216,6 +220,7 @@ function setStreaming(s) {
   sendBtn.style.display = s ? 'none' : '';
   stopBtn.style.display = s ? '' : 'none';
   inp.disabled = s;
+  chat.setAttribute('aria-busy', s ? 'true' : 'false');
   var tc = document.getElementById('toks-counter');
   if (s) {
     streamTokenCount = 0; streamStartTime = performance.now();
@@ -269,6 +274,7 @@ function clearSystemPrompt() {
   var el = document.getElementById('system-prompt');
   el.value = '';
   localStorage.removeItem('agave_system_prompt');
+  announceToSR('System prompt cleared');
 }
 
 function updateCtxBadge(modelData) {
@@ -347,7 +353,7 @@ function processCode(el) {
       var l = document.createElement('span'); l.className = 'code-lang'; l.textContent = lang;
       pre.appendChild(l);
     }
-    var c = document.createElement('button'); c.className = 'copy-btn'; c.textContent = 'Copy';
+    var c = document.createElement('button'); c.type = 'button'; c.className = 'copy-btn'; c.textContent = 'Copy';
     c.setAttribute('aria-label', lang ? 'Copy ' + lang + ' code' : 'Copy code');
     c.onclick = function() {
       navigator.clipboard.writeText(b.textContent).then(function() {
@@ -397,18 +403,14 @@ function renderContent(el, content, final) {
     } else {
       parsed = dc.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\n/g,'<br>');
     }
-    var sanitized;
     if (typeof DOMPurify !== 'undefined') {
-      sanitized = DOMPurify.sanitize(parsed, {ADD_TAGS: ['details', 'summary']});
-    } else if (typeof marked !== 'undefined') {
-      // marked produced HTML but DOMPurify is missing — escape to prevent XSS (breaks formatting)
-      sanitized = parsed.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+      // DOMPurify guarantees safe HTML — render as rich content
+      var sanitized = DOMPurify.sanitize(parsed, {ADD_TAGS: ['details', 'summary']});
+      var container = document.createElement('div'); container.innerHTML = sanitized;
+      while (container.firstChild) el.appendChild(container.firstChild);
     } else {
-      // Both missing — parsed is already escaped, use as-is
-      sanitized = parsed;
+      el.textContent = content;
     }
-    var container = document.createElement('div'); container.innerHTML = sanitized;
-    while (container.firstChild) el.appendChild(container.firstChild);
     processCode(el);
     el.querySelectorAll('a[href]').forEach(function(a) {
       var h = a.getAttribute('href');
@@ -416,7 +418,7 @@ function renderContent(el, content, final) {
     });
     if (final) {
       el.setAttribute('data-content', content);
-      var cb = document.createElement('button'); cb.className = 'msg-copy'; cb.textContent = 'Copy';
+      var cb = document.createElement('button'); cb.type = 'button'; cb.className = 'msg-copy'; cb.textContent = 'Copy';
       cb.setAttribute('aria-label', 'Copy response');
       cb.onclick = function() {
         navigator.clipboard.writeText(content).then(function() {
@@ -515,6 +517,7 @@ function addRegenBtn(msgEl) {
   var wrap = msgEl.closest('.msg-wrap');
   if (!wrap || !wrap.classList.contains('assistant')) return;
   var btn = document.createElement('button');
+  btn.type = 'button';
   btn.className = 'regen-btn';
   btn.textContent = '\u21BB Regenerate';
   btn.setAttribute('aria-label', 'Regenerate response');
@@ -622,7 +625,7 @@ function clearChat() {
   if (!confirm('Clear this conversation?')) return;
   if (pendingImage) removeImage();
   fetch('/v1/chat', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: 'message=%2Fclear' })
-  .then(function() { loadConvs(); showEmpty(); inp.focus(); }).catch(function() { showEmpty(); inp.focus(); });
+  .then(function() { loadConvs(); showEmpty(); inp.focus(); announceToSR('Conversation cleared'); }).catch(function() { showEmpty(); inp.focus(); });
 }
 
 function toggleSidebar() {
@@ -658,13 +661,13 @@ function loadConvs() {
     }
     convs.forEach(function(c) {
       var item = document.createElement('div'); item.className = 'conv-item' + (c.active ? ' active' : '');
-      item.tabIndex = 0; item.setAttribute('role', 'button'); item.setAttribute('aria-label', c.title || 'New chat');
+      item.tabIndex = 0; item.setAttribute('role', 'listitem'); item.setAttribute('aria-label', c.title || 'New chat');
       if (c.active) item.setAttribute('aria-current', 'true');
       item.onclick = function() { selectConv(c.id); };
       item.onkeydown = function(e) { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); selectConv(c.id); } };
       var title = document.createElement('span'); title.className = 'conv-title'; title.textContent = c.title || 'New chat';
       if (c.title) title.title = c.title;
-      var del = document.createElement('button'); del.className = 'conv-del'; del.textContent = '\u00d7';
+      var del = document.createElement('button'); del.type = 'button'; del.className = 'conv-del'; del.textContent = '\u00d7';
       del.setAttribute('aria-label', 'Delete conversation: ' + (c.title || 'New chat'));
       del.onclick = function(e) { e.stopPropagation(); deleteConv(c.id); };
       item.appendChild(title); item.appendChild(del); list.appendChild(item);

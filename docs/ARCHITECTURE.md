@@ -39,7 +39,7 @@ agave/
 │   │   ├── rate_limiter.zig # Token bucket rate limiter
 │   │   └── json.zig        # Streaming JSON field extraction
 │   ├── display.zig        # Rich CLI output (banner, stats, progress)
-│   ├── chat_template.zig  # Data-driven chat prompt templates (ChatML, Gemma, Gemma 4, Qwen35, GLM-4, GPT-OSS)
+│   ├── chat_template.zig  # Data-driven chat prompt templates (ChatML, Gemma, Gemma 4, Qwen35, GLM-4, GPT-OSS, Llama 4)
 │   ├── recipe.zig         # Optional preset configs per model/hardware/quant combo
 │   ├── grammar.zig        # GBNF parser, JSON schema -> grammar converter, constrained decoding
 │   ├── calibrate.zig      # TriAttention calibration subcommand (agave calibrate)
@@ -66,14 +66,15 @@ agave/
 │   │   ├── glm4.zig       # GLM-4 MoE Lite (MLA (DeepSeek-V2) + MoE, MLX 4/6/8-bit)
 │   │   ├── nemotron_nano.zig # Nemotron Nano (SSM + MoE + attention, NVFP4)
 │   │   ├── llama4.zig       # Llama 4 (iRoPE, chunked attention, top-1 MoE)
-│   │   └── vision.zig       # SigLIP-2 vision encoder (Gemma 4 multimodal)
+│   │   └── vision.zig       # Vision encoder (SigLIP-2, SigLIP, Qwen VL) for multimodal models
 │   ├── ops/
 │   │   ├── attention.zig  # Shared SDPA kernel (SIMD, sliding window, backend dispatch)
 │   │   ├── math.zig       # argmax, softplus, sigmoid, GELU, sampleToken
 │   │   ├── ssm.zig        # SSM ops: causal conv1d, Mamba-2 recurrence, group norm+gate
 │   │   ├── quant.zig      # Quantization helpers (bf16, mxfp4, fp8, iq4nl, nvfp4_st)
-│   │   ├── kv_quant.zig   # KV cache quantization (f32/f16/q8_0/int8/fp8/nvfp4)
+│   │   ├── kv_quant.zig   # KV cache quantization (f32/f16/q8_0/int8/fp8/nvfp4/turbo/planar/iso/rotor)
 │   │   ├── mlx.zig        # MLX 4/6/8-bit dequant (mlxGemvRaw, mlxGemvRows, mlxEmbLookup)
+│   │   ├── gptq.zig      # GPTQ INT4 GEMV kernel (packed u32 weights, per-group scales/zeros)
 │   │   ├── kv_evict.zig   # KV eviction: norm-based scoring, cache compaction
 │   │   └── split_attention.zig # Split-attention: async CPU-GPU KV cache offloading
 │   ├── backend/
@@ -96,7 +97,7 @@ agave/
 │   │       └── webgpu/    # WGSL compute shaders
 │   ├── parallel/
 │   │   ├── transport.zig  # Distributed transport: TCP, POSIX shm, NCCL (RoCE RDMA)
-│   │   ├── tp.zig         # Tensor parallelism utilities (shard/gather, rank mapping)
+│   │   ├── tp.zig         # CPU tensor parallelism coordinator (rank-0 only; GPU TP uses NCCL via transport.zig)
 │   │   └── discovery.zig  # UDP peer discovery (LAN broadcast, auto-connect)
 │   ├── spec/
 │   │   ├── spec_decode.zig # Speculative decoding orchestrator (draft, verify, accept)
@@ -203,6 +204,7 @@ When you run `agave model.gguf "Hello"`:
 | `gemma4` | Gemma 4 | `<turn\|>`, `<eos>`, `<channel\|>`, `<\|endoftext\|>`, `<\|end\|>` | `<\|channel>0\n<channel\|>` generation prefix |
 | `glm4` | GLM-4 | `<\|endoftext\|>`, `<\|user\|>`, `<\|observation\|>` | `[gMASK]<sop>` prefix, `</think>` generation prefix |
 | `gpt_oss` | GPT-OSS Harmony | `<\|end\|>`, `<\|endoftext\|>` | Includes default system prompt + developer role override |
+| `llama4` | Llama 4 | `<\|eot\|>`, `<\|end_of_text\|>` | Default system prompt |
 
 ### Recipes (`src/recipe.zig`)
 
@@ -251,7 +253,7 @@ HTTP server activated via `--serve` (default port 49453, override with `--port`)
 - `xtc_threshold` -- XTC sampling threshold
 - `dry_multiplier` -- DRY n-gram repetition penalty multiplier (0 = disabled)
 - `dry_allowed_length` -- DRY minimum n-gram length before penalty applies
-- `mirostat` -- Mirostat mode (0 = disabled, 1 = Mirostat, 2 = Mirostat 2.0)
+- `mirostat` -- Mirostat mode (0 = disabled, 2 = Mirostat 2.0)
 - `mirostat_tau` -- Mirostat target entropy
 - `mirostat_eta` -- Mirostat learning rate
 - `logit_bias` -- Token ID to bias map (e.g. `{"123": 5.0}`)
@@ -337,6 +339,7 @@ Browser inference entry point for running Agave in WebAssembly environments. Pro
 | `mxfp4` | 4.25 | 32 | Microscaled FP4 |
 | `tq1_0` | 1.7 | 256 | Ternary quantization (parsed but GEMV unsupported — output zeroed) |
 | `mlx_q` | 4-8 | 64 | MLX models (affine: scale × uint + bias) |
+| `gptq` | 4.25 | 32-128 | GPTQ INT4 (packed u32 weights, per-group scales/zeros) |
 
 **KV Cache Quantization Types** (see `src/ops/kv_quant.zig`):
 

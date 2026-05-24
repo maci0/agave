@@ -28,6 +28,8 @@ pub const ParseResult = struct {
     options: std.StringHashMap([]const u8),
     positionals: std.ArrayList([]const u8),
     allocator: std.mem.Allocator,
+    /// Set when a known option at end of args had no value to consume.
+    missing_value: ?[]const u8 = null,
 
     /// Release all memory owned by this result.
     pub fn deinit(self: *ParseResult) void {
@@ -52,23 +54,15 @@ pub const ParseResult = struct {
         return self.positionals.items[index];
     }
 
-    /// Parse a named option as u16, returning null if absent or invalid.
-    pub fn optionU16(self: *const ParseResult, name: []const u8) ?u16 {
+    /// Parse a named option as an unsigned integer, returning null if absent or invalid.
+    pub fn optionInt(self: *const ParseResult, comptime T: type, name: []const u8) ?T {
         const s = self.options.get(name) orelse return null;
-        return std.fmt.parseInt(u16, s, 10) catch null;
+        return std.fmt.parseInt(T, s, 10) catch null;
     }
 
-    /// Parse a named option as u32, returning null if absent or invalid.
-    pub fn optionU32(self: *const ParseResult, name: []const u8) ?u32 {
-        const s = self.options.get(name) orelse return null;
-        return std.fmt.parseInt(u32, s, 10) catch null;
-    }
-
-    /// Parse a named option as u64, returning null if absent or invalid.
-    pub fn optionU64(self: *const ParseResult, name: []const u8) ?u64 {
-        const s = self.options.get(name) orelse return null;
-        return std.fmt.parseInt(u64, s, 10) catch null;
-    }
+    pub fn optionU16(self: *const ParseResult, name: []const u8) ?u16 { return self.optionInt(u16, name); }
+    pub fn optionU32(self: *const ParseResult, name: []const u8) ?u32 { return self.optionInt(u32, name); }
+    pub fn optionU64(self: *const ParseResult, name: []const u8) ?u64 { return self.optionInt(u64, name); }
 
     /// Parse a named option as f32, returning null if absent or invalid.
     pub fn optionF32(self: *const ParseResult, name: []const u8) ?f32 {
@@ -100,9 +94,10 @@ fn findByShort(specs: []const ArgSpec, ch: u8) ?*const ArgSpec {
 /// Parse command-line arguments against the given specs.
 ///
 /// Skips argv[0] (program name). After `--`, all remaining arguments
-/// are treated as positionals. Unrecognized flags/options are silently
-/// treated as positionals to avoid breaking on model paths that start
-/// with `-` (rare but possible).
+/// are treated as positionals. Unrecognized long options are stored as
+/// flags (or as options when using `--name=value` form). Unrecognized
+/// short options are treated as positionals to avoid breaking on model
+/// paths that start with `-` (rare but possible).
 pub fn parse(allocator: std.mem.Allocator, args: std.process.Args, specs: []const ArgSpec) ParseResult {
     var result = ParseResult{
         .flags = std.StringHashMap(void).init(allocator),
@@ -118,7 +113,7 @@ pub fn parse(allocator: std.mem.Allocator, args: std.process.Args, specs: []cons
 
     while (iter.next()) |arg| {
         if (past_double_dash) {
-            result.positionals.append(allocator, arg) catch {};
+            result.positionals.append(allocator, arg) catch @panic("out of memory");
             continue;
         }
 
@@ -137,14 +132,14 @@ pub fn parse(allocator: std.mem.Allocator, args: std.process.Args, specs: []cons
                 const value = rest[eq_pos + 1 ..];
                 if (findByLong(specs, name)) |spec| {
                     if (spec.kind == .option) {
-                        result.options.put(name, value) catch {};
+                        result.options.put(name, value) catch @panic("out of memory");
                     } else {
                         // --flag=value is unusual but store as flag
-                        result.flags.put(name, {}) catch {};
+                        result.flags.put(name, {}) catch @panic("out of memory");
                     }
                 } else {
                     // Unknown --name=value: store as option anyway
-                    result.options.put(name, value) catch {};
+                    result.options.put(name, value) catch @panic("out of memory");
                 }
                 continue;
             }
@@ -153,16 +148,18 @@ pub fn parse(allocator: std.mem.Allocator, args: std.process.Args, specs: []cons
             const name = rest;
             if (findByLong(specs, name)) |spec| {
                 if (spec.kind == .flag) {
-                    result.flags.put(name, {}) catch {};
+                    result.flags.put(name, {}) catch @panic("out of memory");
                 } else {
                     // Option: consume next arg as value
                     if (iter.next()) |val| {
-                        result.options.put(name, val) catch {};
+                        result.options.put(name, val) catch @panic("out of memory");
+                    } else {
+                        result.missing_value = name;
                     }
                 }
             } else {
                 // Unknown long option: treat as flag (common for --help-like unknowns)
-                result.flags.put(name, {}) catch {};
+                result.flags.put(name, {}) catch @panic("out of memory");
             }
             continue;
         }
@@ -172,22 +169,24 @@ pub fn parse(allocator: std.mem.Allocator, args: std.process.Args, specs: []cons
             const ch = arg[1];
             if (findByShort(specs, ch)) |spec| {
                 if (spec.kind == .flag) {
-                    result.flags.put(spec.long, {}) catch {};
+                    result.flags.put(spec.long, {}) catch @panic("out of memory");
                 } else {
                     // Option: consume next arg as value
                     if (iter.next()) |val| {
-                        result.options.put(spec.long, val) catch {};
+                        result.options.put(spec.long, val) catch @panic("out of memory");
+                    } else {
+                        result.missing_value = spec.long;
                     }
                 }
             } else {
                 // Unknown short: treat as positional
-                result.positionals.append(allocator, arg) catch {};
+                result.positionals.append(allocator, arg) catch @panic("out of memory");
             }
             continue;
         }
 
         // Positional argument
-        result.positionals.append(allocator, arg) catch {};
+        result.positionals.append(allocator, arg) catch @panic("out of memory");
     }
 
     return result;

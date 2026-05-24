@@ -16,6 +16,7 @@ pub const Tokenizer = struct {
         encode: *const fn (self: *anyopaque, text: []const u8) TokenizerError![]u32,
         decode: *const fn (self: *anyopaque, tokens: []const u32) TokenizerError![]u8,
         get_vocab_size: *const fn (self: *anyopaque) u32,
+        get_vocab_texts: *const fn (self: *anyopaque) []const []const u8,
     };
 
     /// Encode text into a sequence of token IDs.
@@ -29,6 +30,10 @@ pub const Tokenizer = struct {
     /// Return the vocabulary size.
     pub fn vocabSize(self: Tokenizer) u32 {
         return self.vtable.get_vocab_size(self.ptr);
+    }
+    /// Return per-token text strings indexed by token ID.
+    pub fn getVocabTexts(self: Tokenizer) []const []const u8 {
+        return self.vtable.get_vocab_texts(self.ptr);
     }
 };
 
@@ -51,8 +56,11 @@ test "Tokenizer encode error propagates through VTable" {
         fn getVocabSize(_: *anyopaque) u32 {
             return 0;
         }
+        fn getVocabTexts(_: *anyopaque) []const []const u8 {
+            return &.{};
+        }
     };
-    const vtable = Tokenizer.VTable{ .encode = S.encode, .decode = S.decode, .get_vocab_size = S.getVocabSize };
+    const vtable = Tokenizer.VTable{ .encode = S.encode, .decode = S.decode, .get_vocab_size = S.getVocabSize, .get_vocab_texts = S.getVocabTexts };
     var dummy: u8 = 0;
     const tok = Tokenizer{ .ptr = @ptrCast(&dummy), .vtable = &vtable };
     try std.testing.expectError(error.OutOfMemory, tok.encode("test"));
@@ -74,11 +82,15 @@ test "Tokenizer VTable dispatch" {
             const self: *@This() = @ptrCast(@alignCast(ptr));
             return self.vocab_size;
         }
+        fn getVocabTexts(_: *anyopaque) []const []const u8 {
+            return &.{};
+        }
     };
     const vtable = Tokenizer.VTable{
         .encode = S.encode,
         .decode = S.decode,
         .get_vocab_size = S.getVocabSize,
+        .get_vocab_texts = S.getVocabTexts,
     };
     var impl = S{};
     const tok = Tokenizer{

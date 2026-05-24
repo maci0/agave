@@ -30,11 +30,7 @@
 
 const cu = @import("common.zig");
 
-/// FP4 E2M1 dequant lookup table (same as TurboQuant codebook).
-const fp4_e2m1_table = [16]f32{
-    0.0, 0.5,  1.0,  1.5,  2.0,  3.0,  4.0,  6.0,
-    0.0, -0.5, -1.0, -1.5, -2.0, -3.0, -4.0, -6.0,
-};
+const e2m1_lut = cu.e2m1_lut;
 
 /// Software FP4 GEMV fallback — used when tensor cores are not available
 /// or for validation against the tensor core path.
@@ -61,13 +57,13 @@ export fn gemv_fp4_tc_fallback_kernel(
     var sum: f32 = 0.0;
     var g: u32 = tid;
     while (g < scales_per_row) : (g += 256) {
-        const sc = fp8e4m3ToF32(scale[row * scales_per_row + g]);
+        const sc = cu.fp8e4m3ToF32(scale[row * scales_per_row + g]);
         const base = g * 16;
         const w_off = row * bytes_per_row + g * 8;
         for (0..8) |j| {
             const byte = weight[w_off + j];
-            const v0 = fp4_e2m1_table[byte & 0xF] * sc;
-            const v1 = fp4_e2m1_table[byte >> 4] * sc;
+            const v0 = e2m1_lut[byte & 0xF] * sc;
+            const v1 = e2m1_lut[byte >> 4] * sc;
             sum += v0 * x[base + 2 * j] + v1 * x[base + 2 * j + 1];
         }
     }
@@ -75,25 +71,6 @@ export fn gemv_fp4_tc_fallback_kernel(
     sum = cu.blockReduceAdd(sum);
     if (tid == 0) y[row] = sum;
 }
-
-/// FP8 E4M3 → f32 conversion.
-fn fp8e4m3ToF32(val: u8) f32 {
-    const sign: u32 = @as(u32, val >> 7) << 31;
-    const exp: u32 = (val >> 3) & 0xF;
-    const mant: u32 = val & 0x7;
-    if (exp == 0) {
-        if (mant == 0) return @bitCast(sign);
-        const fmant: f32 = @floatFromInt(mant);
-        const val_abs: f32 = fmant / 8.0 * std.math.exp2(@as(f32, -6.0));
-        return @bitCast(sign | @as(u32, @bitCast(val_abs)));
-    }
-    if (exp == 15) return 0.0;
-    const exp_f32: u32 = (exp + 127 - 7) << 23;
-    const mant_f32: u32 = mant << 20;
-    return @bitCast(sign | exp_f32 | mant_f32);
-}
-
-const std = @import("std");
 
 // Note: The actual tensor core MMA path requires inline PTX assembly
 // which Zig's nvptx64 backend may not support directly. The fallback

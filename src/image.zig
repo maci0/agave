@@ -17,7 +17,7 @@ const Allocator = std.mem.Allocator;
 const png_signature = [8]u8{ 0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n' };
 
 /// Maximum image file size to load (64 MB).
-const max_file_size: usize = 64 * 1024 * 1024;
+pub const max_file_size: usize = 64 * 1024 * 1024;
 
 /// Maximum decompressed scanline data (100 MP * 4 channels + filter bytes).
 const max_decompressed_size: usize = 100 * 1024 * 1024;
@@ -146,7 +146,7 @@ pub fn decodePng(allocator: Allocator, data: []const u8) ImageError!PngImage {
     // Concatenate all IDAT data into a single buffer for decompression
     var total_idat_size: usize = 0;
     for (idat_chunks.items) |chunk_data| {
-        total_idat_size += chunk_data.len;
+        total_idat_size = std.math.add(usize, total_idat_size, chunk_data.len) catch return error.InvalidImageSize;
     }
 
     const idat_buf = allocator.alloc(u8, total_idat_size) catch return error.OutOfMemory;
@@ -210,6 +210,68 @@ pub fn decodePng(allocator: Allocator, data: []const u8) ImageError!PngImage {
     };
 }
 
+/// Decoded PPM P6 image — pixels are a borrowed slice into the input buffer.
+pub const PpmImage = struct {
+    /// Raw RGB pixel data (slice of the input buffer, not separately allocated).
+    pixels: []const u8,
+    width: u32,
+    height: u32,
+};
+
+/// Parse a PPM P6 image from raw bytes.
+///
+/// PPM P6 format: "P6" magic, optional '#' comments, width/height/maxval
+/// header, then width * height * 3 raw RGB bytes.
+///
+/// Returns a PpmImage whose `pixels` field borrows from `data` (no allocation).
+pub fn decodePpm(data: []const u8) ImageError!PpmImage {
+    if (data.len < 3) return error.InvalidImageFormat;
+    if (data[0] != 'P' or data[1] != '6') return error.InvalidImageFormat;
+    var pos: usize = 2;
+
+    while (pos < data.len and (data[pos] == '\n' or data[pos] == '\r' or data[pos] == ' ')) : (pos += 1) {}
+
+    const readToken = struct {
+        fn call(d: []const u8, start: *usize) ?[]const u8 {
+            var p = start.*;
+            while (p < d.len) {
+                while (p < d.len and (d[p] == ' ' or d[p] == '\t' or d[p] == '\n' or d[p] == '\r')) : (p += 1) {}
+                if (p >= d.len) return null;
+                if (d[p] == '#') {
+                    while (p < d.len and d[p] != '\n') : (p += 1) {}
+                    continue;
+                }
+                const tok_start = p;
+                while (p < d.len and d[p] != ' ' and d[p] != '\t' and d[p] != '\n' and d[p] != '\r') : (p += 1) {}
+                start.* = p;
+                return d[tok_start..p];
+            }
+            return null;
+        }
+    }.call;
+
+    const w_str = readToken(data, &pos) orelse return error.InvalidImageFormat;
+    const width = std.fmt.parseInt(u32, w_str, 10) catch return error.InvalidImageFormat;
+    const h_str = readToken(data, &pos) orelse return error.InvalidImageFormat;
+    const height = std.fmt.parseInt(u32, h_str, 10) catch return error.InvalidImageFormat;
+    const max_str = readToken(data, &pos) orelse return error.InvalidImageFormat;
+    _ = std.fmt.parseInt(u32, max_str, 10) catch return error.InvalidImageFormat;
+
+    if (width == 0 or height == 0) return error.InvalidImageFormat;
+
+    if (pos < data.len) pos += 1;
+
+    const src_pixels: usize = std.math.mul(usize, std.math.mul(usize, @as(usize, width), height) catch
+        return error.InvalidImageSize, rgb_channels) catch return error.InvalidImageSize;
+    if (pos + src_pixels > data.len) return error.InvalidImageSize;
+
+    return .{
+        .pixels = data[pos..][0..src_pixels],
+        .width = width,
+        .height = height,
+    };
+}
+
 /// Detect image format from magic bytes and return a descriptive tag.
 ///
 /// Returns .png, .ppm, .jpeg, or .unknown based on the file header.
@@ -252,15 +314,17 @@ pub fn getImageDimensions(allocator: Allocator, io: Io, path: []const u8) !Image
             while (pos < hdr_n and hdr_buf[pos] != '\n') pos += 1;
             pos += 1;
         }
-        // Parse width and height
+        // Parse width and height with overflow protection
         var w: u32 = 0;
         while (pos < hdr_n and hdr_buf[pos] >= '0' and hdr_buf[pos] <= '9') : (pos += 1) {
-            w = w * 10 + @as(u32, hdr_buf[pos] - '0');
+            w = std.math.mul(u32, w, 10) catch return error.InvalidImageSize;
+            w = std.math.add(u32, w, @as(u32, hdr_buf[pos] - '0')) catch return error.InvalidImageSize;
         }
         pos += 1; // skip space
         var h: u32 = 0;
         while (pos < hdr_n and hdr_buf[pos] >= '0' and hdr_buf[pos] <= '9') : (pos += 1) {
-            h = h * 10 + @as(u32, hdr_buf[pos] - '0');
+            h = std.math.mul(u32, h, 10) catch return error.InvalidImageSize;
+            h = std.math.add(u32, h, @as(u32, hdr_buf[pos] - '0')) catch return error.InvalidImageSize;
         }
         if (w > 0 and h > 0) return .{ .width = w, .height = h };
     }
@@ -279,6 +343,7 @@ pub fn getImageDimensions(allocator: Allocator, io: Io, path: []const u8) !Image
 ///
 /// Returns: [dst_w * dst_h * 3] u8 with resized RGB pixels. Caller owns.
 pub fn resize(allocator: Allocator, src: []const u8, src_w: u32, src_h: u32, dst_w: u32, dst_h: u32) ![]u8 {
+    if (dst_w == 0 or dst_h == 0 or src_w == 0 or src_h == 0) return error.InvalidImageSize;
     const dw: usize = dst_w;
     const dh: usize = dst_h;
     const sw: usize = src_w;
@@ -287,16 +352,17 @@ pub fn resize(allocator: Allocator, src: []const u8, src_w: u32, src_h: u32, dst
     const out = try allocator.alloc(u8, out_size);
     errdefer allocator.free(out);
 
-    // Bilinear interpolation
+    // Bilinear interpolation — scale factors hoisted out of pixel loops
+    const scale_y: f64 = @as(f64, @floatFromInt(sh)) / @as(f64, @floatFromInt(dh));
+    const scale_x: f64 = @as(f64, @floatFromInt(sw)) / @as(f64, @floatFromInt(dw));
     for (0..dh) |dy| {
-        // Map destination y to source y (center-pixel mapping)
-        const sy_f: f64 = (@as(f64, @floatFromInt(dy)) + 0.5) * @as(f64, @floatFromInt(sh)) / @as(f64, @floatFromInt(dh)) - 0.5;
+        const sy_f: f64 = (@as(f64, @floatFromInt(dy)) + 0.5) * scale_y - 0.5;
         const sy0: usize = @intFromFloat(@max(0.0, @floor(sy_f)));
         const sy1: usize = @min(sy0 + 1, sh - 1);
         const fy: f64 = sy_f - @as(f64, @floatFromInt(sy0));
 
         for (0..dw) |dx| {
-            const sx_f: f64 = (@as(f64, @floatFromInt(dx)) + 0.5) * @as(f64, @floatFromInt(sw)) / @as(f64, @floatFromInt(dw)) - 0.5;
+            const sx_f: f64 = (@as(f64, @floatFromInt(dx)) + 0.5) * scale_x - 0.5;
             const sx0: usize = @intFromFloat(@max(0.0, @floor(sx_f)));
             const sx1: usize = @min(sx0 + 1, sw - 1);
             const fx: f64 = sx_f - @as(f64, @floatFromInt(sx0));
@@ -370,7 +436,10 @@ fn decompressZlib(allocator: Allocator, compressed: []const u8, expected_size: u
     var aw: std.Io.Writer.Allocating = try .initCapacity(allocator, expected_size);
     errdefer aw.deinit();
 
-    _ = decompress.reader.streamRemaining(&aw.writer) catch return error.DecompressionFailed;
+    _ = decompress.reader.streamRemaining(&aw.writer) catch |err| {
+        std.log.warn("PNG zlib decompression failed: {s}", .{@errorName(err)});
+        return error.DecompressionFailed;
+    };
 
     return aw.toOwnedSlice() catch error.OutOfMemory;
 }

@@ -245,8 +245,8 @@ pub fn printUsage() void {
         \\  <org/repo>           Repository in org/repo format
         \\
         \\GENERAL:
-        \\  -h, --help           Show this help message
-        \\  -v, --version        Print version
+        \\  -h, --help           Show this help message and exit
+        \\  -v, --version        Print version and exit
         \\
         \\OPTIONS:
         \\      --quant <QUANT>  Select quantization (e.g. Q4_K_M, Q8_0, safetensors)
@@ -254,6 +254,8 @@ pub fn printUsage() void {
         \\
         \\ENVIRONMENT:
         \\  HF_TOKEN             HuggingFace API token for private repos
+        \\  HF_HOME              Custom HuggingFace cache directory
+        \\  XDG_CACHE_HOME       XDG cache base (fallback: ~/.cache)
         \\
         \\EXAMPLES:
         \\  agave pull Qwen/Qwen3.5-27B-GGUF
@@ -422,7 +424,11 @@ pub fn listModelFiles(allocator: Allocator, repo: []const u8, token: ?[]const u8
     // Parse JSON response.
     const parsed = std.json.parseFromSlice(std.json.Value, arena_alloc, body, .{}) catch {
         const preview_len = @min(body.len, 200);
-        eprint("Error: failed to parse API response (first {d} bytes: {s})\n", .{ preview_len, body[0..preview_len] });
+        var sanitized_preview: [200]u8 = undefined;
+        for (body[0..preview_len], 0..) |c, i| {
+            sanitized_preview[i] = if (c < 0x20 or c == 0x7F) '?' else c;
+        }
+        eprint("Error: failed to parse API response (first {d} bytes: {s})\n", .{ preview_len, sanitized_preview[0..preview_len] });
         return PullError.ApiResponseInvalid;
     };
     const root = parsed.value;
@@ -544,7 +550,7 @@ pub fn listModelFiles(allocator: Allocator, repo: []const u8, token: ?[]const u8
 }
 
 /// Backward-compatible wrapper: list only GGUF files.
-pub fn listGgufFiles(allocator: Allocator, repo: []const u8, token: ?[]const u8) (PullError || Allocator.Error)!ListResult {
+fn listGgufFiles(allocator: Allocator, repo: []const u8, token: ?[]const u8) (PullError || Allocator.Error)!ListResult {
     return listModelFiles(allocator, repo, token);
 }
 
@@ -618,7 +624,7 @@ pub fn selectModel(result: *const ListResult, quant: ?[]const u8) PullError!Sele
 }
 
 /// Select the best GGUF file from the list based on quantization preference.
-/// Legacy wrapper for code that only needs GGUF selection.
+/// GGUF-only subset of `selectModel` (which also handles SafeTensors).
 pub fn selectFile(files: []const GgufFile, quant: ?[]const u8) PullError!GgufFile {
     if (files.len == 0) return PullError.NoGgufFiles;
 
@@ -925,7 +931,9 @@ fn downloadFile(
             } else {
                 eprint("Retrying download (attempt {d}/{d})...\n", .{ attempt + 1, max_retries });
             }
-            mod_io.sleep(Io.Duration.fromNanoseconds(@intCast(retry_base_delay_ns << @intCast(attempt))), .awake) catch {};
+            mod_io.sleep(Io.Duration.fromNanoseconds(@intCast(retry_base_delay_ns << @intCast(attempt))), .awake) catch |err| {
+                std.log.warn("retry sleep failed: {s}", .{@errorName(err)});
+            };
         }
 
         downloadFileOnce(allocator, url, blob_path, token, is_tty) catch |err| {
@@ -1064,9 +1072,12 @@ fn downloadFileOnce(
     const file: Io.File = .{ .handle = fd, .flags = .{ .nonblocking = false } };
     defer _ = std.c.close(file.handle);
 
-    // Seek to end for append.
+    // Seek to resume offset for append.
     if (start_offset > 0) {
-        _ = std.c.lseek(file.handle, @intCast(start_offset), std.c.SEEK.SET);
+        if (std.c.lseek(file.handle, @intCast(start_offset), std.c.SEEK.SET) == -1) {
+            eprint("Error: failed to seek to resume offset {d}\n", .{start_offset});
+            return PullError.DownloadFailed;
+        }
     }
 
     // Get a reader from the response body.
@@ -1249,7 +1260,9 @@ fn pullGgufModel(
                 eprint("  Delete and re-download: rm {s}\n", .{blob_path});
                 return PullError.IntegrityCheckFailed;
             }
-        } else |_| {}
+        } else |err| {
+            eprint("Warning: could not open file for integrity check: {}\n", .{err});
+        }
     }
 
     // Create snapshot symlink (relative path).
@@ -1317,8 +1330,14 @@ fn pullSafeTensorsModel(
         }
 
         // Create snapshot symlink for this shard.
-        const snapshot_link = std.fmt.allocPrint(pa, "{s}/{s}", .{ snapshots_dir, shard }) catch continue;
-        const relative_blob = std.fmt.allocPrint(pa, "../../blobs/{s}", .{shard}) catch continue;
+        const snapshot_link = std.fmt.allocPrint(pa, "{s}/{s}", .{ snapshots_dir, shard }) catch {
+            eprint("Warning: OOM creating symlink for shard {s}\n", .{shard});
+            continue;
+        };
+        const relative_blob = std.fmt.allocPrint(pa, "../../blobs/{s}", .{shard}) catch {
+            eprint("Warning: OOM creating symlink for shard {s}\n", .{shard});
+            continue;
+        };
         atomicSymlink(pa, relative_blob, snapshot_link);
     }
 
@@ -1343,7 +1362,10 @@ fn pullSafeTensorsModel(
     const aux_flags = [_]bool{ st.has_config, st.has_tokenizer, st.has_tokenizer_config };
     for (&safetensors_aux_files, aux_flags) |aux_name, has_file| {
         if (!has_file) continue;
-        const aux_blob = std.fmt.allocPrint(pa, "{s}/{s}", .{ blobs_dir, aux_name }) catch continue;
+        const aux_blob = std.fmt.allocPrint(pa, "{s}/{s}", .{ blobs_dir, aux_name }) catch {
+            eprint("Warning: OOM creating path for {s}\n", .{aux_name});
+            continue;
+        };
         if (Io.Dir.cwd().statFile(mod_io, aux_blob, .{})) |_| {
             eprint("Already downloaded: {s}\n", .{aux_name});
         } else |_| {
@@ -1352,8 +1374,14 @@ fn pullSafeTensorsModel(
                 eprint("Warning: could not download {s}: {}\n", .{ aux_name, err });
             };
         }
-        const snapshot_link = std.fmt.allocPrint(pa, "{s}/{s}", .{ snapshots_dir, aux_name }) catch continue;
-        const relative_blob = std.fmt.allocPrint(pa, "../../blobs/{s}", .{aux_name}) catch continue;
+        const snapshot_link = std.fmt.allocPrint(pa, "{s}/{s}", .{ snapshots_dir, aux_name }) catch {
+            eprint("Warning: OOM creating symlink for {s}\n", .{aux_name});
+            continue;
+        };
+        const relative_blob = std.fmt.allocPrint(pa, "../../blobs/{s}", .{aux_name}) catch {
+            eprint("Warning: OOM creating symlink for {s}\n", .{aux_name});
+            continue;
+        };
         atomicSymlink(pa, relative_blob, snapshot_link);
     }
 
@@ -1389,13 +1417,18 @@ fn atomicSymlink(pa: Allocator, target: []const u8, link_path: []const u8) void 
 
 /// Write the commit SHA to refs/main.
 fn writeRefsMain(pa: Allocator, refs_dir: []const u8, commit_sha: []const u8) void {
-    const refs_main = std.fmt.allocPrint(pa, "{s}/main", .{refs_dir}) catch return;
+    const refs_main = std.fmt.allocPrint(pa, "{s}/main", .{refs_dir}) catch |err| {
+        eprint("Warning: could not allocate refs/main path: {}\n", .{err});
+        return;
+    };
     if (Io.Dir.cwd().createFile(mod_io, refs_main, .{})) |f| {
         defer f.close(mod_io);
         f.writePositionalAll(mod_io, commit_sha, 0) catch |err| {
             eprint("Warning: could not write refs/main: {}\n", .{err});
         };
-    } else |_| {}
+    } else |err| {
+        eprint("Warning: could not write refs/main: {}\n", .{err});
+    }
 }
 
 // ── Entry point ──────────────────────────────────────────────────────────────

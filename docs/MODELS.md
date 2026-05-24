@@ -33,10 +33,11 @@ agave pull google/gemma-4-4b-it-gguf --list          # list available files
 | GPT-OSS | 2880 | 64 | 8 | 64 | 2880 (MoE) | 24 | 150K | 64 |
 | Nemotron-H | 3136 | 40 | 8 | 128 | 12544 | 42 | 10K | 78 |
 | Nemotron-Nano | 2688 | 32 | 2 | 128 | 1856 (MoE) | 52 | 10K | 128 |
-| Gemma4 E2B | 2304 | 8 | 4 | 256 | 9216 | 28 | 10K | 256 |
-| Gemma4 E4B | 2816 | 16 | 8 | 256 | 11264 | 30 | 10K | 256 |
+| Gemma4 E2B | 2304 | 8 | 4 | 256 | 9216 | 35 | 10K | 256 |
+| Gemma4 E4B | 2816 | 16 | 8 | 256 | 11264 | 42 | 10K | 256 |
 | Gemma4 26B-A4B | 2816 | 16 | 8/2 (sl/gl) | 256/512 (sl/gl) | 2816 + 704/expert (MoE) | 30 | 10K/1M (sl/gl) | 256/128 (sl/gl) |
 | GLM-4 | 2048 | 20 | 20 (MLA) | 256 (qk_nope=192 + qk_rope=64) | 10240 (dense) / 1536 (MoE, 64 experts top-4) | 47 | 1M | 64 |
+| Llama 4 Scout | 5120 | 40 | 8 | 128 | 14336 (MoE top-1 + shared) | 48 | 500K | 128 |
 
 ## Model-Specific Details
 
@@ -53,6 +54,8 @@ agave pull google/gemma-4-4b-it-gguf --list          # list available files
 **Gemma 4**: Three variants — E2B and E4B are dense (no MoE), 26B-A4B uses MoE (128 experts, top-8 softmax) + dense FFN path. All variants use dual attention (sliding-window + global layers) and PLE (Per-Layer Embeddings). Shared KV cache for trailing layers. Channel-based chat template. Vision supported via SigLIP-2 encoder. Supports `--megakernel` (fused FFN GELU for dense+MoE, true megakernel Q4K/Q8 on Metal+CUDA).
 
 **GLM-4** (MLX): MLA compresses K/V into latent space. Sigmoid routing (independent expert gates, not competing). MLX 4/6/8-bit affine quantization. Supports `--megakernel` (fused FFN SiLU on Metal).
+
+**Llama 4** (GGUF): iRoPE architecture alternating local RoPE (chunked attention, 8K window) and global NoPE (temperature-scaled) layers. NoPE interval = 4 (layers 3,7,11,... are global). MoE with top-1 expert routing + optional shared expert; some layers are dense. Per-head QK RMSNorm applied after RoPE on local layers. Batched prefill with chunked GEMM.
 
 ## Performance
 

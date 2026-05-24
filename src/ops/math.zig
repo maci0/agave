@@ -15,16 +15,19 @@ pub const gelu_clamp_hi: f32 = 10.0;
 /// GELU tanh-argument clamp lower bound (prevents exp overflow).
 pub const gelu_clamp_lo: f32 = -10.0;
 /// Maximum top-k value for stack-allocated selection buffer in sampleToken.
-const max_top_k: usize = 1024;
+pub const max_top_k: usize = 1024;
 /// Maximum candidates for top-p nucleus sampling buffer.
 /// Caps the number of probabilities tracked during threshold computation.
 const nucleus_max_candidates: usize = 1024;
 /// Maximum top-N for stack-allocated logprob selection buffer in topLogProbs.
-const max_top_logprobs: usize = 20;
+pub const max_top_logprobs: usize = 20;
+/// Minimum probability floor for log-probability computation (prevents -inf from log(0)).
+const log_prob_epsilon: f32 = 1e-10;
+/// 8-wide SIMD vector type for f32 — used across all SIMD helpers in this module.
+const V8 = @Vector(8, f32);
 
 /// SIMD max-reduce over f32 slice. Used by argmax, softmax, log-sum-exp, and sampling.
 inline fn simdMaxF32(buf: []const f32) f32 {
-    const V8 = @Vector(8, f32);
     var max_v: V8 = @splat(-std.math.inf(f32));
     var i: usize = 0;
     while (i + 8 <= buf.len) : (i += 8) {
@@ -35,8 +38,8 @@ inline fn simdMaxF32(buf: []const f32) f32 {
     return m;
 }
 
-/// Return index of maximum element. Two-phase SIMD: branchless max-reduce,
-/// then early-exit index scan. First occurrence on ties.
+/// Return index of maximum element (first occurrence on ties).
+/// SIMD max-reduce to find value, then linear scan for matching index.
 pub fn argmax(buf: []const f32) u32 {
     const best_val = simdMaxF32(buf);
     // Phase 2: find first occurrence (early-exit scan)
@@ -90,6 +93,28 @@ pub fn topKExperts(
     }
 }
 
+/// SIMD dot product of two f32 slices.
+pub inline fn simdDotF32(a: [*]const f32, b: [*]const f32, n: usize) f32 {
+    var acc: V8 = @splat(0.0);
+    var i: usize = 0;
+    while (i + 8 <= n) : (i += 8) {
+        acc = @mulAdd(V8, @as(V8, a[i..][0..8].*), @as(V8, b[i..][0..8].*), acc);
+    }
+    var s = @reduce(.Add, acc);
+    while (i < n) : (i += 1) s += a[i] * b[i];
+    return s;
+}
+
+/// SIMD in-place uniform scale: buf[i] *= scale.
+pub inline fn simdScaleF32(buf: [*]f32, scale: f32, n: usize) void {
+    const sv: V8 = @splat(scale);
+    var i: usize = 0;
+    while (i + 8 <= n) : (i += 8) {
+        buf[i..][0..8].* = @as(V8, buf[i..][0..8].*) * sv;
+    }
+    while (i < n) : (i += 1) buf[i] *= scale;
+}
+
 /// Numerically stable softplus: log(1 + exp(x)).
 /// For large x (> 20), softplus(x) ≈ x since 1 + exp(x) ≈ exp(x) in float precision.
 pub inline fn softplus(x: f32) f32 {
@@ -109,7 +134,6 @@ pub inline fn silu(x: f32) f32 {
 
 /// Squared ReLU activation in-place: x[i] = max(0, x[i])². SIMD-optimized.
 pub fn applyReluSquared(x: []f32) void {
-    const V8 = @Vector(8, f32);
     const zero: V8 = @splat(0.0);
     var i: usize = 0;
     while (i + 8 <= x.len) : (i += 8) {
@@ -126,7 +150,6 @@ pub fn applyReluSquared(x: []f32) void {
 /// GELU activation in-place (tanh approximation), SIMD-optimized.
 /// Tanh computed via clamped exp to avoid overflow.
 pub fn applyGelu(x: []f32) void {
-    const V8 = @Vector(8, f32);
     const half: V8 = @splat(0.5);
     const one: V8 = @splat(1.0);
     const two: V8 = @splat(2.0);
@@ -168,9 +191,6 @@ pub fn applyRepeatPenalty(logits: []f32, recent_ids: []const u32, penalty: f32) 
     }
 }
 
-/// DRY (Don't Repeat Yourself) sampling: penalize tokens that would continue
-/// a repeated n-gram sequence. For each candidate token, check if appending it
-/// would create an n-gram that already appeared in the recent output.
 /// Apply logit bias: add bias values to specific token logits.
 /// OpenAI API `logit_bias` parameter: {"token_id": bias, ...}.
 pub fn applyLogitBias(logits: []f32, ids: []const u32, biases: []const f32, count: u32) void {
@@ -179,8 +199,10 @@ pub fn applyLogitBias(logits: []f32, ids: []const u32, biases: []const f32, coun
     }
 }
 
+/// DRY (Don't Repeat Yourself) sampling: penalize tokens that would continue
+/// a repeated n-gram sequence. For each candidate token, check if appending it
+/// would create an n-gram that already appeared in the recent output.
 /// `multiplier` scales the penalty; `allowed_length` sets minimum repeat length.
-/// Inspired by llama.cpp's DRY sampler.
 pub fn applyDry(logits: []f32, recent_ids: []const u32, multiplier: f32, allowed_length: u32) void {
     if (multiplier <= 0 or recent_ids.len < allowed_length + 1) return;
     const n = recent_ids.len;
@@ -205,7 +227,7 @@ pub fn applyDry(logits: []f32, recent_ids: []const u32, multiplier: f32, allowed
         if (continuation_pos >= n) continue;
         const tid = recent_ids[continuation_pos];
         if (tid < logits.len and logits[tid] != -std.math.inf(f32)) {
-            const penalty = multiplier * @as(f32, @floatFromInt(@as(u32, @intCast(match_len))));
+            const penalty = multiplier * @as(f32, @floatFromInt(match_len));
             logits[tid] -= penalty;
         }
     }
@@ -227,22 +249,46 @@ pub fn applyPenalties(logits: []f32, gen_tokens: []const u32, frequency_penalty:
     if (frequency_penalty == 0 and presence_penalty == 0) return;
     if (gen_tokens.len == 0) return;
 
+    // Fast path: frequency-only (skip 32KB hash set initialization)
+    if (presence_penalty == 0) {
+        for (gen_tokens) |tid| {
+            if (tid < logits.len) logits[tid] -= frequency_penalty;
+        }
+        return;
+    }
+
     // Single pass: frequency penalty per occurrence + presence penalty per unique token.
-    var seen: [256]u32 = undefined;
-    var n_seen: usize = 0;
+    // Open-addressing hash set (power-of-2 table) for O(1) amortized uniqueness check.
+    // Right-size table to ~2× input to keep load factor <50% and minimize init cost.
+    const empty_slot = std.math.maxInt(u32);
+    const min_bits = 6;
+    const max_bits = 13;
+    const set_bits = blk: {
+        var bits: u5 = min_bits;
+        while (bits < max_bits) : (bits += 1) {
+            if ((@as(usize, 1) << bits) >= gen_tokens.len * 2) break;
+        }
+        break :blk bits;
+    };
+    const set_size = @as(usize, 1) << set_bits;
+    const set_mask: u32 = @intCast(set_size - 1);
+    var set_buf: [1 << max_bits]u32 = undefined;
+    const set: []u32 = set_buf[0..set_size];
+    @memset(set, empty_slot);
+
     for (gen_tokens) |tid| {
         if (tid >= logits.len) continue;
         if (frequency_penalty != 0) logits[tid] -= frequency_penalty;
-        if (presence_penalty != 0) {
-            var found = false;
-            for (seen[0..n_seen]) |s| {
-                if (s == tid) { found = true; break; }
-            }
-            if (!found and n_seen < 256) {
-                seen[n_seen] = tid;
-                n_seen += 1;
-                logits[tid] -= presence_penalty;
-            }
+        // Probe hash set for uniqueness
+        var slot = tid & set_mask;
+        var is_new = true;
+        while (set[slot] != empty_slot) {
+            if (set[slot] == tid) { is_new = false; break; }
+            slot = (slot +% 1) & set_mask;
+        }
+        if (is_new) {
+            set[slot] = tid;
+            logits[tid] -= presence_penalty;
         }
     }
 }
@@ -251,7 +297,7 @@ pub fn applyPenalties(logits: []f32, gen_tokens: []const u32, frequency_penalty:
 /// Returns log(softmax(logits)[token_id]).
 pub fn tokenLogProb(logits: []const f32, token_id: u32) f32 {
     if (token_id >= logits.len) return -std.math.inf(f32);
-    const V8 = @Vector(8, f32);
+
     const n = logits.len;
     const max_val = simdMaxF32(logits);
     // SIMD exp-sum
@@ -272,7 +318,6 @@ pub fn tokenLogProb(logits: []const f32, token_id: u32) f32 {
 /// Compute top-N tokens by logit value and their log probabilities.
 /// Writes to provided output slices. Returns actual count written (<= n).
 pub fn topLogProbs(logits: []const f32, n: u32, out_ids: []u32, out_logprobs: []f32) u32 {
-    const V8 = @Vector(8, f32);
     const limit = @min(n, @min(@as(u32, max_top_logprobs), @as(u32, @intCast(out_ids.len))));
     if (limit == 0) return 0;
     const len = logits.len;
@@ -319,7 +364,7 @@ pub fn topLogProbs(logits: []const f32, n: u32, out_ids: []u32, out_logprobs: []
 /// Converts to probabilities, finds max, masks below threshold, restores to logits.
 pub fn applyMinP(logits: []f32, min_p: f32) void {
     if (min_p <= 0 or min_p >= 1.0) return;
-    const V8 = @Vector(8, f32);
+
     const n = logits.len;
     const neg_inf = -std.math.inf(f32);
 
@@ -368,11 +413,10 @@ pub fn applyXtc(logits: []f32, xtc_probability: f32, xtc_threshold: f32, rng: st
 /// Returns the sampled token ID. `mu` is updated in place for the next step.
 /// When Mirostat is active, top-k/top-p are bypassed — Mirostat controls its own truncation.
 pub fn sampleMirostat(logits: []f32, tau: f32, eta: f32, mu: *f32, temperature: f32, rng: std.Random) u32 {
-    const V8 = @Vector(8, f32);
     const n = logits.len;
     if (n == 0) return 0;
 
-    // Temperature scaling (SIMD)
+    // Temperature scaling (needed for max computation)
     if (temperature > 0 and temperature != 1.0) {
         const inv_temp = 1.0 / temperature;
         const inv_v: V8 = @splat(inv_temp);
@@ -383,7 +427,8 @@ pub fn sampleMirostat(logits: []f32, tau: f32, eta: f32, mu: *f32, temperature: 
         while (si < n) : (si += 1) logits[si] *= inv_temp;
     }
 
-    // Softmax (SIMD)
+    // Fused softmax + threshold + normalize (3 passes → 2).
+    // Pass 1: exp and sum. Pass 2: threshold, zero, and normalize.
     const max_val = simdMaxF32(logits);
     var sum_exp: f32 = 0;
     {
@@ -401,56 +446,40 @@ pub fn sampleMirostat(logits: []f32, tau: f32, eta: f32, mu: *f32, temperature: 
             sum_exp += logits[si];
         }
     }
+
+    // Fused threshold + normalize: apply Mirostat truncation and normalize in one pass.
+    // Tokens with p < exp(-mu) are zeroed; survivors are divided by their sum.
+    const min_prob = @exp(-mu.*);
+    var new_sum: f32 = 0;
     if (sum_exp > 0) {
         const inv_sum = 1.0 / sum_exp;
-        const inv_v: V8 = @splat(inv_sum);
-        var si: usize = 0;
-        while (si + 8 <= n) : (si += 8) {
-            logits[si..][0..8].* = @as(V8, logits[si..][0..8].*) * inv_v;
-        }
-        while (si < n) : (si += 1) logits[si] *= inv_sum;
-    }
-
-    // Mirostat 2.0: keep tokens where -ln(p) <= mu (surprise <= target).
-    // Direct threshold: p >= exp(-mu) passes. Single O(n) pass, no sorting needed.
-    const surprise_threshold = mu.*;
-    const min_prob = @exp(-surprise_threshold);
-    {
-        const min_v: V8 = @splat(min_prob);
+        const min_unnorm = min_prob * sum_exp;
+        const min_v: V8 = @splat(min_unnorm);
         const zero_v: V8 = @splat(@as(f32, 0.0));
+        const inv_v: V8 = @splat(inv_sum);
+        var new_sum_v: V8 = zero_v;
         var si: usize = 0;
         while (si + 8 <= n) : (si += 8) {
             const chunk: V8 = logits[si..][0..8].*;
-            logits[si..][0..8].* = @select(f32, chunk < min_v, zero_v, chunk);
+            const kept = @select(f32, chunk < min_v, zero_v, chunk * inv_v);
+            logits[si..][0..8].* = kept;
+            new_sum_v += kept;
         }
+        new_sum = @reduce(.Add, new_sum_v);
         while (si < n) : (si += 1) {
-            if (logits[si] < min_prob) logits[si] = 0;
+            const p = logits[si] * inv_sum;
+            if (logits[si] < min_unnorm) {
+                logits[si] = 0;
+            } else {
+                logits[si] = p;
+                new_sum += p;
+            }
         }
     }
 
-    // Re-normalize (SIMD)
-    var new_sum: f32 = 0;
-    {
-        var sum_v: V8 = @splat(@as(f32, 0.0));
-        var si: usize = 0;
-        while (si + 8 <= n) : (si += 8) {
-            sum_v += @as(V8, logits[si..][0..8].*);
-        }
-        new_sum = @reduce(.Add, sum_v);
-        while (si < n) : (si += 1) new_sum += logits[si];
-    }
-    if (new_sum > 0) {
-        const inv = 1.0 / new_sum;
-        const inv_v: V8 = @splat(inv);
-        var si: usize = 0;
-        while (si + 8 <= n) : (si += 8) {
-            logits[si..][0..8].* = @as(V8, logits[si..][0..8].*) * inv_v;
-        }
-        while (si < n) : (si += 1) logits[si] *= inv;
-    }
-
-    // Sample from filtered distribution
-    var r = rng.float(f32);
+    // Sample from filtered distribution — scale threshold by sum
+    // instead of renormalizing the entire array (saves one SIMD pass over vocab).
+    var r = rng.float(f32) * new_sum;
     var chosen: u32 = 0;
     for (0..n) |i| {
         r -= logits[i];
@@ -460,9 +489,9 @@ pub fn sampleMirostat(logits: []f32, tau: f32, eta: f32, mu: *f32, temperature: 
         }
     }
 
-    // Update mu: mu = mu - eta * (surprise(chosen) - tau)
-    const chosen_p = logits[chosen];
-    const chosen_surprise = -@log(if (chosen_p > 1e-10) chosen_p else 1e-10);
+    // Update mu: normalize only the chosen token's probability
+    const chosen_p = if (new_sum > 0) logits[chosen] / new_sum else log_prob_epsilon;
+    const chosen_surprise = -@log(if (chosen_p > log_prob_epsilon) chosen_p else log_prob_epsilon);
     mu.* -= eta * (chosen_surprise - tau);
 
     return chosen;
@@ -472,12 +501,11 @@ pub fn sampleMirostat(logits: []f32, tau: f32, eta: f32, mu: *f32, temperature: 
 pub fn sampleToken(logits: []f32, temperature: f32, top_k: u32, top_p: f32, rng: std.Random) u32 {
     if (temperature == 0) return argmax(logits);
 
-    const V8 = @Vector(8, f32);
     const n = logits.len;
     const neg_inf = -std.math.inf(f32);
 
-    // 1. Temperature scaling (SIMD)
-    {
+    // 1. Temperature scaling (SIMD) — skip identity scaling
+    if (temperature != 1.0) {
         const inv_temp = 1.0 / temperature;
         const inv_v: V8 = @splat(inv_temp);
         var si: usize = 0;
@@ -487,20 +515,20 @@ pub fn sampleToken(logits: []f32, temperature: f32, top_k: u32, top_p: f32, rng:
         while (si < n) : (si += 1) logits[si] *= inv_temp;
     }
 
-    // 2. Top-k: find k-th largest value via min-replacement scan, mask the rest.
-    // Tracks min index; rescans k-buffer only on insertion (not every element).
+    // 2+3. Top-k + softmax fused: when top-k active, derive max from
+    // top_buf O(k) and fuse mask+exp+sum into single vocab pass,
+    // saving 2 full SIMD sweeps vs. separate mask, max, exp+sum.
+    var sum: f32 = 0;
     if (top_k > 0 and top_k < n) {
         const k: usize = top_k;
         var top_buf: [max_top_k]f32 = undefined;
         const buf_k = @min(k, max_top_k);
         for (0..buf_k) |i| top_buf[i] = neg_inf;
-        // Track current min position in top_buf
         var mi: usize = 0;
 
         for (logits) |v| {
             if (v > top_buf[mi]) {
                 top_buf[mi] = v;
-                // Rescan for new min only when we insert
                 mi = 0;
                 for (1..buf_k) |j| {
                     if (top_buf[j] < top_buf[mi]) mi = j;
@@ -508,40 +536,40 @@ pub fn sampleToken(logits: []f32, temperature: f32, top_k: u32, top_p: f32, rng:
             }
         }
         const top_min = top_buf[mi];
+        var max_val: f32 = top_buf[0];
+        for (1..buf_k) |j| max_val = @max(max_val, top_buf[j]);
+
         const min_v: V8 = @splat(top_min);
         const neg_inf_v: V8 = @splat(neg_inf);
-        {
-            var si: usize = 0;
-            while (si + 8 <= n) : (si += 8) {
-                const chunk: V8 = logits[si..][0..8].*;
-                logits[si..][0..8].* = @select(f32, chunk < min_v, neg_inf_v, chunk);
-            }
-            while (si < n) : (si += 1) {
-                if (logits[si] < top_min) logits[si] = neg_inf;
-            }
-        }
-    }
-
-    // 3. Softmax (unnormalized — normalization deferred to sampling)
-    const max_val = simdMaxF32(logits);
-    var sum: f32 = 0;
-    {
         const max_v: V8 = @splat(max_val);
-        const neg_inf_v: V8 = @splat(neg_inf);
-        const zero_v: V8 = @splat(0.0);
-        var sum_v: V8 = zero_v;
+        var sum_v: V8 = @splat(@as(f32, 0.0));
         var si: usize = 0;
         while (si + 8 <= n) : (si += 8) {
             const chunk: V8 = logits[si..][0..8].*;
-            const is_neginf = chunk == neg_inf_v;
-            const exp_vals = @exp(chunk - max_v);
-            const result = @select(f32, is_neginf, zero_v, exp_vals);
-            logits[si..][0..8].* = result;
-            sum_v += result;
+            const masked = @select(f32, chunk < min_v, neg_inf_v, chunk);
+            const exp_vals = @exp(masked - max_v);
+            logits[si..][0..8].* = exp_vals;
+            sum_v += exp_vals;
         }
         sum = @reduce(.Add, sum_v);
         while (si < n) : (si += 1) {
-            logits[si] = if (logits[si] == neg_inf) 0 else @exp(logits[si] - max_val);
+            if (logits[si] < top_min) logits[si] = neg_inf;
+            logits[si] = @exp(logits[si] - max_val);
+            sum += logits[si];
+        }
+    } else {
+        const max_val = simdMaxF32(logits);
+        const max_v: V8 = @splat(max_val);
+        var sum_v: V8 = @splat(@as(f32, 0.0));
+        var si: usize = 0;
+        while (si + 8 <= n) : (si += 8) {
+            const exp_vals = @exp(@as(V8, logits[si..][0..8].*) - max_v);
+            logits[si..][0..8].* = exp_vals;
+            sum_v += exp_vals;
+        }
+        sum = @reduce(.Add, sum_v);
+        while (si < n) : (si += 1) {
+            logits[si] = @exp(logits[si] - max_val);
             sum += logits[si];
         }
     }
@@ -749,7 +777,7 @@ test "sampleToken top_k filters" {
     // top_k=2 keeps only the two highest logits (indices 1=3.0 and 3=2.5)
     // Close values + temp=1.0 ensure both get sampled across many seeds
     var seen = [_]bool{false} ** 4;
-    for (0..100) |seed| {
+    for (0..500) |seed| {
         var l = [_]f32{ 0.1, 3.0, 0.2, 2.5 };
         var p = std.Random.DefaultPrng.init(seed);
         seen[sampleToken(&l, 1.0, 2, 1.0, p.random())] = true;
@@ -765,7 +793,7 @@ test "sampleToken top_p nucleus sampling" {
     // cumulative probability >= 0.5. With logits [0.1, 5.0, 0.2, 0.3],
     // index 1 dominates after softmax and should be the only token sampled.
     var seen = [_]bool{false} ** 4;
-    for (0..50) |seed| {
+    for (0..500) |seed| {
         var l = [_]f32{ 0.1, 5.0, 0.2, 0.3 };
         var p = std.Random.DefaultPrng.init(seed);
         seen[sampleToken(&l, 1.0, 0, 0.5, p.random())] = true;
@@ -782,7 +810,7 @@ test "sampleToken top_p allows multiple tokens" {
     // With close logits and top_p=0.9, multiple tokens should be sampled.
     // logits [2.0, 2.1, 2.0, 2.1] are close → softmax near uniform.
     var seen = [_]bool{false} ** 4;
-    for (0..200) |seed| {
+    for (0..500) |seed| {
         var l = [_]f32{ 2.0, 2.1, 2.0, 2.1 };
         var p = std.Random.DefaultPrng.init(seed);
         seen[sampleToken(&l, 1.0, 0, 0.9, p.random())] = true;
@@ -1111,7 +1139,44 @@ test "sampleMirostat returns valid token" {
     var prng = std.Random.Xoshiro256.init(42);
     const token = sampleMirostat(&logits, 5.0, 0.1, &mu, 1.0, prng.random());
     try std.testing.expect(token < 4);
-    // mu should have been updated and remain finite
+    // mu must be updated, remain finite, and stay positive (entropy target)
     try std.testing.expect(mu != 10.0);
     try std.testing.expect(std.math.isFinite(mu));
+    try std.testing.expect(mu > 0);
+    // Second call should also produce valid results with updated mu
+    var logits2 = [_]f32{ 1.0, 2.0, 3.0, 0.5 };
+    const mu_before = mu;
+    const token2 = sampleMirostat(&logits2, 5.0, 0.1, &mu, 1.0, prng.random());
+    try std.testing.expect(token2 < 4);
+    try std.testing.expect(mu != mu_before);
+    try std.testing.expect(std.math.isFinite(mu));
+}
+
+test "applyLogitBias basic" {
+    var logits = [_]f32{ 1.0, 2.0, 3.0, 4.0 };
+    const ids = [_]u32{ 0, 2 };
+    const biases = [_]f32{ 5.0, -1.0 };
+    applyLogitBias(&logits, &ids, &biases, 2);
+    try std.testing.expectEqual(@as(f32, 6.0), logits[0]); // 1.0 + 5.0
+    try std.testing.expectEqual(@as(f32, 2.0), logits[1]); // unchanged
+    try std.testing.expectEqual(@as(f32, 2.0), logits[2]); // 3.0 + (-1.0)
+    try std.testing.expectEqual(@as(f32, 4.0), logits[3]); // unchanged
+}
+
+test "applyLogitBias out-of-range id ignored" {
+    var logits = [_]f32{ 1.0, 2.0 };
+    const ids = [_]u32{ 0, 999 };
+    const biases = [_]f32{ 1.0, 10.0 };
+    applyLogitBias(&logits, &ids, &biases, 2);
+    try std.testing.expectEqual(@as(f32, 2.0), logits[0]); // 1.0 + 1.0
+    try std.testing.expectEqual(@as(f32, 2.0), logits[1]); // unchanged
+}
+
+test "applyLogitBias zero count is no-op" {
+    var logits = [_]f32{ 1.0, 2.0 };
+    const ids = [_]u32{0};
+    const biases = [_]f32{99.0};
+    applyLogitBias(&logits, &ids, &biases, 0);
+    try std.testing.expectEqual(@as(f32, 1.0), logits[0]);
+    try std.testing.expectEqual(@as(f32, 2.0), logits[1]);
 }

@@ -6,6 +6,9 @@ const std = @import("std");
 const arch_mod = @import("arch.zig");
 const ImageTokens = arch_mod.ImageTokens;
 
+/// Pre-allocation headroom for tool message formatting (ChatML tags + label).
+const tool_format_overhead: usize = 64;
+
 /// Role in a conversation message.
 pub const Role = enum { user, assistant, tool };
 
@@ -35,8 +38,9 @@ pub const ChatTemplate = struct {
     system_role_override: ?struct { prefix: []const u8, suffix: []const u8 } = null,
     /// Extra text appended after the final assistant_prefix when generating a
     /// response (but NOT for past assistant messages in conversation history).
-    /// Used by Qwen3.5 to inject an empty `<think>` block that disables
-    /// reasoning (greedy decoding makes open-ended thinking unstable).
+    /// Model-specific: Qwen3.5 injects `<think>\n\n</think>\n\n` to disable
+    /// reasoning, Gemma4 selects channel 0 (`<|channel>0\n<channel|>`),
+    /// GLM-4 leaves empty (reasoning disabled by default).
     generation_prefix: []const u8 = "",
 
     /// Format a single-turn chat prompt using this template.
@@ -62,7 +66,7 @@ pub const ChatTemplate = struct {
             }
         }
         for (messages) |msg| {
-            const extra: usize = if (msg.role == .tool) 64 else 0; // tool formatting overhead
+            const extra: usize = if (msg.role == .tool) tool_format_overhead else 0;
             const p = if (msg.role == .user) self.user_prefix else self.assistant_prefix;
             const s = if (msg.role == .user) self.user_suffix else self.assistant_suffix;
             total_len = std.math.add(usize, total_len, p.len + msg.content.len + s.len + extra) catch return error.OutOfMemory;
@@ -86,6 +90,8 @@ pub const ChatTemplate = struct {
                 try result.appendSlice(allocator, self.system_suffix);
             }
         }
+        // Pre-compute ChatML detection once (loop-invariant).
+        const is_chatml = std.mem.indexOf(u8, self.user_prefix, "<|im_start|>") != null;
         for (messages) |msg| {
             switch (msg.role) {
                 .user => {
@@ -101,7 +107,7 @@ pub const ChatTemplate = struct {
                 .tool => {
                     // Tool results use ChatML tool role: <|im_start|>tool\n...<|im_end|>
                     // For non-ChatML models, fall back to user prefix with [Tool Result] label
-                    if (std.mem.indexOf(u8, self.user_prefix, "<|im_start|>") != null) {
+                    if (is_chatml) {
                         try result.appendSlice(allocator, "<|im_start|>tool\n");
                         if (msg.tool_call_id) |tcid| {
                             try result.appendSlice(allocator, tcid);
@@ -198,8 +204,6 @@ pub const ChatTemplate = struct {
 
     /// GLM-4 — uses `[gMASK]<sop>` prefix (BOS sends `[gMASK]`, template starts
     /// with `<sop>`) and `<|user|>`/`<|assistant|>` role markers.
-    /// generation_prefix `</think>` disables the model's reasoning mode, forcing
-    /// direct answers (matching HuggingFace's enable_thinking=false behavior).
     pub const glm4 = ChatTemplate{
         .system_prefix = "[gMASK]<sop>",
         .system_suffix = "",
@@ -570,16 +574,19 @@ test "continuation matches full format suffix" {
     const response = "Hi there!";
     const user2 = "what is my name?";
 
-    const full = try ChatTemplate.chatml.formatConversation(alloc, null, &.{
-        .{ .role = .user, .content = "hello" },
-        .{ .role = .assistant, .content = response },
-        .{ .role = .user, .content = user2 },
-    });
-    defer alloc.free(full);
+    const templates = [_]ChatTemplate{ ChatTemplate.chatml, ChatTemplate.gemma, ChatTemplate.qwen35, ChatTemplate.glm4, ChatTemplate.gemma4, ChatTemplate.gpt_oss };
+    for (templates) |tmpl| {
+        const full = try tmpl.formatConversation(alloc, null, &.{
+            .{ .role = .user, .content = "hello" },
+            .{ .role = .assistant, .content = response },
+            .{ .role = .user, .content = user2 },
+        });
+        defer alloc.free(full);
 
-    const cont = try ChatTemplate.chatml.formatContinuation(alloc, user2);
-    defer alloc.free(cont);
+        const cont = try tmpl.formatContinuation(alloc, user2);
+        defer alloc.free(cont);
 
-    // The full format should end with exactly the continuation text
-    try std.testing.expect(std.mem.endsWith(u8, full, cont));
+        // The full format should end with exactly the continuation text
+        try std.testing.expect(std.mem.endsWith(u8, full, cont));
+    }
 }

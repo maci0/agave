@@ -24,6 +24,7 @@ agave target.gguf --draft-model draft.gguf "prompt"              # Separate draf
 agave model.gguf --spec-mode ddtree "prompt"                     # DDTree self-draft
 agave model.gguf --spec-mode self --draft-layers 9 "prompt"      # Self-speculative (layer skip)
 agave model.gguf --spec-mode ngram "prompt"                      # N-gram (history-based, no draft model)
+agave model-mtp.gguf --spec-mode mtp "prompt"                    # Multi-token prediction heads
 agave model.gguf --ctx-size auto "prompt"                        # Auto-fit context to available memory
 agave model.gguf -t 0.8 --mirostat-mode 2 "prompt"              # Mirostat target-entropy sampling
 agave model.gguf -t 0.8 --dry-multiplier 1.5 "prompt"           # DRY n-gram repetition penalty
@@ -98,7 +99,7 @@ These rules are non-negotiable. Every change must respect all of them.
 - Zero external dependencies. CLI parsing is self-contained (`cli.zig`). Terminal I/O is self-contained (`term.zig`).
 - Every change must maintain cross-compilation for all targets (Linux x86_64/aarch64, macOS aarch64).
 - `ReleaseFast` is production. `Debug` retains full safety checks.
-- Model toggles: `-Denable-<model>=false` (gemma3, gemma4, qwen35, gpt-oss, nemotron-h, nemotron-nano, glm4).
+- Model toggles: `-Denable-<model>=false` (gemma3, gemma4, qwen35, gpt-oss, nemotron-h, nemotron-nano, glm4, llama4).
 - Backend maturity: Level 0 (CPU) → Level 1 (Metal + Vulkan, current goal) → Level 2 (CUDA + ROCm optimized). WebGPU has 43 shaders (most core ops).
 
 ### Error Handling & Safety
@@ -203,7 +204,7 @@ Before approving any PR, verify:
 
 **Agave — Production-Ready LLM Inference Engine**
 
-Supports 6 backends (Metal, CUDA, Vulkan, ROCm, WebGPU, CPU), 7 model architectures (Gemma3/4, Qwen3.5, GPT-OSS, Nemotron-H/Nano, GLM-4), and extensive quantization (Q2-Q8, FP8, bf16, NVFP4, MXFP4, MLX, TurboQuant KV). Megakernel system with composable building blocks for fused GPU dispatch. CLI and HTTP server interfaces. Built with Zig 0.16.0. Zero external dependencies.
+Supports 6 backends (Metal, CUDA, Vulkan, ROCm, WebGPU, CPU), 8 model architectures (Gemma3/4, Qwen3.5, GPT-OSS, Nemotron-H/Nano, GLM-4, Llama 4), and extensive quantization (Q2-Q8, FP8, bf16, NVFP4, MXFP4, MLX, TurboQuant KV). Megakernel system with composable building blocks for fused GPU dispatch. CLI and HTTP server interfaces. Built with Zig 0.16.0. Zero external dependencies.
 
 **Core Value:** Every supported model must produce correct output on every backend at full GPU speed.
 

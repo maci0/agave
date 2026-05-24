@@ -19,9 +19,12 @@ test "fuzz: JSON field extraction" {
             var buf: [256]u8 = undefined;
             smith.bytesWithHash(&buf, 0);
             const input = buf[0..smith.indexWithHash(buf.len + 1, 1)];
-            _ = json.extractField(input, "model");
-            _ = json.extractField(input, "temperature");
-            _ = json.extractField(input, "messages");
+            // Invariant: extracted value, if any, must be a substring of input
+            inline for (.{ "model", "temperature", "messages" }) |field| {
+                if (json.extractField(input, field)) |val| {
+                    try std.testing.expect(val.len <= input.len);
+                }
+            }
         }
     }.f, .{});
 }
@@ -67,7 +70,12 @@ test "fuzz: GBNF grammar parser" {
             smith.bytesWithHash(&buf, 0);
             const len = smith.indexWithHash(buf.len + 1, 1);
             var g = grammar_mod.Grammar.parse(std.testing.allocator, buf[0..len]) catch return;
-            g.deinit();
+            defer g.deinit();
+            // Invariant: every parsed rule must have a non-empty name and elements
+            for (g.rules) |rule| {
+                try std.testing.expect(rule.name.len > 0);
+                try std.testing.expect(rule.elements.len > 0);
+            }
         }
     }.f, .{});
 }
@@ -79,7 +87,12 @@ test "fuzz: JSON schema to grammar" {
             smith.bytesWithHash(&buf, 0);
             const len = smith.indexWithHash(buf.len + 1, 1);
             var g = grammar_mod.Grammar.fromJsonSchema(std.testing.allocator, buf[0..len]) catch return;
-            g.deinit();
+            defer g.deinit();
+            // Invariant: every parsed rule must have a non-empty name and elements
+            for (g.rules) |rule| {
+                try std.testing.expect(rule.name.len > 0);
+                try std.testing.expect(rule.elements.len > 0);
+            }
         }
     }.f, .{});
 }
@@ -216,9 +229,11 @@ test "fuzz: kvDot with random bytes" {
             var query: [n]f32 = undefined;
             for (&query, 0..) |*v, i| v.* = @as(f32, @floatFromInt(smith.valueWithHash(i8, @truncate(i + 50)))) / 10.0;
 
-            // Should not crash even with garbage KV data
-            _ = kv_quant.kvDot(&query, &kv_buf, n, .f16);
-            _ = kv_quant.kvDot(&query, &kv_buf, n, .q8_0);
+            // Invariant: result must not be NaN (garbage data may produce large values but not NaN)
+            const dot_f16 = kv_quant.kvDot(&query, &kv_buf, n, .f16);
+            try std.testing.expect(!std.math.isNan(dot_f16));
+            const dot_q8 = kv_quant.kvDot(&query, &kv_buf, n, .q8_0);
+            try std.testing.expect(!std.math.isNan(dot_q8));
         }
     }.f, .{});
 }

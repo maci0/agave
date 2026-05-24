@@ -36,13 +36,18 @@ pub const TokenBucket = struct {
         self.last_refill = now;
     }
 
+    /// Maximum Retry-After value (1 hour) to avoid absurd HTTP headers
+    /// when refill rate is near-zero.
+    const max_retry_after: u32 = 3600;
+
     /// Calculate how many seconds until the given amount becomes available.
-    /// Used for HTTP Retry-After header.
+    /// Used for HTTP Retry-After header. Capped to max_retry_after (1 hour).
     pub fn retryAfterSeconds(self: *const TokenBucket, amount: f64) u32 {
         const deficit = amount - self.tokens;
         if (deficit <= 0) return 0;
-        if (self.refill_rate <= 0) return std.math.maxInt(u32);
-        return @intFromFloat(@ceil(deficit / self.refill_rate));
+        if (self.refill_rate <= 0) return max_retry_after;
+        const raw = @ceil(deficit / self.refill_rate);
+        return if (raw >= @as(f64, @floatFromInt(max_retry_after))) max_retry_after else @intFromFloat(raw);
     }
 };
 
@@ -238,8 +243,9 @@ test "token bucket exhaustion blocks even with requests available" {
     try std.testing.expect(!limiter.tryConsumeRequest(1));
 
     // Retry-after should reflect token bucket deficit, not request bucket
+    // Token rate = 5/min = 1 per 12s, so retryAfter(1 token) = 12s
     const retry = limiter.retryAfter(1);
-    try std.testing.expect(retry >= 1); // Need at least 1 second to refill 1 token
+    try std.testing.expectEqual(@as(u32, 12), retry);
 }
 
 test "tryConsumeOrRetryAfter combines check and retry" {
@@ -255,7 +261,7 @@ test "tryConsumeOrRetryAfter combines check and retry" {
     }
 
     // Next call should return retry-after seconds (non-null)
+    // Request rate = 10/min = 1 per 6s, so retryAfter(1 request) = 6s
     const retry = limiter.tryConsumeOrRetryAfter(1);
-    try std.testing.expect(retry != null);
-    try std.testing.expect(retry.? >= 1);
+    try std.testing.expectEqual(@as(?u32, 6), retry);
 }

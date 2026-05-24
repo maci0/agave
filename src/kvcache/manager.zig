@@ -11,7 +11,7 @@ pub const BlockTier = @import("tiered.zig").BlockTier;
 
 /// Default KV cache block size (tokens per block) used across all models.
 /// Shared constant to avoid repeating the literal 16 in every model init.
-pub const default_block_size: u16 = 16;
+const default_block_size: u16 = 16;
 
 /// Result of allocating a KV cache.
 /// Slices are byte arrays — the actual format (f32, f16, q8_0, etc.)
@@ -103,39 +103,54 @@ pub const PagedKvView = struct {
     block_table: []const u32,
     blocks: []const CacheBlock,
     block_size: u16,
+    block_shift: std.math.Log2Int(u16),
+    block_mask: u16,
     kv_dim: usize,
     seq_len: usize,
 
+    pub inline fn initView(block_table: []const u32, blocks: []const CacheBlock, block_size: u16, kv_dim: usize, seq_len: usize) PagedKvView {
+        std.debug.assert(block_size > 0);
+        return .{
+            .block_table = block_table,
+            .blocks = blocks,
+            .block_size = block_size,
+            .block_shift = if (std.math.isPowerOfTwo(block_size)) @intCast(@ctz(block_size)) else 0,
+            .block_mask = if (std.math.isPowerOfTwo(block_size)) block_size - 1 else 0,
+            .kv_dim = kv_dim,
+            .seq_len = seq_len,
+        };
+    }
+
+    inline fn blockIdx(self: PagedKvView, position: usize) usize {
+        return if (self.block_mask != 0) position >> self.block_shift else position / self.block_size;
+    }
+
+    inline fn posInBlock(self: PagedKvView, position: usize) usize {
+        return if (self.block_mask != 0) position & self.block_mask else position % self.block_size;
+    }
+
     /// Get key pointer for a specific position within the paged cache.
     pub inline fn keyPtr(self: PagedKvView, position: usize) [*]const f32 {
-        const block_idx = position / self.block_size;
-        const pos_in_block = position % self.block_size;
-        const phys_id = self.block_table[block_idx];
-        return self.blocks[phys_id].keys.ptr + pos_in_block * self.kv_dim;
+        const phys_id = self.block_table[self.blockIdx(position)];
+        return self.blocks[phys_id].keys.ptr + self.posInBlock(position) * self.kv_dim;
     }
 
     /// Get value pointer for a specific position within the paged cache.
     pub inline fn valuePtr(self: PagedKvView, position: usize) [*]const f32 {
-        const block_idx = position / self.block_size;
-        const pos_in_block = position % self.block_size;
-        const phys_id = self.block_table[block_idx];
-        return self.blocks[phys_id].values.ptr + pos_in_block * self.kv_dim;
+        const phys_id = self.block_table[self.blockIdx(position)];
+        return self.blocks[phys_id].values.ptr + self.posInBlock(position) * self.kv_dim;
     }
 
     /// Get mutable key pointer for writing (KV append).
     pub inline fn keyPtrMut(self: PagedKvView, position: usize) [*]f32 {
-        const block_idx = position / self.block_size;
-        const pos_in_block = position % self.block_size;
-        const phys_id = self.block_table[block_idx];
-        return self.blocks[phys_id].keys.ptr + pos_in_block * self.kv_dim;
+        const phys_id = self.block_table[self.blockIdx(position)];
+        return self.blocks[phys_id].keys.ptr + self.posInBlock(position) * self.kv_dim;
     }
 
     /// Get mutable value pointer for writing (KV append).
     pub inline fn valuePtrMut(self: PagedKvView, position: usize) [*]f32 {
-        const block_idx = position / self.block_size;
-        const pos_in_block = position % self.block_size;
-        const phys_id = self.block_table[block_idx];
-        return self.blocks[phys_id].values.ptr + pos_in_block * self.kv_dim;
+        const phys_id = self.block_table[self.blockIdx(position)];
+        return self.blocks[phys_id].values.ptr + self.posInBlock(position) * self.kv_dim;
     }
 };
 
@@ -196,12 +211,10 @@ pub const PagedKvCache = struct {
     }
 
     /// Release a physical block back to the free list.
-    /// The free list was pre-allocated to hold all blocks, so append
-    /// can only fail if the block was double-freed (exceeding capacity).
+    /// Guards against double-free (logs error and returns if all blocks already free).
     pub fn freeBlock(self: *PagedKvCache, block_id: u32) void {
         std.debug.assert(block_id < self.blocks.len);
-        // Guard: free list is pre-allocated to exactly num_blocks capacity.
-        // If it's already full, every block is free — this is a double-free.
+        // Double-free guard: all blocks already free.
         if (self.free_list.items.len >= self.blocks.len) {
             std.log.err("freeBlock: free list full — double-free of block {d}", .{block_id});
             return;

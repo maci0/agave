@@ -28,8 +28,8 @@ const SafeTensorsDir = format_mod.SafeTensorsDir;
 const print_buf_size: usize = 4096;
 /// Default number of calibration tokens to generate.
 const default_calibration_tokens: u32 = 1000;
-/// Default output file name for calibration data.
-const default_output_filename: []const u8 = "calibration.cal";
+/// Fallback output file name when auto-derive from model path fails.
+const fallback_output_filename: []const u8 = "calibration.cal";
 /// Magic bytes for the .cal file header.
 const cal_magic: [4]u8 = .{ 'A', 'C', 'A', 'L' };
 /// File format version.
@@ -61,8 +61,8 @@ const CalibrateArgs = struct {
     model_path: []const u8,
     /// Number of calibration vectors to use.
     n_tokens: u32 = default_calibration_tokens,
-    /// Output file path for the .cal file.
-    output: []const u8 = default_output_filename,
+    /// Output file path for the .cal file (empty = auto-derive from model_path).
+    output: []const u8 = "",
 };
 
 /// Print usage information to stdout.
@@ -77,12 +77,12 @@ pub fn printUsage() void {
         \\  <model.gguf|model-dir/>  Path to GGUF model file or SafeTensors directory
         \\
         \\GENERAL:
-        \\  -h, --help               Show this help message
-        \\  -v, --version            Print version
+        \\  -h, --help               Show this help message and exit
+        \\  -v, --version            Print version and exit
         \\
         \\OPTIONS:
         \\      --tokens <N>         Number of calibration vectors [default: 1000]
-        \\      --output <PATH>      Output .cal file path [default: calibration.cal]
+        \\      --output <PATH>      Output .cal file path [default: <model>.cal]
         \\
         \\DESCRIPTION:
         \\  Generates per-head, per-frequency-band Q projection statistics needed by
@@ -134,12 +134,20 @@ fn parseArgs(args_iter: *std.process.Args.Iterator) ?CalibrateArgs {
         } else if (std.mem.eql(u8, arg, "--version") or std.mem.eql(u8, arg, "-v")) {
             display_mod.printVersion();
             return null;
-        } else if (std.mem.eql(u8, arg, "--tokens")) {
-            const val = args_iter.next() orelse {
+        } else if (std.mem.eql(u8, arg, "--tokens") or std.mem.startsWith(u8, arg, "--tokens=")) {
+            const val = if (std.mem.startsWith(u8, arg, "--tokens="))
+                arg["--tokens=".len..]
+            else
+                args_iter.next() orelse {
+                    eprint("Error: --tokens requires a value\n", .{});
+                    eprint("Run 'agave calibrate --help' for more information.\n", .{});
+                    std.process.exit(1);
+                };
+            if (val.len == 0) {
                 eprint("Error: --tokens requires a value\n", .{});
                 eprint("Run 'agave calibrate --help' for more information.\n", .{});
                 std.process.exit(1);
-            };
+            }
             result.n_tokens = std.fmt.parseInt(u32, val, 10) catch {
                 eprint("Error: --tokens value '{s}' is not a valid integer\n", .{val});
                 std.process.exit(1);
@@ -148,12 +156,20 @@ fn parseArgs(args_iter: *std.process.Args.Iterator) ?CalibrateArgs {
                 eprint("Error: --tokens must be >= 1\n", .{});
                 std.process.exit(1);
             }
-        } else if (std.mem.eql(u8, arg, "--output")) {
-            const val = args_iter.next() orelse {
+        } else if (std.mem.eql(u8, arg, "--output") or std.mem.startsWith(u8, arg, "--output=")) {
+            const val = if (std.mem.startsWith(u8, arg, "--output="))
+                arg["--output=".len..]
+            else
+                args_iter.next() orelse {
+                    eprint("Error: --output requires a path\n", .{});
+                    eprint("Run 'agave calibrate --help' for more information.\n", .{});
+                    std.process.exit(1);
+                };
+            if (val.len == 0) {
                 eprint("Error: --output requires a path\n", .{});
                 eprint("Run 'agave calibrate --help' for more information.\n", .{});
                 std.process.exit(1);
-            };
+            }
             result.output = val;
         } else if (arg.len > 0 and arg[0] == '-') {
             eprint("Error: unknown option '{s}'\n", .{arg});
@@ -203,6 +219,7 @@ const BandAccumulator = struct {
         const sum_im = try allocator.alloc(f32, n_bands);
         errdefer allocator.free(sum_im);
         const sum_norm = try allocator.alloc(f32, n_bands);
+        errdefer allocator.free(sum_norm);
 
         @memset(sum_re, 0);
         @memset(sum_im, 0);
@@ -300,12 +317,14 @@ fn runCalibration(
     // Allocate per-layer, per-head accumulators
     const total_heads: usize = @as(usize, n_layers) * n_q_heads;
     var accumulators = try allocator.alloc(BandAccumulator, total_heads);
+    var init_count: usize = 0;
     errdefer {
-        for (accumulators) |*acc| acc.deinit(allocator);
+        for (accumulators[0..init_count]) |*acc| acc.deinit(allocator);
         allocator.free(accumulators);
     }
     for (0..total_heads) |i| {
         accumulators[i] = try BandAccumulator.init(allocator, n_bands);
+        init_count += 1;
     }
 
     // Scratch buffers for input and Q output
@@ -575,14 +594,26 @@ pub fn readCalFile(allocator: Allocator, io: Io, path: []const u8) ![]kv_evict.T
 ///
 /// Parses arguments, loads the model format, runs calibration, and writes results.
 /// Returns exit code (0 = success, 1 = error).
-pub fn run(allocator: Allocator, io: Io, process_args: std.process.Args) u8 {
+pub fn run(allocator: Allocator, process_args: std.process.Args, io: Io) u8 {
     mod_io = io;
     var args_iter = process_args.iterate();
     _ = args_iter.skip(); // Skip program name (argv[0]).
     _ = args_iter.skip(); // Skip "calibrate" subcommand.
 
     const maybe_args = parseArgs(&args_iter);
-    const args = maybe_args orelse return 0; // --help or --version shown
+    var args = maybe_args orelse return 0; // --help or --version shown
+
+    // Auto-derive output path from model path when --output not specified.
+    // model.gguf → model.cal, model-dir/ → model-dir.cal
+    var auto_output_buf: [1024]u8 = undefined;
+    if (args.output.len == 0) {
+        const path = std.mem.trimEnd(u8, args.model_path, "/");
+        const stem = if (std.mem.endsWith(u8, path, ".gguf"))
+            path[0 .. path.len - 5]
+        else
+            path;
+        args.output = std.fmt.bufPrint(&auto_output_buf, "{s}.cal", .{stem}) catch fallback_output_filename;
+    }
 
     // Detect format: directory -> SafeTensors, else -> GGUF
     const is_dir = blk: {
@@ -694,7 +725,7 @@ pub fn run(allocator: Allocator, io: Io, process_args: std.process.Args) u8 {
     eprint("\nCalibration saved to: {s} ({d:.1} {s})\n", .{
         args.output, fsize.val, fsize.unit,
     });
-    eprint("Use with: agave model.gguf --kv-eviction tri\n", .{});
+    eprint("Use with: agave {s} --kv-eviction tri\n", .{args.model_path});
 
     return 0;
 }
@@ -772,10 +803,12 @@ test "fillRandomGaussian produces reasonable values" {
         max_abs = @max(max_abs, @abs(v));
     }
     const mean = sum / @as(f32, @floatFromInt(buf.len));
-    // Mean should be near 0
-    try std.testing.expect(@abs(mean) < 0.5);
+    // Mean should be near 0 (CLT: std ≈ 1/sqrt(100) = 0.1, 3σ ≈ 0.3)
+    try std.testing.expect(@abs(mean) < 0.3);
     // Values should be bounded (CLT with 4 uniforms gives range ~ [-3.5, 3.5])
     try std.testing.expect(max_abs < 4.0);
+    // Verify non-trivial spread (not all zeros)
+    try std.testing.expect(max_abs > 0.1);
 }
 
 test "writeCalFile and readCalFile roundtrip" {
@@ -829,8 +862,9 @@ test "writeCalFile and readCalFile roundtrip" {
         .rope_freqs = freqs,
     };
 
-    // Write to a temp file
-    const tmp_path = "test_calibration_roundtrip.cal";
+    // Write to a temp file with PID to avoid collisions in parallel runs
+    var tmp_path_buf: [64]u8 = undefined;
+    const tmp_path = std.fmt.bufPrint(&tmp_path_buf, "test_cal_{d}.cal", .{std.c.getpid()}) catch unreachable;
     writeCalFile(&result, tmp_path) catch |e| {
         std.debug.print("writeCalFile failed: {}\n", .{e});
         return error.TestFailed;

@@ -62,7 +62,7 @@ fn readStdinAll(allocator: std.mem.Allocator, max_size: usize) ?[]const u8 {
         const n = std.posix.read(stdin_file.handle, &read_buf) catch break;
         if (n == 0) break;
         if (buf.items.len + n > max_size) {
-            eprint("Error: piped input exceeds 1 MB limit\n", .{});
+            eprint("Error: piped input exceeds {d} MB limit\n", .{max_size / (1024 * 1024)});
             buf.deinit(allocator);
             std.process.exit(1);
         }
@@ -112,6 +112,8 @@ const default_max_tokens: u32 = 512;
 const default_ctx_size: u32 = 4096;
 /// Default prefill chunk size (tokens per batch).
 const default_chunk_size: u32 = 512;
+/// Milliseconds per second — used for tok/s calculations.
+const ms_per_second: f32 = 1000.0;
 /// Minimum prompt tokens before showing prefill progress indicator.
 const prefill_progress_threshold: usize = 50;
 /// Default free RAM estimate when platform detection is not implemented (16 GB).
@@ -140,7 +142,7 @@ const tiered_fallback_n_kv_heads: u32 = 8;
 const tiered_fallback_n_heads: u32 = 32;
 const max_eog_ids = arch_mod.max_eog_ids;
 /// Valid KV cache quantization type names (shared across all --kv-type* validation).
-const kv_valid_types = "f32, f16, q8_0/q8, int8/i8, fp8/fp8_e4m3, nvfp4/fp4, turbo2-4/tq2-4, planar2-4/pq2-4, iso2-4/iq2-4, rotor2-4/rq2-4, turbo (preset: K=q8_0 V=turbo4)";
+const kv_valid_types = "f32, f16, q8_0/q8, int8/i8, fp8/fp8_e4m3, nvfp4/fp4, turbo2-4/tq2-4, planar2-4/pq2-4, iso2-4/iq2-4, rotor2-4/rq2-4, turbo (preset: K=q8_0, V=turbo4)";
 
 // ── Output control ──────────────────────────────────────────────
 
@@ -196,7 +198,7 @@ fn detectFreeRam() usize {
 /// kernel readahead, then switches to RANDOM after pages are resident.
 fn preloadRegion(data: []align(std.heap.page_size_min) const u8) void {
     const MADV = std.posix.MADV;
-    // Hint the kernel to read ahead sequentially
+    // Best-effort OS hint — failure is harmless
     std.posix.madvise(@alignCast(@constCast(data.ptr)), data.len, MADV.SEQUENTIAL) catch {};
 
     // Touch one byte per page to force all pages into RAM
@@ -206,7 +208,7 @@ fn preloadRegion(data: []align(std.heap.page_size_min) const u8) void {
         _ = @as(*const volatile u8, @ptrCast(&data[offset])).*;
     }
 
-    // Switch to random access hint now that all pages are resident
+    // Best-effort OS hint — failure is harmless
     std.posix.madvise(@alignCast(@constCast(data.ptr)), data.len, MADV.RANDOM) catch {};
 }
 
@@ -251,6 +253,7 @@ fn preloadModel(gguf: ?*GGUFFile, st: ?*SafeTensorsDir, quiet: bool, tty: bool, 
 /// and prints a progress bar to stderr at ~1% intervals (at least min_report_pages apart).
 fn preloadRegionProgress(data: []align(std.heap.page_size_min) const u8, loaded: *usize, total_bytes: usize, fsize: display_mod.FormattedSize) void {
     const MADV = std.posix.MADV;
+    // Best-effort OS hint — failure is harmless
     std.posix.madvise(@alignCast(@constCast(data.ptr)), data.len, MADV.SEQUENTIAL) catch {};
 
     const page_size = std.heap.page_size_min;
@@ -297,6 +300,7 @@ fn preloadRegionProgress(data: []align(std.heap.page_size_min) const u8, loaded:
         }
     }
 
+    // Best-effort OS hint — failure is harmless
     std.posix.madvise(@alignCast(@constCast(data.ptr)), data.len, MADV.RANDOM) catch {};
 }
 
@@ -347,7 +351,7 @@ const cli_specs = [_]cli_mod.ArgSpec{
     .{ .long = "seed", .kind = .option, .help = "Random seed for sampling [default: random]." },
     .{ .long = "grammar", .kind = .option, .help = "GBNF grammar file for constrained decoding." },
     .{ .long = "grammar-string", .kind = .option, .help = "Inline GBNF grammar string." },
-    .{ .long = "json-output", .help = "Force valid JSON object output via grammar constraint." },
+    .{ .long = "json-output", .help = "Constrain generation to valid JSON via grammar (not output format; see --json)." },
     .{ .long = "json-schema", .kind = .option, .help = "JSON schema for structured output (converts to GBNF grammar)." },
     .{ .long = "system", .kind = .option, .help = "System prompt for chat formatting." },
     // Backend & model
@@ -379,7 +383,7 @@ const cli_specs = [_]cli_mod.ArgSpec{
     // Server
     .{ .long = "serve", .short = 's', .help = "Start HTTP server (OpenAI + Anthropic API)." },
     .{ .long = "port", .short = 'p', .kind = .option, .help = "Server port [default: 49453]." },
-    .{ .long = "host", .kind = .option, .help = "Server bind address: IPv4, localhost, or 0.0.0.0 [default: 127.0.0.1]." },
+    .{ .long = "host", .kind = .option, .help = "Server bind address: IPv4, localhost, 0.0.0.0, or 0 [default: 127.0.0.1]." },
     .{ .long = "api-key", .kind = .option, .help = "API key for server auth (or AGAVE_API_KEY env)." },
     // Multimodal
     .{ .long = "mmproj", .kind = .option, .help = "Path to vision projector GGUF (mmproj file)." },
@@ -388,14 +392,14 @@ const cli_specs = [_]cli_mod.ArgSpec{
     .{ .long = "draft-model", .kind = .option, .help = "Path to draft model for speculative decoding." },
     .{ .long = "spec-tokens", .short = 'K', .kind = .option, .help = "Draft tokens per speculation round [default: 5]." },
     .{ .long = "tree-budget", .kind = .option, .help = "DDTree node budget [default: 64]." },
-    .{ .long = "spec-mode", .kind = .option, .help = "Speculative mode: standard, ddtree, self, ngram, mtp [default: ddtree]." },
+    .{ .long = "spec-mode", .kind = .option, .help = "Speculative mode: standard, ddtree, self, ngram, mtp [default: ddtree with --draft-model]." },
     .{ .long = "draft-layers", .kind = .option, .help = "Layers for self-speculative draft [default: auto]." },
     // Diagnostics
     .{ .long = "verbose", .short = 'V', .help = "Show technical details (params, load times, EOG)." },
     .{ .long = "debug", .short = 'd', .help = "Enable debug logging (token IDs, layer timing); implies --verbose." },
     .{ .long = "json", .help = "Output results as JSON (implies --quiet)." },
     .{ .long = "model-info", .help = "Print model metadata and exit (supports --json)." },
-    .{ .long = "megakernel", .help = "Use fused megakernel (single GPU dispatch per token)." },
+    .{ .long = "megakernel", .help = "Enable fused FFN megakernels (3→1 dispatch per layer)." },
     .{ .long = "profile", .help = "Profile per-op timing (halves throughput)." },
     .{ .long = "benchmark", .help = "Run decode benchmark: prefill + decode, print stats (supports --json)." },
 };
@@ -489,7 +493,7 @@ fn checkSubcommand(allocator: std.mem.Allocator) bool {
     }
     if (std.mem.eql(u8, first, "calibrate")) {
         const calibrate = @import("calibrate.zig");
-        const exit_code = calibrate.run(allocator, g_io, init_args);
+        const exit_code = calibrate.run(allocator, init_args, g_io);
         if (exit_code != 0) std.process.exit(exit_code);
         return true;
     }
@@ -543,6 +547,19 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
         return null;
     }
 
+    // Error on options that appeared at end of args without a value
+    if (res.missing_value) |name| {
+        eprint("Error: --{s} requires a value\n", .{name});
+        std.process.exit(1);
+    }
+
+    // Warn about unknown flags (catches typos like --temeprature)
+    warnUnknownOptions(&res);
+
+    // Detect when a known flag was consumed as another option's value.
+    // Example: `--system --serve` sets system prompt to "--serve" and loses --serve.
+    warnFlagAsValue(&res);
+
     // Auto-detect TTY: disable color when stdout is not a terminal
     g_tty = stdout_file.isTty(g_io) catch false;
     g_color = blk: {
@@ -577,7 +594,8 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
         const discovery = @import("devices/discovery.zig");
         const device_list = discovery.enumerate();
         discovery.printDeviceTable(&device_list);
-        std.process.exit(0);
+        res.deinit();
+        return null;
     }
 
     const n_positionals = res.positionals.items.len;
@@ -597,7 +615,7 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
         };
     };
     const device_id: u32 = if (res.option("device")) |d| std.fmt.parseInt(u32, d, 10) catch {
-        eprint("Error: --device must be a non-negative integer\n", .{});
+        eprint("Error: invalid value for --device: '{s}' is not a valid integer\n", .{d});
         std.process.exit(1);
     } else 0;
 
@@ -803,6 +821,22 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
             eprint("Warning: --model-info exits before server starts; remove --serve or --model-info\n", .{});
     }
 
+    // Warn about conflicting exit-early flags (--model-info runs first, --benchmark skipped)
+    if (res.flag("model-info") and res.flag("benchmark"))
+        eprint("Warning: --model-info and --benchmark both exit early; only --model-info will run\n", .{});
+
+    // Warn about --profile with --benchmark (profile halves throughput, skewing benchmark results)
+    if (res.flag("profile") and res.flag("benchmark"))
+        eprint("Warning: --profile halves throughput; benchmark results will be misleading\n", .{});
+
+    // Warn about --mmap with --benchmark (lazy mmap means page faults during benchmark)
+    if (res.flag("mmap") and res.flag("benchmark"))
+        eprint("Warning: --mmap with --benchmark includes page fault overhead in timing\n", .{});
+
+    // Warn about prompt with --benchmark (benchmark uses a fixed prompt, user prompt is ignored)
+    if (res.flag("benchmark") and n_positionals > 1 and !res.flag("serve"))
+        eprint("Warning: --benchmark uses a fixed prompt; your prompt will be ignored\n", .{});
+
     // Warn about --allow-cpu-fallback with CPU backend (already on CPU, nothing to fall back to)
     if (res.flag("allow-cpu-fallback") and backend_choice == .cpu)
         eprint("Warning: --allow-cpu-fallback has no effect with --backend cpu\n", .{});
@@ -829,6 +863,12 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
             if (sm == null or !std.mem.eql(u8, sm.?, "self"))
                 eprint("Warning: --draft-layers only applies to --spec-mode self\n", .{});
         }
+        // Warn about --spec-mode standard/ddtree without a draft model
+        if (res.option("spec-mode")) |sm| {
+            if (res.option("draft-model") == null and
+                (std.mem.eql(u8, sm, "standard") or std.mem.eql(u8, sm, "ddtree")))
+                eprint("Warning: --spec-mode {s} requires --draft-model\n", .{sm});
+        }
     }
 
     // Warn about conflicting constrained-decoding flags (only one takes effect)
@@ -848,6 +888,18 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
                 eprint("Warning: both --grammar and --grammar-string given; only --grammar-string takes effect\n", .{});
         }
     }
+
+    // Warn when draft model is the same as target model (likely copy-paste mistake)
+    if (res.option("draft-model")) |dm| {
+        if (n_positionals > 0 and std.mem.eql(u8, dm, res.positional(0).?))
+            eprint("Warning: --draft-model is the same file as the target model\n", .{});
+    }
+
+    // Early file existence checks — fail fast before slow model loading
+    if (grammar_path) |p| validateFileExists(p, "--grammar");
+    if (res.option("image")) |p| validateFileExists(p, "--image");
+    if (res.option("mmproj")) |p| validateFileExists(p, "--mmproj");
+    if (res.option("draft-model")) |p| validateFileExists(p, "--draft-model");
 
     // JSON mode + interactive REPL would corrupt the JSON output stream
     if (json_mode and !res.flag("model-info") and !res.flag("serve") and n_positionals < 2) {
@@ -897,7 +949,7 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
             if (res.option("kv-type-k")) |s| break :blk kvTypeOrExit(s, "--kv-type-k");
             if (res.option("cache-type-k")) |s| break :blk kvTypeOrExit(s, "--cache-type-k");
             const kv_str = res.option("kv-type") orelse break :blk KvQuantType.f16;
-            // "turbo" preset: asymmetric K=q8_0 V=turbo4 (K precision protects attention routing)
+            // "turbo" preset: asymmetric K=q8_0 V=turbo4 (K needs precision for QK score accuracy)
             if (std.mem.eql(u8, kv_str, "turbo")) break :blk KvQuantType.q8_0;
             break :blk kvTypeOrExit(kv_str, "--kv-type");
         },
@@ -923,25 +975,11 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
         .kv_budget = parseU32(res.option("kv-budget"), "kv-budget") orelse 0,
         .host = blk: {
             const host_str = res.option("host") orelse break :blk [4]u8{ 127, 0, 0, 1 };
-            if (std.mem.eql(u8, host_str, "0.0.0.0")) break :blk [4]u8{ 0, 0, 0, 0 };
+            if (std.mem.eql(u8, host_str, "0.0.0.0") or std.mem.eql(u8, host_str, "0")) break :blk [4]u8{ 0, 0, 0, 0 };
             if (std.mem.eql(u8, host_str, "127.0.0.1") or std.mem.eql(u8, host_str, "localhost")) break :blk [4]u8{ 127, 0, 0, 1 };
-            // Parse dotted-quad IPv4
-            var parts: [4]u8 = .{ 0, 0, 0, 0 };
-            var iter = std.mem.splitScalar(u8, host_str, '.');
-            var pi: usize = 0;
-            while (iter.next()) |part| {
-                if (pi >= 4) {
-                    eprint("Error: invalid host address '{s}' (expected IPv4 dotted-quad, 'localhost', or '0.0.0.0')\n", .{host_str});
-                    std.process.exit(1);
-                }
-                parts[pi] = std.fmt.parseInt(u8, part, 10) catch {
-                    eprint("Error: invalid host address '{s}' (expected IPv4 dotted-quad, 'localhost', or '0.0.0.0')\n", .{host_str});
-                    std.process.exit(1);
-                };
-                pi += 1;
-            }
-            if (pi != 4) {
-                eprint("Error: invalid host address '{s}' (expected IPv4 dotted-quad, 'localhost', or '0.0.0.0')\n", .{host_str});
+            var parts: [4]u8 = undefined;
+            if (!parseIpv4(host_str, &parts)) {
+                eprint("Error: invalid host address '{s}' (expected IPv4, 'localhost', '0.0.0.0', or '0')\n", .{host_str});
                 std.process.exit(1);
             }
             break :blk parts;
@@ -959,7 +997,7 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
         .tp_peers = res.option("peers"),
         .transport = if (res.option("transport")) |t| std.meta.stringToEnum(TransportChoice, t) orelse {
             eprint("Error: unknown transport '{s}'\n", .{t});
-            eprint("  Valid options: auto, tcp, shm, nccl, rdma, udp, grpc\n", .{});
+            eprint("  Valid options: auto, tcp, shm, nccl (rdma, udp, grpc accepted but fall back to tcp)\n", .{});
             std.process.exit(1);
         } else .auto,
         .pp_degree = parseU32(res.option("pp"), "pp") orelse 1,
@@ -997,21 +1035,27 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
     };
 }
 
-fn parseIpv4(s: []const u8, out: *[4]u8) void {
+fn parseIpv4(s: []const u8, out: *[4]u8) bool {
     var parts: [4]u8 = .{ 0, 0, 0, 0 };
     var part_idx: usize = 0;
-    var acc: u16 = 0;
+    var acc: u32 = 0;
     for (s) |c| {
         if (c == '.') {
-            if (part_idx < 4) parts[part_idx] = @intCast(acc);
+            if (acc > 255 or part_idx >= 4) return false;
+            parts[part_idx] = @intCast(acc);
             part_idx += 1;
             acc = 0;
         } else if (c >= '0' and c <= '9') {
-            acc = acc * 10 + (c - '0');
+            acc = std.math.mul(u32, acc, 10) catch return false;
+            acc = std.math.add(u32, acc, c - '0') catch return false;
+        } else {
+            return false;
         }
     }
-    if (part_idx < 4) parts[part_idx] = @intCast(acc);
+    if (acc > 255 or part_idx != 3) return false;
+    parts[3] = @intCast(acc);
     out.* = parts;
+    return true;
 }
 
 const TransportMod = @import("parallel/transport.zig");
@@ -1062,9 +1106,15 @@ fn setupTransport(allocator: std.mem.Allocator, peers_str: []const u8, rank: u32
     var port: u16 = port_base;
     if (std.mem.indexOfScalar(u8, peers_str, ':')) |colon| {
         port = std.fmt.parseInt(u16, peers_str[colon + 1 ..], 10) catch port_base;
-        parseIpv4(peers_str[0..colon], &host);
+        if (!parseIpv4(peers_str[0..colon], &host)) {
+            std.log.err("invalid peer address: {s}", .{peers_str});
+            return null;
+        }
     } else {
-        parseIpv4(peers_str, &host);
+        if (!parseIpv4(peers_str, &host)) {
+            std.log.err("invalid peer address: {s}", .{peers_str});
+            return null;
+        }
     }
     if (rank == 0) {
         var la: std.posix.sockaddr.in = .{ .port = std.mem.nativeToBig(u16, port), .addr = 0 };
@@ -1107,6 +1157,7 @@ fn setupTransport(allocator: std.mem.Allocator, peers_str: []const u8, rank: u32
                 t.cuda_backend = @ptrCast(cuda_be);
                 t.cuda_get_dev_ptr = backend_mod.CudaBackend.getDevicePtrOpaque;
                 t.cuda_mem_alloc = cuda_be.cuMemAlloc;
+                t.cuda_mem_free = cuda_be.cuMemFree;
                 t.cuda_memcpy_htod = cuda_be.cuMemcpyHtoD;
                 t.cuda_memcpy_dtoh = cuda_be.cuMemcpyDtoH;
             },
@@ -1177,28 +1228,100 @@ fn measurePeerRtt(t: *TransportMod.Transport, rank: u32) u64 {
     return end_us -| start_us;
 }
 
-fn parseU32(s: ?[]const u8, comptime flag: []const u8) ?u32 {
+fn parseUint(comptime T: type, s: ?[]const u8, comptime flag: []const u8) ?T {
     const str = s orelse return null;
-    return std.fmt.parseInt(u32, str, 10) catch {
+    return std.fmt.parseInt(T, str, 10) catch {
         eprint("Error: invalid value for --" ++ flag ++ ": '{s}' is not a valid integer\n", .{str});
         std.process.exit(1);
     };
 }
 
-fn parseU64(s: ?[]const u8, comptime flag: []const u8) ?u64 {
-    const str = s orelse return null;
-    return std.fmt.parseInt(u64, str, 10) catch {
-        eprint("Error: invalid value for --" ++ flag ++ ": '{s}' is not a valid integer\n", .{str});
-        std.process.exit(1);
-    };
+fn parseU32(s: ?[]const u8, comptime flag: []const u8) ?u32 { return parseUint(u32, s, flag); }
+fn parseU64(s: ?[]const u8, comptime flag: []const u8) ?u64 { return parseUint(u64, s, flag); }
+fn parseU16(s: ?[]const u8, comptime flag: []const u8) ?u16 { return parseUint(u16, s, flag); }
+
+/// Check if a long option name matches any known CLI spec.
+fn isKnownSpec(name: []const u8) bool {
+    for (cli_specs) |spec| {
+        if (std.mem.eql(u8, spec.long, name)) return true;
+    }
+    return false;
 }
 
-fn parseU16(s: ?[]const u8, comptime flag: []const u8) ?u16 {
-    const str = s orelse return null;
-    return std.fmt.parseInt(u16, str, 10) catch {
-        eprint("Error: invalid value for --" ++ flag ++ ": '{s}' is not a valid integer\n", .{str});
-        std.process.exit(1);
-    };
+/// Find the closest matching spec for a typo suggestion (edit distance ≤ 2).
+fn suggestSpec(name: []const u8) ?[]const u8 {
+    for (cli_specs) |spec| {
+        if (closeMatch(name, spec.long)) return spec.long;
+    }
+    return null;
+}
+
+/// Check if two strings differ by at most 2 substitutions, or 1 insertion/deletion.
+fn closeMatch(a: []const u8, b: []const u8) bool {
+    if (a.len == b.len) {
+        var diffs: usize = 0;
+        for (a, b) |ca, cb| {
+            if (ca != cb) diffs += 1;
+            if (diffs > 2) return false;
+        }
+        return diffs > 0 and diffs <= 2;
+    }
+    if (a.len + 1 == b.len) return insertionMatch(a, b);
+    if (b.len + 1 == a.len) return insertionMatch(b, a);
+    return false;
+}
+
+/// Check if `shorter` matches `longer` with exactly one character inserted.
+fn insertionMatch(shorter: []const u8, longer: []const u8) bool {
+    var si: usize = 0;
+    var li: usize = 0;
+    var skips: usize = 0;
+    while (si < shorter.len and li < longer.len) {
+        if (shorter[si] == longer[li]) {
+            si += 1;
+            li += 1;
+        } else {
+            skips += 1;
+            if (skips > 1) return false;
+            li += 1;
+        }
+    }
+    return true;
+}
+
+/// Warn about any flags or options not recognized by cli_specs.
+/// Catches typos like --temeprature that would otherwise silently use defaults.
+fn warnUnknownOptions(res: *const cli_mod.ParseResult) void {
+    var flag_it = res.flags.iterator();
+    while (flag_it.next()) |entry| {
+        if (!isKnownSpec(entry.key_ptr.*)) {
+            eprint("Warning: unknown option '--{s}'", .{entry.key_ptr.*});
+            if (suggestSpec(entry.key_ptr.*)) |s|
+                eprint(" (did you mean '--{s}'?)", .{s});
+            eprint("\n", .{});
+        }
+    }
+    var opt_it = res.options.iterator();
+    while (opt_it.next()) |entry| {
+        if (!isKnownSpec(entry.key_ptr.*)) {
+            eprint("Warning: unknown option '--{s}'", .{entry.key_ptr.*});
+            if (suggestSpec(entry.key_ptr.*)) |s|
+                eprint(" (did you mean '--{s}'?)", .{s});
+            eprint("\n", .{});
+        }
+    }
+}
+
+/// Warn when an option's value looks like a known flag that was accidentally consumed.
+/// Catches `--system --serve` (system prompt becomes "--serve", --serve flag lost).
+fn warnFlagAsValue(res: *const cli_mod.ParseResult) void {
+    var opt_it = res.options.iterator();
+    while (opt_it.next()) |entry| {
+        const val = entry.value_ptr.*;
+        if (val.len > 2 and val[0] == '-' and val[1] == '-' and isKnownSpec(val[2..])) {
+            eprint("Warning: --{s} has value '{s}' which looks like a flag (missing value for --{s}?)\n", .{ entry.key_ptr.*, val, entry.key_ptr.* });
+        }
+    }
 }
 
 fn parseF32(s: ?[]const u8, comptime flag: []const u8) ?f32 {
@@ -1212,6 +1335,15 @@ fn parseF32(s: ?[]const u8, comptime flag: []const u8) ?f32 {
         std.process.exit(1);
     }
     return val;
+}
+
+/// Check that a file path exists before expensive model loading.
+fn validateFileExists(path: []const u8, comptime flag: []const u8) void {
+    const file = Io.Dir.cwd().openFile(g_io, path, .{}) catch {
+        eprint("Error: " ++ flag ++ " file not found: '{s}'\n", .{path});
+        std.process.exit(1);
+    };
+    file.close(g_io);
 }
 
 /// Built-in benchmark: prefill a short prompt, decode N tokens, report stats.
@@ -1316,8 +1448,8 @@ fn printUsage() void {
         \\
         \\BACKEND & MODEL:
         \\      --backend <BE>        Compute backend: auto, cpu, metal, vulkan, cuda, rocm, webgpu [default: auto]
-        \\      --device <N>           GPU device index for CUDA/ROCm/Vulkan [default: 0]
-        \\      --list-devices         List available compute devices and exit
+        \\      --device <N>          GPU device index for CUDA/ROCm/Vulkan [default: 0]
+        \\      --list-devices        List available compute devices and exit
         \\      --ctx-size <N|auto>   Context window size; 0 = full, auto = fit to memory [default: min(model, 4096)]
         \\      --allow-cpu-fallback  Allow GPU backends to fall back to CPU for unsupported ops
         \\      --mmap                Use lazy mmap instead of eagerly paging weights into RAM
@@ -1340,26 +1472,26 @@ fn printUsage() void {
         \\SERVER:
         \\  -s, --serve            Start HTTP server (OpenAI + Anthropic API)
         \\  -p, --port <PORT>      Server port [default: 49453]
-        \\      --host <ADDR>      Bind address: IPv4, localhost, or 0.0.0.0 [default: 127.0.0.1]
+        \\      --host <ADDR>      Bind address: IPv4, localhost, 0.0.0.0, or 0 [default: 127.0.0.1]
         \\      --api-key <KEY>    API key for server auth (or AGAVE_API_KEY env)
         \\
         \\PARALLELISM:
-        \\      --tp <N>               Tensor parallelism degree [default: 1]
-        \\      --pp <N>               Pipeline parallelism stages [default: 1]
-        \\      --peers <ADDR>         Peer address (e.g. 192.168.0.2 or localhost for same-node)
-        \\      --rank <N>             This node's rank for TP/PP/disagg [default: 0]
-        \\      --transport <TYPE>     IPC transport: auto, tcp, shm, nccl [default: auto]
-        \\      --disagg               Disaggregated prefill/decode (rank 0 prefills, rank 1 decodes)
+        \\      --tp <N>              Tensor parallelism degree [default: 1]
+        \\      --pp <N>              Pipeline parallelism stages [default: 1]
+        \\      --peers <ADDR>        Peer address (e.g. 192.168.0.2 or localhost for same-node)
+        \\      --rank <N>            This node's rank for TP/PP/disagg [default: 0]
+        \\      --transport <TYPE>    IPC transport: auto, tcp, shm, nccl [default: auto]
+        \\      --disagg              Disaggregated prefill/decode (rank 0 prefills, rank 1 decodes)
         \\
         \\SPECULATIVE DECODING:
-        \\      --draft-model <PATH>   Draft model GGUF for speculative decoding
-        \\      --spec-mode <MODE>     Speculative mode: standard, ddtree, self, ngram, mtp [default: ddtree]
-        \\  -K, --spec-tokens <N>      Draft tokens per speculation round [default: 5]
-        \\      --tree-budget <N>      DDTree node budget [default: 64]
-        \\      --draft-layers <N>     Layers for self-speculative draft [default: auto]
+        \\      --draft-model <PATH>  Draft model GGUF for speculative decoding
+        \\      --spec-mode <MODE>    Speculative mode: standard, ddtree, self, ngram, mtp [default: ddtree with --draft-model]
+        \\  -K, --spec-tokens <N>     Draft tokens per speculation round [default: 5]
+        \\      --tree-budget <N>     DDTree node budget [default: 64]
+        \\      --draft-layers <N>    Layers for self-speculative draft [default: auto]
         \\
         \\OPTIMIZATION:
-        \\      --megakernel           Enable fused FFN megakernels (3→1 dispatch per layer)
+        \\      --megakernel          Enable fused FFN megakernels (3→1 dispatch per layer)
         \\
         \\MULTIMODAL:
         \\      --mmproj <PATH>    Path to vision projector GGUF (mmproj file)
@@ -1376,13 +1508,16 @@ fn printUsage() void {
         \\ENVIRONMENT:
         \\  NO_COLOR             Disable colored output when set (https://no-color.org)
         \\  AGAVE_API_KEY        API key for server auth (alternative to --api-key)
+        \\  AGAVE_VISION_DEBUG   Dump vision encoder intermediate buffers when set to 1
         \\  HF_TOKEN             HuggingFace API token for private repos (used by pull)
+        \\  HF_HOME              Custom HuggingFace cache directory (used by pull)
         \\
         \\EXAMPLES:
         \\  agave model.gguf                          Interactive REPL
         \\  agave model.gguf "What is 2+2?"           Single prompt
         \\  agave model.gguf -q "Hello" > out.txt     Pipe output (no banner)
-        \\  agave model.gguf --serve --port 3000      HTTP server
+        \\  agave model.gguf --serve --port 3000      HTTP server on port 3000
+        \\  agave model.gguf --serve --host 0          HTTP server on all interfaces
         \\  agave model.gguf -t 0.7 --top-p 0.9 "Tell me a joke"
         \\  agave model.gguf --backend cpu "Hello"    Force CPU backend
         \\  agave ./glm-4-9b/ "Hello"                 Load SafeTensors directory
@@ -1391,6 +1526,7 @@ fn printUsage() void {
         \\  agave model.gguf --json --model-info      Model metadata as JSON
         \\  agave model.gguf --kv-type tq4 "Hello"   TurboQuant KV cache (saves VRAM)
         \\  agave model.gguf --ctx-size 0 "Hello"    Use full model context window
+        \\  agave model.gguf --ctx-size auto "Hello"  Auto-fit context to available memory
         \\  agave model.gguf --image pic.png "What's this?"  Vision (auto-detects mmproj)
         \\  agave model.gguf --json-output "Generate a user profile"  Force JSON output
         \\  agave model.gguf --grammar-string 'root ::= "yes" | "no"' "Is sky blue?"
@@ -1404,11 +1540,11 @@ fn printUsage() void {
         \\  agave pull <org/repo>                    Download GGUF model from HuggingFace
         \\  agave pull <org/repo> --quant Q4_K_M     Download specific quantization
         \\  agave pull <org/repo> --list             List available GGUF files
-        \\  agave calibrate <model.gguf>             Generate TriAttention calibration data
+        \\  agave calibrate <model.gguf|model-dir/>   Generate TriAttention calibration data
         \\  agave help <topic>                       Show help for a subcommand (e.g. pull, calibrate)
         \\
         \\SUPPORTED ARCHITECTURES:
-        \\  gemma3, gemma4, qwen35, gpt-oss, nemotron-h, nemotron-nano, glm4
+        \\  gemma3, gemma4, qwen35, gpt-oss, nemotron-h, nemotron-nano, glm4, llama4
         \\
         \\REPL COMMANDS:
     ++ repl_help;
@@ -1502,9 +1638,20 @@ pub fn main(init: std.process.Init) !void {
     } else {
         gguf_file = GGUFFile.open(allocator, cli.model_path) catch |e| {
             eprint("Error: failed to open '{s}': {}\n", .{ cli.model_path, e });
-            if (e == error.FileNotFound)
-                eprint("  File does not exist. Check the path and try again.\n", .{})
-            else if (e == error.InvalidMagic)
+            if (e == error.FileNotFound) {
+                eprint("  File does not exist. Check the path and try again.\n", .{});
+                if (std.mem.indexOfScalar(u8, cli.model_path, '/') == null and
+                    std.mem.indexOfScalar(u8, cli.model_path, '.') == null)
+                {
+                    const subs = [_][]const u8{ "pull", "calibrate", "help" };
+                    for (subs) |sub| {
+                        if (closeMatch(cli.model_path, sub)) {
+                            eprint("  Did you mean 'agave {s}'?\n", .{sub});
+                            break;
+                        }
+                    }
+                }
+            } else if (e == error.InvalidMagic)
                 eprint("  Not a valid GGUF file. Expected GGUF magic bytes.\n", .{})
             else if (e == error.UnsupportedVersion)
                 eprint("  GGUF version not supported. Agave supports v2 and v3.\n", .{})
@@ -1524,7 +1671,7 @@ pub fn main(init: std.process.Init) !void {
 
     var arch = Arch.detect(arch_str) orelse {
         eprint("Error: unsupported architecture '{s}'\n", .{arch_str});
-        eprint("  Supported: gemma3, gemma4, qwen35, gpt-oss, nemotron-h, nemotron-nano, glm4\n", .{});
+        eprint("  Supported: gemma3, gemma4, qwen35, gpt-oss, nemotron-h, nemotron-nano, glm4, llama4\n", .{});
         std.process.exit(1);
     };
 
@@ -1848,14 +1995,11 @@ fn loadImage(allocator: std.mem.Allocator, path: []const u8, target_size: u32) !
     const file = try Io.Dir.cwd().openFile(g_io, path, .{});
     defer file.close(g_io);
 
-    // Read entire file into memory (vision images are small, typically < 10MB)
-    const max_image_file_size: usize = 64 * 1024 * 1024; // 64 MB limit
     const file_stat = try file.stat(g_io);
-    if (file_stat.size > max_image_file_size) return error.FileTooBig;
+    if (file_stat.size > image.max_file_size) return error.FileTooBig;
     const file_data = try allocator.alloc(u8, @intCast(file_stat.size));
-    errdefer allocator.free(file_data);
-    _ = try file.readPositionalAll(g_io, file_data, 0);
     defer allocator.free(file_data);
+    _ = try file.readPositionalAll(g_io, file_data, 0);
 
     const format = image.detectFormat(file_data);
     switch (format) {
@@ -1865,7 +2009,8 @@ fn loadImage(allocator: std.mem.Allocator, path: []const u8, target_size: u32) !
             return image.resize(allocator, png.pixels, png.width, png.height, target_size, target_size);
         },
         .ppm => {
-            return loadPpmData(allocator, file_data, target_size);
+            const ppm = try image.decodePpm(file_data);
+            return image.resize(allocator, ppm.pixels, ppm.width, ppm.height, target_size, target_size);
         },
         .jpeg => {
             eprint("Error: JPEG images are not supported. Please convert to PNG:\n", .{});
@@ -1878,64 +2023,6 @@ fn loadImage(allocator: std.mem.Allocator, path: []const u8, target_size: u32) !
             return error.InvalidImageFormat;
         },
     }
-}
-
-/// Parse PPM P6 data from a buffer and resize to target dimensions.
-///
-/// PPM P6 format:
-///   - Magic "P6", optional comments starting with '#'
-///   - "<width> <height>\n", "<maxval>\n" (usually 255)
-///   - width * height * 3 raw bytes (RGB)
-fn loadPpmData(allocator: std.mem.Allocator, file_data: []const u8, target_size: u32) ![]u8 {
-    var pos: usize = 0;
-
-    // Validate magic "P6"
-    if (file_data.len < 3) return error.InvalidImageFormat;
-    if (file_data[0] != 'P' or file_data[1] != '6') return error.InvalidImageFormat;
-    pos = 2;
-    // Skip whitespace after magic
-    while (pos < file_data.len and (file_data[pos] == '\n' or file_data[pos] == '\r' or file_data[pos] == ' ')) : (pos += 1) {}
-
-    // Helper: skip comments and whitespace, read next non-comment token
-    const readToken = struct {
-        fn call(data: []const u8, start: *usize) ?[]const u8 {
-            var p = start.*;
-            while (p < data.len) {
-                while (p < data.len and (data[p] == ' ' or data[p] == '\t' or data[p] == '\n' or data[p] == '\r')) : (p += 1) {}
-                if (p >= data.len) return null;
-                if (data[p] == '#') {
-                    while (p < data.len and data[p] != '\n') : (p += 1) {}
-                    continue;
-                }
-                const tok_start = p;
-                while (p < data.len and data[p] != ' ' and data[p] != '\t' and data[p] != '\n' and data[p] != '\r') : (p += 1) {}
-                start.* = p;
-                return data[tok_start..p];
-            }
-            return null;
-        }
-    }.call;
-
-    const w_str = readToken(file_data, &pos) orelse return error.InvalidImageFormat;
-    const width = std.fmt.parseInt(u32, w_str, 10) catch return error.InvalidImageFormat;
-    const h_str = readToken(file_data, &pos) orelse return error.InvalidImageFormat;
-    const height = std.fmt.parseInt(u32, h_str, 10) catch return error.InvalidImageFormat;
-    const max_str = readToken(file_data, &pos) orelse return error.InvalidImageFormat;
-    _ = std.fmt.parseInt(u32, max_str, 10) catch return error.InvalidImageFormat;
-
-    if (width == 0 or height == 0) return error.InvalidImageFormat;
-
-    // Skip exactly one whitespace character after maxval (part of PPM spec)
-    if (pos < file_data.len) pos += 1;
-
-    // Remaining data is raw pixels (checked arithmetic to prevent overflow with crafted dimensions)
-    const src_pixels: usize = std.math.mul(usize, std.math.mul(usize, @as(usize, width), height) catch
-        return error.InvalidImageSize, 3) catch return error.InvalidImageSize;
-    if (pos + src_pixels > file_data.len) return error.InvalidImageSize;
-    const src_data = file_data[pos..][0..src_pixels];
-
-    // Resize using bilinear interpolation
-    return image.resize(allocator, src_data, width, height, target_size, target_size);
 }
 
 /// Initialize the model and run inference/server/REPL. Returns false on failure.
@@ -2048,13 +2135,12 @@ fn initAndRun(
         const a_str = fmt.getMetaStr("general.architecture") orelse "unknown";
         const n_ff = fmt.getArchU32(a_str, "feed_forward_length") orelse 0;
         if (n_embd > 0 and n_ff > 0) {
-            const gemv_kern = @import("backend/kernels/cpu/gemv.zig");
             const local_ff = n_ff / cli.tp_degree;
             // Use f32 row bytes (largest possible) to cover any quant format
             const row_bytes = @max(
-                gemv_kern.gemvRowBytes(.f32, local_ff),
-                @max(gemv_kern.gemvRowBytes(.q8_0, local_ff),
-                     gemv_kern.gemvRowBytes(.q4_k, local_ff)),
+                backend_mod.gemvRowBytes(.f32, local_ff),
+                @max(backend_mod.gemvRowBytes(.q8_0, local_ff),
+                     backend_mod.gemvRowBytes(.q4_k, local_ff)),
             );
             const shard_size = n_embd * row_bytes;
             if (shard_size > 0) {
@@ -2144,8 +2230,9 @@ fn initAndRun(
             else => false,
         };
         if (!supported) {
-            eprint("Error: --megakernel not supported for {s} on this backend.\n" ++
-                "Supported: qwen35/gemma4/gemma3 on Metal, qwen35 on CUDA. See docs/MEGAKERNEL.md\n", .{@tagName(arch)});
+            eprint("Error: --megakernel not supported for {s} on this backend\n", .{@tagName(arch)});
+            eprint("  Supported: qwen35/gemma4/gemma3/glm4 on Metal, qwen35 on CUDA.\n", .{});
+            eprint("  See docs/MEGAKERNEL.md for details.\n", .{});
             return false;
         }
         mdl.setMegakernel(true);
@@ -2262,6 +2349,10 @@ fn initAndRun(
                 eprint("Error: vision encode failed: {}\n", .{err});
                 return false;
             };
+            if (ve.projection_dim == 0) {
+                eprint("Error: vision encoder projection_dim is 0\n", .{});
+                return false;
+            }
             n_visual_tokens = @intCast(visual_tokens.len / ve.projection_dim);
             const pad_id: u32 = if (img_tokens) |it| it.pad else 0;
             model_if.setImageEmbeddings(visual_tokens, n_visual_tokens, pad_id);
@@ -2377,9 +2468,15 @@ fn initAndRun(
             var port: u16 = disagg_default_port;
             if (std.mem.indexOfScalar(u8, peers_str, ':')) |colon| {
                 port = std.fmt.parseInt(u16, peers_str[colon + 1 ..], 10) catch disagg_default_port;
-                parseIpv4(peers_str[0..colon], &host);
+                if (!parseIpv4(peers_str[0..colon], &host)) {
+                    eprint("Error: invalid peer address '{s}'\n", .{peers_str});
+                    break :disagg_blk;
+                }
             } else {
-                parseIpv4(peers_str, &host);
+                if (!parseIpv4(peers_str, &host)) {
+                    eprint("Error: invalid peer address '{s}'\n", .{peers_str});
+                    break :disagg_blk;
+                }
             }
             if (cli.tp_rank == 0) {
                 // Prefill node: tokenize, prefill, send KV
@@ -2911,7 +3008,7 @@ fn generateSpeculative(
     const gen_ms = milliTimestamp(g_io) - gen_start;
     if (show_stats) {
         const gen_toks = if (token_count > 0) token_count else 1;
-        const tok_per_sec = if (gen_ms > 0) @as(f32, @floatFromInt(gen_toks)) / @as(f32, @floatFromInt(gen_ms)) * 1000.0 else 0;
+        const tok_per_sec = if (gen_ms > 0) @as(f32, @floatFromInt(gen_toks)) / @as(f32, @floatFromInt(gen_ms)) * ms_per_second else 0;
         eprint("\n{d} tok · {d:.1} tok/s · {d}ms prefill · spec: {d:.0}% accept ({d:.1} mean)\n", .{
             gen_toks,
             tok_per_sec,
@@ -3089,11 +3186,13 @@ fn generateAndPrintInner(
                     if (file.readPositionalAll(g_io, b, 0)) |_| {
                         grammar = grammar_mod.Grammar.parse(allocator, b) catch |err| blk: {
                             eprint("Error: failed to parse grammar file '{s}': {}\n", .{ path, err });
+                            allocator.free(b);
                             break :blk null;
                         };
                         if (grammar) |*g| grammar_state = g.initState() catch null;
                     } else |err| {
                         eprint("Error: could not read grammar file '{s}': {}\n", .{ path, err });
+                        allocator.free(b);
                     }
                 }
             }
@@ -3408,10 +3507,14 @@ test {
     _ = @import("fuzz_tests.zig");
     _ = @import("spec/ddtree.zig");
     _ = @import("backend/kernels/cpu/sdpa_tree.zig");
+    _ = @import("backend/mega_compose.zig");
+    _ = @import("backend/megakernel.zig");
+    _ = @import("ops/gptq.zig");
 }
 
 test "cpu backend rms_norm via tagged union dispatch" {
     var threaded = std.Io.Threaded.init(std.testing.allocator, .{});
+    defer threaded.deinit();
     var bs = BackendState{};
     bs.init(std.testing.allocator, .cpu, threaded.io(), 0);
     defer if (bs.pool) |*p| p.deinit();
@@ -3430,6 +3533,7 @@ test "cpu backend rms_norm via tagged union dispatch" {
 
 test "cpu backend softmax via tagged union dispatch" {
     var threaded2 = std.Io.Threaded.init(std.testing.allocator, .{});
+    defer threaded2.deinit();
     var bs = BackendState{};
     bs.init(std.testing.allocator, .cpu, threaded2.io(), 0);
     defer if (bs.pool) |*p| p.deinit();
@@ -3452,6 +3556,7 @@ test "cpu backend softmax via tagged union dispatch" {
 
 test "cpu backend silu via tagged union dispatch" {
     var threaded3 = std.Io.Threaded.init(std.testing.allocator, .{});
+    defer threaded3.deinit();
     var bs = BackendState{};
     bs.init(std.testing.allocator, .cpu, threaded3.io(), 0);
     defer if (bs.pool) |*p| p.deinit();
@@ -3465,4 +3570,35 @@ test "cpu backend silu via tagged union dispatch" {
     try std.testing.expectApproxEqAbs(@as(f32, 0.731), output[1], 0.01);
     // SiLU(-1) = -1 * sigmoid(-1) ≈ -0.269
     try std.testing.expectApproxEqAbs(@as(f32, -0.269), output[2], 0.01);
+}
+
+test "closeMatch detects substitutions" {
+    try std.testing.expect(closeMatch("temeprature", "temperature")); // transposition
+    try std.testing.expect(closeMatch("temperture", "temperature")); // missing 'a' (insertion match)
+    try std.testing.expect(closeMatch("bakend", "backend")); // missing 'c' (insertion match)
+    try std.testing.expect(closeMatch("bakcend", "backend")); // same len, 2 subs
+    try std.testing.expect(!closeMatch("xyz", "temperature")); // completely different
+    try std.testing.expect(!closeMatch("temperature", "temperature")); // exact match not a typo
+}
+
+test "insertionMatch detects missing char" {
+    try std.testing.expect(insertionMatch("temperatur", "temperature")); // missing trailing 'e'
+    try std.testing.expect(insertionMatch("verbos", "verbose")); // missing trailing 'e'
+    try std.testing.expect(insertionMatch("bacend", "backend")); // missing 'k'
+    try std.testing.expect(!insertionMatch("abc", "xyzwv")); // completely different
+}
+
+test "suggestSpec finds known flags" {
+    // Known typos should find suggestions
+    const s1 = suggestSpec("temeprature");
+    try std.testing.expect(s1 != null);
+    try std.testing.expectEqualStrings("temperature", s1.?);
+
+    const s2 = suggestSpec("temperatur");
+    try std.testing.expect(s2 != null);
+    try std.testing.expectEqualStrings("temperature", s2.?);
+
+    // Completely unrelated string should not match
+    try std.testing.expect(suggestSpec("foobar") == null);
+    try std.testing.expect(suggestSpec("x") == null);
 }

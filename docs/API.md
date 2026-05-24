@@ -46,12 +46,12 @@ curl http://localhost:49453/v1/chat/completions -d '{
 | mirostat_tau | float | 5.0 | Mirostat target entropy (surprise) |
 | mirostat_eta | float | 0.1 | Mirostat learning rate |
 | logit_bias | object | null | Token ID → bias mapping: `{"123": 5.0, "456": -2.0}` (max 16 entries) |
-| logprobs | bool | false | Return log probabilities for output tokens |
-| top_logprobs | int | null | Number of top token log probabilities to return per position, 0-20 |
+| logprobs | bool | false | Return log probabilities for output tokens (streaming only) |
+| top_logprobs | int | null | Number of top token log probabilities to return per position, 0-20 (streaming only) |
 | n | int | 1 | Number of completions (only n=1 supported, n>1 returns 400) |
 | user | string | null | User identifier for request tracking (logged server-side) |
 | stream | bool | false | Server-Sent Events streaming |
-| stream_options | object | null | `{"include_usage": true/false}` — gate usage chunk in streaming |
+| stream_options | object | null | `{"include_usage": true/false}` — gate usage chunk in streaming (usage included by default when omitted) |
 | grammar | string | null | GBNF grammar for constrained decoding |
 | json_schema | string | null | JSON schema for structured output |
 | response_format | object | null | `{"type": "json_object"}` or `{"type": "json_schema", "json_schema": {"schema": {...}}}` |
@@ -65,7 +65,7 @@ curl http://localhost:49453/v1/chat/completions -d '{
   "object": "chat.completion",
   "created": 1700000000,
   "model": "model-name",
-  "system_fingerprint": "agave-v0.1",
+  "system_fingerprint": "agave-v0.1.0",
   "choices": [{
     "index": 0,
     "message": {"role": "assistant", "content": "..."},
@@ -75,7 +75,7 @@ curl http://localhost:49453/v1/chat/completions -d '{
 }
 ```
 
-`finish_reason` is `"stop"` (natural stop or stop sequence) or `"length"` (max_tokens reached).
+`finish_reason` is `"stop"` (natural stop or stop sequence), `"length"` (max_tokens reached), or `"tool_calls"` (model invoked a tool — see [Tool Calling](#tool-calling)).
 
 ### POST /v1/completions
 
@@ -97,6 +97,7 @@ Same sampling parameters as chat completions. Prompt is raw text (no chat templa
   "object": "text_completion",
   "created": 1700000000,
   "model": "model-name",
+  "system_fingerprint": "agave-v0.1.0",
   "choices": [{"text": "Paris.", "index": 0, "finish_reason": "stop"}],
   "usage": {"completion_tokens": 2, "prompt_tokens": 7, "total_tokens": 9}
 }
@@ -213,6 +214,8 @@ curl -X POST http://localhost:49453/v1/conversations -d 'action=delete&id=1'
 # {"ok":true,"cleared":false}
 ```
 
+Limits: maximum 100 concurrent conversations, 1000 messages per conversation.
+
 ### POST /v1/embeddings
 
 Not implemented. Returns 501.
@@ -232,7 +235,7 @@ Convert token IDs back to text.
 
 ```bash
 curl http://localhost:49453/v1/detokenize -d '{"tokens": [9906, 1917]}'
-# {"text": "Hello world"}
+# {"text": "Hello world", "model": "model-name"}
 ```
 
 ### GET /v1/models
@@ -254,7 +257,7 @@ Additional fields beyond OpenAI spec: `backend` (compute backend), `kv_seq_len` 
 
 ### GET /health
 
-Health check (no auth required). Returns status, uptime, active connections, KV cache utilization, and request counters. Status is `"ok"`, `"degraded"` (KV pressure or high error rate), or `"shutting_down"`.
+Health check (no auth required). Returns status, uptime, active connections, KV cache utilization, and request counters. Status is `"ok"`, `"degraded"` (KV pressure or high error rate), or `"shutting_down"`. When `--api-key` is configured and no valid auth header is provided, returns only `{"status":"...", "reason":"..."}` (no model/version/backend details) to prevent fingerprinting.
 
 ```json
 {"status":"ok","reason":"none","version":"0.1.0","model":"model-name","backend":"metal",
@@ -345,7 +348,7 @@ curl http://localhost:49453/v1/chat/completions -d '{
 
 The `content` field can be either a string (text only) or an array of content parts. Text parts (`"type": "text"`) provide the prompt; image parts (`"type": "image_url"`) provide the image as a base64 data URI. Only one image per request is supported. The image is processed by the vision encoder (SigLIP-2) and injected as visual tokens at the appropriate position in the prompt.
 
-Supported image formats: PNG, JPEG. Maximum resolution depends on the model (Gemma 4 E2B: 224×224, Gemma 4 26B: 768×768, Qwen VL: 448×448).
+Supported image formats: PNG only (JPEG is not yet supported — convert to PNG first). Maximum resolution depends on the model (Gemma 4 E2B: 224×224, Gemma 4 26B: 768×768, Qwen VL: 448×448).
 
 ---
 
@@ -447,23 +450,29 @@ Final event: `data: [DONE]`. Usage chunk sent before `[DONE]`.
 
 ## Error Responses
 
-All endpoints return JSON error bodies on failure:
+All endpoints return JSON error bodies on failure.
 
+**OpenAI format** (all endpoints except `/v1/messages`):
 ```json
-{"error": {"message": "Invalid request: missing 'messages' field", "type": "invalid_request_error"}}
+{"error": {"message": "Missing or empty messages array", "type": "invalid_request_error", "param": null, "code": null}}
+```
+
+**Anthropic format** (`/v1/messages` only):
+```json
+{"type": "error", "error": {"type": "invalid_request_error", "message": "Missing or empty messages array"}}
 ```
 
 | Status | When |
 |--------|------|
 | `400 Bad Request` | Malformed JSON, missing required fields, invalid parameter values |
 | `401 Unauthorized` | Missing or invalid `Authorization: Bearer <key>` when `--api-key` is set |
-| `404 Not Found` | Unknown endpoint |
+| `404 Not Found` | Unknown endpoint or conversation not found |
 | `405 Method Not Allowed` | Known endpoint with wrong HTTP method (includes `Allow` header) |
-| `413 Payload Too Large` | Request body exceeds server limit |
-| `429 Too Many Requests` | Rate limit exceeded (when rate limiter is active) |
+| `413 Payload Too Large` | Request body exceeds 1 MB server limit |
+| `429 Too Many Requests` | Rate limit exceeded (includes `Retry-After` header) |
 | `500 Internal Server Error` | Model forward error, OOM, or unexpected server failure |
 | `501 Not Implemented` | Endpoint exists but is not yet implemented (e.g., `/v1/embeddings`) |
-| `503 Service Unavailable` | Model not loaded yet (server still initializing) |
+| `503 Service Unavailable` | Server at capacity, conversation limit reached, shutting down, or degraded |
 
 ---
 
@@ -480,3 +489,21 @@ curl -H "X-API-Key: mysecret" http://localhost:49453/v1/messages -d '...'
 ```
 
 Returns 401 if key missing or wrong. No auth required when `--api-key` not set.
+
+---
+
+## Response Headers
+
+All responses include these headers:
+
+| Header | Description |
+|--------|-------------|
+| `X-Request-Id` | Monotonic request counter for log correlation (matches server-side `req=N` logs) |
+| `X-Content-Type-Options` | `nosniff` |
+| `X-Frame-Options` | `DENY` |
+| `Cache-Control` | `no-store` |
+| `Connection` | `close` (non-streaming) or `keep-alive` (SSE streaming) |
+
+Rate-limited responses (429) also include `Retry-After` with seconds until the next request is allowed.
+
+When no `--api-key` is configured, CORS headers (`Access-Control-Allow-Origin: *`) are included for browser access. CORS is disabled when authentication is active.

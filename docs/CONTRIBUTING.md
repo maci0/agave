@@ -42,7 +42,7 @@ pub const YourBackend = struct {
 4. Add `enable-yourmodel` build flag in `build.zig` (both `b.option()` and `backend_options.addOption()`)
 5. Add variant to `Arch` enum in `src/arch.zig` with `detect`, `displayName`, `chatTemplate`, `isEnabled`, `buildFlag` methods
 6. Add to `initAndRun` switch in `src/main.zig`
-7. Update `src/format/format.zig` for weight loading
+7. Add weight loading in your model's `init()` using the `Format` interface (`getTensor`, `layerTensor`, `getMetaU32`, etc.)
 8. Add golden test against reference implementation
 
 **Required interface** (see `src/models/model.zig` for the vtable contract):

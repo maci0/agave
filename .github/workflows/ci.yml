@@ -127,6 +127,7 @@ jobs:
             ENABLE_NEMOTRON_NANO=false
             ENABLE_GLM4=false
             ENABLE_GEMMA4=false
+            ENABLE_LLAMA4=false
           cache-from: type=gha
           cache-to: type=gha,mode=max
 

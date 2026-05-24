@@ -8,7 +8,7 @@ const kv_quant = @import("kv_quant.zig");
 const KvQuantType = kv_quant.KvQuantType;
 const split_attn = @import("split_attention.zig");
 const ThreadPool = @import("../thread_pool.zig").ThreadPool;
-const softmax_kernel = @import("../backend/kernels/cpu/softmax.zig");
+const softmax_kernel = @import("../backend/backend.zig").CpuSoftmax;
 
 /// SIMD vector width (number of f32 lanes) used for dot-product and accumulation loops.
 const simd_width: usize = 8;
@@ -99,6 +99,8 @@ pub fn scaledDotProductAttention(
         const f32_values: [*]const f32 = @ptrCast(@alignCast(kv_values.ptr));
         const SimdVec = @Vector(simd_width, f32);
 
+        @memset(attn_out[0 .. nh * hd], 0);
+
         for (0..nh) |h| {
             const kvh = h / hpg;
             const q_base = h * hd;
@@ -121,9 +123,6 @@ pub fn scaledDotProductAttention(
             const n_scores = score_offset + win_len;
             cpuSoftmax(scores, n_scores);
 
-            // V accumulation — position-outer, dimension-inner for cache locality.
-            @memset(attn_out[q_base..][0..hd], 0);
-
             for (0..win_len) |wi| {
                 const score = scores[score_offset + wi];
                 if (score < sparse_v_threshold) continue; // Sparse V: skip negligible positions
@@ -145,6 +144,8 @@ pub fn scaledDotProductAttention(
     }
 
     // Quantized windowed fallback — use kvDot (kv_type_k) / kvMulAccum (kv_type_v)
+    @memset(attn_out[0 .. nh * hd], 0);
+
     for (0..nh) |h| {
         const kvh = h / hpg;
         const q_base = h * hd;
@@ -161,7 +162,6 @@ pub fn scaledDotProductAttention(
         cpuSoftmax(scores, n_scores);
 
         // V accumulation (value type) with sparse V skip
-        @memset(attn_out[q_base..][0..hd], 0);
         for (0..win_len) |wi| {
             const score = scores[score_offset + wi];
             if (score < sparse_v_threshold) continue; // Sparse V: skip negligible positions
@@ -294,6 +294,10 @@ pub fn pagedAttention(
     const sl = seq_len + 1;
     const hpg = nh / nkv;
     const SimdVec = @Vector(simd_width, f32);
+    const blk_shift: std.math.Log2Int(usize) = if (std.math.isPowerOfTwo(block_size)) @intCast(@ctz(block_size)) else 0;
+    const blk_mask: usize = if (blk_shift != 0) block_size - 1 else 0;
+
+    @memset(attn_out[0 .. nh * hd], 0);
 
     for (0..nh) |h| {
         const kvh = h / hpg;
@@ -301,8 +305,8 @@ pub fn pagedAttention(
 
         // QK dot products — look up K from block table
         for (0..sl) |t| {
-            const lb = t / block_size;
-            const bo = t % block_size;
+            const lb = if (blk_mask != 0) t >> blk_shift else t / block_size;
+            const bo = if (blk_mask != 0) t & blk_mask else t % block_size;
             const phys = block_table[lb];
             const k_start = bo * kvd + kvh * hd;
 
@@ -323,13 +327,10 @@ pub fn pagedAttention(
         // Value accumulation from block table — t-outer loop to compute
         // block lookups (div/mod) once per position instead of per dimension.
         {
-            // Zero-init output for this head
-            @memset(attn_out[q_base..][0..hd], 0);
-
             for (0..sl) |t| {
                 if (scores[t] < sparse_v_threshold) continue;
-                const lb = t / block_size;
-                const bo = t % block_size;
+                const lb = if (blk_mask != 0) t >> blk_shift else t / block_size;
+                const bo = if (blk_mask != 0) t & blk_mask else t % block_size;
                 const phys = block_table[lb];
                 const v_start = bo * kvd + kvh * hd;
                 const sv: SimdVec = @splat(scores[t]);
@@ -365,6 +366,7 @@ test "sdpa single head single token" {
 
     const BackendState = @import("../backend/backend.zig").BackendState;
     var threaded = std.Io.Threaded.init(std.testing.allocator, .{});
+    defer threaded.deinit();
     var bs = BackendState{};
     bs.init(std.testing.allocator, .cpu, threaded.io(), 0);
     defer if (bs.pool) |*p| p.deinit();
@@ -408,6 +410,7 @@ test "sdpa multi-token with GQA" {
 
     const BackendState = @import("../backend/backend.zig").BackendState;
     var threaded = std.Io.Threaded.init(std.testing.allocator, .{});
+    defer threaded.deinit();
     var bs = BackendState{};
     bs.init(std.testing.allocator, .cpu, threaded.io(), 0);
     defer if (bs.pool) |*p| p.deinit();
@@ -457,6 +460,7 @@ test "paged attention single head single token" {
 
     const BackendState = @import("../backend/backend.zig").BackendState;
     var threaded = std.Io.Threaded.init(std.testing.allocator, .{});
+    defer threaded.deinit();
     var bs = BackendState{};
     bs.init(std.testing.allocator, .cpu, threaded.io(), 0);
     defer if (bs.pool) |*p| p.deinit();
@@ -507,6 +511,7 @@ test "sdpa asymmetric kv types" {
 
     const BackendState = @import("../backend/backend.zig").BackendState;
     var threaded = std.Io.Threaded.init(std.testing.allocator, .{});
+    defer threaded.deinit();
     var bs = BackendState{};
     bs.init(std.testing.allocator, .cpu, threaded.io(), 0);
     defer if (bs.pool) |*p| p.deinit();
@@ -557,6 +562,7 @@ test "sdpa exercises SIMD path with hd=16" {
 
     const BackendState = @import("../backend/backend.zig").BackendState;
     var threaded = std.Io.Threaded.init(std.testing.allocator, .{});
+    defer threaded.deinit();
     var bs = BackendState{};
     bs.init(std.testing.allocator, .cpu, threaded.io(), 0);
     defer if (bs.pool) |*p| p.deinit();
@@ -602,6 +608,7 @@ test "sdpa windowed attention excludes tokens outside window" {
 
     const BackendState = @import("../backend/backend.zig").BackendState;
     var threaded = std.Io.Threaded.init(std.testing.allocator, .{});
+    defer threaded.deinit();
     var bs = BackendState{};
     bs.init(std.testing.allocator, .cpu, threaded.io(), 0);
     defer if (bs.pool) |*p| p.deinit();

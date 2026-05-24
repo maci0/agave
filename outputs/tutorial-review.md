@@ -1,7 +1,7 @@
 # Tutorial Suite Review — `docs/tutorial/`
 
 **Date:** 2026-05-10  
-**Scope:** All 17 chapters + 4 appendices + README  
+**Scope:** All 18 chapters + 4 appendices + README  
 **Focus:** Factual accuracy, paper references, structural quality, improvements
 
 ---

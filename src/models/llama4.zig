@@ -503,10 +503,7 @@ pub const Llama4Model = struct {
                 const pos_f: f32 = @floatFromInt(self.pf_positions[t] + 1);
                 const temp = @log(@floor(pos_f / self.attn_floor_scale) + 1.0) * self.attn_temp_scale + 1.0;
                 if (temp != 1.0) {
-                    const q_offset = t * qkv_dim;
-                    for (0..qkv_dim) |i| {
-                        self.pf_q[q_offset + i] *= temp;
-                    }
+                    math_ops.simdScaleF32(self.pf_q.ptr + t * qkv_dim, temp, qkv_dim);
                 }
             }
         }
@@ -754,9 +751,7 @@ pub const Llama4Model = struct {
             const temp = @log(@floor(pos_f / self.attn_floor_scale) + 1.0) * self.attn_temp_scale + 1.0;
             if (temp != 1.0) {
                 const qkv_dim = nh * hd;
-                for (0..qkv_dim) |i| {
-                    self.q_buf[i] *= temp;
-                }
+                math_ops.simdScaleF32(self.q_buf.ptr, temp, qkv_dim);
             }
         }
 
@@ -1036,16 +1031,16 @@ pub const Llama4Model = struct {
         };
     }
 
-    const PagedKvView = @import("../kvcache/manager.zig").PagedKvView;
+    const PagedKvView = kvcache.PagedKvView;
 
     fn getPagedKvView(self: *Llama4Model, layer: usize) PagedKvView {
-        return .{
-            .block_table = self.seq_table.block_table[layer],
-            .blocks = self.paged_cache.blocks,
-            .block_size = self.paged_cache.block_size,
-            .kv_dim = self.paged_cache.kv_dim,
-            .seq_len = self.kv_seq_len,
-        };
+        return PagedKvView.initView(
+            self.seq_table.block_table[layer],
+            self.paged_cache.blocks,
+            self.paged_cache.block_size,
+            self.paged_cache.kv_dim,
+            self.kv_seq_len,
+        );
     }
 
     fn isMultiBlock(self: *Llama4Model, layer: usize) bool {

@@ -92,4 +92,19 @@ test "gptq dequant basic" {
     const nibble1: u4 = @truncate(word >> 4);
     try std.testing.expectEqual(@as(u4, 1), nibble0);
     try std.testing.expectEqual(@as(u4, 2), nibble1);
+
+    // Full GEMV: 1 row, k=8, group_size=8
+    // Packed INT4 weights: [1, 2, 3, 0, 1, 2, 3, 0]
+    const qweight = [_]u32{0x03210321};
+    // Scale = 2.0 as f16
+    const scales = [_]u16{@bitCast(@as(f16, 2.0))};
+    // Zero-point = 1 in lowest nibble
+    const qzeros = [_]u32{0x00000001};
+    const x = [_]f32{1.0} ** 8;
+    var y = [_]f32{0.0};
+
+    // dequant: (nibble - zero) * scale = [0, 2, 4, -2, 0, 2, 4, -2]
+    // dot with all-ones x = 8.0
+    gptqGemv(&x, &qweight, &scales, &qzeros, &y, 1, 8, 8);
+    try std.testing.expectApproxEqAbs(@as(f32, 8.0), y[0], 1e-4);
 }

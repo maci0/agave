@@ -959,16 +959,16 @@ fn fuseOneProjection(
     const e0_scale_name = std.fmt.bufPrint(&s_buf, "{s}layers.{d}.mlp.experts.0.{s}.weight_scale", .{ prefix, layer, hf_proj }) catch return;
     const e0_s = tensors.get(e0_scale_name) orelse return;
 
-    // Compute per-expert byte sizes.
+    // Compute per-expert byte sizes (checked to prevent overflow from crafted shapes).
     // weight_packed: [out, in/2] U8 bytes → total = out * in/2
     const w_rows = if (e0_w.n_dims >= 1) e0_w.dims[0] else return;
     const w_cols = if (e0_w.n_dims >= 2) e0_w.dims[1] else return;
-    const w_bytes: usize = @as(usize, @intCast(w_rows)) * @as(usize, @intCast(w_cols));
+    const w_bytes: usize = std.math.mul(usize, @as(usize, @intCast(w_rows)), @as(usize, @intCast(w_cols))) catch return;
 
     // weight_scale: [out, in/16] FP8 bytes → total = out * in/16
     const s_rows = if (e0_s.n_dims >= 1) e0_s.dims[0] else return;
     const s_cols = if (e0_s.n_dims >= 2) e0_s.dims[1] else return;
-    const s_bytes: usize = @as(usize, @intCast(s_rows)) * @as(usize, @intCast(s_cols));
+    const s_bytes: usize = std.math.mul(usize, @as(usize, @intCast(s_rows)), @as(usize, @intCast(s_cols))) catch return;
 
     // Verify all experts are contiguous in memory (same shard, sequential offsets).
     var contiguous = true;
@@ -983,9 +983,13 @@ fn fuseOneProjection(
             contiguous = false;
             break;
         };
-        // Check same shard and expected offset.
+        // Check same shard and expected offset (checked arithmetic to prevent wrap).
+        const ei_w_expected = std.math.mul(usize, ei, w_bytes) catch {
+            contiguous = false;
+            break;
+        };
         if (ei_w.shard_idx != e0_w.shard_idx or
-            ei_w.data_start != e0_w.data_start + ei * w_bytes)
+            ei_w.data_start != e0_w.data_start + ei_w_expected)
         {
             contiguous = false;
             break;
@@ -999,8 +1003,12 @@ fn fuseOneProjection(
             contiguous = false;
             break;
         };
+        const ei_s_expected = std.math.mul(usize, ei, s_bytes) catch {
+            contiguous = false;
+            break;
+        };
         if (ei_s.shard_idx != e0_s.shard_idx or
-            ei_s.data_start != e0_s.data_start + ei * s_bytes)
+            ei_s.data_start != e0_s.data_start + ei_s_expected)
         {
             contiguous = false;
             break;
@@ -1020,8 +1028,8 @@ fn fuseOneProjection(
     if (!contiguous) {
         // Experts are non-contiguous in the SafeTensors file. Allocate contiguous
         // buffers and copy each expert's data sequentially.
-        const total_w = @as(usize, n_experts) * w_bytes;
-        const total_s = @as(usize, n_experts) * s_bytes;
+        const total_w = std.math.mul(usize, @as(usize, n_experts), w_bytes) catch return error.Overflow;
+        const total_s = std.math.mul(usize, @as(usize, n_experts), s_bytes) catch return error.Overflow;
         // Use page_allocator for GPU compatibility (Metal newBufferWithBytesNoCopy
         // requires page-aligned pointers).
         const pa = std.heap.page_allocator;
@@ -1095,6 +1103,7 @@ fn fuseOneProjection(
         // Also repack global_scale for non-contiguous experts
         if (create_global_scale) {
             const gs_array2 = try allocator.alloc(f32, n_experts);
+            errdefer allocator.free(gs_array2);
             try repacked_f32.append(allocator, gs_array2);
             var gs_buf3: [fusion_name_buf_size]u8 = undefined;
             for (0..n_experts) |gi| {
@@ -1107,7 +1116,7 @@ fn fuseOneProjection(
                         const sh = shard_data[gs_e.shard_idx];
                         const a = sh.tensor_base + gs_e.data_start;
                         if (a + 4 <= sh.data.len) {
-                            gs_array2[gi] = @as(*const f32, @ptrCast(@alignCast(sh.data.ptr + a))).*;
+                            gs_array2[gi] = std.mem.bytesToValue(f32, sh.data[a..][0..4]);
                             continue;
                         }
                     }
@@ -1122,6 +1131,7 @@ fn fuseOneProjection(
 
             // Also repack input_global_scale
             const is_array = try allocator.alloc(f32, n_experts);
+            errdefer allocator.free(is_array);
             try repacked_f32.append(allocator, is_array);
             var is_buf3: [fusion_name_buf_size]u8 = undefined;
             for (0..n_experts) |gi| {
@@ -1134,7 +1144,7 @@ fn fuseOneProjection(
                         const sh2 = shard_data[is_e.shard_idx];
                         const a2 = sh2.tensor_base + is_e.data_start;
                         if (a2 + 4 <= sh2.data.len) {
-                            is_array[gi] = @as(*const f32, @ptrCast(@alignCast(sh2.data.ptr + a2))).*;
+                            is_array[gi] = std.mem.bytesToValue(f32, sh2.data[a2..][0..4]);
                             continue;
                         }
                     }
@@ -1180,6 +1190,7 @@ fn fuseOneProjection(
     // Create synthetic global_scale entry: blk.{l}.ffn_{proj}_exps.global_scale
     if (create_global_scale) {
         const gs_array = try allocator.alloc(f32, n_experts);
+        errdefer allocator.free(gs_array);
         try repacked_f32.append(allocator, gs_array);
         var gs_name_buf2: [fusion_name_buf_size]u8 = undefined;
         for (0..n_experts) |gi| {
@@ -1192,7 +1203,7 @@ fn fuseOneProjection(
                     const shard = shard_data[gs_entry.shard_idx];
                     const abs = shard.tensor_base + gs_entry.data_start;
                     if (abs + 4 <= shard.data.len) {
-                        gs_array[gi] = @as(*const f32, @ptrCast(@alignCast(shard.data.ptr + abs))).*;
+                        gs_array[gi] = std.mem.bytesToValue(f32, shard.data[abs..][0..4]);
                         continue;
                     }
                 }
@@ -1202,6 +1213,7 @@ fn fuseOneProjection(
 
         // Also repack input_global_scale (contiguous path)
         const is_array = try allocator.alloc(f32, n_experts);
+        errdefer allocator.free(is_array);
         try repacked_f32.append(allocator, is_array);
         var is_buf_c: [fusion_name_buf_size]u8 = undefined;
         for (0..n_experts) |gi| {
@@ -1214,7 +1226,7 @@ fn fuseOneProjection(
                     const sh2 = shard_data[is_e.shard_idx];
                     const a2 = sh2.tensor_base + is_e.data_start;
                     if (a2 + 4 <= sh2.data.len) {
-                        is_array[gi] = @as(*const f32, @ptrCast(@alignCast(sh2.data.ptr + a2))).*;
+                        is_array[gi] = std.mem.bytesToValue(f32, sh2.data[a2..][0..4]);
                         continue;
                     }
                 }
@@ -2463,4 +2475,9 @@ test "fuseNvfp4Experts creates synthetic entries" {
     const fused_s = fused.get("blk.0.ffn_gate_exps.scales") orelse return error.MissingTensor;
     try std.testing.expectEqual(DType.fp8_e4m3, fused_s.dtype);
     try std.testing.expectEqual(@as(u32, 3), fused_s.n_dims);
+    try std.testing.expectEqual(@as(u64, 4), fused_s.dims[0]); // rows
+    try std.testing.expectEqual(@as(u64, 1), fused_s.dims[1]); // cols
+    try std.testing.expectEqual(@as(u64, 2), fused_s.dims[2]); // n_experts
+    try std.testing.expectEqual(@as(usize, 2 * w_bytes), fused_s.data_start);
+    try std.testing.expectEqual(@as(usize, 2 * w_bytes + 2 * s_bytes), fused_s.data_end);
 }

@@ -349,7 +349,9 @@ pub const LineEditor = struct {
 
     fn disableRaw(self: *LineEditor) void {
         if (self.orig_termios) |orig| {
-            posix.tcsetattr(self.fd, .FLUSH, orig) catch {};
+            posix.tcsetattr(self.fd, .FLUSH, orig) catch |err| {
+                std.log.warn("tcsetattr restore failed: {s}", .{@errorName(err)});
+            };
         }
     }
 

@@ -103,13 +103,21 @@ pub const ThreadPool = struct {
             return;
         }
 
-        // Post task
+        // Atomically claim the pool: active 0 → n_workers.
+        // CAS eliminates the TOCTOU in a load-then-store guard: if two callers
+        // race, only one succeeds; the other falls back to inline execution.
+        if (self.active.cmpxchgWeak(0, @intCast(self.n_workers), .acq_rel, .monotonic)) |still_active| {
+            std.log.err("ThreadPool: concurrent parallelFor detected (active={d}), running inline", .{still_active});
+            func(ctx, 0, total);
+            return;
+        }
+
+        // Post task (published to workers by generation.fetchAdd release below)
         self.task_func = func;
         self.task_ctx = ctx;
         self.task_total = total;
         self.task_grain = effective_grain;
         self.task_counter.store(0, .release);
-        self.active.store(@intCast(self.n_workers), .release);
 
         // Wake workers by bumping generation
         _ = self.generation.fetchAdd(1, .release);

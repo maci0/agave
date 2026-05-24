@@ -1393,76 +1393,107 @@ fn batchedGemvCpu(inputs: [*]const f32, t: TensorInfo, outputs: [*]f32, np: usiz
 /// output[i] = input[i] / rms(input) * weight[i]
 /// where rms = sqrt(mean(x^2) + eps).
 fn rmsNormCpu(input: []const f32, output: []f32, weight: [*]const f32, n: usize, eps: f32) void {
-    var sum_sq: f32 = 0.0;
-    for (0..n) |i| sum_sq += input[i] * input[i];
+    const V8 = @Vector(8, f32);
+    const sum_sq = math_ops.simdDotF32(input.ptr, input.ptr, n);
     const inv_rms = 1.0 / @sqrt(sum_sq / @as(f32, @floatFromInt(n)) + eps);
-    for (0..n) |i| {
-        output[i] = input[i] * inv_rms * weight[i];
+    const inv_v: V8 = @splat(inv_rms);
+    var i: usize = 0;
+    while (i + 8 <= n) : (i += 8) {
+        output[i..][0..8].* = @as(V8, input[i..][0..8].*) * inv_v * @as(V8, weight[i..][0..8].*);
     }
+    while (i < n) : (i += 1) output[i] = input[i] * inv_rms * weight[i];
 }
 
 /// CPU-side in-place RMS normalization with learned weights (no bias).
 /// x[i] = x[i] / rms(x) * weight[i]
 fn rmsNormInPlace(x: []f32, weight: [*]const f32, n: usize, eps: f32) void {
-    var sum_sq: f32 = 0.0;
-    for (0..n) |i| sum_sq += x[i] * x[i];
+    const V8 = @Vector(8, f32);
+    const sum_sq = math_ops.simdDotF32(x.ptr, x.ptr, n);
     const inv_rms = 1.0 / @sqrt(sum_sq / @as(f32, @floatFromInt(n)) + eps);
-    for (0..n) |i| {
-        x[i] = x[i] * inv_rms * weight[i];
+    const inv_v: V8 = @splat(inv_rms);
+    var i: usize = 0;
+    while (i + 8 <= n) : (i += 8) {
+        x[i..][0..8].* = @as(V8, x[i..][0..8].*) * inv_v * @as(V8, weight[i..][0..8].*);
     }
+    while (i < n) : (i += 1) x[i] = x[i] * inv_rms * weight[i];
 }
 
 /// CPU-side in-place RMS normalization without learned weights.
 /// x[i] = x[i] / rms(x)
 /// Used for the Gemma4 embedding_pre_projection_norm (with_scale=False).
 fn rmsNormInPlaceNoWeight(x: []f32, n: usize, eps: f32) void {
-    var sum_sq: f32 = 0.0;
-    for (0..n) |i| sum_sq += x[i] * x[i];
+    const sum_sq = math_ops.simdDotF32(x.ptr, x.ptr, n);
     const inv_rms = 1.0 / @sqrt(sum_sq / @as(f32, @floatFromInt(n)) + eps);
-    for (0..n) |i| {
-        x[i] = x[i] * inv_rms;
-    }
+    math_ops.simdScaleF32(x.ptr, inv_rms, n);
 }
 
 /// CPU-side full LayerNorm (mean subtraction + variance normalization) with weight and bias.
 /// output[i] = (input[i] - mean) / sqrt(var + eps) * weight[i] + bias[i]
 fn layerNormCpu(input: []const f32, output: []f32, weight: [*]const f32, bias: [*]const f32, n: usize, eps: f32) void {
-    // Compute mean
-    var sum: f32 = 0.0;
-    for (0..n) |i| sum += input[i];
+    const V8 = @Vector(8, f32);
+    // SIMD mean
+    var sum_v: V8 = @splat(0.0);
+    var i: usize = 0;
+    while (i + 8 <= n) : (i += 8) sum_v += @as(V8, input[i..][0..8].*);
+    var sum: f32 = @reduce(.Add, sum_v);
+    while (i < n) : (i += 1) sum += input[i];
     const mean = sum / @as(f32, @floatFromInt(n));
 
-    // Compute variance
-    var sum_sq: f32 = 0.0;
-    for (0..n) |i| {
+    // SIMD variance
+    const mean_v: V8 = @splat(mean);
+    var sq_v: V8 = @splat(0.0);
+    i = 0;
+    while (i + 8 <= n) : (i += 8) {
+        const d = @as(V8, input[i..][0..8].*) - mean_v;
+        sq_v = @mulAdd(V8, d, d, sq_v);
+    }
+    var sum_sq: f32 = @reduce(.Add, sq_v);
+    while (i < n) : (i += 1) {
         const diff = input[i] - mean;
         sum_sq += diff * diff;
     }
     const inv_std = 1.0 / @sqrt(sum_sq / @as(f32, @floatFromInt(n)) + eps);
 
-    // Normalize, scale, and shift
-    for (0..n) |i| {
-        output[i] = (input[i] - mean) * inv_std * weight[i] + bias[i];
+    // SIMD normalize, scale, shift
+    const inv_v: V8 = @splat(inv_std);
+    i = 0;
+    while (i + 8 <= n) : (i += 8) {
+        output[i..][0..8].* = (@as(V8, input[i..][0..8].*) - mean_v) * inv_v * @as(V8, weight[i..][0..8].*) + @as(V8, bias[i..][0..8].*);
     }
+    while (i < n) : (i += 1) output[i] = (input[i] - mean) * inv_std * weight[i] + bias[i];
 }
 
 /// CPU-side in-place full LayerNorm with weight and bias.
 /// x[i] = (x[i] - mean) / sqrt(var + eps) * weight[i] + bias[i]
 fn layerNormInPlace(x: []f32, weight: [*]const f32, bias: [*]const f32, n: usize, eps: f32) void {
-    var sum: f32 = 0.0;
-    for (0..n) |i| sum += x[i];
+    const V8 = @Vector(8, f32);
+    var sum_v: V8 = @splat(0.0);
+    var i: usize = 0;
+    while (i + 8 <= n) : (i += 8) sum_v += @as(V8, x[i..][0..8].*);
+    var sum: f32 = @reduce(.Add, sum_v);
+    while (i < n) : (i += 1) sum += x[i];
     const mean = sum / @as(f32, @floatFromInt(n));
 
-    var sum_sq: f32 = 0.0;
-    for (0..n) |i| {
+    const mean_v: V8 = @splat(mean);
+    var sq_v: V8 = @splat(0.0);
+    i = 0;
+    while (i + 8 <= n) : (i += 8) {
+        const d = @as(V8, x[i..][0..8].*) - mean_v;
+        sq_v = @mulAdd(V8, d, d, sq_v);
+    }
+    var sum_sq: f32 = @reduce(.Add, sq_v);
+    while (i < n) : (i += 1) {
         const diff = x[i] - mean;
         sum_sq += diff * diff;
     }
     const inv_std = 1.0 / @sqrt(sum_sq / @as(f32, @floatFromInt(n)) + eps);
 
-    for (0..n) |i| {
-        x[i] = (x[i] - mean) * inv_std * weight[i] + bias[i];
+    const inv_v: V8 = @splat(inv_std);
+    i = 0;
+    while (i + 8 <= n) : (i += 8) {
+        x[i..][0..8].* = (@as(V8, x[i..][0..8].*) - mean_v) * inv_v * @as(V8, weight[i..][0..8].*) + @as(V8, bias[i..][0..8].*);
     }
+    while (i < n) : (i += 1) x[i] = (x[i] - mean) * inv_std * weight[i] + bias[i];
 }
 
 /// SiLU activation: x * sigmoid(x).

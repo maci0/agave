@@ -4,23 +4,32 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const Message = @import("../chat_template.zig").Message;
+const math_ops = @import("../ops/math.zig");
 
 // ── Constants ───────────────────────────────────────────────────
 
 const extract_field_buf_size: usize = 256;
-/// Maximum messages extractable from a single API request body.
+
+/// Build a quoted JSON key needle (`"field"`) into the provided buffer.
+fn quoteFieldKey(buf: *[extract_field_buf_size]u8, field: []const u8) ?[]const u8 {
+    return std.fmt.bufPrint(buf, "\"{s}\"", .{field}) catch null;
+}
+
 const max_api_messages: usize = 128;
 /// Maximum valid sampling temperature (prevents numerical instability in softmax).
 const max_temperature: f32 = 100.0;
 /// Scan window (bytes after key) for response_format value detection.
 const response_format_scan_window: usize = 200;
-/// Maximum valid top_k value (larger values are clamped, not rejected).
-const max_top_k: u32 = 1024;
+/// Maximum valid top_k value — must match math_ops stack buffer size.
+const max_top_k: u32 = math_ops.max_top_k;
 
 // ── Types ───────────────────────────────────────────────────────
 
 /// Maximum number of stop sequences per request.
 const max_stop_sequences: usize = 4;
+
+/// Maximum number of logit bias entries per request.
+const max_logit_bias: usize = 16;
 
 /// Maximum number of tool definitions per request.
 const max_tools: usize = 8;
@@ -33,7 +42,7 @@ pub const ToolDef = struct {
 };
 
 /// Parsed tool call result from model output.
-pub const ToolCallResult = struct {
+const ToolCallResult = struct {
     name: []const u8,
     arguments: []const u8,
 };
@@ -65,9 +74,9 @@ pub const SamplingParams = struct {
     seed: ?u64 = null,
     logprobs: bool = false,
     top_logprobs: u32 = 0,
-    /// Logit bias: up to 16 token_id→bias pairs from {"logit_bias": {"123": 5.0}}
-    logit_bias_ids: [16]u32 = .{0} ** 16,
-    logit_bias_vals: [16]f32 = .{0} ** 16,
+    /// Logit bias: up to max_logit_bias token_id→bias pairs from {"logit_bias": {"123": 5.0}}
+    logit_bias_ids: [max_logit_bias]u32 = .{0} ** max_logit_bias,
+    logit_bias_vals: [max_logit_bias]f32 = .{0} ** max_logit_bias,
     logit_bias_count: u32 = 0,
     stream_include_usage: bool = true,
     user: ?[]const u8 = null,
@@ -109,20 +118,22 @@ pub const ExtractedMessages = struct {
 /// Check if a JSON body contains `"field": true`.
 pub fn extractBoolField(json: []const u8, field: []const u8) bool {
     var buf: [extract_field_buf_size]u8 = undefined;
-    const needle = std.fmt.bufPrint(&buf, "\"{s}\"", .{field}) catch return false;
+    const needle = quoteFieldKey(&buf, field) orelse return false;
     var search_start: usize = 0;
     const i = findFieldValuePos(json, needle, &search_start) orelse return false;
     return i + 4 <= json.len and std.mem.eql(u8, json[i..][0..4], "true");
 }
 
 /// Extract an integer field value from a JSON body (e.g., `"max_tokens": 128`).
+/// Scans at most 20 digits (max decimal length of u64) to bound parsing cost.
 pub fn extractIntField(json: []const u8, field: []const u8) ?usize {
     var buf: [extract_field_buf_size]u8 = undefined;
-    const needle = std.fmt.bufPrint(&buf, "\"{s}\"", .{field}) catch return null;
+    const needle = quoteFieldKey(&buf, field) orelse return null;
+    const max_int_digits = 20;
     var search_start: usize = 0;
     while (findFieldValuePos(json, needle, &search_start)) |val_pos| {
         var end = val_pos;
-        while (end < json.len and json[end] >= '0' and json[end] <= '9') : (end += 1) {}
+        while (end < json.len and end - val_pos < max_int_digits and json[end] >= '0' and json[end] <= '9') : (end += 1) {}
         if (end == val_pos) continue;
         return std.fmt.parseInt(usize, json[val_pos..end], 10) catch continue;
     }
@@ -130,13 +141,15 @@ pub fn extractIntField(json: []const u8, field: []const u8) ?usize {
 }
 
 /// Extract a floating-point field value from a JSON body (e.g., `"temperature": 0.7`).
+/// Scans at most 32 characters to bound parsing cost on malicious input.
 pub fn extractFloatField(json: []const u8, field: []const u8) ?f32 {
     var buf: [extract_field_buf_size]u8 = undefined;
-    const needle = std.fmt.bufPrint(&buf, "\"{s}\"", .{field}) catch return null;
+    const needle = quoteFieldKey(&buf, field) orelse return null;
+    const max_float_chars = 32;
     var search_start: usize = 0;
     while (findFieldValuePos(json, needle, &search_start)) |val_pos| {
         var end = val_pos;
-        while (end < json.len and (json[end] == '.' or (json[end] >= '0' and json[end] <= '9') or json[end] == '-' or json[end] == 'e' or json[end] == 'E' or json[end] == '+')) : (end += 1) {}
+        while (end < json.len and end - val_pos < max_float_chars and (json[end] == '.' or (json[end] >= '0' and json[end] <= '9') or json[end] == '-' or json[end] == 'e' or json[end] == 'E' or json[end] == '+')) : (end += 1) {}
         if (end == val_pos) continue;
         return std.fmt.parseFloat(f32, json[val_pos..end]) catch continue;
     }
@@ -191,7 +204,7 @@ fn findFieldValuePos(json_buf: []const u8, needle: []const u8, search_start: *us
 /// Handles false matches inside string values by requiring a colon after the key.
 pub fn extractField(json: []const u8, field: []const u8) ?[]const u8 {
     var buf: [extract_field_buf_size]u8 = undefined;
-    const needle = std.fmt.bufPrint(&buf, "\"{s}\"", .{field}) catch return null;
+    const needle = quoteFieldKey(&buf, field) orelse return null;
     // Retry loop: the needle may match inside a JSON string value (e.g.,
     // content containing "\"system\""). skipToJsonValue rejects those
     // (no colon follows), so we advance past false matches.
@@ -213,7 +226,7 @@ pub fn extractField(json: []const u8, field: []const u8) ?[]const u8 {
 /// Returns the raw slice including braces/brackets (e.g., `{"city":"Paris"}`).
 pub fn extractObjectField(json_buf: []const u8, field: []const u8) ?[]const u8 {
     var buf: [extract_field_buf_size]u8 = undefined;
-    const needle = std.fmt.bufPrint(&buf, "\"{s}\"", .{field}) catch return null;
+    const needle = quoteFieldKey(&buf, field) orelse return null;
     var search_start: usize = 0;
     while (search_start < json_buf.len) {
         const pos = findFieldValuePos(json_buf, needle, &search_start) orelse return null;
@@ -278,7 +291,7 @@ pub fn parseSampling(body: []const u8) SamplingParams {
         if (std.mem.indexOf(u8, rf_window, "json_object") != null) {
             json_mode = true;
         } else if (std.mem.indexOf(u8, rf_window, "json_schema") != null) {
-            if (extractField(body, "schema")) |s| {
+            if (extractObjectField(body, "schema")) |s| {
                 schema_from_rf = s;
             }
         }
@@ -322,7 +335,7 @@ pub fn parseSampling(body: []const u8) SamplingParams {
         .top_logprobs = @intCast(@min(extractIntField(body, "top_logprobs") orelse 0, 20)),
         .stream_include_usage = blk: {
             // stream_options.include_usage — default true for compat
-            if (extractField(body, "stream_options")) |so| {
+            if (extractObjectField(body, "stream_options")) |so| {
                 break :blk extractBoolField(so, "include_usage");
             }
             break :blk true;
@@ -371,9 +384,9 @@ pub fn parseSampling(body: []const u8) SamplingParams {
     }
 
     // Parse logit_bias: {"logit_bias": {"123": 5.0, "456": -2.0}}
-    if (extractField(body, "logit_bias")) |lb_str| {
+    if (extractObjectField(body, "logit_bias")) |lb_str| {
         var i: usize = 0;
-        while (i < lb_str.len and result.logit_bias_count < 16) {
+        while (i < lb_str.len and result.logit_bias_count < max_logit_bias) {
             // Find quoted key (token ID)
             if (std.mem.indexOfScalarPos(u8, lb_str, i, '"')) |q1| {
                 if (std.mem.indexOfScalarPos(u8, lb_str, q1 + 1, '"')) |q2| {
@@ -618,7 +631,6 @@ pub fn extractFormImage(body: []const u8) ?[]const u8 {
 fn extractTextFromContentArray(obj: []const u8) ?[]const u8 {
     const arr = extractObjectField(obj, "content") orelse return null;
     if (arr.len == 0 or arr[0] != '[') return null;
-    const text_type = "\"text\"";
     var pos: usize = 0;
     while (pos < arr.len) {
         const type_pos = std.mem.indexOfPos(u8, arr, pos, "\"type\"") orelse break;
@@ -630,7 +642,6 @@ fn extractTextFromContentArray(obj: []const u8) ?[]const u8 {
         if (std.mem.eql(u8, type_val, "text")) {
             // Found text type — extract its "text" field
             const remaining = arr[val_end..];
-            _ = text_type;
             return extractField(remaining, "text");
         }
         pos = val_end;
@@ -813,6 +824,7 @@ pub fn jsonUnescape(allocator: Allocator, input: []const u8) ![]u8 {
     if (std.mem.indexOf(u8, input, "\\") == null) return @constCast(input);
 
     const buf = try allocator.alloc(u8, input.len);
+    errdefer allocator.free(buf);
     var out: usize = 0;
     var i: usize = 0;
 
@@ -1301,4 +1313,109 @@ test "extractTextFromContentArray string content" {
     const obj = \\{"role":"user","content":"hello"}
     ;
     try std.testing.expect(extractTextFromContentArray(obj) == null);
+}
+
+test "parseSampling logit_bias object" {
+    const s = parseSampling(
+        \\{"logit_bias": {"123": 5.0, "456": -2.0}, "temperature": 0.5}
+    );
+    try std.testing.expectEqual(@as(u32, 2), s.logit_bias_count);
+    try std.testing.expectEqual(@as(u32, 123), s.logit_bias_ids[0]);
+    try std.testing.expectApproxEqAbs(@as(f32, 5.0), s.logit_bias_vals[0], 0.01);
+    try std.testing.expectEqual(@as(u32, 456), s.logit_bias_ids[1]);
+    try std.testing.expectApproxEqAbs(@as(f32, -2.0), s.logit_bias_vals[1], 0.01);
+}
+
+test "parseSampling stream_options object" {
+    const s1 = parseSampling(
+        \\{"stream": true, "stream_options": {"include_usage": false}}
+    );
+    try std.testing.expect(!s1.stream_include_usage);
+
+    const s2 = parseSampling(
+        \\{"stream": true, "stream_options": {"include_usage": true}}
+    );
+    try std.testing.expect(s2.stream_include_usage);
+}
+
+test "parseSampling response_format json_schema with nested schema" {
+    const s = parseSampling(
+        \\{"response_format": {"type": "json_schema", "json_schema": {"schema": {"type": "object", "properties": {"name": {"type": "string"}}}}}}
+    );
+    try std.testing.expect(s.json_schema != null);
+    try std.testing.expect(std.mem.indexOf(u8, s.json_schema.?, "object") != null);
+}
+
+test "extractLastMessage returns last content" {
+    const body =
+        \\{"messages":[{"role":"system","content":"You help"},{"role":"user","content":"Hello"}]}
+    ;
+    const last = extractLastMessage(body);
+    try std.testing.expect(last != null);
+    try std.testing.expectEqualStrings("Hello", last.?);
+}
+
+test "extractLastMessage returns null for empty" {
+    try std.testing.expect(extractLastMessage("{}") == null);
+    try std.testing.expect(extractLastMessage("") == null);
+}
+
+test "urlDecode basic" {
+    const allocator = std.testing.allocator;
+    const decoded = try urlDecode(allocator, "hello+world%21");
+    defer allocator.free(decoded);
+    try std.testing.expectEqualStrings("hello world!", decoded);
+}
+
+test "urlDecode percent encoding" {
+    const allocator = std.testing.allocator;
+    const decoded = try urlDecode(allocator, "%48%65%6C%6Co");
+    defer allocator.free(decoded);
+    try std.testing.expectEqualStrings("Hello", decoded);
+}
+
+test "urlDecode strips null bytes" {
+    const allocator = std.testing.allocator;
+    const decoded = try urlDecode(allocator, "a%00b");
+    defer allocator.free(decoded);
+    try std.testing.expectEqualStrings("ab", decoded);
+}
+
+test "urlDecode passthrough" {
+    const allocator = std.testing.allocator;
+    const decoded = try urlDecode(allocator, "plain");
+    defer allocator.free(decoded);
+    try std.testing.expectEqualStrings("plain", decoded);
+}
+
+test "htmlEscape special chars" {
+    const allocator = std.testing.allocator;
+    const escaped = try htmlEscape(allocator, "<b>\"hi\"&</b>");
+    defer allocator.free(escaped);
+    try std.testing.expectEqualStrings("&lt;b&gt;&quot;hi&quot;&amp;&lt;/b&gt;", escaped);
+}
+
+test "htmlEscape no-op for plain text" {
+    const allocator = std.testing.allocator;
+    const input = "hello world";
+    const escaped = try htmlEscape(allocator, input);
+    // No escaping needed — returns input pointer, no allocation
+    try std.testing.expect(escaped.ptr == input.ptr);
+    try std.testing.expectEqualStrings("hello world", escaped);
+}
+
+test "extractFormField basic" {
+    const result = extractFormField("name=alice&age=30", "name");
+    try std.testing.expect(result != null);
+    try std.testing.expectEqualStrings("alice", result.?);
+}
+
+test "extractFormField missing" {
+    try std.testing.expect(extractFormField("name=alice", "age") == null);
+}
+
+test "extractFormField empty value" {
+    const result = extractFormField("key=&other=1", "key");
+    try std.testing.expect(result != null);
+    try std.testing.expectEqualStrings("", result.?);
 }

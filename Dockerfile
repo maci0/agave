@@ -19,6 +19,7 @@ ARG ENABLE_NEMOTRON_H=true
 ARG ENABLE_NEMOTRON_NANO=true
 ARG ENABLE_GLM4=true
 ARG ENABLE_GEMMA4=true
+ARG ENABLE_LLAMA4=true
 
 RUN apt-get update && apt-get install -y --no-install-recommends curl xz-utils ca-certificates && rm -rf /var/lib/apt/lists/*
 
@@ -67,6 +68,7 @@ RUN --mount=type=cache,target=/src/.zig-cache \
         -Denable-nemotron-nano="$ENABLE_NEMOTRON_NANO" \
         -Denable-glm4="$ENABLE_GLM4" \
         -Denable-gemma4="$ENABLE_GEMMA4" \
+        -Denable-llama4="$ENABLE_LLAMA4" \
         --prefix /out
 
 # Runtime image — Debian for glibc dlopen compatibility.

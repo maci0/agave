@@ -29,7 +29,7 @@ const Arch = @import("arch.zig").Arch;
 const backend_mod = @import("backend/backend.zig");
 const Backend = backend_mod.Backend;
 const CpuBackend = backend_mod.CpuBackend;
-const tok_mod = @import("tokenizer/bpe.zig");
+const tok_mod = @import("tokenizer/tokenizer.zig");
 const BpeTokenizer = tok_mod.BpeTokenizer;
 
 var gpa = std.heap.page_allocator;
@@ -128,6 +128,7 @@ export fn agave_init(model_ptr: [*]const u8, model_len: usize) usize {
 }
 
 export fn agave_generate(ctx_ptr: usize, prompt_ptr: [*]const u8, prompt_len: usize, max_tokens: u32) u32 {
+    if (ctx_ptr == 0) return 0;
     const ctx: *InferenceContext = @ptrFromInt(ctx_ptr);
     if (!ctx.ready) {
         const msg = std.fmt.bufPrint(&ctx.output_buf, "Model not initialized", .{}) catch "";
@@ -141,7 +142,10 @@ export fn agave_generate(ctx_ptr: usize, prompt_ptr: [*]const u8, prompt_len: us
     // Tokenize prompt to verify pipeline
     const tok_iface = ctx.tok.tokenizer();
     const tmpl = ctx.arch.chatTemplate();
-    const formatted_owned = tmpl.format(gpa, null, prompt) catch null;
+    const formatted_owned = tmpl.format(gpa, null, prompt) catch |err| blk: {
+        std.log.warn("chat template format failed: {s}, using raw prompt", .{@errorName(err)});
+        break :blk null;
+    };
     defer if (formatted_owned) |f| gpa.free(f);
     const formatted = formatted_owned orelse prompt;
 
@@ -166,6 +170,7 @@ export fn agave_generate(ctx_ptr: usize, prompt_ptr: [*]const u8, prompt_len: us
 }
 
 export fn agave_get_output(ctx_ptr: usize, buf_ptr: [*]u8, buf_len: usize) usize {
+    if (ctx_ptr == 0) return 0;
     const ctx: *InferenceContext = @ptrFromInt(ctx_ptr);
     const copy_len = @min(ctx.output_len, buf_len);
     @memcpy(buf_ptr[0..copy_len], ctx.output_buf[0..copy_len]);
@@ -173,6 +178,7 @@ export fn agave_get_output(ctx_ptr: usize, buf_ptr: [*]u8, buf_len: usize) usize
 }
 
 export fn agave_free(ctx_ptr: usize) void {
+    if (ctx_ptr == 0) return;
     const ctx: *InferenceContext = @ptrFromInt(ctx_ptr);
     if (ctx.mdl) |*m| m.deinit();
     ctx.tok.deinit();
@@ -186,6 +192,7 @@ export fn agave_alloc(len: usize) usize {
 }
 
 export fn agave_dealloc(ptr: usize, len: usize) void {
+    if (ptr == 0 or len == 0) return;
     const slice: [*]u8 = @ptrFromInt(ptr);
     gpa.free(slice[0..len]);
 }

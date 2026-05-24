@@ -147,6 +147,13 @@ pub const detectAvailMem = @import("cpu.zig").detectAvailMem;
 /// Detect OS version string (e.g., "macOS 14.2.1", "Linux 6.5.0"). Re-exported from cpu.zig.
 pub const detectOsVersion = @import("cpu.zig").detectOsVersion;
 
+/// CPU softmax kernel — re-exported for the attention module.
+/// The windowed attention fallback runs entirely on CPU, so it needs a CPU-only
+/// softmax that avoids be.softmax() (which dispatches to GPU, causing an expensive sync).
+pub const CpuSoftmax = struct {
+    pub const softmaxSimd = @import("kernels/cpu/softmax.zig").softmaxSimd;
+};
+
 /// CPU SDPA kernel functions — re-exported for the split-attention module.
 /// Split-attention runs CPU SDPA concurrently with GPU SDPA for tiered KV cache
 /// offloading, so it needs direct access to per-head CPU kernel functions
@@ -237,6 +244,32 @@ pub fn weightBytes(dtype: DType, n: usize, k: usize) usize {
         .gptq => n * k / 2,
         // Unsupported dtypes: assume f32 (4 bytes per element).
         .mlx_q, .unknown => n * k * 4,
+    };
+}
+
+/// Row stride in bytes for a given dtype and column count.
+/// Used by parallel GEMV and TP sharding to compute per-row offsets.
+pub fn gemvRowBytes(dtype: DType, k: usize) usize {
+    const nb = (k + quant_block_elems - 1) / quant_block_elems;
+    const nsb = (k + quant_super_block_elems - 1) / quant_super_block_elems;
+    return switch (dtype) {
+        .q4_0 => nb * q4_0_block_bytes,
+        .q4_1 => nb * q4_1_block_bytes,
+        .q5_0 => nb * q5_0_block_bytes,
+        .q8_0 => nb * q8_0_block_bytes,
+        .q2_k => nsb * q2_k_block_bytes,
+        .q3_k => nsb * q3_k_block_bytes,
+        .q4_k => nsb * q4_k_block_bytes,
+        .q5_k => nsb * q5_k_block_bytes,
+        .q6_k => nsb * q6_k_block_bytes,
+        .iq4_nl => nb * iq4_nl_block_bytes,
+        .iq4_xs => nsb * iq4_xs_block_bytes,
+        .mxfp4 => nb * mxfp4_block_bytes,
+        .nvfp4 => ((k + nvfp4_block_elems - 1) / nvfp4_block_elems) * nvfp4_block_bytes,
+        .f16, .bf16 => k * f16_elem_bytes,
+        .f32 => k * f32_elem_bytes,
+        .fp8_e4m3, .fp8_e5m2 => k,
+        .tq1_0, .mlx_q, .gptq, .unknown => 0,
     };
 }
 
@@ -694,6 +727,9 @@ pub const Backend = union(enum) {
     ///   - head_sum[h]: sum of exp(scores - max) — the softmax denominator.
     /// These stats enable exact merging of partial attention outputs from
     /// different devices (GPU + CPU) via online softmax correction.
+    /// Note: GPU backends fill identity stats (max=0, sum=1) — their SDPA
+    /// already produces normalized output, so the merge formula treats it
+    /// as-is. Only the CPU backend computes real per-head stats.
     pub inline fn sdpaWithStats(self: Backend, q: [*]const f32, keys: []u8, values: []u8, k_new: [*]const f32, v_new: [*]const f32, output: [*]f32, head_max: [*]f32, head_sum: [*]f32, nh: usize, nkv: usize, hd: usize, seq_len: usize, scale: f32, kv_type_k: KvQuantType, kv_type_v: KvQuantType) void {
         switch (self) {
             inline else => |be| be.sdpaWithStats(q, keys, values, k_new, v_new, output, head_max, head_sum, nh, nkv, hd, seq_len, scale, kv_type_k, kv_type_v),

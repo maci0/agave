@@ -8,18 +8,22 @@ models/
 *.gguf
 *.safetensors
 
-# Python / research (not needed in image)
+# Python / research / WASM frontend (not needed in image)
 .venv/
 research/
 tests/
+web/
 __pycache__/
 
-# IDE / tools / planning
+# Review / planning outputs (not needed in image)
+outputs/
+.planning/
+
+# IDE / tools
 .opencode/
 .vscode/
 .idea/
 .claude/
-.planning/
 .playwright-mcp/
 
 # Editor temporary files

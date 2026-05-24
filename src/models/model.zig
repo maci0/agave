@@ -3,7 +3,7 @@
 //! the engine to work with any model architecture through a uniform API.
 //!
 //! Implementations: gemma3.zig, gemma4.zig, qwen35.zig, gpt_oss.zig,
-//! nemotron_h.zig, nemotron_nano.zig, glm4.zig, vision.zig
+//! nemotron_h.zig, nemotron_nano.zig, glm4.zig, llama4.zig, vision.zig
 
 const std = @import("std");
 const build_options = @import("build_options");
@@ -14,6 +14,7 @@ const ThreadPool = @import("../thread_pool.zig").ThreadPool;
 const kv_quant = @import("../ops/kv_quant.zig");
 const KvQuantType = kv_quant.KvQuantType;
 const TieredKvCache = @import("../kvcache/tiered.zig").TieredKvCache;
+const Transport = @import("../parallel/transport.zig").Transport;
 
 /// Vision encoder for multimodal models (SigLIP-2, CLIP-like image embedding).
 pub const VisionEncoder = @import("vision.zig").VisionEncoder;
@@ -80,10 +81,11 @@ pub const Model = struct {
         reset_mtp_cache: *const fn (self: *anyopaque) void,
     };
 
-    /// Construct a Model interface from any concrete model type at comptime.
-    /// The concrete type must have: forward(token_id) !u32, prefill(token_ids) !u32,
-    /// resetCache(), cancel(), getBlockTable(), and fields: eos_token_id, vocab_size,
-    /// n_layers, n_embd, n_head, n_head_kv, kv_seq_len, and `logits_buf`.
+    /// Create a polymorphic Model from a concrete model type.
+    /// Required methods: forward, prefill, resetCache, cancel, getBlockTable.
+    /// Required fields: eos_token_id, vocab_size, n_layers, n_embd, n_head, n_head_kv, kv_seq_len, logits_buf, be.
+    /// Optional methods (via @hasDecl): forwardTree, treeLogits, saveSsmState, restoreSsmState, mtpForward, resetMtpCache.
+    /// Optional fields (via @hasField): layer_skip_start, image_embeddings, image_pad_token_id, visual_token_idx, n_mtp_layers, mtp_logits_buf.
     pub fn from(comptime T: type, ptr: *T) Model {
         const vtable = comptime genVTable(T);
         return .{ .ptr = ptr, .vtable = vtable };
@@ -595,12 +597,28 @@ pub fn ensureKvBlock(self: anytype) !void {
 pub fn resetKvCache(self: anytype) void {
     if (self.tiered_block_allocator) |*ta| {
         ta.freeSeqTable(&self.seq_table);
-        self.seq_table = ta.allocateSeqTable(self.n_layers) catch return;
-        ta.appendBlock(&self.seq_table) catch return;
+        self.seq_table = ta.allocateSeqTable(self.n_layers) catch |err| {
+            std.log.err("KV cache reset failed (tiered allocateSeqTable): {s}", .{@errorName(err)});
+            resetInferenceState(&self.kv_seq_len, &self.cancelled);
+            return;
+        };
+        ta.appendBlock(&self.seq_table) catch |err| {
+            std.log.err("KV cache reset failed (tiered appendBlock): {s}", .{@errorName(err)});
+            resetInferenceState(&self.kv_seq_len, &self.cancelled);
+            return;
+        };
     } else {
         self.block_allocator.freeSeqTable(&self.seq_table);
-        self.seq_table = self.block_allocator.allocateSeqTable(self.n_layers) catch return;
-        self.block_allocator.appendBlock(&self.seq_table) catch return;
+        self.seq_table = self.block_allocator.allocateSeqTable(self.n_layers) catch |err| {
+            std.log.err("KV cache reset failed (allocateSeqTable): {s}", .{@errorName(err)});
+            resetInferenceState(&self.kv_seq_len, &self.cancelled);
+            return;
+        };
+        self.block_allocator.appendBlock(&self.seq_table) catch |err| {
+            std.log.err("KV cache reset failed (appendBlock): {s}", .{@errorName(err)});
+            resetInferenceState(&self.kv_seq_len, &self.cancelled);
+            return;
+        };
     }
     resetInferenceState(&self.kv_seq_len, &self.cancelled);
 }
@@ -702,7 +720,7 @@ pub const ModelStorage = union(enum) {
     }
 
     /// Set the network transport for distributed TP all-reduce.
-    pub fn setTpTransport(self: *ModelStorage, transport: *@import("../parallel/transport.zig").Transport) void {
+    pub fn setTpTransport(self: *ModelStorage, transport: *Transport) void {
         switch (self.*) {
             inline else => |*m| {
                 if (@TypeOf(m.*) != void) {
@@ -713,7 +731,7 @@ pub const ModelStorage = union(enum) {
     }
 
     /// Send KV cache via transport (disaggregated prefill).
-    pub fn sendKvCache(self: *ModelStorage, transport: *@import("../parallel/transport.zig").Transport) void {
+    pub fn sendKvCache(self: *ModelStorage, transport: *Transport) void {
         switch (self.*) {
             inline else => |*m| {
                 if (@TypeOf(m.*) != void) {
@@ -724,7 +742,7 @@ pub const ModelStorage = union(enum) {
     }
 
     /// Receive KV cache via transport (disaggregated decode).
-    pub fn recvKvCache(self: *ModelStorage, transport: *@import("../parallel/transport.zig").Transport) void {
+    pub fn recvKvCache(self: *ModelStorage, transport: *Transport) void {
         switch (self.*) {
             inline else => |*m| {
                 if (@TypeOf(m.*) != void) {
@@ -735,7 +753,7 @@ pub const ModelStorage = union(enum) {
     }
 
     /// Set PP config and transport.
-    pub fn setPpConfig(self: *ModelStorage, rank: u32, degree: u32, transport: ?*@import("../parallel/transport.zig").Transport) void {
+    pub fn setPpConfig(self: *ModelStorage, rank: u32, degree: u32, transport: ?*Transport) void {
         switch (self.*) {
             inline else => |*m| {
                 if (@TypeOf(m.*) != void) {

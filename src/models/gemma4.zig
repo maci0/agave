@@ -93,6 +93,12 @@ const attn_scale: f32 = 1.0;
 // ── Dense FFN defaults ───────────────────────────────────────────
 const default_dense_ff_dim: u32 = 2816;
 
+// ── KV eviction tuning ──────────────────────────────────────────
+/// How often (in eviction cycles) to grow the budget.
+const eviction_budget_grow_interval: u32 = 4;
+/// Positions added to eviction budget each growth step.
+const eviction_budget_increment: u32 = 64;
+
 // ── PLE (Per-Layer Embeddings) defaults ─────────────────────────
 /// Per-layer embedding dimension (0 = PLE disabled).
 const default_ple_dim: u32 = 0;
@@ -1032,8 +1038,7 @@ pub const Gemma4Model = struct {
                     }
                 };
                 for (0..n_tok) |t| {
-                    const base = t * e;
-                    for (0..e) |i| self.pf_hidden[base + i] *= scale_val;
+                    math_ops.simdScaleF32(self.pf_hidden.ptr + t * e, scale_val, e);
                 }
             }
         }
@@ -1522,8 +1527,8 @@ pub const Gemma4Model = struct {
         // Dynamic budget: after multiple evictions, slightly increase budget
         // to reduce eviction frequency. Caps at max_seq_len.
         self.eviction_count += 1;
-        if (self.eviction_count % 4 == 0 and self.kv_eviction_budget < self.max_seq_len - 64) {
-            self.kv_eviction_budget += 64;
+        if (self.eviction_count % eviction_budget_grow_interval == 0 and self.kv_eviction_budget < self.max_seq_len - eviction_budget_increment) {
+            self.kv_eviction_budget += eviction_budget_increment;
         }
 
         std.log.info("gemma4: KV eviction {d} -> {d} positions (budget={d}, evictions={d})", .{ seq_len, new_len, self.kv_eviction_budget, self.eviction_count });
@@ -1540,16 +1545,16 @@ pub const Gemma4Model = struct {
         };
     }
 
-    const PagedKvView = @import("../kvcache/manager.zig").PagedKvView;
+    const PagedKvView = kvcache.PagedKvView;
 
     fn getPagedKvView(self: *Gemma4Model, layer: usize) PagedKvView {
-        return .{
-            .block_table = self.seq_table.block_table[self.kv_source[layer]],
-            .blocks = self.paged_cache.blocks,
-            .block_size = self.paged_cache.block_size,
-            .kv_dim = self.paged_cache.kv_dim,
-            .seq_len = self.kv_seq_len,
-        };
+        return PagedKvView.initView(
+            self.seq_table.block_table[self.kv_source[layer]],
+            self.paged_cache.blocks,
+            self.paged_cache.block_size,
+            self.paged_cache.kv_dim,
+            self.kv_seq_len,
+        );
     }
 
     fn isMultiBlock(self: *Gemma4Model, layer: usize) bool {
@@ -1866,7 +1871,7 @@ pub const Gemma4Model = struct {
                     break :blk ptr.*;
                 }
             };
-            for (0..e) |i| self.hidden[i] *= scale_val;
+            math_ops.simdScaleF32(self.hidden.ptr, scale_val, e);
             self.perf.end(.add, t_scale);
         }
     }
@@ -1963,10 +1968,16 @@ pub const Gemma4Model = struct {
         // Step 2: Scale by 1/sqrt(n_embd) and element-wise multiply with ffn_gate_inp.scale
         const inv_sqrt_embd = self.inv_sqrt_embd;
         if (self.fmt.layerTensor(li, "ffn_gate_inp.scale")) |scale_t| {
+            const V8 = @Vector(8, f32);
             const scale_ptr: [*]const f32 = @ptrCast(@alignCast(scale_t.data_ptr));
-            for (0..e) |i| self.router_input[i] *= inv_sqrt_embd * scale_ptr[i];
+            const inv_v: V8 = @splat(inv_sqrt_embd);
+            var si: usize = 0;
+            while (si + 8 <= e) : (si += 8) {
+                self.router_input.ptr[si..][0..8].* = @as(V8, self.router_input.ptr[si..][0..8].*) * inv_v * @as(V8, scale_ptr[si..][0..8].*);
+            }
+            while (si < e) : (si += 1) self.router_input[si] *= inv_sqrt_embd * scale_ptr[si];
         } else {
-            for (0..e) |i| self.router_input[i] *= inv_sqrt_embd;
+            math_ops.simdScaleF32(self.router_input.ptr, inv_sqrt_embd, e);
         }
 
         // Step 3: Project to expert logits

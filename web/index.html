@@ -6,33 +6,62 @@
     <title>Agave — Browser LLM Inference</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
-        body { font-family: system-ui, -apple-system, sans-serif; background: #1a1a2e; color: #e0e0e0; height: 100vh; display: flex; flex-direction: column; }
+        html { color-scheme: dark; }
+        body { font-family: system-ui, -apple-system, sans-serif; background: #1a1a2e; color: #e0e0e0; height: 100vh; display: flex; flex-direction: column; line-height: 1.5; }
         header { padding: 1rem 2rem; background: #16213e; border-bottom: 1px solid #333; }
         header h1 { font-size: 1.2rem; color: #4a8c2a; }
-        header small { color: #888; }
-        #chat { flex: 1; overflow-y: auto; padding: 1rem 2rem; }
-        .msg { margin: 0.5rem 0; padding: 0.75rem 1rem; border-radius: 8px; max-width: 80%; white-space: pre-wrap; }
+        header small { color: #999; }
+        main { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+        #chat { flex: 1; overflow-y: auto; padding: 1rem 2rem; outline: none; }
+        #chat:focus-visible { outline: 2px solid #4a8c2a; outline-offset: -2px; }
+        .msg { margin: 0.5rem 0; padding: 0.75rem 1rem; border-radius: 8px; max-width: 80%; white-space: pre-wrap; overflow-wrap: break-word; word-wrap: break-word; }
         .msg.user { background: #1a3a5c; margin-left: auto; }
         .msg.assistant { background: #2a2a3e; }
         .msg.system { background: #2a3e2a; color: #8c8; font-size: 0.9rem; max-width: 100%; }
         .msg.error { background: #3e2a2a; color: #e88; font-size: 0.9rem; max-width: 100%; }
         #controls { padding: 1rem 2rem; background: #16213e; border-top: 1px solid #333; display: flex; gap: 0.5rem; }
-        #prompt { flex: 1; padding: 0.75rem; border: 1px solid #444; border-radius: 8px; background: #1a1a2e; color: #e0e0e0; font-size: 1rem; }
-        button { padding: 0.75rem 1.5rem; border: none; border-radius: 8px; background: #4a8c2a; color: white; cursor: pointer; font-size: 1rem; }
+        #prompt { flex: 1; padding: 0.75rem; border: 1px solid #444; border-radius: 8px; background: #1a1a2e; color: #e0e0e0; font-size: 1rem; transition: border-color 0.15s; }
+        #prompt:focus { border-color: #4a8c2a; box-shadow: 0 0 0 3px rgba(74, 140, 42, 0.15); outline: none; }
+        button { padding: 0.75rem 1.5rem; border: none; border-radius: 8px; background: #4a8c2a; color: white; cursor: pointer; font-size: 1rem; transition: background 0.15s, transform 0.1s; }
+        button:hover:not(:disabled) { background: #5aa63a; }
+        button:active:not(:disabled) { transform: scale(0.97); }
         button:disabled { background: #555; cursor: not-allowed; }
+        input:disabled { opacity: 0.5; cursor: not-allowed; }
         #status { padding: 0.5rem 2rem; background: #111; color: #888; font-size: 0.85rem; }
         #model-input { padding: 1rem 2rem; background: #16213e; display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; }
         #model-input input[type="text"] { flex: 1; min-width: 200px; padding: 0.5rem; border: 1px solid #444; border-radius: 4px; background: #1a1a2e; color: #e0e0e0; }
         #drop-zone { border: 2px dashed #444; border-radius: 8px; padding: 0.5rem 1rem; color: #999; cursor: pointer; font-size: 0.9rem; }
+        #drop-zone:hover { border-color: #4a8c2a; color: #4a8c2a; }
         #drop-zone.dragover { border-color: #4a8c2a; color: #4a8c2a; }
         #file-input { display: none; }
         button:focus-visible, input:focus-visible { outline: 2px solid #4a8c2a; outline-offset: 2px; }
         #drop-zone:focus-visible { outline: 2px solid #4a8c2a; outline-offset: 2px; border-color: #4a8c2a; }
         .skip-link { position: absolute; top: -100%; left: 16px; z-index: 200; font-size: 13px; padding: 8px 16px; background: #4a8c2a; color: white; border-radius: 4px; text-decoration: none; transition: top .2s; }
         .skip-link:focus { top: 8px; }
-        @media (prefers-reduced-motion: reduce) { .skip-link { transition: none; } }
+        @media (prefers-reduced-motion: reduce) {
+            .skip-link { transition: none; }
+            button { transition: none; }
+            button:active:not(:disabled) { transform: none; }
+        }
+        @media (forced-colors: active) {
+            button, #drop-zone { border: 1px solid ButtonText; }
+            #prompt { border: 1px solid ButtonText; }
+            #prompt:focus, button:focus-visible { outline: 2px solid Highlight; }
+            .msg.user, .msg.assistant { border: 1px solid CanvasText; }
+        }
+        @media (max-width: 600px) {
+            header { padding: 0.75rem 1rem; }
+            #model-input { padding: 0.75rem 1rem; flex-direction: column; }
+            #model-input input[type="text"] { min-width: unset; width: 100%; }
+            #chat { padding: 0.75rem 1rem; }
+            #controls { padding: 0.75rem 1rem; }
+            #prompt { font-size: 16px; }
+            button, #drop-zone { min-height: 44px; }
+        }
     </style>
     <meta name="theme-color" content="#1a1a2e">
+    <meta name="color-scheme" content="dark">
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>&#127797;</text></svg>">
 </head>
 <body>
     <a href="#prompt" class="skip-link">Skip to message input</a>
@@ -40,23 +69,24 @@
         <h1>agave</h1>
         <small>LLM inference in the browser via WebAssembly</small>
     </header>
-    <div id="model-input">
-        <input type="text" id="model-url" placeholder="Model URL (GGUF)..." aria-label="Model URL" autocomplete="off" />
-        <button onclick="loadModelFromUrl()" id="load-btn">Load URL</button>
+    <div id="model-input" role="region" aria-label="Model loading">
+        <input type="url" id="model-url" placeholder="https://example.com/model.gguf" aria-label="Model URL" autocomplete="url" spellcheck="false" />
+        <button type="button" onclick="loadModelFromUrl()" id="load-btn">Load URL</button>
         <div id="drop-zone" role="button" tabindex="0" aria-label="Drop GGUF file or click to browse" onclick="document.getElementById('file-input').click()" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();document.getElementById('file-input').click();}">
             Drop GGUF file or click
         </div>
         <input type="file" id="file-input" accept=".gguf" onchange="loadModelFromFile(event)" />
     </div>
+    <main aria-label="Chat">
     <div id="status" role="status" aria-live="polite">Status: Not initialized</div>
-    <main>
-    <div id="chat" role="log" aria-live="polite"></div>
+    <div id="chat" role="log" aria-label="Chat messages" aria-live="off" tabindex="0"></div>
     <div id="controls">
-        <input type="text" id="prompt" placeholder="Load a model to start..." aria-label="Message input" enterkeyhint="send" autocomplete="off" disabled />
-        <button onclick="send()" id="send-btn" aria-label="Send message" disabled>Send</button>
+        <input type="text" id="prompt" placeholder="Load a model to start..." aria-label="Message input" aria-describedby="input-hint" enterkeyhint="send" autocomplete="off" dir="auto" disabled />
+        <button type="button" onclick="send()" id="send-btn" aria-label="Send message" disabled>Send</button>
     </div>
-    <div id="input-hint" style="text-align:center;padding:4px;color:#888;font-size:0.8rem;display:none;">Enter to send</div>
+    <div id="input-hint" style="text-align:center;padding:4px;color:#999;font-size:0.8rem;display:none;">Enter to send</div>
     </main>
+    <div id="sr-announce" style="position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0" aria-live="polite" aria-atomic="true"></div>
 
     <script src="agave.js"></script>
     <script>
@@ -65,6 +95,11 @@
         const status = document.getElementById('status');
         const promptInput = document.getElementById('prompt');
         const dropZone = document.getElementById('drop-zone');
+
+        function announceToSR(text) {
+            const el = document.getElementById('sr-announce');
+            if (el) { el.textContent = ''; setTimeout(() => { el.textContent = text; }, 100); }
+        }
 
         // Drag & drop
         dropZone.addEventListener('dragover', (e) => { e.preventDefault(); dropZone.classList.add('dragover'); });
@@ -99,12 +134,15 @@
         }
 
         async function initAndLoad(loadFn) {
+            const loadBtn = document.getElementById('load-btn');
+            loadBtn.disabled = true;
             status.textContent = 'Status: Initializing WASM engine...';
             try {
                 if (!engine.ready) await engine.init();
                 await loadFn();
                 addMessage('system', engine.initMessage || 'Model loaded');
                 status.textContent = 'Status: Ready';
+                announceToSR('Model loaded. Ready to chat.');
                 promptInput.disabled = false;
                 promptInput.placeholder = 'Type a message...';
                 document.getElementById('send-btn').disabled = false;
@@ -112,16 +150,21 @@
             } catch (e) {
                 status.textContent = `Error: ${e.message}`;
                 addMessage('error', `Error: ${e.message}`);
+                announceToSR('Error loading model: ' + e.message);
             }
+            loadBtn.disabled = false;
         }
 
+        let isSending = false;
         async function send() {
             const text = promptInput.value.trim();
-            if (!text) return;
+            if (!text || isSending) return;
+            isSending = true;
 
             addMessage('user', text);
             promptInput.value = '';
             promptInput.disabled = true;
+            document.getElementById('send-btn').disabled = true;
             chat.setAttribute('aria-busy', 'true');
             status.textContent = 'Status: Processing...';
 
@@ -133,17 +176,26 @@
             }
 
             promptInput.disabled = false;
+            document.getElementById('send-btn').disabled = false;
             chat.setAttribute('aria-busy', 'false');
             status.textContent = 'Status: Ready';
             promptInput.focus();
+            announceToSR('Response complete');
+            isSending = false;
         }
 
         function addMessage(role, text) {
             const div = document.createElement('div');
             div.className = `msg ${role}`;
             div.textContent = text;
+            if (role === 'error') div.setAttribute('role', 'alert');
             chat.appendChild(div);
             chat.scrollTop = chat.scrollHeight;
+            if (role === 'error' || role === 'system') announceToSR(text);
+            else if (role === 'assistant') {
+                const preview = text.length > 200 ? text.substring(0, 200) + '...' : text;
+                announceToSR('Agave responded: ' + preview);
+            }
         }
 
         promptInput.addEventListener('keydown', (e) => {

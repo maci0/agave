@@ -72,7 +72,7 @@ pub const WeightPack = struct {
 /// Scan all layer weight tensors and record their byte offsets relative to
 /// the earliest tensor data pointer. GGUF files memory-map weights contiguously,
 /// so no copying is needed — the kernel accesses `base_ptr + offset`.
-pub fn computeOffsets(fmt: Format, n_layers: u32) WeightPack {
+fn computeOffsets(fmt: Format, n_layers: u32) WeightPack {
     std.debug.assert(n_layers <= max_layers);
     var pack = WeightPack{
         .base_ptr = undefined,

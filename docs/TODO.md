@@ -79,6 +79,9 @@ All quantized GEMV formats native on all 6 backends. See [KERNELS.md](KERNELS.md
 | Llama 4 architecture (iRoPE, chunked attention, top-1 MoE, temperature scaling) | — |
 | Jump decoding (skip forward pass for deterministic grammar tokens) | vLLM |
 | API prompt prefix caching (KV reuse for shared conversation prefix) | vLLM |
+| TurboQuant in SDPA kernel (sdpa_fa2_turbo) | — |
+| Spec decode thinking budget (adaptive cooldown) | — |
+| Topology-aware auto partitioning (device cap exchange) | Partial |
 
 ### High Priority
 
@@ -90,12 +93,9 @@ All quantized GEMV formats native on all 6 backends. See [KERNELS.md](KERNELS.md
 
 | # | Feature | Impact | Source |
 |---|---------|--------|--------|
-| 6 | ~~TurboQuant in SDPA kernel~~ | ~~Skip decode-time dequant~~ | Done (sdpa_fa2_turbo) |
-| 7 | ~~Spec decode thinking budget~~ | ~~Adaptive cooldown on low acceptance~~ | Done |
 | 8 | Multi-stream pre-attention GEMM | Overlap QKV(N+1) with SDPA(N) | vLLM |
 | 10 | Router mode (multi-model server) | Switch models per request | llama.cpp |
 | 11 | Hybrid memory abstraction | Unified KV+SSM cache | llama.cpp |
-| 12 | ~~Topology-aware auto partitioning~~ | ~~Device cap exchange done, weighted split pending~~ | Partial |
 | 14 | gRPC server (HTTP/2) | Lower overhead serving | vLLM |
 
 ### Low Priority
@@ -118,60 +118,11 @@ All quantized GEMV formats native on all 6 backends. See [KERNELS.md](KERNELS.md
 
 ## Design Notes
 
-### SSM State Prefix Caching (#1)
-
-> vLLM v0.15.0: ~2x speedup by caching Mamba states directly.
-
-DeltaNet (Qwen3.5) and Mamba-2 (Nemotron-H) maintain per-head state matrices computed sequentially. For shared prefixes, the SSM state is deterministic and cacheable.
-
-- Extend `RadixTree` to store SSM state snapshots alongside KV block IDs
-- After prefill, save per-layer state (`state_matrix[n_v_heads][v_dim][k_dim]`)
-- On cache hit: restore state, skip SSM prefill for cached prefix
-- Memory: Qwen3.5 0.8B = 48 layers × 16 heads × 64×64 × 4B = 12 MB/snapshot
-- Complexity: model forward must accept "start from saved state" parameter
-
-### Async Scheduler (#2)
-
-> vLLM v0.16.0: 30.8% E2E throughput, 31.8% TPOT improvement.
-
-Current `runSchedulerLoop` calls `step()` synchronously. Proposed:
-- Prefill/decode interleaving across requests
-- PP overlap: stage 0 processes request B while stage 1 finishes A
-- Double-buffer activations tagged by request ID
-- High complexity — touches scheduler, model forward, KV cache, transport
-
-### MTP Heads (#5)
-
-> llama.cpp active development. Qwen3.6, DeepSeek models.
-
-Models with built-in multi-token prediction heads output K tokens per forward pass natively. Unlike spec decode, MTP is part of the model architecture. Requires:
-- GGUF metadata detection for MTP head count
-- Modified forward pass to return K logit vectors
-- Acceptance logic similar to spec decode verification
-
-### Profile-Guided Spec Decode (#9)
-
-> llama.cpp Nov 2025.
-
-Instead of fixed K draft tokens, measure actual batch-verify cost at each K during warmup. Choose K dynamically: `E[accepted] × token_value - cost_of_verify(K)`.
-
 ### Router Mode (#10)
 
 > llama.cpp server: switch models per request.
 
 Model registry with load/unload on demand. Requires per-model KV cache isolation and reference counting. The `model` field in API requests selects which model to route to.
-
-### Topology-Aware Partitioning (#12)
-
-> Exo: optimal split based on device topology.
-
-At transport setup, exchange device capabilities. Weighted layer assignment: `layers[i] = total × (speed[i] / Σspeeds)`. Store as layer→rank map in PP config.
-
-### Mirostat Sampling (#4)
-
-> llama.cpp: target-entropy sampling.
-
-Controls perplexity by adjusting sampling threshold to maintain target entropy (tau). Track running surprise estimate, adjust mu parameter. When active, top-k/top-p ignored. Two modes: Mirostat 1 and Mirostat 2.0.
 
 ---
 
@@ -192,7 +143,7 @@ Controls perplexity by adjusting sampling threshold to maintain target entropy (
 
 ## Model Abstraction (Deferred)
 
-All 7 models share near-identical skeletons. A `ModelBuilder` could save ~600 lines but adds comptime complexity. Deferred because:
+All 8 models share near-identical skeletons. A `ModelBuilder` could save ~600 lines but adds comptime complexity. Deferred because:
 1. Models rarely change once working
 2. Each has unique quirks (Gemma scaling, GPT-OSS sinks, Qwen DeltaNet, GLM4 MLA)
 3. Self-contained files are easier to debug

@@ -740,6 +740,7 @@ test "composeMSL generates Qwen SiLU with fused residual" {
         .layer_types = ModelDesc.qwenHybrid(24, 4),
     };
     const msl = composeMSL(&buf, desc);
+    try std.testing.expect(std.mem.indexOf(u8, msl, "kernel void megakernel_auto") != null);
     try std.testing.expect(std.mem.indexOf(u8, msl, "mega_silu_mul") != null);
     try std.testing.expect(std.mem.indexOf(u8, msl, "mega_add_rms_norm") != null);
     try std.testing.expect(std.mem.indexOf(u8, msl, "mega_gemv_q8") != null);
@@ -769,5 +770,8 @@ test "composeMSL generates Nemotron-H ReLU² FFN" {
         .layer_types = layer_types,
     };
     const msl = composeMSL(&buf, desc);
+    try std.testing.expect(std.mem.indexOf(u8, msl, "kernel void megakernel_auto") != null);
     try std.testing.expect(std.mem.indexOf(u8, msl, "mega_relu_squared") != null);
+    try std.testing.expect(std.mem.indexOf(u8, msl, "mega_gemv_q8") != null);
+    try std.testing.expect(std.mem.indexOf(u8, msl, "mega_rms_norm") != null);
 }

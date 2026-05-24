@@ -6,30 +6,7 @@
 
 const cu = @import("common.zig");
 
-/// E2M1 FP4 → float lookup (OCP Microscaling Spec).
-const e2m1_lut = [16]f32{
-    0.0,  0.5,  1.0,  1.5,  2.0,  3.0,  4.0,  6.0,
-    -0.0, -0.5, -1.0, -1.5, -2.0, -3.0, -4.0, -6.0,
-};
-
-/// FP8 E4M3 denormal scale: 2^(-9).
-const fp8_e4m3_denorm_scale: f32 = 1.0 / 512.0;
-
-/// Convert FP8 E4M3 byte to f32.
-fn fp8e4m3ToF32(val: u8) f32 {
-    const sign: u32 = @as(u32, val >> 7) << 31;
-    const exp: u32 = (val >> 3) & 0x0F;
-    const mant: u32 = val & 0x07;
-
-    if (exp == 0x0F and mant == 0x07) return @bitCast(sign | @as(u32, 0x7FC00000)); // NaN
-    if (exp == 0) {
-        if (mant == 0) return @bitCast(sign);
-        const fmant: f32 = @floatFromInt(mant);
-        const val_abs: f32 = fmant * fp8_e4m3_denorm_scale;
-        return @bitCast(sign | @as(u32, @bitCast(val_abs)));
-    }
-    return @bitCast(sign | ((exp + 120) << 23) | (mant << 20));
-}
+const e2m1_lut = cu.e2m1_lut;
 
 export fn gemv_nvfp4_st_kernel(
     x: [*]const f32,
@@ -50,7 +27,7 @@ export fn gemv_nvfp4_st_kernel(
     var sum: f32 = 0.0;
     var g: u32 = tid;
     while (g < groups_per_row) : (g += bdim) {
-        const scale = fp8e4m3ToF32(s[row * groups_per_row + g]);
+        const scale = cu.fp8e4m3ToF32(s[row * groups_per_row + g]);
         const w_base = row * bytes_per_row + g * 8;
         const x_base = g * 16;
 

@@ -13,16 +13,7 @@ const TieredKvCache = @import("tiered.zig").TieredKvCache;
 /// Shared helper: allocate a new SeqBlockTable with empty block tables for all layers.
 fn allocateSeqTableImpl(allocator: Allocator, n_layers: usize) !SeqBlockTable {
     const block_table = try allocator.alloc([]u32, n_layers);
-    errdefer allocator.free(block_table);
-
-    var init_count: usize = 0;
-    errdefer for (0..init_count) |i| allocator.free(block_table[i]);
-
-    for (0..n_layers) |i| {
-        block_table[i] = &[_]u32{};
-        init_count = i + 1;
-    }
-
+    for (0..n_layers) |i| block_table[i] = &[_]u32{};
     return .{ .block_table = block_table, .seq_len = 0 };
 }
 
@@ -220,6 +211,7 @@ test "freeSeqTable returns blocks to free list" {
 
     var block_alloc = BlockAllocator.init(&paged, allocator);
     var seq_table = try block_alloc.allocateSeqTable(2);
+    errdefer block_alloc.freeSeqTable(&seq_table);
 
     try block_alloc.appendBlock(&seq_table);
     try block_alloc.appendBlock(&seq_table);

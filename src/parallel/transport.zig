@@ -12,6 +12,10 @@ const max_peers: usize = 8;
 const shm_buf_size: usize = 16 * 1024 * 1024;
 const shm_region_size: usize = shm_buf_size + @sizeOf(ShmHeader);
 const shm_peer_retries: u32 = 5000;
+/// Maximum spin iterations for SHM send/recv before declaring peer unresponsive.
+/// ~100M spins ≈ several seconds at GHz clock rates. Prevents infinite hang
+/// when a peer process crashes mid-transfer.
+const shm_spin_max: u32 = 100_000_000;
 
 const builtin = @import("builtin");
 const shm_O_CREAT: c_int = if (builtin.os.tag == .macos) 0x200 else 0o100;
@@ -96,11 +100,12 @@ pub const Transport = struct {
     cuda_ctx_set: ?*const fn (?*anyopaque) callconv(.c) c_int = null,
     cuda_host_register: ?*const fn (*const anyopaque, usize, c_uint) callconv(.c) c_int = null,
     cuda_mem_alloc: ?*const fn (*u64, usize) callconv(.c) c_int = null,
+    cuda_mem_free: ?*const fn (u64) callconv(.c) c_int = null,
     cuda_memcpy_htod: ?*const fn (u64, *const anyopaque, usize) callconv(.c) c_int = null,
     cuda_memcpy_dtoh: ?*const fn (*anyopaque, u64, usize) callconv(.c) c_int = null,
     nccl_dev_buf: u64 = 0,
     nccl_dev_buf_size: usize = 0,
-    /// Device memory for topology-aware partitioning (populated, not yet consumed).
+    /// Device memory for topology-aware partitioning (reserved for future use).
     local_mem: usize = 0,
     peer_mem: usize = 0,
 
@@ -115,6 +120,9 @@ pub const Transport = struct {
     }
 
     pub fn deinit(self: *Transport) void {
+        if (self.nccl_dev_buf != 0) {
+            if (self.cuda_mem_free) |free| _ = free(self.nccl_dev_buf);
+        }
         if (self.nccl_comm != null) {
             if (self.nccl_destroy) |destroy| _ = destroy(self.nccl_comm);
         }
@@ -131,6 +139,7 @@ pub const Transport = struct {
         }
         if (self.shm_recv_fd >= 0) {
             _ = std.c.close(self.shm_recv_fd);
+            _ = std.c.shm_unlink(&self.shm_name_recv);
         }
     }
 
@@ -175,10 +184,19 @@ pub const Transport = struct {
         // Create send region
         self.shm_send_fd = std.c.shm_open(&self.shm_name_send, shm_O_CREAT | shm_O_RDWR, @as(c.mode_t, 0o600));
         if (self.shm_send_fd < 0) return error.ShmOpenFailed;
-        _ = std.c.ftruncate(self.shm_send_fd, @intCast(shm_region_size));
+        errdefer {
+            _ = std.c.close(self.shm_send_fd);
+            _ = std.c.shm_unlink(&self.shm_name_send);
+            self.shm_send_fd = -1;
+        }
+        if (std.c.ftruncate(self.shm_send_fd, @intCast(shm_region_size)) < 0) return error.ShmOpenFailed;
         const send_ptr = posix.system.mmap(null, shm_region_size, @bitCast(shm_PROT_RW), @bitCast(shm_MAP_SHARED), self.shm_send_fd, 0);
         if (send_ptr == posix.system.MAP_FAILED) return error.ShmMmapFailed;
         self.shm_send = @ptrCast(@alignCast(send_ptr));
+        errdefer {
+            _ = posix.system.munmap(@ptrCast(@alignCast(self.shm_send.?)), shm_region_size);
+            self.shm_send = null;
+        }
         // Zero the header
         const send_hdr: *ShmHeader = @ptrCast(@alignCast(self.shm_send.?));
         send_hdr.ready.store(0, .release);
@@ -193,6 +211,10 @@ pub const Transport = struct {
             _ = posix.system.nanosleep(&ts, null);
         }
         if (self.shm_recv_fd < 0) return error.ShmPeerTimeout;
+        errdefer {
+            _ = std.c.close(self.shm_recv_fd);
+            self.shm_recv_fd = -1;
+        }
         const recv_ptr = posix.system.mmap(null, shm_region_size, @bitCast(shm_PROT_RW), @bitCast(shm_MAP_SHARED), self.shm_recv_fd, 0);
         if (recv_ptr == posix.system.MAP_FAILED) return error.ShmMmapFailed;
         self.shm_recv = @ptrCast(@alignCast(recv_ptr));
@@ -203,8 +225,15 @@ pub const Transport = struct {
         const send = self.shm_send orelse return;
         std.debug.assert(byte_len <= shm_buf_size);
         const hdr: *ShmHeader = @ptrCast(@alignCast(send));
-        // Spin until receiver consumed previous message
-        while (hdr.ready.load(.acquire) != 0) std.atomic.spinLoopHint();
+        // Spin until receiver consumed previous message (bounded to prevent hang on peer crash)
+        var spins: u32 = 0;
+        while (hdr.ready.load(.acquire) != 0) : (spins += 1) {
+            if (spins >= shm_spin_max) {
+                std.log.err("shm: send timeout — peer not consuming after {d} spins", .{shm_spin_max});
+                return;
+            }
+            std.atomic.spinLoopHint();
+        }
         const payload = send + @sizeOf(ShmHeader);
         @memcpy(payload[0..byte_len], data[0..byte_len]);
         hdr.size = @intCast(byte_len);
@@ -215,8 +244,16 @@ pub const Transport = struct {
         const recv = self.shm_recv orelse return;
         std.debug.assert(byte_len <= shm_buf_size);
         const hdr: *ShmHeader = @ptrCast(@alignCast(recv));
-        // Spin until sender has data ready
-        while (hdr.ready.load(.acquire) == 0) std.atomic.spinLoopHint();
+        // Spin until sender has data ready (bounded to prevent hang on peer crash)
+        var spins: u32 = 0;
+        while (hdr.ready.load(.acquire) == 0) : (spins += 1) {
+            if (spins >= shm_spin_max) {
+                std.log.err("shm: recv timeout — peer not sending after {d} spins", .{shm_spin_max});
+                @memset(data[0..byte_len], 0);
+                return;
+            }
+            std.atomic.spinLoopHint();
+        }
         const payload = recv + @sizeOf(ShmHeader);
         @memcpy(data[0..byte_len], payload[0..byte_len]);
         hdr.ready.store(0, .release);
@@ -230,6 +267,7 @@ pub const Transport = struct {
             std.DynLib.open("/usr/lib/aarch64-linux-gnu/libnccl.so.2") catch
             std.DynLib.open("/usr/lib/x86_64-linux-gnu/libnccl.so.2") catch
             return error.NcclNotAvailable;
+        errdefer lib.close();
 
         const getUniqueId = lib.lookup(FnNcclGetUniqueId, "ncclGetUniqueId") orelse return error.NcclNotAvailable;
         const commInitRank = lib.lookup(FnNcclCommInitRank, "ncclCommInitRank") orelse return error.NcclNotAvailable;
@@ -293,8 +331,10 @@ pub const Transport = struct {
     }
 
     /// Lazily initialize NCCL communicator. Called on first NCCL operation.
+    /// Not thread-safe — callers must ensure single-threaded access per rank.
     pub fn ensureNcclComm(self: *Transport) void {
         if (self.nccl_comm != null) return;
+        if (self.kind != .nccl) return;
         if (self.nccl_comm_init_rank) |initRank| {
             // Set CUDA context current BEFORE ncclCommInitRank
             if (self.cuda_ctx_set) |setCtx| _ = setCtx(self.cuda_ctx);
@@ -382,7 +422,10 @@ pub const Transport = struct {
         if (self.tcp_connected == 0) return;
         const byte_len = n * @sizeOf(f32);
 
-        const recv = self.ensureRecvBuf(n) catch return;
+        const recv = self.ensureRecvBuf(n) catch |err| {
+            std.log.err("tcpAllReduce: recv buffer allocation failed ({d} floats): {s}", .{ n, @errorName(err) });
+            return;
+        };
         const fd = self.tcp_fds[0];
         const buf_u8: [*]const u8 = @ptrCast(buf);
         const recv_u8: [*]u8 = @ptrCast(recv.ptr);
@@ -391,14 +434,20 @@ pub const Transport = struct {
         var sent: usize = 0;
         while (sent < byte_len) {
             const rc = c.send(fd, buf_u8 + sent, byte_len - sent, 0);
-            if (rc <= 0) return;
+            if (rc <= 0) {
+                std.log.err("tcpAllReduce: send failed at {d}/{d} bytes", .{ sent, byte_len });
+                return;
+            }
             sent += @intCast(rc);
         }
         // Recv
         var got: usize = 0;
         while (got < byte_len) {
             const rc = c.recv(fd, recv_u8 + got, byte_len - got, 0);
-            if (rc <= 0) return;
+            if (rc <= 0) {
+                std.log.err("tcpAllReduce: recv failed at {d}/{d} bytes", .{ got, byte_len });
+                return;
+            }
             got += @intCast(rc);
         }
         // Sum
@@ -457,6 +506,9 @@ pub const Transport = struct {
 
     fn ensureStagingBuf(self: *Transport, byte_len: usize) void {
         if (self.nccl_dev_buf_size < byte_len) {
+            if (self.nccl_dev_buf != 0) {
+                if (self.cuda_mem_free) |free| _ = free(self.nccl_dev_buf);
+            }
             if (self.cuda_mem_alloc) |alloc| _ = alloc(&self.nccl_dev_buf, byte_len);
             self.nccl_dev_buf_size = byte_len;
         }
@@ -469,7 +521,10 @@ pub const Transport = struct {
         var sent: usize = 0;
         while (sent < byte_len) {
             const rc = c.send(fd, data + sent, byte_len - sent, 0);
-            if (rc <= 0) return;
+            if (rc <= 0) {
+                std.log.err("tcpSend: failed at {d}/{d} bytes", .{ sent, byte_len });
+                return;
+            }
             sent += @intCast(rc);
         }
     }
@@ -500,7 +555,11 @@ pub const Transport = struct {
         var got: usize = 0;
         while (got < byte_len) {
             const rc = c.recv(fd, data + got, byte_len - got, 0);
-            if (rc <= 0) return;
+            if (rc <= 0) {
+                std.log.err("tcpRecv: failed at {d}/{d} bytes", .{ got, byte_len });
+                @memset(data[got..byte_len], 0);
+                return;
+            }
             got += @intCast(rc);
         }
     }

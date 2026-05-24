@@ -53,6 +53,7 @@ pub const BpeTokenizer = struct {
         .encode = @ptrCast(&tokEncode),
         .decode = @ptrCast(&tokDecode),
         .get_vocab_size = @ptrCast(&tokGetVocabSize),
+        .get_vocab_texts = @ptrCast(&tokGetVocabTexts),
     };
     fn tokEncode(self: *BpeTokenizer, text: []const u8) tok_iface.TokenizerError![]u32 {
         return switch (self.tok_kind) {
@@ -69,6 +70,9 @@ pub const BpeTokenizer = struct {
     }
     fn tokGetVocabSize(self: *BpeTokenizer) u32 {
         return self.vocab_size;
+    }
+    fn tokGetVocabTexts(self: *BpeTokenizer) []const []const u8 {
+        return self.id_to_token.items;
     }
 
     /// Create a new BPE tokenizer. Caller must call deinit() when done.
@@ -231,7 +235,11 @@ pub const BpeTokenizer = struct {
             const m = self.findBestMerge(current.items);
             if (m.pos < 0) break;
             const pos: usize = @intCast(m.pos);
-            const merged = try std.fmt.allocPrint(self.allocator, "{s}{s}", .{ current.items[pos], current.items[pos + 1] });
+            const a = current.items[pos];
+            const b = current.items[pos + 1];
+            const merged = try self.allocator.alloc(u8, a.len + b.len);
+            @memcpy(merged[0..a.len], a);
+            @memcpy(merged[a.len..], b);
             try allocated.append(self.allocator, merged);
             current.items[pos] = merged;
             _ = current.orderedRemove(pos + 1);
@@ -267,15 +275,28 @@ pub const BpeTokenizer = struct {
             var best_pos: usize = text.len;
             var best_len: usize = 0;
             var best_tok: ?[]const u8 = null;
-            var it = self.special_tokens.iterator();
-            while (it.next()) |entry| {
-                const st = entry.key_ptr.*;
-                if (std.mem.indexOf(u8, text[start..], st)) |p| {
-                    if (start + p < best_pos) {
-                        best_pos = start + p;
-                        best_len = st.len;
-                        best_tok = st;
+            // All special tokens start with '<' (enforced at load time).
+            // Scan for '<' positions and check special tokens only there,
+            // avoiding O(n_special × text_len) substring searches.
+            {
+                var scan = start;
+                while (scan < text.len) {
+                    const rel = std.mem.indexOfScalar(u8, text[scan..], '<') orelse break;
+                    scan += rel;
+                    var it = self.special_tokens.iterator();
+                    while (it.next()) |entry| {
+                        const st = entry.key_ptr.*;
+                        if (scan + st.len <= text.len and
+                            std.mem.eql(u8, text[scan..][0..st.len], st))
+                        {
+                            best_pos = scan;
+                            best_len = st.len;
+                            best_tok = st;
+                            break;
+                        }
                     }
+                    if (best_tok != null) break;
+                    scan += 1;
                 }
             }
             if (best_tok != null and best_pos < text.len) {
@@ -442,17 +463,20 @@ pub const BpeTokenizer = struct {
 
         var start: usize = 0;
         while (start < text.len) {
-            // Try to match special tokens first (longest match wins)
+            // Try to match special tokens first (longest match wins).
+            // All special tokens start with '<' — skip scan otherwise.
             var best_sp_len: usize = 0;
             var best_sp_id: u32 = 0;
-            var sp_it = self.special_tokens.iterator();
-            while (sp_it.next()) |entry| {
-                const st = entry.key_ptr.*;
-                if (st.len > best_sp_len and start + st.len <= text.len and
-                    std.mem.eql(u8, text[start..][0..st.len], st))
-                {
-                    best_sp_len = st.len;
-                    best_sp_id = entry.value_ptr.*;
+            if (text[start] == '<') {
+                var sp_it = self.special_tokens.iterator();
+                while (sp_it.next()) |entry| {
+                    const st = entry.key_ptr.*;
+                    if (st.len > best_sp_len and start + st.len <= text.len and
+                        std.mem.eql(u8, text[start..][0..st.len], st))
+                    {
+                        best_sp_len = st.len;
+                        best_sp_id = entry.value_ptr.*;
+                    }
                 }
             }
             if (best_sp_len > 0) {
@@ -471,25 +495,26 @@ pub const BpeTokenizer = struct {
             }
 
             // Limit greedy match to not cross a special token boundary.
-            // Scan for the nearest '<' that starts a known special token.
+            // Jump to each '<' via indexOfScalar (SIMD-accelerated) instead of byte-by-byte.
             var max_reach: usize = text.len - start;
             {
                 var scan: usize = start + 1;
-                while (scan < start + max_reach) : (scan += 1) {
-                    if (text[scan] == '<') {
-                        // Check if any special token starts here
-                        var sp2 = self.special_tokens.iterator();
-                        while (sp2.next()) |entry| {
-                            const st = entry.key_ptr.*;
-                            if (scan + st.len <= text.len and
-                                std.mem.eql(u8, text[scan..][0..st.len], st))
-                            {
-                                max_reach = scan - start;
-                                break;
-                            }
+                const scan_end = start + max_reach;
+                while (scan < scan_end) {
+                    const rel = std.mem.indexOfScalar(u8, text[scan..scan_end], '<') orelse break;
+                    scan += rel;
+                    var sp2 = self.special_tokens.iterator();
+                    while (sp2.next()) |entry| {
+                        const st = entry.key_ptr.*;
+                        if (scan + st.len <= text.len and
+                            std.mem.eql(u8, text[scan..][0..st.len], st))
+                        {
+                            max_reach = scan - start;
+                            break;
                         }
-                        if (max_reach == scan - start) break;
                     }
+                    if (max_reach == scan - start) break;
+                    scan += 1;
                 }
             }
 

@@ -20,6 +20,9 @@ const std = @import("std");
 const unresolved_rule_id: u32 = 0xFFFF;
 const forward_ref_base: u32 = 0xFF00;
 const max_json_properties: usize = 32;
+const max_schema_depth: usize = 16;
+const max_grammar_input_size: usize = 64 * 1024;
+const max_rules: usize = 512;
 const bpe_two_byte_prefix: u8 = 0xC4;
 const bpe_three_byte_prefix: u8 = 0xC3;
 
@@ -77,6 +80,7 @@ pub const Grammar = struct {
     /// Supports: object (with properties), string, number, integer, boolean,
     /// array (with items), enum, and nested schemas.
     pub fn fromJsonSchema(allocator: std.mem.Allocator, schema_json: []const u8) !Grammar {
+        if (schema_json.len > max_grammar_input_size) return error.GrammarTooLarge;
         var converter = SchemaConverter.init(allocator);
         defer converter.deinit();
         const gbnf = try converter.convert(schema_json);
@@ -85,6 +89,7 @@ pub const Grammar = struct {
     }
 
     pub fn parse(allocator: std.mem.Allocator, input: []const u8) !Grammar {
+        if (input.len > max_grammar_input_size) return error.GrammarTooLarge;
         var parser = Parser.init(allocator, input);
         return parser.parseGrammar();
     }
@@ -115,8 +120,23 @@ pub const Grammar = struct {
             .stack = std.ArrayList(StackEntry).empty,
             .completed = state.completed,
         };
-        test_state.stack.ensureTotalCapacity(self.allocator, required_cap) catch return;
+        test_state.stack.ensureTotalCapacity(self.allocator, required_cap) catch {
+            std.log.err("grammar: OOM allocating test state (cap={d}), constrained decoding disabled for this token", .{required_cap});
+            return;
+        };
         defer test_state.stack.deinit(self.allocator);
+
+        const src = state.stack.items;
+
+        // Build first-byte acceptance bitmap: test each byte 0..255 against current
+        // grammar state. Rejects ~90% of vocab tokens without per-token state copy.
+        var first_byte_valid: [256]bool = .{false} ** 256;
+        for (0..256) |byte_val| {
+            test_state.stack.items.len = src.len;
+            @memcpy(test_state.stack.items.ptr[0..src.len], src);
+            test_state.completed = state.completed;
+            first_byte_valid[byte_val] = test_state.acceptChar(@intCast(byte_val));
+        }
 
         for (logits, 0..) |*logit, token_id| {
             if (token_id >= vocab.len) break;
@@ -129,11 +149,15 @@ pub const Grammar = struct {
                 continue;
             }
 
-            // Reset test state to original snapshot (no allocation — capacity pre-reserved)
-            test_state.stack.shrinkRetainingCapacity(0);
-            for (state.stack.items) |entry| {
-                test_state.stack.appendAssumeCapacity(entry);
+            // Fast reject via first-byte bitmap (avoids state copy for ~90% of tokens)
+            if (!first_byte_valid[effective[0]]) {
+                logit.* = -std.math.inf(f32);
+                continue;
             }
+
+            // Full validation for tokens that pass first-byte check
+            test_state.stack.items.len = src.len;
+            @memcpy(test_state.stack.items.ptr[0..src.len], src);
             test_state.completed = state.completed;
 
             var valid = true;
@@ -166,16 +190,27 @@ pub const Grammar = struct {
         test_state.stack.ensureTotalCapacity(self.allocator, required_cap) catch return null;
         defer test_state.stack.deinit(self.allocator);
 
+        const src = state.stack.items;
+
+        // First-byte bitmap: skip tokens whose first byte is rejected
+        var first_byte_valid: [256]bool = .{false} ** 256;
+        for (0..256) |byte_val| {
+            test_state.stack.items.len = src.len;
+            @memcpy(test_state.stack.items.ptr[0..src.len], src);
+            test_state.completed = state.completed;
+            first_byte_valid[byte_val] = test_state.acceptChar(@intCast(byte_val));
+        }
+
         var valid_id: ?u32 = null;
         for (vocab, 0..) |text, token_id| {
             if (text.len == 0) continue;
             const effective = getEffectiveText(text);
             if (effective.len == 0) continue;
 
-            test_state.stack.shrinkRetainingCapacity(0);
-            for (state.stack.items) |entry| {
-                test_state.stack.appendAssumeCapacity(entry);
-            }
+            if (!first_byte_valid[effective[0]]) continue;
+
+            test_state.stack.items.len = src.len;
+            @memcpy(test_state.stack.items.ptr[0..src.len], src);
             test_state.completed = state.completed;
 
             var valid = true;
@@ -459,6 +494,7 @@ const Parser = struct {
 
         // Pass 2: parse rule bodies (synthetic rules from groups get real IDs)
         while (self.pos < self.input.len) {
+            if (self.rules.items.len >= max_rules) return error.TooManyRules;
             self.skipWs();
             if (self.pos >= self.input.len) break;
             if (self.input[self.pos] == '#' or self.input[self.pos] == '\n') {
@@ -469,6 +505,7 @@ const Parser = struct {
         }
 
         self.elements.deinit(self.allocator);
+        self.elements = .empty;
 
         for (self.unresolved.items, 0..) |ref, i| {
             const placeholder: u32 = forward_ref_base + @as(u32, @intCast(i));
@@ -487,7 +524,8 @@ const Parser = struct {
         }
 
         self.unresolved.deinit(self.allocator);
-        const root_id = self.rule_names.get("root") orelse 0;
+        self.unresolved = .empty;
+        const root_id = self.rule_names.get("root") orelse return error.MissingRootRule;
         return Grammar{
             .allocator = self.allocator,
             .rules = try self.rules.toOwnedSlice(self.allocator),
@@ -581,6 +619,7 @@ const Parser = struct {
             const group_elems_src = self.elements.items[group_start..group_end];
             const n_group = group_elems_src.len + 1; // +1 for end marker
             const group_elems = try self.allocator.alloc(Element, n_group);
+            errdefer self.allocator.free(group_elems);
             @memcpy(group_elems[0..group_elems_src.len], group_elems_src);
             group_elems[n_group - 1] = .{ .type = .end };
 
@@ -596,7 +635,7 @@ const Parser = struct {
         } else if (std.ascii.isAlphanumeric(c) or c == '_' or c == '-') {
             try self.parseRuleRef();
         } else {
-            self.pos += 1; // skip unknown
+            self.pos += 1;
         }
 
         // Handle repetition modifiers: *, +, ?
@@ -642,7 +681,7 @@ const Parser = struct {
     }
 
     fn parseString(self: *Parser) !void {
-        self.pos += 1; // skip opening "
+        self.pos += 1;
         while (self.pos < self.input.len and self.input[self.pos] != '"') {
             var ch = self.input[self.pos];
             if (ch == '\\' and self.pos + 1 < self.input.len) {
@@ -659,11 +698,11 @@ const Parser = struct {
             try self.elements.append(self.allocator, .{ .type = .char_range, .lo = ch, .hi = ch });
             self.pos += 1;
         }
-        if (self.pos < self.input.len) self.pos += 1; // skip closing "
+        if (self.pos < self.input.len) self.pos += 1;
     }
 
     fn parseCharClass(self: *Parser) !void {
-        self.pos += 1; // skip [
+        self.pos += 1;
         var negate = false;
         if (self.pos < self.input.len and self.input[self.pos] == '^') {
             negate = true;
@@ -674,14 +713,14 @@ const Parser = struct {
             self.pos += 1;
             var hi = lo;
             if (self.pos + 1 < self.input.len and self.input[self.pos] == '-' and self.input[self.pos + 1] != ']') {
-                self.pos += 1; // skip -
+                self.pos += 1;
                 hi = self.input[self.pos];
                 self.pos += 1;
             }
             const elem_type: ElementType = if (negate) .char_not else .char_range;
             try self.elements.append(self.allocator, .{ .type = elem_type, .lo = lo, .hi = hi });
         }
-        if (self.pos < self.input.len) self.pos += 1; // skip ]
+        if (self.pos < self.input.len) self.pos += 1;
     }
 
     fn parseRuleRef(self: *Parser) !void {
@@ -738,12 +777,13 @@ const SchemaConverter = struct {
         try self.emit("ws ::= [ \\t\\n\\r]*\n");
         try self.emit("value ::= string | number | boolean | null\n");
 
-        try self.emitRule("root", schema_json);
+        try self.emitRule("root", schema_json, 0);
         return self.rules.toOwnedSlice(self.allocator);
     }
 
     const ConvertError = error{OutOfMemory};
-    fn emitRule(self: *SchemaConverter, name: []const u8, schema: []const u8) ConvertError!void {
+    fn emitRule(self: *SchemaConverter, name: []const u8, schema: []const u8, depth: usize) ConvertError!void {
+        if (depth > max_schema_depth) return;
         const type_str = extractJsonStr(schema, "type");
 
         // Check for enum first
@@ -757,10 +797,10 @@ const SchemaConverter = struct {
 
         if (type_str) |t| {
             if (std.mem.eql(u8, t, "object")) {
-                try self.emitObject(name, schema);
+                try self.emitObject(name, schema, depth);
                 return;
             } else if (std.mem.eql(u8, t, "array")) {
-                try self.emitArray(name, schema);
+                try self.emitArray(name, schema, depth);
                 return;
             }
         }
@@ -777,7 +817,7 @@ const SchemaConverter = struct {
         try self.emit("\n");
     }
 
-    fn emitObject(self: *SchemaConverter, name: []const u8, schema: []const u8) ConvertError!void {
+    fn emitObject(self: *SchemaConverter, name: []const u8, schema: []const u8, depth: usize) ConvertError!void {
         const props_content = findJsonObject(schema, "properties") orelse {
             try self.emit(name);
             try self.emit(" ::= \"{\" ws \"}\" | \"{\" ws string ws \":\" ws value (ws \",\" ws string ws \":\" ws value)* ws \"}\"\n");
@@ -838,20 +878,20 @@ const SchemaConverter = struct {
             // Generate sub-rule for this property's value
             var sub_name_buf: [64]u8 = undefined;
             const sub_name = std.fmt.bufPrint(&sub_name_buf, "{s}-{s}", .{ name, prop_names[i] }) catch "prop";
-            try self.emitRule(sub_name, prop_schemas[i]);
+            try self.emitRule(sub_name, prop_schemas[i], depth + 1);
             try self.emit(sub_name);
         }
         try self.emit(" ws \"}\"\n");
     }
 
-    fn emitArray(self: *SchemaConverter, name: []const u8, schema: []const u8) ConvertError!void {
+    fn emitArray(self: *SchemaConverter, name: []const u8, schema: []const u8, depth: usize) ConvertError!void {
         const items_schema = findJsonObject(schema, "items");
 
         var item_rule: []const u8 = "value";
         var sub_name_buf: [64]u8 = undefined;
         if (items_schema) |is| {
             const sub = std.fmt.bufPrint(&sub_name_buf, "{s}-item", .{name}) catch "item";
-            try self.emitRule(sub, is);
+            try self.emitRule(sub, is, depth + 1);
             item_rule = sub;
         }
 
@@ -1056,7 +1096,24 @@ test "json grammar parses" {
     const allocator = std.testing.allocator;
     var grammar = try Grammar.parse(allocator, Grammar.json_grammar);
     defer grammar.deinit();
-    try std.testing.expect(grammar.rules.len >= 6);
+    // json_grammar defines 8 named rules (root, object, pair, array, value, string, number, ws)
+    // plus synthetic groups from repetition/optional expansions
+    try std.testing.expect(grammar.rules.len >= 8);
+    // Verify rule names include all core JSON rules
+    var found_root = false;
+    var found_object = false;
+    var found_value = false;
+    var found_string = false;
+    for (grammar.rules) |rule| {
+        if (std.mem.eql(u8, rule.name, "root")) found_root = true;
+        if (std.mem.eql(u8, rule.name, "object")) found_object = true;
+        if (std.mem.eql(u8, rule.name, "value")) found_value = true;
+        if (std.mem.eql(u8, rule.name, "string")) found_string = true;
+    }
+    try std.testing.expect(found_root);
+    try std.testing.expect(found_object);
+    try std.testing.expect(found_value);
+    try std.testing.expect(found_string);
 
     var state = try grammar.initState();
     defer state.deinit();
@@ -1102,6 +1159,10 @@ test "json schema string type" {
     try std.testing.expect(state.acceptChar('h'));
     try std.testing.expect(state.acceptChar('i'));
     try std.testing.expect(state.acceptChar('"'));
+    // Non-quote start should be rejected
+    var state2 = try grammar.initState();
+    defer state2.deinit();
+    try std.testing.expect(!state2.acceptChar('h'));
 }
 
 test "json schema boolean type" {
@@ -1115,6 +1176,14 @@ test "json schema boolean type" {
     try std.testing.expect(state.acceptChar('r'));
     try std.testing.expect(state.acceptChar('u'));
     try std.testing.expect(state.acceptChar('e'));
+    // Also verify "false" path works
+    var state2 = try grammar.initState();
+    defer state2.deinit();
+    try std.testing.expect(state2.acceptChar('f'));
+    try std.testing.expect(state2.acceptChar('a'));
+    try std.testing.expect(state2.acceptChar('l'));
+    try std.testing.expect(state2.acceptChar('s'));
+    try std.testing.expect(state2.acceptChar('e'));
 }
 
 test "json schema enum" {
@@ -1127,6 +1196,15 @@ test "json schema enum" {
     try std.testing.expect(state.acceptChar('r'));
     try std.testing.expect(state.acceptChar('e'));
     try std.testing.expect(state.acceptChar('d'));
+    // "green" path from fresh state
+    var state2 = try grammar.initState();
+    defer state2.deinit();
+    try std.testing.expect(state2.acceptChar('g'));
+    try std.testing.expect(state2.acceptChar('r'));
+    // Invalid start should be rejected
+    var state3 = try grammar.initState();
+    defer state3.deinit();
+    try std.testing.expect(!state3.acceptChar('x'));
 }
 
 test "json schema object" {
@@ -1139,8 +1217,12 @@ test "json schema object" {
     var state = try grammar.initState();
     defer state.deinit();
 
-    // Should accept opening brace
+    // Opening brace accepted
     try std.testing.expect(state.acceptChar('{'));
+    // Non-object start rejected from fresh state
+    var state2 = try grammar.initState();
+    defer state2.deinit();
+    try std.testing.expect(!state2.acceptChar('['));
 }
 
 test "json schema array" {
@@ -1151,6 +1233,10 @@ test "json schema array" {
     defer state.deinit();
 
     try std.testing.expect(state.acceptChar('['));
+    // Non-array start rejected from fresh state
+    var state2 = try grammar.initState();
+    defer state2.deinit();
+    try std.testing.expect(!state2.acceptChar('{'));
 }
 
 test "json schema integer" {
@@ -1165,18 +1251,14 @@ test "json schema integer" {
     try std.testing.expect(state.acceptChar('a') == false);
 }
 
-test "parse empty input produces no rules" {
+test "parse empty input returns MissingRootRule" {
     const allocator = std.testing.allocator;
-    var grammar = try Grammar.parse(allocator, "");
-    defer grammar.deinit();
-    try std.testing.expectEqual(@as(usize, 0), grammar.rules.len);
+    try std.testing.expectError(error.MissingRootRule, Grammar.parse(allocator, ""));
 }
 
-test "parse nonsense input produces no rules" {
+test "parse nonsense input returns MissingRootRule" {
     const allocator = std.testing.allocator;
-    var grammar = try Grammar.parse(allocator, "!@#$%^&*()");
-    defer grammar.deinit();
-    try std.testing.expectEqual(@as(usize, 0), grammar.rules.len);
+    try std.testing.expectError(error.MissingRootRule, Grammar.parse(allocator, "!@#$%^&*()"));
 }
 
 test "singleValidToken with bool grammar" {
@@ -1206,4 +1288,51 @@ test "singleValidToken with fixed literal" {
     state.acceptToken("y");
     const result = grammar.singleValidToken(&state, &vocab);
     try std.testing.expectEqual(@as(?u32, 1), result);
+}
+
+test "isComplete after full match" {
+    const allocator = std.testing.allocator;
+    var grammar = try Grammar.parse(allocator, "root ::= \"hi\"");
+    defer grammar.deinit();
+    var state = try grammar.initState();
+    defer state.deinit();
+
+    try std.testing.expect(!state.isComplete());
+    try std.testing.expect(state.acceptChar('h'));
+    try std.testing.expect(!state.isComplete());
+    try std.testing.expect(state.acceptChar('i'));
+    try std.testing.expect(state.isComplete());
+}
+
+test "maskLogits constrains vocab" {
+    const allocator = std.testing.allocator;
+    var grammar = try Grammar.parse(allocator, "root ::= \"yes\"");
+    defer grammar.deinit();
+    var state = try grammar.initState();
+    defer state.deinit();
+
+    // Vocab: ["y", "n", "yes", "no"]
+    const vocab = [_][]const u8{ "y", "n", "yes", "no" };
+    var logits = [_]f32{ 1.0, 2.0, 3.0, 4.0 };
+    grammar.maskLogits(&state, &logits, &vocab);
+    // "y" (idx 0) valid prefix, "yes" (idx 2) valid full match
+    try std.testing.expect(logits[0] != -std.math.inf(f32));
+    try std.testing.expect(logits[2] != -std.math.inf(f32));
+    // "n" and "no" should be masked
+    try std.testing.expectEqual(-std.math.inf(f32), logits[1]);
+    try std.testing.expectEqual(-std.math.inf(f32), logits[3]);
+}
+
+test "acceptToken advances state" {
+    const allocator = std.testing.allocator;
+    var grammar = try Grammar.parse(allocator, "root ::= \"hello\"");
+    defer grammar.deinit();
+    var state = try grammar.initState();
+    defer state.deinit();
+
+    state.acceptToken("hel");
+    try std.testing.expect(!state.isComplete());
+    try std.testing.expect(state.acceptChar('l'));
+    try std.testing.expect(state.acceptChar('o'));
+    try std.testing.expect(state.isComplete());
 }

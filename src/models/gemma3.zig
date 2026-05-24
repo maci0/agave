@@ -697,16 +697,16 @@ pub const Gemma3Model = struct {
         };
     }
 
-    const PagedKvView = @import("../kvcache/manager.zig").PagedKvView;
+    const PagedKvView = kvcache.PagedKvView;
 
     fn getPagedKvView(self: *Gemma3Model, layer: usize) PagedKvView {
-        return .{
-            .block_table = self.seq_table.block_table[layer],
-            .blocks = self.paged_cache.blocks,
-            .block_size = self.paged_cache.block_size,
-            .kv_dim = self.paged_cache.kv_dim,
-            .seq_len = self.kv_seq_len,
-        };
+        return PagedKvView.initView(
+            self.seq_table.block_table[layer],
+            self.paged_cache.blocks,
+            self.paged_cache.block_size,
+            self.paged_cache.kv_dim,
+            self.kv_seq_len,
+        );
     }
 
     fn isMultiBlock(self: *Gemma3Model, layer: usize) bool {

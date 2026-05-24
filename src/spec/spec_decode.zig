@@ -1,9 +1,12 @@
 //! Speculative decoding orchestrator.
 //!
-//! Supports three verification modes:
+//! Verification modes (selected via --spec-mode):
 //! - Standard greedy: single-path draft → sequential argmax verification
 //! - Rejection sampling: stochastic acceptance with temperature (Leviathan et al. 2023)
 //! - DDTree: tree-structured draft → greedy tree walk (Ringel & Romano, 2026)
+//! - Self-speculative: layer-skip self-drafting (no separate draft model)
+//! - N-gram: history-based n-gram prediction (no draft model)
+//! - MTP: multi-token prediction heads
 
 const std = @import("std");
 const Model = @import("../models/model.zig").Model;
@@ -12,6 +15,10 @@ const ddtree = @import("ddtree.zig");
 
 pub const max_draft_tokens: usize = 32;
 const log_softmax_eps: f32 = 1e-10;
+/// Minimum verification rounds before adaptive K profiling engages.
+const adaptive_k_min_rounds: u64 = 10;
+/// Minimum samples per draft length before including it in optimal K selection.
+const adaptive_k_min_samples: u32 = 3;
 
 /// Pre-allocated state for speculative decoding.
 pub const SpecState = struct {
@@ -37,11 +44,14 @@ pub const SpecState = struct {
     adaptive_k_enabled: bool = false,
 
     pub fn init(allocator: std.mem.Allocator, k: u32, vocab_size: u32) !SpecState {
+        const draft_log_probs = try allocator.alloc(f32, max_draft_tokens * vocab_size);
+        errdefer allocator.free(draft_log_probs);
+        const sampling_buf = try allocator.alloc(f32, vocab_size);
         return .{
             .k = k,
             .vocab_size = vocab_size,
-            .draft_log_probs = try allocator.alloc(f32, max_draft_tokens * vocab_size),
-            .sampling_buf = try allocator.alloc(f32, vocab_size),
+            .draft_log_probs = draft_log_probs,
+            .sampling_buf = sampling_buf,
         };
     }
 
@@ -79,14 +89,13 @@ pub const SpecState = struct {
     /// Optimal k maximizes E[tokens] / cost = k × accept_rate(k) + 1.
     /// Returns the configured k if insufficient data for profiling.
     pub fn optimalK(self: *const SpecState) u32 {
-        if (!self.adaptive_k_enabled or self.total_rounds < 10) return self.k;
+        if (!self.adaptive_k_enabled or self.total_rounds < adaptive_k_min_rounds) return self.k;
 
         var best_k: u32 = self.k;
         var best_ev: f32 = 0;
-        const min_samples: u32 = 3;
 
         for (0..@min(self.k, max_draft_tokens)) |ki| {
-            if (self.k_total_counts[ki] < min_samples) continue;
+            if (self.k_total_counts[ki] < adaptive_k_min_samples) continue;
             const accept_rate = @as(f32, @floatFromInt(self.k_accept_counts[ki])) /
                 @as(f32, @floatFromInt(self.k_total_counts[ki] * (@as(u32, @intCast(ki)) + 1)));
             const k_val: f32 = @floatFromInt(ki + 1);
@@ -168,7 +177,10 @@ pub fn verifySequential(
 
     for (0..state.n_draft) |i| {
         const input = if (i == 0) last_accepted_token else state.draft_tokens[i - 1];
-        const target_next = target_model.forward(input) catch break;
+        const target_next = target_model.forward(input) catch |err| {
+            std.log.warn("spec verify: target forward failed at draft {d}/{d}: {s}", .{ i, state.n_draft, @errorName(err) });
+            break;
+        };
 
         if (target_next == state.draft_tokens[i]) {
             accepted += 1;
@@ -179,7 +191,10 @@ pub fn verifySequential(
 
     // All accepted — bonus token from target
     const last_draft = state.draft_tokens[state.n_draft - 1];
-    const bonus = target_model.forward(last_draft) catch last_draft;
+    const bonus = target_model.forward(last_draft) catch |err| {
+        std.log.warn("spec verify: bonus forward failed: {s}", .{@errorName(err)});
+        return finishRound(state, target_model, draft_model, accepted, pre_draft_pos, last_draft);
+    };
     return finishRound(state, target_model, draft_model, accepted, pre_draft_pos, bonus);
 }
 
@@ -201,7 +216,10 @@ pub fn verifySampling(
 
     for (0..state.n_draft) |i| {
         const input = if (i == 0) last_accepted_token else state.draft_tokens[i - 1];
-        _ = target_model.forward(input) catch break;
+        _ = target_model.forward(input) catch |err| {
+            std.log.warn("spec sampling: target forward failed at draft {d}/{d}: {s}", .{ i, state.n_draft, @errorName(err) });
+            break;
+        };
 
         const target_logits = target_model.getLogits();
         const draft_lp = state.draft_log_probs[i * vs ..][0..vs];
@@ -223,7 +241,8 @@ pub fn verifySampling(
 
     // All accepted — sample bonus from target distribution
     const last_draft = state.draft_tokens[state.n_draft - 1];
-    _ = target_model.forward(last_draft) catch {
+    _ = target_model.forward(last_draft) catch |err| {
+        std.log.warn("spec sampling: bonus forward failed: {s}", .{@errorName(err)});
         return finishRound(state, target_model, draft_model, accepted, pre_draft_pos, last_draft);
     };
     const bonus = math_ops.sampleToken(target_model.getLogits(), temperature, 0, 1.0, rng);
@@ -305,6 +324,7 @@ pub fn verifyDDTree(
             target_model.setKvSeqLen(pre_draft_pos);
             _ = target_model.forward(last_accepted_token) catch |err| {
                 std.log.warn("spec verify: target forward failed: {s}", .{@errorName(err)});
+                return .{ .accepted = 0, .next_token = last_accepted_token };
             };
             return finishRound(state, target_model, draft_model, 0, pre_draft_pos, first_target);
         }
@@ -315,11 +335,14 @@ pub fn verifyDDTree(
         for (0..accepted) |i| {
             _ = target_model.forward(commit_tok) catch |err| {
                 std.log.warn("spec commit: target forward failed at token {d}/{d}: {s}", .{ i, accepted, @errorName(err) });
-                break;
+                return .{ .accepted = @intCast(i), .next_token = commit_tok };
             };
             commit_tok = state.draft_tokens[i];
         }
-        const bonus = target_model.forward(commit_tok) catch commit_tok;
+        const bonus = target_model.forward(commit_tok) catch |err| {
+            std.log.warn("spec commit: bonus forward failed: {s}", .{@errorName(err)});
+            return .{ .accepted = accepted, .next_token = commit_tok };
+        };
         return finishRound(state, target_model, draft_model, accepted, pre_draft_pos, bonus);
     }
     return verifyDDTreeSequential(state, target_model, draft_model, last_accepted_token, &builder, &tree, pre_draft_pos);
@@ -449,4 +472,29 @@ test "SpecState recordRound updates stats" {
     try std.testing.expectEqual(@as(u32, 8), s.total_drafted);
     try std.testing.expectEqual(@as(u32, 2), s.total_rounds);
     try std.testing.expectApproxEqAbs(@as(f32, 3.5), s.meanAccepted(), 0.01);
+}
+
+test "optimalK returns configured k without sufficient data" {
+    var s = try SpecState.init(std.testing.allocator, 5, 100);
+    defer s.deinit(std.testing.allocator);
+
+    // Without adaptive enabled, always returns configured k
+    try std.testing.expectEqual(@as(u32, 5), s.optimalK());
+
+    // With adaptive enabled but insufficient rounds, still returns configured k
+    s.adaptive_k_enabled = true;
+    s.total_rounds = 3;
+    try std.testing.expectEqual(@as(u32, 5), s.optimalK());
+
+    // After enough rounds with per-K profiling data, picks best k
+    s.total_rounds = adaptive_k_min_rounds;
+    // k=3 (index 2): 90% accept rate → EV = 3*0.9 + 1 = 3.7
+    s.k_total_counts[2] = adaptive_k_min_samples;
+    s.k_accept_counts[2] = adaptive_k_min_samples * 3 * 9 / 10;
+    // k=5 (index 4): 40% accept rate → EV = 5*0.4 + 1 = 3.0
+    s.k_total_counts[4] = adaptive_k_min_samples;
+    s.k_accept_counts[4] = adaptive_k_min_samples * 5 * 4 / 10;
+    const optimal = s.optimalK();
+    // k=3 has highest EV (3.7 vs 3.0 for k=5), so optimalK must pick 3
+    try std.testing.expectEqual(@as(u32, 3), optimal);
 }

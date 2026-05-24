@@ -115,6 +115,12 @@ pub const ModelInfo = struct {
     batch_size: u32 = 0,
     mtp_depth: u32 = 0,
     has_vision: bool = false,
+
+    /// Bits per weight: file_size * 8 / n_params. Returns 0 when n_params is 0.
+    pub fn bitsPerWeight(self: ModelInfo) f32 {
+        if (self.n_params == 0) return 0;
+        return @as(f32, @floatFromInt(self.file_size_bytes)) * bits_per_byte / @as(f32, @floatFromInt(self.n_params));
+    }
 };
 
 /// Re-export BackendInfo from backend.zig for display consumers.
@@ -218,14 +224,13 @@ fn fmtDuration(buf: *[16]u8, ms: u64) []const u8 {
     return std.fmt.bufPrint(buf, "{d}ms", .{ms}) catch "";
 }
 
-// ── Internal Helpers ─────────────────────────────────────────────
-
-/// Calculates the display width (terminal columns) of a UTF-8 string.
-/// Uses the self-contained term module for correct handling of multi-byte
-/// characters, combining marks, and wide (CJK) glyphs.
-fn displayWidth(s: []const u8) usize {
-    return term.displayWidth(s);
+/// Append formatted text to a position-tracked buffer. Silently truncates on overflow.
+fn bufAppend(b: []u8, p: *usize, comptime fmt_str: []const u8, args: anytype) void {
+    const s = std.fmt.bufPrint(b[p.*..], fmt_str, args) catch return;
+    p.* += s.len;
 }
+
+// ── Internal Helpers ─────────────────────────────────────────────
 
 /// Returns a byte-slice prefix of `s` whose display width does not exceed `max_cols`.
 /// Cuts on UTF-8 codepoint boundaries to avoid invalid sequences.
@@ -235,7 +240,7 @@ fn truncateToWidth(s: []const u8, max_cols: usize) []const u8 {
     while (i < s.len) {
         const cp_len = std.unicode.utf8ByteSequenceLength(s[i]) catch 1;
         const end = @min(i + cp_len, s.len);
-        const w = displayWidth(s[i..end]);
+        const w = term.displayWidth(s[i..end]);
         if (cols + w > max_cols) break;
         cols += w;
         i = end;
@@ -353,9 +358,8 @@ pub const Display = struct {
         if (info.n_params > 0) {
             var pb: [16]u8 = undefined;
             const ps = fmtCompact(&pb, info.n_params);
-            const bpw: f32 = @as(f32, @floatFromInt(info.file_size_bytes)) * bits_per_byte / @as(f32, @floatFromInt(info.n_params));
             lines[n_lines] = std.fmt.bufPrint(&line_bufs[n_lines], "{s} \xc2\xb7 {s} \xc2\xb7 {s} params \xc2\xb7 {d:.1}{s} \xc2\xb7 {d:.1} bits/weight", .{
-                info.arch_name, info.quant, ps, fsize.val, fsize.unit, bpw,
+                info.arch_name, info.quant, ps, fsize.val, fsize.unit, info.bitsPerWeight(),
             }) catch "";
         } else {
             lines[n_lines] = std.fmt.bufPrint(&line_bufs[n_lines], "{s} \xc2\xb7 {s} \xc2\xb7 {d:.1}{s}", .{
@@ -453,7 +457,7 @@ pub const Display = struct {
         // Find max display width, capped to terminal width
         var max_width: usize = 0;
         for (lines[0..n_lines]) |line| {
-            const w = displayWidth(line);
+            const w = term.displayWidth(line);
             if (w > max_width) max_width = w;
         }
 
@@ -483,7 +487,7 @@ pub const Display = struct {
         const green = comptime std.fmt.comptimePrint(ctl.fg_base, .{2});
         // cactus emoji from module-level constant
         const title = " agave v" ++ version ++ " ";
-        const title_w = displayWidth(cactus) + displayWidth(title); // 🌵 + title text
+        const title_w = term.displayWidth(cactus) + term.displayWidth(title); // 🌵 + title text
         const rule_after = if (box_w > title_w + 1) box_w - title_w - 1 else 0;
 
         append(&out_buf, &out_pos, cyan);
@@ -503,7 +507,7 @@ pub const Display = struct {
 
         // Content lines
         for (lines[0..n_lines], 0..) |line, i| {
-            const lw = displayWidth(line);
+            const lw = term.displayWidth(line);
             const cw = @min(lw, max_width);
             const pad = box_w - cw;
 
@@ -551,63 +555,54 @@ pub const Display = struct {
         const is_tty = self.mode == .tty;
         var buf: [out_buf_size]u8 = undefined;
         var pos: usize = 0;
-        const w = struct {
-            fn f(b: []u8, p: *usize, comptime fmt_str: []const u8, args: anytype) void {
-                const s = std.fmt.bufPrint(b[p.*..], fmt_str, args) catch return;
-                p.* += s.len;
-            }
-        }.f;
 
-        if (is_tty) w(&buf, &pos, "{s}", .{ctl.dim_set});
+        if (is_tty) bufAppend(&buf, &pos, "{s}", .{ctl.dim_set});
         if (info.os_version.len > 0) {
-            w(&buf, &pos, "system: {s} ({s})", .{ info.os_version, info.arch });
+            bufAppend(&buf, &pos, "system: {s} ({s})", .{ info.os_version, info.arch });
         } else {
-            w(&buf, &pos, "system: {s}/{s}", .{ info.arch, info.os });
+            bufAppend(&buf, &pos, "system: {s}/{s}", .{ info.arch, info.os });
         }
-        w(&buf, &pos, " \xc2\xb7 {s}", .{info.name});
-        if (info.device_name.len > 0) w(&buf, &pos, " \xc2\xb7 {s}", .{info.device_name});
-        if (info.compute_cap.len > 0) w(&buf, &pos, " ({s})", .{info.compute_cap});
+        bufAppend(&buf, &pos, " \xc2\xb7 {s}", .{info.name});
+        if (info.device_name.len > 0) bufAppend(&buf, &pos, " \xc2\xb7 {s}", .{info.device_name});
+        if (info.compute_cap.len > 0) bufAppend(&buf, &pos, " ({s})", .{info.compute_cap});
         if (info.total_mem > 0) {
             const total = formatSize(info.total_mem);
             const is_gpu = info.n_gpu_kernels > 0;
             const label: []const u8 = if (info.is_uma) "unified" else if (is_gpu) "VRAM" else "RAM";
-            // Show "avail/total" when available differs meaningfully from total (>2%)
             if (info.avail_mem > 0 and info.avail_mem < info.total_mem * avail_display_threshold_pct / 100) {
                 const avail = formatSize(info.avail_mem);
-                w(&buf, &pos, " \xc2\xb7 {d:.1}/{d:.1}{s} {s}", .{ avail.val, total.val, total.unit, label });
+                bufAppend(&buf, &pos, " \xc2\xb7 {d:.1}/{d:.1}{s} {s}", .{ avail.val, total.val, total.unit, label });
             } else {
-                w(&buf, &pos, " \xc2\xb7 {d:.1}{s} {s}", .{ total.val, total.unit, label });
+                bufAppend(&buf, &pos, " \xc2\xb7 {d:.1}{s} {s}", .{ total.val, total.unit, label });
             }
         }
-        // Show system RAM separately for discrete GPUs (VRAM differs from system RAM)
         if (info.n_gpu_kernels > 0 and !info.is_uma and info.system_mem > 0) {
             const sys_total = formatSize(info.system_mem);
             if (info.system_avail > 0 and info.system_avail < info.system_mem * avail_display_threshold_pct / 100) {
                 const sys_avail = formatSize(info.system_avail);
-                w(&buf, &pos, " \xc2\xb7 {d:.1}/{d:.1}{s} RAM", .{ sys_avail.val, sys_total.val, sys_total.unit });
+                bufAppend(&buf, &pos, " \xc2\xb7 {d:.1}/{d:.1}{s} RAM", .{ sys_avail.val, sys_total.val, sys_total.unit });
             } else {
-                w(&buf, &pos, " \xc2\xb7 {d:.1}{s} RAM", .{ sys_total.val, sys_total.unit });
+                bufAppend(&buf, &pos, " \xc2\xb7 {d:.1}{s} RAM", .{ sys_total.val, sys_total.unit });
             }
         }
-        // CPU cache sizes
         if (info.l2_cache > 0) {
             if (info.l1_cache > 0) {
                 const l1 = formatSize(info.l1_cache);
-                w(&buf, &pos, " \xc2\xb7 L1 {d:.0}{s}", .{ l1.val, l1.unit });
+                bufAppend(&buf, &pos, " \xc2\xb7 L1 {d:.0}{s}", .{ l1.val, l1.unit });
             }
             const l2 = formatSize(info.l2_cache);
-            w(&buf, &pos, " \xc2\xb7 L2 {d:.0}{s}", .{ l2.val, l2.unit });
+            bufAppend(&buf, &pos, " \xc2\xb7 L2 {d:.0}{s}", .{ l2.val, l2.unit });
             if (info.l3_cache > 0) {
                 const l3 = formatSize(info.l3_cache);
-                w(&buf, &pos, " \xc2\xb7 L3 {d:.0}{s}", .{ l3.val, l3.unit });
+                bufAppend(&buf, &pos, " \xc2\xb7 L3 {d:.0}{s}", .{ l3.val, l3.unit });
             }
         }
-        if (info.lib_name.len > 0) w(&buf, &pos, " \xc2\xb7 {s}", .{info.lib_name});
-        if (info.driver_version.len > 0) w(&buf, &pos, " \xc2\xb7 {s}", .{info.driver_version});
-        if (info.n_gpu_kernels > 0) w(&buf, &pos, " \xc2\xb7 {d} {s} kernels", .{ info.n_gpu_kernels, info.kernel_type });
-        if (info.n_threads > 0) w(&buf, &pos, " \xc2\xb7 {d} threads", .{info.n_threads});
-        if (is_tty) w(&buf, &pos, "{s}", .{ctl.sgr_reset});
-        w(&buf, &pos, "\n", .{});
+        if (info.lib_name.len > 0) bufAppend(&buf, &pos, " \xc2\xb7 {s}", .{info.lib_name});
+        if (info.driver_version.len > 0) bufAppend(&buf, &pos, " \xc2\xb7 {s}", .{info.driver_version});
+        if (info.n_gpu_kernels > 0) bufAppend(&buf, &pos, " \xc2\xb7 {d} {s} kernels", .{ info.n_gpu_kernels, info.kernel_type });
+        if (info.n_threads > 0) bufAppend(&buf, &pos, " \xc2\xb7 {d} threads", .{info.n_threads});
+        if (is_tty) bufAppend(&buf, &pos, "{s}", .{ctl.sgr_reset});
+        bufAppend(&buf, &pos, "\n", .{});
 
         writeStderr(buf[0..pos]);
     }
@@ -621,29 +616,23 @@ pub const Display = struct {
         const is_tty = self.mode == .tty;
         var buf: [out_buf_size]u8 = undefined;
         var pos: usize = 0;
-        const w = struct {
-            fn f(b: []u8, p: *usize, comptime fmt_str: []const u8, args: anytype) void {
-                const s = std.fmt.bufPrint(b[p.*..], fmt_str, args) catch return;
-                p.* += s.len;
-            }
-        }.f;
 
-        if (is_tty) w(&buf, &pos, "{s}", .{ctl.dim_set});
-        w(&buf, &pos, "loaded:", .{});
-        if (info.format_name.len > 0) w(&buf, &pos, " {s}", .{info.format_name});
-        if (info.n_tensors > 0) w(&buf, &pos, " \xc2\xb7 {d} tensors", .{info.n_tensors});
-        if (info.tok_kind.len > 0) w(&buf, &pos, " \xc2\xb7 {s} tokenizer", .{info.tok_kind});
+        if (is_tty) bufAppend(&buf, &pos, "{s}", .{ctl.dim_set});
+        bufAppend(&buf, &pos, "loaded:", .{});
+        if (info.format_name.len > 0) bufAppend(&buf, &pos, " {s}", .{info.format_name});
+        if (info.n_tensors > 0) bufAppend(&buf, &pos, " \xc2\xb7 {d} tensors", .{info.n_tensors});
+        if (info.tok_kind.len > 0) bufAppend(&buf, &pos, " \xc2\xb7 {s} tokenizer", .{info.tok_kind});
         if (info.vocab_size > 0) {
             var nb: [16]u8 = undefined;
             const ns = fmtCompact(&nb, info.vocab_size);
-            w(&buf, &pos, " \xc2\xb7 {s} vocab", .{ns});
+            bufAppend(&buf, &pos, " \xc2\xb7 {s} vocab", .{ns});
         }
-        w(&buf, &pos, " \xc2\xb7 eos={d} bos={d}", .{ info.eos_id, info.bos_id });
-        if (info.n_eog > 1) w(&buf, &pos, " (+{d} eog)", .{info.n_eog - 1});
-        if (info.template_name.len > 0) w(&buf, &pos, " \xc2\xb7 {s} template", .{info.template_name});
-        if (info.init_ms > 0) w(&buf, &pos, " \xc2\xb7 init {d}ms", .{info.init_ms});
-        if (is_tty) w(&buf, &pos, "{s}", .{ctl.sgr_reset});
-        w(&buf, &pos, "\n", .{});
+        bufAppend(&buf, &pos, " \xc2\xb7 eos={d} bos={d}", .{ info.eos_id, info.bos_id });
+        if (info.n_eog > 1) bufAppend(&buf, &pos, " (+{d} eog)", .{info.n_eog - 1});
+        if (info.template_name.len > 0) bufAppend(&buf, &pos, " \xc2\xb7 {s} template", .{info.template_name});
+        if (info.init_ms > 0) bufAppend(&buf, &pos, " \xc2\xb7 init {d}ms", .{info.init_ms});
+        if (is_tty) bufAppend(&buf, &pos, "{s}", .{ctl.sgr_reset});
+        bufAppend(&buf, &pos, "\n", .{});
 
         writeStderr(buf[0..pos]);
     }
@@ -789,7 +778,7 @@ pub const Display = struct {
         jw.write(info.n_params) catch return;
         if (info.n_params > 0) {
             jw.objectField("bpw") catch return;
-            jw.write(@as(f32, @floatFromInt(info.file_size_bytes)) * bits_per_byte / @as(f32, @floatFromInt(info.n_params))) catch return;
+            jw.write(info.bitsPerWeight()) catch return;
         }
         if (info.n_experts > 0) {
             jw.objectField("n_experts") catch return;
@@ -833,39 +822,32 @@ pub const Display = struct {
         const fsize = formatSize(info.file_size_bytes);
         var buf: [out_buf_size]u8 = undefined;
         var pos: usize = 0;
-        const w = struct {
-            fn f(b: []u8, p: *usize, comptime fmt: []const u8, args: anytype) void {
-                const s = std.fmt.bufPrint(b[p.*..], fmt, args) catch return;
-                p.* += s.len;
-            }
-        }.f;
 
-        w(&buf, &pos, "  Model:    {s}\n", .{info.name});
-        w(&buf, &pos, "  Arch:     {s}\n", .{info.arch_name});
-        w(&buf, &pos, "  Quant:    {s}\n", .{info.quant});
+        bufAppend(&buf, &pos, "  Model:    {s}\n", .{info.name});
+        bufAppend(&buf, &pos, "  Arch:     {s}\n", .{info.arch_name});
+        bufAppend(&buf, &pos, "  Quant:    {s}\n", .{info.quant});
         if (info.n_params > 0) {
             var pb: [16]u8 = undefined;
             const ps = fmtCompact(&pb, info.n_params);
-            const bpw: f32 = @as(f32, @floatFromInt(info.file_size_bytes)) * bits_per_byte / @as(f32, @floatFromInt(info.n_params));
-            w(&buf, &pos, "  Params:   {d} ({s}, {d:.2} bpw)\n", .{ info.n_params, ps, bpw });
+            bufAppend(&buf, &pos, "  Params:   {d} ({s}, {d:.2} bpw)\n", .{ info.n_params, ps, info.bitsPerWeight() });
         }
-        w(&buf, &pos, "  Backend:  {s}\n", .{info.be_name});
-        if (info.format_name.len > 0) w(&buf, &pos, "  Format:   {s}\n", .{info.format_name});
-        w(&buf, &pos, "  Layers:   {d}\n", .{info.n_layers});
-        w(&buf, &pos, "  Embed:    {d}\n", .{info.n_embed});
-        if (info.ff_dim > 0) w(&buf, &pos, "  FFN:      {d}\n", .{info.ff_dim});
-        w(&buf, &pos, "  Heads:    {d} ({d} KV, GQA {d}:1)\n", .{ info.n_heads, info.n_kv_heads, if (info.n_kv_heads > 0) info.n_heads / info.n_kv_heads else 0 });
-        w(&buf, &pos, "  Head dim: {d}\n", .{info.head_dim});
-        if (info.n_experts > 0) w(&buf, &pos, "  Experts:  {d} used / {d} total\n", .{ info.n_experts_used, info.n_experts });
-        if (info.vocab_size > 0) w(&buf, &pos, "  Vocab:    {d}\n", .{info.vocab_size});
-        if (info.ctx_size > 0) w(&buf, &pos, "  Context:  {d}\n", .{info.ctx_size});
-        w(&buf, &pos, "  KV type:  {s}\n", .{info.kv_type_name});
-        if (info.rope_theta > 0) w(&buf, &pos, "  RoPE:     {d}\n", .{@as(u64, @intFromFloat(info.rope_theta))});
-        if (info.mtp_depth > 0) w(&buf, &pos, "  MTP:      {d} head(s)\n", .{info.mtp_depth});
-        if (info.has_vision) w(&buf, &pos, "  Vision:   yes\n", .{});
-        w(&buf, &pos, "  Size:     {d:.1} {s}\n", .{ fsize.val, fsize.unit });
-        w(&buf, &pos, "  Loaded:   {d}ms\n", .{info.load_ms});
-        if (info.warmup_ms > 0) w(&buf, &pos, "  Warmup:   {d}ms\n", .{info.warmup_ms});
+        bufAppend(&buf, &pos, "  Backend:  {s}\n", .{info.be_name});
+        if (info.format_name.len > 0) bufAppend(&buf, &pos, "  Format:   {s}\n", .{info.format_name});
+        bufAppend(&buf, &pos, "  Layers:   {d}\n", .{info.n_layers});
+        bufAppend(&buf, &pos, "  Embed:    {d}\n", .{info.n_embed});
+        if (info.ff_dim > 0) bufAppend(&buf, &pos, "  FFN:      {d}\n", .{info.ff_dim});
+        bufAppend(&buf, &pos, "  Heads:    {d} ({d} KV, GQA {d}:1)\n", .{ info.n_heads, info.n_kv_heads, if (info.n_kv_heads > 0) info.n_heads / info.n_kv_heads else 0 });
+        bufAppend(&buf, &pos, "  Head dim: {d}\n", .{info.head_dim});
+        if (info.n_experts > 0) bufAppend(&buf, &pos, "  Experts:  {d} used / {d} total\n", .{ info.n_experts_used, info.n_experts });
+        if (info.vocab_size > 0) bufAppend(&buf, &pos, "  Vocab:    {d}\n", .{info.vocab_size});
+        if (info.ctx_size > 0) bufAppend(&buf, &pos, "  Context:  {d}\n", .{info.ctx_size});
+        bufAppend(&buf, &pos, "  KV type:  {s}\n", .{info.kv_type_name});
+        if (info.rope_theta > 0) bufAppend(&buf, &pos, "  RoPE:     {d}\n", .{@as(u64, @intFromFloat(info.rope_theta))});
+        if (info.mtp_depth > 0) bufAppend(&buf, &pos, "  MTP:      {d} head(s)\n", .{info.mtp_depth});
+        if (info.has_vision) bufAppend(&buf, &pos, "  Vision:   yes\n", .{});
+        bufAppend(&buf, &pos, "  Size:     {d:.1} {s}\n", .{ fsize.val, fsize.unit });
+        bufAppend(&buf, &pos, "  Loaded:   {d}ms\n", .{info.load_ms});
+        if (info.warmup_ms > 0) bufAppend(&buf, &pos, "  Warmup:   {d}ms\n", .{info.warmup_ms});
 
         writeStdout(buf[0..pos]);
     }
@@ -912,10 +894,21 @@ test "formatSize" {
 }
 
 test "displayWidth ascii" {
-    try std.testing.expectEqual(@as(usize, 5), displayWidth("hello"));
+    try std.testing.expectEqual(@as(usize, 5), term.displayWidth("hello"));
 }
 
 test "displayWidth middot" {
     // "a · b" — the middot (U+00B7) is 2 bytes in UTF-8 but occupies 1 terminal column
-    try std.testing.expectEqual(@as(usize, 5), displayWidth("a \xc2\xb7 b"));
+    try std.testing.expectEqual(@as(usize, 5), term.displayWidth("a \xc2\xb7 b"));
+}
+
+test "displayWidth CJK double-width" {
+    // "世界" — two CJK characters, each 3 bytes UTF-8, each 2 terminal columns
+    try std.testing.expectEqual(@as(usize, 4), term.displayWidth("世界"));
+    // Mixed ASCII + CJK: "hi世界" = 2 + 4 = 6
+    try std.testing.expectEqual(@as(usize, 6), term.displayWidth("hi世界"));
+}
+
+test "displayWidth empty" {
+    try std.testing.expectEqual(@as(usize, 0), term.displayWidth(""));
 }

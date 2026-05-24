@@ -159,6 +159,23 @@ pub fn sharedLoad(idx: u32) f32 {
 // ── Shared format-conversion helpers ────────────────────────────
 // Used by multiple GEMV kernels. Defined once here to avoid duplication.
 
+/// E2M1 FP4 → float lookup (OCP Microscaling Spec, shared by NVFP4/MXFP4 kernels).
+pub const e2m1_lut = [16]f32{
+    0.0,  0.5,  1.0,  1.5,  2.0,  3.0,  4.0,  6.0,
+    -0.0, -0.5, -1.0, -1.5, -2.0, -3.0, -4.0, -6.0,
+};
+
+/// BF16 → f32: zero-extend mantissa (shift left 16 bits).
+pub inline fn bf16ToF32(val: u16) f32 {
+    return @bitCast(@as(u32, val) << 16);
+}
+
+/// E8M0 → f32: val = 2^(byte - 127). Pure power-of-2 (no mantissa).
+pub inline fn e8m0ToF32(byte: u8) f32 {
+    if (byte == 0) return 0.0;
+    return @bitCast(@as(u32, byte) << 23);
+}
+
 /// 6-bit mask for scale extraction in getScaleMinK4.
 pub const scale_6bit_mask: u8 = 63;
 
@@ -172,6 +189,76 @@ pub inline fn getScaleMinK4(j: usize, q: [*]const u8, sc: *u8, m: *u8) void {
         sc.* = (q[j + 4] & 0xF) | ((q[j - 4] >> 6) << 4);
         m.* = (q[j + 4] >> 4) | ((q[j] >> 6) << 4);
     }
+}
+
+// ── FP8 format-conversion helpers ──────────────────────────────
+// Shared by gemv_fp8_e4m3, gemv_fp8_e5m2, gemv_nvfp4_st.
+
+/// FP8 E4M3 denormal scale: 2^(-6) / 8 = 2^(-9).
+const fp8_e4m3_denorm_scale: f32 = 1.0 / 512.0;
+/// E4M3 exponent bias offset for F32 conversion: 127 (F32 bias) - 7 (E4M3 bias) = 120.
+const fp8_e4m3_exp_rebias: u32 = 120;
+
+/// Compute FP8 E4M3 → f32 at comptime. Bit layout: seeeemmm. No infinities; e=15,m=7 is NaN.
+fn fp8e4m3Compute(val: u8) f32 {
+    const sign: u32 = @as(u32, val >> 7) << 31;
+    const exp: u32 = (val >> 3) & 0x0F;
+    const mant: u32 = val & 0x07;
+    if (exp == 0x0F and mant == 0x07) return @bitCast(sign | 0x7FC00000);
+    if (exp == 0) {
+        if (mant == 0) return @bitCast(sign);
+        const fmant: f32 = @floatFromInt(mant);
+        const val_abs: f32 = fmant * fp8_e4m3_denorm_scale;
+        return @bitCast(sign | @as(u32, @bitCast(val_abs)));
+    }
+    return @bitCast(sign | ((exp + fp8_e4m3_exp_rebias) << 23) | (mant << 20));
+}
+
+/// Precomputed FP8 E4M3 → f32 lookup table (256 entries, built at comptime).
+pub const fp8e4m3_lut = blk: {
+    var table: [256]f32 = undefined;
+    for (0..256) |i| table[i] = fp8e4m3Compute(@intCast(i));
+    break :blk table;
+};
+
+/// Convert FP8 E4M3 to f32 via lookup table.
+pub inline fn fp8e4m3ToF32(val: u8) f32 {
+    return fp8e4m3_lut[val];
+}
+
+/// FP8 E5M2 denormal scale: 2^(-14) / 4 = 2^(-16).
+const fp8_e5m2_denorm_scale: f32 = 1.0 / 65536.0;
+/// E5M2 exponent bias offset for F32 conversion: 127 (F32 bias) - 15 (E5M2 bias) = 112.
+const fp8_e5m2_exp_rebias: u32 = 112;
+
+/// Compute FP8 E5M2 → f32 at comptime. Bit layout: seeeeemm. Has infinities and NaN.
+fn fp8e5m2Compute(val: u8) f32 {
+    const sign: u32 = @as(u32, val >> 7) << 31;
+    const exp: u32 = (val >> 2) & 0x1F;
+    const mant: u32 = val & 0x03;
+    if (exp == 0x1F) {
+        if (mant == 0) return @bitCast(sign | 0x7F800000);
+        return @bitCast(sign | 0x7FC00000);
+    }
+    if (exp == 0) {
+        if (mant == 0) return @bitCast(sign);
+        const fmant: f32 = @floatFromInt(mant);
+        const val_abs: f32 = fmant * fp8_e5m2_denorm_scale;
+        return @bitCast(sign | @as(u32, @bitCast(val_abs)));
+    }
+    return @bitCast(sign | ((exp + fp8_e5m2_exp_rebias) << 23) | (mant << 21));
+}
+
+/// Precomputed FP8 E5M2 → f32 lookup table (256 entries, built at comptime).
+pub const fp8e5m2_lut = blk: {
+    var table: [256]f32 = undefined;
+    for (0..256) |i| table[i] = fp8e5m2Compute(@intCast(i));
+    break :blk table;
+};
+
+/// Convert FP8 E5M2 to f32 via lookup table.
+pub inline fn fp8e5m2ToF32(val: u8) f32 {
+    return fp8e5m2_lut[val];
 }
 
 // ── Block-level reductions (wave reduction + LDS inter-wave) ────

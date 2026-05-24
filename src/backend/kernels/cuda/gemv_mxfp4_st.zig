@@ -6,17 +6,8 @@
 
 const cu = @import("common.zig");
 
-/// E2M1 FP4 → float lookup.
-const e2m1_lut = [16]f32{
-    0.0,  0.5,  1.0,  1.5,  2.0,  3.0,  4.0,  6.0,
-    -0.0, -0.5, -1.0, -1.5, -2.0, -3.0, -4.0, -6.0,
-};
-
-/// E8M0 → f32: val = 2^(byte - 127). Pure power-of-2 (no mantissa).
-inline fn e8m0ToF32(byte: u8) f32 {
-    if (byte == 0) return 0.0;
-    return @bitCast(@as(u32, byte) << 23);
-}
+const e2m1_lut = cu.e2m1_lut;
+const e8m0ToF32 = cu.e8m0ToF32;
 
 export fn gemv_mxfp4_st_kernel(
     x: [*]const f32,

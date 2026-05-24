@@ -824,8 +824,8 @@ pub const MetalBackend = struct {
         const w_ref = self.getBufRef(@ptrCast(w.data), w_bytes);
         const y_ref = self.getBufRef(@ptrCast(y), n * @sizeOf(f32));
 
-        var n_val: u32 = @intCast(n);
-        var k_val: u32 = @intCast(k);
+        const n_val: u32 = @intCast(n);
+        const k_val: u32 = @intCast(k);
 
         const enc = self.getEncoder(pipeline);
         setBuf(enc, x_ref, 0);
@@ -885,8 +885,8 @@ pub const MetalBackend = struct {
         const w_ref = self.getBufRef(@ptrCast(weight), n * @sizeOf(f32));
         const out_ref = self.getBufRef(@ptrCast(output), n * @sizeOf(f32));
 
-        var n_val: u32 = @intCast(n);
-        var eps_val: f32 = eps;
+        const n_val: u32 = @intCast(n);
+        const eps_val: f32 = eps;
 
         const tg = @min(threadgroup_size, n);
         const enc = self.getEncoder(self.pipe_rms_norm_fused);
@@ -906,8 +906,8 @@ pub const MetalBackend = struct {
         const w_ref = self.getBufRef(@ptrCast(weight), n * @sizeOf(f32));
         const out_ref = self.getBufRef(@ptrCast(output), n * @sizeOf(f32));
 
-        var n_val: u32 = @intCast(n);
-        var eps_val: f32 = eps;
+        const n_val: u32 = @intCast(n);
+        const eps_val: f32 = eps;
 
         const tg = @min(threadgroup_size, n);
         const enc = self.getEncoder(self.pipe_add_rms_norm_fused);
@@ -926,7 +926,7 @@ pub const MetalBackend = struct {
     fn dispatchUnaryOp(self: *MetalBackend, pipeline: objc.id, a: [*]const f32, out: [*]f32, n: usize) void {
         const a_ref = self.getBufRef(@ptrCast(a), n * @sizeOf(f32));
         const o_ref = self.getBufRef(@ptrCast(out), n * @sizeOf(f32));
-        var n_val: u32 = @intCast(n);
+        const n_val: u32 = @intCast(n);
         const enc = self.getEncoder(pipeline);
         setBuf(enc, a_ref, 0);
         setBuf(enc, o_ref, 1);
@@ -939,7 +939,7 @@ pub const MetalBackend = struct {
         const a_ref = self.getBufRef(@ptrCast(a), n * @sizeOf(f32));
         const b_ref = self.getBufRef(@ptrCast(b), n * @sizeOf(f32));
         const o_ref = self.getBufRef(@ptrCast(out), n * @sizeOf(f32));
-        var n_val: u32 = @intCast(n);
+        const n_val: u32 = @intCast(n);
         const enc = self.getEncoder(pipeline);
         setBuf(enc, a_ref, 0);
         setBuf(enc, b_ref, 1);
@@ -995,8 +995,8 @@ pub const MetalBackend = struct {
         const up_ref = self.getBufRef(w_up, w_bytes);
         const out_ref = self.getBufRef(@ptrCast(ff_out), n_ff * @sizeOf(f32));
 
-        var nf: u32 = @intCast(n_ff);
-        var ne: u32 = @intCast(n_embd);
+        const nf: u32 = @intCast(n_ff);
+        const ne: u32 = @intCast(n_embd);
 
         const enc = self.getEncoder(self.pipe_fused_ffn_q8);
         setBuf(enc, x_ref, 0);
@@ -1026,8 +1026,8 @@ pub const MetalBackend = struct {
         const up_ref = self.getBufRef(w_up, w_bytes);
         const out_ref = self.getBufRef(@ptrCast(ff_out), n_ff * @sizeOf(f32));
 
-        var nf: u32 = @intCast(n_ff);
-        var ne: u32 = @intCast(n_embd);
+        const nf: u32 = @intCast(n_ff);
+        const ne: u32 = @intCast(n_embd);
 
         const enc = self.getEncoder(self.pipe_fused_ffn_q4_k);
         setBuf(enc, x_ref, 0);
@@ -1057,8 +1057,8 @@ pub const MetalBackend = struct {
         const up_ref = self.getBufRef(w_up, w_bytes);
         const out_ref = self.getBufRef(@ptrCast(ff_out), n_ff * @sizeOf(f32));
 
-        var nf: u32 = @intCast(n_ff);
-        var ne: u32 = @intCast(n_embd);
+        const nf: u32 = @intCast(n_ff);
+        const ne: u32 = @intCast(n_embd);
 
         const enc = self.getEncoder(self.pipe_fused_ffn_q4_0);
         setBuf(enc, x_ref, 0);
@@ -1099,8 +1099,8 @@ pub const MetalBackend = struct {
         const us_ref = self.getBufRef(up_s, sb_bytes);
         const ub_ref = self.getBufRef(up_b, sb_bytes);
         const out_ref = self.getBufRef(@ptrCast(ff_out), n_ff * @sizeOf(f32));
-        var nf: u32 = @intCast(n_ff);
-        var ne: u32 = @intCast(n_embd);
+        const nf: u32 = @intCast(n_ff);
+        const ne: u32 = @intCast(n_embd);
         const enc = self.getEncoder(self.pipe_fused_ffn_silu_mlx_q4);
         setBuf(enc, x_ref, 0);
         setBuf(enc, gw_ref, 1);
@@ -1131,8 +1131,8 @@ pub const MetalBackend = struct {
         const gate_ref = self.getBufRef(w_gate, w_bytes);
         const up_ref = self.getBufRef(w_up, w_bytes);
         const out_ref = self.getBufRef(@ptrCast(ff_out), n_ff * @sizeOf(f32));
-        var nf: u32 = @intCast(n_ff);
-        var ne: u32 = @intCast(n_embd);
+        const nf: u32 = @intCast(n_ff);
+        const ne: u32 = @intCast(n_embd);
         const enc = self.getEncoder(self.pipe_fused_ffn_gelu_q8);
         setBuf(enc, x_ref, 0);
         setBuf(enc, gate_ref, 1);
@@ -1159,8 +1159,8 @@ pub const MetalBackend = struct {
         const gate_ref = self.getBufRef(w_gate, w_bytes);
         const up_ref = self.getBufRef(w_up, w_bytes);
         const out_ref = self.getBufRef(@ptrCast(ff_out), n_ff * @sizeOf(f32));
-        var nf: u32 = @intCast(n_ff);
-        var ne: u32 = @intCast(n_embd);
+        const nf: u32 = @intCast(n_ff);
+        const ne: u32 = @intCast(n_embd);
         const enc = self.getEncoder(self.pipe_fused_ffn_gelu_q4_k);
         setBuf(enc, x_ref, 0);
         setBuf(enc, gate_ref, 1);
@@ -1187,8 +1187,8 @@ pub const MetalBackend = struct {
         const gate_ref = self.getBufRef(w_gate, w_bytes);
         const up_ref = self.getBufRef(w_up, w_bytes);
         const out_ref = self.getBufRef(@ptrCast(ff_out), n_ff * @sizeOf(f32));
-        var nf: u32 = @intCast(n_ff);
-        var ne: u32 = @intCast(n_embd);
+        const nf: u32 = @intCast(n_ff);
+        const ne: u32 = @intCast(n_embd);
         const enc = self.getEncoder(self.pipe_fused_ffn_gelu_q4_0);
         setBuf(enc, x_ref, 0);
         setBuf(enc, gate_ref, 1);
@@ -1215,8 +1215,8 @@ pub const MetalBackend = struct {
         const gate_ref = self.getBufRef(w_gate, w_bytes);
         const up_ref = self.getBufRef(w_up, w_bytes);
         const out_ref = self.getBufRef(@ptrCast(ff_out), n_ff * @sizeOf(f32));
-        var nf: u32 = @intCast(n_ff);
-        var ne: u32 = @intCast(n_embd);
+        const nf: u32 = @intCast(n_ff);
+        const ne: u32 = @intCast(n_embd);
         const enc = self.getEncoder(self.pipe_fused_ffn_q6_k);
         setBuf(enc, x_ref, 0);
         setBuf(enc, gate_ref, 1);
@@ -1243,8 +1243,8 @@ pub const MetalBackend = struct {
         const gate_ref = self.getBufRef(w_gate, w_bytes);
         const up_ref = self.getBufRef(w_up, w_bytes);
         const out_ref = self.getBufRef(@ptrCast(ff_out), n_ff * @sizeOf(f32));
-        var nf: u32 = @intCast(n_ff);
-        var ne: u32 = @intCast(n_embd);
+        const nf: u32 = @intCast(n_ff);
+        const ne: u32 = @intCast(n_embd);
         const enc = self.getEncoder(self.pipe_fused_ffn_gelu_q6_k);
         setBuf(enc, x_ref, 0);
         setBuf(enc, gate_ref, 1);
@@ -1271,8 +1271,8 @@ pub const MetalBackend = struct {
         const gate_ref = self.getBufRef(w_gate, w_bytes);
         const up_ref = self.getBufRef(w_up, w_bytes);
         const out_ref = self.getBufRef(@ptrCast(ff_out), n_ff * @sizeOf(f32));
-        var nf: u32 = @intCast(n_ff);
-        var ne: u32 = @intCast(n_embd);
+        const nf: u32 = @intCast(n_ff);
+        const ne: u32 = @intCast(n_embd);
         const enc = self.getEncoder(self.pipe_fused_ffn_q5_k);
         setBuf(enc, x_ref, 0);
         setBuf(enc, gate_ref, 1);
@@ -1299,8 +1299,8 @@ pub const MetalBackend = struct {
         const gate_ref = self.getBufRef(w_gate, w_bytes);
         const up_ref = self.getBufRef(w_up, w_bytes);
         const out_ref = self.getBufRef(@ptrCast(ff_out), n_ff * @sizeOf(f32));
-        var nf: u32 = @intCast(n_ff);
-        var ne: u32 = @intCast(n_embd);
+        const nf: u32 = @intCast(n_ff);
+        const ne: u32 = @intCast(n_embd);
         const enc = self.getEncoder(self.pipe_fused_ffn_gelu_q5_k);
         setBuf(enc, x_ref, 0);
         setBuf(enc, gate_ref, 1);
@@ -1622,8 +1622,8 @@ pub const MetalBackend = struct {
         const d_ref = self.getBufRef(@ptrCast(data), total * @sizeOf(f32));
         const w_ref = self.getBufRef(@ptrCast(weight), head_dim * @sizeOf(f32));
 
-        var hd_val: u32 = @intCast(head_dim);
-        var eps_val: f32 = eps;
+        const hd_val: u32 = @intCast(head_dim);
+        const eps_val: f32 = eps;
 
         const tg = @min(threadgroup_size, head_dim);
         const enc = self.getEncoder(self.pipe_rms_norm_fused);
@@ -1653,8 +1653,8 @@ pub const MetalBackend = struct {
         const a_ref = self.getBufRef(@ptrCast(out_a), total * @sizeOf(f32));
         const b_ref = self.getBufRef(@ptrCast(out_b), total * @sizeOf(f32));
 
-        var stride_val: u32 = @intCast(stride);
-        var pairs_val: u32 = @intCast(n_pairs);
+        const stride_val: u32 = @intCast(stride);
+        const pairs_val: u32 = @intCast(n_pairs);
 
         const enc = self.getEncoder(self.pipe_deinterleave);
         setBuf(enc, in_ref, 0);
@@ -1673,8 +1673,8 @@ pub const MetalBackend = struct {
         const in_ref = self.getBufRef(@ptrCast(qg), nh * hd * 2 * @sizeOf(f32));
         const q_ref = self.getBufRef(@ptrCast(q_out), total * @sizeOf(f32));
         const g_ref = self.getBufRef(@ptrCast(g_out), total * @sizeOf(f32));
-        var hd_val: u32 = @intCast(hd);
-        var nh_val: u32 = @intCast(nh);
+        const hd_val: u32 = @intCast(hd);
+        const nh_val: u32 = @intCast(nh);
         const enc = self.getEncoder(self.pipe_split_qgate);
         setBuf(enc, in_ref, 0);
         setBuf(enc, q_ref, 1);
@@ -1701,8 +1701,8 @@ pub const MetalBackend = struct {
         const w_bytes = in_dim * blocks_per_row * q8_0_block_bytes;
         const w_ref = self.getBufRef(w, w_bytes);
         const y_ref = self.getBufRef(@ptrCast(y), out_dim * @sizeOf(f32));
-        var od: u32 = @intCast(out_dim);
-        var id: u32 = @intCast(in_dim);
+        const od: u32 = @intCast(out_dim);
+        const id: u32 = @intCast(in_dim);
         const enc = self.getEncoder(self.pipe_gemv_t_q8_0);
         setBuf(enc, x_ref, 0);
         setBuf(enc, w_ref, 1);
@@ -1719,8 +1719,8 @@ pub const MetalBackend = struct {
     pub fn addScaled(self: *MetalBackend, src: [*]const f32, dst: [*]f32, scale: f32, n: usize) void {
         const src_ref = self.getBufRef(@ptrCast(src), n * @sizeOf(f32));
         const dst_ref = self.getBufRef(@ptrCast(dst), n * @sizeOf(f32));
-        var s = scale;
-        var n_val: u32 = @intCast(n);
+        const s = scale;
+        const n_val: u32 = @intCast(n);
         const enc = self.getEncoder(self.pipe_add_scaled);
         setBuf(enc, src_ref, 0);
         setBuf(enc, dst_ref, 1);
@@ -1752,7 +1752,7 @@ pub const MetalBackend = struct {
 
         const d_ref = self.getBufRef(@ptrCast(data), n * @sizeOf(f32));
 
-        var n_val: u32 = @intCast(n);
+        const n_val: u32 = @intCast(n);
 
         // Pass 1: max reduction → scratch_buf offset 0
         const enc1 = self.getEncoder(self.pipe_softmax_max);
@@ -1787,11 +1787,11 @@ pub const MetalBackend = struct {
         const total = n_heads * head_dim;
         const x_ref = self.getBufRef(@ptrCast(x), total * @sizeOf(f32));
 
-        var pos_val: u32 = @intCast(pos);
-        var nh_val: u32 = @intCast(n_heads);
-        var hd_val: u32 = @intCast(head_dim);
-        var rd_val: u32 = @intCast(rope_dim);
-        var theta_val: f32 = theta;
+        const pos_val: u32 = @intCast(pos);
+        const nh_val: u32 = @intCast(n_heads);
+        const hd_val: u32 = @intCast(head_dim);
+        const rd_val: u32 = @intCast(rope_dim);
+        const theta_val: f32 = theta;
 
         const grid = n_heads * rope_dim / 2;
         const enc = self.getEncoder(self.pipe_rope);
@@ -1820,8 +1820,8 @@ pub const MetalBackend = struct {
     pub fn l2Norm(self: *MetalBackend, x: [*]f32, n: usize, eps: f32) void {
         const x_ref = self.getBufRef(@ptrCast(x), n * @sizeOf(f32));
 
-        var n_val: u32 = @intCast(n);
-        var eps_val: f32 = eps;
+        const n_val: u32 = @intCast(n);
+        const eps_val: f32 = eps;
 
         // Pass 1: sum of squares → scratch_buf[0]
         const enc1 = self.getEncoder(self.pipe_rms_ss);
@@ -1853,8 +1853,8 @@ pub const MetalBackend = struct {
         const s_ref = self.getBufRef(@ptrCast(scale), s_bytes);
         const y_ref = self.getBufRef(@ptrCast(y), n * @sizeOf(f32));
 
-        var n_val: u32 = @intCast(n);
-        var k_val: u32 = @intCast(k);
+        const n_val: u32 = @intCast(n);
+        const k_val: u32 = @intCast(k);
 
         const enc = self.getEncoder(self.pipe_gemv_nvfp4_st);
         setBuf(enc, x_ref, 0);
@@ -1886,8 +1886,8 @@ pub const MetalBackend = struct {
         const b_ref = self.getBufRef(@ptrCast(biases), sb_bytes);
         const y_ref = self.getBufRef(@ptrCast(y), n * @sizeOf(f32));
 
-        var n_val: u32 = @intCast(n);
-        var k_val: u32 = @intCast(k);
+        const n_val: u32 = @intCast(n);
+        const k_val: u32 = @intCast(k);
 
         const pipe = switch (bits) {
             8 => self.pipe_gemv_mlx_q8,
@@ -1919,8 +1919,8 @@ pub const MetalBackend = struct {
         const s_ref = self.getBufRef(@ptrCast(scale), s_bytes);
         const y_ref = self.getBufRef(@ptrCast(y), n * @sizeOf(f32));
 
-        var n_val: u32 = @intCast(n);
-        var k_val: u32 = @intCast(k);
+        const n_val: u32 = @intCast(n);
+        const k_val: u32 = @intCast(k);
 
         const enc_m = self.getEncoder(self.pipe_gemv_mxfp4_st);
         setBuf(enc_m, x_ref, 0);
@@ -1943,9 +1943,9 @@ pub const MetalBackend = struct {
         const z_ref = self.getBufRef(@ptrCast(qzeros), n_groups * ((n + 7) / 8) * @sizeOf(u32));
         const y_ref = self.getBufRef(@ptrCast(y), n * @sizeOf(f32));
 
-        var n_val: u32 = @intCast(n);
-        var k_val: u32 = @intCast(k);
-        var gs_val: u32 = group_size;
+        const n_val: u32 = @intCast(n);
+        const k_val: u32 = @intCast(k);
+        const gs_val: u32 = group_size;
 
         const enc = self.getEncoder(self.pipe_gemv_gptq);
         setBuf(enc, x_ref, 0);
@@ -1965,7 +1965,7 @@ pub const MetalBackend = struct {
     pub fn gemvMulti(self: *MetalBackend, x: [*]const f32, ops: []const backend_mod.GemvOp, k: usize) void {
         if (ops.len == 0) return;
         const x_ref = self.getBufRef(@ptrCast(x), k * @sizeOf(f32));
-        var k_val: u32 = @intCast(k);
+        const k_val: u32 = @intCast(k);
 
         for (ops, 0..) |op, idx| {
             const is_last = (idx == ops.len - 1);
@@ -1986,7 +1986,7 @@ pub const MetalBackend = struct {
                 const y_ref = self.getBufRef(@ptrCast(op.y), op.n * @sizeOf(f32));
                 const s_ref = self.getBufRef(@ptrCast(op.mlx_scales.?), sb_bytes);
                 const b_ref = self.getBufRef(@ptrCast(op.mlx_biases.?), sb_bytes);
-                var n_val: u32 = @intCast(op.n);
+                const n_val: u32 = @intCast(op.n);
 
                 const pipe = switch (bits) {
                     8 => self.pipe_gemv_mlx_q8,
@@ -2042,7 +2042,7 @@ pub const MetalBackend = struct {
             const w_ref = self.getBufRef(@ptrCast(op.w.data), w_bytes);
             const y_ref = self.getBufRef(@ptrCast(op.y), op.n * @sizeOf(f32));
 
-            var n_val: u32 = @intCast(op.n);
+            const n_val: u32 = @intCast(op.n);
             const enc = self.getEncoder(pipeline);
             setBuf(enc, x_ref, 0);
             setBuf(enc, w_ref, 1);
@@ -2134,8 +2134,8 @@ pub const MetalBackend = struct {
             setBuf(enc, v_ref, 1);
             setBuf(enc, keys_ref, 2);
             setBuf(enc, vals_ref, 3);
-            var kvd_u: u32 = @intCast(kvd);
-            var kv_off_u: u32 = @intCast(seq_len * kvd);
+            const kvd_u: u32 = @intCast(kvd);
+            const kv_off_u: u32 = @intCast(seq_len * kvd);
             setBytes(enc, @ptrCast(&kvd_u), @sizeOf(u32), 4);
             setBytes(enc, @ptrCast(&kv_off_u), @sizeOf(u32), 5);
             self.endEncode1D(enc, self.pipe_kv_append, kvd);
@@ -2163,10 +2163,10 @@ pub const MetalBackend = struct {
             setBuf(enc, keys_ref, 1);
             setBuf(enc, vals_ref, 2);
             setBuf(enc, out_ref, 3);
-            var nh_u: u32 = @intCast(nh);
-            var nkv_u: u32 = @intCast(nkv);
-            var hd_u: u32 = @intCast(hd);
-            var sl_u: u32 = @intCast(sl);
+            const nh_u: u32 = @intCast(nh);
+            const nkv_u: u32 = @intCast(nkv);
+            const hd_u: u32 = @intCast(hd);
+            const sl_u: u32 = @intCast(sl);
             setBytes(enc, @ptrCast(&nh_u), @sizeOf(u32), 4);
             setBytes(enc, @ptrCast(&nkv_u), @sizeOf(u32), 5);
             setBytes(enc, @ptrCast(&hd_u), @sizeOf(u32), 6);
@@ -2186,14 +2186,14 @@ pub const MetalBackend = struct {
             setBuf(enc, keys_ref, 1);
             setBuf(enc, vals_ref, 2);
             setBuf(enc, out_ref, 3);
-            var nh_u: u32 = @intCast(nh);
-            var nkv_u: u32 = @intCast(nkv);
-            var hd_u: u32 = @intCast(hd);
-            var sl_u: u32 = @intCast(sl);
-            var bits_k_u: u32 = kv_type_k.turboBits();
-            var bits_v_u: u32 = kv_type_v.turboBits();
-            var bb_k_u: u32 = kv_type_k.turboBlockByteSize();
-            var bb_v_u: u32 = kv_type_v.turboBlockByteSize();
+            const nh_u: u32 = @intCast(nh);
+            const nkv_u: u32 = @intCast(nkv);
+            const hd_u: u32 = @intCast(hd);
+            const sl_u: u32 = @intCast(sl);
+            const bits_k_u: u32 = kv_type_k.turboBits();
+            const bits_v_u: u32 = kv_type_v.turboBits();
+            const bb_k_u: u32 = kv_type_k.turboBlockByteSize();
+            const bb_v_u: u32 = kv_type_v.turboBlockByteSize();
             setBytes(enc, @ptrCast(&nh_u), @sizeOf(u32), 4);
             setBytes(enc, @ptrCast(&nkv_u), @sizeOf(u32), 5);
             setBytes(enc, @ptrCast(&hd_u), @sizeOf(u32), 6);
@@ -2262,11 +2262,11 @@ pub const MetalBackend = struct {
         const out_ref = self.getBufRef(@ptrCast(output), nh * hd * @sizeOf(f32));
         const bt_ref = self.getBufRef(@ptrCast(kv_view.block_table.ptr), n_logical_blocks * @sizeOf(u32));
 
-        var nh_u: u32 = @intCast(nh);
-        var nkv_u: u32 = @intCast(nkv);
-        var hd_u: u32 = @intCast(hd);
-        var sl_u: u32 = @intCast(sl);
-        var paged_bs_u: u32 = kv_view.block_size;
+        const nh_u: u32 = @intCast(nh);
+        const nkv_u: u32 = @intCast(nkv);
+        const hd_u: u32 = @intCast(hd);
+        const sl_u: u32 = @intCast(sl);
+        const paged_bs_u: u32 = kv_view.block_size;
 
         const enc = self.getEncoder(self.pipe_sdpa_paged);
         setBuf(enc, q_ref, 0);
@@ -2284,8 +2284,8 @@ pub const MetalBackend = struct {
     }
 
     /// SDPA with per-head softmax stats for split-attention merge.
-    /// GPU stats export not yet implemented — syncs GPU, then runs CPU-side
-    /// sdpaQuantHeadsWithStats as fallback. Native GPU stats is future work.
+    /// Fills identity stats (max=0, sum=1) — GPU SDPA already produces
+    /// normalized output, so the merge formula treats it as-is.
     pub fn sdpaWithStats(self: *MetalBackend, q: [*]const f32, keys: []u8, values: []u8, k_new: [*]const f32, v_new: [*]const f32, output: [*]f32, head_max: [*]f32, head_sum: [*]f32, nh: usize, nkv: usize, hd: usize, seq_len: usize, scale: f32, kv_type_k: KvQuantType, kv_type_v: KvQuantType) void {
         self.sdpa(q, keys, values, k_new, v_new, output, nh, nkv, hd, seq_len, scale, kv_type_k, kv_type_v);
         for (0..nh) |h| {
@@ -2321,9 +2321,9 @@ pub const MetalBackend = struct {
         const w_ref = self.getBufRef(@ptrCast(w.data), w_bytes);
         const y_ref = self.getBufRef(@ptrCast(y), n_tok * n_out * @sizeOf(f32));
 
-        var n_out_val: u32 = @intCast(n_out);
-        var n_in_val: u32 = @intCast(n_in);
-        var n_tok_val: u32 = @intCast(n_tok);
+        const n_out_val: u32 = @intCast(n_out);
+        const n_in_val: u32 = @intCast(n_in);
+        const n_tok_val: u32 = @intCast(n_tok);
 
         const enc = self.getEncoder(pipeline);
         setBuf(enc, x_ref, 0);
@@ -2345,8 +2345,8 @@ pub const MetalBackend = struct {
         const w_ref = self.getBufRef(@ptrCast(weight), dim * @sizeOf(f32));
         const out_ref = self.getBufRef(@ptrCast(output), total * @sizeOf(f32));
 
-        var dim_val: u32 = @intCast(dim);
-        var eps_val: f32 = eps;
+        const dim_val: u32 = @intCast(dim);
+        const eps_val: f32 = eps;
 
         const tg = @min(threadgroup_size, dim);
         const enc = self.getEncoder(self.pipe_rms_norm_fused);
@@ -2365,11 +2365,11 @@ pub const MetalBackend = struct {
         const x_ref = self.getBufRef(@ptrCast(x), n_tok * stride * @sizeOf(f32));
         const pos_ref = self.getBufRef(@ptrCast(positions), n_tok * @sizeOf(u32));
 
-        var n_tok_val: u32 = @intCast(n_tok);
-        var nh_val: u32 = @intCast(n_heads);
-        var hd_val: u32 = @intCast(head_dim);
-        var rd_val: u32 = @intCast(rope_dim);
-        var theta_val: f32 = theta;
+        const n_tok_val: u32 = @intCast(n_tok);
+        const nh_val: u32 = @intCast(n_heads);
+        const hd_val: u32 = @intCast(head_dim);
+        const rd_val: u32 = @intCast(rope_dim);
+        const theta_val: f32 = theta;
 
         const enc = self.getEncoder(self.pipe_rope_batched);
         setBuf(enc, x_ref, 0);
@@ -2407,12 +2407,12 @@ pub const MetalBackend = struct {
             const out_ref = self.getBufRef(@ptrCast(output), n_nodes * nh * hd * @sizeOf(f32));
             const mask_ref = self.getBufRef(@ptrCast(ancestor_masks), n_nodes * 8 * @sizeOf(u64));
 
-            var nh_val: u32 = @intCast(nh);
-            var nkv_val: u32 = @intCast(nkv);
-            var hd_val: u32 = @intCast(hd);
-            var pl_val: u32 = @intCast(prefix_len);
-            var nn_val: u32 = n_nodes;
-            var sc_val: f32 = scale;
+            const nh_val: u32 = @intCast(nh);
+            const nkv_val: u32 = @intCast(nkv);
+            const hd_val: u32 = @intCast(hd);
+            const pl_val: u32 = @intCast(prefix_len);
+            const nn_val: u32 = n_nodes;
+            const sc_val: f32 = scale;
 
             if (is_f32_k and is_f32_v) {
                 const enc = self.getEncoder(self.pipe_sdpa_tree);
@@ -2431,10 +2431,10 @@ pub const MetalBackend = struct {
                 setBytes(enc, @ptrCast(&sc_val), @sizeOf(f32), 12);
                 self.endEncodeThreadgroups(enc, n_nodes * nh, threadgroup_size);
             } else {
-                var bits_k_val: u32 = if (is_turbo_k) kv_type_k.turboBits() else 0;
-                var bits_v_val: u32 = if (is_turbo_v) kv_type_v.turboBits() else 0;
-                var bbk_val: u32 = if (is_turbo_k) kv_type_k.turboBlockByteSize() else 0;
-                var bbv_val: u32 = if (is_turbo_v) kv_type_v.turboBlockByteSize() else 0;
+                const bits_k_val: u32 = if (is_turbo_k) kv_type_k.turboBits() else 0;
+                const bits_v_val: u32 = if (is_turbo_v) kv_type_v.turboBits() else 0;
+                const bbk_val: u32 = if (is_turbo_k) kv_type_k.turboBlockByteSize() else 0;
+                const bbv_val: u32 = if (is_turbo_v) kv_type_v.turboBlockByteSize() else 0;
                 const enc = self.getEncoder(self.pipe_sdpa_tree_turbo);
                 setBuf(enc, q_ref, 0);
                 setBuf(enc, pk_ref, 1);
@@ -2502,15 +2502,15 @@ pub const MetalBackend = struct {
                 setBuf(enc, keys_ref, 1);
                 setBuf(enc, vals_ref, 2);
                 setBuf(enc, out_ref, 3);
-                var nh_u: u32 = @intCast(nh);
-                var nkv_u: u32 = @intCast(nkv);
-                var hd_u: u32 = @intCast(hd);
-                var sl_u: u32 = @intCast(sl);
-                var scale_val: f32 = scale;
-                var bits_k_u: u32 = kv_type_k.turboBits();
-                var bits_v_u: u32 = kv_type_v.turboBits();
-                var bb_k_u: u32 = kv_type_k.turboBlockByteSize();
-                var bb_v_u: u32 = kv_type_v.turboBlockByteSize();
+                const nh_u: u32 = @intCast(nh);
+                const nkv_u: u32 = @intCast(nkv);
+                const hd_u: u32 = @intCast(hd);
+                const sl_u: u32 = @intCast(sl);
+                const scale_val: f32 = scale;
+                const bits_k_u: u32 = kv_type_k.turboBits();
+                const bits_v_u: u32 = kv_type_v.turboBits();
+                const bb_k_u: u32 = kv_type_k.turboBlockByteSize();
+                const bb_v_u: u32 = kv_type_v.turboBlockByteSize();
                 setBytes(enc, @ptrCast(&nh_u), @sizeOf(u32), 4);
                 setBytes(enc, @ptrCast(&nkv_u), @sizeOf(u32), 5);
                 setBytes(enc, @ptrCast(&hd_u), @sizeOf(u32), 6);
@@ -2542,12 +2542,12 @@ pub const MetalBackend = struct {
         const vn_ref = self.getBufRef(@ptrCast(v), copy_elems * @sizeOf(f32));
         const o_ref = self.getBufRef(@ptrCast(output), n_tok * nh * hd * @sizeOf(f32));
 
-        var nh_val: u32 = @intCast(nh);
-        var nkv_val: u32 = @intCast(nkv);
-        var hd_val: u32 = @intCast(hd);
-        var prev_val: u32 = @intCast(prev_len);
-        var ntok_val: u32 = @intCast(n_tok);
-        var scale_val: f32 = scale;
+        const nh_val: u32 = @intCast(nh);
+        const nkv_val: u32 = @intCast(nkv);
+        const hd_val: u32 = @intCast(hd);
+        const prev_val: u32 = @intCast(prev_len);
+        const ntok_val: u32 = @intCast(n_tok);
+        const scale_val: f32 = scale;
 
         {
             const enc = self.getEncoder(self.pipe_sdpa_prefill);
@@ -2604,7 +2604,7 @@ pub const MetalBackend = struct {
         const gate_ref = alpha_ref;
         const beta_out_ref = beta_ref;
         {
-            var n_heads_val: u32 = @intCast(num_v_heads);
+            const n_heads_val: u32 = @intCast(num_v_heads);
             const enc = self.getEncoder(self.pipe_dn_gate_beta);
             setBuf(enc, alpha_ref, 0);
             setBuf(enc, beta_ref, 1);
@@ -2622,8 +2622,8 @@ pub const MetalBackend = struct {
         const cw_ref = self.getBufRef(@ptrCast(conv_w), conv_ch * p.d_conv * @sizeOf(f32));
         const co_ref = self.getBufRef(@ptrCast(conv_out), conv_ch * @sizeOf(f32));
         {
-            var conv_ch_val: u32 = @intCast(conv_ch);
-            var d_conv_val: u32 = p.d_conv;
+            const conv_ch_val: u32 = @intCast(conv_ch);
+            const d_conv_val: u32 = p.d_conv;
             const enc = self.getEncoder(self.pipe_dn_conv1d);
             setBuf(enc, conv_in_ref, 0);
             setBuf(enc, cs_ref, 1);
@@ -2637,11 +2637,11 @@ pub const MetalBackend = struct {
 
         // ── GPU Kernel 3: L2 norm Q & K ──
         {
-            var hd_val: u32 = @intCast(head_k_dim);
-            var nk_val: u32 = @intCast(num_k_heads);
-            var eps_val: f32 = p.rms_eps;
-            var q_off_val: u32 = if (p.kqv_order) @intCast(num_k_heads * head_k_dim) else 0;
-            var k_off_val: u32 = if (p.kqv_order) 0 else @intCast(num_k_heads * head_k_dim);
+            const hd_val: u32 = @intCast(head_k_dim);
+            const nk_val: u32 = @intCast(num_k_heads);
+            const eps_val: f32 = p.rms_eps;
+            const q_off_val: u32 = if (p.kqv_order) @intCast(num_k_heads * head_k_dim) else 0;
+            const k_off_val: u32 = if (p.kqv_order) 0 else @intCast(num_k_heads * head_k_dim);
             const enc = self.getEncoder(self.pipe_dn_l2_norm);
             setBuf(enc, co_ref, 0);
             setBytes(enc, @ptrCast(&hd_val), @sizeOf(u32), 1);
@@ -2669,12 +2669,12 @@ pub const MetalBackend = struct {
             const nw_ref = self.getBufRef(@ptrCast(ssm_norm_w), head_v_dim * @sizeOf(f32));
             const out_ref = self.getBufRef(@ptrCast(output), num_v_heads * head_v_dim * @sizeOf(f32));
 
-            var hvd_val: u32 = @intCast(head_v_dim);
-            var hkd_val: u32 = @intCast(head_k_dim);
-            var nk_val: u32 = @intCast(num_k_heads);
-            var nv_val: u32 = @intCast(num_v_heads);
-            var qs_val: f32 = p.q_scale;
-            var eps_val: f32 = p.rms_eps;
+            const hvd_val: u32 = @intCast(head_v_dim);
+            const hkd_val: u32 = @intCast(head_k_dim);
+            const nk_val: u32 = @intCast(num_k_heads);
+            const nv_val: u32 = @intCast(num_v_heads);
+            const qs_val: f32 = p.q_scale;
+            const eps_val: f32 = p.rms_eps;
 
             const enc = self.getEncoder(self.pipe_dn_recurrence);
             setBuf(enc, q_ref, 0);
@@ -2692,7 +2692,7 @@ pub const MetalBackend = struct {
             setBytes(enc, @ptrCast(&nv_val), @sizeOf(u32), 12);
             setBytes(enc, @ptrCast(&qs_val), @sizeOf(f32), 13);
             setBytes(enc, @ptrCast(&eps_val), @sizeOf(f32), 14);
-            var use_grouped: u32 = if (p.kqv_order) 1 else 0;
+            const use_grouped: u32 = if (p.kqv_order) 1 else 0;
             setBytes(enc, @ptrCast(&use_grouped), @sizeOf(u32), 15);
             const rec_tg_size: usize = @min(threadgroup_size, @max(simd_width, (head_v_dim + simd_width - 1) & ~(simd_width - 1)));
             self.endEncodeThreadgroups(enc, num_v_heads, rec_tg_size);

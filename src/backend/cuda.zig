@@ -409,10 +409,14 @@ pub const CudaBackend = struct {
 
         // Format info strings for display
         if (self.sm_major > 0) {
-            _ = std.fmt.bufPrint(&self.cc_str, "sm_{d}{d}", .{ self.sm_major, self.sm_minor }) catch {};
+            _ = std.fmt.bufPrint(&self.cc_str, "sm_{d}{d}", .{ self.sm_major, self.sm_minor }) catch {
+                @memcpy(self.cc_str[0..3], "sm_");
+            };
         }
         if (self.driver_version > 0) {
-            _ = std.fmt.bufPrint(&self.drv_str, "CUDA {d}.{d}", .{ self.driver_version / cuda_version_major_divisor, (self.driver_version % cuda_version_major_divisor) / cuda_version_minor_divisor }) catch {};
+            _ = std.fmt.bufPrint(&self.drv_str, "CUDA {d}.{d}", .{ self.driver_version / cuda_version_major_divisor, (self.driver_version % cuda_version_major_divisor) / cuda_version_minor_divisor }) catch {
+                @memcpy(self.drv_str[0..4], "CUDA");
+            };
         }
 
         // Use primary context (shared with NCCL/runtime API) instead of cuCtxCreate
@@ -550,8 +554,10 @@ pub const CudaBackend = struct {
 
     fn getFunction(self: *CudaBackend, name: [*:0]const u8) !CUfunction {
         var func: CUfunction = null;
-        if (self.cuModuleGetFunction(&func, self.module, name) != CUDA_SUCCESS)
+        if (self.cuModuleGetFunction(&func, self.module, name) != CUDA_SUCCESS) {
+            std.log.debug("CUDA kernel not found in PTX: {s}", .{name});
             return error.KernelNotFound;
+        }
         return func;
     }
 
@@ -1805,8 +1811,8 @@ pub const CudaBackend = struct {
     }
 
     /// SDPA with per-head softmax stats for split-attention merge.
-    /// GPU stats export not yet implemented — syncs GPU, then runs CPU-side
-    /// sdpaQuantHeadsWithStats as fallback. Native GPU stats is future work.
+    /// Fills identity stats (max=0, sum=1) — GPU SDPA already produces
+    /// normalized output, so the merge formula treats it as-is.
     pub fn sdpaWithStats(self: *CudaBackend, q: [*]const f32, keys: []u8, values: []u8, k_new: [*]const f32, v_new: [*]const f32, output: [*]f32, head_max: [*]f32, head_sum: [*]f32, nh: usize, nkv: usize, hd: usize, seq_len: usize, scale: f32, kv_type_k: KvQuantType, kv_type_v: KvQuantType) void {
         self.sdpa(q, keys, values, k_new, v_new, output, nh, nkv, hd, seq_len, scale, kv_type_k, kv_type_v);
         for (0..nh) |h| {

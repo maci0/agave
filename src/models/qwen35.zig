@@ -19,6 +19,7 @@ const block_alloc_mod = @import("../kvcache/block_allocator.zig");
 const BlockAllocator = block_alloc_mod.BlockAllocator;
 const TieredBlockAllocator = block_alloc_mod.TieredBlockAllocator;
 const TieredKvCache = @import("../kvcache/tiered.zig").TieredKvCache;
+const TransportMod = @import("../parallel/transport.zig");
 const Backend = backend_mod.Backend;
 const Format = format_mod.Format;
 const TensorInfo = format_mod.TensorInfo;
@@ -83,11 +84,11 @@ pub const Qwen35Model = struct {
     tp_degree: u32 = 1,
     tp_peer_buf: ?[*]const f32 = null, // peer rank's partial output for all-reduce
     tp_row_shard_buf: []u8 = &.{}, // scratch for row-split weight column extraction
-    tp_transport: ?*@import("../parallel/transport.zig").Transport = null, // network transport for distributed TP
+    tp_transport: ?*TransportMod.Transport = null, // network transport for distributed TP
     // Pipeline parallelism
     pp_rank: u32 = 0,
     pp_degree: u32 = 1,
-    pp_transport: ?*@import("../parallel/transport.zig").Transport = null,
+    pp_transport: ?*TransportMod.Transport = null,
     tp_kv_cache_rank1: ?PagedKvCache = null, // second KV cache for TP rank 1
     tp_seq_table_rank1: ?kvcache.SeqBlockTable = null,
 
@@ -642,16 +643,16 @@ pub const Qwen35Model = struct {
         };
     }
 
-    const PagedKvView = @import("../kvcache/manager.zig").PagedKvView;
+    const PagedKvView = kvcache.PagedKvView;
 
     fn getPagedKvView(self: *Qwen35Model, layer: usize) PagedKvView {
-        return .{
-            .block_table = self.seq_table.block_table[layer],
-            .blocks = self.paged_cache.blocks,
-            .block_size = self.paged_cache.block_size,
-            .kv_dim = self.paged_cache.kv_dim,
-            .seq_len = self.kv_seq_len,
-        };
+        return PagedKvView.initView(
+            self.seq_table.block_table[layer],
+            self.paged_cache.blocks,
+            self.paged_cache.block_size,
+            self.paged_cache.kv_dim,
+            self.kv_seq_len,
+        );
     }
 
     fn isMultiBlock(self: *Qwen35Model, layer: usize) bool {
@@ -665,14 +666,12 @@ pub const Qwen35Model = struct {
         model_mod.dispatchGemv(self.be, self.fmt, x, t, y, n, k);
     }
 
-    const gemv_kernel = @import("../backend/kernels/cpu/gemv.zig");
-
     /// Column-shard (output-dim split): returns TensorInfo pointing to
     /// this rank's slice of rows. Each rank gets n_total/tp_degree consecutive rows.
     fn shardColumnWeight(self: *const Qwen35Model, t: TensorInfo, n_total: usize, k: usize) TensorInfo {
         if (self.tp_degree <= 1) return t;
         const n_local = n_total / self.tp_degree;
-        const row_bytes = gemv_kernel.gemvRowBytes(t.dtype, k);
+        const row_bytes = backend_mod.gemvRowBytes(t.dtype, k);
         if (row_bytes == 0) return t;
         var shard = t;
         shard.data_ptr = t.data_ptr + self.tp_rank * n_local * row_bytes;
@@ -686,8 +685,8 @@ pub const Qwen35Model = struct {
     fn shardRowWeight(self: *Qwen35Model, t: TensorInfo, n: usize, k_total: usize, shard_buf: []u8) TensorInfo {
         if (self.tp_degree <= 1) return t;
         const local_k = k_total / self.tp_degree;
-        const full_row_bytes = gemv_kernel.gemvRowBytes(t.dtype, k_total);
-        const local_row_bytes = gemv_kernel.gemvRowBytes(t.dtype, local_k);
+        const full_row_bytes = backend_mod.gemvRowBytes(t.dtype, k_total);
+        const local_row_bytes = backend_mod.gemvRowBytes(t.dtype, local_k);
         if (full_row_bytes == 0 or local_row_bytes == 0) return t;
         const col_offset = self.tp_rank * local_row_bytes;
         for (0..n) |row| {
@@ -1270,9 +1269,7 @@ pub const Qwen35Model = struct {
         // Shared expert gate: sigmoid(dot(gate_weight, hidden2)) * shared_out
         if (self.fmt.layerTensor(li, "ffn_gate_inp_shexp.weight")) |gw| {
             const gate_ptr: [*]const f32 = @ptrCast(@alignCast(gw.data_ptr));
-            var dot: f32 = 0.0;
-            for (0..e) |i| dot += gate_ptr[i] * self.hidden2[i];
-            const gate_val = math_ops.sigmoid(dot);
+            const gate_val = math_ops.sigmoid(math_ops.simdDotF32(gate_ptr, self.hidden2.ptr, e));
             self.be.addScaled(self.attn_out.ptr, self.moe_out.ptr, gate_val, e);
         } else {
             self.be.addScaled(self.attn_out.ptr, self.moe_out.ptr, 1.0, e);
@@ -1298,11 +1295,16 @@ pub const Qwen35Model = struct {
 
     /// RMSNorm with +1 weight offset: output[i] = (1 + w[i]) * x[i] / rms(x)
     fn rmsNormPlusOne(input: []const f32, output: []f32, weight: [*]const f32, n: usize, eps: f32) void {
-        var sum_sq: f32 = 0;
-        for (0..n) |i| sum_sq += input[i] * input[i];
-        const rms = @sqrt(sum_sq / @as(f32, @floatFromInt(n)) + eps);
-        const inv_rms = 1.0 / rms;
-        for (0..n) |i| {
+        const V8 = @Vector(8, f32);
+        const sum_sq = math_ops.simdDotF32(input.ptr, input.ptr, n);
+        const inv_rms = 1.0 / @sqrt(sum_sq / @as(f32, @floatFromInt(n)) + eps);
+        const inv_v: V8 = @splat(inv_rms);
+        const one_v: V8 = @splat(@as(f32, 1.0));
+        var i: usize = 0;
+        while (i + 8 <= n) : (i += 8) {
+            output[i..][0..8].* = (one_v + @as(V8, weight[i..][0..8].*)) * @as(V8, input[i..][0..8].*) * inv_v;
+        }
+        while (i < n) : (i += 1) {
             output[i] = (1.0 + weight[i]) * input[i] * inv_rms;
         }
     }
@@ -1666,7 +1668,7 @@ pub const Qwen35Model = struct {
     }
 
     /// Send KV cache to a peer via transport (for disaggregated prefill/decode).
-    pub fn sendKvCache(self: *Qwen35Model, transport: *@import("../parallel/transport.zig").Transport) void {
+    pub fn sendKvCache(self: *Qwen35Model, transport: *TransportMod.Transport) void {
         const kvd = self.paged_cache.kv_dim;
         const bs = self.paged_cache.block_size;
         const elems_per_block = @as(usize, bs) * kvd;
@@ -1687,7 +1689,7 @@ pub const Qwen35Model = struct {
     }
 
     /// Receive KV cache from a peer via transport.
-    pub fn recvKvCache(self: *Qwen35Model, transport: *@import("../parallel/transport.zig").Transport) void {
+    pub fn recvKvCache(self: *Qwen35Model, transport: *TransportMod.Transport) void {
         const kvd = self.paged_cache.kv_dim;
         const bs = self.paged_cache.block_size;
         const elems_per_block = @as(usize, bs) * kvd;

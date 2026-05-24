@@ -147,12 +147,12 @@ pub const TieredKvCache = struct {
     /// (microseconds) make spin-wait acceptable.
     tier_lock: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
 
-    fn lockTier(self: *TieredKvCache) void {
+    pub fn lockTier(self: *TieredKvCache) void {
         while (self.tier_lock.cmpxchgWeak(0, 1, .acquire, .monotonic) != null)
             std.atomic.spinLoopHint();
     }
 
-    fn unlockTier(self: *TieredKvCache) void {
+    pub fn unlockTier(self: *TieredKvCache) void {
         self.tier_lock.store(0, .release);
     }
 
@@ -221,7 +221,11 @@ pub const TieredKvCache = struct {
             const total_size = std.math.mul(usize, ssd_blocks, block_bytes) catch return error.OutOfMemory;
             if (total_size > 0) {
                 const zero_buf: [1]u8 = .{0};
-                _ = std.c.pwrite(ssd_file.?.handle, &zero_buf, 1, @intCast(total_size - 1));
+                const result: isize = @bitCast(std.c.pwrite(ssd_file.?.handle, &zero_buf, 1, @intCast(total_size - 1)));
+                if (result != 1) {
+                    std.log.err("SSD sparse file allocation failed (pwrite returned {d})", .{result});
+                    return error.WriteError;
+                }
             }
 
             std.log.debug("Created SSD sparse file: {s} ({d} blocks, {d} bytes)", .{ path, ssd_blocks, total_size });
@@ -330,6 +334,13 @@ pub const TieredKvCache = struct {
     ///
     /// Returns: Physical block ID.
     pub fn allocBlock(self: *TieredKvCache) !u32 {
+        self.lockTier();
+        defer self.unlockTier();
+        return self.allocBlockInner();
+    }
+
+    /// Allocate without acquiring tier_lock. Caller must hold tier_lock.
+    fn allocBlockInner(self: *TieredKvCache) !u32 {
         // Try VRAM first — loop with bounded demotion attempts (avoids unbounded recursion)
         var demotions: usize = 0;
         const max_demotions: usize = 16;
@@ -373,8 +384,8 @@ pub const TieredKvCache = struct {
         // Fallback to SSD tier (promote from SSD to RAM before use)
         if (self.ssd_free_list.items.len > 0) {
             const block_id = self.ssd_free_list.pop().?;
-            // Promote from SSD to RAM before use
-            try self.promoteFromSsd(block_id);
+            // Promote from SSD to RAM before use (inner: lock already held)
+            try self.promoteFromSsdInner(block_id);
             self.blocks[block_id].base.ref_count = 1;
             self.blocks[block_id].base.used = 0;
             return block_id;
@@ -549,6 +560,13 @@ pub const TieredKvCache = struct {
     /// Free a block and return to appropriate tier free list.
     /// Free lists are pre-allocated to tier capacity in init(), so append cannot fail.
     pub fn freeBlock(self: *TieredKvCache, block_id: u32) void {
+        self.lockTier();
+        defer self.unlockTier();
+        self.freeBlockInner(block_id);
+    }
+
+    /// Free without acquiring tier_lock. Caller must hold tier_lock.
+    fn freeBlockInner(self: *TieredKvCache, block_id: u32) void {
         std.debug.assert(block_id < self.blocks.len);
         var blk = &self.blocks[block_id];
         blk.base.ref_count = 0;
@@ -717,10 +735,9 @@ test "TieredKvCache freeBlock returns to correct tier" {
 
 test "TieredKvCache SSD round-trip preserves data" {
     const allocator = std.testing.allocator;
-    // Use timestamp-based unique name to avoid collisions between parallel test runs.
-    const ts: u64 = @intCast(milliTimestamp());
+    // Use PID-based unique name to avoid collisions between parallel test runs.
     var path_buf: [128]u8 = undefined;
-    const ssd_path = std.fmt.bufPrint(&path_buf, "test_ssd_{d}.tmp", .{ts}) catch unreachable;
+    const ssd_path = std.fmt.bufPrint(&path_buf, "test_ssd_{d}.tmp", .{std.c.getpid()}) catch unreachable;
 
     // 0 VRAM, 1 RAM, 1 SSD — first allocBlock goes to RAM
     var cache = try TieredKvCache.init(allocator, 1, 4, 0, 1, 1, 16, ssd_path);
