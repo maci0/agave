@@ -4561,8 +4561,8 @@ fn handleConnection(stream: TcpStream) void {
     };
     // Disable Nagle's algorithm — SSE streaming writes small token chunks (~20-100 bytes)
     // that Nagle would buffer for up to 200ms waiting for ACK coalescing.
-    const nodelay: [1]u8 = .{1};
-    std.posix.setsockopt(stream.handle, std.posix.IPPROTO.TCP, std.posix.TCP.NODELAY, &nodelay) catch |err| {
+    const nodelay_val: c_int = 1;
+    std.posix.setsockopt(stream.handle, std.posix.IPPROTO.TCP, std.posix.TCP.NODELAY, std.mem.asBytes(&nodelay_val)) catch |err| {
         std.log.warn("Failed to set TCP_NODELAY: {}", .{err});
     };
 
