@@ -133,7 +133,7 @@ Prefill layer pipeline (Gemma 3):
 
 **CUDA**: native GPU GEMM (Q8_0), batched RMSNorm and RoPE kernels compiled to PTX. The SDPA uses sequential single-token GPU sdpa calls (already fused with KV append on GPU).
 
-**CPU**: parallel GEMV-based GEMM via thread pool, parallel-head SDPA with bulk KV append.
+**CPU**: parallel GEMV-based GEMM via thread pool, parallel-head SDPA with bulk KV append. On macOS, F32 GEMV and GEMM dispatch to Apple's Accelerate.framework (`cblas_sgemm`), which uses the AMX matrix coprocessor for ~4x speedup over NEON SIMD.
 
 ## Backend-Specific Notes
 

@@ -484,6 +484,14 @@ const d_conv = fmt.getMetaU32("ssm.conv_kernel") orelse return error.MissingMeta
 
 **Fix:** Use bidirectional mapping (gguf_hf_meta_map).
 
+## GGUF 3D Expert Tensors
+
+GGUF 3D expert tensors store dimensions as `[n_experts, rows, cols]`. Per-expert byte stride = `weightBytes(dtype, dims[1] * dims[2])`. A previous bug computed `dims[0] * dims[1]` which mixed expert count into the stride.
+
+## SafeTensors `rope_parameters` Nesting
+
+SafeTensors `config.json` files may store rope configuration doubly nested in `text_config.rope_parameters.rope_theta`. When reading `rope_theta` from SafeTensors metadata, check the nested `rope_parameters` object inside `text_config` before falling back to the top-level key.
+
 ## mmproj GGUF — Vision Encoder Weights
 
 Multimodal models store vision encoder weights in a **separate GGUF file** (the "mmproj" file), distinct from the main language model GGUF. This keeps the text model self-contained — vision is an optional add-on.

@@ -76,7 +76,8 @@ Expert selection uses **stack-allocated** arrays (fixed-size buffers on the call
 | Qwen 3.5/3.6 MoE | 128/256 | 8 | Yes (1) | Softmax |
 | GPT-OSS | 32 | 4 | No | Softmax |
 | GLM-4 | varies | varies | No | Sigmoid (independent gates) |
-| Nemotron-Nano | 128 | 6 | Yes (1, 2× hidden dim) | Softmax |
+| Nemotron-Nano | 128 | 6 | Yes (1, 2x hidden dim) | Softmax |
+| Gemma 4 26B-A4B | 128 | 8 | No (dual path: dense + MoE per layer) | Softmax |
 
 **Sigmoid routing** (GLM-4): Each expert gate is **independent** (evaluated separately, not competing with each other for probability mass like softmax does) — multiple experts can have high activation simultaneously without competing.
 

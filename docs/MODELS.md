@@ -51,7 +51,7 @@ agave pull google/gemma-4-4b-it-gguf --list          # list available files
 
 **Nemotron Nano** (SafeTensors NVFP4): 52-layer hybrid with `hybrid_override_pattern` (M=SSM, E=MoE, *=attention). Mixed quant — most layers NVFP4, 6 SSM layers use BF16. 128 routed experts, top-6 + shared expert.
 
-**Gemma 4**: Three variants — E2B and E4B are dense (no MoE), 26B-A4B uses MoE (128 experts, top-8 softmax) + dense FFN path. All variants use dual attention (sliding-window + global layers) and PLE (Per-Layer Embeddings). Shared KV cache for trailing layers. Channel-based chat template. Vision supported via SigLIP-2 encoder. Supports `--megakernel` (fused FFN GELU for dense+MoE, true megakernel Q4K/Q8 on Metal+CUDA).
+**Gemma 4**: Three variants — E2B and E4B are dense (no MoE), 26B-A4B uses MoE (128 experts, top-8 softmax) + dense FFN path. All variants use dual attention (sliding-window + global layers) and PLE (Per-Layer Embeddings). Shared KV cache for trailing layers. Channel-based chat template. Vision supported via SigLIP-2 encoder. Supports `--megakernel` (fused FFN GELU for dense+MoE, true megakernel Q4K/Q8 on Metal+CUDA). 26B MoE now produces correct output after fixing the expert stride calculation (was computing `dims[0] * dims[1]` instead of `dims[1] * dims[2]` for 3D expert tensors).
 
 **GLM-4** (MLX): MLA compresses K/V into latent space. Sigmoid routing (independent expert gates, not competing). MLX 4/6/8-bit affine quantization. Supports `--megakernel` (fused FFN SiLU on Metal).
 
@@ -68,9 +68,9 @@ agave pull google/gemma-4-4b-it-gguf --list          # list available files
 | Qwen3.5 9B | Q4_K_M | Metal | 7.2 |
 | Qwen3.5 9B | MLX-4bit | Metal | 12.7 |
 | Qwen3.5 9B | Q4_0 | Metal | 34.5 |
-| Gemma4 E2B | Q4_K | Metal | 9.5 |
-| Gemma4 E4B | Q4_K | Metal | 9.0 |
-| Gemma4 26B-A4B | Q4_K | Metal | 6.8 |
+| Gemma4 E2B | Q4_K_M | Metal | 21.8 |
+| Gemma4 E4B | Q4_K_M | Metal | 14.4 |
+| Gemma4 26B-A4B | Q4_K_M | Metal | 4.2 |
 | Gemma3 27B | QAT 4-bit | Metal | 11.6 |
 | Gemma3 27B | QAT 4-bit | CPU | 3.2 |
 
