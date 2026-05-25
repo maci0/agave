@@ -248,6 +248,11 @@ const Server = struct {
     cached_prompt_ids: []u32 = &.{},
     mutex: Mutex = .init,
     stdout_mutex: Mutex = .init,
+    /// Serializes vision encode + inference for multimodal requests.
+    /// Prevents concurrent processVisionImage calls from corrupting the
+    /// shared vision encoder buffers and model embedding state.
+    /// Lock ordering: vision_mutex → mutex (inference).
+    vision_mutex: Mutex = .init,
     io: Io,
     /// Monotonically increasing request counter for unique response IDs.
     request_counter: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
@@ -1053,6 +1058,9 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
         }
 
         // 4. Check for base64 image in OpenAI content array format
+        const completions_has_image = json.extractJsonImage(body) != null and g_server.vision_encoder != null;
+        if (completions_has_image) g_server.vision_mutex.lockUncancelable(g_server.io);
+        defer if (completions_has_image) g_server.vision_mutex.unlock(g_server.io);
         var completions_image_embedded = false;
         if (json.extractJsonImage(body)) |b64_data| {
             if (g_server.vision_encoder) |ve| {
@@ -1481,6 +1489,9 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
         }
 
         // Vision: extract base64 image from content array (Anthropic format)
+        const anthropic_has_image = json.extractJsonImage(body) != null and g_server.vision_encoder != null;
+        if (anthropic_has_image) g_server.vision_mutex.lockUncancelable(g_server.io);
+        defer if (anthropic_has_image) g_server.vision_mutex.unlock(g_server.io);
         var anthropic_image_embedded = false;
         if (json.extractJsonImage(body)) |b64_data| {
             if (g_server.vision_encoder) |ve| {
@@ -1847,6 +1858,9 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
         // Check for attached image data (base64-encoded data URI from web UI)
         // If a vision encoder is available, decode and encode the image into
         // visual token embeddings that the model injects during generation.
+        const chat_has_image = json.extractFormImage(body) != null and g_server.vision_encoder != null;
+        if (chat_has_image) g_server.vision_mutex.lockUncancelable(g_server.io);
+        defer if (chat_has_image) g_server.vision_mutex.unlock(g_server.io);
         var image_embedded = false;
         if (json.extractFormImage(body)) |b64_data| {
             if (g_server.vision_encoder) |ve| {
