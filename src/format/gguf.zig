@@ -521,7 +521,9 @@ pub const GGUFFile = struct {
                     const strings = try self.allocator.alloc([]const u8, arr_len);
                     errdefer self.allocator.free(strings);
                     try self.owned_arrays.append(self.allocator, @ptrCast(strings.ptr));
+                    errdefer _ = self.owned_arrays.pop();
                     try self.owned_array_lens.append(self.allocator, arr_len);
+                    errdefer _ = self.owned_array_lens.pop();
                     for (0..arr_len) |i| {
                         const s = try self.readString(pos);
                         strings[i] = s.str;
@@ -534,6 +536,7 @@ pub const GGUFFile = struct {
                     const ids = try self.allocator.alloc(u32, arr_len);
                     errdefer self.allocator.free(ids);
                     try self.owned_u32_arrays.append(self.allocator, ids);
+                    errdefer _ = self.owned_u32_arrays.pop();
                     for (0..arr_len) |i| {
                         ids[i] = try self.readU32(pos);
                         pos += 4;
@@ -545,6 +548,7 @@ pub const GGUFFile = struct {
                     const ids = try self.allocator.alloc(u32, arr_len);
                     errdefer self.allocator.free(ids);
                     try self.owned_u32_arrays.append(self.allocator, ids);
+                    errdefer _ = self.owned_u32_arrays.pop();
                     for (0..arr_len) |i| {
                         if (pos >= self.file_size) return error.OffsetOutOfBounds;
                         ids[i] = self.data()[pos];

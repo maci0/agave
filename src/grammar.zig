@@ -619,14 +619,15 @@ const Parser = struct {
             const group_elems_src = self.elements.items[group_start..group_end];
             const n_group = group_elems_src.len + 1; // +1 for end marker
             const group_elems = try self.allocator.alloc(Element, n_group);
-            errdefer self.allocator.free(group_elems);
             @memcpy(group_elems[0..group_elems_src.len], group_elems_src);
             group_elems[n_group - 1] = .{ .type = .end };
 
             // Remove group elements from inline position
             self.elements.shrinkRetainingCapacity(group_start);
 
-            // Add synthetic rule
+            // Add synthetic rule — no local errdefer: once appended, parseGrammar's
+            // errdefer owns cleanup. A local errdefer here would double-free if a
+            // later try (elements.append below) fails.
             const synth_id: u32 = @intCast(self.rules.items.len);
             try self.rules.append(self.allocator, .{ .name = "_group", .elements = group_elems });
 
