@@ -418,9 +418,10 @@ pub fn expertWeightStride(t: format_mod.TensorInfo) usize {
     if (t.dtype == .nvfp4) {
         return @as(usize, @intCast(t.dims[0])) * @as(usize, @intCast(t.dims[1]));
     }
-    // GGUF 3D expert tensors: [rows, cols, n_experts] — per-expert = rows × cols
-    // dims[2] is the expert count, dims[0] × dims[1] is per-expert weight size
-    const elems: usize = @as(usize, @intCast(t.dims[0])) * @as(usize, @intCast(t.dims[1]));
+    // GGUF 3D expert tensors: dims stored as [n_experts, rows, cols].
+    // Per-expert weight size = dims[1] × dims[2] (rows × cols).
+    // dims[0] is the expert count.
+    const elems: usize = @as(usize, @intCast(t.dims[1])) * @as(usize, @intCast(t.dims[2]));
     return backend_mod.weightBytes(t.dtype, 1, elems);
 }
 
