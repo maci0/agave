@@ -4330,7 +4330,7 @@ fn generateStream(stream: TcpStream, prompt: []const u8, req_id: u64, created: i
         }
     } else {
         // Standard streaming — token history for penalty tracking
-        const use_penalties_s = sampling.frequency_penalty != 0 or sampling.presence_penalty != 0;
+        const use_penalties_s = sampling.frequency_penalty != 0 or sampling.presence_penalty != 0 or sampling.repetition_penalty != 1.0 or sampling.dry_multiplier > 0;
         var s_gen_tokens: [gen_ids_buf_size]u32 = undefined;
         var s_gen_count: u32 = 0;
         if (use_penalties_s and token_ids.len > 0 and !g_server.isEog(first_gen_token)) {
@@ -4402,6 +4402,8 @@ fn generateStream(stream: TcpStream, prompt: []const u8, req_id: u64, created: i
                     if (sampling.xtc_probability > 0) math_ops.applyXtc(s_logits, sampling.xtc_probability, sampling.xtc_threshold, prng_s.random());
                     next = math_ops.sampleToken(s_logits, sampling.temperature, sampling.top_k, sampling.top_p, prng_s.random());
                 }
+            } else if (use_penalties_s or sampling.logit_bias_count > 0) {
+                next = math_ops.argmax(s_logits);
             }
             // Compute logprobs before EOG/stop checks (logits still valid)
             const lp = if (sampling.logprobs) computeLogprobs(s_logits, next, sampling.top_logprobs) else null;

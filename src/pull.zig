@@ -1434,7 +1434,7 @@ pub fn run(allocator: Allocator, process_args: std.process.Args, io: Io) u8 {
     _ = args_iter.skip(); // Skip "pull" subcommand (already verified by main.zig).
 
     const maybe_args = parseArgs(&args_iter) catch {
-        return 1;
+        return 2;
     };
 
     const args = maybe_args orelse return 0; // --help was shown.

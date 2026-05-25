@@ -447,7 +447,7 @@ Final event: `data: [DONE]`. Usage chunk sent before `[DONE]`.
 
 **Anthropic endpoint** (`/v1/messages`): SSE events: `message_start` → `content_block_start` → `content_block_delta`* → `content_block_stop` → `message_delta` → `message_stop`.
 
-**Responses endpoint** (`/v1/responses`): SSE events: `response.created` → `response.output_text.delta`* → `response.output_text.done` → `response.completed`.
+**Responses endpoint** (`/v1/responses`): SSE events: `response.created` → `response.output_item.added` → `response.content_part.added` → `response.output_text.delta`* → `response.output_text.done` → `response.content_part.done` → `response.output_item.done` → `response.completed`.
 
 ---
 
