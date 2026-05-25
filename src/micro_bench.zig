@@ -114,7 +114,6 @@ const e2e_repeat_halt_threshold: u32 = 6;
 
 // ── Output helpers ───────────────────────────────────────────────
 
-/// Standard I/O file handles via std.Io.File (Zig 0.16 idiom).
 const stdout_file = std.Io.File.stdout();
 const stderr_file = std.Io.File.stderr();
 
@@ -201,12 +200,12 @@ fn parseCli(proc_args: std.process.Args) ?CliArgs {
     var n_args: usize = 0;
 
     while (args_iter.next()) |arg| {
-        if (std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h")) {
+        if (std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h") or std.mem.eql(u8, arg, "help")) {
             printUsage();
             return null; // exit 0
         }
         if (std.mem.eql(u8, arg, "--version") or std.mem.eql(u8, arg, "-v")) {
-            print("agave-bench {s}\n", .{display_mod.version});
+            print("agave-bench " ++ display_mod.version ++ "\n", .{});
             return null; // exit 0
         }
         if (n_args < all_args.len) {
@@ -265,7 +264,7 @@ fn parseCli(proc_args: std.process.Args) ?CliArgs {
         } else if (getArgValue(args_slice, &i, "--backend")) |v| {
             result.backend = parseBackendName(v) orelse {
                 eprint("Error: unknown backend '{s}'\n", .{v});
-                eprint("  Valid options: auto, cpu, metal, vulkan, cuda, rocm\n", .{});
+                eprint("  Valid options: auto, cpu, metal, vulkan, cuda, rocm, webgpu\n", .{});
                 eprint("Run 'agave-bench --help' for more information.\n", .{});
                 std.process.exit(1);
             };
@@ -359,13 +358,13 @@ fn printUsage() void {
         \\  sdpa  sdpa_turbo4  sdpa_turbo3  sdpa_turbo2
         \\
         \\OPTIONS:
-        \\  -h, --help       Show this help message
-        \\  -v, --version    Print version
+        \\  -h, --help       Show this help message and exit
+        \\  -v, --version    Print version and exit
         \\  -n, --n <N>      Kernel: output dimension [default: 4096]
         \\                   E2E: tokens to generate [default: 10]
         \\  -k, --k <K>      Input dimension for GEMV [default: 4096]
         \\  --iters <N>      Number of timed iterations [default: 100, max: 1000]
-        \\  --backend <X>    Compute backend: auto, cpu, metal, vulkan, cuda, rocm [default: cpu]
+        \\  --backend <X>    Compute backend: auto, cpu, metal, vulkan, cuda, rocm, webgpu [default: cpu]
         \\  --model <PATH>   Model file or directory (required for e2e mode)
         \\
         \\EXAMPLES:

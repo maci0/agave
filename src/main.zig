@@ -534,16 +534,15 @@ fn checkSubcommand(allocator: std.mem.Allocator) bool {
 
 fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
     var res = cli_mod.parse(allocator, init_args, &cli_specs);
+    defer res.deinit();
 
     if (res.flag("help")) {
         printUsage();
-        res.deinit();
         return null;
     }
 
     if (res.flag("version")) {
         display_mod.printVersion();
-        res.deinit();
         return null;
     }
 
@@ -594,7 +593,6 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
         const discovery = @import("devices/discovery.zig");
         const device_list = discovery.enumerate();
         discovery.printDeviceTable(&device_list);
-        res.deinit();
         return null;
     }
 
@@ -841,6 +839,10 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
     if (res.flag("allow-cpu-fallback") and backend_choice == .cpu)
         eprint("Warning: --allow-cpu-fallback has no effect with --backend cpu\n", .{});
 
+    // Warn about --device with CPU backend (CPU ignores device index)
+    if (res.option("device") != null and backend_choice == .cpu)
+        eprint("Warning: --device has no effect with --backend cpu\n", .{});
+
     // Warn about --disagg without --peers (disagg requires a peer to send/receive KV)
     if (res.flag("disagg") and res.option("peers") == null)
         eprint("Warning: --disagg has no effect without --peers\n", .{});
@@ -894,6 +896,10 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
         if (n_positionals > 0 and std.mem.eql(u8, dm, res.positional(0).?))
             eprint("Warning: --draft-model is the same file as the target model\n", .{});
     }
+
+    // Warn about --mmproj without --image in non-server mode (loads but never uses vision encoder)
+    if (res.option("mmproj") != null and res.option("image") == null and !res.flag("serve"))
+        eprint("Warning: --mmproj has no effect without --image or --serve\n", .{});
 
     // Early file existence checks — fail fast before slow model loading
     if (grammar_path) |p| validateFileExists(p, "--grammar");
@@ -1058,6 +1064,20 @@ fn parseIpv4(s: []const u8, out: *[4]u8) bool {
     return true;
 }
 
+const PeerAddr = struct { host: [4]u8, port: u16 };
+
+/// Parse "host:port" or "host" peer address string. Returns null on invalid input.
+fn parsePeerAddr(peers_str: []const u8, fallback_port: u16) ?PeerAddr {
+    var result = PeerAddr{ .host = .{ 0, 0, 0, 0 }, .port = fallback_port };
+    if (std.mem.indexOfScalar(u8, peers_str, ':')) |colon| {
+        result.port = std.fmt.parseInt(u16, peers_str[colon + 1 ..], 10) catch return null;
+        if (!parseIpv4(peers_str[0..colon], &result.host)) return null;
+    } else {
+        if (!parseIpv4(peers_str, &result.host)) return null;
+    }
+    return result;
+}
+
 const TransportMod = @import("parallel/transport.zig");
 
 fn resolveTransportKind(choice: TransportChoice, peers_str: []const u8) TransportMod.TransportKind {
@@ -1102,20 +1122,12 @@ fn setupTransport(allocator: std.mem.Allocator, peers_str: []const u8, rank: u32
     const want_nccl = (kind == .nccl);
 
     // TCP path
-    var host: [4]u8 = .{ 0, 0, 0, 0 };
-    var port: u16 = port_base;
-    if (std.mem.indexOfScalar(u8, peers_str, ':')) |colon| {
-        port = std.fmt.parseInt(u16, peers_str[colon + 1 ..], 10) catch port_base;
-        if (!parseIpv4(peers_str[0..colon], &host)) {
-            std.log.err("invalid peer address: {s}", .{peers_str});
-            return null;
-        }
-    } else {
-        if (!parseIpv4(peers_str, &host)) {
-            std.log.err("invalid peer address: {s}", .{peers_str});
-            return null;
-        }
-    }
+    const peer = parsePeerAddr(peers_str, port_base) orelse {
+        std.log.err("invalid peer address: {s}", .{peers_str});
+        return null;
+    };
+    const host = peer.host;
+    const port = peer.port;
     if (rank == 0) {
         var la: std.posix.sockaddr.in = .{ .port = std.mem.nativeToBig(u16, port), .addr = 0 };
         const ls = std.c.socket(std.posix.AF.INET, std.posix.SOCK.STREAM, 0);
@@ -1347,8 +1359,7 @@ fn validateFileExists(path: []const u8, comptime flag: []const u8) void {
 }
 
 /// Built-in benchmark: prefill a short prompt, decode N tokens, report stats.
-fn runBenchmark(model: *Model, tok_state: anytype, tok_kind: anytype, allocator: std.mem.Allocator, cli: anytype, eog: anytype) void {
-    _ = tok_kind;
+fn runBenchmark(model: *Model, tok_state: anytype, allocator: std.mem.Allocator, cli: anytype, eog: anytype) void {
     const bench_prompt = "The quick brown fox jumps over the lazy dog. Once upon a time";
     var tok_if = tok_state.*.tokenizer();
     const token_ids = tok_if.encode(bench_prompt) catch {
@@ -1537,9 +1548,9 @@ fn printUsage() void {
         \\  agave model.gguf --benchmark --json                   Benchmark with JSON output
         \\
         \\SUBCOMMANDS:
-        \\  agave pull <org/repo>                    Download GGUF model from HuggingFace
+        \\  agave pull <org/repo>                    Download model from HuggingFace
         \\  agave pull <org/repo> --quant Q4_K_M     Download specific quantization
-        \\  agave pull <org/repo> --list             List available GGUF files
+        \\  agave pull <org/repo> --list             List available model files
         \\  agave calibrate <model.gguf|model-dir/>   Generate TriAttention calibration data
         \\  agave help <topic>                       Show help for a subcommand (e.g. pull, calibrate)
         \\
@@ -1645,7 +1656,7 @@ pub fn main(init: std.process.Init) !void {
                 {
                     const subs = [_][]const u8{ "pull", "calibrate", "help" };
                     for (subs) |sub| {
-                        if (closeMatch(cli.model_path, sub)) {
+                        if (std.mem.eql(u8, cli.model_path, sub) or closeMatch(cli.model_path, sub)) {
                             eprint("  Did you mean 'agave {s}'?\n", .{sub});
                             break;
                         }
@@ -2267,7 +2278,6 @@ fn initAndRun(
             probe_dir.close(g_io);
             break :blk cli.model_path;
         };
-        // Use Io.Dir.Reader for directory iteration (Zig 0.16 idiom)
         const scan_dir = Io.Dir.cwd().openDir(g_io, model_dir, .{ .iterate = true }) catch Io.Dir.cwd();
         var dir_buf: [Io.Dir.Reader.min_buffer_len]u8 align(@alignOf(usize)) = undefined;
         var reader = Io.Dir.Reader.init(scan_dir, &dir_buf);
@@ -2421,7 +2431,7 @@ fn initAndRun(
     }
 
     if (cli.benchmark) {
-        runBenchmark(&model_if, &tok, tok_kind, allocator, cli, eog);
+        runBenchmark(&model_if, &tok, allocator, cli, eog);
         return true;
     }
 
@@ -2460,24 +2470,22 @@ fn initAndRun(
         };
     } else if (cli.disagg and cli.tp_peers != null) {
         // Disaggregated inference: rank 0 prefills + sends KV, rank 1 receives KV + decodes
-        if (allocator.create(TransportMod.Transport) catch null) |dtr| disagg_blk: {
+        if (allocator.create(TransportMod.Transport) catch |err| blk: {
+            eprint("Error: disaggregated inference transport allocation failed: {}\n", .{err});
+            break :blk null;
+        }) |dtr| disagg_blk: {
             defer allocator.destroy(dtr);
             const peers_str = cli.tp_peers orelse break :disagg_blk;
-            dtr.* = TransportMod.Transport.init(allocator, .tcp, cli.tp_rank, 2) catch break :disagg_blk;
-            var host: [4]u8 = .{ 0, 0, 0, 0 };
-            var port: u16 = disagg_default_port;
-            if (std.mem.indexOfScalar(u8, peers_str, ':')) |colon| {
-                port = std.fmt.parseInt(u16, peers_str[colon + 1 ..], 10) catch disagg_default_port;
-                if (!parseIpv4(peers_str[0..colon], &host)) {
-                    eprint("Error: invalid peer address '{s}'\n", .{peers_str});
-                    break :disagg_blk;
-                }
-            } else {
-                if (!parseIpv4(peers_str, &host)) {
-                    eprint("Error: invalid peer address '{s}'\n", .{peers_str});
-                    break :disagg_blk;
-                }
-            }
+            dtr.* = TransportMod.Transport.init(allocator, .tcp, cli.tp_rank, 2) catch |err| {
+                eprint("Error: disaggregated transport init failed: {}\n", .{err});
+                break :disagg_blk;
+            };
+            const disagg_peer = parsePeerAddr(peers_str, disagg_default_port) orelse {
+                eprint("Error: invalid peer address '{s}'\n", .{peers_str});
+                break :disagg_blk;
+            };
+            const host = disagg_peer.host;
+            const port = disagg_peer.port;
             if (cli.tp_rank == 0) {
                 // Prefill node: tokenize, prefill, send KV
                 var la: std.posix.sockaddr.in = .{ .port = std.mem.nativeToBig(u16, port), .addr = 0 };
@@ -2542,7 +2550,7 @@ fn initAndRun(
     } else if (effective_prompt) |prompt| {
         generateAndPrint(allocator, &model_if, tok, cli, tok_kind, eog, arch, prompt, !g_quiet, minfo, display, img_tokens, n_visual_tokens, draft_ptr);
     } else {
-        runRepl(allocator, &model_if, tok, cli, tok_kind, eog, arch, minfo, display, img_tokens, n_visual_tokens, if (vision_enc != null) &vision_enc.? else null);
+        runRepl(allocator, &model_if, tok, cli, tok_kind, eog, arch, minfo, display, img_tokens, n_visual_tokens);
     }
     mdl.reportPerf();
     return true;
@@ -2562,10 +2570,8 @@ fn runRepl(
     display_in: Display,
     img_tokens: ?arch_mod.ImageTokens,
     n_visual_tokens_init: u32,
-    vision_enc: ?*model_mod.VisionEncoder,
 ) void {
     var n_visual_tokens: u32 = n_visual_tokens_init;
-    _ = vision_enc;
     var display = display_in;
     print("Type a message, /help for commands, Ctrl+D to quit.\n", .{});
 
@@ -3159,13 +3165,19 @@ fn generateAndPrintInner(
             eprint("Error: failed to parse JSON schema: {}\n", .{err});
             break :blk null;
         };
-        if (grammar) |*g| grammar_state = g.initState() catch null;
+        if (grammar) |*g| grammar_state = g.initState() catch |err| blk: {
+            eprint("Error: grammar state init failed (OOM): {}\n", .{err});
+            break :blk null;
+        };
     } else if (cli.grammar_string) |gs| {
         grammar = grammar_mod.Grammar.parse(allocator, gs) catch |err| blk: {
             eprint("Error: failed to parse grammar string: {}\n", .{err});
             break :blk null;
         };
-        if (grammar) |*g| grammar_state = g.initState() catch null;
+        if (grammar) |*g| grammar_state = g.initState() catch |err| blk: {
+            eprint("Error: grammar state init failed (OOM): {}\n", .{err});
+            break :blk null;
+        };
     } else if (cli.grammar_path) |path| {
         const gf = Io.Dir.cwd().openFile(g_io, path, .{}) catch |err| blk: {
             eprint("Error: could not open grammar file '{s}': {}\n", .{ path, err });
@@ -3189,7 +3201,10 @@ fn generateAndPrintInner(
                             allocator.free(b);
                             break :blk null;
                         };
-                        if (grammar) |*g| grammar_state = g.initState() catch null;
+                        if (grammar) |*g| grammar_state = g.initState() catch |err| blk: {
+                            eprint("Error: grammar state init failed (OOM): {}\n", .{err});
+                            break :blk null;
+                        };
                     } else |err| {
                         eprint("Error: could not read grammar file '{s}': {}\n", .{ path, err });
                         allocator.free(b);
@@ -3234,7 +3249,10 @@ fn generateAndPrintInner(
         // Update grammar state with first accepted token
         if (grammar_state) |*gs| {
             const tok_slice = [1]u32{first_gen_token};
-            const text = tok.decode(&tok_slice) catch null;
+            const text = tok.decode(&tok_slice) catch |err| blk: {
+                eprint("Warning: grammar token decode failed (id={d}): {}\n", .{ first_gen_token, err });
+                break :blk null;
+            };
             defer if (text) |t| allocator.free(t);
             gs.acceptToken(text orelse "");
         }
@@ -3286,7 +3304,10 @@ fn generateAndPrintInner(
                 if (grammar_state) |*gs| {
                     if (g.singleValidToken(gs, tok.id_to_token.items)) |jump_tok| {
                         const jt_slice = [1]u32{jump_tok};
-                        const jt_text = tok.decode(@constCast(&jt_slice)) catch null;
+                        const jt_text = tok.decode(@constCast(&jt_slice)) catch |err| blk: {
+                            eprint("Warning: grammar jump token decode failed (id={d}): {}\n", .{ jump_tok, err });
+                            break :blk null;
+                        };
                         defer if (jt_text) |t| allocator.free(t);
                         gs.acceptToken(jt_text orelse "");
                         gen_ids_buf[token_count] = jump_tok;
@@ -3337,7 +3358,10 @@ fn generateAndPrintInner(
         // Update grammar state with accepted token
         if (grammar_state) |*gs| {
             const tok_slice = [1]u32{next};
-            const text = tok.decode(&tok_slice) catch null;
+            const text = tok.decode(&tok_slice) catch |err| blk: {
+                eprint("Warning: grammar token decode failed (id={d}): {}\n", .{ next, err });
+                break :blk null;
+            };
             defer if (text) |t| allocator.free(t);
             gs.acceptToken(text orelse "");
             if (gs.isComplete()) {
@@ -3393,8 +3417,14 @@ fn generateAndPrintInner(
     // Decode full response text for return value (skip if caller doesn't need it)
     const response_text: ?[]u8 = if (token_count > 0 and (need_response or display.mode == .json))
         switch (tok_kind) {
-            .spm, .spm_no_dummy => tok.decodeSpm(gen_ids_buf[0..token_count]) catch null,
-            .bpe => tok.decode(gen_ids_buf[0..token_count]) catch null,
+            .spm, .spm_no_dummy => tok.decodeSpm(gen_ids_buf[0..token_count]) catch |err| blk: {
+                eprint("Error: failed to decode {d} generated tokens: {}\n", .{ token_count, err });
+                break :blk null;
+            },
+            .bpe => tok.decode(gen_ids_buf[0..token_count]) catch |err| blk: {
+                eprint("Error: failed to decode {d} generated tokens: {}\n", .{ token_count, err });
+                break :blk null;
+            },
         }
     else
         null;

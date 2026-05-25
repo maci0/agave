@@ -3,9 +3,9 @@
 //!
 //! Usage: agave calibrate <model.gguf> [--tokens N] [--output path.cal]
 //!
-//! Loads a GGUF model, runs N tokens of inference on a fixed calibration prompt,
-//! captures pre-RoPE Q vectors after Q projection at each layer, and computes
-//! per-head statistics: center norm, center phase, expected norm, and concentration.
+//! Loads a model's Q weight matrices, projects N random vectors through each
+//! layer's Q projection, and computes per-head statistics: center norm, center
+//! phase, expected norm, and concentration.
 //! Saves results to a binary .cal file consumed by TriAttention scoring.
 
 const std = @import("std");
@@ -38,7 +38,6 @@ const cal_version: u32 = 1;
 const calibration_seed: u64 = 0xCAFE_BABE_DEAD_BEEF;
 const Io = std.Io;
 
-/// Standard I/O file handles via std.Io.File (Zig 0.16 idiom).
 const stderr_file = Io.File.stderr();
 const stdout_file = Io.File.stdout();
 
@@ -148,6 +147,12 @@ fn parseArgs(args_iter: *std.process.Args.Iterator) ?CalibrateArgs {
                 eprint("Run 'agave calibrate --help' for more information.\n", .{});
                 std.process.exit(1);
             }
+            if (val.len > 0 and val[0] == '-') {
+                eprint("Error: --tokens requires a value, got '{s}' (looks like a flag)\n", .{val});
+                eprint("  Example: agave calibrate model.gguf --tokens 2000\n", .{});
+                eprint("Run 'agave calibrate --help' for more information.\n", .{});
+                std.process.exit(1);
+            }
             result.n_tokens = std.fmt.parseInt(u32, val, 10) catch {
                 eprint("Error: --tokens value '{s}' is not a valid integer\n", .{val});
                 std.process.exit(1);
@@ -170,6 +175,12 @@ fn parseArgs(args_iter: *std.process.Args.Iterator) ?CalibrateArgs {
                 eprint("Run 'agave calibrate --help' for more information.\n", .{});
                 std.process.exit(1);
             }
+            if (val.len > 0 and val[0] == '-') {
+                eprint("Error: --output requires a path, got '{s}' (looks like a flag)\n", .{val});
+                eprint("  Example: agave calibrate model.gguf --output model.cal\n", .{});
+                eprint("Run 'agave calibrate --help' for more information.\n", .{});
+                std.process.exit(1);
+            }
             result.output = val;
         } else if (arg.len > 0 and arg[0] == '-') {
             eprint("Error: unknown option '{s}'\n", .{arg});
@@ -187,7 +198,7 @@ fn parseArgs(args_iter: *std.process.Args.Iterator) ?CalibrateArgs {
     }
 
     if (!have_model) {
-        eprint("Error: model path required\n", .{});
+        eprint("Error: missing model path\n", .{});
         eprint("Usage: agave calibrate <model.gguf|model-dir/>\n", .{});
         eprint("Run 'agave calibrate --help' for more information.\n", .{});
         std.process.exit(1);
@@ -314,7 +325,6 @@ fn runCalibration(
     });
     eprint("Projecting {d} random vectors per layer through Q weights...\n", .{n_tokens});
 
-    // Allocate per-layer, per-head accumulators
     const total_heads: usize = @as(usize, n_layers) * n_q_heads;
     var accumulators = try allocator.alloc(BandAccumulator, total_heads);
     var init_count: usize = 0;
@@ -327,22 +337,18 @@ fn runCalibration(
         init_count += 1;
     }
 
-    // Scratch buffers for input and Q output
     const input_buf = try allocator.alloc(f32, n_embd);
     defer allocator.free(input_buf);
     const q_output = try allocator.alloc(f32, qkv_dim);
     defer allocator.free(q_output);
 
-    // PRNG for generating pseudo-random input vectors
     var prng = std.Random.Xoshiro256.init(calibration_seed);
 
-    // Detect whether the model uses fused QKV or separate Q weight
     const uses_fused_qkv = fmt.layerTensor(0, "attn_qkv.weight") != null;
 
     for (0..n_layers) |li| {
         const layer: u32 = @intCast(li);
 
-        // Load Q weight tensor for this layer
         const q_tensor = if (uses_fused_qkv)
             fmt.layerTensor(layer, "attn_qkv.weight")
         else
@@ -354,12 +360,9 @@ fn runCalibration(
         }
         const qw = q_tensor.?;
 
-        // Project n_tokens random inputs
         for (0..n_tokens) |_| {
-            // Generate random input vector (approximate standard normal via Box-Muller-like pairs)
             fillRandomGaussian(&prng, input_buf);
 
-            // Q projection: q_output = W_q @ input
             @memset(q_output, 0);
             if (!model_mod.mlxGemv(be, fmt, input_buf.ptr, qw, q_output.ptr, qkv_dim, n_embd)) {
                 be.gemv(
@@ -371,10 +374,9 @@ fn runCalibration(
                 );
             }
 
-            // Sync GPU if needed (Q buffer may be written by GPU)
+            // GPU may have written q_output asynchronously
             be.sync();
 
-            // Split into per-head Q vectors and accumulate
             for (0..n_q_heads) |qh| {
                 const acc_idx = li * n_q_heads + qh;
                 const head_start = qh * head_dim;
@@ -383,18 +385,15 @@ fn runCalibration(
             }
         }
 
-        // Progress
         if ((li + 1) % 4 == 0 or li + 1 == n_layers) {
             eprint("\r  layer {d}/{d}", .{ li + 1, n_layers });
         }
     }
     eprint("\n", .{});
 
-    // Compute RoPE frequencies
     const rope_freqs = try kv_evict.ropeFrequencies(allocator, head_dim, rope_theta);
     errdefer allocator.free(rope_freqs);
 
-    // Finalize statistics into flat arrays
     const band_count: usize = @as(usize, n_layers) * n_q_heads * n_bands;
     var q_center_norm = try allocator.alloc(f32, band_count);
     errdefer allocator.free(q_center_norm);
@@ -415,7 +414,6 @@ fn runCalibration(
         );
     }
 
-    // Clean up accumulators
     for (accumulators) |*acc| acc.deinit(allocator);
     allocator.free(accumulators);
 

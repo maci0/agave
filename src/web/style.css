@@ -263,7 +263,7 @@ header {
 .msg th { background: var(--surface); font-weight: 600; }
 
 /* Code block extras */
-.code-lang { position: absolute; top: 6px; inset-inline-start: 12px; font-family: var(--mono); font-size: 11px; color: var(--text-3); text-transform: uppercase; letter-spacing: .5px; }
+.code-lang { position: absolute; top: 6px; inset-inline-start: 12px; font-family: var(--mono); font-size: 11px; color: var(--text-3); text-transform: uppercase; letter-spacing: .5px; max-width: calc(100% - 80px); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .copy-btn { position: absolute; top: 6px; inset-inline-end: 8px; font-family: var(--mono); background: var(--surface); border: 1px solid var(--border); color: var(--text-3); padding: 3px 8px; border-radius: 4px; cursor: pointer; font-size: 11px; opacity: 0; transition: all .2s; min-height: 28px; display: inline-flex; align-items: center; }
 .msg pre:hover .copy-btn, .copy-btn:focus-visible { opacity: 1; }
 .copy-btn:hover { background: var(--border); color: var(--text); }

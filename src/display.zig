@@ -16,7 +16,6 @@ pub const version = "0.1.0";
 /// Brand emoji for version/banner output (🌵).
 pub const cactus = "\xf0\x9f\x8c\xb5";
 
-/// Standard I/O file handles via std.Io.File (Zig 0.16 idiom).
 const stderr_file = Io.File.stderr();
 const stdout_file = Io.File.stdout();
 

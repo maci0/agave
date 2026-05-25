@@ -39,10 +39,8 @@ inline fn simdMaxF32(buf: []const f32) f32 {
 }
 
 /// Return index of maximum element (first occurrence on ties).
-/// SIMD max-reduce to find value, then linear scan for matching index.
 pub fn argmax(buf: []const f32) u32 {
     const best_val = simdMaxF32(buf);
-    // Phase 2: find first occurrence (early-exit scan)
     for (buf, 0..) |v, idx| {
         if (v >= best_val) return @intCast(idx);
     }

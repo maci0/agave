@@ -72,7 +72,7 @@ pub const WeightPack = struct {
 /// Scan all layer weight tensors and record their byte offsets relative to
 /// the earliest tensor data pointer. GGUF files memory-map weights contiguously,
 /// so no copying is needed — the kernel accesses `base_ptr + offset`.
-fn computeOffsets(fmt: Format, n_layers: u32) WeightPack {
+pub fn computeOffsets(fmt: Format, n_layers: u32) WeightPack {
     std.debug.assert(n_layers <= max_layers);
     var pack = WeightPack{
         .base_ptr = undefined,
@@ -159,5 +159,23 @@ fn computeOffsets(fmt: Format, n_layers: u32) WeightPack {
 test "LayerOffsets default zero" {
     const lo = LayerOffsets{};
     try std.testing.expectEqual(@as(usize, 0), lo.attn_norm);
+    try std.testing.expectEqual(@as(usize, 0), lo.attn_q);
+    try std.testing.expectEqual(@as(usize, 0), lo.attn_k);
+    try std.testing.expectEqual(@as(usize, 0), lo.attn_v);
+    try std.testing.expectEqual(@as(usize, 0), lo.attn_q_norm);
+    try std.testing.expectEqual(@as(usize, 0), lo.attn_k_norm);
+    try std.testing.expectEqual(@as(usize, 0), lo.attn_output);
+    try std.testing.expectEqual(@as(usize, 0), lo.attn_qkv);
+    try std.testing.expectEqual(@as(usize, 0), lo.attn_gate);
+    try std.testing.expectEqual(@as(usize, 0), lo.ssm_alpha);
+    try std.testing.expectEqual(@as(usize, 0), lo.ssm_beta);
+    try std.testing.expectEqual(@as(usize, 0), lo.ssm_a);
+    try std.testing.expectEqual(@as(usize, 0), lo.ssm_dt_bias);
+    try std.testing.expectEqual(@as(usize, 0), lo.ssm_conv1d);
+    try std.testing.expectEqual(@as(usize, 0), lo.ssm_norm);
+    try std.testing.expectEqual(@as(usize, 0), lo.ssm_out);
+    try std.testing.expectEqual(@as(usize, 0), lo.post_attn_norm);
+    try std.testing.expectEqual(@as(usize, 0), lo.ffn_gate);
+    try std.testing.expectEqual(@as(usize, 0), lo.ffn_up);
     try std.testing.expectEqual(@as(usize, 0), lo.ffn_down);
 }

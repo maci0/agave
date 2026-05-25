@@ -501,7 +501,10 @@ function streamResponse(body, errLabel, url) {
       announceToSR(errMsg);
     }
   })
-  .finally(function() { abortCtrl = null; setStreaming(false); refreshCtxBadge(); inp.focus(); });
+  .finally(function() {
+    abortCtrl = null; setStreaming(false); refreshCtxBadge();
+    if (!document.getElementById('info-modal').classList.contains('show')) inp.focus();
+  });
 }
 
 function sendMessage(text) {
@@ -623,6 +626,7 @@ function showEmpty() {
 
 function clearChat() {
   if (!confirm('Clear this conversation?')) return;
+  if (isStreaming) stopGen();
   if (pendingImage) removeImage();
   fetch('/v1/chat', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: 'message=%2Fclear' })
   .then(function() { loadConvs(); showEmpty(); inp.focus(); announceToSR('Conversation cleared'); }).catch(function() { showEmpty(); inp.focus(); });
@@ -681,6 +685,7 @@ function loadConvs() {
 }
 
 function newConv() {
+  if (isStreaming) stopGen();
   if (pendingImage) removeImage();
   fetch('/v1/conversations', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: 'action=new' })
   .then(function() { loadConvs(); showEmpty(); inp.focus(); }).catch(function() { loadConvs(); });
@@ -688,6 +693,7 @@ function newConv() {
 
 var selectSeq = 0;
 function selectConv(id) {
+  if (isStreaming) stopGen();
   if (pendingImage) removeImage();
   var mySeq = ++selectSeq;
   while (chat.firstChild) chat.removeChild(chat.firstChild);

@@ -75,9 +75,16 @@ pub const Prefetcher = struct {
         self.mutex.lockUncancelable(self.io);
         defer self.mutex.unlock(self.io);
 
+        // Check promotion status under tier_lock to avoid data race on blk.tier.
+        // Worker's promoteFromSsd handles already-promoted blocks (returns early).
         var queued: usize = 0;
         for (block_ids[start_idx..end]) |block_id| {
-            if (self.cache.needsPromotion(block_id)) {
+            const needs = blk: {
+                self.cache.lockTier();
+                defer self.cache.unlockTier();
+                break :blk self.cache.needsPromotion(block_id);
+            };
+            if (needs) {
                 if (self.ring_len >= max_queue_size) {
                     std.log.warn("Prefetch queue full — dropping oldest job (block {d})", .{self.ring[self.ring_head].block_id});
                     self.ring_head = (self.ring_head + 1) % max_queue_size;

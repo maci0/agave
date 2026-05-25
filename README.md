@@ -19,7 +19,7 @@
 ## Features
 
 - **8 Model Architectures**: Gemma 3, Gemma 4, Qwen 3.5, GPT-OSS, Nemotron-H, Nemotron Nano, GLM-4, Llama 4
-- **6 Backends**: CPU (SIMD-optimized), Metal GPU (Apple Silicon), Vulkan, CUDA, ROCm, WebGPU — individually toggleable at build time
+- **6 Backends**: CPU (SIMD-optimized, Accelerate.framework on macOS), Metal GPU (Apple Silicon), Vulkan, CUDA, ROCm, WebGPU — individually toggleable at build time
 - **Compile-Time Model Selection**: Disable unused model architectures to reduce binary size (1.8 MB → 0.75 MB with all models stripped)
 - **2 Formats**: GGUF, SafeTensors (multi-shard, MLX quantized, NVFP4)
 - **20+ Quantization Types**: F32, F16, BF16, Q2_K, Q3_K, Q4_0, Q4_1, Q4_K, Q5_0, Q5_K, Q6_K, Q8_0, TQ1_0, IQ4_XS, IQ4_NL, FP8 E4M3, FP8 E5M2, NVFP4, MXFP4, MLX 4/6/8-bit, GPTQ
@@ -35,7 +35,7 @@
 - **Full Sampling**: temperature, top-k, top-p, min-p, repeat/frequency/presence penalties, seed, stop sequences
 - **Batched Prefill**: Chunked GEMM + fused FlashAttention-2 for fast prompt processing
 - **Distributed Inference**: Tensor parallelism (TP), pipeline parallelism (PP), disaggregated prefill/decode. Same-node multi-GPU via POSIX shm (zero-copy IPC), cross-node via TCP. Heterogeneous: mix CUDA + Vulkan + CPU across x86_64 + aarch64
-- **Speculative Decoding**: Draft model, self-speculative (layer skip), DDTree with configurable tree budget
+- **Speculative Decoding**: Draft model, self-speculative (layer skip), DDTree with configurable tree budget, n-gram history-based prediction, multi-token prediction (MTP) heads
 - **Fused Megakernels**: Composable GPU megakernels — gate+up+SiLU fused into single dispatch (3→1)
 - **~183 tok/s** on Qwen3.5 0.8B Q8_0 (Metal, Apple Silicon M4 Pro), **1.2-1.7x faster than llama.cpp on Q8_0** (Q4_K performance is a [known gap](docs/TODO.md#performance) — active optimization target)
 
@@ -245,7 +245,7 @@ Measured on Apple M4 Pro (48 GB unified memory). See [docs/BENCHMARKS.md](docs/B
 | Gemma 4 E4B | — | Metal | 8.5 | — |
 | Gemma 4 26B-A4B | — | Metal | 5.0 | — |
 | Gemma 3 27B | QAT 4-bit | Metal | 11.6 | — |
-| Qwen3.5 0.8B | MLX-4bit | Metal | 12.7 | — |
+| Qwen3.5 9B | MLX-4bit | Metal | 12.7 | — |
 
 ### Multi-Backend (Qwen3.5 0.8B Q8_0)
 
@@ -334,7 +334,7 @@ agave [OPTIONS] <model> [prompt]
       --mmap               Use lazy mmap instead of preloading weights into RAM
       --megakernel         Enable fused FFN megakernels (3→1 dispatch per layer)
       --draft-model <PATH> Draft model GGUF for speculative decoding
-      --spec-mode <MODE>   Speculative mode: standard, ddtree, self, ngram, mtp [default: ddtree]
+      --spec-mode <MODE>   Speculative mode: standard, ddtree, self, ngram, mtp [default: ddtree with --draft-model]
                            ngram uses output history (no draft model needed)
   -K, --spec-tokens <N>    Draft tokens per speculation round [default: 5]
       --tree-budget <N>    DDTree node budget [default: 64]
@@ -351,7 +351,7 @@ agave [OPTIONS] <model> [prompt]
 
 ## Build Options
 
-All backends and models are enabled by default. Disable individually to reduce binary size or avoid unwanted dependencies.
+All backends (except WebGPU) and models are enabled by default. Disable individually to reduce binary size or avoid unwanted dependencies.
 
 ```bash
 # Disable specific backends
@@ -476,6 +476,7 @@ src/
 │   ├── cuda.zig       #   CUDA GPU (runtime dlopen, Zig PTX kernels)
 │   ├── rocm.zig       #   ROCm GPU (runtime dlopen)
 │   ├── webgpu.zig     #   WebGPU (WGSL shaders, browser + native)
+│   ├── accelerate.zig #   Apple Accelerate.framework BLAS bindings (AMX-accelerated SGEMM)
 │   ├── objc.zig       #   Objective-C runtime bridge for Metal
 │   └── kernels/       #   GPU shader/kernel sources
 │       ├── metal/     #     MSL compute shaders

@@ -38,7 +38,7 @@ RUN ARCH=$(uname -m) && \
     rm /tmp/zig.tar.xz
 
 WORKDIR /src
-COPY . .
+COPY --link . .
 
 # Cross-compile for the target platform.
 # Use glibc (-gnu) when any dlopen backend is enabled (CUDA/Vulkan/ROCm need glibc).
@@ -77,7 +77,7 @@ FROM debian:bookworm-slim
 
 LABEL org.opencontainers.image.title="agave" \
       org.opencontainers.image.description="High-performance LLM inference engine" \
-      org.opencontainers.image.source="https://github.com/anthropics/agave"
+      org.opencontainers.image.source="https://github.com/maci0/agave"
 
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl && rm -rf /var/lib/apt/lists/* && \
     groupadd -r agave && useradd -r -g agave -s /sbin/nologin agave

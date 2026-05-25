@@ -573,23 +573,29 @@ const security_headers =
 /// Anthropic-style `x-api-key: <key>` headers.
 /// Returns true if no auth configured or if token matches.
 /// Uses constant-time comparison to prevent timing side-channel attacks.
+/// Iterates header lines (not substring search) to prevent false matches
+/// inside other header values (CWE-287).
 fn validateAuth(server: *const Server, headers: []const u8) bool {
     if (server.api_key == null) return true; // No auth configured
-    // Try OpenAI-style: Authorization: Bearer <key>
-    const bearer_needle = "authorization: bearer ";
-    if (std.ascii.indexOfIgnoreCase(headers, bearer_needle)) |idx| {
-        const token_start = idx + bearer_needle.len;
-        const token_end = std.mem.indexOfScalarPos(u8, headers, token_start, '\r') orelse headers.len;
-        const token = std.mem.trim(u8, headers[token_start..token_end], " \t");
-        if (constantTimeEql(token, server.api_key.?)) return true;
-    }
-    // Try Anthropic-style: x-api-key: <key>
-    const apikey_needle = "x-api-key: ";
-    if (std.ascii.indexOfIgnoreCase(headers, apikey_needle)) |idx| {
-        const token_start = idx + apikey_needle.len;
-        const token_end = std.mem.indexOfScalarPos(u8, headers, token_start, '\r') orelse headers.len;
-        const token = std.mem.trim(u8, headers[token_start..token_end], " \t");
-        if (constantTimeEql(token, server.api_key.?)) return true;
+    const key = server.api_key.?;
+    var iter = std.mem.splitSequence(u8, headers, "\r\n");
+    while (iter.next()) |line| {
+        const colon = std.mem.indexOf(u8, line, ":") orelse continue;
+        const name = line[0..colon];
+        // Authorization: Bearer <key>
+        if (colon == "authorization".len and std.ascii.eqlIgnoreCase(name, "authorization")) {
+            const val = std.mem.trim(u8, line[colon + 1 ..], " \t");
+            const bearer = "bearer ";
+            if (val.len > bearer.len and std.ascii.eqlIgnoreCase(val[0..bearer.len], bearer)) {
+                const token = std.mem.trim(u8, val[bearer.len..], " \t");
+                if (constantTimeEql(token, key)) return true;
+            }
+        }
+        // x-api-key: <key>
+        if (colon == "x-api-key".len and std.ascii.eqlIgnoreCase(name, "x-api-key")) {
+            const token = std.mem.trim(u8, line[colon + 1 ..], " \t");
+            if (constantTimeEql(token, key)) return true;
+        }
     }
     return false;
 }
@@ -1008,9 +1014,8 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
         const max_tokens = clampMaxTokens(json.extractIntField(body, "max_tokens") orelse json.extractIntField(body, "max_completion_tokens"));
         const sampling = json.parseSampling(body);
         if (sampling.user) |u| {
-            var user_buf: [128]u8 = undefined;
-            const safe_user = sanitizeForLog(u, &user_buf);
-            slog("  req={d} user={s}\n", .{ log_request_id, safe_user });
+            // Log presence and length only — user field may contain PII (email, username)
+            slog("  req={d} user=({d} chars)\n", .{ log_request_id, u.len });
         }
 
         // 2. Parse tools and extract messages
@@ -2308,7 +2313,10 @@ const GeneratedEscaped = struct {
 fn generateEscapedN(prompt: []const u8, reset: bool, max_tokens: usize, sampling: SamplingParams) GeneratedEscaped {
     const result = generateN(prompt, reset, max_tokens, sampling);
     logGeneration(result.stats.tokens_generated, result.stats.time_ms, result.stats.tokens_per_sec);
-    const escaped = json.jsonEscape(g_server.allocator, result.data) catch result.data[0..0];
+    const escaped = json.jsonEscape(g_server.allocator, result.data) catch |err| blk: {
+        std.log.err("req={d} JSON escape OOM ({d} bytes generated): {}", .{ log_request_id, result.data.len, err });
+        break :blk result.data[0..0];
+    };
     return .{
         .raw = result.data,
         .escaped = escaped,
@@ -2397,12 +2405,10 @@ fn generateN(formatted: []const u8, reset: bool, max_tokens: usize, sampling: Sa
         const token_count: u32 = req.visible_len.load(.acquire);
         const tokens_per_sec: f32 = tokensPerSec(token_count, time_ms);
 
-        // Use atomically-loaded token_count for slice bound — req.tokens.items
-        // could race with a late scheduler append on a just-cancelled request.
-        const safe_tokens = req.tokens.items[0..@min(token_count, @as(u32, @intCast(req.tokens.items.len)))];
+        const safe_tokens = req.tokens.items[0..token_count];
         const decoded = tok.decode(safe_tokens) catch |err| d: {
             std.log.warn("req={d} batch decode failed ({d} tokens): {}", .{ log_request_id, safe_tokens.len, err });
-            break :d g_server.allocator.dupe(u8, "[decode error]") catch @constCast("");
+            break :d g_server.allocator.dupe(u8, "[decode error]") catch @as([]u8, &.{});
         };
 
         // Record TTFT from scheduler's per-request prefill timestamp
@@ -2434,12 +2440,17 @@ fn generateN(formatted: []const u8, reset: bool, max_tokens: usize, sampling: Sa
     defer g_server.mutex.unlock(g_server.io);
     const model = g_server.model;
 
+    // Re-check kv_valid under mutex — the caller's `reset` flag may be stale
+    // if another thread invalidated the cache (e.g. /clear) between the caller's
+    // unlock and this lock acquisition.
+    const actual_reset = reset or !g_server.kv_valid;
+
     // Prompt prefix caching: find longest common prefix with cached state.
     // If the new prompt shares a prefix with the previous one, skip re-prefilling
     // those tokens (KV cache already has them). Roll back KV to the shared prefix
     // length and only process new tokens.
     var prefix_len: usize = 0;
-    if (reset and g_server.cached_prompt_ids.len > 0 and token_ids.len > 0) {
+    if (actual_reset and g_server.cached_prompt_ids.len > 0 and token_ids.len > 0) {
         const max_match = @min(g_server.cached_prompt_ids.len, token_ids.len);
         while (prefix_len < max_match and g_server.cached_prompt_ids[prefix_len] == token_ids[prefix_len]) {
             prefix_len += 1;
@@ -2454,10 +2465,10 @@ fn generateN(formatted: []const u8, reset: bool, max_tokens: usize, sampling: Sa
         }
     }
 
-    if (prefix_len == 0 and reset) model.resetCache();
+    if (prefix_len == 0 and actual_reset) model.resetCache();
 
     // BOS token — required by models like Gemma to initialize state correctly
-    if (prefix_len == 0 and reset and g_server.bos_token_id > 0) {
+    if (prefix_len == 0 and actual_reset and g_server.bos_token_id > 0) {
         _ = model.forward(g_server.bos_token_id) catch |err| {
             std.log.warn("req={d} BOS forward failed: {}", .{ log_request_id, err });
             return .{ .data = g_server.allocator.dupe(u8, "[BOS forward error]") catch &.{}, .finish_reason = "error", .stats = zero_stats };
@@ -2520,9 +2531,10 @@ fn generateN(formatted: []const u8, reset: bool, max_tokens: usize, sampling: Sa
         };
     }
 
+    const vocab_texts = g_server.tokenizer.getVocabTexts();
+
     if (token_ids.len > 0) {
         const first_logits = model.getLogits();
-        const vocab_texts = g_server.tokenizer.getVocabTexts();
 
         // Grammar masking on first token
         if (use_grammar) {
@@ -2549,14 +2561,20 @@ fn generateN(formatted: []const u8, reset: bool, max_tokens: usize, sampling: Sa
         // Accept first token in grammar state
         if (use_grammar and grammar_state_storage != null) {
             const tok_slice = [1]u32{first_gen_token};
-            const text = g_server.tokenizer.decode(@constCast(&tok_slice)) catch null;
+            const text = g_server.tokenizer.decode(@constCast(&tok_slice)) catch |err| blk: {
+                std.log.warn("req={d} grammar token decode failed (id={d}): {}", .{ log_request_id, first_gen_token, err });
+                break :blk null;
+            };
             defer if (text) |t| g_server.allocator.free(t);
             grammar_state_storage.?.acceptToken(text orelse "");
         }
         // Track JSON depth for first token
         if (sampling.json_mode) {
             const tok_slice = [1]u32{first_gen_token};
-            const text = g_server.tokenizer.decode(@constCast(&tok_slice)) catch null;
+            const text = g_server.tokenizer.decode(@constCast(&tok_slice)) catch |err| blk: {
+                std.log.warn("req={d} json token decode failed (id={d}): {}", .{ log_request_id, first_gen_token, err });
+                break :blk null;
+            };
             defer if (text) |t| g_server.allocator.free(t);
             if (text) |t| {
                 for (t) |ch| {
@@ -2663,9 +2681,12 @@ fn generateN(formatted: []const u8, reset: bool, max_tokens: usize, sampling: Sa
             if (use_grammar and !use_sampling) {
                 if (grammar_storage) |*g| {
                     if (grammar_state_storage) |*gs| {
-                        if (g.singleValidToken(gs, g_server.tokenizer.getVocabTexts())) |jump_tok| {
+                        if (g.singleValidToken(gs, vocab_texts)) |jump_tok| {
                             const jt_slice = [1]u32{jump_tok};
-                            const jt_text = g_server.tokenizer.decode(@constCast(&jt_slice)) catch null;
+                            const jt_text = g_server.tokenizer.decode(@constCast(&jt_slice)) catch |err| blk: {
+                                std.log.warn("req={d} grammar jump decode failed (id={d}): {}", .{ log_request_id, jump_tok, err });
+                                break :blk null;
+                            };
                             defer if (jt_text) |t| g_server.allocator.free(t);
                             gs.acceptToken(jt_text orelse "");
                             gen_tokens[token_count] = jump_tok;
@@ -2687,37 +2708,38 @@ fn generateN(formatted: []const u8, reset: bool, max_tokens: usize, sampling: Sa
                 }
                 break;
             };
+            const logits = model.getLogits();
             // Grammar masking before sampling
             if (use_grammar) {
                 if (grammar_storage) |*g| {
                     if (grammar_state_storage) |*gs| {
-                        g.maskLogits(gs, model.getLogits(), g_server.tokenizer.getVocabTexts());
-                        next = math_ops.argmax(model.getLogits());
+                        g.maskLogits(gs, logits, vocab_texts);
+                        next = math_ops.argmax(logits);
                     }
                 }
             }
             if (sampling.logit_bias_count > 0) {
-                math_ops.applyLogitBias(model.getLogits(), &sampling.logit_bias_ids, &sampling.logit_bias_vals, sampling.logit_bias_count);
+                math_ops.applyLogitBias(logits, &sampling.logit_bias_ids, &sampling.logit_bias_vals, sampling.logit_bias_count);
             }
             if (sampling.repetition_penalty != 1.0 and token_count > 0) {
-                math_ops.applyRepeatPenalty(model.getLogits(), gen_tokens[0..token_count], sampling.repetition_penalty);
+                math_ops.applyRepeatPenalty(logits, gen_tokens[0..token_count], sampling.repetition_penalty);
             }
             if (sampling.dry_multiplier > 0 and token_count > 0) {
-                math_ops.applyDry(model.getLogits(), gen_tokens[0..token_count], sampling.dry_multiplier, sampling.dry_allowed_length);
+                math_ops.applyDry(logits, gen_tokens[0..token_count], sampling.dry_multiplier, sampling.dry_allowed_length);
             }
             if (sampling.frequency_penalty != 0 or sampling.presence_penalty != 0) {
-                math_ops.applyPenalties(model.getLogits(), gen_tokens[0..token_count], sampling.frequency_penalty, sampling.presence_penalty);
+                math_ops.applyPenalties(logits, gen_tokens[0..token_count], sampling.frequency_penalty, sampling.presence_penalty);
             }
             if ((sampling.repetition_penalty != 1.0 or sampling.frequency_penalty != 0 or sampling.presence_penalty != 0 or sampling.dry_multiplier > 0) and !use_grammar and !use_sampling) {
-                next = math_ops.argmax(model.getLogits());
+                next = math_ops.argmax(logits);
             }
             if (use_sampling and !use_grammar) {
                 if (sampling.mirostat >= 2) {
-                    next = math_ops.sampleMirostat(model.getLogits(), sampling.mirostat_tau, sampling.mirostat_eta, &mirostat_mu, sampling.temperature, prng.random());
+                    next = math_ops.sampleMirostat(logits, sampling.mirostat_tau, sampling.mirostat_eta, &mirostat_mu, sampling.temperature, prng.random());
                 } else {
-                    if (sampling.min_p > 0) math_ops.applyMinP(model.getLogits(), sampling.min_p);
-                    if (sampling.xtc_probability > 0) math_ops.applyXtc(model.getLogits(), sampling.xtc_probability, sampling.xtc_threshold, prng.random());
-                    next = math_ops.sampleToken(model.getLogits(), sampling.temperature, sampling.top_k, sampling.top_p, prng.random());
+                    if (sampling.min_p > 0) math_ops.applyMinP(logits, sampling.min_p);
+                    if (sampling.xtc_probability > 0) math_ops.applyXtc(logits, sampling.xtc_probability, sampling.xtc_threshold, prng.random());
+                    next = math_ops.sampleToken(logits, sampling.temperature, sampling.top_k, sampling.top_p, prng.random());
                 }
             }
             if (g_server.isEog(next)) {
@@ -2729,7 +2751,10 @@ fn generateN(formatted: []const u8, reset: bool, max_tokens: usize, sampling: Sa
             const needs_text = use_grammar or sampling.json_mode or sampling.hasStop();
             const tok_text_alloc: ?[]u8 = if (needs_text) blk: {
                 const tok_slice = [1]u32{next};
-                break :blk g_server.tokenizer.decode(@constCast(&tok_slice)) catch null;
+                break :blk g_server.tokenizer.decode(@constCast(&tok_slice)) catch |err| blk2: {
+                    std.log.warn("req={d} token decode failed (id={d}): {}", .{ log_request_id, next, err });
+                    break :blk2 null;
+                };
             } else null;
             defer if (tok_text_alloc) |t| g_server.allocator.free(t);
             const tok_text: []const u8 = tok_text_alloc orelse "";
@@ -2793,7 +2818,7 @@ fn generateN(formatted: []const u8, reset: bool, max_tokens: usize, sampling: Sa
     // Single batch decode — one alloc instead of N per-token allocs
     const decoded = tok.decode(gen_tokens[0..token_count]) catch |err| d: {
         std.log.warn("req={d} batch decode failed ({d} tokens): {}", .{ log_request_id, token_count, err });
-        break :d g_server.allocator.dupe(u8, "[decode error]") catch @constCast("");
+        break :d g_server.allocator.dupe(u8, "[decode error]") catch @as([]u8, &.{});
     };
 
     return .{
@@ -2845,7 +2870,10 @@ fn chatStreamGenerate(stream: TcpStream, formatted: []const u8, reset: bool, max
             insert_pos,
             img_toks,
             g_server.pending_visual_tokens,
-        ) catch null;
+        ) catch |err| blk: {
+            std.log.warn("req={d} vision token injection failed ({d} visual tokens): {}", .{ log_request_id, g_server.pending_visual_tokens, err });
+            break :blk null;
+        };
     }
     defer if (injected_ids_cs) |ids| g_server.allocator.free(ids);
     const token_ids: []const u32 = if (injected_ids_cs) |ids| ids else raw_token_ids;
@@ -2923,7 +2951,7 @@ fn chatStreamGenerate(stream: TcpStream, formatted: []const u8, reset: bool, max
         const safe_cs_tokens = req.tokens.items[0..@min(token_count, @as(u32, @intCast(req.tokens.items.len)))];
         const decoded = tok.decode(safe_cs_tokens) catch |err| d: {
             std.log.warn("req={d} batch decode failed ({d} tokens): {}", .{ log_request_id, safe_cs_tokens.len, err });
-            break :d g_server.allocator.dupe(u8, "") catch @constCast("");
+            break :d g_server.allocator.dupe(u8, "") catch @as([]u8, &.{});
         };
         return .{
             .data = decoded,
@@ -2935,9 +2963,12 @@ fn chatStreamGenerate(stream: TcpStream, formatted: []const u8, reset: bool, max
     g_server.mutex.lockUncancelable(g_server.io);
     defer g_server.mutex.unlock(g_server.io);
     const model = g_server.model;
-    if (reset) model.resetCache();
+    // Re-check kv_valid under mutex — caller's `reset` may be stale if another
+    // thread invalidated the cache between the caller's unlock and this lock.
+    const actual_reset = reset or !g_server.kv_valid;
+    if (actual_reset) model.resetCache();
 
-    if (reset and g_server.bos_token_id > 0) {
+    if (actual_reset and g_server.bos_token_id > 0) {
         _ = model.forward(g_server.bos_token_id) catch |err| {
             std.log.warn("req={d} BOS forward failed: {}", .{ log_request_id, err });
             g_server.metrics.recordFailure();
@@ -3039,7 +3070,7 @@ fn chatStreamGenerate(stream: TcpStream, formatted: []const u8, reset: bool, max
     // Decode accumulated text for conversation storage
     const decoded = tok.decode(gen_tokens[0..token_count]) catch |err| d: {
         std.log.warn("req={d} batch decode failed ({d} tokens): {}", .{ log_request_id, token_count, err });
-        break :d g_server.allocator.dupe(u8, "") catch @constCast("");
+        break :d g_server.allocator.dupe(u8, "") catch @as([]u8, &.{});
     };
 
     return .{
@@ -3624,10 +3655,13 @@ fn generateResponsesStream(stream: TcpStream, prompt: []const u8, max_tokens: us
             const safe_resp_tokens = req.tokens.items[0..@min(safe_resp_count, @as(u32, @intCast(req.tokens.items.len)))];
             const decoded = tok.decode(safe_resp_tokens) catch |err| d: {
                 std.log.warn("req={d} batch decode failed ({d} tokens): {}", .{ log_request_id, safe_resp_tokens.len, err });
-                break :d g_server.allocator.dupe(u8, "") catch @constCast("");
+                break :d g_server.allocator.dupe(u8, "") catch @as([]u8, &.{});
             };
             defer g_server.allocator.free(decoded);
-            const escaped = json.jsonEscape(g_server.allocator, decoded) catch decoded[0..0];
+            const escaped = json.jsonEscape(g_server.allocator, decoded) catch |err| blk: {
+                std.log.err("req={d} JSON escape OOM in responses stream ({d} bytes): {}", .{ log_request_id, decoded.len, err });
+                break :blk decoded[0..0];
+            };
             defer if (escaped.ptr != decoded.ptr) g_server.allocator.free(escaped);
 
             const stop_reason: []const u8 = if (token_count >= max_tokens) "max_tokens" else "stop";
@@ -3797,10 +3831,13 @@ fn generateResponsesStream(stream: TcpStream, prompt: []const u8, max_tokens: us
     if (!resp_disconnected) {
         const decoded = tok.decode(gen_tokens[0..token_count]) catch |err| d: {
             std.log.warn("req={d} batch decode failed ({d} tokens): {}", .{ log_request_id, token_count, err });
-            break :d g_server.allocator.dupe(u8, "") catch @constCast("");
+            break :d g_server.allocator.dupe(u8, "") catch @as([]u8, &.{});
         };
         defer g_server.allocator.free(decoded);
-        const escaped = json.jsonEscape(g_server.allocator, decoded) catch decoded[0..0];
+        const escaped = json.jsonEscape(g_server.allocator, decoded) catch |err| blk: {
+            std.log.err("req={d} JSON escape OOM in anthropic stream ({d} bytes): {}", .{ log_request_id, decoded.len, err });
+            break :blk decoded[0..0];
+        };
         defer if (escaped.ptr != decoded.ptr) g_server.allocator.free(escaped);
 
         const stop_reason: []const u8 = if (token_count >= max_tokens) "max_tokens" else "stop";
@@ -4249,27 +4286,33 @@ fn generateStream(stream: TcpStream, prompt: []const u8, req_id: u64, created: i
     }
     const stream_prefill_ms: u64 = @intCast(@max(milliTimestamp() - prefill_start, 0));
     g_server.metrics.recordTTFT(stream_prefill_ms, @intCast(token_ids.len));
+    const s_vocab_texts = g_server.tokenizer.getVocabTexts();
     // Grammar masking on first token
     if (use_grammar_s and token_ids.len > 0) {
         if (s_grammar) |*g| {
             if (s_grammar_state) |*gs| {
-                g.maskLogits(gs, model.getLogits(), g_server.tokenizer.getVocabTexts());
-                first_gen_token = math_ops.argmax(model.getLogits());
+                const s_first_logits = model.getLogits();
+                g.maskLogits(gs, s_first_logits, s_vocab_texts);
+                first_gen_token = math_ops.argmax(s_first_logits);
             }
         }
     } else if (use_sampling_s and token_ids.len > 0) {
+        const s_first_logits = model.getLogits();
         if (sampling.mirostat >= 2) {
-            first_gen_token = math_ops.sampleMirostat(model.getLogits(), sampling.mirostat_tau, sampling.mirostat_eta, &mirostat_mu_s, sampling.temperature, prng_s.random());
+            first_gen_token = math_ops.sampleMirostat(s_first_logits, sampling.mirostat_tau, sampling.mirostat_eta, &mirostat_mu_s, sampling.temperature, prng_s.random());
         } else {
-            if (sampling.min_p > 0) math_ops.applyMinP(model.getLogits(), sampling.min_p);
-            if (sampling.xtc_probability > 0) math_ops.applyXtc(model.getLogits(), sampling.xtc_probability, sampling.xtc_threshold, prng_s.random());
-            first_gen_token = math_ops.sampleToken(model.getLogits(), sampling.temperature, sampling.top_k, sampling.top_p, prng_s.random());
+            if (sampling.min_p > 0) math_ops.applyMinP(s_first_logits, sampling.min_p);
+            if (sampling.xtc_probability > 0) math_ops.applyXtc(s_first_logits, sampling.xtc_probability, sampling.xtc_threshold, prng_s.random());
+            first_gen_token = math_ops.sampleToken(s_first_logits, sampling.temperature, sampling.top_k, sampling.top_p, prng_s.random());
         }
     }
     // Accept first token in grammar
     if (use_grammar_s and s_grammar_state != null and token_ids.len > 0) {
         const ft_slice = [1]u32{first_gen_token};
-        const ft_text = g_server.tokenizer.decode(@constCast(&ft_slice)) catch null;
+        const ft_text = g_server.tokenizer.decode(@constCast(&ft_slice)) catch |err| blk: {
+            std.log.warn("req={d} stream grammar decode failed (id={d}): {}", .{ log_request_id, first_gen_token, err });
+            break :blk null;
+        };
         defer if (ft_text) |t| g_server.allocator.free(t);
         s_grammar_state.?.acceptToken(ft_text orelse "");
     }
@@ -4367,9 +4410,12 @@ fn generateStream(stream: TcpStream, prompt: []const u8, req_id: u64, created: i
             if (use_grammar_s and !use_sampling_s) {
                 if (s_grammar) |*g| {
                     if (s_grammar_state) |*gs| {
-                        if (g.singleValidToken(gs, g_server.tokenizer.getVocabTexts())) |jump_tok| {
+                        if (g.singleValidToken(gs, s_vocab_texts)) |jump_tok| {
                             const jt_s = [1]u32{jump_tok};
-                            const jt_text = g_server.tokenizer.decode(@constCast(&jt_s)) catch null;
+                            const jt_text = g_server.tokenizer.decode(@constCast(&jt_s)) catch |err| blk: {
+                                std.log.warn("req={d} stream jump decode failed (id={d}): {}", .{ log_request_id, jump_tok, err });
+                                break :blk null;
+                            };
                             defer if (jt_text) |t| g_server.allocator.free(t);
                             gs.acceptToken(jt_text orelse "");
                             if (!streamChunk(stream, &chunk_buf, tok, jump_tok, req_id, created, is_chat)) {
@@ -4392,42 +4438,46 @@ fn generateStream(stream: TcpStream, prompt: []const u8, req_id: u64, created: i
                 }
                 break;
             };
+            const s_logits = model.getLogits();
             if (sampling.logit_bias_count > 0) {
-                math_ops.applyLogitBias(model.getLogits(), &sampling.logit_bias_ids, &sampling.logit_bias_vals, sampling.logit_bias_count);
+                math_ops.applyLogitBias(s_logits, &sampling.logit_bias_ids, &sampling.logit_bias_vals, sampling.logit_bias_count);
             }
             if (sampling.repetition_penalty != 1.0 and s_gen_count > 0) {
-                math_ops.applyRepeatPenalty(model.getLogits(), s_gen_tokens[0..s_gen_count], sampling.repetition_penalty);
+                math_ops.applyRepeatPenalty(s_logits, s_gen_tokens[0..s_gen_count], sampling.repetition_penalty);
             }
             if (sampling.dry_multiplier > 0 and s_gen_count > 0) {
-                math_ops.applyDry(model.getLogits(), s_gen_tokens[0..s_gen_count], sampling.dry_multiplier, sampling.dry_allowed_length);
+                math_ops.applyDry(s_logits, s_gen_tokens[0..s_gen_count], sampling.dry_multiplier, sampling.dry_allowed_length);
             }
             if (use_penalties_s) {
-                math_ops.applyPenalties(model.getLogits(), s_gen_tokens[0..s_gen_count], sampling.frequency_penalty, sampling.presence_penalty);
+                math_ops.applyPenalties(s_logits, s_gen_tokens[0..s_gen_count], sampling.frequency_penalty, sampling.presence_penalty);
             }
             if (use_grammar_s) {
                 if (s_grammar) |*g| {
                     if (s_grammar_state) |*gs| {
-                        g.maskLogits(gs, model.getLogits(), g_server.tokenizer.getVocabTexts());
-                        next = math_ops.argmax(model.getLogits());
+                        g.maskLogits(gs, s_logits, s_vocab_texts);
+                        next = math_ops.argmax(s_logits);
                     }
                 }
             } else if (use_sampling_s) {
                 if (sampling.mirostat >= 2) {
-                    next = math_ops.sampleMirostat(model.getLogits(), sampling.mirostat_tau, sampling.mirostat_eta, &mirostat_mu_s, sampling.temperature, prng_s.random());
+                    next = math_ops.sampleMirostat(s_logits, sampling.mirostat_tau, sampling.mirostat_eta, &mirostat_mu_s, sampling.temperature, prng_s.random());
                 } else {
-                    if (sampling.min_p > 0) math_ops.applyMinP(model.getLogits(), sampling.min_p);
-                    if (sampling.xtc_probability > 0) math_ops.applyXtc(model.getLogits(), sampling.xtc_probability, sampling.xtc_threshold, prng_s.random());
-                    next = math_ops.sampleToken(model.getLogits(), sampling.temperature, sampling.top_k, sampling.top_p, prng_s.random());
+                    if (sampling.min_p > 0) math_ops.applyMinP(s_logits, sampling.min_p);
+                    if (sampling.xtc_probability > 0) math_ops.applyXtc(s_logits, sampling.xtc_probability, sampling.xtc_threshold, prng_s.random());
+                    next = math_ops.sampleToken(s_logits, sampling.temperature, sampling.top_k, sampling.top_p, prng_s.random());
                 }
             }
             // Compute logprobs before EOG/stop checks (logits still valid)
-            const lp = if (sampling.logprobs) computeLogprobs(model.getLogits(), next, sampling.top_logprobs) else null;
+            const lp = if (sampling.logprobs) computeLogprobs(s_logits, next, sampling.top_logprobs) else null;
 
             if (g_server.isEog(next)) break;
             // Accept in grammar
             if (use_grammar_s and s_grammar_state != null) {
                 const stok_slice = [1]u32{next};
-                const stext = g_server.tokenizer.decode(@constCast(&stok_slice)) catch null;
+                const stext = g_server.tokenizer.decode(@constCast(&stok_slice)) catch |err| blk: {
+                    std.log.warn("req={d} stream grammar decode failed (id={d}): {}", .{ log_request_id, next, err });
+                    break :blk null;
+                };
                 defer if (stext) |st| g_server.allocator.free(st);
                 s_grammar_state.?.acceptToken(stext orelse "");
                 if (s_grammar_state.?.isComplete()) {
@@ -4439,7 +4489,10 @@ fn generateStream(stream: TcpStream, prompt: []const u8, req_id: u64, created: i
             // Stop sequence check (decode token, check trailing text)
             if (sampling.hasStop()) {
                 const stok = [1]u32{next};
-                const stext = g_server.tokenizer.decode(@constCast(&stok)) catch null;
+                const stext = g_server.tokenizer.decode(@constCast(&stok)) catch |err| blk: {
+                    std.log.warn("req={d} stop seq decode failed (id={d}): {}", .{ log_request_id, next, err });
+                    break :blk null;
+                };
                 defer if (stext) |st| g_server.allocator.free(st);
                 if (stext != null and stext.?.len > 0 and sampling.matchesStop(stext.?)) {
                     token_count += 1;

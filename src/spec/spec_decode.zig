@@ -424,20 +424,19 @@ fn sampleResidual(target_probs: []const f32, draft_log_probs: []const f32, vs: u
     return vs - 1;
 }
 
-/// Two-pass log-softmax: v_i = v_i - max - log(sum(exp(v - max))).
+/// Log-softmax: v_i = v_i - max - log(sum(exp(v - max))).
+/// Pass 1: find max. Pass 2: accumulate sum (read-only). Pass 3: single write.
 fn logSoftmax(logits: []f32) void {
     var max_val: f32 = logits[0];
     for (logits[1..]) |v| if (v > max_val) {
         max_val = v;
     };
     var sum_exp: f32 = 0;
-    for (logits) |*v| {
-        v.* -= max_val;
-        const e = @exp(v.*);
-        sum_exp += e;
+    for (logits) |v| {
+        sum_exp += @exp(v - max_val);
     }
-    const log_z = @log(sum_exp + log_softmax_eps);
-    for (logits) |*v| v.* -= log_z;
+    const offset = max_val + @log(sum_exp + log_softmax_eps);
+    for (logits) |*v| v.* -= offset;
 }
 
 // ── Tests ────────────────────────────────────────────────────────────────────
@@ -461,16 +460,16 @@ test "SpecState recordRound updates stats" {
 
     s.n_draft = 5;
     s.recordRound(4);
-    try std.testing.expectEqual(@as(u32, 4), s.total_accepted);
-    try std.testing.expectEqual(@as(u32, 5), s.total_drafted);
-    try std.testing.expectEqual(@as(u32, 1), s.total_rounds);
+    try std.testing.expectEqual(@as(u64, 4), s.total_accepted);
+    try std.testing.expectEqual(@as(u64, 5), s.total_drafted);
+    try std.testing.expectEqual(@as(u64, 1), s.total_rounds);
     try std.testing.expectApproxEqAbs(@as(f32, 0.8), s.acceptanceRate(), 0.01);
 
     s.n_draft = 3;
     s.recordRound(3);
-    try std.testing.expectEqual(@as(u32, 7), s.total_accepted);
-    try std.testing.expectEqual(@as(u32, 8), s.total_drafted);
-    try std.testing.expectEqual(@as(u32, 2), s.total_rounds);
+    try std.testing.expectEqual(@as(u64, 7), s.total_accepted);
+    try std.testing.expectEqual(@as(u64, 8), s.total_drafted);
+    try std.testing.expectEqual(@as(u64, 2), s.total_rounds);
     try std.testing.expectApproxEqAbs(@as(f32, 3.5), s.meanAccepted(), 0.01);
 }
 
@@ -497,4 +496,45 @@ test "optimalK returns configured k without sufficient data" {
     const optimal = s.optimalK();
     // k=3 has highest EV (3.7 vs 3.0 for k=5), so optimalK must pick 3
     try std.testing.expectEqual(@as(u32, 3), optimal);
+}
+
+test "logSoftmax produces valid log-probabilities" {
+    var logits = [_]f32{ 1.0, 2.0, 3.0 };
+    logSoftmax(&logits);
+
+    // All values should be <= 0 (log of probability)
+    for (logits) |v| try std.testing.expect(v <= 0);
+
+    // exp(log_probs) should sum to ~1.0
+    var sum: f32 = 0;
+    for (logits) |v| sum += @exp(v);
+    try std.testing.expectApproxEqAbs(@as(f32, 1.0), sum, 1e-5);
+
+    // Largest input should have largest log-prob
+    try std.testing.expect(logits[2] > logits[1]);
+    try std.testing.expect(logits[1] > logits[0]);
+}
+
+test "softmaxWithTemp concentrates on max at low temperature" {
+    const logits = [_]f32{ 1.0, 2.0, 5.0 };
+    var out: [3]f32 = undefined;
+
+    softmaxWithTemp(&logits, &out, 0.1);
+
+    // At very low temperature, nearly all mass on the maximum
+    try std.testing.expect(out[2] > 0.99);
+
+    // Sum should be 1.0
+    var sum: f32 = 0;
+    for (out) |v| sum += v;
+    try std.testing.expectApproxEqAbs(@as(f32, 1.0), sum, 1e-5);
+}
+
+test "sampleResidual returns valid token" {
+    const target = [_]f32{ 0.1, 0.3, 0.6 };
+    const draft_lp = [_]f32{ @log(@as(f32, 0.5)), @log(@as(f32, 0.3)), @log(@as(f32, 0.2)) };
+    var buf: [3]f32 = undefined;
+    var prng = std.Random.DefaultPrng.init(42);
+    const tok = sampleResidual(&target, &draft_lp, 3, prng.random(), &buf);
+    try std.testing.expect(tok < 3);
 }

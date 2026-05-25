@@ -8,7 +8,7 @@ const std = @import("std");
 const Io = std.Io;
 const Mutex = Io.Mutex;
 
-/// Millisecond timestamp via raw C clock_gettime (Zig 0.16 idiom).
+/// Millisecond timestamp via raw clock_gettime.
 fn milliTimestamp() i64 {
     var ts: std.posix.timespec = undefined;
     _ = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
@@ -25,6 +25,14 @@ const Prefetcher = @import("../kvcache/prefetch.zig").Prefetcher;
 /// Scheduler loop poll interval (nanoseconds).
 const scheduler_poll_ns: u64 = 1_000_000; // 1ms
 
+fn sleepNs(ns: u64) void {
+    const ts = std.posix.timespec{
+        .sec = @intCast(ns / std.time.ns_per_s),
+        .nsec = @intCast(ns % std.time.ns_per_s),
+    };
+    _ = std.c.nanosleep(&ts, null);
+}
+
 /// Cache-aware priority coefficient (α in the priority formula).
 /// Higher values give more weight to cached prefix length.
 const cache_priority_alpha: f64 = 0.5;
@@ -37,11 +45,11 @@ const ms_per_second: f64 = 1000.0;
 const max_waiting_queue_size: usize = 1024;
 
 /// Initial token output buffer capacity per request.
-/// Avoids repeated reallocation during the decode phase.
-/// +8 margin: handler cancel via is_cancelled poll has up to 1 scheduler
-/// step latency, so the scheduler may append beyond max_tokens before
-/// cancellation takes effect. Pre-allocating margin prevents ArrayList
-/// reallocation, which would race with handler threads reading .items.
+/// Must be >= server's gen_ids_buf_size (4096) + cancellation margin.
+/// Handler threads read tokens.items without locking — if append causes
+/// reallocation, those reads hit freed memory. appendToken uses
+/// appendAssumeCapacity to enforce this: if capacity is exhausted, the
+/// request is cancelled instead of reallocating.
 const initial_token_capacity: usize = 4096 + 8;
 
 /// Maximum prefill tokens processed per scheduler step per request.
@@ -87,11 +95,12 @@ pub const Request = struct {
             }
         }
 
-        self.tokens.append(self.allocator, token) catch |err| {
-            std.log.err("req={d} token append failed ({s}), cancelling request", .{ self.id, @errorName(err) });
+        if (self.tokens.items.len >= self.tokens.capacity) {
+            std.log.err("req={d} token capacity exhausted ({d}), cancelling request", .{ self.id, self.tokens.capacity });
             self.is_cancelled.store(true, .release);
             return;
-        };
+        }
+        self.tokens.appendAssumeCapacity(token);
         self.last_token_id = token;
         self.visible_len.store(@intCast(self.tokens.items.len), .release);
     }
@@ -398,13 +407,13 @@ pub const RequestManager = struct {
         // 6. Prefetch next N blocks during attention compute (if prefetcher enabled)
         if (self.tiered_cache) |cache| {
             for (self.running.items) |req| {
-                // Promote all blocks in this request's block table to VRAM
+                // Promote all blocks in this request's block table to VRAM.
+                // promoteToVram takes tier_lock and handles already-promoted blocks
+                // internally (returns early if tier == .vram).
                 for (req.block_table) |block_id| {
-                    if (cache.needsPromotion(block_id)) {
-                        cache.promoteToVram(block_id) catch |err| {
-                            std.log.warn("req={d} block {d} promote failed: {}", .{ req.id, block_id, err });
-                        };
-                    }
+                    cache.promoteToVram(block_id) catch |err| {
+                        std.log.warn("req={d} block {d} promote failed: {}", .{ req.id, block_id, err });
+                    };
                 }
 
                 // Prefetch next blocks asynchronously (per D-07: next 2 blocks)
@@ -540,14 +549,7 @@ pub fn runSchedulerLoop(
             std.log.err("Scheduler step failed: {}", .{err});
             manager.metrics.recordSchedulerError();
         };
-        {
-            // Sleep 1ms between iterations via C nanosleep (std.Thread.sleep removed in Zig 0.16)
-            const ts = std.posix.timespec{
-                .sec = @intCast(scheduler_poll_ns / std.time.ns_per_s),
-                .nsec = @intCast(scheduler_poll_ns % std.time.ns_per_s),
-            };
-            _ = std.c.nanosleep(&ts, null);
-        }
+        sleepNs(scheduler_poll_ns);
     }
 }
 
@@ -668,6 +670,107 @@ test "step cancels timed-out requests" {
 
     // Should be cancelled due to timeout
     try std.testing.expect(req.is_cancelled.load(.acquire));
+}
+
+test "appendToken marks finished on EOG" {
+    const allocator = std.testing.allocator;
+    var tokens: std.ArrayList(u32) = .empty;
+    try tokens.ensureTotalCapacity(allocator, initial_token_capacity);
+    defer tokens.deinit(allocator);
+    var req = Request{
+        .id = 1,
+        .tokens = tokens,
+        .last_token_id = 0,
+        .is_finished = std.atomic.Value(bool).init(false),
+        .is_cancelled = std.atomic.Value(bool).init(false),
+        .visible_len = std.atomic.Value(u32).init(0),
+        .enqueued_at = 0,
+        .prompt_tokens = 0,
+        .allocator = allocator,
+    };
+
+    const eog_ids = [_]u32{ 2, 128001 };
+    req.appendToken(42, &eog_ids);
+    try std.testing.expectEqual(@as(usize, 1), req.tokens.items.len);
+    try std.testing.expect(!req.is_finished.load(.acquire));
+
+    req.appendToken(128001, &eog_ids);
+    try std.testing.expectEqual(@as(usize, 1), req.tokens.items.len);
+    try std.testing.expect(req.is_finished.load(.acquire));
+}
+
+test "appendToken updates visible_len and last_token_id" {
+    const allocator = std.testing.allocator;
+    var tokens: std.ArrayList(u32) = .empty;
+    try tokens.ensureTotalCapacity(allocator, initial_token_capacity);
+    defer tokens.deinit(allocator);
+    var req = Request{
+        .id = 1,
+        .tokens = tokens,
+        .last_token_id = 0,
+        .is_finished = std.atomic.Value(bool).init(false),
+        .is_cancelled = std.atomic.Value(bool).init(false),
+        .visible_len = std.atomic.Value(u32).init(0),
+        .enqueued_at = 0,
+        .prompt_tokens = 0,
+        .allocator = allocator,
+    };
+
+    try std.testing.expectEqual(@as(u32, 0), req.visible_len.load(.acquire));
+
+    req.appendToken(42, &[_]u32{});
+    try std.testing.expectEqual(@as(u32, 1), req.visible_len.load(.acquire));
+    try std.testing.expectEqual(@as(u32, 42), req.last_token_id);
+
+    req.appendToken(99, &[_]u32{});
+    try std.testing.expectEqual(@as(u32, 2), req.visible_len.load(.acquire));
+    try std.testing.expectEqual(@as(u32, 99), req.last_token_id);
+}
+
+test "elapsedSeconds clamps negative to zero" {
+    const req = Request{
+        .id = 1,
+        .tokens = .empty,
+        .last_token_id = 0,
+        .is_finished = std.atomic.Value(bool).init(false),
+        .is_cancelled = std.atomic.Value(bool).init(false),
+        .visible_len = std.atomic.Value(u32).init(0),
+        .enqueued_at = 5000,
+        .prompt_tokens = 0,
+        .allocator = undefined,
+    };
+    try std.testing.expectEqual(@as(u32, 0), req.elapsedSeconds(4000));
+    try std.testing.expectEqual(@as(u32, 0), req.elapsedSeconds(5000));
+    try std.testing.expectEqual(@as(u32, 2), req.elapsedSeconds(7500));
+}
+
+test "requestPriority prefers longer cached prefix" {
+    const now: i64 = 10000;
+    const req_cached = Request{
+        .id = 1,
+        .tokens = .empty,
+        .last_token_id = 0,
+        .is_finished = std.atomic.Value(bool).init(false),
+        .is_cancelled = std.atomic.Value(bool).init(false),
+        .visible_len = std.atomic.Value(u32).init(0),
+        .enqueued_at = now - 100,
+        .prompt_tokens = 100,
+        .cached_prefix_len = 50,
+        .allocator = undefined,
+    };
+    const req_uncached = Request{
+        .id = 2,
+        .tokens = .empty,
+        .last_token_id = 0,
+        .is_finished = std.atomic.Value(bool).init(false),
+        .is_cancelled = std.atomic.Value(bool).init(false),
+        .visible_len = std.atomic.Value(u32).init(0),
+        .enqueued_at = now - 100,
+        .prompt_tokens = 100,
+        .cached_prefix_len = 0,
+        .allocator = undefined,
+    };
+    try std.testing.expect(requestPriority(&req_cached, now) > requestPriority(&req_uncached, now));
 }
 
 // Mock model for testing
