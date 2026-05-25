@@ -10,15 +10,11 @@
 const std = @import("std");
 const kv_quant = @import("../../../ops/kv_quant.zig");
 const KvQuantType = kv_quant.KvQuantType;
+const sdpa_kernel = @import("sdpa.zig");
 
-const V8 = @Vector(8, f32);
-const v8zero: V8 = @splat(0.0);
-
-/// Sparse V threshold: skip V accumulation for negligible softmax weights.
-const sparse_v_threshold: f32 = 1e-6;
-
-const max_sdpa_seq_len: usize = 8192;
-const max_head_dim: usize = 256;
+const sparse_v_threshold = sdpa_kernel.sparse_v_threshold;
+const max_sdpa_seq_len = sdpa_kernel.max_sdpa_seq_len;
+const max_head_dim = sdpa_kernel.max_head_dim;
 
 inline fn isAncestor(mask: [8]u64, j: usize) bool {
     return mask[j / 64] & (@as(u64, 1) << @intCast(@as(u6, @truncate(j)))) != 0;
@@ -111,12 +107,12 @@ fn sdpaTreeNodeHead(
     const mask = ancestor_masks[node_i];
     for (0..n_nodes) |j| {
         if (isAncestor(mask, j)) {
-            scores[si] = dotProductF32(&q_cached, tree_keys + j * kvd + kvh * hd, hd) * scale;
+            scores[si] = sdpa_kernel.dotProductF32(&q_cached, tree_keys + j * kvd + kvh * hd, hd) * scale;
             si += 1;
         }
     }
 
-    softmax(scores[0..si]);
+    sdpa_kernel.softmax(scores[0..si]);
 
     // V accumulation
     const out_base = node_i * nh * hd + h * hd;
@@ -137,51 +133,11 @@ fn sdpaTreeNodeHead(
     for (0..n_nodes) |j| {
         if (isAncestor(mask, j)) {
             if (scores[si] >= sparse_v_threshold) {
-                mulAccumF32(output + out_base, scores[si], tree_values + j * kvd + kvh * hd, hd);
+                sdpa_kernel.mulAccumF32(output + out_base, scores[si], tree_values + j * kvd + kvh * hd, hd);
             }
             si += 1;
         }
     }
-}
-
-inline fn dotProductF32(q: []const f32, k: [*]const f32, hd: usize) f32 {
-    var acc: V8 = v8zero;
-    var d: usize = 0;
-    while (d + 8 <= hd) : (d += 8) {
-        const qv: V8 = q[d..][0..8].*;
-        const kv: V8 = k[d..][0..8].*;
-        acc = @mulAdd(V8, qv, kv, acc);
-    }
-    var sum = @reduce(.Add, acc);
-    while (d < hd) : (d += 1) sum += q[d] * k[d];
-    return sum;
-}
-
-inline fn mulAccumF32(out: [*]f32, weight: f32, v: [*]const f32, hd: usize) void {
-    const wv: V8 = @splat(weight);
-    var d: usize = 0;
-    while (d + 8 <= hd) : (d += 8) {
-        var ov: V8 = out[d..][0..8].*;
-        const vv: V8 = v[d..][0..8].*;
-        ov = @mulAdd(V8, wv, vv, ov);
-        out[d..][0..8].* = ov;
-    }
-    while (d < hd) : (d += 1) out[d] += weight * v[d];
-}
-
-inline fn softmax(data: []f32) void {
-    if (data.len == 0) return;
-    var max_val: f32 = data[0];
-    for (data[1..]) |v| if (v > max_val) {
-        max_val = v;
-    };
-    var sum: f32 = 0;
-    for (data) |*v| {
-        v.* = @exp(v.* - max_val);
-        sum += v.*;
-    }
-    const inv = 1.0 / sum;
-    for (data) |*v| v.* *= inv;
 }
 
 // ── Tests ────────────────────────────────────────────────────────────────────

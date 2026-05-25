@@ -7,7 +7,7 @@ const v8zero: V8 = @splat(0.0);
 /// Sparse V threshold: skip V accumulation for positions where softmax weight
 /// is below this value. At 1e-6, skipped positions contribute < 0.0001% to
 /// the output — zero measured PPL impact across tested models.
-const sparse_v_threshold: f32 = 1e-6;
+pub const sparse_v_threshold: f32 = 1e-6;
 
 /// Maximum sequence length supported by the CPU SDPA scores buffer.
 pub const max_sdpa_seq_len: usize = 8192;
@@ -183,6 +183,34 @@ pub fn sdpaQuantHeadWithStats(q: [*]const f32, keys: [*]const u8, values: [*]con
     }
 }
 
+/// SIMD dot product of q[0..hd] and k[0..hd].
+pub inline fn dotProductF32(q: []const f32, k: [*]const f32, hd: usize) f32 {
+    var acc: V8 = v8zero;
+    var d: usize = 0;
+    while (d + 8 <= hd) : (d += 8) {
+        const qv: V8 = q[d..][0..8].*;
+        const kv: V8 = k[d..][0..8].*;
+        acc = @mulAdd(V8, qv, kv, acc);
+    }
+    var sum = @reduce(.Add, acc);
+    while (d < hd) : (d += 1) sum = @mulAdd(f32, q[d], k[d], sum);
+    return sum;
+}
+
+/// SIMD weighted accumulation: out[0..hd] += weight * v[0..hd].
+pub inline fn mulAccumF32(out: [*]f32, weight: f32, v: [*]const f32, hd: usize) void {
+    const wv: V8 = @splat(weight);
+    var d: usize = 0;
+    while (d + 8 <= hd) : (d += 8) {
+        const vv: V8 = v[d..][0..8].*;
+        const cur: V8 = out[d..][0..8].*;
+        out[d..][0..8].* = @mulAdd(V8, wv, vv, cur);
+    }
+    while (d < hd) : (d += 1) {
+        out[d] = @mulAdd(f32, weight, v[d], out[d]);
+    }
+}
+
 /// Pre-normalization softmax stats for online softmax merge.
 const SoftmaxStats = struct { max_val: f32, sum_val: f32 };
 
@@ -235,7 +263,7 @@ fn softmaxNormalize(scores: []f32, sum_val: f32) void {
 }
 
 /// In-place softmax over a score buffer. SIMD-accelerated: max pass, then fused exp+normalize.
-fn softmax(scores: []f32) void {
+pub fn softmax(scores: []f32) void {
     const stats = softmaxWithStats(scores);
     if (stats.sum_val == 0) return;
     softmaxNormalize(scores, stats.sum_val);
