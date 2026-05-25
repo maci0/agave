@@ -2,7 +2,7 @@
 
 Bugs, performance issues, and future work. Detailed designs inline.
 
-**Last updated**: 2026-05-22
+**Last updated**: 2026-05-25
 
 ---
 
@@ -13,6 +13,8 @@ Bugs, performance issues, and future work. Detailed designs inline.
 | 1 | GLM-4.7 Flash — degenerate output (also broken in llama.cpp) | Low (upstream) | Won't fix |
 | 6 | ROCm HSACO target triple rejected by kernel 7.0.6+ | High | Needs Zig std library patch for amdgcn target triple |
 | 4 | Vulkan push descriptor crashes on RADV gfx1100 | Medium | Suspected RADV driver issue. Infrastructure in place, disabled |
+| 8 | Gemma 4 26B-A4B MoE garbled output | Medium | Dense+MoE sum path or router scale/norm bug. Dense E2B/E4B work fine |
+| 9 | GPT-OSS MXFP4 garbled output | Low | MXFP4 dequant or attention sink bug |
 
 <details><summary>Fixed bugs</summary>
 
