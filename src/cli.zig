@@ -240,13 +240,13 @@ test "ParseResult typed accessors" {
     };
     defer r.deinit();
 
-    r.flags.put("help", {}) catch unreachable;
-    r.options.put("port", "8080") catch unreachable;
-    r.options.put("seed", "42") catch unreachable;
-    r.options.put("bad", "notanumber") catch unreachable;
-    r.options.put("temp", "0.7") catch unreachable;
-    r.options.put("inf", "inf") catch unreachable;
-    r.positionals.append(std.testing.allocator, "model.gguf") catch unreachable;
+    try r.flags.put("help", {});
+    try r.options.put("port", "8080");
+    try r.options.put("seed", "42");
+    try r.options.put("bad", "notanumber");
+    try r.options.put("temp", "0.7");
+    try r.options.put("inf", "inf");
+    try r.positionals.append(std.testing.allocator, "model.gguf");
 
     try std.testing.expect(r.flag("help"));
     try std.testing.expect(!r.flag("version"));

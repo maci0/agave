@@ -2354,11 +2354,10 @@ fn initAndRun(
 
     if (vision_enc) |*ve| {
         if (cli.image) |image_path| {
-            // For Qwen VL, use the original image dimensions aligned to
-            // patch_size * 2 (spatial_merge_size) instead of upscaling to image_size.
-            // This matches llama.cpp which processes at native resolution.
+            // Qwen VL: use original image dims rounded up to patch_size * 2.
+            // Matches llama.cpp which processes at native resolution.
             const target_size: u32 = if (ve.use_native_resolution) blk: {
-                const grid: u32 = ve.patch_size * 2; // patch_size * spatial_merge
+                const grid: u32 = ve.patch_size * 2;
                 const orig = image.getImageDimensions(allocator, g_io, image_path) catch break :blk ve.image_size;
                 const side = @max(orig.width, orig.height);
                 break :blk ((side + grid - 1) / grid) * grid;

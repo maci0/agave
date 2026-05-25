@@ -567,6 +567,12 @@ test "logSoftmax produces valid log-probabilities" {
     // Largest input should have largest log-prob
     try std.testing.expect(logits[2] > logits[1]);
     try std.testing.expect(logits[1] > logits[0]);
+
+    // log_softmax([1,2,3]) = x - log(e^1 + e^2 + e^3), verify against known values
+    const log_sum_exp = @log(@as(f32, @exp(1.0) + @exp(2.0) + @exp(3.0)));
+    try std.testing.expectApproxEqAbs(1.0 - log_sum_exp, logits[0], 1e-5);
+    try std.testing.expectApproxEqAbs(2.0 - log_sum_exp, logits[1], 1e-5);
+    try std.testing.expectApproxEqAbs(3.0 - log_sum_exp, logits[2], 1e-5);
 }
 
 test "softmaxWithTemp concentrates on max at low temperature" {

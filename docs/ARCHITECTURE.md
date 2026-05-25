@@ -69,7 +69,7 @@ agave/
 │   │   └── vision.zig       # Vision encoder (SigLIP-2, SigLIP, Qwen VL) for multimodal models
 │   ├── ops/
 │   │   ├── attention.zig  # Shared SDPA kernel (SIMD, sliding window, backend dispatch)
-│   │   ├── math.zig       # argmax, softplus, sigmoid, GELU, sampleToken
+│   │   ├── math.zig       # argmax, GELU, sampling (top-k/p, min-p, XTC, Mirostat, DRY)
 │   │   ├── ssm.zig        # SSM ops: causal conv1d, Mamba-2 recurrence, group norm+gate
 │   │   ├── quant.zig      # Quantization helpers (bf16, mxfp4, fp8, iq4nl, nvfp4_st)
 │   │   ├── kv_quant.zig   # KV cache quantization (f32/f16/q8_0/int8/fp8/nvfp4/turbo/planar/iso/rotor)
@@ -189,7 +189,7 @@ When you run `agave model.gguf "Hello"`:
 | `splitQGate(qg, q, g, hd, nh)` | Split concatenated Q+gate (Qwen3.5) | Yes |
 | `deltaNet(...)` | DeltaNet SSM recurrence | Yes |
 | `sdpaWithStats(q, keys, vals, ..., max, sum)` | SDPA returning softmax stats (split-attention) | Yes |
-| `sdpaPaged(q, page_table, kv_pool, ...)` | Paged SDPA with block table indirection (256-token blocks) | Yes |
+| `sdpaPaged(q, page_table, kv_pool, ...)` | Paged SDPA with block table indirection (16-token blocks) | Yes |
 | **Infrastructure** | | |
 | `sync()` | Flush GPU work | At sync points |
 | `beginBatch()` / `endBatch()` | Suppress/restore GPU memory barriers | GPU only |
@@ -232,7 +232,7 @@ HTTP server activated via `--serve` (default port 49453, override with `--port`)
 | `/v1/models` | GET | List available models |
 | `/v1/chat/regenerate` | POST | Regenerate last assistant response |
 | `/v1/conversations` | GET/POST | List or create conversations |
-| `/v1/tokenize` | POST | Tokenize text to token IDs |
+| `/v1/tokenize` | POST | Count tokens in text |
 | `/v1/detokenize` | POST | Detokenize token IDs to text |
 | `/v1/chat` | POST | Built-in chat web UI endpoint |
 | `/v1/embeddings` | POST | Text embeddings (501 stub) |
@@ -378,7 +378,7 @@ Browser inference entry point for running Agave in WebAssembly environments. Pro
 - **CPU-only path**: falls back to CPU SDPA on the thread pool when all blocks have been offloaded.
 
 **Paged KV cache and paged SDPA** (`src/kvcache/manager.zig`, `src/backend/kernels/cpu/sdpa.zig`):
-- KV cache is organized into 256-token blocks managed by `PagedKvCache` with `RadixTree` prefix sharing and `BlockAllocator` for efficient allocation.
+- KV cache is organized into 16-token blocks managed by `PagedKvCache` with `RadixTree` prefix sharing and `BlockAllocator` for efficient allocation.
 - `PagedKvView` provides block table indirection, translating logical token positions to physical block locations.
 - `sdpaPagedHeads` computes attention over paged blocks with thread-pool parallelism across heads.
 - CPU backend has a native paged SDPA kernel; GPU backends (Metal, CUDA, Vulkan, ROCm, WebGPU) dispatch through `Backend.sdpaPaged()` which falls back to the CPU kernel.

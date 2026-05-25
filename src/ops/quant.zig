@@ -463,7 +463,7 @@ test "dequantToF32 f32 pass-through" {
     const data: [*]const u8 = @ptrCast(&input);
     var output: [4]f32 = undefined;
     dequantToF32(&output, data, .f32, 4);
-    for (0..4) |i| try std.testing.expectApproxEqAbs(input[i], output[i], 1e-6);
+    for (0..4) |i| try std.testing.expectEqual(input[i], output[i]);
 }
 
 test "dequantToF32 bf16" {

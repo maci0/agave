@@ -1267,7 +1267,7 @@ test "matchesStop" {
 test "extractObjectField" {
     const j = \\{"name":"test","params":{"type":"object","props":{"x":1}},"other":"val"}
     ;
-    const obj = extractObjectField(j, "params") orelse unreachable;
+    const obj = extractObjectField(j, "params") orelse return error.TestUnexpectedResult;
     try std.testing.expectEqualStrings("{\"type\":\"object\",\"props\":{\"x\":1}}", obj);
     try std.testing.expect(extractObjectField(j, "name") == null);
     try std.testing.expect(extractObjectField(j, "missing") == null);
@@ -1276,7 +1276,7 @@ test "extractObjectField" {
 test "extractObjectField array" {
     const j = \\{"items":[1,2,3],"name":"x"}
     ;
-    const arr = extractObjectField(j, "items") orelse unreachable;
+    const arr = extractObjectField(j, "items") orelse return error.TestUnexpectedResult;
     try std.testing.expectEqualStrings("[1,2,3]", arr);
 }
 
@@ -1305,7 +1305,7 @@ test "extractTextFromContentArray" {
     const obj =
         \\{"role":"user","content":[{"type":"text","text":"What is in this image?"},{"type":"image_url","image_url":{"url":"data:image/png;base64,abc"}}]}
     ;
-    const text = extractTextFromContentArray(obj) orelse unreachable;
+    const text = extractTextFromContentArray(obj) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqualStrings("What is in this image?", text);
 }
 
@@ -1424,7 +1424,7 @@ test "extractJsonImage OpenAI data URI" {
     const body =
         \\{"messages":[{"role":"user","content":[{"type":"image_url","image_url":{"url":"data:image/png;base64,iVBORw0KGgo"}}]}]}
     ;
-    const img = extractJsonImage(body) orelse unreachable;
+    const img = extractJsonImage(body) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqualStrings("iVBORw0KGgo", img);
 }
 

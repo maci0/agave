@@ -113,7 +113,7 @@ Paged SDPA handles non-contiguous KV cache blocks via `PagedKvView` — a block 
 be.sdpaPaged(q, kv_view, k_new, v_new, output, nh, nkv, hd, scale, kv_type_k, kv_type_v);
 ```
 
-Instead of flat `keys[t * kvd]` offset arithmetic, the kernel computes `block_table[t / block_size]` → physical block → `keys[pos_in_block * kvd]`. Models use 256-token blocks allocated on demand, so memory scales with actual sequence length rather than maximum context window.
+Instead of flat `keys[t * kvd]` offset arithmetic, the kernel computes `block_table[t / block_size]` → physical block → `keys[pos_in_block * kvd]`. Models use 16-token blocks allocated on demand, so memory scales with actual sequence length rather than maximum context window.
 
 CPU backend has native paged SDPA with thread-pool parallelism across query heads. GPU backends use CPU fallback via `@hasDecl` detection.
 

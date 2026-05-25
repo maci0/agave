@@ -93,7 +93,7 @@ Benefits:
 
 Each `CacheBlock` tracks: `keys`, `values`, `used` count, `ref_count` (for sharing), `access_count` (for eviction).
 
-**Paged SDPA:** The CPU SDPA kernel supports block-table-indexed attention via `PagedKvView`, enabling non-contiguous KV access with 256-token blocks. This means memory scales with actual sequence length rather than maximum context window. The kernel iterates over the block table to gather K/V data from arbitrary physical blocks, computing attention scores and accumulating weighted values without requiring the KV cache to be laid out contiguously in memory.
+**Paged SDPA:** The CPU SDPA kernel supports block-table-indexed attention via `PagedKvView`, enabling non-contiguous KV access with 16-token blocks. This means memory scales with actual sequence length rather than maximum context window. The kernel iterates over the block table to gather K/V data from arbitrary physical blocks, computing attention scores and accumulating weighted values without requiring the KV cache to be laid out contiguously in memory.
 
 ## RadixAttention
 

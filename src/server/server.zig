@@ -116,7 +116,7 @@ const scheduler_max_batch_size: usize = 8;
 /// Request timeout in seconds before scheduler auto-cancels.
 const scheduler_timeout_sec: u32 = 120;
 /// Poll interval (nanoseconds) for SSE streaming when using scheduler path.
-const scheduler_poll_interval_ns: u64 = 1_000_000; // 1ms — match scheduler loop to minimize per-token streaming latency
+const scheduler_poll_interval_ns: u64 = 1_000_000; // 1ms — matches scheduler_poll_ns in scheduler.zig
 /// Accept socket timeout (seconds) — allows Ctrl+C to interrupt the accept loop.
 const accept_timeout_sec: i64 = 1;
 /// Milliseconds per second (for ms-to-seconds TPS calculations).
@@ -1255,7 +1255,7 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
         };
         defer g_server.allocator.free(token_ids);
 
-        // Build JSON response with token count and IDs
+        // Build JSON response with token count
         var resp_buf: [response_buf_size]u8 = undefined;
         const resp = std.fmt.bufPrint(&resp_buf,
             \\{{"count":{d},"model":"{s}"}}

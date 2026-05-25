@@ -117,8 +117,8 @@ pub const VisionEncoder = struct {
     /// Spatial merge kernel size (3 for Gemma 4, 0 for others = no merge).
     n_merge: u32,
     /// Whether image should use native resolution instead of fixed image_size.
-    /// When true, the caller should resize to the original image dims aligned to
-    /// patch_size * spatial_merge (e.g., 32 for Qwen VL) instead of image_size.
+    /// When true, the caller should resize to the original image dims rounded up
+    /// to a multiple of patch_size * 2 (Qwen VL) instead of image_size.
     use_native_resolution: bool = false,
     embd_dim: u32,
     ffn_dim: u32,
@@ -1844,8 +1844,8 @@ test "gemvCpu f32" {
     };
 
     gemvCpu(&x_data, t, &y_data, 2, 3);
-    try std.testing.expectApproxEqAbs(@as(f32, 6.0), y_data[0], 1e-5);
-    try std.testing.expectApproxEqAbs(@as(f32, 15.0), y_data[1], 1e-5);
+    try std.testing.expectEqual(@as(f32, 6.0), y_data[0]);
+    try std.testing.expectEqual(@as(f32, 15.0), y_data[1]);
 }
 
 test "pixel normalization" {
