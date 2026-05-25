@@ -148,7 +148,6 @@ pub fn applyReluSquared(x: []f32) void {
 /// GELU activation in-place (tanh approximation), SIMD-optimized.
 /// Tanh computed via clamped exp to avoid overflow.
 pub fn applyGelu(x: []f32) void {
-    const half: V8 = @splat(0.5);
     const one: V8 = @splat(1.0);
     const two: V8 = @splat(2.0);
     const coeff_v: V8 = @splat(gelu_coeff);
@@ -160,17 +159,16 @@ pub fn applyGelu(x: []f32) void {
     while (i + 8 <= x.len) : (i += 8) {
         const a: V8 = x[i..][0..8].*;
         const inner = s2p_v * @mulAdd(V8, coeff_v * a * a, a, a);
-        // tanh via (exp(2x)-1)/(exp(2x)+1); x pre-clamped to [-10,10] to prevent exp overflow
         const clamped = @min(clamp_hi, @max(clamp_lo, inner));
         const e2 = @exp(two * clamped);
-        x[i..][0..8].* = half * a * (one + (e2 - one) / (e2 + one));
+        x[i..][0..8].* = a - a / (e2 + one);
     }
     while (i < x.len) : (i += 1) {
         const a = x[i];
         const inner = sqrt_2_over_pi * @mulAdd(f32, gelu_coeff * a * a, a, a);
         const clamped = @min(gelu_clamp_hi, @max(gelu_clamp_lo, inner));
         const e2 = @exp(2.0 * clamped);
-        x[i] = 0.5 * a * (1.0 + (e2 - 1.0) / (e2 + 1.0));
+        x[i] = a - a / (e2 + 1.0);
     }
 }
 

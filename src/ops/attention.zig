@@ -272,7 +272,7 @@ pub fn pagedAttention(
     hd: usize,
     seq_len: usize,
     scale: f32,
-    be: Backend,
+    _: Backend,
     block_size: usize,
 ) void {
     const kvd = nkv * hd;
@@ -322,7 +322,7 @@ pub fn pagedAttention(
             scores[t] = dot * scale;
         }
 
-        be.softmax(scores, sl);
+        cpuSoftmax(scores, sl);
 
         // Value accumulation from block table — t-outer loop to compute
         // block lookups (div/mod) once per position instead of per dimension.
