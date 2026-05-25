@@ -1965,11 +1965,18 @@ pub const Gemma4Model = struct {
         self.be.sync(); // Need to read hidden on CPU for router norm
         rmsNormPlain(self.router_input.ptr, self.hidden.ptr, e, self.rms_eps);
 
-        // Step 2: Scale by 1/sqrt(n_embd) and element-wise multiply with ffn_gate_inp.scale
+        // Step 2: Scale by 1/sqrt(n_embd).
+        // Note: ffn_gate_inp.scale in GGUF may be a quantization companion tensor,
+        // not the architectural router scale. Only apply if it's the right shape
+        // (n_embd elements = architectural scale, not quantization block scales).
         const inv_sqrt_embd = self.inv_sqrt_embd;
-        if (self.fmt.layerTensor(li, "ffn_gate_inp.scale")) |scale_t| {
+        const gate_inp_scale = self.fmt.layerTensor(li, "ffn_gate_inp.scale");
+        const has_arch_scale = gate_inp_scale != null and
+            gate_inp_scale.?.dtype == .f32 and
+            @as(usize, @intCast(gate_inp_scale.?.dims[0])) == e;
+        if (has_arch_scale) {
             const V8 = @Vector(8, f32);
-            const scale_ptr: [*]const f32 = @ptrCast(@alignCast(scale_t.data_ptr));
+            const scale_ptr: [*]const f32 = @ptrCast(@alignCast(gate_inp_scale.?.data_ptr));
             const inv_v: V8 = @splat(inv_sqrt_embd);
             var si: usize = 0;
             while (si + 8 <= e) : (si += 8) {
@@ -2002,8 +2009,10 @@ pub const Gemma4Model = struct {
             for (0..n_active) |i| top_scores[i] *= inv_sum;
         }
 
-        // Apply per-expert scale (ffn_down_exps.scale) if present
-        if (self.fmt.layerTensor(li, "ffn_down_exps.scale")) |exp_scale_t| {
+        // Apply per-expert scale (ffn_exp_probs_b — explicit routing bias) if present.
+        // Note: ffn_down_exps.scale is a QUANTIZATION companion tensor (per-block scales),
+        // NOT a routing scale — do NOT multiply it into expert weights.
+        if (self.fmt.layerTensor(li, "ffn_exp_probs_b")) |exp_scale_t| {
             const exp_scale: [*]const f32 = @ptrCast(@alignCast(exp_scale_t.data_ptr));
             for (0..n_active) |i| top_scores[i] *= exp_scale[top_experts[i]];
         }

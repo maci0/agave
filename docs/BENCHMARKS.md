@@ -89,7 +89,7 @@ CLI: `--prefill-batch-size <N>` (default 512). Use `--prefill-batch-size 1` for 
 
 | Architecture | Models | Status | Notes |
 |-------------|--------|--------|-------|
-| Gemma 3 | 4B, 12B, 27B | ✅ Working | + SigLIP vision encoder |
+| Gemma 3 | 1B, 4B, 12B, 27B | ✅ Working | + SigLIP vision encoder |
 | Gemma 4 | E2B, E4B, 26B-A4B | ✅ Working | E2B/E4B dense, 26B MoE. + SigLIP-2 vision |
 | Qwen2/2.5 | 0.5B, 1.5B, 3B, 7B, 14B, 32B, 72B | ✅ Working | Q/K/V biases auto-detected |
 | Qwen3.5 | 0.8B, 9B, 27B, 35B | ✅ Working | + Qwen VL vision (structural) |
@@ -97,6 +97,7 @@ CLI: `--prefill-batch-size <N>` (default 512). Use `--prefill-batch-size 1` for 
 | Nemotron-H | 56B | ✅ Working | Hybrid SSM/MoE |
 | GPT-OSS | 20B | ✅ Working | |
 | GLM-4 | 4.7B Flash | ⚠️ GGUF issue | Also broken in llama.cpp — model format problem |
+| Llama 4 | Scout | ✅ Working | iRoPE, chunked attention, MoE top-1 + shared expert |
 
 ## KV Cache Quantization (Gemma 4 26B, Metal)
 
