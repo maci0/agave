@@ -241,11 +241,11 @@ Measured on Apple M4 Pro (48 GB unified memory). See [docs/BENCHMARKS.md](docs/B
 | Qwen3.5 9B | Q8_0 | Metal | 41.7 | **1.67x** |
 | Gemma 3 4B | MLX-Q4 | Metal | 78.1 | — |
 | Gemma 3 12B | Q8_0 | Metal | 22.3 | **1.19x** |
-| Gemma 4 E2B | — | Metal | 9.7 | — |
-| Gemma 4 E4B | — | Metal | 8.5 | — |
-| Gemma 4 26B-A4B | — | Metal | 5.0 | — |
-| Gemma 3 27B | QAT 4-bit | Metal | 11.6 | — |
-| Qwen3.5 9B | MLX-4bit | Metal | 12.7 | — |
+| Gemma 4 E2B | Q4_K_M | Metal | 21.8 | — |
+| Gemma 4 E4B | Q4_K_M | Metal | 14.4 | — |
+| Gemma 4 26B-A4B | Q4_K_M | Metal | 4.2 | — |
+| Gemma 3 27B | QAT 4-bit | Metal | 6.3 | — |
+| Qwen3.5 9B | MLX-4bit | Metal | 24.9 | — |
 
 ### Multi-Backend (Qwen3.5 0.8B Q8_0)
 
