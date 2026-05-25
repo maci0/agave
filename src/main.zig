@@ -179,7 +179,7 @@ fn kvTypeOrExit(s: []const u8, flag_name: []const u8) KvQuantType {
     return KvQuantType.fromString(s) orelse {
         eprint("Error: unknown {s} value '{s}'\n", .{ flag_name, s });
         eprint("  Valid options: " ++ kv_valid_types ++ "\n", .{});
-        std.process.exit(1);
+        std.process.exit(2);
     };
 }
 
@@ -527,7 +527,7 @@ fn checkSubcommand(allocator: std.mem.Allocator) bool {
         eprint("Error: no help available for '{s}'\n", .{sub});
         eprint("Available help topics: pull, calibrate\n", .{});
         eprint("Run 'agave --help' for more information.\n", .{});
-        std.process.exit(1);
+        std.process.exit(2);
     }
     return false;
 }
@@ -549,7 +549,7 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
     // Error on options that appeared at end of args without a value
     if (res.missing_value) |name| {
         eprint("Error: --{s} requires a value\n", .{name});
-        std.process.exit(1);
+        std.process.exit(2);
     }
 
     // Warn about unknown flags (catches typos like --temeprature)
@@ -569,7 +569,7 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
             if (!std.mem.eql(u8, cm, "auto")) {
                 eprint("Error: unknown --color value '{s}'\n", .{cm});
                 eprint("  Valid options: auto, always, never\n", .{});
-                std.process.exit(1);
+                std.process.exit(2);
             }
         }
         // --no-color flag
@@ -601,7 +601,7 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
         eprint("Error: missing model path\n", .{});
         eprint("Usage: agave <model.gguf|model-dir/> [prompt]\n", .{});
         eprint("Run 'agave --help' for more information.\n", .{});
-        std.process.exit(1);
+        std.process.exit(2);
     }
 
     const backend_choice: BackendChoice = blk: {
@@ -609,12 +609,12 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
         break :blk std.meta.stringToEnum(BackendChoice, be_str) orelse {
             eprint("Error: unknown backend '{s}'\n", .{be_str});
             eprint("  Valid options: auto, cpu, metal, vulkan, cuda, rocm, webgpu\n", .{});
-            std.process.exit(1);
+            std.process.exit(2);
         };
     };
     const device_id: u32 = if (res.option("device")) |d| std.fmt.parseInt(u32, d, 10) catch {
         eprint("Error: invalid value for --device: '{s}' is not a valid integer\n", .{d});
-        std.process.exit(1);
+        std.process.exit(2);
     } else 0;
 
     const temperature = parseF32(res.option("temperature"), "temperature") orelse 0.0;
@@ -627,45 +627,45 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
     // Validate sampling parameter ranges
     if (temperature < 0) {
         eprint("Error: --temperature must be >= 0 (got {d:.2})\n", .{temperature});
-        std.process.exit(1);
+        std.process.exit(2);
     }
     if (top_p <= 0 or top_p > 1.0) {
         eprint("Error: --top-p must be in (0, 1.0] (got {d:.2})\n", .{top_p});
-        std.process.exit(1);
+        std.process.exit(2);
     }
     if (repeat_penalty <= 0) {
         eprint("Error: --repeat-penalty must be > 0 (got {d:.2})\n", .{repeat_penalty});
-        std.process.exit(1);
+        std.process.exit(2);
     }
     const min_p = parseF32(res.option("min-p"), "min-p") orelse 0.0;
     if (min_p < 0 or min_p > 1.0) {
         eprint("Error: --min-p must be in [0, 1.0] (got {d:.2})\n", .{min_p});
-        std.process.exit(1);
+        std.process.exit(2);
     }
     const dry_multiplier = parseF32(res.option("dry-multiplier"), "dry-multiplier") orelse 0;
     if (dry_multiplier < 0) {
         eprint("Error: --dry-multiplier must be >= 0 (got {d:.2})\n", .{dry_multiplier});
-        std.process.exit(1);
+        std.process.exit(2);
     }
     const xtc_probability = parseF32(res.option("xtc-probability"), "xtc-probability") orelse 0;
     if (xtc_probability < 0 or xtc_probability > 1.0) {
         eprint("Error: --xtc-probability must be in [0, 1.0] (got {d:.2})\n", .{xtc_probability});
-        std.process.exit(1);
+        std.process.exit(2);
     }
     const xtc_threshold = parseF32(res.option("xtc-threshold"), "xtc-threshold") orelse 0.1;
     if (xtc_threshold < 0 or xtc_threshold > 1.0) {
         eprint("Error: --xtc-threshold must be in [0, 1.0] (got {d:.2})\n", .{xtc_threshold});
-        std.process.exit(1);
+        std.process.exit(2);
     }
     const mirostat_tau = parseF32(res.option("mirostat-tau"), "mirostat-tau") orelse 5.0;
     if (mirostat_tau <= 0) {
         eprint("Error: --mirostat-tau must be > 0 (got {d:.2})\n", .{mirostat_tau});
-        std.process.exit(1);
+        std.process.exit(2);
     }
     const mirostat_eta = parseF32(res.option("mirostat-eta"), "mirostat-eta") orelse 0.1;
     if (mirostat_eta <= 0) {
         eprint("Error: --mirostat-eta must be > 0 (got {d:.2})\n", .{mirostat_eta});
-        std.process.exit(1);
+        std.process.exit(2);
     }
 
     // Validate --kv-tiers value (mutable copy needed for "off" → null conversion)
@@ -677,7 +677,7 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
         } else if (!std.mem.eql(u8, tiers_str, "vram+ram") and !std.mem.eql(u8, tiers_str, "vram+ram+ssd")) {
             eprint("Error: unknown --kv-tiers value '{s}'\n", .{tiers_str});
             eprint("  Valid options: off, vram+ram, vram+ram+ssd\n", .{});
-            std.process.exit(1);
+            std.process.exit(2);
         }
     }
 
@@ -704,7 +704,7 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
         if (!std.mem.eql(u8, ev_str, "none") and !std.mem.eql(u8, ev_str, "norm") and !std.mem.eql(u8, ev_str, "tri")) {
             eprint("Error: unknown --kv-eviction value '{s}'\n", .{ev_str});
             eprint("  Valid options: none, norm, tri\n", .{});
-            std.process.exit(1);
+            std.process.exit(2);
         }
     }
 
@@ -727,7 +727,7 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
     if (parseU32(res.option("max-tokens"), "max-tokens")) |mt| {
         if (mt == 0) {
             eprint("Error: --max-tokens must be >= 1\n", .{});
-            std.process.exit(1);
+            std.process.exit(2);
         }
     }
 
@@ -735,7 +735,7 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
     if (parseU32(res.option("prefill-batch-size"), "prefill-batch-size")) |pbs| {
         if (pbs == 0) {
             eprint("Error: --prefill-batch-size must be >= 1\n", .{});
-            std.process.exit(1);
+            std.process.exit(2);
         }
     }
 
@@ -743,7 +743,7 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
     if (parseU32(res.option("mirostat-mode"), "mirostat-mode")) |mm| {
         if (mm != 0 and mm != 2) {
             eprint("Error: --mirostat-mode must be 0 (disabled) or 2 (Mirostat 2.0), got {d}\n", .{mm});
-            std.process.exit(1);
+            std.process.exit(2);
         }
     }
 
@@ -751,7 +751,7 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
     if (parseU32(res.option("dry-length"), "dry-length")) |dl| {
         if (dl == 0) {
             eprint("Error: --dry-length must be >= 1\n", .{});
-            std.process.exit(1);
+            std.process.exit(2);
         }
     }
 
@@ -759,13 +759,13 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
     if (parseU32(res.option("tp"), "tp")) |tp| {
         if (tp == 0) {
             eprint("Error: --tp must be >= 1\n", .{});
-            std.process.exit(1);
+            std.process.exit(2);
         }
     }
     if (parseU32(res.option("pp"), "pp")) |pp| {
         if (pp == 0) {
             eprint("Error: --pp must be >= 1\n", .{});
-            std.process.exit(1);
+            std.process.exit(2);
         }
     }
 
@@ -773,13 +773,13 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
     if (parseU32(res.option("spec-tokens"), "spec-tokens")) |st| {
         if (st == 0) {
             eprint("Error: --spec-tokens must be >= 1\n", .{});
-            std.process.exit(1);
+            std.process.exit(2);
         }
     }
     if (parseU32(res.option("tree-budget"), "tree-budget")) |tb| {
         if (tb == 0) {
             eprint("Error: --tree-budget must be >= 1\n", .{});
-            std.process.exit(1);
+            std.process.exit(2);
         }
     }
 
@@ -787,7 +787,7 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
     if (parseU16(res.option("port"), "port")) |p| {
         if (p == 0) {
             eprint("Error: --port must be in range 1-65535\n", .{});
-            std.process.exit(1);
+            std.process.exit(2);
         }
     }
 
@@ -913,7 +913,7 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
             eprint("Error: --json requires a prompt or --model-info\n", .{});
             eprint("  Usage: agave model.gguf --json \"prompt\"\n", .{});
             eprint("  Or: echo \"prompt\" | agave model.gguf --json\n", .{});
-            std.process.exit(1);
+            std.process.exit(2);
         }
     }
 
@@ -947,7 +947,7 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
             if (std.mem.eql(u8, raw, "auto")) break :blk std.math.maxInt(u32);
             break :blk std.fmt.parseInt(u32, raw, 10) catch {
                 eprint("Error: --ctx-size must be a non-negative integer or 'auto', got '{s}'\n", .{raw});
-                std.process.exit(1);
+                std.process.exit(2);
             };
         },
         .seed = parseU64(res.option("seed"), "seed") orelse @as(u64, @truncate(@as(u96, @bitCast(nanoTimestamp(g_io))))),
@@ -986,7 +986,7 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
             var parts: [4]u8 = undefined;
             if (!parseIpv4(host_str, &parts)) {
                 eprint("Error: invalid host address '{s}' (expected IPv4, 'localhost', '0.0.0.0', or '0')\n", .{host_str});
-                std.process.exit(1);
+                std.process.exit(2);
             }
             break :blk parts;
         },
@@ -1004,7 +1004,7 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
         .transport = if (res.option("transport")) |t| std.meta.stringToEnum(TransportChoice, t) orelse {
             eprint("Error: unknown transport '{s}'\n", .{t});
             eprint("  Valid options: auto, tcp, shm, nccl (rdma, udp, grpc accepted but fall back to tcp)\n", .{});
-            std.process.exit(1);
+            std.process.exit(2);
         } else .auto,
         .pp_degree = parseU32(res.option("pp"), "pp") orelse 1,
         .disagg = res.flag("disagg"),
@@ -1025,7 +1025,7 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
                 if (std.mem.eql(u8, s, "ngram")) break :blk SpecMode.ngram;
                 if (std.mem.eql(u8, s, "mtp")) break :blk SpecMode.mtp;
                 eprint("Error: unknown --spec-mode '{s}' (expected: standard, ddtree, self, ngram, mtp)\n", .{s});
-                std.process.exit(1);
+                std.process.exit(2);
             }
             break :blk if (dm != null) SpecMode.ddtree else SpecMode.none;
         },
@@ -1247,7 +1247,7 @@ fn parseUint(comptime T: type, s: ?[]const u8, comptime flag: []const u8) ?T {
     const str = s orelse return null;
     return std.fmt.parseInt(T, str, 10) catch {
         eprint("Error: invalid value for --" ++ flag ++ ": '{s}' is not a valid integer\n", .{str});
-        std.process.exit(1);
+        std.process.exit(2);
     };
 }
 
@@ -1358,11 +1358,11 @@ fn parseF32(s: ?[]const u8, comptime flag: []const u8) ?f32 {
     const str = s orelse return null;
     const val = std.fmt.parseFloat(f32, str) catch {
         eprint("Error: invalid value for --" ++ flag ++ ": '{s}' is not a valid number\n", .{str});
-        std.process.exit(1);
+        std.process.exit(2);
     };
     if (!std.math.isFinite(val)) {
         eprint("Error: --" ++ flag ++ " must be a finite number, got '{s}'\n", .{str});
-        std.process.exit(1);
+        std.process.exit(2);
     }
     return val;
 }
@@ -1371,7 +1371,7 @@ fn parseF32(s: ?[]const u8, comptime flag: []const u8) ?f32 {
 fn validateFileExists(path: []const u8, comptime flag: []const u8) void {
     const file = Io.Dir.cwd().openFile(g_io, path, .{}) catch {
         eprint("Error: " ++ flag ++ " file not found: '{s}'\n", .{path});
-        std.process.exit(1);
+        std.process.exit(2);
     };
     file.close(g_io);
 }
