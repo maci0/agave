@@ -23,6 +23,7 @@ const max_json_properties: usize = 32;
 const max_schema_depth: usize = 16;
 const max_grammar_input_size: usize = 64 * 1024;
 const max_rules: usize = 512;
+const max_accept_depth: u32 = 32;
 const bpe_two_byte_prefix: u8 = 0xC4;
 const bpe_three_byte_prefix: u8 = 0xC3;
 
@@ -273,7 +274,7 @@ pub const GrammarState = struct {
     }
 
     fn acceptCharInner(self: *GrammarState, c: u8, depth: u32) bool {
-        if (depth > 32 or self.completed or self.stack.items.len == 0) return false;
+        if (depth > max_accept_depth or self.completed or self.stack.items.len == 0) return false;
 
         const top = &self.stack.items[self.stack.items.len - 1];
         if (top.rule_id >= self.grammar.rules.len) return false;

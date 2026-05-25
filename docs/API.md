@@ -99,7 +99,7 @@ Same sampling parameters as chat completions. Prompt is raw text (no chat templa
   "model": "model-name",
   "system_fingerprint": "agave-v0.1.0",
   "choices": [{"text": "Paris.", "index": 0, "finish_reason": "stop"}],
-  "usage": {"completion_tokens": 2, "prompt_tokens": 7, "total_tokens": 9}
+  "usage": {"prompt_tokens": 7, "completion_tokens": 2, "total_tokens": 9}
 }
 ```
 
@@ -257,7 +257,9 @@ Additional fields beyond OpenAI spec: `backend` (compute backend), `kv_seq_len` 
 
 ### GET /health
 
-Health check (no auth required). Returns status, uptime, active connections, KV cache utilization, and request counters. Status is `"ok"`, `"degraded"` (KV pressure or high error rate), or `"shutting_down"`. When `--api-key` is configured and no valid auth header is provided, returns only `{"status":"...", "reason":"..."}` (no model/version/backend details) to prevent fingerprinting.
+Liveness probe (no auth required). Returns HTTP 200 for `"ok"` and `"degraded"` states, HTTP 503 only when `"shutting_down"`. Use `/ready` instead if your load balancer should stop routing traffic on degraded state.
+
+Returns status, uptime, active connections, KV cache utilization, and request counters. Status is `"ok"`, `"degraded"` (KV pressure or high error rate), or `"shutting_down"`. When `--api-key` is configured and no valid auth header is provided, returns only `{"status":"...", "reason":"..."}` (no model/version/backend details) to prevent fingerprinting.
 
 ```json
 {"status":"ok","reason":"none","version":"0.1.0","model":"model-name","backend":"metal",
@@ -439,12 +441,13 @@ curl -N http://localhost:49453/v1/chat/completions -d '{
 }'
 ```
 
-**OpenAI endpoints** (`/v1/chat/completions`, `/v1/completions`): `data: {"choices": [{"delta": {"content": "..."}}]}`.
+**Chat completions** (`/v1/chat/completions`): `data: {"choices": [{"delta": {"content": "..."}}]}`.
+**Text completions** (`/v1/completions`): `data: {"choices": [{"text": "...", "index": 0, "finish_reason": null}]}`.
 Final event: `data: [DONE]`. Usage chunk sent before `[DONE]`.
 
-**Anthropic endpoint** (`/v1/messages`): SSE events with `event: content_block_delta` / `event: message_delta` / `event: message_stop` following the Anthropic Messages API streaming format.
+**Anthropic endpoint** (`/v1/messages`): SSE events: `message_start` → `content_block_start` → `content_block_delta`* → `content_block_stop` → `message_delta` → `message_stop`.
 
-**Responses endpoint** (`/v1/responses`): SSE events with `event: response.output_text.delta` / `event: response.completed` following the OpenAI Responses API streaming format.
+**Responses endpoint** (`/v1/responses`): SSE events: `response.created` → `response.output_text.delta`* → `response.output_text.done` → `response.completed`.
 
 ---
 
@@ -472,7 +475,7 @@ All endpoints return JSON error bodies on failure.
 | `429 Too Many Requests` | Rate limit exceeded (includes `Retry-After` header) |
 | `500 Internal Server Error` | Model forward error, OOM, or unexpected server failure |
 | `501 Not Implemented` | Endpoint exists but is not yet implemented (e.g., `/v1/embeddings`) |
-| `503 Service Unavailable` | Server at capacity, conversation limit reached, shutting down, or degraded |
+| `503 Service Unavailable` | Conversation limit reached, shutting down, or degraded (`/ready` only — inference endpoints do not return 503 for degraded state) |
 
 ---
 
@@ -501,6 +504,10 @@ All responses include these headers:
 | `X-Request-Id` | Monotonic request counter for log correlation (matches server-side `req=N` logs) |
 | `X-Content-Type-Options` | `nosniff` |
 | `X-Frame-Options` | `DENY` |
+| `Referrer-Policy` | `no-referrer` |
+| `Strict-Transport-Security` | `max-age=31536000; includeSubDomains` |
+| `Permissions-Policy` | Disables geolocation, microphone, camera, accelerometer, gyroscope |
+| `Content-Security-Policy` | Restrictive CSP: `default-src 'none'`, allows inline scripts/styles and CDN resources for the web UI |
 | `Cache-Control` | `no-store` |
 | `Connection` | `close` (non-streaming) or `keep-alive` (SSE streaming) |
 

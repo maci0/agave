@@ -7,16 +7,13 @@ const std = @import("std");
 const Io = std.Io;
 const Mutex = Io.Mutex;
 
-/// Millisecond timestamp via raw C clock_gettime (Zig 0.16 idiom).
 fn milliTimestamp() i64 {
     var ts: std.posix.timespec = undefined;
     _ = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
     return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
 }
 
-/// Milliseconds per second — used for elapsed-time calculations.
 const ms_per_second: f64 = 1000.0;
-/// Seconds per minute — used for per-minute refill rate calculations.
 const seconds_per_minute: f64 = 60.0;
 
 /// Single token bucket for rate limiting.
@@ -31,6 +28,10 @@ pub const TokenBucket = struct {
     /// Accepts a pre-fetched timestamp so callers can refill multiple buckets
     /// with a consistent `now` value under a single lock.
     fn refill(self: *TokenBucket, now: i64) void {
+        if (now <= self.last_refill) {
+            self.last_refill = now;
+            return;
+        }
         const elapsed_sec = @as(f64, @floatFromInt(now - self.last_refill)) / ms_per_second;
         self.tokens = @min(self.capacity, self.tokens + elapsed_sec * self.refill_rate);
         self.last_refill = now;

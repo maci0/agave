@@ -20,18 +20,14 @@ const version = display_mod.version;
 
 // ── Named constants ──────────────────────────────────────────────────────────
 
-/// Buffer size for stderr formatting output.
 const print_buf_size: usize = 4096;
-/// Streaming download read chunk size (256 KB).
 const download_buf_size: usize = 256 * 1024;
-/// Minimum interval between progress bar updates (500 ms).
 const progress_interval_ns: u64 = 500 * std.time.ns_per_ms;
-/// Maximum number of download retry attempts.
 const max_retries: u32 = 3;
-/// Base delay between retry attempts (doubles per attempt: 1s, 2s, 4s).
+/// Doubles per attempt: 1s, 2s, 4s.
 const retry_base_delay_ns: u64 = 1 * std.time.ns_per_s;
 const hf_api_base = "https://huggingface.co";
-/// Maximum API metadata response size (10 MB — prevents OOM from malicious server).
+/// Prevents OOM from malicious server.
 const max_api_response_size: usize = 10 * 1024 * 1024;
 const progress_bar_width: usize = 30;
 const bytes_per_mb: f64 = 1024.0 * 1024.0;
@@ -547,11 +543,6 @@ pub fn listModelFiles(allocator: Allocator, repo: []const u8, token: ?[]const u8
         .commit_sha = commit_sha,
         .arena = arena,
     };
-}
-
-/// Backward-compatible wrapper: list only GGUF files.
-fn listGgufFiles(allocator: Allocator, repo: []const u8, token: ?[]const u8) (PullError || Allocator.Error)!ListResult {
-    return listModelFiles(allocator, repo, token);
 }
 
 /// Discriminated selection result: either a single GGUF file or the SafeTensors model.

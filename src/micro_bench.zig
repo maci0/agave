@@ -36,80 +36,45 @@ const KvQuantType = kv_quant.KvQuantType;
 
 // ── Named constants ──────────────────────────────────────────────
 
-/// Number of warmup iterations before collecting timing samples.
 const warmup_iters: usize = 10;
-/// Default number of timed iterations when --iters is not specified.
 const default_iters: usize = 100;
-/// Maximum number of timing samples to collect.
 const max_samples: usize = 1000;
-/// Default dimension for GEMV output rows and elementwise ops.
 const default_dim: usize = 4096;
-/// Default inner dimension for GEMV (columns).
 const default_k: usize = 4096;
-/// Modulus for synthetic input vector data generation.
 const synthetic_x_mod: usize = 17;
-/// Modulus for synthetic weight data generation.
 const synthetic_w_mod: usize = 31;
-/// Default number of attention heads for RoPE/SDPA benchmarks.
 const default_n_heads: usize = 32;
-/// Default head dimension for RoPE/SDPA benchmarks when not specified.
 const default_head_dim: usize = 128;
-/// Default RoPE theta value.
 const default_rope_theta: f32 = 10000.0;
-/// RMS norm epsilon.
 const rms_norm_eps: f32 = 1e-6;
-/// L2 norm epsilon.
 const l2_norm_eps: f32 = 1e-6;
 const gemma_fallback_eos = arch_mod.gemma_fallback_eos;
 const default_fallback_eos = arch_mod.default_fallback_eos;
 const default_bos_id = arch_mod.default_bos_id;
-/// Scale factor for synthetic input data.
 const synthetic_x_scale: f32 = 0.01;
-/// Offset for synthetic input data.
 const synthetic_x_offset: f32 = -0.08;
-/// Scale factor for synthetic weight data.
 const synthetic_w_scale: f32 = 0.001;
-/// Offset for synthetic weight data.
 const synthetic_w_offset: f32 = -0.015;
-/// Buffer size for formatted output.
 const output_buf_size: usize = 4096;
-/// Q8_0 block bytes. Canonical source: backend/backend.zig.
 const q8_0_block_bytes = backend_mod.q8_0_block_bytes;
-/// Q4_0 block bytes. Canonical source: backend/backend.zig.
 const q4_0_block_bytes = backend_mod.q4_0_block_bytes;
-/// Elements per quantization block (Q8_0, Q4_0). Canonical source: backend/backend.zig.
 const quant_group_size = backend_mod.quant_block_elems;
-/// Synthetic f16 scale value byte 0 (little-endian f16 ~ 0.00875).
+/// Little-endian f16 ≈ 0.00875.
 const synthetic_scale_byte_0: u8 = 0x1E;
-/// Synthetic f16 scale value byte 1 (paired with byte 0 above).
 const synthetic_scale_byte_1: u8 = 0x21;
-/// Default sequence length for SDPA benchmark.
 const default_sdpa_seq_len: usize = 512;
-/// Default position index for RoPE benchmark.
 const default_rope_pos: usize = 42;
-/// SDPA synthetic query modulus.
 const sdpa_q_mod: usize = 13;
-/// SDPA synthetic query scale.
 const sdpa_q_scale: f32 = 0.01;
-/// SDPA synthetic query offset.
 const sdpa_q_offset: f32 = -0.06;
-/// SDPA synthetic key modulus.
 const sdpa_k_mod: usize = 19;
-/// SDPA synthetic KV scale.
 const sdpa_kv_scale: f32 = 0.005;
-/// SDPA synthetic key offset.
 const sdpa_k_offset: f32 = -0.04;
-/// SDPA synthetic value modulus.
 const sdpa_v_mod: usize = 23;
-/// SDPA synthetic value offset.
 const sdpa_v_offset: f32 = -0.05;
-/// SDPA synthetic v_new modulus.
 const sdpa_v_new_mod: usize = 29;
-/// Default number of tokens to generate in e2e mode.
 const default_gen_tokens: usize = 10;
-/// Default prompt used for e2e benchmarking.
 const e2e_prompt = "What is 2+2?";
-/// Number of consecutive identical tokens before halting e2e generation.
 const e2e_repeat_halt_threshold: u32 = 6;
 
 // ── Output helpers ───────────────────────────────────────────────
@@ -230,7 +195,7 @@ fn parseCli(proc_args: std.process.Args) ?CliArgs {
             eprint("                 rms_norm silu gelu softmax l2_norm add mul rope\n", .{});
             eprint("                 sdpa sdpa_turbo4 sdpa_turbo3 sdpa_turbo2\n", .{});
             eprint("Run 'agave-bench --help' for more information.\n", .{});
-            std.process.exit(1);
+            std.process.exit(2);
         };
     }
 
@@ -242,20 +207,20 @@ fn parseCli(proc_args: std.process.Args) ?CliArgs {
             result.n = std.fmt.parseInt(usize, v, 10) catch {
                 eprint("Error: invalid value for --n: '{s}'\n", .{v});
                 eprint("Run 'agave-bench --help' for more information.\n", .{});
-                std.process.exit(1);
+                std.process.exit(2);
             };
             n_was_set = true;
         } else if (getArgValue(args_slice, &i, "--k") orelse getArgValue(args_slice, &i, "-k")) |v| {
             result.k = std.fmt.parseInt(usize, v, 10) catch {
                 eprint("Error: invalid value for --k: '{s}'\n", .{v});
                 eprint("Run 'agave-bench --help' for more information.\n", .{});
-                std.process.exit(1);
+                std.process.exit(2);
             };
         } else if (getArgValue(args_slice, &i, "--iters")) |v| {
             result.iters = std.fmt.parseInt(usize, v, 10) catch {
                 eprint("Error: invalid value for --iters: '{s}'\n", .{v});
                 eprint("Run 'agave-bench --help' for more information.\n", .{});
-                std.process.exit(1);
+                std.process.exit(2);
             };
             if (result.iters > max_samples) {
                 eprint("Warning: clamping iters to {d}\n", .{max_samples});
@@ -266,21 +231,21 @@ fn parseCli(proc_args: std.process.Args) ?CliArgs {
                 eprint("Error: unknown backend '{s}'\n", .{v});
                 eprint("  Valid options: auto, cpu, metal, vulkan, cuda, rocm, webgpu\n", .{});
                 eprint("Run 'agave-bench --help' for more information.\n", .{});
-                std.process.exit(1);
+                std.process.exit(2);
             };
         } else if (getArgValue(args_slice, &i, "--model")) |v| {
             result.model_path = v;
         } else {
             eprint("Error: unknown argument '{s}'\n", .{args_slice[i]});
             eprint("Run 'agave-bench --help' for more information.\n", .{});
-            std.process.exit(1);
+            std.process.exit(2);
         }
     }
 
     if (result.mode == .kernel and result.kernel == null) {
         eprint("Error: kernel name required\n", .{});
         printUsage();
-        std.process.exit(1);
+        std.process.exit(2);
     }
 
     // In e2e mode, default -n to gen_tokens count (not vector dimension)
@@ -293,7 +258,7 @@ fn parseCli(proc_args: std.process.Args) ?CliArgs {
         eprint("Error: --model is required for e2e mode\n", .{});
         eprint("  Example: agave-bench e2e --model model.gguf --backend cpu\n", .{});
         eprint("Run 'agave-bench --help' for more information.\n", .{});
-        std.process.exit(1);
+        std.process.exit(2);
     }
 
     return result;
@@ -327,7 +292,7 @@ fn getArgValue(args: []const []const u8, i: *usize, key: []const u8) ?[]const u8
         }
         eprint("Error: {s} requires a value\n", .{key});
         eprint("Run 'agave-bench --help' for more information.\n", .{});
-        std.process.exit(1);
+        std.process.exit(2);
     }
     return null;
 }

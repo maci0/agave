@@ -24,17 +24,11 @@ const SafeTensorsDir = format_mod.SafeTensorsDir;
 
 // ── Named constants ──────────────────────────────────────────────────────────
 
-/// Buffer size for stderr formatting output.
 const print_buf_size: usize = 4096;
-/// Default number of calibration tokens to generate.
 const default_calibration_tokens: u32 = 1000;
-/// Fallback output file name when auto-derive from model path fails.
 const fallback_output_filename: []const u8 = "calibration.cal";
-/// Magic bytes for the .cal file header.
 const cal_magic: [4]u8 = .{ 'A', 'C', 'A', 'L' };
-/// File format version.
 const cal_version: u32 = 1;
-/// Seed for the calibration PRNG.
 const calibration_seed: u64 = 0xCAFE_BABE_DEAD_BEEF;
 const Io = std.Io;
 
@@ -115,7 +109,7 @@ fn parseArgs(args_iter: *std.process.Args.Iterator) ?CalibrateArgs {
             if (have_model) {
                 eprint("Error: unexpected argument '{s}'\n", .{arg});
                 eprint("Run 'agave calibrate --help' for more information.\n", .{});
-                std.process.exit(1);
+                std.process.exit(2);
             }
             result.model_path = arg;
             have_model = true;
@@ -140,26 +134,26 @@ fn parseArgs(args_iter: *std.process.Args.Iterator) ?CalibrateArgs {
                 args_iter.next() orelse {
                     eprint("Error: --tokens requires a value\n", .{});
                     eprint("Run 'agave calibrate --help' for more information.\n", .{});
-                    std.process.exit(1);
+                    std.process.exit(2);
                 };
             if (val.len == 0) {
                 eprint("Error: --tokens requires a value\n", .{});
                 eprint("Run 'agave calibrate --help' for more information.\n", .{});
-                std.process.exit(1);
+                std.process.exit(2);
             }
             if (val.len > 0 and val[0] == '-') {
                 eprint("Error: --tokens requires a value, got '{s}' (looks like a flag)\n", .{val});
                 eprint("  Example: agave calibrate model.gguf --tokens 2000\n", .{});
                 eprint("Run 'agave calibrate --help' for more information.\n", .{});
-                std.process.exit(1);
+                std.process.exit(2);
             }
             result.n_tokens = std.fmt.parseInt(u32, val, 10) catch {
                 eprint("Error: --tokens value '{s}' is not a valid integer\n", .{val});
-                std.process.exit(1);
+                std.process.exit(2);
             };
             if (result.n_tokens == 0) {
                 eprint("Error: --tokens must be >= 1\n", .{});
-                std.process.exit(1);
+                std.process.exit(2);
             }
         } else if (std.mem.eql(u8, arg, "--output") or std.mem.startsWith(u8, arg, "--output=")) {
             const val = if (std.mem.startsWith(u8, arg, "--output="))
@@ -168,29 +162,29 @@ fn parseArgs(args_iter: *std.process.Args.Iterator) ?CalibrateArgs {
                 args_iter.next() orelse {
                     eprint("Error: --output requires a path\n", .{});
                     eprint("Run 'agave calibrate --help' for more information.\n", .{});
-                    std.process.exit(1);
+                    std.process.exit(2);
                 };
             if (val.len == 0) {
                 eprint("Error: --output requires a path\n", .{});
                 eprint("Run 'agave calibrate --help' for more information.\n", .{});
-                std.process.exit(1);
+                std.process.exit(2);
             }
             if (val.len > 0 and val[0] == '-') {
                 eprint("Error: --output requires a path, got '{s}' (looks like a flag)\n", .{val});
                 eprint("  Example: agave calibrate model.gguf --output model.cal\n", .{});
                 eprint("Run 'agave calibrate --help' for more information.\n", .{});
-                std.process.exit(1);
+                std.process.exit(2);
             }
             result.output = val;
         } else if (arg.len > 0 and arg[0] == '-') {
             eprint("Error: unknown option '{s}'\n", .{arg});
             eprint("Run 'agave calibrate --help' for more information.\n", .{});
-            std.process.exit(1);
+            std.process.exit(2);
         } else {
             if (have_model) {
                 eprint("Error: unexpected argument '{s}'\n", .{arg});
                 eprint("Run 'agave calibrate --help' for more information.\n", .{});
-                std.process.exit(1);
+                std.process.exit(2);
             }
             result.model_path = arg;
             have_model = true;
@@ -201,7 +195,7 @@ fn parseArgs(args_iter: *std.process.Args.Iterator) ?CalibrateArgs {
         eprint("Error: missing model path\n", .{});
         eprint("Usage: agave calibrate <model.gguf|model-dir/>\n", .{});
         eprint("Run 'agave calibrate --help' for more information.\n", .{});
-        std.process.exit(1);
+        std.process.exit(2);
     }
 
     return result;
