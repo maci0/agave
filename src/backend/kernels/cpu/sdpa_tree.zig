@@ -14,6 +14,9 @@ const KvQuantType = kv_quant.KvQuantType;
 const V8 = @Vector(8, f32);
 const v8zero: V8 = @splat(0.0);
 
+/// Sparse V threshold: skip V accumulation for negligible softmax weights.
+const sparse_v_threshold: f32 = 1e-6;
+
 const max_sdpa_seq_len: usize = 8192;
 const max_head_dim: usize = 256;
 
@@ -122,6 +125,10 @@ fn sdpaTreeNodeHead(
     si = 0;
     // Prefix V (quantized)
     for (0..prefix_len) |t| {
+        if (scores[si] < sparse_v_threshold) {
+            si += 1;
+            continue;
+        }
         const v_off = kv_quant.kvByteOffset(kv_type_v, t * kvd + kvh * hd);
         kv_quant.kvMulAccum(output + out_base, scores[si], prefix_values + v_off, hd, kv_type_v);
         si += 1;
@@ -129,7 +136,9 @@ fn sdpaTreeNodeHead(
     // Tree V (f32, masked)
     for (0..n_nodes) |j| {
         if (isAncestor(mask, j)) {
-            mulAccumF32(output + out_base, scores[si], tree_values + j * kvd + kvh * hd, hd);
+            if (scores[si] >= sparse_v_threshold) {
+                mulAccumF32(output + out_base, scores[si], tree_values + j * kvd + kvh * hd, hd);
+            }
             si += 1;
         }
     }

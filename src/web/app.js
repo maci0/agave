@@ -412,6 +412,15 @@ function renderContent(el, content, final) {
       el.textContent = content;
     }
     processCode(el);
+    el.querySelectorAll('table').forEach(function(t) {
+      var wrapper = document.createElement('div');
+      wrapper.className = 'table-wrap';
+      wrapper.setAttribute('tabindex', '0');
+      wrapper.setAttribute('role', 'region');
+      wrapper.setAttribute('aria-label', 'Data table');
+      t.parentNode.insertBefore(wrapper, t);
+      wrapper.appendChild(t);
+    });
     el.querySelectorAll('a[href]').forEach(function(a) {
       var h = a.getAttribute('href');
       if (h && h.charAt(0) !== '#') { a.target = '_blank'; a.rel = 'noopener noreferrer'; }

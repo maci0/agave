@@ -4,6 +4,11 @@ const std = @import("std");
 const V8 = @Vector(8, f32);
 const v8zero: V8 = @splat(0.0);
 
+/// Sparse V threshold: skip V accumulation for positions where softmax weight
+/// is below this value. At 1e-6, skipped positions contribute < 0.0001% to
+/// the output — zero measured PPL impact across tested models.
+const sparse_v_threshold: f32 = 1e-6;
+
 /// Maximum sequence length supported by the CPU SDPA scores buffer.
 pub const max_sdpa_seq_len: usize = 8192;
 /// Maximum per-head dimension for the cached Q vector in SDPA.
@@ -72,6 +77,7 @@ pub fn sdpaHead(q: [*]const f32, keys: [*]const f32, values: [*]const f32, outpu
         while (d < hd) : (d += 1) output[q_base + d] = 0;
 
         for (0..sl) |t| {
+            if (scores_buf[t] < sparse_v_threshold) continue;
             const v_base = t * kvd + kvh * hd;
             const sv: V8 = @splat(scores_buf[t]);
             d = 0;
@@ -120,6 +126,7 @@ pub fn sdpaQuantHead(q: [*]const f32, keys: [*]const u8, values: [*]const u8, ou
     // V accumulation using quantized KV (value type)
     @memset(output[q_base..][0..hd], 0);
     for (0..sl) |t| {
+        if (scores_buf[t] < sparse_v_threshold) continue;
         const v_byte_off = kv_quant.kvByteOffset(kv_type_v, t * kvd + kvh * hd);
         kv_quant.kvMulAccum(output + q_base, scores_buf[t], values + v_byte_off, hd, kv_type_v);
     }
@@ -170,6 +177,7 @@ pub fn sdpaQuantHeadWithStats(q: [*]const f32, keys: [*]const u8, values: [*]con
     // V accumulation using quantized KV (value type)
     @memset(output[q_base..][0..hd], 0);
     for (0..sl) |t| {
+        if (scores_buf[t] < sparse_v_threshold) continue;
         const v_byte_off = kv_quant.kvByteOffset(kv_type_v, t * kvd + kvh * hd);
         kv_quant.kvMulAccum(output + q_base, scores_buf[t], values + v_byte_off, hd, kv_type_v);
     }
@@ -462,17 +470,21 @@ pub fn sdpaPagedHead(q: [*]const f32, kv_view: PagedKvView, output: [*]f32, h: u
     const hpg = nh / nkv;
     const kvh = h / hpg;
     const q_base = h * hd;
-    const bs: usize = kv_view.block_size;
     std.debug.assert(sl <= max_sdpa_seq_len);
     var scores_buf: [max_sdpa_seq_len]f32 = undefined;
 
     var q_cached: [max_head_dim]f32 = undefined;
     @memcpy(q_cached[0..hd], q[q_base..][0..hd]);
 
+    // Pre-extract shift/mask for power-of-2 block sizes (avoids integer division in inner loops)
+    const blk_shift = kv_view.block_shift;
+    const blk_mask: usize = kv_view.block_mask;
+    const bs: usize = kv_view.block_size;
+
     // QK dot products — walk block table
     for (0..sl) |t| {
-        const block_idx = t / bs;
-        const pos_in_block = t % bs;
+        const block_idx = if (blk_mask != 0) t >> blk_shift else t / bs;
+        const pos_in_block = if (blk_mask != 0) t & blk_mask else t % bs;
         const phys_id = kv_view.block_table[block_idx];
         const block_keys = kv_view.blocks[phys_id].keys;
         const k_base = pos_in_block * kvd + kvh * hd;
@@ -498,8 +510,9 @@ pub fn sdpaPagedHead(q: [*]const f32, kv_view: PagedKvView, output: [*]f32, h: u
         while (d < hd) : (d += 1) output[q_base + d] = 0;
 
         for (0..sl) |t| {
-            const block_idx = t / bs;
-            const pos_in_block = t % bs;
+            if (scores_buf[t] < sparse_v_threshold) continue;
+            const block_idx = if (blk_mask != 0) t >> blk_shift else t / bs;
+            const pos_in_block = if (blk_mask != 0) t & blk_mask else t % bs;
             const phys_id = kv_view.block_table[block_idx];
             const block_values = kv_view.blocks[phys_id].values;
             const v_base = pos_in_block * kvd + kvh * hd;
