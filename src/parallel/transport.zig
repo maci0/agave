@@ -19,6 +19,7 @@ const shm_spin_max: u32 = 100_000_000;
 
 const builtin = @import("builtin");
 const shm_O_CREAT: c_int = if (builtin.os.tag == .macos) 0x200 else 0o100;
+const shm_O_EXCL: c_int = if (builtin.os.tag == .macos) 0x800 else 0o200;
 const shm_O_RDWR: c_int = 0o2;
 const shm_PROT_RW: c_int = 0x1 | 0x2;
 const shm_MAP_SHARED: c_int = 0x01;
@@ -181,8 +182,10 @@ pub const Transport = struct {
         @memcpy(self.shm_name_send[0..send_name.len], send_name);
         @memcpy(self.shm_name_recv[0..recv_name.len], recv_name);
 
-        // Create send region
-        self.shm_send_fd = std.c.shm_open(&self.shm_name_send, shm_O_CREAT | shm_O_RDWR, @as(c.mode_t, 0o600));
+        // Remove any stale segment from a previous run, then create exclusively.
+        // O_EXCL ensures we fail if an attacker pre-created the segment (CWE-367).
+        _ = std.c.shm_unlink(&self.shm_name_send);
+        self.shm_send_fd = std.c.shm_open(&self.shm_name_send, shm_O_CREAT | shm_O_EXCL | shm_O_RDWR, @as(c.mode_t, 0o600));
         if (self.shm_send_fd < 0) return error.ShmOpenFailed;
         errdefer {
             _ = std.c.close(self.shm_send_fd);
