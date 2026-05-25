@@ -859,7 +859,7 @@ pub const NemotronNanoModel = struct {
             self.stLayerTensor(li, prefix ++ ".weight_scale_2") orelse return;
         const gs = @as(*const f32, @ptrCast(@alignCast(gs_t.data_ptr))).*;
         if (gs != 0 and gs != 1.0) {
-            for (0..n) |i| y[i] *= gs;
+            math_ops.simdScaleF32(y, gs, n);
         }
     }
 
@@ -949,7 +949,7 @@ pub const NemotronNanoModel = struct {
             if (self.fmt.getTensor(gs_name)) |gs_t| {
                 const gs = @as(*const f32, @ptrCast(@alignCast(gs_t.data_ptr))).*;
                 if (gs != 0 and gs != 1.0) {
-                    for (0..n) |i| y[i] *= gs;
+                    math_ops.simdScaleF32(y, gs, n);
                 }
             }
         } else {
@@ -987,7 +987,15 @@ pub const NemotronNanoModel = struct {
 /// Convert a BF16 byte array to f32 values in the given output buffer.
 fn bf16ToF32Buf(data: [*]const u8, out: []f32) void {
     const u16s: [*]const u16 = @ptrCast(@alignCast(data));
-    for (0..out.len) |i| out[i] = quant.bf16ToF32(u16s[i]);
+    const n = out.len;
+    const V8u16 = @Vector(8, u16);
+    const V8u32 = @Vector(8, u32);
+    var i: usize = 0;
+    while (i + 8 <= n) : (i += 8) {
+        const raw: V8u32 = @as(V8u16, u16s[i..][0..8].*);
+        out[i..][0..8].* = @bitCast(raw << @splat(16));
+    }
+    while (i < n) : (i += 1) out[i] = quant.bf16ToF32(u16s[i]);
 }
 
 /// Convert a tensor's data to f32, dispatching on its dtype.

@@ -190,7 +190,8 @@ pub fn applyRepeatPenalty(logits: []f32, recent_ids: []const u32, penalty: f32) 
 /// Apply logit bias: add bias values to specific token logits.
 /// OpenAI API `logit_bias` parameter: {"token_id": bias, ...}.
 pub fn applyLogitBias(logits: []f32, ids: []const u32, biases: []const f32, count: u32) void {
-    for (0..count) |i| {
+    const n = @min(count, @min(ids.len, biases.len));
+    for (0..n) |i| {
         if (ids[i] < logits.len) logits[ids[i]] += biases[i];
     }
 }
@@ -495,13 +496,14 @@ pub fn sampleMirostat(logits: []f32, tau: f32, eta: f32, mu: *f32, temperature: 
 
 /// Modifies the logits buffer in-place.
 pub fn sampleToken(logits: []f32, temperature: f32, top_k: u32, top_p: f32, rng: std.Random) u32 {
+    if (logits.len == 0) return 0;
     if (temperature == 0) return argmax(logits);
 
     const n = logits.len;
     const neg_inf = -std.math.inf(f32);
 
     // 1. Temperature scaling (SIMD) — skip identity scaling
-    if (temperature != 1.0) {
+    if (temperature != 1.0 and temperature > 0) {
         const inv_temp = 1.0 / temperature;
         const inv_v: V8 = @splat(inv_temp);
         var si: usize = 0;
@@ -1051,11 +1053,11 @@ test "tokenLogProb" {
 }
 
 test "tokenLogProb dominant" {
-    // logits [10, 0, 0] → token 0 dominates → logprob ≈ 0 (must be ≤ 0)
+    // logits [10, 0, 0] → softmax(0) ≈ e^10/(e^10+2) ≈ 0.999909 → logprob ≈ -9.08e-5
     const logits = [_]f32{ 10, 0, 0 };
     const lp = tokenLogProb(&logits, 0);
-    try std.testing.expect(lp > -0.001);
     try std.testing.expect(lp <= 0);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.0), lp, 1e-4);
 }
 
 test "topLogProbs returns correct ids" {
@@ -1073,30 +1075,29 @@ test "topLogProbs returns correct ids" {
     }
     try std.testing.expect(has_1);
     try std.testing.expect(has_2);
-    // Log probabilities must be finite and non-positive
+    // Log probabilities must be finite, non-positive, and ordered (id=1 has higher logprob than id=2)
     for (probs[0..n]) |p| {
         try std.testing.expect(std.math.isFinite(p));
         try std.testing.expect(p <= 0);
     }
+    // Verify logprob values: logprob(1) ≈ -0.185, logprob(2) ≈ -2.185
+    const lp_1 = if (ids[0] == 1) probs[0] else probs[1];
+    const lp_2 = if (ids[0] == 2) probs[0] else probs[1];
+    try std.testing.expectApproxEqAbs(@as(f32, -0.185), lp_1, 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, -2.185), lp_2, 0.01);
 }
 
 test "applyXtc excludes top tokens" {
     var logits = [_]f32{ 10.0, 9.0, 1.0, 0.5 };
     var prng = std.Random.Xoshiro256.init(42);
     // Force XTC to trigger (probability=1.0, threshold=0.01)
+    // log_threshold = 10.0 + ln(0.01) ≈ 5.39 → tokens 0,1 above threshold
+    // XTC masks all above-threshold except last → token 0 masked, token 1 kept
     applyXtc(&logits, 1.0, 0.01, prng.random());
-    // At least one of the top tokens should be -inf
-    var n_neg_inf: u32 = 0;
-    for (logits) |v| {
-        if (v == -std.math.inf(f32)) n_neg_inf += 1;
-    }
-    try std.testing.expect(n_neg_inf >= 1);
-    // At least one token must survive (XTC always keeps one)
-    var n_alive: u32 = 0;
-    for (logits) |v| {
-        if (v != -std.math.inf(f32)) n_alive += 1;
-    }
-    try std.testing.expect(n_alive >= 1);
+    try std.testing.expectEqual(-std.math.inf(f32), logits[0]);
+    try std.testing.expectEqual(@as(f32, 9.0), logits[1]);
+    try std.testing.expectEqual(@as(f32, 1.0), logits[2]);
+    try std.testing.expectEqual(@as(f32, 0.5), logits[3]);
 }
 
 test "applyXtc no-op at probability 0" {
@@ -1110,13 +1111,14 @@ test "applyXtc no-op at probability 0" {
 test "applyDry penalizes repeated sequence" {
     var logits = [_]f32{ 0.0, 0.0, 0.0, 0.0, 0.0 };
     // History: [1, 2, 3, 1, 2] — token 3 would continue the repeat
+    // match_len=2 (suffix [1,2] matches at pos 0), penalty = 1.0 * 2 = 2.0
     const history = [_]u32{ 1, 2, 3, 1, 2 };
     const hist_slice: []const u32 = &history;
     applyDry(&logits, hist_slice, 1.0, 2);
-    // Token 3 should be penalized (repeating "1 2 3")
-    try std.testing.expect(logits[3] < 0);
-    // Non-continuation tokens must remain unpenalized
+    try std.testing.expectEqual(@as(f32, -2.0), logits[3]);
     try std.testing.expectEqual(@as(f32, 0.0), logits[0]);
+    try std.testing.expectEqual(@as(f32, 0.0), logits[1]);
+    try std.testing.expectEqual(@as(f32, 0.0), logits[2]);
     try std.testing.expectEqual(@as(f32, 0.0), logits[4]);
 }
 

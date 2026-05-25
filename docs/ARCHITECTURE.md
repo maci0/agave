@@ -37,7 +37,7 @@ agave/
 │   │   ├── scheduler.zig  # Continuous batching request scheduler
 │   │   ├── metrics.zig    # Prometheus metrics collector
 │   │   ├── rate_limiter.zig # Token bucket rate limiter
-│   │   └── json.zig        # Streaming JSON field extraction
+│   │   └── json.zig        # JSON field extraction, encoding, and form-parsing
 │   ├── display.zig        # Rich CLI output (banner, stats, progress)
 │   ├── chat_template.zig  # Data-driven chat prompt templates (ChatML, Gemma, Gemma 4, Qwen35, GLM-4, GPT-OSS, Llama 4)
 │   ├── recipe.zig         # Optional preset configs per model/hardware/quant combo
@@ -87,6 +87,7 @@ agave/
 │   │   ├── webgpu.zig     # WebGPU: WGSL shaders, browser + native (wgpu/Dawn)
 │   │   ├── megakernel.zig # Weight offset computation for fused FFN megakernels
 │   │   ├── mega_compose.zig # Composable megakernel generator (ModelDesc → MSL at runtime)
+│   │   ├── accelerate.zig # Apple Accelerate.framework BLAS bindings (AMX-accelerated SGEMM)
 │   │   ├── objc.zig       # Objective-C runtime bridge for Metal API
 │   │   └── kernels/       # Kernel source files
 │   │       ├── cpu/       # CPU SIMD kernels (gemv_*.zig, sdpa.zig, softmax.zig, norm.zig, rope.zig, ...)

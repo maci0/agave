@@ -431,7 +431,7 @@ src/
 ├── pull.zig           # Model download from HuggingFace Hub (agave pull)
 ├── server/            # HTTP server
 │   ├── server.zig     #   HTTP server (OpenAI + Anthropic API + chat UI)
-│   ├── json.zig       #   Streaming JSON parser for API requests
+│   ├── json.zig       #   JSON field extraction, encoding, and form-parsing
 │   ├── scheduler.zig  #   Continuous batching request scheduler
 │   ├── metrics.zig    #   Prometheus metrics collector
 │   └── rate_limiter.zig #  Token bucket rate limiter

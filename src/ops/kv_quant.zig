@@ -1645,14 +1645,14 @@ test "f16 roundtrip" {
         const f16_val: f32 = @floatCast(@as(f16, @floatCast(src[i])));
         expected_dot += q_vec[i] * f16_val;
     }
-    try std.testing.expectApproxEqAbs(expected_dot, dot8, 0.01);
+    try std.testing.expectApproxEqAbs(expected_dot, dot8, 1e-3);
 
     // MulAccum with weight to exercise weighted accumulation
     var acc = [_]f32{0} ** 8;
     kvMulAccum(&acc, 2.5, &buf, 8, .f16);
     for (0..8) |i| {
         const f16_val: f32 = @floatCast(@as(f16, @floatCast(src[i])));
-        try std.testing.expectApproxEqAbs(2.5 * f16_val, acc[i], 0.01);
+        try std.testing.expectApproxEqAbs(2.5 * f16_val, acc[i], 1e-4);
     }
 }
 
@@ -1667,7 +1667,7 @@ test "q8_0 roundtrip accuracy" {
         var q_unit = [_]f32{0} ** 8;
         q_unit[i] = 1.0;
         const dot = kvDot(&q_unit, &buf, 8, .q8_0);
-        try std.testing.expectApproxEqAbs(src[i], dot, 0.02);
+        try std.testing.expectApproxEqAbs(src[i], dot, 0.01);
     }
 
     // Dot with all-ones should ≈ sum(src)
@@ -1675,7 +1675,7 @@ test "q8_0 roundtrip accuracy" {
     const dot_sum = kvDot(&q_ones, &buf, 8, .q8_0);
     var expected_sum: f32 = 0;
     for (src) |v| expected_sum += v;
-    try std.testing.expectApproxEqAbs(expected_sum, dot_sum, 0.1);
+    try std.testing.expectApproxEqAbs(expected_sum, dot_sum, 0.05);
 }
 
 test "int8 roundtrip accuracy" {
@@ -1688,7 +1688,7 @@ test "int8 roundtrip accuracy" {
         var q_unit = [_]f32{0} ** 8;
         q_unit[i] = 1.0;
         const dot = kvDot(&q_unit, &buf, 8, .int8);
-        try std.testing.expectApproxEqAbs(src[i], dot, 0.02);
+        try std.testing.expectApproxEqAbs(src[i], dot, 0.01);
     }
 
     // Dot with all-ones should ≈ sum(src)

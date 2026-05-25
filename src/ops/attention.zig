@@ -69,6 +69,7 @@ pub fn scaledDotProductAttention(
     kv_type_k: KvQuantType,
     kv_type_v: KvQuantType,
 ) void {
+    std.debug.assert(nkv > 0);
     const kvd = nkv * hd;
 
     // Fast path: no window, no score offset → delegate KV append + attention to backend.
@@ -275,6 +276,8 @@ pub fn pagedAttention(
     _: Backend,
     block_size: usize,
 ) void {
+    std.debug.assert(nkv > 0);
+    std.debug.assert(block_size > 0);
     const kvd = nkv * hd;
 
     // Append current K/V to the block for position seq_len

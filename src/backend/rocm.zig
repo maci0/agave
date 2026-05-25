@@ -716,7 +716,13 @@ pub const RocmBackend = struct {
     /// CPU fallback — n_embd-sized, negligible vs GEMV dispatch overhead.
     pub fn addScaled(self: *RocmBackend, src: [*]const f32, dst: [*]f32, scale: f32, n: usize) void {
         self.flushActivations();
-        for (0..n) |i| dst[i] += src[i] * scale;
+        const V8 = @Vector(8, f32);
+        const sv: V8 = @splat(scale);
+        var i: usize = 0;
+        while (i + 8 <= n) : (i += 8) {
+            dst[i..][0..8].* = @mulAdd(V8, @as(V8, src[i..][0..8].*), sv, @as(V8, dst[i..][0..8].*));
+        }
+        while (i < n) : (i += 1) dst[i] += src[i] * scale;
         self.invalidateAct(dst);
     }
 
@@ -830,7 +836,15 @@ pub const RocmBackend = struct {
     pub fn sigmoidMul(self: *RocmBackend, data: [*]f32, gate: [*]const f32, n: usize) void {
         if (self.fn_sigmoid_mul == null) {
             self.sync();
-            for (0..n) |i| data[i] *= 1.0 / (1.0 + @exp(-gate[i]));
+            const V8 = @Vector(8, f32);
+            const one: V8 = @splat(1.0);
+            var i: usize = 0;
+            while (i + 8 <= n) : (i += 8) {
+                const g: V8 = gate[i..][0..8].*;
+                const sig = one / (one + @exp(-g));
+                data[i..][0..8].* = @as(V8, data[i..][0..8].*) * sig;
+            }
+            while (i < n) : (i += 1) data[i] *= 1.0 / (1.0 + @exp(-gate[i]));
             self.invalidateAct(data);
             return;
         }

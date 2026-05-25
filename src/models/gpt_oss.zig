@@ -796,12 +796,26 @@ pub const GptOssModel = struct {
 
 /// Add bias with explicit dtype handling.
 inline fn addBiasTyped(dst: []f32, bias_bytes: [*]const u8, n: usize, dtype: format_mod.DType) void {
+    const V8 = @Vector(8, f32);
     if (dtype == .bf16) {
         const bias_bf16: [*]const u16 = @ptrCast(@alignCast(bias_bytes));
-        for (0..n) |i| dst[i] += quant.bf16ToF32(bias_bf16[i]);
+        const V8u16 = @Vector(8, u16);
+        const V8u32 = @Vector(8, u32);
+        var i: usize = 0;
+        while (i + 8 <= n) : (i += 8) {
+            const raw: V8u32 = @as(V8u16, bias_bf16[i..][0..8].*);
+            const shifted = raw << @splat(16);
+            const bias_v: V8 = @bitCast(shifted);
+            dst[i..][0..8].* = @as(V8, dst[i..][0..8].*) + bias_v;
+        }
+        while (i < n) : (i += 1) dst[i] += quant.bf16ToF32(bias_bf16[i]);
     } else {
         const bias: [*]const f32 = @ptrCast(@alignCast(bias_bytes));
-        for (0..n) |i| dst[i] += bias[i];
+        var i: usize = 0;
+        while (i + 8 <= n) : (i += 8) {
+            dst[i..][0..8].* = @as(V8, dst[i..][0..8].*) + @as(V8, bias[i..][0..8].*);
+        }
+        while (i < n) : (i += 1) dst[i] += bias[i];
     }
 }
 

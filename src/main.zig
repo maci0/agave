@@ -364,7 +364,7 @@ const cli_specs = [_]cli_mod.ArgSpec{
     .{ .long = "peers", .kind = .option, .help = "TP peer addresses for distributed inference (e.g. 192.168.0.212:9999)." },
     .{ .long = "rank", .kind = .option, .help = "This node's rank for TP/PP/disagg [default: 0]." },
     .{ .long = "transport", .kind = .option, .help = "IPC transport: auto, tcp, shm, nccl [default: auto]. Also accepts rdma, udp, grpc (not yet implemented, falls back to tcp)." },
-    .{ .long = "ctx-size", .kind = .option, .help = "Context window size; 0 = full, auto = fit to memory [default: min(model, 4096)]." },
+    .{ .long = "ctx-size", .kind = .option, .help = "Context window size; 0 = full, auto = fit to memory [default: 4096 or model limit, whichever is smaller]." },
     .{ .long = "allow-cpu-fallback", .help = "Allow GPU backends to fall back to CPU for unsupported ops." },
     .{ .long = "mmap", .help = "Use lazy mmap instead of eagerly paging weights into RAM." },
     .{ .long = "prefill-batch-size", .kind = .option, .help = "Prefill chunk size in tokens [default: 512]." },
@@ -1042,6 +1042,9 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
 }
 
 fn parseIpv4(s: []const u8, out: *[4]u8) bool {
+    if (s.len == 0) return false;
+    if (s[0] == '.' or s[s.len - 1] == '.') return false;
+    if (std.mem.indexOf(u8, s, "..") != null) return false;
     var parts: [4]u8 = .{ 0, 0, 0, 0 };
     var part_idx: usize = 0;
     var acc: u32 = 0;
@@ -1325,15 +1328,30 @@ fn warnUnknownOptions(res: *const cli_mod.ParseResult) void {
 }
 
 /// Warn when an option's value looks like a known flag that was accidentally consumed.
-/// Catches `--system --serve` (system prompt becomes "--serve", --serve flag lost).
+/// Catches `--system --serve` (system prompt becomes "--serve", --serve flag lost)
+/// and `--system -s` (short flag consumed as value).
 fn warnFlagAsValue(res: *const cli_mod.ParseResult) void {
     var opt_it = res.options.iterator();
     while (opt_it.next()) |entry| {
         const val = entry.value_ptr.*;
         if (val.len > 2 and val[0] == '-' and val[1] == '-' and isKnownSpec(val[2..])) {
             eprint("Warning: --{s} has value '{s}' which looks like a flag (missing value for --{s}?)\n", .{ entry.key_ptr.*, val, entry.key_ptr.* });
+        } else if (val.len == 2 and val[0] == '-' and val[1] != '-') {
+            if (isKnownShort(val[1])) {
+                eprint("Warning: --{s} has value '{s}' which looks like a flag (missing value for --{s}?)\n", .{ entry.key_ptr.*, val, entry.key_ptr.* });
+            }
         }
     }
+}
+
+/// Check if a short character matches any known CLI spec.
+fn isKnownShort(ch: u8) bool {
+    for (cli_specs) |spec| {
+        if (spec.short) |s| {
+            if (s == ch) return true;
+        }
+    }
+    return false;
 }
 
 fn parseF32(s: ?[]const u8, comptime flag: []const u8) ?f32 {
@@ -1423,6 +1441,7 @@ fn printUsage() void {
         \\
         \\USAGE:
         \\  agave [OPTIONS] <model.gguf|model-dir/> [prompt]
+        \\  agave [OPTIONS] -- <model.gguf|model-dir/> [prompt]
         \\  echo "prompt" | agave model.gguf
         \\
         \\ARGUMENTS:
@@ -1461,7 +1480,7 @@ fn printUsage() void {
         \\      --backend <BE>        Compute backend: auto, cpu, metal, vulkan, cuda, rocm, webgpu [default: auto]
         \\      --device <N>          GPU device index for CUDA/ROCm/Vulkan [default: 0]
         \\      --list-devices        List available compute devices and exit
-        \\      --ctx-size <N|auto>   Context window size; 0 = full, auto = fit to memory [default: min(model, 4096)]
+        \\      --ctx-size <N|auto>   Context window size; 0 = full, auto = fit to memory [default: 4096 or model limit]
         \\      --allow-cpu-fallback  Allow GPU backends to fall back to CPU for unsupported ops
         \\      --mmap                Use lazy mmap instead of eagerly paging weights into RAM
         \\      --prefill-batch-size <N>  Prefill chunk size in tokens [default: 512]
@@ -2527,7 +2546,11 @@ fn initAndRun(
                 // Receive first generated token from prefill node
                 var first_tok_f32: [1]f32 = undefined;
                 dtr.recvBuf(&first_tok_f32, 1);
-                var next: u32 = @intFromFloat(first_tok_f32[0]);
+                const raw_tok = first_tok_f32[0];
+                var next: u32 = if (raw_tok >= 0 and raw_tok < @as(f32, @floatFromInt(std.math.maxInt(u32))))
+                    @intFromFloat(raw_tok)
+                else
+                    0;
                 std.log.info("KV cache received ({d} positions, first_gen={d}). Generating...", .{ kv_len, next });
                 var gen_count: u32 = 0;
                 const max_gen: u32 = @intCast(cli.max_tokens);

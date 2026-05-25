@@ -391,52 +391,106 @@ fn finishRound(state: *SpecState, target_model: *Model, draft_model: *Model, acc
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
 fn softmaxWithTemp(logits: []const f32, out: []f32, temperature: f32) void {
-    const inv_t = 1.0 / temperature;
-    var max_val: f32 = logits[0] * inv_t;
-    for (logits[1..]) |v| {
-        const scaled = v * inv_t;
-        if (scaled > max_val) max_val = scaled;
+    if (logits.len == 0) return;
+    const V8 = @Vector(8, f32);
+    const n = logits.len;
+    const safe_temp = if (temperature > 0) temperature else 1.0;
+    const inv_t = 1.0 / safe_temp;
+
+    const inv_tv: V8 = @splat(inv_t);
+    var max_v: V8 = @splat(-std.math.inf(f32));
+    var i: usize = 0;
+    while (i + 8 <= n) : (i += 8) {
+        max_v = @max(max_v, @as(V8, logits[i..][0..8].*) * inv_tv);
     }
-    var sum: f32 = 0;
-    for (logits, 0..) |v, i| {
-        out[i] = @exp(v * inv_t - max_val);
+    var max_val = @reduce(.Max, max_v);
+    while (i < n) : (i += 1) max_val = @max(max_val, logits[i] * inv_t);
+
+    const mv: V8 = @splat(max_val);
+    var sum_v: V8 = @splat(@as(f32, 0.0));
+    i = 0;
+    while (i + 8 <= n) : (i += 8) {
+        const exp_v = @exp(@as(V8, logits[i..][0..8].*) * inv_tv - mv);
+        out[i..][0..8].* = exp_v;
+        sum_v += exp_v;
+    }
+    var sum = @reduce(.Add, sum_v);
+    while (i < n) : (i += 1) {
+        out[i] = @exp(logits[i] * inv_t - max_val);
         sum += out[i];
     }
-    const inv_sum = 1.0 / sum;
-    for (out[0..logits.len]) |*v| v.* *= inv_sum;
+
+    if (sum > 0) {
+        const inv_sum = 1.0 / sum;
+        const isv: V8 = @splat(inv_sum);
+        i = 0;
+        while (i + 8 <= n) : (i += 8) {
+            out[i..][0..8].* = @as(V8, out[i..][0..8].*) * isv;
+        }
+        while (i < n) : (i += 1) out[i] *= inv_sum;
+    }
 }
 
 /// Sample from norm(max(0, p_target - p_draft)).
 fn sampleResidual(target_probs: []const f32, draft_log_probs: []const f32, vs: u32, rng: std.Random, buf: []f32) u32 {
-    var sum: f32 = 0;
-    for (0..vs) |i| {
-        const p = target_probs[i];
-        const q = @exp(draft_log_probs[i]);
-        buf[i] = @max(0.0, p - q);
-        sum += buf[i];
+    const V8 = @Vector(8, f32);
+    const zero: V8 = @splat(@as(f32, 0.0));
+    const n: usize = vs;
+    var sum_v: V8 = zero;
+    var i: usize = 0;
+    while (i + 8 <= n) : (i += 8) {
+        const p: V8 = target_probs[i..][0..8].*;
+        const q = @exp(@as(V8, draft_log_probs[i..][0..8].*));
+        const diff = @max(zero, p - q);
+        buf[i..][0..8].* = diff;
+        sum_v += diff;
+    }
+    var sum = @reduce(.Add, sum_v);
+    while (i < n) : (i += 1) {
+        const diff = @max(0.0, target_probs[i] - @exp(draft_log_probs[i]));
+        buf[i] = diff;
+        sum += diff;
     }
     if (sum <= 0) return 0;
     var r = rng.float(f32) * sum;
-    for (0..vs) |i| {
-        r -= buf[i];
-        if (r <= 0) return @intCast(i);
+    for (0..n) |j| {
+        r -= buf[j];
+        if (r <= 0) return @intCast(j);
     }
     return vs - 1;
 }
 
 /// Log-softmax: v_i = v_i - max - log(sum(exp(v - max))).
-/// Pass 1: find max. Pass 2: accumulate sum (read-only). Pass 3: single write.
+/// SIMD-optimized (8-wide) — called per draft token on vocab-sized arrays.
 fn logSoftmax(logits: []f32) void {
-    var max_val: f32 = logits[0];
-    for (logits[1..]) |v| if (v > max_val) {
-        max_val = v;
-    };
-    var sum_exp: f32 = 0;
-    for (logits) |v| {
-        sum_exp += @exp(v - max_val);
+    if (logits.len == 0) return;
+    const V8 = @Vector(8, f32);
+    const n = logits.len;
+
+    var max_v: V8 = @splat(-std.math.inf(f32));
+    var i: usize = 0;
+    while (i + 8 <= n) : (i += 8) {
+        max_v = @max(max_v, @as(V8, logits[i..][0..8].*));
     }
+    var max_val = @reduce(.Max, max_v);
+    while (i < n) : (i += 1) max_val = @max(max_val, logits[i]);
+
+    const mv: V8 = @splat(max_val);
+    var sum_v: V8 = @splat(@as(f32, 0.0));
+    i = 0;
+    while (i + 8 <= n) : (i += 8) {
+        sum_v += @exp(@as(V8, logits[i..][0..8].*) - mv);
+    }
+    var sum_exp = @reduce(.Add, sum_v);
+    while (i < n) : (i += 1) sum_exp += @exp(logits[i] - max_val);
+
     const offset = max_val + @log(sum_exp + log_softmax_eps);
-    for (logits) |*v| v.* -= offset;
+    const ov: V8 = @splat(offset);
+    i = 0;
+    while (i + 8 <= n) : (i += 8) {
+        logits[i..][0..8].* = @as(V8, logits[i..][0..8].*) - ov;
+    }
+    while (i < n) : (i += 1) logits[i] -= offset;
 }
 
 // ── Tests ────────────────────────────────────────────────────────────────────
@@ -521,8 +575,11 @@ test "softmaxWithTemp concentrates on max at low temperature" {
 
     softmaxWithTemp(&logits, &out, 0.1);
 
-    // At very low temperature, nearly all mass on the maximum
+    // At very low temperature, nearly all mass on the maximum (index 2)
     try std.testing.expect(out[2] > 0.99);
+    // Max logit must produce highest probability; others must be ordered
+    try std.testing.expect(out[2] > out[1]);
+    try std.testing.expect(out[1] > out[0]);
 
     // Sum should be 1.0
     var sum: f32 = 0;
@@ -534,7 +591,15 @@ test "sampleResidual returns valid token" {
     const target = [_]f32{ 0.1, 0.3, 0.6 };
     const draft_lp = [_]f32{ @log(@as(f32, 0.5)), @log(@as(f32, 0.3)), @log(@as(f32, 0.2)) };
     var buf: [3]f32 = undefined;
-    var prng = std.Random.DefaultPrng.init(42);
-    const tok = sampleResidual(&target, &draft_lp, 3, prng.random(), &buf);
-    try std.testing.expect(tok < 3);
+    // Residual mass: target - draft = {-0.4, 0, 0.4} → clamp negatives → {0, 0, 0.4} → normalized
+    // Token 2 should be strongly favored (all residual mass)
+    var counts = [_]u32{ 0, 0, 0 };
+    for (0..100) |seed| {
+        var prng = std.Random.DefaultPrng.init(seed);
+        const tok = sampleResidual(&target, &draft_lp, 3, prng.random(), &buf);
+        try std.testing.expect(tok < 3);
+        counts[tok] += 1;
+    }
+    // Token 2 must dominate (has all positive residual mass)
+    try std.testing.expect(counts[2] > 50);
 }
