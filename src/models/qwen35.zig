@@ -247,6 +247,19 @@ pub const Qwen35Model = struct {
 
         if (f.getMetaU32("tokenizer.ggml.eos_token_id")) |v| self.eos_token_id = v;
         if (f.getVocab()) |v| self.vocab_size = @intCast(v.len);
+        // Config.json vocab_size overrides tokenizer count (may include special tokens)
+        if (f.getArchU32(arch, "vocab_size")) |vs| {
+            if (vs > self.vocab_size) self.vocab_size = vs;
+        } else if (f.getMetaU32("vocab_size")) |vs| {
+            if (vs > self.vocab_size) self.vocab_size = vs;
+        }
+        // SafeTensors: weight tensor rows may exceed both — use the largest
+        for ([_][]const u8{ "token_embd.weight", "output.weight" }) |tname| {
+            if (f.getTensor(tname)) |t| {
+                const rows: u32 = @intCast(t.dims[0]);
+                if (rows > self.vocab_size) self.vocab_size = rows;
+            }
+        }
         if (f.getArchU32(arch, "context_length")) |cl| self.max_seq_len = cl;
         if (ctx_size > 0) self.max_seq_len = ctx_size;
 

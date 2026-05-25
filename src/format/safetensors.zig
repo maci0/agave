@@ -513,6 +513,7 @@ const gguf_hf_layer_map = [_]struct { []const u8, []const u8 }{
 const hf_prefixes = [_][]const u8{
     "model.language_model.",
     "language_model.model.",
+    "language_model.",
     "model.",
 };
 
@@ -530,9 +531,8 @@ fn ggufToHfName(name: []const u8, buf: *[name_buf_size]u8, prefix: []const u8) ?
     }
     if (std.mem.startsWith(u8, name, "output.")) {
         const attr = name["output.".len..];
-        // lm_head is at top level in HF models — try without any prefix first,
-        // then with stripped prefix for nested models (model.language_model. → "")
-        return std.fmt.bufPrint(buf, "lm_head.{s}", .{attr}) catch null;
+        // lm_head may be at top level or under a prefix (e.g. language_model.lm_head)
+        return std.fmt.bufPrint(buf, "{s}lm_head.{s}", .{ prefix, attr }) catch null;
     }
 
     // Layer tensors: "blk.{i}.{component}.{attr}"
@@ -657,6 +657,7 @@ const gguf_hf_meta_map = [_]struct { []const u8, []const u8 }{
     .{ "ssm.group_count", "linear_num_key_heads" },
     .{ "ssm.time_step_rank", "linear_num_value_heads" },
     .{ "partial_rotary_factor", "partial_rotary_factor" },
+    .{ "vocab_size", "vocab_size" },
 };
 
 /// Translate a GGUF-style metadata key to HuggingFace config.json key.
@@ -1853,10 +1854,15 @@ fn parseConfigObject(
 
         if (i >= json.len) break;
 
-        // Recurse into text_config / quantization to flatten important nested values.
-        if (!is_override and (std.mem.eql(u8, key_res.val, "text_config") or
+        // Recurse into nested config objects to flatten important values.
+        // Always recurse into rope_parameters/rope_scaling even when already
+        // inside text_config (they're doubly nested in some HF configs).
+        const should_recurse = (std.mem.eql(u8, key_res.val, "rope_parameters") or
+            std.mem.eql(u8, key_res.val, "rope_scaling")) or
+            (!is_override and (std.mem.eql(u8, key_res.val, "text_config") or
             std.mem.eql(u8, key_res.val, "quantization") or
-            std.mem.eql(u8, key_res.val, "quantization_config")) and json[i] == '{')
+            std.mem.eql(u8, key_res.val, "quantization_config")));
+        if (should_recurse and json[i] == '{')
         {
             i = try parseConfigObject(allocator, json, i, meta, owned, true);
         } else {
