@@ -67,6 +67,7 @@ fn readStdinAll(allocator: std.mem.Allocator, max_size: usize) ?[]const u8 {
             std.process.exit(1);
         }
         buf.appendSlice(allocator, read_buf[0..n]) catch {
+            eprint("Error: out of memory reading piped input ({d} bytes read)\n", .{buf.items.len});
             buf.deinit(allocator);
             return null;
         };
@@ -76,6 +77,7 @@ fn readStdinAll(allocator: std.mem.Allocator, max_size: usize) ?[]const u8 {
         return null;
     }
     return buf.toOwnedSlice(allocator) catch {
+        eprint("Error: out of memory finalizing piped input ({d} bytes)\n", .{buf.items.len});
         buf.deinit(allocator);
         return null;
     };
@@ -2707,7 +2709,10 @@ fn runRepl(
         }
 
         // Add user message to history
-        const user_content = allocator.dupe(u8, trimmed) catch continue;
+        const user_content = allocator.dupe(u8, trimmed) catch {
+            eprint("Error: out of memory\n", .{});
+            continue;
+        };
         history.append(allocator, .{ .role = .user, .content = user_content }) catch {
             allocator.free(user_content);
             continue;

@@ -863,7 +863,9 @@ fn createAgaveSymlink(allocator: Allocator, repo: []const u8, snapshot_dir: []co
     };
     Io.Dir.rename(Io.Dir.cwd(), tmp_path, Io.Dir.cwd(), link_path, mod_io) catch |err| {
         eprint("Warning: could not finalize agave symlink: {}\n", .{err});
-        Io.Dir.cwd().deleteFile(mod_io, tmp_path) catch {};
+        Io.Dir.cwd().deleteFile(mod_io, tmp_path) catch |del_err| {
+            eprint("Warning: could not clean up temp file '{s}': {}\n", .{ tmp_path, del_err });
+        };
     };
 }
 
@@ -1402,7 +1404,9 @@ fn atomicSymlink(pa: Allocator, target: []const u8, link_path: []const u8) void 
     };
     Io.Dir.rename(Io.Dir.cwd(), tmp_link, Io.Dir.cwd(), link_path, mod_io) catch |err| {
         eprint("Warning: could not finalize symlink: {}\n", .{err});
-        Io.Dir.cwd().deleteFile(mod_io, tmp_link) catch {};
+        Io.Dir.cwd().deleteFile(mod_io, tmp_link) catch |del_err| {
+            eprint("Warning: could not clean up temp file '{s}': {}\n", .{ tmp_link, del_err });
+        };
     };
 }
 

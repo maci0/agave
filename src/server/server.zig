@@ -376,6 +376,30 @@ fn elapsedMs(start: i64) u64 {
     return @intCast(@max(milliTimestamp() - start, 0));
 }
 
+/// Compute non-negative elapsed milliseconds between two timestamps.
+fn elapsedBetween(start: i64, end: i64) u64 {
+    return @intCast(@max(end - start, 0));
+}
+
+/// Estimate prompt token count: use actual tokenized count when available,
+/// fall back to byte-length estimate (1 byte = 1 token) to prevent rate
+/// limiter bypass on tokenizer failure.
+fn estimatePromptTokens(token_count: usize, text_len: usize) u32 {
+    return if (token_count > 0) @intCast(token_count) else @intCast(@max(1, text_len));
+}
+
+/// Characters unsafe for direct embedding in JSON string values or HTML contexts.
+/// Characters unsafe for direct embedding in JSON string values or HTML contexts.
+fn isUnsafeJsonChar(c: u8) bool {
+    return c == '"' or c == '\\' or c < 0x20 or c == '<' or c == '>' or c == '&';
+}
+
+/// CORS headers: include origin/expose headers when no API key is configured
+/// (public mode); omit when auth is required (prevents wildcard origin leaks).
+fn corsHeaders() []const u8 {
+    return if (g_server.api_key != null) "" else cors_allow_headers;
+}
+
 /// Broken-down UTC time for request log timestamps.
 const TimeComponents = struct { hours: u64, minutes: u64, seconds: u64 };
 
@@ -615,8 +639,7 @@ fn checkRateLimit(server: *Server, prompt_tokens: u32) ?u32 {
 /// Write a complete HTTP response (status line + headers + body).
 fn sendResponse(stream: TcpStream, status: []const u8, content_type: []const u8, body: []const u8) void {
     var hdr_buf: [hdr_buf_size]u8 = undefined;
-    const cors_origin: []const u8 = if (g_server.api_key != null) "" else cors_allow_headers;
-    const hdr = std.fmt.bufPrint(&hdr_buf, "HTTP/1.1 {s}\r\nContent-Type: {s}\r\nContent-Length: {d}\r\nX-Request-Id: {d}\r\n{s}" ++ security_headers ++ "Connection: close\r\n\r\n", .{ status, content_type, body.len, log_request_id, cors_origin }) catch {
+    const hdr = std.fmt.bufPrint(&hdr_buf, "HTTP/1.1 {s}\r\nContent-Type: {s}\r\nContent-Length: {d}\r\nX-Request-Id: {d}\r\n{s}" ++ security_headers ++ "Connection: close\r\n\r\n", .{ status, content_type, body.len, log_request_id, corsHeaders() }) catch {
         std.log.warn("req={d} response header overflow (body={d})", .{ log_request_id, body.len });
         return;
     };
@@ -704,9 +727,10 @@ fn buildToolCallResponse(buf: []u8, raw_text: []const u8, req_id: u64, created: 
         const args = json.extractObjectField(tc_json, "arguments") orelse
             (json.extractField(tc_json, "arguments") orelse "{}");
 
-        // Escape arguments JSON for embedding as string value.
-        // On OOM, emit empty args to avoid JSON injection (CWE-116).
-        const escaped_args = json.jsonEscape(g_server.allocator, args) catch args[0..0];
+        const escaped_args = json.jsonEscape(g_server.allocator, args) catch {
+            std.log.warn("req={d} tool call argument escaping failed (OOM), skipping tool call", .{log_request_id});
+            continue;
+        };
         defer if (escaped_args.ptr != args.ptr) g_server.allocator.free(escaped_args);
 
         if (call_idx > 0 and tc_pos < tc_buf.len) {
@@ -754,8 +778,7 @@ fn send401(stream: TcpStream) void {
 /// Returns false if the write failed (client disconnected).
 fn sendSseHeaders(stream: TcpStream) bool {
     var hdr_buf: [hdr_buf_size]u8 = undefined;
-    const cors_sse: []const u8 = if (g_server.api_key != null) "" else cors_allow_headers;
-    const hdr = std.fmt.bufPrint(&hdr_buf, "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\nX-Accel-Buffering: no\r\nX-Request-Id: {d}\r\n{s}" ++ security_headers ++ "Connection: keep-alive\r\n\r\n", .{ log_request_id, cors_sse }) catch return false;
+    const hdr = std.fmt.bufPrint(&hdr_buf, "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\nX-Accel-Buffering: no\r\nX-Request-Id: {d}\r\n{s}" ++ security_headers ++ "Connection: keep-alive\r\n\r\n", .{ log_request_id, corsHeaders() }) catch return false;
     stream.writeAll(hdr) catch |err| {
         std.log.warn("req={d} SSE header write failed: {}", .{ log_request_id, err });
         return false;
@@ -772,8 +795,7 @@ fn send429(stream: TcpStream, retry_after: u32) void {
         return;
     };
     var hdr_buf: [hdr_buf_size]u8 = undefined;
-    const cors_429: []const u8 = if (g_server.api_key != null) "" else cors_allow_headers;
-    const hdr = std.fmt.bufPrint(&hdr_buf, "HTTP/1.1 429 Too Many Requests\r\nContent-Type: application/json\r\nContent-Length: {d}\r\nRetry-After: {d}\r\nX-Request-Id: {d}\r\n{s}" ++ security_headers ++ "Connection: close\r\n\r\n", .{ body.len, retry_after, log_request_id, cors_429 }) catch {
+    const hdr = std.fmt.bufPrint(&hdr_buf, "HTTP/1.1 429 Too Many Requests\r\nContent-Type: application/json\r\nContent-Length: {d}\r\nRetry-After: {d}\r\nX-Request-Id: {d}\r\n{s}" ++ security_headers ++ "Connection: close\r\n\r\n", .{ body.len, retry_after, log_request_id, corsHeaders() }) catch {
         std.log.warn("req={d} 429 header format failed", .{log_request_id});
         return;
     };
@@ -806,7 +828,6 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
             }
         }
         var opts_buf: [hdr_buf_size]u8 = undefined;
-        const cors_preflight: []const u8 = if (g_server.api_key != null) "" else cors_allow_headers;
         const opts_hdr = std.fmt.bufPrint(&opts_buf, "HTTP/1.1 204 No Content\r\n" ++
             "{s}" ++
             "Access-Control-Allow-Methods: {s}\r\n" ++
@@ -815,7 +836,7 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
             "X-Request-Id: {d}\r\n" ++
             security_headers ++
             "Content-Length: 0\r\n" ++
-            "Connection: close\r\n\r\n", .{ cors_preflight, allow_methods, log_request_id }) catch return;
+            "Connection: close\r\n\r\n", .{ corsHeaders(), allow_methods, log_request_id }) catch return;
         stream.writeAll(opts_hdr) catch return;
         return;
     }
@@ -933,9 +954,8 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
     }
 
     if (is_get and std.mem.eql(u8, path, "/favicon.ico")) {
-        const cors_fav: []const u8 = if (g_server.api_key != null) "" else cors_allow_headers;
         var fav_buf: [short_hdr_buf_size]u8 = undefined;
-        const fav_hdr = std.fmt.bufPrint(&fav_buf, "HTTP/1.1 204 No Content\r\nContent-Length: 0\r\nX-Request-Id: {d}\r\n{s}" ++ security_headers ++ "Connection: close\r\n\r\n", .{ log_request_id, cors_fav }) catch return;
+        const fav_hdr = std.fmt.bufPrint(&fav_buf, "HTTP/1.1 204 No Content\r\nContent-Length: 0\r\nX-Request-Id: {d}\r\n{s}" ++ security_headers ++ "Connection: close\r\n\r\n", .{ log_request_id, corsHeaders() }) catch return;
         stream.writeAll(fav_hdr) catch return;
         return;
     }
@@ -1045,10 +1065,7 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
             break :blk &[_]u32{};
         };
         defer if (prompt_ids.len > 0) g_server.allocator.free(prompt_ids);
-        // When tokenization fails, use conservative byte-count estimate (1 byte = 1 token)
-        // to prevent rate limiter bypass. This overestimates, but tokenizer failure is
-        // already exceptional — erring on the side of rate limiting is correct.
-        const prompt_tokens: u32 = if (prompt_ids.len > 0) @intCast(prompt_ids.len) else @intCast(@max(1, formatted.len));
+        const prompt_tokens = estimatePromptTokens(prompt_ids.len, formatted.len);
 
         // 3. Check rate limit
         if (checkRateLimit(g_server, prompt_tokens)) |retry| {
@@ -1169,10 +1186,7 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
         // Rate limit check (estimate prompt tokens via encode)
         const prompt_ids_c = g_server.tokenizer.encode(prompt) catch &[_]u32{};
         defer if (prompt_ids_c.len > 0) g_server.allocator.free(prompt_ids_c);
-        // When tokenization fails, use conservative byte-count estimate (1 byte = 1 token)
-        // to prevent rate limiter bypass. This overestimates, but tokenizer failure is
-        // already exceptional — erring on the side of rate limiting is correct.
-        const prompt_tokens_c: u32 = if (prompt_ids_c.len > 0) @intCast(prompt_ids_c.len) else @intCast(@max(1, prompt.len));
+        const prompt_tokens_c = estimatePromptTokens(prompt_ids_c.len, prompt.len);
         if (checkRateLimit(g_server, prompt_tokens_c)) |retry| {
             send429(stream, retry);
             logRequestDone(method, path, 429, elapsedMs(request_start));
@@ -1377,10 +1391,7 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
         defer if (formatted_rl.ptr != input.ptr) g_server.allocator.free(formatted_rl);
         const prompt_ids_r = g_server.tokenizer.encode(formatted_rl) catch &[_]u32{};
         defer if (prompt_ids_r.len > 0) g_server.allocator.free(prompt_ids_r);
-        // When tokenization fails, use conservative byte-count estimate (1 byte = 1 token)
-        // to prevent rate limiter bypass. This overestimates, but tokenizer failure is
-        // already exceptional — erring on the side of rate limiting is correct.
-        const prompt_tokens_r: u32 = if (prompt_ids_r.len > 0) @intCast(prompt_ids_r.len) else @intCast(@max(1, formatted_rl.len));
+        const prompt_tokens_r = estimatePromptTokens(prompt_ids_r.len, formatted_rl.len);
         if (checkRateLimit(g_server, prompt_tokens_r)) |retry| {
             send429(stream, retry);
             logRequestDone(method, path, 429, elapsedMs(request_start));
@@ -1477,9 +1488,7 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
         const prompt_ids_m = g_server.tokenizer.encode(formatted_m) catch &[_]u32{};
         defer if (prompt_ids_m.len > 0) g_server.allocator.free(prompt_ids_m);
         // When tokenization fails, use conservative byte-count estimate (1 byte = 1 token)
-        // to prevent rate limiter bypass. This overestimates, but tokenizer failure is
-        // already exceptional — erring on the side of rate limiting is correct.
-        const prompt_tokens_m: u32 = if (prompt_ids_m.len > 0) @intCast(prompt_ids_m.len) else @intCast(@max(1, formatted_m.len));
+        const prompt_tokens_m = estimatePromptTokens(prompt_ids_m.len, formatted_m.len);
 
         // Rate limit check
         if (checkRateLimit(g_server, prompt_tokens_m)) |retry| {
@@ -1778,7 +1787,7 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
         // Rate limit check
         const regen_prompt_ids = g_server.tokenizer.encode(regen_formatted) catch &[_]u32{};
         defer if (regen_prompt_ids.len > 0) g_server.allocator.free(regen_prompt_ids);
-        const regen_prompt_tokens: u32 = if (regen_prompt_ids.len > 0) @intCast(regen_prompt_ids.len) else @intCast(@max(1, regen_formatted.len));
+        const regen_prompt_tokens = estimatePromptTokens(regen_prompt_ids.len, regen_formatted.len);
         if (checkRateLimit(g_server, regen_prompt_tokens)) |retry| {
             send429(stream, retry);
             logRequestDone(method, path, 429, elapsedMs(request_start));
@@ -1943,9 +1952,15 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
 
             const need_reset = !g_server.kv_valid;
             const formatted = if (need_reset)
-                g_server.chat_template.formatConversation(g_server.allocator, system_prompt, conv.messages.items) catch trimmed
+                g_server.chat_template.formatConversation(g_server.allocator, system_prompt, conv.messages.items) catch |err| fmt_err: {
+                    std.log.warn("req={d} chat template formatting failed (OOM), using raw input: {}", .{ log_request_id, err });
+                    break :fmt_err trimmed;
+                }
             else
-                g_server.chat_template.formatContinuation(g_server.allocator, trimmed) catch trimmed;
+                g_server.chat_template.formatContinuation(g_server.allocator, trimmed) catch |err| fmt_err: {
+                    std.log.warn("req={d} chat continuation formatting failed (OOM), using raw input: {}", .{ log_request_id, err });
+                    break :fmt_err trimmed;
+                };
             break :blk ChatPrepResult{ .need_reset = need_reset, .formatted = formatted };
         };
         if (prep_result == null) return;
@@ -1956,8 +1971,7 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
         // Rate limit check (matches API endpoint pattern)
         const chat_prompt_ids = g_server.tokenizer.encode(formatted) catch &[_]u32{};
         defer if (chat_prompt_ids.len > 0) g_server.allocator.free(chat_prompt_ids);
-        // When tokenization fails, use conservative byte-count estimate (1 byte = 1 token).
-        const chat_prompt_tokens: u32 = if (chat_prompt_ids.len > 0) @intCast(chat_prompt_ids.len) else @intCast(@max(1, formatted.len));
+        const chat_prompt_tokens = estimatePromptTokens(chat_prompt_ids.len, formatted.len);
         if (checkRateLimit(g_server, chat_prompt_tokens)) |retry| {
             send429(stream, retry);
             logRequestDone(method, path, 429, elapsedMs(request_start));
@@ -2034,8 +2048,7 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
                     logRequestDone(method, path, 405, elapsedMs(request_start));
                     return;
                 };
-            const cors_405: []const u8 = if (g_server.api_key != null) "" else cors_allow_headers;
-            const hdr = std.fmt.bufPrint(&hdr_buf, "HTTP/1.1 405 Method Not Allowed\r\nContent-Type: application/json\r\nContent-Length: {d}\r\nAllow: {s}\r\nX-Request-Id: {d}\r\n{s}" ++ security_headers ++ "Connection: close\r\n\r\n", .{ body.len, ep.allow, log_request_id, cors_405 }) catch return;
+            const hdr = std.fmt.bufPrint(&hdr_buf, "HTTP/1.1 405 Method Not Allowed\r\nContent-Type: application/json\r\nContent-Length: {d}\r\nAllow: {s}\r\nX-Request-Id: {d}\r\n{s}" ++ security_headers ++ "Connection: close\r\n\r\n", .{ body.len, ep.allow, log_request_id, corsHeaders() }) catch return;
             stream.writeAll(hdr) catch |err| {
                 std.log.warn("req={d} 405 write failed: {}", .{ log_request_id, err });
                 return;
@@ -2337,7 +2350,7 @@ fn generateN(formatted: []const u8, reset: bool, max_tokens: usize, sampling: Sa
         }
 
         const gen_end = milliTimestamp();
-        const time_ms = @as(u64, @intCast(@max(gen_end - gen_start, 0)));
+        const time_ms = elapsedBetween(gen_start, gen_end);
         const token_count: u32 = req.visible_len.load(.acquire);
         const tokens_per_sec: f32 = tokensPerSec(token_count, time_ms);
 
@@ -2349,7 +2362,7 @@ fn generateN(formatted: []const u8, reset: bool, max_tokens: usize, sampling: Sa
 
         // Record TTFT from scheduler's per-request prefill timestamp
         if (req.prefill_done_at > 0) {
-            const sched_ttft: u64 = @intCast(@max(req.prefill_done_at - req.enqueued_at, 0));
+            const sched_ttft = elapsedBetween(req.enqueued_at, req.prefill_done_at);
             g_server.metrics.recordTTFT(sched_ttft, prompt_token_count);
         }
         g_server.metrics.recordThroughput(token_count, time_ms);
@@ -2428,7 +2441,7 @@ fn generateN(formatted: []const u8, reset: bool, max_tokens: usize, sampling: Sa
     // Cache the prompt token IDs for next request's prefix matching
     if (g_server.cached_prompt_ids.len > 0) g_server.allocator.free(g_server.cached_prompt_ids);
     g_server.cached_prompt_ids = g_server.allocator.dupe(u32, token_ids) catch &.{};
-    const prefill_ms: u64 = @intCast(@max(milliTimestamp() - prefill_start, 0));
+    const prefill_ms: u64 = elapsedMs(prefill_start);
     const prefill_tps: f32 = tokensPerSec(prompt_token_count, prefill_ms);
     g_server.metrics.recordTTFT(prefill_ms, prompt_token_count);
 
@@ -2741,7 +2754,7 @@ fn generateN(formatted: []const u8, reset: bool, max_tokens: usize, sampling: Sa
     }
 
     const gen_end = milliTimestamp();
-    const time_ms = @as(u64, @intCast(@max(gen_end - gen_start, 0)));
+    const time_ms = elapsedBetween(gen_start, gen_end);
     const tokens_per_sec = tokensPerSec(token_count, time_ms);
     const finish_reason: []const u8 = if (cancelled) "stop" else if (forward_failed) "error" else if (hit_eog) "stop" else "length";
     g_server.metrics.recordThroughput(token_count, time_ms);
@@ -2858,7 +2871,7 @@ fn chatStreamGenerate(stream: TcpStream, formatted: []const u8, reset: bool, max
         }
 
         const gen_end = milliTimestamp();
-        const time_ms = @as(u64, @intCast(@max(gen_end - gen_start, 0)));
+        const time_ms = elapsedBetween(gen_start, gen_end);
         const token_count: u32 = req.visible_len.load(.acquire);
         const tps: f32 = tokensPerSec(token_count, time_ms);
 
@@ -2874,7 +2887,7 @@ fn chatStreamGenerate(stream: TcpStream, formatted: []const u8, reset: bool, max
         // Record TTFT from scheduler's per-request prefill timestamp
         var sched_prefill_ms: u64 = 0;
         if (req.prefill_done_at > 0) {
-            sched_prefill_ms = @intCast(@max(req.prefill_done_at - req.enqueued_at, 0));
+            sched_prefill_ms = elapsedBetween(req.enqueued_at, req.prefill_done_at);
             g_server.metrics.recordTTFT(sched_prefill_ms, prompt_token_count);
         }
         g_server.metrics.recordThroughput(token_count, time_ms);
@@ -2930,7 +2943,7 @@ fn chatStreamGenerate(stream: TcpStream, formatted: []const u8, reset: bool, max
             return .{ .data = g_server.allocator.dupe(u8, "[prefill error]") catch &.{}, .finish_reason = "error", .stats = zero_stats };
         };
     }
-    const prefill_ms: u64 = @intCast(@max(milliTimestamp() - prefill_start, 0));
+    const prefill_ms: u64 = elapsedMs(prefill_start);
     const prefill_tps: f32 = tokensPerSec(prompt_token_count, prefill_ms);
     g_server.metrics.recordTTFT(prefill_ms, prompt_token_count);
 
@@ -2981,7 +2994,7 @@ fn chatStreamGenerate(stream: TcpStream, formatted: []const u8, reset: bool, max
     }
 
     const gen_end = milliTimestamp();
-    const time_ms = @as(u64, @intCast(@max(gen_end - gen_start, 0)));
+    const time_ms = elapsedBetween(gen_start, gen_end);
     const tps: f32 = tokensPerSec(token_count, time_ms);
     g_server.metrics.recordThroughput(token_count, time_ms);
     g_server.metrics.recordTPOT(token_count, time_ms);
@@ -3105,8 +3118,7 @@ fn sendAnthropic429(stream: TcpStream, retry_after: u32) void {
         return;
     };
     var hdr_buf: [hdr_buf_size]u8 = undefined;
-    const cors_a429: []const u8 = if (g_server.api_key != null) "" else cors_allow_headers;
-    const hdr = std.fmt.bufPrint(&hdr_buf, "HTTP/1.1 429 Too Many Requests\r\nContent-Type: application/json\r\nContent-Length: {d}\r\nRetry-After: {d}\r\nX-Request-Id: {d}\r\n{s}" ++ security_headers ++ "Connection: close\r\n\r\n", .{ body.len, retry_after, log_request_id, cors_a429 }) catch {
+    const hdr = std.fmt.bufPrint(&hdr_buf, "HTTP/1.1 429 Too Many Requests\r\nContent-Type: application/json\r\nContent-Length: {d}\r\nRetry-After: {d}\r\nX-Request-Id: {d}\r\n{s}" ++ security_headers ++ "Connection: close\r\n\r\n", .{ body.len, retry_after, log_request_id, corsHeaders() }) catch {
         std.log.warn("req={d} anthropic 429 header format failed", .{log_request_id});
         return;
     };
@@ -3220,14 +3232,14 @@ fn generateAnthropicStream(stream: TcpStream, formatted: []const u8, max_tokens:
         }
 
         const gen_end = milliTimestamp();
-        const time_ms = @as(u64, @intCast(@max(gen_end - gen_start, 0)));
+        const time_ms = elapsedBetween(gen_start, gen_end);
         const tps: f32 = tokensPerSec(token_count, time_ms);
         logGeneration(token_count, time_ms, tps);
         g_server.metrics.recordLatency(time_ms);
         g_server.metrics.recordTokens(token_count);
         // Record TTFT from scheduler's per-request prefill timestamp
         if (req.prefill_done_at > 0) {
-            const anth_ttft: u64 = @intCast(@max(req.prefill_done_at - req.enqueued_at, 0));
+            const anth_ttft = elapsedBetween(req.enqueued_at, req.prefill_done_at);
             g_server.metrics.recordTTFT(anth_ttft, input_tokens);
         }
         g_server.metrics.recordThroughput(token_count, time_ms);
@@ -3377,7 +3389,7 @@ fn generateAnthropicStream(stream: TcpStream, formatted: []const u8, max_tokens:
     }
 
     const gen_end = milliTimestamp();
-    const time_ms = @as(u64, @intCast(@max(gen_end - gen_start, 0)));
+    const time_ms = elapsedBetween(gen_start, gen_end);
     const tps: f32 = tokensPerSec(token_count, time_ms);
     logGeneration(token_count, time_ms, tps);
     g_server.metrics.recordThroughput(token_count, time_ms);
@@ -3605,14 +3617,14 @@ fn generateResponsesStream(stream: TcpStream, prompt: []const u8, max_tokens: us
         }
 
         const gen_end = milliTimestamp();
-        const time_ms = @as(u64, @intCast(@max(gen_end - gen_start, 0)));
+        const time_ms = elapsedBetween(gen_start, gen_end);
         const tps: f32 = tokensPerSec(token_count, time_ms);
         logGeneration(token_count, time_ms, tps);
         g_server.metrics.recordLatency(time_ms);
         g_server.metrics.recordTokens(token_count);
         // Record TTFT from scheduler's per-request prefill timestamp
         if (req.prefill_done_at > 0) {
-            const resp_ttft: u64 = @intCast(@max(req.prefill_done_at - req.enqueued_at, 0));
+            const resp_ttft = elapsedBetween(req.enqueued_at, req.prefill_done_at);
             g_server.metrics.recordTTFT(resp_ttft, input_tokens);
         }
         g_server.metrics.recordThroughput(token_count, time_ms);
@@ -3781,7 +3793,7 @@ fn generateResponsesStream(stream: TcpStream, prompt: []const u8, max_tokens: us
     }
 
     const gen_end = milliTimestamp();
-    const time_ms = @as(u64, @intCast(@max(gen_end - gen_start, 0)));
+    const time_ms = elapsedBetween(gen_start, gen_end);
     const tps: f32 = tokensPerSec(token_count, time_ms);
     logGeneration(token_count, time_ms, tps);
     g_server.metrics.recordThroughput(token_count, time_ms);
@@ -3858,7 +3870,10 @@ fn startStreamWithTools(stream: TcpStream, prompt: []const u8, max_tokens: usize
             const name = json.extractField(tc_json, "name") orelse continue;
             const args = json.extractObjectField(tc_json, "arguments") orelse
                 (json.extractField(tc_json, "arguments") orelse "{}");
-            const escaped_args = json.jsonEscape(g_server.allocator, args) catch args[0..0];
+            const escaped_args = json.jsonEscape(g_server.allocator, args) catch {
+                std.log.warn("req={d} tool call argument escaping failed (OOM), skipping tool call", .{log_request_id});
+                continue;
+            };
             defer if (escaped_args.ptr != args.ptr) g_server.allocator.free(escaped_args);
 
             // First chunk: role + tool call header
@@ -4123,14 +4138,14 @@ fn generateStream(stream: TcpStream, prompt: []const u8, req_id: u64, created: i
         }
 
         const gen_end = milliTimestamp();
-        const time_ms = @as(u64, @intCast(@max(gen_end - gen_start, 0)));
+        const time_ms = elapsedBetween(gen_start, gen_end);
         const tps: f32 = tokensPerSec(token_count, time_ms);
         logGeneration(token_count, time_ms, tps);
         g_server.metrics.recordLatency(time_ms);
         g_server.metrics.recordTokens(token_count);
         // Record TTFT from scheduler's per-request prefill timestamp
         if (req.prefill_done_at > 0) {
-            const openai_ttft: u64 = @intCast(@max(req.prefill_done_at - req.enqueued_at, 0));
+            const openai_ttft = elapsedBetween(req.enqueued_at, req.prefill_done_at);
             g_server.metrics.recordTTFT(openai_ttft, @intCast(token_ids.len));
         }
         g_server.metrics.recordThroughput(token_count, time_ms);
@@ -4220,7 +4235,7 @@ fn generateStream(stream: TcpStream, prompt: []const u8, req_id: u64, created: i
             return;
         };
     }
-    const stream_prefill_ms: u64 = @intCast(@max(milliTimestamp() - prefill_start, 0));
+    const stream_prefill_ms: u64 = elapsedMs(prefill_start);
     g_server.metrics.recordTTFT(stream_prefill_ms, @intCast(token_ids.len));
     const s_vocab_texts = g_server.tokenizer.getVocabTexts();
     // Grammar masking on first token
@@ -4466,7 +4481,7 @@ fn generateStream(stream: TcpStream, prompt: []const u8, req_id: u64, created: i
     }
 
     const gen_end = milliTimestamp();
-    const time_ms = @as(u64, @intCast(@max(gen_end - gen_start, 0)));
+    const time_ms = elapsedBetween(gen_start, gen_end);
     const tps: f32 = tokensPerSec(token_count, time_ms);
     logGeneration(token_count, time_ms, tps);
     g_server.metrics.recordThroughput(token_count, time_ms);
@@ -4585,10 +4600,10 @@ pub fn run(config: ServerConfig) !void {
     defer if (model_name_buf) |b| allocator.free(b);
     const safe_model_name: []const u8 = blk: {
         for (model_name) |c| {
-            if (c == '"' or c == '\\' or c < 0x20 or c == '<' or c == '>' or c == '&') {
+            if (isUnsafeJsonChar(c)) {
                 const buf = allocator.alloc(u8, model_name.len) catch break :blk model_name;
                 for (buf, model_name) |*d, sc| {
-                    d.* = if (sc == '"' or sc == '\\' or sc < 0x20 or sc == '<' or sc == '>' or sc == '&') '_' else sc;
+                    d.* = if (isUnsafeJsonChar(sc)) '_' else sc;
                 }
                 model_name_buf = buf;
                 break :blk buf;

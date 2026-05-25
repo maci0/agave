@@ -757,6 +757,7 @@ pub const WebGpuBackend = struct {
             cached.generation = self.upload_generation;
         } else {
             self.buf_cache.put(key, .{ .buffer = buf, .size = size, .generation = self.upload_generation }) catch {
+                std.log.warn("WebGPU buffer cache insert failed (OOM), falling back to uncached path", .{});
                 self.downloadF32(buf, ptr, size / @sizeOf(f32));
                 self.fn_buffer_destroy(buf);
                 return;

@@ -18,6 +18,9 @@ __pycache__/
 # Review / planning outputs (not needed in image)
 outputs/
 .planning/
+notes/
+progress.md
+scripts/
 
 # IDE / tools
 .opencode/
