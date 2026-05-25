@@ -173,6 +173,7 @@ pub fn build(b: *std.Build) void {
     if (link_metal) {
         mod_rel.linkFramework("Metal", .{});
         mod_rel.linkFramework("Foundation", .{});
+        mod_rel.linkFramework("Accelerate", .{});
     }
     b.installArtifact(exe_rel);
 
@@ -189,6 +190,7 @@ pub fn build(b: *std.Build) void {
     if (link_metal) {
         mod_dbg.linkFramework("Metal", .{});
         mod_dbg.linkFramework("Foundation", .{});
+        mod_dbg.linkFramework("Accelerate", .{});
     }
     b.installArtifact(exe_dbg);
 
@@ -257,6 +259,7 @@ pub fn build(b: *std.Build) void {
         if (link_metal) {
             mod.linkFramework("Metal", .{});
             mod.linkFramework("Foundation", .{});
+            mod.linkFramework("Accelerate", .{});
         }
         test_step.dependOn(&b.addRunArtifact(t).step);
     }
@@ -275,6 +278,7 @@ pub fn build(b: *std.Build) void {
         if (link_metal) {
             mod.linkFramework("Metal", .{});
             mod.linkFramework("Foundation", .{});
+            mod.linkFramework("Accelerate", .{});
         }
         test_step.dependOn(&b.addRunArtifact(t).step);
     }
@@ -299,6 +303,7 @@ pub fn build(b: *std.Build) void {
     if (link_metal) {
         mod_bench.linkFramework("Metal", .{});
         mod_bench.linkFramework("Foundation", .{});
+        mod_bench.linkFramework("Accelerate", .{});
     }
     b.installArtifact(exe_bench);
 

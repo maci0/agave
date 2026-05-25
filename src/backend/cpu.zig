@@ -668,6 +668,14 @@ pub const CpuBackend = struct {
     /// GEMM: Y[n_tok × n_out] = X[n_tok × n_in] @ W[n_out × n_in]^T.
     /// Each token's GEMV dispatches through the thread pool for parallelism.
     pub fn gemm(self: *CpuBackend, x: [*]const f32, w: TensorData, y: [*]f32, n_tok: usize, n_out: usize, n_in: usize) void {
+        // Accelerate.framework: full SGEMM for F32 weights (AMX-accelerated, ~4× faster)
+        if (comptime builtin.os.tag == .macos) {
+            if (w.dtype == .f32) {
+                const accel = @import("accelerate.zig");
+                accel.sgemm(n_tok, n_out, n_in, x, @ptrCast(@alignCast(w.data)), y);
+                return;
+            }
+        }
         for (0..n_tok) |t| {
             self.gemv(x + t * n_in, w, y + t * n_out, n_out, n_in);
         }

@@ -39,11 +39,14 @@ pub const gemvQ5_0 = gemv_q_small.gemvQ5_0;
 pub const gemvQ2_K = gemv_q_small.gemvQ2_K;
 pub const gemvQ3_K = gemv_q_small.gemvQ3_K;
 
+const builtin = @import("builtin");
 const backend_mod = @import("../../backend.zig");
+const accelerate = if (builtin.os.tag == .macos) @import("../../../backend/accelerate.zig") else struct {};
 
 pub const gemvRowBytes = backend_mod.gemvRowBytes;
 
 /// Sequential GEMV — dispatches to the appropriate quantized kernel.
+/// F32 on macOS uses Accelerate.framework (AMX-accelerated) for ~4× speedup.
 pub fn gemvSeq(x: [*]const f32, w_data: [*]const u8, dtype: DType, y: [*]f32, n: usize, k: usize) void {
     switch (dtype) {
         .q4_0 => gemvQ4_0(x, w_data, y, n, k),
@@ -53,7 +56,10 @@ pub fn gemvSeq(x: [*]const f32, w_data: [*]const u8, dtype: DType, y: [*]f32, n:
         .q6_k => gemvQ6_K(x, w_data, y, n, k),
         .q8_0 => gemvQ8_0(x, w_data, y, n, k),
         .f16 => gemvF16(x, @ptrCast(@alignCast(w_data)), y, n, k),
-        .f32 => gemvF32(x, @ptrCast(@alignCast(w_data)), y, n, k),
+        .f32 => if (comptime builtin.os.tag == .macos)
+            accelerate.sgemv(n, k, x, @ptrCast(@alignCast(w_data)), y)
+        else
+            gemvF32(x, @ptrCast(@alignCast(w_data)), y, n, k),
         .bf16 => gemvBF16(x, w_data, y, n, k),
         .mxfp4 => gemvMXFP4(x, w_data, y, n, k),
         .q2_k => gemvQ2_K(x, w_data, y, n, k),
