@@ -855,12 +855,12 @@ const Llama4Model = if (build_options.enable_llama4) @import("llama4.zig").Llama
 // ── Tests ─────────────────────────────────────────────────────────
 
 test "expertWeightStride f32 2x2 layout" {
-    // GGUF 3D expert tensor: dims = [cols, rows, n_experts].
-    // Per-expert stride = dims[0] * dims[1] elements × sizeof(dtype).
+    // GGUF 3D expert tensor: dims = [n_experts, rows, cols].
+    // Per-expert stride = dims[1] * dims[2] elements × sizeof(dtype).
     const t = format_mod.TensorInfo{
         .name = "test",
         .n_dims = 3,
-        .dims = .{ 4, 4, 2, 0 }, // 4 cols × 4 rows × 2 experts
+        .dims = .{ 2, 4, 4, 0 }, // 2 experts × 4 rows × 4 cols
         .dtype = .f32,
         .data_ptr = undefined,
     };
