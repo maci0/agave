@@ -8,6 +8,7 @@
 const std = @import("std");
 const quant = @import("../../../ops/quant.zig");
 const backend_mod = @import("../../backend.zig");
+const gemv_common = @import("gemv.zig");
 const V8 = @Vector(8, f32);
 const v8zero: V8 = @splat(0.0);
 const V8u = @Vector(8, u8);
@@ -39,6 +40,10 @@ pub fn gemvQ4_K(x: [*]const f32, w: [*]const u8, y: [*]f32, n: usize, k: usize) 
         const rp1 = w + (row + 1) * row_bytes;
 
         for (0..nb) |b| {
+            // Sparse skip: if all 256 input values in this super-block are near-zero,
+            // skip the entire block (saves dequant + 256 MAC operations).
+            if (gemv_common.isBlockSparse(x, b * bs, bs)) continue;
+
             const bp0 = rp0 + b * bpb;
             const bp1 = rp1 + b * bpb;
             const d_0: f32 = @floatCast(@as(f16, @bitCast(std.mem.readInt(u16, bp0[0..2], .little))));
@@ -159,6 +164,7 @@ pub fn gemvQ4_K(x: [*]const f32, w: [*]const u8, y: [*]f32, n: usize, k: usize) 
         var sum: f32 = 0.0;
         const rp = w + row * row_bytes;
         for (0..nb) |b| {
+            if (gemv_common.isBlockSparse(x, b * bs, bs)) continue;
             const bp = rp + b * bpb;
             const d: f32 = @floatCast(@as(f16, @bitCast(std.mem.readInt(u16, bp[0..2], .little))));
             const dmin: f32 = @floatCast(@as(f16, @bitCast(std.mem.readInt(u16, bp[2..4], .little))));
