@@ -111,7 +111,7 @@ All quantized GEMV formats native on all 6 backends. See [KERNELS.md](KERNELS.md
 | 23 | Nostr-based discovery | Mesh-LLM |
 | 24 | RDMA over Thunderbolt 5 | Exo |
 | 25 | Inter-model collaboration (MoM) | Mesh-LLM |
-| 26 | Sparse GEMV (skip near-zero FFN activations, ~40% sparsity measured) | PowerInfer/TurboSparse |
+| ~~26~~ | ~~Sparse GEMV (skip near-zero FFN activations, ~40% sparsity measured)~~ | Done (CPU +21%, Metal +12%) |
 | 27 | DeepSeek V4 support (mHC hyper-connections, CSA/HCA attention) | — |
 
 ---
