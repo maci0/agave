@@ -193,6 +193,15 @@ kernel void gemv_q4_0(
         float4 x6 = *(device const float4*)(x + bk + 24);
         float4 x7 = *(device const float4*)(x + bk + 28);
 
+        // Sparse skip: check if all 32 input values are near-zero
+        float4 a0 = abs(x0), a1 = abs(x1), a2 = abs(x2), a3 = abs(x3);
+        float4 a4 = abs(x4), a5 = abs(x5), a6 = abs(x6), a7 = abs(x7);
+        float bmax = max(max(max(max(a0.x,a0.y),max(a0.z,a0.w)), max(max(a1.x,a1.y),max(a1.z,a1.w))),
+                         max(max(max(a2.x,a2.y),max(a2.z,a2.w)), max(max(a3.x,a3.y),max(a3.z,a3.w))));
+        bmax = max(bmax, max(max(max(max(a4.x,a4.y),max(a4.z,a4.w)), max(max(a5.x,a5.y),max(a5.z,a5.w))),
+                              max(max(max(a6.x,a6.y),max(a6.z,a6.w)), max(max(a7.x,a7.y),max(a7.z,a7.w)))));
+        if (bmax < 0.005f) continue;
+
         // Fully unrolled: each row is independent, compiler can schedule freely
         sum0 += q4_0_block_dot(W[row_base * nb + b], x0, x1, x2, x3, x4, x5, x6, x7);
         if (nr_active > 1)
@@ -255,6 +264,15 @@ kernel void gemv_q4_1(
         float block_sum = 0.0f;
         float x_sum = 0.0f; // sum of x for min offset
         uint bk = b * 32;
+
+        // Sparse skip: check if all 32 input values are near-zero
+        float bmax = 0.0f;
+        for (uint i = 0; i < 32; i += 4) {
+            float4 v = abs(*(device const float4*)(x + bk + i));
+            bmax = max(bmax, max(max(v.x, v.y), max(v.z, v.w)));
+        }
+        if (bmax < 0.005f) continue;
+
         for (uint j = 0; j < 16; j += 4) {
             float4 lo = float4(float(blk.qs[j  ] & 0xF),
                                float(blk.qs[j+1] & 0xF),
@@ -750,6 +768,16 @@ kernel void gemv_q2_k(
 
     for (uint b = tid; b < nb; b += tg_size) {
         uint bk = b * bs;
+
+        // Sparse skip: check if all 256 input values are near-zero
+        float bmax = 0.0f;
+        uint check_end = min(bs, k - bk);
+        for (uint i = 0; i < check_end; i += 4) {
+            float4 v = abs(*(device const float4*)(x + bk + i));
+            bmax = max(bmax, max(max(v.x, v.y), max(v.z, v.w)));
+        }
+        if (bmax < 0.005f) continue;
+
         sum0 += q2_k_block_dot(W + (row_base * nb + b) * bpb, x, k, bk);
         if (nr_active > 1)
             sum1 += q2_k_block_dot(W + ((row_base + 1) * nb + b) * bpb, x, k, bk);
@@ -789,10 +817,19 @@ kernel void gemv_q5_0(
 
     for (uint b = tid; b < nb; b += tg_size) {
         device const uchar* bp = W + (tgid * nb + b) * bpb;
+        uint bk = b * qk;
+
+        // Sparse skip: check if all 32 input values are near-zero
+        float bmax = 0.0f;
+        for (uint i = 0; i < 32; i += 4) {
+            float4 v = abs(*(device const float4*)(x + bk + i));
+            bmax = max(bmax, max(max(v.x, v.y), max(v.z, v.w)));
+        }
+        if (bmax < 0.005f) continue;
+
         float d = float(as_type<half>(ushort(bp[0] | (uint(bp[1]) << 8))));
         uint qh = uint(bp[2]) | (uint(bp[3]) << 8) | (uint(bp[4]) << 16) | (uint(bp[5]) << 24);
         device const uchar* qs = bp + 6;
-        uint bk = b * qk;
         float block_sum = 0.0f;
 
         for (uint j = 0; j < 16; j++) {
@@ -873,6 +910,16 @@ kernel void gemv_q3_k(
 
     for (uint b = tid; b < nb; b += tg_size) {
         uint bk = b * bs;
+
+        // Sparse skip: check if all 256 input values are near-zero
+        float bmax = 0.0f;
+        uint check_end = min(bs, k - bk);
+        for (uint i = 0; i < check_end; i += 4) {
+            float4 v = abs(*(device const float4*)(x + bk + i));
+            bmax = max(bmax, max(max(v.x, v.y), max(v.z, v.w)));
+        }
+        if (bmax < 0.005f) continue;
+
         sum0 += q3_k_block_dot(W + (row_base * nb + b) * bpb, x, k, bk);
         if (nr_active > 1)
             sum1 += q3_k_block_dot(W + ((row_base + 1) * nb + b) * bpb, x, k, bk);
@@ -964,6 +1011,16 @@ kernel void gemv_q6_k(
 
     for (uint b = tid; b < nb; b += tg_size) {
         uint bk = b * bs;
+
+        // Sparse skip: check if all 256 input values are near-zero
+        float bmax = 0.0f;
+        uint check_end = min(bs, k - bk);
+        for (uint i = 0; i < check_end; i += 4) {
+            float4 v = abs(*(device const float4*)(x + bk + i));
+            bmax = max(bmax, max(max(v.x, v.y), max(v.z, v.w)));
+        }
+        if (bmax < 0.005f) continue;
+
         sum0 += q6_k_block_dot(W + (row_base * nb + b) * bpb, x, k, bk);
         if (nr_active > 1)
             sum1 += q6_k_block_dot(W + ((row_base + 1) * nb + b) * bpb, x, k, bk);
@@ -1052,6 +1109,16 @@ kernel void gemv_q5_k(
 
     for (uint b = tid; b < nb; b += tg_size) {
         uint bk = b * bs;
+
+        // Sparse skip: check if all 256 input values are near-zero
+        float bmax = 0.0f;
+        uint check_end = min(bs, k - bk);
+        for (uint i = 0; i < check_end; i += 4) {
+            float4 v = abs(*(device const float4*)(x + bk + i));
+            bmax = max(bmax, max(max(v.x, v.y), max(v.z, v.w)));
+        }
+        if (bmax < 0.005f) continue;
+
         sum0 += q5_k_block_dot(W + (row_base * nb + b) * bpb, x, k, bk);
         if (nr_active > 1)
             sum1 += q5_k_block_dot(W + ((row_base + 1) * nb + b) * bpb, x, k, bk);
@@ -1425,8 +1492,17 @@ kernel void gemv_iq4_nl(
 
     for (uint b = tid; b < nb; b += tg_size) {
         device const block_iq4_nl& blk = W[tgid * nb + b];
-        float d = float(blk.d);
         uint bk = b * 32;
+
+        // Sparse skip: check if all 32 input values are near-zero
+        float bmax = 0.0f;
+        for (uint i = 0; i < 32; i += 4) {
+            float4 v = abs(*(device const float4*)(x + bk + i));
+            bmax = max(bmax, max(max(v.x, v.y), max(v.z, v.w)));
+        }
+        if (bmax < 0.005f) continue;
+
+        float d = float(blk.d);
         float block_sum = 0.0f;
         for (uint j = 0; j < 16; j += 4) {
             float4 lo = float4(iq4nl_lut[blk.qs[j]   & 0xF],
@@ -1474,11 +1550,21 @@ kernel void gemv_iq4_xs(
 
     for (uint b = tid; b < nb; b += tg_size) {
         device const uchar* bp = W + (tgid * nb + b) * bpb;
+        uint bk = b * bs;
+
+        // Sparse skip: check if all 256 input values are near-zero
+        float bmax = 0.0f;
+        uint check_end = min(bs, k - bk);
+        for (uint i = 0; i < check_end; i += 4) {
+            float4 v = abs(*(device const float4*)(x + bk + i));
+            bmax = max(bmax, max(max(v.x, v.y), max(v.z, v.w)));
+        }
+        if (bmax < 0.005f) continue;
+
         float d = float(as_type<half>(ushort(bp[0] | (uint(bp[1]) << 8))));
         uint scales_h = uint(bp[2]) | (uint(bp[3]) << 8);
         device const uchar* scales_l = bp + 4;
         device const uchar* qs = bp + 8;
-        uint bk = b * bs;
 
         for (uint sb = 0; sb < 8; sb++) {
             uint lo4 = (sb % 2 == 0) ? (scales_l[sb / 2] & 0xF) : (scales_l[sb / 2] >> 4);

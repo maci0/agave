@@ -23,6 +23,16 @@ void main() {
     float sum = 0.0;
 
     for (uint b = tid; b < nb; b += tg_size) {
+        uint bk = b * 32;
+
+        // Sparse skip: check if all 32 input values are near-zero
+        float bmax = 0.0;
+        for (uint i = 0; i < 32; i += 4) {
+            vec4 v = abs(vec4(x[bk+i], x[bk+i+1], x[bk+i+2], x[bk+i+3]));
+            bmax = max(bmax, max(max(v.x, v.y), max(v.z, v.w)));
+        }
+        if (bmax < 0.005) continue;
+
         uint block_byte_off = row * nb * 18 + b * 18;
         uint word_off = block_byte_off / 4;
         uint byte_in_word = block_byte_off % 4;
@@ -33,7 +43,6 @@ void main() {
         float d = unpackHalf2x16(scale_bits).x;
 
         float block_sum = 0.0;
-        uint bk = b * 32;
 
         // 16 packed bytes → 32 nibbles
         for (uint j = 0; j < 16; j++) {

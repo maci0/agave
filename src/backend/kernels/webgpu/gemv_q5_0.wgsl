@@ -56,12 +56,20 @@ fn main(
     var acc: f32 = 0.0;
     var blk = tid;
     while (blk < nb) {
+        let bk = blk * BLOCK_ELEMS;
+
+        // Sparse skip: check if all 32 input values are near-zero
+        var bmax: f32 = 0.0;
+        for (var i = 0u; i < BLOCK_ELEMS; i += 4u) {
+            let v = abs(vec4<f32>(x[bk+i], x[bk+i+1u], x[bk+i+2u], x[bk+i+3u]));
+            bmax = max(bmax, max(max(v.x, v.y), max(v.z, v.w)));
+        }
+        if (bmax < 0.005) { blk += WG_SIZE; continue; }
+
         let block_byte_off = row * nb * BLOCK_BYTES + blk * BLOCK_BYTES;
 
         let d = unpack2x16float(read_u16_unaligned(block_byte_off)).x;
         let qh = read_u32_unaligned(block_byte_off + 2u);
-
-        let bk = blk * BLOCK_ELEMS;
         var block_sum: f32 = 0.0;
 
         for (var j: u32 = 0u; j < 16u; j++) {

@@ -39,13 +39,23 @@ void main() {
     float sum = 0.0;
 
     for (uint b = tid; b < nb; b += tg_size) {
+        uint bk = b * bs;
+
+        // Sparse skip: check if all 256 input values are near-zero
+        float bmax = 0.0;
+        uint check_end = min(bs, k - bk);
+        for (uint i = 0; i < check_end; i += 4) {
+            vec4 v = abs(vec4(x[bk+i], x[bk+i+1], x[bk+i+2], x[bk+i+3]));
+            bmax = max(bmax, max(max(v.x, v.y), max(v.z, v.w)));
+        }
+        if (bmax < 0.005) continue;
+
         uint bp = (row * nb + b) * bpb;
         float d    = unpackHalf2x16(readByte(bp) | (readByte(bp + 1) << 8)).x;
         float dmin = unpackHalf2x16(readByte(bp + 2) | (readByte(bp + 3) << 8)).x;
         uint scales_off = bp + 4;
         uint qh_off = bp + 16;
         uint qs_off = bp + 48;
-        uint bk = b * bs;
 
         uint is_val = 0;
         uint ql_off = 0;

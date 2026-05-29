@@ -29,6 +29,16 @@ void main() {
 
     // Each thread processes blocks in stride
     for (uint b = tid; b < nb; b += tg_size) {
+        uint bk = b * 32;
+
+        // Sparse skip: check if all 32 input values are near-zero
+        float bmax = 0.0;
+        for (uint i = 0; i < 32; i += 4) {
+            vec4 v = abs(vec4(x[bk+i], x[bk+i+1], x[bk+i+2], x[bk+i+3]));
+            bmax = max(bmax, max(max(v.x, v.y), max(v.z, v.w)));
+        }
+        if (bmax < 0.005) continue;
+
         // Read scale from first 2 bytes of block
         uint block_byte_off = row * nb * 34 + b * 34;
         uint word_off = block_byte_off / 4;
@@ -40,7 +50,6 @@ void main() {
         float d = unpackHalf2x16(scale_bits).x;
 
         float block_sum = 0.0;
-        uint bk = b * 32;
         for (uint j = 0; j < 32 && bk + j < k; j++) {
             uint qbyte_off = block_byte_off + 2 + j;
             uint qword = w_raw[qbyte_off / 4];

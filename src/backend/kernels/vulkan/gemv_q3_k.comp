@@ -40,9 +40,19 @@ void main() {
     float sum = 0.0;
 
     for (uint b = tid; b < nb; b += tg_size) {
+        uint bk = b * 256;
+
+        // Sparse skip: check if all 256 input values are near-zero
+        float bmax = 0.0;
+        uint check_end = min(256u, k - bk);
+        for (uint i = 0; i < check_end; i += 4) {
+            vec4 v = abs(vec4(x[bk+i], x[bk+i+1], x[bk+i+2], x[bk+i+3]));
+            bmax = max(bmax, max(max(v.x, v.y), max(v.z, v.w)));
+        }
+        if (bmax < 0.005) continue;
+
         uint bp = row * nb * 110 + b * 110;
         float d = readF16(bp + 108);
-        uint bk = b * 256;
 
         for (uint g = 0; g < 16; g++) {
             uint base = bk + g * 16;

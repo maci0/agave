@@ -55,6 +55,16 @@ fn main(
     var sum: f32 = 0.0;
 
     for (var b = tid; b < nb; b += WG_SIZE) {
+        let bk = b * BLOCK_SIZE;
+
+        // Sparse skip: check if all 32 input values are near-zero
+        var bmax: f32 = 0.0;
+        for (var i = 0u; i < BLOCK_SIZE; i += 4u) {
+            let v = abs(vec4<f32>(x[bk+i], x[bk+i+1u], x[bk+i+2u], x[bk+i+3u]));
+            bmax = max(bmax, max(max(v.x, v.y), max(v.z, v.w)));
+        }
+        if (bmax < 0.005) { continue; }
+
         // Locate this block in the raw byte stream
         let block_byte_off = row * nb * BLOCK_BYTES + b * BLOCK_BYTES;
         let word_off = block_byte_off / 4u;
@@ -76,7 +86,6 @@ fn main(
 
         // Process 32 int8 quantized values
         var block_sum: f32 = 0.0;
-        let bk = b * BLOCK_SIZE;
         for (var j = 0u; j < BLOCK_SIZE; j++) {
             if (bk + j >= params.k) {
                 break;

@@ -35,11 +35,21 @@ void main() {
     float sum = 0.0;
 
     for (uint b = tid; b < nb; b += tg_size) {
+        uint bk = b * bs;
+
+        // Sparse skip: check if all 256 input values are near-zero
+        float bmax = 0.0;
+        uint check_end = min(bs, k - bk);
+        for (uint i = 0; i < check_end; i += 4) {
+            vec4 v = abs(vec4(x[bk+i], x[bk+i+1], x[bk+i+2], x[bk+i+3]));
+            bmax = max(bmax, max(max(v.x, v.y), max(v.z, v.w)));
+        }
+        if (bmax < 0.005) continue;
+
         uint bp = (row * nb + b) * bpb;
         uint d_off = bp + 208;
         uint d_bits = readByte(d_off) | (readByte(d_off + 1) << 8);
         float d = unpackHalf2x16(d_bits).x;
-        uint bk = b * bs;
 
         for (uint chunk = 0; chunk < 2; chunk++) {
             uint ql_off = bp + chunk * 64;

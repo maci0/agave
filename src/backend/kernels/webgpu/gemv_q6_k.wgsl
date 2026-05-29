@@ -47,9 +47,19 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>, @builtin(local_invocation_id) l
     var sum: f32 = 0.0;
 
     for (var b = tid; b < nb; b += WG_SIZE) {
+        let bk = b * BLOCK_SIZE;
+
+        // Sparse skip: check if all 256 input values are near-zero
+        var bmax: f32 = 0.0;
+        let check_end = min(BLOCK_SIZE, params.k - bk);
+        for (var i = 0u; i < check_end; i += 4u) {
+            let v = abs(vec4<f32>(x[bk+i], x[bk+i+1u], x[bk+i+2u], x[bk+i+3u]));
+            bmax = max(bmax, max(max(v.x, v.y), max(v.z, v.w)));
+        }
+        if (bmax < 0.005) { continue; }
+
         let bp = row * nb * BLOCK_BYTES + b * BLOCK_BYTES;
         let d = read_f16(bp, 208u);
-        let bk = b * BLOCK_SIZE;
 
         // 2 chunks of 128 elements each
         for (var chunk = 0u; chunk < 2u; chunk++) {

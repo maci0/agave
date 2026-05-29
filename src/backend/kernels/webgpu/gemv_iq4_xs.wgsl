@@ -45,10 +45,20 @@ fn main(@builtin(workgroup_id) wg: vec3<u32>, @builtin(local_invocation_id) lid:
 
     var blk = tid;
     while (blk < nb) {
+        let bk = blk * 256u;
+
+        // Sparse skip: check if all 256 input values are near-zero
+        var bmax: f32 = 0.0;
+        let check_end = min(256u, params.k - bk);
+        for (var i = 0u; i < check_end; i += 4u) {
+            let v = abs(vec4<f32>(x[bk+i], x[bk+i+1u], x[bk+i+2u], x[bk+i+3u]));
+            bmax = max(bmax, max(max(v.x, v.y), max(v.z, v.w)));
+        }
+        if (bmax < 0.005) { blk += WG_SIZE; continue; }
+
         let bp = row * nb * 136u + blk * 136u;
         let d = rf16(bp);
         let scales_h = ru16(bp + 2u);
-        let bk = blk * 256u;
 
         for (var sb: u32 = 0u; sb < 8u; sb++) {
             let sl_byte = rb(bp + 4u + sb / 2u);

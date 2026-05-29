@@ -45,6 +45,16 @@ fn main(
     var acc: f32 = 0.0;
     var blk = tid;
     while (blk < nb) {
+        let bk = blk * BLOCK_ELEMS;
+
+        // Sparse skip: check if all 32 input values are near-zero
+        var bmax: f32 = 0.0;
+        for (var i = 0u; i < BLOCK_ELEMS; i += 4u) {
+            let v = abs(vec4<f32>(x[bk+i], x[bk+i+1u], x[bk+i+2u], x[bk+i+3u]));
+            bmax = max(bmax, max(max(v.x, v.y), max(v.z, v.w)));
+        }
+        if (bmax < 0.005) { blk += WG_SIZE; continue; }
+
         let base = row_word_offset + blk * words_per_block;
 
         // Word 0: low 16 bits = f16 scale (d), high 16 bits = f16 min (m)
@@ -53,7 +63,6 @@ fn main(
         let m_f16 = unpack2x16float(header >> 16u).x;
 
         // Words 1-4: 16 nibble-packed bytes (32 elements)
-        let bk = blk * BLOCK_ELEMS;
         var qx_sum: f32 = 0.0;
         var x_sum: f32 = 0.0;
 

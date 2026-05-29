@@ -46,11 +46,21 @@ void main() {
 
     for (uint b = tid; b < nb; b += tg_size) {
         uint bp = (row * nb + b) * bpb;
+        uint bk = b * bs;
+
+        // Sparse skip: check if all 256 input values are near-zero
+        float bmax = 0.0;
+        uint check_end = min(bs, k - bk);
+        for (uint i = 0; i < check_end; i += 4) {
+            vec4 v = abs(vec4(x[bk+i], x[bk+i+1], x[bk+i+2], x[bk+i+3]));
+            bmax = max(bmax, max(max(v.x, v.y), max(v.z, v.w)));
+        }
+        if (bmax < 0.005) continue;
+
         float d    = unpackHalf2x16(readU16(bp)).x;
         float dmin = unpackHalf2x16(readU16(bp + 2)).x;
         uint scales_off = bp + 4;
         uint qs_off = bp + 16;
-        uint bk = b * bs;
 
         // 4 groups of 64 elements: low nibbles (32 elems) then high nibbles (32 elems)
         for (uint g = 0; g < 4; g++) {

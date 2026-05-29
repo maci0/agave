@@ -23,6 +23,16 @@ void main() {
     float sum = 0.0;
 
     for (uint b = tid; b < nb; b += tg_size) {
+        uint bk = b * 32;
+
+        // Sparse skip: check if all 32 input values are near-zero
+        float bmax = 0.0;
+        for (uint i = 0; i < 32; i += 4) {
+            vec4 v = abs(vec4(x[bk+i], x[bk+i+1], x[bk+i+2], x[bk+i+3]));
+            bmax = max(bmax, max(max(v.x, v.y), max(v.z, v.w)));
+        }
+        if (bmax < 0.005) continue;
+
         uint block_byte_off = row * nb * 22 + b * 22;
 
         // Read f16 scale (2 bytes)
@@ -47,7 +57,6 @@ void main() {
         }
 
         float block_sum = 0.0;
-        uint bk = b * 32;
 
         for (uint j = 0; j < 16; j++) {
             uint qbyte_off = block_byte_off + 6 + j;

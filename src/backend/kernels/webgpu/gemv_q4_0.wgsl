@@ -25,6 +25,16 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>, @builtin(local_invocation_id) l
     var sum: f32 = 0.0;
 
     for (var b = tid; b < nb; b += WG_SIZE) {
+        let bk = b * BLOCK_SIZE;
+
+        // Sparse skip: check if all 32 input values are near-zero
+        var bmax: f32 = 0.0;
+        for (var i = 0u; i < BLOCK_SIZE; i += 4u) {
+            let v = abs(vec4<f32>(x[bk+i], x[bk+i+1u], x[bk+i+2u], x[bk+i+3u]));
+            bmax = max(bmax, max(max(v.x, v.y), max(v.z, v.w)));
+        }
+        if (bmax < 0.005) { continue; }
+
         let block_byte_off = row * nb * BLOCK_BYTES + b * BLOCK_BYTES;
         let word_off = block_byte_off / 4u;
         let byte_in_word = block_byte_off % 4u;
@@ -40,7 +50,6 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>, @builtin(local_invocation_id) l
         let d = unpack2x16float(scale_bits).x;
 
         var block_sum: f32 = 0.0;
-        let bk = b * BLOCK_SIZE;
         for (var j = 0u; j < 16u; j++) {
             let qbyte_off = block_byte_off + 2u + j;
             let qword = w_raw[qbyte_off / 4u];
