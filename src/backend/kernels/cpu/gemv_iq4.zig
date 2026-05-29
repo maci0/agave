@@ -5,6 +5,7 @@
 const std = @import("std");
 const quant = @import("../../../ops/quant.zig");
 const backend_mod = @import("../../backend.zig");
+const gemv_common = @import("gemv.zig");
 
 /// IQ4_XS scale bias: 6-bit unsigned [0..63] centered to signed [-32..31].
 const iq4_xs_scale_bias: i32 = -32;
@@ -28,6 +29,8 @@ pub fn gemvIQ4_NL(x: [*]const f32, w: [*]const u8, y: [*]f32, n: usize, k: usize
         const rp0 = w + row * row_bytes;
         const rp1 = w + (row + 1) * row_bytes;
         for (0..nb) |b| {
+            if (gemv_common.isBlockSparse(x, b * qk, qk)) continue;
+
             const bp0 = rp0 + b * bpb;
             const bp1 = rp1 + b * bpb;
             const d0: f32 = @floatCast(@as(f16, @bitCast(std.mem.readInt(u16, bp0[0..2], .little))));
@@ -76,6 +79,8 @@ pub fn gemvIQ4_NL(x: [*]const f32, w: [*]const u8, y: [*]f32, n: usize, k: usize
         var sum: f32 = 0.0;
         const rp = w + row * row_bytes;
         for (0..nb) |b| {
+            if (gemv_common.isBlockSparse(x, b * qk, qk)) continue;
+
             const bp = rp + b * bpb;
             const d: f32 = @floatCast(@as(f16, @bitCast(std.mem.readInt(u16, bp[0..2], .little))));
             const bk = b * qk;
@@ -119,6 +124,8 @@ pub fn gemvIQ4_XS(x: [*]const f32, w: [*]const u8, y: [*]f32, n: usize, k: usize
         const rp0 = w + row * row_bytes;
         const rp1 = w + (row + 1) * row_bytes;
         for (0..nb) |b| {
+            if (gemv_common.isBlockSparse(x, b * super_block_size, super_block_size)) continue;
+
             const bp0 = rp0 + b * bpb;
             const bp1 = rp1 + b * bpb;
             const d0: f32 = @floatCast(@as(f16, @bitCast(std.mem.readInt(u16, bp0[0..2], .little))));
@@ -192,6 +199,8 @@ pub fn gemvIQ4_XS(x: [*]const f32, w: [*]const u8, y: [*]f32, n: usize, k: usize
         var sum: f32 = 0.0;
         const rp = w + row * row_bytes;
         for (0..nb) |b| {
+            if (gemv_common.isBlockSparse(x, b * super_block_size, super_block_size)) continue;
+
             const bp = rp + b * bpb;
             const d: f32 = @floatCast(@as(f16, @bitCast(std.mem.readInt(u16, bp[0..2], .little))));
             const scales_h = std.mem.readInt(u16, bp[2..4], .little);

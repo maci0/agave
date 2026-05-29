@@ -2,11 +2,14 @@
 //! 4-row batching with V8 SIMD.
 
 const quant = @import("../../../ops/quant.zig");
+const gemv_common = @import("gemv.zig");
 const V8 = @Vector(8, f32);
 const V8u16 = @Vector(8, u16);
 const V8u32 = @Vector(8, u32);
 const bf16_shift: @Vector(8, u5) = @splat(16);
 const v8zero: V8 = @splat(0.0);
+/// Sparse block-skip chunk size for element-level formats.
+const sparse_chunk = 32;
 
 /// BF16 GEMV: y = W @ x. 4-row batched with bf16→f32 conversion.
 pub fn gemvBF16(x: [*]const f32, w: [*]const u8, y: [*]f32, n: usize, k: usize) void {
@@ -22,7 +25,12 @@ pub fn gemvBF16(x: [*]const f32, w: [*]const u8, y: [*]f32, n: usize, k: usize) 
         const r2 = r1 + k;
         const r3 = r2 + k;
         var i: usize = 0;
-        while (i + 8 <= k) : (i += 8) {
+        while (i + 8 <= k) {
+            // Sparse block skip: check every 32 elements
+            if (i % sparse_chunk == 0 and i + sparse_chunk <= k and gemv_common.isBlockSparse(x, i, sparse_chunk)) {
+                i += sparse_chunk;
+                continue;
+            }
             const xv: V8 = x[i..][0..8].*;
             const w0: V8 = @bitCast(@as(V8u32, @intCast(@as(V8u16, w16[r0 + i ..][0..8].*))) << bf16_shift);
             const w1: V8 = @bitCast(@as(V8u32, @intCast(@as(V8u16, w16[r1 + i ..][0..8].*))) << bf16_shift);
@@ -32,6 +40,7 @@ pub fn gemvBF16(x: [*]const f32, w: [*]const u8, y: [*]f32, n: usize, k: usize) 
             acc1 = @mulAdd(V8, xv, w1, acc1);
             acc2 = @mulAdd(V8, xv, w2, acc2);
             acc3 = @mulAdd(V8, xv, w3, acc3);
+            i += 8;
         }
         var t0: f32 = 0.0;
         var t1: f32 = 0.0;
@@ -54,10 +63,15 @@ pub fn gemvBF16(x: [*]const f32, w: [*]const u8, y: [*]f32, n: usize, k: usize) 
         var tail: f32 = 0.0;
         const roff = row * k;
         var i: usize = 0;
-        while (i + 8 <= k) : (i += 8) {
+        while (i + 8 <= k) {
+            if (i % sparse_chunk == 0 and i + sparse_chunk <= k and gemv_common.isBlockSparse(x, i, sparse_chunk)) {
+                i += sparse_chunk;
+                continue;
+            }
             const xv: V8 = x[i..][0..8].*;
             const wv: V8 = @bitCast(@as(V8u32, @intCast(@as(V8u16, w16[roff + i ..][0..8].*))) << bf16_shift);
             acc = @mulAdd(V8, xv, wv, acc);
+            i += 8;
         }
         while (i < k) : (i += 1) tail = @mulAdd(f32, x[i], quant.bf16ToF32(w16[roff + i]), tail);
         y[row] = @reduce(.Add, acc) + tail;

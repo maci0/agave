@@ -3,8 +3,11 @@
 //! 4-row batching with V8 SIMD, matching the F32/F16/BF16 kernel structure.
 
 const quant = @import("../../../ops/quant.zig");
+const gemv_common = @import("gemv.zig");
 const V8 = @Vector(8, f32);
 const v8zero: V8 = @splat(0.0);
+/// Sparse block-skip chunk size for element-level formats.
+const sparse_chunk = 32;
 
 /// FP8_E4M3: 1 byte per element (4 exponent, 3 mantissa, bias=7).
 /// 4-row batched with V8 SIMD for instruction-level parallelism.
@@ -20,7 +23,11 @@ pub fn gemvFP8_E4M3(x: [*]const f32, w: [*]const u8, y: [*]f32, n: usize, k: usi
         const r2 = r1 + k;
         const r3 = r2 + k;
         var i: usize = 0;
-        while (i + 8 <= k) : (i += 8) {
+        while (i + 8 <= k) {
+            if (i % sparse_chunk == 0 and i + sparse_chunk <= k and gemv_common.isBlockSparse(x, i, sparse_chunk)) {
+                i += sparse_chunk;
+                continue;
+            }
             const xv: V8 = x[i..][0..8].*;
             var w0: V8 = undefined;
             var w1: V8 = undefined;
@@ -36,6 +43,7 @@ pub fn gemvFP8_E4M3(x: [*]const f32, w: [*]const u8, y: [*]f32, n: usize, k: usi
             acc1 = @mulAdd(V8, xv, w1, acc1);
             acc2 = @mulAdd(V8, xv, w2, acc2);
             acc3 = @mulAdd(V8, xv, w3, acc3);
+            i += 8;
         }
         var t0: f32 = 0.0;
         var t1: f32 = 0.0;
@@ -58,13 +66,18 @@ pub fn gemvFP8_E4M3(x: [*]const f32, w: [*]const u8, y: [*]f32, n: usize, k: usi
         var tail: f32 = 0.0;
         const roff = row * k;
         var i: usize = 0;
-        while (i + 8 <= k) : (i += 8) {
+        while (i + 8 <= k) {
+            if (i % sparse_chunk == 0 and i + sparse_chunk <= k and gemv_common.isBlockSparse(x, i, sparse_chunk)) {
+                i += sparse_chunk;
+                continue;
+            }
             const xv: V8 = x[i..][0..8].*;
             var wv: V8 = undefined;
             inline for (0..8) |idx| {
                 wv[idx] = quant.fp8e4m3ToF32(w[roff + i + idx]);
             }
             acc = @mulAdd(V8, xv, wv, acc);
+            i += 8;
         }
         while (i < k) : (i += 1) tail = @mulAdd(f32, x[i], quant.fp8e4m3ToF32(w[roff + i]), tail);
         y[row] = @reduce(.Add, acc) + tail;
@@ -85,7 +98,11 @@ pub fn gemvFP8_E5M2(x: [*]const f32, w: [*]const u8, y: [*]f32, n: usize, k: usi
         const r2 = r1 + k;
         const r3 = r2 + k;
         var i: usize = 0;
-        while (i + 8 <= k) : (i += 8) {
+        while (i + 8 <= k) {
+            if (i % sparse_chunk == 0 and i + sparse_chunk <= k and gemv_common.isBlockSparse(x, i, sparse_chunk)) {
+                i += sparse_chunk;
+                continue;
+            }
             const xv: V8 = x[i..][0..8].*;
             var w0: V8 = undefined;
             var w1: V8 = undefined;
@@ -101,6 +118,7 @@ pub fn gemvFP8_E5M2(x: [*]const f32, w: [*]const u8, y: [*]f32, n: usize, k: usi
             acc1 = @mulAdd(V8, xv, w1, acc1);
             acc2 = @mulAdd(V8, xv, w2, acc2);
             acc3 = @mulAdd(V8, xv, w3, acc3);
+            i += 8;
         }
         var t0: f32 = 0.0;
         var t1: f32 = 0.0;
@@ -123,13 +141,18 @@ pub fn gemvFP8_E5M2(x: [*]const f32, w: [*]const u8, y: [*]f32, n: usize, k: usi
         var tail: f32 = 0.0;
         const roff = row * k;
         var i: usize = 0;
-        while (i + 8 <= k) : (i += 8) {
+        while (i + 8 <= k) {
+            if (i % sparse_chunk == 0 and i + sparse_chunk <= k and gemv_common.isBlockSparse(x, i, sparse_chunk)) {
+                i += sparse_chunk;
+                continue;
+            }
             const xv: V8 = x[i..][0..8].*;
             var wv: V8 = undefined;
             inline for (0..8) |idx| {
                 wv[idx] = quant.fp8e5m2ToF32(w[roff + i + idx]);
             }
             acc = @mulAdd(V8, xv, wv, acc);
+            i += 8;
         }
         while (i < k) : (i += 1) tail = @mulAdd(f32, x[i], quant.fp8e5m2ToF32(w[roff + i]), tail);
         y[row] = @reduce(.Add, acc) + tail;
