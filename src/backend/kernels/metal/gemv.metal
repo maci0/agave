@@ -85,6 +85,14 @@ kernel void gemv_q8_0(
     for (uint b = tid; b < nb; b += tg_size) {
         device const float* x_block = x + b * 32;
 
+        // Sparse skip: check if all 32 input values are near-zero
+        float bmax = 0.0f;
+        for (uint i = 0; i < 32; i += 4) {
+            float4 v = abs(*(device const float4*)(x_block + i));
+            bmax = max(bmax, max(max(v.x, v.y), max(v.z, v.w)));
+        }
+        if (bmax < 0.005f) continue;
+
         // Each row reuses the same x_block; compiler hoists the loads
         sum0 += q8_0_block_dot(W[row_base * nb + b], x_block);
         if (nr_active > 1)
@@ -587,16 +595,24 @@ kernel void gemv_q4_k(
                 // Preload x into registers — shared between both rows
                 float4 xv_lo[8], xv_hi[8];
                 float x_sum_lo = 0.0f, x_sum_hi = 0.0f;
+                float x_amax = 0.0f;
                 for (uint l = 0; l < 32; l += 4) {
                     float4 v = *(device const float4*)(x + gi_lo + l);
                     xv_lo[l / 4] = v;
                     x_sum_lo += v.x + v.y + v.z + v.w;
+                    float4 a = abs(v);
+                    x_amax = max(x_amax, max(max(a.x, a.y), max(a.z, a.w)));
                 }
                 for (uint l = 0; l < 32; l += 4) {
                     float4 v = *(device const float4*)(x + gi_hi + l);
                     xv_hi[l / 4] = v;
                     x_sum_hi += v.x + v.y + v.z + v.w;
+                    float4 a = abs(v);
+                    x_amax = max(x_amax, max(max(a.x, a.y), max(a.z, a.w)));
                 }
+
+                // Sparse skip: all 64 input values are near-zero → skip weight processing
+                if (x_amax < 0.005f) continue;
 
                 // Row 0
                 uint sc0_lo, m0_lo, sc0_hi, m0_hi;
