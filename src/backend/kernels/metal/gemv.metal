@@ -1867,3 +1867,64 @@ kernel void gemv_tq1_0(
     sum = threadgroup_reduce_sum(sum, shmem, tid, tg_size);
     if (tid == 0) y[row] = sum;
 }
+
+// ── AWQ INT4 GEMV ───────────────────────────────────────────────
+// AWQ format: column-major packed, 8 INT4 nibbles per u32.
+// qweight[k, n/8] column-major, scales[k/group_size, n] f16 (natural order),
+// qzeros[k/group_size, n/8] u32 (GEMM interleaved order).
+// GEMM nibble order: {0,2,4,6,1,3,5,7} — even cols in lower 16 bits,
+// odd cols in upper 16 bits. Both qweight and qzeros use this packing.
+// Scales use natural sequential order.
+// Dispatch: one threadgroup per output column.
+
+// GEMM reverse map: for output column col, the shift position in the u32
+// is gemm_reverse[col % 8] * 4 bits.
+constant uint awq_gemm_reverse[8] = {0, 4, 1, 5, 2, 6, 3, 7};
+
+kernel void gemv_awq(
+    device const float* x          [[buffer(0)]],
+    device const uint*  qweight    [[buffer(1)]],
+    device const half*  scales     [[buffer(2)]],
+    device const uint*  qzeros     [[buffer(3)]],
+    device float* y                [[buffer(4)]],
+    constant uint& n               [[buffer(5)]],
+    constant uint& k               [[buffer(6)]],
+    constant uint& group_size      [[buffer(7)]],
+    uint tgid     [[threadgroup_position_in_grid]],
+    uint tid      [[thread_index_in_threadgroup]],
+    uint tg_size  [[threads_per_threadgroup]])
+{
+    uint col = tgid;
+    if (col >= n) return;
+
+    uint n_words = n / 8;
+    uint word_idx = col / 8;
+    uint shift = awq_gemm_reverse[col % 8] * 4;
+
+    float sum = 0.0f;
+
+    for (uint ki = tid; ki < k; ki += tg_size) {
+        // Sparse skip: near-zero input contributes nothing
+        float xv = x[ki];
+        if (abs(xv) < 0.005f) continue;
+
+        // Column-major: qweight[ki, word_idx]
+        uint word = qweight[ki * n_words + word_idx];
+        float nibble = float((word >> shift) & 0xFu);
+
+        uint g = ki / group_size;
+
+        // qzeros uses same GEMM interleaved order
+        uint z_word = qzeros[g * n_words + word_idx];
+        float zero = float((z_word >> shift) & 0xFu);
+
+        // scales uses natural sequential order
+        float scale = float(scales[g * n + col]);
+
+        sum += (nibble - zero) * scale * xv;
+    }
+
+    threadgroup float shared[8];
+    sum = threadgroup_reduce_sum(sum, shared, tid, tg_size);
+    if (tid == 0) y[col] = sum;
+}

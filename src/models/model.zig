@@ -549,10 +549,7 @@ pub fn dispatchGemv(be: backend_mod.Backend, fmt: format_mod.Format, x: [*]const
             else
                 @ptrCast(@alignCast(st.data_ptr));
             if (t.dtype == .awq) {
-                // AWQ runs on CPU — sync GPU first so input activations are visible.
-                be.sync();
-                const awq = @import("../ops/awq.zig");
-                awq.awqGemv(x, @ptrCast(@alignCast(t.data_ptr)), @ptrCast(@alignCast(st.data_ptr)), zeros_ptr, y, n, k, group_size);
+                be.gemvAwq(x, @ptrCast(@alignCast(t.data_ptr)), @ptrCast(@alignCast(st.data_ptr)), zeros_ptr, y, n, k, group_size);
             } else {
                 // GPTQ: row-major packing (8 input elements per INT32 word)
                 be.gemvGptq(x, @ptrCast(@alignCast(t.data_ptr)), @ptrCast(@alignCast(st.data_ptr)), zeros_ptr, y, n, k, group_size);

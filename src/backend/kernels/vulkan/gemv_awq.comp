@@ -1,0 +1,60 @@
+#version 450
+#extension GL_KHR_shader_subgroup_arithmetic : require
+
+layout(local_size_x = 256) in;
+
+layout(set = 0, binding = 0) readonly buffer X  { float x_data[]; };
+layout(set = 0, binding = 1) readonly buffer QW { uint qweight[]; };
+layout(set = 0, binding = 2) readonly buffer SC { uint scales_raw[]; };
+layout(set = 0, binding = 3) readonly buffer QZ { uint qzeros[]; };
+layout(set = 0, binding = 4) writeonly buffer Y { float y_data[]; };
+layout(push_constant) uniform Params { uint n; uint k; uint group_size; };
+
+const uint awq_reverse[8] = uint[8](0, 4, 1, 5, 2, 6, 3, 7);
+
+shared float shared_sums[8];
+
+void main() {
+    uint col = gl_WorkGroupID.x;
+    uint tid = gl_LocalInvocationID.x;
+    uint tg_size = gl_WorkGroupSize.x;
+    if (col >= n) return;
+
+    uint n_words = n / 8;
+    uint word_idx = col / 8;
+    uint shift = awq_reverse[col % 8] * 4;
+    float sum = 0.0;
+
+    for (uint ki = tid; ki < k; ki += tg_size) {
+        float xv = x_data[ki];
+        if (abs(xv) < 0.005) continue;
+
+        uint word = qweight[ki * n_words + word_idx];
+        float nibble = float((word >> shift) & 0xFu);
+
+        uint g = ki / group_size;
+        uint z_word = qzeros[g * n_words + word_idx];
+        float zero = float((z_word >> shift) & 0xFu);
+
+        // Scales in natural order — read f16 from packed u32
+        uint scale_idx = g * n + col;
+        uint scale_word = scales_raw[scale_idx / 2];
+        uint scale_bits = (scale_idx % 2 == 0) ? (scale_word & 0xFFFF) : (scale_word >> 16);
+        float scale = unpackHalf2x16(scale_bits).x;
+
+        sum += (nibble - zero) * scale * xv;
+    }
+
+    // Subgroup + shared memory reduction
+    sum = subgroupAdd(sum);
+    uint sg_lane = gl_SubgroupInvocationID;
+    uint sg_id = gl_SubgroupID;
+    uint num_sg = (tg_size + gl_SubgroupSize - 1) / gl_SubgroupSize;
+    if (sg_lane == 0) shared_sums[sg_id] = sum;
+    barrier();
+    if (tid < num_sg) sum = shared_sums[tid]; else sum = 0.0;
+    if (tid < gl_SubgroupSize) {
+        sum = subgroupAdd(sum);
+        if (tid == 0) y_data[col] = sum;
+    }
+}

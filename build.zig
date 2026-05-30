@@ -71,6 +71,7 @@ pub fn build(b: *std.Build) void {
             "all",       "silu",     "gelu",      "add",       "mul",
             "rms_norm",  "softmax",  "l2_norm",   "rope",      "gemv_f32",
             "gemv_bf16", "gemv_f16", "gemv_q8_0", "gemv_q4_0", "gemv_tq1_0",
+            "gemv_gptq", "gemv_awq",
         };
 
         for (kernel_files) |name| {

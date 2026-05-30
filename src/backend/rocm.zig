@@ -154,6 +154,7 @@ pub const RocmBackend = struct {
     fn_sdpa_tree: HipFunction = null,
     fn_sdpa_paged: HipFunction = null,
     fn_gemv_gptq: HipFunction = null,
+    fn_gemv_awq: HipFunction = null,
     fn_sigmoid_mul: HipFunction = null,
     fn_silu_mul: HipFunction = null,
     fn_gelu_mul: HipFunction = null,
@@ -326,6 +327,7 @@ pub const RocmBackend = struct {
         self.fn_sdpa_tree = self.getFunction(hipModuleGetFunction, "sdpa_tree_kernel") catch null;
         self.fn_sdpa_paged = self.getFunction(hipModuleGetFunction, "sdpa_paged_kernel") catch null;
         self.fn_gemv_gptq = self.getFunction(hipModuleGetFunction, "gemv_gptq_kernel") catch null;
+        self.fn_gemv_awq = self.getFunction(hipModuleGetFunction, "gemv_awq_kernel") catch null;
         self.fn_sigmoid_mul = self.getFunction(hipModuleGetFunction, "sigmoid_mul_kernel") catch null;
         self.fn_silu_mul = self.getFunction(hipModuleGetFunction, "silu_mul_kernel") catch null;
         self.fn_gelu_mul = self.getFunction(hipModuleGetFunction, "gelu_mul_kernel") catch null;
@@ -615,6 +617,33 @@ pub const RocmBackend = struct {
             @ptrCast(&k_u32), @ptrCast(&gs_u32),
         };
         self.launch(self.fn_gemv_gptq.?, @intCast(n), block_size, reduction_smem, &params);
+    }
+
+    /// AWQ INT4 GEMV: y[col] = sum_k dequant(qweight[k, col]) * x[k]
+    pub fn gemvAwq(self: *RocmBackend, x: [*]const f32, qweight: [*]const u32, scales: [*]const u16, qzeros: [*]const u32, y: [*]f32, n: usize, k: usize, group_size: u32) void {
+        if (self.fn_gemv_awq == null) {
+            self.flushActivations();
+            const awq_ops = @import("../ops/awq.zig");
+            awq_ops.awqGemv(x, qweight, scales, qzeros, y, n, k, group_size);
+            return;
+        }
+        const n_words = n / 8;
+        const n_groups = (k + group_size - 1) / group_size;
+        var d_x = self.getInputBuf(x, k * @sizeOf(f32));
+        var d_qw = self.getOrUpload(@ptrCast(qweight), k * n_words * @sizeOf(u32));
+        var d_sc = self.getOrUpload(@ptrCast(scales), n_groups * n * @sizeOf(u16));
+        var d_qz = self.getOrUpload(@ptrCast(qzeros), n_groups * n_words * @sizeOf(u32));
+        var d_y = self.getOutputBuf(y, n * @sizeOf(f32));
+
+        var n_u32: u32 = @intCast(n);
+        var k_u32: u32 = @intCast(k);
+        var gs_u32: u32 = group_size;
+        var params = [_]?*anyopaque{
+            @ptrCast(&d_x),  @ptrCast(&d_qw), @ptrCast(&d_sc),
+            @ptrCast(&d_qz), @ptrCast(&d_y),  @ptrCast(&n_u32),
+            @ptrCast(&k_u32), @ptrCast(&gs_u32),
+        };
+        self.launch(self.fn_gemv_awq.?, @intCast(n), block_size, reduction_smem, &params);
     }
 
     /// output[i] = input[i] * weight[i] * rsqrt(mean(x^2) + eps)

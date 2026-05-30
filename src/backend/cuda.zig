@@ -205,6 +205,7 @@ pub const CudaBackend = struct {
     fn_gemv_mlx_q8: CUfunction = null,
     fn_gemv_mxfp4_st: CUfunction = null,
     fn_gemv_gptq: CUfunction = null,
+    fn_gemv_awq: CUfunction = null,
     fn_gemv_tq1_0: CUfunction = null,
     fn_fused_ffn_q8: CUfunction = null,
     fn_fused_ffn_q4k: CUfunction = null,
@@ -486,6 +487,7 @@ pub const CudaBackend = struct {
         self.fn_gemv_mlx_q8 = try self.getFunction("gemv_mlx_q8_kernel");
         self.fn_gemv_mxfp4_st = try self.getFunction("gemv_mxfp4_st_kernel");
         self.fn_gemv_gptq = self.getFunction("gemv_gptq_kernel") catch null;
+        self.fn_gemv_awq = self.getFunction("gemv_awq_kernel") catch null;
         self.fn_gemv_tq1_0 = self.getFunction("gemv_tq1_0_kernel") catch null;
         self.fn_fused_ffn_q8 = try self.getFunction("fused_ffn_gate_up_silu_q8_0_kernel");
         self.fn_fused_ffn_q4k = self.getFunction("fused_ffn_gate_up_silu_q4_k_kernel") catch null;
@@ -1606,6 +1608,33 @@ pub const CudaBackend = struct {
         } else {
             const gptq_ops = @import("../ops/gptq.zig");
             gptq_ops.gptqGemv(x, qweight, scales, qzeros, y, n, k, group_size);
+        }
+    }
+
+    /// AWQ INT4 GEMV on CUDA GPU.
+    pub fn gemvAwq(self: *CudaBackend, x: [*]const f32, qweight: [*]const u32, scales: [*]const u16, qzeros: [*]const u32, y: [*]f32, n: usize, k: usize, group_size: u32) void {
+        if (self.fn_gemv_awq) |func| {
+            const n_words = n / 8;
+            const n_groups = (k + group_size - 1) / group_size;
+
+            var d_x = self.getInputBuf(x, k * @sizeOf(f32));
+            var d_w = self.getOrUpload(@ptrCast(qweight), k * n_words * @sizeOf(u32));
+            var d_s = self.getOrUpload(@ptrCast(scales), n_groups * n * @sizeOf(u16));
+            var d_z = self.getOrUpload(@ptrCast(qzeros), n_groups * n_words * @sizeOf(u32));
+            var d_y = self.getOutputBuf(y, n * @sizeOf(f32));
+
+            var n_u32: u32 = @intCast(n);
+            var k_u32: u32 = @intCast(k);
+            var gs_u32: u32 = group_size;
+            var params = [_]?*anyopaque{
+                @ptrCast(&d_x),    @ptrCast(&d_w), @ptrCast(&d_s),
+                @ptrCast(&d_z),    @ptrCast(&d_y), @ptrCast(&n_u32),
+                @ptrCast(&k_u32),  @ptrCast(&gs_u32),
+            };
+            self.launch(func, @intCast(n), block_size, reduction_smem, &params);
+        } else {
+            const awq_ops = @import("../ops/awq.zig");
+            awq_ops.awqGemv(x, qweight, scales, qzeros, y, n, k, group_size);
         }
     }
 

@@ -51,6 +51,7 @@ comptime {
     _ = @import("gemv_nvfp4_st.zig");
     _ = @import("gemv_mxfp4_st.zig");
     _ = @import("gemv_gptq.zig");
+    _ = @import("gemv_awq.zig");
     _ = @import("gemv_q4_1.zig");
     _ = @import("gemv_q5_0.zig");
     _ = @import("gemv_q2_k.zig");

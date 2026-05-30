@@ -57,6 +57,7 @@ const wgsl_gemv_nvfp4_st = @embedFile("kernels/webgpu/gemv_nvfp4_st.wgsl");
 const wgsl_gemv_mlx_q4 = @embedFile("kernels/webgpu/gemv_mlx_q4.wgsl");
 const wgsl_gemv_mxfp4_st = @embedFile("kernels/webgpu/gemv_mxfp4_st.wgsl");
 const wgsl_gemv_gptq = @embedFile("kernels/webgpu/gemv_gptq.wgsl");
+const wgsl_gemv_awq = @embedFile("kernels/webgpu/gemv_awq.wgsl");
 const wgsl_gemv_tq1_0 = @embedFile("kernels/webgpu/gemv_tq1_0.wgsl");
 
 // ── WebGPU C API types ──────────────────────────────────────────────
@@ -356,6 +357,7 @@ pub const WebGpuBackend = struct {
     pipe_gemv_mlx_q4: PipelineInfo = .{},
     pipe_gemv_mxfp4_st: PipelineInfo = .{},
     pipe_gemv_gptq: PipelineInfo = .{},
+    pipe_gemv_awq: PipelineInfo = .{},
     pipe_gemv_tq1_0: PipelineInfo = .{},
     pipe_sdpa: PipelineInfo = .{},
     pipe_conv1d: PipelineInfo = .{},
@@ -605,6 +607,7 @@ pub const WebGpuBackend = struct {
         self.pipe_gemv_mlx_q4 = try self.createPipeline(wgsl_gemv_mlx_q4);
         self.pipe_gemv_mxfp4_st = try self.createPipeline(wgsl_gemv_mxfp4_st);
         self.pipe_gemv_gptq = try self.createPipeline(wgsl_gemv_gptq);
+        self.pipe_gemv_awq = try self.createPipeline(wgsl_gemv_awq);
         self.pipe_gemv_tq1_0 = try self.createPipeline(wgsl_gemv_tq1_0);
         self.pipe_sdpa = try self.createPipeline(wgsl_sdpa);
         self.pipe_conv1d = try self.createPipeline(wgsl_conv1d);
@@ -1623,6 +1626,39 @@ pub const WebGpuBackend = struct {
             uniformEntry(5, params_buf, Params),
         };
         self.dispatchCompute(self.pipe_gemv_gptq, &entries, @intCast(n));
+        self.cacheGpuResult(y, y_buf, y_sz);
+    }
+
+    pub fn gemvAwq(self: *WebGpuBackend, x: [*]const f32, qweight: [*]const u32, scales: [*]const u16, qzeros: [*]const u32, y: [*]f32, n: usize, k: usize, group_size: u32) void {
+        const words_per_col = k / 8;
+        const n_groups = (k + group_size - 1) / group_size;
+        const x_sz = k * @sizeOf(f32);
+        const w_sz = k * (n / 8) * @sizeOf(u32);
+        const s_sz = n_groups * n * @sizeOf(u16);
+        const z_sz = n_groups * (n / 8) * @sizeOf(u32);
+        const y_sz = n * @sizeOf(f32);
+        _ = words_per_col;
+
+        const x_buf = self.getOrUpload(@ptrCast(x), x_sz);
+        const w_buf = self.getOrUpload(@ptrCast(qweight), w_sz);
+        const s_buf = self.getOrUpload(@ptrCast(scales), s_sz);
+        const z_buf = self.getOrUpload(@ptrCast(qzeros), z_sz);
+        const y_buf = self.createOutputBuf(y_sz);
+
+        const Params = extern struct { n_v: u32, k_v: u32, gs: u32, _pad: u32 = 0 };
+        const p = Params{ .n_v = @intCast(n), .k_v = @intCast(k), .gs = group_size };
+        const params_buf = self.createUniformBuf(Params, p);
+        self.deferDestroy(params_buf);
+
+        const entries = [_]WGPUBindGroupEntry{
+            storageEntry(0, x_buf, x_sz),
+            storageEntry(1, w_buf, w_sz),
+            storageEntry(2, s_buf, s_sz),
+            storageEntry(3, z_buf, z_sz),
+            storageEntry(4, y_buf, y_sz),
+            uniformEntry(5, params_buf, Params),
+        };
+        self.dispatchCompute(self.pipe_gemv_awq, &entries, @intCast(n));
         self.cacheGpuResult(y, y_buf, y_sz);
     }
 

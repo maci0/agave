@@ -597,6 +597,12 @@ pub const CpuBackend = struct {
         }
     };
 
+    /// AWQ INT4 GEMV with thread pool parallelism.
+    pub fn gemvAwq(_: *CpuBackend, x: [*]const f32, qweight: [*]const u32, scales: [*]const u16, qzeros: [*]const u32, y: [*]f32, n: usize, k: usize, group_size: u32) void {
+        const awq_ops = @import("../ops/awq.zig");
+        awq_ops.awqGemv(x, qweight, scales, qzeros, y, n, k, group_size);
+    }
+
     /// Batched GEMV — fuses all ops into a single parallelFor to minimize
     /// thread wake/sleep overhead (~250 GEMV dispatches per token).
     pub fn gemvMulti(self: *CpuBackend, x: [*]const f32, ops: []const backend_mod.GemvOp, k: usize) void {

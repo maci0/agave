@@ -392,6 +392,10 @@ pub const NullBackend = struct {
         unreachable;
     }
 
+    pub fn gemvAwq(_: *NullBackend, _: [*]const f32, _: [*]const u32, _: [*]const u16, _: [*]const u32, _: [*]f32, _: usize, _: usize, _: u32) void {
+        unreachable;
+    }
+
     pub fn gemvNvfp4St(_: *NullBackend, _: [*]const f32, _: [*]const u8, _: [*]const u8, _: [*]f32, _: usize, _: usize) void {
         unreachable;
     }
@@ -820,6 +824,14 @@ pub const Backend = union(enum) {
     pub inline fn gemvGptq(self: Backend, x: [*]const f32, qweight: [*]const u32, scales: [*]const u16, qzeros: [*]const u32, y: [*]f32, n: usize, k: usize, group_size: u32) void {
         switch (self) {
             inline else => |be| be.gemvGptq(x, qweight, scales, qzeros, y, n, k, group_size),
+        }
+    }
+
+    /// AWQ INT4 GEMV: y[n] = dequant(qweight[k,n/8]) @ x[k].
+    /// Weights column-major packed 8 nibbles per u32, FP16 per-group scales, GEMM-order zero-points.
+    pub inline fn gemvAwq(self: Backend, x: [*]const f32, qweight: [*]const u32, scales: [*]const u16, qzeros: [*]const u32, y: [*]f32, n: usize, k: usize, group_size: u32) void {
+        switch (self) {
+            inline else => |be| be.gemvAwq(x, qweight, scales, qzeros, y, n, k, group_size),
         }
     }
 

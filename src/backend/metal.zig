@@ -147,6 +147,7 @@ pub const MetalBackend = struct {
     pipe_gemv_fp8_e4m3: objc.id,
     pipe_gemv_fp8_e5m2: objc.id,
     pipe_gemv_gptq: objc.id,
+    pipe_gemv_awq: objc.id,
     pipe_gemv_tq1_0: objc.id,
     pipe_gemm_f32: objc.id,
     pipe_gemm_bf16: objc.id,
@@ -316,6 +317,7 @@ pub const MetalBackend = struct {
             .pipe_gemv_fp8_e4m3 = undefined,
             .pipe_gemv_fp8_e5m2 = undefined,
             .pipe_gemv_gptq = undefined,
+            .pipe_gemv_awq = undefined,
             .pipe_gemv_tq1_0 = undefined,
             .pipe_gemm_f32 = undefined,
             .pipe_gemm_bf16 = undefined,
@@ -406,6 +408,7 @@ pub const MetalBackend = struct {
         self.pipe_gemv_fp8_e4m3 = try self.makePipeline("gemv_fp8_e4m3");
         self.pipe_gemv_fp8_e5m2 = try self.makePipeline("gemv_fp8_e5m2");
         self.pipe_gemv_gptq = try self.makePipeline("gemv_gptq");
+        self.pipe_gemv_awq = try self.makePipeline("gemv_awq");
         self.pipe_gemv_tq1_0 = try self.makePipeline("gemv_tq1_0");
         self.pipe_gemm_f32 = try self.makePipeline("gemm_f32");
         self.pipe_gemm_bf16 = try self.makePipeline("gemm_bf16");
@@ -1952,6 +1955,33 @@ pub const MetalBackend = struct {
         const gs_val: u32 = group_size;
 
         const enc = self.getEncoder(self.pipe_gemv_gptq);
+        setBuf(enc, x_ref, 0);
+        setBuf(enc, w_ref, 1);
+        setBuf(enc, s_ref, 2);
+        setBuf(enc, z_ref, 3);
+        setBuf(enc, y_ref, 4);
+        setBytes(enc, @ptrCast(&n_val), @sizeOf(u32), 5);
+        setBytes(enc, @ptrCast(&k_val), @sizeOf(u32), 6);
+        setBytes(enc, @ptrCast(&gs_val), @sizeOf(u32), 7);
+        self.endEncodeThreadgroups(enc, n, 256);
+    }
+
+    /// AWQ INT4 GEMV on Metal GPU.
+    pub fn gemvAwq(self: *MetalBackend, x: [*]const f32, qweight: [*]const u32, scales: [*]const u16, qzeros: [*]const u32, y: [*]f32, n: usize, k: usize, group_size: u32) void {
+        const n_words = n / 8;
+        const n_groups = (k + group_size - 1) / group_size;
+
+        const x_ref = self.getBufRef(@ptrCast(x), k * @sizeOf(f32));
+        const w_ref = self.getBufRef(@ptrCast(qweight), k * n_words * @sizeOf(u32));
+        const s_ref = self.getBufRef(@ptrCast(scales), n_groups * n * @sizeOf(u16));
+        const z_ref = self.getBufRef(@ptrCast(qzeros), n_groups * n_words * @sizeOf(u32));
+        const y_ref = self.getBufRef(@ptrCast(y), n * @sizeOf(f32));
+
+        const n_val: u32 = @intCast(n);
+        const k_val: u32 = @intCast(k);
+        const gs_val: u32 = group_size;
+
+        const enc = self.getEncoder(self.pipe_gemv_awq);
         setBuf(enc, x_ref, 0);
         setBuf(enc, w_ref, 1);
         setBuf(enc, s_ref, 2);
