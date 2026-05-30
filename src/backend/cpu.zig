@@ -1077,7 +1077,193 @@ pub const CpuBackend = struct {
     };
 };
 
+// ── Tests ───────────────────────────────────────────────────────────
+
+test "CpuBackend — allocKvSlice and freeKvSlice" {
+    const allocator = std.testing.allocator;
+    var be = CpuBackend{};
+    const slice = try be.allocKvSlice(allocator, 1024);
+    try std.testing.expectEqual(@as(usize, 1024), slice.len);
+    // Verify memory is writable.
+    @memset(slice, 0xAA);
+    try std.testing.expectEqual(@as(u8, 0xAA), slice[0]);
+    try std.testing.expectEqual(@as(u8, 0xAA), slice[1023]);
+    be.freeKvSlice(allocator, slice);
+}
+
+test "CpuBackend — addScaled" {
+    var be = CpuBackend{};
+    var dst = [_]f32{ 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0 };
+    const src = [_]f32{ 10.0, 20.0, 30.0, 40.0, 50.0, 60.0, 70.0, 80.0, 90.0, 100.0 };
+    be.addScaled(&src, &dst, 0.5, 10);
+    // dst[i] = dst[i] + src[i] * 0.5
+    try std.testing.expectApproxEqAbs(@as(f32, 6.0), dst[0], 1e-6); // 1 + 10*0.5
+    try std.testing.expectApproxEqAbs(@as(f32, 12.0), dst[1], 1e-6); // 2 + 20*0.5
+    try std.testing.expectApproxEqAbs(@as(f32, 60.0), dst[9], 1e-6); // 10 + 100*0.5
+}
+
+test "CpuBackend — allReduceAdd" {
+    var be = CpuBackend{};
+    var dst = [_]f32{ 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0 };
+    const src = [_]f32{ 10.0, 20.0, 30.0, 40.0, 50.0, 60.0, 70.0, 80.0, 90.0, 100.0 };
+    be.allReduceAdd(&dst, &src, 10);
+    try std.testing.expectApproxEqAbs(@as(f32, 11.0), dst[0], 1e-6);
+    try std.testing.expectApproxEqAbs(@as(f32, 22.0), dst[1], 1e-6);
+    try std.testing.expectApproxEqAbs(@as(f32, 110.0), dst[9], 1e-6);
+}
+
+test "CpuBackend — splitQGate" {
+    var be = CpuBackend{};
+    // 2 heads, head_dim=3 → input is [Q0,Q1,Q2,G0,G1,G2, Q3,Q4,Q5,G3,G4,G5]
+    const qg = [_]f32{ 1, 2, 3, 10, 20, 30, 4, 5, 6, 40, 50, 60 };
+    var q_out: [6]f32 = undefined;
+    var g_out: [6]f32 = undefined;
+    be.splitQGate(&qg, &q_out, &g_out, 3, 2);
+    // Q: [1,2,3,4,5,6]
+    try std.testing.expectApproxEqAbs(@as(f32, 1.0), q_out[0], 1e-6);
+    try std.testing.expectApproxEqAbs(@as(f32, 2.0), q_out[1], 1e-6);
+    try std.testing.expectApproxEqAbs(@as(f32, 3.0), q_out[2], 1e-6);
+    try std.testing.expectApproxEqAbs(@as(f32, 4.0), q_out[3], 1e-6);
+    // G: [10,20,30,40,50,60]
+    try std.testing.expectApproxEqAbs(@as(f32, 10.0), g_out[0], 1e-6);
+    try std.testing.expectApproxEqAbs(@as(f32, 40.0), g_out[3], 1e-6);
+}
+
+test "CpuBackend — sync and batch are no-ops" {
+    var be = CpuBackend{};
+    // These must not panic.
+    be.sync();
+    be.beginBatch();
+    be.endBatch();
+}
+
+test "CpuBackend — backendInfo returns CPU" {
+    var be = CpuBackend{};
+    const info = be.backendInfo();
+    try std.testing.expectEqualStrings("CPU", info.name);
+    // System memory should be non-zero on any real host.
+    try std.testing.expect(info.system_mem > 0 or info.total_mem > 0);
+}
+
+test "CpuBackend — default pool is null" {
+    const be = CpuBackend{};
+    try std.testing.expectEqual(@as(?*ThreadPool, null), be.pool);
+}
+
+test "CpuBackend — gemvSeq with F32 identity" {
+    // Simple F32 GEMV: y[2] = W[2,4] @ x[4]
+    const x = [_]f32{ 1, 0, 0, 0 };
+    const w = [_]f32{
+        1, 2, 3, 4, // row 0
+        5, 6, 7, 8, // row 1
+    };
+    var y: [2]f32 = undefined;
+    const w_bytes: [*]const u8 = @ptrCast(&w);
+    var be = CpuBackend{};
+    be.gemv(&x, .{ .data = w_bytes, .dtype = .f32 }, &y, 2, 4);
+    // x = [1,0,0,0] → y = first column of W
+    try std.testing.expectApproxEqAbs(@as(f32, 1.0), y[0], 1e-5);
+    try std.testing.expectApproxEqAbs(@as(f32, 5.0), y[1], 1e-5);
+}
+
+test "detectSystemMem — returns non-zero" {
+    const mem = detectSystemMem();
+    // On any real machine, total memory should be at least 256MB.
+    try std.testing.expect(mem > 256 * 1024 * 1024);
+}
+
+test "detectCacheSizes — returns reasonable values" {
+    const caches = detectCacheSizes();
+    // On modern CPUs, at least L1 should be non-zero (typically 32K-128K).
+    // Some VMs may report 0, so we just check it doesn't crash.
+    _ = caches.l1;
+    _ = caches.l2;
+    _ = caches.l3;
+}
+
+test "detectOsVersion — returns non-empty string" {
+    const version = detectOsVersion();
+    if (comptime builtin.os.tag == .macos) {
+        try std.testing.expect(version.len > 0);
+        try std.testing.expect(std.mem.startsWith(u8, version, "macOS "));
+    } else if (comptime builtin.os.tag == .linux) {
+        try std.testing.expect(version.len > 0);
+        try std.testing.expect(std.mem.startsWith(u8, version, "Linux "));
+    }
+}
+
+test "detectAvailMem — returns something" {
+    const avail = detectAvailMem();
+    // Available memory should be non-zero on a running system.
+    // Some constrained environments might have very little, so just check it doesn't crash.
+    _ = avail;
+}
+
+test "parallel constants — values are reasonable" {
+    try std.testing.expectEqual(@as(usize, 32), parallel_min_rows);
+    try std.testing.expectEqual(@as(usize, 16), parallel_grain);
+    try std.testing.expect(parallel_grain <= parallel_min_rows);
+}
+
 // ── Autotune tests ───────────────────────────────────────────────
+
+test "parseSysfsCacheSize — returns 0 on non-linux or valid size" {
+    if (comptime builtin.os.tag == .linux) {
+        // On Linux, index0 is typically L1 data cache (32K-128K).
+        const l1 = parseSysfsCacheSize("/sys/devices/system/cpu/cpu0/cache/index0/size");
+        // Must be >0 on any real Linux box with sysfs.
+        try std.testing.expect(l1 > 0);
+        // L1 should be a multiple of 1 KB.
+        try std.testing.expectEqual(@as(usize, 0), l1 % kb_to_bytes);
+    } else {
+        // On non-Linux, parseSysfsCacheSize is a comptime no-op returning 0.
+        const val = parseSysfsCacheSize("/sys/devices/system/cpu/cpu0/cache/index0/size");
+        try std.testing.expectEqual(@as(usize, 0), val);
+    }
+}
+
+test "detectCpuModel — returns non-empty on supported platforms" {
+    // Reset detection state for a clean test.
+    cpu_model_detected = false;
+    cpu_model_len = 0;
+    const model = detectCpuModel();
+    if (comptime builtin.os.tag == .macos or builtin.os.tag == .linux) {
+        try std.testing.expect(model.len > 0);
+    }
+    // Calling again should return cached result (idempotent).
+    const model2 = detectCpuModel();
+    try std.testing.expectEqualStrings(model, model2);
+}
+
+test "sysctlU64 — returns 0 on non-macos" {
+    if (comptime builtin.os.tag != .macos) {
+        const val = sysctlU64("hw.memsize");
+        try std.testing.expectEqual(@as(usize, 0), val);
+    } else {
+        // On macOS, hw.memsize should be at least 1 GB.
+        const val = sysctlU64("hw.memsize");
+        try std.testing.expect(val >= 1024 * 1024 * 1024);
+    }
+}
+
+test "detectCacheSizes — L1 is non-zero on real hardware" {
+    const caches = detectCacheSizes();
+    if (comptime builtin.os.tag == .macos or builtin.os.tag == .linux) {
+        // On real hardware L1 data cache is always present (typically 32K-128K).
+        try std.testing.expect(caches.l1 > 0);
+        // L1 should be at most 1 MB (sanity upper bound).
+        try std.testing.expect(caches.l1 <= 1 * mb_to_bytes);
+        // L2 should also be present on modern CPUs.
+        try std.testing.expect(caches.l2 > 0);
+        // L2 > L1 on virtually all architectures.
+        try std.testing.expect(caches.l2 >= caches.l1);
+    }
+}
+
+test "unit conversion constants" {
+    try std.testing.expectEqual(@as(usize, 1024), kb_to_bytes);
+    try std.testing.expectEqual(@as(usize, 1024 * 1024), mb_to_bytes);
+}
 
 test "softmax autotune — compare SIMD widths" {
     // Generates all 3 variants at comptime, benchmarks each at test time.

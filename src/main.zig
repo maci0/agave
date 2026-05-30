@@ -3659,3 +3659,12 @@ test "suggestSpec finds known flags" {
     try std.testing.expect(suggestSpec("foobar") == null);
     try std.testing.expect(suggestSpec("x") == null);
 }
+
+// Force test discovery for modules only imported at runtime (inside function bodies).
+// Without these comptime references, zig test won't find their test blocks.
+comptime {
+    _ = @import("devices/discovery.zig");
+    _ = @import("parallel/discovery.zig");
+    _ = @import("parallel/tp.zig");
+    _ = @import("kvcache/prefetch.zig");
+}

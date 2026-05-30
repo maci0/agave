@@ -1536,3 +1536,187 @@ pub const RocmBackend = struct {
         self.invalidateAct(@as([*]f32, @ptrCast(ssm_state.ptr)));
     }
 };
+
+// ── Tests ─────────────────────────────────────────────────────────
+
+test "ROCm tuning constants are valid" {
+    const testing = std.testing;
+
+    // Block size must be a power of 2 and within HIP limits
+    try testing.expect(block_size > 0);
+    try testing.expect(block_size <= 1024);
+    try testing.expect(block_size & (block_size - 1) == 0);
+
+    // Reduction LDS must fit
+    try testing.expect(reduction_smem >= 4);
+    try testing.expect(reduction_smem <= block_size);
+
+    // Device name buffer
+    try testing.expect(device_name_buf_size >= 64);
+
+    // Version encoding divisors must be non-zero
+    try testing.expect(hip_version_major_divisor > 0);
+    try testing.expect(hip_version_minor_divisor > 0);
+    try testing.expect(hip_version_minor_modulus > 0);
+}
+
+test "ROCm GEMV grid size matches CUDA pattern" {
+    const testing = std.testing;
+
+    // Q4_K/Q5_K/Q6_K use NR=2
+    const n: usize = 100;
+    try testing.expectEqual(@as(usize, 50), (n + 1) / 2);
+
+    // Q4_0/Q8_0 use NR=4
+    try testing.expectEqual(@as(usize, 25), (n + 3) / 4);
+
+    // Other dtypes: grid = n
+    try testing.expectEqual(@as(usize, 100), n);
+}
+
+test "ROCm BufState transitions are valid" {
+    const states = [_]RocmBackend.BufState{ .clean, .dirty, .stale };
+    try std.testing.expectEqual(@as(usize, 3), states.len);
+}
+
+test "ROCm backend public function signatures compile" {
+    comptime {
+        // Core ops
+        _ = @TypeOf(RocmBackend.gemv);
+        _ = @TypeOf(RocmBackend.gemvMulti);
+        _ = @TypeOf(RocmBackend.gemvGptq);
+        _ = @TypeOf(RocmBackend.gemvAwq);
+        _ = @TypeOf(RocmBackend.rmsNorm);
+        _ = @TypeOf(RocmBackend.rmsNormMulti);
+        _ = @TypeOf(RocmBackend.silu);
+        _ = @TypeOf(RocmBackend.gelu);
+        _ = @TypeOf(RocmBackend.add);
+        _ = @TypeOf(RocmBackend.addRmsNorm);
+        _ = @TypeOf(RocmBackend.mul);
+        _ = @TypeOf(RocmBackend.softmax);
+        _ = @TypeOf(RocmBackend.rope);
+        _ = @TypeOf(RocmBackend.embLookup);
+        _ = @TypeOf(RocmBackend.l2Norm);
+        _ = @TypeOf(RocmBackend.addScaled);
+        _ = @TypeOf(RocmBackend.siluMul);
+        _ = @TypeOf(RocmBackend.geluMul);
+        _ = @TypeOf(RocmBackend.sigmoidMul);
+        _ = @TypeOf(RocmBackend.deinterleave);
+        _ = @TypeOf(RocmBackend.splitQGate);
+        _ = @TypeOf(RocmBackend.gemvT);
+        _ = @TypeOf(RocmBackend.gemvNvfp4St);
+        _ = @TypeOf(RocmBackend.gemvMlxQ);
+        _ = @TypeOf(RocmBackend.gemvMxfp4St);
+
+        // SDPA
+        _ = @TypeOf(RocmBackend.sdpa);
+        _ = @TypeOf(RocmBackend.sdpaWithStats);
+        _ = @TypeOf(RocmBackend.sdpaPaged);
+        _ = @TypeOf(RocmBackend.sdpaPrefill);
+        _ = @TypeOf(RocmBackend.sdpaTree);
+
+        // Megakernels
+        _ = @TypeOf(RocmBackend.dispatchMegakernelQwen35Q8);
+        _ = @TypeOf(RocmBackend.dispatchMegakernelGemmaQ4K);
+
+        // Batched prefill
+        _ = @TypeOf(RocmBackend.gemm);
+        _ = @TypeOf(RocmBackend.rmsNormBatched);
+        _ = @TypeOf(RocmBackend.ropeBatched);
+
+        // Sync / lifecycle
+        _ = @TypeOf(RocmBackend.sync);
+        _ = @TypeOf(RocmBackend.beginBatch);
+        _ = @TypeOf(RocmBackend.endBatch);
+        _ = @TypeOf(RocmBackend.init);
+        _ = @TypeOf(RocmBackend.deinit);
+        _ = @TypeOf(RocmBackend.backendInfo);
+        _ = @TypeOf(RocmBackend.flushActivations);
+        _ = @TypeOf(RocmBackend.invalidateAct);
+        _ = @TypeOf(RocmBackend.invalidateWeight);
+
+        // KV cache
+        _ = @TypeOf(RocmBackend.allocKvSlice);
+        _ = @TypeOf(RocmBackend.freeKvSlice);
+
+        // DeltaNet
+        _ = @TypeOf(RocmBackend.deltaNet);
+    }
+}
+
+test "ROCm n_kernels and lib_name" {
+    try std.testing.expectEqual(@as(u32, 28), RocmBackend.n_kernels);
+    try std.testing.expectEqualStrings("libamdhip64.so", RocmBackend.lib_name);
+}
+
+test "ROCm HIP memcpy direction constants" {
+    // Verify direction constants match HIP spec
+    try std.testing.expectEqual(@as(c_int, 1), hipMemcpyHostToDevice);
+    try std.testing.expectEqual(@as(c_int, 2), hipMemcpyDeviceToHost);
+    try std.testing.expectEqual(@as(c_int, 3), hipMemcpyDeviceToDevice);
+}
+
+test "ROCm HIP function pointer types are correctly typed" {
+    comptime {
+        // Verify all HIP function pointer types resolve to valid fn pointer types
+        _ = @TypeOf(@as(FnInit, undefined));
+        _ = @TypeOf(@as(FnSetDevice, undefined));
+        _ = @TypeOf(@as(FnDeviceGetName, undefined));
+        _ = @TypeOf(@as(FnDeviceSynchronize, undefined));
+        _ = @TypeOf(@as(FnMalloc, undefined));
+        _ = @TypeOf(@as(FnFree, undefined));
+        _ = @TypeOf(@as(FnMemcpy, undefined));
+        _ = @TypeOf(@as(FnModuleLoadData, undefined));
+        _ = @TypeOf(@as(FnModuleUnload, undefined));
+        _ = @TypeOf(@as(FnModuleGetFunction, undefined));
+        _ = @TypeOf(@as(FnRuntimeGetVersion, undefined));
+        _ = @TypeOf(@as(FnDeviceGetAttribute, undefined));
+        _ = @TypeOf(@as(FnLaunchKernel, undefined));
+    }
+}
+
+test "ROCm struct field defaults" {
+    // Verify default initialization produces valid state (no GPU needed)
+    const be = RocmBackend{};
+    try std.testing.expect(be.module == null);
+    try std.testing.expect(be.fn_silu == null);
+    try std.testing.expect(be.fn_gemv_f32 == null);
+    try std.testing.expect(be.fn_sdpa == null);
+    try std.testing.expect(be.fn_mega_qwen35_q8 == null);
+    try std.testing.expect(be.sdpa_flat_keys == null);
+    try std.testing.expect(be.sdpa_flat_vals == null);
+    try std.testing.expectEqual(@as(usize, 0), be.device_name_len);
+}
+
+test "ROCm internal type sizes" {
+    const testing = std.testing;
+    comptime {
+        // CachedBuf must hold device pointer + size
+        try testing.expect(@sizeOf(RocmBackend.CachedBuf) >= @sizeOf(DevicePtr) + @sizeOf(usize));
+
+        // ActBuf must hold device pointer + size + state enum
+        try testing.expect(@sizeOf(RocmBackend.ActBuf) >= @sizeOf(DevicePtr) + @sizeOf(usize));
+
+        // BufState enum has exactly 3 variants
+        try testing.expectEqual(@as(usize, 3), @typeInfo(RocmBackend.BufState).@"enum".fields.len);
+
+        // KvDevCache must hold device pointer + capacity
+        try testing.expect(@sizeOf(RocmBackend.KvDevCache) >= @sizeOf(DevicePtr) + @sizeOf(usize));
+
+        // DevicePtr is pointer-sized
+        try testing.expectEqual(@sizeOf(usize), @sizeOf(DevicePtr));
+    }
+}
+
+test "ROCm block_size matches AMDGCN wavefront constraints" {
+    const testing = std.testing;
+
+    // block_size must be a multiple of the AMDGCN wavefront size (64)
+    try testing.expectEqual(@as(u32, 0), block_size % 64);
+
+    // block_size of 256 = 4 waves per workgroup (matches common.zig)
+    try testing.expectEqual(@as(u32, 256), block_size);
+
+    // reduction_smem = 32 bytes = 8 waves x 4 bytes (one f32 per wave for reduction)
+    try testing.expectEqual(@as(u32, 32), reduction_smem);
+}

@@ -1021,3 +1021,93 @@ test "bf16ToF32Buf" {
     try std.testing.expectEqual(@as(f32, 1.0), out[0]);
     try std.testing.expectEqual(@as(f32, -1.0), out[1]);
 }
+
+test "bf16ToF32Buf SIMD path" {
+    // 16 values to exercise the SIMD (8-wide) loop + scalar tail
+    const bf16_data = [_]u16{
+        0x3F80, 0x4000, 0x4040, 0x4080, // 1.0, 2.0, 3.0, 4.0
+        0x40A0, 0x40C0, 0x40E0, 0x4100, // 5.0, 6.0, 7.0, 8.0
+        0x4110, 0x4120, 0x4130, 0x4140, // 9.0, 10.0, 11.0, 12.0
+        0x4150, 0x4160, 0x4170, 0x4180, // 13.0, 14.0, 15.0, 16.0
+    };
+    var out: [16]f32 = undefined;
+    bf16ToF32Buf(@ptrCast(&bf16_data), &out);
+    for (0..16) |i| {
+        try std.testing.expectEqual(@as(f32, @floatFromInt(i + 1)), out[i]);
+    }
+}
+
+test "tensorToF32Buf f32 passthrough" {
+    const data = [_]f32{ 42.0, -3.14 };
+    var out = [_]f32{ 0, 0 };
+    const t = format_mod.TensorInfo{
+        .name = "test",
+        .data_ptr = @ptrCast(&data),
+        .dtype = .f32,
+        .n_dims = 1,
+        .dims = .{ 2, 0, 0, 0 },
+    };
+    tensorToF32Buf(t, &out);
+    try std.testing.expectApproxEqAbs(@as(f32, 42.0), out[0], 1e-6);
+    try std.testing.expectApproxEqAbs(@as(f32, -3.14), out[1], 1e-6);
+}
+
+test "tensorToF32Buf bf16 conversion" {
+    // BF16 2.0 = 0x4000, BF16 0.5 = 0x3F00
+    const bf16_data = [_]u16{ 0x4000, 0x3F00 };
+    var out = [_]f32{ 0, 0 };
+    const t = format_mod.TensorInfo{
+        .name = "test",
+        .data_ptr = @ptrCast(&bf16_data),
+        .dtype = .bf16,
+        .n_dims = 1,
+        .dims = .{ 2, 0, 0, 0 },
+    };
+    tensorToF32Buf(t, &out);
+    try std.testing.expectEqual(@as(f32, 2.0), out[0]);
+    try std.testing.expectEqual(@as(f32, 0.5), out[1]);
+}
+
+test "NemotronNano layer type from pattern" {
+    // "MEEME*M" → M=ssm, E=moe, *=attention
+    const pattern = "MEEME*M";
+    var types: [7]LayerType = undefined;
+    for (pattern, 0..) |c, i| {
+        types[i] = switch (c) {
+            'M' => .ssm,
+            'E' => .moe,
+            '*' => .attention,
+            else => .moe,
+        };
+    }
+    try std.testing.expectEqual(LayerType.ssm, types[0]);
+    try std.testing.expectEqual(LayerType.moe, types[1]);
+    try std.testing.expectEqual(LayerType.moe, types[2]);
+    try std.testing.expectEqual(LayerType.ssm, types[3]);
+    try std.testing.expectEqual(LayerType.moe, types[4]);
+    try std.testing.expectEqual(LayerType.attention, types[5]);
+    try std.testing.expectEqual(LayerType.ssm, types[6]);
+}
+
+test "NemotronNano NVFP4 stride calculation" {
+    // NVFP4: 2 values per byte, so n_elements/2 bytes per row
+    // weight stride = n_rows * (k / nvfp4_values_per_byte)
+    const n: usize = 1856;
+    const k: usize = 2688;
+    const w_stride = n * (k / nvfp4_values_per_byte);
+    // 1856 * 1344 = 2,494,464 bytes per expert
+    try std.testing.expectEqual(@as(usize, 2494464), w_stride);
+
+    // Scale stride: 1 FP8 per 16 elements
+    const s_stride = n * (k / nvfp4_scale_group_size);
+    // 1856 * 168 = 311,808
+    try std.testing.expectEqual(@as(usize, 311808), s_stride);
+}
+
+test "NemotronNano model vtable compiles" {
+    try std.testing.expect(@hasDecl(NemotronNanoModel, "forward"));
+    try std.testing.expect(@hasDecl(NemotronNanoModel, "prefill"));
+    try std.testing.expect(@hasDecl(NemotronNanoModel, "resetCache"));
+    try std.testing.expect(@hasDecl(NemotronNanoModel, "cancel"));
+    try std.testing.expect(@hasDecl(NemotronNanoModel, "model"));
+}

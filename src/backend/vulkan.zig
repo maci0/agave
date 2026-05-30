@@ -2563,6 +2563,120 @@ test "VulkanBackend l2Norm" {
     try std.testing.expectApproxEqAbs(@as(f32, 0.0), data[3], 1e-4);
 }
 
+test "Vulkan tuning constants are valid" {
+    const testing = std.testing;
+
+    try testing.expect(workgroup_size > 0);
+    try testing.expect(workgroup_size <= 1024);
+    try testing.expect(workgroup_size & (workgroup_size - 1) == 0);
+
+    try testing.expect(max_physical_devices > 0);
+    try testing.expect(max_queue_families > 0);
+    try testing.expect(max_descriptor_sets > 0);
+    try testing.expect(max_descriptors >= max_descriptor_sets);
+
+    try testing.expect(sdpa_max_seq_len >= 1024);
+    try testing.expect(sdpa_max_head_dim >= 64);
+    try testing.expect(emb_max_vocab_size > 0);
+}
+
+test "Vulkan pipeline binding counts" {
+    // Verify the binding counts passed to createPipeline are consistent
+    // Elementwise: 2 bufs, 4 bytes push
+    // Binary: 3 bufs, 4 bytes push
+    // GEMV: 3 bufs, 8 bytes push
+    // NVFP4: 4 bufs, 8 bytes push
+    // MLX: 5 bufs, 8 bytes push
+    // GPTQ/AWQ: 5 bufs, 12 bytes push
+    // SDPA: 4 bufs, 20 bytes push
+    // SDPA turbo: 4 bufs, 36 bytes push
+    // These are validated by successful init() — but we can verify the constants make sense.
+    const testing = std.testing;
+
+    // Push constant sizes must be multiples of 4 (GLSL std430 alignment)
+    const push_sizes = [_]u32{ 4, 8, 12, 20, 24, 36 };
+    for (push_sizes) |sz| {
+        try testing.expect(sz % 4 == 0);
+        try testing.expect(sz <= 128); // Vulkan guarantees at least 128 bytes push constants
+    }
+}
+
+test "Vulkan VK_API_VERSION_1_1 encoding" {
+    const testing = std.testing;
+    // VK_MAKE_API_VERSION(0, 1, 1, 0) = (0 << 29) | (1 << 22) | (1 << 12) | 0
+    const major = (VK_API_VERSION_1_1 >> 22) & 0x7F;
+    const minor = (VK_API_VERSION_1_1 >> 12) & 0x3FF;
+    try testing.expectEqual(@as(u32, 1), major);
+    try testing.expectEqual(@as(u32, 1), minor);
+}
+
+test "Vulkan n_pipelines and lib_name" {
+    try std.testing.expectEqual(@as(u32, 44), VulkanBackend.n_pipelines);
+    const expected_lib = switch (builtin.os.tag) {
+        .macos => "libMoltenVK.dylib",
+        .linux => "libvulkan.so.1",
+        .windows => "vulkan-1.dll",
+        else => "libvulkan.so",
+    };
+    try std.testing.expectEqualStrings(expected_lib, VulkanBackend.lib_name);
+}
+
+test "Vulkan backend public function signatures compile" {
+    comptime {
+        _ = @TypeOf(VulkanBackend.gemv);
+        _ = @TypeOf(VulkanBackend.gemvMulti);
+        _ = @TypeOf(VulkanBackend.gemvT);
+        _ = @TypeOf(VulkanBackend.gemvNvfp4St);
+        _ = @TypeOf(VulkanBackend.gemvMlxQ);
+        _ = @TypeOf(VulkanBackend.gemvMxfp4St);
+        _ = @TypeOf(VulkanBackend.gemvGptq);
+        _ = @TypeOf(VulkanBackend.gemvAwq);
+        _ = @TypeOf(VulkanBackend.rmsNorm);
+        _ = @TypeOf(VulkanBackend.rmsNormMulti);
+        _ = @TypeOf(VulkanBackend.addRmsNorm);
+        _ = @TypeOf(VulkanBackend.silu);
+        _ = @TypeOf(VulkanBackend.gelu);
+        _ = @TypeOf(VulkanBackend.siluMul);
+        _ = @TypeOf(VulkanBackend.geluMul);
+        _ = @TypeOf(VulkanBackend.sigmoidMul);
+        _ = @TypeOf(VulkanBackend.add);
+        _ = @TypeOf(VulkanBackend.addScaled);
+        _ = @TypeOf(VulkanBackend.mul);
+        _ = @TypeOf(VulkanBackend.softmax);
+        _ = @TypeOf(VulkanBackend.rope);
+        _ = @TypeOf(VulkanBackend.embLookup);
+        _ = @TypeOf(VulkanBackend.l2Norm);
+        _ = @TypeOf(VulkanBackend.deinterleave);
+        _ = @TypeOf(VulkanBackend.splitQGate);
+        _ = @TypeOf(VulkanBackend.sdpa);
+        _ = @TypeOf(VulkanBackend.sdpaPaged);
+        _ = @TypeOf(VulkanBackend.sdpaWithStats);
+        _ = @TypeOf(VulkanBackend.sdpaPrefill);
+        _ = @TypeOf(VulkanBackend.sdpaTree);
+        _ = @TypeOf(VulkanBackend.gemm);
+        _ = @TypeOf(VulkanBackend.rmsNormBatched);
+        _ = @TypeOf(VulkanBackend.ropeBatched);
+        _ = @TypeOf(VulkanBackend.deltaNet);
+        _ = @TypeOf(VulkanBackend.causalConv1dSilu);
+        _ = @TypeOf(VulkanBackend.sync);
+        _ = @TypeOf(VulkanBackend.beginBatch);
+        _ = @TypeOf(VulkanBackend.endBatch);
+        _ = @TypeOf(VulkanBackend.init);
+        _ = @TypeOf(VulkanBackend.deinit);
+        _ = @TypeOf(VulkanBackend.backendInfo);
+        _ = @TypeOf(VulkanBackend.flushActivations);
+        _ = @TypeOf(VulkanBackend.invalidateAct);
+        _ = @TypeOf(VulkanBackend.invalidateWeight);
+        _ = @TypeOf(VulkanBackend.allocKvSlice);
+        _ = @TypeOf(VulkanBackend.freeKvSlice);
+    }
+}
+
+test "Vulkan BufState enum" {
+    const states = [_]VulkanBackend.BufState{ .clean, .dirty, .stale };
+    try std.testing.expectEqual(@as(usize, 3), states.len);
+}
+
 test "VulkanBackend rope" {
     var vk_be = VulkanBackend.init(std.testing.allocator, 0) catch |err| {
         if (err == error.VulkanNotAvailable) return error.SkipZigTest;

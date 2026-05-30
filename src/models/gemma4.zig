@@ -2666,3 +2666,105 @@ test "Gemma4 dense variant detection" {
         try std.testing.expectEqual(c.exp_moe_dim, moe_dim);
     }
 }
+
+test "Gemma4 rmsNormPlain" {
+    // Plain RMS norm (no learned weights): output = input / rms(input)
+    var input = [_]f32{ 3.0, 4.0 };
+    var output = [_]f32{ 0.0, 0.0 };
+    rmsNormPlain(&output, &input, 2, 0.0);
+    // rms = sqrt((9+16)/2) = sqrt(12.5) = 3.5355
+    // output[0] = 3/3.5355 = 0.8485, output[1] = 4/3.5355 = 1.1314
+    const rms = @sqrt((9.0 + 16.0) / 2.0);
+    try std.testing.expectApproxEqAbs(3.0 / rms, output[0], 1e-5);
+    try std.testing.expectApproxEqAbs(4.0 / rms, output[1], 1e-5);
+}
+
+test "Gemma4 rmsNormPlainMulti" {
+    // Two heads of dimension 2
+    var x = [_]f32{ 3.0, 4.0, 1.0, 0.0 };
+    rmsNormPlainMulti(&x, 2, 2, 1e-6);
+    // Head 0: rms = sqrt((9+16)/2)
+    const rms0 = @sqrt((9.0 + 16.0) / 2.0 + 1e-6);
+    try std.testing.expectApproxEqAbs(3.0 / rms0, x[0], 1e-4);
+    try std.testing.expectApproxEqAbs(4.0 / rms0, x[1], 1e-4);
+    // Head 1: rms = sqrt((1+0)/2)
+    const rms1 = @sqrt(1.0 / 2.0 + 1e-6);
+    try std.testing.expectApproxEqAbs(1.0 / rms1, x[2], 1e-4);
+    try std.testing.expectApproxEqAbs(0.0 / rms1, x[3], 1e-4);
+}
+
+test "Gemma4 softmaxInPlace" {
+    // softmax([0, 0, 0]) = [1/3, 1/3, 1/3]
+    var x = [_]f32{ 0.0, 0.0, 0.0 };
+    softmaxInPlace(&x);
+    try std.testing.expectApproxEqAbs(@as(f32, 1.0 / 3.0), x[0], 1e-5);
+    try std.testing.expectApproxEqAbs(@as(f32, 1.0 / 3.0), x[1], 1e-5);
+    try std.testing.expectApproxEqAbs(@as(f32, 1.0 / 3.0), x[2], 1e-5);
+
+    // softmax with large values — must sum to 1.0
+    var y = [_]f32{ 10.0, 20.0, 30.0 };
+    softmaxInPlace(&y);
+    const sum = y[0] + y[1] + y[2];
+    try std.testing.expectApproxEqAbs(@as(f32, 1.0), sum, 1e-5);
+    // Largest input should have largest probability
+    try std.testing.expect(y[2] > y[1]);
+    try std.testing.expect(y[1] > y[0]);
+}
+
+test "Gemma4 layerVType boundary protection" {
+    var m: Gemma4Model = undefined;
+    m.n_layers = 30;
+    m.kv_type_v = .turbo4;
+
+    // No boundary
+    m.kv_boundary_v = 0;
+    try std.testing.expectEqual(kv_quant.KvQuantType.turbo4, m.layerVType(0));
+    try std.testing.expectEqual(kv_quant.KvQuantType.turbo4, m.layerVType(29));
+
+    // Boundary = 2
+    m.kv_boundary_v = 2;
+    try std.testing.expectEqual(kv_quant.KvQuantType.f16, m.layerVType(0));
+    try std.testing.expectEqual(kv_quant.KvQuantType.f16, m.layerVType(1));
+    try std.testing.expectEqual(kv_quant.KvQuantType.turbo4, m.layerVType(2));
+    try std.testing.expectEqual(kv_quant.KvQuantType.turbo4, m.layerVType(27));
+    try std.testing.expectEqual(kv_quant.KvQuantType.f16, m.layerVType(28));
+    try std.testing.expectEqual(kv_quant.KvQuantType.f16, m.layerVType(29));
+}
+
+test "Gemma4 ple_combination_scale" {
+    // 1/sqrt(2) ~ 0.7071
+    try std.testing.expectApproxEqAbs(@as(f32, 0.7071), ple_combination_scale, 0.001);
+}
+
+test "Gemma4 expertRowBytes f32" {
+    const t = TensorInfo{
+        .name = "test",
+        .data_ptr = @ptrFromInt(0x1000),
+        .dtype = .f32,
+        .n_dims = 3,
+        .dims = .{ 128, 704, 1408, 0 },
+    };
+    // f32: 2816 elements * 4 bytes = 11264
+    try std.testing.expectEqual(@as(usize, 11264), Gemma4Model.expertRowBytes(t, 704, 2816));
+}
+
+test "Gemma4 expertRowBytes q8_0" {
+    const t = TensorInfo{
+        .name = "test",
+        .data_ptr = @ptrFromInt(0x1000),
+        .dtype = .q8_0,
+        .n_dims = 3,
+        .dims = .{ 128, 704, 2816, 0 },
+    };
+    // q8_0: 2816/32 blocks * 34 bytes = 88 * 34 = 2992
+    const expected = (2816 / backend_mod.quant_block_elems) * backend_mod.q8_0_block_bytes;
+    try std.testing.expectEqual(expected, Gemma4Model.expertRowBytes(t, 704, 2816));
+}
+
+test "Gemma4 model vtable compiles" {
+    try std.testing.expect(@hasDecl(Gemma4Model, "forward"));
+    try std.testing.expect(@hasDecl(Gemma4Model, "prefill"));
+    try std.testing.expect(@hasDecl(Gemma4Model, "resetCache"));
+    try std.testing.expect(@hasDecl(Gemma4Model, "cancel"));
+    try std.testing.expect(@hasDecl(Gemma4Model, "model"));
+}

@@ -826,3 +826,173 @@ pub const Glm4Model = struct {
         };
     }
 };
+
+// ── Tests ─────────────────────────────────────────────────────────
+
+test "GLM4 dtypeBytes f32" {
+    // 256 f32 elements = 256 * 4 = 1024 bytes
+    try std.testing.expectEqual(@as(usize, 1024), Glm4Model.dtypeBytes(.f32, 256));
+}
+
+test "GLM4 dtypeBytes bf16" {
+    // 256 bf16 elements = 256 * 2 = 512 bytes
+    try std.testing.expectEqual(@as(usize, 512), Glm4Model.dtypeBytes(.bf16, 256));
+}
+
+test "GLM4 dtypeBytes q8_0" {
+    // q8_0: 32 elements per block, each block = 34 bytes (32 int8 + 2 byte scale)
+    // 256 elements = 8 blocks * 34 = 272 bytes
+    const n: usize = 256;
+    const expected = @divExact(n, backend_mod.quant_block_elems) * backend_mod.q8_0_block_bytes;
+    try std.testing.expectEqual(expected, Glm4Model.dtypeBytes(.q8_0, n));
+}
+
+test "GLM4 dtypeBytes unknown fallback" {
+    // Unknown dtype: 1 byte per element
+    try std.testing.expectEqual(@as(usize, 256), Glm4Model.dtypeBytes(.mlx_q, 256));
+}
+
+test "GLM4 ropePartial position 0 is identity" {
+    // At position 0, angle=0 for all frequencies: cos(0)=1, sin(0)=0
+    // So RoPE should be identity
+    var m: Glm4Model = undefined;
+    m.kv_seq_len = 0;
+    m.rope_theta = 1000000.0;
+    // 1 head, head_dim=8, nope_dim=4, rope_dim=4
+    // rope applies to indices [4..8] within the head
+    var x = [_]f32{ 10.0, 20.0, 30.0, 40.0, 1.0, 2.0, 3.0, 4.0 };
+    m.ropePartial(&x, 1, 8, 4, 4);
+    // nope portion unchanged
+    try std.testing.expectApproxEqAbs(@as(f32, 10.0), x[0], 1e-5);
+    try std.testing.expectApproxEqAbs(@as(f32, 20.0), x[1], 1e-5);
+    try std.testing.expectApproxEqAbs(@as(f32, 30.0), x[2], 1e-5);
+    try std.testing.expectApproxEqAbs(@as(f32, 40.0), x[3], 1e-5);
+    // rope portion at pos=0: identity
+    try std.testing.expectApproxEqAbs(@as(f32, 1.0), x[4], 1e-5);
+    try std.testing.expectApproxEqAbs(@as(f32, 2.0), x[5], 1e-5);
+    try std.testing.expectApproxEqAbs(@as(f32, 3.0), x[6], 1e-5);
+    try std.testing.expectApproxEqAbs(@as(f32, 4.0), x[7], 1e-5);
+}
+
+test "GLM4 model vtable compiles" {
+    try std.testing.expect(@hasDecl(Glm4Model, "forward"));
+    try std.testing.expect(@hasDecl(Glm4Model, "prefill"));
+    try std.testing.expect(@hasDecl(Glm4Model, "resetCache"));
+    try std.testing.expect(@hasDecl(Glm4Model, "cancel"));
+    try std.testing.expect(@hasDecl(Glm4Model, "model"));
+}
+
+test "GLM4 dtypeBytes q4_0" {
+    const n: usize = 256;
+    const expected = @divExact(n, backend_mod.quant_block_elems) * backend_mod.q4_0_block_bytes;
+    try std.testing.expectEqual(expected, Glm4Model.dtypeBytes(.q4_0, n));
+}
+
+test "GLM4 dtypeBytes q4_k" {
+    const n: usize = 256;
+    const expected = @divExact(n, backend_mod.quant_super_block_elems) * backend_mod.q4_k_block_bytes;
+    try std.testing.expectEqual(expected, Glm4Model.dtypeBytes(.q4_k, n));
+}
+
+test "GLM4 dtypeBytes q5_k" {
+    const n: usize = 256;
+    const expected = @divExact(n, backend_mod.quant_super_block_elems) * backend_mod.q5_k_block_bytes;
+    try std.testing.expectEqual(expected, Glm4Model.dtypeBytes(.q5_k, n));
+}
+
+test "GLM4 dtypeBytes q6_k" {
+    const n: usize = 256;
+    const expected = @divExact(n, backend_mod.quant_super_block_elems) * backend_mod.q6_k_block_bytes;
+    try std.testing.expectEqual(expected, Glm4Model.dtypeBytes(.q6_k, n));
+}
+
+test "GLM4 dtypeBytes f16" {
+    try std.testing.expectEqual(@as(usize, 512), Glm4Model.dtypeBytes(.f16, 256));
+}
+
+test "GLM4 ropePartial non-zero position rotates" {
+    // At position 1 with small rope_theta, angles are non-trivial.
+    // Verify the rotation actually changes values and preserves nope dims.
+    var m: Glm4Model = undefined;
+    m.kv_seq_len = 1;
+    m.rope_theta = 10.0; // small theta for visible rotation
+    var x = [_]f32{ 10.0, 20.0, 1.0, 0.0, 0.0, 1.0 };
+    // 1 head, head_dim=6, nope_dim=2, rope_dim=4
+    m.ropePartial(&x, 1, 6, 2, 4);
+    // nope portion [0..2] must be unchanged
+    try std.testing.expectApproxEqAbs(@as(f32, 10.0), x[0], 1e-5);
+    try std.testing.expectApproxEqAbs(@as(f32, 20.0), x[1], 1e-5);
+    // rope portion must have changed (freq at i=0: exp(-ln(10)*0/4)=1.0, angle=1.0)
+    // cos(1) ~ 0.5403, sin(1) ~ 0.8415
+    // x[2] was 1.0, x[4] was 0.0 → new x[2] = 1.0*cos(1) - 0.0*sin(1) = cos(1)
+    try std.testing.expectApproxEqAbs(@cos(@as(f32, 1.0)), x[2], 1e-4);
+    // x[4] = 1.0*sin(1) + 0.0*cos(1) = sin(1)
+    try std.testing.expectApproxEqAbs(@sin(@as(f32, 1.0)), x[4], 1e-4);
+}
+
+test "GLM4 ropePartial multi-head" {
+    // Verify RoPE is applied independently per head
+    var m: Glm4Model = undefined;
+    m.kv_seq_len = 0; // pos=0 → identity
+    m.rope_theta = 1000000.0;
+    // 2 heads, head_dim=4, nope_dim=2, rope_dim=2
+    var x = [_]f32{ 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0 };
+    m.ropePartial(&x, 2, 4, 2, 2);
+    // At pos=0, all values should be unchanged (identity rotation)
+    try std.testing.expectApproxEqAbs(@as(f32, 1.0), x[0], 1e-5);
+    try std.testing.expectApproxEqAbs(@as(f32, 2.0), x[1], 1e-5);
+    try std.testing.expectApproxEqAbs(@as(f32, 3.0), x[2], 1e-5);
+    try std.testing.expectApproxEqAbs(@as(f32, 4.0), x[3], 1e-5);
+    try std.testing.expectApproxEqAbs(@as(f32, 5.0), x[4], 1e-5);
+    try std.testing.expectApproxEqAbs(@as(f32, 6.0), x[5], 1e-5);
+    try std.testing.expectApproxEqAbs(@as(f32, 7.0), x[6], 1e-5);
+    try std.testing.expectApproxEqAbs(@as(f32, 8.0), x[7], 1e-5);
+}
+
+test "GLM4 default config constants" {
+    // Verify default struct field values match the GLM-4 MoE Lite spec
+    const m = Glm4Model{};
+    try std.testing.expectEqual(@as(u32, 47), m.n_layers);
+    try std.testing.expectEqual(@as(u32, 2048), m.n_embd);
+    try std.testing.expectEqual(@as(u32, 20), m.n_head);
+    try std.testing.expectEqual(@as(u32, 768), m.q_lora_rank);
+    try std.testing.expectEqual(@as(u32, 512), m.kv_lora_rank);
+    try std.testing.expectEqual(@as(u32, 192), m.qk_nope_head_dim);
+    try std.testing.expectEqual(@as(u32, 64), m.qk_rope_head_dim);
+    try std.testing.expectEqual(@as(u32, 256), m.v_head_dim);
+    try std.testing.expectEqual(@as(u32, 64), m.n_routed_experts);
+    try std.testing.expectEqual(@as(u32, 4), m.num_experts_per_tok);
+    try std.testing.expectEqual(@as(u32, 1), m.first_k_dense_replace);
+    try std.testing.expectEqual(@as(u32, 6), m.mlx_bits);
+    try std.testing.expectApproxEqAbs(@as(f32, 1.8), m.routed_scaling_factor, 1e-6);
+    try std.testing.expectApproxEqAbs(@as(f32, 1000000.0), m.rope_theta, 1.0);
+    try std.testing.expectApproxEqAbs(@as(f32, 1e-5), m.rms_eps, 1e-10);
+}
+
+test "GLM4 module-level constants" {
+    try std.testing.expectEqual(@as(usize, 8), max_active_experts);
+    try std.testing.expectEqual(@as(usize, 128), Glm4Model.max_rope_half);
+    try std.testing.expectEqual(@as(u32, 6), default_glm4_mlx_bits);
+}
+
+test "GLM4 cancel and cancelled flag" {
+    var m: Glm4Model = undefined;
+    m.cancelled = std.atomic.Value(bool).init(false);
+    try std.testing.expect(!m.cancelled.load(.monotonic));
+    m.cancelled.store(true, .monotonic);
+    try std.testing.expect(m.cancelled.load(.monotonic));
+}
+
+test "GLM4 pub fn signatures" {
+    // Compile-time verification that public function signatures exist and have expected types.
+    comptime {
+        _ = @TypeOf(Glm4Model.init);
+        _ = @TypeOf(Glm4Model.deinit);
+        _ = @TypeOf(Glm4Model.forward);
+        _ = @TypeOf(Glm4Model.prefill);
+        _ = @TypeOf(Glm4Model.resetCache);
+        _ = @TypeOf(Glm4Model.cancel);
+        _ = @TypeOf(Glm4Model.model);
+        _ = @TypeOf(Glm4Model.getBlockTable);
+    }
+}

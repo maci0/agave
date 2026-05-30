@@ -1159,3 +1159,388 @@ pub const BackendState = struct {
         };
     }
 };
+
+// ── Tests ───────────────────────────────────────────────────────────
+
+test "DType — gemvRowBytes for F32" {
+    // F32: 4 bytes per element, no quantization blocks.
+    try std.testing.expectEqual(@as(usize, 4096 * 4), gemvRowBytes(.f32, 4096));
+    try std.testing.expectEqual(@as(usize, 1 * 4), gemvRowBytes(.f32, 1));
+}
+
+test "DType — gemvRowBytes for F16 and BF16" {
+    // F16/BF16: 2 bytes per element.
+    try std.testing.expectEqual(@as(usize, 4096 * 2), gemvRowBytes(.f16, 4096));
+    try std.testing.expectEqual(@as(usize, 4096 * 2), gemvRowBytes(.bf16, 4096));
+}
+
+test "DType — gemvRowBytes for FP8" {
+    // FP8: 1 byte per element.
+    try std.testing.expectEqual(@as(usize, 4096), gemvRowBytes(.fp8_e4m3, 4096));
+    try std.testing.expectEqual(@as(usize, 4096), gemvRowBytes(.fp8_e5m2, 4096));
+}
+
+test "DType — gemvRowBytes for Q4_0" {
+    // Q4_0: 18 bytes per 32-element block.
+    // k=4096 → 128 blocks → 128 * 18 = 2304 bytes per row.
+    try std.testing.expectEqual(@as(usize, 128 * q4_0_block_bytes), gemvRowBytes(.q4_0, 4096));
+    // k=32 → 1 block → 18 bytes.
+    try std.testing.expectEqual(@as(usize, q4_0_block_bytes), gemvRowBytes(.q4_0, 32));
+    // k=33 → ceil(33/32) = 2 blocks → 36 bytes.
+    try std.testing.expectEqual(@as(usize, 2 * q4_0_block_bytes), gemvRowBytes(.q4_0, 33));
+}
+
+test "DType — gemvRowBytes for Q8_0" {
+    // Q8_0: 34 bytes per 32-element block.
+    try std.testing.expectEqual(@as(usize, 128 * q8_0_block_bytes), gemvRowBytes(.q8_0, 4096));
+    try std.testing.expectEqual(@as(usize, q8_0_block_bytes), gemvRowBytes(.q8_0, 32));
+}
+
+test "DType — gemvRowBytes for Q4_K super-block" {
+    // Q4_K: 144 bytes per 256-element super-block.
+    // k=4096 → 16 super-blocks → 16 * 144 = 2304.
+    try std.testing.expectEqual(@as(usize, 16 * q4_k_block_bytes), gemvRowBytes(.q4_k, 4096));
+    // k=256 → 1 super-block.
+    try std.testing.expectEqual(@as(usize, q4_k_block_bytes), gemvRowBytes(.q4_k, 256));
+}
+
+test "DType — gemvRowBytes for Q6_K super-block" {
+    // Q6_K: 210 bytes per 256-element super-block.
+    try std.testing.expectEqual(@as(usize, 16 * q6_k_block_bytes), gemvRowBytes(.q6_k, 4096));
+}
+
+test "DType — gemvRowBytes for NVFP4" {
+    // NVFP4: 9 bytes per 16-element block.
+    // k=4096 → 256 blocks → 256 * 9 = 2304.
+    try std.testing.expectEqual(@as(usize, 256 * nvfp4_block_bytes), gemvRowBytes(.nvfp4, 4096));
+}
+
+test "DType — gemvRowBytes returns 0 for unsupported formats" {
+    // Formats that don't support standard row-based GEMV return 0.
+    try std.testing.expectEqual(@as(usize, 0), gemvRowBytes(.tq1_0, 4096));
+    try std.testing.expectEqual(@as(usize, 0), gemvRowBytes(.mlx_q, 4096));
+    try std.testing.expectEqual(@as(usize, 0), gemvRowBytes(.gptq, 4096));
+    try std.testing.expectEqual(@as(usize, 0), gemvRowBytes(.awq, 4096));
+    try std.testing.expectEqual(@as(usize, 0), gemvRowBytes(.unknown, 4096));
+}
+
+test "DType — gemvRowBytes all dtypes handled" {
+    // Ensure gemvRowBytes doesn't panic for any DType variant.
+    inline for (comptime std.enums.values(DType)) |dtype| {
+        _ = gemvRowBytes(dtype, 256);
+    }
+}
+
+test "weightBytes — F32" {
+    // F32: n * k * 4 bytes.
+    try std.testing.expectEqual(@as(usize, 4 * 4096 * 4096), weightBytes(.f32, 4096, 4096));
+    try std.testing.expectEqual(@as(usize, 4 * 10 * 20), weightBytes(.f32, 10, 20));
+}
+
+test "weightBytes — F16 and BF16" {
+    // F16/BF16: n * k * 2 bytes.
+    try std.testing.expectEqual(@as(usize, 2 * 4096 * 4096), weightBytes(.f16, 4096, 4096));
+    try std.testing.expectEqual(@as(usize, 2 * 4096 * 4096), weightBytes(.bf16, 4096, 4096));
+}
+
+test "weightBytes — Q4_0" {
+    // Q4_0: n * blocks * 18 bytes per block.
+    // k=4096 → 128 blocks, n=4096.
+    try std.testing.expectEqual(@as(usize, 4096 * 128 * q4_0_block_bytes), weightBytes(.q4_0, 4096, 4096));
+}
+
+test "weightBytes — Q4_K super-block" {
+    // Q4_K: n * super-blocks * 144 bytes.
+    // k=4096 → 16 super-blocks, n=4096.
+    try std.testing.expectEqual(@as(usize, 4096 * 16 * q4_k_block_bytes), weightBytes(.q4_k, 4096, 4096));
+}
+
+test "weightBytes — GPTQ/AWQ" {
+    // GPTQ/AWQ: n * k / 2 (4-bit packed).
+    try std.testing.expectEqual(@as(usize, 4096 * 4096 / 2), weightBytes(.gptq, 4096, 4096));
+    try std.testing.expectEqual(@as(usize, 4096 * 4096 / 2), weightBytes(.awq, 4096, 4096));
+}
+
+test "weightBytes — NVFP4" {
+    // NVFP4: n * ceil(k/16) * 9.
+    try std.testing.expectEqual(@as(usize, 4096 * 256 * nvfp4_block_bytes), weightBytes(.nvfp4, 4096, 4096));
+}
+
+test "weightBytes — all dtypes handled" {
+    // Ensure weightBytes doesn't panic for any DType variant.
+    inline for (comptime std.enums.values(DType)) |dtype| {
+        _ = weightBytes(dtype, 256, 256);
+    }
+}
+
+test "weightBytes — consistency with gemvRowBytes" {
+    // For supported dtypes, weightBytes(dtype, n, k) == n * gemvRowBytes(dtype, k).
+    const dtypes_to_check = [_]DType{ .f32, .f16, .bf16, .fp8_e4m3, .fp8_e5m2, .q4_0, .q4_1, .q5_0, .q8_0, .q4_k, .q5_k, .q6_k, .q2_k, .q3_k, .iq4_nl, .iq4_xs, .mxfp4, .nvfp4 };
+    for (dtypes_to_check) |dtype| {
+        const rb = gemvRowBytes(dtype, 4096);
+        if (rb > 0) {
+            try std.testing.expectEqual(256 * rb, weightBytes(dtype, 256, 4096));
+        }
+    }
+}
+
+test "BackendInfo — default values" {
+    const info = BackendInfo{};
+    try std.testing.expectEqualStrings("CPU", info.name);
+    try std.testing.expectEqualStrings("", info.device_name);
+    try std.testing.expectEqualStrings("", info.lib_name);
+    try std.testing.expectEqual(@as(u32, 0), info.n_gpu_kernels);
+    try std.testing.expectEqual(@as(usize, 0), info.total_mem);
+    try std.testing.expectEqual(@as(usize, 0), info.avail_mem);
+    try std.testing.expect(!info.is_uma);
+    try std.testing.expectEqualStrings("", info.compute_cap);
+    try std.testing.expectEqualStrings("", info.driver_version);
+    try std.testing.expectEqual(@as(u32, 0), info.n_threads);
+    try std.testing.expectEqual(@as(usize, 0), info.system_mem);
+    try std.testing.expectEqualStrings(@tagName(builtin.cpu.arch), info.arch);
+    try std.testing.expectEqualStrings(@tagName(builtin.os.tag), info.os);
+}
+
+test "BackendInfo — custom values" {
+    const info = BackendInfo{
+        .name = "Metal",
+        .device_name = "Apple M4 Pro",
+        .n_gpu_kernels = 42,
+        .kernel_type = "MSL",
+        .total_mem = 36 * 1024 * 1024 * 1024,
+        .is_uma = true,
+        .n_threads = 12,
+    };
+    try std.testing.expectEqualStrings("Metal", info.name);
+    try std.testing.expectEqualStrings("Apple M4 Pro", info.device_name);
+    try std.testing.expectEqual(@as(u32, 42), info.n_gpu_kernels);
+    try std.testing.expectEqualStrings("MSL", info.kernel_type);
+    try std.testing.expect(info.is_uma);
+    try std.testing.expectEqual(@as(u32, 12), info.n_threads);
+}
+
+test "CacheSizes — default zeros" {
+    const cs = CacheSizes{};
+    try std.testing.expectEqual(@as(usize, 0), cs.l1);
+    try std.testing.expectEqual(@as(usize, 0), cs.l2);
+    try std.testing.expectEqual(@as(usize, 0), cs.l3);
+}
+
+test "TensorData — construction" {
+    var data = [_]u8{ 0, 1, 2, 3 };
+    const td = TensorData{ .data = &data, .dtype = .f32 };
+    try std.testing.expectEqual(DType.f32, td.dtype);
+    try std.testing.expectEqual(@as(u8, 0), td.data[0]);
+}
+
+test "GemvOp — default optional fields" {
+    var y_buf: [4]f32 = undefined;
+    var w_data = [_]u8{ 0, 0, 0, 0 };
+    const op = GemvOp{
+        .w = .{ .data = &w_data, .dtype = .q4_0 },
+        .y = &y_buf,
+        .n = 4,
+    };
+    try std.testing.expectEqual(@as(?[*]const u8, null), op.mlx_scales);
+    try std.testing.expectEqual(@as(?[*]const u8, null), op.mlx_biases);
+    try std.testing.expectEqual(@as(u32, 0), op.mlx_bits);
+}
+
+test "DeltaNetParams — default kqv_order" {
+    const p = DeltaNetParams{
+        .conv_ch = 1024,
+        .d_conv = 4,
+        .d_inner = 2048,
+        .num_k_heads = 8,
+        .head_k_dim = 128,
+        .num_v_heads = 8,
+        .head_v_dim = 128,
+        .q_scale = 1.0,
+        .rms_eps = 1e-6,
+    };
+    try std.testing.expect(!p.kqv_order);
+    try std.testing.expectEqual(@as(u32, 1024), p.conv_ch);
+}
+
+test "quant block constants" {
+    // Verify block element counts are powers-of-two aligned.
+    try std.testing.expectEqual(@as(usize, 32), quant_block_elems);
+    try std.testing.expectEqual(@as(usize, 256), quant_super_block_elems);
+    try std.testing.expectEqual(@as(usize, 16), nvfp4_block_elems);
+
+    // Verify block byte sizes match expected values from GGML spec.
+    try std.testing.expectEqual(@as(usize, 18), q4_0_block_bytes); // f16 scale + 16B quants
+    try std.testing.expectEqual(@as(usize, 20), q4_1_block_bytes); // f16 scale + f16 min + 16B
+    try std.testing.expectEqual(@as(usize, 34), q8_0_block_bytes); // f16 scale + 32B quants
+    try std.testing.expectEqual(@as(usize, 144), q4_k_block_bytes); // 256-elem super-block
+    try std.testing.expectEqual(@as(usize, 210), q6_k_block_bytes); // 256-elem super-block
+    try std.testing.expectEqual(@as(usize, 9), nvfp4_block_bytes); // 8B quants + 1B scale
+    try std.testing.expectEqual(@as(usize, 17), mxfp4_block_bytes); // 16B quants + 1B scale
+}
+
+test "BackendChoice — all variants exist" {
+    // Verify the enum has all expected variants.
+    const choices = [_]BackendChoice{ .auto, .cpu, .metal, .vulkan, .cuda, .rocm, .webgpu };
+    try std.testing.expectEqual(@as(usize, 7), choices.len);
+}
+
+test "NullBackend — function signatures exist" {
+    // Compile-time check that NullBackend has all required method signatures.
+    comptime {
+        _ = @TypeOf(NullBackend.gemv);
+        _ = @TypeOf(NullBackend.rmsNorm);
+        _ = @TypeOf(NullBackend.silu);
+        _ = @TypeOf(NullBackend.gelu);
+        _ = @TypeOf(NullBackend.add);
+        _ = @TypeOf(NullBackend.mul);
+        _ = @TypeOf(NullBackend.softmax);
+        _ = @TypeOf(NullBackend.rope);
+        _ = @TypeOf(NullBackend.sync);
+        _ = @TypeOf(NullBackend.sdpa);
+        _ = @TypeOf(NullBackend.sdpaPaged);
+        _ = @TypeOf(NullBackend.gemvMulti);
+        _ = @TypeOf(NullBackend.gemm);
+        _ = @TypeOf(NullBackend.deltaNet);
+        _ = @TypeOf(NullBackend.backendInfo);
+        _ = @TypeOf(NullBackend.embLookup);
+        _ = @TypeOf(NullBackend.gemvGptq);
+        _ = @TypeOf(NullBackend.gemvAwq);
+        _ = @TypeOf(NullBackend.gemvNvfp4St);
+        _ = @TypeOf(NullBackend.gemvMlxQ);
+        _ = @TypeOf(NullBackend.gemvMxfp4St);
+    }
+}
+
+test "Backend union — size is reasonable" {
+    // Backend is a tagged union of pointers — should be pointer-sized + tag.
+    try std.testing.expect(@sizeOf(Backend) <= 16);
+}
+
+test "BackendState — default name is CPU" {
+    const state = BackendState{};
+    try std.testing.expectEqualStrings("CPU", state.name);
+}
+
+test "buf_cache_initial_capacity constant" {
+    try std.testing.expectEqual(@as(usize, 512), buf_cache_initial_capacity);
+}
+
+test "DType — gemvRowBytes for remaining small-block dtypes" {
+    // Q4_1: 20 bytes per 32-element block.
+    try std.testing.expectEqual(@as(usize, 128 * q4_1_block_bytes), gemvRowBytes(.q4_1, 4096));
+    try std.testing.expectEqual(@as(usize, q4_1_block_bytes), gemvRowBytes(.q4_1, 32));
+    // Q5_0: 22 bytes per 32-element block.
+    try std.testing.expectEqual(@as(usize, 128 * q5_0_block_bytes), gemvRowBytes(.q5_0, 4096));
+    // IQ4_NL: 18 bytes per 32-element block (same as Q4_0).
+    try std.testing.expectEqual(@as(usize, 128 * iq4_nl_block_bytes), gemvRowBytes(.iq4_nl, 4096));
+    // MXFP4: 17 bytes per 32-element block.
+    try std.testing.expectEqual(@as(usize, 128 * mxfp4_block_bytes), gemvRowBytes(.mxfp4, 4096));
+}
+
+test "DType — gemvRowBytes for remaining super-block dtypes" {
+    // Q2_K: 84 bytes per 256-element super-block.
+    try std.testing.expectEqual(@as(usize, 16 * q2_k_block_bytes), gemvRowBytes(.q2_k, 4096));
+    try std.testing.expectEqual(@as(usize, q2_k_block_bytes), gemvRowBytes(.q2_k, 256));
+    // Q3_K: 110 bytes per 256-element super-block.
+    try std.testing.expectEqual(@as(usize, 16 * q3_k_block_bytes), gemvRowBytes(.q3_k, 4096));
+    // Q5_K: 176 bytes per 256-element super-block.
+    try std.testing.expectEqual(@as(usize, 16 * q5_k_block_bytes), gemvRowBytes(.q5_k, 4096));
+    // IQ4_XS: 136 bytes per 256-element super-block.
+    try std.testing.expectEqual(@as(usize, 16 * iq4_xs_block_bytes), gemvRowBytes(.iq4_xs, 4096));
+}
+
+test "DType — gemvRowBytes and weightBytes edge case k=0" {
+    // k=0 should produce 0 bytes for all dtypes.
+    inline for (comptime std.enums.values(DType)) |dtype| {
+        try std.testing.expectEqual(@as(usize, 0), gemvRowBytes(dtype, 0));
+        try std.testing.expectEqual(@as(usize, 0), weightBytes(dtype, 1, 0));
+        try std.testing.expectEqual(@as(usize, 0), weightBytes(dtype, 0, 256));
+    }
+}
+
+test "DType — gemvRowBytes non-aligned k rounds up" {
+    // Q4_0 with k=33: ceil(33/32) = 2 blocks.
+    try std.testing.expectEqual(@as(usize, 2 * q4_0_block_bytes), gemvRowBytes(.q4_0, 33));
+    // Q4_K with k=257: ceil(257/256) = 2 super-blocks.
+    try std.testing.expectEqual(@as(usize, 2 * q4_k_block_bytes), gemvRowBytes(.q4_k, 257));
+    // NVFP4 with k=17: ceil(17/16) = 2 blocks.
+    try std.testing.expectEqual(@as(usize, 2 * nvfp4_block_bytes), gemvRowBytes(.nvfp4, 17));
+    // Q8_0 with k=31: ceil(31/32) = 1 block.
+    try std.testing.expectEqual(@as(usize, 1 * q8_0_block_bytes), gemvRowBytes(.q8_0, 31));
+    // Q6_K with k=255: ceil(255/256) = 1 super-block.
+    try std.testing.expectEqual(@as(usize, 1 * q6_k_block_bytes), gemvRowBytes(.q6_k, 255));
+}
+
+test "weightBytes — remaining dtypes coverage" {
+    const k = 4096;
+    const n = 128;
+    const nb = k / quant_block_elems; // 128
+    const nsb = k / quant_super_block_elems; // 16
+    // Q8_0
+    try std.testing.expectEqual(@as(usize, n * nb * q8_0_block_bytes), weightBytes(.q8_0, n, k));
+    // Q4_1
+    try std.testing.expectEqual(@as(usize, n * nb * q4_1_block_bytes), weightBytes(.q4_1, n, k));
+    // Q5_0
+    try std.testing.expectEqual(@as(usize, n * nb * q5_0_block_bytes), weightBytes(.q5_0, n, k));
+    // Q2_K
+    try std.testing.expectEqual(@as(usize, n * nsb * q2_k_block_bytes), weightBytes(.q2_k, n, k));
+    // Q3_K
+    try std.testing.expectEqual(@as(usize, n * nsb * q3_k_block_bytes), weightBytes(.q3_k, n, k));
+    // Q5_K
+    try std.testing.expectEqual(@as(usize, n * nsb * q5_k_block_bytes), weightBytes(.q5_k, n, k));
+    // Q6_K
+    try std.testing.expectEqual(@as(usize, n * nsb * q6_k_block_bytes), weightBytes(.q6_k, n, k));
+    // IQ4_NL
+    try std.testing.expectEqual(@as(usize, n * nb * iq4_nl_block_bytes), weightBytes(.iq4_nl, n, k));
+    // IQ4_XS
+    try std.testing.expectEqual(@as(usize, n * nsb * iq4_xs_block_bytes), weightBytes(.iq4_xs, n, k));
+    // MXFP4
+    try std.testing.expectEqual(@as(usize, n * nb * mxfp4_block_bytes), weightBytes(.mxfp4, n, k));
+    // TQ1_0
+    try std.testing.expectEqual(@as(usize, n * nsb * tq1_0_block_bytes), weightBytes(.tq1_0, n, k));
+    // FP8 variants: 1 byte per element.
+    try std.testing.expectEqual(@as(usize, n * k), weightBytes(.fp8_e4m3, n, k));
+    try std.testing.expectEqual(@as(usize, n * k), weightBytes(.fp8_e5m2, n, k));
+    // MLX_Q / unknown: 4 bytes per element (assume f32).
+    try std.testing.expectEqual(@as(usize, n * k * 4), weightBytes(.mlx_q, n, k));
+    try std.testing.expectEqual(@as(usize, n * k * 4), weightBytes(.unknown, n, k));
+}
+
+test "weightBytes — NVFP4 non-aligned k" {
+    // k=17 → ceil(17/16) = 2 blocks of 9 bytes each.
+    try std.testing.expectEqual(@as(usize, 10 * 2 * nvfp4_block_bytes), weightBytes(.nvfp4, 10, 17));
+}
+
+test "BackendInfo — cache size fields" {
+    const info = BackendInfo{
+        .l1_cache = 64 * 1024,
+        .l2_cache = 512 * 1024,
+        .l3_cache = 16 * 1024 * 1024,
+    };
+    try std.testing.expectEqual(@as(usize, 64 * 1024), info.l1_cache);
+    try std.testing.expectEqual(@as(usize, 512 * 1024), info.l2_cache);
+    try std.testing.expectEqual(@as(usize, 16 * 1024 * 1024), info.l3_cache);
+}
+
+test "Backend union — all variant tags exist" {
+    // Compile-time verification that Backend enum has all expected tags.
+    const Tag = std.meta.Tag(Backend);
+    comptime {
+        _ = @field(Tag, "cpu");
+        _ = @field(Tag, "metal");
+        _ = @field(Tag, "vulkan");
+        _ = @field(Tag, "cuda");
+        _ = @field(Tag, "rocm");
+        _ = @field(Tag, "webgpu");
+    }
+    // Exactly 6 backends.
+    try std.testing.expectEqual(@as(usize, 6), std.enums.values(Tag).len);
+}
+
+test "KvQuantType — re-export accessible" {
+    // Verify KvQuantType re-export is usable.
+    comptime {
+        _ = @TypeOf(KvQuantType);
+        _ = @sizeOf(KvQuantType);
+    }
+}

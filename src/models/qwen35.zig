@@ -1806,3 +1806,191 @@ fn applyNvfp4Scale(fmt: Format, buf: []f32, layer: u32, expert: usize, proj: []c
         }
     }
 }
+
+// ── Tests ─────────────────────────────────────────────────────────
+
+test "isFullAttn with interval 4" {
+    var m: Qwen35Model = undefined;
+    m.full_attn_interval = 4;
+    try std.testing.expect(!m.isFullAttn(0)); // (0+1) % 4 != 0
+    try std.testing.expect(!m.isFullAttn(1)); // (1+1) % 4 != 0
+    try std.testing.expect(!m.isFullAttn(2)); // (2+1) % 4 != 0
+    try std.testing.expect(m.isFullAttn(3)); // (3+1) % 4 == 0
+    try std.testing.expect(!m.isFullAttn(4)); // (4+1) % 4 != 0
+    try std.testing.expect(m.isFullAttn(7)); // (7+1) % 4 == 0
+}
+
+test "isFullAttn with interval 1 — all layers are full attention" {
+    var m: Qwen35Model = undefined;
+    m.full_attn_interval = 1;
+    try std.testing.expect(m.isFullAttn(0));
+    try std.testing.expect(m.isFullAttn(1));
+    try std.testing.expect(m.isFullAttn(31));
+}
+
+test "isFullAttn with interval 0 — all layers are full attention" {
+    var m: Qwen35Model = undefined;
+    m.full_attn_interval = 0;
+    try std.testing.expect(m.isFullAttn(0));
+    try std.testing.expect(m.isFullAttn(5));
+    try std.testing.expect(m.isFullAttn(31));
+}
+
+test "layerVType boundary protection" {
+    var m: Qwen35Model = undefined;
+    m.n_layers = 32;
+    m.kv_type_v = .turbo4;
+
+    // No boundary — all layers use configured type
+    m.kv_boundary_v = 0;
+    try std.testing.expectEqual(kv_quant.KvQuantType.turbo4, m.layerVType(0));
+    try std.testing.expectEqual(kv_quant.KvQuantType.turbo4, m.layerVType(15));
+    try std.testing.expectEqual(kv_quant.KvQuantType.turbo4, m.layerVType(31));
+
+    // Boundary = 2: first 2 and last 2 layers use f16
+    m.kv_boundary_v = 2;
+    try std.testing.expectEqual(kv_quant.KvQuantType.f16, m.layerVType(0));
+    try std.testing.expectEqual(kv_quant.KvQuantType.f16, m.layerVType(1));
+    try std.testing.expectEqual(kv_quant.KvQuantType.turbo4, m.layerVType(2));
+    try std.testing.expectEqual(kv_quant.KvQuantType.turbo4, m.layerVType(15));
+    try std.testing.expectEqual(kv_quant.KvQuantType.turbo4, m.layerVType(29));
+    try std.testing.expectEqual(kv_quant.KvQuantType.f16, m.layerVType(30));
+    try std.testing.expectEqual(kv_quant.KvQuantType.f16, m.layerVType(31));
+}
+
+test "ssmConvChannels default config" {
+    var m: Qwen35Model = undefined;
+    m.ssm_d_inner = 2048;
+    m.ssm_n_group = 16;
+    m.ssm_d_state = 128;
+    // conv_ch = 2048 + 2 * 16 * 128 = 2048 + 4096 = 6144
+    try std.testing.expectEqual(@as(usize, 6144), m.ssmConvChannels());
+}
+
+test "shardColumnWeight no-op for single rank" {
+    var m: Qwen35Model = undefined;
+    m.tp_degree = 1;
+    m.tp_rank = 0;
+    const dummy = format_mod.TensorInfo{
+        .name = "test",
+        .data_ptr = @ptrFromInt(0x1000),
+        .dtype = .f32,
+        .n_dims = 2,
+        .dims = .{ 4096, 4096, 0, 0 },
+    };
+    const result = m.shardColumnWeight(dummy, 4096, 4096);
+    // With tp_degree=1, should return the tensor unchanged
+    try std.testing.expectEqual(dummy.data_ptr, result.data_ptr);
+}
+
+test "shardColumnWeight with 2-way TP" {
+    var m: Qwen35Model = undefined;
+    m.tp_degree = 2;
+    m.tp_rank = 1;
+    const base_ptr: [*]const u8 = @ptrFromInt(0x1000);
+    const dummy = format_mod.TensorInfo{
+        .name = "test",
+        .data_ptr = base_ptr,
+        .dtype = .f32,
+        .n_dims = 2,
+        .dims = .{ 4096, 4096, 0, 0 },
+    };
+    const n_total: usize = 4096;
+    const k: usize = 4096;
+    const result = m.shardColumnWeight(dummy, n_total, k);
+    // Rank 1 should offset by n_local * row_bytes = 2048 * 16384 bytes
+    const n_local = n_total / 2;
+    const row_bytes = backend_mod.gemvRowBytes(.f32, k);
+    const expected_offset = 1 * n_local * row_bytes;
+    try std.testing.expectEqual(base_ptr + expected_offset, result.data_ptr);
+}
+
+test "rmsNormPlusOne correctness" {
+    // (1 + w) * x / rms(x) where rms = sqrt(mean(x^2) + eps)
+    var input = [_]f32{ 1.0, 2.0, 3.0, 4.0 };
+    var output = [_]f32{ 0, 0, 0, 0 };
+    var weight = [_]f32{ 0.0, 0.0, 0.0, 0.0 }; // w=0 → (1+0)=1 → plain rmsNorm
+
+    Qwen35Model.rmsNormPlusOne(&input, &output, &weight, 4, 1e-6);
+
+    // With w=0, output should be x / rms(x)
+    // rms = sqrt((1+4+9+16)/4 + eps) = sqrt(7.5 + eps) ~ 2.7386
+    const sum_sq: f32 = 1.0 + 4.0 + 9.0 + 16.0;
+    const inv_rms = 1.0 / @sqrt(sum_sq / 4.0 + 1e-6);
+    try std.testing.expectApproxEqAbs(1.0 * inv_rms, output[0], 1e-5);
+    try std.testing.expectApproxEqAbs(2.0 * inv_rms, output[1], 1e-5);
+    try std.testing.expectApproxEqAbs(3.0 * inv_rms, output[2], 1e-5);
+    try std.testing.expectApproxEqAbs(4.0 * inv_rms, output[3], 1e-5);
+}
+
+test "model vtable compiles" {
+    // Verify that Qwen35Model implements the Model vtable interface
+    const M = model_mod.Model;
+    _ = M.from;
+    // Verify the struct has the expected public API surface
+    try std.testing.expect(@hasDecl(Qwen35Model, "forward"));
+    try std.testing.expect(@hasDecl(Qwen35Model, "prefill"));
+    try std.testing.expect(@hasDecl(Qwen35Model, "resetCache"));
+    try std.testing.expect(@hasDecl(Qwen35Model, "cancel"));
+    try std.testing.expect(@hasDecl(Qwen35Model, "model"));
+}
+
+test "layerVType boundary = 1 single-layer protection" {
+    var m: Qwen35Model = undefined;
+    m.n_layers = 8;
+    m.kv_type_v = .turbo3;
+    m.kv_boundary_v = 1;
+    // Only first and last layer use f16
+    try std.testing.expectEqual(kv_quant.KvQuantType.f16, m.layerVType(0));
+    try std.testing.expectEqual(kv_quant.KvQuantType.turbo3, m.layerVType(1));
+    try std.testing.expectEqual(kv_quant.KvQuantType.turbo3, m.layerVType(3));
+    try std.testing.expectEqual(kv_quant.KvQuantType.turbo3, m.layerVType(6));
+    try std.testing.expectEqual(kv_quant.KvQuantType.f16, m.layerVType(7));
+}
+
+test "layerVType boundary covers all layers" {
+    var m: Qwen35Model = undefined;
+    m.n_layers = 8;
+    m.kv_type_v = .turbo4;
+    // boundary = 4, n_layers = 8: first 4 + last 4 = all 8 layers use f16
+    m.kv_boundary_v = 4;
+    for (0..8) |i| {
+        try std.testing.expectEqual(kv_quant.KvQuantType.f16, m.layerVType(@intCast(i)));
+    }
+}
+
+test "isFullAttn with interval 2 — alternating" {
+    var m: Qwen35Model = undefined;
+    m.full_attn_interval = 2;
+    // (layer+1) % 2 == 0 → odd layers are full attention
+    try std.testing.expect(!m.isFullAttn(0)); // (0+1)%2 = 1
+    try std.testing.expect(m.isFullAttn(1)); // (1+1)%2 = 0
+    try std.testing.expect(!m.isFullAttn(2)); // (2+1)%2 = 1
+    try std.testing.expect(m.isFullAttn(3)); // (3+1)%2 = 0
+}
+
+test "rmsNormPlusOne with non-zero weights" {
+    var input = [_]f32{ 1.0, 2.0, 3.0, 4.0 };
+    var output = [_]f32{ 0, 0, 0, 0 };
+    var weight = [_]f32{ 1.0, 0.5, -0.5, 0.0 };
+
+    Qwen35Model.rmsNormPlusOne(&input, &output, &weight, 4, 1e-6);
+
+    const sum_sq: f32 = 1.0 + 4.0 + 9.0 + 16.0;
+    const inv_rms = 1.0 / @sqrt(sum_sq / 4.0 + 1e-6);
+    // output[i] = (1 + w[i]) * input[i] * inv_rms
+    try std.testing.expectApproxEqAbs(2.0 * 1.0 * inv_rms, output[0], 1e-5);
+    try std.testing.expectApproxEqAbs(1.5 * 2.0 * inv_rms, output[1], 1e-5);
+    try std.testing.expectApproxEqAbs(0.5 * 3.0 * inv_rms, output[2], 1e-5);
+    try std.testing.expectApproxEqAbs(1.0 * 4.0 * inv_rms, output[3], 1e-5);
+}
+
+test "ssmConvChannels with different configs" {
+    var m: Qwen35Model = undefined;
+    // Minimal config: d_inner=256, n_group=4, d_state=64
+    m.ssm_d_inner = 256;
+    m.ssm_n_group = 4;
+    m.ssm_d_state = 64;
+    // conv_ch = 256 + 2 * 4 * 64 = 256 + 512 = 768
+    try std.testing.expectEqual(@as(usize, 768), m.ssmConvChannels());
+}

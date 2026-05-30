@@ -684,4 +684,58 @@ test "NemotronHModel convChannels default" {
     try std.testing.expectEqual(@as(usize, 17504), proj);
 }
 
+test "NemotronH convChannels method" {
+    // Test the actual method on a struct instance
+    var m: NemotronHModel = undefined;
+    m.ssm_d_inner = 7680;
+    m.ssm_n_group = 8;
+    m.ssm_d_state = 128;
+    try std.testing.expectEqual(@as(usize, 9728), m.convChannels());
+
+    // Smaller config
+    m.ssm_d_inner = 1024;
+    m.ssm_n_group = 4;
+    m.ssm_d_state = 64;
+    // 1024 + 2*4*64 = 1024 + 512 = 1536
+    try std.testing.expectEqual(@as(usize, 1536), m.convChannels());
+}
+
+test "NemotronH LayerType enum" {
+    // Verify the three layer types are distinct
+    try std.testing.expect(LayerType.ssm != LayerType.attention);
+    try std.testing.expect(LayerType.ssm != LayerType.ffn_only);
+    try std.testing.expect(LayerType.attention != LayerType.ffn_only);
+}
+
+test "NemotronH layer type pattern" {
+    // Simulate the 8B variant's layer distribution
+    var types: [42]LayerType = [_]LayerType{.ffn_only} ** 42;
+    var n_ssm: usize = 0;
+    var n_attn: usize = 0;
+    var n_ffn: usize = 0;
+
+    // Example pattern: layers 0,2,4,... are SSM; 1,9,17,25 are attention; rest FFN
+    const ssm_layers = [_]usize{ 0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 24, 26, 28, 30, 32, 34, 36, 38, 40 };
+    const attn_layers = [_]usize{ 1, 9, 17, 25 };
+    for (ssm_layers) |l| types[l] = .ssm;
+    for (attn_layers) |l| types[l] = .attention;
+
+    for (types) |t| switch (t) {
+        .ssm => n_ssm += 1,
+        .attention => n_attn += 1,
+        .ffn_only => n_ffn += 1,
+    };
+    try std.testing.expectEqual(@as(usize, 21), n_ssm);
+    try std.testing.expectEqual(@as(usize, 4), n_attn);
+    try std.testing.expectEqual(@as(usize, 17), n_ffn);
+}
+
+test "NemotronH model vtable compiles" {
+    try std.testing.expect(@hasDecl(NemotronHModel, "forward"));
+    try std.testing.expect(@hasDecl(NemotronHModel, "prefill"));
+    try std.testing.expect(@hasDecl(NemotronHModel, "resetCache"));
+    try std.testing.expect(@hasDecl(NemotronHModel, "cancel"));
+    try std.testing.expect(@hasDecl(NemotronHModel, "model"));
+}
+
 // argmax is tested in src/ops/math.zig — no need to duplicate here.

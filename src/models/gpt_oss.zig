@@ -829,3 +829,243 @@ fn inferMlxBits(t: TensorInfo, k: u32) u32 {
     const result = words_dim * bits_per_u32_word / @as(u64, k);
     return if (result >= min_mlx_bits and result <= max_mlx_bits) @intCast(result) else default_mlx_bits;
 }
+
+// ── Tests ─────────────────────────────────────────────────────────
+
+test "addBiasTyped f32" {
+    var dst = [_]f32{ 1.0, 2.0, 3.0, 4.0 };
+    const bias = [_]f32{ 0.5, -0.5, 1.0, -1.0 };
+    addBiasTyped(&dst, @ptrCast(&bias), 4, .f32);
+    try std.testing.expectApproxEqAbs(@as(f32, 1.5), dst[0], 1e-6);
+    try std.testing.expectApproxEqAbs(@as(f32, 1.5), dst[1], 1e-6);
+    try std.testing.expectApproxEqAbs(@as(f32, 4.0), dst[2], 1e-6);
+    try std.testing.expectApproxEqAbs(@as(f32, 3.0), dst[3], 1e-6);
+}
+
+test "addBiasTyped bf16" {
+    var dst = [_]f32{ 0.0, 0.0 };
+    // BF16 1.0 = 0x3F80, BF16 -1.0 = 0xBF80
+    const bias_bf16 = [_]u16{ 0x3F80, 0xBF80 };
+    addBiasTyped(&dst, @ptrCast(&bias_bf16), 2, .bf16);
+    try std.testing.expectApproxEqAbs(@as(f32, 1.0), dst[0], 1e-6);
+    try std.testing.expectApproxEqAbs(@as(f32, -1.0), dst[1], 1e-6);
+}
+
+test "inferMlxBits 8-bit" {
+    // 720 words * 32 / 2880 = 8 bits
+    const t = TensorInfo{
+        .name = "test",
+        .data_ptr = @ptrFromInt(0x1000),
+        .dtype = .mlx_q,
+        .n_dims = 2,
+        .dims = .{ 2880, 720, 0, 0 },
+    };
+    try std.testing.expectEqual(@as(u32, 8), inferMlxBits(t, 2880));
+}
+
+test "inferMlxBits 4-bit" {
+    // 360 words * 32 / 2880 = 4 bits
+    const t = TensorInfo{
+        .name = "test",
+        .data_ptr = @ptrFromInt(0x1000),
+        .dtype = .mlx_q,
+        .n_dims = 2,
+        .dims = .{ 2880, 360, 0, 0 },
+    };
+    try std.testing.expectEqual(@as(u32, 4), inferMlxBits(t, 2880));
+}
+
+test "inferMlxBits degenerate inputs" {
+    // k=0 → default 4
+    const t = TensorInfo{
+        .name = "test",
+        .data_ptr = @ptrFromInt(0x1000),
+        .dtype = .mlx_q,
+        .n_dims = 2,
+        .dims = .{ 1, 1, 0, 0 },
+    };
+    try std.testing.expectEqual(@as(u32, 4), inferMlxBits(t, 0));
+
+    // n_dims < 2 → default 4
+    const t1d = TensorInfo{
+        .name = "test",
+        .data_ptr = @ptrFromInt(0x1000),
+        .dtype = .mlx_q,
+        .n_dims = 1,
+        .dims = .{ 100, 0, 0, 0 },
+    };
+    try std.testing.expectEqual(@as(u32, 4), inferMlxBits(t1d, 100));
+}
+
+test "inferMlxBits expert tensor 3D" {
+    // Expert tensor [n_experts=32, rows=2880, words=360]: 360 * 32 / 2880 = 4
+    const t = TensorInfo{
+        .name = "test",
+        .data_ptr = @ptrFromInt(0x1000),
+        .dtype = .mlx_q,
+        .n_dims = 3,
+        .dims = .{ 32, 2880, 360, 0 },
+    };
+    try std.testing.expectEqual(@as(u32, 4), inferMlxBits(t, 2880));
+}
+
+test "GptOss Companion expertScaleStrideMxfp4" {
+    const comp = GptOssModel.Companion{
+        .scales = @ptrFromInt(0x1000),
+        .biases = undefined,
+        .scale_t = .{
+            .name = "test",
+            .data_ptr = @ptrFromInt(0x1000),
+            .dtype = .unknown,
+            .n_dims = 3,
+            .dims = .{ 32, 2880, 180, 0 }, // [n_experts, rows, groups_per_row]
+        },
+        .bias_t = undefined,
+        .is_mxfp4 = true,
+        .bits = 4,
+    };
+    // Per-expert = dims[1] * dims[2] = 2880 * 180 = 518400
+    try std.testing.expectEqual(@as(usize, 518400), comp.expertScaleStrideMxfp4());
+}
+
+test "GptOss model vtable compiles" {
+    try std.testing.expect(@hasDecl(GptOssModel, "forward"));
+    try std.testing.expect(@hasDecl(GptOssModel, "prefill"));
+    try std.testing.expect(@hasDecl(GptOssModel, "resetCache"));
+    try std.testing.expect(@hasDecl(GptOssModel, "cancel"));
+    try std.testing.expect(@hasDecl(GptOssModel, "model"));
+}
+
+test "GptOss Companion expertScaleStrideAffine" {
+    const comp = GptOssModel.Companion{
+        .scales = @ptrFromInt(0x1000),
+        .biases = @ptrFromInt(0x2000),
+        .scale_t = .{
+            .name = "test",
+            .data_ptr = @ptrFromInt(0x1000),
+            .dtype = .bf16,
+            .n_dims = 3,
+            .dims = .{ 32, 2880, 90, 0 }, // [n_experts, rows, groups_per_row]
+        },
+        .bias_t = .{
+            .name = "test",
+            .data_ptr = @ptrFromInt(0x2000),
+            .dtype = .bf16,
+            .n_dims = 3,
+            .dims = .{ 32, 2880, 90, 0 },
+        },
+        .is_mxfp4 = false,
+        .bits = 4,
+    };
+    // Per-expert = dims[1] * dims[2] * 2 = 2880 * 90 * 2 = 518400
+    try std.testing.expectEqual(@as(usize, 518400), comp.expertScaleStrideAffine());
+}
+
+test "GptOss Companion expertScaleStrideMxfp4 2D fallback" {
+    // When n_dims < 3, should use numElements() fallback
+    const comp = GptOssModel.Companion{
+        .scales = @ptrFromInt(0x1000),
+        .biases = undefined,
+        .scale_t = .{
+            .name = "test",
+            .data_ptr = @ptrFromInt(0x1000),
+            .dtype = .unknown,
+            .n_dims = 2,
+            .dims = .{ 100, 50, 0, 0 },
+        },
+        .bias_t = undefined,
+        .is_mxfp4 = true,
+        .bits = 4,
+    };
+    // numElements() = 100 * 50 = 5000
+    try std.testing.expectEqual(@as(usize, 5000), comp.expertScaleStrideMxfp4());
+}
+
+test "GptOss Companion expertScaleStrideAffine 2D fallback" {
+    // When n_dims < 3, should use numElements() * 2 fallback
+    const comp = GptOssModel.Companion{
+        .scales = @ptrFromInt(0x1000),
+        .biases = @ptrFromInt(0x2000),
+        .scale_t = .{
+            .name = "test",
+            .data_ptr = @ptrFromInt(0x1000),
+            .dtype = .bf16,
+            .n_dims = 2,
+            .dims = .{ 100, 50, 0, 0 },
+        },
+        .bias_t = .{
+            .name = "test",
+            .data_ptr = @ptrFromInt(0x2000),
+            .dtype = .bf16,
+            .n_dims = 2,
+            .dims = .{ 100, 50, 0, 0 },
+        },
+        .is_mxfp4 = false,
+        .bits = 8,
+    };
+    // numElements() * 2 = (100 * 50) * 2 = 10000
+    try std.testing.expectEqual(@as(usize, 10000), comp.expertScaleStrideAffine());
+}
+
+test "inferMlxBits out-of-range returns default" {
+    // words_dim * 32 / k = 1000 * 32 / 1 = 32000 — exceeds max_mlx_bits (32)
+    const t = TensorInfo{
+        .name = "test",
+        .data_ptr = @ptrFromInt(0x1000),
+        .dtype = .mlx_q,
+        .n_dims = 2,
+        .dims = .{ 1, 1000, 0, 0 },
+    };
+    try std.testing.expectEqual(default_mlx_bits, inferMlxBits(t, 1));
+}
+
+test "addBiasTyped f32 SIMD path" {
+    // Test with 16 elements to exercise the SIMD (V8) loop path
+    var dst = [_]f32{ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16 };
+    const bias = [_]f32{ 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2, 1.3, 1.4, 1.5, 1.6 };
+    addBiasTyped(&dst, @ptrCast(&bias), 16, .f32);
+    for (0..16) |i| {
+        const expected: f32 = @as(f32, @floatFromInt(i + 1)) + @as(f32, @floatFromInt(i + 1)) * 0.1;
+        try std.testing.expectApproxEqAbs(expected, dst[i], 1e-5);
+    }
+}
+
+test "addBiasTyped bf16 SIMD path" {
+    // BF16 1.0=0x3F80, 2.0=0x4000, 3.0=0x4040, 4.0=0x4080,
+    // 5.0=0x40A0, 6.0=0x40C0, 7.0=0x40E0, 8.0=0x4100
+    var dst = [_]f32{ 0, 0, 0, 0, 0, 0, 0, 0 };
+    const bias_bf16 = [_]u16{ 0x3F80, 0x4000, 0x4040, 0x4080, 0x40A0, 0x40C0, 0x40E0, 0x4100 };
+    addBiasTyped(&dst, @ptrCast(&bias_bf16), 8, .bf16);
+    try std.testing.expectApproxEqAbs(@as(f32, 1.0), dst[0], 1e-6);
+    try std.testing.expectApproxEqAbs(@as(f32, 2.0), dst[1], 1e-6);
+    try std.testing.expectApproxEqAbs(@as(f32, 3.0), dst[2], 1e-6);
+    try std.testing.expectApproxEqAbs(@as(f32, 4.0), dst[3], 1e-6);
+    try std.testing.expectApproxEqAbs(@as(f32, 5.0), dst[4], 1e-6);
+    try std.testing.expectApproxEqAbs(@as(f32, 6.0), dst[5], 1e-6);
+    try std.testing.expectApproxEqAbs(@as(f32, 7.0), dst[6], 1e-6);
+    try std.testing.expectApproxEqAbs(@as(f32, 8.0), dst[7], 1e-6);
+}
+
+test "GptOss module-level constants are consistent" {
+    // Verify named constants have sensible relationships
+    try std.testing.expect(max_active_experts > 0);
+    try std.testing.expect(max_sink_heads >= 64); // must fit n_head=64
+    try std.testing.expect(max_norm_entries >= 73); // 3 norms * 24 layers + 1 output norm
+    try std.testing.expect(attention_sink_slots == 1);
+    try std.testing.expect(min_mlx_bits <= max_mlx_bits);
+    try std.testing.expectEqual(@as(u64, 32), bits_per_u32_word);
+}
+
+test "GptOss fn signatures compile" {
+    comptime {
+        // Verify all public method signatures are well-formed
+        _ = @TypeOf(GptOssModel.init);
+        _ = @TypeOf(GptOssModel.deinit);
+        _ = @TypeOf(GptOssModel.model);
+        _ = @TypeOf(GptOssModel.forward);
+        _ = @TypeOf(GptOssModel.prefill);
+        _ = @TypeOf(GptOssModel.resetCache);
+        _ = @TypeOf(GptOssModel.cancel);
+        _ = @TypeOf(GptOssModel.getBlockTable);
+    }
+}

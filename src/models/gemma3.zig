@@ -1107,3 +1107,172 @@ pub const Gemma3Model = struct {
         }
     }
 };
+
+// ── Tests ─────────────────────────────────────────────────────────
+
+test "Gemma3 layerVType boundary protection" {
+    var m: Gemma3Model = undefined;
+    m.n_layers = 26;
+    m.kv_type_v = .turbo4;
+
+    // No boundary — all layers use configured type
+    m.kv_boundary_v = 0;
+    try std.testing.expectEqual(kv_quant.KvQuantType.turbo4, m.layerVType(0));
+    try std.testing.expectEqual(kv_quant.KvQuantType.turbo4, m.layerVType(25));
+
+    // Boundary = 3: first/last 3 layers use f16
+    m.kv_boundary_v = 3;
+    try std.testing.expectEqual(kv_quant.KvQuantType.f16, m.layerVType(0));
+    try std.testing.expectEqual(kv_quant.KvQuantType.f16, m.layerVType(2));
+    try std.testing.expectEqual(kv_quant.KvQuantType.turbo4, m.layerVType(3));
+    try std.testing.expectEqual(kv_quant.KvQuantType.turbo4, m.layerVType(12));
+    try std.testing.expectEqual(kv_quant.KvQuantType.turbo4, m.layerVType(22));
+    try std.testing.expectEqual(kv_quant.KvQuantType.f16, m.layerVType(23));
+    try std.testing.expectEqual(kv_quant.KvQuantType.f16, m.layerVType(25));
+}
+
+test "Gemma3 sliding window pattern" {
+    // sliding_window_pattern=6: every 6th layer (1-indexed) is global (full attention).
+    // Local layers: (li+1) % 6 != 0 → layers 0,1,2,3,4, 6,7,8,9,10, ...
+    // Global layers: (li+1) % 6 == 0 → layers 5, 11, 17, 23
+    const pattern: u32 = 6;
+    for (0..26) |li| {
+        const is_local = pattern > 0 and (li + 1) % pattern != 0;
+        if (li == 5 or li == 11 or li == 17 or li == 23) {
+            try std.testing.expect(!is_local);
+        } else {
+            try std.testing.expect(is_local);
+        }
+    }
+}
+
+test "Gemma3 applyRopeScaled basic" {
+    // Test that RoPE with freq_scale=1.0 at position 0 is identity
+    var x = [_]f32{ 1.0, 0.0, 0.5, 0.5 };
+    Gemma3Model.applyRopeScaled(&x, 0, 1, 4, 4, 10000.0, 1.0);
+    // At position 0, angle=0 for all freqs: cos(0)=1, sin(0)=0
+    // x[0] = x[0]*1 - x[2]*0 = 1.0
+    // x[2] = x[0]*0 + x[2]*1 = 0.5
+    try std.testing.expectApproxEqAbs(@as(f32, 1.0), x[0], 1e-5);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.0), x[1], 1e-5);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.5), x[2], 1e-5);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.5), x[3], 1e-5);
+}
+
+test "Gemma3 embedding scale" {
+    // embd_scale = sqrt(n_embd)
+    const n_embd: u32 = 1152;
+    const expected: f32 = @sqrt(@as(f32, @floatFromInt(n_embd)));
+    try std.testing.expectApproxEqAbs(@as(f32, 33.9411), expected, 0.001);
+}
+
+test "Gemma3 attention scale from query_pre_attn_scalar" {
+    // Gemma uses 1/sqrt(scalar) where scalar defaults to head_dim
+    const head_dim: u32 = 256;
+    const attn_scale = 1.0 / @sqrt(@as(f32, @floatFromInt(head_dim)));
+    try std.testing.expectApproxEqAbs(@as(f32, 0.0625), attn_scale, 1e-5);
+}
+
+test "Gemma3 model vtable compiles" {
+    try std.testing.expect(@hasDecl(Gemma3Model, "forward"));
+    try std.testing.expect(@hasDecl(Gemma3Model, "prefill"));
+    try std.testing.expect(@hasDecl(Gemma3Model, "resetCache"));
+    try std.testing.expect(@hasDecl(Gemma3Model, "cancel"));
+    try std.testing.expect(@hasDecl(Gemma3Model, "model"));
+}
+
+test "Gemma3 applyRopeScaled non-zero position" {
+    // At position 1 with a small rope_dim, verify rotation is applied.
+    // With theta=10000, rope_dim=4, half=2:
+    //   freq[0] = exp(-log(10000) * 0/4) = 1.0, angle = 1.0
+    //   freq[1] = exp(-log(10000) * 2/4) = 1/100, angle = 0.01
+    var x = [_]f32{ 1.0, 0.0, 0.0, 0.0 };
+    Gemma3Model.applyRopeScaled(&x, 1, 1, 4, 4, 10000.0, 1.0);
+    // x[0] = 1.0 * cos(1.0) - 0.0 * sin(1.0) = cos(1.0)
+    try std.testing.expectApproxEqAbs(@cos(@as(f32, 1.0)), x[0], 1e-5);
+    // x[2] = 1.0 * sin(1.0) + 0.0 * cos(1.0) = sin(1.0)
+    try std.testing.expectApproxEqAbs(@sin(@as(f32, 1.0)), x[2], 1e-5);
+}
+
+test "Gemma3 applyRopeScaled freq_scale halves angle" {
+    // freq_scale=0.5 should halve the effective position: pos=2, scale=0.5 -> p=1.0
+    var x_scaled = [_]f32{ 1.0, 0.0, 0.0, 0.0 };
+    Gemma3Model.applyRopeScaled(&x_scaled, 2, 1, 4, 4, 10000.0, 0.5);
+    var x_ref = [_]f32{ 1.0, 0.0, 0.0, 0.0 };
+    Gemma3Model.applyRopeScaled(&x_ref, 1, 1, 4, 4, 10000.0, 1.0);
+    // Both should produce the same result since 2*0.5 = 1*1.0
+    try std.testing.expectApproxEqAbs(x_ref[0], x_scaled[0], 1e-5);
+    try std.testing.expectApproxEqAbs(x_ref[1], x_scaled[1], 1e-5);
+    try std.testing.expectApproxEqAbs(x_ref[2], x_scaled[2], 1e-5);
+    try std.testing.expectApproxEqAbs(x_ref[3], x_scaled[3], 1e-5);
+}
+
+test "Gemma3 applyRopeScaled multi-head" {
+    // 2 heads, head_dim=4: RoPE should apply independently to each head
+    var x = [_]f32{ 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0 };
+    Gemma3Model.applyRopeScaled(&x, 1, 2, 4, 4, 10000.0, 1.0);
+    // Both heads should get the same rotation since they start with identical values
+    try std.testing.expectApproxEqAbs(x[0], x[4], 1e-5);
+    try std.testing.expectApproxEqAbs(x[1], x[5], 1e-5);
+    try std.testing.expectApproxEqAbs(x[2], x[6], 1e-5);
+    try std.testing.expectApproxEqAbs(x[3], x[7], 1e-5);
+}
+
+test "Gemma3 applySoftcap tanh clamping" {
+    // softcap = cap * tanh(x / cap). For large x, tanh saturates to +/-1.
+    var m: Gemma3Model = undefined;
+    m.final_logit_softcap = 30.0;
+    // Allocate a buffer with values that exercise both SIMD (>=8) and scalar paths
+    var buf = [_]f32{ 100.0, -100.0, 0.0, 15.0, -15.0, 30.0, 60.0, 1.0, 0.5 };
+    m.logits_buf = &buf;
+    m.applySoftcap();
+    // Large positive -> cap (30.0)
+    try std.testing.expectApproxEqAbs(@as(f32, 30.0), buf[0], 0.01);
+    // Large negative -> -cap (-30.0)
+    try std.testing.expectApproxEqAbs(@as(f32, -30.0), buf[1], 0.01);
+    // Zero -> 0.0
+    try std.testing.expectApproxEqAbs(@as(f32, 0.0), buf[2], 1e-5);
+    // tanh(15/30) = tanh(0.5) ~ 0.4621; 30 * 0.4621 ~ 13.86
+    try std.testing.expectApproxEqAbs(@as(f32, 30.0 * @as(f32, math.tanh(@as(f32, 0.5)))), buf[3], 0.01);
+    // Scalar tail element (index 8): tanh(0.5/30) ~ 0.01667; 30 * 0.01667 ~ 0.5
+    try std.testing.expectApproxEqAbs(@as(f32, 30.0 * @as(f32, math.tanh(@as(f32, 0.5 / 30.0)))), buf[8], 0.01);
+}
+
+test "Gemma3 default constants sanity" {
+    // Verify named constants have expected values matching Gemma3 1B config
+    try std.testing.expectEqual(@as(u32, 26), default_n_layers);
+    try std.testing.expectEqual(@as(u32, 1152), default_n_embd);
+    try std.testing.expectEqual(@as(u32, 256), default_head_dim);
+    try std.testing.expectEqual(@as(u32, 6912), default_n_ff);
+    try std.testing.expectEqual(@as(u32, 262144), default_vocab_size);
+    try std.testing.expectEqual(@as(u32, 4), default_n_head);
+    try std.testing.expectEqual(@as(u32, 1), default_n_head_kv);
+    try std.testing.expectEqual(@as(f32, 1_000_000.0), default_rope_freq_base);
+    try std.testing.expectEqual(@as(f32, 10_000.0), default_rope_local_freq_base);
+    try std.testing.expectEqual(@as(u32, 6), default_sliding_window_pattern);
+    // n_ff should be 6x n_embd for Gemma3 1B
+    try std.testing.expectEqual(@as(u32, 6912), default_n_ff);
+}
+
+test "Gemma3 struct field types compile" {
+    // Compile-time verification that key struct fields exist with expected types
+    comptime {
+        _ = @TypeOf(@as(Gemma3Model, undefined).n_layers);
+        _ = @TypeOf(@as(Gemma3Model, undefined).n_embd);
+        _ = @TypeOf(@as(Gemma3Model, undefined).n_head);
+        _ = @TypeOf(@as(Gemma3Model, undefined).head_dim);
+        _ = @TypeOf(@as(Gemma3Model, undefined).rope_theta);
+        _ = @TypeOf(@as(Gemma3Model, undefined).attn_scale);
+        _ = @TypeOf(@as(Gemma3Model, undefined).embd_scale);
+        _ = @TypeOf(@as(Gemma3Model, undefined).megakernel_enabled);
+        _ = @TypeOf(@as(Gemma3Model, undefined).norm_add_one);
+        _ = @TypeOf(@as(Gemma3Model, undefined).kv_type_k);
+        _ = @TypeOf(@as(Gemma3Model, undefined).kv_type_v);
+        _ = @TypeOf(Gemma3Model.init);
+        _ = @TypeOf(Gemma3Model.deinit);
+        _ = @TypeOf(Gemma3Model.forward);
+        _ = @TypeOf(Gemma3Model.prefill);
+        _ = @TypeOf(Gemma3Model.forwardTree);
+        _ = @TypeOf(Gemma3Model.treeLogits);
+    }
+}

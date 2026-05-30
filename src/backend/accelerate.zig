@@ -66,3 +66,111 @@ pub fn sgemv(n: usize, k: usize, x: [*]const f32, w: [*]const f32, y: [*]f32) vo
     if (comptime !is_macos) unreachable;
     sgemm(1, n, k, x, w, y);
 }
+
+// ── Tests ───────────────────────────────────────────────────────────
+
+test "accelerate — function signatures exist" {
+    // Verify all public functions have correct types (compile-time check).
+    // These are thin FFI wrappers so we only verify they compile.
+    comptime {
+        _ = @TypeOf(sgemm);
+        _ = @TypeOf(sdot);
+        _ = @TypeOf(vdspDot);
+        _ = @TypeOf(sgemv);
+    }
+}
+
+test "accelerate — cblas constants" {
+    // Verify CBLAS constants match Apple Accelerate.framework header values.
+    try std.testing.expectEqual(@as(c_int, 101), CblasRowMajor);
+    try std.testing.expectEqual(@as(c_int, 111), CblasNoTrans);
+    try std.testing.expectEqual(@as(c_int, 112), CblasTrans);
+}
+
+test "accelerate — sgemm via Accelerate.framework" {
+    if (comptime !is_macos) return error.SkipZigTest;
+
+    // 2×3 @ 3×2 = 2×2 (B transposed: B is [n=2, k=3] row-major)
+    const a = [_]f32{ 1, 2, 3, 4, 5, 6 }; // [2, 3]
+    const b = [_]f32{ 1, 0, 0, 0, 1, 0 }; // [2, 3] transposed → selects cols
+    var c_out: [4]f32 = undefined; // [2, 2]
+
+    sgemm(2, 2, 3, &a, &b, &c_out);
+
+    // Row 0: [1,2,3] dot [1,0,0] = 1, [1,2,3] dot [0,1,0] = 2
+    // Row 1: [4,5,6] dot [1,0,0] = 4, [4,5,6] dot [0,1,0] = 5
+    try std.testing.expectApproxEqAbs(@as(f32, 1.0), c_out[0], 1e-6);
+    try std.testing.expectApproxEqAbs(@as(f32, 2.0), c_out[1], 1e-6);
+    try std.testing.expectApproxEqAbs(@as(f32, 4.0), c_out[2], 1e-6);
+    try std.testing.expectApproxEqAbs(@as(f32, 5.0), c_out[3], 1e-6);
+}
+
+test "accelerate — sdot" {
+    if (comptime !is_macos) return error.SkipZigTest;
+
+    const x = [_]f32{ 1, 2, 3, 4 };
+    const y = [_]f32{ 2, 3, 4, 5 };
+    const result = sdot(4, &x, &y);
+    // 1*2 + 2*3 + 3*4 + 4*5 = 2 + 6 + 12 + 20 = 40
+    try std.testing.expectApproxEqAbs(@as(f32, 40.0), result, 1e-6);
+}
+
+test "accelerate — vdspDot" {
+    if (comptime !is_macos) return error.SkipZigTest;
+
+    const a = [_]f32{ 1, 2, 3, 4 };
+    const b = [_]f32{ 2, 3, 4, 5 };
+    const result = vdspDot(&a, &b, 4);
+    try std.testing.expectApproxEqAbs(@as(f32, 40.0), result, 1e-6);
+}
+
+test "accelerate — sdot and vdspDot agree" {
+    if (comptime !is_macos) return error.SkipZigTest;
+
+    const x = [_]f32{ 0.5, -1.2, 3.7, 0.0, -2.1, 1.0, 0.3, -0.8 };
+    const y = [_]f32{ 1.0, 2.0, -0.5, 3.0, 0.0, -1.0, 2.5, 1.5 };
+    const dot_result = sdot(8, &x, &y);
+    const vdsp_result = vdspDot(&x, &y, 8);
+    try std.testing.expectApproxEqAbs(dot_result, vdsp_result, 1e-5);
+}
+
+test "accelerate — sgemv via sgemm" {
+    if (comptime !is_macos) return error.SkipZigTest;
+
+    // y[3] = W[3,4] @ x[4]
+    const x = [_]f32{ 1, 0, 0, 0 };
+    const w = [_]f32{
+        1, 2, 3, 4, // row 0
+        5, 6, 7, 8, // row 1
+        9, 10, 11, 12, // row 2
+    };
+    var y: [3]f32 = undefined;
+
+    sgemv(3, 4, &x, &w, &y);
+
+    // x = [1,0,0,0] selects first column of W
+    try std.testing.expectApproxEqAbs(@as(f32, 1.0), y[0], 1e-6);
+    try std.testing.expectApproxEqAbs(@as(f32, 5.0), y[1], 1e-6);
+    try std.testing.expectApproxEqAbs(@as(f32, 9.0), y[2], 1e-6);
+}
+
+test "accelerate — sgemv identity matrix preserves input" {
+    if (comptime @import("builtin").os.tag != .macos) return error.SkipZigTest;
+
+    // Identity matrix: y = I @ x should yield y == x.
+    // W is [4,4] identity in row-major order.
+    const identity = [_]f32{
+        1, 0, 0, 0,
+        0, 1, 0, 0,
+        0, 0, 1, 0,
+        0, 0, 0, 1,
+    };
+    const x = [_]f32{ 3.14, -2.71, 0.0, 42.0 };
+    var y: [4]f32 = undefined;
+
+    sgemv(4, 4, &x, &identity, &y);
+
+    for (0..4) |i| {
+        try std.testing.expectApproxEqAbs(x[i], y[i], 1e-6);
+    }
+}

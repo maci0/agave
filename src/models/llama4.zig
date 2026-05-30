@@ -1120,3 +1120,210 @@ pub const Llama4Model = struct {
         return buf.ptr;
     }
 };
+
+// ── Tests ─────────────────────────────────────────────────────────
+
+test "Llama4 isNopeLayer with interval 4" {
+    var m: Llama4Model = undefined;
+    m.nope_interval = 4;
+    // NoPE when (layer+1) % 4 == 0 → layers 3, 7, 11, ...
+    try std.testing.expect(!m.isNopeLayer(0)); // 1 % 4 != 0
+    try std.testing.expect(!m.isNopeLayer(1)); // 2 % 4 != 0
+    try std.testing.expect(!m.isNopeLayer(2)); // 3 % 4 != 0
+    try std.testing.expect(m.isNopeLayer(3)); // 4 % 4 == 0
+    try std.testing.expect(!m.isNopeLayer(4)); // 5 % 4 != 0
+    try std.testing.expect(m.isNopeLayer(7)); // 8 % 4 == 0
+    try std.testing.expect(m.isNopeLayer(11)); // 12 % 4 == 0
+}
+
+test "Llama4 isNopeLayer with interval 0 — no NoPE layers" {
+    var m: Llama4Model = undefined;
+    m.nope_interval = 0;
+    try std.testing.expect(!m.isNopeLayer(0));
+    try std.testing.expect(!m.isNopeLayer(3));
+    try std.testing.expect(!m.isNopeLayer(47));
+}
+
+test "Llama4 layerVType boundary protection" {
+    var m: Llama4Model = undefined;
+    m.n_layers = 48;
+    m.kv_type_v = .turbo3;
+
+    // No boundary
+    m.kv_boundary_v = 0;
+    try std.testing.expectEqual(kv_quant.KvQuantType.turbo3, m.layerVType(0));
+    try std.testing.expectEqual(kv_quant.KvQuantType.turbo3, m.layerVType(47));
+
+    // Boundary = 4: first/last 4 layers use f16
+    m.kv_boundary_v = 4;
+    try std.testing.expectEqual(kv_quant.KvQuantType.f16, m.layerVType(0));
+    try std.testing.expectEqual(kv_quant.KvQuantType.f16, m.layerVType(3));
+    try std.testing.expectEqual(kv_quant.KvQuantType.turbo3, m.layerVType(4));
+    try std.testing.expectEqual(kv_quant.KvQuantType.turbo3, m.layerVType(24));
+    try std.testing.expectEqual(kv_quant.KvQuantType.turbo3, m.layerVType(43));
+    try std.testing.expectEqual(kv_quant.KvQuantType.f16, m.layerVType(44));
+    try std.testing.expectEqual(kv_quant.KvQuantType.f16, m.layerVType(47));
+}
+
+test "Llama4 NoPE temperature scaling formula" {
+    // temp = log(floor((pos+1) / floor_scale) + 1) * attn_temp_scale + 1.0
+    const floor_scale: f32 = 8192.0;
+    const attn_temp_scale: f32 = 0.1;
+
+    // Position 0: log(floor(1/8192) + 1) * 0.1 + 1 = log(0+1)*0.1 + 1 = 0 + 1 = 1.0
+    const pos0: f32 = @floatFromInt(@as(u32, 0) + 1);
+    const temp0 = @log(@floor(pos0 / floor_scale) + 1.0) * attn_temp_scale + 1.0;
+    try std.testing.expectApproxEqAbs(@as(f32, 1.0), temp0, 1e-5);
+
+    // Position 8191 (still in first chunk): same as pos 0
+    const pos8191: f32 = @floatFromInt(@as(u32, 8191) + 1);
+    const temp8191 = @log(@floor(pos8191 / floor_scale) + 1.0) * attn_temp_scale + 1.0;
+    try std.testing.expectApproxEqAbs(@as(f32, 1.0), temp8191, 1e-5);
+
+    // Position 8192: log(floor(8193/8192) + 1) * 0.1 + 1 = log(2)*0.1 + 1
+    const pos8192: f32 = @floatFromInt(@as(u32, 8192) + 1);
+    const temp8192 = @log(@floor(pos8192 / floor_scale) + 1.0) * attn_temp_scale + 1.0;
+    const expected = @log(@as(f32, 2.0)) * 0.1 + 1.0;
+    try std.testing.expectApproxEqAbs(expected, temp8192, 1e-5);
+}
+
+test "Llama4 chunked attention window" {
+    // Window start = floor(pos / chunk_size) * chunk_size
+    // Window length = pos + 1 - window_start
+    const chunk_size: usize = 8192;
+
+    // Position 100: window [0, 101)
+    const pos0: usize = 100;
+    const win_start0 = (pos0 / chunk_size) * chunk_size;
+    const win_len0 = pos0 + 1 - win_start0;
+    try std.testing.expectEqual(@as(usize, 0), win_start0);
+    try std.testing.expectEqual(@as(usize, 101), win_len0);
+
+    // Position 8192: new chunk starts, window [8192, 8193)
+    const pos1: usize = 8192;
+    const win_start1 = (pos1 / chunk_size) * chunk_size;
+    const win_len1 = pos1 + 1 - win_start1;
+    try std.testing.expectEqual(@as(usize, 8192), win_start1);
+    try std.testing.expectEqual(@as(usize, 1), win_len1);
+
+    // Position 8300: window [8192, 8301)
+    const pos2: usize = 8300;
+    const win_start2 = (pos2 / chunk_size) * chunk_size;
+    const win_len2 = pos2 + 1 - win_start2;
+    try std.testing.expectEqual(@as(usize, 8192), win_start2);
+    try std.testing.expectEqual(@as(usize, 109), win_len2);
+}
+
+test "Llama4 model vtable compiles" {
+    try std.testing.expect(@hasDecl(Llama4Model, "forward"));
+    try std.testing.expect(@hasDecl(Llama4Model, "prefill"));
+    try std.testing.expect(@hasDecl(Llama4Model, "resetCache"));
+    try std.testing.expect(@hasDecl(Llama4Model, "cancel"));
+    try std.testing.expect(@hasDecl(Llama4Model, "model"));
+}
+
+test "Llama4 isNopeLayer with interval 1 — all NoPE" {
+    var m: Llama4Model = undefined;
+    m.nope_interval = 1;
+    // (layer+1) % 1 == 0 is always true
+    try std.testing.expect(m.isNopeLayer(0));
+    try std.testing.expect(m.isNopeLayer(1));
+    try std.testing.expect(m.isNopeLayer(47));
+}
+
+test "Llama4 isNopeLayer with interval 2 — alternating" {
+    var m: Llama4Model = undefined;
+    m.nope_interval = 2;
+    // NoPE when (layer+1) % 2 == 0 -> layers 1, 3, 5, ...
+    try std.testing.expect(!m.isNopeLayer(0)); // 1 % 2 = 1
+    try std.testing.expect(m.isNopeLayer(1)); // 2 % 2 = 0
+    try std.testing.expect(!m.isNopeLayer(2)); // 3 % 2 = 1
+    try std.testing.expect(m.isNopeLayer(3)); // 4 % 2 = 0
+}
+
+test "Llama4 layerVType boundary covers all layers" {
+    var m: Llama4Model = undefined;
+    m.n_layers = 48;
+    m.kv_type_v = .turbo3;
+    // Boundary = 24: half the layers on each side -> all layers get f16
+    m.kv_boundary_v = 24;
+    for (0..48) |i| {
+        try std.testing.expectEqual(kv_quant.KvQuantType.f16, m.layerVType(@intCast(i)));
+    }
+}
+
+test "Llama4 layerVType boundary = 1 — only first and last layer" {
+    var m: Llama4Model = undefined;
+    m.n_layers = 48;
+    m.kv_type_v = .turbo3;
+    m.kv_boundary_v = 1;
+    try std.testing.expectEqual(kv_quant.KvQuantType.f16, m.layerVType(0));
+    try std.testing.expectEqual(kv_quant.KvQuantType.turbo3, m.layerVType(1));
+    try std.testing.expectEqual(kv_quant.KvQuantType.turbo3, m.layerVType(46));
+    try std.testing.expectEqual(kv_quant.KvQuantType.f16, m.layerVType(47));
+}
+
+test "Llama4 default constants are consistent" {
+    // Verify head_dim * n_head = QKV dimension (embedding dim for standard Llama 4)
+    try std.testing.expectEqual(@as(u32, 5120), default_n_head * default_head_dim);
+    // KV dimension should be n_head_kv * head_dim
+    try std.testing.expectEqual(@as(u32, 1024), default_n_head_kv * default_head_dim);
+    // chunk_size should be a power of two
+    try std.testing.expect(default_chunk_size > 0);
+    try std.testing.expectEqual(@as(u32, 0), default_chunk_size & (default_chunk_size - 1));
+    // nope_interval should divide evenly into typical layer counts
+    try std.testing.expectEqual(@as(u32, 0), default_n_layers % default_nope_interval);
+}
+
+test "Llama4 chunked attention window — chunk boundary edge cases" {
+    const chunk_size: usize = 8192;
+
+    // Position 0: first token
+    const pos0: usize = 0;
+    const win_start0 = (pos0 / chunk_size) * chunk_size;
+    const win_len0 = pos0 + 1 - win_start0;
+    try std.testing.expectEqual(@as(usize, 0), win_start0);
+    try std.testing.expectEqual(@as(usize, 1), win_len0);
+
+    // Last position in first chunk (8191): window covers full chunk
+    const pos_last: usize = 8191;
+    const win_start_last = (pos_last / chunk_size) * chunk_size;
+    const win_len_last = pos_last + 1 - win_start_last;
+    try std.testing.expectEqual(@as(usize, 0), win_start_last);
+    try std.testing.expectEqual(@as(usize, 8192), win_len_last);
+
+    // Third chunk: position 16384
+    const pos3: usize = 16384;
+    const win_start3 = (pos3 / chunk_size) * chunk_size;
+    const win_len3 = pos3 + 1 - win_start3;
+    try std.testing.expectEqual(@as(usize, 16384), win_start3);
+    try std.testing.expectEqual(@as(usize, 1), win_len3);
+}
+
+test "Llama4 NoPE temperature scaling — large position" {
+    const floor_scale: f32 = 8192.0;
+    const attn_temp_scale: f32 = 0.1;
+
+    // Position 131071 (max default - 1): floor(131072/8192) = 16
+    // temp = log(16 + 1) * 0.1 + 1 = log(17)*0.1 + 1
+    const pos: f32 = @floatFromInt(@as(u32, 131071) + 1);
+    const temp = @log(@floor(pos / floor_scale) + 1.0) * attn_temp_scale + 1.0;
+    const expected = @log(@as(f32, 17.0)) * 0.1 + 1.0;
+    try std.testing.expectApproxEqAbs(expected, temp, 1e-5);
+    // Temperature should be > 1.0 for long contexts
+    try std.testing.expect(temp > 1.0);
+}
+
+test "Llama4 function signatures type check" {
+    // Verify key method signatures exist and have expected types at comptime
+    comptime {
+        _ = @TypeOf(Llama4Model.init);
+        _ = @TypeOf(Llama4Model.deinit);
+        _ = @TypeOf(Llama4Model.forward);
+        _ = @TypeOf(Llama4Model.prefill);
+        _ = @TypeOf(Llama4Model.resetCache);
+        _ = @TypeOf(Llama4Model.cancel);
+        _ = @TypeOf(Llama4Model.model);
+        _ = @TypeOf(Llama4Model.getBlockTable);
+    }
+}

@@ -1869,3 +1869,222 @@ pub const WebGpuBackend = struct {
         };
     }
 };
+
+// ── Tests ─────────────────────────────────────────────────────────
+
+test "WebGPU tuning constants are valid" {
+    const testing = std.testing;
+
+    try testing.expect(workgroup_size > 0);
+    try testing.expect(workgroup_size <= 1024);
+    try testing.expect(workgroup_size & (workgroup_size - 1) == 0); // power of 2
+
+    try testing.expect(act_pool_capacity > 0);
+    try testing.expect(act_pool_capacity <= 256);
+
+    try testing.expect(max_deferred_destroy > 0);
+    try testing.expect(max_bindings > 0);
+    try testing.expect(max_bindings <= 16);
+
+    try testing.expect(max_map_poll_iterations > 0);
+}
+
+test "WebGPU alignUniform rounds up to 16" {
+    const testing = std.testing;
+
+    // Already aligned
+    try testing.expectEqual(@as(usize, 16), WebGpuBackend.alignUniform(16));
+    try testing.expectEqual(@as(usize, 32), WebGpuBackend.alignUniform(32));
+
+    // Needs rounding
+    try testing.expectEqual(@as(usize, 16), WebGpuBackend.alignUniform(1));
+    try testing.expectEqual(@as(usize, 16), WebGpuBackend.alignUniform(4));
+    try testing.expectEqual(@as(usize, 16), WebGpuBackend.alignUniform(8));
+    try testing.expectEqual(@as(usize, 16), WebGpuBackend.alignUniform(12));
+    try testing.expectEqual(@as(usize, 16), WebGpuBackend.alignUniform(15));
+    try testing.expectEqual(@as(usize, 32), WebGpuBackend.alignUniform(17));
+    try testing.expectEqual(@as(usize, 32), WebGpuBackend.alignUniform(20));
+
+    // Zero edge case
+    try testing.expectEqual(@as(usize, 0), WebGpuBackend.alignUniform(0));
+}
+
+test "WebGPU buffer usage flags are distinct" {
+    const testing = std.testing;
+
+    // Each usage flag must be a distinct power of 2
+    try testing.expect(wgpu_buffer_usage_storage != wgpu_buffer_usage_copy_src);
+    try testing.expect(wgpu_buffer_usage_copy_src != wgpu_buffer_usage_copy_dst);
+    try testing.expect(wgpu_buffer_usage_copy_dst != wgpu_buffer_usage_map_read);
+    try testing.expect(wgpu_buffer_usage_map_read != wgpu_buffer_usage_uniform);
+
+    // Flags must be non-zero
+    try testing.expect(wgpu_buffer_usage_storage > 0);
+    try testing.expect(wgpu_buffer_usage_copy_src > 0);
+    try testing.expect(wgpu_buffer_usage_copy_dst > 0);
+    try testing.expect(wgpu_buffer_usage_map_read > 0);
+    try testing.expect(wgpu_buffer_usage_uniform > 0);
+
+    // Combination of storage | copy_src | copy_dst must not collide with map_read
+    const combined = wgpu_buffer_usage_storage | wgpu_buffer_usage_copy_src | wgpu_buffer_usage_copy_dst;
+    try testing.expect(combined & wgpu_buffer_usage_map_read == 0);
+}
+
+test "WebGPU binding type constants are distinct" {
+    const testing = std.testing;
+
+    try testing.expect(wgpu_buffer_binding_storage != wgpu_buffer_binding_read_only_storage);
+    try testing.expect(wgpu_buffer_binding_read_only_storage != wgpu_buffer_binding_uniform);
+    try testing.expect(wgpu_buffer_binding_storage != wgpu_buffer_binding_uniform);
+}
+
+test "WebGPU storageEntry and uniformEntry helpers" {
+    const testing = std.testing;
+
+    // storageEntry: binding, buffer, size
+    const se = WebGpuBackend.storageEntry(3, null, 1024);
+    try testing.expectEqual(@as(u32, 3), se.binding);
+    try testing.expectEqual(@as(u64, 1024), se.size);
+
+    // uniformEntry: binding, buffer, aligned size
+    const ue = WebGpuBackend.uniformEntry(1, null, extern struct { n: u32, eps: f32 });
+    try testing.expectEqual(@as(u32, 1), ue.binding);
+    try testing.expectEqual(@as(u64, 16), ue.size); // alignUniform(8) = 16
+}
+
+test "WebGPU DirtyEntry and PoolEntry struct sizes" {
+    const testing = std.testing;
+
+    // DirtyEntry must hold a buffer handle, pointer, and count
+    try testing.expect(@sizeOf(WebGpuBackend.DirtyEntry) >= @sizeOf(usize) * 2);
+
+    // PoolEntry must hold a buffer handle, size, and in_use flag
+    try testing.expect(@sizeOf(PoolEntry) >= @sizeOf(usize) + @sizeOf(bool));
+}
+
+test "WebGPU max_buffer_size is 1GB" {
+    try std.testing.expectEqual(@as(usize, 1024 * 1024 * 1024), WebGpuBackend.max_buffer_size);
+}
+
+test "WebGPU backend public function signatures compile" {
+    comptime {
+        // Core ops
+        _ = @TypeOf(WebGpuBackend.silu);
+        _ = @TypeOf(WebGpuBackend.gelu);
+        _ = @TypeOf(WebGpuBackend.add);
+        _ = @TypeOf(WebGpuBackend.mul);
+        _ = @TypeOf(WebGpuBackend.siluMul);
+        _ = @TypeOf(WebGpuBackend.geluMul);
+        _ = @TypeOf(WebGpuBackend.rmsNorm);
+        _ = @TypeOf(WebGpuBackend.softmax);
+        _ = @TypeOf(WebGpuBackend.rope);
+        _ = @TypeOf(WebGpuBackend.embLookup);
+        _ = @TypeOf(WebGpuBackend.gemv);
+        _ = @TypeOf(WebGpuBackend.gemm);
+        _ = @TypeOf(WebGpuBackend.gemvMulti);
+        _ = @TypeOf(WebGpuBackend.l2Norm);
+        _ = @TypeOf(WebGpuBackend.addRmsNorm);
+        _ = @TypeOf(WebGpuBackend.addScaled);
+        _ = @TypeOf(WebGpuBackend.sigmoidMul);
+        _ = @TypeOf(WebGpuBackend.deinterleave);
+        _ = @TypeOf(WebGpuBackend.splitQGate);
+        _ = @TypeOf(WebGpuBackend.rmsNormMulti);
+        _ = @TypeOf(WebGpuBackend.gemvT);
+        _ = @TypeOf(WebGpuBackend.gemvNvfp4St);
+        _ = @TypeOf(WebGpuBackend.gemvMlxQ);
+        _ = @TypeOf(WebGpuBackend.gemvMxfp4St);
+        _ = @TypeOf(WebGpuBackend.gemvGptq);
+        _ = @TypeOf(WebGpuBackend.gemvAwq);
+
+        // SDPA
+        _ = @TypeOf(WebGpuBackend.sdpa);
+        _ = @TypeOf(WebGpuBackend.sdpaWithStats);
+        _ = @TypeOf(WebGpuBackend.sdpaPaged);
+        _ = @TypeOf(WebGpuBackend.sdpaPrefill);
+        _ = @TypeOf(WebGpuBackend.sdpaTree);
+
+        // Batched prefill
+        _ = @TypeOf(WebGpuBackend.rmsNormBatched);
+        _ = @TypeOf(WebGpuBackend.ropeBatched);
+
+        // SSM
+        _ = @TypeOf(WebGpuBackend.causalConv1dSilu);
+        _ = @TypeOf(WebGpuBackend.deltaNet);
+
+        // Sync / lifecycle
+        _ = @TypeOf(WebGpuBackend.sync);
+        _ = @TypeOf(WebGpuBackend.beginBatch);
+        _ = @TypeOf(WebGpuBackend.endBatch);
+        _ = @TypeOf(WebGpuBackend.init);
+        _ = @TypeOf(WebGpuBackend.deinit);
+        _ = @TypeOf(WebGpuBackend.backendInfo);
+
+        // KV cache
+        _ = @TypeOf(WebGpuBackend.allocKvSlice);
+        _ = @TypeOf(WebGpuBackend.freeKvSlice);
+    }
+}
+
+test "WebGPU WGPUStringView fromSlice" {
+    const sv = WGPUStringView.fromSlice("main");
+    try std.testing.expectEqual(@as(usize, 4), sv.length);
+    try std.testing.expect(sv.data != null);
+}
+
+test "WebGPU deferred_destroy capacity matches max_deferred_destroy" {
+    const testing = std.testing;
+
+    // max_deferred_destroy must be a positive power of 2 for efficient modular arithmetic
+    try testing.expect(max_deferred_destroy > 0);
+    try testing.expect(max_deferred_destroy & (max_deferred_destroy - 1) == 0);
+
+    // The deferred_destroy array in WebGpuBackend must have exactly max_deferred_destroy slots
+    try testing.expectEqual(max_deferred_destroy, @as(u32, @intCast(@typeInfo(@TypeOf(@as(WebGpuBackend, undefined).deferred_destroy)).array.len)));
+
+    // deferred_count is u32, so max_deferred_destroy must fit in u32
+    try testing.expect(max_deferred_destroy <= std.math.maxInt(u32));
+
+    // Verify the dirty_bufs array matches max_dirty_entries
+    try testing.expectEqual(WebGpuBackend.max_dirty_entries, @typeInfo(@TypeOf(@as(WebGpuBackend, undefined).dirty_bufs)).array.len);
+}
+
+test "WebGPU comptime struct layout verification" {
+    comptime {
+        // CachedBuf must contain buffer handle, size, and generation counter
+        const cached_fields = @typeInfo(CachedBuf).@"struct".fields;
+        var has_buffer = false;
+        var has_size = false;
+        var has_generation = false;
+        for (cached_fields) |f| {
+            if (std.mem.eql(u8, f.name, "buffer")) has_buffer = true;
+            if (std.mem.eql(u8, f.name, "size")) has_size = true;
+            if (std.mem.eql(u8, f.name, "generation")) has_generation = true;
+        }
+        if (!has_buffer) @compileError("CachedBuf missing 'buffer' field");
+        if (!has_size) @compileError("CachedBuf missing 'size' field");
+        if (!has_generation) @compileError("CachedBuf missing 'generation' field");
+
+        // PipelineInfo must contain pipeline and bind_group_layout
+        const pipe_fields = @typeInfo(PipelineInfo).@"struct".fields;
+        var has_pipeline = false;
+        var has_bgl = false;
+        for (pipe_fields) |f| {
+            if (std.mem.eql(u8, f.name, "pipeline")) has_pipeline = true;
+            if (std.mem.eql(u8, f.name, "bind_group_layout")) has_bgl = true;
+        }
+        if (!has_pipeline) @compileError("PipelineInfo missing 'pipeline' field");
+        if (!has_bgl) @compileError("PipelineInfo missing 'bind_group_layout' field");
+
+        // PoolEntry must have buffer, size, and in_use fields
+        const pool_fields = @typeInfo(PoolEntry).@"struct".fields;
+        var has_in_use = false;
+        for (pool_fields) |f| {
+            if (std.mem.eql(u8, f.name, "in_use")) has_in_use = true;
+        }
+        if (!has_in_use) @compileError("PoolEntry missing 'in_use' field");
+
+        // Verify act_pool array element type is PoolEntry
+        const pool_info = @typeInfo(@TypeOf(@as(WebGpuBackend, undefined).act_pool));
+        if (pool_info.array.child != PoolEntry) @compileError("act_pool element type is not PoolEntry");
+    }
+}

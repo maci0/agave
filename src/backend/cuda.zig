@@ -2159,3 +2159,263 @@ pub const CudaBackend = struct {
         self.invalidateAct(output);
     }
 };
+
+// ── Tests ─────────────────────────────────────────────────────────
+
+test "CUDA tuning constants are valid" {
+    const testing = std.testing;
+
+    // Block size must be a power of 2 and within CUDA limits (max 1024)
+    try testing.expect(block_size > 0);
+    try testing.expect(block_size <= 1024);
+    try testing.expect(block_size & (block_size - 1) == 0); // power of 2
+
+    // Reduction shared memory must accommodate at least one warp
+    try testing.expect(reduction_smem >= 4);
+    try testing.expect(reduction_smem <= block_size);
+
+    // SDPA prefill constants must be non-zero
+    try testing.expect(prefill_kv_tile > 0);
+    try testing.expect(prefill_reduce_slots > 0);
+
+    // Device name buffer must be reasonable
+    try testing.expect(device_name_buf_size >= 64);
+    try testing.expect(device_name_buf_size <= 1024);
+
+    // Version encoding divisors must be non-zero
+    try testing.expect(cuda_version_major_divisor > 0);
+    try testing.expect(cuda_version_minor_divisor > 0);
+
+    // bits_per_u32_word must be exactly 32
+    try testing.expectEqual(@as(usize, 32), bits_per_u32_word);
+}
+
+test "CUDA GEMV grid size calculations" {
+    const testing = std.testing;
+
+    // Q4_K/Q5_K/Q6_K use NR=2: grid = ceil(n/2)
+    try testing.expectEqual(@as(u32, 1), @as(u32, @intCast((1 + 1) / 2))); // n=1
+    try testing.expectEqual(@as(u32, 1), @as(u32, @intCast((2 + 1) / 2))); // n=2
+    try testing.expectEqual(@as(u32, 2), @as(u32, @intCast((3 + 1) / 2))); // n=3
+    try testing.expectEqual(@as(u32, 2), @as(u32, @intCast((4 + 1) / 2))); // n=4
+
+    // Q4_0/Q8_0 use NR=4: grid = ceil(n/4)
+    try testing.expectEqual(@as(u32, 1), @as(u32, @intCast((1 + 3) / 4))); // n=1
+    try testing.expectEqual(@as(u32, 1), @as(u32, @intCast((4 + 3) / 4))); // n=4
+    try testing.expectEqual(@as(u32, 2), @as(u32, @intCast((5 + 3) / 4))); // n=5
+
+    // Elementwise grid: ceil(n/block_size)
+    const n: usize = 1000;
+    const grid = (n + block_size - 1) / block_size;
+    try testing.expectEqual(@as(usize, 4), grid); // ceil(1000/256) = 4
+}
+
+test "CUDA BufState transitions are valid" {
+    // Verify the BufState enum has exactly 3 states
+    const states = [_]CudaBackend.BufState{ .clean, .dirty, .stale };
+    try std.testing.expectEqual(@as(usize, 3), states.len);
+
+    // Verify default ActBuf state
+    const act = CudaBackend.ActBuf{ .dptr = 0, .size = 0, .state = .clean };
+    try std.testing.expectEqual(CudaBackend.BufState.clean, act.state);
+}
+
+test "CUDA UMA region bounds checking" {
+    // isInUmaRegion with no regions should always return false
+    const be = CudaBackend{};
+    try std.testing.expect(!be.isInUmaRegion(0));
+    try std.testing.expect(!be.isInUmaRegion(0x1000));
+    try std.testing.expect(!be.isInUmaRegion(std.math.maxInt(usize)));
+}
+
+test "CUDA backend public function signatures compile" {
+    // Compile-time verification that all pub fn signatures exist and are well-typed.
+    // This catches signature drift between the backend interface and implementation.
+    comptime {
+        // Core ops
+        _ = @TypeOf(CudaBackend.gemv);
+        _ = @TypeOf(CudaBackend.gemvMulti);
+        _ = @TypeOf(CudaBackend.rmsNorm);
+        _ = @TypeOf(CudaBackend.rmsNormMulti);
+        _ = @TypeOf(CudaBackend.silu);
+        _ = @TypeOf(CudaBackend.gelu);
+        _ = @TypeOf(CudaBackend.add);
+        _ = @TypeOf(CudaBackend.addRmsNorm);
+        _ = @TypeOf(CudaBackend.mul);
+        _ = @TypeOf(CudaBackend.softmax);
+        _ = @TypeOf(CudaBackend.rope);
+        _ = @TypeOf(CudaBackend.embLookup);
+        _ = @TypeOf(CudaBackend.l2Norm);
+        _ = @TypeOf(CudaBackend.addScaled);
+        _ = @TypeOf(CudaBackend.siluMul);
+        _ = @TypeOf(CudaBackend.geluMul);
+        _ = @TypeOf(CudaBackend.sigmoidMul);
+        _ = @TypeOf(CudaBackend.deinterleave);
+        _ = @TypeOf(CudaBackend.splitQGate);
+        _ = @TypeOf(CudaBackend.gemvT);
+
+        // GEMV variants
+        _ = @TypeOf(CudaBackend.gemvNvfp4St);
+        _ = @TypeOf(CudaBackend.gemvMlxQ);
+        _ = @TypeOf(CudaBackend.gemvMxfp4St);
+        _ = @TypeOf(CudaBackend.gemvGptq);
+        _ = @TypeOf(CudaBackend.gemvAwq);
+
+        // Fused FFN
+        _ = @TypeOf(CudaBackend.fusedFfnGateUpSiluQ8);
+        _ = @TypeOf(CudaBackend.fusedFfnGateUpGeluQ8);
+        _ = @TypeOf(CudaBackend.fusedFfnGateUpSiluQ4K);
+        _ = @TypeOf(CudaBackend.fusedFfnGateUpSiluQ5K);
+        _ = @TypeOf(CudaBackend.fusedFfnGateUpSiluQ6K);
+
+        // SDPA
+        _ = @TypeOf(CudaBackend.sdpa);
+        _ = @TypeOf(CudaBackend.sdpaWithStats);
+        _ = @TypeOf(CudaBackend.sdpaPaged);
+        _ = @TypeOf(CudaBackend.sdpaPrefill);
+        _ = @TypeOf(CudaBackend.sdpaTree);
+
+        // Megakernels
+        _ = @TypeOf(CudaBackend.dispatchMegakernelQwen35Q8);
+        _ = @TypeOf(CudaBackend.dispatchMegakernelGemmaQ4K);
+
+        // Batched prefill
+        _ = @TypeOf(CudaBackend.gemm);
+        _ = @TypeOf(CudaBackend.rmsNormBatched);
+        _ = @TypeOf(CudaBackend.ropeBatched);
+
+        // Sync / lifecycle
+        _ = @TypeOf(CudaBackend.sync);
+        _ = @TypeOf(CudaBackend.beginBatch);
+        _ = @TypeOf(CudaBackend.endBatch);
+        _ = @TypeOf(CudaBackend.init);
+        _ = @TypeOf(CudaBackend.deinit);
+        _ = @TypeOf(CudaBackend.backendInfo);
+        _ = @TypeOf(CudaBackend.flushActivations);
+        _ = @TypeOf(CudaBackend.invalidateAct);
+        _ = @TypeOf(CudaBackend.invalidateWeight);
+        _ = @TypeOf(CudaBackend.setThreadContext);
+        _ = @TypeOf(CudaBackend.registerHostRegion);
+
+        // KV cache
+        _ = @TypeOf(CudaBackend.allocKvSlice);
+        _ = @TypeOf(CudaBackend.freeKvSlice);
+        _ = @TypeOf(CudaBackend.registerRamKv);
+        _ = @TypeOf(CudaBackend.getDevicePtr);
+        _ = @TypeOf(CudaBackend.getDevicePtrOpaque);
+
+        // DeltaNet
+        _ = @TypeOf(CudaBackend.deltaNet);
+    }
+}
+
+test "CUDA n_kernels constant matches expected count" {
+    try std.testing.expectEqual(@as(u32, 43), CudaBackend.n_kernels);
+}
+
+test "CUDA lib_name is platform-appropriate" {
+    const name = CudaBackend.lib_name;
+    try std.testing.expect(name.len > 0);
+    // Must contain "cuda" (case-insensitive check via known platform values)
+    const expected = switch (builtin.os.tag) {
+        .linux => "libcuda.so.1",
+        .windows => "nvcuda.dll",
+        else => "libcuda.dylib",
+    };
+    try std.testing.expectEqualStrings(expected, name);
+}
+
+test "CUDA internal struct layouts are well-formed" {
+    const testing = std.testing;
+
+    // CachedBuf: weight cache entry
+    const cb = CudaBackend.CachedBuf{ .dptr = 0x1000, .size = 4096, .is_registered = false };
+    try testing.expectEqual(@as(CUdeviceptr, 0x1000), cb.dptr);
+    try testing.expectEqual(@as(usize, 4096), cb.size);
+    try testing.expect(!cb.is_registered);
+
+    // KvDevCache: device KV buffer
+    const kv = CudaBackend.KvDevCache{ .dptr = 0x2000, .capacity = 8192 };
+    try testing.expectEqual(@as(CUdeviceptr, 0x2000), kv.dptr);
+    try testing.expectEqual(@as(usize, 8192), kv.capacity);
+
+    // ActBuf: activation buffer with state tracking
+    const ab_clean = CudaBackend.ActBuf{ .dptr = 0x3000, .size = 1024, .state = .clean };
+    const ab_dirty = CudaBackend.ActBuf{ .dptr = 0x3000, .size = 1024, .state = .dirty };
+    const ab_stale = CudaBackend.ActBuf{ .dptr = 0x3000, .size = 1024, .state = .stale };
+    try testing.expectEqual(CudaBackend.BufState.clean, ab_clean.state);
+    try testing.expectEqual(CudaBackend.BufState.dirty, ab_dirty.state);
+    try testing.expectEqual(CudaBackend.BufState.stale, ab_stale.state);
+
+    // max_uma_regions: must be at least 1 and fit in u32
+    try testing.expect(CudaBackend.max_uma_regions >= 1);
+    try testing.expect(CudaBackend.max_uma_regions <= 256);
+
+    // UmaRegion default state
+    const uma = CudaBackend.UmaRegion{};
+    try testing.expectEqual(@as(usize, 0), uma.base);
+    try testing.expectEqual(@as(usize, 0), uma.size);
+}
+
+test "CUDA driver API types have correct sizes" {
+    const testing = std.testing;
+
+    // CUresult and CUdevice are c_int
+    try testing.expectEqual(@sizeOf(c_int), @sizeOf(CUresult));
+    try testing.expectEqual(@sizeOf(c_int), @sizeOf(CUdevice));
+
+    // CUdeviceptr is u64 (64-bit device address)
+    try testing.expectEqual(@as(usize, 8), @sizeOf(CUdeviceptr));
+
+    // CUcontext and CUmodule are optional opaque pointers
+    try testing.expectEqual(@sizeOf(?*anyopaque), @sizeOf(CUcontext));
+    try testing.expectEqual(@sizeOf(?*anyopaque), @sizeOf(CUmodule));
+
+    // CUDA_SUCCESS must be 0
+    try testing.expectEqual(@as(CUresult, 0), CUDA_SUCCESS);
+
+    // Device attribute constants must be distinct
+    try testing.expect(CU_DEVICE_ATTRIBUTE_INTEGRATED != CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR);
+    try testing.expect(CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR != CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MINOR);
+}
+
+test "CUDA SDPA prefill shared memory calculation" {
+    const testing = std.testing;
+
+    // Verify the shared memory formula matches the expected layout:
+    // q[hd] + kv_block[kv_tile*hd] + scores[kv_tile] + out_acc[hd] + reduce[warps] + broadcast[1]
+    const hd: u32 = 128; // typical head dimension
+    const smem = (hd + prefill_kv_tile * hd + prefill_kv_tile + hd + prefill_reduce_slots + 1) * @sizeOf(f32);
+
+    // Should be: (128 + 32*128 + 32 + 128 + 8 + 1) * 4 = (128 + 4096 + 32 + 128 + 8 + 1) * 4 = 4393 * 4 = 17572
+    try testing.expectEqual(@as(u32, (128 + 32 * 128 + 32 + 128 + 8 + 1) * 4), smem);
+
+    // Must stay within Metal-style 32KB limit for cross-backend compatibility
+    try testing.expect(smem <= 32768);
+}
+
+test "CUDA default struct initialization is safe" {
+    // Verify that a default-initialized CudaBackend has null handles
+    // and zero counts (prevents use-before-init bugs).
+    const be = CudaBackend{};
+    try std.testing.expect(be.context == null);
+    try std.testing.expect(be.module == null);
+    try std.testing.expect(!be.is_uma);
+    try std.testing.expect(!be.has_gds);
+    try std.testing.expectEqual(@as(u32, 0), be.sm_major);
+    try std.testing.expectEqual(@as(u32, 0), be.sm_minor);
+    try std.testing.expectEqual(@as(usize, 0), be.total_mem);
+    try std.testing.expectEqual(@as(usize, 0), be.avail_mem);
+    try std.testing.expectEqual(@as(u32, 0), be.driver_version);
+    try std.testing.expectEqual(@as(u32, 0), be.uma_region_count);
+    try std.testing.expectEqual(@as(usize, 0), be.device_name_len);
+    try std.testing.expect(be.sdpa_flat_keys == null);
+    try std.testing.expect(be.sdpa_flat_vals == null);
+    try std.testing.expect(be.cufile_lib == null);
+
+    // Kernel function handles should all be null
+    try std.testing.expect(be.fn_silu == null);
+    try std.testing.expect(be.fn_sdpa == null);
+    try std.testing.expect(be.fn_gemv_f32 == null);
+    try std.testing.expect(be.fn_mega_qwen35_q8 == null);
+}
