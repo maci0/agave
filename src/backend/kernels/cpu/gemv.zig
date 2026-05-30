@@ -50,6 +50,7 @@ const gemv_fp8 = @import("gemv_fp8.zig");
 const gemv_fp4 = @import("gemv_fp4.zig");
 const gemv_iq4 = @import("gemv_iq4.zig");
 const gemv_q_small = @import("gemv_q_small.zig");
+const gemv_tq1_0 = @import("gemv_tq1_0.zig");
 
 // ── Re-exports for direct access ─────────────────────────────────
 pub const gemvQ4_0 = gemv_q4_0.gemvQ4_0;
@@ -102,7 +103,8 @@ pub fn gemvSeq(x: [*]const f32, w_data: [*]const u8, dtype: DType, y: [*]f32, n:
         .fp8_e4m3 => gemvFP8_E4M3(x, w_data, y, n, k),
         .fp8_e5m2 => gemvFP8_E5M2(x, w_data, y, n, k),
         .nvfp4 => gemvNVFP4(x, w_data, y, n, k),
-        .tq1_0, .mlx_q, .gptq, .unknown => {
+        .tq1_0 => gemv_tq1_0.gemvTQ1_0(x, w_data, y, n, k),
+        .mlx_q, .gptq, .unknown => {
             std.log.warn("GEMV: unsupported dtype {s}, output zeroed", .{@tagName(dtype)});
             @memset(y[0..n], 0);
         },
