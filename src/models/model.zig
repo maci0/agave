@@ -1583,3 +1583,11 @@ test "findMlxCompanion 3D expert tensor computes bits from last dim" {
     const companion = findMlxCompanion(mock.format(), t, 2048).?;
     try std.testing.expectEqual(@as(u32, 4), companion.bits);
 }
+
+test "resetKvCache compiles" {
+    comptime { _ = &resetKvCache; }
+}
+
+test "ensureKvBlock compiles" {
+    comptime { _ = &ensureKvBlock; }
+}
