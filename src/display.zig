@@ -911,3 +911,27 @@ test "displayWidth CJK double-width" {
 test "displayWidth empty" {
     try std.testing.expectEqual(@as(usize, 0), term.displayWidth(""));
 }
+
+test "bitsPerWeight calculation" {
+    const info = ModelInfo{ .name = "test", .arch_name = "test", .quant = "Q4", .be_name = "CPU", .n_layers = 1, .n_embed = 256, .n_heads = 4, .n_kv_heads = 4, .head_dim = 64, .ff_dim = 512, .vocab_size = 1000, .ctx_size = 2048, .rope_theta = 10000, .n_params = 1_000_000_000, .n_experts = 0, .n_experts_used = 0, .file_size_bytes = 1_000_000_000, .load_ms = 0, .warmup_ms = 0 };
+    try std.testing.expectApproxEqAbs(@as(f32, 8.0), info.bitsPerWeight(), 0.001);
+}
+
+test "bitsPerWeight zero params" {
+    const info = ModelInfo{ .name = "test", .arch_name = "test", .quant = "Q4", .be_name = "CPU", .n_layers = 1, .n_embed = 256, .n_heads = 4, .n_kv_heads = 4, .head_dim = 64, .ff_dim = 512, .vocab_size = 1000, .ctx_size = 2048, .rope_theta = 10000, .n_params = 0, .n_experts = 0, .n_experts_used = 0, .file_size_bytes = 100, .load_ms = 0, .warmup_ms = 0 };
+    try std.testing.expectEqual(@as(f32, 0.0), info.bitsPerWeight());
+}
+
+test "formatSize edge cases" {
+    const gb = formatSize(1024 * 1024 * 1024);
+    try std.testing.expectApproxEqAbs(@as(f64, 1.0), gb.val, 0.01);
+    try std.testing.expectEqualStrings("GB", gb.unit);
+    const small = formatSize(512);
+    try std.testing.expectApproxEqAbs(@as(f64, 0.5), small.val, 0.01);
+}
+
+test "GenStats prefill calculation" {
+    const s = GenStats{ .token_count = 50, .gen_ms = 1000, .prefill_ms = 500, .prefill_token_count = 100 };
+    try std.testing.expectApproxEqAbs(@as(f32, 50.0), s.tokPerSec(), 0.1);
+    try std.testing.expectApproxEqAbs(@as(f32, 200.0), s.prefillTokPerSec(), 0.1);
+}

@@ -690,6 +690,222 @@ pub fn composeMSL(buf: []u8, desc: ModelDesc) []const u8 {
 
 // ── Tests ────────────────────────────────────────────────────────────────
 
+test "ModelDesc.uniform creates all-same-kind layer array" {
+    const types = ModelDesc.uniform(5, .attention);
+    for (0..5) |i| try std.testing.expectEqual(LayerKind.attention, types[i]);
+    // Beyond n_layers should default to .attention
+    try std.testing.expectEqual(LayerKind.attention, types[5]);
+    try std.testing.expectEqual(LayerKind.attention, types[63]);
+}
+
+test "ModelDesc.uniform with deltanet" {
+    const types = ModelDesc.uniform(3, .deltanet);
+    try std.testing.expectEqual(LayerKind.deltanet, types[0]);
+    try std.testing.expectEqual(LayerKind.deltanet, types[1]);
+    try std.testing.expectEqual(LayerKind.deltanet, types[2]);
+    // Past n_layers
+    try std.testing.expectEqual(LayerKind.attention, types[3]);
+}
+
+test "ModelDesc.qwenHybrid creates correct attention pattern" {
+    // Qwen: every 4th layer is attention, rest deltanet
+    const types = ModelDesc.qwenHybrid(12, 4);
+    // Layers 3, 7, 11 (0-indexed: (i+1) % 4 == 0) should be attention
+    try std.testing.expectEqual(LayerKind.deltanet, types[0]);
+    try std.testing.expectEqual(LayerKind.deltanet, types[1]);
+    try std.testing.expectEqual(LayerKind.deltanet, types[2]);
+    try std.testing.expectEqual(LayerKind.attention, types[3]); // (3+1)%4==0
+    try std.testing.expectEqual(LayerKind.deltanet, types[4]);
+    try std.testing.expectEqual(LayerKind.deltanet, types[5]);
+    try std.testing.expectEqual(LayerKind.deltanet, types[6]);
+    try std.testing.expectEqual(LayerKind.attention, types[7]); // (7+1)%4==0
+    try std.testing.expectEqual(LayerKind.attention, types[11]); // (11+1)%4==0
+}
+
+test "ModelDesc.qwenHybrid with zero interval is all deltanet" {
+    const types = ModelDesc.qwenHybrid(8, 0);
+    for (0..8) |i| try std.testing.expectEqual(LayerKind.deltanet, types[i]);
+}
+
+test "ModelDesc per-layer accessors use override or default" {
+    var desc = ModelDesc{
+        .name = "test",
+        .n_layers = 4,
+        .n_embd = 2048,
+        .n_ff = 8192,
+        .n_head = 16,
+        .n_kv = 4,
+        .head_dim = 128,
+        .rope_dim = 128,
+        .rope_theta = 10000.0,
+        .rms_eps = 1e-6,
+        .max_seq_len = 4096,
+        .activation = .silu,
+        .quant = .q4_k,
+        .layer_types = ModelDesc.uniform(4, .attention),
+    };
+
+    // Defaults: all layers return the base values
+    try std.testing.expectEqual(@as(u32, 16), desc.layerNHead(0));
+    try std.testing.expectEqual(@as(u32, 4), desc.layerNKv(0));
+    try std.testing.expectEqual(@as(u32, 128), desc.layerHeadDim(0));
+    try std.testing.expectEqual(@as(u32, 8192), desc.layerNFf(0));
+    try std.testing.expectApproxEqAbs(@as(f32, 10000.0), desc.layerRopeTheta(0), 0.1);
+    try std.testing.expectEqual(@as(u32, 0), desc.layerWindow(0));
+
+    // Override layer 2
+    desc.layer_n_head[2] = 32;
+    desc.layer_head_dim[2] = 64;
+    desc.layer_n_ff[2] = 4096;
+    desc.layer_rope_theta[2] = 500000.0;
+    desc.layer_sliding_window[2] = 1024;
+
+    try std.testing.expectEqual(@as(u32, 32), desc.layerNHead(2));
+    try std.testing.expectEqual(@as(u32, 64), desc.layerHeadDim(2));
+    try std.testing.expectEqual(@as(u32, 4096), desc.layerNFf(2));
+    try std.testing.expectApproxEqAbs(@as(f32, 500000.0), desc.layerRopeTheta(2), 0.1);
+    try std.testing.expectEqual(@as(u32, 1024), desc.layerWindow(2));
+
+    // Other layers unchanged
+    try std.testing.expectEqual(@as(u32, 16), desc.layerNHead(0));
+    try std.testing.expectEqual(@as(u32, 128), desc.layerHeadDim(1));
+}
+
+test "ModelDesc.hasPerLayerVariation detects overrides" {
+    var desc = ModelDesc{
+        .name = "test",
+        .n_layers = 4,
+        .n_embd = 2048,
+        .n_ff = 8192,
+        .n_head = 16,
+        .n_kv = 4,
+        .head_dim = 128,
+        .rope_dim = 128,
+        .rope_theta = 10000.0,
+        .rms_eps = 1e-6,
+        .max_seq_len = 4096,
+        .activation = .silu,
+        .quant = .q4_k,
+        .layer_types = ModelDesc.uniform(4, .attention),
+    };
+
+    // No overrides
+    try std.testing.expect(!desc.hasPerLayerVariation());
+
+    // Set one override
+    desc.layer_n_head[1] = 32;
+    try std.testing.expect(desc.hasPerLayerVariation());
+}
+
+test "gemvFn returns correct function name per quant" {
+    try std.testing.expectEqualStrings("mega_gemv_q8", gemvFn(.q8_0));
+    try std.testing.expectEqualStrings("mega_gemv_q4k", gemvFn(.q4_k));
+    try std.testing.expectEqualStrings("mega_gemv_q5k", gemvFn(.q5_k));
+    try std.testing.expectEqualStrings("mega_gemv_q6k", gemvFn(.q6_k));
+    try std.testing.expectEqualStrings("mega_gemv_q4_0", gemvFn(.q4_0));
+}
+
+test "activationFn returns correct function name" {
+    try std.testing.expectEqualStrings("mega_silu_mul", activationFn(.silu));
+    try std.testing.expectEqualStrings("mega_gelu_mul", activationFn(.gelu));
+    try std.testing.expectEqualStrings("mega_relu_squared", activationFn(.relu_squared));
+}
+
+test "composeMSL uniform model does not emit per-layer arrays" {
+    var buf: [32768]u8 = undefined;
+    const desc = ModelDesc{
+        .name = "uniform_test",
+        .n_layers = 4,
+        .n_embd = 2048,
+        .n_ff = 8192,
+        .n_head = 16,
+        .n_kv = 4,
+        .head_dim = 128,
+        .rope_dim = 128,
+        .rope_theta = 10000.0,
+        .rms_eps = 1e-6,
+        .max_seq_len = 4096,
+        .activation = .silu,
+        .quant = .q4_k,
+        .layer_types = ModelDesc.uniform(4, .attention),
+    };
+    const msl = composeMSL(&buf, desc);
+    // Uniform model should use p.n_head, not per-layer arrays
+    try std.testing.expect(std.mem.indexOf(u8, msl, "cur_n_head = p.n_head") != null);
+    try std.testing.expect(std.mem.indexOf(u8, msl, "cur_n_head = layer_n_head[li]") == null);
+}
+
+test "composeMSL per-layer variation uses baked arrays" {
+    var buf: [32768]u8 = undefined;
+    var desc = ModelDesc{
+        .name = "iRoPE",
+        .n_layers = 4,
+        .n_embd = 2048,
+        .n_ff = 8192,
+        .n_head = 16,
+        .n_kv = 4,
+        .head_dim = 128,
+        .rope_dim = 128,
+        .rope_theta = 10000.0,
+        .rms_eps = 1e-6,
+        .max_seq_len = 4096,
+        .activation = .silu,
+        .quant = .q4_k,
+        .layer_types = ModelDesc.uniform(4, .attention),
+    };
+    desc.layer_head_dim[2] = 64;
+
+    const msl = composeMSL(&buf, desc);
+    // With per-layer variation, kernel should use layer arrays
+    try std.testing.expect(std.mem.indexOf(u8, msl, "cur_n_head = layer_n_head[li]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, msl, "cur_head_dim = layer_head_dim[li]") != null);
+}
+
+test "composeMSL Q5_K and Q6_K quant variants" {
+    var buf: [32768]u8 = undefined;
+
+    // Q5_K
+    const desc5 = ModelDesc{
+        .name = "q5k_test",
+        .n_layers = 2,
+        .n_embd = 1024,
+        .n_ff = 4096,
+        .n_head = 8,
+        .n_kv = 4,
+        .head_dim = 128,
+        .rope_dim = 128,
+        .rope_theta = 10000.0,
+        .rms_eps = 1e-6,
+        .max_seq_len = 2048,
+        .activation = .silu,
+        .quant = .q5_k,
+        .layer_types = ModelDesc.uniform(2, .attention),
+    };
+    const msl5 = composeMSL(&buf, desc5);
+    try std.testing.expect(std.mem.indexOf(u8, msl5, "mega_gemv_q5k") != null);
+    try std.testing.expect(std.mem.indexOf(u8, msl5, "mega_gemv_q4k") == null);
+
+    // Q6_K
+    const desc6 = ModelDesc{
+        .name = "q6k_test",
+        .n_layers = 2,
+        .n_embd = 1024,
+        .n_ff = 4096,
+        .n_head = 8,
+        .n_kv = 4,
+        .head_dim = 128,
+        .rope_dim = 128,
+        .rope_theta = 10000.0,
+        .rms_eps = 1e-6,
+        .max_seq_len = 2048,
+        .activation = .silu,
+        .quant = .q6_k,
+        .layer_types = ModelDesc.uniform(2, .attention),
+    };
+    const msl6 = composeMSL(&buf, desc6);
+    try std.testing.expect(std.mem.indexOf(u8, msl6, "mega_gemv_q6k") != null);
+}
+
 test "composeMSL generates valid kernel for Gemma Q4_K" {
     var buf: [32768]u8 = undefined;
     const desc = ModelDesc{

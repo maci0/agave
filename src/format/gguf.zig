@@ -1041,3 +1041,366 @@ test "dequantQ8_0 correctness" {
     // Remaining zeros: 0 * 0.5 = 0.0
     for (output[4..]) |v| try std.testing.expectApproxEqAbs(@as(f32, 0.0), v, 0.001);
 }
+
+test "ggmlToDType complete mapping" {
+    // Verify all explicitly-mapped GGML types produce the expected DType
+    const mapping = [_]struct { GGMLType, DType }{
+        .{ .f32, .f32 },
+        .{ .f16, .f16 },
+        .{ .bf16, .bf16 },
+        .{ .q2_k, .q2_k },
+        .{ .q3_k, .q3_k },
+        .{ .q4_0, .q4_0 },
+        .{ .q4_1, .q4_1 },
+        .{ .q4_k, .q4_k },
+        .{ .q5_0, .q5_0 },
+        .{ .q5_k, .q5_k },
+        .{ .q6_k, .q6_k },
+        .{ .q8_0, .q8_0 },
+        .{ .iq4_xs, .iq4_xs },
+        .{ .iq4_nl, .iq4_nl },
+        .{ .tq1_0, .tq1_0 },
+        .{ .mxfp4, .mxfp4 },
+    };
+    for (mapping) |m| {
+        try std.testing.expectEqual(m[1], GGUFFile.ggmlToDType(m[0]));
+    }
+    // Types that map to unknown
+    const unknown_types = [_]GGMLType{ .i8, .i16, .i32, .i64, .f64, .q5_1, .q8_1, .iq2_xxs, .iq2_xs, .iq2_s, .iq3_xxs, .iq3_s, .iq1_s, .iq1_m, .tq2_0 };
+    for (unknown_types) |t| {
+        try std.testing.expectEqual(DType.unknown, GGUFFile.ggmlToDType(t));
+    }
+}
+
+test "GGMLType blockSize all types" {
+    // Scalar types: blockSize = 1
+    const scalar_types = [_]GGMLType{ .f32, .f16, .i8, .i16, .i32, .i64, .f64, .bf16 };
+    for (scalar_types) |t| {
+        try std.testing.expectEqual(@as(usize, 1), t.blockSize());
+    }
+    // 32-element block types
+    const block32_types = [_]GGMLType{ .q4_0, .q4_1, .q5_0, .q5_1, .q8_0, .q8_1, .iq4_nl, .mxfp4 };
+    for (block32_types) |t| {
+        try std.testing.expectEqual(@as(usize, 32), t.blockSize());
+    }
+    // 256-element super-block types
+    const block256_types = [_]GGMLType{ .q2_k, .q3_k, .q4_k, .q5_k, .q6_k, .iq2_xxs, .iq2_xs, .iq2_s, .iq3_xxs, .iq3_s, .iq1_s, .iq1_m, .iq4_xs, .tq1_0 };
+    for (block256_types) |t| {
+        try std.testing.expectEqual(@as(usize, 256), t.blockSize());
+    }
+    // Unknown/invalid type falls to else => 1
+    try std.testing.expectEqual(@as(usize, 1), (@as(GGMLType, @enumFromInt(99))).blockSize());
+}
+
+test "GGMLType bytesPerBlock all types" {
+    // Verify known block sizes match GGML spec
+    const expected = [_]struct { GGMLType, usize }{
+        .{ .f32, 4 },
+        .{ .f16, 2 },
+        .{ .bf16, 2 },
+        .{ .q4_0, 18 },
+        .{ .q4_1, 20 },
+        .{ .q5_0, 22 },
+        .{ .q5_1, 24 },
+        .{ .q8_0, 34 },
+        .{ .q8_1, 36 },
+        .{ .q2_k, 100 },
+        .{ .q3_k, 110 },
+        .{ .q4_k, 144 },
+        .{ .q5_k, 176 },
+        .{ .q6_k, 210 },
+        .{ .i8, 1 },
+        .{ .i16, 2 },
+        .{ .i32, 4 },
+        .{ .i64, 8 },
+        .{ .f64, 8 },
+        .{ .iq2_xxs, 66 },
+        .{ .iq2_xs, 74 },
+        .{ .iq2_s, 82 },
+        .{ .iq3_xxs, 98 },
+        .{ .iq3_s, 110 },
+        .{ .iq1_s, 50 },
+        .{ .iq1_m, 56 },
+        .{ .iq4_nl, 18 },
+        .{ .iq4_xs, 136 },
+        .{ .tq1_0, 64 },
+        .{ .mxfp4, 17 },
+    };
+    for (expected) |e| {
+        try std.testing.expectEqual(e[1], e[0].bytesPerBlock());
+    }
+}
+
+test "GGMLType tensorBytes edge cases" {
+    // Zero elements
+    try std.testing.expectEqual(@as(usize, 0), GGMLType.f32.tensorBytes(0));
+    // Non-aligned element count rounds up to next block
+    // 33 Q4_0 elements = ceil(33/32) = 2 blocks = 36 bytes
+    try std.testing.expectEqual(@as(usize, 36), GGMLType.q4_0.tensorBytes(33));
+    // 1 element of Q4_0 = 1 block = 18 bytes
+    try std.testing.expectEqual(@as(usize, 18), GGMLType.q4_0.tensorBytes(1));
+    // 257 elements of Q6_K = ceil(257/256) = 2 blocks = 420 bytes
+    try std.testing.expectEqual(@as(usize, 420), GGMLType.q6_k.tensorBytes(257));
+    // Large but valid element count
+    try std.testing.expectEqual(@as(usize, 4096 * 4), GGMLType.f32.tensorBytes(4096));
+    // Overflow saturation: huge element count shouldn't crash
+    const huge = GGMLType.f32.tensorBytes(std.math.maxInt(usize));
+    try std.testing.expectEqual(std.math.maxInt(usize), huge);
+}
+
+test "GGMLType blockSize and bytesPerBlock consistency" {
+    // For scalar types, bytesPerBlock should be the type's natural size
+    try std.testing.expectEqual(@as(usize, 4), GGMLType.f32.bytesPerBlock());
+    try std.testing.expectEqual(@as(usize, 1), GGMLType.f32.blockSize());
+    // tensorBytes(1) = 1 * 4 = 4
+    try std.testing.expectEqual(@as(usize, 4), GGMLType.f32.tensorBytes(1));
+
+    // For Q4_K: 256 elements per block, 144 bytes per block
+    // 512 elements = 2 blocks = 288 bytes
+    try std.testing.expectEqual(@as(usize, 288), GGMLType.q4_k.tensorBytes(512));
+    // Verify: n_blocks = ceil(512/256) = 2, 2 * 144 = 288
+    const n_blocks = (512 + 256 - 1) / 256;
+    try std.testing.expectEqual(@as(usize, 288), n_blocks * GGMLType.q4_k.bytesPerBlock());
+}
+
+test "MetaValue asU32 type coercion" {
+    // u8 → u32 widening
+    try std.testing.expectEqual(@as(?u32, 255), (MetaValue{ .uint8 = 255 }).asU32());
+    try std.testing.expectEqual(@as(?u32, 0), (MetaValue{ .uint8 = 0 }).asU32());
+    // u16 → u32 widening
+    try std.testing.expectEqual(@as(?u32, 65535), (MetaValue{ .uint16 = 65535 }).asU32());
+    // i32 → u32 (positive)
+    try std.testing.expectEqual(@as(?u32, 100), (MetaValue{ .int32 = 100 }).asU32());
+    // i32 → u32 (negative = null)
+    try std.testing.expectEqual(@as(?u32, null), (MetaValue{ .int32 = -1 }).asU32());
+    // u64 → u32 (in range)
+    try std.testing.expectEqual(@as(?u32, 42), (MetaValue{ .uint64 = 42 }).asU32());
+    // u64 → u32 (out of range = null)
+    try std.testing.expectEqual(@as(?u32, null), (MetaValue{ .uint64 = @as(u64, std.math.maxInt(u32)) + 1 }).asU32());
+    // u64 → u32 (max u32 = ok)
+    try std.testing.expectEqual(@as(?u32, std.math.maxInt(u32)), (MetaValue{ .uint64 = std.math.maxInt(u32) }).asU32());
+    // Types that never convert
+    try std.testing.expectEqual(@as(?u32, null), (MetaValue{ .float32 = 1.0 }).asU32());
+    try std.testing.expectEqual(@as(?u32, null), (MetaValue{ .string = "42" }).asU32());
+    try std.testing.expectEqual(@as(?u32, null), (MetaValue{ .bool_val = true }).asU32());
+    try std.testing.expectEqual(@as(?u32, null), (MetaValue{ .int64 = 42 }).asU32());
+    try std.testing.expectEqual(@as(?u32, null), (MetaValue{ .float64 = 42.0 }).asU32());
+}
+
+test "MetaValue asF32 type coercion" {
+    // f32 passthrough
+    try std.testing.expectApproxEqAbs(@as(f32, 2.718), (MetaValue{ .float32 = 2.718 }).asF32().?, 0.001);
+    // f64 → f32 narrowing
+    try std.testing.expectApproxEqAbs(@as(f32, 1e-5), (MetaValue{ .float64 = 1e-5 }).asF32().?, 1e-10);
+    // Types that never convert
+    try std.testing.expectEqual(@as(?f32, null), (MetaValue{ .uint32 = 42 }).asF32());
+    try std.testing.expectEqual(@as(?f32, null), (MetaValue{ .string = "3.14" }).asF32());
+}
+
+test "MetaValue asStr and asBool null cases" {
+    // asStr returns null for non-string
+    try std.testing.expectEqual(@as(?[]const u8, null), (MetaValue{ .uint32 = 42 }).asStr());
+    try std.testing.expectEqual(@as(?[]const u8, null), (MetaValue{ .float32 = 1.0 }).asStr());
+    // asBool returns null for non-bool
+    try std.testing.expectEqual(@as(?bool, null), (MetaValue{ .uint32 = 1 }).asBool());
+    try std.testing.expectEqual(@as(?bool, null), (MetaValue{ .string = "true" }).asBool());
+    // asBool with false
+    try std.testing.expectEqual(@as(?bool, false), (MetaValue{ .bool_val = false }).asBool());
+}
+
+test "TensorInfo numElements and dataBytes" {
+    const info = TensorInfo{
+        .name = "test",
+        .n_dims = 2,
+        .dims = .{ 4096, 4096, 0, 0 },
+        .ggml_type = .q4_k,
+        .offset = 0,
+    };
+    try std.testing.expectEqual(@as(usize, 4096 * 4096), info.numElements());
+    // Q4_K: ceil(16777216 / 256) = 65536 blocks * 144 bytes = 9437184
+    try std.testing.expectEqual(@as(usize, 65536 * 144), info.dataBytes());
+}
+
+test "TensorInfo numElements zero dim" {
+    const info = TensorInfo{
+        .name = "test",
+        .n_dims = 2,
+        .dims = .{ 0, 4096, 0, 0 },
+        .ggml_type = .f32,
+        .offset = 0,
+    };
+    try std.testing.expectEqual(@as(usize, 0), info.numElements());
+}
+
+test "TensorInfo numElements 1D and scalar" {
+    // 1D vector
+    const vec = TensorInfo{
+        .name = "vec",
+        .n_dims = 1,
+        .dims = .{ 128, 0, 0, 0 },
+        .ggml_type = .f32,
+        .offset = 0,
+    };
+    try std.testing.expectEqual(@as(usize, 128), vec.numElements());
+    try std.testing.expectEqual(@as(usize, 512), vec.dataBytes()); // 128 * 4
+
+    // Scalar (0-D)
+    const scalar = TensorInfo{
+        .name = "scalar",
+        .n_dims = 0,
+        .dims = .{ 0, 0, 0, 0 },
+        .ggml_type = .f32,
+        .offset = 0,
+    };
+    try std.testing.expectEqual(@as(usize, 1), scalar.numElements());
+    try std.testing.expectEqual(@as(usize, 4), scalar.dataBytes()); // 1 * 4
+}
+
+test "hfNameToGguf MLA attention mappings" {
+    var buf: [name_buf_size]u8 = undefined;
+    // MLA attention (DeepSeek2/GLM-4)
+    try std.testing.expectEqualStrings("blk.0.attn_q_a_norm.weight", hfNameToGguf("model.layers.0.self_attn.q_a_layernorm.weight", &buf).?);
+    try std.testing.expectEqualStrings("blk.0.attn_kv_a_norm.weight", hfNameToGguf("model.layers.0.self_attn.kv_a_layernorm.weight", &buf).?);
+    try std.testing.expectEqualStrings("blk.0.attn_q_b.weight", hfNameToGguf("model.layers.0.self_attn.q_b_proj.weight", &buf).?);
+    try std.testing.expectEqualStrings("blk.0.attn_kv_a_mqa.weight", hfNameToGguf("model.layers.0.self_attn.kv_a_proj_with_mqa.weight", &buf).?);
+    try std.testing.expectEqualStrings("blk.0.attn_k_b.weight", hfNameToGguf("model.layers.0.self_attn.embed_q.weight", &buf).?);
+    try std.testing.expectEqualStrings("blk.0.attn_v_b.weight", hfNameToGguf("model.layers.0.self_attn.unembed_out.weight", &buf).?);
+}
+
+test "hfNameToGguf standard attention and FFN" {
+    var buf: [name_buf_size]u8 = undefined;
+    // Standard attention
+    try std.testing.expectEqualStrings("blk.0.attn_q_norm.weight", hfNameToGguf("model.layers.0.self_attn.q_norm.weight", &buf).?);
+    try std.testing.expectEqualStrings("blk.0.attn_k_norm.weight", hfNameToGguf("model.layers.0.self_attn.k_norm.weight", &buf).?);
+    try std.testing.expectEqualStrings("blk.0.attn_k.weight", hfNameToGguf("model.layers.0.self_attn.k_proj.weight", &buf).?);
+    try std.testing.expectEqualStrings("blk.0.attn_v.weight", hfNameToGguf("model.layers.0.self_attn.v_proj.weight", &buf).?);
+    try std.testing.expectEqualStrings("blk.0.attn_output.weight", hfNameToGguf("model.layers.0.self_attn.o_proj.weight", &buf).?);
+    // FFN
+    try std.testing.expectEqualStrings("blk.0.ffn_gate.weight", hfNameToGguf("model.layers.0.mlp.gate_proj.weight", &buf).?);
+    try std.testing.expectEqualStrings("blk.0.ffn_up.weight", hfNameToGguf("model.layers.0.mlp.up_proj.weight", &buf).?);
+    try std.testing.expectEqualStrings("blk.0.ffn_down.weight", hfNameToGguf("model.layers.0.mlp.down_proj.weight", &buf).?);
+    // Norms
+    try std.testing.expectEqualStrings("blk.0.ffn_norm.weight", hfNameToGguf("model.layers.0.post_attention_layernorm.weight", &buf).?);
+    try std.testing.expectEqualStrings("blk.0.ffn_norm.weight", hfNameToGguf("model.layers.0.pre_feedforward_layernorm.weight", &buf).?);
+    try std.testing.expectEqualStrings("blk.0.post_ffw_norm.weight", hfNameToGguf("model.layers.0.post_feedforward_layernorm.weight", &buf).?);
+}
+
+test "hfNameToGguf MoE expert mappings" {
+    var buf: [name_buf_size]u8 = undefined;
+    // MoE routing
+    try std.testing.expectEqualStrings("blk.0.ffn_gate_inp.weight", hfNameToGguf("model.layers.0.mlp.router.weight", &buf).?);
+    // MoE experts (switch_mlp variant)
+    try std.testing.expectEqualStrings("blk.0.ffn_up_exps.weight", hfNameToGguf("model.layers.0.mlp.switch_mlp.up_proj.weight", &buf).?);
+    try std.testing.expectEqualStrings("blk.0.ffn_down_exps.weight", hfNameToGguf("model.layers.0.mlp.switch_mlp.down_proj.weight", &buf).?);
+    // MoE experts (experts variant)
+    try std.testing.expectEqualStrings("blk.0.ffn_gate_exps.weight", hfNameToGguf("model.layers.0.mlp.experts.gate_proj.weight", &buf).?);
+    try std.testing.expectEqualStrings("blk.0.ffn_up_exps.weight", hfNameToGguf("model.layers.0.mlp.experts.up_proj.weight", &buf).?);
+    try std.testing.expectEqualStrings("blk.0.ffn_down_exps.weight", hfNameToGguf("model.layers.0.mlp.experts.down_proj.weight", &buf).?);
+    // Shared expert
+    try std.testing.expectEqualStrings("blk.0.ffn_gate_shexp.weight", hfNameToGguf("model.layers.0.mlp.shared_experts.gate_proj.weight", &buf).?);
+    try std.testing.expectEqualStrings("blk.0.ffn_up_shexp.weight", hfNameToGguf("model.layers.0.mlp.shared_experts.up_proj.weight", &buf).?);
+    try std.testing.expectEqualStrings("blk.0.ffn_down_shexp.weight", hfNameToGguf("model.layers.0.mlp.shared_experts.down_proj.weight", &buf).?);
+}
+
+test "hfNameToGguf multimodal prefix stripping" {
+    var buf: [name_buf_size]u8 = undefined;
+    // language_model.model. prefix
+    try std.testing.expectEqualStrings("blk.0.attn_q.weight", hfNameToGguf("language_model.model.layers.0.self_attn.q_proj.weight", &buf).?);
+    try std.testing.expectEqualStrings("token_embd.weight", hfNameToGguf("language_model.model.embed_tokens.weight", &buf).?);
+}
+
+test "hfNameToGguf returns null for unrecognized names" {
+    var buf: [name_buf_size]u8 = undefined;
+    try std.testing.expect(hfNameToGguf("completely.unrelated.tensor", &buf) == null);
+    try std.testing.expect(hfNameToGguf("model.layers.0.unknown_component.weight", &buf) == null);
+    try std.testing.expect(hfNameToGguf("", &buf) == null);
+    try std.testing.expect(hfNameToGguf("model.layers.", &buf) == null);
+}
+
+test "hfKeyToGgufSuffix complete mapping" {
+    // Verify all entries in hf_gguf_meta_map are accessible
+    const expected = [_]struct { []const u8, []const u8 }{
+        .{ "num_hidden_layers", "block_count" },
+        .{ "hidden_size", "embedding_length" },
+        .{ "num_attention_heads", "attention.head_count" },
+        .{ "num_key_value_heads", "attention.head_count_kv" },
+        .{ "head_dim", "attention.key_length" },
+        .{ "intermediate_size", "feed_forward_length" },
+        .{ "max_position_embeddings", "context_length" },
+        .{ "context_length", "context_length" },
+        .{ "rope_theta", "rope.freq_base" },
+        .{ "rms_norm_eps", "attention.layer_norm_rms_epsilon" },
+        .{ "vocab_size", "vocab_size" },
+        .{ "q_lora_rank", "attention.q_lora_rank" },
+        .{ "kv_lora_rank", "attention.kv_lora_rank" },
+        .{ "qk_rope_head_dim", "rope.dimension_count" },
+        .{ "n_routed_experts", "expert_count" },
+        .{ "num_experts_per_tok", "expert_used_count" },
+        .{ "moe_intermediate_size", "expert_feed_forward_length" },
+        .{ "first_k_dense_replace", "leading_dense_block_count" },
+        .{ "routed_scaling_factor", "expert_weights_scale" },
+    };
+    for (expected) |e| {
+        const result = hfKeyToGgufSuffix(e[0]) orelse {
+            std.debug.print("Missing mapping for: {s}\n", .{e[0]});
+            return error.MissingMapping;
+        };
+        try std.testing.expectEqualStrings(e[1], result);
+    }
+}
+
+test "GGUF fromBuffer invalid magic" {
+    const allocator = std.testing.allocator;
+    // Valid header structure but wrong magic bytes
+    var buf: [24]u8 = undefined;
+    std.mem.writeInt(u32, buf[0..4], 0xDEADBEEF, .little); // bad magic
+    std.mem.writeInt(u32, buf[4..8], 3, .little); // version
+    std.mem.writeInt(u64, buf[8..16], 0, .little); // tensor_count
+    std.mem.writeInt(u64, buf[16..24], 0, .little); // metadata_kv_count
+
+    const result = GGUFFile.fromBuffer(allocator, &buf);
+    try std.testing.expectError(error.InvalidMagic, result);
+}
+
+test "GGUF fromBuffer unsupported version" {
+    const allocator = std.testing.allocator;
+    var buf: [24]u8 = undefined;
+    std.mem.writeInt(u32, buf[0..4], gguf_magic, .little);
+    std.mem.writeInt(u32, buf[4..8], 1, .little); // version 1 (too old)
+    std.mem.writeInt(u64, buf[8..16], 0, .little);
+    std.mem.writeInt(u64, buf[16..24], 0, .little);
+
+    try std.testing.expectError(error.UnsupportedVersion, GGUFFile.fromBuffer(allocator, &buf));
+
+    // Version 4 (too new)
+    std.mem.writeInt(u32, buf[4..8], 4, .little);
+    try std.testing.expectError(error.UnsupportedVersion, GGUFFile.fromBuffer(allocator, &buf));
+}
+
+test "GGUF fromBuffer file too small" {
+    const allocator = std.testing.allocator;
+    var buf: [4]u8 = .{ 0, 0, 0, 0 };
+    try std.testing.expectError(error.FileTooSmall, GGUFFile.fromBuffer(allocator, &buf));
+}
+
+test "GGUF fromBuffer minimal valid file" {
+    const allocator = std.testing.allocator;
+    // Minimal valid GGUF: magic + version 3 + 0 tensors + 0 metadata.
+    // Header is 24 bytes, but data_offset is aligned to 32 (default alignment),
+    // so the buffer must be at least 32 bytes.
+    var buf: [32]u8 = undefined;
+    @memset(&buf, 0);
+    std.mem.writeInt(u32, buf[0..4], gguf_magic, .little);
+    std.mem.writeInt(u32, buf[4..8], 3, .little);
+    std.mem.writeInt(u64, buf[8..16], 0, .little);
+    std.mem.writeInt(u64, buf[16..24], 0, .little);
+
+    var gguf = try GGUFFile.fromBuffer(allocator, &buf);
+    defer gguf.deinit();
+
+    try std.testing.expectEqual(@as(u32, 3), gguf.version);
+    try std.testing.expectEqual(@as(u64, 0), gguf.tensor_count);
+    try std.testing.expectEqual(@as(usize, 0), gguf.metadata.count());
+    try std.testing.expectEqual(@as(usize, 0), gguf.tensors.count());
+    try std.testing.expectEqual(@as(u64, 0), gguf.totalParams());
+}

@@ -577,6 +577,175 @@ test "RadixTree empty match" {
     try std.testing.expectEqual(@as(usize, 0), m.matched);
 }
 
+test "tokenBucket distributes different IDs to different buckets" {
+    // Sequential token IDs should not all map to the same bucket
+    // (multiplicative hashing avoids clustering)
+    var buckets_seen: [256]bool = .{false} ** 256;
+    var unique: usize = 0;
+    for (0..256) |i| {
+        const b = tokenBucket(@intCast(i));
+        if (!buckets_seen[b]) {
+            buckets_seen[b] = true;
+            unique += 1;
+        }
+    }
+    // At least 200 of 256 sequential IDs should map to distinct buckets
+    try std.testing.expect(unique >= 200);
+}
+
+test "tokenBucket is deterministic" {
+    // Same input always produces same output
+    try std.testing.expectEqual(tokenBucket(42), tokenBucket(42));
+    try std.testing.expectEqual(tokenBucket(0), tokenBucket(0));
+    try std.testing.expectEqual(tokenBucket(0xFFFFFFFF), tokenBucket(0xFFFFFFFF));
+}
+
+test "PagedKvView initView and pointer access" {
+    const allocator = std.testing.allocator;
+    var paged = try PagedKvCache.init(allocator, 1, 4, 4, 8);
+    defer paged.deinit();
+
+    // Allocate 2 blocks and set up a block table
+    const b0 = paged.allocBlock().?;
+    const b1 = paged.allocBlock().?;
+
+    var block_table = [_]u32{ b0, b1 };
+    const view = PagedKvView.initView(&block_table, paged.blocks, 8, 4, 12);
+
+    // block_size=8 is power of 2, so bit-shift path is used
+    try std.testing.expectEqual(@as(u16, 8), view.block_size);
+    try std.testing.expectEqual(@as(u16, 7), view.block_mask);
+    try std.testing.expectEqual(@as(usize, 4), view.kv_dim);
+    try std.testing.expectEqual(@as(usize, 12), view.seq_len);
+
+    // Write data to block 0 position 3 and verify round-trip
+    const key_ptr = view.keyPtrMut(3);
+    key_ptr[0] = 42.0;
+    key_ptr[1] = 43.0;
+    const read_ptr = view.keyPtr(3);
+    try std.testing.expectEqual(@as(f32, 42.0), read_ptr[0]);
+    try std.testing.expectEqual(@as(f32, 43.0), read_ptr[1]);
+
+    // Write to block 1 position 9 (position 9 => block_idx=1, pos_in_block=1)
+    const val_ptr = view.valuePtrMut(9);
+    val_ptr[0] = 99.0;
+    const val_read = view.valuePtr(9);
+    try std.testing.expectEqual(@as(f32, 99.0), val_read[0]);
+}
+
+test "PagedKvView non-power-of-two block size" {
+    const allocator = std.testing.allocator;
+    // block_size=12 is not power of 2, so division path is used
+    var paged = try PagedKvCache.init(allocator, 1, 4, 4, 12);
+    defer paged.deinit();
+
+    const b0 = paged.allocBlock().?;
+    const b1 = paged.allocBlock().?;
+
+    var block_table = [_]u32{ b0, b1 };
+    const view = PagedKvView.initView(&block_table, paged.blocks, 12, 4, 20);
+
+    // Non-power-of-2: mask should be 0 (use division path)
+    try std.testing.expectEqual(@as(u16, 0), view.block_mask);
+
+    // Position 11 => block 0, pos 11
+    const k11 = view.keyPtrMut(11);
+    k11[0] = 11.0;
+    try std.testing.expectEqual(@as(f32, 11.0), view.keyPtr(11)[0]);
+
+    // Position 12 => block 1, pos 0
+    const k12 = view.keyPtrMut(12);
+    k12[0] = 12.0;
+    try std.testing.expectEqual(@as(f32, 12.0), view.keyPtr(12)[0]);
+}
+
+test "PagedKvCache freeBlock and reallocation" {
+    const allocator = std.testing.allocator;
+    var paged = try PagedKvCache.init(allocator, 1, 32, 4, 8);
+    defer paged.deinit();
+
+    // Allocate all 4 blocks
+    var ids: [4]u32 = undefined;
+    for (0..4) |i| ids[i] = paged.allocBlock().?;
+
+    // Exhausted
+    try std.testing.expectEqual(@as(?u32, null), paged.allocBlock());
+
+    // Free block 1 and 3
+    paged.freeBlock(ids[1]);
+    paged.freeBlock(ids[3]);
+    try std.testing.expectEqual(@as(usize, 2), paged.freeCount());
+
+    // Reallocate — should get back the freed blocks
+    const r0 = paged.allocBlock().?;
+    const r1 = paged.allocBlock().?;
+    try std.testing.expect(r0 == ids[1] or r0 == ids[3]);
+    try std.testing.expect(r1 == ids[1] or r1 == ids[3]);
+    try std.testing.expect(r0 != r1);
+
+    // Exhausted again
+    try std.testing.expectEqual(@as(?u32, null), paged.allocBlock());
+}
+
+test "PagedKvCache block used field reset on free" {
+    const allocator = std.testing.allocator;
+    var paged = try PagedKvCache.init(allocator, 1, 32, 4, 8);
+    defer paged.deinit();
+
+    const b0 = paged.allocBlock().?;
+    // Simulate usage: mark block as partially filled with ref_count > 1
+    paged.blocks[b0].used = 5;
+    paged.blocks[b0].ref_count = 3;
+
+    paged.freeBlock(b0);
+
+    // After free, used and ref_count should be reset
+    try std.testing.expectEqual(@as(u16, 0), paged.blocks[b0].used);
+    try std.testing.expectEqual(@as(u16, 1), paged.blocks[b0].ref_count);
+    try std.testing.expectEqual(@as(usize, 4), paged.freeCount());
+}
+
+test "RadixTree insert and overwrite" {
+    const allocator = std.testing.allocator;
+    var tree = try RadixTree.init(allocator);
+    defer tree.deinit();
+
+    // Insert same prefix twice — second should update
+    try tree.insert(&.{ 1, 2, 3 }, &.{ 10, 11, 12 });
+    try tree.insert(&.{ 1, 2, 3, 4, 5 }, &.{ 10, 11, 12, 13, 14 });
+
+    // Longer sequence should match fully
+    const m1 = tree.matchPrefix(&.{ 1, 2, 3, 4, 5 });
+    try std.testing.expectEqual(@as(usize, 5), m1.matched);
+
+    // Original prefix should still match
+    const m2 = tree.matchPrefix(&.{ 1, 2, 3 });
+    try std.testing.expectEqual(@as(usize, 3), m2.matched);
+}
+
+test "RadixTree hash cache invalidation" {
+    const allocator = std.testing.allocator;
+    var tree = try RadixTree.init(allocator);
+    defer tree.deinit();
+
+    try tree.insert(&.{ 10, 20, 30 }, &.{ 1, 2, 3 });
+
+    // First match populates hash cache
+    const m1 = tree.matchPrefix(&.{ 10, 20, 30 });
+    try std.testing.expectEqual(@as(usize, 3), m1.matched);
+
+    // Second match should use hash cache (same result)
+    const m2 = tree.matchPrefix(&.{ 10, 20, 30 });
+    try std.testing.expectEqual(@as(usize, 3), m2.matched);
+
+    // Insert invalidates cache
+    try tree.insert(&.{ 10, 20, 30, 40 }, &.{ 1, 2, 3, 4 });
+
+    // Now should match longer prefix
+    const m3 = tree.matchPrefix(&.{ 10, 20, 30, 40 });
+    try std.testing.expectEqual(@as(usize, 4), m3.matched);
+}
+
 test "RadixTree edge splitting" {
     const allocator = std.testing.allocator;
     var tree = try RadixTree.init(allocator);

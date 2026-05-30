@@ -2413,6 +2413,467 @@ test "ggufToHfNameIter multiple mappings" {
     try std.testing.expect(iter.next(&buf) == null);
 }
 
+test "parseDType complete mapping" {
+    // All known SafeTensors dtype strings
+    const expected = [_]struct { []const u8, DType }{
+        .{ "F32", .f32 },
+        .{ "F16", .f16 },
+        .{ "BF16", .bf16 },
+        .{ "U32", .mlx_q },
+        .{ "U8", .nvfp4 },
+        .{ "F8_E4M3", .fp8_e4m3 },
+        .{ "I32", .gptq },
+    };
+    for (expected) |e| {
+        try std.testing.expectEqual(e[1], parseDType(e[0]));
+    }
+    // Unknown dtypes
+    const unknown_strs = [_][]const u8{ "I64", "F64", "BOOL", "U16", "I8", "I16", "", "f32", "bf16", "COMPLEX64" };
+    for (unknown_strs) |s| {
+        try std.testing.expectEqual(DType.unknown, parseDType(s));
+    }
+}
+
+test "parseConfigJson with text_config override" {
+    const allocator = std.testing.allocator;
+    // Multimodal config: text_config values should override top-level
+    const json =
+        \\{"hidden_size":1024,"num_hidden_layers":12,"text_config":{"hidden_size":4096,"num_hidden_layers":32}}
+    ;
+    var meta = std.StringHashMap(MetaValue).init(allocator);
+    defer meta.deinit();
+    var owned: std.ArrayList([]u8) = .empty;
+    defer {
+        for (owned.items) |s| allocator.free(s);
+        owned.deinit(allocator);
+    }
+
+    try parseConfigJson(allocator, json, &meta, &owned);
+
+    // text_config values should override top-level
+    const hs = meta.get("hidden_size") orelse return error.Missing;
+    try std.testing.expectEqual(@as(u64, 4096), hs.uint);
+    const nl = meta.get("num_hidden_layers") orelse return error.Missing;
+    try std.testing.expectEqual(@as(u64, 32), nl.uint);
+}
+
+test "parseConfigJson float values" {
+    const allocator = std.testing.allocator;
+    const json =
+        \\{"rope_theta":500000.0,"rms_norm_eps":1e-05}
+    ;
+    var meta = std.StringHashMap(MetaValue).init(allocator);
+    defer meta.deinit();
+    var owned: std.ArrayList([]u8) = .empty;
+    defer {
+        for (owned.items) |s| allocator.free(s);
+        owned.deinit(allocator);
+    }
+
+    try parseConfigJson(allocator, json, &meta, &owned);
+
+    const rope = meta.get("rope_theta") orelse return error.Missing;
+    try std.testing.expectApproxEqAbs(@as(f64, 500000.0), rope.float, 0.1);
+    const eps = meta.get("rms_norm_eps") orelse return error.Missing;
+    try std.testing.expectApproxEqAbs(@as(f64, 1e-5), eps.float, 1e-10);
+}
+
+test "parseConfigJson null and false values" {
+    const allocator = std.testing.allocator;
+    const json =
+        \\{"add_cross_attention":false,"output_attentions":null,"use_cache":true}
+    ;
+    var meta = std.StringHashMap(MetaValue).init(allocator);
+    defer meta.deinit();
+    var owned: std.ArrayList([]u8) = .empty;
+    defer {
+        for (owned.items) |s| allocator.free(s);
+        owned.deinit(allocator);
+    }
+
+    try parseConfigJson(allocator, json, &meta, &owned);
+
+    const add = meta.get("add_cross_attention") orelse return error.Missing;
+    try std.testing.expect(!add.bool_val);
+    const use = meta.get("use_cache") orelse return error.Missing;
+    try std.testing.expect(use.bool_val);
+    // null values are not stored
+    try std.testing.expect(meta.get("output_attentions") == null);
+}
+
+test "parseConfigJson array with first element" {
+    const allocator = std.testing.allocator;
+    const json =
+        \\{"eos_token_id":[154820,154827]}
+    ;
+    var meta = std.StringHashMap(MetaValue).init(allocator);
+    defer meta.deinit();
+    var owned: std.ArrayList([]u8) = .empty;
+    defer {
+        for (owned.items) |s| allocator.free(s);
+        owned.deinit(allocator);
+    }
+
+    try parseConfigJson(allocator, json, &meta, &owned);
+
+    // Array: first integer element is stored as uint
+    const eos = meta.get("eos_token_id") orelse return error.Missing;
+    try std.testing.expectEqual(@as(u64, 154820), eos.uint);
+}
+
+test "parseConfigJson quantization_config nested" {
+    const allocator = std.testing.allocator;
+    const json =
+        \\{"model_type":"llama","quantization_config":{"quant_method":"awq","bits":4,"group_size":128}}
+    ;
+    var meta = std.StringHashMap(MetaValue).init(allocator);
+    defer meta.deinit();
+    var owned: std.ArrayList([]u8) = .empty;
+    defer {
+        for (owned.items) |s| allocator.free(s);
+        owned.deinit(allocator);
+    }
+
+    try parseConfigJson(allocator, json, &meta, &owned);
+
+    const mt = meta.get("model_type") orelse return error.Missing;
+    try std.testing.expectEqualStrings("llama", mt.string);
+    // quantization_config values are flattened into top-level
+    const qm = meta.get("quant_method") orelse return error.Missing;
+    try std.testing.expectEqualStrings("awq", qm.string);
+    const bits = meta.get("bits") orelse return error.Missing;
+    try std.testing.expectEqual(@as(u64, 4), bits.uint);
+}
+
+test "ggufToHfName top-level tensors" {
+    var buf: [name_buf_size]u8 = undefined;
+    // token_embd → embed_tokens
+    try std.testing.expectEqualStrings("model.embed_tokens.weight", ggufToHfName("token_embd.weight", &buf, "model.").?);
+    // output_norm → norm
+    try std.testing.expectEqualStrings("model.norm.weight", ggufToHfName("output_norm.weight", &buf, "model.").?);
+    // output → lm_head
+    try std.testing.expectEqualStrings("model.lm_head.weight", ggufToHfName("output.weight", &buf, "model.").?);
+}
+
+test "ggufToHfName layer tensors" {
+    var buf: [name_buf_size]u8 = undefined;
+    // Standard attention
+    try std.testing.expectEqualStrings("model.layers.0.self_attn.q_proj.weight", ggufToHfName("blk.0.attn_q.weight", &buf, "model.").?);
+    try std.testing.expectEqualStrings("model.layers.5.self_attn.k_proj.weight", ggufToHfName("blk.5.attn_k.weight", &buf, "model.").?);
+    // FFN
+    try std.testing.expectEqualStrings("model.layers.0.mlp.gate_proj.weight", ggufToHfName("blk.0.ffn_gate.weight", &buf, "model.").?);
+    // MoE
+    try std.testing.expectEqualStrings("model.layers.0.mlp.experts.gate_proj.weight", ggufToHfName("blk.0.ffn_gate_exps.weight", &buf, "model.").?);
+}
+
+test "ggufToHfName ssm_dt.bias special case" {
+    var buf: [name_buf_size]u8 = undefined;
+    // ssm_dt.bias → linear_attn.dt_bias (underscore, not dot)
+    try std.testing.expectEqualStrings("model.layers.0.linear_attn.dt_bias", ggufToHfName("blk.0.ssm_dt.bias", &buf, "model.").?);
+}
+
+test "ggufToHfName DeltaNet SSM mappings" {
+    var buf: [name_buf_size]u8 = undefined;
+    try std.testing.expectEqualStrings("model.layers.0.linear_attn.in_proj_qkv.weight", ggufToHfName("blk.0.attn_qkv.weight", &buf, "model.").?);
+    try std.testing.expectEqualStrings("model.layers.0.linear_attn.in_proj_z.weight", ggufToHfName("blk.0.attn_gate.weight", &buf, "model.").?);
+    try std.testing.expectEqualStrings("model.layers.0.linear_attn.in_proj_a.weight", ggufToHfName("blk.0.ssm_alpha.weight", &buf, "model.").?);
+    try std.testing.expectEqualStrings("model.layers.0.linear_attn.out_proj.weight", ggufToHfName("blk.0.ssm_out.weight", &buf, "model.").?);
+}
+
+test "ggufToHfName with different prefixes" {
+    var buf: [name_buf_size]u8 = undefined;
+    // language_model.model. prefix
+    try std.testing.expectEqualStrings("language_model.model.embed_tokens.weight", ggufToHfName("token_embd.weight", &buf, "language_model.model.").?);
+    // language_model. prefix
+    try std.testing.expectEqualStrings("language_model.lm_head.weight", ggufToHfName("output.weight", &buf, "language_model.").?);
+}
+
+test "ggufToHfName no attribute suffix (bare component)" {
+    var buf: [name_buf_size]u8 = undefined;
+    // SSM A_log has no .weight suffix (bare tensor name)
+    try std.testing.expectEqualStrings("model.layers.0.linear_attn.A_log", ggufToHfName("blk.0.ssm_a", &buf, "model.").?);
+}
+
+test "ggufToHfName returns null for unrecognized" {
+    var buf: [name_buf_size]u8 = undefined;
+    try std.testing.expect(ggufToHfName("blk.0.unknown_layer.weight", &buf, "model.") == null);
+    try std.testing.expect(ggufToHfName("random.tensor.name", &buf, "model.") == null);
+    // Missing layer number
+    try std.testing.expect(ggufToHfName("blk..attn_q.weight", &buf, "model.") != null); // "blk." + rest, dot1 at 0 → layer=""
+}
+
+test "ggufToHfNameIter toplevel emits once" {
+    var buf: [name_buf_size]u8 = undefined;
+    var iter = ggufToHfNameIter("token_embd.weight", "model.");
+    const first = iter.next(&buf);
+    try std.testing.expect(first != null);
+    try std.testing.expectEqualStrings("model.embed_tokens.weight", first.?);
+    // Should not emit again
+    try std.testing.expect(iter.next(&buf) == null);
+}
+
+test "ggufToHfNameIter single mapping" {
+    var buf: [name_buf_size]u8 = undefined;
+    // attn_q has only one mapping
+    var iter = ggufToHfNameIter("blk.0.attn_q.weight", "model.");
+    const first = iter.next(&buf);
+    try std.testing.expect(first != null);
+    try std.testing.expectEqualStrings("model.layers.0.self_attn.q_proj.weight", first.?);
+    try std.testing.expect(iter.next(&buf) == null);
+}
+
+test "ggufToHfNameIter ssm_dt.bias special" {
+    var buf: [name_buf_size]u8 = undefined;
+    var iter = ggufToHfNameIter("blk.3.ssm_dt.bias", "model.");
+    const first = iter.next(&buf);
+    try std.testing.expect(first != null);
+    try std.testing.expectEqualStrings("model.layers.3.linear_attn.dt_bias", first.?);
+    // After special case, no more results
+    try std.testing.expect(iter.next(&buf) == null);
+}
+
+test "ggufKeyToHf translations" {
+    // general.architecture → model_type
+    try std.testing.expectEqualStrings("model_type", ggufKeyToHf("general.architecture").?);
+    // tokenizer.ggml.eos_token_id → eos_token_id
+    try std.testing.expectEqualStrings("eos_token_id", ggufKeyToHf("tokenizer.ggml.eos_token_id").?);
+    // arch-prefixed keys
+    try std.testing.expectEqualStrings("num_hidden_layers", ggufKeyToHf("llama.block_count").?);
+    try std.testing.expectEqualStrings("hidden_size", ggufKeyToHf("gemma3.embedding_length").?);
+    try std.testing.expectEqualStrings("num_attention_heads", ggufKeyToHf("qwen3_5_moe_text.attention.head_count").?);
+    try std.testing.expectEqualStrings("rope_theta", ggufKeyToHf("llama.rope.freq_base").?);
+    try std.testing.expectEqualStrings("num_experts_per_tok", ggufKeyToHf("deepseek2.expert_used_count").?);
+    try std.testing.expectEqualStrings("vocab_size", ggufKeyToHf("llama.vocab_size").?);
+    // Unknown key
+    try std.testing.expect(ggufKeyToHf("llama.unknown_key") == null);
+    try std.testing.expect(ggufKeyToHf("no_dots") == null);
+}
+
+test "isSafeShardName" {
+    // Valid names
+    try std.testing.expect(isSafeShardName("model-00001-of-00002.safetensors"));
+    try std.testing.expect(isSafeShardName("model.safetensors"));
+    try std.testing.expect(isSafeShardName("a"));
+    // Invalid names
+    try std.testing.expect(!isSafeShardName(""));
+    try std.testing.expect(!isSafeShardName("../etc/passwd"));
+    try std.testing.expect(!isSafeShardName("foo/bar.safetensors"));
+    try std.testing.expect(!isSafeShardName("foo\\bar.safetensors"));
+    try std.testing.expect(!isSafeShardName(".."));
+    try std.testing.expect(!isSafeShardName("model..safetensors"));
+}
+
+test "parseShardHeader multiple tensors" {
+    const allocator = std.testing.allocator;
+    const json =
+        \\{"__metadata__":{},"weight_a":{"dtype":"F32","shape":[10,20],"data_offsets":[0,800]},"weight_b":{"dtype":"F16","shape":[5],"data_offsets":[800,810]}}
+    ;
+
+    var tensors = std.StringHashMap(TensorEntry).init(allocator);
+    defer tensors.deinit();
+    var owned: std.ArrayList([]u8) = .empty;
+    defer {
+        for (owned.items) |s| allocator.free(s);
+        owned.deinit(allocator);
+    }
+
+    try parseShardHeader(allocator, json, 2, &tensors, &owned);
+
+    try std.testing.expectEqual(@as(usize, 2), tensors.count());
+
+    const a = tensors.get("weight_a") orelse return error.MissingTensor;
+    try std.testing.expectEqual(DType.f32, a.dtype);
+    try std.testing.expectEqual(@as(u32, 2), a.n_dims);
+    try std.testing.expectEqual(@as(u64, 10), a.dims[0]);
+    try std.testing.expectEqual(@as(u64, 20), a.dims[1]);
+    try std.testing.expectEqual(@as(usize, 0), a.data_start);
+    try std.testing.expectEqual(@as(usize, 800), a.data_end);
+    try std.testing.expectEqual(@as(usize, 2), a.shard_idx);
+
+    const b = tensors.get("weight_b") orelse return error.MissingTensor;
+    try std.testing.expectEqual(DType.f16, b.dtype);
+    try std.testing.expectEqual(@as(u32, 1), b.n_dims);
+    try std.testing.expectEqual(@as(u64, 5), b.dims[0]);
+    try std.testing.expectEqual(@as(usize, 800), b.data_start);
+    try std.testing.expectEqual(@as(usize, 810), b.data_end);
+}
+
+test "parseShardHeader NVFP4 types" {
+    const allocator = std.testing.allocator;
+    const json =
+        \\{"w.weight_packed":{"dtype":"U8","shape":[4096,2048],"data_offsets":[0,8388608]},"w.weight_scale":{"dtype":"F8_E4M3","shape":[4096,256],"data_offsets":[8388608,9437184]},"w.qweight":{"dtype":"I32","shape":[4096,512],"data_offsets":[9437184,17825792]}}
+    ;
+
+    var tensors = std.StringHashMap(TensorEntry).init(allocator);
+    defer tensors.deinit();
+    var owned: std.ArrayList([]u8) = .empty;
+    defer {
+        for (owned.items) |s| allocator.free(s);
+        owned.deinit(allocator);
+    }
+
+    try parseShardHeader(allocator, json, 0, &tensors, &owned);
+
+    const wp = tensors.get("w.weight_packed") orelse return error.MissingTensor;
+    try std.testing.expectEqual(DType.nvfp4, wp.dtype);
+
+    const ws = tensors.get("w.weight_scale") orelse return error.MissingTensor;
+    try std.testing.expectEqual(DType.fp8_e4m3, ws.dtype);
+
+    const qw = tensors.get("w.qweight") orelse return error.MissingTensor;
+    try std.testing.expectEqual(DType.gptq, qw.dtype);
+}
+
+test "parseIndexJson rejects path traversal" {
+    const allocator = std.testing.allocator;
+    const json =
+        \\{"weight_map":{"a":"../evil.safetensors"}}
+    ;
+    var shard_list: std.ArrayList([]const u8) = .empty;
+    defer shard_list.deinit(allocator);
+    var shard_to_idx = std.StringHashMap(usize).init(allocator);
+    defer shard_to_idx.deinit();
+    var owned: std.ArrayList([]u8) = .empty;
+    defer {
+        for (owned.items) |s| allocator.free(s);
+        owned.deinit(allocator);
+    }
+
+    try std.testing.expectError(error.InvalidSafeTensors, parseIndexJson(allocator, json, &shard_list, &shard_to_idx, &owned));
+}
+
+test "parseIndexJson deduplicates shards" {
+    const allocator = std.testing.allocator;
+    const json =
+        \\{"weight_map":{"a":"shard1.safetensors","b":"shard1.safetensors","c":"shard2.safetensors","d":"shard1.safetensors"}}
+    ;
+    var shard_list: std.ArrayList([]const u8) = .empty;
+    defer shard_list.deinit(allocator);
+    var shard_to_idx = std.StringHashMap(usize).init(allocator);
+    defer shard_to_idx.deinit();
+    var owned: std.ArrayList([]u8) = .empty;
+    defer {
+        for (owned.items) |s| allocator.free(s);
+        owned.deinit(allocator);
+    }
+
+    try parseIndexJson(allocator, json, &shard_list, &shard_to_idx, &owned);
+
+    // Should only have 2 unique shards
+    try std.testing.expectEqual(@as(usize, 2), shard_list.items.len);
+    try std.testing.expectEqualStrings("shard1.safetensors", shard_list.items[0]);
+    try std.testing.expectEqualStrings("shard2.safetensors", shard_list.items[1]);
+}
+
+test "gguf_hf_layer_map and hf_gguf_layer_map bidirectional consistency" {
+    // Verify that every entry in gguf_hf_layer_map has a corresponding reverse
+    // entry in the HF→GGUF map in gguf.zig (via ggufToHfName/hfNameToGguf round-trip).
+    var buf: [name_buf_size]u8 = undefined;
+
+    // Test a representative subset of round-trips: GGUF → HF → GGUF
+    const round_trips = [_]struct { gguf: []const u8, hf: []const u8 }{
+        .{ .gguf = "attn_q", .hf = "self_attn.q_proj" },
+        .{ .gguf = "attn_k", .hf = "self_attn.k_proj" },
+        .{ .gguf = "attn_v", .hf = "self_attn.v_proj" },
+        .{ .gguf = "attn_output", .hf = "self_attn.o_proj" },
+        .{ .gguf = "ffn_gate", .hf = "mlp.gate_proj" },
+        .{ .gguf = "ffn_up", .hf = "mlp.up_proj" },
+        .{ .gguf = "ffn_down", .hf = "mlp.down_proj" },
+        .{ .gguf = "ffn_gate_exps", .hf = "mlp.experts.gate_proj" },
+        .{ .gguf = "ffn_up_exps", .hf = "mlp.experts.up_proj" },
+        .{ .gguf = "ffn_down_exps", .hf = "mlp.experts.down_proj" },
+    };
+    for (round_trips) |rt| {
+        // GGUF→HF: blk.0.{gguf}.weight → model.layers.0.{hf}.weight
+        const gguf_name_str = std.fmt.bufPrint(&buf, "blk.0.{s}.weight", .{rt.gguf}) catch unreachable;
+        var name_buf2: [name_buf_size]u8 = undefined;
+        const hf_result = ggufToHfName(gguf_name_str, &name_buf2, "model.") orelse {
+            std.debug.print("GGUF→HF failed for: {s}\n", .{rt.gguf});
+            return error.MissingMapping;
+        };
+        var expected_buf: [name_buf_size]u8 = undefined;
+        const expected = std.fmt.bufPrint(&expected_buf, "model.layers.0.{s}.weight", .{rt.hf}) catch unreachable;
+        try std.testing.expectEqualStrings(expected, hf_result);
+    }
+}
+
+test "dupeUnescaped BMP unicode" {
+    const allocator = std.testing.allocator;
+    var owned: std.ArrayList([]u8) = .empty;
+    defer {
+        for (owned.items) |s| allocator.free(s);
+        owned.deinit(allocator);
+    }
+
+    // é = e with acute (é) = C3 A9 in UTF-8
+    const result = try dupeUnescaped(allocator, &owned, "caf\\u00E9");
+    try std.testing.expectEqualSlices(u8, "caf\xC3\xA9", result);
+}
+
+test "dupeUnescaped slash and backspace escapes" {
+    const allocator = std.testing.allocator;
+    var owned: std.ArrayList([]u8) = .empty;
+    defer {
+        for (owned.items) |s| allocator.free(s);
+        owned.deinit(allocator);
+    }
+
+    // \/ → /
+    const slash = try dupeUnescaped(allocator, &owned, "a\\/b");
+    try std.testing.expectEqualSlices(u8, "a/b", slash);
+
+    // \b → 0x08
+    const bs = try dupeUnescaped(allocator, &owned, "a\\bb");
+    try std.testing.expectEqual(@as(u8, 0x08), bs[1]);
+
+    // \f → 0x0C
+    const ff = try dupeUnescaped(allocator, &owned, "a\\fb");
+    try std.testing.expectEqual(@as(u8, 0x0C), ff[1]);
+}
+
+test "dupeUnescaped no escapes passthrough" {
+    const allocator = std.testing.allocator;
+    var owned: std.ArrayList([]u8) = .empty;
+    defer {
+        for (owned.items) |s| allocator.free(s);
+        owned.deinit(allocator);
+    }
+
+    // No backslashes → fast path
+    const result = try dupeUnescaped(allocator, &owned, "hello world");
+    try std.testing.expectEqualSlices(u8, "hello world", result);
+}
+
+test "ggufToHfNameIter shared expert dual mappings" {
+    var buf: [name_buf_size]u8 = undefined;
+    // ffn_gate_shexp has two HF mappings: shared_experts and shared_expert
+    var iter = ggufToHfNameIter("blk.0.ffn_gate_shexp.weight", "model.");
+    const first = iter.next(&buf);
+    try std.testing.expect(first != null);
+    try std.testing.expectEqualStrings("model.layers.0.mlp.shared_experts.gate_proj.weight", first.?);
+    const second = iter.next(&buf);
+    try std.testing.expect(second != null);
+    try std.testing.expectEqualStrings("model.layers.0.mlp.shared_expert.gate_proj.weight", second.?);
+    // No more
+    try std.testing.expect(iter.next(&buf) == null);
+}
+
+test "ggufToHfNameIter MLA attention" {
+    var buf: [name_buf_size]u8 = undefined;
+    // MLA components should each have single mappings
+    var iter = ggufToHfNameIter("blk.0.attn_q_a.weight", "model.");
+    const first = iter.next(&buf);
+    try std.testing.expect(first != null);
+    try std.testing.expectEqualStrings("model.layers.0.self_attn.q_a_proj.weight", first.?);
+    try std.testing.expect(iter.next(&buf) == null);
+
+    var iter2 = ggufToHfNameIter("blk.0.attn_kv_a_mqa.weight", "model.");
+    const first2 = iter2.next(&buf);
+    try std.testing.expect(first2 != null);
+    try std.testing.expectEqualStrings("model.layers.0.self_attn.kv_a_proj_with_mqa.weight", first2.?);
+    try std.testing.expect(iter2.next(&buf) == null);
+}
+
 test "fuseNvfp4Experts creates synthetic entries" {
     const allocator = std.testing.allocator;
 

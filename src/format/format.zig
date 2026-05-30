@@ -350,3 +350,109 @@ test "TensorInfo dataByteLen q6_k" {
     const t = TensorInfo{ .name = "w", .n_dims = 1, .dims = .{ 512, 0, 0, 0 }, .dtype = .q6_k, .data_ptr = @as([*]const u8, @ptrCast(&dummy)) };
     try std.testing.expectEqual(@as(usize, (512 / 256) * 210), t.dataByteLen());
 }
+
+test "TensorInfo dataByteLen all quantized dtypes" {
+    var dummy: u8 = 0;
+    const ptr = @as([*]const u8, @ptrCast(&dummy));
+
+    // Each test: 256 elements, verify byte calculation
+    const quant_tests = [_]struct { DType, usize }{
+        // Scalar types
+        .{ .f32, 256 * 4 },
+        .{ .f16, 256 * 2 },
+        .{ .bf16, 256 * 2 },
+        .{ .fp8_e4m3, 256 },
+        .{ .fp8_e5m2, 256 },
+        // 32-element block types
+        .{ .q8_0, (256 / 32) * 34 },
+        .{ .q4_0, (256 / 32) * 18 },
+        .{ .iq4_nl, (256 / 32) * 18 },
+        .{ .q4_1, (256 / 32) * 20 },
+        .{ .q5_0, (256 / 32) * 22 },
+        .{ .mxfp4, (256 / 32) * 17 },
+        // 256-element super-block types
+        .{ .q4_k, 144 },
+        .{ .q5_k, 176 },
+        .{ .q6_k, 210 },
+        .{ .q2_k, 84 },
+        .{ .q3_k, 110 },
+        .{ .iq4_xs, 136 },
+        .{ .tq1_0, 64 },
+        // NVFP4: 16-element group, 9 bytes per group
+        .{ .nvfp4, (256 / 16) * 9 },
+    };
+    for (quant_tests) |qt| {
+        const t = TensorInfo{ .name = "w", .n_dims = 1, .dims = .{ 256, 0, 0, 0 }, .dtype = qt[0], .data_ptr = ptr };
+        try std.testing.expectEqual(qt[1], t.dataByteLen());
+    }
+}
+
+test "TensorInfo dataByteLen 2D tensor" {
+    var dummy: u8 = 0;
+    // 2D tensor: 4096 x 4096 = 16M elements in Q4_K
+    const t = TensorInfo{
+        .name = "w",
+        .n_dims = 2,
+        .dims = .{ 4096, 4096, 0, 0 },
+        .dtype = .q4_k,
+        .data_ptr = @as([*]const u8, @ptrCast(&dummy)),
+    };
+    const n = 4096 * 4096;
+    try std.testing.expectEqual(@as(usize, n), t.numElements());
+    // Q4_K: 256 elements per block, 144 bytes per block
+    try std.testing.expectEqual(@as(usize, (n / 256) * 144), t.dataByteLen());
+}
+
+test "TensorInfo dataByteLen unknown and packed types" {
+    var dummy: u8 = 0;
+    const ptr = @as([*]const u8, @ptrCast(&dummy));
+
+    // unknown, mlx_q, gptq, awq all use n*4 (treated as 4 bytes per element)
+    const packed_types = [_]DType{ .unknown, .mlx_q, .gptq, .awq };
+    for (packed_types) |dt| {
+        const t = TensorInfo{ .name = "w", .n_dims = 1, .dims = .{ 100, 0, 0, 0 }, .dtype = dt, .data_ptr = ptr };
+        try std.testing.expectEqual(@as(usize, 400), t.dataByteLen());
+    }
+}
+
+test "TensorInfo numElements overflow protection" {
+    var dummy: u8 = 0;
+    // Huge dimensions that would overflow usize multiplication
+    const t = TensorInfo{
+        .name = "huge",
+        .n_dims = 2,
+        .dims = .{ std.math.maxInt(u64), 2, 0, 0 },
+        .dtype = .f32,
+        .data_ptr = @as([*]const u8, @ptrCast(&dummy)),
+    };
+    // Should return 0 on overflow, not crash
+    try std.testing.expectEqual(@as(usize, 0), t.numElements());
+}
+
+test "Format getArchU32 and getArchF32 formatting" {
+    // Test that arch key formatting works correctly by verifying buffer format
+    var buf: [arch_key_buf_size]u8 = undefined;
+    const key = std.fmt.bufPrint(&buf, "{s}.{s}", .{ "gemma3", "block_count" }) catch unreachable;
+    try std.testing.expectEqualStrings("gemma3.block_count", key);
+
+    const key2 = std.fmt.bufPrint(&buf, "{s}.{s}", .{ "qwen3_5_moe_text", "attention.head_count" }) catch unreachable;
+    try std.testing.expectEqualStrings("qwen3_5_moe_text.attention.head_count", key2);
+}
+
+test "Format layerTensor name formatting" {
+    // Verify the layer tensor name format string
+    const layer_name_buf_sz: usize = 128;
+    var buf: [layer_name_buf_sz]u8 = undefined;
+    const name0 = std.fmt.bufPrint(&buf, "blk.{d}.{s}", .{ @as(u32, 0), "attn_q.weight" }) catch unreachable;
+    try std.testing.expectEqualStrings("blk.0.attn_q.weight", name0);
+
+    const name42 = std.fmt.bufPrint(&buf, "blk.{d}.{s}", .{ @as(u32, 42), "ffn_gate_exps.weight" }) catch unreachable;
+    try std.testing.expectEqualStrings("blk.42.ffn_gate_exps.weight", name42);
+}
+
+test "DType enum completeness" {
+    // Verify all DType variants are distinct and the enum has the expected count
+    const dtype_fields = @typeInfo(DType).@"enum".fields;
+    // Count should match all known dtypes
+    try std.testing.expect(dtype_fields.len >= 23); // At least: f32, f16, bf16, q2-q8, iq4s, fp8s, nvfp4, mxfp4, tq1_0, mlx_q, gptq, awq, unknown
+}

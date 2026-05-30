@@ -863,3 +863,478 @@ test "expertWeightStride f32 2x2 layout" {
     // 4*4 = 16 elements per expert, 4 bytes each = 64 bytes.
     try std.testing.expectEqual(@as(usize, 64), expertWeightStride(t));
 }
+
+test "expertWeightStride q4_k quantized" {
+    // Q4_K: super-block = 256 elems, 144 bytes per super-block.
+    // dims = [8 experts, 256 rows, 512 cols], elems = 256×512 = 131072
+    // nsb = 131072/256 = 512, stride = 512 × 144 = 73728
+    const t = format_mod.TensorInfo{
+        .name = "blk.0.ffn_gate_exps.weight",
+        .n_dims = 3,
+        .dims = .{ 8, 256, 512, 0 },
+        .dtype = .q4_k,
+        .data_ptr = undefined,
+    };
+    try std.testing.expectEqual(@as(usize, 73728), expertWeightStride(t));
+}
+
+test "expertWeightStride q8_0 quantized" {
+    // Q8_0: block = 32 elems, 34 bytes per block.
+    // dims = [4, 128, 256], elems = 128×256 = 32768
+    // nb = 32768/32 = 1024, stride = 1024 × 34 = 34816
+    const t = format_mod.TensorInfo{
+        .name = "blk.0.ffn_up_exps.weight",
+        .n_dims = 3,
+        .dims = .{ 4, 128, 256, 0 },
+        .dtype = .q8_0,
+        .data_ptr = undefined,
+    };
+    try std.testing.expectEqual(@as(usize, 34816), expertWeightStride(t));
+}
+
+test "expertWeightStride f16" {
+    // F16: 2 bytes per element. dims = [16, 64, 128], elems = 64×128 = 8192
+    // stride = 8192 × 2 = 16384
+    const t = format_mod.TensorInfo{
+        .name = "test",
+        .n_dims = 3,
+        .dims = .{ 16, 64, 128, 0 },
+        .dtype = .f16,
+        .data_ptr = undefined,
+    };
+    try std.testing.expectEqual(@as(usize, 16384), expertWeightStride(t));
+}
+
+test "expertWeightStride nvfp4 compressed-tensors" {
+    // NVFP4: dims = [rows, cols_packed, n_experts], stride = rows × cols_packed.
+    // Unlike GGUF, compressed-tensors NVFP4 uses raw byte layout.
+    const t = format_mod.TensorInfo{
+        .name = "blk.0.ffn_gate_exps.weight",
+        .n_dims = 3,
+        .dims = .{ 128, 64, 4, 0 }, // 128 rows × 64 packed cols × 4 experts
+        .dtype = .nvfp4,
+        .data_ptr = undefined,
+    };
+    try std.testing.expectEqual(@as(usize, 8192), expertWeightStride(t));
+}
+
+test "expertWeightStride 4D tensor uses inner dims" {
+    // 4D: dims = [batch, n_experts, rows, cols]. Only dims[1]×dims[2] used.
+    // This tests the n_dims >= 3 path still uses dims[1] and dims[2].
+    const t = format_mod.TensorInfo{
+        .name = "test",
+        .n_dims = 4,
+        .dims = .{ 2, 8, 32, 64 },
+        .dtype = .f32,
+        .data_ptr = undefined,
+    };
+    // weightBytes(.f32, 1, 8*32) = 8*32*4 = 1024
+    try std.testing.expectEqual(@as(usize, 1024), expertWeightStride(t));
+}
+
+// ── expertStride tests ───────────────────────────────────────────
+
+test "expertStride mlx_q U32 packed" {
+    // MLX: dims = [n_experts, rows, words_per_row] as U32.
+    // Stride = rows × words_per_row × sizeof(u32).
+    const t = format_mod.TensorInfo{
+        .name = "blk.0.ffn_gate_exps.weight",
+        .n_dims = 3,
+        .dims = .{ 8, 256, 32, 0 }, // 8 experts × 256 rows × 32 u32 words
+        .dtype = .mlx_q,
+        .data_ptr = undefined,
+    };
+    // 256 × 32 × 4 = 32768
+    try std.testing.expectEqual(@as(usize, 32768), expertStride(t));
+}
+
+test "expertStride non-mlx delegates to expertWeightStride" {
+    // For non-MLX dtypes, expertStride should return same as expertWeightStride.
+    const t = format_mod.TensorInfo{
+        .name = "test",
+        .n_dims = 3,
+        .dims = .{ 2, 4, 4, 0 },
+        .dtype = .f32,
+        .data_ptr = undefined,
+    };
+    try std.testing.expectEqual(expertWeightStride(t), expertStride(t));
+}
+
+test "expertStride nvfp4 delegates to expertWeightStride" {
+    const t = format_mod.TensorInfo{
+        .name = "test",
+        .n_dims = 3,
+        .dims = .{ 128, 64, 4, 0 },
+        .dtype = .nvfp4,
+        .data_ptr = undefined,
+    };
+    try std.testing.expectEqual(expertWeightStride(t), expertStride(t));
+}
+
+// ── resetInferenceState tests ────────────────────────────────────
+
+test "resetInferenceState clears position and cancel flag" {
+    var kv_seq_len: usize = 42;
+    var cancelled = std.atomic.Value(bool).init(true);
+    resetInferenceState(&kv_seq_len, &cancelled);
+    try std.testing.expectEqual(@as(usize, 0), kv_seq_len);
+    try std.testing.expectEqual(false, cancelled.load(.acquire));
+}
+
+test "resetInferenceState idempotent on already-cleared state" {
+    var kv_seq_len: usize = 0;
+    var cancelled = std.atomic.Value(bool).init(false);
+    resetInferenceState(&kv_seq_len, &cancelled);
+    try std.testing.expectEqual(@as(usize, 0), kv_seq_len);
+    try std.testing.expectEqual(false, cancelled.load(.acquire));
+}
+
+// ── signalCancel tests ───────────────────────────────────────────
+
+test "signalCancel sets flag" {
+    var cancelled = std.atomic.Value(bool).init(false);
+    signalCancel(&cancelled);
+    try std.testing.expectEqual(true, cancelled.load(.acquire));
+}
+
+test "signalCancel is idempotent" {
+    var cancelled = std.atomic.Value(bool).init(true);
+    signalCancel(&cancelled);
+    try std.testing.expectEqual(true, cancelled.load(.acquire));
+}
+
+// ── findMlxCompanion tests (with mock Format) ────────────────────
+
+/// Mock format that returns configurable tensors by name.
+/// Implements the Format vtable for testing companion tensor lookup.
+const MockFormat = struct {
+    tensors: []const NamedTensor,
+    meta_bits: ?u32 = null,
+
+    const NamedTensor = struct { name: []const u8, info: format_mod.TensorInfo };
+
+    fn getTensorFn(self_ptr: *anyopaque, name: []const u8) ?format_mod.TensorInfo {
+        const self: *MockFormat = @ptrCast(@alignCast(self_ptr));
+        for (self.tensors) |entry| {
+            if (std.mem.eql(u8, entry.name, name)) return entry.info;
+        }
+        return null;
+    }
+
+    fn getMetaU32Fn(self_ptr: *anyopaque, key: []const u8) ?u32 {
+        const self: *MockFormat = @ptrCast(@alignCast(self_ptr));
+        if (std.mem.eql(u8, key, "bits")) return self.meta_bits;
+        return null;
+    }
+
+    fn nullStrFn(_: *anyopaque, _: []const u8) ?[]const u8 {
+        return null;
+    }
+    fn nullF32Fn(_: *anyopaque, _: []const u8) ?f32 {
+        return null;
+    }
+    fn nullU32ArrayFn(_: *anyopaque, _: []const u8) ?[]const u32 {
+        return null;
+    }
+    fn nullVocabFn(_: *anyopaque) ?[]const []const u8 {
+        return null;
+    }
+    fn nullMergesFn(_: *anyopaque) ?[]const []const u8 {
+        return null;
+    }
+
+    const vtable = format_mod.Format.VTable{
+        .get_tensor = @ptrCast(&getTensorFn),
+        .get_meta_str = @ptrCast(&nullStrFn),
+        .get_meta_u32 = @ptrCast(&getMetaU32Fn),
+        .get_meta_f32 = @ptrCast(&nullF32Fn),
+        .get_meta_u32_array = @ptrCast(&nullU32ArrayFn),
+        .get_vocab = @ptrCast(&nullVocabFn),
+        .get_merges = @ptrCast(&nullMergesFn),
+    };
+
+    fn format(self: *MockFormat) format_mod.Format {
+        return .{ .ptr = self, .vtable = &vtable };
+    }
+};
+
+test "findMlxCompanion returns null for non-mlx tensor" {
+    var mock = MockFormat{ .tensors = &.{} };
+    const t = format_mod.TensorInfo{
+        .name = "blk.0.attn_q.weight",
+        .n_dims = 2,
+        .dims = .{ 1024, 1024, 0, 0 },
+        .dtype = .q4_k,
+        .data_ptr = undefined,
+    };
+    try std.testing.expect(findMlxCompanion(mock.format(), t, 1024) == null);
+}
+
+test "findMlxCompanion returns null for name without .weight suffix" {
+    var mock = MockFormat{ .tensors = &.{} };
+    const t = format_mod.TensorInfo{
+        .name = "blk.0.attn_q.bias",
+        .n_dims = 2,
+        .dims = .{ 1024, 32, 0, 0 },
+        .dtype = .mlx_q,
+        .data_ptr = undefined,
+    };
+    try std.testing.expect(findMlxCompanion(mock.format(), t, 1024) == null);
+}
+
+test "findMlxCompanion returns null when scales tensor is missing" {
+    var mock = MockFormat{ .tensors = &.{} };
+    const t = format_mod.TensorInfo{
+        .name = "blk.0.attn_q.weight",
+        .n_dims = 2,
+        .dims = .{ 1024, 128, 0, 0 },
+        .dtype = .mlx_q,
+        .data_ptr = undefined,
+    };
+    try std.testing.expect(findMlxCompanion(mock.format(), t, 1024) == null);
+}
+
+test "findMlxCompanion returns null for MXFP4 (scales dtype .unknown)" {
+    // MXFP4 scales use .unknown dtype (U8 E8M0) — should not be treated as MLX affine.
+    var dummy: u8 = 0;
+    var tensors = [_]MockFormat.NamedTensor{
+        .{ .name = "blk.0.attn_q.scales", .info = .{
+            .name = "blk.0.attn_q.scales",
+            .n_dims = 2,
+            .dims = .{ 1024, 32, 0, 0 },
+            .dtype = .unknown,
+            .data_ptr = @ptrCast(&dummy),
+        } },
+    };
+    var mock = MockFormat{ .tensors = &tensors };
+    const t = format_mod.TensorInfo{
+        .name = "blk.0.attn_q.weight",
+        .n_dims = 2,
+        .dims = .{ 1024, 128, 0, 0 },
+        .dtype = .mlx_q,
+        .data_ptr = undefined,
+    };
+    try std.testing.expect(findMlxCompanion(mock.format(), t, 1024) == null);
+}
+
+test "findMlxCompanion returns null when biases tensor is missing" {
+    var dummy: u8 = 0;
+    var tensors = [_]MockFormat.NamedTensor{
+        .{ .name = "blk.0.attn_q.scales", .info = .{
+            .name = "blk.0.attn_q.scales",
+            .n_dims = 2,
+            .dims = .{ 32, 1024, 0, 0 },
+            .dtype = .bf16,
+            .data_ptr = @ptrCast(&dummy),
+        } },
+        // no biases tensor
+    };
+    var mock = MockFormat{ .tensors = &tensors };
+    const t = format_mod.TensorInfo{
+        .name = "blk.0.attn_q.weight",
+        .n_dims = 2,
+        .dims = .{ 1024, 128, 0, 0 },
+        .dtype = .mlx_q,
+        .data_ptr = undefined,
+    };
+    try std.testing.expect(findMlxCompanion(mock.format(), t, 1024) == null);
+}
+
+test "findMlxCompanion 4-bit: bits computed from dims" {
+    // 4-bit MLX: k=1024, words_per_row = 1024*4/32 = 128
+    // bits = 128 * 32 / 1024 = 4
+    var scales_data: u8 = 0;
+    var biases_data: u8 = 0;
+    var tensors = [_]MockFormat.NamedTensor{
+        .{ .name = "blk.0.attn_q.scales", .info = .{
+            .name = "blk.0.attn_q.scales",
+            .n_dims = 2,
+            .dims = .{ 32, 1024, 0, 0 },
+            .dtype = .bf16,
+            .data_ptr = @ptrCast(&scales_data),
+        } },
+        .{ .name = "blk.0.attn_q.biases", .info = .{
+            .name = "blk.0.attn_q.biases",
+            .n_dims = 2,
+            .dims = .{ 32, 1024, 0, 0 },
+            .dtype = .bf16,
+            .data_ptr = @ptrCast(&biases_data),
+        } },
+    };
+    var mock = MockFormat{ .tensors = &tensors };
+    const t = format_mod.TensorInfo{
+        .name = "blk.0.attn_q.weight",
+        .n_dims = 2,
+        .dims = .{ 1024, 128, 0, 0 }, // 128 u32 words per row
+        .dtype = .mlx_q,
+        .data_ptr = undefined,
+    };
+    const companion = findMlxCompanion(mock.format(), t, 1024).?;
+    try std.testing.expectEqual(@as(u32, 4), companion.bits);
+    try std.testing.expectEqual(@as([*]const u8, @ptrCast(&scales_data)), companion.scales);
+    try std.testing.expectEqual(@as([*]const u8, @ptrCast(&biases_data)), companion.biases);
+}
+
+test "findMlxCompanion 8-bit: bits computed from dims" {
+    // 8-bit MLX: k=1024, words_per_row = 1024*8/32 = 256
+    // bits = 256 * 32 / 1024 = 8
+    var scales_data: u8 = 0;
+    var biases_data: u8 = 0;
+    var tensors = [_]MockFormat.NamedTensor{
+        .{ .name = "blk.0.ffn_gate.scales", .info = .{
+            .name = "blk.0.ffn_gate.scales",
+            .n_dims = 2,
+            .dims = .{ 32, 1024, 0, 0 },
+            .dtype = .bf16,
+            .data_ptr = @ptrCast(&scales_data),
+        } },
+        .{ .name = "blk.0.ffn_gate.biases", .info = .{
+            .name = "blk.0.ffn_gate.biases",
+            .n_dims = 2,
+            .dims = .{ 32, 1024, 0, 0 },
+            .dtype = .bf16,
+            .data_ptr = @ptrCast(&biases_data),
+        } },
+    };
+    var mock = MockFormat{ .tensors = &tensors };
+    const t = format_mod.TensorInfo{
+        .name = "blk.0.ffn_gate.weight",
+        .n_dims = 2,
+        .dims = .{ 1024, 256, 0, 0 }, // 256 u32 words per row
+        .dtype = .mlx_q,
+        .data_ptr = undefined,
+    };
+    const companion = findMlxCompanion(mock.format(), t, 1024).?;
+    try std.testing.expectEqual(@as(u32, 8), companion.bits);
+}
+
+test "findMlxCompanion 2-bit: bits computed from dims" {
+    // 2-bit MLX: k=1024, words_per_row = 1024*2/32 = 64
+    // bits = 64 * 32 / 1024 = 2
+    var scales_data: u8 = 0;
+    var biases_data: u8 = 0;
+    var tensors = [_]MockFormat.NamedTensor{
+        .{ .name = "blk.0.attn_v.scales", .info = .{
+            .name = "blk.0.attn_v.scales",
+            .n_dims = 2,
+            .dims = .{ 32, 1024, 0, 0 },
+            .dtype = .bf16,
+            .data_ptr = @ptrCast(&scales_data),
+        } },
+        .{ .name = "blk.0.attn_v.biases", .info = .{
+            .name = "blk.0.attn_v.biases",
+            .n_dims = 2,
+            .dims = .{ 32, 1024, 0, 0 },
+            .dtype = .bf16,
+            .data_ptr = @ptrCast(&biases_data),
+        } },
+    };
+    var mock = MockFormat{ .tensors = &tensors };
+    const t = format_mod.TensorInfo{
+        .name = "blk.0.attn_v.weight",
+        .n_dims = 2,
+        .dims = .{ 1024, 64, 0, 0 }, // 64 u32 words per row
+        .dtype = .mlx_q,
+        .data_ptr = undefined,
+    };
+    const companion = findMlxCompanion(mock.format(), t, 1024).?;
+    try std.testing.expectEqual(@as(u32, 2), companion.bits);
+}
+
+test "findMlxCompanion falls back to metadata bits when k=0" {
+    // When k=0 (can't compute from dims), should use format metadata "bits" key.
+    var scales_data: u8 = 0;
+    var biases_data: u8 = 0;
+    var tensors = [_]MockFormat.NamedTensor{
+        .{ .name = "blk.0.attn_q.scales", .info = .{
+            .name = "blk.0.attn_q.scales",
+            .n_dims = 2,
+            .dims = .{ 32, 1024, 0, 0 },
+            .dtype = .bf16,
+            .data_ptr = @ptrCast(&scales_data),
+        } },
+        .{ .name = "blk.0.attn_q.biases", .info = .{
+            .name = "blk.0.attn_q.biases",
+            .n_dims = 2,
+            .dims = .{ 32, 1024, 0, 0 },
+            .dtype = .bf16,
+            .data_ptr = @ptrCast(&biases_data),
+        } },
+    };
+    var mock = MockFormat{ .tensors = &tensors, .meta_bits = 6 };
+    const t = format_mod.TensorInfo{
+        .name = "blk.0.attn_q.weight",
+        .n_dims = 2,
+        .dims = .{ 1024, 128, 0, 0 },
+        .dtype = .mlx_q,
+        .data_ptr = undefined,
+    };
+    const companion = findMlxCompanion(mock.format(), t, 0).?;
+    try std.testing.expectEqual(@as(u32, 6), companion.bits);
+}
+
+test "findMlxCompanion defaults to 4-bit when no metadata" {
+    // When k=0 and no "bits" metadata, should default to default_mlx_bits (4).
+    var scales_data: u8 = 0;
+    var biases_data: u8 = 0;
+    var tensors = [_]MockFormat.NamedTensor{
+        .{ .name = "blk.0.attn_q.scales", .info = .{
+            .name = "blk.0.attn_q.scales",
+            .n_dims = 2,
+            .dims = .{ 32, 1024, 0, 0 },
+            .dtype = .bf16,
+            .data_ptr = @ptrCast(&scales_data),
+        } },
+        .{ .name = "blk.0.attn_q.biases", .info = .{
+            .name = "blk.0.attn_q.biases",
+            .n_dims = 2,
+            .dims = .{ 32, 1024, 0, 0 },
+            .dtype = .bf16,
+            .data_ptr = @ptrCast(&biases_data),
+        } },
+    };
+    var mock = MockFormat{ .tensors = &tensors, .meta_bits = null };
+    const t = format_mod.TensorInfo{
+        .name = "blk.0.attn_q.weight",
+        .n_dims = 1, // n_dims < 2 triggers fallback path
+        .dims = .{ 1024, 0, 0, 0 },
+        .dtype = .mlx_q,
+        .data_ptr = undefined,
+    };
+    const companion = findMlxCompanion(mock.format(), t, 0).?;
+    try std.testing.expectEqual(@as(u32, default_mlx_bits), companion.bits);
+}
+
+test "findMlxCompanion 3D expert tensor computes bits from last dim" {
+    // 3D MLX expert tensor: dims = [n_experts, rows, words_per_row]
+    // bits = dims[n_dims-1] * 32 / k = dims[2] * 32 / k
+    // 4-bit with k=2048: words_per_row = 2048*4/32 = 256
+    var scales_data: u8 = 0;
+    var biases_data: u8 = 0;
+    var tensors = [_]MockFormat.NamedTensor{
+        .{ .name = "blk.0.ffn_gate_exps.scales", .info = .{
+            .name = "blk.0.ffn_gate_exps.scales",
+            .n_dims = 3,
+            .dims = .{ 8, 32, 2048, 0 },
+            .dtype = .bf16,
+            .data_ptr = @ptrCast(&scales_data),
+        } },
+        .{ .name = "blk.0.ffn_gate_exps.biases", .info = .{
+            .name = "blk.0.ffn_gate_exps.biases",
+            .n_dims = 3,
+            .dims = .{ 8, 32, 2048, 0 },
+            .dtype = .bf16,
+            .data_ptr = @ptrCast(&biases_data),
+        } },
+    };
+    var mock = MockFormat{ .tensors = &tensors };
+    const t = format_mod.TensorInfo{
+        .name = "blk.0.ffn_gate_exps.weight",
+        .n_dims = 3,
+        .dims = .{ 8, 2048, 256, 0 }, // 256 u32 words per row
+        .dtype = .mlx_q,
+        .data_ptr = undefined,
+    };
+    const companion = findMlxCompanion(mock.format(), t, 2048).?;
+    try std.testing.expectEqual(@as(u32, 4), companion.bits);
+}

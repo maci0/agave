@@ -567,3 +567,40 @@ pub const Transport = struct {
         }
     }
 };
+
+// ── Tests ──────────────────────────────────────────────────────
+
+test "simdAddF32 basic" {
+    var dst = [_]f32{ 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0 };
+    const src = [_]f32{ 10.0, 20.0, 30.0, 40.0, 50.0, 60.0, 70.0, 80.0 };
+    simdAddF32(&dst, &src, 8);
+    try std.testing.expectApproxEqAbs(@as(f32, 11.0), dst[0], 1e-6);
+    try std.testing.expectApproxEqAbs(@as(f32, 88.0), dst[7], 1e-6);
+}
+
+test "simdAddF32 non-aligned" {
+    var dst = [_]f32{ 1.0, 2.0, 3.0 };
+    const src = [_]f32{ 10.0, 20.0, 30.0 };
+    simdAddF32(&dst, &src, 3);
+    try std.testing.expectApproxEqAbs(@as(f32, 11.0), dst[0], 1e-6);
+    try std.testing.expectApproxEqAbs(@as(f32, 33.0), dst[2], 1e-6);
+}
+
+test "simdAddF32 large" {
+    var dst: [100]f32 = undefined;
+    var src: [100]f32 = undefined;
+    for (0..100) |i| {
+        dst[i] = @floatFromInt(i);
+        src[i] = 1.0;
+    }
+    simdAddF32(&dst, &src, 100);
+    try std.testing.expectApproxEqAbs(@as(f32, 1.0), dst[0], 1e-6);
+    try std.testing.expectApproxEqAbs(@as(f32, 100.0), dst[99], 1e-6);
+}
+
+test "simdAddF32 zero length" {
+    var dst = [_]f32{42.0};
+    const src = [_]f32{99.0};
+    simdAddF32(&dst, &src, 0);
+    try std.testing.expectApproxEqAbs(@as(f32, 42.0), dst[0], 1e-6);
+}

@@ -360,6 +360,74 @@ test "DDTree compile ancestor masks" {
     try std.testing.expectEqual(@as(u64, 0b111), tree.ancestor_masks[2][0]);
 }
 
+test "DDTree presort selects correct top-K per depth" {
+    // Verify presort directly: 6-token vocab, budget=3, should pick top 3
+    const vocab = [_]f32{ -2.0, -0.1, -1.5, -0.5, -3.0, -0.3 };
+    // Top 3 by descending value: -0.1 (idx 1), -0.3 (idx 5), -0.5 (idx 3)
+    const logits = [_][]const f32{&vocab};
+
+    var builder = DDTreeBuilder{};
+    builder.budget = 3;
+    builder.presort(&logits);
+
+    try std.testing.expectEqual(@as(u32, 1), builder.n_depths);
+    try std.testing.expectEqual(@as(u32, 3), builder.n_sorted[0]);
+
+    // Sorted descending: -0.1 first, -0.3 second, -0.5 third
+    try std.testing.expectApproxEqAbs(@as(f32, -0.1), builder.sorted_lps[0][0], 0.001);
+    try std.testing.expectEqual(@as(u32, 1), builder.sorted_ids[0][0]);
+
+    try std.testing.expectApproxEqAbs(@as(f32, -0.3), builder.sorted_lps[0][1], 0.001);
+    try std.testing.expectEqual(@as(u32, 5), builder.sorted_ids[0][1]);
+
+    try std.testing.expectApproxEqAbs(@as(f32, -0.5), builder.sorted_lps[0][2], 0.001);
+    try std.testing.expectEqual(@as(u32, 3), builder.sorted_ids[0][2]);
+}
+
+test "DDTree build branching tree with siblings" {
+    // 1 depth, 4 tokens, budget=4
+    // All nodes should be at depth 0 with different ranks as siblings
+    const depth0 = [_]f32{ -0.1, -0.2, -0.3, -0.4 };
+    const logits = [_][]const f32{&depth0};
+
+    var builder = DDTreeBuilder{};
+    builder.budget = 4;
+    builder.presort(&logits);
+    builder.buildTree();
+
+    try std.testing.expectEqual(@as(u32, 4), builder.n_nodes);
+
+    // All nodes at depth 0, all with parent -1
+    for (0..4) |i| {
+        try std.testing.expectEqual(@as(u16, 0), builder.nodes[i].depth);
+        try std.testing.expectEqual(@as(i32, -1), builder.nodes[i].parent);
+    }
+
+    // Compile and verify all are children of root
+    const tree = builder.compile(0);
+    try std.testing.expectEqual(@as(u32, 4), tree.n_nodes);
+
+    // Root has 4 children
+    const root_idx = max_budget;
+    try std.testing.expectEqual(@as(u8, 4), tree.child_counts[root_idx]);
+}
+
+test "DDTree empty build" {
+    // Zero depths should produce zero nodes
+    var builder = DDTreeBuilder{};
+    builder.budget = 10;
+    const logits = [_][]const f32{};
+    builder.presort(&logits);
+    builder.buildTree();
+
+    try std.testing.expectEqual(@as(u32, 0), builder.n_nodes);
+
+    // Compile empty tree
+    const tree = builder.compile(50);
+    try std.testing.expectEqual(@as(u32, 0), tree.n_nodes);
+    try std.testing.expectEqual(@as(u32, 50), tree.base_pos);
+}
+
 test "findChild and isAncestor" {
     var builder = DDTreeBuilder{};
     builder.n_nodes = 3;

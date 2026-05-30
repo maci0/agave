@@ -224,6 +224,101 @@ test "freeSeqTable returns blocks to free list" {
     try std.testing.expectEqual(free_before + 4, free_after);
 }
 
+test "appendBlock until exhaustion returns OutOfBlocks" {
+    const allocator = std.testing.allocator;
+    // 2 layers, 4 blocks total. Each appendBlock uses 2 blocks (1 per layer).
+    // So we can append exactly 2 blocks before exhaustion.
+    var paged = try PagedKvCache.init(allocator, 2, 32, 4, 8);
+    defer paged.deinit();
+
+    var block_alloc = BlockAllocator.init(&paged, allocator);
+    var seq_table = try block_alloc.allocateSeqTable(2);
+    defer block_alloc.freeSeqTable(&seq_table);
+
+    // First two appends should succeed (4 blocks total: 2 layers x 2 appends)
+    try block_alloc.appendBlock(&seq_table);
+    try block_alloc.appendBlock(&seq_table);
+    try std.testing.expectEqual(@as(usize, 0), paged.freeCount());
+
+    // Third append should fail with OutOfBlocks
+    const result = block_alloc.appendBlock(&seq_table);
+    try std.testing.expectError(error.OutOfBlocks, result);
+
+    // Verify seq_len was not incremented on failure (rollback worked)
+    try std.testing.expectEqual(@as(usize, 16), seq_table.seq_len);
+}
+
+test "appendBlock errdefer rollback frees partial allocations" {
+    const allocator = std.testing.allocator;
+    // 3 layers, 5 blocks. First appendBlock needs 3 blocks (1 per layer) → succeeds.
+    // Second appendBlock: allocates block for layer 0, layer 1, but layer 2 fails (only 2 free).
+    // Should rollback the 2 blocks allocated for layers 0 and 1.
+    var paged = try PagedKvCache.init(allocator, 3, 32, 5, 8);
+    defer paged.deinit();
+
+    var block_alloc = BlockAllocator.init(&paged, allocator);
+    var seq_table = try block_alloc.allocateSeqTable(3);
+    defer block_alloc.freeSeqTable(&seq_table);
+
+    // First append: uses 3 blocks, 2 remain free
+    try block_alloc.appendBlock(&seq_table);
+    try std.testing.expectEqual(@as(usize, 2), paged.freeCount());
+    try std.testing.expectEqual(@as(usize, 1), seq_table.block_table[0].len);
+
+    // Second append: needs 3 blocks but only 2 free → fails.
+    // errdefer should roll back partial allocations.
+    const result = block_alloc.appendBlock(&seq_table);
+    try std.testing.expectError(error.OutOfBlocks, result);
+
+    // After rollback, free count should be restored to 2
+    try std.testing.expectEqual(@as(usize, 2), paged.freeCount());
+
+    // Block tables should be unchanged (still 1 block per layer)
+    try std.testing.expectEqual(@as(usize, 1), seq_table.block_table[0].len);
+    try std.testing.expectEqual(@as(usize, 1), seq_table.block_table[1].len);
+    try std.testing.expectEqual(@as(usize, 1), seq_table.block_table[2].len);
+}
+
+test "freeSeqTable on empty table is a no-op" {
+    const allocator = std.testing.allocator;
+    var paged = try PagedKvCache.init(allocator, 2, 32, 4, 8);
+    defer paged.deinit();
+
+    var block_alloc = BlockAllocator.init(&paged, allocator);
+    // Create an "empty" SeqBlockTable with zero layers
+    var empty = SeqBlockTable{ .block_table = &.{}, .seq_len = 0 };
+    // Should not crash
+    block_alloc.freeSeqTable(&empty);
+}
+
+test "free and re-allocate produces valid blocks" {
+    const allocator = std.testing.allocator;
+    var paged = try PagedKvCache.init(allocator, 1, 16, 8, 4);
+    defer paged.deinit();
+
+    var block_alloc = BlockAllocator.init(&paged, allocator);
+
+    // Allocate sequence, append blocks, then free
+    var seq1 = try block_alloc.allocateSeqTable(1);
+    try block_alloc.appendBlock(&seq1);
+    try block_alloc.appendBlock(&seq1);
+    const b0 = BlockAllocator.getPhysicalBlock(&seq1, 0, 0);
+    const b1 = BlockAllocator.getPhysicalBlock(&seq1, 0, 1);
+    block_alloc.freeSeqTable(&seq1);
+
+    // Re-allocate — should reuse freed blocks
+    var seq2 = try block_alloc.allocateSeqTable(1);
+    defer block_alloc.freeSeqTable(&seq2);
+    try block_alloc.appendBlock(&seq2);
+    try block_alloc.appendBlock(&seq2);
+    const r0 = BlockAllocator.getPhysicalBlock(&seq2, 0, 0);
+    const r1 = BlockAllocator.getPhysicalBlock(&seq2, 0, 1);
+
+    // The freed blocks should be the ones we get back (LIFO from free list)
+    try std.testing.expect(r0 == b0 or r0 == b1);
+    try std.testing.expect(r1 == b0 or r1 == b1);
+}
+
 test "getPhysicalBlock returns correct block ID" {
     const allocator = std.testing.allocator;
     var paged = try PagedKvCache.init(allocator, 2, 64, 16, 16);

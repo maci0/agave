@@ -593,6 +593,127 @@ test "softmaxWithTemp concentrates on max at low temperature" {
     try std.testing.expectApproxEqAbs(@as(f32, 1.0), sum, 1e-5);
 }
 
+test "SpecState recordRound with adaptive K profiling" {
+    var s = try SpecState.init(std.testing.allocator, 5, 100);
+    defer s.deinit(std.testing.allocator);
+
+    s.adaptive_k_enabled = true;
+
+    // Record rounds with different draft lengths
+    s.n_draft = 3;
+    s.recordRound(2);
+    try std.testing.expectEqual(@as(u32, 1), s.k_total_counts[2]); // index 2 = k=3
+    try std.testing.expectEqual(@as(u32, 2), s.k_accept_counts[2]);
+
+    s.n_draft = 5;
+    s.recordRound(4);
+    try std.testing.expectEqual(@as(u32, 1), s.k_total_counts[4]); // index 4 = k=5
+    try std.testing.expectEqual(@as(u32, 4), s.k_accept_counts[4]);
+
+    // Cumulative stats should be correct
+    try std.testing.expectEqual(@as(u64, 6), s.total_accepted);
+    try std.testing.expectEqual(@as(u64, 8), s.total_drafted);
+    try std.testing.expectEqual(@as(u64, 2), s.total_rounds);
+}
+
+test "SpecState zero draft round" {
+    var s = try SpecState.init(std.testing.allocator, 5, 100);
+    defer s.deinit(std.testing.allocator);
+
+    s.n_draft = 0;
+    s.recordRound(0);
+    try std.testing.expectEqual(@as(u64, 0), s.total_drafted);
+    try std.testing.expectEqual(@as(u64, 1), s.total_rounds);
+    try std.testing.expectEqual(@as(f32, 0), s.acceptanceRate());
+    try std.testing.expectEqual(@as(f32, 0), s.meanAccepted());
+}
+
+test "logSoftmax single element" {
+    var logits = [_]f32{5.0};
+    logSoftmax(&logits);
+    // Single element: log(1.0) = 0
+    try std.testing.expectApproxEqAbs(@as(f32, 0.0), logits[0], 1e-4);
+}
+
+test "logSoftmax large input" {
+    // Test with larger input to exercise SIMD path (>8 elements)
+    var logits: [16]f32 = undefined;
+    for (0..16) |i| logits[i] = @floatFromInt(i);
+
+    logSoftmax(&logits);
+
+    // All should be <= 0
+    for (logits) |v| try std.testing.expect(v <= 0);
+
+    // exp(log_probs) should sum to ~1.0
+    var sum: f32 = 0;
+    for (logits) |v| sum += @exp(v);
+    try std.testing.expectApproxEqAbs(@as(f32, 1.0), sum, 1e-4);
+
+    // Last element should have the largest log-prob
+    try std.testing.expect(logits[15] > logits[14]);
+    try std.testing.expect(logits[14] > logits[0]);
+}
+
+test "logSoftmax empty is no-op" {
+    var empty: [0]f32 = .{};
+    logSoftmax(&empty); // Should not crash
+}
+
+test "softmaxWithTemp temperature=1 is standard softmax" {
+    const logits = [_]f32{ 1.0, 2.0, 3.0 };
+    var out: [3]f32 = undefined;
+
+    softmaxWithTemp(&logits, &out, 1.0);
+
+    // Standard softmax
+    var sum: f32 = 0;
+    for (out) |v| sum += v;
+    try std.testing.expectApproxEqAbs(@as(f32, 1.0), sum, 1e-5);
+
+    // p(3) > p(2) > p(1)
+    try std.testing.expect(out[2] > out[1]);
+    try std.testing.expect(out[1] > out[0]);
+}
+
+test "softmaxWithTemp zero temperature uses temp=1 fallback" {
+    const logits = [_]f32{ 1.0, 2.0, 3.0 };
+    var out: [3]f32 = undefined;
+
+    // Zero temperature should fallback to 1.0 (safe_temp guard)
+    softmaxWithTemp(&logits, &out, 0.0);
+
+    var sum: f32 = 0;
+    for (out) |v| sum += v;
+    try std.testing.expectApproxEqAbs(@as(f32, 1.0), sum, 1e-5);
+}
+
+test "softmaxWithTemp SIMD path with >8 elements" {
+    var logits: [16]f32 = undefined;
+    var out: [16]f32 = undefined;
+    for (0..16) |i| logits[i] = @as(f32, @floatFromInt(i)) * 0.5;
+
+    softmaxWithTemp(&logits, &out, 0.5);
+
+    var sum: f32 = 0;
+    for (out) |v| {
+        try std.testing.expect(v >= 0);
+        sum += v;
+    }
+    try std.testing.expectApproxEqAbs(@as(f32, 1.0), sum, 1e-4);
+}
+
+test "sampleResidual all mass on draft returns 0 fallback" {
+    // When target <= draft everywhere, residual is all zeros
+    const target = [_]f32{ 0.1, 0.3, 0.6 };
+    const draft_lp = [_]f32{ @log(@as(f32, 0.2)), @log(@as(f32, 0.4)), @log(@as(f32, 0.7)) };
+    var buf: [3]f32 = undefined;
+    var prng = std.Random.DefaultPrng.init(42);
+    const tok = sampleResidual(&target, &draft_lp, 3, prng.random(), &buf);
+    // Sum of residual is 0, function returns 0
+    try std.testing.expectEqual(@as(u32, 0), tok);
+}
+
 test "sampleResidual returns valid token" {
     const target = [_]f32{ 0.1, 0.3, 0.6 };
     const draft_lp = [_]f32{ @log(@as(f32, 0.5)), @log(@as(f32, 0.3)), @log(@as(f32, 0.2)) };
