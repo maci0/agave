@@ -3046,68 +3046,796 @@ test "Metal n_pipelines count" {
     try std.testing.expectEqual(@as(u32, 70), MetalBackend.n_pipelines);
 }
 
-test "Metal backend public function signatures compile" {
-    comptime {
-        _ = @TypeOf(MetalBackend.gemv);
-        _ = @TypeOf(MetalBackend.gemvMulti);
-        _ = @TypeOf(MetalBackend.gemvT);
-        _ = @TypeOf(MetalBackend.gemvNvfp4St);
-        _ = @TypeOf(MetalBackend.gemvMlxQ);
-        _ = @TypeOf(MetalBackend.gemvMxfp4St);
-        _ = @TypeOf(MetalBackend.gemvGptq);
-        _ = @TypeOf(MetalBackend.gemvAwq);
-        _ = @TypeOf(MetalBackend.rmsNorm);
-        _ = @TypeOf(MetalBackend.rmsNormMulti);
-        _ = @TypeOf(MetalBackend.addRmsNorm);
-        _ = @TypeOf(MetalBackend.silu);
-        _ = @TypeOf(MetalBackend.gelu);
-        _ = @TypeOf(MetalBackend.siluMul);
-        _ = @TypeOf(MetalBackend.geluMul);
-        _ = @TypeOf(MetalBackend.sigmoidMul);
-        _ = @TypeOf(MetalBackend.add);
-        _ = @TypeOf(MetalBackend.addScaled);
-        _ = @TypeOf(MetalBackend.mul);
-        _ = @TypeOf(MetalBackend.softmax);
-        _ = @TypeOf(MetalBackend.rope);
-        _ = @TypeOf(MetalBackend.embLookup);
-        _ = @TypeOf(MetalBackend.l2Norm);
-        _ = @TypeOf(MetalBackend.deinterleave);
-        _ = @TypeOf(MetalBackend.splitQGate);
-        _ = @TypeOf(MetalBackend.sdpa);
-        _ = @TypeOf(MetalBackend.sdpaPaged);
-        _ = @TypeOf(MetalBackend.sdpaWithStats);
-        _ = @TypeOf(MetalBackend.sdpaPrefill);
-        _ = @TypeOf(MetalBackend.sdpaTree);
-        _ = @TypeOf(MetalBackend.gemm);
-        _ = @TypeOf(MetalBackend.rmsNormBatched);
-        _ = @TypeOf(MetalBackend.ropeBatched);
-        _ = @TypeOf(MetalBackend.deltaNet);
-        _ = @TypeOf(MetalBackend.fusedFfnGateUpSiluQ8);
-        _ = @TypeOf(MetalBackend.fusedFfnGateUpSiluQ4K);
-        _ = @TypeOf(MetalBackend.fusedFfnGateUpSiluQ40);
-        _ = @TypeOf(MetalBackend.fusedFfnGateUpGeluQ8);
-        _ = @TypeOf(MetalBackend.fusedFfnGateUpGeluQ4K);
-        _ = @TypeOf(MetalBackend.fusedFfnGateUpGeluQ40);
-        _ = @TypeOf(MetalBackend.fusedFfnGateUpSiluQ6K);
-        _ = @TypeOf(MetalBackend.fusedFfnGateUpGeluQ6K);
-        _ = @TypeOf(MetalBackend.fusedFfnGateUpSiluQ5K);
-        _ = @TypeOf(MetalBackend.fusedFfnGateUpGeluQ5K);
-        _ = @TypeOf(MetalBackend.fusedFfnGateUpSiluMlxQ4);
-        _ = @TypeOf(MetalBackend.dispatchMegakernelQwen35Q8);
-        _ = @TypeOf(MetalBackend.dispatchMegakernelGemmaQ4K);
-        _ = @TypeOf(MetalBackend.dispatchMegakernelQwen35Q4K);
-        _ = @TypeOf(MetalBackend.dispatchMegakernelNemotronHQ8);
-        _ = @TypeOf(MetalBackend.dispatchMegakernelAuto);
-        _ = @TypeOf(MetalBackend.compileComposedMegakernel);
-        _ = @TypeOf(MetalBackend.sync);
-        _ = @TypeOf(MetalBackend.beginBatch);
-        _ = @TypeOf(MetalBackend.endBatch);
-        _ = @TypeOf(MetalBackend.init);
-        _ = @TypeOf(MetalBackend.deinit);
-        _ = @TypeOf(MetalBackend.backendInfo);
-        _ = @TypeOf(MetalBackend.deviceName);
-        _ = @TypeOf(MetalBackend.allocKvSlice);
-        _ = @TypeOf(MetalBackend.freeKvSlice);
-        _ = @TypeOf(MetalBackend.resetCounters);
+// ── Helper to get a Metal backend or skip the test ──────────────
+fn getTestBackend() !MetalBackend {
+    if (comptime builtin.os.tag != .macos) return error.SkipZigTest;
+    return MetalBackend.init(std.testing.allocator) catch |err| {
+        if (err == error.NoMetalDevice) return error.SkipZigTest;
+        return err;
+    };
+}
+
+// ── Per-function behavioral tests ─────────────────────────────────
+
+test "MetalBackend.deviceName" {
+    var be = try getTestBackend();
+    defer be.deinit();
+    const name = be.deviceName();
+    // Device name should be non-empty on any Mac with Metal
+    try std.testing.expect(name.len > 0);
+}
+
+test "MetalBackend.backendInfo" {
+    var be = try getTestBackend();
+    defer be.deinit();
+    const info = be.backendInfo();
+    try std.testing.expectEqualStrings("Metal", info.name);
+    try std.testing.expect(info.total_mem > 0);
+    try std.testing.expect(info.is_uma);
+    try std.testing.expectEqual(@as(u32, 70), info.n_gpu_kernels);
+    try std.testing.expectEqualStrings("MSL", info.kernel_type);
+    try std.testing.expect(info.device_name.len > 0);
+}
+
+test "MetalBackend.allocKvSlice and freeKvSlice" {
+    var be = try getTestBackend();
+    defer be.deinit();
+    const slice = try be.allocKvSlice(std.testing.allocator, 4096);
+    // Slice should be zeroed
+    for (slice) |b| try std.testing.expectEqual(@as(u8, 0), b);
+    // Should be page-aligned
+    try std.testing.expectEqual(@as(usize, 0), @intFromPtr(slice.ptr) % std.heap.page_size_min);
+    be.freeKvSlice(std.testing.allocator, slice);
+}
+
+test "MetalBackend.freeKvSlice empty" {
+    var be = try getTestBackend();
+    defer be.deinit();
+    // Freeing an empty slice should be a no-op
+    const empty: []u8 = &.{};
+    be.freeKvSlice(std.testing.allocator, empty);
+}
+
+test "MetalBackend.gelu" {
+    var be = try getTestBackend();
+    defer be.deinit();
+    var input = [_]f32{ 0.0, 1.0, -1.0, 2.0 };
+    var output: [4]f32 = undefined;
+    be.gelu(&input, &output, 4);
+    be.sync();
+    // GELU(0) = 0
+    try std.testing.expectApproxEqAbs(@as(f32, 0.0), output[0], 0.001);
+    // GELU(1) ~ 0.8412
+    try std.testing.expectApproxEqAbs(@as(f32, 0.8412), output[1], 0.01);
+    // GELU(-1) ~ -0.1588
+    try std.testing.expectApproxEqAbs(@as(f32, -0.1588), output[2], 0.01);
+    // GELU(2) ~ 1.9545
+    try std.testing.expectApproxEqAbs(@as(f32, 1.9545), output[3], 0.01);
+}
+
+test "MetalBackend.siluMul" {
+    var be = try getTestBackend();
+    defer be.deinit();
+    var a = [_]f32{ 0.0, 1.0, -1.0, 2.0 };
+    var b = [_]f32{ 1.0, 2.0, 3.0, 0.5 };
+    var out: [4]f32 = undefined;
+    be.siluMul(&a, &b, &out, 4);
+    be.sync();
+    // siluMul(a,b) = silu(a) * b
+    // silu(0)*1 = 0, silu(1)*2 ~ 1.4623, silu(-1)*3 ~ -0.8068, silu(2)*0.5 ~ 0.8808
+    try std.testing.expectApproxEqAbs(@as(f32, 0.0), out[0], 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 1.4623), out[1], 0.02);
+    try std.testing.expectApproxEqAbs(@as(f32, -0.8068), out[2], 0.02);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.8808), out[3], 0.02);
+}
+
+test "MetalBackend.geluMul" {
+    var be = try getTestBackend();
+    defer be.deinit();
+    var a = [_]f32{ 0.0, 1.0, -1.0, 2.0 };
+    var b = [_]f32{ 1.0, 2.0, 3.0, 0.5 };
+    var out: [4]f32 = undefined;
+    be.geluMul(&a, &b, &out, 4);
+    be.sync();
+    // geluMul(a,b) = gelu(a) * b
+    try std.testing.expectApproxEqAbs(@as(f32, 0.0), out[0], 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 1.6824), out[1], 0.02);
+    try std.testing.expectApproxEqAbs(@as(f32, -0.4763), out[2], 0.02);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.9773), out[3], 0.02);
+}
+
+test "MetalBackend.mul" {
+    var be = try getTestBackend();
+    defer be.deinit();
+    var a = [_]f32{ 1.0, 2.0, 3.0, 4.0 };
+    var b = [_]f32{ 5.0, 6.0, 7.0, 8.0 };
+    var out: [4]f32 = undefined;
+    be.mul(&a, &b, &out, 4);
+    be.sync();
+    try std.testing.expectApproxEqAbs(@as(f32, 5.0), out[0], 1e-4);
+    try std.testing.expectApproxEqAbs(@as(f32, 12.0), out[1], 1e-4);
+    try std.testing.expectApproxEqAbs(@as(f32, 21.0), out[2], 1e-4);
+    try std.testing.expectApproxEqAbs(@as(f32, 32.0), out[3], 1e-4);
+}
+
+test "MetalBackend.addScaled" {
+    var be = try getTestBackend();
+    defer be.deinit();
+    var src = [_]f32{ 1.0, 2.0, 3.0, 4.0 };
+    var dst = [_]f32{ 10.0, 20.0, 30.0, 40.0 };
+    be.addScaled(&src, &dst, 0.5, 4);
+    be.sync();
+    // dst[i] += src[i] * 0.5
+    try std.testing.expectApproxEqAbs(@as(f32, 10.5), dst[0], 1e-4);
+    try std.testing.expectApproxEqAbs(@as(f32, 21.0), dst[1], 1e-4);
+    try std.testing.expectApproxEqAbs(@as(f32, 31.5), dst[2], 1e-4);
+    try std.testing.expectApproxEqAbs(@as(f32, 42.0), dst[3], 1e-4);
+}
+
+test "MetalBackend.softmax" {
+    var be = try getTestBackend();
+    defer be.deinit();
+    // Use n >= softmax_cpu_threshold (128) to exercise GPU path
+    var data: [256]f32 = undefined;
+    for (0..256) |i| data[i] = @as(f32, @floatFromInt(i)) * 0.01 - 1.28;
+    be.softmax(&data, 256);
+    be.sync();
+    // Softmax outputs should sum to 1.0
+    var sum: f32 = 0;
+    for (data) |v| sum += v;
+    try std.testing.expectApproxEqAbs(@as(f32, 1.0), sum, 1e-3);
+    // All values should be >= 0
+    for (data) |v| try std.testing.expect(v >= 0.0);
+}
+
+test "MetalBackend.softmax small n CPU fallback" {
+    var be = try getTestBackend();
+    defer be.deinit();
+    // n < softmax_cpu_threshold (128) triggers CPU fallback
+    var data = [_]f32{ 1.0, 2.0, 3.0, 4.0 };
+    be.softmax(&data, 4);
+    be.sync();
+    var sum: f32 = 0;
+    for (data) |v| sum += v;
+    try std.testing.expectApproxEqAbs(@as(f32, 1.0), sum, 1e-4);
+    // Largest input (4.0) should have largest probability
+    try std.testing.expect(data[3] > data[2]);
+    try std.testing.expect(data[2] > data[1]);
+    try std.testing.expect(data[1] > data[0]);
+}
+
+test "MetalBackend.rope" {
+    var be = try getTestBackend();
+    defer be.deinit();
+    // 2 heads, head_dim=4, rope_dim=4, pos=0 => no rotation (cos(0)=1, sin(0)=0)
+    var x = [_]f32{ 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0 };
+    var expected: [8]f32 = undefined;
+    @memcpy(&expected, &x);
+    be.rope(&x, 0, 2, 4, 4, 10000.0);
+    be.sync();
+    // At pos=0, cos(0)=1 and sin(0)=0, so values unchanged
+    for (0..8) |i| {
+        try std.testing.expectApproxEqAbs(expected[i], x[i], 1e-4);
     }
+}
+
+test "MetalBackend.rope nonzero position" {
+    var be = try getTestBackend();
+    defer be.deinit();
+    // Use larger buffer so Metal buffer wrapping succeeds reliably.
+    // 4 heads, head_dim=32, rope_dim=32, pos=1 => rotation applied.
+    const nh = 4;
+    const hd = 32;
+    var x: [nh * hd]f32 = undefined;
+    for (0..x.len) |i| x[i] = 1.0;
+    var orig: [nh * hd]f32 = undefined;
+    @memcpy(&orig, &x);
+    be.rope(&x, 1, nh, hd, hd, 10000.0);
+    be.sync();
+    // At pos=1, rotation is applied. Values should change from the original.
+    var changed: usize = 0;
+    for (0..x.len) |i| {
+        if (@abs(x[i] - orig[i]) > 1e-6) changed += 1;
+    }
+    // Most elements should be rotated (all pairs where angle is non-zero)
+    try std.testing.expect(changed > 0);
+}
+
+test "MetalBackend.l2Norm" {
+    var be = try getTestBackend();
+    defer be.deinit();
+    var x = [_]f32{ 3.0, 4.0, 0.0, 0.0 };
+    be.l2Norm(&x, 4, 1e-6);
+    be.sync();
+    // L2 norm of [3,4,0,0] = 5, so normalized = [0.6, 0.8, 0, 0]
+    try std.testing.expectApproxEqAbs(@as(f32, 0.6), x[0], 1e-3);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.8), x[1], 1e-3);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.0), x[2], 1e-3);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.0), x[3], 1e-3);
+}
+
+test "MetalBackend.addRmsNorm" {
+    var be = try getTestBackend();
+    defer be.deinit();
+    var a = [_]f32{ 0.5, 1.0, 1.5, 2.0 };
+    var b = [_]f32{ 0.5, 1.0, 1.5, 2.0 };
+    var weight = [_]f32{ 1.0, 1.0, 1.0, 1.0 };
+    var output: [4]f32 = undefined;
+    // a[i] += b[i] => a = [1, 2, 3, 4], then rmsNorm(a, weight)
+    be.addRmsNorm(&a, &b, &weight, &output, 4, 1e-6);
+    be.sync();
+    // After add: a = [1, 2, 3, 4]. RMS = sqrt(30/4) ~ 2.7386
+    // output[i] = a[i] * weight[i] / RMS = a[i] / 2.7386
+    try std.testing.expectApproxEqAbs(@as(f32, 0.3651), output[0], 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.7303), output[1], 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 1.0954), output[2], 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 1.4606), output[3], 0.01);
+}
+
+test "MetalBackend.rmsNormMulti" {
+    var be = try getTestBackend();
+    defer be.deinit();
+    // 2 heads, head_dim=4. Apply rmsNorm per head in-place.
+    var data = [_]f32{ 1.0, 2.0, 3.0, 4.0, 2.0, 2.0, 2.0, 2.0 };
+    var weight = [_]f32{ 1.0, 1.0, 1.0, 1.0 };
+    be.rmsNormMulti(&data, &weight, 2, 4, 1e-6);
+    be.sync();
+    // Head 0: [1,2,3,4], RMS=sqrt(30/4)~2.7386
+    try std.testing.expectApproxEqAbs(@as(f32, 0.3651), data[0], 0.01);
+    // Head 1: [2,2,2,2], RMS=2.0, normalized=[1,1,1,1]
+    try std.testing.expectApproxEqAbs(@as(f32, 1.0), data[4], 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 1.0), data[5], 0.01);
+}
+
+test "MetalBackend.sigmoidMul" {
+    var be = try getTestBackend();
+    defer be.deinit();
+    var data = [_]f32{ 1.0, 2.0, 3.0, 4.0 };
+    var gate = [_]f32{ 0.0, 0.0, 0.0, 0.0 };
+    be.sigmoidMul(&data, &gate, 4);
+    be.sync();
+    // sigmoid(0) = 0.5, so data[i] *= 0.5
+    try std.testing.expectApproxEqAbs(@as(f32, 0.5), data[0], 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 1.0), data[1], 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 1.5), data[2], 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 2.0), data[3], 0.01);
+}
+
+test "MetalBackend.deinterleave" {
+    var be = try getTestBackend();
+    defer be.deinit();
+    // 2 pairs, stride=2: input = [a0, a1, b0, b1, a2, a3, b2, b3]
+    var input = [_]f32{ 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0 };
+    var out_a: [4]f32 = undefined;
+    var out_b: [4]f32 = undefined;
+    be.deinterleave(&input, &out_a, &out_b, 2, 2);
+    be.sync();
+    // out_a = [1, 2, 5, 6], out_b = [3, 4, 7, 8]
+    try std.testing.expectApproxEqAbs(@as(f32, 1.0), out_a[0], 1e-4);
+    try std.testing.expectApproxEqAbs(@as(f32, 2.0), out_a[1], 1e-4);
+    try std.testing.expectApproxEqAbs(@as(f32, 5.0), out_a[2], 1e-4);
+    try std.testing.expectApproxEqAbs(@as(f32, 6.0), out_a[3], 1e-4);
+    try std.testing.expectApproxEqAbs(@as(f32, 3.0), out_b[0], 1e-4);
+    try std.testing.expectApproxEqAbs(@as(f32, 4.0), out_b[1], 1e-4);
+    try std.testing.expectApproxEqAbs(@as(f32, 7.0), out_b[2], 1e-4);
+    try std.testing.expectApproxEqAbs(@as(f32, 8.0), out_b[3], 1e-4);
+}
+
+test "MetalBackend.splitQGate" {
+    var be = try getTestBackend();
+    defer be.deinit();
+    // 2 heads, head_dim=2. Input: [Q0, Q1, G0, G1, Q2, Q3, G2, G3]
+    var qg = [_]f32{ 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0 };
+    var q_out: [4]f32 = undefined;
+    var g_out: [4]f32 = undefined;
+    be.splitQGate(&qg, &q_out, &g_out, 2, 2);
+    be.sync();
+    // q_out = [1, 2, 5, 6], g_out = [3, 4, 7, 8]
+    try std.testing.expectApproxEqAbs(@as(f32, 1.0), q_out[0], 1e-4);
+    try std.testing.expectApproxEqAbs(@as(f32, 2.0), q_out[1], 1e-4);
+    try std.testing.expectApproxEqAbs(@as(f32, 5.0), q_out[2], 1e-4);
+    try std.testing.expectApproxEqAbs(@as(f32, 6.0), q_out[3], 1e-4);
+    try std.testing.expectApproxEqAbs(@as(f32, 3.0), g_out[0], 1e-4);
+    try std.testing.expectApproxEqAbs(@as(f32, 4.0), g_out[1], 1e-4);
+    try std.testing.expectApproxEqAbs(@as(f32, 7.0), g_out[2], 1e-4);
+    try std.testing.expectApproxEqAbs(@as(f32, 8.0), g_out[3], 1e-4);
+}
+
+test "MetalBackend.gemv f32" {
+    var be = try getTestBackend();
+    defer be.deinit();
+    // 2x4 matrix: W = [[1,0,0,0],[0,1,0,0]], x = [3,7,0,0]
+    // y = W @ x = [3, 7]
+    var w = [_]f32{ 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0 };
+    var x = [_]f32{ 3.0, 7.0, 0.0, 0.0 };
+    var y: [2]f32 = undefined;
+    const td = TensorData{ .data = @ptrCast(&w), .dtype = .f32 };
+    be.gemv(&x, td, &y, 2, 4);
+    be.sync();
+    try std.testing.expectApproxEqAbs(@as(f32, 3.0), y[0], 1e-3);
+    try std.testing.expectApproxEqAbs(@as(f32, 7.0), y[1], 1e-3);
+}
+
+test "MetalBackend.embLookup" {
+    var be = try getTestBackend();
+    defer be.deinit();
+    // 3-token vocabulary, dim=4
+    var table_data = [_]f32{
+        1.0, 2.0, 3.0, 4.0, // token 0
+        5.0, 6.0, 7.0, 8.0, // token 1
+        9.0, 10.0, 11.0, 12.0, // token 2
+    };
+    const td = TensorData{ .data = @ptrCast(&table_data), .dtype = .f32 };
+    var output: [4]f32 = undefined;
+    be.embLookup(td, 1, &output, 4);
+    // embLookup does CPU fallback (with sync), no extra sync needed
+    try std.testing.expectApproxEqAbs(@as(f32, 5.0), output[0], 1e-4);
+    try std.testing.expectApproxEqAbs(@as(f32, 6.0), output[1], 1e-4);
+    try std.testing.expectApproxEqAbs(@as(f32, 7.0), output[2], 1e-4);
+    try std.testing.expectApproxEqAbs(@as(f32, 8.0), output[3], 1e-4);
+}
+
+test "MetalBackend.gemvT" {
+    var be = try getTestBackend();
+    defer be.deinit();
+    // gemvT needs Q8_0 weights. Use compile-time signature check.
+    comptime {
+        const F = @TypeOf(MetalBackend.gemvT);
+        const info = @typeInfo(F);
+        // gemvT takes self + 5 params = 6 total
+        try std.testing.expectEqual(6, info.@"fn".params.len);
+    }
+}
+
+test "MetalBackend.beginBatch and endBatch" {
+    var be = try getTestBackend();
+    defer be.deinit();
+    try std.testing.expect(!be.batch_mode);
+    be.beginBatch();
+    try std.testing.expect(be.batch_mode);
+    // Dispatch something in batch mode
+    var a = [_]f32{ 1.0, 2.0, 3.0, 4.0 };
+    var b = [_]f32{ 1.0, 1.0, 1.0, 1.0 };
+    var out: [4]f32 = undefined;
+    be.add(&a, &b, &out, 4);
+    be.endBatch();
+    try std.testing.expect(!be.batch_mode);
+    be.sync();
+    try std.testing.expectApproxEqAbs(@as(f32, 2.0), out[0], 1e-4);
+}
+
+test "MetalBackend.sync" {
+    var be = try getTestBackend();
+    defer be.deinit();
+    // sync() should be safe to call even with no pending work
+    be.sync();
+    be.sync(); // double sync
+}
+
+test "MetalBackend.resetCounters" {
+    var be = try getTestBackend();
+    defer be.deinit();
+    be.resetCounters();
+    try std.testing.expect(be.profile_counters);
+    try std.testing.expectEqual(@as(u32, 0), be.dispatch_count);
+    try std.testing.expectEqual(@as(u32, 0), be.barrier_count);
+    try std.testing.expectEqual(@as(u32, 0), be.sync_count);
+    // Do some work, counters should increment
+    var a = [_]f32{ 1.0, 2.0, 3.0, 4.0 };
+    var out: [4]f32 = undefined;
+    be.silu(&a, &out, 4);
+    be.sync();
+    try std.testing.expect(be.dispatch_count > 0);
+    try std.testing.expect(be.sync_count > 0);
+}
+
+test "MetalBackend.rmsNormBatched" {
+    var be = try getTestBackend();
+    defer be.deinit();
+    // 2 tokens, dim=4, same weight
+    var input = [_]f32{ 1.0, 2.0, 3.0, 4.0, 2.0, 2.0, 2.0, 2.0 };
+    var weight = [_]f32{ 1.0, 1.0, 1.0, 1.0 };
+    var output: [8]f32 = undefined;
+    be.rmsNormBatched(&input, &weight, &output, 2, 4, 1e-6);
+    be.sync();
+    // Token 0: [1,2,3,4], RMS=sqrt(30/4)~2.7386, output[0]=1/2.7386~0.3651
+    try std.testing.expectApproxEqAbs(@as(f32, 0.3651), output[0], 0.01);
+    // Token 1: [2,2,2,2], RMS=2.0, output[4]=2/2=1.0
+    try std.testing.expectApproxEqAbs(@as(f32, 1.0), output[4], 0.01);
+}
+
+test "MetalBackend.ropeBatched" {
+    var be = try getTestBackend();
+    defer be.deinit();
+    // 2 tokens at positions 0,0 -> no rotation
+    var x = [_]f32{ 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0 };
+    var positions = [_]u32{ 0, 0 };
+    var expected: [8]f32 = undefined;
+    @memcpy(&expected, &x);
+    be.ropeBatched(&x, &positions, 2, 1, 4, 4, 10000.0);
+    be.sync();
+    // pos=0 means cos(0)=1 sin(0)=0, no change
+    for (0..8) |i| {
+        try std.testing.expectApproxEqAbs(expected[i], x[i], 1e-4);
+    }
+}
+
+test "MetalBackend.gemm f32" {
+    var be = try getTestBackend();
+    defer be.deinit();
+    // GEMM: Y[2x2] = X[2x4] @ W[2x4]^T
+    // X = [[1,0,0,0],[0,1,0,0]], W = [[1,2,3,4],[5,6,7,8]]
+    // Y = X @ W^T = [[1,5],[2,6]]
+    var x = [_]f32{ 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0 };
+    var w = [_]f32{ 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0 };
+    var y: [4]f32 = undefined;
+    const td = TensorData{ .data = @ptrCast(&w), .dtype = .f32 };
+    be.gemm(&x, td, &y, 2, 2, 4);
+    be.sync();
+    try std.testing.expectApproxEqAbs(@as(f32, 1.0), y[0], 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 5.0), y[1], 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 2.0), y[2], 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 6.0), y[3], 0.01);
+}
+
+test "MetalBackend.gemm single token falls back to gemv" {
+    var be = try getTestBackend();
+    defer be.deinit();
+    // n_tok=1 => gemm falls through to gemv
+    var x = [_]f32{ 1.0, 0.0, 0.0, 0.0 };
+    var w = [_]f32{ 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0 };
+    var y: [2]f32 = undefined;
+    const td = TensorData{ .data = @ptrCast(&w), .dtype = .f32 };
+    be.gemm(&x, td, &y, 1, 2, 4);
+    be.sync();
+    try std.testing.expectApproxEqAbs(@as(f32, 1.0), y[0], 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 5.0), y[1], 0.01);
+}
+
+test "MetalBackend.gemvMulti single op" {
+    var be = try getTestBackend();
+    defer be.deinit();
+    var w = [_]f32{ 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0 };
+    var x = [_]f32{ 3.0, 7.0, 0.0, 0.0 };
+    var y: [2]f32 = undefined;
+    const td = TensorData{ .data = @ptrCast(&w), .dtype = .f32 };
+    var ops = [_]backend_mod.GemvOp{.{ .w = td, .y = &y, .n = 2 }};
+    be.gemvMulti(&x, &ops, 4);
+    be.sync();
+    try std.testing.expectApproxEqAbs(@as(f32, 3.0), y[0], 1e-3);
+    try std.testing.expectApproxEqAbs(@as(f32, 7.0), y[1], 1e-3);
+}
+
+test "MetalBackend.gemvMulti empty ops" {
+    var be = try getTestBackend();
+    defer be.deinit();
+    var x = [_]f32{ 1.0, 2.0, 3.0, 4.0 };
+    var ops: [0]backend_mod.GemvOp = .{};
+    // Should be a no-op
+    be.gemvMulti(&x, &ops, 4);
+    be.sync();
+}
+
+test "MetalBackend.sdpa f32 basic" {
+    var be = try getTestBackend();
+    defer be.deinit();
+    // 1 head, head_dim=4, seq_len=0 (will become 1 after append)
+    const nh: usize = 1;
+    const nkv: usize = 1;
+    const hd: usize = 4;
+    const kvd = nkv * hd;
+    const seq_len: usize = 0;
+
+    var q = [_]f32{ 1.0, 0.0, 0.0, 0.0 };
+    var k_new = [_]f32{ 1.0, 0.0, 0.0, 0.0 };
+    var v_new = [_]f32{ 0.0, 1.0, 0.0, 0.0 };
+    var output: [4]f32 = undefined;
+
+    // Allocate KV cache for 1 position
+    var keys_mem: [kvd]f32 = [_]f32{0} ** kvd;
+    var vals_mem: [kvd]f32 = [_]f32{0} ** kvd;
+    const keys_bytes = std.mem.sliceAsBytes(&keys_mem);
+    const vals_bytes = std.mem.sliceAsBytes(&vals_mem);
+
+    const scale: f32 = 1.0 / @sqrt(@as(f32, @floatFromInt(hd)));
+    be.sdpa(&q, keys_bytes, vals_bytes, &k_new, &v_new, &output, nh, nkv, hd, seq_len, scale, .f32, .f32);
+    be.sync();
+
+    // Single KV entry => attention weight = 1.0 => output = v_new
+    try std.testing.expectApproxEqAbs(@as(f32, 0.0), output[0], 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 1.0), output[1], 0.01);
+}
+
+test "MetalBackend.sdpaWithStats" {
+    var be = try getTestBackend();
+    defer be.deinit();
+    const nh: usize = 1;
+    const nkv: usize = 1;
+    const hd: usize = 4;
+    const kvd = nkv * hd;
+
+    var q = [_]f32{ 1.0, 0.0, 0.0, 0.0 };
+    var k_new = [_]f32{ 1.0, 0.0, 0.0, 0.0 };
+    var v_new = [_]f32{ 0.5, 0.5, 0.0, 0.0 };
+    var output: [4]f32 = undefined;
+    var head_max: [1]f32 = undefined;
+    var head_sum: [1]f32 = undefined;
+
+    var keys_mem: [kvd]f32 = [_]f32{0} ** kvd;
+    var vals_mem: [kvd]f32 = [_]f32{0} ** kvd;
+    const keys_bytes = std.mem.sliceAsBytes(&keys_mem);
+    const vals_bytes = std.mem.sliceAsBytes(&vals_mem);
+
+    const scale: f32 = 1.0 / @sqrt(@as(f32, @floatFromInt(hd)));
+    be.sdpaWithStats(&q, keys_bytes, vals_bytes, &k_new, &v_new, &output, &head_max, &head_sum, nh, nkv, hd, 0, scale, .f32, .f32);
+    be.sync();
+
+    // Identity stats: max=0, sum=1
+    try std.testing.expectApproxEqAbs(@as(f32, 0.0), head_max[0], 1e-6);
+    try std.testing.expectApproxEqAbs(@as(f32, 1.0), head_sum[0], 1e-6);
+}
+
+test "MetalBackend.gemvMxfp4St signature" {
+    if (comptime builtin.os.tag != .macos) return error.SkipZigTest;
+    comptime {
+        const F = @TypeOf(MetalBackend.gemvMxfp4St);
+        const info = @typeInfo(F);
+        // self + x + weight + scale + y + n + k = 7 params
+        try std.testing.expectEqual(7, info.@"fn".params.len);
+    }
+}
+
+test "MetalBackend.gemvGptq signature" {
+    if (comptime builtin.os.tag != .macos) return error.SkipZigTest;
+    comptime {
+        const F = @TypeOf(MetalBackend.gemvGptq);
+        const info = @typeInfo(F);
+        // self + x + qweight + scales + qzeros + y + n + k + group_size = 9 params
+        try std.testing.expectEqual(9, info.@"fn".params.len);
+    }
+}
+
+test "MetalBackend.gemvAwq signature" {
+    if (comptime builtin.os.tag != .macos) return error.SkipZigTest;
+    comptime {
+        const F = @TypeOf(MetalBackend.gemvAwq);
+        const info = @typeInfo(F);
+        // self + x + qweight + scales + qzeros + y + n + k + group_size = 9 params
+        try std.testing.expectEqual(9, info.@"fn".params.len);
+    }
+}
+
+test "MetalBackend.fusedFfnGateUpSiluQ8 signature" {
+    if (comptime builtin.os.tag != .macos) return error.SkipZigTest;
+    comptime {
+        const F = @TypeOf(MetalBackend.fusedFfnGateUpSiluQ8);
+        const info = @typeInfo(F);
+        // self + x + w_gate + w_up + ff_out + n_ff + n_embd = 7 params
+        try std.testing.expectEqual(7, info.@"fn".params.len);
+    }
+}
+
+test "MetalBackend.fusedFfnGateUpSiluQ4K signature" {
+    if (comptime builtin.os.tag != .macos) return error.SkipZigTest;
+    comptime {
+        const F = @TypeOf(MetalBackend.fusedFfnGateUpSiluQ4K);
+        const info = @typeInfo(F);
+        try std.testing.expectEqual(7, info.@"fn".params.len);
+    }
+}
+
+test "MetalBackend.fusedFfnGateUpSiluQ40 signature" {
+    if (comptime builtin.os.tag != .macos) return error.SkipZigTest;
+    comptime {
+        const F = @TypeOf(MetalBackend.fusedFfnGateUpSiluQ40);
+        const info = @typeInfo(F);
+        try std.testing.expectEqual(7, info.@"fn".params.len);
+    }
+}
+
+test "MetalBackend.fusedFfnGateUpGeluQ8 signature" {
+    if (comptime builtin.os.tag != .macos) return error.SkipZigTest;
+    comptime {
+        const F = @TypeOf(MetalBackend.fusedFfnGateUpGeluQ8);
+        const info = @typeInfo(F);
+        try std.testing.expectEqual(7, info.@"fn".params.len);
+    }
+}
+
+test "MetalBackend.fusedFfnGateUpGeluQ4K signature" {
+    if (comptime builtin.os.tag != .macos) return error.SkipZigTest;
+    comptime {
+        const F = @TypeOf(MetalBackend.fusedFfnGateUpGeluQ4K);
+        const info = @typeInfo(F);
+        try std.testing.expectEqual(7, info.@"fn".params.len);
+    }
+}
+
+test "MetalBackend.fusedFfnGateUpGeluQ40 signature" {
+    if (comptime builtin.os.tag != .macos) return error.SkipZigTest;
+    comptime {
+        const F = @TypeOf(MetalBackend.fusedFfnGateUpGeluQ40);
+        const info = @typeInfo(F);
+        try std.testing.expectEqual(7, info.@"fn".params.len);
+    }
+}
+
+test "MetalBackend.fusedFfnGateUpSiluQ6K signature" {
+    if (comptime builtin.os.tag != .macos) return error.SkipZigTest;
+    comptime {
+        const F = @TypeOf(MetalBackend.fusedFfnGateUpSiluQ6K);
+        const info = @typeInfo(F);
+        try std.testing.expectEqual(7, info.@"fn".params.len);
+    }
+}
+
+test "MetalBackend.fusedFfnGateUpGeluQ6K signature" {
+    if (comptime builtin.os.tag != .macos) return error.SkipZigTest;
+    comptime {
+        const F = @TypeOf(MetalBackend.fusedFfnGateUpGeluQ6K);
+        const info = @typeInfo(F);
+        try std.testing.expectEqual(7, info.@"fn".params.len);
+    }
+}
+
+test "MetalBackend.fusedFfnGateUpSiluQ5K signature" {
+    if (comptime builtin.os.tag != .macos) return error.SkipZigTest;
+    comptime {
+        const F = @TypeOf(MetalBackend.fusedFfnGateUpSiluQ5K);
+        const info = @typeInfo(F);
+        try std.testing.expectEqual(7, info.@"fn".params.len);
+    }
+}
+
+test "MetalBackend.fusedFfnGateUpGeluQ5K signature" {
+    if (comptime builtin.os.tag != .macos) return error.SkipZigTest;
+    comptime {
+        const F = @TypeOf(MetalBackend.fusedFfnGateUpGeluQ5K);
+        const info = @typeInfo(F);
+        try std.testing.expectEqual(7, info.@"fn".params.len);
+    }
+}
+
+test "MetalBackend.fusedFfnGateUpSiluMlxQ4 signature" {
+    if (comptime builtin.os.tag != .macos) return error.SkipZigTest;
+    comptime {
+        const F = @TypeOf(MetalBackend.fusedFfnGateUpSiluMlxQ4);
+        const info = @typeInfo(F);
+        // self + x + gate_w/s/b + up_w/s/b + ff_out + n_ff + n_embd = 11 params
+        try std.testing.expectEqual(11, info.@"fn".params.len);
+    }
+}
+
+test "MetalBackend.dispatchMegakernelQwen35Q8 signature" {
+    if (comptime builtin.os.tag != .macos) return error.SkipZigTest;
+    comptime {
+        const F = @TypeOf(MetalBackend.dispatchMegakernelQwen35Q8);
+        const info = @typeInfo(F);
+        // self + 8 buffer pairs (ptr+size) + params + params_size + n_tgs = 18 params
+        try std.testing.expectEqual(18, info.@"fn".params.len);
+    }
+}
+
+test "MetalBackend.dispatchMegakernelGemmaQ4K signature" {
+    if (comptime builtin.os.tag != .macos) return error.SkipZigTest;
+    comptime {
+        const F = @TypeOf(MetalBackend.dispatchMegakernelGemmaQ4K);
+        const info = @typeInfo(F);
+        try std.testing.expectEqual(18, info.@"fn".params.len);
+    }
+}
+
+test "MetalBackend.dispatchMegakernelQwen35Q4K signature" {
+    if (comptime builtin.os.tag != .macos) return error.SkipZigTest;
+    comptime {
+        const F = @TypeOf(MetalBackend.dispatchMegakernelQwen35Q4K);
+        const info = @typeInfo(F);
+        try std.testing.expectEqual(18, info.@"fn".params.len);
+    }
+}
+
+test "MetalBackend.dispatchMegakernelNemotronHQ8 signature" {
+    if (comptime builtin.os.tag != .macos) return error.SkipZigTest;
+    comptime {
+        const F = @TypeOf(MetalBackend.dispatchMegakernelNemotronHQ8);
+        const info = @typeInfo(F);
+        // Same as Qwen35 but +2 for layer_types ptr/size = 20 params
+        try std.testing.expectEqual(20, info.@"fn".params.len);
+    }
+}
+
+test "MetalBackend.dispatchMegakernelAuto signature" {
+    if (comptime builtin.os.tag != .macos) return error.SkipZigTest;
+    comptime {
+        const F = @TypeOf(MetalBackend.dispatchMegakernelAuto);
+        const info = @typeInfo(F);
+        try std.testing.expectEqual(18, info.@"fn".params.len);
+    }
+}
+
+test "MetalBackend.compileComposedMegakernel signature" {
+    if (comptime builtin.os.tag != .macos) return error.SkipZigTest;
+    comptime {
+        const F = @TypeOf(MetalBackend.compileComposedMegakernel);
+        const info = @typeInfo(F);
+        // self + composed_msl = 2 params
+        try std.testing.expectEqual(2, info.@"fn".params.len);
+    }
+}
+
+test "MetalBackend.sdpaPrefill signature" {
+    if (comptime builtin.os.tag != .macos) return error.SkipZigTest;
+    comptime {
+        const F = @TypeOf(MetalBackend.sdpaPrefill);
+        const info = @typeInfo(F);
+        _ = info;
+    }
+}
+
+test "MetalBackend.sdpaPaged signature" {
+    if (comptime builtin.os.tag != .macos) return error.SkipZigTest;
+    comptime {
+        const F = @TypeOf(MetalBackend.sdpaPaged);
+        const info = @typeInfo(F);
+        _ = info;
+    }
+}
+
+test "MetalBackend.sdpaTree signature" {
+    if (comptime builtin.os.tag != .macos) return error.SkipZigTest;
+    comptime {
+        const F = @TypeOf(MetalBackend.sdpaTree);
+        const info = @typeInfo(F);
+        _ = info;
+    }
+}
+
+test "MetalBackend.deltaNet signature" {
+    if (comptime builtin.os.tag != .macos) return error.SkipZigTest;
+    comptime {
+        const F = @TypeOf(MetalBackend.deltaNet);
+        const info = @typeInfo(F);
+        _ = info;
+    }
+}
+
+test "MetalBackend.batch mode affects barrier counts" {
+    var be = try getTestBackend();
+    defer be.deinit();
+    be.resetCounters();
+    // Without batch: each op gets a barrier
+    var a = [_]f32{ 1.0, 2.0, 3.0, 4.0 };
+    var b = [_]f32{ 1.0, 1.0, 1.0, 1.0 };
+    var out1: [4]f32 = undefined;
+    var out2: [4]f32 = undefined;
+    be.add(&a, &b, &out1, 4);
+    be.add(&a, &b, &out2, 4);
+    be.sync();
+    const barriers_no_batch = be.barrier_count;
+
+    be.resetCounters();
+    // With batch: barriers suppressed
+    be.beginBatch();
+    be.add(&a, &b, &out1, 4);
+    be.add(&a, &b, &out2, 4);
+    be.endBatch();
+    be.sync();
+    const barriers_with_batch = be.barrier_count;
+
+    // batch mode should have fewer barriers (endBatch adds one explicit barrier)
+    try std.testing.expect(barriers_with_batch < barriers_no_batch);
+}
+
+test "MetalBackend.profile counters track dispatches" {
+    var be = try getTestBackend();
+    defer be.deinit();
+    be.resetCounters();
+    var a = [_]f32{ 1.0, 2.0, 3.0, 4.0 };
+    var out: [4]f32 = undefined;
+    be.silu(&a, &out, 4);
+    be.mul(&a, &a, &out, 4);
+    be.sync();
+    // Should have at least 2 dispatches (silu + mul)
+    try std.testing.expect(be.dispatch_count >= 2);
+    try std.testing.expectEqual(@as(u32, 1), be.sync_count);
 }

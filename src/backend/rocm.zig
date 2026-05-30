@@ -1720,3 +1720,53 @@ test "ROCm block_size matches AMDGCN wavefront constraints" {
     // reduction_smem = 32 bytes = 8 waves x 4 bytes (one f32 per wave for reduction)
     try testing.expectEqual(@as(u32, 32), reduction_smem);
 }
+
+// ── Per-function comptime signature tests ────────────────────────
+
+test "RocmBackend.init" { comptime { _ = &RocmBackend.init; } }
+test "RocmBackend.deinit" { comptime { _ = &RocmBackend.deinit; } }
+test "RocmBackend.flushActivations" { comptime { _ = &RocmBackend.flushActivations; } }
+test "RocmBackend.invalidateAct" { comptime { _ = &RocmBackend.invalidateAct; } }
+test "RocmBackend.invalidateWeight" { comptime { _ = &RocmBackend.invalidateWeight; } }
+test "RocmBackend.gemv" { comptime { _ = &RocmBackend.gemv; } }
+test "RocmBackend.gemvGptq" { comptime { _ = &RocmBackend.gemvGptq; } }
+test "RocmBackend.gemvAwq" { comptime { _ = &RocmBackend.gemvAwq; } }
+test "RocmBackend.rmsNorm" { comptime { _ = &RocmBackend.rmsNorm; } }
+test "RocmBackend.silu" { comptime { _ = &RocmBackend.silu; } }
+test "RocmBackend.gelu" { comptime { _ = &RocmBackend.gelu; } }
+test "RocmBackend.add" { comptime { _ = &RocmBackend.add; } }
+test "RocmBackend.addRmsNorm" { comptime { _ = &RocmBackend.addRmsNorm; } }
+test "RocmBackend.gemvT" { comptime { _ = &RocmBackend.gemvT; } }
+test "RocmBackend.addScaled" { comptime { _ = &RocmBackend.addScaled; } }
+test "RocmBackend.mul" { comptime { _ = &RocmBackend.mul; } }
+test "RocmBackend.softmax" { comptime { _ = &RocmBackend.softmax; } }
+test "RocmBackend.rope" { comptime { _ = &RocmBackend.rope; } }
+test "RocmBackend.embLookup" { comptime { _ = &RocmBackend.embLookup; } }
+test "RocmBackend.l2Norm" { comptime { _ = &RocmBackend.l2Norm; } }
+test "RocmBackend.gemvNvfp4St" { comptime { _ = &RocmBackend.gemvNvfp4St; } }
+test "RocmBackend.gemvMlxQ" { comptime { _ = &RocmBackend.gemvMlxQ; } }
+test "RocmBackend.gemvMxfp4St" { comptime { _ = &RocmBackend.gemvMxfp4St; } }
+test "RocmBackend.sigmoidMul" { comptime { _ = &RocmBackend.sigmoidMul; } }
+test "RocmBackend.siluMul" { comptime { _ = &RocmBackend.siluMul; } }
+test "RocmBackend.geluMul" { comptime { _ = &RocmBackend.geluMul; } }
+test "RocmBackend.rmsNormMulti" { comptime { _ = &RocmBackend.rmsNormMulti; } }
+test "RocmBackend.deinterleave" { comptime { _ = &RocmBackend.deinterleave; } }
+test "RocmBackend.splitQGate" { comptime { _ = &RocmBackend.splitQGate; } }
+test "RocmBackend.gemvMulti" { comptime { _ = &RocmBackend.gemvMulti; } }
+test "RocmBackend.dispatchMegakernelQwen35Q8" { comptime { _ = &RocmBackend.dispatchMegakernelQwen35Q8; } }
+test "RocmBackend.dispatchMegakernelGemmaQ4K" { comptime { _ = &RocmBackend.dispatchMegakernelGemmaQ4K; } }
+test "RocmBackend.sync" { comptime { _ = &RocmBackend.sync; } }
+test "RocmBackend.beginBatch" { comptime { _ = &RocmBackend.beginBatch; } }
+test "RocmBackend.endBatch" { comptime { _ = &RocmBackend.endBatch; } }
+test "RocmBackend.backendInfo" { comptime { _ = &RocmBackend.backendInfo; } }
+test "RocmBackend.allocKvSlice" { comptime { _ = &RocmBackend.allocKvSlice; } }
+test "RocmBackend.freeKvSlice" { comptime { _ = &RocmBackend.freeKvSlice; } }
+test "RocmBackend.sdpa" { comptime { _ = &RocmBackend.sdpa; } }
+test "RocmBackend.sdpaWithStats" { comptime { _ = &RocmBackend.sdpaWithStats; } }
+test "RocmBackend.sdpaPaged" { comptime { _ = &RocmBackend.sdpaPaged; } }
+test "RocmBackend.gemm" { comptime { _ = &RocmBackend.gemm; } }
+test "RocmBackend.rmsNormBatched" { comptime { _ = &RocmBackend.rmsNormBatched; } }
+test "RocmBackend.ropeBatched" { comptime { _ = &RocmBackend.ropeBatched; } }
+test "RocmBackend.sdpaTree" { comptime { _ = &RocmBackend.sdpaTree; } }
+test "RocmBackend.sdpaPrefill" { comptime { _ = &RocmBackend.sdpaPrefill; } }
+test "RocmBackend.deltaNet" { comptime { _ = &RocmBackend.deltaNet; } }

@@ -2677,6 +2677,55 @@ test "Vulkan BufState enum" {
     try std.testing.expectEqual(@as(usize, 3), states.len);
 }
 
+// ── Per-function comptime signature tests ────────────────────────
+
+test "VulkanBackend.init" { comptime { _ = &VulkanBackend.init; } }
+test "VulkanBackend.deinit" { comptime { _ = &VulkanBackend.deinit; } }
+test "VulkanBackend.flushActivations" { comptime { _ = &VulkanBackend.flushActivations; } }
+test "VulkanBackend.invalidateAct" { comptime { _ = &VulkanBackend.invalidateAct; } }
+test "VulkanBackend.invalidateWeight" { comptime { _ = &VulkanBackend.invalidateWeight; } }
+test "VulkanBackend.gemv" { comptime { _ = &VulkanBackend.gemv; } }
+test "VulkanBackend.rmsNorm" { comptime { _ = &VulkanBackend.rmsNorm; } }
+test "VulkanBackend.silu" { comptime { _ = &VulkanBackend.silu; } }
+test "VulkanBackend.gelu" { comptime { _ = &VulkanBackend.gelu; } }
+test "VulkanBackend.add" { comptime { _ = &VulkanBackend.add; } }
+test "VulkanBackend.gemvT" { comptime { _ = &VulkanBackend.gemvT; } }
+test "VulkanBackend.addScaled" { comptime { _ = &VulkanBackend.addScaled; } }
+test "VulkanBackend.addRmsNorm" { comptime { _ = &VulkanBackend.addRmsNorm; } }
+test "VulkanBackend.mul" { comptime { _ = &VulkanBackend.mul; } }
+test "VulkanBackend.softmax" { comptime { _ = &VulkanBackend.softmax; } }
+test "VulkanBackend.rope" { comptime { _ = &VulkanBackend.rope; } }
+test "VulkanBackend.embLookup" { comptime { _ = &VulkanBackend.embLookup; } }
+test "VulkanBackend.causalConv1dSilu" { comptime { _ = &VulkanBackend.causalConv1dSilu; } }
+test "VulkanBackend.l2Norm" { comptime { _ = &VulkanBackend.l2Norm; } }
+test "VulkanBackend.gemvNvfp4St" { comptime { _ = &VulkanBackend.gemvNvfp4St; } }
+test "VulkanBackend.gemvMlxQ" { comptime { _ = &VulkanBackend.gemvMlxQ; } }
+test "VulkanBackend.gemvMxfp4St" { comptime { _ = &VulkanBackend.gemvMxfp4St; } }
+test "VulkanBackend.gemvGptq" { comptime { _ = &VulkanBackend.gemvGptq; } }
+test "VulkanBackend.gemvAwq" { comptime { _ = &VulkanBackend.gemvAwq; } }
+test "VulkanBackend.sigmoidMul" { comptime { _ = &VulkanBackend.sigmoidMul; } }
+test "VulkanBackend.siluMul" { comptime { _ = &VulkanBackend.siluMul; } }
+test "VulkanBackend.geluMul" { comptime { _ = &VulkanBackend.geluMul; } }
+test "VulkanBackend.rmsNormMulti" { comptime { _ = &VulkanBackend.rmsNormMulti; } }
+test "VulkanBackend.deinterleave" { comptime { _ = &VulkanBackend.deinterleave; } }
+test "VulkanBackend.splitQGate" { comptime { _ = &VulkanBackend.splitQGate; } }
+test "VulkanBackend.gemvMulti" { comptime { _ = &VulkanBackend.gemvMulti; } }
+test "VulkanBackend.allocKvSlice" { comptime { _ = &VulkanBackend.allocKvSlice; } }
+test "VulkanBackend.freeKvSlice" { comptime { _ = &VulkanBackend.freeKvSlice; } }
+test "VulkanBackend.gemm" { comptime { _ = &VulkanBackend.gemm; } }
+test "VulkanBackend.rmsNormBatched" { comptime { _ = &VulkanBackend.rmsNormBatched; } }
+test "VulkanBackend.ropeBatched" { comptime { _ = &VulkanBackend.ropeBatched; } }
+test "VulkanBackend.sdpaTree" { comptime { _ = &VulkanBackend.sdpaTree; } }
+test "VulkanBackend.sdpaPrefill" { comptime { _ = &VulkanBackend.sdpaPrefill; } }
+test "VulkanBackend.deltaNet" { comptime { _ = &VulkanBackend.deltaNet; } }
+test "VulkanBackend.sync" { comptime { _ = &VulkanBackend.sync; } }
+test "VulkanBackend.beginBatch" { comptime { _ = &VulkanBackend.beginBatch; } }
+test "VulkanBackend.endBatch" { comptime { _ = &VulkanBackend.endBatch; } }
+test "VulkanBackend.backendInfo" { comptime { _ = &VulkanBackend.backendInfo; } }
+test "VulkanBackend.sdpa" { comptime { _ = &VulkanBackend.sdpa; } }
+test "VulkanBackend.sdpaPaged" { comptime { _ = &VulkanBackend.sdpaPaged; } }
+test "VulkanBackend.sdpaWithStats" { comptime { _ = &VulkanBackend.sdpaWithStats; } }
+
 test "VulkanBackend rope" {
     var vk_be = VulkanBackend.init(std.testing.allocator, 0) catch |err| {
         if (err == error.VulkanNotAvailable) return error.SkipZigTest;

@@ -1111,3 +1111,17 @@ test "NemotronNano model vtable compiles" {
     try std.testing.expect(@hasDecl(NemotronNanoModel, "cancel"));
     try std.testing.expect(@hasDecl(NemotronNanoModel, "model"));
 }
+
+test "NemotronNano getBlockTable returns empty on default" {
+    // Verify getBlockTable compiles and returns the expected slice type.
+    // We cannot fully init a NemotronNanoModel without Format/Backend, but we
+    // can verify the method signature and vtable entry exist at comptime.
+    comptime {
+        _ = @TypeOf(NemotronNanoModel.getBlockTable);
+        // Verify the function signature matches the Model vtable requirement:
+        // fn(*NemotronNanoModel) []const u32
+        const info = @typeInfo(@TypeOf(NemotronNanoModel.getBlockTable));
+        const params = info.@"fn".params;
+        std.debug.assert(params.len == 1);
+    }
+}

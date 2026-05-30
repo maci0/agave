@@ -673,3 +673,15 @@ test "Transport struct methods exist at comptime" {
     try std.testing.expect(@hasDecl(Transport, "recvBuf"));
     try std.testing.expect(@hasDecl(Transport, "recvBufs"));
 }
+
+test "Transport.init nccl" {
+    const allocator = std.testing.allocator;
+    var t = try Transport.init(allocator, .nccl, 0, 2);
+    defer t.deinit();
+    try std.testing.expectEqual(TransportKind.nccl, t.kind);
+    try std.testing.expectEqual(@as(u32, 0), t.rank);
+    try std.testing.expectEqual(@as(u32, 2), t.world_size);
+    try std.testing.expectEqual(@as(u32, 0), t.tcp_connected);
+    // NCCL comm should be null until ensureNcclComm is called
+    try std.testing.expectEqual(@as(NcclComm, null), t.nccl_comm);
+}

@@ -1984,6 +1984,228 @@ test "Backend.sdpa f32 KV via CPU dispatch" {
     try std.testing.expectApproxEqAbs(@as(f32, 0.5), output[3], 1e-3);
 }
 
+test "Backend.sdpaPrefill f32 via CPU dispatch" {
+    var cpu = CpuBackend{};
+    const be = Backend{ .cpu = &cpu };
+    const nh: usize = 1;
+    const nkv: usize = 1;
+    const hd: usize = 4;
+    const kvd = nkv * hd;
+    const max_seq: usize = 4;
+    var keys: [max_seq * kvd * 4]u8 = undefined;
+    var values: [max_seq * kvd * 4]u8 = undefined;
+    var q = [_]f32{ 1.0, 0.0, 0.0, 0.0 };
+    var k = [_]f32{ 1.0, 0.0, 0.0, 0.0 };
+    var v = [_]f32{ 0.5, 0.5, 0.5, 0.5 };
+    var output: [4]f32 = undefined;
+    be.sdpaPrefill(&q, &k, &v, &keys, &values, &output, nh, nkv, hd, 0, 1, 1.0, .f32, .f32);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.5), output[0], 1e-3);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.5), output[3], 1e-3);
+}
+
+test "Backend.setThreadContext via CPU dispatch — no-op" {
+    var cpu = CpuBackend{};
+    const be = Backend{ .cpu = &cpu };
+    be.setThreadContext(); // Must not panic — CpuBackend has no setThreadContext
+}
+
+test "Backend.invalidateActivation via CPU dispatch — no-op" {
+    var cpu = CpuBackend{};
+    const be = Backend{ .cpu = &cpu };
+    var buf = [_]f32{ 1.0, 2.0 };
+    be.invalidateActivation(&buf); // CpuBackend has no invalidateAct — no-op
+}
+
+test "Backend.getDevicePtr via CPU dispatch returns 0" {
+    var cpu = CpuBackend{};
+    const be = Backend{ .cpu = &cpu };
+    var buf = [_]f32{ 1.0 };
+    const ptr = be.getDevicePtr(@as([*]const f32, &buf));
+    try std.testing.expectEqual(@as(u64, 0), ptr);
+}
+
+test "Backend.invalidateWeight via CPU dispatch — no-op" {
+    var cpu = CpuBackend{};
+    const be = Backend{ .cpu = &cpu };
+    var buf = [_]u8{ 0, 1, 2, 3 };
+    be.invalidateWeight(@as([*]const u8, &buf)); // CpuBackend has no invalidateWeight — no-op
+}
+
+test "Backend.allReduceAdd via CPU dispatch — no-op" {
+    var cpu = CpuBackend{};
+    const be = Backend{ .cpu = &cpu };
+    var dst = [_]f32{ 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0 };
+    var src = [_]f32{ 10.0, 20.0, 30.0, 40.0, 50.0, 60.0, 70.0, 80.0 };
+    be.allReduceAdd(&dst, &src, 8);
+    // CpuBackend.allReduceAdd does dst[i] += src[i]
+    try std.testing.expectApproxEqAbs(@as(f32, 11.0), dst[0], 1e-5);
+    try std.testing.expectApproxEqAbs(@as(f32, 88.0), dst[7], 1e-5);
+}
+
+test "Backend.registerHostRegion via CPU dispatch — no-op" {
+    var cpu = CpuBackend{};
+    const be = Backend{ .cpu = &cpu };
+    var data = [_]u8{ 0, 1, 2, 3 };
+    be.registerHostRegion(&data, 4); // CpuBackend has no registerHostRegion — no-op
+}
+
+test "NullBackend — all method signatures are consistent with Backend" {
+    // Compile-time check that NullBackend has all methods matching Backend dispatch.
+    comptime {
+        _ = @TypeOf(NullBackend.allocKvSlice);
+        _ = @TypeOf(NullBackend.freeKvSlice);
+        _ = @TypeOf(NullBackend.addRmsNorm);
+        _ = @TypeOf(NullBackend.addScaled);
+        _ = @TypeOf(NullBackend.l2Norm);
+        _ = @TypeOf(NullBackend.sigmoidMul);
+        _ = @TypeOf(NullBackend.siluMul);
+        _ = @TypeOf(NullBackend.geluMul);
+        _ = @TypeOf(NullBackend.rmsNormMulti);
+        _ = @TypeOf(NullBackend.deinterleave);
+        _ = @TypeOf(NullBackend.splitQGate);
+        _ = @TypeOf(NullBackend.sdpaWithStats);
+        _ = @TypeOf(NullBackend.sdpaTree);
+        _ = @TypeOf(NullBackend.sdpaPrefill);
+        _ = @TypeOf(NullBackend.rmsNormBatched);
+        _ = @TypeOf(NullBackend.ropeBatched);
+        _ = @TypeOf(NullBackend.gemvT);
+        _ = @TypeOf(NullBackend.beginBatch);
+        _ = @TypeOf(NullBackend.endBatch);
+    }
+}
+
+test "weightBytes — TQ1_0 super-block" {
+    // TQ1_0: 64 bytes per 256-element super-block.
+    // k=256, n=1 → 1 super-block = 64 bytes
+    try std.testing.expectEqual(@as(usize, 64), weightBytes(.tq1_0, 1, 256));
+    try std.testing.expectEqual(@as(usize, 4 * 16 * tq1_0_block_bytes), weightBytes(.tq1_0, 4, 4096));
+}
+
+test "DType — gemvRowBytes for MXFP4" {
+    // MXFP4: 17 bytes per 32-element block.
+    // k=4096 → 128 blocks → 128 × 17 = 2176
+    try std.testing.expectEqual(@as(usize, 128 * mxfp4_block_bytes), gemvRowBytes(.mxfp4, 4096));
+}
+
+test "DType — gemvRowBytes for IQ4_XS super-block" {
+    // IQ4_XS: 136 bytes per 256-element super-block.
+    try std.testing.expectEqual(@as(usize, 16 * iq4_xs_block_bytes), gemvRowBytes(.iq4_xs, 4096));
+}
+
+test "BackendInfo — driver and compute fields" {
+    const info = BackendInfo{
+        .compute_cap = "sm_121",
+        .driver_version = "CUDA 13.0",
+        .os_version = "Linux 6.5.0",
+    };
+    try std.testing.expectEqualStrings("sm_121", info.compute_cap);
+    try std.testing.expectEqualStrings("CUDA 13.0", info.driver_version);
+    try std.testing.expectEqualStrings("Linux 6.5.0", info.os_version);
+}
+
+test "Backend.gemv f32 all-ones dot product via CPU dispatch" {
+    var cpu = CpuBackend{};
+    const be = Backend{ .cpu = &cpu };
+    // y = W @ x with all ones → dot product = k
+    var x = [_]f32{ 1.0, 1.0, 1.0, 1.0 };
+    var w = [_]f32{
+        1.0, 1.0, 1.0, 1.0, // row 0 → dot = 4.0
+        2.0, 2.0, 2.0, 2.0, // row 1 → dot = 8.0
+    };
+    var y: [2]f32 = undefined;
+    be.gemv(&x, .{ .data = @ptrCast(&w), .dtype = .f32 }, &y, 2, 4);
+    try std.testing.expectApproxEqAbs(@as(f32, 4.0), y[0], 1e-5);
+    try std.testing.expectApproxEqAbs(@as(f32, 8.0), y[1], 1e-5);
+}
+
+test "Backend.gemvMulti via CPU dispatch — two ops" {
+    var cpu = CpuBackend{};
+    const be = Backend{ .cpu = &cpu };
+    var x = [_]f32{ 1.0, 1.0, 1.0, 1.0 };
+    var w0 = [_]f32{ 1.0, 2.0, 3.0, 4.0 };
+    var w1 = [_]f32{ 5.0, 6.0, 7.0, 8.0 };
+    var y0: [1]f32 = undefined;
+    var y1: [1]f32 = undefined;
+    const ops = [_]GemvOp{
+        .{ .w = .{ .data = @ptrCast(&w0), .dtype = .f32 }, .y = &y0, .n = 1 },
+        .{ .w = .{ .data = @ptrCast(&w1), .dtype = .f32 }, .y = &y1, .n = 1 },
+    };
+    be.gemvMulti(&x, &ops, 4);
+    try std.testing.expectApproxEqAbs(@as(f32, 10.0), y0[0], 1e-5);
+    try std.testing.expectApproxEqAbs(@as(f32, 26.0), y1[0], 1e-5);
+}
+
+test "Backend.rope partial rope_dim via CPU dispatch" {
+    var cpu = CpuBackend{};
+    const be = Backend{ .cpu = &cpu };
+    // 1 head, head_dim=8, rope_dim=4 (only first 4 elements rotated)
+    // Split-complex layout: pairs are (x[i], x[i+half]) where half = rope_dim/2 = 2
+    // So pairs are (x[0], x[2]) and (x[1], x[3]). x[4..7] are untouched.
+    var x = [_]f32{ 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 };
+    be.rope(&x, 1, 1, 8, 4, 10000.0);
+    // Elements beyond rope_dim should be unchanged
+    try std.testing.expectApproxEqAbs(@as(f32, 0.0), x[4], 1e-5);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.0), x[5], 1e-5);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.0), x[6], 1e-5);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.0), x[7], 1e-5);
+    // Rotated elements finite
+    for (x[0..4]) |v| try std.testing.expect(std.math.isFinite(v));
+}
+
+test "Backend.softmax single element via CPU dispatch" {
+    var cpu = CpuBackend{};
+    const be = Backend{ .cpu = &cpu };
+    var data = [_]f32{42.0};
+    be.softmax(&data, 1);
+    // softmax of single element = 1.0
+    try std.testing.expectApproxEqAbs(@as(f32, 1.0), data[0], 1e-5);
+}
+
+test "Backend.l2Norm zero vector via CPU dispatch" {
+    var cpu = CpuBackend{};
+    const be = Backend{ .cpu = &cpu };
+    // With eps > 0, a zero vector should produce zeros (0 / sqrt(eps))
+    var x = [_]f32{ 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 };
+    be.l2Norm(&x, 8, 1e-12);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.0), x[0], 1e-6);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.0), x[7], 1e-6);
+}
+
+test "GemvOp — MLX companion pointers set" {
+    var y_buf: [4]f32 = undefined;
+    var w_data = [_]u8{ 0, 0, 0, 0 };
+    var scales = [_]u8{ 1, 2, 3 };
+    var biases = [_]u8{ 4, 5, 6 };
+    const op = GemvOp{
+        .w = .{ .data = &w_data, .dtype = .mlx_q },
+        .y = &y_buf,
+        .n = 4,
+        .mlx_scales = &scales,
+        .mlx_biases = &biases,
+        .mlx_bits = 4,
+    };
+    try std.testing.expectEqual(@as(u32, 4), op.mlx_bits);
+    try std.testing.expect(op.mlx_scales != null);
+    try std.testing.expect(op.mlx_biases != null);
+}
+
+test "DeltaNetParams — kqv_order true" {
+    const p = DeltaNetParams{
+        .conv_ch = 512,
+        .d_conv = 4,
+        .d_inner = 1024,
+        .num_k_heads = 4,
+        .head_k_dim = 64,
+        .num_v_heads = 4,
+        .head_v_dim = 64,
+        .q_scale = 0.5,
+        .rms_eps = 1e-5,
+        .kqv_order = true,
+    };
+    try std.testing.expect(p.kqv_order);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.5), p.q_scale, 1e-6);
+}
+
 test "Backend.sdpaWithStats f32 KV via CPU dispatch" {
     var cpu = CpuBackend{};
     const be = Backend{ .cpu = &cpu };

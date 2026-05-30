@@ -1007,7 +1007,8 @@ test "signalCancel is idempotent" {
 
 /// Mock format that returns configurable tensors by name.
 /// Implements the Format vtable for testing companion tensor lookup.
-const MockFormat = struct {
+/// Public so model implementation tests (e.g. qwen35.zig) can reuse it.
+pub const MockFormat = struct {
     tensors: []const NamedTensor,
     meta_bits: ?u32 = null,
 
@@ -1053,10 +1054,254 @@ const MockFormat = struct {
         .get_merges = @ptrCast(&nullMergesFn),
     };
 
-    fn format(self: *MockFormat) format_mod.Format {
+    pub fn format(self: *MockFormat) format_mod.Format {
         return .{ .ptr = self, .vtable = &vtable };
     }
 };
+
+// ── MockModel for vtable dispatch tests ─────────────────────────
+
+/// Minimal mock model that satisfies the Model.from() comptime requirements.
+/// Used to test vtable dispatch without requiring a real backend or format.
+const MockModel = struct {
+    eos_token_id: u32 = 42,
+    vocab_size: u32 = 1000,
+    n_layers: u32 = 8,
+    n_embd: u32 = 256,
+    n_head: u32 = 4,
+    n_head_kv: u32 = 2,
+    kv_seq_len: usize = 10,
+    logits_buf: []f32 = &.{},
+    cancelled: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+    be: MockBackend = .{},
+    layer_skip_start: u32 = 0,
+    layer_skip_end: u32 = 0,
+    image_embeddings: ?[]const f32 = null,
+    n_visual_tokens: u32 = 0,
+    image_pad_token_id: u32 = 0,
+    visual_token_idx: u32 = 0,
+
+    const MockBackend = struct {
+        pub fn setThreadContext(_: *MockBackend) void {}
+    };
+
+    fn forward(_: *MockModel, _: u32) ForwardError!u32 {
+        return 7;
+    }
+    fn prefill(_: *MockModel, _: []const u32) ForwardError!u32 {
+        return 7;
+    }
+    fn resetCache(_: *MockModel) void {}
+    fn cancel(self: *MockModel) void {
+        signalCancel(&self.cancelled);
+    }
+    fn getBlockTable(_: *MockModel) []const u32 {
+        return &.{};
+    }
+};
+
+test "Model.from and vtable dispatch — eosId" {
+    var mock = MockModel{};
+    const m = Model.from(MockModel, &mock);
+    try std.testing.expectEqual(@as(u32, 42), m.eosId());
+}
+
+test "Model.from and vtable dispatch — vocabSize" {
+    var mock = MockModel{};
+    const m = Model.from(MockModel, &mock);
+    try std.testing.expectEqual(@as(u32, 1000), m.vocabSize());
+}
+
+test "Model.from and vtable dispatch — nLayers" {
+    var mock = MockModel{};
+    const m = Model.from(MockModel, &mock);
+    try std.testing.expectEqual(@as(u32, 8), m.nLayers());
+}
+
+test "Model.from and vtable dispatch — nEmbd" {
+    var mock = MockModel{};
+    const m = Model.from(MockModel, &mock);
+    try std.testing.expectEqual(@as(u32, 256), m.nEmbd());
+}
+
+test "Model.from and vtable dispatch — nHead" {
+    var mock = MockModel{};
+    const m = Model.from(MockModel, &mock);
+    try std.testing.expectEqual(@as(u32, 4), m.nHead());
+}
+
+test "Model.from and vtable dispatch — nHeadKv" {
+    var mock = MockModel{};
+    const m = Model.from(MockModel, &mock);
+    try std.testing.expectEqual(@as(u32, 2), m.nHeadKv());
+}
+
+test "Model.from and vtable dispatch — kvSeqLen and setKvSeqLen" {
+    var mock = MockModel{};
+    const m = Model.from(MockModel, &mock);
+    try std.testing.expectEqual(@as(usize, 10), m.kvSeqLen());
+    m.setKvSeqLen(5);
+    try std.testing.expectEqual(@as(usize, 5), m.kvSeqLen());
+}
+
+test "Model.from and vtable dispatch — getLogits empty" {
+    var mock = MockModel{};
+    const m = Model.from(MockModel, &mock);
+    try std.testing.expectEqual(@as(usize, 0), m.getLogits().len);
+}
+
+test "Model.from and vtable dispatch — getLogits with buffer" {
+    var logits = [_]f32{ 1.0, 2.0, 3.0 };
+    var mock = MockModel{ .logits_buf = &logits };
+    const m = Model.from(MockModel, &mock);
+    try std.testing.expectEqual(@as(usize, 3), m.getLogits().len);
+    try std.testing.expectApproxEqAbs(@as(f32, 2.0), m.getLogits()[1], 1e-6);
+}
+
+test "Model.from and vtable dispatch — forward" {
+    var mock = MockModel{};
+    const m = Model.from(MockModel, &mock);
+    const result = try m.forward(0);
+    try std.testing.expectEqual(@as(u32, 7), result);
+}
+
+test "Model.from and vtable dispatch — prefill" {
+    var mock = MockModel{};
+    const m = Model.from(MockModel, &mock);
+    const ids = [_]u32{ 1, 2, 3 };
+    const result = try m.prefill(&ids);
+    try std.testing.expectEqual(@as(u32, 7), result);
+}
+
+test "Model.from and vtable dispatch — resetCache" {
+    var mock = MockModel{};
+    const m = Model.from(MockModel, &mock);
+    m.resetCache(); // Must not panic
+}
+
+test "Model.from and vtable dispatch — cancel" {
+    var mock = MockModel{};
+    const m = Model.from(MockModel, &mock);
+    m.cancel();
+    try std.testing.expectEqual(true, mock.cancelled.load(.acquire));
+}
+
+test "Model.from and vtable dispatch — setThreadContext" {
+    var mock = MockModel{};
+    const m = Model.from(MockModel, &mock);
+    m.setThreadContext(); // Must not panic
+}
+
+test "Model.from and vtable dispatch — getBlockTable" {
+    var mock = MockModel{};
+    const m = Model.from(MockModel, &mock);
+    try std.testing.expectEqual(@as(usize, 0), m.getBlockTable().len);
+}
+
+test "Model.from and vtable dispatch — setLayerSkip" {
+    var mock = MockModel{};
+    const m = Model.from(MockModel, &mock);
+    m.setLayerSkip(2, 6);
+    try std.testing.expectEqual(@as(u32, 2), mock.layer_skip_start);
+    try std.testing.expectEqual(@as(u32, 6), mock.layer_skip_end);
+}
+
+test "Model.from and vtable dispatch — setImageEmbeddings" {
+    var mock = MockModel{};
+    const m = Model.from(MockModel, &mock);
+    var embd = [_]f32{ 1.0, 2.0, 3.0, 4.0 };
+    m.setImageEmbeddings(&embd, 2, 99);
+    try std.testing.expectEqual(@as(u32, 2), mock.n_visual_tokens);
+    try std.testing.expectEqual(@as(u32, 99), mock.image_pad_token_id);
+    try std.testing.expectEqual(@as(u32, 0), mock.visual_token_idx);
+    // Clear
+    m.setImageEmbeddings(null, 0, 0);
+    try std.testing.expect(mock.image_embeddings == null);
+}
+
+test "Model.from and vtable dispatch — forwardTree returns MissingTensor for mock" {
+    var mock = MockModel{};
+    const m = Model.from(MockModel, &mock);
+    // MockModel has no forwardTree → vtable returns error.MissingTensor
+    try std.testing.expectError(error.MissingTensor, m.forwardTree(&.{}, &.{}, @ptrFromInt(0x1000), 0));
+}
+
+test "Model.from and vtable dispatch — treeLogits returns 0 for mock" {
+    var mock = MockModel{};
+    const m = Model.from(MockModel, &mock);
+    // MockModel has no treeLogits → vtable returns 0
+    try std.testing.expectEqual(@as(u32, 0), m.treeLogits(0));
+}
+
+test "Model.from and vtable dispatch — saveSsmState returns null for mock" {
+    var mock = MockModel{};
+    const m = Model.from(MockModel, &mock);
+    try std.testing.expect(m.saveSsmState(std.testing.allocator) == null);
+}
+
+test "Model.from and vtable dispatch — restoreSsmState no-op for mock" {
+    var mock = MockModel{};
+    const m = Model.from(MockModel, &mock);
+    m.restoreSsmState(&[_]u8{ 1, 2, 3 }); // Must not panic
+}
+
+test "Model.from and vtable dispatch — getMtpDepth returns 0 for mock" {
+    var mock = MockModel{};
+    const m = Model.from(MockModel, &mock);
+    try std.testing.expectEqual(@as(u32, 0), m.getMtpDepth());
+}
+
+test "Model.from and vtable dispatch — getMtpLogits returns empty for mock" {
+    var mock = MockModel{};
+    const m = Model.from(MockModel, &mock);
+    try std.testing.expectEqual(@as(usize, 0), m.getMtpLogits().len);
+}
+
+test "Model.from and vtable dispatch — resetMtpCache no-op for mock" {
+    var mock = MockModel{};
+    const m = Model.from(MockModel, &mock);
+    m.resetMtpCache(); // Must not panic
+}
+
+test "Model.from and vtable dispatch — mtpForward returns MissingTensor for mock" {
+    var mock = MockModel{};
+    const m = Model.from(MockModel, &mock);
+    try std.testing.expectError(error.MissingTensor, m.mtpForward(0, 0));
+}
+
+// ── mlxGemv tests ───────────────────────────────────────────────
+
+test "mlxGemv returns false for non-mlx tensor" {
+    var cpu = @import("../backend/backend.zig").CpuBackend{};
+    var mock = MockFormat{ .tensors = &.{} };
+    const t = format_mod.TensorInfo{
+        .name = "blk.0.attn_q.weight",
+        .n_dims = 2,
+        .dims = .{ 4, 4, 0, 0 },
+        .dtype = .f32,
+        .data_ptr = undefined,
+    };
+    var y: [4]f32 = undefined;
+    var x = [_]f32{ 1.0, 2.0, 3.0, 4.0 };
+    const handled = mlxGemv(.{ .cpu = &cpu }, mock.format(), &x, t, &y, 4, 4);
+    try std.testing.expect(!handled);
+}
+
+test "mlxGemv returns false for name without .weight" {
+    var cpu = @import("../backend/backend.zig").CpuBackend{};
+    var mock = MockFormat{ .tensors = &.{} };
+    const t = format_mod.TensorInfo{
+        .name = "blk.0.attn_q.bias",
+        .n_dims = 2,
+        .dims = .{ 4, 4, 0, 0 },
+        .dtype = .mlx_q,
+        .data_ptr = undefined,
+    };
+    var y: [4]f32 = undefined;
+    var x = [_]f32{ 1.0, 2.0, 3.0, 4.0 };
+    const handled = mlxGemv(.{ .cpu = &cpu }, mock.format(), &x, t, &y, 4, 4);
+    try std.testing.expect(!handled);
+}
 
 test "findMlxCompanion returns null for non-mlx tensor" {
     var mock = MockFormat{ .tensors = &.{} };

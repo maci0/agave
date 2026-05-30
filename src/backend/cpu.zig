@@ -1555,6 +1555,50 @@ test "CpuBackend — sdpa f32 single token" {
     try std.testing.expectApproxEqAbs(@as(f32, 0.5), output[3], 1e-3);
 }
 
+test "CpuBackend — sdpaPrefill f32 single token" {
+    var be = CpuBackend{};
+    const nh: usize = 1;
+    const nkv: usize = 1;
+    const hd: usize = 4;
+    const kvd = nkv * hd;
+    const max_seq: usize = 4;
+    var keys: [max_seq * kvd * @sizeOf(f32)]u8 = undefined;
+    var values: [max_seq * kvd * @sizeOf(f32)]u8 = undefined;
+    // Q, K, V for 1 token prefill
+    var q = [_]f32{ 1.0, 0.0, 0.0, 0.0 };
+    var k = [_]f32{ 1.0, 0.0, 0.0, 0.0 };
+    var v = [_]f32{ 0.5, 0.5, 0.5, 0.5 };
+    var output: [4]f32 = undefined;
+    be.sdpaPrefill(&q, &k, &v, &keys, &values, &output, nh, nkv, hd, 0, 1, 1.0, .f32, .f32);
+    // Single token prefill: output = v (softmax of single score = 1.0)
+    try std.testing.expectApproxEqAbs(@as(f32, 0.5), output[0], 1e-3);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.5), output[3], 1e-3);
+}
+
+test "CpuBackend — sdpaWithStats f32 single token" {
+    var be = CpuBackend{};
+    const nh: usize = 1;
+    const nkv: usize = 1;
+    const hd: usize = 4;
+    const kvd = nkv * hd;
+    const max_seq: usize = 4;
+    var keys: [max_seq * kvd * @sizeOf(f32)]u8 = undefined;
+    var values: [max_seq * kvd * @sizeOf(f32)]u8 = undefined;
+    var q = [_]f32{ 1.0, 0.0, 0.0, 0.0 };
+    var k_new = [_]f32{ 1.0, 0.0, 0.0, 0.0 };
+    var v_new = [_]f32{ 0.5, 0.5, 0.5, 0.5 };
+    var output: [4]f32 = undefined;
+    var head_max: [1]f32 = undefined;
+    var head_sum: [1]f32 = undefined;
+    be.sdpaWithStats(&q, &keys, &values, &k_new, &v_new, &output, &head_max, &head_sum, nh, nkv, hd, 0, 1.0, .f32, .f32);
+    // Output should match sdpa single token
+    try std.testing.expectApproxEqAbs(@as(f32, 0.5), output[0], 1e-3);
+    // Stats should be finite and sum > 0
+    try std.testing.expect(std.math.isFinite(head_max[0]));
+    try std.testing.expect(std.math.isFinite(head_sum[0]));
+    try std.testing.expect(head_sum[0] > 0);
+}
+
 test "softmax autotune — compare SIMD widths" {
     // Generates all 3 variants at comptime, benchmarks each at test time.
     // Run with: zig build test --release=fast

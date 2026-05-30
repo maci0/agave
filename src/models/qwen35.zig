@@ -1994,3 +1994,13 @@ test "ssmConvChannels with different configs" {
     // conv_ch = 256 + 2 * 4 * 64 = 256 + 512 = 768
     try std.testing.expectEqual(@as(usize, 768), m.ssmConvChannels());
 }
+
+test "applyNvfp4Scale no-op when tensor missing" {
+    // applyNvfp4Scale should not modify the buffer when the scale tensor is missing.
+    var mock = @import("model.zig").MockFormat{ .tensors = &.{} };
+    var buf = [_]f32{ 1.0, 2.0, 3.0, 4.0 };
+    applyNvfp4Scale(mock.format(), &buf, 0, 0, "gate_proj");
+    // Buffer should be unchanged — no matching tensor found.
+    try std.testing.expectApproxEqAbs(@as(f32, 1.0), buf[0], 1e-6);
+    try std.testing.expectApproxEqAbs(@as(f32, 4.0), buf[3], 1e-6);
+}

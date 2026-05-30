@@ -2088,3 +2088,49 @@ test "WebGPU comptime struct layout verification" {
         if (pool_info.array.child != PoolEntry) @compileError("act_pool element type is not PoolEntry");
     }
 }
+
+// ── Per-function comptime signature tests ────────────────────────
+
+test "WebGpuBackend.init" { comptime { _ = &WebGpuBackend.init; } }
+test "WebGpuBackend.deinit" { comptime { _ = &WebGpuBackend.deinit; } }
+test "WebGpuBackend.silu" { comptime { _ = &WebGpuBackend.silu; } }
+test "WebGpuBackend.gelu" { comptime { _ = &WebGpuBackend.gelu; } }
+test "WebGpuBackend.add" { comptime { _ = &WebGpuBackend.add; } }
+test "WebGpuBackend.mul" { comptime { _ = &WebGpuBackend.mul; } }
+test "WebGpuBackend.siluMul" { comptime { _ = &WebGpuBackend.siluMul; } }
+test "WebGpuBackend.geluMul" { comptime { _ = &WebGpuBackend.geluMul; } }
+test "WebGpuBackend.rmsNorm" { comptime { _ = &WebGpuBackend.rmsNorm; } }
+test "WebGpuBackend.softmax" { comptime { _ = &WebGpuBackend.softmax; } }
+test "WebGpuBackend.rope" { comptime { _ = &WebGpuBackend.rope; } }
+test "WebGpuBackend.embLookup" { comptime { _ = &WebGpuBackend.embLookup; } }
+test "WebGpuBackend.gemv" { comptime { _ = &WebGpuBackend.gemv; } }
+test "WebGpuBackend.gemm" { comptime { _ = &WebGpuBackend.gemm; } }
+test "WebGpuBackend.l2Norm" { comptime { _ = &WebGpuBackend.l2Norm; } }
+test "WebGpuBackend.addRmsNorm" { comptime { _ = &WebGpuBackend.addRmsNorm; } }
+test "WebGpuBackend.addScaled" { comptime { _ = &WebGpuBackend.addScaled; } }
+test "WebGpuBackend.sigmoidMul" { comptime { _ = &WebGpuBackend.sigmoidMul; } }
+test "WebGpuBackend.deinterleave" { comptime { _ = &WebGpuBackend.deinterleave; } }
+test "WebGpuBackend.splitQGate" { comptime { _ = &WebGpuBackend.splitQGate; } }
+test "WebGpuBackend.rmsNormMulti" { comptime { _ = &WebGpuBackend.rmsNormMulti; } }
+test "WebGpuBackend.rmsNormBatched" { comptime { _ = &WebGpuBackend.rmsNormBatched; } }
+test "WebGpuBackend.ropeBatched" { comptime { _ = &WebGpuBackend.ropeBatched; } }
+test "WebGpuBackend.sdpa" { comptime { _ = &WebGpuBackend.sdpa; } }
+test "WebGpuBackend.sdpaWithStats" { comptime { _ = &WebGpuBackend.sdpaWithStats; } }
+test "WebGpuBackend.sdpaPaged" { comptime { _ = &WebGpuBackend.sdpaPaged; } }
+test "WebGpuBackend.sdpaTree" { comptime { _ = &WebGpuBackend.sdpaTree; } }
+test "WebGpuBackend.sdpaPrefill" { comptime { _ = &WebGpuBackend.sdpaPrefill; } }
+test "WebGpuBackend.gemvT" { comptime { _ = &WebGpuBackend.gemvT; } }
+test "WebGpuBackend.gemvNvfp4St" { comptime { _ = &WebGpuBackend.gemvNvfp4St; } }
+test "WebGpuBackend.gemvMlxQ" { comptime { _ = &WebGpuBackend.gemvMlxQ; } }
+test "WebGpuBackend.gemvMxfp4St" { comptime { _ = &WebGpuBackend.gemvMxfp4St; } }
+test "WebGpuBackend.gemvGptq" { comptime { _ = &WebGpuBackend.gemvGptq; } }
+test "WebGpuBackend.gemvAwq" { comptime { _ = &WebGpuBackend.gemvAwq; } }
+test "WebGpuBackend.gemvMulti" { comptime { _ = &WebGpuBackend.gemvMulti; } }
+test "WebGpuBackend.causalConv1dSilu" { comptime { _ = &WebGpuBackend.causalConv1dSilu; } }
+test "WebGpuBackend.deltaNet" { comptime { _ = &WebGpuBackend.deltaNet; } }
+test "WebGpuBackend.sync" { comptime { _ = &WebGpuBackend.sync; } }
+test "WebGpuBackend.beginBatch" { comptime { _ = &WebGpuBackend.beginBatch; } }
+test "WebGpuBackend.endBatch" { comptime { _ = &WebGpuBackend.endBatch; } }
+test "WebGpuBackend.allocKvSlice" { comptime { _ = &WebGpuBackend.allocKvSlice; } }
+test "WebGpuBackend.freeKvSlice" { comptime { _ = &WebGpuBackend.freeKvSlice; } }
+test "WebGpuBackend.backendInfo" { comptime { _ = &WebGpuBackend.backendInfo; } }
