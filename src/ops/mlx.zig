@@ -482,3 +482,41 @@ test "mlxEmbLookup 4-bit basic" {
         try std.testing.expectApproxEqAbs(@as(f32, 5.0), out[i], 1e-6);
     }
 }
+
+test "fuzz: wordsPerGroup and mlxEmbLookup" {
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *std.testing.Smith) !void {
+            var raw: [4]u8 = undefined;
+            smith.bytesWithHash(&raw, 0);
+
+            // wordsPerGroup: test with valid bit widths.
+            const bits_choices = [_]u32{ 4, 6, 8 };
+            const bits = bits_choices[raw[0] % 3];
+            const wpg = wordsPerGroup(bits);
+            // Invariant: words per group must be positive.
+            try std.testing.expect(wpg > 0);
+            // Invariant: wpg * 32 / bits == group_size (64).
+            try std.testing.expectEqual(mlx_group_size, wpg * bits_per_u32 / bits);
+
+            // mlxEmbLookup: small 4-bit test with random data.
+            const k: usize = 8; // elements per row
+            const n_rows: usize = 2;
+            const words_per_row = k * 4 / bits_per_u32; // 4-bit: 1 word per 8 elems
+            var pw: [n_rows * words_per_row]u32 = undefined;
+            var pw_bytes: [n_rows * words_per_row * 4]u8 = undefined;
+            smith.bytesWithHash(&pw_bytes, 1);
+            pw = @bitCast(pw_bytes);
+
+            // BF16 scales and biases: use known-good values.
+            const sc = [n_rows]u16{ 0x3F80, 0x3F80 }; // bf16(1.0)
+            const bi = [n_rows]u16{ 0x0000, 0x0000 }; // bf16(0.0)
+            var out: [k]f32 = undefined;
+
+            const row_idx = raw[1] % n_rows;
+            mlxEmbLookup(&out, &pw, &sc, &bi, row_idx, k, 4);
+
+            // Invariant: output must be finite (scale=1.0, bias=0.0, values 0..15).
+            for (out) |v| try std.testing.expect(std.math.isFinite(v));
+        }
+    }.f, .{});
+}

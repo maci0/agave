@@ -284,3 +284,47 @@ test "gemvMXFP4 varying x" {
     // sum(1..32) = 32*33/2 = 528
     try std.testing.expectApproxEqAbs(@as(f32, 528.0), y[0], 2.0);
 }
+
+test "fuzz: gemvMXFP4 gemvNVFP4" {
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *std.testing.Smith) !void {
+            // -- MXFP4: 2 rows, k=32 --
+            {
+                const bpb = backend_mod.mxfp4_block_bytes; // 17
+                const qk = backend_mod.quant_block_elems; // 32
+                const n = 2;
+                var x: [qk]f32 = undefined;
+                var w: [n * bpb]u8 = undefined;
+                var y: [n]f32 = undefined;
+                var x_raw: [qk * 4]u8 = undefined;
+                smith.bytesWithHash(&x_raw, 0);
+                smith.bytesWithHash(&w, 1);
+                x = @bitCast(x_raw);
+                for (&x) |*v| if (!std.math.isFinite(v.*)) { v.* = 0.0; };
+                gemvMXFP4(&x, &w, &y, n, qk);
+                for (y) |v| try std.testing.expect(std.math.isFinite(v));
+            }
+
+            // -- NVFP4: 3 rows, k=16 --
+            {
+                const bpb = backend_mod.nvfp4_block_bytes; // 9
+                const qk = backend_mod.nvfp4_block_elems; // 16
+                const n = 3;
+                var x: [qk]f32 = undefined;
+                var w: [n * bpb]u8 = undefined;
+                var y: [n]f32 = undefined;
+                var x_raw: [qk * 4]u8 = undefined;
+                smith.bytesWithHash(&x_raw, 2);
+                smith.bytesWithHash(&w, 3);
+                x = @bitCast(x_raw);
+                for (&x) |*v| if (!std.math.isFinite(v.*)) { v.* = 0.0; };
+                // Clamp FP8 E4M3 scale to non-NaN (0x7F = NaN in E4M3).
+                for (0..n) |r| {
+                    if (w[r * bpb] == 0x7F or w[r * bpb] == 0xFF) w[r * bpb] = 0;
+                }
+                gemvNVFP4(&x, &w, &y, n, qk);
+                for (y) |v| try std.testing.expect(std.math.isFinite(v));
+            }
+        }
+    }.f, .{});
+}

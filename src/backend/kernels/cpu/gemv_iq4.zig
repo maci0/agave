@@ -339,3 +339,52 @@ test "gemvIQ4_XS uniform nibble 8" {
     gemvIQ4_XS(&x, &w, &y, 1, bs);
     try std.testing.expectApproxEqAbs(@as(f32, 256.0), y[0], 2.0);
 }
+
+test "fuzz: gemvIQ4_NL gemvIQ4_XS" {
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *std.testing.Smith) !void {
+            const clampF16 = struct {
+                fn c(w: []u8, off: usize) void {
+                    const raw = std.mem.readInt(u16, w[off..][0..2], .little);
+                    if (raw & 0x7C00 == 0x7C00) { w[off] = 0; w[off + 1] = 0; }
+                }
+            }.c;
+
+            // -- IQ4_NL: 2 rows, k=32 --
+            {
+                const bpb = backend_mod.iq4_nl_block_bytes; // 18
+                const qk = backend_mod.quant_block_elems; // 32
+                const n = 2;
+                var x: [qk]f32 = undefined;
+                var w: [n * bpb]u8 = undefined;
+                var y: [n]f32 = undefined;
+                var x_raw: [qk * 4]u8 = undefined;
+                smith.bytesWithHash(&x_raw, 0);
+                smith.bytesWithHash(&w, 1);
+                x = @bitCast(x_raw);
+                for (&x) |*v| if (!std.math.isFinite(v.*)) { v.* = 0.0; };
+                for (0..n) |r| clampF16(&w, r * bpb);
+                gemvIQ4_NL(&x, &w, &y, n, qk);
+                for (y) |v| try std.testing.expect(std.math.isFinite(v));
+            }
+
+            // -- IQ4_XS: 2 rows, k=256 --
+            {
+                const bpb = backend_mod.iq4_xs_block_bytes; // 136
+                const bs = backend_mod.quant_super_block_elems; // 256
+                const n = 2;
+                var x: [bs]f32 = undefined;
+                var w: [n * bpb]u8 = undefined;
+                var y: [n]f32 = undefined;
+                var x_raw: [bs * 4]u8 = undefined;
+                smith.bytesWithHash(&x_raw, 2);
+                smith.bytesWithHash(&w, 3);
+                x = @bitCast(x_raw);
+                for (&x) |*v| if (!std.math.isFinite(v.*)) { v.* = 0.0; };
+                for (0..n) |r| clampF16(&w, r * bpb);
+                gemvIQ4_XS(&x, &w, &y, n, bs);
+                for (y) |v| try std.testing.expect(std.math.isFinite(v));
+            }
+        }
+    }.f, .{});
+}

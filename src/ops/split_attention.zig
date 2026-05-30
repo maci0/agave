@@ -546,3 +546,62 @@ test "splitSdpaMerge one split dominates" {
         try std.testing.expectApproxEqAbs(out_a[i], merged[i], 0.01);
     }
 }
+
+test "fuzz: partitionBlocks and splitSdpaMerge" {
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *std.testing.Smith) !void {
+            var raw: [16]u8 = undefined;
+            smith.bytesWithHash(&raw, 0);
+
+            // -- partitionBlocks: random blocks with mixed tiers --
+            const n_blocks: usize = (raw[0] % 8) + 1;
+            var block_table: [8]u32 = undefined;
+            var tiered_blocks: [8]TieredBlock = undefined;
+            for (0..n_blocks) |i| {
+                block_table[i] = @intCast(i);
+                tiered_blocks[i] = .{
+                    .base = undefined,
+                    .tier = if (raw[1 + i] % 2 == 0) .vram else .ram,
+                };
+            }
+            const block_size: usize = (raw[9] % 4) + 1;
+            const seq_len: usize = n_blocks * block_size;
+
+            const partition = partitionBlocks(
+                block_table[0..n_blocks],
+                tiered_blocks[0..n_blocks],
+                block_size,
+                seq_len,
+            );
+
+            // Invariant: total positions must equal seq_len.
+            try std.testing.expectEqual(seq_len, partition.total_gpu_positions + partition.total_cpu_positions);
+
+            // -- splitSdpaMerge: small random merge --
+            const hd: usize = 8;
+            const nh: usize = 1;
+            var out_a: [hd]f32 = undefined;
+            var out_b: [hd]f32 = undefined;
+            var merged: [hd]f32 = undefined;
+            var a_bytes: [hd * 4]u8 = undefined;
+            var b_bytes: [hd * 4]u8 = undefined;
+            smith.bytesWithHash(&a_bytes, 1);
+            smith.bytesWithHash(&b_bytes, 2);
+            out_a = @bitCast(a_bytes);
+            out_b = @bitCast(b_bytes);
+            for (&out_a) |*v| if (!std.math.isFinite(v.*)) { v.* = 0.0; };
+            for (&out_b) |*v| if (!std.math.isFinite(v.*)) { v.* = 0.0; };
+
+            // Use small finite max values to avoid exp overflow.
+            var max_a = [_]f32{@as(f32, @floatFromInt(@as(i8, @bitCast(raw[10])))) / 32.0};
+            var max_b = [_]f32{@as(f32, @floatFromInt(@as(i8, @bitCast(raw[11])))) / 32.0};
+            var sum_a = [_]f32{@abs(@as(f32, @floatFromInt(@as(i8, @bitCast(raw[12]))))) / 128.0 + 0.01};
+            var sum_b = [_]f32{@abs(@as(f32, @floatFromInt(@as(i8, @bitCast(raw[13]))))) / 128.0 + 0.01};
+
+            splitSdpaMerge(&out_a, &max_a, &sum_a, &out_b, &max_b, &sum_b, &merged, nh, hd);
+
+            // Invariant: merged output must be finite.
+            for (merged) |v| try std.testing.expect(std.math.isFinite(v));
+        }
+    }.f, .{});
+}

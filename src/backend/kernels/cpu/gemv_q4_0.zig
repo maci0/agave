@@ -225,3 +225,33 @@ test "gemvQ4_0 single row scalar tail" {
     gemvQ4_0(&x, &w, &y, 1, 32);
     try std.testing.expectApproxEqAbs(@as(f32, 32.0), y[0], 0.01);
 }
+
+test "fuzz: gemvQ4_0" {
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *std.testing.Smith) !void {
+            const bpb = backend_mod.q4_0_block_bytes; // 18
+            const qk = backend_mod.quant_block_elems; // 32
+            const n = 5;
+            const k = qk; // one block per row
+            var x: [k]f32 = undefined;
+            var w: [n * bpb]u8 = undefined;
+            var y: [n]f32 = undefined;
+            var x_raw: [k * 4]u8 = undefined;
+            smith.bytesWithHash(&x_raw, 0);
+            smith.bytesWithHash(&w, 1);
+            x = @bitCast(x_raw);
+            for (&x) |*v| if (!std.math.isFinite(v.*)) { v.* = 0.0; };
+            // Clamp f16 scale bytes to finite: mask inf/nan (exponent all-ones = 0x7C00).
+            for (0..n) |r| {
+                const base = r * bpb;
+                const scale_raw = std.mem.readInt(u16, w[base..][0..2], .little);
+                if (scale_raw & 0x7C00 == 0x7C00) {
+                    w[base] = 0;
+                    w[base + 1] = 0;
+                }
+            }
+            gemvQ4_0(&x, &w, &y, n, k);
+            for (y) |v| try std.testing.expect(std.math.isFinite(v));
+        }
+    }.f, .{});
+}

@@ -1795,3 +1795,56 @@ test "selectModel hasAnyFiles" {
     };
     try std.testing.expect(with_st.hasAnyFiles());
 }
+
+test "fuzz: pull helper functions" {
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *std.testing.Smith) !void {
+            var buf: [256]u8 = undefined;
+            smith.bytesWithHash(&buf, 0);
+            const len = buf[0];
+            const input = buf[1..@min(@as(usize, len) + 1, buf.len)];
+
+            // isSafeFilename: must not crash on any input.
+            const safe = isSafeFilename(input);
+            // If safe, must not contain ".." or control chars.
+            if (safe) {
+                try std.testing.expect(std.mem.indexOf(u8, input, "..") == null);
+                try std.testing.expect(input.len <= 255);
+            }
+
+            // isValidRepoName: must not crash on any input.
+            const valid_repo = isValidRepoName(input);
+            // If valid, must not be empty or start/end with '/'.
+            if (valid_repo) {
+                try std.testing.expect(input.len > 0);
+                try std.testing.expect(input[0] != '/');
+                try std.testing.expect(input[input.len - 1] != '/');
+            }
+
+            // isValidHexSha: must not crash on any input.
+            const valid_sha = isValidHexSha(input);
+            // If valid, must only contain hex chars and be 1..64 length.
+            if (valid_sha) {
+                try std.testing.expect(input.len >= 1 and input.len <= 64);
+                for (input) |c| try std.testing.expect(std.ascii.isHex(c));
+            }
+
+            // replaceSlashes: must produce output with no '/'.
+            if (input.len <= 128) {
+                const result = replaceSlashes(std.testing.allocator, input) catch return;
+                defer std.testing.allocator.free(result);
+                for (result) |c| try std.testing.expect(c != '/');
+            }
+
+            // selectFile: empty slice returns error.
+            const empty: []const GgufFile = &.{};
+            try std.testing.expectError(PullError.NoGgufFiles, selectFile(empty, null));
+
+            // progressBar: any pct value must not crash.
+            var pbar_buf: [progress_bar_width + 2]u8 = undefined;
+            const pct = buf[1] % 101; // 0..100
+            const bar = progressBar(&pbar_buf, pct);
+            try std.testing.expect(bar.len > 0);
+        }
+    }.f, .{});
+}

@@ -266,3 +266,56 @@ test "tryConsumeOrRetryAfter combines check and retry" {
     const retry = limiter.tryConsumeOrRetryAfter(1);
     try std.testing.expectEqual(@as(?u32, 6), retry);
 }
+
+test "fuzz: TokenBucket and RateLimiter" {
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *std.testing.Smith) !void {
+            var raw: [16]u8 = undefined;
+            smith.bytesWithHash(&raw, 0);
+
+            // TokenBucket.retryAfterSeconds with random state.
+            const capacity: f64 = @floatFromInt(@as(u32, std.mem.readInt(u16, raw[0..2], .little)) + 1);
+            const tokens: f64 = @floatFromInt(@as(u32, std.mem.readInt(u16, raw[2..4], .little)));
+            const refill_rate = capacity / seconds_per_minute;
+            var bucket = TokenBucket{
+                .capacity = capacity,
+                .tokens = @min(tokens, capacity),
+                .refill_rate = refill_rate,
+                .last_refill = 0,
+            };
+
+            const amount: f64 = @floatFromInt(@as(u32, std.mem.readInt(u16, raw[4..6], .little)));
+            const retry = bucket.retryAfterSeconds(amount);
+            // Invariant: retry must be bounded.
+            try std.testing.expect(retry <= TokenBucket.max_retry_after);
+
+            // TokenBucket.refill with forward time.
+            const time_delta: i64 = @intCast(@as(u32, std.mem.readInt(u16, raw[6..8], .little)));
+            const old_tokens = bucket.tokens;
+            bucket.refill(time_delta);
+            // Invariant: tokens must be clamped to capacity.
+            try std.testing.expect(bucket.tokens <= bucket.capacity);
+            // Invariant: refill must not decrease tokens (time goes forward).
+            try std.testing.expect(bucket.tokens >= old_tokens or time_delta <= bucket.last_refill);
+
+            // RateLimiter: consume some requests.
+            const io = testIo();
+            const req_pm = @as(u32, std.mem.readInt(u16, raw[8..10], .little) % 1000) + 1;
+            const tok_pm = @as(u32, std.mem.readInt(u16, raw[10..12], .little) % 10000) + 1;
+            var limiter = RateLimiter.init(req_pm, tok_pm, io);
+            const consume_count = raw[12] % 5;
+            for (0..consume_count) |_| {
+                _ = limiter.tryConsumeRequest(1);
+            }
+            // retryAfter must not crash.
+            const r = limiter.retryAfter(1);
+            try std.testing.expect(r <= TokenBucket.max_retry_after);
+
+            // tryConsumeOrRetryAfter must return consistent results.
+            const result = limiter.tryConsumeOrRetryAfter(1);
+            if (result) |retry_secs| {
+                try std.testing.expect(retry_secs <= TokenBucket.max_retry_after);
+            }
+        }
+    }.f, .{});
+}

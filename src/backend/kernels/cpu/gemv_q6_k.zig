@@ -277,3 +277,30 @@ test "gemvQ6_K single row" {
     gemvQ6_K(&x, &w, &y, 1, bs);
     try std.testing.expectApproxEqAbs(@as(f32, 128.0), y[0], 1.0);
 }
+
+test "fuzz: gemvQ6_K" {
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *std.testing.Smith) !void {
+            const bpb = backend_mod.q6_k_block_bytes; // 210
+            const bs = backend_mod.quant_super_block_elems; // 256
+            const n = 2;
+            const k = bs;
+            var x: [k]f32 = undefined;
+            var w: [n * bpb]u8 = undefined;
+            var y: [n]f32 = undefined;
+            var x_raw: [k * 4]u8 = undefined;
+            smith.bytesWithHash(&x_raw, 0);
+            smith.bytesWithHash(&w, 1);
+            x = @bitCast(x_raw);
+            for (&x) |*v| if (!std.math.isFinite(v.*)) { v.* = 0.0; };
+            // Clamp d (f16) at offset 208 for each row.
+            for (0..n) |r| {
+                const base = r * bpb + q6_k_d_offset;
+                const raw = std.mem.readInt(u16, w[base..][0..2], .little);
+                if (raw & 0x7C00 == 0x7C00) { w[base] = 0; w[base + 1] = 0; }
+            }
+            gemvQ6_K(&x, &w, &y, n, k);
+            for (y) |v| try std.testing.expect(std.math.isFinite(v));
+        }
+    }.f, .{});
+}

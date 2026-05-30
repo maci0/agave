@@ -529,3 +529,60 @@ test "dequantToF32 q4_0" {
         try std.testing.expectApproxEqAbs(expected, output[i], 0.01);
     }
 }
+
+test "fuzz: all quant functions" {
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *std.testing.Smith) !void {
+            var buf: [4]u8 = undefined;
+            smith.bytesWithHash(&buf, 0);
+
+            // bf16ToF32: any u16 input is valid.
+            const bf16_val: u16 = @bitCast(buf[0..2].*);
+            const bf16_result = bf16ToF32(bf16_val);
+            // Result must be a valid f32 (including inf/nan — bf16 encodes those).
+            _ = bf16_result;
+
+            // mxfp4Lookup: nibble 0..15, always returns finite.
+            const nibble: u4 = @truncate(buf[0]);
+            const mxfp4_result = mxfp4Lookup(nibble);
+            try std.testing.expect(std.math.isFinite(mxfp4_result));
+
+            // e8m0ToF32: any u8 input is valid, result is finite (pure power-of-2 or 0).
+            const e8m0_result = e8m0ToF32(buf[0]);
+            try std.testing.expect(std.math.isFinite(e8m0_result));
+            try std.testing.expect(e8m0_result >= 0.0);
+
+            // fp8e4m3ToF32: any u8 input is valid.
+            const fp8e4m3_result = fp8e4m3ToF32(buf[1]);
+            _ = fp8e4m3_result; // Can be NaN for 0x7F/0xFF
+
+            // fp8e5m2ToF32: any u8 input is valid.
+            const fp8e5m2_result = fp8e5m2ToF32(buf[2]);
+            _ = fp8e5m2_result; // Can be NaN/Inf
+
+            // getScaleMinK4: index 0..7, needs 12-byte scale array.
+            var scales: [12]u8 = undefined;
+            smith.bytesWithHash(&scales, 1);
+            var sc: u8 = undefined;
+            var m: u8 = undefined;
+            const j = buf[3] % 8;
+            getScaleMinK4(j, &scales, &sc, &m);
+            // Scale and min must be representable (no overflow for u8).
+            try std.testing.expect(sc <= 63 or j >= 4);
+
+            // iq4nl_table: verify monotonic (compile-time table).
+            for (1..16) |i| try std.testing.expect(iq4nl_table[i] > iq4nl_table[i - 1]);
+
+            // dequantToF32 with f32 pass-through: random f32 bytes.
+            var f32_input: [4]f32 = undefined;
+            var f32_bytes: [16]u8 = undefined;
+            smith.bytesWithHash(&f32_bytes, 2);
+            f32_input = @bitCast(f32_bytes);
+            var f32_output: [4]f32 = undefined;
+            dequantToF32(&f32_output, @ptrCast(&f32_input), .f32, 4);
+            for (0..4) |i| {
+                try std.testing.expect(@as(u32, @bitCast(f32_output[i])) == @as(u32, @bitCast(f32_input[i])));
+            }
+        }
+    }.f, .{});
+}

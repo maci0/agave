@@ -251,3 +251,31 @@ test "init and deinit without work" {
     // After deinit, n_workers should be 0
     try std.testing.expectEqual(@as(usize, 0), pool.n_workers);
 }
+
+test "fuzz: ThreadPool parallelFor" {
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *std.testing.Smith) !void {
+            var raw: [4]u8 = undefined;
+            smith.bytesWithHash(&raw, 0);
+
+            // Vary total and grain size with random inputs.
+            const total: usize = @as(usize, raw[0]) * 4 + 1; // 1..1021
+            const grain: usize = @as(usize, raw[1] % 32) + 1; // 1..32
+            const n_threads: usize = @as(usize, raw[2] % 4) + 1; // 1..4
+
+            var threaded = Io.Threaded.init(std.testing.allocator, .{});
+            defer threaded.deinit();
+
+            var pool = ThreadPool.init(n_threads);
+            pool.spawn(threaded.io());
+            defer pool.deinit();
+
+            var ctx = SumContext{ .result = std.atomic.Value(usize).init(0) };
+            pool.parallelFor(total, grain, @ptrCast(&ctx), SumContext.callback);
+
+            // Invariant: sum(0..total-1) must be exact regardless of grain/thread count.
+            const expected: usize = (total - 1) * total / 2;
+            try std.testing.expectEqual(expected, ctx.result.load(.acquire));
+        }
+    }.f, .{});
+}

@@ -151,3 +151,27 @@ test "gemvBF16 non-aligned k exercises scalar tail" {
     try std.testing.expectApproxEqAbs(@as(f32, 2.5), y[1], 0.1);
     try std.testing.expectApproxEqAbs(@as(f32, 10.0), y[2], 0.1);
 }
+
+test "fuzz: gemvBF16" {
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *std.testing.Smith) !void {
+            const n = 5;
+            const k = 16;
+            var x: [k]f32 = undefined;
+            var w_bytes: [n * k * 2]u8 align(2) = undefined;
+            var y: [n]f32 = undefined;
+            var x_raw: [k * 4]u8 = undefined;
+            smith.bytesWithHash(&x_raw, 0);
+            smith.bytesWithHash(&w_bytes, 1);
+            x = @bitCast(x_raw);
+            for (&x) |*v| if (!std.math.isFinite(v.*)) { v.* = 0.0; };
+            // BF16: mask out exponent-all-ones (0x7F80 = inf/nan) to keep finite.
+            const w16: [*]u16 = @ptrCast(@alignCast(&w_bytes));
+            for (0..n * k) |i| {
+                if (w16[i] & 0x7F80 == 0x7F80) w16[i] = 0;
+            }
+            gemvBF16(&x, &w_bytes, &y, n, k);
+            for (y) |v| try std.testing.expect(std.math.isFinite(v));
+        }
+    }.f, .{});
+}

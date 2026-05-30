@@ -1218,6 +1218,62 @@ test "Metrics: renderPrometheus — prefix cache hit rate calculated" {
     try std.testing.expect(std.mem.indexOf(u8, output, "agave_prefix_cache_hit_rate 0.7500\n") != null);
 }
 
+test "fuzz: all Metrics recording functions" {
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *std.testing.Smith) !void {
+            var metrics = Metrics{};
+
+            var raw: [32]u8 = undefined;
+            smith.bytesWithHash(&raw, 0);
+
+            const latency_ms = std.mem.readInt(u64, raw[0..8], .little) % 100_000;
+            const token_count = std.mem.readInt(u32, raw[8..12], .little) % 10_000;
+            const duration_ms = std.mem.readInt(u64, raw[12..20], .little) % 100_000;
+            const queue_depth_val = std.mem.readInt(u32, raw[20..24], .little) % 1_000;
+            const kv_used = std.mem.readInt(u32, raw[24..28], .little) % 10_000;
+            const kv_total_val = (std.mem.readInt(u32, raw[28..32], .little) % 10_000) + 1;
+
+            // Call all recording functions.
+            metrics.recordRequest();
+            metrics.recordCompletion();
+            metrics.recordCancellation();
+            metrics.recordFailure();
+            metrics.recordAuthFailure();
+            metrics.recordRateLimit();
+            metrics.recordConnectionRejection();
+            metrics.recordTimeout();
+            metrics.recordSchedulerError();
+            metrics.recordPreemption();
+            metrics.recordTokens(token_count);
+            metrics.recordLatency(latency_ms);
+            metrics.recordTTFT(latency_ms, token_count);
+            metrics.recordThroughput(token_count, if (duration_ms > 0) duration_ms else 1);
+            metrics.updateQueueDepth(queue_depth_val);
+            metrics.updateActiveRequests(queue_depth_val);
+            metrics.updateKvBlocks(kv_used % kv_total_val, kv_total_val);
+            metrics.updateGpuKvBlocks(kv_used % kv_total_val, kv_total_val);
+            metrics.setCacheConfig(16, kv_total_val);
+            metrics.updateInputTokensInFlight(token_count);
+            metrics.recordCacheHit(token_count, token_count + 1);
+            metrics.recordCacheMiss(token_count);
+            metrics.recordTPOT(if (token_count > 0) token_count else 1, duration_ms);
+            metrics.recordQueueTime(latency_ms);
+            metrics.recordPromptTokens(token_count);
+            metrics.recordGenerationTokens(token_count);
+            metrics.recordInterTokenLatency(latency_ms);
+
+            // Invariant: renderPrometheus must not crash with any combination of metrics.
+            var buf: [test_render_buf_size]u8 = undefined;
+            var fbs = FixedBufStream.init(&buf);
+            metrics.renderPrometheus(fbs.writer()) catch {};
+
+            // Invariant: counters must be positive (at least 1 from calls above).
+            try std.testing.expect(metrics.requests_total.load(.monotonic) >= 1);
+            try std.testing.expect(metrics.requests_completed.load(.monotonic) >= 1);
+        }
+    }.f, .{});
+}
+
 test "Metrics: renderPrometheus — throughput rendered" {
     var metrics = Metrics{};
     metrics.recordThroughput(50, 1000); // 50 tok/s → tps_x100 = 5000

@@ -122,3 +122,28 @@ test "gemvF32 non-aligned k exercises scalar cleanup" {
     try std.testing.expectApproxEqAbs(@as(f32, 2.5), y[1], 1e-5);
     try std.testing.expectApproxEqAbs(@as(f32, 10.0), y[2], 1e-5);
 }
+
+test "fuzz: gemvF32" {
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *std.testing.Smith) !void {
+            // Fixed dimensions that exercise both 4-row batch and scalar tail.
+            const n = 5;
+            const k = 16;
+            var x: [k]f32 = undefined;
+            var w: [n * k]f32 = undefined;
+            var y: [n]f32 = undefined;
+            var x_bytes: [k * 4]u8 = undefined;
+            var w_bytes: [n * k * 4]u8 = undefined;
+            smith.bytesWithHash(&x_bytes, 0);
+            smith.bytesWithHash(&w_bytes, 1);
+            x = @bitCast(x_bytes);
+            w = @bitCast(w_bytes);
+            // Clamp to finite values to avoid NaN propagation masking real bugs.
+            for (&x) |*v| if (!std.math.isFinite(v.*)) { v.* = 0.0; };
+            for (&w) |*v| if (!std.math.isFinite(v.*)) { v.* = 0.0; };
+            gemvF32(&x, &w, &y, n, k);
+            // Invariant: output must be finite when inputs are finite.
+            for (y) |v| try std.testing.expect(std.math.isFinite(v));
+        }
+    }.f, .{});
+}

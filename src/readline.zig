@@ -545,3 +545,46 @@ test "displayWidth multibyte UTF-8" {
     // Actually: c(1) + a(1) + f(1) + e(1) + combining(0) = 4
     try std.testing.expectEqual(@as(usize, 4), LineEditor.displayWidth("caf\xc3\xa9"));
 }
+
+test "fuzz: LineEditor addHistory searchBack displayWidth" {
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *std.testing.Smith) !void {
+            var editor = LineEditor.init(std.testing.allocator);
+            defer editor.deinit();
+
+            // Generate a few random history entries.
+            var entry_buf: [64]u8 = undefined;
+            smith.bytesWithHash(&entry_buf, 0);
+            // Use first byte as length, rest as data. Clamp to printable ASCII.
+            const entry_len = (entry_buf[0] % 32) + 1;
+            for (entry_buf[1 .. entry_len + 1]) |*c| {
+                if (c.* < 0x20 or c.* > 0x7E) c.* = 'a';
+            }
+            const entry = entry_buf[1 .. entry_len + 1];
+
+            editor.addHistory(entry);
+            // Invariant: non-empty entry is always added (first one, no dedup).
+            try std.testing.expect(editor.hist_len >= 1);
+
+            // addHistory dedup: adding same entry again should not increase count.
+            const prev_len = editor.hist_len;
+            editor.addHistory(entry);
+            try std.testing.expectEqual(prev_len, editor.hist_len);
+
+            // searchBack: search for a substring of the entry we just added.
+            const search_len = @min(entry_len, 4);
+            const search_str = entry[0..search_len];
+            const result = editor.searchBack(search_str, null);
+            // Must find a match since we just added an entry containing this substring.
+            try std.testing.expect(result != null);
+
+            // displayWidth: random string must not crash.
+            var dw_buf: [128]u8 = undefined;
+            smith.bytesWithHash(&dw_buf, 1);
+            const dw_len = dw_buf[0] % 64;
+            const width = LineEditor.displayWidth(dw_buf[1 .. dw_len + 1]);
+            // Width must not exceed byte length * 2 (CJK chars are max 2 columns).
+            try std.testing.expect(width <= dw_len * 2);
+        }
+    }.f, .{});
+}

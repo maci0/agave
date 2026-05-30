@@ -455,3 +455,59 @@ test "selectVictims budget covers all positions" {
     try std.testing.expectEqual(@as(usize, 4), kept);
     for (0..4) |i| try std.testing.expect(keep[i]);
 }
+
+test "fuzz: scorePositions selectVictims compactCache" {
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *std.testing.Smith) !void {
+            var raw: [8]u8 = undefined;
+            smith.bytesWithHash(&raw, 0);
+
+            const seq_len: usize = (raw[0] % 16) + 2; // 2..17
+            const kv_dim: usize = (raw[1] % 8) + 1; // 1..8
+
+            // Allocate k_cache, scores, keep arrays.
+            const k_cache = try std.testing.allocator.alloc(f32, seq_len * kv_dim);
+            defer std.testing.allocator.free(k_cache);
+            const scores = try std.testing.allocator.alloc(f32, seq_len);
+            defer std.testing.allocator.free(scores);
+            const keep = try std.testing.allocator.alloc(bool, seq_len);
+            defer std.testing.allocator.free(keep);
+
+            // Fill k_cache with clamped random data.
+            var cache_bytes: [256]u8 = undefined;
+            smith.bytesWithHash(&cache_bytes, 1);
+            for (0..seq_len * kv_dim) |i| {
+                k_cache[i] = @as(f32, @floatFromInt(@as(i8, @bitCast(cache_bytes[i % cache_bytes.len])))) / 128.0;
+            }
+
+            // scorePositions: must produce non-negative finite scores.
+            scorePositions(k_cache.ptr, scores.ptr, seq_len, kv_dim);
+            for (0..seq_len) |i| {
+                try std.testing.expect(std.math.isFinite(scores[i]));
+                try std.testing.expect(scores[i] >= 0.0);
+            }
+
+            // selectVictims with random budget.
+            const budget: usize = (raw[2] % (seq_len + 2)) + 1;
+            const sink: usize = raw[3] % 4;
+            const recent: usize = raw[4] % 8;
+            const kept = selectVictims(scores.ptr, keep.ptr, seq_len, budget, sink, recent);
+
+            // Invariant: kept must be <= seq_len.
+            try std.testing.expect(kept <= seq_len);
+
+            // Invariant: count of true in keep must equal kept.
+            var count: usize = 0;
+            for (0..seq_len) |i| if (keep[i]) { count += 1; };
+            try std.testing.expectEqual(kept, count);
+
+            // compactCache: must reduce or maintain seq_len.
+            const cache_copy = try std.testing.allocator.alloc(f32, seq_len * kv_dim);
+            defer std.testing.allocator.free(cache_copy);
+            @memcpy(cache_copy, k_cache);
+            const new_len = compactCache(cache_copy.ptr, keep.ptr, seq_len, kv_dim);
+            try std.testing.expect(new_len <= seq_len);
+            try std.testing.expectEqual(kept, new_len);
+        }
+    }.f, .{});
+}

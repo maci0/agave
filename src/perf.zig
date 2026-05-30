@@ -176,3 +176,35 @@ test "PerfCounters Op enum has expected fields" {
     // Verify at least some known ops exist
     try std.testing.expect(n_ops >= 10);
 }
+
+test "fuzz: PerfCounters" {
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *std.testing.Smith) !void {
+            var pc = PerfCounters{ .enabled = true };
+
+            var raw: [8]u8 = undefined;
+            smith.bytesWithHash(&raw, 0);
+
+            // Use random bytes to select ops and call counts.
+            const op_idx = raw[0] % n_ops;
+            const call_count = (raw[1] % 10) + 1;
+            const op: Op = @enumFromInt(op_idx);
+
+            for (0..call_count) |_| {
+                const t0 = pc.start();
+                try std.testing.expect(t0 != 0); // enabled → non-zero
+                pc.end(op, t0);
+                pc.addToken();
+            }
+
+            // Invariant: counts match number of end() calls.
+            try std.testing.expectEqual(@as(u64, call_count), pc.counts[op_idx]);
+            try std.testing.expectEqual(@as(u64, call_count), pc.n_tokens);
+
+            // Invariant: total time must be non-negative.
+            var total_us: u64 = 0;
+            for (pc.times_us) |t| total_us += t;
+            try std.testing.expect(total_us >= 0);
+        }
+    }.f, .{});
+}
