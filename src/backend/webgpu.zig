@@ -272,6 +272,8 @@ const WGPUBindGroupDescriptor = extern struct {
 
 const workgroup_size: u32 = 256;
 const act_pool_capacity: u32 = 32;
+/// Max params buffers to defer-destroy per sync cycle.
+const max_deferred_destroy: u32 = 256;
 const max_bindings: u32 = 8;
 /// Maximum device poll iterations for buffer map completion.
 const max_map_poll_iterations: u32 = 10000;
@@ -363,6 +365,11 @@ pub const WebGpuBackend = struct {
     buf_cache: std.AutoHashMap(usize, CachedBuf) = undefined,
     act_pool: [act_pool_capacity]PoolEntry = [_]PoolEntry{.{}} ** act_pool_capacity,
     act_pool_count: u32 = 0,
+
+    // Deferred buffer destruction: params buffers can't be destroyed until
+    // the command buffer that references them has been submitted + completed.
+    deferred_destroy: [max_deferred_destroy]WGPUBuffer = .{null} ** max_deferred_destroy,
+    deferred_count: u32 = 0,
 
     // Staging buffer for readbacks
     staging_buf: WGPUBuffer = null,
@@ -751,7 +758,7 @@ pub const WebGpuBackend = struct {
     fn cacheGpuResult(self: *WebGpuBackend, ptr: [*]f32, buf: WGPUBuffer, size: usize) void {
         const key = @intFromPtr(ptr);
         if (self.buf_cache.getPtr(key)) |cached| {
-            if (cached.buffer != buf) self.fn_buffer_destroy(cached.buffer);
+            if (cached.buffer != buf) self.deferDestroy(cached.buffer);
             cached.buffer = buf;
             cached.size = size;
             cached.generation = self.upload_generation;
@@ -759,7 +766,7 @@ pub const WebGpuBackend = struct {
             self.buf_cache.put(key, .{ .buffer = buf, .size = size, .generation = self.upload_generation }) catch {
                 std.log.warn("WebGPU buffer cache insert failed (OOM), falling back to uncached path", .{});
                 self.downloadF32(buf, ptr, size / @sizeOf(f32));
-                self.fn_buffer_destroy(buf);
+                self.deferDestroy(buf);
                 return;
             };
         }
@@ -802,7 +809,8 @@ pub const WebGpuBackend = struct {
         };
         const bind_group = self.fn_device_create_bind_group(self.device, &bg_desc);
         if (bind_group == null) @panic("WebGPU: bind group creation failed — layout/entry mismatch");
-        defer self.fn_bind_group_release(bind_group);
+        // Don't release bind group here — defer until sync() so referenced
+        // buffers stay alive until the command buffer is submitted + completed.
 
         if (self.batch_encoder == null)
             self.batch_encoder = self.fn_device_create_command_encoder(self.device, null);
@@ -843,7 +851,7 @@ pub const WebGpuBackend = struct {
 
         const Params = extern struct { n: u32, _pad: [12]u8 = .{0} ** 12 };
         const params_buf = self.createUniformBuf(Params, .{ .n = @intCast(n) });
-        defer self.fn_buffer_destroy(params_buf);
+        self.deferDestroy(params_buf);
 
         const entries = [_]WGPUBindGroupEntry{
             storageEntry(0, in_buf, size),
@@ -861,7 +869,7 @@ pub const WebGpuBackend = struct {
 
         const Params = extern struct { n: u32, _pad: [12]u8 = .{0} ** 12 };
         const params_buf = self.createUniformBuf(Params, .{ .n = @intCast(n) });
-        defer self.fn_buffer_destroy(params_buf);
+        self.deferDestroy(params_buf);
 
         const entries = [_]WGPUBindGroupEntry{
             storageEntry(0, in_buf, size),
@@ -880,7 +888,7 @@ pub const WebGpuBackend = struct {
 
         const Params = extern struct { n: u32, _pad: [12]u8 = .{0} ** 12 };
         const params_buf = self.createUniformBuf(Params, .{ .n = @intCast(n) });
-        defer self.fn_buffer_destroy(params_buf);
+        self.deferDestroy(params_buf);
 
         const entries = [_]WGPUBindGroupEntry{
             storageEntry(0, buf_a, size),
@@ -900,7 +908,7 @@ pub const WebGpuBackend = struct {
 
         const Params = extern struct { n: u32, _pad: [12]u8 = .{0} ** 12 };
         const params_buf = self.createUniformBuf(Params, .{ .n = @intCast(n) });
-        defer self.fn_buffer_destroy(params_buf);
+        self.deferDestroy(params_buf);
 
         const entries = [_]WGPUBindGroupEntry{
             storageEntry(0, buf_a, size),
@@ -920,7 +928,7 @@ pub const WebGpuBackend = struct {
 
         const Params = extern struct { n: u32, _pad: [12]u8 = .{0} ** 12 };
         const params_buf = self.createUniformBuf(Params, .{ .n = @intCast(n) });
-        defer self.fn_buffer_destroy(params_buf);
+        self.deferDestroy(params_buf);
 
         const entries = [_]WGPUBindGroupEntry{
             storageEntry(0, buf_a, size),
@@ -940,7 +948,7 @@ pub const WebGpuBackend = struct {
 
         const Params = extern struct { n: u32, _pad: [12]u8 = .{0} ** 12 };
         const params_buf = self.createUniformBuf(Params, .{ .n = @intCast(n) });
-        defer self.fn_buffer_destroy(params_buf);
+        self.deferDestroy(params_buf);
 
         const entries = [_]WGPUBindGroupEntry{
             storageEntry(0, buf_a, size),
@@ -961,7 +969,7 @@ pub const WebGpuBackend = struct {
         const Params = extern struct { n: u32, eps: f32, _pad: [8]u8 = .{0} ** 8 };
         const params = Params{ .n = @intCast(n), .eps = eps };
         const params_buf = self.createUniformBuf(Params, params);
-        defer self.fn_buffer_destroy(params_buf);
+        self.deferDestroy(params_buf);
 
         const entries = [_]WGPUBindGroupEntry{
             storageEntry(0, in_buf, size),
@@ -980,7 +988,7 @@ pub const WebGpuBackend = struct {
         const Params = extern struct { n: u32, _pad: [12]u8 = .{0} ** 12 };
         const params = Params{ .n = @intCast(n) };
         const params_buf = self.createUniformBuf(Params, params);
-        defer self.fn_buffer_destroy(params_buf);
+        self.deferDestroy(params_buf);
 
         const entries = [_]WGPUBindGroupEntry{
             storageEntry(0, data_buf, size),
@@ -1011,7 +1019,7 @@ pub const WebGpuBackend = struct {
             .theta = theta,
         };
         const params_buf = self.createUniformBuf(Params, params);
-        defer self.fn_buffer_destroy(params_buf);
+        self.deferDestroy(params_buf);
 
         const half_rope = n_heads * rope_dim / 2;
         const entries = [_]WGPUBindGroupEntry{
@@ -1048,7 +1056,7 @@ pub const WebGpuBackend = struct {
         const Params = extern struct { n_embd: u32, dtype: u32, token_id_v: u32, _pad: u32 };
         const params = Params{ .n_embd = @intCast(dim), .dtype = 0, .token_id_v = token_id, ._pad = 0 };
         const params_buf = self.createUniformBuf(Params, params);
-        defer self.fn_buffer_destroy(params_buf);
+        self.deferDestroy(params_buf);
 
         const entries = [_]WGPUBindGroupEntry{
             storageEntry(0, table_buf, table_size),
@@ -1105,7 +1113,7 @@ pub const WebGpuBackend = struct {
             const chunk = @min(@as(u32, @intCast(n)) - row_offset, max_dispatch);
             const params = Params{ .n = @intCast(n), .k = @intCast(k), .row_offset = row_offset, ._pad = 0 };
             const params_buf = self.createUniformBuf(Params, params);
-            defer self.fn_buffer_destroy(params_buf);
+            self.deferDestroy(params_buf);
             const entries = [_]WGPUBindGroupEntry{
                 storageEntry(0, x_buf, x_size),
                 storageEntry(1, w_buf, w_size),
@@ -1131,7 +1139,7 @@ pub const WebGpuBackend = struct {
         const Params = extern struct { n: u32, eps: f32, _pad: [8]u8 = .{0} ** 8 };
         const params = Params{ .n = @intCast(n), .eps = eps };
         const params_buf = self.createUniformBuf(Params, params);
-        defer self.fn_buffer_destroy(params_buf);
+        self.deferDestroy(params_buf);
 
         const entries = [_]WGPUBindGroupEntry{
             storageEntry(0, data_buf, size),
@@ -1152,7 +1160,7 @@ pub const WebGpuBackend = struct {
         const Params = extern struct { n: u32, eps: f32, _pad: [8]u8 = .{0} ** 8 };
         const params = Params{ .n = @intCast(n), .eps = eps };
         const params_buf = self.createUniformBuf(Params, params);
-        defer self.fn_buffer_destroy(params_buf);
+        self.deferDestroy(params_buf);
 
         const entries = [_]WGPUBindGroupEntry{
             storageEntry(0, data_buf, size),
@@ -1174,7 +1182,7 @@ pub const WebGpuBackend = struct {
         const Params = extern struct { n: u32, scale: f32 };
         const params = Params{ .n = @intCast(n), .scale = scale };
         const params_buf = self.createUniformBuf(Params, params);
-        defer self.fn_buffer_destroy(params_buf);
+        self.deferDestroy(params_buf);
         const entries = [_]WGPUBindGroupEntry{
             storageEntry(0, src_buf, size),
             storageEntry(1, dst_buf, size),
@@ -1193,7 +1201,7 @@ pub const WebGpuBackend = struct {
         const Params = extern struct { n: u32, _pad: [12]u8 = .{0} ** 12 };
         const params = Params{ .n = @intCast(n) };
         const params_buf = self.createUniformBuf(Params, params);
-        defer self.fn_buffer_destroy(params_buf);
+        self.deferDestroy(params_buf);
 
         const entries = [_]WGPUBindGroupEntry{
             storageEntry(0, data_buf, size),
@@ -1214,7 +1222,7 @@ pub const WebGpuBackend = struct {
         const Params = extern struct { stride: u32, n_pairs: u32, _pad: [8]u8 = .{0} ** 8 };
         const params = Params{ .stride = @intCast(stride), .n_pairs = @intCast(n_pairs) };
         const params_buf = self.createUniformBuf(Params, params);
-        defer self.fn_buffer_destroy(params_buf);
+        self.deferDestroy(params_buf);
 
         const total_elems = n_pairs * stride;
         const entries = [_]WGPUBindGroupEntry{
@@ -1239,7 +1247,7 @@ pub const WebGpuBackend = struct {
         const Params = extern struct { hd: u32, nh: u32, _pad: [8]u8 = .{0} ** 8 };
         const params = Params{ .hd = @intCast(head_dim), .nh = @intCast(n_heads) };
         const params_buf = self.createUniformBuf(Params, params);
-        defer self.fn_buffer_destroy(params_buf);
+        self.deferDestroy(params_buf);
 
         const entries = [_]WGPUBindGroupEntry{
             storageEntry(0, in_buf, in_size),
@@ -1263,7 +1271,7 @@ pub const WebGpuBackend = struct {
         const Params = extern struct { n_heads: u32, head_dim: u32, eps: f32, _pad: u32 = 0 };
         const params = Params{ .n_heads = @intCast(n_heads), .head_dim = @intCast(head_dim), .eps = eps };
         const params_buf = self.createUniformBuf(Params, params);
-        defer self.fn_buffer_destroy(params_buf);
+        self.deferDestroy(params_buf);
 
         const entries = [_]WGPUBindGroupEntry{
             storageEntry(0, data_buf, size),
@@ -1323,7 +1331,7 @@ pub const WebGpuBackend = struct {
             .scale_v = scale,
         };
         const params_buf = self.createUniformBuf(Params, p);
-        defer self.fn_buffer_destroy(params_buf);
+        self.deferDestroy(params_buf);
 
         const entries = [_]WGPUBindGroupEntry{
             storageEntry(0, q_buf, q_sz),
@@ -1413,7 +1421,7 @@ pub const WebGpuBackend = struct {
             .paged_bs_v = kv_view.block_size,
         };
         const params_buf = self.createUniformBuf(Params, p);
-        defer self.fn_buffer_destroy(params_buf);
+        self.deferDestroy(params_buf);
 
         const entries = [_]WGPUBindGroupEntry{
             storageEntry(0, q_buf, q_sz),
@@ -1446,7 +1454,7 @@ pub const WebGpuBackend = struct {
             const Params = extern struct { nh_v: u32, nkv_v: u32, hd_v: u32, prefix_len_v: u32, n_nodes_v: u32, scale_v: f32, _pad: [8]u8 = .{0} ** 8 };
             const p = Params{ .nh_v = @intCast(nh), .nkv_v = @intCast(nkv), .hd_v = @intCast(hd), .prefix_len_v = @intCast(prefix_len), .n_nodes_v = n_nodes, .scale_v = scale };
             const params_buf = self.createUniformBuf(Params, p);
-            defer self.fn_buffer_destroy(params_buf);
+            self.deferDestroy(params_buf);
 
             const entries = [_]WGPUBindGroupEntry{
                 storageEntry(0, q_buf, q_sz),
@@ -1491,7 +1499,7 @@ pub const WebGpuBackend = struct {
         const Params = extern struct { out_dim_val: u32, in_dim_val: u32, _pad: [8]u8 = .{0} ** 8 };
         const params = Params{ .out_dim_val = @intCast(out_dim), .in_dim_val = @intCast(in_dim) };
         const params_buf = self.createUniformBuf(Params, params);
-        defer self.fn_buffer_destroy(params_buf);
+        self.deferDestroy(params_buf);
 
         const entries = [_]WGPUBindGroupEntry{
             storageEntry(0, x_buf, x_size),
@@ -1515,7 +1523,7 @@ pub const WebGpuBackend = struct {
         const Params = extern struct { n: u32, k: u32 };
         const p = Params{ .n = @intCast(n), .k = @intCast(k) };
         const params_buf = self.createUniformBuf(Params, p);
-        defer self.fn_buffer_destroy(params_buf);
+        self.deferDestroy(params_buf);
         const entries = [_]WGPUBindGroupEntry{
             storageEntry(0, x_buf, x_sz),
             storageEntry(1, w_buf, w_sz),
@@ -1544,7 +1552,7 @@ pub const WebGpuBackend = struct {
         const Params = extern struct { n: u32, k: u32 };
         const p = Params{ .n = @intCast(n), .k = @intCast(k) };
         const params_buf = self.createUniformBuf(Params, p);
-        defer self.fn_buffer_destroy(params_buf);
+        self.deferDestroy(params_buf);
         const entries = [_]WGPUBindGroupEntry{
             storageEntry(0, x_buf, x_sz),
             storageEntry(1, w_buf, w_sz),
@@ -1569,7 +1577,7 @@ pub const WebGpuBackend = struct {
         const Params = extern struct { n: u32, k: u32 };
         const p = Params{ .n = @intCast(n), .k = @intCast(k) };
         const params_buf = self.createUniformBuf(Params, p);
-        defer self.fn_buffer_destroy(params_buf);
+        self.deferDestroy(params_buf);
         const entries = [_]WGPUBindGroupEntry{
             storageEntry(0, x_buf, x_sz),
             storageEntry(1, w_buf, w_sz),
@@ -1599,7 +1607,7 @@ pub const WebGpuBackend = struct {
         const Params = extern struct { n_v: u32, k_v: u32, gs: u32, _pad: u32 = 0 };
         const p = Params{ .n_v = @intCast(n), .k_v = @intCast(k), .gs = group_size };
         const params_buf = self.createUniformBuf(Params, p);
-        defer self.fn_buffer_destroy(params_buf);
+        self.deferDestroy(params_buf);
 
         const entries = [_]WGPUBindGroupEntry{
             storageEntry(0, x_buf, x_sz),
@@ -1639,7 +1647,7 @@ pub const WebGpuBackend = struct {
             ._pad = 0,
         };
         const params_buf = self.createUniformBuf(Params, p);
-        defer self.fn_buffer_destroy(params_buf);
+        self.deferDestroy(params_buf);
 
         const entries = [_]WGPUBindGroupEntry{
             storageEntry(0, x_buf, ch_sz),
@@ -1739,7 +1747,7 @@ pub const WebGpuBackend = struct {
             .rms_eps_v = p.rms_eps,
         };
         const params_buf = self.createUniformBuf(Params, params);
-        defer self.fn_buffer_destroy(params_buf);
+        self.deferDestroy(params_buf);
 
         const entries = [_]WGPUBindGroupEntry{
             storageEntry(0, qk_pool.buf, qk_sz),
@@ -1758,6 +1766,18 @@ pub const WebGpuBackend = struct {
     }
 
     // ── Sync + Batch + Memory ───────────────────────────────────
+
+    /// Queue a buffer for destruction after the next sync() completes.
+    /// Params buffers can't be destroyed immediately because the command
+    /// buffer that references them hasn't been submitted yet.
+    fn deferDestroy(self: *WebGpuBackend, buf: WGPUBuffer) void {
+        if (self.deferred_count < max_deferred_destroy) {
+            self.deferred_destroy[self.deferred_count] = buf;
+            self.deferred_count += 1;
+        } else {
+            self.fn_buffer_destroy(buf);
+        }
+    }
 
     pub fn sync(self: *WebGpuBackend) void {
         self.submitPending();
@@ -1781,6 +1801,11 @@ pub const WebGpuBackend = struct {
         }
         self.dirty_count = 0;
         _ = self.fn_device_poll(self.device, 1, null);
+        // Destroy deferred params buffers now that GPU has consumed them
+        for (self.deferred_destroy[0..self.deferred_count]) |buf| {
+            if (buf != null) self.fn_buffer_destroy(buf);
+        }
+        self.deferred_count = 0;
         self.upload_generation +%= 1;
     }
 
