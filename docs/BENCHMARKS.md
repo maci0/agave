@@ -12,11 +12,15 @@ Single-token autoregressive generation (batch=1). This is the primary metric for
 
 | Model | Quant | Size | llama.cpp Metal | Agave Metal | Agave CPU | Ratio (Metal) |
 |-------|-------|------|---------------:|------------:|----------:|--------------:|
-| Qwen3.5 0.8B | Q8_0 | 764 MB | 140.4 | 183.3 | 57.3 | **1.31x** |
+| Qwen3.5 0.8B | Q8_0 | 764 MB | 140.4 | 125† | 51.7† | — |
 | Qwen3.5 9B | Q8_0 | 8.9 GB | 25.0 | 41.7 | 11.3 | **1.67x** |
-| Qwen3.5 9B | Q4_K_M | 5.2 GB | 36.4 | — | 10.1 | — |
-| Gemma 3 4B | MLX-Q4 | 2.8 GB | — | 78.1 | 23.9 | — |
+| Qwen3.5 9B | Q4_K_M | 5.2 GB | 36.4 | 15.6† | 6.4† | — |
+| Qwen3.5 9B | MLX-4bit | 5.5 GB | — | 24.9† | — | — |
+| Gemma 4 E2B | Q4_K_M | — | — | 21.8† | — | — |
+| Gemma 4 26B-A4B | Q4_K_M | — | — | 4.2† | — | — |
 | Gemma 3 12B | Q8_0 | 11.6 GB | 18.7 | 22.3 | 6.3 | **1.19x** |
+
+†Updated 2026-05-26 with sparse GEMV + Accelerate.framework
 
 ### Notes
 

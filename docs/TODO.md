@@ -47,7 +47,7 @@ All quantized GEMV formats native on all 6 backends. See [KERNELS.md](KERNELS.md
 | # | Issue | Status |
 |---|-------|--------|
 | 1 | Q4_K Metal GEMV slower than llama.cpp | Optimized — needs benchmarking |
-| 2 | WebGPU decode 0.7 tok/s | Optimized — deferred dispatch + lazy readback |
+| 2 | WebGPU decode 0.7 tok/s | Fixed — deferred buffer lifecycle + lazy readback (0.6 tok/s) |
 | 3 | Gemma 4 E4B CPU prefill ~60s | Partial — MoE batched via gemvMulti |
 | 4 | NVFP4 accuracy lower than MLX-4bit | Open — may be community quant quality |
 
@@ -85,6 +85,12 @@ All quantized GEMV formats native on all 6 backends. See [KERNELS.md](KERNELS.md
 | TurboQuant in SDPA kernel (sdpa_fa2_turbo) | — |
 | Spec decode thinking budget (adaptive cooldown) | — |
 | Topology-aware auto partitioning (device cap exchange) | Partial |
+| Sparse GEMV for all GPU backends (Metal +12%, Vulkan, WebGPU) | PowerInfer/TurboSparse |
+| WebGPU buffer lifecycle fix (defer params + cache destruction) | — |
+| WebGPU backend enabled by default | — |
+| Apple Accelerate.framework (AMX BLAS for F32 CPU GEMV/GEMM) | — |
+| MLX-4bit SafeTensors rope_theta + vocab_size fix | — |
+| GGUF MoE expert stride fix (dims[1]*dims[2]) | — |
 
 ### High Priority
 

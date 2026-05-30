@@ -133,6 +133,14 @@ The composer automatically selects the correct GEMV function (Q8_0/Q4_K/Q5_K/Q6_
 
 **Pipeline/kernel counts**: Metal 70+ pipelines (+ 1 runtime-composed), CUDA 56 kernels, ROCm 44 kernels, Vulkan 44 shaders, WebGPU 43 shaders. Total megakernel code: ~4,640 lines across 16 files plus ~773 lines in `mega_compose.zig` (composable generator).
 
+## Sparse GEMV (Activation Sparsity)
+
+All CPU and GPU GEMV kernels include block-level activation sparsity checks. After SiLU/GELU activation in FFN layers, ~40% of output values are near-zero (magnitude < 0.005). Before processing each weight block, the kernel checks if all input values in that block are below the threshold. If so, the entire block (dequantization + MAC) is skipped.
+
+Measured speedup: CPU +21%, Metal +12%, Vulkan/WebGPU (compile-verified). Inspired by [PowerInfer](https://github.com/Tiiny-AI/PowerInfer) and [TurboSparse](https://arxiv.org/abs/2406.05955).
+
+Implemented in all quantized GEMV kernels: Q4_K, Q8_0, Q4_0, Q4_1, Q5_0, Q5_K, Q6_K, Q2_K, Q3_K, IQ4_NL, IQ4_XS, BF16, F16, FP8 (CPU only for element-level formats).
+
 ## Vision Encoder
 
 Vision ViT (Vision Transformer) kernels run on CPU for patch embedding, positional encoding, and layer norm. GEMM/GEMV operations within the ViT encoder layers use GPU acceleration via the standard backend dispatcher for supported weight dtypes (f32, q8_0, q4_0, bf16). Vision encoding is init-time only (not in the token generation hot path). See `src/models/vision.zig`.

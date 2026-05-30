@@ -37,7 +37,8 @@
 - **Distributed Inference**: Tensor parallelism (TP), pipeline parallelism (PP), disaggregated prefill/decode. Same-node multi-GPU via POSIX shm (zero-copy IPC), cross-node via TCP. Heterogeneous: mix CUDA + Vulkan + CPU across x86_64 + aarch64
 - **Speculative Decoding**: Draft model, self-speculative (layer skip), DDTree with configurable tree budget, n-gram history-based prediction, multi-token prediction (MTP) heads
 - **Fused Megakernels**: Composable GPU megakernels — gate+up+SiLU fused into single dispatch (3→1)
-- **~183 tok/s** on Qwen3.5 0.8B Q8_0 (Metal, Apple Silicon M4 Pro), **1.2-1.7x faster than llama.cpp on Q8_0** (Q4_K performance is a [known gap](docs/TODO.md#performance) — active optimization target)
+- **Sparse GEMV**: Skip near-zero FFN activation blocks (~40% sparsity from SiLU). CPU +21%, Metal +12%, all GPU backends. Inspired by PowerInfer/TurboSparse
+- **~125 tok/s** on Qwen3.5 0.8B Q8_0 (Metal, Apple Silicon M4 Pro), **24.9 tok/s** on Qwen3.5 9B MLX-4bit (82% of native MLX-lm)
 
 ## Quick Start
 
@@ -351,7 +352,7 @@ agave [OPTIONS] <model> [prompt]
 
 ## Build Options
 
-All backends (except WebGPU) and models are enabled by default. Disable individually to reduce binary size or avoid unwanted dependencies.
+All backends and models are enabled by default. Disable individually to reduce binary size or avoid unwanted dependencies.
 
 ```bash
 # Disable specific backends
