@@ -268,3 +268,77 @@ test "ParseResult typed accessors" {
     try std.testing.expectEqualStrings("model.gguf", r.positional(0).?);
     try std.testing.expect(r.positional(1) == null);
 }
+
+test "findByLong empty specs" {
+    const specs = [_]ArgSpec{};
+    try std.testing.expect(findByLong(&specs, "anything") == null);
+}
+
+test "findByShort empty specs" {
+    const specs = [_]ArgSpec{};
+    try std.testing.expect(findByShort(&specs, 'x') == null);
+}
+
+test "findByShort no match when short is null" {
+    const specs = [_]ArgSpec{
+        .{ .long = "verbose" }, // no short alias
+    };
+    try std.testing.expect(findByShort(&specs, 'v') == null);
+}
+
+test "optionInt negative value" {
+    var r = ParseResult{
+        .flags = std.StringHashMap(void).init(std.testing.allocator),
+        .options = std.StringHashMap([]const u8).init(std.testing.allocator),
+        .positionals = .empty,
+        .allocator = std.testing.allocator,
+    };
+    defer r.deinit();
+
+    try r.options.put("val", "-5");
+    // i32 should parse negative
+    try std.testing.expectEqual(@as(?i32, -5), r.optionInt(i32, "val"));
+    // u32 should fail on negative
+    try std.testing.expect(r.optionInt(u32, "val") == null);
+}
+
+test "optionF32 negative and zero" {
+    var r = ParseResult{
+        .flags = std.StringHashMap(void).init(std.testing.allocator),
+        .options = std.StringHashMap([]const u8).init(std.testing.allocator),
+        .positionals = .empty,
+        .allocator = std.testing.allocator,
+    };
+    defer r.deinit();
+
+    try r.options.put("neg", "-0.5");
+    try r.options.put("zero", "0.0");
+    try r.options.put("nan", "nan");
+
+    try std.testing.expectEqual(@as(?f32, -0.5), r.optionF32("neg"));
+    try std.testing.expectEqual(@as(?f32, 0.0), r.optionF32("zero"));
+    // NaN is not finite, should return null
+    try std.testing.expect(r.optionF32("nan") == null);
+}
+
+test "ParseResult.flag and option" {
+    var r = ParseResult{
+        .flags = std.StringHashMap(void).init(std.testing.allocator),
+        .options = std.StringHashMap([]const u8).init(std.testing.allocator),
+        .positionals = .empty,
+        .allocator = std.testing.allocator,
+    };
+    defer r.deinit();
+
+    // Empty result
+    try std.testing.expect(!r.flag("verbose"));
+    try std.testing.expect(r.option("backend") == null);
+    try std.testing.expect(r.positional(0) == null);
+}
+
+test "ArgSpec default values" {
+    const spec = ArgSpec{ .long = "test" };
+    try std.testing.expectEqual(@as(?u8, null), spec.short);
+    try std.testing.expectEqual(.flag, spec.kind);
+    try std.testing.expectEqualStrings("", spec.help);
+}

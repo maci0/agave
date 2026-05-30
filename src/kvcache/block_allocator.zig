@@ -339,3 +339,33 @@ test "getPhysicalBlock returns correct block ID" {
     try std.testing.expect(block0 != BlockAllocator.getPhysicalBlock(&seq_table, 1, 0));
     try std.testing.expect(block1 != BlockAllocator.getPhysicalBlock(&seq_table, 1, 1));
 }
+
+test "setCachePtr updates pointer" {
+    const allocator = std.testing.allocator;
+    var paged1 = try PagedKvCache.init(allocator, 1, 16, 4, 8);
+    defer paged1.deinit();
+    var paged2 = try PagedKvCache.init(allocator, 1, 16, 4, 8);
+    defer paged2.deinit();
+
+    var block_alloc = BlockAllocator.init(&paged1, allocator);
+    // Verify it points to paged1
+    try std.testing.expect(block_alloc.cache == &paged1);
+
+    // Update to point to paged2
+    block_alloc.setCachePtr(&paged2);
+    try std.testing.expect(block_alloc.cache == &paged2);
+}
+
+test "TieredBlockAllocator allocateSeqTable" {
+    const allocator = std.testing.allocator;
+    var tiered = try TieredKvCache.init(allocator, 2, 4, 4, 2, 0, 16, null);
+    defer tiered.deinit();
+
+    var block_alloc = TieredBlockAllocator.init(&tiered, allocator);
+    var seq_table = try block_alloc.allocateSeqTable(2);
+    defer block_alloc.freeSeqTable(&seq_table);
+
+    try std.testing.expectEqual(@as(usize, 2), seq_table.block_table.len);
+    try std.testing.expectEqual(@as(usize, 0), seq_table.block_table[0].len);
+    try std.testing.expectEqual(@as(usize, 0), seq_table.seq_len);
+}

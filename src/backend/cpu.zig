@@ -1265,6 +1265,296 @@ test "unit conversion constants" {
     try std.testing.expectEqual(@as(usize, 1024 * 1024), mb_to_bytes);
 }
 
+test "CpuBackend — silu activation" {
+    var be = CpuBackend{};
+    var input = [_]f32{ 0.0, 1.0, -1.0, 2.0, -2.0, 3.0, -3.0, 4.0 };
+    var output: [8]f32 = undefined;
+    be.silu(&input, &output, 8);
+    // silu(0) = 0*sigmoid(0) = 0
+    try std.testing.expectApproxEqAbs(@as(f32, 0.0), output[0], 1e-5);
+    // silu(1) = 1*sigmoid(1) ≈ 0.7311
+    try std.testing.expectApproxEqAbs(@as(f32, 0.7311), output[1], 1e-3);
+    // silu(-1) = -1*sigmoid(-1) ≈ -0.2689
+    try std.testing.expectApproxEqAbs(@as(f32, -0.2689), output[2], 1e-3);
+}
+
+test "CpuBackend — gelu activation" {
+    var be = CpuBackend{};
+    var input = [_]f32{ 0.0, 1.0, -1.0, 2.0, -2.0, 3.0, -3.0, 0.5 };
+    var output: [8]f32 = undefined;
+    be.gelu(&input, &output, 8);
+    // gelu(0) = 0
+    try std.testing.expectApproxEqAbs(@as(f32, 0.0), output[0], 1e-4);
+    // gelu(1) ≈ 0.8412
+    try std.testing.expectApproxEqAbs(@as(f32, 0.8412), output[1], 1e-3);
+    // gelu(-1) ≈ -0.1588
+    try std.testing.expectApproxEqAbs(@as(f32, -0.1588), output[2], 1e-3);
+}
+
+test "CpuBackend — add element-wise" {
+    var be = CpuBackend{};
+    var a = [_]f32{ 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0 };
+    var b_arr = [_]f32{ 10.0, 20.0, 30.0, 40.0, 50.0, 60.0, 70.0, 80.0 };
+    var out: [8]f32 = undefined;
+    be.add(&a, &b_arr, &out, 8);
+    try std.testing.expectApproxEqAbs(@as(f32, 11.0), out[0], 1e-5);
+    try std.testing.expectApproxEqAbs(@as(f32, 88.0), out[7], 1e-5);
+}
+
+test "CpuBackend — mul element-wise" {
+    var be = CpuBackend{};
+    var a = [_]f32{ 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0 };
+    var b_arr = [_]f32{ 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5 };
+    var out: [8]f32 = undefined;
+    be.mul(&a, &b_arr, &out, 8);
+    try std.testing.expectApproxEqAbs(@as(f32, 1.0), out[0], 1e-5);
+    try std.testing.expectApproxEqAbs(@as(f32, 4.5), out[7], 1e-5);
+}
+
+test "CpuBackend — rmsNorm" {
+    var be = CpuBackend{};
+    var input = [_]f32{ 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0 };
+    var weight = [_]f32{ 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0 };
+    var output: [8]f32 = undefined;
+    be.rmsNorm(&input, &weight, &output, 8, 1e-6);
+    const rms = @sqrt(@as(f32, 25.5) + 1e-6);
+    try std.testing.expectApproxEqAbs(1.0 / rms, output[0], 1e-4);
+    try std.testing.expectApproxEqAbs(8.0 / rms, output[7], 1e-4);
+}
+
+test "CpuBackend — addRmsNorm" {
+    var be = CpuBackend{};
+    var a = [_]f32{ 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0 };
+    var b_arr = [_]f32{ 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0 };
+    var weight = [_]f32{ 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0 };
+    var output: [8]f32 = undefined;
+    be.addRmsNorm(&a, &b_arr, &weight, &output, 8, 1e-6);
+    // a = [2,3,4,5,6,7,8,9]
+    try std.testing.expectApproxEqAbs(@as(f32, 2.0), a[0], 1e-5);
+    const rms = @sqrt(@as(f32, 35.5) + 1e-6);
+    try std.testing.expectApproxEqAbs(2.0 / rms, output[0], 1e-4);
+    try std.testing.expectApproxEqAbs(9.0 / rms, output[7], 1e-4);
+}
+
+test "CpuBackend — rope at pos=0 is identity" {
+    var be = CpuBackend{};
+    var x = [_]f32{ 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0 };
+    be.rope(&x, 0, 1, 8, 8, 10000.0);
+    // At pos=0, angle=0, cos=1, sin=0 → no change
+    try std.testing.expectApproxEqAbs(@as(f32, 1.0), x[0], 1e-5);
+    try std.testing.expectApproxEqAbs(@as(f32, 5.0), x[4], 1e-5);
+}
+
+test "CpuBackend — rope at pos=1 rotates" {
+    var be = CpuBackend{};
+    var x = [_]f32{ 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 };
+    be.rope(&x, 1, 1, 8, 8, 10000.0);
+    try std.testing.expectApproxEqAbs(@cos(@as(f32, 1.0)), x[0], 1e-4);
+    try std.testing.expectApproxEqAbs(@sin(@as(f32, 1.0)), x[4], 1e-4);
+}
+
+test "CpuBackend — softmax normalizes to sum=1" {
+    var be = CpuBackend{};
+    var data = [_]f32{ 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0 };
+    be.softmax(&data, 8);
+    var sum: f32 = 0.0;
+    for (data) |v| sum += v;
+    try std.testing.expectApproxEqAbs(@as(f32, 1.0), sum, 1e-5);
+    // Monotonically increasing
+    for (1..8) |i| try std.testing.expect(data[i] >= data[i - 1]);
+}
+
+test "CpuBackend — embLookup f32" {
+    var be = CpuBackend{};
+    const table = [_]f32{ 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0 };
+    var output: [4]f32 = undefined;
+    be.embLookup(.{ .data = @ptrCast(&table), .dtype = .f32 }, 1, &output, 4);
+    try std.testing.expectApproxEqAbs(@as(f32, 5.0), output[0], 1e-5);
+    try std.testing.expectApproxEqAbs(@as(f32, 8.0), output[3], 1e-5);
+}
+
+test "CpuBackend — embLookup f16" {
+    var be = CpuBackend{};
+    const table = [_]f16{ 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0 };
+    var output: [4]f32 = undefined;
+    be.embLookup(.{ .data = @ptrCast(&table), .dtype = .f16 }, 0, &output, 4);
+    try std.testing.expectApproxEqAbs(@as(f32, 1.0), output[0], 1e-3);
+    try std.testing.expectApproxEqAbs(@as(f32, 4.0), output[3], 1e-3);
+}
+
+test "CpuBackend — siluMul" {
+    var be = CpuBackend{};
+    var a = [_]f32{ 0.0, 1.0, -1.0, 2.0, -2.0, 3.0, -3.0, 4.0 };
+    var b_arr = [_]f32{ 2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0 };
+    var out: [8]f32 = undefined;
+    be.siluMul(&a, &b_arr, &out, 8);
+    // siluMul(0, 2) = silu(0) * 2 = 0
+    try std.testing.expectApproxEqAbs(@as(f32, 0.0), out[0], 1e-5);
+    // siluMul(1, 2) ≈ 0.7311 * 2 = 1.4622
+    try std.testing.expectApproxEqAbs(@as(f32, 1.4622), out[1], 1e-3);
+}
+
+test "CpuBackend — geluMul" {
+    var be = CpuBackend{};
+    var a = [_]f32{ 0.0, 1.0, -1.0, 2.0, -2.0, 3.0, -3.0, 0.5 };
+    var b_arr = [_]f32{ 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0 };
+    var out: [8]f32 = undefined;
+    be.geluMul(&a, &b_arr, &out, 8);
+    // geluMul(0, 1) = gelu(0) = 0
+    try std.testing.expectApproxEqAbs(@as(f32, 0.0), out[0], 1e-4);
+    // geluMul(1, 1) ≈ 0.8412
+    try std.testing.expectApproxEqAbs(@as(f32, 0.8412), out[1], 1e-3);
+}
+
+test "CpuBackend — deinterleave" {
+    var be = CpuBackend{};
+    // 2 pairs, stride=2
+    var input = [_]f32{ 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0 };
+    var out_a: [4]f32 = undefined;
+    var out_b: [4]f32 = undefined;
+    be.deinterleave(&input, &out_a, &out_b, 2, 2);
+    try std.testing.expectApproxEqAbs(@as(f32, 1.0), out_a[0], 1e-6);
+    try std.testing.expectApproxEqAbs(@as(f32, 2.0), out_a[1], 1e-6);
+    try std.testing.expectApproxEqAbs(@as(f32, 5.0), out_a[2], 1e-6);
+    try std.testing.expectApproxEqAbs(@as(f32, 3.0), out_b[0], 1e-6);
+    try std.testing.expectApproxEqAbs(@as(f32, 7.0), out_b[2], 1e-6);
+}
+
+test "CpuBackend — l2Norm" {
+    var be = CpuBackend{};
+    var x = [_]f32{ 3.0, 4.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 };
+    be.l2Norm(&x, 8, 1e-12);
+    // L2 norm = sqrt(9+16) = 5 → x = [0.6, 0.8, 0, ...]
+    try std.testing.expectApproxEqAbs(@as(f32, 0.6), x[0], 1e-4);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.8), x[1], 1e-4);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.0), x[2], 1e-4);
+}
+
+test "CpuBackend — sigmoidMul" {
+    var be = CpuBackend{};
+    var data = [_]f32{ 2.0, 4.0, 6.0, 8.0, 10.0, 12.0, 14.0, 16.0 };
+    var gate = [_]f32{ 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 };
+    be.sigmoidMul(&data, &gate, 8);
+    // sigmoid(0) = 0.5 → data[i] *= 0.5
+    try std.testing.expectApproxEqAbs(@as(f32, 1.0), data[0], 1e-5);
+    try std.testing.expectApproxEqAbs(@as(f32, 8.0), data[7], 1e-5);
+}
+
+test "CpuBackend — rmsNormMulti" {
+    var be = CpuBackend{};
+    var data = [_]f32{
+        1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0,
+        3.0, 3.0, 3.0, 3.0, 3.0, 3.0, 3.0, 3.0,
+    };
+    var weight = [_]f32{ 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0 };
+    be.rmsNormMulti(&data, &weight, 2, 8, 1e-6);
+    // rms([1,1,...]) = 1 → normalized = 1
+    try std.testing.expectApproxEqAbs(@as(f32, 1.0), data[0], 1e-4);
+    // rms([3,3,...]) = 3 → normalized = 1
+    try std.testing.expectApproxEqAbs(@as(f32, 1.0), data[8], 1e-4);
+}
+
+test "CpuBackend — rmsNormBatched" {
+    var be = CpuBackend{};
+    var input = [_]f32{
+        2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0,
+        4.0, 4.0, 4.0, 4.0, 4.0, 4.0, 4.0, 4.0,
+    };
+    var weight = [_]f32{ 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0 };
+    var output: [16]f32 = undefined;
+    be.rmsNormBatched(&input, &weight, &output, 2, 8, 1e-6);
+    // Each row is constant → output = 1.0
+    try std.testing.expectApproxEqAbs(@as(f32, 1.0), output[0], 1e-4);
+    try std.testing.expectApproxEqAbs(@as(f32, 1.0), output[8], 1e-4);
+}
+
+test "CpuBackend — ropeBatched" {
+    var be = CpuBackend{};
+    var x = [_]f32{
+        1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+        1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+    };
+    var positions = [_]u32{ 0, 1 };
+    be.ropeBatched(&x, &positions, 2, 1, 8, 8, 10000.0);
+    // pos=0 → identity
+    try std.testing.expectApproxEqAbs(@as(f32, 1.0), x[0], 1e-5);
+    // pos=1 → rotated
+    try std.testing.expectApproxEqAbs(@cos(@as(f32, 1.0)), x[8], 1e-4);
+}
+
+test "CpuBackend — gemvT with Q8_0" {
+    var be = CpuBackend{};
+    // 1 input, 32 outputs, 1 Q8_0 block
+    var w_block: [34]u8 align(2) = undefined;
+    // scale = 1.0 → f16 = 0x3C00
+    w_block[0] = 0x00;
+    w_block[1] = 0x3C;
+    @memset(w_block[2..34], 0);
+    w_block[2] = 2; // first quantized weight = 2
+    var x_in = [_]f32{3.0};
+    var y_out: [32]f32 = undefined;
+    be.gemvT(&x_in, &w_block, &y_out, 32, 1);
+    // y[0] = 3.0 * 1.0 * 2 = 6.0
+    try std.testing.expectApproxEqAbs(@as(f32, 6.0), y_out[0], 1e-3);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.0), y_out[1], 1e-3);
+}
+
+test "CpuBackend — gemm f32" {
+    var be = CpuBackend{};
+    // Y = X @ W^T
+    // X = [[1,2],[3,4]], W = [[1,0],[0,1]] (identity) → Y = X
+    var x = [_]f32{ 1.0, 2.0, 3.0, 4.0 };
+    var w = [_]f32{ 1.0, 0.0, 0.0, 1.0 };
+    var y: [4]f32 = undefined;
+    be.gemm(&x, .{ .data = @ptrCast(&w), .dtype = .f32 }, &y, 2, 2, 2);
+    try std.testing.expectApproxEqAbs(@as(f32, 1.0), y[0], 1e-5);
+    try std.testing.expectApproxEqAbs(@as(f32, 2.0), y[1], 1e-5);
+    try std.testing.expectApproxEqAbs(@as(f32, 3.0), y[2], 1e-5);
+    try std.testing.expectApproxEqAbs(@as(f32, 4.0), y[3], 1e-5);
+}
+
+test "CpuBackend — gemvMulti single op" {
+    var be = CpuBackend{};
+    var x = [_]f32{ 1.0, 1.0, 1.0, 1.0 };
+    var w = [_]f32{ 1.0, 2.0, 3.0, 4.0 };
+    var y: [1]f32 = undefined;
+    const ops = [_]backend_mod.GemvOp{
+        .{
+            .w = .{ .data = @ptrCast(&w), .dtype = .f32 },
+            .y = &y,
+            .n = 1,
+        },
+    };
+    be.gemvMulti(&x, &ops, 4);
+    try std.testing.expectApproxEqAbs(@as(f32, 10.0), y[0], 1e-5);
+}
+
+test "CpuBackend — gemvMulti empty ops" {
+    var be = CpuBackend{};
+    var x = [_]f32{1.0};
+    const ops = [_]backend_mod.GemvOp{};
+    be.gemvMulti(&x, &ops, 1); // Must not panic
+}
+
+test "CpuBackend — sdpa f32 single token" {
+    var be = CpuBackend{};
+    const nh: usize = 1;
+    const nkv: usize = 1;
+    const hd: usize = 4;
+    const kvd = nkv * hd;
+    const max_seq: usize = 4;
+    var keys: [max_seq * kvd * @sizeOf(f32)]u8 = undefined;
+    var values: [max_seq * kvd * @sizeOf(f32)]u8 = undefined;
+    var q = [_]f32{ 1.0, 0.0, 0.0, 0.0 };
+    var k_new = [_]f32{ 1.0, 0.0, 0.0, 0.0 };
+    var v_new = [_]f32{ 0.5, 0.5, 0.5, 0.5 };
+    var output: [4]f32 = undefined;
+    be.sdpa(&q, &keys, &values, &k_new, &v_new, &output, nh, nkv, hd, 0, 1.0, .f32, .f32);
+    // Single token → output = v_new
+    try std.testing.expectApproxEqAbs(@as(f32, 0.5), output[0], 1e-3);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.5), output[3], 1e-3);
+}
+
 test "softmax autotune — compare SIMD widths" {
     // Generates all 3 variants at comptime, benchmarks each at test time.
     // Run with: zig build test --release=fast

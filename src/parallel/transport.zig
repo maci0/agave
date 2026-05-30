@@ -604,3 +604,72 @@ test "simdAddF32 zero length" {
     simdAddF32(&dst, &src, 0);
     try std.testing.expectApproxEqAbs(@as(f32, 42.0), dst[0], 1e-6);
 }
+
+test "simdAddF32 partial SIMD width" {
+    // 11 elements: 1 full SIMD pass (8) + 3 scalar tail
+    var dst: [11]f32 = undefined;
+    var src: [11]f32 = undefined;
+    for (0..11) |i| {
+        dst[i] = @floatFromInt(i * 2);
+        src[i] = @floatFromInt(i);
+    }
+    simdAddF32(&dst, &src, 11);
+    for (0..11) |i| {
+        const expected: f32 = @floatFromInt(i * 3);
+        try std.testing.expectApproxEqAbs(expected, dst[i], 1e-6);
+    }
+}
+
+test "getenv returns null for nonexistent var" {
+    const result = getenv("AGAVE_TEST_NONEXISTENT_ENV_VAR_12345");
+    try std.testing.expectEqual(@as(?[]const u8, null), result);
+}
+
+test "TransportKind enum has all expected variants" {
+    // Compile-time verification that all transport kinds exist
+    const fields = @typeInfo(TransportKind).@"enum".fields;
+    try std.testing.expectEqual(@as(usize, 4), fields.len);
+    try std.testing.expectEqual(TransportKind.tcp, .tcp);
+    try std.testing.expectEqual(TransportKind.shm, .shm);
+    try std.testing.expectEqual(TransportKind.nccl, .nccl);
+    try std.testing.expectEqual(TransportKind.rccl, .rccl);
+}
+
+test "Transport.init tcp" {
+    const allocator = std.testing.allocator;
+    var t = try Transport.init(allocator, .tcp, 0, 2);
+    defer t.deinit();
+    try std.testing.expectEqual(TransportKind.tcp, t.kind);
+    try std.testing.expectEqual(@as(u32, 0), t.rank);
+    try std.testing.expectEqual(@as(u32, 2), t.world_size);
+    try std.testing.expectEqual(@as(u32, 0), t.tcp_connected);
+}
+
+test "Transport.init shm" {
+    const allocator = std.testing.allocator;
+    var t = try Transport.init(allocator, .shm, 1, 2);
+    defer t.deinit();
+    try std.testing.expectEqual(TransportKind.shm, t.kind);
+    try std.testing.expectEqual(@as(u32, 1), t.rank);
+}
+
+test "Transport.init rccl returns NotImplemented" {
+    const allocator = std.testing.allocator;
+    try std.testing.expectError(error.NotImplemented, Transport.init(allocator, .rccl, 0, 2));
+}
+
+test "Transport struct methods exist at comptime" {
+    // Verify the public API surface compiles and exists
+    try std.testing.expect(@hasDecl(Transport, "init"));
+    try std.testing.expect(@hasDecl(Transport, "deinit"));
+    try std.testing.expect(@hasDecl(Transport, "connectPeer"));
+    try std.testing.expect(@hasDecl(Transport, "acceptPeer"));
+    try std.testing.expect(@hasDecl(Transport, "setupShm"));
+    try std.testing.expect(@hasDecl(Transport, "setupNccl"));
+    try std.testing.expect(@hasDecl(Transport, "ensureNcclComm"));
+    try std.testing.expect(@hasDecl(Transport, "allReduceAdd"));
+    try std.testing.expect(@hasDecl(Transport, "sendBuf"));
+    try std.testing.expect(@hasDecl(Transport, "sendBufs"));
+    try std.testing.expect(@hasDecl(Transport, "recvBuf"));
+    try std.testing.expect(@hasDecl(Transport, "recvBufs"));
+}

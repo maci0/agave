@@ -99,3 +99,44 @@ test "Tokenizer VTable dispatch" {
     };
     try std.testing.expectEqual(@as(u32, 42), tok.vocabSize());
 }
+
+test "Tokenizer getVocabTexts dispatch" {
+    const S = struct {
+        texts: []const []const u8 = &.{ "hello", "world" },
+
+        fn encode(_: *anyopaque, _: []const u8) TokenizerError![]u32 {
+            return error.OutOfMemory;
+        }
+        fn decode(_: *anyopaque, _: []const u32) TokenizerError![]u8 {
+            return error.OutOfMemory;
+        }
+        fn getVocabSize(_: *anyopaque) u32 {
+            return 2;
+        }
+        fn getVocabTexts(ptr: *anyopaque) []const []const u8 {
+            const self: *@This() = @ptrCast(@alignCast(ptr));
+            return self.texts;
+        }
+    };
+    const vtable = Tokenizer.VTable{
+        .encode = S.encode,
+        .decode = S.decode,
+        .get_vocab_size = S.getVocabSize,
+        .get_vocab_texts = S.getVocabTexts,
+    };
+    var impl = S{};
+    const tok = Tokenizer{ .ptr = @ptrCast(&impl), .vtable = &vtable };
+    const texts = tok.getVocabTexts();
+    try std.testing.expectEqual(@as(usize, 2), texts.len);
+    try std.testing.expectEqualStrings("hello", texts[0]);
+    try std.testing.expectEqualStrings("world", texts[1]);
+}
+
+test "TokenizerKind enum variants" {
+    try std.testing.expect(TokenizerKind.bpe != TokenizerKind.spm);
+    try std.testing.expect(TokenizerKind.spm != TokenizerKind.spm_no_dummy);
+    try std.testing.expect(TokenizerKind.bpe != TokenizerKind.spm_no_dummy);
+    // Verify there are exactly 3 variants
+    const fields = @typeInfo(TokenizerKind).@"enum".fields;
+    try std.testing.expectEqual(@as(usize, 3), fields.len);
+}

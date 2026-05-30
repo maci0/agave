@@ -153,3 +153,26 @@ test "PerfCounters enabled tracks calls" {
     pc.end(.rope, t1);
     try std.testing.expectEqual(@as(u64, 2), pc.counts[@intFromEnum(Op.rope)]);
 }
+
+test "PerfCounters multiple ops accumulate independently" {
+    var pc = PerfCounters{ .enabled = true };
+    const t0 = pc.start();
+    pc.end(.rope, t0);
+    const t1 = pc.start();
+    pc.end(.sdpa, t1);
+    const t2 = pc.start();
+    pc.end(.rope, t2);
+
+    try std.testing.expectEqual(@as(u64, 2), pc.counts[@intFromEnum(Op.rope)]);
+    try std.testing.expectEqual(@as(u64, 1), pc.counts[@intFromEnum(Op.sdpa)]);
+    // Other ops should be zero
+    try std.testing.expectEqual(@as(u64, 0), pc.counts[@intFromEnum(Op.gemv_qkv)]);
+}
+
+test "PerfCounters Op enum has expected fields" {
+    // Verify the number of Op variants matches n_ops
+    const fields = @typeInfo(Op).@"enum".fields;
+    try std.testing.expectEqual(n_ops, fields.len);
+    // Verify at least some known ops exist
+    try std.testing.expect(n_ops >= 10);
+}

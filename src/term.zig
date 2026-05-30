@@ -627,3 +627,72 @@ test "text input update" {
     try std.testing.expectEqual(@as(usize, 4), input.buf.realLength());
     try std.testing.expectEqualStrings("hell", input.buf.firstHalf());
 }
+
+test "displayWidth control characters" {
+    // Control chars (< 0x20) should have zero width
+    try std.testing.expectEqual(@as(usize, 0), codepointWidth(0x00));
+    try std.testing.expectEqual(@as(usize, 0), codepointWidth(0x1F));
+    try std.testing.expectEqual(@as(usize, 0), codepointWidth(0x7F));
+}
+
+test "codepointWidth zero-width joiner" {
+    try std.testing.expectEqual(@as(usize, 0), codepointWidth(0x200B)); // ZWSP
+    try std.testing.expectEqual(@as(usize, 0), codepointWidth(0x200C)); // ZWNJ
+    try std.testing.expectEqual(@as(usize, 0), codepointWidth(0x200D)); // ZWJ
+    try std.testing.expectEqual(@as(usize, 0), codepointWidth(0xFEFF)); // BOM
+}
+
+test "codepointWidth variation selectors" {
+    try std.testing.expectEqual(@as(usize, 0), codepointWidth(0xFE00));
+    try std.testing.expectEqual(@as(usize, 0), codepointWidth(0xFE0F));
+}
+
+test "parser: backspace" {
+    var parser: Parser = .{};
+    const result = try parser.parse("\x7f", null);
+    try std.testing.expectEqual(@as(usize, 1), result.n);
+    try std.testing.expectEqual(Key.backspace, result.event.?.key_press.codepoint);
+}
+
+test "parser: home and end CSI" {
+    var parser: Parser = .{};
+    const home_result = try parser.parse("\x1b[H", null);
+    try std.testing.expectEqual(Key.home, home_result.event.?.key_press.codepoint);
+
+    const end_result = try parser.parse("\x1b[F", null);
+    try std.testing.expectEqual(Key.end, end_result.event.?.key_press.codepoint);
+}
+
+test "parser: empty buffer returns zero" {
+    var parser: Parser = .{};
+    const result = try parser.parse("", null);
+    try std.testing.expectEqual(@as(usize, 0), result.n);
+    try std.testing.expect(result.event == null);
+}
+
+test "gwidth wrapper" {
+    try std.testing.expectEqual(@as(u16, 5), gwidth.gwidth("hello", .unicode));
+    try std.testing.expectEqual(@as(u16, 4), gwidth.gwidth("\xe4\xb8\xad\xe6\x96\x87", .unicode));
+}
+
+test "Key.Modifiers.eql" {
+    const m1: Key.Modifiers = .{ .ctrl = true };
+    const m2: Key.Modifiers = .{ .ctrl = true };
+    const m3: Key.Modifiers = .{ .alt = true };
+    try std.testing.expect(m1.eql(m2));
+    try std.testing.expect(!m1.eql(m3));
+}
+
+test "gap buffer clearRetainingCapacity" {
+    var buf = TextInput.Buffer.init(std.testing.allocator);
+    defer buf.deinit();
+
+    try buf.insertSliceAtCursor("hello world");
+    try std.testing.expect(buf.realLength() > 0);
+
+    buf.clearRetainingCapacity();
+    try std.testing.expectEqual(@as(usize, 0), buf.realLength());
+    try std.testing.expectEqual(@as(usize, 0), buf.cursor);
+    // Buffer memory is still allocated (capacity retained)
+    try std.testing.expect(buf.buffer.len > 0);
+}

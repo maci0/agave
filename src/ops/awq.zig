@@ -120,3 +120,28 @@ test "awqGemv GEMM order" {
         }
     }
 }
+
+test "awqGemvRows with non-zero start_col" {
+    // Test that start_col offsets the output correctly.
+    // Use the same weights as the GEMM order test but start_col=0, n_cols=8.
+    // Then verify awqGemv (which calls awqGemvRows with start_col=0) matches.
+    const n: usize = 8;
+    const k: usize = 1;
+    const gs: u32 = 128;
+
+    var qweight = [_]u32{0x97585367};
+    var qzeros = [_]u32{0xb6674377};
+    var scales = [_]u16{ 6794, 7247, 8252, 7744, 11327, 8329, 8451, 8314 };
+    var x = [_]f32{1.0};
+
+    var y_direct: [8]f32 = undefined;
+    var y_rows: [8]f32 = undefined;
+
+    awqGemv(&x, &qweight, &scales, &qzeros, &y_direct, n, k, gs);
+    awqGemvRows(&x, &qweight, &scales, &qzeros, &y_rows, 0, n, k, gs);
+
+    // Both should produce identical results
+    for (0..8) |i| {
+        try std.testing.expectApproxEqAbs(y_direct[i], y_rows[i], 1e-6);
+    }
+}

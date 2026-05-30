@@ -445,3 +445,13 @@ test "ropeFrequencies produces decreasing values" {
         try std.testing.expect(freqs[i] < freqs[i - 1]);
     }
 }
+
+test "selectVictims budget covers all positions" {
+    const scores = [_]f32{ 1.0, 2.0, 3.0, 4.0 };
+    var keep: [4]bool = undefined;
+
+    // Budget >= seq_len: everything should be kept
+    const kept = selectVictims(&scores, &keep, 4, 10, 2, 1);
+    try std.testing.expectEqual(@as(usize, 4), kept);
+    for (0..4) |i| try std.testing.expect(keep[i]);
+}

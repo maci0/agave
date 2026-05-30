@@ -807,6 +807,62 @@ test "TieredKvCache freeBlock returns to correct tier" {
     try std.testing.expectEqual(@as(u32, 0), cache.blocks[b0].base.ref_count);
 }
 
+test "TieredKvCache lockTier and unlockTier" {
+    const allocator = std.testing.allocator;
+    var cache = try TieredKvCache.init(allocator, 1, 2, 2, 1, 0, 16, null);
+    defer cache.deinit();
+
+    cache.lockTier();
+    try std.testing.expectEqual(@as(u32, 1), cache.tier_lock.load(.monotonic));
+    cache.unlockTier();
+    try std.testing.expectEqual(@as(u32, 0), cache.tier_lock.load(.monotonic));
+}
+
+test "TieredKvCache access_count increments on promote" {
+    const allocator = std.testing.allocator;
+    var cache = try TieredKvCache.init(allocator, 1, 2, 2, 2, 0, 16, null);
+    defer cache.deinit();
+
+    const b0 = try cache.allocBlock();
+    const b1 = try cache.allocBlock();
+    _ = b0;
+    _ = b1;
+
+    // Allocate a RAM block
+    const b2 = try cache.allocBlock();
+    try std.testing.expectEqual(BlockTier.ram, cache.blocks[b2].tier);
+
+    // Promote b2 to VRAM should increment access_count
+    try cache.promoteToVram(b2);
+    try std.testing.expectEqual(BlockTier.vram, cache.blocks[b2].tier);
+    try std.testing.expectEqual(@as(u32, 1), cache.blocks[b2].access_count);
+}
+
+test "TransferCallback.uma_noop is inactive" {
+    const cb = TransferCallback.uma_noop;
+    try std.testing.expect(!cb.isActive());
+    try std.testing.expect(cb.upload == null);
+    try std.testing.expect(cb.download == null);
+    try std.testing.expect(cb.sync == null);
+    try std.testing.expect(cb.ctx == null);
+}
+
+test "TieredKvCache batchPromoteToVram empty list" {
+    const allocator = std.testing.allocator;
+    var cache = try TieredKvCache.init(allocator, 1, 2, 2, 1, 0, 16, null);
+    defer cache.deinit();
+
+    try cache.batchPromoteToVram(&[_]u32{});
+}
+
+test "TieredKvCache block_bytes calculation" {
+    const allocator = std.testing.allocator;
+    var cache = try TieredKvCache.init(allocator, 1, 4, 2, 1, 0, 16, null);
+    defer cache.deinit();
+    // block_bytes = kv_dim * block_size * sizeof(f32) * 2 = 4 * 16 * 4 * 2 = 512
+    try std.testing.expectEqual(@as(usize, 4 * 16 * 4 * 2), cache.block_bytes);
+}
+
 test "TieredKvCache SSD round-trip preserves data" {
     const allocator = std.testing.allocator;
     // Use PID-based unique name to avoid collisions between parallel test runs.

@@ -772,3 +772,57 @@ test "RadixTree edge splitting" {
     const m4 = tree.matchPrefix(&.{ 9, 8, 7 });
     try std.testing.expectEqual(@as(usize, 0), m4.matched);
 }
+
+test "PagedKvView position mapping" {
+    // Verify blockIdx and posInBlock for power-of-2 block size
+    const allocator = std.testing.allocator;
+    var paged = try PagedKvCache.init(allocator, 1, 4, 4, 16);
+    defer paged.deinit();
+
+    const b0 = paged.allocBlock().?;
+    const b1 = paged.allocBlock().?;
+    var block_table = [_]u32{ b0, b1 };
+    const view = PagedKvView.initView(&block_table, paged.blocks, 16, 4, 20);
+
+    // Position 0 should map to block 0, offset 0
+    const k0 = view.keyPtrMut(0);
+    k0[0] = 1.0;
+    try std.testing.expectEqual(@as(f32, 1.0), view.keyPtr(0)[0]);
+
+    // Position 15 should map to block 0, offset 15
+    const k15 = view.keyPtrMut(15);
+    k15[0] = 15.0;
+    try std.testing.expectEqual(@as(f32, 15.0), view.keyPtr(15)[0]);
+
+    // Position 16 should map to block 1, offset 0
+    const k16 = view.keyPtrMut(16);
+    k16[0] = 16.0;
+    try std.testing.expectEqual(@as(f32, 16.0), view.keyPtr(16)[0]);
+}
+
+test "allocKvCache zero layers" {
+    const allocator = std.testing.allocator;
+    const cache = try allocKvCache(allocator, 0, 128);
+    defer freeKvCache(allocator, cache);
+    try std.testing.expectEqual(@as(usize, 0), cache.keys.len);
+    try std.testing.expectEqual(@as(usize, 0), cache.values.len);
+}
+
+test "RadixTree multiple disjoint sequences" {
+    const allocator = std.testing.allocator;
+    var tree = try RadixTree.init(allocator);
+    defer tree.deinit();
+
+    try tree.insert(&.{ 1, 2, 3 }, &.{ 10, 11, 12 });
+    try tree.insert(&.{ 100, 200, 300 }, &.{ 20, 21, 22 });
+
+    const m1 = tree.matchPrefix(&.{ 1, 2, 3 });
+    try std.testing.expectEqual(@as(usize, 3), m1.matched);
+
+    const m2 = tree.matchPrefix(&.{ 100, 200, 300 });
+    try std.testing.expectEqual(@as(usize, 3), m2.matched);
+
+    // Neither should interfere with the other
+    const m3 = tree.matchPrefix(&.{ 1, 200, 300 });
+    try std.testing.expectEqual(@as(usize, 0), m3.matched);
+}

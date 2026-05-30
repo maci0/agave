@@ -738,4 +738,45 @@ test "NemotronH model vtable compiles" {
     try std.testing.expect(@hasDecl(NemotronHModel, "model"));
 }
 
+test "NemotronH default config values" {
+    var m: NemotronHModel = undefined;
+    m.n_layers = 42;
+    m.n_embd = 3136;
+    m.n_head = 40;
+    m.n_head_kv = 8;
+    m.head_dim = 128;
+    m.n_ff = 12544;
+    m.vocab_size = 131072;
+    m.rope_theta = 10000.0;
+    m.rope_dim = 78;
+    m.rms_eps = 1e-5;
+    m.ssm_d_conv = 4;
+    m.ssm_d_state = 128;
+    m.ssm_n_group = 8;
+    m.ssm_dt_rank = 96;
+    m.ssm_d_inner = 7680;
+
+    // Verify GQA ratio
+    try std.testing.expectEqual(@as(u32, 5), m.n_head / m.n_head_kv);
+    // Verify mamba_head_dim
+    const mamba_hd: u32 = m.ssm_d_inner / m.ssm_dt_rank;
+    try std.testing.expectEqual(@as(u32, 80), mamba_hd);
+    // Verify partial RoPE (< head_dim)
+    try std.testing.expect(m.rope_dim < m.head_dim);
+    try std.testing.expect(m.rope_dim % 2 == 0);
+}
+
+test "NemotronH layer_types default" {
+    var m: NemotronHModel = undefined;
+    m.layer_types = [_]LayerType{.ffn_only} ** max_layers;
+    // All layers default to ffn_only
+    for (0..max_layers) |i| {
+        try std.testing.expectEqual(LayerType.ffn_only, m.layer_types[i]);
+    }
+}
+
+test "NemotronH getBlockTable compiles" {
+    try std.testing.expect(@hasDecl(NemotronHModel, "getBlockTable"));
+}
+
 // argmax is tested in src/ops/math.zig — no need to duplicate here.

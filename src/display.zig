@@ -935,3 +935,91 @@ test "GenStats prefill calculation" {
     try std.testing.expectApproxEqAbs(@as(f32, 50.0), s.tokPerSec(), 0.1);
     try std.testing.expectApproxEqAbs(@as(f32, 200.0), s.prefillTokPerSec(), 0.1);
 }
+
+test "fmtCompact billions" {
+    var buf: [16]u8 = undefined;
+    try std.testing.expectEqualStrings("9.2B", fmtCompact(&buf, 9_200_000_000));
+}
+
+test "fmtCompact millions" {
+    var buf: [16]u8 = undefined;
+    try std.testing.expectEqualStrings("1M", fmtCompact(&buf, 1_000_000));
+    var buf2: [16]u8 = undefined;
+    try std.testing.expectEqualStrings("1.5M", fmtCompact(&buf2, 1_500_000));
+}
+
+test "fmtCompact thousands" {
+    var buf: [16]u8 = undefined;
+    try std.testing.expectEqualStrings("152K", fmtCompact(&buf, 152_000));
+}
+
+test "fmtCompact small" {
+    var buf: [16]u8 = undefined;
+    try std.testing.expectEqualStrings("42", fmtCompact(&buf, 42));
+}
+
+test "fmtDuration milliseconds" {
+    var buf: [16]u8 = undefined;
+    try std.testing.expectEqualStrings("500ms", fmtDuration(&buf, 500));
+}
+
+test "fmtDuration seconds with fraction" {
+    var buf: [16]u8 = undefined;
+    try std.testing.expectEqualStrings("2.5s", fmtDuration(&buf, 2500));
+}
+
+test "fmtDuration whole seconds" {
+    var buf: [16]u8 = undefined;
+    // >= 10000ms shows whole seconds
+    try std.testing.expectEqualStrings("21s", fmtDuration(&buf, 21515));
+}
+
+test "truncateToWidth ascii" {
+    const result = truncateToWidth("hello world", 5);
+    try std.testing.expectEqualStrings("hello", result);
+}
+
+test "truncateToWidth full string fits" {
+    const result = truncateToWidth("hi", 10);
+    try std.testing.expectEqualStrings("hi", result);
+}
+
+test "truncateToWidth empty" {
+    const result = truncateToWidth("", 5);
+    try std.testing.expectEqualStrings("", result);
+}
+
+test "sanitizeMetadata strips control characters" {
+    var buf: [max_meta_len]u8 = undefined;
+    // "hello\x1b[31mworld\x00!" = 5 + 1 + 1 + 1 + 1 + 1 + 5 + 1 + 1 = 17 bytes
+    const input = "hello\x1b[31mworld\x00!";
+    const result = sanitizeMetadata(&buf, input);
+    try std.testing.expectEqual(input.len, result.len);
+    // ESC (0x1b) at index 5 should be replaced with '?'
+    try std.testing.expectEqual(@as(u8, '?'), result[5]);
+    // NUL (0x00) at index 15 should be replaced with '?'
+    try std.testing.expectEqual(@as(u8, '?'), result[15]);
+    // Regular chars preserved
+    try std.testing.expectEqual(@as(u8, 'h'), result[0]);
+}
+
+test "Display.init" {
+    const d = Display.init(.tty, true);
+    try std.testing.expectEqual(OutputMode.tty, d.mode);
+    try std.testing.expect(d.verbose);
+    const d2 = Display.init(.plain, false);
+    try std.testing.expectEqual(OutputMode.plain, d2.mode);
+    try std.testing.expect(!d2.verbose);
+}
+
+test "OutputMode enum variants" {
+    try std.testing.expect(OutputMode.tty != OutputMode.plain);
+    try std.testing.expect(OutputMode.plain != OutputMode.json);
+    try std.testing.expect(OutputMode.tty != OutputMode.json);
+}
+
+test "formatSize zero" {
+    const result = formatSize(0);
+    try std.testing.expectApproxEqAbs(@as(f64, 0.0), result.val, 0.01);
+    try std.testing.expectEqualStrings("KB", result.unit);
+}

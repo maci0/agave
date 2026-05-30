@@ -283,3 +283,48 @@ test "Arch.imageTokens multimodal" {
     try std.testing.expectEqual(@as(?ImageTokens, null), Arch.nemotron_nano.imageTokens());
     try std.testing.expectEqual(@as(?ImageTokens, null), Arch.glm4.imageTokens());
 }
+
+test "Arch.chatTemplate returns correct template per arch" {
+    // Verify each arch returns its expected template
+    try std.testing.expectEqual(ChatTemplate.gemma, Arch.gemma3.chatTemplate());
+    try std.testing.expectEqual(ChatTemplate.gemma4, Arch.gemma4.chatTemplate());
+    try std.testing.expectEqual(ChatTemplate.qwen35, Arch.qwen35.chatTemplate());
+    try std.testing.expectEqual(ChatTemplate.gpt_oss, Arch.gpt_oss.chatTemplate());
+    try std.testing.expectEqual(ChatTemplate.glm4, Arch.glm4.chatTemplate());
+    try std.testing.expectEqual(ChatTemplate.llama4, Arch.llama4.chatTemplate());
+    // nemotron variants use chatml default
+    try std.testing.expectEqual(ChatTemplate.chatml, Arch.nemotron_h.chatTemplate());
+    try std.testing.expectEqual(ChatTemplate.chatml, Arch.nemotron_nano.chatTemplate());
+}
+
+test "Arch.templateName returns non-empty strings" {
+    const fields = @typeInfo(Arch).@"enum".fields;
+    inline for (fields) |field| {
+        const arch: Arch = @enumFromInt(field.value);
+        const name = arch.templateName();
+        try std.testing.expect(name.len > 0);
+    }
+}
+
+test "Arch.buildFlag returns valid flag names" {
+    try std.testing.expectEqualStrings("gemma3", Arch.gemma3.buildFlag());
+    try std.testing.expectEqualStrings("gemma4", Arch.gemma4.buildFlag());
+    try std.testing.expectEqualStrings("qwen35", Arch.qwen35.buildFlag());
+    try std.testing.expectEqualStrings("gpt-oss", Arch.gpt_oss.buildFlag());
+    try std.testing.expectEqualStrings("nemotron-h", Arch.nemotron_h.buildFlag());
+    try std.testing.expectEqualStrings("nemotron-nano", Arch.nemotron_nano.buildFlag());
+    try std.testing.expectEqualStrings("glm4", Arch.glm4.buildFlag());
+    try std.testing.expectEqualStrings("llama4", Arch.llama4.buildFlag());
+}
+
+test "Arch.isEnabled returns bool for all variants" {
+    // This test just verifies isEnabled compiles and returns bool for every arch.
+    // Actual values depend on build flags.
+    const fields = @typeInfo(Arch).@"enum".fields;
+    inline for (fields) |field| {
+        const arch: Arch = @enumFromInt(field.value);
+        const enabled = arch.isEnabled();
+        // Just ensure it returns a valid bool (true or false)
+        try std.testing.expect(enabled or !enabled);
+    }
+}

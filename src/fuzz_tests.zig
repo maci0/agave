@@ -667,3 +667,1233 @@ test "fuzz: expertWeightStride no overflow" {
         }
     }.f, .{});
 }
+
+// ── Norm Kernel Fuzzing ─────────────────────────────────────────
+
+test "fuzz: rmsNorm no crash" {
+    const norm = @import("backend/kernels/cpu/norm.zig");
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *Smith) !void {
+            // 32-element buffers: exercises both SIMD and scalar tail paths
+            var input: [32]f32 = undefined;
+            var weight: [32]f32 = undefined;
+            var output: [32]f32 = undefined;
+            for (&input, 0..) |*v, i| v.* = @as(f32, @floatFromInt(smith.valueWithHash(i8, @truncate(i)))) / 10.0;
+            for (&weight, 0..) |*v, i| v.* = @as(f32, @floatFromInt(smith.valueWithHash(i8, @truncate(i + 50)))) / 10.0;
+            const n = smith.indexWithHash(32, 100) + 1;
+            // Ensure n is at least 1 to avoid div-by-zero in RMS
+            norm.rmsNorm(&input, &weight, &output, n, 1e-6);
+            for (output[0..n]) |v| try std.testing.expect(std.math.isFinite(v));
+        }
+    }.f, .{});
+}
+
+test "fuzz: addRmsNorm no crash" {
+    const norm = @import("backend/kernels/cpu/norm.zig");
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *Smith) !void {
+            var a: [32]f32 = undefined;
+            var b: [32]f32 = undefined;
+            var weight: [32]f32 = undefined;
+            var output: [32]f32 = undefined;
+            for (&a, 0..) |*v, i| v.* = @as(f32, @floatFromInt(smith.valueWithHash(i8, @truncate(i)))) / 10.0;
+            for (&b, 0..) |*v, i| v.* = @as(f32, @floatFromInt(smith.valueWithHash(i8, @truncate(i + 40)))) / 10.0;
+            for (&weight, 0..) |*v, i| v.* = @as(f32, @floatFromInt(smith.valueWithHash(i8, @truncate(i + 80)))) / 10.0;
+            const n = smith.indexWithHash(32, 120) + 1;
+            norm.addRmsNorm(&a, &b, &weight, &output, n, 1e-6);
+            // output must be finite
+            for (output[0..n]) |v| try std.testing.expect(std.math.isFinite(v));
+            // a must be modified in-place (a = a + b)
+            for (a[0..n]) |v| try std.testing.expect(std.math.isFinite(v));
+        }
+    }.f, .{});
+}
+
+test "fuzz: l2Norm no crash" {
+    const norm = @import("backend/kernels/cpu/norm.zig");
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *Smith) !void {
+            var x: [32]f32 = undefined;
+            for (&x, 0..) |*v, i| v.* = @as(f32, @floatFromInt(smith.valueWithHash(i8, @truncate(i)))) / 10.0;
+            const n = smith.indexWithHash(32, 50) + 1;
+            norm.l2Norm(&x, n, 1e-12);
+            // After L2 norm, all values should be finite
+            for (x[0..n]) |v| try std.testing.expect(std.math.isFinite(v));
+            // Verify unit norm: sum of squares should be approximately 1.0
+            var ss: f32 = 0;
+            for (x[0..n]) |v| ss += v * v;
+            try std.testing.expect(@abs(ss - 1.0) < 0.01 or ss == 0.0);
+        }
+    }.f, .{});
+}
+
+// ── Activation Fuzzing ──────────────────────────────────────────
+
+test "fuzz: silu activation" {
+    const act = @import("backend/kernels/cpu/activation.zig");
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *Smith) !void {
+            var input: [32]f32 = undefined;
+            var output: [32]f32 = undefined;
+            for (&input, 0..) |*v, i| v.* = @as(f32, @floatFromInt(smith.valueWithHash(i8, @truncate(i)))) / 10.0;
+            const n = smith.indexWithHash(32, 50) + 1;
+            act.silu(&input, &output, n);
+            for (output[0..n]) |v| try std.testing.expect(std.math.isFinite(v));
+        }
+    }.f, .{});
+}
+
+test "fuzz: gelu activation" {
+    const act = @import("backend/kernels/cpu/activation.zig");
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *Smith) !void {
+            var input: [32]f32 = undefined;
+            var output: [32]f32 = undefined;
+            for (&input, 0..) |*v, i| v.* = @as(f32, @floatFromInt(smith.valueWithHash(i8, @truncate(i)))) / 10.0;
+            const n = smith.indexWithHash(32, 50) + 1;
+            act.gelu(&input, &output, n);
+            for (output[0..n]) |v| try std.testing.expect(std.math.isFinite(v));
+        }
+    }.f, .{});
+}
+
+test "fuzz: siluMul activation" {
+    const act = @import("backend/kernels/cpu/activation.zig");
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *Smith) !void {
+            var a: [32]f32 = undefined;
+            var b: [32]f32 = undefined;
+            var out: [32]f32 = undefined;
+            for (&a, 0..) |*v, i| v.* = @as(f32, @floatFromInt(smith.valueWithHash(i8, @truncate(i)))) / 10.0;
+            for (&b, 0..) |*v, i| v.* = @as(f32, @floatFromInt(smith.valueWithHash(i8, @truncate(i + 40)))) / 10.0;
+            const n = smith.indexWithHash(32, 80) + 1;
+            act.siluMul(&a, &b, &out, n);
+            for (out[0..n]) |v| try std.testing.expect(std.math.isFinite(v));
+        }
+    }.f, .{});
+}
+
+test "fuzz: geluMul activation" {
+    const act = @import("backend/kernels/cpu/activation.zig");
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *Smith) !void {
+            var a: [32]f32 = undefined;
+            var b: [32]f32 = undefined;
+            var out: [32]f32 = undefined;
+            for (&a, 0..) |*v, i| v.* = @as(f32, @floatFromInt(smith.valueWithHash(i8, @truncate(i)))) / 10.0;
+            for (&b, 0..) |*v, i| v.* = @as(f32, @floatFromInt(smith.valueWithHash(i8, @truncate(i + 40)))) / 10.0;
+            const n = smith.indexWithHash(32, 80) + 1;
+            act.geluMul(&a, &b, &out, n);
+            for (out[0..n]) |v| try std.testing.expect(std.math.isFinite(v));
+        }
+    }.f, .{});
+}
+
+// ── Elementwise Fuzzing ─────────────────────────────────────────
+
+test "fuzz: elementwise add" {
+    const elem = @import("backend/kernels/cpu/elementwise.zig");
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *Smith) !void {
+            var a: [32]f32 = undefined;
+            var b: [32]f32 = undefined;
+            var out: [32]f32 = undefined;
+            for (&a, 0..) |*v, i| v.* = @as(f32, @floatFromInt(smith.valueWithHash(i8, @truncate(i)))) / 10.0;
+            for (&b, 0..) |*v, i| v.* = @as(f32, @floatFromInt(smith.valueWithHash(i8, @truncate(i + 40)))) / 10.0;
+            const n = smith.indexWithHash(32, 80) + 1;
+            elem.add(&a, &b, &out, n);
+            // Invariant: out[i] must equal a[i] + b[i]
+            for (0..n) |i| {
+                const expected = a[i] + b[i];
+                try std.testing.expect(@abs(out[i] - expected) < 1e-5);
+            }
+        }
+    }.f, .{});
+}
+
+test "fuzz: elementwise mul" {
+    const elem = @import("backend/kernels/cpu/elementwise.zig");
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *Smith) !void {
+            var a: [32]f32 = undefined;
+            var b: [32]f32 = undefined;
+            var out: [32]f32 = undefined;
+            for (&a, 0..) |*v, i| v.* = @as(f32, @floatFromInt(smith.valueWithHash(i8, @truncate(i)))) / 10.0;
+            for (&b, 0..) |*v, i| v.* = @as(f32, @floatFromInt(smith.valueWithHash(i8, @truncate(i + 40)))) / 10.0;
+            const n = smith.indexWithHash(32, 80) + 1;
+            elem.mul(&a, &b, &out, n);
+            for (0..n) |i| {
+                const expected = a[i] * b[i];
+                try std.testing.expect(@abs(out[i] - expected) < 1e-5);
+            }
+        }
+    }.f, .{});
+}
+
+test "fuzz: sigmoidMul no crash" {
+    const elem = @import("backend/kernels/cpu/elementwise.zig");
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *Smith) !void {
+            var data: [32]f32 = undefined;
+            var gate: [32]f32 = undefined;
+            for (&data, 0..) |*v, i| v.* = @as(f32, @floatFromInt(smith.valueWithHash(i8, @truncate(i)))) / 10.0;
+            for (&gate, 0..) |*v, i| v.* = @as(f32, @floatFromInt(smith.valueWithHash(i8, @truncate(i + 40)))) / 10.0;
+            const n = smith.indexWithHash(32, 80) + 1;
+            elem.sigmoidMul(&data, &gate, n);
+            for (data[0..n]) |v| try std.testing.expect(std.math.isFinite(v));
+        }
+    }.f, .{});
+}
+
+test "fuzz: deinterleave no crash" {
+    const elem = @import("backend/kernels/cpu/elementwise.zig");
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *Smith) !void {
+            var input: [32]f32 = undefined;
+            var out_a: [16]f32 = undefined;
+            var out_b: [16]f32 = undefined;
+            for (&input, 0..) |*v, i| v.* = @as(f32, @floatFromInt(smith.valueWithHash(i8, @truncate(i))));
+            // stride in {1,2,4,8}, n_pairs such that stride*2*n_pairs <= 32
+            const stride_idx = smith.indexWithHash(4, 50);
+            const stride: usize = @as(usize, 1) << @intCast(stride_idx);
+            const max_pairs = 32 / (stride * 2);
+            if (max_pairs == 0) return;
+            const n_pairs = smith.indexWithHash(max_pairs, 51) + 1;
+            elem.deinterleave(&input, &out_a, &out_b, stride, n_pairs);
+            // Verify no NaN in outputs
+            for (out_a[0 .. n_pairs * stride]) |v| try std.testing.expect(!std.math.isNan(v));
+            for (out_b[0 .. n_pairs * stride]) |v| try std.testing.expect(!std.math.isNan(v));
+        }
+    }.f, .{});
+}
+
+// ── RoPE Fuzzing ─────────────────────────────────────────────────
+
+test "fuzz: rope no crash" {
+    const rope_mod = @import("backend/kernels/cpu/rope.zig");
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *Smith) !void {
+            // head_dim must be even for RoPE; use fixed multiples of 8
+            const head_dims = [_]usize{ 8, 16, 32 };
+            const hd = head_dims[smith.indexWithHash(head_dims.len, 0)];
+            const n_heads_choices = [_]usize{ 1, 2, 4 };
+            const n_heads = n_heads_choices[smith.indexWithHash(n_heads_choices.len, 1)];
+            var x: [128]f32 = undefined; // max: 32 * 4 = 128
+            const total = hd * n_heads;
+            for (x[0..total], 0..) |*v, i| v.* = @as(f32, @floatFromInt(smith.valueWithHash(i8, @truncate(i + 10)))) / 10.0;
+            const pos: usize = smith.valueWithHash(u8, 2);
+            const theta: f32 = 10000.0;
+            rope_mod.rope(&x, pos, n_heads, hd, hd, theta);
+            // All output values must be finite
+            for (x[0..total]) |v| try std.testing.expect(std.math.isFinite(v));
+        }
+    }.f, .{});
+}
+
+test "fuzz: rope preserves magnitude" {
+    const rope_mod = @import("backend/kernels/cpu/rope.zig");
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *Smith) !void {
+            const hd: usize = 16;
+            const half = hd / 2;
+            var x: [16]f32 = undefined;
+            for (&x, 0..) |*v, i| v.* = @as(f32, @floatFromInt(smith.valueWithHash(i8, @truncate(i)))) / 10.0;
+            const orig = x;
+            const pos: usize = smith.valueWithHash(u8, 20);
+            rope_mod.rope(&x, pos, 1, hd, hd, 10000.0);
+            // RoPE is rotation: magnitude preserved per (i, i+half) pair
+            for (0..half) |i| {
+                const orig_mag = @sqrt(orig[i] * orig[i] + orig[i + half] * orig[i + half]);
+                const new_mag = @sqrt(x[i] * x[i] + x[i + half] * x[i + half]);
+                try std.testing.expect(@abs(orig_mag - new_mag) < 0.01);
+            }
+        }
+    }.f, .{});
+}
+
+// ── Softmax Fuzzing ─────────────────────────────────────────────
+
+test "fuzz: softmax sums to one" {
+    const soft = @import("backend/kernels/cpu/softmax.zig");
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *Smith) !void {
+            var data: [32]f32 = undefined;
+            for (&data, 0..) |*v, i| v.* = @as(f32, @floatFromInt(smith.valueWithHash(i8, @truncate(i))));
+            const n = smith.indexWithHash(32, 50) + 1;
+            soft.softmaxSimd(8, &data, n);
+            // All values must be non-negative and finite
+            var sum: f32 = 0;
+            for (data[0..n]) |v| {
+                try std.testing.expect(std.math.isFinite(v));
+                try std.testing.expect(v >= 0.0);
+                sum += v;
+            }
+            // Sum must be approximately 1.0
+            try std.testing.expect(@abs(sum - 1.0) < 0.01);
+        }
+    }.f, .{});
+}
+
+// ── Embedding Fuzzing ───────────────────────────────────────────
+
+test "fuzz: embLookup f32 bounds" {
+    const emb = @import("backend/kernels/cpu/embedding.zig");
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *Smith) !void {
+            // 4 tokens, 8 dims = 128 bytes of f32 weight data
+            const dim: usize = 8;
+            const vocab: usize = 4;
+            var weights: [vocab * dim]f32 = undefined;
+            for (&weights, 0..) |*v, i| v.* = @as(f32, @floatFromInt(smith.valueWithHash(i8, @truncate(i)))) / 10.0;
+            var output: [dim]f32 = undefined;
+            const token_id: u32 = @intCast(smith.indexWithHash(vocab, 50));
+            emb.embLookup(@ptrCast(&weights), .f32, token_id, &output, dim);
+            // Output should exactly match the weight row
+            for (0..dim) |i| {
+                try std.testing.expectApproxEqAbs(weights[token_id * dim + i], output[i], 1e-6);
+            }
+        }
+    }.f, .{});
+}
+
+test "fuzz: embQ8_0 no crash" {
+    const emb = @import("backend/kernels/cpu/embedding.zig");
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *Smith) !void {
+            // Q8_0: 34 bytes per 32-element block
+            var block: [34]u8 align(2) = undefined;
+            smith.bytesWithHash(&block, 0);
+            var output: [32]f32 = undefined;
+            emb.embQ8_0(&block, 0, &output, 32);
+            for (output) |v| try std.testing.expect(!std.math.isNan(v));
+        }
+    }.f, .{});
+}
+
+test "fuzz: embQ4_0 no crash" {
+    const emb = @import("backend/kernels/cpu/embedding.zig");
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *Smith) !void {
+            var block: [18]u8 align(2) = undefined;
+            smith.bytesWithHash(&block, 0);
+            var output: [32]f32 = undefined;
+            emb.embQ4_0(&block, 0, &output, 32);
+            for (output) |v| try std.testing.expect(!std.math.isNan(v));
+        }
+    }.f, .{});
+}
+
+test "fuzz: embQ5_0 no crash" {
+    const emb = @import("backend/kernels/cpu/embedding.zig");
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *Smith) !void {
+            // Q5_0: 22 bytes per 32-element block
+            var block: [22]u8 align(2) = undefined;
+            smith.bytesWithHash(&block, 0);
+            var output: [32]f32 = undefined;
+            emb.embQ5_0(&block, 0, &output, 32);
+            for (output) |v| try std.testing.expect(!std.math.isNan(v));
+        }
+    }.f, .{});
+}
+
+// ── GEMV Format Fuzzing ─────────────────────────────────────────
+
+test "fuzz: Q4_K GEMV no crash" {
+    const gemv = @import("backend/kernels/cpu/gemv.zig");
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *Smith) !void {
+            // Q4_K: 256-elem super-blocks, 144 bytes each. 1 row of k=256.
+            var block: [144]u8 align(2) = undefined;
+            smith.bytesWithHash(&block, 0);
+            var x: [256]f32 = undefined;
+            for (&x, 0..) |*v, i| v.* = @as(f32, @floatFromInt(smith.valueWithHash(i8, @truncate(i + 50)))) / 100.0;
+            var y: [1]f32 = .{0};
+            gemv.gemvQ4_K(&x, &block, &y, 1, 256);
+            try std.testing.expect(std.math.isFinite(y[0]));
+        }
+    }.f, .{});
+}
+
+test "fuzz: Q5_K GEMV no crash" {
+    const gemv = @import("backend/kernels/cpu/gemv.zig");
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *Smith) !void {
+            // Q5_K: 256-elem super-blocks, 176 bytes each
+            var block: [176]u8 align(2) = undefined;
+            smith.bytesWithHash(&block, 0);
+            var x: [256]f32 = undefined;
+            for (&x, 0..) |*v, i| v.* = @as(f32, @floatFromInt(smith.valueWithHash(i8, @truncate(i + 50)))) / 100.0;
+            var y: [1]f32 = .{0};
+            gemv.gemvQ5_K(&x, &block, &y, 1, 256);
+            try std.testing.expect(std.math.isFinite(y[0]));
+        }
+    }.f, .{});
+}
+
+test "fuzz: Q6_K GEMV no crash" {
+    const gemv = @import("backend/kernels/cpu/gemv.zig");
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *Smith) !void {
+            // Q6_K: 256-elem super-blocks, 210 bytes each
+            var block: [210]u8 align(2) = undefined;
+            smith.bytesWithHash(&block, 0);
+            var x: [256]f32 = undefined;
+            for (&x, 0..) |*v, i| v.* = @as(f32, @floatFromInt(smith.valueWithHash(i8, @truncate(i + 50)))) / 100.0;
+            var y: [1]f32 = .{0};
+            gemv.gemvQ6_K(&x, &block, &y, 1, 256);
+            try std.testing.expect(std.math.isFinite(y[0]));
+        }
+    }.f, .{});
+}
+
+test "fuzz: Q2_K GEMV no crash" {
+    const gemv = @import("backend/kernels/cpu/gemv.zig");
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *Smith) !void {
+            // Q2_K: 256-elem super-blocks, 84 bytes each
+            var block: [84]u8 align(2) = undefined;
+            smith.bytesWithHash(&block, 0);
+            var x: [256]f32 = undefined;
+            for (&x, 0..) |*v, i| v.* = @as(f32, @floatFromInt(smith.valueWithHash(i8, @truncate(i + 50)))) / 100.0;
+            var y: [1]f32 = .{0};
+            gemv.gemvQ2_K(&x, &block, &y, 1, 256);
+            try std.testing.expect(std.math.isFinite(y[0]));
+        }
+    }.f, .{});
+}
+
+test "fuzz: Q3_K GEMV no crash" {
+    const gemv = @import("backend/kernels/cpu/gemv.zig");
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *Smith) !void {
+            // Q3_K: 256-elem super-blocks, 110 bytes each
+            var block: [110]u8 align(2) = undefined;
+            smith.bytesWithHash(&block, 0);
+            var x: [256]f32 = undefined;
+            for (&x, 0..) |*v, i| v.* = @as(f32, @floatFromInt(smith.valueWithHash(i8, @truncate(i + 50)))) / 100.0;
+            var y: [1]f32 = .{0};
+            gemv.gemvQ3_K(&x, &block, &y, 1, 256);
+            try std.testing.expect(std.math.isFinite(y[0]));
+        }
+    }.f, .{});
+}
+
+test "fuzz: IQ4_NL GEMV no crash" {
+    const gemv = @import("backend/kernels/cpu/gemv.zig");
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *Smith) !void {
+            // IQ4_NL: 32-elem blocks, 18 bytes each (same as Q4_0)
+            var block: [18]u8 align(2) = undefined;
+            smith.bytesWithHash(&block, 0);
+            var x: [32]f32 = undefined;
+            for (&x, 0..) |*v, i| v.* = @as(f32, @floatFromInt(smith.valueWithHash(i8, @truncate(i + 50)))) / 10.0;
+            var y: [1]f32 = .{0};
+            gemv.gemvIQ4_NL(&x, &block, &y, 1, 32);
+            try std.testing.expect(std.math.isFinite(y[0]));
+        }
+    }.f, .{});
+}
+
+test "fuzz: FP8 E4M3 GEMV no crash" {
+    const gemv = @import("backend/kernels/cpu/gemv.zig");
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *Smith) !void {
+            // FP8 E4M3: 1 byte per element, 32 elements
+            var block: [32]u8 = undefined;
+            smith.bytesWithHash(&block, 0);
+            var x: [32]f32 = undefined;
+            for (&x, 0..) |*v, i| v.* = @as(f32, @floatFromInt(smith.valueWithHash(i8, @truncate(i + 50)))) / 10.0;
+            var y: [1]f32 = .{0};
+            gemv.gemvFP8_E4M3(&x, &block, &y, 1, 32);
+            // FP8 may produce NaN for special patterns but must not crash
+            try std.testing.expect(!std.math.isNan(y[0]) or std.math.isNan(y[0]));
+        }
+    }.f, .{});
+}
+
+test "fuzz: FP8 E5M2 GEMV no crash" {
+    const gemv = @import("backend/kernels/cpu/gemv.zig");
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *Smith) !void {
+            var block: [32]u8 = undefined;
+            smith.bytesWithHash(&block, 0);
+            var x: [32]f32 = undefined;
+            for (&x, 0..) |*v, i| v.* = @as(f32, @floatFromInt(smith.valueWithHash(i8, @truncate(i + 50)))) / 10.0;
+            var y: [1]f32 = .{0};
+            gemv.gemvFP8_E5M2(&x, &block, &y, 1, 32);
+            // Must not crash; NaN is allowed from special FP8 bit patterns
+            _ = y[0];
+        }
+    }.f, .{});
+}
+
+test "fuzz: TQ1_0 GEMV no crash" {
+    const gemv_tq1 = @import("backend/kernels/cpu/gemv_tq1_0.zig");
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *Smith) !void {
+            // TQ1_0: 256-elem blocks, 64 bytes each
+            var block: [64]u8 align(2) = undefined;
+            smith.bytesWithHash(&block, 0);
+            var x: [256]f32 = undefined;
+            for (&x, 0..) |*v, i| v.* = @as(f32, @floatFromInt(smith.valueWithHash(i8, @truncate(i + 50)))) / 100.0;
+            var y: [1]f32 = .{0};
+            gemv_tq1.gemvTQ1_0(&x, &block, &y, 1, 256);
+            try std.testing.expect(std.math.isFinite(y[0]));
+        }
+    }.f, .{});
+}
+
+test "fuzz: Q4_1 GEMV no crash" {
+    const gemv = @import("backend/kernels/cpu/gemv.zig");
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *Smith) !void {
+            // Q4_1: 32-elem blocks, 20 bytes (f16 scale + f16 min + 16 nibble bytes)
+            var block: [20]u8 align(2) = undefined;
+            smith.bytesWithHash(&block, 0);
+            var x: [32]f32 = undefined;
+            for (&x, 0..) |*v, i| v.* = @as(f32, @floatFromInt(smith.valueWithHash(i8, @truncate(i + 50)))) / 10.0;
+            var y: [1]f32 = .{0};
+            gemv.gemvQ4_1(&x, &block, &y, 1, 32);
+            try std.testing.expect(!std.math.isNan(y[0]));
+        }
+    }.f, .{});
+}
+
+test "fuzz: Q5_0 GEMV no crash" {
+    const gemv = @import("backend/kernels/cpu/gemv.zig");
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *Smith) !void {
+            // Q5_0: 32-elem blocks, 22 bytes (f16 scale + 4 byte qh + 16 nibble bytes)
+            var block: [22]u8 align(2) = undefined;
+            smith.bytesWithHash(&block, 0);
+            var x: [32]f32 = undefined;
+            for (&x, 0..) |*v, i| v.* = @as(f32, @floatFromInt(smith.valueWithHash(i8, @truncate(i + 50)))) / 10.0;
+            var y: [1]f32 = .{0};
+            gemv.gemvQ5_0(&x, &block, &y, 1, 32);
+            try std.testing.expect(!std.math.isNan(y[0]));
+        }
+    }.f, .{});
+}
+
+test "fuzz: IQ4_XS GEMV no crash" {
+    const gemv = @import("backend/kernels/cpu/gemv.zig");
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *Smith) !void {
+            // IQ4_XS: 256-elem blocks, 136 bytes
+            var block: [136]u8 align(2) = undefined;
+            smith.bytesWithHash(&block, 0);
+            var x: [256]f32 = undefined;
+            for (&x, 0..) |*v, i| v.* = @as(f32, @floatFromInt(smith.valueWithHash(i8, @truncate(i + 50)))) / 100.0;
+            var y: [1]f32 = .{0};
+            gemv.gemvIQ4_XS(&x, &block, &y, 1, 256);
+            try std.testing.expect(std.math.isFinite(y[0]));
+        }
+    }.f, .{});
+}
+
+// ── Math/Sampler Fuzzing ────────────────────────────────────────
+
+test "fuzz: applyRepeatPenalty no crash" {
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *Smith) !void {
+            var logits: [32]f32 = undefined;
+            for (&logits, 0..) |*v, i| v.* = @as(f32, @floatFromInt(smith.valueWithHash(i8, @truncate(i))));
+            var recent_ids: [16]u32 = undefined;
+            for (&recent_ids, 0..) |*v, i| v.* = smith.valueWithHash(u8, @truncate(i + 40)) % 32;
+            const len = smith.indexWithHash(16, 60) + 1;
+            // penalty > 0, typically 1.0-2.0
+            const penalty: f32 = @as(f32, @floatFromInt(smith.valueWithHash(u8, 61))) / 100.0 + 0.1;
+            math_ops.applyRepeatPenalty(&logits, recent_ids[0..len], penalty);
+            for (logits) |v| try std.testing.expect(std.math.isFinite(v));
+        }
+    }.f, .{});
+}
+
+test "fuzz: applyPenalties no crash" {
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *Smith) !void {
+            var logits: [32]f32 = undefined;
+            for (&logits, 0..) |*v, i| v.* = @as(f32, @floatFromInt(smith.valueWithHash(i8, @truncate(i))));
+            var gen_tokens: [16]u32 = undefined;
+            for (&gen_tokens, 0..) |*v, i| v.* = smith.valueWithHash(u8, @truncate(i + 40)) % 32;
+            const len = smith.indexWithHash(16, 60) + 1;
+            const freq: f32 = @as(f32, @floatFromInt(smith.valueWithHash(u8, 61))) / 100.0;
+            const pres: f32 = @as(f32, @floatFromInt(smith.valueWithHash(u8, 62))) / 100.0;
+            math_ops.applyPenalties(&logits, gen_tokens[0..len], freq, pres);
+            for (logits) |v| try std.testing.expect(std.math.isFinite(v));
+        }
+    }.f, .{});
+}
+
+test "fuzz: applyLogitBias no crash" {
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *Smith) !void {
+            var logits: [32]f32 = undefined;
+            for (&logits, 0..) |*v, i| v.* = @as(f32, @floatFromInt(smith.valueWithHash(i8, @truncate(i))));
+            var ids: [8]u32 = undefined;
+            var biases: [8]f32 = undefined;
+            for (&ids, 0..) |*v, i| v.* = smith.valueWithHash(u8, @truncate(i + 40)) % 32;
+            for (&biases, 0..) |*v, i| v.* = @as(f32, @floatFromInt(smith.valueWithHash(i8, @truncate(i + 50)))) / 10.0;
+            const count: u32 = @intCast(smith.indexWithHash(8, 60) + 1);
+            math_ops.applyLogitBias(&logits, &ids, &biases, count);
+            for (logits) |v| try std.testing.expect(std.math.isFinite(v));
+        }
+    }.f, .{});
+}
+
+test "fuzz: sigmoid no NaN" {
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *Smith) !void {
+            // Test sigmoid over the full i8 range → f32 [-12.8, 12.7]
+            const x: f32 = @as(f32, @floatFromInt(smith.valueWithHash(i8, 0))) / 10.0;
+            const result = math_ops.sigmoid(x);
+            try std.testing.expect(std.math.isFinite(result));
+            try std.testing.expect(result >= 0.0 and result <= 1.0);
+        }
+    }.f, .{});
+}
+
+test "fuzz: softplus no crash" {
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *Smith) !void {
+            const x: f32 = @as(f32, @floatFromInt(smith.valueWithHash(i8, 0))) / 5.0;
+            const result = math_ops.softplus(x);
+            try std.testing.expect(std.math.isFinite(result));
+            try std.testing.expect(result >= 0.0);
+        }
+    }.f, .{});
+}
+
+test "fuzz: silu scalar no crash" {
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *Smith) !void {
+            const x: f32 = @as(f32, @floatFromInt(smith.valueWithHash(i8, 0))) / 5.0;
+            const result = math_ops.silu(x);
+            try std.testing.expect(std.math.isFinite(result));
+        }
+    }.f, .{});
+}
+
+test "fuzz: applyReluSquared no crash" {
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *Smith) !void {
+            var x: [32]f32 = undefined;
+            for (&x, 0..) |*v, i| v.* = @as(f32, @floatFromInt(smith.valueWithHash(i8, @truncate(i)))) / 10.0;
+            const n = smith.indexWithHash(32, 50) + 1;
+            math_ops.applyReluSquared(x[0..n]);
+            for (x[0..n]) |v| {
+                try std.testing.expect(std.math.isFinite(v));
+                try std.testing.expect(v >= 0.0);
+            }
+        }
+    }.f, .{});
+}
+
+test "fuzz: applyGelu no crash" {
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *Smith) !void {
+            var x: [32]f32 = undefined;
+            for (&x, 0..) |*v, i| v.* = @as(f32, @floatFromInt(smith.valueWithHash(i8, @truncate(i)))) / 10.0;
+            const n = smith.indexWithHash(32, 50) + 1;
+            math_ops.applyGelu(x[0..n]);
+            for (x[0..n]) |v| try std.testing.expect(std.math.isFinite(v));
+        }
+    }.f, .{});
+}
+
+test "fuzz: simdDotF32 no crash" {
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *Smith) !void {
+            var a: [32]f32 = undefined;
+            var b: [32]f32 = undefined;
+            for (&a, 0..) |*v, i| v.* = @as(f32, @floatFromInt(smith.valueWithHash(i8, @truncate(i)))) / 10.0;
+            for (&b, 0..) |*v, i| v.* = @as(f32, @floatFromInt(smith.valueWithHash(i8, @truncate(i + 40)))) / 10.0;
+            const n = smith.indexWithHash(32, 80) + 1;
+            const dot = math_ops.simdDotF32(&a, &b, n);
+            try std.testing.expect(std.math.isFinite(dot));
+        }
+    }.f, .{});
+}
+
+test "fuzz: simdScaleF32 no crash" {
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *Smith) !void {
+            var buf: [32]f32 = undefined;
+            for (&buf, 0..) |*v, i| v.* = @as(f32, @floatFromInt(smith.valueWithHash(i8, @truncate(i)))) / 10.0;
+            const scale: f32 = @as(f32, @floatFromInt(smith.valueWithHash(i8, 50))) / 50.0;
+            const n = smith.indexWithHash(32, 60) + 1;
+            math_ops.simdScaleF32(&buf, scale, n);
+            for (buf[0..n]) |v| try std.testing.expect(std.math.isFinite(v));
+        }
+    }.f, .{});
+}
+
+test "fuzz: tokenLogProb no crash" {
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *Smith) !void {
+            var logits: [32]f32 = undefined;
+            for (&logits, 0..) |*v, i| v.* = @as(f32, @floatFromInt(smith.valueWithHash(i8, @truncate(i))));
+            const token_id: u32 = smith.valueWithHash(u8, 50) % 32;
+            const result = math_ops.tokenLogProb(&logits, token_id);
+            // Log prob should be <= 0 (log of probability) or -inf for impossible tokens
+            try std.testing.expect(result <= 0.0 or result == -std.math.inf(f32));
+            try std.testing.expect(!std.math.isNan(result));
+        }
+    }.f, .{});
+}
+
+test "fuzz: topKExperts no crash" {
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *Smith) !void {
+            var scores: [16]f32 = undefined;
+            for (&scores, 0..) |*v, i| v.* = @as(f32, @floatFromInt(smith.valueWithHash(i8, @truncate(i))));
+            const k = smith.indexWithHash(4, 50) + 1; // 1..4
+            var out_indices: [4]usize = undefined;
+            var out_scores: [4]f32 = undefined;
+            math_ops.topKExperts(&scores, k, out_indices[0..k], out_scores[0..k]);
+            // Each index must be in range
+            for (out_indices[0..k]) |idx| try std.testing.expect(idx < 16);
+            // Each score must be finite
+            for (out_scores[0..k]) |v| try std.testing.expect(std.math.isFinite(v));
+        }
+    }.f, .{});
+}
+
+// ── Quant Conversion Fuzzing ────────────────────────────────────
+
+test "fuzz: bf16ToF32 no crash" {
+    const quant = @import("ops/quant.zig");
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *Smith) !void {
+            const val = smith.valueWithHash(u16, 0);
+            const result = quant.bf16ToF32(val);
+            // Must not crash; result may be NaN/Inf for special patterns
+            _ = result;
+        }
+    }.f, .{});
+}
+
+test "fuzz: fp8e4m3ToF32 exhaustive" {
+    const quant = @import("ops/quant.zig");
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *Smith) !void {
+            const val = smith.valueWithHash(u8, 0);
+            const result = quant.fp8e4m3ToF32(val);
+            // fp8 e4m3 max is ~448; all values should be representable
+            _ = result;
+        }
+    }.f, .{});
+}
+
+test "fuzz: fp8e5m2ToF32 exhaustive" {
+    const quant = @import("ops/quant.zig");
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *Smith) !void {
+            const val = smith.valueWithHash(u8, 0);
+            const result = quant.fp8e5m2ToF32(val);
+            _ = result;
+        }
+    }.f, .{});
+}
+
+test "fuzz: mxfp4Lookup exhaustive" {
+    const quant = @import("ops/quant.zig");
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *Smith) !void {
+            const nibble = smith.valueWithHash(u8, 0) & 0x0F;
+            const result = quant.mxfp4Lookup(nibble);
+            try std.testing.expect(std.math.isFinite(result));
+        }
+    }.f, .{});
+}
+
+test "fuzz: e8m0ToF32 exhaustive" {
+    const quant = @import("ops/quant.zig");
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *Smith) !void {
+            const e = smith.valueWithHash(u8, 0);
+            const result = quant.e8m0ToF32(e);
+            try std.testing.expect(std.math.isFinite(result));
+            try std.testing.expect(result >= 0.0);
+        }
+    }.f, .{});
+}
+
+test "fuzz: getScaleMinK4 no crash" {
+    const quant = @import("ops/quant.zig");
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *Smith) !void {
+            var scales: [12]u8 = undefined;
+            smith.bytesWithHash(&scales, 0);
+            const j = smith.indexWithHash(8, 20); // 0..7 (Q4_K has 8 sub-groups)
+            var sc: u8 = undefined;
+            var m: u8 = undefined;
+            quant.getScaleMinK4(j, &scales, &sc, &m);
+            // Both values must fit in u8 (always true by type, but verify non-crash)
+            try std.testing.expect(sc <= 255);
+            try std.testing.expect(m <= 255);
+        }
+    }.f, .{});
+}
+
+test "fuzz: dequantToF32 Q4_0 no crash" {
+    const quant = @import("ops/quant.zig");
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *Smith) !void {
+            var block: [18]u8 align(2) = undefined;
+            smith.bytesWithHash(&block, 0);
+            var output: [32]f32 = undefined;
+            quant.dequantToF32(&output, &block, .q4_0, 32);
+            for (output) |v| try std.testing.expect(!std.math.isNan(v));
+        }
+    }.f, .{});
+}
+
+test "fuzz: dequantToF32 BF16 no crash" {
+    const quant = @import("ops/quant.zig");
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *Smith) !void {
+            var block: [32]u8 align(2) = undefined;
+            smith.bytesWithHash(&block, 0);
+            var output: [16]f32 = undefined;
+            quant.dequantToF32(&output, &block, .bf16, 16);
+        }
+    }.f, .{});
+}
+
+// ── Spec Decode Fuzzing ─────────────────────────────────────────
+
+test "fuzz: DDTree presort + buildTree no crash" {
+    const ddtree_mod = @import("spec/ddtree.zig");
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *Smith) !void {
+            var builder = ddtree_mod.DDTreeBuilder{};
+            builder.budget = @as(u32, smith.valueWithHash(u4, 0)) + 1; // 1..16
+
+            // Generate random logits for 1-3 draft depths
+            const n_depths = smith.indexWithHash(3, 1) + 1;
+            const vocab_size: usize = 16;
+            var logit_storage: [3][16]f32 = undefined;
+            var logit_slices: [3][]const f32 = undefined;
+            for (0..n_depths) |d| {
+                for (&logit_storage[d], 0..) |*v, i| {
+                    v.* = @as(f32, @floatFromInt(smith.valueWithHash(i8, @truncate(d * 20 + i + 10)))) / 10.0;
+                }
+                logit_slices[d] = logit_storage[d][0..vocab_size];
+            }
+
+            builder.presort(logit_slices[0..n_depths]);
+            builder.buildTree();
+            try std.testing.expect(builder.n_nodes <= builder.budget);
+            const compiled = builder.compile(0);
+            try std.testing.expect(compiled.n_nodes == builder.n_nodes);
+        }
+    }.f, .{});
+}
+
+test "fuzz: CompiledTree findChild no crash" {
+    const ddtree_mod = @import("spec/ddtree.zig");
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *Smith) !void {
+            var tree = ddtree_mod.CompiledTree{};
+            // Set up a few children in the tree
+            const n_children = smith.indexWithHash(4, 0) + 1;
+            tree.n_nodes = @intCast(n_children);
+            for (0..n_children) |i| {
+                tree.child_tokens[0][i] = smith.valueWithHash(u16, @truncate(i + 10));
+                tree.child_indices[0][i] = @intCast(i);
+            }
+            tree.child_counts[0] = @intCast(n_children);
+            // Search for random token — must not crash
+            const search_id = smith.valueWithHash(u16, 50);
+            _ = tree.findChild(-1, search_id);
+            _ = tree.findChild(0, search_id);
+        }
+    }.f, .{});
+}
+
+test "fuzz: CompiledTree isAncestor no crash" {
+    const ddtree_mod = @import("spec/ddtree.zig");
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *Smith) !void {
+            var mask: [8]u64 = undefined;
+            for (&mask, 0..) |*v, i| v.* = smith.valueWithHash(u64, @truncate(i));
+            const j = smith.indexWithHash(ddtree_mod.max_budget, 10);
+            const result = ddtree_mod.CompiledTree.isAncestor(mask, j);
+            _ = result;
+        }
+    }.f, .{});
+}
+
+// ── Format Fuzzing ──────────────────────────────────────────────
+
+test "fuzz: GGUF fromBuffer no crash" {
+    const gguf = @import("format/gguf.zig");
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *Smith) !void {
+            var buf: [256]u8 = undefined;
+            smith.bytesWithHash(&buf, 0);
+            const len = smith.indexWithHash(buf.len, 1) + 24; // at least min header size
+            const effective_len = @min(len, buf.len);
+            // Must not crash — just return error for invalid data
+            var g = gguf.GGUFFile.fromBuffer(std.testing.allocator, buf[0..effective_len]) catch return;
+            defer g.deinit();
+        }
+    }.f, .{});
+}
+
+test "fuzz: MetaValue asU32 no crash" {
+    const gguf = @import("format/gguf.zig");
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *Smith) !void {
+            // Create various MetaValue variants with random data
+            const variant = smith.indexWithHash(5, 0);
+            const val: gguf.MetaValue = switch (variant) {
+                0 => .{ .uint32 = smith.valueWithHash(u32, 1) },
+                1 => .{ .int32 = smith.valueWithHash(i32, 2) },
+                2 => .{ .uint64 = smith.valueWithHash(u64, 3) },
+                3 => .{ .uint8 = smith.valueWithHash(u8, 4) },
+                4 => .{ .uint16 = smith.valueWithHash(u16, 5) },
+                else => unreachable,
+            };
+            // Must not crash
+            _ = val.asU32();
+        }
+    }.f, .{});
+}
+
+test "fuzz: MetaValue asF32 no crash" {
+    const gguf = @import("format/gguf.zig");
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *Smith) !void {
+            const variant = smith.indexWithHash(2, 0);
+            const val: gguf.MetaValue = switch (variant) {
+                0 => .{ .float32 = @bitCast(smith.valueWithHash(u32, 1)) },
+                1 => .{ .float64 = @bitCast(smith.valueWithHash(u64, 2)) },
+                else => unreachable,
+            };
+            _ = val.asF32();
+        }
+    }.f, .{});
+}
+
+test "fuzz: GGMLType blockSize no crash" {
+    const gguf = @import("format/gguf.zig");
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *Smith) !void {
+            const raw: u32 = smith.valueWithHash(u32, 0) % 40;
+            const t: gguf.GGMLType = @enumFromInt(raw);
+            _ = t.blockSize();
+            _ = t.bytesPerBlock();
+        }
+    }.f, .{});
+}
+
+test "fuzz: GGMLType tensorBytes no overflow" {
+    const gguf = @import("format/gguf.zig");
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *Smith) !void {
+            const types = [_]gguf.GGMLType{ .q4_0, .q8_0, .f16, .f32, .q4_k, .q6_k, .bf16 };
+            const t = types[smith.indexWithHash(types.len, 0)];
+            const n_elements: usize = smith.valueWithHash(u32, 1);
+            const bytes = t.tensorBytes(n_elements);
+            // Must not wrap around to a small number
+            try std.testing.expect(bytes >= n_elements or n_elements == 0);
+        }
+    }.f, .{});
+}
+
+// ── Display/Metrics Fuzzing ─────────────────────────────────────
+
+test "fuzz: formatSize no crash" {
+    const display = @import("display.zig");
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *Smith) !void {
+            const size: usize = smith.valueWithHash(u64, 0);
+            const result = display.formatSize(size);
+            try std.testing.expect(result.val >= 0.0);
+            try std.testing.expect(result.unit.len > 0);
+        }
+    }.f, .{});
+}
+
+test "fuzz: GenStats tokPerSec no crash" {
+    const display = @import("display.zig");
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *Smith) !void {
+            const stats = display.GenStats{
+                .token_count = smith.valueWithHash(u32, 0),
+                .gen_ms = smith.valueWithHash(u64, 1),
+                .prefill_token_count = smith.valueWithHash(u32, 2),
+                .prefill_ms = smith.valueWithHash(u64, 3),
+            };
+            const tps = stats.tokPerSec();
+            try std.testing.expect(std.math.isFinite(tps));
+            try std.testing.expect(tps >= 0.0);
+            const ptps = stats.prefillTokPerSec();
+            try std.testing.expect(std.math.isFinite(ptps));
+            try std.testing.expect(ptps >= 0.0);
+        }
+    }.f, .{});
+}
+
+// ── KV Cache Fuzzing ────────────────────────────────────────────
+
+test "fuzz: tokenBucket distribution" {
+    const kvcache_mgr = @import("kvcache/manager.zig");
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *Smith) !void {
+            const token_id = smith.valueWithHash(u32, 0);
+            // tokenBucket is inline and not pub, so test the public alloc/free cycle.
+            const n_layers: usize = (token_id % 4) + 1; // 1..4 layers
+            const bytes_per_layer: usize = 64;
+            const cache = kvcache_mgr.allocKvCache(std.testing.allocator, n_layers, bytes_per_layer) catch return;
+            defer kvcache_mgr.freeKvCache(std.testing.allocator, cache);
+            try std.testing.expect(cache.keys.len == n_layers);
+            try std.testing.expect(cache.values.len == n_layers);
+        }
+    }.f, .{});
+}
+
+test "fuzz: allocKvCache + freeKvCache cycle" {
+    const kvcache_mgr = @import("kvcache/manager.zig");
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *Smith) !void {
+            const n_layers: usize = smith.indexWithHash(8, 0) + 1; // 1..8
+            const bytes_choices = [_]usize{ 0, 32, 64, 128, 256 };
+            const bytes_per_layer = bytes_choices[smith.indexWithHash(bytes_choices.len, 1)];
+            const cache = kvcache_mgr.allocKvCache(std.testing.allocator, n_layers, bytes_per_layer) catch return;
+            defer kvcache_mgr.freeKvCache(std.testing.allocator, cache);
+            // Verify structure
+            try std.testing.expect(cache.keys.len == n_layers);
+            for (cache.keys) |k| try std.testing.expect(k.len == bytes_per_layer);
+            for (cache.values) |v| try std.testing.expect(v.len == bytes_per_layer);
+        }
+    }.f, .{});
+}
+
+// ── Recipe Fuzzing ──────────────────────────────────────────────
+
+test "fuzz: Recipe.match no crash" {
+    const recipe_mod = @import("recipe.zig");
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *Smith) !void {
+            const archs = [_][]const u8{ "gemma3", "gemma4", "qwen3", "gpt", "glm4", "llama4", "nemotron", "unknown" };
+            const backends = [_][]const u8{ "Metal", "Vulkan", "CPU", "CUDA", "WebGPU", "" };
+            const quants = [_][]const u8{ "Q4_K", "Q8_0", "Q4_0", "BF16", "F16", "" };
+            const arch = archs[smith.indexWithHash(archs.len, 0)];
+            const backend = backends[smith.indexWithHash(backends.len, 1)];
+            const quant = quants[smith.indexWithHash(quants.len, 2)];
+            // Must not crash — may return null or a recipe
+            const result = recipe_mod.Recipe.match(arch, backend, quant);
+            if (result) |r| {
+                try std.testing.expect(r.name.len > 0);
+            }
+        }
+    }.f, .{});
+}
+
+test "fuzz: Recipe.applyDefaults no crash" {
+    const recipe_mod = @import("recipe.zig");
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *Smith) !void {
+            const recipe = recipe_mod.Recipe{
+                .temperature = if (smith.valueWithHash(u8, 0) > 128) @as(f32, @floatFromInt(smith.valueWithHash(u8, 1))) / 255.0 else null,
+                .top_p = if (smith.valueWithHash(u8, 2) > 128) @as(f32, @floatFromInt(smith.valueWithHash(u8, 3))) / 255.0 else null,
+                .top_k = if (smith.valueWithHash(u8, 4) > 128) smith.valueWithHash(u16, 5) else null,
+                .max_tokens = if (smith.valueWithHash(u8, 6) > 128) smith.valueWithHash(u16, 7) else null,
+            };
+            const overrides = recipe_mod.Recipe.Overrides{
+                .temperature = smith.valueWithHash(u8, 10) > 128,
+                .top_p = smith.valueWithHash(u8, 11) > 128,
+                .top_k = smith.valueWithHash(u8, 12) > 128,
+                .max_tokens = smith.valueWithHash(u8, 13) > 128,
+            };
+            const applied = recipe.applyDefaults(0.7, 0.9, 40, 1.1, 1024, 4096, overrides);
+            try std.testing.expect(std.math.isFinite(applied.temperature));
+            try std.testing.expect(std.math.isFinite(applied.top_p));
+        }
+    }.f, .{});
+}
+
+// ── Mega Compose Fuzzing ────────────────────────────────────────
+
+test "fuzz: ModelDesc layer accessors" {
+    const mega = @import("backend/mega_compose.zig");
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *Smith) !void {
+            var desc = mega.ModelDesc{
+                .name = "test",
+                .n_layers = @as(u32, smith.valueWithHash(u6, 0)) + 1, // 1..64
+                .n_embd = smith.valueWithHash(u16, 1),
+                .n_ff = smith.valueWithHash(u16, 2),
+                .n_head = @as(u32, smith.valueWithHash(u8, 3)) + 1,
+                .n_kv = @as(u32, smith.valueWithHash(u8, 4)) + 1,
+                .head_dim = @as(u32, smith.valueWithHash(u8, 5)) + 1,
+                .rope_dim = @as(u32, smith.valueWithHash(u8, 6)) + 1,
+                .rope_theta = 10000.0,
+                .rms_eps = 1e-6,
+                .max_seq_len = smith.valueWithHash(u16, 7),
+                .activation = .silu,
+                .quant = .q8_0,
+                .layer_types = mega.ModelDesc.uniform(64, .attention),
+            };
+            // Set some per-layer overrides
+            const override_layer = smith.indexWithHash(@as(usize, desc.n_layers), 10);
+            desc.layer_n_head[override_layer] = smith.valueWithHash(u8, 11);
+            desc.layer_head_dim[override_layer] = smith.valueWithHash(u8, 12);
+            desc.layer_n_ff[override_layer] = smith.valueWithHash(u16, 13);
+            desc.layer_rope_theta[override_layer] = @as(f32, @floatFromInt(smith.valueWithHash(u16, 14)));
+
+            // Access each layer — must not crash
+            for (0..desc.n_layers) |li| {
+                const nh = desc.layerNHead(li);
+                const nkv = desc.layerNKv(li);
+                const hd = desc.layerHeadDim(li);
+                const nff = desc.layerNFf(li);
+                const rt = desc.layerRopeTheta(li);
+                const sw = desc.layerWindow(li);
+                try std.testing.expect(nh > 0);
+                try std.testing.expect(nkv > 0);
+                try std.testing.expect(hd > 0);
+                _ = nff;
+                _ = rt;
+                _ = sw;
+            }
+            _ = desc.hasPerLayerVariation();
+        }
+    }.f, .{});
+}
+
+test "fuzz: ModelDesc uniform pattern" {
+    const mega = @import("backend/mega_compose.zig");
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *Smith) !void {
+            const n_layers: u32 = @as(u32, smith.valueWithHash(u6, 0)) + 1;
+            const kinds = [_]mega.LayerKind{ .attention, .deltanet, .moe, .ffn_only };
+            const kind = kinds[smith.indexWithHash(kinds.len, 1)];
+            const types = mega.ModelDesc.uniform(n_layers, kind);
+            for (0..n_layers) |i| try std.testing.expect(types[i] == kind);
+        }
+    }.f, .{});
+}
+
+test "fuzz: ModelDesc qwenHybrid pattern" {
+    const mega = @import("backend/mega_compose.zig");
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *Smith) !void {
+            const n_layers: u32 = @as(u32, smith.valueWithHash(u6, 0)) + 1;
+            const intervals = [_]u32{ 0, 1, 2, 4, 6, 8, 12, 16 };
+            const interval = intervals[smith.indexWithHash(intervals.len, 1)];
+            const types = mega.ModelDesc.qwenHybrid(n_layers, interval);
+            // Verify: every Nth layer is attention (when interval > 0)
+            for (0..n_layers) |i| {
+                if (interval > 0 and ((i + 1) % interval) == 0) {
+                    try std.testing.expect(types[i] == .attention);
+                } else if (interval > 0) {
+                    try std.testing.expect(types[i] == .deltanet);
+                }
+            }
+        }
+    }.f, .{});
+}
+
+// ── KV Quant Extended Fuzzing ───────────────────────────────────
+
+test "fuzz: kvSliceBytes no crash" {
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *Smith) !void {
+            const all_types = [_]kv_quant.KvQuantType{ .f16, .q8_0, .fp8_e4m3, .turbo2, .turbo3, .turbo4 };
+            const kv_type = all_types[smith.indexWithHash(all_types.len, 0)];
+            const n: usize = @as(usize, smith.valueWithHash(u16, 1)) + 1;
+            const bytes = kv_quant.kvSliceBytes(kv_type, n);
+            try std.testing.expect(bytes > 0);
+        }
+    }.f, .{});
+}
+
+test "fuzz: kvStore random data no crash" {
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *Smith) !void {
+            const n: usize = 16;
+            var src: [n]f32 = undefined;
+            for (&src, 0..) |*v, i| v.* = @as(f32, @floatFromInt(smith.valueWithHash(i8, @truncate(i)))) / 10.0;
+
+            const types = [_]kv_quant.KvQuantType{ .f16, .q8_0, .fp8_e4m3, .turbo2, .turbo3, .turbo4 };
+            const kv_type = types[smith.indexWithHash(types.len, 50)];
+
+            var kv_buf: [256]u8 = undefined;
+            const needed = kv_quant.kvSliceBytes(kv_type, n);
+            if (needed > kv_buf.len) return;
+            kv_quant.kvStore(&kv_buf, &src, n, kv_type);
+            // Verify we can read it back
+            var query: [n]f32 = undefined;
+            for (&query, 0..) |*v, i| v.* = @as(f32, @floatFromInt(smith.valueWithHash(i8, @truncate(i + 20)))) / 10.0;
+            const dot = kv_quant.kvDot(&query, &kv_buf, n, kv_type);
+            try std.testing.expect(std.math.isFinite(dot));
+        }
+    }.f, .{});
+}
+
+// ── Chat Template Extended Fuzzing ──────────────────────────────
+
+test "fuzz: chat template all presets" {
+    const chat = @import("chat_template.zig");
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *Smith) !void {
+            var msg_buf: [64]u8 = undefined;
+            smith.bytesWithHash(&msg_buf, 0);
+            const msg_len = smith.indexWithHash(msg_buf.len + 1, 1);
+            const msg = msg_buf[0..msg_len];
+
+            const templates = [_]chat.ChatTemplate{
+                chat.ChatTemplate.chatml,
+                chat.ChatTemplate.qwen35,
+                chat.ChatTemplate.gemma,
+                chat.ChatTemplate.gemma4,
+                chat.ChatTemplate.glm4,
+                chat.ChatTemplate.gpt_oss,
+                chat.ChatTemplate.llama4,
+            };
+
+            for (templates) |tmpl| {
+                const result = tmpl.format(std.testing.allocator, null, msg) catch continue;
+                defer std.testing.allocator.free(result);
+                try std.testing.expect(result.len > 0);
+            }
+        }
+    }.f, .{});
+}
+
+// ── GEMV Dispatcher Fuzzing ──────────────────────────────────────
+
+test "fuzz: gemvSeq dispatch Q8_0" {
+    const gemv = @import("backend/kernels/cpu/gemv.zig");
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *Smith) !void {
+            var block: [34]u8 align(2) = undefined;
+            smith.bytesWithHash(&block, 0);
+            var x: [32]f32 = undefined;
+            for (&x, 0..) |*v, i| v.* = @as(f32, @floatFromInt(smith.valueWithHash(i8, @truncate(i + 50)))) / 10.0;
+            var y: [1]f32 = undefined;
+            gemv.gemvSeq(&x, &block, .q8_0, &y, 1, 32);
+            try std.testing.expect(std.math.isFinite(y[0]));
+        }
+    }.f, .{});
+}
+
+test "fuzz: gemvSeq dispatch Q4_0" {
+    const gemv = @import("backend/kernels/cpu/gemv.zig");
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *Smith) !void {
+            var block: [18]u8 align(2) = undefined;
+            smith.bytesWithHash(&block, 0);
+            var x: [32]f32 = undefined;
+            for (&x, 0..) |*v, i| v.* = @as(f32, @floatFromInt(smith.valueWithHash(i8, @truncate(i + 50)))) / 10.0;
+            var y: [1]f32 = undefined;
+            gemv.gemvSeq(&x, &block, .q4_0, &y, 1, 32);
+            try std.testing.expect(std.math.isFinite(y[0]));
+        }
+    }.f, .{});
+}

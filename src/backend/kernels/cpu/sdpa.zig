@@ -470,6 +470,61 @@ test "sdpa exercises SIMD dot product path" {
     for (0..hd) |i| try std.testing.expectApproxEqAbs(expected, output[i], 1e-4);
 }
 
+test "softmax normalizes to sum 1" {
+    var scores = [_]f32{ 1.0, 2.0, 3.0, 4.0 };
+    softmax(&scores);
+    var sum: f32 = 0;
+    for (scores) |s| sum += s;
+    try std.testing.expectApproxEqAbs(@as(f32, 1.0), sum, 1e-5);
+    // Largest input should have largest probability
+    try std.testing.expect(scores[3] > scores[2]);
+    try std.testing.expect(scores[2] > scores[1]);
+    try std.testing.expect(scores[1] > scores[0]);
+}
+
+test "softmax single element" {
+    var scores = [_]f32{5.0};
+    softmax(&scores);
+    try std.testing.expectApproxEqAbs(@as(f32, 1.0), scores[0], 1e-6);
+}
+
+test "softmax equal values" {
+    var scores = [_]f32{ 1.0, 1.0, 1.0, 1.0 };
+    softmax(&scores);
+    for (scores) |s| try std.testing.expectApproxEqAbs(@as(f32, 0.25), s, 1e-5);
+}
+
+test "dotProductF32 basic" {
+    const q = [_]f32{ 1.0, 2.0, 3.0, 4.0 };
+    const k = [_]f32{ 4.0, 3.0, 2.0, 1.0 };
+    const result = dotProductF32(&q, &k, 4);
+    // 1*4 + 2*3 + 3*2 + 4*1 = 4+6+6+4 = 20
+    try std.testing.expectApproxEqAbs(@as(f32, 20.0), result, 1e-5);
+}
+
+test "dotProductF32 SIMD path" {
+    // hd=16 to exercise the V8 SIMD loop
+    var q: [16]f32 = undefined;
+    var k: [16]f32 = undefined;
+    for (0..16) |i| {
+        q[i] = 1.0;
+        k[i] = 2.0;
+    }
+    const result = dotProductF32(&q, &k, 16);
+    try std.testing.expectApproxEqAbs(@as(f32, 32.0), result, 1e-5);
+}
+
+test "mulAccumF32 basic" {
+    var out = [_]f32{ 1.0, 2.0, 3.0, 4.0 };
+    const v = [_]f32{ 10.0, 20.0, 30.0, 40.0 };
+    mulAccumF32(&out, 0.5, &v, 4);
+    // out[i] += 0.5 * v[i]
+    try std.testing.expectApproxEqAbs(@as(f32, 6.0), out[0], 1e-5);
+    try std.testing.expectApproxEqAbs(@as(f32, 12.0), out[1], 1e-5);
+    try std.testing.expectApproxEqAbs(@as(f32, 18.0), out[2], 1e-5);
+    try std.testing.expectApproxEqAbs(@as(f32, 24.0), out[3], 1e-5);
+}
+
 // ── Paged SDPA (block-table-indexed) ────────────────────────────
 
 const PagedKvView = @import("../../../kvcache/manager.zig").PagedKvView;

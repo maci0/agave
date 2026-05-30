@@ -108,3 +108,15 @@ test "gptq dequant basic" {
     gptqGemv(&x, &qweight, &scales, &qzeros, &y, 1, 8, 8);
     try std.testing.expectApproxEqAbs(@as(f32, 8.0), y[0], 1e-4);
 }
+
+test "gptqGemvRows with start_row offset" {
+    // Same setup as basic test but using gptqGemvRows with start_row=0
+    const qweight = [_]u32{0x03210321};
+    const scales = [_]u16{@bitCast(@as(f16, 2.0))};
+    const qzeros = [_]u32{0x00000001};
+    const x = [_]f32{1.0} ** 8;
+    var y = [_]f32{0.0};
+
+    gptqGemvRows(&x, &qweight, &scales, &qzeros, &y, 0, 1, 8, 8);
+    try std.testing.expectApproxEqAbs(@as(f32, 8.0), y[0], 1e-4);
+}

@@ -852,3 +852,434 @@ test "Metrics: cache counters exposed in Prometheus output" {
     // Total prompt tokens: hit(50,200) + hit(30,150) + miss(100) = 450
     try std.testing.expect(std.mem.indexOf(u8, output, "agave_prefix_tokens_total 450\n") != null);
 }
+
+// ── Additional recording function tests ──────────────────────────
+
+test "Metrics: recordCompletion increments counter" {
+    var metrics = Metrics{};
+    try std.testing.expectEqual(@as(u64, 0), metrics.requests_completed.load(.monotonic));
+    metrics.recordCompletion();
+    try std.testing.expectEqual(@as(u64, 1), metrics.requests_completed.load(.monotonic));
+    metrics.recordCompletion();
+    metrics.recordCompletion();
+    try std.testing.expectEqual(@as(u64, 3), metrics.requests_completed.load(.monotonic));
+}
+
+test "Metrics: recordCancellation increments counter" {
+    var metrics = Metrics{};
+    try std.testing.expectEqual(@as(u64, 0), metrics.requests_cancelled.load(.monotonic));
+    metrics.recordCancellation();
+    try std.testing.expectEqual(@as(u64, 1), metrics.requests_cancelled.load(.monotonic));
+    metrics.recordCancellation();
+    try std.testing.expectEqual(@as(u64, 2), metrics.requests_cancelled.load(.monotonic));
+}
+
+test "Metrics: recordFailure increments counter" {
+    var metrics = Metrics{};
+    try std.testing.expectEqual(@as(u64, 0), metrics.requests_failed.load(.monotonic));
+    metrics.recordFailure();
+    try std.testing.expectEqual(@as(u64, 1), metrics.requests_failed.load(.monotonic));
+}
+
+test "Metrics: recordAuthFailure increments counter" {
+    var metrics = Metrics{};
+    try std.testing.expectEqual(@as(u64, 0), metrics.requests_auth_failed.load(.monotonic));
+    metrics.recordAuthFailure();
+    try std.testing.expectEqual(@as(u64, 1), metrics.requests_auth_failed.load(.monotonic));
+    metrics.recordAuthFailure();
+    try std.testing.expectEqual(@as(u64, 2), metrics.requests_auth_failed.load(.monotonic));
+}
+
+test "Metrics: recordRateLimit increments counter" {
+    var metrics = Metrics{};
+    try std.testing.expectEqual(@as(u64, 0), metrics.requests_rate_limited.load(.monotonic));
+    metrics.recordRateLimit();
+    try std.testing.expectEqual(@as(u64, 1), metrics.requests_rate_limited.load(.monotonic));
+}
+
+test "Metrics: recordConnectionRejection increments counter" {
+    var metrics = Metrics{};
+    try std.testing.expectEqual(@as(u64, 0), metrics.connections_rejected.load(.monotonic));
+    metrics.recordConnectionRejection();
+    try std.testing.expectEqual(@as(u64, 1), metrics.connections_rejected.load(.monotonic));
+    metrics.recordConnectionRejection();
+    metrics.recordConnectionRejection();
+    try std.testing.expectEqual(@as(u64, 3), metrics.connections_rejected.load(.monotonic));
+}
+
+test "Metrics: recordTimeout increments counter" {
+    var metrics = Metrics{};
+    try std.testing.expectEqual(@as(u64, 0), metrics.requests_timeout.load(.monotonic));
+    metrics.recordTimeout();
+    try std.testing.expectEqual(@as(u64, 1), metrics.requests_timeout.load(.monotonic));
+}
+
+test "Metrics: recordSchedulerError increments counter" {
+    var metrics = Metrics{};
+    try std.testing.expectEqual(@as(u64, 0), metrics.scheduler_errors.load(.monotonic));
+    metrics.recordSchedulerError();
+    try std.testing.expectEqual(@as(u64, 1), metrics.scheduler_errors.load(.monotonic));
+    metrics.recordSchedulerError();
+    try std.testing.expectEqual(@as(u64, 2), metrics.scheduler_errors.load(.monotonic));
+}
+
+test "Metrics: recordPreemption increments counter" {
+    var metrics = Metrics{};
+    try std.testing.expectEqual(@as(u64, 0), metrics.preemptions_total.load(.monotonic));
+    metrics.recordPreemption();
+    try std.testing.expectEqual(@as(u64, 1), metrics.preemptions_total.load(.monotonic));
+}
+
+test "Metrics: recordInterTokenLatency updates histogram and sum" {
+    var metrics = Metrics{};
+    // 3ms → itl_5ms bucket
+    metrics.recordInterTokenLatency(3);
+    try std.testing.expectEqual(@as(u64, 1), metrics.itl_5ms.load(.monotonic));
+    try std.testing.expectEqual(@as(u64, 3), metrics.itl_sum.load(.monotonic));
+    // 15ms → itl_20ms bucket
+    metrics.recordInterTokenLatency(15);
+    try std.testing.expectEqual(@as(u64, 1), metrics.itl_20ms.load(.monotonic));
+    try std.testing.expectEqual(@as(u64, 18), metrics.itl_sum.load(.monotonic));
+    // 300ms → itl_500ms bucket
+    metrics.recordInterTokenLatency(300);
+    try std.testing.expectEqual(@as(u64, 1), metrics.itl_500ms.load(.monotonic));
+    // 2000ms → itl_inf bucket
+    metrics.recordInterTokenLatency(2000);
+    try std.testing.expectEqual(@as(u64, 1), metrics.itl_inf.load(.monotonic));
+}
+
+test "Metrics: updateGpuKvBlocks sets gauges" {
+    var metrics = Metrics{};
+    try std.testing.expectEqual(@as(u32, 0), metrics.gpu_kv_blocks_used.load(.monotonic));
+    try std.testing.expectEqual(@as(u32, 0), metrics.gpu_kv_blocks_total.load(.monotonic));
+    metrics.updateGpuKvBlocks(50, 200);
+    try std.testing.expectEqual(@as(u32, 50), metrics.gpu_kv_blocks_used.load(.monotonic));
+    try std.testing.expectEqual(@as(u32, 200), metrics.gpu_kv_blocks_total.load(.monotonic));
+    // Update again — should overwrite
+    metrics.updateGpuKvBlocks(100, 200);
+    try std.testing.expectEqual(@as(u32, 100), metrics.gpu_kv_blocks_used.load(.monotonic));
+}
+
+test "Metrics: recordTokens accumulates count" {
+    var metrics = Metrics{};
+    metrics.recordTokens(10);
+    try std.testing.expectEqual(@as(u64, 10), metrics.tokens_generated_total.load(.monotonic));
+    metrics.recordTokens(20);
+    try std.testing.expectEqual(@as(u64, 30), metrics.tokens_generated_total.load(.monotonic));
+}
+
+test "Metrics: recordLatency — boundary values" {
+    var metrics = Metrics{};
+    // Exactly at boundary: 10ms → latency_10ms
+    metrics.recordLatency(10);
+    try std.testing.expectEqual(@as(u64, 1), metrics.latency_10ms.load(.monotonic));
+    // 50ms → latency_50ms
+    metrics.recordLatency(50);
+    try std.testing.expectEqual(@as(u64, 1), metrics.latency_50ms.load(.monotonic));
+    // 100ms → latency_100ms
+    metrics.recordLatency(100);
+    try std.testing.expectEqual(@as(u64, 1), metrics.latency_100ms.load(.monotonic));
+    // 1000ms → latency_1s
+    metrics.recordLatency(1000);
+    try std.testing.expectEqual(@as(u64, 1), metrics.latency_1s.load(.monotonic));
+    // 50000ms → latency_inf
+    metrics.recordLatency(50000);
+    try std.testing.expectEqual(@as(u64, 1), metrics.latency_inf.load(.monotonic));
+    // Sum: 10+50+100+1000+50000 = 51160
+    try std.testing.expectEqual(@as(u64, 51160), metrics.latency_sum.load(.monotonic));
+}
+
+test "Metrics: updateQueueDepth sets gauge" {
+    var metrics = Metrics{};
+    metrics.updateQueueDepth(7);
+    try std.testing.expectEqual(@as(u32, 7), metrics.queue_depth.load(.monotonic));
+    metrics.updateQueueDepth(0);
+    try std.testing.expectEqual(@as(u32, 0), metrics.queue_depth.load(.monotonic));
+}
+
+test "Metrics: updateActiveRequests sets gauge" {
+    var metrics = Metrics{};
+    metrics.updateActiveRequests(3);
+    try std.testing.expectEqual(@as(u32, 3), metrics.active_requests.load(.monotonic));
+}
+
+test "Metrics: recordCacheHit and recordCacheMiss" {
+    var metrics = Metrics{};
+    metrics.recordCacheHit(100, 500);
+    try std.testing.expectEqual(@as(u64, 1), metrics.kv_cache_hits.load(.monotonic));
+    try std.testing.expectEqual(@as(u64, 100), metrics.prefix_tokens_reused.load(.monotonic));
+    try std.testing.expectEqual(@as(u64, 500), metrics.prefix_tokens_total.load(.monotonic));
+    metrics.recordCacheMiss(200);
+    try std.testing.expectEqual(@as(u64, 1), metrics.kv_cache_misses.load(.monotonic));
+    try std.testing.expectEqual(@as(u64, 700), metrics.prefix_tokens_total.load(.monotonic));
+}
+
+test "Metrics: recordTTFT updates histogram and prefill tokens" {
+    var metrics = Metrics{};
+    metrics.recordTTFT(25, 100);
+    try std.testing.expectEqual(@as(u64, 1), metrics.ttft_50ms.load(.monotonic));
+    try std.testing.expectEqual(@as(u64, 25), metrics.ttft_sum.load(.monotonic));
+    try std.testing.expectEqual(@as(u64, 100), metrics.prefill_tokens_total.load(.monotonic));
+    metrics.recordTTFT(3000, 200);
+    try std.testing.expectEqual(@as(u64, 1), metrics.ttft_5s.load(.monotonic));
+    try std.testing.expectEqual(@as(u64, 3025), metrics.ttft_sum.load(.monotonic));
+}
+
+test "Metrics: recordThroughput stores tps_x100" {
+    var metrics = Metrics{};
+    // 100 tokens in 1000ms = 100 tok/s → tps_x100 = 10000
+    metrics.recordThroughput(100, 1000);
+    try std.testing.expectEqual(@as(u64, 10000), metrics.last_tps_x100.load(.monotonic));
+    // 0 duration should be a no-op
+    metrics.recordThroughput(100, 0);
+    // Value should remain 10000 (not updated)
+    try std.testing.expectEqual(@as(u64, 10000), metrics.last_tps_x100.load(.monotonic));
+}
+
+test "Metrics: setCacheConfig and updateInputTokensInFlight" {
+    var metrics = Metrics{};
+    metrics.setCacheConfig(16, 1024);
+    try std.testing.expectEqual(@as(u32, 16), metrics.cache_block_size.load(.monotonic));
+    try std.testing.expectEqual(@as(u32, 1024), metrics.cache_num_blocks.load(.monotonic));
+    metrics.updateInputTokensInFlight(42);
+    try std.testing.expectEqual(@as(u32, 42), metrics.input_tokens_in_flight.load(.monotonic));
+}
+
+test "Metrics: recordTPOT updates histogram" {
+    var metrics = Metrics{};
+    // 10 tokens in 100ms → tpot = 10ms → tpot_10ms bucket
+    metrics.recordTPOT(10, 100);
+    try std.testing.expectEqual(@as(u64, 1), metrics.tpot_10ms.load(.monotonic));
+    try std.testing.expectEqual(@as(u64, 10), metrics.tpot_sum.load(.monotonic));
+    // 0 tokens → no-op
+    metrics.recordTPOT(0, 100);
+    try std.testing.expectEqual(@as(u64, 10), metrics.tpot_sum.load(.monotonic));
+    // 1 token in 300ms → tpot = 300ms → tpot_500ms bucket
+    metrics.recordTPOT(1, 300);
+    try std.testing.expectEqual(@as(u64, 1), metrics.tpot_500ms.load(.monotonic));
+}
+
+test "Metrics: recordQueueTime updates histogram" {
+    var metrics = Metrics{};
+    // 5ms → queue_time_10ms bucket
+    metrics.recordQueueTime(5);
+    try std.testing.expectEqual(@as(u64, 1), metrics.queue_time_10ms.load(.monotonic));
+    try std.testing.expectEqual(@as(u64, 5), metrics.queue_time_sum.load(.monotonic));
+    // 20000ms <= 30000ms → queue_time_30s bucket
+    metrics.recordQueueTime(20000);
+    try std.testing.expectEqual(@as(u64, 1), metrics.queue_time_30s.load(.monotonic));
+    try std.testing.expectEqual(@as(u64, 20005), metrics.queue_time_sum.load(.monotonic));
+    // 50000ms > 30000ms → queue_time_inf
+    metrics.recordQueueTime(50000);
+    try std.testing.expectEqual(@as(u64, 1), metrics.queue_time_inf.load(.monotonic));
+}
+
+test "Metrics: recordPromptTokens updates histogram" {
+    var metrics = Metrics{};
+    // 10 tokens → prompt_tok_16 bucket
+    metrics.recordPromptTokens(10);
+    try std.testing.expectEqual(@as(u64, 1), metrics.prompt_tok_16.load(.monotonic));
+    try std.testing.expectEqual(@as(u64, 10), metrics.prompt_tok_sum.load(.monotonic));
+    // 500 tokens → prompt_tok_512 bucket
+    metrics.recordPromptTokens(500);
+    try std.testing.expectEqual(@as(u64, 1), metrics.prompt_tok_512.load(.monotonic));
+    try std.testing.expectEqual(@as(u64, 510), metrics.prompt_tok_sum.load(.monotonic));
+    // 5000 tokens → prompt_tok_inf
+    metrics.recordPromptTokens(5000);
+    try std.testing.expectEqual(@as(u64, 1), metrics.prompt_tok_inf.load(.monotonic));
+}
+
+test "Metrics: recordGenerationTokens updates histogram" {
+    var metrics = Metrics{};
+    // 64 tokens → gen_tok_64 bucket
+    metrics.recordGenerationTokens(64);
+    try std.testing.expectEqual(@as(u64, 1), metrics.gen_tok_64.load(.monotonic));
+    try std.testing.expectEqual(@as(u64, 64), metrics.gen_tok_sum.load(.monotonic));
+    // 1024 tokens → gen_tok_1024 bucket
+    metrics.recordGenerationTokens(1024);
+    try std.testing.expectEqual(@as(u64, 1), metrics.gen_tok_1024.load(.monotonic));
+    // 10000 tokens → gen_tok_inf
+    metrics.recordGenerationTokens(10000);
+    try std.testing.expectEqual(@as(u64, 1), metrics.gen_tok_inf.load(.monotonic));
+}
+
+test "Metrics: renderPrometheus with process_start_time" {
+    var metrics = Metrics{};
+    metrics.process_start_time.store(1700000000, .monotonic);
+    var buf: [test_render_buf_size]u8 = undefined;
+    var fbs = FixedBufStream.init(&buf);
+    try metrics.renderPrometheus(fbs.writer());
+    const output = fbs.getWritten();
+    try std.testing.expect(std.mem.indexOf(u8, output, "agave_process_start_time_seconds 1700000000\n") != null);
+}
+
+test "Metrics: renderPrometheus — TPOT histogram rendered" {
+    var metrics = Metrics{};
+    metrics.recordTPOT(10, 50); // 5ms/tok → tpot_5ms bucket
+    var buf: [test_render_buf_size]u8 = undefined;
+    var fbs = FixedBufStream.init(&buf);
+    try metrics.renderPrometheus(fbs.writer());
+    const output = fbs.getWritten();
+    try std.testing.expect(std.mem.indexOf(u8, output, "agave_time_per_output_token_seconds") != null);
+}
+
+test "Metrics: renderPrometheus — queue time histogram rendered" {
+    var metrics = Metrics{};
+    metrics.recordQueueTime(25);
+    var buf: [test_render_buf_size]u8 = undefined;
+    var fbs = FixedBufStream.init(&buf);
+    try metrics.renderPrometheus(fbs.writer());
+    const output = fbs.getWritten();
+    try std.testing.expect(std.mem.indexOf(u8, output, "agave_request_queue_time_seconds") != null);
+}
+
+test "Metrics: renderPrometheus — prompt token histogram rendered" {
+    var metrics = Metrics{};
+    metrics.recordPromptTokens(100);
+    var buf: [test_render_buf_size]u8 = undefined;
+    var fbs = FixedBufStream.init(&buf);
+    try metrics.renderPrometheus(fbs.writer());
+    const output = fbs.getWritten();
+    try std.testing.expect(std.mem.indexOf(u8, output, "agave_request_prompt_tokens") != null);
+}
+
+test "Metrics: renderPrometheus — generation token histogram rendered" {
+    var metrics = Metrics{};
+    metrics.recordGenerationTokens(200);
+    var buf: [test_render_buf_size]u8 = undefined;
+    var fbs = FixedBufStream.init(&buf);
+    try metrics.renderPrometheus(fbs.writer());
+    const output = fbs.getWritten();
+    try std.testing.expect(std.mem.indexOf(u8, output, "agave_request_generation_tokens") != null);
+}
+
+test "Metrics: renderPrometheus — GPU KV cache rendered" {
+    var metrics = Metrics{};
+    metrics.updateGpuKvBlocks(75, 300);
+    var buf: [test_render_buf_size]u8 = undefined;
+    var fbs = FixedBufStream.init(&buf);
+    try metrics.renderPrometheus(fbs.writer());
+    const output = fbs.getWritten();
+    try std.testing.expect(std.mem.indexOf(u8, output, "agave_gpu_cache_usage_perc") != null);
+}
+
+test "Metrics: renderPrometheus — ITL histogram rendered" {
+    var metrics = Metrics{};
+    metrics.recordInterTokenLatency(10);
+    var buf: [test_render_buf_size]u8 = undefined;
+    var fbs = FixedBufStream.init(&buf);
+    try metrics.renderPrometheus(fbs.writer());
+    const output = fbs.getWritten();
+    try std.testing.expect(std.mem.indexOf(u8, output, "agave_inter_token_latency_seconds") != null);
+}
+
+test "Metrics: renderPrometheus — preemptions rendered" {
+    var metrics = Metrics{};
+    metrics.recordPreemption();
+    metrics.recordPreemption();
+    var buf: [test_render_buf_size]u8 = undefined;
+    var fbs = FixedBufStream.init(&buf);
+    try metrics.renderPrometheus(fbs.writer());
+    const output = fbs.getWritten();
+    try std.testing.expect(std.mem.indexOf(u8, output, "agave_num_preemptions_total 2\n") != null);
+}
+
+test "Metrics: renderPrometheus — cache config rendered" {
+    var metrics = Metrics{};
+    metrics.setCacheConfig(16, 512);
+    var buf: [test_render_buf_size]u8 = undefined;
+    var fbs = FixedBufStream.init(&buf);
+    try metrics.renderPrometheus(fbs.writer());
+    const output = fbs.getWritten();
+    try std.testing.expect(std.mem.indexOf(u8, output, "agave_cache_config_info{block_size=\"16\",num_gpu_blocks=\"512\"} 1\n") != null);
+}
+
+test "Metrics: renderPrometheus — kv_cache_usage_perc calculated" {
+    var metrics = Metrics{};
+    metrics.updateKvBlocks(50, 100);
+    var buf: [test_render_buf_size]u8 = undefined;
+    var fbs = FixedBufStream.init(&buf);
+    try metrics.renderPrometheus(fbs.writer());
+    const output = fbs.getWritten();
+    try std.testing.expect(std.mem.indexOf(u8, output, "agave_kv_cache_usage_perc 0.5000\n") != null);
+}
+
+test "Metrics: renderPrometheus — prefix cache hit rate calculated" {
+    var metrics = Metrics{};
+    metrics.recordCacheHit(10, 100);
+    metrics.recordCacheHit(10, 100);
+    metrics.recordCacheHit(10, 100);
+    metrics.recordCacheMiss(100);
+    // 3 hits, 1 miss → hit rate = 3/4 = 0.75
+    var buf: [test_render_buf_size]u8 = undefined;
+    var fbs = FixedBufStream.init(&buf);
+    try metrics.renderPrometheus(fbs.writer());
+    const output = fbs.getWritten();
+    try std.testing.expect(std.mem.indexOf(u8, output, "agave_prefix_cache_hit_rate 0.7500\n") != null);
+}
+
+test "Metrics: renderPrometheus — throughput rendered" {
+    var metrics = Metrics{};
+    metrics.recordThroughput(50, 1000); // 50 tok/s → tps_x100 = 5000
+    var buf: [test_render_buf_size]u8 = undefined;
+    var fbs = FixedBufStream.init(&buf);
+    try metrics.renderPrometheus(fbs.writer());
+    const output = fbs.getWritten();
+    try std.testing.expect(std.mem.indexOf(u8, output, "agave_tokens_per_second 50.00\n") != null);
+}
+
+// ── FixedBufStream tests ─────────────────────────────────────────
+
+test "FixedBufStream: init and getWritten on empty" {
+    var buf: [64]u8 = undefined;
+    var fbs = FixedBufStream.init(&buf);
+    try std.testing.expectEqual(@as(usize, 0), fbs.getWritten().len);
+}
+
+test "FixedBufStream: writeAll and getWritten" {
+    var buf: [64]u8 = undefined;
+    var fbs = FixedBufStream.init(&buf);
+    const w = fbs.writer();
+    try w.writeAll("hello");
+    try std.testing.expectEqualStrings("hello", fbs.getWritten());
+    try w.writeAll(" world");
+    try std.testing.expectEqualStrings("hello world", fbs.getWritten());
+}
+
+test "FixedBufStream: writeByte" {
+    var buf: [64]u8 = undefined;
+    var fbs = FixedBufStream.init(&buf);
+    const w = fbs.writer();
+    try w.writeByte('A');
+    try w.writeByte('B');
+    try std.testing.expectEqualStrings("AB", fbs.getWritten());
+}
+
+test "FixedBufStream: print formatted" {
+    var buf: [64]u8 = undefined;
+    var fbs = FixedBufStream.init(&buf);
+    const w = fbs.writer();
+    try w.print("count={d}", .{@as(u32, 42)});
+    try std.testing.expectEqualStrings("count=42", fbs.getWritten());
+}
+
+test "FixedBufStream: overflow returns error" {
+    var buf: [4]u8 = undefined;
+    var fbs = FixedBufStream.init(&buf);
+    const w = fbs.writer();
+    try w.writeAll("abcd");
+    // Buffer is now full — next write should fail
+    try std.testing.expectError(error.NoSpaceLeft, w.writeAll("e"));
+    try std.testing.expectError(error.NoSpaceLeft, w.writeByte('x'));
+}
+
+test "FixedBufStream: pos tracks correctly" {
+    var buf: [64]u8 = undefined;
+    var fbs = FixedBufStream.init(&buf);
+    try std.testing.expectEqual(@as(usize, 0), fbs.pos);
+    const w = fbs.writer();
+    try w.writeAll("test");
+    try std.testing.expectEqual(@as(usize, 4), fbs.pos);
+    try w.writeByte('!');
+    try std.testing.expectEqual(@as(usize, 5), fbs.pos);
+}
