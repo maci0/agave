@@ -549,7 +549,8 @@ pub fn dispatchGemv(be: backend_mod.Backend, fmt: format_mod.Format, x: [*]const
             else
                 @ptrCast(@alignCast(st.data_ptr));
             if (t.dtype == .awq) {
-                // AWQ: column-major packing (8 output channels per INT32 word)
+                // AWQ runs on CPU — sync GPU first so input activations are visible.
+                be.sync();
                 const awq = @import("../ops/awq.zig");
                 awq.awqGemv(x, @ptrCast(@alignCast(t.data_ptr)), @ptrCast(@alignCast(st.data_ptr)), zeros_ptr, y, n, k, group_size);
             } else {
