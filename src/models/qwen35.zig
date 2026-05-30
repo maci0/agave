@@ -734,7 +734,7 @@ pub const Qwen35Model = struct {
     /// MLX companion pointers are resolved per-op so all dispatches
     /// (including MLX-Q) run without inter-dispatch barriers.
     fn doGemvBatch2(self: *Qwen35Model, x: [*]const f32, t0: TensorInfo, y0: [*]f32, n0: usize, t1: TensorInfo, y1: [*]f32, n1: usize, k: usize) void {
-        if (t0.dtype == .nvfp4 or t1.dtype == .nvfp4 or t0.dtype == .gptq or t1.dtype == .gptq) {
+        if (t0.dtype == .nvfp4 or t1.dtype == .nvfp4 or t0.dtype == .gptq or t1.dtype == .gptq or t0.dtype == .awq or t1.dtype == .awq) {
             self.doGemv(x, t0, y0, n0, k);
             self.doGemv(x, t1, y1, n1, k);
             return;
@@ -748,7 +748,8 @@ pub const Qwen35Model = struct {
 
     fn doGemvBatch3(self: *Qwen35Model, x: [*]const f32, t0: TensorInfo, y0: [*]f32, n0: usize, t1: TensorInfo, y1: [*]f32, n1: usize, t2: TensorInfo, y2: [*]f32, n2: usize, k: usize) void {
         if (t0.dtype == .nvfp4 or t1.dtype == .nvfp4 or t2.dtype == .nvfp4 or
-            t0.dtype == .gptq or t1.dtype == .gptq or t2.dtype == .gptq) {
+            t0.dtype == .gptq or t1.dtype == .gptq or t2.dtype == .gptq or
+            t0.dtype == .awq or t1.dtype == .awq or t2.dtype == .awq) {
             self.doGemv(x, t0, y0, n0, k);
             self.doGemv(x, t1, y1, n1, k);
             self.doGemv(x, t2, y2, n2, k);

@@ -240,8 +240,8 @@ pub fn weightBytes(dtype: DType, n: usize, k: usize) usize {
         .iq4_xs => n * nsb * iq4_xs_block_bytes,
         .tq1_0 => n * nsb * tq1_0_block_bytes,
         .nvfp4 => n * ((k + nvfp4_block_elems - 1) / nvfp4_block_elems) * nvfp4_block_bytes,
-        // GPTQ: 8 INT4 nibbles per u32 word
-        .gptq => n * k / 2,
+        // GPTQ/AWQ: 8 INT4 nibbles per u32 word
+        .gptq, .awq => n * k / 2,
         // Unsupported dtypes: assume f32 (4 bytes per element).
         .mlx_q, .unknown => n * k * 4,
     };
@@ -269,7 +269,7 @@ pub fn gemvRowBytes(dtype: DType, k: usize) usize {
         .f16, .bf16 => k * f16_elem_bytes,
         .f32 => k * f32_elem_bytes,
         .fp8_e4m3, .fp8_e5m2 => k,
-        .tq1_0, .mlx_q, .gptq, .unknown => 0,
+        .tq1_0, .mlx_q, .gptq, .awq, .unknown => 0,
     };
 }
 

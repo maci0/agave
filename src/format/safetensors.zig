@@ -72,6 +72,10 @@ pub const SafeTensorsDir = struct {
     /// One entry per mmap'd shard file.
     shard_data: []ShardInfo,
 
+    /// AWQ quantization detected (quant_method == "awq" in config.json).
+    /// Controls I32 dtype mapping: .awq (column-major) vs .gptq (row-major).
+    is_awq: bool = false,
+
     /// Key-value metadata parsed from config.json.
     config_meta: std.StringHashMap(MetaValue),
 
@@ -268,6 +272,10 @@ pub const SafeTensorsDir = struct {
             .repacked_f32 = repacked_f32,
             .shard_data = shard_data,
             .config_meta = config_meta,
+            .is_awq = if (config_meta.get("quant_method")) |v| switch (v) {
+                .string => |s| std.mem.eql(u8, s, "awq"),
+                else => false,
+            } else false,
             .vocab = vocab,
             .merges = merges,
             .owned_strings = owned_strings,
@@ -401,11 +409,12 @@ pub const SafeTensorsDir = struct {
             std.log.err("Tensor data exceeds shard bounds for {s} (end={d}, shard_size={d})", .{ name, abs_end, shard.data.len });
             return null;
         }
+        const effective_dtype = if (entry.dtype == .gptq and self.is_awq) DType.awq else entry.dtype;
         return TensorInfo{
             .name = name,
             .n_dims = entry.n_dims,
             .dims = entry.dims,
-            .dtype = entry.dtype,
+            .dtype = effective_dtype,
             .data_ptr = shard.data[abs_start..].ptr,
         };
     }

@@ -528,8 +528,8 @@ pub fn dispatchGemv(be: backend_mod.Backend, fmt: format_mod.Format, x: [*]const
         }
         return;
     }
-    if (t.dtype == .gptq) {
-        // GPTQ: INT4 packed weights + FP16 scales + INT4 packed zeros
+    if (t.dtype == .gptq or t.dtype == .awq) {
+        // GPTQ/AWQ: INT4 packed weights + FP16 scales + INT4 packed zeros
         const base_name = blk: {
             if (std.mem.endsWith(u8, t.name, ".qweight")) {
                 break :blk t.name[0 .. t.name.len - ".qweight".len];
@@ -548,16 +548,14 @@ pub fn dispatchGemv(be: backend_mod.Backend, fmt: format_mod.Format, x: [*]const
                 @ptrCast(@alignCast(zt.data_ptr))
             else
                 @ptrCast(@alignCast(st.data_ptr));
-            be.gemvGptq(
-                x,
-                @ptrCast(@alignCast(t.data_ptr)),
-                @ptrCast(@alignCast(st.data_ptr)),
-                zeros_ptr,
-                y,
-                n,
-                k,
-                group_size,
-            );
+            if (t.dtype == .awq) {
+                // AWQ: column-major packing (8 output channels per INT32 word)
+                const awq = @import("../ops/awq.zig");
+                awq.awqGemv(x, @ptrCast(@alignCast(t.data_ptr)), @ptrCast(@alignCast(st.data_ptr)), zeros_ptr, y, n, k, group_size);
+            } else {
+                // GPTQ: row-major packing (8 input elements per INT32 word)
+                be.gemvGptq(x, @ptrCast(@alignCast(t.data_ptr)), @ptrCast(@alignCast(st.data_ptr)), zeros_ptr, y, n, k, group_size);
+            }
             return;
         }
     }
