@@ -497,3 +497,173 @@ test "fuzz: term key parser" {
         }
     }.f, .{});
 }
+
+// ── GEMV Kernel Fuzzing ─────────────────────────────────────────
+
+test "fuzz: Q8_0 GEMV no crash" {
+    const gemv = @import("backend/kernels/cpu/gemv.zig");
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *Smith) !void {
+            // Q8_0 block: 34 bytes (f16 scale + 32 i8 quants), block_size=32
+            var block: [34]u8 align(2) = undefined;
+            smith.bytesWithHash(&block, 0);
+            var x: [32]f32 = undefined;
+            for (&x, 0..) |*v, i| v.* = @as(f32, @floatFromInt(smith.valueWithHash(i8, @truncate(i + 50)))) / 10.0;
+            var y: [1]f32 = undefined;
+            gemv.gemvSeq(&x, &block, .q8_0, &y, 1, 32);
+            try std.testing.expect(std.math.isFinite(y[0]));
+        }
+    }.f, .{});
+}
+
+test "fuzz: Q4_0 GEMV no crash" {
+    const gemv = @import("backend/kernels/cpu/gemv.zig");
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *Smith) !void {
+            // Q4_0 block: 18 bytes (f16 scale + 16 bytes = 32 nibbles)
+            var block: [18]u8 align(2) = undefined;
+            smith.bytesWithHash(&block, 0);
+            var x: [32]f32 = undefined;
+            for (&x, 0..) |*v, i| v.* = @as(f32, @floatFromInt(smith.valueWithHash(i8, @truncate(i + 50)))) / 10.0;
+            var y: [1]f32 = undefined;
+            gemv.gemvSeq(&x, &block, .q4_0, &y, 1, 32);
+            try std.testing.expect(std.math.isFinite(y[0]));
+        }
+    }.f, .{});
+}
+
+test "fuzz: F16 GEMV no crash" {
+    const gemv = @import("backend/kernels/cpu/gemv.zig");
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *Smith) !void {
+            var w: [16]u16 = undefined;
+            for (&w, 0..) |*v, i| v.* = smith.valueWithHash(u16, @truncate(i));
+            var x: [16]f32 = undefined;
+            for (&x, 0..) |*v, i| v.* = @as(f32, @floatFromInt(smith.valueWithHash(i8, @truncate(i + 50)))) / 10.0;
+            var y: [1]f32 = undefined;
+            gemv.gemvSeq(&x, @ptrCast(&w), .f16, &y, 1, 16);
+            try std.testing.expect(!std.math.isNan(y[0]));
+        }
+    }.f, .{});
+}
+
+test "fuzz: BF16 GEMV no crash" {
+    const gemv = @import("backend/kernels/cpu/gemv.zig");
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *Smith) !void {
+            var w: [16]u16 = undefined;
+            for (&w, 0..) |*v, i| v.* = smith.valueWithHash(u16, @truncate(i));
+            var x: [16]f32 = undefined;
+            for (&x, 0..) |*v, i| v.* = @as(f32, @floatFromInt(smith.valueWithHash(i8, @truncate(i + 50)))) / 10.0;
+            var y: [1]f32 = undefined;
+            gemv.gemvSeq(&x, @ptrCast(&w), .bf16, &y, 1, 16);
+            try std.testing.expect(!std.math.isNan(y[0]));
+        }
+    }.f, .{});
+}
+
+test "fuzz: isBlockSparse no crash" {
+    const gemv = @import("backend/kernels/cpu/gemv.zig");
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *Smith) !void {
+            var x: [64]f32 = undefined;
+            for (&x, 0..) |*v, i| v.* = @as(f32, @floatFromInt(smith.valueWithHash(i8, @truncate(i)))) / 100.0;
+            const len = smith.indexWithHash(64, 100) + 1;
+            const start = smith.indexWithHash(65 - len, 101);
+            _ = gemv.isBlockSparse(&x, start, len);
+        }
+    }.f, .{});
+}
+
+// ── Quant Conversion Fuzzing ────────────────────────────────────
+
+test "fuzz: dequantToF32 Q8_0 no crash" {
+    const quant = @import("ops/quant.zig");
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *Smith) !void {
+            var block: [34]u8 align(2) = undefined;
+            smith.bytesWithHash(&block, 0);
+            var output: [32]f32 = undefined;
+            quant.dequantToF32(&output, &block, .q8_0, 32);
+            for (output) |v| try std.testing.expect(!std.math.isNan(v));
+        }
+    }.f, .{});
+}
+
+test "fuzz: dequantToF32 F16 no crash" {
+    const quant = @import("ops/quant.zig");
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *Smith) !void {
+            var block: [32]u8 align(2) = undefined;
+            smith.bytesWithHash(&block, 0);
+            var output: [16]f32 = undefined;
+            quant.dequantToF32(&output, &block, .f16, 16);
+        }
+    }.f, .{});
+}
+
+// ── KV Cache Fuzzing ────────────────────────────────────────────
+
+test "fuzz: TurboQuant kvStore+kvDot consistency" {
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *Smith) !void {
+            const n: usize = 64;
+            var src: [n]f32 = undefined;
+            for (&src, 0..) |*v, i| v.* = @as(f32, @floatFromInt(smith.valueWithHash(i8, @truncate(i)))) / 10.0;
+
+            const turbo_types = [_]kv_quant.KvQuantType{ .turbo2, .turbo3, .turbo4 };
+            const kv_type = turbo_types[smith.indexWithHash(turbo_types.len, 100)];
+
+            var kv_buf: [512]u8 = undefined;
+            const needed = kv_quant.kvSliceBytes(kv_type, n);
+            if (needed > kv_buf.len) return;
+            kv_quant.kvStore(&kv_buf, &src, n, kv_type);
+
+            var query: [n]f32 = undefined;
+            for (&query, 0..) |*v, i| v.* = @as(f32, @floatFromInt(smith.valueWithHash(i8, @truncate(i + 50)))) / 10.0;
+            const dot = kv_quant.kvDot(&query, &kv_buf, n, kv_type);
+            try std.testing.expect(std.math.isFinite(dot));
+        }
+    }.f, .{});
+}
+
+// ── Spec Decode Fuzzing ─────────────────────────────────────────
+
+test "fuzz: argmax stability" {
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *Smith) !void {
+            var logits: [32]f32 = undefined;
+            for (&logits, 0..) |*v, i| v.* = @as(f32, @floatFromInt(smith.valueWithHash(i8, @truncate(i))));
+            const idx = math_ops.argmax(&logits);
+            try std.testing.expect(idx < 32);
+            for (logits, 0..) |v, i| {
+                try std.testing.expect(v <= logits[idx] or i == idx);
+            }
+        }
+    }.f, .{});
+}
+
+// ── Model Helper Fuzzing ────────────────────────────────────────
+
+test "fuzz: expertWeightStride no overflow" {
+    const model_mod = @import("models/model.zig");
+    const format_mod = @import("format/format.zig");
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *Smith) !void {
+            const dtypes = [_]format_mod.DType{ .q4_k, .q8_0, .f16, .f32, .bf16, .q4_0, .q6_k };
+            const dtype = dtypes[smith.indexWithHash(dtypes.len, 0)];
+            const d0 = smith.valueWithHash(u16, 1);
+            const d1 = smith.valueWithHash(u16, 2);
+            const d2 = smith.valueWithHash(u16, 3);
+            const t = format_mod.TensorInfo{
+                .name = "test",
+                .n_dims = 3,
+                .dims = .{ d0, d1, d2, 0 },
+                .dtype = dtype,
+                .data_ptr = undefined,
+            };
+            const stride = model_mod.expertWeightStride(t);
+            _ = stride;
+        }
+    }.f, .{});
+}
