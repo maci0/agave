@@ -22,9 +22,22 @@ export fn gemv_q4_1_kernel(
 
     const nb = k / q4_1_block_elems;
     var sum: f32 = 0.0;
+    const sparse_threshold: f32 = 0.005;
 
     var b: u32 = tid;
     while (b < nb) : (b += bdim) {
+        const base_col = b * q4_1_block_elems;
+
+        // Sparse skip: check if all 32 input values are near-zero
+        var bmax: f32 = 0.0;
+        for (0..q4_1_block_elems) |i| {
+            if (base_col + i < k) {
+                const a = @abs(x[base_col + i]);
+                if (a > bmax) bmax = a;
+            }
+        }
+        if (bmax < sparse_threshold) continue;
+
         const bp = w + (row * nb + b) * q4_1_block_bytes;
         // Read f16 scale and min (little-endian)
         const d_bits: u16 = @as(u16, bp[0]) | (@as(u16, bp[1]) << 8);

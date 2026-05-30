@@ -83,9 +83,19 @@ export fn gemv_q6_k_kernel(x: [*]const f32, w: [*]const u8, y: [*]f32, n: u32, k
     var sum0: f32 = 0.0;
     var sum1: f32 = 0.0;
 
+    const sparse_threshold: f32 = 0.005;
     var blk = tid;
     while (blk < blocks_per_row) : (blk += bdim) {
         const base_col = blk * q6_k_group_size;
+
+        // Sparse skip: check if all 256 input values are near-zero
+        var bmax: f32 = 0.0;
+        const check_end = @min(base_col + q6_k_group_size, k);
+        for (base_col..check_end) |i| {
+            const a = @abs(x[i]);
+            if (a > bmax) bmax = a;
+        }
+        if (bmax < sparse_threshold) continue;
 
         // Row 0
         sum0 += q6kBlockDot(x, @intFromPtr(w) + row_base * row_bytes + blk * q6_k_block_size, k, base_col);

@@ -37,9 +37,22 @@ export fn gemv_iq4_nl_kernel(x: [*]const f32, w: [*]const u8, y: [*]f32, n: u32,
     const row_bytes = nb * block_bytes;
 
     var sum: f32 = 0.0;
+    const sparse_threshold: f32 = 0.005;
     var blk = tid;
     while (blk < nb) : (blk += bdim) {
-        sum += iq4nlBlockDot(x, w + row * row_bytes + blk * block_bytes, k, blk * block_elems);
+        const base_col = blk * block_elems;
+
+        // Sparse skip: check if all 32 input values are near-zero
+        var bmax: f32 = 0.0;
+        for (0..block_elems) |i| {
+            if (base_col + i < k) {
+                const a = @abs(x[base_col + i]);
+                if (a > bmax) bmax = a;
+            }
+        }
+        if (bmax < sparse_threshold) continue;
+
+        sum += iq4nlBlockDot(x, w + row * row_bytes + blk * block_bytes, k, base_col);
     }
     sum = cu.blockReduceAdd(sum);
     if (tid == 0) y[row] = sum;

@@ -44,9 +44,20 @@ export fn gemv_q8_0_kernel(x: [*]const f32, w: [*]const u8, y: [*]f32, n: u32, k
     var sum2: f32 = 0.0;
     var sum3: f32 = 0.0;
 
+    const sparse_threshold: f32 = 0.005;
     var blk = tid;
     while (blk < blocks_per_row) : (blk += bdim) {
         const base_col = blk * q8_0_group_size;
+
+        // Sparse skip: check if all 32 input values are near-zero
+        var bmax: f32 = 0.0;
+        for (0..q8_0_group_size) |i| {
+            if (base_col + i < k) {
+                const a = @abs(x[base_col + i]);
+                if (a > bmax) bmax = a;
+            }
+        }
+        if (bmax < sparse_threshold) continue;
 
         sum0 += q8_0BlockDot(x, w + row_base * row_bytes + blk * q8_0_block_size, k, base_col);
         if (nr_active > 1)

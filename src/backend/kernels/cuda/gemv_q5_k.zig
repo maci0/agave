@@ -97,9 +97,20 @@ export fn gemv_q5_k_kernel(
     var sum0: f32 = 0.0;
     var sum1: f32 = 0.0;
 
+    const sparse_threshold: f32 = 0.005;
     var b = tid;
     while (b < num_blocks) : (b += bdim) {
         const block_start = b * values_per_block;
+
+        // Sparse skip: check if all 256 input values are near-zero
+        var bmax: f32 = 0.0;
+        const check_end = @min(block_start + values_per_block, k);
+        for (block_start..check_end) |i| {
+            const a = @abs(x[i]);
+            if (a > bmax) bmax = a;
+        }
+        if (bmax < sparse_threshold) continue;
+
         sum0 += q5kBlockDot(x, w + (row_base) * num_blocks * bytes_per_block + b * bytes_per_block, k, block_start);
         if (nr_active > 1)
             sum1 += q5kBlockDot(x, w + (row_base + 1) * num_blocks * bytes_per_block + b * bytes_per_block, k, block_start);
