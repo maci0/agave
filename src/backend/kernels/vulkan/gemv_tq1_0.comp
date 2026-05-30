@@ -1,0 +1,112 @@
+#version 450
+#extension GL_KHR_shader_subgroup_arithmetic : require
+
+layout(local_size_x = 256) in;
+
+layout(set = 0, binding = 0) readonly buffer X { float x[]; };
+layout(set = 0, binding = 1) readonly buffer W { uint w_raw[]; };  // raw bytes as u32
+layout(set = 0, binding = 2) writeonly buffer Y { float y[]; };
+layout(push_constant) uniform Params { uint n; uint k; };
+
+shared float shared_sums[8];  // one slot per subgroup (256 threads / 32 lanes)
+
+// TQ1_0 block: 54 bytes = 2 bytes f16 scale + 48 bytes (5 trits/byte, 240 elems)
+//              + 4 bytes (4 trits/byte, 16 elems) = 256 elements per block.
+// Values are {-1, 0, +1}: decoded as (trit - 1).
+
+const uint BLOCK_ELEMS = 256;
+const uint BLOCK_BYTES = 54;
+const uint PACKED_BYTES_5 = 48;
+const uint PACKED_BYTES_4 = 4;
+const uint SCALE_BYTES = 2;
+
+float unpackF16(uint raw) {
+    return unpackHalf2x16(raw).x;
+}
+
+/// Read a single byte from the raw u32 array at a given byte offset.
+uint readByte(uint byte_off) {
+    return (w_raw[byte_off / 4] >> ((byte_off % 4) * 8)) & 0xFF;
+}
+
+/// Read f16 scale from two bytes at byte_off (may straddle u32 boundary).
+float readScale(uint byte_off) {
+    uint word_off = byte_off / 4;
+    uint byte_in_word = byte_off % 4;
+    uint raw_word = w_raw[word_off];
+    uint scale_bits;
+    if (byte_in_word <= 2) {
+        scale_bits = (raw_word >> (byte_in_word * 8)) & 0xFFFF;
+    } else {
+        // Straddles two u32 words (byte_in_word == 3)
+        uint lo = (raw_word >> 24) & 0xFF;
+        uint hi = w_raw[word_off + 1] & 0xFF;
+        scale_bits = lo | (hi << 8);
+    }
+    return unpackHalf2x16(scale_bits).x;
+}
+
+void main() {
+    uint row = gl_WorkGroupID.x;
+    uint tid = gl_LocalInvocationID.x;
+    uint tg_size = gl_WorkGroupSize.x;
+    if (row >= n) return;
+
+    uint nb = (k + BLOCK_ELEMS - 1) / BLOCK_ELEMS;
+    float sum = 0.0;
+
+    for (uint b = tid; b < nb; b += tg_size) {
+        uint bk = b * BLOCK_ELEMS;
+        uint block_byte_off = row * nb * BLOCK_BYTES + b * BLOCK_BYTES;
+
+        float scale = readScale(block_byte_off);
+        uint trit_off = block_byte_off + SCALE_BYTES;
+
+        uint elem = 0;
+
+        // First 240 elements: 5 trits per byte, 48 bytes
+        for (uint bi = 0; bi < PACKED_BYTES_5; bi++) {
+            uint bv = readByte(trit_off + bi);
+            if (bv < 243) {
+                int rem = int(bv);
+                for (int ti = 0; ti < 5; ti++) {
+                    if (bk + elem < k) {
+                        int trit = (rem % 3) - 1;
+                        sum += float(trit) * scale * x[bk + elem];
+                    }
+                    rem /= 3;
+                    elem++;
+                }
+            } else {
+                elem += 5;
+            }
+        }
+
+        // Last 16 elements: 4 trits per byte, 4 bytes
+        for (uint bi = 0; bi < PACKED_BYTES_4; bi++) {
+            uint bv = readByte(trit_off + PACKED_BYTES_5 + bi);
+            int rem = int(bv);
+            for (int ti = 0; ti < 4; ti++) {
+                if (bk + elem < k) {
+                    int trit = (rem % 3) - 1;
+                    sum += float(trit) * scale * x[bk + elem];
+                }
+                rem /= 3;
+                elem++;
+            }
+        }
+    }
+
+    // Subgroup + shared memory reduction
+    sum = subgroupAdd(sum);
+    uint sg_id = gl_SubgroupID;
+    uint sg_lane = gl_SubgroupInvocationID;
+    if (sg_lane == 0) shared_sums[sg_id] = sum;
+    barrier();
+    uint num_sg = (tg_size + gl_SubgroupSize - 1) / gl_SubgroupSize;
+    if (tid < num_sg) sum = shared_sums[tid]; else sum = 0.0;
+    if (tid < gl_SubgroupSize) {
+        sum = subgroupAdd(sum);
+        if (tid == 0) y[row] = sum;
+    }
+}
