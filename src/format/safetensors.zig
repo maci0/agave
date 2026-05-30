@@ -338,9 +338,18 @@ pub const SafeTensorsDir = struct {
             var iter = ggufToHfNameIter(name, pfx);
             while (iter.next(&buf)) |hf_name| {
                 if (self.lookupStable(hf_name)) |r| return self.entryToInfo(r.key, r.entry);
+                // AWQ/GPTQ: try .qweight instead of .weight
+                if (std.mem.endsWith(u8, hf_name, ".weight")) {
+                    var awq_buf: [name_buf_size]u8 = undefined;
+                    const base_len = hf_name.len - ".weight".len;
+                    @memcpy(awq_buf[0..base_len], hf_name[0..base_len]);
+                    const awq_suffix = ".qweight";
+                    @memcpy(awq_buf[base_len..][0..awq_suffix.len], awq_suffix);
+                    if (self.lookupStable(awq_buf[0 .. base_len + awq_suffix.len])) |r|
+                        return self.entryToInfo(r.key, r.entry);
+                }
             }
         }
-        // Log ALL tensor misses
         return null;
     }
 
