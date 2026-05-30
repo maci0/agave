@@ -2971,3 +2971,143 @@ test "Metal backend gemvMlxQ4 large matrix" {
         try std.testing.expectApproxEqRel(y_cpu[i], y_metal[i], 1e-3);
     }
 }
+
+test "Metal gemvThreadgroupSize calculations" {
+    if (comptime builtin.os.tag != .macos) return error.SkipZigTest;
+    const testing = std.testing;
+
+    // Q4_0: 32-element blocks, k=256 means 8 blocks -> round up to 32 (SIMD width)
+    try testing.expectEqual(@as(usize, 32), MetalBackend.gemvThreadgroupSize(.q4_0, 256));
+    // Q4_0: k=8192 means 256 blocks -> capped at threadgroup_size=256
+    try testing.expectEqual(@as(usize, 256), MetalBackend.gemvThreadgroupSize(.q4_0, 8192));
+    // Q4_K: 256-element superblocks, k=256 means 1 block -> 32 (SIMD minimum)
+    try testing.expectEqual(@as(usize, 32), MetalBackend.gemvThreadgroupSize(.q4_k, 256));
+    // Q4_K: k=4096 means 16 blocks -> 32
+    try testing.expectEqual(@as(usize, 32), MetalBackend.gemvThreadgroupSize(.q4_k, 4096));
+    // f32: always 256
+    try testing.expectEqual(@as(usize, 256), MetalBackend.gemvThreadgroupSize(.f32, 1024));
+    // bf16: always 256
+    try testing.expectEqual(@as(usize, 256), MetalBackend.gemvThreadgroupSize(.bf16, 1024));
+}
+
+test "Metal gemvThreadgroups calculations" {
+    if (comptime builtin.os.tag != .macos) return error.SkipZigTest;
+    const testing = std.testing;
+
+    // Q4_0 with NR=4
+    try testing.expectEqual(@as(usize, 1), MetalBackend.gemvThreadgroups(.q4_0, 1));
+    try testing.expectEqual(@as(usize, 1), MetalBackend.gemvThreadgroups(.q4_0, 4));
+    try testing.expectEqual(@as(usize, 2), MetalBackend.gemvThreadgroups(.q4_0, 5));
+
+    // Q4_K with NR=2
+    try testing.expectEqual(@as(usize, 1), MetalBackend.gemvThreadgroups(.q4_k, 1));
+    try testing.expectEqual(@as(usize, 1), MetalBackend.gemvThreadgroups(.q4_k, 2));
+    try testing.expectEqual(@as(usize, 2), MetalBackend.gemvThreadgroups(.q4_k, 3));
+
+    // BF16 with NR=2
+    try testing.expectEqual(@as(usize, 1), MetalBackend.gemvThreadgroups(.bf16, 1));
+    try testing.expectEqual(@as(usize, 1), MetalBackend.gemvThreadgroups(.bf16, 2));
+    try testing.expectEqual(@as(usize, 2), MetalBackend.gemvThreadgroups(.bf16, 3));
+
+    // f32: 1 threadgroup per output row
+    try testing.expectEqual(@as(usize, 100), MetalBackend.gemvThreadgroups(.f32, 100));
+}
+
+test "Metal tuning constants are valid" {
+    if (comptime builtin.os.tag != .macos) return error.SkipZigTest;
+    const testing = std.testing;
+
+    try testing.expect(threadgroup_size > 0);
+    try testing.expect(threadgroup_size <= 1024);
+    try testing.expect(softmax_cpu_threshold > 0);
+    try testing.expect(sdpa_max_seq_len >= 1024);
+    try testing.expect(sdpa_max_head_dim >= 64);
+
+    try testing.expect(q4_0_nr > 0);
+    try testing.expect(q8_0_nr > 0);
+    try testing.expect(q4_k_nr > 0);
+    try testing.expect(q2_k_nr > 0);
+    try testing.expect(q3_k_nr > 0);
+    try testing.expect(bf16_nr > 0);
+    try testing.expect(f16_nr > 0);
+
+    try testing.expectEqual(@as(usize, 32), simd_width);
+    try testing.expect(sdpa_threadgroup_size > 0);
+    try testing.expect(sdpa_threadgroup_size <= threadgroup_size);
+
+    try testing.expect(mlx_words_per_group_q4 > 0);
+    try testing.expect(mlx_words_per_group_q6 > 0);
+    try testing.expect(mlx_words_per_group_q8 > 0);
+    try testing.expect(mxfp4_words_per_group > 0);
+}
+
+test "Metal n_pipelines count" {
+    if (comptime builtin.os.tag != .macos) return error.SkipZigTest;
+    try std.testing.expectEqual(@as(u32, 70), MetalBackend.n_pipelines);
+}
+
+test "Metal backend public function signatures compile" {
+    comptime {
+        _ = @TypeOf(MetalBackend.gemv);
+        _ = @TypeOf(MetalBackend.gemvMulti);
+        _ = @TypeOf(MetalBackend.gemvT);
+        _ = @TypeOf(MetalBackend.gemvNvfp4St);
+        _ = @TypeOf(MetalBackend.gemvMlxQ);
+        _ = @TypeOf(MetalBackend.gemvMxfp4St);
+        _ = @TypeOf(MetalBackend.gemvGptq);
+        _ = @TypeOf(MetalBackend.gemvAwq);
+        _ = @TypeOf(MetalBackend.rmsNorm);
+        _ = @TypeOf(MetalBackend.rmsNormMulti);
+        _ = @TypeOf(MetalBackend.addRmsNorm);
+        _ = @TypeOf(MetalBackend.silu);
+        _ = @TypeOf(MetalBackend.gelu);
+        _ = @TypeOf(MetalBackend.siluMul);
+        _ = @TypeOf(MetalBackend.geluMul);
+        _ = @TypeOf(MetalBackend.sigmoidMul);
+        _ = @TypeOf(MetalBackend.add);
+        _ = @TypeOf(MetalBackend.addScaled);
+        _ = @TypeOf(MetalBackend.mul);
+        _ = @TypeOf(MetalBackend.softmax);
+        _ = @TypeOf(MetalBackend.rope);
+        _ = @TypeOf(MetalBackend.embLookup);
+        _ = @TypeOf(MetalBackend.l2Norm);
+        _ = @TypeOf(MetalBackend.deinterleave);
+        _ = @TypeOf(MetalBackend.splitQGate);
+        _ = @TypeOf(MetalBackend.sdpa);
+        _ = @TypeOf(MetalBackend.sdpaPaged);
+        _ = @TypeOf(MetalBackend.sdpaWithStats);
+        _ = @TypeOf(MetalBackend.sdpaPrefill);
+        _ = @TypeOf(MetalBackend.sdpaTree);
+        _ = @TypeOf(MetalBackend.gemm);
+        _ = @TypeOf(MetalBackend.rmsNormBatched);
+        _ = @TypeOf(MetalBackend.ropeBatched);
+        _ = @TypeOf(MetalBackend.deltaNet);
+        _ = @TypeOf(MetalBackend.fusedFfnGateUpSiluQ8);
+        _ = @TypeOf(MetalBackend.fusedFfnGateUpSiluQ4K);
+        _ = @TypeOf(MetalBackend.fusedFfnGateUpSiluQ40);
+        _ = @TypeOf(MetalBackend.fusedFfnGateUpGeluQ8);
+        _ = @TypeOf(MetalBackend.fusedFfnGateUpGeluQ4K);
+        _ = @TypeOf(MetalBackend.fusedFfnGateUpGeluQ40);
+        _ = @TypeOf(MetalBackend.fusedFfnGateUpSiluQ6K);
+        _ = @TypeOf(MetalBackend.fusedFfnGateUpGeluQ6K);
+        _ = @TypeOf(MetalBackend.fusedFfnGateUpSiluQ5K);
+        _ = @TypeOf(MetalBackend.fusedFfnGateUpGeluQ5K);
+        _ = @TypeOf(MetalBackend.fusedFfnGateUpSiluMlxQ4);
+        _ = @TypeOf(MetalBackend.dispatchMegakernelQwen35Q8);
+        _ = @TypeOf(MetalBackend.dispatchMegakernelGemmaQ4K);
+        _ = @TypeOf(MetalBackend.dispatchMegakernelQwen35Q4K);
+        _ = @TypeOf(MetalBackend.dispatchMegakernelNemotronHQ8);
+        _ = @TypeOf(MetalBackend.dispatchMegakernelAuto);
+        _ = @TypeOf(MetalBackend.compileComposedMegakernel);
+        _ = @TypeOf(MetalBackend.sync);
+        _ = @TypeOf(MetalBackend.beginBatch);
+        _ = @TypeOf(MetalBackend.endBatch);
+        _ = @TypeOf(MetalBackend.init);
+        _ = @TypeOf(MetalBackend.deinit);
+        _ = @TypeOf(MetalBackend.backendInfo);
+        _ = @TypeOf(MetalBackend.deviceName);
+        _ = @TypeOf(MetalBackend.allocKvSlice);
+        _ = @TypeOf(MetalBackend.freeKvSlice);
+        _ = @TypeOf(MetalBackend.resetCounters);
+    }
+}
