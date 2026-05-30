@@ -59,7 +59,8 @@ pub const GGMLType = enum(u32) {
     f64 = 28,
     iq1_m = 29,
     bf16 = 30,
-    tq1_0 = 36,
+    tq1_0 = 34,
+    tq2_0 = 35,
     mxfp4 = 39,
     _,
 
