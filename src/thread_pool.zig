@@ -171,3 +171,83 @@ pub const ThreadPool = struct {
         }
     }
 };
+
+// ── Tests ────────────────────────────────────────────────────
+
+/// Test context for parallelFor: atomically accumulates a sum of indices.
+const SumContext = struct {
+    result: std.atomic.Value(usize),
+
+    fn callback(ctx_ptr: *anyopaque, start: usize, end: usize) void {
+        const self: *SumContext = @ptrCast(@alignCast(ctx_ptr));
+        var local_sum: usize = 0;
+        for (start..end) |i| {
+            local_sum += i;
+        }
+        _ = self.result.fetchAdd(local_sum, .acq_rel);
+    }
+};
+
+test "parallelFor basic" {
+    var threaded = Io.Threaded.init(std.testing.allocator, .{});
+    defer threaded.deinit();
+
+    var pool = ThreadPool.init(4);
+    pool.spawn(threaded.io());
+    defer pool.deinit();
+
+    var ctx = SumContext{ .result = std.atomic.Value(usize).init(0) };
+    const n: usize = 1000;
+    pool.parallelFor(n, 16, @ptrCast(&ctx), SumContext.callback);
+
+    // Sum of 0..999 = 999 * 1000 / 2 = 499500
+    const expected: usize = (n - 1) * n / 2;
+    try std.testing.expectEqual(expected, ctx.result.load(.acquire));
+}
+
+test "parallelFor single element" {
+    var threaded = Io.Threaded.init(std.testing.allocator, .{});
+    defer threaded.deinit();
+
+    var pool = ThreadPool.init(4);
+    pool.spawn(threaded.io());
+    defer pool.deinit();
+
+    var ctx = SumContext{ .result = std.atomic.Value(usize).init(0) };
+    pool.parallelFor(1, 1, @ptrCast(&ctx), SumContext.callback);
+
+    // Only index 0, so sum = 0
+    try std.testing.expectEqual(@as(usize, 0), ctx.result.load(.acquire));
+}
+
+test "parallelFor zero elements" {
+    var threaded = Io.Threaded.init(std.testing.allocator, .{});
+    defer threaded.deinit();
+
+    var pool = ThreadPool.init(4);
+    pool.spawn(threaded.io());
+    defer pool.deinit();
+
+    var ctx = SumContext{ .result = std.atomic.Value(usize).init(42) };
+    pool.parallelFor(0, 1, @ptrCast(&ctx), SumContext.callback);
+
+    // No work done — result should remain at initial value
+    try std.testing.expectEqual(@as(usize, 42), ctx.result.load(.acquire));
+}
+
+test "init and deinit without work" {
+    var threaded = Io.Threaded.init(std.testing.allocator, .{});
+    defer threaded.deinit();
+
+    var pool = ThreadPool.init(4);
+    pool.spawn(threaded.io());
+
+    // Verify workers were spawned
+    try std.testing.expect(pool.n_workers > 0);
+    try std.testing.expect(pool.n_workers <= max_workers);
+
+    pool.deinit();
+
+    // After deinit, n_workers should be 0
+    try std.testing.expectEqual(@as(usize, 0), pool.n_workers);
+}

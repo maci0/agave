@@ -44,6 +44,7 @@ const trit4_table: [81][4]i8 = blk: {
     break :blk table;
 };
 
+/// Entry point for TQ1_0 GEMV: y[row] = sum over blocks of (dequant(w) * x).
 pub fn gemvTQ1_0(x: [*]const f32, w: [*]const u8, y: [*]f32, n: usize, k: usize) void {
     const nb = (k + block_elems - 1) / block_elems;
     const row_bytes = nb * block_bytes;
@@ -96,4 +97,97 @@ pub fn gemvTQ1_0(x: [*]const f32, w: [*]const u8, y: [*]f32, n: usize, k: usize)
         }
         y[row] = sum;
     }
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+const testing = std.testing;
+
+/// Helper: fill a TQ1_0 block (54 bytes) with a constant trit-byte value
+/// for the 5-packed region and a constant for the 4-packed region, plus an f16 scale.
+fn fillBlock(buf: *[block_bytes]u8, scale: f16, trit5_val: u8, trit4_val: u8) void {
+    const scale_bits = @as(u16, @bitCast(scale));
+    std.mem.writeInt(u16, buf[0..2], scale_bits, .little);
+    @memset(buf[scale_bytes .. scale_bytes + packed_bytes_5], trit5_val);
+    @memset(buf[scale_bytes + packed_bytes_5 .. scale_bytes + packed_bytes_5 + packed_bytes_4], trit4_val);
+}
+
+test "TQ1_0 all-zero block (trit=1 → weight=0) produces zero output" {
+    // Trit value 1 in every position → decoded weight = (1-1)*scale = 0.
+    // 5-packed byte: 1 + 1*3 + 1*9 + 1*27 + 1*81 = 121.
+    // 4-packed byte: 1 + 1*3 + 1*9 + 1*27 = 40.
+    var block: [block_bytes]u8 = undefined;
+    fillBlock(&block, @as(f16, 1.0), 121, 40);
+
+    var x: [block_elems]f32 = undefined;
+    @memset(&x, 1.0);
+
+    var y: [1]f32 = .{999.0};
+    gemvTQ1_0(&x, &block, &y, 1, block_elems);
+
+    try testing.expectApproxEqAbs(@as(f32, 0.0), y[0], 0.01);
+}
+
+test "TQ1_0 all-positive block (trit=2 → weight=+1) sums to 256" {
+    // Trit value 2 in every position → decoded weight = (2-1)*scale = +1*scale.
+    // 5-packed byte: 2 + 2*3 + 2*9 + 2*27 + 2*81 = 242.
+    // 4-packed byte: 2 + 2*3 + 2*9 + 2*27 = 80.
+    var block: [block_bytes]u8 = undefined;
+    fillBlock(&block, @as(f16, 1.0), 242, 80);
+
+    var x: [block_elems]f32 = undefined;
+    @memset(&x, 1.0);
+
+    var y: [1]f32 = .{0.0};
+    gemvTQ1_0(&x, &block, &y, 1, block_elems);
+
+    // All 256 elements are +1 * 1.0 * 1.0 = 1.0, sum = 256.
+    try testing.expectApproxEqAbs(@as(f32, 256.0), y[0], 0.01);
+}
+
+test "TQ1_0 scale factor applied correctly" {
+    // Same as all-positive but scale=0.5 → sum should be 128.
+    var block: [block_bytes]u8 = undefined;
+    fillBlock(&block, @as(f16, 0.5), 242, 80);
+
+    var x: [block_elems]f32 = undefined;
+    @memset(&x, 1.0);
+
+    var y: [1]f32 = .{0.0};
+    gemvTQ1_0(&x, &block, &y, 1, block_elems);
+
+    try testing.expectApproxEqAbs(@as(f32, 128.0), y[0], 0.5);
+}
+
+test "TQ1_0 all-negative block (trit=0 → weight=-1) sums to -256" {
+    // Trit value 0 in every position → decoded weight = (0-1)*scale = -1.
+    // 5-packed byte: 0. 4-packed byte: 0.
+    var block: [block_bytes]u8 = undefined;
+    fillBlock(&block, @as(f16, 1.0), 0, 0);
+
+    var x: [block_elems]f32 = undefined;
+    @memset(&x, 1.0);
+
+    var y: [1]f32 = .{0.0};
+    gemvTQ1_0(&x, &block, &y, 1, block_elems);
+
+    try testing.expectApproxEqAbs(@as(f32, -256.0), y[0], 0.01);
+}
+
+test "TQ1_0 multi-row GEMV" {
+    // Two rows: first all-positive, second all-zero trits.
+    var blocks: [2 * block_bytes]u8 = undefined;
+    fillBlock(blocks[0..block_bytes], @as(f16, 1.0), 242, 80);
+    fillBlock(blocks[block_bytes..][0..block_bytes], @as(f16, 1.0), 121, 40);
+
+    var x: [block_elems]f32 = undefined;
+    @memset(&x, 1.0);
+
+    var y: [2]f32 = .{ 0.0, 0.0 };
+    gemvTQ1_0(&x, &blocks, &y, 2, block_elems);
+
+    try testing.expectApproxEqAbs(@as(f32, 256.0), y[0], 0.01);
+    try testing.expectApproxEqAbs(@as(f32, 0.0), y[1], 0.01);
 }

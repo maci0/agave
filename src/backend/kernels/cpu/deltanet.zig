@@ -156,3 +156,180 @@ pub fn deltaNetHead(h: usize, gate_vals: *const [max_deltanet_v_heads]f32, beta_
         output[off + vi] = normed * (z / (1.0 + @exp(-z)));
     }
 }
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+const testing = std.testing;
+
+/// Build a minimal DeltaNetParams for testing with the given dimensions.
+fn testParams(num_heads: u32, head_k: u32, head_v: u32) DeltaNetParams {
+    return .{
+        .conv_ch = 2 * num_heads * head_k + num_heads * head_v,
+        .d_conv = 4,
+        .d_inner = num_heads * head_v,
+        .num_k_heads = num_heads,
+        .head_k_dim = head_k,
+        .num_v_heads = num_heads,
+        .head_v_dim = head_v,
+        .q_scale = 1.0,
+        .rms_eps = 1e-6,
+    };
+}
+
+test "deltaNetHead zero state, zero input produces zero output" {
+    // With zero Q, K, V, and zero SSM state, output before gating should be zero.
+    // The gating applies RMSNorm (0/eps → ~0) * SiLU(z). With z=1 the SiLU is nonzero
+    // but normed is ~0, so final output should be ~0.
+    const num_heads: u32 = 1;
+    const head_k: u32 = 8;
+    const head_v: u32 = 8;
+    const p = testParams(num_heads, head_k, head_v);
+
+    var q = [_]f32{0.0} ** head_k;
+    var k = [_]f32{0.0} ** head_k;
+    var v = [_]f32{0.0} ** head_v;
+    var output = [_]f32{999.0} ** head_v;
+    var ssm_state = [_]f32{0.0} ** (head_v * head_k);
+    var z_buf = [_]f32{1.0} ** head_v; // nonzero gate to avoid 0*0 ambiguity
+    var norm_w = [_]f32{1.0} ** head_v;
+    var gate_vals: [max_deltanet_v_heads]f32 = undefined;
+    var beta_vals: [max_deltanet_v_heads]f32 = undefined;
+    gate_vals[0] = 0.0; // decay = exp(0) = 1
+    beta_vals[0] = 0.5;
+
+    deltaNetHead(0, &gate_vals, &beta_vals, &q, &k, &v, &output, &ssm_state, &z_buf, &norm_w, p);
+
+    for (0..head_v) |i| {
+        try testing.expectApproxEqAbs(@as(f32, 0.0), output[i], 0.01);
+    }
+}
+
+test "deltaNetHead identity-like recurrence stores value in state" {
+    // Set up: Q=K=unit vector along dim 0 (normalized), V=[1,0,...], beta=1, decay=1.
+    // With zero initial state: sk=0, delta = beta*(v-0) = v, output = (0 + delta*kq) * q_scale.
+    // kq = dot(K,Q) = 1.0, so output[0] = 1.0 * 1.0 = 1.0 before gating.
+    // After gating with z=large (SiLU≈z) and norm_w=1: output ≈ normed * z.
+    const num_heads: u32 = 1;
+    const head_k: u32 = 8;
+    const head_v: u32 = 8;
+    const p = testParams(num_heads, head_k, head_v);
+
+    // Q and K are unit vectors along dim 0
+    var q = [_]f32{0.0} ** head_k;
+    var k = [_]f32{0.0} ** head_k;
+    q[0] = 1.0;
+    k[0] = 1.0;
+
+    var v = [_]f32{0.0} ** head_v;
+    v[0] = 1.0;
+
+    var output = [_]f32{0.0} ** head_v;
+    var ssm_state = [_]f32{0.0} ** (head_v * head_k);
+    // Use z=10 so SiLU(z)≈z and gating doesn't squash much.
+    var z_buf = [_]f32{10.0} ** head_v;
+    var norm_w = [_]f32{1.0} ** head_v;
+    var gate_vals: [max_deltanet_v_heads]f32 = undefined;
+    var beta_vals: [max_deltanet_v_heads]f32 = undefined;
+    gate_vals[0] = 0.0; // decay = exp(0) = 1
+    beta_vals[0] = 1.0; // full beta
+
+    deltaNetHead(0, &gate_vals, &beta_vals, &q, &k, &v, &output, &ssm_state, &z_buf, &norm_w, p);
+
+    // After recurrence: output[0] before gating = (0 + 1.0*1.0) * 1.0 = 1.0.
+    // RMSNorm: rms = sqrt(1.0/8 + eps) ≈ 0.3536 → inv ≈ 2.828. normed[0] = 1.0*2.828*1.0 = 2.828.
+    // SiLU(10) ≈ 10.0 (saturated). Final ≈ 2.828 * 10.0 = 28.28.
+    // Other dims: normed = 0, so output stays 0.
+    try testing.expect(output[0] > 1.0); // gated output is positive and amplified
+    for (1..head_v) |i| {
+        try testing.expectApproxEqAbs(@as(f32, 0.0), output[i], 0.01);
+    }
+
+    // Verify state was updated: ssm_state[0*head_k + 0] should be delta*k[0] = 1.0*1.0 = 1.0
+    try testing.expectApproxEqAbs(@as(f32, 1.0), ssm_state[0], 0.01);
+}
+
+test "deltaNetHead decay shrinks state" {
+    // Pre-load state, run with zero V to observe decay effect.
+    // gate_vals[0] = -1 → decay = exp(-1) ≈ 0.368.
+    const num_heads: u32 = 1;
+    const head_k: u32 = 8;
+    const head_v: u32 = 8;
+    const p = testParams(num_heads, head_k, head_v);
+
+    var q = [_]f32{0.0} ** head_k;
+    var k = [_]f32{0.0} ** head_k;
+    q[0] = 1.0;
+    k[0] = 1.0;
+
+    var v = [_]f32{0.0} ** head_v;
+    var output = [_]f32{0.0} ** head_v;
+
+    // Pre-load state: row 0 of state has 5.0 at position 0
+    var ssm_state = [_]f32{0.0} ** (head_v * head_k);
+    ssm_state[0] = 5.0;
+
+    var z_buf = [_]f32{10.0} ** head_v;
+    var norm_w = [_]f32{1.0} ** head_v;
+    var gate_vals: [max_deltanet_v_heads]f32 = undefined;
+    var beta_vals: [max_deltanet_v_heads]f32 = undefined;
+    gate_vals[0] = -1.0; // decay = exp(-1) ≈ 0.368
+    beta_vals[0] = 1.0;
+
+    deltaNetHead(0, &gate_vals, &beta_vals, &q, &k, &v, &output, &ssm_state, &z_buf, &norm_w, p);
+
+    // After decay and delta update:
+    // s_dec = 5.0 * 0.368 = 1.839
+    // sk = s_dec * k[0] = 1.839 (state dot k for vi=0)
+    // delta = beta * (v[0] - sk) = 1.0 * (0 - 1.839) = -1.839
+    // new state[0] = s_dec + k[0]*delta = 1.839 + 1.0*(-1.839) = 0.0
+    // But the decay should have reduced the original 5.0 → decayed value
+    const decay = @exp(@as(f32, -1.0));
+    // State should be less than original
+    try testing.expect(@abs(ssm_state[0]) < 5.0 * decay + 0.01);
+}
+
+test "deltaNet full pipeline runs without crash" {
+    // Smoke test: run the full deltaNet function with minimal dimensions.
+    const num_heads: u32 = 1;
+    const head_k: u32 = 8;
+    const head_v: u32 = 8;
+    const d_conv: u32 = 4;
+    const n_qk = num_heads * head_k;
+    const conv_ch = 2 * n_qk + num_heads * head_v;
+
+    const p = DeltaNetParams{
+        .conv_ch = conv_ch,
+        .d_conv = d_conv,
+        .d_inner = num_heads * head_v,
+        .num_k_heads = num_heads,
+        .head_k_dim = head_k,
+        .num_v_heads = num_heads,
+        .head_v_dim = head_v,
+        .q_scale = 1.0,
+        .rms_eps = 1e-6,
+    };
+
+    var conv_in = [_]f32{0.1} ** conv_ch;
+    var conv_out = [_]f32{0.0} ** conv_ch;
+    var z_buf = [_]f32{1.0} ** (num_heads * head_v);
+    var alpha_buf = [_]f32{0.0} ** num_heads;
+    var beta_buf = [_]f32{0.0} ** num_heads;
+    var output = [_]f32{0.0} ** (num_heads * head_v);
+    var conv_state = [_]f32{0.0} ** (conv_ch * (d_conv - 1));
+    var ssm_state_arr = [_]f32{0.0} ** (num_heads * head_v * head_k);
+    const ssm_state: []f32 = &ssm_state_arr;
+    var ssm_a = [_]f32{-1.0} ** num_heads;
+    var dt_bias = [_]f32{0.0} ** num_heads;
+    var conv_w = [_]f32{0.25} ** (conv_ch * d_conv);
+    var ssm_norm_w = [_]f32{1.0} ** head_v;
+
+    deltaNet(&conv_in, &conv_out, &z_buf, &alpha_buf, &beta_buf, &output, &conv_state, ssm_state, &ssm_a, &dt_bias, &conv_w, &ssm_norm_w, p);
+
+    // Verify output is finite (not NaN or Inf)
+    for (0..num_heads * head_v) |i| {
+        try testing.expect(!std.math.isNan(output[i]));
+        try testing.expect(!std.math.isInf(output[i]));
+    }
+}

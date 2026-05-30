@@ -368,6 +368,7 @@ pub const LineEditor = struct {
 
     /// Display width with ANSI escape sequence filtering.
     /// Uses the self-contained term module for Unicode width calculation.
+    /// Also used by tests in this file.
     fn displayWidth(s: []const u8) usize {
         // Filter out ANSI escape sequences for prompt width calculation
         var cols: usize = 0;
@@ -393,3 +394,154 @@ pub const LineEditor = struct {
         return cols;
     }
 };
+
+// ── Tests ────────────────────────────────────────────────────
+
+test "init and deinit empty" {
+    var editor = LineEditor.init(std.testing.allocator);
+    defer editor.deinit();
+
+    try std.testing.expectEqual(@as(usize, 0), editor.hist_len);
+}
+
+test "addHistory basic" {
+    var editor = LineEditor.init(std.testing.allocator);
+    defer editor.deinit();
+
+    editor.addHistory("hello");
+    try std.testing.expectEqual(@as(usize, 1), editor.hist_len);
+    try std.testing.expectEqualStrings("hello", editor.history[0]);
+
+    editor.addHistory("world");
+    try std.testing.expectEqual(@as(usize, 2), editor.hist_len);
+    try std.testing.expectEqualStrings("world", editor.history[1]);
+}
+
+test "addHistory deduplicates consecutive" {
+    var editor = LineEditor.init(std.testing.allocator);
+    defer editor.deinit();
+
+    editor.addHistory("hello");
+    editor.addHistory("hello");
+    try std.testing.expectEqual(@as(usize, 1), editor.hist_len);
+
+    // Different entry should be added
+    editor.addHistory("world");
+    try std.testing.expectEqual(@as(usize, 2), editor.hist_len);
+
+    // Same as last should be deduplicated
+    editor.addHistory("world");
+    try std.testing.expectEqual(@as(usize, 2), editor.hist_len);
+}
+
+test "addHistory ignores empty" {
+    var editor = LineEditor.init(std.testing.allocator);
+    defer editor.deinit();
+
+    editor.addHistory("");
+    try std.testing.expectEqual(@as(usize, 0), editor.hist_len);
+}
+
+test "addHistory evicts oldest when full" {
+    var editor = LineEditor.init(std.testing.allocator);
+    defer editor.deinit();
+
+    // Fill history to max
+    for (0..max_history) |i| {
+        var buf: [32]u8 = undefined;
+        const s = std.fmt.bufPrint(&buf, "entry-{d}", .{i}) catch unreachable;
+        editor.addHistory(s);
+    }
+    try std.testing.expectEqual(max_history, editor.hist_len);
+
+    // Adding one more should evict the oldest ("entry-0")
+    editor.addHistory("overflow");
+    try std.testing.expectEqual(max_history, editor.hist_len);
+    try std.testing.expectEqualStrings("overflow", editor.history[max_history - 1]);
+    // First entry should now be "entry-1" (entry-0 was evicted)
+    try std.testing.expectEqualStrings("entry-1", editor.history[0]);
+}
+
+test "searchBack finds match" {
+    var editor = LineEditor.init(std.testing.allocator);
+    defer editor.deinit();
+
+    editor.addHistory("foo bar");
+    editor.addHistory("baz qux");
+    editor.addHistory("foo baz");
+
+    // Search for "foo" — should find last match (index 2)
+    const result = editor.searchBack("foo", null);
+    try std.testing.expectEqual(@as(?usize, 2), result);
+
+    // Search for "qux" — should find index 1
+    const result2 = editor.searchBack("qux", null);
+    try std.testing.expectEqual(@as(?usize, 1), result2);
+}
+
+test "searchBack reverse iteration" {
+    var editor = LineEditor.init(std.testing.allocator);
+    defer editor.deinit();
+
+    editor.addHistory("alpha");
+    editor.addHistory("beta");
+    editor.addHistory("alpha again");
+
+    // Start from last, find "alpha" — should match index 2
+    const first = editor.searchBack("alpha", null);
+    try std.testing.expectEqual(@as(?usize, 2), first);
+
+    // Continue searching from before that match — should find index 0
+    const second = editor.searchBack("alpha", 1);
+    try std.testing.expectEqual(@as(?usize, 0), second);
+}
+
+test "searchBack no match" {
+    var editor = LineEditor.init(std.testing.allocator);
+    defer editor.deinit();
+
+    editor.addHistory("hello");
+    const result = editor.searchBack("xyz", null);
+    try std.testing.expect(result == null);
+}
+
+test "searchBack empty query" {
+    var editor = LineEditor.init(std.testing.allocator);
+    defer editor.deinit();
+
+    editor.addHistory("hello");
+    const result = editor.searchBack("", null);
+    try std.testing.expect(result == null);
+}
+
+test "searchBack empty history" {
+    var editor = LineEditor.init(std.testing.allocator);
+    defer editor.deinit();
+
+    const result = editor.searchBack("hello", null);
+    try std.testing.expect(result == null);
+}
+
+test "displayWidth plain ascii" {
+    try std.testing.expectEqual(@as(usize, 5), LineEditor.displayWidth("hello"));
+    try std.testing.expectEqual(@as(usize, 0), LineEditor.displayWidth(""));
+}
+
+test "displayWidth strips ANSI escape sequences" {
+    // Bold "hi" — ESC[1m + hi + ESC[m should be 2 columns
+    try std.testing.expectEqual(@as(usize, 2), LineEditor.displayWidth("\x1b[1mhi\x1b[m"));
+    // Color sequence — ESC[31m + abc + ESC[0m should be 3 columns
+    try std.testing.expectEqual(@as(usize, 3), LineEditor.displayWidth("\x1b[31mabc\x1b[0m"));
+}
+
+test "displayWidth skips control characters" {
+    // Tab and other control characters should not add width
+    try std.testing.expectEqual(@as(usize, 2), LineEditor.displayWidth("a\x01b"));
+    try std.testing.expectEqual(@as(usize, 2), LineEditor.displayWidth("a\tb"));
+}
+
+test "displayWidth multibyte UTF-8" {
+    // "café" — e + combining acute = 4 visible columns
+    // Actually: c(1) + a(1) + f(1) + e(1) + combining(0) = 4
+    try std.testing.expectEqual(@as(usize, 4), LineEditor.displayWidth("caf\xc3\xa9"));
+}

@@ -110,3 +110,73 @@ pub fn gemvSeq(x: [*]const f32, w_data: [*]const u8, dtype: DType, y: [*]f32, n:
         },
     }
 }
+
+// ── Tests ────────────────────────────────────────────────────────
+
+test "isBlockSparse all zeros" {
+    var x = [_]f32{0.0} ** 32;
+    try std.testing.expect(isBlockSparse(&x, 0, 32));
+}
+
+test "isBlockSparse below threshold" {
+    var x = [_]f32{0.001} ** 32;
+    try std.testing.expect(isBlockSparse(&x, 0, 32));
+}
+
+test "isBlockSparse above threshold" {
+    var x = [_]f32{0.001} ** 32;
+    x[16] = 0.01;
+    try std.testing.expect(!isBlockSparse(&x, 0, 32));
+}
+
+test "isBlockSparse negative values" {
+    var x = [_]f32{-0.004} ** 32;
+    try std.testing.expect(isBlockSparse(&x, 0, 32));
+    x[0] = -0.006;
+    try std.testing.expect(!isBlockSparse(&x, 0, 32));
+}
+
+test "isBlockSparse partial block" {
+    var x = [_]f32{0.0} ** 13;
+    try std.testing.expect(isBlockSparse(&x, 0, 13));
+    x[12] = 1.0;
+    try std.testing.expect(!isBlockSparse(&x, 0, 13));
+}
+
+test "isBlockSparse offset" {
+    var x = [_]f32{1.0} ** 64;
+    // Fill second half with zeros
+    for (32..64) |i| x[i] = 0.0;
+    try std.testing.expect(!isBlockSparse(&x, 0, 32));
+    try std.testing.expect(isBlockSparse(&x, 32, 32));
+}
+
+test "isBlockSparse disabled when threshold is zero" {
+    if (sparse_threshold != 0) return error.SkipZigTest;
+    var x = [_]f32{0.0} ** 32;
+    try std.testing.expect(!isBlockSparse(&x, 0, 32));
+}
+
+test "gemvSeq f32 identity" {
+    // 2 rows, k=4: W = [[1,0,0,0],[0,1,0,0]], x = [3,7,0,0]
+    // y[0] = 3.0, y[1] = 7.0
+    const w = [_]f32{ 1, 0, 0, 0, 0, 1, 0, 0 };
+    const x = [_]f32{ 3.0, 7.0, 0.0, 0.0 };
+    var y: [2]f32 = undefined;
+    gemvSeq(&x, @ptrCast(&w), .f32, &y, 2, 4);
+    try std.testing.expectApproxEqAbs(@as(f32, 3.0), y[0], 1e-5);
+    try std.testing.expectApproxEqAbs(@as(f32, 7.0), y[1], 1e-5);
+}
+
+test "gemvSeq q8_0 roundtrip" {
+    // Q8_0: f16 scale + 32 i8 quants = 34 bytes. dequant: val = quant * scale.
+    var block: [34]u8 align(2) = undefined;
+    @as(*f16, @ptrCast(@alignCast(&block[0]))).* = @as(f16, 0.5);
+    @memset(block[2..34], 2); // quant=2, dequant = 2 * 0.5 = 1.0
+
+    const x = [_]f32{1.0} ** 32;
+    var y: [1]f32 = undefined;
+    gemvSeq(&x, &block, .q8_0, &y, 1, 32);
+    // 32 × (2 × 0.5) × 1.0 = 32.0
+    try std.testing.expectApproxEqAbs(@as(f32, 32.0), y[0], 0.5);
+}

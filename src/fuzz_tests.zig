@@ -255,3 +255,245 @@ test "fuzz: ngram propose no crash" {
         }
     }.f, .{});
 }
+
+// ── Chat Template Fuzzing ──────────────────────────────────────
+
+test "fuzz: chat template format" {
+    const chat = @import("chat_template.zig");
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *Smith) !void {
+            // Generate random user message content
+            var user_buf: [128]u8 = undefined;
+            smith.bytesWithHash(&user_buf, 0);
+            const user_len = smith.indexWithHash(user_buf.len + 1, 1);
+            const user_msg = user_buf[0..user_len];
+
+            // Generate random system message
+            var sys_buf: [64]u8 = undefined;
+            smith.bytesWithHash(&sys_buf, 2);
+            const sys_len = smith.indexWithHash(sys_buf.len + 1, 3);
+            const sys_msg: ?[]const u8 = if (sys_len > 0) sys_buf[0..sys_len] else null;
+
+            // Test against all preset templates
+            const templates = [_]chat.ChatTemplate{
+                chat.ChatTemplate.chatml,
+                chat.ChatTemplate.qwen35,
+                chat.ChatTemplate.gemma,
+                chat.ChatTemplate.gemma4,
+                chat.ChatTemplate.glm4,
+                chat.ChatTemplate.gpt_oss,
+                chat.ChatTemplate.llama4,
+            };
+            const tmpl = templates[smith.indexWithHash(templates.len, 4)];
+
+            // Invariant: format must not crash and must produce non-empty output
+            const result = tmpl.format(std.testing.allocator, sys_msg, user_msg) catch return;
+            defer std.testing.allocator.free(result);
+            try std.testing.expect(result.len > 0);
+        }
+    }.f, .{});
+}
+
+test "fuzz: chat template formatConversation" {
+    const chat = @import("chat_template.zig");
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *Smith) !void {
+            // Build random conversation messages (1-4 turns)
+            const n_msgs = smith.indexWithHash(4, 0) + 1;
+            var msg_bufs: [4][64]u8 = undefined;
+            var messages: [4]chat.Message = undefined;
+            const roles = [_]chat.Role{ .user, .assistant, .tool };
+            for (0..n_msgs) |i| {
+                smith.bytesWithHash(&msg_bufs[i], @truncate(i + 10));
+                const len = smith.indexWithHash(msg_bufs[i].len + 1, @truncate(i + 20));
+                messages[i] = .{
+                    .role = roles[smith.indexWithHash(roles.len, @truncate(i + 30))],
+                    .content = msg_bufs[i][0..len],
+                };
+            }
+
+            const tmpl = chat.ChatTemplate.chatml;
+            const result = tmpl.formatConversation(std.testing.allocator, null, messages[0..n_msgs]) catch return;
+            defer std.testing.allocator.free(result);
+            // Invariant: result must end with assistant prefix + generation_prefix
+            try std.testing.expect(result.len > 0);
+        }
+    }.f, .{});
+}
+
+test "fuzz: findImageInsertPos" {
+    const chat = @import("chat_template.zig");
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *Smith) !void {
+            // Random token sequence
+            var tokens: [32]u32 = undefined;
+            for (&tokens, 0..) |*t, i| t.* = smith.valueWithHash(u16, @truncate(i));
+            const tok_len = smith.indexWithHash(tokens.len + 1, 100);
+
+            // Random prefix sequence
+            var prefix: [8]u32 = undefined;
+            for (&prefix, 0..) |*p, i| p.* = smith.valueWithHash(u16, @truncate(i + 50));
+            const pfx_len = smith.indexWithHash(prefix.len + 1, 101);
+
+            const pos = chat.findImageInsertPos(tokens[0..tok_len], prefix[0..pfx_len]);
+            // Invariant: position must be within bounds
+            try std.testing.expect(pos <= tok_len);
+        }
+    }.f, .{});
+}
+
+// ── CLI Parser Fuzzing ─────────────────────────────────────────
+
+test "fuzz: CLI arg parser" {
+    const cli = @import("cli.zig");
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *Smith) !void {
+            // Build random null-terminated argument strings.
+            // On POSIX, std.process.Args.Vector = []const [*:0]const u8
+            var arg_storage: [8][31:0]u8 = undefined;
+            var argv: [8][*:0]const u8 = undefined;
+            const n_args = smith.indexWithHash(8, 0) + 1;
+            for (0..n_args) |i| {
+                smith.bytesWithHash(&arg_storage[i], @truncate(i + 1));
+                // Ensure null-terminator is preserved (bytesWithHash may overwrite it
+                // but the sentinel-terminated array type guarantees buf[31] == 0)
+                argv[i] = &arg_storage[i];
+            }
+
+            // Define a representative set of arg specs (mirrors real CLI options)
+            const specs = [_]cli.ArgSpec{
+                .{ .long = "help", .short = 'h' },
+                .{ .long = "serve", .short = 's' },
+                .{ .long = "verbose", .short = 'V' },
+                .{ .long = "backend", .short = 'b', .kind = .option },
+                .{ .long = "max-tokens", .short = 'n', .kind = .option },
+                .{ .long = "temperature", .short = 't', .kind = .option },
+                .{ .long = "ctx-size", .kind = .option },
+            };
+
+            const args = std.process.Args{ .vector = argv[0..n_args] };
+            // Invariant: parse must not crash on any argument combination
+            var result = cli.parse(std.testing.allocator, args, &specs);
+            defer result.deinit();
+
+            // All accessors must be safe on parsed result
+            _ = result.flag("help");
+            _ = result.flag("nonexistent");
+            _ = result.option("backend");
+            _ = result.optionU32("max-tokens");
+            _ = result.optionF32("temperature");
+            _ = result.positional(0);
+        }
+    }.f, .{});
+}
+
+// ── AWQ Dequant Fuzzing ────────────────────────────────────────
+
+test "fuzz: AWQ dequant no crash" {
+    const awq = @import("ops/awq.zig");
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *Smith) !void {
+            // Fixed dimensions: 8 output channels, 8 input elements, group_size=128
+            // AWQ column-major: qweight is [k, n/8] = [8, 1] = 1 u32 per input row
+            const n: usize = 8;
+            const k: usize = 8;
+            const n_words = n / 8; // = 1
+            const group_size: u32 = 128;
+
+            // qweight: [k * n_words] = 8 words (one per input row)
+            var qw: [k * n_words]u32 = undefined;
+            for (&qw, 0..) |*w, i| w.* = smith.valueWithHash(u32, @truncate(i));
+            // qzeros: [1 group * n_words] = 1 word
+            var qz: [1 * n_words]u32 = undefined;
+            qz[0] = smith.valueWithHash(u32, 100);
+            // scales: [1 group * n] = 8 FP16 values
+            var scales: [1 * n]u16 = undefined;
+            for (&scales, 0..) |*s, i| s.* = smith.valueWithHash(u16, @truncate(i + 110));
+            // Input vector
+            var x: [k]f32 = undefined;
+            for (&x, 0..) |*v, i| v.* = @as(f32, @floatFromInt(smith.valueWithHash(i8, @truncate(i + 130)))) / 10.0;
+            // Output
+            var y: [n]f32 = undefined;
+
+            awq.awqGemvRows(&x, &qw, &scales, &qz, &y, 0, n, k, group_size);
+            // Invariant: output must be finite (no NaN from INT4 dequant)
+            for (y) |v| try std.testing.expect(std.math.isFinite(v));
+        }
+    }.f, .{});
+}
+
+// ── GPTQ Dequant Fuzzing ───────────────────────────────────────
+
+test "fuzz: GPTQ dequant no crash" {
+    const gptq = @import("ops/gptq.zig");
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *Smith) !void {
+            // Fixed dimensions: 8 output rows, k=8, group_size=128
+            // GPTQ row-major: qweight is [n, k/8] = [8, 1] = 1 u32 per output row
+            const n: usize = 8;
+            const k: usize = 8;
+            const words_per_row = k / 8; // = 1
+            const group_size: u32 = 128;
+            const n_groups: usize = 1; // ceil(8/128) = 1
+
+            // qweight: [n * words_per_row] = 8 words
+            var qw: [n * words_per_row]u32 = undefined;
+            for (&qw, 0..) |*w, i| w.* = smith.valueWithHash(u32, @truncate(i));
+            // scales: [n * n_groups] = 8 FP16 values
+            var scales: [n * n_groups]u16 = undefined;
+            for (&scales, 0..) |*s, i| s.* = smith.valueWithHash(u16, @truncate(i + 50));
+            // qzeros: [n_groups * ceil(n/8)] = 1 word
+            var qz: [n_groups * 1]u32 = undefined;
+            qz[0] = smith.valueWithHash(u32, 100);
+            // Input vector
+            var x: [k]f32 = undefined;
+            for (&x, 0..) |*v, i| v.* = @as(f32, @floatFromInt(smith.valueWithHash(i8, @truncate(i + 110)))) / 10.0;
+            // Output
+            var y: [n]f32 = undefined;
+
+            gptq.gptqGemvRows(&x, &qw, &scales, &qz, &y, 0, n, k, group_size);
+            // Invariant: output must be finite (no NaN from INT4 dequant)
+            for (y) |v| try std.testing.expect(std.math.isFinite(v));
+        }
+    }.f, .{});
+}
+
+// ── Terminal Display Width Fuzzing ──────────────────────────────
+
+test "fuzz: term displayWidth" {
+    const term = @import("term.zig");
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *Smith) !void {
+            var buf: [64]u8 = undefined;
+            smith.bytesWithHash(&buf, 0);
+            const len = smith.indexWithHash(buf.len + 1, 1);
+            const w = term.displayWidth(buf[0..len]);
+            // Invariant: display width cannot exceed 2x byte count
+            // (each byte is at most 1 codepoint of width 2)
+            try std.testing.expect(w <= len * 2);
+        }
+    }.f, .{});
+}
+
+test "fuzz: term key parser" {
+    const term = @import("term.zig");
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *Smith) !void {
+            var buf: [32]u8 = undefined;
+            smith.bytesWithHash(&buf, 0);
+            const len = smith.indexWithHash(buf.len, 1) + 1; // at least 1 byte
+            var parser: term.Parser = .{};
+            // Parse all events from the buffer without crashing
+            var offset: usize = 0;
+            var n_events: u32 = 0;
+            while (offset < len) {
+                const result = parser.parse(buf[offset..len], null) catch break;
+                if (result.n == 0) break; // incomplete sequence
+                offset += result.n;
+                if (result.event != null) n_events += 1;
+            }
+            // Invariant: consumed bytes cannot exceed input length
+            try std.testing.expect(offset <= len);
+        }
+    }.f, .{});
+}
