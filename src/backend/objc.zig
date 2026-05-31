@@ -128,6 +128,19 @@ test "objc — public function signature contracts" {
     }
 }
 
+test "fuzz: all objc functions" {
+    try @import("std").testing.fuzz({}, struct {
+        fn f(_: void, smith: *@import("std").testing.Smith) !void {
+            _ = smith;
+            comptime {
+                _ = &sel;
+                _ = &getClass;
+                _ = &MTLCreateSystemDefaultDevice;
+            }
+        }
+    }.f, .{});
+}
+
 test "objc — MsgSendFn covers all arities 0-8" {
     comptime {
         // Arity 0

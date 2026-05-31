@@ -696,3 +696,116 @@ test "gap buffer clearRetainingCapacity" {
     // Buffer memory is still allocated (capacity retained)
     try std.testing.expect(buf.buffer.len > 0);
 }
+
+test "fuzz: all term functions" {
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *std.testing.Smith) !void {
+            // ── 1. Key.Modifiers.eql ──
+            const mod_a: Key.Modifiers = @bitCast(smith.valueWithHash(u8, 0));
+            const mod_b: Key.Modifiers = @bitCast(smith.valueWithHash(u8, 1));
+            const eq = mod_a.eql(mod_b);
+            // reflexivity: a mod must equal itself
+            try std.testing.expect(mod_a.eql(mod_a));
+            _ = eq;
+
+            // ── 2. Key.matches ──
+            const cp_a = smith.valueWithHash(u21, 2) % 0x110000;
+            const cp_b = smith.valueWithHash(u21, 3) % 0x110000;
+            const key: Key = .{ .codepoint = cp_a, .mods = mod_a };
+            _ = key.matches(cp_b, mod_b);
+
+            // ── 3. displayWidth ──
+            // Build a small random buffer as input
+            var dw_buf: [16]u8 = undefined;
+            for (&dw_buf, 0..) |*b, i| b.* = smith.valueWithHash(u8, @intCast(100 + i));
+            const dw_len = smith.valueWithHash(u4, 50);
+            const dw_slice = dw_buf[0..dw_len];
+            const w = displayWidth(dw_slice);
+            try std.testing.expect(w <= dw_slice.len * 2); // max 2 columns per byte
+
+            // ── 4. gwidth.gwidth ──
+            const gw = gwidth.gwidth(dw_slice, .unicode);
+            try std.testing.expect(gw <= @as(u16, @intCast(dw_slice.len)) * 2);
+
+            // ── 5. Parser.parse ──
+            var parser: Parser = .{};
+            var parse_buf: [8]u8 = undefined;
+            for (&parse_buf, 0..) |*b, i| b.* = smith.valueWithHash(u8, @intCast(200 + i));
+            const parse_len = smith.valueWithHash(u4, 60);
+            const result = parser.parse(parse_buf[0..parse_len], null) catch return;
+            try std.testing.expect(result.n <= parse_len);
+
+            // ── 6-11. TextInput (init, deinit, insertSliceAtCursor,
+            //          clearRetainingCapacity, toOwnedSlice, update) ──
+            var input = TextInput.init(std.testing.allocator);
+            defer input.deinit();
+
+            // insertSliceAtCursor with random slice
+            var ins_buf: [8]u8 = undefined;
+            for (&ins_buf, 0..) |*b, i| b.* = smith.valueWithHash(u8, @intCast(300 + i));
+            const ins_len = smith.valueWithHash(u3, 70);
+            input.insertSliceAtCursor(ins_buf[0..ins_len]) catch return;
+
+            // update with a random key event
+            const ev_cp = smith.valueWithHash(u21, 80) % 0x110000;
+            const ev_mod: Key.Modifiers = @bitCast(smith.valueWithHash(u8, 81));
+            input.update(.{ .key_press = .{
+                .codepoint = ev_cp,
+                .mods = ev_mod,
+            } }) catch return;
+
+            // clearRetainingCapacity
+            input.clearRetainingCapacity();
+            try std.testing.expectEqual(@as(usize, 0), input.buf.realLength());
+
+            // Re-insert so toOwnedSlice has something to return
+            input.insertSliceAtCursor("fz") catch return;
+            const owned = input.toOwnedSlice() catch return;
+            std.testing.allocator.free(owned);
+
+            // ── 12-23. TextInput.Buffer (init, deinit, firstHalf, secondHalf,
+            //           realLength, insertSliceAtCursor, moveGapLeft, moveGapRight,
+            //           growGapLeft, growGapRight, clearRetainingCapacity,
+            //           toOwnedSlice) ──
+            var buf = TextInput.Buffer.init(std.testing.allocator);
+            defer buf.deinit();
+
+            // insertSliceAtCursor
+            var buf_data: [6]u8 = undefined;
+            for (&buf_data, 0..) |*b, i| b.* = smith.valueWithHash(u8, @intCast(400 + i));
+            const buf_ins_len = smith.valueWithHash(u3, 90);
+            buf.insertSliceAtCursor(buf_data[0..buf_ins_len]) catch return;
+
+            // firstHalf / secondHalf / realLength
+            const fh = buf.firstHalf();
+            const sh = buf.secondHalf();
+            try std.testing.expectEqual(fh.len + sh.len, buf.realLength());
+
+            // moveGapLeft — clamp to firstHalf length
+            const ml = smith.valueWithHash(u3, 91);
+            buf.moveGapLeft(@min(ml, buf.firstHalf().len));
+
+            // moveGapRight — clamp to secondHalf length
+            const mr = smith.valueWithHash(u3, 92);
+            buf.moveGapRight(@min(mr, buf.secondHalf().len));
+
+            // growGapLeft — clamp to cursor
+            const gl = smith.valueWithHash(u3, 93);
+            buf.growGapLeft(@min(gl, buf.cursor));
+
+            // growGapRight — clamp to secondHalf length
+            const gr = smith.valueWithHash(u3, 94);
+            buf.growGapRight(@min(gr, buf.secondHalf().len));
+
+            // clearRetainingCapacity
+            buf.clearRetainingCapacity();
+            try std.testing.expectEqual(@as(usize, 0), buf.realLength());
+
+            // Re-insert for toOwnedSlice
+            buf.insertSliceAtCursor("ab") catch return;
+            const buf_owned = buf.toOwnedSlice() catch return;
+            try std.testing.expectEqual(@as(usize, 2), buf_owned.len);
+            std.testing.allocator.free(buf_owned);
+        }
+    }.f, .{});
+}

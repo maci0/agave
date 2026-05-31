@@ -159,3 +159,28 @@ test "softmax two elements verifies exact ratio" {
     try std.testing.expectApproxEqAbs(@as(f32, 1.0 / 3.0), data[0], 1e-5);
     try std.testing.expectApproxEqAbs(@as(f32, 2.0 / 3.0), data[1], 1e-5);
 }
+
+test "fuzz: all softmax functions" {
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *std.testing.Smith) !void {
+            // softmaxSimd — the only pub function
+            const len = smith.valueWithHash(u4, 0) | 1; // 1..15, never 0
+            var buf: [16]f32 = undefined;
+            for (0..len) |i| {
+                const bits = smith.valueWithHash(u32, @truncate(i));
+                buf[i] = @bitCast(bits);
+                // Clamp to finite range to avoid NaN/Inf inputs poisoning the test
+                if (!std.math.isFinite(buf[i])) buf[i] = 0.0;
+            }
+            softmaxSimd(4, &buf, len);
+            // Invariant: all outputs finite
+            var sum: f32 = 0;
+            for (0..len) |i| {
+                if (!std.math.isFinite(buf[i])) return error.TestUnexpectedResult;
+                sum += buf[i];
+            }
+            // Invariant: outputs sum to ~1.0
+            try std.testing.expectApproxEqAbs(@as(f32, 1.0), sum, 1e-4);
+        }
+    }.f, .{});
+}

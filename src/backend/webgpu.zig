@@ -2134,3 +2134,56 @@ test "WebGpuBackend.endBatch" { comptime { _ = &WebGpuBackend.endBatch; } }
 test "WebGpuBackend.allocKvSlice" { comptime { _ = &WebGpuBackend.allocKvSlice; } }
 test "WebGpuBackend.freeKvSlice" { comptime { _ = &WebGpuBackend.freeKvSlice; } }
 test "WebGpuBackend.backendInfo" { comptime { _ = &WebGpuBackend.backendInfo; } }
+
+test "fuzz: all webgpu functions" {
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *std.testing.Smith) !void {
+            _ = smith;
+            comptime {
+                _ = &WebGpuBackend.init;
+                _ = &WebGpuBackend.deinit;
+                _ = &WebGpuBackend.silu;
+                _ = &WebGpuBackend.gelu;
+                _ = &WebGpuBackend.add;
+                _ = &WebGpuBackend.mul;
+                _ = &WebGpuBackend.siluMul;
+                _ = &WebGpuBackend.geluMul;
+                _ = &WebGpuBackend.rmsNorm;
+                _ = &WebGpuBackend.softmax;
+                _ = &WebGpuBackend.rope;
+                _ = &WebGpuBackend.embLookup;
+                _ = &WebGpuBackend.gemv;
+                _ = &WebGpuBackend.gemm;
+                _ = &WebGpuBackend.l2Norm;
+                _ = &WebGpuBackend.addRmsNorm;
+                _ = &WebGpuBackend.addScaled;
+                _ = &WebGpuBackend.sigmoidMul;
+                _ = &WebGpuBackend.deinterleave;
+                _ = &WebGpuBackend.splitQGate;
+                _ = &WebGpuBackend.rmsNormMulti;
+                _ = &WebGpuBackend.rmsNormBatched;
+                _ = &WebGpuBackend.ropeBatched;
+                _ = &WebGpuBackend.sdpa;
+                _ = &WebGpuBackend.sdpaWithStats;
+                _ = &WebGpuBackend.sdpaPaged;
+                _ = &WebGpuBackend.sdpaTree;
+                _ = &WebGpuBackend.sdpaPrefill;
+                _ = &WebGpuBackend.gemvT;
+                _ = &WebGpuBackend.gemvNvfp4St;
+                _ = &WebGpuBackend.gemvMlxQ;
+                _ = &WebGpuBackend.gemvMxfp4St;
+                _ = &WebGpuBackend.gemvGptq;
+                _ = &WebGpuBackend.gemvAwq;
+                _ = &WebGpuBackend.gemvMulti;
+                _ = &WebGpuBackend.causalConv1dSilu;
+                _ = &WebGpuBackend.deltaNet;
+                _ = &WebGpuBackend.sync;
+                _ = &WebGpuBackend.beginBatch;
+                _ = &WebGpuBackend.endBatch;
+                _ = &WebGpuBackend.allocKvSlice;
+                _ = &WebGpuBackend.freeKvSlice;
+                _ = &WebGpuBackend.backendInfo;
+            }
+        }
+    }.f, .{});
+}

@@ -673,3 +673,73 @@ test "unfilterScanlines Paeth filter" {
     //   paeth(32,60,30): p=62, pa=30, pb=2, pc=32 → b=60 → 3+60=63
     try std.testing.expectEqualSlices(u8, &[_]u8{ 15, 23, 32, 41, 52, 63 }, data[8..14]);
 }
+
+test "fuzz: all image functions" {
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *std.testing.Smith) !void {
+            const allocator = std.testing.allocator;
+
+            // --- pub const max_file_size ---
+            try std.testing.expect(max_file_size > 0);
+
+            // --- pub types: PngImage, PpmImage, ImageDims, ImageFormat, ImageError ---
+            comptime {
+                _ = PngImage;
+                _ = PpmImage;
+                _ = ImageDims;
+                _ = ImageFormat;
+                _ = ImageError;
+            }
+
+            // --- pub fn detectFormat ---
+            {
+                var buf: [16]u8 = undefined;
+                for (&buf, 0..) |*b, i| b.* = smith.valueWithHash(u8, @intCast(i));
+                const fmt = detectFormat(&buf);
+                _ = @intFromEnum(fmt); // valid enum
+            }
+
+            // --- pub fn decodePng ---
+            {
+                var buf: [64]u8 = undefined;
+                for (&buf, 0..) |*b, i| b.* = smith.valueWithHash(u8, @intCast(i +| 100));
+                var img = decodePng(allocator, &buf) catch return;
+                img.deinit(); // exercises PngImage.deinit
+            }
+
+            // --- pub fn decodePpm ---
+            {
+                var buf: [64]u8 = undefined;
+                for (&buf, 0..) |*b, i| b.* = smith.valueWithHash(u8, @intCast(i +| 200));
+                const ppm = decodePpm(&buf) catch return;
+                try std.testing.expect(ppm.width > 0);
+                try std.testing.expect(ppm.height > 0);
+            }
+
+            // --- pub fn resize ---
+            {
+                const w_raw = smith.valueWithHash(u8, 300);
+                const h_raw = smith.valueWithHash(u8, 301);
+                const sw: u32 = @as(u32, w_raw % 4) + 1; // 1..4
+                const sh: u32 = @as(u32, h_raw % 4) + 1; // 1..4
+                const pixel_count = sw * sh * 3;
+                const src = allocator.alloc(u8, pixel_count) catch return;
+                defer allocator.free(src);
+                for (src, 0..) |*b, i| b.* = smith.valueWithHash(u8, @intCast(i +| 400));
+
+                const dw: u32 = @as(u32, smith.valueWithHash(u8, 500) % 4) + 1;
+                const dh: u32 = @as(u32, smith.valueWithHash(u8, 501) % 4) + 1;
+                const out = resize(allocator, src, sw, sh, dw, dh) catch return;
+                defer allocator.free(out);
+                try std.testing.expectEqual(dw * dh * 3, out.len);
+                for (out) |px| try std.testing.expect(px <= 255);
+            }
+
+            // --- pub fn getImageDimensions ---
+            // Requires Io and filesystem; verify reference at comptime
+            comptime {
+                _ = &getImageDimensions;
+            }
+        }
+    }.f, .{});
+}

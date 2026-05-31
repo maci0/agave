@@ -369,3 +369,79 @@ test "TieredBlockAllocator allocateSeqTable" {
     try std.testing.expectEqual(@as(usize, 0), seq_table.block_table[0].len);
     try std.testing.expectEqual(@as(usize, 0), seq_table.seq_len);
 }
+
+test "fuzz: all block_allocator functions" {
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *std.testing.Smith) !void {
+            const allocator = std.testing.allocator;
+
+            // Constrain random inputs to safe ranges
+            const raw_layers = smith.valueWithHash(u8, 0);
+            const n_layers: usize = @as(usize, raw_layers % 4) + 1; // 1..4
+            const raw_appends = smith.valueWithHash(u8, 1);
+            const n_appends: usize = @as(usize, raw_appends % 3) + 1; // 1..3
+            // Need n_layers * n_appends blocks; provide exactly that + 1 spare
+            const num_blocks: usize = n_layers * n_appends + 1;
+
+            // ── BlockAllocator ──
+            {
+                // BlockAllocator.init
+                var paged = PagedKvCache.init(allocator, n_layers, 4, num_blocks, 8) catch return;
+                defer paged.deinit();
+
+                var ba = BlockAllocator.init(&paged, allocator);
+
+                // BlockAllocator.setCachePtr
+                ba.setCachePtr(&paged);
+                try std.testing.expect(ba.cache == &paged);
+
+                // BlockAllocator.allocateSeqTable
+                var seq = ba.allocateSeqTable(n_layers) catch return;
+                defer ba.freeSeqTable(&seq);
+
+                try std.testing.expectEqual(n_layers, seq.block_table.len);
+                try std.testing.expectEqual(@as(usize, 0), seq.seq_len);
+
+                // BlockAllocator.appendBlock (multiple appends)
+                var appended: usize = 0;
+                for (0..n_appends) |_| {
+                    ba.appendBlock(&seq) catch break;
+                    appended += 1;
+                }
+                try std.testing.expectEqual(appended * 8, seq.seq_len);
+
+                // BlockAllocator.getPhysicalBlock — verify each allocated block ID
+                for (0..n_layers) |layer| {
+                    for (0..appended) |idx| {
+                        const bid = BlockAllocator.getPhysicalBlock(&seq, layer, idx);
+                        try std.testing.expect(bid < num_blocks);
+                    }
+                }
+
+                // freeSeqTable exercised by defer above
+            }
+
+            // ── TieredBlockAllocator ──
+            {
+                // TieredBlockAllocator.init
+                var tiered = TieredKvCache.init(allocator, n_layers, 4, num_blocks, 0, 0, 8, null) catch return;
+                defer tiered.deinit();
+
+                var tba = TieredBlockAllocator.init(&tiered, allocator);
+
+                // TieredBlockAllocator.allocateSeqTable
+                var tseq = tba.allocateSeqTable(n_layers) catch return;
+                defer tba.freeSeqTable(&tseq);
+
+                try std.testing.expectEqual(n_layers, tseq.block_table.len);
+
+                // TieredBlockAllocator.appendBlock
+                for (0..n_appends) |_| {
+                    tba.appendBlock(&tseq) catch break;
+                }
+
+                // freeSeqTable exercised by defer above
+            }
+        }
+    }.f, .{});
+}

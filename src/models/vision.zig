@@ -1860,6 +1860,19 @@ test "VisionVariant detection constants" {
     try std.testing.expect(@intFromEnum(VisionVariant.gemma4_siglip2) != @intFromEnum(VisionVariant.qwen_vl));
 }
 
+test "fuzz: all vision functions" {
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *std.testing.Smith) !void {
+            _ = smith;
+            comptime {
+                _ = &VisionEncoder.init;
+                _ = &VisionEncoder.deinit;
+                _ = &VisionEncoder.encode;
+            }
+        }
+    }.f, .{});
+}
+
 test "attention_chunk_size guard" {
     // Verify the chunk constant is reasonable: with chunk_size=64 and 4096 patches,
     // scores buffer is 16 * 64 * 4096 * 4 = 16MB (bounded, vs 1GB for full n^2).

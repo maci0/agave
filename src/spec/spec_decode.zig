@@ -730,3 +730,117 @@ test "sampleResidual returns valid token" {
     // Token 2 must dominate (has all positive residual mass)
     try std.testing.expect(counts[2] > 50);
 }
+
+test "fuzz: all spec_decode functions" {
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *std.testing.Smith) !void {
+            const vocab_size: u32 = 16;
+
+            // -- SpecState.init / deinit --
+            const k_raw: u32 = smith.valueWithHash(u8, 0);
+            const k: u32 = k_raw % @as(u32, max_draft_tokens) + 1;
+            var s = try SpecState.init(std.testing.allocator, k, vocab_size);
+            defer s.deinit(std.testing.allocator);
+
+            // -- SpecState.acceptanceRate (zero state) --
+            const rate0 = s.acceptanceRate();
+            try std.testing.expect(rate0 == 0);
+
+            // -- SpecState.meanAccepted (zero state) --
+            const mean0 = s.meanAccepted();
+            try std.testing.expect(mean0 == 0);
+
+            // -- SpecState.recordRound --
+            const n_draft_raw: u32 = smith.valueWithHash(u8, 1);
+            s.n_draft = n_draft_raw % @as(u32, max_draft_tokens);
+            s.adaptive_k_enabled = (smith.valueWithHash(u8, 2) & 1) != 0;
+            const accepted_val: u32 = @as(u32, smith.valueWithHash(u8, 3)) % (s.n_draft + 1);
+            s.recordRound(accepted_val);
+            try std.testing.expect(s.total_rounds == 1);
+            try std.testing.expect(s.total_accepted == accepted_val);
+
+            // -- SpecState.acceptanceRate (after round) --
+            const rate1 = s.acceptanceRate();
+            try std.testing.expect(rate1 >= 0 and rate1 <= 1.0);
+
+            // -- SpecState.meanAccepted (after round) --
+            const mean1 = s.meanAccepted();
+            try std.testing.expect(mean1 >= 0);
+
+            // -- SpecState.optimalK --
+            // Populate enough rounds for adaptive path
+            s.total_rounds = 20;
+            for (0..@min(@as(usize, k), max_draft_tokens)) |ki| {
+                s.k_total_counts[ki] = smith.valueWithHash(u8, @intCast(ki + 10)) / 2 + 1;
+                s.k_accept_counts[ki] = smith.valueWithHash(u8, @intCast(ki + 42)) % (s.k_total_counts[ki] * (@as(u32, @intCast(ki)) + 1) + 1);
+            }
+            const ok = s.optimalK();
+            try std.testing.expect(ok >= 1 and ok <= @as(u32, max_draft_tokens));
+
+            // -- logSoftmax (private but accessible in-file tests) --
+            var logits: [vocab_size]f32 = undefined;
+            for (0..vocab_size) |i| {
+                const raw = smith.valueWithHash(i16, @intCast(i + 100));
+                logits[i] = @as(f32, @floatFromInt(raw)) * 0.01;
+            }
+            logSoftmax(&logits);
+            var sum_exp: f32 = 0;
+            for (logits) |v| {
+                try std.testing.expect(v <= 0.001); // log-probs are <= 0 (with eps tolerance)
+                sum_exp += @exp(v);
+            }
+            try std.testing.expectApproxEqAbs(@as(f32, 1.0), sum_exp, 1e-3);
+
+            // -- softmaxWithTemp --
+            var inp: [vocab_size]f32 = undefined;
+            for (0..vocab_size) |i| {
+                const raw = smith.valueWithHash(i16, @intCast(i + 200));
+                inp[i] = @as(f32, @floatFromInt(raw)) * 0.01;
+            }
+            var out: [vocab_size]f32 = undefined;
+            const temp_raw = smith.valueWithHash(u8, 50);
+            const temp: f32 = @as(f32, @floatFromInt(temp_raw)) * 0.02 + 0.01;
+            softmaxWithTemp(&inp, &out, temp);
+            var prob_sum: f32 = 0;
+            for (out) |v| {
+                try std.testing.expect(v >= 0);
+                prob_sum += v;
+            }
+            try std.testing.expectApproxEqAbs(@as(f32, 1.0), prob_sum, 1e-3);
+
+            // -- sampleResidual --
+            var target_probs: [vocab_size]f32 = undefined;
+            var draft_lp: [vocab_size]f32 = undefined;
+            var sample_buf: [vocab_size]f32 = undefined;
+            softmaxWithTemp(&inp, &target_probs, 1.0);
+            for (0..vocab_size) |i| {
+                const raw = smith.valueWithHash(i16, @intCast(i + 300));
+                draft_lp[i] = @as(f32, @floatFromInt(raw)) * 0.01;
+            }
+            logSoftmax(&draft_lp);
+            var prng = std.Random.DefaultPrng.init(smith.valueWithHash(u64, 99));
+            const sampled = sampleResidual(&target_probs, &draft_lp, vocab_size, prng.random(), &sample_buf);
+            try std.testing.expect(sampled < vocab_size);
+
+            // -- max_draft_tokens constant --
+            try std.testing.expect(max_draft_tokens > 0);
+
+            // -- SpecResult type --
+            const sr = SpecResult{ .accepted = accepted_val, .next_token = 0 };
+            try std.testing.expect(sr.accepted <= max_draft_tokens);
+
+            // -- Model-dependent pub fns: comptime-verify reachability --
+            // draftMtp, draft, draftWithLogits, verifySequential,
+            // verifySampling, verifyDDTree all require *Model (vtable runtime).
+            // Verify they exist and are callable at comptime.
+            comptime {
+                _ = &draftMtp;
+                _ = &draft;
+                _ = &draftWithLogits;
+                _ = &verifySequential;
+                _ = &verifySampling;
+                _ = &verifyDDTree;
+            }
+        }
+    }.f, .{});
+}

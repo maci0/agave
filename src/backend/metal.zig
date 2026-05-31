@@ -3839,3 +3839,176 @@ test "MetalBackend.profile counters track dispatches" {
     try std.testing.expect(be.dispatch_count >= 2);
     try std.testing.expectEqual(@as(u32, 1), be.sync_count);
 }
+
+test "fuzz: all metal functions" {
+    // Metal is a GPU backend — comptime verification that all pub functions
+    // exist in MetalBackend. Uses @hasDecl to avoid forcing function body
+    // resolution (some functions like compileComposedMegakernel use runtime
+    // concatenation that cannot be evaluated at comptime).
+    comptime {
+        const decls = [_][]const u8{
+            // Init / deinit
+            "init",              "deinit",
+            // Info
+            "deviceName",        "backendInfo",      "n_pipelines",
+            // KV cache
+            "allocKvSlice",      "freeKvSlice",
+            // GEMV variants
+            "gemv",              "gemvNvfp4St",      "gemvMlxQ",
+            "gemvMxfp4St",       "gemvGptq",         "gemvAwq",
+            "gemvMulti",         "gemvT",
+            // Norms
+            "rmsNorm",           "addRmsNorm",       "rmsNormMulti",
+            "rmsNormBatched",    "l2Norm",
+            // Activations
+            "silu",              "gelu",             "siluMul",
+            "geluMul",           "sigmoidMul",
+            // Fused FFN (SiLU)
+            "fusedFfnGateUpSiluQ8",    "fusedFfnGateUpSiluQ4K",
+            "fusedFfnGateUpSiluQ40",   "fusedFfnGateUpSiluMlxQ4",
+            "fusedFfnGateUpSiluQ6K",   "fusedFfnGateUpSiluQ5K",
+            // Fused FFN (GELU)
+            "fusedFfnGateUpGeluQ8",    "fusedFfnGateUpGeluQ4K",
+            "fusedFfnGateUpGeluQ40",   "fusedFfnGateUpGeluQ6K",
+            "fusedFfnGateUpGeluQ5K",
+            // Megakernels
+            "dispatchMegakernelQwen35Q8",   "dispatchMegakernelGemmaQ4K",
+            "dispatchMegakernelQwen35Q4K",  "dispatchMegakernelNemotronHQ8",
+            "compileComposedMegakernel",    "dispatchMegakernelAuto",
+            // Elementwise
+            "add",               "mul",              "addScaled",
+            // Interleave / split
+            "deinterleave",      "splitQGate",
+            // Softmax
+            "softmax",
+            // RoPE
+            "rope",              "ropeBatched",
+            // Embedding
+            "embLookup",
+            // GEMM
+            "gemm",
+            // SDPA
+            "sdpa",              "sdpaPaged",        "sdpaWithStats",
+            "sdpaTree",          "sdpaPrefill",
+            // Batch / sync
+            "beginBatch",        "endBatch",         "sync",
+            "resetCounters",
+            // SSM
+            "deltaNet",
+        };
+        for (decls) |name| {
+            if (!@hasDecl(MetalBackend, name))
+                @compileError("missing pub decl: " ++ name);
+        }
+    }
+
+    // Runtime fuzz body — exercises GPU ops if Metal device is available
+    try std.testing.fuzz(.{}, struct {
+        fn f(_: @TypeOf(.{}), smith: *std.testing.Smith) !void {
+            const allocator = std.testing.allocator;
+            var be = MetalBackend.init(allocator) catch return;
+            defer be.deinit();
+
+            // Random f32 buffers
+            var a: [4]f32 = undefined;
+            var b: [4]f32 = undefined;
+            var out: [4]f32 = undefined;
+            for (&a, 0..) |*v, i| v.* = smith.valueWithHash(f32, @truncate(i));
+            for (&b, 0..) |*v, i| v.* = smith.valueWithHash(f32, @truncate(i +% 4));
+
+            // silu
+            be.silu(&a, &out, 4);
+            be.sync();
+
+            // gelu
+            be.gelu(&a, &out, 4);
+            be.sync();
+
+            // add
+            be.add(&a, &b, &out, 4);
+            be.sync();
+
+            // mul
+            be.mul(&a, &b, &out, 4);
+            be.sync();
+
+            // siluMul
+            be.siluMul(&a, &b, &out, 4);
+            be.sync();
+
+            // geluMul
+            be.geluMul(&a, &b, &out, 4);
+            be.sync();
+
+            // addScaled
+            const scale = smith.valueWithHash(f32, 99);
+            be.addScaled(&a, &out, scale, 4);
+            be.sync();
+
+            // sigmoidMul
+            be.sigmoidMul(&out, &a, 4);
+            be.sync();
+
+            // rmsNorm
+            var weight = [_]f32{ 1.0, 1.0, 1.0, 1.0 };
+            be.rmsNorm(&a, &weight, &out, 4, 1e-6);
+            be.sync();
+
+            // addRmsNorm
+            var a2 = a;
+            be.addRmsNorm(&a2, &b, &weight, &out, 4, 1e-6);
+            be.sync();
+
+            // softmax
+            var sm = [_]f32{ 1.0, 2.0, 3.0, 4.0 };
+            be.softmax(&sm, 4);
+            be.sync();
+
+            // l2Norm
+            var l2 = [_]f32{ 3.0, 4.0, 0.0, 0.0 };
+            be.l2Norm(&l2, 4, 1e-6);
+            be.sync();
+
+            // rope (head_dim=4, rope_dim=4, 1 head)
+            var rope_buf = [_]f32{ 1.0, 0.0, 1.0, 0.0 };
+            const pos = smith.valueWithHash(u8, 42);
+            be.rope(&rope_buf, pos, 1, 4, 4, 10000.0);
+            be.sync();
+
+            // beginBatch / endBatch / sync / resetCounters
+            be.resetCounters();
+            be.beginBatch();
+            be.add(&a, &b, &out, 4);
+            be.endBatch();
+            be.sync();
+
+            // deinterleave (stride=2, n_pairs=1 -> input[4], out_a[2], out_b[2])
+            var deint_in = [_]f32{ 1.0, 2.0, 3.0, 4.0 };
+            var deint_a: [2]f32 = undefined;
+            var deint_b: [2]f32 = undefined;
+            be.deinterleave(&deint_in, &deint_a, &deint_b, 2, 1);
+            be.sync();
+
+            // splitQGate (hd=2, nh=1 -> input[4], q[2], g[2])
+            var qg_in = [_]f32{ 1.0, 2.0, 3.0, 4.0 };
+            var q_out: [2]f32 = undefined;
+            var g_out: [2]f32 = undefined;
+            be.splitQGate(&qg_in, &q_out, &g_out, 2, 1);
+            be.sync();
+
+            // embLookup (f32 table, dim=2, token=0)
+            var emb_table = [_]f32{ 1.0, 2.0, 3.0, 4.0 };
+            var emb_out: [2]f32 = undefined;
+            be.embLookup(.{ .data = @ptrCast(&emb_table), .dtype = .f32 }, 0, &emb_out, 2);
+
+            // allocKvSlice / freeKvSlice
+            const kv_slice = be.allocKvSlice(allocator, 4096) catch return;
+            be.freeKvSlice(allocator, kv_slice);
+
+            // rmsNormMulti (1 head, head_dim=4)
+            var rm_data = [_]f32{ 1.0, 2.0, 3.0, 4.0 };
+            be.rmsNormMulti(&rm_data, &weight, 1, 4, 1e-6);
+            be.sync();
+        }
+    }.f, .{});
+}

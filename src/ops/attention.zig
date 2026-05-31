@@ -635,3 +635,165 @@ test "sdpa windowed attention excludes tokens outside window" {
     try std.testing.expectApproxEqAbs(@as(f32, 0.0), attn_out[2], 1e-5);
     try std.testing.expectApproxEqAbs(@as(f32, 0.0), attn_out[3], 1e-5);
 }
+
+test "fuzz: all attention functions" {
+    // Exercises ALL pub functions: scaledDotProductAttention,
+    // scaledDotProductAttentionTiered, pagedAttention, TieredSdpaInfo.
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *std.testing.Smith) !void {
+            const BackendState = @import("../backend/backend.zig").BackendState;
+            const manager = @import("../kvcache/manager.zig");
+
+            // Fixed geometry: 1 head, 1 KV head, hd=8 (covers SIMD path)
+            const hd = 8;
+            const nh = 1;
+            const nkv = 1;
+            const kvd = nkv * hd;
+            const max_sl = 4;
+            const block_size = 4;
+
+            // Generate random Q/K/V vectors clamped to finite range
+            var q_buf: [nh * hd]f32 = undefined;
+            var k_buf: [kvd]f32 = undefined;
+            var v_buf: [kvd]f32 = undefined;
+            for (0..nh * hd) |i| {
+                const raw = smith.valueWithHash(u16, @as(u32, @intCast(i)));
+                q_buf[i] = @as(f32, @floatFromInt(@as(i16, @bitCast(raw)))) * (1.0 / 32768.0);
+            }
+            for (0..kvd) |i| {
+                const rk = smith.valueWithHash(u16, @as(u32, @intCast(i)) +% 100);
+                k_buf[i] = @as(f32, @floatFromInt(@as(i16, @bitCast(rk)))) * (1.0 / 32768.0);
+                const rv = smith.valueWithHash(u16, @as(u32, @intCast(i)) +% 200);
+                v_buf[i] = @as(f32, @floatFromInt(@as(i16, @bitCast(rv)))) * (1.0 / 32768.0);
+            }
+
+            // Pick scale: avoid zero/inf
+            const scale_raw = smith.valueWithHash(u8, 300);
+            const scale: f32 = 0.1 + @as(f32, @floatFromInt(scale_raw)) * (2.0 / 255.0);
+
+            // --- 1. scaledDotProductAttention (fast path, no window) ---
+            {
+                var kv_keys_f32 = [_]f32{0} ** (max_sl * kvd);
+                var kv_values_f32 = [_]f32{0} ** (max_sl * kvd);
+                const kv_keys = std.mem.sliceAsBytes(&kv_keys_f32);
+                const kv_values = std.mem.sliceAsBytes(&kv_values_f32);
+                var attn_out = [_]f32{0} ** (nh * hd);
+                var scores = [_]f32{0} ** (max_sl + 4);
+
+                var threaded = std.Io.Threaded.init(std.testing.allocator, .{});
+                defer threaded.deinit();
+                var bs = BackendState{};
+                bs.init(std.testing.allocator, .cpu, threaded.io(), 0);
+                defer if (bs.pool) |*p| p.deinit();
+
+                scaledDotProductAttention(
+                    &q_buf,
+                    kv_keys,
+                    kv_values,
+                    &k_buf,
+                    &v_buf,
+                    &attn_out,
+                    &scores,
+                    nh,
+                    nkv,
+                    hd,
+                    0,
+                    scale,
+                    bs.be,
+                    null,
+                    0,
+                    .f32,
+                    .f32,
+                );
+                // Output must be finite
+                for (attn_out[0 .. nh * hd]) |v| {
+                    if (!std.math.isFinite(v)) return error.TestUnexpectedResult;
+                }
+            }
+
+            // --- 2. scaledDotProductAttentionTiered (all-GPU partition fast path) ---
+            {
+                var kv_keys_f32 = [_]f32{0} ** (max_sl * kvd);
+                var kv_values_f32 = [_]f32{0} ** (max_sl * kvd);
+                const kv_keys = std.mem.sliceAsBytes(&kv_keys_f32);
+                const kv_values = std.mem.sliceAsBytes(&kv_values_f32);
+                var attn_out = [_]f32{0} ** (nh * hd);
+                var gpu_out = [_]f32{0} ** (nh * hd);
+                var cpu_out = [_]f32{0} ** (nh * hd);
+
+                var threaded = std.Io.Threaded.init(std.testing.allocator, .{});
+                defer threaded.deinit();
+                var bs = BackendState{};
+                bs.init(std.testing.allocator, .cpu, threaded.io(), 0);
+                defer if (bs.pool) |*p| p.deinit();
+
+                // TieredSdpaInfo exercised here (struct construction)
+                const pool_ptr: ?*ThreadPool = if (bs.pool != null) &bs.pool.? else null;
+                const tiered_info = TieredSdpaInfo{
+                    .partition = .{}, // zero counts = all-GPU fast path
+                    .pool = pool_ptr,
+                    .gpu_out = &gpu_out,
+                    .cpu_out = &cpu_out,
+                };
+
+                scaledDotProductAttentionTiered(
+                    &q_buf,
+                    kv_keys,
+                    kv_values,
+                    &k_buf,
+                    &v_buf,
+                    &attn_out,
+                    nh,
+                    nkv,
+                    hd,
+                    0,
+                    scale,
+                    bs.be,
+                    .f32,
+                    .f32,
+                    tiered_info,
+                );
+                for (attn_out[0 .. nh * hd]) |v| {
+                    if (!std.math.isFinite(v)) return error.TestUnexpectedResult;
+                }
+            }
+
+            // --- 3. pagedAttention ---
+            {
+                var paged = manager.PagedKvCache.init(std.testing.allocator, 1, kvd, 2, block_size) catch return;
+                defer paged.deinit();
+
+                const blk_id = paged.allocBlock() orelse return;
+                var block_table = [_]u32{blk_id};
+                var attn_out = [_]f32{0} ** (nh * hd);
+                var scores = [_]f32{0} ** (max_sl + 4);
+
+                var threaded = std.Io.Threaded.init(std.testing.allocator, .{});
+                defer threaded.deinit();
+                var bs = BackendState{};
+                bs.init(std.testing.allocator, .cpu, threaded.io(), 0);
+                defer if (bs.pool) |*p| p.deinit();
+
+                pagedAttention(
+                    &q_buf,
+                    paged.blocks,
+                    &block_table,
+                    &k_buf,
+                    &v_buf,
+                    &attn_out,
+                    &scores,
+                    nh,
+                    nkv,
+                    hd,
+                    0,
+                    scale,
+                    bs.be,
+                    block_size,
+                );
+                for (attn_out[0 .. nh * hd]) |v| {
+                    if (!std.math.isFinite(v)) return error.TestUnexpectedResult;
+                }
+            }
+        }
+    }.f, .{});
+}

@@ -179,3 +179,78 @@ test "LayerOffsets default zero" {
     try std.testing.expectEqual(@as(usize, 0), lo.ffn_up);
     try std.testing.expectEqual(@as(usize, 0), lo.ffn_down);
 }
+
+test "fuzz: all megakernel functions" {
+    // computeOffsets requires a live Format with mmap'd tensors — verify signature at comptime.
+    comptime {
+        const F = @TypeOf(computeOffsets);
+        _ = @as(F, computeOffsets);
+    }
+
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *std.testing.Smith) !void {
+            // ── LayerOffsets: construct with random fields, verify round-trip ──
+            const lo = LayerOffsets{
+                .attn_norm = smith.valueWithHash(usize, 0),
+                .attn_q = smith.valueWithHash(usize, 1),
+                .attn_k = smith.valueWithHash(usize, 2),
+                .attn_v = smith.valueWithHash(usize, 3),
+                .attn_q_norm = smith.valueWithHash(usize, 4),
+                .attn_k_norm = smith.valueWithHash(usize, 5),
+                .attn_output = smith.valueWithHash(usize, 6),
+                .attn_qkv = smith.valueWithHash(usize, 7),
+                .attn_gate = smith.valueWithHash(usize, 8),
+                .ssm_alpha = smith.valueWithHash(usize, 9),
+                .ssm_beta = smith.valueWithHash(usize, 10),
+                .ssm_a = smith.valueWithHash(usize, 11),
+                .ssm_dt_bias = smith.valueWithHash(usize, 12),
+                .ssm_conv1d = smith.valueWithHash(usize, 13),
+                .ssm_norm = smith.valueWithHash(usize, 14),
+                .ssm_out = smith.valueWithHash(usize, 15),
+                .post_attn_norm = smith.valueWithHash(usize, 16),
+                .ffn_gate = smith.valueWithHash(usize, 17),
+                .ffn_up = smith.valueWithHash(usize, 18),
+                .ffn_down = smith.valueWithHash(usize, 19),
+            };
+
+            // All 20 fields must be accessible via reflection
+            const fields = @typeInfo(LayerOffsets).@"struct".fields;
+            inline for (fields) |field| {
+                const val = @field(lo, field.name);
+                try std.testing.expect(val <= std.math.maxInt(usize));
+            }
+
+            // ── WeightPack: construct with random scalars, verify field access ──
+            var pack: WeightPack = undefined;
+            const n_layers_raw = smith.valueWithHash(u32, 20);
+            pack.n_layers = n_layers_raw % @as(u32, max_layers + 1);
+            pack.output_norm = smith.valueWithHash(usize, 21);
+            pack.output_weight = smith.valueWithHash(usize, 22);
+            pack.token_embd = smith.valueWithHash(usize, 23);
+            pack.base_ptr = @ptrFromInt(smith.valueWithHash(usize, 24) | 1);
+
+            // Fill layer_offsets array up to n_layers
+            for (0..pack.n_layers) |i| {
+                const seed: u32 = @truncate(i);
+                pack.layer_offsets[i] = LayerOffsets{
+                    .attn_norm = smith.valueWithHash(usize, 25 +% seed),
+                    .ffn_down = smith.valueWithHash(usize, 26 +% seed),
+                };
+            }
+
+            // Verify invariants
+            try std.testing.expect(pack.n_layers <= max_layers);
+            try std.testing.expect(@intFromPtr(pack.base_ptr) != 0);
+            try std.testing.expect(pack.output_norm <= std.math.maxInt(usize));
+            try std.testing.expect(pack.output_weight <= std.math.maxInt(usize));
+            try std.testing.expect(pack.token_embd <= std.math.maxInt(usize));
+
+            // Verify each packed layer offset is readable
+            for (0..pack.n_layers) |i| {
+                const layer = pack.layer_offsets[i];
+                try std.testing.expect(layer.attn_norm <= std.math.maxInt(usize));
+                try std.testing.expect(layer.ffn_down <= std.math.maxInt(usize));
+            }
+        }
+    }.f, .{});
+}

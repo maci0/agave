@@ -1338,3 +1338,89 @@ test "acceptToken advances state" {
     try std.testing.expect(state.acceptChar('o'));
     try std.testing.expect(state.isComplete());
 }
+
+test "fuzz: all grammar functions" {
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *std.testing.Smith) !void {
+            const allocator = std.testing.allocator;
+
+            // --- pub const Grammar.json_grammar / bool_grammar / integer_grammar ---
+            const grammars = [_][]const u8{
+                Grammar.bool_grammar,
+                Grammar.integer_grammar,
+                Grammar.json_grammar,
+            };
+
+            // --- pub fn Grammar.getEffectiveText ---
+            var text_buf: [8]u8 = undefined;
+            for (&text_buf, 0..) |*b, i| b.* = smith.valueWithHash(u8, @intCast(i));
+            const effective = Grammar.getEffectiveText(&text_buf);
+            std.debug.assert(effective.len <= text_buf.len);
+
+            // --- pub fn Grammar.parse (random bytes — exercise error paths) ---
+            var input_buf: [32]u8 = undefined;
+            for (&input_buf, 0..) |*b, i| b.* = smith.valueWithHash(u8, @as(u32, @intCast(i)) +% 100);
+            if (Grammar.parse(allocator, &input_buf)) |*g| {
+                var gm = g.*;
+                gm.deinit();
+            } else |_| {}
+
+            // --- pub fn Grammar.fromJsonSchema (random bytes — exercise error paths) ---
+            var schema_buf: [48]u8 = undefined;
+            for (&schema_buf, 0..) |*b, i| b.* = smith.valueWithHash(u8, @as(u32, @intCast(i)) +% 200);
+            if (Grammar.fromJsonSchema(allocator, &schema_buf)) |*gs| {
+                var gsm = gs.*;
+                gsm.deinit();
+            } else |_| {}
+
+            // --- pub fn Grammar.parse (valid grammar) + pub fn Grammar.deinit ---
+            const pick = smith.valueWithHash(u8, 300) % grammars.len;
+            var grammar = Grammar.parse(allocator, grammars[pick]) catch return;
+            defer grammar.deinit();
+
+            // --- pub fn Grammar.initState ---
+            var state = grammar.initState() catch return;
+            defer state.deinit();
+
+            // --- pub fn GrammarState.isComplete ---
+            std.debug.assert(!state.isComplete());
+
+            // --- pub fn GrammarState.acceptChar ---
+            const ch = smith.valueWithHash(u8, 400);
+            _ = state.acceptChar(ch);
+
+            // --- pub fn GrammarState.acceptToken ---
+            var tok_buf: [4]u8 = undefined;
+            for (&tok_buf, 0..) |*b, i| b.* = smith.valueWithHash(u8, @as(u32, @intCast(i)) +% 500);
+            state.acceptToken(&tok_buf);
+            _ = state.isComplete();
+
+            // --- pub fn Grammar.maskLogits ---
+            const vocab = [_][]const u8{ "t", "f", "true", "false", "-", "1", "42", "{", "[" };
+            var logits = [_]f32{ 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0 };
+            var state2 = grammar.initState() catch return;
+            defer state2.deinit();
+            grammar.maskLogits(&state2, &logits, &vocab);
+            for (logits) |l| {
+                std.debug.assert(std.math.isFinite(l) or l == -std.math.inf(f32));
+            }
+
+            // --- pub fn Grammar.singleValidToken ---
+            var state3 = grammar.initState() catch return;
+            defer state3.deinit();
+            const single = grammar.singleValidToken(&state3, &vocab);
+            if (single) |id| std.debug.assert(id < vocab.len);
+
+            // --- pub fn GrammarState.init + pub fn GrammarState.deinit (standalone) ---
+            var state4 = GrammarState.init(&grammar) catch return;
+            state4.deinit();
+
+            // --- pub types: ElementType, Element, Rule (comptime verification) ---
+            comptime {
+                _ = @as(ElementType, .char_range);
+                _ = Element{ .type = .end };
+                _ = Rule{ .name = "", .elements = &.{} };
+            }
+        }
+    }.f, .{});
+}

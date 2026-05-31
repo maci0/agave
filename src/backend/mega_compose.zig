@@ -962,6 +962,49 @@ test "composeMSL generates Qwen SiLU with fused residual" {
     try std.testing.expect(std.mem.indexOf(u8, msl, "mega_gemv_q8") != null);
 }
 
+test "fuzz: all mega_compose functions" {
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *std.testing.Smith) !void {
+            _ = smith;
+            // ModelDesc methods
+            const desc = ModelDesc{
+                .name = "fuzz",
+                .n_layers = 2,
+                .n_embd = 64,
+                .n_ff = 128,
+                .n_head = 4,
+                .n_kv = 2,
+                .head_dim = 16,
+                .rope_dim = 16,
+                .rope_theta = 10000.0,
+                .rms_eps = 1e-6,
+                .max_seq_len = 64,
+                .activation = .silu,
+                .quant = .q8_0,
+                .layer_types = ModelDesc.uniform(2, .attention),
+            };
+            _ = desc.layerNHead(0);
+            _ = desc.layerNKv(0);
+            _ = desc.layerHeadDim(0);
+            _ = desc.layerNFf(0);
+            _ = desc.layerRopeTheta(0);
+            _ = desc.layerWindow(0);
+            _ = desc.hasPerLayerVariation();
+            _ = ModelDesc.uniform(2, .attention);
+            _ = ModelDesc.qwenHybrid(2, 1);
+
+            // composeMSL
+            var buf: [32768]u8 = undefined;
+            _ = composeMSL(&buf, desc);
+
+            // gemvFn / activationFn / weightCast (module-level fns)
+            _ = gemvFn(.q8_0);
+            _ = activationFn(.silu);
+            _ = weightCast(.q8_0);
+        }
+    }.f, .{});
+}
+
 test "composeMSL generates Nemotron-H ReLU² FFN" {
     var buf: [32768]u8 = undefined;
     var layer_types: [max_layers]LayerKind = undefined;

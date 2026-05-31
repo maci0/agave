@@ -1023,3 +1023,131 @@ test "formatSize zero" {
     try std.testing.expectApproxEqAbs(@as(f64, 0.0), result.val, 0.01);
     try std.testing.expectEqualStrings("KB", result.unit);
 }
+
+test "fuzz: all display functions" {
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *std.testing.Smith) !void {
+            // ── pub constants ──
+            _ = version;
+            _ = cactus;
+
+            // ── pub fn formatSize ──
+            const size_val = smith.valueWithHash(usize, 0);
+            const fs = formatSize(size_val);
+            try std.testing.expect(std.math.isFinite(fs.val));
+            try std.testing.expect(fs.unit.len > 0);
+
+            // ── pub fn printVersion ──
+            // Writes to stdout; just verify it doesn't crash.
+            printVersion();
+
+            // ── ModelInfo.bitsPerWeight ──
+            const n_params = smith.valueWithHash(u64, 1);
+            const file_size = smith.valueWithHash(usize, 2);
+            const mi = ModelInfo{
+                .name = "fuzz",
+                .arch_name = "fuzz",
+                .quant = "Q4",
+                .be_name = "CPU",
+                .n_layers = smith.valueWithHash(u32, 3),
+                .n_embed = smith.valueWithHash(u32, 4),
+                .n_heads = smith.valueWithHash(u32, 5),
+                .n_kv_heads = smith.valueWithHash(u32, 6) | 1, // avoid zero for GQA div
+                .head_dim = smith.valueWithHash(u32, 7),
+                .ff_dim = smith.valueWithHash(u32, 8),
+                .vocab_size = smith.valueWithHash(u32, 9),
+                .ctx_size = smith.valueWithHash(u32, 10),
+                .rope_theta = @bitCast(smith.valueWithHash(u32, 11)),
+                .n_params = n_params,
+                .n_experts = smith.valueWithHash(u32, 12),
+                .n_experts_used = smith.valueWithHash(u32, 13),
+                .file_size_bytes = file_size,
+                .load_ms = smith.valueWithHash(u64, 14),
+                .warmup_ms = smith.valueWithHash(u64, 15),
+            };
+            const bpw = mi.bitsPerWeight();
+            try std.testing.expect(std.math.isFinite(bpw) or bpw == 0);
+
+            // ── GenStats.tokPerSec / prefillTokPerSec ──
+            const gs = GenStats{
+                .token_count = smith.valueWithHash(u32, 16),
+                .gen_ms = smith.valueWithHash(u64, 17),
+                .prefill_token_count = smith.valueWithHash(u32, 18),
+                .prefill_ms = smith.valueWithHash(u64, 19),
+            };
+            const tps = gs.tokPerSec();
+            try std.testing.expect(std.math.isFinite(tps) or tps == 0);
+            const ptps = gs.prefillTokPerSec();
+            try std.testing.expect(std.math.isFinite(ptps) or ptps == 0);
+
+            // ── OutputMode enum ──
+            const mode_idx = smith.valueWithHash(u8, 20) % 3;
+            const mode: OutputMode = @enumFromInt(mode_idx);
+            _ = mode;
+
+            // ── FormattedSize struct ──
+            const fmts = FormattedSize{ .val = @bitCast(smith.valueWithHash(u64, 21)), .unit = "MB" };
+            _ = fmts;
+
+            // ── Display.init ──
+            const verbose = (smith.valueWithHash(u8, 22) & 1) != 0;
+            // Use .json mode to suppress stderr/stdout writes in banner/stats methods
+            const d = Display.init(.json, verbose);
+
+            // ── Display.printBanner ──
+            d.printBanner(mi);
+
+            // ── Display.printBannerPlain (json mode = no-op for printBanner, call plain directly on a plain display) ──
+            // Use a separate display to exercise printBannerPlain (writes to stderr, safe)
+            const d_plain = Display.init(.plain, verbose);
+            d_plain.printBannerPlain(mi);
+
+            // ── Display.printBannerTty (writes to stderr, safe) ──
+            const d_tty = Display.init(.tty, verbose);
+            d_tty.printBannerTty(mi);
+
+            // ── Display.printSystemInfo ──
+            const bi = BackendInfo{};
+            d.printSystemInfo(bi);
+            d_plain.printSystemInfo(bi);
+
+            // ── Display.printLoadInfo ──
+            const li = LoadInfo{
+                .n_tensors = smith.valueWithHash(u64, 23),
+                .vocab_size = smith.valueWithHash(u32, 24),
+                .eos_id = smith.valueWithHash(u32, 25),
+                .bos_id = smith.valueWithHash(u32, 26),
+                .n_eog = smith.valueWithHash(usize, 27),
+                .init_ms = smith.valueWithHash(u64, 28),
+            };
+            d.printLoadInfo(li);
+            d_plain.printLoadInfo(li);
+
+            // ── Display.showPrefillStart ──
+            const pfx_count = smith.valueWithHash(usize, 29);
+            d.showPrefillStart(pfx_count);
+            d_plain.showPrefillStart(pfx_count);
+
+            // ── Display.clearPrefillProgress ──
+            d.clearPrefillProgress();
+            d_tty.clearPrefillProgress();
+            d_plain.clearPrefillProgress();
+
+            // ── Display.printStats ──
+            d.printStats(gs);
+            d_plain.printStats(gs);
+
+            // ── Display.printStatsPlain ──
+            d_plain.printStatsPlain(gs);
+
+            // ── Display.printJsonPrompt ──
+            d.printJsonPrompt(mi, "fuzz output", gs);
+
+            // ── Display.printJsonModelInfo ──
+            d.printJsonModelInfo(mi);
+
+            // ── Display.printModelInfo ──
+            d.printModelInfo(mi);
+        }
+    }.f, .{});
+}

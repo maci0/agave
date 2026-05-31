@@ -130,6 +130,35 @@ test "sigmoidMul non-aligned exercises scalar tail" {
     try std.testing.expectApproxEqAbs(@as(f32, 2.689), data[4], 1e-2); // 10.0 * sigmoid(-1)
 }
 
+test "fuzz: all elementwise functions" {
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *std.testing.Smith) !void {
+            var a_buf: [16]f32 = undefined;
+            var b_buf: [16]f32 = undefined;
+            var out_buf: [16]f32 = undefined;
+            for (0..16) |i| {
+                a_buf[i] = @as(f32, @floatFromInt(smith.valueWithHash(i8, @truncate(i))));
+                b_buf[i] = @as(f32, @floatFromInt(smith.valueWithHash(i8, @truncate(i +% 50))));
+            }
+
+            // add
+            add(&a_buf, &b_buf, &out_buf, 16);
+
+            // mul
+            mul(&a_buf, &b_buf, &out_buf, 16);
+
+            // sigmoidMul
+            var data_buf: [16]f32 = a_buf;
+            sigmoidMul(&data_buf, &b_buf, 16);
+
+            // deinterleave (2 pairs, stride=4)
+            var di_a: [8]f32 = undefined;
+            var di_b: [8]f32 = undefined;
+            deinterleave(&a_buf, &di_a, &di_b, 4, 2);
+        }
+    }.f, .{});
+}
+
 test "deinterleave multi-pair" {
     // 2 pairs, stride=2: [A0a, A0b, B0a, B0b, A1a, A1b, B1a, B1b]
     var input = [_]f32{ 10, 11, 20, 21, 30, 31, 40, 41 };

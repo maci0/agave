@@ -145,3 +145,36 @@ test "awqGemvRows with non-zero start_col" {
         try std.testing.expectApproxEqAbs(y_direct[i], y_rows[i], 1e-6);
     }
 }
+
+test "fuzz: all awq functions" {
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *std.testing.Smith) !void {
+            const n: usize = 8;
+            const k: usize = 1;
+            const gs: u32 = 128;
+
+            // Random inputs
+            var x = [_]f32{smith.valueWithHash(f32, 0)};
+            var qweight = [_]u32{smith.valueWithHash(u32, 1)};
+            var qzeros = [_]u32{smith.valueWithHash(u32, 2)};
+            var scales: [8]u16 = undefined;
+            for (&scales, 0..) |*s, i| {
+                s.* = smith.valueWithHash(u16, @intCast(3 + i));
+            }
+
+            // Exercise awqGemv (pub)
+            var y1: [8]f32 = undefined;
+            awqGemv(&x, &qweight, &scales, &qzeros, &y1, n, k, gs);
+
+            // Exercise awqGemvRows (pub)
+            var y2: [8]f32 = undefined;
+            awqGemvRows(&x, &qweight, &scales, &qzeros, &y2, 0, n, k, gs);
+
+            // awqGemv delegates to awqGemvRows with start_col=0, so outputs must match
+            for (0..8) |i| {
+                if (!std.math.isFinite(y1[i])) return error.TestUnexpectedResult;
+                if (@abs(y1[i] - y2[i]) > 1e-6) return error.TestUnexpectedResult;
+            }
+        }
+    }.f, .{});
+}

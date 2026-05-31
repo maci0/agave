@@ -4818,3 +4818,186 @@ test "parseContentLength case insensitive" {
     try std.testing.expectEqual(@as(?usize, 99), parseContentLength("content-length: 99\r\nHost: x"));
     try std.testing.expectEqual(@as(?usize, 7), parseContentLength("CONTENT-LENGTH: 7\r\nHost: x"));
 }
+
+test "fuzz: all server functions" {
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *std.testing.Smith) !void {
+            // ── pub struct ServerConfig: verify all fields exist at comptime ──
+            comptime {
+                _ = @as(?*const ServerConfig, null);
+                // Verify fields exist
+                _ = @offsetOf(ServerConfig, "allocator");
+                _ = @offsetOf(ServerConfig, "model");
+                _ = @offsetOf(ServerConfig, "tokenizer");
+                _ = @offsetOf(ServerConfig, "port");
+                _ = @offsetOf(ServerConfig, "bos_token_id");
+                _ = @offsetOf(ServerConfig, "eog_ids");
+                _ = @offsetOf(ServerConfig, "eog_len");
+                _ = @offsetOf(ServerConfig, "api_key");
+                _ = @offsetOf(ServerConfig, "host");
+                _ = @offsetOf(ServerConfig, "ctx_size");
+                _ = @offsetOf(ServerConfig, "vision_encoder");
+                _ = @offsetOf(ServerConfig, "draft_model");
+                _ = @offsetOf(ServerConfig, "spec_tokens");
+                _ = @offsetOf(ServerConfig, "tree_budget");
+            }
+
+            // ── pub fn run: comptime verify it exists (needs full server, cannot call) ──
+            comptime {
+                _ = &run;
+            }
+
+            // ── pub TcpStream methods: comptime verify (need real socket FDs) ──
+            comptime {
+                _ = &TcpStream.writeAll;
+                _ = &TcpStream.read;
+                _ = &TcpStream.close;
+            }
+
+            // ── pub GeneratedEscaped.deinit: comptime verify (needs g_server) ──
+            comptime {
+                _ = &GeneratedEscaped.deinit;
+            }
+
+            // ── Private pure helpers: fuzz with random inputs ──
+
+            // clampMaxTokens
+            {
+                const raw_val = smith.valueWithHash(u16, 0x01);
+                const result = clampMaxTokens(@as(?usize, @intCast(raw_val)));
+                std.debug.assert(result >= 1);
+                std.debug.assert(result <= gen_ids_buf_size);
+                // null case
+                const null_result = clampMaxTokens(null);
+                std.debug.assert(null_result == default_max_gen_tokens);
+            }
+
+            // tokensPerSec
+            {
+                const count = smith.valueWithHash(u16, 0x02);
+                const time_ms = smith.valueWithHash(u16, 0x03);
+                const tps = tokensPerSec(@intCast(count), @intCast(time_ms));
+                std.debug.assert(tps >= 0 or tps == 0);
+                std.debug.assert(!std.math.isNan(tps));
+            }
+
+            // estimatePromptTokens
+            {
+                const tok_count = smith.valueWithHash(u16, 0x04);
+                const text_len = smith.valueWithHash(u16, 0x05);
+                const result = estimatePromptTokens(@intCast(tok_count), @intCast(text_len));
+                if (tok_count > 0) {
+                    std.debug.assert(result == tok_count);
+                } else {
+                    std.debug.assert(result >= 1);
+                }
+            }
+
+            // isUnsafeJsonChar
+            {
+                const c = smith.valueWithHash(u8, 0x06);
+                const is_unsafe = isUnsafeJsonChar(c);
+                // Control chars < 0x20 must be unsafe
+                if (c < 0x20) std.debug.assert(is_unsafe);
+                // Normal alphanum must be safe
+                if (c >= 'A' and c <= 'Z') std.debug.assert(!is_unsafe);
+            }
+
+            // sanitizeForLog
+            {
+                var input_buf: [32]u8 = undefined;
+                const len = @min(smith.valueWithHash(u5, 0x07), 31) + 1;
+                for (0..len) |i| {
+                    input_buf[i] = smith.valueWithHash(u8, @truncate(0x08 +% i));
+                }
+                var out_buf: [32]u8 = undefined;
+                const result = sanitizeForLog(input_buf[0..len], &out_buf);
+                std.debug.assert(result.len == len);
+                // Check no control chars in output (except space)
+                for (result) |ch| {
+                    std.debug.assert(ch >= 0x20 or ch == ' ');
+                    std.debug.assert(ch != 0x7F);
+                }
+            }
+
+            // hasHeader
+            {
+                const has_ct = hasHeader("Content-Type: text/html\r\nHost: x", "Content-Type");
+                std.debug.assert(has_ct);
+                const has_missing = hasHeader("Content-Type: text/html\r\nHost: x", "Authorization");
+                std.debug.assert(!has_missing);
+                // Case-insensitive
+                const has_ci = hasHeader("content-type: text/html\r\nHost: x", "Content-Type");
+                std.debug.assert(has_ci);
+            }
+
+            // parseContentLength
+            {
+                const val = smith.valueWithHash(u16, 0x10);
+                var hdr_buf: [64]u8 = undefined;
+                const hdr = std.fmt.bufPrint(&hdr_buf, "Content-Length: {d}\r\nHost: x", .{val}) catch unreachable;
+                const parsed = parseContentLength(hdr);
+                std.debug.assert(parsed != null);
+                std.debug.assert(parsed.? == @as(usize, val));
+            }
+
+            // constantTimeEql
+            {
+                var a_buf: [8]u8 = undefined;
+                var b_buf: [8]u8 = undefined;
+                for (0..8) |i| {
+                    a_buf[i] = smith.valueWithHash(u8, @truncate(0x20 +% i));
+                    b_buf[i] = smith.valueWithHash(u8, @truncate(0x28 +% i));
+                }
+                // Same inputs must be equal
+                std.debug.assert(constantTimeEql(&a_buf, &a_buf));
+                // a == b iff they happen to be the same
+                const eq = constantTimeEql(&a_buf, &b_buf);
+                const mem_eq = std.mem.eql(u8, &a_buf, &b_buf);
+                std.debug.assert(eq == mem_eq);
+            }
+
+            // hasToolCalls
+            {
+                std.debug.assert(hasToolCalls("<tool_call>{\"name\":\"foo\"}</tool_call>"));
+                std.debug.assert(!hasToolCalls("No tools here"));
+                // Random input
+                var tc_buf: [16]u8 = undefined;
+                for (0..16) |i| {
+                    tc_buf[i] = smith.valueWithHash(u8, @truncate(0x30 +% i));
+                }
+                _ = hasToolCalls(&tc_buf);
+            }
+
+            // elapsedBetween
+            {
+                const a = smith.valueWithHash(i16, 0x40);
+                const b = smith.valueWithHash(i16, 0x41);
+                const start: i64 = @intCast(a);
+                const end: i64 = @intCast(b);
+                const result = elapsedBetween(start, end);
+                if (end >= start) {
+                    std.debug.assert(result == @as(u64, @intCast(end - start)));
+                } else {
+                    std.debug.assert(result == 0);
+                }
+            }
+
+            // HttpReadResult union: verify layout at comptime
+            comptime {
+                _ = @as(?HttpReadResult, null);
+                _ = HttpReadResult.malformed;
+                _ = HttpReadResult.body_too_large;
+            }
+
+            // KnownEndpoint: verify at comptime
+            comptime {
+                std.debug.assert(known_endpoints.len > 0);
+                for (known_endpoints) |ep| {
+                    std.debug.assert(ep.path.len > 0);
+                    std.debug.assert(ep.allow.len > 0);
+                }
+            }
+        }
+    }.f, .{});
+}

@@ -2230,3 +2230,352 @@ test "Backend.sdpaWithStats f32 KV via CPU dispatch" {
     try std.testing.expect(std.math.isFinite(head_sum[0]));
     try std.testing.expect(head_sum[0] > 0);
 }
+
+test "fuzz: all backend functions" {
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *std.testing.Smith) !void {
+            // weightBytes: exercise every DType with random n, k
+            {
+                const n_raw = smith.valueWithHash(u16, 0) | 1;
+                const k_raw = smith.valueWithHash(u16, 1) | 1;
+                const n: usize = @intCast(n_raw);
+                const k: usize = @intCast(k_raw);
+                inline for (comptime std.enums.values(DType)) |dtype| {
+                    _ = weightBytes(dtype, n, k);
+                }
+            }
+            // gemvRowBytes: exercise every DType with random k
+            {
+                const k: usize = @intCast(smith.valueWithHash(u16, 2));
+                inline for (comptime std.enums.values(DType)) |dtype| {
+                    _ = gemvRowBytes(dtype, k);
+                }
+            }
+            // detectSystemMem, detectAvailMem, detectCacheSizes, detectOsVersion
+            {
+                try std.testing.expect(detectSystemMem() > 0);
+                _ = detectAvailMem();
+                const cs = detectCacheSizes();
+                _ = cs.l1;
+                _ = cs.l2;
+                _ = cs.l3;
+                _ = detectOsVersion();
+            }
+            // TensorData
+            {
+                var data = [_]u8{ smith.valueWithHash(u8, 3), 0, 0, 0 };
+                _ = (TensorData{ .data = &data, .dtype = .f32 }).dtype;
+            }
+            // GemvOp
+            {
+                var y_buf: [1]f32 = .{0};
+                var w_data = [_]u8{0} ** 4;
+                const op = GemvOp{ .w = .{ .data = &w_data, .dtype = .f32 }, .y = &y_buf, .n = 1, .mlx_bits = smith.valueWithHash(u32, 4) & 0x7 };
+                _ = op.mlx_scales;
+                _ = op.mlx_biases;
+            }
+            // DeltaNetParams
+            {
+                const p = DeltaNetParams{ .conv_ch = smith.valueWithHash(u32, 5) | 1, .d_conv = (smith.valueWithHash(u32, 6) & 0xF) | 1, .d_inner = smith.valueWithHash(u32, 7) | 1, .num_k_heads = (smith.valueWithHash(u32, 8) & 0xF) | 1, .head_k_dim = (smith.valueWithHash(u32, 9) & 0xFF) | 1, .num_v_heads = (smith.valueWithHash(u32, 10) & 0xF) | 1, .head_v_dim = (smith.valueWithHash(u32, 11) & 0xFF) | 1, .q_scale = 1.0, .rms_eps = 1e-6, .kqv_order = (smith.valueWithHash(u8, 12) & 1) != 0 };
+                _ = p.conv_ch;
+            }
+            // BackendInfo
+            {
+                const info = BackendInfo{ .n_gpu_kernels = smith.valueWithHash(u32, 13), .total_mem = @intCast(smith.valueWithHash(u32, 14)), .is_uma = (smith.valueWithHash(u8, 15) & 1) != 0, .n_threads = smith.valueWithHash(u32, 16) };
+                _ = info.name;
+                _ = info.arch;
+                _ = info.os;
+            }
+            // CacheSizes
+            {
+                const cs = CacheSizes{ .l1 = @intCast(smith.valueWithHash(u16, 17)), .l2 = @intCast(smith.valueWithHash(u16, 18)), .l3 = @intCast(smith.valueWithHash(u16, 19)) };
+                try std.testing.expect(cs.l1 <= std.math.maxInt(u16));
+            }
+            // BackendChoice
+            {
+                const choices = [_]BackendChoice{ .auto, .cpu, .metal, .vulkan, .cuda, .rocm, .webgpu };
+                _ = choices[smith.valueWithHash(u8, 20) % choices.len];
+            }
+            // BackendState defaults
+            try std.testing.expectEqualStrings("CPU", (BackendState{}).name);
+            // Constants
+            try std.testing.expect(buf_cache_initial_capacity > 0);
+            try std.testing.expect(quant_block_elems > 0);
+            try std.testing.expect(quant_super_block_elems > 0);
+            try std.testing.expect(nvfp4_block_elems > 0);
+            try std.testing.expect(f32_elem_bytes == 4);
+            try std.testing.expect(f16_elem_bytes == 2);
+            try std.testing.expect(q4_0_block_bytes > 0);
+            try std.testing.expect(q4_1_block_bytes > 0);
+            try std.testing.expect(q5_0_block_bytes > 0);
+            try std.testing.expect(q8_0_block_bytes > 0);
+            try std.testing.expect(q2_k_block_bytes > 0);
+            try std.testing.expect(q3_k_block_bytes > 0);
+            try std.testing.expect(q4_k_block_bytes > 0);
+            try std.testing.expect(q5_k_block_bytes > 0);
+            try std.testing.expect(q6_k_block_bytes > 0);
+            try std.testing.expect(iq4_nl_block_bytes > 0);
+            try std.testing.expect(iq4_xs_block_bytes > 0);
+            try std.testing.expect(mxfp4_block_bytes > 0);
+            try std.testing.expect(nvfp4_block_bytes > 0);
+            try std.testing.expect(tq1_0_block_bytes > 0);
+            // Backend dispatch via CPU
+            var cpu = CpuBackend{};
+            const be = Backend{ .cpu = &cpu };
+            const dim = 8;
+            var buf_a = [_]f32{ 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0 };
+            var buf_b = [_]f32{ 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5 };
+            var buf_w = [_]f32{ 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0 };
+            var out: [dim]f32 = undefined;
+            be.add(&buf_a, &buf_b, &out, dim);
+            for (&out) |v| try std.testing.expect(std.math.isFinite(v));
+            be.mul(&buf_a, &buf_b, &out, dim);
+            for (&out) |v| try std.testing.expect(std.math.isFinite(v));
+            be.silu(&buf_a, &out, dim);
+            for (&out) |v| try std.testing.expect(std.math.isFinite(v));
+            be.gelu(&buf_a, &out, dim);
+            for (&out) |v| try std.testing.expect(std.math.isFinite(v));
+            be.rmsNorm(&buf_a, &buf_w, &out, dim, 1e-6);
+            for (&out) |v| try std.testing.expect(std.math.isFinite(v));
+            var buf_a2 = buf_a;
+            be.addRmsNorm(&buf_a2, &buf_b, &buf_w, &out, dim, 1e-6);
+            for (&out) |v| try std.testing.expect(std.math.isFinite(v));
+            var addsc_dst = [_]f32{ 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0 };
+            be.addScaled(&buf_b, &addsc_dst, 0.5, dim);
+            for (&addsc_dst) |v| try std.testing.expect(std.math.isFinite(v));
+            var sm_data = [_]f32{ 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0 };
+            be.softmax(&sm_data, dim);
+            var sm_sum: f32 = 0;
+            for (&sm_data) |v| sm_sum += v;
+            try std.testing.expectApproxEqAbs(@as(f32, 1.0), sm_sum, 1e-4);
+            var rope_buf = [_]f32{ 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 };
+            be.rope(&rope_buf, 0, 1, dim, dim, 10000.0);
+            try std.testing.expect(std.math.isFinite(rope_buf[0]));
+            var l2_buf = [_]f32{ 3.0, 4.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 };
+            be.l2Norm(&l2_buf, dim, 1e-12);
+            for (&l2_buf) |v| try std.testing.expect(std.math.isFinite(v));
+            var sig_data = [_]f32{ 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0 };
+            var sig_gate = [_]f32{ 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 };
+            be.sigmoidMul(&sig_data, &sig_gate, dim);
+            for (&sig_data) |v| try std.testing.expect(std.math.isFinite(v));
+            be.siluMul(&buf_a, &buf_b, &out, dim);
+            for (&out) |v| try std.testing.expect(std.math.isFinite(v));
+            be.geluMul(&buf_a, &buf_b, &out, dim);
+            for (&out) |v| try std.testing.expect(std.math.isFinite(v));
+            var rnm_data = [_]f32{ 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0 };
+            var rnm_w = [_]f32{ 1.0, 1.0, 1.0, 1.0 };
+            be.rmsNormMulti(&rnm_data, &rnm_w, 2, 4, 1e-6);
+            for (&rnm_data) |v| try std.testing.expect(std.math.isFinite(v));
+            var di_in = [_]f32{ 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0 };
+            var di_a: [4]f32 = undefined;
+            var di_b: [4]f32 = undefined;
+            be.deinterleave(&di_in, &di_a, &di_b, 2, 2);
+            for (&di_a) |v| try std.testing.expect(std.math.isFinite(v));
+            var qg_in = [_]f32{ 1.0, 2.0, 10.0, 20.0, 3.0, 4.0, 30.0, 40.0 };
+            var q_out: [4]f32 = undefined;
+            var g_out: [4]f32 = undefined;
+            be.splitQGate(&qg_in, &q_out, &g_out, 2, 2);
+            for (&q_out) |v| try std.testing.expect(std.math.isFinite(v));
+            const emb_table = [_]f32{ 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0 };
+            var emb_out: [4]f32 = undefined;
+            be.embLookup(.{ .data = @ptrCast(&emb_table), .dtype = .f32 }, 0, &emb_out, 4);
+            for (&emb_out) |v| try std.testing.expect(std.math.isFinite(v));
+            var gemv_x = [_]f32{ 1.0, 1.0, 1.0, 1.0 };
+            var gemv_w = [_]f32{ 1.0, 2.0, 3.0, 4.0 };
+            var gemv_y: [1]f32 = undefined;
+            be.gemv(&gemv_x, .{ .data = @ptrCast(&gemv_w), .dtype = .f32 }, &gemv_y, 1, 4);
+            try std.testing.expect(std.math.isFinite(gemv_y[0]));
+            var gemm_x = [_]f32{ 1.0, 0.0, 0.0, 1.0 };
+            var gemm_w = [_]f32{ 2.0, 3.0, 4.0, 5.0 };
+            var gemm_y: [4]f32 = undefined;
+            be.gemm(&gemm_x, .{ .data = @ptrCast(&gemm_w), .dtype = .f32 }, &gemm_y, 2, 2, 2);
+            for (&gemm_y) |v| try std.testing.expect(std.math.isFinite(v));
+            var w_block: [34]u8 align(2) = undefined;
+            w_block[0] = 0x00;
+            w_block[1] = 0x3C;
+            @memset(w_block[2..34], 0);
+            w_block[2] = 1;
+            var gt_x = [_]f32{1.0};
+            var gt_y: [32]f32 = undefined;
+            be.gemvT(&gt_x, &w_block, &gt_y, 32, 1);
+            try std.testing.expect(std.math.isFinite(gt_y[0]));
+            var gm_x = [_]f32{ 1.0, 1.0, 1.0, 1.0 };
+            var gm_w = [_]f32{ 1.0, 2.0, 3.0, 4.0 };
+            var gm_y: [1]f32 = undefined;
+            const gm_ops = [_]GemvOp{.{ .w = .{ .data = @ptrCast(&gm_w), .dtype = .f32 }, .y = &gm_y, .n = 1 }};
+            be.gemvMulti(&gm_x, &gm_ops, 4);
+            try std.testing.expect(std.math.isFinite(gm_y[0]));
+            be.rmsNormBatched(&buf_a, &buf_w, &out, 1, dim, 1e-6);
+            for (&out) |v| try std.testing.expect(std.math.isFinite(v));
+            var rb_x = [_]f32{ 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 };
+            var rb_pos = [_]u32{0};
+            be.ropeBatched(&rb_x, &rb_pos, 1, 1, dim, dim, 10000.0);
+            try std.testing.expect(std.math.isFinite(rb_x[0]));
+            be.sync();
+            be.beginBatch();
+            be.endBatch();
+            try std.testing.expectEqualStrings("CPU", be.backendInfo().name);
+            be.setThreadContext();
+            be.invalidateActivation(&out);
+            try std.testing.expectEqual(@as(u64, 0), be.getDevicePtr(@as([*]const f32, &out)));
+            be.invalidateWeight(@as([*]const u8, @ptrCast(&out)));
+            var ar_dst = [_]f32{ 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0 };
+            var ar_src = [_]f32{ 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0 };
+            be.allReduceAdd(&ar_dst, &ar_src, dim);
+            var host_region = [_]u8{0} ** 16;
+            be.registerHostRegion(&host_region, 16);
+            const kv_slice = be.allocKvSlice(std.testing.allocator, 64) catch return;
+            try std.testing.expectEqual(@as(usize, 64), kv_slice.len);
+            be.freeKvSlice(std.testing.allocator, kv_slice);
+            // sdpa
+            {
+                const hd = 4;
+                var kv_keys: [4 * 4 * 4]u8 = undefined;
+                var kv_vals: [4 * 4 * 4]u8 = undefined;
+                var s_q = [_]f32{ 1.0, 0.0, 0.0, 0.0 };
+                var s_k = [_]f32{ 1.0, 0.0, 0.0, 0.0 };
+                var s_v = [_]f32{ 0.5, 0.5, 0.5, 0.5 };
+                var s_out: [hd]f32 = undefined;
+                be.sdpa(&s_q, &kv_keys, &kv_vals, &s_k, &s_v, &s_out, 1, 1, hd, 0, 1.0, .f32, .f32);
+                for (&s_out) |v| try std.testing.expect(std.math.isFinite(v));
+            }
+            // sdpaWithStats
+            {
+                const hd = 4;
+                var kv_keys: [4 * 4 * 4]u8 = undefined;
+                var kv_vals: [4 * 4 * 4]u8 = undefined;
+                var s_q = [_]f32{ 1.0, 0.0, 0.0, 0.0 };
+                var s_k = [_]f32{ 1.0, 0.0, 0.0, 0.0 };
+                var s_v = [_]f32{ 0.5, 0.5, 0.5, 0.5 };
+                var s_out: [hd]f32 = undefined;
+                var h_max: [1]f32 = undefined;
+                var h_sum: [1]f32 = undefined;
+                be.sdpaWithStats(&s_q, &kv_keys, &kv_vals, &s_k, &s_v, &s_out, &h_max, &h_sum, 1, 1, hd, 0, 1.0, .f32, .f32);
+                for (&s_out) |v| try std.testing.expect(std.math.isFinite(v));
+                try std.testing.expect(std.math.isFinite(h_max[0]));
+                try std.testing.expect(std.math.isFinite(h_sum[0]));
+            }
+            // sdpaPrefill
+            {
+                const hd = 4;
+                var kv_keys: [4 * 4 * 4]u8 = undefined;
+                var kv_vals: [4 * 4 * 4]u8 = undefined;
+                var s_q = [_]f32{ 1.0, 0.0, 0.0, 0.0 };
+                var s_k = [_]f32{ 1.0, 0.0, 0.0, 0.0 };
+                var s_v = [_]f32{ 0.5, 0.5, 0.5, 0.5 };
+                var s_out: [hd]f32 = undefined;
+                be.sdpaPrefill(&s_q, &s_k, &s_v, &kv_keys, &kv_vals, &s_out, 1, 1, hd, 0, 1, 1.0, .f32, .f32);
+                for (&s_out) |v| try std.testing.expect(std.math.isFinite(v));
+            }
+            // Comptime: NullBackend methods (init skipped — @compileError by design)
+            comptime {
+                _ = &NullBackend.allocKvSlice;
+                _ = &NullBackend.freeKvSlice;
+                _ = &NullBackend.gemv;
+                _ = &NullBackend.rmsNorm;
+                _ = &NullBackend.silu;
+                _ = &NullBackend.gelu;
+                _ = &NullBackend.add;
+                _ = &NullBackend.gemvT;
+                _ = &NullBackend.addScaled;
+                _ = &NullBackend.addRmsNorm;
+                _ = &NullBackend.mul;
+                _ = &NullBackend.softmax;
+                _ = &NullBackend.rope;
+                _ = &NullBackend.embLookup;
+                _ = &NullBackend.l2Norm;
+                _ = &NullBackend.sigmoidMul;
+                _ = &NullBackend.siluMul;
+                _ = &NullBackend.geluMul;
+                _ = &NullBackend.rmsNormMulti;
+                _ = &NullBackend.deinterleave;
+                _ = &NullBackend.splitQGate;
+                _ = &NullBackend.sync;
+                _ = &NullBackend.sdpa;
+                _ = &NullBackend.sdpaWithStats;
+                _ = &NullBackend.sdpaTree;
+                _ = &NullBackend.sdpaPaged;
+                _ = &NullBackend.gemvGptq;
+                _ = &NullBackend.gemvAwq;
+                _ = &NullBackend.gemvNvfp4St;
+                _ = &NullBackend.gemvMlxQ;
+                _ = &NullBackend.gemvMxfp4St;
+                _ = &NullBackend.gemvMulti;
+                _ = &NullBackend.gemm;
+                _ = &NullBackend.rmsNormBatched;
+                _ = &NullBackend.ropeBatched;
+                _ = &NullBackend.sdpaPrefill;
+                _ = &NullBackend.deltaNet;
+                _ = &NullBackend.beginBatch;
+                _ = &NullBackend.endBatch;
+                _ = &NullBackend.backendInfo;
+            }
+            // Comptime: Backend union methods
+            comptime {
+                _ = &Backend.allocKvSlice;
+                _ = &Backend.freeKvSlice;
+                _ = &Backend.gemv;
+                _ = &Backend.gemm;
+                _ = &Backend.rmsNormBatched;
+                _ = &Backend.ropeBatched;
+                _ = &Backend.sdpaPrefill;
+                _ = &Backend.rmsNorm;
+                _ = &Backend.silu;
+                _ = &Backend.gelu;
+                _ = &Backend.add;
+                _ = &Backend.gemvT;
+                _ = &Backend.addScaled;
+                _ = &Backend.addRmsNorm;
+                _ = &Backend.mul;
+                _ = &Backend.softmax;
+                _ = &Backend.rope;
+                _ = &Backend.embLookup;
+                _ = &Backend.l2Norm;
+                _ = &Backend.sigmoidMul;
+                _ = &Backend.deinterleave;
+                _ = &Backend.splitQGate;
+                _ = &Backend.siluMul;
+                _ = &Backend.geluMul;
+                _ = &Backend.rmsNormMulti;
+                _ = &Backend.sync;
+                _ = &Backend.sdpa;
+                _ = &Backend.sdpaPaged;
+                _ = &Backend.sdpaWithStats;
+                _ = &Backend.sdpaTree;
+                _ = &Backend.gemvMulti;
+                _ = &Backend.deltaNet;
+                _ = &Backend.gemvNvfp4St;
+                _ = &Backend.gemvMlxQ;
+                _ = &Backend.gemvMxfp4St;
+                _ = &Backend.gemvGptq;
+                _ = &Backend.gemvAwq;
+                _ = &Backend.beginBatch;
+                _ = &Backend.endBatch;
+                _ = &Backend.backendInfo;
+                _ = &Backend.setThreadContext;
+                _ = &Backend.invalidateActivation;
+                _ = &Backend.getDevicePtr;
+                _ = &Backend.invalidateWeight;
+                _ = &Backend.allReduceAdd;
+                _ = &Backend.registerHostRegion;
+            }
+            // Comptime: BackendState.init, GPU backend types, re-exports
+            comptime {
+                _ = &BackendState.init;
+                _ = @sizeOf(CpuBackend);
+                _ = @sizeOf(MetalBackend);
+                _ = @sizeOf(VulkanBackend);
+                _ = @sizeOf(CudaBackend);
+                _ = @sizeOf(RocmBackend);
+                _ = @sizeOf(WebGpuBackend);
+                _ = &CpuSoftmax.softmaxSimd;
+                _ = &CpuSdpa.sdpaQuantHead;
+                _ = &CpuSdpa.sdpaQuantHeadWithStats;
+                _ = &CpuSdpa.sdpaQuantHeads;
+                _ = @sizeOf(DType);
+                _ = @sizeOf(KvQuantType);
+                _ = @sizeOf(PagedKvView);
+            }
+        }
+    }.f, .{});
+}

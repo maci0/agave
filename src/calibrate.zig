@@ -893,3 +893,36 @@ test "writeCalFile and readCalFile roundtrip" {
     try std.testing.expectApproxEqAbs(@as(f32, 0.5), calibrations[0].concentration[0], 1e-6);
     try std.testing.expectApproxEqAbs(@as(f32, 0.8), calibrations[1].concentration[1], 1e-6);
 }
+
+test "fuzz: all calibrate functions" {
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *std.testing.Smith) !void {
+            // -- printUsage: no args, just writes usage text to stdout --
+            printUsage();
+
+            // -- readCalFile: needs Io + file path; will error on random/nonexistent paths --
+            {
+                const allocator = std.testing.allocator;
+                var path_buf: [16]u8 = undefined;
+                smith.bytesWithHash(&path_buf, 0xCA11);
+                // Construct a short random path; readCalFile will fail on open, which is fine
+                const cal = readCalFile(allocator, std.testing.io, &path_buf) catch return;
+                // If it somehow succeeds, free the result properly
+                if (cal.len > 0) {
+                    allocator.free(cal[0].rope_freqs);
+                    const total = cal.len * cal[0].n_bands;
+                    allocator.free(cal[0].q_center_norm.ptr[0..total]);
+                    allocator.free(cal[0].q_center_phase.ptr[0..total]);
+                    allocator.free(cal[0].q_expected_norm.ptr[0..total]);
+                    allocator.free(cal[0].concentration.ptr[0..total]);
+                }
+                allocator.free(cal);
+            }
+
+            // -- run: calls std.process.exit on bad args, so verify at comptime only --
+            comptime {
+                _ = &run;
+            }
+        }
+    }.f, .{});
+}

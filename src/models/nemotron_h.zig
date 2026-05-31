@@ -780,3 +780,73 @@ test "NemotronH getBlockTable compiles" {
 }
 
 // argmax is tested in src/ops/math.zig — no need to duplicate here.
+
+test "fuzz: all nemotron_h functions" {
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *std.testing.Smith) !void {
+            // ── LayerType enum ──────────────────────────────────────
+            const lt_idx = smith.valueWithHash(u8, 0) % 3;
+            const lt: LayerType = @enumFromInt(lt_idx);
+            switch (lt) {
+                .ssm, .attention, .ffn_only => {},
+            }
+
+            // ── NemotronHModel.cancel (exercises atomic store) ──────
+            var m: NemotronHModel = undefined;
+            m.cancelled = std.atomic.Value(bool).init(false);
+            m.cancel();
+            try std.testing.expect(m.cancelled.load(.monotonic) == true);
+
+            // ── NemotronHModel.convChannels (private but callable via struct) ──
+            m.ssm_d_inner = smith.valueWithHash(u16, 1) | 1; // ensure non-zero
+            m.ssm_n_group = @as(u32, smith.valueWithHash(u8, 2) % 16) + 1;
+            m.ssm_d_state = @as(u32, smith.valueWithHash(u8, 3) % 64) + 1;
+            const ch = m.convChannels();
+            // conv_ch = d_inner + 2 * n_group * d_state
+            const expected = @as(usize, m.ssm_d_inner) +
+                2 * @as(usize, m.ssm_n_group) * @as(usize, m.ssm_d_state);
+            try std.testing.expectEqual(expected, ch);
+
+            // ── NemotronHModel default field values ─────────────────
+            const n_head_val = smith.valueWithHash(u8, 4) | 1;
+            const n_head_kv_val: u32 = @as(u32, smith.valueWithHash(u8, 5) % 8) + 1;
+            m.n_head = n_head_val;
+            m.n_head_kv = n_head_kv_val;
+            m.head_dim = @as(u32, smith.valueWithHash(u8, 6) % 64) + 1;
+            m.ssm_dt_rank = @as(u32, smith.valueWithHash(u8, 7) % 32) + 1;
+            // Verify convChannels still consistent after field changes
+            _ = m.convChannels();
+
+            // ── Comptime verification: all pub functions exist ──────
+            // These require Format/Backend/KV infrastructure to call at runtime.
+            // Verify they compile and have the expected signatures.
+            comptime {
+                _ = &NemotronHModel.init;
+                _ = &NemotronHModel.deinit;
+                _ = &NemotronHModel.model;
+                _ = &NemotronHModel.forward;
+                _ = &NemotronHModel.prefill;
+                _ = &NemotronHModel.resetCache;
+                _ = &NemotronHModel.cancel;
+                _ = &NemotronHModel.getBlockTable;
+            }
+
+            // ── layer_types array fuzz ──────────────────────────────
+            m.layer_types = [_]LayerType{.ffn_only} ** max_layers;
+            const layer_count = smith.valueWithHash(u8, 8) % max_layers;
+            var ssm_count: usize = 0;
+            var attn_count: usize = 0;
+            var ffn_count: usize = 0;
+            for (0..layer_count) |i| {
+                const kind = smith.valueWithHash(u8, @intCast(i + 100)) % 3;
+                m.layer_types[i] = @enumFromInt(kind);
+                switch (m.layer_types[i]) {
+                    .ssm => ssm_count += 1,
+                    .attention => attn_count += 1,
+                    .ffn_only => ffn_count += 1,
+                }
+            }
+            try std.testing.expectEqual(layer_count, ssm_count + attn_count + ffn_count);
+        }
+    }.f, .{});
+}

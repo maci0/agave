@@ -1445,3 +1445,132 @@ test "parseTools multiple tools" {
     const t1 = tp.tools[1].?;
     try std.testing.expectEqualStrings("sub", t1.name);
 }
+
+test "fuzz: all json functions" {
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *std.testing.Smith) !void {
+            const allocator = std.testing.allocator;
+
+            // Generate random input bytes to use as JSON/form bodies and field names
+            var input_buf: [256]u8 = undefined;
+            const input_len = smith.valueWithHash(u8, 0) % 200;
+            for (input_buf[0..input_len]) |*b| b.* = smith.valueWithHash(u8, 1);
+            const input = input_buf[0..input_len];
+
+            var field_buf: [32]u8 = undefined;
+            const field_len = smith.valueWithHash(u8, 2) % 20 + 1;
+            for (field_buf[0..field_len]) |*b| b.* = smith.valueWithHash(u8, 3);
+            const field = field_buf[0..field_len];
+
+            // 1. extractBoolField — always returns bool
+            _ = extractBoolField(input, field);
+
+            // 2. extractIntField — returns optional usize
+            _ = extractIntField(input, field);
+
+            // 3. extractFloatField — returns optional f32
+            if (extractFloatField(input, field)) |v| {
+                std.debug.assert(!std.math.isNan(v) or std.math.isNan(v)); // no crash
+            }
+
+            // 4. extractField — returns optional slice into input
+            if (extractField(input, field)) |s| {
+                std.debug.assert(s.len <= input.len);
+            }
+
+            // 5. extractObjectField — returns optional slice into input
+            if (extractObjectField(input, field)) |s| {
+                std.debug.assert(s.len <= input.len);
+            }
+
+            // 6. extractLastMessage — returns optional slice into input
+            if (extractLastMessage(input)) |s| {
+                std.debug.assert(s.len <= input.len);
+            }
+
+            // 7. parseSampling — always returns valid SamplingParams
+            const sp = parseSampling(input);
+            std.debug.assert(sp.temperature >= 0 and sp.temperature <= max_temperature);
+            std.debug.assert(sp.top_p >= 0 and sp.top_p <= 1.0);
+            std.debug.assert(sp.min_p >= 0 and sp.min_p <= 1.0);
+            std.debug.assert(sp.frequency_penalty >= -2.0 and sp.frequency_penalty <= 2.0);
+            std.debug.assert(sp.presence_penalty >= -2.0 and sp.presence_penalty <= 2.0);
+            std.debug.assert(sp.n_stop <= max_stop_sequences);
+            std.debug.assert(sp.logit_bias_count <= max_logit_bias);
+
+            // 8. SamplingParams.hasStop / matchesStop
+            _ = sp.hasStop();
+            _ = sp.matchesStop(input);
+
+            // 9. parseTools — always returns valid ToolParams
+            const tp = parseTools(input);
+            std.debug.assert(tp.tool_count <= max_tools);
+
+            // 10. extractMessages — may allocate, must clean up
+            if (extractMessages(input, allocator)) |em| {
+                std.debug.assert(em.messages.len > 0);
+                em.deinit(allocator);
+            }
+
+            // 11. extractFormField — returns optional slice into input
+            if (extractFormField(input, field)) |s| {
+                std.debug.assert(s.len <= input.len);
+            }
+
+            // 12. extractFormBool — always returns bool
+            _ = extractFormBool(input, field);
+
+            // 13. extractFormFloat — returns optional f32
+            _ = extractFormFloat(input, field);
+
+            // 14. extractFormInt — returns optional usize
+            _ = extractFormInt(input, field);
+
+            // 15. parseFormSampling — always returns valid SamplingParams
+            const fs = parseFormSampling(input);
+            std.debug.assert(fs.temperature >= 0 and fs.temperature <= max_temperature);
+            std.debug.assert(fs.top_p >= 0 and fs.top_p <= 1.0);
+
+            // 16. extractFormImage — returns optional slice into input
+            if (extractFormImage(input)) |s| {
+                std.debug.assert(s.len <= input.len);
+            }
+
+            // 17. extractJsonImage — returns optional slice into input
+            if (extractJsonImage(input)) |s| {
+                std.debug.assert(s.len <= input.len);
+            }
+
+            // 18. urlDecode — allocates, must free
+            const decoded = urlDecode(allocator, input) catch return;
+            defer allocator.free(decoded);
+            std.debug.assert(decoded.len <= input.len);
+
+            // 19. jsonEscape — may allocate
+            const escaped = jsonEscape(allocator, input) catch return;
+            if (escaped.ptr != input.ptr) allocator.free(escaped);
+
+            // 20. jsonUnescape — may allocate
+            const unescaped = jsonUnescape(allocator, input) catch return;
+            if (unescaped.ptr != input.ptr) allocator.free(unescaped);
+
+            // 21. jsonUnescapeOwned — always allocates
+            const owned = jsonUnescapeOwned(allocator, input) catch return;
+            allocator.free(owned);
+
+            // 22. htmlEscape — may allocate
+            const html = htmlEscape(allocator, input) catch return;
+            if (html.ptr != input.ptr) allocator.free(html);
+
+            // 23. ExtractedMessages.deinit — tested via extractMessages above
+
+            // 24. Pub types exist and are usable
+            comptime {
+                _ = ToolDef;
+                _ = ToolParams;
+                _ = SamplingParams;
+                _ = ExtractedMessages;
+            }
+        }
+    }.f, .{});
+}

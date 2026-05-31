@@ -258,6 +258,35 @@ test "l2Norm non-aligned size exercises scalar tail" {
     try std.testing.expectApproxEqAbs(@as(f32, 1.0), ss, 1e-5);
 }
 
+test "fuzz: all norm functions" {
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *std.testing.Smith) !void {
+            var input: [32]f32 = undefined;
+            var weight: [32]f32 = undefined;
+            var output: [32]f32 = undefined;
+            for (0..32) |i| {
+                input[i] = @as(f32, @floatFromInt(smith.valueWithHash(i8, @truncate(i)))) * 0.1;
+                weight[i] = @as(f32, @floatFromInt(smith.valueWithHash(i8, @truncate(i +% 100)))) * 0.01 + 1.0;
+            }
+
+            // rmsNorm
+            rmsNorm(&input, &weight, &output, 32, 1e-6);
+
+            // addRmsNorm
+            var a_buf: [32]f32 = input;
+            var b_buf: [32]f32 = undefined;
+            for (0..32) |i| {
+                b_buf[i] = @as(f32, @floatFromInt(smith.valueWithHash(i8, @truncate(i +% 200)))) * 0.1;
+            }
+            addRmsNorm(&a_buf, &b_buf, &weight, &output, 32, 1e-6);
+
+            // l2Norm
+            var l2_buf: [32]f32 = input;
+            l2Norm(&l2_buf, 32, 1e-12);
+        }
+    }.f, .{});
+}
+
 test "rmsNorm large input exercises 4x unroll" {
     // n=64: exercises the 4x unrolled path (64 / 32 = 2 full iterations)
     var input: [64]f32 = undefined;

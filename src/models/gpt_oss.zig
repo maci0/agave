@@ -1069,3 +1069,178 @@ test "GptOss fn signatures compile" {
         _ = @TypeOf(GptOssModel.getBlockTable);
     }
 }
+
+test "fuzz: all gpt_oss functions" {
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *std.testing.Smith) !void {
+            // ── Comptime verification of all pub methods (need Backend/Format) ──
+            comptime {
+                _ = &GptOssModel.init;
+                _ = &GptOssModel.deinit;
+                _ = &GptOssModel.model;
+                _ = &GptOssModel.forward;
+                _ = &GptOssModel.prefill;
+                _ = &GptOssModel.resetCache;
+                _ = &GptOssModel.cancel;
+                _ = &GptOssModel.getBlockTable;
+            }
+
+            // ── cancel: exercises the atomic store (no Backend needed) ──
+            {
+                var m: GptOssModel = undefined;
+                m.cancelled = std.atomic.Value(bool).init(false);
+                m.cancel();
+                try std.testing.expect(m.cancelled.load(.monotonic) == true);
+            }
+
+            // ── inferMlxBits with random inputs ──
+            {
+                const d0 = smith.valueWithHash(u32, 0);
+                const d1 = smith.valueWithHash(u32, 1);
+                const k = smith.valueWithHash(u32, 2);
+                const n_dims_raw = smith.valueWithHash(u8, 3);
+                const n_dims: u32 = (n_dims_raw % 4) + 1; // 1..4
+                const t = TensorInfo{
+                    .name = "fuzz",
+                    .data_ptr = @ptrFromInt(0x1000),
+                    .dtype = .mlx_q,
+                    .n_dims = n_dims,
+                    .dims = .{ d0, d1, 0, 0 },
+                };
+                const bits = inferMlxBits(t, k);
+                // Result is either default (4) or in [min_mlx_bits..max_mlx_bits]
+                try std.testing.expect(bits == default_mlx_bits or
+                    (bits >= min_mlx_bits and bits <= max_mlx_bits));
+            }
+
+            // ── addBiasTyped f32 with random data ──
+            {
+                const len = 16;
+                var dst: [len]f32 = undefined;
+                var bias align(4) = [_]f32{0} ** len;
+                for (0..len) |i| {
+                    const raw = smith.valueWithHash(u16, @intCast(10 + i));
+                    dst[i] = @as(f32, @floatFromInt(raw % 1000)) * 0.01;
+                    bias[i] = @as(f32, @floatFromInt(raw % 500)) * 0.001;
+                }
+                const saved = dst;
+                addBiasTyped(&dst, @ptrCast(&bias), len, .f32);
+                for (0..len) |i| {
+                    try std.testing.expect(std.math.isFinite(dst[i]));
+                    try std.testing.expectApproxEqAbs(saved[i] + bias[i], dst[i], 1e-4);
+                }
+            }
+
+            // ── addBiasTyped bf16 with random data ──
+            {
+                const len = 16;
+                var dst = [_]f32{0} ** len;
+                var bias_bf16 align(2) = [_]u16{0} ** len;
+                for (0..len) |i| {
+                    // Generate valid BF16 values (avoid NaN/Inf: exponent < 0xFF)
+                    const raw = smith.valueWithHash(u16, @intCast(30 + i));
+                    bias_bf16[i] = raw & 0x7F7F; // clear sign, clamp exponent
+                }
+                addBiasTyped(&dst, @ptrCast(&bias_bf16), len, .bf16);
+                for (0..len) |i| {
+                    try std.testing.expect(std.math.isFinite(dst[i]));
+                }
+            }
+
+            // ── Companion.expertScaleStrideMxfp4 with random dims ──
+            {
+                const d1 = @as(u64, smith.valueWithHash(u16, 50)) + 1;
+                const d2 = @as(u64, smith.valueWithHash(u16, 51)) + 1;
+                const comp = GptOssModel.Companion{
+                    .scales = @ptrFromInt(0x1000),
+                    .biases = undefined,
+                    .scale_t = .{
+                        .name = "fuzz",
+                        .data_ptr = @ptrFromInt(0x1000),
+                        .dtype = .unknown,
+                        .n_dims = 3,
+                        .dims = .{ 32, d1, d2, 0 },
+                    },
+                    .bias_t = undefined,
+                    .is_mxfp4 = true,
+                    .bits = 4,
+                };
+                const stride = comp.expertScaleStrideMxfp4();
+                try std.testing.expectEqual(d1 * d2, stride);
+            }
+
+            // ── Companion.expertScaleStrideAffine with random dims ──
+            {
+                const d1 = @as(u64, smith.valueWithHash(u16, 52)) + 1;
+                const d2 = @as(u64, smith.valueWithHash(u16, 53)) + 1;
+                const comp = GptOssModel.Companion{
+                    .scales = @ptrFromInt(0x1000),
+                    .biases = @ptrFromInt(0x2000),
+                    .scale_t = .{
+                        .name = "fuzz",
+                        .data_ptr = @ptrFromInt(0x1000),
+                        .dtype = .bf16,
+                        .n_dims = 3,
+                        .dims = .{ 32, d1, d2, 0 },
+                    },
+                    .bias_t = .{
+                        .name = "fuzz",
+                        .data_ptr = @ptrFromInt(0x2000),
+                        .dtype = .bf16,
+                        .n_dims = 3,
+                        .dims = .{ 32, d1, d2, 0 },
+                    },
+                    .is_mxfp4 = false,
+                    .bits = 4,
+                };
+                const stride = comp.expertScaleStrideAffine();
+                try std.testing.expectEqual(d1 * d2 * 2, stride);
+            }
+
+            // ── Companion 2D fallback paths ──
+            {
+                const d0 = @as(u64, smith.valueWithHash(u16, 54)) + 1;
+                const d1 = @as(u64, smith.valueWithHash(u16, 55)) + 1;
+                const comp_mxfp4 = GptOssModel.Companion{
+                    .scales = @ptrFromInt(0x1000),
+                    .biases = undefined,
+                    .scale_t = .{
+                        .name = "fuzz",
+                        .data_ptr = @ptrFromInt(0x1000),
+                        .dtype = .unknown,
+                        .n_dims = 2,
+                        .dims = .{ d0, d1, 0, 0 },
+                    },
+                    .bias_t = undefined,
+                    .is_mxfp4 = true,
+                    .bits = 4,
+                };
+                const s1 = comp_mxfp4.expertScaleStrideMxfp4();
+                try std.testing.expectEqual(d0 * d1, s1);
+
+                const comp_affine = GptOssModel.Companion{
+                    .scales = @ptrFromInt(0x1000),
+                    .biases = @ptrFromInt(0x2000),
+                    .scale_t = .{
+                        .name = "fuzz",
+                        .data_ptr = @ptrFromInt(0x1000),
+                        .dtype = .bf16,
+                        .n_dims = 2,
+                        .dims = .{ d0, d1, 0, 0 },
+                    },
+                    .bias_t = .{
+                        .name = "fuzz",
+                        .data_ptr = @ptrFromInt(0x2000),
+                        .dtype = .bf16,
+                        .n_dims = 2,
+                        .dims = .{ d0, d1, 0, 0 },
+                    },
+                    .is_mxfp4 = false,
+                    .bits = 8,
+                };
+                const s2 = comp_affine.expertScaleStrideAffine();
+                try std.testing.expectEqual(d0 * d1 * 2, s2);
+            }
+        }
+    }.f, .{});
+}

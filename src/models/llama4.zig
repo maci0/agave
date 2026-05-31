@@ -1327,3 +1327,63 @@ test "Llama4 function signatures type check" {
         _ = @TypeOf(Llama4Model.getBlockTable);
     }
 }
+
+test "fuzz: all llama4 pub functions" {
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *std.testing.Smith) !void {
+            // ── comptime: verify every pub function is reachable ────
+            comptime {
+                _ = &Llama4Model.init;
+                _ = &Llama4Model.deinit;
+                _ = &Llama4Model.model;
+                _ = &Llama4Model.forward;
+                _ = &Llama4Model.prefill;
+                _ = &Llama4Model.resetCache;
+                _ = &Llama4Model.cancel;
+                _ = &Llama4Model.getBlockTable;
+            }
+
+            // ── runtime: cancel is the only pub fn callable without
+            //    a full Format+Backend init ──────────────────────────
+            var m: Llama4Model = undefined;
+            m.cancelled = std.atomic.Value(bool).init(false);
+
+            // Fuzz isNopeLayer via cancel-gate pattern
+            var raw: [8]u8 = undefined;
+            smith.bytesWithHash(&raw, 0);
+            const fuzz_interval: u32 = @as(u32, raw[0]) +| 1;
+            const fuzz_layer: u32 = @as(u32, raw[1]);
+            m.nope_interval = fuzz_interval;
+
+            // isNopeLayer invariant: result matches modular arithmetic
+            const expected_nope = ((fuzz_layer +% 1) % fuzz_interval) == 0;
+            try std.testing.expectEqual(expected_nope, m.isNopeLayer(fuzz_layer));
+
+            // layerVType invariant: boundary=0 always returns kv_type_v
+            m.n_layers = @as(u32, raw[2]) +| 2;
+            m.kv_type_v = .turbo3;
+            m.kv_boundary_v = 0;
+            const layer_idx: u32 = raw[3] % m.n_layers;
+            try std.testing.expectEqual(kv_quant.KvQuantType.turbo3, m.layerVType(layer_idx));
+
+            // layerVType with boundary: first/last b layers get f16
+            const b = raw[4] % (m.n_layers / 2 + 1);
+            m.kv_boundary_v = b;
+            const vt = m.layerVType(layer_idx);
+            if (b > 0 and (layer_idx < b or layer_idx >= m.n_layers - b)) {
+                try std.testing.expectEqual(kv_quant.KvQuantType.f16, vt);
+            } else if (b == 0) {
+                try std.testing.expectEqual(kv_quant.KvQuantType.turbo3, vt);
+            }
+
+            // cancel: sets the atomic flag
+            try std.testing.expect(!m.cancelled.load(.monotonic));
+            m.cancel();
+            try std.testing.expect(m.cancelled.load(.monotonic));
+
+            // cancel is idempotent
+            m.cancel();
+            try std.testing.expect(m.cancelled.load(.monotonic));
+        }
+    }.f, .{});
+}

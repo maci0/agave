@@ -464,3 +464,107 @@ test "mamba2Recurrence exercises SIMD path" {
         try std.testing.expectApproxEqAbs(dt, state[j], 1e-5);
     }
 }
+
+test "fuzz: all ssm functions" {
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *std.testing.Smith) !void {
+            // ── causalConv1dSilu ──
+            // Use fixed conv_ch=4, d_conv=4 (3 history slots)
+            const conv_ch = 4;
+            const d_conv = 4;
+            const hist = d_conv - 1;
+
+            var conv_out: [conv_ch]f32 = undefined;
+            var conv_state: [hist * conv_ch]f32 = undefined;
+            var conv_in: [conv_ch]f32 = undefined;
+            var conv_w: [conv_ch * d_conv]f32 = undefined;
+            var conv_b: [conv_ch]f32 = undefined;
+
+            for (0..conv_state.len) |i| conv_state[i] = @bitCast(smith.valueWithHash(u32, @intCast(i)));
+            for (0..conv_in.len) |i| conv_in[i] = @bitCast(smith.valueWithHash(u32, @as(u32, @intCast(i)) +% 100));
+            for (0..conv_w.len) |i| conv_w[i] = @bitCast(smith.valueWithHash(u32, @as(u32, @intCast(i)) +% 200));
+            for (0..conv_b.len) |i| conv_b[i] = @bitCast(smith.valueWithHash(u32, @as(u32, @intCast(i)) +% 300));
+
+            // Clamp to finite range to avoid NaN propagation masking bugs
+            for (&conv_state) |*v| v.* = clampFinite(v.*);
+            for (&conv_in) |*v| v.* = clampFinite(v.*);
+            for (&conv_w) |*v| v.* = clampFinite(v.*);
+            for (&conv_b) |*v| v.* = clampFinite(v.*);
+
+            // Call with bias
+            causalConv1dSilu(&conv_out, &conv_state, &conv_in, &conv_w, &conv_b, conv_ch, d_conv);
+            for (conv_out) |v| if (!std.math.isFinite(v)) return error.TestUnexpectedResult;
+
+            // Call without bias (null path)
+            causalConv1dSilu(&conv_out, &conv_state, &conv_in, &conv_w, null, conv_ch, d_conv);
+            for (conv_out) |v| if (!std.math.isFinite(v)) return error.TestUnexpectedResult;
+
+            // ── mamba2Recurrence ──
+            const num_heads = 2;
+            const head_dim = 2;
+            const d_state = 16; // exercises SIMD path (>= 8)
+            const n_groups = 1;
+            const hpg = num_heads / n_groups;
+
+            var y_m: [num_heads * head_dim]f32 = undefined;
+            var state_m: [num_heads * head_dim * d_state]f32 = undefined;
+            var x_m: [num_heads * head_dim]f32 = undefined;
+            var B_m: [n_groups * d_state]f32 = undefined;
+            var C_m: [n_groups * d_state]f32 = undefined;
+            var dt_raw_m: [num_heads]f32 = undefined;
+            var dt_bias_m: [num_heads]f32 = undefined;
+            var ssm_a_m: [num_heads]f32 = undefined;
+            var ssm_d_m: [num_heads]f32 = undefined;
+
+            for (0..state_m.len) |i| state_m[i] = clampFinite(@as(f32, @bitCast(smith.valueWithHash(u32, @as(u32, @intCast(i)) +% 400))));
+            for (0..x_m.len) |i| x_m[i] = clampFinite(@as(f32, @bitCast(smith.valueWithHash(u32, @as(u32, @intCast(i)) +% 500))));
+            for (0..B_m.len) |i| B_m[i] = clampFinite(@as(f32, @bitCast(smith.valueWithHash(u32, @as(u32, @intCast(i)) +% 600))));
+            for (0..C_m.len) |i| C_m[i] = clampFinite(@as(f32, @bitCast(smith.valueWithHash(u32, @as(u32, @intCast(i)) +% 700))));
+            for (0..num_heads) |i| {
+                const h: u32 = @intCast(i);
+                dt_raw_m[i] = clampSmall(@as(f32, @bitCast(smith.valueWithHash(u32, h +% 800))));
+                dt_bias_m[i] = clampSmall(@as(f32, @bitCast(smith.valueWithHash(u32, h +% 900))));
+                ssm_a_m[i] = -@abs(clampSmall(@as(f32, @bitCast(smith.valueWithHash(u32, h +% 1000)))));
+                ssm_d_m[i] = clampFinite(@as(f32, @bitCast(smith.valueWithHash(u32, h +% 1100))));
+            }
+
+            mamba2Recurrence(&y_m, &state_m, &x_m, &B_m, &C_m, &dt_raw_m, &dt_bias_m, &ssm_a_m, &ssm_d_m, num_heads, head_dim, d_state, hpg);
+            // y values may be large but must be finite
+            for (y_m) |v| if (!std.math.isFinite(v)) return error.TestUnexpectedResult;
+
+            // ── groupRmsNormSiluGate ──
+            const d_inner = 16; // exercises SIMD path, divisible by 1,2,4,8,16
+            const grn_groups = 4;
+
+            var y_g: [d_inner]f32 = undefined;
+            var z_g: [d_inner]f32 = undefined;
+            var norm_w_g: [d_inner]f32 = undefined;
+
+            for (0..d_inner) |i| {
+                const idx: u32 = @intCast(i);
+                y_g[i] = clampFinite(@as(f32, @bitCast(smith.valueWithHash(u32, idx +% 1200))));
+                z_g[i] = clampFinite(@as(f32, @bitCast(smith.valueWithHash(u32, idx +% 1300))));
+                norm_w_g[i] = clampFinite(@as(f32, @bitCast(smith.valueWithHash(u32, idx +% 1400))));
+            }
+
+            const eps_bits = smith.valueWithHash(u32, @as(u32, 1500));
+            const eps_raw: f32 = @bitCast(eps_bits);
+            const eps = if (std.math.isFinite(eps_raw) and eps_raw > 0) @min(eps_raw, 1.0) else 1e-6;
+
+            groupRmsNormSiluGate(&y_g, &z_g, &norm_w_g, d_inner, grn_groups, eps);
+            for (y_g) |v| if (!std.math.isFinite(v)) return error.TestUnexpectedResult;
+        }
+
+        /// Clamp to [-1e6, 1e6], replacing non-finite with 0.
+        fn clampFinite(v: f32) f32 {
+            if (!std.math.isFinite(v)) return 0.0;
+            return @max(-1e6, @min(1e6, v));
+        }
+
+        /// Clamp to [-10, 10] for values fed into exp/softplus to avoid overflow.
+        fn clampSmall(v: f32) f32 {
+            if (!std.math.isFinite(v)) return 0.0;
+            return @max(-10.0, @min(10.0, v));
+        }
+    }.f, .{});
+}

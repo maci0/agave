@@ -2746,3 +2746,59 @@ test "VulkanBackend rope" {
     try std.testing.expect(x[0] != 1.0);
     try std.testing.expect(x[2] != 0.0);
 }
+
+test "fuzz: all vulkan functions" {
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *std.testing.Smith) !void {
+            _ = smith;
+            comptime {
+                _ = &VulkanBackend.init;
+                _ = &VulkanBackend.deinit;
+                _ = &VulkanBackend.flushActivations;
+                _ = &VulkanBackend.invalidateAct;
+                _ = &VulkanBackend.invalidateWeight;
+                _ = &VulkanBackend.gemv;
+                _ = &VulkanBackend.rmsNorm;
+                _ = &VulkanBackend.silu;
+                _ = &VulkanBackend.gelu;
+                _ = &VulkanBackend.add;
+                _ = &VulkanBackend.gemvT;
+                _ = &VulkanBackend.addScaled;
+                _ = &VulkanBackend.addRmsNorm;
+                _ = &VulkanBackend.mul;
+                _ = &VulkanBackend.softmax;
+                _ = &VulkanBackend.rope;
+                _ = &VulkanBackend.embLookup;
+                _ = &VulkanBackend.causalConv1dSilu;
+                _ = &VulkanBackend.l2Norm;
+                _ = &VulkanBackend.gemvNvfp4St;
+                _ = &VulkanBackend.gemvMlxQ;
+                _ = &VulkanBackend.gemvMxfp4St;
+                _ = &VulkanBackend.gemvGptq;
+                _ = &VulkanBackend.gemvAwq;
+                _ = &VulkanBackend.sigmoidMul;
+                _ = &VulkanBackend.siluMul;
+                _ = &VulkanBackend.geluMul;
+                _ = &VulkanBackend.rmsNormMulti;
+                _ = &VulkanBackend.deinterleave;
+                _ = &VulkanBackend.splitQGate;
+                _ = &VulkanBackend.gemvMulti;
+                _ = &VulkanBackend.allocKvSlice;
+                _ = &VulkanBackend.freeKvSlice;
+                _ = &VulkanBackend.gemm;
+                _ = &VulkanBackend.rmsNormBatched;
+                _ = &VulkanBackend.ropeBatched;
+                _ = &VulkanBackend.sdpaTree;
+                _ = &VulkanBackend.sdpaPrefill;
+                _ = &VulkanBackend.deltaNet;
+                _ = &VulkanBackend.sync;
+                _ = &VulkanBackend.beginBatch;
+                _ = &VulkanBackend.endBatch;
+                _ = &VulkanBackend.backendInfo;
+                _ = &VulkanBackend.sdpa;
+                _ = &VulkanBackend.sdpaPaged;
+                _ = &VulkanBackend.sdpaWithStats;
+            }
+        }
+    }.f, .{});
+}

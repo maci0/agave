@@ -120,3 +120,46 @@ test "gptqGemvRows with start_row offset" {
     gptqGemvRows(&x, &qweight, &scales, &qzeros, &y, 0, 1, 8, 8);
     try std.testing.expectApproxEqAbs(@as(f32, 8.0), y[0], 1e-4);
 }
+
+test "fuzz: all gptq functions" {
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *std.testing.Smith) !void {
+            // Fixed layout: 1 row, k=8, group_size=8 (1 u32 word, 1 group)
+            const k: usize = 8;
+            const n: usize = 1;
+            const group_size: u32 = 8;
+
+            // Random packed INT4 weights (8 nibbles in one u32)
+            var qweight = [_]u32{smith.valueWithHash(u32, 0)};
+            // Random scale as f16 bits — clamp to finite f16 range
+            var scale_bits = smith.valueWithHash(u16, 1);
+            // Mask exponent to avoid inf/nan: exponent field [14:10], max 0x7C00 = inf
+            // Keep exponent <= 0x1E (30) to stay finite
+            const exp = (scale_bits >> 10) & 0x1F;
+            if (exp == 0x1F) scale_bits &= 0x83FF; // zero out exponent -> subnormal (finite)
+            var scales_arr = [_]u16{scale_bits};
+            // Random packed zero-points
+            var qzeros = [_]u32{smith.valueWithHash(u32, 2)};
+
+            // Random input vector
+            var x: [k]f32 = undefined;
+            for (0..k) |i| {
+                const bits = smith.valueWithHash(u32, @as(u32, @intCast(i)) +% 100);
+                x[i] = @bitCast(bits);
+                if (!std.math.isFinite(x[i])) x[i] = 0.0;
+            }
+
+            // --- Exercise gptqGemv (pub fn #1) ---
+            var y1 = [_]f32{0.0};
+            gptqGemv(&x, &qweight, &scales_arr, &qzeros, &y1, n, k, group_size);
+            // Result must be finite (finite inputs, finite scale, integer weights)
+            if (!std.math.isFinite(y1[0])) return error.TestUnexpectedResult;
+
+            // --- Exercise gptqGemvRows (pub fn #2) ---
+            var y2 = [_]f32{0.0};
+            gptqGemvRows(&x, &qweight, &scales_arr, &qzeros, &y2, 0, n, k, group_size);
+            // gptqGemv delegates to gptqGemvRows, so results must match
+            if (y1[0] != y2[0]) return error.TestUnexpectedResult;
+        }
+    }.f, .{});
+}

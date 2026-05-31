@@ -264,3 +264,38 @@ test "gemvFP8_E5M2 non-aligned k" {
     gemvFP8_E5M2(&x, &w, &y, 1, 13);
     try std.testing.expectApproxEqAbs(@as(f32, 6.5), y[0], 1e-5);
 }
+
+test "fuzz: all gemv_fp8 functions" {
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *std.testing.Smith) !void {
+            const k_choices = [_]usize{ 8, 9, 13, 16, 24, 32 };
+            const n_raw = smith.valueWithHash(u8, 0);
+            const k_idx = smith.valueWithHash(u8, 1);
+            const n: usize = @as(usize, n_raw % 8) + 1;
+            const k: usize = k_choices[k_idx % k_choices.len];
+
+            var x_buf: [32]f32 = undefined;
+            var w_buf: [8 * 32]u8 = undefined;
+            var y_buf: [8]f32 = undefined;
+
+            for (0..k) |i| {
+                const bits = smith.valueWithHash(u32, @as(u32, @intCast(i)) +% 100);
+                const raw: f32 = @bitCast(bits);
+                x_buf[i] = if (std.math.isFinite(raw)) raw else 0.0;
+            }
+            for (0..n * k) |i| {
+                w_buf[i] = smith.valueWithHash(u8, @as(u32, @intCast(i)) +% 1000);
+            }
+
+            // gemvFP8_E4M3
+            @memset(y_buf[0..n], 0.0);
+            gemvFP8_E4M3(&x_buf, &w_buf, &y_buf, n, k);
+            for (0..n) |i| _ = y_buf[i];
+
+            // gemvFP8_E5M2
+            @memset(y_buf[0..n], 0.0);
+            gemvFP8_E5M2(&x_buf, &w_buf, &y_buf, n, k);
+            for (0..n) |i| _ = y_buf[i];
+        }
+    }.f, .{});
+}

@@ -2004,3 +2004,173 @@ test "applyNvfp4Scale no-op when tensor missing" {
     try std.testing.expectApproxEqAbs(@as(f32, 1.0), buf[0], 1e-6);
     try std.testing.expectApproxEqAbs(@as(f32, 4.0), buf[3], 1e-6);
 }
+
+test "fuzz: all qwen35 functions" {
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *std.testing.Smith) !void {
+            // ── 1. isFullAttn: pure field-based, no alloc ──
+            {
+                var m: Qwen35Model = undefined;
+                const interval = smith.valueWithHash(u32, 0) % 17;
+                m.full_attn_interval = interval;
+                const layer = smith.valueWithHash(u32, 1) % 64;
+                const result = m.isFullAttn(layer);
+                if (interval == 0) {
+                    try std.testing.expect(result);
+                }
+            }
+
+            // ── 2. layerVType: boundary layer protection ──
+            {
+                var m: Qwen35Model = undefined;
+                m.n_layers = 32;
+                m.kv_type_v = .turbo4;
+                m.kv_boundary_v = smith.valueWithHash(u32, 2) % 17;
+                const li = smith.valueWithHash(u32, 3) % 32;
+                const vt = m.layerVType(li);
+                _ = vt;
+            }
+
+            // ── 3. ssmConvChannels: arithmetic helper ──
+            {
+                var m: Qwen35Model = undefined;
+                m.ssm_d_inner = @as(u32, smith.valueWithHash(u16, 4)) | 1;
+                m.ssm_n_group = @as(u32, smith.valueWithHash(u8, 5) % 64) | 1;
+                m.ssm_d_state = @as(u32, smith.valueWithHash(u8, 6) % 128) | 1;
+                const ch = m.ssmConvChannels();
+                try std.testing.expect(ch >= m.ssm_d_inner);
+            }
+
+            // ── 4. shardColumnWeight: no-op for tp_degree=1 ──
+            {
+                var m: Qwen35Model = undefined;
+                m.tp_degree = 1;
+                m.tp_rank = 0;
+                const dummy = format_mod.TensorInfo{
+                    .name = "test",
+                    .data_ptr = @ptrFromInt(0x1000),
+                    .dtype = .f32,
+                    .n_dims = 2,
+                    .dims = .{ 64, 64, 0, 0 },
+                };
+                const result = m.shardColumnWeight(dummy, 64, 64);
+                try std.testing.expectEqual(dummy.data_ptr, result.data_ptr);
+            }
+
+            // ── 5. rmsNormPlusOne: static function, fuzz-safe ──
+            {
+                const n: usize = 16;
+                var input: [n]f32 = undefined;
+                var output: [n]f32 = undefined;
+                var weight: [n]f32 = undefined;
+                for (0..n) |i| {
+                    input[i] = @as(f32, @floatFromInt(smith.valueWithHash(i16, @intCast(7 + i)))) / 100.0;
+                    weight[i] = @as(f32, @floatFromInt(smith.valueWithHash(i8, @intCast(23 + i)))) / 127.0;
+                }
+                const eps_raw = smith.valueWithHash(u16, 39);
+                const eps: f32 = @as(f32, @floatFromInt(eps_raw | 1)) * 1e-8;
+                Qwen35Model.rmsNormPlusOne(&input, &output, &weight, n, eps);
+                for (0..n) |i| {
+                    try std.testing.expect(math.isFinite(output[i]));
+                }
+            }
+
+            // ── 6. cancel: atomic store, no deps ──
+            {
+                var m: Qwen35Model = undefined;
+                m.cancelled = std.atomic.Value(bool).init(false);
+                m.cancel();
+                try std.testing.expect(m.cancelled.load(.monotonic));
+            }
+
+            // ── 7. getMtpLogits: returns slice ──
+            {
+                var m: Qwen35Model = undefined;
+                var buf = [_]f32{ 1.0, 2.0, 3.0, 4.0 };
+                m.mtp_logits_buf = &buf;
+                const logits = m.getMtpLogits();
+                try std.testing.expectEqual(@as(usize, 4), logits.len);
+            }
+
+            // ── 8. resetMtpCache: resets counter ──
+            {
+                var m: Qwen35Model = undefined;
+                m.mtp_kv_seq_len = 42;
+                m.resetMtpCache();
+                try std.testing.expectEqual(@as(usize, 0), m.mtp_kv_seq_len);
+            }
+
+            // ── 9. applyNvfp4Scale: file-scope fn with MockFormat ──
+            {
+                var mock = model_mod.MockFormat{ .tensors = &.{} };
+                var buf = [_]f32{ 1.0, 2.0, 3.0, 4.0 };
+                const layer = smith.valueWithHash(u8, 40);
+                const expert = smith.valueWithHash(u8, 41);
+                applyNvfp4Scale(mock.format(), &buf, layer, expert, "gate_proj");
+                // No matching tensor — buffer unchanged
+                try std.testing.expectApproxEqAbs(@as(f32, 1.0), buf[0], 1e-6);
+            }
+
+            // ── 10. saveSsmState + restoreSsmState: round-trip ──
+            {
+                const allocator = std.testing.allocator;
+                var m: Qwen35Model = undefined;
+                m.n_layers = 2;
+                m.conv_states = allocator.alloc([]f32, 2) catch return;
+                defer allocator.free(m.conv_states);
+                m.ssm_states = allocator.alloc([]f32, 2) catch return;
+                defer allocator.free(m.ssm_states);
+
+                var conv0 = [_]f32{ 1.0, 2.0 };
+                var conv1 = [_]f32{ 3.0, 4.0 };
+                m.conv_states[0] = &conv0;
+                m.conv_states[1] = &conv1;
+                var ssm0 = [_]f32{ 5.0, 6.0 };
+                var ssm1 = [_]f32{ 7.0, 8.0 };
+                m.ssm_states[0] = &ssm0;
+                m.ssm_states[1] = &ssm1;
+
+                const snapshot = m.saveSsmState(allocator) catch return;
+                defer if (snapshot.len > 0) allocator.free(snapshot);
+                try std.testing.expect(snapshot.len > 0);
+
+                // Zero out, then restore
+                conv0 = .{ 0, 0 };
+                conv1 = .{ 0, 0 };
+                ssm0 = .{ 0, 0 };
+                ssm1 = .{ 0, 0 };
+                m.restoreSsmState(snapshot);
+                try std.testing.expectApproxEqAbs(@as(f32, 1.0), conv0[0], 1e-6);
+                try std.testing.expectApproxEqAbs(@as(f32, 8.0), ssm1[1], 1e-6);
+            }
+
+            // ── 11. getBlockTable: needs seq_table — verify via comptime ──
+            // ── 12. model: returns Model vtable — verify via comptime ──
+            // ── 13. init/deinit: need Format+Backend — verify via comptime ──
+            // ── 14. forward/prefill: need full model — verify via comptime ──
+            // ── 15. mtpForward: needs full model — verify via comptime ──
+            // ── 16. sendKvCache/recvKvCache: need transport — verify via comptime ──
+            // ── 17. resetCache: needs KV cache — verify via comptime ──
+            comptime {
+                // Verify all pub functions exist and are callable
+                _ = &Qwen35Model.model;
+                _ = &Qwen35Model.init;
+                _ = &Qwen35Model.deinit;
+                _ = &Qwen35Model.cancel;
+                _ = &Qwen35Model.getBlockTable;
+                _ = &Qwen35Model.mtpForward;
+                _ = &Qwen35Model.getMtpLogits;
+                _ = &Qwen35Model.resetMtpCache;
+                _ = &Qwen35Model.forward;
+                _ = &Qwen35Model.prefill;
+                _ = &Qwen35Model.sendKvCache;
+                _ = &Qwen35Model.recvKvCache;
+                _ = &Qwen35Model.saveSsmState;
+                _ = &Qwen35Model.restoreSsmState;
+                _ = &Qwen35Model.resetCache;
+                // Verify the type itself
+                _ = @sizeOf(Qwen35Model);
+            }
+        }
+    }.f, .{});
+}

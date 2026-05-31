@@ -567,6 +567,105 @@ test "glm4 multi-turn conversation" {
     try std.testing.expect(std.mem.endsWith(u8, result, "<|assistant|>\n"));
 }
 
+test "fuzz: all chat_template functions" {
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *std.testing.Smith) !void {
+            const alloc = std.testing.allocator;
+
+            // Pick a random template from all presets (covers all pub const templates)
+            const templates = [_]ChatTemplate{
+                ChatTemplate.chatml,
+                ChatTemplate.qwen35,
+                ChatTemplate.gemma,
+                ChatTemplate.gemma4,
+                ChatTemplate.glm4,
+                ChatTemplate.gpt_oss,
+                ChatTemplate.llama4,
+            };
+            const tmpl = templates[smith.valueWithHash(u8, 0) % templates.len];
+
+            // Build random content strings from fixed buffers
+            var sys_buf: [32]u8 = undefined;
+            var user_buf: [32]u8 = undefined;
+            var asst_buf: [32]u8 = undefined;
+            var tool_buf: [32]u8 = undefined;
+            smith.bytesWithHash(&sys_buf, 1);
+            smith.bytesWithHash(&user_buf, 2);
+            smith.bytesWithHash(&asst_buf, 3);
+            smith.bytesWithHash(&tool_buf, 4);
+            const sys_len = smith.valueWithHash(u8, 5) % (sys_buf.len + 1);
+            const user_len = smith.valueWithHash(u8, 6) % (user_buf.len + 1);
+            const asst_len = smith.valueWithHash(u8, 7) % (asst_buf.len + 1);
+            const tool_len = smith.valueWithHash(u8, 8) % (tool_buf.len + 1);
+            const sys_str = sys_buf[0..sys_len];
+            const user_str = user_buf[0..user_len];
+            const asst_str = asst_buf[0..asst_len];
+            const tool_str = tool_buf[0..tool_len];
+
+            // Exercise Role enum (pub type)
+            const roles = [_]Role{ .user, .assistant, .tool };
+            const role = roles[smith.valueWithHash(u8, 9) % roles.len];
+            _ = @intFromEnum(role);
+
+            // Exercise Message struct (pub type) with tool_call_id
+            const use_sys = smith.valueWithHash(u8, 10) % 2 == 0;
+            const opt_sys: ?[]const u8 = if (use_sys) sys_str else null;
+
+            // --- pub fn format ---
+            const fmt_result = tmpl.format(alloc, opt_sys, user_str) catch return;
+            defer alloc.free(fmt_result);
+            // Invariant: result always ends with generation_prefix
+            std.debug.assert(std.mem.endsWith(u8, fmt_result, tmpl.generation_prefix));
+
+            // --- pub fn formatConversation ---
+            const messages = &[_]Message{
+                .{ .role = .user, .content = user_str },
+                .{ .role = .assistant, .content = asst_str },
+                .{ .role = .tool, .content = tool_str, .tool_call_id = if (smith.valueWithHash(u8, 11) % 2 == 0) "call_123" else null },
+                .{ .role = .user, .content = user_str },
+            };
+            const conv_result = tmpl.formatConversation(alloc, opt_sys, messages) catch return;
+            defer alloc.free(conv_result);
+            std.debug.assert(std.mem.endsWith(u8, conv_result, tmpl.generation_prefix));
+
+            // --- pub fn formatContinuation ---
+            const cont_result = tmpl.formatContinuation(alloc, user_str) catch return;
+            defer alloc.free(cont_result);
+            std.debug.assert(std.mem.endsWith(u8, cont_result, tmpl.generation_prefix));
+            // continuation must start with assistant_suffix
+            std.debug.assert(std.mem.startsWith(u8, cont_result, tmpl.assistant_suffix));
+
+            // --- pub fn findImageInsertPos ---
+            var token_buf: [16]u32 = undefined;
+            for (&token_buf, 0..) |*t, i| t.* = smith.valueWithHash(u32, @as(u32, @intCast(i)) +% 20);
+            const tok_len = smith.valueWithHash(u8, 40) % (token_buf.len + 1);
+            const tokens = token_buf[0..tok_len];
+
+            var prefix_buf: [4]u32 = undefined;
+            for (&prefix_buf, 0..) |*t, i| t.* = smith.valueWithHash(u32, @as(u32, @intCast(i)) +% 50);
+            const pfx_len = smith.valueWithHash(u8, 60) % (prefix_buf.len + 1);
+            const prefix_seq = prefix_buf[0..pfx_len];
+
+            const insert_pos = findImageInsertPos(tokens, prefix_seq);
+            // Invariant: result <= tokens.len
+            std.debug.assert(insert_pos <= tokens.len);
+
+            // --- pub fn injectImageTokens ---
+            const img_tokens = ImageTokens{
+                .start = smith.valueWithHash(u32, 70),
+                .end = smith.valueWithHash(u32, 71),
+                .pad = smith.valueWithHash(u32, 72),
+            };
+            // Keep n_visual small to avoid OOM
+            const n_visual: u32 = smith.valueWithHash(u8, 73) % 16;
+            const injected = injectImageTokens(alloc, tokens, insert_pos, img_tokens, n_visual) catch return;
+            defer alloc.free(injected);
+            // Invariant: output length >= input length
+            std.debug.assert(injected.len >= tokens.len);
+        }
+    }.f, .{});
+}
+
 test "continuation matches full format suffix" {
     // Verify that formatContinuation produces the same trailing text as
     // formatConversation — ensuring KV cache reuse sees identical tokens.

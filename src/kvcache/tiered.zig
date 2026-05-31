@@ -906,3 +906,100 @@ test "TieredKvCache SSD round-trip preserves data" {
 
     cache.freeBlock(b0);
 }
+
+test "fuzz: all tiered functions" {
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *std.testing.Smith) !void {
+            const allocator = std.testing.allocator;
+
+            // --- BlockTier enum ---
+            const tier_val = smith.valueWithHash(u8, 0) % 3;
+            const tier: BlockTier = @enumFromInt(tier_val);
+            _ = @intFromEnum(tier);
+
+            // --- TransferCallback ---
+            const noop = TransferCallback.uma_noop;
+            std.debug.assert(!noop.isActive());
+            std.debug.assert(noop.upload == null);
+
+            var active_cb = TransferCallback{
+                .upload = &struct {
+                    fn cb(_: *anyopaque, _: [*]u8, _: [*]const u8, _: usize) void {}
+                }.cb,
+                .ctx = undefined,
+            };
+            std.debug.assert(active_cb.isActive());
+            active_cb = TransferCallback.uma_noop;
+
+            // --- TieredBlock struct fields ---
+            var tb: TieredBlock = undefined;
+            tb.tier = .ram;
+            tb.access_count = smith.valueWithHash(u32, 1);
+            tb.last_access_ms = smith.valueWithHash(i64, 2);
+            tb.ssd_offset = null;
+            std.debug.assert(tb.tier == .ram);
+
+            // --- TieredKvCache: init, lockTier, unlockTier, allocBlock, freeBlock, needsPromotion, promoteToVram, batchPromoteToVram, promoteFromSsd, deinit ---
+            const vram_ct = @as(usize, smith.valueWithHash(u4, 3) % 5) + 2; // 2..6
+            const ram_ct = @as(usize, smith.valueWithHash(u4, 4) % 4) + 1; // 1..4
+            const kv_dim: usize = @as(usize, smith.valueWithHash(u4, 5) % 4) + 1; // 1..4
+            const block_size: u16 = @as(u16, smith.valueWithHash(u4, 6) % 4) + 1; // 1..4
+
+            var cache = TieredKvCache.init(allocator, 1, kv_dim, vram_ct, ram_ct, 0, block_size, null) catch return;
+            defer cache.deinit();
+
+            // lockTier / unlockTier
+            cache.lockTier();
+            std.debug.assert(cache.tier_lock.load(.monotonic) == 1);
+            cache.unlockTier();
+            std.debug.assert(cache.tier_lock.load(.monotonic) == 0);
+
+            // allocBlock — fill VRAM
+            const n_alloc = smith.valueWithHash(u8, 7) % @as(u8, @intCast(vram_ct + ram_ct));
+            var alloc_ids: [10]u32 = undefined;
+            var alloc_count: usize = 0;
+            for (0..n_alloc) |_| {
+                const bid = cache.allocBlock() catch break;
+                std.debug.assert(bid < cache.blocks.len);
+                alloc_ids[alloc_count] = bid;
+                alloc_count += 1;
+                if (alloc_count >= 10) break;
+            }
+
+            // needsPromotion on allocated blocks
+            for (alloc_ids[0..alloc_count]) |bid| {
+                const needs = cache.needsPromotion(bid);
+                if (cache.blocks[bid].tier == .vram) {
+                    std.debug.assert(!needs);
+                }
+            }
+
+            // promoteToVram — promote any RAM blocks
+            for (alloc_ids[0..alloc_count]) |bid| {
+                if (cache.blocks[bid].tier == .ram) {
+                    cache.promoteToVram(bid) catch {};
+                }
+            }
+
+            // batchPromoteToVram — empty and non-empty
+            cache.batchPromoteToVram(&[_]u32{}) catch {};
+            if (alloc_count > 0) {
+                cache.batchPromoteToVram(alloc_ids[0..alloc_count]) catch {};
+            }
+
+            // promoteFromSsd — no SSD tier so should be no-op or error
+            if (alloc_count > 0) {
+                cache.promoteFromSsd(alloc_ids[0]) catch {};
+            }
+
+            // freeBlock
+            for (alloc_ids[0..alloc_count]) |bid| {
+                cache.freeBlock(bid);
+            }
+
+            // Verify counters after freeing all
+            std.debug.assert(cache.vram_used.load(.monotonic) == 0);
+            std.debug.assert(cache.ram_used.load(.monotonic) == 0);
+        }
+    }.f, .{});
+}

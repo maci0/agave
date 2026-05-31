@@ -2966,3 +2966,82 @@ test "fuseNvfp4Experts creates synthetic entries" {
     try std.testing.expectEqual(@as(usize, 2 * w_bytes), fused_s.data_start);
     try std.testing.expectEqual(@as(usize, 2 * w_bytes + 2 * s_bytes), fused_s.data_end);
 }
+
+test "fuzz: all safetensors functions" {
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *std.testing.Smith) !void {
+            const allocator = std.testing.allocator;
+
+            // -- SafeTensorsDir.open: requires filesystem, verify symbol exists --
+            comptime {
+                _ = &SafeTensorsDir.open;
+            }
+
+            // -- Build a minimal SafeTensorsDir for method testing --
+            var tensors = std.StringHashMap(TensorEntry).init(allocator);
+            defer tensors.deinit();
+
+            // Insert a fuzzed tensor entry
+            const n_dims = smith.valueWithHash(u2, 0);
+            var dims: [4]u64 = .{ 0, 0, 0, 0 };
+            for (0..@as(usize, n_dims)) |di| {
+                dims[di] = @as(u64, smith.valueWithHash(u8, @intCast(di + 1))) + 1;
+            }
+            try tensors.put("fuzz.weight", TensorEntry{
+                .shard_idx = 0,
+                .data_start = 0,
+                .data_end = smith.valueWithHash(u16, 2),
+                .dtype = .f32,
+                .n_dims = n_dims,
+                .dims = dims,
+            });
+
+            var fused_tensors = std.StringHashMap(TensorEntry).init(allocator);
+            defer fused_tensors.deinit();
+            var repacked_f32: std.ArrayList([]f32) = .empty;
+            defer repacked_f32.deinit(allocator);
+            var config_meta = std.StringHashMap(MetaValue).init(allocator);
+            defer config_meta.deinit();
+            var owned_strings: std.ArrayList([]u8) = .empty;
+            defer owned_strings.deinit(allocator);
+
+            var shard_info = [_]ShardInfo{.{ .data = &.{}, .tensor_base = 0 }};
+
+            var dir = SafeTensorsDir{
+                .allocator = allocator,
+                .tensors = tensors,
+                .fused_tensors = fused_tensors,
+                .repacked_f32 = repacked_f32,
+                .shard_data = &shard_info,
+                .is_awq = smith.valueWithHash(bool, 3),
+                .config_meta = config_meta,
+                .vocab = null,
+                .merges = null,
+                .owned_strings = owned_strings,
+            };
+
+            // -- SafeTensorsDir.tensorCount --
+            const tc = dir.tensorCount();
+            try std.testing.expect(tc >= 1);
+
+            // -- SafeTensorsDir.totalParams --
+            const tp = dir.totalParams();
+            _ = tp; // result depends on fuzzed dims, just ensure no crash
+
+            // -- SafeTensorsDir.totalBytes --
+            const tb = dir.totalBytes();
+            try std.testing.expect(tb == 0); // shard_data has empty data
+
+            // -- SafeTensorsDir.format --
+            const fmt = dir.format();
+            try std.testing.expect(fmt.is_safetensors);
+            // Exercise vtable: getTensor with random name (should return null)
+            try std.testing.expect(fmt.getTensor("nonexistent.tensor.xyz") == null);
+
+            // -- SafeTensorsDir.deinit: verify symbol, don't call (would invalidate our stack vars) --
+            comptime {
+                _ = &SafeTensorsDir.deinit;
+            }
+        }
+    }.f, .{});
+}

@@ -2479,3 +2479,70 @@ test "CudaBackend.sdpaTree" { comptime { _ = &CudaBackend.sdpaTree; } }
 test "CudaBackend.sdpaPaged" { comptime { _ = &CudaBackend.sdpaPaged; } }
 test "CudaBackend.sdpaPrefill" { comptime { _ = &CudaBackend.sdpaPrefill; } }
 test "CudaBackend.deltaNet" { comptime { _ = &CudaBackend.deltaNet; } }
+
+test "fuzz: all cuda functions" {
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *std.testing.Smith) !void {
+            _ = smith;
+            comptime {
+                _ = &CudaBackend.init;
+                _ = &CudaBackend.deinit;
+                _ = &CudaBackend.setThreadContext;
+                _ = &CudaBackend.registerHostRegion;
+                _ = &CudaBackend.flushActivations;
+                _ = &CudaBackend.invalidateAct;
+                _ = &CudaBackend.getDevicePtrOpaque;
+                _ = &CudaBackend.getDevicePtr;
+                _ = &CudaBackend.invalidateWeight;
+                _ = &CudaBackend.gemv;
+                _ = &CudaBackend.sigmoidMul;
+                _ = &CudaBackend.siluMul;
+                _ = &CudaBackend.geluMul;
+                _ = &CudaBackend.fusedFfnGateUpSiluQ8;
+                _ = &CudaBackend.fusedFfnGateUpGeluQ8;
+                _ = &CudaBackend.fusedFfnGateUpSiluQ4K;
+                _ = &CudaBackend.fusedFfnGateUpSiluQ5K;
+                _ = &CudaBackend.fusedFfnGateUpSiluQ6K;
+                _ = &CudaBackend.dispatchMegakernelQwen35Q8;
+                _ = &CudaBackend.dispatchMegakernelGemmaQ4K;
+                _ = &CudaBackend.rmsNormMulti;
+                _ = &CudaBackend.deinterleave;
+                _ = &CudaBackend.splitQGate;
+                _ = &CudaBackend.gemvMulti;
+                _ = &CudaBackend.rmsNorm;
+                _ = &CudaBackend.silu;
+                _ = &CudaBackend.gelu;
+                _ = &CudaBackend.add;
+                _ = &CudaBackend.addRmsNorm;
+                _ = &CudaBackend.gemvT;
+                _ = &CudaBackend.addScaled;
+                _ = &CudaBackend.mul;
+                _ = &CudaBackend.softmax;
+                _ = &CudaBackend.rope;
+                _ = &CudaBackend.embLookup;
+                _ = &CudaBackend.l2Norm;
+                _ = &CudaBackend.gemvNvfp4St;
+                _ = &CudaBackend.gemvMlxQ;
+                _ = &CudaBackend.gemvMxfp4St;
+                _ = &CudaBackend.gemvGptq;
+                _ = &CudaBackend.gemvAwq;
+                _ = &CudaBackend.sync;
+                _ = &CudaBackend.beginBatch;
+                _ = &CudaBackend.endBatch;
+                _ = &CudaBackend.backendInfo;
+                _ = &CudaBackend.allocKvSlice;
+                _ = &CudaBackend.freeKvSlice;
+                _ = &CudaBackend.registerRamKv;
+                _ = &CudaBackend.sdpa;
+                _ = &CudaBackend.sdpaWithStats;
+                _ = &CudaBackend.gemm;
+                _ = &CudaBackend.rmsNormBatched;
+                _ = &CudaBackend.ropeBatched;
+                _ = &CudaBackend.sdpaTree;
+                _ = &CudaBackend.sdpaPaged;
+                _ = &CudaBackend.sdpaPrefill;
+                _ = &CudaBackend.deltaNet;
+            }
+        }
+    }.f, .{});
+}

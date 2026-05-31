@@ -1178,3 +1178,212 @@ test "applyLogitBias zero count is no-op" {
     try std.testing.expectEqual(@as(f32, 1.0), logits[0]);
     try std.testing.expectEqual(@as(f32, 2.0), logits[1]);
 }
+
+test "fuzz: all math functions" {
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *std.testing.Smith) !void {
+            // -- pub constants (reference to prevent dead-code) --
+            const constants_sum = sqrt_2_over_pi + gelu_coeff + gelu_clamp_hi + gelu_clamp_lo;
+            std.debug.assert(std.math.isFinite(constants_sum));
+            _ = max_top_k;
+            _ = max_top_logprobs;
+
+            // -- Deterministic PRNG seeded from fuzz input --
+            const seed = smith.valueWithHash(u64, 0);
+            var prng = std.Random.DefaultPrng.init(seed);
+            const rng = prng.random();
+
+            // -- Shared mutable buffers (16 elements = 2 full SIMD chunks) --
+            const buf_len = 16;
+            var buf: [buf_len]f32 = undefined;
+            for (0..buf_len) |i| {
+                const raw = smith.valueWithHash(u16, @intCast(i));
+                buf[i] = @as(f32, @floatFromInt(@as(i16, @bitCast(raw)))) * 0.01;
+            }
+
+            // 1. argmax
+            {
+                const idx = argmax(&buf);
+                std.debug.assert(idx < buf_len);
+            }
+
+            // 2. topKExperts
+            {
+                const k_raw = smith.valueWithHash(u8, 100) % 4;
+                const k: usize = @as(usize, k_raw) + 1; // 1..4
+                var out_idx: [4]usize = undefined;
+                var out_sc: [4]f32 = undefined;
+                topKExperts(&buf, k, out_idx[0..k], out_sc[0..k]);
+                for (0..k) |i| std.debug.assert(out_idx[i] < buf_len);
+            }
+
+            // 3. simdDotF32
+            {
+                var buf2: [buf_len]f32 = undefined;
+                for (0..buf_len) |i| {
+                    const raw = smith.valueWithHash(u16, @intCast(i + 100));
+                    buf2[i] = @as(f32, @floatFromInt(@as(i16, @bitCast(raw)))) * 0.01;
+                }
+                const dot = simdDotF32(&buf, &buf2, buf_len);
+                std.debug.assert(std.math.isFinite(dot));
+            }
+
+            // 4. simdScaleF32
+            {
+                var scale_buf: [buf_len]f32 = buf;
+                const scale_raw = smith.valueWithHash(i16, 200);
+                const scale = @as(f32, @floatFromInt(scale_raw)) * 0.001;
+                simdScaleF32(&scale_buf, scale, buf_len);
+                for (0..buf_len) |i| std.debug.assert(std.math.isFinite(scale_buf[i]));
+            }
+
+            // 5. softplus
+            {
+                const x_raw = smith.valueWithHash(i16, 300);
+                const x = @as(f32, @floatFromInt(x_raw)) * 0.01;
+                const sp = softplus(x);
+                std.debug.assert(sp >= 0);
+                std.debug.assert(std.math.isFinite(sp));
+            }
+
+            // 6. sigmoid
+            {
+                const x_raw = smith.valueWithHash(i16, 400);
+                const x = @as(f32, @floatFromInt(x_raw)) * 0.01;
+                const s = sigmoid(x);
+                std.debug.assert(s >= 0 and s <= 1.0);
+            }
+
+            // 7. silu
+            {
+                const x_raw = smith.valueWithHash(i16, 500);
+                const x = @as(f32, @floatFromInt(x_raw)) * 0.01;
+                const s = silu(x);
+                std.debug.assert(std.math.isFinite(s));
+            }
+
+            // 8. applyReluSquared
+            {
+                var relu_buf: [buf_len]f32 = buf;
+                applyReluSquared(&relu_buf);
+                for (relu_buf) |v| std.debug.assert(v >= 0);
+            }
+
+            // 9. applyGelu
+            {
+                var gelu_buf: [buf_len]f32 = buf;
+                applyGelu(&gelu_buf);
+                for (gelu_buf) |v| std.debug.assert(std.math.isFinite(v));
+            }
+
+            // 10. applyRepeatPenalty (penalty must be > 0)
+            {
+                var rp_buf: [buf_len]f32 = buf;
+                const pen_raw = smith.valueWithHash(u16, 600);
+                const penalty = @as(f32, @floatFromInt(pen_raw % 1000 + 1)) * 0.01;
+                const ids = [_]u32{ 0, 3, 15, 999 };
+                applyRepeatPenalty(&rp_buf, &ids, penalty);
+                for (rp_buf) |v| std.debug.assert(std.math.isFinite(v));
+            }
+
+            // 11. applyLogitBias
+            {
+                var lb_buf: [buf_len]f32 = buf;
+                const ids = [_]u32{ 1, 5, 999 };
+                const biases = [_]f32{ 0.5, -0.5, 1.0 };
+                applyLogitBias(&lb_buf, &ids, &biases, 3);
+                for (lb_buf) |v| std.debug.assert(std.math.isFinite(v));
+            }
+
+            // 12. applyDry
+            {
+                var dry_buf: [buf_len]f32 = buf;
+                const history = [_]u32{ 1, 2, 3, 1, 2, 4, 0, 3 };
+                const mult_raw = smith.valueWithHash(u8, 700);
+                const multiplier = @as(f32, @floatFromInt(mult_raw)) * 0.01;
+                const al_raw = smith.valueWithHash(u8, 701);
+                const allowed_length: u32 = @as(u32, al_raw % 4) + 1;
+                applyDry(&dry_buf, &history, multiplier, allowed_length);
+                for (dry_buf) |v| std.debug.assert(!std.math.isNan(v));
+            }
+
+            // 13. applyPenalties
+            {
+                var pen_buf: [buf_len]f32 = buf;
+                const gen_toks = [_]u32{ 0, 2, 2, 5, 999 };
+                const fp_raw = smith.valueWithHash(i16, 800);
+                const fp = @as(f32, @floatFromInt(fp_raw)) * 0.001;
+                const pp_raw = smith.valueWithHash(i16, 801);
+                const pp = @as(f32, @floatFromInt(pp_raw)) * 0.001;
+                applyPenalties(&pen_buf, &gen_toks, fp, pp);
+                for (pen_buf) |v| std.debug.assert(std.math.isFinite(v));
+            }
+
+            // 14. tokenLogProb
+            {
+                const tid_raw = smith.valueWithHash(u8, 900);
+                const tid: u32 = @as(u32, tid_raw) % (buf_len + 2);
+                const lp = tokenLogProb(&buf, tid);
+                std.debug.assert(!std.math.isNan(lp));
+            }
+
+            // 15. topLogProbs
+            {
+                var out_ids: [4]u32 = undefined;
+                var out_lp: [4]f32 = undefined;
+                const n_raw = smith.valueWithHash(u8, 1000);
+                const n: u32 = @as(u32, n_raw % 5);
+                const count = topLogProbs(&buf, n, &out_ids, &out_lp);
+                std.debug.assert(count <= n);
+                for (0..count) |i| std.debug.assert(!std.math.isNan(out_lp[i]));
+            }
+
+            // 16. applyMinP
+            {
+                var mp_buf: [buf_len]f32 = buf;
+                const mp_raw = smith.valueWithHash(u8, 1100);
+                const min_p = @as(f32, @floatFromInt(mp_raw)) / 256.0;
+                applyMinP(&mp_buf, min_p);
+                for (mp_buf) |v| std.debug.assert(!std.math.isNan(v));
+            }
+
+            // 17. applyXtc
+            {
+                var xtc_buf: [buf_len]f32 = buf;
+                const xp_raw = smith.valueWithHash(u8, 1200);
+                const xt_raw = smith.valueWithHash(u8, 1201);
+                const xp = @as(f32, @floatFromInt(xp_raw)) / 256.0;
+                const xt = @as(f32, @floatFromInt(xt_raw)) / 256.0;
+                applyXtc(&xtc_buf, xp, xt, rng);
+                for (xtc_buf) |v| std.debug.assert(!std.math.isNan(v));
+            }
+
+            // 18. sampleMirostat
+            {
+                var miro_buf: [buf_len]f32 = buf;
+                var mu: f32 = @as(f32, @floatFromInt(smith.valueWithHash(u8, 1300) % 20 + 1));
+                const tau_raw = smith.valueWithHash(u8, 1301);
+                const tau = @as(f32, @floatFromInt(tau_raw % 20 + 1)) * 0.5;
+                const eta = 0.1;
+                const temp_raw = smith.valueWithHash(u8, 1302);
+                const temp = @as(f32, @floatFromInt(temp_raw % 10 + 1)) * 0.1;
+                const tok = sampleMirostat(&miro_buf, tau, eta, &mu, temp, rng);
+                std.debug.assert(tok < buf_len);
+                std.debug.assert(std.math.isFinite(mu));
+            }
+
+            // 19. sampleToken
+            {
+                var st_buf: [buf_len]f32 = buf;
+                const t_raw = smith.valueWithHash(u8, 1400);
+                const temp = @as(f32, @floatFromInt(t_raw % 20)) * 0.1;
+                const tk_raw = smith.valueWithHash(u8, 1401);
+                const top_k: u32 = @as(u32, tk_raw) % (buf_len + 1);
+                const tp_raw = smith.valueWithHash(u8, 1402);
+                const top_p = @as(f32, @floatFromInt(tp_raw)) / 256.0;
+                const tok = sampleToken(&st_buf, temp, top_k, top_p, rng);
+                std.debug.assert(tok < buf_len);
+            }
+        }
+    }.f, .{});
+}

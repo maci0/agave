@@ -168,3 +168,47 @@ test "tensor partition size — row shard byte offset calculation" {
     const shard_bytes = local_k * n_rows * bytes_per_element;
     try std.testing.expectEqual(k_total * n_rows * bytes_per_element, shard_bytes * degree);
 }
+
+test "fuzz: all tp functions" {
+    // TpGroup.init/deinit/forward all require a real Model + Format + Backend stack
+    // that cannot be constructed in a unit test. Verify all pub fn pointers exist at
+    // comptime, then fuzz the TP sharding arithmetic that underpins the module.
+    comptime {
+        _ = &TpGroup.init;
+        _ = &TpGroup.deinit;
+        _ = &TpGroup.forward;
+    }
+
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *std.testing.Smith) !void {
+            // Fuzz the TP sharding arithmetic (dimension / degree partitioning).
+            const raw_dim = smith.valueWithHash(u16, 0);
+            const raw_degree = smith.valueWithHash(u4, 1);
+
+            // Avoid division by zero; clamp degree to [1..16].
+            const degree: u32 = @as(u32, raw_degree) | 1;
+            // Ensure dim is a multiple of degree so sharding is exact.
+            const dim: u32 = (@as(u32, raw_dim) | 1) * degree;
+
+            const local_dim = dim / degree;
+            // Partitions must reconstruct the original dimension.
+            try std.testing.expectEqual(dim, local_dim * degree);
+            // Each partition is non-zero.
+            try std.testing.expect(local_dim > 0);
+
+            // Verify contiguous rank offsets cover the full dimension.
+            var covered: u32 = 0;
+            for (0..degree) |r| {
+                const rank: u32 = @intCast(r);
+                try std.testing.expectEqual(covered, rank * local_dim);
+                covered += local_dim;
+            }
+            try std.testing.expectEqual(dim, covered);
+
+            // TpGroup struct is constructible with manual field assignment.
+            var group: TpGroup = undefined;
+            group.degree = degree;
+            try std.testing.expectEqual(degree, group.degree);
+        }
+    }.f, .{});
+}

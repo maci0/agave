@@ -613,3 +613,123 @@ pub fn sdpaPagedHead(q: [*]const f32, kv_view: PagedKvView, output: [*]f32, h: u
         }
     }
 }
+
+test "fuzz: all sdpa functions" {
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *std.testing.Smith) !void {
+            // Fixed geometry: 1 head, 1 KV head, hd=8 (SIMD-aligned), sl=1
+            const nh = 1;
+            const nkv = 1;
+            const hd = 8;
+            const kvd = nkv * hd;
+            const sl = 1;
+
+            // Clamp random floats to sane range to avoid NaN/inf explosions
+            const raw_q = smith.valueWithHash([hd]f32, 0);
+            const raw_k = smith.valueWithHash([hd]f32, 1);
+            const raw_v = smith.valueWithHash([hd]f32, 2);
+
+            var q: [hd]f32 = undefined;
+            var k_new: [hd]f32 = undefined;
+            var v_new: [hd]f32 = undefined;
+            for (0..hd) |i| {
+                q[i] = std.math.clamp(raw_q[i], -10.0, 10.0);
+                k_new[i] = std.math.clamp(raw_k[i], -10.0, 10.0);
+                v_new[i] = std.math.clamp(raw_v[i], -10.0, 10.0);
+            }
+
+            const scale: f32 = 1.0 / @sqrt(@as(f32, @floatFromInt(hd)));
+            var keys: [2 * kvd]f32 = .{0} ** (2 * kvd);
+            var values: [2 * kvd]f32 = .{0} ** (2 * kvd);
+            var output: [nh * hd]f32 = undefined;
+
+            // 1. sdpa — append at pos 0, compute over 1 position
+            sdpa(&q, &keys, &values, &k_new, &v_new, &output, nh, nkv, hd, 0, scale);
+            for (output) |o| std.debug.assert(std.math.isFinite(o));
+
+            // 2. sdpaHeads — run over 1 position
+            sdpaHeads(&q, &keys, &values, &output, nh, nkv, hd, sl, scale);
+            for (output) |o| std.debug.assert(std.math.isFinite(o));
+
+            // 3. sdpaHead — single head
+            sdpaHead(&q, &keys, &values, &output, 0, nh, nkv, hd, sl, scale);
+            for (output) |o| std.debug.assert(std.math.isFinite(o));
+
+            // 4-5. sdpaQuantHeads / sdpaQuantHead — f16 quantized path
+            const kv_bytes = comptime kv_quant.kvSliceBytes(.f16, 2 * kvd);
+            var qk_buf: [kv_bytes]u8 = .{0} ** kv_bytes;
+            var qv_buf: [kv_bytes]u8 = .{0} ** kv_bytes;
+            kv_quant.kvStore(&qk_buf, &k_new, kvd, .f16);
+            kv_quant.kvStore(&qv_buf, &v_new, kvd, .f16);
+
+            sdpaQuantHeads(&q, &qk_buf, &qv_buf, &output, nh, nkv, hd, sl, scale, .f16, .f16);
+            for (output) |o| std.debug.assert(std.math.isFinite(o));
+
+            sdpaQuantHead(&q, &qk_buf, &qv_buf, &output, 0, nh, nkv, hd, sl, scale, .f16, .f16);
+            for (output) |o| std.debug.assert(std.math.isFinite(o));
+
+            // 6-7. sdpaQuantHeadsWithStats / sdpaQuantHeadWithStats
+            var head_max: [nh]f32 = undefined;
+            var head_sum: [nh]f32 = undefined;
+            sdpaQuantHeadsWithStats(&q, &qk_buf, &qv_buf, &output, nh, nkv, hd, sl, scale, .f16, .f16, &head_max, &head_sum);
+            for (output) |o| std.debug.assert(std.math.isFinite(o));
+            for (head_max) |m| std.debug.assert(std.math.isFinite(m));
+            for (head_sum) |s| std.debug.assert(std.math.isFinite(s));
+
+            sdpaQuantHeadWithStats(&q, &qk_buf, &qv_buf, &output, 0, nh, nkv, hd, sl, scale, .f16, .f16, &head_max, &head_sum);
+            for (output) |o| std.debug.assert(std.math.isFinite(o));
+
+            // 8. dotProductF32
+            const dot = dotProductF32(&q, &k_new, hd);
+            std.debug.assert(std.math.isFinite(dot));
+
+            // 9. mulAccumF32
+            var accum: [hd]f32 = .{0} ** hd;
+            const weight = std.math.clamp(smith.valueWithHash(f32, 3), -10.0, 10.0);
+            mulAccumF32(&accum, weight, &v_new, hd);
+            for (accum) |a| std.debug.assert(std.math.isFinite(a));
+
+            // 10. softmax
+            var sm_buf: [4]f32 = undefined;
+            const raw_sm = smith.valueWithHash([4]f32, 4);
+            for (0..4) |i| sm_buf[i] = std.math.clamp(raw_sm[i], -10.0, 10.0);
+            softmax(&sm_buf);
+            var sm_sum: f32 = 0;
+            for (sm_buf) |s| {
+                std.debug.assert(std.math.isFinite(s));
+                std.debug.assert(s >= 0.0);
+                sm_sum += s;
+            }
+            std.debug.assert(@abs(sm_sum - 1.0) < 1e-4);
+
+            // 11-12. sdpaPagedHeads / sdpaPagedHead — paged KV path
+            var block_keys: [kvd]f32 = .{0} ** kvd;
+            var block_values: [kvd]f32 = .{0} ** kvd;
+            const block = @import("../../../kvcache/manager.zig").CacheBlock{
+                .keys = &block_keys,
+                .values = &block_values,
+            };
+            var blocks = [_]@import("../../../kvcache/manager.zig").CacheBlock{block};
+            var block_table = [_]u32{0};
+            const kv_view = PagedKvView.initView(&block_table, &blocks, 1, kvd, 0);
+
+            sdpaPagedHeads(&q, kv_view, &k_new, &v_new, &output, nh, nkv, hd, scale);
+            for (output) |o| std.debug.assert(std.math.isFinite(o));
+
+            // Reset block for sdpaPagedHead (re-init with 1 position already stored)
+            @memcpy(block_keys[0..kvd], k_new[0..kvd]);
+            @memcpy(block_values[0..kvd], v_new[0..kvd]);
+            blocks[0] = .{ .keys = &block_keys, .values = &block_values };
+            const kv_view2 = PagedKvView.initView(&block_table, &blocks, 1, kvd, 1);
+            sdpaPagedHead(&q, kv_view2, &output, 0, nh, nkv, hd, 1, scale);
+            for (output) |o| std.debug.assert(std.math.isFinite(o));
+
+            // Pub constants are compile-time verified
+            comptime {
+                std.debug.assert(sparse_v_threshold > 0);
+                std.debug.assert(max_sdpa_seq_len > 0);
+                std.debug.assert(max_head_dim > 0);
+            }
+        }
+    }.f, .{});
+}

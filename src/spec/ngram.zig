@@ -114,3 +114,47 @@ test "ngram short history" {
     const n = state.propose(5, &draft);
     try std.testing.expectEqual(@as(usize, 0), n);
 }
+
+test "fuzz: all ngram functions" {
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *std.testing.Smith) !void {
+            var state = NgramState{};
+
+            // push: fill state with random tokens
+            const num_pushes = smith.valueWithHash(u8, 0) | 4; // at least 4
+            for (0..num_pushes) |i| {
+                const token = smith.valueWithHash(u32, @truncate(i));
+                state.push(token);
+                // Invariant: len never exceeds capacity
+                try std.testing.expect(state.len <= history_capacity);
+            }
+
+            // push: verify len is correct (capped by capacity)
+            try std.testing.expect(state.len > 0);
+
+            // propose: call with random max_draft
+            var draft: [64]u32 = undefined;
+            const max_draft = smith.valueWithHash(u8, 100) % 64;
+            const n = state.propose(max_draft, &draft);
+
+            // Invariant: proposed count never exceeds max_draft or output buffer
+            try std.testing.expect(n <= max_draft);
+            try std.testing.expect(n <= draft.len);
+
+            // propose: with zero max_draft always returns 0
+            const n_zero = state.propose(0, &draft);
+            try std.testing.expect(n_zero == 0);
+
+            // push: force ring buffer wrap by pushing beyond capacity
+            var state2 = NgramState{};
+            for (0..history_capacity + 10) |i| {
+                state2.push(smith.valueWithHash(u32, @as(u32, @truncate(i)) +% 0xBEEF));
+                try std.testing.expect(state2.len <= history_capacity);
+            }
+
+            // propose: on wrapped state still returns bounded result
+            const n2 = state2.propose(8, draft[0..8]);
+            try std.testing.expect(n2 <= 8);
+        }
+    }.f, .{});
+}

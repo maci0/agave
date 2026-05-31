@@ -808,6 +808,114 @@ test "allocKvCache zero layers" {
     try std.testing.expectEqual(@as(usize, 0), cache.values.len);
 }
 
+test "fuzz: all manager functions" {
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *std.testing.Smith) !void {
+            const allocator = std.testing.allocator;
+
+            // ── Pub type existence: KvCache, CacheBlock, SeqBlockTable, PrefixMatch, BlockTier ──
+            comptime {
+                _ = KvCache;
+                _ = CacheBlock;
+                _ = SeqBlockTable;
+                _ = PrefixMatch;
+                _ = BlockTier;
+            }
+
+            // ── allocKvCache / freeKvCache ──
+            const n_layers = @as(usize, smith.valueWithHash(u2, 0)) + 1; // 1..4
+            const bytes_per = @as(usize, smith.valueWithHash(u4, 1)) * 16 + 16; // 16..256
+            const cache = allocKvCache(allocator, n_layers, bytes_per) catch return;
+            defer freeKvCache(allocator, cache);
+            try std.testing.expectEqual(n_layers, cache.keys.len);
+            try std.testing.expectEqual(n_layers, cache.values.len);
+
+            // ── PagedKvCache: init, allocBlock, freeBlock, freeCount, deinit ──
+            const kv_dim: usize = @as(usize, smith.valueWithHash(u3, 2)) + 1; // 1..8
+            const num_blocks: usize = @as(usize, smith.valueWithHash(u3, 3)) + 2; // 2..9
+            const block_size: u16 = @as(u16, smith.valueWithHash(u3, 4)) + 1; // 1..8
+            var paged = PagedKvCache.init(allocator, 1, kv_dim, num_blocks, block_size) catch return;
+            defer paged.deinit();
+
+            try std.testing.expectEqual(num_blocks, paged.freeCount());
+
+            // Allocate some blocks
+            const alloc_count = @as(usize, smith.valueWithHash(u2, 5)) + 1; // 1..4
+            const safe_count = @min(alloc_count, num_blocks);
+            var allocated: [4]u32 = undefined;
+            for (0..safe_count) |i| {
+                allocated[i] = paged.allocBlock() orelse break;
+            }
+            try std.testing.expect(paged.freeCount() <= num_blocks);
+
+            // Free first block if we allocated any
+            if (safe_count > 0) {
+                paged.freeBlock(allocated[0]);
+                try std.testing.expect(paged.freeCount() >= 1);
+            }
+
+            // ── PagedKvView: initView, keyPtr, valuePtr, keyPtrMut, valuePtrMut ──
+            // Need at least 1 block allocated for view
+            var paged2 = PagedKvCache.init(allocator, 1, 4, 4, 8) catch return;
+            defer paged2.deinit();
+            const b0 = paged2.allocBlock().?;
+            const b1 = paged2.allocBlock().?;
+            var block_table = [_]u32{ b0, b1 };
+            const view = PagedKvView.initView(&block_table, paged2.blocks, 8, 4, 12);
+
+            // Random position within bounds
+            const pos = @as(usize, smith.valueWithHash(u3, 6)) % 12;
+
+            // keyPtrMut / keyPtr round-trip
+            const kw = view.keyPtrMut(pos);
+            const val = smith.valueWithHash(f32, 7);
+            if (std.math.isFinite(val)) {
+                kw[0] = val;
+                try std.testing.expectEqual(val, view.keyPtr(pos)[0]);
+            }
+
+            // valuePtrMut / valuePtr round-trip
+            const vw = view.valuePtrMut(pos);
+            const val2 = smith.valueWithHash(f32, 8);
+            if (std.math.isFinite(val2)) {
+                vw[0] = val2;
+                try std.testing.expectEqual(val2, view.valuePtr(pos)[0]);
+            }
+
+            // ── RadixTree: init, insert, matchPrefix, invalidateHashCache, deinit ──
+            var tree = RadixTree.init(allocator) catch return;
+            defer tree.deinit();
+
+            // Build random token sequence (1..8 tokens)
+            var tok_buf: [8]u32 = undefined;
+            var blk_buf: [8]u32 = undefined;
+            const tok_len = @as(usize, smith.valueWithHash(u3, 9)) + 1;
+            for (0..tok_len) |i| {
+                tok_buf[i] = smith.valueWithHash(u32, @intCast(10 + i));
+                blk_buf[i] = smith.valueWithHash(u32, @intCast(20 + i));
+            }
+            const tokens = tok_buf[0..tok_len];
+            const blocks = blk_buf[0..tok_len];
+
+            tree.insert(tokens, blocks) catch return;
+
+            const m = tree.matchPrefix(tokens);
+            try std.testing.expect(m.matched > 0);
+
+            // Empty match
+            const m0 = tree.matchPrefix(&.{});
+            try std.testing.expectEqual(@as(usize, 0), m0.matched);
+
+            // invalidateHashCache
+            tree.invalidateHashCache();
+
+            // After invalidation, match still works (just no cache hit)
+            const m2 = tree.matchPrefix(tokens);
+            try std.testing.expect(m2.matched > 0);
+        }
+    }.f, .{});
+}
+
 test "RadixTree multiple disjoint sequences" {
     const allocator = std.testing.allocator;
     var tree = try RadixTree.init(allocator);

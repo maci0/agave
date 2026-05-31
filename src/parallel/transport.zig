@@ -132,8 +132,8 @@ pub const Transport = struct {
             if (fd >= 0) _ = c.close(fd);
         }
         if (self.recv_buf) |buf| self.allocator.free(buf);
-        if (self.shm_send) |ptr| _ = posix.system.munmap(@ptrCast(ptr), shm_region_size);
-        if (self.shm_recv) |ptr| _ = posix.system.munmap(@ptrCast(ptr), shm_region_size);
+        if (self.shm_send) |ptr| _ = posix.system.munmap(@ptrCast(@alignCast(ptr)), shm_region_size);
+        if (self.shm_recv) |ptr| _ = posix.system.munmap(@ptrCast(@alignCast(ptr)), shm_region_size);
         if (self.shm_send_fd >= 0) {
             _ = std.c.close(self.shm_send_fd);
             _ = std.c.shm_unlink(&self.shm_name_send);
@@ -684,4 +684,89 @@ test "Transport.init nccl" {
     try std.testing.expectEqual(@as(u32, 0), t.tcp_connected);
     // NCCL comm should be null until ensureNcclComm is called
     try std.testing.expectEqual(@as(NcclComm, null), t.nccl_comm);
+}
+
+test "fuzz: all transport functions" {
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *std.testing.Smith) !void {
+            const allocator = std.testing.allocator;
+
+            // ── TransportKind enum coverage ──
+            const kind_idx = smith.valueWithHash(u8, 0) % 4;
+            const kind: TransportKind = @enumFromInt(kind_idx);
+            _ = @tagName(kind);
+
+            // ── Transport.init ──
+            const rank = smith.valueWithHash(u32, 1) % 4;
+            const world_size = smith.valueWithHash(u32, 2) % 8 + 1;
+            var t = Transport.init(allocator, kind, rank, world_size) catch return;
+            defer t.deinit(); // exercises deinit on every path
+
+            // ── connectPeer (will fail — no listener, exercises error path) ──
+            const host = [4]u8{
+                smith.valueWithHash(u8, 3),
+                smith.valueWithHash(u8, 4),
+                smith.valueWithHash(u8, 5),
+                smith.valueWithHash(u8, 6),
+            };
+            const port = smith.valueWithHash(u16, 7) | 1024;
+            t.connectPeer(host, port) catch {};
+
+            // ── acceptPeer (invalid fd, exercises error path) ──
+            const bad_fd = smith.valueWithHash(c_int, 8);
+            t.acceptPeer(bad_fd) catch {};
+
+            // ── setupShm (will fail in test env — no peer) ──
+            t.setupShm() catch {};
+
+            // ── setupNccl (will fail — no libnccl) ──
+            t.setupNccl() catch {};
+
+            // ── ensureNcclComm (no-op without nccl_comm_init_rank) ──
+            t.ensureNcclComm();
+
+            // ── allReduceAdd (no peers connected, early-return paths) ──
+            const n = smith.valueWithHash(u8, 9) % 32 + 1;
+            var buf: [32]f32 = undefined;
+            for (0..32) |i| buf[i] = @floatFromInt(i);
+            t.allReduceAdd(&buf, @intCast(n)) catch {};
+
+            // ── sendBuf (no peers, early-return) ──
+            const send_n = smith.valueWithHash(u8, 10) % 16 + 1;
+            t.sendBuf(@ptrCast(&buf), @intCast(send_n));
+
+            // ── recvBuf (no peers, early-return) ──
+            var recv_area: [32]f32 = [_]f32{0.0} ** 32;
+            const recv_n = smith.valueWithHash(u8, 11) % 16 + 1;
+            t.recvBuf(@ptrCast(&recv_area), @intCast(recv_n));
+
+            // ── sendBufs (batched, no peers) ──
+            const ptr0: [*]const f32 = @ptrCast(&buf);
+            const ptrs = [_][*]const f32{ptr0};
+            const lens = [_]usize{@intCast(send_n)};
+            t.sendBufs(&ptrs, &lens);
+
+            // ── recvBufs (batched, no peers) ──
+            const rptr0: [*]f32 = @ptrCast(&recv_area);
+            const rptrs = [_][*]f32{rptr0};
+            const rlens = [_]usize{@intCast(recv_n)};
+            t.recvBufs(&rptrs, &rlens);
+
+            // ── Verify all pub decls are referenced (comptime) ──
+            comptime {
+                _ = &Transport.init;
+                _ = &Transport.deinit;
+                _ = &Transport.connectPeer;
+                _ = &Transport.acceptPeer;
+                _ = &Transport.setupShm;
+                _ = &Transport.setupNccl;
+                _ = &Transport.ensureNcclComm;
+                _ = &Transport.allReduceAdd;
+                _ = &Transport.sendBuf;
+                _ = &Transport.sendBufs;
+                _ = &Transport.recvBuf;
+                _ = &Transport.recvBufs;
+            }
+        }
+    }.f, .{});
 }

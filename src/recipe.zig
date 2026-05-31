@@ -229,3 +229,74 @@ test "applyDefaults no recipe values uses CLI defaults" {
     try std.testing.expectEqual(@as(u32, 256), applied.max_tokens);
     try std.testing.expectEqual(@as(u32, 2048), applied.ctx_size);
 }
+
+test "fuzz: all recipe functions" {
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *std.testing.Smith) !void {
+            // ── Recipe.default ──
+            const def = Recipe.default;
+            try std.testing.expect(def.temperature == null);
+
+            // ── Recipe.Overrides ── (exercise struct with random bools)
+            const overrides = Recipe.Overrides{
+                .temperature = smith.valueWithHash(bool, 0),
+                .top_p = smith.valueWithHash(bool, 1),
+                .top_k = smith.valueWithHash(bool, 2),
+                .repeat_penalty = smith.valueWithHash(bool, 3),
+                .max_tokens = smith.valueWithHash(bool, 4),
+                .ctx_size = smith.valueWithHash(bool, 5),
+            };
+
+            // ── Recipe.applyDefaults ── (exercises Applied return type too)
+            const temp = smith.valueWithHash(f32, 10);
+            const top_p = smith.valueWithHash(f32, 11);
+            const top_k = smith.valueWithHash(u32, 12);
+            const rep = smith.valueWithHash(f32, 13);
+            const max_tok = smith.valueWithHash(u32, 14);
+            const ctx = smith.valueWithHash(u32, 15);
+
+            const recipe = Recipe{
+                .temperature = 0.7,
+                .top_p = 0.9,
+                .top_k = 50,
+                .repeat_penalty = 1.1,
+                .max_tokens = 1024,
+                .ctx_size = 4096,
+            };
+            const applied = recipe.applyDefaults(temp, top_p, top_k, rep, max_tok, ctx, overrides);
+
+            // ── Recipe.Applied ── verify fields are populated
+            _ = applied.temperature;
+            _ = applied.top_p;
+            _ = applied.top_k;
+            _ = applied.repeat_penalty;
+            _ = applied.max_tokens;
+            _ = applied.ctx_size;
+
+            // When user overrides temperature, CLI value wins
+            if (overrides.temperature) {
+                try std.testing.expectEqual(temp, applied.temperature);
+            } else {
+                try std.testing.expectApproxEqAbs(@as(f32, 0.7), applied.temperature, 0.001);
+            }
+
+            // ── Recipe.match ── with random arch/backend/quant strings
+            const archs = [_][]const u8{ "qwen35", "gemma3", "gpt", "glm4", "unknown", "" };
+            const backends = [_][]const u8{ "Metal", "CPU", "Vulkan", "WebGPU", "" };
+            const quants = [_][]const u8{ "Q4_K", "Q4_0", "Q8_0", "F32", "" };
+
+            const ai = smith.valueWithHash(u8, 20) % archs.len;
+            const bi = smith.valueWithHash(u8, 21) % backends.len;
+            const qi = smith.valueWithHash(u8, 22) % quants.len;
+
+            const matched = Recipe.match(archs[ai], backends[bi], quants[qi]);
+            if (matched) |r| {
+                try std.testing.expect(r.name.len > 0);
+            }
+
+            // Also exercise match with default fallback
+            const r2 = Recipe.match(archs[ai], backends[bi], quants[qi]) orelse Recipe.default;
+            try std.testing.expect(r2.name.len > 0);
+        }
+    }.f, .{});
+}

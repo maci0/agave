@@ -128,3 +128,63 @@ test "rope exercises SIMD path" {
     // Verify first pair is actually rotated (pos=1, not identity)
     try std.testing.expect(@abs(x[0] - orig[0]) > 0.01);
 }
+
+test "fuzz: all rope functions" {
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *std.testing.Smith) !void {
+            // Constrain rope_dim to even values in [2, 64].
+            const rope_dim_half_raw = smith.valueWithHash(u5, 0);
+            const rope_dim_half: usize = @as(usize, rope_dim_half_raw) + 1;
+            const rd: usize = rope_dim_half * 2;
+
+            // head_dim >= rope_dim, up to rope_dim + 15 extra.
+            const hd_extra = smith.valueWithHash(u4, 1);
+            const hd: usize = rd + @as(usize, hd_extra);
+
+            // n_heads in [1, 4].
+            const nh: usize = @as(usize, smith.valueWithHash(u2, 2)) + 1;
+
+            const pos: usize = @as(usize, smith.valueWithHash(u10, 3));
+
+            // theta > 0.
+            const theta_raw = smith.valueWithHash(u16, 4);
+            const theta: f32 = @as(f32, @floatFromInt(@as(u32, theta_raw) + 1));
+
+            const total = nh * hd;
+            if (total > 512) return;
+
+            var buf: [512]f32 = undefined;
+            for (0..total) |i| {
+                const seed: u32 = @as(u32, @intCast(i)) +% 100;
+                const bits = smith.valueWithHash(u32, seed);
+                const val: f32 = @bitCast(bits);
+                buf[i] = if (std.math.isFinite(val)) val else 1.0;
+            }
+
+            var orig: [512]f32 = undefined;
+            @memcpy(orig[0..total], buf[0..total]);
+
+            // Exercise the sole pub function: rope
+            rope(&buf, pos, nh, hd, rd, theta);
+
+            // Verify magnitude preservation per rotated pair per head.
+            const half = rd / 2;
+            for (0..nh) |h| {
+                const base = h * hd;
+                for (0..half) |i| {
+                    const o_r = orig[base + i];
+                    const o_im = orig[base + i + half];
+                    const n_r = buf[base + i];
+                    const n_im = buf[base + i + half];
+                    const orig_mag = @sqrt(o_r * o_r + o_im * o_im);
+                    const new_mag = @sqrt(n_r * n_r + n_im * n_im);
+                    if (std.math.isFinite(orig_mag) and orig_mag > 1e-6) {
+                        if (!std.math.isFinite(new_mag)) return;
+                        const rel_err = @abs(orig_mag - new_mag) / orig_mag;
+                        if (rel_err > 1e-3) return error.MagnitudeNotPreserved;
+                    }
+                }
+            }
+        }
+    }.f, .{});
+}

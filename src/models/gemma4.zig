@@ -2768,3 +2768,148 @@ test "Gemma4 model vtable compiles" {
     try std.testing.expect(@hasDecl(Gemma4Model, "cancel"));
     try std.testing.expect(@hasDecl(Gemma4Model, "model"));
 }
+
+test "fuzz: all gemma4 functions" {
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *std.testing.Smith) !void {
+            // -- Comptime verification of all pub functions requiring full model init --
+            comptime {
+                _ = &Gemma4Model.init;
+                _ = &Gemma4Model.deinit;
+                _ = &Gemma4Model.model;
+                _ = &Gemma4Model.forward;
+                _ = &Gemma4Model.prefill;
+                _ = &Gemma4Model.resetCache;
+                _ = &Gemma4Model.cancel;
+                _ = &Gemma4Model.getBlockTable;
+            }
+
+            // -- cancel: exercises the pub fn on a partially-initialized struct --
+            {
+                var m: Gemma4Model = undefined;
+                m.cancelled = std.atomic.Value(bool).init(false);
+                m.cancel();
+                try std.testing.expect(m.cancelled.load(.monotonic));
+            }
+
+            // -- applySoftcap: fuzz with random logits --
+            {
+                var logits: [16]f32 = undefined;
+                smith.bytesWithHash(std.mem.asBytes(&logits), 0);
+                for (&logits) |*v| {
+                    if (!math.isFinite(v.*)) v.* = 0.0;
+                    v.* = @max(-1000.0, @min(1000.0, v.*));
+                }
+                var raw: [1]u8 = undefined;
+                smith.bytesWithHash(&raw, 1);
+                const cap: f32 = @as(f32, @floatFromInt((raw[0] % 100) + 1));
+                var m: Gemma4Model = undefined;
+                m.final_logit_softcap = cap;
+                m.logits_buf = &logits;
+                m.applySoftcap();
+                for (logits) |v| {
+                    try std.testing.expect(math.isFinite(v));
+                    try std.testing.expect(v >= -cap and v <= cap);
+                }
+            }
+
+            // -- layerVType: fuzz boundary protection logic --
+            {
+                var raw: [3]u8 = undefined;
+                smith.bytesWithHash(&raw, 2);
+                var m: Gemma4Model = undefined;
+                m.n_layers = @as(u32, raw[0] % 60) + 4;
+                m.kv_type_v = .turbo4;
+                m.kv_boundary_v = raw[1] % (m.n_layers / 2);
+                const li = raw[2] % @as(u8, @intCast(m.n_layers));
+                const result = m.layerVType(li);
+                if (m.kv_boundary_v == 0) {
+                    try std.testing.expectEqual(kv_quant.KvQuantType.turbo4, result);
+                } else {
+                    const b = m.kv_boundary_v;
+                    if (li < b or li >= m.n_layers - b) {
+                        try std.testing.expectEqual(kv_quant.KvQuantType.f16, result);
+                    } else {
+                        try std.testing.expectEqual(kv_quant.KvQuantType.turbo4, result);
+                    }
+                }
+            }
+
+            // -- rmsNormPlain: fuzz with random input --
+            {
+                var input: [16]f32 = undefined;
+                var output: [16]f32 = undefined;
+                smith.bytesWithHash(std.mem.asBytes(&input), 3);
+                for (&input) |*v| {
+                    if (!math.isFinite(v.*)) v.* = 1.0;
+                    v.* = @max(-100.0, @min(100.0, v.*));
+                }
+                rmsNormPlain(&output, &input, 16, 1e-6);
+                for (0..16) |i| try std.testing.expect(math.isFinite(output[i]));
+            }
+
+            // -- rmsNormPlainMulti: fuzz with random multi-head input --
+            {
+                var x: [16]f32 = undefined;
+                smith.bytesWithHash(std.mem.asBytes(&x), 4);
+                for (&x) |*v| {
+                    if (!math.isFinite(v.*)) v.* = 1.0;
+                    v.* = @max(-100.0, @min(100.0, v.*));
+                }
+                var raw: [1]u8 = undefined;
+                smith.bytesWithHash(&raw, 5);
+                const n_heads: usize = (raw[0] % 4) + 1; // 1..4
+                const hd: usize = 16 / n_heads;
+                if (hd >= 8) {
+                    rmsNormPlainMulti(&x, n_heads, hd, 1e-6);
+                    for (0..n_heads * hd) |i| try std.testing.expect(math.isFinite(x[i]));
+                }
+            }
+
+            // -- softmaxInPlace: fuzz with random values --
+            {
+                var vals: [8]f32 = undefined;
+                smith.bytesWithHash(std.mem.asBytes(&vals), 6);
+                for (&vals) |*v| {
+                    if (!math.isFinite(v.*)) v.* = 0.0;
+                    v.* = @max(-500.0, @min(500.0, v.*));
+                }
+                softmaxInPlace(&vals);
+                var sum: f32 = 0.0;
+                for (vals) |v| {
+                    try std.testing.expect(math.isFinite(v));
+                    try std.testing.expect(v >= 0.0 and v <= 1.0);
+                    sum += v;
+                }
+                try std.testing.expectApproxEqAbs(@as(f32, 1.0), sum, 1e-4);
+            }
+
+            // -- expertRowBytes: fuzz with random dtypes and dimensions --
+            {
+                var raw: [3]u8 = undefined;
+                smith.bytesWithHash(&raw, 7);
+                const dtype_idx = raw[0] % 5;
+                const dtype: format_mod.DType = switch (dtype_idx) {
+                    0 => .f32,
+                    1 => .f16,
+                    2 => .bf16,
+                    3 => .q8_0,
+                    4 => .q4_0,
+                    else => .f32,
+                };
+                // Use multiples of 32 for quantized types
+                const k: usize = (@as(usize, raw[1] % 4) + 1) * 256; // 256..1024
+                const n_rows: usize = @as(usize, raw[2] % 8) + 1;
+                const t = TensorInfo{
+                    .name = "fuzz",
+                    .data_ptr = @ptrFromInt(0x1000),
+                    .dtype = dtype,
+                    .n_dims = 3,
+                    .dims = .{ n_rows, k, 0, 0 },
+                };
+                const result = Gemma4Model.expertRowBytes(t, n_rows, k);
+                try std.testing.expect(result > 0);
+            }
+        }
+    }.f, .{});
+}

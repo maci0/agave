@@ -456,3 +456,137 @@ test "DType enum completeness" {
     // Count should match all known dtypes
     try std.testing.expect(dtype_fields.len >= 23); // At least: f32, f16, bf16, q2-q8, iq4s, fp8s, nvfp4, mxfp4, tq1_0, mlx_q, gptq, awq, unknown
 }
+
+test "fuzz: all format functions" {
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *std.testing.Smith) !void {
+            // -- pub const arch_key_buf_size --
+            comptime {
+                std.debug.assert(arch_key_buf_size == 256);
+            }
+
+            // -- pub const GGUFFile, SafeTensorsDir (re-exports) --
+            comptime {
+                _ = GGUFFile;
+                _ = SafeTensorsDir;
+            }
+
+            // -- pub enum DType: exercise all variants via random tag --
+            const dtype_int = smith.valueWithHash(u5, 0);
+            const all_dtypes = comptime std.enums.values(DType);
+            const dtype = all_dtypes[@as(usize, dtype_int) % all_dtypes.len];
+            _ = @tagName(dtype);
+
+            // -- pub fn TensorInfo.numElements --
+            var dummy_data: [4]u8 = .{ 0, 0, 0, 0 };
+            const n_dims = smith.valueWithHash(u3, 1) % 5; // 0..4
+            const d0 = smith.valueWithHash(u16, 2);
+            const d1 = smith.valueWithHash(u16, 3);
+            const d2 = smith.valueWithHash(u8, 4);
+            const d3 = smith.valueWithHash(u8, 5);
+            const ti = TensorInfo{
+                .name = "fuzz",
+                .n_dims = @as(u32, n_dims),
+                .dims = .{ @as(u64, d0), @as(u64, d1), @as(u64, d2), @as(u64, d3) },
+                .dtype = dtype,
+                .data_ptr = @as([*]const u8, @ptrCast(&dummy_data)),
+            };
+            const num_el = ti.numElements();
+
+            // -- pub fn TensorInfo.dataByteLen --
+            const byte_len = ti.dataByteLen();
+            // dataByteLen returns 0 when numElements is 0
+            if (num_el == 0) {
+                std.debug.assert(byte_len == 0);
+            }
+
+            // -- Mock VTable for all Format methods --
+            const MockVTable = struct {
+                fn getTensor(_: *anyopaque, _: []const u8) ?TensorInfo {
+                    return null;
+                }
+                fn getMetaStr(_: *anyopaque, _: []const u8) ?[]const u8 {
+                    return null;
+                }
+                fn getMetaU32(_: *anyopaque, _: []const u8) ?u32 {
+                    return null;
+                }
+                fn getMetaF32(_: *anyopaque, _: []const u8) ?f32 {
+                    return null;
+                }
+                fn getMetaU32Array(_: *anyopaque, _: []const u8) ?[]const u32 {
+                    return null;
+                }
+                fn getVocab(_: *anyopaque) ?[]const []const u8 {
+                    return null;
+                }
+                fn getMerges(_: *anyopaque) ?[]const []const u8 {
+                    return null;
+                }
+            };
+            const vtable = Format.VTable{
+                .get_tensor = MockVTable.getTensor,
+                .get_meta_str = MockVTable.getMetaStr,
+                .get_meta_u32 = MockVTable.getMetaU32,
+                .get_meta_f32 = MockVTable.getMetaF32,
+                .get_meta_u32_array = MockVTable.getMetaU32Array,
+                .get_vocab = MockVTable.getVocab,
+                .get_merges = MockVTable.getMerges,
+            };
+            var mock_state: u8 = 0;
+            const fmt = Format{
+                .ptr = @ptrCast(&mock_state),
+                .vtable = &vtable,
+                .is_safetensors = smith.valueWithHash(bool, 6),
+            };
+
+            // -- pub fn Format.getTensor --
+            std.debug.assert(fmt.getTensor("fuzz_tensor") == null);
+
+            // -- pub fn Format.getMetaStr --
+            std.debug.assert(fmt.getMetaStr("fuzz_key") == null);
+
+            // -- pub fn Format.getMetaU32 --
+            std.debug.assert(fmt.getMetaU32("fuzz_key") == null);
+
+            // -- pub fn Format.getMetaF32 --
+            std.debug.assert(fmt.getMetaF32("fuzz_key") == null);
+
+            // -- pub fn Format.getMetaU32Array --
+            std.debug.assert(fmt.getMetaU32Array("fuzz_key") == null);
+
+            // -- pub fn Format.getMetaArrayFirstU32 --
+            std.debug.assert(fmt.getMetaArrayFirstU32("fuzz_key") == null);
+
+            // -- pub fn Format.getVocab --
+            std.debug.assert(fmt.getVocab() == null);
+
+            // -- pub fn Format.getMerges --
+            std.debug.assert(fmt.getMerges() == null);
+
+            // -- pub fn Format.getArchU32 --
+            const arch_byte = smith.valueWithHash(u8, 7);
+            var arch_buf: [3]u8 = .{ 'a', @truncate(arch_byte >> 4), @truncate(arch_byte & 0xf) };
+            const arch_slice: []const u8 = &arch_buf;
+            std.debug.assert(fmt.getArchU32(arch_slice, "block_count") == null);
+
+            // -- pub fn Format.getArchArrayFirstU32 --
+            std.debug.assert(fmt.getArchArrayFirstU32(arch_slice, "head_count") == null);
+
+            // -- pub fn Format.getArchF32 --
+            std.debug.assert(fmt.getArchF32(arch_slice, "rope_theta") == null);
+
+            // -- pub fn Format.layerTensor --
+            const layer_idx = smith.valueWithHash(u32, 8);
+            std.debug.assert(fmt.layerTensor(layer_idx, "attn_q.weight") == null);
+
+            // -- pub fn Format.prefetchLayer --
+            // With mock returning null tensors, this is a no-op but exercises the loop
+            fmt.prefetchLayer(smith.valueWithHash(u32, 9));
+
+            // -- pub fn Format.getQuantName --
+            const qname = fmt.getQuantName();
+            std.debug.assert(qname.len > 0);
+        }
+    }.f, .{});
+}

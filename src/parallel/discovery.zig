@@ -199,6 +199,38 @@ test "discovery — private function signatures exist" {
     }
 }
 
+test "fuzz: all discovery functions" {
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *std.testing.Smith) !void {
+            // ── DiscoveredPeer (pub struct) ──
+            const addr = [4]u8{
+                smith.valueWithHash(u8, 0),
+                smith.valueWithHash(u8, 1),
+                smith.valueWithHash(u8, 2),
+                smith.valueWithHash(u8, 3),
+            };
+            const rank_val = smith.valueWithHash(u32, 4);
+            const peer = DiscoveredPeer{ .addr = addr, .rank = rank_val };
+            try std.testing.expectEqual(addr, peer.addr);
+            try std.testing.expectEqual(rank_val, peer.rank);
+
+            // ── discoverPeer (pub fn) ──
+            const fuzz_rank = smith.valueWithHash(u32, 5);
+            const fuzz_world = smith.valueWithHash(u32, 6);
+            const fuzz_port = smith.valueWithHash(u16, 7);
+            const result = discoverPeer(fuzz_rank, fuzz_world, fuzz_port);
+            // world_size < 2 must always return null
+            if (fuzz_world < 2) {
+                try std.testing.expectEqual(@as(?[4]u8, null), result);
+            }
+            // If non-null, addr must be 4 bytes (type guarantees this)
+            if (result) |ip| {
+                try std.testing.expect(ip.len == 4);
+            }
+        }
+    }.f, .{});
+}
+
 fn discoverAsWorker(sock: c_int, rank: u32, port: u16) ?[4]u8 {
     _ = port;
     // Bind to beacon listen port

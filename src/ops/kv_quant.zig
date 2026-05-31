@@ -2109,3 +2109,112 @@ test "pack/unpack indices all-max values" {
     unpackIndices(4, &buf4, &out4);
     for (0..32) |i| try std.testing.expectEqual(@as(u8, 15), out4[i]);
 }
+
+test "fuzz: all kv_quant functions" {
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *std.testing.Smith) !void {
+            // ── Pub constants (comptime verification) ──
+            comptime {
+                std.debug.assert(turbo2_block_bytes == 10);
+                std.debug.assert(turbo3_block_bytes == 14);
+                std.debug.assert(turbo4_block_bytes == 18);
+            }
+
+            // ── KvQuantType: exercise all pub methods on a random variant ──
+            const type_idx = smith.valueWithHash(u8, 0) % 18;
+            const all_types = [18]KvQuantType{
+                .f32, .f16, .q8_0, .int8, .fp8_e4m3, .nvfp4,
+                .turbo2, .turbo3, .turbo4,
+                .planar2, .planar3, .planar4,
+                .iso2,    .iso3,    .iso4,
+                .rotor2,  .rotor3,  .rotor4,
+            };
+            const kv_type = all_types[type_idx];
+
+            // name — must return non-empty string
+            const nm = kv_type.name();
+            std.debug.assert(nm.len > 0);
+
+            // bitsPerElement — must be positive
+            const bpe = kv_type.bitsPerElement();
+            std.debug.assert(bpe > 0);
+
+            // Boolean classifiers — at least one group must match for rotation quants
+            const it = kv_type.isTurbo();
+            const ip = kv_type.isPlanar();
+            const ii = kv_type.isIso();
+            const ir = kv_type.isRotor();
+            const irq = kv_type.isRotationQuant();
+            std.debug.assert(irq == (it or ip or ii or ir));
+
+            // turboBits — 0 for non-rotation, 2/3/4 for rotation
+            const tb = kv_type.turboBits();
+            if (irq) {
+                std.debug.assert(tb >= 2 and tb <= 4);
+            } else {
+                std.debug.assert(tb == 0);
+            }
+
+            // turboBlockByteSize — only nonzero for turbo{2,3,4}
+            _ = kv_type.turboBlockByteSize();
+
+            // fromString — roundtrip: name -> fromString should find *something*
+            // (name() returns short names like "F32", "TQ2", etc.)
+            _ = KvQuantType.fromString(nm);
+
+            // fromString with random bytes — must not crash
+            var rnd_str: [4]u8 = undefined;
+            for (&rnd_str) |*c| c.* = smith.valueWithHash(u8, 1);
+            _ = KvQuantType.fromString(&rnd_str);
+
+            // ── kvSliceBytes / kvByteOffset ──
+            // Use a small n to keep buffers manageable (32 = one full block for all formats)
+            const n: usize = 32;
+            const slice_bytes = kvSliceBytes(kv_type, n);
+            std.debug.assert(slice_bytes > 0);
+
+            const offset0 = kvByteOffset(kv_type, 0);
+            std.debug.assert(offset0 == 0);
+            const offset_last = kvByteOffset(kv_type, n - 1);
+            std.debug.assert(offset_last < slice_bytes);
+
+            // ── kvStore / kvDot / kvMulAccum roundtrip ──
+            // Generate 32 random f32 source values, clamped to finite range
+            var src: [32]f32 = undefined;
+            for (&src, 0..) |*v, si| {
+                const raw_bits = smith.valueWithHash(u32, @as(u32, @intCast(si)) +% 100);
+                var fval: f32 = @bitCast(raw_bits);
+                // Clamp to reasonable range to avoid inf/nan issues in quantization
+                if (!std.math.isFinite(fval)) fval = 0;
+                fval = std.math.clamp(fval, -100.0, 100.0);
+                v.* = fval;
+            }
+
+            // Allocate enough buffer for any kv type at n=32
+            // Max is int8: 36 bytes per 32 elems. Turbo4: 18. Use 64 for safety.
+            var kv_buf: [64]u8 align(4) = @splat(0);
+            kvStore(&kv_buf, &src, n, kv_type);
+
+            // kvDot — result must be finite
+            var q_vec: [32]f32 = undefined;
+            for (&q_vec, 0..) |*v, qi| {
+                const raw_bits = smith.valueWithHash(u32, @as(u32, @intCast(qi)) +% 200);
+                var fval: f32 = @bitCast(raw_bits);
+                if (!std.math.isFinite(fval)) fval = 0;
+                fval = std.math.clamp(fval, -10.0, 10.0);
+                v.* = fval;
+            }
+            const dot = kvDot(&q_vec, &kv_buf, n, kv_type);
+            std.debug.assert(std.math.isFinite(dot));
+
+            // kvMulAccum — result elements must be finite
+            var acc = [_]f32{0} ** 32;
+            const weight_bits = smith.valueWithHash(u32, 300);
+            var weight: f32 = @bitCast(weight_bits);
+            if (!std.math.isFinite(weight)) weight = 1.0;
+            weight = std.math.clamp(weight, -10.0, 10.0);
+            kvMulAccum(&acc, weight, &kv_buf, n, kv_type);
+            for (acc) |a| std.debug.assert(std.math.isFinite(a));
+        }
+    }.f, .{});
+}

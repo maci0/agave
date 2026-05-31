@@ -567,3 +567,61 @@ pub fn printDeviceTable(list: *const DeviceList) void {
     pos += 1;
     _ = std.posix.system.write(1, buf[0..pos].ptr, pos);
 }
+
+test "fuzz: all discovery functions" {
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *std.testing.Smith) !void {
+            // -- DeviceInfo.displayName --
+            var dev = DeviceInfo{ .backend = .cpu, .device_id = smith.valueWithHash(u32, 0) };
+            const name_len_raw = smith.valueWithHash(u8, 1);
+            dev.name_len = @min(name_len_raw, name_buf_size);
+            // Fill name buffer with random bytes
+            for (0..dev.name_len) |i| {
+                dev.name[i] = smith.valueWithHash(u8, @intCast(i + 100));
+            }
+            const dn = dev.displayName();
+            try std.testing.expectEqual(dev.name_len, dn.len);
+
+            // -- DeviceInfo.ccString --
+            const cc_len_raw = smith.valueWithHash(u8, 2);
+            dev.cc_len = @min(cc_len_raw, cc_buf_size);
+            for (0..dev.cc_len) |i| {
+                dev.compute_cap[i] = smith.valueWithHash(u8, @intCast(i + 200));
+            }
+            const cs = dev.ccString();
+            try std.testing.expectEqual(dev.cc_len, cs.len);
+
+            // -- DeviceList.slice --
+            var list = DeviceList{};
+            const n_devs = smith.valueWithHash(u8, 3) % (max_devices + 2); // may exceed max
+            for (0..n_devs) |j| {
+                const backend_idx = smith.valueWithHash(u8, @intCast(j + 300)) % 5;
+                const backend: BackendKind = @enumFromInt(backend_idx);
+                list.add(.{ .backend = backend, .device_id = smith.valueWithHash(u32, @intCast(j + 400)) });
+            }
+            const sl = list.slice();
+            try std.testing.expectEqual(list.count, sl.len);
+            try std.testing.expect(list.count <= max_devices);
+
+            // -- enumerate --
+            const enum_list = enumerate();
+            try std.testing.expect(enum_list.count >= 1);
+            // CPU always present
+            var found_cpu = false;
+            for (enum_list.slice()) |d| {
+                if (d.backend == .cpu) found_cpu = true;
+            }
+            try std.testing.expect(found_cpu);
+
+            // -- printDeviceTable (comptime signature check + call with empty list) --
+            // Cannot capture stdout in fuzz, so verify callable with minimal list
+            comptime {
+                _ = &printDeviceTable;
+            }
+            var empty_list = DeviceList{};
+            empty_list.add(.{ .backend = .cpu, .device_id = 0 });
+            // printDeviceTable writes to fd 1; safe to call, output is harmless
+            printDeviceTable(&empty_list);
+        }
+    }.f, .{});
+}

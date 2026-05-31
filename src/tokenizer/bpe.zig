@@ -792,3 +792,124 @@ test "BPE decode reverses encode" {
     defer allocator.free(decoded);
     try std.testing.expectEqualStrings("abc", decoded);
 }
+
+test "fuzz: all bpe functions" {
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *std.testing.Smith) !void {
+            const allocator = std.testing.allocator;
+
+            // --- init / deinit ---
+            var tok = BpeTokenizer.init(allocator);
+            defer tok.deinit();
+
+            // --- loadFromGGUFSpm ---
+            // Build a small vocab with SPM-prefixed and special tokens
+            const vocab = [_][]const u8{
+                "<unk>",
+                "<s>",
+                "</s>",
+                "\xe2\x96\x81hello",
+                "\xe2\x96\x81world",
+                "\xe2\x96\x81",
+                "h",
+                "e",
+                "l",
+                "o",
+                "<0x0A>",
+            };
+            var vocab_slice: [vocab.len][]const u8 = undefined;
+            for (&vocab, 0..) |v, i| vocab_slice[i] = v;
+            const eos_id = smith.valueWithHash(u32, 0) % @as(u32, vocab.len);
+            tok.loadFromGGUFSpm(&vocab_slice, eos_id) catch return;
+
+            // --- vocab_size ---
+            const vs = tok.vocab_size;
+            try std.testing.expect(vs == vocab.len);
+
+            // --- tokenizer (vtable interface) ---
+            var iface = tok.tokenizer();
+            try std.testing.expect(iface.vocabSize() == vs);
+
+            // --- encodeSpm with random text ---
+            var text_buf: [32]u8 = undefined;
+            const text_len = smith.valueWithHash(u5, 1) | 1; // 1..31
+            for (text_buf[0..text_len]) |*b| {
+                b.* = smith.valueWithHash(u8, 2);
+            }
+            const spm_ids = tok.encodeSpm(text_buf[0..text_len]) catch return;
+            defer allocator.free(spm_ids);
+
+            // --- decodeSpm with the encoded ids ---
+            const spm_decoded = tok.decodeSpm(spm_ids) catch return;
+            defer allocator.free(spm_decoded);
+
+            // --- decodeSpm with random token ids (including out-of-range) ---
+            var rand_ids: [4]u32 = undefined;
+            for (&rand_ids, 0..) |*r, i| {
+                r.* = smith.valueWithHash(u32, @intCast(10 + i));
+            }
+            const spm_dec2 = tok.decodeSpm(&rand_ids) catch return;
+            defer allocator.free(spm_dec2);
+
+            // --- encodeSpmNoDummy ---
+            const nodummy_ids = tok.encodeSpmNoDummy(text_buf[0..text_len]) catch return;
+            defer allocator.free(nodummy_ids);
+
+            // --- encodeSpm / encodeSpmNoDummy with empty string ---
+            const empty_spm = tok.encodeSpm("") catch return;
+            defer allocator.free(empty_spm);
+            try std.testing.expect(empty_spm.len == 0);
+
+            const empty_nodummy = tok.encodeSpmNoDummy("") catch return;
+            defer allocator.free(empty_nodummy);
+            try std.testing.expect(empty_nodummy.len == 0);
+
+            // --- Now test BPE mode: create a second tokenizer with merges ---
+            var tok2 = BpeTokenizer.init(allocator);
+            defer tok2.deinit();
+
+            const bpe_vocab = [_][]const u8{ "a", "b", "c", "ab", "bc", "abc" };
+            var bpe_vocab_slice: [bpe_vocab.len][]const u8 = undefined;
+            for (&bpe_vocab, 0..) |v, i| bpe_vocab_slice[i] = v;
+
+            const bpe_merges = [_][]const u8{ "a b", "ab c" };
+            var bpe_merges_slice: [bpe_merges.len][]const u8 = undefined;
+            for (&bpe_merges, 0..) |m, i| bpe_merges_slice[i] = m;
+
+            // --- loadFromGGUF ---
+            const bpe_eos = smith.valueWithHash(u32, 3) % @as(u32, bpe_vocab.len);
+            tok2.loadFromGGUF(&bpe_vocab_slice, &bpe_merges_slice, bpe_eos) catch return;
+
+            // --- encode (BPE mode) with random printable ASCII ---
+            var bpe_text: [8]u8 = undefined;
+            const bpe_len = (smith.valueWithHash(u3, 4) | 1); // 1..7
+            for (bpe_text[0..bpe_len]) |*b| {
+                // Printable ASCII only (maps 1:1 in GPT-2 byte encoder)
+                b.* = 'a' + (smith.valueWithHash(u8, 5) % 3); // a, b, or c
+            }
+            const bpe_ids = tok2.encode(bpe_text[0..bpe_len]) catch return;
+            defer allocator.free(bpe_ids);
+
+            // --- decode (BPE mode) ---
+            const bpe_decoded = tok2.decode(bpe_ids) catch return;
+            defer allocator.free(bpe_decoded);
+
+            // --- decode with random ids ---
+            var rand_bpe_ids: [3]u32 = undefined;
+            for (&rand_bpe_ids, 0..) |*r, i| {
+                r.* = smith.valueWithHash(u32, @intCast(20 + i));
+            }
+            const bpe_dec2 = tok2.decode(&rand_bpe_ids) catch return;
+            defer allocator.free(bpe_dec2);
+
+            // --- encode / decode empty ---
+            const empty_enc = tok2.encode("") catch return;
+            defer allocator.free(empty_enc);
+            try std.testing.expect(empty_enc.len == 0);
+
+            const empty_dec = tok2.decode(&.{}) catch return;
+            defer allocator.free(empty_dec);
+            try std.testing.expect(empty_dec.len == 0);
+        }
+    }.f, .{});
+}

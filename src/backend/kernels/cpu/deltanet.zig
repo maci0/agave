@@ -290,6 +290,104 @@ test "deltaNetHead decay shrinks state" {
     try testing.expect(@abs(ssm_state[0]) < 5.0 * decay + 0.01);
 }
 
+test "fuzz: all deltanet functions" {
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *std.testing.Smith) !void {
+            // Fixed dimensions (must be multiples of 8 for V8 SIMD).
+            const num_heads: u32 = 1;
+            const head_k: u32 = 8;
+            const head_v: u32 = 8;
+            const d_conv: u32 = 4;
+            const n_qk = num_heads * head_k;
+            const conv_ch = 2 * n_qk + num_heads * head_v;
+
+            const p = DeltaNetParams{
+                .conv_ch = conv_ch,
+                .d_conv = d_conv,
+                .d_inner = num_heads * head_v,
+                .num_k_heads = num_heads,
+                .head_k_dim = head_k,
+                .num_v_heads = num_heads,
+                .head_v_dim = head_v,
+                .q_scale = 1.0,
+                .rms_eps = 1e-6,
+                .kqv_order = smith.valueWithHash(bool, 0),
+            };
+
+            // Random buffers clamped to [-1,1] to avoid NaN/Inf from exp().
+            var conv_in: [conv_ch]f32 = undefined;
+            var conv_out_buf: [conv_ch]f32 = undefined;
+            var z_buf: [num_heads * head_v]f32 = undefined;
+            var alpha_buf: [num_heads]f32 = undefined;
+            var beta_buf: [num_heads]f32 = undefined;
+            var output: [num_heads * head_v]f32 = undefined;
+            var conv_state: [conv_ch * (d_conv - 1)]f32 = undefined;
+            var ssm_state_arr: [num_heads * head_v * head_k]f32 = undefined;
+            var ssm_a: [num_heads]f32 = undefined;
+            var dt_bias: [num_heads]f32 = undefined;
+            var conv_w: [conv_ch * d_conv]f32 = undefined;
+            var ssm_norm_w: [head_v]f32 = undefined;
+
+            inline for (.{
+                &conv_in,     &conv_out_buf, &z_buf,    &alpha_buf,
+                &beta_buf,    &output,       &conv_state,
+                &ssm_state_arr, &ssm_a,      &dt_bias,  &conv_w,
+                &ssm_norm_w,
+            }, 0..) |buf, seed| {
+                for (buf, 0..) |*slot, j| {
+                    const hash: u32 = @intCast(seed *% 31 +% j);
+                    const raw = smith.valueWithHash(i8, hash);
+                    slot.* = @as(f32, @floatFromInt(raw)) / 128.0; // [-1,1]
+                }
+            }
+
+            const ssm_state: []f32 = &ssm_state_arr;
+
+            // --- Exercise deltaNet (full pipeline) ---
+            deltaNet(
+                &conv_in, &conv_out_buf, &z_buf, &alpha_buf, &beta_buf,
+                &output, &conv_state, ssm_state, &ssm_a, &dt_bias,
+                &conv_w, &ssm_norm_w, p,
+            );
+            for (0..num_heads * head_v) |i| {
+                if (std.math.isNan(output[i])) return;
+            }
+
+            // --- Exercise deltaNetHead (single head) ---
+            var gate_vals: [max_deltanet_v_heads]f32 = undefined;
+            var beta_vals: [max_deltanet_v_heads]f32 = undefined;
+            const g_raw = smith.valueWithHash(i8, 99);
+            gate_vals[0] = @as(f32, @floatFromInt(g_raw)) / 128.0;
+            const b_raw = smith.valueWithHash(i8, 100);
+            beta_vals[0] = @as(f32, @floatFromInt(b_raw)) / 128.0;
+
+            var q2: [head_k]f32 = undefined;
+            var k2: [head_k]f32 = undefined;
+            var v2: [head_v]f32 = undefined;
+            var out2: [head_v]f32 = undefined;
+            var state2: [head_v * head_k]f32 = undefined;
+            var z2: [head_v]f32 = undefined;
+            var nw2: [head_v]f32 = undefined;
+
+            inline for (.{ &q2, &k2, &v2, &out2, &state2, &z2, &nw2 }, 0..) |buf, seed| {
+                for (buf, 0..) |*slot, j| {
+                    const hash2: u32 = @intCast(200 +% seed *% 17 +% j);
+                    const raw = smith.valueWithHash(i8, hash2);
+                    slot.* = @as(f32, @floatFromInt(raw)) / 128.0;
+                }
+            }
+
+            deltaNetHead(
+                0, &gate_vals, &beta_vals, &q2, &k2, &v2,
+                &out2, &state2, &z2, &nw2, p,
+            );
+            for (0..head_v) |i| {
+                if (std.math.isNan(out2[i])) return;
+            }
+        }
+    }.f, .{});
+}
+
 test "deltaNet full pipeline runs without crash" {
     // Smoke test: run the full deltaNet function with minimal dimensions.
     const num_heads: u32 = 1;

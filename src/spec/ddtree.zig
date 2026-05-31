@@ -451,3 +451,87 @@ test "findChild and isAncestor" {
     try std.testing.expect(!CompiledTree.isAncestor(tree.ancestor_masks[2], 0));
     try std.testing.expect(!CompiledTree.isAncestor(tree.ancestor_masks[2], 1));
 }
+
+test "fuzz: all ddtree functions" {
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *std.testing.Smith) !void {
+            // -- isAncestor: pub fn on CompiledTree --
+            var mask: [8]u64 = undefined;
+            for (0..8) |i| mask[i] = smith.valueWithHash(u64, @intCast(i));
+            const j = smith.valueWithHash(usize, 100) % max_budget;
+            _ = CompiledTree.isAncestor(mask, j);
+
+            // -- DDTreeBuilder.presort + buildTree + compile --
+            const n_depths_raw = smith.valueWithHash(u8, 200);
+            const n_depths: usize = @min(n_depths_raw % 5, max_depth); // 0..4 depths
+            const vocab_size: usize = 4;
+            var vocab_bufs: [4][4]f32 = undefined;
+            for (0..n_depths) |d| {
+                for (0..vocab_size) |v| {
+                    const bits = smith.valueWithHash(u32, @intCast(d * 100 + v + 300));
+                    // Map to finite float: clear exponent=0xFF (inf/nan)
+                    const clean_bits = bits & 0x7F7FFFFF;
+                    var val = @as(f32, @bitCast(clean_bits));
+                    if (!std.math.isFinite(val)) val = 0.0;
+                    // Negate so values are log-probs (negative)
+                    vocab_bufs[d][v] = -@abs(val);
+                }
+            }
+            var slices: [4][]const f32 = undefined;
+            for (0..n_depths) |d| slices[d] = &vocab_bufs[d];
+            const logits_slice: []const []const f32 = slices[0..n_depths];
+
+            var builder = DDTreeBuilder{};
+            const budget_raw = smith.valueWithHash(u8, 400);
+            builder.budget = @as(u32, (budget_raw % 16)) + 1; // 1..16
+
+            // pub fn presort
+            builder.presort(logits_slice);
+            std.debug.assert(builder.n_depths == @as(u32, @intCast(n_depths)));
+
+            // pub fn buildTree
+            builder.buildTree();
+            std.debug.assert(builder.n_nodes <= builder.budget);
+
+            // pub fn compile
+            const base_pos = smith.valueWithHash(u32, 500) % 4096;
+            const tree = builder.compile(base_pos);
+            std.debug.assert(tree.n_nodes == builder.n_nodes);
+            std.debug.assert(tree.base_pos == base_pos);
+
+            // Verify position_ids are base_pos + depth for each node
+            for (0..tree.n_nodes) |i| {
+                std.debug.assert(tree.position_ids[i] == base_pos + builder.nodes[i].depth);
+            }
+
+            // -- findChild: search for each node's token under its parent --
+            for (0..tree.n_nodes) |i| {
+                const node = builder.nodes[i];
+                const found = tree.findChild(node.parent, node.token_id);
+                // Should find this node (or a sibling with same token)
+                std.debug.assert(found != null);
+            }
+            // findChild with non-existent token should return null
+            _ = tree.findChild(-1, 0xDEADBEEF);
+
+            // -- isAncestor on compiled tree: self is always ancestor --
+            for (0..tree.n_nodes) |i| {
+                std.debug.assert(CompiledTree.isAncestor(tree.ancestor_masks[i], i));
+            }
+
+            // -- Verify pub consts are accessible --
+            std.debug.assert(max_budget == 512);
+            std.debug.assert(max_depth == 32);
+
+            // -- Verify TreeNode struct fields --
+            const tn = TreeNode{
+                .token_id = smith.valueWithHash(u32, 600),
+                .parent = @bitCast(smith.valueWithHash(u32, 601)),
+                .depth = smith.valueWithHash(u16, 602),
+                .rank = smith.valueWithHash(u16, 603),
+                .cum_log_prob = -1.0,
+            };
+            _ = tn;
+        }
+    }.f, .{});
+}

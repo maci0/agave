@@ -191,3 +191,41 @@ test "TQ1_0 multi-row GEMV" {
     try testing.expectApproxEqAbs(@as(f32, 256.0), y[0], 0.01);
     try testing.expectApproxEqAbs(@as(f32, 0.0), y[1], 0.01);
 }
+
+test "fuzz: all gemv_tq1_0 functions" {
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *std.testing.Smith) !void {
+            // gemvTQ1_0: y[row] = dot(dequant(w), x) for each row
+            // Use 1 row, 1 block (256 elements, 54 bytes weight data)
+            const n_rows = 1;
+
+            var x: [block_elems]f32 = undefined;
+            for (&x) |*v| {
+                v.* = @bitCast(smith.valueWithHash(u32, 0));
+                if (!std.math.isFinite(v.*)) v.* = 0.0;
+            }
+
+            // Build a valid TQ1_0 block: 2-byte f16 scale + 48 bytes (5-packed) + 4 bytes (4-packed)
+            var w_buf: [block_bytes]u8 align(2) = undefined;
+            const scale_bits = smith.valueWithHash(u16, 1);
+            std.mem.writeInt(u16, w_buf[0..2], scale_bits, .little);
+            // 5-packed trit bytes: clamp to [0,242] so they index into trit5_table
+            for (w_buf[scale_bytes .. scale_bytes + packed_bytes_5]) |*b| {
+                b.* = smith.valueWithHash(u8, 2) % 243;
+            }
+            // 4-packed trit bytes: clamp to [0,80] so they index into trit4_table
+            for (w_buf[scale_bytes + packed_bytes_5 .. scale_bytes + packed_bytes_5 + packed_bytes_4]) |*b| {
+                b.* = smith.valueWithHash(u8, 3) % 81;
+            }
+
+            var y: [n_rows]f32 = .{0.0};
+            gemvTQ1_0(&x, &w_buf, &y, n_rows, block_elems);
+
+            // Scale may be NaN/Inf f16 -- only check finite when scale is finite
+            const scale_f32: f32 = @floatCast(@as(f16, @bitCast(scale_bits)));
+            if (std.math.isFinite(scale_f32)) {
+                if (!std.math.isFinite(y[0])) return error.TestUnexpectedResult;
+            }
+        }
+    }.f, .{});
+}

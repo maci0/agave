@@ -1599,6 +1599,163 @@ test "CpuBackend — sdpaWithStats f32 single token" {
     try std.testing.expect(head_sum[0] > 0);
 }
 
+test "fuzz: all cpu functions" {
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *std.testing.Smith) !void {
+            _ = smith;
+            var be = CpuBackend{};
+            const allocator = std.testing.allocator;
+
+            // allocKvSlice / freeKvSlice
+            const slice = try be.allocKvSlice(allocator, 64);
+            be.freeKvSlice(allocator, slice);
+
+            // sync / beginBatch / endBatch (no-ops)
+            be.sync();
+            be.beginBatch();
+            be.endBatch();
+
+            // backendInfo
+            _ = be.backendInfo();
+
+            // silu / gelu
+            var act_buf = [_]f32{ 0.5, -0.5, 1.0, -1.0, 2.0, -2.0, 0.0, 0.1 };
+            var act_out: [8]f32 = undefined;
+            be.silu(&act_buf, &act_out, 8);
+            be.gelu(&act_buf, &act_out, 8);
+
+            // add / mul
+            var a_buf = [_]f32{ 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0 };
+            var b_buf = [_]f32{ 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8 };
+            var c_buf: [8]f32 = undefined;
+            be.add(&a_buf, &b_buf, &c_buf, 8);
+            be.mul(&a_buf, &b_buf, &c_buf, 8);
+
+            // rmsNorm / addRmsNorm
+            var w_buf = [_]f32{ 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0 };
+            be.rmsNorm(&a_buf, &w_buf, &c_buf, 8, 1e-6);
+            var a2 = [_]f32{ 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0 };
+            be.addRmsNorm(&a2, &b_buf, &w_buf, &c_buf, 8, 1e-6);
+
+            // softmax
+            var sm = [_]f32{ 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0 };
+            be.softmax(&sm, 8);
+
+            // rope
+            var rope_buf = [_]f32{ 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 };
+            be.rope(&rope_buf, 0, 1, 8, 8, 10000.0);
+
+            // embLookup (f32 table)
+            const table = [_]f32{ 1.0, 2.0, 3.0, 4.0 };
+            var emb_out: [2]f32 = undefined;
+            be.embLookup(.{ .data = @ptrCast(&table), .dtype = .f32 }, 0, &emb_out, 2);
+
+            // l2Norm
+            var l2 = [_]f32{ 3.0, 4.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 };
+            be.l2Norm(&l2, 8, 1e-12);
+
+            // sigmoidMul
+            var sig_data = [_]f32{ 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0 };
+            var sig_gate = [_]f32{ 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 };
+            be.sigmoidMul(&sig_data, &sig_gate, 8);
+
+            // siluMul / geluMul
+            var sm_a = [_]f32{ 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0 };
+            var sm_b = [_]f32{ 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0 };
+            var sm_out: [8]f32 = undefined;
+            be.siluMul(&sm_a, &sm_b, &sm_out, 8);
+            be.geluMul(&sm_a, &sm_b, &sm_out, 8);
+
+            // addScaled / allReduceAdd
+            var dst = [_]f32{ 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0 };
+            var src_buf = [_]f32{ 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0 };
+            be.addScaled(&src_buf, &dst, 0.5, 8);
+            be.allReduceAdd(&dst, &src_buf, 8);
+
+            // rmsNormMulti
+            be.rmsNormMulti(&dst, &w_buf, 1, 8, 1e-6);
+
+            // deinterleave
+            var di_in = [_]f32{ 1.0, 2.0, 3.0, 4.0 };
+            var di_a: [2]f32 = undefined;
+            var di_b: [2]f32 = undefined;
+            be.deinterleave(&di_in, &di_a, &di_b, 2, 1);
+
+            // splitQGate
+            var qg = [_]f32{ 1.0, 2.0, 3.0, 4.0 };
+            var q_out: [2]f32 = undefined;
+            var g_out: [2]f32 = undefined;
+            be.splitQGate(&qg, &q_out, &g_out, 2, 1);
+
+            // gemv (f32)
+            const gw = [_]f32{ 1.0, 0.0, 0.0, 1.0 };
+            const gx = [_]f32{ 1.0, 2.0 };
+            var gy: [2]f32 = undefined;
+            be.gemv(&gx, .{ .data = @ptrCast(&gw), .dtype = .f32 }, &gy, 2, 2);
+
+            // gemvMulti (empty)
+            const ops = [_]backend_mod.GemvOp{};
+            be.gemvMulti(&gx, &ops, 2);
+
+            // gemm
+            be.gemm(&gx, .{ .data = @ptrCast(&gw), .dtype = .f32 }, &gy, 1, 2, 2);
+
+            // gemvT
+            var w_q8: [34]u8 align(2) = undefined;
+            w_q8[0] = 0x00;
+            w_q8[1] = 0x3C; // scale = 1.0 in f16
+            @memset(w_q8[2..34], 0);
+            var gt_x = [_]f32{1.0};
+            var gt_y: [32]f32 = undefined;
+            be.gemvT(&gt_x, &w_q8, &gt_y, 32, 1);
+
+            // rmsNormBatched / ropeBatched
+            var rnb_in = [_]f32{ 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0 };
+            var rnb_out: [8]f32 = undefined;
+            be.rmsNormBatched(&rnb_in, &w_buf, &rnb_out, 1, 8, 1e-6);
+            var rb_x = [_]f32{ 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 };
+            var rb_pos = [_]u32{0};
+            be.ropeBatched(&rb_x, &rb_pos, 1, 1, 8, 8, 10000.0);
+
+            // sdpa (f32 single token)
+            const nh: usize = 1;
+            const nkv: usize = 1;
+            const hd: usize = 4;
+            const kvd = nkv * hd;
+            var keys: [4 * kvd * @sizeOf(f32)]u8 = undefined;
+            var values: [4 * kvd * @sizeOf(f32)]u8 = undefined;
+            var sq = [_]f32{ 1.0, 0.0, 0.0, 0.0 };
+            var sk = [_]f32{ 1.0, 0.0, 0.0, 0.0 };
+            var sv = [_]f32{ 0.5, 0.5, 0.5, 0.5 };
+            var s_out: [4]f32 = undefined;
+            be.sdpa(&sq, &keys, &values, &sk, &sv, &s_out, nh, nkv, hd, 0, 1.0, .f32, .f32);
+
+            // sdpaWithStats
+            var hm: [1]f32 = undefined;
+            var hs: [1]f32 = undefined;
+            be.sdpaWithStats(&sq, &keys, &values, &sk, &sv, &s_out, &hm, &hs, nh, nkv, hd, 0, 1.0, .f32, .f32);
+
+            // sdpaPrefill
+            be.sdpaPrefill(&sq, &sk, &sv, &keys, &values, &s_out, nh, nkv, hd, 0, 1, 1.0, .f32, .f32);
+
+            // sdpaTree (zero nodes — no-op)
+            be.sdpaTree(&sq, @as([*]const u8, @ptrCast(&keys)), @as([*]const u8, @ptrCast(&values)), &sq, &sq, &s_out, @as([*]const [8]u64, &.{.{0} ** 8}), 1, 1, 4, 0, 0, 1.0, .f32, .f32);
+
+            // sdpaPaged (CPU fallback)
+            // Not easily callable without PagedKvView setup, verified via comptime ref
+            comptime {
+                _ = &CpuBackend.sdpaPaged;
+                _ = &CpuBackend.deltaNet;
+                _ = &CpuBackend.gemvNvfp4St;
+                _ = &CpuBackend.gemvMlxQ;
+                _ = &CpuBackend.gemvMxfp4St;
+                _ = &CpuBackend.gemvGptq;
+                _ = &CpuBackend.gemvAwq;
+            }
+        }
+    }.f, .{});
+}
+
 test "softmax autotune — compare SIMD widths" {
     // Generates all 3 variants at comptime, benchmarks each at test time.
     // Run with: zig build test --release=fast

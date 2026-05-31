@@ -499,3 +499,53 @@ test "embLookup f32 smoke" {
     // All-zero f32 bytes dequantize to 0.0.
     for (&out) |v| try std.testing.expectApproxEqAbs(@as(f32, 0.0), v, 1e-6);
 }
+
+test "fuzz: all embedding functions" {
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *std.testing.Smith) !void {
+            // Data buffer large enough for any single block (Q6_K = 210 bytes max).
+            // Use align(4) so f32/f16 casts inside embLookup are safe.
+            var data align(4) = smith.valueWithHash([256]u8, 0);
+            var out: [quant_super_block_elems]f32 = undefined;
+            const tok: u32 = 0;
+
+            // --- embQ4_0: 1 block = 18 bytes, 32 elements ---
+            embQ4_0(&data, tok, &out, quant_block_elems);
+            for (out[0..quant_block_elems]) |v| if (!std.math.isFinite(v)) return;
+
+            // --- embQ5_0: 1 block = 22 bytes, 32 elements ---
+            embQ5_0(&data, tok, &out, quant_block_elems);
+            for (out[0..quant_block_elems]) |v| if (!std.math.isFinite(v)) return;
+
+            // --- embQ8_0: 1 block = 34 bytes, 32 elements ---
+            embQ8_0(&data, tok, &out, quant_block_elems);
+            for (out[0..quant_block_elems]) |v| if (!std.math.isFinite(v)) return;
+
+            // --- embQ6_K: 1 super-block = 210 bytes, 256 elements ---
+            embQ6_K(&data, tok, &out, quant_super_block_elems);
+            for (&out) |v| if (!std.math.isFinite(v)) return;
+
+            // --- embQ4_K: 1 super-block = 144 bytes, 256 elements ---
+            embQ4_K(&data, tok, &out, quant_super_block_elems);
+            for (&out) |v| if (!std.math.isFinite(v)) return;
+
+            // --- embQ5_K: 1 super-block = 176 bytes, 256 elements ---
+            embQ5_K(&data, tok, &out, quant_super_block_elems);
+            for (&out) |v| if (!std.math.isFinite(v)) return;
+
+            // --- embMXFP4: 1 block = 17 bytes, 32 elements ---
+            embMXFP4(&data, tok, &out, quant_block_elems);
+            for (out[0..quant_block_elems]) |v| if (!std.math.isFinite(v)) return;
+
+            // --- embLookup dispatcher: exercise f32 path (4 bytes/elem, tok=0) ---
+            // 256 bytes / 4 = 64 f32 elements fit safely.
+            const f32_dim = 64;
+            embLookup(&data, .f32, tok, &out, f32_dim);
+            for (out[0..f32_dim]) |v| if (!std.math.isFinite(v)) return;
+
+            // --- embLookup dispatcher: exercise q4_0 path ---
+            embLookup(&data, .q4_0, tok, &out, quant_block_elems);
+            for (out[0..quant_block_elems]) |v| if (!std.math.isFinite(v)) return;
+        }
+    }.f, .{});
+}

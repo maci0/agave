@@ -202,3 +202,24 @@ test "Prefetcher — default field values" {
         _ = @offsetOf(Prefetcher, "mutex");
     }
 }
+
+test "fuzz: all prefetch functions" {
+    // All pub functions (init, start, deinit, prefetchNext) require a live
+    // TieredKvCache + Io context with futex/thread support. Cannot safely
+    // call them with random inputs — use comptime verification instead.
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *std.testing.Smith) !void {
+            _ = smith;
+            comptime {
+                // Prefetcher.init — requires *TieredKvCache, returns Prefetcher
+                _ = &Prefetcher.init;
+                // Prefetcher.start — requires *Prefetcher + Io, spawns thread
+                _ = &Prefetcher.start;
+                // Prefetcher.deinit — requires *Prefetcher, joins thread
+                _ = &Prefetcher.deinit;
+                // Prefetcher.prefetchNext — requires *Prefetcher + block_ids + idx
+                _ = &Prefetcher.prefetchNext;
+            }
+        }
+    }.f, .{});
+}

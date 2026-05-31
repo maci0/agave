@@ -227,3 +227,39 @@ test "geluMul non-aligned size exercises scalar tail" {
     elementwise_kernel.mul(&ref_out, &b, &ref_out, 5);
     for (0..5) |i| try std.testing.expectApproxEqAbs(ref_out[i], fused_out[i], 1e-5);
 }
+
+test "fuzz: all activation functions" {
+    const Smith = std.testing.Smith;
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *Smith) !void {
+            const n: usize = smith.indexWithHash(33, 0);
+
+            var buf_a: [32]f32 = undefined;
+            var buf_b: [32]f32 = undefined;
+            for (0..n) |i| {
+                buf_a[i] = @as(f32, @floatFromInt(smith.valueWithHash(i8, @truncate(i))));
+                buf_b[i] = @as(f32, @floatFromInt(smith.valueWithHash(i8, @truncate(i +% 100))));
+            }
+
+            var out: [32]f32 = undefined;
+
+            // silu
+            silu(&buf_a, &out, n);
+            for (0..n) |i| try std.testing.expect(std.math.isFinite(out[i]));
+
+            // siluMul
+            siluMul(&buf_a, &buf_b, &out, n);
+            for (0..n) |i| try std.testing.expect(std.math.isFinite(out[i]));
+
+            // gelu
+            var gelu_in: [32]f32 = undefined;
+            @memcpy(gelu_in[0..n], buf_a[0..n]);
+            gelu(&gelu_in, &out, n);
+            for (0..n) |i| try std.testing.expect(std.math.isFinite(out[i]));
+
+            // geluMul
+            geluMul(&buf_a, &buf_b, &out, n);
+            for (0..n) |i| try std.testing.expect(std.math.isFinite(out[i]));
+        }
+    }.f, .{});
+}

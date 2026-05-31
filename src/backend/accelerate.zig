@@ -154,6 +154,29 @@ test "accelerate — sgemv via sgemm" {
     try std.testing.expectApproxEqAbs(@as(f32, 9.0), y[2], 1e-6);
 }
 
+test "fuzz: all accelerate functions" {
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *std.testing.Smith) !void {
+            _ = smith;
+            if (comptime !is_macos) return;
+            // sgemm
+            const a = [_]f32{ 1, 0, 0, 1 };
+            const x_in = [_]f32{ 1, 2 };
+            var y_out: [2]f32 = undefined;
+            sgemm(1, 2, 2, &x_in, &a, &y_out);
+
+            // sdot
+            _ = sdot(2, &x_in, &x_in);
+
+            // vdspDot
+            _ = vdspDot(&x_in, &x_in, 2);
+
+            // sgemv
+            sgemv(2, 2, &x_in, &a, &y_out);
+        }
+    }.f, .{});
+}
+
 test "accelerate — sgemv identity matrix preserves input" {
     if (comptime @import("builtin").os.tag != .macos) return error.SkipZigTest;
 

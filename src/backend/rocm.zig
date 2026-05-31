@@ -1770,3 +1770,60 @@ test "RocmBackend.ropeBatched" { comptime { _ = &RocmBackend.ropeBatched; } }
 test "RocmBackend.sdpaTree" { comptime { _ = &RocmBackend.sdpaTree; } }
 test "RocmBackend.sdpaPrefill" { comptime { _ = &RocmBackend.sdpaPrefill; } }
 test "RocmBackend.deltaNet" { comptime { _ = &RocmBackend.deltaNet; } }
+
+test "fuzz: all rocm functions" {
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *std.testing.Smith) !void {
+            _ = smith;
+            comptime {
+                _ = &RocmBackend.init;
+                _ = &RocmBackend.deinit;
+                _ = &RocmBackend.flushActivations;
+                _ = &RocmBackend.invalidateAct;
+                _ = &RocmBackend.invalidateWeight;
+                _ = &RocmBackend.gemv;
+                _ = &RocmBackend.gemvGptq;
+                _ = &RocmBackend.gemvAwq;
+                _ = &RocmBackend.rmsNorm;
+                _ = &RocmBackend.silu;
+                _ = &RocmBackend.gelu;
+                _ = &RocmBackend.add;
+                _ = &RocmBackend.addRmsNorm;
+                _ = &RocmBackend.gemvT;
+                _ = &RocmBackend.addScaled;
+                _ = &RocmBackend.mul;
+                _ = &RocmBackend.softmax;
+                _ = &RocmBackend.rope;
+                _ = &RocmBackend.embLookup;
+                _ = &RocmBackend.l2Norm;
+                _ = &RocmBackend.gemvNvfp4St;
+                _ = &RocmBackend.gemvMlxQ;
+                _ = &RocmBackend.gemvMxfp4St;
+                _ = &RocmBackend.sigmoidMul;
+                _ = &RocmBackend.siluMul;
+                _ = &RocmBackend.geluMul;
+                _ = &RocmBackend.rmsNormMulti;
+                _ = &RocmBackend.deinterleave;
+                _ = &RocmBackend.splitQGate;
+                _ = &RocmBackend.gemvMulti;
+                _ = &RocmBackend.dispatchMegakernelQwen35Q8;
+                _ = &RocmBackend.dispatchMegakernelGemmaQ4K;
+                _ = &RocmBackend.sync;
+                _ = &RocmBackend.beginBatch;
+                _ = &RocmBackend.endBatch;
+                _ = &RocmBackend.backendInfo;
+                _ = &RocmBackend.allocKvSlice;
+                _ = &RocmBackend.freeKvSlice;
+                _ = &RocmBackend.sdpa;
+                _ = &RocmBackend.sdpaWithStats;
+                _ = &RocmBackend.sdpaPaged;
+                _ = &RocmBackend.gemm;
+                _ = &RocmBackend.rmsNormBatched;
+                _ = &RocmBackend.ropeBatched;
+                _ = &RocmBackend.sdpaTree;
+                _ = &RocmBackend.sdpaPrefill;
+                _ = &RocmBackend.deltaNet;
+            }
+        }
+    }.f, .{});
+}

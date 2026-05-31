@@ -195,6 +195,21 @@ test "sdpaTree with f32 prefix" {
     try std.testing.expectApproxEqAbs(expected, output[0], 0.05);
 }
 
+test "fuzz: all sdpa_tree functions" {
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *std.testing.Smith) !void {
+            _ = smith;
+            // sdpaTree with 0 nodes is a safe no-op
+            const q = [_]f32{ 1, 0, 0, 0 };
+            var output: [4]f32 = undefined;
+            const empty: [0]u8 = .{};
+            var masks: [0][8]u64 = undefined;
+            _ = &masks;
+            sdpaTree(&q, &empty, &empty, &q, &q, &output, @as([*]const [8]u64, &.{.{0} ** 8}), 1, 1, 4, 0, 0, 1.0, .f32, .f32);
+        }
+    }.f, .{});
+}
+
 test "sdpaTree 2-node chain with GQA" {
     const nh: usize = 2;
     const nkv: usize = 1;

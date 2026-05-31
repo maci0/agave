@@ -1404,3 +1404,103 @@ test "GGUF fromBuffer minimal valid file" {
     try std.testing.expectEqual(@as(usize, 0), gguf.tensors.count());
     try std.testing.expectEqual(@as(u64, 0), gguf.totalParams());
 }
+
+test "fuzz: all gguf functions" {
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *std.testing.Smith) !void {
+            // --- GGMLType: blockSize, bytesPerBlock, tensorBytes ---
+            const ggml_raw = smith.valueWithHash(u32, 0);
+            const ggml_type: GGMLType = @enumFromInt(ggml_raw);
+            const bs = ggml_type.blockSize();
+            std.debug.assert(bs >= 1);
+            const bpb = ggml_type.bytesPerBlock();
+            std.debug.assert(bpb >= 1);
+            const n_elems = smith.valueWithHash(usize, 1) % 100_000;
+            const tb = ggml_type.tensorBytes(n_elems);
+            _ = tb;
+
+            // --- MetaValue: asU32, asF32, asStr, asBool ---
+            const mv_tag = smith.valueWithHash(u8, 2) % 7;
+            const mv: MetaValue = switch (mv_tag) {
+                0 => .{ .uint32 = smith.valueWithHash(u32, 3) },
+                1 => .{ .int32 = smith.valueWithHash(i32, 4) },
+                2 => .{ .float32 = @bitCast(smith.valueWithHash(u32, 5)) },
+                3 => .{ .bool_val = smith.valueWithHash(u8, 6) & 1 == 1 },
+                4 => .{ .uint8 = smith.valueWithHash(u8, 7) },
+                5 => .{ .uint16 = smith.valueWithHash(u16, 8) },
+                else => .{ .uint64 = smith.valueWithHash(u64, 9) },
+            };
+            _ = mv.asU32();
+            _ = mv.asF32();
+            _ = mv.asStr();
+            _ = mv.asBool();
+
+            // --- TensorInfo: numElements, dataBytes ---
+            const ti = TensorInfo{
+                .name = "fuzz",
+                .n_dims = smith.valueWithHash(u32, 10) % 5,
+                .dims = .{
+                    smith.valueWithHash(u64, 11) % 4096,
+                    smith.valueWithHash(u64, 12) % 4096,
+                    smith.valueWithHash(u64, 13) % 64,
+                    smith.valueWithHash(u64, 14) % 64,
+                },
+                .ggml_type = @enumFromInt(smith.valueWithHash(u32, 15) % 40),
+                .offset = 0,
+            };
+            const ne = ti.numElements();
+            _ = ne;
+            const db = ti.dataBytes();
+            _ = db;
+
+            // --- GGUFFile: fromBuffer (exercises parseHeader), deinit ---
+            // Build random buffer that might or might not be valid GGUF
+            var hdr_buf: [64]u8 = undefined;
+            for (&hdr_buf, 0..) |*b, i| b.* = smith.valueWithHash(u8, @intCast(16 + i));
+            // Also try a valid header sometimes
+            if (smith.valueWithHash(u8, 80) & 1 == 0) {
+                std.mem.writeInt(u32, hdr_buf[0..4], gguf_magic, .little);
+                std.mem.writeInt(u32, hdr_buf[4..8], 3, .little);
+                std.mem.writeInt(u64, hdr_buf[8..16], 0, .little);
+                std.mem.writeInt(u64, hdr_buf[16..24], 0, .little);
+            }
+            const allocator = std.testing.allocator;
+            if (GGUFFile.fromBuffer(allocator, &hdr_buf)) |*gguf_ptr| {
+                var gguf = gguf_ptr.*;
+                // format (returns a Format vtable wrapper)
+                _ = gguf.format();
+                // totalParams
+                _ = gguf.totalParams();
+                // getMetaStr, getMetaU32, getMetaF32, getMetaU32Array
+                _ = gguf.getMetaStr("fuzz_key");
+                _ = gguf.getMetaU32("fuzz_key");
+                _ = gguf.getMetaF32("fuzz_key");
+                _ = gguf.getMetaU32Array("fuzz_key");
+                // getTokenizerVocab, getTokenizerMerges
+                _ = gguf.getTokenizerVocab();
+                _ = gguf.getTokenizerMerges();
+                // tensorData — only safe if tensors exist
+                var it = gguf.tensors.valueIterator();
+                if (it.next()) |info| _ = gguf.tensorData(info);
+                gguf.deinit();
+            } else |_| {}
+
+            // --- GGUFFile.open — errors on non-existent path ---
+            _ = GGUFFile.open(allocator, "/__nonexistent_fuzz_path__") catch {};
+
+            // --- dequantQ4_0 ---
+            var q4_block align(2) = [_]u8{0} ** 18;
+            for (&q4_block, 0..) |*b, i| b.* = smith.valueWithHash(u8, @intCast(81 + i));
+            var q4_out: [32]f32 = undefined;
+            GGUFFile.dequantQ4_0(&q4_block, &q4_out);
+            for (q4_out) |v| if (!std.math.isFinite(v)) return; // NaN/Inf from f16 is ok, just bail
+
+            // --- dequantQ8_0 ---
+            var q8_block align(2) = [_]u8{0} ** 34;
+            for (&q8_block, 0..) |*b, i| b.* = smith.valueWithHash(u8, @intCast(99 + i));
+            var q8_out: [32]f32 = undefined;
+            GGUFFile.dequantQ8_0(&q8_block, &q8_out);
+            for (q8_out) |v| if (!std.math.isFinite(v)) return;
+        }
+    }.f, .{});
+}

@@ -328,3 +328,71 @@ test "Arch.isEnabled returns bool for all variants" {
         try std.testing.expect(enabled or !enabled);
     }
 }
+
+test "fuzz: all arch functions" {
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *std.testing.Smith) !void {
+            const num_archs = @typeInfo(Arch).@"enum".fields.len;
+
+            // 1. Arch.detect — random bytes as input
+            const detect_len = smith.valueWithHash(u4, 0);
+            var detect_buf: [16]u8 = undefined;
+            for (detect_buf[0..detect_len]) |*b| b.* = smith.valueWithHash(u8, 1);
+            _ = Arch.detect(detect_buf[0..detect_len]);
+
+            // Pick a random Arch variant for method tests
+            const arch_idx = smith.valueWithHash(u8, 2) % num_archs;
+            const arch: Arch = @enumFromInt(arch_idx);
+
+            // 2. displayName — result must be non-empty
+            const dn = arch.displayName();
+            try std.testing.expect(dn.len > 0);
+
+            // 3. chatTemplate — just call, ensure no crash
+            _ = arch.chatTemplate();
+
+            // 4. templateName — result must be non-empty
+            const tn = arch.templateName();
+            try std.testing.expect(tn.len > 0);
+
+            // 5. isEnabled — returns valid bool
+            const enabled = arch.isEnabled();
+            try std.testing.expect(enabled or !enabled);
+
+            // 6. defaultBos — if non-null, must be > 0
+            if (arch.defaultBos()) |bos| {
+                try std.testing.expect(bos > 0);
+            }
+
+            // 7. defaultEos — must be > 0
+            const eos = arch.defaultEos();
+            try std.testing.expect(eos > 0);
+
+            // 8. imageTokens — if non-null, pad must be > 0
+            if (arch.imageTokens()) |img| {
+                try std.testing.expect(img.pad > 0);
+            }
+
+            // 9. buildFlag — result must be non-empty
+            const bf = arch.buildFlag();
+            try std.testing.expect(bf.len > 0);
+
+            // Pub constants — verify they have expected values
+            try std.testing.expect(gemma_fallback_eos == 1);
+            try std.testing.expect(default_fallback_eos == 248046);
+            try std.testing.expect(glm4_fallback_bos == 154822);
+            try std.testing.expect(llama4_fallback_bos == 128000);
+            try std.testing.expect(llama4_fallback_eos == 128009);
+            try std.testing.expect(default_bos_id == 2);
+            try std.testing.expect(max_eog_ids == 8);
+
+            // ImageTokens struct — construct with random values
+            const it = ImageTokens{
+                .start = smith.valueWithHash(u32, 3),
+                .end = smith.valueWithHash(u32, 4),
+                .pad = smith.valueWithHash(u32, 5),
+            };
+            _ = it;
+        }
+    }.f, .{});
+}

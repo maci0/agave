@@ -1591,3 +1591,299 @@ test "resetKvCache compiles" {
 test "ensureKvBlock compiles" {
     comptime { _ = &ensureKvBlock; }
 }
+
+test "fuzz: all model functions" {
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *std.testing.Smith) !void {
+            // ── Pub constants/types: verify they exist at comptime ───
+            comptime {
+                _ = VisionEncoder;
+                _ = @as(usize, tensor_name_buf_size);
+                _ = @as(u32, default_mlx_bits);
+                _ = NormCacheEntry;
+                _ = ForwardError;
+                _ = Model;
+                _ = Model.VTable;
+                _ = MlxCompanion;
+                _ = ModelStorage;
+                _ = MockFormat;
+            }
+
+            // ── resetInferenceState ─────────────────────────────────
+            {
+                var kv_len: usize = smith.valueWithHash(usize, 0);
+                var cancelled = std.atomic.Value(bool).init(smith.valueWithHash(bool, 1));
+                resetInferenceState(&kv_len, &cancelled);
+                std.debug.assert(kv_len == 0);
+                std.debug.assert(!cancelled.load(.acquire));
+            }
+
+            // ── signalCancel ────────────────────────────────────────
+            {
+                var cancelled = std.atomic.Value(bool).init(smith.valueWithHash(bool, 2));
+                signalCancel(&cancelled);
+                std.debug.assert(cancelled.load(.acquire));
+            }
+
+            // ── expertWeightStride (f32, 3D) ────────────────────────
+            {
+                const d1 = @as(u64, smith.valueWithHash(u8, 3) | 1); // non-zero
+                const d2 = @as(u64, smith.valueWithHash(u8, 4) | 1);
+                const t = format_mod.TensorInfo{
+                    .name = "test",
+                    .n_dims = 3,
+                    .dims = .{ 2, d1, d2, 0 },
+                    .dtype = .f32,
+                    .data_ptr = undefined,
+                };
+                const stride = expertWeightStride(t);
+                std.debug.assert(stride > 0);
+            }
+
+            // ── expertWeightStride (nvfp4) ──────────────────────────
+            {
+                const d0 = @as(u64, smith.valueWithHash(u8, 5) | 1);
+                const d1 = @as(u64, smith.valueWithHash(u8, 6) | 1);
+                const t = format_mod.TensorInfo{
+                    .name = "test",
+                    .n_dims = 3,
+                    .dims = .{ d0, d1, 4, 0 },
+                    .dtype = .nvfp4,
+                    .data_ptr = undefined,
+                };
+                const stride = expertWeightStride(t);
+                std.debug.assert(stride == d0 * d1);
+            }
+
+            // ── expertStride (mlx_q) ────────────────────────────────
+            {
+                const d1 = @as(u64, smith.valueWithHash(u8, 7) | 1);
+                const d2 = @as(u64, smith.valueWithHash(u8, 8) | 1);
+                const t = format_mod.TensorInfo{
+                    .name = "test",
+                    .n_dims = 3,
+                    .dims = .{ 8, d1, d2, 0 },
+                    .dtype = .mlx_q,
+                    .data_ptr = undefined,
+                };
+                const stride = expertStride(t);
+                std.debug.assert(stride == d1 * d2 * @sizeOf(u32));
+            }
+
+            // ── expertStride (non-mlx delegates) ────────────────────
+            {
+                const t = format_mod.TensorInfo{
+                    .name = "test",
+                    .n_dims = 3,
+                    .dims = .{ 2, 4, 4, 0 },
+                    .dtype = .f32,
+                    .data_ptr = undefined,
+                };
+                std.debug.assert(expertStride(t) == expertWeightStride(t));
+            }
+
+            // ── findMlxCompanion (non-mlx returns null) ─────────────
+            {
+                var mock = MockFormat{ .tensors = &.{} };
+                const t = format_mod.TensorInfo{
+                    .name = "blk.0.attn_q.weight",
+                    .n_dims = 2,
+                    .dims = .{ 1024, 128, 0, 0 },
+                    .dtype = .f32,
+                    .data_ptr = undefined,
+                };
+                const k: usize = smith.valueWithHash(u16, 9);
+                std.debug.assert(findMlxCompanion(mock.format(), t, k) == null);
+            }
+
+            // ── findMlxCompanion (missing .weight suffix) ───────────
+            {
+                var mock = MockFormat{ .tensors = &.{} };
+                const t = format_mod.TensorInfo{
+                    .name = "blk.0.attn_q.bias",
+                    .n_dims = 2,
+                    .dims = .{ 1024, 128, 0, 0 },
+                    .dtype = .mlx_q,
+                    .data_ptr = undefined,
+                };
+                std.debug.assert(findMlxCompanion(mock.format(), t, 1024) == null);
+            }
+
+            // ── mlxGemv (non-mlx returns false) ─────────────────────
+            {
+                var cpu = @import("../backend/backend.zig").CpuBackend{};
+                var mock = MockFormat{ .tensors = &.{} };
+                const t = format_mod.TensorInfo{
+                    .name = "blk.0.attn_q.weight",
+                    .n_dims = 2,
+                    .dims = .{ 4, 4, 0, 0 },
+                    .dtype = .f32,
+                    .data_ptr = undefined,
+                };
+                var y: [4]f32 = undefined;
+                var x = [_]f32{ 1.0, 2.0, 3.0, 4.0 };
+                std.debug.assert(!mlxGemv(.{ .cpu = &cpu }, mock.format(), &x, t, &y, 4, 4));
+            }
+
+            // ── mlxGemv (mlx_q without .weight returns false) ───────
+            {
+                var cpu = @import("../backend/backend.zig").CpuBackend{};
+                var mock = MockFormat{ .tensors = &.{} };
+                const t = format_mod.TensorInfo{
+                    .name = "blk.0.attn_q.bias",
+                    .n_dims = 2,
+                    .dims = .{ 4, 4, 0, 0 },
+                    .dtype = .mlx_q,
+                    .data_ptr = undefined,
+                };
+                var y: [4]f32 = undefined;
+                var x = [_]f32{ 1.0, 2.0, 3.0, 4.0 };
+                std.debug.assert(!mlxGemv(.{ .cpu = &cpu }, mock.format(), &x, t, &y, 4, 4));
+            }
+
+            // ── dispatchGemv / ensureKvBlock / resetKvCache: comptime ref ──
+            comptime {
+                _ = &dispatchGemv;
+                _ = &ensureKvBlock;
+                _ = &resetKvCache;
+            }
+
+            // ── MockFormat.format() ─────────────────────────────────
+            {
+                var mock = MockFormat{ .tensors = &.{}, .meta_bits = smith.valueWithHash(u4, 10) };
+                const fmt = mock.format();
+                std.debug.assert(fmt.getTensor("nonexistent") == null);
+            }
+
+            // ── Model vtable dispatch via MockModel ─────────────────
+            {
+                const eos = smith.valueWithHash(u32, 11);
+                const vocab = smith.valueWithHash(u32, 12);
+                const layers = smith.valueWithHash(u32, 13);
+                const embd = smith.valueWithHash(u32, 14);
+                const head = smith.valueWithHash(u32, 15);
+                const head_kv = smith.valueWithHash(u32, 16);
+                const seq_len = smith.valueWithHash(usize, 17);
+
+                var mock = MockModel{
+                    .eos_token_id = eos,
+                    .vocab_size = vocab,
+                    .n_layers = layers,
+                    .n_embd = embd,
+                    .n_head = head,
+                    .n_head_kv = head_kv,
+                    .kv_seq_len = seq_len,
+                };
+                // Model.from
+                const m = Model.from(MockModel, &mock);
+
+                // eosId
+                std.debug.assert(m.eosId() == eos);
+                // vocabSize
+                std.debug.assert(m.vocabSize() == vocab);
+                // nLayers
+                std.debug.assert(m.nLayers() == layers);
+                // nEmbd
+                std.debug.assert(m.nEmbd() == embd);
+                // nHead
+                std.debug.assert(m.nHead() == head);
+                // nHeadKv
+                std.debug.assert(m.nHeadKv() == head_kv);
+                // kvSeqLen
+                std.debug.assert(m.kvSeqLen() == seq_len);
+
+                // setKvSeqLen
+                const new_len = smith.valueWithHash(usize, 18);
+                m.setKvSeqLen(new_len);
+                std.debug.assert(m.kvSeqLen() == new_len);
+
+                // getLogits (empty)
+                std.debug.assert(m.getLogits().len == 0);
+
+                // getBlockTable
+                std.debug.assert(m.getBlockTable().len == 0);
+
+                // forward
+                const fwd = m.forward(smith.valueWithHash(u32, 19)) catch return;
+                std.debug.assert(fwd == 7);
+
+                // prefill
+                const ids = [_]u32{ smith.valueWithHash(u32, 20) };
+                const pfx = m.prefill(&ids) catch return;
+                std.debug.assert(pfx == 7);
+
+                // forwardTree (MockModel has none -> MissingTensor)
+                _ = m.forwardTree(&.{}, &.{}, @ptrFromInt(0x1000), 0) catch {};
+
+                // treeLogits
+                std.debug.assert(m.treeLogits(smith.valueWithHash(u32, 21)) == 0);
+
+                // resetCache
+                m.resetCache();
+
+                // setThreadContext
+                m.setThreadContext();
+
+                // cancel
+                m.cancel();
+                std.debug.assert(mock.cancelled.load(.acquire));
+
+                // saveSsmState (null for mock)
+                std.debug.assert(m.saveSsmState(std.testing.allocator) == null);
+
+                // restoreSsmState (no-op for mock)
+                m.restoreSsmState(&[_]u8{ 1, 2, 3 });
+
+                // mtpForward (MissingTensor for mock)
+                _ = m.mtpForward(smith.valueWithHash(u32, 22), smith.valueWithHash(u32, 23)) catch {};
+
+                // getMtpDepth
+                std.debug.assert(m.getMtpDepth() == 0);
+
+                // getMtpLogits
+                std.debug.assert(m.getMtpLogits().len == 0);
+
+                // resetMtpCache
+                m.resetMtpCache();
+
+                // setLayerSkip
+                const skip_start = smith.valueWithHash(u32, 24);
+                const skip_end = smith.valueWithHash(u32, 25);
+                m.setLayerSkip(skip_start, skip_end);
+                std.debug.assert(mock.layer_skip_start == skip_start);
+                std.debug.assert(mock.layer_skip_end == skip_end);
+
+                // setImageEmbeddings
+                var embd_data = [_]f32{ 1.0, 2.0, 3.0, 4.0 };
+                const n_tokens = smith.valueWithHash(u32, 26);
+                const pad_id = smith.valueWithHash(u32, 27);
+                m.setImageEmbeddings(&embd_data, n_tokens, pad_id);
+                std.debug.assert(mock.n_visual_tokens == n_tokens);
+                std.debug.assert(mock.image_pad_token_id == pad_id);
+                std.debug.assert(mock.visual_token_idx == 0);
+                // Clear
+                m.setImageEmbeddings(null, 0, 0);
+                std.debug.assert(mock.image_embeddings == null);
+            }
+
+            // ── ModelStorage: comptime verify all pub methods ───────
+            comptime {
+                _ = &ModelStorage.initFromArch;
+                _ = &ModelStorage.model;
+                _ = &ModelStorage.deinit;
+                _ = &ModelStorage.setPool;
+                _ = &ModelStorage.setTpRowShardBuf;
+                _ = &ModelStorage.setTpTransport;
+                _ = &ModelStorage.sendKvCache;
+                _ = &ModelStorage.recvKvCache;
+                _ = &ModelStorage.setPpConfig;
+                _ = &ModelStorage.fixBlockAllocator;
+                _ = &ModelStorage.setChunkSize;
+                _ = &ModelStorage.setMegakernel;
+                _ = &ModelStorage.setTriCalibration;
+                _ = &ModelStorage.enableProfiling;
+                _ = &ModelStorage.reportPerf;
+            }
+        }
+    }.f, .{});
+}

@@ -1276,3 +1276,101 @@ test "Gemma3 struct field types compile" {
         _ = @TypeOf(Gemma3Model.treeLogits);
     }
 }
+
+test "fuzz: all gemma3 functions" {
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *std.testing.Smith) !void {
+            // -- Comptime verification of all pub functions that need full model init --
+            comptime {
+                _ = &Gemma3Model.init;
+                _ = &Gemma3Model.deinit;
+                _ = &Gemma3Model.model;
+                _ = &Gemma3Model.forward;
+                _ = &Gemma3Model.prefill;
+                _ = &Gemma3Model.forwardTree;
+                _ = &Gemma3Model.treeLogits;
+                _ = &Gemma3Model.resetCache;
+                _ = &Gemma3Model.cancel;
+                _ = &Gemma3Model.getBlockTable;
+            }
+
+            // -- applyRopeScaled: fuzz with random buffer --
+            {
+                var raw: [4]u8 = undefined;
+                smith.bytesWithHash(&raw, 0);
+                const n_heads: usize = (raw[0] % 4) + 1; // 1..4
+                const head_dim: usize = ((raw[1] % 4) + 1) * 2; // 2,4,6,8
+                const buf_len = n_heads * head_dim;
+                var buf: [4 * 8]f32 = undefined; // max 4 heads * 8 dim
+                smith.bytesWithHash(std.mem.asBytes(&buf), 1);
+                const pos: usize = raw[2] % 64;
+                const theta: f32 = @as(f32, @floatFromInt((raw[3] % 200) + 1)); // 1..200
+                Gemma3Model.applyRopeScaled(&buf, pos, n_heads, head_dim, head_dim, theta, 1.0);
+                for (0..buf_len) |i| try std.testing.expect(math.isFinite(buf[i]));
+            }
+
+            // -- applyRopeScaled with freq_scale: verify finite output --
+            {
+                var raw2: [4]u8 = undefined;
+                smith.bytesWithHash(&raw2, 2);
+                var buf2: [8]f32 = undefined;
+                smith.bytesWithHash(std.mem.asBytes(&buf2), 3);
+                const scale: f32 = @as(f32, @floatFromInt((raw2[0] % 10) + 1)) * 0.1;
+                Gemma3Model.applyRopeScaled(&buf2, raw2[1] % 32, 1, 8, 8, 10000.0, scale);
+                for (0..8) |i| try std.testing.expect(math.isFinite(buf2[i]));
+            }
+
+            // -- applySoftcap: fuzz with random logits --
+            {
+                var logits: [16]f32 = undefined;
+                smith.bytesWithHash(std.mem.asBytes(&logits), 4);
+                // Clamp to avoid NaN/Inf inputs
+                for (&logits) |*v| {
+                    if (!math.isFinite(v.*)) v.* = 0.0;
+                    v.* = @max(-1000.0, @min(1000.0, v.*));
+                }
+                var raw3: [1]u8 = undefined;
+                smith.bytesWithHash(&raw3, 5);
+                const cap: f32 = @as(f32, @floatFromInt((raw3[0] % 100) + 1)); // 1..100
+                var m: Gemma3Model = undefined;
+                m.final_logit_softcap = cap;
+                m.logits_buf = &logits;
+                m.applySoftcap();
+                for (logits) |v| {
+                    try std.testing.expect(math.isFinite(v));
+                    try std.testing.expect(v >= -cap and v <= cap);
+                }
+            }
+
+            // -- layerVType: fuzz boundary logic --
+            {
+                var raw4: [3]u8 = undefined;
+                smith.bytesWithHash(&raw4, 6);
+                var m2: Gemma3Model = undefined;
+                m2.n_layers = @as(u32, raw4[0] % 60) + 4; // 4..63
+                m2.kv_type_v = .turbo4;
+                m2.kv_boundary_v = raw4[1] % (m2.n_layers / 2); // 0..half
+                const li = raw4[2] % @as(u8, @intCast(m2.n_layers));
+                const result = m2.layerVType(li);
+                if (m2.kv_boundary_v == 0) {
+                    try std.testing.expectEqual(kv_quant.KvQuantType.turbo4, result);
+                } else {
+                    const b = m2.kv_boundary_v;
+                    if (li < b or li >= m2.n_layers - b) {
+                        try std.testing.expectEqual(kv_quant.KvQuantType.f16, result);
+                    } else {
+                        try std.testing.expectEqual(kv_quant.KvQuantType.turbo4, result);
+                    }
+                }
+            }
+
+            // -- cancel: verify atomic flag --
+            {
+                var m3: Gemma3Model = undefined;
+                m3.cancelled = std.atomic.Value(bool).init(false);
+                m3.cancel();
+                try std.testing.expect(m3.cancelled.load(.monotonic));
+            }
+        }
+    }.f, .{});
+}
