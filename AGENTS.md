@@ -30,6 +30,9 @@ agave model.gguf -t 0.8 --mirostat-mode 2 "prompt"              # Mirostat targe
 agave model.gguf -t 0.8 --dry-multiplier 1.5 "prompt"           # DRY n-gram repetition penalty
 agave target.gguf --draft-model draft.gguf --spec-mode ddtree \
   --spec-tokens 5 --tree-budget 64 "prompt"                      # Full DDTree with draft model
+agave model.gguf --draft-model draft.gguf --spec-mode pflash "prompt"                             # PFlash prefill + DDTree decode
+agave model.gguf --draft-model draft.gguf --pflash-scorer scorer.gguf --spec-mode pflash "prompt" # separate scorer model
+agave model.gguf --draft-model draft.gguf --spec-mode pflash --pflash-alpha 0.7 "prompt"          # aggressive block compression
 ```
 
 ```bash

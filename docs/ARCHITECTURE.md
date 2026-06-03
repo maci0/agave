@@ -303,10 +303,75 @@ Browser inference entry point for running Agave in WebAssembly environments. Pro
 | `spec_decode.zig` | Orchestrator: draft, verify, generation loop (standard + DDTree modes) |
 | `ddtree.zig` | DDTree tree construction: best-first heap, compile, acceptance walk |
 | `ngram.zig` | N-gram speculative decoding: history-based draft from token patterns (no draft model) |
+| `pflash.zig` | PFlash speculative prefill: block scoring, alpha-threshold selection, compressed prefill |
 
 | Backend Kernel | Description |
 |----------------|-------------|
 | `sdpa_tree.zig` | Tree-masked SDPA: ancestor bitmask attention for tree verification |
+
+### Block Sparse Attention (`src/ops/sparse_attn.zig`)
+
+BigBird-style block sparsity for long-context inference. Reduces attention complexity from O(n²) to O(n) by computing QK dot products only for attended block pairs.
+
+**Sparsity pattern:**
+
+```
+Blocks:   [0] [1] [2] [3] [4] [5] [6] [7]
+Query 0:  G   G   W               W         G = global block (attends all)
+Query 1:  G   G   W   W   W                 W = sliding window block
+Query 2:  G   G   W   W   W   W             . = masked (not computed)
+Query 3:  G   G       W   W   W   W
+Query 4:  G   G           W   W   W   W
+```
+
+Two components determine which blocks are computed:
+
+- **Global blocks**: the first N blocks attend to and are attended by every other block. They capture long-range information (BOS, task prefix, system prompt).
+- **Sliding window**: each block attends to the ±window blocks around it, preserving local context without O(n²) cost.
+
+The CPU SDPA kernel in `sparse_attn.zig` iterates over query blocks and skips the inner KV loop entirely for masked block pairs. For a 128K-token sequence with block size 64 and window 2, this reduces dot-product work by roughly 98%.
+
+### PFlash: Speculative Prefill (`src/spec/pflash.zig`)
+
+PFlash accelerates prefill for long prompts (128K+ tokens) by having a cheap scorer model identify which KV blocks carry the most information. Only those blocks are forwarded through the full target model.
+
+**Pipeline:**
+
+```
+Prompt (128K tokens)
+    |
+    v
+Scorer model runs forward pass
+(block-sparse attention, O(n) cost)
+    |
+    v
+Score each KV block: [0.1, 0.9, 0.2, 0.8, 0.3, 0.7, 0.1, 0.85, ...]
+    |
+    v
+Adaptive threshold: keep block if score > alpha * mean(scores)
+[    ##       ##        ##  ##  ]  <- selected (~5-15% of blocks)
+    |
+    v
+Target model prefills compressed prompt (~6-13K tokens)
+    |
+    v
+DDTree speculative decode -> output tokens
+```
+
+**Adaptive PFlash** uses a data-dependent threshold: `alpha * mean(block_scores)` rather than a fixed top-K count. This adapts to prompt structure -- dense technical content selects more blocks than sparse narrative text -- and avoids the need to tune K per prompt length.
+
+**Composability:** PFlash handles prefill; DDTree handles decode. They compose naturally: PFlash fills the KV cache with the compressed prompt, then the normal DDTree speculative decode loop takes over for generation. Use `--spec-mode pflash` to activate both.
+
+**Scorer model:** By default, the `--draft-model` is used as the scorer. For highest throughput, pass a separate, smaller `--pflash-scorer` model. The scorer only needs to identify important blocks -- it does not need to produce high-quality token predictions.
+
+**CLI parameters:**
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--spec-mode pflash` | -- | Activate PFlash prefill (requires `--draft-model`) |
+| `--pflash-alpha` | 0.85 | Block selection threshold multiplier |
+| `--pflash-block-size` | 64 | Block size in tokens |
+| `--pflash-scorer` | (draft model) | Separate model for block scoring |
 
 ### Distributed Inference (`src/parallel/`)
 

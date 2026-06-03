@@ -22,8 +22,9 @@ A progressive tutorial series that builds understanding layer by layer:
 14. [Format Conventions](tutorial/14-format-conventions.md) — GGUF vs SafeTensors, tensor layout
 15. [Chat Templates](tutorial/15-chat-templates.md) — data-driven role markers, EOG tokens
 16. [Recipe System](tutorial/16-recipe-system.md) — per-model/hardware defaults, user overrides
-17. [Speculative Decoding & DDTree](tutorial/17-speculative-decoding.md) — draft models, DDTree, self-speculative, n-gram, adaptive K
+17. [Speculative Decoding & DDTree](tutorial/17-speculative-decoding.md) — draft models, DDTree, self-speculative, n-gram, adaptive K, PFlash overview
 18. [Multi-Token Prediction](tutorial/18-multi-token-prediction.md) — MTP heads, +1 offset norm, draft/verify loop
+19. [PFlash and Block Sparse Attention](tutorial/19-pflash-and-block-sparse.md) — block sparsity, speculative prefill, alpha tuning, scoring models, PFlash+DDTree composition
 
 **Appendices:**
 - [Mathematical Operations Reference](tutorial/appendix-math.md) — dot product, softmax, GEMV, convolution

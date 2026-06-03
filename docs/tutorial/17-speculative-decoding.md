@@ -258,6 +258,98 @@ agave model-mtp.gguf --spec-mode mtp "prompt"
 
 MTP requires GGUF files with nextn tensors (look for "-MTP" in the filename). See [Chapter 18: Multi-Token Prediction](18-multi-token-prediction.md) for full architectural details, including the +1 offset norm, concatenation projection, and which models support MTP.
 
+## PFlash: Speculative Prefill for Long Contexts
+
+All the modes above address decode speed -- the time between tokens during generation. Prefill is a separate bottleneck: for a 128K-token prompt, the target model must attend over every token pair before producing the first output token. PFlash (from Luce-Org/lucebox-hub) attacks this with speculative prefill.
+
+### What PFlash Does
+
+Instead of running the full target model over the entire prompt, PFlash uses a cheap scorer to identify which KV blocks matter and prefills only those blocks through the target model.
+
+```
+Prompt (128K tokens)
+    |
+    v
+Scorer model runs forward pass
+(block-sparse attention, O(n) cost)
+    |
+    v
+Score each KV block: [0.1, 0.9, 0.2, 0.8, 0.3, 0.7, 0.1, 0.85, ...]
+    |
+    v
+Adaptive threshold: keep block if score > alpha * mean(scores)
+[    ##       ##        ##  ##  ]  <- selected (~5-15% of blocks)
+    |
+    v
+Target model prefills compressed prompt (~6-13K tokens)
+    |
+    v
+DDTree speculative decode -> output tokens
+```
+
+The key insight: most tokens in a long prompt are not consulted during generation. A technical document's repeated boilerplate, padding, or off-topic context contributes little to the final answer. The scorer identifies and discards these blocks before the expensive target model runs.
+
+### Adaptive PFlash: The Alpha Threshold
+
+The selection threshold is `alpha * mean(block_scores)`, not a fixed top-K count. This is what "Adaptive PFlash" refers to in the original paper.
+
+Why adaptive matters:
+
+- A dense technical reference might have 40% of blocks score above threshold
+- A padded narrative prompt might have only 3% score above threshold
+- Fixed top-K=10 over-selects for the dense case and under-selects for the sparse case
+
+Lower alpha = more aggressive compression = faster prefill but higher risk of dropping important context. Start with the default (0.85) and lower it if you observe degraded output quality.
+
+```bash
+agave model.gguf --draft-model draft.gguf --spec-mode pflash "prompt"                       # alpha=0.85 (default)
+agave model.gguf --draft-model draft.gguf --spec-mode pflash --pflash-alpha 0.7 "prompt"    # aggressive
+agave model.gguf --draft-model draft.gguf --spec-mode pflash --pflash-alpha 0.95 "prompt"   # conservative
+```
+
+### PFlash + DDTree: Combining Prefill and Decode Speedup
+
+PFlash and DDTree solve different bottlenecks and compose cleanly. PFlash fills the KV cache with the compressed prompt representation; DDTree then runs its normal speculative decode loop over that KV cache.
+
+```bash
+# PFlash prefill + DDTree decode (recommended for 32K+ prompts)
+agave target.gguf --draft-model draft.gguf --spec-mode pflash "prompt"
+
+# Separate scorer for maximum throughput (scorer can be smaller than draft model)
+agave target.gguf --draft-model draft.gguf --pflash-scorer tiny-scorer.gguf --spec-mode pflash "prompt"
+
+# Tune block granularity (smaller blocks = finer selection, more overhead)
+agave target.gguf --draft-model draft.gguf --spec-mode pflash --pflash-block-size 32 "prompt"
+```
+
+The scorer defaults to the `--draft-model`. If you already have a draft model loaded for DDTree, PFlash reuses it at no extra memory cost. For maximum throughput, a dedicated `--pflash-scorer` model can be smaller than the draft model -- it only needs to rank block importance, not produce accurate next-token predictions.
+
+### Performance Expectations
+
+PFlash targets time-to-first-token (TTFT) for long prompts. Decode throughput is unchanged.
+
+| Context length | Expected TTFT reduction |
+|---------------|------------------------|
+| 8K tokens | Minimal (overhead not worth it) |
+| 32K tokens | ~3-5x |
+| 128K tokens | ~8-12x |
+| 512K tokens | ~20-40x |
+
+Actual numbers depend on prompt compressibility (how many blocks score below threshold), scorer speed, and target model size. Prompts with high repetition or large amounts of boilerplate compress more aggressively.
+
+**When to use PFlash:**
+- Prompts longer than 32K tokens
+- RAG pipelines with many retrieved chunks (most chunks are irrelevant)
+- Long system prompts or document contexts
+- Any use case where TTFT matters more than generation quality on the full context
+
+**When not to use PFlash:**
+- Short prompts (< 8K tokens) -- overhead exceeds benefit
+- Tasks where every sentence in the prompt is load-bearing (legal analysis, code review with full repo)
+- When `--pflash-alpha` is already high and output quality is still degraded
+
+See [Tutorial 19: PFlash and Block Sparse Attention](19-pflash-and-block-sparse.md) for a full walkthrough including block sparse attention internals, alpha tuning, and scoring model selection.
+
 ## Server Mode
 
 Speculative decoding works with `--serve`. All API endpoints (OpenAI, Anthropic, Responses) support it in both streaming and non-streaming modes.
@@ -284,6 +376,6 @@ The server uses the same speculative decoding loop as CLI mode. Draft model pref
 
 ---
 
-**In the code:** [src/spec/spec_decode.zig](../../src/spec/spec_decode.zig) (orchestrator, adaptive K, cooldown), [src/spec/ddtree.zig](../../src/spec/ddtree.zig) (DDTree construction), [src/spec/ngram.zig](../../src/spec/ngram.zig) (n-gram history matching), [src/backend/kernels/cpu/sdpa_tree.zig](../../src/backend/kernels/cpu/sdpa_tree.zig) (tree-masked attention)
+**In the code:** [src/spec/spec_decode.zig](../../src/spec/spec_decode.zig) (orchestrator, adaptive K, cooldown), [src/spec/ddtree.zig](../../src/spec/ddtree.zig) (DDTree construction), [src/spec/ngram.zig](../../src/spec/ngram.zig) (n-gram history matching), [src/spec/pflash.zig](../../src/spec/pflash.zig) (PFlash block scoring and compressed prefill), [src/ops/sparse_attn.zig](../../src/ops/sparse_attn.zig) (block sparse SDPA), [src/backend/kernels/cpu/sdpa_tree.zig](../../src/backend/kernels/cpu/sdpa_tree.zig) (tree-masked attention)
 
-**Next:** [Appendix: Mathematical Operations →](appendix-math.md) | **Back:** [Chapter 16: Recipe System ←](16-recipe-system.md) | **Product docs:** [Models](../MODELS.md)
+**Next:** [Chapter 19: PFlash and Block Sparse Attention →](19-pflash-and-block-sparse.md) | **Back:** [Chapter 16: Recipe System ←](16-recipe-system.md) | **Product docs:** [Models](../MODELS.md)
