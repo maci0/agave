@@ -48,7 +48,7 @@ The cache grows linearly with sequence length. Each new token adds one K vector 
 Per-token KV cost = n_layers × n_kv_heads × head_dim × 2 (K+V) × bytes_per_element
 
 Example: Qwen3.5 9B at f16 precision
-  = 64 layers × 4 KV heads × 128 dim × 2 × 2 bytes = 128 KB per token
+  = 32 layers × 4 KV heads × 256 dim × 2 × 2 bytes = 128 KB per token
 
 How this scales:
   128 tokens:   16 MB    (fits in GPU cache)
@@ -138,7 +138,7 @@ flowchart LR
     end
 
     subgraph Physical["Physical KV block pool (shared across all requests)"]
-        B1["Block 1\n(free after Request B done)"]
+        B1["Block 1\n(shared — was used by Request B)"]
         B4["Block 4\n(active)"]
         B7["Block 7\n(active)"]
         BX["Block 2, 3, 5, 6…\n(free — available)"]

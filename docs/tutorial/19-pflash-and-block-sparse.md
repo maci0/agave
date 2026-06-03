@@ -38,7 +38,7 @@ Agave's `sparse_attn.zig` implements BigBird-style block sparsity with two compo
 }}}%%
 flowchart TD
     Q["Query Block (any position)"] --> G["Global Blocks\n(first G blocks)"]
-    Q --> W["Window Blocks\n(W preceding blocks)"]
+    Q --> W["Window Blocks\n(±W blocks, causal-bounded)"]
     Q --> S["All Other Blocks\n(skipped)"]
 
     G --> KV_G["KV Vectors\nDot products computed"]
@@ -65,23 +65,23 @@ flowchart TD
 
 **Global blocks** -- the first G blocks attend to and are attended by every block. These typically cover BOS, the system prompt, and the task prefix: tokens the model always needs to see regardless of which part of the context it's drawing from.
 
-**Sliding window** -- each block attends to the W blocks immediately preceding it (and itself), preserving local context for sequential reasoning.
+**Sliding window** -- each block attends ±W blocks in each direction, bounded by the causal mask, preserving local context for sequential reasoning.
 
 ```
 Block size = 64 tokens. G = 2 global blocks, W = 2 window.
 
 Blocks:   [0] [1] [2] [3] [4] [5] [6] [7]
-Query 0:  G   G   W               W         G = global (attends all blocks)
-Query 1:  G   G   W   W   W                 W = within sliding window
-Query 2:  G   G   W   W   W   W             . = masked (dot product skipped)
-Query 3:  G   G       W   W   W   W
-Query 4:  G   G           W   W   W   W
-Query 5:  G   G               W   W   W   W
-Query 6:  G   G               W   W   W   W
-Query 7:  G   G               W   W   W   W
+Query 0:  G   .   .   .   .   .   .   .    G = global block (always attended)
+Query 1:  G   G   .   .   .   .   .   .    W = within ±W sliding window
+Query 2:  G   G   W   .   .   .   .   .    . = masked (dot product skipped)
+Query 3:  G   G   W   W   .   .   .   .
+Query 4:  G   G   W   W   W   .   .   .
+Query 5:  G   G   .   W   W   W   .   .
+Query 6:  G   G   .   .   W   W   W   .
+Query 7:  G   G   .   .   .   W   W   W
 
-Attended fraction: ~15% for this 8-block example.
-At 2048 blocks (128K tokens), attended fraction ~2%.
+Attended fraction: ~83% for this 8-block example (small n amplifies global).
+At 2048 blocks (128K tokens), attended fraction ~3-5%.
 ```
 
 Each query block always computes scores for:

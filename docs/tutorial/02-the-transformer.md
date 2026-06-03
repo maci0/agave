@@ -62,6 +62,7 @@ flowchart TD
     VocabProj --> Logits["Logits\n[262144 floats]"]
     Logits --> Argmax["Argmax / Sample"]
     Argmax --> NextToken["Next Token ID"]
+```
 
 
 ## Attention
@@ -164,7 +165,7 @@ learning different relationships (syntax, semantics, position, etc.)
 
 ### GQA (Grouped Query Attention)
 
-Attention is computed **in parallel** (all heads compute simultaneously, not one after another) across multiple **heads** (independent attention mechanisms, each focusing on different aspects of the input). [GQA (Ainslie et al., 2023)](https://arxiv.org/abs/2305.13245) reduces memory by sharing K/V heads across multiple Q heads. With 20 Q heads and 5 KV heads, each KV head serves 4 Q heads, cutting KV cache memory by 4×.
+Attention is computed **in parallel** (all heads compute simultaneously, not one after another) across multiple **heads** (independent attention mechanisms, each focusing on different aspects of the input). [GQA (Ainslie et al., 2023)](https://arxiv.org/abs/2305.13245) reduces memory by sharing K/V heads across multiple Q heads. With 16 Q heads and 4 KV heads (as in Qwen3.5), each KV head serves 4 Q heads, cutting KV cache memory by 4×.
 
 ```mermaid
 %%{init: {'theme': 'base', 'themeVariables': {
