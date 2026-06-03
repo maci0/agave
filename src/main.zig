@@ -394,8 +394,10 @@ const cli_specs = [_]cli_mod.ArgSpec{
     .{ .long = "draft-model", .kind = .option, .help = "Path to draft model for speculative decoding." },
     .{ .long = "spec-tokens", .short = 'K', .kind = .option, .help = "Draft tokens per speculation round [default: 5]." },
     .{ .long = "tree-budget", .kind = .option, .help = "DDTree node budget [default: 64]." },
-    .{ .long = "spec-mode", .kind = .option, .help = "Speculative mode: standard, ddtree, self, ngram, mtp [default: ddtree with --draft-model]." },
+    .{ .long = "spec-mode", .kind = .option, .help = "Speculative mode: standard, ddtree, self, ngram, mtp, pflash [default: ddtree with --draft-model]." },
     .{ .long = "draft-layers", .kind = .option, .help = "Layers for self-speculative draft [default: auto]." },
+    .{ .long = "pflash-alpha", .kind = .option, .help = "PFlash block selection threshold (0.0-2.0) [default: 0.85]." },
+    .{ .long = "pflash-block-size", .kind = .option, .help = "PFlash scoring block size in tokens [default: 64]." },
     // Diagnostics
     .{ .long = "verbose", .short = 'V', .help = "Show technical details (params, load times, EOG)." },
     .{ .long = "debug", .short = 'd', .help = "Enable debug logging (token IDs, layer timing); implies --verbose." },
@@ -406,7 +408,7 @@ const cli_specs = [_]cli_mod.ArgSpec{
     .{ .long = "benchmark", .help = "Run decode benchmark: prefill + decode, print stats (supports --json)." },
 };
 
-const SpecMode = enum { none, standard, ddtree, self_spec, ngram, mtp };
+const SpecMode = enum { none, standard, ddtree, self_spec, ngram, mtp, pflash };
 
 const CliArgs = struct {
     model_path: []const u8,
@@ -477,6 +479,9 @@ const CliArgs = struct {
     tree_budget: u32 = 64,
     spec_mode: SpecMode = .none,
     draft_layers: ?u32 = null,
+    // PFlash speculative prefill
+    pflash_alpha: f32 = 0.85,
+    pflash_block_size: u32 = 64,
     /// Tracks which CLI args the user explicitly set (so recipes don't override them).
     user_set: Recipe.Overrides = .{},
 };
@@ -867,11 +872,13 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
             if (sm == null or !std.mem.eql(u8, sm.?, "self"))
                 eprint("Warning: --draft-layers only applies to --spec-mode self\n", .{});
         }
-        // Warn about --spec-mode standard/ddtree without a draft model
+        // Warn about --spec-mode standard/ddtree/pflash without a draft model
         if (res.option("spec-mode")) |sm| {
             if (res.option("draft-model") == null and
                 (std.mem.eql(u8, sm, "standard") or std.mem.eql(u8, sm, "ddtree")))
                 eprint("Warning: --spec-mode {s} requires --draft-model\n", .{sm});
+            if (std.mem.eql(u8, sm, "pflash") and res.option("draft-model") == null)
+                eprint("Warning: --spec-mode pflash requires --draft-model for block scoring\n", .{});
         }
     }
 
@@ -1026,12 +1033,24 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
                 if (std.mem.eql(u8, s, "self")) break :blk SpecMode.self_spec;
                 if (std.mem.eql(u8, s, "ngram")) break :blk SpecMode.ngram;
                 if (std.mem.eql(u8, s, "mtp")) break :blk SpecMode.mtp;
-                eprint("Error: unknown --spec-mode '{s}' (expected: standard, ddtree, self, ngram, mtp)\n", .{s});
+                if (std.mem.eql(u8, s, "pflash")) break :blk SpecMode.pflash;
+                eprint("Error: unknown --spec-mode '{s}' (expected: standard, ddtree, self, ngram, mtp, pflash)\n", .{s});
                 std.process.exit(2);
             }
             break :blk if (dm != null) SpecMode.ddtree else SpecMode.none;
         },
         .draft_layers = parseU32(res.option("draft-layers"), "draft-layers"),
+        .pflash_alpha = blk: {
+            if (res.option("pflash-alpha")) |s| {
+                const v = std.fmt.parseFloat(f32, s) catch {
+                    eprint("Error: --pflash-alpha must be a number\n", .{});
+                    std.process.exit(2);
+                };
+                break :blk v;
+            }
+            break :blk 0.85;
+        },
+        .pflash_block_size = parseU32(res.option("pflash-block-size"), "pflash-block-size") orelse 64,
         .user_set = .{
             .temperature = res.option("temperature") != null,
             .top_p = res.option("top-p") != null,
@@ -1517,7 +1536,7 @@ fn printUsage() void {
         \\
         \\SPECULATIVE DECODING:
         \\      --draft-model <PATH>  Draft model GGUF for speculative decoding
-        \\      --spec-mode <MODE>    Speculative mode: standard, ddtree, self, ngram, mtp [default: ddtree with --draft-model]
+        \\      --spec-mode <MODE>    Speculative mode: standard, ddtree, self, ngram, mtp, pflash [default: ddtree with --draft-model]
         \\  -K, --spec-tokens <N>     Draft tokens per speculation round [default: 5]
         \\      --tree-budget <N>     DDTree node budget [default: 64]
         \\      --draft-layers <N>    Layers for self-speculative draft [default: auto]
@@ -2832,16 +2851,42 @@ fn generateSpeculative(
 
     // Prefill both models with the prompt
     const prefill_start = milliTimestamp(g_io);
-    var first_target = target.prefill(prefill_toks) catch |e| {
-        eprint("Error: target prefill failed: {}\n", .{e});
-        return;
-    };
-    // Only prefill draft model separately when it's a different model
-    if (target.ptr != draft_model.ptr) {
-        _ = draft_model.prefill(prefill_toks) catch |e| {
-            eprint("Error: draft prefill failed: {}\n", .{e});
+    var first_target: u32 = 0;
+
+    if (cli.spec_mode == .pflash and target.ptr != draft_model.ptr) {
+        // PFlash speculative prefill: draft scores blocks, target prefills compressed prompt
+        const pflash = @import("spec/pflash.zig");
+        const pflash_cfg = pflash.PFlashConfig{
+            .alpha = cli.pflash_alpha,
+            .block_size = cli.pflash_block_size,
+            .max_kept_ratio = 0.20,
+            .score_tail = 16,
+        };
+        var pflash_state = pflash.PFlashState.init(allocator, pflash_cfg, prefill_toks.len) catch |e| {
+            eprint("Error: PFlash state init failed: {}\n", .{e});
             return;
         };
+        defer pflash_state.deinit(allocator);
+        first_target = pflash.pflashPrefill(pflash_cfg, &pflash_state, draft_model, target, prefill_toks, allocator) catch |e| {
+            eprint("Error: PFlash prefill failed: {}\n", .{e});
+            return;
+        };
+        const ratio = pflash.compressionRatio(&pflash_state);
+        eprint("pflash: {d} → {d} tokens ({d:.1}% kept)\n", .{
+            prefill_toks.len, pflash_state.selected_len, ratio * 100,
+        });
+    } else {
+        first_target = target.prefill(prefill_toks) catch |e| {
+            eprint("Error: target prefill failed: {}\n", .{e});
+            return;
+        };
+        // Only prefill draft model separately when it's a different model
+        if (target.ptr != draft_model.ptr) {
+            _ = draft_model.prefill(prefill_toks) catch |e| {
+                eprint("Error: draft prefill failed: {}\n", .{e});
+                return;
+            };
+        }
     }
     const prefill_ms = milliTimestamp(g_io) - prefill_start;
 
@@ -2873,10 +2918,12 @@ fn generateSpeculative(
         token_count = 1;
     }
 
-    const use_ddtree = (cli.spec_mode == .ddtree);
-    const self_spec = (cli.spec_mode == .self_spec);
-    const use_ngram = (cli.spec_mode == .ngram);
-    const use_mtp = (cli.spec_mode == .mtp);
+    // pflash only changes prefill; for decode, treat like ddtree when a separate draft model exists
+    const effective_spec_mode: SpecMode = if (cli.spec_mode == .pflash and target.ptr != draft_model.ptr) .ddtree else cli.spec_mode;
+    const use_ddtree = (effective_spec_mode == .ddtree);
+    const self_spec = (effective_spec_mode == .self_spec);
+    const use_ngram = (effective_spec_mode == .ngram);
+    const use_mtp = (effective_spec_mode == .mtp);
     var ngram_state = ngram_mod.NgramState{};
     if (use_ngram) {
         // Seed n-gram history with prefill tokens
@@ -3505,6 +3552,8 @@ test {
     _ = @import("cli.zig");
     _ = @import("display.zig");
     _ = @import("ops/split_attention.zig");
+    _ = @import("ops/sparse_attn.zig");
+    _ = @import("spec/pflash.zig");
     _ = @import("arch.zig");
     _ = @import("perf.zig");
     _ = @import("recipe.zig");
