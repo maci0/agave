@@ -4,6 +4,40 @@ A chat model expects prompts in a specific format with special tokens marking ro
 
 ## The Problem: Hardcoded Prompt Formatting
 
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#e8f0fe',
+  'primaryTextColor': '#1a1a2e',
+  'primaryBorderColor': '#4a6cf7',
+  'lineColor': '#4a6cf7',
+  'secondaryColor': '#f0f4ff',
+  'tertiaryColor': '#f8f9ff',
+  'edgeLabelBackground': '#ffffff',
+  'clusterBkg': '#f0f4ff',
+  'clusterBorder': '#4a6cf7',
+  'titleColor': '#1a1a2e',
+  'nodeTextColor': '#1a1a2e',
+  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
+}}}%%
+flowchart LR
+    Messages["Messages\n[system, user, assistant, ...]"] --> Template["ChatTemplate\n(prefix/suffix pairs)"]
+    Template --> Rendered["Rendered Prompt\n(flat string with special tokens)"]
+    Rendered --> Tokenizer["Tokenizer\n(BPE encode)"]
+    Tokenizer --> TokenIDs["Token ID sequence\n[1, 428, 999, 13, ...]"]
+    TokenIDs --> Model["Model forward()"]
+
+    subgraph Config["Template config (chat_template.zig)"]
+        Template
+    end
+
+    subgraph Runtime["Runtime resolution"]
+        EOGNames["EOG token names\n&lt;|im_end|&gt;, &lt;eos&gt;"]
+        EOGNames --> TokLookup["Tokenizer special\ntoken map"]
+        TokLookup --> EOGIDs["EOG token IDs\n[151643, 151645]"]
+        EOGIDs --> GenLoop["Generation loop\n(stop check)"]
+    end
+
+
 **Bad pattern** (don't do this):
 
 ```zig
@@ -66,6 +100,44 @@ pub const qwen35 = ChatTemplate{
 
 ## Template Usage
 
+Each role (system, user, assistant) is wrapped in a pair of prefix and suffix strings. The diagram below shows how a single-turn ChatML prompt assembles from template fields into the flat string the model receives.
+
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#e8f0fe',
+  'primaryTextColor': '#1a1a2e',
+  'primaryBorderColor': '#4a6cf7',
+  'lineColor': '#4a6cf7',
+  'secondaryColor': '#f0f4ff',
+  'tertiaryColor': '#f8f9ff',
+  'edgeLabelBackground': '#ffffff',
+  'clusterBkg': '#f0f4ff',
+  'clusterBorder': '#4a6cf7',
+  'titleColor': '#1a1a2e',
+  'nodeTextColor': '#1a1a2e',
+  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
+}}}%%
+flowchart TD
+    SysMsg["system message\n'You are helpful'"] --> SysPre["system_prefix\n&lt;|im_start|&gt;system\n"]
+    SysPre --> SysBody["message body"]
+    SysBody --> SysSuf["system_suffix\n&lt;|im_end|&gt;\n"]
+
+    UserMsg["user message\n'What is 2+2?'"] --> UserPre["user_prefix\n&lt;|im_start|&gt;user\n"]
+    UserPre --> UserBody["message body"]
+    UserBody --> UserSuf["user_suffix\n(empty)"]
+
+    SysSuf --> UserPre
+    UserSuf --> AsstPre["assistant_prefix\n&lt;|im_end|&gt;\n&lt;|im_start|&gt;assistant\n"]
+    AsstPre --> GenPfx["generation_prefix\n&lt;think&gt;\n\n&lt;/think&gt;\n\n"]
+    GenPfx --> GenStart["--- model generates here ---"]
+
+    style GenStart fill:#2d5a27,color:#fff,stroke:#4a9e40
+    style SysPre fill:#1a3a5c,color:#fff,stroke:#2a5a8c
+    style UserPre fill:#1a3a5c,color:#fff,stroke:#2a5a8c
+    style AsstPre fill:#1a3a5c,color:#fff,stroke:#2a5a8c
+    style GenPfx fill:#4a3500,color:#fff,stroke:#7a5a00
+
+
 ### Single-Turn Prompt
 
 ```zig
@@ -120,7 +192,48 @@ const prompt = try template.formatConversation(
 
 ## Architecture-Specific Templates
 
-**Each model architecture has its own template** (defined in `src/chat_template.zig`):
+**Each model architecture has its own template** (defined in `src/chat_template.zig`). The three major styles differ in which special tokens they use to delimit turns.
+
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#e8f0fe',
+  'primaryTextColor': '#1a1a2e',
+  'primaryBorderColor': '#4a6cf7',
+  'lineColor': '#4a6cf7',
+  'secondaryColor': '#f0f4ff',
+  'tertiaryColor': '#f8f9ff',
+  'edgeLabelBackground': '#ffffff',
+  'clusterBkg': '#f0f4ff',
+  'clusterBorder': '#4a6cf7',
+  'titleColor': '#1a1a2e',
+  'nodeTextColor': '#1a1a2e',
+  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
+}}}%%
+flowchart LR
+    subgraph ChatML["ChatML style (Qwen3.5, Nemotron)"]
+        direction TB
+        CM1["&lt;|im_start|&gt;system\n{system}&lt;|im_end|&gt;\n"]
+        CM2["&lt;|im_start|&gt;user\n{user}"]
+        CM3["&lt;|im_end|&gt;\n&lt;|im_start|&gt;assistant\n{response}&lt;|im_end|&gt;\n"]
+        CM1 --> CM2 --> CM3
+    end
+
+    subgraph Gemma["Turn-based style (Gemma 3)"]
+        direction TB
+        G1["&lt;start_of_turn&gt;user\n{system}\n\n"]
+        G2["&lt;start_of_turn&gt;user\n{user}"]
+        G3["&lt;end_of_turn&gt;\n&lt;start_of_turn&gt;model\n{response}&lt;end_of_turn&gt;\n"]
+        G1 --> G2 --> G3
+    end
+
+    subgraph GPTOSS["Marker-based style (GPT-OSS)"]
+        direction TB
+        P1["&lt;|start|&gt;system&lt;|message|&gt;{system}&lt;|end|&gt;"]
+        P2["&lt;|start|&gt;user&lt;|message|&gt;{user}"]
+        P3["&lt;|end|&gt;&lt;|start|&gt;assistant{response}&lt;|end|&gt;"]
+        P1 --> P2 --> P3
+    end
+
 
 ### Gemma 3
 
@@ -260,6 +373,38 @@ else
 ## End-of-Generation Token Detection
 
 **Templates define EOG tokens by name**, not by ID. The tokenizer resolves them at runtime.
+
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#e8f0fe',
+  'primaryTextColor': '#1a1a2e',
+  'primaryBorderColor': '#4a6cf7',
+  'lineColor': '#4a6cf7',
+  'secondaryColor': '#f0f4ff',
+  'tertiaryColor': '#f8f9ff',
+  'edgeLabelBackground': '#ffffff',
+  'clusterBkg': '#f0f4ff',
+  'clusterBorder': '#4a6cf7',
+  'titleColor': '#1a1a2e',
+  'nodeTextColor': '#1a1a2e',
+  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
+}}}%%
+flowchart LR
+    TmplNames["Template EOG names\n&lt;|im_end|&gt;, &lt;|endoftext|&gt;"]
+    TmplNames --> Lookup["Tokenizer special\ntoken map\n(from GGUF / tokenizer.json)"]
+    Lookup -->|found| EOGSet["Resolved EOG IDs\n[151643, 151645]"]
+    Lookup -->|not found| Skip["skip\n(token absent in this vocab)"]
+
+    EOGSet --> GenLoop["Token generation loop"]
+    GenLoop -->|each token| Check{"token ID\nin EOG set?"}
+    Check -->|no| Emit["emit token, continue"]
+    Check -->|yes| Stop["stop generation"]
+
+    Emit --> GenLoop
+
+    style Stop fill:#5c1a1a,color:#fff,stroke:#8c2a2a
+    style EOGSet fill:#1a3a5c,color:#fff,stroke:#2a5a8c
+
 
 ### Template Definition
 

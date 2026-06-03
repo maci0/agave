@@ -6,6 +6,41 @@ Zig's `comptime` feature executes code **at compile time**, generating optimized
 
 **comptime** means "computed at compile time". The compiler evaluates the expression during compilation, and the result is baked into the binary.
 
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#e8f0fe',
+  'primaryTextColor': '#1a1a2e',
+  'primaryBorderColor': '#4a6cf7',
+  'lineColor': '#4a6cf7',
+  'secondaryColor': '#f0f4ff',
+  'tertiaryColor': '#f8f9ff',
+  'edgeLabelBackground': '#ffffff',
+  'clusterBkg': '#f0f4ff',
+  'clusterBorder': '#4a6cf7',
+  'titleColor': '#1a1a2e',
+  'nodeTextColor': '#1a1a2e',
+  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
+}}}%%
+flowchart LR
+    Source["Source Code\n(comptime expression)"] --> Compiler["Zig Compiler\n(compile time)"]
+    Compiler --> Value["Constant Value\nbaked into binary"]
+    Value --> Binary["Executable Binary\n(.rodata section)"]
+    Runtime["Runtime\n(user runs program)"] --> Binary
+    Binary --> Result["Instant result\n(no computation)"]
+
+    subgraph CompilePhase["Compile Phase (your machine, once)"]
+        Source
+        Compiler
+        Value
+    end
+
+    subgraph RunPhase["Run Phase (user's machine, many times)"]
+        Runtime
+        Binary
+        Result
+    end
+
+
 ```zig
 const table_size = 256;  // Regular constant
 const doubled = comptime table_size * 2;  // Computed at compile time (512)
@@ -23,6 +58,45 @@ const doubled = comptime table_size * 2;  // Computed at compile time (512)
 ## Lookup Tables
 
 Pre-computing values at compile time eliminates runtime arithmetic.
+
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#e8f0fe',
+  'primaryTextColor': '#1a1a2e',
+  'primaryBorderColor': '#4a6cf7',
+  'lineColor': '#4a6cf7',
+  'secondaryColor': '#f0f4ff',
+  'tertiaryColor': '#f8f9ff',
+  'edgeLabelBackground': '#ffffff',
+  'clusterBkg': '#f0f4ff',
+  'clusterBorder': '#4a6cf7',
+  'titleColor': '#1a1a2e',
+  'nodeTextColor': '#1a1a2e',
+  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
+}}}%%
+flowchart TD
+    NaiveInput["8-bit FP8 value\n(e.g. 0xA7)"] --> NaiveOps["Runtime: extract bits,\nbranch, pow(), multiply\n~30 instructions"]
+    NaiveOps --> NaiveOut["f32 result"]
+
+    ComptimeLoop["Compiler: loop 0..256\nfp8ToF32Internal(i)"] --> LUT["[256]f32 table\nin .rodata\n(1 KB)"]
+    LUT --> LUTLookup["Runtime: array[val]\n1 instruction"]
+    FastInput["8-bit FP8 value\n(e.g. 0xA7)"] --> LUTLookup
+    LUTLookup --> FastOut["f32 result"]
+
+    subgraph Naive["Naive (runtime per call)"]
+        NaiveInput
+        NaiveOps
+        NaiveOut
+    end
+
+    subgraph LUTPath["LUT (comptime table, runtime lookup)"]
+        ComptimeLoop
+        LUT
+        FastInput
+        LUTLookup
+        FastOut
+    end
+
 
 ### FP8 E4M3 Dequantization Table
 
@@ -126,6 +200,43 @@ This runs at compile time. If the table is malformed, **compilation fails**.
 ## Feature Detection
 
 Zig's `builtin` module provides platform information at comptime.
+
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#e8f0fe',
+  'primaryTextColor': '#1a1a2e',
+  'primaryBorderColor': '#4a6cf7',
+  'lineColor': '#4a6cf7',
+  'secondaryColor': '#f0f4ff',
+  'tertiaryColor': '#f8f9ff',
+  'edgeLabelBackground': '#ffffff',
+  'clusterBkg': '#f0f4ff',
+  'clusterBorder': '#4a6cf7',
+  'titleColor': '#1a1a2e',
+  'nodeTextColor': '#1a1a2e',
+  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
+}}}%%
+flowchart LR
+    BuildCmd["zig build\n-Dtarget=aarch64-macos"] --> Builtin["builtin.os.tag\nbuiltin.cpu.arch\nbuild_options.*"]
+
+    Builtin --> MacOS{{"os == .macos?"}}
+    MacOS -- yes --> MetalBranch["MetalBackend\ncompiled in"]
+    MacOS -- no --> Linux{{"os == .linux?"}}
+    Linux -- yes --> VulkanBranch["VulkanBackend\ncompiled in"]
+    Linux -- no --> CPUBranch["CpuBackend\ncompiled in"]
+
+    MetalBranch --> Binary["macOS Binary\n(Metal only,\nLinux code absent)"]
+    VulkanBranch --> LinuxBin["Linux Binary\n(Vulkan only,\nMetal code absent)"]
+    CPUBranch --> CPUBin["Other Binary\n(CPU fallback)"]
+
+    subgraph CompileTime["Compile Time: dead code eliminated"]
+        MacOS
+        Linux
+        MetalBranch
+        VulkanBranch
+        CPUBranch
+    end
+
 
 ### Target OS Detection
 

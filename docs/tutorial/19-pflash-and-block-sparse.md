@@ -19,7 +19,49 @@ Standard attention computes a score between every query token and every key toke
 
 ### The Sparsity Pattern
 
-Agave's `sparse_attn.zig` implements BigBird-style block sparsity with two components:
+Agave's `sparse_attn.zig` implements BigBird-style block sparsity with two components: global blocks that every query attends to, and a sliding window of recent blocks for local context. Everything outside those two patterns is skipped entirely.
+
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#e8f0fe',
+  'primaryTextColor': '#1a1a2e',
+  'primaryBorderColor': '#4a6cf7',
+  'lineColor': '#4a6cf7',
+  'secondaryColor': '#f0f4ff',
+  'tertiaryColor': '#f8f9ff',
+  'edgeLabelBackground': '#ffffff',
+  'clusterBkg': '#f0f4ff',
+  'clusterBorder': '#4a6cf7',
+  'titleColor': '#1a1a2e',
+  'nodeTextColor': '#1a1a2e',
+  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
+}}}%%
+flowchart TD
+    Q["Query Block (any position)"] --> G["Global Blocks\n(first G blocks)"]
+    Q --> W["Window Blocks\n(W preceding blocks)"]
+    Q --> S["All Other Blocks\n(skipped)"]
+
+    G --> KV_G["KV Vectors\nDot products computed"]
+    W --> KV_W["KV Vectors\nDot products computed"]
+    S --> SKIP["No dot products\ninner loop never executes"]
+
+    subgraph Always["Always attended"]
+        G
+    end
+
+    subgraph Local["Local context"]
+        W
+    end
+
+    subgraph Masked["Masked out (~85-98% of pairs)"]
+        S
+        SKIP
+    end
+
+    style Always fill:#d4edda,stroke:#28a745
+    style Local fill:#cce5ff,stroke:#004085
+    style Masked fill:#f8d7da,stroke:#721c24
+
 
 **Global blocks** -- the first G blocks attend to and are attended by every block. These typically cover BOS, the system prompt, and the task prefix: tokens the model always needs to see regardless of which part of the context it's drawing from.
 
@@ -80,6 +122,59 @@ Block sparse attention makes the scorer fast. PFlash uses that cheap scorer to d
 
 ### The Core Algorithm
 
+PFlash runs four sequential stages: a cheap sparse scorer pass over the full prompt, an adaptive threshold to pick which blocks matter, a compressed prefill through the expensive target model, and then normal speculative decode.
+
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#e8f0fe',
+  'primaryTextColor': '#1a1a2e',
+  'primaryBorderColor': '#4a6cf7',
+  'lineColor': '#4a6cf7',
+  'secondaryColor': '#f0f4ff',
+  'tertiaryColor': '#f8f9ff',
+  'edgeLabelBackground': '#ffffff',
+  'clusterBkg': '#f0f4ff',
+  'clusterBorder': '#4a6cf7',
+  'titleColor': '#1a1a2e',
+  'nodeTextColor': '#1a1a2e',
+  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
+}}}%%
+flowchart LR
+    Prompt["Full Prompt\n(e.g. 128K tokens)"] --> Score
+
+    subgraph Score["Stage 1: Score (fast)"]
+        Scorer["Scorer Model\n(small, 0.5-3B)"]
+        Sparse["Block Sparse\nAttention"]
+        BlockScores["Per-block\nimportance scores"]
+        Scorer --> Sparse --> BlockScores
+    end
+
+    BlockScores --> Select
+
+    subgraph Select["Stage 2: Select"]
+        Threshold["alpha * mean(scores)"]
+        Kept["Selected blocks\n(5-15% of total)"]
+        Threshold --> Kept
+    end
+
+    Kept --> Prefill
+
+    subgraph Prefill["Stage 3: Prefill (expensive)"]
+        Compress["Compress to\nselected spans only"]
+        Target["Target Model\n(large, 8-70B)"]
+        KVCache["Populated KV Cache\n(compressed context)"]
+        Compress --> Target --> KVCache
+    end
+
+    KVCache --> Decode
+
+    subgraph Decode["Stage 4: Decode"]
+        DDTree["DDTree Speculative\nDecode"]
+        Tokens["Output Tokens"]
+        DDTree --> Tokens
+    end
+
+
 **Step 1: Score.** Run the scorer model over the full prompt with block sparse attention. For each KV block, compute a scalar importance score -- typically the mean L2 norm of the key vectors, or the attention entropy at that block position.
 
 **Step 2: Select.** Apply the adaptive threshold:
@@ -97,7 +192,50 @@ Blocks above the threshold are kept; the rest are discarded. With `alpha=0.85` a
 
 ### Adaptive Threshold vs Fixed Top-K
 
-The threshold `alpha * mean(scores)` adapts to prompt structure. Compare two prompts with alpha=0.85:
+The threshold `alpha * mean(scores)` adapts to prompt structure: a dense technical reference has a high mean score so more blocks are kept; a padded narrative has a low mean so nearly all boilerplate is dropped. A fixed top-K cannot distinguish these cases.
+
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#e8f0fe',
+  'primaryTextColor': '#1a1a2e',
+  'primaryBorderColor': '#4a6cf7',
+  'lineColor': '#4a6cf7',
+  'secondaryColor': '#f0f4ff',
+  'tertiaryColor': '#f8f9ff',
+  'edgeLabelBackground': '#ffffff',
+  'clusterBkg': '#f0f4ff',
+  'clusterBorder': '#4a6cf7',
+  'titleColor': '#1a1a2e',
+  'nodeTextColor': '#1a1a2e',
+  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
+}}}%%
+flowchart TD
+    Scores["Block Importance Scores"] --> Mean["Compute mean(scores)"]
+    Mean --> Threshold["threshold = alpha * mean"]
+    Threshold --> Compare{"score > threshold?"}
+    Compare -->|yes| Keep["Keep block\n(sent to target model)"]
+    Compare -->|no| Drop["Drop block\n(never reaches target)"]
+
+    subgraph Dense["Dense prompt (API docs)\nmean=0.78, threshold=0.66"]
+        D1["block: 0.80 -- KEEP"]
+        D2["block: 0.60 -- DROP"]
+        D3["block: 0.90 -- KEEP"]
+    end
+
+    subgraph Padded["Padded prompt (novel + boilerplate)\nmean=0.14, threshold=0.12"]
+        P1["block: 0.90 -- KEEP"]
+        P2["block: 0.05 -- DROP"]
+        P3["block: 0.03 -- DROP"]
+    end
+
+    Keep -.->|"~70% kept\n(dense case)"| Dense
+    Drop -.->|"~92% dropped\n(padded case)"| Padded
+
+    style Keep fill:#d4edda,stroke:#28a745
+    style Drop fill:#f8d7da,stroke:#721c24
+
+
+Compare two prompts with alpha=0.85:
 
 ```
 Dense technical reference (API docs, 128K tokens):
@@ -183,7 +321,44 @@ When to use a separate scorer:
 
 ### PFlash + DDTree: Full Pipeline
 
-PFlash and DDTree are designed to compose. PFlash compresses the prefill; DDTree accelerates decode. Together they address the full latency profile:
+PFlash and DDTree are designed to compose. PFlash attacks TTFT by shrinking what the target model must prefill; DDTree attacks decode latency by drafting multiple tokens per target-model pass. Each technique targets a separate bottleneck, so their gains multiply.
+
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#e8f0fe',
+  'primaryTextColor': '#1a1a2e',
+  'primaryBorderColor': '#4a6cf7',
+  'lineColor': '#4a6cf7',
+  'secondaryColor': '#f0f4ff',
+  'tertiaryColor': '#f8f9ff',
+  'edgeLabelBackground': '#ffffff',
+  'clusterBkg': '#f0f4ff',
+  'clusterBorder': '#4a6cf7',
+  'titleColor': '#1a1a2e',
+  'nodeTextColor': '#1a1a2e',
+  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
+}}}%%
+sequenceDiagram
+    participant User
+    participant Scorer as Scorer Model (small)
+    participant Target as Target Model (large)
+    participant Draft as Draft Model (small)
+
+    User->>Scorer: Full prompt (128K tokens)
+    Note over Scorer: Block sparse attention pass (~200ms)
+    Scorer-->>Target: Selected blocks only (~8K tokens)
+    Note over Target: Compressed prefill (~500ms vs 6000ms)
+    Target-->>Draft: KV cache ready, begin decode
+
+    loop DDTree decode (per generation step)
+        Draft->>Draft: Propose 5-token tree (~8ms)
+        Draft->>Target: Tree of candidates
+        Target->>Target: Verify batch in 1 pass (~65ms)
+        Target-->>User: Accept ~3 tokens on average
+    end
+
+
+Together they address the full latency profile:
 
 ```bash
 agave target-14B.gguf \

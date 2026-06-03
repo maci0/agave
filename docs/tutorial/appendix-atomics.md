@@ -4,6 +4,36 @@ Multi-threaded code needs **synchronization** to coordinate between threads. Zig
 
 ## The Problem: Race Conditions
 
+Two threads reading and writing the same memory without coordination can interleave in ways that corrupt data -- each sees a stale value, and the last write wins.
+
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#e8f0fe',
+  'primaryTextColor': '#1a1a2e',
+  'primaryBorderColor': '#4a6cf7',
+  'lineColor': '#4a6cf7',
+  'secondaryColor': '#f0f4ff',
+  'tertiaryColor': '#f8f9ff',
+  'edgeLabelBackground': '#ffffff',
+  'clusterBkg': '#f0f4ff',
+  'clusterBorder': '#4a6cf7',
+  'titleColor': '#1a1a2e',
+  'nodeTextColor': '#1a1a2e',
+  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
+}}}%%
+sequenceDiagram
+    participant A as Thread A
+    participant M as Memory (counter=0)
+    participant B as Thread B
+
+    A->>M: Read counter → 0
+    B->>M: Read counter → 0
+    Note over A,B: Both see 0 before either writes
+    A->>M: Write counter = 0+1 = 1
+    B->>M: Write counter = 0+1 = 1
+    Note over M: Final value: 1 (expected: 2)
+
+
 Without atomics, concurrent writes corrupt data:
 
 ```zig
@@ -76,7 +106,42 @@ val.store(50, .monotonic);
 
 ## Memory Ordering
 
-**Memory ordering** controls **when other threads see your writes** and **when you see their writes**.
+**Memory ordering** controls **when other threads see your writes** and **when you see their writes**. Stronger orders give more guarantees but cost more CPU cycles.
+
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#e8f0fe',
+  'primaryTextColor': '#1a1a2e',
+  'primaryBorderColor': '#4a6cf7',
+  'lineColor': '#4a6cf7',
+  'secondaryColor': '#f0f4ff',
+  'tertiaryColor': '#f8f9ff',
+  'edgeLabelBackground': '#ffffff',
+  'clusterBkg': '#f0f4ff',
+  'clusterBorder': '#4a6cf7',
+  'titleColor': '#1a1a2e',
+  'nodeTextColor': '#1a1a2e',
+  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
+}}}%%
+flowchart LR
+    Mon[".monotonic\nAtomic op only\nno ordering"]
+    Acq[".acquire\nSee all writes\nbefore paired release"]
+    Rel[".release\nPublish writes\nbefore this store"]
+    AcqRel[".acq_rel\nBoth acquire\nand release"]
+    Seq[".seq_cst\nGlobal total order\nall threads agree"]
+
+    Mon -->|"+ load ordering"| Acq
+    Mon -->|"+ store ordering"| Rel
+    Acq -->|"+ store ordering"| AcqRel
+    Rel -->|"+ load ordering"| AcqRel
+    AcqRel -->|"+ global order"| Seq
+
+    style Mon fill:#e8f4e8,stroke:#4a9e4a
+    style Acq fill:#e8f0fa,stroke:#4a70c0
+    style Rel fill:#e8f0fa,stroke:#4a70c0
+    style AcqRel fill:#f5eaf5,stroke:#8a4ab0
+    style Seq fill:#faeaea,stroke:#c04a4a
+
 
 ### The Four Orders (Weakest to Strongest)
 
@@ -115,6 +180,35 @@ const start = self.task_counter.fetchAdd(grain, .monotonic);
 **Acquire** (on load): All writes that happened **before** a release store are visible **after** this load.
 
 **Use for:** Handing off data between threads.
+
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#e8f0fe',
+  'primaryTextColor': '#1a1a2e',
+  'primaryBorderColor': '#4a6cf7',
+  'lineColor': '#4a6cf7',
+  'secondaryColor': '#f0f4ff',
+  'tertiaryColor': '#f8f9ff',
+  'edgeLabelBackground': '#ffffff',
+  'clusterBkg': '#f0f4ff',
+  'clusterBorder': '#4a6cf7',
+  'titleColor': '#1a1a2e',
+  'nodeTextColor': '#1a1a2e',
+  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
+}}}%%
+sequenceDiagram
+    participant P as Producer thread
+    participant F as ready flag (atomic bool)
+    participant C as Consumer thread
+
+    P->>P: data[0..99] = compute(...)
+    P->>F: store(true, .release)
+    Note over P,F: Release fence: data writes<br/>guaranteed visible before flag flip
+    C->>F: load(.acquire) → false, spin...
+    C->>F: load(.acquire) → true
+    Note over F,C: Acquire fence: consumer now<br/>sees all pre-release writes
+    C->>C: process(data[0..99])  ✓ safe
+
 
 ```zig
 var ready = std.atomic.Value(bool).init(false);
@@ -198,6 +292,49 @@ fn doWork(self: *ThreadPool) void {
 - No synchronization needed — each thread works independently
 
 ### Generation Counter (Thread Wake-Up)
+
+A futex (fast userspace mutex) lets sleeping threads block cheaply and wake precisely. The generation counter acts as the signal: workers sleep while the counter matches their local copy, and wake the moment the main thread bumps it.
+
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#e8f0fe',
+  'primaryTextColor': '#1a1a2e',
+  'primaryBorderColor': '#4a6cf7',
+  'lineColor': '#4a6cf7',
+  'secondaryColor': '#f0f4ff',
+  'tertiaryColor': '#f8f9ff',
+  'edgeLabelBackground': '#ffffff',
+  'clusterBkg': '#f0f4ff',
+  'clusterBorder': '#4a6cf7',
+  'titleColor': '#1a1a2e',
+  'nodeTextColor': '#1a1a2e',
+  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
+}}}%%
+sequenceDiagram
+    participant Main as Main thread
+    participant Gen as generation (atomic u32)
+    participant W1 as Worker 1
+    participant W2 as Worker 2
+
+    Main->>Gen: write task_func, task_ctx, task_total
+    Main->>Gen: fetchAdd(1, .release) → gen=1
+    Main->>W1: futexWake (wake all workers)
+    Main->>W2: futexWake
+
+    Note over W1,W2: Workers were sleeping in<br/>futexWaitUncancelable(gen, expected=0)
+
+    W1->>Gen: futexWait returns (gen changed)
+    W1->>Gen: load(.acquire) → see all task fields
+    W1->>W1: doWork() → chunk A
+
+    W2->>Gen: futexWait returns
+    W2->>Gen: load(.acquire) → see all task fields
+    W2->>W2: doWork() → chunk B
+
+    W1->>Main: active.fetchSub(1, .release)
+    W2->>Main: active.fetchSub(1, .release)
+    Note over Main: active==0 → all done, safe to read results
+
 
 ```zig
 generation: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),

@@ -8,6 +8,45 @@ A 7B parameter model (7 billion weight values — the "B" in model names like "Q
 
 ## Block Quantization
 
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#e8f0fe',
+  'primaryTextColor': '#1a1a2e',
+  'primaryBorderColor': '#4a6cf7',
+  'lineColor': '#4a6cf7',
+  'secondaryColor': '#f0f4ff',
+  'tertiaryColor': '#f8f9ff',
+  'edgeLabelBackground': '#ffffff',
+  'clusterBkg': '#f0f4ff',
+  'clusterBorder': '#4a6cf7',
+  'titleColor': '#1a1a2e',
+  'nodeTextColor': '#1a1a2e',
+  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
+}}}%%
+flowchart LR
+    W["Weight Matrix\n(billions of f32 values)"] --> Split["Split into\nBlocks of 32"]
+
+    Split --> B1["Block 0\n32 integers"]
+    Split --> B2["Block 1\n32 integers"]
+    Split --> BN["Block N\n32 integers"]
+
+    B1 --> S1["scale₀\n(f16, 2 bytes)"]
+    B2 --> S2["scale₁\n(f16, 2 bytes)"]
+    BN --> SN["scaleₙ\n(f16, 2 bytes)"]
+
+    subgraph Stored["Stored on disk (Q4_0 example)"]
+        S1
+        B1
+        S2
+        B2
+        SN
+        BN
+    end
+
+    Stored --> Dequant["On-the-fly dequant\nfloat = int × scale"]
+    Dequant --> GEMV["GEMV kernel\n(inside the dot product)"]
+
+
 **Q4_0, Q8_0** (GGUF-style): Groups of 32 values share a single **scale factor** (a multiplier that converts small integers back to approximate float values). Each value is stored as a small integer, dequantized on-the-fly:
 
 ```
@@ -16,7 +55,81 @@ float_value = integer_value * scale
 
 **Super-block formats** (Q4_K, Q5_K, Q6_K): Groups of 256 values with **hierarchical scales** (multiple levels of scale factors — a coarse scale for the whole block, then fine-grained adjustments per sub-block) — a block scale plus per-sub-block adjustments.
 
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#e8f0fe',
+  'primaryTextColor': '#1a1a2e',
+  'primaryBorderColor': '#4a6cf7',
+  'lineColor': '#4a6cf7',
+  'secondaryColor': '#f0f4ff',
+  'tertiaryColor': '#f8f9ff',
+  'edgeLabelBackground': '#ffffff',
+  'clusterBkg': '#f0f4ff',
+  'clusterBorder': '#4a6cf7',
+  'titleColor': '#1a1a2e',
+  'nodeTextColor': '#1a1a2e',
+  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
+}}}%%
+flowchart TD
+    SB["Super-block: 256 values"]
+
+    SB --> Meta["Super-block metadata\n(d: f16 coarse scale\ndmin: f16 minimum)"]
+    SB --> Sub0["Sub-block 0\n32 values"]
+    SB --> Sub1["Sub-block 1\n32 values"]
+    SB --> SubDots["..."]
+    SB --> Sub7["Sub-block 7\n32 values"]
+
+    Sub0 --> SC0["scale₀ + min₀\n(6-bit each, packed)"]
+    Sub1 --> SC1["scale₁ + min₁"]
+    Sub7 --> SC7["scale₇ + min₇"]
+
+    SC0 --> DQ0["dequant₀ = d×scale₀×q - dmin×min₀"]
+    SC1 --> DQ1["dequant₁ = d×scale₁×q - dmin×min₁"]
+
+    subgraph Hierarchy["Two-level scale hierarchy"]
+        Meta
+        SC0
+        SC1
+        SC7
+    end
+
+
 ## MLX Affine Quantization
+
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#e8f0fe',
+  'primaryTextColor': '#1a1a2e',
+  'primaryBorderColor': '#4a6cf7',
+  'lineColor': '#4a6cf7',
+  'secondaryColor': '#f0f4ff',
+  'tertiaryColor': '#f8f9ff',
+  'edgeLabelBackground': '#ffffff',
+  'clusterBkg': '#f0f4ff',
+  'clusterBorder': '#4a6cf7',
+  'titleColor': '#1a1a2e',
+  'nodeTextColor': '#1a1a2e',
+  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
+}}}%%
+flowchart LR
+    WT["weight tensor\n(packed u32 nibbles)"] --> Unpack["Unpack nibble\nuint_value ∈ [0..15]"]
+
+    ScaleTensor["weight.scales\n(bf16 per group)"] --> Affine
+    BiasTensor["weight.biases\n(bf16 per group)"] --> Affine
+
+    Unpack --> Affine["Affine transform\nfloat = scale × uint + bias"]
+    Affine --> Out["Dequantized f32\n(used in dot product)"]
+
+    subgraph CompanionTensors["Companion tensors (stored separately)"]
+        ScaleTensor
+        BiasTensor
+    end
+
+    subgraph PerGroup["Per group of 64 elements"]
+        Unpack
+        Affine
+    end
+
 
 Used by Apple MLX models (Gemma QAT 4-bit, GLM-4 6-bit). Each group of 64 values has a scale and bias:
 
@@ -413,7 +526,42 @@ All geometric methods use the same CLI pattern: `--kv-type <prefix><bits>` where
 
 ## Key Principle
 
-Dequantization happens *inside* the GEMV kernel, not before it. This avoids materializing the full-precision weight matrix:
+Dequantization happens *inside* the GEMV kernel, not before it. This avoids materializing the full-precision weight matrix.
+
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#e8f0fe',
+  'primaryTextColor': '#1a1a2e',
+  'primaryBorderColor': '#4a6cf7',
+  'lineColor': '#4a6cf7',
+  'secondaryColor': '#f0f4ff',
+  'tertiaryColor': '#f8f9ff',
+  'edgeLabelBackground': '#ffffff',
+  'clusterBkg': '#f0f4ff',
+  'clusterBorder': '#4a6cf7',
+  'titleColor': '#1a1a2e',
+  'nodeTextColor': '#1a1a2e',
+  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
+}}}%%
+flowchart TD
+    QW["Quantized weights\n(Q4: 0.5 bytes/elem)"]
+
+    QW --> BadPath["BAD: pre-dequantize\nentire matrix to f32"]
+    BadPath --> BigBuf["f32 buffer\n(4 bytes/elem)\n7B model = 28 GB"]
+    BigBuf --> MatMul["Matrix multiply\n(reads 28 GB)"]
+
+    QW --> GoodPath["GOOD: dequantize\nper-block inside kernel"]
+    GoodPath --> Block["Load one block\n(32 nibbles + 1 scale)"]
+    Block --> DQ["Dequant on register\n(no memory write)"]
+    DQ --> Dot["Accumulate dot product"]
+    Dot --> NextBlock["Next block"]
+    NextBlock --> Block
+
+    style BadPath fill:#c0392b,color:#fff
+    style BigBuf fill:#c0392b,color:#fff
+    style GoodPath fill:#27ae60,color:#fff
+    style Dot fill:#27ae60,color:#fff
+
 
 ```
 // BAD: dequantize entire matrix, then multiply

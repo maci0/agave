@@ -37,6 +37,50 @@ fundamental tradeoff: constant memory, but lossy recall.
 
 **Hybrid models** combine attention and SSM layers: attention every N layers for global context, SSM for the rest for speed.
 
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#e8f0fe',
+  'primaryTextColor': '#1a1a2e',
+  'primaryBorderColor': '#4a6cf7',
+  'lineColor': '#4a6cf7',
+  'secondaryColor': '#f0f4ff',
+  'tertiaryColor': '#f8f9ff',
+  'edgeLabelBackground': '#ffffff',
+  'clusterBkg': '#f0f4ff',
+  'clusterBorder': '#4a6cf7',
+  'titleColor': '#1a1a2e',
+  'nodeTextColor': '#1a1a2e',
+  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
+}}}%%
+flowchart LR
+    subgraph Attention["Transformer Attention (O(n) per token)"]
+        direction TB
+        KVCache["KV Cache\n(all past tokens)"]
+        QVec["Query vector\n(current token)"]
+        Scores["Dot products\nwith every key"]
+        AttnOut["Weighted sum\nof all values"]
+        KVCache --> Scores
+        QVec --> Scores
+        Scores --> AttnOut
+    end
+
+    subgraph SSM["SSM Recurrence (O(1) per token)"]
+        direction TB
+        State["State matrix S\n(fixed size, ~256 KB)"]
+        NewTok["New token\nx[t]"]
+        Decay["Decay old state\nS *= exp(a * dt)"]
+        Update["Write new info\nS += outer(v, k)"]
+        Read["Read via query\nout = S @ q"]
+        State --> Decay
+        NewTok --> Decay
+        Decay --> Update
+        Update --> Read
+    end
+
+    Past100K["100K past tokens"] --> KVCache
+    Past100K -. "compressed into" .-> State
+
+
 ## Causal Convolution
 
 Both DeltaNet and Mamba-2 use **causal convolution** as a preprocessing step. A **convolution** is a sliding window operation that combines nearby values using learned weights. **Causal** means it only looks at past inputs (backward in time), never future ones — ensuring the model can't "cheat" by seeing ahead:
@@ -81,6 +125,38 @@ DeltaNet builds on the delta rule for associative memory, first explored in the 
    out[vi] = sum_ki(S[h, vi, ki] * q[ki]) / sqrt(head_k_dim)
 ```
 
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#e8f0fe',
+  'primaryTextColor': '#1a1a2e',
+  'primaryBorderColor': '#4a6cf7',
+  'lineColor': '#4a6cf7',
+  'secondaryColor': '#f0f4ff',
+  'tertiaryColor': '#f8f9ff',
+  'edgeLabelBackground': '#ffffff',
+  'clusterBkg': '#f0f4ff',
+  'clusterBorder': '#4a6cf7',
+  'titleColor': '#1a1a2e',
+  'nodeTextColor': '#1a1a2e',
+  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
+}}}%%
+flowchart TD
+    Input["Input token x[t]"] --> QKV["Q / K / V projections"]
+    QKV --> Q["Query q\n(what to retrieve)"]
+    QKV --> K["Key k\n(what to write)"]
+    QKV --> V["Value v\n(what to store)"]
+
+    State["State matrix S\n(accumulated memory)"] --> Decay["Step 1: Decay\nS *= exp(a * softplus(alpha))"]
+    Decay --> SK["sk = S^T @ k\n(what state already knows about k)"]
+    V --> Delta["Step 2: Error signal\ndelta = beta * (v - sk)"]
+    SK --> Delta
+    Delta --> Update["Step 3: Outer product update\nS += outer(delta, k)\n(correct the state)"]
+    Update --> State
+    Update --> Output["Step 4: Output\nout = S @ q / sqrt(k_dim)"]
+    Q --> Output
+    Output --> Gate["Multiply by SiLU(z) gate"]
+
+
 **GQA in DeltaNet:** Head mapping is format-dependent: GGUF uses **tiling** (`kh = h % num_k_heads`, matching `ggml_repeat` semantics), while SafeTensors uses **interleaved grouping** (`kh = h * num_k_heads / num_v_heads`). Controlled by the `kqv_order` flag set at model load time.
 
 **Split order:** After conv1d, output splits as `[Q | K | V]` (llama.cpp convention).
@@ -90,6 +166,41 @@ DeltaNet builds on the delta rule for associative memory, first explored in the 
 ## Mamba-2 (Nemotron-H)
 
 [Mamba-2 (Dao & Gu, 2024)](https://arxiv.org/abs/2405.21060) learns input-dependent **discretization** (choosing how much time passes between updates) — the `dt` (timestep, delta-time) is computed from the input, making the model selectively remember or forget.
+
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#e8f0fe',
+  'primaryTextColor': '#1a1a2e',
+  'primaryBorderColor': '#4a6cf7',
+  'lineColor': '#4a6cf7',
+  'secondaryColor': '#f0f4ff',
+  'tertiaryColor': '#f8f9ff',
+  'edgeLabelBackground': '#ffffff',
+  'clusterBkg': '#f0f4ff',
+  'clusterBorder': '#4a6cf7',
+  'titleColor': '#1a1a2e',
+  'nodeTextColor': '#1a1a2e',
+  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
+}}}%%
+flowchart LR
+    Input["Input x[t]"] --> DT["dt projection\n(learned, per-head)"]
+    Input --> B["B projection\n(what to write)"]
+    Input --> C["C projection\n(what to read)"]
+    Input --> D["D skip\n(direct passthrough)"]
+
+    DT --> Decay["decay = exp(ssm_a * dt)\n(input-dependent forget rate)"]
+    State["State S[h]\n(fixed-size memory)"] --> DecayState["Decay: S *= decay"]
+    Decay --> DecayState
+    B --> WriteIn["Write: S += x * dt * B^T\n(add new info)"]
+    DecayState --> WriteIn
+    WriteIn --> State
+
+    C --> ReadOut["Read: y = S @ C\n(query the state)"]
+    WriteIn --> ReadOut
+    D --> Skip["y += D * x\n(skip connection)"]
+    ReadOut --> Skip
+    Skip --> Output["Output y[t]"]
+
 
 **Per-head recurrence:**
 
@@ -112,6 +223,40 @@ For each state element [i, j]:
 ## Why SSMs are Faster
 
 The core difference: attention re-reads all previous tokens every time, SSMs update a fixed-size summary.
+
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#e8f0fe',
+  'primaryTextColor': '#1a1a2e',
+  'primaryBorderColor': '#4a6cf7',
+  'lineColor': '#4a6cf7',
+  'secondaryColor': '#f0f4ff',
+  'tertiaryColor': '#f8f9ff',
+  'edgeLabelBackground': '#ffffff',
+  'clusterBkg': '#f0f4ff',
+  'clusterBorder': '#4a6cf7',
+  'titleColor': '#1a1a2e',
+  'nodeTextColor': '#1a1a2e',
+  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
+}}}%%
+flowchart TD
+    subgraph TransformerMem["Transformer memory — grows with context"]
+        direction LR
+        T1K["Token 1\nK, V stored"] --- T2K["Token 2\nK, V stored"] --- TdotK["..."] --- T32KK["Token 32,000\nK, V stored"]
+        QNew1["Query (new token)"] --> ScanAll["Scan ALL 32,000 entries\n= 2M multiply-adds / head"]
+    end
+
+    subgraph SSMMem["SSM memory — always the same size"]
+        direction LR
+        SMatrix["State matrix S\n64 × 64 = 4,096 floats\n(256 KB for 16 heads)"]
+        QNew2["New token"] --> UpdateS["One state update\n~8,192 multiply-adds / head"]
+        UpdateS --> SMatrix
+        SMatrix --> UpdateS
+    end
+
+    Past["100K past tokens"] --> TransformerMem
+    Past -. "compressed into fixed box" .-> SSMMem
+
 
 | Aspect | Transformer Attention | SSM Recurrence |
 |--------|----------------------|----------------|

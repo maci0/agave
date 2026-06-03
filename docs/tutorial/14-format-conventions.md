@@ -20,6 +20,38 @@ When llama.cpp converts a HuggingFace model to GGUF, it **transforms** the data 
 
 ## Format Detection
 
+Agave inspects the model path at startup: a directory signals SafeTensors (multiple `.safetensors` shards + `config.json`), while a single file signals GGUF. The result is a unified `Format` interface that carries the `is_safetensors` flag so all downstream code can branch on conventions without re-inspecting the path.
+
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#e8f0fe',
+  'primaryTextColor': '#1a1a2e',
+  'primaryBorderColor': '#4a6cf7',
+  'lineColor': '#4a6cf7',
+  'secondaryColor': '#f0f4ff',
+  'tertiaryColor': '#f8f9ff',
+  'edgeLabelBackground': '#ffffff',
+  'clusterBkg': '#f0f4ff',
+  'clusterBorder': '#4a6cf7',
+  'titleColor': '#1a1a2e',
+  'nodeTextColor': '#1a1a2e',
+  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
+}}}%%
+flowchart LR
+    Path["Model Path\n(CLI argument)"] --> Check{"Is directory?"}
+    Check -->|"Yes"| ST["SafeTensors\nLoader"]
+    Check -->|"No"| GG["GGUF\nLoader"]
+
+    ST --> FmtST["Format interface\nis_safetensors = true"]
+    GG --> FmtGG["Format interface\nis_safetensors = false"]
+
+    FmtST --> Conv["Convention\nSelector"]
+    FmtGG --> Conv
+
+    Conv -->|"true"| HFConv["HF conventions\n• KQV order: K,Q,V\n• GQA: interleaved\n• A_log: raw → convert"]
+    Conv -->|"false"| LLConv["llama.cpp conventions\n• KQV order: Q,K,V\n• GQA: tiling\n• A_log: pre-converted"]
+
+
 ```zig
 // src/format/format.zig — vtable-based polymorphism
 pub const Format = struct {
@@ -57,7 +89,48 @@ if (is_dir) {
 
 ### 1. DeltaNet Conv Output Split Order
 
-**Operation:** After causal conv1d, output is split into Q, K, V tensors.
+**Operation:** After causal conv1d, output is split into Q, K, V tensors. The two formats pack these slices in opposite orders inside the same flat buffer, so reading with the wrong offset silently assigns the wrong data to each projection.
+
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#e8f0fe',
+  'primaryTextColor': '#1a1a2e',
+  'primaryBorderColor': '#4a6cf7',
+  'lineColor': '#4a6cf7',
+  'secondaryColor': '#f0f4ff',
+  'tertiaryColor': '#f8f9ff',
+  'edgeLabelBackground': '#ffffff',
+  'clusterBkg': '#f0f4ff',
+  'clusterBorder': '#4a6cf7',
+  'titleColor': '#1a1a2e',
+  'nodeTextColor': '#1a1a2e',
+  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
+}}}%%
+flowchart TD
+    Conv["conv1d output\n[key_dim + key_dim + v_dim floats]"]
+
+    Conv --> GGUF_Layout
+    Conv --> HF_Layout
+
+    subgraph GGUF_Layout["GGUF layout  (Q, K, V)"]
+        G0["offset 0\n→ Q  (key_dim floats)"]
+        G1["offset key_dim\n→ K  (key_dim floats)"]
+        G2["offset 2×key_dim\n→ V  (v_dim floats)"]
+    end
+
+    subgraph HF_Layout["SafeTensors layout  (K, Q, V)"]
+        H0["offset 0\n→ K  (key_dim floats)"]
+        H1["offset key_dim\n→ Q  (key_dim floats)"]
+        H2["offset 2×key_dim\n→ V  (v_dim floats)"]
+    end
+
+    G0 --> QProj["Q projection"]
+    G1 --> KProj["K projection"]
+    G2 --> VProj["V projection"]
+    H1 --> QProj
+    H0 --> KProj
+    H2 --> VProj
+
 
 **GGUF (llama.cpp):**
 ```zig
@@ -106,7 +179,50 @@ const p = DeltaNetParams{
 
 ### 2. DeltaNet GQA Head Mapping
 
-**Problem:** GQA maps Q heads to KV heads. Two different semantics exist.
+**Problem:** GQA maps Q heads to KV heads. Two different semantics exist. With 8 V-heads and 2 K-heads, the two formats produce completely different attention patterns even though both are "valid" GQA implementations.
+
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#e8f0fe',
+  'primaryTextColor': '#1a1a2e',
+  'primaryBorderColor': '#4a6cf7',
+  'lineColor': '#4a6cf7',
+  'secondaryColor': '#f0f4ff',
+  'tertiaryColor': '#f8f9ff',
+  'edgeLabelBackground': '#ffffff',
+  'clusterBkg': '#f0f4ff',
+  'clusterBorder': '#4a6cf7',
+  'titleColor': '#1a1a2e',
+  'nodeTextColor': '#1a1a2e',
+  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
+}}}%%
+flowchart LR
+    subgraph VHeads["8 V-heads (query heads)"]
+        V0["V0"] & V1["V1"] & V2["V2"] & V3["V3"]
+        V4["V4"] & V5["V5"] & V6["V6"] & V7["V7"]
+    end
+
+    subgraph KHeads["2 K-heads (key/value heads)"]
+        K0["K0"]
+        K1["K1"]
+    end
+
+    V0 -->|"GGUF: h%2=0"| K0
+    V1 -->|"GGUF: h%2=1"| K1
+    V2 -->|"GGUF: h%2=0"| K0
+    V3 -->|"GGUF: h%2=1"| K1
+    V4 -->|"GGUF: h%2=0"| K0
+    V5 -->|"GGUF: h%2=1"| K1
+    V6 -->|"GGUF: h%2=0"| K0
+    V7 -->|"GGUF: h%2=1"| K1
+
+    V0 & V1 & V2 & V3 -->|"HF: h*2/8=0"| K0
+    V4 & V5 & V6 & V7 -->|"HF: h*2/8=1"| K1
+
+
+**GGUF pattern:** `0,1,0,1,0,1,0,1` (tiling — alternates every head)
+
+**SafeTensors pattern:** `0,0,0,0,1,1,1,1` (interleaved groups — contiguous blocks)
 
 **GGUF (llama.cpp TILING):**
 ```zig
@@ -329,7 +445,41 @@ pub fn getMetaU32(self: *GGUFFile, key: []const u8) ?u32 {
 
 ## Tensor Name Mapping
 
-**HuggingFace uses different tensor names than llama.cpp.**
+**HuggingFace uses different tensor names than llama.cpp.** Model code always uses GGUF-style short names (e.g., `attn_qkv`, `ssm_a`). When loading SafeTensors, a translation step converts those names to the full HuggingFace path before the tensor lookup, so model logic stays format-agnostic.
+
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#e8f0fe',
+  'primaryTextColor': '#1a1a2e',
+  'primaryBorderColor': '#4a6cf7',
+  'lineColor': '#4a6cf7',
+  'secondaryColor': '#f0f4ff',
+  'tertiaryColor': '#f8f9ff',
+  'edgeLabelBackground': '#ffffff',
+  'clusterBkg': '#f0f4ff',
+  'clusterBorder': '#4a6cf7',
+  'titleColor': '#1a1a2e',
+  'nodeTextColor': '#1a1a2e',
+  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
+}}}%%
+flowchart LR
+    Model["Model code\nreads 'ssm_a'"] --> Lookup["Format.getTensor(name)"]
+
+    Lookup --> Branch{"is_safetensors?"}
+
+    Branch -->|"No (GGUF)"| GGUFLookup["Look up\n'blk.N.ssm_a.weight'\ndirectly"]
+    Branch -->|"Yes (SafeTensors)"| Translate["ggufToHfName()"]
+
+    Translate --> Map{"In tensor_name_map?"}
+    Map -->|"Yes + needs .weight"| HFName["'model.layers.N.\nlinear_attn.A_log'\n(no .weight suffix)"]
+    Map -->|"Yes, append .weight"| HFNameW["'model.layers.N.\nlinear_attn.in_proj_qkv.weight'"]
+    Map -->|"No mapping"| PassThru["Pass through as-is"]
+
+    GGUFLookup --> TensorInfo["TensorInfo\n(dtype, dims, offset)"]
+    HFName --> TensorInfo
+    HFNameW --> TensorInfo
+    PassThru --> TensorInfo
+
 
 ### DeltaNet Tensor Names
 

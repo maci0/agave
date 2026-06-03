@@ -26,6 +26,34 @@ pub fn processFile(allocator: Allocator, path: []const u8) !void {
 
 **Execution order:** Defers run in **reverse order** of declaration (stack unwinding — last declared, first executed):
 
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#e8f0fe',
+  'primaryTextColor': '#1a1a2e',
+  'primaryBorderColor': '#4a6cf7',
+  'lineColor': '#4a6cf7',
+  'secondaryColor': '#f0f4ff',
+  'tertiaryColor': '#f8f9ff',
+  'edgeLabelBackground': '#ffffff',
+  'clusterBkg': '#f0f4ff',
+  'clusterBorder': '#4a6cf7',
+  'titleColor': '#1a1a2e',
+  'nodeTextColor': '#1a1a2e',
+  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
+}}}%%
+sequenceDiagram
+    participant Code as Function Body
+    participant Stack as Defer Stack
+    participant Cleanup as Cleanup Actions
+
+    Code->>Stack: defer file.close()
+    Code->>Stack: defer allocator.free(data)
+    Note over Code: ... work happens ...
+    Code->>Code: return (normal or error)
+    Stack->>Cleanup: allocator.free(data)  [last declared, first run]
+    Stack->>Cleanup: file.close()          [first declared, last run]
+
+
 ```zig
 defer std.debug.print("Third\n", .{});
 defer std.debug.print("Second\n", .{});
@@ -58,6 +86,35 @@ pub fn initModel(allocator: Allocator, config: Config) !Model {
 
 **What happens on error?**
 
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#e8f0fe',
+  'primaryTextColor': '#1a1a2e',
+  'primaryBorderColor': '#4a6cf7',
+  'lineColor': '#4a6cf7',
+  'secondaryColor': '#f0f4ff',
+  'tertiaryColor': '#f8f9ff',
+  'edgeLabelBackground': '#ffffff',
+  'clusterBkg': '#f0f4ff',
+  'clusterBorder': '#4a6cf7',
+  'titleColor': '#1a1a2e',
+  'nodeTextColor': '#1a1a2e',
+  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
+}}}%%
+flowchart TD
+    A["alloc weights\nerrdefer free(weights)"] --> B["KVCache.init()\nerrdefer cache.deinit()"]
+    B --> C["Backend.init()\nerrdefer backend.deinit()"]
+    C --> D["return model  (success)"]
+
+    B -- "KVCache.init() fails" --> E["free(weights)"]
+    C -- "Backend.init() fails" --> F["cache.deinit()\nfree(weights)"]
+    D --> G["caller owns model\nno errdefers run"]
+
+    style E fill:#f66,color:#fff
+    style F fill:#f66,color:#fff
+    style G fill:#6a6,color:#fff
+
+
 - If `KVCache.init()` fails → only `model.weights` is freed
 - If `Backend.init()` fails → `model.cache.deinit()` AND `allocator.free(model.weights)` run
 - If all succeed → nothing runs, model is returned to caller
@@ -70,6 +127,38 @@ pub fn initModel(allocator: Allocator, config: Config) !Model {
 ## The Pattern: defer + errdefer
 
 **Rule:** Use `defer` immediately after acquiring a resource that must **always** be cleaned up. Use `errdefer` for partial initialization where cleanup depends on success.
+
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#e8f0fe',
+  'primaryTextColor': '#1a1a2e',
+  'primaryBorderColor': '#4a6cf7',
+  'lineColor': '#4a6cf7',
+  'secondaryColor': '#f0f4ff',
+  'tertiaryColor': '#f8f9ff',
+  'edgeLabelBackground': '#ffffff',
+  'clusterBkg': '#f0f4ff',
+  'clusterBorder': '#4a6cf7',
+  'titleColor': '#1a1a2e',
+  'nodeTextColor': '#1a1a2e',
+  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
+}}}%%
+flowchart LR
+    subgraph Acquire["Resource Acquisition"]
+        R1["open file"] --> D1["defer file.close()"]
+        R2["alloc buffer"] --> D2["errdefer free(buffer)"]
+        R3["init struct"] --> D3["errdefer struct.deinit()"]
+    end
+
+    subgraph Exit["Scope Exit"]
+        direction TB
+        OK["success path\nreturn value"] --> NE["errdefers skipped\ncaller owns resources"]
+        ERR["error path\nreturn error"] --> ED["errdefers run\npartial state cleaned up"]
+        BOTH["always"] --> DD["defers run\n(in reverse order)"]
+    end
+
+    Acquire --> Exit
+
 
 ### Example 1: Simple Allocation
 
@@ -336,6 +425,39 @@ This is **your safety net** — write tests, use `std.testing.allocator`, catch 
 ## Advanced Pattern: Arena Allocator
 
 For temporary allocations that all get freed together, use `std.heap.ArenaAllocator`:
+
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#e8f0fe',
+  'primaryTextColor': '#1a1a2e',
+  'primaryBorderColor': '#4a6cf7',
+  'lineColor': '#4a6cf7',
+  'secondaryColor': '#f0f4ff',
+  'tertiaryColor': '#f8f9ff',
+  'edgeLabelBackground': '#ffffff',
+  'clusterBkg': '#f0f4ff',
+  'clusterBorder': '#4a6cf7',
+  'titleColor': '#1a1a2e',
+  'nodeTextColor': '#1a1a2e',
+  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
+}}}%%
+flowchart TD
+    PA["Parent Allocator\n(e.g. GPA)"] --> Arena["ArenaAllocator\ndefer arena.deinit()"]
+
+    Arena --> A1["tokenize()\narena_alloc"]
+    Arena --> A2["embed()\narena_alloc"]
+    Arena --> A3["generate()\narena_alloc"]
+
+    PA --> Final["decode()\nallocator  (parent)"]
+
+    A3 --> Return["return text\n(owned by caller)"]
+    Final --> Return
+
+    Arena -- "arena.deinit()" --> Free["ALL temp buffers freed\nin one operation"]
+
+    style Free fill:#6a6,color:#fff
+    style Return fill:#66a,color:#fff
+
 
 ```zig
 pub fn generateText(allocator: Allocator, prompt: []const u8) ![]u8 {

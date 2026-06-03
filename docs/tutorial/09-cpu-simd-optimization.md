@@ -4,6 +4,46 @@ When a GPU isn't available, the CPU backend needs to be fast. Modern CPUs have *
 
 ## The @Vector Type
 
+A single SIMD instruction operates on an entire register of values at once, turning N sequential operations into 1 parallel operation.
+
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#e8f0fe',
+  'primaryTextColor': '#1a1a2e',
+  'primaryBorderColor': '#4a6cf7',
+  'lineColor': '#4a6cf7',
+  'secondaryColor': '#f0f4ff',
+  'tertiaryColor': '#f8f9ff',
+  'edgeLabelBackground': '#ffffff',
+  'clusterBkg': '#f0f4ff',
+  'clusterBorder': '#4a6cf7',
+  'titleColor': '#1a1a2e',
+  'nodeTextColor': '#1a1a2e',
+  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
+}}}%%
+flowchart LR
+    subgraph Scalar["Scalar (8 instructions)"]
+        direction TB
+        s1["a[0]+b[0]"] --> r1["c[0]"]
+        s2["a[1]+b[1]"] --> r2["c[1]"]
+        s3["a[2]+b[2]"] --> r3["c[2]"]
+        s4["..."] --> r4["..."]
+    end
+
+    subgraph SIMD["SIMD @Vector(8, f32) (1 instruction)"]
+        direction TB
+        reg_a["AVX2 register\n1.0 | 2.0 | 3.0 | 4.0 | 5.0 | 6.0 | 7.0 | 8.0"]
+        reg_b["AVX2 register\n2.0 | 2.0 | 2.0 | 2.0 | 2.0 | 2.0 | 2.0 | 2.0"]
+        op["vaddps (1 cycle)"]
+        reg_c["AVX2 register\n3.0 | 4.0 | 5.0 | 6.0 | 7.0 | 8.0 | 9.0 | 10.0"]
+        reg_a --> op
+        reg_b --> op
+        op --> reg_c
+    end
+
+    Scalar -- "8x slower" --- SIMD
+
+
 A vector is a fixed-size array that maps to hardware SIMD registers:
 
 ```zig
@@ -58,6 +98,39 @@ const sum = @reduce(.Add, v);  // sum = 36.0 (1+2+3+4+5+6+7+8)
 
 Compiles to a **reduction tree** (pair-wise adds that preserve precision better than sequential accumulation):
 
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#e8f0fe',
+  'primaryTextColor': '#1a1a2e',
+  'primaryBorderColor': '#4a6cf7',
+  'lineColor': '#4a6cf7',
+  'secondaryColor': '#f0f4ff',
+  'tertiaryColor': '#f8f9ff',
+  'edgeLabelBackground': '#ffffff',
+  'clusterBkg': '#f0f4ff',
+  'clusterBorder': '#4a6cf7',
+  'titleColor': '#1a1a2e',
+  'nodeTextColor': '#1a1a2e',
+  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
+}}}%%
+flowchart TD
+    subgraph Input["Input vector (8 lanes)"]
+        direction LR
+        v1["1"] --- v2["2"] --- v3["3"] --- v4["4"] --- v5["5"] --- v6["6"] --- v7["7"] --- v8["8"]
+    end
+    p1["1+2 = 3"] & p2["3+4 = 7"] & p3["5+6 = 11"] & p4["7+8 = 15"]
+    q1["3+7 = 10"] & q2["11+15 = 26"]
+    total["10+26 = 36"]
+
+    v1 & v2 --> p1
+    v3 & v4 --> p2
+    v5 & v6 --> p3
+    v7 & v8 --> p4
+    p1 & p2 --> q1
+    p3 & p4 --> q2
+    q1 & q2 --> total
+
+
 ```
 {1,2,3,4,5,6,7,8}
 → {1+2, 3+4, 5+6, 7+8} = {3, 7, 11, 15}
@@ -68,6 +141,43 @@ Compiles to a **reduction tree** (pair-wise adds that preserve precision better 
 On NEON: `vaddvq_f32` (horizontal add). On AVX2: `vhaddps` + scalar extract.
 
 ### @mulAdd — Fused Multiply-Add (FMA)
+
+FMA collapses a multiply and an add into one instruction, firing through a dedicated hardware unit. The CPU dispatches it alongside other work in the same cycle.
+
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#e8f0fe',
+  'primaryTextColor': '#1a1a2e',
+  'primaryBorderColor': '#4a6cf7',
+  'lineColor': '#4a6cf7',
+  'secondaryColor': '#f0f4ff',
+  'tertiaryColor': '#f8f9ff',
+  'edgeLabelBackground': '#ffffff',
+  'clusterBkg': '#f0f4ff',
+  'clusterBorder': '#4a6cf7',
+  'titleColor': '#1a1a2e',
+  'nodeTextColor': '#1a1a2e',
+  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
+}}}%%
+flowchart LR
+    subgraph Unfused["Without FMA (2 instructions, 2 cycles min)"]
+        direction TB
+        u_a["a (weight)"] --> mul["vmulps\n1 cycle"]
+        u_b["b (input)"] --> mul
+        mul --> tmp["tmp = a * b\n(intermediate, rounded)"]
+        tmp --> add["vaddps\n1 cycle"]
+        u_acc["acc"] --> add
+        add --> u_out["acc + tmp"]
+    end
+
+    subgraph Fused["With FMA — @mulAdd (1 instruction, 1 cycle)"]
+        direction TB
+        f_a["a (weight)"] --> fma["vfmadd231ps\n1 cycle, dedicated FMA unit"]
+        f_b["b (input)"] --> fma
+        f_acc["acc"] --> fma
+        fma --> f_out["acc + a*b\n(no intermediate rounding)"]
+    end
+
 
 **The single most important SIMD operation for inference.**
 
@@ -106,6 +216,63 @@ const dot = @reduce(.Add, acc);
 The problem: loading `x` from memory is expensive. Each row of the matrix needs the same `x` vector. **Reuse it across multiple rows before evicting from cache.**
 
 ### 4-Row Batching Pattern
+
+Loading the input vector `x` is expensive. With 4-row batching, `x` is loaded once and reused across 4 rows of the weight matrix before being evicted from cache.
+
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#e8f0fe',
+  'primaryTextColor': '#1a1a2e',
+  'primaryBorderColor': '#4a6cf7',
+  'lineColor': '#4a6cf7',
+  'secondaryColor': '#f0f4ff',
+  'tertiaryColor': '#f8f9ff',
+  'edgeLabelBackground': '#ffffff',
+  'clusterBkg': '#f0f4ff',
+  'clusterBorder': '#4a6cf7',
+  'titleColor': '#1a1a2e',
+  'nodeTextColor': '#1a1a2e',
+  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
+}}}%%
+flowchart LR
+    x_mem["x vector\n(k floats in L1/L2 cache)"]
+
+    subgraph Weight["Weight matrix W (4 rows)"]
+        w0["row 0: w[0..k]"]
+        w1["row 1: w[k..2k]"]
+        w2["row 2: w[2k..3k]"]
+        w3["row 3: w[3k..4k]"]
+    end
+
+    subgraph FMA["FMA units (4 independent accumulators)"]
+        acc0["acc0 += xv * w0[i..i+8]"]
+        acc1["acc1 += xv * w1[i..i+8]"]
+        acc2["acc2 += xv * w2[i..i+8]"]
+        acc3["acc3 += xv * w3[i..i+8]"]
+    end
+
+    subgraph Output["y (4 output values)"]
+        y0["y[row]"]
+        y1["y[row+1]"]
+        y2["y[row+2]"]
+        y3["y[row+3]"]
+    end
+
+    x_mem -- "load ONCE\nreuse 4x" --> acc0
+    x_mem --> acc1
+    x_mem --> acc2
+    x_mem --> acc3
+
+    w0 --> acc0
+    w1 --> acc1
+    w2 --> acc2
+    w3 --> acc3
+
+    acc0 -- "@reduce(.Add)" --> y0
+    acc1 -- "@reduce(.Add)" --> y1
+    acc2 -- "@reduce(.Add)" --> y2
+    acc3 -- "@reduce(.Add)" --> y3
+
 
 ```zig
 pub fn gemvF32(x: [*]const f32, w: [*]const f32, y: [*]f32, n: usize, k: usize) void {

@@ -6,6 +6,38 @@ The Metal backend is Agave's primary GPU path on Apple Silicon. It's designed ar
 
 On Apple Silicon (M1, M2, M3, M4), the CPU and GPU share the **same physical DRAM** — there's no separate VRAM. This is different from discrete GPUs (NVIDIA, AMD) where data must be copied between host RAM and GPU memory.
 
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#e8f0fe',
+  'primaryTextColor': '#1a1a2e',
+  'primaryBorderColor': '#4a6cf7',
+  'lineColor': '#4a6cf7',
+  'secondaryColor': '#f0f4ff',
+  'tertiaryColor': '#f8f9ff',
+  'edgeLabelBackground': '#ffffff',
+  'clusterBkg': '#f0f4ff',
+  'clusterBorder': '#4a6cf7',
+  'titleColor': '#1a1a2e',
+  'nodeTextColor': '#1a1a2e',
+  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
+}}}%%
+flowchart LR
+    subgraph Discrete["Discrete GPU (NVIDIA/AMD)"]
+        direction LR
+        H1["Host RAM\n(CPU allocation)"] -->|"memcpy D2H/H2D\n(PCIe, ~32 GB/s)"| V1["VRAM\n(GPU memory)"]
+    end
+
+    subgraph UMA["Apple Silicon UMA"]
+        direction LR
+        Shared["Shared DRAM\n(~400 GB/s)"]
+        CPU["CPU"] -->|"pointer read/write"| Shared
+        GPU["GPU"] -->|"pointer read/write"| Shared
+    end
+
+    style Discrete fill:#2d1b1b,stroke:#cc4444
+    style UMA fill:#1b2d1b,stroke:#44cc44
+
+
 **Implications:**
 
 - **Zero-copy buffer wrapping:** CPU allocations can be used directly by the GPU via `MTLBuffer.newBufferWithBytesNoCopy()`
@@ -35,6 +67,37 @@ Agave wraps all model weights (mmap'd from GGUF/SafeTensors) and activation buff
 Creating a `MTLBuffer` wrapper involves ObjC allocation and reference counting. Doing this **every dispatch** (800+ times per token) adds 10-15% overhead.
 
 **Solution:** Cache `MTLBuffer` objects by their host pointer address.
+
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#e8f0fe',
+  'primaryTextColor': '#1a1a2e',
+  'primaryBorderColor': '#4a6cf7',
+  'lineColor': '#4a6cf7',
+  'secondaryColor': '#f0f4ff',
+  'tertiaryColor': '#f8f9ff',
+  'edgeLabelBackground': '#ffffff',
+  'clusterBkg': '#f0f4ff',
+  'clusterBorder': '#4a6cf7',
+  'titleColor': '#1a1a2e',
+  'nodeTextColor': '#1a1a2e',
+  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
+}}}%%
+flowchart TD
+    Call["getBufRef(ptr, len)"] --> Hash["Compute addr = @intFromPtr(ptr)"]
+    Hash --> Lookup{"buf_cache.get(addr)?"}
+
+    Lookup -->|"Hit (stable weight pointer)"| Return["Return cached MTLBuffer\n+ stored offset"]
+    Lookup -->|"Miss (first access)"| Align["Align ptr down to\npage boundary (4096 B)"]
+    Align --> Wrap["newBufferWithBytesNoCopy\n(zero-copy, Shared mode)"]
+    Wrap --> Store["buf_cache.put(addr, info)"]
+    Store --> Return
+
+    Return --> Kernel["Pass BufRef{buf, offset}\nto Metal compute encoder"]
+
+    style Return fill:#1b2d1b,stroke:#44cc44
+    style Wrap fill:#1b1b2d,stroke:#4444cc
+
 
 ### Cache Structure
 
@@ -115,6 +178,49 @@ return BufRef{ .buf = buf, .offset = offset };
 Metal kernels are dispatched via **command buffers** — sequences of GPU operations that execute together. Creating a new command buffer for every kernel would serialize execution and waste CPU time.
 
 **Pattern:** Maintain a **persistent command buffer** and **compute encoder** across multiple dispatches.
+
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#e8f0fe',
+  'primaryTextColor': '#1a1a2e',
+  'primaryBorderColor': '#4a6cf7',
+  'lineColor': '#4a6cf7',
+  'secondaryColor': '#f0f4ff',
+  'tertiaryColor': '#f8f9ff',
+  'edgeLabelBackground': '#ffffff',
+  'clusterBkg': '#f0f4ff',
+  'clusterBorder': '#4a6cf7',
+  'titleColor': '#1a1a2e',
+  'nodeTextColor': '#1a1a2e',
+  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
+}}}%%
+sequenceDiagram
+    participant Model as Model (Zig)
+    participant BE as MetalBackend
+    participant GPU as GPU Hardware
+
+    Note over Model,GPU: Token generation forward pass
+
+    Model->>BE: gemv(x, W_q, ...)
+    BE->>BE: active_enc == nil: create CommandBuffer + Encoder
+    BE->>BE: encode kernel #1 (GEMV)
+    BE->>BE: insert memoryBarrier
+
+    Model->>BE: gemv(x, W_k, ...)
+    BE->>BE: reuse active_enc
+    BE->>BE: encode kernel #2 (GEMV)
+    BE->>BE: insert memoryBarrier
+
+    Note over Model,BE: ...20+ more dispatches, same command buffer...
+
+    Model->>BE: sync()
+    BE->>BE: endEncoding()
+    BE->>GPU: commit() — submit all work at once
+    GPU-->>BE: waitUntilCompleted()
+    BE->>BE: active_enc = nil, active_cmd = nil
+
+    Model->>Model: argmax(logits) — safe to read GPU output
+
 
 ### Active Command Buffer State
 
@@ -210,6 +316,36 @@ Metal's memory barrier (`memoryBarrierWithScope`) ensures write visibility but *
 **Problem:** Independent operations (e.g., normalizing Q and K in parallel) don't need a barrier between them.
 
 **Solution:** `beginBatch()` / `endBatch()` to suppress barriers and insert one at the end.
+
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#e8f0fe',
+  'primaryTextColor': '#1a1a2e',
+  'primaryBorderColor': '#4a6cf7',
+  'lineColor': '#4a6cf7',
+  'secondaryColor': '#f0f4ff',
+  'tertiaryColor': '#f8f9ff',
+  'edgeLabelBackground': '#ffffff',
+  'clusterBkg': '#f0f4ff',
+  'clusterBorder': '#4a6cf7',
+  'titleColor': '#1a1a2e',
+  'nodeTextColor': '#1a1a2e',
+  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
+}}}%%
+flowchart LR
+    subgraph Sequential["Without beginBatch (930 barriers/token)"]
+        direction LR
+        A1["rmsNorm Q"] -->|barrier| A2["rmsNorm K"] -->|barrier| A3["rmsNorm V"] -->|barrier| A4["next op"]
+    end
+
+    subgraph Batched["With beginBatch/endBatch (690 barriers/token)"]
+        direction LR
+        B1["rmsNorm Q"] & B2["rmsNorm K"] & B3["rmsNorm V"] -->|"single barrier\n(endBatch)"| B4["next op"]
+    end
+
+    style Sequential fill:#2d1b1b,stroke:#cc4444
+    style Batched fill:#1b2d1b,stroke:#44cc44
+
 
 ### API
 

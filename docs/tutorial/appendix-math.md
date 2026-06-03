@@ -19,7 +19,48 @@ dot(a, b) = a[0]*b[0] + a[1]*b[1] + ... + a[n-1]*b[n-1]
 
 ### Matrix-Vector Multiply (GEMV)
 
-Each output element is a dot product of a matrix row with the input vector:
+Each output element is a dot product of a matrix row with the input vector. The weight matrix is streamed from memory one row at a time, and each row produces one output scalar.
+
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#e8f0fe',
+  'primaryTextColor': '#1a1a2e',
+  'primaryBorderColor': '#4a6cf7',
+  'lineColor': '#4a6cf7',
+  'secondaryColor': '#f0f4ff',
+  'tertiaryColor': '#f8f9ff',
+  'edgeLabelBackground': '#ffffff',
+  'clusterBkg': '#f0f4ff',
+  'clusterBorder': '#4a6cf7',
+  'titleColor': '#1a1a2e',
+  'nodeTextColor': '#1a1a2e',
+  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
+}}}%%
+flowchart LR
+    X["Input Vector x\n[k floats]"]
+    W["Weight Matrix W\n[n rows × k cols]"]
+
+    subgraph Row0["Row 0 → output y[0]"]
+        D0["dot(W[0], x)"]
+    end
+    subgraph Row1["Row 1 → output y[1]"]
+        D1["dot(W[1], x)"]
+    end
+    subgraph RowN["Row n-1 → output y[n-1]"]
+        DN["dot(W[n-1], x)"]
+    end
+
+    W --> D0
+    W --> D1
+    W --> DN
+    X --> D0
+    X --> D1
+    X --> DN
+
+    D0 --> Y["Output Vector y\n[n floats]"]
+    D1 --> Y
+    DN --> Y
+
 
 ```
 y[i] = sum_j(W[i][j] * x[j])
@@ -96,6 +137,55 @@ W_v = [[0.3, 0.4, 0.5, 0.6],      V = W_v @ x = [5.0,
 
 The Q and K projections are used to compute **attention scores** (how much each token should attend to each other token). The V projection contains the actual information that gets mixed based on those scores.
 
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#e8f0fe',
+  'primaryTextColor': '#1a1a2e',
+  'primaryBorderColor': '#4a6cf7',
+  'lineColor': '#4a6cf7',
+  'secondaryColor': '#f0f4ff',
+  'tertiaryColor': '#f8f9ff',
+  'edgeLabelBackground': '#ffffff',
+  'clusterBkg': '#f0f4ff',
+  'clusterBorder': '#4a6cf7',
+  'titleColor': '#1a1a2e',
+  'nodeTextColor': '#1a1a2e',
+  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
+}}}%%
+flowchart TD
+    subgraph Current["Current token (e.g. 'cat')"]
+        Q["Query Q\nWhat am I looking for?\ne.g. 'adjectives nearby'"]
+    end
+
+    subgraph Context["All tokens in context"]
+        K1["Key K1 'fluffy'\nWhat do I offer?"]
+        K2["Key K2 'sat'\nWhat do I offer?"]
+        K3["Key K3 'mat'\nWhat do I offer?"]
+    end
+
+    Q -->|"dot product → score"| K1
+    Q -->|"dot product → score"| K2
+    Q -->|"dot product → score"| K3
+
+    K1 -->|"high score → high weight"| Softmax["softmax(scores)\nattention weights"]
+    K2 -->|"low score → low weight"| Softmax
+    K3 -->|"low score → low weight"| Softmax
+
+    subgraph Values["Values carry the content"]
+        V1["Value V1 'fluffy'"]
+        V2["Value V2 'sat'"]
+        V3["Value V3 'mat'"]
+    end
+
+    Softmax -->|"weight × value"| V1
+    Softmax -->|"weight × value"| V2
+    Softmax -->|"weight × value"| V3
+
+    V1 --> Output["Output = weighted mix\n(mostly 'fluffy' info)"]
+    V2 --> Output
+    V3 --> Output
+
+
 ### Attention Score Computation
 
 Once we have Q and K, we compute similarity scores via dot products:
@@ -123,6 +213,44 @@ The division by `sqrt(head_dim)` (called **scaled** dot-product attention) preve
 3. Apply softmax per row: weights[i][j] = softmax(S[i])
 4. Weighted sum of values: output[i] = sum_j(weights[i][j] × V[j])
 ```
+
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#e8f0fe',
+  'primaryTextColor': '#1a1a2e',
+  'primaryBorderColor': '#4a6cf7',
+  'lineColor': '#4a6cf7',
+  'secondaryColor': '#f0f4ff',
+  'tertiaryColor': '#f8f9ff',
+  'edgeLabelBackground': '#ffffff',
+  'clusterBkg': '#f0f4ff',
+  'clusterBorder': '#4a6cf7',
+  'titleColor': '#1a1a2e',
+  'nodeTextColor': '#1a1a2e',
+  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
+}}}%%
+flowchart LR
+    HiddenState["Hidden State x\n[hidden_dim floats]"]
+
+    HiddenState --> Wq["W_q projection\nGEMV"]
+    HiddenState --> Wk["W_k projection\nGEMV"]
+    HiddenState --> Wv["W_v projection\nGEMV"]
+
+    Wq --> Q["Query Q\n[n_heads × head_dim]"]
+    Wk --> K["Key K\n(stored in KV cache)"]
+    Wv --> V["Value V\n(stored in KV cache)"]
+
+    subgraph Scores["Attention Score Computation"]
+        Q --> Dot["Q · Kᵀ\n(dot products)"]
+        K --> Dot
+        Dot --> Scale["÷ sqrt(head_dim)\n(prevents saturation)"]
+        Scale --> SM["softmax per row\n(convert to weights 0→1)"]
+    end
+
+    SM --> WeightedSum["Weighted sum\nweights × V"]
+    V --> WeightedSum
+    WeightedSum --> Out["Attention Output\n[hidden_dim floats]"]
+
 
 **Multi-head attention**: Repeat this process with different W_q, W_k, W_v matrices for each head, concatenate outputs.
 
@@ -168,11 +296,39 @@ Output: [0.66, 0.24, 0.10]    (sum = 1.00)
 
 **Usage**: Attention weights (convert attention scores to probabilities), MoE routing (select experts), sampling (convert logits to token probabilities).
 
-**Numerical stability trick**: Subtract max before exp to prevent overflow:
-```
-x_shifted = x - max(x)
-softmax(x) = exp(x_shifted) / sum(exp(x_shifted))
-```
+**Numerical stability trick**: Subtract max before exp to prevent overflow. The diagram below shows why the naive path fails and what the stable path does instead.
+
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#e8f0fe',
+  'primaryTextColor': '#1a1a2e',
+  'primaryBorderColor': '#4a6cf7',
+  'lineColor': '#4a6cf7',
+  'secondaryColor': '#f0f4ff',
+  'tertiaryColor': '#f8f9ff',
+  'edgeLabelBackground': '#ffffff',
+  'clusterBkg': '#f0f4ff',
+  'clusterBorder': '#4a6cf7',
+  'titleColor': '#1a1a2e',
+  'nodeTextColor': '#1a1a2e',
+  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
+}}}%%
+flowchart TD
+    Input["Raw scores x\ne.g. [1000, 1001, 999]"]
+
+    Input --> Naive["Naive: exp(x) directly"]
+    Naive --> Overflow["exp(1000) = Inf\noverflow — unusable"]
+
+    Input --> FindMax["Find max(x) = 1001"]
+    FindMax --> Shift["Subtract max\nx_shifted = [-1, 0, -2]"]
+    Shift --> ExpSafe["exp(x_shifted)\n= [0.368, 1.0, 0.135]"]
+    ExpSafe --> Sum["sum = 1.503"]
+    Sum --> Divide["Divide each by sum"]
+    Divide --> Probs["Probabilities\n[0.245, 0.665, 0.090]\nsum = 1.0"]
+
+    style Overflow fill:#ffcccc,color:#333
+    style Probs fill:#ccffcc,color:#333
+
 
 ### RMS Normalization (RMSNorm)
 

@@ -40,13 +40,91 @@ After all layers, one final RMSNorm + GEMV maps the hidden state from `n_embd` d
 
 MTP adds a shortcut. After the main model finishes its forward pass (all N layers), we save the **pre-norm hidden state** — the hidden vector just before the final output norm. This vector contains the model's complete understanding of the sequence context.
 
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#e8f0fe',
+  'primaryTextColor': '#1a1a2e',
+  'primaryBorderColor': '#4a6cf7',
+  'lineColor': '#4a6cf7',
+  'secondaryColor': '#f0f4ff',
+  'tertiaryColor': '#f8f9ff',
+  'edgeLabelBackground': '#ffffff',
+  'clusterBkg': '#f0f4ff',
+  'clusterBorder': '#4a6cf7',
+  'titleColor': '#1a1a2e',
+  'nodeTextColor': '#1a1a2e',
+  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
+}}}%%
+flowchart LR
+    Input["Token t"] --> MainModel
+
+    subgraph MainModel["Main Model (N layers)"]
+        direction TB
+        Layers["64 Transformer Layers"]
+        PreNorm["Pre-norm Hidden State\n(saved for MTP)"]
+        OutNorm["Final RMSNorm + Projection"]
+        Layers --> PreNorm --> OutNorm
+    end
+
+    OutNorm --> TokenT1["Token t+1\n(main prediction)"]
+    PreNorm -- "hidden state\n(cheap shortcut)" --> MTPHead
+
+    subgraph MTPHead["MTP Head (1 layer, ~5% cost)"]
+        direction TB
+        EmbedT1["Embed(token t+1)"]
+        Fuse["Fuse + Project"]
+        SingleLayer["1 Transformer Layer"]
+        EmbedT1 --> Fuse --> SingleLayer
+    end
+
+    MTPHead --> TokenT2["Token t+2\n(draft prediction)"]
+
+
 An MTP head takes this hidden state and produces an additional token prediction with just **one transformer layer** instead of N. This is ~5-10% the cost of a full forward pass. If the main model predicted token `t`, the MTP head predicts what token `t+1` will be — before the main model has even seen token `t`.
 
 These draft tokens are then **verified** against the main model. If the main model agrees with the MTP prediction (which happens 70-85% of the time), the token is accepted for free. If not, the main model's prediction replaces it. This is **speculative decoding** — lossless, identical output to standard decoding.
 
 ## MTP Head Architecture
 
-Each MTP head is a single transformer layer with some extra plumbing:
+Each MTP head is a single transformer layer with some extra plumbing. Two vectors are fused together: the main model's final understanding of the context, and the embedding of the token just predicted. That fused vector feeds a lightweight transformer block that produces the next draft token.
+
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#e8f0fe',
+  'primaryTextColor': '#1a1a2e',
+  'primaryBorderColor': '#4a6cf7',
+  'lineColor': '#4a6cf7',
+  'secondaryColor': '#f0f4ff',
+  'tertiaryColor': '#f8f9ff',
+  'edgeLabelBackground': '#ffffff',
+  'clusterBkg': '#f0f4ff',
+  'clusterBorder': '#4a6cf7',
+  'titleColor': '#1a1a2e',
+  'nodeTextColor': '#1a1a2e',
+  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
+}}}%%
+flowchart TD
+    HiddenState["Pre-norm Hidden State\n(from main model, n_embd floats)"]
+    TokenEmbed["Token Embedding\n(of token t, n_embd floats)"]
+
+    HNorm["RMSNorm + 1\n(hnorm weights)"]
+    ENorm["RMSNorm + 1\n(enorm weights)"]
+
+    HiddenState --> HNorm
+    TokenEmbed --> ENorm
+
+    HNorm --> Concat["Concatenate\n[embed ; hidden]\n2×n_embd floats"]
+    ENorm --> Concat
+
+    Concat --> EHProj["eh_proj GEMV\n2×n_embd → n_embd"]
+
+    EHProj --> AttnBlock["Attention Block\n(Q/K/V + RoPE + SDPA)"]
+    AttnBlock --> FFNBlock["FFN Block\n(SwiGLU gate + up + down)"]
+    FFNBlock --> HeadNorm["RMSNorm\n(shared_head_norm)"]
+    HeadNorm --> HeadProj["Output GEMV\n(shared_head_head)\nn_embd → vocab_size"]
+    HeadProj --> Logits["Logits [vocab_size]"]
+    Logits --> ArgMax["argmax → draft token t+2"]
+
 
 ```
                  ┌────────────────────────────────────────────┐
@@ -112,7 +190,49 @@ The GGUF metadata field `{arch}.nextn_predict_layers` indicates how many MTP dep
 
 ## Draft/Verify Loop
 
-MTP integrates with Agave's existing speculative decoding infrastructure:
+MTP integrates with Agave's existing speculative decoding infrastructure. The key insight is that draft tokens are generated cheaply and then verified by the main model in a single pass. Accepted tokens are free; rejected tokens fall back to the main model's output with no quality loss.
+
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#e8f0fe',
+  'primaryTextColor': '#1a1a2e',
+  'primaryBorderColor': '#4a6cf7',
+  'lineColor': '#4a6cf7',
+  'secondaryColor': '#f0f4ff',
+  'tertiaryColor': '#f8f9ff',
+  'edgeLabelBackground': '#ffffff',
+  'clusterBkg': '#f0f4ff',
+  'clusterBorder': '#4a6cf7',
+  'titleColor': '#1a1a2e',
+  'nodeTextColor': '#1a1a2e',
+  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
+}}}%%
+sequenceDiagram
+    participant Main as Main Model (N layers)
+    participant MTP as MTP Head (1 layer)
+    participant KV as KV Cache
+
+    Note over Main,KV: Forward pass — generate token t+1
+    Main->>KV: Write K/V for token t
+    Main->>Main: Save pre-norm hidden state
+    Main-->>Main: Predict token t+1
+
+    Note over MTP,KV: Draft pass — predict token t+2 cheaply
+    MTP->>KV: Write K/V for token t+1 (MTP cache)
+    MTP->>MTP: Fuse hidden(t) + embed(t+1)
+    MTP-->>MTP: Draft token t+2
+
+    Note over Main,KV: Verify pass — main model checks the draft
+    Main->>KV: Write K/V for token t+1
+    Main-->>Main: Predict token t+2 (independently)
+
+    alt Draft accepted (70-85% of the time)
+        Main-->>Main: Emit token t+1 AND token t+2 (free!)
+    else Draft rejected
+        Main-->>KV: Roll back MTP KV cache
+        Main-->>Main: Emit token t+1 only, use main model's t+2
+    end
+
 
 ```
 Step 1: Main model forward(token_t)
@@ -133,6 +253,46 @@ Step 4: Rollback MTP KV cache to accepted position
 For greedy decoding (temperature=0), speculative decoding is **lossless** — output is byte-identical to standard decoding. For sampling (temperature>0), rejection sampling preserves the target distribution.
 
 ## Performance Characteristics
+
+MTP heads live inside the same checkpoint as the main model and share its learned representations. A separate draft model is an entirely independent model loaded alongside the main one. The structural difference explains why MTP achieves higher acceptance rates at lower memory cost.
+
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#e8f0fe',
+  'primaryTextColor': '#1a1a2e',
+  'primaryBorderColor': '#4a6cf7',
+  'lineColor': '#4a6cf7',
+  'secondaryColor': '#f0f4ff',
+  'tertiaryColor': '#f8f9ff',
+  'edgeLabelBackground': '#ffffff',
+  'clusterBkg': '#f0f4ff',
+  'clusterBorder': '#4a6cf7',
+  'titleColor': '#1a1a2e',
+  'nodeTextColor': '#1a1a2e',
+  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
+}}}%%
+flowchart TD
+    subgraph MTPArch["MTP (built-in heads)"]
+        direction TB
+        SharedEmbed["Shared Embedding Table"]
+        MainLayers["Main Model Layers\n(all N layers)"]
+        SharedEmbed --> MainLayers
+        MainLayers -- "pre-norm hidden\n(shared repr)" --> MTPHead1["MTP Head 0\n(1 layer)"]
+        MainLayers -- "pre-norm hidden\n(shared repr)" --> MTPHead2["MTP Head 1\n(1 layer, depth 2)"]
+        MTPHead1 --> Draft1["Draft token t+2"]
+        MTPHead2 --> Draft2["Draft token t+3"]
+    end
+
+    subgraph SeparateArch["Separate Draft Model"]
+        direction TB
+        TargetModel["Target Model\n(e.g. 27B, all N layers)"]
+        DraftModel["Draft Model\n(e.g. 1.5B, M layers)"]
+        TargetModel --> TTarget["Token t+1"]
+        DraftModel --> TDraft["Draft token t+2\n(independent distribution)"]
+    end
+
+    MTPArch -. "higher acceptance rate\nlower memory overhead" .- SeparateArch
+
 
 | Metric | MTP | Separate Draft Model | N-gram |
 |--------|-----|---------------------|--------|

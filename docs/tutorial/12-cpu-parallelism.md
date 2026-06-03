@@ -31,6 +31,49 @@ A **futex** (fast userspace mutex) is a kernel primitive that lets threads sleep
 
 **Cost:** ~1-2 µs to wake a sleeping thread (vs 50+ µs to spawn a new thread).
 
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#e8f0fe',
+  'primaryTextColor': '#1a1a2e',
+  'primaryBorderColor': '#4a6cf7',
+  'lineColor': '#4a6cf7',
+  'secondaryColor': '#f0f4ff',
+  'tertiaryColor': '#f8f9ff',
+  'edgeLabelBackground': '#ffffff',
+  'clusterBkg': '#f0f4ff',
+  'clusterBorder': '#4a6cf7',
+  'titleColor': '#1a1a2e',
+  'nodeTextColor': '#1a1a2e',
+  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
+}}}%%
+sequenceDiagram
+    participant M as Main Thread
+    participant K as Kernel (futex)
+    participant W1 as Worker 1
+    participant W2 as Worker 2
+
+    Note over W1,W2: Idle — sleeping on generation=0
+    W1->>K: futexWait(&generation, 0)
+    W2->>K: futexWait(&generation, 0)
+
+    M->>M: generation.fetchAdd(1) → generation=1
+    M->>K: futexWake(&generation, 2)
+    K-->>W1: wake (generation changed)
+    K-->>W2: wake (generation changed)
+
+    W1->>W1: local_gen = generation.load() → 1
+    W2->>W2: local_gen = generation.load() → 1
+
+    par Workers process chunks
+        W1->>W1: doWork()
+        W2->>W2: doWork()
+    end
+
+    W1->>M: active.fetchSub(1)
+    W2->>M: active.fetchSub(1)
+    Note over W1,W2: Back to sleep — futexWait(&generation, 1)
+
+
 In Zig 0.16, futex operations go through the `Io` context (threaded from `main(Init)` via `init.io`). The thread pool stores `io` at spawn time and uses `io.futexWaitUncancelable()` / `io.futexWake()` instead of the old `std.Thread.Futex` API.
 
 ### Generation Counter Pattern
@@ -58,7 +101,44 @@ while (true) {
 
 ## Work Distribution: Atomic Counter
 
-Instead of pre-assigning rows to threads, use an **atomic counter** that threads increment to grab the next chunk:
+Instead of pre-assigning rows to threads, use an **atomic counter** that threads increment to grab the next chunk. Each thread races to claim the next available chunk by atomically advancing the counter — no coordinator needed.
+
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#e8f0fe',
+  'primaryTextColor': '#1a1a2e',
+  'primaryBorderColor': '#4a6cf7',
+  'lineColor': '#4a6cf7',
+  'secondaryColor': '#f0f4ff',
+  'tertiaryColor': '#f8f9ff',
+  'edgeLabelBackground': '#ffffff',
+  'clusterBkg': '#f0f4ff',
+  'clusterBorder': '#4a6cf7',
+  'titleColor': '#1a1a2e',
+  'nodeTextColor': '#1a1a2e',
+  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
+}}}%%
+flowchart LR
+    Counter["task_counter\n(atomic usize)\nstarts at 0"]
+
+    Counter -->|fetchAdd(4)| M["Main Thread\nrows 0–3"]
+    Counter -->|fetchAdd(4)| W1["Worker 1\nrows 4–7"]
+    Counter -->|fetchAdd(4)| W2["Worker 2\nrows 8–11"]
+    Counter -->|fetchAdd(4)| W1b["Worker 1\nrows 12–15"]
+    Counter -->|fetchAdd(4)| W3["Worker 3\nrows 16–19"]
+    Counter -->|fetchAdd(4)| W2b["Worker 2\nrows 20–23"]
+
+    M --> Out["Output rows\n(y vector)"]
+    W1 --> Out
+    W2 --> Out
+    W1b --> Out
+    W3 --> Out
+    W2b --> Out
+
+    subgraph "n=24 rows, grain=4 → 6 chunks"
+        Counter
+    end
+
 
 ```zig
 task_counter: std.atomic.Value(usize) = std.atomic.Value(usize).init(0);
@@ -89,7 +169,44 @@ fn doWork(pool: *ThreadPool) void {
 
 ## Main Thread Participation
 
-The main thread should **not** just wait — it should do work too:
+The main thread should **not** just wait — it should do work too. Instead of sitting idle while workers run, it joins the counter race and takes chunks like any other thread, then spin-waits for the stragglers.
+
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#e8f0fe',
+  'primaryTextColor': '#1a1a2e',
+  'primaryBorderColor': '#4a6cf7',
+  'lineColor': '#4a6cf7',
+  'secondaryColor': '#f0f4ff',
+  'tertiaryColor': '#f8f9ff',
+  'edgeLabelBackground': '#ffffff',
+  'clusterBkg': '#f0f4ff',
+  'clusterBorder': '#4a6cf7',
+  'titleColor': '#1a1a2e',
+  'nodeTextColor': '#1a1a2e',
+  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
+}}}%%
+flowchart TD
+    Start["parallelFor() called"] --> Post["Post task descriptor\n(func, ctx, total, grain)"]
+    Post --> Reset["task_counter = 0\nactive = n_workers"]
+    Reset --> Wake["generation++\nfutexWake(all workers)"]
+    Wake --> Split["Main thread + Workers\nall racing on task_counter"]
+
+    Split --> Main["Main Thread\ndoWork() loop\n(fetchAdd chunks)"]
+    Split --> W1["Worker 1\ndoWork() loop"]
+    Split --> W2["Worker 2\ndoWork() loop"]
+    Split --> Wn["Worker N\ndoWork() loop"]
+
+    Main --> Spin["Main spins:\nwhile active != 0\n spinLoopHint()"]
+    W1 --> Dec1["active.fetchSub(1)"]
+    W2 --> Dec2["active.fetchSub(1)"]
+    Wn --> DecN["active.fetchSub(1)"]
+
+    Dec1 --> Done["active == 0\nparallelFor returns"]
+    Dec2 --> Done
+    DecN --> Done
+    Spin --> Done
+
 
 ```zig
 pub fn parallelFor(pool: *ThreadPool, total: usize, grain: usize, ctx: *anyopaque, func: WorkFunc) void {
@@ -271,7 +388,40 @@ pub fn gemvParallel(pool: *ThreadPool, x: [*]const f32, w: [*]const f32, y: [*]f
 
 ## Memory Ordering
 
-Atomic operations have different **memory ordering** guarantees:
+Atomic operations have different **memory ordering** guarantees. The key question is: when one thread writes data and another reads it, how do you ensure the reader sees the writer's writes?
+
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#e8f0fe',
+  'primaryTextColor': '#1a1a2e',
+  'primaryBorderColor': '#4a6cf7',
+  'lineColor': '#4a6cf7',
+  'secondaryColor': '#f0f4ff',
+  'tertiaryColor': '#f8f9ff',
+  'edgeLabelBackground': '#ffffff',
+  'clusterBkg': '#f0f4ff',
+  'clusterBorder': '#4a6cf7',
+  'titleColor': '#1a1a2e',
+  'nodeTextColor': '#1a1a2e',
+  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
+}}}%%
+sequenceDiagram
+    participant M as Main Thread
+    participant W as Worker Thread
+
+    Note over M: Write task descriptor fields
+    M->>M: task_total = 1024 (plain write)
+    M->>M: task_grain = 4 (plain write)
+    M->>M: generation.fetchAdd(1, .release)
+    Note over M: .release: all prior writes<br/>are visible before this store
+
+    Note over M,W: futexWake / futexWait handoff
+
+    W->>W: local_gen = generation.load(.acquire)
+    Note over W: .acquire: all writes that<br/>happened before the .release<br/>are now visible here
+    W->>W: read task_total → sees 1024 ✓
+    W->>W: read task_grain → sees 4 ✓
+
 
 ### .monotonic
 

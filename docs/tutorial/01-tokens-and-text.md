@@ -10,12 +10,67 @@ Language models don't see text — they see **tokens**, which are integer IDs re
 
 The tokenizer converts between text and token IDs:
 
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#e8f0fe',
+  'primaryTextColor': '#1a1a2e',
+  'primaryBorderColor': '#4a6cf7',
+  'lineColor': '#4a6cf7',
+  'secondaryColor': '#f0f4ff',
+  'tertiaryColor': '#f8f9ff',
+  'edgeLabelBackground': '#ffffff',
+  'clusterBkg': '#f0f4ff',
+  'clusterBorder': '#4a6cf7',
+  'titleColor': '#1a1a2e',
+  'nodeTextColor': '#1a1a2e',
+  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
+}}}%%
+flowchart LR
+    Raw["Raw Text\n\"Hello, world!\""] --> Tok["BPE Tokenizer\nbpe.zig"]
+    Tok --> IDs["Token IDs\n[15496, 11, 995, 0]"]
+    IDs --> Embed["Embedding Table\n[vocab_size × n_embd]"]
+    Embed --> Vec["Float Vectors\nready for the model"]
+
+    IDs -->|"decode path"| Back["\"Hello, world!\""]
+
+    subgraph Vocab["Vocabulary (32K–256K entries)"]
+        IDs
+        Embed
+    end
+
+
 ```
 "Hello, world!" → [15496, 11, 995, 0]     (encode)
 [15496, 11, 995, 0] → "Hello, world!"     (decode)
 ```
 
 **BPE (Byte Pair Encoding)** is the most common algorithm. It works by iteratively merging the most frequent pair of adjacent symbols:
+
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#e8f0fe',
+  'primaryTextColor': '#1a1a2e',
+  'primaryBorderColor': '#4a6cf7',
+  'lineColor': '#4a6cf7',
+  'secondaryColor': '#f0f4ff',
+  'tertiaryColor': '#f8f9ff',
+  'edgeLabelBackground': '#ffffff',
+  'clusterBkg': '#f0f4ff',
+  'clusterBorder': '#4a6cf7',
+  'titleColor': '#1a1a2e',
+  'nodeTextColor': '#1a1a2e',
+  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
+}}}%%
+flowchart TD
+    Start["Input bytes\nH · e · l · l · o"] -->|"find most frequent pair"| S1["Merge: l+l → ll\nH · e · ll · o"]
+    S1 -->|"find next most frequent pair"| S2["Merge: H+e → He\nHe · ll · o"]
+    S2 -->|"find next most frequent pair"| S3["Merge: He+ll → Hell\nHell · o"]
+    S3 -->|"find next most frequent pair"| S4["Merge: Hell+o → Hello\nHello"]
+    S4 --> Done["Token: Hello\nID: 15496"]
+
+    style Start fill:#f5f5f5
+    style Done fill:#d4edda
+
 
 1. Start with individual bytes: `H e l l o`
 2. Most frequent pair is `l l` → merge to `ll`: `H e ll o`
@@ -73,6 +128,34 @@ The tokenizer tracks these IDs for chat template formatting and end-of-generatio
 ### Byte-Level BPE Encoding
 
 Qwen/GPT-style tokenizers use **byte-level** encoding where every possible byte (0x00–0xFF) maps to a printable Unicode character. For example, a space (0x20) is represented as `Ġ` (U+0120). This means:
+
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#e8f0fe',
+  'primaryTextColor': '#1a1a2e',
+  'primaryBorderColor': '#4a6cf7',
+  'lineColor': '#4a6cf7',
+  'secondaryColor': '#f0f4ff',
+  'tertiaryColor': '#f8f9ff',
+  'edgeLabelBackground': '#ffffff',
+  'clusterBkg': '#f0f4ff',
+  'clusterBorder': '#4a6cf7',
+  'titleColor': '#1a1a2e',
+  'nodeTextColor': '#1a1a2e',
+  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
+}}}%%
+flowchart LR
+    Text["\" hello\""] --> Bytes["Raw Bytes\n0x20 0x68 0x65 0x6C 0x6C 0x6F"]
+    Bytes --> Map["Byte→Unicode Map\n256 printable chars"]
+    Map --> Visible["Ġ h e l l o\n(BPE-safe alphabet)"]
+    Visible --> Merge["BPE Merges\napplied normally"]
+    Merge --> Token["Token: Ġhello\n(space included in token)"]
+
+    subgraph "Why byte-level?"
+        NeverUnk["No unknown characters\nevery byte 0x00–0xFF is covered"]
+    end
+
+
 - Every text can be tokenized (no unknown characters)
 - Token text looks odd in raw form: `"Ġhello"` = `" hello"` (space prefix)
 - Grammar-constrained decoding must strip these prefixes via `getEffectiveText()`
@@ -80,6 +163,35 @@ Qwen/GPT-style tokenizers use **byte-level** encoding where every possible byte 
 ## Embedding Lookup
 
 The first operation in the forward pass converts a token ID into a **vector** (a 1D array of numbers). The model has an **embedding** (a learned numerical representation — a fixed-size array of floats that encodes the token's meaning) **table** — a **matrix** (a 2D array) of shape `[vocab_size × n_embd]` where `vocab_size` is the total number of tokens in the vocabulary (e.g., 128K) and `n_embd` is the **embedding dimension** (the size/length of each vector — how many numbers it contains, typically 1024–8192 floating-point numbers). Each row is the learned representation of one token.
+
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#e8f0fe',
+  'primaryTextColor': '#1a1a2e',
+  'primaryBorderColor': '#4a6cf7',
+  'lineColor': '#4a6cf7',
+  'secondaryColor': '#f0f4ff',
+  'tertiaryColor': '#f8f9ff',
+  'edgeLabelBackground': '#ffffff',
+  'clusterBkg': '#f0f4ff',
+  'clusterBorder': '#4a6cf7',
+  'titleColor': '#1a1a2e',
+  'nodeTextColor': '#1a1a2e',
+  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
+}}}%%
+flowchart LR
+    TID["Token ID\ne.g. 15496"] -->|"row index"| Lookup["Embedding Table\n[vocab_size × n_embd]\ne.g. 128K × 4096"]
+    Lookup -->|"read one row"| Vec["Float Vector\n[4096 float32s]\n≈ 16 KB"]
+    Vec --> Layers["Transformer Layers\nattention + FFN × N"]
+    Layers --> Hidden["Final Hidden State\n[4096 float32s]"]
+    Hidden --> Proj["Output Projection\n[vocab_size × n_embd]"]
+    Proj --> Logits["Logits\n[vocab_size scores]"]
+    Logits -->|"argmax"| NextTok["Next Token ID"]
+
+    style Lookup fill:#fff3cd
+    style Vec fill:#d4edda
+    style Logits fill:#d1ecf1
+
 
 **Note on terminology:** Machine learning uses the term **tensor** for multi-dimensional arrays — a **scalar** (single number, 0D), vector (1D), matrix (2D), or higher-dimensional array (3D, 4D, etc.) are all tensors. Throughout this tutorial we use the more specific terms (scalar/vector/matrix) since nearly all operations are 0D, 1D, or 2D, but you'll see "tensor" in the code and documentation referring to these same arrays.
 

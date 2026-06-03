@@ -6,7 +6,53 @@ Inference can run on different compute backends: **CPU** (universal, always avai
 
 ## The GPU Landscape
 
-Each hardware **vendor** (manufacturer — NVIDIA, Apple, AMD, etc.) has its own API:
+Each hardware **vendor** (manufacturer — NVIDIA, Apple, AMD, etc.) has its own API. Every backend compiles kernel source to an intermediate representation, then the GPU driver translates that to native machine code at runtime.
+
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#e8f0fe',
+  'primaryTextColor': '#1a1a2e',
+  'primaryBorderColor': '#4a6cf7',
+  'lineColor': '#4a6cf7',
+  'secondaryColor': '#f0f4ff',
+  'tertiaryColor': '#f8f9ff',
+  'edgeLabelBackground': '#ffffff',
+  'clusterBkg': '#f0f4ff',
+  'clusterBorder': '#4a6cf7',
+  'titleColor': '#1a1a2e',
+  'nodeTextColor': '#1a1a2e',
+  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
+}}}%%
+flowchart LR
+    Zig["Zig kernel source"]
+
+    Zig --> PTX["PTX bytecode"]
+    Zig --> AMDGCN["AMDGCN bytecode"]
+    Zig --> NEON["NEON / AVX2\n(native binary)"]
+
+    PTX --> NVIDIA["NVIDIA GPU"]
+    AMDGCN --> AMD["AMD GPU"]
+    NEON --> CPU["CPU"]
+
+    MSL["MSL shader"] --> MetalIR["Metal IR"]
+    GLSL["GLSL compute shader"] --> SPIRV["SPIR-V bytecode"]
+    WGSL["WGSL shader"] --> WGSL2["WGSL (interpreted)"]
+
+    MetalIR --> Apple["Apple Silicon GPU"]
+    SPIRV --> AnyGPU["Any GPU\n(Vulkan driver)"]
+    WGSL2 --> Browser["Browser / native\n(wgpu)"]
+
+    subgraph Vendor-specific
+        PTX
+        AMDGCN
+        MetalIR
+    end
+
+    subgraph Cross-platform
+        SPIRV
+        WGSL2
+    end
+
 
 | Platform | Vendor | Language | Compiled Format | Scope |
 |----------|--------|----------|-----------------|-------|
@@ -58,9 +104,87 @@ fused_mlp: load from VRAM → compute gate+up → gelu in-register → multiply 
 
 **Example**: Gemma3's FFN does `down_proj(GELU(gate_proj(x)) * up_proj(x))` — that's 4 matrix operations. Unfused = 8 memory passes. Fused = 2 memory passes (4× speedup from memory reduction alone).
 
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#e8f0fe',
+  'primaryTextColor': '#1a1a2e',
+  'primaryBorderColor': '#4a6cf7',
+  'lineColor': '#4a6cf7',
+  'secondaryColor': '#f0f4ff',
+  'tertiaryColor': '#f8f9ff',
+  'edgeLabelBackground': '#ffffff',
+  'clusterBkg': '#f0f4ff',
+  'clusterBorder': '#4a6cf7',
+  'titleColor': '#1a1a2e',
+  'nodeTextColor': '#1a1a2e',
+  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
+}}}%%
+flowchart LR
+    Input["x\n(hidden state)"]
+
+    subgraph Unfused["Unfused: 8 VRAM reads/writes"]
+        direction LR
+        G1["gate_proj\nGEMV"] -->|"write gate\nto VRAM"| VRAM1["VRAM"]
+        VRAM1 -->|"read gate\nfrom VRAM"| Gelu["GELU\nactivation"]
+        U1["up_proj\nGEMV"] -->|"write up\nto VRAM"| VRAM2["VRAM"]
+        VRAM2 -->|"read up\nfrom VRAM"| Mul["Element-wise\nmultiply"]
+        Gelu --> Mul
+        Mul -->|"write mid\nto VRAM"| VRAM3["VRAM"]
+        VRAM3 -->|"read mid\nfrom VRAM"| D1["down_proj\nGEMV"]
+    end
+
+    subgraph Fused["Fused megakernel: 2 VRAM reads/writes"]
+        direction LR
+        FG["gate_proj\n+ GELU\n+ up_proj\n+ multiply\n(all in registers)"] -->|"write once\nto VRAM"| FV["VRAM"]
+        FV -->|"read once\nfrom VRAM"| FD["down_proj\nGEMV"]
+    end
+
+    Input --> G1
+    Input --> U1
+    Input -->|"load once"| FG
+
+
 ## The Dispatcher Pattern
 
-Model code never imports backend implementations directly. Instead, the `Backend` tagged union with `inline else` dispatch resolves **at compile time** (during compilation, not when the program runs — zero runtime overhead):
+Model code never imports backend implementations directly. Instead, the `Backend` tagged union with `inline else` dispatch resolves **at compile time** (during compilation, not when the program runs — zero runtime overhead). Every model calls the same `be.gemv()` regardless of which hardware is present.
+
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#e8f0fe',
+  'primaryTextColor': '#1a1a2e',
+  'primaryBorderColor': '#4a6cf7',
+  'lineColor': '#4a6cf7',
+  'secondaryColor': '#f0f4ff',
+  'tertiaryColor': '#f8f9ff',
+  'edgeLabelBackground': '#ffffff',
+  'clusterBkg': '#f0f4ff',
+  'clusterBorder': '#4a6cf7',
+  'titleColor': '#1a1a2e',
+  'nodeTextColor': '#1a1a2e',
+  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
+}}}%%
+flowchart LR
+    Model["Model code\nllama.zig / gemma.zig"]
+    Dispatcher["Backend dispatcher\nbackend.zig"]
+
+    Model -->|"be.gemv(...)"| Dispatcher
+
+    Dispatcher -->|"inline else\n(compile-time)"| CPU["CpuBackend\ngemvQ4_0 / gemvBF16"]
+    Dispatcher --> Metal["MetalBackend\nMSL compute shader"]
+    Dispatcher --> CUDA["CudaBackend\nPTX kernel"]
+    Dispatcher --> Vulkan["VulkanBackend\nSPIR-V shader"]
+    Dispatcher --> ROCm["RocmBackend\nAMDGCN kernel"]
+    Dispatcher --> WebGPU["WebGpuBackend\nWGSL shader"]
+
+    subgraph "Never imported by models"
+        CPU
+        Metal
+        CUDA
+        Vulkan
+        ROCm
+        WebGPU
+    end
+
 
 ```zig
 pub const Backend = union(enum) {
@@ -83,7 +207,44 @@ This gives zero-overhead dispatch (no **vtable** — virtual function table used
 
 ## UMA (Unified Memory Architecture)
 
-On **UMA** platforms (where CPU and GPU share the same physical memory chips, unlike **discrete GPUs** which have separate VRAM) like Apple Silicon and NVIDIA Grace, GPU backends can wrap existing CPU allocations as GPU buffers with zero copies:
+On **UMA** platforms (where CPU and GPU share the same physical memory chips, unlike **discrete GPUs** which have separate VRAM) like Apple Silicon and NVIDIA Grace, GPU backends can wrap existing CPU allocations as GPU buffers with zero copies. This eliminates the biggest bottleneck in traditional GPU inference: copying weights from system RAM across the PCIe bus into separate VRAM.
+
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#e8f0fe',
+  'primaryTextColor': '#1a1a2e',
+  'primaryBorderColor': '#4a6cf7',
+  'lineColor': '#4a6cf7',
+  'secondaryColor': '#f0f4ff',
+  'tertiaryColor': '#f8f9ff',
+  'edgeLabelBackground': '#ffffff',
+  'clusterBkg': '#f0f4ff',
+  'clusterBorder': '#4a6cf7',
+  'titleColor': '#1a1a2e',
+  'nodeTextColor': '#1a1a2e',
+  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
+}}}%%
+flowchart TD
+    subgraph Discrete["Discrete GPU (NVIDIA RTX, AMD RX)"]
+        direction LR
+        SysRAM["System RAM\n(weights loaded here)"]
+        PCIe["PCIe Bus\n~64 GB/s"]
+        VRAM["VRAM\n(GPU-only memory)"]
+        dGPU["GPU Compute"]
+
+        SysRAM -->|"cudaMemcpy\n(explicit copy)"| PCIe --> VRAM --> dGPU
+    end
+
+    subgraph UMA["UMA (Apple Silicon, NVIDIA Grace)"]
+        direction LR
+        SharedMem["Shared Physical Memory\n(weights live here once)"]
+        uGPU["GPU Compute"]
+        uCPU["CPU Compute"]
+
+        SharedMem -->|"zero-copy pointer\nnewBufferWithBytesNoCopy"| uGPU
+        SharedMem -->|"normal pointer"| uCPU
+    end
+
 
 - **Metal**: `newBufferWithBytesNoCopy` wraps mmap'd weights directly
 - **CUDA**: `cudaMallocManaged` for transparent access

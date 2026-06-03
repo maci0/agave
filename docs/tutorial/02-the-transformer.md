@@ -23,9 +23,89 @@ A model has N layers stacked in sequence (e.g., 28 for Gemma4 E2B, 64 for Qwen3.
 
 Both sublayers use **residual connections** (`output = input + sublayer(input)`) so information flows through unchanged, preventing the **vanishing gradient problem** (where gradients get exponentially smaller in deep networks during training, making learning impossible) in deep networks.
 
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#e8f0fe',
+  'primaryTextColor': '#1a1a2e',
+  'primaryBorderColor': '#4a6cf7',
+  'lineColor': '#4a6cf7',
+  'secondaryColor': '#f0f4ff',
+  'tertiaryColor': '#f8f9ff',
+  'edgeLabelBackground': '#ffffff',
+  'clusterBkg': '#f0f4ff',
+  'clusterBorder': '#4a6cf7',
+  'titleColor': '#1a1a2e',
+  'nodeTextColor': '#1a1a2e',
+  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
+}}}%%
+flowchart TD
+    TokenID["Token ID\n(e.g. 15496)"] --> EmbedLookup["Embedding Lookup\n(vocab × n_embd matrix)"]
+    EmbedLookup --> H0["Hidden State\n[2304 floats]"]
+
+    H0 --> Layer0
+
+    subgraph Layer0["Transformer Layer (repeated N times)"]
+        direction LR
+        PreNorm1["RMSNorm"] --> Attn["Attention\n(Q/K/V + SDPA)"]
+        Attn --> Add1("+")
+        PreNorm2["RMSNorm"] --> FFN["Feed-Forward\nNetwork"]
+        FFN --> Add2("+")
+    end
+
+    H0 --> Add1
+    Add1 --> PreNorm2
+    Add1 --> Add2
+    Add2 --> HN["Hidden State\n[2304 floats]"]
+
+    HN --> FinalNorm["Final RMSNorm"]
+    FinalNorm --> VocabProj["Vocab Projection\n(n_embd → vocab_size)"]
+    VocabProj --> Logits["Logits\n[262144 floats]"]
+    Logits --> Argmax["Argmax / Sample"]
+    Argmax --> NextToken["Next Token ID"]
+
+
 ## Attention
 
 Attention answers: "which previous tokens should I pay attention to?"
+
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#e8f0fe',
+  'primaryTextColor': '#1a1a2e',
+  'primaryBorderColor': '#4a6cf7',
+  'lineColor': '#4a6cf7',
+  'secondaryColor': '#f0f4ff',
+  'tertiaryColor': '#f8f9ff',
+  'edgeLabelBackground': '#ffffff',
+  'clusterBkg': '#f0f4ff',
+  'clusterBorder': '#4a6cf7',
+  'titleColor': '#1a1a2e',
+  'nodeTextColor': '#1a1a2e',
+  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
+}}}%%
+flowchart LR
+    X["Hidden State x\n[n_embd floats]"]
+
+    X -->|"W_q @"| Q["Query Q\n'What am I looking for?'"]
+    X -->|"W_k @"| K["Key K\n'What do I contain?'"]
+    X -->|"W_v @"| V["Value V\n'What info do I carry?'"]
+
+    subgraph KVCache["KV Cache (past tokens)"]
+        PastK["Past Keys"]
+        PastV["Past Values"]
+    end
+
+    K --> PastK
+    V --> PastV
+
+    Q --> Scores["Dot Products\nQ · K / √d"]
+    PastK --> Scores
+    Scores --> Mask["Causal Mask\n(future = -∞)"]
+    Mask --> Softmax["Softmax\n→ attention weights"]
+    Softmax --> WeightedSum["Weighted Sum\n× V vectors"]
+    PastV --> WeightedSum
+    WeightedSum --> Out["Attention Output\n[n_embd floats]"]
+
 
 **What are Q, K, V?** They're three different **linear projections** (matrix-vector multiplies) of the same input hidden state `x`:
 
@@ -86,6 +166,42 @@ learning different relationships (syntax, semantics, position, etc.)
 
 Attention is computed **in parallel** (all heads compute simultaneously, not one after another) across multiple **heads** (independent attention mechanisms, each focusing on different aspects of the input). [GQA (Ainslie et al., 2023)](https://arxiv.org/abs/2305.13245) reduces memory by sharing K/V heads across multiple Q heads. With 20 Q heads and 5 KV heads, each KV head serves 4 Q heads, cutting KV cache memory by 4×.
 
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#e8f0fe',
+  'primaryTextColor': '#1a1a2e',
+  'primaryBorderColor': '#4a6cf7',
+  'lineColor': '#4a6cf7',
+  'secondaryColor': '#f0f4ff',
+  'tertiaryColor': '#f8f9ff',
+  'edgeLabelBackground': '#ffffff',
+  'clusterBkg': '#f0f4ff',
+  'clusterBorder': '#4a6cf7',
+  'titleColor': '#1a1a2e',
+  'nodeTextColor': '#1a1a2e',
+  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
+}}}%%
+flowchart LR
+    subgraph QHeads["16 Query Heads (one per attention 'channel')"]
+        Q0["Q0"] & Q1["Q1"] & Q2["Q2"] & Q3["Q3"]
+        Q4["Q4"] & Q5["Q5"] & Q6["Q6"] & Q7["Q7"]
+        Q8["Q8"] & Q9["Q9"] & Q10["Q10"] & Q11["Q11"]
+        Q12["Q12"] & Q13["Q13"] & Q14["Q14"] & Q15["Q15"]
+    end
+
+    subgraph KVHeads["4 KV Heads (shared — stored in KV cache)"]
+        KV0["K0 / V0"]
+        KV1["K1 / V1"]
+        KV2["K2 / V2"]
+        KV3["K3 / V3"]
+    end
+
+    Q0 & Q1 & Q2 & Q3 --> KV0
+    Q4 & Q5 & Q6 & Q7 --> KV1
+    Q8 & Q9 & Q10 & Q11 --> KV2
+    Q12 & Q13 & Q14 & Q15 --> KV3
+
+
 | Model | Q heads | KV heads | Ratio |
 | :--- | :--- | :--- | :--- |
 | Gemma3 1B | 4 | 1 | 4:1 |
@@ -143,6 +259,49 @@ The implementation handles KV cache append, GQA head mapping, sliding window, at
 ## RoPE (Rotary Position Encoding)
 
 Transformers are **position-agnostic** by default (they don't know the order of tokens) — without position information, "the cat sat" and "sat the cat" look identical. Earlier models added absolute position embeddings (e.g., "this is position 5"), but [RoPE (Su et al., 2021)](https://arxiv.org/abs/2104.09864) encodes position through **rotation** because it has a key geometric property: **the angle difference between two rotated vectors depends only on their relative distance, not their absolute positions**.
+
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#e8f0fe',
+  'primaryTextColor': '#1a1a2e',
+  'primaryBorderColor': '#4a6cf7',
+  'lineColor': '#4a6cf7',
+  'secondaryColor': '#f0f4ff',
+  'tertiaryColor': '#f8f9ff',
+  'edgeLabelBackground': '#ffffff',
+  'clusterBkg': '#f0f4ff',
+  'clusterBorder': '#4a6cf7',
+  'titleColor': '#1a1a2e',
+  'nodeTextColor': '#1a1a2e',
+  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
+}}}%%
+flowchart LR
+    subgraph Input["Q or K vector (8 dims shown)"]
+        D01["dims 0-1"]
+        D23["dims 2-3"]
+        D45["dims 4-5"]
+        D67["dims 6-7"]
+    end
+
+    subgraph Freqs["Rotation Frequency per plane\n(lower dim = faster rotation)"]
+        F0["freq₀ = 1.0\n(fast)"]
+        F1["freq₁ = 0.1\n(medium)"]
+        F2["freq₂ = 0.01\n(slow)"]
+        F3["freq₃ = 0.001\n(very slow)"]
+    end
+
+    Pos["Token Position\n(e.g. pos = 7)"] --> Angle0["angle = pos × freq₀"]
+    Pos --> Angle1["angle = pos × freq₁"]
+    Pos --> Angle2["angle = pos × freq₂"]
+    Pos --> Angle3["angle = pos × freq₃"]
+
+    D01 & F0 & Angle0 --> R0["Rotate 2D\n[cos θ, -sin θ]\n[sin θ,  cos θ]"]
+    D23 & F1 & Angle1 --> R1["Rotate 2D"]
+    D45 & F2 & Angle2 --> R2["Rotate 2D"]
+    D67 & F3 & Angle3 --> R3["Rotate 2D"]
+
+    R0 & R1 & R2 & R3 --> Out["Rotated Q or K\n(position encoded)"]
+
 
 When we rotate Q at position `i` by angle `θ_i` and K at position `j` by angle `θ_j`, their dot product includes a term `cos(θ_i - θ_j)`. Since angles are proportional to position (`θ = pos × freq`), the difference `θ_i - θ_j = (i - j) × freq` captures the *relative* distance `(i - j)` between tokens. This means attention naturally focuses on how far apart tokens are, not where they appear absolutely — which is what matters for language ("the cat" should attend the same way whether it's at the start or middle of a sentence).
 

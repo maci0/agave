@@ -6,6 +6,36 @@ After the forward pass produces **logits** (raw unnormalized scores, one per voc
 
 Controls randomness by scaling logits before sampling:
 
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#e8f0fe',
+  'primaryTextColor': '#1a1a2e',
+  'primaryBorderColor': '#4a6cf7',
+  'lineColor': '#4a6cf7',
+  'secondaryColor': '#f0f4ff',
+  'tertiaryColor': '#f8f9ff',
+  'edgeLabelBackground': '#ffffff',
+  'clusterBkg': '#f0f4ff',
+  'clusterBorder': '#4a6cf7',
+  'titleColor': '#1a1a2e',
+  'nodeTextColor': '#1a1a2e',
+  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
+}}}%%
+flowchart LR
+    Logits["Raw Logits\n[3.2, 1.1, 0.4, ...]"] --> Divide["Divide by Temperature\nlogit / T"]
+    Divide --> Adjusted["Adjusted Logits"]
+    Adjusted --> Softmax["Softmax\ne^x / Σe^x"]
+    Softmax --> Probs["Probabilities\n[0.72, 0.19, 0.09, ...]"]
+    Probs --> Sample["Weighted Random Pick"]
+    Sample --> Token["Next Token"]
+
+    subgraph Effect["Temperature Effect"]
+        T_low["T=0.3 → peaky\ntop token dominates"]
+        T_mid["T=1.0 → balanced\nraw model probs"]
+        T_high["T=1.5 → flat\nmany tokens compete"]
+    end
+
+
 ```
 adjusted_logits[i] = logits[i] / temperature
 probabilities = softmax(adjusted_logits)
@@ -45,6 +75,42 @@ Introduced in [The Curious Case of Neural Text Degeneration (Holtzman et al., 20
 More adaptive than top-k: when the model is confident (top token = 95%), top-p=0.9 keeps 1-2 candidates. When uncertain (many similar scores), it keeps dozens.
 
 **Top-K vs Top-P**: Top-K always keeps exactly K tokens. Top-P adapts based on confidence. They can be combined.
+
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#e8f0fe',
+  'primaryTextColor': '#1a1a2e',
+  'primaryBorderColor': '#4a6cf7',
+  'lineColor': '#4a6cf7',
+  'secondaryColor': '#f0f4ff',
+  'tertiaryColor': '#f8f9ff',
+  'edgeLabelBackground': '#ffffff',
+  'clusterBkg': '#f0f4ff',
+  'clusterBorder': '#4a6cf7',
+  'titleColor': '#1a1a2e',
+  'nodeTextColor': '#1a1a2e',
+  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
+}}}%%
+flowchart TD
+    Start["Sorted Token Probabilities\n[0.40, 0.25, 0.15, 0.10, 0.06, 0.04]"] --> TopK["Top-K Filter\nkeep only top K tokens"]
+    Start --> TopP["Top-P Filter\ncumulate until sum >= P"]
+
+    TopK --> K_out["Fixed K candidates\ne.g. top-3: [0.40, 0.25, 0.15]"]
+    TopP --> P_out["Variable candidates\ne.g. P=0.9: [0.40, 0.25, 0.15, 0.10]\n(cumsum = 0.90)"]
+
+    K_out --> Renorm_K["Renormalize to 1.0"]
+    P_out --> Renorm_P["Renormalize to 1.0"]
+
+    Renorm_K --> Combined["Both applied? Intersection wins\n(whichever is more restrictive)"]
+    Renorm_P --> Combined
+
+    Combined --> Sample["Sample from remaining tokens"]
+
+    subgraph Confidence["Model confidence drives top-p size"]
+        Certain["Confident model\ntop-p=0.9 → 1-2 tokens"]
+        Uncertain["Uncertain model\ntop-p=0.9 → 20+ tokens"]
+    end
+
 
 ## Repeat Penalty
 
@@ -160,7 +226,72 @@ Supported: GBNF strings, GBNF files (`--grammar`), JSON schemas (`--json-schema`
 
 ## Combining Parameters
 
+Use this decision tree to pick parameters for your use case, then the pipeline diagram below shows the order they apply at runtime.
+
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#e8f0fe',
+  'primaryTextColor': '#1a1a2e',
+  'primaryBorderColor': '#4a6cf7',
+  'lineColor': '#4a6cf7',
+  'secondaryColor': '#f0f4ff',
+  'tertiaryColor': '#f8f9ff',
+  'edgeLabelBackground': '#ffffff',
+  'clusterBkg': '#f0f4ff',
+  'clusterBorder': '#4a6cf7',
+  'titleColor': '#1a1a2e',
+  'nodeTextColor': '#1a1a2e',
+  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
+}}}%%
+flowchart TD
+    Start["What are you generating?"] --> Q1{"Need exact,\nreproducible output?"}
+    Q1 -->|Yes| Greedy["temperature=0\ngreedy argmax"]
+    Q1 -->|No| Q2{"Structured output\nrequired?"}
+    Q2 -->|Yes - JSON/grammar| Grammar["--json-schema / --grammar\ngrammar mask handles the rest"]
+    Q2 -->|No| Q3{"What matters most?"}
+    Q3 -->|Avoid repetition in long text| LongForm["repeat_penalty=1.1\nDRY multiplier=1.5\ntemperature=0.8"]
+    Q3 -->|Creative + diverse| Creative["temperature=1.2\nmin_p=0.05\nor XTC for variety"]
+    Q3 -->|Consistent readability| Mirostat["mirostat=2\ntau=5.0\n(ignores top-k/p)"]
+    Q3 -->|General conversation| Balanced["temperature=0.7\ntop-p=0.9"]
+
+    subgraph Defaults["Safe starting point"]
+        Balanced
+    end
+
+
 Applied in order:
+
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#e8f0fe',
+  'primaryTextColor': '#1a1a2e',
+  'primaryBorderColor': '#4a6cf7',
+  'lineColor': '#4a6cf7',
+  'secondaryColor': '#f0f4ff',
+  'tertiaryColor': '#f8f9ff',
+  'edgeLabelBackground': '#ffffff',
+  'clusterBkg': '#f0f4ff',
+  'clusterBorder': '#4a6cf7',
+  'titleColor': '#1a1a2e',
+  'nodeTextColor': '#1a1a2e',
+  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
+}}}%%
+flowchart TD
+    Logits["Raw Logits\none score per vocab token"] --> Bias["Logit Bias\nper-token additive adjustments"]
+    Bias --> Penalties["Repetition Penalties\nrepeat / frequency / presence / DRY"]
+    Penalties --> Grammar["Grammar Mask\nset invalid tokens to -infinity"]
+    Grammar --> Temp["Temperature Scaling\nlogits /= temperature"]
+    Temp --> XTC["XTC Exclusion\nrandomly drop top tokens"]
+    XTC --> MinP["Min-P Filter\ndrop tokens below min_p × max_prob"]
+    MinP --> TopK["Top-K Filter\nkeep only K highest"]
+    TopK --> Softmax["Softmax\nconvert logits to probabilities"]
+    Softmax --> TopP["Top-P Filter\nnucleus cutoff + renormalize"]
+    TopP --> Mirostat{"Mirostat\nactive?"}
+    Mirostat -->|Yes - replaces top-k/p| MiroTrunc["Mirostat Truncation\nentropy-targeted cutoff"]
+    Mirostat -->|No| FinalSample["Weighted Random Sample"]
+    MiroTrunc --> FinalSample
+    FinalSample --> NextToken["Next Token ID"]
+
 
 ```
 logits (raw scores, one per vocab token)

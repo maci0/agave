@@ -9,6 +9,43 @@ Standard autoregressive decoding generates one token per forward pass. For large
 3. **Accept**: Matching tokens are accepted for free (no extra target compute)
 4. **Correct**: At the first disagreement, the target's prediction replaces the draft's
 
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#e8f0fe',
+  'primaryTextColor': '#1a1a2e',
+  'primaryBorderColor': '#4a6cf7',
+  'lineColor': '#4a6cf7',
+  'secondaryColor': '#f0f4ff',
+  'tertiaryColor': '#f8f9ff',
+  'edgeLabelBackground': '#ffffff',
+  'clusterBkg': '#f0f4ff',
+  'clusterBorder': '#4a6cf7',
+  'titleColor': '#1a1a2e',
+  'nodeTextColor': '#1a1a2e',
+  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
+}}}%%
+sequenceDiagram
+    participant Draft as Draft Model<br/>(small, fast)
+    participant Target as Target Model<br/>(large, accurate)
+    participant Output as Output Stream
+
+    Draft->>Draft: generate K=5 candidate tokens<br/>["the", "cat", "sat", "on", "a"]
+    Draft->>Target: proposed tokens + draft logits
+
+    loop for each draft token
+        Target->>Target: verify token at position i
+        alt target agrees (accept)
+            Target->>Output: emit accepted token
+        else target disagrees (reject)
+            Target->>Output: emit target's correction token
+            Note over Target,Output: stop here, discard remaining drafts
+        end
+    end
+
+    Target->>Draft: rollback KV cache to accepted prefix
+    Note over Draft,Target: next round starts from accepted position
+
+
 With a good draft model (70-80% acceptance rate), speculative decoding generates 2-3× more tokens per second with **no quality loss** — for greedy decoding (temperature=0), the output is byte-identical to the target model alone; for sampling (temperature>0), the output distribution is mathematically preserved via rejection sampling.
 
 ## Modes in Agave
@@ -30,6 +67,55 @@ DDTree (Ringel & Romano, 2026) improves on standard speculative decoding by cons
 ```bash
 agave model.gguf --draft-model draft.gguf --spec-mode ddtree --spec-tokens 5 --tree-budget 64 "prompt"
 ```
+
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#e8f0fe',
+  'primaryTextColor': '#1a1a2e',
+  'primaryBorderColor': '#4a6cf7',
+  'lineColor': '#4a6cf7',
+  'secondaryColor': '#f0f4ff',
+  'tertiaryColor': '#f8f9ff',
+  'edgeLabelBackground': '#ffffff',
+  'clusterBkg': '#f0f4ff',
+  'clusterBorder': '#4a6cf7',
+  'titleColor': '#1a1a2e',
+  'nodeTextColor': '#1a1a2e',
+  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
+}}}%%
+graph LR
+    Root["[prefix]\nshared KV cache"]
+
+    Root --> D0A["the\n(p=0.60)"]
+    Root --> D0B["a\n(p=0.25)"]
+    Root --> D0C["an\n(p=0.10)"]
+
+    D0A --> D1A["cat\n(p=0.55)"]
+    D0A --> D1B["dog\n(p=0.30)"]
+    D0B --> D1C["cat\n(p=0.60)"]
+
+    D1A --> D2A["sat\n(p=0.70)"]
+    D1A --> D2B["ran\n(p=0.20)"]
+    D1B --> D2C["sat\n(p=0.45)"]
+
+    subgraph Depth0["Depth 0 — top tokens at position 1"]
+        D0A
+        D0B
+        D0C
+    end
+
+    subgraph Depth1["Depth 1 — top tokens at position 2"]
+        D1A
+        D1B
+        D1C
+    end
+
+    subgraph Depth2["Depth 2 — top tokens at position 3"]
+        D2A
+        D2B
+        D2C
+    end
+
 
 **How it works:**
 
@@ -167,6 +253,46 @@ For sampling (temperature > 0), rejection sampling (Leviathan et al. 2023) prese
 
 Agave tracks per-K acceptance statistics during generation. The `optimalK()` function in `spec_decode.zig` computes the expected tokens per step for each K value and selects the one with the highest throughput:
 
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#e8f0fe',
+  'primaryTextColor': '#1a1a2e',
+  'primaryBorderColor': '#4a6cf7',
+  'lineColor': '#4a6cf7',
+  'secondaryColor': '#f0f4ff',
+  'tertiaryColor': '#f8f9ff',
+  'edgeLabelBackground': '#ffffff',
+  'clusterBkg': '#f0f4ff',
+  'clusterBorder': '#4a6cf7',
+  'titleColor': '#1a1a2e',
+  'nodeTextColor': '#1a1a2e',
+  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
+}}}%%
+flowchart TD
+    Start["start of step\nwhich K to use?"]
+
+    Start --> Check{"enough stats\n(>50 tokens)?"}
+    Check -- "no (warmup)" --> DefaultK["use default K=5"]
+    Check -- "yes" --> Compute["compute expected_tokens(K)\nfor K = 1..8"]
+
+    Compute --> Compare["compare throughput:\ntokens / (draft_cost + verify_cost)"]
+
+    Compare --> HighAccept{"acceptance rate\n> 80%?"}
+    HighAccept -- "yes" --> GrowK["increase K\n(more drafts worth it)"]
+    HighAccept -- "no" --> LowAccept{"acceptance rate\n< 20%?"}
+    LowAccept -- "yes" --> Cooldown["enter cooldown\nfall back to K=1\nfor N steps"]
+    LowAccept -- "no" --> BestK["use argmax K\nfrom expected_tokens"]
+
+    GrowK --> Draft["run draft model\nK forward passes"]
+    BestK --> Draft
+    DefaultK --> Draft
+    Cooldown --> SingleDecode["single-token decode\n(no speculation)"]
+
+    Draft --> Verify["verify with target model"]
+    Verify --> RecordStats["record: how many\ntokens were accepted"]
+    RecordStats --> Start
+
+
 ```
 expected_tokens(K) = Σ(i=1..K) i × P(accept exactly i)
 optimal_K = argmax over K of expected_tokens(K) / cost(K)
@@ -265,6 +391,50 @@ All the modes above address decode speed -- the time between tokens during gener
 ### What PFlash Does
 
 Instead of running the full target model over the entire prompt, PFlash uses a cheap scorer to identify which KV blocks matter and prefills only those blocks through the target model.
+
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#e8f0fe',
+  'primaryTextColor': '#1a1a2e',
+  'primaryBorderColor': '#4a6cf7',
+  'lineColor': '#4a6cf7',
+  'secondaryColor': '#f0f4ff',
+  'tertiaryColor': '#f8f9ff',
+  'edgeLabelBackground': '#ffffff',
+  'clusterBkg': '#f0f4ff',
+  'clusterBorder': '#4a6cf7',
+  'titleColor': '#1a1a2e',
+  'nodeTextColor': '#1a1a2e',
+  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
+}}}%%
+flowchart LR
+    Prompt["Long Prompt\n128K tokens"]
+
+    Prompt --> Scorer["Scorer Model\n(draft model or dedicated tiny model)\nblock-sparse O(n) pass"]
+
+    Scorer --> Scores["Block Importance Scores\n[0.1, 0.9, 0.2, 0.8, 0.3, 0.7, ...]"]
+
+    Scores --> Threshold["Adaptive Threshold\nalpha x mean(scores)\n(default alpha=0.85)"]
+
+    Threshold --> Drop["Dropped Blocks\n~85-95% of prompt\n(boilerplate, padding, off-topic)"]
+    Threshold --> Keep["Kept Blocks\n~5-15% of prompt\n(high-relevance context)"]
+
+    Keep --> Target["Target Model\nprefill compressed prompt\n6-13K tokens instead of 128K"]
+
+    Target --> KVCache["KV Cache\n(compressed representation)"]
+
+    KVCache --> Decode["DDTree Speculative Decode\nnormal token generation loop"]
+
+    Decode --> Tokens["Output Tokens"]
+
+    subgraph Compression["PFlash Compression (8-20x)"]
+        Scorer
+        Scores
+        Threshold
+        Drop
+        Keep
+    end
+
 
 ```
 Prompt (128K tokens)

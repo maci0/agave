@@ -108,6 +108,43 @@ const presets = [_]Preset{
 
 ### Matching Logic
 
+Each preset is tested in order against three criteria. Empty strings act as wildcards, so a preset can match any arch, any backend, or any quant independently.
+
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#e8f0fe',
+  'primaryTextColor': '#1a1a2e',
+  'primaryBorderColor': '#4a6cf7',
+  'lineColor': '#4a6cf7',
+  'secondaryColor': '#f0f4ff',
+  'tertiaryColor': '#f8f9ff',
+  'edgeLabelBackground': '#ffffff',
+  'clusterBkg': '#f0f4ff',
+  'clusterBorder': '#4a6cf7',
+  'titleColor': '#1a1a2e',
+  'nodeTextColor': '#1a1a2e',
+  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
+}}}%%
+flowchart TD
+    Start(["match(arch, backend, quant)"]) --> Loop["Check next preset\nin order"]
+    Loop --> ArchCheck{"arch_prefix\nempty?"}
+    ArchCheck -- "yes (wildcard)" --> BackCheck
+    ArchCheck -- "no" --> ArchMatch{"arch starts\nwith prefix?"}
+    ArchMatch -- "no" --> NextPreset["Skip to next preset"]
+    ArchMatch -- "yes" --> BackCheck{"backend\nempty?"}
+    BackCheck -- "yes (wildcard)" --> QuantCheck
+    BackCheck -- "no" --> BackMatch{"backend\nexact match?"}
+    BackMatch -- "no" --> NextPreset
+    BackMatch -- "yes" --> QuantCheck{"quant\nempty?"}
+    QuantCheck -- "yes (wildcard)" --> Hit["Return this recipe"]
+    QuantCheck -- "no" --> QuantMatch{"quant starts\nwith prefix?"}
+    QuantMatch -- "no" --> NextPreset
+    QuantMatch -- "yes" --> Hit
+    NextPreset --> More{"More\npresets?"}
+    More -- "yes" --> Loop
+    More -- "no" --> Miss["Return null\n(use Recipe.default)"]
+
+
 ```zig
 pub fn match(arch: []const u8, backend: []const u8, quant: []const u8) ?Recipe {
     for (presets) |p| {
@@ -136,7 +173,42 @@ fn matches(self: Preset, arch: []const u8, be: []const u8, q: []const u8) bool {
 
 ## User Override Semantics
 
-**Golden rule:** User CLI flags **always** override recipe defaults.
+**Golden rule:** User CLI flags **always** override recipe defaults. Each parameter resolves independently through a three-level priority chain.
+
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#e8f0fe',
+  'primaryTextColor': '#1a1a2e',
+  'primaryBorderColor': '#4a6cf7',
+  'lineColor': '#4a6cf7',
+  'secondaryColor': '#f0f4ff',
+  'tertiaryColor': '#f8f9ff',
+  'edgeLabelBackground': '#ffffff',
+  'clusterBkg': '#f0f4ff',
+  'clusterBorder': '#4a6cf7',
+  'titleColor': '#1a1a2e',
+  'nodeTextColor': '#1a1a2e',
+  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
+}}}%%
+flowchart LR
+    CLI["--temperature 0.8\n(user-provided flag)"]
+    Recipe["Recipe default\n(e.g. temperature = 0.6)"]
+    Default["CLI baseline\n(e.g. temperature = 0.0)"]
+
+    CLI -->|"highest priority\noverrides everything"| Final["Final value\nused for inference"]
+    Recipe -->|"used when user\ndid NOT set flag"| Final
+    Default -->|"used when neither\nuser nor recipe set it"| Final
+
+    subgraph Resolution["Per-parameter resolution (independent for each param)"]
+        direction TB
+        Q1{"user_set.temperature?"}
+        Q2{"recipe.temperature != null?"}
+        Q1 -- yes --> Use1["use user value"]
+        Q1 -- no --> Q2
+        Q2 -- yes --> Use2["use recipe value"]
+        Q2 -- no --> Use3["use CLI baseline"]
+    end
+
 
 ### Override Tracking
 
@@ -208,6 +280,42 @@ pub fn applyDefaults(
 ## Usage Flow
 
 ### In main.zig
+
+Five sequential steps connect the model file to the final inference config. Steps 1-2 happen before CLI parsing; step 4 merges recipe values only where the user left gaps.
+
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#e8f0fe',
+  'primaryTextColor': '#1a1a2e',
+  'primaryBorderColor': '#4a6cf7',
+  'lineColor': '#4a6cf7',
+  'secondaryColor': '#f0f4ff',
+  'tertiaryColor': '#f8f9ff',
+  'edgeLabelBackground': '#ffffff',
+  'clusterBkg': '#f0f4ff',
+  'clusterBorder': '#4a6cf7',
+  'titleColor': '#1a1a2e',
+  'nodeTextColor': '#1a1a2e',
+  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
+}}}%%
+sequenceDiagram
+    participant Main as main.zig
+    participant Fmt as Format detector
+    participant Rec as recipe.zig
+    participant CLI as CLI args
+    participant Inf as Inference engine
+
+    Main->>Fmt: detect arch, backend, quant from model file
+    Fmt-->>Main: arch="qwen35", backend="Metal", quant="Q4_K_M"
+    Main->>Rec: match("qwen35", "Metal", "Q4_K_M")
+    Rec-->>Main: Recipe { temp=0.6, top_p=0.9, max_tokens=1024 }
+    Main->>CLI: parse flags, record which were set
+    CLI-->>Main: temperature=0.3 (user set), top_p not set, max_tokens not set
+    Main->>Rec: applyDefaults(user_values, overrides)
+    Note over Rec: temperature → 0.3 (user)<br/>top_p → 0.9 (recipe)<br/>max_tokens → 1024 (recipe)
+    Rec-->>Main: Applied { temp=0.3, top_p=0.9, max_tokens=1024 }
+    Main->>Inf: run inference with final config
+
 
 ```zig
 // 1. Detect architecture, backend, quantization
@@ -304,6 +412,41 @@ std.log.info("Temperature: {d}, Top-P: {d}, Max tokens: {d}",
 ### Matching Specificity
 
 **Order from most specific to most general:**
+
+The preset array is a priority list. More constrained entries go first so they win before broader wildcards consume the match.
+
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#e8f0fe',
+  'primaryTextColor': '#1a1a2e',
+  'primaryBorderColor': '#4a6cf7',
+  'lineColor': '#4a6cf7',
+  'secondaryColor': '#f0f4ff',
+  'tertiaryColor': '#f8f9ff',
+  'edgeLabelBackground': '#ffffff',
+  'clusterBkg': '#f0f4ff',
+  'clusterBorder': '#4a6cf7',
+  'titleColor': '#1a1a2e',
+  'nodeTextColor': '#1a1a2e',
+  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
+}}}%%
+graph LR
+    Any["Any model\nAny quant\n(arch='', quant='')"]
+    AnyQ["Specific model\nAny quant\n(quant='')"]
+    Exact["Specific model\nSpecific quant"]
+
+    Exact -->|"most specific\ncheck first"| AnyQ
+    AnyQ -->|"narrower before\nbroader"| Any
+    Any -->|"last resort\nbefore null"| Fallback["Recipe.default\n(all nulls)"]
+
+    subgraph Examples["Example preset order in array"]
+        direction TB
+        P1["qwen35 + Metal + MLX_4bit"]
+        P2["qwen3 + Metal + (any quant)"]
+        P3["(any model) + CPU + (any quant)"]
+        P1 --> P2 --> P3
+    end
+
 
 ```zig
 const presets = [_]Preset{

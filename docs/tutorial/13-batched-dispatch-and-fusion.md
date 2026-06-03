@@ -4,6 +4,48 @@ Every GPU kernel dispatch has overhead: setting up the pipeline state, binding b
 
 ## The Dispatch Overhead Problem
 
+Each GPU kernel dispatch burns ~5-10 µs on CPU-side setup before any compute happens. When three projections each need their own dispatch, the overhead stacks up — and the same input vector gets loaded from memory three times.
+
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#e8f0fe',
+  'primaryTextColor': '#1a1a2e',
+  'primaryBorderColor': '#4a6cf7',
+  'lineColor': '#4a6cf7',
+  'secondaryColor': '#f0f4ff',
+  'tertiaryColor': '#f8f9ff',
+  'edgeLabelBackground': '#ffffff',
+  'clusterBkg': '#f0f4ff',
+  'clusterBorder': '#4a6cf7',
+  'titleColor': '#1a1a2e',
+  'nodeTextColor': '#1a1a2e',
+  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
+}}}%%
+sequenceDiagram
+    participant CPU
+    participant GPU
+
+    note over CPU,GPU: Sequential (unfused) — 3 dispatches, 3 barriers
+
+    CPU->>GPU: dispatch Q projection
+    GPU->>GPU: load x from VRAM, compute Q
+    GPU-->>CPU: barrier (Q done)
+
+    CPU->>GPU: dispatch K projection
+    GPU->>GPU: load x from VRAM again, compute K
+    GPU-->>CPU: barrier (K done)
+
+    CPU->>GPU: dispatch V projection
+    GPU->>GPU: load x from VRAM again, compute V
+    GPU-->>CPU: barrier (V done)
+
+    note over CPU,GPU: Batched (gemvMulti) — 1 dispatch, 1 barrier
+
+    CPU->>GPU: dispatch Q + K + V together
+    GPU->>GPU: load x once, compute Q then K then V
+    GPU-->>CPU: barrier (all done)
+
+
 A typical attention layer does:
 
 ```zig
@@ -50,7 +92,42 @@ For a 27B model with ~210 GEMVs per token, that's **1-2 ms of pure overhead** pe
 
 ## Batched GEMV: gemvMulti
 
-**Idea:** Dispatch all GEMVs that share the same input vector in a **single kernel launch**.
+**Idea:** Dispatch all GEMVs that share the same input vector in a **single kernel launch**. The input vector `x` is loaded into registers once and reused across all output projections.
+
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#e8f0fe',
+  'primaryTextColor': '#1a1a2e',
+  'primaryBorderColor': '#4a6cf7',
+  'lineColor': '#4a6cf7',
+  'secondaryColor': '#f0f4ff',
+  'tertiaryColor': '#f8f9ff',
+  'edgeLabelBackground': '#ffffff',
+  'clusterBkg': '#f0f4ff',
+  'clusterBorder': '#4a6cf7',
+  'titleColor': '#1a1a2e',
+  'nodeTextColor': '#1a1a2e',
+  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
+}}}%%
+flowchart LR
+    X["Input vector x\n(n_embd floats, loaded once)"]
+
+    X --> GQ["GEMV: W_q @ x\n→ Q buffer"]
+    X --> GK["GEMV: W_k @ x\n→ K buffer"]
+    X --> GV["GEMV: W_v @ x\n→ V buffer"]
+
+    GQ --> Bar["Single barrier\n(all ops complete)"]
+    GK --> Bar
+    GV --> Bar
+
+    Bar --> Attn["Attention\ncomputation"]
+
+    subgraph OneDispatch["Single gemvMulti dispatch"]
+        GQ
+        GK
+        GV
+    end
+
 
 ### GemvOp Structure
 
@@ -382,11 +459,80 @@ for (active_experts) |expert_id, i| {
 
 ## Megakernel System (Three-Tier Architecture)
 
-The megakernel system eliminates GPU dispatch overhead at three levels of granularity. All tiers are enabled via the `--megakernel` CLI flag.
+The megakernel system eliminates GPU dispatch overhead at three levels of granularity. All tiers are enabled via the `--megakernel` CLI flag. Each tier subsumes the one below it: Tier 3 auto-generates a Tier 2 megakernel at runtime from model metadata, so no hand-written shader code is needed for new models.
+
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#e8f0fe',
+  'primaryTextColor': '#1a1a2e',
+  'primaryBorderColor': '#4a6cf7',
+  'lineColor': '#4a6cf7',
+  'secondaryColor': '#f0f4ff',
+  'tertiaryColor': '#f8f9ff',
+  'edgeLabelBackground': '#ffffff',
+  'clusterBkg': '#f0f4ff',
+  'clusterBorder': '#4a6cf7',
+  'titleColor': '#1a1a2e',
+  'nodeTextColor': '#1a1a2e',
+  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
+}}}%%
+graph TD
+    Meta["Model metadata\n(GGUF / SafeTensors)"]
+
+    Meta --> T3["Tier 3: Composed megakernel\nmega_compose.zig generates MSL at runtime\nfrom ModelDesc — no hand-written shaders"]
+    T3 -->|"generates"| T2["Tier 2: True megakernel\nEntire transformer layer in ONE dispatch\n(norm + QKV + RoPE + KV cache + SDPA + FFN)"]
+    T2 -->|"builds on"| T1["Tier 1: Fused FFN\n3 FFN dispatches → 1 dispatch\n(gate GEMV + up GEMV + activation)"]
+    T1 -->|"builds on"| Base["Baseline: gemvMulti + addRmsNorm\nBatched projections, fused residual+norm"]
+
+    T3 -. "eliminates\nper-model shader files" .-> T3
+    T2 -. "eliminates\nper-layer dispatch overhead" .-> T2
+    T1 -. "eliminates\nintermediate VRAM writes" .-> T1
+
+    subgraph Scope["Overhead eliminated at each tier"]
+        T1
+        T2
+        T3
+    end
+
 
 ### Tier 1: Fused FFN
 
-Combine **gate GEMV + up GEMV + activation** into a single kernel dispatch. Instead of 3 separate dispatches per FFN layer (gate, up, silu/gelu), a single kernel computes all three.
+Combine **gate GEMV + up GEMV + activation** into a single kernel dispatch. Instead of 3 separate dispatches per FFN layer (gate, up, silu/gelu), a single kernel computes all three. The input `x` is loaded once per threadgroup; intermediate gate and up values never touch VRAM.
+
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#e8f0fe',
+  'primaryTextColor': '#1a1a2e',
+  'primaryBorderColor': '#4a6cf7',
+  'lineColor': '#4a6cf7',
+  'secondaryColor': '#f0f4ff',
+  'tertiaryColor': '#f8f9ff',
+  'edgeLabelBackground': '#ffffff',
+  'clusterBkg': '#f0f4ff',
+  'clusterBorder': '#4a6cf7',
+  'titleColor': '#1a1a2e',
+  'nodeTextColor': '#1a1a2e',
+  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
+}}}%%
+flowchart TD
+    subgraph Before["Before: 3 dispatches per FFN layer"]
+        direction LR
+        X1["x (input)"] --> D1["Dispatch 1\ngate_buf = W_gate @ x"]
+        X1 --> D2["Dispatch 2\nup_buf = W_up @ x"]
+        D1 --> D3["Dispatch 3\nout = silu(gate_buf) * up_buf"]
+        D2 --> D3
+        D1 -. "write gate_buf\nto VRAM" .-> D3
+        D2 -. "write up_buf\nto VRAM" .-> D3
+    end
+
+    subgraph After["After: 1 dispatch (Tier 1 megakernel)"]
+        direction LR
+        X2["x (input)"] --> MK["Single kernel\nload x once per threadgroup\ncompute gate dot product\ncompute up dot product\napply silu in registers\nwrite output"]
+        MK --> Out["out (result)"]
+    end
+
+    Before -. "3 → 1\nfusion" .-> After
+
 
 **Standard FFN:**
 ```

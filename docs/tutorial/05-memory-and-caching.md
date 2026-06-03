@@ -4,6 +4,38 @@ During **autoregressive generation** (generating text one token at a time, where
 
 ## The KV Cache
 
+Each generated token extends the cache — every subsequent token attends to all previously stored K/V pairs.
+
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#e8f0fe',
+  'primaryTextColor': '#1a1a2e',
+  'primaryBorderColor': '#4a6cf7',
+  'lineColor': '#4a6cf7',
+  'secondaryColor': '#f0f4ff',
+  'tertiaryColor': '#f8f9ff',
+  'edgeLabelBackground': '#ffffff',
+  'clusterBkg': '#f0f4ff',
+  'clusterBorder': '#4a6cf7',
+  'titleColor': '#1a1a2e',
+  'nodeTextColor': '#1a1a2e',
+  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
+}}}%%
+flowchart LR
+    T1["Token 1\n(compute K₁, V₁)"] --> C1["Cache\n[K₁, V₁]"]
+    T2["Token 2\n(compute K₂, V₂)"] --> C2["Cache\n[K₁, V₁]\n[K₂, V₂]"]
+    T3["Token 3\n(compute K₃, V₃)"] --> C3["Cache\n[K₁, V₁]\n[K₂, V₂]\n[K₃, V₃]"]
+
+    C1 -->|"attend to 1 position"| T2
+    C2 -->|"attend to 2 positions"| T3
+
+    subgraph Growth["Cache grows every token — never shrinks"]
+        C1
+        C2
+        C3
+    end
+
+
 ```
 Token 1: compute K₁, V₁, store in cache
 Token 2: compute K₂, V₂, store in cache, attend to [K₁,K₂], [V₁,V₂]
@@ -75,6 +107,48 @@ The preset also enables **boundary V protection** — the first and last 2 trans
 
 ## PagedAttention
 
+PagedAttention maps a sequence's logical positions to non-contiguous physical memory blocks, the same way an OS uses virtual memory pages.
+
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#e8f0fe',
+  'primaryTextColor': '#1a1a2e',
+  'primaryBorderColor': '#4a6cf7',
+  'lineColor': '#4a6cf7',
+  'secondaryColor': '#f0f4ff',
+  'tertiaryColor': '#f8f9ff',
+  'edgeLabelBackground': '#ffffff',
+  'clusterBkg': '#f0f4ff',
+  'clusterBorder': '#4a6cf7',
+  'titleColor': '#1a1a2e',
+  'nodeTextColor': '#1a1a2e',
+  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
+}}}%%
+flowchart LR
+    subgraph Logical["Logical sequence (Request A — 48 tokens)"]
+        L0["Positions 0-15"]
+        L1["Positions 16-31"]
+        L2["Positions 32-47"]
+    end
+
+    subgraph BT["Block Table (per-request mapping)"]
+        BT0["slot 0 → block 4"]
+        BT1["slot 1 → block 1"]
+        BT2["slot 2 → block 7"]
+    end
+
+    subgraph Physical["Physical KV block pool (shared across all requests)"]
+        B1["Block 1\n(free after Request B done)"]
+        B4["Block 4\n(active)"]
+        B7["Block 7\n(active)"]
+        BX["Block 2, 3, 5, 6…\n(free — available)"]
+    end
+
+    L0 --> BT0 --> B4
+    L1 --> BT1 --> B1
+    L2 --> BT2 --> B7
+
+
 **The problem with contiguous allocation:** Without paging, you must pre-allocate the maximum context length for each sequence. If max_ctx=4096 and a request only generates 50 tokens, you've wasted 99% of that allocation. Worse, with 10 concurrent requests you need 10 × 4096 × 128 KB/token = 5 GB reserved — even if total actual usage is 50 MB. You can't reclaim the unused space because each sequence's cache must be contiguous in memory.
 
 [PagedAttention (Kwon et al., 2023)](https://arxiv.org/abs/2309.06180) solves this the same way an OS handles virtual memory — by breaking the cache into fixed-size **blocks** (default 16 positions) allocated on demand:
@@ -98,6 +172,34 @@ Each `CacheBlock` tracks: `keys`, `values`, `used` count, `ref_count` (for shari
 ## RadixAttention
 
 RadixAttention builds a **radix tree** (also called a **prefix trie** — a tree data structure where shared prefixes are stored only once) over token sequences to automatically detect and share common prefixes. If two requests share the same system prompt, the KV cache for that prefix is computed once and reused.
+
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#e8f0fe',
+  'primaryTextColor': '#1a1a2e',
+  'primaryBorderColor': '#4a6cf7',
+  'lineColor': '#4a6cf7',
+  'secondaryColor': '#f0f4ff',
+  'tertiaryColor': '#f8f9ff',
+  'edgeLabelBackground': '#ffffff',
+  'clusterBkg': '#f0f4ff',
+  'clusterBorder': '#4a6cf7',
+  'titleColor': '#1a1a2e',
+  'nodeTextColor': '#1a1a2e',
+  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
+}}}%%
+graph LR
+    Root(["root"]) -->|"computed once\nblocks 0,1,2"| Shared["You are helpful.\n(shared prefix — ref_count=2)"]
+
+    Shared -->|"Request A only"| BranchA["What is 2+2?\nblock 3"]
+    Shared -->|"Request B only"| BranchB["Tell me a joke.\nblock 3'"]
+
+    BranchA -->|"answer"| AnsA["4\nblock 4"]
+    BranchB -->|"answer"| AnsB["Why did the...\nblock 4'"]
+
+    style Shared fill:#2d6a2d,color:#fff
+    style Root fill:#555,color:#fff
+
 
 ```
 Request A: "You are helpful. What is 2+2?"     → compute KV for "You are helpful." once
@@ -145,7 +247,47 @@ RadixAttention is the preferred strategy for production serving.
 
 During **batched prefill**, all prompt tokens are processed through each layer together using GEMM instead of GEMV. The KV cache is populated in bulk — each layer's `sdpaPrefill` kernel appends all N key/value vectors at once.
 
-**Chunked prefill** limits memory usage by splitting long prompts into fixed-size chunks (default 512 tokens). Each chunk is one batched pass through all layers:
+**Chunked prefill** limits memory usage by splitting long prompts into fixed-size chunks (default 512 tokens). Each chunk is one batched pass through all layers.
+
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#e8f0fe',
+  'primaryTextColor': '#1a1a2e',
+  'primaryBorderColor': '#4a6cf7',
+  'lineColor': '#4a6cf7',
+  'secondaryColor': '#f0f4ff',
+  'tertiaryColor': '#f8f9ff',
+  'edgeLabelBackground': '#ffffff',
+  'clusterBkg': '#f0f4ff',
+  'clusterBorder': '#4a6cf7',
+  'titleColor': '#1a1a2e',
+  'nodeTextColor': '#1a1a2e',
+  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
+}}}%%
+sequenceDiagram
+    participant P as Prompt (2048 tokens)
+    participant G as GPU (GEMM + FA2)
+    participant K as KV Cache
+
+    P->>G: Chunk 0 — tokens[0..512]
+    G->>K: store K/V for positions 0-511
+    Note over G: causal attention within chunk (prev_len=0)
+
+    P->>G: Chunk 1 — tokens[512..1024]
+    G->>K: store K/V for positions 512-1023
+    K-->>G: read cached positions 0-511
+    Note over G: causal attention + attend to chunk 0 (prev_len=512)
+
+    P->>G: Chunk 2 — tokens[1024..1536]
+    G->>K: store K/V for positions 1024-1535
+    K-->>G: read cached positions 0-1023
+    Note over G: attend to chunks 0+1 (prev_len=1024)
+
+    P->>G: Chunk 3 — tokens[1536..2048]
+    G->>K: store K/V for positions 1536-2047
+    K-->>G: read all prior positions
+    Note over G: attend to chunks 0+1+2 (prev_len=1536)
+
 
 ```
 prefill([2048 tokens], chunk_size=512):

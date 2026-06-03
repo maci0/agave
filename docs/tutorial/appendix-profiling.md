@@ -4,6 +4,42 @@ Performance regressions are silent — the model still runs, but slower. **Profi
 
 ## --profile Flag
 
+The `--profile` flag threads timing instrumentation through the entire inference pipeline, collecting per-operation durations and backend counters that are printed after each token.
+
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#e8f0fe',
+  'primaryTextColor': '#1a1a2e',
+  'primaryBorderColor': '#4a6cf7',
+  'lineColor': '#4a6cf7',
+  'secondaryColor': '#f0f4ff',
+  'tertiaryColor': '#f8f9ff',
+  'edgeLabelBackground': '#ffffff',
+  'clusterBkg': '#f0f4ff',
+  'clusterBorder': '#4a6cf7',
+  'titleColor': '#1a1a2e',
+  'nodeTextColor': '#1a1a2e',
+  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
+}}}%%
+flowchart LR
+    CLI["--profile flag"] --> Enable["PerfCounters.enabled = true\nMetalBackend.profile_counters = true"]
+    Enable --> Forward["Model forward()"]
+    Forward --> OpWrap["Per-op start()/end() wraps\n(with GPU sync between)"]
+    OpWrap --> Accumulate["Accumulate times_us[]\ncounts[] per Op enum"]
+    Accumulate --> TokenEnd["End of token"]
+    TokenEnd --> Reset["resetCounters()\n(dispatch/barrier/sync → 0)"]
+    TokenEnd --> Report["perf.report()\nPrint table + Metal counters"]
+    Reset --> Forward
+
+    subgraph Hot["Per-token loop"]
+        Forward
+        OpWrap
+        Accumulate
+        TokenEnd
+        Reset
+    end
+
+
 **Enable profiling:** Add `--profile` to any inference command.
 
 ```bash
@@ -78,6 +114,36 @@ pub const PerfCounters = struct {
 
 ### Instrumented Operation
 
+Without a GPU sync between dispatch and timing, you'd measure only the CPU's time to queue the command (~5 µs) rather than the actual GPU execution. The sequence below shows why the sync is mandatory for accurate per-op numbers.
+
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#e8f0fe',
+  'primaryTextColor': '#1a1a2e',
+  'primaryBorderColor': '#4a6cf7',
+  'lineColor': '#4a6cf7',
+  'secondaryColor': '#f0f4ff',
+  'tertiaryColor': '#f8f9ff',
+  'edgeLabelBackground': '#ffffff',
+  'clusterBkg': '#f0f4ff',
+  'clusterBorder': '#4a6cf7',
+  'titleColor': '#1a1a2e',
+  'nodeTextColor': '#1a1a2e',
+  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
+}}}%%
+sequenceDiagram
+    participant CPU as CPU (model forward)
+    participant GPU as GPU (Metal/CUDA)
+    participant Perf as PerfCounters
+
+    CPU->>Perf: t = perf.start() → nanoTimestamp()
+    CPU->>GPU: be.gemv(x, w, y, n, k)  [queued, not yet run]
+    CPU->>GPU: be.sync()  [block until GPU finishes]
+    GPU-->>CPU: done
+    CPU->>Perf: perf.end(.gemv_qkv, t)
+    Note over Perf: elapsed = now - t<br/>times_us[gemv_qkv] += elapsed<br/>counts[gemv_qkv] += 1
+
+
 ```zig
 // In model forward(), e.g. src/models/qwen35.zig
 var t = self.perf.start();
@@ -120,6 +186,44 @@ After generation completes, `perf.report()` prints a table with call counts, tot
 ## Backend Dispatch Counters
 
 ### Metal Counters
+
+The three Metal counters measure different levels of GPU work granularity. A dispatch is one kernel invocation; a barrier serializes two consecutive dispatches; a sync flushes the GPU command queue back to the CPU. Each has an "optimal" range -- deviating in either direction signals a specific class of problem.
+
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#e8f0fe',
+  'primaryTextColor': '#1a1a2e',
+  'primaryBorderColor': '#4a6cf7',
+  'lineColor': '#4a6cf7',
+  'secondaryColor': '#f0f4ff',
+  'tertiaryColor': '#f8f9ff',
+  'edgeLabelBackground': '#ffffff',
+  'clusterBkg': '#f0f4ff',
+  'clusterBorder': '#4a6cf7',
+  'titleColor': '#1a1a2e',
+  'nodeTextColor': '#1a1a2e',
+  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
+}}}%%
+graph TD
+    Dispatch["Dispatch\n(one kernel invocation)\nOptimal: 300-600"]
+    Barrier["Barrier\n(serializes two dispatches)\nOptimal: 300-700"]
+    Sync["Sync / Flush\n(CPU waits for GPU)\nOptimal: 1-3"]
+
+    Dispatch -->|"too high >1000\n→ dispatch overhead dominates"| HighDisp["Fuse ops or use megakernel"]
+    Dispatch -->|"too low <100\n→ missing parallelism"| LowDisp["Audit batching (gemvMulti, etc.)"]
+
+    Barrier -->|"too high >1000\n→ serialized execution"| HighBarr["Check batch_mode flag\nGroup ops before barrier"]
+    Barrier -->|"too low <100\n→ missing sync"| LowBarr["Risk: GPU reads stale data"]
+
+    Sync -->|"high >10\n→ CPU/GPU round-trips"| HighSync["Move CPU work to GPU kernel\n(e.g. Q/gate split)"]
+    Sync -->|"zero\n→ suspicious"| ZeroSync["CPU may read stale GPU output"]
+
+    style Dispatch fill:#1a3a5c,color:#e0e8f0
+    style Barrier fill:#1a3a5c,color:#e0e8f0
+    style Sync fill:#1a3a5c,color:#e0e8f0
+    style HighSync fill:#5c1a1a,color:#f0e0e0
+    style ZeroSync fill:#5c1a1a,color:#f0e0e0
+
 
 ```zig
 pub const MetalBackend = struct {

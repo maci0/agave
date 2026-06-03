@@ -10,6 +10,38 @@ While attention lets tokens communicate with each other, the FFN processes each 
 
 The standard FFN structure in modern transformers:
 
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#e8f0fe',
+  'primaryTextColor': '#1a1a2e',
+  'primaryBorderColor': '#4a6cf7',
+  'lineColor': '#4a6cf7',
+  'secondaryColor': '#f0f4ff',
+  'tertiaryColor': '#f8f9ff',
+  'edgeLabelBackground': '#ffffff',
+  'clusterBkg': '#f0f4ff',
+  'clusterBorder': '#4a6cf7',
+  'titleColor': '#1a1a2e',
+  'nodeTextColor': '#1a1a2e',
+  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
+}}}%%
+flowchart LR
+    Input["Hidden State\n(e.g. 2304 floats)"] --> Gate["gate_proj\n(2304 → 12288)"]
+    Input --> Up["up_proj\n(2304 → 12288)"]
+
+    Gate --> Act["SiLU activation\nx * sigmoid(x)"]
+    Act --> Mul["Element-wise\nmultiply ⊗"]
+    Up --> Mul
+
+    Mul --> Down["down_proj\n(12288 → 2304)"]
+    Down --> Output["FFN Output\n(2304 floats)"]
+
+    subgraph Gate Mechanism
+        Act
+        Mul
+    end
+
+
 ```
 FFN(x) = down_proj(activation(gate_proj(x)) * up_proj(x))
 ```
@@ -19,6 +51,33 @@ Three matrix multiplies per FFN call, expanding to a larger **intermediate dimen
 Notice the structure: `activation(gate_proj(x)) * up_proj(x)`. The `gate_proj` output is passed through an activation function and then multiplied element-wise with `up_proj`, **gating** (controlling) how much of the up-projection passes through. This gating pattern is called a **GLU** (Gated Linear Unit). **SwiGLU**, introduced in [GLU Variants Improve Transformer (Shazeer, 2020)](https://arxiv.org/abs/2002.05202), uses **SiLU** (Sigmoid Linear Unit, also called Swish) as the activation — hence the name: **Swi**sh + **GLU** = SwiGLU.
 
 ## Activation Functions
+
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#e8f0fe',
+  'primaryTextColor': '#1a1a2e',
+  'primaryBorderColor': '#4a6cf7',
+  'lineColor': '#4a6cf7',
+  'secondaryColor': '#f0f4ff',
+  'tertiaryColor': '#f8f9ff',
+  'edgeLabelBackground': '#ffffff',
+  'clusterBkg': '#f0f4ff',
+  'clusterBorder': '#4a6cf7',
+  'titleColor': '#1a1a2e',
+  'nodeTextColor': '#1a1a2e',
+  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
+}}}%%
+flowchart LR
+    Input["Input value x"] --> SiLU["SiLU / Swish\nx · sigmoid(x)\n\nSmooth, passes positive,\ndampens negative"]
+    Input --> GELU["GELU\n≈ 0.5x(1 + tanh(...))\n\nSimilar to SiLU,\nGaussian-weighted"]
+    Input --> ReLU2["ReLU²\nmax(0, x)²\n\nHard zero cutoff,\nsquared positives"]
+    Input --> Sigmoid["Sigmoid\n1 / (1 + e^-x)\n\nOutput in (0, 1)\nUsed for gates/routing"]
+
+    SiLU --> FFN["FFN gate\n(most models)"]
+    GELU --> FFN2["FFN gate\n(Gemma 3)"]
+    ReLU2 --> FFN3["FFN gate\n(Nemotron-Nano MoE)"]
+    Sigmoid --> Router["MoE router\n(GLM-4)"]
+
 
 | Function | Formula | Used by |
 | :--- | :--- | :--- |
@@ -33,6 +92,42 @@ Notice the structure: `activation(gate_proj(x)) * up_proj(x)`. The `gate_proj` o
 ## Mixture of Experts (MoE)
 
 Standard transformers use the same FFN weights for every token. MoE models have multiple FFN "experts" and a **router** (a learned selection mechanism that scores and picks which experts should process each token) that selects which ones to use:
+
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#e8f0fe',
+  'primaryTextColor': '#1a1a2e',
+  'primaryBorderColor': '#4a6cf7',
+  'lineColor': '#4a6cf7',
+  'secondaryColor': '#f0f4ff',
+  'tertiaryColor': '#f8f9ff',
+  'edgeLabelBackground': '#ffffff',
+  'clusterBkg': '#f0f4ff',
+  'clusterBorder': '#4a6cf7',
+  'titleColor': '#1a1a2e',
+  'nodeTextColor': '#1a1a2e',
+  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
+}}}%%
+flowchart TD
+    Token["Token hidden state\n(e.g. 7168 floats)"] --> Router["Router\nhidden @ gate_weight\n→ 128 scores"]
+
+    Router -->|"top-6\nscores"| Norm["Softmax normalize\nselected scores\n→ weights [0.19, 0.18, ...]"]
+
+    Norm --> E3["Expert 3\n'programming'\nFFN(hidden)"]
+    Norm --> E1["Expert 1\n'syntax'\nFFN(hidden)"]
+    Norm --> E87["Expert 87\n'nouns'\nFFN(hidden)"]
+    Norm --> Edots["... 3 more\nexperts ..."]
+
+    Token --> Shared["Shared Expert\n(always active)\nFFN(hidden)"]
+
+    E3 -->|"× 0.193"| Sum["Weighted sum\nΣ weight_i · expert_i(x)"]
+    E1 -->|"× 0.182"| Sum
+    E87 -->|"× 0.169"| Sum
+    Edots -->|"× ..."| Sum
+    Shared -->|"+ 1.0"| Sum
+
+    Sum --> Output["FFN Output"]
+
 
 ```
 1. Router: scores = sigmoid(hidden @ gate_weight)     # score each expert
