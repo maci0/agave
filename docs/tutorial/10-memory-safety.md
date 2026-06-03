@@ -12,7 +12,7 @@ pub fn processFile(allocator: Allocator, path: []const u8) !void {
     defer file.close();  // Runs when this function exits, no matter how
 
     const data = try file.readToEndAlloc(allocator, 1024 * 1024);
-    defer allocator.free(data);  // Runs after file.close()
+    defer allocator.free(data);  // Runs before file.close() (declared last, runs first)
 
     // ... process data ...
 
@@ -52,7 +52,7 @@ sequenceDiagram
     Code->>Code: return (normal or error)
     Stack->>Cleanup: allocator.free(data)  [last declared, first run]
     Stack->>Cleanup: file.close()          [first declared, last run]
-
+```
 
 ```zig
 defer std.debug.print("Third\n", .{});
@@ -113,7 +113,7 @@ flowchart TD
     style E fill:#f66,color:#fff
     style F fill:#f66,color:#fff
     style G fill:#6a6,color:#fff
-
+```
 
 - If `KVCache.init()` fails → only `model.weights` is freed
 - If `Backend.init()` fails → `model.cache.deinit()` AND `allocator.free(model.weights)` run
@@ -158,7 +158,7 @@ flowchart LR
     end
 
     Acquire --> Exit
-
+```
 
 ### Example 1: Simple Allocation
 
@@ -245,9 +245,9 @@ defer cache.deinit();  // Always cleanup
 - If `init()` succeeds → caller uses `defer cache.deinit()` to clean up later
 - No memory leaks on any code path
 
-### Example 3: Nested Initialization (Real Code from Agave)
+### Example 3: Nested Initialization
 
-From `src/main.zig`:
+Simplified illustrative example showing how Agave-style multi-component initialization chains defer and errdefer:
 
 ```zig
 pub fn initAndRun(allocator: Allocator, args: Args) !void {
@@ -457,7 +457,7 @@ flowchart TD
 
     style Free fill:#6a6,color:#fff
     style Return fill:#66a,color:#fff
-
+```
 
 ```zig
 pub fn generateText(allocator: Allocator, prompt: []const u8) ![]u8 {
@@ -484,7 +484,7 @@ pub fn generateText(allocator: Allocator, prompt: []const u8) ![]u8 {
 - Compiler passes (free all AST nodes after pass completes)
 - **Not** for long-lived allocations (model weights, KV cache)
 
-Agave uses arena allocators in the HTTP server (`src/server/server.zig`) for per-request temporary buffers.
+Agave uses arena allocators in `src/pull.zig` for temporary allocations during model downloads and repository listing.
 
 ## Memory Safety Checklist
 

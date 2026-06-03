@@ -98,7 +98,7 @@ The CPU kernel in `sparse_attn.zig` works at the block level:
 for each query_block qb:
     accumulate attention over:
         global_blocks[0..G]            // always attend
-        window_blocks[qb-W .. qb]      // recent context
+        window_blocks[qb-W .. qb+1]    // W+1 blocks including self
     skip all other kv_blocks           // no dot products computed
 ```
 
@@ -108,9 +108,9 @@ This is the kernel used by PFlash's scorer pass. It is not used during target mo
 
 | Sequence length | Full attention | Block sparse (G=2, W=2, B=64) |
 |-----------------|---------------|-------------------------------|
-| 8K tokens (125 blocks) | 64M dot products / layer | ~5M dot products / layer |
-| 32K tokens (500 blocks) | 1B dot products / layer | ~20M dot products / layer |
-| 128K tokens (2000 blocks) | 16B dot products / layer | ~80M dot products / layer |
+| 8K tokens (128 blocks) | 64M dot products / layer | ~5M dot products / layer |
+| 32K tokens (512 blocks) | 1B dot products / layer | ~20M dot products / layer |
+| 128K tokens (2048 blocks) | 16B dot products / layer | ~80M dot products / layer |
 
 The reduction scales with sequence length. At 128K tokens, block sparse attention is roughly 200x cheaper per layer than full attention.
 
@@ -175,7 +175,7 @@ flowchart LR
     end
 
 
-**Step 1: Score.** Run the scorer model over the full prompt with block sparse attention. For each KV block, compute a scalar importance score -- typically the mean L2 norm of the key vectors, or the attention entropy at that block position.
+**Step 1: Score.** Run the scorer model over the full prompt with block sparse attention. In the current implementation, each block is scored by its position in the sequence (recency heuristic). A KV-dot-product scorer (scoreFromLastQ) is defined but not yet integrated into the main prefill pipeline.
 
 **Step 2: Select.** Apply the adaptive threshold:
 
@@ -283,10 +283,12 @@ Alpha controls the compression ratio. Lower alpha = more aggressive = faster pre
 
 | Alpha | Typical selection rate | Use when |
 |-------|----------------------|----------|
-| 0.95 | 30-50% | Output quality is critical, modest TTFT improvement acceptable |
+| 0.95 | 15-20% | Output quality is critical, modest TTFT improvement acceptable |
 | 0.85 | 10-20% | Good balance for most tasks (default) |
 | 0.70 | 5-10% | Aggressive; prompts with large irrelevant sections |
 | 0.50 | 2-5% | Very aggressive; only well-structured retrieval prompts |
+
+Selection is additionally capped by `max_kept_ratio` (default 0.20); rates above 20% require raising this cap.
 
 To find the right alpha for your use case:
 

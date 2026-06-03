@@ -80,7 +80,7 @@ turbo2     2.5         47 MB  (6.4x vs f16)                       WHT-32
 ```
 
 Four rotation-based quantizers are available, differing only in the decorrelation transform:
-- **TurboQuant** (`tq2/3/4`): Walsh-Hadamard butterfly network — ~640 FMAs (32-element blocks)
+- **TurboQuant** (`tq2/3/4`): Walsh-Hadamard butterfly network — ~160 add/sub ops (32-element blocks, no multiplies)
 - **PlanarQuant** (`pq2/3/4`): Givens 2D rotation — 256 FMAs (2.5x fewer)
 - **IsoQuant** (`iq2/3/4`): Quaternion 4D rotation — 512 FMAs
 - **RotorQuant** (`rq2/3/4`): Clifford Cl(3,0) rotor — ~2,400 FMAs
@@ -147,7 +147,7 @@ flowchart LR
     L0 --> BT0 --> B4
     L1 --> BT1 --> B1
     L2 --> BT2 --> B7
-
+```
 
 **The problem with contiguous allocation:** Without paging, you must pre-allocate the maximum context length for each sequence. If max_ctx=4096 and a request only generates 50 tokens, you've wasted 99% of that allocation. Worse, with 10 concurrent requests you need 10 × 4096 × 128 KB/token = 5 GB reserved — even if total actual usage is 50 MB. You can't reclaim the unused space because each sequence's cache must be contiguous in memory.
 
@@ -231,7 +231,7 @@ Request B path: root → "You are helpful." → " Tell me a" → " joke." → "W
                         shared prefix (blocks 0,1,2)
                         computed once, reused by both requests
 
-Eviction: Shared blocks (ref_count=2) have 100× cost → preserved longer
+Eviction (planned): Shared blocks (ref_count > 1) will be weighted 100× against eviction to preserve reuse — tracking infrastructure is in place but policy dispatch is not yet deployed.
 Benefit: 3 shared blocks = 48 positions × 2 requests = 96 positions saved
 ```
 
@@ -239,7 +239,7 @@ Key operations (all at the scheduler layer, never in the token generation hot pa
 
 - **Insert**: Cache a completed sequence's block IDs
 - **Lookup**: Find the longest cached prefix for a new prompt
-- **Eviction**: **LRU** (Least Recently Used — remove the oldest unused data first) based on access **timestamps** (recorded times when each block was last used); shared prefixes (ref_count > 1) get 100× **eviction cost** (penalty score that makes them harder to remove) to preserve reuse
+- **Eviction**: **LRU** (Least Recently Used — remove the oldest unused data first) based on access **timestamps** (recorded times when each block was last used); shared prefixes (ref_count > 1) will get 100× **eviction cost** (penalty score that makes them harder to remove) to preserve reuse — tracking infrastructure (`ref_count`, `last_access`) is in place but eviction policy dispatch is not yet deployed
 
 RadixAttention is the preferred strategy for production serving.
 
@@ -310,7 +310,7 @@ Prefill buffers are allocated once at model init, sized to `chunk_size × dim`. 
 # info: ctx-size: auto → 16384 (48000 MB available, 128 B/token KV)
 ```
 
-The formula: `max_ctx = (available_memory * 0.8 - model_size) / per_token_kv_bytes`. Per-token KV bytes depend on `n_layers × n_kv_heads × head_dim × 2 (K+V) × kv_type_bits / 8`. For a 28-layer model with 4 KV heads, 128-dim heads, and f16 KV cache: `28 × 4 × 128 × 2 × 2 = 57 KB per token`. With 40 GB available and a 15 GB model, auto computes `(40G×0.8 - 15G) / 57K ≈ 300K tokens` — clamped to the model's max context.
+The formula: `max_ctx = (available_memory - 2 × model_size) × 0.8 / per_token_kv_bytes`. The 2× model-size reservation is a safety margin for weight overhead. Per-token KV bytes depend on `n_layers × n_kv_heads × head_dim × 2 (K+V) × kv_type_bits / 8`. For a 28-layer model with 4 KV heads, 128-dim heads, and f16 KV cache: `28 × 4 × 128 × 2 × 2 = 56 KB per token`. With 40 GB available and a 15 GB model, auto computes `(40G - 2×15G) × 0.8 / 56K ≈ 143K tokens` — clamped to the model's max context.
 
 Use `--ctx-size auto` to avoid OOM at startup without manually calculating how much context your hardware can handle.
 

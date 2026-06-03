@@ -89,8 +89,10 @@ io.futexWake(u32, &generation.raw, n_workers);  // Wake all workers
 // Worker loop
 var local_gen: u32 = 0;
 while (true) {
-    pool.io.futexWaitUncancelable(u32, &pool.generation.raw, local_gen);  // Sleep until gen changes
-    local_gen = pool.generation.load(.acquire);          // Update local copy
+    pool.io.futexWaitUncancelable(u32, &pool.generation.raw, local_gen);
+    const new_gen = pool.generation.load(.acquire);
+    if (new_gen == local_gen) continue; // spurious wakeup
+    local_gen = new_gen;
     // ... do work ...
 }
 ```
@@ -188,8 +190,10 @@ The main thread should **not** just wait — it should do work too. Instead of s
 }}}%%
 flowchart TD
     Start["parallelFor() called"] --> Post["Post task descriptor\n(func, ctx, total, grain)"]
-    Post --> Reset["task_counter = 0\nactive = n_workers"]
-    Reset --> Wake["generation++\nfutexWake(all workers)"]
+    Post --> Reset["task_counter = 0"]
+    Reset --> CAS["cmpxchgWeak(active, 0→n_workers)"]
+    CAS -->|CAS succeeds| Wake["generation++\nfutexWake(all workers)"]
+    CAS -->|CAS fails: pool busy| Inline["run func() inline\n(return immediately)"]
     Wake --> Split["Main thread + Workers\nall racing on task_counter"]
 
     Split --> Main["Main Thread\ndoWork() loop\n(fetchAdd chunks)"]
@@ -212,7 +216,11 @@ flowchart TD
 pub fn parallelFor(pool: *ThreadPool, total: usize, grain: usize, ctx: *anyopaque, func: WorkFunc) void {
     // Post work
     pool.task_counter.store(0, .release);
-    pool.active.store(@intCast(pool.n_workers), .release);
+    if (self.active.cmpxchgWeak(0, @intCast(self.n_workers), .acq_rel, .monotonic)) |still_active| {
+        std.log.err("ThreadPool: concurrent parallelFor detected (active={d}), running inline", .{still_active});
+        func(ctx, 0, total);
+        return;
+    }
     _ = pool.generation.fetchAdd(1, .release);
     pool.io.futexWake(u32, &pool.generation.raw, @intCast(pool.n_workers));
 
@@ -265,7 +273,8 @@ pub const ThreadPool = struct {
         self.io = io;  // Store Io for futex operations
         for (0..self.n_workers) |i| {
             self.workers[i] = .{
-                .thread = std.Thread.spawn(.{}, workerLoop, .{self}) catch {
+                .thread = std.Thread.spawn(.{}, workerLoop, .{self}) catch |err| {
+                    std.log.warn("ThreadPool: failed to spawn worker {d}: {s}", .{ i, @errorName(err) });
                     self.n_workers = i;  // Reduce count if spawn fails
                     return;
                 },
@@ -344,7 +353,9 @@ pub const ThreadPool = struct {
 
             if (pool.shutdown.load(.acquire)) return;
 
-            local_gen = pool.generation.load(.acquire);
+            const new_gen = pool.generation.load(.acquire);
+            if (new_gen == local_gen) continue; // spurious wakeup
+            local_gen = new_gen;
 
             // Do work
             pool.doWork();
@@ -586,7 +597,7 @@ defer pool.deinit();
 | Q4_0 GEMV (4096×4096) | 0.8 ms | 0.13 ms | 6.2× |
 | RMSNorm (4096) | 15 µs | 3 µs | 5.0× |
 
-**Why not 12× speedup?** Memory bandwidth saturation. At ~8 threads, all available bandwidth is used (~400 GB/s on M4 Pro).
+**Why not 12× speedup?** Memory bandwidth saturation. With 12 threads, bandwidth is exhausted well before linear scaling; marginal gains from threads beyond the saturation point are small, so actual speedup plateaus in the 5-7x range.
 
 **Overhead:**
 

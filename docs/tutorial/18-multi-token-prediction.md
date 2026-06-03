@@ -14,7 +14,7 @@ The input token ID (e.g., 42) indexes into an **embedding table** — a matrix o
 
 ### 2. Transformer Layers (The Layer Loop)
 
-The hidden state passes through N **transformer layers** (e.g., 64 layers for a 27B model). Each layer has two sub-blocks:
+The hidden state passes through N **transformer layers** (e.g., 64 layers for a 0.8B model, or 32 layers for a 3B model). Each layer has two sub-blocks:
 
 **Attention block** — lets the model look at previous tokens:
 - **Q/K/V projections**: Three matrix multiplications (**GEMV** = General Matrix-Vector multiply) project the hidden state into **Query**, **Key**, and **Value** vectors. Q asks "what am I looking for?", K says "what do I contain?", V says "what information do I provide?"
@@ -38,7 +38,7 @@ After all layers, one final RMSNorm + GEMV maps the hidden state from `n_embd` d
 
 ## What MTP Changes
 
-MTP adds a shortcut. After the main model finishes its forward pass (all N layers), we save the **pre-norm hidden state** — the hidden vector just before the final output norm. This vector contains the model's complete understanding of the sequence context.
+MTP adds a shortcut. After the main model finishes its forward pass (all N layers), we save the **pre-norm hidden state** — the residual stream after the last attention block, before the final FFN residual and output norm are applied. This vector contains the model's complete understanding of the sequence context.
 
 ```mermaid
 %%{init: {'theme': 'base', 'themeVariables': {
@@ -60,7 +60,7 @@ flowchart LR
 
     subgraph MainModel["Main Model (N layers)"]
         direction TB
-        Layers["64 Transformer Layers"]
+        Layers["N Transformer Layers"]
         PreNorm["Pre-norm Hidden State\n(saved for MTP)"]
         OutNorm["Final RMSNorm + Projection"]
         Layers --> PreNorm --> OutNorm
@@ -278,7 +278,7 @@ flowchart TD
         MainLayers["Main Model Layers\n(all N layers)"]
         SharedEmbed --> MainLayers
         MainLayers -- "pre-norm hidden\n(shared repr)" --> MTPHead1["MTP Head 0\n(1 layer)"]
-        MainLayers -- "pre-norm hidden\n(shared repr)" --> MTPHead2["MTP Head 1\n(1 layer, depth 2)"]
+        MainLayers -- "pre-norm hidden\n(shared repr)" --> MTPHead2["MTP Head 1\n(1 layer, depth 1)"]
         MTPHead1 --> Draft1["Draft token t+2"]
         MTPHead2 --> Draft2["Draft token t+3"]
     end
@@ -303,7 +303,7 @@ flowchart TD
 
 ### SSM Caveat (Qwen 3.5)
 
-Qwen 3.5 uses a hybrid architecture with **DeltaNet SSM** layers. SSM layers maintain recurrent state (~150 MiB) that must be checkpointed before speculation and restored on rejection. This overhead makes MTP a net negative for Qwen 3.5 specifically. Pure attention models (Qwen 3.6, Gemma 4) do not have this problem.
+Qwen 3.5 uses a hybrid architecture with **DeltaNet SSM** layers. SSM layers maintain recurrent state (~50 MiB for the 0.8B model) that must be checkpointed before speculation and restored on rejection. This overhead makes MTP a net negative for Qwen 3.5 specifically. Pure attention models (Qwen 3.6, Gemma 4) do not have this problem.
 
 ## Models With MTP Support
 

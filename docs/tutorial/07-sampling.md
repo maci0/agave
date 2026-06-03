@@ -110,7 +110,7 @@ flowchart TD
         Certain["Confident model\ntop-p=0.9 → 1-2 tokens"]
         Uncertain["Uncertain model\ntop-p=0.9 → 20+ tokens"]
     end
-
+```
 
 ## Repeat Penalty
 
@@ -129,9 +129,8 @@ Prevents the common "the the the the..." failure mode. Default 1.0 (disabled).
 Adaptive threshold that keeps tokens whose probability is at least min_p × the top token's probability:
 
 ```
-max_prob = max(softmax(logits))
-threshold = min_p * max_prob
-keep tokens where prob >= threshold
+log_threshold = max(logits) + log(min_p)
+keep tokens where logit >= log_threshold (set others to -inf)
 ```
 
 ```
@@ -159,7 +158,7 @@ Positive values reduce repetition. Negative values encourage it (useful for rhym
 
 ## XTC (eXclude Top Choices)
 
-XTC randomly excludes high-probability tokens to increase diversity. With probability `xtc_probability`, all tokens above `xtc_threshold` probability (except one) are zeroed out, forcing the model to pick a less obvious continuation.
+XTC randomly excludes high-probability tokens to increase diversity. With probability `xtc_probability`, all tokens above `xtc_threshold` probability (except one) are set to -infinity, forcing the model to pick a less obvious continuation.
 
 ```json
 {"xtc_probability": 0.5, "xtc_threshold": 0.1, "temperature": 0.8}
@@ -257,7 +256,7 @@ flowchart TD
     subgraph Defaults["Safe starting point"]
         Balanced
     end
-
+```
 
 Applied in order:
 

@@ -208,7 +208,7 @@ for (0..64) |j| {
 acc += scale * q_dot + bias * x_sum;  // Apply scale/bias ONCE
 ```
 
-**Cost:** 64 multiplies (q × x) + 64 adds (accumulate) + 64 adds (sum x) + **2 final ops** = **130 operations per group**.
+**Cost:** 64 FMAs (q × x, fused multiply-add) + 64 adds (sum x) + **2 final ops** = **130 operations per group**.
 
 **Savings:** 192 → 130 ops = **32% reduction** in arithmetic. Real-world speedup: **30-40%** (measured on Apple M4 with Gemma3 27B QAT).
 
@@ -218,7 +218,7 @@ acc += scale * q_dot + bias * x_sum;  // Apply scale/bias ONCE
 - We can compute the dot product `sum(q × x)` and sum `sum(x)` separately
 - Then apply scale and bias **once** at the end
 
-**SIMD implementation** (from `src/ops/mlx.zig`):
+**SIMD implementation** (pseudocode illustrating the vectorized approach):
 
 ```zig
 var q_dot_acc: V8 = @splat(0.0);
@@ -282,17 +282,17 @@ Unlike integer quantization (Q4_0, Q8_0), floating-point quantization keeps the 
 **Bit layout**: `[sign:1][exponent:4][mantissa:3]`
 
 ```
-Example: 7.5 in FP8 E4M3
+Example: 7.0 in FP8 E4M3
 Binary:  0 1001 110
-         │  │    └─ mantissa (0.875)
+         │  │    └─ mantissa (0.75)
          │  └────── exponent (bias-adjusted = 2)
          └───────── sign (positive)
 
-Value = (-1)^0 × 1.875 × 2^2 = 7.5
-(mantissa 110 = 0.5 + 0.25 + 0.125 = 0.875; 1 + 0.875 = 1.875)
+Value = (-1)^0 × 1.75 × 2^2 = 7.0
+(mantissa 110 = 0.5 + 0.25 + 0.0 = 0.75; 1 + 0.75 = 1.75)
 ```
 
-**Range**: Can represent values from ~6×10⁻⁸ to 448 (with subnormals)
+**Range**: Can represent values from ~2×10⁻³ to 448 (with subnormals)
 
 **Why E4M3 for weights?**
 - **High precision near zero**: 3 mantissa bits give 8 distinct values in each power-of-2 range
@@ -308,7 +308,7 @@ Value = (-1)^0 × 1.875 × 2^2 = 7.5
 
 **Bit layout**: `[sign:1][exponent:5][mantissa:2]`
 
-**Range**: ~6×10⁻⁸ to 57,344 (128× wider than E4M3)
+**Range**: ~2×10⁻⁵ to 57,344 (128× wider than E4M3 in max value)
 
 **Why E5M2 for KV cache?**
 
@@ -342,7 +342,7 @@ Value = (-1)^0 × 1.875 × 2^2 = 7.5
 - FP8 E4M3: Weights and gradients with small deltas
 - FP8 E5M2: Activations with wide dynamic range
 
-**NVFP4, MXFP4**: 4-bit microscaled floating-point. 16-element blocks with FP8 scales. Hardware-native on NVIDIA Blackwell and newer.
+**NVFP4, MXFP4**: 4-bit microscaled floating-point. NVFP4 uses 16-element blocks (9 bytes each); MXFP4 uses 32-element blocks (17 bytes each). Both use FP8 E4M3 scales. Hardware-native on NVIDIA Blackwell and newer.
 
 ## TurboQuant — KV Cache Quantization
 
@@ -457,7 +457,7 @@ At 32K context length, the majority of positions have negligible softmax weights
 
 ## Geometric KV Cache Quantization
 
-The TurboQuant family uses a Walsh-Hadamard Transform (WHT) to decorrelate KV vectors before quantization. WHT works well but operates on 32-element blocks — each block requires a 5-stage butterfly (O(n log n)), costing ~160 FMAs. For a 128-dim head (4 blocks), that's ~640 FMAs total. The **geometric** methods achieve comparable or better quality with fewer FMAs by exploiting low-dimensional rotations.
+The TurboQuant family uses a Walsh-Hadamard Transform (WHT) to decorrelate KV vectors before quantization. WHT works well but operates on 32-element blocks — each block requires a 5-stage butterfly (O(n log n)), costing ~160 butterfly operations (add/subtract pairs, no multiplications). For a 128-dim head (4 blocks), that's ~640 add/sub operations total. The **geometric** methods achieve comparable or better quality with fewer FMAs by exploiting low-dimensional rotations.
 
 All three geometric methods share TurboQuant's storage format (f16 norm + Lloyd-Max packed indices) and support the same 2/3/4-bit variants. The key difference is how they decorrelate the input before quantization.
 
@@ -484,10 +484,10 @@ PlanarQuant achieves the **best 3-bit perplexity** among all geometric methods b
 
 ### IsoQuant
 
-**Quaternion 4D rotation** decorrelates groups of 4 elements. A unit quaternion q = a + bi + cj + dk defines a 4D rotation via the sandwich product:
+**Quaternion 3D rotation** decorrelates groups of 4 elements (3 rotated, 1 passed through). A unit quaternion q = a + bi + cj + dk defines a 3D rotation via the sandwich product q v q* on pure imaginary (3D) vectors:
 
 ```
-x' = q x q*    (quaternion conjugation in 4D)
+x' = q x q*    (quaternion sandwich product on 3D vector)
 ```
 
 For a 128-dim head, 32 groups of 4 elements are rotated. Total cost: **512 FMAs** (16 per group x 32 groups). The 4D rotation provides deeper decorrelation than PlanarQuant's 2D pairs — it can remove correlations between all 4 coordinates simultaneously, not just pairwise.
@@ -519,7 +519,7 @@ Coordinates are grouped into triples (with padding for the 128 -> 129 case). Tot
 |--------|-----------|-----------|----------------|---------------|
 | TurboQuant | Walsh-Hadamard | 32 (block) | ~640 | Maximum decorrelation, any distribution |
 | PlanarQuant | Givens 2D rotation | 2 | 256 | Fastest encode/decode, best 3-bit PPL |
-| IsoQuant | Quaternion 4D rotation | 4 | 512 | Balanced speed/quality |
+| IsoQuant | Quaternion 3D rotation | 4 | 512 | Balanced speed/quality |
 | RotorQuant | Clifford Cl(3,0) rotor | 3 | ~2400 | Structure-preserving, geometric models |
 
 All geometric methods use the same CLI pattern: `--kv-type <prefix><bits>` where prefix is `pq` (PlanarQuant), `iq` (IsoQuant), or `rq` (RotorQuant) and bits is 2, 3, or 4. Full names (`planar3`, `iso3`, `rotor3`) are also accepted.

@@ -44,7 +44,7 @@ sequenceDiagram
     CPU->>GPU: dispatch Q + K + V together
     GPU->>GPU: load x once, compute Q then K then V
     GPU-->>CPU: barrier (all done)
-
+```
 
 A typical attention layer does:
 
@@ -76,9 +76,9 @@ CPU:   [dispatch Q,K,V together]           [wait once]
 GPU:        [Q GEMV] [K GEMV] [V GEMV]      │
              ▲        ▲        ▲             │
              └────────┴────────┘─────────────┘
-            load x once, reuse in registers
+            x loaded from VRAM by each sub-kernel; overhead reduced by batching barriers
 
-Overhead saved: 2 dispatches, 2 barriers, 2× redundant x loads
+Overhead saved: 2 dispatches, 2 barriers
 ```
 
 **Problem:** All three GEMVs use the same `x` input vector. The GPU loads `x` from memory **three times** (once per dispatch), even though it could load it once and reuse it.
@@ -92,7 +92,7 @@ For a 27B model with ~210 GEMVs per token, that's **1-2 ms of pure overhead** pe
 
 ## Batched GEMV: gemvMulti
 
-**Idea:** Dispatch all GEMVs that share the same input vector in a **single kernel launch**. The input vector `x` is loaded into registers once and reused across all output projections.
+**Idea:** Dispatch all GEMVs that share the same input vector in a **single kernel launch**. Each GEMV still loads x from VRAM, but the N-1 intermediate CPU barriers are eliminated — reducing CPU-side overhead and command buffer size.
 
 ```mermaid
 %%{init: {'theme': 'base', 'themeVariables': {
@@ -127,7 +127,7 @@ flowchart LR
         GK
         GV
     end
-
+```
 
 ### GemvOp Structure
 
@@ -202,13 +202,14 @@ pub fn gemvMulti(self: *MetalBackend, x: [*]const f32, ops: []const GemvOp, k: u
 
 ```zig
 pub fn gemvMulti(self: *CpuBackend, x: [*]const f32, ops: []const GemvOp, k: usize) void {
-    for (ops) |op| {
-        self.gemv(x, op.w, op.y, op.n, k);  // Sequential on CPU
-    }
+    // Parallel dispatch when all ops share dtype and n >= 32
+    if (self.pool) |pool| { /* parallelFor across total_n rows */ }
+    // Fallback: sequential
+    for (ops) |op| { self.gemv(x, op.w, op.y, op.n, k); }
 }
 ```
 
-**CPU doesn't batch** — sequential execution is fine. The API uniformity is the benefit.
+CPU parallelizes rows across the thread pool when ops share a dtype, falling back to sequential otherwise.
 
 ### Performance Impact
 
@@ -296,7 +297,7 @@ be.rmsNorm(residual, norm_w, x_normed, n_embd, eps);
 be.addRmsNorm(residual, ffn_out, norm_w, x_normed, n_embd, eps);
 ```
 
-**Impact:** Qwen3.5 saved **128 dispatches/token** (64 layers × 2 residual+norm per layer).
+**Impact:** Qwen3.5 saved **64 dispatches/token** (32 layers × 2 residual+norm per layer).
 
 #### siluMul: SwiGLU Activation
 
@@ -350,10 +351,10 @@ be.siluMul(gate_buf, up_buf, ffn_out, ff_dim);  // Fused
 
 #### splitQGate: Q+Gate Deinterleaving (GPU Kernel)
 
-**Problem:** DeltaNet (Qwen3.5) stores Q and gate interleaved per head:
+**Problem:** DeltaNet (Qwen3.5) stores Q and gate block-interleaved per head:
 
 ```
-[Q0, G0, Q1, G1, Q2, G2, ..., Q_{hd-1}, G_{hd-1}] × nh heads
+[Q0..Q_{hd-1}, G0..G_{hd-1}] × nh heads
 ```
 
 Needs to split into:
@@ -377,7 +378,7 @@ for (0..nh) |h| {
 // Next GPU op must re-upload them → 2 more syncs!
 ```
 
-**Cost:** 16 syncs/token (one per DeltaNet layer) × ~200 µs/sync = **3.2 ms/token overhead**.
+**Cost:** 24 syncs/token (one per DeltaNet layer) × ~200 µs/sync = **4.8 ms/token overhead**.
 
 **Fused GPU kernel:**
 
@@ -406,7 +407,7 @@ kernel void split_qgate(
 be.splitQGate(qg_buf, q_buf, g_buf, hd, nh);  // 1 dispatch, no sync needed
 ```
 
-**Impact:** Eliminated 16 syncs/token → Qwen3.5 throughput **12.3 → 14.1 tok/s** (+15%).
+**Impact:** Eliminated 24 syncs/token → Qwen3.5 throughput **12.3 → 14.1 tok/s** (+15%).
 
 **Key insight:** Moving data manipulation from CPU to GPU eliminates sync points. Even a trivial operation (memcpy) is worth a GPU kernel if it avoids a round-trip.
 
@@ -493,7 +494,7 @@ graph TD
         T2
         T3
     end
-
+```
 
 ### Tier 1: Fused FFN
 
@@ -532,7 +533,7 @@ flowchart TD
     end
 
     Before -. "3 → 1\nfusion" .-> After
-
+```
 
 **Standard FFN:**
 ```
@@ -555,11 +556,11 @@ Each threadgroup computes one output element. It loads the same `x` vector once 
 
 **Quantization coverage:**
 
-12 Metal MSL kernels in `megakernel.metal`:
+11 Metal MSL kernels in `megakernel.metal`:
 - SiLU: Q8_0, Q4_K, Q5_K, Q6_K, Q4_0, MLX_Q4
 - GELU: Q8_0, Q4_K, Q5_K, Q6_K, Q4_0
 
-4 CUDA kernels: `fused_ffn_{q8_0,q4_k,q5_k,q6_k}.zig` (SiLU, compiled to PTX). 1 ROCm kernel (Q8_0 SiLU).
+4 CUDA kernels: `fused_ffn_{q8_0,q4_k,q5_k,q6_k}.zig` (SiLU, compiled to PTX).
 
 **Performance:**
 
@@ -630,7 +631,7 @@ Single GPU dispatch:
 
 **TurboQuant+ in megakernels:** The `mega_kv_append_tq` and `mega_sdpa_inline` building blocks integrate TurboQuant+ directly. KV values are quantized inline during append, and SDPA dequantizes them on-the-fly with sparse V optimization (positions with softmax weight below 1e-6 skip V dequantization).
 
-**Total megakernel code:** ~4,166 lines across 12 files (hand-written) plus ~650 lines in `mega_compose.zig` (auto-generator).
+**Total megakernel code:** ~4,334 lines across 12 files (hand-written) plus ~1,036 lines in `mega_compose.zig` (auto-generator).
 
 ### Tier 3: Composed Megakernels (Auto-Generated)
 
@@ -764,16 +765,16 @@ fn encode(...) void {
 ## Real-World Example: Qwen3.5 Optimization Journey
 
 **Initial (naive):**
-- 16 DeltaNet layers × 1 sync per Q/gate split = **16 syncs/token**
+- 24 DeltaNet layers × 1 sync per Q/gate split = **24 syncs/token**
 - No gemvMulti → 3 dispatches for Q/K/V projection = **~600 extra dispatches**
-- No addRmsNorm → 128 extra dispatches for residual+norm
+- No addRmsNorm → 64 extra dispatches for residual+norm
 - **Throughput:** 12.3 tok/s
 
 **Optimizations applied:**
 
-1. **splitQGate GPU kernel** → eliminated 16 syncs
+1. **splitQGate GPU kernel** → eliminated 24 syncs
 2. **gemvMulti for Q/K/V** → reduced dispatches by ~200
-3. **addRmsNorm fusion** → reduced dispatches by 128
+3. **addRmsNorm fusion** → reduced dispatches by 64
 4. **Batch mode for independent norms/RoPE** → reduced barriers by 240
 
 **Final:**

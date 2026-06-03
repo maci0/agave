@@ -104,10 +104,10 @@ Agave's tokenizer (`src/tokenizer/bpe.zig`) supports both:
 
 | Model | Vocab Size | Avg Tokens/Word | Encoding |
 |-------|:----------:|:---------------:|----------|
-| Qwen 3.5 | 151,936 | ~1.3 | BPE (GPT-2 style, byte-level) |
+| Qwen 3.5 | 248,320 | ~1.3 | BPE (GPT-2 style, byte-level) |
 | Gemma 3/4 | 262,144 | ~1.1 | SentencePiece |
-| GPT-OSS | 200,064 | ~1.3 | BPE |
-| GLM-4 | 151,552 | ~1.3 | BPE |
+| GPT-OSS | 201,088 | ~1.3 | BPE |
+| GLM-4 | 154,880 | ~1.3 | BPE |
 
 Larger vocabularies encode text more efficiently (fewer tokens per sentence) but increase the embedding table size — a 256K vocabulary with 4096-dim embeddings takes 4 GB in FP32.
 

@@ -290,7 +290,7 @@ softmax(x)[i] = exp(x[i]) / sum_j(exp(x[j]))
 **Example**:
 ```
 Input:  [2.0, 1.0, 0.1]
-Exp:    [7.39, 2.72, 1.11]    (sum = 11.22)
+Exp:    [7.39, 2.72, 1.11]    (sum = 11.21)
 Output: [0.66, 0.24, 0.10]    (sum = 1.00)
 ```
 
@@ -441,7 +441,7 @@ argmax(x) = 1    (x[1] = 0.8 is largest)
 
 **Usage**: Greedy decoding (temperature=0) — always pick the highest-scoring token.
 
-**Implementation**: Single-pass linear scan, O(n).
+**Implementation**: Two-pass linear scan, O(n). First pass finds the maximum value (SIMD-vectorised); second pass finds its index.
 
 ### Temperature Scaling
 
@@ -462,9 +462,9 @@ temperature → ∞:   uniform distribution
 Keep only the K highest-scoring tokens, set rest to -∞:
 
 ```
-1. Sort tokens by score descending
-2. Keep top K, mask rest
-3. Renormalize (softmax over remaining K)
+1. Scan all tokens once to find the k-th largest value (min-replacement scan, O(n))
+2. In a single SIMD pass: mask tokens below that threshold to −∞ and apply exp
+3. Renormalize by dividing by the accumulated sum
 ```
 
 **Usage**: Prevent sampling extremely unlikely tokens at high temperatures.
@@ -518,10 +518,11 @@ mul(a, b)[i] = a[i] * b[i]
 Matrix-vector multiply is ~95% of decode time. Every linear layer (`Linear(in, out)`) is a GEMV:
 
 - Q/K/V projections: 3 GEMVs per layer
+- Attention output projection: 1 GEMV per layer
 - FFN: 3 GEMVs per layer (gate, up, down)
 - Output logits: 1 GEMV (largest — vocab_size rows)
 
-A 28-layer model with vocab_size=128K does ~210 GEMVs per token.
+A 28-layer model with vocab_size=128K does ~197 GEMVs per token.
 
 ### Bandwidth vs Compute Bound
 
@@ -535,7 +536,7 @@ For single-token decode, everything is bandwidth-bound.
 
 **In-place** (modifies input): `rope(x)` rotates x directly. Zero allocations.
 
-**Allocating** (creates output): `softmax(x)` produces new array (can't normalize in-place — need all values to compute sum first).
+**Allocating** (creates output): `softmax(x)` operates **in-place** over two passes (find max, then exp+normalize). No allocation — the input buffer is reused as output.
 
 Inference hot path is allocation-free — all buffers pre-allocated, operations reuse scratch space.
 

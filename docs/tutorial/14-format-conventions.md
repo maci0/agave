@@ -50,7 +50,7 @@ flowchart LR
 
     Conv -->|"true"| HFConv["HF conventions\n• KQV order: K,Q,V\n• GQA: interleaved\n• A_log: raw → convert"]
     Conv -->|"false"| LLConv["llama.cpp conventions\n• KQV order: Q,K,V\n• GQA: tiling\n• A_log: pre-converted"]
-
+```
 
 ```zig
 // src/format/format.zig — vtable-based polymorphism
@@ -64,7 +64,10 @@ pub const Format = struct {
         get_tensor: *const fn (self: *anyopaque, name: []const u8) ?TensorInfo,
         get_meta_str: *const fn (self: *anyopaque, key: []const u8) ?[]const u8,
         get_meta_u32: *const fn (self: *anyopaque, key: []const u8) ?u32,
-        // ...
+        get_meta_f32: *const fn (self: *anyopaque, key: []const u8) ?f32,
+        get_meta_u32_array: *const fn (self: *anyopaque, key: []const u8) ?[]const u32,
+        get_vocab: *const fn (self: *anyopaque) ?[]const []const u8,
+        get_merges: *const fn (self: *anyopaque) ?[]const []const u8,
     };
 
     pub fn getTensor(self: Format, name: []const u8) ?TensorInfo {
@@ -130,7 +133,7 @@ flowchart TD
     H1 --> QProj
     H0 --> KProj
     H2 --> VProj
-
+```
 
 **GGUF (llama.cpp):**
 ```zig
@@ -156,7 +159,7 @@ const v_start = key_dim + key_dim;
 @memcpy(v_buf[0..v_dim],   conv_out[v_start..][0..v_dim]);
 ```
 
-**Controlled by:** `kqv_order` flag in `DeltaNetParams`:
+**Controlled by:** `kqv_order` flag in `DeltaNetParams`. The field exists to support per-format branching, but in practice it is hardcoded to `false` for both GGUF and HF SafeTensors:
 
 ```zig
 pub const DeltaNetParams = struct {
@@ -173,7 +176,7 @@ pub const DeltaNetParams = struct {
 // src/models/qwen35.zig
 const p = DeltaNetParams{
     // ... other params ...
-    .kqv_order = self.fmt.is_safetensors,  // Detect format
+    .kqv_order = false, // Q,K,V order for both GGUF and HF SafeTensors
 };
 ```
 
@@ -218,7 +221,7 @@ flowchart LR
 
     V0 & V1 & V2 & V3 -->|"HF: h*2/8=0"| K0
     V4 & V5 & V6 & V7 -->|"HF: h*2/8=1"| K1
-
+```
 
 **GGUF pattern:** `0,1,0,1,0,1,0,1` (tiling — alternates every head)
 
@@ -248,16 +251,16 @@ const kh = h * num_k_heads / num_v_heads;
 - V-heads 4-7 → K-head 1 (4×2/8 = 1)
 - Pattern: `0,0,0,0,1,1,1,1` (interleaved groups)
 
-**Controlled by:** Same `kqv_order` flag (GQA mapping convention follows split order convention).
+**Controlled by:** Same `kqv_order` flag (GQA mapping convention follows split order convention). Since `kqv_order` is `false` for both formats in Qwen3.5, the tiling path is always used.
 
 **Implementation:**
 
 ```zig
 // src/backend/kernels/cpu/deltanet.zig
 const kh = if (p.kqv_order)
-    h * p.num_k_heads / p.num_v_heads  // SafeTensors: interleaved groups
+    h * p.num_k_heads / p.num_v_heads  // interleaved groups
 else
-    h % p.num_k_heads;                 // GGUF: tiling
+    h % p.num_k_heads;                 // tiling (used by both formats)
 ```
 
 ### 3. SSM A_log Pre-Conversion
@@ -390,18 +393,32 @@ const buf2 = be.getBufRef(scratch);  // Returns CACHED buffer (stale!)
 
 ```zig
 // src/models/qwen35.zig
-norm_cache: std.AutoHashMap(usize, []f32)  // Key = bf16 norm ptr
+// Fixed-size array cache — no HashMap allocation, linear scan over ~200 entries.
+norm_cache: [max_norm_entries]NormCacheEntry = undefined,
+norm_cache_len: usize = 0,
 
-pub fn normAsF32(self: *Model, bf16_ptr: [*]const u8, n: usize) ![]f32 {
-    const key = @intFromPtr(bf16_ptr);
-    if (self.norm_cache.get(key)) |cached| return cached;
+fn normAsF32(self: *Qwen35Model, t: TensorInfo, n: usize) [*]const f32 {
+    if (t.dtype == .f32) return @ptrCast(@alignCast(t.data_ptr));
 
-    // Allocate permanent f32 buffer
-    const f32_buf = try self.allocator.alloc(f32, n);
-    dequantToF32(bf16_ptr, f32_buf, n);
+    // Linear scan — at most ~200 entries, first-token only on miss.
+    const key = @intFromPtr(t.data_ptr);
+    for (self.norm_cache[0..self.norm_cache_len]) |entry| {
+        if (entry.key == key) return entry.data.ptr;
+    }
 
-    self.norm_cache.put(key, f32_buf) catch {};
-    return f32_buf;
+    // Cache miss: allocate, convert, store permanently.
+    if (self.norm_cache_len >= max_norm_entries) {
+        quant.dequantToF32(self.dequant_buf, t.data_ptr, t.dtype, n);
+        return self.dequant_buf.ptr;
+    }
+    const buf = self.allocator.alloc(f32, n) catch {
+        quant.dequantToF32(self.dequant_buf, t.data_ptr, t.dtype, n);
+        return self.dequant_buf.ptr;
+    };
+    quant.dequantToF32(buf, t.data_ptr, t.dtype, n);
+    self.norm_cache[self.norm_cache_len] = .{ .key = key, .data = buf };
+    self.norm_cache_len += 1;
+    return buf.ptr;
 }
 ```
 
@@ -415,31 +432,34 @@ pub fn normAsF32(self: *Model, bf16_ptr: [*]const u8, n: usize) ![]f32 {
 
 ```zig
 // src/format/safetensors.zig
-const gguf_hf_meta_map = std.StaticStringMap([]const u8).initComptime(.{
-    .{ "full_attn_interval", "full_attention_interval" },
+const gguf_hf_meta_map = [_]struct { []const u8, []const u8 }{
+    .{ "full_attention_interval", "full_attention_interval" },
     .{ "ssm.conv_kernel", "linear_conv_kernel_dim" },
     .{ "ssm.state_size", "linear_key_head_dim" },
     .{ "ssm.group_count", "linear_num_key_heads" },
     .{ "ssm.time_step_rank", "linear_num_value_heads" },
     .{ "partial_rotary_factor", "partial_rotary_factor" },
-});
+};
 ```
 
 **Usage:**
 
+The map is used by `SafeTensorsDir` when looking up a GGUF-style metadata key against a `config.json`. `lookupMetaAllTranslations()` iterates `gguf_hf_meta_map`, finds the HF key for a given GGUF suffix, and returns the first matching value from the parsed JSON:
+
 ```zig
-pub fn getMetaU32(self: *GGUFFile, key: []const u8) ?u32 {
-    // Try GGUF key first
-    if (self.meta.get(key)) |val| return val.asU32();
-
-    // Fallback to HF key
-    if (gguf_hf_meta_map.get(key)) |hf_key| {
-        if (self.meta.get(hf_key)) |val| return val.asU32();
+// src/format/safetensors.zig — SafeTensorsDir metadata lookup
+fn lookupMetaAllTranslations(config_meta: *const std.StringHashMap(MetaValue), key: []const u8) ?MetaValue {
+    // Primary translation: strip arch prefix, look up GGUF suffix in map → HF key
+    if (ggufKeyToHf(key)) |hf_key| {
+        if (config_meta.get(hf_key)) |v| return v;
     }
-
+    // Alias pass: some GGUF suffixes map to multiple valid HF keys
+    // ...
     return null;
 }
 ```
+
+For GGUF files, the direction is reversed: `gguf.zig`'s `fmtGetMetaU32` translates an HF key to a GGUF suffix via `hfKeyToGgufSuffix()`, then looks up the arch-prefixed GGUF key in the binary metadata.
 
 **Example:** Qwen3.5 reads `ssm.conv_kernel` (GGUF) or `linear_conv_kernel_dim` (HF) transparently.
 
@@ -479,7 +499,7 @@ flowchart LR
     HFName --> TensorInfo
     HFNameW --> TensorInfo
     PassThru --> TensorInfo
-
+```
 
 ### DeltaNet Tensor Names
 
@@ -487,7 +507,7 @@ flowchart LR
 // GGUF → HF mapping
 const tensor_name_map = std.StaticStringMap([]const u8).initComptime(.{
     .{ "attn_qkv", "linear_attn.in_proj_qkv" },
-    .{ "attn_gate", "in_proj_z" },
+    .{ "attn_gate", "linear_attn.in_proj_z" },
     .{ "ssm_alpha", "in_proj_a" },
     .{ "ssm_beta", "in_proj_b" },
     .{ "ssm_out", "out_proj" },

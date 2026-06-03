@@ -8,7 +8,7 @@ Token ID → Embedding → N Transformer Layers → Final Norm → Logits → Ar
 
 Concrete example (Gemma4 E2B, 2.6B parameters):
 ```
-Token 15496     → embed → [2304 floats]  → 28 layers → [2304 floats]  → norm → [2304 floats]
+Token 15496     → embed → [2304 floats]  → 35 layers → [2304 floats]  → norm → [2304 floats]
 ("Hello")          lookup    hidden state     attention+FFN    hidden state            
                                                               → vocab proj → [262144 floats] → argmax → Token 11
                                                                  logits (one per vocab entry)            (",")
@@ -19,7 +19,7 @@ Each **transformer layer** has two sublayers:
 1. **Attention** — lets the model look at previous tokens
 2. **FFN** (Feed-Forward Network) — processes each position independently
 
-A model has N layers stacked in sequence (e.g., 28 for Gemma4 E2B, 64 for Qwen3.5 0.8B). Each layer has its own **independent weight matrices** — layer 0's attention weights are completely different from layer 15's. The hidden state vector passes through all N layers, getting progressively refined. Early layers tend to learn basic features (syntax, word relationships), later layers learn more abstract ones (reasoning, facts).
+A model has N layers stacked in sequence (e.g., 35 for Gemma4 E2B, 64 for Qwen3.5 0.8B). Each layer has its own **independent weight matrices** — layer 0's attention weights are completely different from layer 15's. The hidden state vector passes through all N layers, getting progressively refined. Early layers tend to learn basic features (syntax, word relationships), later layers learn more abstract ones (reasoning, facts).
 
 Both sublayers use **residual connections** (`output = input + sublayer(input)`) so information flows through unchanged, preventing the **vanishing gradient problem** (where gradients get exponentially smaller in deep networks during training, making learning impossible) in deep networks.
 
@@ -106,7 +106,7 @@ flowchart LR
     Softmax --> WeightedSum["Weighted Sum\n× V vectors"]
     PastV --> WeightedSum
     WeightedSum --> Out["Attention Output\n[n_embd floats]"]
-
+```
 
 **What are Q, K, V?** They're three different **linear projections** (matrix-vector multiplies) of the same input hidden state `x`:
 
@@ -201,7 +201,7 @@ flowchart LR
     Q4 & Q5 & Q6 & Q7 --> KV1
     Q8 & Q9 & Q10 & Q11 --> KV2
     Q12 & Q13 & Q14 & Q15 --> KV3
-
+```
 
 | Model | Q heads | KV heads | Ratio |
 | :--- | :--- | :--- | :--- |
@@ -302,7 +302,7 @@ flowchart LR
     D67 & F3 & Angle3 --> R3["Rotate 2D"]
 
     R0 & R1 & R2 & R3 --> Out["Rotated Q or K\n(position encoded)"]
-
+```
 
 When we rotate Q at position `i` by angle `θ_i` and K at position `j` by angle `θ_j`, their dot product includes a term `cos(θ_i - θ_j)`. Since angles are proportional to position (`θ = pos × freq`), the difference `θ_i - θ_j = (i - j) × freq` captures the *relative* distance `(i - j)` between tokens. This means attention naturally focuses on how far apart tokens are, not where they appear absolutely — which is what matters for language ("the cat" should attend the same way whether it's at the start or middle of a sentence).
 

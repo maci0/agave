@@ -40,6 +40,7 @@ flowchart LR
         Result
     end
 
+```
 
 ```zig
 const table_size = 256;  // Regular constant
@@ -78,7 +79,7 @@ flowchart TD
     NaiveInput["8-bit FP8 value\n(e.g. 0xA7)"] --> NaiveOps["Runtime: extract bits,\nbranch, pow(), multiply\n~30 instructions"]
     NaiveOps --> NaiveOut["f32 result"]
 
-    ComptimeLoop["Compiler: loop 0..256\nfp8ToF32Internal(i)"] --> LUT["[256]f32 table\nin .rodata\n(1 KB)"]
+    ComptimeLoop["Compiler: loop 0..256\nfp8e4m3Compute(i)"] --> LUT["[256]f32 table\nin .rodata\n(1 KB)"]
     LUT --> LUTLookup["Runtime: array[val]\n1 instruction"]
     FastInput["8-bit FP8 value\n(e.g. 0xA7)"] --> LUTLookup
     LUTLookup --> FastOut["f32 result"]
@@ -97,6 +98,7 @@ flowchart TD
         FastOut
     end
 
+```
 
 ### FP8 E4M3 Dequantization Table
 
@@ -133,7 +135,7 @@ pub fn fp8e4m3ToF32(val: u8) f32 {
 const fp8e4m3_lut: [256]f32 = blk: {
     var table: [256]f32 = undefined;
     for (0..256) |i| {
-        table[i] = fp8ToF32Internal(@intCast(i));  // Computed once at compile time
+        table[i] = fp8e4m3Compute(@intCast(i));  // Computed once at compile time
     }
     break :blk table;
 };
@@ -170,14 +172,13 @@ const table = blk: {
 **IQ4_NL** uses a fixed dequantization table (not computed, but verified at comptime):
 
 ```zig
-const iq4nl_values = [_]i8{
+pub const iq4nl_table: [16]i8 = .{
     -127, -104, -83, -65, -49, -35, -22, -10,
     1, 13, 25, 38, 53, 69, 89, 113,
 };
 
-pub fn iq4nlToF32(nibble: u4, scale: f32) f32 {
-    return @as(f32, @floatFromInt(iq4nl_values[nibble])) * scale;
-}
+// Illustrative usage (not a real API function — callers use iq4nl_table directly):
+// const val = @as(f32, @floatFromInt(iq4nl_table[nibble])) * scale;
 ```
 
 **Why a table?** IQ4_NL uses **non-linear quantization** — the step sizes aren't uniform. Small values have fine steps, large values have coarse steps. This gives better accuracy than linear Q4.
@@ -186,10 +187,10 @@ pub fn iq4nlToF32(nibble: u4, scale: f32) f32 {
 
 ```zig
 comptime {
-    std.debug.assert(iq4nl_values.len == 16);  // 4-bit = 16 values
-    for (iq4nl_values, 0..) |v, i| {
+    std.debug.assert(iq4nl_table.len == 16);  // 4-bit = 16 values
+    for (iq4nl_table, 0..) |v, i| {
         if (i > 0) {
-            std.debug.assert(v > iq4nl_values[i - 1]);  // Strictly increasing
+            std.debug.assert(v > iq4nl_table[i - 1]);  // Strictly increasing
         }
     }
 }
@@ -237,6 +238,7 @@ flowchart LR
         CPUBranch
     end
 
+```
 
 ### Target OS Detection
 
@@ -406,6 +408,7 @@ switch (self) {
     .vulkan => |be| be.gemv(...),
     .cuda => |be| be.gemv(...),
     .rocm => |be| be.gemv(...),
+    .webgpu => |be| be.gemv(...),
 }
 ```
 
@@ -483,57 +486,43 @@ comptime {
 
 ```zig
 // MXFP4 uses E2M1 format (2-bit exponent, 1-bit mantissa)
-// 4-bit nibble → 16 possible values
-const mxfp4_lut = comptime blk: {
-    var table: [16]f32 = undefined;
-    for (0..16) |nibble| {
-        const exp = (nibble >> 1) & 0x3;  // 2 bits
-        const mant = nibble & 0x1;        // 1 bit
-
-        // E2M1 decoding
-        if (exp == 0 and mant == 0) {
-            table[nibble] = 0.0;
-        } else {
-            const frac = 1.0 + @as(f32, @floatFromInt(mant));  // 1.0 or 1.5
-            table[nibble] = frac * std.math.pow(f32, 2.0, @as(f32, @floatFromInt(exp)) - 1.0);
-        }
-    }
-    break :blk table;
-};
-
-pub fn mxfp4ToF32(nibble: u4, scale_fp8: u8) f32 {
-    const scale = fp8e4m3ToF32(scale_fp8);  // Also a comptime LUT!
-    return mxfp4_lut[nibble] * scale;
+// 4-bit nibble → 16 possible values stored as a literal constant table
+pub fn mxfp4Lookup(nibble: u8) f32 {
+    const table: [16]f32 = .{
+        0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0,
+        0.0, -0.5, -1.0, -1.5, -2.0, -3.0, -4.0, -6.0,
+    };
+    return table[nibble & 0xF];
 }
+
+// For the scaled variant (nibble value × block scale), see nvfp4Dequant.
+// The mantissa term for E2M1 is 0.5 * mant (not 1.0 * mant):
+//   mant=0 → 0.0 addend, mant=1 → 0.5 addend, giving 1.0 and 1.5 for normal values.
 ```
 
-**Two-level lookup:** nibble → base value (comptime), scale (comptime) → final value (runtime multiply).
+**Single-level lookup:** nibble → base value via literal table (no module-level symbol). For NVFP4 scaled dequantization, `nvfp4Dequant` combines `mxfp4Lookup` with a block scale.
 
 ### Quantization Block Sizes
 
-```zig
-pub fn blockBytes(comptime dtype: DType) usize {
-    return switch (dtype) {
-        .f32 => 4,
-        .f16, .bf16 => 2,
-        .q4_0 => 18,
-        .q8_0 => 34,
-        .q4_k => 144,
-        .q6_k => 210,
-        .mxfp4 => 17,
-        // ...
-    };
-}
-
-// Usage: computed at compile time
-const bytes_per_block = comptime blockBytes(.q4_0);  // 18
-```
-
-**Benefit:** Function is `comptime`, so it can be used in other comptime expressions:
+Block byte sizes are defined as named module-level constants in `backend.zig`:
 
 ```zig
-const num_blocks = (total_bytes + comptime blockBytes(dtype) - 1) / comptime blockBytes(dtype);
+pub const q4_0_block_bytes: usize = 18;   // 2-byte scale + 16 bytes of nibbles
+pub const q8_0_block_bytes: usize = 34;   // 2-byte scale + 32 bytes of i8 values
+pub const q4_k_block_bytes: usize = 144;
+pub const q6_k_block_bytes: usize = 210;
+// ...
 ```
+
+**Usage:** reference the constant directly by name:
+
+```zig
+const bytes_per_block = backend.q4_0_block_bytes;  // 18
+
+const num_blocks = (total_bytes + backend.q4_0_block_bytes - 1) / backend.q4_0_block_bytes;
+```
+
+**Benefit:** Named constants are self-documenting, always available at comptime, and require no function call overhead.
 
 ## Performance Impact
 
@@ -668,7 +657,7 @@ pub fn getNextId() usize {
 
 ---
 
-**In the code:** [src/ops/quant.zig](../../src/ops/quant.zig) (fp8e4m3_lut, iq4nl_values), [src/backend/metal.zig](../../src/backend/metal.zig) (@embedFile for MSL shaders), [src/backend/backend.zig](../../src/backend/backend.zig) (inline else dispatch), [build.zig](../../build.zig) (build_options)
+**In the code:** [src/ops/quant.zig](../../src/ops/quant.zig) (fp8e4m3_lut, iq4nl_table), [src/backend/metal.zig](../../src/backend/metal.zig) (@embedFile for MSL shaders), [src/backend/backend.zig](../../src/backend/backend.zig) (inline else dispatch), [build.zig](../../build.zig) (build_options)
 
 **Related:** [Zig Language Reference — comptime](https://ziglang.org/documentation/master/#comptime), [Chapter 9: CPU SIMD Optimization](09-cpu-simd-optimization.md#real-world-example-rmsnorm) (uses comptime LUTs)
 

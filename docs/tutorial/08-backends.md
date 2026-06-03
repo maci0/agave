@@ -190,8 +190,8 @@ flowchart LR
 pub const Backend = union(enum) {
     cpu: *CpuBackend,
     metal: *MetalBackend,
-    cuda: *CudaBackend,
     vulkan: *VulkanBackend,
+    cuda: *CudaBackend,
     rocm: *RocmBackend,
     webgpu: *WebGpuBackend,
 
@@ -248,7 +248,7 @@ flowchart TD
 
 - **Metal**: `newBufferWithBytesNoCopy` wraps mmap'd weights directly
 - **CUDA**: `cudaMallocManaged` for transparent access
-- **Vulkan**: `HOST_VISIBLE | DEVICE_LOCAL` memory type
+- **Vulkan**: `HOST_VISIBLE | HOST_COHERENT | DEVICE_LOCAL` memory type
 
 All GPU backends use **deferred dispatch** — operations are encoded into **command buffers** (queues of GPU operations) without blocking. Models call `be.sync()` only when CPU code needs to read GPU-produced data.
 
@@ -292,21 +292,21 @@ Prefill layer pipeline (Gemma 3):
 
 **Metal**: all batched ops are native GPU kernels. The GEMM uses one threadgroup per output row with weight reuse across tokens. The `sdpa_prefill_fa2` kernel reads old K/V from the cache and new K/V directly from GEMM output (dual-source), then a `copy_f32` kernel populates the cache — all in one command buffer with zero CPU-GPU flush.
 
-**CUDA**: native GPU GEMM (Q8_0), batched RMSNorm and RoPE kernels compiled to PTX. The SDPA uses sequential single-token GPU sdpa calls (already fused with KV append on GPU).
+**CUDA**: native GPU GEMM (Q8_0), batched RMSNorm and RoPE kernels compiled to PTX. The f32 SDPA uses a native batched GPU sdpa_prefill kernel. The turbo KV path uses sequential single-token GPU sdpa calls.
 
 **CPU**: parallel GEMV-based GEMM via thread pool, parallel-head SDPA with bulk KV append. On macOS, F32 GEMV and GEMM dispatch to Apple's Accelerate.framework (`cblas_sgemm`), which uses the AMX matrix coprocessor for ~4x speedup over NEON SIMD.
 
 ## Backend-Specific Notes
 
-**Metal** (`metal.zig`): MSL compute shaders with **threadgroup**-level (a group of threads that execute together and can share fast on-chip memory) `simd_sum` reduction. Buffer caching eliminates ~800 ObjC alloc/release per token. [FlashAttention-2 (Dao, 2023)](https://arxiv.org/abs/2307.08691) with block_size=16 (fits 32KB threadgroup memory). Prefill: native GEMM (f32/Q8_0/Q4_0), batched RoPE, dual-source FA2, zero per-layer flush. **Megakernel**: 70+ pipelines including 11 fused FFN kernels and 5 true megakernels with atomic grid sync. Sparse V threshold in SDPA.
+**Metal** (`metal.zig`): MSL compute shaders with **threadgroup**-level (a group of threads that execute together and can share fast on-chip memory) `simd_sum` reduction. Buffer caching eliminates ~800 ObjC alloc/release per token. [FlashAttention-2 (Dao, 2023)](https://arxiv.org/abs/2307.08691) with block_size=16 (fits 32KB threadgroup memory). Prefill: native GEMM (f32/Q8_0/Q4_0), batched RoPE, dual-source FA2, zero per-layer flush. **Megakernel**: 70 pipelines including 11 fused FFN kernels and 5 true megakernels with atomic grid sync. Sparse V threshold in SDPA.
 
-**CUDA** (`cuda.zig`): Zig kernels compiled to PTX via `nvptx64-cuda` target — no CUDA C++ dependency. Driver API loaded dynamically via `dlopen`. Deferred execution with activation caching for zero-sync SDPA. Prefill: native GEMM (Q8_0), batched RMSNorm/RoPE. **Megakernel**: 56 kernels including 4 fused FFN kernels (SiLU × Q8_0/Q4_K/Q5_K/Q6_K) and 3 true megakernels. Sparse V threshold in SDPA.
+**CUDA** (`cuda.zig`): Zig kernels compiled to PTX via `nvptx64-cuda` target — no CUDA C++ dependency. Driver API loaded dynamically via `dlopen`. Deferred execution with activation caching for zero-sync SDPA. Prefill: native GEMM (Q8_0), batched RMSNorm/RoPE. **Megakernel**: 43 kernels including 5 fused FFN kernels (SiLU × Q8_0/Q4_K/Q5_K/Q6_K and GELU × Q8_0) and 3 true megakernels. Sparse V threshold in SDPA.
 
-**WebGPU** (`webgpu.zig`): WGSL compute shaders loaded via wgpu-native C API. Dynamic library loading (`dlopen`). Enabled by default in the build system. **Lazy readback cache**: activation buffers stay on GPU between operations — `cacheGpuResult` registers GPU output in `buf_cache`, and `getOrUpload` finds it on next access. Downloads only happen on `sync()`. This eliminates ~200 CPU↔GPU round-trips per token. 43 WGSL compute shaders covering all core ops including quantized GEMV for all formats. Buffer lifecycle uses deferred destruction — params and cache-evicted buffers are queued for cleanup during `sync()` to avoid destroying buffers still referenced by pending command buffers.
+**WebGPU** (`webgpu.zig`): WGSL compute shaders loaded via wgpu-native C API. Dynamic library loading (`dlopen`). Enabled by default in the build system. **Lazy readback cache**: activation buffers stay on GPU between operations — `cacheGpuResult` registers GPU output in `buf_cache`, and `getOrUpload` finds it on next access. Downloads only happen on `sync()`. This eliminates ~200 CPU↔GPU round-trips per token. 45 WGSL compute shaders covering all core ops including quantized GEMV for all formats. Buffer lifecycle uses deferred destruction — params and cache-evicted buffers are queued for cleanup during `sync()` to avoid destroying buffers still referenced by pending command buffers.
 
 **Vulkan** (`vulkan.zig`): Pre-compiled SPIR-V compute shaders. Subgroup arithmetic for reductions. Fused single-dispatch normalization/softmax. Works on all vendors including Apple (via MoltenVK). No megakernel support.
 
-**ROCm** (`rocm.zig`): HIP Runtime API loaded dynamically. AMDGCN kernels compiled from Zig via `amdgcn-amdhsa` target. Same deferred execution pattern as CUDA. **Megakernel**: 44 kernels including 1 true megakernel (Qwen Q8). Sparse V threshold in SDPA.
+**ROCm** (`rocm.zig`): HIP Runtime API loaded dynamically. AMDGCN kernels compiled from Zig via `amdgcn-amdhsa` target. Same deferred execution pattern as CUDA. **Megakernel**: 28 kernels including 1 true megakernel (Qwen Q8). Sparse V threshold in SDPA.
 
 ---
 

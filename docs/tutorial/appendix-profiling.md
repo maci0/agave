@@ -27,7 +27,7 @@ flowchart LR
     Forward --> OpWrap["Per-op start()/end() wraps\n(with GPU sync between)"]
     OpWrap --> Accumulate["Accumulate times_us[]\ncounts[] per Op enum"]
     Accumulate --> TokenEnd["End of token"]
-    TokenEnd --> Reset["resetCounters()\n(dispatch/barrier/sync → 0)"]
+    TokenEnd --> Reset["resetCounters()\n(dispatch/barrier/sync → 0, profile_counters = true)"]
     TokenEnd --> Report["perf.report()\nPrint table + Metal counters"]
     Reset --> Forward
 
@@ -99,7 +99,9 @@ pub const PerfCounters = struct {
 
     pub inline fn start(self: *PerfCounters) i128 {
         if (!self.enabled) return 0;
-        return std.time.nanoTimestamp();
+        // Call the private nanoTimestamp() helper, which reads CLOCK_REALTIME directly
+        // via std.c.clock_gettime — avoids Io virtual dispatch overhead in the hot path.
+        return nanoTimestamp();
     }
 
     pub inline fn end(self: *PerfCounters, op: Op, t0: i128) void {
@@ -255,23 +257,25 @@ fn flush() void {
 
 ```zig
 pub fn resetCounters(self: *MetalBackend) void {
-    if (self.profile_counters) {
-        self.dispatch_count = 0;
-        self.barrier_count = 0;
-        self.sync_count = 0;
-    }
+    self.dispatch_count = 0;
+    self.barrier_count = 0;
+    self.sync_count = 0;
+    self.profile_counters = true;
 }
 ```
 
-**Print at end of token:**
+**Print at first decode token:**
 
 ```zig
-if (g_profile) {
-    const info = be.backendInfo();
-    std.log.info("Metal: {d} dispatches, {d} barriers, {d} syncs",
-        .{backend.metal.dispatch_count, backend.metal.barrier_count, backend.metal.sync_count});
+// src/models/qwen35.zig — fires only on the first generated token (kv_seq_len == 1)
+if (self.be == .metal and self.kv_seq_len == 1) {
+    const m = &self.be.metal;
+    std.log.warn("Metal: {d} dispatches, {d} barriers, {d} syncs",
+        .{ m.dispatch_count, m.barrier_count, m.sync_count });
 }
 ```
+
+Note: counters are accessed directly from the `.metal` tagged-union variant, not via a `g_profile` global. Printing is gated on `kv_seq_len == 1` so it fires once (the first decode step) rather than after every token.
 
 ### Interpreting Counts
 
@@ -305,9 +309,9 @@ if (g_profile) {
 pub fn gemvMlxQ(self: *MetalBackend, x: [*]const f32, weight: [*]const u8, scales: [*]const u8, biases: [*]const u8, y: [*]f32, n: usize, k: usize, bits: u32) void {
     const pipeline = switch (bits) {
         4 => self.pipe_gemv_mlx_q4,
+        6 => self.pipe_gemv_mlx_q6,
         8 => self.pipe_gemv_mlx_q8,
-        6 => @panic("Metal MLX 6-bit GEMV not implemented — use --backend cpu or convert to 4-bit"),
-        else => @panic("Unsupported MLX bit width"),
+        else => @panic("Metal MLX GEMV: unsupported bit width"),
     };
     // ... dispatch ...
 }
@@ -315,9 +319,10 @@ pub fn gemvMlxQ(self: *MetalBackend, x: [*]const f32, weight: [*]const u8, scale
 
 **Error message requirements:**
 
-1. **What's missing:** "Metal MLX 6-bit GEMV not implemented"
-2. **Workaround:** "use --backend cpu"
-3. **Alternative:** "or convert to 4-bit"
+1. **What's missing:** name the unsupported configuration
+2. **Workaround:** suggest `--backend cpu` or a supported quantization format
+
+Note: 4-bit, 6-bit, and 8-bit are all supported on Metal. The panic fires for any other value (e.g., bits=3) with the message "Metal MLX GEMV: unsupported bit width".
 
 ### Why @panic?
 
@@ -354,8 +359,11 @@ User **immediately knows** there's an issue and has clear next steps.
 
 ```zig
 pub fn embLookup(self: *MetalBackend, table: TensorData, token_id: u32, output: [*]f32, dim: usize) void {
-    // Fallback to CPU: single-row lookup is faster on CPU than GPU dispatch overhead
-    dequantToF32(table.data[token_id * rowBytes(dim, table.dtype) ..], output, dim);
+    // Fallback to CPU: single-row lookup is faster on CPU than GPU dispatch overhead.
+    // cpuFallback() calls flush() first, ensuring any pending GPU writes (e.g., a preceding
+    // rmsNorm output) are visible before the CPU reads the embedding table.
+    var cpu = self.cpuFallback();
+    cpu.embLookup(table, token_id, output, dim);
 }
 ```
 
@@ -372,8 +380,10 @@ const softmax_cpu_threshold: usize = 128;
 
 pub fn softmax(self: *MetalBackend, data: [*]f32, n: usize) void {
     if (n < softmax_cpu_threshold) {
-        // CPU fallback: dispatch overhead dominates for tiny softmax
-        cpuSoftmax(data, n);
+        // CPU fallback: dispatch overhead dominates for tiny softmax.
+        // cpuFallback() flushes pending GPU work so the CPU reads current data.
+        var cpu = self.cpuFallback();
+        cpu.softmax(data, n);
         return;
     }
     // ... GPU path ...

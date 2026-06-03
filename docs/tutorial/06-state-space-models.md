@@ -66,7 +66,7 @@ flowchart LR
 
     subgraph SSM["SSM Recurrence (O(1) per token)"]
         direction TB
-        State["State matrix S\n(fixed size, ~256 KB)"]
+        State["State matrix S\n(fixed size, ~1,024 KB)"]
         NewTok["New token\nx[t]"]
         Decay["Decay old state\nS *= exp(a * dt)"]
         Update["Write new info\nS += outer(v, k)"]
@@ -157,7 +157,7 @@ flowchart TD
     Output --> Gate["Multiply by SiLU(z) gate"]
 
 
-**GQA in DeltaNet:** Head mapping is format-dependent: GGUF uses **tiling** (`kh = h % num_k_heads`, matching `ggml_repeat` semantics), while SafeTensors uses **interleaved grouping** (`kh = h * num_k_heads / num_v_heads`). Controlled by the `kqv_order` flag set at model load time.
+**GQA in DeltaNet:** GQA head mapping uses tiling (`kh = h % num_k_heads`) for both GGUF and SafeTensors formats (`kqv_order` is always false for Qwen3.5).
 
 **Split order:** After conv1d, output splits as `[Q | K | V]` (llama.cpp convention).
 
@@ -248,8 +248,8 @@ flowchart TD
 
     subgraph SSMMem["SSM memory — always the same size"]
         direction LR
-        SMatrix["State matrix S\n64 × 64 = 4,096 floats\n(256 KB for 16 heads)"]
-        QNew2["New token"] --> UpdateS["One state update\n~8,192 multiply-adds / head"]
+        SMatrix["State matrix S\n128 × 128 = 16,384 floats\n(1,024 KB for 16 heads)"]
+        QNew2["New token"] --> UpdateS["One state update\n~32,768 multiply-adds / head"]
         UpdateS --> SMatrix
         SMatrix --> UpdateS
     end
@@ -275,31 +275,31 @@ Attention layer:
   KV cache read: 32,000 × 128 × 16 × 2 bytes ≈ 125 MB scanned
 
 SSM layer:
-  Per head: decay state (64×64 = 4096 muls), outer product update (4096 muls)
-  = ~8,192 multiply-adds per head
-  × 16 heads = 131K multiply-adds
-  State read: 64 × 64 × 16 × 4 bytes = 256 KB
+  Per head: decay state (128×128 = 16,384 muls), outer product update (16,384 muls)
+  = ~32,768 multiply-adds per head
+  × 16 heads = 524K multiply-adds
+  State read: 128 × 128 × 16 × 4 bytes = 1,024 KB
 
 Ratio: attention does 250× more work at 32K context.
          At 128K context, it's 1000× more.
 ```
 
-The tradeoff: SSMs are faster but lose exact long-range recall. The state matrix has fixed size (64×64 = 4096 floats per head), so it acts as a lossy compression of all past tokens — like a 256 KB "summary" trying to represent 125 MB of cached history. If the model saw "The capital of France is" 10,000 tokens ago, the relevant information has been multiplied by decay^10,000 and is effectively gone. Attention doesn't have this problem — it stores every K/V and can look them up exactly, at the cost of scanning all of them every token.
+The tradeoff: SSMs are faster but lose exact long-range recall. The state matrix has fixed size (128×128 = 16,384 floats per head), so it acts as a lossy compression of all past tokens — like a 1,024 KB "summary" trying to represent 125 MB of cached history. If the model saw "The capital of France is" 10,000 tokens ago, the relevant information has been multiplied by decay^10,000 and is effectively gone. Attention doesn't have this problem — it stores every K/V and can look them up exactly, at the cost of scanning all of them every token.
 
 Hybrid models get the best of both: SSM layers for speed on most positions, attention layers every Nth layer for precise long-range access. Qwen3.5 uses attention every 4th layer — 48 of its 64 layers are cheap SSM layers, and 16 are full-attention layers that maintain exact recall. The attention layers act as "checkpoints" that periodically refresh the model's access to the full history.
 
 ## State Matrix Visualization
 
-For DeltaNet with `head_v_dim=64` and `head_k_dim=64`:
+For DeltaNet with `head_v_dim=128` and `head_k_dim=128`:
 
 ```
-State S[h]: 64×64 matrix = 4,096 floats per head
+State S[h]: 128×128 matrix = 16,384 floats per head
            ┌─────────────────────────┐
-    v_dim  │ Accumulated K→V mapping │ 64 rows
+    v_dim  │ Accumulated K→V mapping │ 128 rows
      ↓     │ via outer product       │
            │ updates with decay      │
            └─────────────────────────┘
-                   k_dim → 64 cols
+                   k_dim → 128 cols
 
 Each timestep:
   1. Decay entire matrix by exp(a * softplus(alpha))
@@ -308,7 +308,7 @@ Each timestep:
   4. Output: o = S @ q / sqrt(k_dim)
 ```
 
-Total state per layer: `num_v_heads × v_dim × k_dim × 4 bytes`. For Qwen3.5 0.8B: 16 heads × 64 × 64 × 4 = 256 KB per SSM layer — negligible vs KV cache.
+Total state per layer: `num_v_heads × v_dim × k_dim × 4 bytes`. For Qwen3.5 0.8B: 16 heads × 128 × 128 × 4 = 1,024 KB per SSM layer — negligible vs KV cache.
 
 ## Hardware Considerations
 
@@ -316,7 +316,7 @@ SSM recurrence is **inherently sequential** — each timestep depends on the pre
 
 - **Prefill**: Cannot batch SSM layers across tokens (unlike attention with GEMM). Each token must be processed sequentially through SSM layers.
 - **Decode**: SSM layers are fast (one state update per token) — the bottleneck shifts to attention layers.
-- **GPU dispatch**: SSM recurrence runs on CPU for Qwen3.5 DeltaNet (the state update loop is register-heavy, not memory-bound). GPU backends dispatch `conv1d` and `deltaNet` but the recurrence itself is scalar.
+- **GPU dispatch**: GPU backends (Metal, Vulkan, WebGPU, ROCm) run the full DeltaNet recurrence on the GPU. The CUDA backend falls back to the CPU SIMD kernel (V8-vectorized, not scalar). The state update loop is sequential across v-heads, not memory-bound.
 
 ## Hybrid Layer Patterns
 

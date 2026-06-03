@@ -4,7 +4,7 @@ The **FFN (Feed-Forward Network)** is the second **sublayer** (component within 
 
 While attention lets tokens communicate with each other, the FFN processes each position **independently** — it's a separate computation per token that doesn't look at neighboring tokens.
 
-**Why does the FFN store "knowledge"?** The FFN expands the hidden state to a much larger intermediate dimension (e.g., 2304 → 12,288 in Gemma4 E2B), applies a nonlinear activation, then compresses back. Research ([Geva et al., 2021](https://arxiv.org/abs/2012.14913)) showed that rows of the up-projection act as **pattern detectors** — each row activates strongly for specific input patterns (e.g., "capital of [country]", "past tense verb", "python function definition"). The corresponding down-projection row then adds the associated output (e.g., the embedding direction for the country's capital). The gate controls which patterns fire. With 12,288 intermediate neurons, the FFN has 12,288 independent "if pattern X, then add Y" slots — this is where factual associations live. Attention routes information between positions; the FFN transforms it at each position.
+**Why does the FFN store "knowledge"?** The FFN expands the hidden state to a much larger intermediate dimension (e.g., 2304 → 9,216 in Gemma4 E2B), applies a nonlinear activation, then compresses back. Research ([Geva et al., 2021](https://arxiv.org/abs/2012.14913)) showed that rows of the up-projection act as **pattern detectors** — each row activates strongly for specific input patterns (e.g., "capital of [country]", "past tense verb", "python function definition"). The corresponding down-projection row then adds the associated output (e.g., the embedding direction for the country's capital). The gate controls which patterns fire. With 9,216 intermediate neurons, the FFN has 9,216 independent "if pattern X, then add Y" slots — this is where factual associations live. Attention routes information between positions; the FFN transforms it at each position.
 
 ## SwiGLU
 
@@ -109,7 +109,7 @@ Standard transformers use the same FFN weights for every token. MoE models have 
   'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
 }}}%%
 flowchart TD
-    Token["Token hidden state\n(e.g. 7168 floats)"] --> Router["Router\nhidden @ gate_weight\n→ 128 scores"]
+    Token["Token hidden state\n(e.g. 4096 floats)"] --> Router["Router\nhidden @ gate_weight\n→ 128 scores"]
 
     Router -->|"top-6\nscores"| Norm["Softmax normalize\nselected scores\n→ weights [0.19, 0.18, ...]"]
 
@@ -130,8 +130,8 @@ flowchart TD
 
 
 ```
-1. Router: scores = sigmoid(hidden @ gate_weight)     # score each expert
-2. Select: top_k = top-4 experts by score             # pick best K
+1. Router: scores = softmax(hidden @ gate_weight)     # score each expert (Qwen 3.5 MoE: softmax+top-8; GPT-OSS: sigmoid+top-4)
+2. Select: top_k = top-8 experts by score             # pick best K
 3. Normalize: weights = softmax(top_k_scores)         # normalize selected
 4. Compute: output = Σ weight[i] * expert_i(hidden)   # weighted sum (each expert's output multiplied by its weight, then added together)
 5. Shared: output += shared_expert(hidden)             # always-active (if present)
@@ -168,10 +168,10 @@ Expert selection uses **stack-allocated** arrays (fixed-size buffers on the call
 
 | Model | Routed Experts | Top-K | Shared Expert | Routing |
 | :--- | :--- | :--- | :--- | :--- |
-| Qwen 3.5/3.6 MoE | 128/256 | 8 | Yes (1) | Softmax |
+| Qwen 3.5/3.6 MoE | 256 | 8 | Yes (1) | Softmax |
 | GPT-OSS | 32 | 4 | No | Softmax |
 | GLM-4 | varies | varies | No | Sigmoid (independent gates) |
-| Nemotron-Nano | 128 | 6 | Yes (1, 2x hidden dim) | Softmax |
+| Nemotron-Nano | 128 | 6 | Yes (1, 2x routed FFN dim) | Sigmoid |
 | Gemma 4 26B-A4B | 128 | 8 | No (dual path: dense + MoE per layer) | Softmax |
 
 **Sigmoid routing** (GLM-4): Each expert gate is **independent** (evaluated separately, not competing with each other for probability mass like softmax does) — multiple experts can have high activation simultaneously without competing.
@@ -194,9 +194,11 @@ This gives large-model quality at small-model compute cost. The tradeoff: all ex
 Expert weights are stored as 3D tensors: `[n_experts, rows, cols]`. The **expert stride** is the byte offset between consecutive experts. For quantized formats (Q4_K, Q8_0), the stride accounts for block structure:
 
 ```
-expert_stride = dims[0] * dims[1]    (for 3D: per-expert = rows × cols)
+expert_stride = dims[0] * dims[1]    (for 3D: per-expert = rows × cols, element count only)
 expert_data = base_ptr + expert_id * stride
 ```
+
+> **Note:** This formula gives the element count per expert and applies directly to float/packed formats. For quantized formats (Q4_K, Q8_0, etc.) the actual byte stride accounts for block headers and is computed by a format-aware function — the raw `dims[0] * dims[1]` product is not the byte stride in those cases.
 
 Some models store fused `gate_up_exps` (gate and up projections concatenated per expert) to reduce tensor count. The GEMV dispatch slices the fused tensor into gate and up halves.
 
@@ -206,8 +208,8 @@ When multiple experts share the same input vector (common in decode), Agave batc
 
 ```zig
 const ops = [_]GemvOp{
-    .{ .w = gate_data, .y = gate_buf, .n = ff },
-    .{ .w = up_data,   .y = up_buf,   .n = ff },
+    .{ .w = .{ .data = gate_data, .dtype = gate_exps.dtype }, .y = gate_buf, .n = ff },
+    .{ .w = .{ .data = up_data,  .dtype = up_exps.dtype  }, .y = up_buf,  .n = ff },
 };
 be.gemvMulti(input, &ops, k);
 ```

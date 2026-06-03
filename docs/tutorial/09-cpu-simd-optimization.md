@@ -347,9 +347,9 @@ pub fn gemvF32(x: [*]const f32, w: [*]const f32, y: [*]f32, n: usize, k: usize) 
 
 **Performance gain:** 2-3× faster than 1-row-at-a-time on bandwidth-bound workloads (most GEMV cases).
 
-**Why not 8 rows?** Register pressure. 8 accumulators x V8 = 32 SIMD registers (NEON only has 32, AVX2 has 16). Compiler starts spilling to stack -> slower. 4 rows is the sweet spot.
+**Why not 8 rows?** Register pressure. 8 accumulators + 8 row-weight vectors + the xv broadcast = ~17 SIMD registers on AVX2, which only has 16 YMM registers, forcing spills to the stack. 4 rows is the sweet spot.
 
-**NR=2 for quantized formats:** In practice, all CPU GEMV kernels for quantized formats (Q4_0, Q4_K, Q5_K, Q6_K, Q8_0, BF16, F16, etc.) use **NR=2** (2-row batching). The dequantization logic per block consumes more registers than f32 GEMV, so 2 rows is the optimal trade-off between input vector reuse and register pressure. The same NR multi-row pattern is applied across GPU backends as well (Metal, CUDA, ROCm) with NR values tuned per format and hardware.
+**NR=2 for K-quant formats:** Q4_K, Q5_K, and Q6_K use **NR=2**; Q4_0, Q8_0, BF16, and F16 use **NR=4** (same as the f32 kernel). The heavier per-block dequantization in K-quant formats is what reduces the optimal row count to 2. The same NR multi-row pattern is applied across GPU backends as well (Metal, CUDA, ROCm) with NR values tuned per format and hardware.
 
 ## Handling Quantized Data
 
@@ -383,11 +383,10 @@ pub fn gemvQ4_0(x: [*]const f32, w: [*]const u8, y: [*]f32, n: usize, k: usize) 
             var block_sum: f32 = 0.0;
             for (0..16) |j| {  // 16 bytes = 32 nibbles (2 per byte)
                 const byte = quant_data[j];
-                const q0 = @as(i8, @intCast(byte & 0xF)) - 8;  // Low nibble
-                const q1 = @as(i8, @intCast(byte >> 4)) - 8;   // High nibble
-
-                block_sum += @as(f32, @floatFromInt(q0)) * x[x_offset + j*2];
-                block_sum += @as(f32, @floatFromInt(q1)) * x[x_offset + j*2 + 1];
+                const q0 = @as(i8, @intCast(byte & 0xF)) - 8;  // Low nibble -> element j
+                const q1 = @as(i8, @intCast(byte >> 4)) - 8;   // High nibble -> element j + 16
+                block_sum += @as(f32, @floatFromInt(q0)) * x[x_offset + j];
+                block_sum += @as(f32, @floatFromInt(q1)) * x[x_offset + j + 16];
             }
 
             sum += scale * block_sum;  // Apply scale once per block
@@ -561,6 +560,8 @@ while (i + 8 <= n) : (i += 8) {
 ## Real-World Example: RMSNorm
 
 RMSNorm is a two-pass reduction: compute RMS, then normalize.
+
+(simplified for clarity -- the real implementation in norm.zig uses 4-accumulator unrolling with a stride-32 inner loop to hide FMA latency)
 
 ```zig
 pub fn rmsNorm(input: [*]const f32, weight: [*]const f32, output: [*]f32, n: usize, eps: f32) void {

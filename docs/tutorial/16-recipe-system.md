@@ -91,6 +91,18 @@ const presets = [_]Preset{
             .ctx_size = 2048,  // Limit context to prevent OOM
         },
     },
+    // GLM-4 — needs repeat penalty to avoid greedy loops
+    .{
+        .arch_prefix = "glm4",
+        .backend = "",
+        .quant = "",
+        .recipe = .{
+            .name = "GLM-4 generic",
+            .temperature = 0.7,
+            .repeat_penalty = 1.1,
+            .max_tokens = 1024,
+        },
+    },
     // CPU-only — smaller batches, lower context
     .{
         .arch_prefix = "",  // Any model
@@ -503,32 +515,11 @@ const presets = [_]Preset{
         .name = "CPU generic",
         .max_tokens = 256,      // Faster generation
         .ctx_size = 2048,       // Lower memory
-        .repeat_penalty = 1.1,  // Prevent loops (slower sampling)
     },
 }
 ```
 
 **Rationale:** CPU is slower. Limit max_tokens for faster response. Lower ctx_size to fit in L3 cache.
-
-### Qwen3.5 MLX 4-bit on Metal (Optimized)
-
-```zig
-.{
-    .arch_prefix = "qwen3",
-    .backend = "Metal",
-    .quant = "MLX",
-    .recipe = .{
-        .name = "Qwen3.5 MLX Metal",
-        .temperature = 0.6,
-        .top_p = 0.9,
-        .repeat_penalty = 1.1,
-        .max_tokens = 2048,     // MLX is fast, allow longer generation
-        .ctx_size = 8192,       // MLX is memory-efficient
-    },
-}
-```
-
-**Rationale:** MLX quantization achieves high throughput. Use larger context and longer generation.
 
 ### GPT-OSS (MoE, Conservative)
 
@@ -540,6 +531,7 @@ const presets = [_]Preset{
     .recipe = .{
         .name = "GPT-OSS Metal",
         .temperature = 0.5,    // Lower temp for reasoning model
+        .top_p = 0.9,
         .ctx_size = 2048,      // MoE uses more memory, limit context
         .max_tokens = 512,     // Prevent excessive generation
     },
@@ -547,25 +539,6 @@ const presets = [_]Preset{
 ```
 
 **Rationale:** MoE models use more VRAM (8-16 experts). Limit context to prevent OOM. Lower temperature for reasoning tasks.
-
-### Gemma 27B QAT (Quality-Focused)
-
-```zig
-.{
-    .arch_prefix = "gemma",
-    .backend = "Metal",
-    .quant = "QAT",  // Quantization-aware training (high quality)
-    .recipe = .{
-        .name = "Gemma 27B QAT Metal",
-        .temperature = 0.7,
-        .top_p = 0.95,          // Wide sampling (creative responses)
-        .repeat_penalty = 1.05, // Light penalty (QAT has good diversity)
-        .ctx_size = 16384,      // QAT is memory-efficient, use full context
-    },
-}
-```
-
-**Rationale:** QAT models have better quality. Use larger context, wider sampling, lighter repeat penalty.
 
 ## Advanced Features
 
@@ -607,25 +580,26 @@ pub fn computeCtxSize(avail_mem: usize, model_size: usize) u32 {
 ## Testing Recipes
 
 ```zig
-test "recipe matching" {
-    // Exact match
-    const r1 = Recipe.match("qwen35", "Metal", "MLX_4bit");
-    try std.testing.expect(r1 != null);
-    try std.testing.expect(std.mem.eql(u8, r1.?.name, "Qwen3.5 MLX Metal"));
+test "recipe match exact" {
+    const r = Recipe.match("qwen35", "Metal", "Q4_K") orelse Recipe.default;
+    try std.testing.expectEqualStrings("Qwen3.5 Q4 Metal", r.name);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.6), r.temperature.?, 0.001);
+}
 
-    // Prefix match (arch)
-    const r2 = Recipe.match("qwen3_5b", "Metal", "Q4_K_M");
-    try std.testing.expect(r2 != null);
-    try std.testing.expect(r2.?.temperature != null);
+test "recipe match glm4 gets GLM-4 recipe" {
+    const r = Recipe.match("glm4", "CPU", "Q4_0") orelse Recipe.default;
+    try std.testing.expectEqualStrings("GLM-4 generic", r.name);
+    try std.testing.expectApproxEqAbs(@as(f32, 1.1), r.repeat_penalty.?, 0.001);
+}
 
-    // Wildcard match (CPU generic)
-    const r3 = Recipe.match("unknown_model", "CPU", "Q8_0");
-    try std.testing.expect(r3 != null);
-    try std.testing.expect(std.mem.eql(u8, r3.?.name, "CPU generic"));
+test "recipe match falls through to CPU generic" {
+    const r = Recipe.match("unknown_cpu_arch", "CPU", "Q4_0") orelse Recipe.default;
+    try std.testing.expectEqualStrings("CPU generic", r.name);
+}
 
-    // No match
-    const r4 = Recipe.match("unknown_model", "CUDA", "F32");
-    try std.testing.expect(r4 == null);
+test "recipe no match returns null" {
+    const r = Recipe.match("unknown_arch", "Vulkan", "F32");
+    try std.testing.expect(r == null);
 }
 
 test "user override priority" {

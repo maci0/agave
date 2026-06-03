@@ -32,7 +32,7 @@ sequenceDiagram
     A->>M: Write counter = 0+1 = 1
     B->>M: Write counter = 0+1 = 1
     Note over M: Final value: 1 (expected: 2)
-
+```
 
 Without atomics, concurrent writes corrupt data:
 
@@ -141,7 +141,7 @@ flowchart LR
     style Rel fill:#e8f0fa,stroke:#4a70c0
     style AcqRel fill:#f5eaf5,stroke:#8a4ab0
     style Seq fill:#faeaea,stroke:#c04a4a
-
+```
 
 ### The Four Orders (Weakest to Strongest)
 
@@ -208,7 +208,7 @@ sequenceDiagram
     C->>F: load(.acquire) → true
     Note over F,C: Acquire fence: consumer now<br/>sees all pre-release writes
     C->>C: process(data[0..99])  ✓ safe
-
+```
 
 ```zig
 var ready = std.atomic.Value(bool).init(false);
@@ -233,16 +233,21 @@ for (data) |d| {
 **Example from thread pool:**
 
 ```zig
-// Main thread: publish work
+// Main thread: publish work (simplified — actual code uses a CAS on active
+// before writing task fields, and also sets task_grain and resets task_counter)
 self.task_func = func;
 self.task_ctx = ctx;
 self.task_total = total;
+self.task_grain = effective_grain;
+self.task_counter.store(0, .release);
 _ = self.generation.fetchAdd(1, .release);  // All writes happen-before this
-self.io.futexWake(u32, &self.generation.raw, n_workers);  // Zig 0.16 Io-based futex
+self.io.futexWake(u32, &self.generation.raw, @intCast(self.n_workers));
 
 // Worker thread: subscribe
-local_gen = self.generation.load(.acquire);  // See all writes before release
-// Safe to read task_func, task_ctx, task_total
+const new_gen = self.generation.load(.acquire);  // See all writes before release
+if (new_gen == local_gen) continue; // spurious wakeup
+local_gen = new_gen;
+// Safe to read task_func, task_ctx, task_total, task_grain
 ```
 
 #### .seq_cst — Sequential Consistency
@@ -276,11 +281,16 @@ local_gen = self.generation.load(.acquire);  // See all writes before release
 task_counter: std.atomic.Value(usize) = std.atomic.Value(usize).init(0),
 
 fn doWork(self: *ThreadPool) void {
+    const func = self.task_func orelse return;
+    const ctx  = self.task_ctx  orelse return;
+    const total = self.task_total;
+    const grain = self.task_grain;
+
     while (true) {
-        const start = self.task_counter.fetchAdd(self.task_grain, .monotonic);
-        if (start >= self.task_total) break;
-        const end = @min(start + self.task_grain, self.task_total);
-        self.task_func.?(self.task_ctx.?, start, end);
+        const start = self.task_counter.fetchAdd(grain, .monotonic);
+        if (start >= total) break;
+        const end = @min(start + grain, total);
+        func(ctx, start, end);
     }
 }
 ```
@@ -334,17 +344,24 @@ sequenceDiagram
     W1->>Main: active.fetchSub(1, .release)
     W2->>Main: active.fetchSub(1, .release)
     Note over Main: active==0 → all done, safe to read results
-
+```
 
 ```zig
 generation: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
 
 // Main thread: post work
+// CAS claims the pool atomically (0 → n_workers); concurrent parallelFor falls back inline.
+// active is set *before* task fields so workers cannot start with stale state.
+if (self.active.cmpxchgWeak(0, @intCast(self.n_workers), .acq_rel, .monotonic)) |still_active| {
+    func(ctx, 0, total);  // Concurrent call — run inline instead
+    return;
+}
+// Post task fields (published to workers by generation.fetchAdd release below)
 self.task_func = func;
 self.task_ctx = ctx;
 self.task_total = total;
+self.task_grain = effective_grain;
 self.task_counter.store(0, .release);  // Reset counter
-self.active.store(@intCast(self.n_workers), .release);
 _ = self.generation.fetchAdd(1, .release);  // Publish: all task fields valid
 self.io.futexWake(u32, &self.generation.raw, @intCast(self.n_workers));
 ```
@@ -362,7 +379,9 @@ fn workerLoop(pool: *ThreadPool) void {
         pool.io.futexWaitUncancelable(u32, &pool.generation.raw, local_gen);
         if (pool.shutdown.load(.acquire)) return;
 
-        local_gen = pool.generation.load(.acquire);  // See all task fields
+        const new_gen = pool.generation.load(.acquire);  // See all task fields
+        if (new_gen == local_gen) continue; // spurious wakeup — generation unchanged
+        local_gen = new_gen;
         pool.doWork();
         _ = pool.active.fetchSub(1, .release);  // Signal completion
     }

@@ -85,12 +85,12 @@ Creating a `MTLBuffer` wrapper involves ObjC allocation and reference counting. 
 }}}%%
 flowchart TD
     Call["getBufRef(ptr, len)"] --> Hash["Compute addr = @intFromPtr(ptr)"]
-    Hash --> Lookup{"buf_cache.get(addr)?"}
+    Hash --> Lookup{"buf_cache.get(aligned_base)?"}
 
-    Lookup -->|"Hit (stable weight pointer)"| Return["Return cached MTLBuffer\n+ stored offset"]
-    Lookup -->|"Miss (first access)"| Align["Align ptr down to\npage boundary (4096 B)"]
+    Lookup -->|"Hit (stable weight pointer)"| Return["Return cached MTLBuffer\n+ recomputed offset"]
+    Lookup -->|"Miss (first access)"| Align["Align ptr down to\npage boundary"]
     Align --> Wrap["newBufferWithBytesNoCopy\n(zero-copy, Shared mode)"]
-    Wrap --> Store["buf_cache.put(addr, info)"]
+    Wrap --> Store["buf_cache.put(aligned_base, info)"]
     Store --> Return
 
     Return --> Kernel["Pass BufRef{buf, offset}\nto Metal compute encoder"]
@@ -116,24 +116,28 @@ buf_cache: std.AutoHashMap(usize, BufferInfo)
 ```zig
 fn getBufRef(self: *MetalBackend, ptr: [*]const u8, len: usize) BufRef {
     const addr = @intFromPtr(ptr);
+    const aligned_base = addr & ~(page_size - 1);
+    const offset = addr - aligned_base;
 
-    // Check cache
-    if (self.buf_cache.get(addr)) |info| {
-        return BufRef{ .buf = info.metal_buf, .offset = 0 };
+    // Check cache using aligned base address as key
+    if (self.buf_cache.get(aligned_base)) |cached| {
+        return BufRef{ .buf = cached.metal_buf, .offset = offset };
     }
 
-    // Not cached: create new wrapper
+    // Not cached: wrap from the aligned base (zero-copy)
+    const aligned_ptr = @as([*]const u8, @ptrFromInt(aligned_base));
+    const aligned_len = (offset + len + page_size - 1) & ~(@as(usize, page_size - 1));
     const buf = objc.msgSend(
         ?objc.id,
         self.device,
         objc.sel("newBufferWithBytesNoCopy:length:options:deallocator:"),
-        .{ ptr, len, MTLResourceStorageModeShared, @as(?objc.id, null) },
+        .{ aligned_ptr, aligned_len, MTLResourceStorageModeShared, @as(?objc.id, null) },
     ) orelse @panic("Metal buffer creation failed");
 
-    // Cache for future use
-    self.buf_cache.put(addr, .{ .metal_buf = buf, .len = len }) catch {};
+    // Cache at aligned base for future use
+    self.buf_cache.put(aligned_base, .{ .metal_buf = buf, .len = aligned_len }) catch {};
 
-    return BufRef{ .buf = buf, .offset = 0 };
+    return BufRef{ .buf = buf, .offset = offset };
 }
 ```
 
@@ -144,19 +148,19 @@ fn getBufRef(self: *MetalBackend, ptr: [*]const u8, len: usize) BufRef {
 
 ### Page Alignment Requirement
 
-`newBufferWithBytesNoCopy` requires the pointer to be **page-aligned** (multiple of 4096 bytes on macOS). If you pass a mid-page pointer, buffer creation fails.
+`newBufferWithBytesNoCopy` requires the pointer to be **page-aligned** (multiple of 16384 bytes (16 KB) on Apple Silicon (aarch64 macOS)). If you pass a mid-page pointer, buffer creation fails.
 
 **Workaround:** Wrap the **entire page range** and use an offset:
 
 ```zig
-const page_size = 4096;
+const page_size = std.heap.page_size_min; // 16384 on Apple Silicon
 const page_mask = ~(page_size - 1);
 
 const page_base = @intFromPtr(ptr) & page_mask;  // Round down to page boundary
 const offset = @intFromPtr(ptr) - page_base;     // Offset within page
 
 const aligned_ptr = @as([*]const u8, @ptrFromInt(page_base));
-const aligned_len = len + offset;
+const aligned_len = (offset + len + page_size - 1) & ~(page_size - 1);
 
 const buf = device.newBufferWithBytesNoCopy(aligned_ptr, aligned_len, ...);
 
@@ -165,11 +169,11 @@ return BufRef{ .buf = buf, .offset = offset };
 
 **Example:**
 
-- Pointer: `0x100003800` (not page-aligned)
-- Page base: `0x100003000` (aligned to 4096)
-- Offset: `0x800` (2048 bytes into the page)
-- Metal sees: buffer starting at `0x100003000`, length = original length + 2048
-- Kernel access: `buffer[offset + idx]` to skip the first 2048 bytes
+- Pointer: `0x100008800` (not page-aligned, within a 16384-byte page)
+- Page base: `0x100004000` (aligned to 16384)
+- Offset: `0x4800` (18432 bytes into the page)
+- Metal sees: buffer starting at `0x100004000`, length = rounded up to next 16 KB boundary
+- Kernel access: `buffer[offset + idx]` to skip the leading bytes
 
 **Cost:** Negligible — Metal doesn't copy the page, just references it with an offset.
 
@@ -432,19 +436,19 @@ Metal has a **per-threadgroup memory limit** of 32 KB on Apple Silicon. If your 
 ### Debugging Pipeline Creation
 
 ```zig
-fn makePipeline(device: objc.id, library: objc.id, name: []const u8) !objc.id {
+fn makePipeline(self: *MetalBackend, name: [*:0]const u8) !objc.id {
     const fn_name = objc.msgSend(?objc.id, NSString, objc.sel("stringWithUTF8String:"), .{
-        @as([*:0]const u8, @ptrCast(name.ptr)),
+        name,
     }) orelse return error.StringFailed;
 
-    const function = objc.msgSend(?objc.id, library, objc.sel("newFunctionWithName:"), .{fn_name})
+    const function = objc.msgSend(?objc.id, self.library, objc.sel("newFunctionWithName:"), .{fn_name})
         orelse {
-            std.debug.print("Metal function '{s}' not found in library\n", .{name});
-            return error.FunctionNotFound;
+            std.log.err("Metal kernel not found: {s}", .{name});
+            return error.KernelNotFound;
         };
 
     var err: ?objc.id = null;
-    const pipeline = objc.msgSend(?objc.id, device, objc.sel("newComputePipelineStateWithFunction:error:"), .{
+    const pipeline = objc.msgSend(?objc.id, self.device, objc.sel("newComputePipelineStateWithFunction:error:"), .{
         function,
         @as(*?objc.id, &err),
     }) orelse {
@@ -452,10 +456,10 @@ fn makePipeline(device: objc.id, library: objc.id, name: []const u8) !objc.id {
             const desc = objc.msgSend(?objc.id, e, objc.sel("localizedDescription"), .{});
             if (desc) |d| {
                 const utf8 = objc.msgSend([*:0]const u8, d, objc.sel("UTF8String"), .{});
-                std.debug.print("Metal pipeline creation error: {s}\n", .{utf8});
+                std.log.err("Metal pipeline creation error: {s}", .{utf8});
             }
         }
-        return error.PipelineCreationFailed;
+        return error.PipelineFailed;
     };
 
     return pipeline;
@@ -510,7 +514,11 @@ fn encode(...) void {
 }
 
 fn flush(...) void {
-    // ... commit ...
+    // ... commit and wait ...
+}
+
+fn sync(...) void {
+    self.flush();
     if (self.profile_counters) self.sync_count += 1;
 }
 ```
@@ -561,7 +569,7 @@ pub fn gemm(self: *MetalBackend, x: [*]const f32, w: TensorData, y: [*]f32,
 }
 ```
 
-The kernel tiles across tokens (`TILE_T=8`) to reuse weight data loaded into threadgroup memory across multiple input vectors. Each threadgroup handles one output row.
+Each threadgroup handles one output row. The bf16 variant processes tokens sequentially without token tiling; token tiling is used in the quantized GEMM kernels (Q8_0 uses `TILE_T=8`, Q4_K uses `TILE_T=4`) to amortize weight loads across multiple input vectors.
 
 ## Vision Encoder GPU Acceleration
 
@@ -596,7 +604,7 @@ This interleaving is necessary because the vision encoder uses full (non-causal)
 1. **Batch independent ops:** Use `beginBatch()` / `endBatch()` to suppress intermediate barriers
 2. **Minimize syncs:** Only sync when CPU needs GPU data
 3. **Fuse kernels:** Combine sequential ops (e.g., `addRmsNorm`) to reduce dispatches
-4. **Megakernel pipelines:** The `--megakernel` flag enables a three-tier fusion system. **Tier 1** (fused FFN) combines gate GEMV + up GEMV + activation into a single dispatch (3->1 per FFN layer) via 12 kernels in `megakernel.metal` (SiLU x {Q8_0, Q4_K, Q5_K, Q6_K, Q4_0, MLX_Q4} + GELU x {Q8_0, Q4_K, Q5_K, Q6_K, Q4_0}). **Tier 2** (true megakernels) executes entire transformer layers in a single dispatch using 18 composable building blocks in `mega_common.metal` with atomic counter grid sync (`mega_grid_sync`). **Tier 3** (composed megakernels) auto-generates model-specific MSL at runtime via `mega_compose.zig`: the `composeMSL()` function produces MSL source from a `ModelDesc` struct, then `compileComposedMegakernel()` compiles it via `newLibraryWithSource`. This enables megakernel support for new models without writing any shader code -- just a `ModelDesc` definition. The Metal backend compiles **70+ MSL pipelines** total (standard ops + fused FFN + 5 true megakernels + 1 runtime-composed). See [Chapter 13](13-batched-dispatch-and-fusion.md) for details.
+4. **Megakernel pipelines:** The `--megakernel` flag enables a three-tier fusion system. **Tier 1** (fused FFN) combines gate GEMV + up GEMV + activation into a single dispatch (3->1 per FFN layer) via 11 kernels in `megakernel.metal` (SiLU x {Q8_0, Q4_K, Q5_K, Q6_K, Q4_0, MLX_Q4} + GELU x {Q8_0, Q4_K, Q5_K, Q6_K, Q4_0}). **Tier 2** (true megakernels) executes entire transformer layers in a single dispatch using 18 composable building blocks in `mega_common.metal` with atomic counter grid sync (`mega_grid_sync`). **Tier 3** (composed megakernels) auto-generates model-specific MSL at runtime via `mega_compose.zig`: the `composeMSL()` function produces MSL source from a `ModelDesc` struct, then `compileComposedMegakernel()` compiles it via `newLibraryWithSource`. This enables megakernel support for new models without writing any shader code -- just a `ModelDesc` definition. The Metal backend compiles **83 MSL pipelines** total (standard ops + fused FFN + 5 true megakernels + 1 runtime-composed). See [Chapter 13](13-batched-dispatch-and-fusion.md) for details.
 
 ### Debugging
 

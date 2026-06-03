@@ -182,6 +182,7 @@ Zero memory overhead (no draft model weights). The ring buffer uses 8 KB.
 src/spec/
 ├── spec_decode.zig   — orchestrator: draft, verify, generation loop
 ├── ddtree.zig        — DDTree: heap, tree build, compile, acceptance walk
+├── pflash.zig        — PFlash: block scoring, adaptive selection, compressed prefill
 └── ngram.zig         — N-gram: history ring buffer, n-gram matching, proposal
 
 src/backend/kernels/cpu/
@@ -271,20 +272,16 @@ Agave tracks per-K acceptance statistics during generation. The `optimalK()` fun
 flowchart TD
     Start["start of step\nwhich K to use?"]
 
-    Start --> Check{"enough stats\n(>50 tokens)?"}
+    Start --> Check{"enough stats\n(>= 10 rounds)?"}
     Check -- "no (warmup)" --> DefaultK["use default K=5"]
-    Check -- "yes" --> Compute["compute expected_tokens(K)\nfor K = 1..8"]
+    Check -- "yes" --> Compute["compute expected_tokens(K)\nfor K = 1..configured_K"]
 
-    Compute --> Compare["compare throughput:\ntokens / (draft_cost + verify_cost)"]
+    Compute --> BestK["use best K\n(argmax expected_tokens)"]
 
-    Compare --> HighAccept{"acceptance rate\n> 80%?"}
-    HighAccept -- "yes" --> GrowK["increase K\n(more drafts worth it)"]
-    HighAccept -- "no" --> LowAccept{"acceptance rate\n< 20%?"}
-    LowAccept -- "yes" --> Cooldown["enter cooldown\nfall back to K=1\nfor N steps"]
-    LowAccept -- "no" --> BestK["use argmax K\nfrom expected_tokens"]
+    BestK --> LowAccept{"acceptance rate\n< 25%?"}
+    LowAccept -- "yes" --> Cooldown["enter cooldown\nsingle-token decode (no draft)\nfor N steps"]
+    LowAccept -- "no" --> Draft["run draft model\nK forward passes"]
 
-    GrowK --> Draft["run draft model\nK forward passes"]
-    BestK --> Draft
     DefaultK --> Draft
     Cooldown --> SingleDecode["single-token decode\n(no speculation)"]
 
@@ -303,11 +300,11 @@ Enable with:
 agave model.gguf --draft-model draft.gguf --adaptive-k "prompt"
 ```
 
-Early in generation (first ~50 tokens), the system uses the default K. As statistics accumulate, it adjusts K per-step based on observed acceptance rates. If acceptance drops (poor draft quality), K shrinks to reduce wasted drafts. If acceptance is high, K grows.
+Early in generation (first 10 verification rounds), the system uses the default K. As statistics accumulate, it adjusts K per-step by picking the K with the highest expected-value estimate.
 
 ### Cooldown
 
-When the acceptance rate drops below a threshold (e.g., all K tokens rejected), speculative decoding temporarily falls back to standard single-token decode for a cooldown period. This avoids wasting compute on bad draft proposals during challenging output segments (reasoning, novel vocabulary, code switches).
+When the acceptance rate over the last `adaptive_window` (8) drafted tokens drops below 25%, speculative decoding is bypassed for the next 8 steps. The generation loop calls `target.forward()` directly for single-token decode with no draft model involved. This avoids wasting compute on bad draft proposals during challenging output segments (reasoning, novel vocabulary, code switches).
 
 The cooldown counter decrements each step and re-enables speculation when it expires.
 

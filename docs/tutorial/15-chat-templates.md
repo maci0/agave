@@ -296,7 +296,7 @@ pub const gpt_oss = ChatTemplate{
 
 ```zig
 pub const glm4 = ChatTemplate{
-    .system_prefix = "<sop>",
+    .system_prefix = "[gMASK]<sop>",
     .system_suffix = "",
     .user_prefix = "<|user|>",
     .user_suffix = "",
@@ -304,7 +304,7 @@ pub const glm4 = ChatTemplate{
     .assistant_suffix = "",
     .eog_tokens = &.{ "<|endoftext|>", "<|user|>", "<|observation|>" },
     .default_system = "",
-    .generation_prefix = "</think>",
+    .generation_prefix = "",
     .system_role_override = .{
         .prefix = "<|system|>\n",
         .suffix = "",
@@ -312,7 +312,7 @@ pub const glm4 = ChatTemplate{
 };
 ```
 
-**Note:** GLM-4 uses `<sop>` as the initial BOS marker. The `system_role_override` maps user-provided system messages to the `<|system|>` role. `generation_prefix = "</think>"` disables reasoning mode (forces direct answers).
+**Note:** GLM-4 uses `[gMASK]<sop>` as the initial BOS marker. The `system_role_override` maps user-provided system messages to the `<|system|>` role. Reasoning is disabled by default — GLM-4 has no generation prefix.
 
 ### Nemotron-H / Nemotron-Nano (ChatML)
 
@@ -342,6 +342,7 @@ pub const Arch = enum {
     nemotron_h,
     nemotron_nano,
     glm4,
+    llama4,
 
     pub fn chatTemplate(self: Arch) ChatTemplate {
         return switch (self) {
@@ -350,6 +351,7 @@ pub const Arch = enum {
             .gpt_oss => ChatTemplate.gpt_oss,
             .qwen35 => ChatTemplate.qwen35,
             .glm4 => ChatTemplate.glm4,
+            .llama4 => ChatTemplate.llama4,
             else => ChatTemplate.chatml,  // Nemotron-H, Nemotron-Nano
         };
     }
@@ -359,7 +361,7 @@ pub const Arch = enum {
 **Main loop uses architecture's template:**
 
 ```zig
-const arch = try Arch.detect(fmt);
+const arch = Arch.detect(fmt) orelse return error.UnknownArch;
 const template = arch.chatTemplate();
 
 const prompt = if (args.system_msg) |sys|
@@ -572,14 +574,20 @@ pub fn formatConversation(
                 try result.appendSlice(allocator, self.assistant_suffix);
             },
             .tool => {
-                // Tool results formatted as ChatML tool role
-                try result.appendSlice(allocator, "<|im_start|>tool\n");
-                if (msg.tool_call_id) |tcid| {
-                    try result.appendSlice(allocator, tcid);
-                    try result.appendSlice(allocator, "\n");
+                if (is_chatml) {
+                    try result.appendSlice(allocator, "<|im_start|>tool\n");
+                    if (msg.tool_call_id) |tcid| {
+                        try result.appendSlice(allocator, tcid);
+                        try result.appendSlice(allocator, "\n");
+                    }
+                    try result.appendSlice(allocator, msg.content);
+                    try result.appendSlice(allocator, "<|im_end|>\n");
+                } else {
+                    try result.appendSlice(allocator, self.user_prefix);
+                    try result.appendSlice(allocator, "[Tool Result] ");
+                    try result.appendSlice(allocator, msg.content);
+                    try result.appendSlice(allocator, self.user_suffix);
                 }
-                try result.appendSlice(allocator, msg.content);
-                try result.appendSlice(allocator, "<|im_end|>\n");
             },
         }
     }
@@ -667,6 +675,7 @@ When an image is attached to a prompt, the tokenized text needs image placeholde
 ```zig
 // src/chat_template.zig
 pub fn findImageInsertPos(tokens: []const u32, prefix_seq: []const u32) usize {
+    if (prefix_seq.len == 0) return 0;
     var last_match: usize = 0;
     if (tokens.len >= prefix_seq.len) {
         var i: usize = 0;
@@ -691,7 +700,7 @@ Different model architectures use different special tokens for image placeholder
 | Architecture | Start Token | End Token | Pad Token | Notes |
 |---|---|---|---|---|
 | Gemma 4 | `<\|image\|>` (258880) | `<\|image\|>` (258880) | `<\|image\|>` (258880) | Single token for all three roles |
-| Gemma 3 | `<img>` (219) | `</img>` (230) | `<img>` (219) | Distinct end token |
+| Gemma 3 | `<img>` (219) | `<img>` (219) | `<img>` (219) | Single token for all three roles |
 | Qwen 3.5 | `<\|vision_start\|>` (248053) | `<\|vision_end\|>` (248054) | `<\|image_pad\|>` (248056) | Three distinct tokens |
 
 When start equals pad (Gemma 4), `injectImageTokens()` omits the start wrapper to avoid the model consuming the start token as a visual embedding — it just injects `pad * N + end`:
