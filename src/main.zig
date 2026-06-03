@@ -398,6 +398,7 @@ const cli_specs = [_]cli_mod.ArgSpec{
     .{ .long = "draft-layers", .kind = .option, .help = "Layers for self-speculative draft [default: auto]." },
     .{ .long = "pflash-alpha", .kind = .option, .help = "PFlash block selection threshold (0.0-2.0) [default: 0.85]." },
     .{ .long = "pflash-block-size", .kind = .option, .help = "PFlash scoring block size in tokens [default: 64]." },
+    .{ .long = "pflash-scorer", .kind = .option, .help = "Separate model for PFlash block importance scoring (defaults to --draft-model)." },
     // Diagnostics
     .{ .long = "verbose", .short = 'V', .help = "Show technical details (params, load times, EOG)." },
     .{ .long = "debug", .short = 'd', .help = "Enable debug logging (token IDs, layer timing); implies --verbose." },
@@ -482,6 +483,8 @@ const CliArgs = struct {
     // PFlash speculative prefill
     pflash_alpha: f32 = 0.85,
     pflash_block_size: u32 = 64,
+    /// Separate model for PFlash block scoring (optional; defaults to --draft-model).
+    pflash_scorer_path: ?[]const u8 = null,
     /// Tracks which CLI args the user explicitly set (so recipes don't override them).
     user_set: Recipe.Overrides = .{},
 };
@@ -915,6 +918,7 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
     if (res.option("image")) |p| validateFileExists(p, "--image");
     if (res.option("mmproj")) |p| validateFileExists(p, "--mmproj");
     if (res.option("draft-model")) |p| validateFileExists(p, "--draft-model");
+    if (res.option("pflash-scorer")) |p| validateFileExists(p, "--pflash-scorer");
 
     // JSON mode + interactive REPL would corrupt the JSON output stream
     if (json_mode and !res.flag("model-info") and !res.flag("serve") and n_positionals < 2) {
@@ -1051,6 +1055,7 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
             break :blk 0.85;
         },
         .pflash_block_size = parseU32(res.option("pflash-block-size"), "pflash-block-size") orelse 64,
+        .pflash_scorer_path = res.option("pflash-scorer"),
         .user_set = .{
             .temperature = res.option("temperature") != null,
             .top_p = res.option("top-p") != null,
@@ -1540,6 +1545,9 @@ fn printUsage() void {
         \\  -K, --spec-tokens <N>     Draft tokens per speculation round [default: 5]
         \\      --tree-budget <N>     DDTree node budget [default: 64]
         \\      --draft-layers <N>    Layers for self-speculative draft [default: auto]
+        \\      --pflash-alpha <F>    PFlash block selection threshold [default: 0.85]
+        \\      --pflash-block-size <N>  PFlash scoring block size in tokens [default: 64]
+        \\      --pflash-scorer <PATH>  Separate model for PFlash block scoring (defaults to --draft-model)
         \\
         \\OPTIMIZATION:
         \\      --megakernel          Enable fused FFN megakernels (3→1 dispatch per layer)
@@ -2415,10 +2423,19 @@ fn initAndRun(
     var draft_gguf: ?GGUFFile = null;
     var draft_st: ?SafeTensorsDir = null;
     var draft_mdl_storage: ?ModelStorage = null;
+    // ── PFlash scorer model (separate from draft; optional) ──────
+    var scorer_gguf: ?GGUFFile = null;
+    var scorer_st: ?SafeTensorsDir = null;
+    var scorer_mdl_storage: ?ModelStorage = null;
+    var scorer_model_if: Model = undefined;
+    var scorer_ptr: ?*Model = null;
     defer {
         if (draft_mdl_storage) |*dm| dm.deinit();
         if (draft_gguf) |*g| g.deinit();
         if (draft_st) |*s| s.deinit();
+        if (scorer_mdl_storage) |*sm| sm.deinit();
+        if (scorer_gguf) |*g| g.deinit();
+        if (scorer_st) |*s| s.deinit();
     }
 
     var draft_ptr: ?*Model = null;
@@ -2467,6 +2484,48 @@ fn initAndRun(
         eprint("draft: {s} · {s}\n", .{ draft_arch.displayName(), Format.getQuantName(draft_fmt) });
     } else if (cli.spec_mode != .none) {
         draft_ptr = &model_if;
+    }
+
+    // ── PFlash scorer model (separate model for block importance scoring) ──
+    if (cli.pflash_scorer_path) |scorer_path| {
+        const scorer_is_dir = blk: {
+            const d = Io.Dir.cwd().openDir(g_io, scorer_path, .{}) catch break :blk false;
+            d.close(g_io);
+            break :blk true;
+        };
+        var scorer_fmt: Format = undefined;
+        if (scorer_is_dir) {
+            scorer_st = SafeTensorsDir.open(allocator, scorer_path) catch |e| {
+                eprint("Error: failed to open pflash scorer '{s}': {}\n", .{ scorer_path, e });
+                return false;
+            };
+            scorer_fmt = scorer_st.?.format();
+        } else {
+            scorer_gguf = GGUFFile.open(allocator, scorer_path) catch |e| {
+                eprint("Error: failed to open pflash scorer '{s}': {}\n", .{ scorer_path, e });
+                return false;
+            };
+            scorer_fmt = scorer_gguf.?.format();
+        }
+        const scorer_arch_str = scorer_fmt.getMetaStr("general.architecture") orelse
+            scorer_fmt.getMetaStr("model_type") orelse "unknown";
+        const scorer_arch = Arch.detect(scorer_arch_str) orelse {
+            eprint("Error: unsupported pflash scorer architecture '{s}'\n", .{scorer_arch_str});
+            return false;
+        };
+        if (!scorer_arch.isEnabled()) {
+            eprint("Error: pflash scorer arch {s} disabled at compile time\n", .{scorer_arch.displayName()});
+            return false;
+        }
+        scorer_mdl_storage = ModelStorage.initFromArch(scorer_arch, allocator, scorer_fmt, be, cli.ctx_size, .f16, .f16, 0, 0, null, 0, 1) catch |e| {
+            eprint("Error: failed to init pflash scorer: {}\n", .{e});
+            return false;
+        };
+        scorer_mdl_storage.?.setPool(pool);
+        scorer_mdl_storage.?.fixBlockAllocator();
+        scorer_model_if = scorer_mdl_storage.?.model();
+        scorer_ptr = &scorer_model_if;
+        eprint("pflash scorer: {s} · {s}\n", .{ scorer_arch.displayName(), Format.getQuantName(scorer_fmt) });
     }
 
     if (cli.benchmark) {
@@ -2591,7 +2650,7 @@ fn initAndRun(
             }
         }
     } else if (effective_prompt) |prompt| {
-        generateAndPrint(allocator, &model_if, tok, cli, tok_kind, eog, arch, prompt, !g_quiet, minfo, display, img_tokens, n_visual_tokens, draft_ptr);
+        generateAndPrint(allocator, &model_if, tok, cli, tok_kind, eog, arch, prompt, !g_quiet, minfo, display, img_tokens, n_visual_tokens, draft_ptr, scorer_ptr);
     } else {
         runRepl(allocator, &model_if, tok, cli, tok_kind, eog, arch, minfo, display, img_tokens, n_visual_tokens);
     }
@@ -2796,9 +2855,10 @@ fn generateAndPrint(
     img_tokens: ?arch_mod.ImageTokens,
     n_visual_tokens: u32,
     draft_model: ?*Model,
+    pflash_scorer: ?*Model,
 ) void {
     if (draft_model) |dm| {
-        generateSpeculative(allocator, mdl, dm, tok, cli, tok_kind, eog, arch, prompt, show_stats);
+        generateSpeculative(allocator, mdl, dm, pflash_scorer, tok, cli, tok_kind, eog, arch, prompt, show_stats);
     } else {
         const response = generateAndPrintInner(allocator, mdl, tok, cli, tok_kind, eog, arch.chatTemplate(), prompt, true, false, show_stats, minfo, display, false, img_tokens, n_visual_tokens);
         if (response) |r| allocator.free(r);
@@ -2809,6 +2869,7 @@ fn generateSpeculative(
     allocator: std.mem.Allocator,
     target: *Model,
     draft_model: *Model,
+    pflash_scorer: ?*Model,
     tok: *BpeTokenizer,
     cli: *const CliArgs,
     tok_kind: TokenizerKind,
@@ -2867,7 +2928,9 @@ fn generateSpeculative(
             return;
         };
         defer pflash_state.deinit(allocator);
-        first_target = pflash.pflashPrefill(pflash_cfg, &pflash_state, draft_model, target, prefill_toks, allocator) catch |e| {
+        // Use dedicated scorer if provided, else fall back to draft model
+        const scoring_model = pflash_scorer orelse draft_model;
+        first_target = pflash.pflashPrefill(pflash_cfg, &pflash_state, scoring_model, target, prefill_toks, allocator) catch |e| {
             eprint("Error: PFlash prefill failed: {}\n", .{e});
             return;
         };
