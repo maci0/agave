@@ -337,9 +337,28 @@ pub const Gemma4Model = struct {
         // Sliding-window attention params
         const sl_n_head = f.getArchU32(arch, "attention.head_count") orelse
             f.getMetaU32("num_attention_heads") orelse default_sl_n_head;
-        // head_count_kv can be a per-layer array; read the scalar default first
-        const sl_n_kv_head = f.getArchU32(arch, "attention.head_count_kv") orelse
-            f.getMetaU32("num_key_value_heads") orelse default_sl_n_kv_head;
+        // head_count_kv is typically for SWA layers. Some GGUF files (e.g. Gemma 4 12B)
+        // only store the GLOBAL KV count (1) as head_count_kv; the SWA count must be
+        // inferred from tensors. The raw metadata value is saved for global fallback.
+        // head_count_kv may be a scalar or per-layer array (Gemma 4 12B uses array).
+        // For scalar: read directly. For array: the MINIMUM value is the global count
+        // (1 KV head for global layers), the MAXIMUM is the SWA count (8 KV heads).
+        const meta_n_kv_head_raw = f.getArchU32(arch, "attention.head_count_kv") orelse
+            f.getMetaU32("num_key_value_heads");
+        // If the scalar metadata is unavailable (e.g. it's stored as an array), derive from array.
+        // We take the minimum across layers as the global KV head count.
+        const meta_n_kv_head: u32 = meta_n_kv_head_raw orelse blk: {
+            var key_buf_kv: [format_mod.arch_key_buf_size]u8 = undefined;
+            const kv_key_tmp = std.fmt.bufPrint(&key_buf_kv, "{s}.attention.head_count_kv", .{arch}) catch break :blk default_sl_n_kv_head;
+            if (f.getMetaU32Array(kv_key_tmp)) |arr| {
+                var mn: u32 = std.math.maxInt(u32);
+                for (arr) |v| if (v < mn) { mn = v; };
+                break :blk if (mn == std.math.maxInt(u32)) default_sl_n_kv_head else mn;
+            }
+            break :blk default_sl_n_kv_head;
+        };
+        var sl_n_kv_head = f.getArchU32(arch, "attention.head_count_kv_swa") orelse
+            f.getMetaU32("num_key_value_heads_swa") orelse meta_n_kv_head;
         // key_length_swa is the sliding-window head dim; fall back to key_length
         var sl_head_dim = f.getArchU32(arch, "attention.key_length_swa") orelse
             f.getArchU32(arch, "attention.key_length") orelse
@@ -358,9 +377,9 @@ pub const Gemma4Model = struct {
         const gl_n_head = f.getArchU32(arch, "attention.head_count_global") orelse
             f.getMetaU32("global_num_attention_heads") orelse sl_n_head;
         // Global KV head count: try global-specific key, then fall back to the
-        // shared head_count_kv scalar (E2B/E4B use a single value for all layers).
+        // raw metadata head_count_kv (which IS the global count for Gemma 4 12B).
         const gl_n_kv_head = f.getArchU32(arch, "attention.head_count_kv_global") orelse
-            f.getMetaU32("global_num_key_value_heads") orelse sl_n_kv_head;
+            f.getMetaU32("global_num_key_value_heads") orelse meta_n_kv_head;
         var gl_head_dim = f.getArchU32(arch, "attention.key_length") orelse
             f.getArchU32(arch, "attention.key_length_global") orelse
             f.getMetaU32("global_head_dim") orelse default_gl_head_dim;
@@ -521,6 +540,25 @@ pub const Gemma4Model = struct {
                             sl_head_dim = tensor_hd;
                         }
                     }
+                }
+            }
+        }
+
+        // If sl_n_kv_head wasn't set from a SWA-specific key, try to infer it from
+        // the K weight tensor at the first SWA layer. This handles Gemma 4 12B where
+        // attention.head_count_kv=1 is for global layers only; SWA layers use more heads.
+        if (sl_n_kv_head <= gl_n_kv_head) {
+            for (0..nl) |i| {
+                if (!layer_is_global[i]) {
+                    if (f.layerTensor(@intCast(i), "attn_k.weight")) |kt| {
+                        if (kt.n_dims >= 2 and kt.dims[0] > 0 and sl_head_dim > 0) {
+                            const inferred_nkv: u32 = @intCast(kt.dims[0] / sl_head_dim);
+                            if (inferred_nkv > 0 and inferred_nkv != sl_n_kv_head) {
+                                sl_n_kv_head = inferred_nkv;
+                            }
+                        }
+                    }
+                    break;
                 }
             }
         }

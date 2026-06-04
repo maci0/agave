@@ -1969,8 +1969,8 @@ pub fn main(init: std.process.Init) !void {
         tok.bos_token_id = bos_id;
         tok.tok_kind = tok_kind;
 
-        // Add EOG tokens defined by the chat template
-        const tmpl = arch.chatTemplate();
+        // Add EOG tokens defined by the chat template (use n_layers for gemma4 variant selection)
+        const tmpl = arch.chatTemplateForLayers(disp_info.n_layers);
         for (tmpl.eog_tokens) |eog_name| {
             if (tok.special_tokens.get(eog_name)) |id| {
                 if (!isEogToken(id, eog) and eog.len < eog.ids.len) {
@@ -2543,7 +2543,7 @@ fn initAndRun(
             .allocator = allocator,
             .model = &model_if,
             .tokenizer = &tok_if,
-            .chat_template = arch.chatTemplate(),
+            .chat_template = arch.chatTemplateForLayers(minfo.n_layers),
             .model_name = minfo.name,
             .backend_name = minfo.be_name,
             .port = cli.port,
@@ -2599,7 +2599,7 @@ fn initAndRun(
                 std.log.info("Decode node connected. Prefilling...", .{});
 
                 if (effective_prompt) |prompt| {
-                    const tmpl = arch.chatTemplate();
+                    const tmpl = arch.chatTemplateForLayers(minfo.n_layers);
                     const formatted = tmpl.format(allocator, null, prompt) catch prompt;
                     const tok_iface = tok.tokenizer();
                     const token_ids = tok_iface.encode(formatted) catch break :disagg_blk;
@@ -2694,7 +2694,7 @@ fn runRepl(
         history.deinit(allocator);
     }
 
-    const template = arch.chatTemplate();
+    const template = arch.chatTemplateForLayers(minfo.n_layers);
 
     while (true) {
         print("\n", .{});
@@ -2860,7 +2860,7 @@ fn generateAndPrint(
     if (draft_model) |dm| {
         generateSpeculative(allocator, mdl, dm, pflash_scorer, tok, cli, tok_kind, eog, arch, prompt, show_stats);
     } else {
-        const response = generateAndPrintInner(allocator, mdl, tok, cli, tok_kind, eog, arch.chatTemplate(), prompt, true, false, show_stats, minfo, display, false, img_tokens, n_visual_tokens);
+        const response = generateAndPrintInner(allocator, mdl, tok, cli, tok_kind, eog, arch.chatTemplateForLayers(minfo.n_layers), prompt, true, false, show_stats, minfo, display, false, img_tokens, n_visual_tokens);
         if (response) |r| allocator.free(r);
     }
 }
@@ -2878,7 +2878,7 @@ fn generateSpeculative(
     prompt: []const u8,
     show_stats: bool,
 ) void {
-    const template = arch.chatTemplate();
+    const template = arch.chatTemplateForLayers(target.nLayers());
     const formatted = template.format(allocator, cli.system_prompt, prompt) catch @as([]const u8, prompt);
     defer if (formatted.ptr != prompt.ptr) allocator.free(formatted);
 

@@ -191,6 +191,9 @@ pub const ChatTemplate = struct {
     /// closes it, preventing the model from emitting reasoning tokens.
     /// `<channel|>` is an EOG token so generation stops if the model outputs
     /// a channel-end marker.
+    /// Gemma 4 E2B / E4B (35 / 42 layers) — uses `<|turn>` / `<turn|>` markers.
+    /// `<|channel>0\n<channel|>` selects the primary output channel (channel 0),
+    /// suppressing the thinking/reasoning channel and getting direct text output.
     pub const gemma4 = ChatTemplate{
         .system_prefix = "<|turn>system\n",
         .system_suffix = "<turn|>\n",
@@ -200,6 +203,20 @@ pub const ChatTemplate = struct {
         .assistant_suffix = "<turn|>\n",
         .eog_tokens = &.{ "<turn|>", "<eos>", "<channel|>", "<|endoftext|>", "<|end|>" },
         .generation_prefix = "<|channel>0\n<channel|>",
+    };
+
+    /// Gemma 4 12B "encoder-free unified" (48 layers) — same turn markers.
+    /// Injects empty thinking block `<|channel>thought\n<channel|>` to signal
+    /// no thinking phase (model jumps straight to output).
+    pub const gemma4_unified = ChatTemplate{
+        .system_prefix = "<|turn>system\n",
+        .system_suffix = "<turn|>\n",
+        .user_prefix = "<|turn>user\n",
+        .user_suffix = "<turn|>\n",
+        .assistant_prefix = "<|turn>model\n",
+        .assistant_suffix = "<turn|>\n",
+        .eog_tokens = &.{ "<turn|>", "<eos>", "<channel|>", "<|endoftext|>", "<|end|>" },
+        .generation_prefix = "<|channel>thought\n<channel|>",
     };
 
     /// GLM-4 — uses `[gMASK]<sop>` prefix (BOS sends `[gMASK]`, template starts

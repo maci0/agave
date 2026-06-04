@@ -80,6 +80,13 @@ pub const Arch = enum {
         };
     }
 
+    /// Layer-count-aware template selection. Gemma 4 12B (48 layers) uses
+    /// `gemma4_unified` with a thinking-channel prefix; E2B/E4B use plain `gemma4`.
+    pub fn chatTemplateForLayers(self: Arch, n_layers: u32) ChatTemplate {
+        if (self == .gemma4 and n_layers >= 48) return ChatTemplate.gemma4_unified;
+        return self.chatTemplate();
+    }
+
     /// Short name of the chat template for this architecture (for display).
     pub fn templateName(self: Arch) []const u8 {
         return switch (self) {
