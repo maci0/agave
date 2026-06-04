@@ -1115,13 +1115,10 @@ pub const Gemma4Model = struct {
             self.doGemm(self.pf_hidden2.ptr, kw, self.pf_k.ptr, n_tok, kv_dim, e);
             if (vw) |vw_t| {
                 self.doGemm(self.pf_hidden2.ptr, vw_t, self.pf_v.ptr, n_tok, kv_dim, e);
-            } else {
-                // Tied K=V: copy K to V
-                self.be.sync();
-                @memcpy(self.pf_v[0 .. n_tok * kv_dim], self.pf_k[0 .. n_tok * kv_dim]);
             }
 
-            // Per-head QK RMSNorm: treat n_tok*n_heads as total heads
+            // Per-head QK RMSNorm: treat n_tok*n_heads as total heads.
+            // For tied K=V: copy K to V AFTER K norm so V = k_norm(K_proj(x)).
             if (self.fmt.layerTensor(li, "attn_q_norm.weight")) |qn| {
                 self.be.rmsNormMulti(self.pf_q.ptr, self.normAsF32(qn, hd), n_tok * nh, hd, self.rms_eps);
             }
@@ -1129,8 +1126,9 @@ pub const Gemma4Model = struct {
                 self.be.rmsNormMulti(self.pf_k.ptr, self.normAsF32(kn, hd), n_tok * nkv, hd, self.rms_eps);
             }
             if (vw == null) {
-                // Tied K=V: V was copied from K, apply plain RMSNorm
+                // Tied K=V: copy K (after k_norm) then apply plain RMSNorm to V.
                 self.be.sync();
+                @memcpy(self.pf_v[0 .. n_tok * kv_dim], self.pf_k[0 .. n_tok * kv_dim]);
                 rmsNormPlainMulti(self.pf_v.ptr, n_tok * nkv, hd, self.rms_eps);
             }
 
@@ -1639,13 +1637,13 @@ pub const Gemma4Model = struct {
                 self.doGemv(self.hidden2.ptr, vw_t, self.v_buf.ptr, kv_dim, e);
                 self.be.endBatch();
             } else {
+                // Tied K=V: endBatch first, then K norm runs before V copy
                 self.be.endBatch();
-                self.be.sync();
-                @memcpy(self.v_buf[0..kv_dim], self.k_buf[0..kv_dim]);
             }
             self.perf.end(.gemv_qkv, t);
 
-            // Per-head QK RMSNorm (with learned weights) and V norm
+            // Per-head QK RMSNorm (with learned weights).
+            // For tied K=V: copy K to V AFTER K norm so V = k_norm(K_proj(x)).
             t = self.perf.start();
             const qn_t = self.fmt.layerTensor(li, "attn_q_norm.weight");
             const kn_t = self.fmt.layerTensor(li, "attn_k_norm.weight");
@@ -1654,8 +1652,9 @@ pub const Gemma4Model = struct {
             if (kn_t) |kn| self.be.rmsNormMulti(self.k_buf.ptr, self.normAsF32(kn, hd), nkv, hd, self.rms_eps);
             if (qn_t != null and kn_t != null) self.be.endBatch();
             if (vw == null) {
-                // Tied K=V: V was copied from K, apply plain RMSNorm
+                // Tied K=V: copy K (after k_norm) to V, then apply plain RMSNorm to V.
                 self.be.sync();
+                @memcpy(self.v_buf[0..kv_dim], self.k_buf[0..kv_dim]);
                 rmsNormPlainMulti(self.v_buf.ptr, nkv, hd, self.rms_eps);
             }
             self.perf.end(.rms_norm, t);
