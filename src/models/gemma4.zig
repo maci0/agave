@@ -380,8 +380,11 @@ pub const Gemma4Model = struct {
         // raw metadata head_count_kv (which IS the global count for Gemma 4 12B).
         const gl_n_kv_head = f.getArchU32(arch, "attention.head_count_kv_global") orelse
             f.getMetaU32("global_num_key_value_heads") orelse meta_n_kv_head;
-        var gl_head_dim = f.getArchU32(arch, "attention.key_length") orelse
-            f.getArchU32(arch, "attention.key_length_global") orelse
+        // Global head dim: check global-specific key first, then fall back to the
+        // generic key_length. For 12B, key_length=256 (SWA dim) but
+        // key_length_global=512; checking generic first would give wrong value.
+        var gl_head_dim = f.getArchU32(arch, "attention.key_length_global") orelse
+            f.getArchU32(arch, "attention.key_length") orelse
             f.getMetaU32("global_head_dim") orelse default_gl_head_dim;
         // NOTE: metadata key_length may not match actual tensor dims in some GGUF
         // converters (e.g., E2B metadata says 512 but tensors use 256). Head dim
@@ -510,10 +513,17 @@ pub const Gemma4Model = struct {
                     std.log.info("gemma4: no global layers found, setting gl_head_dim={d} (all global)", .{gl_head_dim});
                 }
             } else if (!pattern_set and sl_head_dim == gl_head_dim) {
-                // All layers have the same head dim (E2B/E4B dense models).
-                // Treat all as global — sliding window makes no difference when
-                // sl and gl params are identical.
-                for (0..nl) |i| layer_is_global[i] = true;
+                // Head dims are equal: either E2B/E4B (truly all-global dense models)
+                // or 12B with metadata that doesn't distinguish sl/gl head dims.
+                // If global_layer_interval is set, use it; otherwise all are global.
+                if (global_layer_interval > 0) {
+                    for (0..nl) |i| {
+                        layer_is_global[i] = ((i + 1) % global_layer_interval == 0);
+                    }
+                    std.log.info("gemma4: equal head dims, using interval={d} for global detection", .{global_layer_interval});
+                } else {
+                    for (0..nl) |i| layer_is_global[i] = true;
+                }
             } else if (!pattern_set and global_layer_interval > 0) {
                 // Fallback: every global_layer_interval-th layer (1-indexed) is global.
                 // For interval=6: layers 5,11,17,23,29 (0-indexed) are global.
@@ -524,20 +534,31 @@ pub const Gemma4Model = struct {
         }
 
         // Validate head dims against actual tensor shapes (after layer types known).
-        // Find a sliding layer and a global layer, check their Q tensor dims.
-        if (f.layerTensor(0, "attn_q.weight")) |qt| {
-            if (qt.n_dims >= 2 and sl_n_head > 0) {
-                const tensor_hd: u32 = @intCast(qt.dims[0] / sl_n_head);
-                if (tensor_hd > 0) {
-                    if (layer_is_global[0]) {
-                        if (tensor_hd != gl_head_dim) {
-                            std.log.info("gemma4: overriding gl_head_dim {d} -> {d} from attn_q[0]", .{ gl_head_dim, tensor_hd });
-                            gl_head_dim = tensor_hd;
-                        }
-                    } else {
-                        if (tensor_hd != sl_head_dim) {
-                            std.log.info("gemma4: overriding sl_head_dim {d} -> {d} from attn_q[0]", .{ sl_head_dim, tensor_hd });
-                            sl_head_dim = tensor_hd;
+        // Scan all layers to find both a SWA and a global representative.
+        // This corrects wrong metadata and ensures gl_head_dim != sl_head_dim when
+        // the model actually uses different head dims per layer type (e.g., 12B).
+        {
+            var found_sl = false;
+            var found_gl = false;
+            for (0..nl) |i| {
+                if (found_sl and found_gl) break;
+                if (f.layerTensor(@intCast(i), "attn_q.weight")) |qt| {
+                    if (qt.n_dims >= 2 and sl_n_head > 0) {
+                        const tensor_hd: u32 = @intCast(qt.dims[0] / sl_n_head);
+                        if (tensor_hd > 0) {
+                            if (layer_is_global[i] and !found_gl) {
+                                found_gl = true;
+                                if (tensor_hd != gl_head_dim) {
+                                    std.log.info("gemma4: overriding gl_head_dim {d} -> {d} from attn_q[{d}]", .{ gl_head_dim, tensor_hd, i });
+                                    gl_head_dim = tensor_hd;
+                                }
+                            } else if (!layer_is_global[i] and !found_sl) {
+                                found_sl = true;
+                                if (tensor_hd != sl_head_dim) {
+                                    std.log.info("gemma4: overriding sl_head_dim {d} -> {d} from attn_q[{d}]", .{ sl_head_dim, tensor_hd, i });
+                                    sl_head_dim = tensor_hd;
+                                }
+                            }
                         }
                     }
                 }
