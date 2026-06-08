@@ -74,7 +74,9 @@ agave/
 │   │   ├── quant.zig      # Quantization helpers (bf16, mxfp4, fp8, iq4nl, nvfp4_st)
 │   │   ├── kv_quant.zig   # KV cache quantization (f32/f16/q8_0/int8/fp8/nvfp4/turbo/planar/iso/rotor)
 │   │   ├── mlx.zig        # MLX 4/6/8-bit dequant (mlxGemvRaw, mlxGemvRows, mlxEmbLookup)
-│   │   ├── gptq.zig      # GPTQ INT4 GEMV kernel (packed u32 weights, per-group scales/zeros)
+│   │   ├── gptq.zig       # GPTQ INT4 GEMV kernel (row-major packed u32, per-group scales/qzeros)
+│   │   ├── awq.zig        # AWQ INT4 GEMV kernel (column-major, GEMM-order nibble interleave)
+│   │   ├── hqq.zig        # HQQ 4-bit GEMV kernel (uint8 2-nibble, float meta.scale/meta.zero)
 │   │   ├── kv_evict.zig   # KV eviction: norm-based scoring, cache compaction
 │   │   └── split_attention.zig # Split-attention: async CPU-GPU KV cache offloading
 │   ├── backend/
@@ -403,9 +405,12 @@ DDTree speculative decode -> output tokens
 | `fp8_e5m2` | 8 | 1 | Weights only |
 | `nvfp4` | 4.25 | 16 | Blackwell+ (GGUF) |
 | `mxfp4` | 4.25 | 32 | Microscaled FP4 |
-| `tq1_0` | 1.7 | 256 | Ternary quantization (parsed but GEMV unsupported — output zeroed) |
+| `tq1_0` | 1.7 | 256 | Ternary {-1,0,+1} — base-3 packed (5 trits/byte), all 6 backends |
+| `tq2_0` | 2.0 | 256 | Ternary {-1,0,+1} — 2-bit packed (4 values/byte), all 6 backends |
 | `mlx_q` | 4-8 | 64 | MLX models (affine: scale × uint + bias) |
-| `gptq` | 4.25 | 32-128 | GPTQ INT4 (packed u32 weights, per-group scales/zeros) |
+| `gptq` | 4.25 | 32-128 | GPTQ INT4 (row-major packed u32, per-group scales/qzeros) |
+| `awq` | 4.25 | 32-128 | AWQ INT4 (column-major packed u32, GEMM-order interleave [0,2,4,6,1,3,5,7]) |
+| `hqq` | 4.0 | 64 | HQQ INT4 (uint8 2-nibble packed, float meta.scale/meta.zero — CPU only) |
 
 **KV Cache Quantization Types** (see `src/ops/kv_quant.zig`):
 
