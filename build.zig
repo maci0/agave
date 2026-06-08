@@ -291,6 +291,42 @@ pub fn build(b: *std.Build) void {
         .optimize = .ReleaseFast,
     }) })).step);
 
+    // micro_bench pure-function tests (parseKeyValue, parseKernelName, etc.)
+    {
+        const mod_bench_test = b.createModule(.{
+            .root_source_file = b.path("src/micro_bench.zig"),
+            .target = target,
+            .optimize = .Debug,
+        });
+        mod_bench_test.addImport("build_options", backend_options.createModule());
+        const t = b.addTest(.{ .root_module = mod_bench_test });
+        link_platform(mod_bench_test, t, target);
+        if (link_metal) {
+            mod_bench_test.linkFramework("Metal", .{});
+            mod_bench_test.linkFramework("Foundation", .{});
+            mod_bench_test.linkFramework("Accelerate", .{});
+        }
+        test_step.dependOn(&b.addRunArtifact(t).step);
+    }
+
+    // wasm_entry pure-function tests (agave_alloc, agave_dealloc, wasmLogFn)
+    {
+        const mod_wasm_test = b.createModule(.{
+            .root_source_file = b.path("src/wasm_entry.zig"),
+            .target = target,
+            .optimize = .Debug,
+        });
+        mod_wasm_test.addImport("build_options", backend_options.createModule());
+        const t = b.addTest(.{ .root_module = mod_wasm_test });
+        link_platform(mod_wasm_test, t, target);
+        if (link_metal) {
+            mod_wasm_test.linkFramework("Metal", .{});
+            mod_wasm_test.linkFramework("Foundation", .{});
+            mod_wasm_test.linkFramework("Accelerate", .{});
+        }
+        test_step.dependOn(&b.addRunArtifact(t).step);
+    }
+
     // ── Benchmark binary (standalone micro-benchmark) ──────────────
     const mod_bench = b.createModule(.{
         .root_source_file = b.path("src/micro_bench.zig"),

@@ -3780,3 +3780,166 @@ comptime {
     _ = @import("parallel/tp.zig");
     _ = @import("kvcache/prefetch.zig");
 }
+
+test "parseIpv4 valid addresses" {
+    var out: [4]u8 = undefined;
+    try std.testing.expect(parseIpv4("192.168.1.1", &out));
+    try std.testing.expectEqual([4]u8{ 192, 168, 1, 1 }, out);
+    try std.testing.expect(parseIpv4("0.0.0.0", &out));
+    try std.testing.expectEqual([4]u8{ 0, 0, 0, 0 }, out);
+    try std.testing.expect(parseIpv4("255.255.255.255", &out));
+    try std.testing.expectEqual([4]u8{ 255, 255, 255, 255 }, out);
+    try std.testing.expect(parseIpv4("10.0.0.1", &out));
+}
+
+test "parseIpv4 invalid addresses" {
+    var out: [4]u8 = undefined;
+    try std.testing.expect(!parseIpv4("", &out));
+    try std.testing.expect(!parseIpv4("256.0.0.1", &out));
+    try std.testing.expect(!parseIpv4("1.2.3", &out));
+    try std.testing.expect(!parseIpv4("1.2.3.4.5", &out));
+    try std.testing.expect(!parseIpv4(".1.2.3.4", &out));
+    try std.testing.expect(!parseIpv4("1.2.3.4.", &out));
+    try std.testing.expect(!parseIpv4("1..2.3.4", &out));
+    try std.testing.expect(!parseIpv4("abc", &out));
+    try std.testing.expect(!parseIpv4("1.2.x.4", &out));
+}
+
+test "parsePeerAddr host only" {
+    const pa = parsePeerAddr("10.0.0.1", 8080);
+    try std.testing.expect(pa != null);
+    try std.testing.expectEqual([4]u8{ 10, 0, 0, 1 }, pa.?.host);
+    try std.testing.expectEqual(@as(u16, 8080), pa.?.port);
+}
+
+test "parsePeerAddr host:port" {
+    const pa = parsePeerAddr("10.0.0.2:9000", 8080);
+    try std.testing.expect(pa != null);
+    try std.testing.expectEqual([4]u8{ 10, 0, 0, 2 }, pa.?.host);
+    try std.testing.expectEqual(@as(u16, 9000), pa.?.port);
+}
+
+test "parsePeerAddr invalid" {
+    try std.testing.expect(parsePeerAddr("notanip", 8080) == null);
+    try std.testing.expect(parsePeerAddr("1.2.3.4:99999", 8080) == null);
+    try std.testing.expect(parsePeerAddr("", 8080) == null);
+}
+
+test "resolveTransportKind explicit" {
+    try std.testing.expectEqual(TransportMod.TransportKind.tcp, resolveTransportKind(.tcp, "10.0.0.1"));
+    try std.testing.expectEqual(TransportMod.TransportKind.shm, resolveTransportKind(.shm, "10.0.0.1"));
+    try std.testing.expectEqual(TransportMod.TransportKind.nccl, resolveTransportKind(.nccl, "10.0.0.1"));
+}
+
+test "resolveTransportKind auto localhost" {
+    try std.testing.expectEqual(TransportMod.TransportKind.shm, resolveTransportKind(.auto, "localhost"));
+    try std.testing.expectEqual(TransportMod.TransportKind.shm, resolveTransportKind(.auto, "127.0.0.1"));
+    try std.testing.expectEqual(TransportMod.TransportKind.tcp, resolveTransportKind(.auto, "10.0.0.2"));
+}
+
+test "isKnownShort recognizes valid short flags" {
+    // 'h' for help, 't' for temperature should be registered
+    try std.testing.expect(isKnownShort('h'));
+    // An invalid short should return false
+    try std.testing.expect(!isKnownShort(0));
+    try std.testing.expect(!isKnownShort('Z'));
+}
+
+test "isEogToken" {
+    const eog = EogTokens{ .ids = .{ 2, 7, 0, 0, 0, 0, 0, 0 }, .len = 2 };
+    try std.testing.expect(isEogToken(2, eog));
+    try std.testing.expect(isEogToken(7, eog));
+    try std.testing.expect(!isEogToken(99, eog));
+    try std.testing.expect(!isEogToken(0, eog)); // id 0 not in [2,7]
+}
+
+test "parseUint null input" {
+    try std.testing.expect(parseUint(u32, null, "n") == null);
+    try std.testing.expect(parseUint(u64, null, "k") == null);
+}
+
+test "parseUint valid input" {
+    try std.testing.expectEqual(@as(?u32, 42), parseUint(u32, "42", "n"));
+    try std.testing.expectEqual(@as(?u64, 1024), parseUint(u64, "1024", "k"));
+    try std.testing.expectEqual(@as(?u16, 0), parseUint(u16, "0", "port"));
+}
+
+test "fuzz: main.zig pure functions" {
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *std.testing.Smith) !void {
+            // Comptime symbol refs for all functions not easily called at runtime
+            comptime {
+                _ = &milliTimestamp;
+                _ = &nanoTimestamp;
+                _ = &readStdinAll;
+                _ = &kvTypeOrExit;
+                _ = &detectFreeRam;
+                _ = &preloadRegion;
+                _ = &preloadModel;
+                _ = &preloadRegionProgress;
+                _ = &checkSubcommand;
+                _ = &parseCli;
+                _ = &setupTransport;
+                _ = &exchangeDeviceCaps;
+                _ = &measurePeerRtt;
+                _ = &parseU32;
+                _ = &parseU64;
+                _ = &parseU16;
+                _ = &parseF32;
+                _ = &warnUnknownOptions;
+                _ = &warnFlagAsValue;
+                _ = &validateFileExists;
+                _ = &runBenchmark;
+                _ = &printUsage;
+                _ = &elapsedMs;
+                _ = &getEogTokens;
+                _ = &loadImage;
+                _ = &initAndRun;
+                _ = &runRepl;
+                _ = &generateAndPrint;
+                _ = &generateSpeculative;
+                _ = &generateAndPrintInner;
+                _ = &flushTokenBatch;
+                _ = &isKnownSpec;
+                _ = &suggestSpec;
+                _ = &closeMatch;
+                _ = &insertionMatch;
+                _ = &isKnownShort;
+                _ = &isEogToken;
+                _ = &isKnownSpec;
+            }
+
+            // Exercise pure parsing functions with fuzz inputs
+            var ip_out: [4]u8 = undefined;
+            const s_len = smith.valueWithHash(u8, 0) % 32;
+            var ip_buf: [32]u8 = undefined;
+            smith.bytesWithHash(&ip_buf, 1);
+            _ = parseIpv4(ip_buf[0..s_len], &ip_out);
+
+            // parsePeerAddr with random strings
+            _ = parsePeerAddr(ip_buf[0..s_len], smith.valueWithHash(u16, 2));
+
+            // resolveTransportKind all choices
+            const choices = [_]TransportChoice{ .auto, .tcp, .shm, .nccl, .rdma, .udp, .grpc };
+            for (choices) |c| {
+                _ = resolveTransportKind(c, "localhost");
+                _ = resolveTransportKind(c, "10.0.0.1");
+            }
+
+            // parseUint null/valid paths
+            _ = parseUint(u32, null, "n");
+            const num_str = "42";
+            _ = parseUint(u32, num_str, "n");
+
+            // isKnownShort/isEogToken
+            const ch = smith.valueWithHash(u8, 3);
+            _ = isKnownShort(ch);
+            _ = isEogToken(smith.valueWithHash(u32, 4), EogTokens{ .ids = .{ 1, 2, 0, 0, 0, 0, 0, 0 }, .len = 2 });
+
+            // isKnownSpec/suggestSpec/closeMatch/insertionMatch
+            _ = isKnownSpec(ip_buf[0..@min(s_len, 31)]);
+            _ = suggestSpec(ip_buf[0..@min(s_len, 31)]);
+            _ = closeMatch(ip_buf[0..@min(s_len, 15)], ip_buf[16..@min(16 + s_len, 31)]);
+        }
+    }.f, .{});
+}

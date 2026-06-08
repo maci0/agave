@@ -196,3 +196,49 @@ export fn agave_dealloc(ptr: usize, len: usize) void {
     const slice: [*]u8 = @ptrFromInt(ptr);
     gpa.free(slice[0..len]);
 }
+
+// ── Tests ──────────────────────────────────────────────────────────
+
+test "wasmLogFn is a no-op" {
+    comptime { _ = &wasmLogFn; }
+    wasmLogFn(.debug, .wasm, "test {}", .{42});
+}
+
+test "agave_alloc zero returns null pointer" {
+    try std.testing.expectEqual(@as(usize, 0), agave_alloc(0));
+}
+
+test "agave_alloc and agave_dealloc round-trip" {
+    const ptr = agave_alloc(64);
+    try std.testing.expect(ptr != 0);
+    agave_dealloc(ptr, 64);
+}
+
+test "agave_dealloc zero ptr is safe" {
+    agave_dealloc(0, 0);
+    agave_dealloc(0, 16);
+}
+
+test "fuzz: wasm entry pure functions" {
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *std.testing.Smith) !void {
+            comptime {
+                _ = &wasmLogFn;
+                _ = &agave_init;
+                _ = &agave_generate;
+                _ = &agave_get_output;
+                _ = &agave_free;
+                _ = &agave_alloc;
+                _ = &agave_dealloc;
+            }
+            // Test alloc/dealloc cycle with random sizes
+            const len = smith.valueWithHash(u16, 0);
+            if (len == 0) {
+                try std.testing.expectEqual(@as(usize, 0), agave_alloc(0));
+            } else {
+                const ptr = agave_alloc(len);
+                if (ptr != 0) agave_dealloc(ptr, len);
+            }
+        }
+    }.f, .{});
+}

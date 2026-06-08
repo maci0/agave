@@ -1263,3 +1263,71 @@ pub fn main(init: std.process.Init.Minimal) u8 {
     benchKernel(cli.kernel.?, be, be_name, cli.n, cli.k, cli.iters);
     return 0;
 }
+
+// ── Tests ──────────────────────────────────────────────────────────
+
+test "parseKeyValue exact match" {
+    try std.testing.expectEqualStrings("4096", parseKeyValue("--n=4096", "--n").?);
+    try std.testing.expectEqualStrings("metal", parseKeyValue("--backend=metal", "--backend").?);
+    try std.testing.expect(parseKeyValue("--n=4096", "--k") == null);
+    try std.testing.expect(parseKeyValue("--n", "--n") == null); // no '='
+    try std.testing.expect(parseKeyValue("", "--n") == null);
+}
+
+test "parseKeyValue empty value" {
+    const v = parseKeyValue("--n=", "--n");
+    try std.testing.expect(v != null);
+    try std.testing.expectEqualStrings("", v.?);
+}
+
+test "parseKernelName valid" {
+    try std.testing.expectEqual(Kernel.gemv_f32, parseKernelName("gemv_f32").?);
+    try std.testing.expectEqual(Kernel.rms_norm, parseKernelName("rms_norm").?);
+    try std.testing.expectEqual(Kernel.sdpa, parseKernelName("sdpa").?);
+}
+
+test "parseKernelName invalid" {
+    try std.testing.expect(parseKernelName("notakernel") == null);
+    try std.testing.expect(parseKernelName("") == null);
+    try std.testing.expect(parseKernelName("GEMV_F32") == null);
+}
+
+test "parseBackendName valid" {
+    try std.testing.expectEqual(BackendChoice.cpu, parseBackendName("cpu").?);
+    try std.testing.expectEqual(BackendChoice.metal, parseBackendName("metal").?);
+}
+
+test "parseBackendName invalid" {
+    try std.testing.expect(parseBackendName("fpga") == null);
+    try std.testing.expect(parseBackendName("") == null);
+}
+
+test "fuzz: micro_bench pure functions" {
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *std.testing.Smith) !void {
+            // Comptime symbol refs for I/O and complex functions
+            comptime {
+                _ = &fdWriteAll;
+                _ = &print;
+                _ = &eprint;
+                _ = &printUsage;
+                _ = &parseCli;
+                _ = &getArgValue;
+                _ = &collectMedian;
+            }
+
+            var buf: [64]u8 = undefined;
+            smith.bytesWithHash(&buf, 0);
+            const len: usize = smith.valueWithHash(u8, 1) % 32;
+            const s = buf[0..len];
+
+            // parseKeyValue with random key and arg
+            _ = parseKeyValue(s, "--n");
+            _ = parseKeyValue("--backend=metal", s);
+
+            // parseKernelName / parseBackendName with random input
+            _ = parseKernelName(s);
+            _ = parseBackendName(s);
+        }
+    }.f, .{});
+}
