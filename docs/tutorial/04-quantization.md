@@ -273,6 +273,156 @@ acc += scale * q_dot + bias * x_sum;
 - Cross-platform deployment (GGUF Q4_K has wider support)
 - Extreme compression (Q2_K, IQ4_XS are smaller)
 
+## Ternary Quantization (TQ1_0, TQ2_0)
+
+BitNet models use **ternary weights** — each weight is one of {-1, 0, +1}. Multiplying by {-1, 0, +1} is just negation, zero-out, or identity (no multiplication at all), which enables extremely fast matrix operations on CPUs without SIMD FMAs.
+
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#e8f0fe',
+  'primaryTextColor': '#1a1a2e',
+  'primaryBorderColor': '#4a6cf7',
+  'lineColor': '#4a6cf7',
+  'secondaryColor': '#f0f4ff',
+  'tertiaryColor': '#f8f9ff',
+  'edgeLabelBackground': '#ffffff',
+  'clusterBkg': '#f0f4ff',
+  'clusterBorder': '#4a6cf7',
+  'titleColor': '#1a1a2e',
+  'nodeTextColor': '#1a1a2e',
+  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
+}}}%%
+flowchart LR
+    Byte["1 byte (8 bits)"]
+
+    Byte --> P0["bits 0-1\nvalue for elem 0\n00=−1  01=0  10=+1"]
+    Byte --> P1["bits 2-3\nvalue for elem 1"]
+    Byte --> P2["bits 4-5\nvalue for elem 2"]
+    Byte --> P3["bits 6-7\nvalue for elem 3"]
+
+    P0 --> DQ0["(encoded − 1) × scale"]
+    P1 --> DQ1["(encoded − 1) × scale"]
+    P2 --> DQ2["(encoded − 1) × scale"]
+    P3 --> DQ3["(encoded − 1) × scale"]
+
+    subgraph TQ2_0["TQ2_0: 4 ternary values per byte"]
+        P0
+        P1
+        P2
+        P3
+    end
+```
+
+**TQ1_0** (1.58 bits/weight): Encodes 256 ternary values per block using base-3 packing — 5 trits per byte (3^5=243 combinations per byte, leaving 13 invalid codes unused). Block layout: 2 bytes f16 scale + 48 bytes (5-trit packed) + 4 bytes (4-trit packed) = 54 bytes total for 256 elements.
+
+**TQ2_0** (2 bits/weight): Simpler binary packing — 4 values per byte using 2 bits each (bit patterns: `00`=−1, `01`=0, `10`=+1, `11`=unused). Block layout: 2 bytes f16 scale + 64 bytes packed = 66 bytes total for 256 elements.
+
+Dequantization formula for both:
+
+```
+w = (encoded_value - 1) * scale
+```
+
+This maps {0, 1, 2} → {-1, 0, +1} × scale, where encoded values are the stored bit patterns shifted to the range [0, 2].
+
+### Choosing TQ1_0 vs TQ2_0
+
+| | TQ1_0 | TQ2_0 |
+|---|---|---|
+| Bits per weight | 1.58 | 2.0 |
+| Bytes per 256-elem block | 54 | 66 |
+| Decode complexity | Base-3 lookup table | Bitshift only |
+| CPU throughput | Slightly lower (table) | Highest (bitshift) |
+
+Use **TQ1_0** when minimizing model size is the top priority. Use **TQ2_0** when decode speed matters more, since the bitshift extraction (`(byte >> (2*i)) & 0x3`) avoids a table lookup.
+
+## GPTQ and AWQ — Calibration-Based INT4
+
+Both GPTQ and AWQ store INT4 weights but differ from GGUF's Q4_K in two key ways: scales and zero-points are stored as **companion tensors** (separate SafeTensors entries rather than embedded in each weight block), and the nibble layout is tuned for GPU memory access patterns.
+
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#e8f0fe',
+  'primaryTextColor': '#1a1a2e',
+  'primaryBorderColor': '#4a6cf7',
+  'lineColor': '#4a6cf7',
+  'secondaryColor': '#f0f4ff',
+  'tertiaryColor': '#f8f9ff',
+  'edgeLabelBackground': '#ffffff',
+  'clusterBkg': '#f0f4ff',
+  'clusterBorder': '#4a6cf7',
+  'titleColor': '#1a1a2e',
+  'nodeTextColor': '#1a1a2e',
+  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
+}}}%%
+flowchart LR
+    U32["u32 word\n(32 bits)"]
+
+    U32 --> N0["nibble 0\nbits 0-3\nelem 0"]
+    U32 --> N1["nibble 1\nbits 4-7\nelem 1"]
+    U32 --> N2["nibble 2\nbits 8-11\nelem 2"]
+    U32 --> Dots["..."]
+    U32 --> N7["nibble 7\nbits 28-31\nelem 7"]
+
+    N0 --> DQ["(nibble − zero) × scale\n(group_size=128)"]
+    N7 --> DQ
+
+    subgraph Companions["Companion tensors"]
+        SC[".scales  (f16 per group)"]
+        ZR[".qzeros  (INT4 per group)"]
+    end
+
+    SC --> DQ
+    ZR --> DQ
+
+    subgraph Layout["8 nibbles packed into 1 u32 — GPTQ row-major"]
+        N0
+        N1
+        N2
+        Dots
+        N7
+    end
+```
+
+**GPTQ** (row-major layout): The weight matrix is packed 8 nibbles per u32 word along each row. Zero-points (`qzeros`) are packed INT4 per group. Scales are f16. GPTQ applies a second-order calibration (Hessian-based weight updates) to minimize quantization error on a small calibration dataset.
+
+**AWQ** (column-major layout): Same nibble packing but organized by output channel — each u32 word holds 8 output channels at the same input position. AWQ interleaves nibbles in the order `[0, 2, 4, 6, 1, 3, 5, 7]` (not sequential) for efficient GPU GEMM memory access. AWQ searches for a per-channel activation scale that protects salient weights from quantization error.
+
+Dequantization for both:
+
+```
+w = (nibble - zero) * scale      # group_size=128, typically
+```
+
+The critical implementation difference from GGUF: zero-points and scales are loaded from separate tensors (`.scales`, `.qzeros`), not from a header embedded in the weight block.
+
+## HQQ — Half-Quadratic Quantization
+
+HQQ requires **no calibration data**. Weights are quantized using half-quadratic optimization, which finds the best INT4 approximation by iteratively reweighting an L1-like loss — no forward passes through the model, no sample dataset required. This makes HQQ practical for quantizing any model without a calibration corpus.
+
+**Format (4-bit HQQ):**
+
+- `W_q`: uint8, shape `[n_out, k_in/2]` — 2 nibbles per byte, low nibble first (elem `k` at `byte[k/2] & 0xF`, elem `k+1` at `byte[k/2] >> 4`)
+- `meta.scale`: bf16, shape `[n_out, k_in/group_size]` — per-group scale
+- `meta.zero`: bf16, shape `[n_out, k_in/group_size]` — per-group zero (stored as full bf16 float, not packed INT4)
+
+Dequantization:
+
+```
+w = (nibble - zero) * scale
+```
+
+The zero being stored as a full float (rather than packed INT4 like GPTQ) simplifies the dequantization path — no zero unpacking step, just a subtract and multiply.
+
+**Loading HQQ models:**
+
+```bash
+# HQQ-quantized models load automatically when config.json has quant_method="hqq"
+./agave model-hqq-dir/ "prompt"
+```
+
+Note: GPU backends (Metal, Vulkan, WebGPU, CUDA, ROCm) fall through to CPU for HQQ — native GPU kernels are planned but not yet implemented.
+
 ## Floating-Point Quantization
 
 Unlike integer quantization (Q4_0, Q8_0), floating-point quantization keeps the exponential representation, just with fewer bits.
@@ -592,6 +742,9 @@ For a 2560×2560 matrix, that's 6.5M **multiply-accumulates** (multiply two numb
 | Maximum compression | Q2_K, IQ4_XS | Smallest memory footprint |
 | CPU inference | IQ4_NL, Q4_0, Q5_K | Optimized SIMD kernels |
 | GPU with limited VRAM | Q4_K, FP8 E4M3 | Good quality/size tradeoff |
+| BitNet models | TQ1_0, TQ2_0 | Extreme compression with {-1,0,+1} weights |
+| Calibration-based INT4 | GPTQ, AWQ | Calibration-based, good quality, GPU-optimized layout |
+| No calibration available | HQQ | No calibration needed, good quality, CPU inference |
 | KV cache (default) | q8_0-K + turbo4-V | Zero quality loss, 2x compression |
 | KV cache (max compress) | turbo3, turbo4 | 3.6-4.6x compression, ~1% PPL |
 | KV cache (max quality) | f16, FP8 E4M3 | Fast decode, no transform overhead |
@@ -606,6 +759,10 @@ For a 2560×2560 matrix, that's 6.5M **multiply-accumulates** (multiply two numb
 **numElements() for packed weights**: MLX-quantized weights store packed u32 words. `numElements()` returns the word count, not the actual element count. Always check the dtype before interpreting dimensions.
 
 **SafeTensors U32 ambiguity**: Both MLX and NVFP4 formats use U32 dtype. Distinguish them by checking for `.biases` companion tensor (MLX has biases, NVFP4 doesn't).
+
+**HQQ companion tensor naming**: HQQ zero-points and scales live under `meta.zero` and `meta.scale`, not `.biases` and `.scales`. Loading HQQ tensors with the MLX naming convention produces silently wrong output — check `quant_method` in `config.json` before dispatching to a dequant path.
+
+**TQ2_0 byte ordering**: Each byte holds **4** ternary values (2 bits each). Slot `s` within a byte is extracted as `(byte >> (s * 2)) & 0x3`, where `s = k % 4`. Element `k` lives in byte `k / 4`. Confusing this with nibble-based (4-bit) extraction silently misreads all weight values.
 
 **V cache inverse rotation**: For rotation-based KV quantization (TurboQuant, PlanarQuant, IsoQuant, RotorQuant), the V cache dequantization **must** apply the inverse rotation. K cache can rotate the query instead (orthogonality trick). Omitting the V inverse rotation produces garbage output.
 

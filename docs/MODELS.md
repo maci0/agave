@@ -35,6 +35,7 @@ agave pull google/gemma-4-4b-it-gguf --list          # list available files
 | Nemotron-Nano | 2688 | 32 | 2 | 128 | 1856 (MoE) | 52 | 10K | 128 |
 | Gemma4 E2B | 2304 | 8 | 4 | 256 | 9216 | 35 | 10K | 256 |
 | Gemma4 E4B | 2816 | 16 | 8 | 256 | 11264 | 42 | 10K | 256 |
+| Gemma4 12B | 2304 | 8 | 8/1 (sl/gl) | 256/512 (sl/gl) | 9216 | 48 | 10K | 256/128 (sl/gl) |
 | Gemma4 26B-A4B | 2816 | 16 | 8/2 (sl/gl) | 256/512 (sl/gl) | 2816 + 704/expert (MoE) | 30 | 10K/1M (sl/gl) | 256/128 (sl/gl) |
 | GLM-4 | 2048 | 20 | 20 (MLA) | 256 (qk_nope=192 + qk_rope=64) | 10240 (dense) / 1536 (MoE, 64 experts top-4) | 47 | 1M | 64 |
 | Llama 4 Scout | 5120 | 40 | 8 | 128 | 14336 (MoE top-1 + shared) | 48 | 500K | 128 |
@@ -51,7 +52,9 @@ agave pull google/gemma-4-4b-it-gguf --list          # list available files
 
 **Nemotron Nano** (SafeTensors NVFP4): 52-layer hybrid with `hybrid_override_pattern` (M=SSM, E=MoE, *=attention). Mixed quant — most layers NVFP4, 6 SSM layers use BF16. 128 routed experts, top-6 + shared expert.
 
-**Gemma 4**: Three variants — E2B and E4B are dense (no MoE), 26B-A4B uses MoE (128 experts, top-8 softmax) + dense FFN path. All variants use dual attention (sliding-window + global layers) and PLE (Per-Layer Embeddings). Shared KV cache for trailing layers. Channel-based chat template. Vision supported via SigLIP-2 encoder. Supports `--megakernel` (fused FFN GELU for dense+MoE, true megakernel Q4K/Q8 on Metal+CUDA). 26B MoE now produces correct output after fixing the expert stride calculation (was computing `dims[0] * dims[1]` instead of `dims[1] * dims[2]` for 3D expert tensors).
+**Gemma 4**: Four variants — E2B and E4B are dense (no MoE), 12B is dense, 26B-A4B uses MoE (128 experts, top-8 softmax) + dense FFN path. All variants use dual attention (sliding-window + global layers) and PLE (Per-Layer Embeddings). Shared KV cache for trailing layers. Channel-based chat template. Vision supported via SigLIP-2 encoder. Supports `--megakernel` (fused FFN GELU for dense+MoE, true megakernel Q4K/Q8 on Metal+CUDA). 26B MoE now produces correct output after fixing the expert stride calculation (was computing `dims[0] * dims[1]` instead of `dims[1] * dims[2]` for 3D expert tensors).
+
+The 12B variant has 48 layers with a global attention layer every 6 layers (layers 5, 11, 17, ...). Unlike the 26B which stores a scalar `attention.head_count_kv`, the 12B GGUF stores a per-layer `head_count_kv` array: SWA layers use nkv=8 with head_dim=256, global layers use nkv=1 with head_dim=512. Global layers also omit the V projection (tied K=V: copy K to V after `k_norm`, not before). When loading, read `attention.key_length_global` before `attention.key_length` to detect the global head dimension — if the key is absent, fall back to `attention.key_length`. Sliding window size: 4096 tokens. Maximum context: 128K.
 
 **GLM-4** (MLX): MLA compresses K/V into latent space. Sigmoid routing (independent expert gates, not competing). MLX 4/6/8-bit affine quantization. Supports `--megakernel` (fused FFN SiLU on Metal).
 
