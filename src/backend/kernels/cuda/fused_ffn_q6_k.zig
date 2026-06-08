@@ -92,3 +92,25 @@ export fn fused_ffn_gate_up_silu_q6_k_kernel(
         ff_out[row] = silu_gate * up_sum;
     }
 }
+
+const std = @import("std");
+
+test "constants valid" {
+    comptime std.debug.assert(bytes_per_block > 0);
+    comptime std.debug.assert(values_per_block > 0);
+    comptime std.debug.assert(q6_k_d_offset > 0);
+    comptime std.debug.assert(q6_k_qh_offset > 0);
+    comptime std.debug.assert(q6_k_sc_offset > 0);
+    comptime std.debug.assert(q6_k_ql_chunk_bytes > 0);
+    comptime std.debug.assert(q6_k_qh_chunk_bytes > 0);
+    comptime std.debug.assert(q6_k_sc_chunk_bytes > 0);
+    comptime std.debug.assert(chunk_elems > 0);
+}
+
+test "fuzz: fused_ffn_q6_k functions" {
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, _: *std.testing.Smith) !void {
+            comptime { _ = &q6kBlockDot; }
+        }
+    }.f, .{});
+}

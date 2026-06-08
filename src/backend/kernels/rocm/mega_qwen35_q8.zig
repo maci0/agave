@@ -514,3 +514,39 @@ export fn megakernel_qwen35_q8_kernel(
     // ── Final: fuse last FFN residual into hidden ────────────────
     addStage(hidden, hidden2, n_embd, n_blocks);
 }
+
+const std = @import("std");
+
+test "constants valid" {
+    comptime std.debug.assert(q8_0_block_size > 0);
+    comptime std.debug.assert(q8_0_group_size > 0);
+    comptime std.debug.assert(n_sync_slots > 0);
+    comptime std.debug.assert(off_attn_q > 0);
+    comptime std.debug.assert(off_attn_k > 0);
+    comptime std.debug.assert(off_attn_v > 0);
+    comptime std.debug.assert(off_attn_output > 0);
+    comptime std.debug.assert(off_post_attn_norm > 0);
+    comptime std.debug.assert(off_ffn_gate > 0);
+    comptime std.debug.assert(off_ffn_up > 0);
+    comptime std.debug.assert(off_ffn_down > 0);
+    comptime std.debug.assert(layer_offsets_stride > 0);
+}
+
+test "fuzz: mega_qwen35_q8 functions" {
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, _: *std.testing.Smith) !void {
+            comptime {
+                _ = &gridSync;
+                _ = &gridSyncReset;
+                _ = &q8BlockDot;
+                _ = &rmsNormStage;
+                _ = &addRmsNormStage;
+                _ = &gemvQ8Stage;
+                _ = &ropeStage;
+                _ = &siluMulStage;
+                _ = &addStage;
+                _ = &readLayerOffset;
+            }
+        }
+    }.f, .{});
+}

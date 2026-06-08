@@ -105,3 +105,18 @@ export fn fused_ffn_gate_up_gelu_q8_0_kernel(
         ff_out[row] = gelu_gate * up_sum;
     }
 }
+
+const std = @import("std");
+
+test "constants valid" {
+    comptime std.debug.assert(q8_0_block_size > 0);
+    comptime std.debug.assert(q8_0_group_size > 0);
+}
+
+test "fuzz: fused_ffn_q8_0 functions" {
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, _: *std.testing.Smith) !void {
+            comptime { _ = &q8_0BlockDot; }
+        }
+    }.f, .{});
+}

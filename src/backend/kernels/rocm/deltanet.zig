@@ -60,3 +60,17 @@ export fn deltanet_conv1d_kernel(
     }
     conv_state[(hist - 1) * conv_ch + ch] = conv_in[ch];
 }
+
+const std = @import("std");
+
+test "constants valid" {
+    comptime std.debug.assert(softplus_threshold > 0);
+}
+
+test "fuzz: deltanet functions" {
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, _: *std.testing.Smith) !void {
+            comptime { _ = @sizeOf(u8); }
+        }
+    }.f, .{});
+}

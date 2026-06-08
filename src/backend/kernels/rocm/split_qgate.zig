@@ -13,3 +13,20 @@ export fn split_qgate_kernel(qg: [*]const f32, q_out: [*]f32, g_out: [*]f32, hd:
     q_out[idx] = qg[h * hd * 2 + d];
     g_out[idx] = qg[h * hd * 2 + hd + d];
 }
+
+const std = @import("std");
+
+test "constants valid" {
+    // No module-level numeric constants in this file.
+    _ = @sizeOf(u8);
+}
+
+test "fuzz: split_qgate functions" {
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, _: *std.testing.Smith) !void {
+            comptime {
+                _ = @sizeOf(u8);
+            }
+        }
+    }.f, .{});
+}

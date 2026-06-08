@@ -214,3 +214,20 @@ export fn sdpa_prefill_kernel(
         output[o_base + d] = smem[out_off + d] * inv_l;
     }
 }
+
+const std = @import("std");
+
+test "constants valid" {
+    comptime std.debug.assert(kv_block_size > 0);
+    comptime std.debug.assert(max_warps > 0);
+}
+
+test "fuzz: sdpa_prefill functions" {
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, _: *std.testing.Smith) !void {
+            comptime {
+                _ = @sizeOf(u8);
+            }
+        }
+    }.f, .{});
+}

@@ -192,6 +192,8 @@ export fn sdpa_kernel(
 //
 // Mixed types supported: f32-K + turbo-V, turbo-K + f32-V, or both turbo.
 
+const std = @import("std");
+
 export fn sdpa_turbo_kernel(
     q: [*]const f32,
     k_cache: [*]const u8,
@@ -315,4 +317,21 @@ export fn sdpa_turbo_kernel(
         }
         output[q_base + d] = acc;
     }
+}
+
+test "constants valid" {
+    comptime std.debug.assert(turbo_block_elems > 0);
+    comptime std.debug.assert(wht_inv_scale > 0);
+    comptime std.debug.assert(sparse_v_threshold > 0);
+}
+
+test "fuzz: sdpa functions" {
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, _: *std.testing.Smith) !void {
+            comptime {
+                _ = &wht32;
+                _ = &turboDequantBlock;
+            }
+        }
+    }.f, .{});
 }

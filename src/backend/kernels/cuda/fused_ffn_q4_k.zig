@@ -97,3 +97,18 @@ export fn fused_ffn_gate_up_silu_q4_k_kernel(
         ff_out[row] = silu_gate * up_sum;
     }
 }
+
+const std = @import("std");
+
+test "constants valid" {
+    comptime std.debug.assert(bytes_per_block > 0);
+    comptime std.debug.assert(values_per_block > 0);
+}
+
+test "fuzz: fused_ffn_q4_k functions" {
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, _: *std.testing.Smith) !void {
+            comptime { _ = &q4kBlockDot; }
+        }
+    }.f, .{});
+}

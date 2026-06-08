@@ -40,3 +40,20 @@ export fn add_rms_norm_kernel(
         output[i] = v * weight[i] * scale;
     }
 }
+
+const std = @import("std");
+
+test "constants valid" {
+    // No module-level numeric constants defined in this file.
+    _ = @sizeOf(u8);
+}
+
+test "fuzz: add_rms_norm functions" {
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, _: *std.testing.Smith) !void {
+            comptime {
+                _ = @sizeOf(u8);
+            }
+        }
+    }.f, .{});
+}

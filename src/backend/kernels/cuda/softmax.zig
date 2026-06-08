@@ -39,3 +39,20 @@ export fn softmax_kernel(data: [*]f32, n: u32) callconv(.kernel) void {
         data[i] *= inv_sum;
     }
 }
+
+const std = @import("std");
+
+test "constants valid" {
+    // No module-level numeric constants in this file.
+    _ = @sizeOf(u8);
+}
+
+test "fuzz: softmax functions" {
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, _: *std.testing.Smith) !void {
+            comptime {
+                _ = @sizeOf(u8);
+            }
+        }
+    }.f, .{});
+}

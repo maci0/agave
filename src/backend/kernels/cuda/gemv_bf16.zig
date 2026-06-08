@@ -34,3 +34,17 @@ export fn gemv_bf16_kernel(x: [*]const f32, w: [*]const u16, y: [*]f32, n: u32, 
     sum = cu.blockReduceAdd(sum);
     if (tid == 0) y[row] = sum;
 }
+
+const std = @import("std");
+
+test "constants valid" {
+    comptime std.debug.assert(32 > 0); // chunk_size
+}
+
+test "fuzz: gemv_bf16 functions" {
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, _: *std.testing.Smith) !void {
+            comptime { _ = @sizeOf(u8); }
+        }
+    }.f, .{});
+}

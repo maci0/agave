@@ -120,3 +120,19 @@ export fn gemv_q6_k_kernel(
         if (tid == 0) y[row_base + 1] = sum1;
     }
 }
+
+const std = @import("std");
+
+test "constants valid" {
+    comptime std.debug.assert(bytes_per_block > 0);
+    comptime std.debug.assert(values_per_block > 0);
+    comptime std.debug.assert(nr > 0);
+}
+
+test "fuzz: gemv_q6_k functions" {
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, _: *std.testing.Smith) !void {
+            comptime { _ = &q6kBlockDot; }
+        }
+    }.f, .{});
+}

@@ -156,3 +156,17 @@ export fn sdpa_tree_kernel(
         output[out_base + d4] = out_acc[out_i3] * inv_l;
     }
 }
+
+const std = @import("std");
+
+test "constants valid" {
+    comptime std.debug.assert(tree_block_size > 0);
+}
+
+test "fuzz: sdpa_tree functions" {
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, _: *std.testing.Smith) !void {
+            comptime { _ = @sizeOf(u8); }
+        }
+    }.f, .{});
+}

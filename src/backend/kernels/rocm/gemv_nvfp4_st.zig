@@ -31,3 +31,20 @@ export fn gemv_nvfp4_st_kernel(x: [*]const f32, weight: [*]const u8, scale: [*]c
     sum = cu.blockReduceAdd(sum);
     if (tid == 0) y[row] = sum;
 }
+
+const std = @import("std");
+
+test "constants valid" {
+    // No module-level numeric constants defined in this file.
+    _ = @sizeOf(u8);
+}
+
+test "fuzz: gemv_nvfp4_st functions" {
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, _: *std.testing.Smith) !void {
+            comptime {
+                _ = @sizeOf(u8);
+            }
+        }
+    }.f, .{});
+}

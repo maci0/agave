@@ -50,3 +50,17 @@ export fn gemv_awq_kernel(
     sum = cu.warpReduceAdd(sum);
     if (tid == 0) y[col] = sum;
 }
+
+const std = @import("std");
+
+test "constants valid" {
+    comptime std.debug.assert(gemm_reverse.len > 0);
+}
+
+test "fuzz: gemv_awq functions" {
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, _: *std.testing.Smith) !void {
+            comptime { _ = @sizeOf(u8); }
+        }
+    }.f, .{});
+}

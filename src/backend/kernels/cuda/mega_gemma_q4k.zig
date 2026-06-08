@@ -445,3 +445,33 @@ export fn megakernel_gemma_q4k_kernel(
         sync_idx += 1;
     }
 }
+
+const std = @import("std");
+
+test "constants valid" {
+    comptime std.debug.assert(q4k_bytes_per_block > 0);
+    comptime std.debug.assert(q4k_values_per_block > 0);
+    comptime std.debug.assert(n_sync_slots > 0);
+    comptime std.debug.assert(sqrt_2_over_pi > 0.0);
+    comptime std.debug.assert(gelu_coeff > 0.0);
+    comptime std.debug.assert(off_attn_q > 0);
+    comptime std.debug.assert(off_attn_k > 0);
+    comptime std.debug.assert(off_attn_v > 0);
+    comptime std.debug.assert(off_attn_output > 0);
+    comptime std.debug.assert(off_post_attn_norm > 0);
+    comptime std.debug.assert(off_ffn_gate > 0);
+    comptime std.debug.assert(off_ffn_up > 0);
+    comptime std.debug.assert(off_ffn_down > 0);
+    comptime std.debug.assert(layer_offsets_stride > 0);
+}
+
+test "fuzz: mega_gemma_q4k functions" {
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, _: *std.testing.Smith) !void {
+            comptime {
+                _ = &q4kBlockDot;
+                _ = &readLayerOffset;
+            }
+        }
+    }.f, .{});
+}

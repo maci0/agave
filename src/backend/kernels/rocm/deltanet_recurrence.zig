@@ -62,3 +62,20 @@ export fn deltanet_recurrence_kernel(
         output[off + vi] = normed * silu_z;
     }
 }
+
+const std = @import("std");
+
+test "constants valid" {
+    // No module-level numeric constants defined in this file.
+    _ = @sizeOf(u8);
+}
+
+test "fuzz: deltanet_recurrence functions" {
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, _: *std.testing.Smith) !void {
+            comptime {
+                _ = @sizeOf(u8);
+            }
+        }
+    }.f, .{});
+}

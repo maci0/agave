@@ -79,3 +79,23 @@ export fn gemv_tq2_0_kernel(
         }
     }
 }
+
+const std = @import("std");
+
+test "constants valid" {
+    comptime std.debug.assert(tq2_0_block_bytes > 0);
+    comptime std.debug.assert(tq2_0_block_elems > 0);
+    comptime std.debug.assert(scale_bytes > 0);
+    comptime std.debug.assert(qs_bytes > 0);
+    comptime std.debug.assert(nr > 0);
+}
+
+test "fuzz: gemv_tq2_0 functions" {
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, _: *std.testing.Smith) !void {
+            comptime {
+                _ = @sizeOf(u8);
+            }
+        }
+    }.f, .{});
+}

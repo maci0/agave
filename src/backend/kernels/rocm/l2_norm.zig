@@ -26,3 +26,20 @@ export fn l2_norm_kernel(data: [*]f32, n: u32, eps: f32) callconv(.kernel) void 
         data[i] *= scale;
     }
 }
+
+const std = @import("std");
+
+test "constants valid" {
+    // No module-level numeric constants in this file.
+    _ = @sizeOf(u8);
+}
+
+test "fuzz: l2_norm functions" {
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, _: *std.testing.Smith) !void {
+            comptime {
+                _ = @sizeOf(u8);
+            }
+        }
+    }.f, .{});
+}

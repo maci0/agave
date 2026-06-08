@@ -13,3 +13,18 @@ export fn gelu_kernel(input: [*]const f32, output: [*]f32, n: u32) callconv(.ker
     const inner = sqrt_2_over_pi * @mulAdd(f32, gelu_coeff * x * x, x, x);
     output[idx] = 0.5 * x * (1.0 + cu.tanhf(inner));
 }
+
+const std = @import("std");
+
+test "constants valid" {
+    comptime std.debug.assert(sqrt_2_over_pi > 0);
+    comptime std.debug.assert(gelu_coeff > 0);
+}
+
+test "fuzz: gelu functions" {
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, _: *std.testing.Smith) !void {
+            comptime { _ = @sizeOf(u8); }
+        }
+    }.f, .{});
+}

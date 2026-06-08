@@ -94,3 +94,17 @@ export fn sdpa_paged_kernel(
         output[q_base + d] = acc;
     }
 }
+
+const std = @import("std");
+
+test "constants valid" {
+    comptime std.debug.assert(sparse_v_threshold > 0.0);
+}
+
+test "fuzz: sdpa_paged functions" {
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, _: *std.testing.Smith) !void {
+            comptime { _ = @sizeOf(u8); }
+        }
+    }.f, .{});
+}

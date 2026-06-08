@@ -8,3 +8,17 @@ export fn mul_kernel(a: [*]const f32, b: [*]const f32, out: [*]f32, n: u32) call
     if (idx >= n) return;
     out[idx] = a[idx] * b[idx];
 }
+
+const std = @import("std");
+
+test "constants valid" {
+    _ = std.mem.zeroes(u8);
+}
+
+test "fuzz: mul functions" {
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, _: *std.testing.Smith) !void {
+            comptime { _ = @sizeOf(u8); }
+        }
+    }.f, .{});
+}

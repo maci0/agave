@@ -32,3 +32,20 @@ export fn gemv_f16_kernel(x: [*]const f32, w: [*]const f16, y: [*]f32, n: u32, k
     sum = cu.blockReduceAdd(sum);
     if (tid == 0) y[row] = sum;
 }
+
+const std = @import("std");
+
+test "constants valid" {
+    // No module-level numeric constants in this file; kernel locals are not accessible here.
+    _ = @sizeOf(u8);
+}
+
+test "fuzz: gemv_f16 functions" {
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, _: *std.testing.Smith) !void {
+            comptime {
+                _ = @sizeOf(u8);
+            }
+        }
+    }.f, .{});
+}

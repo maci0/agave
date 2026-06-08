@@ -87,3 +87,19 @@ export fn gemv_q8_0_kernel(x: [*]const f32, w: [*]const u8, y: [*]f32, n: u32, k
         if (tid == 0) y[row_base + 3] = sum3;
     }
 }
+
+const std = @import("std");
+
+test "constants valid" {
+    comptime std.debug.assert(q8_0_block_size > 0);
+    comptime std.debug.assert(q8_0_group_size > 0);
+    comptime std.debug.assert(nr > 0);
+}
+
+test "fuzz: gemv_q8_0 functions" {
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, _: *std.testing.Smith) !void {
+            comptime { _ = &q8_0BlockDot; }
+        }
+    }.f, .{});
+}

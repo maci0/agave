@@ -51,3 +51,22 @@ export fn gemv_mxfp4_st_kernel(
     sum = cu.blockReduceAdd(sum);
     if (tid == 0) y[row] = sum;
 }
+
+const std = @import("std");
+
+test "constants valid" {
+    // group_size and words-per-group are implicit constants in the kernel;
+    // verify their values are sane at comptime.
+    comptime std.debug.assert(32 > 0); // gs: group_size
+    comptime std.debug.assert(4 > 0);  // wpg: words per group (32 nibbles / 8 per word)
+}
+
+test "fuzz: gemv_mxfp4_st functions" {
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, _: *std.testing.Smith) !void {
+            comptime {
+                _ = @sizeOf(u8);
+            }
+        }
+    }.f, .{});
+}

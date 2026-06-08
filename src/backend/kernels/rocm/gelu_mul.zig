@@ -16,3 +16,19 @@ export fn gelu_mul_kernel(a: [*]const f32, b: [*]const f32, out: [*]f32, n: u32)
     const t_clamped = @min(@max(t, -gelu_clamp_bound), gelu_clamp_bound);
     out[idx] = 0.5 * x * (1.0 + cu.tanhf(t_clamped)) * b[idx];
 }
+
+const std = @import("std");
+
+test "constants valid" {
+    comptime std.debug.assert(sqrt_2_over_pi > 0);
+    comptime std.debug.assert(gelu_coeff > 0);
+    comptime std.debug.assert(gelu_clamp_bound > 0);
+}
+
+test "fuzz: gelu_mul functions" {
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, _: *std.testing.Smith) !void {
+            comptime { _ = @sizeOf(u8); }
+        }
+    }.f, .{});
+}

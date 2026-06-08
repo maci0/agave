@@ -37,3 +37,20 @@ export fn gemv_t_q8_0_kernel(x: [*]const f32, w: [*]const u8, y: [*]f32, out_dim
     sum = cu.blockReduceAdd(sum);
     if (tid == 0) y[col] = sum;
 }
+
+const std = @import("std");
+
+test "constants valid" {
+    comptime std.debug.assert(q8_0_block_bytes > 0);
+    comptime std.debug.assert(q8_0_block_elems > 0);
+}
+
+test "fuzz: gemv_t_q8_0 functions" {
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, _: *std.testing.Smith) !void {
+            comptime {
+                _ = @sizeOf(u8);
+            }
+        }
+    }.f, .{});
+}

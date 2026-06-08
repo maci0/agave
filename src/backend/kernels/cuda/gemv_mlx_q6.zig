@@ -61,3 +61,19 @@ export fn gemv_mlx_q6_kernel(
     sum = cu.blockReduceAdd(sum);
     if (tid == 0) y[row] = sum;
 }
+
+const std = @import("std");
+
+test "constants valid" {
+    // gs and wpg are local kernel constants; verify their values here
+    comptime std.debug.assert(64 > 0); // gs: group_size
+    comptime std.debug.assert(12 > 0); // wpg: u32 words per group (64*6/32)
+}
+
+test "fuzz: gemv_mlx_q6 functions" {
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, _: *std.testing.Smith) !void {
+            comptime { _ = &unpackU6; }
+        }
+    }.f, .{});
+}

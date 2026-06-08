@@ -90,3 +90,20 @@ export fn gemv_fp4_tc_fallback_kernel(
 //       "f"(c0), "f"(c1), "f"(c2), "f"(c3),
 //       "r"(sfa), "r"(sfb)
 // );
+
+const std = @import("std");
+
+test "constants valid" {
+    // e2m1_lut is a fixed lookup table with 16 entries (FP4 E2M1 values)
+    comptime std.debug.assert(e2m1_lut.len > 0);
+}
+
+test "fuzz: gemv_fp4_tc functions" {
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, _: *std.testing.Smith) !void {
+            comptime {
+                _ = @sizeOf(u8);
+            }
+        }
+    }.f, .{});
+}

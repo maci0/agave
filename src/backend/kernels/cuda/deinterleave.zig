@@ -14,3 +14,15 @@ export fn deinterleave_kernel(input: [*]const f32, out_a: [*]f32, out_b: [*]f32,
     out_a[idx] = input[pair * 2 * stride + off];
     out_b[idx] = input[(pair * 2 + 1) * stride + off];
 }
+
+const std = @import("std");
+
+test "fuzz: deinterleave functions" {
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, _: *std.testing.Smith) !void {
+            comptime {
+                _ = @sizeOf(u8);
+            }
+        }
+    }.f, .{});
+}

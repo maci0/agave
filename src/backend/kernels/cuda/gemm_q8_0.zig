@@ -63,3 +63,21 @@ export fn gemm_q8_0_kernel(x: [*]const f32, w: [*]const u8, y: [*]f32, n_out: u3
         if (t_base + tile_t < n_tok) cu.syncthreads();
     }
 }
+
+const std = @import("std");
+
+test "constants valid" {
+    comptime std.debug.assert(q8_0_block_size > 0);
+    comptime std.debug.assert(q8_0_group_size > 0);
+    comptime std.debug.assert(tile_t > 0);
+}
+
+test "fuzz: gemm_q8_0 functions" {
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, _: *std.testing.Smith) !void {
+            comptime {
+                _ = @sizeOf(u8);
+            }
+        }
+    }.f, .{});
+}

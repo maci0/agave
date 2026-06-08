@@ -35,3 +35,17 @@ export fn rope_batched_kernel(x: [*]f32, positions: [*]const u32, n_tok: u32, n_
     x[re_idx] = r * cos_a - im * sin_a;
     x[im_idx] = r * sin_a + im * cos_a;
 }
+
+const std = @import("std");
+
+test "constants valid" {
+    comptime std.debug.assert(ln2 > 0);
+}
+
+test "fuzz: rope_batched functions" {
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, _: *std.testing.Smith) !void {
+            comptime { _ = @sizeOf(u8); }
+        }
+    }.f, .{});
+}

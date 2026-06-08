@@ -114,3 +114,23 @@ export fn gemv_q6_k_kernel(x: [*]const f32, w: [*]const u8, y: [*]f32, n: u32, k
         if (tid == 0) y[row_base + 1] = sum1;
     }
 }
+
+const std = @import("std");
+
+test "constants valid" {
+    comptime std.debug.assert(q6_k_block_size > 0);
+    comptime std.debug.assert(q6_k_group_size > 0);
+    comptime std.debug.assert(nr > 0);
+    comptime std.debug.assert(q6_k_ql_offset == 0);
+    comptime std.debug.assert(q6_k_qh_offset > 0);
+    comptime std.debug.assert(q6_k_sc_offset > 0);
+    comptime std.debug.assert(q6_k_d_offset > 0);
+}
+
+test "fuzz: gemv_q6_k functions" {
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, _: *std.testing.Smith) !void {
+            comptime { _ = &q6kBlockDot; }
+        }
+    }.f, .{});
+}

@@ -151,3 +151,22 @@ export fn gemv_tq1_0_kernel(x: [*]const f32, w: [*]const u8, y: [*]f32, n: u32, 
         if (tid == 0) y[row_base + 3] = sum3;
     }
 }
+
+const std = @import("std");
+
+test "constants valid" {
+    comptime std.debug.assert(tq1_0_block_bytes > 0);
+    comptime std.debug.assert(tq1_0_block_elems > 0);
+    comptime std.debug.assert(packed_bytes_5 > 0);
+    comptime std.debug.assert(packed_bytes_4 > 0);
+    comptime std.debug.assert(scale_bytes > 0);
+    comptime std.debug.assert(nr > 0);
+}
+
+test "fuzz: gemv_tq1_0 functions" {
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, _: *std.testing.Smith) !void {
+            comptime { _ = &tq1_0BlockDot; }
+        }
+    }.f, .{});
+}

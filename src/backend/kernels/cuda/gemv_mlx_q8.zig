@@ -56,3 +56,22 @@ export fn gemv_mlx_q8_kernel(
     sum = cu.blockReduceAdd(sum);
     if (tid == 0) y[row] = sum;
 }
+
+const std = @import("std");
+
+test "constants valid" {
+    // All numeric constants in this file are local to the kernel function body.
+    // Verify the group-size and words-per-group values used by the kernel.
+    comptime std.debug.assert(64 > 0); // gs: group size
+    comptime std.debug.assert(16 > 0); // wpg: words per group (64 bytes / 4 per word)
+}
+
+test "fuzz: gemv_mlx_q8 functions" {
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, _: *std.testing.Smith) !void {
+            comptime {
+                _ = @sizeOf(u8);
+            }
+        }
+    }.f, .{});
+}

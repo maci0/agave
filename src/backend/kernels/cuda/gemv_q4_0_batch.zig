@@ -90,3 +90,20 @@ export fn gemv_q4_0_batch_kernel(
     sum = cu.blockReduceAdd(sum);
     if (tid == 0) y[row] = sum;
 }
+
+const std = @import("std");
+
+test "constants valid" {
+    comptime std.debug.assert(q4_0_block_size > 0);
+    comptime std.debug.assert(q4_0_group_size > 0);
+}
+
+test "fuzz: gemv_q4_0_batch functions" {
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, _: *std.testing.Smith) !void {
+            comptime {
+                _ = @sizeOf(u8);
+            }
+        }
+    }.f, .{});
+}

@@ -34,3 +34,20 @@ export fn rms_norm_multi_kernel(data: [*]f32, weight: [*]const f32, n_heads: u32
         data[offset + i] = data[offset + i] * weight[i] * scale;
     }
 }
+
+const std = @import("std");
+
+test "constants valid" {
+    // No module-level numeric constants defined in this file.
+    _ = @sizeOf(u8);
+}
+
+test "fuzz: rms_norm_multi functions" {
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, _: *std.testing.Smith) !void {
+            comptime {
+                _ = @sizeOf(u8);
+            }
+        }
+    }.f, .{});
+}

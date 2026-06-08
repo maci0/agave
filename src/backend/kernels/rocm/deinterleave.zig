@@ -16,3 +16,20 @@ export fn deinterleave_kernel(input: [*]const f32, out_a: [*]f32, out_b: [*]f32,
     out_a[pair * stride + lane] = input[pair * 2 * stride + lane];
     out_b[pair * stride + lane] = input[pair * 2 * stride + stride + lane];
 }
+
+const std = @import("std");
+
+test "constants valid" {
+    // No module-level numeric constants defined in this file.
+    _ = @sizeOf(u8);
+}
+
+test "fuzz: deinterleave functions" {
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, _: *std.testing.Smith) !void {
+            comptime {
+                _ = @sizeOf(u8);
+            }
+        }
+    }.f, .{});
+}

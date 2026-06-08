@@ -134,3 +134,20 @@ export fn gemv_q5_k_kernel(x: [*]const f32, w: [*]const u8, y: [*]f32, n: u32, k
         if (tid == 0) y[row_base + 1] = sum1;
     }
 }
+
+const std = @import("std");
+
+test "constants valid" {
+    comptime std.debug.assert(q5_k_block_size > 0);
+    comptime std.debug.assert(q5_k_group_size > 0);
+    comptime std.debug.assert(q5_k_high_bit_int > 0);
+    comptime std.debug.assert(nr > 0);
+}
+
+test "fuzz: gemv_q5_k functions" {
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, _: *std.testing.Smith) !void {
+            comptime { _ = &q5kBlockDot; }
+        }
+    }.f, .{});
+}

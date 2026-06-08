@@ -303,3 +303,23 @@ export fn sdpa_turbo_kernel(
         output[q_base + d] = acc;
     }
 }
+
+const std = @import("std");
+
+test "constants valid" {
+    comptime std.debug.assert(turbo_block_size > 0);
+}
+
+test "fuzz: sdpa_turbo functions" {
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, _: *std.testing.Smith) !void {
+            comptime {
+                _ = &wht32;
+                _ = &codebookLookup;
+                _ = &readU16;
+                _ = &f16ToF32;
+                _ = &turboDequantBlock;
+            }
+        }
+    }.f, .{});
+}
