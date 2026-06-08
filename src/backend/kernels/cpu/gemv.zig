@@ -278,12 +278,30 @@ test "fuzz: all gemv functions" {
             gemvIQ4_XS(&x, &w_buf, &y, N, K);
 
             // 22. gemvSeq (dispatcher — exercises multiple dtype paths)
+            // Exercise every gemvSeq branch for full dispatch coverage.
             gemvSeq(&x, &w_buf, .q4_0, &y, N, K);
+            gemvSeq(&x, &w_buf, .q4_1, &y, N, K);
+            gemvSeq(&x, &w_buf, .q5_0, &y, N, K);
+            gemvSeq(&x, &w_buf, .q5_k, &y, N, K);
+            gemvSeq(&x, &w_buf, .q6_k, &y, N, K);
             gemvSeq(&x, &w_buf, .q8_0, &y, N, K);
-            gemvSeq(&x, &w_buf, .bf16, &y, N, K);
+            gemvSeq(&x, @ptrCast(@alignCast(&w_f16)), .f16, &y, N, K);
             gemvSeq(&x, @ptrCast(&w_f32), .f32, &y, N, K);
+            gemvSeq(&x, &w_buf, .bf16, &y, N, K);
+            gemvSeq(&x, &w_buf, .mxfp4, &y, N, K);
+            gemvSeq(&x, &w_buf, .q2_k, &y, N, K);
+            gemvSeq(&x, &w_buf, .q3_k, &y, N, K);
+            gemvSeq(&x, &w_buf, .q4_k, &y, N, K);
+            gemvSeq(&x, &w_buf, .iq4_nl, &y, N, K);
+            gemvSeq(&x, &w_buf, .iq4_xs, &y, N, K);
+            gemvSeq(&x, &w_buf, .fp8_e4m3, &y, N, K);
+            gemvSeq(&x, &w_buf, .fp8_e5m2, &y, N, K);
+            gemvSeq(&x, &w_buf, .nvfp4, &y, N, K);
             gemvSeq(&x, &w_buf, .tq1_0, &y, N, K);
             gemvSeq(&x, &w_buf, .tq2_0, &y, N, K);
+            gemvSeq(&x, &w_buf, .mlx_q, &y, N, K);
+            gemvSeq(&x, &w_buf, .gptq, &y, N, K);
+            gemvSeq(&x, &w_buf, .awq, &y, N, K);
             gemvSeq(&x, &w_buf, .unknown, &y, N, K);
         }
     }.f, .{});
