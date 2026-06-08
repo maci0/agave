@@ -557,6 +557,24 @@ pub fn dispatchGemv(be: backend_mod.Backend, fmt: format_mod.Format, x: [*]const
             return;
         }
     }
+    if (t.dtype == .hqq) {
+        // HQQ: uint8 packed nibbles + bf16 companion scale/zero from meta.* tensors.
+        const base_name = if (std.mem.endsWith(u8, t.name, ".W_q"))
+            t.name[0 .. t.name.len - ".W_q".len]
+        else
+            t.name[0..(std.mem.lastIndexOfScalar(u8, t.name, '.') orelse t.name.len)];
+        var s_buf: [tensor_name_buf_size]u8 = undefined;
+        var z_buf: [tensor_name_buf_size]u8 = undefined;
+        const s_name = std.fmt.bufPrint(&s_buf, "{s}.meta.scale", .{base_name}) catch "";
+        const z_name = std.fmt.bufPrint(&z_buf, "{s}.meta.zero", .{base_name}) catch "";
+        const scales_t = if (s_name.len > 0) fmt.getTensor(s_name) else null;
+        const zeros_t = if (z_name.len > 0) fmt.getTensor(z_name) else null;
+        if (scales_t != null and zeros_t != null) {
+            const group_size = fmt.getMetaU32("group_size") orelse 64;
+            be.gemvHqq(x, t.data_ptr, scales_t.?.data_ptr, zeros_t.?.data_ptr, y, n, k, group_size);
+            return;
+        }
+    }
     be.gemv(x, .{ .data = t.data_ptr, .dtype = t.dtype }, y, n, k);
 }
 

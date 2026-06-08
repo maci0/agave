@@ -32,6 +32,8 @@ pub const DType = enum {
     gptq,
     /// AWQ INT4 packed in INT32 (column-major); needs companion scales/qzeros tensors.
     awq,
+    /// HQQ 4-bit packed in uint8 (2 nibbles/byte); needs companion meta.scale/meta.zero tensors.
+    hqq,
     unknown,
 };
 
@@ -77,6 +79,8 @@ pub const TensorInfo = struct {
             .tq2_0 => std.math.mul(usize, n / 256, 66) catch std.math.maxInt(usize),
             .mxfp4 => std.math.mul(usize, n / 32, 17) catch std.math.maxInt(usize),
             .nvfp4 => std.math.mul(usize, n / 16, 9) catch std.math.maxInt(usize),
+            // HQQ: 2 nibbles/byte → n/2 bytes; companion scale/zero are separate tensors.
+            .hqq => std.math.mul(usize, n, 1) catch std.math.maxInt(usize),
             .mlx_q, .gptq, .awq, .unknown => std.math.mul(usize, n, 4) catch std.math.maxInt(usize),
         };
     }
@@ -228,6 +232,7 @@ pub const Format = struct {
                     .mlx_q => "MLX-Q",
                     .gptq => "GPTQ",
                     .awq => "AWQ",
+                    .hqq => "HQQ",
                     .unknown => "unknown",
                 };
             }
@@ -413,6 +418,9 @@ test "TensorInfo dataByteLen unknown and packed types" {
 
     // unknown, mlx_q, gptq, awq all use n*4 (treated as 4 bytes per element)
     const packed_types = [_]DType{ .unknown, .mlx_q, .gptq, .awq };
+    // HQQ uses n*1 (uint8, 2 nibbles/byte, companion scale/zero separate)
+    const t_hqq = TensorInfo{ .name = "w", .n_dims = 1, .dims = .{ 256, 0, 0, 0 }, .dtype = .hqq, .data_ptr = ptr };
+    try std.testing.expectEqual(@as(usize, 256), t_hqq.dataByteLen());
     for (packed_types) |dt| {
         const t = TensorInfo{ .name = "w", .n_dims = 1, .dims = .{ 100, 0, 0, 0 }, .dtype = dt, .data_ptr = ptr };
         try std.testing.expectEqual(@as(usize, 400), t.dataByteLen());
@@ -458,7 +466,7 @@ test "DType enum completeness" {
     // Verify all DType variants are distinct and the enum has the expected count
     const dtype_fields = @typeInfo(DType).@"enum".fields;
     // Count should match all known dtypes
-    try std.testing.expect(dtype_fields.len >= 24); // At least: f32, f16, bf16, q2-q8, iq4s, fp8s, nvfp4, mxfp4, tq1_0, tq2_0, mlx_q, gptq, awq, unknown
+    try std.testing.expect(dtype_fields.len >= 25); // At least: f32, f16, bf16, q2-q8, iq4s, fp8s, nvfp4, mxfp4, tq1_0, tq2_0, mlx_q, gptq, awq, hqq, unknown
 }
 
 test "fuzz: all format functions" {

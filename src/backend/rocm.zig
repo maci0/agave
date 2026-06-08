@@ -649,6 +649,10 @@ pub const RocmBackend = struct {
         self.launch(self.fn_gemv_awq.?, @intCast(n), block_size, reduction_smem, &params);
     }
 
+    pub fn gemvHqq(_: *RocmBackend, _: [*]const f32, _: [*]const u8, _: [*]const u8, _: [*]const u8, _: [*]f32, _: usize, _: usize, _: u32) void {
+        @panic("HQQ GEMV not yet implemented for ROCm");
+    }
+
     /// output[i] = input[i] * weight[i] * rsqrt(mean(x^2) + eps)
     pub fn rmsNorm(self: *RocmBackend, input: [*]const f32, weight: [*]const f32, output: [*]f32, n: usize, eps: f32) void {
         const sz = n * @sizeOf(f32);

@@ -3679,6 +3679,7 @@ test {
     _ = @import("backend/mega_compose.zig");
     _ = @import("backend/megakernel.zig");
     _ = @import("ops/gptq.zig");
+    _ = @import("ops/hqq.zig");
 }
 
 test "cpu backend rms_norm via tagged union dispatch" {

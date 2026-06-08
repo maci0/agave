@@ -1970,6 +1970,22 @@ pub const MetalBackend = struct {
         self.endEncodeThreadgroups(enc, n, 256);
     }
 
+    /// HQQ INT4 GEMV — Metal kernel not yet implemented; falls back to CPU path via ops/hqq.zig.
+    pub fn gemvHqq(self: *MetalBackend, x: [*]const f32, w_q: [*]const u8, scale: [*]const u8, zero: [*]const u8, y: [*]f32, n: usize, k: usize, group_size: u32) void {
+        _ = self;
+        _ = x;
+        _ = w_q;
+        _ = scale;
+        _ = zero;
+        _ = y;
+        _ = n;
+        _ = k;
+        _ = group_size;
+        // HQQ kernel not yet implemented for Metal — fall through to CPU path.
+        // The model layer should handle this via ops/hqq.zig directly.
+        @panic("HQQ GEMV not yet implemented for Metal");
+    }
+
     /// AWQ INT4 GEMV on Metal GPU.
     pub fn gemvAwq(self: *MetalBackend, x: [*]const f32, qweight: [*]const u32, scales: [*]const u16, qzeros: [*]const u32, y: [*]f32, n: usize, k: usize, group_size: u32) void {
         const n_words = n / 8;
@@ -3599,6 +3615,17 @@ test "MetalBackend.gemvGptq signature" {
     }
 }
 
+test "MetalBackend.gemvHqq signature" {
+    if (comptime builtin.os.tag != .macos) return error.SkipZigTest;
+    comptime {
+        _ = &MetalBackend.gemvHqq;
+        const F = @TypeOf(MetalBackend.gemvHqq);
+        const info = @typeInfo(F);
+        // self + x + w_q + scale + zero + y + n + k + group_size = 9 params
+        try std.testing.expectEqual(9, info.@"fn".params.len);
+    }
+}
+
 test "MetalBackend.gemvAwq signature" {
     if (comptime builtin.os.tag != .macos) return error.SkipZigTest;
     comptime {
@@ -3859,7 +3886,7 @@ test "fuzz: all metal functions" {
             "allocKvSlice",      "freeKvSlice",
             // GEMV variants
             "gemv",              "gemvNvfp4St",      "gemvMlxQ",
-            "gemvMxfp4St",       "gemvGptq",         "gemvAwq",
+            "gemvMxfp4St",       "gemvGptq",         "gemvAwq",        "gemvHqq",
             "gemvMulti",         "gemvT",
             // Norms
             "rmsNorm",           "addRmsNorm",       "rmsNormMulti",

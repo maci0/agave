@@ -2018,6 +2018,10 @@ pub const VulkanBackend = struct {
         self.downloadF32(y_pool.mem, y, n);
     }
 
+    pub fn gemvHqq(_: *VulkanBackend, _: [*]const f32, _: [*]const u8, _: [*]const u8, _: [*]const u8, _: [*]f32, _: usize, _: usize, _: u32) void {
+        @panic("HQQ GEMV not yet implemented for Vulkan");
+    }
+
     /// In-place sigmoid-gated multiply.
     pub fn sigmoidMul(self: *VulkanBackend, data: [*]f32, gate: [*]const f32, n: usize) void {
         const sz = n * @sizeOf(f32);
@@ -2782,6 +2786,7 @@ test "fuzz: all vulkan functions" {
                 _ = &VulkanBackend.gemvMxfp4St;
                 _ = &VulkanBackend.gemvGptq;
                 _ = &VulkanBackend.gemvAwq;
+                _ = &VulkanBackend.gemvHqq;
                 _ = &VulkanBackend.sigmoidMul;
                 _ = &VulkanBackend.siluMul;
                 _ = &VulkanBackend.geluMul;

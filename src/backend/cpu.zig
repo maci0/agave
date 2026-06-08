@@ -603,6 +603,11 @@ pub const CpuBackend = struct {
         awq_ops.awqGemv(x, qweight, scales, qzeros, y, n, k, group_size);
     }
 
+    pub fn gemvHqq(_: *CpuBackend, x: [*]const f32, w_q: [*]const u8, scale: [*]const u8, zero: [*]const u8, y: [*]f32, n: usize, k: usize, group_size: u32) void {
+        const hqq_ops = @import("../ops/hqq.zig");
+        hqq_ops.hqqGemv(x, w_q, @ptrCast(@alignCast(scale)), @ptrCast(@alignCast(zero)), y, n, k, group_size);
+    }
+
     /// Batched GEMV — fuses all ops into a single parallelFor to minimize
     /// thread wake/sleep overhead (~250 GEMV dispatches per token).
     pub fn gemvMulti(self: *CpuBackend, x: [*]const f32, ops: []const backend_mod.GemvOp, k: usize) void {

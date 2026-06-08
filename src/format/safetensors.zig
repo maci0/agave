@@ -76,6 +76,10 @@ pub const SafeTensorsDir = struct {
     /// Controls I32 dtype mapping: .awq (column-major) vs .gptq (row-major).
     is_awq: bool = false,
 
+    /// HQQ quantization detected (quant_method == "hqq" in config.json).
+    /// Activates .W_q suffix tensor lookup and U8 → .hqq dtype mapping.
+    is_hqq: bool = false,
+
     /// Key-value metadata parsed from config.json.
     config_meta: std.StringHashMap(MetaValue),
 
@@ -276,6 +280,10 @@ pub const SafeTensorsDir = struct {
                 .string => |s| std.mem.eql(u8, s, "awq"),
                 else => false,
             } else false,
+            .is_hqq = if (config_meta.get("quant_method")) |v| switch (v) {
+                .string => |s| std.mem.eql(u8, s, "hqq"),
+                else => false,
+            } else false,
             .vocab = vocab,
             .merges = merges,
             .owned_strings = owned_strings,
@@ -355,6 +363,13 @@ pub const SafeTensorsDir = struct {
                     @memcpy(awq_buf[base_len..][0..awq_suffix.len], awq_suffix);
                     if (self.lookupStable(awq_buf[0 .. base_len + awq_suffix.len])) |r|
                         return self.entryToInfo(r.key, r.entry);
+                    // HQQ: try .W_q instead of .weight
+                    if (self.is_hqq) {
+                        const hqq_suffix = ".W_q";
+                        @memcpy(awq_buf[base_len..][0..hqq_suffix.len], hqq_suffix);
+                        if (self.lookupStable(awq_buf[0 .. base_len + hqq_suffix.len])) |r|
+                            return self.entryToInfo(r.key, r.entry);
+                    }
                 }
             }
         }
@@ -409,7 +424,12 @@ pub const SafeTensorsDir = struct {
             std.log.err("Tensor data exceeds shard bounds for {s} (end={d}, shard_size={d})", .{ name, abs_end, shard.data.len });
             return null;
         }
-        const effective_dtype = if (entry.dtype == .gptq and self.is_awq) DType.awq else entry.dtype;
+        const effective_dtype = blk: {
+            if (entry.dtype == .gptq and self.is_awq) break :blk DType.awq;
+            // HQQ .W_q tensors are U8 (parsed as nvfp4); remap to .hqq when is_hqq.
+            if (entry.dtype == .nvfp4 and self.is_hqq) break :blk DType.hqq;
+            break :blk entry.dtype;
+        };
         return TensorInfo{
             .name = name,
             .n_dims = entry.n_dims,

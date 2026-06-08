@@ -1667,6 +1667,10 @@ pub const WebGpuBackend = struct {
         self.cacheGpuResult(y, y_buf, y_sz);
     }
 
+    pub fn gemvHqq(_: *WebGpuBackend, _: [*]const f32, _: [*]const u8, _: [*]const u8, _: [*]const u8, _: [*]f32, _: usize, _: usize, _: u32) void {
+        @panic("HQQ GEMV not yet implemented for WebGPU");
+    }
+
     pub fn gemvMulti(self: *WebGpuBackend, x: [*]const f32, ops: []const backend_mod.GemvOp, k: usize) void {
         for (ops) |op| self.gemv(x, op.w, op.y, op.n, k);
     }
@@ -2179,6 +2183,7 @@ test "fuzz: all webgpu functions" {
                 _ = &WebGpuBackend.gemvMxfp4St;
                 _ = &WebGpuBackend.gemvGptq;
                 _ = &WebGpuBackend.gemvAwq;
+                _ = &WebGpuBackend.gemvHqq;
                 _ = &WebGpuBackend.gemvMulti;
                 _ = &WebGpuBackend.causalConv1dSilu;
                 _ = &WebGpuBackend.deltaNet;

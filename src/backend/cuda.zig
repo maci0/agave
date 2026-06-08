@@ -1641,6 +1641,10 @@ pub const CudaBackend = struct {
         }
     }
 
+    pub fn gemvHqq(_: *CudaBackend, _: [*]const f32, _: [*]const u8, _: [*]const u8, _: [*]const u8, _: [*]f32, _: usize, _: usize, _: u32) void {
+        @panic("HQQ GEMV not yet implemented for CUDA");
+    }
+
     /// Commit pending GPU work and download results to host.
     /// Call before CPU code reads buffers written by deferred GPU ops.
     /// After sync, all act_cache entries are marked stale — CPU may modify

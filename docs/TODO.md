@@ -123,7 +123,7 @@ All quantized GEMV formats native on all 6 backends. See [KERNELS.md](KERNELS.md
 | ~~29~~ | ~~TQ1_0 ternary GEMV kernel (BitNet 1.58-bit, {-1,0,1}, 5 trits/byte)~~ | Done (all 6 backends) |
 | ~~30~~ | ~~TQ2_0 ternary GEMV kernel (2-bit ternary, faster on AVX2)~~ | Done (all 6 backends) |
 | 31 | EXL2 mixed-precision codebook (NVIDIA only) | ExLlama |
-| 32 | HQQ half-quadratic quantization | HQQ |
+| ~~32~~ | ~~HQQ half-quadratic quantization~~ | Done (CPU GEMV; GPU kernels emit @panic until implemented) |
 
 ---
 

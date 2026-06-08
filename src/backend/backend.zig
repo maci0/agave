@@ -245,6 +245,8 @@ pub fn weightBytes(dtype: DType, n: usize, k: usize) usize {
         .nvfp4 => n * ((k + nvfp4_block_elems - 1) / nvfp4_block_elems) * nvfp4_block_bytes,
         // GPTQ/AWQ: 8 INT4 nibbles per u32 word
         .gptq, .awq => n * k / 2,
+        // HQQ: 2 nibbles/byte, companion scale/zero handled separately
+        .hqq => n * k / 2,
         // Unsupported dtypes: assume f32 (4 bytes per element).
         .mlx_q, .unknown => n * k * 4,
     };
@@ -272,7 +274,7 @@ pub fn gemvRowBytes(dtype: DType, k: usize) usize {
         .f16, .bf16 => k * f16_elem_bytes,
         .f32 => k * f32_elem_bytes,
         .fp8_e4m3, .fp8_e5m2 => k,
-        .tq1_0, .tq2_0, .mlx_q, .gptq, .awq, .unknown => 0,
+        .tq1_0, .tq2_0, .mlx_q, .gptq, .awq, .hqq, .unknown => 0,
     };
 }
 
@@ -396,6 +398,10 @@ pub const NullBackend = struct {
     }
 
     pub fn gemvAwq(_: *NullBackend, _: [*]const f32, _: [*]const u32, _: [*]const u16, _: [*]const u32, _: [*]f32, _: usize, _: usize, _: u32) void {
+        unreachable;
+    }
+
+    pub fn gemvHqq(_: *NullBackend, _: [*]const f32, _: [*]const u8, _: [*]const u8, _: [*]const u8, _: [*]f32, _: usize, _: usize, _: u32) void {
         unreachable;
     }
 
@@ -838,6 +844,14 @@ pub const Backend = union(enum) {
         }
     }
 
+    /// HQQ 4-bit GEMV: y[n] = dequant(w_q[n,k/2], scale[n,k/group], zero[n,k/group]) @ x[k].
+    /// w_q: uint8, 2 nibbles/byte. scale and zero: bf16 companion tensors.
+    pub inline fn gemvHqq(self: Backend, x: [*]const f32, w_q: [*]const u8, scale: [*]const u8, zero: [*]const u8, y: [*]f32, n: usize, k: usize, group_size: u32) void {
+        switch (self) {
+            inline else => |be| be.gemvHqq(x, w_q, scale, zero, y, n, k, group_size),
+        }
+    }
+
     /// Begin a batch of independent GPU dispatches. While active, memory barriers
     /// between dispatches are suppressed so the GPU can overlap execution.
     /// Call endBatch() after the last independent op to insert a single barrier.
@@ -1212,6 +1226,14 @@ test "DType — gemvRowBytes for Q6_K super-block" {
     try std.testing.expectEqual(@as(usize, 16 * q6_k_block_bytes), gemvRowBytes(.q6_k, 4096));
 }
 
+test "DType — weightBytes and gemvRowBytes for HQQ" {
+    // HQQ 4-bit: 2 nibbles per byte → n*k/2 bytes total.
+    try std.testing.expectEqual(@as(usize, 1 * 4096 / 2), weightBytes(.hqq, 1, 4096));
+    try std.testing.expectEqual(@as(usize, 8 * 4096 / 2), weightBytes(.hqq, 8, 4096));
+    // gemvRowBytes returns 0 (companion tensors, handled at model level).
+    try std.testing.expectEqual(@as(usize, 0), gemvRowBytes(.hqq, 4096));
+}
+
 test "DType — gemvRowBytes for NVFP4" {
     // NVFP4: 9 bytes per 16-element block.
     // k=4096 → 256 blocks → 256 * 9 = 2304.
@@ -1409,6 +1431,7 @@ test "NullBackend — function signatures exist" {
         _ = @TypeOf(NullBackend.embLookup);
         _ = @TypeOf(NullBackend.gemvGptq);
         _ = @TypeOf(NullBackend.gemvAwq);
+        _ = @TypeOf(NullBackend.gemvHqq);
         _ = @TypeOf(NullBackend.gemvNvfp4St);
         _ = @TypeOf(NullBackend.gemvMlxQ);
         _ = @TypeOf(NullBackend.gemvMxfp4St);
@@ -2505,6 +2528,7 @@ test "fuzz: all backend functions" {
                 _ = &NullBackend.sdpaPaged;
                 _ = &NullBackend.gemvGptq;
                 _ = &NullBackend.gemvAwq;
+                _ = &NullBackend.gemvHqq;
                 _ = &NullBackend.gemvNvfp4St;
                 _ = &NullBackend.gemvMlxQ;
                 _ = &NullBackend.gemvMxfp4St;
