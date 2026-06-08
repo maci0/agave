@@ -51,6 +51,7 @@ const gemv_fp4 = @import("gemv_fp4.zig");
 const gemv_iq4 = @import("gemv_iq4.zig");
 const gemv_q_small = @import("gemv_q_small.zig");
 const gemv_tq1_0 = @import("gemv_tq1_0.zig");
+const gemv_tq2_0 = @import("gemv_tq2_0.zig");
 
 // ── Re-exports for direct access ─────────────────────────────────
 pub const gemvQ4_0 = gemv_q4_0.gemvQ4_0;
@@ -104,6 +105,7 @@ pub fn gemvSeq(x: [*]const f32, w_data: [*]const u8, dtype: DType, y: [*]f32, n:
         .fp8_e5m2 => gemvFP8_E5M2(x, w_data, y, n, k),
         .nvfp4 => gemvNVFP4(x, w_data, y, n, k),
         .tq1_0 => gemv_tq1_0.gemvTQ1_0(x, w_data, y, n, k),
+        .tq2_0 => gemv_tq2_0.gemvTQ2_0(x, w_data, y, n, k),
         .mlx_q, .gptq, .awq, .unknown => {
             std.log.warn("GEMV: unsupported dtype {s}, output zeroed", .{@tagName(dtype)});
             @memset(y[0..n], 0);
@@ -280,6 +282,8 @@ test "fuzz: all gemv functions" {
             gemvSeq(&x, &w_buf, .q8_0, &y, N, K);
             gemvSeq(&x, &w_buf, .bf16, &y, N, K);
             gemvSeq(&x, @ptrCast(&w_f32), .f32, &y, N, K);
+            gemvSeq(&x, &w_buf, .tq1_0, &y, N, K);
+            gemvSeq(&x, &w_buf, .tq2_0, &y, N, K);
             gemvSeq(&x, &w_buf, .unknown, &y, N, K);
         }
     }.f, .{});

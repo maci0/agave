@@ -207,6 +207,7 @@ pub const CudaBackend = struct {
     fn_gemv_gptq: CUfunction = null,
     fn_gemv_awq: CUfunction = null,
     fn_gemv_tq1_0: CUfunction = null,
+    fn_gemv_tq2_0: CUfunction = null,
     fn_fused_ffn_q8: CUfunction = null,
     fn_fused_ffn_q4k: CUfunction = null,
     fn_fused_ffn_q5k: CUfunction = null,
@@ -489,6 +490,7 @@ pub const CudaBackend = struct {
         self.fn_gemv_gptq = self.getFunction("gemv_gptq_kernel") catch null;
         self.fn_gemv_awq = self.getFunction("gemv_awq_kernel") catch null;
         self.fn_gemv_tq1_0 = self.getFunction("gemv_tq1_0_kernel") catch null;
+        self.fn_gemv_tq2_0 = self.getFunction("gemv_tq2_0_kernel") catch null;
         self.fn_fused_ffn_q8 = try self.getFunction("fused_ffn_gate_up_silu_q8_0_kernel");
         self.fn_fused_ffn_q4k = self.getFunction("fused_ffn_gate_up_silu_q4_k_kernel") catch null;
         self.fn_fused_ffn_q5k = self.getFunction("fused_ffn_gate_up_silu_q5_k_kernel") catch null;
@@ -868,6 +870,7 @@ pub const CudaBackend = struct {
             .fp8_e4m3 => self.fn_gemv_fp8_e4m3,
             .fp8_e5m2 => self.fn_gemv_fp8_e5m2,
             .tq1_0 => if (self.fn_gemv_tq1_0) |f| f else return self.cpuGemvFallback(x, w, y, n, k),
+            .tq2_0 => if (self.fn_gemv_tq2_0) |f| f else return self.cpuGemvFallback(x, w, y, n, k),
             else => @panic("CUDA GEMV: unsupported dtype — add a GPU kernel"),
         };
 

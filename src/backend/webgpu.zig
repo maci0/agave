@@ -59,6 +59,7 @@ const wgsl_gemv_mxfp4_st = @embedFile("kernels/webgpu/gemv_mxfp4_st.wgsl");
 const wgsl_gemv_gptq = @embedFile("kernels/webgpu/gemv_gptq.wgsl");
 const wgsl_gemv_awq = @embedFile("kernels/webgpu/gemv_awq.wgsl");
 const wgsl_gemv_tq1_0 = @embedFile("kernels/webgpu/gemv_tq1_0.wgsl");
+const wgsl_gemv_tq2_0 = @embedFile("kernels/webgpu/gemv_tq2_0.wgsl");
 
 // ── WebGPU C API types ──────────────────────────────────────────────
 
@@ -359,6 +360,7 @@ pub const WebGpuBackend = struct {
     pipe_gemv_gptq: PipelineInfo = .{},
     pipe_gemv_awq: PipelineInfo = .{},
     pipe_gemv_tq1_0: PipelineInfo = .{},
+    pipe_gemv_tq2_0: PipelineInfo = .{},
     pipe_sdpa: PipelineInfo = .{},
     pipe_conv1d: PipelineInfo = .{},
     pipe_deltanet: PipelineInfo = .{},
@@ -609,6 +611,7 @@ pub const WebGpuBackend = struct {
         self.pipe_gemv_gptq = try self.createPipeline(wgsl_gemv_gptq);
         self.pipe_gemv_awq = try self.createPipeline(wgsl_gemv_awq);
         self.pipe_gemv_tq1_0 = try self.createPipeline(wgsl_gemv_tq1_0);
+        self.pipe_gemv_tq2_0 = try self.createPipeline(wgsl_gemv_tq2_0);
         self.pipe_sdpa = try self.createPipeline(wgsl_sdpa);
         self.pipe_conv1d = try self.createPipeline(wgsl_conv1d);
         self.pipe_deltanet = try self.createPipeline(wgsl_deltanet);
@@ -1099,6 +1102,7 @@ pub const WebGpuBackend = struct {
             .q5_k => self.pipe_gemv_q5_k,
             .q6_k => self.pipe_gemv_q6_k,
             .tq1_0 => self.pipe_gemv_tq1_0,
+            .tq2_0 => self.pipe_gemv_tq2_0,
             else => @panic("WebGPU gemv: unsupported weight dtype"),
         };
         const nb32 = (k + 31) / 32;
@@ -1111,6 +1115,7 @@ pub const WebGpuBackend = struct {
             .q5_k => n * nb256 * 176,
             .q6_k => n * nb256 * 210,
             .tq1_0 => n * nb256 * 54,
+            .tq2_0 => n * nb256 * 66,
             else => unreachable,
         };
         const w_buf = self.getOrUpload(w.data, w_size);

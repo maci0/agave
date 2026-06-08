@@ -149,6 +149,7 @@ pub const MetalBackend = struct {
     pipe_gemv_gptq: objc.id,
     pipe_gemv_awq: objc.id,
     pipe_gemv_tq1_0: objc.id,
+    pipe_gemv_tq2_0: objc.id,
     pipe_gemm_f32: objc.id,
     pipe_gemm_bf16: objc.id,
     pipe_gemm_q8_0: objc.id,
@@ -319,6 +320,7 @@ pub const MetalBackend = struct {
             .pipe_gemv_gptq = undefined,
             .pipe_gemv_awq = undefined,
             .pipe_gemv_tq1_0 = undefined,
+            .pipe_gemv_tq2_0 = undefined,
             .pipe_gemm_f32 = undefined,
             .pipe_gemm_bf16 = undefined,
             .pipe_gemm_q8_0 = undefined,
@@ -410,6 +412,7 @@ pub const MetalBackend = struct {
         self.pipe_gemv_gptq = try self.makePipeline("gemv_gptq");
         self.pipe_gemv_awq = try self.makePipeline("gemv_awq");
         self.pipe_gemv_tq1_0 = try self.makePipeline("gemv_tq1_0");
+        self.pipe_gemv_tq2_0 = try self.makePipeline("gemv_tq2_0");
         self.pipe_gemm_f32 = try self.makePipeline("gemm_f32");
         self.pipe_gemm_bf16 = try self.makePipeline("gemm_bf16");
         self.pipe_gemm_q8_0 = try self.makePipeline("gemm_q8_0");
@@ -823,6 +826,7 @@ pub const MetalBackend = struct {
             .fp8_e5m2 => self.pipe_gemv_fp8_e5m2,
             .mxfp4 => self.pipe_gemv_mxfp4,
             .tq1_0 => self.pipe_gemv_tq1_0,
+            .tq2_0 => self.pipe_gemv_tq2_0,
             else => @panic("Metal GEMV: unsupported dtype — add a GPU kernel"),
         };
 

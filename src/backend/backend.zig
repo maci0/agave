@@ -215,6 +215,8 @@ pub const mxfp4_block_bytes: usize = 17;
 pub const nvfp4_block_bytes: usize = 9;
 /// TQ1_0: 64 bytes per 256-element super-block.
 pub const tq1_0_block_bytes: usize = 64;
+/// TQ2_0: 130 bytes per 256-element super-block (f16 scale + 128 bytes data).
+pub const tq2_0_block_bytes: usize = 66;
 
 /// Compute raw byte size of a weight matrix [n, k] for a given dtype.
 /// Used by GPU backends to determine upload buffer sizes. Accounts for
@@ -239,6 +241,7 @@ pub fn weightBytes(dtype: DType, n: usize, k: usize) usize {
         .iq4_nl => n * nb * iq4_nl_block_bytes,
         .iq4_xs => n * nsb * iq4_xs_block_bytes,
         .tq1_0 => n * nsb * tq1_0_block_bytes,
+        .tq2_0 => n * nsb * tq2_0_block_bytes,
         .nvfp4 => n * ((k + nvfp4_block_elems - 1) / nvfp4_block_elems) * nvfp4_block_bytes,
         // GPTQ/AWQ: 8 INT4 nibbles per u32 word
         .gptq, .awq => n * k / 2,
@@ -269,7 +272,7 @@ pub fn gemvRowBytes(dtype: DType, k: usize) usize {
         .f16, .bf16 => k * f16_elem_bytes,
         .f32 => k * f32_elem_bytes,
         .fp8_e4m3, .fp8_e5m2 => k,
-        .tq1_0, .mlx_q, .gptq, .awq, .unknown => 0,
+        .tq1_0, .tq2_0, .mlx_q, .gptq, .awq, .unknown => 0,
     };
 }
 
@@ -1218,6 +1221,7 @@ test "DType — gemvRowBytes for NVFP4" {
 test "DType — gemvRowBytes returns 0 for unsupported formats" {
     // Formats that don't support standard row-based GEMV return 0.
     try std.testing.expectEqual(@as(usize, 0), gemvRowBytes(.tq1_0, 4096));
+    try std.testing.expectEqual(@as(usize, 0), gemvRowBytes(.tq2_0, 4096));
     try std.testing.expectEqual(@as(usize, 0), gemvRowBytes(.mlx_q, 4096));
     try std.testing.expectEqual(@as(usize, 0), gemvRowBytes(.gptq, 4096));
     try std.testing.expectEqual(@as(usize, 0), gemvRowBytes(.awq, 4096));
@@ -1496,8 +1500,9 @@ test "weightBytes — remaining dtypes coverage" {
     try std.testing.expectEqual(@as(usize, n * nsb * iq4_xs_block_bytes), weightBytes(.iq4_xs, n, k));
     // MXFP4
     try std.testing.expectEqual(@as(usize, n * nb * mxfp4_block_bytes), weightBytes(.mxfp4, n, k));
-    // TQ1_0
+    // TQ1_0 / TQ2_0
     try std.testing.expectEqual(@as(usize, n * nsb * tq1_0_block_bytes), weightBytes(.tq1_0, n, k));
+    try std.testing.expectEqual(@as(usize, n * nsb * tq2_0_block_bytes), weightBytes(.tq2_0, n, k));
     // FP8 variants: 1 byte per element.
     try std.testing.expectEqual(@as(usize, n * k), weightBytes(.fp8_e4m3, n, k));
     try std.testing.expectEqual(@as(usize, n * k), weightBytes(.fp8_e5m2, n, k));
@@ -2076,9 +2081,11 @@ test "NullBackend — all method signatures are consistent with Backend" {
 
 test "weightBytes — TQ1_0 super-block" {
     // TQ1_0: 64 bytes per 256-element super-block.
-    // k=256, n=1 → 1 super-block = 64 bytes
     try std.testing.expectEqual(@as(usize, 64), weightBytes(.tq1_0, 1, 256));
     try std.testing.expectEqual(@as(usize, 4 * 16 * tq1_0_block_bytes), weightBytes(.tq1_0, 4, 4096));
+    // TQ2_0: 66 bytes per 256-element super-block.
+    try std.testing.expectEqual(@as(usize, 66), weightBytes(.tq2_0, 1, 256));
+    try std.testing.expectEqual(@as(usize, 4 * 16 * tq2_0_block_bytes), weightBytes(.tq2_0, 4, 4096));
 }
 
 test "DType — gemvRowBytes for MXFP4" {
@@ -2319,6 +2326,7 @@ test "fuzz: all backend functions" {
             try std.testing.expect(mxfp4_block_bytes > 0);
             try std.testing.expect(nvfp4_block_bytes > 0);
             try std.testing.expect(tq1_0_block_bytes > 0);
+            try std.testing.expect(tq2_0_block_bytes > 0);
             // Backend dispatch via CPU
             var cpu = CpuBackend{};
             const be = Backend{ .cpu = &cpu };

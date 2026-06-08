@@ -148,6 +148,7 @@ pub const RocmBackend = struct {
     fn_gemv_nvfp4_st: HipFunction = null,
     fn_gemv_mxfp4_st: HipFunction = null,
     fn_gemv_tq1_0: HipFunction = null,
+    fn_gemv_tq2_0: HipFunction = null,
     fn_rms_norm_multi: HipFunction = null,
     fn_sdpa: HipFunction = null,
     fn_sdpa_turbo: HipFunction = null,
@@ -321,6 +322,7 @@ pub const RocmBackend = struct {
         self.fn_gemv_nvfp4_st = self.getFunction(hipModuleGetFunction, "gemv_nvfp4_st_kernel") catch null;
         self.fn_gemv_mxfp4_st = self.getFunction(hipModuleGetFunction, "gemv_mxfp4_st_kernel") catch null;
         self.fn_gemv_tq1_0 = self.getFunction(hipModuleGetFunction, "gemv_tq1_0_kernel") catch null;
+        self.fn_gemv_tq2_0 = self.getFunction(hipModuleGetFunction, "gemv_tq2_0_kernel") catch null;
         self.fn_rms_norm_multi = self.getFunction(hipModuleGetFunction, "rms_norm_multi_kernel") catch null; // loaded but rmsNormMulti() panics — GPU kernel not yet validated
         self.fn_sdpa = self.getFunction(hipModuleGetFunction, "sdpa_kernel") catch null;
         self.fn_sdpa_turbo = self.getFunction(hipModuleGetFunction, "sdpa_turbo_kernel") catch null;
@@ -566,6 +568,7 @@ pub const RocmBackend = struct {
             .fp8_e4m3 => self.fn_gemv_fp8_e4m3,
             .fp8_e5m2 => self.fn_gemv_fp8_e5m2,
             .tq1_0 => self.fn_gemv_tq1_0,
+            .tq2_0 => self.fn_gemv_tq2_0,
             else => @panic("ROCm GEMV: unsupported dtype — add a GPU kernel"),
         };
 

@@ -96,6 +96,7 @@ pub const GGMLType = enum(u32) {
             .iq4_nl => 32,
             .iq4_xs => 256,
             .tq1_0 => 256,
+            .tq2_0 => 256,
             .mxfp4 => 32,
             else => 1,
         };
@@ -132,7 +133,8 @@ pub const GGMLType = enum(u32) {
             .iq1_m => 56, // 256 elements
             .iq4_nl => 18, // f16 scale + 16 bytes (32 nibbles, same as q4_0)
             .iq4_xs => 136, // f16 d (2) + u16 scales_h (2) + scales_l[4] (4) + qs[128] (128)
-            .tq1_0 => 64, // f16 scale (2) + qs[40] + qh[13] + padding[9]
+            .tq1_0 => 64,  // f16 scale (2) + qs[40] + qh[13] + padding[9]
+            .tq2_0 => 66, // f16 scale (2) + qs[64] (256 elements × 2 bits = 64 bytes)
             .mxfp4 => 17, // 1 byte E8M0 scale + 16 bytes (32 FP4 nibbles)
             else => 1,
         };
@@ -358,6 +360,7 @@ pub const GGUFFile = struct {
             .iq4_xs => .iq4_xs,
             .iq4_nl => .iq4_nl,
             .tq1_0 => .tq1_0,
+            .tq2_0 => .tq2_0,
             .mxfp4 => .mxfp4,
             else => .unknown,
         };
@@ -900,6 +903,7 @@ test "GGMLType blockSize" {
     try std.testing.expectEqual(@as(usize, 1), GGMLType.f16.blockSize());
     try std.testing.expectEqual(@as(usize, 1), GGMLType.bf16.blockSize());
     try std.testing.expectEqual(@as(usize, 256), GGMLType.tq1_0.blockSize());
+    try std.testing.expectEqual(@as(usize, 256), GGMLType.tq2_0.blockSize());
     try std.testing.expectEqual(@as(usize, 32), GGMLType.mxfp4.blockSize());
 }
 
@@ -911,6 +915,7 @@ test "GGMLType bytesPerBlock" {
     try std.testing.expectEqual(@as(usize, 2), GGMLType.f16.bytesPerBlock());
     try std.testing.expectEqual(@as(usize, 17), GGMLType.mxfp4.bytesPerBlock());
     try std.testing.expectEqual(@as(usize, 64), GGMLType.tq1_0.bytesPerBlock());
+    try std.testing.expectEqual(@as(usize, 66), GGMLType.tq2_0.bytesPerBlock());
 }
 
 test "GGMLType tensorBytes" {
@@ -1060,13 +1065,14 @@ test "ggmlToDType complete mapping" {
         .{ .iq4_xs, .iq4_xs },
         .{ .iq4_nl, .iq4_nl },
         .{ .tq1_0, .tq1_0 },
+        .{ .tq2_0, .tq2_0 },
         .{ .mxfp4, .mxfp4 },
     };
     for (mapping) |m| {
         try std.testing.expectEqual(m[1], GGUFFile.ggmlToDType(m[0]));
     }
     // Types that map to unknown
-    const unknown_types = [_]GGMLType{ .i8, .i16, .i32, .i64, .f64, .q5_1, .q8_1, .iq2_xxs, .iq2_xs, .iq2_s, .iq3_xxs, .iq3_s, .iq1_s, .iq1_m, .tq2_0 };
+    const unknown_types = [_]GGMLType{ .i8, .i16, .i32, .i64, .f64, .q5_1, .q8_1, .iq2_xxs, .iq2_xs, .iq2_s, .iq3_xxs, .iq3_s, .iq1_s, .iq1_m };
     for (unknown_types) |t| {
         try std.testing.expectEqual(DType.unknown, GGUFFile.ggmlToDType(t));
     }
@@ -1084,7 +1090,7 @@ test "GGMLType blockSize all types" {
         try std.testing.expectEqual(@as(usize, 32), t.blockSize());
     }
     // 256-element super-block types
-    const block256_types = [_]GGMLType{ .q2_k, .q3_k, .q4_k, .q5_k, .q6_k, .iq2_xxs, .iq2_xs, .iq2_s, .iq3_xxs, .iq3_s, .iq1_s, .iq1_m, .iq4_xs, .tq1_0 };
+    const block256_types = [_]GGMLType{ .q2_k, .q3_k, .q4_k, .q5_k, .q6_k, .iq2_xxs, .iq2_xs, .iq2_s, .iq3_xxs, .iq3_s, .iq1_s, .iq1_m, .iq4_xs, .tq1_0, .tq2_0 };
     for (block256_types) |t| {
         try std.testing.expectEqual(@as(usize, 256), t.blockSize());
     }
@@ -1124,6 +1130,7 @@ test "GGMLType bytesPerBlock all types" {
         .{ .iq4_nl, 18 },
         .{ .iq4_xs, 136 },
         .{ .tq1_0, 64 },
+        .{ .tq2_0, 66 },
         .{ .mxfp4, 17 },
     };
     for (expected) |e| {

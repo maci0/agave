@@ -25,6 +25,7 @@ pub const DType = enum {
     nvfp4,
     mxfp4,
     tq1_0,
+    tq2_0,
     /// MLX quantized weights (U32-packed); needs companion scales/biases tensors for dequant.
     mlx_q,
     /// GPTQ INT4 packed in INT32 (row-major); needs companion scales/qzeros tensors.
@@ -73,6 +74,7 @@ pub const TensorInfo = struct {
             .q3_k => std.math.mul(usize, n / 256, 110) catch std.math.maxInt(usize),
             .iq4_xs => std.math.mul(usize, n / 256, 136) catch std.math.maxInt(usize),
             .tq1_0 => std.math.mul(usize, n / 256, 64) catch std.math.maxInt(usize),
+            .tq2_0 => std.math.mul(usize, n / 256, 66) catch std.math.maxInt(usize),
             .mxfp4 => std.math.mul(usize, n / 32, 17) catch std.math.maxInt(usize),
             .nvfp4 => std.math.mul(usize, n / 16, 9) catch std.math.maxInt(usize),
             .mlx_q, .gptq, .awq, .unknown => std.math.mul(usize, n, 4) catch std.math.maxInt(usize),
@@ -222,6 +224,7 @@ pub const Format = struct {
                     .nvfp4 => "NVFP4",
                     .mxfp4 => "MXFP4",
                     .tq1_0 => "TQ1_0",
+                    .tq2_0 => "TQ2_0",
                     .mlx_q => "MLX-Q",
                     .gptq => "GPTQ",
                     .awq => "AWQ",
@@ -378,6 +381,7 @@ test "TensorInfo dataByteLen all quantized dtypes" {
         .{ .q3_k, 110 },
         .{ .iq4_xs, 136 },
         .{ .tq1_0, 64 },
+        .{ .tq2_0, 66 },
         // NVFP4: 16-element group, 9 bytes per group
         .{ .nvfp4, (256 / 16) * 9 },
     };
@@ -454,7 +458,7 @@ test "DType enum completeness" {
     // Verify all DType variants are distinct and the enum has the expected count
     const dtype_fields = @typeInfo(DType).@"enum".fields;
     // Count should match all known dtypes
-    try std.testing.expect(dtype_fields.len >= 23); // At least: f32, f16, bf16, q2-q8, iq4s, fp8s, nvfp4, mxfp4, tq1_0, mlx_q, gptq, awq, unknown
+    try std.testing.expect(dtype_fields.len >= 24); // At least: f32, f16, bf16, q2-q8, iq4s, fp8s, nvfp4, mxfp4, tq1_0, tq2_0, mlx_q, gptq, awq, unknown
 }
 
 test "fuzz: all format functions" {

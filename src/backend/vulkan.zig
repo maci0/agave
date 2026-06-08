@@ -543,6 +543,7 @@ const spv_gemv_mxfp4_st = @embedFile("kernels/vulkan/gemv_mxfp4_st.spv");
 const spv_gemv_gptq = @embedFile("kernels/vulkan/gemv_gptq.spv");
 const spv_gemv_awq = @embedFile("kernels/vulkan/gemv_awq.spv");
 const spv_gemv_tq1_0 = @embedFile("kernels/vulkan/gemv_tq1_0.spv");
+const spv_gemv_tq2_0 = @embedFile("kernels/vulkan/gemv_tq2_0.spv");
 
 // DeltaNet SSM
 const spv_deltanet = @embedFile("kernels/vulkan/deltanet_recurrence.spv");
@@ -647,6 +648,7 @@ pub const VulkanBackend = struct {
     pipe_gemv_gptq: PipelineInfo = .{},
     pipe_gemv_awq: PipelineInfo = .{},
     pipe_gemv_tq1_0: PipelineInfo = .{},
+    pipe_gemv_tq2_0: PipelineInfo = .{},
 
     // Attention pipelines
     pipe_sdpa: PipelineInfo = .{},
@@ -1136,6 +1138,8 @@ pub const VulkanBackend = struct {
         self.pipe_gemv_awq = try self.createPipeline(spv_gemv_awq, 5, 12);
         // TQ1_0: 3 bufs (x, w, y), 8 bytes push (n, k)
         self.pipe_gemv_tq1_0 = try self.createPipeline(spv_gemv_tq1_0, 3, 8);
+        // TQ2_0: 3 bufs (x, w, y), 8 bytes push (n, k)
+        self.pipe_gemv_tq2_0 = try self.createPipeline(spv_gemv_tq2_0, 3, 8);
         // SDPA: 4 bufs (Q, K, V, out), 20 bytes push (nh, nkv, hd, sl, scale)
         self.pipe_sdpa = try self.createPipeline(spv_sdpa, 4, 20);
         // SDPA TurboQuant: 4 bufs (Q, K_raw, V_raw, out), 36 bytes push
@@ -1306,6 +1310,7 @@ pub const VulkanBackend = struct {
             &self.pipe_gemv_fp8_e4m3, &self.pipe_gemv_fp8_e5m2,
             &self.pipe_gemv_t_q8_0,
             &self.pipe_gemv_tq1_0,
+            &self.pipe_gemv_tq2_0,
                 // Attention
               &self.pipe_sdpa,
             &self.pipe_sdpa_turbo,
@@ -1626,6 +1631,7 @@ pub const VulkanBackend = struct {
             .fp8_e4m3 => self.pipe_gemv_fp8_e4m3,
             .fp8_e5m2 => self.pipe_gemv_fp8_e5m2,
             .tq1_0 => self.pipe_gemv_tq1_0,
+            .tq2_0 => self.pipe_gemv_tq2_0,
             else => @panic("Vulkan GEMV: unsupported dtype — add a GPU shader"),
         };
 
