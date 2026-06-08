@@ -353,3 +353,43 @@ pub fn blockReduceMax(val: f32) f32 {
 
     return result;
 }
+
+test "fuzz: all cuda common functions" {
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *std.testing.Smith) !void {
+            _ = smith;
+            comptime {
+                _ = &memoryFence;
+                _ = &threadIdx;
+                _ = &blockIdx;
+                _ = &blockDim;
+                _ = &globalIdx;
+                _ = &expf;
+                _ = &rcpf;
+                _ = &rsqrtf;
+                _ = &log2f;
+                _ = &sinf;
+                _ = &cosf;
+                _ = &tanhf;
+                _ = &sigmoidf;
+                _ = &bf16ToF32;
+                _ = &f16tof32;
+                _ = &fp8e4m3ToF32;
+                _ = &fp8e5m2ToF32;
+                _ = &e8m0ToF32;
+                _ = &getScaleMinK4;
+                _ = &sharedBase;
+                _ = &sharedLoad;
+                _ = &sharedStore;
+                _ = &shflDown;
+                _ = &syncthreads;
+                _ = &warpReduceAdd;
+                _ = &warpReduceMax;
+                _ = &blockReduceAdd;
+                _ = &blockReduceMax;
+            }
+        }
+    }.f, .{});
+}
+
+const std = @import("std");

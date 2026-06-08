@@ -300,3 +300,39 @@ pub fn blockReduceMax(val: f32) f32 {
 
     return result;
 }
+
+test "fuzz: all rocm common functions" {
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *std.testing.Smith) !void {
+            _ = smith;
+            comptime {
+                _ = &threadIdx;
+                _ = &blockIdx;
+                _ = &blockDim;
+                _ = &globalIdx;
+                _ = &expf;
+                _ = &rcpf;
+                _ = &rsqrtf;
+                _ = &sinf;
+                _ = &cosf;
+                _ = &tanhf;
+                _ = &sigmoidf;
+                _ = &bf16ToF32;
+                _ = &fp8e4m3ToF32;
+                _ = &fp8e5m2ToF32;
+                _ = &e8m0ToF32;
+                _ = &getScaleMinK4;
+                _ = &sharedLoad;
+                _ = &sharedStore;
+                _ = &syncthreads;
+                _ = &waveReduceAdd;
+                _ = &waveReduceMax;
+                _ = &waveShuffleDown;
+                _ = &blockReduceAdd;
+                _ = &blockReduceMax;
+            }
+        }
+    }.f, .{});
+}
+
+const std = @import("std");
