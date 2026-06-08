@@ -119,7 +119,7 @@ All quantized GEMV formats native on all 6 backends. See [KERNELS.md](KERNELS.md
 | 25 | Inter-model collaboration (MoM) | Mesh-LLM |
 | ~~26~~ | ~~Sparse GEMV (skip near-zero FFN activations, ~40% sparsity measured)~~ | Done (CPU +21%, Metal +12%) |
 | 27 | DeepSeek V4 support (mHC hyper-connections, CSA/HCA attention) | — |
-| 28 | AWQ column-major INT4 GEMV kernel (currently uses GPTQ row-major — wrong packing) | AWQ |
+| ~~28~~ | ~~AWQ column-major INT4 GEMV kernel (currently uses GPTQ row-major — wrong packing)~~ | Done (all 6 backends + nibble order fix) |
 | ~~29~~ | ~~TQ1_0 ternary GEMV kernel (BitNet 1.58-bit, {-1,0,1}, 5 trits/byte)~~ | Done (all 6 backends) |
 | ~~30~~ | ~~TQ2_0 ternary GEMV kernel (2-bit ternary, faster on AVX2)~~ | Done (all 6 backends) |
 | 31 | EXL2 mixed-precision codebook (NVIDIA only) | ExLlama |
