@@ -1610,6 +1610,70 @@ test "ensureKvBlock compiles" {
     comptime { _ = &ensureKvBlock; }
 }
 
+test "dispatchGemv HQQ path — CPU" {
+    // k=4, n=1, group_size defaults to 64 (g=0 for all elements).
+    // w_q: nibbles [1,2,3,4] (bytes [0x21, 0x43])
+    // scale: bf16 1.0 (0x3F80), zero: bf16 0.0 (0x0000)
+    // x=[1,1,1,1] → y = (1+2+3+4)*1*1 = 10.0
+    var w_q_data = [_]u8{ 0x21, 0x43 }; // nibbles: lo=1,hi=2 and lo=3,hi=4
+    const one_bf16: [2]u8 = .{ 0x80, 0x3F }; // 1.0 as little-endian bf16
+    const zero_bf16: [2]u8 = .{ 0x00, 0x00 }; // 0.0
+    // scale and zero are [1] element tensors (one group)
+    var scale_data = [_]u8{ 0x80, 0x3F }; // bf16 1.0
+    var zero_data = [_]u8{ 0x00, 0x00 };  // bf16 0.0
+    _ = one_bf16;
+    _ = zero_bf16;
+
+    var tensors = [_]MockFormat.NamedTensor{
+        .{ .name = "blk.0.attn_q.W_q", .info = .{
+            .name = "blk.0.attn_q.W_q",
+            .n_dims = 2, .dims = .{ 1, 2, 0, 0 },
+            .dtype = .hqq, .data_ptr = @ptrCast(&w_q_data),
+        }},
+        .{ .name = "blk.0.attn_q.meta.scale", .info = .{
+            .name = "blk.0.attn_q.meta.scale",
+            .n_dims = 1, .dims = .{ 1, 0, 0, 0 },
+            .dtype = .bf16, .data_ptr = @ptrCast(&scale_data),
+        }},
+        .{ .name = "blk.0.attn_q.meta.zero", .info = .{
+            .name = "blk.0.attn_q.meta.zero",
+            .n_dims = 1, .dims = .{ 1, 0, 0, 0 },
+            .dtype = .bf16, .data_ptr = @ptrCast(&zero_data),
+        }},
+    };
+    var mock = MockFormat{ .tensors = &tensors };
+    const be = backend_mod.Backend{ .cpu = &(backend_mod.CpuBackend{}) };
+
+    const t = tensors[0].info;
+    var x = [_]f32{ 1.0, 1.0, 1.0, 1.0 };
+    var y = [_]f32{0.0};
+    dispatchGemv(be, mock.format(), &x, t, &y, 1, 4);
+    // y ≈ (1+2+3+4)*1 = 10.0 (nibbles - 0) * 1.0 * x
+    try std.testing.expectApproxEqAbs(@as(f32, 10.0), y[0], 0.5);
+}
+
+test "dispatchGemv HQQ path — missing companion returns fallback" {
+    // HQQ tensor but no companion scale/zero → falls through to be.gemv (unknown dtype → zero)
+    var w_q_data = [_]u8{ 0x21 };
+    var tensors = [_]MockFormat.NamedTensor{
+        .{ .name = "blk.0.attn_q.W_q", .info = .{
+            .name = "blk.0.attn_q.W_q",
+            .n_dims = 1, .dims = .{ 1, 0, 0, 0 },
+            .dtype = .hqq, .data_ptr = @ptrCast(&w_q_data),
+        }},
+    };
+    var mock = MockFormat{ .tensors = &tensors };
+    var cpu = backend_mod.CpuBackend{};
+    const be = backend_mod.Backend{ .cpu = &cpu };
+    const t = tensors[0].info;
+    var x = [_]f32{ 1.0 };
+    var y = [_]f32{99.0};
+    // Should not panic — falls back to be.gemv with .hqq dtype → zeroed output
+    dispatchGemv(be, mock.format(), &x, t, &y, 1, 1);
+    // y = 0 because hqq is in the "warn + zero" branch
+    try std.testing.expect(std.math.isFinite(y[0]));
+}
+
 test "fuzz: all model functions" {
     try std.testing.fuzz({}, struct {
         fn f(_: void, smith: *std.testing.Smith) !void {

@@ -3034,6 +3034,7 @@ test "fuzz: all safetensors functions" {
                 .repacked_f32 = repacked_f32,
                 .shard_data = &shard_info,
                 .is_awq = smith.valueWithHash(bool, 3),
+                .is_hqq = smith.valueWithHash(bool, 4),
                 .config_meta = config_meta,
                 .vocab = null,
                 .merges = null,
