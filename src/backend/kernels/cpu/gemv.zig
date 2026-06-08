@@ -106,7 +106,7 @@ pub fn gemvSeq(x: [*]const f32, w_data: [*]const u8, dtype: DType, y: [*]f32, n:
         .nvfp4 => gemvNVFP4(x, w_data, y, n, k),
         .tq1_0 => gemv_tq1_0.gemvTQ1_0(x, w_data, y, n, k),
         .tq2_0 => gemv_tq2_0.gemvTQ2_0(x, w_data, y, n, k),
-        .mlx_q, .gptq, .awq, .unknown => {
+        .mlx_q, .gptq, .awq, .hqq, .unknown => {
             std.log.warn("GEMV: unsupported dtype {s}, output zeroed", .{@tagName(dtype)});
             @memset(y[0..n], 0);
         },

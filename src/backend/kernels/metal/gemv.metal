@@ -1868,6 +1868,57 @@ kernel void gemv_tq1_0(
     if (tid == 0) y[row] = sum;
 }
 
+// ── TQ2_0 GEMV (ternary 2-bit) ──────────────────────────────────
+// 256 elements per block, 66 bytes: f16 scale at bytes 0-1, qs[64] at bytes 2-65.
+// Each byte packs 4 values: bits[1:0]=val0, bits[3:2]=val1, bits[5:4]=val2, bits[7:6]=val3.
+// Values: 0→-1, 1→0, 2→+1. Dequant formula: (q - 1) * scale.
+
+kernel void gemv_tq2_0(
+    device const float* x [[buffer(0)]],
+    device const uchar* W [[buffer(1)]],
+    device float* y       [[buffer(2)]],
+    constant uint& n      [[buffer(3)]],
+    constant uint& k      [[buffer(4)]],
+    uint tgid     [[threadgroup_position_in_grid]],
+    uint tid      [[thread_index_in_threadgroup]],
+    uint tg_size  [[threads_per_threadgroup]])
+{
+    uint row = tgid;
+    if (row >= n) return;
+
+    const uint bpb = 66;  // bytes per block (2 bytes f16 scale + 64 bytes packed quads)
+    const uint bs  = 256; // elements per block
+    uint nb = (k + bs - 1) / bs;
+    uint row_bytes = nb * bpb;
+
+    float sum = 0.0f;
+
+    for (uint b = tid; b < nb; b += tg_size) {
+        uint bk = b * bs;
+        device const uchar* bp = W + row * row_bytes + b * bpb;
+        float scale = float(as_type<half>(ushort(bp[0] | (uint(bp[1]) << 8))));
+        device const uchar* qs = bp + 2;
+
+        // Each of the 64 bytes holds 4 values (2 bits each, 256 elements total).
+        for (uint bi = 0; bi < 64; bi++) {
+            uchar byte = qs[bi];
+            uint elem_base = bk + bi * 4;
+            for (uint slot = 0; slot < 4; slot++) {
+                uint ki = elem_base + slot;
+                if (ki >= k) break;
+                float xv = x[ki];
+                if (xv < 0.005f && xv > -0.005f) continue;
+                int q = int((byte >> (slot * 2)) & 3u);
+                sum += float(q - 1) * scale * xv;
+            }
+        }
+    }
+
+    threadgroup float shmem[8];
+    sum = threadgroup_reduce_sum(sum, shmem, tid, tg_size);
+    if (tid == 0) y[row] = sum;
+}
+
 // ── AWQ INT4 GEMV ───────────────────────────────────────────────
 // AWQ format: column-major packed, 8 INT4 nibbles per u32.
 // qweight[k, n/8] column-major, scales[k/group_size, n] f16 (natural order),
