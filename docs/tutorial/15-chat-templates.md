@@ -36,7 +36,7 @@ flowchart LR
         TokLookup --> EOGIDs["EOG token IDs\n[151643, 151645]"]
         EOGIDs --> GenLoop["Generation loop\n(stop check)"]
     end
-
+```
 
 **Bad pattern** (don't do this):
 
@@ -136,7 +136,7 @@ flowchart TD
     style UserPre fill:#1a3a5c,color:#fff,stroke:#2a5a8c
     style AsstPre fill:#1a3a5c,color:#fff,stroke:#2a5a8c
     style GenPfx fill:#4a3500,color:#fff,stroke:#7a5a00
-
+```
 
 ### Single-Turn Prompt
 
@@ -233,7 +233,7 @@ flowchart LR
         P3["&lt;|end|&gt;&lt;|start|&gt;assistant{response}&lt;|end|&gt;"]
         P1 --> P2 --> P3
     end
-
+```
 
 ### Gemma 3
 
@@ -331,6 +331,70 @@ pub const chatml = ChatTemplate{
 
 ## Template Selection
 
+The `Arch` enum acts as the single dispatch point: every model architecture maps to exactly one `ChatTemplate` constant, and that constant flows through formatting into EOG resolution and finally the generation loop.
+
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#e8f0fe',
+  'primaryTextColor': '#1a1a2e',
+  'primaryBorderColor': '#4a6cf7',
+  'lineColor': '#4a6cf7',
+  'secondaryColor': '#f0f4ff',
+  'tertiaryColor': '#f8f9ff',
+  'edgeLabelBackground': '#ffffff',
+  'clusterBkg': '#f0f4ff',
+  'clusterBorder': '#4a6cf7',
+  'titleColor': '#1a1a2e',
+  'nodeTextColor': '#1a1a2e',
+  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
+}}}%%
+flowchart LR
+    subgraph Archs["Arch enum variants (arch.zig)"]
+        direction TB
+        A1["gemma3"]
+        A2["gemma4"]
+        A3["qwen35"]
+        A4["gpt_oss"]
+        A5["glm4"]
+        A6["llama4"]
+        A7["nemotron_h\nnemotron_nano\n(else branch)"]
+    end
+
+    subgraph Templates["ChatTemplate constants (chat_template.zig)"]
+        direction TB
+        T1["ChatTemplate.gemma\n&lt;start_of_turn&gt; style"]
+        T2["ChatTemplate.gemma4\n&lt;|turn&gt; + channel style"]
+        T3["ChatTemplate.qwen35\nChatML + generation_prefix"]
+        T4["ChatTemplate.gpt_oss\n&lt;|start|&gt; + developer role"]
+        T5["ChatTemplate.glm4\n[gMASK]&lt;sop&gt; style"]
+        T6["ChatTemplate.llama4\n&lt;|header_id|&gt; style"]
+        T7["ChatTemplate.chatml\nstandard ChatML"]
+    end
+
+    subgraph Downstream["Runtime usage (main.zig)"]
+        direction TB
+        Format["template.format()\nor formatConversation()\n-> rendered prompt string"]
+        EOGRes["EOG token resolution\nfor each eog_tokens name:\n  tokenizer.special_tokens.get(name)\n  -> resolved ID set"]
+        GenLoop["generation loop\n  if token_id in eog_ids:\n    stop"]
+
+        Format --> EOGRes --> GenLoop
+    end
+
+    A1 -->|chatTemplate()| T1
+    A2 -->|chatTemplate()| T2
+    A3 -->|chatTemplate()| T3
+    A4 -->|chatTemplate()| T4
+    A5 -->|chatTemplate()| T5
+    A6 -->|chatTemplate()| T6
+    A7 -->|chatTemplate()| T7
+
+    T1 & T2 & T3 & T4 & T5 & T6 & T7 --> Format
+
+    style GenLoop fill:#2d5a27,color:#fff,stroke:#4a9e40
+    style T4 fill:#4a3500,color:#fff,stroke:#7a5a00
+    style T5 fill:#1a3a5c,color:#fff,stroke:#2a5a8c
+```
+
 **Architecture determines template** (from `src/arch.zig`):
 
 ```zig
@@ -406,7 +470,7 @@ flowchart LR
 
     style Stop fill:#5c1a1a,color:#fff,stroke:#8c2a2a
     style EOGSet fill:#1a3a5c,color:#fff,stroke:#2a5a8c
-
+```
 
 ### Template Definition
 
@@ -527,6 +591,82 @@ pub fn format(
         .{ .role = .user, .content = user_msg },
     });
 }
+```
+
+### formatConversation() Control Flow
+
+The function has three branching paths for system messages and a special branch for tool-role messages:
+
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#e8f0fe',
+  'primaryTextColor': '#1a1a2e',
+  'primaryBorderColor': '#4a6cf7',
+  'lineColor': '#4a6cf7',
+  'secondaryColor': '#f0f4ff',
+  'tertiaryColor': '#f8f9ff',
+  'edgeLabelBackground': '#ffffff',
+  'clusterBkg': '#f0f4ff',
+  'clusterBorder': '#4a6cf7',
+  'titleColor': '#1a1a2e',
+  'nodeTextColor': '#1a1a2e',
+  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
+}}}%%
+flowchart TD
+    Start(["formatConversation()"])
+
+    subgraph SystemBlock["Step 1: system message handling"]
+        direction TB
+        HasDefault{"default_system\nset?"}
+        EmitDefault["emit system_prefix\n+ default_system\n+ system_suffix"]
+        HasUserSys{"system_msg\nprovided?"}
+        HasOverride{"system_role_override\nset?"}
+        EmitOverride["emit override.prefix\n+ system_msg\n+ override.suffix"]
+        HasNoDefault{"default_system\nnot set?"}
+        EmitPlain["emit system_prefix\n+ system_msg\n+ system_suffix"]
+        SkipSys["skip system"]
+
+        HasDefault -->|yes| EmitDefault
+        HasDefault -->|no| HasUserSys
+        EmitDefault --> HasUserSys
+        HasUserSys -->|yes| HasOverride
+        HasUserSys -->|no| SkipSys
+        HasOverride -->|yes| EmitOverride
+        HasOverride -->|no| HasNoDefault
+        HasNoDefault -->|yes| EmitPlain
+        HasNoDefault -->|no| SkipSys
+    end
+
+    subgraph MsgLoop["Step 2: conversation messages (iterate)"]
+        direction TB
+        RoleCheck{"msg.role?"}
+        EmitUser["emit user_prefix\n+ content\n+ user_suffix"]
+        EmitAsst["emit assistant_prefix\n+ content\n+ assistant_suffix"]
+        IsChatML{"is_chatml?"}
+        EmitToolChatML["emit &lt;|im_start|&gt;tool\n+ tool_call_id\n+ content\n+ &lt;|im_end|&gt;"]
+        EmitToolFallback["emit user_prefix\n+ '[Tool Result] '\n+ content\n+ user_suffix"]
+
+        RoleCheck -->|user| EmitUser
+        RoleCheck -->|assistant| EmitAsst
+        RoleCheck -->|tool| IsChatML
+        IsChatML -->|yes| EmitToolChatML
+        IsChatML -->|no| EmitToolFallback
+    end
+
+    subgraph GenStep["Step 3: open final assistant turn"]
+        EmitAsstPrefix["emit assistant_prefix\n+ generation_prefix"]
+    end
+
+    Start --> SystemBlock
+    SystemBlock --> MsgLoop
+    MsgLoop --> GenStep
+    GenStep --> Done(["return rendered prompt"])
+
+    style Done fill:#2d5a27,color:#fff,stroke:#4a9e40
+    style Start fill:#1a3a5c,color:#fff,stroke:#2a5a8c
+    style EmitDefault fill:#4a3500,color:#fff,stroke:#7a5a00
+    style EmitOverride fill:#4a3500,color:#fff,stroke:#7a5a00
+    style EmitPlain fill:#4a3500,color:#fff,stroke:#7a5a00
 ```
 
 ### Multi-Turn Format Function
@@ -667,6 +807,77 @@ Used by: Nemotron-H, Nemotron-Nano (Qwen3.5 uses a variant with `generation_pref
 ## Image Token Injection (Multimodal)
 
 When an image is attached to a prompt, the tokenized text needs image placeholder tokens spliced in at the right position. The chat template system handles this through two functions: `findImageInsertPos()` and `injectImageTokens()`.
+
+The pipeline spans three functions across two files: `findImageInsertPos()` and `injectImageTokens()` in `chat_template.zig`, and the embedding replacement in the model's `forward()`.
+
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#e8f0fe',
+  'primaryTextColor': '#1a1a2e',
+  'primaryBorderColor': '#4a6cf7',
+  'lineColor': '#4a6cf7',
+  'secondaryColor': '#f0f4ff',
+  'tertiaryColor': '#f8f9ff',
+  'edgeLabelBackground': '#ffffff',
+  'clusterBkg': '#f0f4ff',
+  'clusterBorder': '#4a6cf7',
+  'titleColor': '#1a1a2e',
+  'nodeTextColor': '#1a1a2e',
+  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
+}}}%%
+flowchart TD
+    subgraph Phase1["Phase 1: find insertion point (chat_template.zig)"]
+        direction TB
+        TokenArr["token array\n[sys_tok..., user_prefix_toks..., text_toks...]"]
+        Scan["findImageInsertPos()\nscan for last occurrence\nof user_prefix token sequence"]
+        InsertPos["insertion position\n(index after last prefix match)"]
+
+        TokenArr --> Scan --> InsertPos
+    end
+
+    subgraph Phase2["Phase 2: splice image tokens (chat_template.zig)"]
+        direction TB
+        DistinctStart{"start != pad?"}
+        EmitStart["prepend start token\n(e.g. &lt;|vision_start|&gt;)"]
+        EmitPads["emit pad token x N\n(N = n_visual_tokens\nfrom vision encoder)"]
+        DistinctEnd{"end != pad?"}
+        EmitEnd["append end token\n(e.g. &lt;|vision_end|&gt;)"]
+        SplicedArr["spliced token array\n[..., start?, pad*N, end?, ...]"]
+
+        DistinctStart -->|yes| EmitStart
+        DistinctStart -->|no| EmitPads
+        EmitStart --> EmitPads
+        EmitPads --> DistinctEnd
+        DistinctEnd -->|yes| EmitEnd
+        DistinctEnd -->|no| SplicedArr
+        EmitEnd --> SplicedArr
+    end
+
+    subgraph Phase3["Phase 3: embedding replacement (model forward())"]
+        direction TB
+        TokenLoop["iterate tokens in forward()"]
+        IsPad{"token_id ==\nimage_pad_id?"}
+        NormalEmb["embLookup(token_id)\nnormal text embedding"]
+        VisEmb["copy visual_embeddings[visual_token_idx]\nadvance visual_token_idx"]
+        NextTok["next token"]
+
+        TokenLoop --> IsPad
+        IsPad -->|no| NormalEmb
+        IsPad -->|yes| VisEmb
+        NormalEmb --> NextTok
+        VisEmb --> NextTok
+        NextTok --> TokenLoop
+    end
+
+    InsertPos --> Phase2
+    SplicedArr --> Phase3
+
+    style Phase1 fill:#f0f4ff,stroke:#4a6cf7
+    style Phase2 fill:#f0f4ff,stroke:#4a6cf7
+    style Phase3 fill:#f0f4ff,stroke:#4a6cf7
+    style VisEmb fill:#1a3a5c,color:#fff,stroke:#2a5a8c
+    style SplicedArr fill:#2d5a27,color:#fff,stroke:#4a9e40
+```
 
 ### Finding the Insertion Point
 

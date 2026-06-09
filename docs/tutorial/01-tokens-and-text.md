@@ -37,7 +37,7 @@ flowchart LR
         IDs
         Embed
     end
-
+```
 
 ```
 "Hello, world!" → [15496, 11, 995, 0]     (encode)
@@ -70,7 +70,7 @@ flowchart TD
 
     style Start fill:#f5f5f5
     style Done fill:#d4edda
-
+```
 
 1. Start with individual bytes: `H e l l o`
 2. Most frequent pair is `l l` → merge to `ll`: `H e ll o`
@@ -95,6 +95,49 @@ The **vocabulary size** (vocab_size) is the total number of distinct tokens. Mod
 |----------|-----------|--------|-------------|
 | **BPE** | Iterative pair merging | Qwen, GPT | Required — learned merge priority list |
 | **SPM** | Greedy longest-match | Gemma | Not needed — matches vocabulary entries directly |
+
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#e8f0fe',
+  'primaryTextColor': '#1a1a2e',
+  'primaryBorderColor': '#4a6cf7',
+  'lineColor': '#4a6cf7',
+  'secondaryColor': '#f0f4ff',
+  'tertiaryColor': '#f8f9ff',
+  'edgeLabelBackground': '#ffffff',
+  'clusterBkg': '#f0f4ff',
+  'clusterBorder': '#4a6cf7',
+  'titleColor': '#1a1a2e',
+  'nodeTextColor': '#1a1a2e',
+  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
+}}}%%
+flowchart TB
+    Input["Input text\n\"unhappiness\""]
+
+    subgraph BPE["BPE — Byte Pair Encoding (Qwen, GPT)"]
+        direction TB
+        B1["Start: u·n·h·a·p·p·i·n·e·s·s\n(individual bytes)"]
+        B2["Apply merge table\n(learned during training)"]
+        B3["un · hap · pi · ness\n(pairs merged by frequency rank)"]
+        B4["Token IDs\nfrom merge result"]
+        B1 --> B2 --> B3 --> B4
+    end
+
+    subgraph SPM["SPM — SentencePiece (Gemma)"]
+        direction TB
+        S1["Start: full string\n\"unhappiness\""]
+        S2["Greedy longest match\nagainst vocabulary"]
+        S3["▁un · happiness\n(longest vocab entries win)"]
+        S4["Token IDs\nfrom matched entries"]
+        S1 --> S2 --> S3 --> S4
+    end
+
+    Input --> BPE
+    Input --> SPM
+
+    BPE -->|"needs merge table"| Out["Token ID sequence"]
+    SPM -->|"vocab entries only"| Out
+```
 
 Agave's tokenizer (`src/tokenizer/bpe.zig`) supports both:
 - **BPE mode** — uses merge rules to decide which byte pairs to combine first
@@ -154,7 +197,7 @@ flowchart LR
     subgraph "Why byte-level?"
         NeverUnk["No unknown characters\nevery byte 0x00–0xFF is covered"]
     end
-
+```
 
 - Every text can be tokenized (no unknown characters)
 - Token text looks odd in raw form: `"Ġhello"` = `" hello"` (space prefix)
@@ -191,7 +234,7 @@ flowchart LR
     style Lookup fill:#fff3cd
     style Vec fill:#d4edda
     style Logits fill:#d1ecf1
-
+```
 
 **Note on terminology:** Machine learning uses the term **tensor** for multi-dimensional arrays — a **scalar** (single number, 0D), vector (1D), matrix (2D), or higher-dimensional array (3D, 4D, etc.) are all tensors. Throughout this tutorial we use the more specific terms (scalar/vector/matrix) since nearly all operations are 0D, 1D, or 2D, but you'll see "tensor" in the code and documentation referring to these same arrays.
 
@@ -211,6 +254,45 @@ This is the **largest single GEMV** (matrix-vector multiply — multiplying a we
 
 After projection, **argmax** (the operation that finds the index of the maximum value) over the logits gives the predicted next token ID.
 
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#e8f0fe',
+  'primaryTextColor': '#1a1a2e',
+  'primaryBorderColor': '#4a6cf7',
+  'lineColor': '#4a6cf7',
+  'secondaryColor': '#f0f4ff',
+  'tertiaryColor': '#f8f9ff',
+  'edgeLabelBackground': '#ffffff',
+  'clusterBkg': '#f0f4ff',
+  'clusterBorder': '#4a6cf7',
+  'titleColor': '#1a1a2e',
+  'nodeTextColor': '#1a1a2e',
+  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
+}}}%%
+flowchart LR
+    Hidden["Final Hidden State\n[n_embd floats]\ne.g. 4096-dim"] -->|"GEMV — largest op\nin the entire model"| Proj
+
+    subgraph Proj["Output Projection  W_output @ hidden"]
+        direction TB
+        Wout["W_output matrix\n[vocab_size × n_embd]\ne.g. 128K × 4096 = 512M weights"]
+        Wout -->|"one dot-product\nper vocabulary entry"| Raw["Raw logit scores\n[vocab_size floats]"]
+    end
+
+    Raw -->|"argmax"| Best["Predicted token ID\n(highest score wins)"]
+    Best --> Decode["Decode to text\n\"Paris\""]
+
+    subgraph TiedEmbed["Tied Embeddings (Gemma3)"]
+        direction LR
+        Shared["Single weight matrix\n[vocab_size × n_embd]\nshared by input + output"]
+        Saving["Memory saved:\nvocab_size × n_embd × dtype_bytes\n128K × 4096 × 2 bytes = 1 GB"]
+        Shared --- Saving
+    end
+
+    style Wout fill:#fff3cd
+    style Best fill:#d4edda
+    style Shared fill:#e8f5e9
+```
+
 ## The Generation Loop
 
 Text generation is **autoregressive** — each generated token becomes the input for the next step:
@@ -225,6 +307,51 @@ while not done:
     if next_token == EOS: break       // stop at end-of-sequence
     print(decode(next_token))         // output: " Paris"
     logits = forward(next_token)      // feed output back as input
+```
+
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#e8f0fe',
+  'primaryTextColor': '#1a1a2e',
+  'primaryBorderColor': '#4a6cf7',
+  'lineColor': '#4a6cf7',
+  'secondaryColor': '#f0f4ff',
+  'tertiaryColor': '#f8f9ff',
+  'edgeLabelBackground': '#ffffff',
+  'clusterBkg': '#f0f4ff',
+  'clusterBorder': '#4a6cf7',
+  'titleColor': '#1a1a2e',
+  'nodeTextColor': '#1a1a2e',
+  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
+}}}%%
+flowchart TB
+    Prompt["Prompt tokens\n\"The capital of France is\"\n[464, 3361, 286, 4881, 318]"]
+
+    subgraph Prefill["Prefill phase — process prompt"]
+        direction LR
+        P1["token 464\n'The'"] --> Fwd1["forward()"]
+        P2["token 3361\n'capital'"] --> Fwd2["forward()"]
+        P3["..."] --> FwdN["forward()"]
+        Fwd1 -->|"KV cache\nbuilt up"| Fwd2
+        Fwd2 -->|"KV cache\nbuilt up"| FwdN
+    end
+
+    subgraph Decode["Decode phase — autoregressive loop"]
+        direction TB
+        ArgMax["argmax(logits)\npick best token"] -->|"e.g. token 6342\n' Paris'"| Print["Output token\nto terminal"]
+        Print --> Check{{"next == EOS?\nor max_tokens?"}}
+        Check -->|"no — keep going"| EmbNew["embed new token\nfeed back as input"]
+        EmbNew --> ForwardNew["forward()\none more pass\nthrough the model"]
+        ForwardNew --> ArgMax
+        Check -->|"yes — stop"| Done["Generation complete"]
+    end
+
+    Prompt --> Prefill
+    Prefill -->|"final logits"| Decode
+
+    style Prompt fill:#f0f4ff
+    style Done fill:#d4edda
+    style Check fill:#fff3cd
 ```
 
 This is why inference speed matters — generating 100 tokens requires 100 sequential forward passes through the entire model. Each pass is dominated by GEMV (matrix-vector multiply), which is memory-bandwidth bound. The rest of this tutorial series explains every component of that forward pass and how Agave optimizes it.

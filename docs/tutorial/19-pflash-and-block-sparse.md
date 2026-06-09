@@ -37,7 +37,7 @@ Agave's `sparse_attn.zig` implements BigBird-style block sparsity with two compo
   'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
 }}}%%
 flowchart TD
-    Q["Query Block (any position)"] --> G["Global Blocks\n(first G blocks)"]
+    Q["Query Block\n(any position)"] --> G["Global Blocks\n(first G blocks)"]
     Q --> W["Window Blocks\n(±W blocks, causal-bounded)"]
     Q --> S["All Other Blocks\n(skipped)"]
 
@@ -61,28 +61,92 @@ flowchart TD
     style Always fill:#d4edda,stroke:#28a745
     style Local fill:#cce5ff,stroke:#004085
     style Masked fill:#f8d7da,stroke:#721c24
-
+```
 
 **Global blocks** -- the first G blocks attend to and are attended by every block. These typically cover BOS, the system prompt, and the task prefix: tokens the model always needs to see regardless of which part of the context it's drawing from.
 
 **Sliding window** -- each block attends ±W blocks in each direction, bounded by the causal mask, preserving local context for sequential reasoning.
 
-```
-Block size = 64 tokens. G = 2 global blocks, W = 2 window.
+### Block Attention Matrix Layout
 
-Blocks:   [0] [1] [2] [3] [4] [5] [6] [7]
-Query 0:  G   .   .   .   .   .   .   .    G = global block (always attended)
-Query 1:  G   G   .   .   .   .   .   .    W = within ±W sliding window
-Query 2:  G   G   W   .   .   .   .   .    . = masked (dot product skipped)
-Query 3:  G   G   W   W   .   .   .   .
-Query 4:  G   G   W   W   W   .   .   .
-Query 5:  G   G   .   W   W   W   .   .
-Query 6:  G   G   .   .   W   W   W   .
-Query 7:  G   G   .   .   .   W   W   W
+The diagram below shows which query blocks (rows) attend which KV blocks (columns) for an 8-block sequence with G=2 global blocks and W=2 window blocks. G = attended as global, W = within sliding window, dot = masked out.
 
-Attended fraction: ~83% for this 8-block example (small n amplifies global).
-At 2048 blocks (128K tokens), attended fraction ~3-5%.
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#e8f0fe',
+  'primaryTextColor': '#1a1a2e',
+  'primaryBorderColor': '#4a6cf7',
+  'lineColor': '#4a6cf7',
+  'secondaryColor': '#f0f4ff',
+  'tertiaryColor': '#f8f9ff',
+  'edgeLabelBackground': '#ffffff',
+  'clusterBkg': '#f0f4ff',
+  'clusterBorder': '#4a6cf7',
+  'titleColor': '#1a1a2e',
+  'nodeTextColor': '#1a1a2e',
+  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
+}}}%%
+flowchart LR
+    subgraph KV["KV blocks (columns)"]
+        direction LR
+        K0["KV 0\n(global)"]
+        K1["KV 1\n(global)"]
+        K2["KV 2"]
+        K3["KV 3"]
+        K4["KV 4"]
+        K5["KV 5"]
+        K6["KV 6"]
+        K7["KV 7"]
+    end
+
+    subgraph Q0["Query 0"]
+        Q0n["Q0: attends G0, G1"]
+    end
+    subgraph Q3["Query 3"]
+        Q3n["Q3: attends G0, G1, W1, W2, W3"]
+    end
+    subgraph Q5["Query 5"]
+        Q5n["Q5: attends G0, G1, W3, W4, W5"]
+    end
+    subgraph Q7["Query 7"]
+        Q7n["Q7: attends G0, G1, W5, W6, W7"]
+    end
+
+    Q0n -->|"G"| K0
+    Q0n -->|"G"| K1
+    Q3n -->|"G"| K0
+    Q3n -->|"G"| K1
+    Q3n -->|"W"| K2
+    Q3n -->|"W"| K3
+    Q5n -->|"G"| K0
+    Q5n -->|"G"| K1
+    Q5n -->|"W"| K3
+    Q5n -->|"W"| K4
+    Q5n -->|"W"| K5
+    Q7n -->|"G"| K0
+    Q7n -->|"G"| K1
+    Q7n -->|"W"| K5
+    Q7n -->|"W"| K6
+    Q7n -->|"W"| K7
+
+    subgraph Legend["Legend"]
+        LG["G = global (always)"]
+        LW["W = window (local)"]
+        LD["unmarked = masked, skipped"]
+    end
+
+    style K0 fill:#d4edda,stroke:#28a745
+    style K1 fill:#d4edda,stroke:#28a745
+    style K2 fill:#cce5ff,stroke:#004085
+    style K3 fill:#cce5ff,stroke:#004085
+    style K4 fill:#cce5ff,stroke:#004085
+    style K5 fill:#cce5ff,stroke:#004085
+    style K6 fill:#cce5ff,stroke:#004085
+    style K7 fill:#cce5ff,stroke:#004085
+    style Legend fill:#f8f9ff,stroke:#4a6cf7
 ```
+
+At 2048 blocks (128K tokens) with G=2 and W=2, the attended fraction drops to ~3-5%. The reduction scales with sequence length: a 200x reduction at 128K tokens.
 
 Each query block always computes scores for:
 - All G global blocks (two in this example)
@@ -173,7 +237,7 @@ flowchart LR
         Tokens["Output Tokens"]
         DDTree --> Tokens
     end
-
+```
 
 **Step 1: Score.** Run the scorer model over the full prompt with block sparse attention. In the current implementation, each block is scored by its position in the sequence (recency heuristic). A KV-dot-product scorer (scoreFromLastQ) is defined but not yet integrated into the main prefill pipeline.
 
@@ -233,7 +297,7 @@ flowchart TD
 
     style Keep fill:#d4edda,stroke:#28a745
     style Drop fill:#f8d7da,stroke:#721c24
-
+```
 
 Compare two prompts with alpha=0.85:
 
@@ -358,7 +422,7 @@ sequenceDiagram
         Target->>Target: Verify batch in 1 pass (~65ms)
         Target-->>User: Accept ~3 tokens on average
     end
-
+```
 
 Together they address the full latency profile:
 
@@ -391,14 +455,115 @@ Effective decode: ~35 tok/s (same as without PFlash -- TTFT improved, not tok/s)
 ```
 
 PFlash cuts TTFT; DDTree cuts generation latency. For a 128K-token prompt generating 500 tokens:
-- Without either: 6000ms TTFT + 33000ms decode = 39 seconds total
-- With PFlash only: 700ms TTFT + 33000ms decode = 34 seconds total
-- With DDTree only: 6000ms TTFT + 14000ms decode = 20 seconds total
-- With both: 700ms TTFT + 14000ms decode = 15 seconds total
+
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#e8f0fe',
+  'primaryTextColor': '#1a1a2e',
+  'primaryBorderColor': '#4a6cf7',
+  'lineColor': '#4a6cf7',
+  'secondaryColor': '#f0f4ff',
+  'tertiaryColor': '#f8f9ff',
+  'edgeLabelBackground': '#ffffff',
+  'clusterBkg': '#f0f4ff',
+  'clusterBorder': '#4a6cf7',
+  'titleColor': '#1a1a2e',
+  'nodeTextColor': '#1a1a2e',
+  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
+}}}%%
+flowchart LR
+    subgraph Baseline["No features\n39s total"]
+        B_TTFT["TTFT: 6000ms\n(full 128K prefill)"]
+        B_DEC["Decode: 33000ms\n(500 tokens, 1 per step)"]
+        B_TTFT --> B_DEC
+    end
+
+    subgraph PFlashOnly["PFlash only\n34s total"]
+        P_TTFT["TTFT: 700ms\n(8K compressed prefill)"]
+        P_DEC["Decode: 33000ms\n(500 tokens, 1 per step)"]
+        P_TTFT --> P_DEC
+    end
+
+    subgraph DDTreeOnly["DDTree only\n20s total"]
+        D_TTFT["TTFT: 6000ms\n(full 128K prefill)"]
+        D_DEC["Decode: 14000ms\n(~3 tokens accepted/step)"]
+        D_TTFT --> D_DEC
+    end
+
+    subgraph Both["PFlash + DDTree\n15s total"]
+        C_TTFT["TTFT: 700ms\n(8K compressed prefill)"]
+        C_DEC["Decode: 14000ms\n(~3 tokens accepted/step)"]
+        C_TTFT --> C_DEC
+    end
+
+    style B_TTFT fill:#f8d7da,stroke:#721c24
+    style B_DEC fill:#f8d7da,stroke:#721c24
+    style P_TTFT fill:#d4edda,stroke:#28a745
+    style P_DEC fill:#f8d7da,stroke:#721c24
+    style D_TTFT fill:#f8d7da,stroke:#721c24
+    style D_DEC fill:#d4edda,stroke:#28a745
+    style C_TTFT fill:#d4edda,stroke:#28a745
+    style C_DEC fill:#d4edda,stroke:#28a745
+    style Both fill:#e8f0fe,stroke:#4a6cf7
+```
+
+The gains multiply because they target different bottlenecks: PFlash owns TTFT, DDTree owns decode throughput.
 
 ### Block Size Tuning
 
 `--pflash-block-size` controls the granularity of block selection.
+
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#e8f0fe',
+  'primaryTextColor': '#1a1a2e',
+  'primaryBorderColor': '#4a6cf7',
+  'lineColor': '#4a6cf7',
+  'secondaryColor': '#f0f4ff',
+  'tertiaryColor': '#f8f9ff',
+  'edgeLabelBackground': '#ffffff',
+  'clusterBkg': '#f0f4ff',
+  'clusterBorder': '#4a6cf7',
+  'titleColor': '#1a1a2e',
+  'nodeTextColor': '#1a1a2e',
+  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
+}}}%%
+flowchart TD
+    subgraph Fine["Fine blocks (16-32 tokens)\nBlock size = 16 tokens"]
+        direction LR
+        FA["tok 0-15\nKEPT"]
+        FB["tok 16-31\ndropped"]
+        FC["tok 32-47\nKEPT"]
+        FD["tok 48-63\ndropped"]
+        FE["tok 64-79\nKEPT"]
+        FF["tok 80-95\ndropped"]
+        FG["tok 96-111\nKEPT"]
+        FH["tok 112-127\ndropped"]
+    end
+
+    subgraph Coarse["Coarse blocks (64-128 tokens)\nBlock size = 64 tokens"]
+        direction LR
+        CA["tok 0-63\nKEPT (contains important lines)"]
+        CB["tok 64-127\ndropped (all or nothing)"]
+    end
+
+    subgraph Tradeoff["Tradeoff"]
+        T1["Fine: precise selection\nmore overhead per span\nbetter for code/JSON/tables"]
+        T2["Coarse: fast scoring\nfewer discontinuous spans\nbetter for long-form text"]
+    end
+
+    style FA fill:#d4edda,stroke:#28a745
+    style FC fill:#d4edda,stroke:#28a745
+    style FE fill:#d4edda,stroke:#28a745
+    style FG fill:#d4edda,stroke:#28a745
+    style FB fill:#f8d7da,stroke:#721c24
+    style FD fill:#f8d7da,stroke:#721c24
+    style FF fill:#f8d7da,stroke:#721c24
+    style FH fill:#f8d7da,stroke:#721c24
+    style CA fill:#d4edda,stroke:#28a745
+    style CB fill:#f8d7da,stroke:#721c24
+    style Tradeoff fill:#f8f9ff,stroke:#4a6cf7
+```
 
 Smaller blocks (16-32 tokens):
 - Finer selection: can keep a single important sentence while discarding surrounding text

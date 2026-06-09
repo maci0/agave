@@ -297,6 +297,66 @@ else
 
 Shader source code can be embedded directly into the binary at compile time.
 
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#e8f0fe',
+  'primaryTextColor': '#1a1a2e',
+  'primaryBorderColor': '#4a6cf7',
+  'lineColor': '#4a6cf7',
+  'secondaryColor': '#f0f4ff',
+  'tertiaryColor': '#f8f9ff',
+  'edgeLabelBackground': '#ffffff',
+  'clusterBkg': '#f0f4ff',
+  'clusterBorder': '#4a6cf7',
+  'titleColor': '#1a1a2e',
+  'nodeTextColor': '#1a1a2e',
+  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
+}}}%%
+flowchart LR
+    MSL1["common.metal\n(MSL source)"]
+    MSL2["elementwise.metal\n(MSL source)"]
+    MSL3["gemv.metal\n(MSL source)"]
+    MSLN["... (5 more .metal files)"]
+    SPV["gemv.spv\n(SPIR-V binary)"]
+
+    MSL1 --> EF["@embedFile\n(compile step)"]
+    MSL2 --> EF
+    MSL3 --> EF
+    MSLN --> EF
+    SPV  --> EF2["@embedFile\n(compile step)"]
+
+    EF  --> Concat["++ concatenation\n(zero-cost, compile time)"]
+    Concat --> ROData[".rodata section\nin binary\n([]const u8 pointer)"]
+    EF2 --> ROData2[".rodata section\nin binary\n([]const u8 pointer)"]
+
+    ROData  --> Init["MetalBackend.init()\nnewLibraryWithSource(src)\n(driver compiles to GPU bytecode)"]
+    ROData2 --> Init2["VulkanBackend.init()\ncreateShaderModule(code)\n(SPIR-V loaded directly)"]
+
+    subgraph SourceFiles["Source Files (on disk, compile time only)"]
+        MSL1
+        MSL2
+        MSL3
+        MSLN
+        SPV
+    end
+
+    subgraph CompileStep["Zig Compiler"]
+        EF
+        EF2
+        Concat
+    end
+
+    subgraph Binary["Agave Binary (.rodata — no external files needed)"]
+        ROData
+        ROData2
+    end
+
+    subgraph Runtime["Runtime (zero file I/O)"]
+        Init
+        Init2
+    end
+```
+
 ### Metal Shader Embedding
 
 ```zig
@@ -382,6 +442,46 @@ dequantize(Q4_0, quant_data, f32_output);  // Compiles to direct call to dequant
 
 **No runtime dispatch** — the switch is resolved at compile time, and only the relevant function is called.
 
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#e8f0fe',
+  'primaryTextColor': '#1a1a2e',
+  'primaryBorderColor': '#4a6cf7',
+  'lineColor': '#4a6cf7',
+  'secondaryColor': '#f0f4ff',
+  'tertiaryColor': '#f8f9ff',
+  'edgeLabelBackground': '#ffffff',
+  'clusterBkg': '#f0f4ff',
+  'clusterBorder': '#4a6cf7',
+  'titleColor': '#1a1a2e',
+  'nodeTextColor': '#1a1a2e',
+  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
+}}}%%
+flowchart TD
+    Generic["dequantize(comptime T: type, ...)\ngeneric call site"]
+
+    subgraph CompileTime["Compiler — resolved at compile time (T is known)"]
+        direction LR
+        SW{"switch T"}
+        Q4["T == Q4_0\n→ dequantizeQ4_0()\nmonomorphized copy"]
+        Q8["T == Q8_0\n→ dequantizeQ8_0()\nmonomorphized copy"]
+        BF["T == BF16\n→ dequantizeBF16()\nmonomorphized copy"]
+        ERR["T == other\n→ @compileError()\nhalts compilation"]
+        SW --> Q4 & Q8 & BF & ERR
+    end
+
+    subgraph Binary["Binary — only called variant present"]
+        BQ4["dequantizeQ4_0\n(direct call, inlined)"]
+        BQ8["dequantizeQ8_0\n(direct call, inlined)"]
+        BBF["dequantizeBF16\n(direct call, inlined)"]
+    end
+
+    Generic --> SW
+    Q4 --> BQ4
+    Q8 --> BQ8
+    BF --> BBF
+```
+
 ### Tagged Union Dispatch (inline else)
 
 ```zig
@@ -414,6 +514,51 @@ switch (self) {
 
 **Benefit:** Compiler sees all calls, can inline them. No function pointer indirection.
 
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#e8f0fe',
+  'primaryTextColor': '#1a1a2e',
+  'primaryBorderColor': '#4a6cf7',
+  'lineColor': '#4a6cf7',
+  'secondaryColor': '#f0f4ff',
+  'tertiaryColor': '#f8f9ff',
+  'edgeLabelBackground': '#ffffff',
+  'clusterBkg': '#f0f4ff',
+  'clusterBorder': '#4a6cf7',
+  'titleColor': '#1a1a2e',
+  'nodeTextColor': '#1a1a2e',
+  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
+}}}%%
+flowchart TD
+    Call["backend.gemv(args)\n(call site in model code)"]
+
+    subgraph InlineElse["inline else dispatch (Zig)"]
+        direction TB
+        IE_Tag["read union tag\n(cheap branch)"]
+        IE_CPU["tag == .cpu\nCpuBackend.gemv(args)\n(inlined by compiler)"]
+        IE_Metal["tag == .metal\nMetalBackend.gemv(args)\n(inlined by compiler)"]
+        IE_Vulkan["tag == .vulkan\nVulkanBackend.gemv(args)\n(inlined by compiler)"]
+        IE_Tag --> IE_CPU & IE_Metal & IE_Vulkan
+    end
+
+    subgraph VTable["vtable dispatch (C++ / runtime)"]
+        direction TB
+        VT_Ptr["load vtable pointer\nfrom object header"]
+        VT_Offset["add method offset\n(e.g. +8 bytes for gemv)"]
+        VT_Load["load function pointer\nfrom vtable memory"]
+        VT_Call["indirect call\nvia register\n(branch predictor miss risk)"]
+        VT_Ptr --> VT_Offset --> VT_Load --> VT_Call
+    end
+
+    Call --> IE_Tag
+    Call --> VT_Ptr
+
+    IE_CPU --> Res1["direct kernel code\n(zero indirection)"]
+    IE_Metal --> Res1
+    IE_Vulkan --> Res1
+    VT_Call --> Res2["kernel code\n(1 indirect branch)"]
+```
+
 ## Format String Validation
 
 Compile-time format string checking prevents runtime errors.
@@ -442,6 +587,48 @@ Zig catches this at compile time.
 ## Comptime Assertions
 
 Validate assumptions at compile time.
+
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#e8f0fe',
+  'primaryTextColor': '#1a1a2e',
+  'primaryBorderColor': '#4a6cf7',
+  'lineColor': '#4a6cf7',
+  'secondaryColor': '#f0f4ff',
+  'tertiaryColor': '#f8f9ff',
+  'edgeLabelBackground': '#ffffff',
+  'clusterBkg': '#f0f4ff',
+  'clusterBorder': '#4a6cf7',
+  'titleColor': '#1a1a2e',
+  'nodeTextColor': '#1a1a2e',
+  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
+}}}%%
+flowchart TD
+    subgraph ComptimeAssert["comptime { std.debug.assert(cond) }"]
+        direction TB
+        CA_Eval["evaluate condition\nat compile time"]
+        CA_Pass{"condition\ntrue?"}
+        CA_Silent["(nothing emitted)\nbinary produced normally"]
+        CA_Fail["compile error\n'assertion failed'\nbuild stops immediately\nno binary produced"]
+        CA_Eval --> CA_Pass
+        CA_Pass -- yes --> CA_Silent
+        CA_Pass -- no --> CA_Fail
+    end
+
+    subgraph RuntimeAssert["std.debug.assert(cond) at runtime"]
+        direction TB
+        RA_Eval["evaluate condition\nat runtime"]
+        RA_Pass{"condition\ntrue?"}
+        RA_Silent["execution continues"]
+        RA_Fail["@panic / illegal instruction\nprocess crashes\n(only in Debug/ReleaseSafe)"]
+        RA_Eval --> RA_Pass
+        RA_Pass -- yes --> RA_Silent
+        RA_Pass -- no --> RA_Fail
+    end
+
+    CA_Fail -. "catches bug before\nshipping any binary" .-> note1["user never sees bad binary"]
+    RA_Fail -. "caught only if\ntest covers that path" .-> note2["may ship silently in ReleaseFast"]
+```
 
 ### Array Size Validation
 

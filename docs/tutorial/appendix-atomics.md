@@ -395,6 +395,59 @@ fn workerLoop(pool: *ThreadPool) void {
 
 ### Active Thread Counter
 
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#e8f0fe',
+  'primaryTextColor': '#1a1a2e',
+  'primaryBorderColor': '#4a6cf7',
+  'lineColor': '#4a6cf7',
+  'secondaryColor': '#f0f4ff',
+  'tertiaryColor': '#f8f9ff',
+  'edgeLabelBackground': '#ffffff',
+  'clusterBkg': '#f0f4ff',
+  'clusterBorder': '#4a6cf7',
+  'titleColor': '#1a1a2e',
+  'nodeTextColor': '#1a1a2e',
+  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
+}}}%%
+flowchart TD
+    subgraph Main["Main thread"]
+        Dispatch["Dispatch work\nactive = n_workers\n(.acq_rel CAS)"]
+        Spin{"active.load(.acquire)\n== 0?"}
+        Hint["spinLoopHint()\nCPU pause / yield"]
+        Done(["All worker output\nvisible — safe to read results"])
+    end
+
+    subgraph Workers["Worker threads (run concurrently)"]
+        W1["Worker 1\ndoWork() → chunk A\nwrites output buffer"]
+        W2["Worker 2\ndoWork() → chunk B\nwrites output buffer"]
+        WN["Worker N\ndoWork() → chunk N\nwrites output buffer"]
+        Sub1["fetchSub(1, .release)\npublishes output writes"]
+        Sub2["fetchSub(1, .release)\npublishes output writes"]
+        SubN["fetchSub(1, .release)\npublishes output writes"]
+    end
+
+    Dispatch --> W1
+    Dispatch --> W2
+    Dispatch --> WN
+    W1 --> Sub1
+    W2 --> Sub2
+    WN --> SubN
+    Sub1 -->|"active decrements"| Spin
+    Sub2 -->|"active decrements"| Spin
+    SubN -->|"last decrement\nactive → 0"| Spin
+    Spin -->|"no — still workers running"| Hint
+    Hint --> Spin
+    Spin -->|"yes — acquire fence\nsees all release writes"| Done
+
+    style Dispatch fill:#e8f4e8,stroke:#4a9e4a
+    style Done fill:#e8f4e8,stroke:#4a9e4a
+    style Spin fill:#fff8e8,stroke:#c0904a
+    style Hint fill:#f5eaf5,stroke:#8a4ab0
+    style Main fill:#f0f4ff,stroke:#4a6cf7
+    style Workers fill:#f8f9ff,stroke:#4a6cf7
+```
+
 ```zig
 active: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
 
@@ -437,6 +490,46 @@ if (pool.shutdown.load(.acquire)) return;
 **Problem:** Update a value only if it hasn't changed since you last read it.
 
 **Example:** Lock-free stack push:
+
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#e8f0fe',
+  'primaryTextColor': '#1a1a2e',
+  'primaryBorderColor': '#4a6cf7',
+  'lineColor': '#4a6cf7',
+  'secondaryColor': '#f0f4ff',
+  'tertiaryColor': '#f8f9ff',
+  'edgeLabelBackground': '#ffffff',
+  'clusterBkg': '#f0f4ff',
+  'clusterBorder': '#4a6cf7',
+  'titleColor': '#1a1a2e',
+  'nodeTextColor': '#1a1a2e',
+  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
+}}}%%
+flowchart TD
+    Start([push: item to insert])
+
+    subgraph RetryLoop["CAS retry loop"]
+        Read["Read head\n(.acquire)\ncurrent_head = self.head.load()"]
+        Link["Link item into list\nitem.next = current_head"]
+        CAS{"cmpxchgWeak\nhead == current_head?"}
+        Success(["Return\nhead now points to item"])
+        Retry["Retry\nanother thread\nchanged head"]
+    end
+
+    Start --> Read
+    Read --> Link
+    Link --> CAS
+    CAS -->|"yes — swap succeeds\n(.release publishes item.next)"| Success
+    CAS -->|"no — spurious fail\nor concurrent push"| Retry
+    Retry --> Read
+
+    style Start fill:#e8f4e8,stroke:#4a9e4a
+    style Success fill:#e8f4e8,stroke:#4a9e4a
+    style CAS fill:#fff8e8,stroke:#c0904a
+    style Retry fill:#faeaea,stroke:#c04a4a
+    style RetryLoop fill:#f0f4ff,stroke:#4a6cf7
+```
 
 ```zig
 pub fn push(self: *LockFreeStack, item: *Node) void {

@@ -72,7 +72,7 @@ sequenceDiagram
     W1->>M: active.fetchSub(1)
     W2->>M: active.fetchSub(1)
     Note over W1,W2: Back to sleep — futexWait(&generation, 1)
-
+```
 
 In Zig 0.16, futex operations go through the `Io` context (threaded from `main(Init)` via `init.io`). The thread pool stores `io` at spawn time and uses `io.futexWaitUncancelable()` / `io.futexWake()` instead of the old `std.Thread.Futex` API.
 
@@ -140,7 +140,7 @@ flowchart LR
     subgraph "n=24 rows, grain=4 → 6 chunks"
         Counter
     end
-
+```
 
 ```zig
 task_counter: std.atomic.Value(usize) = std.atomic.Value(usize).init(0);
@@ -210,7 +210,7 @@ flowchart TD
     Dec2 --> Done
     DecN --> Done
     Spin --> Done
-
+```
 
 ```zig
 pub fn parallelFor(pool: *ThreadPool, total: usize, grain: usize, ctx: *anyopaque, func: WorkFunc) void {
@@ -237,6 +237,52 @@ pub fn parallelFor(pool: *ThreadPool, total: usize, grain: usize, ctx: *anyopaqu
 **Why participate?** If you have 8 cores and spawn 7 worker threads, the main thread sitting idle wastes 1/8 of your compute power.
 
 **Why spin-wait?** GEMV chunks are microsecond-scale. Futex wait/wake would add 1-2 µs overhead per operation — comparable to the work itself. Spinning is simpler and faster for short waits.
+
+## Thread Pool Lifecycle
+
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#e8f0fe',
+  'primaryTextColor': '#1a1a2e',
+  'primaryBorderColor': '#4a6cf7',
+  'lineColor': '#4a6cf7',
+  'secondaryColor': '#f0f4ff',
+  'tertiaryColor': '#f8f9ff',
+  'edgeLabelBackground': '#ffffff',
+  'clusterBkg': '#f0f4ff',
+  'clusterBorder': '#4a6cf7',
+  'titleColor': '#1a1a2e',
+  'nodeTextColor': '#1a1a2e',
+  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
+}}}%%
+stateDiagram-v2
+    [*] --> Uninit
+
+    Uninit --> Ready : init(n_workers)\npool fields zeroed\nno threads exist
+
+    state Ready {
+        [*] --> Idle
+        Idle --> Spawning : spawn(io)\nstores Io context
+        Spawning --> Sleeping : std.Thread.spawn()\nfor each worker\nworkers enter futexWait
+        Sleeping --> Working : parallelFor()\ngeneration++\nfutexWake(all)
+        Working --> Sleeping : all workers complete\nactive decrements to 0\nmain returns from spin
+        Sleeping --> Sleeping : spurious wakeup\nlocal_gen == generation\nworker loops back
+    }
+
+    Ready --> ShuttingDown : deinit()\nshutdown = true\ngeneration++\nfutexWake(all)
+    ShuttingDown --> [*] : all workers join()\npool memory released
+
+    note right of Uninit
+        ThreadPool.init() only sets
+        n_workers — no threads yet
+    end note
+
+    note right of Working
+        Main thread participates
+        (doWork loop) while workers
+        also race on task_counter
+    end note
+```
 
 ## Full Thread Pool Implementation
 
@@ -432,7 +478,7 @@ sequenceDiagram
     Note over W: .acquire: all writes that<br/>happened before the .release<br/>are now visible here
     W->>W: read task_total → sees 1024 ✓
     W->>W: read task_grain → sees 4 ✓
-
+```
 
 ### .monotonic
 
@@ -490,6 +536,57 @@ const min_grain: usize = 4;  // Minimum rows per chunk
 - Too small → atomic contention
 - Too large → poor load balancing
 - 4× oversubscription → good load balance
+
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#e8f0fe',
+  'primaryTextColor': '#1a1a2e',
+  'primaryBorderColor': '#4a6cf7',
+  'lineColor': '#4a6cf7',
+  'secondaryColor': '#f0f4ff',
+  'tertiaryColor': '#f8f9ff',
+  'edgeLabelBackground': '#ffffff',
+  'clusterBkg': '#f0f4ff',
+  'clusterBorder': '#4a6cf7',
+  'titleColor': '#1a1a2e',
+  'nodeTextColor': '#1a1a2e',
+  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
+}}}%%
+flowchart LR
+    subgraph small ["grain = 1  (too small)"]
+        direction TB
+        S_chunks["256 chunks\nfor 256 rows"]
+        S_atomic["256 fetchAdd\noperations\n(high contention)"]
+        S_load["Perfect load\nbalance"]
+        S_chunks --> S_atomic
+        S_chunks --> S_load
+    end
+
+    subgraph sweet ["grain = 4-16  (sweet spot)"]
+        direction TB
+        M_chunks["16-64 chunks\nfor 256 rows"]
+        M_atomic["16-64 fetchAdd\noperations\n(low contention)"]
+        M_load["Good load\nbalance\n(4x oversubscription)"]
+        M_chunks --> M_atomic
+        M_chunks --> M_load
+    end
+
+    subgraph large ["grain = 128  (too large)"]
+        direction TB
+        L_chunks["2 chunks\nfor 256 rows"]
+        L_atomic["2 fetchAdd\noperations\n(no contention)"]
+        L_load["Poor load balance:\none fast core done,\none slow core stalls all"]
+        L_chunks --> L_atomic
+        L_chunks --> L_load
+    end
+
+    small -->|"increase grain"| sweet
+    sweet -->|"increase grain"| large
+
+    small -. "fetchAdd cost\ndominates" .-> Slow1["Slow"]
+    large -. "stragglers\nhurt latency" .-> Slow2["Slow"]
+    sweet --> Fast["Optimal:\nlow contention +\ngood balance"]
+```
 
 ### Inline Threshold
 
@@ -564,6 +661,50 @@ const CacheLinePadded = struct {
 };
 
 var partial_sums: [8]CacheLinePadded = undefined;
+```
+
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#e8f0fe',
+  'primaryTextColor': '#1a1a2e',
+  'primaryBorderColor': '#4a6cf7',
+  'lineColor': '#4a6cf7',
+  'secondaryColor': '#f0f4ff',
+  'tertiaryColor': '#f8f9ff',
+  'edgeLabelBackground': '#ffffff',
+  'clusterBkg': '#f0f4ff',
+  'clusterBorder': '#4a6cf7',
+  'titleColor': '#1a1a2e',
+  'nodeTextColor': '#1a1a2e',
+  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
+}}}%%
+flowchart TB
+    subgraph bad ["BAD: [8]f32 — 32 bytes, fits in one 64-byte cache line"]
+        direction LR
+        CL1["Cache line (64 bytes)"]
+        CL1 --- PS0["ps[0]\n4B\nCore 0"]
+        CL1 --- PS1["ps[1]\n4B\nCore 1"]
+        CL1 --- PS2["ps[2]\n4B\nCore 2"]
+        CL1 --- PS3["ps[3]\n4B\nCore 3"]
+        CL1 --- PS4["ps[4]\n4B\nCore 4"]
+        CL1 --- PS5["ps[5]\n4B\nCore 5"]
+        CL1 --- PS6["ps[6]\n4B\nCore 6"]
+        CL1 --- PS7["ps[7]\n4B\nCore 7"]
+    end
+
+    subgraph good ["GOOD: [8]CacheLinePadded — each value owns a full 64-byte cache line"]
+        direction LR
+        CL_A["Cache line A\n(64 bytes)"]
+        CL_B["Cache line B\n(64 bytes)"]
+        CL_C["..."]
+        CL_H["Cache line H\n(64 bytes)"]
+        CL_A --- PA0["ps[0].value\n4B + 60B pad\nCore 0 only"]
+        CL_B --- PA1["ps[1].value\n4B + 60B pad\nCore 1 only"]
+        CL_H --- PA7["ps[7].value\n4B + 60B pad\nCore 7 only"]
+    end
+
+    bad -->|"Core 1 writes ps[1]\ninvalidates entire line\nCore 0 must reload ps[0]"| Ping["Cache line\nping-pong\n(5-30x slowdown)"]
+    good -->|"Core 1 writes pa[1]\nonly its own line\nis invalidated"| Solo["Each write\nindependent\nno cross-core traffic"]
 ```
 
 Agave avoids this by using per-chunk reduction in the worker function — no shared array.

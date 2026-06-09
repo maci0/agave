@@ -60,7 +60,7 @@ flowchart LR
     D0 --> Y["Output Vector y\n[n floats]"]
     D1 --> Y
     DN --> Y
-
+```
 
 ```
 y[i] = sum_j(W[i][j] * x[j])
@@ -184,7 +184,7 @@ flowchart TD
     V1 --> Output["Output = weighted mix\n(mostly 'fluffy' info)"]
     V2 --> Output
     V3 --> Output
-
+```
 
 ### Attention Score Computation
 
@@ -250,7 +250,7 @@ flowchart LR
     SM --> WeightedSum["Weighted sum\nweights × V"]
     V --> WeightedSum
     WeightedSum --> Out["Attention Output\n[hidden_dim floats]"]
-
+```
 
 **Multi-head attention**: Repeat this process with different W_q, W_k, W_v matrices for each head, concatenate outputs.
 
@@ -328,7 +328,7 @@ flowchart TD
 
     style Overflow fill:#ffcccc,color:#333
     style Probs fill:#ccffcc,color:#333
-
+```
 
 ### RMS Normalization (RMSNorm)
 
@@ -351,6 +351,44 @@ output = [2.0/3.464, 4.0/3.464, 4.0/3.464] * w
 **Usage**: Applied before every attention and FFN sublayer. Stabilizes training and inference by preventing activation magnitudes from exploding.
 
 **Why RMS not mean**: Simpler (no mean subtraction), empirically just as effective as LayerNorm.
+
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#e8f0fe',
+  'primaryTextColor': '#1a1a2e',
+  'primaryBorderColor': '#4a6cf7',
+  'lineColor': '#4a6cf7',
+  'secondaryColor': '#f0f4ff',
+  'tertiaryColor': '#f8f9ff',
+  'edgeLabelBackground': '#ffffff',
+  'clusterBkg': '#f0f4ff',
+  'clusterBorder': '#4a6cf7',
+  'titleColor': '#1a1a2e',
+  'nodeTextColor': '#1a1a2e',
+  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
+}}}%%
+flowchart TD
+    Input["Input vector x\ne.g. [2.0, 4.0, 4.0]"]
+
+    subgraph Pass1["Pass 1: Compute RMS"]
+        Sq["Square each element\nx² = [4, 16, 16]"]
+        Mean["Mean of squares\nmean(x²) = 12.0"]
+        Eps["Add epsilon for stability\n12.0 + 1e-6"]
+        Sqrt["Square root\nrms = sqrt(12.000001) ≈ 3.464"]
+        Sq --> Mean --> Eps --> Sqrt
+    end
+
+    subgraph Pass2["Pass 2: Normalize and Scale"]
+        Div["Divide each element by rms\n[2/3.464, 4/3.464, 4/3.464]\n= [0.577, 1.155, 1.155]"]
+        Scale["Multiply by learned weights w\n(per-element scale, trained)"]
+        Out["Normalized output\nunit RMS, scaled by w"]
+        Div --> Scale --> Out
+    end
+
+    Input --> Pass1
+    Sqrt -->|"rms value"| Pass2
+    Input -->|"original x"| Pass2
+```
 
 ### L2 Normalization
 
@@ -425,6 +463,49 @@ tanh(x) = (exp(x) - exp(-x)) / (exp(x) + exp(-x))
 
 **Usage**: Logit softcapping in Gemma3 (`tanh(x/cap) * cap` clamps to ±cap smoothly).
 
+### Activation Function Comparison
+
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#e8f0fe',
+  'primaryTextColor': '#1a1a2e',
+  'primaryBorderColor': '#4a6cf7',
+  'lineColor': '#4a6cf7',
+  'secondaryColor': '#f0f4ff',
+  'tertiaryColor': '#f8f9ff',
+  'edgeLabelBackground': '#ffffff',
+  'clusterBkg': '#f0f4ff',
+  'clusterBorder': '#4a6cf7',
+  'titleColor': '#1a1a2e',
+  'nodeTextColor': '#1a1a2e',
+  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
+}}}%%
+flowchart LR
+    subgraph Bounded["Bounded outputs (0,1) or (-1,1)"]
+        Sigmoid["sigmoid(x)\nRange: (0, 1)\nFormula: 1/(1+exp(-x))\nUse: gating, routing"]
+        Tanh["tanh(x)\nRange: (-1, 1)\nFormula: 2·sigmoid(2x)-1\nUse: softcapping logits"]
+    end
+
+    subgraph Unbounded["Unbounded outputs — pass large values through"]
+        SiLU["SiLU / Swish\nRange: (-0.28, ∞)\nFormula: x·sigmoid(x)\nUse: SwiGLU FFN layers"]
+        GELU["GELU\nRange: (-0.17, ∞)\nFormula: 0.5x·(1+tanh(...))\nUse: Gemma3 FFN layers"]
+    end
+
+    subgraph AlwaysPos["Always positive"]
+        Softplus["softplus(x)\nRange: (0, ∞)\nFormula: log(1+exp(x))\nUse: SSM timestep dt"]
+    end
+
+    Input["Raw activation value x\n(any real number)"] --> Bounded
+    Input --> Unbounded
+    Input --> AlwaysPos
+
+    Sigmoid -->|"small x → ~0\nlarge x → ~1"| GateUse["Controls how much\nsignal passes through"]
+    Tanh -->|"large x → ±1\n(saturates smoothly)"| ClampUse["Soft clamp — prevents\nlogit explosion"]
+    SiLU -->|"x < 0 → small neg\nx > 0 → ~linear"| FFNUse["Gate × up projection\nin SwiGLU FFN"]
+    GELU -->|"similar to SiLU\nslightly smoother"| GELUUse["Drop-in for SiLU\nin Gemma3"]
+    Softplus -->|"always > 0\nno negative outputs"| DtUse["Ensures dt > 0\nfor stable SSM decay"]
+```
+
 ## Sampling Operations
 
 ### Argmax
@@ -482,6 +563,50 @@ Keep smallest set of tokens whose cumulative probability ≥ P:
 
 **Adaptive**: When model is confident (one token = 90%), keeps 1-2 tokens. When uncertain (many similar scores), keeps dozens.
 
+### Sampling Pipeline
+
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#e8f0fe',
+  'primaryTextColor': '#1a1a2e',
+  'primaryBorderColor': '#4a6cf7',
+  'lineColor': '#4a6cf7',
+  'secondaryColor': '#f0f4ff',
+  'tertiaryColor': '#f8f9ff',
+  'edgeLabelBackground': '#ffffff',
+  'clusterBkg': '#f0f4ff',
+  'clusterBorder': '#4a6cf7',
+  'titleColor': '#1a1a2e',
+  'nodeTextColor': '#1a1a2e',
+  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
+}}}%%
+flowchart TD
+    Logits["Raw logits\n[vocab_size floats]\ne.g. 128,000 values"]
+
+    Logits --> TempCheck{"temperature\n= 0?"}
+
+    TempCheck -->|"yes — greedy"| Argmax["argmax(logits)\npick highest score directly"]
+    Argmax --> Token["Next token ID"]
+
+    TempCheck -->|"no — sample"| TempScale["Divide by temperature\nlogits / T\nlower T → sharper, higher T → flatter"]
+
+    TempScale --> TopK{"top_k\nenabled?"}
+    TopK -->|"yes"| KFilter["Find k-th largest value\nmask all below threshold to -inf\n(O(n) single pass)"]
+    TopK -->|"no"| TopP
+
+    KFilter --> TopP{"top_p\nenabled?"}
+    TopP -->|"yes"| Softmax2["softmax → cumulative probs\ndrop tokens past nucleus threshold P\nrenormalize remaining"]
+    TopP -->|"no"| Softmax1["softmax\nconvert all logits to probs"]
+
+    Softmax2 --> Sample["Weighted random sample\nfrom remaining distribution"]
+    Softmax1 --> Sample
+
+    Sample --> Token
+
+    style Token fill:#ccffcc,color:#333
+    style Argmax fill:#e8f0fe,color:#1a1a2e
+```
+
 ## Special Operations
 
 ### Reduction Operations
@@ -531,6 +656,38 @@ A 28-layer model with vocab_size=128K does ~197 GEMVs per token.
 **Compute-bound** (attention for long sequences, matrix-matrix multiply during prefill): Arithmetic dominates. GPU compute power matters more than memory speed.
 
 For single-token decode, everything is bandwidth-bound.
+
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#e8f0fe',
+  'primaryTextColor': '#1a1a2e',
+  'primaryBorderColor': '#4a6cf7',
+  'lineColor': '#4a6cf7',
+  'secondaryColor': '#f0f4ff',
+  'tertiaryColor': '#f8f9ff',
+  'edgeLabelBackground': '#ffffff',
+  'clusterBkg': '#f0f4ff',
+  'clusterBorder': '#4a6cf7',
+  'titleColor': '#1a1a2e',
+  'nodeTextColor': '#1a1a2e',
+  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
+}}}%%
+flowchart LR
+    subgraph BW["Bandwidth-bound operations\n(memory speed is the bottleneck)"]
+        GEMV2["GEMV — decode\nReads weight matrix row by row\nArithmetic intensity: ~0.25 FLOP/byte\nBottleneck: DRAM bandwidth"]
+        Norm["RMSNorm / LayerNorm\nReads vector, writes vector\nArithmetic intensity: ~2 FLOP/byte\nBottleneck: memory round-trips"]
+        Activation["Activation functions\n(SiLU, GELU, sigmoid)\nElement-wise, trivial math\nBottleneck: reading/writing the tensor"]
+        ElemWise["Element-wise ops\n(add, mul, residual)\nOne pass over data\nBottleneck: memory bandwidth"]
+    end
+
+    subgraph Compute["Compute-bound operations\n(ALU utilization is the bottleneck)"]
+        Prefill["GEMM — prefill\nMatrix × matrix (all tokens at once)\nArithmetic intensity: ~O(seq_len) FLOP/byte\nBottleneck: GPU TFLOPS"]
+        LongAttn["Attention — long sequences\nO(seq_len²) dot products per head\nArithmetic intensity grows with seq_len\nBottleneck: GPU TFLOPS"]
+    end
+
+    Opt1["Optimization levers\nfor bandwidth-bound:\n• Quantization (4-bit → 4× less data)\n• Kernel fusion (fewer passes)\n• Larger batch size"] --- BW
+    Opt2["Optimization levers\nfor compute-bound:\n• FlashAttention (tiled SRAM)\n• Tensor parallelism\n• Higher-TFLOPS GPU"] --- Compute
+```
 
 ### In-place vs Allocating
 

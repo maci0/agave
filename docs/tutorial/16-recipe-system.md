@@ -48,6 +48,61 @@ pub const Recipe = struct {
 
 **Key insight:** All fields are `?T` (optional). `null` means "use the CLI default / model default".
 
+### Recipe and Applied Data Model
+
+The `Recipe` struct holds optional fields; the resolved `Applied` struct holds concrete values after merging CLI flags, recipe defaults, and CLI baselines.
+
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#e8f0fe',
+  'primaryTextColor': '#1a1a2e',
+  'primaryBorderColor': '#4a6cf7',
+  'lineColor': '#4a6cf7',
+  'secondaryColor': '#f0f4ff',
+  'tertiaryColor': '#f8f9ff',
+  'edgeLabelBackground': '#ffffff',
+  'clusterBkg': '#f0f4ff',
+  'clusterBorder': '#4a6cf7',
+  'titleColor': '#1a1a2e',
+  'nodeTextColor': '#1a1a2e',
+  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
+}}}%%
+graph TD
+    subgraph RecipeStruct["Recipe struct (all fields optional)"]
+        direction TB
+        R1["name: []const u8\n= 'default'"]
+        R2["temperature: ?f32\n= null"]
+        R3["top_p: ?f32\n= null"]
+        R4["top_k: ?u32\n= null"]
+        R5["repeat_penalty: ?f32\n= null"]
+        R6["max_tokens: ?u32\n= null"]
+        R7["ctx_size: ?u32\n= null"]
+    end
+
+    subgraph AppliedStruct["Applied struct (all fields concrete after resolution)"]
+        direction TB
+        A1["temperature: f32"]
+        A2["top_p: f32"]
+        A3["top_k: u32"]
+        A4["repeat_penalty: f32"]
+        A5["max_tokens: u32"]
+        A6["ctx_size: u32"]
+    end
+
+    subgraph Overrides["Overrides struct (tracks what the user set via CLI)"]
+        direction TB
+        O1["temperature: bool = false"]
+        O2["top_p: bool = false"]
+        O3["top_k: bool = false"]
+        O4["repeat_penalty: bool = false"]
+        O5["max_tokens: bool = false"]
+        O6["ctx_size: bool = false"]
+    end
+
+    RecipeStruct -->|"applyDefaults(cli_values, overrides)"| AppliedStruct
+    Overrides -->|"gates each field independently"| AppliedStruct
+```
+
 ### Preset Recipes
 
 ```zig
@@ -155,7 +210,7 @@ flowchart TD
     NextPreset --> More{"More\npresets?"}
     More -- "yes" --> Loop
     More -- "no" --> Miss["Return null\n(use Recipe.default)"]
-
+```
 
 ```zig
 pub fn match(arch: []const u8, backend: []const u8, quant: []const u8) ?Recipe {
@@ -220,7 +275,7 @@ flowchart LR
         Q2 -- yes --> Use2["use recipe value"]
         Q2 -- no --> Use3["use CLI baseline"]
     end
-
+```
 
 ### Override Tracking
 
@@ -250,6 +305,62 @@ if (args.top_p) |p| {
     top_p = p;
 }
 // ... etc
+```
+
+### Override Flag Mapping
+
+Each `Overrides` boolean gates the three-way resolution for its parameter independently.
+
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#e8f0fe',
+  'primaryTextColor': '#1a1a2e',
+  'primaryBorderColor': '#4a6cf7',
+  'lineColor': '#4a6cf7',
+  'secondaryColor': '#f0f4ff',
+  'tertiaryColor': '#f8f9ff',
+  'edgeLabelBackground': '#ffffff',
+  'clusterBkg': '#f0f4ff',
+  'clusterBorder': '#4a6cf7',
+  'titleColor': '#1a1a2e',
+  'nodeTextColor': '#1a1a2e',
+  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
+}}}%%
+flowchart TD
+    subgraph Legend["Resolution rule per parameter"]
+        direction LR
+        L1["user_set.X = true"] -->|"use"| LU["user CLI value"]
+        L2["user_set.X = false\nrecipe.X != null"] -->|"use"| LR["recipe value"]
+        L3["user_set.X = false\nrecipe.X = null"] -->|"use"| LD["CLI baseline default"]
+    end
+
+    subgraph Params["Per-parameter override gates"]
+        direction TB
+
+        T1["temperature"] --> TG{"user_set\n.temperature?"}
+        TG -- "true" --> TV["user value\ne.g. 0.8"]
+        TG -- "false" --> TR{"recipe\n.temperature?"}
+        TR -- "Some(v)" --> TRV["recipe value\ne.g. 0.6"]
+        TR -- "null" --> TDV["CLI baseline\ne.g. 0.0"]
+
+        P1["top_p"] --> PG{"user_set\n.top_p?"}
+        PG -- "true" --> PV["user value"]
+        PG -- "false" --> PR{"recipe\n.top_p?"}
+        PR -- "Some(v)" --> PRV["recipe value"]
+        PR -- "null" --> PDV["CLI baseline\ne.g. 1.0"]
+
+        M1["max_tokens"] --> MG{"user_set\n.max_tokens?"}
+        MG -- "true" --> MV["user value"]
+        MG -- "false" --> MR{"recipe\n.max_tokens?"}
+        MR -- "Some(v)" --> MRV["recipe value\ne.g. 1024"]
+        MR -- "null" --> MDV["CLI baseline\ne.g. 512"]
+
+        C1["ctx_size"] --> CG{"user_set\n.ctx_size?"}
+        CG -- "true" --> CV["user value"]
+        CG -- "false" --> CR{"recipe\n.ctx_size?"}
+        CR -- "Some(v)" --> CRV["recipe value\ne.g. 2048"]
+        CR -- "null" --> CDV["CLI baseline\ne.g. 4096"]
+    end
 ```
 
 ### Applying Defaults
@@ -327,7 +438,7 @@ sequenceDiagram
     Note over Rec: temperature → 0.3 (user)<br/>top_p → 0.9 (recipe)<br/>max_tokens → 1024 (recipe)
     Rec-->>Main: Applied { temp=0.3, top_p=0.9, max_tokens=1024 }
     Main->>Inf: run inference with final config
-
+```
 
 ```zig
 // 1. Detect architecture, backend, quantization
@@ -458,7 +569,7 @@ graph LR
         P3["(any model) + CPU + (any quant)"]
         P1 --> P2 --> P3
     end
-
+```
 
 ```zig
 const presets = [_]Preset{

@@ -36,7 +36,7 @@ flowchart LR
 
     style Discrete fill:#2d1b1b,stroke:#cc4444
     style UMA fill:#1b2d1b,stroke:#44cc44
-
+```
 
 **Implications:**
 
@@ -97,7 +97,7 @@ flowchart TD
 
     style Return fill:#1b2d1b,stroke:#44cc44
     style Wrap fill:#1b1b2d,stroke:#4444cc
-
+```
 
 ### Cache Structure
 
@@ -224,7 +224,7 @@ sequenceDiagram
     BE->>BE: active_enc = nil, active_cmd = nil
 
     Model->>Model: argmax(logits) — safe to read GPU output
-
+```
 
 ### Active Command Buffer State
 
@@ -349,7 +349,7 @@ flowchart LR
 
     style Sequential fill:#2d1b1b,stroke:#cc4444
     style Batched fill:#1b2d1b,stroke:#44cc44
-
+```
 
 ### API
 
@@ -429,6 +429,50 @@ For a typical model forward pass:
 
 **Optimization:** Qwen3.5 eliminated 16 syncs/token by moving Q/gate split from CPU (memcpy) to GPU (kernel) → 15% throughput gain.
 
+### Deferred Dispatch Timeline
+
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#e8f0fe',
+  'primaryTextColor': '#1a1a2e',
+  'primaryBorderColor': '#4a6cf7',
+  'lineColor': '#4a6cf7',
+  'secondaryColor': '#f0f4ff',
+  'tertiaryColor': '#f8f9ff',
+  'edgeLabelBackground': '#ffffff',
+  'clusterBkg': '#f0f4ff',
+  'clusterBorder': '#4a6cf7',
+  'titleColor': '#1a1a2e',
+  'nodeTextColor': '#1a1a2e',
+  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
+}}}%%
+sequenceDiagram
+    participant CPU as CPU Thread
+    participant CMB as Command Buffer<br/>(GPU queue)
+    participant GPU as GPU Hardware
+
+    Note over CPU,GPU: Forward pass begins — GPU ops encoded, not yet executing
+
+    CPU->>CMB: encode gemv(W_q) [deferred]
+    CPU->>CMB: encode gemv(W_k) [deferred]
+    CPU->>CMB: encode gemv(W_v) [deferred]
+    CPU->>CMB: encode sdpa(q,k,v) [deferred]
+
+    Note over CPU: CPU tries to read logits here WITHOUT sync
+    CPU->>CPU: argmax(logits) — READS STALE DATA (write hazard)
+
+    Note over CPU,GPU: Correct pattern: sync before CPU read
+
+    CPU->>CMB: encode gemv(lm_head) [deferred]
+    CPU->>CMB: commit() — submit all at once
+    CMB->>GPU: execute all encoded ops
+    GPU-->>CPU: waitUntilCompleted() — CPU blocks here
+    Note over CPU: GPU writes are now visible in UMA shared memory
+    CPU->>CPU: argmax(logits) — CORRECT: reads fresh logits
+
+    Note over CPU,GPU: Total syncs per token: 1-2 (not 800+)
+```
+
 ## Threadgroup Memory Limits
 
 Metal has a **per-threadgroup memory limit** of 32 KB on Apple Silicon. If your kernel allocates more, pipeline creation **fails silently** (returns `nil` without logging an error).
@@ -494,6 +538,43 @@ kernel void sdpa(
 - Increasing `max_head_dim` to 512 → 32 KB (also maxed out)
 
 **Trade-off:** Agave caps SDPA at 4096 seq_len, 256 head_dim to fit in 32 KB. Larger contexts fall back to chunked attention.
+
+### Threadgroup Memory Budget Breakdown
+
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#e8f0fe',
+  'primaryTextColor': '#1a1a2e',
+  'primaryBorderColor': '#4a6cf7',
+  'lineColor': '#4a6cf7',
+  'secondaryColor': '#f0f4ff',
+  'tertiaryColor': '#f8f9ff',
+  'edgeLabelBackground': '#ffffff',
+  'clusterBkg': '#f0f4ff',
+  'clusterBorder': '#4a6cf7',
+  'titleColor': '#1a1a2e',
+  'nodeTextColor': '#1a1a2e',
+  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
+}}}%%
+flowchart TD
+    Budget["Apple Silicon threadgroup\nmemory limit: 32 KB total"]
+
+    Budget --> KV["kv_block\nfloat[16 × 256]\n= 16 KB\n(50% of budget)"]
+    Budget --> Q["q_local\nfloat[256]\n= 1 KB\n(3% of budget)"]
+    Budget --> Out["out_acc\nfloat[256]\n= 1 KB\n(3% of budget)"]
+    Budget --> Scores["scores\nfloat[16]\n= 64 bytes\n(0.2% of budget)"]
+    Budget --> Shared["shared\nfloat[8]\n= 32 bytes\n(0.1% of budget)"]
+    Budget --> Free["headroom\n~13.4 KB remaining\n(42% of budget)"]
+
+    KV --> Constraint["Constraint: 16 positions × 256 head_dim\nIncreasing to 32 pos → 32 KB (maxed)\nIncreasing head_dim to 512 → 32 KB (maxed)"]
+    Free --> Fallback["Contexts > 4096 tokens\nor head_dim > 256\nfall back to chunked attention"]
+
+    style Budget fill:#1a1a2e,stroke:#4a6cf7,color:#ffffff
+    style KV fill:#2d1b1b,stroke:#cc4444
+    style Constraint fill:#2d2d1b,stroke:#ccaa44
+    style Fallback fill:#1b2d2d,stroke:#44aacc
+    style Free fill:#1b2d1b,stroke:#44cc44
+```
 
 ## Profiling Counters
 
@@ -571,22 +652,100 @@ pub fn gemm(self: *MetalBackend, x: [*]const f32, w: TensorData, y: [*]f32,
 
 Each threadgroup handles one output row. The bf16 variant processes tokens sequentially without token tiling; token tiling is used in the quantized GEMM kernels (Q8_0 uses `TILE_T=8`, Q4_K uses `TILE_T=4`) to amortize weight loads across multiple input vectors.
 
+### GEMM vs GEMV Dispatch Decision Tree
+
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#e8f0fe',
+  'primaryTextColor': '#1a1a2e',
+  'primaryBorderColor': '#4a6cf7',
+  'lineColor': '#4a6cf7',
+  'secondaryColor': '#f0f4ff',
+  'tertiaryColor': '#f8f9ff',
+  'edgeLabelBackground': '#ffffff',
+  'clusterBkg': '#f0f4ff',
+  'clusterBorder': '#4a6cf7',
+  'titleColor': '#1a1a2e',
+  'nodeTextColor': '#1a1a2e',
+  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
+}}}%%
+flowchart TD
+    Entry["be.gemm(x, W, y,\nn_tok, n_out, n_in)"]
+
+    Entry --> TokCheck{"n_tok == 1?\n(token generation)"}
+
+    TokCheck -->|"yes — single token"| GEMV["GEMV path\ngemv(x, W, y)\n1 vector × matrix\nlow latency, no tiling"]
+
+    TokCheck -->|"no — batch / prefill"| DtypeCheck{"Weight dtype?"}
+
+    DtypeCheck -->|"f32"| GemmF32["pipe_gemm_f32\n(f32 weights)\nno tiling"]
+    DtypeCheck -->|"bf16 / f16"| GemmBF16["pipe_gemm_bf16\n(half-precision weights)\nsequential token loop"]
+    DtypeCheck -->|"q8_0"| GemmQ8["pipe_gemm_q8_0\n(8-bit quant)\nTILE_T=8 token tiling\namortize weight decode"]
+    DtypeCheck -->|"q4_k / q5_k / q6_k"| GemmQ4K["pipe_gemm_q4_k / q5_k / q6_k\n(4/5/6-bit K-quant)\nTILE_T=4 token tiling"]
+    DtypeCheck -->|"q4_0"| GemmQ4["pipe_gemm_q4_0\n(4-bit quant)\nTILE_T=4 token tiling"]
+    DtypeCheck -->|"other"| Panic["@panic\nno CPU fallback\nadd GPU kernel first"]
+
+    subgraph Output["All paths"]
+        Threadgroup["1 threadgroup per output row\nencode → barrier → next kernel"]
+    end
+
+    GemmF32 & GemmBF16 & GemmQ8 & GemmQ4K & GemmQ4 --> Threadgroup
+    GEMV --> Threadgroup
+
+    style Panic fill:#2d1b1b,stroke:#cc4444
+    style GEMV fill:#1b2d1b,stroke:#44cc44
+    style Threadgroup fill:#1b1b2d,stroke:#4a6cf7
+```
+
 ## Vision Encoder GPU Acceleration
 
 When a vision encoder (mmproj) is loaded, its transformer blocks run on the GPU via the standard `gemm()` dispatch. The vision encoder calls `be.gemm()` for all linear projections (Q/K/V/O, FFN up/gate/down, output projection), which dispatches to the appropriate Metal kernel based on weight dtype — f32, bf16, q8_0, q4_0, q4_k, q5_k, or q6_k.
 
 The key synchronization pattern: `be.sync()` is required between GPU GEMM operations and CPU operations (like softmax or activation functions that run on the CPU thread pool). Without it, the CPU reads stale data from shared UMA memory.
 
-```
-Vision encoder forward pass (per transformer block):
-  1. GPU: gemm(hidden, W_q) → q_buf     (Metal dispatch, no sync)
-  2. GPU: gemm(hidden, W_k) → k_buf     (Metal dispatch, no sync)
-  3. GPU: gemm(hidden, W_v) → v_buf     (Metal dispatch, no sync)
-  4. be.sync()                           (flush command buffer)
-  5. CPU: attention scores + softmax     (thread pool)
-  6. GPU: gemm(attn_out, W_o) → hidden  (Metal dispatch)
-  7. be.sync()
-  8. CPU/GPU: FFN layers...
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#e8f0fe',
+  'primaryTextColor': '#1a1a2e',
+  'primaryBorderColor': '#4a6cf7',
+  'lineColor': '#4a6cf7',
+  'secondaryColor': '#f0f4ff',
+  'tertiaryColor': '#f8f9ff',
+  'edgeLabelBackground': '#ffffff',
+  'clusterBkg': '#f0f4ff',
+  'clusterBorder': '#4a6cf7',
+  'titleColor': '#1a1a2e',
+  'nodeTextColor': '#1a1a2e',
+  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
+}}}%%
+sequenceDiagram
+    participant GPU as GPU (Metal)<br/>gemm projections
+    participant UMA as Shared DRAM<br/>(UMA buffer)
+    participant CPU as CPU Thread Pool<br/>attention + softmax
+
+    Note over GPU,CPU: Vision encoder — one transformer block (n_patches tokens)
+
+    GPU->>UMA: gemm(hidden, W_q) → q_buf [encoded, deferred]
+    GPU->>UMA: gemm(hidden, W_k) → k_buf [encoded, deferred]
+    GPU->>UMA: gemm(hidden, W_v) → v_buf [encoded, deferred]
+    GPU->>GPU: commit + waitUntilCompleted (be.sync #1)
+    Note over UMA: Q/K/V writes now visible to CPU
+
+    UMA->>CPU: read q_buf, k_buf, v_buf
+    CPU->>CPU: compute n_patches × n_patches attention scores
+    CPU->>CPU: softmax(scores) — full non-causal attention
+    CPU->>CPU: weighted sum → attn_out
+    CPU->>UMA: write attn_out
+
+    GPU->>UMA: gemm(attn_out, W_o) → hidden [encoded, deferred]
+    GPU->>GPU: commit + waitUntilCompleted (be.sync #2)
+    Note over UMA: Output projection visible to CPU
+
+    UMA->>CPU: read hidden (for residual add)
+    CPU->>UMA: write hidden + residual
+
+    Note over GPU,CPU: FFN layers follow same GPU/CPU interleave pattern
+    Note over GPU,CPU: GEMM projections (bulk compute) run on GPU<br/>Softmax + score matrix run on CPU thread pool
 ```
 
 This interleaving is necessary because the vision encoder uses full (non-causal) attention with `n_patches x n_patches` score matrices, which currently runs on the CPU. The GEMM projections — the bulk of the compute — run on the GPU.
@@ -605,6 +764,54 @@ This interleaving is necessary because the vision encoder uses full (non-causal)
 2. **Minimize syncs:** Only sync when CPU needs GPU data
 3. **Fuse kernels:** Combine sequential ops (e.g., `addRmsNorm`) to reduce dispatches
 4. **Megakernel pipelines:** The `--megakernel` flag enables a three-tier fusion system. **Tier 1** (fused FFN) combines gate GEMV + up GEMV + activation into a single dispatch (3->1 per FFN layer) via 11 kernels in `megakernel.metal` (SiLU x {Q8_0, Q4_K, Q5_K, Q6_K, Q4_0, MLX_Q4} + GELU x {Q8_0, Q4_K, Q5_K, Q6_K, Q4_0}). **Tier 2** (true megakernels) executes entire transformer layers in a single dispatch using 18 composable building blocks in `mega_common.metal` with atomic counter grid sync (`mega_grid_sync`). **Tier 3** (composed megakernels) auto-generates model-specific MSL at runtime via `mega_compose.zig`: the `composeMSL()` function produces MSL source from a `ModelDesc` struct, then `compileComposedMegakernel()` compiles it via `newLibraryWithSource`. This enables megakernel support for new models without writing any shader code -- just a `ModelDesc` definition. The Metal backend compiles **83 MSL pipelines** total (standard ops + fused FFN + 5 true megakernels + 1 runtime-composed). See [Chapter 13](13-batched-dispatch-and-fusion.md) for details.
+
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#e8f0fe',
+  'primaryTextColor': '#1a1a2e',
+  'primaryBorderColor': '#4a6cf7',
+  'lineColor': '#4a6cf7',
+  'secondaryColor': '#f0f4ff',
+  'tertiaryColor': '#f8f9ff',
+  'edgeLabelBackground': '#ffffff',
+  'clusterBkg': '#f0f4ff',
+  'clusterBorder': '#4a6cf7',
+  'titleColor': '#1a1a2e',
+  'nodeTextColor': '#1a1a2e',
+  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
+}}}%%
+flowchart TD
+    Flag["--megakernel flag\nenables fusion system"]
+
+    Flag --> T1
+    Flag --> T2
+    Flag --> T3
+
+    subgraph T1["Tier 1 — Fused FFN\n(megakernel.metal)"]
+        T1Desc["3 dispatches → 1 dispatch per FFN layer\ngate GEMV + up GEMV + activation fused\n11 kernels: SiLU×6 dtypes + GELU×5 dtypes\nDtypes: Q8_0, Q4_K, Q5_K, Q6_K, Q4_0, MLX_Q4"]
+    end
+
+    subgraph T2["Tier 2 — True Megakernels\n(mega_common.metal)"]
+        T2Desc["Entire transformer layer = 1 dispatch\n18 composable building blocks\nAtomic counter grid sync (mega_grid_sync)\n5 pre-compiled megakernel pipelines"]
+    end
+
+    subgraph T3["Tier 3 — Composed Megakernels\n(mega_compose.zig)"]
+        T3Desc["MSL source generated at runtime\nfrom ModelDesc struct definition\ncomposeMSL() → compileComposedMegakernel()\nnewLibraryWithSource() JIT compilation\nNew models: zero shader code needed"]
+    end
+
+    T1Desc --> Total["83 total MSL pipelines compiled\n(standard ops + Tier 1 + Tier 2 + Tier 3)"]
+    T2Desc --> Total
+    T3Desc --> Total
+
+    Total --> Benefit["Reduced dispatch overhead\nImproved GPU utilization\nLower CPU encoding cost per token"]
+
+    style T1 fill:#1b2d1b,stroke:#44cc44
+    style T2 fill:#1b1b2d,stroke:#4a6cf7
+    style T3 fill:#2d1b2d,stroke:#aa44cc
+    style Flag fill:#1a1a2e,stroke:#4a6cf7,color:#ffffff
+    style Total fill:#2d2d1b,stroke:#ccaa44
+    style Benefit fill:#1b2d2d,stroke:#44aacc
+```
 
 ### Debugging
 

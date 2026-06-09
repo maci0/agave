@@ -42,7 +42,7 @@ flowchart LR
     end
 
     Scalar -- "8x slower" --- SIMD
-
+```
 
 A vector is a fixed-size array that maps to hardware SIMD registers:
 
@@ -129,7 +129,7 @@ flowchart TD
     p1 & p2 --> q1
     p3 & p4 --> q2
     q1 & q2 --> total
-
+```
 
 ```
 {1,2,3,4,5,6,7,8}
@@ -177,7 +177,7 @@ flowchart LR
         f_acc["acc"] --> fma
         fma --> f_out["acc + a*b\n(no intermediate rounding)"]
     end
-
+```
 
 **The single most important SIMD operation for inference.**
 
@@ -272,7 +272,7 @@ flowchart LR
     acc1 -- "@reduce(.Add)" --> y1
     acc2 -- "@reduce(.Add)" --> y2
     acc3 -- "@reduce(.Add)" --> y3
-
+```
 
 ```zig
 pub fn gemvF32(x: [*]const f32, w: [*]const f32, y: [*]f32, n: usize, k: usize) void {
@@ -354,6 +354,51 @@ pub fn gemvF32(x: [*]const f32, w: [*]const f32, y: [*]f32, n: usize, k: usize) 
 ## Handling Quantized Data
 
 Quantized GEMV must **dequantize inside the loop** to avoid materializing the full f32 matrix.
+
+### Q4_0 Block Memory Layout
+
+Each Q4_0 block encodes 32 elements into 18 bytes: a 2-byte f16 scale followed by 16 bytes of packed nibbles (two 4-bit values per byte).
+
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#e8f0fe',
+  'primaryTextColor': '#1a1a2e',
+  'primaryBorderColor': '#4a6cf7',
+  'lineColor': '#4a6cf7',
+  'secondaryColor': '#f0f4ff',
+  'tertiaryColor': '#f8f9ff',
+  'edgeLabelBackground': '#ffffff',
+  'clusterBkg': '#f0f4ff',
+  'clusterBorder': '#4a6cf7',
+  'titleColor': '#1a1a2e',
+  'nodeTextColor': '#1a1a2e',
+  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
+}}}%%
+flowchart LR
+    subgraph Block["Q4_0 block — 18 bytes total\nencode 32 elements"]
+        direction LR
+        scale["bytes 0-1\nf16 scale\napplied to all 32 elements"]
+        nibbles["bytes 2-17\n16 packed bytes\n= 32 nibbles (4 bits each)"]
+        scale --- nibbles
+    end
+
+    subgraph Byte["Single nibble byte (byte j)"]
+        direction TB
+        lo["low nibble [3:0]\nelement j\nvalue = (byte & 0xF) - 8"]
+        hi["high nibble [7:4]\nelement j+16\nvalue = (byte >> 4) - 8"]
+    end
+
+    subgraph Decode["Dequantize element"]
+        direction TB
+        d1["q = nibble - 8\n(center at zero)"]
+        d2["f32 = scale * q\n(apply block scale once)"]
+        d1 --> d2
+    end
+
+    nibbles -- "byte j" --> Byte
+    Byte -- "q0, q1" --> Decode
+    scale -- "scale" --> Decode
+```
 
 ### Example: Q4_0 GEMV (4-bit with f16 scale)
 
@@ -493,7 +538,42 @@ pub fn softplusVec(x: [*]f32, n: usize) void {
 
 ### Cache Locality
 
-Process data in the order it's laid out in memory. Row-major matrices should iterate rows → columns:
+Process data in the order it's laid out in memory. Row-major matrices should iterate rows then columns. Sequential access keeps data in L1/L2 cache; column-major access on a row-major matrix jumps by `n_cols` bytes between loads, thrashing cache lines.
+
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#e8f0fe',
+  'primaryTextColor': '#1a1a2e',
+  'primaryBorderColor': '#4a6cf7',
+  'lineColor': '#4a6cf7',
+  'secondaryColor': '#f0f4ff',
+  'tertiaryColor': '#f8f9ff',
+  'edgeLabelBackground': '#ffffff',
+  'clusterBkg': '#f0f4ff',
+  'clusterBorder': '#4a6cf7',
+  'titleColor': '#1a1a2e',
+  'nodeTextColor': '#1a1a2e',
+  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
+}}}%%
+flowchart TD
+    subgraph Matrix["Row-major matrix in memory\n(4 cols × 3 rows = 12 floats, 48 bytes)"]
+        direction LR
+        m00["[0,0]"] --- m01["[0,1]"] --- m02["[0,2]"] --- m03["[0,3]"] --- m10["[1,0]"] --- m11["[1,1]"] --- m12["[1,2]"] --- m13["[1,3]"] --- m20["[2,0]"] --- m21["[2,1]"] --- m22["[2,2]"] --- m23["[2,3]"]
+    end
+
+    subgraph Good["Row-major iteration (sequential)"]
+        direction LR
+        g1["[0,0] [0,1] [0,2] [0,3]"] -- "cache line hit" --> g2["[1,0] [1,1] [1,2] [1,3]"] -- "cache line hit" --> g3["[2,0] [2,1] [2,2] [2,3]"]
+    end
+
+    subgraph Bad["Column-major iteration (strided)"]
+        direction LR
+        b1["[0,0]"] -- "stride 4 floats\ncache miss" --> b2["[1,0]"] -- "stride 4 floats\ncache miss" --> b3["[2,0]"] -- "stride 4 floats\ncache miss" --> b4["..."]
+    end
+
+    Matrix --> Good
+    Matrix --> Bad
+```
 
 ```zig
 // GOOD: Sequential memory access
@@ -561,6 +641,47 @@ while (i + 8 <= n) : (i += 8) {
 
 RMSNorm is a two-pass reduction: compute RMS, then normalize.
 
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#e8f0fe',
+  'primaryTextColor': '#1a1a2e',
+  'primaryBorderColor': '#4a6cf7',
+  'lineColor': '#4a6cf7',
+  'secondaryColor': '#f0f4ff',
+  'tertiaryColor': '#f8f9ff',
+  'edgeLabelBackground': '#ffffff',
+  'clusterBkg': '#f0f4ff',
+  'clusterBorder': '#4a6cf7',
+  'titleColor': '#1a1a2e',
+  'nodeTextColor': '#1a1a2e',
+  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
+}}}%%
+flowchart TD
+    input["input[0..n]\n(n f32 values)"]
+    weight["weight[0..n]\n(learned gain per element)"]
+
+    subgraph Pass1["Pass 1 — sum of squares"]
+        direction LR
+        p1a["@mulAdd(V8, xv, xv, acc)\nfor each 8-element chunk"] --> p1b["@reduce(.Add, acc)\nhorizontal sum"] --> p1c["sum_sq\n= Σ input[i]²"]
+    end
+
+    subgraph Scalar["Scalar normalization"]
+        direction LR
+        s1["rms = sqrt(sum_sq / n + eps)"] --> s2["scale = 1.0 / rms"]
+    end
+
+    subgraph Pass2["Pass 2 — normalize + weight"]
+        direction LR
+        p2a["@splat(scale)\nbroadcast scalar"] --> p2b["xv * scale_v\nnormalize chunk"] --> p2c["normalized * wv\napply weight"] --> p2d["output[i..i+8]"]
+    end
+
+    input --> Pass1
+    Pass1 --> Scalar
+    Scalar --> Pass2
+    input --> Pass2
+    weight --> Pass2
+```
+
 (simplified for clarity -- the real implementation in norm.zig uses 4-accumulator unrolling with a stride-32 inner loop to hide FMA latency)
 
 ```zig
@@ -613,6 +734,48 @@ pub fn rmsNorm(input: [*]const f32, weight: [*]const f32, output: [*]f32, n: usi
 ## Activation Sparsity (Sparse GEMV)
 
 After SiLU activation in FFN layers, ~40% of output values are near-zero (magnitude < 0.005). The down-projection GEMV multiplies these near-zero values by weight blocks — wasting ~40% of compute. Sparse GEMV skips these blocks entirely:
+
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#e8f0fe',
+  'primaryTextColor': '#1a1a2e',
+  'primaryBorderColor': '#4a6cf7',
+  'lineColor': '#4a6cf7',
+  'secondaryColor': '#f0f4ff',
+  'tertiaryColor': '#f8f9ff',
+  'edgeLabelBackground': '#ffffff',
+  'clusterBkg': '#f0f4ff',
+  'clusterBorder': '#4a6cf7',
+  'titleColor': '#1a1a2e',
+  'nodeTextColor': '#1a1a2e',
+  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
+}}}%%
+flowchart TD
+    gate["gate_proj output\n(n values)"]
+    up["up_proj output\n(n values)"]
+
+    subgraph SiLU["SiLU activation\nx * sigmoid(x)"]
+        direction LR
+        act["gate * sigmoid(gate)\nelement-wise"]
+    end
+
+    subgraph Sparsity["~40% near-zero after SiLU\n(magnitude < threshold)"]
+        direction LR
+        sparse["block 0: |max| = 0.001\nSKIP"] -.- dense1["block 1: |max| = 0.83\ncompute"] -.- sparse2["block 2: |max| = 0.002\nSKIP"] -.- dense2["block 3: |max| = 1.2\ncompute"]
+    end
+
+    subgraph Check["isBlockSparse (SIMD max-abs)"]
+        direction LR
+        c1["@reduce(.Max, @abs(xv))\n~1 cycle per 8 elements"] --> c2{"< threshold?"}
+        c2 -- "yes" --> skip["continue\n(skip dequant + dot)"]
+        c2 -- "no" --> compute["normal GEMV block\n(dequant + FMA)"]
+    end
+
+    gate --> SiLU
+    up --> SiLU
+    SiLU -- "element-wise product" --> Sparsity
+    Sparsity --> Check
+```
 
 ```zig
 // Before processing each weight block, check if input is negligible

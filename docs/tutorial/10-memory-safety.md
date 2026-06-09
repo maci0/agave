@@ -160,6 +160,39 @@ flowchart LR
     Acquire --> Exit
 ```
 
+**Quick decision guide** — which keyword to reach for:
+
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#e8f0fe',
+  'primaryTextColor': '#1a1a2e',
+  'primaryBorderColor': '#4a6cf7',
+  'lineColor': '#4a6cf7',
+  'secondaryColor': '#f0f4ff',
+  'tertiaryColor': '#f8f9ff',
+  'edgeLabelBackground': '#ffffff',
+  'clusterBkg': '#f0f4ff',
+  'clusterBorder': '#4a6cf7',
+  'titleColor': '#1a1a2e',
+  'nodeTextColor': '#1a1a2e',
+  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
+}}}%%
+flowchart TD
+    START["You just acquired a resource\n(alloc, open, init)"]
+
+    START --> Q1{"Are you going to return\nthis resource to the caller?"}
+
+    Q1 -- "yes\ne.g. return buf, return struct" --> Q2{"Could the function\nerror out after this point?"}
+    Q1 -- "no\nthis function owns it fully" --> USE_DEFER["use defer\ncleanup runs on ALL exits\n(success and error)"]
+
+    Q2 -- "yes\nmore fallible steps below" --> USE_ERRDEFER["use errdefer\ncleanup runs ONLY on error\ncaller gets ownership on success"]
+    Q2 -- "no\nthis is the last step" --> NO_DEFER["no defer needed\nreturn and transfer ownership\nno error path to guard"]
+
+    style USE_DEFER fill:#e8f0fe,stroke:#4a6cf7
+    style USE_ERRDEFER fill:#fff3e0,stroke:#f6a623
+    style NO_DEFER fill:#f0fff0,stroke:#6a6
+```
+
 ### Example 1: Simple Allocation
 
 ```zig
@@ -280,6 +313,47 @@ pub fn initAndRun(allocator: Allocator, args: Args) !void {
 
 ### Pitfall 1: defer in a Loop
 
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#e8f0fe',
+  'primaryTextColor': '#1a1a2e',
+  'primaryBorderColor': '#4a6cf7',
+  'lineColor': '#4a6cf7',
+  'secondaryColor': '#f0f4ff',
+  'tertiaryColor': '#f8f9ff',
+  'edgeLabelBackground': '#ffffff',
+  'clusterBkg': '#f0f4ff',
+  'clusterBorder': '#4a6cf7',
+  'titleColor': '#1a1a2e',
+  'nodeTextColor': '#1a1a2e',
+  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
+}}}%%
+flowchart TD
+    subgraph BAD["BAD — defer in loop body (defers pile up)"]
+        direction TB
+        B1["iteration 1\nopen file_a\ndefer file_a.close()"] --> B2["iteration 2\nopen file_b\ndefer file_b.close()"]
+        B2 --> B3["iteration 3\nopen file_c\ndefer file_c.close()"]
+        B3 --> B4["function exits\n(or errors out)"]
+        B4 --> B5["file_c.close()\nfile_b.close()\nfile_a.close()\nALL 3 files were open simultaneously"]
+    end
+
+    subgraph GOOD["GOOD — explicit inner scope forces early run"]
+        direction TB
+        G1["iteration 1\n{ open file_a\n  defer file_a.close()\n  ... process ... }"] --> G1C["file_a.close() runs here"]
+        G1C --> G2["iteration 2\n{ open file_b\n  defer file_b.close()\n  ... process ... }"]
+        G2 --> G2C["file_b.close() runs here"]
+        G2C --> G3["iteration 3\n{ open file_c\n  defer file_c.close()\n  ... process ... }"]
+        G3 --> G3C["file_c.close() runs here"]
+    end
+
+    style BAD fill:#fff0f0,stroke:#f66
+    style GOOD fill:#f0fff0,stroke:#6a6
+    style B5 fill:#f66,color:#fff
+    style G1C fill:#6a6,color:#fff
+    style G2C fill:#6a6,color:#fff
+    style G3C fill:#6a6,color:#fff
+```
+
 ```zig
 // BAD: defer accumulates, all run at function exit
 for (files) |path| {
@@ -387,6 +461,41 @@ pub fn init(allocator: Allocator) !MyStruct {
 ```
 
 ## Testing for Leaks
+
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#e8f0fe',
+  'primaryTextColor': '#1a1a2e',
+  'primaryBorderColor': '#4a6cf7',
+  'lineColor': '#4a6cf7',
+  'secondaryColor': '#f0f4ff',
+  'tertiaryColor': '#f8f9ff',
+  'edgeLabelBackground': '#ffffff',
+  'clusterBkg': '#f0f4ff',
+  'clusterBorder': '#4a6cf7',
+  'titleColor': '#1a1a2e',
+  'nodeTextColor': '#1a1a2e',
+  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
+}}}%%
+flowchart TD
+    subgraph TestAllocator["std.testing.allocator — Leak Detection Lifecycle"]
+        direction TB
+        T0["test begins\nallocator created\nalloc table = {}"]
+
+        T0 --> A1["alloc(u8, 100)\nregisters ptr_A → 100 bytes\ntable = {ptr_A}"]
+        A1 --> A2["alloc(u32, 64)\nregisters ptr_B → 256 bytes\ntable = {ptr_A, ptr_B}"]
+        A2 --> F1["free(ptr_A)\nremoves ptr_A from table\ntable = {ptr_B}"]
+        F1 --> TE["test body exits"]
+
+        TE --> CHECK{"alloc table\nempty?"}
+        CHECK -- "yes\ntable = {}" --> PASS["TEST PASS\nno leaks"]
+        CHECK -- "no\ntable = {ptr_B}" --> FAIL["TEST FAIL\nmemory leak detected\nptr_B (256 bytes) was never freed"]
+    end
+
+    style PASS fill:#6a6,color:#fff
+    style FAIL fill:#f66,color:#fff
+    style T0 fill:#e8f0fe,stroke:#4a6cf7
+```
 
 Zig's test allocator **automatically detects leaks**:
 

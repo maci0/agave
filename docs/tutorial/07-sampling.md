@@ -176,6 +176,46 @@ DRY penalizes tokens that would continue a repeated n-gram sequence. If the mode
 
 `dry_multiplier` scales the penalty (0 = disabled). `dry_allowed_length` sets the minimum n-gram length to trigger (default 2 — penalize repeated bigrams and longer). More effective than `repeat_penalty` because it detects repeated **sequences**, not just individual tokens. A token might be fine to repeat (e.g., "the") unless it's part of a repeated phrase.
 
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#e8f0fe',
+  'primaryTextColor': '#1a1a2e',
+  'primaryBorderColor': '#4a6cf7',
+  'lineColor': '#4a6cf7',
+  'secondaryColor': '#f0f4ff',
+  'tertiaryColor': '#f8f9ff',
+  'edgeLabelBackground': '#ffffff',
+  'clusterBkg': '#f0f4ff',
+  'clusterBorder': '#4a6cf7',
+  'titleColor': '#1a1a2e',
+  'nodeTextColor': '#1a1a2e',
+  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
+}}}%%
+flowchart TD
+    History["Generation History\n[... the cat sat on the mat ...]"] --> Window["Sliding Window Scan\nfor each candidate token C"]
+    Window --> Match{"Does token C appear\nearlier in history?"}
+
+    Match -->|No match| NoPenalty["No DRY penalty\nlogit unchanged"]
+    Match -->|Match found| Extend["Extend match backward\nhow many prior tokens also match?"]
+
+    Extend --> Length["Match length L\n(tokens in common prefix)"]
+    Length --> Allowed{"L >= dry_allowed_length?"}
+
+    Allowed -->|No, sequence too short| NoPenalty
+    Allowed -->|Yes, repeated phrase| Penalty["Apply penalty\nlogit -= dry_multiplier ^ L"]
+
+    subgraph Example["Example: dry_multiplier=1.5, dry_allowed_length=2"]
+        Ex1["token 'sat' after 'cat'\nL=1 (just 'sat') → no penalty"]
+        Ex2["token 'on' after 'cat sat'\nL=2 (bigram) → penalty x1.5^2=2.25"]
+        Ex3["token 'mat' after 'cat sat on'\nL=3 → penalty x1.5^3=3.375"]
+    end
+
+    subgraph Contrast["vs repeat_penalty"]
+        RP["repeat_penalty: penalizes\neach token individually\n'the' always penalized"]
+        DRY2["DRY: penalizes token only\nwhen it continues a phrase\n'the' fine alone, penalized in repeated phrase"]
+    end
+```
+
 ## Mirostat
 
 Mirostat maintains consistent **perplexity** (unpredictability) during generation by dynamically adjusting the sampling threshold. Instead of fixed temperature, it targets a specific entropy level (tau) and adapts via learning rate (eta):
@@ -189,6 +229,46 @@ Mirostat maintains consistent **perplexity** (unpredictability) during generatio
 | `mirostat` | 0 | Mode: 0=disabled, 2=Mirostat 2.0 |
 | `mirostat_tau` | 5.0 | Target entropy — lower = more focused, higher = more creative |
 | `mirostat_eta` | 0.1 | Learning rate — how fast to adapt |
+
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#e8f0fe',
+  'primaryTextColor': '#1a1a2e',
+  'primaryBorderColor': '#4a6cf7',
+  'lineColor': '#4a6cf7',
+  'secondaryColor': '#f0f4ff',
+  'tertiaryColor': '#f8f9ff',
+  'edgeLabelBackground': '#ffffff',
+  'clusterBkg': '#f0f4ff',
+  'clusterBorder': '#4a6cf7',
+  'titleColor': '#1a1a2e',
+  'nodeTextColor': '#1a1a2e',
+  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
+}}}%%
+flowchart TD
+    Logits["Raw Logits\none score per vocab token"] --> Trunc["Truncate to top-k candidates\n(Mirostat controls k dynamically)"]
+    Trunc --> Softmax["Softmax\ncompute probabilities"]
+    Softmax --> Sample["Weighted Random Sample\npick next token"]
+    Sample --> Surprise["Measure Surprise\n-log2(prob of sampled token)"]
+    Surprise --> Error["Error = surprise - tau\ntau = target entropy"]
+    Error --> Update["Update mu\nmu -= eta * error"]
+    Update --> NextK["Set next k\nbased on updated mu"]
+    NextK -->|next token| Logits
+
+    subgraph Params["Control Parameters"]
+        Tau["tau (target entropy)\nlower = focused\nhigher = creative"]
+        Eta["eta (learning rate)\nhow fast mu adapts"]
+    end
+
+    subgraph State["Running State"]
+        Mu["mu\ncurrent entropy estimate\nstarts at 2 * tau"]
+    end
+
+    Update -.->|adjusts| Mu
+    Mu -.->|drives| NextK
+    Tau -.->|anchors| Error
+    Eta -.->|scales| Update
+```
 
 When Mirostat is active, top-k and top-p are bypassed — Mirostat controls its own truncation. It works by tracking a running "surprise" estimate and adjusting which tokens are eligible for sampling. Produces more consistently readable output than fixed temperature across varying prompt types.
 
@@ -220,6 +300,48 @@ agave model.gguf --json-output "Generate a user profile"
 The grammar state machine masks logits before sampling — tokens that would violate the grammar get set to -infinity. This guarantees syntactically valid output regardless of sampling parameters.
 
 **Jump decoding**: When the grammar allows exactly one valid next token (e.g., a colon after a JSON key, a closing brace at the end), the forward pass is skipped entirely and that token is emitted directly. This eliminates unnecessary GPU compute for deterministic structural tokens, significantly speeding up JSON schema output where many tokens are fixed by the schema.
+
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#e8f0fe',
+  'primaryTextColor': '#1a1a2e',
+  'primaryBorderColor': '#4a6cf7',
+  'lineColor': '#4a6cf7',
+  'secondaryColor': '#f0f4ff',
+  'tertiaryColor': '#f8f9ff',
+  'edgeLabelBackground': '#ffffff',
+  'clusterBkg': '#f0f4ff',
+  'clusterBorder': '#4a6cf7',
+  'titleColor': '#1a1a2e',
+  'nodeTextColor': '#1a1a2e',
+  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
+}}}%%
+stateDiagram-v2
+    [*] --> GrammarState: parse grammar / JSON schema
+
+    GrammarState --> ValidSet: compute valid next tokens\nfrom current state
+
+    ValidSet --> JumpCheck: how many valid tokens?
+
+    JumpCheck --> JumpDecode: exactly one valid token\n(e.g. colon after JSON key)
+    JumpCheck --> MaskLogits: multiple valid tokens
+
+    JumpDecode --> EmitToken: emit token directly\nno GPU forward pass needed
+
+    MaskLogits --> MaskedLogits: set invalid tokens to -infinity\nvalid tokens unchanged
+
+    MaskedLogits --> SamplingPipeline: temperature / top-k / top-p\napplied to masked logits
+
+    SamplingPipeline --> Sample: weighted random pick\nfrom valid-token distribution
+
+    Sample --> EmitToken: sampled token
+
+    EmitToken --> AdvanceState: advance grammar state machine\nwith emitted token
+
+    AdvanceState --> GrammarState: ready for next position
+
+    AdvanceState --> [*]: grammar accepted\n(output complete)
+```
 
 Supported: GBNF strings, GBNF files (`--grammar`), JSON schemas (`--json-schema`), JSON mode (`--json-output`). Full repetition (`*`/`+`/`?`) and grouped expressions.
 

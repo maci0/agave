@@ -212,6 +212,55 @@ acc += scale * q_dot + bias * x_sum;  // Apply scale/bias ONCE
 
 **Savings:** 192 → 130 ops = **32% reduction** in arithmetic. Real-world speedup: **30-40%** (measured on Apple M4 with Gemma3 27B QAT).
 
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#e8f0fe',
+  'primaryTextColor': '#1a1a2e',
+  'primaryBorderColor': '#4a6cf7',
+  'lineColor': '#4a6cf7',
+  'secondaryColor': '#f0f4ff',
+  'tertiaryColor': '#f8f9ff',
+  'edgeLabelBackground': '#ffffff',
+  'clusterBkg': '#f0f4ff',
+  'clusterBorder': '#4a6cf7',
+  'titleColor': '#1a1a2e',
+  'nodeTextColor': '#1a1a2e',
+  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
+}}}%%
+flowchart LR
+    subgraph Naive["Naive: 192 ops per group"]
+        direction TB
+        NI["for j in 0..64"]
+        NU["unpack q[j]\n(64 ops)"]
+        ND["scale × q[j] + bias\n(64 muls + 64 adds)"]
+        NA["acc += dq × x[j]\n(64 FMAs)"]
+        NI --> NU --> ND --> NA
+        NT["Total: 192 ops"]
+        NA --> NT
+    end
+
+    subgraph Factored["Factored: 130 ops per group"]
+        direction TB
+        FI["for j in 0..64"]
+        FQ["q_dot += q[j] × x[j]\n(64 FMAs)"]
+        FX["x_sum += x[j]\n(64 adds)"]
+        FF["acc += scale×q_dot\n       + bias×x_sum\n(2 final ops)"]
+        FI --> FQ
+        FI --> FX
+        FQ --> FF
+        FX --> FF
+        FT["Total: 130 ops"]
+        FF --> FT
+    end
+
+    Naive -->|"32% fewer ops\n30-40% real speedup"| Factored
+
+    style NT fill:#f5c6cb,color:#721c24
+    style FT fill:#c3e6cb,color:#155724
+    style Naive fill:#fff5f5
+    style Factored fill:#f5fff5
+```
+
 **Why this works:**
 
 - Scale and bias are **constant per group** (same for all 64 elements)
@@ -509,6 +558,55 @@ Dequantize: unpack → codebook → inverse WHT → rescale
 
 The WHT is a deterministic rotation (like a Fourier transform but with only additions and subtractions) that makes each coordinate approximately N(0,1), regardless of the original distribution. This lets us use a single fixed codebook — no per-model calibration needed.
 
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#e8f0fe',
+  'primaryTextColor': '#1a1a2e',
+  'primaryBorderColor': '#4a6cf7',
+  'lineColor': '#4a6cf7',
+  'secondaryColor': '#f0f4ff',
+  'tertiaryColor': '#f8f9ff',
+  'edgeLabelBackground': '#ffffff',
+  'clusterBkg': '#f0f4ff',
+  'clusterBorder': '#4a6cf7',
+  'titleColor': '#1a1a2e',
+  'nodeTextColor': '#1a1a2e',
+  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
+}}}%%
+flowchart LR
+    KV["KV vector\n(128-dim, f16)"]
+
+    subgraph Quantize["Quantize path"]
+        direction LR
+        N1["1. Normalize\ndivide by RMS norm\n→ unit vector"]
+        W1["2. WHT\n5-stage butterfly\n~640 add/sub ops\n→ N(0,1) coords"]
+        CB1["3. Codebook lookup\nLloyd-Max optimal\nbins per bit-width"]
+        PK["4. Pack\nf16 norm + indices\n(2B + n×bits)"]
+    end
+
+    subgraph Dequantize["Dequantize path"]
+        direction RL
+        UPK["1. Unpack\nread norm + indices"]
+        CB2["2. Codebook decode\nindex → centroid value"]
+        IW["3. Inverse WHT\nrestore original basis"]
+        RS["4. Rescale\nmultiply by norm"]
+    end
+
+    KV --> N1 --> W1 --> CB1 --> PK
+    PK -->|"stored in KV cache"| UPK
+    UPK --> CB2 --> IW --> RS
+    RS --> OUT["Restored KV vector\n(approx, f16)"]
+
+    style N1 fill:#e8f0fe
+    style W1 fill:#dce8fd
+    style CB1 fill:#d0dffc
+    style PK fill:#c4d7fb
+    style UPK fill:#c4d7fb
+    style CB2 fill:#d0dffc
+    style IW fill:#dce8fd
+    style RS fill:#e8f0fe
+```
+
 ### Format Family
 
 | Format | Bits/elem | Compression vs f16 | PPL impact |
@@ -665,6 +763,57 @@ Coordinates are grouped into triples (with padding for the 128 -> 129 case). Tot
 
 ### Comparison
 
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#e8f0fe',
+  'primaryTextColor': '#1a1a2e',
+  'primaryBorderColor': '#4a6cf7',
+  'lineColor': '#4a6cf7',
+  'secondaryColor': '#f0f4ff',
+  'tertiaryColor': '#f8f9ff',
+  'edgeLabelBackground': '#ffffff',
+  'clusterBkg': '#f0f4ff',
+  'clusterBorder': '#4a6cf7',
+  'titleColor': '#1a1a2e',
+  'nodeTextColor': '#1a1a2e',
+  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
+}}}%%
+flowchart TD
+    IN["KV vector\n128-dim, f16"]
+
+    subgraph PQ["PlanarQuant  --kv-type pq3"]
+        direction TB
+        PG["Givens 2D rotation\n64 coordinate pairs\ncos/sin per pair"]
+        PF["256 FMAs total\n(4 per pair × 64 pairs)"]
+        PP["Best 3-bit PPL\nFastest encode/decode"]
+        PG --> PF --> PP
+    end
+
+    subgraph IQ["IsoQuant  --kv-type iq3"]
+        direction TB
+        IG["Quaternion 3D rotation\n32 groups of 4 elems\nq v q* sandwich"]
+        IF["512 FMAs total\n(16 per group × 32 groups)"]
+        IP["Balanced speed/quality\nDeeper decorrelation"]
+        IG --> IF --> IP
+    end
+
+    subgraph RQ["RotorQuant  --kv-type rq3"]
+        direction TB
+        RG["Clifford Cl(3,0) rotor\ntriple bivector rotation\nR x R~ sandwich"]
+        RF["~2400 FMAs total\n(~75 per triple × 32)"]
+        RP["Structure-preserving\nGeometric fidelity"]
+        RG --> RF --> RP
+    end
+
+    IN -->|"2D pairs"| PQ
+    IN -->|"4-elem groups"| IQ
+    IN -->|"3-elem triples"| RQ
+
+    PQ --> OUT["f16 norm + packed indices\n(shared storage layout)"]
+    IQ --> OUT
+    RQ --> OUT
+```
+
 | Method | Transform | Group Size | FMAs (128-dim) | Best Use Case |
 |--------|-----------|-----------|----------------|---------------|
 | TurboQuant | Walsh-Hadamard | 32 (block) | ~640 | Maximum decorrelation, any distribution |
@@ -711,7 +860,7 @@ flowchart TD
     style BigBuf fill:#c0392b,color:#fff
     style GoodPath fill:#27ae60,color:#fff
     style Dot fill:#27ae60,color:#fff
-
+```
 
 ```
 // BAD: dequantize entire matrix, then multiply
@@ -735,6 +884,51 @@ For a 2560×2560 matrix, that's 6.5M **multiply-accumulates** (multiply two numb
 (For the full mathematical definition with examples, see [Math Reference: GEMV](appendix-math.md#matrix-vector-multiply-gemv))
 
 ## Choosing a Format
+
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#e8f0fe',
+  'primaryTextColor': '#1a1a2e',
+  'primaryBorderColor': '#4a6cf7',
+  'lineColor': '#4a6cf7',
+  'secondaryColor': '#f0f4ff',
+  'tertiaryColor': '#f8f9ff',
+  'edgeLabelBackground': '#ffffff',
+  'clusterBkg': '#f0f4ff',
+  'clusterBorder': '#4a6cf7',
+  'titleColor': '#1a1a2e',
+  'nodeTextColor': '#1a1a2e',
+  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
+}}}%%
+flowchart TD
+    START["What are you quantizing?"]
+
+    START -->|"KV cache at runtime"| KV["KV cache path"]
+    START -->|"Model weights"| WQ["Weight quant path"]
+
+    subgraph KVPath["KV Cache"]
+        KV --> KVQ["Quality priority?"]
+        KVQ -->|"max quality"| KVF16["f16 / FP8 E4M3\n--kv-type f16"]
+        KVQ -->|"balanced"| KVT["turbo preset\n--kv-type turbo\nq8_0-K + turbo4-V"]
+        KVQ -->|"max compression"| KVT2["turbo2 / turbo3\n--kv-type turbo3\n4.6x vs f16"]
+        KVQ -->|"CPU-bound decode"| KVP["PlanarQuant pq3\n256 FMAs, fastest"]
+    end
+
+    subgraph WPath["Model Weights"]
+        WQ --> WPlatform["Target platform?"]
+
+        WPlatform -->|"CPU"| WCPU["IQ4_NL / Q4_0 / Q5_K\nOptimized SIMD kernels"]
+        WPlatform -->|"Apple Silicon"| WAPPLE["MLX 4-bit\nNative Metal, affine quant"]
+        WPlatform -->|"GPU (limited VRAM)"| WGPU["Q4_K / FP8 E4M3\nGood quality/size ratio"]
+        WPlatform -->|"BitNet model"| WBIT["TQ1_0 / TQ2_0\nTernary weights"]
+
+        WPlatform -->|"Need calibration-free"| WCAL["Calibration available?"]
+        WCAL -->|"yes"| WGPTQ["GPTQ / AWQ\nHessian / activation scale"]
+        WCAL -->|"no"| WHQQ["HQQ\nNo calibration needed"]
+
+        WPlatform -->|"Reference / debug"| WREF["f32 / bf16\nFull precision"]
+    end
+```
 
 | Use Case | Recommended | Rationale |
 |----------|-------------|-----------|

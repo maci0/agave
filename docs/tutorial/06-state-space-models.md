@@ -100,6 +100,51 @@ Shift left:  buffer becomes [input[t-2], input[t-1], input[t]]
 
 Agave fuses the convolution with SiLU activation in a single pass.
 
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#e8f0fe',
+  'primaryTextColor': '#1a1a2e',
+  'primaryBorderColor': '#4a6cf7',
+  'lineColor': '#4a6cf7',
+  'secondaryColor': '#f0f4ff',
+  'tertiaryColor': '#f8f9ff',
+  'edgeLabelBackground': '#ffffff',
+  'clusterBkg': '#f0f4ff',
+  'clusterBorder': '#4a6cf7',
+  'titleColor': '#1a1a2e',
+  'nodeTextColor': '#1a1a2e',
+  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
+}}}%%
+flowchart LR
+    subgraph Weights["Learned conv weights (d_conv = 4)"]
+        direction LR
+        W0["w[0]\noldest"] --- W1["w[1]"] --- W2["w[2]"] --- W3["w[3]\nnewest"]
+    end
+
+    subgraph RingBuf["Ring buffer — circular, fixed allocation"]
+        direction LR
+        B0["buf[t-3]\nslot 0"] --- B1["buf[t-2]\nslot 1"] --- B2["buf[t-1]\nslot 2"] --- B3["x[t]\nslot 3 (new)"]
+    end
+
+    subgraph Multiply["Element-wise multiply and sum"]
+        direction LR
+        P0["w[0] × buf[t-3]"] --> Sum["Σ = conv_out[t]"]
+        P1["w[1] × buf[t-2]"] --> Sum
+        P2["w[2] × buf[t-1]"] --> Sum
+        P3["w[3] × x[t]"] --> Sum
+    end
+
+    subgraph Advance["Next step — oldest slot overwritten"]
+        direction LR
+        A0["buf[t-2]\nslot 0"] --- A1["buf[t-1]\nslot 1"] --- A2["x[t]\nslot 2"] --- A3["x[t+1]\nslot 3 (new)"]
+    end
+
+    Weights --> Multiply
+    RingBuf --> Multiply
+    Sum -->|"SiLU(conv_out[t])"| Out["fused output"]
+    RingBuf -->|"head pointer\nadvances by 1"| Advance
+```
+
 ## DeltaNet (Qwen3.5)
 
 DeltaNet builds on the delta rule for associative memory, first explored in the context of linear transformers by [Schlag et al. (2021)](https://arxiv.org/abs/2102.11174) and developed into the DeltaNet architecture by [Yang et al. (2024)](https://arxiv.org/abs/2406.06484).
@@ -319,6 +364,58 @@ SSM recurrence is **inherently sequential** — each timestep depends on the pre
 - **GPU dispatch**: GPU backends (Metal, Vulkan, WebGPU, ROCm) run the full DeltaNet recurrence on the GPU. The CUDA backend falls back to the CPU SIMD kernel (V8-vectorized, not scalar). The state update loop is sequential across v-heads, not memory-bound.
 
 ## Hybrid Layer Patterns
+
+Qwen3.5 places a full-attention layer every 4th layer across its 64-layer stack. The remaining 48 layers are DeltaNet SSM layers, making token generation cheap on most layers while preserving exact recall at regular checkpoints.
+
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#e8f0fe',
+  'primaryTextColor': '#1a1a2e',
+  'primaryBorderColor': '#4a6cf7',
+  'lineColor': '#4a6cf7',
+  'secondaryColor': '#f0f4ff',
+  'tertiaryColor': '#f8f9ff',
+  'edgeLabelBackground': '#ffffff',
+  'clusterBkg': '#f0f4ff',
+  'clusterBorder': '#4a6cf7',
+  'titleColor': '#1a1a2e',
+  'nodeTextColor': '#1a1a2e',
+  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
+}}}%%
+flowchart TD
+    Input["Token embedding"]
+
+    subgraph Block0["Layers 0–3"]
+        direction TB
+        L0["Layer 0\nDeltaNet SSM"] --> L1["Layer 1\nDeltaNet SSM"] --> L2["Layer 2\nDeltaNet SSM"] --> L3["Layer 3\nFull Attention ✦"]
+    end
+
+    subgraph Block1["Layers 4–7"]
+        direction TB
+        L4["Layer 4\nDeltaNet SSM"] --> L5["Layer 5\nDeltaNet SSM"] --> L6["Layer 6\nDeltaNet SSM"] --> L7["Layer 7\nFull Attention ✦"]
+    end
+
+    subgraph BlockMid["Layers 8–59  (pattern repeats × 13)"]
+        direction TB
+        LM["SSM → SSM → SSM → Attention ✦\nevery 4th layer is attention"]
+    end
+
+    subgraph Block60["Layers 60–63"]
+        direction TB
+        L60["Layer 60\nDeltaNet SSM"] --> L61["Layer 61\nDeltaNet SSM"] --> L62["Layer 62\nDeltaNet SSM"] --> L63["Layer 63\nFull Attention ✦"]
+    end
+
+    Input --> Block0 --> Block1 --> BlockMid --> Block60
+
+    LegSSM["DeltaNet SSM — O(d²) per token\n48 layers — fast state update"]
+    LegATN["Full Attention ✦ — O(n) per token\n16 layers — exact recall checkpoint"]
+
+    style LegSSM fill:#e8f0fe,stroke:#4a6cf7
+    style LegATN fill:#fff3cd,stroke:#f0ad4e
+    style L3 fill:#fff3cd,stroke:#f0ad4e
+    style L7 fill:#fff3cd,stroke:#f0ad4e
+    style L63 fill:#fff3cd,stroke:#f0ad4e
+```
 
 | Model | Pattern | Rule |
 | :--- | :--- | :--- |

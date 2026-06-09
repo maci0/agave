@@ -300,6 +300,39 @@ if (self.fmt.is_safetensors) {
 
 **Why the difference?** llama.cpp pre-computes this to avoid calling `exp()` on every token. PyTorch stores the raw value for flexibility.
 
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#e8f0fe',
+  'primaryTextColor': '#1a1a2e',
+  'primaryBorderColor': '#4a6cf7',
+  'lineColor': '#4a6cf7',
+  'secondaryColor': '#f0f4ff',
+  'tertiaryColor': '#f8f9ff',
+  'edgeLabelBackground': '#ffffff',
+  'clusterBkg': '#f0f4ff',
+  'clusterBorder': '#4a6cf7',
+  'titleColor': '#1a1a2e',
+  'nodeTextColor': '#1a1a2e',
+  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
+}}}%%
+flowchart TD
+    subgraph ST["SafeTensors path"]
+        ST_Raw["A_log tensor\nraw log value\n(e.g. -3.2)"]
+        ST_Conv["init() conversion\n-exp(A_log)\nonce at model load"]
+        ST_Use["ssm_a[h]\nalready -exp(A_log)\nused directly in decay"]
+        ST_Raw -->|"is_safetensors = true"| ST_Conv --> ST_Use
+    end
+
+    subgraph GG["GGUF path"]
+        GG_Pre["A_log tensor\npre-converted by llama.cpp\n-exp(A_log) on disk"]
+        GG_Use["ssm_a[h]\nalready -exp(A_log)\nused directly in decay"]
+        GG_Pre -->|"no conversion needed"| GG_Use
+    end
+
+    ST_Use --> Decay["decay = ssm_a[h] * dt\nsame kernel code\nboth formats"]
+    GG_Use --> Decay
+```
+
 ### 4. Q/Gate Split Layout
 
 **Operation:** DeltaNet projects Q and gate together, then splits them.
@@ -339,6 +372,42 @@ if (self.fmt.is_safetensors) {
 ```
 
 **Impact:** Wrong layout → Q gets half of gate's values, gate gets half of Q's → attention completely broken.
+
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#e8f0fe',
+  'primaryTextColor': '#1a1a2e',
+  'primaryBorderColor': '#4a6cf7',
+  'lineColor': '#4a6cf7',
+  'secondaryColor': '#f0f4ff',
+  'tertiaryColor': '#f8f9ff',
+  'edgeLabelBackground': '#ffffff',
+  'clusterBkg': '#f0f4ff',
+  'clusterBorder': '#4a6cf7',
+  'titleColor': '#1a1a2e',
+  'nodeTextColor': '#1a1a2e',
+  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
+}}}%%
+flowchart LR
+    subgraph GGUFMem["GGUF memory layout — interleaved per element"]
+        direction TB
+        GH0["head 0\n[Q0, G0, Q1, G1,\n..., Q_hd-1, G_hd-1]"]
+        GH1["head 1\n[Q0, G0, Q1, G1,\n..., Q_hd-1, G_hd-1]"]
+        GHN["head nh-1\n[Q0, G0, Q1, G1,\n..., Q_hd-1, G_hd-1]"]
+        GH0 ~~~ GH1 ~~~ GHN
+    end
+
+    subgraph STMem["SafeTensors memory layout — concatenated halves"]
+        direction TB
+        SH0["head 0\n[Q0, Q1, ..., Q_hd-1,\n G0, G1, ..., G_hd-1]"]
+        SH1["head 1\n[Q0, Q1, ..., Q_hd-1,\n G0, G1, ..., G_hd-1]"]
+        SHN["head nh-1\n[Q0, Q1, ..., Q_hd-1,\n G0, G1, ..., G_hd-1]"]
+        SH0 ~~~ SH1 ~~~ SHN
+    end
+
+    GGUFMem -->|"stride = i*2\nstride+1 = gate"| SplitG["q_buf / g_buf\nsplit correctly"]
+    STMem -->|"first half = Q\nsecond half = gate"| SplitG
+```
 
 ### 5. Gate Detection via Tensor Dimensions
 
@@ -423,6 +492,42 @@ fn normAsF32(self: *Qwen35Model, t: TensorInfo, n: usize) [*]const f32 {
 ```
 
 **Key insight:** Each norm weight gets its own permanent f32 buffer. Metal caches the pointer → always correct data.
+
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#e8f0fe',
+  'primaryTextColor': '#1a1a2e',
+  'primaryBorderColor': '#4a6cf7',
+  'lineColor': '#4a6cf7',
+  'secondaryColor': '#f0f4ff',
+  'tertiaryColor': '#f8f9ff',
+  'edgeLabelBackground': '#ffffff',
+  'clusterBkg': '#f0f4ff',
+  'clusterBorder': '#4a6cf7',
+  'titleColor': '#1a1a2e',
+  'nodeTextColor': '#1a1a2e',
+  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
+}}}%%
+flowchart TD
+    subgraph Bad["Bad pattern — scratch buffer reuse"]
+        B1["dequant(norm_layer1, scratch)"]
+        B2["getBufRef(scratch)\ncaches ptr → MTLBuffer A"]
+        B3["dequant(norm_layer2, scratch)\noverwrites scratch memory"]
+        B4["getBufRef(scratch)\nreturns CACHED MTLBuffer A\n(stale — still points to layer1 data)"]
+        B5["GPU reads layer1 norm weights\nfor layer2 forward pass\nSILENT CORRUPTION"]
+        B1 --> B2 --> B3 --> B4 --> B5
+    end
+
+    subgraph Good["Fixed pattern — per-tensor cache"]
+        G1["normAsF32(tensor)\ncheck norm_cache by data_ptr key"]
+        G2{"cache hit?"}
+        G3["return cached f32 buf\npermanent allocation\ncorrect MTLBuffer always"]
+        G4["allocate new f32 buf\ndequant once\nstore in norm_cache\nreturn stable ptr"]
+        G1 --> G2
+        G2 -->|"yes"| G3
+        G2 -->|"no"| G4
+    end
+```
 
 ## Metadata Key Mapping
 
@@ -577,6 +682,40 @@ This means all model code can use `dims[0]` uniformly:
 const out_dim = tensor.dims[0];  // Always outer dimension
 ```
 
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#e8f0fe',
+  'primaryTextColor': '#1a1a2e',
+  'primaryBorderColor': '#4a6cf7',
+  'lineColor': '#4a6cf7',
+  'secondaryColor': '#f0f4ff',
+  'tertiaryColor': '#f8f9ff',
+  'edgeLabelBackground': '#ffffff',
+  'clusterBkg': '#f0f4ff',
+  'clusterBorder': '#4a6cf7',
+  'titleColor': '#1a1a2e',
+  'nodeTextColor': '#1a1a2e',
+  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
+}}}%%
+flowchart LR
+    subgraph OnDisk["On-disk representation"]
+        GGDisk["GGUF binary\ndims stored reversed\n[cols, rows]\n(inner dimension first)"]
+        STDisk["SafeTensors JSON header\ndims in PyTorch order\n[rows, cols]\n(outer dimension first)"]
+    end
+
+    subgraph Parse["Parsing step"]
+        GGParse["gguf.zig readTensor()\nreverses dims array:\ndims[d] = raw[n-1-d]"]
+        STParse["safetensors.zig readTensor()\nno reversal needed\ndims taken as-is"]
+    end
+
+    subgraph Normalized["Normalized TensorInfo (both formats)"]
+        Result["dims[0] = rows (output dim)\ndims[1] = cols (input dim)\ndims[2] = depth (3D tensors)\n\nModel code reads dims[0] uniformly"]
+    end
+
+    GGDisk --> GGParse --> Result
+    STDisk --> STParse --> Result
+```
+
 ## Testing Across Formats
 
 **Strategy:** Load the same model in both formats, compare outputs token-by-token.
@@ -665,6 +804,53 @@ SafeTensors `config.json` files may store rope configuration doubly nested in `t
 ## mmproj GGUF — Vision Encoder Weights
 
 Multimodal models store vision encoder weights in a **separate GGUF file** (the "mmproj" file), distinct from the main language model GGUF. This keeps the text model self-contained — vision is an optional add-on.
+
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#e8f0fe',
+  'primaryTextColor': '#1a1a2e',
+  'primaryBorderColor': '#4a6cf7',
+  'lineColor': '#4a6cf7',
+  'secondaryColor': '#f0f4ff',
+  'tertiaryColor': '#f8f9ff',
+  'edgeLabelBackground': '#ffffff',
+  'clusterBkg': '#f0f4ff',
+  'clusterBorder': '#4a6cf7',
+  'titleColor': '#1a1a2e',
+  'nodeTextColor': '#1a1a2e',
+  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
+}}}%%
+flowchart TD
+    subgraph Files["Two-file model loading"]
+        MainGGUF["main model.gguf\ntensor prefix: blk.N.*\nvocab, metadata, LLM weights"]
+        MmprojGGUF["mmproj-*.gguf\ntensor prefix: v.blk.N.* / mm.*\nvision encoder + projector"]
+    end
+
+    subgraph VisionEncoder["Vision encoder (v.blk.* tensors)"]
+        Patch["v.patch_embd.weight\nPatch extraction conv\nimage → patch tokens"]
+        PosEmb["v.position_embd.weight\nPositional embeddings"]
+        ViT["v.blk.0..N\nattn_q/k/v, ffn_up/down\nSigLIP-2 transformer blocks"]
+        Patch --> PosEmb --> ViT
+    end
+
+    subgraph Projector["Multimodal projector (mm.* tensors)"]
+        Proj["mm.input_projection.weight\nLinear: vision_dim → llm_embd"]
+        Norm["mm.soft_emb_norm.weight\nOptional norm (Gemma 3/4)"]
+        MLP["mm.0.weight / mm.2.weight\nMLP projector (Qwen VL)"]
+    end
+
+    subgraph LLM["LLM forward pass"]
+        TokEmb["Token embeddings\n(text tokens)"]
+        VizSlot["Visual token slots\nreplace text embeddings\nat image positions"]
+        Layers["blk.0..N transformer layers\nnormal autoregressive forward"]
+        TokEmb --> VizSlot --> Layers
+    end
+
+    MmprojGGUF --> VisionEncoder
+    VisionEncoder --> Projector
+    MainGGUF --> LLM
+    Projector -->|"projection_dim\nmust match n_embd"| VizSlot
+```
 
 ### Tensor Naming
 

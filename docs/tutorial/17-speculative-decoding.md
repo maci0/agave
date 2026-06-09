@@ -44,9 +44,9 @@ sequenceDiagram
 
     Target->>Draft: rollback KV cache to accepted prefix
     Note over Draft,Target: next round starts from accepted position
+```
 
-
-With a good draft model (70-80% acceptance rate), speculative decoding generates 2-3× more tokens per second with **no quality loss** — for greedy decoding (temperature=0), the output is byte-identical to the target model alone; for sampling (temperature>0), the output distribution is mathematically preserved via rejection sampling.
+With a good draft model (70-80% acceptance rate), speculative decoding generates 2-3x more tokens per second with **no quality loss** -- for greedy decoding (temperature=0), the output is byte-identical to the target model alone; for sampling (temperature>0), the output distribution is mathematically preserved via rejection sampling.
 
 ## Modes in Agave
 
@@ -115,7 +115,7 @@ graph LR
         D2B
         D2C
     end
-
+```
 
 **How it works:**
 
@@ -129,12 +129,12 @@ graph LR
 The tree structure means the verifier can find longer accepted sequences by exploring alternative branches, yielding higher acceptance lengths than single-path speculation.
 
 **Key parameters:**
-- `--spec-tokens K` — draft depth (default: 5). More depth = deeper tree but more draft compute
-- `--tree-budget B` — maximum tree nodes (default: 64). Higher budget = wider tree but more verification compute
+- `--spec-tokens K` -- draft depth (default: 5). More depth = deeper tree but more draft compute
+- `--tree-budget B` -- maximum tree nodes (default: 64). Higher budget = wider tree but more verification compute
 
 ### Self-Speculative Mode (`--spec-mode self`)
 
-Uses the target model itself as its own draft by skipping layers during the draft phase. No extra model needed — trades quality for speed in the draft:
+Uses the target model itself as its own draft by skipping layers during the draft phase. No extra model needed -- trades quality for speed in the draft:
 
 ```bash
 agave model.gguf --spec-mode self "prompt"
@@ -145,32 +145,32 @@ The `--draft-layers` flag controls how many layers to skip (default: 50% of mode
 
 ### N-gram Mode (`--spec-mode ngram`)
 
-Uses output history as its own draft — no draft model, no extra forward passes for drafting. Searches the last 2048 generated tokens for n-gram matches (n=3..10) of the most recent tokens. When a match is found, the tokens that followed that match in history are proposed as draft tokens.
+Uses output history as its own draft -- no draft model, no extra forward passes for drafting. Searches the last 2048 generated tokens for n-gram matches (n=3..10) of the most recent tokens. When a match is found, the tokens that followed that match in history are proposed as draft tokens.
 
 ```bash
 agave model.gguf --spec-mode ngram "Write a Python function to sort a list"
 agave model.gguf --spec-mode ngram --spec-tokens 8 "Generate a JSON schema"
 ```
 
-**How it works:** If the model has generated "```python\ndef sort_list" earlier and the current output ends with "```python\ndef", the n-gram matcher finds the earlier occurrence and proposes "sort_list" as draft tokens. The target model verifies these — accepted tokens skip forward passes.
+**How it works:** If the model has generated "```python\ndef sort_list" earlier and the current output ends with "```python\ndef", the n-gram matcher finds the earlier occurrence and proposes "sort_list" as draft tokens. The target model verifies these -- accepted tokens skip forward passes.
 
 **Best for**: code generation (repeated patterns, imports, boilerplate), structured output (JSON, XML), templates, lists with repeated structure. **Not useful for**: creative writing, conversation, reasoning (low repetition).
 
-**Worked example** — generating a list:
+**Worked example** -- generating a list:
 
 ```
 Generated so far: "1. Apple\n2. Banana\n3. Cherry\n4. "
 Last 3 tokens: ["\n", "4", ". "]
 
 N-gram search finds "\n" + "2" + ". " earlier in history
-→ proposes continuation: ["B", "anana", "\n", "3"]
+-> proposes continuation: ["B", "anana", "\n", "3"]
 
 Target model verifies:
-  - "D" (reject — target wants "Date" not "Banana")
+  - "D" (reject -- target wants "Date" not "Banana")
   - 0 tokens accepted, correction token = "D"
 
 Next attempt after "Date\n5. ":
-  N-gram finds "\n" + "5" + ". " — no earlier match with "5"
+  N-gram finds "\n" + "5" + ". " -- no earlier match with "5"
   Falls back to single-token decode
 ```
 
@@ -191,37 +191,92 @@ src/backend/kernels/cpu/
 
 ### Data Flow
 
-```
-┌─────────────┐     K tokens + logits     ┌──────────────┐
-│ Draft Model │ ─────────────────────────→ │  DDTree      │
-│ (small/skip)│                            │  Builder     │
-└─────────────┘                            └──────┬───────┘
-                                                  │ tree (B nodes)
-                                                  ▼
-┌─────────────┐     verify each depth     ┌──────────────┐
-│ Target Model│ ←─────────────────────────│  Acceptance   │
-│ (full)      │ ─────────────────────────→│  Walk         │
-└─────────────┘     argmax at each node   └──────┬───────┘
-                                                  │ accepted tokens
-                                                  ▼
-                                           ┌──────────────┐
-                                           │   Output     │
-                                           │   Stream     │
-                                           └──────────────┘
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#e8f0fe',
+  'primaryTextColor': '#1a1a2e',
+  'primaryBorderColor': '#4a6cf7',
+  'lineColor': '#4a6cf7',
+  'secondaryColor': '#f0f4ff',
+  'tertiaryColor': '#f8f9ff',
+  'edgeLabelBackground': '#ffffff',
+  'clusterBkg': '#f0f4ff',
+  'clusterBorder': '#4a6cf7',
+  'titleColor': '#1a1a2e',
+  'nodeTextColor': '#1a1a2e',
+  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
+}}}%%
+flowchart TD
+    subgraph Draft["Draft Phase"]
+        DM["Draft Model\n(small / layer-skipped / n-gram)"]
+        DM -->|"K tokens + per-position\nlogit distributions"| TB["DDTree Builder\nbest-first heap\nO(B log B)"]
+    end
+
+    subgraph Verify["Verify Phase"]
+        TB -->|"tree: B nodes\nancestor bitmasks"| TM["Target Model\ntree-masked SDPA\nforwardTree()"]
+        TM -->|"argmax at each\ntree node"| AW["Acceptance Walk\nfind longest\nmatching path"]
+    end
+
+    subgraph Output["Output"]
+        AW -->|"accepted tokens\n(1..K)"| OS["Output Stream\n/ SSE"]
+        AW -->|"correction token\n(on rejection)"| OS
+        AW -->|"rollback KV to\naccepted position"| DM
+    end
 ```
 
 ### KV Cache Management
 
 - **Separate models**: Each has independent KV cache. Draft model rolled back to accepted prefix on rejection.
 - **Self-draft**: Same KV cache for both phases. Target rollback before re-verification overwrites draft entries (safe because same model produces identical KV).
-- **Rollback**: `Model.setKvSeqLen(pos)` — paged blocks stay allocated, overwritten on next forward.
+- **Rollback**: `Model.setKvSeqLen(pos)` -- paged blocks stay allocated, overwritten on next forward.
+
+### KV Cache Rollback on Rejection
+
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#e8f0fe',
+  'primaryTextColor': '#1a1a2e',
+  'primaryBorderColor': '#4a6cf7',
+  'lineColor': '#4a6cf7',
+  'secondaryColor': '#f0f4ff',
+  'tertiaryColor': '#f8f9ff',
+  'edgeLabelBackground': '#ffffff',
+  'clusterBkg': '#f0f4ff',
+  'clusterBorder': '#4a6cf7',
+  'titleColor': '#1a1a2e',
+  'nodeTextColor': '#1a1a2e',
+  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
+}}}%%
+sequenceDiagram
+    participant DraftKV as Draft KV Cache
+    participant TargetKV as Target KV Cache
+    participant Verifier as Acceptance Walk
+
+    Note over DraftKV,TargetKV: State before draft round (prefix len = P)
+
+    DraftKV->>DraftKV: forward passes x K<br/>KV grows: P -> P+K
+    TargetKV->>TargetKV: forwardTree() over draft tree<br/>KV grows: P -> P+K (tree nodes)
+
+    Verifier->>Verifier: walk tree, find first mismatch<br/>accepted = A tokens (0 <= A < K)
+
+    alt A = K (all accepted)
+        Note over DraftKV,TargetKV: both caches already at P+K, consistent
+    else A < K (partial or zero acceptance)
+        Verifier->>TargetKV: setKvSeqLen(P + A + 1)<br/>trim to accepted prefix + correction
+        Verifier->>DraftKV: setKvSeqLen(P + A + 1)<br/>trim to same position
+
+        Note over DraftKV,TargetKV: Separate-model mode: two independent trims
+    end
+
+    Note over DraftKV,TargetKV: Self-draft mode: single shared KV cache<br/>one setKvSeqLen() call covers both
+```
 
 ### DDTree Heap Algorithm
 
 The tree construction is O(B log B) where B is the node budget:
 
 ```
-Initialize: push (depth=0, rank=0) with log_prob = log q₀[best_token]
+Initialize: push (depth=0, rank=0) with log_prob = log q0[best_token]
 
 While tree_size < B:
     Pop node with highest cumulative log-probability
@@ -236,7 +291,7 @@ While tree_size < B:
 
 This produces the optimal prefix-closed tree under the draft model's factorized distribution.
 
-### Tree Attention
+### Tree Attention and Ancestor Bitmask
 
 Each tree node attends to:
 - All prefix KV entries (shared, unconditional)
@@ -244,11 +299,105 @@ Each tree node attends to:
 
 The ancestor bitmask is a `[8]u64` per node (512 bits), supporting trees up to 512 nodes. The CPU kernel (`sdpa_tree.zig`) iterates over attended positions; GPU kernels can mask in the inner loop.
 
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#e8f0fe',
+  'primaryTextColor': '#1a1a2e',
+  'primaryBorderColor': '#4a6cf7',
+  'lineColor': '#4a6cf7',
+  'secondaryColor': '#f0f4ff',
+  'tertiaryColor': '#f8f9ff',
+  'edgeLabelBackground': '#ffffff',
+  'clusterBkg': '#f0f4ff',
+  'clusterBorder': '#4a6cf7',
+  'titleColor': '#1a1a2e',
+  'nodeTextColor': '#1a1a2e',
+  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
+}}}%%
+graph TD
+    subgraph Prefix["Shared Prefix KV (positions 0..P-1)\nAll tree nodes attend to all prefix positions"]
+        P0["pos 0"] --- P1["pos 1"] --- P2["..."] --- PP["pos P-1"]
+    end
+
+    subgraph Tree["Draft Tree (positions P..P+B-1)"]
+        N0["Node 0\n'the'\nindex=0\nmask=0b...001"]
+        N1["Node 1\n'cat'\nindex=1\nmask=0b...011"]
+        N2["Node 2\n'sat'\nindex=2\nmask=0b...111"]
+        N3["Node 3\n'dog'\nindex=3\nmask=0b...011"]
+        N4["Node 4\n'a'\nindex=4\nmask=0b...001\n(sibling of N0)"]
+        N5["Node 5\n'cat'\nindex=5\nmask=0b10001"]
+
+        N0 --> N1
+        N1 --> N2
+        N0 --> N3
+        N4 --> N5
+    end
+
+    subgraph Legend["Attention rule per node"]
+        L1["attends to: ALL prefix positions"]
+        L2["attends to: ancestors in tree\n(bit i set = attend to node i)"]
+        L3["does NOT attend to: siblings\nor non-ancestor tree nodes"]
+    end
+
+    Prefix -.->|"unconditional\nfor all nodes"| N0
+    Prefix -.-> N1
+    Prefix -.-> N2
+    Prefix -.-> N3
+    Prefix -.-> N4
+    Prefix -.-> N5
+```
+
 ## Correctness Guarantee
 
 For greedy decoding (temperature=0), speculative decoding produces **byte-identical output** to non-speculative decoding. The verification step ensures every accepted token matches what the target model would have generated. This is verified in agave's test suite.
 
 For sampling (temperature > 0), rejection sampling (Leviathan et al. 2023) preserves the target model's output distribution. Each draft token is accepted with probability min(1, p_target/p_draft); on rejection, a correction is sampled from the residual distribution max(0, p_target - p_draft).
+
+### Rejection Sampling Correctness
+
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#e8f0fe',
+  'primaryTextColor': '#1a1a2e',
+  'primaryBorderColor': '#4a6cf7',
+  'lineColor': '#4a6cf7',
+  'secondaryColor': '#f0f4ff',
+  'tertiaryColor': '#f8f9ff',
+  'edgeLabelBackground': '#ffffff',
+  'clusterBkg': '#f0f4ff',
+  'clusterBorder': '#4a6cf7',
+  'titleColor': '#1a1a2e',
+  'nodeTextColor': '#1a1a2e',
+  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
+}}}%%
+flowchart TD
+    Start["For each draft token x_i\nproposed by draft model"]
+
+    Start --> ReadProbs["Read probabilities\np_draft(x_i) from draft logits\np_target(x_i) from target logits"]
+
+    ReadProbs --> Ratio["Compute acceptance ratio\nr = p_target(x_i) / p_draft(x_i)"]
+
+    Ratio --> Sample["Sample u ~ Uniform(0, 1)"]
+
+    Sample --> Decision{"u <= min(1, r)?"}
+
+    Decision -->|"yes: accept\n(draft token is good enough)"| Accept["Accept x_i\nmove to next position\nno extra compute needed"]
+
+    Decision -->|"no: reject\n(draft overestimates probability)"| Residual["Compute residual distribution\np_residual(x) = max(0, p_target(x) - p_draft(x))\nnormalized over full vocabulary"]
+
+    Residual --> Correct["Sample correction token x_i'\nfrom p_residual\nreplace x_i with x_i'"]
+
+    Correct --> Stop["Stop -- discard all\nremaining draft tokens\nafter position i"]
+
+    Accept --> More{"more draft\ntokens?"}
+    More -->|yes| Start
+    More -->|"no (all K accepted)"| BonusToken["Sample bonus token\nfrom p_target at position K+1\n(always done after full acceptance)"]
+
+    subgraph Guarantee["Distribution Guarantee"]
+        G1["At every accepted position:\nE[output] = p_target(x)\nregardless of draft distribution"]
+        G2["Output is i.i.d. identical\nto sampling from target alone"]
+    end
+```
 
 ## Adaptive K (Profile-Guided)
 
@@ -288,10 +437,10 @@ flowchart TD
     Draft --> Verify["verify with target model"]
     Verify --> RecordStats["record: how many\ntokens were accepted"]
     RecordStats --> Start
-
+```
 
 ```
-expected_tokens(K) = Σ(i=1..K) i × P(accept exactly i)
+expected_tokens(K) = sum(i=1..K) i x P(accept exactly i)
 optimal_K = argmax over K of expected_tokens(K) / cost(K)
 ```
 
@@ -308,6 +457,106 @@ When the acceptance rate over the last `adaptive_window` (8) drafted tokens drop
 
 The cooldown counter decrements each step and re-enables speculation when it expires.
 
+## Self-Speculative Layer Skipping
+
+Self-speculative decoding uses the target model itself as a draft by executing only a subset of transformer layers during the draft phase. The middle layers are skipped, keeping the embedding and final output layers.
+
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#e8f0fe',
+  'primaryTextColor': '#1a1a2e',
+  'primaryBorderColor': '#4a6cf7',
+  'lineColor': '#4a6cf7',
+  'secondaryColor': '#f0f4ff',
+  'tertiaryColor': '#f8f9ff',
+  'edgeLabelBackground': '#ffffff',
+  'clusterBkg': '#f0f4ff',
+  'clusterBorder': '#4a6cf7',
+  'titleColor': '#1a1a2e',
+  'nodeTextColor': '#1a1a2e',
+  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
+}}}%%
+flowchart LR
+    subgraph DraftPhase["Draft Phase (--draft-layers 9 skipped, model has 32 layers)"]
+        direction TB
+        DE["Embedding\nlayer 0"]
+        D1["Layer 1"]
+        D2["Layer 2"]
+        D3["Layer 3"]
+        DSKIP["... layers 4-12\nSKIPPED\n(no compute, no KV write)"]
+        D13["Layer 13"]
+        D14["..."]
+        D32["Layer 32\n(output head)"]
+        DE --> D1 --> D2 --> D3 --> DSKIP --> D13 --> D14 --> D32
+        D32 -->|"K candidate\ntokens + logits"| DraftOut["Draft\nProposals"]
+    end
+
+    subgraph VerifyPhase["Verify Phase (all 32 layers, full model)"]
+        direction TB
+        VE["Embedding\nlayer 0"]
+        V1["Layer 1"]
+        V2["...all layers..."]
+        V32["Layer 32\n(output head)"]
+        VE --> V1 --> V2 --> V32
+        V32 -->|"target logits\nat each position"| VerifyOut["Acceptance\nWalk"]
+    end
+
+    DraftOut -->|"proposed tokens\nfor verification"| VerifyPhase
+
+    subgraph Memory["KV Cache (shared between phases)"]
+        KV["Single KV store\nDraft writes partial activations\nVerify overwrites with full activations\nsetKvSeqLen() rolls back on reject"]
+    end
+```
+
+## N-gram Ring Buffer Matching
+
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#e8f0fe',
+  'primaryTextColor': '#1a1a2e',
+  'primaryBorderColor': '#4a6cf7',
+  'lineColor': '#4a6cf7',
+  'secondaryColor': '#f0f4ff',
+  'tertiaryColor': '#f8f9ff',
+  'edgeLabelBackground': '#ffffff',
+  'clusterBkg': '#f0f4ff',
+  'clusterBorder': '#4a6cf7',
+  'titleColor': '#1a1a2e',
+  'nodeTextColor': '#1a1a2e',
+  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
+}}}%%
+flowchart TD
+    subgraph RingBuffer["Ring Buffer (last 2048 generated tokens, 8 KB)"]
+        RB["[ t0, t1, t2, ..., t_head ]<br/>fixed-size circular buffer<br/>head pointer advances each token"]
+    end
+
+    subgraph Query["Query Construction"]
+        QT["Current output tail\n(last N tokens, N = 3..10)"]
+        QT -->|"build query gram\n[t-2, t-1, t0]"| Gram["Query: ['\n', '4', '. ']"]
+    end
+
+    Gram -->|"scan ring buffer\nfor matching prefix"| Search["N-gram Search\nO(window) linear scan\nstop at first length-N match"]
+
+    Search --> Found{"match\nfound?"}
+
+    Found -->|"yes\n(found at position j)"| Proposal["Proposal: tokens at j+1..j+K\nfrom history buffer\n(up to spec-tokens K tokens)"]
+    Found -->|"no match\n(novel context)"| Fallback["Fallback:\nsingle-token decode\n(no speculation this step)"]
+
+    Proposal -->|"proposed draft tokens"| Verify["Target Model Verification\nstandard accept/reject loop"]
+
+    Verify -->|"accepted tokens"| Emit["Emit to output"]
+    Verify -->|"correction token"| Emit
+
+    Emit -->|"append new token\nadvance head"| RingBuffer
+
+    subgraph Performance["Performance Profile"]
+        P1["Zero draft model weight memory"]
+        P2["O(window) lookup per step"]
+        P3["Best on: code, JSON, repeated lists"]
+        P4["Useless on: novel creative text"]
+    end
+```
+
 ## Performance Tuning
 
 | Parameter | Effect | Recommendation |
@@ -322,33 +571,33 @@ The cooldown counter decrements each step and re-enables speculation when it exp
 
 Models with `forwardTree()` support (currently Gemma3) can verify the entire draft tree in a **single** target forward pass using tree-masked SDPA (`sdpaTree`). This reduces verification from O(K) sequential forwards to O(1), making speculative decoding significantly faster.
 
-The `sdpaTree` kernel has native implementations on all 6 backends: CPU, Metal, CUDA, Vulkan, ROCm, and WebGPU. GPU kernels use FlashAttention-2 with ancestor bitmask masking — one threadgroup per (node, head) pair.
+The `sdpaTree` kernel has native implementations on all 6 backends: CPU, Metal, CUDA, Vulkan, ROCm, and WebGPU. GPU kernels use FlashAttention-2 with ancestor bitmask masking -- one threadgroup per (node, head) pair.
 
 Models without `forwardTree()` (Qwen3.5, Nemotron, etc.) fall back to sequential verification, which still works but doesn't benefit from batching.
 
 ### Example Speedup
 
 ```
-Without spec dec:  1 forward pass per token  → 15 tok/s (Qwen 3.5 8B, Metal)
-With DDTree:       ~3 tokens per verify pass → ~35 tok/s (2.3x speedup)
+Without spec dec:  1 forward pass per token  -> 15 tok/s (Qwen 3.5 8B, Metal)
+With DDTree:       ~3 tokens per verify pass -> ~35 tok/s (2.3x speedup)
 
 Breakdown per step:
-  Draft (5 tokens):     2 ms  (small model, fast)
+  Draft (5 tokens):      2 ms  (small model, fast)
   Tree build (64 nodes): 0.1 ms  (CPU, O(B log B))
   Verify (1 pass):       65 ms  (full model, tree attention)
   Accepted:             ~3 tokens average
-  Effective:            3 tokens / 67 ms ≈ 45 tok/s theoretical
-  Overhead:             Draft prefill, KV rollback → ~35 tok/s actual
+  Effective:            3 tokens / 67 ms ~= 45 tok/s theoretical
+  Overhead:             Draft prefill, KV rollback -> ~35 tok/s actual
 ```
 
 **When to use speculative decoding:**
-- Long generations (100+ tokens) — amortizes dual-model overhead
-- Large target models (8B+) — more room for speedup
-- Same-family draft/target — higher acceptance rates
+- Long generations (100+ tokens) -- amortizes dual-model overhead
+- Large target models (8B+) -- more room for speedup
+- Same-family draft/target -- higher acceptance rates
 
 **When NOT to use:**
 - Very short outputs (< 10 tokens)
-- Small target models (< 3B) — draft overhead dominates
+- Small target models (< 3B) -- draft overhead dominates
 - No suitable draft model available (self-spec with aggressive skip may hurt quality)
 
 ## Background: DFlash and Block Diffusion
@@ -356,24 +605,24 @@ Breakdown per step:
 DDTree builds on **DFlash** (Block Diffusion Flash), a speculative decoding method that uses a **block diffusion model** as the drafter. Unlike autoregressive drafters that generate tokens one at a time, a block diffusion drafter produces an entire block of L draft tokens in a single forward pass by iteratively denoising a block of mask tokens.
 
 **DFlash** (baseline):
-1. Run block diffusion drafter once → L draft positions with per-position distributions
+1. Run block diffusion drafter once -> L draft positions with per-position distributions
 2. Sample a single sequence from those distributions
 3. Verify the sequence against the target model
 4. Accept matching prefix, reject at first mismatch
 
 **DDTree** (improvement over DFlash):
-1. Same drafter → same L per-position distributions
+1. Same drafter -> same L per-position distributions
 2. Instead of sampling one sequence, build an **optimal tree** of candidate continuations
 3. The tree explores multiple branches at each depth, prioritized by probability
-4. Verify the entire tree → accept the longest matching path (not just one sequence)
+4. Verify the entire tree -> accept the longest matching path (not just one sequence)
 
 The key insight: DFlash wastes information by collapsing the draft distributions into a single path. DDTree exploits the full distribution at each position to construct a tree that maximizes expected acceptance length. The paper shows 35-62% speedup over DFlash.
 
-**In agave's implementation**, we use autoregressive drafting (not block diffusion) since agave doesn't include a diffusion model. The DDTree tree construction algorithm works identically — it takes per-position logit distributions (however produced) and builds the optimal tree. The draft distributions come from K sequential forward passes of the draft model rather than one block diffusion pass.
+**In agave's implementation**, we use autoregressive drafting (not block diffusion) since agave doesn't include a diffusion model. The DDTree tree construction algorithm works identically -- it takes per-position logit distributions (however produced) and builds the optimal tree. The draft distributions come from K sequential forward passes of the draft model rather than one block diffusion pass.
 
 ## MTP (Multi-Token Prediction)
 
-MTP uses prediction heads trained jointly with the main model — no separate draft model needed. Each head is a single transformer layer that takes the main model's hidden state + the current token embedding, and predicts the next token at ~5% the cost of a full forward pass. Acceptance rates are 70-85% (vs ~50% for separate draft models).
+MTP uses prediction heads trained jointly with the main model -- no separate draft model needed. Each head is a single transformer layer that takes the main model's hidden state + the current token embedding, and predicts the next token at ~5% the cost of a full forward pass. Acceptance rates are 70-85% (vs ~50% for separate draft models).
 
 ```bash
 agave model-mtp.gguf --spec-mode mtp "prompt"
@@ -431,27 +680,6 @@ flowchart LR
         Drop
         Keep
     end
-
-
-```
-Prompt (128K tokens)
-    |
-    v
-Scorer model runs forward pass
-(block-sparse attention, O(n) cost)
-    |
-    v
-Score each KV block: [0.1, 0.9, 0.2, 0.8, 0.3, 0.7, 0.1, 0.85, ...]
-    |
-    v
-Adaptive threshold: keep block if score > alpha * mean(scores)
-[    ##       ##        ##  ##  ]  <- selected (~5-15% of blocks)
-    |
-    v
-Target model prefills compressed prompt (~6-13K tokens)
-    |
-    v
-DDTree speculative decode -> output tokens
 ```
 
 The key insight: most tokens in a long prompt are not consulted during generation. A technical document's repeated boilerplate, padding, or off-topic context contributes little to the final answer. The scorer identifies and discards these blocks before the expensive target model runs.
@@ -545,4 +773,4 @@ The server uses the same speculative decoding loop as CLI mode. Draft model pref
 
 **In the code:** [src/spec/spec_decode.zig](../../src/spec/spec_decode.zig) (orchestrator, adaptive K, cooldown), [src/spec/ddtree.zig](../../src/spec/ddtree.zig) (DDTree construction), [src/spec/ngram.zig](../../src/spec/ngram.zig) (n-gram history matching), [src/spec/pflash.zig](../../src/spec/pflash.zig) (PFlash block scoring and compressed prefill), [src/ops/sparse_attn.zig](../../src/ops/sparse_attn.zig) (block sparse SDPA), [src/backend/kernels/cpu/sdpa_tree.zig](../../src/backend/kernels/cpu/sdpa_tree.zig) (tree-masked attention)
 
-**Next:** [Chapter 19: PFlash and Block Sparse Attention →](19-pflash-and-block-sparse.md) | **Back:** [Chapter 16: Recipe System ←](16-recipe-system.md) | **Product docs:** [Models](../MODELS.md)
+**Next:** [Chapter 19: PFlash and Block Sparse Attention ->](19-pflash-and-block-sparse.md) | **Back:** [Chapter 16: Recipe System <-](16-recipe-system.md) | **Product docs:** [Models](../MODELS.md)

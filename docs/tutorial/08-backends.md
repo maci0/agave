@@ -52,7 +52,7 @@ flowchart LR
         SPIRV
         WGSL2
     end
-
+```
 
 | Platform | Vendor | Language | Compiled Format | Scope |
 |----------|--------|----------|-----------------|-------|
@@ -64,15 +64,6 @@ flowchart LR
 | **WebGPU** | W3C | WGSL | WGSL source | All vendors (browser + native) |
 
 The "Compiled Format" column shows the **IR** (Intermediate Representation — compiled bytecode that the GPU driver converts to native machine code at runtime, not final executable code).
-
-```
-Vendor-specific:  CUDA ──→ PTX ──→ NVIDIA only
-                  Metal ──→ Metal IR ──→ Apple only
-                  ROCm/HIP ──→ AMDGCN ──→ AMD only
-
-Cross-platform:   Vulkan ──→ SPIR-V ──→ All vendors
-                  WebGPU ──→ WGSL ──→ All vendors (browser + native via wgpu)
-```
 
 **Agave's strategy**: Use vendor-specific APIs for maximum performance, with Vulkan and WebGPU as cross-platform fallbacks. The `Backend` interface abstracts all six behind a single dispatch.
 
@@ -142,7 +133,7 @@ flowchart LR
     Input --> G1
     Input --> U1
     Input -->|"load once"| FG
-
+```
 
 ## The Dispatcher Pattern
 
@@ -184,7 +175,7 @@ flowchart LR
         ROCm
         WebGPU
     end
-
+```
 
 ```zig
 pub const Backend = union(enum) {
@@ -244,7 +235,7 @@ flowchart TD
         SharedMem -->|"zero-copy pointer\nnewBufferWithBytesNoCopy"| uGPU
         SharedMem -->|"normal pointer"| uCPU
     end
-
+```
 
 - **Metal**: `newBufferWithBytesNoCopy` wraps mmap'd weights directly
 - **CUDA**: `cudaMallocManaged` for transparent access
@@ -278,16 +269,101 @@ Instead of flat `keys[t * kvd]` offset arithmetic, the kernel computes `block_ta
 
 CPU backend has native paged SDPA with thread-pool parallelism across query heads. GPU backends use CPU fallback via `@hasDecl` detection.
 
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#e8f0fe',
+  'primaryTextColor': '#1a1a2e',
+  'primaryBorderColor': '#4a6cf7',
+  'lineColor': '#4a6cf7',
+  'secondaryColor': '#f0f4ff',
+  'tertiaryColor': '#f8f9ff',
+  'edgeLabelBackground': '#ffffff',
+  'clusterBkg': '#f0f4ff',
+  'clusterBorder': '#4a6cf7',
+  'titleColor': '#1a1a2e',
+  'nodeTextColor': '#1a1a2e',
+  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
+}}}%%
+flowchart TD
+    Token["Logical token position t"]
+
+    Token -->|"t / block_size"| BlockIdx["Block table index\nblock_table[t / block_size]"]
+    BlockIdx -->|"dereference"| PhysBlock["Physical block ID\n(16-token block, on-demand alloc)"]
+    PhysBlock -->|"t % block_size"| KVSlot["KV slot within block\nkeys[pos_in_block * kvd]"]
+
+    subgraph BlockTable["PagedKvView — block table indirection"]
+        direction LR
+        BT0["block_table[0] = phys#4"]
+        BT1["block_table[1] = phys#11"]
+        BT2["block_table[2] = phys#2"]
+        BT3["block_table[3] = phys#7"]
+    end
+
+    subgraph PhysPool["Physical KV pool (non-contiguous blocks)"]
+        direction LR
+        P2["Block #2\ntokens 32-47"]
+        P4["Block #4\ntokens 0-15"]
+        P7["Block #7\ntokens 48-63"]
+        P11["Block #11\ntokens 16-31"]
+    end
+
+    BlockIdx --> BlockTable
+    BlockTable -->|"physical block ID"| PhysPool
+    PhysPool --> KVSlot
+
+    KVSlot -->|"all heads in parallel\n(thread pool)"| SDPA["SDPA kernel\nattention output"]
+```
+
 ## Batched Prefill Dispatch
 
 During prefill, the backend dispatches **batched** versions of the core ops — GEMM (instead of GEMV), batched RMSNorm, batched RoPE, and fused causal SDPA:
 
-```
-Prefill layer pipeline (Gemma 3):
-  rmsNormBatched → GEMM(Q,K,V) → rmsNormMulti → ropeBatched
-    → sdpaPrefill(FA2) → GEMM(O) → rmsNormBatched → add
-    → rmsNormBatched → GEMM(gate,up) → gelu → mul → GEMM(down)
-    → rmsNormBatched → add
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#e8f0fe',
+  'primaryTextColor': '#1a1a2e',
+  'primaryBorderColor': '#4a6cf7',
+  'lineColor': '#4a6cf7',
+  'secondaryColor': '#f0f4ff',
+  'tertiaryColor': '#f8f9ff',
+  'edgeLabelBackground': '#ffffff',
+  'clusterBkg': '#f0f4ff',
+  'clusterBorder': '#4a6cf7',
+  'titleColor': '#1a1a2e',
+  'nodeTextColor': '#1a1a2e',
+  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
+}}}%%
+flowchart TD
+    Tokens["Input tokens\n[seq_len, hidden_dim]"]
+
+    subgraph Attention["Attention block"]
+        direction TB
+        RN1["rmsNormBatched\nnormalize hidden states"]
+        QKV["GEMM(Q, K, V)\none-shot projection\n[seq_len, head_dim * n_heads]"]
+        RN2["rmsNormMulti\nnorm Q and K (Gemma3-style)"]
+        RoPE["ropeBatched\nrotary position embeddings"]
+        SDPA["sdpaPrefill (FA2)\ncausal self-attention\ndual-source K/V from GEMM"]
+        ProjO["GEMM(O)\noutput projection\n[seq_len, hidden_dim]"]
+        Add1["residual add"]
+
+        RN1 --> QKV --> RN2 --> RoPE --> SDPA --> ProjO --> Add1
+    end
+
+    subgraph FFN["Feed-forward block"]
+        direction TB
+        RN3["rmsNormBatched\nnormalize after attention"]
+        GateUp["GEMM(gate, up)\ndual projection\n[seq_len, ffn_dim]"]
+        Gelu["GELU activation\n(in-register for megakernel)"]
+        Mul["element-wise multiply\ngate * up"]
+        Down["GEMM(down)\nproject back to hidden\n[seq_len, hidden_dim]"]
+        Add2["residual add"]
+
+        RN3 --> GateUp --> Gelu --> Mul --> Down --> Add2
+    end
+
+    Tokens --> Attention
+    Attention --> FFN
+    FFN -->|"next layer"| NextLayer["Layer N+1 ..."]
 ```
 
 **Metal**: all batched ops are native GPU kernels. The GEMM uses one threadgroup per output row with weight reuse across tokens. The `sdpa_prefill_fa2` kernel reads old K/V from the cache and new K/V directly from GEMM output (dual-source), then a `copy_f32` kernel populates the cache — all in one command buffer with zero CPU-GPU flush.
@@ -315,6 +391,64 @@ Prefill layer pipeline (Gemma 3):
 All GPU backends support distributed inference via `src/parallel/transport.zig`. Three transports: **TCP** (cross-node), **POSIX shm** (same-node zero-copy), **NCCL** (GPU-optimized RoCE RDMA, loaded via `dlopen`). Modes: tensor parallelism (`--tp 2` splits weights), pipeline parallelism (`--pp 2` splits layers), hybrid TP+PP, disaggregated prefill/decode (`--disagg`). Device selection via `--device N`.
 
 NCCL integration requires `cuDevicePrimaryCtxRetain` (not `cuCtxCreate`) — NCCL uses the CUDA primary context and will corrupt a separate driver API context. Device pointer `allReduceAdd` passes GPU activation cache pointers directly to NCCL when data is dirty on device; when CPU fallback has written to host (stale on GPU), uploads to a device staging buffer first.
+
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#e8f0fe',
+  'primaryTextColor': '#1a1a2e',
+  'primaryBorderColor': '#4a6cf7',
+  'lineColor': '#4a6cf7',
+  'secondaryColor': '#f0f4ff',
+  'tertiaryColor': '#f8f9ff',
+  'edgeLabelBackground': '#ffffff',
+  'clusterBkg': '#f0f4ff',
+  'clusterBorder': '#4a6cf7',
+  'titleColor': '#1a1a2e',
+  'nodeTextColor': '#1a1a2e',
+  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
+}}}%%
+flowchart TD
+    subgraph Transports["Transport Layer (transport.zig)"]
+        direction LR
+        TCP["TCP\ncross-node\n(any network)"]
+        SHM["POSIX shm\nsame-node\nzero-copy"]
+        NCCL["NCCL\nRoCE RDMA\nGPU-optimized"]
+    end
+
+    subgraph Modes["Parallelism Modes"]
+        direction TB
+
+        subgraph TP["Tensor Parallelism (--tp N)"]
+            TP0["GPU 0\nweight shard 0\nallReduceAdd after each layer"]
+            TP1["GPU 1\nweight shard 1\nallReduceAdd after each layer"]
+            TP0 <-->|"allReduce\n(shm or NCCL)"| TP1
+        end
+
+        subgraph PP["Pipeline Parallelism (--pp N)"]
+            PP0["GPU 0\nlayers 0..L/2\nprefill + decode"]
+            PP1["GPU 1\nlayers L/2..L\nprefill + decode"]
+            PP0 -->|"activation\ntransfer"| PP1
+        end
+
+        subgraph Hybrid["Hybrid TP+PP"]
+            H0["GPU 0\nlayer shard A"]
+            H1["GPU 1\nlayer shard A"]
+            H2["GPU 2\nlayer shard B"]
+            H3["GPU 3\nlayer shard B"]
+            H0 <-->|"TP allReduce"| H1
+            H2 <-->|"TP allReduce"| H3
+            H1 -->|"PP activation"| H2
+        end
+
+        subgraph Disagg["Disaggregated (--disagg)"]
+            PNode["Prefill node\nfull context ingestion"]
+            DNode["Decode node\ntoken-by-token generation"]
+            PNode -->|"KV cache transfer\n(TCP or NCCL)"| DNode
+        end
+    end
+
+    Transports --> Modes
+```
 
 See [Parallelism docs](../PARALLELISM.md) for full details.
 

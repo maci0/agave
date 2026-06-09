@@ -40,7 +40,7 @@ flowchart LR
         Act
         Mul
     end
-
+```
 
 ```
 FFN(x) = down_proj(activation(gate_proj(x)) * up_proj(x))
@@ -77,7 +77,7 @@ flowchart LR
     GELU --> FFN2["FFN gate\n(Gemma 3)"]
     ReLU2 --> FFN3["FFN gate\n(Nemotron-Nano MoE)"]
     Sigmoid --> Router["MoE router\n(GLM-4)"]
-
+```
 
 | Function | Formula | Used by |
 | :--- | :--- | :--- |
@@ -127,7 +127,7 @@ flowchart TD
     Shared -->|"+ 1.0"| Sum
 
     Sum --> Output["FFN Output"]
-
+```
 
 ```
 1. Router: scores = softmax(hidden @ gate_weight)     # score each expert (Qwen 3.5 MoE: softmax+top-8; GPT-OSS: sigmoid+top-4)
@@ -178,13 +178,48 @@ Expert selection uses **stack-allocated** arrays (fixed-size buffers on the call
 
 **Shared expert** (Nemotron-Nano): One expert is always active regardless of router output, providing a stable **baseline** (consistent minimum contribution that all tokens receive, ensuring basic functionality).
 
-### MoE Performance
+### MoE Sparse Activation: Dense vs. MoE Compute
 
-MoE's key advantage is **sparse activation** — only K of N experts run per token:
+MoE's key advantage is **sparse activation** — only K of N experts run per token. The diagram below compares how much compute each model actually performs versus how many weights it stores:
+
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#e8f0fe',
+  'primaryTextColor': '#1a1a2e',
+  'primaryBorderColor': '#4a6cf7',
+  'lineColor': '#4a6cf7',
+  'secondaryColor': '#f0f4ff',
+  'tertiaryColor': '#f8f9ff',
+  'edgeLabelBackground': '#ffffff',
+  'clusterBkg': '#f0f4ff',
+  'clusterBorder': '#4a6cf7',
+  'titleColor': '#1a1a2e',
+  'nodeTextColor': '#1a1a2e',
+  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
+}}}%%
+flowchart LR
+    subgraph Dense["Dense 30B — every weight active"]
+        D_in["Token\nhidden state"] --> D_FFN["Single FFN\n30B parameters\nALL active"]
+        D_FFN --> D_out["Output\n30B multiplies\nper token"]
+    end
+
+    subgraph MoE["MoE 30B — sparse activation"]
+        M_in["Token\nhidden state"] --> M_Router["Router\n(tiny: ~0.01B)"]
+        M_Router -->|"top-2 selected\nout of 128"| M_E1["Expert A\n~0.23B active"]
+        M_Router -->|"top-2 selected\nout of 128"| M_E2["Expert B\n~0.23B active"]
+        M_Router -.->|"126 experts\nNOT activated"| M_Idle["Experts 3–128\n~29.5B weights\nidle in memory"]
+        M_E1 --> M_out["Output\n~0.5B multiplies\nper token"]
+        M_E2 --> M_out
+    end
+
+    Dense ---|"same\noutput quality"| MoE
+```
 
 ```
-Dense 30B model:   30B multiplies per token
-MoE 30B (top-2/128): ~0.5B multiplies per token (2 experts × 704-dim FFN)
+Dense 30B model:       30B multiplies per token   (all weights active)
+MoE 30B (top-2/128):  ~0.5B multiplies per token  (2 experts active)
+                        ↑ 60x fewer operations, similar quality
+Tradeoff: 30B weights still occupy memory — only the compute is sparse.
 ```
 
 This gives large-model quality at small-model compute cost. The tradeoff: all expert weights must fit in memory even though most are idle. A 128-expert MoE model stores 128× the FFN weights but only activates 2× per token.
@@ -206,6 +241,44 @@ Some models store fused `gate_up_exps` (gate and up projections concatenated per
 
 When multiple experts share the same input vector (common in decode), Agave batches their gate+up GEMVs into a single `gemvMulti` dispatch. This parallelizes all output rows across both experts in one thread pool call instead of two separate dispatches:
 
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#e8f0fe',
+  'primaryTextColor': '#1a1a2e',
+  'primaryBorderColor': '#4a6cf7',
+  'lineColor': '#4a6cf7',
+  'secondaryColor': '#f0f4ff',
+  'tertiaryColor': '#f8f9ff',
+  'edgeLabelBackground': '#ffffff',
+  'clusterBkg': '#f0f4ff',
+  'clusterBorder': '#4a6cf7',
+  'titleColor': '#1a1a2e',
+  'nodeTextColor': '#1a1a2e',
+  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
+}}}%%
+flowchart TD
+    subgraph Sequential["Sequential dispatch — 2 thread pool calls"]
+        S_in["Input vector x\n(shared by all experts)"] --> S_D1["Dispatch 1\ngate_proj expert A\nthread pool: serialize"]
+        S_D1 --> S_W1["Wait for completion"]
+        S_W1 --> S_D2["Dispatch 2\nup_proj expert A\nthread pool: serialize"]
+        S_D2 --> S_W2["Wait for completion"]
+        S_W2 --> S_D3["Dispatch 3..N\nrepeat for expert B, C...\n2 calls per expert"]
+    end
+
+    subgraph Batched["gemvMulti — 1 thread pool call"]
+        B_in["Input vector x\n(shared by all experts)"] --> B_ops["Build GemvOp array\nop[0]: gate expert A\nop[1]: up expert A\nop[2]: gate expert B\nop[3]: up expert B\n..."]
+        B_ops --> B_dispatch["gemvMulti dispatch\nall output rows\nin parallel"]
+        B_dispatch --> B_gate_A["gate buf A\n(parallel)"]
+        B_dispatch --> B_up_A["up buf A\n(parallel)"]
+        B_dispatch --> B_gate_B["gate buf B\n(parallel)"]
+        B_dispatch --> B_up_B["up buf B\n(parallel)"]
+        B_gate_A --> B_out["Results ready\n(single barrier)"]
+        B_up_A --> B_out
+        B_gate_B --> B_out
+        B_up_B --> B_out
+    end
+```
+
 ```zig
 const ops = [_]GemvOp{
     .{ .w = .{ .data = gate_data, .dtype = gate_exps.dtype }, .y = gate_buf, .n = ff },
@@ -217,6 +290,40 @@ be.gemvMulti(input, &ops, k);
 ## Megakernel Fusion
 
 On Metal GPU, the three FFN GEMVs (gate + up + down) can be fused into a single dispatch via the **megakernel** system. Instead of 3 separate GPU launches with memory round-trips, one kernel reads the input once, computes all three projections plus the activation, and writes the final output. This eliminates inter-kernel memory traffic and reduces dispatch overhead.
+
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#e8f0fe',
+  'primaryTextColor': '#1a1a2e',
+  'primaryBorderColor': '#4a6cf7',
+  'lineColor': '#4a6cf7',
+  'secondaryColor': '#f0f4ff',
+  'tertiaryColor': '#f8f9ff',
+  'edgeLabelBackground': '#ffffff',
+  'clusterBkg': '#f0f4ff',
+  'clusterBorder': '#4a6cf7',
+  'titleColor': '#1a1a2e',
+  'nodeTextColor': '#1a1a2e',
+  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
+}}}%%
+flowchart LR
+    subgraph Unfused["3 separate GPU dispatches (standard)"]
+        U_in["Input\n(GPU memory)"] -->|"read"| U_gate["Dispatch 1\ngate_proj GEMV"]
+        U_gate -->|"write → read"| U_up["Dispatch 2\nup_proj GEMV"]
+        U_up -->|"write → read"| U_act["Dispatch 3\nSiLU + multiply\n+ down_proj GEMV"]
+        U_act -->|"write"| U_out["Output\n(GPU memory)"]
+
+        U_rt1["round-trip\nto GPU memory"] -.-> U_gate
+        U_rt2["round-trip\nto GPU memory"] -.-> U_up
+    end
+
+    subgraph Fused["1 fused megakernel dispatch"]
+        F_in["Input\n(GPU memory)"] -->|"read ONCE"| F_kern["Single kernel\ngate_proj\n+ up_proj\n+ SiLU * gate\n+ down_proj\n(all in registers/threadgroup)"]
+        F_kern -->|"write ONCE"| F_out["Output\n(GPU memory)"]
+    end
+
+    Unfused -->|"--megakernel\neliminates\nmemory round-trips"| Fused
+```
 
 Enable with `--megakernel`. See [Chapter 13](13-batched-dispatch-and-fusion.md) for details.
 

@@ -39,6 +39,43 @@ Both sublayers use **residual connections** (`output = input + sublayer(input)`)
   'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
 }}}%%
 flowchart TD
+    In["Residual stream x\n(hidden state in)"]
+
+    subgraph AttnBlock["Attention sublayer (with residual)"]
+        direction LR
+        AN["RMSNorm"] --> Attn["Attention"]
+        Attn --> AttnAdd["+ x"]
+    end
+
+    subgraph FFNBlock["FFN sublayer (with residual)"]
+        direction LR
+        FN["RMSNorm"] --> FFN["Feed-Forward\nNetwork"]
+        FFN --> FFNAdd["+ x"]
+    end
+
+    In --> AN
+    In -->|"skip connection\n(unchanged)"| AttnAdd
+    AttnAdd --> FN
+    AttnAdd -->|"skip connection\n(unchanged)"| FFNAdd
+    FFNAdd --> Out["Residual stream x'\n(hidden state out)"]
+```
+
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#e8f0fe',
+  'primaryTextColor': '#1a1a2e',
+  'primaryBorderColor': '#4a6cf7',
+  'lineColor': '#4a6cf7',
+  'secondaryColor': '#f0f4ff',
+  'tertiaryColor': '#f8f9ff',
+  'edgeLabelBackground': '#ffffff',
+  'clusterBkg': '#f0f4ff',
+  'clusterBorder': '#4a6cf7',
+  'titleColor': '#1a1a2e',
+  'nodeTextColor': '#1a1a2e',
+  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
+}}}%%
+flowchart TD
     TokenID["Token ID\n(e.g. 15496)"] --> EmbedLookup["Embedding Lookup\n(vocab × n_embd matrix)"]
     EmbedLookup --> H0["Hidden State\n[2304 floats]"]
 
@@ -237,6 +274,43 @@ The implementation handles KV cache append, GQA head mapping, sliding window, at
 
 **[FlashAttention (Dao et al., 2022)](https://arxiv.org/abs/2205.14135)** is an optimization that computes attention in **tiles** (small rectangular blocks of the attention matrix processed one at a time) using **online softmax** (incrementally updating the softmax result as new tiles arrive, avoiding the need to store all scores at once), never **materializing** (allocating memory for and storing) the full scores matrix. Metal and CUDA backends implement [FlashAttention-2 (Dao, 2023)](https://arxiv.org/abs/2307.08691); the CPU backend uses a **SIMD-vectorized** (using Single Instruction Multiple Data — processing multiple values at once with one CPU instruction) **fallback** (alternative implementation used when the primary method isn't available).
 
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#e8f0fe',
+  'primaryTextColor': '#1a1a2e',
+  'primaryBorderColor': '#4a6cf7',
+  'lineColor': '#4a6cf7',
+  'secondaryColor': '#f0f4ff',
+  'tertiaryColor': '#f8f9ff',
+  'edgeLabelBackground': '#ffffff',
+  'clusterBkg': '#f0f4ff',
+  'clusterBorder': '#4a6cf7',
+  'titleColor': '#1a1a2e',
+  'nodeTextColor': '#1a1a2e',
+  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
+}}}%%
+flowchart TD
+    subgraph Naive["Naive attention — O(n²) HBM traffic"]
+        direction LR
+        NQ["Q\n[n × d]"] --> NS["S = Q @ Kᵀ\n[n × n] — full matrix\nwritten to HBM"]
+        NK["K\n[n × d]"] --> NS
+        NS --> NP["P = softmax(S)\n[n × n] — full matrix\nwritten to HBM"]
+        NP --> NO["O = P @ V\n[n × d]"]
+        NV["V\n[n × d]"] --> NO
+        NMem["HBM reads/writes:\nn² scores + n² softmax\n→ 2n² elements to/from DRAM"]
+    end
+
+    subgraph Flash["FlashAttention — tiled, O(n) HBM traffic"]
+        direction LR
+        FQ["Q tile\n[Br × d]\n(fits in SRAM)"] --> FTile["Tile loop:\nload K/V block → Br×Bc scores\nonline softmax update → accum O"]
+        FK["K/V tiles\n[Bc × d]\nstreamed block by block"] --> FTile
+        FTile --> FO["O\n[n × d]\nwritten once to HBM"]
+        FMem["HBM reads/writes:\nO(n) — scores never\nleave on-chip SRAM\n→ 5-20× less DRAM traffic"]
+    end
+
+    Naive -->|"replace with"| Flash
+```
+
 ### Attention Variants
 
 | Variant | Models | Where | What it does |
@@ -362,6 +436,49 @@ rmsNorm(x, weight, eps) = x / sqrt(mean(x²) + eps) * weight
 
 Unlike **LayerNorm** (an older normalization method that also subtracts the mean), RMSNorm has no mean subtraction — simpler and empirically just as effective. Every layer applies RMSNorm **before** attention and before FFN (**pre-norm** — normalizing the input to each sublayer). Some models add **post-norms** (normalizing the output after the sublayer, as in Gemma3) or per-head QK norms (Gemma3, Qwen3.5).
 
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#e8f0fe',
+  'primaryTextColor': '#1a1a2e',
+  'primaryBorderColor': '#4a6cf7',
+  'lineColor': '#4a6cf7',
+  'secondaryColor': '#f0f4ff',
+  'tertiaryColor': '#f8f9ff',
+  'edgeLabelBackground': '#ffffff',
+  'clusterBkg': '#f0f4ff',
+  'clusterBorder': '#4a6cf7',
+  'titleColor': '#1a1a2e',
+  'nodeTextColor': '#1a1a2e',
+  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
+}}}%%
+flowchart TD
+    subgraph Internal["RMSNorm internals"]
+        direction LR
+        X["Input vector x\n[n_embd floats]"] --> SqMean["mean(x²)\nper element"]
+        SqMean --> RMS["√(mean + ε)\nscalar"]
+        X --> Divide["x / RMS\n→ unit-scale vector"]
+        RMS --> Divide
+        Divide --> Scale["× weight\n(learned per-dim)"]
+        Scale --> Out["Normalized output\n[n_embd floats]"]
+    end
+
+    subgraph PreNorm["Pre-norm placement (default — all models)"]
+        direction TB
+        PNResid["Residual stream x"] --> PNNorm["RMSNorm"]
+        PNNorm --> PNSub["Sublayer\n(Attention or FFN)"]
+        PNSub --> PNAdd["+ x\n(residual add)"]
+        PNAdd --> PNOut["Next residual stream"]
+    end
+
+    subgraph PostNorm["Post-norm placement (Gemma3 — added after sublayer)"]
+        direction TB
+        PoResid["Residual stream x"] --> PoSub["Sublayer\n(Attention or FFN)"]
+        PoSub --> PoAdd["+ x\n(residual add)"]
+        PoAdd --> PoNorm["RMSNorm"]
+        PoNorm --> PoOut["Next residual stream"]
+    end
+```
+
 **L2 Normalization** is unit-norm without **learnable weights** (parameters that the model adjusts during training — L2 norm just scales to unit length, doesn't multiply by learned values): `x[i] /= sqrt(sum(x²) + eps)`. Used by **DeltaNet** (a linear-complexity alternative to attention covered in [Chapter 6](06-state-space-models.md#deltanet-qwen35)) to normalize Q and K before the recurrence.
 
 ---
@@ -379,6 +496,39 @@ GEMM (prefill, N tokens): load weight row → N dot products → discard
 ```
 
 With N=200 tokens, GEMM has 200× higher **arithmetic intensity** (compute-to-memory ratio), shifting the bottleneck from memory bandwidth to compute throughput. This is why batched prefill is dramatically faster for long prompts.
+
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#e8f0fe',
+  'primaryTextColor': '#1a1a2e',
+  'primaryBorderColor': '#4a6cf7',
+  'lineColor': '#4a6cf7',
+  'secondaryColor': '#f0f4ff',
+  'tertiaryColor': '#f8f9ff',
+  'edgeLabelBackground': '#ffffff',
+  'clusterBkg': '#f0f4ff',
+  'clusterBorder': '#4a6cf7',
+  'titleColor': '#1a1a2e',
+  'nodeTextColor': '#1a1a2e',
+  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
+}}}%%
+flowchart LR
+    subgraph GEMV["GEMV — Decode (1 token at a time)"]
+        direction TB
+        WA["Weight matrix W\n[out × in]\nLoaded fully from VRAM"] -->|"1 dot product\nper row"| XA["Input x\n[in floats]\n1 token"]
+        XA --> YA["Output y\n[out floats]"]
+        NoteA["Bandwidth-bound:\neach weight byte used once\nArithmetic intensity ≈ 1 op/byte"]
+    end
+
+    subgraph GEMM["GEMM — Prefill (N tokens batched)"]
+        direction TB
+        WB["Weight matrix W\n[out × in]\nLoaded once from VRAM"] -->|"N dot products\nper row"| XB["Input X\n[N × in floats]\nN tokens"]
+        XB --> YB["Output Y\n[N × out floats]"]
+        NoteB["Compute-bound:\neach weight byte used N times\nArithmetic intensity ≈ N ops/byte"]
+    end
+
+    GEMV -->|"N=200 prompt tokens\n→ 200× more useful\nwork per memory load"| GEMM
+```
 
 **Chunked prefill** (`--prefill-batch-size N`, default 512) splits long prompts into fixed-size chunks. Each chunk is one batched pass through all layers. Memory overhead is bounded by the chunk size, not the full prompt length.
 

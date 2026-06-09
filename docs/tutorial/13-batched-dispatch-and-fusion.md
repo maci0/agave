@@ -247,6 +247,51 @@ be.addRmsNorm(residual, ffn_out, norm_w, normalized, n_embd);
 
 **GPU implementation:** `temp` computed in registers, never written to VRAM.
 
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#e8f0fe',
+  'primaryTextColor': '#1a1a2e',
+  'primaryBorderColor': '#4a6cf7',
+  'lineColor': '#4a6cf7',
+  'secondaryColor': '#f0f4ff',
+  'tertiaryColor': '#f8f9ff',
+  'edgeLabelBackground': '#ffffff',
+  'clusterBkg': '#f0f4ff',
+  'clusterBorder': '#4a6cf7',
+  'titleColor': '#1a1a2e',
+  'nodeTextColor': '#1a1a2e',
+  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
+}}}%%
+flowchart LR
+    subgraph Unfused["Unfused: 2 dispatches, 4 memory ops"]
+        direction TB
+        R1["residual\n(VRAM read)"]
+        F1["ffn_out\n(VRAM read)"]
+        T1["temp\n(VRAM write)"]
+        T2["temp\n(VRAM read)"]
+        N1["normalized\n(VRAM write)"]
+
+        R1 -->|"Dispatch 1: add"| T1
+        F1 -->|"Dispatch 1: add"| T1
+        T1 -->|"barrier"| T2
+        T2 -->|"Dispatch 2: rmsNorm"| N1
+    end
+
+    subgraph Fused["Fused: 1 dispatch, 3 memory ops"]
+        direction TB
+        R2["residual\n(VRAM read)"]
+        F2["ffn_out\n(VRAM read)"]
+        Reg["sum in registers\n(never touches VRAM)"]
+        N2["normalized\n(VRAM write)"]
+
+        R2 -->|"addRmsNorm\nkernel"| Reg
+        F2 -->|"addRmsNorm\nkernel"| Reg
+        Reg -->|"norm + scale\nin registers"| N2
+    end
+
+    Unfused -. "25% fewer\nmemory ops" .-> Fused
+```
+
 ### Common Fused Operations in Agave
 
 #### addRmsNorm: Residual + Normalization
@@ -361,6 +406,55 @@ Needs to split into:
 ```
 Q: [Q0..Q_{hd-1}] × nh heads
 G: [G0..G_{hd-1}] × nh heads
+```
+
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#e8f0fe',
+  'primaryTextColor': '#1a1a2e',
+  'primaryBorderColor': '#4a6cf7',
+  'lineColor': '#4a6cf7',
+  'secondaryColor': '#f0f4ff',
+  'tertiaryColor': '#f8f9ff',
+  'edgeLabelBackground': '#ffffff',
+  'clusterBkg': '#f0f4ff',
+  'clusterBorder': '#4a6cf7',
+  'titleColor': '#1a1a2e',
+  'nodeTextColor': '#1a1a2e',
+  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
+}}}%%
+flowchart TD
+    subgraph Input["Input buffer: qg (interleaved, nh heads)"]
+        direction LR
+        H0["Head 0\nQ0 .. Q_hd-1 | G0 .. G_hd-1\n(stride = hd*2 per head)"]
+        H1["Head 1\nQ0 .. Q_hd-1 | G0 .. G_hd-1"]
+        H2["Head nh-1\nQ0 .. Q_hd-1 | G0 .. G_hd-1"]
+        H0 ~~~ H1 ~~~ H2
+    end
+
+    subgraph Kernel["GPU kernel: split_qgate\n(1 thread per element, no sync)"]
+        K["tid = h * hd + i\nsrc = h * hd * 2 + i\nq_out[dst] = qg[src]\ng_out[dst] = qg[src + hd]"]
+    end
+
+    subgraph QOut["Output: q_buf (contiguous Q)"]
+        direction LR
+        Q0["Head 0: Q0..Q_hd-1"]
+        Q1["Head 1: Q0..Q_hd-1"]
+        Q2["Head nh-1: Q0..Q_hd-1"]
+        Q0 ~~~ Q1 ~~~ Q2
+    end
+
+    subgraph GOut["Output: g_buf (contiguous Gate)"]
+        direction LR
+        G0["Head 0: G0..G_hd-1"]
+        G1["Head 1: G0..G_hd-1"]
+        G2["Head nh-1: G0..G_hd-1"]
+        G0 ~~~ G1 ~~~ G2
+    end
+
+    Input -->|"read interleaved\nper-head block"| Kernel
+    Kernel -->|"write first hd\nelements"| QOut
+    Kernel -->|"write second hd\nelements (offset +hd)"| GOut
 ```
 
 **Naive CPU implementation:**
@@ -754,6 +848,50 @@ fn encode(...) void {
 }
 ```
 
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#e8f0fe',
+  'primaryTextColor': '#1a1a2e',
+  'primaryBorderColor': '#4a6cf7',
+  'lineColor': '#4a6cf7',
+  'secondaryColor': '#f0f4ff',
+  'tertiaryColor': '#f8f9ff',
+  'edgeLabelBackground': '#ffffff',
+  'clusterBkg': '#f0f4ff',
+  'clusterBorder': '#4a6cf7',
+  'titleColor': '#1a1a2e',
+  'nodeTextColor': '#1a1a2e',
+  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
+}}}%%
+sequenceDiagram
+    participant CPU as CPU (Zig)
+    participant Enc as Metal Command Encoder
+    participant GPU as GPU
+
+    note over CPU,GPU: Without batch mode — N barriers for N independent ops
+
+    CPU->>Enc: encode rmsNormMulti(q_buf)
+    Enc->>GPU: dispatch kernel
+    Enc->>GPU: memoryBarrier (suppress GPU overlap)
+    CPU->>Enc: encode rmsNormMulti(k_buf)
+    Enc->>GPU: dispatch kernel
+    Enc->>GPU: memoryBarrier
+
+    note over CPU,GPU: With beginBatch / endBatch — 1 barrier for N ops
+
+    CPU->>CPU: beginBatch() — set batch_mode = true
+    CPU->>Enc: encode rmsNormMulti(q_buf)
+    Enc->>GPU: dispatch kernel
+    note right of Enc: barrier suppressed (batch_mode)
+    CPU->>Enc: encode rmsNormMulti(k_buf)
+    Enc->>GPU: dispatch kernel
+    note right of Enc: barrier suppressed (batch_mode)
+    CPU->>CPU: endBatch() — set batch_mode = false
+    CPU->>Enc: memoryBarrier (single, covers all batched ops)
+    Enc->>GPU: barrier
+    GPU-->>CPU: all ops visible
+```
+
 **When to use:**
 
 - Multiple normalizations on different buffers
@@ -776,6 +914,47 @@ fn encode(...) void {
 2. **gemvMulti for Q/K/V** → reduced dispatches by ~200
 3. **addRmsNorm fusion** → reduced dispatches by 64
 4. **Batch mode for independent norms/RoPE** → reduced barriers by 240
+
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#e8f0fe',
+  'primaryTextColor': '#1a1a2e',
+  'primaryBorderColor': '#4a6cf7',
+  'lineColor': '#4a6cf7',
+  'secondaryColor': '#f0f4ff',
+  'tertiaryColor': '#f8f9ff',
+  'edgeLabelBackground': '#ffffff',
+  'clusterBkg': '#f0f4ff',
+  'clusterBorder': '#4a6cf7',
+  'titleColor': '#1a1a2e',
+  'nodeTextColor': '#1a1a2e',
+  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
+}}}%%
+flowchart TD
+    Start["Baseline: Qwen3.5 27B MLX\n12.3 tok/s\n24 syncs/token\n930 barriers/token\n~1250 dispatches/token"]
+
+    Start -->|"(1) splitQGate\nGPU kernel\neliminate 24 CPU-GPU syncs\n(-4.8 ms/token overhead)"| Step1
+
+    Step1["0 syncs/token\n930 barriers/token\n~1250 dispatches/token\n~13.0 tok/s"]
+
+    Step1 -->|"(2) gemvMulti\nbatch Q+K+V projections\n-240 barriers/token\n-200 dispatches/token"| Step2
+
+    Step2["0 syncs/token\n690 barriers/token\n~1050 dispatches/token\n~13.5 tok/s"]
+
+    Step2 -->|"(3) addRmsNorm fusion\nfuse residual+norm\n-64 dispatches/token"| Step3
+
+    Step3["0 syncs/token\n690 barriers/token\n~994 dispatches/token\n~13.9 tok/s"]
+
+    Step3 -->|"(4) beginBatch/endBatch\nfor RoPE(Q) + RoPE(K)\n-240 redundant barriers"| Final
+
+    Final["Final: Qwen3.5 27B MLX\n14.1 tok/s (+15%)\n1 sync/token\n690 barriers/token\n994 dispatches/token"]
+
+    style Start fill:#fce8e8,stroke:#e05252
+    style Step1 fill:#fdf3e8,stroke:#e09252
+    style Step2 fill:#fdfae8,stroke:#c8b852
+    style Step3 fill:#eef8ee,stroke:#52a852
+    style Final fill:#e8f4e8,stroke:#2e8b2e
+```
 
 **Final:**
 - 1 sync/token (only for final argmax)

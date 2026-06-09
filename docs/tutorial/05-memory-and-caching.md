@@ -79,6 +79,61 @@ iso3       3.5         66 MB  (4.6x vs f16)                       Quaternion 4D
 turbo2     2.5         47 MB  (6.4x vs f16)                       WHT-32
 ```
 
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#e8f0fe',
+  'primaryTextColor': '#1a1a2e',
+  'primaryBorderColor': '#4a6cf7',
+  'lineColor': '#4a6cf7',
+  'secondaryColor': '#f0f4ff',
+  'tertiaryColor': '#f8f9ff',
+  'edgeLabelBackground': '#ffffff',
+  'clusterBkg': '#f0f4ff',
+  'clusterBorder': '#4a6cf7',
+  'titleColor': '#1a1a2e',
+  'nodeTextColor': '#1a1a2e',
+  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
+}}}%%
+flowchart TB
+    subgraph Formats["KV Cache Quantization Formats — bits/element and memory reduction"]
+        direction TB
+
+        subgraph Full["Full Precision"]
+            F32["f32\n32 bits/elem\n600 MB baseline"]
+            F16["f16\n16 bits/elem\n300 MB  (2× vs f32)"]
+            Q8["q8_0\n8.5 bits/elem\n159 MB  (3.5× vs f16)"]
+        end
+
+        subgraph Turbo4Grp["4-bit tier  (3.6× vs f16 — 84 MB)"]
+            TQ4["TurboQuant turbo4\nWalsh-Hadamard WHT-32\n~160 add/sub, no multiplies"]
+            PQ4["PlanarQuant planar4\nGivens 2D rotation\n256 FMAs"]
+            IQ4["IsoQuant iso4\nQuaternion 4D rotation\n512 FMAs"]
+            RQ4["RotorQuant rotor4\nClifford Cl(3,0) rotor\n~2400 FMAs"]
+        end
+
+        subgraph Turbo3Grp["3-bit tier  (4.6× vs f16 — 66 MB)"]
+            TQ3["TurboQuant turbo3\nWHT-32 decorrelation"]
+            PQ3["PlanarQuant planar3\nGivens 2D rotation"]
+            IQ3["IsoQuant iso3\nQuaternion 4D rotation"]
+        end
+
+        subgraph Turbo2Grp["2-bit tier  (6.4× vs f16 — 47 MB)"]
+            TQ2["TurboQuant turbo2\nWHT-32 decorrelation\nmaximum compression"]
+        end
+    end
+
+    F32 -->|"halve precision"| F16
+    F16 -->|"scalar quantize"| Q8
+    Q8 -->|"rotate + pack\nLloyd-Max codebook"| TQ4
+    Q8 -->|"rotate + pack"| PQ4
+    Q8 -->|"rotate + pack"| IQ4
+    Q8 -->|"rotate + pack"| RQ4
+    TQ4 -->|"reduce bits"| TQ3
+    PQ4 -->|"reduce bits"| PQ3
+    IQ4 -->|"reduce bits"| IQ3
+    TQ3 -->|"reduce bits"| TQ2
+```
+
 Four rotation-based quantizers are available, differing only in the decorrelation transform:
 - **TurboQuant** (`tq2/3/4`): Walsh-Hadamard butterfly network — ~160 add/sub ops (32-element blocks, no multiplies)
 - **PlanarQuant** (`pq2/3/4`): Givens 2D rotation — 256 FMAs (2.5x fewer)
@@ -344,6 +399,52 @@ Both policies share the same eviction framework:
 - **Recent window**: The most recent positions are always retained regardless of their score, ensuring the model has full access to the immediate context.
 - **Periodic compression**: Eviction runs every 128 tokens once the cache exceeds `--kv-budget`. This amortizes the scoring cost rather than evicting on every token.
 
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#e8f0fe',
+  'primaryTextColor': '#1a1a2e',
+  'primaryBorderColor': '#4a6cf7',
+  'lineColor': '#4a6cf7',
+  'secondaryColor': '#f0f4ff',
+  'tertiaryColor': '#f8f9ff',
+  'edgeLabelBackground': '#ffffff',
+  'clusterBkg': '#f0f4ff',
+  'clusterBorder': '#4a6cf7',
+  'titleColor': '#1a1a2e',
+  'nodeTextColor': '#1a1a2e',
+  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
+}}}%%
+flowchart TD
+    NewTok["New token generated\n(cache length checked)"]
+    Check{"Cache exceeds\n--kv-budget?"}
+    Generate["Continue generation\n(no eviction needed)"]
+    Modulo{"Every 128 tokens?\n(amortized trigger)"}
+    Skip["Skip eviction\nthis token"]
+
+    subgraph Protected["Always Protected — never evicted"]
+        Sink["Attention sinks\npositions 0-3\n(disproportionate attention mass)"]
+        Recent["Recent window\nlast N positions\n(immediate context)"]
+    end
+
+    subgraph Scoring["Score remaining positions"]
+        NormScore["norm policy\nL2 norm of K vector\nsmall norm → low attention impact"]
+        TriScore["tri policy\nQ/K frequency-domain stats\nfrom .cal calibration file"]
+    end
+
+    Evict["Evict lowest-scoring positions\nfree blocks returned to pool"]
+    Resume["Resume generation\nwith compressed cache"]
+
+    NewTok --> Check
+    Check -->|"within budget"| Generate
+    Check -->|"over budget"| Modulo
+    Modulo -->|"not yet"| Skip
+    Modulo -->|"yes — compress now"| Protected
+    Protected --> Scoring
+    NormScore --> Evict
+    TriScore --> Evict
+    Evict --> Resume
+```
+
 ### Stacking with TurboQuant
 
 TurboQuant and KV eviction are complementary — one compresses *bits per entry*, the other reduces the *number of entries*:
@@ -369,6 +470,56 @@ Token generation with split KV cache:
 3. Both run concurrently (async overlap)
 4. Merge partial outputs via online softmax correction
 5. Continue to FFN on GPU
+```
+
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#e8f0fe',
+  'primaryTextColor': '#1a1a2e',
+  'primaryBorderColor': '#4a6cf7',
+  'lineColor': '#4a6cf7',
+  'secondaryColor': '#f0f4ff',
+  'tertiaryColor': '#f8f9ff',
+  'edgeLabelBackground': '#ffffff',
+  'clusterBkg': '#f0f4ff',
+  'clusterBorder': '#4a6cf7',
+  'titleColor': '#1a1a2e',
+  'nodeTextColor': '#1a1a2e',
+  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
+}}}%%
+flowchart TB
+    Proj["Q/K/V projections\n(GPU — full speed)"]
+
+    subgraph Split["Concurrent split-attention — GPU and CPU overlap"]
+        direction LR
+        subgraph GPU["GPU SDPA (VRAM)"]
+            GBlocks["Recent KV blocks\n(hot — VRAM resident)"]
+            GSDPA["GPU SDPA kernel\nFlashAttention-2\ncausal masking"]
+            GOut["Partial output Oᵍ\nlocal max mᵍ\nlocal sum lᵍ"]
+        end
+
+        subgraph CPU["CPU SDPA (RAM)"]
+            CBlocks["Cold KV blocks\n(evicted — RAM resident)"]
+            CSDPA["CPU SDPA\nthread pool\nonline softmax"]
+            COut["Partial output Oᶜ\nlocal max mᶜ\nlocal sum lᶜ"]
+        end
+    end
+
+    subgraph Merge["Online softmax merge (exact — no approximation)"]
+        MaxMerge["m = max(mᵍ, mᶜ)\n(global max for rescaling)"]
+        Rescale["Rescale each partial:\nOᵍ ← Oᵍ × exp(mᵍ - m)\nOᶜ ← Oᶜ × exp(mᶜ - m)"]
+        Combine["O = (Oᵍ·lᵍ + Oᶜ·lᶜ) / (lᵍ + lᶜ)\n(weighted sum normalized by combined denominators)"]
+    end
+
+    FFN["FFN layer\n(GPU — continues normally)"]
+
+    Proj -->|"dispatch query"| GPU
+    Proj -->|"dispatch query"| CPU
+    GBlocks --> GSDPA --> GOut
+    CBlocks --> CSDPA --> COut
+    GOut --> MaxMerge
+    COut --> MaxMerge
+    MaxMerge --> Rescale --> Combine --> FFN
 ```
 
 **Online softmax merge:** Each split computes local softmax independently. The merge uses [FlashAttention-2 (Dao, 2023)](https://arxiv.org/abs/2307.08691)'s online correction: track per-head `max` and `sum`, then rescale and combine. This is exact — no approximation.

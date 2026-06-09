@@ -38,7 +38,7 @@ flowchart LR
         TokenEnd
         Reset
     end
-
+```
 
 **Enable profiling:** Add `--profile` to any inference command.
 
@@ -144,7 +144,7 @@ sequenceDiagram
     GPU-->>CPU: done
     CPU->>Perf: perf.end(.gemv_qkv, t)
     Note over Perf: elapsed = now - t<br/>times_us[gemv_qkv] += elapsed<br/>counts[gemv_qkv] += 1
-
+```
 
 ```zig
 // In model forward(), e.g. src/models/qwen35.zig
@@ -225,7 +225,7 @@ graph TD
     style Sync fill:#1a3a5c,color:#e0e8f0
     style HighSync fill:#5c1a1a,color:#f0e0e0
     style ZeroSync fill:#5c1a1a,color:#f0e0e0
-
+```
 
 ```zig
 pub const MetalBackend = struct {
@@ -353,6 +353,61 @@ User **immediately knows** there's an issue and has clear next steps.
 
 ### CPU Fallback Exceptions
 
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#e8f0fe',
+  'primaryTextColor': '#1a1a2e',
+  'primaryBorderColor': '#4a6cf7',
+  'lineColor': '#4a6cf7',
+  'secondaryColor': '#f0f4ff',
+  'tertiaryColor': '#f8f9ff',
+  'edgeLabelBackground': '#ffffff',
+  'clusterBkg': '#f0f4ff',
+  'clusterBorder': '#4a6cf7',
+  'titleColor': '#1a1a2e',
+  'nodeTextColor': '#1a1a2e',
+  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
+}}}%%
+flowchart TD
+    Op["GPU backend op called"]
+    IsEmb{"op == embLookup?"}
+    IsSoftmax{"op == softmax?"}
+    BelowThresh{"n < 128\n(softmax_cpu_threshold)?"}
+    IsImpl{"kernel\nimplemented?"}
+
+    CpuEmb["CPU path\ncpuFallback().embLookup()\nSingle-row dequant: ~2us\nGPU dispatch overhead: ~10us\nCPU always wins here"]
+    CpuSoftmax["CPU path\ncpuFallback().softmax()\nCPU SIMD: ~2us for n=128\nvs GPU dispatch: ~10us base"]
+    GpuSoftmax["GPU path\ndispatch softmax kernel\nWorth it for n>=128\n(CPU: ~15us, GPU: ~3us)"]
+    GpuKernel["GPU path\ndispatch kernel\nnormal execution"]
+    Panic["@panic\n'Metal X not implemented\nuse --backend cpu or\nconvert to supported format'\nuser sees error immediately"]
+
+    Op --> IsEmb
+    IsEmb -->|"yes"| CpuEmb
+    IsEmb -->|"no"| IsSoftmax
+    IsSoftmax -->|"yes"| BelowThresh
+    IsSoftmax -->|"no"| IsImpl
+    BelowThresh -->|"yes: tiny n\ndispatch overhead dominates"| CpuSoftmax
+    BelowThresh -->|"no: large n\nGPU wins"| GpuSoftmax
+    IsImpl -->|"yes"| GpuKernel
+    IsImpl -->|"no"| Panic
+
+    style CpuEmb fill:#d4edda,color:#1a1a2e
+    style CpuSoftmax fill:#d4edda,color:#1a1a2e
+    style GpuKernel fill:#cce5ff,color:#1a1a2e
+    style GpuSoftmax fill:#cce5ff,color:#1a1a2e
+    style Panic fill:#f8d7da,color:#1a1a2e
+
+    subgraph Allowed["Allowed CPU fallbacks (performance-justified)"]
+        CpuEmb
+        CpuSoftmax
+    end
+
+    subgraph GPU["GPU execution"]
+        GpuKernel
+        GpuSoftmax
+    end
+```
+
 **Only two cases allow CPU fallback:**
 
 #### 1. embLookup (Single-Row Read)
@@ -401,6 +456,60 @@ pub fn softmax(self: *MetalBackend, data: [*]f32, n: usize) void {
 ## Debugging Performance Regressions
 
 ### Workflow
+
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#e8f0fe',
+  'primaryTextColor': '#1a1a2e',
+  'primaryBorderColor': '#4a6cf7',
+  'lineColor': '#4a6cf7',
+  'secondaryColor': '#f0f4ff',
+  'tertiaryColor': '#f8f9ff',
+  'edgeLabelBackground': '#ffffff',
+  'clusterBkg': '#f0f4ff',
+  'clusterBorder': '#4a6cf7',
+  'titleColor': '#1a1a2e',
+  'nodeTextColor': '#1a1a2e',
+  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
+}}}%%
+flowchart TD
+    Step1["1. Establish baseline\ngit checkout main\n--profile > baseline.txt"]
+    Step2["2. Test change\ngit checkout feature\n--profile > feature.txt"]
+    Step3["3. Diff profiles\ndiff baseline.txt feature.txt\ncheck dispatch/barrier/sync deltas"]
+    Step4{"4. Isolate\nregression found?"}
+    Step5["5. Fix\nmove CPU work to GPU kernel\nrestore batching\neliminate extra syncs"]
+    Step6["6. Verify\nre-run --profile\nconfirm counters match baseline"]
+    Regression["regression identified\n(e.g. +16 syncs = DeltaNet layers\nmoved split to CPU)"]
+    NoReg["no regression\ncheck for silent\ncorrectness issues"]
+
+    Step1 -->|"record expected\ndispatch/barrier/sync counts"| Step2
+    Step2 -->|"capture feature\nbranch numbers"| Step3
+    Step3 --> Step4
+    Step4 -->|"yes"| Regression
+    Step4 -->|"no obvious delta"| NoReg
+    Regression -->|"comment out\nchanges one by one"| Step5
+    Step5 -->|"regression fixed"| Step6
+    Step6 -->|"counters match\nbaseline"| Done["done: merge"]
+    Step6 -->|"still regressed"| Step5
+
+    subgraph Measure["Measure"]
+        Step1
+        Step2
+        Step3
+    end
+
+    subgraph Diagnose["Diagnose"]
+        Step4
+        Regression
+        NoReg
+    end
+
+    subgraph Remediate["Remediate"]
+        Step5
+        Step6
+        Done
+    end
+```
 
 1. **Establish baseline:** Run with `--profile` on main branch
 
@@ -552,6 +661,62 @@ fi
 **Prevents:** Silent performance regressions from merging.
 
 ### Megakernel Profiling
+
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#e8f0fe',
+  'primaryTextColor': '#1a1a2e',
+  'primaryBorderColor': '#4a6cf7',
+  'lineColor': '#4a6cf7',
+  'secondaryColor': '#f0f4ff',
+  'tertiaryColor': '#f8f9ff',
+  'edgeLabelBackground': '#ffffff',
+  'clusterBkg': '#f0f4ff',
+  'clusterBorder': '#4a6cf7',
+  'titleColor': '#1a1a2e',
+  'nodeTextColor': '#1a1a2e',
+  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
+}}}%%
+graph LR
+    subgraph Standard["Standard dispatch\n(no megakernel)"]
+        S1["rmsNorm\n1 dispatch"]
+        S2["gemv Q\n1 dispatch"]
+        S3["gemv K\n1 dispatch"]
+        S4["gemv V\n1 dispatch"]
+        S5["rope\n1 dispatch"]
+        S6["sdpa\n1 dispatch"]
+        S7["gemv out\n1 dispatch"]
+        S8["rmsNorm FFN\n1 dispatch"]
+        S9["gemv gate\n1 dispatch"]
+        S10["gemv up\n1 dispatch"]
+        S11["siluMul\n1 dispatch"]
+        S12["gemv down\n1 dispatch"]
+        STotal["Total per layer: ~12 dispatches\n32 layers = ~994 dispatches/token\n690 barriers, 1 sync"]
+        S1 --> S2 --> S3 --> S4 --> S5 --> S6 --> S7 --> S8 --> S9 --> S10 --> S11 --> S12 --> STotal
+    end
+
+    subgraph FusedFFN["Fused FFN megakernel (Tier 1)\n--megakernel flag"]
+        F1["attention ops\n(unchanged)"]
+        F2["fusedFfnGateUp\ngate+up+siluMul\nfused into 1 dispatch"]
+        F3["gemv down\n1 dispatch"]
+        FTotal["Total per layer: ~10 dispatches\n32 layers = ~946 dispatches/token\n642 barriers, 1 sync\n(-48 dispatches vs standard)"]
+        F1 --> F2 --> F3 --> FTotal
+    end
+
+    subgraph TrueMega["True megakernel (Tier 2)\nmodel+quant must support"]
+        T1["entire layer\nattn + FFN + norms\nfused into 1 dispatch\n(mega_grid_sync atomic barriers\nreplace Metal memory barriers)"]
+        TTotal["Total: ~30 dispatches/token\n~30 barriers (atomic, not Metal)\n1 sync\n(n_layers + small overhead)"]
+        T1 --> TTotal
+    end
+
+    Standard -->|"--megakernel\nfuses gate+up+siluMul"| FusedFFN
+    FusedFFN -->|"full ModelDesc\ncomptime kernel gen"| TrueMega
+
+    style STotal fill:#fff3cd,color:#1a1a2e
+    style FTotal fill:#d4edda,color:#1a1a2e
+    style TTotal fill:#cce5ff,color:#1a1a2e
+    style T1 fill:#b8d4ff,color:#1a1a2e
+```
 
 Combining `--profile` with `--megakernel` shows the impact of kernel fusion on dispatch and barrier counts:
 
