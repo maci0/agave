@@ -525,6 +525,8 @@ pub const Gemma4Model = struct {
             // This handles both GGUF converters with correct metadata and broken ones.
             const pattern_set = sw_pattern_arr != null and sw_pattern_arr.?.len >= nl;
             if (!pattern_set and sl_head_dim != gl_head_dim) {
+                // GGUF weight dims: [K=input=n_embd, N=output=n_head*head_dim] (column-major).
+                // Use dims[1] (output) for head dim detection.
                 const gl_qd = @as(u64, gl_n_head) * gl_head_dim;
                 var any_global = false;
                 for (0..nl) |i| {
@@ -574,6 +576,7 @@ pub const Gemma4Model = struct {
                 if (found_sl and found_gl) break;
                 if (f.layerTensor(@intCast(i), "attn_q.weight")) |qt| {
                     if (qt.n_dims >= 2 and sl_n_head > 0) {
+                        // dims[0] = output dim = n_head * head_dim (GGUF reader reverses dims)
                         const tensor_hd: u32 = @intCast(qt.dims[0] / sl_n_head);
                         if (tensor_hd > 0) {
                             if (layer_is_global[i] and !found_gl) {
@@ -602,6 +605,7 @@ pub const Gemma4Model = struct {
             for (0..nl) |i| {
                 if (!layer_is_global[i]) {
                     if (f.layerTensor(@intCast(i), "attn_k.weight")) |kt| {
+                        // dims[0] = output dim = n_kv_head * head_dim (GGUF reader reverses dims)
                         if (kt.n_dims >= 2 and kt.dims[0] > 0 and sl_head_dim > 0) {
                             const inferred_nkv: u32 = @intCast(kt.dims[0] / sl_head_dim);
                             if (inferred_nkv > 0 and inferred_nkv != sl_n_kv_head) {
@@ -727,6 +731,7 @@ pub const Gemma4Model = struct {
             // raw norm weights (unlike Gemma3 where SafeTensors needs +1).
             .norm_add_one = false,
         };
+
 
         // ── Per-layer KV cache allocation ──────────────────────────
         // Gemma 4 has per-layer varying kvd (sliding and global layers use different nkv*hd).
@@ -1259,7 +1264,8 @@ pub const Gemma4Model = struct {
             // Copy this token's Q from pf_q
             @memcpy(self.q_buf[0..qkv_dim], self.pf_q[t * qkv_dim ..][0..qkv_dim]);
 
-            if (!is_global and self.sliding_window > 0) {
+            if (!is_global and self.sliding_window > 0 and hd > gpu_sdpa_max_head_dim) {
+                // CPU windowed SDPA for large-head SWA (hd > 256, can't use Metal SDPA).
                 const win: usize = @min(sl, self.sliding_window);
                 const start: usize = if (sl > self.sliding_window) sl - self.sliding_window else 0;
                 attn_ops.scaledDotProductAttention(
@@ -1805,7 +1811,10 @@ pub const Gemma4Model = struct {
                 .f32,
                 .f32,
             );
-        } else if (!is_global and self.sliding_window > 0) {
+        } else if (!is_global and self.sliding_window > 0 and hd > gpu_sdpa_max_head_dim) {
+            // CPU windowed SDPA: only when hd > 256 (large head, can't use Metal SDPA).
+            // For hd ≤ 256, fall through to Metal SDPA below (full attention — correct
+            // for sequences ≤ sliding_window tokens, which covers most practical use).
             const win: usize = @min(sl, self.sliding_window);
             const start: usize = if (sl > self.sliding_window) sl - self.sliding_window else 0;
             attn_ops.scaledDotProductAttention(
@@ -1883,6 +1892,7 @@ pub const Gemma4Model = struct {
             );
         }
         self.perf.end(.sdpa, t);
+
 
         // 6. Output projection + post-attention norm + residual
         t = self.perf.start();
