@@ -156,6 +156,7 @@ pub const RocmBackend = struct {
     fn_sdpa_paged: HipFunction = null,
     fn_gemv_gptq: HipFunction = null,
     fn_gemv_awq: HipFunction = null,
+    fn_gemv_hqq: HipFunction = null,
     fn_sigmoid_mul: HipFunction = null,
     fn_silu_mul: HipFunction = null,
     fn_gelu_mul: HipFunction = null,
@@ -196,7 +197,7 @@ pub const RocmBackend = struct {
     kv_dev_cache: std.AutoHashMap(usize, KvDevCache) = undefined,
 
     /// Number of AMDGCN kernels loaded at init.
-    pub const n_kernels: u32 = 28;
+    pub const n_kernels: u32 = 29;
 
     /// Library name loaded via dlopen at init.
     pub const lib_name = "libamdhip64.so";
@@ -330,6 +331,7 @@ pub const RocmBackend = struct {
         self.fn_sdpa_paged = self.getFunction(hipModuleGetFunction, "sdpa_paged_kernel") catch null;
         self.fn_gemv_gptq = self.getFunction(hipModuleGetFunction, "gemv_gptq_kernel") catch null;
         self.fn_gemv_awq = self.getFunction(hipModuleGetFunction, "gemv_awq_kernel") catch null;
+        self.fn_gemv_hqq = self.getFunction(hipModuleGetFunction, "gemv_hqq_kernel") catch null;
         self.fn_sigmoid_mul = self.getFunction(hipModuleGetFunction, "sigmoid_mul_kernel") catch null;
         self.fn_silu_mul = self.getFunction(hipModuleGetFunction, "silu_mul_kernel") catch null;
         self.fn_gelu_mul = self.getFunction(hipModuleGetFunction, "gelu_mul_kernel") catch null;
@@ -649,8 +651,35 @@ pub const RocmBackend = struct {
         self.launch(self.fn_gemv_awq.?, @intCast(n), block_size, reduction_smem, &params);
     }
 
-    pub fn gemvHqq(_: *RocmBackend, _: [*]const f32, _: [*]const u8, _: [*]const u8, _: [*]const u8, _: [*]f32, _: usize, _: usize, _: u32) void {
-        @panic("HQQ GEMV not yet implemented for ROCm");
+    /// HQQ 4-bit GEMV on ROCm GPU.
+    /// w_q: uint8 [n_out, k_in/2], scale/zero: bf16 [n_out, k_in/group_size].
+    /// Dequant: w = (nibble - zero) * scale. Kernel uses NR=4 row parallelism.
+    pub fn gemvHqq(self: *RocmBackend, x: [*]const f32, w_q: [*]const u8, scale: [*]const u8, zero: [*]const u8, y: [*]f32, n: usize, k: usize, group_size: u32) void {
+        if (self.fn_gemv_hqq == null) {
+            self.flushActivations();
+            const hqq_ops = @import("../ops/hqq.zig");
+            hqq_ops.hqqGemv(x, w_q, @ptrCast(@alignCast(scale)), @ptrCast(@alignCast(zero)), y, n, k, group_size);
+            return;
+        }
+        const bytes_per_row = (k + 1) / 2;
+        const n_groups = (k + group_size - 1) / group_size;
+
+        var d_x = self.getInputBuf(x, k * @sizeOf(f32));
+        var d_wq = self.getOrUpload(@ptrCast(w_q), n * bytes_per_row * @sizeOf(u8));
+        var d_sc = self.getOrUpload(@ptrCast(scale), n * n_groups * @sizeOf(u16));
+        var d_zr = self.getOrUpload(@ptrCast(zero), n * n_groups * @sizeOf(u16));
+        var d_y = self.getOutputBuf(y, n * @sizeOf(f32));
+
+        var n_u32: u32 = @intCast(n);
+        var k_u32: u32 = @intCast(k);
+        var gs_u32: u32 = group_size;
+        var params = [_]?*anyopaque{
+            @ptrCast(&d_x),   @ptrCast(&d_wq), @ptrCast(&d_sc),
+            @ptrCast(&d_zr),  @ptrCast(&d_y),  @ptrCast(&n_u32),
+            @ptrCast(&k_u32), @ptrCast(&gs_u32),
+        };
+        const grid: u32 = @intCast((n + 3) / 4);
+        self.launch(self.fn_gemv_hqq.?, grid, block_size, reduction_smem, &params);
     }
 
     /// output[i] = input[i] * weight[i] * rsqrt(mean(x^2) + eps)
@@ -1593,6 +1622,7 @@ test "ROCm backend public function signatures compile" {
         _ = @TypeOf(RocmBackend.gemvMulti);
         _ = @TypeOf(RocmBackend.gemvGptq);
         _ = @TypeOf(RocmBackend.gemvAwq);
+        _ = @TypeOf(RocmBackend.gemvHqq);
         _ = @TypeOf(RocmBackend.rmsNorm);
         _ = @TypeOf(RocmBackend.rmsNormMulti);
         _ = @TypeOf(RocmBackend.silu);
@@ -1652,7 +1682,7 @@ test "ROCm backend public function signatures compile" {
 }
 
 test "ROCm n_kernels and lib_name" {
-    try std.testing.expectEqual(@as(u32, 28), RocmBackend.n_kernels);
+    try std.testing.expectEqual(@as(u32, 29), RocmBackend.n_kernels);
     try std.testing.expectEqualStrings("libamdhip64.so", RocmBackend.lib_name);
 }
 
@@ -1738,6 +1768,7 @@ test "RocmBackend.invalidateWeight" { comptime { _ = &RocmBackend.invalidateWeig
 test "RocmBackend.gemv" { comptime { _ = &RocmBackend.gemv; } }
 test "RocmBackend.gemvGptq" { comptime { _ = &RocmBackend.gemvGptq; } }
 test "RocmBackend.gemvAwq" { comptime { _ = &RocmBackend.gemvAwq; } }
+test "RocmBackend.gemvHqq" { comptime { _ = &RocmBackend.gemvHqq; } }
 test "RocmBackend.rmsNorm" { comptime { _ = &RocmBackend.rmsNorm; } }
 test "RocmBackend.silu" { comptime { _ = &RocmBackend.silu; } }
 test "RocmBackend.gelu" { comptime { _ = &RocmBackend.gelu; } }
@@ -1791,6 +1822,7 @@ test "fuzz: all rocm functions" {
                 _ = &RocmBackend.gemv;
                 _ = &RocmBackend.gemvGptq;
                 _ = &RocmBackend.gemvAwq;
+                _ = &RocmBackend.gemvHqq;
                 _ = &RocmBackend.rmsNorm;
                 _ = &RocmBackend.silu;
                 _ = &RocmBackend.gelu;

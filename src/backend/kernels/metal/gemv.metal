@@ -1979,3 +1979,47 @@ kernel void gemv_awq(
     sum = threadgroup_reduce_sum(sum, shared, tid, tg_size);
     if (tid == 0) y[col] = sum;
 }
+
+/// HQQ INT4 GEMV.
+/// w_q layout: [n_out, k_in/2] packed nibbles — low nibble = even k, high nibble = odd k.
+/// scale/zero layout: [n_out, k_in/group_size] bf16 (float zero, not packed int).
+/// Dequant: w = (nibble - zero) * scale
+kernel void gemv_hqq(
+    device const float*  x          [[buffer(0)]],
+    device const uchar*  w_q        [[buffer(1)]],
+    device const ushort* scale      [[buffer(2)]],
+    device const ushort* zero       [[buffer(3)]],
+    device float*        y          [[buffer(4)]],
+    constant uint&       n          [[buffer(5)]],
+    constant uint&       k          [[buffer(6)]],
+    constant uint&       group_size [[buffer(7)]],
+    uint tgid    [[threadgroup_position_in_grid]],
+    uint tid     [[thread_index_in_threadgroup]],
+    uint tg_size [[threads_per_threadgroup]])
+{
+    uint row = tgid;
+    if (row >= n) return;
+
+    uint n_groups = k / group_size;
+    float acc = 0.0f;
+
+    for (uint ki = tid; ki < k; ki += tg_size) {
+        float xv = x[ki];
+        if (abs(xv) < 0.005f) continue;
+
+        uint byte_idx = ki / 2;
+        uchar byte = w_q[row * (k / 2) + byte_idx];
+        float nibble = (ki % 2 == 0) ? float(byte & 0xFu) : float(byte >> 4);
+
+        uint g = ki / group_size;
+        // bf16 stored as ushort: reconstruct float by shifting into the upper 16 bits
+        float s = as_type<float>(uint(scale[row * n_groups + g]) << 16);
+        float z = as_type<float>(uint(zero [row * n_groups + g]) << 16);
+
+        acc += (nibble - z) * s * xv;
+    }
+
+    threadgroup float shared[8];
+    acc = threadgroup_reduce_sum(acc, shared, tid, tg_size);
+    if (tid == 0) y[row] = acc;
+}

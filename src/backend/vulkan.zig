@@ -542,6 +542,7 @@ const spv_gemv_mlx_q4 = @embedFile("kernels/vulkan/gemv_mlx_q4.spv");
 const spv_gemv_mxfp4_st = @embedFile("kernels/vulkan/gemv_mxfp4_st.spv");
 const spv_gemv_gptq = @embedFile("kernels/vulkan/gemv_gptq.spv");
 const spv_gemv_awq = @embedFile("kernels/vulkan/gemv_awq.spv");
+const spv_gemv_hqq = @embedFile("kernels/vulkan/gemv_hqq.spv");
 const spv_gemv_tq1_0 = @embedFile("kernels/vulkan/gemv_tq1_0.spv");
 const spv_gemv_tq2_0 = @embedFile("kernels/vulkan/gemv_tq2_0.spv");
 
@@ -647,6 +648,7 @@ pub const VulkanBackend = struct {
     pipe_gemv_mxfp4_st: PipelineInfo = .{},
     pipe_gemv_gptq: PipelineInfo = .{},
     pipe_gemv_awq: PipelineInfo = .{},
+    pipe_gemv_hqq: PipelineInfo = .{},
     pipe_gemv_tq1_0: PipelineInfo = .{},
     pipe_gemv_tq2_0: PipelineInfo = .{},
 
@@ -1136,6 +1138,8 @@ pub const VulkanBackend = struct {
         self.pipe_gemv_gptq = try self.createPipeline(spv_gemv_gptq, 5, 12);
         // AWQ: 5 bufs (x, qweight, scales, qzeros, y), 12 bytes push (n, k, group_size)
         self.pipe_gemv_awq = try self.createPipeline(spv_gemv_awq, 5, 12);
+        // HQQ: 5 bufs (x, w_q, scale, zero, y), 12 bytes push (n, k, group_size)
+        self.pipe_gemv_hqq = try self.createPipeline(spv_gemv_hqq, 5, 12);
         // TQ1_0: 3 bufs (x, w, y), 8 bytes push (n, k)
         self.pipe_gemv_tq1_0 = try self.createPipeline(spv_gemv_tq1_0, 3, 8);
         // TQ2_0: 3 bufs (x, w, y), 8 bytes push (n, k)
@@ -1311,6 +1315,7 @@ pub const VulkanBackend = struct {
             &self.pipe_gemv_t_q8_0,
             &self.pipe_gemv_tq1_0,
             &self.pipe_gemv_tq2_0,
+            &self.pipe_gemv_hqq,
                 // Attention
               &self.pipe_sdpa,
             &self.pipe_sdpa_turbo,
@@ -2018,8 +2023,30 @@ pub const VulkanBackend = struct {
         self.downloadF32(y_pool.mem, y, n);
     }
 
-    pub fn gemvHqq(_: *VulkanBackend, _: [*]const f32, _: [*]const u8, _: [*]const u8, _: [*]const u8, _: [*]f32, _: usize, _: usize, _: u32) void {
-        @panic("HQQ GEMV not yet implemented for Vulkan");
+    /// HQQ INT4 GEMV on Vulkan GPU.
+    /// w_q: packed uint8 nibbles [n * k/2], scale/zero: bf16 packed two-per-u32 [n * k/group_size].
+    pub fn gemvHqq(self: *VulkanBackend, x: [*]const f32, w_q: [*]const u8, scale: [*]const u8, zero: [*]const u8, y: [*]f32, n: usize, k: usize, group_size: u32) void {
+        const n_groups = (k + group_size - 1) / group_size;
+        const x_sz  = k * @sizeOf(f32);
+        const wq_sz = n * (k / 2);                          // bytes: 2 nibbles per byte
+        const sq_sz = n * n_groups * @sizeOf(u16);          // bf16 scale array
+        const zr_sz = n * n_groups * @sizeOf(u16);          // bf16 zero  array
+        const y_sz  = n * @sizeOf(f32);
+
+        const x_pool  = self.getPooledBuf(x_sz);
+        defer self.releasePooledBuf(x_pool);
+        const wq_vk   = self.getOrUpload(@ptrCast(w_q),  wq_sz);
+        const sc_vk   = self.getOrUpload(@ptrCast(scale), sq_sz);
+        const zr_vk   = self.getOrUpload(@ptrCast(zero),  zr_sz);
+        const y_pool  = self.getPooledBuf(y_sz);
+        defer self.releasePooledBuf(y_pool);
+        self.uploadBuffer(x_pool.mem, @ptrCast(x), x_sz);
+
+        const params = [3]u32{ @intCast(n), @intCast(k), group_size };
+        const bufs   = [_]VkBuffer{ x_pool.buf, wq_vk.buf, sc_vk.buf, zr_vk.buf, y_pool.buf };
+        const sizes  = [_]usize{ x_sz, wq_sz, sq_sz, zr_sz, y_sz };
+        self.dispatch(self.pipe_gemv_hqq, &bufs, &sizes, @ptrCast(&params), 12, @intCast(n));
+        self.downloadF32(y_pool.mem, y, n);
     }
 
     /// In-place sigmoid-gated multiply.

@@ -206,6 +206,7 @@ pub const CudaBackend = struct {
     fn_gemv_mxfp4_st: CUfunction = null,
     fn_gemv_gptq: CUfunction = null,
     fn_gemv_awq: CUfunction = null,
+    fn_gemv_hqq: CUfunction = null,
     fn_gemv_tq1_0: CUfunction = null,
     fn_gemv_tq2_0: CUfunction = null,
     fn_fused_ffn_q8: CUfunction = null,
@@ -283,7 +284,7 @@ pub const CudaBackend = struct {
     };
 
     /// Number of PTX kernels loaded at init.
-    pub const n_kernels: u32 = 43;
+    pub const n_kernels: u32 = 44;
 
     /// Library name loaded via dlopen at init.
     pub const lib_name = cuda_lib_name;
@@ -489,6 +490,7 @@ pub const CudaBackend = struct {
         self.fn_gemv_mxfp4_st = try self.getFunction("gemv_mxfp4_st_kernel");
         self.fn_gemv_gptq = self.getFunction("gemv_gptq_kernel") catch null;
         self.fn_gemv_awq = self.getFunction("gemv_awq_kernel") catch null;
+        self.fn_gemv_hqq = self.getFunction("gemv_hqq_kernel") catch null;
         self.fn_gemv_tq1_0 = self.getFunction("gemv_tq1_0_kernel") catch null;
         self.fn_gemv_tq2_0 = self.getFunction("gemv_tq2_0_kernel") catch null;
         self.fn_fused_ffn_q8 = try self.getFunction("fused_ffn_gate_up_silu_q8_0_kernel");
@@ -1641,8 +1643,34 @@ pub const CudaBackend = struct {
         }
     }
 
-    pub fn gemvHqq(_: *CudaBackend, _: [*]const f32, _: [*]const u8, _: [*]const u8, _: [*]const u8, _: [*]f32, _: usize, _: usize, _: u32) void {
-        @panic("HQQ GEMV not yet implemented for CUDA");
+    /// HQQ 4-bit GEMV on CUDA GPU.
+    /// w_q: uint8 [n_out, k_in/2], scale/zero: bf16 [n_out, k_in/group_size].
+    /// Dequant: w = (nibble - zero) * scale. Kernel uses NR=4 row parallelism.
+    pub fn gemvHqq(self: *CudaBackend, x: [*]const f32, w_q: [*]const u8, scale: [*]const u8, zero: [*]const u8, y: [*]f32, n: usize, k: usize, group_size: u32) void {
+        if (self.fn_gemv_hqq) |func| {
+            const bytes_per_row = (k + 1) / 2;
+            const n_groups = (k + group_size - 1) / group_size;
+
+            var d_x = self.getInputBuf(x, k * @sizeOf(f32));
+            var d_wq = self.getOrUpload(@ptrCast(w_q), n * bytes_per_row * @sizeOf(u8));
+            var d_sc = self.getOrUpload(@ptrCast(scale), n * n_groups * @sizeOf(u16));
+            var d_zr = self.getOrUpload(@ptrCast(zero), n * n_groups * @sizeOf(u16));
+            var d_y = self.getOutputBuf(y, n * @sizeOf(f32));
+
+            var n_u32: u32 = @intCast(n);
+            var k_u32: u32 = @intCast(k);
+            var gs_u32: u32 = group_size;
+            var params = [_]?*anyopaque{
+                @ptrCast(&d_x),   @ptrCast(&d_wq), @ptrCast(&d_sc),
+                @ptrCast(&d_zr),  @ptrCast(&d_y),  @ptrCast(&n_u32),
+                @ptrCast(&k_u32), @ptrCast(&gs_u32),
+            };
+            const grid: u32 = @intCast((n + 3) / 4);
+            self.launch(func, grid, block_size, reduction_smem, &params);
+        } else {
+            const hqq_ops = @import("../ops/hqq.zig");
+            hqq_ops.hqqGemv(x, w_q, @ptrCast(@alignCast(scale)), @ptrCast(@alignCast(zero)), y, n, k, group_size);
+        }
     }
 
     /// Commit pending GPU work and download results to host.
@@ -2267,6 +2295,7 @@ test "CUDA backend public function signatures compile" {
         _ = @TypeOf(CudaBackend.gemvMxfp4St);
         _ = @TypeOf(CudaBackend.gemvGptq);
         _ = @TypeOf(CudaBackend.gemvAwq);
+        _ = @TypeOf(CudaBackend.gemvHqq);
 
         // Fused FFN
         _ = @TypeOf(CudaBackend.fusedFfnGateUpSiluQ8);
@@ -2317,7 +2346,7 @@ test "CUDA backend public function signatures compile" {
 }
 
 test "CUDA n_kernels constant matches expected count" {
-    try std.testing.expectEqual(@as(u32, 43), CudaBackend.n_kernels);
+    try std.testing.expectEqual(@as(u32, 44), CudaBackend.n_kernels);
 }
 
 test "CUDA lib_name is platform-appropriate" {
@@ -2470,6 +2499,7 @@ test "CudaBackend.gemvMlxQ" { comptime { _ = &CudaBackend.gemvMlxQ; } }
 test "CudaBackend.gemvMxfp4St" { comptime { _ = &CudaBackend.gemvMxfp4St; } }
 test "CudaBackend.gemvGptq" { comptime { _ = &CudaBackend.gemvGptq; } }
 test "CudaBackend.gemvAwq" { comptime { _ = &CudaBackend.gemvAwq; } }
+test "CudaBackend.gemvHqq" { comptime { _ = &CudaBackend.gemvHqq; } }
 test "CudaBackend.sync" { comptime { _ = &CudaBackend.sync; } }
 test "CudaBackend.beginBatch" { comptime { _ = &CudaBackend.beginBatch; } }
 test "CudaBackend.endBatch" { comptime { _ = &CudaBackend.endBatch; } }
@@ -2533,6 +2563,7 @@ test "fuzz: all cuda functions" {
                 _ = &CudaBackend.gemvMxfp4St;
                 _ = &CudaBackend.gemvGptq;
                 _ = &CudaBackend.gemvAwq;
+                _ = &CudaBackend.gemvHqq;
                 _ = &CudaBackend.sync;
                 _ = &CudaBackend.beginBatch;
                 _ = &CudaBackend.endBatch;

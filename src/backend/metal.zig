@@ -148,6 +148,7 @@ pub const MetalBackend = struct {
     pipe_gemv_fp8_e5m2: objc.id,
     pipe_gemv_gptq: objc.id,
     pipe_gemv_awq: objc.id,
+    pipe_gemv_hqq: objc.id,
     pipe_gemv_tq1_0: objc.id,
     pipe_gemv_tq2_0: objc.id,
     pipe_gemm_f32: objc.id,
@@ -319,6 +320,7 @@ pub const MetalBackend = struct {
             .pipe_gemv_fp8_e5m2 = undefined,
             .pipe_gemv_gptq = undefined,
             .pipe_gemv_awq = undefined,
+            .pipe_gemv_hqq = undefined,
             .pipe_gemv_tq1_0 = undefined,
             .pipe_gemv_tq2_0 = undefined,
             .pipe_gemm_f32 = undefined,
@@ -411,6 +413,7 @@ pub const MetalBackend = struct {
         self.pipe_gemv_fp8_e5m2 = try self.makePipeline("gemv_fp8_e5m2");
         self.pipe_gemv_gptq = try self.makePipeline("gemv_gptq");
         self.pipe_gemv_awq = try self.makePipeline("gemv_awq");
+        self.pipe_gemv_hqq = try self.makePipeline("gemv_hqq");
         self.pipe_gemv_tq1_0 = try self.makePipeline("gemv_tq1_0");
         self.pipe_gemv_tq2_0 = try self.makePipeline("gemv_tq2_0");
         self.pipe_gemm_f32 = try self.makePipeline("gemm_f32");
@@ -1970,20 +1973,31 @@ pub const MetalBackend = struct {
         self.endEncodeThreadgroups(enc, n, 256);
     }
 
-    /// HQQ INT4 GEMV — Metal kernel not yet implemented; falls back to CPU path via ops/hqq.zig.
+    /// HQQ INT4 GEMV on Metal GPU.
+    /// w_q: [n, k/2] packed nibbles; scale/zero: [n, k/group_size] bf16 stored as u8 pairs.
     pub fn gemvHqq(self: *MetalBackend, x: [*]const f32, w_q: [*]const u8, scale: [*]const u8, zero: [*]const u8, y: [*]f32, n: usize, k: usize, group_size: u32) void {
-        _ = self;
-        _ = x;
-        _ = w_q;
-        _ = scale;
-        _ = zero;
-        _ = y;
-        _ = n;
-        _ = k;
-        _ = group_size;
-        // HQQ kernel not yet implemented for Metal — fall through to CPU path.
-        // The model layer should handle this via ops/hqq.zig directly.
-        @panic("HQQ GEMV not yet implemented for Metal");
+        const n_groups = (k + group_size - 1) / group_size;
+
+        const x_ref = self.getBufRef(@ptrCast(x), k * @sizeOf(f32));
+        const w_ref = self.getBufRef(@ptrCast(w_q), n * (k / 2) * @sizeOf(u8));
+        const s_ref = self.getBufRef(@ptrCast(scale), n * n_groups * @sizeOf(u16));
+        const z_ref = self.getBufRef(@ptrCast(zero), n * n_groups * @sizeOf(u16));
+        const y_ref = self.getBufRef(@ptrCast(y), n * @sizeOf(f32));
+
+        const n_val: u32 = @intCast(n);
+        const k_val: u32 = @intCast(k);
+        const gs_val: u32 = group_size;
+
+        const enc = self.getEncoder(self.pipe_gemv_hqq);
+        setBuf(enc, x_ref, 0);
+        setBuf(enc, w_ref, 1);
+        setBuf(enc, s_ref, 2);
+        setBuf(enc, z_ref, 3);
+        setBuf(enc, y_ref, 4);
+        setBytes(enc, @ptrCast(&n_val), @sizeOf(u32), 5);
+        setBytes(enc, @ptrCast(&k_val), @sizeOf(u32), 6);
+        setBytes(enc, @ptrCast(&gs_val), @sizeOf(u32), 7);
+        self.endEncodeThreadgroups(enc, n, 256);
     }
 
     /// AWQ INT4 GEMV on Metal GPU.

@@ -58,6 +58,7 @@ const wgsl_gemv_mlx_q4 = @embedFile("kernels/webgpu/gemv_mlx_q4.wgsl");
 const wgsl_gemv_mxfp4_st = @embedFile("kernels/webgpu/gemv_mxfp4_st.wgsl");
 const wgsl_gemv_gptq = @embedFile("kernels/webgpu/gemv_gptq.wgsl");
 const wgsl_gemv_awq = @embedFile("kernels/webgpu/gemv_awq.wgsl");
+const wgsl_gemv_hqq = @embedFile("kernels/webgpu/gemv_hqq.wgsl");
 const wgsl_gemv_tq1_0 = @embedFile("kernels/webgpu/gemv_tq1_0.wgsl");
 const wgsl_gemv_tq2_0 = @embedFile("kernels/webgpu/gemv_tq2_0.wgsl");
 
@@ -359,6 +360,7 @@ pub const WebGpuBackend = struct {
     pipe_gemv_mxfp4_st: PipelineInfo = .{},
     pipe_gemv_gptq: PipelineInfo = .{},
     pipe_gemv_awq: PipelineInfo = .{},
+    pipe_gemv_hqq: PipelineInfo = .{},
     pipe_gemv_tq1_0: PipelineInfo = .{},
     pipe_gemv_tq2_0: PipelineInfo = .{},
     pipe_sdpa: PipelineInfo = .{},
@@ -610,6 +612,7 @@ pub const WebGpuBackend = struct {
         self.pipe_gemv_mxfp4_st = try self.createPipeline(wgsl_gemv_mxfp4_st);
         self.pipe_gemv_gptq = try self.createPipeline(wgsl_gemv_gptq);
         self.pipe_gemv_awq = try self.createPipeline(wgsl_gemv_awq);
+        self.pipe_gemv_hqq = try self.createPipeline(wgsl_gemv_hqq);
         self.pipe_gemv_tq1_0 = try self.createPipeline(wgsl_gemv_tq1_0);
         self.pipe_gemv_tq2_0 = try self.createPipeline(wgsl_gemv_tq2_0);
         self.pipe_sdpa = try self.createPipeline(wgsl_sdpa);
@@ -1667,8 +1670,37 @@ pub const WebGpuBackend = struct {
         self.cacheGpuResult(y, y_buf, y_sz);
     }
 
-    pub fn gemvHqq(_: *WebGpuBackend, _: [*]const f32, _: [*]const u8, _: [*]const u8, _: [*]const u8, _: [*]f32, _: usize, _: usize, _: u32) void {
-        @panic("HQQ GEMV not yet implemented for WebGPU");
+    /// HQQ INT4 GEMV on WebGPU.
+    /// w_q: packed uint8 nibbles [n * k/2], scale/zero: bf16 packed two-per-u32 [n * k/group_size].
+    pub fn gemvHqq(self: *WebGpuBackend, x: [*]const f32, w_q: [*]const u8, scale: [*]const u8, zero: [*]const u8, y: [*]f32, n: usize, k: usize, group_size: u32) void {
+        const n_groups = (k + group_size - 1) / group_size;
+        const x_sz  = k * @sizeOf(f32);
+        const wq_sz = n * (k / 2);                      // packed nibbles: 2 per byte
+        const sq_sz = n * n_groups * @sizeOf(u16);      // bf16 scale
+        const zr_sz = n * n_groups * @sizeOf(u16);      // bf16 zero
+        const y_sz  = n * @sizeOf(f32);
+
+        const x_buf  = self.getOrUpload(@ptrCast(x),     x_sz);
+        const wq_buf = self.getOrUpload(@ptrCast(w_q),   wq_sz);
+        const sc_buf = self.getOrUpload(@ptrCast(scale), sq_sz);
+        const zr_buf = self.getOrUpload(@ptrCast(zero),  zr_sz);
+        const y_buf  = self.createOutputBuf(y_sz);
+
+        const Params = extern struct { n_v: u32, k_v: u32, gs: u32, _pad: u32 = 0 };
+        const p = Params{ .n_v = @intCast(n), .k_v = @intCast(k), .gs = group_size };
+        const params_buf = self.createUniformBuf(Params, p);
+        self.deferDestroy(params_buf);
+
+        const entries = [_]WGPUBindGroupEntry{
+            storageEntry(0, x_buf,  x_sz),
+            storageEntry(1, wq_buf, wq_sz),
+            storageEntry(2, sc_buf, sq_sz),
+            storageEntry(3, zr_buf, zr_sz),
+            storageEntry(4, y_buf,  y_sz),
+            uniformEntry(5, params_buf, Params),
+        };
+        self.dispatchCompute(self.pipe_gemv_hqq, &entries, @intCast(n));
+        self.cacheGpuResult(y, y_buf, y_sz);
     }
 
     pub fn gemvMulti(self: *WebGpuBackend, x: [*]const f32, ops: []const backend_mod.GemvOp, k: usize) void {
