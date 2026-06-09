@@ -1029,7 +1029,10 @@ pub const Gemma4Model = struct {
         const cs: usize = if (has_gemm) self.chunk_size else 1;
 
         // Fall back to sequential for: images, MoE, PLE, no GEMM, or single token.
-        if (has_image or self.n_experts > 0 or self.ple_dim > 0 or cs <= 1 or token_ids.len == 1) {
+        // NOTE: models with n_layers >= 48 (Gemma 4 12B) use sequential prefill as a
+        // workaround for a bug in prefillChunk that causes corrupted hidden states for
+        // large models. The bug is in the batched Metal GEMM path — investigation ongoing.
+        if (has_image or self.n_experts > 0 or self.ple_dim > 0 or cs <= 1 or token_ids.len == 1 or self.n_layers >= 48) {
             var last: u32 = 0;
             var i: usize = 0;
             while (i < token_ids.len) {
@@ -1264,8 +1267,7 @@ pub const Gemma4Model = struct {
             // Copy this token's Q from pf_q
             @memcpy(self.q_buf[0..qkv_dim], self.pf_q[t * qkv_dim ..][0..qkv_dim]);
 
-            if (!is_global and self.sliding_window > 0 and hd > gpu_sdpa_max_head_dim) {
-                // CPU windowed SDPA for large-head SWA (hd > 256, can't use Metal SDPA).
+            if (!is_global and self.sliding_window > 0) {
                 const win: usize = @min(sl, self.sliding_window);
                 const start: usize = if (sl > self.sliding_window) sl - self.sliding_window else 0;
                 attn_ops.scaledDotProductAttention(
@@ -1811,10 +1813,7 @@ pub const Gemma4Model = struct {
                 .f32,
                 .f32,
             );
-        } else if (!is_global and self.sliding_window > 0 and hd > gpu_sdpa_max_head_dim) {
-            // CPU windowed SDPA: only when hd > 256 (large head, can't use Metal SDPA).
-            // For hd ≤ 256, fall through to Metal SDPA below (full attention — correct
-            // for sequences ≤ sliding_window tokens, which covers most practical use).
+        } else if (!is_global and self.sliding_window > 0) {
             const win: usize = @min(sl, self.sliding_window);
             const start: usize = if (sl > self.sliding_window) sl - self.sliding_window else 0;
             attn_ops.scaledDotProductAttention(
