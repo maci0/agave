@@ -570,7 +570,16 @@ pub fn dispatchGemv(be: backend_mod.Backend, fmt: format_mod.Format, x: [*]const
         const scales_t = if (s_name.len > 0) fmt.getTensor(s_name) else null;
         const zeros_t = if (z_name.len > 0) fmt.getTensor(z_name) else null;
         if (scales_t != null and zeros_t != null) {
-            const group_size = fmt.getMetaU32("group_size") orelse 64;
+            // Derive group_size from scale tensor shape: scale[n_out, k/group_size]
+            // dims[1] = k / group_size → group_size = k / dims[1]
+            const group_size: u32 = blk: {
+                const st = scales_t.?;
+                if (st.n_dims >= 2 and st.dims[1] > 0 and k > 0) {
+                    const gs = k / @as(usize, st.dims[1]);
+                    if (gs > 0) break :blk @intCast(gs);
+                }
+                break :blk fmt.getMetaU32("group_size") orelse 64;
+            };
             be.gemvHqq(x, t.data_ptr, scales_t.?.data_ptr, zeros_t.?.data_ptr, y, n, k, group_size);
             return;
         }
