@@ -106,31 +106,31 @@ while (true) {
 Instead of pre-assigning rows to threads, use an **atomic counter** that threads increment to grab the next chunk. Each thread races to claim the next available chunk by atomically advancing the counter — no coordinator needed.
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': {
-  'primaryColor': '#e8f0fe',
-  'primaryTextColor': '#1a1a2e',
-  'primaryBorderColor': '#4a6cf7',
-  'lineColor': '#4a6cf7',
-  'secondaryColor': '#f0f4ff',
-  'tertiaryColor': '#f8f9ff',
-  'edgeLabelBackground': '#ffffff',
-  'clusterBkg': '#f0f4ff',
-  'clusterBorder': '#4a6cf7',
-  'titleColor': '#1a1a2e',
-  'nodeTextColor': '#1a1a2e',
-  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
-}}}%%
 flowchart LR
-    Counter["task_counter\n(atomic usize)\nstarts at 0"]
+    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
+    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
+    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
+    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
+    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
+    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
 
-    Counter -->|fetchAdd(4)| M["Main Thread\nrows 0–3"]
-    Counter -->|fetchAdd(4)| W1["Worker 1\nrows 4–7"]
-    Counter -->|fetchAdd(4)| W2["Worker 2\nrows 8–11"]
-    Counter -->|fetchAdd(4)| W1b["Worker 1\nrows 12–15"]
-    Counter -->|fetchAdd(4)| W3["Worker 3\nrows 16–19"]
-    Counter -->|fetchAdd(4)| W2b["Worker 2\nrows 20–23"]
+    Counter["task_counter\n(atomic usize)\nstarts at 0"]:::setup
+    M["Main Thread\nrows 0–3"]:::sync
+    W1["Worker 1\nrows 4–7"]:::sync
+    W2["Worker 2\nrows 8–11"]:::sync
+    W1b["Worker 1\nrows 12–15"]:::sync
+    W3["Worker 3\nrows 16–19"]:::sync
+    W2b["Worker 2\nrows 20–23"]:::sync
+    Out["Output rows\n(y vector)"]:::success
 
-    M --> Out["Output rows\n(y vector)"]
+    Counter -->|fetchAdd(4)| M
+    Counter -->|fetchAdd(4)| W1
+    Counter -->|fetchAdd(4)| W2
+    Counter -->|fetchAdd(4)| W1b
+    Counter -->|fetchAdd(4)| W3
+    Counter -->|fetchAdd(4)| W2b
+
+    M --> Out
     W1 --> Out
     W2 --> Out
     W1b --> Out
@@ -174,39 +174,48 @@ fn doWork(pool: *ThreadPool) void {
 The main thread should **not** just wait — it should do work too. Instead of sitting idle while workers run, it joins the counter race and takes chunks like any other thread, then spin-waits for the stragglers.
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': {
-  'primaryColor': '#e8f0fe',
-  'primaryTextColor': '#1a1a2e',
-  'primaryBorderColor': '#4a6cf7',
-  'lineColor': '#4a6cf7',
-  'secondaryColor': '#f0f4ff',
-  'tertiaryColor': '#f8f9ff',
-  'edgeLabelBackground': '#ffffff',
-  'clusterBkg': '#f0f4ff',
-  'clusterBorder': '#4a6cf7',
-  'titleColor': '#1a1a2e',
-  'nodeTextColor': '#1a1a2e',
-  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
-}}}%%
 flowchart TD
-    Start["parallelFor() called"] --> Post["Post task descriptor\n(func, ctx, total, grain)"]
-    Post --> Reset["task_counter = 0"]
-    Reset --> CAS["cmpxchgWeak(active, 0→n_workers)"]
-    CAS -->|CAS succeeds| Wake["generation++\nfutexWake(all workers)"]
-    CAS -->|CAS fails: pool busy| Inline["run func() inline\n(return immediately)"]
-    Wake --> Split["Main thread + Workers\nall racing on task_counter"]
+    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
+    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
+    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
+    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
+    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
+    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
 
-    Split --> Main["Main Thread\ndoWork() loop\n(fetchAdd chunks)"]
-    Split --> W1["Worker 1\ndoWork() loop"]
-    Split --> W2["Worker 2\ndoWork() loop"]
-    Split --> Wn["Worker N\ndoWork() loop"]
+    Start["parallelFor() called"]:::setup
+    Post["Post task descriptor\n(func, ctx, total, grain)"]:::migration
+    Reset["task_counter = 0"]:::setup
+    Wake["generation++\nfutexWake(all workers)"]:::sync
+    Inline["run func() inline\n(return immediately)"]:::danger
+    Split["Main thread + Workers\nall racing on task_counter"]:::sync
+    Main["Main Thread\ndoWork() loop\n(fetchAdd chunks)"]:::sync
+    W1["Worker 1\ndoWork() loop"]:::sync
+    W2["Worker 2\ndoWork() loop"]:::sync
+    Wn["Worker N\ndoWork() loop"]:::sync
+    Spin["Main spins:\nwhile active != 0\n spinLoopHint()"]:::migration
+    Dec1["active.fetchSub(1)"]:::migration
+    Dec2["active.fetchSub(1)"]:::migration
+    DecN["active.fetchSub(1)"]:::migration
+    Done["active == 0\nparallelFor returns"]:::success
 
-    Main --> Spin["Main spins:\nwhile active != 0\n spinLoopHint()"]
-    W1 --> Dec1["active.fetchSub(1)"]
-    W2 --> Dec2["active.fetchSub(1)"]
-    Wn --> DecN["active.fetchSub(1)"]
+    Start --> Post
+    Post --> Reset
+    Reset --> CAS{"cmpxchgWeak\n(active, 0→n_workers)"}
+    CAS -->|CAS succeeds| Wake
+    CAS -->|CAS fails: pool busy| Inline
+    Wake --> Split
 
-    Dec1 --> Done["active == 0\nparallelFor returns"]
+    Split --> Main
+    Split --> W1
+    Split --> W2
+    Split --> Wn
+
+    Main --> Spin
+    W1 --> Dec1
+    W2 --> Dec2
+    Wn --> DecN
+
+    Dec1 --> Done
     Dec2 --> Done
     DecN --> Done
     Spin --> Done
@@ -538,44 +547,41 @@ const min_grain: usize = 4;  // Minimum rows per chunk
 - 4× oversubscription → good load balance
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': {
-  'primaryColor': '#e8f0fe',
-  'primaryTextColor': '#1a1a2e',
-  'primaryBorderColor': '#4a6cf7',
-  'lineColor': '#4a6cf7',
-  'secondaryColor': '#f0f4ff',
-  'tertiaryColor': '#f8f9ff',
-  'edgeLabelBackground': '#ffffff',
-  'clusterBkg': '#f0f4ff',
-  'clusterBorder': '#4a6cf7',
-  'titleColor': '#1a1a2e',
-  'nodeTextColor': '#1a1a2e',
-  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
-}}}%%
 flowchart LR
+    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
+    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
+    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
+    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
+    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
+    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
+
+    Slow1["Slow"]:::danger
+    Slow2["Slow"]:::danger
+    Fast["Optimal:\nlow contention +\ngood balance"]:::success
+
     subgraph small ["grain = 1  (too small)"]
         direction TB
-        S_chunks["256 chunks\nfor 256 rows"]
-        S_atomic["256 fetchAdd\noperations\n(high contention)"]
-        S_load["Perfect load\nbalance"]
+        S_chunks["256 chunks\nfor 256 rows"]:::migration
+        S_atomic["256 fetchAdd\noperations\n(high contention)"]:::danger
+        S_load["Perfect load\nbalance"]:::sync
         S_chunks --> S_atomic
         S_chunks --> S_load
     end
 
     subgraph sweet ["grain = 4-16  (sweet spot)"]
         direction TB
-        M_chunks["16-64 chunks\nfor 256 rows"]
-        M_atomic["16-64 fetchAdd\noperations\n(low contention)"]
-        M_load["Good load\nbalance\n(4x oversubscription)"]
+        M_chunks["16-64 chunks\nfor 256 rows"]:::setup
+        M_atomic["16-64 fetchAdd\noperations\n(low contention)"]:::sync
+        M_load["Good load\nbalance\n(4x oversubscription)"]:::success
         M_chunks --> M_atomic
         M_chunks --> M_load
     end
 
     subgraph large ["grain = 128  (too large)"]
         direction TB
-        L_chunks["2 chunks\nfor 256 rows"]
-        L_atomic["2 fetchAdd\noperations\n(no contention)"]
-        L_load["Poor load balance:\none fast core done,\none slow core stalls all"]
+        L_chunks["2 chunks\nfor 256 rows"]:::migration
+        L_atomic["2 fetchAdd\noperations\n(no contention)"]:::sync
+        L_load["Poor load balance:\none fast core done,\none slow core stalls all"]:::danger
         L_chunks --> L_atomic
         L_chunks --> L_load
     end
@@ -583,9 +589,9 @@ flowchart LR
     small -->|"increase grain"| sweet
     sweet -->|"increase grain"| large
 
-    small -. "fetchAdd cost\ndominates" .-> Slow1["Slow"]
-    large -. "stragglers\nhurt latency" .-> Slow2["Slow"]
-    sweet --> Fast["Optimal:\nlow contention +\ngood balance"]
+    small -. "fetchAdd cost\ndominates" .-> Slow1
+    large -. "stragglers\nhurt latency" .-> Slow2
+    sweet --> Fast
 ```
 
 ### Inline Threshold
@@ -664,47 +670,54 @@ var partial_sums: [8]CacheLinePadded = undefined;
 ```
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': {
-  'primaryColor': '#e8f0fe',
-  'primaryTextColor': '#1a1a2e',
-  'primaryBorderColor': '#4a6cf7',
-  'lineColor': '#4a6cf7',
-  'secondaryColor': '#f0f4ff',
-  'tertiaryColor': '#f8f9ff',
-  'edgeLabelBackground': '#ffffff',
-  'clusterBkg': '#f0f4ff',
-  'clusterBorder': '#4a6cf7',
-  'titleColor': '#1a1a2e',
-  'nodeTextColor': '#1a1a2e',
-  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
-}}}%%
 flowchart TB
+    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
+    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
+    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
+    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
+    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
+    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
+
+    Ping["Cache line\nping-pong\n(5-30x slowdown)"]:::danger
+    Solo["Each write\nindependent\nno cross-core traffic"]:::success
+
     subgraph bad ["BAD: [8]f32 — 32 bytes, fits in one 64-byte cache line"]
         direction LR
-        CL1["Cache line (64 bytes)"]
-        CL1 --- PS0["ps[0]\n4B\nCore 0"]
-        CL1 --- PS1["ps[1]\n4B\nCore 1"]
-        CL1 --- PS2["ps[2]\n4B\nCore 2"]
-        CL1 --- PS3["ps[3]\n4B\nCore 3"]
-        CL1 --- PS4["ps[4]\n4B\nCore 4"]
-        CL1 --- PS5["ps[5]\n4B\nCore 5"]
-        CL1 --- PS6["ps[6]\n4B\nCore 6"]
-        CL1 --- PS7["ps[7]\n4B\nCore 7"]
+        CL1["Cache line (64 bytes)"]:::danger
+        PS0["ps[0]\n4B\nCore 0"]:::migration
+        PS1["ps[1]\n4B\nCore 1"]:::migration
+        PS2["ps[2]\n4B\nCore 2"]:::migration
+        PS3["ps[3]\n4B\nCore 3"]:::migration
+        PS4["ps[4]\n4B\nCore 4"]:::migration
+        PS5["ps[5]\n4B\nCore 5"]:::migration
+        PS6["ps[6]\n4B\nCore 6"]:::migration
+        PS7["ps[7]\n4B\nCore 7"]:::migration
+        CL1 --- PS0
+        CL1 --- PS1
+        CL1 --- PS2
+        CL1 --- PS3
+        CL1 --- PS4
+        CL1 --- PS5
+        CL1 --- PS6
+        CL1 --- PS7
     end
 
     subgraph good ["GOOD: [8]CacheLinePadded — each value owns a full 64-byte cache line"]
         direction LR
-        CL_A["Cache line A\n(64 bytes)"]
-        CL_B["Cache line B\n(64 bytes)"]
-        CL_C["..."]
-        CL_H["Cache line H\n(64 bytes)"]
-        CL_A --- PA0["ps[0].value\n4B + 60B pad\nCore 0 only"]
-        CL_B --- PA1["ps[1].value\n4B + 60B pad\nCore 1 only"]
-        CL_H --- PA7["ps[7].value\n4B + 60B pad\nCore 7 only"]
+        CL_A["Cache line A\n(64 bytes)"]:::setup
+        CL_B["Cache line B\n(64 bytes)"]:::setup
+        CL_C["..."]:::setup
+        CL_H["Cache line H\n(64 bytes)"]:::setup
+        PA0["ps[0].value\n4B + 60B pad\nCore 0 only"]:::success
+        PA1["ps[1].value\n4B + 60B pad\nCore 1 only"]:::success
+        PA7["ps[7].value\n4B + 60B pad\nCore 7 only"]:::success
+        CL_A --- PA0
+        CL_B --- PA1
+        CL_H --- PA7
     end
 
-    bad -->|"Core 1 writes ps[1]\ninvalidates entire line\nCore 0 must reload ps[0]"| Ping["Cache line\nping-pong\n(5-30x slowdown)"]
-    good -->|"Core 1 writes pa[1]\nonly its own line\nis invalidated"| Solo["Each write\nindependent\nno cross-core traffic"]
+    bad -->|"Core 1 writes ps[1]\ninvalidates entire line\nCore 0 must reload ps[0]"| Ping
+    good -->|"Core 1 writes pa[1]\nonly its own line\nis invalidated"| Solo
 ```
 
 Agave avoids this by using per-chunk reduction in the worker function — no shared array.

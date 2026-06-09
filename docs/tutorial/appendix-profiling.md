@@ -7,28 +7,30 @@ Performance regressions are silent — the model still runs, but slower. **Profi
 The `--profile` flag threads timing instrumentation through the entire inference pipeline, collecting per-operation durations and backend counters that are printed after each token.
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': {
-  'primaryColor': '#e8f0fe',
-  'primaryTextColor': '#1a1a2e',
-  'primaryBorderColor': '#4a6cf7',
-  'lineColor': '#4a6cf7',
-  'secondaryColor': '#f0f4ff',
-  'tertiaryColor': '#f8f9ff',
-  'edgeLabelBackground': '#ffffff',
-  'clusterBkg': '#f0f4ff',
-  'clusterBorder': '#4a6cf7',
-  'titleColor': '#1a1a2e',
-  'nodeTextColor': '#1a1a2e',
-  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
-}}}%%
 flowchart LR
-    CLI["--profile flag"] --> Enable["PerfCounters.enabled = true\nMetalBackend.profile_counters = true"]
-    Enable --> Forward["Model forward()"]
-    Forward --> OpWrap["Per-op start()/end() wraps\n(with GPU sync between)"]
-    OpWrap --> Accumulate["Accumulate times_us[]\ncounts[] per Op enum"]
-    Accumulate --> TokenEnd["End of token"]
-    TokenEnd --> Reset["resetCounters()\n(dispatch/barrier/sync → 0, profile_counters = true)"]
-    TokenEnd --> Report["perf.report()\nPrint table + Metal counters"]
+    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
+    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
+    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
+    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
+    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
+    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
+
+    CLI["--profile flag"]:::setup
+    Enable["PerfCounters.enabled = true\nMetalBackend.profile_counters = true"]:::setup
+    Forward["Model forward()"]:::sync
+    OpWrap["Per-op start()/end() wraps\n(with GPU sync between)"]:::sync
+    Accumulate["Accumulate times_us[]\ncounts[] per Op enum"]:::migration
+    TokenEnd["End of token"]:::migration
+    Reset["resetCounters()\n(dispatch/barrier/sync → 0, profile_counters = true)"]:::setup
+    Report["perf.report()\nPrint table + Metal counters"]:::success
+
+    CLI --> Enable
+    Enable --> Forward
+    Forward --> OpWrap
+    OpWrap --> Accumulate
+    Accumulate --> TokenEnd
+    TokenEnd --> Reset
+    TokenEnd --> Report
     Reset --> Forward
 
     subgraph Hot["Per-token loop"]
@@ -192,39 +194,30 @@ After generation completes, `perf.report()` prints a table with call counts, tot
 The three Metal counters measure different levels of GPU work granularity. A dispatch is one kernel invocation; a barrier serializes two consecutive dispatches; a sync flushes the GPU command queue back to the CPU. Each has an "optimal" range -- deviating in either direction signals a specific class of problem.
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': {
-  'primaryColor': '#e8f0fe',
-  'primaryTextColor': '#1a1a2e',
-  'primaryBorderColor': '#4a6cf7',
-  'lineColor': '#4a6cf7',
-  'secondaryColor': '#f0f4ff',
-  'tertiaryColor': '#f8f9ff',
-  'edgeLabelBackground': '#ffffff',
-  'clusterBkg': '#f0f4ff',
-  'clusterBorder': '#4a6cf7',
-  'titleColor': '#1a1a2e',
-  'nodeTextColor': '#1a1a2e',
-  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
-}}}%%
 graph TD
-    Dispatch["Dispatch\n(one kernel invocation)\nOptimal: 300-600"]
-    Barrier["Barrier\n(serializes two dispatches)\nOptimal: 300-700"]
-    Sync["Sync / Flush\n(CPU waits for GPU)\nOptimal: 1-3"]
+    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
+    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
+    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
+    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
+    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
+    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
 
-    Dispatch -->|"too high >1000\n→ dispatch overhead dominates"| HighDisp["Fuse ops or use megakernel"]
-    Dispatch -->|"too low <100\n→ missing parallelism"| LowDisp["Audit batching (gemvMulti, etc.)"]
+    Dispatch["Dispatch\n(one kernel invocation)\nOptimal: 300-600"]:::setup
+    Barrier["Barrier\n(serializes two dispatches)\nOptimal: 300-700"]:::setup
+    Sync["Sync / Flush\n(CPU waits for GPU)\nOptimal: 1-3"]:::setup
+    HighDisp["Fuse ops or use megakernel"]:::migration
+    LowDisp["Audit batching (gemvMulti, etc.)"]:::migration
+    HighBarr["Check batch_mode flag\nGroup ops before barrier"]:::migration
+    LowBarr["Risk: GPU reads stale data"]:::danger
+    HighSync["Move CPU work to GPU kernel\n(e.g. Q/gate split)"]:::danger
+    ZeroSync["CPU may read stale GPU output"]:::danger
 
-    Barrier -->|"too high >1000\n→ serialized execution"| HighBarr["Check batch_mode flag\nGroup ops before barrier"]
-    Barrier -->|"too low <100\n→ missing sync"| LowBarr["Risk: GPU reads stale data"]
-
-    Sync -->|"high >10\n→ CPU/GPU round-trips"| HighSync["Move CPU work to GPU kernel\n(e.g. Q/gate split)"]
-    Sync -->|"zero\n→ suspicious"| ZeroSync["CPU may read stale GPU output"]
-
-    style Dispatch fill:#1a3a5c,color:#e0e8f0
-    style Barrier fill:#1a3a5c,color:#e0e8f0
-    style Sync fill:#1a3a5c,color:#e0e8f0
-    style HighSync fill:#5c1a1a,color:#f0e0e0
-    style ZeroSync fill:#5c1a1a,color:#f0e0e0
+    Dispatch -->|"too high >1000\n→ dispatch overhead dominates"| HighDisp
+    Dispatch -->|"too low <100\n→ missing parallelism"| LowDisp
+    Barrier -->|"too high >1000\n→ serialized execution"| HighBarr
+    Barrier -->|"too low <100\n→ missing sync"| LowBarr
+    Sync -->|"high >10\n→ CPU/GPU round-trips"| HighSync
+    Sync -->|"zero\n→ suspicious"| ZeroSync
 ```
 
 ```zig
@@ -354,32 +347,24 @@ User **immediately knows** there's an issue and has clear next steps.
 ### CPU Fallback Exceptions
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': {
-  'primaryColor': '#e8f0fe',
-  'primaryTextColor': '#1a1a2e',
-  'primaryBorderColor': '#4a6cf7',
-  'lineColor': '#4a6cf7',
-  'secondaryColor': '#f0f4ff',
-  'tertiaryColor': '#f8f9ff',
-  'edgeLabelBackground': '#ffffff',
-  'clusterBkg': '#f0f4ff',
-  'clusterBorder': '#4a6cf7',
-  'titleColor': '#1a1a2e',
-  'nodeTextColor': '#1a1a2e',
-  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
-}}}%%
 flowchart TD
-    Op["GPU backend op called"]
+    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
+    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
+    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
+    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
+    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
+    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
+
+    Op["GPU backend op called"]:::setup
     IsEmb{"op == embLookup?"}
     IsSoftmax{"op == softmax?"}
     BelowThresh{"n < 128\n(softmax_cpu_threshold)?"}
     IsImpl{"kernel\nimplemented?"}
-
-    CpuEmb["CPU path\ncpuFallback().embLookup()\nSingle-row dequant: ~2us\nGPU dispatch overhead: ~10us\nCPU always wins here"]
-    CpuSoftmax["CPU path\ncpuFallback().softmax()\nCPU SIMD: ~2us for n=128\nvs GPU dispatch: ~10us base"]
-    GpuSoftmax["GPU path\ndispatch softmax kernel\nWorth it for n>=128\n(CPU: ~15us, GPU: ~3us)"]
-    GpuKernel["GPU path\ndispatch kernel\nnormal execution"]
-    Panic["@panic\n'Metal X not implemented\nuse --backend cpu or\nconvert to supported format'\nuser sees error immediately"]
+    CpuEmb["CPU path\ncpuFallback().embLookup()\nSingle-row dequant: ~2us\nGPU dispatch overhead: ~10us\nCPU always wins here"]:::success
+    CpuSoftmax["CPU path\ncpuFallback().softmax()\nCPU SIMD: ~2us for n=128\nvs GPU dispatch: ~10us base"]:::success
+    GpuSoftmax["GPU path\ndispatch softmax kernel\nWorth it for n>=128\n(CPU: ~15us, GPU: ~3us)"]:::sync
+    GpuKernel["GPU path\ndispatch kernel\nnormal execution"]:::sync
+    Panic["@panic\n'Metal X not implemented\nuse --backend cpu or\nconvert to supported format'\nuser sees error immediately"]:::danger
 
     Op --> IsEmb
     IsEmb -->|"yes"| CpuEmb
@@ -390,12 +375,6 @@ flowchart TD
     BelowThresh -->|"no: large n\nGPU wins"| GpuSoftmax
     IsImpl -->|"yes"| GpuKernel
     IsImpl -->|"no"| Panic
-
-    style CpuEmb fill:#d4edda,color:#1a1a2e
-    style CpuSoftmax fill:#d4edda,color:#1a1a2e
-    style GpuKernel fill:#cce5ff,color:#1a1a2e
-    style GpuSoftmax fill:#cce5ff,color:#1a1a2e
-    style Panic fill:#f8d7da,color:#1a1a2e
 
     subgraph Allowed["Allowed CPU fallbacks (performance-justified)"]
         CpuEmb
@@ -458,29 +437,23 @@ pub fn softmax(self: *MetalBackend, data: [*]f32, n: usize) void {
 ### Workflow
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': {
-  'primaryColor': '#e8f0fe',
-  'primaryTextColor': '#1a1a2e',
-  'primaryBorderColor': '#4a6cf7',
-  'lineColor': '#4a6cf7',
-  'secondaryColor': '#f0f4ff',
-  'tertiaryColor': '#f8f9ff',
-  'edgeLabelBackground': '#ffffff',
-  'clusterBkg': '#f0f4ff',
-  'clusterBorder': '#4a6cf7',
-  'titleColor': '#1a1a2e',
-  'nodeTextColor': '#1a1a2e',
-  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
-}}}%%
 flowchart TD
-    Step1["1. Establish baseline\ngit checkout main\n--profile > baseline.txt"]
-    Step2["2. Test change\ngit checkout feature\n--profile > feature.txt"]
-    Step3["3. Diff profiles\ndiff baseline.txt feature.txt\ncheck dispatch/barrier/sync deltas"]
+    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
+    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
+    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
+    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
+    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
+    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
+
+    Step1["1. Establish baseline\ngit checkout main\n--profile > baseline.txt"]:::setup
+    Step2["2. Test change\ngit checkout feature\n--profile > feature.txt"]:::setup
+    Step3["3. Diff profiles\ndiff baseline.txt feature.txt\ncheck dispatch/barrier/sync deltas"]:::sync
     Step4{"4. Isolate\nregression found?"}
-    Step5["5. Fix\nmove CPU work to GPU kernel\nrestore batching\neliminate extra syncs"]
-    Step6["6. Verify\nre-run --profile\nconfirm counters match baseline"]
-    Regression["regression identified\n(e.g. +16 syncs = DeltaNet layers\nmoved split to CPU)"]
-    NoReg["no regression\ncheck for silent\ncorrectness issues"]
+    Step5["5. Fix\nmove CPU work to GPU kernel\nrestore batching\neliminate extra syncs"]:::migration
+    Step6["6. Verify\nre-run --profile\nconfirm counters match baseline"]:::sync
+    Regression["regression identified\n(e.g. +16 syncs = DeltaNet layers\nmoved split to CPU)"]:::danger
+    NoReg["no regression\ncheck for silent\ncorrectness issues"]:::optional
+    Done["done: merge"]:::success
 
     Step1 -->|"record expected\ndispatch/barrier/sync counts"| Step2
     Step2 -->|"capture feature\nbranch numbers"| Step3
@@ -489,7 +462,7 @@ flowchart TD
     Step4 -->|"no obvious delta"| NoReg
     Regression -->|"comment out\nchanges one by one"| Step5
     Step5 -->|"regression fixed"| Step6
-    Step6 -->|"counters match\nbaseline"| Done["done: merge"]
+    Step6 -->|"counters match\nbaseline"| Done
     Step6 -->|"still regressed"| Step5
 
     subgraph Measure["Measure"]
@@ -663,59 +636,47 @@ fi
 ### Megakernel Profiling
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': {
-  'primaryColor': '#e8f0fe',
-  'primaryTextColor': '#1a1a2e',
-  'primaryBorderColor': '#4a6cf7',
-  'lineColor': '#4a6cf7',
-  'secondaryColor': '#f0f4ff',
-  'tertiaryColor': '#f8f9ff',
-  'edgeLabelBackground': '#ffffff',
-  'clusterBkg': '#f0f4ff',
-  'clusterBorder': '#4a6cf7',
-  'titleColor': '#1a1a2e',
-  'nodeTextColor': '#1a1a2e',
-  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
-}}}%%
 graph LR
+    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
+    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
+    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
+    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
+    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
+    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
+
     subgraph Standard["Standard dispatch\n(no megakernel)"]
-        S1["rmsNorm\n1 dispatch"]
-        S2["gemv Q\n1 dispatch"]
-        S3["gemv K\n1 dispatch"]
-        S4["gemv V\n1 dispatch"]
-        S5["rope\n1 dispatch"]
-        S6["sdpa\n1 dispatch"]
-        S7["gemv out\n1 dispatch"]
-        S8["rmsNorm FFN\n1 dispatch"]
-        S9["gemv gate\n1 dispatch"]
-        S10["gemv up\n1 dispatch"]
-        S11["siluMul\n1 dispatch"]
-        S12["gemv down\n1 dispatch"]
-        STotal["Total per layer: ~12 dispatches\n32 layers = ~994 dispatches/token\n690 barriers, 1 sync"]
+        S1["rmsNorm\n1 dispatch"]:::sync
+        S2["gemv Q\n1 dispatch"]:::sync
+        S3["gemv K\n1 dispatch"]:::sync
+        S4["gemv V\n1 dispatch"]:::sync
+        S5["rope\n1 dispatch"]:::sync
+        S6["sdpa\n1 dispatch"]:::sync
+        S7["gemv out\n1 dispatch"]:::sync
+        S8["rmsNorm FFN\n1 dispatch"]:::sync
+        S9["gemv gate\n1 dispatch"]:::sync
+        S10["gemv up\n1 dispatch"]:::sync
+        S11["siluMul\n1 dispatch"]:::sync
+        S12["gemv down\n1 dispatch"]:::sync
+        STotal["Total per layer: ~12 dispatches\n32 layers = ~994 dispatches/token\n690 barriers, 1 sync"]:::migration
         S1 --> S2 --> S3 --> S4 --> S5 --> S6 --> S7 --> S8 --> S9 --> S10 --> S11 --> S12 --> STotal
     end
 
     subgraph FusedFFN["Fused FFN megakernel (Tier 1)\n--megakernel flag"]
-        F1["attention ops\n(unchanged)"]
-        F2["fusedFfnGateUp\ngate+up+siluMul\nfused into 1 dispatch"]
-        F3["gemv down\n1 dispatch"]
-        FTotal["Total per layer: ~10 dispatches\n32 layers = ~946 dispatches/token\n642 barriers, 1 sync\n(-48 dispatches vs standard)"]
+        F1["attention ops\n(unchanged)"]:::sync
+        F2["fusedFfnGateUp\ngate+up+siluMul\nfused into 1 dispatch"]:::sync
+        F3["gemv down\n1 dispatch"]:::sync
+        FTotal["Total per layer: ~10 dispatches\n32 layers = ~946 dispatches/token\n642 barriers, 1 sync\n(-48 dispatches vs standard)"]:::success
         F1 --> F2 --> F3 --> FTotal
     end
 
     subgraph TrueMega["True megakernel (Tier 2)\nmodel+quant must support"]
-        T1["entire layer\nattn + FFN + norms\nfused into 1 dispatch\n(mega_grid_sync atomic barriers\nreplace Metal memory barriers)"]
-        TTotal["Total: ~30 dispatches/token\n~30 barriers (atomic, not Metal)\n1 sync\n(n_layers + small overhead)"]
+        T1["entire layer\nattn + FFN + norms\nfused into 1 dispatch\n(mega_grid_sync atomic barriers\nreplace Metal memory barriers)"]:::setup
+        TTotal["Total: ~30 dispatches/token\n~30 barriers (atomic, not Metal)\n1 sync\n(n_layers + small overhead)"]:::success
         T1 --> TTotal
     end
 
     Standard -->|"--megakernel\nfuses gate+up+siluMul"| FusedFFN
     FusedFFN -->|"full ModelDesc\ncomptime kernel gen"| TrueMega
-
-    style STotal fill:#fff3cd,color:#1a1a2e
-    style FTotal fill:#d4edda,color:#1a1a2e
-    style TTotal fill:#cce5ff,color:#1a1a2e
-    style T1 fill:#b8d4ff,color:#1a1a2e
 ```
 
 Combining `--profile` with `--megakernel` shows the impact of kernel fusion on dispatch and barrier counts:

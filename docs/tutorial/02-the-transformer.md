@@ -24,81 +24,90 @@ A model has N layers stacked in sequence (e.g., 35 for Gemma4 E2B, 64 for Qwen3.
 Both sublayers use **residual connections** (`output = input + sublayer(input)`) so information flows through unchanged, preventing the **vanishing gradient problem** (where gradients get exponentially smaller in deep networks during training, making learning impossible) in deep networks.
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': {
-  'primaryColor': '#e8f0fe',
-  'primaryTextColor': '#1a1a2e',
-  'primaryBorderColor': '#4a6cf7',
-  'lineColor': '#4a6cf7',
-  'secondaryColor': '#f0f4ff',
-  'tertiaryColor': '#f8f9ff',
-  'edgeLabelBackground': '#ffffff',
-  'clusterBkg': '#f0f4ff',
-  'clusterBorder': '#4a6cf7',
-  'titleColor': '#1a1a2e',
-  'nodeTextColor': '#1a1a2e',
-  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
-}}}%%
 flowchart TD
-    In["Residual stream x\n(hidden state in)"]
+    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
+    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
+    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
+    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
+    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
+    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
+
+    In["Residual stream x\n(hidden state in)"]:::setup
+    AN["RMSNorm"]:::migration
+    Attn["Attention"]:::sync
+    AttnAdd["+ x"]:::migration
+    FN["RMSNorm"]:::migration
+    FFN["Feed-Forward\nNetwork"]:::sync
+    FFNAdd["+ x"]:::migration
+    Out["Residual stream x'\n(hidden state out)"]:::success
 
     subgraph AttnBlock["Attention sublayer (with residual)"]
         direction LR
-        AN["RMSNorm"] --> Attn["Attention"]
-        Attn --> AttnAdd["+ x"]
+        AN --> Attn
+        Attn --> AttnAdd
     end
 
     subgraph FFNBlock["FFN sublayer (with residual)"]
         direction LR
-        FN["RMSNorm"] --> FFN["Feed-Forward\nNetwork"]
-        FFN --> FFNAdd["+ x"]
+        FN --> FFN
+        FFN --> FFNAdd
     end
 
     In --> AN
     In -->|"skip connection\n(unchanged)"| AttnAdd
     AttnAdd --> FN
     AttnAdd -->|"skip connection\n(unchanged)"| FFNAdd
-    FFNAdd --> Out["Residual stream x'\n(hidden state out)"]
+    FFNAdd --> Out
 ```
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': {
-  'primaryColor': '#e8f0fe',
-  'primaryTextColor': '#1a1a2e',
-  'primaryBorderColor': '#4a6cf7',
-  'lineColor': '#4a6cf7',
-  'secondaryColor': '#f0f4ff',
-  'tertiaryColor': '#f8f9ff',
-  'edgeLabelBackground': '#ffffff',
-  'clusterBkg': '#f0f4ff',
-  'clusterBorder': '#4a6cf7',
-  'titleColor': '#1a1a2e',
-  'nodeTextColor': '#1a1a2e',
-  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
-}}}%%
 flowchart TD
-    TokenID["Token ID\n(e.g. 15496)"] --> EmbedLookup["Embedding Lookup\n(vocab × n_embd matrix)"]
-    EmbedLookup --> H0["Hidden State\n[2304 floats]"]
+    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
+    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
+    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
+    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
+    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
+    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
+
+    TokenID["Token ID\n(e.g. 15496)"]:::setup
+    EmbedLookup["Embedding Lookup\n(vocab × n_embd matrix)"]:::sync
+    H0["Hidden State\n[2304 floats]"]:::migration
+    PreNorm1["RMSNorm"]:::migration
+    Attn["Attention\n(Q/K/V + SDPA)"]:::sync
+    Add1("+")
+    PreNorm2["RMSNorm"]:::migration
+    FFN["Feed-Forward\nNetwork"]:::sync
+    Add2("+")
+    HN["Hidden State\n[2304 floats]"]:::migration
+    FinalNorm["Final RMSNorm"]:::migration
+    VocabProj["Vocab Projection\n(n_embd → vocab_size)"]:::sync
+    Logits["Logits\n[262144 floats]"]:::migration
+    Argmax["Argmax / Sample"]:::sync
+    NextToken["Next Token ID"]:::success
+
+    TokenID --> EmbedLookup
+    EmbedLookup --> H0
 
     H0 --> Layer0
 
     subgraph Layer0["Transformer Layer (repeated N times)"]
         direction LR
-        PreNorm1["RMSNorm"] --> Attn["Attention\n(Q/K/V + SDPA)"]
-        Attn --> Add1("+")
-        PreNorm2["RMSNorm"] --> FFN["Feed-Forward\nNetwork"]
-        FFN --> Add2("+")
+        PreNorm1 --> Attn
+        Attn --> Add1
+        PreNorm2 --> FFN
+        FFN --> Add2
     end
 
     H0 --> Add1
     Add1 --> PreNorm2
     Add1 --> Add2
-    Add2 --> HN["Hidden State\n[2304 floats]"]
+    Add2 --> HN
 
-    HN --> FinalNorm["Final RMSNorm"]
-    FinalNorm --> VocabProj["Vocab Projection\n(n_embd → vocab_size)"]
-    VocabProj --> Logits["Logits\n[262144 floats]"]
-    Logits --> Argmax["Argmax / Sample"]
-    Argmax --> NextToken["Next Token ID"]
+    HN --> FinalNorm
+    FinalNorm --> VocabProj
+    VocabProj --> Logits
+    Logits --> Argmax
+    Argmax --> NextToken
 ```
 
 
@@ -107,42 +116,45 @@ flowchart TD
 Attention answers: "which previous tokens should I pay attention to?"
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': {
-  'primaryColor': '#e8f0fe',
-  'primaryTextColor': '#1a1a2e',
-  'primaryBorderColor': '#4a6cf7',
-  'lineColor': '#4a6cf7',
-  'secondaryColor': '#f0f4ff',
-  'tertiaryColor': '#f8f9ff',
-  'edgeLabelBackground': '#ffffff',
-  'clusterBkg': '#f0f4ff',
-  'clusterBorder': '#4a6cf7',
-  'titleColor': '#1a1a2e',
-  'nodeTextColor': '#1a1a2e',
-  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
-}}}%%
 flowchart LR
-    X["Hidden State x\n[n_embd floats]"]
+    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
+    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
+    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
+    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
+    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
+    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
 
-    X -->|"W_q @"| Q["Query Q\n'What am I looking for?'"]
-    X -->|"W_k @"| K["Key K\n'What do I contain?'"]
-    X -->|"W_v @"| V["Value V\n'What info do I carry?'"]
+    X["Hidden State x\n[n_embd floats]"]:::setup
+    Q["Query Q\n'What am I looking for?'"]:::migration
+    K["Key K\n'What do I contain?'"]:::migration
+    V["Value V\n'What info do I carry?'"]:::migration
+    PastK["Past Keys"]:::setup
+    PastV["Past Values"]:::setup
+    Scores["Dot Products\nQ · K / √d"]:::sync
+    Mask["Causal Mask\n(future = -∞)"]:::danger
+    Softmax["Softmax\n→ attention weights"]:::sync
+    WeightedSum["Weighted Sum\n× V vectors"]:::sync
+    Out["Attention Output\n[n_embd floats]"]:::success
+
+    X -->|"W_q @"| Q
+    X -->|"W_k @"| K
+    X -->|"W_v @"| V
 
     subgraph KVCache["KV Cache (past tokens)"]
-        PastK["Past Keys"]
-        PastV["Past Values"]
+        PastK
+        PastV
     end
 
     K --> PastK
     V --> PastV
 
-    Q --> Scores["Dot Products\nQ · K / √d"]
+    Q --> Scores
     PastK --> Scores
-    Scores --> Mask["Causal Mask\n(future = -∞)"]
-    Mask --> Softmax["Softmax\n→ attention weights"]
-    Softmax --> WeightedSum["Weighted Sum\n× V vectors"]
+    Scores --> Mask
+    Mask --> Softmax
+    Softmax --> WeightedSum
     PastV --> WeightedSum
-    WeightedSum --> Out["Attention Output\n[n_embd floats]"]
+    WeightedSum --> Out
 ```
 
 **What are Q, K, V?** They're three different **linear projections** (matrix-vector multiplies) of the same input hidden state `x`:
@@ -205,33 +217,47 @@ learning different relationships (syntax, semantics, position, etc.)
 Attention is computed **in parallel** (all heads compute simultaneously, not one after another) across multiple **heads** (independent attention mechanisms, each focusing on different aspects of the input). [GQA (Ainslie et al., 2023)](https://arxiv.org/abs/2305.13245) reduces memory by sharing K/V heads across multiple Q heads. With 16 Q heads and 4 KV heads (as in Qwen3.5), each KV head serves 4 Q heads, cutting KV cache memory by 4×.
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': {
-  'primaryColor': '#e8f0fe',
-  'primaryTextColor': '#1a1a2e',
-  'primaryBorderColor': '#4a6cf7',
-  'lineColor': '#4a6cf7',
-  'secondaryColor': '#f0f4ff',
-  'tertiaryColor': '#f8f9ff',
-  'edgeLabelBackground': '#ffffff',
-  'clusterBkg': '#f0f4ff',
-  'clusterBorder': '#4a6cf7',
-  'titleColor': '#1a1a2e',
-  'nodeTextColor': '#1a1a2e',
-  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
-}}}%%
 flowchart LR
+    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
+    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
+    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
+    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
+    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
+    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
+
+    Q0["Q0"]:::migration
+    Q1["Q1"]:::migration
+    Q2["Q2"]:::migration
+    Q3["Q3"]:::migration
+    Q4["Q4"]:::migration
+    Q5["Q5"]:::migration
+    Q6["Q6"]:::migration
+    Q7["Q7"]:::migration
+    Q8["Q8"]:::migration
+    Q9["Q9"]:::migration
+    Q10["Q10"]:::migration
+    Q11["Q11"]:::migration
+    Q12["Q12"]:::migration
+    Q13["Q13"]:::migration
+    Q14["Q14"]:::migration
+    Q15["Q15"]:::migration
+    KV0["K0 / V0"]:::setup
+    KV1["K1 / V1"]:::setup
+    KV2["K2 / V2"]:::setup
+    KV3["K3 / V3"]:::setup
+
     subgraph QHeads["16 Query Heads (one per attention 'channel')"]
-        Q0["Q0"] & Q1["Q1"] & Q2["Q2"] & Q3["Q3"]
-        Q4["Q4"] & Q5["Q5"] & Q6["Q6"] & Q7["Q7"]
-        Q8["Q8"] & Q9["Q9"] & Q10["Q10"] & Q11["Q11"]
-        Q12["Q12"] & Q13["Q13"] & Q14["Q14"] & Q15["Q15"]
+        Q0 & Q1 & Q2 & Q3
+        Q4 & Q5 & Q6 & Q7
+        Q8 & Q9 & Q10 & Q11
+        Q12 & Q13 & Q14 & Q15
     end
 
     subgraph KVHeads["4 KV Heads (shared — stored in KV cache)"]
-        KV0["K0 / V0"]
-        KV1["K1 / V1"]
-        KV2["K2 / V2"]
-        KV3["K3 / V3"]
+        KV0
+        KV1
+        KV2
+        KV3
     end
 
     Q0 & Q1 & Q2 & Q3 --> KV0
@@ -275,37 +301,43 @@ The implementation handles KV cache append, GQA head mapping, sliding window, at
 **[FlashAttention (Dao et al., 2022)](https://arxiv.org/abs/2205.14135)** is an optimization that computes attention in **tiles** (small rectangular blocks of the attention matrix processed one at a time) using **online softmax** (incrementally updating the softmax result as new tiles arrive, avoiding the need to store all scores at once), never **materializing** (allocating memory for and storing) the full scores matrix. Metal and CUDA backends implement [FlashAttention-2 (Dao, 2023)](https://arxiv.org/abs/2307.08691); the CPU backend uses a **SIMD-vectorized** (using Single Instruction Multiple Data — processing multiple values at once with one CPU instruction) **fallback** (alternative implementation used when the primary method isn't available).
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': {
-  'primaryColor': '#e8f0fe',
-  'primaryTextColor': '#1a1a2e',
-  'primaryBorderColor': '#4a6cf7',
-  'lineColor': '#4a6cf7',
-  'secondaryColor': '#f0f4ff',
-  'tertiaryColor': '#f8f9ff',
-  'edgeLabelBackground': '#ffffff',
-  'clusterBkg': '#f0f4ff',
-  'clusterBorder': '#4a6cf7',
-  'titleColor': '#1a1a2e',
-  'nodeTextColor': '#1a1a2e',
-  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
-}}}%%
 flowchart TD
+    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
+    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
+    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
+    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
+    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
+    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
+
+    NQ["Q\n[n × d]"]:::setup
+    NK["K\n[n × d]"]:::setup
+    NV["V\n[n × d]"]:::setup
+    NS["S = Q @ Kᵀ\n[n × n] — full matrix\nwritten to HBM"]:::danger
+    NP["P = softmax(S)\n[n × n] — full matrix\nwritten to HBM"]:::danger
+    NO["O = P @ V\n[n × d]"]:::migration
+    NMem["HBM reads/writes:\nn² scores + n² softmax\n→ 2n² elements to/from DRAM"]:::danger
+    FQ["Q tile\n[Br × d]\n(fits in SRAM)"]:::setup
+    FK["K/V tiles\n[Bc × d]\nstreamed block by block"]:::setup
+    FTile["Tile loop:\nload K/V block → Br×Bc scores\nonline softmax update → accum O"]:::sync
+    FO["O\n[n × d]\nwritten once to HBM"]:::success
+    FMem["HBM reads/writes:\nO(n) — scores never\nleave on-chip SRAM\n→ 5-20× less DRAM traffic"]:::success
+
     subgraph Naive["Naive attention — O(n²) HBM traffic"]
         direction LR
-        NQ["Q\n[n × d]"] --> NS["S = Q @ Kᵀ\n[n × n] — full matrix\nwritten to HBM"]
-        NK["K\n[n × d]"] --> NS
-        NS --> NP["P = softmax(S)\n[n × n] — full matrix\nwritten to HBM"]
-        NP --> NO["O = P @ V\n[n × d]"]
-        NV["V\n[n × d]"] --> NO
-        NMem["HBM reads/writes:\nn² scores + n² softmax\n→ 2n² elements to/from DRAM"]
+        NQ --> NS
+        NK --> NS
+        NS --> NP
+        NP --> NO
+        NV --> NO
+        NMem
     end
 
     subgraph Flash["FlashAttention — tiled, O(n) HBM traffic"]
         direction LR
-        FQ["Q tile\n[Br × d]\n(fits in SRAM)"] --> FTile["Tile loop:\nload K/V block → Br×Bc scores\nonline softmax update → accum O"]
-        FK["K/V tiles\n[Bc × d]\nstreamed block by block"] --> FTile
-        FTile --> FO["O\n[n × d]\nwritten once to HBM"]
-        FMem["HBM reads/writes:\nO(n) — scores never\nleave on-chip SRAM\n→ 5-20× less DRAM traffic"]
+        FQ --> FTile
+        FK --> FTile
+        FTile --> FO
+        FMem
     end
 
     Naive -->|"replace with"| Flash
@@ -336,46 +368,58 @@ flowchart TD
 Transformers are **position-agnostic** by default (they don't know the order of tokens) — without position information, "the cat sat" and "sat the cat" look identical. Earlier models added absolute position embeddings (e.g., "this is position 5"), but [RoPE (Su et al., 2021)](https://arxiv.org/abs/2104.09864) encodes position through **rotation** because it has a key geometric property: **the angle difference between two rotated vectors depends only on their relative distance, not their absolute positions**.
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': {
-  'primaryColor': '#e8f0fe',
-  'primaryTextColor': '#1a1a2e',
-  'primaryBorderColor': '#4a6cf7',
-  'lineColor': '#4a6cf7',
-  'secondaryColor': '#f0f4ff',
-  'tertiaryColor': '#f8f9ff',
-  'edgeLabelBackground': '#ffffff',
-  'clusterBkg': '#f0f4ff',
-  'clusterBorder': '#4a6cf7',
-  'titleColor': '#1a1a2e',
-  'nodeTextColor': '#1a1a2e',
-  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
-}}}%%
 flowchart LR
+    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
+    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
+    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
+    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
+    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
+    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
+
+    D01["dims 0-1"]:::setup
+    D23["dims 2-3"]:::setup
+    D45["dims 4-5"]:::setup
+    D67["dims 6-7"]:::setup
+    F0["freq₀ = 1.0\n(fast)"]:::optional
+    F1["freq₁ = 0.1\n(medium)"]:::optional
+    F2["freq₂ = 0.01\n(slow)"]:::optional
+    F3["freq₃ = 0.001\n(very slow)"]:::optional
+    Pos["Token Position\n(e.g. pos = 7)"]:::setup
+    Angle0["angle = pos × freq₀"]:::migration
+    Angle1["angle = pos × freq₁"]:::migration
+    Angle2["angle = pos × freq₂"]:::migration
+    Angle3["angle = pos × freq₃"]:::migration
+    R0["Rotate 2D\n[cos θ, -sin θ]\n[sin θ,  cos θ]"]:::sync
+    R1["Rotate 2D"]:::sync
+    R2["Rotate 2D"]:::sync
+    R3["Rotate 2D"]:::sync
+    Out["Rotated Q or K\n(position encoded)"]:::success
+
     subgraph Input["Q or K vector (8 dims shown)"]
-        D01["dims 0-1"]
-        D23["dims 2-3"]
-        D45["dims 4-5"]
-        D67["dims 6-7"]
+        D01
+        D23
+        D45
+        D67
     end
 
     subgraph Freqs["Rotation Frequency per plane\n(lower dim = faster rotation)"]
-        F0["freq₀ = 1.0\n(fast)"]
-        F1["freq₁ = 0.1\n(medium)"]
-        F2["freq₂ = 0.01\n(slow)"]
-        F3["freq₃ = 0.001\n(very slow)"]
+        F0
+        F1
+        F2
+        F3
     end
 
-    Pos["Token Position\n(e.g. pos = 7)"] --> Angle0["angle = pos × freq₀"]
-    Pos --> Angle1["angle = pos × freq₁"]
-    Pos --> Angle2["angle = pos × freq₂"]
-    Pos --> Angle3["angle = pos × freq₃"]
+    Pos --> Angle0
+    Pos --> Angle1
+    Pos --> Angle2
+    Pos --> Angle3
 
-    D01 & F0 & Angle0 --> R0["Rotate 2D\n[cos θ, -sin θ]\n[sin θ,  cos θ]"]
-    D23 & F1 & Angle1 --> R1["Rotate 2D"]
-    D45 & F2 & Angle2 --> R2["Rotate 2D"]
-    D67 & F3 & Angle3 --> R3["Rotate 2D"]
+    D01 & F0 & Angle0 --> R0
+    D23 & F1 & Angle1 --> R1
+    D45 & F2 & Angle2 --> R2
+    D67 & F3 & Angle3 --> R3
 
-    R0 & R1 & R2 & R3 --> Out["Rotated Q or K\n(position encoded)"]
+    R0 & R1 & R2 & R3 --> Out
 ```
 
 When we rotate Q at position `i` by angle `θ_i` and K at position `j` by angle `θ_j`, their dot product includes a term `cos(θ_i - θ_j)`. Since angles are proportional to position (`θ = pos × freq`), the difference `θ_i - θ_j = (i - j) × freq` captures the *relative* distance `(i - j)` between tokens. This means attention naturally focuses on how far apart tokens are, not where they appear absolutely — which is what matters for language ("the cat" should attend the same way whether it's at the start or middle of a sentence).
@@ -437,45 +481,55 @@ rmsNorm(x, weight, eps) = x / sqrt(mean(x²) + eps) * weight
 Unlike **LayerNorm** (an older normalization method that also subtracts the mean), RMSNorm has no mean subtraction — simpler and empirically just as effective. Every layer applies RMSNorm **before** attention and before FFN (**pre-norm** — normalizing the input to each sublayer). Some models add **post-norms** (normalizing the output after the sublayer, as in Gemma3) or per-head QK norms (Gemma3, Qwen3.5).
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': {
-  'primaryColor': '#e8f0fe',
-  'primaryTextColor': '#1a1a2e',
-  'primaryBorderColor': '#4a6cf7',
-  'lineColor': '#4a6cf7',
-  'secondaryColor': '#f0f4ff',
-  'tertiaryColor': '#f8f9ff',
-  'edgeLabelBackground': '#ffffff',
-  'clusterBkg': '#f0f4ff',
-  'clusterBorder': '#4a6cf7',
-  'titleColor': '#1a1a2e',
-  'nodeTextColor': '#1a1a2e',
-  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
-}}}%%
 flowchart TD
+    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
+    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
+    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
+    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
+    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
+    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
+
+    X["Input vector x\n[n_embd floats]"]:::setup
+    SqMean["mean(x²)\nper element"]:::sync
+    RMS["√(mean + ε)\nscalar"]:::sync
+    Divide["x / RMS\n→ unit-scale vector"]:::sync
+    Scale["× weight\n(learned per-dim)"]:::sync
+    Out["Normalized output\n[n_embd floats]"]:::success
+    PNResid["Residual stream x"]:::setup
+    PNNorm["RMSNorm"]:::migration
+    PNSub["Sublayer\n(Attention or FFN)"]:::sync
+    PNAdd["+ x\n(residual add)"]:::migration
+    PNOut["Next residual stream"]:::success
+    PoResid["Residual stream x"]:::setup
+    PoSub["Sublayer\n(Attention or FFN)"]:::sync
+    PoAdd["+ x\n(residual add)"]:::migration
+    PoNorm["RMSNorm"]:::migration
+    PoOut["Next residual stream"]:::success
+
     subgraph Internal["RMSNorm internals"]
         direction LR
-        X["Input vector x\n[n_embd floats]"] --> SqMean["mean(x²)\nper element"]
-        SqMean --> RMS["√(mean + ε)\nscalar"]
-        X --> Divide["x / RMS\n→ unit-scale vector"]
+        X --> SqMean
+        SqMean --> RMS
+        X --> Divide
         RMS --> Divide
-        Divide --> Scale["× weight\n(learned per-dim)"]
-        Scale --> Out["Normalized output\n[n_embd floats]"]
+        Divide --> Scale
+        Scale --> Out
     end
 
     subgraph PreNorm["Pre-norm placement (default — all models)"]
         direction TB
-        PNResid["Residual stream x"] --> PNNorm["RMSNorm"]
-        PNNorm --> PNSub["Sublayer\n(Attention or FFN)"]
-        PNSub --> PNAdd["+ x\n(residual add)"]
-        PNAdd --> PNOut["Next residual stream"]
+        PNResid --> PNNorm
+        PNNorm --> PNSub
+        PNSub --> PNAdd
+        PNAdd --> PNOut
     end
 
     subgraph PostNorm["Post-norm placement (Gemma3 — added after sublayer)"]
         direction TB
-        PoResid["Residual stream x"] --> PoSub["Sublayer\n(Attention or FFN)"]
-        PoSub --> PoAdd["+ x\n(residual add)"]
-        PoAdd --> PoNorm["RMSNorm"]
-        PoNorm --> PoOut["Next residual stream"]
+        PoResid --> PoSub
+        PoSub --> PoAdd
+        PoAdd --> PoNorm
+        PoNorm --> PoOut
     end
 ```
 
@@ -498,33 +552,35 @@ GEMM (prefill, N tokens): load weight row → N dot products → discard
 With N=200 tokens, GEMM has 200× higher **arithmetic intensity** (compute-to-memory ratio), shifting the bottleneck from memory bandwidth to compute throughput. This is why batched prefill is dramatically faster for long prompts.
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': {
-  'primaryColor': '#e8f0fe',
-  'primaryTextColor': '#1a1a2e',
-  'primaryBorderColor': '#4a6cf7',
-  'lineColor': '#4a6cf7',
-  'secondaryColor': '#f0f4ff',
-  'tertiaryColor': '#f8f9ff',
-  'edgeLabelBackground': '#ffffff',
-  'clusterBkg': '#f0f4ff',
-  'clusterBorder': '#4a6cf7',
-  'titleColor': '#1a1a2e',
-  'nodeTextColor': '#1a1a2e',
-  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
-}}}%%
 flowchart LR
+    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
+    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
+    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
+    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
+    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
+    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
+
+    WA["Weight matrix W\n[out × in]\nLoaded fully from VRAM"]:::setup
+    XA["Input x\n[in floats]\n1 token"]:::setup
+    YA["Output y\n[out floats]"]:::migration
+    NoteA["Bandwidth-bound:\neach weight byte used once\nArithmetic intensity ≈ 1 op/byte"]:::danger
+    WB["Weight matrix W\n[out × in]\nLoaded once from VRAM"]:::setup
+    XB["Input X\n[N × in floats]\nN tokens"]:::setup
+    YB["Output Y\n[N × out floats]"]:::success
+    NoteB["Compute-bound:\neach weight byte used N times\nArithmetic intensity ≈ N ops/byte"]:::success
+
     subgraph GEMV["GEMV — Decode (1 token at a time)"]
         direction TB
-        WA["Weight matrix W\n[out × in]\nLoaded fully from VRAM"] -->|"1 dot product\nper row"| XA["Input x\n[in floats]\n1 token"]
-        XA --> YA["Output y\n[out floats]"]
-        NoteA["Bandwidth-bound:\neach weight byte used once\nArithmetic intensity ≈ 1 op/byte"]
+        WA -->|"1 dot product\nper row"| XA
+        XA --> YA
+        NoteA
     end
 
     subgraph GEMM["GEMM — Prefill (N tokens batched)"]
         direction TB
-        WB["Weight matrix W\n[out × in]\nLoaded once from VRAM"] -->|"N dot products\nper row"| XB["Input X\n[N × in floats]\nN tokens"]
-        XB --> YB["Output Y\n[N × out floats]"]
-        NoteB["Compute-bound:\neach weight byte used N times\nArithmetic intensity ≈ N ops/byte"]
+        WB -->|"N dot products\nper row"| XB
+        XB --> YB
+        NoteB
     end
 
     GEMV -->|"N=200 prompt tokens\n→ 200× more useful\nwork per memory load"| GEMM

@@ -22,28 +22,28 @@ Standard attention computes a score between every query token and every key toke
 Agave's `sparse_attn.zig` implements BigBird-style block sparsity with two components: global blocks that every query attends to, and a sliding window of recent blocks for local context. Everything outside those two patterns is skipped entirely.
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': {
-  'primaryColor': '#e8f0fe',
-  'primaryTextColor': '#1a1a2e',
-  'primaryBorderColor': '#4a6cf7',
-  'lineColor': '#4a6cf7',
-  'secondaryColor': '#f0f4ff',
-  'tertiaryColor': '#f8f9ff',
-  'edgeLabelBackground': '#ffffff',
-  'clusterBkg': '#f0f4ff',
-  'clusterBorder': '#4a6cf7',
-  'titleColor': '#1a1a2e',
-  'nodeTextColor': '#1a1a2e',
-  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
-}}}%%
 flowchart TD
-    Q["Query Block\n(any position)"] --> G["Global Blocks\n(first G blocks)"]
-    Q --> W["Window Blocks\n(±W blocks, causal-bounded)"]
-    Q --> S["All Other Blocks\n(skipped)"]
+    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
+    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
+    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
+    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
+    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
+    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
 
-    G --> KV_G["KV Vectors\nDot products computed"]
-    W --> KV_W["KV Vectors\nDot products computed"]
-    S --> SKIP["No dot products\ninner loop never executes"]
+    Q["Query Block\n(any position)"]:::setup
+    G["Global Blocks\n(first G blocks)"]:::sync
+    W["Window Blocks\n(±W blocks, causal-bounded)"]:::sync
+    S["All Other Blocks\n(skipped)"]:::danger
+    KV_G["KV Vectors\nDot products computed"]:::success
+    KV_W["KV Vectors\nDot products computed"]:::success
+    SKIP["No dot products\ninner loop never executes"]:::danger
+
+    Q --> G
+    Q --> W
+    Q --> S
+    G --> KV_G
+    W --> KV_W
+    S --> SKIP
 
     subgraph Always["Always attended"]
         G
@@ -57,10 +57,6 @@ flowchart TD
         S
         SKIP
     end
-
-    style Always fill:#d4edda,stroke:#28a745
-    style Local fill:#cce5ff,stroke:#004085
-    style Masked fill:#f8d7da,stroke:#721c24
 ```
 
 **Global blocks** -- the first G blocks attend to and are attended by every block. These typically cover BOS, the system prompt, and the task prefix: tokens the model always needs to see regardless of which part of the context it's drawing from.
@@ -72,44 +68,53 @@ flowchart TD
 The diagram below shows which query blocks (rows) attend which KV blocks (columns) for an 8-block sequence with G=2 global blocks and W=2 window blocks. G = attended as global, W = within sliding window, dot = masked out.
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': {
-  'primaryColor': '#e8f0fe',
-  'primaryTextColor': '#1a1a2e',
-  'primaryBorderColor': '#4a6cf7',
-  'lineColor': '#4a6cf7',
-  'secondaryColor': '#f0f4ff',
-  'tertiaryColor': '#f8f9ff',
-  'edgeLabelBackground': '#ffffff',
-  'clusterBkg': '#f0f4ff',
-  'clusterBorder': '#4a6cf7',
-  'titleColor': '#1a1a2e',
-  'nodeTextColor': '#1a1a2e',
-  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
-}}}%%
 flowchart LR
+    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
+    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
+    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
+    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
+    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
+    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
+
+    K0["KV 0\n(global)"]:::success
+    K1["KV 1\n(global)"]:::success
+    K2["KV 2"]:::sync
+    K3["KV 3"]:::sync
+    K4["KV 4"]:::sync
+    K5["KV 5"]:::sync
+    K6["KV 6"]:::sync
+    K7["KV 7"]:::sync
+    Q0n["Q0: attends G0, G1"]:::setup
+    Q3n["Q3: attends G0, G1, W1, W2, W3"]:::setup
+    Q5n["Q5: attends G0, G1, W3, W4, W5"]:::setup
+    Q7n["Q7: attends G0, G1, W5, W6, W7"]:::setup
+    LG["G = global (always)"]:::optional
+    LW["W = window (local)"]:::optional
+    LD["unmarked = masked, skipped"]:::optional
+
     subgraph KV["KV blocks (columns)"]
         direction LR
-        K0["KV 0\n(global)"]
-        K1["KV 1\n(global)"]
-        K2["KV 2"]
-        K3["KV 3"]
-        K4["KV 4"]
-        K5["KV 5"]
-        K6["KV 6"]
-        K7["KV 7"]
+        K0
+        K1
+        K2
+        K3
+        K4
+        K5
+        K6
+        K7
     end
 
     subgraph Q0["Query 0"]
-        Q0n["Q0: attends G0, G1"]
+        Q0n
     end
     subgraph Q3["Query 3"]
-        Q3n["Q3: attends G0, G1, W1, W2, W3"]
+        Q3n
     end
     subgraph Q5["Query 5"]
-        Q5n["Q5: attends G0, G1, W3, W4, W5"]
+        Q5n
     end
     subgraph Q7["Query 7"]
-        Q7n["Q7: attends G0, G1, W5, W6, W7"]
+        Q7n
     end
 
     Q0n -->|"G"| K0
@@ -130,20 +135,10 @@ flowchart LR
     Q7n -->|"W"| K7
 
     subgraph Legend["Legend"]
-        LG["G = global (always)"]
-        LW["W = window (local)"]
-        LD["unmarked = masked, skipped"]
+        LG
+        LW
+        LD
     end
-
-    style K0 fill:#d4edda,stroke:#28a745
-    style K1 fill:#d4edda,stroke:#28a745
-    style K2 fill:#cce5ff,stroke:#004085
-    style K3 fill:#cce5ff,stroke:#004085
-    style K4 fill:#cce5ff,stroke:#004085
-    style K5 fill:#cce5ff,stroke:#004085
-    style K6 fill:#cce5ff,stroke:#004085
-    style K7 fill:#cce5ff,stroke:#004085
-    style Legend fill:#f8f9ff,stroke:#4a6cf7
 ```
 
 At 2048 blocks (128K tokens) with G=2 and W=2, the attended fraction drops to ~3-5%. The reduction scales with sequence length: a 200x reduction at 128K tokens.
@@ -189,52 +184,47 @@ Block sparse attention makes the scorer fast. PFlash uses that cheap scorer to d
 PFlash runs four sequential stages: a cheap sparse scorer pass over the full prompt, an adaptive threshold to pick which blocks matter, a compressed prefill through the expensive target model, and then normal speculative decode.
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': {
-  'primaryColor': '#e8f0fe',
-  'primaryTextColor': '#1a1a2e',
-  'primaryBorderColor': '#4a6cf7',
-  'lineColor': '#4a6cf7',
-  'secondaryColor': '#f0f4ff',
-  'tertiaryColor': '#f8f9ff',
-  'edgeLabelBackground': '#ffffff',
-  'clusterBkg': '#f0f4ff',
-  'clusterBorder': '#4a6cf7',
-  'titleColor': '#1a1a2e',
-  'nodeTextColor': '#1a1a2e',
-  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
-}}}%%
 flowchart LR
-    Prompt["Full Prompt\n(e.g. 128K tokens)"] --> Score
+    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
+    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
+    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
+    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
+    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
+    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
+
+    Prompt["Full Prompt\n(e.g. 128K tokens)"]:::setup
+    Scorer["Scorer Model\n(small, 0.5-3B)"]:::setup
+    Sparse["Block Sparse\nAttention"]:::sync
+    BlockScores["Per-block\nimportance scores"]:::migration
+    Threshold["alpha * mean(scores)"]:::migration
+    Kept["Selected blocks\n(5-15% of total)"]:::migration
+    Compress["Compress to\nselected spans only"]:::migration
+    Target["Target Model\n(large, 8-70B)"]:::setup
+    KVCache["Populated KV Cache\n(compressed context)"]:::success
+    DDTree["DDTree Speculative\nDecode"]:::sync
+    Tokens["Output Tokens"]:::success
+
+    Prompt --> Score
 
     subgraph Score["Stage 1: Score (fast)"]
-        Scorer["Scorer Model\n(small, 0.5-3B)"]
-        Sparse["Block Sparse\nAttention"]
-        BlockScores["Per-block\nimportance scores"]
         Scorer --> Sparse --> BlockScores
     end
 
     BlockScores --> Select
 
     subgraph Select["Stage 2: Select"]
-        Threshold["alpha * mean(scores)"]
-        Kept["Selected blocks\n(5-15% of total)"]
         Threshold --> Kept
     end
 
     Kept --> Prefill
 
     subgraph Prefill["Stage 3: Prefill (expensive)"]
-        Compress["Compress to\nselected spans only"]
-        Target["Target Model\n(large, 8-70B)"]
-        KVCache["Populated KV Cache\n(compressed context)"]
         Compress --> Target --> KVCache
     end
 
     KVCache --> Decode
 
     subgraph Decode["Stage 4: Decode"]
-        DDTree["DDTree Speculative\nDecode"]
-        Tokens["Output Tokens"]
         DDTree --> Tokens
     end
 ```
@@ -259,44 +249,46 @@ Blocks above the threshold are kept; the rest are discarded. With `alpha=0.85` a
 The threshold `alpha * mean(scores)` adapts to prompt structure: a dense technical reference has a high mean score so more blocks are kept; a padded narrative has a low mean so nearly all boilerplate is dropped. A fixed top-K cannot distinguish these cases.
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': {
-  'primaryColor': '#e8f0fe',
-  'primaryTextColor': '#1a1a2e',
-  'primaryBorderColor': '#4a6cf7',
-  'lineColor': '#4a6cf7',
-  'secondaryColor': '#f0f4ff',
-  'tertiaryColor': '#f8f9ff',
-  'edgeLabelBackground': '#ffffff',
-  'clusterBkg': '#f0f4ff',
-  'clusterBorder': '#4a6cf7',
-  'titleColor': '#1a1a2e',
-  'nodeTextColor': '#1a1a2e',
-  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
-}}}%%
 flowchart TD
-    Scores["Block Importance Scores"] --> Mean["Compute mean(scores)"]
-    Mean --> Threshold["threshold = alpha * mean"]
+    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
+    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
+    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
+    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
+    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
+    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
+
+    Scores["Block Importance Scores"]:::setup
+    Mean["Compute mean(scores)"]:::sync
+    Threshold["threshold = alpha * mean"]:::migration
+    Keep["Keep block\n(sent to target model)"]:::success
+    Drop["Drop block\n(never reaches target)"]:::danger
+    D1["block: 0.80 -- KEEP"]:::success
+    D2["block: 0.60 -- DROP"]:::danger
+    D3["block: 0.90 -- KEEP"]:::success
+    P1["block: 0.90 -- KEEP"]:::success
+    P2["block: 0.05 -- DROP"]:::danger
+    P3["block: 0.03 -- DROP"]:::danger
+
+    Scores --> Mean
+    Mean --> Threshold
     Threshold --> Compare{"score > threshold?"}
-    Compare -->|yes| Keep["Keep block\n(sent to target model)"]
-    Compare -->|no| Drop["Drop block\n(never reaches target)"]
+    Compare -->|yes| Keep
+    Compare -->|no| Drop
 
     subgraph Dense["Dense prompt (API docs)\nmean=0.78, threshold=0.66"]
-        D1["block: 0.80 -- KEEP"]
-        D2["block: 0.60 -- DROP"]
-        D3["block: 0.90 -- KEEP"]
+        D1
+        D2
+        D3
     end
 
     subgraph Padded["Padded prompt (novel + boilerplate)\nmean=0.14, threshold=0.12"]
-        P1["block: 0.90 -- KEEP"]
-        P2["block: 0.05 -- DROP"]
-        P3["block: 0.03 -- DROP"]
+        P1
+        P2
+        P3
     end
 
     Keep -.->|"~70% kept\n(dense case)"| Dense
     Drop -.->|"~92% dropped\n(padded case)"| Padded
-
-    style Keep fill:#d4edda,stroke:#28a745
-    style Drop fill:#f8d7da,stroke:#721c24
 ```
 
 Compare two prompts with alpha=0.85:
@@ -457,54 +449,38 @@ Effective decode: ~35 tok/s (same as without PFlash -- TTFT improved, not tok/s)
 PFlash cuts TTFT; DDTree cuts generation latency. For a 128K-token prompt generating 500 tokens:
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': {
-  'primaryColor': '#e8f0fe',
-  'primaryTextColor': '#1a1a2e',
-  'primaryBorderColor': '#4a6cf7',
-  'lineColor': '#4a6cf7',
-  'secondaryColor': '#f0f4ff',
-  'tertiaryColor': '#f8f9ff',
-  'edgeLabelBackground': '#ffffff',
-  'clusterBkg': '#f0f4ff',
-  'clusterBorder': '#4a6cf7',
-  'titleColor': '#1a1a2e',
-  'nodeTextColor': '#1a1a2e',
-  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
-}}}%%
 flowchart LR
+    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
+    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
+    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
+    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
+    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
+    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
+
+    B_TTFT["TTFT: 6000ms\n(full 128K prefill)"]:::danger
+    B_DEC["Decode: 33000ms\n(500 tokens, 1 per step)"]:::danger
+    P_TTFT["TTFT: 700ms\n(8K compressed prefill)"]:::success
+    P_DEC["Decode: 33000ms\n(500 tokens, 1 per step)"]:::danger
+    D_TTFT["TTFT: 6000ms\n(full 128K prefill)"]:::danger
+    D_DEC["Decode: 14000ms\n(~3 tokens accepted/step)"]:::success
+    C_TTFT["TTFT: 700ms\n(8K compressed prefill)"]:::success
+    C_DEC["Decode: 14000ms\n(~3 tokens accepted/step)"]:::success
+
     subgraph Baseline["No features\n39s total"]
-        B_TTFT["TTFT: 6000ms\n(full 128K prefill)"]
-        B_DEC["Decode: 33000ms\n(500 tokens, 1 per step)"]
         B_TTFT --> B_DEC
     end
 
     subgraph PFlashOnly["PFlash only\n34s total"]
-        P_TTFT["TTFT: 700ms\n(8K compressed prefill)"]
-        P_DEC["Decode: 33000ms\n(500 tokens, 1 per step)"]
         P_TTFT --> P_DEC
     end
 
     subgraph DDTreeOnly["DDTree only\n20s total"]
-        D_TTFT["TTFT: 6000ms\n(full 128K prefill)"]
-        D_DEC["Decode: 14000ms\n(~3 tokens accepted/step)"]
         D_TTFT --> D_DEC
     end
 
     subgraph Both["PFlash + DDTree\n15s total"]
-        C_TTFT["TTFT: 700ms\n(8K compressed prefill)"]
-        C_DEC["Decode: 14000ms\n(~3 tokens accepted/step)"]
         C_TTFT --> C_DEC
     end
-
-    style B_TTFT fill:#f8d7da,stroke:#721c24
-    style B_DEC fill:#f8d7da,stroke:#721c24
-    style P_TTFT fill:#d4edda,stroke:#28a745
-    style P_DEC fill:#f8d7da,stroke:#721c24
-    style D_TTFT fill:#f8d7da,stroke:#721c24
-    style D_DEC fill:#d4edda,stroke:#28a745
-    style C_TTFT fill:#d4edda,stroke:#28a745
-    style C_DEC fill:#d4edda,stroke:#28a745
-    style Both fill:#e8f0fe,stroke:#4a6cf7
 ```
 
 The gains multiply because they target different bottlenecks: PFlash owns TTFT, DDTree owns decode throughput.
@@ -514,55 +490,49 @@ The gains multiply because they target different bottlenecks: PFlash owns TTFT, 
 `--pflash-block-size` controls the granularity of block selection.
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': {
-  'primaryColor': '#e8f0fe',
-  'primaryTextColor': '#1a1a2e',
-  'primaryBorderColor': '#4a6cf7',
-  'lineColor': '#4a6cf7',
-  'secondaryColor': '#f0f4ff',
-  'tertiaryColor': '#f8f9ff',
-  'edgeLabelBackground': '#ffffff',
-  'clusterBkg': '#f0f4ff',
-  'clusterBorder': '#4a6cf7',
-  'titleColor': '#1a1a2e',
-  'nodeTextColor': '#1a1a2e',
-  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
-}}}%%
 flowchart TD
+    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
+    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
+    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
+    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
+    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
+    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
+
+    FA["tok 0-15\nKEPT"]:::success
+    FB["tok 16-31\ndropped"]:::danger
+    FC["tok 32-47\nKEPT"]:::success
+    FD["tok 48-63\ndropped"]:::danger
+    FE["tok 64-79\nKEPT"]:::success
+    FF["tok 80-95\ndropped"]:::danger
+    FG["tok 96-111\nKEPT"]:::success
+    FH["tok 112-127\ndropped"]:::danger
+    CA["tok 0-63\nKEPT (contains important lines)"]:::success
+    CB["tok 64-127\ndropped (all or nothing)"]:::danger
+    T1["Fine: precise selection\nmore overhead per span\nbetter for code/JSON/tables"]:::optional
+    T2["Coarse: fast scoring\nfewer discontinuous spans\nbetter for long-form text"]:::optional
+
     subgraph Fine["Fine blocks (16-32 tokens)\nBlock size = 16 tokens"]
         direction LR
-        FA["tok 0-15\nKEPT"]
-        FB["tok 16-31\ndropped"]
-        FC["tok 32-47\nKEPT"]
-        FD["tok 48-63\ndropped"]
-        FE["tok 64-79\nKEPT"]
-        FF["tok 80-95\ndropped"]
-        FG["tok 96-111\nKEPT"]
-        FH["tok 112-127\ndropped"]
+        FA
+        FB
+        FC
+        FD
+        FE
+        FF
+        FG
+        FH
     end
 
     subgraph Coarse["Coarse blocks (64-128 tokens)\nBlock size = 64 tokens"]
         direction LR
-        CA["tok 0-63\nKEPT (contains important lines)"]
-        CB["tok 64-127\ndropped (all or nothing)"]
+        CA
+        CB
     end
 
     subgraph Tradeoff["Tradeoff"]
-        T1["Fine: precise selection\nmore overhead per span\nbetter for code/JSON/tables"]
-        T2["Coarse: fast scoring\nfewer discontinuous spans\nbetter for long-form text"]
+        T1
+        T2
     end
-
-    style FA fill:#d4edda,stroke:#28a745
-    style FC fill:#d4edda,stroke:#28a745
-    style FE fill:#d4edda,stroke:#28a745
-    style FG fill:#d4edda,stroke:#28a745
-    style FB fill:#f8d7da,stroke:#721c24
-    style FD fill:#f8d7da,stroke:#721c24
-    style FF fill:#f8d7da,stroke:#721c24
-    style FH fill:#f8d7da,stroke:#721c24
-    style CA fill:#d4edda,stroke:#28a745
-    style CB fill:#f8d7da,stroke:#721c24
-    style Tradeoff fill:#f8f9ff,stroke:#4a6cf7
 ```
 
 Smaller blocks (16-32 tokens):

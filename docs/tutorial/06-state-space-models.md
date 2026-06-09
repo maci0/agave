@@ -38,27 +38,20 @@ fundamental tradeoff: constant memory, but lossy recall.
 **Hybrid models** combine attention and SSM layers: attention every N layers for global context, SSM for the rest for speed.
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': {
-  'primaryColor': '#e8f0fe',
-  'primaryTextColor': '#1a1a2e',
-  'primaryBorderColor': '#4a6cf7',
-  'lineColor': '#4a6cf7',
-  'secondaryColor': '#f0f4ff',
-  'tertiaryColor': '#f8f9ff',
-  'edgeLabelBackground': '#ffffff',
-  'clusterBkg': '#f0f4ff',
-  'clusterBorder': '#4a6cf7',
-  'titleColor': '#1a1a2e',
-  'nodeTextColor': '#1a1a2e',
-  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
-}}}%%
 flowchart LR
+    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
+    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
+    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
+    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
+    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
+    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
+
     subgraph Attention["Transformer Attention (O(n) per token)"]
         direction TB
-        KVCache["KV Cache\n(all past tokens)"]
-        QVec["Query vector\n(current token)"]
-        Scores["Dot products\nwith every key"]
-        AttnOut["Weighted sum\nof all values"]
+        KVCache["KV Cache\n(all past tokens)"]:::setup
+        QVec["Query vector\n(current token)"]:::setup
+        Scores["Dot products\nwith every key"]:::sync
+        AttnOut["Weighted sum\nof all values"]:::success
         KVCache --> Scores
         QVec --> Scores
         Scores --> AttnOut
@@ -66,18 +59,18 @@ flowchart LR
 
     subgraph SSM["SSM Recurrence (O(1) per token)"]
         direction TB
-        State["State matrix S\n(fixed size, ~1,024 KB)"]
-        NewTok["New token\nx[t]"]
-        Decay["Decay old state\nS *= exp(a * dt)"]
-        Update["Write new info\nS += outer(v, k)"]
-        Read["Read via query\nout = S @ q"]
+        State["State matrix S\n(fixed size, ~1,024 KB)"]:::setup
+        NewTok["New token\nx[t]"]:::setup
+        Decay["Decay old state\nS *= exp(a * dt)"]:::migration
+        Update["Write new info\nS += outer(v, k)"]:::sync
+        Read["Read via query\nout = S @ q"]:::success
         State --> Decay
         NewTok --> Decay
         Decay --> Update
         Update --> Read
     end
 
-    Past100K["100K past tokens"] --> KVCache
+    Past100K["100K past tokens"]:::setup --> KVCache
     Past100K -. "compressed into" .-> State
 
 
@@ -101,47 +94,40 @@ Shift left:  buffer becomes [input[t-2], input[t-1], input[t]]
 Agave fuses the convolution with SiLU activation in a single pass.
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': {
-  'primaryColor': '#e8f0fe',
-  'primaryTextColor': '#1a1a2e',
-  'primaryBorderColor': '#4a6cf7',
-  'lineColor': '#4a6cf7',
-  'secondaryColor': '#f0f4ff',
-  'tertiaryColor': '#f8f9ff',
-  'edgeLabelBackground': '#ffffff',
-  'clusterBkg': '#f0f4ff',
-  'clusterBorder': '#4a6cf7',
-  'titleColor': '#1a1a2e',
-  'nodeTextColor': '#1a1a2e',
-  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
-}}}%%
 flowchart LR
+    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
+    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
+    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
+    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
+    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
+    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
+
     subgraph Weights["Learned conv weights (d_conv = 4)"]
         direction LR
-        W0["w[0]\noldest"] --- W1["w[1]"] --- W2["w[2]"] --- W3["w[3]\nnewest"]
+        W0["w[0]\noldest"]:::setup --- W1["w[1]"]:::setup --- W2["w[2]"]:::setup --- W3["w[3]\nnewest"]:::setup
     end
 
     subgraph RingBuf["Ring buffer — circular, fixed allocation"]
         direction LR
-        B0["buf[t-3]\nslot 0"] --- B1["buf[t-2]\nslot 1"] --- B2["buf[t-1]\nslot 2"] --- B3["x[t]\nslot 3 (new)"]
+        B0["buf[t-3]\nslot 0"]:::setup --- B1["buf[t-2]\nslot 1"]:::setup --- B2["buf[t-1]\nslot 2"]:::setup --- B3["x[t]\nslot 3 (new)"]:::setup
     end
 
     subgraph Multiply["Element-wise multiply and sum"]
         direction LR
-        P0["w[0] × buf[t-3]"] --> Sum["Σ = conv_out[t]"]
-        P1["w[1] × buf[t-2]"] --> Sum
-        P2["w[2] × buf[t-1]"] --> Sum
-        P3["w[3] × x[t]"] --> Sum
+        P0["w[0] × buf[t-3]"]:::sync --> Sum["Σ = conv_out[t]"]:::migration
+        P1["w[1] × buf[t-2]"]:::sync --> Sum
+        P2["w[2] × buf[t-1]"]:::sync --> Sum
+        P3["w[3] × x[t]"]:::sync --> Sum
     end
 
     subgraph Advance["Next step — oldest slot overwritten"]
         direction LR
-        A0["buf[t-2]\nslot 0"] --- A1["buf[t-1]\nslot 1"] --- A2["x[t]\nslot 2"] --- A3["x[t+1]\nslot 3 (new)"]
+        A0["buf[t-2]\nslot 0"]:::migration --- A1["buf[t-1]\nslot 1"]:::migration --- A2["x[t]\nslot 2"]:::migration --- A3["x[t+1]\nslot 3 (new)"]:::migration
     end
 
     Weights --> Multiply
     RingBuf --> Multiply
-    Sum -->|"SiLU(conv_out[t])"| Out["fused output"]
+    Sum -->|"SiLU(conv_out[t])"| Out["fused output"]:::success
     RingBuf -->|"head pointer\nadvances by 1"| Advance
 ```
 
@@ -171,35 +157,28 @@ DeltaNet builds on the delta rule for associative memory, first explored in the 
 ```
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': {
-  'primaryColor': '#e8f0fe',
-  'primaryTextColor': '#1a1a2e',
-  'primaryBorderColor': '#4a6cf7',
-  'lineColor': '#4a6cf7',
-  'secondaryColor': '#f0f4ff',
-  'tertiaryColor': '#f8f9ff',
-  'edgeLabelBackground': '#ffffff',
-  'clusterBkg': '#f0f4ff',
-  'clusterBorder': '#4a6cf7',
-  'titleColor': '#1a1a2e',
-  'nodeTextColor': '#1a1a2e',
-  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
-}}}%%
 flowchart TD
-    Input["Input token x[t]"] --> QKV["Q / K / V projections"]
-    QKV --> Q["Query q\n(what to retrieve)"]
-    QKV --> K["Key k\n(what to write)"]
-    QKV --> V["Value v\n(what to store)"]
+    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
+    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
+    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
+    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
+    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
+    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
 
-    State["State matrix S\n(accumulated memory)"] --> Decay["Step 1: Decay\nS *= exp(a * softplus(alpha))"]
-    Decay --> SK["sk = S^T @ k\n(what state already knows about k)"]
-    V --> Delta["Step 2: Error signal\ndelta = beta * (v - sk)"]
+    Input["Input token x[t]"]:::setup --> QKV["Q / K / V projections"]:::sync
+    QKV --> Q["Query q\n(what to retrieve)"]:::setup
+    QKV --> K["Key k\n(what to write)"]:::setup
+    QKV --> V["Value v\n(what to store)"]:::setup
+
+    State["State matrix S\n(accumulated memory)"]:::setup --> Decay["Step 1: Decay\nS *= exp(a * softplus(alpha))"]:::migration
+    Decay --> SK["sk = S^T @ k\n(what state already knows about k)"]:::sync
+    V --> Delta["Step 2: Error signal\ndelta = beta * (v - sk)"]:::migration
     SK --> Delta
-    Delta --> Update["Step 3: Outer product update\nS += outer(delta, k)\n(correct the state)"]
+    Delta --> Update["Step 3: Outer product update\nS += outer(delta, k)\n(correct the state)"]:::sync
     Update --> State
-    Update --> Output["Step 4: Output\nout = S @ q / sqrt(k_dim)"]
+    Update --> Output["Step 4: Output\nout = S @ q / sqrt(k_dim)"]:::success
     Q --> Output
-    Output --> Gate["Multiply by SiLU(z) gate"]
+    Output --> Gate["Multiply by SiLU(z) gate"]:::optional
 
 
 **GQA in DeltaNet:** GQA head mapping uses tiling (`kh = h % num_k_heads`) for both GGUF and SafeTensors formats (`kqv_order` is always false for Qwen3.5).
@@ -213,38 +192,31 @@ flowchart TD
 [Mamba-2 (Dao & Gu, 2024)](https://arxiv.org/abs/2405.21060) learns input-dependent **discretization** (choosing how much time passes between updates) — the `dt` (timestep, delta-time) is computed from the input, making the model selectively remember or forget.
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': {
-  'primaryColor': '#e8f0fe',
-  'primaryTextColor': '#1a1a2e',
-  'primaryBorderColor': '#4a6cf7',
-  'lineColor': '#4a6cf7',
-  'secondaryColor': '#f0f4ff',
-  'tertiaryColor': '#f8f9ff',
-  'edgeLabelBackground': '#ffffff',
-  'clusterBkg': '#f0f4ff',
-  'clusterBorder': '#4a6cf7',
-  'titleColor': '#1a1a2e',
-  'nodeTextColor': '#1a1a2e',
-  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
-}}}%%
 flowchart LR
-    Input["Input x[t]"] --> DT["dt projection\n(learned, per-head)"]
-    Input --> B["B projection\n(what to write)"]
-    Input --> C["C projection\n(what to read)"]
-    Input --> D["D skip\n(direct passthrough)"]
+    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
+    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
+    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
+    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
+    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
+    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
 
-    DT --> Decay["decay = exp(ssm_a * dt)\n(input-dependent forget rate)"]
-    State["State S[h]\n(fixed-size memory)"] --> DecayState["Decay: S *= decay"]
+    Input["Input x[t]"]:::setup --> DT["dt projection\n(learned, per-head)"]:::setup
+    Input --> B["B projection\n(what to write)"]:::setup
+    Input --> C["C projection\n(what to read)"]:::setup
+    Input --> D["D skip\n(direct passthrough)"]:::optional
+
+    DT --> Decay["decay = exp(ssm_a * dt)\n(input-dependent forget rate)"]:::migration
+    State["State S[h]\n(fixed-size memory)"]:::setup --> DecayState["Decay: S *= decay"]:::migration
     Decay --> DecayState
-    B --> WriteIn["Write: S += x * dt * B^T\n(add new info)"]
+    B --> WriteIn["Write: S += x * dt * B^T\n(add new info)"]:::sync
     DecayState --> WriteIn
     WriteIn --> State
 
-    C --> ReadOut["Read: y = S @ C\n(query the state)"]
+    C --> ReadOut["Read: y = S @ C\n(query the state)"]:::sync
     WriteIn --> ReadOut
-    D --> Skip["y += D * x\n(skip connection)"]
+    D --> Skip["y += D * x\n(skip connection)"]:::optional
     ReadOut --> Skip
-    Skip --> Output["Output y[t]"]
+    Skip --> Output["Output y[t]"]:::success
 
 
 **Per-head recurrence:**
@@ -270,36 +242,29 @@ For each state element [i, j]:
 The core difference: attention re-reads all previous tokens every time, SSMs update a fixed-size summary.
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': {
-  'primaryColor': '#e8f0fe',
-  'primaryTextColor': '#1a1a2e',
-  'primaryBorderColor': '#4a6cf7',
-  'lineColor': '#4a6cf7',
-  'secondaryColor': '#f0f4ff',
-  'tertiaryColor': '#f8f9ff',
-  'edgeLabelBackground': '#ffffff',
-  'clusterBkg': '#f0f4ff',
-  'clusterBorder': '#4a6cf7',
-  'titleColor': '#1a1a2e',
-  'nodeTextColor': '#1a1a2e',
-  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
-}}}%%
 flowchart TD
+    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
+    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
+    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
+    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
+    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
+    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
+
     subgraph TransformerMem["Transformer memory — grows with context"]
         direction LR
-        T1K["Token 1\nK, V stored"] --- T2K["Token 2\nK, V stored"] --- TdotK["..."] --- T32KK["Token 32,000\nK, V stored"]
-        QNew1["Query (new token)"] --> ScanAll["Scan ALL 32,000 entries\n= 2M multiply-adds / head"]
+        T1K["Token 1\nK, V stored"]:::setup --- T2K["Token 2\nK, V stored"]:::setup --- TdotK["..."] --- T32KK["Token 32,000\nK, V stored"]:::setup
+        QNew1["Query (new token)"]:::setup --> ScanAll["Scan ALL 32,000 entries\n= 2M multiply-adds / head"]:::sync
     end
 
     subgraph SSMMem["SSM memory — always the same size"]
         direction LR
-        SMatrix["State matrix S\n128 × 128 = 16,384 floats\n(1,024 KB for 16 heads)"]
-        QNew2["New token"] --> UpdateS["One state update\n~32,768 multiply-adds / head"]
+        SMatrix["State matrix S\n128 × 128 = 16,384 floats\n(1,024 KB for 16 heads)"]:::setup
+        QNew2["New token"]:::setup --> UpdateS["One state update\n~32,768 multiply-adds / head"]:::sync
         UpdateS --> SMatrix
         SMatrix --> UpdateS
     end
 
-    Past["100K past tokens"] --> TransformerMem
+    Past["100K past tokens"]:::setup --> TransformerMem
     Past -. "compressed into fixed box" .-> SSMMem
 
 
@@ -368,53 +333,40 @@ SSM recurrence is **inherently sequential** — each timestep depends on the pre
 Qwen3.5 places a full-attention layer every 4th layer across its 64-layer stack. The remaining 48 layers are DeltaNet SSM layers, making token generation cheap on most layers while preserving exact recall at regular checkpoints.
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': {
-  'primaryColor': '#e8f0fe',
-  'primaryTextColor': '#1a1a2e',
-  'primaryBorderColor': '#4a6cf7',
-  'lineColor': '#4a6cf7',
-  'secondaryColor': '#f0f4ff',
-  'tertiaryColor': '#f8f9ff',
-  'edgeLabelBackground': '#ffffff',
-  'clusterBkg': '#f0f4ff',
-  'clusterBorder': '#4a6cf7',
-  'titleColor': '#1a1a2e',
-  'nodeTextColor': '#1a1a2e',
-  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
-}}}%%
 flowchart TD
-    Input["Token embedding"]
+    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
+    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
+    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
+    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
+    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
+    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
+
+    Input["Token embedding"]:::setup
 
     subgraph Block0["Layers 0–3"]
         direction TB
-        L0["Layer 0\nDeltaNet SSM"] --> L1["Layer 1\nDeltaNet SSM"] --> L2["Layer 2\nDeltaNet SSM"] --> L3["Layer 3\nFull Attention ✦"]
+        L0["Layer 0\nDeltaNet SSM"]:::setup --> L1["Layer 1\nDeltaNet SSM"]:::setup --> L2["Layer 2\nDeltaNet SSM"]:::setup --> L3["Layer 3\nFull Attention ✦"]:::migration
     end
 
     subgraph Block1["Layers 4–7"]
         direction TB
-        L4["Layer 4\nDeltaNet SSM"] --> L5["Layer 5\nDeltaNet SSM"] --> L6["Layer 6\nDeltaNet SSM"] --> L7["Layer 7\nFull Attention ✦"]
+        L4["Layer 4\nDeltaNet SSM"]:::setup --> L5["Layer 5\nDeltaNet SSM"]:::setup --> L6["Layer 6\nDeltaNet SSM"]:::setup --> L7["Layer 7\nFull Attention ✦"]:::migration
     end
 
     subgraph BlockMid["Layers 8–59  (pattern repeats × 13)"]
         direction TB
-        LM["SSM → SSM → SSM → Attention ✦\nevery 4th layer is attention"]
+        LM["SSM → SSM → SSM → Attention ✦\nevery 4th layer is attention"]:::setup
     end
 
     subgraph Block60["Layers 60–63"]
         direction TB
-        L60["Layer 60\nDeltaNet SSM"] --> L61["Layer 61\nDeltaNet SSM"] --> L62["Layer 62\nDeltaNet SSM"] --> L63["Layer 63\nFull Attention ✦"]
+        L60["Layer 60\nDeltaNet SSM"]:::setup --> L61["Layer 61\nDeltaNet SSM"]:::setup --> L62["Layer 62\nDeltaNet SSM"]:::setup --> L63["Layer 63\nFull Attention ✦"]:::migration
     end
 
     Input --> Block0 --> Block1 --> BlockMid --> Block60
 
-    LegSSM["DeltaNet SSM — O(d²) per token\n48 layers — fast state update"]
-    LegATN["Full Attention ✦ — O(n) per token\n16 layers — exact recall checkpoint"]
-
-    style LegSSM fill:#e8f0fe,stroke:#4a6cf7
-    style LegATN fill:#fff3cd,stroke:#f0ad4e
-    style L3 fill:#fff3cd,stroke:#f0ad4e
-    style L7 fill:#fff3cd,stroke:#f0ad4e
-    style L63 fill:#fff3cd,stroke:#f0ad4e
+    LegSSM["DeltaNet SSM — O(d²) per token\n48 layers — fast state update"]:::setup
+    LegATN["Full Attention ✦ — O(n) per token\n16 layers — exact recall checkpoint"]:::migration
 ```
 
 | Model | Pattern | Rule |

@@ -9,38 +9,47 @@ Inference can run on different compute backends: **CPU** (universal, always avai
 Each hardware **vendor** (manufacturer — NVIDIA, Apple, AMD, etc.) has its own API. Every backend compiles kernel source to an intermediate representation, then the GPU driver translates that to native machine code at runtime.
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': {
-  'primaryColor': '#e8f0fe',
-  'primaryTextColor': '#1a1a2e',
-  'primaryBorderColor': '#4a6cf7',
-  'lineColor': '#4a6cf7',
-  'secondaryColor': '#f0f4ff',
-  'tertiaryColor': '#f8f9ff',
-  'edgeLabelBackground': '#ffffff',
-  'clusterBkg': '#f0f4ff',
-  'clusterBorder': '#4a6cf7',
-  'titleColor': '#1a1a2e',
-  'nodeTextColor': '#1a1a2e',
-  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
-}}}%%
 flowchart LR
-    Zig["Zig kernel source"]
+    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
+    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
+    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
+    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
+    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
+    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
 
-    Zig --> PTX["PTX bytecode"]
-    Zig --> AMDGCN["AMDGCN bytecode"]
-    Zig --> NEON["NEON / AVX2\n(native binary)"]
+    Zig["Zig kernel source"]:::setup
 
-    PTX --> NVIDIA["NVIDIA GPU"]
-    AMDGCN --> AMD["AMD GPU"]
-    NEON --> CPU["CPU"]
+    PTX["PTX bytecode"]:::migration
+    AMDGCN["AMDGCN bytecode"]:::migration
+    NEON["NEON / AVX2\n(native binary)"]:::migration
+    MSL["MSL shader"]:::setup
+    GLSL["GLSL compute shader"]:::setup
+    WGSL["WGSL shader"]:::setup
+    MetalIR["Metal IR"]:::migration
+    SPIRV["SPIR-V bytecode"]:::migration
+    WGSL2["WGSL (interpreted)"]:::migration
+    NVIDIA["NVIDIA GPU"]:::success
+    AMD["AMD GPU"]:::success
+    CPU["CPU"]:::success
+    Apple["Apple Silicon GPU"]:::success
+    AnyGPU["Any GPU\n(Vulkan driver)"]:::success
+    Browser["Browser / native\n(wgpu)"]:::success
 
-    MSL["MSL shader"] --> MetalIR["Metal IR"]
-    GLSL["GLSL compute shader"] --> SPIRV["SPIR-V bytecode"]
-    WGSL["WGSL shader"] --> WGSL2["WGSL (interpreted)"]
+    Zig --> PTX
+    Zig --> AMDGCN
+    Zig --> NEON
 
-    MetalIR --> Apple["Apple Silicon GPU"]
-    SPIRV --> AnyGPU["Any GPU\n(Vulkan driver)"]
-    WGSL2 --> Browser["Browser / native\n(wgpu)"]
+    PTX --> NVIDIA
+    AMDGCN --> AMD
+    NEON --> CPU
+
+    MSL --> MetalIR
+    GLSL --> SPIRV
+    WGSL --> WGSL2
+
+    MetalIR --> Apple
+    SPIRV --> AnyGPU
+    WGSL2 --> Browser
 
     subgraph Vendor-specific
         PTX
@@ -96,38 +105,44 @@ fused_mlp: load from VRAM → compute gate+up → gelu in-register → multiply 
 **Example**: Gemma3's FFN does `down_proj(GELU(gate_proj(x)) * up_proj(x))` — that's 4 matrix operations. Unfused = 8 memory passes. Fused = 2 memory passes (4× speedup from memory reduction alone).
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': {
-  'primaryColor': '#e8f0fe',
-  'primaryTextColor': '#1a1a2e',
-  'primaryBorderColor': '#4a6cf7',
-  'lineColor': '#4a6cf7',
-  'secondaryColor': '#f0f4ff',
-  'tertiaryColor': '#f8f9ff',
-  'edgeLabelBackground': '#ffffff',
-  'clusterBkg': '#f0f4ff',
-  'clusterBorder': '#4a6cf7',
-  'titleColor': '#1a1a2e',
-  'nodeTextColor': '#1a1a2e',
-  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
-}}}%%
 flowchart LR
-    Input["x\n(hidden state)"]
+    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
+    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
+    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
+    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
+    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
+    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
+
+    Input["x\n(hidden state)"]:::setup
 
     subgraph Unfused["Unfused: 8 VRAM reads/writes"]
         direction LR
-        G1["gate_proj\nGEMV"] -->|"write gate\nto VRAM"| VRAM1["VRAM"]
-        VRAM1 -->|"read gate\nfrom VRAM"| Gelu["GELU\nactivation"]
-        U1["up_proj\nGEMV"] -->|"write up\nto VRAM"| VRAM2["VRAM"]
-        VRAM2 -->|"read up\nfrom VRAM"| Mul["Element-wise\nmultiply"]
+        G1["gate_proj\nGEMV"]:::sync
+        VRAM1["VRAM"]:::danger
+        Gelu["GELU\nactivation"]:::sync
+        U1["up_proj\nGEMV"]:::sync
+        VRAM2["VRAM"]:::danger
+        Mul["Element-wise\nmultiply"]:::sync
+        VRAM3["VRAM"]:::danger
+        D1["down_proj\nGEMV"]:::sync
+
+        G1 -->|"write gate\nto VRAM"| VRAM1
+        VRAM1 -->|"read gate\nfrom VRAM"| Gelu
+        U1 -->|"write up\nto VRAM"| VRAM2
+        VRAM2 -->|"read up\nfrom VRAM"| Mul
         Gelu --> Mul
-        Mul -->|"write mid\nto VRAM"| VRAM3["VRAM"]
-        VRAM3 -->|"read mid\nfrom VRAM"| D1["down_proj\nGEMV"]
+        Mul -->|"write mid\nto VRAM"| VRAM3
+        VRAM3 -->|"read mid\nfrom VRAM"| D1
     end
 
     subgraph Fused["Fused megakernel: 2 VRAM reads/writes"]
         direction LR
-        FG["gate_proj\n+ GELU\n+ up_proj\n+ multiply\n(all in registers)"] -->|"write once\nto VRAM"| FV["VRAM"]
-        FV -->|"read once\nfrom VRAM"| FD["down_proj\nGEMV"]
+        FG["gate_proj\n+ GELU\n+ up_proj\n+ multiply\n(all in registers)"]:::sync
+        FV["VRAM"]:::migration
+        FD["down_proj\nGEMV"]:::sync
+
+        FG -->|"write once\nto VRAM"| FV
+        FV -->|"read once\nfrom VRAM"| FD
     end
 
     Input --> G1
@@ -140,32 +155,31 @@ flowchart LR
 Model code never imports backend implementations directly. Instead, the `Backend` tagged union with `inline else` dispatch resolves **at compile time** (during compilation, not when the program runs — zero runtime overhead). Every model calls the same `be.gemv()` regardless of which hardware is present.
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': {
-  'primaryColor': '#e8f0fe',
-  'primaryTextColor': '#1a1a2e',
-  'primaryBorderColor': '#4a6cf7',
-  'lineColor': '#4a6cf7',
-  'secondaryColor': '#f0f4ff',
-  'tertiaryColor': '#f8f9ff',
-  'edgeLabelBackground': '#ffffff',
-  'clusterBkg': '#f0f4ff',
-  'clusterBorder': '#4a6cf7',
-  'titleColor': '#1a1a2e',
-  'nodeTextColor': '#1a1a2e',
-  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
-}}}%%
 flowchart LR
-    Model["Model code\nllama.zig / gemma.zig"]
-    Dispatcher["Backend dispatcher\nbackend.zig"]
+    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
+    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
+    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
+    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
+    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
+    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
+
+    Model["Model code\nllama.zig / gemma.zig"]:::setup
+    Dispatcher["Backend dispatcher\nbackend.zig"]:::migration
+    CPU["CpuBackend\ngemvQ4_0 / gemvBF16"]:::sync
+    Metal["MetalBackend\nMSL compute shader"]:::sync
+    CUDA["CudaBackend\nPTX kernel"]:::sync
+    Vulkan["VulkanBackend\nSPIR-V shader"]:::sync
+    ROCm["RocmBackend\nAMDGCN kernel"]:::sync
+    WebGPU["WebGpuBackend\nWGSL shader"]:::sync
 
     Model -->|"be.gemv(...)"| Dispatcher
 
-    Dispatcher -->|"inline else\n(compile-time)"| CPU["CpuBackend\ngemvQ4_0 / gemvBF16"]
-    Dispatcher --> Metal["MetalBackend\nMSL compute shader"]
-    Dispatcher --> CUDA["CudaBackend\nPTX kernel"]
-    Dispatcher --> Vulkan["VulkanBackend\nSPIR-V shader"]
-    Dispatcher --> ROCm["RocmBackend\nAMDGCN kernel"]
-    Dispatcher --> WebGPU["WebGpuBackend\nWGSL shader"]
+    Dispatcher -->|"inline else\n(compile-time)"| CPU
+    Dispatcher --> Metal
+    Dispatcher --> CUDA
+    Dispatcher --> Vulkan
+    Dispatcher --> ROCm
+    Dispatcher --> WebGPU
 
     subgraph "Never imported by models"
         CPU
@@ -201,36 +215,29 @@ This gives zero-overhead dispatch (no **vtable** — virtual function table used
 On **UMA** platforms (where CPU and GPU share the same physical memory chips, unlike **discrete GPUs** which have separate VRAM) like Apple Silicon and NVIDIA Grace, GPU backends can wrap existing CPU allocations as GPU buffers with zero copies. This eliminates the biggest bottleneck in traditional GPU inference: copying weights from system RAM across the PCIe bus into separate VRAM.
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': {
-  'primaryColor': '#e8f0fe',
-  'primaryTextColor': '#1a1a2e',
-  'primaryBorderColor': '#4a6cf7',
-  'lineColor': '#4a6cf7',
-  'secondaryColor': '#f0f4ff',
-  'tertiaryColor': '#f8f9ff',
-  'edgeLabelBackground': '#ffffff',
-  'clusterBkg': '#f0f4ff',
-  'clusterBorder': '#4a6cf7',
-  'titleColor': '#1a1a2e',
-  'nodeTextColor': '#1a1a2e',
-  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
-}}}%%
 flowchart TD
+    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
+    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
+    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
+    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
+    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
+    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
+
     subgraph Discrete["Discrete GPU (NVIDIA RTX, AMD RX)"]
         direction LR
-        SysRAM["System RAM\n(weights loaded here)"]
-        PCIe["PCIe Bus\n~64 GB/s"]
-        VRAM["VRAM\n(GPU-only memory)"]
-        dGPU["GPU Compute"]
+        SysRAM["System RAM\n(weights loaded here)"]:::setup
+        PCIe["PCIe Bus\n~64 GB/s"]:::danger
+        VRAM["VRAM\n(GPU-only memory)"]:::migration
+        dGPU["GPU Compute"]:::success
 
         SysRAM -->|"cudaMemcpy\n(explicit copy)"| PCIe --> VRAM --> dGPU
     end
 
     subgraph UMA["UMA (Apple Silicon, NVIDIA Grace)"]
         direction LR
-        SharedMem["Shared Physical Memory\n(weights live here once)"]
-        uGPU["GPU Compute"]
-        uCPU["CPU Compute"]
+        SharedMem["Shared Physical Memory\n(weights live here once)"]:::setup
+        uGPU["GPU Compute"]:::success
+        uCPU["CPU Compute"]:::success
 
         SharedMem -->|"zero-copy pointer\nnewBufferWithBytesNoCopy"| uGPU
         SharedMem -->|"normal pointer"| uCPU
@@ -270,48 +277,45 @@ Instead of flat `keys[t * kvd]` offset arithmetic, the kernel computes `block_ta
 CPU backend has native paged SDPA with thread-pool parallelism across query heads. GPU backends use CPU fallback via `@hasDecl` detection.
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': {
-  'primaryColor': '#e8f0fe',
-  'primaryTextColor': '#1a1a2e',
-  'primaryBorderColor': '#4a6cf7',
-  'lineColor': '#4a6cf7',
-  'secondaryColor': '#f0f4ff',
-  'tertiaryColor': '#f8f9ff',
-  'edgeLabelBackground': '#ffffff',
-  'clusterBkg': '#f0f4ff',
-  'clusterBorder': '#4a6cf7',
-  'titleColor': '#1a1a2e',
-  'nodeTextColor': '#1a1a2e',
-  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
-}}}%%
 flowchart TD
-    Token["Logical token position t"]
+    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
+    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
+    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
+    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
+    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
+    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
 
-    Token -->|"t / block_size"| BlockIdx["Block table index\nblock_table[t / block_size]"]
-    BlockIdx -->|"dereference"| PhysBlock["Physical block ID\n(16-token block, on-demand alloc)"]
-    PhysBlock -->|"t % block_size"| KVSlot["KV slot within block\nkeys[pos_in_block * kvd]"]
+    Token["Logical token position t"]:::setup
+    BlockIdx["Block table index\nblock_table[t / block_size]"]:::migration
+    PhysBlock["Physical block ID\n(16-token block, on-demand alloc)"]:::migration
+    KVSlot["KV slot within block\nkeys[pos_in_block * kvd]"]:::migration
+    SDPA["SDPA kernel\nattention output"]:::success
+
+    Token -->|"t / block_size"| BlockIdx
+    BlockIdx -->|"dereference"| PhysBlock
+    PhysBlock -->|"t % block_size"| KVSlot
 
     subgraph BlockTable["PagedKvView — block table indirection"]
         direction LR
-        BT0["block_table[0] = phys#4"]
-        BT1["block_table[1] = phys#11"]
-        BT2["block_table[2] = phys#2"]
-        BT3["block_table[3] = phys#7"]
+        BT0["block_table[0] = phys#4"]:::setup
+        BT1["block_table[1] = phys#11"]:::setup
+        BT2["block_table[2] = phys#2"]:::setup
+        BT3["block_table[3] = phys#7"]:::setup
     end
 
     subgraph PhysPool["Physical KV pool (non-contiguous blocks)"]
         direction LR
-        P2["Block #2\ntokens 32-47"]
-        P4["Block #4\ntokens 0-15"]
-        P7["Block #7\ntokens 48-63"]
-        P11["Block #11\ntokens 16-31"]
+        P2["Block #2\ntokens 32-47"]:::sync
+        P4["Block #4\ntokens 0-15"]:::sync
+        P7["Block #7\ntokens 48-63"]:::sync
+        P11["Block #11\ntokens 16-31"]:::sync
     end
 
     BlockIdx --> BlockTable
     BlockTable -->|"physical block ID"| PhysPool
     PhysPool --> KVSlot
 
-    KVSlot -->|"all heads in parallel\n(thread pool)"| SDPA["SDPA kernel\nattention output"]
+    KVSlot -->|"all heads in parallel\n(thread pool)"| SDPA
 ```
 
 ## Batched Prefill Dispatch
@@ -319,51 +323,45 @@ flowchart TD
 During prefill, the backend dispatches **batched** versions of the core ops — GEMM (instead of GEMV), batched RMSNorm, batched RoPE, and fused causal SDPA:
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': {
-  'primaryColor': '#e8f0fe',
-  'primaryTextColor': '#1a1a2e',
-  'primaryBorderColor': '#4a6cf7',
-  'lineColor': '#4a6cf7',
-  'secondaryColor': '#f0f4ff',
-  'tertiaryColor': '#f8f9ff',
-  'edgeLabelBackground': '#ffffff',
-  'clusterBkg': '#f0f4ff',
-  'clusterBorder': '#4a6cf7',
-  'titleColor': '#1a1a2e',
-  'nodeTextColor': '#1a1a2e',
-  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
-}}}%%
 flowchart TD
-    Tokens["Input tokens\n[seq_len, hidden_dim]"]
+    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
+    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
+    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
+    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
+    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
+    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
+
+    Tokens["Input tokens\n[seq_len, hidden_dim]"]:::setup
+    NextLayer["Layer N+1 ..."]:::success
 
     subgraph Attention["Attention block"]
         direction TB
-        RN1["rmsNormBatched\nnormalize hidden states"]
-        QKV["GEMM(Q, K, V)\none-shot projection\n[seq_len, head_dim * n_heads]"]
-        RN2["rmsNormMulti\nnorm Q and K (Gemma3-style)"]
-        RoPE["ropeBatched\nrotary position embeddings"]
-        SDPA["sdpaPrefill (FA2)\ncausal self-attention\ndual-source K/V from GEMM"]
-        ProjO["GEMM(O)\noutput projection\n[seq_len, hidden_dim]"]
-        Add1["residual add"]
+        RN1["rmsNormBatched\nnormalize hidden states"]:::sync
+        QKV["GEMM(Q, K, V)\none-shot projection\n[seq_len, head_dim * n_heads]"]:::sync
+        RN2["rmsNormMulti\nnorm Q and K (Gemma3-style)"]:::sync
+        RoPE["ropeBatched\nrotary position embeddings"]:::sync
+        SDPA["sdpaPrefill (FA2)\ncausal self-attention\ndual-source K/V from GEMM"]:::sync
+        ProjO["GEMM(O)\noutput projection\n[seq_len, hidden_dim]"]:::sync
+        Add1["residual add"]:::migration
 
         RN1 --> QKV --> RN2 --> RoPE --> SDPA --> ProjO --> Add1
     end
 
     subgraph FFN["Feed-forward block"]
         direction TB
-        RN3["rmsNormBatched\nnormalize after attention"]
-        GateUp["GEMM(gate, up)\ndual projection\n[seq_len, ffn_dim]"]
-        Gelu["GELU activation\n(in-register for megakernel)"]
-        Mul["element-wise multiply\ngate * up"]
-        Down["GEMM(down)\nproject back to hidden\n[seq_len, hidden_dim]"]
-        Add2["residual add"]
+        RN3["rmsNormBatched\nnormalize after attention"]:::sync
+        GateUp["GEMM(gate, up)\ndual projection\n[seq_len, ffn_dim]"]:::sync
+        Gelu["GELU activation\n(in-register for megakernel)"]:::sync
+        Mul["element-wise multiply\ngate * up"]:::sync
+        Down["GEMM(down)\nproject back to hidden\n[seq_len, hidden_dim]"]:::sync
+        Add2["residual add"]:::migration
 
         RN3 --> GateUp --> Gelu --> Mul --> Down --> Add2
     end
 
     Tokens --> Attention
     Attention --> FFN
-    FFN -->|"next layer"| NextLayer["Layer N+1 ..."]
+    FFN -->|"next layer"| NextLayer
 ```
 
 **Metal**: all batched ops are native GPU kernels. The GEMM uses one threadgroup per output row with weight reuse across tokens. The `sdpa_prefill_fa2` kernel reads old K/V from the cache and new K/V directly from GEMM output (dual-source), then a `copy_f32` kernel populates the cache — all in one command buffer with zero CPU-GPU flush.
@@ -393,56 +391,49 @@ All GPU backends support distributed inference via `src/parallel/transport.zig`.
 NCCL integration requires `cuDevicePrimaryCtxRetain` (not `cuCtxCreate`) — NCCL uses the CUDA primary context and will corrupt a separate driver API context. Device pointer `allReduceAdd` passes GPU activation cache pointers directly to NCCL when data is dirty on device; when CPU fallback has written to host (stale on GPU), uploads to a device staging buffer first.
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': {
-  'primaryColor': '#e8f0fe',
-  'primaryTextColor': '#1a1a2e',
-  'primaryBorderColor': '#4a6cf7',
-  'lineColor': '#4a6cf7',
-  'secondaryColor': '#f0f4ff',
-  'tertiaryColor': '#f8f9ff',
-  'edgeLabelBackground': '#ffffff',
-  'clusterBkg': '#f0f4ff',
-  'clusterBorder': '#4a6cf7',
-  'titleColor': '#1a1a2e',
-  'nodeTextColor': '#1a1a2e',
-  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
-}}}%%
 flowchart TD
+    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
+    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
+    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
+    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
+    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
+    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
+
     subgraph Transports["Transport Layer (transport.zig)"]
         direction LR
-        TCP["TCP\ncross-node\n(any network)"]
-        SHM["POSIX shm\nsame-node\nzero-copy"]
-        NCCL["NCCL\nRoCE RDMA\nGPU-optimized"]
+        TCP["TCP\ncross-node\n(any network)"]:::setup
+        SHM["POSIX shm\nsame-node\nzero-copy"]:::setup
+        NCCL["NCCL\nRoCE RDMA\nGPU-optimized"]:::optional
     end
 
     subgraph Modes["Parallelism Modes"]
         direction TB
 
         subgraph TP["Tensor Parallelism (--tp N)"]
-            TP0["GPU 0\nweight shard 0\nallReduceAdd after each layer"]
-            TP1["GPU 1\nweight shard 1\nallReduceAdd after each layer"]
+            TP0["GPU 0\nweight shard 0\nallReduceAdd after each layer"]:::sync
+            TP1["GPU 1\nweight shard 1\nallReduceAdd after each layer"]:::sync
             TP0 <-->|"allReduce\n(shm or NCCL)"| TP1
         end
 
         subgraph PP["Pipeline Parallelism (--pp N)"]
-            PP0["GPU 0\nlayers 0..L/2\nprefill + decode"]
-            PP1["GPU 1\nlayers L/2..L\nprefill + decode"]
+            PP0["GPU 0\nlayers 0..L/2\nprefill + decode"]:::sync
+            PP1["GPU 1\nlayers L/2..L\nprefill + decode"]:::sync
             PP0 -->|"activation\ntransfer"| PP1
         end
 
         subgraph Hybrid["Hybrid TP+PP"]
-            H0["GPU 0\nlayer shard A"]
-            H1["GPU 1\nlayer shard A"]
-            H2["GPU 2\nlayer shard B"]
-            H3["GPU 3\nlayer shard B"]
+            H0["GPU 0\nlayer shard A"]:::sync
+            H1["GPU 1\nlayer shard A"]:::sync
+            H2["GPU 2\nlayer shard B"]:::sync
+            H3["GPU 3\nlayer shard B"]:::sync
             H0 <-->|"TP allReduce"| H1
             H2 <-->|"TP allReduce"| H3
             H1 -->|"PP activation"| H2
         end
 
         subgraph Disagg["Disaggregated (--disagg)"]
-            PNode["Prefill node\nfull context ingestion"]
-            DNode["Decode node\ntoken-by-token generation"]
+            PNode["Prefill node\nfull context ingestion"]:::setup
+            DNode["Decode node\ntoken-by-token generation"]:::success
             PNode -->|"KV cache transfer\n(TCP or NCCL)"| DNode
         end
     end

@@ -95,32 +95,30 @@ For a 27B model with ~210 GEMVs per token, that's **1-2 ms of pure overhead** pe
 **Idea:** Dispatch all GEMVs that share the same input vector in a **single kernel launch**. Each GEMV still loads x from VRAM, but the N-1 intermediate CPU barriers are eliminated — reducing CPU-side overhead and command buffer size.
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': {
-  'primaryColor': '#e8f0fe',
-  'primaryTextColor': '#1a1a2e',
-  'primaryBorderColor': '#4a6cf7',
-  'lineColor': '#4a6cf7',
-  'secondaryColor': '#f0f4ff',
-  'tertiaryColor': '#f8f9ff',
-  'edgeLabelBackground': '#ffffff',
-  'clusterBkg': '#f0f4ff',
-  'clusterBorder': '#4a6cf7',
-  'titleColor': '#1a1a2e',
-  'nodeTextColor': '#1a1a2e',
-  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
-}}}%%
 flowchart LR
-    X["Input vector x\n(n_embd floats, loaded once)"]
+    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
+    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
+    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
+    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
+    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
+    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
 
-    X --> GQ["GEMV: W_q @ x\n→ Q buffer"]
-    X --> GK["GEMV: W_k @ x\n→ K buffer"]
-    X --> GV["GEMV: W_v @ x\n→ V buffer"]
+    X["Input vector x\n(n_embd floats, loaded once)"]:::setup
+    GQ["GEMV: W_q @ x\n→ Q buffer"]:::sync
+    GK["GEMV: W_k @ x\n→ K buffer"]:::sync
+    GV["GEMV: W_v @ x\n→ V buffer"]:::sync
+    Bar["Single barrier\n(all ops complete)"]:::migration
+    Attn["Attention\ncomputation"]:::success
 
-    GQ --> Bar["Single barrier\n(all ops complete)"]
+    X --> GQ
+    X --> GK
+    X --> GV
+
+    GQ --> Bar
     GK --> Bar
     GV --> Bar
 
-    Bar --> Attn["Attention\ncomputation"]
+    Bar --> Attn
 
     subgraph OneDispatch["Single gemvMulti dispatch"]
         GQ
@@ -248,28 +246,21 @@ be.addRmsNorm(residual, ffn_out, norm_w, normalized, n_embd);
 **GPU implementation:** `temp` computed in registers, never written to VRAM.
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': {
-  'primaryColor': '#e8f0fe',
-  'primaryTextColor': '#1a1a2e',
-  'primaryBorderColor': '#4a6cf7',
-  'lineColor': '#4a6cf7',
-  'secondaryColor': '#f0f4ff',
-  'tertiaryColor': '#f8f9ff',
-  'edgeLabelBackground': '#ffffff',
-  'clusterBkg': '#f0f4ff',
-  'clusterBorder': '#4a6cf7',
-  'titleColor': '#1a1a2e',
-  'nodeTextColor': '#1a1a2e',
-  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
-}}}%%
 flowchart LR
+    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
+    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
+    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
+    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
+    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
+    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
+
     subgraph Unfused["Unfused: 2 dispatches, 4 memory ops"]
         direction TB
-        R1["residual\n(VRAM read)"]
-        F1["ffn_out\n(VRAM read)"]
-        T1["temp\n(VRAM write)"]
-        T2["temp\n(VRAM read)"]
-        N1["normalized\n(VRAM write)"]
+        R1["residual\n(VRAM read)"]:::setup
+        F1["ffn_out\n(VRAM read)"]:::setup
+        T1["temp\n(VRAM write)"]:::migration
+        T2["temp\n(VRAM read)"]:::migration
+        N1["normalized\n(VRAM write)"]:::success
 
         R1 -->|"Dispatch 1: add"| T1
         F1 -->|"Dispatch 1: add"| T1
@@ -279,10 +270,10 @@ flowchart LR
 
     subgraph Fused["Fused: 1 dispatch, 3 memory ops"]
         direction TB
-        R2["residual\n(VRAM read)"]
-        F2["ffn_out\n(VRAM read)"]
-        Reg["sum in registers\n(never touches VRAM)"]
-        N2["normalized\n(VRAM write)"]
+        R2["residual\n(VRAM read)"]:::setup
+        F2["ffn_out\n(VRAM read)"]:::setup
+        Reg["sum in registers\n(never touches VRAM)"]:::sync
+        N2["normalized\n(VRAM write)"]:::success
 
         R2 -->|"addRmsNorm\nkernel"| Reg
         F2 -->|"addRmsNorm\nkernel"| Reg
@@ -409,46 +400,39 @@ G: [G0..G_{hd-1}] × nh heads
 ```
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': {
-  'primaryColor': '#e8f0fe',
-  'primaryTextColor': '#1a1a2e',
-  'primaryBorderColor': '#4a6cf7',
-  'lineColor': '#4a6cf7',
-  'secondaryColor': '#f0f4ff',
-  'tertiaryColor': '#f8f9ff',
-  'edgeLabelBackground': '#ffffff',
-  'clusterBkg': '#f0f4ff',
-  'clusterBorder': '#4a6cf7',
-  'titleColor': '#1a1a2e',
-  'nodeTextColor': '#1a1a2e',
-  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
-}}}%%
 flowchart TD
+    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
+    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
+    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
+    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
+    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
+    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
+
     subgraph Input["Input buffer: qg (interleaved, nh heads)"]
         direction LR
-        H0["Head 0\nQ0 .. Q_hd-1 | G0 .. G_hd-1\n(stride = hd*2 per head)"]
-        H1["Head 1\nQ0 .. Q_hd-1 | G0 .. G_hd-1"]
-        H2["Head nh-1\nQ0 .. Q_hd-1 | G0 .. G_hd-1"]
+        H0["Head 0\nQ0 .. Q_hd-1 | G0 .. G_hd-1\n(stride = hd*2 per head)"]:::setup
+        H1["Head 1\nQ0 .. Q_hd-1 | G0 .. G_hd-1"]:::setup
+        H2["Head nh-1\nQ0 .. Q_hd-1 | G0 .. G_hd-1"]:::setup
         H0 ~~~ H1 ~~~ H2
     end
 
     subgraph Kernel["GPU kernel: split_qgate\n(1 thread per element, no sync)"]
-        K["tid = h * hd + i\nsrc = h * hd * 2 + i\nq_out[dst] = qg[src]\ng_out[dst] = qg[src + hd]"]
+        K["tid = h * hd + i\nsrc = h * hd * 2 + i\nq_out[dst] = qg[src]\ng_out[dst] = qg[src + hd]"]:::sync
     end
 
     subgraph QOut["Output: q_buf (contiguous Q)"]
         direction LR
-        Q0["Head 0: Q0..Q_hd-1"]
-        Q1["Head 1: Q0..Q_hd-1"]
-        Q2["Head nh-1: Q0..Q_hd-1"]
+        Q0["Head 0: Q0..Q_hd-1"]:::success
+        Q1["Head 1: Q0..Q_hd-1"]:::success
+        Q2["Head nh-1: Q0..Q_hd-1"]:::success
         Q0 ~~~ Q1 ~~~ Q2
     end
 
     subgraph GOut["Output: g_buf (contiguous Gate)"]
         direction LR
-        G0["Head 0: G0..G_hd-1"]
-        G1["Head 1: G0..G_hd-1"]
-        G2["Head nh-1: G0..G_hd-1"]
+        G0["Head 0: G0..G_hd-1"]:::success
+        G1["Head 1: G0..G_hd-1"]:::success
+        G2["Head nh-1: G0..G_hd-1"]:::success
         G0 ~~~ G1 ~~~ G2
     end
 
@@ -557,27 +541,24 @@ for (active_experts) |expert_id, i| {
 The megakernel system eliminates GPU dispatch overhead at three levels of granularity. All tiers are enabled via the `--megakernel` CLI flag. Each tier subsumes the one below it: Tier 3 auto-generates a Tier 2 megakernel at runtime from model metadata, so no hand-written shader code is needed for new models.
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': {
-  'primaryColor': '#e8f0fe',
-  'primaryTextColor': '#1a1a2e',
-  'primaryBorderColor': '#4a6cf7',
-  'lineColor': '#4a6cf7',
-  'secondaryColor': '#f0f4ff',
-  'tertiaryColor': '#f8f9ff',
-  'edgeLabelBackground': '#ffffff',
-  'clusterBkg': '#f0f4ff',
-  'clusterBorder': '#4a6cf7',
-  'titleColor': '#1a1a2e',
-  'nodeTextColor': '#1a1a2e',
-  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
-}}}%%
 graph TD
-    Meta["Model metadata\n(GGUF / SafeTensors)"]
+    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
+    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
+    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
+    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
+    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
+    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
 
-    Meta --> T3["Tier 3: Composed megakernel\nmega_compose.zig generates MSL at runtime\nfrom ModelDesc — no hand-written shaders"]
-    T3 -->|"generates"| T2["Tier 2: True megakernel\nEntire transformer layer in ONE dispatch\n(norm + QKV + RoPE + KV cache + SDPA + FFN)"]
-    T2 -->|"builds on"| T1["Tier 1: Fused FFN\n3 FFN dispatches → 1 dispatch\n(gate GEMV + up GEMV + activation)"]
-    T1 -->|"builds on"| Base["Baseline: gemvMulti + addRmsNorm\nBatched projections, fused residual+norm"]
+    Meta["Model metadata\n(GGUF / SafeTensors)"]:::setup
+    T3["Tier 3: Composed megakernel\nmega_compose.zig generates MSL at runtime\nfrom ModelDesc — no hand-written shaders"]:::optional
+    T2["Tier 2: True megakernel\nEntire transformer layer in ONE dispatch\n(norm + QKV + RoPE + KV cache + SDPA + FFN)"]:::sync
+    T1["Tier 1: Fused FFN\n3 FFN dispatches → 1 dispatch\n(gate GEMV + up GEMV + activation)"]:::migration
+    Base["Baseline: gemvMulti + addRmsNorm\nBatched projections, fused residual+norm"]:::success
+
+    Meta --> T3
+    T3 -->|"generates"| T2
+    T2 -->|"builds on"| T1
+    T1 -->|"builds on"| Base
 
     T3 -. "eliminates\nper-model shader files" .-> T3
     T2 -. "eliminates\nper-layer dispatch overhead" .-> T2
@@ -595,26 +576,24 @@ graph TD
 Combine **gate GEMV + up GEMV + activation** into a single kernel dispatch. Instead of 3 separate dispatches per FFN layer (gate, up, silu/gelu), a single kernel computes all three. The input `x` is loaded once per threadgroup; intermediate gate and up values never touch VRAM.
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': {
-  'primaryColor': '#e8f0fe',
-  'primaryTextColor': '#1a1a2e',
-  'primaryBorderColor': '#4a6cf7',
-  'lineColor': '#4a6cf7',
-  'secondaryColor': '#f0f4ff',
-  'tertiaryColor': '#f8f9ff',
-  'edgeLabelBackground': '#ffffff',
-  'clusterBkg': '#f0f4ff',
-  'clusterBorder': '#4a6cf7',
-  'titleColor': '#1a1a2e',
-  'nodeTextColor': '#1a1a2e',
-  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
-}}}%%
 flowchart TD
+    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
+    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
+    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
+    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
+    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
+    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
+
     subgraph Before["Before: 3 dispatches per FFN layer"]
         direction LR
-        X1["x (input)"] --> D1["Dispatch 1\ngate_buf = W_gate @ x"]
-        X1 --> D2["Dispatch 2\nup_buf = W_up @ x"]
-        D1 --> D3["Dispatch 3\nout = silu(gate_buf) * up_buf"]
+        X1["x (input)"]:::setup
+        D1["Dispatch 1\ngate_buf = W_gate @ x"]:::migration
+        D2["Dispatch 2\nup_buf = W_up @ x"]:::migration
+        D3["Dispatch 3\nout = silu(gate_buf) * up_buf"]:::migration
+
+        X1 --> D1
+        X1 --> D2
+        D1 --> D3
         D2 --> D3
         D1 -. "write gate_buf\nto VRAM" .-> D3
         D2 -. "write up_buf\nto VRAM" .-> D3
@@ -622,8 +601,12 @@ flowchart TD
 
     subgraph After["After: 1 dispatch (Tier 1 megakernel)"]
         direction LR
-        X2["x (input)"] --> MK["Single kernel\nload x once per threadgroup\ncompute gate dot product\ncompute up dot product\napply silu in registers\nwrite output"]
-        MK --> Out["out (result)"]
+        X2["x (input)"]:::setup
+        MK["Single kernel\nload x once per threadgroup\ncompute gate dot product\ncompute up dot product\napply silu in registers\nwrite output"]:::sync
+        Out["out (result)"]:::success
+
+        X2 --> MK
+        MK --> Out
     end
 
     Before -. "3 → 1\nfusion" .-> After
@@ -916,44 +899,24 @@ sequenceDiagram
 4. **Batch mode for independent norms/RoPE** → reduced barriers by 240
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': {
-  'primaryColor': '#e8f0fe',
-  'primaryTextColor': '#1a1a2e',
-  'primaryBorderColor': '#4a6cf7',
-  'lineColor': '#4a6cf7',
-  'secondaryColor': '#f0f4ff',
-  'tertiaryColor': '#f8f9ff',
-  'edgeLabelBackground': '#ffffff',
-  'clusterBkg': '#f0f4ff',
-  'clusterBorder': '#4a6cf7',
-  'titleColor': '#1a1a2e',
-  'nodeTextColor': '#1a1a2e',
-  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
-}}}%%
 flowchart TD
-    Start["Baseline: Qwen3.5 27B MLX\n12.3 tok/s\n24 syncs/token\n930 barriers/token\n~1250 dispatches/token"]
+    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
+    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
+    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
+    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
+    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
+    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
+
+    Start["Baseline: Qwen3.5 27B MLX\n12.3 tok/s\n24 syncs/token\n930 barriers/token\n~1250 dispatches/token"]:::danger
+    Step1["0 syncs/token\n930 barriers/token\n~1250 dispatches/token\n~13.0 tok/s"]:::migration
+    Step2["0 syncs/token\n690 barriers/token\n~1050 dispatches/token\n~13.5 tok/s"]:::migration
+    Step3["0 syncs/token\n690 barriers/token\n~994 dispatches/token\n~13.9 tok/s"]:::sync
+    Final["Final: Qwen3.5 27B MLX\n14.1 tok/s (+15%)\n1 sync/token\n690 barriers/token\n994 dispatches/token"]:::success
 
     Start -->|"(1) splitQGate\nGPU kernel\neliminate 24 CPU-GPU syncs\n(-4.8 ms/token overhead)"| Step1
-
-    Step1["0 syncs/token\n930 barriers/token\n~1250 dispatches/token\n~13.0 tok/s"]
-
     Step1 -->|"(2) gemvMulti\nbatch Q+K+V projections\n-240 barriers/token\n-200 dispatches/token"| Step2
-
-    Step2["0 syncs/token\n690 barriers/token\n~1050 dispatches/token\n~13.5 tok/s"]
-
     Step2 -->|"(3) addRmsNorm fusion\nfuse residual+norm\n-64 dispatches/token"| Step3
-
-    Step3["0 syncs/token\n690 barriers/token\n~994 dispatches/token\n~13.9 tok/s"]
-
     Step3 -->|"(4) beginBatch/endBatch\nfor RoPE(Q) + RoPE(K)\n-240 redundant barriers"| Final
-
-    Final["Final: Qwen3.5 27B MLX\n14.1 tok/s (+15%)\n1 sync/token\n690 barriers/token\n994 dispatches/token"]
-
-    style Start fill:#fce8e8,stroke:#e05252
-    style Step1 fill:#fdf3e8,stroke:#e09252
-    style Step2 fill:#fdfae8,stroke:#c8b852
-    style Step3 fill:#eef8ee,stroke:#52a852
-    style Final fill:#e8f4e8,stroke:#2e8b2e
 ```
 
 **Final:**

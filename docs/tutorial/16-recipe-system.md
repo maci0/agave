@@ -53,50 +53,43 @@ pub const Recipe = struct {
 The `Recipe` struct holds optional fields; the resolved `Applied` struct holds concrete values after merging CLI flags, recipe defaults, and CLI baselines.
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': {
-  'primaryColor': '#e8f0fe',
-  'primaryTextColor': '#1a1a2e',
-  'primaryBorderColor': '#4a6cf7',
-  'lineColor': '#4a6cf7',
-  'secondaryColor': '#f0f4ff',
-  'tertiaryColor': '#f8f9ff',
-  'edgeLabelBackground': '#ffffff',
-  'clusterBkg': '#f0f4ff',
-  'clusterBorder': '#4a6cf7',
-  'titleColor': '#1a1a2e',
-  'nodeTextColor': '#1a1a2e',
-  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
-}}}%%
 graph TD
+    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
+    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
+    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
+    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
+    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
+    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
+
     subgraph RecipeStruct["Recipe struct (all fields optional)"]
         direction TB
-        R1["name: []const u8\n= 'default'"]
-        R2["temperature: ?f32\n= null"]
-        R3["top_p: ?f32\n= null"]
-        R4["top_k: ?u32\n= null"]
-        R5["repeat_penalty: ?f32\n= null"]
-        R6["max_tokens: ?u32\n= null"]
-        R7["ctx_size: ?u32\n= null"]
+        R1["name: []const u8\n= 'default'"]:::setup
+        R2["temperature: ?f32\n= null"]:::setup
+        R3["top_p: ?f32\n= null"]:::setup
+        R4["top_k: ?u32\n= null"]:::setup
+        R5["repeat_penalty: ?f32\n= null"]:::setup
+        R6["max_tokens: ?u32\n= null"]:::setup
+        R7["ctx_size: ?u32\n= null"]:::setup
     end
 
     subgraph AppliedStruct["Applied struct (all fields concrete after resolution)"]
         direction TB
-        A1["temperature: f32"]
-        A2["top_p: f32"]
-        A3["top_k: u32"]
-        A4["repeat_penalty: f32"]
-        A5["max_tokens: u32"]
-        A6["ctx_size: u32"]
+        A1["temperature: f32"]:::success
+        A2["top_p: f32"]:::success
+        A3["top_k: u32"]:::success
+        A4["repeat_penalty: f32"]:::success
+        A5["max_tokens: u32"]:::success
+        A6["ctx_size: u32"]:::success
     end
 
     subgraph Overrides["Overrides struct (tracks what the user set via CLI)"]
         direction TB
-        O1["temperature: bool = false"]
-        O2["top_p: bool = false"]
-        O3["top_k: bool = false"]
-        O4["repeat_penalty: bool = false"]
-        O5["max_tokens: bool = false"]
-        O6["ctx_size: bool = false"]
+        O1["temperature: bool = false"]:::migration
+        O2["top_p: bool = false"]:::migration
+        O3["top_k: bool = false"]:::migration
+        O4["repeat_penalty: bool = false"]:::migration
+        O5["max_tokens: bool = false"]:::migration
+        O6["ctx_size: bool = false"]:::migration
     end
 
     RecipeStruct -->|"applyDefaults(cli_values, overrides)"| AppliedStruct
@@ -178,38 +171,37 @@ const presets = [_]Preset{
 Each preset is tested in order against three criteria. Empty strings act as wildcards, so a preset can match any arch, any backend, or any quant independently.
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': {
-  'primaryColor': '#e8f0fe',
-  'primaryTextColor': '#1a1a2e',
-  'primaryBorderColor': '#4a6cf7',
-  'lineColor': '#4a6cf7',
-  'secondaryColor': '#f0f4ff',
-  'tertiaryColor': '#f8f9ff',
-  'edgeLabelBackground': '#ffffff',
-  'clusterBkg': '#f0f4ff',
-  'clusterBorder': '#4a6cf7',
-  'titleColor': '#1a1a2e',
-  'nodeTextColor': '#1a1a2e',
-  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
-}}}%%
 flowchart TD
-    Start(["match(arch, backend, quant)"]) --> Loop["Check next preset\nin order"]
+    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
+    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
+    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
+    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
+    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
+    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
+
+    Start(["match(arch, backend, quant)"]):::setup
+    Loop["Check next preset\nin order"]:::migration
+    NextPreset["Skip to next preset"]:::migration
+    Hit["Return this recipe"]:::success
+    Miss["Return null\n(use Recipe.default)"]:::danger
+
+    Start --> Loop
     Loop --> ArchCheck{"arch_prefix\nempty?"}
     ArchCheck -- "yes (wildcard)" --> BackCheck
     ArchCheck -- "no" --> ArchMatch{"arch starts\nwith prefix?"}
-    ArchMatch -- "no" --> NextPreset["Skip to next preset"]
+    ArchMatch -- "no" --> NextPreset
     ArchMatch -- "yes" --> BackCheck{"backend\nempty?"}
     BackCheck -- "yes (wildcard)" --> QuantCheck
     BackCheck -- "no" --> BackMatch{"backend\nexact match?"}
     BackMatch -- "no" --> NextPreset
     BackMatch -- "yes" --> QuantCheck{"quant\nempty?"}
-    QuantCheck -- "yes (wildcard)" --> Hit["Return this recipe"]
+    QuantCheck -- "yes (wildcard)" --> Hit
     QuantCheck -- "no" --> QuantMatch{"quant starts\nwith prefix?"}
     QuantMatch -- "no" --> NextPreset
     QuantMatch -- "yes" --> Hit
     NextPreset --> More{"More\npresets?"}
     More -- "yes" --> Loop
-    More -- "no" --> Miss["Return null\n(use Recipe.default)"]
+    More -- "no" --> Miss
 ```
 
 ```zig
@@ -243,26 +235,23 @@ fn matches(self: Preset, arch: []const u8, be: []const u8, q: []const u8) bool {
 **Golden rule:** User CLI flags **always** override recipe defaults. Each parameter resolves independently through a three-level priority chain.
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': {
-  'primaryColor': '#e8f0fe',
-  'primaryTextColor': '#1a1a2e',
-  'primaryBorderColor': '#4a6cf7',
-  'lineColor': '#4a6cf7',
-  'secondaryColor': '#f0f4ff',
-  'tertiaryColor': '#f8f9ff',
-  'edgeLabelBackground': '#ffffff',
-  'clusterBkg': '#f0f4ff',
-  'clusterBorder': '#4a6cf7',
-  'titleColor': '#1a1a2e',
-  'nodeTextColor': '#1a1a2e',
-  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
-}}}%%
 flowchart LR
-    CLI["--temperature 0.8\n(user-provided flag)"]
-    Recipe["Recipe default\n(e.g. temperature = 0.6)"]
-    Default["CLI baseline\n(e.g. temperature = 0.0)"]
+    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
+    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
+    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
+    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
+    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
+    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
 
-    CLI -->|"highest priority\noverrides everything"| Final["Final value\nused for inference"]
+    CLI["--temperature 0.8\n(user-provided flag)"]:::setup
+    Recipe["Recipe default\n(e.g. temperature = 0.6)"]:::migration
+    Default["CLI baseline\n(e.g. temperature = 0.0)"]:::optional
+    Final["Final value\nused for inference"]:::success
+    Use1["use user value"]:::success
+    Use2["use recipe value"]:::success
+    Use3["use CLI baseline"]:::migration
+
+    CLI -->|"highest priority\noverrides everything"| Final
     Recipe -->|"used when user\ndid NOT set flag"| Final
     Default -->|"used when neither\nuser nor recipe set it"| Final
 
@@ -270,10 +259,10 @@ flowchart LR
         direction TB
         Q1{"user_set.temperature?"}
         Q2{"recipe.temperature != null?"}
-        Q1 -- yes --> Use1["use user value"]
+        Q1 -- yes --> Use1
         Q1 -- no --> Q2
-        Q2 -- yes --> Use2["use recipe value"]
-        Q2 -- no --> Use3["use CLI baseline"]
+        Q2 -- yes --> Use2
+        Q2 -- no --> Use3
     end
 ```
 
@@ -312,54 +301,73 @@ if (args.top_p) |p| {
 Each `Overrides` boolean gates the three-way resolution for its parameter independently.
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': {
-  'primaryColor': '#e8f0fe',
-  'primaryTextColor': '#1a1a2e',
-  'primaryBorderColor': '#4a6cf7',
-  'lineColor': '#4a6cf7',
-  'secondaryColor': '#f0f4ff',
-  'tertiaryColor': '#f8f9ff',
-  'edgeLabelBackground': '#ffffff',
-  'clusterBkg': '#f0f4ff',
-  'clusterBorder': '#4a6cf7',
-  'titleColor': '#1a1a2e',
-  'nodeTextColor': '#1a1a2e',
-  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
-}}}%%
 flowchart TD
+    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
+    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
+    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
+    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
+    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
+    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
+
     subgraph Legend["Resolution rule per parameter"]
         direction LR
-        L1["user_set.X = true"] -->|"use"| LU["user CLI value"]
-        L2["user_set.X = false\nrecipe.X != null"] -->|"use"| LR["recipe value"]
-        L3["user_set.X = false\nrecipe.X = null"] -->|"use"| LD["CLI baseline default"]
+        L1["user_set.X = true"]:::setup
+        LU["user CLI value"]:::success
+        L2["user_set.X = false\nrecipe.X != null"]:::migration
+        LR["recipe value"]:::success
+        L3["user_set.X = false\nrecipe.X = null"]:::optional
+        LD["CLI baseline default"]:::migration
+        L1 -->|"use"| LU
+        L2 -->|"use"| LR
+        L3 -->|"use"| LD
     end
 
     subgraph Params["Per-parameter override gates"]
         direction TB
 
-        T1["temperature"] --> TG{"user_set\n.temperature?"}
-        TG -- "true" --> TV["user value\ne.g. 0.8"]
+        T1["temperature"]:::setup
+        TV["user value\ne.g. 0.8"]:::success
+        TRV["recipe value\ne.g. 0.6"]:::success
+        TDV["CLI baseline\ne.g. 0.0"]:::migration
+
+        P1["top_p"]:::setup
+        PV["user value"]:::success
+        PRV["recipe value"]:::success
+        PDV["CLI baseline\ne.g. 1.0"]:::migration
+
+        M1["max_tokens"]:::setup
+        MV["user value"]:::success
+        MRV["recipe value\ne.g. 1024"]:::success
+        MDV["CLI baseline\ne.g. 512"]:::migration
+
+        C1["ctx_size"]:::setup
+        CV["user value"]:::success
+        CRV["recipe value\ne.g. 2048"]:::success
+        CDV["CLI baseline\ne.g. 4096"]:::migration
+
+        T1 --> TG{"user_set\n.temperature?"}
+        TG -- "true" --> TV
         TG -- "false" --> TR{"recipe\n.temperature?"}
-        TR -- "Some(v)" --> TRV["recipe value\ne.g. 0.6"]
-        TR -- "null" --> TDV["CLI baseline\ne.g. 0.0"]
+        TR -- "Some(v)" --> TRV
+        TR -- "null" --> TDV
 
-        P1["top_p"] --> PG{"user_set\n.top_p?"}
-        PG -- "true" --> PV["user value"]
+        P1 --> PG{"user_set\n.top_p?"}
+        PG -- "true" --> PV
         PG -- "false" --> PR{"recipe\n.top_p?"}
-        PR -- "Some(v)" --> PRV["recipe value"]
-        PR -- "null" --> PDV["CLI baseline\ne.g. 1.0"]
+        PR -- "Some(v)" --> PRV
+        PR -- "null" --> PDV
 
-        M1["max_tokens"] --> MG{"user_set\n.max_tokens?"}
-        MG -- "true" --> MV["user value"]
+        M1 --> MG{"user_set\n.max_tokens?"}
+        MG -- "true" --> MV
         MG -- "false" --> MR{"recipe\n.max_tokens?"}
-        MR -- "Some(v)" --> MRV["recipe value\ne.g. 1024"]
-        MR -- "null" --> MDV["CLI baseline\ne.g. 512"]
+        MR -- "Some(v)" --> MRV
+        MR -- "null" --> MDV
 
-        C1["ctx_size"] --> CG{"user_set\n.ctx_size?"}
-        CG -- "true" --> CV["user value"]
+        C1 --> CG{"user_set\n.ctx_size?"}
+        CG -- "true" --> CV
         CG -- "false" --> CR{"recipe\n.ctx_size?"}
-        CR -- "Some(v)" --> CRV["recipe value\ne.g. 2048"]
-        CR -- "null" --> CDV["CLI baseline\ne.g. 4096"]
+        CR -- "Some(v)" --> CRV
+        CR -- "null" --> CDV
     end
 ```
 
@@ -539,34 +547,28 @@ std.log.info("Temperature: {d}, Top-P: {d}, Max tokens: {d}",
 The preset array is a priority list. More constrained entries go first so they win before broader wildcards consume the match.
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': {
-  'primaryColor': '#e8f0fe',
-  'primaryTextColor': '#1a1a2e',
-  'primaryBorderColor': '#4a6cf7',
-  'lineColor': '#4a6cf7',
-  'secondaryColor': '#f0f4ff',
-  'tertiaryColor': '#f8f9ff',
-  'edgeLabelBackground': '#ffffff',
-  'clusterBkg': '#f0f4ff',
-  'clusterBorder': '#4a6cf7',
-  'titleColor': '#1a1a2e',
-  'nodeTextColor': '#1a1a2e',
-  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
-}}}%%
 graph LR
-    Any["Any model\nAny quant\n(arch='', quant='')"]
-    AnyQ["Specific model\nAny quant\n(quant='')"]
-    Exact["Specific model\nSpecific quant"]
+    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
+    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
+    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
+    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
+    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
+    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
+
+    Exact["Specific model\nSpecific quant"]:::setup
+    AnyQ["Specific model\nAny quant\n(quant='')"]:::migration
+    Any["Any model\nAny quant\n(arch='', quant='')"]:::optional
+    Fallback["Recipe.default\n(all nulls)"]:::danger
 
     Exact -->|"most specific\ncheck first"| AnyQ
     AnyQ -->|"narrower before\nbroader"| Any
-    Any -->|"last resort\nbefore null"| Fallback["Recipe.default\n(all nulls)"]
+    Any -->|"last resort\nbefore null"| Fallback
 
     subgraph Examples["Example preset order in array"]
         direction TB
-        P1["qwen35 + Metal + MLX_4bit"]
-        P2["qwen3 + Metal + (any quant)"]
-        P3["(any model) + CPU + (any quant)"]
+        P1["qwen35 + Metal + MLX_4bit"]:::setup
+        P2["qwen3 + Metal + (any quant)"]:::migration
+        P3["(any model) + CPU + (any quant)"]:::optional
         P1 --> P2 --> P3
     end
 ```

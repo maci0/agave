@@ -11,27 +11,26 @@ Language models don't see text — they see **tokens**, which are integer IDs re
 The tokenizer converts between text and token IDs:
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': {
-  'primaryColor': '#e8f0fe',
-  'primaryTextColor': '#1a1a2e',
-  'primaryBorderColor': '#4a6cf7',
-  'lineColor': '#4a6cf7',
-  'secondaryColor': '#f0f4ff',
-  'tertiaryColor': '#f8f9ff',
-  'edgeLabelBackground': '#ffffff',
-  'clusterBkg': '#f0f4ff',
-  'clusterBorder': '#4a6cf7',
-  'titleColor': '#1a1a2e',
-  'nodeTextColor': '#1a1a2e',
-  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
-}}}%%
 flowchart LR
-    Raw["Raw Text\n\"Hello, world!\""] --> Tok["BPE Tokenizer\nbpe.zig"]
-    Tok --> IDs["Token IDs\n[15496, 11, 995, 0]"]
-    IDs --> Embed["Embedding Table\n[vocab_size × n_embd]"]
-    Embed --> Vec["Float Vectors\nready for the model"]
+    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
+    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
+    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
+    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
+    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
+    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
 
-    IDs -->|"decode path"| Back["\"Hello, world!\""]
+    Raw["Raw Text\n\"Hello, world!\""]:::setup
+    Tok["BPE Tokenizer\nbpe.zig"]:::sync
+    IDs["Token IDs\n[15496, 11, 995, 0]"]:::migration
+    Embed["Embedding Table\n[vocab_size × n_embd]"]:::setup
+    Vec["Float Vectors\nready for the model"]:::success
+    Back["\"Hello, world!\""]:::success
+
+    Raw --> Tok
+    Tok --> IDs
+    IDs --> Embed
+    Embed --> Vec
+    IDs -->|"decode path"| Back
 
     subgraph Vocab["Vocabulary (32K–256K entries)"]
         IDs
@@ -47,29 +46,26 @@ flowchart LR
 **BPE (Byte Pair Encoding)** is the most common algorithm. It works by iteratively merging the most frequent pair of adjacent symbols:
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': {
-  'primaryColor': '#e8f0fe',
-  'primaryTextColor': '#1a1a2e',
-  'primaryBorderColor': '#4a6cf7',
-  'lineColor': '#4a6cf7',
-  'secondaryColor': '#f0f4ff',
-  'tertiaryColor': '#f8f9ff',
-  'edgeLabelBackground': '#ffffff',
-  'clusterBkg': '#f0f4ff',
-  'clusterBorder': '#4a6cf7',
-  'titleColor': '#1a1a2e',
-  'nodeTextColor': '#1a1a2e',
-  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
-}}}%%
 flowchart TD
-    Start["Input bytes\nH · e · l · l · o"] -->|"find most frequent pair"| S1["Merge: l+l → ll\nH · e · ll · o"]
-    S1 -->|"find next most frequent pair"| S2["Merge: H+e → He\nHe · ll · o"]
-    S2 -->|"find next most frequent pair"| S3["Merge: He+ll → Hell\nHell · o"]
-    S3 -->|"find next most frequent pair"| S4["Merge: Hell+o → Hello\nHello"]
-    S4 --> Done["Token: Hello\nID: 15496"]
+    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
+    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
+    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
+    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
+    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
+    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
 
-    style Start fill:#f5f5f5
-    style Done fill:#d4edda
+    Start["Input bytes\nH · e · l · l · o"]:::setup
+    S1["Merge: l+l → ll\nH · e · ll · o"]:::migration
+    S2["Merge: H+e → He\nHe · ll · o"]:::migration
+    S3["Merge: He+ll → Hell\nHell · o"]:::migration
+    S4["Merge: Hell+o → Hello\nHello"]:::migration
+    Done["Token: Hello\nID: 15496"]:::success
+
+    Start -->|"find most frequent pair"| S1
+    S1 -->|"find next most frequent pair"| S2
+    S2 -->|"find next most frequent pair"| S3
+    S3 -->|"find next most frequent pair"| S4
+    S4 --> Done
 ```
 
 1. Start with individual bytes: `H e l l o`
@@ -97,45 +93,39 @@ The **vocabulary size** (vocab_size) is the total number of distinct tokens. Mod
 | **SPM** | Greedy longest-match | Gemma | Not needed — matches vocabulary entries directly |
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': {
-  'primaryColor': '#e8f0fe',
-  'primaryTextColor': '#1a1a2e',
-  'primaryBorderColor': '#4a6cf7',
-  'lineColor': '#4a6cf7',
-  'secondaryColor': '#f0f4ff',
-  'tertiaryColor': '#f8f9ff',
-  'edgeLabelBackground': '#ffffff',
-  'clusterBkg': '#f0f4ff',
-  'clusterBorder': '#4a6cf7',
-  'titleColor': '#1a1a2e',
-  'nodeTextColor': '#1a1a2e',
-  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
-}}}%%
 flowchart TB
-    Input["Input text\n\"unhappiness\""]
+    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
+    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
+    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
+    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
+    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
+    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
+
+    Input["Input text\n\"unhappiness\""]:::setup
+    Out["Token ID sequence"]:::success
 
     subgraph BPE["BPE — Byte Pair Encoding (Qwen, GPT)"]
         direction TB
-        B1["Start: u·n·h·a·p·p·i·n·e·s·s\n(individual bytes)"]
-        B2["Apply merge table\n(learned during training)"]
-        B3["un · hap · pi · ness\n(pairs merged by frequency rank)"]
-        B4["Token IDs\nfrom merge result"]
+        B1["Start: u·n·h·a·p·p·i·n·e·s·s\n(individual bytes)"]:::setup
+        B2["Apply merge table\n(learned during training)"]:::sync
+        B3["un · hap · pi · ness\n(pairs merged by frequency rank)"]:::migration
+        B4["Token IDs\nfrom merge result"]:::success
         B1 --> B2 --> B3 --> B4
     end
 
     subgraph SPM["SPM — SentencePiece (Gemma)"]
         direction TB
-        S1["Start: full string\n\"unhappiness\""]
-        S2["Greedy longest match\nagainst vocabulary"]
-        S3["▁un · happiness\n(longest vocab entries win)"]
-        S4["Token IDs\nfrom matched entries"]
+        S1["Start: full string\n\"unhappiness\""]:::setup
+        S2["Greedy longest match\nagainst vocabulary"]:::sync
+        S3["▁un · happiness\n(longest vocab entries win)"]:::migration
+        S4["Token IDs\nfrom matched entries"]:::success
         S1 --> S2 --> S3 --> S4
     end
 
     Input --> BPE
     Input --> SPM
 
-    BPE -->|"needs merge table"| Out["Token ID sequence"]
+    BPE -->|"needs merge table"| Out
     SPM -->|"vocab entries only"| Out
 ```
 
@@ -173,29 +163,30 @@ The tokenizer tracks these IDs for chat template formatting and end-of-generatio
 Qwen/GPT-style tokenizers use **byte-level** encoding where every possible byte (0x00–0xFF) maps to a printable Unicode character. For example, a space (0x20) is represented as `Ġ` (U+0120). This means:
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': {
-  'primaryColor': '#e8f0fe',
-  'primaryTextColor': '#1a1a2e',
-  'primaryBorderColor': '#4a6cf7',
-  'lineColor': '#4a6cf7',
-  'secondaryColor': '#f0f4ff',
-  'tertiaryColor': '#f8f9ff',
-  'edgeLabelBackground': '#ffffff',
-  'clusterBkg': '#f0f4ff',
-  'clusterBorder': '#4a6cf7',
-  'titleColor': '#1a1a2e',
-  'nodeTextColor': '#1a1a2e',
-  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
-}}}%%
 flowchart LR
-    Text["\" hello\""] --> Bytes["Raw Bytes\n0x20 0x68 0x65 0x6C 0x6C 0x6F"]
-    Bytes --> Map["Byte→Unicode Map\n256 printable chars"]
-    Map --> Visible["Ġ h e l l o\n(BPE-safe alphabet)"]
-    Visible --> Merge["BPE Merges\napplied normally"]
-    Merge --> Token["Token: Ġhello\n(space included in token)"]
+    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
+    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
+    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
+    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
+    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
+    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
+
+    Text["\" hello\""]:::setup
+    Bytes["Raw Bytes\n0x20 0x68 0x65 0x6C 0x6C 0x6F"]:::migration
+    Map["Byte→Unicode Map\n256 printable chars"]:::setup
+    Visible["Ġ h e l l o\n(BPE-safe alphabet)"]:::migration
+    Merge["BPE Merges\napplied normally"]:::sync
+    Token["Token: Ġhello\n(space included in token)"]:::success
+    NeverUnk["No unknown characters\nevery byte 0x00–0xFF is covered"]:::optional
+
+    Text --> Bytes
+    Bytes --> Map
+    Map --> Visible
+    Visible --> Merge
+    Merge --> Token
 
     subgraph "Why byte-level?"
-        NeverUnk["No unknown characters\nevery byte 0x00–0xFF is covered"]
+        NeverUnk
     end
 ```
 
@@ -208,32 +199,30 @@ flowchart LR
 The first operation in the forward pass converts a token ID into a **vector** (a 1D array of numbers). The model has an **embedding** (a learned numerical representation — a fixed-size array of floats that encodes the token's meaning) **table** — a **matrix** (a 2D array) of shape `[vocab_size × n_embd]` where `vocab_size` is the total number of tokens in the vocabulary (e.g., 128K) and `n_embd` is the **embedding dimension** (the size/length of each vector — how many numbers it contains, typically 1024–8192 floating-point numbers). Each row is the learned representation of one token.
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': {
-  'primaryColor': '#e8f0fe',
-  'primaryTextColor': '#1a1a2e',
-  'primaryBorderColor': '#4a6cf7',
-  'lineColor': '#4a6cf7',
-  'secondaryColor': '#f0f4ff',
-  'tertiaryColor': '#f8f9ff',
-  'edgeLabelBackground': '#ffffff',
-  'clusterBkg': '#f0f4ff',
-  'clusterBorder': '#4a6cf7',
-  'titleColor': '#1a1a2e',
-  'nodeTextColor': '#1a1a2e',
-  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
-}}}%%
 flowchart LR
-    TID["Token ID\ne.g. 15496"] -->|"row index"| Lookup["Embedding Table\n[vocab_size × n_embd]\ne.g. 128K × 4096"]
-    Lookup -->|"read one row"| Vec["Float Vector\n[4096 float32s]\n≈ 16 KB"]
-    Vec --> Layers["Transformer Layers\nattention + FFN × N"]
-    Layers --> Hidden["Final Hidden State\n[4096 float32s]"]
-    Hidden --> Proj["Output Projection\n[vocab_size × n_embd]"]
-    Proj --> Logits["Logits\n[vocab_size scores]"]
-    Logits -->|"argmax"| NextTok["Next Token ID"]
+    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
+    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
+    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
+    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
+    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
+    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
 
-    style Lookup fill:#fff3cd
-    style Vec fill:#d4edda
-    style Logits fill:#d1ecf1
+    TID["Token ID\ne.g. 15496"]:::setup
+    Lookup["Embedding Table\n[vocab_size × n_embd]\ne.g. 128K × 4096"]:::setup
+    Vec["Float Vector\n[4096 float32s]\n≈ 16 KB"]:::success
+    Layers["Transformer Layers\nattention + FFN × N"]:::sync
+    Hidden["Final Hidden State\n[4096 float32s]"]:::migration
+    Proj["Output Projection\n[vocab_size × n_embd]"]:::setup
+    Logits["Logits\n[vocab_size scores]"]:::migration
+    NextTok["Next Token ID"]:::success
+
+    TID -->|"row index"| Lookup
+    Lookup -->|"read one row"| Vec
+    Vec --> Layers
+    Layers --> Hidden
+    Hidden --> Proj
+    Proj --> Logits
+    Logits -->|"argmax"| NextTok
 ```
 
 **Note on terminology:** Machine learning uses the term **tensor** for multi-dimensional arrays — a **scalar** (single number, 0D), vector (1D), matrix (2D), or higher-dimensional array (3D, 4D, etc.) are all tensors. Throughout this tutorial we use the more specific terms (scalar/vector/matrix) since nearly all operations are 0D, 1D, or 2D, but you'll see "tensor" in the code and documentation referring to these same arrays.
@@ -255,42 +244,36 @@ This is the **largest single GEMV** (matrix-vector multiply — multiplying a we
 After projection, **argmax** (the operation that finds the index of the maximum value) over the logits gives the predicted next token ID.
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': {
-  'primaryColor': '#e8f0fe',
-  'primaryTextColor': '#1a1a2e',
-  'primaryBorderColor': '#4a6cf7',
-  'lineColor': '#4a6cf7',
-  'secondaryColor': '#f0f4ff',
-  'tertiaryColor': '#f8f9ff',
-  'edgeLabelBackground': '#ffffff',
-  'clusterBkg': '#f0f4ff',
-  'clusterBorder': '#4a6cf7',
-  'titleColor': '#1a1a2e',
-  'nodeTextColor': '#1a1a2e',
-  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
-}}}%%
 flowchart LR
-    Hidden["Final Hidden State\n[n_embd floats]\ne.g. 4096-dim"] -->|"GEMV — largest op\nin the entire model"| Proj
+    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
+    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
+    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
+    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
+    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
+    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
+
+    Hidden["Final Hidden State\n[n_embd floats]\ne.g. 4096-dim"]:::migration
+    Raw["Raw logit scores\n[vocab_size floats]"]:::migration
+    Best["Predicted token ID\n(highest score wins)"]:::success
+    Decode["Decode to text\n\"Paris\""]:::success
+
+    Hidden -->|"GEMV — largest op\nin the entire model"| Proj
 
     subgraph Proj["Output Projection  W_output @ hidden"]
         direction TB
-        Wout["W_output matrix\n[vocab_size × n_embd]\ne.g. 128K × 4096 = 512M weights"]
-        Wout -->|"one dot-product\nper vocabulary entry"| Raw["Raw logit scores\n[vocab_size floats]"]
+        Wout["W_output matrix\n[vocab_size × n_embd]\ne.g. 128K × 4096 = 512M weights"]:::setup
+        Wout -->|"one dot-product\nper vocabulary entry"| Raw
     end
 
-    Raw -->|"argmax"| Best["Predicted token ID\n(highest score wins)"]
-    Best --> Decode["Decode to text\n\"Paris\""]
+    Raw -->|"argmax"| Best
+    Best --> Decode
 
     subgraph TiedEmbed["Tied Embeddings (Gemma3)"]
         direction LR
-        Shared["Single weight matrix\n[vocab_size × n_embd]\nshared by input + output"]
-        Saving["Memory saved:\nvocab_size × n_embd × dtype_bytes\n128K × 4096 × 2 bytes = 1 GB"]
+        Shared["Single weight matrix\n[vocab_size × n_embd]\nshared by input + output"]:::optional
+        Saving["Memory saved:\nvocab_size × n_embd × dtype_bytes\n128K × 4096 × 2 bytes = 1 GB"]:::optional
         Shared --- Saving
     end
-
-    style Wout fill:#fff3cd
-    style Best fill:#d4edda
-    style Shared fill:#e8f5e9
 ```
 
 ## The Generation Loop
@@ -310,48 +293,48 @@ while not done:
 ```
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': {
-  'primaryColor': '#e8f0fe',
-  'primaryTextColor': '#1a1a2e',
-  'primaryBorderColor': '#4a6cf7',
-  'lineColor': '#4a6cf7',
-  'secondaryColor': '#f0f4ff',
-  'tertiaryColor': '#f8f9ff',
-  'edgeLabelBackground': '#ffffff',
-  'clusterBkg': '#f0f4ff',
-  'clusterBorder': '#4a6cf7',
-  'titleColor': '#1a1a2e',
-  'nodeTextColor': '#1a1a2e',
-  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
-}}}%%
 flowchart TB
-    Prompt["Prompt tokens\n\"The capital of France is\"\n[464, 3361, 286, 4881, 318]"]
+    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
+    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
+    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
+    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
+    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
+    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
+
+    Prompt["Prompt tokens\n\"The capital of France is\"\n[464, 3361, 286, 4881, 318]"]:::setup
+    Done["Generation complete"]:::success
 
     subgraph Prefill["Prefill phase — process prompt"]
         direction LR
-        P1["token 464\n'The'"] --> Fwd1["forward()"]
-        P2["token 3361\n'capital'"] --> Fwd2["forward()"]
-        P3["..."] --> FwdN["forward()"]
+        P1["token 464\n'The'"]:::setup
+        Fwd1["forward()"]:::sync
+        P2["token 3361\n'capital'"]:::setup
+        Fwd2["forward()"]:::sync
+        P3["..."]:::setup
+        FwdN["forward()"]:::sync
+        P1 --> Fwd1
+        P2 --> Fwd2
+        P3 --> FwdN
         Fwd1 -->|"KV cache\nbuilt up"| Fwd2
         Fwd2 -->|"KV cache\nbuilt up"| FwdN
     end
 
     subgraph Decode["Decode phase — autoregressive loop"]
         direction TB
-        ArgMax["argmax(logits)\npick best token"] -->|"e.g. token 6342\n' Paris'"| Print["Output token\nto terminal"]
+        ArgMax["argmax(logits)\npick best token"]:::sync
+        Print["Output token\nto terminal"]:::success
+        EmbNew["embed new token\nfeed back as input"]:::migration
+        ForwardNew["forward()\none more pass\nthrough the model"]:::sync
+        ArgMax -->|"e.g. token 6342\n' Paris'"| Print
         Print --> Check{{"next == EOS?\nor max_tokens?"}}
-        Check -->|"no — keep going"| EmbNew["embed new token\nfeed back as input"]
-        EmbNew --> ForwardNew["forward()\none more pass\nthrough the model"]
+        Check -->|"no — keep going"| EmbNew
+        EmbNew --> ForwardNew
         ForwardNew --> ArgMax
-        Check -->|"yes — stop"| Done["Generation complete"]
+        Check -->|"yes — stop"| Done
     end
 
     Prompt --> Prefill
     Prefill -->|"final logits"| Decode
-
-    style Prompt fill:#f0f4ff
-    style Done fill:#d4edda
-    style Check fill:#fff3cd
 ```
 
 This is why inference speed matters — generating 100 tokens requires 100 sequential forward passes through the entire model. Each pass is dominated by GEMV (matrix-vector multiply), which is memory-bandwidth bound. The rest of this tutorial series explains every component of that forward pass and how Agave optimizes it.

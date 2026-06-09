@@ -76,4 +76,4 @@ research/kernels/vision_ref_dumps/
 /test_*.png
 
 # Stray operator manifests (not part of this project)
-pelorus-*.yaml
+pelorus-*.yamldocs/diagrams/

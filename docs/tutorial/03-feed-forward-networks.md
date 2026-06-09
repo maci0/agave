@@ -11,30 +11,29 @@ While attention lets tokens communicate with each other, the FFN processes each 
 The standard FFN structure in modern transformers:
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': {
-  'primaryColor': '#e8f0fe',
-  'primaryTextColor': '#1a1a2e',
-  'primaryBorderColor': '#4a6cf7',
-  'lineColor': '#4a6cf7',
-  'secondaryColor': '#f0f4ff',
-  'tertiaryColor': '#f8f9ff',
-  'edgeLabelBackground': '#ffffff',
-  'clusterBkg': '#f0f4ff',
-  'clusterBorder': '#4a6cf7',
-  'titleColor': '#1a1a2e',
-  'nodeTextColor': '#1a1a2e',
-  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
-}}}%%
 flowchart LR
-    Input["Hidden State\n(e.g. 2304 floats)"] --> Gate["gate_proj\n(2304 → 12288)"]
-    Input --> Up["up_proj\n(2304 → 12288)"]
+    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
+    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
+    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
+    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
+    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
+    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
 
-    Gate --> Act["SiLU activation\nx * sigmoid(x)"]
-    Act --> Mul["Element-wise\nmultiply ⊗"]
+    Input["Hidden State\n(e.g. 2304 floats)"]:::setup
+    Gate["gate_proj\n(2304 → 12288)"]:::sync
+    Up["up_proj\n(2304 → 12288)"]:::sync
+    Act["SiLU activation\nx * sigmoid(x)"]:::migration
+    Mul["Element-wise\nmultiply ⊗"]:::migration
+    Down["down_proj\n(12288 → 2304)"]:::sync
+    Output["FFN Output\n(2304 floats)"]:::success
+
+    Input --> Gate
+    Input --> Up
+    Gate --> Act
+    Act --> Mul
     Up --> Mul
-
-    Mul --> Down["down_proj\n(12288 → 2304)"]
-    Down --> Output["FFN Output\n(2304 floats)"]
+    Mul --> Down
+    Down --> Output
 
     subgraph Gate Mechanism
         Act
@@ -53,30 +52,32 @@ Notice the structure: `activation(gate_proj(x)) * up_proj(x)`. The `gate_proj` o
 ## Activation Functions
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': {
-  'primaryColor': '#e8f0fe',
-  'primaryTextColor': '#1a1a2e',
-  'primaryBorderColor': '#4a6cf7',
-  'lineColor': '#4a6cf7',
-  'secondaryColor': '#f0f4ff',
-  'tertiaryColor': '#f8f9ff',
-  'edgeLabelBackground': '#ffffff',
-  'clusterBkg': '#f0f4ff',
-  'clusterBorder': '#4a6cf7',
-  'titleColor': '#1a1a2e',
-  'nodeTextColor': '#1a1a2e',
-  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
-}}}%%
 flowchart LR
-    Input["Input value x"] --> SiLU["SiLU / Swish\nx · sigmoid(x)\n\nSmooth, passes positive,\ndampens negative"]
-    Input --> GELU["GELU\n≈ 0.5x(1 + tanh(...))\n\nSimilar to SiLU,\nGaussian-weighted"]
-    Input --> ReLU2["ReLU²\nmax(0, x)²\n\nHard zero cutoff,\nsquared positives"]
-    Input --> Sigmoid["Sigmoid\n1 / (1 + e^-x)\n\nOutput in (0, 1)\nUsed for gates/routing"]
+    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
+    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
+    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
+    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
+    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
+    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
 
-    SiLU --> FFN["FFN gate\n(most models)"]
-    GELU --> FFN2["FFN gate\n(Gemma 3)"]
-    ReLU2 --> FFN3["FFN gate\n(Nemotron-Nano MoE)"]
-    Sigmoid --> Router["MoE router\n(GLM-4)"]
+    Input["Input value x"]:::setup
+    SiLU["SiLU / Swish\nx · sigmoid(x)\n\nSmooth, passes positive,\ndampens negative"]:::migration
+    GELU["GELU\n≈ 0.5x(1 + tanh(...))\n\nSimilar to SiLU,\nGaussian-weighted"]:::migration
+    ReLU2["ReLU²\nmax(0, x)²\n\nHard zero cutoff,\nsquared positives"]:::migration
+    Sigmoid["Sigmoid\n1 / (1 + e^-x)\n\nOutput in (0, 1)\nUsed for gates/routing"]:::migration
+    FFN["FFN gate\n(most models)"]:::success
+    FFN2["FFN gate\n(Gemma 3)"]:::success
+    FFN3["FFN gate\n(Nemotron-Nano MoE)"]:::success
+    Router["MoE router\n(GLM-4)"]:::success
+
+    Input --> SiLU
+    Input --> GELU
+    Input --> ReLU2
+    Input --> Sigmoid
+    SiLU --> FFN
+    GELU --> FFN2
+    ReLU2 --> FFN3
+    Sigmoid --> Router
 ```
 
 | Function | Formula | Used by |
@@ -94,39 +95,38 @@ flowchart LR
 Standard transformers use the same FFN weights for every token. MoE models have multiple FFN "experts" and a **router** (a learned selection mechanism that scores and picks which experts should process each token) that selects which ones to use:
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': {
-  'primaryColor': '#e8f0fe',
-  'primaryTextColor': '#1a1a2e',
-  'primaryBorderColor': '#4a6cf7',
-  'lineColor': '#4a6cf7',
-  'secondaryColor': '#f0f4ff',
-  'tertiaryColor': '#f8f9ff',
-  'edgeLabelBackground': '#ffffff',
-  'clusterBkg': '#f0f4ff',
-  'clusterBorder': '#4a6cf7',
-  'titleColor': '#1a1a2e',
-  'nodeTextColor': '#1a1a2e',
-  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
-}}}%%
 flowchart TD
-    Token["Token hidden state\n(e.g. 4096 floats)"] --> Router["Router\nhidden @ gate_weight\n→ 128 scores"]
+    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
+    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
+    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
+    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
+    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
+    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
 
-    Router -->|"top-6\nscores"| Norm["Softmax normalize\nselected scores\n→ weights [0.19, 0.18, ...]"]
+    Token["Token hidden state\n(e.g. 4096 floats)"]:::setup
+    Router["Router\nhidden @ gate_weight\n→ 128 scores"]:::sync
+    Norm["Softmax normalize\nselected scores\n→ weights [0.19, 0.18, ...]"]:::migration
+    E3["Expert 3\n'programming'\nFFN(hidden)"]:::sync
+    E1["Expert 1\n'syntax'\nFFN(hidden)"]:::sync
+    E87["Expert 87\n'nouns'\nFFN(hidden)"]:::sync
+    Edots["... 3 more\nexperts ..."]:::sync
+    Shared["Shared Expert\n(always active)\nFFN(hidden)"]:::optional
+    Sum["Weighted sum\nΣ weight_i · expert_i(x)"]:::migration
+    Output["FFN Output"]:::success
 
-    Norm --> E3["Expert 3\n'programming'\nFFN(hidden)"]
-    Norm --> E1["Expert 1\n'syntax'\nFFN(hidden)"]
-    Norm --> E87["Expert 87\n'nouns'\nFFN(hidden)"]
-    Norm --> Edots["... 3 more\nexperts ..."]
-
-    Token --> Shared["Shared Expert\n(always active)\nFFN(hidden)"]
-
-    E3 -->|"× 0.193"| Sum["Weighted sum\nΣ weight_i · expert_i(x)"]
+    Token --> Router
+    Router -->|"top-6\nscores"| Norm
+    Norm --> E3
+    Norm --> E1
+    Norm --> E87
+    Norm --> Edots
+    Token --> Shared
+    E3 -->|"× 0.193"| Sum
     E1 -->|"× 0.182"| Sum
     E87 -->|"× 0.169"| Sum
     Edots -->|"× ..."| Sum
     Shared -->|"+ 1.0"| Sum
-
-    Sum --> Output["FFN Output"]
+    Sum --> Output
 ```
 
 ```
@@ -183,32 +183,36 @@ Expert selection uses **stack-allocated** arrays (fixed-size buffers on the call
 MoE's key advantage is **sparse activation** — only K of N experts run per token. The diagram below compares how much compute each model actually performs versus how many weights it stores:
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': {
-  'primaryColor': '#e8f0fe',
-  'primaryTextColor': '#1a1a2e',
-  'primaryBorderColor': '#4a6cf7',
-  'lineColor': '#4a6cf7',
-  'secondaryColor': '#f0f4ff',
-  'tertiaryColor': '#f8f9ff',
-  'edgeLabelBackground': '#ffffff',
-  'clusterBkg': '#f0f4ff',
-  'clusterBorder': '#4a6cf7',
-  'titleColor': '#1a1a2e',
-  'nodeTextColor': '#1a1a2e',
-  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
-}}}%%
 flowchart LR
+    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
+    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
+    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
+    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
+    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
+    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
+
     subgraph Dense["Dense 30B — every weight active"]
-        D_in["Token\nhidden state"] --> D_FFN["Single FFN\n30B parameters\nALL active"]
-        D_FFN --> D_out["Output\n30B multiplies\nper token"]
+        D_in["Token\nhidden state"]:::setup
+        D_FFN["Single FFN\n30B parameters\nALL active"]:::sync
+        D_out["Output\n30B multiplies\nper token"]:::success
+
+        D_in --> D_FFN
+        D_FFN --> D_out
     end
 
     subgraph MoE["MoE 30B — sparse activation"]
-        M_in["Token\nhidden state"] --> M_Router["Router\n(tiny: ~0.01B)"]
-        M_Router -->|"top-2 selected\nout of 128"| M_E1["Expert A\n~0.23B active"]
-        M_Router -->|"top-2 selected\nout of 128"| M_E2["Expert B\n~0.23B active"]
-        M_Router -.->|"126 experts\nNOT activated"| M_Idle["Experts 3–128\n~29.5B weights\nidle in memory"]
-        M_E1 --> M_out["Output\n~0.5B multiplies\nper token"]
+        M_in["Token\nhidden state"]:::setup
+        M_Router["Router\n(tiny: ~0.01B)"]:::sync
+        M_E1["Expert A\n~0.23B active"]:::sync
+        M_E2["Expert B\n~0.23B active"]:::sync
+        M_Idle["Experts 3–128\n~29.5B weights\nidle in memory"]:::optional
+        M_out["Output\n~0.5B multiplies\nper token"]:::success
+
+        M_in --> M_Router
+        M_Router -->|"top-2 selected\nout of 128"| M_E1
+        M_Router -->|"top-2 selected\nout of 128"| M_E2
+        M_Router -.->|"126 experts\nNOT activated"| M_Idle
+        M_E1 --> M_out
         M_E2 --> M_out
     end
 
@@ -242,37 +246,46 @@ Some models store fused `gate_up_exps` (gate and up projections concatenated per
 When multiple experts share the same input vector (common in decode), Agave batches their gate+up GEMVs into a single `gemvMulti` dispatch. This parallelizes all output rows across both experts in one thread pool call instead of two separate dispatches:
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': {
-  'primaryColor': '#e8f0fe',
-  'primaryTextColor': '#1a1a2e',
-  'primaryBorderColor': '#4a6cf7',
-  'lineColor': '#4a6cf7',
-  'secondaryColor': '#f0f4ff',
-  'tertiaryColor': '#f8f9ff',
-  'edgeLabelBackground': '#ffffff',
-  'clusterBkg': '#f0f4ff',
-  'clusterBorder': '#4a6cf7',
-  'titleColor': '#1a1a2e',
-  'nodeTextColor': '#1a1a2e',
-  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
-}}}%%
 flowchart TD
+    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
+    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
+    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
+    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
+    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
+    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
+
     subgraph Sequential["Sequential dispatch — 2 thread pool calls"]
-        S_in["Input vector x\n(shared by all experts)"] --> S_D1["Dispatch 1\ngate_proj expert A\nthread pool: serialize"]
-        S_D1 --> S_W1["Wait for completion"]
-        S_W1 --> S_D2["Dispatch 2\nup_proj expert A\nthread pool: serialize"]
-        S_D2 --> S_W2["Wait for completion"]
-        S_W2 --> S_D3["Dispatch 3..N\nrepeat for expert B, C...\n2 calls per expert"]
+        S_in["Input vector x\n(shared by all experts)"]:::setup
+        S_D1["Dispatch 1\ngate_proj expert A\nthread pool: serialize"]:::migration
+        S_W1["Wait for completion"]:::danger
+        S_D2["Dispatch 2\nup_proj expert A\nthread pool: serialize"]:::migration
+        S_W2["Wait for completion"]:::danger
+        S_D3["Dispatch 3..N\nrepeat for expert B, C...\n2 calls per expert"]:::migration
+
+        S_in --> S_D1
+        S_D1 --> S_W1
+        S_W1 --> S_D2
+        S_D2 --> S_W2
+        S_W2 --> S_D3
     end
 
     subgraph Batched["gemvMulti — 1 thread pool call"]
-        B_in["Input vector x\n(shared by all experts)"] --> B_ops["Build GemvOp array\nop[0]: gate expert A\nop[1]: up expert A\nop[2]: gate expert B\nop[3]: up expert B\n..."]
-        B_ops --> B_dispatch["gemvMulti dispatch\nall output rows\nin parallel"]
-        B_dispatch --> B_gate_A["gate buf A\n(parallel)"]
-        B_dispatch --> B_up_A["up buf A\n(parallel)"]
-        B_dispatch --> B_gate_B["gate buf B\n(parallel)"]
-        B_dispatch --> B_up_B["up buf B\n(parallel)"]
-        B_gate_A --> B_out["Results ready\n(single barrier)"]
+        B_in["Input vector x\n(shared by all experts)"]:::setup
+        B_ops["Build GemvOp array\nop[0]: gate expert A\nop[1]: up expert A\nop[2]: gate expert B\nop[3]: up expert B\n..."]:::migration
+        B_dispatch["gemvMulti dispatch\nall output rows\nin parallel"]:::sync
+        B_gate_A["gate buf A\n(parallel)"]:::sync
+        B_up_A["up buf A\n(parallel)"]:::sync
+        B_gate_B["gate buf B\n(parallel)"]:::sync
+        B_up_B["up buf B\n(parallel)"]:::sync
+        B_out["Results ready\n(single barrier)"]:::success
+
+        B_in --> B_ops
+        B_ops --> B_dispatch
+        B_dispatch --> B_gate_A
+        B_dispatch --> B_up_A
+        B_dispatch --> B_gate_B
+        B_dispatch --> B_up_B
+        B_gate_A --> B_out
         B_up_A --> B_out
         B_gate_B --> B_out
         B_up_B --> B_out
@@ -292,34 +305,38 @@ be.gemvMulti(input, &ops, k);
 On Metal GPU, the three FFN GEMVs (gate + up + down) can be fused into a single dispatch via the **megakernel** system. Instead of 3 separate GPU launches with memory round-trips, one kernel reads the input once, computes all three projections plus the activation, and writes the final output. This eliminates inter-kernel memory traffic and reduces dispatch overhead.
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': {
-  'primaryColor': '#e8f0fe',
-  'primaryTextColor': '#1a1a2e',
-  'primaryBorderColor': '#4a6cf7',
-  'lineColor': '#4a6cf7',
-  'secondaryColor': '#f0f4ff',
-  'tertiaryColor': '#f8f9ff',
-  'edgeLabelBackground': '#ffffff',
-  'clusterBkg': '#f0f4ff',
-  'clusterBorder': '#4a6cf7',
-  'titleColor': '#1a1a2e',
-  'nodeTextColor': '#1a1a2e',
-  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
-}}}%%
 flowchart LR
-    subgraph Unfused["3 separate GPU dispatches (standard)"]
-        U_in["Input\n(GPU memory)"] -->|"read"| U_gate["Dispatch 1\ngate_proj GEMV"]
-        U_gate -->|"write → read"| U_up["Dispatch 2\nup_proj GEMV"]
-        U_up -->|"write → read"| U_act["Dispatch 3\nSiLU + multiply\n+ down_proj GEMV"]
-        U_act -->|"write"| U_out["Output\n(GPU memory)"]
+    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
+    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
+    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
+    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
+    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
+    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
 
-        U_rt1["round-trip\nto GPU memory"] -.-> U_gate
-        U_rt2["round-trip\nto GPU memory"] -.-> U_up
+    subgraph Unfused["3 separate GPU dispatches (standard)"]
+        U_in["Input\n(GPU memory)"]:::setup
+        U_gate["Dispatch 1\ngate_proj GEMV"]:::migration
+        U_up["Dispatch 2\nup_proj GEMV"]:::migration
+        U_act["Dispatch 3\nSiLU + multiply\n+ down_proj GEMV"]:::migration
+        U_out["Output\n(GPU memory)"]:::danger
+        U_rt1["round-trip\nto GPU memory"]:::danger
+        U_rt2["round-trip\nto GPU memory"]:::danger
+
+        U_in -->|"read"| U_gate
+        U_gate -->|"write → read"| U_up
+        U_up -->|"write → read"| U_act
+        U_act -->|"write"| U_out
+        U_rt1 -.-> U_gate
+        U_rt2 -.-> U_up
     end
 
     subgraph Fused["1 fused megakernel dispatch"]
-        F_in["Input\n(GPU memory)"] -->|"read ONCE"| F_kern["Single kernel\ngate_proj\n+ up_proj\n+ SiLU * gate\n+ down_proj\n(all in registers/threadgroup)"]
-        F_kern -->|"write ONCE"| F_out["Output\n(GPU memory)"]
+        F_in["Input\n(GPU memory)"]:::setup
+        F_kern["Single kernel\ngate_proj\n+ up_proj\n+ SiLU * gate\n+ down_proj\n(all in registers/threadgroup)"]:::sync
+        F_out["Output\n(GPU memory)"]:::success
+
+        F_in -->|"read ONCE"| F_kern
+        F_kern -->|"write ONCE"| F_out
     end
 
     Unfused -->|"--megakernel\neliminates\nmemory round-trips"| Fused

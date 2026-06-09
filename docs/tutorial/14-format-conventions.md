@@ -23,33 +23,32 @@ When llama.cpp converts a HuggingFace model to GGUF, it **transforms** the data 
 Agave inspects the model path at startup: a directory signals SafeTensors (multiple `.safetensors` shards + `config.json`), while a single file signals GGUF. The result is a unified `Format` interface that carries the `is_safetensors` flag so all downstream code can branch on conventions without re-inspecting the path.
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': {
-  'primaryColor': '#e8f0fe',
-  'primaryTextColor': '#1a1a2e',
-  'primaryBorderColor': '#4a6cf7',
-  'lineColor': '#4a6cf7',
-  'secondaryColor': '#f0f4ff',
-  'tertiaryColor': '#f8f9ff',
-  'edgeLabelBackground': '#ffffff',
-  'clusterBkg': '#f0f4ff',
-  'clusterBorder': '#4a6cf7',
-  'titleColor': '#1a1a2e',
-  'nodeTextColor': '#1a1a2e',
-  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
-}}}%%
 flowchart LR
-    Path["Model Path\n(CLI argument)"] --> Check{"Is directory?"}
-    Check -->|"Yes"| ST["SafeTensors\nLoader"]
-    Check -->|"No"| GG["GGUF\nLoader"]
+    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
+    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
+    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
+    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
+    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
+    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
 
-    ST --> FmtST["Format interface\nis_safetensors = true"]
-    GG --> FmtGG["Format interface\nis_safetensors = false"]
+    Path["Model Path\n(CLI argument)"]:::setup
+    ST["SafeTensors\nLoader"]:::setup
+    GG["GGUF\nLoader"]:::setup
+    FmtST["Format interface\nis_safetensors = true"]:::migration
+    FmtGG["Format interface\nis_safetensors = false"]:::migration
+    Conv["Convention\nSelector"]:::sync
+    HFConv["HF conventions\n• KQV order: K,Q,V\n• GQA: interleaved\n• A_log: raw → convert"]:::success
+    LLConv["llama.cpp conventions\n• KQV order: Q,K,V\n• GQA: tiling\n• A_log: pre-converted"]:::success
 
-    FmtST --> Conv["Convention\nSelector"]
+    Path --> Check{"Is directory?"}
+    Check -->|"Yes"| ST
+    Check -->|"No"| GG
+    ST --> FmtST
+    GG --> FmtGG
+    FmtST --> Conv
     FmtGG --> Conv
-
-    Conv -->|"true"| HFConv["HF conventions\n• KQV order: K,Q,V\n• GQA: interleaved\n• A_log: raw → convert"]
-    Conv -->|"false"| LLConv["llama.cpp conventions\n• KQV order: Q,K,V\n• GQA: tiling\n• A_log: pre-converted"]
+    Conv -->|"true"| HFConv
+    Conv -->|"false"| LLConv
 ```
 
 ```zig
@@ -95,41 +94,43 @@ if (is_dir) {
 **Operation:** After causal conv1d, output is split into Q, K, V tensors. The two formats pack these slices in opposite orders inside the same flat buffer, so reading with the wrong offset silently assigns the wrong data to each projection.
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': {
-  'primaryColor': '#e8f0fe',
-  'primaryTextColor': '#1a1a2e',
-  'primaryBorderColor': '#4a6cf7',
-  'lineColor': '#4a6cf7',
-  'secondaryColor': '#f0f4ff',
-  'tertiaryColor': '#f8f9ff',
-  'edgeLabelBackground': '#ffffff',
-  'clusterBkg': '#f0f4ff',
-  'clusterBorder': '#4a6cf7',
-  'titleColor': '#1a1a2e',
-  'nodeTextColor': '#1a1a2e',
-  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
-}}}%%
 flowchart TD
-    Conv["conv1d output\n[key_dim + key_dim + v_dim floats]"]
+    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
+    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
+    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
+    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
+    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
+    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
+
+    Conv["conv1d output\n[key_dim + key_dim + v_dim floats]"]:::setup
+    G0["offset 0\n→ Q  (key_dim floats)"]:::migration
+    G1["offset key_dim\n→ K  (key_dim floats)"]:::migration
+    G2["offset 2×key_dim\n→ V  (v_dim floats)"]:::migration
+    H0["offset 0\n→ K  (key_dim floats)"]:::migration
+    H1["offset key_dim\n→ Q  (key_dim floats)"]:::migration
+    H2["offset 2×key_dim\n→ V  (v_dim floats)"]:::migration
+    QProj["Q projection"]:::success
+    KProj["K projection"]:::success
+    VProj["V projection"]:::success
 
     Conv --> GGUF_Layout
     Conv --> HF_Layout
 
     subgraph GGUF_Layout["GGUF layout  (Q, K, V)"]
-        G0["offset 0\n→ Q  (key_dim floats)"]
-        G1["offset key_dim\n→ K  (key_dim floats)"]
-        G2["offset 2×key_dim\n→ V  (v_dim floats)"]
+        G0
+        G1
+        G2
     end
 
     subgraph HF_Layout["SafeTensors layout  (K, Q, V)"]
-        H0["offset 0\n→ K  (key_dim floats)"]
-        H1["offset key_dim\n→ Q  (key_dim floats)"]
-        H2["offset 2×key_dim\n→ V  (v_dim floats)"]
+        H0
+        H1
+        H2
     end
 
-    G0 --> QProj["Q projection"]
-    G1 --> KProj["K projection"]
-    G2 --> VProj["V projection"]
+    G0 --> QProj
+    G1 --> KProj
+    G2 --> VProj
     H1 --> QProj
     H0 --> KProj
     H2 --> VProj
@@ -185,29 +186,33 @@ const p = DeltaNetParams{
 **Problem:** GQA maps Q heads to KV heads. Two different semantics exist. With 8 V-heads and 2 K-heads, the two formats produce completely different attention patterns even though both are "valid" GQA implementations.
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': {
-  'primaryColor': '#e8f0fe',
-  'primaryTextColor': '#1a1a2e',
-  'primaryBorderColor': '#4a6cf7',
-  'lineColor': '#4a6cf7',
-  'secondaryColor': '#f0f4ff',
-  'tertiaryColor': '#f8f9ff',
-  'edgeLabelBackground': '#ffffff',
-  'clusterBkg': '#f0f4ff',
-  'clusterBorder': '#4a6cf7',
-  'titleColor': '#1a1a2e',
-  'nodeTextColor': '#1a1a2e',
-  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
-}}}%%
 flowchart LR
+    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
+    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
+    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
+    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
+    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
+    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
+
+    V0["V0"]:::setup
+    V1["V1"]:::setup
+    V2["V2"]:::setup
+    V3["V3"]:::setup
+    V4["V4"]:::setup
+    V5["V5"]:::setup
+    V6["V6"]:::setup
+    V7["V7"]:::setup
+    K0["K0"]:::success
+    K1["K1"]:::success
+
     subgraph VHeads["8 V-heads (query heads)"]
-        V0["V0"] & V1["V1"] & V2["V2"] & V3["V3"]
-        V4["V4"] & V5["V5"] & V6["V6"] & V7["V7"]
+        V0 & V1 & V2 & V3
+        V4 & V5 & V6 & V7
     end
 
     subgraph KHeads["2 K-heads (key/value heads)"]
-        K0["K0"]
-        K1["K1"]
+        K0
+        K1
     end
 
     V0 -->|"GGUF: h%2=0"| K0
@@ -301,35 +306,30 @@ if (self.fmt.is_safetensors) {
 **Why the difference?** llama.cpp pre-computes this to avoid calling `exp()` on every token. PyTorch stores the raw value for flexibility.
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': {
-  'primaryColor': '#e8f0fe',
-  'primaryTextColor': '#1a1a2e',
-  'primaryBorderColor': '#4a6cf7',
-  'lineColor': '#4a6cf7',
-  'secondaryColor': '#f0f4ff',
-  'tertiaryColor': '#f8f9ff',
-  'edgeLabelBackground': '#ffffff',
-  'clusterBkg': '#f0f4ff',
-  'clusterBorder': '#4a6cf7',
-  'titleColor': '#1a1a2e',
-  'nodeTextColor': '#1a1a2e',
-  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
-}}}%%
 flowchart TD
+    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
+    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
+    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
+    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
+    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
+    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
+
+    ST_Raw["A_log tensor\nraw log value\n(e.g. -3.2)"]:::setup
+    ST_Conv["init() conversion\n-exp(A_log)\nonce at model load"]:::migration
+    ST_Use["ssm_a[h]\nalready -exp(A_log)\nused directly in decay"]:::sync
+    GG_Pre["A_log tensor\npre-converted by llama.cpp\n-exp(A_log) on disk"]:::setup
+    GG_Use["ssm_a[h]\nalready -exp(A_log)\nused directly in decay"]:::sync
+    Decay["decay = ssm_a[h] * dt\nsame kernel code\nboth formats"]:::success
+
     subgraph ST["SafeTensors path"]
-        ST_Raw["A_log tensor\nraw log value\n(e.g. -3.2)"]
-        ST_Conv["init() conversion\n-exp(A_log)\nonce at model load"]
-        ST_Use["ssm_a[h]\nalready -exp(A_log)\nused directly in decay"]
         ST_Raw -->|"is_safetensors = true"| ST_Conv --> ST_Use
     end
 
     subgraph GG["GGUF path"]
-        GG_Pre["A_log tensor\npre-converted by llama.cpp\n-exp(A_log) on disk"]
-        GG_Use["ssm_a[h]\nalready -exp(A_log)\nused directly in decay"]
         GG_Pre -->|"no conversion needed"| GG_Use
     end
 
-    ST_Use --> Decay["decay = ssm_a[h] * dt\nsame kernel code\nboth formats"]
+    ST_Use --> Decay
     GG_Use --> Decay
 ```
 
@@ -374,38 +374,33 @@ if (self.fmt.is_safetensors) {
 **Impact:** Wrong layout → Q gets half of gate's values, gate gets half of Q's → attention completely broken.
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': {
-  'primaryColor': '#e8f0fe',
-  'primaryTextColor': '#1a1a2e',
-  'primaryBorderColor': '#4a6cf7',
-  'lineColor': '#4a6cf7',
-  'secondaryColor': '#f0f4ff',
-  'tertiaryColor': '#f8f9ff',
-  'edgeLabelBackground': '#ffffff',
-  'clusterBkg': '#f0f4ff',
-  'clusterBorder': '#4a6cf7',
-  'titleColor': '#1a1a2e',
-  'nodeTextColor': '#1a1a2e',
-  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
-}}}%%
 flowchart LR
+    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
+    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
+    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
+    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
+    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
+    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
+
+    GH0["head 0\n[Q0, G0, Q1, G1,\n..., Q_hd-1, G_hd-1]"]:::setup
+    GH1["head 1\n[Q0, G0, Q1, G1,\n..., Q_hd-1, G_hd-1]"]:::setup
+    GHN["head nh-1\n[Q0, G0, Q1, G1,\n..., Q_hd-1, G_hd-1]"]:::setup
+    SH0["head 0\n[Q0, Q1, ..., Q_hd-1,\n G0, G1, ..., G_hd-1]"]:::setup
+    SH1["head 1\n[Q0, Q1, ..., Q_hd-1,\n G0, G1, ..., G_hd-1]"]:::setup
+    SHN["head nh-1\n[Q0, Q1, ..., Q_hd-1,\n G0, G1, ..., G_hd-1]"]:::setup
+    SplitG["q_buf / g_buf\nsplit correctly"]:::success
+
     subgraph GGUFMem["GGUF memory layout — interleaved per element"]
         direction TB
-        GH0["head 0\n[Q0, G0, Q1, G1,\n..., Q_hd-1, G_hd-1]"]
-        GH1["head 1\n[Q0, G0, Q1, G1,\n..., Q_hd-1, G_hd-1]"]
-        GHN["head nh-1\n[Q0, G0, Q1, G1,\n..., Q_hd-1, G_hd-1]"]
         GH0 ~~~ GH1 ~~~ GHN
     end
 
     subgraph STMem["SafeTensors memory layout — concatenated halves"]
         direction TB
-        SH0["head 0\n[Q0, Q1, ..., Q_hd-1,\n G0, G1, ..., G_hd-1]"]
-        SH1["head 1\n[Q0, Q1, ..., Q_hd-1,\n G0, G1, ..., G_hd-1]"]
-        SHN["head nh-1\n[Q0, Q1, ..., Q_hd-1,\n G0, G1, ..., G_hd-1]"]
         SH0 ~~~ SH1 ~~~ SHN
     end
 
-    GGUFMem -->|"stride = i*2\nstride+1 = gate"| SplitG["q_buf / g_buf\nsplit correctly"]
+    GGUFMem -->|"stride = i*2\nstride+1 = gate"| SplitG
     STMem -->|"first half = Q\nsecond half = gate"| SplitG
 ```
 
@@ -494,36 +489,29 @@ fn normAsF32(self: *Qwen35Model, t: TensorInfo, n: usize) [*]const f32 {
 **Key insight:** Each norm weight gets its own permanent f32 buffer. Metal caches the pointer → always correct data.
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': {
-  'primaryColor': '#e8f0fe',
-  'primaryTextColor': '#1a1a2e',
-  'primaryBorderColor': '#4a6cf7',
-  'lineColor': '#4a6cf7',
-  'secondaryColor': '#f0f4ff',
-  'tertiaryColor': '#f8f9ff',
-  'edgeLabelBackground': '#ffffff',
-  'clusterBkg': '#f0f4ff',
-  'clusterBorder': '#4a6cf7',
-  'titleColor': '#1a1a2e',
-  'nodeTextColor': '#1a1a2e',
-  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
-}}}%%
 flowchart TD
+    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
+    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
+    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
+    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
+    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
+    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
+
+    B1["dequant(norm_layer1, scratch)"]:::setup
+    B2["getBufRef(scratch)\ncaches ptr → MTLBuffer A"]:::migration
+    B3["dequant(norm_layer2, scratch)\noverwrites scratch memory"]:::danger
+    B4["getBufRef(scratch)\nreturns CACHED MTLBuffer A\n(stale — still points to layer1 data)"]:::danger
+    B5["GPU reads layer1 norm weights\nfor layer2 forward pass\nSILENT CORRUPTION"]:::danger
+    G1["normAsF32(tensor)\ncheck norm_cache by data_ptr key"]:::setup
+    G3["return cached f32 buf\npermanent allocation\ncorrect MTLBuffer always"]:::success
+    G4["allocate new f32 buf\ndequant once\nstore in norm_cache\nreturn stable ptr"]:::success
+
     subgraph Bad["Bad pattern — scratch buffer reuse"]
-        B1["dequant(norm_layer1, scratch)"]
-        B2["getBufRef(scratch)\ncaches ptr → MTLBuffer A"]
-        B3["dequant(norm_layer2, scratch)\noverwrites scratch memory"]
-        B4["getBufRef(scratch)\nreturns CACHED MTLBuffer A\n(stale — still points to layer1 data)"]
-        B5["GPU reads layer1 norm weights\nfor layer2 forward pass\nSILENT CORRUPTION"]
         B1 --> B2 --> B3 --> B4 --> B5
     end
 
     subgraph Good["Fixed pattern — per-tensor cache"]
-        G1["normAsF32(tensor)\ncheck norm_cache by data_ptr key"]
-        G2{"cache hit?"}
-        G3["return cached f32 buf\npermanent allocation\ncorrect MTLBuffer always"]
-        G4["allocate new f32 buf\ndequant once\nstore in norm_cache\nreturn stable ptr"]
-        G1 --> G2
+        G1 --> G2{"cache hit?"}
         G2 -->|"yes"| G3
         G2 -->|"no"| G4
     end
@@ -573,34 +561,32 @@ For GGUF files, the direction is reversed: `gguf.zig`'s `fmtGetMetaU32` translat
 **HuggingFace uses different tensor names than llama.cpp.** Model code always uses GGUF-style short names (e.g., `attn_qkv`, `ssm_a`). When loading SafeTensors, a translation step converts those names to the full HuggingFace path before the tensor lookup, so model logic stays format-agnostic.
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': {
-  'primaryColor': '#e8f0fe',
-  'primaryTextColor': '#1a1a2e',
-  'primaryBorderColor': '#4a6cf7',
-  'lineColor': '#4a6cf7',
-  'secondaryColor': '#f0f4ff',
-  'tertiaryColor': '#f8f9ff',
-  'edgeLabelBackground': '#ffffff',
-  'clusterBkg': '#f0f4ff',
-  'clusterBorder': '#4a6cf7',
-  'titleColor': '#1a1a2e',
-  'nodeTextColor': '#1a1a2e',
-  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
-}}}%%
 flowchart LR
-    Model["Model code\nreads 'ssm_a'"] --> Lookup["Format.getTensor(name)"]
+    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
+    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
+    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
+    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
+    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
+    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
 
+    Model["Model code\nreads 'ssm_a'"]:::setup
+    Lookup["Format.getTensor(name)"]:::sync
+    GGUFLookup["Look up\n'blk.N.ssm_a.weight'\ndirectly"]:::sync
+    Translate["ggufToHfName()"]:::migration
+    HFName["'model.layers.N.\nlinear_attn.A_log'\n(no .weight suffix)"]:::migration
+    HFNameW["'model.layers.N.\nlinear_attn.in_proj_qkv.weight'"]:::migration
+    PassThru["Pass through as-is"]:::optional
+    TensorInfo["TensorInfo\n(dtype, dims, offset)"]:::success
+
+    Model --> Lookup
     Lookup --> Branch{"is_safetensors?"}
-
-    Branch -->|"No (GGUF)"| GGUFLookup["Look up\n'blk.N.ssm_a.weight'\ndirectly"]
-    Branch -->|"Yes (SafeTensors)"| Translate["ggufToHfName()"]
-
+    Branch -->|"No (GGUF)"| GGUFLookup
+    Branch -->|"Yes (SafeTensors)"| Translate
     Translate --> Map{"In tensor_name_map?"}
-    Map -->|"Yes + needs .weight"| HFName["'model.layers.N.\nlinear_attn.A_log'\n(no .weight suffix)"]
-    Map -->|"Yes, append .weight"| HFNameW["'model.layers.N.\nlinear_attn.in_proj_qkv.weight'"]
-    Map -->|"No mapping"| PassThru["Pass through as-is"]
-
-    GGUFLookup --> TensorInfo["TensorInfo\n(dtype, dims, offset)"]
+    Map -->|"Yes + needs .weight"| HFName
+    Map -->|"Yes, append .weight"| HFNameW
+    Map -->|"No mapping"| PassThru
+    GGUFLookup --> TensorInfo
     HFName --> TensorInfo
     HFNameW --> TensorInfo
     PassThru --> TensorInfo
@@ -683,33 +669,32 @@ const out_dim = tensor.dims[0];  // Always outer dimension
 ```
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': {
-  'primaryColor': '#e8f0fe',
-  'primaryTextColor': '#1a1a2e',
-  'primaryBorderColor': '#4a6cf7',
-  'lineColor': '#4a6cf7',
-  'secondaryColor': '#f0f4ff',
-  'tertiaryColor': '#f8f9ff',
-  'edgeLabelBackground': '#ffffff',
-  'clusterBkg': '#f0f4ff',
-  'clusterBorder': '#4a6cf7',
-  'titleColor': '#1a1a2e',
-  'nodeTextColor': '#1a1a2e',
-  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
-}}}%%
 flowchart LR
+    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
+    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
+    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
+    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
+    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
+    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
+
+    GGDisk["GGUF binary\ndims stored reversed\n[cols, rows]\n(inner dimension first)"]:::setup
+    STDisk["SafeTensors JSON header\ndims in PyTorch order\n[rows, cols]\n(outer dimension first)"]:::setup
+    GGParse["gguf.zig readTensor()\nreverses dims array:\ndims[d] = raw[n-1-d]"]:::migration
+    STParse["safetensors.zig readTensor()\nno reversal needed\ndims taken as-is"]:::sync
+    Result["dims[0] = rows (output dim)\ndims[1] = cols (input dim)\ndims[2] = depth (3D tensors)\n\nModel code reads dims[0] uniformly"]:::success
+
     subgraph OnDisk["On-disk representation"]
-        GGDisk["GGUF binary\ndims stored reversed\n[cols, rows]\n(inner dimension first)"]
-        STDisk["SafeTensors JSON header\ndims in PyTorch order\n[rows, cols]\n(outer dimension first)"]
+        GGDisk
+        STDisk
     end
 
     subgraph Parse["Parsing step"]
-        GGParse["gguf.zig readTensor()\nreverses dims array:\ndims[d] = raw[n-1-d]"]
-        STParse["safetensors.zig readTensor()\nno reversal needed\ndims taken as-is"]
+        GGParse
+        STParse
     end
 
     subgraph Normalized["Normalized TensorInfo (both formats)"]
-        Result["dims[0] = rows (output dim)\ndims[1] = cols (input dim)\ndims[2] = depth (3D tensors)\n\nModel code reads dims[0] uniformly"]
+        Result
     end
 
     GGDisk --> GGParse --> Result
@@ -806,43 +791,42 @@ SafeTensors `config.json` files may store rope configuration doubly nested in `t
 Multimodal models store vision encoder weights in a **separate GGUF file** (the "mmproj" file), distinct from the main language model GGUF. This keeps the text model self-contained — vision is an optional add-on.
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': {
-  'primaryColor': '#e8f0fe',
-  'primaryTextColor': '#1a1a2e',
-  'primaryBorderColor': '#4a6cf7',
-  'lineColor': '#4a6cf7',
-  'secondaryColor': '#f0f4ff',
-  'tertiaryColor': '#f8f9ff',
-  'edgeLabelBackground': '#ffffff',
-  'clusterBkg': '#f0f4ff',
-  'clusterBorder': '#4a6cf7',
-  'titleColor': '#1a1a2e',
-  'nodeTextColor': '#1a1a2e',
-  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
-}}}%%
 flowchart TD
+    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
+    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
+    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
+    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
+    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
+    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
+
+    MainGGUF["main model.gguf\ntensor prefix: blk.N.*\nvocab, metadata, LLM weights"]:::setup
+    MmprojGGUF["mmproj-*.gguf\ntensor prefix: v.blk.N.* / mm.*\nvision encoder + projector"]:::setup
+    Patch["v.patch_embd.weight\nPatch extraction conv\nimage → patch tokens"]:::sync
+    PosEmb["v.position_embd.weight\nPositional embeddings"]:::sync
+    ViT["v.blk.0..N\nattn_q/k/v, ffn_up/down\nSigLIP-2 transformer blocks"]:::sync
+    Proj["mm.input_projection.weight\nLinear: vision_dim → llm_embd"]:::migration
+    Norm["mm.soft_emb_norm.weight\nOptional norm (Gemma 3/4)"]:::optional
+    MLP["mm.0.weight / mm.2.weight\nMLP projector (Qwen VL)"]:::optional
+    TokEmb["Token embeddings\n(text tokens)"]:::setup
+    VizSlot["Visual token slots\nreplace text embeddings\nat image positions"]:::migration
+    Layers["blk.0..N transformer layers\nnormal autoregressive forward"]:::success
+
     subgraph Files["Two-file model loading"]
-        MainGGUF["main model.gguf\ntensor prefix: blk.N.*\nvocab, metadata, LLM weights"]
-        MmprojGGUF["mmproj-*.gguf\ntensor prefix: v.blk.N.* / mm.*\nvision encoder + projector"]
+        MainGGUF
+        MmprojGGUF
     end
 
     subgraph VisionEncoder["Vision encoder (v.blk.* tensors)"]
-        Patch["v.patch_embd.weight\nPatch extraction conv\nimage → patch tokens"]
-        PosEmb["v.position_embd.weight\nPositional embeddings"]
-        ViT["v.blk.0..N\nattn_q/k/v, ffn_up/down\nSigLIP-2 transformer blocks"]
         Patch --> PosEmb --> ViT
     end
 
     subgraph Projector["Multimodal projector (mm.* tensors)"]
-        Proj["mm.input_projection.weight\nLinear: vision_dim → llm_embd"]
-        Norm["mm.soft_emb_norm.weight\nOptional norm (Gemma 3/4)"]
-        MLP["mm.0.weight / mm.2.weight\nMLP projector (Qwen VL)"]
+        Proj
+        Norm
+        MLP
     end
 
     subgraph LLM["LLM forward pass"]
-        TokEmb["Token embeddings\n(text tokens)"]
-        VizSlot["Visual token slots\nreplace text embeddings\nat image positions"]
-        Layers["blk.0..N transformer layers\nnormal autoregressive forward"]
         TokEmb --> VizSlot --> Layers
     end
 

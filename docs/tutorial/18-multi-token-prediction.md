@@ -41,43 +41,38 @@ After all layers, one final RMSNorm + GEMV maps the hidden state from `n_embd` d
 MTP adds a shortcut. After the main model finishes its forward pass (all N layers), we save the **pre-norm hidden state** — the residual stream after the last attention block, before the final FFN residual and output norm are applied. This vector contains the model's complete understanding of the sequence context.
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': {
-  'primaryColor': '#e8f0fe',
-  'primaryTextColor': '#1a1a2e',
-  'primaryBorderColor': '#4a6cf7',
-  'lineColor': '#4a6cf7',
-  'secondaryColor': '#f0f4ff',
-  'tertiaryColor': '#f8f9ff',
-  'edgeLabelBackground': '#ffffff',
-  'clusterBkg': '#f0f4ff',
-  'clusterBorder': '#4a6cf7',
-  'titleColor': '#1a1a2e',
-  'nodeTextColor': '#1a1a2e',
-  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
-}}}%%
 flowchart LR
-    Input["Token t"] --> MainModel
+    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
+    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
+    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
+    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
+    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
+    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
+
+    Input["Token t"]:::setup
+
+    Input --> MainModel
 
     subgraph MainModel["Main Model (N layers)"]
         direction TB
-        Layers["N Transformer Layers"]
-        PreNorm["Pre-norm Hidden State\n(saved for MTP)"]
-        OutNorm["Final RMSNorm + Projection"]
+        Layers["N Transformer Layers"]:::sync
+        PreNorm["Pre-norm Hidden State\n(saved for MTP)"]:::migration
+        OutNorm["Final RMSNorm + Projection"]:::sync
         Layers --> PreNorm --> OutNorm
     end
 
-    OutNorm --> TokenT1["Token t+1\n(main prediction)"]
+    OutNorm --> TokenT1["Token t+1\n(main prediction)"]:::success
     PreNorm -- "hidden state\n(cheap shortcut)" --> MTPHead
 
     subgraph MTPHead["MTP Head (1 layer, ~5% cost)"]
         direction TB
-        EmbedT1["Embed(token t+1)"]
-        Fuse["Fuse + Project"]
-        SingleLayer["1 Transformer Layer"]
+        EmbedT1["Embed(token t+1)"]:::setup
+        Fuse["Fuse + Project"]:::migration
+        SingleLayer["1 Transformer Layer"]:::sync
         EmbedT1 --> Fuse --> SingleLayer
     end
 
-    MTPHead --> TokenT2["Token t+2\n(draft prediction)"]
+    MTPHead --> TokenT2["Token t+2\n(draft prediction)"]:::success
 ```
 
 An MTP head takes this hidden state and produces an additional token prediction with just **one transformer layer** instead of N. This is ~5-10% the cost of a full forward pass. If the main model predicted token `t`, the MTP head predicts what token `t+1` will be — before the main model has even seen token `t`.
@@ -89,41 +84,38 @@ These draft tokens are then **verified** against the main model. If the main mod
 Each MTP head is a single transformer layer with some extra plumbing. Two vectors are fused together: the main model's final understanding of the context, and the embedding of the token just predicted. That fused vector feeds a lightweight transformer block that produces the next draft token.
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': {
-  'primaryColor': '#e8f0fe',
-  'primaryTextColor': '#1a1a2e',
-  'primaryBorderColor': '#4a6cf7',
-  'lineColor': '#4a6cf7',
-  'secondaryColor': '#f0f4ff',
-  'tertiaryColor': '#f8f9ff',
-  'edgeLabelBackground': '#ffffff',
-  'clusterBkg': '#f0f4ff',
-  'clusterBorder': '#4a6cf7',
-  'titleColor': '#1a1a2e',
-  'nodeTextColor': '#1a1a2e',
-  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
-}}}%%
 flowchart TD
-    HiddenState["Pre-norm Hidden State\n(from main model, n_embd floats)"]
-    TokenEmbed["Token Embedding\n(of token t, n_embd floats)"]
+    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
+    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
+    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
+    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
+    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
+    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
 
-    HNorm["RMSNorm + 1\n(hnorm weights)"]
-    ENorm["RMSNorm + 1\n(enorm weights)"]
+    HiddenState["Pre-norm Hidden State\n(from main model, n_embd floats)"]:::setup
+    TokenEmbed["Token Embedding\n(of token t, n_embd floats)"]:::setup
+    HNorm["RMSNorm + 1\n(hnorm weights)"]:::sync
+    ENorm["RMSNorm + 1\n(enorm weights)"]:::sync
+    Concat["Concatenate\n[embed ; hidden]\n2×n_embd floats"]:::migration
+    EHProj["eh_proj GEMV\n2×n_embd → n_embd"]:::sync
+    AttnBlock["Attention Block\n(Q/K/V + RoPE + SDPA)"]:::sync
+    FFNBlock["FFN Block\n(SwiGLU gate + up + down)"]:::sync
+    HeadNorm["RMSNorm\n(shared_head_norm)"]:::sync
+    HeadProj["Output GEMV\n(shared_head_head)\nn_embd → vocab_size"]:::sync
+    Logits["Logits [vocab_size]"]:::migration
+    ArgMax["argmax → draft token t+2"]:::success
 
     HiddenState --> HNorm
     TokenEmbed --> ENorm
-
-    HNorm --> Concat["Concatenate\n[embed ; hidden]\n2×n_embd floats"]
+    HNorm --> Concat
     ENorm --> Concat
-
-    Concat --> EHProj["eh_proj GEMV\n2×n_embd → n_embd"]
-
-    EHProj --> AttnBlock["Attention Block\n(Q/K/V + RoPE + SDPA)"]
-    AttnBlock --> FFNBlock["FFN Block\n(SwiGLU gate + up + down)"]
-    FFNBlock --> HeadNorm["RMSNorm\n(shared_head_norm)"]
-    HeadNorm --> HeadProj["Output GEMV\n(shared_head_head)\nn_embd → vocab_size"]
-    HeadProj --> Logits["Logits [vocab_size]"]
-    Logits --> ArgMax["argmax → draft token t+2"]
+    Concat --> EHProj
+    EHProj --> AttnBlock
+    AttnBlock --> FFNBlock
+    FFNBlock --> HeadNorm
+    HeadNorm --> HeadProj
+    HeadProj --> Logits
+    Logits --> ArgMax
 ```
 
 ### Step by Step
@@ -151,44 +143,37 @@ flowchart TD
 The MTP head uses a variant of RMSNorm called **offset RMSNorm** (also called +1 norm), introduced in DeepSeek V3. The difference is subtle but important for training stability when fusing two different vector spaces.
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': {
-  'primaryColor': '#e8f0fe',
-  'primaryTextColor': '#1a1a2e',
-  'primaryBorderColor': '#4a6cf7',
-  'lineColor': '#4a6cf7',
-  'secondaryColor': '#f0f4ff',
-  'tertiaryColor': '#f8f9ff',
-  'edgeLabelBackground': '#ffffff',
-  'clusterBkg': '#f0f4ff',
-  'clusterBorder': '#4a6cf7',
-  'titleColor': '#1a1a2e',
-  'nodeTextColor': '#1a1a2e',
-  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
-}}}%%
 flowchart TD
+    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
+    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
+    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
+    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
+    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
+    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
+
     subgraph Standard["Standard RMSNorm\n(main model layers)"]
         direction TB
-        SX["Input x\n[n_embd floats]"]
-        SRMS["rms(x) = sqrt( mean(x²) + ε )"]
-        SScale["x_norm = x / rms(x)"]
-        SWeight["w  (learned weight, init ≈ 1.0)\nstored in GGUF as-is"]
-        SOut["output = w * x_norm"]
+        SX["Input x\n[n_embd floats]"]:::setup
+        SRMS["rms(x) = sqrt( mean(x²) + ε )"]:::sync
+        SScale["x_norm = x / rms(x)"]:::sync
+        SWeight["w  (learned weight, init ≈ 1.0)\nstored in GGUF as-is"]:::setup
+        SOut["output = w * x_norm"]:::success
         SX --> SRMS --> SScale --> SOut
         SWeight --> SOut
     end
 
     subgraph Offset["Offset RMSNorm +1\n(MTP enorm / hnorm weights)"]
         direction TB
-        OX["Input x\n[n_embd floats]"]
-        ORMS["rms(x) = sqrt( mean(x²) + ε )"]
-        OScale["x_norm = x / rms(x)"]
-        OWeight["w  (learned weight, stored in GGUF)\napplied as (1 + w) at runtime"]
-        OOut["output = (1 + w) * x_norm"]
+        OX["Input x\n[n_embd floats]"]:::setup
+        ORMS["rms(x) = sqrt( mean(x²) + ε )"]:::sync
+        OScale["x_norm = x / rms(x)"]:::sync
+        OWeight["w  (learned weight, stored in GGUF)\napplied as (1 + w) at runtime"]:::setup
+        OOut["output = (1 + w) * x_norm"]:::success
         OX --> ORMS --> OScale --> OOut
         OWeight --> OOut
     end
 
-    Diff["Key difference:\nStandard can zero-gate (w→0 ⟹ output=0)\nOffset cannot (w→0 ⟹ output=x_norm)\nProvides a residual identity path\nthrough the normalization step"]
+    Diff["Key difference:\nStandard can zero-gate (w→0 ⟹ output=0)\nOffset cannot (w→0 ⟹ output=x_norm)\nProvides a residual identity path\nthrough the normalization step"]:::optional
 
     Standard --- Diff
     Offset --- Diff
@@ -218,48 +203,41 @@ Plus standard transformer block tensors (`attn_q.weight`, `ffn_gate.weight`, etc
 MTP tensors occupy layer indices immediately after the main model's layer range. The GGUF file stores all tensors with their layer index prefix; a loader discovers MTP heads by finding `blk.N.*` where N >= the model's declared layer count.
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': {
-  'primaryColor': '#e8f0fe',
-  'primaryTextColor': '#1a1a2e',
-  'primaryBorderColor': '#4a6cf7',
-  'lineColor': '#4a6cf7',
-  'secondaryColor': '#f0f4ff',
-  'tertiaryColor': '#f8f9ff',
-  'edgeLabelBackground': '#ffffff',
-  'clusterBkg': '#f0f4ff',
-  'clusterBorder': '#4a6cf7',
-  'titleColor': '#1a1a2e',
-  'nodeTextColor': '#1a1a2e',
-  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
-}}}%%
 flowchart TD
+    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
+    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
+    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
+    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
+    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
+    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
+
     subgraph GGUF["GGUF File (e.g. Qwen3.5-0.8B-MTP-Q4_K_M.gguf)"]
         direction TB
-        Meta["GGUF Header + Metadata\nqwen3_5.nextn_predict_layers = 1\nqwen3_5.block_count = 64"]
+        Meta["GGUF Header + Metadata\nqwen3_5.nextn_predict_layers = 1\nqwen3_5.block_count = 64"]:::setup
 
         subgraph Main["Main Model Tensors  blk.0 … blk.63"]
             direction TB
-            B0["blk.0.attn_q.weight\nblk.0.attn_k.weight\nblk.0.ffn_gate.weight\n..."]
-            Bdots["blk.1 … blk.62\n(62 more layers)"]
-            B63["blk.63.attn_q.weight\nblk.63.ffn_gate.weight\n..."]
+            B0["blk.0.attn_q.weight\nblk.0.attn_k.weight\nblk.0.ffn_gate.weight\n..."]:::setup
+            Bdots["blk.1 … blk.62\n(62 more layers)"]:::setup
+            B63["blk.63.attn_q.weight\nblk.63.ffn_gate.weight\n..."]:::setup
             B0 -..- Bdots -..- B63
         end
 
         subgraph MTP["MTP Head Tensors  blk.64.*"]
             direction TB
-            EHProj["blk.64.nextn.eh_proj\n[n_embd, 2×n_embd]  — fusion projection"]
-            Embed["blk.64.nextn.embed_tokens\n[vocab, n_embd]  — MTP embedding table"]
-            ENorm["blk.64.nextn.enorm\n[n_embd]  — embedding branch +1 norm"]
-            HNorm["blk.64.nextn.hnorm\n[n_embd]  — hidden state branch +1 norm"]
-            SHH["blk.64.nextn.shared_head_head\n[vocab, n_embd]  — output projection"]
-            SHN["blk.64.nextn.shared_head_norm\n[n_embd]  — pre-output norm"]
-            AttnW["blk.64.attn_q/k/v/o.weight\nblk.64.ffn_gate/up/down.weight\n(standard transformer weights)"]
+            EHProj["blk.64.nextn.eh_proj\n[n_embd, 2×n_embd]  — fusion projection"]:::migration
+            Embed["blk.64.nextn.embed_tokens\n[vocab, n_embd]  — MTP embedding table"]:::migration
+            ENorm["blk.64.nextn.enorm\n[n_embd]  — embedding branch +1 norm"]:::migration
+            HNorm["blk.64.nextn.hnorm\n[n_embd]  — hidden state branch +1 norm"]:::migration
+            SHH["blk.64.nextn.shared_head_head\n[vocab, n_embd]  — output projection"]:::migration
+            SHN["blk.64.nextn.shared_head_norm\n[n_embd]  — pre-output norm"]:::migration
+            AttnW["blk.64.attn_q/k/v/o.weight\nblk.64.ffn_gate/up/down.weight\n(standard transformer weights)"]:::setup
         end
 
         Meta --> Main --> MTP
     end
 
-    Note["Loader detects MTP depth:\nn_mtp_layers = max_blk_idx - block_count\nHere: 64 - 64 = 1 MTP head"]
+    Note["Loader detects MTP depth:\nn_mtp_layers = max_blk_idx - block_count\nHere: 64 - 64 = 1 MTP head"]:::optional
     GGUF --> Note
 ```
 
@@ -318,49 +296,36 @@ For greedy decoding (temperature=0), speculative decoding is **lossless** — ou
 Qwen 3.5 uses a hybrid architecture with **DeltaNet SSM** layers. Unlike attention, which only touches the KV cache on rejection, SSM layers maintain a **recurrent state** buffer that is modified in-place during each forward pass. Speculation requires checkpointing this state before the draft and restoring it on rejection.
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': {
-  'primaryColor': '#e8f0fe',
-  'primaryTextColor': '#1a1a2e',
-  'primaryBorderColor': '#4a6cf7',
-  'lineColor': '#4a6cf7',
-  'secondaryColor': '#f0f4ff',
-  'tertiaryColor': '#f8f9ff',
-  'edgeLabelBackground': '#ffffff',
-  'clusterBkg': '#f0f4ff',
-  'clusterBorder': '#4a6cf7',
-  'titleColor': '#1a1a2e',
-  'nodeTextColor': '#1a1a2e',
-  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
-}}}%%
 flowchart TD
-    MainFwd["Main model forward\n(token t)\nSSM state updated in-place"]
+    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
+    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
+    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
+    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
+    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
+    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
 
-    Checkpoint["Checkpoint SSM state\n~50 MiB memcpy\n(all SSM layers)"]
+    MainFwd["Main model forward\n(token t)\nSSM state updated in-place"]:::sync
+    Checkpoint["Checkpoint SSM state\n~50 MiB memcpy\n(all SSM layers)"]:::migration
+    MTPDraft["MTP head forward\n(token t+1 draft)\nSSM state updated again"]:::sync
+    Verify["Main model verify\n(token t+1)\nCompares main prediction\nvs MTP draft token"]:::sync
+    Accept["Draft accepted\nDiscard checkpoint\n(SSM state from draft pass is correct)"]:::success
+    Reject["Draft rejected\nRestore SSM state\nfrom checkpoint\n(undo draft SSM mutations)"]:::danger
+    NextToken["Continue from\naccepted SSM state"]:::success
+    NextToken2["Continue from\nrestored SSM state\n(as if draft never ran)"]:::migration
 
     MainFwd --> Checkpoint
-
-    MTPDraft["MTP head forward\n(token t+1 draft)\nSSM state updated again"]
-
     Checkpoint --> MTPDraft
-
-    Verify["Main model verify\n(token t+1)\nCompares main prediction\nvs MTP draft token"]
-
     MTPDraft --> Verify
-
-    Accept["Draft accepted\nDiscard checkpoint\n(SSM state from draft pass is correct)"]
-    Reject["Draft rejected\nRestore SSM state\nfrom checkpoint\n(undo draft SSM mutations)"]
-
     Verify -->|"main agrees\n(70-85%)"| Accept
     Verify -->|"main disagrees"| Reject
-
-    Accept --> NextToken["Continue from\naccepted SSM state"]
-    Reject --> NextToken2["Continue from\nrestored SSM state\n(as if draft never ran)"]
+    Accept --> NextToken
+    Reject --> NextToken2
 
     subgraph Cost["Why this hurts performance for Qwen 3.5"]
         direction LR
-        C1["50 MiB checkpoint\n= ~100 μs memcpy\nevery token"]
-        C2["50 MiB restore\non each rejection\n= additional latency"]
-        C3["Net negative vs\nno speculation\nfor SSM-heavy models"]
+        C1["50 MiB checkpoint\n= ~100 μs memcpy\nevery token"]:::danger
+        C2["50 MiB restore\non each rejection\n= additional latency"]:::danger
+        C3["Net negative vs\nno speculation\nfor SSM-heavy models"]:::danger
         C1 --> C2 --> C3
     end
 
@@ -374,38 +339,37 @@ Pure attention models (Qwen 3.6, Gemma 4) do not maintain recurrent state, so re
 MTP heads live inside the same checkpoint as the main model and share its learned representations. A separate draft model is an entirely independent model loaded alongside the main one. The structural difference explains why MTP achieves higher acceptance rates at lower memory cost.
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': {
-  'primaryColor': '#e8f0fe',
-  'primaryTextColor': '#1a1a2e',
-  'primaryBorderColor': '#4a6cf7',
-  'lineColor': '#4a6cf7',
-  'secondaryColor': '#f0f4ff',
-  'tertiaryColor': '#f8f9ff',
-  'edgeLabelBackground': '#ffffff',
-  'clusterBkg': '#f0f4ff',
-  'clusterBorder': '#4a6cf7',
-  'titleColor': '#1a1a2e',
-  'nodeTextColor': '#1a1a2e',
-  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
-}}}%%
 flowchart TD
+    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
+    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
+    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
+    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
+    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
+    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
+
     subgraph MTPArch["MTP (built-in heads)"]
         direction TB
-        SharedEmbed["Shared Embedding Table"]
-        MainLayers["Main Model Layers\n(all N layers)"]
+        SharedEmbed["Shared Embedding Table"]:::setup
+        MainLayers["Main Model Layers\n(all N layers)"]:::sync
+        MTPHead1["MTP Head 0\n(1 layer)"]:::sync
+        MTPHead2["MTP Head 1\n(1 layer, depth 1)"]:::sync
+        Draft1["Draft token t+2"]:::success
+        Draft2["Draft token t+3"]:::success
         SharedEmbed --> MainLayers
-        MainLayers -- "pre-norm hidden\n(shared repr)" --> MTPHead1["MTP Head 0\n(1 layer)"]
-        MainLayers -- "pre-norm hidden\n(shared repr)" --> MTPHead2["MTP Head 1\n(1 layer, depth 1)"]
-        MTPHead1 --> Draft1["Draft token t+2"]
-        MTPHead2 --> Draft2["Draft token t+3"]
+        MainLayers -- "pre-norm hidden\n(shared repr)" --> MTPHead1
+        MainLayers -- "pre-norm hidden\n(shared repr)" --> MTPHead2
+        MTPHead1 --> Draft1
+        MTPHead2 --> Draft2
     end
 
     subgraph SeparateArch["Separate Draft Model"]
         direction TB
-        TargetModel["Target Model\n(e.g. 27B, all N layers)"]
-        DraftModel["Draft Model\n(e.g. 1.5B, M layers)"]
-        TargetModel --> TTarget["Token t+1"]
-        DraftModel --> TDraft["Draft token t+2\n(independent distribution)"]
+        TargetModel["Target Model\n(e.g. 27B, all N layers)"]:::setup
+        DraftModel["Draft Model\n(e.g. 1.5B, M layers)"]:::setup
+        TTarget["Token t+1"]:::success
+        TDraft["Draft token t+2\n(independent distribution)"]:::migration
+        TargetModel --> TTarget
+        DraftModel --> TDraft
     end
 
     MTPArch -. "higher acceptance rate\nlower memory overhead" .- SeparateArch

@@ -9,30 +9,34 @@ A 7B parameter model (7 billion weight values — the "B" in model names like "Q
 ## Block Quantization
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': {
-  'primaryColor': '#e8f0fe',
-  'primaryTextColor': '#1a1a2e',
-  'primaryBorderColor': '#4a6cf7',
-  'lineColor': '#4a6cf7',
-  'secondaryColor': '#f0f4ff',
-  'tertiaryColor': '#f8f9ff',
-  'edgeLabelBackground': '#ffffff',
-  'clusterBkg': '#f0f4ff',
-  'clusterBorder': '#4a6cf7',
-  'titleColor': '#1a1a2e',
-  'nodeTextColor': '#1a1a2e',
-  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
-}}}%%
 flowchart LR
-    W["Weight Matrix\n(billions of f32 values)"] --> Split["Split into\nBlocks of 32"]
+    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
+    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
+    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
+    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
+    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
+    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
 
-    Split --> B1["Block 0\n32 integers"]
-    Split --> B2["Block 1\n32 integers"]
-    Split --> BN["Block N\n32 integers"]
+    W["Weight Matrix\n(billions of f32 values)"]:::setup
+    Split["Split into\nBlocks of 32"]:::migration
+    B1["Block 0\n32 integers"]:::migration
+    B2["Block 1\n32 integers"]:::migration
+    BN["Block N\n32 integers"]:::migration
+    S1["scale₀\n(f16, 2 bytes)"]:::setup
+    S2["scale₁\n(f16, 2 bytes)"]:::setup
+    SN["scaleₙ\n(f16, 2 bytes)"]:::setup
+    Dequant["On-the-fly dequant\nfloat = int × scale"]:::sync
+    GEMV["GEMV kernel\n(inside the dot product)"]:::success
 
-    B1 --> S1["scale₀\n(f16, 2 bytes)"]
-    B2 --> S2["scale₁\n(f16, 2 bytes)"]
-    BN --> SN["scaleₙ\n(f16, 2 bytes)"]
+    W --> Split
+
+    Split --> B1
+    Split --> B2
+    Split --> BN
+
+    B1 --> S1
+    B2 --> S2
+    BN --> SN
 
     subgraph Stored["Stored on disk (Q4_0 example)"]
         S1
@@ -43,8 +47,8 @@ flowchart LR
         BN
     end
 
-    Stored --> Dequant["On-the-fly dequant\nfloat = int × scale"]
-    Dequant --> GEMV["GEMV kernel\n(inside the dot product)"]
+    Stored --> Dequant
+    Dequant --> GEMV
 
 
 **Q4_0, Q8_0** (GGUF-style): Groups of 32 values share a single **scale factor** (a multiplier that converts small integers back to approximate float values). Each value is stored as a small integer, dequantized on-the-fly:
@@ -56,35 +60,38 @@ float_value = integer_value * scale
 **Super-block formats** (Q4_K, Q5_K, Q6_K): Groups of 256 values with **hierarchical scales** (multiple levels of scale factors — a coarse scale for the whole block, then fine-grained adjustments per sub-block) — a block scale plus per-sub-block adjustments.
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': {
-  'primaryColor': '#e8f0fe',
-  'primaryTextColor': '#1a1a2e',
-  'primaryBorderColor': '#4a6cf7',
-  'lineColor': '#4a6cf7',
-  'secondaryColor': '#f0f4ff',
-  'tertiaryColor': '#f8f9ff',
-  'edgeLabelBackground': '#ffffff',
-  'clusterBkg': '#f0f4ff',
-  'clusterBorder': '#4a6cf7',
-  'titleColor': '#1a1a2e',
-  'nodeTextColor': '#1a1a2e',
-  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
-}}}%%
 flowchart TD
-    SB["Super-block: 256 values"]
+    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
+    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
+    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
+    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
+    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
+    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
 
-    SB --> Meta["Super-block metadata\n(d: f16 coarse scale\ndmin: f16 minimum)"]
-    SB --> Sub0["Sub-block 0\n32 values"]
-    SB --> Sub1["Sub-block 1\n32 values"]
-    SB --> SubDots["..."]
-    SB --> Sub7["Sub-block 7\n32 values"]
+    SB["Super-block: 256 values"]:::setup
+    Meta["Super-block metadata\n(d: f16 coarse scale\ndmin: f16 minimum)"]:::setup
+    Sub0["Sub-block 0\n32 values"]:::migration
+    Sub1["Sub-block 1\n32 values"]:::migration
+    SubDots["..."]:::migration
+    Sub7["Sub-block 7\n32 values"]:::migration
+    SC0["scale₀ + min₀\n(6-bit each, packed)"]:::setup
+    SC1["scale₁ + min₁"]:::setup
+    SC7["scale₇ + min₇"]:::setup
+    DQ0["dequant₀ = d×scale₀×q - dmin×min₀"]:::success
+    DQ1["dequant₁ = d×scale₁×q - dmin×min₁"]:::success
 
-    Sub0 --> SC0["scale₀ + min₀\n(6-bit each, packed)"]
-    Sub1 --> SC1["scale₁ + min₁"]
-    Sub7 --> SC7["scale₇ + min₇"]
+    SB --> Meta
+    SB --> Sub0
+    SB --> Sub1
+    SB --> SubDots
+    SB --> Sub7
 
-    SC0 --> DQ0["dequant₀ = d×scale₀×q - dmin×min₀"]
-    SC1 --> DQ1["dequant₁ = d×scale₁×q - dmin×min₁"]
+    Sub0 --> SC0
+    Sub1 --> SC1
+    Sub7 --> SC7
+
+    SC0 --> DQ0
+    SC1 --> DQ1
 
     subgraph Hierarchy["Two-level scale hierarchy"]
         Meta
@@ -97,28 +104,28 @@ flowchart TD
 ## MLX Affine Quantization
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': {
-  'primaryColor': '#e8f0fe',
-  'primaryTextColor': '#1a1a2e',
-  'primaryBorderColor': '#4a6cf7',
-  'lineColor': '#4a6cf7',
-  'secondaryColor': '#f0f4ff',
-  'tertiaryColor': '#f8f9ff',
-  'edgeLabelBackground': '#ffffff',
-  'clusterBkg': '#f0f4ff',
-  'clusterBorder': '#4a6cf7',
-  'titleColor': '#1a1a2e',
-  'nodeTextColor': '#1a1a2e',
-  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
-}}}%%
 flowchart LR
-    WT["weight tensor\n(packed u32 nibbles)"] --> Unpack["Unpack nibble\nuint_value ∈ [0..15]"]
+    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
+    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
+    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
+    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
+    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
+    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
 
-    ScaleTensor["weight.scales\n(bf16 per group)"] --> Affine
-    BiasTensor["weight.biases\n(bf16 per group)"] --> Affine
+    WT["weight tensor\n(packed u32 nibbles)"]:::setup
+    Unpack["Unpack nibble\nuint_value ∈ [0..15]"]:::migration
+    ScaleTensor["weight.scales\n(bf16 per group)"]:::setup
+    BiasTensor["weight.biases\n(bf16 per group)"]:::setup
+    Affine["Affine transform\nfloat = scale × uint + bias"]:::sync
+    Out["Dequantized f32\n(used in dot product)"]:::success
 
-    Unpack --> Affine["Affine transform\nfloat = scale × uint + bias"]
-    Affine --> Out["Dequantized f32\n(used in dot product)"]
+    WT --> Unpack
+
+    ScaleTensor --> Affine
+    BiasTensor --> Affine
+
+    Unpack --> Affine
+    Affine --> Out
 
     subgraph CompanionTensors["Companion tensors (stored separately)"]
         ScaleTensor
@@ -213,52 +220,40 @@ acc += scale * q_dot + bias * x_sum;  // Apply scale/bias ONCE
 **Savings:** 192 → 130 ops = **32% reduction** in arithmetic. Real-world speedup: **30-40%** (measured on Apple M4 with Gemma3 27B QAT).
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': {
-  'primaryColor': '#e8f0fe',
-  'primaryTextColor': '#1a1a2e',
-  'primaryBorderColor': '#4a6cf7',
-  'lineColor': '#4a6cf7',
-  'secondaryColor': '#f0f4ff',
-  'tertiaryColor': '#f8f9ff',
-  'edgeLabelBackground': '#ffffff',
-  'clusterBkg': '#f0f4ff',
-  'clusterBorder': '#4a6cf7',
-  'titleColor': '#1a1a2e',
-  'nodeTextColor': '#1a1a2e',
-  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
-}}}%%
 flowchart LR
+    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
+    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
+    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
+    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
+    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
+    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
+
     subgraph Naive["Naive: 192 ops per group"]
         direction TB
-        NI["for j in 0..64"]
-        NU["unpack q[j]\n(64 ops)"]
-        ND["scale × q[j] + bias\n(64 muls + 64 adds)"]
-        NA["acc += dq × x[j]\n(64 FMAs)"]
+        NI["for j in 0..64"]:::migration
+        NU["unpack q[j]\n(64 ops)"]:::migration
+        ND["scale × q[j] + bias\n(64 muls + 64 adds)"]:::migration
+        NA["acc += dq × x[j]\n(64 FMAs)"]:::migration
         NI --> NU --> ND --> NA
-        NT["Total: 192 ops"]
+        NT["Total: 192 ops"]:::danger
         NA --> NT
     end
 
     subgraph Factored["Factored: 130 ops per group"]
         direction TB
-        FI["for j in 0..64"]
-        FQ["q_dot += q[j] × x[j]\n(64 FMAs)"]
-        FX["x_sum += x[j]\n(64 adds)"]
-        FF["acc += scale×q_dot\n       + bias×x_sum\n(2 final ops)"]
+        FI["for j in 0..64"]:::sync
+        FQ["q_dot += q[j] × x[j]\n(64 FMAs)"]:::sync
+        FX["x_sum += x[j]\n(64 adds)"]:::sync
+        FF["acc += scale×q_dot\n       + bias×x_sum\n(2 final ops)"]:::sync
         FI --> FQ
         FI --> FX
         FQ --> FF
         FX --> FF
-        FT["Total: 130 ops"]
+        FT["Total: 130 ops"]:::success
         FF --> FT
     end
 
     Naive -->|"32% fewer ops\n30-40% real speedup"| Factored
-
-    style NT fill:#f5c6cb,color:#721c24
-    style FT fill:#c3e6cb,color:#155724
-    style Naive fill:#fff5f5
-    style Factored fill:#f5fff5
 ```
 
 **Why this works:**
@@ -327,32 +322,33 @@ acc += scale * q_dot + bias * x_sum;
 BitNet models use **ternary weights** — each weight is one of {-1, 0, +1}. Multiplying by {-1, 0, +1} is just negation, zero-out, or identity (no multiplication at all), which enables extremely fast matrix operations on CPUs without SIMD FMAs.
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': {
-  'primaryColor': '#e8f0fe',
-  'primaryTextColor': '#1a1a2e',
-  'primaryBorderColor': '#4a6cf7',
-  'lineColor': '#4a6cf7',
-  'secondaryColor': '#f0f4ff',
-  'tertiaryColor': '#f8f9ff',
-  'edgeLabelBackground': '#ffffff',
-  'clusterBkg': '#f0f4ff',
-  'clusterBorder': '#4a6cf7',
-  'titleColor': '#1a1a2e',
-  'nodeTextColor': '#1a1a2e',
-  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
-}}}%%
 flowchart LR
-    Byte["1 byte (8 bits)"]
+    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
+    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
+    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
+    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
+    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
+    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
 
-    Byte --> P0["bits 0-1\nvalue for elem 0\n00=−1  01=0  10=+1"]
-    Byte --> P1["bits 2-3\nvalue for elem 1"]
-    Byte --> P2["bits 4-5\nvalue for elem 2"]
-    Byte --> P3["bits 6-7\nvalue for elem 3"]
+    Byte["1 byte (8 bits)"]:::setup
+    P0["bits 0-1\nvalue for elem 0\n00=−1  01=0  10=+1"]:::migration
+    P1["bits 2-3\nvalue for elem 1"]:::migration
+    P2["bits 4-5\nvalue for elem 2"]:::migration
+    P3["bits 6-7\nvalue for elem 3"]:::migration
+    DQ0["(encoded − 1) × scale"]:::success
+    DQ1["(encoded − 1) × scale"]:::success
+    DQ2["(encoded − 1) × scale"]:::success
+    DQ3["(encoded − 1) × scale"]:::success
 
-    P0 --> DQ0["(encoded − 1) × scale"]
-    P1 --> DQ1["(encoded − 1) × scale"]
-    P2 --> DQ2["(encoded − 1) × scale"]
-    P3 --> DQ3["(encoded − 1) × scale"]
+    Byte --> P0
+    Byte --> P1
+    Byte --> P2
+    Byte --> P3
+
+    P0 --> DQ0
+    P1 --> DQ1
+    P2 --> DQ2
+    P3 --> DQ3
 
     subgraph TQ2_0["TQ2_0: 4 ternary values per byte"]
         P0
@@ -390,35 +386,36 @@ Use **TQ1_0** when minimizing model size is the top priority. Use **TQ2_0** when
 Both GPTQ and AWQ store INT4 weights but differ from GGUF's Q4_K in two key ways: scales and zero-points are stored as **companion tensors** (separate SafeTensors entries rather than embedded in each weight block), and the nibble layout is tuned for GPU memory access patterns.
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': {
-  'primaryColor': '#e8f0fe',
-  'primaryTextColor': '#1a1a2e',
-  'primaryBorderColor': '#4a6cf7',
-  'lineColor': '#4a6cf7',
-  'secondaryColor': '#f0f4ff',
-  'tertiaryColor': '#f8f9ff',
-  'edgeLabelBackground': '#ffffff',
-  'clusterBkg': '#f0f4ff',
-  'clusterBorder': '#4a6cf7',
-  'titleColor': '#1a1a2e',
-  'nodeTextColor': '#1a1a2e',
-  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
-}}}%%
 flowchart LR
-    U32["u32 word\n(32 bits)"]
+    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
+    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
+    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
+    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
+    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
+    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
 
-    U32 --> N0["nibble 0\nbits 0-3\nelem 0"]
-    U32 --> N1["nibble 1\nbits 4-7\nelem 1"]
-    U32 --> N2["nibble 2\nbits 8-11\nelem 2"]
-    U32 --> Dots["..."]
-    U32 --> N7["nibble 7\nbits 28-31\nelem 7"]
+    U32["u32 word\n(32 bits)"]:::setup
+    N0["nibble 0\nbits 0-3\nelem 0"]:::migration
+    N1["nibble 1\nbits 4-7\nelem 1"]:::migration
+    N2["nibble 2\nbits 8-11\nelem 2"]:::migration
+    Dots["..."]:::migration
+    N7["nibble 7\nbits 28-31\nelem 7"]:::migration
+    DQ["(nibble − zero) × scale\n(group_size=128)"]:::success
+    SC[".scales  (f16 per group)"]:::setup
+    ZR[".qzeros  (INT4 per group)"]:::setup
 
-    N0 --> DQ["(nibble − zero) × scale\n(group_size=128)"]
+    U32 --> N0
+    U32 --> N1
+    U32 --> N2
+    U32 --> Dots
+    U32 --> N7
+
+    N0 --> DQ
     N7 --> DQ
 
     subgraph Companions["Companion tensors"]
-        SC[".scales  (f16 per group)"]
-        ZR[".qzeros  (INT4 per group)"]
+        SC
+        ZR
     end
 
     SC --> DQ
@@ -559,52 +556,37 @@ Dequantize: unpack → codebook → inverse WHT → rescale
 The WHT is a deterministic rotation (like a Fourier transform but with only additions and subtractions) that makes each coordinate approximately N(0,1), regardless of the original distribution. This lets us use a single fixed codebook — no per-model calibration needed.
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': {
-  'primaryColor': '#e8f0fe',
-  'primaryTextColor': '#1a1a2e',
-  'primaryBorderColor': '#4a6cf7',
-  'lineColor': '#4a6cf7',
-  'secondaryColor': '#f0f4ff',
-  'tertiaryColor': '#f8f9ff',
-  'edgeLabelBackground': '#ffffff',
-  'clusterBkg': '#f0f4ff',
-  'clusterBorder': '#4a6cf7',
-  'titleColor': '#1a1a2e',
-  'nodeTextColor': '#1a1a2e',
-  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
-}}}%%
 flowchart LR
-    KV["KV vector\n(128-dim, f16)"]
+    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
+    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
+    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
+    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
+    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
+    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
+
+    KV["KV vector\n(128-dim, f16)"]:::setup
+    OUT["Restored KV vector\n(approx, f16)"]:::success
 
     subgraph Quantize["Quantize path"]
         direction LR
-        N1["1. Normalize\ndivide by RMS norm\n→ unit vector"]
-        W1["2. WHT\n5-stage butterfly\n~640 add/sub ops\n→ N(0,1) coords"]
-        CB1["3. Codebook lookup\nLloyd-Max optimal\nbins per bit-width"]
-        PK["4. Pack\nf16 norm + indices\n(2B + n×bits)"]
+        N1["1. Normalize\ndivide by RMS norm\n→ unit vector"]:::sync
+        W1["2. WHT\n5-stage butterfly\n~640 add/sub ops\n→ N(0,1) coords"]:::sync
+        CB1["3. Codebook lookup\nLloyd-Max optimal\nbins per bit-width"]:::sync
+        PK["4. Pack\nf16 norm + indices\n(2B + n×bits)"]:::migration
     end
 
     subgraph Dequantize["Dequantize path"]
         direction RL
-        UPK["1. Unpack\nread norm + indices"]
-        CB2["2. Codebook decode\nindex → centroid value"]
-        IW["3. Inverse WHT\nrestore original basis"]
-        RS["4. Rescale\nmultiply by norm"]
+        UPK["1. Unpack\nread norm + indices"]:::migration
+        CB2["2. Codebook decode\nindex → centroid value"]:::sync
+        IW["3. Inverse WHT\nrestore original basis"]:::sync
+        RS["4. Rescale\nmultiply by norm"]:::sync
     end
 
     KV --> N1 --> W1 --> CB1 --> PK
     PK -->|"stored in KV cache"| UPK
     UPK --> CB2 --> IW --> RS
-    RS --> OUT["Restored KV vector\n(approx, f16)"]
-
-    style N1 fill:#e8f0fe
-    style W1 fill:#dce8fd
-    style CB1 fill:#d0dffc
-    style PK fill:#c4d7fb
-    style UPK fill:#c4d7fb
-    style CB2 fill:#d0dffc
-    style IW fill:#dce8fd
-    style RS fill:#e8f0fe
+    RS --> OUT
 ```
 
 ### Format Family
@@ -764,44 +746,38 @@ Coordinates are grouped into triples (with padding for the 128 -> 129 case). Tot
 ### Comparison
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': {
-  'primaryColor': '#e8f0fe',
-  'primaryTextColor': '#1a1a2e',
-  'primaryBorderColor': '#4a6cf7',
-  'lineColor': '#4a6cf7',
-  'secondaryColor': '#f0f4ff',
-  'tertiaryColor': '#f8f9ff',
-  'edgeLabelBackground': '#ffffff',
-  'clusterBkg': '#f0f4ff',
-  'clusterBorder': '#4a6cf7',
-  'titleColor': '#1a1a2e',
-  'nodeTextColor': '#1a1a2e',
-  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
-}}}%%
 flowchart TD
-    IN["KV vector\n128-dim, f16"]
+    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
+    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
+    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
+    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
+    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
+    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
+
+    IN["KV vector\n128-dim, f16"]:::setup
+    OUT["f16 norm + packed indices\n(shared storage layout)"]:::success
 
     subgraph PQ["PlanarQuant  --kv-type pq3"]
         direction TB
-        PG["Givens 2D rotation\n64 coordinate pairs\ncos/sin per pair"]
-        PF["256 FMAs total\n(4 per pair × 64 pairs)"]
-        PP["Best 3-bit PPL\nFastest encode/decode"]
+        PG["Givens 2D rotation\n64 coordinate pairs\ncos/sin per pair"]:::sync
+        PF["256 FMAs total\n(4 per pair × 64 pairs)"]:::migration
+        PP["Best 3-bit PPL\nFastest encode/decode"]:::success
         PG --> PF --> PP
     end
 
     subgraph IQ["IsoQuant  --kv-type iq3"]
         direction TB
-        IG["Quaternion 3D rotation\n32 groups of 4 elems\nq v q* sandwich"]
-        IF["512 FMAs total\n(16 per group × 32 groups)"]
-        IP["Balanced speed/quality\nDeeper decorrelation"]
+        IG["Quaternion 3D rotation\n32 groups of 4 elems\nq v q* sandwich"]:::sync
+        IF["512 FMAs total\n(16 per group × 32 groups)"]:::migration
+        IP["Balanced speed/quality\nDeeper decorrelation"]:::success
         IG --> IF --> IP
     end
 
     subgraph RQ["RotorQuant  --kv-type rq3"]
         direction TB
-        RG["Clifford Cl(3,0) rotor\ntriple bivector rotation\nR x R~ sandwich"]
-        RF["~2400 FMAs total\n(~75 per triple × 32)"]
-        RP["Structure-preserving\nGeometric fidelity"]
+        RG["Clifford Cl(3,0) rotor\ntriple bivector rotation\nR x R~ sandwich"]:::sync
+        RF["~2400 FMAs total\n(~75 per triple × 32)"]:::migration
+        RP["Structure-preserving\nGeometric fidelity"]:::optional
         RG --> RF --> RP
     end
 
@@ -809,7 +785,7 @@ flowchart TD
     IN -->|"4-elem groups"| IQ
     IN -->|"3-elem triples"| RQ
 
-    PQ --> OUT["f16 norm + packed indices\n(shared storage layout)"]
+    PQ --> OUT
     IQ --> OUT
     RQ --> OUT
 ```
@@ -828,38 +804,34 @@ All geometric methods use the same CLI pattern: `--kv-type <prefix><bits>` where
 Dequantization happens *inside* the GEMV kernel, not before it. This avoids materializing the full-precision weight matrix.
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': {
-  'primaryColor': '#e8f0fe',
-  'primaryTextColor': '#1a1a2e',
-  'primaryBorderColor': '#4a6cf7',
-  'lineColor': '#4a6cf7',
-  'secondaryColor': '#f0f4ff',
-  'tertiaryColor': '#f8f9ff',
-  'edgeLabelBackground': '#ffffff',
-  'clusterBkg': '#f0f4ff',
-  'clusterBorder': '#4a6cf7',
-  'titleColor': '#1a1a2e',
-  'nodeTextColor': '#1a1a2e',
-  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
-}}}%%
 flowchart TD
-    QW["Quantized weights\n(Q4: 0.5 bytes/elem)"]
+    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
+    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
+    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
+    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
+    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
+    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
 
-    QW --> BadPath["BAD: pre-dequantize\nentire matrix to f32"]
-    BadPath --> BigBuf["f32 buffer\n(4 bytes/elem)\n7B model = 28 GB"]
-    BigBuf --> MatMul["Matrix multiply\n(reads 28 GB)"]
+    QW["Quantized weights\n(Q4: 0.5 bytes/elem)"]:::setup
+    BadPath["BAD: pre-dequantize\nentire matrix to f32"]:::danger
+    BigBuf["f32 buffer\n(4 bytes/elem)\n7B model = 28 GB"]:::danger
+    MatMul["Matrix multiply\n(reads 28 GB)"]:::danger
+    GoodPath["GOOD: dequantize\nper-block inside kernel"]:::success
+    Block["Load one block\n(32 nibbles + 1 scale)"]:::sync
+    DQ["Dequant on register\n(no memory write)"]:::sync
+    Dot["Accumulate dot product"]:::success
+    NextBlock["Next block"]:::sync
 
-    QW --> GoodPath["GOOD: dequantize\nper-block inside kernel"]
-    GoodPath --> Block["Load one block\n(32 nibbles + 1 scale)"]
-    Block --> DQ["Dequant on register\n(no memory write)"]
-    DQ --> Dot["Accumulate dot product"]
-    Dot --> NextBlock["Next block"]
+    QW --> BadPath
+    BadPath --> BigBuf
+    BigBuf --> MatMul
+
+    QW --> GoodPath
+    GoodPath --> Block
+    Block --> DQ
+    DQ --> Dot
+    Dot --> NextBlock
     NextBlock --> Block
-
-    style BadPath fill:#c0392b,color:#fff
-    style BigBuf fill:#c0392b,color:#fff
-    style GoodPath fill:#27ae60,color:#fff
-    style Dot fill:#27ae60,color:#fff
 ```
 
 ```
@@ -886,47 +858,55 @@ For a 2560×2560 matrix, that's 6.5M **multiply-accumulates** (multiply two numb
 ## Choosing a Format
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': {
-  'primaryColor': '#e8f0fe',
-  'primaryTextColor': '#1a1a2e',
-  'primaryBorderColor': '#4a6cf7',
-  'lineColor': '#4a6cf7',
-  'secondaryColor': '#f0f4ff',
-  'tertiaryColor': '#f8f9ff',
-  'edgeLabelBackground': '#ffffff',
-  'clusterBkg': '#f0f4ff',
-  'clusterBorder': '#4a6cf7',
-  'titleColor': '#1a1a2e',
-  'nodeTextColor': '#1a1a2e',
-  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
-}}}%%
 flowchart TD
-    START["What are you quantizing?"]
+    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
+    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
+    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
+    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
+    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
+    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
 
-    START -->|"KV cache at runtime"| KV["KV cache path"]
-    START -->|"Model weights"| WQ["Weight quant path"]
+    START["What are you quantizing?"]:::setup
+    KV["KV cache path"]:::setup
+    WQ["Weight quant path"]:::setup
+    KVF16["f16 / FP8 E4M3\n--kv-type f16"]:::success
+    KVT["turbo preset\n--kv-type turbo\nq8_0-K + turbo4-V"]:::success
+    KVT2["turbo2 / turbo3\n--kv-type turbo3\n4.6x vs f16"]:::migration
+    KVP["PlanarQuant pq3\n256 FMAs, fastest"]:::sync
+    WPlatform["Target platform?"]:::setup
+    WCPU["IQ4_NL / Q4_0 / Q5_K\nOptimized SIMD kernels"]:::success
+    WAPPLE["MLX 4-bit\nNative Metal, affine quant"]:::success
+    WGPU["Q4_K / FP8 E4M3\nGood quality/size ratio"]:::success
+    WBIT["TQ1_0 / TQ2_0\nTernary weights"]:::optional
+    WCAL["Calibration available?"]:::setup
+    WGPTQ["GPTQ / AWQ\nHessian / activation scale"]:::sync
+    WHQQ["HQQ\nNo calibration needed"]:::sync
+    WREF["f32 / bf16\nFull precision"]:::optional
+
+    START -->|"KV cache at runtime"| KV
+    START -->|"Model weights"| WQ
 
     subgraph KVPath["KV Cache"]
         KV --> KVQ["Quality priority?"]
-        KVQ -->|"max quality"| KVF16["f16 / FP8 E4M3\n--kv-type f16"]
-        KVQ -->|"balanced"| KVT["turbo preset\n--kv-type turbo\nq8_0-K + turbo4-V"]
-        KVQ -->|"max compression"| KVT2["turbo2 / turbo3\n--kv-type turbo3\n4.6x vs f16"]
-        KVQ -->|"CPU-bound decode"| KVP["PlanarQuant pq3\n256 FMAs, fastest"]
+        KVQ -->|"max quality"| KVF16
+        KVQ -->|"balanced"| KVT
+        KVQ -->|"max compression"| KVT2
+        KVQ -->|"CPU-bound decode"| KVP
     end
 
     subgraph WPath["Model Weights"]
-        WQ --> WPlatform["Target platform?"]
+        WQ --> WPlatform
 
-        WPlatform -->|"CPU"| WCPU["IQ4_NL / Q4_0 / Q5_K\nOptimized SIMD kernels"]
-        WPlatform -->|"Apple Silicon"| WAPPLE["MLX 4-bit\nNative Metal, affine quant"]
-        WPlatform -->|"GPU (limited VRAM)"| WGPU["Q4_K / FP8 E4M3\nGood quality/size ratio"]
-        WPlatform -->|"BitNet model"| WBIT["TQ1_0 / TQ2_0\nTernary weights"]
+        WPlatform -->|"CPU"| WCPU
+        WPlatform -->|"Apple Silicon"| WAPPLE
+        WPlatform -->|"GPU (limited VRAM)"| WGPU
+        WPlatform -->|"BitNet model"| WBIT
 
-        WPlatform -->|"Need calibration-free"| WCAL["Calibration available?"]
-        WCAL -->|"yes"| WGPTQ["GPTQ / AWQ\nHessian / activation scale"]
-        WCAL -->|"no"| WHQQ["HQQ\nNo calibration needed"]
+        WPlatform -->|"Need calibration-free"| WCAL
+        WCAL -->|"yes"| WGPTQ
+        WCAL -->|"no"| WHQQ
 
-        WPlatform -->|"Reference / debug"| WREF["f32 / bf16\nFull precision"]
+        WPlatform -->|"Reference / debug"| WREF
     end
 ```
 

@@ -109,38 +109,25 @@ val.store(50, .monotonic);
 **Memory ordering** controls **when other threads see your writes** and **when you see their writes**. Stronger orders give more guarantees but cost more CPU cycles.
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': {
-  'primaryColor': '#e8f0fe',
-  'primaryTextColor': '#1a1a2e',
-  'primaryBorderColor': '#4a6cf7',
-  'lineColor': '#4a6cf7',
-  'secondaryColor': '#f0f4ff',
-  'tertiaryColor': '#f8f9ff',
-  'edgeLabelBackground': '#ffffff',
-  'clusterBkg': '#f0f4ff',
-  'clusterBorder': '#4a6cf7',
-  'titleColor': '#1a1a2e',
-  'nodeTextColor': '#1a1a2e',
-  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
-}}}%%
 flowchart LR
-    Mon[".monotonic\nAtomic op only\nno ordering"]
-    Acq[".acquire\nSee all writes\nbefore paired release"]
-    Rel[".release\nPublish writes\nbefore this store"]
-    AcqRel[".acq_rel\nBoth acquire\nand release"]
-    Seq[".seq_cst\nGlobal total order\nall threads agree"]
+    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
+    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
+    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
+    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
+    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
+    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
+
+    Mon[".monotonic\nAtomic op only\nno ordering"]:::sync
+    Acq[".acquire\nSee all writes\nbefore paired release"]:::setup
+    Rel[".release\nPublish writes\nbefore this store"]:::setup
+    AcqRel[".acq_rel\nBoth acquire\nand release"]:::optional
+    Seq[".seq_cst\nGlobal total order\nall threads agree"]:::danger
 
     Mon -->|"+ load ordering"| Acq
     Mon -->|"+ store ordering"| Rel
     Acq -->|"+ store ordering"| AcqRel
     Rel -->|"+ load ordering"| AcqRel
     AcqRel -->|"+ global order"| Seq
-
-    style Mon fill:#e8f4e8,stroke:#4a9e4a
-    style Acq fill:#e8f0fa,stroke:#4a70c0
-    style Rel fill:#e8f0fa,stroke:#4a70c0
-    style AcqRel fill:#f5eaf5,stroke:#8a4ab0
-    style Seq fill:#faeaea,stroke:#c04a4a
 ```
 
 ### The Four Orders (Weakest to Strongest)
@@ -396,35 +383,28 @@ fn workerLoop(pool: *ThreadPool) void {
 ### Active Thread Counter
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': {
-  'primaryColor': '#e8f0fe',
-  'primaryTextColor': '#1a1a2e',
-  'primaryBorderColor': '#4a6cf7',
-  'lineColor': '#4a6cf7',
-  'secondaryColor': '#f0f4ff',
-  'tertiaryColor': '#f8f9ff',
-  'edgeLabelBackground': '#ffffff',
-  'clusterBkg': '#f0f4ff',
-  'clusterBorder': '#4a6cf7',
-  'titleColor': '#1a1a2e',
-  'nodeTextColor': '#1a1a2e',
-  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
-}}}%%
 flowchart TD
+    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
+    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
+    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
+    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
+    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
+    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
+
     subgraph Main["Main thread"]
-        Dispatch["Dispatch work\nactive = n_workers\n(.acq_rel CAS)"]
+        Dispatch["Dispatch work\nactive = n_workers\n(.acq_rel CAS)"]:::setup
         Spin{"active.load(.acquire)\n== 0?"}
-        Hint["spinLoopHint()\nCPU pause / yield"]
-        Done(["All worker output\nvisible — safe to read results"])
+        Hint["spinLoopHint()\nCPU pause / yield"]:::optional
+        Done(["All worker output\nvisible — safe to read results"]):::success
     end
 
     subgraph Workers["Worker threads (run concurrently)"]
-        W1["Worker 1\ndoWork() → chunk A\nwrites output buffer"]
-        W2["Worker 2\ndoWork() → chunk B\nwrites output buffer"]
-        WN["Worker N\ndoWork() → chunk N\nwrites output buffer"]
-        Sub1["fetchSub(1, .release)\npublishes output writes"]
-        Sub2["fetchSub(1, .release)\npublishes output writes"]
-        SubN["fetchSub(1, .release)\npublishes output writes"]
+        W1["Worker 1\ndoWork() → chunk A\nwrites output buffer"]:::sync
+        W2["Worker 2\ndoWork() → chunk B\nwrites output buffer"]:::sync
+        WN["Worker N\ndoWork() → chunk N\nwrites output buffer"]:::sync
+        Sub1["fetchSub(1, .release)\npublishes output writes"]:::migration
+        Sub2["fetchSub(1, .release)\npublishes output writes"]:::migration
+        SubN["fetchSub(1, .release)\npublishes output writes"]:::migration
     end
 
     Dispatch --> W1
@@ -439,13 +419,6 @@ flowchart TD
     Spin -->|"no — still workers running"| Hint
     Hint --> Spin
     Spin -->|"yes — acquire fence\nsees all release writes"| Done
-
-    style Dispatch fill:#e8f4e8,stroke:#4a9e4a
-    style Done fill:#e8f4e8,stroke:#4a9e4a
-    style Spin fill:#fff8e8,stroke:#c0904a
-    style Hint fill:#f5eaf5,stroke:#8a4ab0
-    style Main fill:#f0f4ff,stroke:#4a6cf7
-    style Workers fill:#f8f9ff,stroke:#4a6cf7
 ```
 
 ```zig
@@ -492,29 +465,22 @@ if (pool.shutdown.load(.acquire)) return;
 **Example:** Lock-free stack push:
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': {
-  'primaryColor': '#e8f0fe',
-  'primaryTextColor': '#1a1a2e',
-  'primaryBorderColor': '#4a6cf7',
-  'lineColor': '#4a6cf7',
-  'secondaryColor': '#f0f4ff',
-  'tertiaryColor': '#f8f9ff',
-  'edgeLabelBackground': '#ffffff',
-  'clusterBkg': '#f0f4ff',
-  'clusterBorder': '#4a6cf7',
-  'titleColor': '#1a1a2e',
-  'nodeTextColor': '#1a1a2e',
-  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
-}}}%%
 flowchart TD
-    Start([push: item to insert])
+    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
+    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
+    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
+    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
+    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
+    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
+
+    Start(["push: item to insert"]):::setup
 
     subgraph RetryLoop["CAS retry loop"]
-        Read["Read head\n(.acquire)\ncurrent_head = self.head.load()"]
-        Link["Link item into list\nitem.next = current_head"]
+        Read["Read head\n(.acquire)\ncurrent_head = self.head.load()"]:::sync
+        Link["Link item into list\nitem.next = current_head"]:::migration
         CAS{"cmpxchgWeak\nhead == current_head?"}
-        Success(["Return\nhead now points to item"])
-        Retry["Retry\nanother thread\nchanged head"]
+        Success(["Return\nhead now points to item"]):::success
+        Retry["Retry\nanother thread\nchanged head"]:::danger
     end
 
     Start --> Read
@@ -523,12 +489,6 @@ flowchart TD
     CAS -->|"yes — swap succeeds\n(.release publishes item.next)"| Success
     CAS -->|"no — spurious fail\nor concurrent push"| Retry
     Retry --> Read
-
-    style Start fill:#e8f4e8,stroke:#4a9e4a
-    style Success fill:#e8f4e8,stroke:#4a9e4a
-    style CAS fill:#fff8e8,stroke:#c0904a
-    style Retry fill:#faeaea,stroke:#c04a4a
-    style RetryLoop fill:#f0f4ff,stroke:#4a6cf7
 ```
 
 ```zig

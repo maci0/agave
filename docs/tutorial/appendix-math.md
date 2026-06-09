@@ -22,32 +22,26 @@ dot(a, b) = a[0]*b[0] + a[1]*b[1] + ... + a[n-1]*b[n-1]
 Each output element is a dot product of a matrix row with the input vector. The weight matrix is streamed from memory one row at a time, and each row produces one output scalar.
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': {
-  'primaryColor': '#e8f0fe',
-  'primaryTextColor': '#1a1a2e',
-  'primaryBorderColor': '#4a6cf7',
-  'lineColor': '#4a6cf7',
-  'secondaryColor': '#f0f4ff',
-  'tertiaryColor': '#f8f9ff',
-  'edgeLabelBackground': '#ffffff',
-  'clusterBkg': '#f0f4ff',
-  'clusterBorder': '#4a6cf7',
-  'titleColor': '#1a1a2e',
-  'nodeTextColor': '#1a1a2e',
-  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
-}}}%%
 flowchart LR
-    X["Input Vector x\n[k floats]"]
-    W["Weight Matrix W\n[n rows × k cols]"]
+    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
+    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
+    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
+    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
+    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
+    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
+
+    X["Input Vector x\n[k floats]"]:::setup
+    W["Weight Matrix W\n[n rows × k cols]"]:::setup
+    Y["Output Vector y\n[n floats]"]:::success
 
     subgraph Row0["Row 0 → output y[0]"]
-        D0["dot(W[0], x)"]
+        D0["dot(W[0], x)"]:::sync
     end
     subgraph Row1["Row 1 → output y[1]"]
-        D1["dot(W[1], x)"]
+        D1["dot(W[1], x)"]:::sync
     end
     subgraph RowN["Row n-1 → output y[n-1]"]
-        DN["dot(W[n-1], x)"]
+        DN["dot(W[n-1], x)"]:::sync
     end
 
     W --> D0
@@ -57,7 +51,7 @@ flowchart LR
     X --> D1
     X --> DN
 
-    D0 --> Y["Output Vector y\n[n floats]"]
+    D0 --> Y
     D1 --> Y
     DN --> Y
 ```
@@ -138,50 +132,46 @@ W_v = [[0.3, 0.4, 0.5, 0.6],      V = W_v @ x = [5.0,
 The Q and K projections are used to compute **attention scores** (how much each token should attend to each other token). The V projection contains the actual information that gets mixed based on those scores.
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': {
-  'primaryColor': '#e8f0fe',
-  'primaryTextColor': '#1a1a2e',
-  'primaryBorderColor': '#4a6cf7',
-  'lineColor': '#4a6cf7',
-  'secondaryColor': '#f0f4ff',
-  'tertiaryColor': '#f8f9ff',
-  'edgeLabelBackground': '#ffffff',
-  'clusterBkg': '#f0f4ff',
-  'clusterBorder': '#4a6cf7',
-  'titleColor': '#1a1a2e',
-  'nodeTextColor': '#1a1a2e',
-  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
-}}}%%
 flowchart TD
+    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
+    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
+    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
+    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
+    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
+    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
+
+    Softmax["softmax(scores)\nattention weights"]:::migration
+    Output["Output = weighted mix\n(mostly 'fluffy' info)"]:::success
+
     subgraph Current["Current token (e.g. 'cat')"]
-        Q["Query Q\nWhat am I looking for?\ne.g. 'adjectives nearby'"]
+        Q["Query Q\nWhat am I looking for?\ne.g. 'adjectives nearby'"]:::setup
     end
 
     subgraph Context["All tokens in context"]
-        K1["Key K1 'fluffy'\nWhat do I offer?"]
-        K2["Key K2 'sat'\nWhat do I offer?"]
-        K3["Key K3 'mat'\nWhat do I offer?"]
+        K1["Key K1 'fluffy'\nWhat do I offer?"]:::sync
+        K2["Key K2 'sat'\nWhat do I offer?"]:::sync
+        K3["Key K3 'mat'\nWhat do I offer?"]:::sync
     end
 
     Q -->|"dot product → score"| K1
     Q -->|"dot product → score"| K2
     Q -->|"dot product → score"| K3
 
-    K1 -->|"high score → high weight"| Softmax["softmax(scores)\nattention weights"]
+    K1 -->|"high score → high weight"| Softmax
     K2 -->|"low score → low weight"| Softmax
     K3 -->|"low score → low weight"| Softmax
 
     subgraph Values["Values carry the content"]
-        V1["Value V1 'fluffy'"]
-        V2["Value V2 'sat'"]
-        V3["Value V3 'mat'"]
+        V1["Value V1 'fluffy'"]:::sync
+        V2["Value V2 'sat'"]:::sync
+        V3["Value V3 'mat'"]:::sync
     end
 
     Softmax -->|"weight × value"| V1
     Softmax -->|"weight × value"| V2
     Softmax -->|"weight × value"| V3
 
-    V1 --> Output["Output = weighted mix\n(mostly 'fluffy' info)"]
+    V1 --> Output
     V2 --> Output
     V3 --> Output
 ```
@@ -215,41 +205,45 @@ The division by `sqrt(head_dim)` (called **scaled** dot-product attention) preve
 ```
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': {
-  'primaryColor': '#e8f0fe',
-  'primaryTextColor': '#1a1a2e',
-  'primaryBorderColor': '#4a6cf7',
-  'lineColor': '#4a6cf7',
-  'secondaryColor': '#f0f4ff',
-  'tertiaryColor': '#f8f9ff',
-  'edgeLabelBackground': '#ffffff',
-  'clusterBkg': '#f0f4ff',
-  'clusterBorder': '#4a6cf7',
-  'titleColor': '#1a1a2e',
-  'nodeTextColor': '#1a1a2e',
-  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
-}}}%%
 flowchart LR
-    HiddenState["Hidden State x\n[hidden_dim floats]"]
+    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
+    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
+    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
+    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
+    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
+    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
 
-    HiddenState --> Wq["W_q projection\nGEMV"]
-    HiddenState --> Wk["W_k projection\nGEMV"]
-    HiddenState --> Wv["W_v projection\nGEMV"]
+    HiddenState["Hidden State x\n[hidden_dim floats]"]:::setup
+    Wq["W_q projection\nGEMV"]:::sync
+    Wk["W_k projection\nGEMV"]:::sync
+    Wv["W_v projection\nGEMV"]:::sync
+    Q["Query Q\n[n_heads × head_dim]"]:::migration
+    K["Key K\n(stored in KV cache)"]:::migration
+    V["Value V\n(stored in KV cache)"]:::migration
+    WeightedSum["Weighted sum\nweights × V"]:::sync
+    Out["Attention Output\n[hidden_dim floats]"]:::success
 
-    Wq --> Q["Query Q\n[n_heads × head_dim]"]
-    Wk --> K["Key K\n(stored in KV cache)"]
-    Wv --> V["Value V\n(stored in KV cache)"]
+    HiddenState --> Wq
+    HiddenState --> Wk
+    HiddenState --> Wv
+
+    Wq --> Q
+    Wk --> K
+    Wv --> V
 
     subgraph Scores["Attention Score Computation"]
-        Q --> Dot["Q · Kᵀ\n(dot products)"]
+        Dot["Q · Kᵀ\n(dot products)"]:::sync
+        Scale["÷ sqrt(head_dim)\n(prevents saturation)"]:::migration
+        SM["softmax per row\n(convert to weights 0→1)"]:::migration
+        Q --> Dot
         K --> Dot
-        Dot --> Scale["÷ sqrt(head_dim)\n(prevents saturation)"]
-        Scale --> SM["softmax per row\n(convert to weights 0→1)"]
+        Dot --> Scale
+        Scale --> SM
     end
 
-    SM --> WeightedSum["Weighted sum\nweights × V"]
+    SM --> WeightedSum
     V --> WeightedSum
-    WeightedSum --> Out["Attention Output\n[hidden_dim floats]"]
+    WeightedSum --> Out
 ```
 
 **Multi-head attention**: Repeat this process with different W_q, W_k, W_v matrices for each head, concatenate outputs.
@@ -299,35 +293,33 @@ Output: [0.66, 0.24, 0.10]    (sum = 1.00)
 **Numerical stability trick**: Subtract max before exp to prevent overflow. The diagram below shows why the naive path fails and what the stable path does instead.
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': {
-  'primaryColor': '#e8f0fe',
-  'primaryTextColor': '#1a1a2e',
-  'primaryBorderColor': '#4a6cf7',
-  'lineColor': '#4a6cf7',
-  'secondaryColor': '#f0f4ff',
-  'tertiaryColor': '#f8f9ff',
-  'edgeLabelBackground': '#ffffff',
-  'clusterBkg': '#f0f4ff',
-  'clusterBorder': '#4a6cf7',
-  'titleColor': '#1a1a2e',
-  'nodeTextColor': '#1a1a2e',
-  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
-}}}%%
 flowchart TD
-    Input["Raw scores x\ne.g. [1000, 1001, 999]"]
+    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
+    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
+    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
+    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
+    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
+    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
 
-    Input --> Naive["Naive: exp(x) directly"]
-    Naive --> Overflow["exp(1000) = Inf\noverflow — unusable"]
+    Input["Raw scores x\ne.g. [1000, 1001, 999]"]:::setup
+    Naive["Naive: exp(x) directly"]:::sync
+    Overflow["exp(1000) = Inf\noverflow — unusable"]:::danger
+    FindMax["Find max(x) = 1001"]:::sync
+    Shift["Subtract max\nx_shifted = [-1, 0, -2]"]:::migration
+    ExpSafe["exp(x_shifted)\n= [0.368, 1.0, 0.135]"]:::sync
+    Sum["sum = 1.503"]:::migration
+    Divide["Divide each by sum"]:::sync
+    Probs["Probabilities\n[0.245, 0.665, 0.090]\nsum = 1.0"]:::success
 
-    Input --> FindMax["Find max(x) = 1001"]
-    FindMax --> Shift["Subtract max\nx_shifted = [-1, 0, -2]"]
-    Shift --> ExpSafe["exp(x_shifted)\n= [0.368, 1.0, 0.135]"]
-    ExpSafe --> Sum["sum = 1.503"]
-    Sum --> Divide["Divide each by sum"]
-    Divide --> Probs["Probabilities\n[0.245, 0.665, 0.090]\nsum = 1.0"]
+    Input --> Naive
+    Naive --> Overflow
 
-    style Overflow fill:#ffcccc,color:#333
-    style Probs fill:#ccffcc,color:#333
+    Input --> FindMax
+    FindMax --> Shift
+    Shift --> ExpSafe
+    ExpSafe --> Sum
+    Sum --> Divide
+    Divide --> Probs
 ```
 
 ### RMS Normalization (RMSNorm)
@@ -353,35 +345,28 @@ output = [2.0/3.464, 4.0/3.464, 4.0/3.464] * w
 **Why RMS not mean**: Simpler (no mean subtraction), empirically just as effective as LayerNorm.
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': {
-  'primaryColor': '#e8f0fe',
-  'primaryTextColor': '#1a1a2e',
-  'primaryBorderColor': '#4a6cf7',
-  'lineColor': '#4a6cf7',
-  'secondaryColor': '#f0f4ff',
-  'tertiaryColor': '#f8f9ff',
-  'edgeLabelBackground': '#ffffff',
-  'clusterBkg': '#f0f4ff',
-  'clusterBorder': '#4a6cf7',
-  'titleColor': '#1a1a2e',
-  'nodeTextColor': '#1a1a2e',
-  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
-}}}%%
 flowchart TD
-    Input["Input vector x\ne.g. [2.0, 4.0, 4.0]"]
+    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
+    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
+    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
+    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
+    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
+    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
+
+    Input["Input vector x\ne.g. [2.0, 4.0, 4.0]"]:::setup
 
     subgraph Pass1["Pass 1: Compute RMS"]
-        Sq["Square each element\nx² = [4, 16, 16]"]
-        Mean["Mean of squares\nmean(x²) = 12.0"]
-        Eps["Add epsilon for stability\n12.0 + 1e-6"]
-        Sqrt["Square root\nrms = sqrt(12.000001) ≈ 3.464"]
+        Sq["Square each element\nx² = [4, 16, 16]"]:::sync
+        Mean["Mean of squares\nmean(x²) = 12.0"]:::sync
+        Eps["Add epsilon for stability\n12.0 + 1e-6"]:::migration
+        Sqrt["Square root\nrms = sqrt(12.000001) ≈ 3.464"]:::migration
         Sq --> Mean --> Eps --> Sqrt
     end
 
     subgraph Pass2["Pass 2: Normalize and Scale"]
-        Div["Divide each element by rms\n[2/3.464, 4/3.464, 4/3.464]\n= [0.577, 1.155, 1.155]"]
-        Scale["Multiply by learned weights w\n(per-element scale, trained)"]
-        Out["Normalized output\nunit RMS, scaled by w"]
+        Div["Divide each element by rms\n[2/3.464, 4/3.464, 4/3.464]\n= [0.577, 1.155, 1.155]"]:::sync
+        Scale["Multiply by learned weights w\n(per-element scale, trained)"]:::sync
+        Out["Normalized output\nunit RMS, scaled by w"]:::success
         Div --> Scale --> Out
     end
 
@@ -466,44 +451,44 @@ tanh(x) = (exp(x) - exp(-x)) / (exp(x) + exp(-x))
 ### Activation Function Comparison
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': {
-  'primaryColor': '#e8f0fe',
-  'primaryTextColor': '#1a1a2e',
-  'primaryBorderColor': '#4a6cf7',
-  'lineColor': '#4a6cf7',
-  'secondaryColor': '#f0f4ff',
-  'tertiaryColor': '#f8f9ff',
-  'edgeLabelBackground': '#ffffff',
-  'clusterBkg': '#f0f4ff',
-  'clusterBorder': '#4a6cf7',
-  'titleColor': '#1a1a2e',
-  'nodeTextColor': '#1a1a2e',
-  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
-}}}%%
 flowchart LR
+    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
+    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
+    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
+    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
+    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
+    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
+
+    Input["Raw activation value x\n(any real number)"]:::setup
+    GateUse["Controls how much\nsignal passes through"]:::success
+    ClampUse["Soft clamp — prevents\nlogit explosion"]:::success
+    FFNUse["Gate × up projection\nin SwiGLU FFN"]:::success
+    GELUUse["Drop-in for SiLU\nin Gemma3"]:::success
+    DtUse["Ensures dt > 0\nfor stable SSM decay"]:::success
+
     subgraph Bounded["Bounded outputs (0,1) or (-1,1)"]
-        Sigmoid["sigmoid(x)\nRange: (0, 1)\nFormula: 1/(1+exp(-x))\nUse: gating, routing"]
-        Tanh["tanh(x)\nRange: (-1, 1)\nFormula: 2·sigmoid(2x)-1\nUse: softcapping logits"]
+        Sigmoid["sigmoid(x)\nRange: (0, 1)\nFormula: 1/(1+exp(-x))\nUse: gating, routing"]:::sync
+        Tanh["tanh(x)\nRange: (-1, 1)\nFormula: 2·sigmoid(2x)-1\nUse: softcapping logits"]:::sync
     end
 
     subgraph Unbounded["Unbounded outputs — pass large values through"]
-        SiLU["SiLU / Swish\nRange: (-0.28, ∞)\nFormula: x·sigmoid(x)\nUse: SwiGLU FFN layers"]
-        GELU["GELU\nRange: (-0.17, ∞)\nFormula: 0.5x·(1+tanh(...))\nUse: Gemma3 FFN layers"]
+        SiLU["SiLU / Swish\nRange: (-0.28, ∞)\nFormula: x·sigmoid(x)\nUse: SwiGLU FFN layers"]:::sync
+        GELU["GELU\nRange: (-0.17, ∞)\nFormula: 0.5x·(1+tanh(...))\nUse: Gemma3 FFN layers"]:::sync
     end
 
     subgraph AlwaysPos["Always positive"]
-        Softplus["softplus(x)\nRange: (0, ∞)\nFormula: log(1+exp(x))\nUse: SSM timestep dt"]
+        Softplus["softplus(x)\nRange: (0, ∞)\nFormula: log(1+exp(x))\nUse: SSM timestep dt"]:::sync
     end
 
-    Input["Raw activation value x\n(any real number)"] --> Bounded
+    Input --> Bounded
     Input --> Unbounded
     Input --> AlwaysPos
 
-    Sigmoid -->|"small x → ~0\nlarge x → ~1"| GateUse["Controls how much\nsignal passes through"]
-    Tanh -->|"large x → ±1\n(saturates smoothly)"| ClampUse["Soft clamp — prevents\nlogit explosion"]
-    SiLU -->|"x < 0 → small neg\nx > 0 → ~linear"| FFNUse["Gate × up projection\nin SwiGLU FFN"]
-    GELU -->|"similar to SiLU\nslightly smoother"| GELUUse["Drop-in for SiLU\nin Gemma3"]
-    Softplus -->|"always > 0\nno negative outputs"| DtUse["Ensures dt > 0\nfor stable SSM decay"]
+    Sigmoid -->|"small x → ~0\nlarge x → ~1"| GateUse
+    Tanh -->|"large x → ±1\n(saturates smoothly)"| ClampUse
+    SiLU -->|"x < 0 → small neg\nx > 0 → ~linear"| FFNUse
+    GELU -->|"similar to SiLU\nslightly smoother"| GELUUse
+    Softplus -->|"always > 0\nno negative outputs"| DtUse
 ```
 
 ## Sampling Operations
@@ -566,45 +551,42 @@ Keep smallest set of tokens whose cumulative probability ≥ P:
 ### Sampling Pipeline
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': {
-  'primaryColor': '#e8f0fe',
-  'primaryTextColor': '#1a1a2e',
-  'primaryBorderColor': '#4a6cf7',
-  'lineColor': '#4a6cf7',
-  'secondaryColor': '#f0f4ff',
-  'tertiaryColor': '#f8f9ff',
-  'edgeLabelBackground': '#ffffff',
-  'clusterBkg': '#f0f4ff',
-  'clusterBorder': '#4a6cf7',
-  'titleColor': '#1a1a2e',
-  'nodeTextColor': '#1a1a2e',
-  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
-}}}%%
 flowchart TD
-    Logits["Raw logits\n[vocab_size floats]\ne.g. 128,000 values"]
+    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
+    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
+    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
+    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
+    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
+    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
+
+    Logits["Raw logits\n[vocab_size floats]\ne.g. 128,000 values"]:::setup
+    Argmax["argmax(logits)\npick highest score directly"]:::setup
+    Token["Next token ID"]:::success
+    TempScale["Divide by temperature\nlogits / T\nlower T → sharper, higher T → flatter"]:::migration
+    KFilter["Find k-th largest value\nmask all below threshold to -inf\n(O(n) single pass)"]:::migration
+    Softmax2["softmax → cumulative probs\ndrop tokens past nucleus threshold P\nrenormalize remaining"]:::sync
+    Softmax1["softmax\nconvert all logits to probs"]:::sync
+    Sample["Weighted random sample\nfrom remaining distribution"]:::sync
 
     Logits --> TempCheck{"temperature\n= 0?"}
 
-    TempCheck -->|"yes — greedy"| Argmax["argmax(logits)\npick highest score directly"]
-    Argmax --> Token["Next token ID"]
+    TempCheck -->|"yes — greedy"| Argmax
+    Argmax --> Token
 
-    TempCheck -->|"no — sample"| TempScale["Divide by temperature\nlogits / T\nlower T → sharper, higher T → flatter"]
+    TempCheck -->|"no — sample"| TempScale
 
     TempScale --> TopK{"top_k\nenabled?"}
-    TopK -->|"yes"| KFilter["Find k-th largest value\nmask all below threshold to -inf\n(O(n) single pass)"]
+    TopK -->|"yes"| KFilter
     TopK -->|"no"| TopP
 
     KFilter --> TopP{"top_p\nenabled?"}
-    TopP -->|"yes"| Softmax2["softmax → cumulative probs\ndrop tokens past nucleus threshold P\nrenormalize remaining"]
-    TopP -->|"no"| Softmax1["softmax\nconvert all logits to probs"]
+    TopP -->|"yes"| Softmax2
+    TopP -->|"no"| Softmax1
 
-    Softmax2 --> Sample["Weighted random sample\nfrom remaining distribution"]
+    Softmax2 --> Sample
     Softmax1 --> Sample
 
     Sample --> Token
-
-    style Token fill:#ccffcc,color:#333
-    style Argmax fill:#e8f0fe,color:#1a1a2e
 ```
 
 ## Special Operations
@@ -658,35 +640,31 @@ A 28-layer model with vocab_size=128K does ~197 GEMVs per token.
 For single-token decode, everything is bandwidth-bound.
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': {
-  'primaryColor': '#e8f0fe',
-  'primaryTextColor': '#1a1a2e',
-  'primaryBorderColor': '#4a6cf7',
-  'lineColor': '#4a6cf7',
-  'secondaryColor': '#f0f4ff',
-  'tertiaryColor': '#f8f9ff',
-  'edgeLabelBackground': '#ffffff',
-  'clusterBkg': '#f0f4ff',
-  'clusterBorder': '#4a6cf7',
-  'titleColor': '#1a1a2e',
-  'nodeTextColor': '#1a1a2e',
-  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
-}}}%%
 flowchart LR
+    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
+    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
+    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
+    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
+    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
+    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
+
+    Opt1["Optimization levers\nfor bandwidth-bound:\n• Quantization (4-bit → 4× less data)\n• Kernel fusion (fewer passes)\n• Larger batch size"]:::optional
+    Opt2["Optimization levers\nfor compute-bound:\n• FlashAttention (tiled SRAM)\n• Tensor parallelism\n• Higher-TFLOPS GPU"]:::optional
+
     subgraph BW["Bandwidth-bound operations\n(memory speed is the bottleneck)"]
-        GEMV2["GEMV — decode\nReads weight matrix row by row\nArithmetic intensity: ~0.25 FLOP/byte\nBottleneck: DRAM bandwidth"]
-        Norm["RMSNorm / LayerNorm\nReads vector, writes vector\nArithmetic intensity: ~2 FLOP/byte\nBottleneck: memory round-trips"]
-        Activation["Activation functions\n(SiLU, GELU, sigmoid)\nElement-wise, trivial math\nBottleneck: reading/writing the tensor"]
-        ElemWise["Element-wise ops\n(add, mul, residual)\nOne pass over data\nBottleneck: memory bandwidth"]
+        GEMV2["GEMV — decode\nReads weight matrix row by row\nArithmetic intensity: ~0.25 FLOP/byte\nBottleneck: DRAM bandwidth"]:::setup
+        Norm["RMSNorm / LayerNorm\nReads vector, writes vector\nArithmetic intensity: ~2 FLOP/byte\nBottleneck: memory round-trips"]:::setup
+        Activation["Activation functions\n(SiLU, GELU, sigmoid)\nElement-wise, trivial math\nBottleneck: reading/writing the tensor"]:::setup
+        ElemWise["Element-wise ops\n(add, mul, residual)\nOne pass over data\nBottleneck: memory bandwidth"]:::setup
     end
 
     subgraph Compute["Compute-bound operations\n(ALU utilization is the bottleneck)"]
-        Prefill["GEMM — prefill\nMatrix × matrix (all tokens at once)\nArithmetic intensity: ~O(seq_len) FLOP/byte\nBottleneck: GPU TFLOPS"]
-        LongAttn["Attention — long sequences\nO(seq_len²) dot products per head\nArithmetic intensity grows with seq_len\nBottleneck: GPU TFLOPS"]
+        Prefill["GEMM — prefill\nMatrix × matrix (all tokens at once)\nArithmetic intensity: ~O(seq_len) FLOP/byte\nBottleneck: GPU TFLOPS"]:::sync
+        LongAttn["Attention — long sequences\nO(seq_len²) dot products per head\nArithmetic intensity grows with seq_len\nBottleneck: GPU TFLOPS"]:::sync
     end
 
-    Opt1["Optimization levers\nfor bandwidth-bound:\n• Quantization (4-bit → 4× less data)\n• Kernel fusion (fewer passes)\n• Larger batch size"] --- BW
-    Opt2["Optimization levers\nfor compute-bound:\n• FlashAttention (tiled SRAM)\n• Tensor parallelism\n• Higher-TFLOPS GPU"] --- Compute
+    Opt1 --- BW
+    Opt2 --- Compute
 ```
 
 ### In-place vs Allocating

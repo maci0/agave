@@ -7,26 +7,26 @@ Zig's `comptime` feature executes code **at compile time**, generating optimized
 **comptime** means "computed at compile time". The compiler evaluates the expression during compilation, and the result is baked into the binary.
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': {
-  'primaryColor': '#e8f0fe',
-  'primaryTextColor': '#1a1a2e',
-  'primaryBorderColor': '#4a6cf7',
-  'lineColor': '#4a6cf7',
-  'secondaryColor': '#f0f4ff',
-  'tertiaryColor': '#f8f9ff',
-  'edgeLabelBackground': '#ffffff',
-  'clusterBkg': '#f0f4ff',
-  'clusterBorder': '#4a6cf7',
-  'titleColor': '#1a1a2e',
-  'nodeTextColor': '#1a1a2e',
-  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
-}}}%%
 flowchart LR
-    Source["Source Code\n(comptime expression)"] --> Compiler["Zig Compiler\n(compile time)"]
-    Compiler --> Value["Constant Value\nbaked into binary"]
-    Value --> Binary["Executable Binary\n(.rodata section)"]
-    Runtime["Runtime\n(user runs program)"] --> Binary
-    Binary --> Result["Instant result\n(no computation)"]
+    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
+    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
+    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
+    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
+    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
+    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
+
+    Source["Source Code\n(comptime expression)"]:::setup
+    Compiler["Zig Compiler\n(compile time)"]:::sync
+    Value["Constant Value\nbaked into binary"]:::migration
+    Binary["Executable Binary\n(.rodata section)"]:::success
+    Runtime["Runtime\n(user runs program)"]:::setup
+    Result["Instant result\n(no computation)"]:::success
+
+    Source --> Compiler
+    Compiler --> Value
+    Value --> Binary
+    Runtime --> Binary
+    Binary --> Result
 
     subgraph CompilePhase["Compile Phase (your machine, once)"]
         Source
@@ -61,28 +61,31 @@ const doubled = comptime table_size * 2;  // Computed at compile time (512)
 Pre-computing values at compile time eliminates runtime arithmetic.
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': {
-  'primaryColor': '#e8f0fe',
-  'primaryTextColor': '#1a1a2e',
-  'primaryBorderColor': '#4a6cf7',
-  'lineColor': '#4a6cf7',
-  'secondaryColor': '#f0f4ff',
-  'tertiaryColor': '#f8f9ff',
-  'edgeLabelBackground': '#ffffff',
-  'clusterBkg': '#f0f4ff',
-  'clusterBorder': '#4a6cf7',
-  'titleColor': '#1a1a2e',
-  'nodeTextColor': '#1a1a2e',
-  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
-}}}%%
 flowchart TD
-    NaiveInput["8-bit FP8 value\n(e.g. 0xA7)"] --> NaiveOps["Runtime: extract bits,\nbranch, pow(), multiply\n~30 instructions"]
-    NaiveOps --> NaiveOut["f32 result"]
+    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
+    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
+    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
+    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
+    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
+    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
 
-    ComptimeLoop["Compiler: loop 0..256\nfp8e4m3Compute(i)"] --> LUT["[256]f32 table\nin .rodata\n(1 KB)"]
-    LUT --> LUTLookup["Runtime: array[val]\n1 instruction"]
-    FastInput["8-bit FP8 value\n(e.g. 0xA7)"] --> LUTLookup
-    LUTLookup --> FastOut["f32 result"]
+    NaiveInput["8-bit FP8 value\n(e.g. 0xA7)"]:::setup
+    NaiveOps["Runtime: extract bits,\nbranch, pow(), multiply\n~30 instructions"]:::danger
+    NaiveOut["f32 result"]:::migration
+
+    ComptimeLoop["Compiler: loop 0..256\nfp8e4m3Compute(i)"]:::sync
+    LUT["[256]f32 table\nin .rodata\n(1 KB)"]:::migration
+    FastInput["8-bit FP8 value\n(e.g. 0xA7)"]:::setup
+    LUTLookup["Runtime: array[val]\n1 instruction"]:::sync
+    FastOut["f32 result"]:::success
+
+    NaiveInput --> NaiveOps
+    NaiveOps --> NaiveOut
+
+    ComptimeLoop --> LUT
+    LUT --> LUTLookup
+    FastInput --> LUTLookup
+    LUTLookup --> FastOut
 
     subgraph Naive["Naive (runtime per call)"]
         NaiveInput
@@ -203,32 +206,33 @@ This runs at compile time. If the table is malformed, **compilation fails**.
 Zig's `builtin` module provides platform information at comptime.
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': {
-  'primaryColor': '#e8f0fe',
-  'primaryTextColor': '#1a1a2e',
-  'primaryBorderColor': '#4a6cf7',
-  'lineColor': '#4a6cf7',
-  'secondaryColor': '#f0f4ff',
-  'tertiaryColor': '#f8f9ff',
-  'edgeLabelBackground': '#ffffff',
-  'clusterBkg': '#f0f4ff',
-  'clusterBorder': '#4a6cf7',
-  'titleColor': '#1a1a2e',
-  'nodeTextColor': '#1a1a2e',
-  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
-}}}%%
 flowchart LR
-    BuildCmd["zig build\n-Dtarget=aarch64-macos"] --> Builtin["builtin.os.tag\nbuiltin.cpu.arch\nbuild_options.*"]
+    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
+    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
+    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
+    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
+    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
+    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
 
+    BuildCmd["zig build\n-Dtarget=aarch64-macos"]:::setup
+    Builtin["builtin.os.tag\nbuiltin.cpu.arch\nbuild_options.*"]:::migration
+    MetalBranch["MetalBackend\ncompiled in"]:::sync
+    VulkanBranch["VulkanBackend\ncompiled in"]:::sync
+    CPUBranch["CpuBackend\ncompiled in"]:::sync
+    Binary["macOS Binary\n(Metal only,\nLinux code absent)"]:::success
+    LinuxBin["Linux Binary\n(Vulkan only,\nMetal code absent)"]:::success
+    CPUBin["Other Binary\n(CPU fallback)"]:::success
+
+    BuildCmd --> Builtin
     Builtin --> MacOS{{"os == .macos?"}}
-    MacOS -- yes --> MetalBranch["MetalBackend\ncompiled in"]
+    MacOS -- yes --> MetalBranch
     MacOS -- no --> Linux{{"os == .linux?"}}
-    Linux -- yes --> VulkanBranch["VulkanBackend\ncompiled in"]
-    Linux -- no --> CPUBranch["CpuBackend\ncompiled in"]
+    Linux -- yes --> VulkanBranch
+    Linux -- no --> CPUBranch
 
-    MetalBranch --> Binary["macOS Binary\n(Metal only,\nLinux code absent)"]
-    VulkanBranch --> LinuxBin["Linux Binary\n(Vulkan only,\nMetal code absent)"]
-    CPUBranch --> CPUBin["Other Binary\n(CPU fallback)"]
+    MetalBranch --> Binary
+    VulkanBranch --> LinuxBin
+    CPUBranch --> CPUBin
 
     subgraph CompileTime["Compile Time: dead code eliminated"]
         MacOS
@@ -298,39 +302,39 @@ else
 Shader source code can be embedded directly into the binary at compile time.
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': {
-  'primaryColor': '#e8f0fe',
-  'primaryTextColor': '#1a1a2e',
-  'primaryBorderColor': '#4a6cf7',
-  'lineColor': '#4a6cf7',
-  'secondaryColor': '#f0f4ff',
-  'tertiaryColor': '#f8f9ff',
-  'edgeLabelBackground': '#ffffff',
-  'clusterBkg': '#f0f4ff',
-  'clusterBorder': '#4a6cf7',
-  'titleColor': '#1a1a2e',
-  'nodeTextColor': '#1a1a2e',
-  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
-}}}%%
 flowchart LR
-    MSL1["common.metal\n(MSL source)"]
-    MSL2["elementwise.metal\n(MSL source)"]
-    MSL3["gemv.metal\n(MSL source)"]
-    MSLN["... (5 more .metal files)"]
-    SPV["gemv.spv\n(SPIR-V binary)"]
+    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
+    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
+    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
+    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
+    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
+    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
 
-    MSL1 --> EF["@embedFile\n(compile step)"]
+    MSL1["common.metal\n(MSL source)"]:::setup
+    MSL2["elementwise.metal\n(MSL source)"]:::setup
+    MSL3["gemv.metal\n(MSL source)"]:::setup
+    MSLN["... (5 more .metal files)"]:::setup
+    SPV["gemv.spv\n(SPIR-V binary)"]:::setup
+    EF["@embedFile\n(compile step)"]:::sync
+    EF2["@embedFile\n(compile step)"]:::sync
+    Concat["++ concatenation\n(zero-cost, compile time)"]:::sync
+    ROData[".rodata section\nin binary\n([]const u8 pointer)"]:::migration
+    ROData2[".rodata section\nin binary\n([]const u8 pointer)"]:::migration
+    Init["MetalBackend.init()\nnewLibraryWithSource(src)\n(driver compiles to GPU bytecode)"]:::success
+    Init2["VulkanBackend.init()\ncreateShaderModule(code)\n(SPIR-V loaded directly)"]:::success
+
+    MSL1 --> EF
     MSL2 --> EF
     MSL3 --> EF
     MSLN --> EF
-    SPV  --> EF2["@embedFile\n(compile step)"]
+    SPV  --> EF2
 
-    EF  --> Concat["++ concatenation\n(zero-cost, compile time)"]
-    Concat --> ROData[".rodata section\nin binary\n([]const u8 pointer)"]
-    EF2 --> ROData2[".rodata section\nin binary\n([]const u8 pointer)"]
+    EF  --> Concat
+    Concat --> ROData
+    EF2 --> ROData2
 
-    ROData  --> Init["MetalBackend.init()\nnewLibraryWithSource(src)\n(driver compiles to GPU bytecode)"]
-    ROData2 --> Init2["VulkanBackend.init()\ncreateShaderModule(code)\n(SPIR-V loaded directly)"]
+    ROData  --> Init
+    ROData2 --> Init2
 
     subgraph SourceFiles["Source Files (on disk, compile time only)"]
         MSL1
@@ -443,37 +447,37 @@ dequantize(Q4_0, quant_data, f32_output);  // Compiles to direct call to dequant
 **No runtime dispatch** — the switch is resolved at compile time, and only the relevant function is called.
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': {
-  'primaryColor': '#e8f0fe',
-  'primaryTextColor': '#1a1a2e',
-  'primaryBorderColor': '#4a6cf7',
-  'lineColor': '#4a6cf7',
-  'secondaryColor': '#f0f4ff',
-  'tertiaryColor': '#f8f9ff',
-  'edgeLabelBackground': '#ffffff',
-  'clusterBkg': '#f0f4ff',
-  'clusterBorder': '#4a6cf7',
-  'titleColor': '#1a1a2e',
-  'nodeTextColor': '#1a1a2e',
-  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
-}}}%%
 flowchart TD
-    Generic["dequantize(comptime T: type, ...)\ngeneric call site"]
+    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
+    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
+    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
+    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
+    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
+    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
+
+    Generic["dequantize(comptime T: type, ...)\ngeneric call site"]:::setup
+    Q4["T == Q4_0\n→ dequantizeQ4_0()\nmonomorphized copy"]:::sync
+    Q8["T == Q8_0\n→ dequantizeQ8_0()\nmonomorphized copy"]:::sync
+    BF["T == BF16\n→ dequantizeBF16()\nmonomorphized copy"]:::sync
+    ERR["T == other\n→ @compileError()\nhalts compilation"]:::danger
+    BQ4["dequantizeQ4_0\n(direct call, inlined)"]:::success
+    BQ8["dequantizeQ8_0\n(direct call, inlined)"]:::success
+    BBF["dequantizeBF16\n(direct call, inlined)"]:::success
 
     subgraph CompileTime["Compiler — resolved at compile time (T is known)"]
         direction LR
         SW{"switch T"}
-        Q4["T == Q4_0\n→ dequantizeQ4_0()\nmonomorphized copy"]
-        Q8["T == Q8_0\n→ dequantizeQ8_0()\nmonomorphized copy"]
-        BF["T == BF16\n→ dequantizeBF16()\nmonomorphized copy"]
-        ERR["T == other\n→ @compileError()\nhalts compilation"]
+        Q4
+        Q8
+        BF
+        ERR
         SW --> Q4 & Q8 & BF & ERR
     end
 
     subgraph Binary["Binary — only called variant present"]
-        BQ4["dequantizeQ4_0\n(direct call, inlined)"]
-        BQ8["dequantizeQ8_0\n(direct call, inlined)"]
-        BBF["dequantizeBF16\n(direct call, inlined)"]
+        BQ4
+        BQ8
+        BBF
     end
 
     Generic --> SW
@@ -515,48 +519,51 @@ switch (self) {
 **Benefit:** Compiler sees all calls, can inline them. No function pointer indirection.
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': {
-  'primaryColor': '#e8f0fe',
-  'primaryTextColor': '#1a1a2e',
-  'primaryBorderColor': '#4a6cf7',
-  'lineColor': '#4a6cf7',
-  'secondaryColor': '#f0f4ff',
-  'tertiaryColor': '#f8f9ff',
-  'edgeLabelBackground': '#ffffff',
-  'clusterBkg': '#f0f4ff',
-  'clusterBorder': '#4a6cf7',
-  'titleColor': '#1a1a2e',
-  'nodeTextColor': '#1a1a2e',
-  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
-}}}%%
 flowchart TD
-    Call["backend.gemv(args)\n(call site in model code)"]
+    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
+    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
+    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
+    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
+    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
+    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
+
+    Call["backend.gemv(args)\n(call site in model code)"]:::setup
+    IE_Tag["read union tag\n(cheap branch)"]:::migration
+    IE_CPU["tag == .cpu\nCpuBackend.gemv(args)\n(inlined by compiler)"]:::sync
+    IE_Metal["tag == .metal\nMetalBackend.gemv(args)\n(inlined by compiler)"]:::sync
+    IE_Vulkan["tag == .vulkan\nVulkanBackend.gemv(args)\n(inlined by compiler)"]:::sync
+    VT_Ptr["load vtable pointer\nfrom object header"]:::danger
+    VT_Offset["add method offset\n(e.g. +8 bytes for gemv)"]:::danger
+    VT_Load["load function pointer\nfrom vtable memory"]:::danger
+    VT_Call["indirect call\nvia register\n(branch predictor miss risk)"]:::danger
+    Res1["direct kernel code\n(zero indirection)"]:::success
+    Res2["kernel code\n(1 indirect branch)"]:::migration
 
     subgraph InlineElse["inline else dispatch (Zig)"]
         direction TB
-        IE_Tag["read union tag\n(cheap branch)"]
-        IE_CPU["tag == .cpu\nCpuBackend.gemv(args)\n(inlined by compiler)"]
-        IE_Metal["tag == .metal\nMetalBackend.gemv(args)\n(inlined by compiler)"]
-        IE_Vulkan["tag == .vulkan\nVulkanBackend.gemv(args)\n(inlined by compiler)"]
+        IE_Tag
+        IE_CPU
+        IE_Metal
+        IE_Vulkan
         IE_Tag --> IE_CPU & IE_Metal & IE_Vulkan
     end
 
     subgraph VTable["vtable dispatch (C++ / runtime)"]
         direction TB
-        VT_Ptr["load vtable pointer\nfrom object header"]
-        VT_Offset["add method offset\n(e.g. +8 bytes for gemv)"]
-        VT_Load["load function pointer\nfrom vtable memory"]
-        VT_Call["indirect call\nvia register\n(branch predictor miss risk)"]
+        VT_Ptr
+        VT_Offset
+        VT_Load
+        VT_Call
         VT_Ptr --> VT_Offset --> VT_Load --> VT_Call
     end
 
     Call --> IE_Tag
     Call --> VT_Ptr
 
-    IE_CPU --> Res1["direct kernel code\n(zero indirection)"]
+    IE_CPU --> Res1
     IE_Metal --> Res1
     IE_Vulkan --> Res1
-    VT_Call --> Res2["kernel code\n(1 indirect branch)"]
+    VT_Call --> Res2
 ```
 
 ## Format String Validation
@@ -589,27 +596,29 @@ Zig catches this at compile time.
 Validate assumptions at compile time.
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': {
-  'primaryColor': '#e8f0fe',
-  'primaryTextColor': '#1a1a2e',
-  'primaryBorderColor': '#4a6cf7',
-  'lineColor': '#4a6cf7',
-  'secondaryColor': '#f0f4ff',
-  'tertiaryColor': '#f8f9ff',
-  'edgeLabelBackground': '#ffffff',
-  'clusterBkg': '#f0f4ff',
-  'clusterBorder': '#4a6cf7',
-  'titleColor': '#1a1a2e',
-  'nodeTextColor': '#1a1a2e',
-  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
-}}}%%
 flowchart TD
+    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
+    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
+    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
+    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
+    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
+    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
+
+    CA_Eval["evaluate condition\nat compile time"]:::sync
+    CA_Silent["(nothing emitted)\nbinary produced normally"]:::success
+    CA_Fail["compile error\n'assertion failed'\nbuild stops immediately\nno binary produced"]:::danger
+    RA_Eval["evaluate condition\nat runtime"]:::sync
+    RA_Silent["execution continues"]:::success
+    RA_Fail["@panic / illegal instruction\nprocess crashes\n(only in Debug/ReleaseSafe)"]:::danger
+    note1["user never sees bad binary"]:::success
+    note2["may ship silently in ReleaseFast"]:::optional
+
     subgraph ComptimeAssert["comptime { std.debug.assert(cond) }"]
         direction TB
-        CA_Eval["evaluate condition\nat compile time"]
+        CA_Eval
         CA_Pass{"condition\ntrue?"}
-        CA_Silent["(nothing emitted)\nbinary produced normally"]
-        CA_Fail["compile error\n'assertion failed'\nbuild stops immediately\nno binary produced"]
+        CA_Silent
+        CA_Fail
         CA_Eval --> CA_Pass
         CA_Pass -- yes --> CA_Silent
         CA_Pass -- no --> CA_Fail
@@ -617,17 +626,17 @@ flowchart TD
 
     subgraph RuntimeAssert["std.debug.assert(cond) at runtime"]
         direction TB
-        RA_Eval["evaluate condition\nat runtime"]
+        RA_Eval
         RA_Pass{"condition\ntrue?"}
-        RA_Silent["execution continues"]
-        RA_Fail["@panic / illegal instruction\nprocess crashes\n(only in Debug/ReleaseSafe)"]
+        RA_Silent
+        RA_Fail
         RA_Eval --> RA_Pass
         RA_Pass -- yes --> RA_Silent
         RA_Pass -- no --> RA_Fail
     end
 
-    CA_Fail -. "catches bug before\nshipping any binary" .-> note1["user never sees bad binary"]
-    RA_Fail -. "caught only if\ntest covers that path" .-> note2["may ship silently in ReleaseFast"]
+    CA_Fail -. "catches bug before\nshipping any binary" .-> note1
+    RA_Fail -. "caught only if\ntest covers that path" .-> note2
 ```
 
 ### Array Size Validation

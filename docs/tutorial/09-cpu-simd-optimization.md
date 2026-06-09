@@ -7,35 +7,28 @@ When a GPU isn't available, the CPU backend needs to be fast. Modern CPUs have *
 A single SIMD instruction operates on an entire register of values at once, turning N sequential operations into 1 parallel operation.
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': {
-  'primaryColor': '#e8f0fe',
-  'primaryTextColor': '#1a1a2e',
-  'primaryBorderColor': '#4a6cf7',
-  'lineColor': '#4a6cf7',
-  'secondaryColor': '#f0f4ff',
-  'tertiaryColor': '#f8f9ff',
-  'edgeLabelBackground': '#ffffff',
-  'clusterBkg': '#f0f4ff',
-  'clusterBorder': '#4a6cf7',
-  'titleColor': '#1a1a2e',
-  'nodeTextColor': '#1a1a2e',
-  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
-}}}%%
 flowchart LR
+    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
+    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
+    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
+    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
+    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
+    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
+
     subgraph Scalar["Scalar (8 instructions)"]
         direction TB
-        s1["a[0]+b[0]"] --> r1["c[0]"]
-        s2["a[1]+b[1]"] --> r2["c[1]"]
-        s3["a[2]+b[2]"] --> r3["c[2]"]
-        s4["..."] --> r4["..."]
+        s1["a[0]+b[0]"]:::sync --> r1["c[0]"]:::success
+        s2["a[1]+b[1]"]:::sync --> r2["c[1]"]:::success
+        s3["a[2]+b[2]"]:::sync --> r3["c[2]"]:::success
+        s4["..."]:::sync --> r4["..."]:::success
     end
 
     subgraph SIMD["SIMD @Vector(8, f32) (1 instruction)"]
         direction TB
-        reg_a["AVX2 register\n1.0 | 2.0 | 3.0 | 4.0 | 5.0 | 6.0 | 7.0 | 8.0"]
-        reg_b["AVX2 register\n2.0 | 2.0 | 2.0 | 2.0 | 2.0 | 2.0 | 2.0 | 2.0"]
-        op["vaddps (1 cycle)"]
-        reg_c["AVX2 register\n3.0 | 4.0 | 5.0 | 6.0 | 7.0 | 8.0 | 9.0 | 10.0"]
+        reg_a["AVX2 register\n1.0 | 2.0 | 3.0 | 4.0 | 5.0 | 6.0 | 7.0 | 8.0"]:::setup
+        reg_b["AVX2 register\n2.0 | 2.0 | 2.0 | 2.0 | 2.0 | 2.0 | 2.0 | 2.0"]:::setup
+        op["vaddps (1 cycle)"]:::sync
+        reg_c["AVX2 register\n3.0 | 4.0 | 5.0 | 6.0 | 7.0 | 8.0 | 9.0 | 10.0"]:::success
         reg_a --> op
         reg_b --> op
         op --> reg_c
@@ -99,28 +92,25 @@ const sum = @reduce(.Add, v);  // sum = 36.0 (1+2+3+4+5+6+7+8)
 Compiles to a **reduction tree** (pair-wise adds that preserve precision better than sequential accumulation):
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': {
-  'primaryColor': '#e8f0fe',
-  'primaryTextColor': '#1a1a2e',
-  'primaryBorderColor': '#4a6cf7',
-  'lineColor': '#4a6cf7',
-  'secondaryColor': '#f0f4ff',
-  'tertiaryColor': '#f8f9ff',
-  'edgeLabelBackground': '#ffffff',
-  'clusterBkg': '#f0f4ff',
-  'clusterBorder': '#4a6cf7',
-  'titleColor': '#1a1a2e',
-  'nodeTextColor': '#1a1a2e',
-  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
-}}}%%
 flowchart TD
+    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
+    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
+    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
+    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
+    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
+    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
+
     subgraph Input["Input vector (8 lanes)"]
         direction LR
-        v1["1"] --- v2["2"] --- v3["3"] --- v4["4"] --- v5["5"] --- v6["6"] --- v7["7"] --- v8["8"]
+        v1["1"]:::setup --- v2["2"]:::setup --- v3["3"]:::setup --- v4["4"]:::setup --- v5["5"]:::setup --- v6["6"]:::setup --- v7["7"]:::setup --- v8["8"]:::setup
     end
-    p1["1+2 = 3"] & p2["3+4 = 7"] & p3["5+6 = 11"] & p4["7+8 = 15"]
-    q1["3+7 = 10"] & q2["11+15 = 26"]
-    total["10+26 = 36"]
+    p1["1+2 = 3"]:::sync
+    p2["3+4 = 7"]:::sync
+    p3["5+6 = 11"]:::sync
+    p4["7+8 = 15"]:::sync
+    q1["3+7 = 10"]:::migration
+    q2["11+15 = 26"]:::migration
+    total["10+26 = 36"]:::success
 
     v1 & v2 --> p1
     v3 & v4 --> p2
@@ -145,37 +135,42 @@ On NEON: `vaddvq_f32` (horizontal add). On AVX2: `vhaddps` + scalar extract.
 FMA collapses a multiply and an add into one instruction, firing through a dedicated hardware unit. The CPU dispatches it alongside other work in the same cycle.
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': {
-  'primaryColor': '#e8f0fe',
-  'primaryTextColor': '#1a1a2e',
-  'primaryBorderColor': '#4a6cf7',
-  'lineColor': '#4a6cf7',
-  'secondaryColor': '#f0f4ff',
-  'tertiaryColor': '#f8f9ff',
-  'edgeLabelBackground': '#ffffff',
-  'clusterBkg': '#f0f4ff',
-  'clusterBorder': '#4a6cf7',
-  'titleColor': '#1a1a2e',
-  'nodeTextColor': '#1a1a2e',
-  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
-}}}%%
 flowchart LR
+    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
+    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
+    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
+    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
+    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
+    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
+
     subgraph Unfused["Without FMA (2 instructions, 2 cycles min)"]
         direction TB
-        u_a["a (weight)"] --> mul["vmulps\n1 cycle"]
-        u_b["b (input)"] --> mul
-        mul --> tmp["tmp = a * b\n(intermediate, rounded)"]
-        tmp --> add["vaddps\n1 cycle"]
-        u_acc["acc"] --> add
-        add --> u_out["acc + tmp"]
+        u_a["a (weight)"]:::setup
+        u_b["b (input)"]:::setup
+        u_acc["acc"]:::setup
+        mul["vmulps\n1 cycle"]:::sync
+        tmp["tmp = a * b\n(intermediate, rounded)"]:::migration
+        add["vaddps\n1 cycle"]:::sync
+        u_out["acc + tmp"]:::success
+        u_a --> mul
+        u_b --> mul
+        mul --> tmp
+        tmp --> add
+        u_acc --> add
+        add --> u_out
     end
 
     subgraph Fused["With FMA — @mulAdd (1 instruction, 1 cycle)"]
         direction TB
-        f_a["a (weight)"] --> fma["vfmadd231ps\n1 cycle, dedicated FMA unit"]
-        f_b["b (input)"] --> fma
-        f_acc["acc"] --> fma
-        fma --> f_out["acc + a*b\n(no intermediate rounding)"]
+        f_a["a (weight)"]:::setup
+        f_b["b (input)"]:::setup
+        f_acc["acc"]:::setup
+        fma["vfmadd231ps\n1 cycle, dedicated FMA unit"]:::sync
+        f_out["acc + a*b\n(no intermediate rounding)"]:::success
+        f_a --> fma
+        f_b --> fma
+        f_acc --> fma
+        fma --> f_out
     end
 ```
 
@@ -220,42 +215,35 @@ The problem: loading `x` from memory is expensive. Each row of the matrix needs 
 Loading the input vector `x` is expensive. With 4-row batching, `x` is loaded once and reused across 4 rows of the weight matrix before being evicted from cache.
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': {
-  'primaryColor': '#e8f0fe',
-  'primaryTextColor': '#1a1a2e',
-  'primaryBorderColor': '#4a6cf7',
-  'lineColor': '#4a6cf7',
-  'secondaryColor': '#f0f4ff',
-  'tertiaryColor': '#f8f9ff',
-  'edgeLabelBackground': '#ffffff',
-  'clusterBkg': '#f0f4ff',
-  'clusterBorder': '#4a6cf7',
-  'titleColor': '#1a1a2e',
-  'nodeTextColor': '#1a1a2e',
-  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
-}}}%%
 flowchart LR
-    x_mem["x vector\n(k floats in L1/L2 cache)"]
+    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
+    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
+    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
+    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
+    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
+    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
+
+    x_mem["x vector\n(k floats in L1/L2 cache)"]:::setup
 
     subgraph Weight["Weight matrix W (4 rows)"]
-        w0["row 0: w[0..k]"]
-        w1["row 1: w[k..2k]"]
-        w2["row 2: w[2k..3k]"]
-        w3["row 3: w[3k..4k]"]
+        w0["row 0: w[0..k]"]:::setup
+        w1["row 1: w[k..2k]"]:::setup
+        w2["row 2: w[2k..3k]"]:::setup
+        w3["row 3: w[3k..4k]"]:::setup
     end
 
     subgraph FMA["FMA units (4 independent accumulators)"]
-        acc0["acc0 += xv * w0[i..i+8]"]
-        acc1["acc1 += xv * w1[i..i+8]"]
-        acc2["acc2 += xv * w2[i..i+8]"]
-        acc3["acc3 += xv * w3[i..i+8]"]
+        acc0["acc0 += xv * w0[i..i+8]"]:::sync
+        acc1["acc1 += xv * w1[i..i+8]"]:::sync
+        acc2["acc2 += xv * w2[i..i+8]"]:::sync
+        acc3["acc3 += xv * w3[i..i+8]"]:::sync
     end
 
     subgraph Output["y (4 output values)"]
-        y0["y[row]"]
-        y1["y[row+1]"]
-        y2["y[row+2]"]
-        y3["y[row+3]"]
+        y0["y[row]"]:::success
+        y1["y[row+1]"]:::success
+        y2["y[row+2]"]:::success
+        y3["y[row+3]"]:::success
     end
 
     x_mem -- "load ONCE\nreuse 4x" --> acc0
@@ -360,38 +348,31 @@ Quantized GEMV must **dequantize inside the loop** to avoid materializing the fu
 Each Q4_0 block encodes 32 elements into 18 bytes: a 2-byte f16 scale followed by 16 bytes of packed nibbles (two 4-bit values per byte).
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': {
-  'primaryColor': '#e8f0fe',
-  'primaryTextColor': '#1a1a2e',
-  'primaryBorderColor': '#4a6cf7',
-  'lineColor': '#4a6cf7',
-  'secondaryColor': '#f0f4ff',
-  'tertiaryColor': '#f8f9ff',
-  'edgeLabelBackground': '#ffffff',
-  'clusterBkg': '#f0f4ff',
-  'clusterBorder': '#4a6cf7',
-  'titleColor': '#1a1a2e',
-  'nodeTextColor': '#1a1a2e',
-  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
-}}}%%
 flowchart LR
+    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
+    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
+    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
+    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
+    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
+    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
+
     subgraph Block["Q4_0 block — 18 bytes total\nencode 32 elements"]
         direction LR
-        scale["bytes 0-1\nf16 scale\napplied to all 32 elements"]
-        nibbles["bytes 2-17\n16 packed bytes\n= 32 nibbles (4 bits each)"]
+        scale["bytes 0-1\nf16 scale\napplied to all 32 elements"]:::setup
+        nibbles["bytes 2-17\n16 packed bytes\n= 32 nibbles (4 bits each)"]:::setup
         scale --- nibbles
     end
 
     subgraph Byte["Single nibble byte (byte j)"]
         direction TB
-        lo["low nibble [3:0]\nelement j\nvalue = (byte & 0xF) - 8"]
-        hi["high nibble [7:4]\nelement j+16\nvalue = (byte >> 4) - 8"]
+        lo["low nibble [3:0]\nelement j\nvalue = (byte & 0xF) - 8"]:::migration
+        hi["high nibble [7:4]\nelement j+16\nvalue = (byte >> 4) - 8"]:::migration
     end
 
     subgraph Decode["Dequantize element"]
         direction TB
-        d1["q = nibble - 8\n(center at zero)"]
-        d2["f32 = scale * q\n(apply block scale once)"]
+        d1["q = nibble - 8\n(center at zero)"]:::sync
+        d2["f32 = scale * q\n(apply block scale once)"]:::success
         d1 --> d2
     end
 
@@ -541,34 +522,27 @@ pub fn softplusVec(x: [*]f32, n: usize) void {
 Process data in the order it's laid out in memory. Row-major matrices should iterate rows then columns. Sequential access keeps data in L1/L2 cache; column-major access on a row-major matrix jumps by `n_cols` bytes between loads, thrashing cache lines.
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': {
-  'primaryColor': '#e8f0fe',
-  'primaryTextColor': '#1a1a2e',
-  'primaryBorderColor': '#4a6cf7',
-  'lineColor': '#4a6cf7',
-  'secondaryColor': '#f0f4ff',
-  'tertiaryColor': '#f8f9ff',
-  'edgeLabelBackground': '#ffffff',
-  'clusterBkg': '#f0f4ff',
-  'clusterBorder': '#4a6cf7',
-  'titleColor': '#1a1a2e',
-  'nodeTextColor': '#1a1a2e',
-  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
-}}}%%
 flowchart TD
+    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
+    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
+    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
+    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
+    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
+    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
+
     subgraph Matrix["Row-major matrix in memory\n(4 cols × 3 rows = 12 floats, 48 bytes)"]
         direction LR
-        m00["[0,0]"] --- m01["[0,1]"] --- m02["[0,2]"] --- m03["[0,3]"] --- m10["[1,0]"] --- m11["[1,1]"] --- m12["[1,2]"] --- m13["[1,3]"] --- m20["[2,0]"] --- m21["[2,1]"] --- m22["[2,2]"] --- m23["[2,3]"]
+        m00["[0,0]"]:::setup --- m01["[0,1]"]:::setup --- m02["[0,2]"]:::setup --- m03["[0,3]"]:::setup --- m10["[1,0]"]:::setup --- m11["[1,1]"]:::setup --- m12["[1,2]"]:::setup --- m13["[1,3]"]:::setup --- m20["[2,0]"]:::setup --- m21["[2,1]"]:::setup --- m22["[2,2]"]:::setup --- m23["[2,3]"]:::setup
     end
 
     subgraph Good["Row-major iteration (sequential)"]
         direction LR
-        g1["[0,0] [0,1] [0,2] [0,3]"] -- "cache line hit" --> g2["[1,0] [1,1] [1,2] [1,3]"] -- "cache line hit" --> g3["[2,0] [2,1] [2,2] [2,3]"]
+        g1["[0,0] [0,1] [0,2] [0,3]"]:::success -- "cache line hit" --> g2["[1,0] [1,1] [1,2] [1,3]"]:::success -- "cache line hit" --> g3["[2,0] [2,1] [2,2] [2,3]"]:::success
     end
 
     subgraph Bad["Column-major iteration (strided)"]
         direction LR
-        b1["[0,0]"] -- "stride 4 floats\ncache miss" --> b2["[1,0]"] -- "stride 4 floats\ncache miss" --> b3["[2,0]"] -- "stride 4 floats\ncache miss" --> b4["..."]
+        b1["[0,0]"]:::danger -- "stride 4 floats\ncache miss" --> b2["[1,0]"]:::danger -- "stride 4 floats\ncache miss" --> b3["[2,0]"]:::danger -- "stride 4 floats\ncache miss" --> b4["..."]:::danger
     end
 
     Matrix --> Good
@@ -642,37 +616,30 @@ while (i + 8 <= n) : (i += 8) {
 RMSNorm is a two-pass reduction: compute RMS, then normalize.
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': {
-  'primaryColor': '#e8f0fe',
-  'primaryTextColor': '#1a1a2e',
-  'primaryBorderColor': '#4a6cf7',
-  'lineColor': '#4a6cf7',
-  'secondaryColor': '#f0f4ff',
-  'tertiaryColor': '#f8f9ff',
-  'edgeLabelBackground': '#ffffff',
-  'clusterBkg': '#f0f4ff',
-  'clusterBorder': '#4a6cf7',
-  'titleColor': '#1a1a2e',
-  'nodeTextColor': '#1a1a2e',
-  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
-}}}%%
 flowchart TD
-    input["input[0..n]\n(n f32 values)"]
-    weight["weight[0..n]\n(learned gain per element)"]
+    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
+    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
+    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
+    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
+    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
+    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
+
+    input["input[0..n]\n(n f32 values)"]:::setup
+    weight["weight[0..n]\n(learned gain per element)"]:::setup
 
     subgraph Pass1["Pass 1 — sum of squares"]
         direction LR
-        p1a["@mulAdd(V8, xv, xv, acc)\nfor each 8-element chunk"] --> p1b["@reduce(.Add, acc)\nhorizontal sum"] --> p1c["sum_sq\n= Σ input[i]²"]
+        p1a["@mulAdd(V8, xv, xv, acc)\nfor each 8-element chunk"]:::sync --> p1b["@reduce(.Add, acc)\nhorizontal sum"]:::sync --> p1c["sum_sq\n= Σ input[i]²"]:::migration
     end
 
     subgraph Scalar["Scalar normalization"]
         direction LR
-        s1["rms = sqrt(sum_sq / n + eps)"] --> s2["scale = 1.0 / rms"]
+        s1["rms = sqrt(sum_sq / n + eps)"]:::migration --> s2["scale = 1.0 / rms"]:::migration
     end
 
     subgraph Pass2["Pass 2 — normalize + weight"]
         direction LR
-        p2a["@splat(scale)\nbroadcast scalar"] --> p2b["xv * scale_v\nnormalize chunk"] --> p2c["normalized * wv\napply weight"] --> p2d["output[i..i+8]"]
+        p2a["@splat(scale)\nbroadcast scalar"]:::sync --> p2b["xv * scale_v\nnormalize chunk"]:::sync --> p2c["normalized * wv\napply weight"]:::sync --> p2d["output[i..i+8]"]:::success
     end
 
     input --> Pass1
@@ -736,39 +703,32 @@ pub fn rmsNorm(input: [*]const f32, weight: [*]const f32, output: [*]f32, n: usi
 After SiLU activation in FFN layers, ~40% of output values are near-zero (magnitude < 0.005). The down-projection GEMV multiplies these near-zero values by weight blocks — wasting ~40% of compute. Sparse GEMV skips these blocks entirely:
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': {
-  'primaryColor': '#e8f0fe',
-  'primaryTextColor': '#1a1a2e',
-  'primaryBorderColor': '#4a6cf7',
-  'lineColor': '#4a6cf7',
-  'secondaryColor': '#f0f4ff',
-  'tertiaryColor': '#f8f9ff',
-  'edgeLabelBackground': '#ffffff',
-  'clusterBkg': '#f0f4ff',
-  'clusterBorder': '#4a6cf7',
-  'titleColor': '#1a1a2e',
-  'nodeTextColor': '#1a1a2e',
-  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
-}}}%%
 flowchart TD
-    gate["gate_proj output\n(n values)"]
-    up["up_proj output\n(n values)"]
+    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
+    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
+    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
+    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
+    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
+    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
+
+    gate["gate_proj output\n(n values)"]:::setup
+    up["up_proj output\n(n values)"]:::setup
 
     subgraph SiLU["SiLU activation\nx * sigmoid(x)"]
         direction LR
-        act["gate * sigmoid(gate)\nelement-wise"]
+        act["gate * sigmoid(gate)\nelement-wise"]:::sync
     end
 
     subgraph Sparsity["~40% near-zero after SiLU\n(magnitude < threshold)"]
         direction LR
-        sparse["block 0: |max| = 0.001\nSKIP"] -.- dense1["block 1: |max| = 0.83\ncompute"] -.- sparse2["block 2: |max| = 0.002\nSKIP"] -.- dense2["block 3: |max| = 1.2\ncompute"]
+        sparse["block 0: |max| = 0.001\nSKIP"]:::danger -.- dense1["block 1: |max| = 0.83\ncompute"]:::success -.- sparse2["block 2: |max| = 0.002\nSKIP"]:::danger -.- dense2["block 3: |max| = 1.2\ncompute"]:::success
     end
 
     subgraph Check["isBlockSparse (SIMD max-abs)"]
         direction LR
-        c1["@reduce(.Max, @abs(xv))\n~1 cycle per 8 elements"] --> c2{"< threshold?"}
-        c2 -- "yes" --> skip["continue\n(skip dequant + dot)"]
-        c2 -- "no" --> compute["normal GEMV block\n(dequant + FMA)"]
+        c1["@reduce(.Max, @abs(xv))\n~1 cycle per 8 elements"]:::sync --> c2{"< threshold?"}
+        c2 -- "yes" --> skip["continue\n(skip dequant + dot)"]:::danger
+        c2 -- "no" --> compute["normal GEMV block\n(dequant + FMA)"]:::success
     end
 
     gate --> SiLU

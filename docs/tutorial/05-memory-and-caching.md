@@ -7,24 +7,24 @@ During **autoregressive generation** (generating text one token at a time, where
 Each generated token extends the cache — every subsequent token attends to all previously stored K/V pairs.
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': {
-  'primaryColor': '#e8f0fe',
-  'primaryTextColor': '#1a1a2e',
-  'primaryBorderColor': '#4a6cf7',
-  'lineColor': '#4a6cf7',
-  'secondaryColor': '#f0f4ff',
-  'tertiaryColor': '#f8f9ff',
-  'edgeLabelBackground': '#ffffff',
-  'clusterBkg': '#f0f4ff',
-  'clusterBorder': '#4a6cf7',
-  'titleColor': '#1a1a2e',
-  'nodeTextColor': '#1a1a2e',
-  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
-}}}%%
 flowchart LR
-    T1["Token 1\n(compute K₁, V₁)"] --> C1["Cache\n[K₁, V₁]"]
-    T2["Token 2\n(compute K₂, V₂)"] --> C2["Cache\n[K₁, V₁]\n[K₂, V₂]"]
-    T3["Token 3\n(compute K₃, V₃)"] --> C3["Cache\n[K₁, V₁]\n[K₂, V₂]\n[K₃, V₃]"]
+    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
+    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
+    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
+    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
+    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
+    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
+
+    T1["Token 1\n(compute K₁, V₁)"]:::setup
+    T2["Token 2\n(compute K₂, V₂)"]:::setup
+    T3["Token 3\n(compute K₃, V₃)"]:::setup
+    C1["Cache\n[K₁, V₁]"]:::migration
+    C2["Cache\n[K₁, V₁]\n[K₂, V₂]"]:::migration
+    C3["Cache\n[K₁, V₁]\n[K₂, V₂]\n[K₃, V₃]"]:::success
+
+    T1 --> C1
+    T2 --> C2
+    T3 --> C3
 
     C1 -->|"attend to 1 position"| T2
     C2 -->|"attend to 2 positions"| T3
@@ -34,8 +34,6 @@ flowchart LR
         C2
         C3
     end
-
-
 ```
 Token 1: compute K₁, V₁, store in cache
 Token 2: compute K₂, V₂, store in cache, attend to [K₁,K₂], [V₁,V₂]
@@ -80,45 +78,50 @@ turbo2     2.5         47 MB  (6.4x vs f16)                       WHT-32
 ```
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': {
-  'primaryColor': '#e8f0fe',
-  'primaryTextColor': '#1a1a2e',
-  'primaryBorderColor': '#4a6cf7',
-  'lineColor': '#4a6cf7',
-  'secondaryColor': '#f0f4ff',
-  'tertiaryColor': '#f8f9ff',
-  'edgeLabelBackground': '#ffffff',
-  'clusterBkg': '#f0f4ff',
-  'clusterBorder': '#4a6cf7',
-  'titleColor': '#1a1a2e',
-  'nodeTextColor': '#1a1a2e',
-  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
-}}}%%
 flowchart TB
+    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
+    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
+    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
+    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
+    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
+    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
+
+    F32["f32\n32 bits/elem\n600 MB baseline"]:::setup
+    F16["f16\n16 bits/elem\n300 MB  (2× vs f32)"]:::setup
+    Q8["q8_0\n8.5 bits/elem\n159 MB  (3.5× vs f16)"]:::migration
+    TQ4["TurboQuant turbo4\nWalsh-Hadamard WHT-32\n~160 add/sub, no multiplies"]:::sync
+    PQ4["PlanarQuant planar4\nGivens 2D rotation\n256 FMAs"]:::sync
+    IQ4["IsoQuant iso4\nQuaternion 4D rotation\n512 FMAs"]:::sync
+    RQ4["RotorQuant rotor4\nClifford Cl(3,0) rotor\n~2400 FMAs"]:::optional
+    TQ3["TurboQuant turbo3\nWHT-32 decorrelation"]:::sync
+    PQ3["PlanarQuant planar3\nGivens 2D rotation"]:::sync
+    IQ3["IsoQuant iso3\nQuaternion 4D rotation"]:::sync
+    TQ2["TurboQuant turbo2\nWHT-32 decorrelation\nmaximum compression"]:::success
+
     subgraph Formats["KV Cache Quantization Formats — bits/element and memory reduction"]
         direction TB
 
         subgraph Full["Full Precision"]
-            F32["f32\n32 bits/elem\n600 MB baseline"]
-            F16["f16\n16 bits/elem\n300 MB  (2× vs f32)"]
-            Q8["q8_0\n8.5 bits/elem\n159 MB  (3.5× vs f16)"]
+            F32
+            F16
+            Q8
         end
 
         subgraph Turbo4Grp["4-bit tier  (3.6× vs f16 — 84 MB)"]
-            TQ4["TurboQuant turbo4\nWalsh-Hadamard WHT-32\n~160 add/sub, no multiplies"]
-            PQ4["PlanarQuant planar4\nGivens 2D rotation\n256 FMAs"]
-            IQ4["IsoQuant iso4\nQuaternion 4D rotation\n512 FMAs"]
-            RQ4["RotorQuant rotor4\nClifford Cl(3,0) rotor\n~2400 FMAs"]
+            TQ4
+            PQ4
+            IQ4
+            RQ4
         end
 
         subgraph Turbo3Grp["3-bit tier  (4.6× vs f16 — 66 MB)"]
-            TQ3["TurboQuant turbo3\nWHT-32 decorrelation"]
-            PQ3["PlanarQuant planar3\nGivens 2D rotation"]
-            IQ3["IsoQuant iso3\nQuaternion 4D rotation"]
+            TQ3
+            PQ3
+            IQ3
         end
 
         subgraph Turbo2Grp["2-bit tier  (6.4× vs f16 — 47 MB)"]
-            TQ2["TurboQuant turbo2\nWHT-32 decorrelation\nmaximum compression"]
+            TQ2
         end
     end
 
@@ -165,38 +168,42 @@ The preset also enables **boundary V protection** — the first and last 2 trans
 PagedAttention maps a sequence's logical positions to non-contiguous physical memory blocks, the same way an OS uses virtual memory pages.
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': {
-  'primaryColor': '#e8f0fe',
-  'primaryTextColor': '#1a1a2e',
-  'primaryBorderColor': '#4a6cf7',
-  'lineColor': '#4a6cf7',
-  'secondaryColor': '#f0f4ff',
-  'tertiaryColor': '#f8f9ff',
-  'edgeLabelBackground': '#ffffff',
-  'clusterBkg': '#f0f4ff',
-  'clusterBorder': '#4a6cf7',
-  'titleColor': '#1a1a2e',
-  'nodeTextColor': '#1a1a2e',
-  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
-}}}%%
 flowchart LR
+    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
+    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
+    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
+    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
+    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
+    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
+
+    L0["Positions 0-15"]:::setup
+    L1["Positions 16-31"]:::setup
+    L2["Positions 32-47"]:::setup
+    BT0["slot 0 → block 4"]:::migration
+    BT1["slot 1 → block 1"]:::migration
+    BT2["slot 2 → block 7"]:::migration
+    B1["Block 1\n(shared — was used by Request B)"]:::optional
+    B4["Block 4\n(active)"]:::sync
+    B7["Block 7\n(active)"]:::sync
+    BX["Block 2, 3, 5, 6…\n(free — available)"]:::success
+
     subgraph Logical["Logical sequence (Request A — 48 tokens)"]
-        L0["Positions 0-15"]
-        L1["Positions 16-31"]
-        L2["Positions 32-47"]
+        L0
+        L1
+        L2
     end
 
     subgraph BT["Block Table (per-request mapping)"]
-        BT0["slot 0 → block 4"]
-        BT1["slot 1 → block 1"]
-        BT2["slot 2 → block 7"]
+        BT0
+        BT1
+        BT2
     end
 
     subgraph Physical["Physical KV block pool (shared across all requests)"]
-        B1["Block 1\n(shared — was used by Request B)"]
-        B4["Block 4\n(active)"]
-        B7["Block 7\n(active)"]
-        BX["Block 2, 3, 5, 6…\n(free — available)"]
+        B1
+        B4
+        B7
+        BX
     end
 
     L0 --> BT0 --> B4
@@ -229,33 +236,26 @@ Each `CacheBlock` tracks: `keys`, `values`, `used` count, `ref_count` (for shari
 RadixAttention builds a **radix tree** (also called a **prefix trie** — a tree data structure where shared prefixes are stored only once) over token sequences to automatically detect and share common prefixes. If two requests share the same system prompt, the KV cache for that prefix is computed once and reused.
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': {
-  'primaryColor': '#e8f0fe',
-  'primaryTextColor': '#1a1a2e',
-  'primaryBorderColor': '#4a6cf7',
-  'lineColor': '#4a6cf7',
-  'secondaryColor': '#f0f4ff',
-  'tertiaryColor': '#f8f9ff',
-  'edgeLabelBackground': '#ffffff',
-  'clusterBkg': '#f0f4ff',
-  'clusterBorder': '#4a6cf7',
-  'titleColor': '#1a1a2e',
-  'nodeTextColor': '#1a1a2e',
-  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
-}}}%%
 graph LR
-    Root(["root"]) -->|"computed once\nblocks 0,1,2"| Shared["You are helpful.\n(shared prefix — ref_count=2)"]
+    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
+    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
+    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
+    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
+    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
+    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
 
-    Shared -->|"Request A only"| BranchA["What is 2+2?\nblock 3"]
-    Shared -->|"Request B only"| BranchB["Tell me a joke.\nblock 3'"]
+    Root(["root"]):::setup
+    Shared["You are helpful.\n(shared prefix — ref_count=2)"]:::sync
+    BranchA["What is 2+2?\nblock 3"]:::migration
+    BranchB["Tell me a joke.\nblock 3'"]:::migration
+    AnsA["4\nblock 4"]:::success
+    AnsB["Why did the...\nblock 4'"]:::success
 
-    BranchA -->|"answer"| AnsA["4\nblock 4"]
-    BranchB -->|"answer"| AnsB["Why did the...\nblock 4'"]
-
-    style Shared fill:#2d6a2d,color:#fff
-    style Root fill:#555,color:#fff
-
-
+    Root -->|"computed once\nblocks 0,1,2"| Shared
+    Shared -->|"Request A only"| BranchA
+    Shared -->|"Request B only"| BranchB
+    BranchA -->|"answer"| AnsA
+    BranchB -->|"answer"| AnsB
 ```
 Request A: "You are helpful. What is 2+2?"     → compute KV for "You are helpful." once
 Request B: "You are helpful. Tell me a joke."   → reuse KV, only compute " Tell me a joke."
@@ -400,39 +400,36 @@ Both policies share the same eviction framework:
 - **Periodic compression**: Eviction runs every 128 tokens once the cache exceeds `--kv-budget`. This amortizes the scoring cost rather than evicting on every token.
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': {
-  'primaryColor': '#e8f0fe',
-  'primaryTextColor': '#1a1a2e',
-  'primaryBorderColor': '#4a6cf7',
-  'lineColor': '#4a6cf7',
-  'secondaryColor': '#f0f4ff',
-  'tertiaryColor': '#f8f9ff',
-  'edgeLabelBackground': '#ffffff',
-  'clusterBkg': '#f0f4ff',
-  'clusterBorder': '#4a6cf7',
-  'titleColor': '#1a1a2e',
-  'nodeTextColor': '#1a1a2e',
-  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
-}}}%%
 flowchart TD
-    NewTok["New token generated\n(cache length checked)"]
+    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
+    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
+    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
+    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
+    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
+    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
+
+    NewTok["New token generated\n(cache length checked)"]:::setup
+    Generate["Continue generation\n(no eviction needed)"]:::success
+    Skip["Skip eviction\nthis token"]:::migration
+    Sink["Attention sinks\npositions 0-3\n(disproportionate attention mass)"]:::optional
+    Recent["Recent window\nlast N positions\n(immediate context)"]:::optional
+    NormScore["norm policy\nL2 norm of K vector\nsmall norm → low attention impact"]:::sync
+    TriScore["tri policy\nQ/K frequency-domain stats\nfrom .cal calibration file"]:::sync
+    Evict["Evict lowest-scoring positions\nfree blocks returned to pool"]:::danger
+    Resume["Resume generation\nwith compressed cache"]:::success
+
     Check{"Cache exceeds\n--kv-budget?"}
-    Generate["Continue generation\n(no eviction needed)"]
     Modulo{"Every 128 tokens?\n(amortized trigger)"}
-    Skip["Skip eviction\nthis token"]
 
     subgraph Protected["Always Protected — never evicted"]
-        Sink["Attention sinks\npositions 0-3\n(disproportionate attention mass)"]
-        Recent["Recent window\nlast N positions\n(immediate context)"]
+        Sink
+        Recent
     end
 
     subgraph Scoring["Score remaining positions"]
-        NormScore["norm policy\nL2 norm of K vector\nsmall norm → low attention impact"]
-        TriScore["tri policy\nQ/K frequency-domain stats\nfrom .cal calibration file"]
+        NormScore
+        TriScore
     end
-
-    Evict["Evict lowest-scoring positions\nfree blocks returned to pool"]
-    Resume["Resume generation\nwith compressed cache"]
 
     NewTok --> Check
     Check -->|"within budget"| Generate
@@ -473,45 +470,46 @@ Token generation with split KV cache:
 ```
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': {
-  'primaryColor': '#e8f0fe',
-  'primaryTextColor': '#1a1a2e',
-  'primaryBorderColor': '#4a6cf7',
-  'lineColor': '#4a6cf7',
-  'secondaryColor': '#f0f4ff',
-  'tertiaryColor': '#f8f9ff',
-  'edgeLabelBackground': '#ffffff',
-  'clusterBkg': '#f0f4ff',
-  'clusterBorder': '#4a6cf7',
-  'titleColor': '#1a1a2e',
-  'nodeTextColor': '#1a1a2e',
-  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
-}}}%%
 flowchart TB
-    Proj["Q/K/V projections\n(GPU — full speed)"]
+    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
+    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
+    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
+    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
+    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
+    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
+
+    Proj["Q/K/V projections\n(GPU — full speed)"]:::setup
+    GBlocks["Recent KV blocks\n(hot — VRAM resident)"]:::setup
+    GSDPA["GPU SDPA kernel\nFlashAttention-2\ncausal masking"]:::sync
+    GOut["Partial output Oᵍ\nlocal max mᵍ\nlocal sum lᵍ"]:::migration
+    CBlocks["Cold KV blocks\n(evicted — RAM resident)"]:::optional
+    CSDPA["CPU SDPA\nthread pool\nonline softmax"]:::sync
+    COut["Partial output Oᶜ\nlocal max mᶜ\nlocal sum lᶜ"]:::migration
+    MaxMerge["m = max(mᵍ, mᶜ)\n(global max for rescaling)"]:::migration
+    Rescale["Rescale each partial:\nOᵍ ← Oᵍ × exp(mᵍ - m)\nOᶜ ← Oᶜ × exp(mᶜ - m)"]:::migration
+    Combine["O = (Oᵍ·lᵍ + Oᶜ·lᶜ) / (lᵍ + lᶜ)\n(weighted sum normalized by combined denominators)"]:::sync
+    FFN["FFN layer\n(GPU — continues normally)"]:::success
 
     subgraph Split["Concurrent split-attention — GPU and CPU overlap"]
         direction LR
         subgraph GPU["GPU SDPA (VRAM)"]
-            GBlocks["Recent KV blocks\n(hot — VRAM resident)"]
-            GSDPA["GPU SDPA kernel\nFlashAttention-2\ncausal masking"]
-            GOut["Partial output Oᵍ\nlocal max mᵍ\nlocal sum lᵍ"]
+            GBlocks
+            GSDPA
+            GOut
         end
 
         subgraph CPU["CPU SDPA (RAM)"]
-            CBlocks["Cold KV blocks\n(evicted — RAM resident)"]
-            CSDPA["CPU SDPA\nthread pool\nonline softmax"]
-            COut["Partial output Oᶜ\nlocal max mᶜ\nlocal sum lᶜ"]
+            CBlocks
+            CSDPA
+            COut
         end
     end
 
     subgraph Merge["Online softmax merge (exact — no approximation)"]
-        MaxMerge["m = max(mᵍ, mᶜ)\n(global max for rescaling)"]
-        Rescale["Rescale each partial:\nOᵍ ← Oᵍ × exp(mᵍ - m)\nOᶜ ← Oᶜ × exp(mᶜ - m)"]
-        Combine["O = (Oᵍ·lᵍ + Oᶜ·lᶜ) / (lᵍ + lᶜ)\n(weighted sum normalized by combined denominators)"]
+        MaxMerge
+        Rescale
+        Combine
     end
-
-    FFN["FFN layer\n(GPU — continues normally)"]
 
     Proj -->|"dispatch query"| GPU
     Proj -->|"dispatch query"| CPU

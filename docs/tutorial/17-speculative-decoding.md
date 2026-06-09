@@ -69,34 +69,37 @@ agave model.gguf --draft-model draft.gguf --spec-mode ddtree --spec-tokens 5 --t
 ```
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': {
-  'primaryColor': '#e8f0fe',
-  'primaryTextColor': '#1a1a2e',
-  'primaryBorderColor': '#4a6cf7',
-  'lineColor': '#4a6cf7',
-  'secondaryColor': '#f0f4ff',
-  'tertiaryColor': '#f8f9ff',
-  'edgeLabelBackground': '#ffffff',
-  'clusterBkg': '#f0f4ff',
-  'clusterBorder': '#4a6cf7',
-  'titleColor': '#1a1a2e',
-  'nodeTextColor': '#1a1a2e',
-  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
-}}}%%
 graph LR
-    Root["[prefix]\nshared KV cache"]
+    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
+    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
+    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
+    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
+    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
+    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
 
-    Root --> D0A["the\n(p=0.60)"]
-    Root --> D0B["a\n(p=0.25)"]
-    Root --> D0C["an\n(p=0.10)"]
+    Root["[prefix]\nshared KV cache"]:::setup
 
-    D0A --> D1A["cat\n(p=0.55)"]
-    D0A --> D1B["dog\n(p=0.30)"]
-    D0B --> D1C["cat\n(p=0.60)"]
+    D0A["the\n(p=0.60)"]:::sync
+    D0B["a\n(p=0.25)"]:::sync
+    D0C["an\n(p=0.10)"]:::sync
+    D1A["cat\n(p=0.55)"]:::migration
+    D1B["dog\n(p=0.30)"]:::migration
+    D1C["cat\n(p=0.60)"]:::migration
+    D2A["sat\n(p=0.70)"]:::success
+    D2B["ran\n(p=0.20)"]:::success
+    D2C["sat\n(p=0.45)"]:::success
 
-    D1A --> D2A["sat\n(p=0.70)"]
-    D1A --> D2B["ran\n(p=0.20)"]
-    D1B --> D2C["sat\n(p=0.45)"]
+    Root --> D0A
+    Root --> D0B
+    Root --> D0C
+
+    D0A --> D1A
+    D0A --> D1B
+    D0B --> D1C
+
+    D1A --> D2A
+    D1A --> D2B
+    D1B --> D2C
 
     subgraph Depth0["Depth 0 — top tokens at position 1"]
         D0A
@@ -192,33 +195,30 @@ src/backend/kernels/cpu/
 ### Data Flow
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': {
-  'primaryColor': '#e8f0fe',
-  'primaryTextColor': '#1a1a2e',
-  'primaryBorderColor': '#4a6cf7',
-  'lineColor': '#4a6cf7',
-  'secondaryColor': '#f0f4ff',
-  'tertiaryColor': '#f8f9ff',
-  'edgeLabelBackground': '#ffffff',
-  'clusterBkg': '#f0f4ff',
-  'clusterBorder': '#4a6cf7',
-  'titleColor': '#1a1a2e',
-  'nodeTextColor': '#1a1a2e',
-  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
-}}}%%
 flowchart TD
+    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
+    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
+    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
+    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
+    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
+    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
+
     subgraph Draft["Draft Phase"]
-        DM["Draft Model\n(small / layer-skipped / n-gram)"]
-        DM -->|"K tokens + per-position\nlogit distributions"| TB["DDTree Builder\nbest-first heap\nO(B log B)"]
+        DM["Draft Model\n(small / layer-skipped / n-gram)"]:::setup
+        TB["DDTree Builder\nbest-first heap\nO(B log B)"]:::migration
+        DM -->|"K tokens + per-position\nlogit distributions"| TB
     end
 
     subgraph Verify["Verify Phase"]
-        TB -->|"tree: B nodes\nancestor bitmasks"| TM["Target Model\ntree-masked SDPA\nforwardTree()"]
-        TM -->|"argmax at each\ntree node"| AW["Acceptance Walk\nfind longest\nmatching path"]
+        TM["Target Model\ntree-masked SDPA\nforwardTree()"]:::sync
+        AW["Acceptance Walk\nfind longest\nmatching path"]:::migration
+        TB -->|"tree: B nodes\nancestor bitmasks"| TM
+        TM -->|"argmax at each\ntree node"| AW
     end
 
     subgraph Output["Output"]
-        AW -->|"accepted tokens\n(1..K)"| OS["Output Stream\n/ SSE"]
+        OS["Output Stream\n/ SSE"]:::success
+        AW -->|"accepted tokens\n(1..K)"| OS
         AW -->|"correction token\n(on rejection)"| OS
         AW -->|"rollback KV to\naccepted position"| DM
     end
@@ -300,32 +300,29 @@ Each tree node attends to:
 The ancestor bitmask is a `[8]u64` per node (512 bits), supporting trees up to 512 nodes. The CPU kernel (`sdpa_tree.zig`) iterates over attended positions; GPU kernels can mask in the inner loop.
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': {
-  'primaryColor': '#e8f0fe',
-  'primaryTextColor': '#1a1a2e',
-  'primaryBorderColor': '#4a6cf7',
-  'lineColor': '#4a6cf7',
-  'secondaryColor': '#f0f4ff',
-  'tertiaryColor': '#f8f9ff',
-  'edgeLabelBackground': '#ffffff',
-  'clusterBkg': '#f0f4ff',
-  'clusterBorder': '#4a6cf7',
-  'titleColor': '#1a1a2e',
-  'nodeTextColor': '#1a1a2e',
-  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
-}}}%%
 graph TD
+    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
+    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
+    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
+    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
+    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
+    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
+
     subgraph Prefix["Shared Prefix KV (positions 0..P-1)\nAll tree nodes attend to all prefix positions"]
-        P0["pos 0"] --- P1["pos 1"] --- P2["..."] --- PP["pos P-1"]
+        P0["pos 0"]:::setup
+        P1["pos 1"]:::setup
+        P2["..."]:::setup
+        PP["pos P-1"]:::setup
+        P0 --- P1 --- P2 --- PP
     end
 
     subgraph Tree["Draft Tree (positions P..P+B-1)"]
-        N0["Node 0\n'the'\nindex=0\nmask=0b...001"]
-        N1["Node 1\n'cat'\nindex=1\nmask=0b...011"]
-        N2["Node 2\n'sat'\nindex=2\nmask=0b...111"]
-        N3["Node 3\n'dog'\nindex=3\nmask=0b...011"]
-        N4["Node 4\n'a'\nindex=4\nmask=0b...001\n(sibling of N0)"]
-        N5["Node 5\n'cat'\nindex=5\nmask=0b10001"]
+        N0["Node 0\n'the'\nindex=0\nmask=0b...001"]:::sync
+        N1["Node 1\n'cat'\nindex=1\nmask=0b...011"]:::sync
+        N2["Node 2\n'sat'\nindex=2\nmask=0b...111"]:::sync
+        N3["Node 3\n'dog'\nindex=3\nmask=0b...011"]:::sync
+        N4["Node 4\n'a'\nindex=4\nmask=0b...001\n(sibling of N0)"]:::sync
+        N5["Node 5\n'cat'\nindex=5\nmask=0b10001"]:::sync
 
         N0 --> N1
         N1 --> N2
@@ -334,9 +331,9 @@ graph TD
     end
 
     subgraph Legend["Attention rule per node"]
-        L1["attends to: ALL prefix positions"]
-        L2["attends to: ancestors in tree\n(bit i set = attend to node i)"]
-        L3["does NOT attend to: siblings\nor non-ancestor tree nodes"]
+        L1["attends to: ALL prefix positions"]:::optional
+        L2["attends to: ancestors in tree\n(bit i set = attend to node i)"]:::optional
+        L3["does NOT attend to: siblings\nor non-ancestor tree nodes"]:::optional
     end
 
     Prefix -.->|"unconditional\nfor all nodes"| N0
@@ -356,46 +353,39 @@ For sampling (temperature > 0), rejection sampling (Leviathan et al. 2023) prese
 ### Rejection Sampling Correctness
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': {
-  'primaryColor': '#e8f0fe',
-  'primaryTextColor': '#1a1a2e',
-  'primaryBorderColor': '#4a6cf7',
-  'lineColor': '#4a6cf7',
-  'secondaryColor': '#f0f4ff',
-  'tertiaryColor': '#f8f9ff',
-  'edgeLabelBackground': '#ffffff',
-  'clusterBkg': '#f0f4ff',
-  'clusterBorder': '#4a6cf7',
-  'titleColor': '#1a1a2e',
-  'nodeTextColor': '#1a1a2e',
-  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
-}}}%%
 flowchart TD
-    Start["For each draft token x_i\nproposed by draft model"]
+    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
+    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
+    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
+    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
+    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
+    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
 
-    Start --> ReadProbs["Read probabilities\np_draft(x_i) from draft logits\np_target(x_i) from target logits"]
+    Start["For each draft token x_i\nproposed by draft model"]:::setup
+    ReadProbs["Read probabilities\np_draft(x_i) from draft logits\np_target(x_i) from target logits"]:::setup
+    Ratio["Compute acceptance ratio\nr = p_target(x_i) / p_draft(x_i)"]:::migration
+    Sample["Sample u ~ Uniform(0, 1)"]:::migration
+    Accept["Accept x_i\nmove to next position\nno extra compute needed"]:::success
+    Residual["Compute residual distribution\np_residual(x) = max(0, p_target(x) - p_draft(x))\nnormalized over full vocabulary"]:::danger
+    Correct["Sample correction token x_i'\nfrom p_residual\nreplace x_i with x_i'"]:::danger
+    Stop["Stop -- discard all\nremaining draft tokens\nafter position i"]:::danger
+    BonusToken["Sample bonus token\nfrom p_target at position K+1\n(always done after full acceptance)"]:::success
 
-    ReadProbs --> Ratio["Compute acceptance ratio\nr = p_target(x_i) / p_draft(x_i)"]
-
-    Ratio --> Sample["Sample u ~ Uniform(0, 1)"]
-
+    Start --> ReadProbs
+    ReadProbs --> Ratio
+    Ratio --> Sample
     Sample --> Decision{"u <= min(1, r)?"}
-
-    Decision -->|"yes: accept\n(draft token is good enough)"| Accept["Accept x_i\nmove to next position\nno extra compute needed"]
-
-    Decision -->|"no: reject\n(draft overestimates probability)"| Residual["Compute residual distribution\np_residual(x) = max(0, p_target(x) - p_draft(x))\nnormalized over full vocabulary"]
-
-    Residual --> Correct["Sample correction token x_i'\nfrom p_residual\nreplace x_i with x_i'"]
-
-    Correct --> Stop["Stop -- discard all\nremaining draft tokens\nafter position i"]
-
+    Decision -->|"yes: accept\n(draft token is good enough)"| Accept
+    Decision -->|"no: reject\n(draft overestimates probability)"| Residual
+    Residual --> Correct
+    Correct --> Stop
     Accept --> More{"more draft\ntokens?"}
     More -->|yes| Start
-    More -->|"no (all K accepted)"| BonusToken["Sample bonus token\nfrom p_target at position K+1\n(always done after full acceptance)"]
+    More -->|"no (all K accepted)"| BonusToken
 
     subgraph Guarantee["Distribution Guarantee"]
-        G1["At every accepted position:\nE[output] = p_target(x)\nregardless of draft distribution"]
-        G2["Output is i.i.d. identical\nto sampling from target alone"]
+        G1["At every accepted position:\nE[output] = p_target(x)\nregardless of draft distribution"]:::optional
+        G2["Output is i.i.d. identical\nto sampling from target alone"]:::optional
     end
 ```
 
@@ -404,38 +394,35 @@ flowchart TD
 Agave tracks per-K acceptance statistics during generation. The `optimalK()` function in `spec_decode.zig` computes the expected tokens per step for each K value and selects the one with the highest throughput:
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': {
-  'primaryColor': '#e8f0fe',
-  'primaryTextColor': '#1a1a2e',
-  'primaryBorderColor': '#4a6cf7',
-  'lineColor': '#4a6cf7',
-  'secondaryColor': '#f0f4ff',
-  'tertiaryColor': '#f8f9ff',
-  'edgeLabelBackground': '#ffffff',
-  'clusterBkg': '#f0f4ff',
-  'clusterBorder': '#4a6cf7',
-  'titleColor': '#1a1a2e',
-  'nodeTextColor': '#1a1a2e',
-  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
-}}}%%
 flowchart TD
-    Start["start of step\nwhich K to use?"]
+    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
+    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
+    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
+    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
+    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
+    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
+
+    Start["start of step\nwhich K to use?"]:::setup
+    DefaultK["use default K=5"]:::setup
+    Compute["compute expected_tokens(K)\nfor K = 1..configured_K"]:::migration
+    BestK["use best K\n(argmax expected_tokens)"]:::migration
+    Cooldown["enter cooldown\nsingle-token decode (no draft)\nfor N steps"]:::danger
+    Draft["run draft model\nK forward passes"]:::sync
+    SingleDecode["single-token decode\n(no speculation)"]:::danger
+    Verify["verify with target model"]:::sync
+    RecordStats["record: how many\ntokens were accepted"]:::success
 
     Start --> Check{"enough stats\n(>= 10 rounds)?"}
-    Check -- "no (warmup)" --> DefaultK["use default K=5"]
-    Check -- "yes" --> Compute["compute expected_tokens(K)\nfor K = 1..configured_K"]
-
-    Compute --> BestK["use best K\n(argmax expected_tokens)"]
-
+    Check -- "no (warmup)" --> DefaultK
+    Check -- "yes" --> Compute
+    Compute --> BestK
     BestK --> LowAccept{"acceptance rate\n< 25%?"}
-    LowAccept -- "yes" --> Cooldown["enter cooldown\nsingle-token decode (no draft)\nfor N steps"]
-    LowAccept -- "no" --> Draft["run draft model\nK forward passes"]
-
+    LowAccept -- "yes" --> Cooldown
+    LowAccept -- "no" --> Draft
     DefaultK --> Draft
-    Cooldown --> SingleDecode["single-token decode\n(no speculation)"]
-
-    Draft --> Verify["verify with target model"]
-    Verify --> RecordStats["record: how many\ntokens were accepted"]
+    Cooldown --> SingleDecode
+    Draft --> Verify
+    Verify --> RecordStats
     RecordStats --> Start
 ```
 
@@ -462,98 +449,88 @@ The cooldown counter decrements each step and re-enables speculation when it exp
 Self-speculative decoding uses the target model itself as a draft by executing only a subset of transformer layers during the draft phase. The middle layers are skipped, keeping the embedding and final output layers.
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': {
-  'primaryColor': '#e8f0fe',
-  'primaryTextColor': '#1a1a2e',
-  'primaryBorderColor': '#4a6cf7',
-  'lineColor': '#4a6cf7',
-  'secondaryColor': '#f0f4ff',
-  'tertiaryColor': '#f8f9ff',
-  'edgeLabelBackground': '#ffffff',
-  'clusterBkg': '#f0f4ff',
-  'clusterBorder': '#4a6cf7',
-  'titleColor': '#1a1a2e',
-  'nodeTextColor': '#1a1a2e',
-  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
-}}}%%
 flowchart LR
+    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
+    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
+    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
+    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
+    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
+    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
+
     subgraph DraftPhase["Draft Phase (--draft-layers 9 skipped, model has 32 layers)"]
         direction TB
-        DE["Embedding\nlayer 0"]
-        D1["Layer 1"]
-        D2["Layer 2"]
-        D3["Layer 3"]
-        DSKIP["... layers 4-12\nSKIPPED\n(no compute, no KV write)"]
-        D13["Layer 13"]
-        D14["..."]
-        D32["Layer 32\n(output head)"]
+        DE["Embedding\nlayer 0"]:::setup
+        D1["Layer 1"]:::sync
+        D2["Layer 2"]:::sync
+        D3["Layer 3"]:::sync
+        DSKIP["... layers 4-12\nSKIPPED\n(no compute, no KV write)"]:::danger
+        D13["Layer 13"]:::sync
+        D14["..."]:::sync
+        D32["Layer 32\n(output head)"]:::sync
+        DraftOut["Draft\nProposals"]:::migration
         DE --> D1 --> D2 --> D3 --> DSKIP --> D13 --> D14 --> D32
-        D32 -->|"K candidate\ntokens + logits"| DraftOut["Draft\nProposals"]
+        D32 -->|"K candidate\ntokens + logits"| DraftOut
     end
 
     subgraph VerifyPhase["Verify Phase (all 32 layers, full model)"]
         direction TB
-        VE["Embedding\nlayer 0"]
-        V1["Layer 1"]
-        V2["...all layers..."]
-        V32["Layer 32\n(output head)"]
+        VE["Embedding\nlayer 0"]:::setup
+        V1["Layer 1"]:::sync
+        V2["...all layers..."]:::sync
+        V32["Layer 32\n(output head)"]:::sync
+        VerifyOut["Acceptance\nWalk"]:::success
         VE --> V1 --> V2 --> V32
-        V32 -->|"target logits\nat each position"| VerifyOut["Acceptance\nWalk"]
+        V32 -->|"target logits\nat each position"| VerifyOut
     end
 
     DraftOut -->|"proposed tokens\nfor verification"| VerifyPhase
 
     subgraph Memory["KV Cache (shared between phases)"]
-        KV["Single KV store\nDraft writes partial activations\nVerify overwrites with full activations\nsetKvSeqLen() rolls back on reject"]
+        KV["Single KV store\nDraft writes partial activations\nVerify overwrites with full activations\nsetKvSeqLen() rolls back on reject"]:::optional
     end
 ```
 
 ## N-gram Ring Buffer Matching
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': {
-  'primaryColor': '#e8f0fe',
-  'primaryTextColor': '#1a1a2e',
-  'primaryBorderColor': '#4a6cf7',
-  'lineColor': '#4a6cf7',
-  'secondaryColor': '#f0f4ff',
-  'tertiaryColor': '#f8f9ff',
-  'edgeLabelBackground': '#ffffff',
-  'clusterBkg': '#f0f4ff',
-  'clusterBorder': '#4a6cf7',
-  'titleColor': '#1a1a2e',
-  'nodeTextColor': '#1a1a2e',
-  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
-}}}%%
 flowchart TD
+    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
+    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
+    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
+    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
+    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
+    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
+
     subgraph RingBuffer["Ring Buffer (last 2048 generated tokens, 8 KB)"]
-        RB["[ t0, t1, t2, ..., t_head ]<br/>fixed-size circular buffer<br/>head pointer advances each token"]
+        RB["[ t0, t1, t2, ..., t_head ]\nfixed-size circular buffer\nhead pointer advances each token"]:::setup
     end
 
     subgraph Query["Query Construction"]
-        QT["Current output tail\n(last N tokens, N = 3..10)"]
-        QT -->|"build query gram\n[t-2, t-1, t0]"| Gram["Query: ['\n', '4', '. ']"]
+        QT["Current output tail\n(last N tokens, N = 3..10)"]:::setup
+        Gram["Query: ['\n', '4', '. ']"]:::migration
+        QT -->|"build query gram\n[t-2, t-1, t0]"| Gram
     end
 
-    Gram -->|"scan ring buffer\nfor matching prefix"| Search["N-gram Search\nO(window) linear scan\nstop at first length-N match"]
+    Search["N-gram Search\nO(window) linear scan\nstop at first length-N match"]:::sync
+    Proposal["Proposal: tokens at j+1..j+K\nfrom history buffer\n(up to spec-tokens K tokens)"]:::migration
+    Fallback["Fallback:\nsingle-token decode\n(no speculation this step)"]:::danger
+    Verify["Target Model Verification\nstandard accept/reject loop"]:::sync
+    Emit["Emit to output"]:::success
 
+    Gram -->|"scan ring buffer\nfor matching prefix"| Search
     Search --> Found{"match\nfound?"}
-
-    Found -->|"yes\n(found at position j)"| Proposal["Proposal: tokens at j+1..j+K\nfrom history buffer\n(up to spec-tokens K tokens)"]
-    Found -->|"no match\n(novel context)"| Fallback["Fallback:\nsingle-token decode\n(no speculation this step)"]
-
-    Proposal -->|"proposed draft tokens"| Verify["Target Model Verification\nstandard accept/reject loop"]
-
-    Verify -->|"accepted tokens"| Emit["Emit to output"]
+    Found -->|"yes\n(found at position j)"| Proposal
+    Found -->|"no match\n(novel context)"| Fallback
+    Proposal -->|"proposed draft tokens"| Verify
+    Verify -->|"accepted tokens"| Emit
     Verify -->|"correction token"| Emit
-
     Emit -->|"append new token\nadvance head"| RingBuffer
 
     subgraph Performance["Performance Profile"]
-        P1["Zero draft model weight memory"]
-        P2["O(window) lookup per step"]
-        P3["Best on: code, JSON, repeated lists"]
-        P4["Useless on: novel creative text"]
+        P1["Zero draft model weight memory"]:::optional
+        P2["O(window) lookup per step"]:::optional
+        P3["Best on: code, JSON, repeated lists"]:::optional
+        P4["Useless on: novel creative text"]:::optional
     end
 ```
 
@@ -639,39 +616,34 @@ All the modes above address decode speed -- the time between tokens during gener
 Instead of running the full target model over the entire prompt, PFlash uses a cheap scorer to identify which KV blocks matter and prefills only those blocks through the target model.
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': {
-  'primaryColor': '#e8f0fe',
-  'primaryTextColor': '#1a1a2e',
-  'primaryBorderColor': '#4a6cf7',
-  'lineColor': '#4a6cf7',
-  'secondaryColor': '#f0f4ff',
-  'tertiaryColor': '#f8f9ff',
-  'edgeLabelBackground': '#ffffff',
-  'clusterBkg': '#f0f4ff',
-  'clusterBorder': '#4a6cf7',
-  'titleColor': '#1a1a2e',
-  'nodeTextColor': '#1a1a2e',
-  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
-}}}%%
 flowchart LR
-    Prompt["Long Prompt\n128K tokens"]
+    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
+    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
+    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
+    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
+    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
+    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
 
-    Prompt --> Scorer["Scorer Model\n(draft model or dedicated tiny model)\nblock-sparse O(n) pass"]
+    Prompt["Long Prompt\n128K tokens"]:::setup
+    Scorer["Scorer Model\n(draft model or dedicated tiny model)\nblock-sparse O(n) pass"]:::sync
+    Scores["Block Importance Scores\n[0.1, 0.9, 0.2, 0.8, 0.3, 0.7, ...]"]:::migration
+    Threshold["Adaptive Threshold\nalpha x mean(scores)\n(default alpha=0.85)"]:::migration
+    Drop["Dropped Blocks\n~85-95% of prompt\n(boilerplate, padding, off-topic)"]:::danger
+    Keep["Kept Blocks\n~5-15% of prompt\n(high-relevance context)"]:::sync
+    Target["Target Model\nprefill compressed prompt\n6-13K tokens instead of 128K"]:::sync
+    KVCache["KV Cache\n(compressed representation)"]:::migration
+    Decode["DDTree Speculative Decode\nnormal token generation loop"]:::sync
+    Tokens["Output Tokens"]:::success
 
-    Scorer --> Scores["Block Importance Scores\n[0.1, 0.9, 0.2, 0.8, 0.3, 0.7, ...]"]
-
-    Scores --> Threshold["Adaptive Threshold\nalpha x mean(scores)\n(default alpha=0.85)"]
-
-    Threshold --> Drop["Dropped Blocks\n~85-95% of prompt\n(boilerplate, padding, off-topic)"]
-    Threshold --> Keep["Kept Blocks\n~5-15% of prompt\n(high-relevance context)"]
-
-    Keep --> Target["Target Model\nprefill compressed prompt\n6-13K tokens instead of 128K"]
-
-    Target --> KVCache["KV Cache\n(compressed representation)"]
-
-    KVCache --> Decode["DDTree Speculative Decode\nnormal token generation loop"]
-
-    Decode --> Tokens["Output Tokens"]
+    Prompt --> Scorer
+    Scorer --> Scores
+    Scores --> Threshold
+    Threshold --> Drop
+    Threshold --> Keep
+    Keep --> Target
+    Target --> KVCache
+    KVCache --> Decode
+    Decode --> Tokens
 
     subgraph Compression["PFlash Compression (8-20x)"]
         Scorer

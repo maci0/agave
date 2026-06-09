@@ -7,35 +7,37 @@ After the forward pass produces **logits** (raw unnormalized scores, one per voc
 Controls randomness by scaling logits before sampling:
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': {
-  'primaryColor': '#e8f0fe',
-  'primaryTextColor': '#1a1a2e',
-  'primaryBorderColor': '#4a6cf7',
-  'lineColor': '#4a6cf7',
-  'secondaryColor': '#f0f4ff',
-  'tertiaryColor': '#f8f9ff',
-  'edgeLabelBackground': '#ffffff',
-  'clusterBkg': '#f0f4ff',
-  'clusterBorder': '#4a6cf7',
-  'titleColor': '#1a1a2e',
-  'nodeTextColor': '#1a1a2e',
-  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
-}}}%%
 flowchart LR
-    Logits["Raw Logits\n[3.2, 1.1, 0.4, ...]"] --> Divide["Divide by Temperature\nlogit / T"]
-    Divide --> Adjusted["Adjusted Logits"]
-    Adjusted --> Softmax["Softmax\ne^x / Σe^x"]
-    Softmax --> Probs["Probabilities\n[0.72, 0.19, 0.09, ...]"]
-    Probs --> Sample["Weighted Random Pick"]
-    Sample --> Token["Next Token"]
+    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
+    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
+    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
+    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
+    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
+    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
+
+    Logits["Raw Logits\n[3.2, 1.1, 0.4, ...]"]:::setup
+    Divide["Divide by Temperature\nlogit / T"]:::sync
+    Adjusted["Adjusted Logits"]:::migration
+    Softmax["Softmax\ne^x / Σe^x"]:::sync
+    Probs["Probabilities\n[0.72, 0.19, 0.09, ...]"]:::migration
+    Sample["Weighted Random Pick"]:::sync
+    Token["Next Token"]:::success
+    T_low["T=0.3 → peaky\ntop token dominates"]:::optional
+    T_mid["T=1.0 → balanced\nraw model probs"]:::optional
+    T_high["T=1.5 → flat\nmany tokens compete"]:::optional
+
+    Logits --> Divide
+    Divide --> Adjusted
+    Adjusted --> Softmax
+    Softmax --> Probs
+    Probs --> Sample
+    Sample --> Token
 
     subgraph Effect["Temperature Effect"]
-        T_low["T=0.3 → peaky\ntop token dominates"]
-        T_mid["T=1.0 → balanced\nraw model probs"]
-        T_high["T=1.5 → flat\nmany tokens compete"]
+        T_low
+        T_mid
+        T_high
     end
-
-
 ```
 adjusted_logits[i] = logits[i] / temperature
 probabilities = softmax(adjusted_logits)
@@ -77,38 +79,39 @@ More adaptive than top-k: when the model is confident (top token = 95%), top-p=0
 **Top-K vs Top-P**: Top-K always keeps exactly K tokens. Top-P adapts based on confidence. They can be combined.
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': {
-  'primaryColor': '#e8f0fe',
-  'primaryTextColor': '#1a1a2e',
-  'primaryBorderColor': '#4a6cf7',
-  'lineColor': '#4a6cf7',
-  'secondaryColor': '#f0f4ff',
-  'tertiaryColor': '#f8f9ff',
-  'edgeLabelBackground': '#ffffff',
-  'clusterBkg': '#f0f4ff',
-  'clusterBorder': '#4a6cf7',
-  'titleColor': '#1a1a2e',
-  'nodeTextColor': '#1a1a2e',
-  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
-}}}%%
 flowchart TD
-    Start["Sorted Token Probabilities\n[0.40, 0.25, 0.15, 0.10, 0.06, 0.04]"] --> TopK["Top-K Filter\nkeep only top K tokens"]
-    Start --> TopP["Top-P Filter\ncumulate until sum >= P"]
+    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
+    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
+    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
+    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
+    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
+    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
 
-    TopK --> K_out["Fixed K candidates\ne.g. top-3: [0.40, 0.25, 0.15]"]
-    TopP --> P_out["Variable candidates\ne.g. P=0.9: [0.40, 0.25, 0.15, 0.10]\n(cumsum = 0.90)"]
+    Start["Sorted Token Probabilities\n[0.40, 0.25, 0.15, 0.10, 0.06, 0.04]"]:::setup
+    TopK["Top-K Filter\nkeep only top K tokens"]:::sync
+    TopP["Top-P Filter\ncumulate until sum >= P"]:::sync
+    K_out["Fixed K candidates\ne.g. top-3: [0.40, 0.25, 0.15]"]:::migration
+    P_out["Variable candidates\ne.g. P=0.9: [0.40, 0.25, 0.15, 0.10]\n(cumsum = 0.90)"]:::migration
+    Renorm_K["Renormalize to 1.0"]:::sync
+    Renorm_P["Renormalize to 1.0"]:::sync
+    Combined["Both applied? Intersection wins\n(whichever is more restrictive)"]:::migration
+    Sample["Sample from remaining tokens"]:::success
+    Certain["Confident model\ntop-p=0.9 → 1-2 tokens"]:::optional
+    Uncertain["Uncertain model\ntop-p=0.9 → 20+ tokens"]:::optional
 
-    K_out --> Renorm_K["Renormalize to 1.0"]
-    P_out --> Renorm_P["Renormalize to 1.0"]
-
-    Renorm_K --> Combined["Both applied? Intersection wins\n(whichever is more restrictive)"]
+    Start --> TopK
+    Start --> TopP
+    TopK --> K_out
+    TopP --> P_out
+    K_out --> Renorm_K
+    P_out --> Renorm_P
+    Renorm_K --> Combined
     Renorm_P --> Combined
-
-    Combined --> Sample["Sample from remaining tokens"]
+    Combined --> Sample
 
     subgraph Confidence["Model confidence drives top-p size"]
-        Certain["Confident model\ntop-p=0.9 → 1-2 tokens"]
-        Uncertain["Uncertain model\ntop-p=0.9 → 20+ tokens"]
+        Certain
+        Uncertain
     end
 ```
 
@@ -177,42 +180,44 @@ DRY penalizes tokens that would continue a repeated n-gram sequence. If the mode
 `dry_multiplier` scales the penalty (0 = disabled). `dry_allowed_length` sets the minimum n-gram length to trigger (default 2 — penalize repeated bigrams and longer). More effective than `repeat_penalty` because it detects repeated **sequences**, not just individual tokens. A token might be fine to repeat (e.g., "the") unless it's part of a repeated phrase.
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': {
-  'primaryColor': '#e8f0fe',
-  'primaryTextColor': '#1a1a2e',
-  'primaryBorderColor': '#4a6cf7',
-  'lineColor': '#4a6cf7',
-  'secondaryColor': '#f0f4ff',
-  'tertiaryColor': '#f8f9ff',
-  'edgeLabelBackground': '#ffffff',
-  'clusterBkg': '#f0f4ff',
-  'clusterBorder': '#4a6cf7',
-  'titleColor': '#1a1a2e',
-  'nodeTextColor': '#1a1a2e',
-  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
-}}}%%
 flowchart TD
-    History["Generation History\n[... the cat sat on the mat ...]"] --> Window["Sliding Window Scan\nfor each candidate token C"]
+    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
+    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
+    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
+    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
+    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
+    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
+
+    History["Generation History\n[... the cat sat on the mat ...]"]:::setup
+    Window["Sliding Window Scan\nfor each candidate token C"]:::sync
+    NoPenalty["No DRY penalty\nlogit unchanged"]:::success
+    Extend["Extend match backward\nhow many prior tokens also match?"]:::sync
+    Length["Match length L\n(tokens in common prefix)"]:::migration
+    Penalty["Apply penalty\nlogit -= dry_multiplier ^ L"]:::danger
+    Ex1["token 'sat' after 'cat'\nL=1 (just 'sat') → no penalty"]:::optional
+    Ex2["token 'on' after 'cat sat'\nL=2 (bigram) → penalty x1.5^2=2.25"]:::optional
+    Ex3["token 'mat' after 'cat sat on'\nL=3 → penalty x1.5^3=3.375"]:::optional
+    RP["repeat_penalty: penalizes\neach token individually\n'the' always penalized"]:::optional
+    DRY2["DRY: penalizes token only\nwhen it continues a phrase\n'the' fine alone, penalized in repeated phrase"]:::optional
+
+    History --> Window
     Window --> Match{"Does token C appear\nearlier in history?"}
-
-    Match -->|No match| NoPenalty["No DRY penalty\nlogit unchanged"]
-    Match -->|Match found| Extend["Extend match backward\nhow many prior tokens also match?"]
-
-    Extend --> Length["Match length L\n(tokens in common prefix)"]
+    Match -->|No match| NoPenalty
+    Match -->|Match found| Extend
+    Extend --> Length
     Length --> Allowed{"L >= dry_allowed_length?"}
-
     Allowed -->|No, sequence too short| NoPenalty
-    Allowed -->|Yes, repeated phrase| Penalty["Apply penalty\nlogit -= dry_multiplier ^ L"]
+    Allowed -->|Yes, repeated phrase| Penalty
 
     subgraph Example["Example: dry_multiplier=1.5, dry_allowed_length=2"]
-        Ex1["token 'sat' after 'cat'\nL=1 (just 'sat') → no penalty"]
-        Ex2["token 'on' after 'cat sat'\nL=2 (bigram) → penalty x1.5^2=2.25"]
-        Ex3["token 'mat' after 'cat sat on'\nL=3 → penalty x1.5^3=3.375"]
+        Ex1
+        Ex2
+        Ex3
     end
 
     subgraph Contrast["vs repeat_penalty"]
-        RP["repeat_penalty: penalizes\neach token individually\n'the' always penalized"]
-        DRY2["DRY: penalizes token only\nwhen it continues a phrase\n'the' fine alone, penalized in repeated phrase"]
+        RP
+        DRY2
     end
 ```
 
@@ -231,37 +236,42 @@ Mirostat maintains consistent **perplexity** (unpredictability) during generatio
 | `mirostat_eta` | 0.1 | Learning rate — how fast to adapt |
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': {
-  'primaryColor': '#e8f0fe',
-  'primaryTextColor': '#1a1a2e',
-  'primaryBorderColor': '#4a6cf7',
-  'lineColor': '#4a6cf7',
-  'secondaryColor': '#f0f4ff',
-  'tertiaryColor': '#f8f9ff',
-  'edgeLabelBackground': '#ffffff',
-  'clusterBkg': '#f0f4ff',
-  'clusterBorder': '#4a6cf7',
-  'titleColor': '#1a1a2e',
-  'nodeTextColor': '#1a1a2e',
-  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
-}}}%%
 flowchart TD
-    Logits["Raw Logits\none score per vocab token"] --> Trunc["Truncate to top-k candidates\n(Mirostat controls k dynamically)"]
-    Trunc --> Softmax["Softmax\ncompute probabilities"]
-    Softmax --> Sample["Weighted Random Sample\npick next token"]
-    Sample --> Surprise["Measure Surprise\n-log2(prob of sampled token)"]
-    Surprise --> Error["Error = surprise - tau\ntau = target entropy"]
-    Error --> Update["Update mu\nmu -= eta * error"]
-    Update --> NextK["Set next k\nbased on updated mu"]
+    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
+    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
+    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
+    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
+    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
+    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
+
+    Logits["Raw Logits\none score per vocab token"]:::setup
+    Trunc["Truncate to top-k candidates\n(Mirostat controls k dynamically)"]:::sync
+    Softmax["Softmax\ncompute probabilities"]:::sync
+    Sample["Weighted Random Sample\npick next token"]:::sync
+    Surprise["Measure Surprise\n-log2(prob of sampled token)"]:::migration
+    Error["Error = surprise - tau\ntau = target entropy"]:::migration
+    Update["Update mu\nmu -= eta * error"]:::migration
+    NextK["Set next k\nbased on updated mu"]:::migration
+    Tau["tau (target entropy)\nlower = focused\nhigher = creative"]:::optional
+    Eta["eta (learning rate)\nhow fast mu adapts"]:::optional
+    Mu["mu\ncurrent entropy estimate\nstarts at 2 * tau"]:::optional
+
+    Logits --> Trunc
+    Trunc --> Softmax
+    Softmax --> Sample
+    Sample --> Surprise
+    Surprise --> Error
+    Error --> Update
+    Update --> NextK
     NextK -->|next token| Logits
 
     subgraph Params["Control Parameters"]
-        Tau["tau (target entropy)\nlower = focused\nhigher = creative"]
-        Eta["eta (learning rate)\nhow fast mu adapts"]
+        Tau
+        Eta
     end
 
     subgraph State["Running State"]
-        Mu["mu\ncurrent entropy estimate\nstarts at 2 * tau"]
+        Mu
     end
 
     Update -.->|adjusts| Mu
@@ -350,30 +360,31 @@ Supported: GBNF strings, GBNF files (`--grammar`), JSON schemas (`--json-schema`
 Use this decision tree to pick parameters for your use case, then the pipeline diagram below shows the order they apply at runtime.
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': {
-  'primaryColor': '#e8f0fe',
-  'primaryTextColor': '#1a1a2e',
-  'primaryBorderColor': '#4a6cf7',
-  'lineColor': '#4a6cf7',
-  'secondaryColor': '#f0f4ff',
-  'tertiaryColor': '#f8f9ff',
-  'edgeLabelBackground': '#ffffff',
-  'clusterBkg': '#f0f4ff',
-  'clusterBorder': '#4a6cf7',
-  'titleColor': '#1a1a2e',
-  'nodeTextColor': '#1a1a2e',
-  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
-}}}%%
 flowchart TD
-    Start["What are you generating?"] --> Q1{"Need exact,\nreproducible output?"}
-    Q1 -->|Yes| Greedy["temperature=0\ngreedy argmax"]
+    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
+    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
+    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
+    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
+    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
+    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
+
+    Start["What are you generating?"]:::setup
+    Greedy["temperature=0\ngreedy argmax"]:::success
+    Grammar["--json-schema / --grammar\ngrammar mask handles the rest"]:::success
+    LongForm["repeat_penalty=1.1\nDRY multiplier=1.5\ntemperature=0.8"]:::success
+    Creative["temperature=1.2\nmin_p=0.05\nor XTC for variety"]:::success
+    Mirostat["mirostat=2\ntau=5.0\n(ignores top-k/p)"]:::success
+    Balanced["temperature=0.7\ntop-p=0.9"]:::success
+
+    Start --> Q1{"Need exact,\nreproducible output?"}
+    Q1 -->|Yes| Greedy
     Q1 -->|No| Q2{"Structured output\nrequired?"}
-    Q2 -->|Yes - JSON/grammar| Grammar["--json-schema / --grammar\ngrammar mask handles the rest"]
+    Q2 -->|Yes - JSON/grammar| Grammar
     Q2 -->|No| Q3{"What matters most?"}
-    Q3 -->|Avoid repetition in long text| LongForm["repeat_penalty=1.1\nDRY multiplier=1.5\ntemperature=0.8"]
-    Q3 -->|Creative + diverse| Creative["temperature=1.2\nmin_p=0.05\nor XTC for variety"]
-    Q3 -->|Consistent readability| Mirostat["mirostat=2\ntau=5.0\n(ignores top-k/p)"]
-    Q3 -->|General conversation| Balanced["temperature=0.7\ntop-p=0.9"]
+    Q3 -->|Avoid repetition in long text| LongForm
+    Q3 -->|Creative + diverse| Creative
+    Q3 -->|Consistent readability| Mirostat
+    Q3 -->|General conversation| Balanced
 
     subgraph Defaults["Safe starting point"]
         Balanced
@@ -383,37 +394,42 @@ flowchart TD
 Applied in order:
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': {
-  'primaryColor': '#e8f0fe',
-  'primaryTextColor': '#1a1a2e',
-  'primaryBorderColor': '#4a6cf7',
-  'lineColor': '#4a6cf7',
-  'secondaryColor': '#f0f4ff',
-  'tertiaryColor': '#f8f9ff',
-  'edgeLabelBackground': '#ffffff',
-  'clusterBkg': '#f0f4ff',
-  'clusterBorder': '#4a6cf7',
-  'titleColor': '#1a1a2e',
-  'nodeTextColor': '#1a1a2e',
-  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
-}}}%%
 flowchart TD
-    Logits["Raw Logits\none score per vocab token"] --> Bias["Logit Bias\nper-token additive adjustments"]
-    Bias --> Penalties["Repetition Penalties\nrepeat / frequency / presence / DRY"]
-    Penalties --> Grammar["Grammar Mask\nset invalid tokens to -infinity"]
-    Grammar --> Temp["Temperature Scaling\nlogits /= temperature"]
-    Temp --> XTC["XTC Exclusion\nrandomly drop top tokens"]
-    XTC --> MinP["Min-P Filter\ndrop tokens below min_p × max_prob"]
-    MinP --> TopK["Top-K Filter\nkeep only K highest"]
-    TopK --> Softmax["Softmax\nconvert logits to probabilities"]
-    Softmax --> TopP["Top-P Filter\nnucleus cutoff + renormalize"]
+    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
+    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
+    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
+    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
+    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
+    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
+
+    Logits["Raw Logits\none score per vocab token"]:::setup
+    Bias["Logit Bias\nper-token additive adjustments"]:::sync
+    Penalties["Repetition Penalties\nrepeat / frequency / presence / DRY"]:::sync
+    Grammar["Grammar Mask\nset invalid tokens to -infinity"]:::sync
+    Temp["Temperature Scaling\nlogits /= temperature"]:::sync
+    XTC["XTC Exclusion\nrandomly drop top tokens"]:::sync
+    MinP["Min-P Filter\ndrop tokens below min_p × max_prob"]:::sync
+    TopK["Top-K Filter\nkeep only K highest"]:::sync
+    Softmax["Softmax\nconvert logits to probabilities"]:::migration
+    TopP["Top-P Filter\nnucleus cutoff + renormalize"]:::sync
+    MiroTrunc["Mirostat Truncation\nentropy-targeted cutoff"]:::optional
+    FinalSample["Weighted Random Sample"]:::sync
+    NextToken["Next Token ID"]:::success
+
+    Logits --> Bias
+    Bias --> Penalties
+    Penalties --> Grammar
+    Grammar --> Temp
+    Temp --> XTC
+    XTC --> MinP
+    MinP --> TopK
+    TopK --> Softmax
+    Softmax --> TopP
     TopP --> Mirostat{"Mirostat\nactive?"}
-    Mirostat -->|Yes - replaces top-k/p| MiroTrunc["Mirostat Truncation\nentropy-targeted cutoff"]
-    Mirostat -->|No| FinalSample["Weighted Random Sample"]
+    Mirostat -->|Yes - replaces top-k/p| MiroTrunc
+    Mirostat -->|No| FinalSample
     MiroTrunc --> FinalSample
-    FinalSample --> NextToken["Next Token ID"]
-
-
+    FinalSample --> NextToken
 ```
 logits (raw scores, one per vocab token)
   │

@@ -7,35 +7,30 @@ The Metal backend is Agave's primary GPU path on Apple Silicon. It's designed ar
 On Apple Silicon (M1, M2, M3, M4), the CPU and GPU share the **same physical DRAM** — there's no separate VRAM. This is different from discrete GPUs (NVIDIA, AMD) where data must be copied between host RAM and GPU memory.
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': {
-  'primaryColor': '#e8f0fe',
-  'primaryTextColor': '#1a1a2e',
-  'primaryBorderColor': '#4a6cf7',
-  'lineColor': '#4a6cf7',
-  'secondaryColor': '#f0f4ff',
-  'tertiaryColor': '#f8f9ff',
-  'edgeLabelBackground': '#ffffff',
-  'clusterBkg': '#f0f4ff',
-  'clusterBorder': '#4a6cf7',
-  'titleColor': '#1a1a2e',
-  'nodeTextColor': '#1a1a2e',
-  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
-}}}%%
 flowchart LR
+    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
+    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
+    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
+    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
+    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
+    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
+
+    H1["Host RAM\n(CPU allocation)"]:::danger
+    V1["VRAM\n(GPU memory)"]:::danger
+    Shared["Shared DRAM\n(~400 GB/s)"]:::success
+    CPU["CPU"]:::setup
+    GPU["GPU"]:::setup
+
     subgraph Discrete["Discrete GPU (NVIDIA/AMD)"]
         direction LR
-        H1["Host RAM\n(CPU allocation)"] -->|"memcpy D2H/H2D\n(PCIe, ~32 GB/s)"| V1["VRAM\n(GPU memory)"]
+        H1 -->|"memcpy D2H/H2D\n(PCIe, ~32 GB/s)"| V1
     end
 
     subgraph UMA["Apple Silicon UMA"]
         direction LR
-        Shared["Shared DRAM\n(~400 GB/s)"]
-        CPU["CPU"] -->|"pointer read/write"| Shared
-        GPU["GPU"] -->|"pointer read/write"| Shared
+        CPU -->|"pointer read/write"| Shared
+        GPU -->|"pointer read/write"| Shared
     end
-
-    style Discrete fill:#2d1b1b,stroke:#cc4444
-    style UMA fill:#1b2d1b,stroke:#44cc44
 ```
 
 **Implications:**
@@ -69,34 +64,32 @@ Creating a `MTLBuffer` wrapper involves ObjC allocation and reference counting. 
 **Solution:** Cache `MTLBuffer` objects by their host pointer address.
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': {
-  'primaryColor': '#e8f0fe',
-  'primaryTextColor': '#1a1a2e',
-  'primaryBorderColor': '#4a6cf7',
-  'lineColor': '#4a6cf7',
-  'secondaryColor': '#f0f4ff',
-  'tertiaryColor': '#f8f9ff',
-  'edgeLabelBackground': '#ffffff',
-  'clusterBkg': '#f0f4ff',
-  'clusterBorder': '#4a6cf7',
-  'titleColor': '#1a1a2e',
-  'nodeTextColor': '#1a1a2e',
-  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
-}}}%%
 flowchart TD
-    Call["getBufRef(ptr, len)"] --> Hash["Compute addr = @intFromPtr(ptr)"]
+    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
+    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
+    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
+    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
+    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
+    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
+
+    Call["getBufRef(ptr, len)"]:::setup
+    Hash["Compute addr = @intFromPtr(ptr)"]:::migration
+    Return["Return cached MTLBuffer\n+ recomputed offset"]:::success
+    Align["Align ptr down to\npage boundary"]:::migration
+    Wrap["newBufferWithBytesNoCopy\n(zero-copy, Shared mode)"]:::sync
+    Store["buf_cache.put(aligned_base, info)"]:::migration
+    Kernel["Pass BufRef{buf, offset}\nto Metal compute encoder"]:::success
+
+    Call --> Hash
     Hash --> Lookup{"buf_cache.get(aligned_base)?"}
 
-    Lookup -->|"Hit (stable weight pointer)"| Return["Return cached MTLBuffer\n+ recomputed offset"]
-    Lookup -->|"Miss (first access)"| Align["Align ptr down to\npage boundary"]
-    Align --> Wrap["newBufferWithBytesNoCopy\n(zero-copy, Shared mode)"]
-    Wrap --> Store["buf_cache.put(aligned_base, info)"]
+    Lookup -->|"Hit (stable weight pointer)"| Return
+    Lookup -->|"Miss (first access)"| Align
+    Align --> Wrap
+    Wrap --> Store
     Store --> Return
 
-    Return --> Kernel["Pass BufRef{buf, offset}\nto Metal compute encoder"]
-
-    style Return fill:#1b2d1b,stroke:#44cc44
-    style Wrap fill:#1b1b2d,stroke:#4444cc
+    Return --> Kernel
 ```
 
 ### Cache Structure
@@ -322,33 +315,32 @@ Metal's memory barrier (`memoryBarrierWithScope`) ensures write visibility but *
 **Solution:** `beginBatch()` / `endBatch()` to suppress barriers and insert one at the end.
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': {
-  'primaryColor': '#e8f0fe',
-  'primaryTextColor': '#1a1a2e',
-  'primaryBorderColor': '#4a6cf7',
-  'lineColor': '#4a6cf7',
-  'secondaryColor': '#f0f4ff',
-  'tertiaryColor': '#f8f9ff',
-  'edgeLabelBackground': '#ffffff',
-  'clusterBkg': '#f0f4ff',
-  'clusterBorder': '#4a6cf7',
-  'titleColor': '#1a1a2e',
-  'nodeTextColor': '#1a1a2e',
-  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
-}}}%%
 flowchart LR
+    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
+    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
+    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
+    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
+    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
+    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
+
+    A1["rmsNorm Q"]:::danger
+    A2["rmsNorm K"]:::danger
+    A3["rmsNorm V"]:::danger
+    A4["next op"]:::danger
+    B1["rmsNorm Q"]:::sync
+    B2["rmsNorm K"]:::sync
+    B3["rmsNorm V"]:::sync
+    B4["next op"]:::success
+
     subgraph Sequential["Without beginBatch (930 barriers/token)"]
         direction LR
-        A1["rmsNorm Q"] -->|barrier| A2["rmsNorm K"] -->|barrier| A3["rmsNorm V"] -->|barrier| A4["next op"]
+        A1 -->|barrier| A2 -->|barrier| A3 -->|barrier| A4
     end
 
     subgraph Batched["With beginBatch/endBatch (690 barriers/token)"]
         direction LR
-        B1["rmsNorm Q"] & B2["rmsNorm K"] & B3["rmsNorm V"] -->|"single barrier\n(endBatch)"| B4["next op"]
+        B1 & B2 & B3 -->|"single barrier\n(endBatch)"| B4
     end
-
-    style Sequential fill:#2d1b1b,stroke:#cc4444
-    style Batched fill:#1b2d1b,stroke:#44cc44
 ```
 
 ### API
@@ -542,38 +534,33 @@ kernel void sdpa(
 ### Threadgroup Memory Budget Breakdown
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': {
-  'primaryColor': '#e8f0fe',
-  'primaryTextColor': '#1a1a2e',
-  'primaryBorderColor': '#4a6cf7',
-  'lineColor': '#4a6cf7',
-  'secondaryColor': '#f0f4ff',
-  'tertiaryColor': '#f8f9ff',
-  'edgeLabelBackground': '#ffffff',
-  'clusterBkg': '#f0f4ff',
-  'clusterBorder': '#4a6cf7',
-  'titleColor': '#1a1a2e',
-  'nodeTextColor': '#1a1a2e',
-  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
-}}}%%
 flowchart TD
-    Budget["Apple Silicon threadgroup\nmemory limit: 32 KB total"]
+    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
+    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
+    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
+    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
+    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
+    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
 
-    Budget --> KV["kv_block\nfloat[16 × 256]\n= 16 KB\n(50% of budget)"]
-    Budget --> Q["q_local\nfloat[256]\n= 1 KB\n(3% of budget)"]
-    Budget --> Out["out_acc\nfloat[256]\n= 1 KB\n(3% of budget)"]
-    Budget --> Scores["scores\nfloat[16]\n= 64 bytes\n(0.2% of budget)"]
-    Budget --> Shared["shared\nfloat[8]\n= 32 bytes\n(0.1% of budget)"]
-    Budget --> Free["headroom\n~13.4 KB remaining\n(42% of budget)"]
+    Budget["Apple Silicon threadgroup\nmemory limit: 32 KB total"]:::setup
+    KV["kv_block\nfloat[16 × 256]\n= 16 KB\n(50% of budget)"]:::danger
+    Q["q_local\nfloat[256]\n= 1 KB\n(3% of budget)"]:::sync
+    Out["out_acc\nfloat[256]\n= 1 KB\n(3% of budget)"]:::sync
+    Scores["scores\nfloat[16]\n= 64 bytes\n(0.2% of budget)"]:::sync
+    Shared["shared\nfloat[8]\n= 32 bytes\n(0.1% of budget)"]:::sync
+    Free["headroom\n~13.4 KB remaining\n(42% of budget)"]:::success
+    Constraint["Constraint: 16 positions × 256 head_dim\nIncreasing to 32 pos → 32 KB (maxed)\nIncreasing head_dim to 512 → 32 KB (maxed)"]:::migration
+    Fallback["Contexts > 4096 tokens\nor head_dim > 256\nfall back to chunked attention"]:::optional
 
-    KV --> Constraint["Constraint: 16 positions × 256 head_dim\nIncreasing to 32 pos → 32 KB (maxed)\nIncreasing head_dim to 512 → 32 KB (maxed)"]
-    Free --> Fallback["Contexts > 4096 tokens\nor head_dim > 256\nfall back to chunked attention"]
+    Budget --> KV
+    Budget --> Q
+    Budget --> Out
+    Budget --> Scores
+    Budget --> Shared
+    Budget --> Free
 
-    style Budget fill:#1a1a2e,stroke:#4a6cf7,color:#ffffff
-    style KV fill:#2d1b1b,stroke:#cc4444
-    style Constraint fill:#2d2d1b,stroke:#ccaa44
-    style Fallback fill:#1b2d2d,stroke:#44aacc
-    style Free fill:#1b2d1b,stroke:#44cc44
+    KV --> Constraint
+    Free --> Fallback
 ```
 
 ## Profiling Counters
@@ -655,46 +642,42 @@ Each threadgroup handles one output row. The bf16 variant processes tokens seque
 ### GEMM vs GEMV Dispatch Decision Tree
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': {
-  'primaryColor': '#e8f0fe',
-  'primaryTextColor': '#1a1a2e',
-  'primaryBorderColor': '#4a6cf7',
-  'lineColor': '#4a6cf7',
-  'secondaryColor': '#f0f4ff',
-  'tertiaryColor': '#f8f9ff',
-  'edgeLabelBackground': '#ffffff',
-  'clusterBkg': '#f0f4ff',
-  'clusterBorder': '#4a6cf7',
-  'titleColor': '#1a1a2e',
-  'nodeTextColor': '#1a1a2e',
-  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
-}}}%%
 flowchart TD
-    Entry["be.gemm(x, W, y,\nn_tok, n_out, n_in)"]
+    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
+    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
+    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
+    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
+    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
+    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
+
+    Entry["be.gemm(x, W, y,\nn_tok, n_out, n_in)"]:::setup
+    GEMV["GEMV path\ngemv(x, W, y)\n1 vector × matrix\nlow latency, no tiling"]:::success
+    GemmF32["pipe_gemm_f32\n(f32 weights)\nno tiling"]:::sync
+    GemmBF16["pipe_gemm_bf16\n(half-precision weights)\nsequential token loop"]:::sync
+    GemmQ8["pipe_gemm_q8_0\n(8-bit quant)\nTILE_T=8 token tiling\namortize weight decode"]:::sync
+    GemmQ4K["pipe_gemm_q4_k / q5_k / q6_k\n(4/5/6-bit K-quant)\nTILE_T=4 token tiling"]:::sync
+    GemmQ4["pipe_gemm_q4_0\n(4-bit quant)\nTILE_T=4 token tiling"]:::sync
+    Panic["@panic\nno CPU fallback\nadd GPU kernel first"]:::danger
+    Threadgroup["1 threadgroup per output row\nencode → barrier → next kernel"]:::setup
 
     Entry --> TokCheck{"n_tok == 1?\n(token generation)"}
 
-    TokCheck -->|"yes — single token"| GEMV["GEMV path\ngemv(x, W, y)\n1 vector × matrix\nlow latency, no tiling"]
-
+    TokCheck -->|"yes — single token"| GEMV
     TokCheck -->|"no — batch / prefill"| DtypeCheck{"Weight dtype?"}
 
-    DtypeCheck -->|"f32"| GemmF32["pipe_gemm_f32\n(f32 weights)\nno tiling"]
-    DtypeCheck -->|"bf16 / f16"| GemmBF16["pipe_gemm_bf16\n(half-precision weights)\nsequential token loop"]
-    DtypeCheck -->|"q8_0"| GemmQ8["pipe_gemm_q8_0\n(8-bit quant)\nTILE_T=8 token tiling\namortize weight decode"]
-    DtypeCheck -->|"q4_k / q5_k / q6_k"| GemmQ4K["pipe_gemm_q4_k / q5_k / q6_k\n(4/5/6-bit K-quant)\nTILE_T=4 token tiling"]
-    DtypeCheck -->|"q4_0"| GemmQ4["pipe_gemm_q4_0\n(4-bit quant)\nTILE_T=4 token tiling"]
-    DtypeCheck -->|"other"| Panic["@panic\nno CPU fallback\nadd GPU kernel first"]
+    DtypeCheck -->|"f32"| GemmF32
+    DtypeCheck -->|"bf16 / f16"| GemmBF16
+    DtypeCheck -->|"q8_0"| GemmQ8
+    DtypeCheck -->|"q4_k / q5_k / q6_k"| GemmQ4K
+    DtypeCheck -->|"q4_0"| GemmQ4
+    DtypeCheck -->|"other"| Panic
 
     subgraph Output["All paths"]
-        Threadgroup["1 threadgroup per output row\nencode → barrier → next kernel"]
+        Threadgroup
     end
 
     GemmF32 & GemmBF16 & GemmQ8 & GemmQ4K & GemmQ4 --> Threadgroup
     GEMV --> Threadgroup
-
-    style Panic fill:#2d1b1b,stroke:#cc4444
-    style GEMV fill:#1b2d1b,stroke:#44cc44
-    style Threadgroup fill:#1b1b2d,stroke:#4a6cf7
 ```
 
 ## Vision Encoder GPU Acceleration
@@ -766,51 +749,42 @@ This interleaving is necessary because the vision encoder uses full (non-causal)
 4. **Megakernel pipelines:** The `--megakernel` flag enables a three-tier fusion system. **Tier 1** (fused FFN) combines gate GEMV + up GEMV + activation into a single dispatch (3->1 per FFN layer) via 11 kernels in `megakernel.metal` (SiLU x {Q8_0, Q4_K, Q5_K, Q6_K, Q4_0, MLX_Q4} + GELU x {Q8_0, Q4_K, Q5_K, Q6_K, Q4_0}). **Tier 2** (true megakernels) executes entire transformer layers in a single dispatch using 18 composable building blocks in `mega_common.metal` with atomic counter grid sync (`mega_grid_sync`). **Tier 3** (composed megakernels) auto-generates model-specific MSL at runtime via `mega_compose.zig`: the `composeMSL()` function produces MSL source from a `ModelDesc` struct, then `compileComposedMegakernel()` compiles it via `newLibraryWithSource`. This enables megakernel support for new models without writing any shader code -- just a `ModelDesc` definition. The Metal backend compiles **83 MSL pipelines** total (standard ops + fused FFN + 5 true megakernels + 1 runtime-composed). See [Chapter 13](13-batched-dispatch-and-fusion.md) for details.
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': {
-  'primaryColor': '#e8f0fe',
-  'primaryTextColor': '#1a1a2e',
-  'primaryBorderColor': '#4a6cf7',
-  'lineColor': '#4a6cf7',
-  'secondaryColor': '#f0f4ff',
-  'tertiaryColor': '#f8f9ff',
-  'edgeLabelBackground': '#ffffff',
-  'clusterBkg': '#f0f4ff',
-  'clusterBorder': '#4a6cf7',
-  'titleColor': '#1a1a2e',
-  'nodeTextColor': '#1a1a2e',
-  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
-}}}%%
 flowchart TD
-    Flag["--megakernel flag\nenables fusion system"]
+    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
+    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
+    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
+    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
+    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
+    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
+
+    Flag["--megakernel flag\nenables fusion system"]:::setup
+    T1Desc["3 dispatches → 1 dispatch per FFN layer\ngate GEMV + up GEMV + activation fused\n11 kernels: SiLU×6 dtypes + GELU×5 dtypes\nDtypes: Q8_0, Q4_K, Q5_K, Q6_K, Q4_0, MLX_Q4"]:::sync
+    T2Desc["Entire transformer layer = 1 dispatch\n18 composable building blocks\nAtomic counter grid sync (mega_grid_sync)\n5 pre-compiled megakernel pipelines"]:::setup
+    T3Desc["MSL source generated at runtime\nfrom ModelDesc struct definition\ncomposeMSL() → compileComposedMegakernel()\nnewLibraryWithSource() JIT compilation\nNew models: zero shader code needed"]:::optional
+    Total["83 total MSL pipelines compiled\n(standard ops + Tier 1 + Tier 2 + Tier 3)"]:::migration
+    Benefit["Reduced dispatch overhead\nImproved GPU utilization\nLower CPU encoding cost per token"]:::success
 
     Flag --> T1
     Flag --> T2
     Flag --> T3
 
     subgraph T1["Tier 1 — Fused FFN\n(megakernel.metal)"]
-        T1Desc["3 dispatches → 1 dispatch per FFN layer\ngate GEMV + up GEMV + activation fused\n11 kernels: SiLU×6 dtypes + GELU×5 dtypes\nDtypes: Q8_0, Q4_K, Q5_K, Q6_K, Q4_0, MLX_Q4"]
+        T1Desc
     end
 
     subgraph T2["Tier 2 — True Megakernels\n(mega_common.metal)"]
-        T2Desc["Entire transformer layer = 1 dispatch\n18 composable building blocks\nAtomic counter grid sync (mega_grid_sync)\n5 pre-compiled megakernel pipelines"]
+        T2Desc
     end
 
     subgraph T3["Tier 3 — Composed Megakernels\n(mega_compose.zig)"]
-        T3Desc["MSL source generated at runtime\nfrom ModelDesc struct definition\ncomposeMSL() → compileComposedMegakernel()\nnewLibraryWithSource() JIT compilation\nNew models: zero shader code needed"]
+        T3Desc
     end
 
-    T1Desc --> Total["83 total MSL pipelines compiled\n(standard ops + Tier 1 + Tier 2 + Tier 3)"]
+    T1Desc --> Total
     T2Desc --> Total
     T3Desc --> Total
 
-    Total --> Benefit["Reduced dispatch overhead\nImproved GPU utilization\nLower CPU encoding cost per token"]
-
-    style T1 fill:#1b2d1b,stroke:#44cc44
-    style T2 fill:#1b1b2d,stroke:#4a6cf7
-    style T3 fill:#2d1b2d,stroke:#aa44cc
-    style Flag fill:#1a1a2e,stroke:#4a6cf7,color:#ffffff
-    style Total fill:#2d2d1b,stroke:#ccaa44
-    style Benefit fill:#1b2d2d,stroke:#44aacc
+    Total --> Benefit
 ```
 
 ### Debugging
