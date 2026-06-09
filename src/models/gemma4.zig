@@ -328,14 +328,28 @@ pub const Gemma4Model = struct {
     pub fn init(allocator: Allocator, f: Format, be: Backend, ctx_size: u32, kv_type_k: kv_quant.KvQuantType, kv_type_v: kv_quant.KvQuantType, tiered_cache: ?*TieredKvCache) !Gemma4Model {
         const arch = f.getMetaStr("general.architecture") orelse "gemma4";
 
-        const n_layers = f.getArchU32(arch, "block_count") orelse
+        // Some QAT/text-only 12B GUF files use "gemma4_text" as the architecture key
+        // but store metadata under "gemma4.*" prefix (or vice versa). Try both.
+        // getArchAny tries the given arch first, then falls back to "gemma4".
+        const getArchAny = struct {
+            fn u32_(fmt: Format, a: []const u8, suffix: []const u8) ?u32 {
+                return fmt.getArchU32(a, suffix) orelse
+                    if (!std.mem.eql(u8, a, "gemma4")) fmt.getArchU32("gemma4", suffix) else null;
+            }
+            fn f32_(fmt: Format, a: []const u8, suffix: []const u8) ?f32 {
+                return fmt.getArchF32(a, suffix) orelse
+                    if (!std.mem.eql(u8, a, "gemma4")) fmt.getArchF32("gemma4", suffix) else null;
+            }
+        };
+
+        const n_layers = getArchAny.u32_(f, arch, "block_count") orelse
             f.getMetaU32("num_hidden_layers") orelse default_n_layers;
-        const n_embd = f.getArchU32(arch, "embedding_length") orelse
+        const n_embd = getArchAny.u32_(f, arch, "embedding_length") orelse
             f.getMetaU32("hidden_size") orelse default_n_embd;
-        const vocab_size: u32 = if (f.getVocab()) |v| @intCast(v.len) else f.getArchU32(arch, "vocab_size") orelse default_vocab_size;
+        const vocab_size: u32 = if (f.getVocab()) |v| @intCast(v.len) else getArchAny.u32_(f, arch, "vocab_size") orelse default_vocab_size;
 
         // Sliding-window attention params
-        const sl_n_head = f.getArchU32(arch, "attention.head_count") orelse
+        const sl_n_head = getArchAny.u32_(f, arch, "attention.head_count") orelse
             f.getMetaU32("num_attention_heads") orelse default_sl_n_head;
         // head_count_kv is typically for SWA layers. Some GGUF files (e.g. Gemma 4 12B)
         // only store the GLOBAL KV count (1) as head_count_kv; the SWA count must be
@@ -343,70 +357,74 @@ pub const Gemma4Model = struct {
         // head_count_kv may be a scalar or per-layer array (Gemma 4 12B uses array).
         // For scalar: read directly. For array: the MINIMUM value is the global count
         // (1 KV head for global layers), the MAXIMUM is the SWA count (8 KV heads).
-        const meta_n_kv_head_raw = f.getArchU32(arch, "attention.head_count_kv") orelse
+        const meta_n_kv_head_raw = getArchAny.u32_(f, arch, "attention.head_count_kv") orelse
             f.getMetaU32("num_key_value_heads");
         // If the scalar metadata is unavailable (e.g. it's stored as an array), derive from array.
         // We take the minimum across layers as the global KV head count.
         const meta_n_kv_head: u32 = meta_n_kv_head_raw orelse blk: {
             var key_buf_kv: [format_mod.arch_key_buf_size]u8 = undefined;
-            const kv_key_tmp = std.fmt.bufPrint(&key_buf_kv, "{s}.attention.head_count_kv", .{arch}) catch break :blk default_sl_n_kv_head;
-            if (f.getMetaU32Array(kv_key_tmp)) |arr| {
-                var mn: u32 = std.math.maxInt(u32);
-                for (arr) |v| if (v < mn) { mn = v; };
-                break :blk if (mn == std.math.maxInt(u32)) default_sl_n_kv_head else mn;
+            // Try arch prefix then "gemma4" base (handles "gemma4_text" → "gemma4" fallback).
+            for ([_][]const u8{ arch, "gemma4" }) |pfx| {
+                const kv_key_tmp = std.fmt.bufPrint(&key_buf_kv, "{s}.attention.head_count_kv", .{pfx}) catch continue;
+                if (f.getMetaU32Array(kv_key_tmp)) |arr| {
+                    var mn: u32 = std.math.maxInt(u32);
+                    for (arr) |v| if (v < mn) { mn = v; };
+                    if (mn != std.math.maxInt(u32)) break :blk mn;
+                }
+                if (std.mem.eql(u8, pfx, arch) and std.mem.eql(u8, arch, "gemma4")) break; // no fallback needed
             }
             break :blk default_sl_n_kv_head;
         };
-        var sl_n_kv_head = f.getArchU32(arch, "attention.head_count_kv_swa") orelse
+        var sl_n_kv_head = getArchAny.u32_(f, arch, "attention.head_count_kv_swa") orelse
             f.getMetaU32("num_key_value_heads_swa") orelse meta_n_kv_head;
         // key_length_swa is the sliding-window head dim; fall back to key_length
-        var sl_head_dim = f.getArchU32(arch, "attention.key_length_swa") orelse
-            f.getArchU32(arch, "attention.key_length") orelse
+        var sl_head_dim = getArchAny.u32_(f, arch, "attention.key_length_swa") orelse
+            getArchAny.u32_(f, arch, "attention.key_length") orelse
             f.getMetaU32("head_dim") orelse default_sl_head_dim;
         // Sliding-window uses freq_base_swa (10K); freq_base is the global theta (1M).
-        const sl_rope_theta = f.getArchF32(arch, "rope.freq_base_swa") orelse
-            f.getArchF32(arch, "rope.freq_base") orelse
+        const sl_rope_theta = getArchAny.f32_(f, arch, "rope.freq_base_swa") orelse
+            getArchAny.f32_(f, arch, "rope.freq_base") orelse
             f.getMetaF32("rope_theta") orelse default_sl_rope_theta;
-        const sliding_window = f.getArchU32(arch, "attention.sliding_window") orelse
+        const sliding_window = getArchAny.u32_(f, arch, "attention.sliding_window") orelse
             f.getMetaU32("sliding_window") orelse default_sliding_window;
         // RoPE dimension counts — separate for sliding and global
-        const sl_rope_dim = f.getArchU32(arch, "rope.dimension_count_swa") orelse
-            f.getArchU32(arch, "rope.dimension_count") orelse sl_head_dim;
+        const sl_rope_dim = getArchAny.u32_(f, arch, "rope.dimension_count_swa") orelse
+            getArchAny.u32_(f, arch, "rope.dimension_count") orelse sl_head_dim;
 
         // Global attention params
-        const gl_n_head = f.getArchU32(arch, "attention.head_count_global") orelse
+        const gl_n_head = getArchAny.u32_(f, arch, "attention.head_count_global") orelse
             f.getMetaU32("global_num_attention_heads") orelse sl_n_head;
         // Global KV head count: try global-specific key, then fall back to the
         // raw metadata head_count_kv (which IS the global count for Gemma 4 12B).
-        const gl_n_kv_head = f.getArchU32(arch, "attention.head_count_kv_global") orelse
+        const gl_n_kv_head = getArchAny.u32_(f, arch, "attention.head_count_kv_global") orelse
             f.getMetaU32("global_num_key_value_heads") orelse meta_n_kv_head;
         // Global head dim: check global-specific key first, then fall back to the
         // generic key_length. For 12B, key_length=256 (SWA dim) but
         // key_length_global=512; checking generic first would give wrong value.
-        var gl_head_dim = f.getArchU32(arch, "attention.key_length_global") orelse
-            f.getArchU32(arch, "attention.key_length") orelse
+        var gl_head_dim = getArchAny.u32_(f, arch, "attention.key_length_global") orelse
+            getArchAny.u32_(f, arch, "attention.key_length") orelse
             f.getMetaU32("global_head_dim") orelse default_gl_head_dim;
         // NOTE: metadata key_length may not match actual tensor dims in some GGUF
         // converters (e.g., E2B metadata says 512 but tensors use 256). Head dim
         // is validated and corrected after layer type detection below.
         // Global attention uses freq_base (1M); freq_base_global is a fallback alias.
-        const gl_rope_theta = f.getArchF32(arch, "rope.freq_base") orelse
-            f.getArchF32(arch, "rope.freq_base_global") orelse
+        const gl_rope_theta = getArchAny.f32_(f, arch, "rope.freq_base") orelse
+            getArchAny.f32_(f, arch, "rope.freq_base_global") orelse
             f.getMetaF32("global_rope_theta") orelse default_gl_rope_theta;
-        const gl_partial_rotary = f.getArchF32(arch, "rope.partial_rotary_factor") orelse
+        const gl_partial_rotary = getArchAny.f32_(f, arch, "rope.partial_rotary_factor") orelse
             f.getMetaF32("partial_rotary_factor") orelse default_gl_partial_rotary;
-        const gl_rope_dim = f.getArchU32(arch, "rope.dimension_count") orelse gl_head_dim;
+        const gl_rope_dim = getArchAny.u32_(f, arch, "rope.dimension_count") orelse gl_head_dim;
 
         // MoE params — detect dense variants by checking for expert tensors.
         // Dense models (e.g. Gemma 4 31B, E4B) have no expert_count metadata
         // and no expert weight tensors; default to 0 when both are absent.
         const has_expert_tensors = f.layerTensor(0, "ffn_gate_inp.weight") != null;
-        const n_experts = f.getArchU32(arch, "expert_count") orelse
+        const n_experts = getArchAny.u32_(f, arch, "expert_count") orelse
             f.getMetaU32("num_local_experts") orelse
             if (has_expert_tensors) default_n_experts else 0;
-        const top_k_experts = if (n_experts == 0) @as(u32, 0) else f.getArchU32(arch, "expert_used_count") orelse
+        const top_k_experts = if (n_experts == 0) @as(u32, 0) else getArchAny.u32_(f, arch, "expert_used_count") orelse
             f.getMetaU32("num_experts_per_tok") orelse default_top_k_experts;
-        const moe_intermediate = if (n_experts == 0) @as(u32, 0) else f.getArchU32(arch, "expert_feed_forward_length") orelse
+        const moe_intermediate = if (n_experts == 0) @as(u32, 0) else getArchAny.u32_(f, arch, "expert_feed_forward_length") orelse
             f.getMetaU32("expert_intermediate_size") orelse default_moe_intermediate;
 
         // Dense FFN intermediate dimension — can be scalar or per-layer array.
@@ -416,8 +434,14 @@ pub const Gemma4Model = struct {
         {
             const nli: usize = n_layers;
             var ff_key_buf: [format_mod.arch_key_buf_size]u8 = undefined;
-            const ff_key = std.fmt.bufPrint(&ff_key_buf, "{s}.feed_forward_length", .{arch}) catch "";
-            const ff_arr = f.getMetaU32Array(ff_key);
+            const ff_arr = blk: {
+                for ([_][]const u8{ arch, "gemma4" }) |pfx| {
+                    const ff_key = std.fmt.bufPrint(&ff_key_buf, "{s}.feed_forward_length", .{pfx}) catch continue;
+                    if (f.getMetaU32Array(ff_key)) |arr| break :blk arr;
+                    if (std.mem.eql(u8, pfx, arch) and std.mem.eql(u8, arch, "gemma4")) break :blk null;
+                }
+                break :blk null;
+            };
             if (ff_arr) |arr| {
                 // Per-layer array: use each layer's value, dense_ff_dim = max.
                 // If array is shorter than n_layers (e.g. scalar stored as 1-element
@@ -433,7 +457,7 @@ pub const Gemma4Model = struct {
                 }
             } else {
                 // Try scalar metadata
-                dense_ff_dim = f.getArchU32(arch, "feed_forward_length") orelse blk: {
+                dense_ff_dim = getArchAny.u32_(f, arch, "feed_forward_length") orelse blk: {
                     // Infer from ffn_gate.weight shape: [ff_dim × n_embd]
                     if (f.layerTensor(0, "ffn_gate.weight")) |t| {
                         if (t.n_dims >= 2) break :blk @as(u32, @intCast(t.dims[1]));
@@ -446,29 +470,29 @@ pub const Gemma4Model = struct {
         }
 
         // Layer structure
-        const global_layer_interval = f.getArchU32(arch, "attention.global_layer_interval") orelse
+        const global_layer_interval = getArchAny.u32_(f, arch, "attention.global_layer_interval") orelse
             f.getMetaU32("global_layer_interval") orelse default_global_layer_interval;
 
         // Shared KV layers
-        const n_kv_shared_layers = f.getArchU32(arch, "attention.shared_kv_layers") orelse
-            f.getArchU32(arch, "attention.kv_shared_layer_count") orelse
+        const n_kv_shared_layers = getArchAny.u32_(f, arch, "attention.shared_kv_layers") orelse
+            getArchAny.u32_(f, arch, "attention.kv_shared_layer_count") orelse
             f.getMetaU32("num_kv_shared_layers") orelse 0;
 
         // PLE (Per-Layer Embeddings)
-        const ple_dim = f.getArchU32(arch, "embedding_length_per_layer_input") orelse
+        const ple_dim = getArchAny.u32_(f, arch, "embedding_length_per_layer_input") orelse
             f.getMetaU32("hidden_size_per_layer_input") orelse default_ple_dim;
 
         // Softcap
-        const final_logit_softcap = f.getArchF32(arch, "final_logit_softcapping") orelse
+        const final_logit_softcap = getArchAny.f32_(f, arch, "final_logit_softcapping") orelse
             f.getMetaF32("final_logit_softcapping") orelse default_final_logit_softcap;
 
-        const rms_eps = f.getArchF32(arch, "attention.layer_norm_rms_epsilon") orelse
+        const rms_eps = getArchAny.f32_(f, arch, "attention.layer_norm_rms_epsilon") orelse
             f.getMetaF32("rms_norm_eps") orelse default_rms_eps;
 
         const eos_token_id = f.getMetaU32("tokenizer.ggml.eos_token_id") orelse 1;
 
         var max_sl: usize = default_max_seq_len;
-        if (f.getArchU32(arch, "context_length")) |cl| max_sl = cl;
+        if (getArchAny.u32_(f, arch, "context_length")) |cl| max_sl = cl;
         if (f.getMetaU32("max_position_embeddings")) |cl| max_sl = cl;
         if (ctx_size > 0) max_sl = ctx_size;
 
@@ -481,8 +505,14 @@ pub const Gemma4Model = struct {
             // Format: arch_key e.g. "gemma4.attention.sliding_window_pattern"
             // Array values: 0 = global (no window), >0 = sliding (window size).
             var key_buf: [format_mod.arch_key_buf_size]u8 = undefined;
-            const sw_key = std.fmt.bufPrint(&key_buf, "{s}.attention.sliding_window_pattern", .{arch}) catch "";
-            const sw_pattern_arr = f.getMetaU32Array(sw_key);
+            const sw_pattern_arr = blk: {
+                for ([_][]const u8{ arch, "gemma4" }) |pfx| {
+                    const sw_key = std.fmt.bufPrint(&key_buf, "{s}.attention.sliding_window_pattern", .{pfx}) catch continue;
+                    if (f.getMetaU32Array(sw_key)) |arr| break :blk arr;
+                    if (std.mem.eql(u8, pfx, arch) and std.mem.eql(u8, arch, "gemma4")) break :blk null;
+                }
+                break :blk null;
+            };
             if (sw_pattern_arr) |arr| {
                 if (arr.len >= nl) {
                     // Full per-layer array — use directly
@@ -588,8 +618,15 @@ pub const Gemma4Model = struct {
         var per_layer_n_kv_head: [max_layers]u32 = [_]u32{0} ** max_layers;
         {
             var key_buf: [format_mod.arch_key_buf_size]u8 = undefined;
-            const kv_key = std.fmt.bufPrint(&key_buf, "{s}.attention.head_count_kv", .{arch}) catch "";
-            const kv_arr = f.getMetaU32Array(kv_key);
+            // Try arch prefix then "gemma4" base (handles "gemma4_text" QAT variants).
+            const kv_arr = blk: {
+                for ([_][]const u8{ arch, "gemma4" }) |pfx| {
+                    const kv_key = std.fmt.bufPrint(&key_buf, "{s}.attention.head_count_kv", .{pfx}) catch continue;
+                    if (f.getMetaU32Array(kv_key)) |arr| break :blk arr;
+                    if (std.mem.eql(u8, pfx, arch) and std.mem.eql(u8, arch, "gemma4")) break :blk null;
+                }
+                break :blk null;
+            };
             if (kv_arr) |arr| {
                 for (0..@min(nl, arr.len)) |i| {
                     per_layer_n_kv_head[i] = arr[i];
