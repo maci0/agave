@@ -121,20 +121,6 @@ pub const PerfCounters = struct {
 Without a GPU sync between dispatch and timing, you'd measure only the CPU's time to queue the command (~5 µs) rather than the actual GPU execution. The sequence below shows why the sync is mandatory for accurate per-op numbers.
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': {
-  'primaryColor': '#e8f0fe',
-  'primaryTextColor': '#1a1a2e',
-  'primaryBorderColor': '#4a6cf7',
-  'lineColor': '#4a6cf7',
-  'secondaryColor': '#f0f4ff',
-  'tertiaryColor': '#f8f9ff',
-  'edgeLabelBackground': '#ffffff',
-  'clusterBkg': '#f0f4ff',
-  'clusterBorder': '#4a6cf7',
-  'titleColor': '#1a1a2e',
-  'nodeTextColor': '#1a1a2e',
-  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
-}}}%%
 sequenceDiagram
     participant CPU as CPU (model forward)
     participant GPU as GPU (Metal/CUDA)

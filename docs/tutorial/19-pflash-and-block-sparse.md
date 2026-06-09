@@ -382,20 +382,6 @@ When to use a separate scorer:
 PFlash and DDTree are designed to compose. PFlash attacks TTFT by shrinking what the target model must prefill; DDTree attacks decode latency by drafting multiple tokens per target-model pass. Each technique targets a separate bottleneck, so their gains multiply.
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': {
-  'primaryColor': '#e8f0fe',
-  'primaryTextColor': '#1a1a2e',
-  'primaryBorderColor': '#4a6cf7',
-  'lineColor': '#4a6cf7',
-  'secondaryColor': '#f0f4ff',
-  'tertiaryColor': '#f8f9ff',
-  'edgeLabelBackground': '#ffffff',
-  'clusterBkg': '#f0f4ff',
-  'clusterBorder': '#4a6cf7',
-  'titleColor': '#1a1a2e',
-  'nodeTextColor': '#1a1a2e',
-  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
-}}}%%
 sequenceDiagram
     participant User
     participant Scorer as Scorer Model (small)

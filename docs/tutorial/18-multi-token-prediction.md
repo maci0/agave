@@ -248,20 +248,6 @@ The GGUF metadata field `{arch}.nextn_predict_layers` indicates how many MTP dep
 MTP integrates with Agave's existing speculative decoding infrastructure. The key insight is that draft tokens are generated cheaply and then verified by the main model in a single pass. Accepted tokens are free; rejected tokens fall back to the main model's output with no quality loss.
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': {
-  'primaryColor': '#e8f0fe',
-  'primaryTextColor': '#1a1a2e',
-  'primaryBorderColor': '#4a6cf7',
-  'lineColor': '#4a6cf7',
-  'secondaryColor': '#f0f4ff',
-  'tertiaryColor': '#f8f9ff',
-  'edgeLabelBackground': '#ffffff',
-  'clusterBkg': '#f0f4ff',
-  'clusterBorder': '#4a6cf7',
-  'titleColor': '#1a1a2e',
-  'nodeTextColor': '#1a1a2e',
-  'fontFamily': 'ui-monospace, SFMono-Regular, monospace'
-}}}%%
 sequenceDiagram
     participant Main as Main Model (N layers)
     participant MTP as MTP Head (1 layer)
