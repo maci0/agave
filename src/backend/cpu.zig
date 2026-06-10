@@ -3,6 +3,7 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
+const build_options = @import("build_options");
 const posix = std.posix;
 const backend_mod = @import("backend.zig");
 
@@ -680,7 +681,8 @@ pub const CpuBackend = struct {
     /// Each token's GEMV dispatches through the thread pool for parallelism.
     pub fn gemm(self: *CpuBackend, x: [*]const f32, w: TensorData, y: [*]f32, n_tok: usize, n_out: usize, n_in: usize) void {
         // Accelerate.framework: full SGEMM for F32 weights (AMX-accelerated, ~4× faster)
-        if (comptime builtin.os.tag == .macos) {
+        // Only available when Metal/Accelerate is linked (enable_metal controls this).
+        if (comptime builtin.os.tag == .macos and build_options.enable_metal) {
             if (w.dtype == .f32) {
                 const accel = @import("accelerate.zig");
                 accel.sgemm(n_tok, n_out, n_in, x, @ptrCast(@alignCast(w.data)), y);

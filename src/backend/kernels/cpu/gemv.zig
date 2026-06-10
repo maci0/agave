@@ -74,8 +74,10 @@ pub const gemvQ2_K = gemv_q_small.gemvQ2_K;
 pub const gemvQ3_K = gemv_q_small.gemvQ3_K;
 
 const builtin = @import("builtin");
+const build_options = @import("build_options");
 const backend_mod = @import("../../backend.zig");
-const accelerate = if (builtin.os.tag == .macos) @import("../../../backend/accelerate.zig") else struct {};
+// Accelerate.framework only available when Metal is enabled (they're linked together).
+const accelerate = if (builtin.os.tag == .macos and build_options.enable_metal) @import("../../../backend/accelerate.zig") else struct {};
 
 pub const gemvRowBytes = backend_mod.gemvRowBytes;
 
@@ -90,7 +92,7 @@ pub fn gemvSeq(x: [*]const f32, w_data: [*]const u8, dtype: DType, y: [*]f32, n:
         .q6_k => gemvQ6_K(x, w_data, y, n, k),
         .q8_0 => gemvQ8_0(x, w_data, y, n, k),
         .f16 => gemvF16(x, @ptrCast(@alignCast(w_data)), y, n, k),
-        .f32 => if (comptime builtin.os.tag == .macos)
+        .f32 => if (comptime builtin.os.tag == .macos and build_options.enable_metal)
             accelerate.sgemv(n, k, x, @ptrCast(@alignCast(w_data)), y)
         else
             gemvF32(x, @ptrCast(@alignCast(w_data)), y, n, k),

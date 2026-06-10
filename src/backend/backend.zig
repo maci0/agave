@@ -454,6 +454,10 @@ pub const NullBackend = struct {
     }
 
     pub fn resetCounters(_: *NullBackend) void {}
+
+    dispatch_count: u32 = 0,
+    barrier_count: u32 = 0,
+    sync_count: u32 = 0,
 };
 
 /// CPU backend — accessed through Backend union dispatch.
