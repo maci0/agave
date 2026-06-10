@@ -1724,7 +1724,6 @@ pub const Gemma4Model = struct {
             }
             self.perf.end(.rms_norm, t);
 
-            // RoPE for Q and K — independent buffers, batch without barriers
             t = self.perf.start();
             if (is_global) {
                 const rd: usize = @intFromFloat(@as(f32, @floatFromInt(self.gl_head_dim)) * self.gl_partial_rotary);
@@ -1837,7 +1836,6 @@ pub const Gemma4Model = struct {
                 .f32,
             );
         } else if (hd > gpu_sdpa_max_head_dim) {
-            // DEBUG: print Q/K magnitudes for global layer
             attn_ops.scaledDotProductAttention(
                 self.q_buf.ptr,
                 kv_keys_bytes,
