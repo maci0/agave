@@ -68,10 +68,10 @@ pub fn build(b: *std.Build) void {
     const ptx_step = b.step("ptx", "Compile CUDA kernels to PTX (nvptx64)");
     {
         const kernel_files = [_][]const u8{
-            "all",       "silu",     "gelu",      "add",       "mul",
-            "rms_norm",  "softmax",  "l2_norm",   "rope",      "gemv_f32",
-            "gemv_bf16", "gemv_f16", "gemv_q8_0", "gemv_q4_0", "gemv_tq1_0", "gemv_tq2_0",
-            "gemv_gptq", "gemv_awq", "gemv_hqq",
+            "all",        "silu",      "gelu",      "add",       "mul",
+            "rms_norm",   "softmax",   "l2_norm",   "rope",      "gemv_f32",
+            "gemv_bf16",  "gemv_f16",  "gemv_q8_0", "gemv_q4_0", "gemv_tq1_0",
+            "gemv_tq2_0", "gemv_gptq", "gemv_awq",  "gemv_hqq",
         };
 
         for (kernel_files) |name| {
@@ -96,7 +96,8 @@ pub fn build(b: *std.Build) void {
             // generates .func. Post-processing renames definitions using alias
             // mappings (.alias clean, mangled → .entry clean replacing .func mangled),
             // then promotes forward declarations and removes .alias directives.
-            const fixup = b.addSystemCommand(&.{ "python3", "-c",
+            const fixup = b.addSystemCommand(&.{
+                "python3", "-c",
                 \\import re, sys
                 \\ptx = open(sys.argv[1]).read()
                 \\for clean, mangled in re.findall(r'\.alias (\w+_kernel), ([^;]+);', ptx):

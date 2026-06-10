@@ -37,7 +37,9 @@
 
 // Test 2: WORKS with callconv(.c) — generates .func instead of .entry
 fn threadIdx() u32 {
-    return asm ("mov.u32 %[ret], %tid.x;" : [ret] "=r" (-> u32));
+    return asm ("mov.u32 %[ret], %tid.x;"
+        : [ret] "=r" (-> u32),
+    );
 }
 
 fn kern_body(input: [*]const f32, output: [*]f32, n: u32) callconv(.c) void {
