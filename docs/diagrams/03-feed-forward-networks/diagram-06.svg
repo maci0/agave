@@ -1,0 +1,135 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 2524.442 292.65" width="2524.442" height="292.65" style="--bg:#FFFFFF;--fg:#27272A;background:#ffffff">
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;display=swap');
+  text { font-family: 'Inter', system-ui, sans-serif; }
+  svg {
+    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
+    --_text:          #1a1a2e;
+    --_text-sec:      var(--muted, color-mix(in srgb, #1a1a2e 60%, #ffffff));
+    --_text-muted:    var(--muted, color-mix(in srgb, #1a1a2e 40%, #ffffff));
+    --_text-faint:    color-mix(in srgb, #1a1a2e 25%, #ffffff);
+    --_line:          var(--line, color-mix(in srgb, #1a1a2e 50%, #ffffff));
+    --_arrow:         var(--accent, color-mix(in srgb, #1a1a2e 85%, #ffffff));
+    --_node-fill:     var(--surface, color-mix(in srgb, #1a1a2e 3%, #ffffff));
+    --_node-stroke:   var(--border, color-mix(in srgb, #1a1a2e 20%, #ffffff));
+    --_group-fill:    #ffffff;
+    --_group-hdr:     color-mix(in srgb, #1a1a2e 5%, #ffffff);
+    --_inner-stroke:  color-mix(in srgb, #1a1a2e 12%, #ffffff);
+    --_key-badge:     color-mix(in srgb, #1a1a2e 10%, #ffffff);
+  }
+</style>
+<defs>
+  <marker id="arrowhead" markerWidth="8" markerHeight="5" refX="7" refY="2.5" orient="auto">
+    <polygon points="0 0, 8 2.5, 0 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+  <marker id="arrowhead-start" markerWidth="8" markerHeight="5" refX="1" refY="2.5" orient="auto-start-reverse">
+    <polygon points="8 0, 0 2.5, 8 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+</defs>
+<g class="subgraph" data-id="Unfused" data-label="3 separate GPU dispatches (standard)">
+  <rect x="40" y="40" width="1439.725" height="212.65" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="40" y="40" width="1439.725" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="52" y="54" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">3 separate GPU dispatches (standard)</text>
+</g>
+<g class="subgraph" data-id="Fused" data-label="1 fused megakernel dispatch">
+  <rect x="1676.8509999999999" y="55.625" width="807.591" height="181.4" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="1676.8509999999999" y="55.625" width="807.591" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="1688.8509999999999" y="69.625" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">1 fused megakernel dispatch</text>
+</g>
+<polyline class="edge" data-from="Unfused" data-to="Fused" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="--megakernel
+eliminates
+memory round-trips" points="1479.725,146.325 1676.8509999999999,146.325" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="U_in" data-to="U_gate" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="read" points="180.20100000000002,209.75 369.58900000000006,209.75 369.58900000000006,185.76666666666668 405.58900000000006,185.76666666666668" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="U_gate" data-to="U_up" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="write → read" points="543.869,176.8 733.2570000000001,176.8 733.2570000000001,152.81666666666666 769.2570000000001,152.81666666666666" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="U_up" data-to="U_act" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="write → read" points="897.163,143.85000000000002 1057.461,143.85000000000002" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="U_act" data-to="U_out" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="write" points="1211.302,143.85000000000002 1339.524,143.85000000000002" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="U_rt1" data-to="U_gate" data-style="dotted" data-arrow-start="false" data-arrow-end="true" points="357.58900000000006,143.85000000000002 369.58900000000006,143.85000000000002 369.58900000000006,167.83333333333334 405.58900000000006,167.83333333333334" fill="none" stroke="var(--_line)" stroke-width="1" stroke-dasharray="4 4" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="U_rt2" data-to="U_up" data-style="dotted" data-arrow-start="false" data-arrow-end="true" points="721.2570000000001,110.9 733.2570000000001,110.9 733.2570000000001,134.88333333333333 769.2570000000001,134.88333333333333" fill="none" stroke="var(--_line)" stroke-width="1" stroke-dasharray="4 4" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="F_in" data-to="F_kern" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="read ONCE" points="1817.052,160.325 1975.568,160.325" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="F_kern" data-to="F_out" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="write ONCE" points="2185.725,160.325 2344.241,160.325" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<g class="edge-label" data-from="Unfused" data-to="Fused" data-label="--megakernel
+eliminates
+memory round-trips">
+  <rect x="1523.725" y="116.325" width="109.12600000000003" height="58.900000000000006" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="1578.288" y="145.775" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)"><tspan x="1578.288" dy="-10.450000000000001">--megakernel</tspan><tspan x="1578.288" dy="14.3">eliminates</tspan><tspan x="1578.288" dy="14.3">memory round-trips</tspan></text>
+</g>
+<g class="edge-label" data-from="U_in" data-to="U_gate" data-label="read">
+  <rect x="272.784" y="193.75" width="40.221999999999994" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="292.895" y="208.9" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">read</text>
+</g>
+<g class="edge-label" data-from="U_gate" data-to="U_up" data-label="write → read">
+  <rect x="620.414" y="160.8" width="72.298" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="656.563" y="175.95000000000002" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">write → read</text>
+</g>
+<g class="edge-label" data-from="U_up" data-to="U_act" data-label="write → read">
+  <rect x="941.163" y="127.85" width="72.298" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="977.312" y="143" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">write → read</text>
+</g>
+<g class="edge-label" data-from="U_act" data-to="U_out" data-label="write">
+  <rect x="1255.302" y="127.85" width="40.221999999999994" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="1275.413" y="143" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">write</text>
+</g>
+<g class="edge-label" data-from="F_in" data-to="F_kern" data-label="read ONCE">
+  <rect x="1861.052" y="144.32500000000002" width="70.516" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="1896.31" y="159.47500000000002" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">read ONCE</text>
+</g>
+<g class="edge-label" data-from="F_kern" data-to="F_out" data-label="write ONCE">
+  <rect x="2229.7250000000004" y="144.32500000000002" width="70.516" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="2264.983" y="159.47500000000002" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">write ONCE</text>
+</g>
+<g class="node" data-id="U_in" data-label="Input
+(GPU memory)" data-shape="rectangle">
+  <rect x="56" y="182.85000000000002" width="124.20100000000001" height="53.800000000000004" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
+  <text x="118.10050000000001" y="209.75000000000003" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f"><tspan x="118.10050000000001" dy="-3.9000000000000012">Input</tspan><tspan x="118.10050000000001" dy="16.900000000000002">(GPU memory)</tspan></text>
+</g>
+<g class="node" data-id="U_gate" data-label="Dispatch 1
+gate_proj GEMV" data-shape="rectangle">
+  <rect x="405.58900000000006" y="149.9" width="138.27999999999997" height="53.800000000000004" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
+  <text x="474.72900000000004" y="176.8" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12"><tspan x="474.72900000000004" dy="-3.9000000000000012">Dispatch 1</tspan><tspan x="474.72900000000004" dy="16.900000000000002">gate_proj GEMV</tspan></text>
+</g>
+<g class="node" data-id="U_up" data-label="Dispatch 2
+up_proj GEMV" data-shape="rectangle">
+  <rect x="769.2570000000001" y="116.95000000000002" width="127.90599999999999" height="53.800000000000004" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
+  <text x="833.21" y="143.85000000000002" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12"><tspan x="833.21" dy="-3.9000000000000012">Dispatch 2</tspan><tspan x="833.21" dy="16.900000000000002">up_proj GEMV</tspan></text>
+</g>
+<g class="node" data-id="U_act" data-label="Dispatch 3
+SiLU + multiply
++ down_proj GEMV" data-shape="rectangle">
+  <rect x="1057.461" y="108.50000000000001" width="153.84099999999998" height="70.7" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
+  <text x="1134.3815" y="143.85000000000002" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12"><tspan x="1134.3815" dy="-12.350000000000001">Dispatch 3</tspan><tspan x="1134.3815" dy="16.900000000000002">SiLU + multiply</tspan><tspan x="1134.3815" dy="16.900000000000002">+ down_proj GEMV</tspan></text>
+</g>
+<g class="node" data-id="U_out" data-label="Output
+(GPU memory)" data-shape="rectangle">
+  <rect x="1339.524" y="116.95000000000002" width="124.20100000000001" height="53.800000000000004" rx="0" ry="0" fill="#fee2e2" stroke="#ef4444" stroke-width="0.75" />
+  <text x="1401.6245" y="143.85000000000002" text-anchor="middle" font-size="13" font-weight="500" fill="#7f1d1d"><tspan x="1401.6245" dy="-3.9000000000000012">Output</tspan><tspan x="1401.6245" dy="16.900000000000002">(GPU memory)</tspan></text>
+</g>
+<g class="node" data-id="U_rt1" data-label="round-trip
+to GPU memory" data-shape="rectangle">
+  <rect x="228.20100000000002" y="116.95000000000002" width="129.388" height="53.800000000000004" rx="0" ry="0" fill="#fee2e2" stroke="#ef4444" stroke-width="0.75" />
+  <text x="292.89500000000004" y="143.85000000000002" text-anchor="middle" font-size="13" font-weight="500" fill="#7f1d1d"><tspan x="292.89500000000004" dy="-3.9000000000000012">round-trip</tspan><tspan x="292.89500000000004" dy="16.900000000000002">to GPU memory</tspan></text>
+</g>
+<g class="node" data-id="U_rt2" data-label="round-trip
+to GPU memory" data-shape="rectangle">
+  <rect x="591.869" y="84" width="129.388" height="53.800000000000004" rx="0" ry="0" fill="#fee2e2" stroke="#ef4444" stroke-width="0.75" />
+  <text x="656.563" y="110.9" text-anchor="middle" font-size="13" font-weight="500" fill="#7f1d1d"><tspan x="656.563" dy="-3.9000000000000012">round-trip</tspan><tspan x="656.563" dy="16.900000000000002">to GPU memory</tspan></text>
+</g>
+<g class="node" data-id="F_in" data-label="Input
+(GPU memory)" data-shape="rectangle">
+  <rect x="1692.8509999999999" y="133.425" width="124.20100000000001" height="53.800000000000004" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
+  <text x="1754.9515" y="160.32500000000002" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f"><tspan x="1754.9515" dy="-3.9000000000000012">Input</tspan><tspan x="1754.9515" dy="16.900000000000002">(GPU memory)</tspan></text>
+</g>
+<g class="node" data-id="F_kern" data-label="Single kernel
+gate_proj
++ up_proj
++ SiLU * gate
++ down_proj
+(all in registers/threadgroup)" data-shape="rectangle">
+  <rect x="1975.568" y="99.625" width="210.15699999999998" height="121.4" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="2080.6465" y="160.325" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="2080.6465" dy="-37.70000000000001">Single kernel</tspan><tspan x="2080.6465" dy="16.900000000000002">gate_proj</tspan><tspan x="2080.6465" dy="16.900000000000002">+ up_proj</tspan><tspan x="2080.6465" dy="16.900000000000002">+ SiLU * gate</tspan><tspan x="2080.6465" dy="16.900000000000002">+ down_proj</tspan><tspan x="2080.6465" dy="16.900000000000002">(all in registers/threadgroup)</tspan></text>
+</g>
+<g class="node" data-id="F_out" data-label="Output
+(GPU memory)" data-shape="rectangle">
+  <rect x="2344.241" y="133.425" width="124.20100000000001" height="53.800000000000004" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
+  <text x="2406.3415" y="160.32500000000002" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="2406.3415" dy="-3.9000000000000012">Output</tspan><tspan x="2406.3415" dy="16.900000000000002">(GPU memory)</tspan></text>
+</g>
+</svg>

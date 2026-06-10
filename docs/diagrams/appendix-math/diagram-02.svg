@@ -1,0 +1,135 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 556.164 955.8999999999999" width="556.164" height="955.8999999999999" style="--bg:#FFFFFF;--fg:#27272A;background:#ffffff">
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;display=swap');
+  text { font-family: 'Inter', system-ui, sans-serif; }
+  svg {
+    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
+    --_text:          #1a1a2e;
+    --_text-sec:      var(--muted, color-mix(in srgb, #1a1a2e 60%, #ffffff));
+    --_text-muted:    var(--muted, color-mix(in srgb, #1a1a2e 40%, #ffffff));
+    --_text-faint:    color-mix(in srgb, #1a1a2e 25%, #ffffff);
+    --_line:          var(--line, color-mix(in srgb, #1a1a2e 50%, #ffffff));
+    --_arrow:         var(--accent, color-mix(in srgb, #1a1a2e 85%, #ffffff));
+    --_node-fill:     var(--surface, color-mix(in srgb, #1a1a2e 3%, #ffffff));
+    --_node-stroke:   var(--border, color-mix(in srgb, #1a1a2e 20%, #ffffff));
+    --_group-fill:    #ffffff;
+    --_group-hdr:     color-mix(in srgb, #1a1a2e 5%, #ffffff);
+    --_inner-stroke:  color-mix(in srgb, #1a1a2e 12%, #ffffff);
+    --_key-badge:     color-mix(in srgb, #1a1a2e 10%, #ffffff);
+  }
+</style>
+<defs>
+  <marker id="arrowhead" markerWidth="8" markerHeight="5" refX="7" refY="2.5" orient="auto">
+    <polygon points="0 0, 8 2.5, 0 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+  <marker id="arrowhead-start" markerWidth="8" markerHeight="5" refX="1" refY="2.5" orient="auto-start-reverse">
+    <polygon points="8 0, 0 2.5, 8 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+</defs>
+<g class="subgraph" data-id="Current" data-label="Current token (e.g. 'cat')">
+  <rect x="177.40999999999997" y="40" width="208.81199999999998" height="130.7" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="177.40999999999997" y="40" width="208.81199999999998" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="189.40999999999997" y="54" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">Current token (e.g. &#39;cat&#39;)</text>
+</g>
+<g class="subgraph" data-id="Context" data-label="All tokens in context">
+  <rect x="40" y="299" width="476.164" height="113.80000000000001" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="40" y="299" width="476.164" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="52" y="313" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">All tokens in context</text>
+</g>
+<g class="subgraph" data-id="Values" data-label="Values carry the content">
+  <rect x="50.37399999999998" y="711.2" width="455.416" height="96.9" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="50.37399999999998" y="711.2" width="455.416" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="62.37399999999998" y="725.2" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">Values carry the content</text>
+</g>
+<polyline class="edge" data-from="Q" data-to="K1" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="dot product → score" points="237.61299999999997,154.7 237.61299999999997,212.7 165.26999999999995,212.7 165.26999999999995,281 120.694,281 120.69399999999997,343" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Q" data-to="K2" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="dot product → score" points="281.816,154.7 281.8159999999999,212.7 278.082,212.7 278.082,343" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Q" data-to="K3" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="dot product → score" points="326.01899999999995,154.7 326.01899999999995,212.7 394.62800000000004,212.7 394.62800000000004,281 435.47,281 435.46999999999997,343" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="K1" data-to="Softmax" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="high score → high weight" points="120.694,396.8 120.69400000000002,523.1 243.69724999999997,523.1 243.69724999999997,535.1" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="K2" data-to="Softmax" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="low score → low weight" points="278.082,396.8 278.082,535.1" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="K3" data-to="Softmax" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="low score → low weight" points="435.47,396.8 435.47,523.1 312.46674999999993,523.1 312.46674999999993,535.1" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Softmax" data-to="V1" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="weight × value" points="243.69725,588.9000000000001 243.69725,624.9000000000001 159.22750000000002,624.9000000000001 159.22750000000002,693.2 128.84499999999997,693.2 128.84499999999997,755.2" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Softmax" data-to="V2" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="weight × value" points="278.082,588.9000000000001 278.082,624.9000000000001 279.56399999999996,624.9000000000001 279.56399999999996,755.2" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Softmax" data-to="V3" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="weight × value" points="312.46675,588.9000000000001 312.46675,624.9000000000001 397.6775,624.9000000000001 397.6775,693.2 428.80099999999993,693.2 428.80099999999993,755.2" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="V1" data-to="Output" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="128.84499999999997,792.1 128.84499999999997,827.0999999999999 278.823,827.0999999999999 278.823,862.0999999999999" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="V2" data-to="Output" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="279.56399999999996,792.1 279.56399999999996,827.0999999999999 278.823,827.0999999999999 278.823,862.0999999999999" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="V3" data-to="Output" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="428.80099999999993,792.1 428.80099999999993,827.0999999999999 278.823,827.0999999999999 278.823,862.0999999999999" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<g class="edge-label" data-from="Q" data-to="K1" data-label="dot product → score">
+  <rect x="110.76999999999995" y="219.7" width="108.53200000000004" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="165.03599999999997" y="234.85" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">dot product → score</text>
+</g>
+<g class="edge-label" data-from="Q" data-to="K2" data-label="dot product → score">
+  <rect x="223.582" y="219.7" width="108.53200000000004" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="277.848" y="234.85" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">dot product → score</text>
+</g>
+<g class="edge-label" data-from="Q" data-to="K3" data-label="dot product → score">
+  <rect x="340.12800000000004" y="219.7" width="108.53200000000004" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="394.39400000000006" y="234.85" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">dot product → score</text>
+</g>
+<g class="edge-label" data-from="K1" data-to="Softmax" data-label="high score → high weight">
+  <rect x="55.69400000000002" y="485.8" width="129.322" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="120.35500000000002" y="500.95" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">high score → high weight</text>
+</g>
+<g class="edge-label" data-from="K2" data-to="Softmax" data-label="low score → low weight">
+  <rect x="218.082" y="461.8" width="119.81800000000001" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="277.991" y="476.95" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">low score → low weight</text>
+</g>
+<g class="edge-label" data-from="K3" data-to="Softmax" data-label="low score → low weight">
+  <rect x="375.47" y="485.8" width="119.81800000000001" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="435.379" y="500.95" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">low score → low weight</text>
+</g>
+<g class="edge-label" data-from="Softmax" data-to="V1" data-label="weight × value">
+  <rect x="117.72750000000002" y="631.9000000000001" width="82.99000000000001" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="159.22250000000003" y="647.0500000000001" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">weight × value</text>
+</g>
+<g class="edge-label" data-from="Softmax" data-to="V2" data-label="weight × value">
+  <rect x="238.06399999999996" y="631.9000000000001" width="82.99000000000001" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="279.55899999999997" y="647.0500000000001" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">weight × value</text>
+</g>
+<g class="edge-label" data-from="Softmax" data-to="V3" data-label="weight × value">
+  <rect x="356.1775" y="631.9000000000001" width="82.99000000000001" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="397.6725" y="647.0500000000001" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">weight × value</text>
+</g>
+<g class="node" data-id="Softmax" data-label="softmax(scores)
+attention weights" data-shape="rectangle">
+  <rect x="209.3125" y="535.1" width="137.539" height="53.800000000000004" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
+  <text x="278.082" y="562" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12"><tspan x="278.082" dy="-3.9000000000000012">softmax(scores)</tspan><tspan x="278.082" dy="16.900000000000002">attention weights</tspan></text>
+</g>
+<g class="node" data-id="Output" data-label="Output = weighted mix
+(mostly 'fluffy' info)" data-shape="rectangle">
+  <rect x="196.71549999999996" y="862.0999999999999" width="164.21499999999997" height="53.800000000000004" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
+  <text x="278.823" y="888.9999999999999" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="278.823" dy="-3.9000000000000012">Output = weighted mix</tspan><tspan x="278.823" dy="16.900000000000002">(mostly &#39;fluffy&#39; info)</tspan></text>
+</g>
+<g class="node" data-id="Q" data-label="Query Q
+What am I looking for?
+e.g. 'adjectives nearby'" data-shape="rectangle">
+  <rect x="193.40999999999997" y="84" width="176.81199999999998" height="70.7" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
+  <text x="281.816" y="119.35" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f"><tspan x="281.816" dy="-12.350000000000001">Query Q</tspan><tspan x="281.816" dy="16.900000000000002">What am I looking for?</tspan><tspan x="281.816" dy="16.900000000000002">e.g. &#39;adjectives nearby&#39;</tspan></text>
+</g>
+<g class="node" data-id="K1" data-label="Key K1 'fluffy'
+What do I offer?" data-shape="rectangle">
+  <rect x="56" y="343" width="129.388" height="53.800000000000004" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="120.694" y="369.9" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="120.694" dy="-3.9000000000000012">Key K1 &#39;fluffy&#39;</tspan><tspan x="120.694" dy="16.900000000000002">What do I offer?</tspan></text>
+</g>
+<g class="node" data-id="K2" data-label="Key K2 'sat'
+What do I offer?" data-shape="rectangle">
+  <rect x="213.388" y="343" width="129.388" height="53.800000000000004" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="278.082" y="369.9" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="278.082" dy="-3.9000000000000012">Key K2 &#39;sat&#39;</tspan><tspan x="278.082" dy="16.900000000000002">What do I offer?</tspan></text>
+</g>
+<g class="node" data-id="K3" data-label="Key K3 'mat'
+What do I offer?" data-shape="rectangle">
+  <rect x="370.77599999999995" y="343" width="129.388" height="53.800000000000004" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="435.46999999999997" y="369.9" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="435.46999999999997" dy="-3.9000000000000012">Key K3 &#39;mat&#39;</tspan><tspan x="435.46999999999997" dy="16.900000000000002">What do I offer?</tspan></text>
+</g>
+<g class="node" data-id="V1" data-label="Value V1 'fluffy'" data-shape="rectangle">
+  <rect x="66.37399999999998" y="755.2" width="124.94200000000001" height="36.900000000000006" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="128.84499999999997" y="773.6500000000001" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d" dy="4.55">Value V1 &#39;fluffy&#39;</text>
+</g>
+<g class="node" data-id="V2" data-label="Value V2 'sat'" data-shape="rectangle">
+  <rect x="219.31599999999997" y="755.2" width="120.49600000000001" height="36.900000000000006" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="279.56399999999996" y="773.6500000000001" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d" dy="4.55">Value V2 &#39;sat&#39;</text>
+</g>
+<g class="node" data-id="V3" data-label="Value V3 'mat'" data-shape="rectangle">
+  <rect x="367.81199999999995" y="755.2" width="121.978" height="36.900000000000006" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="428.80099999999993" y="773.6500000000001" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d" dy="4.55">Value V3 &#39;mat&#39;</text>
+</g>
+</svg>

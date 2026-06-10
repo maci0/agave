@@ -1,0 +1,94 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1380.4619999999998 218.70000000000002" width="1380.4619999999998" height="218.70000000000002" style="--bg:#FFFFFF;--fg:#27272A;background:#ffffff">
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;display=swap');
+  text { font-family: 'Inter', system-ui, sans-serif; }
+  svg {
+    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
+    --_text:          #1a1a2e;
+    --_text-sec:      var(--muted, color-mix(in srgb, #1a1a2e 60%, #ffffff));
+    --_text-muted:    var(--muted, color-mix(in srgb, #1a1a2e 40%, #ffffff));
+    --_text-faint:    color-mix(in srgb, #1a1a2e 25%, #ffffff);
+    --_line:          var(--line, color-mix(in srgb, #1a1a2e 50%, #ffffff));
+    --_arrow:         var(--accent, color-mix(in srgb, #1a1a2e 85%, #ffffff));
+    --_node-fill:     var(--surface, color-mix(in srgb, #1a1a2e 3%, #ffffff));
+    --_node-stroke:   var(--border, color-mix(in srgb, #1a1a2e 20%, #ffffff));
+    --_group-fill:    #ffffff;
+    --_group-hdr:     color-mix(in srgb, #1a1a2e 5%, #ffffff);
+    --_inner-stroke:  color-mix(in srgb, #1a1a2e 12%, #ffffff);
+    --_key-badge:     color-mix(in srgb, #1a1a2e 10%, #ffffff);
+  }
+</style>
+<defs>
+  <marker id="arrowhead" markerWidth="8" markerHeight="5" refX="7" refY="2.5" orient="auto">
+    <polygon points="0 0, 8 2.5, 0 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+  <marker id="arrowhead-start" markerWidth="8" markerHeight="5" refX="1" refY="2.5" orient="auto-start-reverse">
+    <polygon points="8 0, 0 2.5, 8 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+</defs>
+<g class="subgraph" data-id="GGUF_Layout" data-label="GGUF layout  (Q, K, V)">
+  <rect x="118.20333333333335" y="141.8" width="0" height="0" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="118.20333333333335" y="141.8" width="0" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="130.20333333333335" y="155.8" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">GGUF layout  (Q, K, V)</text>
+</g>
+<g class="subgraph" data-id="HF_Layout" data-label="SafeTensors layout  (K, Q, V)">
+  <rect x="196.40666666666664" y="141.8" width="0" height="0" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="196.40666666666664" y="141.8" width="0" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="208.40666666666664" y="155.8" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">SafeTensors layout  (K, Q, V)</text>
+</g>
+<polyline class="edge" data-from="Conv" data-to="GGUF_Layout" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="118.2033333333333,93.80000000000001 118.20333333333335,141.8" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Conv" data-to="HF_Layout" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="196.4066666666666,93.80000000000001 196.40666666666664,141.8" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="G0" data-to="QProj" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="745.0649999999998,93.80000000000001 745.0649999999998,117.80000000000001 836.3559999999999,117.80000000000001 836.3559999999999,141.8" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="G1" data-to="KProj" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="379.9009999999999,93.80000000000001 379.9009999999999,117.80000000000001 471.1919999999999,117.80000000000001 471.1919999999999,141.8" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="G2" data-to="VProj" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="1102.819,93.80000000000001 1102.819,117.80000000000001 1186.6999999999996,117.80000000000001 1186.6999999999996,141.8" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="H1" data-to="QProj" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="927.6469999999997,93.80000000000001 927.6469999999997,117.80000000000001 836.3559999999999,117.80000000000001 836.3559999999999,141.8" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="H0" data-to="KProj" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="562.483,93.80000000000001 562.483,117.80000000000001 471.1919999999999,117.80000000000001 471.1919999999999,141.8" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="H2" data-to="VProj" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="1270.581,93.80000000000001 1270.581,117.80000000000001 1186.6999999999996,117.80000000000001 1186.6999999999996,141.8" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<g class="node" data-id="Conv" data-label="&quot;conv1d output
+[key_dim + key_dim + v_dim floats" data-shape="rectangle">
+  <rect x="40" y="40" width="234.60999999999993" height="53.800000000000004" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="157.30499999999995" y="66.9" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="157.30499999999995" dy="-3.9000000000000012">&quot;conv1d output</tspan><tspan x="157.30499999999995" dy="16.900000000000002">[key_dim + key_dim + v_dim floats</tspan></text>
+</g>
+<g class="node" data-id="G0" data-label="offset 0
+→ Q  (key_dim floats)" data-shape="rectangle">
+  <rect x="667.7739999999999" y="40" width="154.582" height="53.800000000000004" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
+  <text x="745.0649999999998" y="66.9" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12"><tspan x="745.0649999999998" dy="-3.9000000000000012">offset 0</tspan><tspan x="745.0649999999998" dy="16.900000000000002">→ Q  (key_dim floats)</tspan></text>
+</g>
+<g class="node" data-id="G1" data-label="offset key_dim
+→ K  (key_dim floats)" data-shape="rectangle">
+  <rect x="302.6099999999999" y="40" width="154.582" height="53.800000000000004" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
+  <text x="379.9009999999999" y="66.9" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12"><tspan x="379.9009999999999" dy="-3.9000000000000012">offset key_dim</tspan><tspan x="379.9009999999999" dy="16.900000000000002">→ K  (key_dim floats)</tspan></text>
+</g>
+<g class="node" data-id="G2" data-label="offset 2×key_dim
+→ V  (v_dim floats)" data-shape="rectangle">
+  <rect x="1032.9379999999999" y="40" width="139.762" height="53.800000000000004" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
+  <text x="1102.819" y="66.9" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12"><tspan x="1102.819" dy="-3.9000000000000012">offset 2×key_dim</tspan><tspan x="1102.819" dy="16.900000000000002">→ V  (v_dim floats)</tspan></text>
+</g>
+<g class="node" data-id="H0" data-label="offset 0
+→ K  (key_dim floats)" data-shape="rectangle">
+  <rect x="485.1919999999999" y="40" width="154.582" height="53.800000000000004" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
+  <text x="562.483" y="66.9" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12"><tspan x="562.483" dy="-3.9000000000000012">offset 0</tspan><tspan x="562.483" dy="16.900000000000002">→ K  (key_dim floats)</tspan></text>
+</g>
+<g class="node" data-id="H1" data-label="offset key_dim
+→ Q  (key_dim floats)" data-shape="rectangle">
+  <rect x="850.3559999999998" y="40" width="154.582" height="53.800000000000004" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
+  <text x="927.6469999999997" y="66.9" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12"><tspan x="927.6469999999997" dy="-3.9000000000000012">offset key_dim</tspan><tspan x="927.6469999999997" dy="16.900000000000002">→ Q  (key_dim floats)</tspan></text>
+</g>
+<g class="node" data-id="H2" data-label="offset 2×key_dim
+→ V  (v_dim floats)" data-shape="rectangle">
+  <rect x="1200.6999999999998" y="40" width="139.762" height="53.800000000000004" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
+  <text x="1270.581" y="66.9" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12"><tspan x="1270.581" dy="-3.9000000000000012">offset 2×key_dim</tspan><tspan x="1270.581" dy="16.900000000000002">→ V  (v_dim floats)</tspan></text>
+</g>
+<g class="node" data-id="QProj" data-label="Q projection" data-shape="rectangle">
+  <rect x="780.1834999999999" y="141.8" width="112.345" height="36.900000000000006" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
+  <text x="836.3559999999999" y="160.25" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d" dy="4.55">Q projection</text>
+</g>
+<g class="node" data-id="KProj" data-label="K projection" data-shape="rectangle">
+  <rect x="415.0194999999999" y="141.8" width="112.345" height="36.900000000000006" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
+  <text x="471.1919999999999" y="160.25" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d" dy="4.55">K projection</text>
+</g>
+<g class="node" data-id="VProj" data-label="V projection" data-shape="rectangle">
+  <rect x="1130.5274999999997" y="141.8" width="112.345" height="36.900000000000006" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
+  <text x="1186.6999999999996" y="160.25" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d" dy="4.55">V projection</text>
+</g>
+</svg>

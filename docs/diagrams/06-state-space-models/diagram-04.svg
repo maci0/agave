@@ -1,0 +1,99 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1046.9835 531.2" width="1046.9835" height="531.2" style="--bg:#FFFFFF;--fg:#27272A;background:#ffffff">
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;display=swap');
+  text { font-family: 'Inter', system-ui, sans-serif; }
+  svg {
+    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
+    --_text:          #1a1a2e;
+    --_text-sec:      var(--muted, color-mix(in srgb, #1a1a2e 60%, #ffffff));
+    --_text-muted:    var(--muted, color-mix(in srgb, #1a1a2e 40%, #ffffff));
+    --_text-faint:    color-mix(in srgb, #1a1a2e 25%, #ffffff);
+    --_line:          var(--line, color-mix(in srgb, #1a1a2e 50%, #ffffff));
+    --_arrow:         var(--accent, color-mix(in srgb, #1a1a2e 85%, #ffffff));
+    --_node-fill:     var(--surface, color-mix(in srgb, #1a1a2e 3%, #ffffff));
+    --_node-stroke:   var(--border, color-mix(in srgb, #1a1a2e 20%, #ffffff));
+    --_group-fill:    #ffffff;
+    --_group-hdr:     color-mix(in srgb, #1a1a2e 5%, #ffffff);
+    --_inner-stroke:  color-mix(in srgb, #1a1a2e 12%, #ffffff);
+    --_key-badge:     color-mix(in srgb, #1a1a2e 10%, #ffffff);
+  }
+</style>
+<defs>
+  <marker id="arrowhead" markerWidth="8" markerHeight="5" refX="7" refY="2.5" orient="auto">
+    <polygon points="0 0, 8 2.5, 0 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+  <marker id="arrowhead-start" markerWidth="8" markerHeight="5" refX="1" refY="2.5" orient="auto-start-reverse">
+    <polygon points="8 0, 0 2.5, 8 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+</defs>
+<g class="subgraph" data-id="TransformerMem" data-label="Transformer memory — grows with context">
+  <rect x="40" y="124.9" width="570.071" height="187.60000000000002" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="40" y="124.9" width="570.071" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="52" y="138.9" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">Transformer memory — grows with context</text>
+</g>
+<g class="subgraph" data-id="SSMMem" data-label="SSM memory — always the same size">
+  <rect x="401.1585" y="360.5" width="605.825" height="130.7" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="401.1585" y="360.5" width="605.825" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="413.1585" y="374.5" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">SSM memory — always the same size</text>
+</g>
+<polyline class="edge" data-from="Past" data-to="TransformerMem" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="491.5065833333334,76.9 491.5065833333334,112.9 325.0355,112.9 325.0355,124.9" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Past" data-to="SSMMem" data-style="dotted" data-arrow-start="false" data-arrow-end="true" data-label="compressed into fixed box" points="537.5999166666668,76.9 537.5999166666668,112.9 704.071,112.9 704.071,360.5" fill="none" stroke="var(--_line)" stroke-width="1" stroke-dasharray="4 4" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="T1K" data-to="T2K" data-style="solid" data-arrow-start="false" data-arrow-end="false" points="161.676,269.6 209.676,269.6" fill="none" stroke="var(--_line)" stroke-width="1" />
+<polyline class="edge" data-from="T2K" data-to="TdotK" data-style="solid" data-arrow-start="false" data-arrow-end="false" points="315.352,269.6 363.352,269.6" fill="none" stroke="var(--_line)" stroke-width="1" />
+<polyline class="edge" data-from="TdotK" data-to="T32KK" data-style="solid" data-arrow-start="false" data-arrow-end="false" points="423.352,269.6 471.352,269.6" fill="none" stroke="var(--_line)" stroke-width="1" />
+<polyline class="edge" data-from="QNew1" data-to="ScanAll" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="203.17200000000003,195.8 251.17200000000003,195.8" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="QNew2" data-to="UpdateS" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="519.1295,439.85 567.1295,439.85" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="UpdateS" data-to="SMatrix" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="772.8405,448.81666666666666 784.8405,448.81666666666666 784.8405,451.6333333333333 820.8405,451.6333333333333" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="SMatrix" data-to="UpdateS" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="820.8405,428.06666666666666 784.8405,428.06666666666666 784.8405,430.8833333333333 772.8405,430.8833333333333" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<g class="edge-label" data-from="Past" data-to="SSMMem" data-label="compressed into fixed box">
+  <rect x="634.071" y="287.20000000000005" width="139.42000000000002" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="703.7810000000001" y="302.35" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">compressed into fixed box</text>
+</g>
+<g class="node" data-id="Past" data-label="100K past tokens" data-shape="rectangle">
+  <rect x="445.41325000000006" y="40" width="138.28" height="36.900000000000006" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
+  <text x="514.55325" y="58.45" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f" dy="4.55">100K past tokens</text>
+</g>
+<g class="node" data-id="T1K" data-label="Token 1
+K, V stored" data-shape="rectangle">
+  <rect x="56" y="242.70000000000002" width="105.676" height="53.800000000000004" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
+  <text x="108.838" y="269.6" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f"><tspan x="108.838" dy="-3.9000000000000012">Token 1</tspan><tspan x="108.838" dy="16.900000000000002">K, V stored</tspan></text>
+</g>
+<g class="node" data-id="T2K" data-label="Token 2
+K, V stored" data-shape="rectangle">
+  <rect x="209.676" y="242.70000000000002" width="105.676" height="53.800000000000004" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
+  <text x="262.514" y="269.6" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f"><tspan x="262.514" dy="-3.9000000000000012">Token 2</tspan><tspan x="262.514" dy="16.900000000000002">K, V stored</tspan></text>
+</g>
+<g class="node" data-id="TdotK" data-label="..." data-shape="rectangle">
+  <rect x="363.352" y="251.15000000000003" width="60" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="393.352" y="269.6" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">...</text>
+</g>
+<g class="node" data-id="T32KK" data-label="Token 32,000
+K, V stored" data-shape="rectangle">
+  <rect x="471.352" y="242.70000000000002" width="122.71900000000001" height="53.800000000000004" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
+  <text x="532.7115" y="269.6" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f"><tspan x="532.7115" dy="-3.9000000000000012">Token 32,000</tspan><tspan x="532.7115" dy="16.900000000000002">K, V stored</tspan></text>
+</g>
+<g class="node" data-id="QNew1" data-label="Query (new token)" data-shape="rectangle">
+  <rect x="56" y="177.35000000000002" width="147.17200000000003" height="36.900000000000006" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
+  <text x="129.586" y="195.8" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f" dy="4.55">Query (new token)</text>
+</g>
+<g class="node" data-id="ScanAll" data-label="Scan ALL 32,000 entries
+= 2M multiply-adds / head" data-shape="rectangle">
+  <rect x="251.17200000000003" y="168.9" width="187.92699999999996" height="53.800000000000004" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="345.1355" y="195.8" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="345.1355" dy="-3.9000000000000012">Scan ALL 32,000 entries</tspan><tspan x="345.1355" dy="16.900000000000002">= 2M multiply-adds / head</tspan></text>
+</g>
+<g class="node" data-id="SMatrix" data-label="State matrix S
+128 × 128 = 16,384 floats
+(1,024 KB for 16 heads)" data-shape="rectangle">
+  <rect x="820.8405" y="404.5" width="170.14299999999997" height="70.7" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
+  <text x="905.912" y="439.85" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f"><tspan x="905.912" dy="-12.350000000000001">State matrix S</tspan><tspan x="905.912" dy="16.900000000000002">128 × 128 = 16,384 floats</tspan><tspan x="905.912" dy="16.900000000000002">(1,024 KB for 16 heads)</tspan></text>
+</g>
+<g class="node" data-id="QNew2" data-label="New token" data-shape="rectangle">
+  <rect x="417.1585" y="421.4" width="101.971" height="36.900000000000006" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
+  <text x="468.144" y="439.84999999999997" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f" dy="4.55">New token</text>
+</g>
+<g class="node" data-id="UpdateS" data-label="One state update
+~32,768 multiply-adds / head" data-shape="rectangle">
+  <rect x="567.1295" y="412.95" width="205.71099999999998" height="53.800000000000004" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="669.985" y="439.84999999999997" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="669.985" dy="-3.9000000000000012">One state update</tspan><tspan x="669.985" dy="16.900000000000002">~32,768 multiply-adds / head</tspan></text>
+</g>
+</svg>

@@ -1,0 +1,125 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1063.9937499999999 822.3000000000001" width="1063.9937499999999" height="822.3000000000001" style="--bg:#FFFFFF;--fg:#27272A;background:#ffffff">
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;display=swap');
+  text { font-family: 'Inter', system-ui, sans-serif; }
+  svg {
+    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
+    --_text:          #1a1a2e;
+    --_text-sec:      var(--muted, color-mix(in srgb, #1a1a2e 60%, #ffffff));
+    --_text-muted:    var(--muted, color-mix(in srgb, #1a1a2e 40%, #ffffff));
+    --_text-faint:    color-mix(in srgb, #1a1a2e 25%, #ffffff);
+    --_line:          var(--line, color-mix(in srgb, #1a1a2e 50%, #ffffff));
+    --_arrow:         var(--accent, color-mix(in srgb, #1a1a2e 85%, #ffffff));
+    --_node-fill:     var(--surface, color-mix(in srgb, #1a1a2e 3%, #ffffff));
+    --_node-stroke:   var(--border, color-mix(in srgb, #1a1a2e 20%, #ffffff));
+    --_group-fill:    #ffffff;
+    --_group-hdr:     color-mix(in srgb, #1a1a2e 5%, #ffffff);
+    --_inner-stroke:  color-mix(in srgb, #1a1a2e 12%, #ffffff);
+    --_key-badge:     color-mix(in srgb, #1a1a2e 10%, #ffffff);
+  }
+</style>
+<defs>
+  <marker id="arrowhead" markerWidth="8" markerHeight="5" refX="7" refY="2.5" orient="auto">
+    <polygon points="0 0, 8 2.5, 0 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+  <marker id="arrowhead-start" markerWidth="8" markerHeight="5" refX="1" refY="2.5" orient="auto-start-reverse">
+    <polygon points="8 0, 0 2.5, 8 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+</defs>
+<g class="subgraph" data-id="Cost" data-label="Why this hurts performance for Qwen 3.5">
+  <rect x="419.65074999999996" y="329" width="604.343" height="130.7" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="419.65074999999996" y="329" width="604.343" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="431.65074999999996" y="343" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">Why this hurts performance for Qwen 3.5</text>
+</g>
+<polyline class="edge" data-from="MainFwd" data-to="Checkpoint" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="508.45799999999997,110.7 508.45799999999997,158.7" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Checkpoint" data-to="MTPDraft" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="480.10083333333336,229.4 480.10083333333336,241.4 295.09375,241.4 295.09374999999994,253.4" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="MTPDraft" data-to="Verify" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="295.09374999999994,324.1 295.09375,372.1" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Verify" data-to="Accept" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="main agrees
+(70-85%)" points="262.9080833333333,459.70000000000005 262.9080833333333,495.70000000000005 168.04949999999997,495.70000000000005 168.0495,583.1500000000001" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Verify" data-to="Reject" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="main disagrees" points="327.27941666666663,459.70000000000005 327.27941666666663,495.70000000000005 422.138,495.70000000000005 422.138,583.1500000000001" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Accept" data-to="NextToken" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="168.0495,653.8500000000001 168.0495,710.3000000000001" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Reject" data-to="NextToken2" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="422.138,670.7500000000001 422.1379999999999,710.3000000000001" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Checkpoint" data-to="Cost" data-style="dotted" data-arrow-start="false" data-arrow-end="true" data-label="overhead" points="536.8151666666666,229.4 536.8151666666666,248.70000000000002 721.8222499999999,248.70000000000002 721.8222499999999,329" fill="none" stroke="var(--_line)" stroke-width="1" stroke-dasharray="4 4" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="C1" data-to="C2" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="585.04575,408.35 633.04575,408.35" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="C2" data-to="C3" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="786.1457499999999,408.35 834.1457499999999,408.35" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<g class="edge-label" data-from="Verify" data-to="Accept" data-label="main agrees
+(70-85%)">
+  <rect x="130.04949999999997" y="502.7" width="75.268" height="44.6" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="167.68349999999998" y="525" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)"><tspan x="167.68349999999998" dy="-3.3000000000000007">main agrees</tspan><tspan x="167.68349999999998" dy="14.3">(70-85%)</tspan></text>
+</g>
+<g class="edge-label" data-from="Verify" data-to="Reject" data-label="main disagrees">
+  <rect x="377.138" y="502.70000000000005" width="89.52400000000003" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="421.9" y="517.85" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">main disagrees</text>
+</g>
+<g class="edge-label" data-from="Checkpoint" data-to="Cost" data-label="overhead">
+  <rect x="689.8222499999999" y="255.70000000000002" width="63.982" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="721.8132499999999" y="270.85" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">overhead</text>
+</g>
+<g class="node" data-id="MainFwd" data-label="Main model forward
+(token t)
+SSM state updated in-place" data-shape="rectangle">
+  <rect x="408.56649999999996" y="40" width="199.783" height="70.7" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="508.45799999999997" y="75.35" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="508.45799999999997" dy="-12.350000000000001">Main model forward</tspan><tspan x="508.45799999999997" dy="16.900000000000002">(token t)</tspan><tspan x="508.45799999999997" dy="16.900000000000002">SSM state updated in-place</tspan></text>
+</g>
+<g class="node" data-id="Checkpoint" data-label="Checkpoint SSM state
+~50 MiB memcpy
+(all SSM layers)" data-shape="rectangle">
+  <rect x="423.3865" y="158.7" width="170.14299999999997" height="70.7" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
+  <text x="508.45799999999997" y="194.04999999999998" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12"><tspan x="508.45799999999997" dy="-12.350000000000001">Checkpoint SSM state</tspan><tspan x="508.45799999999997" dy="16.900000000000002">~50 MiB memcpy</tspan><tspan x="508.45799999999997" dy="16.900000000000002">(all SSM layers)</tspan></text>
+</g>
+<g class="node" data-id="MTPDraft" data-label="MTP head forward
+(token t+1 draft)
+SSM state updated again" data-shape="rectangle">
+  <rect x="202.24174999999997" y="253.4" width="185.70399999999998" height="70.7" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="295.09374999999994" y="288.75" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="295.09374999999994" dy="-12.350000000000001">MTP head forward</tspan><tspan x="295.09374999999994" dy="16.900000000000002">(token t+1 draft)</tspan><tspan x="295.09374999999994" dy="16.900000000000002">SSM state updated again</tspan></text>
+</g>
+<g class="node" data-id="Verify" data-label="Main model verify
+(token t+1)
+Compares main prediction
+vs MTP draft token" data-shape="rectangle">
+  <rect x="198.53674999999998" y="372.1" width="193.11399999999998" height="87.60000000000001" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="295.09375" y="415.90000000000003" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="295.09375" dy="-20.8">Main model verify</tspan><tspan x="295.09375" dy="16.900000000000002">(token t+1)</tspan><tspan x="295.09375" dy="16.900000000000002">Compares main prediction</tspan><tspan x="295.09375" dy="16.900000000000002">vs MTP draft token</tspan></text>
+</g>
+<g class="node" data-id="Accept" data-label="Draft accepted
+Discard checkpoint
+(SSM state from draft pass is correct)" data-shape="rectangle">
+  <rect x="40" y="583.1500000000001" width="256.099" height="70.7" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
+  <text x="168.0495" y="618.5000000000001" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="168.0495" dy="-12.350000000000001">Draft accepted</tspan><tspan x="168.0495" dy="16.900000000000002">Discard checkpoint</tspan><tspan x="168.0495" dy="16.900000000000002">(SSM state from draft pass is correct)</tspan></text>
+</g>
+<g class="node" data-id="Reject" data-label="Draft rejected
+Restore SSM state
+from checkpoint
+(undo draft SSM mutations)" data-shape="rectangle">
+  <rect x="324.099" y="583.1500000000001" width="196.07799999999997" height="87.60000000000001" rx="0" ry="0" fill="#fee2e2" stroke="#ef4444" stroke-width="0.75" />
+  <text x="422.138" y="626.95" text-anchor="middle" font-size="13" font-weight="500" fill="#7f1d1d"><tspan x="422.138" dy="-20.8">Draft rejected</tspan><tspan x="422.138" dy="16.900000000000002">Restore SSM state</tspan><tspan x="422.138" dy="16.900000000000002">from checkpoint</tspan><tspan x="422.138" dy="16.900000000000002">(undo draft SSM mutations)</tspan></text>
+</g>
+<g class="node" data-id="NextToken" data-label="Continue from
+accepted SSM state" data-shape="rectangle">
+  <rect x="88.906" y="710.3000000000001" width="158.287" height="53.800000000000004" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
+  <text x="168.04950000000002" y="737.2" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="168.04950000000002" dy="-3.9000000000000012">Continue from</tspan><tspan x="168.04950000000002" dy="16.900000000000002">accepted SSM state</tspan></text>
+</g>
+<g class="node" data-id="NextToken2" data-label="Continue from
+restored SSM state
+(as if draft never ran)" data-shape="rectangle">
+  <rect x="341.14199999999994" y="710.3000000000001" width="161.99200000000002" height="70.7" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
+  <text x="422.1379999999999" y="745.6500000000001" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12"><tspan x="422.1379999999999" dy="-12.350000000000001">Continue from</tspan><tspan x="422.1379999999999" dy="16.900000000000002">restored SSM state</tspan><tspan x="422.1379999999999" dy="16.900000000000002">(as if draft never ran)</tspan></text>
+</g>
+<g class="node" data-id="C1" data-label="50 MiB checkpoint
+= ~100 μs memcpy
+every token" data-shape="rectangle">
+  <rect x="435.65074999999996" y="373" width="149.39499999999998" height="70.7" rx="0" ry="0" fill="#fee2e2" stroke="#ef4444" stroke-width="0.75" />
+  <text x="510.34824999999995" y="408.35" text-anchor="middle" font-size="13" font-weight="500" fill="#7f1d1d"><tspan x="510.34824999999995" dy="-12.350000000000001">50 MiB checkpoint</tspan><tspan x="510.34824999999995" dy="16.900000000000002">= ~100 μs memcpy</tspan><tspan x="510.34824999999995" dy="16.900000000000002">every token</tspan></text>
+</g>
+<g class="node" data-id="C2" data-label="50 MiB restore
+on each rejection
+= additional latency" data-shape="rectangle">
+  <rect x="633.04575" y="373" width="153.10000000000002" height="70.7" rx="0" ry="0" fill="#fee2e2" stroke="#ef4444" stroke-width="0.75" />
+  <text x="709.59575" y="408.35" text-anchor="middle" font-size="13" font-weight="500" fill="#7f1d1d"><tspan x="709.59575" dy="-12.350000000000001">50 MiB restore</tspan><tspan x="709.59575" dy="16.900000000000002">on each rejection</tspan><tspan x="709.59575" dy="16.900000000000002">= additional latency</tspan></text>
+</g>
+<g class="node" data-id="C3" data-label="Net negative vs
+no speculation
+for SSM-heavy models" data-shape="rectangle">
+  <rect x="834.1457499999999" y="373" width="173.84799999999996" height="70.7" rx="0" ry="0" fill="#fee2e2" stroke="#ef4444" stroke-width="0.75" />
+  <text x="921.0697499999999" y="408.35" text-anchor="middle" font-size="13" font-weight="500" fill="#7f1d1d"><tspan x="921.0697499999999" dy="-12.350000000000001">Net negative vs</tspan><tspan x="921.0697499999999" dy="16.900000000000002">no speculation</tspan><tspan x="921.0697499999999" dy="16.900000000000002">for SSM-heavy models</tspan></text>
+</g>
+</svg>

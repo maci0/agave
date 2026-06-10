@@ -1,0 +1,169 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 920.2769999999999 1059.1" width="920.2769999999999" height="1059.1" style="--bg:#FFFFFF;--fg:#27272A;background:#ffffff">
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;display=swap');
+  text { font-family: 'Inter', system-ui, sans-serif; }
+  svg {
+    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
+    --_text:          #1a1a2e;
+    --_text-sec:      var(--muted, color-mix(in srgb, #1a1a2e 60%, #ffffff));
+    --_text-muted:    var(--muted, color-mix(in srgb, #1a1a2e 40%, #ffffff));
+    --_text-faint:    color-mix(in srgb, #1a1a2e 25%, #ffffff);
+    --_line:          var(--line, color-mix(in srgb, #1a1a2e 50%, #ffffff));
+    --_arrow:         var(--accent, color-mix(in srgb, #1a1a2e 85%, #ffffff));
+    --_node-fill:     var(--surface, color-mix(in srgb, #1a1a2e 3%, #ffffff));
+    --_node-stroke:   var(--border, color-mix(in srgb, #1a1a2e 20%, #ffffff));
+    --_group-fill:    #ffffff;
+    --_group-hdr:     color-mix(in srgb, #1a1a2e 5%, #ffffff);
+    --_inner-stroke:  color-mix(in srgb, #1a1a2e 12%, #ffffff);
+    --_key-badge:     color-mix(in srgb, #1a1a2e 10%, #ffffff);
+  }
+</style>
+<defs>
+  <marker id="arrowhead" markerWidth="8" markerHeight="5" refX="7" refY="2.5" orient="auto">
+    <polygon points="0 0, 8 2.5, 0 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+  <marker id="arrowhead-start" markerWidth="8" markerHeight="5" refX="1" refY="2.5" orient="auto-start-reverse">
+    <polygon points="8 0, 0 2.5, 8 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+</defs>
+<g class="subgraph" data-id="Formats" data-label="KV Cache Quantization Formats — bits/element and memory reduction">
+  <rect x="40" y="40" width="52" height="120" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="40" y="40" width="52" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="52" y="54" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">KV Cache Quantization Formats — bits/element and memory reduction</text>
+<g class="subgraph" data-id="Full" data-label="Full Precision">
+  <rect x="56" y="84" width="0" height="0" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="56" y="84" width="0" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="68" y="98" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">Full Precision</text>
+</g>
+<g class="subgraph" data-id="Turbo4Grp" data-label="4-bit tier  (3.6× vs f16 — 84 MB)">
+  <rect x="56" y="104" width="0" height="0" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="56" y="104" width="0" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="68" y="118" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">4-bit tier  (3.6× vs f16 — 84 MB)</text>
+</g>
+<g class="subgraph" data-id="Turbo3Grp" data-label="3-bit tier  (4.6× vs f16 — 66 MB)">
+  <rect x="56" y="124" width="0" height="0" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="56" y="124" width="0" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="68" y="138" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">3-bit tier  (4.6× vs f16 — 66 MB)</text>
+</g>
+<g class="subgraph" data-id="Turbo2Grp" data-label="2-bit tier  (6.4× vs f16 — 47 MB)">
+  <rect x="56" y="144" width="0" height="0" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="56" y="144" width="0" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="68" y="158" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">2-bit tier  (6.4× vs f16 — 47 MB)</text>
+</g>
+</g>
+<polyline class="edge" data-from="F32" data-to="F16" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="halve precision" points="513.3667499999999,110.7 513.3667499999999,227" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="F16" data-to="Q8" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="scalar quantize" points="513.3667499999999,297.7 513.3667499999999,414" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Q8" data-to="TQ4" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="rotate + pack
+Lloyd-Max codebook" points="467.88134999999994,484.7 467.8813499999999,496.7 208.55700000000002,496.7 208.55699999999996,589" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Q8" data-to="PQ4" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="rotate + pack" points="498.20494999999994,484.7 498.20494999999994,520.7 415.22149999999993,520.7 415.2214999999999,589" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Q8" data-to="IQ4" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="rotate + pack" points="528.52855,484.7 528.5285499999999,520.7 611.512,520.7 611.512,589" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Q8" data-to="RQ4" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="rotate + pack" points="558.8521499999999,484.7 558.8521499999999,496.70000000000005 802.9859999999999,496.70000000000005 802.9859999999999,589" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="TQ4" data-to="TQ3" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="reduce bits" points="208.55699999999996,659.7 208.55700000000002,783.15" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="PQ4" data-to="PQ3" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="reduce bits" points="415.2214999999999,659.7 415.2214999999999,783.15" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="IQ4" data-to="IQ3" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="reduce bits" points="611.512,659.7 611.512,783.15" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="TQ3" data-to="TQ2" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="reduce bits" points="208.55700000000002,836.9499999999999 208.55700000000002,948.3999999999999" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<g class="edge-label" data-from="F32" data-to="F16" data-label="halve precision">
+  <rect x="467.8667499999999" y="153.7" width="90.71200000000002" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="513.2227499999999" y="168.85" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">halve precision</text>
+</g>
+<g class="edge-label" data-from="F16" data-to="Q8" data-label="scalar quantize">
+  <rect x="467.8667499999999" y="340.7" width="90.71200000000002" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="513.2227499999999" y="355.84999999999997" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">scalar quantize</text>
+</g>
+<g class="edge-label" data-from="Q8" data-to="TQ4" data-label="rotate + pack
+Lloyd-Max codebook">
+  <rect x="149.05700000000002" y="503.7" width="118.036" height="44.6" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="208.07500000000002" y="526" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)"><tspan x="208.07500000000002" dy="-3.3000000000000007">rotate + pack</tspan><tspan x="208.07500000000002" dy="14.3">Lloyd-Max codebook</tspan></text>
+</g>
+<g class="edge-label" data-from="Q8" data-to="PQ4" data-label="rotate + pack">
+  <rect x="375.7214999999999" y="527.7" width="78.238" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="414.8404999999999" y="542.85" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">rotate + pack</text>
+</g>
+<g class="edge-label" data-from="Q8" data-to="IQ4" data-label="rotate + pack">
+  <rect x="572.012" y="527.7" width="78.238" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="611.131" y="542.85" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">rotate + pack</text>
+</g>
+<g class="edge-label" data-from="Q8" data-to="RQ4" data-label="rotate + pack">
+  <rect x="763.4859999999999" y="503.70000000000005" width="78.238" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="802.6049999999999" y="518.85" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">rotate + pack</text>
+</g>
+<g class="edge-label" data-from="TQ4" data-to="TQ3" data-label="reduce bits">
+  <rect x="173.05699999999996" y="705" width="70.516" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="208.31499999999997" y="720.15" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">reduce bits</text>
+</g>
+<g class="edge-label" data-from="PQ4" data-to="PQ3" data-label="reduce bits">
+  <rect x="379.72149999999993" y="714.7" width="70.516" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="414.9794999999999" y="729.85" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">reduce bits</text>
+</g>
+<g class="edge-label" data-from="IQ4" data-to="IQ3" data-label="reduce bits">
+  <rect x="576.012" y="714.7" width="70.516" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="611.27" y="729.85" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">reduce bits</text>
+</g>
+<g class="edge-label" data-from="TQ3" data-to="TQ2" data-label="reduce bits">
+  <rect x="173.05699999999996" y="875.0999999999999" width="70.516" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="208.31499999999997" y="890.2499999999999" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">reduce bits</text>
+</g>
+<g class="node" data-id="F32" data-label="f32
+32 bits/elem
+600 MB baseline" data-shape="rectangle">
+  <rect x="443.85624999999993" y="40" width="139.02100000000002" height="70.7" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
+  <text x="513.3667499999999" y="75.35" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f"><tspan x="513.3667499999999" dy="-12.350000000000001">f32</tspan><tspan x="513.3667499999999" dy="16.900000000000002">32 bits/elem</tspan><tspan x="513.3667499999999" dy="16.900000000000002">600 MB baseline</tspan></text>
+</g>
+<g class="node" data-id="F16" data-label="f16
+16 bits/elem
+300 MB  (2× vs f32)" data-shape="rectangle">
+  <rect x="438.2987499999999" y="227" width="150.136" height="70.7" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
+  <text x="513.3667499999999" y="262.35" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f"><tspan x="513.3667499999999" dy="-12.350000000000001">f16</tspan><tspan x="513.3667499999999" dy="16.900000000000002">16 bits/elem</tspan><tspan x="513.3667499999999" dy="16.900000000000002">300 MB  (2× vs f32)</tspan></text>
+</g>
+<g class="node" data-id="Q8" data-label="q8_0
+8.5 bits/elem
+159 MB  (3.5× vs f16)" data-shape="rectangle">
+  <rect x="437.55774999999994" y="414" width="151.618" height="70.7" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
+  <text x="513.3667499999999" y="449.35" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12"><tspan x="513.3667499999999" dy="-12.350000000000001">q8_0</tspan><tspan x="513.3667499999999" dy="16.900000000000002">8.5 bits/elem</tspan><tspan x="513.3667499999999" dy="16.900000000000002">159 MB  (3.5× vs f16)</tspan></text>
+</g>
+<g class="node" data-id="TQ4" data-label="TurboQuant turbo4
+Walsh-Hadamard WHT-32
+~160 add/sub, no multiplies" data-shape="rectangle">
+  <rect x="112" y="589" width="193.11399999999995" height="70.7" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="208.55699999999996" y="624.35" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="208.55699999999996" dy="-12.350000000000001">TurboQuant turbo4</tspan><tspan x="208.55699999999996" dy="16.900000000000002">Walsh-Hadamard WHT-32</tspan><tspan x="208.55699999999996" dy="16.900000000000002">~160 add/sub, no multiplies</tspan></text>
+</g>
+<g class="node" data-id="PQ4" data-label="PlanarQuant planar4
+Givens 2D rotation
+256 FMAs" data-shape="rectangle">
+  <rect x="333.1139999999999" y="589" width="164.21499999999997" height="70.7" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="415.2214999999999" y="624.35" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="415.2214999999999" dy="-12.350000000000001">PlanarQuant planar4</tspan><tspan x="415.2214999999999" dy="16.900000000000002">Givens 2D rotation</tspan><tspan x="415.2214999999999" dy="16.900000000000002">256 FMAs</tspan></text>
+</g>
+<g class="node" data-id="IQ4" data-label="IsoQuant iso4
+Quaternion 4D rotation
+512 FMAs" data-shape="rectangle">
+  <rect x="525.329" y="589" width="172.36599999999999" height="70.7" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="611.512" y="624.35" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="611.512" dy="-12.350000000000001">IsoQuant iso4</tspan><tspan x="611.512" dy="16.900000000000002">Quaternion 4D rotation</tspan><tspan x="611.512" dy="16.900000000000002">512 FMAs</tspan></text>
+</g>
+<g class="node" data-id="RQ4" data-label="RotorQuant rotor4
+Clifford Cl(3,0) rotor
+~2400 FMAs" data-shape="rectangle">
+  <rect x="725.6949999999999" y="589" width="154.582" height="70.7" rx="0" ry="0" fill="#f3e8ff" stroke="#9333ea" stroke-width="0.75" />
+  <text x="802.9859999999999" y="624.35" text-anchor="middle" font-size="13" font-weight="500" fill="#581c87"><tspan x="802.9859999999999" dy="-12.350000000000001">RotorQuant rotor4</tspan><tspan x="802.9859999999999" dy="16.900000000000002">Clifford Cl(3,0) rotor</tspan><tspan x="802.9859999999999" dy="16.900000000000002">~2400 FMAs</tspan></text>
+</g>
+<g class="node" data-id="TQ3" data-label="TurboQuant turbo3
+WHT-32 decorrelation" data-shape="rectangle">
+  <rect x="122.74450000000002" y="783.15" width="171.62499999999997" height="53.800000000000004" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="208.55700000000002" y="810.05" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="208.55700000000002" dy="-3.9000000000000012">TurboQuant turbo3</tspan><tspan x="208.55700000000002" dy="16.900000000000002">WHT-32 decorrelation</tspan></text>
+</g>
+<g class="node" data-id="PQ3" data-label="PlanarQuant planar3
+Givens 2D rotation" data-shape="rectangle">
+  <rect x="333.1139999999999" y="783.15" width="164.21499999999997" height="53.800000000000004" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="415.2214999999999" y="810.05" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="415.2214999999999" dy="-3.9000000000000012">PlanarQuant planar3</tspan><tspan x="415.2214999999999" dy="16.900000000000002">Givens 2D rotation</tspan></text>
+</g>
+<g class="node" data-id="IQ3" data-label="IsoQuant iso3
+Quaternion 4D rotation" data-shape="rectangle">
+  <rect x="525.329" y="783.15" width="172.36599999999999" height="53.800000000000004" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="611.512" y="810.05" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="611.512" dy="-3.9000000000000012">IsoQuant iso3</tspan><tspan x="611.512" dy="16.900000000000002">Quaternion 4D rotation</tspan></text>
+</g>
+<g class="node" data-id="TQ2" data-label="TurboQuant turbo2
+WHT-32 decorrelation
+maximum compression" data-shape="rectangle">
+  <rect x="122.00350000000003" y="948.3999999999999" width="173.107" height="70.7" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
+  <text x="208.55700000000002" y="983.7499999999999" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="208.55700000000002" dy="-12.350000000000001">TurboQuant turbo2</tspan><tspan x="208.55700000000002" dy="16.900000000000002">WHT-32 decorrelation</tspan><tspan x="208.55700000000002" dy="16.900000000000002">maximum compression</tspan></text>
+</g>
+</svg>

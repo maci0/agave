@@ -1,0 +1,99 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 516.4579999999999 1033.1" width="516.4579999999999" height="1033.1" style="--bg:#FFFFFF;--fg:#27272A;background:#ffffff">
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;display=swap');
+  text { font-family: 'Inter', system-ui, sans-serif; }
+  svg {
+    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
+    --_text:          #1a1a2e;
+    --_text-sec:      var(--muted, color-mix(in srgb, #1a1a2e 60%, #ffffff));
+    --_text-muted:    var(--muted, color-mix(in srgb, #1a1a2e 40%, #ffffff));
+    --_text-faint:    color-mix(in srgb, #1a1a2e 25%, #ffffff);
+    --_line:          var(--line, color-mix(in srgb, #1a1a2e 50%, #ffffff));
+    --_arrow:         var(--accent, color-mix(in srgb, #1a1a2e 85%, #ffffff));
+    --_node-fill:     var(--surface, color-mix(in srgb, #1a1a2e 3%, #ffffff));
+    --_node-stroke:   var(--border, color-mix(in srgb, #1a1a2e 20%, #ffffff));
+    --_group-fill:    #ffffff;
+    --_group-hdr:     color-mix(in srgb, #1a1a2e 5%, #ffffff);
+    --_inner-stroke:  color-mix(in srgb, #1a1a2e 12%, #ffffff);
+    --_key-badge:     color-mix(in srgb, #1a1a2e 10%, #ffffff);
+  }
+</style>
+<defs>
+  <marker id="arrowhead" markerWidth="8" markerHeight="5" refX="7" refY="2.5" orient="auto">
+    <polygon points="0 0, 8 2.5, 0 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+  <marker id="arrowhead-start" markerWidth="8" markerHeight="5" refX="1" refY="2.5" orient="auto-start-reverse">
+    <polygon points="8 0, 0 2.5, 8 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+</defs>
+<polyline class="edge" data-from="HiddenState" data-to="HNorm" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="152.11799999999997,93.80000000000001 152.11799999999997,141.8" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="TokenEmbed" data-to="ENorm" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="384.3469999999999,93.80000000000001 384.347,141.8" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="HNorm" data-to="Concat" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="152.11799999999997,195.60000000000002 152.11799999999997,219.60000000000002 268.23249999999996,219.60000000000002 268.23249999999996,243.60000000000002" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="ENorm" data-to="Concat" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="384.347,195.60000000000002 384.347,219.60000000000002 268.23249999999996,219.60000000000002 268.23249999999996,243.60000000000002" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Concat" data-to="EHProj" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="268.23249999999996,297.40000000000003 268.23249999999996,345.40000000000003" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="EHProj" data-to="AttnBlock" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="268.23249999999996,399.20000000000005 268.23249999999996,447.20000000000005" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="AttnBlock" data-to="FFNBlock" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="268.23249999999996,501.00000000000006 268.23249999999996,549" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="FFNBlock" data-to="HeadNorm" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="268.23249999999996,602.8000000000001 268.23249999999996,650.8000000000001" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="HeadNorm" data-to="HeadProj" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="268.23249999999996,704.6 268.23249999999996,752.6" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="HeadProj" data-to="Logits" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="268.23249999999996,823.3000000000001 268.23249999999996,871.3000000000001" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Logits" data-to="ArgMax" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="268.23249999999996,908.2 268.23249999999996,956.2" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<g class="node" data-id="HiddenState" data-label="Pre-norm Hidden State
+(from main model, n_embd floats)" data-shape="rectangle">
+  <rect x="40" y="40" width="224.23599999999993" height="53.800000000000004" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
+  <text x="152.11799999999997" y="66.9" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f"><tspan x="152.11799999999997" dy="-3.9000000000000012">Pre-norm Hidden State</tspan><tspan x="152.11799999999997" dy="16.900000000000002">(from main model, n_embd floats)</tspan></text>
+</g>
+<g class="node" data-id="TokenEmbed" data-label="Token Embedding
+(of token t, n_embd floats)" data-shape="rectangle">
+  <rect x="292.23599999999993" y="40" width="184.22199999999998" height="53.800000000000004" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
+  <text x="384.3469999999999" y="66.9" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f"><tspan x="384.3469999999999" dy="-3.9000000000000012">Token Embedding</tspan><tspan x="384.3469999999999" dy="16.900000000000002">(of token t, n_embd floats)</tspan></text>
+</g>
+<g class="node" data-id="HNorm" data-label="RMSNorm + 1
+(hnorm weights)" data-shape="rectangle">
+  <rect x="85.57149999999996" y="141.8" width="133.09300000000002" height="53.800000000000004" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="152.11799999999997" y="168.70000000000002" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="152.11799999999997" dy="-3.9000000000000012">RMSNorm + 1</tspan><tspan x="152.11799999999997" dy="16.900000000000002">(hnorm weights)</tspan></text>
+</g>
+<g class="node" data-id="ENorm" data-label="RMSNorm + 1
+(enorm weights)" data-shape="rectangle">
+  <rect x="317.80049999999994" y="141.8" width="133.09300000000002" height="53.800000000000004" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="384.347" y="168.70000000000002" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="384.347" dy="-3.9000000000000012">RMSNorm + 1</tspan><tspan x="384.347" dy="16.900000000000002">(enorm weights)</tspan></text>
+</g>
+<g class="node" data-id="Concat" data-label="&quot;Concatenate
+[embed ; hidden" data-shape="rectangle">
+  <rect x="202.42699999999996" y="243.60000000000002" width="131.611" height="53.800000000000004" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="268.23249999999996" y="270.5" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="268.23249999999996" dy="-3.9000000000000012">&quot;Concatenate</tspan><tspan x="268.23249999999996" dy="16.900000000000002">[embed ; hidden</tspan></text>
+</g>
+<g class="node" data-id="EHProj" data-label="eh_proj GEMV
+2×n_embd → n_embd" data-shape="rectangle">
+  <rect x="187.97749999999996" y="345.40000000000003" width="160.51" height="53.800000000000004" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="268.23249999999996" y="372.3" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="268.23249999999996" dy="-3.9000000000000012">eh_proj GEMV</tspan><tspan x="268.23249999999996" dy="16.900000000000002">2×n_embd → n_embd</tspan></text>
+</g>
+<g class="node" data-id="AttnBlock" data-label="Attention Block
+(Q/K/V + RoPE + SDPA)" data-shape="rectangle">
+  <rect x="179.82649999999995" y="447.20000000000005" width="176.81199999999998" height="53.800000000000004" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="268.23249999999996" y="474.1" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="268.23249999999996" dy="-3.9000000000000012">Attention Block</tspan><tspan x="268.23249999999996" dy="16.900000000000002">(Q/K/V + RoPE + SDPA)</tspan></text>
+</g>
+<g class="node" data-id="FFNBlock" data-label="FFN Block
+(SwiGLU gate + up + down)" data-shape="rectangle">
+  <rect x="171.30499999999995" y="549" width="193.85500000000002" height="53.800000000000004" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="268.23249999999996" y="575.9" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="268.23249999999996" dy="-3.9000000000000012">FFN Block</tspan><tspan x="268.23249999999996" dy="16.900000000000002">(SwiGLU gate + up + down)</tspan></text>
+</g>
+<g class="node" data-id="HeadNorm" data-label="RMSNorm
+(shared_head_norm)" data-shape="rectangle">
+  <rect x="185.01349999999996" y="650.8000000000001" width="166.438" height="53.800000000000004" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="268.23249999999996" y="677.7" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="268.23249999999996" dy="-3.9000000000000012">RMSNorm</tspan><tspan x="268.23249999999996" dy="16.900000000000002">(shared_head_norm)</tspan></text>
+</g>
+<g class="node" data-id="HeadProj" data-label="Output GEMV
+(shared_head_head)
+n_embd → vocab_size" data-shape="rectangle">
+  <rect x="183.53149999999997" y="752.6" width="169.402" height="70.7" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="268.23249999999996" y="787.95" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="268.23249999999996" dy="-12.350000000000001">Output GEMV</tspan><tspan x="268.23249999999996" dy="16.900000000000002">(shared_head_head)</tspan><tspan x="268.23249999999996" dy="16.900000000000002">n_embd → vocab_size</tspan></text>
+</g>
+<g class="node" data-id="Logits" data-label="&quot;Logits [vocab_size" data-shape="rectangle">
+  <rect x="189.08899999999994" y="871.3000000000001" width="158.287" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="268.23249999999996" y="889.7500000000001" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">&quot;Logits [vocab_size</text>
+</g>
+<g class="node" data-id="ArgMax" data-label="argmax → draft token t+2" data-shape="rectangle">
+  <rect x="178.34449999999998" y="956.2" width="179.77599999999998" height="36.900000000000006" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
+  <text x="268.23249999999996" y="974.6500000000001" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d" dy="4.55">argmax → draft token t+2</text>
+</g>
+</svg>

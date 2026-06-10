@@ -1,0 +1,110 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 984.9775 635.7" width="984.9775" height="635.7" style="--bg:#FFFFFF;--fg:#27272A;background:#ffffff">
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;display=swap');
+  text { font-family: 'Inter', system-ui, sans-serif; }
+  svg {
+    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
+    --_text:          #1a1a2e;
+    --_text-sec:      var(--muted, color-mix(in srgb, #1a1a2e 60%, #ffffff));
+    --_text-muted:    var(--muted, color-mix(in srgb, #1a1a2e 40%, #ffffff));
+    --_text-faint:    color-mix(in srgb, #1a1a2e 25%, #ffffff);
+    --_line:          var(--line, color-mix(in srgb, #1a1a2e 50%, #ffffff));
+    --_arrow:         var(--accent, color-mix(in srgb, #1a1a2e 85%, #ffffff));
+    --_node-fill:     var(--surface, color-mix(in srgb, #1a1a2e 3%, #ffffff));
+    --_node-stroke:   var(--border, color-mix(in srgb, #1a1a2e 20%, #ffffff));
+    --_group-fill:    #ffffff;
+    --_group-hdr:     color-mix(in srgb, #1a1a2e 5%, #ffffff);
+    --_inner-stroke:  color-mix(in srgb, #1a1a2e 12%, #ffffff);
+    --_key-badge:     color-mix(in srgb, #1a1a2e 10%, #ffffff);
+  }
+</style>
+<defs>
+  <marker id="arrowhead" markerWidth="8" markerHeight="5" refX="7" refY="2.5" orient="auto">
+    <polygon points="0 0, 8 2.5, 0 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+  <marker id="arrowhead-start" markerWidth="8" markerHeight="5" refX="1" refY="2.5" orient="auto-start-reverse">
+    <polygon points="8 0, 0 2.5, 8 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+</defs>
+<g class="subgraph" data-id="InlineElse" data-label="inline else dispatch (Zig)">
+  <rect x="40" y="40" width="0" height="0" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="40" y="40" width="0" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="52" y="54" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">inline else dispatch (Zig)</text>
+</g>
+<g class="subgraph" data-id="VTable" data-label="vtable dispatch (C++ / runtime)">
+  <rect x="60" y="40" width="0" height="0" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="60" y="40" width="0" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="72" y="54" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">vtable dispatch (C++ / runtime)</text>
+</g>
+<polyline class="edge" data-from="IE_Tag" data-to="IE_CPU" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="395.0775,171.60000000000002 395.0775,201.60000000000002 174.334,201.60000000000002 174.334,231.60000000000002" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="IE_Tag" data-to="IE_Metal" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="395.0775,171.60000000000002 395.0775,201.60000000000002 395.0775,201.60000000000002 395.0775,231.60000000000002" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="IE_Tag" data-to="IE_Vulkan" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="395.0775,171.60000000000002 395.0775,201.60000000000002 624.713,201.60000000000002 624.713,231.60000000000002" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="VT_Ptr" data-to="VT_Offset" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="842.8629999999999,171.60000000000002 842.863,231.60000000000002" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="VT_Offset" data-to="VT_Load" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="842.863,285.40000000000003 842.8629999999999,329.85" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="VT_Load" data-to="VT_Call" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="842.8629999999999,383.65000000000003 842.8629999999999,423.20000000000005" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Call" data-to="IE_Tag" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="618.97025,93.80000000000001 618.97025,105.80000000000001 395.0775,105.80000000000001 395.0775,117.80000000000001" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Call" data-to="VT_Ptr" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="618.97025,93.80000000000001 618.97025,105.80000000000001 842.8629999999999,105.80000000000001 842.8629999999999,117.80000000000001" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="IE_CPU" data-to="Res1" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="174.334,302.3 174.334,316.07500000000005 395.0775,316.07500000000005 395.0775,329.85" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="IE_Metal" data-to="Res1" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="395.0775,302.3 395.0775,316.07500000000005 395.0775,316.07500000000005 395.0775,329.85" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="IE_Vulkan" data-to="Res1" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="624.713,302.3 624.713,316.07500000000005 395.0775,316.07500000000005 395.0775,329.85" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="VT_Call" data-to="Res2" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="842.8629999999999,493.90000000000003 842.863,541.9000000000001" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<g class="node" data-id="Call" data-label="backend.gemv(args)
+(call site in model code)" data-shape="rectangle">
+  <rect x="532.04625" y="40" width="173.848" height="53.800000000000004" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
+  <text x="618.97025" y="66.9" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f"><tspan x="618.97025" dy="-3.9000000000000012">backend.gemv(args)</tspan><tspan x="618.97025" dy="16.900000000000002">(call site in model code)</tspan></text>
+</g>
+<g class="node" data-id="IE_Tag" data-label="read union tag
+(cheap branch)" data-shape="rectangle">
+  <rect x="329.272" y="117.80000000000001" width="131.611" height="53.800000000000004" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
+  <text x="395.0775" y="144.70000000000002" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12"><tspan x="395.0775" dy="-3.9000000000000012">read union tag</tspan><tspan x="395.0775" dy="16.900000000000002">(cheap branch)</tspan></text>
+</g>
+<g class="node" data-id="IE_CPU" data-label="tag == .cpu
+CpuBackend.gemv(args)
+(inlined by compiler)" data-shape="rectangle">
+  <rect x="80" y="231.60000000000002" width="188.668" height="70.7" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="174.334" y="266.95000000000005" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="174.334" dy="-12.350000000000001">tag == .cpu</tspan><tspan x="174.334" dy="16.900000000000002">CpuBackend.gemv(args)</tspan><tspan x="174.334" dy="16.900000000000002">(inlined by compiler)</tspan></text>
+</g>
+<g class="node" data-id="IE_Metal" data-label="tag == .metal
+MetalBackend.gemv(args)
+(inlined by compiler)" data-shape="rectangle">
+  <rect x="296.668" y="231.60000000000002" width="196.819" height="70.7" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="395.0775" y="266.95000000000005" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="395.0775" dy="-12.350000000000001">tag == .metal</tspan><tspan x="395.0775" dy="16.900000000000002">MetalBackend.gemv(args)</tspan><tspan x="395.0775" dy="16.900000000000002">(inlined by compiler)</tspan></text>
+</g>
+<g class="node" data-id="IE_Vulkan" data-label="tag == .vulkan
+VulkanBackend.gemv(args)
+(inlined by compiler)" data-shape="rectangle">
+  <rect x="521.487" y="231.60000000000002" width="206.452" height="70.7" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="624.713" y="266.95000000000005" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="624.713" dy="-12.350000000000001">tag == .vulkan</tspan><tspan x="624.713" dy="16.900000000000002">VulkanBackend.gemv(args)</tspan><tspan x="624.713" dy="16.900000000000002">(inlined by compiler)</tspan></text>
+</g>
+<g class="node" data-id="VT_Ptr" data-label="load vtable pointer
+from object header" data-shape="rectangle">
+  <rect x="767.795" y="117.80000000000001" width="150.13600000000002" height="53.800000000000004" rx="0" ry="0" fill="#fee2e2" stroke="#ef4444" stroke-width="0.75" />
+  <text x="842.8629999999999" y="144.70000000000002" text-anchor="middle" font-size="13" font-weight="500" fill="#7f1d1d"><tspan x="842.8629999999999" dy="-3.9000000000000012">load vtable pointer</tspan><tspan x="842.8629999999999" dy="16.900000000000002">from object header</tspan></text>
+</g>
+<g class="node" data-id="VT_Offset" data-label="add method offset
+(e.g. +8 bytes for gemv)" data-shape="rectangle">
+  <rect x="755.9390000000001" y="231.60000000000002" width="173.84799999999998" height="53.800000000000004" rx="0" ry="0" fill="#fee2e2" stroke="#ef4444" stroke-width="0.75" />
+  <text x="842.863" y="258.5" text-anchor="middle" font-size="13" font-weight="500" fill="#7f1d1d"><tspan x="842.863" dy="-3.9000000000000012">add method offset</tspan><tspan x="842.863" dy="16.900000000000002">(e.g. +8 bytes for gemv)</tspan></text>
+</g>
+<g class="node" data-id="VT_Load" data-label="load function pointer
+from vtable memory" data-shape="rectangle">
+  <rect x="763.3489999999999" y="329.85" width="159.02800000000002" height="53.800000000000004" rx="0" ry="0" fill="#fee2e2" stroke="#ef4444" stroke-width="0.75" />
+  <text x="842.8629999999999" y="356.75" text-anchor="middle" font-size="13" font-weight="500" fill="#7f1d1d"><tspan x="842.8629999999999" dy="-3.9000000000000012">load function pointer</tspan><tspan x="842.8629999999999" dy="16.900000000000002">from vtable memory</tspan></text>
+</g>
+<g class="node" data-id="VT_Call" data-label="indirect call
+via register
+(branch predictor miss risk)" data-shape="rectangle">
+  <rect x="740.7484999999999" y="423.20000000000005" width="204.229" height="70.7" rx="0" ry="0" fill="#fee2e2" stroke="#ef4444" stroke-width="0.75" />
+  <text x="842.8629999999999" y="458.55000000000007" text-anchor="middle" font-size="13" font-weight="500" fill="#7f1d1d"><tspan x="842.8629999999999" dy="-12.350000000000001">indirect call</tspan><tspan x="842.8629999999999" dy="16.900000000000002">via register</tspan><tspan x="842.8629999999999" dy="16.900000000000002">(branch predictor miss risk)</tspan></text>
+</g>
+<g class="node" data-id="Res1" data-label="direct kernel code
+(zero indirection)" data-shape="rectangle">
+  <rect x="320.7505" y="329.85" width="148.654" height="53.800000000000004" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
+  <text x="395.0775" y="356.75" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="395.0775" dy="-3.9000000000000012">direct kernel code</tspan><tspan x="395.0775" dy="16.900000000000002">(zero indirection)</tspan></text>
+</g>
+<g class="node" data-id="Res2" data-label="kernel code
+(1 indirect branch)" data-shape="rectangle">
+  <rect x="770.759" y="541.9000000000001" width="144.208" height="53.800000000000004" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
+  <text x="842.863" y="568.8000000000001" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12"><tspan x="842.863" dy="-3.9000000000000012">kernel code</tspan><tspan x="842.863" dy="16.900000000000002">(1 indirect branch)</tspan></text>
+</g>
+</svg>

@@ -1,0 +1,132 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 832.208 704.1" width="832.208" height="704.1" style="--bg:#FFFFFF;--fg:#27272A;background:#ffffff">
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;display=swap');
+  text { font-family: 'Inter', system-ui, sans-serif; }
+  svg {
+    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
+    --_text:          #1a1a2e;
+    --_text-sec:      var(--muted, color-mix(in srgb, #1a1a2e 60%, #ffffff));
+    --_text-muted:    var(--muted, color-mix(in srgb, #1a1a2e 40%, #ffffff));
+    --_text-faint:    color-mix(in srgb, #1a1a2e 25%, #ffffff);
+    --_line:          var(--line, color-mix(in srgb, #1a1a2e 50%, #ffffff));
+    --_arrow:         var(--accent, color-mix(in srgb, #1a1a2e 85%, #ffffff));
+    --_node-fill:     var(--surface, color-mix(in srgb, #1a1a2e 3%, #ffffff));
+    --_node-stroke:   var(--border, color-mix(in srgb, #1a1a2e 20%, #ffffff));
+    --_group-fill:    #ffffff;
+    --_group-hdr:     color-mix(in srgb, #1a1a2e 5%, #ffffff);
+    --_inner-stroke:  color-mix(in srgb, #1a1a2e 12%, #ffffff);
+    --_key-badge:     color-mix(in srgb, #1a1a2e 10%, #ffffff);
+  }
+</style>
+<defs>
+  <marker id="arrowhead" markerWidth="8" markerHeight="5" refX="7" refY="2.5" orient="auto">
+    <polygon points="0 0, 8 2.5, 0 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+  <marker id="arrowhead-start" markerWidth="8" markerHeight="5" refX="1" refY="2.5" orient="auto-start-reverse">
+    <polygon points="8 0, 0 2.5, 8 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+</defs>
+<g class="subgraph" data-id="Unfused" data-label="Unfused: 2 dispatches, 4 memory ops">
+  <rect x="40" y="40" width="295.06399999999996" height="624.1" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="40" y="40" width="295.06399999999996" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="52" y="54" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">Unfused: 2 dispatches, 4 memory ops</text>
+</g>
+<g class="subgraph" data-id="Fused" data-label="Fused: 1 dispatch, 3 memory ops">
+  <rect x="497.144" y="110.74999999999997" width="295.06399999999996" height="482.6000000000001" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="497.144" y="110.74999999999997" width="295.06399999999996" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="509.144" y="124.74999999999997" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">Fused: 1 dispatch, 3 memory ops</text>
+</g>
+<polyline class="edge" data-from="Unfused" data-to="Fused" data-style="dotted" data-arrow-start="false" data-arrow-end="true" data-label="25% fewer
+memory ops" points="335.06399999999996,352.05 497.144,352.05" fill="none" stroke="var(--_line)" stroke-width="1" stroke-dasharray="4 4" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="R1" data-to="T1" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="Dispatch 1: add" points="260.298,137.8 260.298,218.10000000000002 207.12066666666664,218.10000000000002 207.12066666666666,254.10000000000002" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="F1" data-to="T1" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="Dispatch 1: add" points="114.76599999999999,137.8 114.76599999999999,218.10000000000002 167.94333333333333,218.10000000000002 167.94333333333333,254.10000000000002" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="T1" data-to="T2" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="barrier" points="187.53199999999998,307.90000000000003 187.53199999999998,424.20000000000005" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="T2" data-to="N1" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="Dispatch 2: rmsNorm" points="187.53199999999998,478.00000000000006 187.53199999999998,594.3000000000001" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="R2" data-to="Reg" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="addRmsNorm
+kernel" points="717.442,208.54999999999998 717.442,303.15 673.7741666666666,303.15 673.7741666666666,339.15" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="F2" data-to="Reg" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="addRmsNorm
+kernel" points="571.91,208.54999999999998 571.91,303.15 615.5778333333334,303.15 615.5778333333333,339.15" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Reg" data-to="N2" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="norm + scale
+in registers" points="644.6759999999999,392.95000000000005 644.6759999999999,523.5500000000001" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<g class="edge-label" data-from="Unfused" data-to="Fused" data-label="25% fewer
+memory ops">
+  <rect x="379.06399999999996" y="329.05" width="74.08000000000001" height="44.6" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="416.104" y="351.35" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)"><tspan x="416.104" dy="-3.3000000000000007">25% fewer</tspan><tspan x="416.104" dy="14.3">memory ops</tspan></text>
+</g>
+<g class="edge-label" data-from="R1" data-to="T1" data-label="Dispatch 1: add">
+  <rect x="217.298" y="180.8" width="85.36600000000001" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="259.981" y="195.95000000000002" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">Dispatch 1: add</text>
+</g>
+<g class="edge-label" data-from="F1" data-to="T1" data-label="Dispatch 1: add">
+  <rect x="71.76599999999999" y="180.8" width="85.36600000000001" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="114.449" y="195.95000000000002" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">Dispatch 1: add</text>
+</g>
+<g class="edge-label" data-from="T1" data-to="T2" data-label="barrier">
+  <rect x="161.032" y="350.90000000000003" width="52.102" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="187.083" y="366.05" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">barrier</text>
+</g>
+<g class="edge-label" data-from="T2" data-to="N1" data-label="Dispatch 2: rmsNorm">
+  <rect x="130.53199999999998" y="521.0000000000001" width="113.87800000000004" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="187.471" y="536.1500000000001" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">Dispatch 2: rmsNorm</text>
+</g>
+<g class="edge-label" data-from="R2" data-to="Reg" data-label="addRmsNorm
+kernel">
+  <rect x="676.942" y="251.55" width="80.61400000000002" height="44.6" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="717.249" y="273.85" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)"><tspan x="717.249" dy="-3.3000000000000007">addRmsNorm</tspan><tspan x="717.249" dy="14.3">kernel</tspan></text>
+</g>
+<g class="edge-label" data-from="F2" data-to="Reg" data-label="addRmsNorm
+kernel">
+  <rect x="531.41" y="251.55" width="80.61400000000002" height="44.6" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="571.717" y="273.85" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)"><tspan x="571.717" dy="-3.3000000000000007">addRmsNorm</tspan><tspan x="571.717" dy="14.3">kernel</tspan></text>
+</g>
+<g class="edge-label" data-from="Reg" data-to="N2" data-label="norm + scale
+in registers">
+  <rect x="605.676" y="435.95" width="77.05000000000001" height="44.6" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="644.201" y="458.25" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)"><tspan x="644.201" dy="-3.3000000000000007">norm + scale</tspan><tspan x="644.201" dy="14.3">in registers</tspan></text>
+</g>
+<g class="node" data-id="R1" data-label="residual
+(VRAM read)" data-shape="rectangle">
+  <rect x="201.53199999999998" y="84" width="117.532" height="53.800000000000004" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
+  <text x="260.298" y="110.9" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f"><tspan x="260.298" dy="-3.9000000000000012">residual</tspan><tspan x="260.298" dy="16.900000000000002">(VRAM read)</tspan></text>
+</g>
+<g class="node" data-id="F1" data-label="ffn_out
+(VRAM read)" data-shape="rectangle">
+  <rect x="56" y="84" width="117.532" height="53.800000000000004" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
+  <text x="114.76599999999999" y="110.9" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f"><tspan x="114.76599999999999" dy="-3.9000000000000012">ffn_out</tspan><tspan x="114.76599999999999" dy="16.900000000000002">(VRAM read)</tspan></text>
+</g>
+<g class="node" data-id="T1" data-label="temp
+(VRAM write)" data-shape="rectangle">
+  <rect x="128.766" y="254.10000000000002" width="117.532" height="53.800000000000004" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
+  <text x="187.53199999999998" y="281" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12"><tspan x="187.53199999999998" dy="-3.9000000000000012">temp</tspan><tspan x="187.53199999999998" dy="16.900000000000002">(VRAM write)</tspan></text>
+</g>
+<g class="node" data-id="T2" data-label="temp
+(VRAM read)" data-shape="rectangle">
+  <rect x="128.766" y="424.20000000000005" width="117.532" height="53.800000000000004" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
+  <text x="187.53199999999998" y="451.1" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12"><tspan x="187.53199999999998" dy="-3.9000000000000012">temp</tspan><tspan x="187.53199999999998" dy="16.900000000000002">(VRAM read)</tspan></text>
+</g>
+<g class="node" data-id="N1" data-label="normalized
+(VRAM write)" data-shape="rectangle">
+  <rect x="128.766" y="594.3000000000001" width="117.532" height="53.800000000000004" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
+  <text x="187.53199999999998" y="621.2" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="187.53199999999998" dy="-3.9000000000000012">normalized</tspan><tspan x="187.53199999999998" dy="16.900000000000002">(VRAM write)</tspan></text>
+</g>
+<g class="node" data-id="R2" data-label="residual
+(VRAM read)" data-shape="rectangle">
+  <rect x="658.6759999999999" y="154.74999999999997" width="117.532" height="53.800000000000004" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
+  <text x="717.4419999999999" y="181.64999999999998" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f"><tspan x="717.4419999999999" dy="-3.9000000000000012">residual</tspan><tspan x="717.4419999999999" dy="16.900000000000002">(VRAM read)</tspan></text>
+</g>
+<g class="node" data-id="F2" data-label="ffn_out
+(VRAM read)" data-shape="rectangle">
+  <rect x="513.144" y="154.74999999999997" width="117.532" height="53.800000000000004" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
+  <text x="571.91" y="181.64999999999998" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f"><tspan x="571.91" dy="-3.9000000000000012">ffn_out</tspan><tspan x="571.91" dy="16.900000000000002">(VRAM read)</tspan></text>
+</g>
+<g class="node" data-id="Reg" data-label="sum in registers
+(never touches VRAM)" data-shape="rectangle">
+  <rect x="557.3815" y="339.15" width="174.58899999999997" height="53.800000000000004" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="644.6759999999999" y="366.04999999999995" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="644.6759999999999" dy="-3.9000000000000012">sum in registers</tspan><tspan x="644.6759999999999" dy="16.900000000000002">(never touches VRAM)</tspan></text>
+</g>
+<g class="node" data-id="N2" data-label="normalized
+(VRAM write)" data-shape="rectangle">
+  <rect x="585.91" y="523.5500000000001" width="117.532" height="53.800000000000004" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
+  <text x="644.6759999999999" y="550.45" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="644.6759999999999" dy="-3.9000000000000012">normalized</tspan><tspan x="644.6759999999999" dy="16.900000000000002">(VRAM write)</tspan></text>
+</g>
+</svg>

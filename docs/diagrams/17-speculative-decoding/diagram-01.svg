@@ -1,0 +1,93 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 652.731 530" width="652.731" height="530" style="--bg:#FFFFFF;--fg:#27272A;background:#ffffff">
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;display=swap');
+  text { font-family: 'Inter', system-ui, sans-serif; }
+  svg {
+    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
+    --_text:          #1a1a2e;
+    --_text-sec:      var(--muted, color-mix(in srgb, #1a1a2e 60%, #ffffff));
+    --_text-muted:    var(--muted, color-mix(in srgb, #1a1a2e 40%, #ffffff));
+    --_text-faint:    color-mix(in srgb, #1a1a2e 25%, #ffffff);
+    --_line:          var(--line, color-mix(in srgb, #1a1a2e 50%, #ffffff));
+    --_arrow:         var(--accent, color-mix(in srgb, #1a1a2e 85%, #ffffff));
+    --_node-fill:     var(--surface, color-mix(in srgb, #1a1a2e 3%, #ffffff));
+    --_node-stroke:   var(--border, color-mix(in srgb, #1a1a2e 20%, #ffffff));
+    --_group-fill:    #ffffff;
+    --_group-hdr:     color-mix(in srgb, #1a1a2e 5%, #ffffff);
+    --_inner-stroke:  color-mix(in srgb, #1a1a2e 12%, #ffffff);
+    --_key-badge:     color-mix(in srgb, #1a1a2e 10%, #ffffff);
+  }
+</style>
+<defs>
+  <marker id="seq-arrow" markerWidth="8" markerHeight="5" refX="8" refY="2.5" orient="auto-start-reverse">
+    <polygon points="0 0, 8 2.5, 0 5" fill="var(--_arrow)" />
+  </marker>
+  <marker id="seq-arrow-open" markerWidth="8" markerHeight="5" refX="8" refY="2.5" orient="auto-start-reverse">
+    <polyline points="0 0, 8 2.5, 0 5" fill="none" stroke="var(--_arrow)" stroke-width="1" />
+  </marker>
+</defs>
+<g class="block" data-type="alt" data-label="target agrees (accept)">
+  <rect x="231.03499999999997" y="286" width="391.696" height="124" rx="0" ry="0" fill="none" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="231.03499999999997" y="286" width="152.95" height="18" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="237.03499999999997" y="295" font-size="11" font-weight="600" fill="var(--_text-sec)" dy="3.8499999999999996">alt [target agrees (accept)]</text>
+  <line x1="231.03499999999997" y1="362" x2="622.731" y2="362" stroke="var(--_line)" stroke-width="0.75" stroke-dasharray="6 4" />
+  <text x="239.03499999999997" y="376" font-size="11" text-anchor="start" font-weight="400" fill="var(--_text-muted)" dy="3.8499999999999996">[target disagrees (reject)]</text>
+</g>
+<g class="block" data-type="loop" data-label="for each draft token">
+  <rect x="231.03499999999997" y="188" width="391.696" height="222" rx="0" ry="0" fill="none" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="231.03499999999997" y="188" width="148.33" height="18" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="237.03499999999997" y="197" font-size="11" font-weight="600" fill="var(--_text-sec)" dy="3.8499999999999996">loop [for each draft token]</text>
+</g>
+<line class="lifeline" data-actor="Draft" x1="115.51749999999998" y1="70" x2="115.51749999999998" y2="500" stroke="var(--_line)" stroke-width="0.75" stroke-dasharray="6 4" />
+<line class="lifeline" data-actor="Target" x1="349.52349999999996" y1="70" x2="349.52349999999996" y2="500" stroke="var(--_line)" stroke-width="0.75" stroke-dasharray="6 4" />
+<line class="lifeline" data-actor="Output" x1="555.3715" y1="70" x2="555.3715" y2="500" stroke="var(--_line)" stroke-width="0.75" stroke-dasharray="6 4" />
+<g class="message" data-from="Draft" data-to="Draft" data-label="generate K=5 candidate tokens
+[&quot;the&quot;, &quot;cat&quot;, &quot;sat&quot;, &quot;on&quot;, &quot;a&quot;]" data-line-style="solid" data-arrow-head="filled" data-self="true">
+  <polyline points="115.51749999999998,90 145.51749999999998,90 145.51749999999998,110 115.51749999999998,110" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#seq-arrow)" />
+  <text x="153.51749999999998" y="100" font-size="11" text-anchor="start" font-weight="400" fill="var(--_text-muted)"><tspan x="153.51749999999998" dy="-3.3000000000000007">generate K=5 candidate tokens</tspan><tspan x="153.51749999999998" dy="14.3">[&quot;the&quot;, &quot;cat&quot;, &quot;sat&quot;, &quot;on&quot;, &quot;a&quot;]</tspan></text>
+</g>
+<g class="message" data-from="Draft" data-to="Target" data-label="proposed tokens + draft logits" data-line-style="solid" data-arrow-head="filled" data-self="false">
+  <line x1="115.51749999999998" y1="160" x2="349.52349999999996" y2="160" stroke="var(--_line)" stroke-width="1" marker-end="url(#seq-arrow)" />
+  <text x="232.52049999999997" y="150" font-size="11" text-anchor="middle" font-weight="400" fill="var(--_text-muted)" dy="3.8499999999999996">proposed tokens + draft logits</text>
+</g>
+<g class="message" data-from="Target" data-to="Target" data-label="verify token at position i" data-line-style="solid" data-arrow-head="filled" data-self="true">
+  <polyline points="349.52349999999996,228 379.52349999999996,228 379.52349999999996,248 349.52349999999996,248" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#seq-arrow)" />
+  <text x="387.52349999999996" y="238" font-size="11" text-anchor="start" font-weight="400" fill="var(--_text-muted)" dy="3.8499999999999996">verify token at position i</text>
+</g>
+<g class="message" data-from="Target" data-to="Output" data-label="emit accepted token" data-line-style="solid" data-arrow-head="filled" data-self="false">
+  <line x1="349.52349999999996" y1="326" x2="555.3715" y2="326" stroke="var(--_line)" stroke-width="1" marker-end="url(#seq-arrow)" />
+  <text x="452.4475" y="316" font-size="11" text-anchor="middle" font-weight="400" fill="var(--_text-muted)" dy="3.8499999999999996">emit accepted token</text>
+</g>
+<g class="message" data-from="Target" data-to="Output" data-label="emit target's correction token" data-line-style="solid" data-arrow-head="filled" data-self="false">
+  <line x1="349.52349999999996" y1="390" x2="555.3715" y2="390" stroke="var(--_line)" stroke-width="1" marker-end="url(#seq-arrow)" />
+  <text x="452.4475" y="380" font-size="11" text-anchor="middle" font-weight="400" fill="var(--_text-muted)" dy="3.8499999999999996">emit target&#39;s correction token</text>
+</g>
+<g class="message" data-from="Target" data-to="Draft" data-label="rollback KV cache to accepted prefix" data-line-style="solid" data-arrow-head="filled" data-self="false">
+  <line x1="349.52349999999996" y1="445" x2="115.51749999999998" y2="445" stroke="var(--_line)" stroke-width="1" marker-end="url(#seq-arrow)" />
+  <text x="232.52049999999997" y="435" font-size="11" text-anchor="middle" font-weight="400" fill="var(--_text-muted)" dy="3.8499999999999996">rollback KV cache to accepted prefix</text>
+</g>
+<g class="note" data-position="over" data-actors="Target,Output">
+  <polygon points="358.2445,398 540.6505,398 546.6505,404 546.6505,421 358.2445,421" fill="#ffffff" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <polygon points="540.6505,398 546.6505,404 540.6505,404" fill="var(--_inner-stroke)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="452.4475" y="409.5" font-size="11" text-anchor="middle" font-weight="400" fill="var(--_text-muted)" dy="3.8499999999999996">stop here, discard remaining drafts</text>
+</g>
+<g class="note" data-position="over" data-actors="Draft,Target">
+  <polygon points="126.73449999999995,453 332.30649999999997,453 338.30649999999997,459 338.30649999999997,476 126.73449999999995,476" fill="#ffffff" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <polygon points="332.30649999999997,453 338.30649999999997,459 332.30649999999997,459" fill="var(--_inner-stroke)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="232.52049999999997" y="464.5" font-size="11" text-anchor="middle" font-weight="400" fill="var(--_text-muted)" dy="3.8499999999999996">next round starts from accepted position</text>
+</g>
+<g class="actor" data-id="Draft" data-label="Draft Model
+(small, fast)" data-type="participant">
+  <rect x="30" y="30" width="171.03499999999997" height="40" rx="4" ry="4" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="115.51749999999998" y="50" font-size="13" text-anchor="middle" font-weight="500" fill="var(--_text)"><tspan x="115.51749999999998" dy="-3.9000000000000012">Draft Model</tspan><tspan x="115.51749999999998" dy="16.900000000000002">(small, fast)</tspan></text>
+</g>
+<g class="actor" data-id="Target" data-label="Target Model
+(large, accurate)" data-type="participant">
+  <rect x="241.03499999999997" y="30" width="216.97699999999995" height="40" rx="4" ry="4" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="349.52349999999996" y="50" font-size="13" text-anchor="middle" font-weight="500" fill="var(--_text)"><tspan x="349.52349999999996" dy="-3.9000000000000012">Target Model</tspan><tspan x="349.52349999999996" dy="16.900000000000002">(large, accurate)</tspan></text>
+</g>
+<g class="actor" data-id="Output" data-label="Output Stream" data-type="participant">
+  <rect x="498.01199999999994" y="30" width="114.719" height="40" rx="4" ry="4" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="555.3715" y="50" font-size="13" text-anchor="middle" font-weight="500" fill="var(--_text)" dy="4.55">Output Stream</text>
+</g>
+</svg>

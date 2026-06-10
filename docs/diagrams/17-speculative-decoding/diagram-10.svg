@@ -1,0 +1,97 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 2125.7029999999995 249.39999999999998" width="2125.7029999999995" height="249.39999999999998" style="--bg:#FFFFFF;--fg:#27272A;background:#ffffff">
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;display=swap');
+  text { font-family: 'Inter', system-ui, sans-serif; }
+  svg {
+    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
+    --_text:          #1a1a2e;
+    --_text-sec:      var(--muted, color-mix(in srgb, #1a1a2e 60%, #ffffff));
+    --_text-muted:    var(--muted, color-mix(in srgb, #1a1a2e 40%, #ffffff));
+    --_text-faint:    color-mix(in srgb, #1a1a2e 25%, #ffffff);
+    --_line:          var(--line, color-mix(in srgb, #1a1a2e 50%, #ffffff));
+    --_arrow:         var(--accent, color-mix(in srgb, #1a1a2e 85%, #ffffff));
+    --_node-fill:     var(--surface, color-mix(in srgb, #1a1a2e 3%, #ffffff));
+    --_node-stroke:   var(--border, color-mix(in srgb, #1a1a2e 20%, #ffffff));
+    --_group-fill:    #ffffff;
+    --_group-hdr:     color-mix(in srgb, #1a1a2e 5%, #ffffff);
+    --_inner-stroke:  color-mix(in srgb, #1a1a2e 12%, #ffffff);
+    --_key-badge:     color-mix(in srgb, #1a1a2e 10%, #ffffff);
+  }
+</style>
+<defs>
+  <marker id="arrowhead" markerWidth="8" markerHeight="5" refX="7" refY="2.5" orient="auto">
+    <polygon points="0 0, 8 2.5, 0 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+  <marker id="arrowhead-start" markerWidth="8" markerHeight="5" refX="1" refY="2.5" orient="auto-start-reverse">
+    <polygon points="8 0, 0 2.5, 8 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+</defs>
+<g class="subgraph" data-id="Compression" data-label="PFlash Compression (8-20x)">
+  <rect x="909.773" y="179.60000000000002" width="0" height="0" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="909.773" y="179.60000000000002" width="0" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="921.773" y="193.60000000000002" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">PFlash Compression (8-20x)</text>
+</g>
+<polyline class="edge" data-from="Prompt" data-to="Scorer" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="156.791,124.7 204.791,124.7" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Scorer" data-to="Scores" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="451.99799999999993,124.7 499.99799999999993,124.7" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Scores" data-to="Threshold" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="693.853,124.7 741.853,124.7" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Threshold" data-to="Drop" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="909.7729999999999,124.69999999999999 933.7729999999999,124.69999999999999 933.7729999999999,75.35 957.7729999999999,75.35" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Threshold" data-to="Keep" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="909.7729999999999,124.69999999999999 933.7729999999999,124.69999999999999 933.7729999999999,174.04999999999998 957.773,174.04999999999998" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Keep" data-to="Target" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="1141.9950000000001,174.05 1189.9950000000001,174.05" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Target" data-to="KVCache" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="1391.26,174.05 1439.26,174.05" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="KVCache" data-to="Decode" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="1652.3809999999999,174.05 1700.3809999999999,174.05" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Decode" data-to="Tokens" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="1910.5379999999998,174.05 1958.5379999999998,174.05" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<g class="node" data-id="Prompt" data-label="Long Prompt
+128K tokens" data-shape="rectangle">
+  <rect x="40" y="97.80000000000001" width="116.79099999999998" height="53.800000000000004" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
+  <text x="98.3955" y="124.70000000000002" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f"><tspan x="98.3955" dy="-3.9000000000000012">Long Prompt</tspan><tspan x="98.3955" dy="16.900000000000002">128K tokens</tspan></text>
+</g>
+<g class="node" data-id="Scorer" data-label="Scorer Model
+(draft model or dedicated tiny model)
+block-sparse O(n) pass" data-shape="rectangle">
+  <rect x="204.791" y="89.35" width="247.20699999999997" height="70.7" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="328.3945" y="124.69999999999999" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="328.3945" dy="-12.350000000000001">Scorer Model</tspan><tspan x="328.3945" dy="16.900000000000002">(draft model or dedicated tiny model)</tspan><tspan x="328.3945" dy="16.900000000000002">block-sparse O(n) pass</tspan></text>
+</g>
+<g class="node" data-id="Scores" data-label="&quot;Block Importance Scores
+[0.1, 0.9, 0.2, 0.8, 0.3, 0.7, ..." data-shape="rectangle">
+  <rect x="499.99799999999993" y="97.80000000000001" width="193.85500000000002" height="53.800000000000004" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="596.9254999999999" y="124.70000000000002" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="596.9254999999999" dy="-3.9000000000000012">&quot;Block Importance Scores</tspan><tspan x="596.9254999999999" dy="16.900000000000002">[0.1, 0.9, 0.2, 0.8, 0.3, 0.7, ...</tspan></text>
+</g>
+<g class="node" data-id="Threshold" data-label="Adaptive Threshold
+alpha x mean(scores)
+(default alpha=0.85)" data-shape="rectangle">
+  <rect x="741.853" y="89.35" width="167.92" height="70.7" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
+  <text x="825.813" y="124.69999999999999" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12"><tspan x="825.813" dy="-12.350000000000001">Adaptive Threshold</tspan><tspan x="825.813" dy="16.900000000000002">alpha x mean(scores)</tspan><tspan x="825.813" dy="16.900000000000002">(default alpha=0.85)</tspan></text>
+</g>
+<g class="node" data-id="Drop" data-label="Dropped Blocks
+~85-95% of prompt
+(boilerplate, padding, off-topic)" data-shape="rectangle">
+  <rect x="957.7729999999999" y="40" width="214.60299999999992" height="70.7" rx="0" ry="0" fill="#fee2e2" stroke="#ef4444" stroke-width="0.75" />
+  <text x="1065.0745" y="75.35" text-anchor="middle" font-size="13" font-weight="500" fill="#7f1d1d"><tspan x="1065.0745" dy="-12.350000000000001">Dropped Blocks</tspan><tspan x="1065.0745" dy="16.900000000000002">~85-95% of prompt</tspan><tspan x="1065.0745" dy="16.900000000000002">(boilerplate, padding, off-topic)</tspan></text>
+</g>
+<g class="node" data-id="Keep" data-label="Kept Blocks
+~5-15% of prompt
+(high-relevance context)" data-shape="rectangle">
+  <rect x="957.773" y="138.7" width="184.22199999999998" height="70.7" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="1049.884" y="174.04999999999998" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="1049.884" dy="-12.350000000000001">Kept Blocks</tspan><tspan x="1049.884" dy="16.900000000000002">~5-15% of prompt</tspan><tspan x="1049.884" dy="16.900000000000002">(high-relevance context)</tspan></text>
+</g>
+<g class="node" data-id="Target" data-label="Target Model
+prefill compressed prompt
+6-13K tokens instead of 128K" data-shape="rectangle">
+  <rect x="1189.9950000000001" y="138.7" width="201.265" height="70.7" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="1290.6275" y="174.04999999999998" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="1290.6275" dy="-12.350000000000001">Target Model</tspan><tspan x="1290.6275" dy="16.900000000000002">prefill compressed prompt</tspan><tspan x="1290.6275" dy="16.900000000000002">6-13K tokens instead of 128K</tspan></text>
+</g>
+<g class="node" data-id="KVCache" data-label="KV Cache
+(compressed representation)" data-shape="rectangle">
+  <rect x="1439.26" y="147.15" width="213.12099999999995" height="53.800000000000004" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
+  <text x="1545.8205" y="174.05" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12"><tspan x="1545.8205" dy="-3.9000000000000012">KV Cache</tspan><tspan x="1545.8205" dy="16.900000000000002">(compressed representation)</tspan></text>
+</g>
+<g class="node" data-id="Decode" data-label="DDTree Speculative Decode
+normal token generation loop" data-shape="rectangle">
+  <rect x="1700.3809999999999" y="147.15" width="210.15699999999995" height="53.800000000000004" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="1805.4595" y="174.05" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="1805.4595" dy="-3.9000000000000012">DDTree Speculative Decode</tspan><tspan x="1805.4595" dy="16.900000000000002">normal token generation loop</tspan></text>
+</g>
+<g class="node" data-id="Tokens" data-label="Output Tokens" data-shape="rectangle">
+  <rect x="1958.5379999999998" y="155.60000000000002" width="127.16499999999999" height="36.900000000000006" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
+  <text x="2022.1204999999998" y="174.05" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d" dy="4.55">Output Tokens</text>
+</g>
+</svg>

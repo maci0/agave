@@ -1,0 +1,102 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 551.568 461.00000000000006" width="551.568" height="461.00000000000006" style="--bg:#FFFFFF;--fg:#27272A;background:#ffffff">
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;display=swap');
+  text { font-family: 'Inter', system-ui, sans-serif; }
+  svg {
+    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
+    --_text:          #1a1a2e;
+    --_text-sec:      var(--muted, color-mix(in srgb, #1a1a2e 60%, #ffffff));
+    --_text-muted:    var(--muted, color-mix(in srgb, #1a1a2e 40%, #ffffff));
+    --_text-faint:    color-mix(in srgb, #1a1a2e 25%, #ffffff);
+    --_line:          var(--line, color-mix(in srgb, #1a1a2e 50%, #ffffff));
+    --_arrow:         var(--accent, color-mix(in srgb, #1a1a2e 85%, #ffffff));
+    --_node-fill:     var(--surface, color-mix(in srgb, #1a1a2e 3%, #ffffff));
+    --_node-stroke:   var(--border, color-mix(in srgb, #1a1a2e 20%, #ffffff));
+    --_group-fill:    #ffffff;
+    --_group-hdr:     color-mix(in srgb, #1a1a2e 5%, #ffffff);
+    --_inner-stroke:  color-mix(in srgb, #1a1a2e 12%, #ffffff);
+    --_key-badge:     color-mix(in srgb, #1a1a2e 10%, #ffffff);
+  }
+</style>
+<defs>
+  <marker id="arrowhead" markerWidth="8" markerHeight="5" refX="7" refY="2.5" orient="auto">
+    <polygon points="0 0, 8 2.5, 0 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+  <marker id="arrowhead-start" markerWidth="8" markerHeight="5" refX="1" refY="2.5" orient="auto-start-reverse">
+    <polygon points="8 0, 0 2.5, 8 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+</defs>
+<g class="subgraph" data-id="Depth0" data-label="Depth 0 — top tokens at position 1">
+  <rect x="99.44600000000005" y="358.75" width="0" height="0" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="99.44600000000005" y="358.75" width="0" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="111.44600000000005" y="372.75" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">Depth 0 — top tokens at position 1</text>
+</g>
+<g class="subgraph" data-id="Depth1" data-label="Depth 1 — top tokens at position 2">
+  <rect x="99.44600000000005" y="386.75" width="0" height="0" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="99.44600000000005" y="386.75" width="0" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="111.44600000000005" y="400.75" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">Depth 1 — top tokens at position 2</text>
+</g>
+<g class="subgraph" data-id="Depth2" data-label="Depth 2 — top tokens at position 3">
+  <rect x="99.44600000000005" y="414.75" width="0" height="0" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="99.44600000000005" y="414.75" width="0" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="111.44600000000005" y="428.75" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">Depth 2 — top tokens at position 3</text>
+</g>
+<polyline class="edge" data-from="Root" data-to="D0A" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="123.446,312.3 141.44600000000003,312.3 141.44600000000003,120.02083333333337 159.44600000000003,120.02083333333337" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Root" data-to="D0B" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="123.446,312.3 141.44600000000003,312.3 141.44600000000003,312.3 159.44600000000003,312.3" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Root" data-to="D0C" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="123.446,312.3 141.44600000000003,312.3 141.44600000000003,394.1 159.44600000000003,394.1" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="D0A" data-to="D1A" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="248.82000000000002,120.02083333333337 266.82000000000005,120.02083333333337 266.82000000000005,75.86666666666667 284.82000000000005,75.86666666666667" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="D0A" data-to="D1B" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="248.82000000000002,120.02083333333337 266.82000000000005,120.02083333333337 266.82000000000005,230.50000000000003 284.82000000000005,230.50000000000003" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="D0B" data-to="D1C" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="248.82000000000002,312.3 284.82000000000005,312.3" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="D1A" data-to="D2A" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="374.1940000000001,75.86666666666667 392.1940000000001,75.86666666666667 392.1940000000001,66.9 410.194,66.9" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="D1A" data-to="D2B" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="374.1940000000001,75.86666666666667 392.1940000000001,75.86666666666667 392.1940000000001,148.70000000000002 410.194,148.70000000000002" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="D1B" data-to="D2C" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="374.194,230.50000000000003 410.194,230.50000000000003" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<g class="node" data-id="Root" data-label="&quot;[prefix" data-shape="rectangle">
+  <rect x="40" y="293.85" width="83.446" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="81.723" y="312.3" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">&quot;[prefix</text>
+</g>
+<g class="node" data-id="D0A" data-label="the
+(p=0.60)" data-shape="rectangle">
+  <rect x="159.44600000000003" y="93.12083333333337" width="89.374" height="53.800000000000004" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="204.13300000000004" y="120.02083333333337" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="204.13300000000004" dy="-3.9000000000000012">the</tspan><tspan x="204.13300000000004" dy="16.900000000000002">(p=0.60)</tspan></text>
+</g>
+<g class="node" data-id="D0B" data-label="a
+(p=0.25)" data-shape="rectangle">
+  <rect x="159.44600000000003" y="285.40000000000003" width="89.374" height="53.800000000000004" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="204.13300000000004" y="312.3" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="204.13300000000004" dy="-3.9000000000000012">a</tspan><tspan x="204.13300000000004" dy="16.900000000000002">(p=0.25)</tspan></text>
+</g>
+<g class="node" data-id="D0C" data-label="an
+(p=0.10)" data-shape="rectangle">
+  <rect x="159.44600000000003" y="367.20000000000005" width="84.928" height="53.800000000000004" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="201.91000000000003" y="394.1" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="201.91000000000003" dy="-3.9000000000000012">an</tspan><tspan x="201.91000000000003" dy="16.900000000000002">(p=0.10)</tspan></text>
+</g>
+<g class="node" data-id="D1A" data-label="cat
+(p=0.55)" data-shape="rectangle">
+  <rect x="284.82000000000005" y="48.96666666666667" width="89.374" height="53.800000000000004" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
+  <text x="329.50700000000006" y="75.86666666666667" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12"><tspan x="329.50700000000006" dy="-3.9000000000000012">cat</tspan><tspan x="329.50700000000006" dy="16.900000000000002">(p=0.55)</tspan></text>
+</g>
+<g class="node" data-id="D1B" data-label="dog
+(p=0.30)" data-shape="rectangle">
+  <rect x="284.82000000000005" y="203.60000000000002" width="89.374" height="53.800000000000004" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
+  <text x="329.50700000000006" y="230.50000000000003" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12"><tspan x="329.50700000000006" dy="-3.9000000000000012">dog</tspan><tspan x="329.50700000000006" dy="16.900000000000002">(p=0.30)</tspan></text>
+</g>
+<g class="node" data-id="D1C" data-label="cat
+(p=0.60)" data-shape="rectangle">
+  <rect x="284.82000000000005" y="285.40000000000003" width="89.374" height="53.800000000000004" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
+  <text x="329.50700000000006" y="312.3" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12"><tspan x="329.50700000000006" dy="-3.9000000000000012">cat</tspan><tspan x="329.50700000000006" dy="16.900000000000002">(p=0.60)</tspan></text>
+</g>
+<g class="node" data-id="D2A" data-label="sat
+(p=0.70)" data-shape="rectangle">
+  <rect x="410.194" y="40" width="89.374" height="53.800000000000004" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
+  <text x="454.88100000000003" y="66.9" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="454.88100000000003" dy="-3.9000000000000012">sat</tspan><tspan x="454.88100000000003" dy="16.900000000000002">(p=0.70)</tspan></text>
+</g>
+<g class="node" data-id="D2B" data-label="ran
+(p=0.20)" data-shape="rectangle">
+  <rect x="410.194" y="121.80000000000001" width="89.374" height="53.800000000000004" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
+  <text x="454.88100000000003" y="148.70000000000002" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="454.88100000000003" dy="-3.9000000000000012">ran</tspan><tspan x="454.88100000000003" dy="16.900000000000002">(p=0.20)</tspan></text>
+</g>
+<g class="node" data-id="D2C" data-label="sat
+(p=0.45)" data-shape="rectangle">
+  <rect x="410.194" y="203.60000000000002" width="89.374" height="53.800000000000004" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
+  <text x="454.88100000000003" y="230.50000000000003" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="454.88100000000003" dy="-3.9000000000000012">sat</tspan><tspan x="454.88100000000003" dy="16.900000000000002">(p=0.45)</tspan></text>
+</g>
+</svg>

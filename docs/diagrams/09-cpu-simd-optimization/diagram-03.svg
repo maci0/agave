@@ -1,0 +1,102 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 755.4095 567.2" width="755.4095" height="567.2" style="--bg:#FFFFFF;--fg:#27272A;background:#ffffff">
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;display=swap');
+  text { font-family: 'Inter', system-ui, sans-serif; }
+  svg {
+    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
+    --_text:          #1a1a2e;
+    --_text-sec:      var(--muted, color-mix(in srgb, #1a1a2e 60%, #ffffff));
+    --_text-muted:    var(--muted, color-mix(in srgb, #1a1a2e 40%, #ffffff));
+    --_text-faint:    color-mix(in srgb, #1a1a2e 25%, #ffffff);
+    --_line:          var(--line, color-mix(in srgb, #1a1a2e 50%, #ffffff));
+    --_arrow:         var(--accent, color-mix(in srgb, #1a1a2e 85%, #ffffff));
+    --_node-fill:     var(--surface, color-mix(in srgb, #1a1a2e 3%, #ffffff));
+    --_node-stroke:   var(--border, color-mix(in srgb, #1a1a2e 20%, #ffffff));
+    --_group-fill:    #ffffff;
+    --_group-hdr:     color-mix(in srgb, #1a1a2e 5%, #ffffff);
+    --_inner-stroke:  color-mix(in srgb, #1a1a2e 12%, #ffffff);
+    --_key-badge:     color-mix(in srgb, #1a1a2e 10%, #ffffff);
+  }
+</style>
+<defs>
+  <marker id="arrowhead" markerWidth="8" markerHeight="5" refX="7" refY="2.5" orient="auto">
+    <polygon points="0 0, 8 2.5, 0 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+  <marker id="arrowhead-start" markerWidth="8" markerHeight="5" refX="1" refY="2.5" orient="auto-start-reverse">
+    <polygon points="8 0, 0 2.5, 8 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+</defs>
+<g class="subgraph" data-id="Unfused" data-label="Without FMA (2 instructions, 2 cycles min)">
+  <rect x="395.374" y="40" width="320.03549999999996" height="487.20000000000005" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="395.374" y="40" width="320.03549999999996" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="407.374" y="54" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">Without FMA (2 instructions, 2 cycles min)</text>
+</g>
+<g class="subgraph" data-id="Fused" data-label="With FMA — @mulAdd (1 instruction, 1 cycle)">
+  <rect x="40" y="40" width="335.374" height="300.5" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="40" y="40" width="335.374" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="52" y="54" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">With FMA — @mulAdd (1 instruction, 1 cycle)</text>
+</g>
+<polyline class="edge" data-from="u_a" data-to="mul" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="651.388,120.9 651.3879999999999,132.9 605.4971666666667,132.9 605.4971666666667,168.9" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="u_b" data-to="mul" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="524.844125,120.9 524.844125,132.9 577.6818333333333,132.9 577.6818333333333,168.9" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="mul" data-to="tmp" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="591.5895,222.70000000000002 591.5895,270.70000000000005" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="tmp" data-to="add" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="591.5895,324.5 591.5895,336.5 538.8752916666667,336.5 538.8752916666667,372.5" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="u_acc" data-to="add" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="443.464,324.5 443.464,336.5 510.0719583333334,336.5 510.0719583333334,372.5" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="add" data-to="u_out" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="524.4736250000001,426.3 524.4736250000001,474.3" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="f_a" data-to="fma" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="311.3525,120.9 311.3525,132.9 240.96025,132.9 240.96025,168.9" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="f_b" data-to="fma" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="191.7555,120.9 191.7555,168.9" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="f_acc" data-to="fma" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="88.09,120.9 88.09,132.9 142.55075000000002,132.9 142.55075000000002,168.9" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="fma" data-to="f_out" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="191.7555,222.70000000000002 191.7555,270.70000000000005" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<g class="node" data-id="u_a" data-label="a (weight)" data-shape="rectangle">
+  <rect x="603.3665" y="84" width="96.043" height="36.900000000000006" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
+  <text x="651.3879999999999" y="102.45" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f" dy="4.55">a (weight)</text>
+</g>
+<g class="node" data-id="u_b" data-label="b (input)" data-shape="rectangle">
+  <rect x="481.26862500000004" y="84" width="87.15100000000001" height="36.900000000000006" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
+  <text x="524.8441250000001" y="102.45" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f" dy="4.55">b (input)</text>
+</g>
+<g class="node" data-id="u_acc" data-label="acc" data-shape="rectangle">
+  <rect x="411.374" y="287.6" width="64.17999999999999" height="36.900000000000006" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
+  <text x="443.464" y="306.05" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f" dy="4.55">acc</text>
+</g>
+<g class="node" data-id="mul" data-label="vmulps
+1 cycle" data-shape="rectangle">
+  <rect x="549.8665" y="168.9" width="83.446" height="53.800000000000004" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="591.5894999999999" y="195.8" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="591.5894999999999" dy="-3.9000000000000012">vmulps</tspan><tspan x="591.5894999999999" dy="16.900000000000002">1 cycle</tspan></text>
+</g>
+<g class="node" data-id="tmp" data-label="tmp = a * b
+(intermediate, rounded)" data-shape="rectangle">
+  <rect x="503.55400000000003" y="270.70000000000005" width="176.07099999999997" height="53.800000000000004" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
+  <text x="591.5895" y="297.6" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12"><tspan x="591.5895" dy="-3.9000000000000012">tmp = a * b</tspan><tspan x="591.5895" dy="16.900000000000002">(intermediate, rounded)</tspan></text>
+</g>
+<g class="node" data-id="add" data-label="vaddps
+1 cycle" data-shape="rectangle">
+  <rect x="481.26862500000004" y="372.5" width="86.41" height="53.800000000000004" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="524.4736250000001" y="399.4" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="524.4736250000001" dy="-3.9000000000000012">vaddps</tspan><tspan x="524.4736250000001" dy="16.900000000000002">1 cycle</tspan></text>
+</g>
+<g class="node" data-id="u_out" data-label="acc + tmp" data-shape="rectangle">
+  <rect x="469.87575000000004" y="474.3" width="95.30199999999999" height="36.900000000000006" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
+  <text x="517.52675" y="492.75" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d" dy="4.55">acc + tmp</text>
+</g>
+<g class="node" data-id="f_a" data-label="a (weight)" data-shape="rectangle">
+  <rect x="263.331" y="84" width="96.043" height="36.900000000000006" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
+  <text x="311.3525" y="102.45" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f" dy="4.55">a (weight)</text>
+</g>
+<g class="node" data-id="f_b" data-label="b (input)" data-shape="rectangle">
+  <rect x="148.18" y="84" width="87.15100000000001" height="36.900000000000006" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
+  <text x="191.7555" y="102.45" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f" dy="4.55">b (input)</text>
+</g>
+<g class="node" data-id="f_acc" data-label="acc" data-shape="rectangle">
+  <rect x="56" y="84" width="64.17999999999999" height="36.900000000000006" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
+  <text x="88.09" y="102.45" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f" dy="4.55">acc</text>
+</g>
+<g class="node" data-id="fma" data-label="vfmadd231ps
+1 cycle, dedicated FMA unit" data-shape="rectangle">
+  <rect x="93.34600000000003" y="168.9" width="196.81899999999996" height="53.800000000000004" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="191.7555" y="195.8" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="191.7555" dy="-3.9000000000000012">vfmadd231ps</tspan><tspan x="191.7555" dy="16.900000000000002">1 cycle, dedicated FMA unit</tspan></text>
+</g>
+<g class="node" data-id="f_out" data-label="acc + a*b
+(no intermediate rounding)" data-shape="rectangle">
+  <rect x="95.19850000000002" y="270.70000000000005" width="193.11399999999998" height="53.800000000000004" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
+  <text x="191.7555" y="297.6" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="191.7555" dy="-3.9000000000000012">acc + a*b</tspan><tspan x="191.7555" dy="16.900000000000002">(no intermediate rounding)</tspan></text>
+</g>
+</svg>

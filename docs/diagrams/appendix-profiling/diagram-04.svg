@@ -1,0 +1,142 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900.1469999999999 1139.3020000000001" width="900.1469999999999" height="1139.3020000000001" style="--bg:#FFFFFF;--fg:#27272A;background:#ffffff">
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;display=swap');
+  text { font-family: 'Inter', system-ui, sans-serif; }
+  svg {
+    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
+    --_text:          #1a1a2e;
+    --_text-sec:      var(--muted, color-mix(in srgb, #1a1a2e 60%, #ffffff));
+    --_text-muted:    var(--muted, color-mix(in srgb, #1a1a2e 40%, #ffffff));
+    --_text-faint:    color-mix(in srgb, #1a1a2e 25%, #ffffff);
+    --_line:          var(--line, color-mix(in srgb, #1a1a2e 50%, #ffffff));
+    --_arrow:         var(--accent, color-mix(in srgb, #1a1a2e 85%, #ffffff));
+    --_node-fill:     var(--surface, color-mix(in srgb, #1a1a2e 3%, #ffffff));
+    --_node-stroke:   var(--border, color-mix(in srgb, #1a1a2e 20%, #ffffff));
+    --_group-fill:    #ffffff;
+    --_group-hdr:     color-mix(in srgb, #1a1a2e 5%, #ffffff);
+    --_inner-stroke:  color-mix(in srgb, #1a1a2e 12%, #ffffff);
+    --_key-badge:     color-mix(in srgb, #1a1a2e 10%, #ffffff);
+  }
+</style>
+<defs>
+  <marker id="arrowhead" markerWidth="8" markerHeight="5" refX="7" refY="2.5" orient="auto">
+    <polygon points="0 0, 8 2.5, 0 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+  <marker id="arrowhead-start" markerWidth="8" markerHeight="5" refX="1" refY="2.5" orient="auto-start-reverse">
+    <polygon points="8 0, 0 2.5, 8 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+</defs>
+<g class="subgraph" data-id="Allowed" data-label="Allowed CPU fallbacks (performance-justified)">
+  <rect x="466.842" y="302" width="0" height="0" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="466.842" y="302" width="0" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="478.842" y="316" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">Allowed CPU fallbacks (performance-justified)</text>
+</g>
+<g class="subgraph" data-id="GPU" data-label="GPU execution">
+  <rect x="494.842" y="370.3" width="0" height="0" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="494.842" y="370.3" width="0" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="506.842" y="384.3" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">GPU execution</text>
+</g>
+<polyline class="edge" data-from="Op" data-to="IsEmb" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="350.0655,76.9 350.0655,124.9" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="IsEmb" data-to="CpuEmb" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="yes" points="320.5488333333333,272.4833333333333 320.5488333333333,361.406 243.32674999999995,361.406 243.32674999999995,430.00300000000004" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="IsEmb" data-to="IsSoftmax" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="no" points="379.58216666666664,272.48333333333335 379.58216666666664,338 456.80424999999997,338 456.8042499999999,430.00300000000004" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="IsSoftmax" data-to="BelowThresh" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="yes" points="431.4865833333333,556.5913333333334 431.4865833333333,582.206 255.07975,582.206 255.07975,662.506" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="IsSoftmax" data-to="IsImpl" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="no" points="482.1219166666666,556.5913333333334 482.1219166666666,582.2060000000001 656.3675,582.2060000000001 656.3675,662.5060000000002" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="BelowThresh" data-to="CpuSoftmax" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="yes: tiny n
+dispatch overhead dominates" points="218.64708333333328,844.6693333333333 218.64708333333328,917.102 143.96699999999998,917.102 143.96699999999998,1011.702" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="BelowThresh" data-to="GpuSoftmax" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="no: large n
+GPU wins" points="291.51241666666664,844.6693333333333 291.51241666666664,917.102 366.19249999999994,917.102 366.19249999999994,1011.702" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="IsImpl" data-to="GpuKernel" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="yes" points="632.2848333333333,782.9193333333333 632.2848333333333,819.0020000000001 555.4434999999999,819.0020000000001 555.4434999999999,899.302" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="IsImpl" data-to="Panic" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="no" points="680.4501666666666,782.9193333333335 680.4501666666666,819.0020000000001 757.2914999999999,819.0020000000001 757.2914999999999,899.302" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<g class="edge-label" data-from="IsEmb" data-to="CpuEmb" data-label="yes">
+  <rect x="225.32674999999995" y="368.406" width="35.47" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="243.06174999999996" y="383.556" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">yes</text>
+</g>
+<g class="edge-label" data-from="IsEmb" data-to="IsSoftmax" data-label="no">
+  <rect x="441.80424999999997" y="345" width="29.53" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="456.56924999999995" y="360.15" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">no</text>
+</g>
+<g class="edge-label" data-from="IsSoftmax" data-to="BelowThresh" data-label="yes">
+  <rect x="237.07975" y="589.206" width="35.47" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="254.81475" y="604.356" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">yes</text>
+</g>
+<g class="edge-label" data-from="IsSoftmax" data-to="IsImpl" data-label="no">
+  <rect x="641.3675" y="589.2060000000001" width="29.53" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="656.1324999999999" y="604.3560000000001" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">no</text>
+</g>
+<g class="edge-label" data-from="BelowThresh" data-to="CpuSoftmax" data-label="yes: tiny n
+dispatch overhead dominates">
+  <rect x="65.96699999999997" y="924.102" width="155.458" height="44.6" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="143.69599999999997" y="946.4019999999999" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)"><tspan x="143.69599999999997" dy="-3.3000000000000007">yes: tiny n</tspan><tspan x="143.69599999999997" dy="14.3">dispatch overhead dominates</tspan></text>
+</g>
+<g class="edge-label" data-from="BelowThresh" data-to="GpuSoftmax" data-label="no: large n
+GPU wins">
+  <rect x="332.6924999999999" y="924.102" width="66.358" height="44.6" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="365.8714999999999" y="946.4019999999999" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)"><tspan x="365.8714999999999" dy="-3.3000000000000007">no: large n</tspan><tspan x="365.8714999999999" dy="14.3">GPU wins</tspan></text>
+</g>
+<g class="edge-label" data-from="IsImpl" data-to="GpuKernel" data-label="yes">
+  <rect x="537.4434999999999" y="826.0020000000001" width="35.47" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="555.1784999999999" y="841.152" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">yes</text>
+</g>
+<g class="edge-label" data-from="IsImpl" data-to="Panic" data-label="no">
+  <rect x="742.2914999999999" y="826.0020000000001" width="29.53" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="757.0564999999999" y="841.152" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">no</text>
+</g>
+<g class="node" data-id="Op" data-label="GPU backend op called" data-shape="rectangle">
+  <rect x="261.289" y="40" width="177.55299999999997" height="36.900000000000006" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
+  <text x="350.0655" y="58.45" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f" dy="4.55">GPU backend op called</text>
+</g>
+<g class="node" data-id="IsEmb" data-label="op == embLookup?" data-shape="diamond">
+  <polygon points="350.0655,124.89999999999999 438.6155,213.45 350.0655,302 261.5155,213.45" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="350.0655" y="213.45" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">op == embLookup?</text>
+</g>
+<g class="node" data-id="IsSoftmax" data-label="op == softmax?" data-shape="diamond">
+  <polygon points="456.8042499999999,430.00300000000004 532.7572499999999,505.956 456.8042499999999,581.909 380.85124999999994,505.956" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="456.8042499999999" y="505.956" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">op == softmax?</text>
+</g>
+<g class="node" data-id="BelowThresh" data-label="n &lt; 128
+(softmax_cpu_threshold)?" data-shape="diamond">
+  <polygon points="255.07975,662.506 364.37775,771.804 255.07975,881.102 145.78175,771.804" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="255.07975" y="771.804" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="255.07975" dy="-3.9000000000000012">n &lt; 128</tspan><tspan x="255.07975" dy="16.900000000000002">(softmax_cpu_threshold)?</tspan></text>
+</g>
+<g class="node" data-id="IsImpl" data-label="kernel
+implemented?" data-shape="diamond">
+  <polygon points="656.3675000000001,662.5060000000001 728.6155000000001,734.7540000000001 656.3675000000001,807.0020000000002 584.1195,734.7540000000001" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="656.3675000000001" y="734.7540000000001" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="656.3675000000001" dy="-3.9000000000000012">kernel</tspan><tspan x="656.3675000000001" dy="16.900000000000002">implemented?</tspan></text>
+</g>
+<g class="node" data-id="CpuEmb" data-label="CPU path
+cpuFallback().embLookup()
+Single-row dequant: ~2us
+GPU dispatch overhead: ~10us
+CPU always wins here" data-shape="rectangle">
+  <rect x="133.80224999999996" y="430.00300000000004" width="219.049" height="104.50000000000001" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
+  <text x="243.32674999999995" y="482.25300000000004" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="243.32674999999995" dy="-29.250000000000004">CPU path</tspan><tspan x="243.32674999999995" dy="16.900000000000002">cpuFallback().embLookup()</tspan><tspan x="243.32674999999995" dy="16.900000000000002">Single-row dequant: ~2us</tspan><tspan x="243.32674999999995" dy="16.900000000000002">GPU dispatch overhead: ~10us</tspan><tspan x="243.32674999999995" dy="16.900000000000002">CPU always wins here</tspan></text>
+</g>
+<g class="node" data-id="CpuSoftmax" data-label="CPU path
+cpuFallback().softmax()
+CPU SIMD: ~2us for n=128
+vs GPU dispatch: ~10us base" data-shape="rectangle">
+  <rect x="40" y="1011.702" width="207.934" height="87.60000000000001" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
+  <text x="143.96699999999998" y="1055.502" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="143.96699999999998" dy="-20.8">CPU path</tspan><tspan x="143.96699999999998" dy="16.900000000000002">cpuFallback().softmax()</tspan><tspan x="143.96699999999998" dy="16.900000000000002">CPU SIMD: ~2us for n=128</tspan><tspan x="143.96699999999998" dy="16.900000000000002">vs GPU dispatch: ~10us base</tspan></text>
+</g>
+<g class="node" data-id="GpuSoftmax" data-label="GPU path
+dispatch softmax kernel
+Worth it for n&gt;=128
+(CPU: ~15us, GPU: ~3us)" data-shape="rectangle">
+  <rect x="275.93399999999997" y="1011.702" width="180.51699999999997" height="87.60000000000001" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="366.19249999999994" y="1055.502" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="366.19249999999994" dy="-20.8">GPU path</tspan><tspan x="366.19249999999994" dy="16.900000000000002">dispatch softmax kernel</tspan><tspan x="366.19249999999994" dy="16.900000000000002">Worth it for n&gt;=128</tspan><tspan x="366.19249999999994" dy="16.900000000000002">(CPU: ~15us, GPU: ~3us)</tspan></text>
+</g>
+<g class="node" data-id="GpuKernel" data-label="GPU path
+dispatch kernel
+normal execution" data-shape="rectangle">
+  <rect x="484.4509999999999" y="899.302" width="141.985" height="70.7" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="555.4434999999999" y="934.652" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="555.4434999999999" dy="-12.350000000000001">GPU path</tspan><tspan x="555.4434999999999" dy="16.900000000000002">dispatch kernel</tspan><tspan x="555.4434999999999" dy="16.900000000000002">normal execution</tspan></text>
+</g>
+<g class="node" data-id="Panic" data-label="@panic
+'Metal X not implemented
+use --backend cpu or
+convert to supported format'
+user sees error immediately" data-shape="rectangle">
+  <rect x="654.4359999999999" y="899.302" width="205.71099999999996" height="104.50000000000001" rx="0" ry="0" fill="#fee2e2" stroke="#ef4444" stroke-width="0.75" />
+  <text x="757.2914999999999" y="951.552" text-anchor="middle" font-size="13" font-weight="500" fill="#7f1d1d"><tspan x="757.2914999999999" dy="-29.250000000000004">@panic</tspan><tspan x="757.2914999999999" dy="16.900000000000002">&#39;Metal X not implemented</tspan><tspan x="757.2914999999999" dy="16.900000000000002">use --backend cpu or</tspan><tspan x="757.2914999999999" dy="16.900000000000002">convert to supported format&#39;</tspan><tspan x="757.2914999999999" dy="16.900000000000002">user sees error immediately</tspan></text>
+</g>
+</svg>

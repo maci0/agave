@@ -1,0 +1,105 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 797.7429999999999 875.64" width="797.7429999999999" height="875.64" style="--bg:#FFFFFF;--fg:#27272A;background:#ffffff">
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;display=swap');
+  text { font-family: 'Inter', system-ui, sans-serif; }
+  svg {
+    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
+    --_text:          #1a1a2e;
+    --_text-sec:      var(--muted, color-mix(in srgb, #1a1a2e 60%, #ffffff));
+    --_text-muted:    var(--muted, color-mix(in srgb, #1a1a2e 40%, #ffffff));
+    --_text-faint:    color-mix(in srgb, #1a1a2e 25%, #ffffff);
+    --_line:          var(--line, color-mix(in srgb, #1a1a2e 50%, #ffffff));
+    --_arrow:         var(--accent, color-mix(in srgb, #1a1a2e 85%, #ffffff));
+    --_node-fill:     var(--surface, color-mix(in srgb, #1a1a2e 3%, #ffffff));
+    --_node-stroke:   var(--border, color-mix(in srgb, #1a1a2e 20%, #ffffff));
+    --_group-fill:    #ffffff;
+    --_group-hdr:     color-mix(in srgb, #1a1a2e 5%, #ffffff);
+    --_inner-stroke:  color-mix(in srgb, #1a1a2e 12%, #ffffff);
+    --_key-badge:     color-mix(in srgb, #1a1a2e 10%, #ffffff);
+  }
+</style>
+<defs>
+  <marker id="arrowhead" markerWidth="8" markerHeight="5" refX="7" refY="2.5" orient="auto">
+    <polygon points="0 0, 8 2.5, 0 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+  <marker id="arrowhead-start" markerWidth="8" markerHeight="5" refX="1" refY="2.5" orient="auto-start-reverse">
+    <polygon points="8 0, 0 2.5, 8 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+</defs>
+<g class="subgraph" data-id="Attention" data-label="Transformer Attention (O(n) per token)">
+  <rect x="314.90600000000006" y="50.039999999999964" width="320.99899999999997" height="317.40000000000003" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="314.90600000000006" y="50.039999999999964" width="320.99899999999997" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="326.90600000000006" y="64.03999999999996" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">Transformer Attention (O(n) per token)</text>
+</g>
+<g class="subgraph" data-id="SSM" data-label="SSM Recurrence (O(1) per token)">
+  <rect x="426.37" y="416.43999999999994" width="331.373" height="419.20000000000005" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="426.37" y="416.43999999999994" width="331.373" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="438.37" y="430.43999999999994" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">SSM Recurrence (O(1) per token)</text>
+</g>
+<polyline class="edge" data-from="Past100K" data-to="KVCache" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="266.906,217.08999999999995 302.90600000000006,217.08999999999995 302.90600000000006,40.039999999999964 553.729,40.039999999999964 565.760625,50.039999999999964 565.760625,94.03999999999996" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Past100K" data-to="State" data-style="dotted" data-arrow-start="false" data-arrow-end="true" data-label="compressed into" points="266.906,229.38999999999993 278.906,229.38999999999993 278.906,406.43999999999994 658.8945000000001,406.43999999999994 658.8945,416.43999999999994 658.8945,460.43999999999994" fill="none" stroke="var(--_line)" stroke-width="1" stroke-dasharray="4 4" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="KVCache" data-to="Scores" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="565.760625,147.83999999999997 565.760625,159.83999999999997 495.5499166666667,159.83999999999997 495.5499166666667,195.83999999999997" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="QVec" data-to="Scores" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="395.22950000000003,147.83999999999997 395.22950000000003,159.83999999999997 453.40858333333335,159.83999999999997 453.40858333333335,195.83999999999997" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Scores" data-to="AttnOut" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="474.47925000000004,249.64 474.4792500000001,297.64" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="State" data-to="Decay" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="658.8945,514.24 658.8945,526.24 586.8312916666667,526.24 586.8312916666667,562.24" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="NewTok" data-to="Decay" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="495.20799999999997,514.24 495.20799999999997,526.24 543.2079583333333,526.24 543.2079583333333,562.24" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Decay" data-to="Update" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="565.019625,616.04 565.019625,664.04" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Update" data-to="Read" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="565.019625,717.8399999999999 565.019625,765.8399999999999" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<g class="edge-label" data-from="Past100K" data-to="State" data-label="compressed into">
+  <rect x="286.906" y="390.43999999999994" width="95.46400000000003" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="334.63800000000003" y="405.5899999999999" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">compressed into</text>
+</g>
+<g class="node" data-id="Past100K" data-label="100K past tokens" data-shape="rectangle">
+  <rect x="128.626" y="204.78999999999994" width="138.28" height="36.900000000000006" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
+  <text x="197.76600000000002" y="223.23999999999995" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f" dy="4.55">100K past tokens</text>
+</g>
+<g class="node" data-id="Both" data-label="Both" data-shape="rectangle">
+  <rect x="40" y="40" width="68.626" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="74.313" y="58.45" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">Both</text>
+</g>
+<g class="node" data-id="KVCache" data-label="KV Cache
+(all past tokens)" data-shape="rectangle">
+  <rect x="499.584625" y="94.03999999999996" width="132.35199999999998" height="53.800000000000004" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
+  <text x="565.760625" y="120.93999999999997" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f"><tspan x="565.760625" dy="-3.9000000000000012">KV Cache</tspan><tspan x="565.760625" dy="16.900000000000002">(all past tokens)</tspan></text>
+</g>
+<g class="node" data-id="QVec" data-label="Query vector
+(current token)" data-shape="rectangle">
+  <rect x="330.90600000000006" y="94.03999999999996" width="128.647" height="53.800000000000004" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
+  <text x="395.22950000000003" y="120.93999999999997" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f"><tspan x="395.22950000000003" dy="-3.9000000000000012">Query vector</tspan><tspan x="395.22950000000003" dy="16.900000000000002">(current token)</tspan></text>
+</g>
+<g class="node" data-id="Scores" data-label="Dot products
+with every key" data-shape="rectangle">
+  <rect x="411.26725000000005" y="195.83999999999997" width="126.424" height="53.800000000000004" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="474.47925000000004" y="222.73999999999998" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="474.47925000000004" dy="-3.9000000000000012">Dot products</tspan><tspan x="474.47925000000004" dy="16.900000000000002">with every key</tspan></text>
+</g>
+<g class="node" data-id="AttnOut" data-label="Weighted sum
+of all values" data-shape="rectangle">
+  <rect x="413.49025000000006" y="297.64" width="121.978" height="53.800000000000004" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
+  <text x="474.47925000000004" y="324.53999999999996" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="474.47925000000004" dy="-3.9000000000000012">Weighted sum</tspan><tspan x="474.47925000000004" dy="16.900000000000002">of all values</tspan></text>
+</g>
+<g class="node" data-id="State" data-label="State matrix S
+(fixed size, ~1,024 KB)" data-shape="rectangle">
+  <rect x="576.046" y="460.43999999999994" width="165.697" height="53.800000000000004" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
+  <text x="658.8945000000001" y="487.3399999999999" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f"><tspan x="658.8945000000001" dy="-3.9000000000000012">State matrix S</tspan><tspan x="658.8945000000001" dy="16.900000000000002">(fixed size, ~1,024 KB)</tspan></text>
+</g>
+<g class="node" data-id="NewTok" data-label="&quot;New token
+x[t" data-shape="rectangle">
+  <rect x="442.37" y="460.43999999999994" width="105.676" height="53.800000000000004" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="495.208" y="487.3399999999999" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="495.208" dy="-3.9000000000000012">&quot;New token</tspan><tspan x="495.208" dy="16.900000000000002">x[t</tspan></text>
+</g>
+<g class="node" data-id="Decay" data-label="Decay old state
+S *= exp(a * dt)" data-shape="rectangle">
+  <rect x="499.584625" y="562.24" width="130.87" height="53.800000000000004" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
+  <text x="565.019625" y="589.14" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12"><tspan x="565.019625" dy="-3.9000000000000012">Decay old state</tspan><tspan x="565.019625" dy="16.900000000000002">S *= exp(a * dt)</tspan></text>
+</g>
+<g class="node" data-id="Update" data-label="Write new info
+S += outer(v, k)" data-shape="rectangle">
+  <rect x="512.72775" y="664.04" width="128.647" height="53.800000000000004" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="577.05125" y="690.9399999999999" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="577.05125" dy="-3.9000000000000012">Write new info</tspan><tspan x="577.05125" dy="16.900000000000002">S += outer(v, k)</tspan></text>
+</g>
+<g class="node" data-id="Read" data-label="Read via query
+out = S @ q" data-shape="rectangle">
+  <rect x="499.584625" y="765.8399999999999" width="130.87" height="53.800000000000004" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
+  <text x="565.019625" y="792.7399999999999" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="565.019625" dy="-3.9000000000000012">Read via query</tspan><tspan x="565.019625" dy="16.900000000000002">out = S @ q</tspan></text>
+</g>
+</svg>

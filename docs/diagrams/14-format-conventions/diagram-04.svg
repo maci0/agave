@@ -1,0 +1,82 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 437.66350000000006 507.49999999999994" width="437.66350000000006" height="507.49999999999994" style="--bg:#FFFFFF;--fg:#27272A;background:#ffffff">
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;display=swap');
+  text { font-family: 'Inter', system-ui, sans-serif; }
+  svg {
+    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
+    --_text:          #1a1a2e;
+    --_text-sec:      var(--muted, color-mix(in srgb, #1a1a2e 60%, #ffffff));
+    --_text-muted:    var(--muted, color-mix(in srgb, #1a1a2e 40%, #ffffff));
+    --_text-faint:    color-mix(in srgb, #1a1a2e 25%, #ffffff);
+    --_line:          var(--line, color-mix(in srgb, #1a1a2e 50%, #ffffff));
+    --_arrow:         var(--accent, color-mix(in srgb, #1a1a2e 85%, #ffffff));
+    --_node-fill:     var(--surface, color-mix(in srgb, #1a1a2e 3%, #ffffff));
+    --_node-stroke:   var(--border, color-mix(in srgb, #1a1a2e 20%, #ffffff));
+    --_group-fill:    #ffffff;
+    --_group-hdr:     color-mix(in srgb, #1a1a2e 5%, #ffffff);
+    --_inner-stroke:  color-mix(in srgb, #1a1a2e 12%, #ffffff);
+    --_key-badge:     color-mix(in srgb, #1a1a2e 10%, #ffffff);
+  }
+</style>
+<defs>
+  <marker id="arrowhead" markerWidth="8" markerHeight="5" refX="7" refY="2.5" orient="auto">
+    <polygon points="0 0, 8 2.5, 0 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+  <marker id="arrowhead-start" markerWidth="8" markerHeight="5" refX="1" refY="2.5" orient="auto-start-reverse">
+    <polygon points="8 0, 0 2.5, 8 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+</defs>
+<g class="subgraph" data-id="ST" data-label="SafeTensors path">
+  <rect x="201.4635" y="60.3" width="0" height="0" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="201.4635" y="60.3" width="0" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="213.4635" y="74.3" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">SafeTensors path</text>
+</g>
+<g class="subgraph" data-id="GG" data-label="GGUF path">
+  <rect x="229.4635" y="60.3" width="0" height="0" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="229.4635" y="60.3" width="0" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="241.4635" y="74.3" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">GGUF path</text>
+</g>
+<polyline class="edge" data-from="ST_Raw" data-to="ST_Conv" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="is_safetensors = true" points="113.9565,110.7 113.9565,227" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="ST_Conv" data-to="ST_Use" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="113.9565,297.7 113.9565,345.7" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="GG_Pre" data-to="GG_Use" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="no conversion needed" points="297.03100000000006,179 297.03100000000006,345.7" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="ST_Use" data-to="Decay" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="113.9565,382.6 113.9565,406.6 205.49375000000003,406.6 205.49375000000003,430.59999999999997" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="GG_Use" data-to="Decay" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="297.03100000000006,382.6 297.03100000000006,406.6 205.49375000000003,406.6 205.49375000000003,430.59999999999997" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<g class="edge-label" data-from="ST_Raw" data-to="ST_Conv" data-label="is_safetensors = true">
+  <rect x="54.956500000000005" y="153.7" width="117.44200000000004" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="113.67750000000002" y="168.85" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">is_safetensors = true</text>
+</g>
+<g class="edge-label" data-from="GG_Pre" data-to="GG_Use" data-label="no conversion needed">
+  <rect x="235.0310000000001" y="272.4" width="123.38200000000002" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="296.7220000000001" y="287.54999999999995" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">no conversion needed</text>
+</g>
+<g class="node" data-id="ST_Raw" data-label="A_log tensor
+raw log value
+(e.g. -3.2)" data-shape="rectangle">
+  <rect x="54.4495" y="40" width="119.014" height="70.7" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
+  <text x="113.9565" y="75.35" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f"><tspan x="113.9565" dy="-12.350000000000001">A_log tensor</tspan><tspan x="113.9565" dy="16.900000000000002">raw log value</tspan><tspan x="113.9565" dy="16.900000000000002">(e.g. -3.2)</tspan></text>
+</g>
+<g class="node" data-id="ST_Conv" data-label="init() conversion
+-exp(A_log)
+once at model load" data-shape="rectangle">
+  <rect x="40" y="227" width="147.913" height="70.7" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
+  <text x="113.9565" y="262.35" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12"><tspan x="113.9565" dy="-12.350000000000001">init() conversion</tspan><tspan x="113.9565" dy="16.900000000000002">-exp(A_log)</tspan><tspan x="113.9565" dy="16.900000000000002">once at model load</tspan></text>
+</g>
+<g class="node" data-id="ST_Use" data-label="&quot;ssm_a[h" data-shape="rectangle">
+  <rect x="66.30550000000001" y="345.7" width="95.30199999999999" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="113.9565" y="364.15" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">&quot;ssm_a[h</text>
+</g>
+<g class="node" data-id="GG_Pre" data-label="A_log tensor
+pre-converted by llama.cpp
+-exp(A_log) on disk" data-shape="rectangle">
+  <rect x="196.39850000000004" y="108.3" width="201.26500000000001" height="70.7" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
+  <text x="297.03100000000006" y="143.65" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f"><tspan x="297.03100000000006" dy="-12.350000000000001">A_log tensor</tspan><tspan x="297.03100000000006" dy="16.900000000000002">pre-converted by llama.cpp</tspan><tspan x="297.03100000000006" dy="16.900000000000002">-exp(A_log) on disk</tspan></text>
+</g>
+<g class="node" data-id="GG_Use" data-label="&quot;ssm_a[h" data-shape="rectangle">
+  <rect x="249.38000000000005" y="345.7" width="95.30199999999999" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="297.03100000000006" y="364.15" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">&quot;ssm_a[h</text>
+</g>
+<g class="node" data-id="Decay" data-label="&quot;decay = ssm_a[h" data-shape="rectangle">
+  <rect x="133.38975000000005" y="430.59999999999997" width="144.20799999999997" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="205.49375000000003" y="449.04999999999995" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">&quot;decay = ssm_a[h</text>
+</g>
+</svg>

@@ -1,0 +1,128 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 481.18549999999993 1340.0999999999997" width="481.18549999999993" height="1340.0999999999997" style="--bg:#FFFFFF;--fg:#27272A;background:#ffffff">
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;display=swap');
+  text { font-family: 'Inter', system-ui, sans-serif; }
+  svg {
+    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
+    --_text:          #1a1a2e;
+    --_text-sec:      var(--muted, color-mix(in srgb, #1a1a2e 60%, #ffffff));
+    --_text-muted:    var(--muted, color-mix(in srgb, #1a1a2e 40%, #ffffff));
+    --_text-faint:    color-mix(in srgb, #1a1a2e 25%, #ffffff);
+    --_line:          var(--line, color-mix(in srgb, #1a1a2e 50%, #ffffff));
+    --_arrow:         var(--accent, color-mix(in srgb, #1a1a2e 85%, #ffffff));
+    --_node-fill:     var(--surface, color-mix(in srgb, #1a1a2e 3%, #ffffff));
+    --_node-stroke:   var(--border, color-mix(in srgb, #1a1a2e 20%, #ffffff));
+    --_group-fill:    #ffffff;
+    --_group-hdr:     color-mix(in srgb, #1a1a2e 5%, #ffffff);
+    --_inner-stroke:  color-mix(in srgb, #1a1a2e 12%, #ffffff);
+    --_key-badge:     color-mix(in srgb, #1a1a2e 10%, #ffffff);
+  }
+</style>
+<defs>
+  <marker id="arrowhead" markerWidth="8" markerHeight="5" refX="7" refY="2.5" orient="auto">
+    <polygon points="0 0, 8 2.5, 0 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+  <marker id="arrowhead-start" markerWidth="8" markerHeight="5" refX="1" refY="2.5" orient="auto-start-reverse">
+    <polygon points="8 0, 0 2.5, 8 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+</defs>
+<g class="subgraph" data-id="Params" data-label="Control Parameters">
+  <rect x="219.46308333333326" y="263.90000000000003" width="0" height="0" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="219.46308333333326" y="263.90000000000003" width="0" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="231.46308333333326" y="277.90000000000003" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">Control Parameters</text>
+</g>
+<g class="subgraph" data-id="State" data-label="Running State">
+  <rect x="247.46308333333326" y="263.90000000000003" width="0" height="0" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="247.46308333333326" y="263.90000000000003" width="0" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="259.46308333333326" y="277.90000000000003" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">Running State</text>
+</g>
+<polyline class="edge" data-from="Logits" data-to="Trunc" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="166.1219999999999,791.0999999999999 166.1219999999999,839.0999999999999" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Trunc" data-to="Softmax" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="166.1219999999999,892.8999999999999 166.12199999999993,940.8999999999999" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Softmax" data-to="Sample" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="166.12199999999993,994.6999999999998 166.12199999999993,1042.6999999999998" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Sample" data-to="Surprise" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="166.12199999999993,1096.4999999999998 166.12199999999993,1144.4999999999998" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Surprise" data-to="Error" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="166.12199999999993,1198.2999999999997 166.12199999999993,1246.2999999999997" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Error" data-to="Update" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="124.69774999999993,1246.2999999999997 124.69774999999993,1234.2999999999997 40.039999999999935,1234.2999999999997 40.039999999999935,555.2 82.75133333333326,555.2 82.75133333333326,263.90000000000003" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Update" data-to="NextK" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="116.76558333333327,263.90000000000003 116.76558333333327,555.2 114.5664999999999,555.2 114.5664999999999,555.2 138.75283333333326,555.2 138.75283333333326,567.2" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="NextK" data-to="Logits" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="next token" points="166.12199999999993,621 166.1219999999999,737.3" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Update" data-to="Mu" data-style="dotted" data-arrow-start="false" data-arrow-end="true" data-label="adjusts" points="150.77983333333327,263.90000000000003 150.77983333333327,299.90000000000003 217.6774999999999,299.90000000000003 217.6774999999999,380.20000000000005" fill="none" stroke="var(--_line)" stroke-width="1" stroke-dasharray="4 4" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Mu" data-to="NextK" data-style="dotted" data-arrow-start="false" data-arrow-end="true" data-label="drives" points="217.6774999999999,450.90000000000003 217.6774999999999,555.2 193.49116666666657,555.2 193.49116666666657,567.2" fill="none" stroke="var(--_line)" stroke-width="1" stroke-dasharray="4 4" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Tau" data-to="Error" data-style="dotted" data-arrow-start="false" data-arrow-end="true" data-label="anchors" points="365.3764999999999,1153.9999999999998 365.3764999999999,1234.2999999999997 207.54624999999993,1234.2999999999997 207.54624999999993,1246.2999999999997" fill="none" stroke="var(--_line)" stroke-width="1" stroke-dasharray="4 4" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Eta" data-to="Update" data-style="dotted" data-arrow-start="false" data-arrow-end="true" data-label="scales" points="116.76558333333327,93.80000000000001 116.76558333333327,210.1" fill="none" stroke="var(--_line)" stroke-width="1" stroke-dasharray="4 4" marker-end="url(#arrowhead)" />
+<g class="edge-label" data-from="NextK" data-to="Logits" data-label="next token">
+  <rect x="133.12199999999993" y="664" width="65.764" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="166.00399999999993" y="679.15" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">next token</text>
+</g>
+<g class="edge-label" data-from="Update" data-to="Mu" data-label="adjusts">
+  <rect x="191.1774999999999" y="306.90000000000003" width="52.102000000000004" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="217.22849999999988" y="322.05" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">adjusts</text>
+</g>
+<g class="edge-label" data-from="Mu" data-to="NextK" data-label="drives">
+  <rect x="193.1774999999999" y="493.90000000000003" width="48.538000000000004" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="217.4464999999999" y="509.05" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">drives</text>
+</g>
+<g class="edge-label" data-from="Tau" data-to="Error" data-label="anchors">
+  <rect x="335.8764999999999" y="1196.9999999999998" width="58.042" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="364.8974999999999" y="1212.1499999999999" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">anchors</text>
+</g>
+<g class="edge-label" data-from="Eta" data-to="Update" data-label="scales">
+  <rect x="91.76558333333327" y="136.8" width="49.726000000000006" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="116.62858333333327" y="151.95000000000002" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">scales</text>
+</g>
+<g class="node" data-id="Logits" data-label="Raw Logits
+one score per vocab token" data-shape="rectangle">
+  <rect x="66.60099999999994" y="737.3" width="199.04199999999994" height="53.800000000000004" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
+  <text x="166.1219999999999" y="764.1999999999999" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f"><tspan x="166.1219999999999" dy="-3.9000000000000012">Raw Logits</tspan><tspan x="166.1219999999999" dy="16.900000000000002">one score per vocab token</tspan></text>
+</g>
+<g class="node" data-id="Trunc" data-label="Truncate to top-k candidates
+(Mirostat controls k dynamically)" data-shape="rectangle">
+  <rect x="51.039999999999935" y="839.0999999999999" width="230.16399999999996" height="53.800000000000004" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="166.1219999999999" y="865.9999999999999" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="166.1219999999999" dy="-3.9000000000000012">Truncate to top-k candidates</tspan><tspan x="166.1219999999999" dy="16.900000000000002">(Mirostat controls k dynamically)</tspan></text>
+</g>
+<g class="node" data-id="Softmax" data-label="Softmax
+compute probabilities" data-shape="rectangle">
+  <rect x="83.27349999999993" y="940.8999999999999" width="165.697" height="53.800000000000004" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="166.12199999999993" y="967.7999999999998" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="166.12199999999993" dy="-3.9000000000000012">Softmax</tspan><tspan x="166.12199999999993" dy="16.900000000000002">compute probabilities</tspan></text>
+</g>
+<g class="node" data-id="Sample" data-label="Weighted Random Sample
+pick next token" data-shape="rectangle">
+  <rect x="70.67649999999995" y="1042.6999999999998" width="190.89099999999996" height="53.800000000000004" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="166.12199999999993" y="1069.6" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="166.12199999999993" dy="-3.9000000000000012">Weighted Random Sample</tspan><tspan x="166.12199999999993" dy="16.900000000000002">pick next token</tspan></text>
+</g>
+<g class="node" data-id="Surprise" data-label="Measure Surprise
+-log2(prob of sampled token)" data-shape="rectangle">
+  <rect x="63.636999999999944" y="1144.4999999999998" width="204.96999999999997" height="53.800000000000004" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
+  <text x="166.12199999999993" y="1171.3999999999999" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12"><tspan x="166.12199999999993" dy="-3.9000000000000012">Measure Surprise</tspan><tspan x="166.12199999999993" dy="16.900000000000002">-log2(prob of sampled token)</tspan></text>
+</g>
+<g class="node" data-id="Error" data-label="Error = surprise - tau
+tau = target entropy" data-shape="rectangle">
+  <rect x="83.27349999999993" y="1246.2999999999997" width="165.697" height="53.800000000000004" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
+  <text x="166.12199999999993" y="1273.1999999999998" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12"><tspan x="166.12199999999993" dy="-3.9000000000000012">Error = surprise - tau</tspan><tspan x="166.12199999999993" dy="16.900000000000002">tau = target entropy</tspan></text>
+</g>
+<g class="node" data-id="Update" data-label="Update mu
+mu -= eta * error" data-shape="rectangle">
+  <rect x="48.73708333333326" y="210.1" width="136.05700000000002" height="53.800000000000004" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
+  <text x="116.76558333333327" y="237" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12"><tspan x="116.76558333333327" dy="-3.9000000000000012">Update mu</tspan><tspan x="116.76558333333327" dy="16.900000000000002">mu -= eta * error</tspan></text>
+</g>
+<g class="node" data-id="NextK" data-label="Set next k
+based on updated mu" data-shape="rectangle">
+  <rect x="84.01449999999994" y="567.2" width="164.21499999999997" height="53.800000000000004" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
+  <text x="166.12199999999993" y="594.1" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12"><tspan x="166.12199999999993" dy="-3.9000000000000012">Set next k</tspan><tspan x="166.12199999999993" dy="16.900000000000002">based on updated mu</tspan></text>
+</g>
+<g class="node" data-id="Tau" data-label="tau (target entropy)
+lower = focused
+higher = creative" data-shape="rectangle">
+  <rect x="289.5674999999999" y="1083.2999999999997" width="151.618" height="70.7" rx="0" ry="0" fill="#f3e8ff" stroke="#9333ea" stroke-width="0.75" />
+  <text x="365.37649999999985" y="1118.6499999999996" text-anchor="middle" font-size="13" font-weight="500" fill="#581c87"><tspan x="365.37649999999985" dy="-12.350000000000001">tau (target entropy)</tspan><tspan x="365.37649999999985" dy="16.900000000000002">lower = focused</tspan><tspan x="365.37649999999985" dy="16.900000000000002">higher = creative</tspan></text>
+</g>
+<g class="node" data-id="Eta" data-label="eta (learning rate)
+how fast mu adapts" data-shape="rectangle">
+  <rect x="42.06808333333325" y="40" width="149.395" height="53.800000000000004" rx="0" ry="0" fill="#f3e8ff" stroke="#9333ea" stroke-width="0.75" />
+  <text x="116.76558333333325" y="66.9" text-anchor="middle" font-size="13" font-weight="500" fill="#581c87"><tspan x="116.76558333333325" dy="-3.9000000000000012">eta (learning rate)</tspan><tspan x="116.76558333333325" dy="16.900000000000002">how fast mu adapts</tspan></text>
+</g>
+<g class="node" data-id="Mu" data-label="mu
+current entropy estimate
+starts at 2 * tau" data-shape="rectangle">
+  <rect x="125.5664999999999" y="380.20000000000005" width="184.22199999999998" height="70.7" rx="0" ry="0" fill="#f3e8ff" stroke="#9333ea" stroke-width="0.75" />
+  <text x="217.6774999999999" y="415.55000000000007" text-anchor="middle" font-size="13" font-weight="500" fill="#581c87"><tspan x="217.6774999999999" dy="-12.350000000000001">mu</tspan><tspan x="217.6774999999999" dy="16.900000000000002">current entropy estimate</tspan><tspan x="217.6774999999999" dy="16.900000000000002">starts at 2 * tau</tspan></text>
+</g>
+</svg>

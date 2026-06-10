@@ -1,0 +1,97 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 497.18499999999995 491.20000000000005" width="497.18499999999995" height="491.20000000000005" style="--bg:#FFFFFF;--fg:#27272A;background:#ffffff">
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;display=swap');
+  text { font-family: 'Inter', system-ui, sans-serif; }
+  svg {
+    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
+    --_text:          #1a1a2e;
+    --_text-sec:      var(--muted, color-mix(in srgb, #1a1a2e 60%, #ffffff));
+    --_text-muted:    var(--muted, color-mix(in srgb, #1a1a2e 40%, #ffffff));
+    --_text-faint:    color-mix(in srgb, #1a1a2e 25%, #ffffff);
+    --_line:          var(--line, color-mix(in srgb, #1a1a2e 50%, #ffffff));
+    --_arrow:         var(--accent, color-mix(in srgb, #1a1a2e 85%, #ffffff));
+    --_node-fill:     var(--surface, color-mix(in srgb, #1a1a2e 3%, #ffffff));
+    --_node-stroke:   var(--border, color-mix(in srgb, #1a1a2e 20%, #ffffff));
+    --_group-fill:    #ffffff;
+    --_group-hdr:     color-mix(in srgb, #1a1a2e 5%, #ffffff);
+    --_inner-stroke:  color-mix(in srgb, #1a1a2e 12%, #ffffff);
+    --_key-badge:     color-mix(in srgb, #1a1a2e 10%, #ffffff);
+  }
+</style>
+<defs>
+  <marker id="arrowhead" markerWidth="8" markerHeight="5" refX="7" refY="2.5" orient="auto">
+    <polygon points="0 0, 8 2.5, 0 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+  <marker id="arrowhead-start" markerWidth="8" markerHeight="5" refX="1" refY="2.5" orient="auto-start-reverse">
+    <polygon points="8 0, 0 2.5, 8 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+</defs>
+<g class="subgraph" data-id="Baseline" data-label="No features
+39s total">
+  <rect x="40" y="367.20000000000005" width="0" height="0" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="40" y="367.20000000000005" width="0" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="52" y="381.20000000000005" font-size="12" font-weight="600" fill="var(--_text-sec)"><tspan x="52" dy="-3.6000000000000014">No features</tspan><tspan x="52" dy="15.600000000000001">39s total</tspan></text>
+</g>
+<g class="subgraph" data-id="PFlashOnly" data-label="PFlash only
+34s total">
+  <rect x="40" y="395.20000000000005" width="0" height="0" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="40" y="395.20000000000005" width="0" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="52" y="409.20000000000005" font-size="12" font-weight="600" fill="var(--_text-sec)"><tspan x="52" dy="-3.6000000000000014">PFlash only</tspan><tspan x="52" dy="15.600000000000001">34s total</tspan></text>
+</g>
+<g class="subgraph" data-id="DDTreeOnly" data-label="DDTree only
+20s total">
+  <rect x="40" y="423.20000000000005" width="0" height="0" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="40" y="423.20000000000005" width="0" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="52" y="437.20000000000005" font-size="12" font-weight="600" fill="var(--_text-sec)"><tspan x="52" dy="-3.6000000000000014">DDTree only</tspan><tspan x="52" dy="15.600000000000001">20s total</tspan></text>
+</g>
+<g class="subgraph" data-id="Both" data-label="PFlash + DDTree
+15s total">
+  <rect x="40" y="451.20000000000005" width="0" height="0" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="40" y="451.20000000000005" width="0" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="52" y="465.20000000000005" font-size="12" font-weight="600" fill="var(--_text-sec)"><tspan x="52" dy="-3.6000000000000014">PFlash + DDTree</tspan><tspan x="52" dy="15.600000000000001">15s total</tspan></text>
+</g>
+<polyline class="edge" data-from="B_TTFT" data-to="B_DEC" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="169.38800000000003,66.9 217.38800000000003,66.9" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="P_TTFT" data-to="P_DEC" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="216.81199999999995,148.70000000000002 264.81199999999995,148.70000000000002" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="D_TTFT" data-to="D_DEC" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="169.388,230.50000000000003 217.388,230.50000000000003" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="C_TTFT" data-to="C_DEC" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="216.81199999999998,312.3 264.812,312.3" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<g class="node" data-id="B_TTFT" data-label="TTFT: 6000ms
+(full 128K prefill)" data-shape="rectangle">
+  <rect x="40.00000000000003" y="40" width="129.388" height="53.800000000000004" rx="0" ry="0" fill="#fee2e2" stroke="#ef4444" stroke-width="0.75" />
+  <text x="104.69400000000003" y="66.9" text-anchor="middle" font-size="13" font-weight="500" fill="#7f1d1d"><tspan x="104.69400000000003" dy="-3.9000000000000012">TTFT: 6000ms</tspan><tspan x="104.69400000000003" dy="16.900000000000002">(full 128K prefill)</tspan></text>
+</g>
+<g class="node" data-id="B_DEC" data-label="Decode: 33000ms
+(500 tokens, 1 per step)" data-shape="rectangle">
+  <rect x="217.38800000000003" y="40" width="172.36599999999999" height="53.800000000000004" rx="0" ry="0" fill="#fee2e2" stroke="#ef4444" stroke-width="0.75" />
+  <text x="303.571" y="66.9" text-anchor="middle" font-size="13" font-weight="500" fill="#7f1d1d"><tspan x="303.571" dy="-3.9000000000000012">Decode: 33000ms</tspan><tspan x="303.571" dy="16.900000000000002">(500 tokens, 1 per step)</tspan></text>
+</g>
+<g class="node" data-id="P_TTFT" data-label="TTFT: 700ms
+(8K compressed prefill)" data-shape="rectangle">
+  <rect x="40" y="121.80000000000001" width="176.81199999999995" height="53.800000000000004" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
+  <text x="128.40599999999998" y="148.70000000000002" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="128.40599999999998" dy="-3.9000000000000012">TTFT: 700ms</tspan><tspan x="128.40599999999998" dy="16.900000000000002">(8K compressed prefill)</tspan></text>
+</g>
+<g class="node" data-id="P_DEC" data-label="Decode: 33000ms
+(500 tokens, 1 per step)" data-shape="rectangle">
+  <rect x="264.81199999999995" y="121.80000000000001" width="172.36599999999999" height="53.800000000000004" rx="0" ry="0" fill="#fee2e2" stroke="#ef4444" stroke-width="0.75" />
+  <text x="350.99499999999995" y="148.70000000000002" text-anchor="middle" font-size="13" font-weight="500" fill="#7f1d1d"><tspan x="350.99499999999995" dy="-3.9000000000000012">Decode: 33000ms</tspan><tspan x="350.99499999999995" dy="16.900000000000002">(500 tokens, 1 per step)</tspan></text>
+</g>
+<g class="node" data-id="D_TTFT" data-label="TTFT: 6000ms
+(full 128K prefill)" data-shape="rectangle">
+  <rect x="40" y="203.60000000000002" width="129.388" height="53.800000000000004" rx="0" ry="0" fill="#fee2e2" stroke="#ef4444" stroke-width="0.75" />
+  <text x="104.694" y="230.50000000000003" text-anchor="middle" font-size="13" font-weight="500" fill="#7f1d1d"><tspan x="104.694" dy="-3.9000000000000012">TTFT: 6000ms</tspan><tspan x="104.694" dy="16.900000000000002">(full 128K prefill)</tspan></text>
+</g>
+<g class="node" data-id="D_DEC" data-label="Decode: 14000ms
+(~3 tokens accepted/step)" data-shape="rectangle">
+  <rect x="217.388" y="203.60000000000002" width="192.37299999999996" height="53.800000000000004" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
+  <text x="313.5745" y="230.50000000000003" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="313.5745" dy="-3.9000000000000012">Decode: 14000ms</tspan><tspan x="313.5745" dy="16.900000000000002">(~3 tokens accepted/step)</tspan></text>
+</g>
+<g class="node" data-id="C_TTFT" data-label="TTFT: 700ms
+(8K compressed prefill)" data-shape="rectangle">
+  <rect x="40.00000000000003" y="285.40000000000003" width="176.81199999999995" height="53.800000000000004" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
+  <text x="128.406" y="312.3" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="128.406" dy="-3.9000000000000012">TTFT: 700ms</tspan><tspan x="128.406" dy="16.900000000000002">(8K compressed prefill)</tspan></text>
+</g>
+<g class="node" data-id="C_DEC" data-label="Decode: 14000ms
+(~3 tokens accepted/step)" data-shape="rectangle">
+  <rect x="264.812" y="285.40000000000003" width="192.37299999999996" height="53.800000000000004" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
+  <text x="360.9985" y="312.3" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="360.9985" dy="-3.9000000000000012">Decode: 14000ms</tspan><tspan x="360.9985" dy="16.900000000000002">(~3 tokens accepted/step)</tspan></text>
+</g>
+</svg>

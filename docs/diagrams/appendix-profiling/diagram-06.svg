@@ -1,0 +1,181 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 3885.58 244.5" width="3885.58" height="244.5" style="--bg:#FFFFFF;--fg:#27272A;background:#ffffff">
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;display=swap');
+  text { font-family: 'Inter', system-ui, sans-serif; }
+  svg {
+    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
+    --_text:          #1a1a2e;
+    --_text-sec:      var(--muted, color-mix(in srgb, #1a1a2e 60%, #ffffff));
+    --_text-muted:    var(--muted, color-mix(in srgb, #1a1a2e 40%, #ffffff));
+    --_text-faint:    color-mix(in srgb, #1a1a2e 25%, #ffffff);
+    --_line:          var(--line, color-mix(in srgb, #1a1a2e 50%, #ffffff));
+    --_arrow:         var(--accent, color-mix(in srgb, #1a1a2e 85%, #ffffff));
+    --_node-fill:     var(--surface, color-mix(in srgb, #1a1a2e 3%, #ffffff));
+    --_node-stroke:   var(--border, color-mix(in srgb, #1a1a2e 20%, #ffffff));
+    --_group-fill:    #ffffff;
+    --_group-hdr:     color-mix(in srgb, #1a1a2e 5%, #ffffff);
+    --_inner-stroke:  color-mix(in srgb, #1a1a2e 12%, #ffffff);
+    --_key-badge:     color-mix(in srgb, #1a1a2e 10%, #ffffff);
+  }
+</style>
+<defs>
+  <marker id="arrowhead" markerWidth="8" markerHeight="5" refX="7" refY="2.5" orient="auto">
+    <polygon points="0 0, 8 2.5, 0 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+  <marker id="arrowhead-start" markerWidth="8" markerHeight="5" refX="1" refY="2.5" orient="auto-start-reverse">
+    <polygon points="8 0, 0 2.5, 8 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+</defs>
+<g class="subgraph" data-id="Standard" data-label="Standard dispatch
+(no megakernel)">
+  <rect x="40" y="56.900000000000006" width="2059.593" height="130.7" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="40" y="56.900000000000006" width="2059.593" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="52" y="70.9" font-size="12" font-weight="600" fill="var(--_text-sec)"><tspan x="52" dy="-3.6000000000000014">Standard dispatch</tspan><tspan x="52" dy="15.600000000000001">(no megakernel)</tspan></text>
+</g>
+<g class="subgraph" data-id="FusedFFN" data-label="Fused FFN megakernel (Tier 1)
+--megakernel flag">
+  <rect x="2310.975" y="48.44999999999999" width="796.5509999999999" height="147.60000000000002" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="2310.975" y="48.44999999999999" width="796.5509999999999" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="2322.975" y="62.44999999999999" font-size="12" font-weight="600" fill="var(--_text-sec)"><tspan x="2322.975" dy="-3.6000000000000014">Fused FFN megakernel (Tier 1)</tspan><tspan x="2322.975" dy="15.600000000000001">--megakernel flag</tspan></text>
+</g>
+<g class="subgraph" data-id="TrueMega" data-label="True megakernel (Tier 2)
+model+quant must support">
+  <rect x="3308.216" y="40" width="537.3639999999999" height="164.5" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="3308.216" y="40" width="537.3639999999999" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="3320.216" y="54" font-size="12" font-weight="600" fill="var(--_text-sec)"><tspan x="3320.216" dy="-3.6000000000000014">True megakernel (Tier 2)</tspan><tspan x="3320.216" dy="15.600000000000001">model+quant must support</tspan></text>
+</g>
+<polyline class="edge" data-from="Standard" data-to="FusedFFN" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="--megakernel
+fuses gate+up+siluMul" points="2099.593,122.25 2310.975,122.25" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="FusedFFN" data-to="TrueMega" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="full ModelDesc
+comptime kernel gen" points="3107.526,122.25 3308.216,122.25" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="S1" data-to="S2" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="153.525,136.25 201.525,136.25" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="S2" data-to="S3" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="299.05,136.25 347.05,136.25" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="S3" data-to="S4" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="444.57500000000005,136.25 492.57500000000005,136.25" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="S4" data-to="S5" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="590.1,136.25 638.1,136.25" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="S5" data-to="S6" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="735.625,136.25 783.625,136.25" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="S6" data-to="S7" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="881.15,136.25 929.15,136.25" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="S7" data-to="S8" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="1026.675,136.25 1074.675,136.25" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="S8" data-to="S9" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="1198.876,136.25 1246.876,136.25" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="S9" data-to="S10" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="1347.365,136.25 1395.365,136.25" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="S10" data-to="S11" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="1492.89,136.25 1540.89,136.25" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="S11" data-to="S12" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="1638.4150000000002,136.25 1686.4150000000002,136.25" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="S12" data-to="STotal" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="1792.832,136.25 1840.832,136.25" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="F1" data-to="F2" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="2443.025,136.25 2491.025,136.25" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="F2" data-to="F3" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="2646.348,136.25 2694.348,136.25" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="F3" data-to="FTotal" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="2800.765,136.25 2848.765,136.25" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="T1" data-to="TTotal" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="3561.049,136.25 3609.049,136.25" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<g class="edge-label" data-from="Standard" data-to="FusedFFN" data-label="--megakernel
+fuses gate+up+siluMul">
+  <rect x="2143.593" y="99.25" width="123.38200000000002" height="44.6" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="2205.2839999999997" y="121.55" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)"><tspan x="2205.2839999999997" dy="-3.3000000000000007">--megakernel</tspan><tspan x="2205.2839999999997" dy="14.3">fuses gate+up+siluMul</tspan></text>
+</g>
+<g class="edge-label" data-from="FusedFFN" data-to="TrueMega" data-label="full ModelDesc
+comptime kernel gen">
+  <rect x="3151.526" y="99.25" width="112.69000000000001" height="44.6" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="3207.8709999999996" y="121.55" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)"><tspan x="3207.8709999999996" dy="-3.3000000000000007">full ModelDesc</tspan><tspan x="3207.8709999999996" dy="14.3">comptime kernel gen</tspan></text>
+</g>
+<g class="node" data-id="S1" data-label="rmsNorm
+1 dispatch" data-shape="rectangle">
+  <rect x="56" y="109.35000000000001" width="97.525" height="53.800000000000004" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="104.7625" y="136.25" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="104.7625" dy="-3.9000000000000012">rmsNorm</tspan><tspan x="104.7625" dy="16.900000000000002">1 dispatch</tspan></text>
+</g>
+<g class="node" data-id="S2" data-label="gemv Q
+1 dispatch" data-shape="rectangle">
+  <rect x="201.525" y="109.35000000000001" width="97.525" height="53.800000000000004" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="250.28750000000002" y="136.25" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="250.28750000000002" dy="-3.9000000000000012">gemv Q</tspan><tspan x="250.28750000000002" dy="16.900000000000002">1 dispatch</tspan></text>
+</g>
+<g class="node" data-id="S3" data-label="gemv K
+1 dispatch" data-shape="rectangle">
+  <rect x="347.05" y="109.35000000000001" width="97.525" height="53.800000000000004" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="395.8125" y="136.25" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="395.8125" dy="-3.9000000000000012">gemv K</tspan><tspan x="395.8125" dy="16.900000000000002">1 dispatch</tspan></text>
+</g>
+<g class="node" data-id="S4" data-label="gemv V
+1 dispatch" data-shape="rectangle">
+  <rect x="492.57500000000005" y="109.35000000000001" width="97.525" height="53.800000000000004" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="541.3375000000001" y="136.25" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="541.3375000000001" dy="-3.9000000000000012">gemv V</tspan><tspan x="541.3375000000001" dy="16.900000000000002">1 dispatch</tspan></text>
+</g>
+<g class="node" data-id="S5" data-label="rope
+1 dispatch" data-shape="rectangle">
+  <rect x="638.1" y="109.35000000000001" width="97.525" height="53.800000000000004" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="686.8625000000001" y="136.25" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="686.8625000000001" dy="-3.9000000000000012">rope</tspan><tspan x="686.8625000000001" dy="16.900000000000002">1 dispatch</tspan></text>
+</g>
+<g class="node" data-id="S6" data-label="sdpa
+1 dispatch" data-shape="rectangle">
+  <rect x="783.625" y="109.35000000000001" width="97.525" height="53.800000000000004" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="832.3875" y="136.25" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="832.3875" dy="-3.9000000000000012">sdpa</tspan><tspan x="832.3875" dy="16.900000000000002">1 dispatch</tspan></text>
+</g>
+<g class="node" data-id="S7" data-label="gemv out
+1 dispatch" data-shape="rectangle">
+  <rect x="929.15" y="109.35000000000001" width="97.525" height="53.800000000000004" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="977.9125" y="136.25" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="977.9125" dy="-3.9000000000000012">gemv out</tspan><tspan x="977.9125" dy="16.900000000000002">1 dispatch</tspan></text>
+</g>
+<g class="node" data-id="S8" data-label="rmsNorm FFN
+1 dispatch" data-shape="rectangle">
+  <rect x="1074.675" y="109.35000000000001" width="124.20099999999998" height="53.800000000000004" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="1136.7755" y="136.25" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="1136.7755" dy="-3.9000000000000012">rmsNorm FFN</tspan><tspan x="1136.7755" dy="16.900000000000002">1 dispatch</tspan></text>
+</g>
+<g class="node" data-id="S9" data-label="gemv gate
+1 dispatch" data-shape="rectangle">
+  <rect x="1246.876" y="109.35000000000001" width="100.489" height="53.800000000000004" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="1297.1205" y="136.25" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="1297.1205" dy="-3.9000000000000012">gemv gate</tspan><tspan x="1297.1205" dy="16.900000000000002">1 dispatch</tspan></text>
+</g>
+<g class="node" data-id="S10" data-label="gemv up
+1 dispatch" data-shape="rectangle">
+  <rect x="1395.365" y="109.35000000000001" width="97.525" height="53.800000000000004" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="1444.1275" y="136.25" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="1444.1275" dy="-3.9000000000000012">gemv up</tspan><tspan x="1444.1275" dy="16.900000000000002">1 dispatch</tspan></text>
+</g>
+<g class="node" data-id="S11" data-label="siluMul
+1 dispatch" data-shape="rectangle">
+  <rect x="1540.89" y="109.35000000000001" width="97.525" height="53.800000000000004" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="1589.6525000000001" y="136.25" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="1589.6525000000001" dy="-3.9000000000000012">siluMul</tspan><tspan x="1589.6525000000001" dy="16.900000000000002">1 dispatch</tspan></text>
+</g>
+<g class="node" data-id="S12" data-label="gemv down
+1 dispatch" data-shape="rectangle">
+  <rect x="1686.4150000000002" y="109.35000000000001" width="106.41699999999999" height="53.800000000000004" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="1739.6235000000001" y="136.25" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="1739.6235000000001" dy="-3.9000000000000012">gemv down</tspan><tspan x="1739.6235000000001" dy="16.900000000000002">1 dispatch</tspan></text>
+</g>
+<g class="node" data-id="STotal" data-label="Total per layer: ~12 dispatches
+32 layers = ~994 dispatches/token
+690 barriers, 1 sync" data-shape="rectangle">
+  <rect x="1840.832" y="100.9" width="242.76099999999994" height="70.7" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
+  <text x="1962.2125" y="136.25" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12"><tspan x="1962.2125" dy="-12.350000000000001">Total per layer: ~12 dispatches</tspan><tspan x="1962.2125" dy="16.900000000000002">32 layers = ~994 dispatches/token</tspan><tspan x="1962.2125" dy="16.900000000000002">690 barriers, 1 sync</tspan></text>
+</g>
+<g class="node" data-id="F1" data-label="attention ops
+(unchanged)" data-shape="rectangle">
+  <rect x="2326.975" y="109.35" width="116.05" height="53.800000000000004" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="2385" y="136.25" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="2385" dy="-3.9000000000000012">attention ops</tspan><tspan x="2385" dy="16.900000000000002">(unchanged)</tspan></text>
+</g>
+<g class="node" data-id="F2" data-label="fusedFfnGateUp
+gate+up+siluMul
+fused into 1 dispatch" data-shape="rectangle">
+  <rect x="2491.025" y="100.89999999999999" width="155.323" height="70.7" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="2568.6865000000003" y="136.25" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="2568.6865000000003" dy="-12.350000000000001">fusedFfnGateUp</tspan><tspan x="2568.6865000000003" dy="16.900000000000002">gate+up+siluMul</tspan><tspan x="2568.6865000000003" dy="16.900000000000002">fused into 1 dispatch</tspan></text>
+</g>
+<g class="node" data-id="F3" data-label="gemv down
+1 dispatch" data-shape="rectangle">
+  <rect x="2694.348" y="109.35" width="106.41699999999999" height="53.800000000000004" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="2747.5565" y="136.25" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="2747.5565" dy="-3.9000000000000012">gemv down</tspan><tspan x="2747.5565" dy="16.900000000000002">1 dispatch</tspan></text>
+</g>
+<g class="node" data-id="FTotal" data-label="Total per layer: ~10 dispatches
+32 layers = ~946 dispatches/token
+642 barriers, 1 sync
+(-48 dispatches vs standard)" data-shape="rectangle">
+  <rect x="2848.765" y="92.44999999999999" width="242.76099999999994" height="87.60000000000001" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
+  <text x="2970.1454999999996" y="136.25" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="2970.1454999999996" dy="-20.8">Total per layer: ~10 dispatches</tspan><tspan x="2970.1454999999996" dy="16.900000000000002">32 layers = ~946 dispatches/token</tspan><tspan x="2970.1454999999996" dy="16.900000000000002">642 barriers, 1 sync</tspan><tspan x="2970.1454999999996" dy="16.900000000000002">(-48 dispatches vs standard)</tspan></text>
+</g>
+<g class="node" data-id="T1" data-label="entire layer
+attn + FFN + norms
+fused into 1 dispatch
+(mega_grid_sync atomic barriers
+replace Metal memory barriers)" data-shape="rectangle">
+  <rect x="3324.216" y="84" width="236.833" height="104.50000000000001" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
+  <text x="3442.6324999999997" y="136.25" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f"><tspan x="3442.6324999999997" dy="-29.250000000000004">entire layer</tspan><tspan x="3442.6324999999997" dy="16.900000000000002">attn + FFN + norms</tspan><tspan x="3442.6324999999997" dy="16.900000000000002">fused into 1 dispatch</tspan><tspan x="3442.6324999999997" dy="16.900000000000002">(mega_grid_sync atomic barriers</tspan><tspan x="3442.6324999999997" dy="16.900000000000002">replace Metal memory barriers)</tspan></text>
+</g>
+<g class="node" data-id="TTotal" data-label="Total: ~30 dispatches/token
+~30 barriers (atomic, not Metal)
+1 sync
+(n_layers + small overhead)" data-shape="rectangle">
+  <rect x="3609.049" y="92.45" width="220.53099999999995" height="87.60000000000001" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
+  <text x="3719.3145" y="136.25" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="3719.3145" dy="-20.8">Total: ~30 dispatches/token</tspan><tspan x="3719.3145" dy="16.900000000000002">~30 barriers (atomic, not Metal)</tspan><tspan x="3719.3145" dy="16.900000000000002">1 sync</tspan><tspan x="3719.3145" dy="16.900000000000002">(n_layers + small overhead)</tspan></text>
+</g>
+</svg>

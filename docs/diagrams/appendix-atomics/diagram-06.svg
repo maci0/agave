@@ -1,0 +1,83 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 527.0620000000001 856.4759999999999" width="527.0620000000001" height="856.4759999999999" style="--bg:#FFFFFF;--fg:#27272A;background:#ffffff">
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;display=swap');
+  text { font-family: 'Inter', system-ui, sans-serif; }
+  svg {
+    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
+    --_text:          #1a1a2e;
+    --_text-sec:      var(--muted, color-mix(in srgb, #1a1a2e 60%, #ffffff));
+    --_text-muted:    var(--muted, color-mix(in srgb, #1a1a2e 40%, #ffffff));
+    --_text-faint:    color-mix(in srgb, #1a1a2e 25%, #ffffff);
+    --_line:          var(--line, color-mix(in srgb, #1a1a2e 50%, #ffffff));
+    --_arrow:         var(--accent, color-mix(in srgb, #1a1a2e 85%, #ffffff));
+    --_node-fill:     var(--surface, color-mix(in srgb, #1a1a2e 3%, #ffffff));
+    --_node-stroke:   var(--border, color-mix(in srgb, #1a1a2e 20%, #ffffff));
+    --_group-fill:    #ffffff;
+    --_group-hdr:     color-mix(in srgb, #1a1a2e 5%, #ffffff);
+    --_inner-stroke:  color-mix(in srgb, #1a1a2e 12%, #ffffff);
+    --_key-badge:     color-mix(in srgb, #1a1a2e 10%, #ffffff);
+  }
+</style>
+<defs>
+  <marker id="arrowhead" markerWidth="8" markerHeight="5" refX="7" refY="2.5" orient="auto">
+    <polygon points="0 0, 8 2.5, 0 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+  <marker id="arrowhead-start" markerWidth="8" markerHeight="5" refX="1" refY="2.5" orient="auto-start-reverse">
+    <polygon points="8 0, 0 2.5, 8 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+</defs>
+<g class="subgraph" data-id="RetryLoop" data-label="CAS retry loop">
+  <rect x="40" y="130.9" width="390.10550000000006" height="685.5759999999999" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="40" y="130.9" width="390.10550000000006" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="52" y="144.9" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">CAS retry loop</text>
+</g>
+<polyline class="edge" data-from="Start" data-to="Read" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="413.10550000000006,76.9 413.10550000000006,603.976 275.76075000000003,603.976 275.76075000000003,627.976" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Read" data-to="Link" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="275.76075000000003,698.6759999999999 275.76075000000003,710.6759999999999 245.15241666666668,710.6759999999999 245.15241666666668,746.6759999999999" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Link" data-to="CAS" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="183.25108333333336,746.6759999999999 183.25108333333336,710.6759999999999 57.88158333333338,710.6759999999999 57.88158333333338,390.67599999999993 106.94399999999999,390.67599999999993 106.94399999999999,327.73199999999997" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="CAS" data-to="Success" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="yes — swap succeeds
+(.release publishes item.next)" points="208.832,327.73199999999997 208.832,390.67599999999993 316.92250000000007,390.67599999999993 316.92250000000007,509.27599999999995" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="CAS" data-to="Retry" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="no — spurious fail
+or concurrent push" points="157.88799999999998,378.676 157.88799999999998,390.67599999999993 138.41600000000003,390.67599999999993 138.41600000000005,509.27599999999995" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Retry" data-to="Read" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="138.41600000000005,579.976 138.41600000000005,603.976 275.76075000000003,603.976 275.76075000000003,627.976" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<g class="edge-label" data-from="CAS" data-to="Success" data-label="yes — swap succeeds
+(.release publishes item.next)">
+  <rect x="239.92250000000007" y="421.676" width="153.082" height="44.6" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="316.46350000000007" y="443.976" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)"><tspan x="316.46350000000007" dy="-3.3000000000000007">yes — swap succeeds</tspan><tspan x="316.46350000000007" dy="14.3">(.release publishes item.next)</tspan></text>
+</g>
+<g class="edge-label" data-from="CAS" data-to="Retry" data-label="no — spurious fail
+or concurrent push">
+  <rect x="83.41600000000003" y="421.676" width="109.12600000000002" height="44.6" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="137.97900000000004" y="443.976" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)"><tspan x="137.97900000000004" dy="-3.3000000000000007">no — spurious fail</tspan><tspan x="137.97900000000004" dy="14.3">or concurrent push</tspan></text>
+</g>
+<g class="node" data-id="Start" data-label="push: item to insert" data-shape="stadium">
+  <rect x="339.14900000000006" y="40" width="147.913" height="36.900000000000006" rx="18.450000000000003" ry="18.450000000000003" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
+  <text x="413.10550000000006" y="58.45" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f" dy="4.55">push: item to insert</text>
+</g>
+<g class="node" data-id="Read" data-label="Read head
+(.acquire)
+current_head = self.head.load()" data-shape="rectangle">
+  <rect x="163.64275000000004" y="627.976" width="224.236" height="70.7" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="275.76075000000003" y="663.326" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="275.76075000000003" dy="-12.350000000000001">Read head</tspan><tspan x="275.76075000000003" dy="16.900000000000002">(.acquire)</tspan><tspan x="275.76075000000003" dy="16.900000000000002">current_head = self.head.load()</tspan></text>
+</g>
+<g class="node" data-id="Link" data-label="Link item into list
+item.next = current_head" data-shape="rectangle">
+  <rect x="121.34975000000001" y="746.6759999999999" width="185.704" height="53.800000000000004" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
+  <text x="214.20175" y="773.5759999999999" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12"><tspan x="214.20175" dy="-3.9000000000000012">Link item into list</tspan><tspan x="214.20175" dy="16.900000000000002">item.next = current_head</tspan></text>
+</g>
+<g class="node" data-id="CAS" data-label="cmpxchgWeak
+head == current_head?" data-shape="diamond">
+  <polygon points="157.88799999999998,174.90000000000003 259.77599999999995,276.788 157.88799999999998,378.676 55.999999999999986,276.788" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="157.88799999999998" y="276.788" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="157.88799999999998" dy="-3.9000000000000012">cmpxchgWeak</tspan><tspan x="157.88799999999998" dy="16.900000000000002">head == current_head?</tspan></text>
+</g>
+<g class="node" data-id="Success" data-label="Return
+head now points to item" data-shape="stadium">
+  <rect x="230.73950000000005" y="509.27599999999995" width="172.366" height="53.800000000000004" rx="26.900000000000002" ry="26.900000000000002" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
+  <text x="316.92250000000007" y="536.1759999999999" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="316.92250000000007" dy="-3.9000000000000012">Return</tspan><tspan x="316.92250000000007" dy="16.900000000000002">head now points to item</tspan></text>
+</g>
+<g class="node" data-id="Retry" data-label="Retry
+another thread
+changed head" data-shape="rectangle">
+  <rect x="74.09250000000006" y="509.27599999999995" width="128.647" height="70.7" rx="0" ry="0" fill="#fee2e2" stroke="#ef4444" stroke-width="0.75" />
+  <text x="138.41600000000005" y="544.626" text-anchor="middle" font-size="13" font-weight="500" fill="#7f1d1d"><tspan x="138.41600000000005" dy="-12.350000000000001">Retry</tspan><tspan x="138.41600000000005" dy="16.900000000000002">another thread</tspan><tspan x="138.41600000000005" dy="16.900000000000002">changed head</tspan></text>
+</g>
+</svg>

@@ -1,0 +1,123 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1267.8285 802.37" width="1267.8285" height="802.37" style="--bg:#FFFFFF;--fg:#27272A;background:#ffffff">
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;display=swap');
+  text { font-family: 'Inter', system-ui, sans-serif; }
+  svg {
+    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
+    --_text:          #1a1a2e;
+    --_text-sec:      var(--muted, color-mix(in srgb, #1a1a2e 60%, #ffffff));
+    --_text-muted:    var(--muted, color-mix(in srgb, #1a1a2e 40%, #ffffff));
+    --_text-faint:    color-mix(in srgb, #1a1a2e 25%, #ffffff);
+    --_line:          var(--line, color-mix(in srgb, #1a1a2e 50%, #ffffff));
+    --_arrow:         var(--accent, color-mix(in srgb, #1a1a2e 85%, #ffffff));
+    --_node-fill:     var(--surface, color-mix(in srgb, #1a1a2e 3%, #ffffff));
+    --_node-stroke:   var(--border, color-mix(in srgb, #1a1a2e 20%, #ffffff));
+    --_group-fill:    #ffffff;
+    --_group-hdr:     color-mix(in srgb, #1a1a2e 5%, #ffffff);
+    --_inner-stroke:  color-mix(in srgb, #1a1a2e 12%, #ffffff);
+    --_key-badge:     color-mix(in srgb, #1a1a2e 10%, #ffffff);
+  }
+</style>
+<defs>
+  <marker id="arrowhead" markerWidth="8" markerHeight="5" refX="7" refY="2.5" orient="auto">
+    <polygon points="0 0, 8 2.5, 0 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+  <marker id="arrowhead-start" markerWidth="8" markerHeight="5" refX="1" refY="2.5" orient="auto-start-reverse">
+    <polygon points="8 0, 0 2.5, 8 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+</defs>
+<g class="subgraph" data-id="Protected" data-label="Always Protected — never evicted">
+  <rect x="357.66425000000004" y="706.37" width="0" height="0" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="357.66425000000004" y="706.37" width="0" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="369.66425000000004" y="720.37" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">Always Protected — never evicted</text>
+</g>
+<g class="subgraph" data-id="Scoring" data-label="Score remaining positions">
+  <rect x="357.66425000000004" y="754.37" width="0" height="0" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="357.66425000000004" y="754.37" width="0" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="369.66425000000004" y="768.37" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">Score remaining positions</text>
+</g>
+<polyline class="edge" data-from="NewTok" data-to="Check" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="217.17550000000003,93.80000000000003 217.17550000000006,150.25000000000003" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Check" data-to="Generate" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="within budget" points="190.74633333333338,282.39583333333337 190.74633333333338,336.375 119.8845,336.375 119.8845,416.675" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Check" data-to="Modulo" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="over budget" points="243.6046666666667,282.3958333333333 243.6046666666667,336.375 314.4665,336.375 314.4665,416.675" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Modulo" data-to="Skip" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="not yet" points="285.56733333333335,561.1708333333335 285.56733333333335,626.07 271.26874999999995,626.07 271.26875,706.37" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Modulo" data-to="Protected" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="yes — compress now" points="343.3656666666667,561.1708333333333 343.3656666666667,626.07 357.66425000000004,626.07 357.66425000000004,706.37" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Protected" data-to="Scoring" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="357.66425000000004,706.37 357.66425000000004,754.37" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="NormScore" data-to="Evict" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="885.334,110.7 885.334,130.475 1006.07975,130.475 1006.07975,150.25" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="TriScore" data-to="Evict" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="1126.8255000000001,110.7 1126.8255000000001,130.475 1006.07975,130.475 1006.07975,150.25" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Evict" data-to="Resume" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="1006.07975,204.05 1006.0797500000001,260.5" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<g class="edge-label" data-from="Check" data-to="Generate" data-label="within budget">
+  <rect x="80.8845" y="343.375" width="77.644" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="119.7065" y="358.525" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">within budget</text>
+</g>
+<g class="edge-label" data-from="Check" data-to="Modulo" data-label="over budget">
+  <rect x="276.9665" y="343.375" width="74.08000000000001" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="314.0065" y="358.525" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">over budget</text>
+</g>
+<g class="edge-label" data-from="Modulo" data-to="Skip" data-label="not yet">
+  <rect x="247.26874999999998" y="633.07" width="47.944" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="271.24075" y="648.22" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">not yet</text>
+</g>
+<g class="edge-label" data-from="Modulo" data-to="Protected" data-label="yes — compress now">
+  <rect x="300.66425000000004" y="633.07" width="113.28400000000002" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="357.30625000000003" y="648.22" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">yes — compress now</text>
+</g>
+<g class="node" data-id="NewTok" data-label="New token generated
+(cache length checked)" data-shape="rectangle">
+  <rect x="128.02850000000004" y="40.00000000000002" width="178.29399999999998" height="53.800000000000004" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
+  <text x="217.17550000000003" y="66.90000000000002" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f"><tspan x="217.17550000000003" dy="-3.9000000000000012">New token generated</tspan><tspan x="217.17550000000003" dy="16.900000000000002">(cache length checked)</tspan></text>
+</g>
+<g class="node" data-id="Generate" data-label="Continue generation
+(no eviction needed)" data-shape="rectangle">
+  <rect x="40" y="416.675" width="159.769" height="53.800000000000004" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
+  <text x="119.8845" y="443.575" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="119.8845" dy="-3.9000000000000012">Continue generation</tspan><tspan x="119.8845" dy="16.900000000000002">(no eviction needed)</tspan></text>
+</g>
+<g class="node" data-id="Skip" data-label="Skip eviction
+this token" data-shape="rectangle">
+  <rect x="212.87324999999998" y="706.37" width="116.791" height="53.800000000000004" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
+  <text x="271.26874999999995" y="733.27" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12"><tspan x="271.26874999999995" dy="-3.9000000000000012">Skip eviction</tspan><tspan x="271.26874999999995" dy="16.900000000000002">this token</tspan></text>
+</g>
+<g class="node" data-id="Sink" data-label="Attention sinks
+positions 0-3
+(disproportionate attention mass)" data-shape="rectangle">
+  <rect x="334.3225" y="229.675" width="231.646" height="70.7" rx="0" ry="0" fill="#f3e8ff" stroke="#9333ea" stroke-width="0.75" />
+  <text x="450.14549999999997" y="265.02500000000003" text-anchor="middle" font-size="13" font-weight="500" fill="#581c87"><tspan x="450.14549999999997" dy="-12.350000000000001">Attention sinks</tspan><tspan x="450.14549999999997" dy="16.900000000000002">positions 0-3</tspan><tspan x="450.14549999999997" dy="16.900000000000002">(disproportionate attention mass)</tspan></text>
+</g>
+<g class="node" data-id="Recent" data-label="Recent window
+last N positions
+(immediate context)" data-shape="rectangle">
+  <rect x="593.9685000000001" y="40.000000000000014" width="150.877" height="70.7" rx="0" ry="0" fill="#f3e8ff" stroke="#9333ea" stroke-width="0.75" />
+  <text x="669.407" y="75.35000000000002" text-anchor="middle" font-size="13" font-weight="500" fill="#581c87"><tspan x="669.407" dy="-12.350000000000001">Recent window</tspan><tspan x="669.407" dy="16.900000000000002">last N positions</tspan><tspan x="669.407" dy="16.900000000000002">(immediate context)</tspan></text>
+</g>
+<g class="node" data-id="NormScore" data-label="norm policy
+L2 norm of K vector
+small norm → low attention impact" data-shape="rectangle">
+  <rect x="772.8455" y="40" width="224.97699999999995" height="70.7" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="885.334" y="75.35" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="885.334" dy="-12.350000000000001">norm policy</tspan><tspan x="885.334" dy="16.900000000000002">L2 norm of K vector</tspan><tspan x="885.334" dy="16.900000000000002">small norm → low attention impact</tspan></text>
+</g>
+<g class="node" data-id="TriScore" data-label="tri policy
+Q/K frequency-domain stats
+from .cal calibration file" data-shape="rectangle">
+  <rect x="1025.8225000000002" y="40" width="202.00599999999994" height="70.7" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="1126.8255000000001" y="75.35" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="1126.8255000000001" dy="-12.350000000000001">tri policy</tspan><tspan x="1126.8255000000001" dy="16.900000000000002">Q/K frequency-domain stats</tspan><tspan x="1126.8255000000001" dy="16.900000000000002">from .cal calibration file</tspan></text>
+</g>
+<g class="node" data-id="Evict" data-label="Evict lowest-scoring positions
+free blocks returned to pool" data-shape="rectangle">
+  <rect x="898.03725" y="150.25" width="216.08499999999995" height="53.800000000000004" rx="0" ry="0" fill="#fee2e2" stroke="#ef4444" stroke-width="0.75" />
+  <text x="1006.07975" y="177.15" text-anchor="middle" font-size="13" font-weight="500" fill="#7f1d1d"><tspan x="1006.07975" dy="-3.9000000000000012">Evict lowest-scoring positions</tspan><tspan x="1006.07975" dy="16.900000000000002">free blocks returned to pool</tspan></text>
+</g>
+<g class="node" data-id="Resume" data-label="Resume generation
+with compressed cache" data-shape="rectangle">
+  <rect x="916.1917500000001" y="260.5" width="179.77599999999998" height="53.800000000000004" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
+  <text x="1006.0797500000001" y="287.4" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="1006.0797500000001" dy="-3.9000000000000012">Resume generation</tspan><tspan x="1006.0797500000001" dy="16.900000000000002">with compressed cache</tspan></text>
+</g>
+<g class="node" data-id="Check" data-label="Cache exceeds
+--kv-budget?" data-shape="diamond">
+  <polygon points="217.17550000000003,150.25 296.463,229.5375 217.17550000000003,308.825 137.88800000000003,229.5375" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="217.17550000000003" y="229.5375" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="217.17550000000003" dy="-3.9000000000000012">Cache exceeds</tspan><tspan x="217.17550000000003" dy="16.900000000000002">--kv-budget?</tspan></text>
+</g>
+<g class="node" data-id="Modulo" data-label="Every 128 tokens?
+(amortized trigger)" data-shape="diamond">
+  <polygon points="314.4665,416.67500000000007 401.164,503.37250000000006 314.4665,590.07 227.76899999999998,503.37250000000006" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="314.4665" y="503.37250000000006" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="314.4665" dy="-3.9000000000000012">Every 128 tokens?</tspan><tspan x="314.4665" dy="16.900000000000002">(amortized trigger)</tspan></text>
+</g>
+</svg>

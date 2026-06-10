@@ -1,0 +1,94 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 894.04 398.30000000000007" width="894.04" height="398.30000000000007" style="--bg:#FFFFFF;--fg:#27272A;background:#ffffff">
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;display=swap');
+  text { font-family: 'Inter', system-ui, sans-serif; }
+  svg {
+    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
+    --_text:          #1a1a2e;
+    --_text-sec:      var(--muted, color-mix(in srgb, #1a1a2e 60%, #ffffff));
+    --_text-muted:    var(--muted, color-mix(in srgb, #1a1a2e 40%, #ffffff));
+    --_text-faint:    color-mix(in srgb, #1a1a2e 25%, #ffffff);
+    --_line:          var(--line, color-mix(in srgb, #1a1a2e 50%, #ffffff));
+    --_arrow:         var(--accent, color-mix(in srgb, #1a1a2e 85%, #ffffff));
+    --_node-fill:     var(--surface, color-mix(in srgb, #1a1a2e 3%, #ffffff));
+    --_node-stroke:   var(--border, color-mix(in srgb, #1a1a2e 20%, #ffffff));
+    --_group-fill:    #ffffff;
+    --_group-hdr:     color-mix(in srgb, #1a1a2e 5%, #ffffff);
+    --_inner-stroke:  color-mix(in srgb, #1a1a2e 12%, #ffffff);
+    --_key-badge:     color-mix(in srgb, #1a1a2e 10%, #ffffff);
+  }
+</style>
+<defs>
+  <marker id="arrowhead" markerWidth="8" markerHeight="5" refX="7" refY="2.5" orient="auto">
+    <polygon points="0 0, 8 2.5, 0 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+  <marker id="arrowhead-start" markerWidth="8" markerHeight="5" refX="1" refY="2.5" orient="auto-start-reverse">
+    <polygon points="8 0, 0 2.5, 8 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+</defs>
+<g class="subgraph" data-id="Hierarchy" data-label="Two-level scale hierarchy">
+  <rect x="688.8924999999999" y="76.9" width="0" height="0" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="688.8924999999999" y="76.9" width="0" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="700.8924999999999" y="90.9" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">Two-level scale hierarchy</text>
+</g>
+<polyline class="edge" data-from="SB" data-to="Meta" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="568.411,76.9 568.411,94.9 124.701,94.9 124.701,112.9" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="SB" data-to="Sub0" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="568.411,76.9 568.411,94.9 293.204,94.9 293.204,112.9" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="SB" data-to="Sub1" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="568.411,76.9 568.411,94.9 568.4110000000001,94.9 568.4110000000001,112.9" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="SB" data-to="SubDots" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="568.411,76.9 568.411,94.9 679.99,94.9 679.99,214.70000000000002" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="SB" data-to="Sub7" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="568.411,76.9 568.411,94.9 793.792,94.9 793.792,112.9" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Sub0" data-to="SC0" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="293.204,166.70000000000002 293.204,214.70000000000002" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Sub1" data-to="SC1" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="568.4110000000001,166.70000000000002 568.4110000000001,214.70000000000002" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Sub7" data-to="SC7" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="793.792,166.70000000000002 793.7919999999999,214.70000000000002" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="SC0" data-to="DQ0" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="293.204,268.5 293.204,316.50000000000006" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="SC1" data-to="DQ1" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="568.4110000000001,251.60000000000002 568.411,316.50000000000006" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<g class="node" data-id="SB" data-label="Super-block: 256 values" data-shape="rectangle">
+  <rect x="475.92949999999996" y="40" width="184.96299999999997" height="36.900000000000006" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
+  <text x="568.411" y="58.45" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f" dy="4.55">Super-block: 256 values</text>
+</g>
+<g class="node" data-id="Meta" data-label="Super-block metadata
+(d: f16 coarse scale
+dmin: f16 minimum)" data-shape="rectangle">
+  <rect x="40" y="112.9" width="169.402" height="70.7" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
+  <text x="124.701" y="148.25" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f"><tspan x="124.701" dy="-12.350000000000001">Super-block metadata</tspan><tspan x="124.701" dy="16.900000000000002">(d: f16 coarse scale</tspan><tspan x="124.701" dy="16.900000000000002">dmin: f16 minimum)</tspan></text>
+</g>
+<g class="node" data-id="Sub0" data-label="Sub-block 0
+32 values" data-shape="rectangle">
+  <rect x="237.402" y="112.9" width="111.60400000000001" height="53.800000000000004" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
+  <text x="293.204" y="139.8" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12"><tspan x="293.204" dy="-3.9000000000000012">Sub-block 0</tspan><tspan x="293.204" dy="16.900000000000002">32 values</tspan></text>
+</g>
+<g class="node" data-id="Sub1" data-label="Sub-block 1
+32 values" data-shape="rectangle">
+  <rect x="514.832" y="112.9" width="107.15800000000002" height="53.800000000000004" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
+  <text x="568.4110000000001" y="139.8" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12"><tspan x="568.4110000000001" dy="-3.9000000000000012">Sub-block 1</tspan><tspan x="568.4110000000001" dy="16.900000000000002">32 values</tspan></text>
+</g>
+<g class="node" data-id="SubDots" data-label="..." data-shape="rectangle">
+  <rect x="649.99" y="214.70000000000002" width="60" height="36.900000000000006" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
+  <text x="679.99" y="233.15000000000003" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12" dy="4.55">...</text>
+</g>
+<g class="node" data-id="Sub7" data-label="Sub-block 7
+32 values" data-shape="rectangle">
+  <rect x="737.99" y="112.9" width="111.60400000000001" height="53.800000000000004" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
+  <text x="793.792" y="139.8" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12"><tspan x="793.792" dy="-3.9000000000000012">Sub-block 7</tspan><tspan x="793.792" dy="16.900000000000002">32 values</tspan></text>
+</g>
+<g class="node" data-id="SC0" data-label="scale₀ + min₀
+(6-bit each, packed)" data-shape="rectangle">
+  <rect x="215.54250000000002" y="214.70000000000002" width="155.32299999999998" height="53.800000000000004" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
+  <text x="293.204" y="241.60000000000002" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f"><tspan x="293.204" dy="-3.9000000000000012">scale₀ + min₀</tspan><tspan x="293.204" dy="16.900000000000002">(6-bit each, packed)</tspan></text>
+</g>
+<g class="node" data-id="SC1" data-label="scale₁ + min₁" data-shape="rectangle">
+  <rect x="508.163" y="214.70000000000002" width="120.49599999999998" height="36.900000000000006" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
+  <text x="568.4110000000001" y="233.15000000000003" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f" dy="4.55">scale₁ + min₁</text>
+</g>
+<g class="node" data-id="SC7" data-label="scale₇ + min₇" data-shape="rectangle">
+  <rect x="733.544" y="214.70000000000002" width="120.49599999999998" height="36.900000000000006" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
+  <text x="793.7919999999999" y="233.15000000000003" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f" dy="4.55">scale₇ + min₇</text>
+</g>
+<g class="node" data-id="DQ0" data-label="dequant₀ = d×scale₀×q - dmin×min₀" data-shape="rectangle">
+  <rect x="169.6005" y="316.50000000000006" width="247.20699999999997" height="36.900000000000006" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
+  <text x="293.204" y="334.95000000000005" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d" dy="4.55">dequant₀ = d×scale₀×q - dmin×min₀</text>
+</g>
+<g class="node" data-id="DQ1" data-label="dequant₁ = d×scale₁×q - dmin×min₁" data-shape="rectangle">
+  <rect x="444.8075" y="316.50000000000006" width="247.20699999999997" height="36.900000000000006" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
+  <text x="568.411" y="334.95000000000005" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d" dy="4.55">dequant₁ = d×scale₁×q - dmin×min₁</text>
+</g>
+</svg>

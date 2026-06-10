@@ -1,0 +1,108 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 522.5369999999999 462.8" width="522.5369999999999" height="462.8" style="--bg:#FFFFFF;--fg:#27272A;background:#ffffff">
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;display=swap');
+  text { font-family: 'Inter', system-ui, sans-serif; }
+  svg {
+    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
+    --_text:          #1a1a2e;
+    --_text-sec:      var(--muted, color-mix(in srgb, #1a1a2e 60%, #ffffff));
+    --_text-muted:    var(--muted, color-mix(in srgb, #1a1a2e 40%, #ffffff));
+    --_text-faint:    color-mix(in srgb, #1a1a2e 25%, #ffffff);
+    --_line:          var(--line, color-mix(in srgb, #1a1a2e 50%, #ffffff));
+    --_arrow:         var(--accent, color-mix(in srgb, #1a1a2e 85%, #ffffff));
+    --_node-fill:     var(--surface, color-mix(in srgb, #1a1a2e 3%, #ffffff));
+    --_node-stroke:   var(--border, color-mix(in srgb, #1a1a2e 20%, #ffffff));
+    --_group-fill:    #ffffff;
+    --_group-hdr:     color-mix(in srgb, #1a1a2e 5%, #ffffff);
+    --_inner-stroke:  color-mix(in srgb, #1a1a2e 12%, #ffffff);
+    --_key-badge:     color-mix(in srgb, #1a1a2e 10%, #ffffff);
+  }
+</style>
+<defs>
+  <marker id="arrowhead" markerWidth="8" markerHeight="5" refX="7" refY="2.5" orient="auto">
+    <polygon points="0 0, 8 2.5, 0 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+  <marker id="arrowhead-start" markerWidth="8" markerHeight="5" refX="1" refY="2.5" orient="auto-start-reverse">
+    <polygon points="8 0, 0 2.5, 8 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+</defs>
+<g class="subgraph" data-id="Fine" data-label="Fine blocks (16-32 tokens)
+Block size = 16 tokens">
+  <rect x="40" y="40" width="0" height="0" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="40" y="40" width="0" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="52" y="54" font-size="12" font-weight="600" fill="var(--_text-sec)"><tspan x="52" dy="-3.6000000000000014">Fine blocks (16-32 tokens)</tspan><tspan x="52" dy="15.600000000000001">Block size = 16 tokens</tspan></text>
+</g>
+<g class="subgraph" data-id="Coarse" data-label="Coarse blocks (64-128 tokens)
+Block size = 64 tokens">
+  <rect x="60" y="40" width="0" height="0" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="60" y="40" width="0" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="72" y="54" font-size="12" font-weight="600" fill="var(--_text-sec)"><tspan x="72" dy="-3.6000000000000014">Coarse blocks (64-128 tokens)</tspan><tspan x="72" dy="15.600000000000001">Block size = 64 tokens</tspan></text>
+</g>
+<g class="subgraph" data-id="Tradeoff" data-label="Tradeoff">
+  <rect x="80" y="40" width="0" height="0" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="80" y="40" width="0" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="92" y="54" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">Tradeoff</text>
+</g>
+<g class="node" data-id="FA" data-label="tok 0-15
+KEPT" data-shape="rectangle">
+  <rect x="100" y="40" width="83.446" height="53.800000000000004" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
+  <text x="141.723" y="66.9" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="141.723" dy="-3.9000000000000012">tok 0-15</tspan><tspan x="141.723" dy="16.900000000000002">KEPT</tspan></text>
+</g>
+<g class="node" data-id="FB" data-label="tok 16-31
+dropped" data-shape="rectangle">
+  <rect x="312.82" y="40" width="92.338" height="53.800000000000004" rx="0" ry="0" fill="#fee2e2" stroke="#ef4444" stroke-width="0.75" />
+  <text x="358.989" y="66.9" text-anchor="middle" font-size="13" font-weight="500" fill="#7f1d1d"><tspan x="358.989" dy="-3.9000000000000012">tok 16-31</tspan><tspan x="358.989" dy="16.900000000000002">dropped</tspan></text>
+</g>
+<g class="node" data-id="FC" data-label="tok 32-47
+KEPT" data-shape="rectangle">
+  <rect x="40" y="113.80000000000001" width="95.30199999999999" height="53.800000000000004" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
+  <text x="87.651" y="140.70000000000002" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="87.651" dy="-3.9000000000000012">tok 32-47</tspan><tspan x="87.651" dy="16.900000000000002">KEPT</tspan></text>
+</g>
+<g class="node" data-id="FD" data-label="tok 48-63
+dropped" data-shape="rectangle">
+  <rect x="155.302" y="113.80000000000001" width="95.30199999999999" height="53.800000000000004" rx="0" ry="0" fill="#fee2e2" stroke="#ef4444" stroke-width="0.75" />
+  <text x="202.95299999999997" y="140.70000000000002" text-anchor="middle" font-size="13" font-weight="500" fill="#7f1d1d"><tspan x="202.95299999999997" dy="-3.9000000000000012">tok 48-63</tspan><tspan x="202.95299999999997" dy="16.900000000000002">dropped</tspan></text>
+</g>
+<g class="node" data-id="FE" data-label="tok 64-79
+KEPT" data-shape="rectangle">
+  <rect x="270.604" y="113.80000000000001" width="95.30199999999999" height="53.800000000000004" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
+  <text x="318.255" y="140.70000000000002" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="318.255" dy="-3.9000000000000012">tok 64-79</tspan><tspan x="318.255" dy="16.900000000000002">KEPT</tspan></text>
+</g>
+<g class="node" data-id="FF" data-label="tok 80-95
+dropped" data-shape="rectangle">
+  <rect x="385.90599999999995" y="113.80000000000001" width="95.30199999999999" height="53.800000000000004" rx="0" ry="0" fill="#fee2e2" stroke="#ef4444" stroke-width="0.75" />
+  <text x="433.55699999999996" y="140.70000000000002" text-anchor="middle" font-size="13" font-weight="500" fill="#7f1d1d"><tspan x="433.55699999999996" dy="-3.9000000000000012">tok 80-95</tspan><tspan x="433.55699999999996" dy="16.900000000000002">dropped</tspan></text>
+</g>
+<g class="node" data-id="FG" data-label="tok 96-111
+KEPT" data-shape="rectangle">
+  <rect x="203.446" y="40" width="89.374" height="53.800000000000004" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
+  <text x="248.13299999999998" y="66.9" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="248.13299999999998" dy="-3.9000000000000012">tok 96-111</tspan><tspan x="248.13299999999998" dy="16.900000000000002">KEPT</tspan></text>
+</g>
+<g class="node" data-id="FH" data-label="tok 112-127
+dropped" data-shape="rectangle">
+  <rect x="40" y="187.60000000000002" width="96.78399999999999" height="53.800000000000004" rx="0" ry="0" fill="#fee2e2" stroke="#ef4444" stroke-width="0.75" />
+  <text x="88.392" y="214.50000000000003" text-anchor="middle" font-size="13" font-weight="500" fill="#7f1d1d"><tspan x="88.392" dy="-3.9000000000000012">tok 112-127</tspan><tspan x="88.392" dy="16.900000000000002">dropped</tspan></text>
+</g>
+<g class="node" data-id="CA" data-label="tok 0-63
+KEPT (contains important lines)" data-shape="rectangle">
+  <rect x="40" y="261.40000000000003" width="223.49499999999995" height="53.800000000000004" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
+  <text x="151.74749999999997" y="288.3" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="151.74749999999997" dy="-3.9000000000000012">tok 0-63</tspan><tspan x="151.74749999999997" dy="16.900000000000002">KEPT (contains important lines)</tspan></text>
+</g>
+<g class="node" data-id="CB" data-label="tok 64-127
+dropped (all or nothing)" data-shape="rectangle">
+  <rect x="156.784" y="187.60000000000002" width="176.07099999999997" height="53.800000000000004" rx="0" ry="0" fill="#fee2e2" stroke="#ef4444" stroke-width="0.75" />
+  <text x="244.81949999999998" y="214.50000000000003" text-anchor="middle" font-size="13" font-weight="500" fill="#7f1d1d"><tspan x="244.81949999999998" dy="-3.9000000000000012">tok 64-127</tspan><tspan x="244.81949999999998" dy="16.900000000000002">dropped (all or nothing)</tspan></text>
+</g>
+<g class="node" data-id="T1" data-label="Fine: precise selection
+more overhead per span
+better for code/JSON/tables" data-shape="rectangle">
+  <rect x="40" y="352.1" width="204.9699999999999" height="70.7" rx="0" ry="0" fill="#f3e8ff" stroke="#9333ea" stroke-width="0.75" />
+  <text x="142.48499999999996" y="387.45000000000005" text-anchor="middle" font-size="13" font-weight="500" fill="#581c87"><tspan x="142.48499999999996" dy="-12.350000000000001">Fine: precise selection</tspan><tspan x="142.48499999999996" dy="16.900000000000002">more overhead per span</tspan><tspan x="142.48499999999996" dy="16.900000000000002">better for code/JSON/tables</tspan></text>
+</g>
+<g class="node" data-id="T2" data-label="Coarse: fast scoring
+fewer discontinuous spans
+better for long-form text" data-shape="rectangle">
+  <rect x="283.49499999999995" y="261.40000000000003" width="199.04199999999994" height="70.7" rx="0" ry="0" fill="#f3e8ff" stroke="#9333ea" stroke-width="0.75" />
+  <text x="383.0159999999999" y="296.75000000000006" text-anchor="middle" font-size="13" font-weight="500" fill="#581c87"><tspan x="383.0159999999999" dy="-12.350000000000001">Coarse: fast scoring</tspan><tspan x="383.0159999999999" dy="16.900000000000002">fewer discontinuous spans</tspan><tspan x="383.0159999999999" dy="16.900000000000002">better for long-form text</tspan></text>
+</g>
+</svg>

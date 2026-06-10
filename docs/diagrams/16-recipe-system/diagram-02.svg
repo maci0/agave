@@ -1,0 +1,157 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 579.9176666666666 1763.1409999999998" width="579.9176666666666" height="1763.1409999999998" style="--bg:#FFFFFF;--fg:#27272A;background:#ffffff">
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;display=swap');
+  text { font-family: 'Inter', system-ui, sans-serif; }
+  svg {
+    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
+    --_text:          #1a1a2e;
+    --_text-sec:      var(--muted, color-mix(in srgb, #1a1a2e 60%, #ffffff));
+    --_text-muted:    var(--muted, color-mix(in srgb, #1a1a2e 40%, #ffffff));
+    --_text-faint:    color-mix(in srgb, #1a1a2e 25%, #ffffff);
+    --_line:          var(--line, color-mix(in srgb, #1a1a2e 50%, #ffffff));
+    --_arrow:         var(--accent, color-mix(in srgb, #1a1a2e 85%, #ffffff));
+    --_node-fill:     var(--surface, color-mix(in srgb, #1a1a2e 3%, #ffffff));
+    --_node-stroke:   var(--border, color-mix(in srgb, #1a1a2e 20%, #ffffff));
+    --_group-fill:    #ffffff;
+    --_group-hdr:     color-mix(in srgb, #1a1a2e 5%, #ffffff);
+    --_inner-stroke:  color-mix(in srgb, #1a1a2e 12%, #ffffff);
+    --_key-badge:     color-mix(in srgb, #1a1a2e 10%, #ffffff);
+  }
+</style>
+<defs>
+  <marker id="arrowhead" markerWidth="8" markerHeight="5" refX="7" refY="2.5" orient="auto">
+    <polygon points="0 0, 8 2.5, 0 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+  <marker id="arrowhead-start" markerWidth="8" markerHeight="5" refX="1" refY="2.5" orient="auto-start-reverse">
+    <polygon points="8 0, 0 2.5, 8 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+</defs>
+<polyline class="edge" data-from="Start" data-to="Loop" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="318.6191666666666,1621.341 318.6191666666666,1633.341 163.68274999999994,1633.341 163.68274999999994,1657.341" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Loop" data-to="ArchCheck" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="89.35574999999994,1657.341 89.35574999999994,1633.341 40.039999999999964,1633.341 40.039999999999964,435.803 126.15712499999994,435.803 126.15712499999994,141.70299999999997" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="ArchCheck" data-to="BackCheck" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="yes (wildcard)" points="160.05812499999993,175.60399999999998 160.05812499999996,504.103 177.64754166666663,504.103 177.64754166666663,516.1030000000001" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="ArchCheck" data-to="ArchMatch" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="no" points="193.95912499999991,141.703 193.95912499999991,187.60399999999998 291.59162499999996,187.60399999999998 291.59162499999996,267.904" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="ArchMatch" data-to="NextPreset" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="no" points="313.5747916666666,377.81983333333335 313.5747916666666,657.3029999999999 355.40291666666667,657.3029999999999 355.4029166666666,1332.2389999999998" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="ArchMatch" data-to="BackCheck" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="yes" points="269.60845833333326,377.8198333333333 269.60845833333326,435.803 251.02337499999996,435.803 251.02337499999996,504.103 214.84887499999996,504.103 214.84887499999996,516.1030000000001" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="BackCheck" data-to="QuantCheck" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="yes (wildcard)" points="177.64754166666663,553.0029999999999 177.64754166666663,847.576 127.88795833333329,847.576 127.88795833333329,915.876 150.29387499999996,915.876 150.29387499999996,927.876" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="BackCheck" data-to="BackMatch" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="no" points="214.84887499999996,553.0029999999999 214.84887499999996,589.0029999999999 264.6084583333333,589.0029999999999 264.60845833333326,669.3029999999999" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="BackMatch" data-to="NextPreset" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="no" points="288.32062499999995,787.8638333333332 288.32062499999995,1000.7759999999998 320.18208333333325,1000.7759999999998 320.18208333333325,1320.2389999999998 318.0541666666666,1320.2389999999998 318.0541666666666,1332.2389999999998" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="BackMatch" data-to="QuantCheck" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="yes" points="240.89629166666663,787.8638333333332 240.89629166666663,847.576 231.19341666666662,847.576 231.19341666666662,915.876 188.4832083333333,915.876 188.4832083333333,927.876" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="QuantCheck" data-to="Hit" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="yes (wildcard)" points="150.29387499999996,964.7759999999998 150.29387499999996,1411.841 109.73508333333328,1411.841 109.73508333333328,1480.1409999999998 116.59874999999994,1480.1409999999998 116.59874999999994,1492.1409999999998" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="QuantCheck" data-to="QuantMatch" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="no" points="188.4832083333333,964.7759999999998 188.4832083333333,1000.7759999999998 242.75058333333328,1000.7759999999998 242.75058333333328,1081.0759999999998" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="QuantMatch" data-to="NextPreset" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="no" points="265.22774999999996,1193.461833333333 265.22774999999996,1320.2389999999998 280.7054166666666,1320.2389999999998 280.7054166666666,1332.2389999999998" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="QuantMatch" data-to="Hit" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="yes" points="220.2734166666666,1193.461833333333 220.2734166666666,1411.841 196.14958333333328,1411.841 196.14958333333328,1480.1409999999998 165.16208333333327,1480.1409999999998 165.16208333333327,1492.1409999999998" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="NextPreset" data-to="More" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="318.0541666666666,1369.139 318.0541666666666,1417.139" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="More" data-to="Loop" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="yes" points="298.17049999999995,1516.5573333333332 298.17049999999995,1565.041 173.92316666666662,1565.041 173.92316666666662,1621.341 126.51924999999994,1621.341 126.51924999999994,1657.341" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="More" data-to="Miss" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="no" points="337.9378333333333,1516.5573333333332 337.9378333333333,1572.4409999999998 461.5151666666666,1572.4409999999998 461.5151666666666,1657.341" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<g class="edge-label" data-from="ArchCheck" data-to="BackCheck" data-label="yes (wildcard)">
+  <rect x="118.05812499999996" y="442.803" width="83.58400000000002" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="159.85012499999996" y="457.953" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">yes (wildcard)</text>
+</g>
+<g class="edge-label" data-from="ArchCheck" data-to="ArchMatch" data-label="no">
+  <rect x="276.59162499999996" y="194.60399999999998" width="29.53" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="291.35662499999995" y="209.754" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">no</text>
+</g>
+<g class="edge-label" data-from="ArchMatch" data-to="NextPreset" data-label="no">
+  <rect x="340.40291666666667" y="1258.9389999999999" width="29.53" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="355.16791666666666" y="1274.089" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">no</text>
+</g>
+<g class="edge-label" data-from="ArchMatch" data-to="BackCheck" data-label="yes">
+  <rect x="233.02337499999993" y="442.803" width="35.47" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="250.75837499999994" y="457.953" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">yes</text>
+</g>
+<g class="edge-label" data-from="BackCheck" data-to="QuantCheck" data-label="yes (wildcard)">
+  <rect x="85.8879583333333" y="854.576" width="83.58400000000002" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="127.6799583333333" y="869.726" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">yes (wildcard)</text>
+</g>
+<g class="edge-label" data-from="BackCheck" data-to="BackMatch" data-label="no">
+  <rect x="249.60845833333332" y="596.0029999999999" width="29.53" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="264.3734583333333" y="611.1529999999999" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">no</text>
+</g>
+<g class="edge-label" data-from="BackMatch" data-to="NextPreset" data-label="no">
+  <rect x="305.18208333333325" y="1007.7759999999998" width="29.53" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="319.94708333333324" y="1022.9259999999998" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">no</text>
+</g>
+<g class="edge-label" data-from="BackMatch" data-to="QuantCheck" data-label="yes">
+  <rect x="213.19341666666662" y="854.576" width="35.47" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="230.92841666666664" y="869.726" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">yes</text>
+</g>
+<g class="edge-label" data-from="QuantCheck" data-to="Hit" data-label="yes (wildcard)">
+  <rect x="67.73508333333325" y="1418.841" width="83.58400000000002" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="109.52708333333325" y="1433.991" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">yes (wildcard)</text>
+</g>
+<g class="edge-label" data-from="QuantCheck" data-to="QuantMatch" data-label="no">
+  <rect x="227.75058333333328" y="1007.7759999999998" width="29.53" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="242.51558333333327" y="1022.9259999999998" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">no</text>
+</g>
+<g class="edge-label" data-from="QuantMatch" data-to="NextPreset" data-label="no">
+  <rect x="250.22774999999996" y="1258.9389999999999" width="29.53" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="264.99274999999994" y="1274.089" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">no</text>
+</g>
+<g class="edge-label" data-from="QuantMatch" data-to="Hit" data-label="yes">
+  <rect x="178.14958333333328" y="1418.841" width="35.47" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="195.8845833333333" y="1433.991" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">yes</text>
+</g>
+<g class="edge-label" data-from="More" data-to="Loop" data-label="yes">
+  <rect x="155.9231666666666" y="1572.041" width="35.47" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="173.6581666666666" y="1587.191" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">yes</text>
+</g>
+<g class="edge-label" data-from="More" data-to="Miss" data-label="no">
+  <rect x="446.5151666666666" y="1596.041" width="29.53" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="461.28016666666656" y="1611.191" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">no</text>
+</g>
+<g class="node" data-id="Start" data-label="match(arch, backend, quant)" data-shape="stadium">
+  <rect x="215.39316666666662" y="1584.4409999999998" width="206.45199999999994" height="36.900000000000006" rx="18.450000000000003" ry="18.450000000000003" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
+  <text x="318.6191666666666" y="1602.8909999999998" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f" dy="4.55">match(arch, backend, quant)</text>
+</g>
+<g class="node" data-id="Loop" data-label="Check next preset
+in order" data-shape="rectangle">
+  <rect x="52.192249999999945" y="1657.341" width="148.654" height="53.800000000000004" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
+  <text x="126.51924999999994" y="1684.241" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12"><tspan x="126.51924999999994" dy="-3.9000000000000012">Check next preset</tspan><tspan x="126.51924999999994" dy="16.900000000000002">in order</tspan></text>
+</g>
+<g class="node" data-id="NextPreset" data-label="Skip to next preset" data-shape="rectangle">
+  <rect x="243.35666666666663" y="1332.2389999999998" width="149.395" height="36.900000000000006" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
+  <text x="318.0541666666666" y="1350.6889999999999" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12" dy="4.55">Skip to next preset</text>
+</g>
+<g class="node" data-id="Hit" data-label="Return this recipe" data-shape="rectangle">
+  <rect x="68.0354166666666" y="1492.1409999999998" width="145.69" height="36.900000000000006" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
+  <text x="140.8804166666666" y="1510.591" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d" dy="4.55">Return this recipe</text>
+</g>
+<g class="node" data-id="Miss" data-label="Return null
+(use Recipe.default)" data-shape="rectangle">
+  <rect x="383.1126666666666" y="1657.341" width="156.805" height="53.800000000000004" rx="0" ry="0" fill="#fee2e2" stroke="#ef4444" stroke-width="0.75" />
+  <text x="461.5151666666666" y="1684.241" text-anchor="middle" font-size="13" font-weight="500" fill="#7f1d1d"><tspan x="461.5151666666666" dy="-3.9000000000000012">Return null</tspan><tspan x="461.5151666666666" dy="16.900000000000002">(use Recipe.default)</tspan></text>
+</g>
+<g class="node" data-id="ArchCheck" data-label="arch_prefix
+empty?" data-shape="diamond">
+  <polygon points="160.05812499999993,40 227.86012499999993,107.80199999999999 160.05812499999993,175.60399999999998 92.25612499999994,107.80199999999999" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="160.05812499999993" y="107.80199999999999" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="160.05812499999993" dy="-3.9000000000000012">arch_prefix</tspan><tspan x="160.05812499999993" dy="16.900000000000002">empty?</tspan></text>
+</g>
+<g class="node" data-id="BackCheck" data-label="BackCheck" data-shape="rectangle">
+  <rect x="140.4462083333333" y="516.1030000000001" width="111.604" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="196.24820833333328" y="534.5530000000001" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">BackCheck</text>
+</g>
+<g class="node" data-id="ArchMatch" data-label="arch starts
+with prefix?" data-shape="diamond">
+  <polygon points="291.59162499999996,267.904 357.54112499999997,333.8535 291.59162499999996,399.803 225.64212499999996,333.8535" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="291.59162499999996" y="333.8535" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="291.59162499999996" dy="-3.9000000000000012">arch starts</tspan><tspan x="291.59162499999996" dy="16.900000000000002">with prefix?</tspan></text>
+</g>
+<g class="node" data-id="QuantCheck" data-label="QuantCheck" data-shape="rectangle">
+  <rect x="112.10454166666662" y="927.876" width="114.568" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="169.3885416666666" y="946.326" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">QuantCheck</text>
+</g>
+<g class="node" data-id="BackMatch" data-label="backend
+exact match?" data-shape="diamond">
+  <polygon points="264.6084583333333,669.3029999999999 335.74495833333333,740.4394999999998 264.6084583333333,811.5759999999998 193.4719583333333,740.4394999999998" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="264.6084583333333" y="740.4394999999998" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="264.6084583333333" dy="-3.9000000000000012">backend</tspan><tspan x="264.6084583333333" dy="16.900000000000002">exact match?</tspan></text>
+</g>
+<g class="node" data-id="QuantMatch" data-label="quant starts
+with prefix?" data-shape="diamond">
+  <polygon points="242.75058333333328,1081.0759999999998 310.18208333333325,1148.5074999999997 242.75058333333328,1215.9389999999996 175.31908333333328,1148.5074999999997" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="242.75058333333328" y="1148.5074999999997" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="242.75058333333328" dy="-3.9000000000000012">quant starts</tspan><tspan x="242.75058333333328" dy="16.900000000000002">with prefix?</tspan></text>
+</g>
+<g class="node" data-id="More" data-label="More
+presets?" data-shape="diamond">
+  <polygon points="318.0541666666666,1417.139 377.7051666666666,1476.79 318.0541666666666,1536.441 258.4031666666666,1476.79" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="318.0541666666666" y="1476.79" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="318.0541666666666" dy="-3.9000000000000012">More</tspan><tspan x="318.0541666666666" dy="16.900000000000002">presets?</tspan></text>
+</g>
+</svg>

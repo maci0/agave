@@ -1,0 +1,137 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1115.0854047619046 1015.9000000000001" width="1115.0854047619046" height="1015.9000000000001" style="--bg:#FFFFFF;--fg:#27272A;background:#ffffff">
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;display=swap');
+  text { font-family: 'Inter', system-ui, sans-serif; }
+  svg {
+    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
+    --_text:          #1a1a2e;
+    --_text-sec:      var(--muted, color-mix(in srgb, #1a1a2e 60%, #ffffff));
+    --_text-muted:    var(--muted, color-mix(in srgb, #1a1a2e 40%, #ffffff));
+    --_text-faint:    color-mix(in srgb, #1a1a2e 25%, #ffffff);
+    --_line:          var(--line, color-mix(in srgb, #1a1a2e 50%, #ffffff));
+    --_arrow:         var(--accent, color-mix(in srgb, #1a1a2e 85%, #ffffff));
+    --_node-fill:     var(--surface, color-mix(in srgb, #1a1a2e 3%, #ffffff));
+    --_node-stroke:   var(--border, color-mix(in srgb, #1a1a2e 20%, #ffffff));
+    --_group-fill:    #ffffff;
+    --_group-hdr:     color-mix(in srgb, #1a1a2e 5%, #ffffff);
+    --_inner-stroke:  color-mix(in srgb, #1a1a2e 12%, #ffffff);
+    --_key-badge:     color-mix(in srgb, #1a1a2e 10%, #ffffff);
+  }
+</style>
+<defs>
+  <marker id="arrowhead" markerWidth="8" markerHeight="5" refX="7" refY="2.5" orient="auto">
+    <polygon points="0 0, 8 2.5, 0 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+  <marker id="arrowhead-start" markerWidth="8" markerHeight="5" refX="1" refY="2.5" orient="auto-start-reverse">
+    <polygon points="8 0, 0 2.5, 8 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+</defs>
+<g class="subgraph" data-id="Prefix" data-label="Shared Prefix KV (positions 0..P-1)
+All tree nodes attend to all prefix positions">
+  <rect x="219.8374047619047" y="40" width="113.964" height="351.6" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="219.8374047619047" y="40" width="113.964" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="231.8374047619047" y="54" font-size="12" font-weight="600" fill="var(--_text-sec)"><tspan x="231.8374047619047" dy="-3.6000000000000014">Shared Prefix KV (positions 0..P-1)</tspan><tspan x="231.8374047619047" dy="15.600000000000001">All tree nodes attend to all prefix positions</tspan></text>
+</g>
+<g class="subgraph" data-id="Tree" data-label="Draft Tree (positions P..P+B-1)">
+  <rect x="40" y="540.2" width="474.27750000000003" height="435.70000000000005" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="40" y="540.2" width="474.27750000000003" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="52" y="554.2" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">Draft Tree (positions P..P+B-1)</text>
+</g>
+<g class="subgraph" data-id="Legend" data-label="Attention rule per node">
+  <rect x="361.8014047619047" y="277.8" width="713.2839999999999" height="113.80000000000001" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="361.8014047619047" y="277.8" width="713.2839999999999" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="373.8014047619047" y="291.8" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">Attention rule per node</text>
+</g>
+<polyline class="edge" data-from="Prefix" data-to="N0" data-style="dotted" data-arrow-start="false" data-arrow-end="true" data-label="unconditional
+for all nodes" points="252.39854761904758,391.6 252.39854761904758,439.6 227.10071428571425,439.6 227.10071428571425,522.2 187.532,522.2 187.532,589.8333333333334" fill="none" stroke="var(--_line)" stroke-width="1" stroke-dasharray="4 4" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Prefix" data-to="N1" data-style="dotted" data-arrow-start="false" data-arrow-end="true" points="236.11797619047613,391.6 236.11797619047613,427.6 154.05288095238092,427.6 154.05288095238092,522.2 88.93633333333332,522.2 88.93633333333332,700.7 95.17733333333334,700.7 95.17733333333334,736.7" fill="none" stroke="var(--_line)" stroke-width="1" stroke-dasharray="4 4" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Prefix" data-to="N2" data-style="dotted" data-arrow-start="false" data-arrow-end="true" points="284.9596904761904,391.6 284.9596904761904,427.6 313.8458333333333,427.6 313.8458333333333,522.2 329.06399999999996,522.2 329.06399999999996,836.3000000000001 240.7626666666667,836.3000000000001 240.7626666666667,872.3000000000001" fill="none" stroke="var(--_line)" stroke-width="1" stroke-dasharray="4 4" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Prefix" data-to="N3" data-style="dotted" data-arrow-start="false" data-arrow-end="true" points="268.679119047619,391.6 268.679119047619,439.6 299.2055476190476,439.6 299.2055476190476,522.2 285.62766666666664,522.2 285.62766666666664,700.7 279.88666666666666,700.7 279.88666666666666,736.7" fill="none" stroke="var(--_line)" stroke-width="1" stroke-dasharray="4 4" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Prefix" data-to="N4" data-style="dotted" data-arrow-start="false" data-arrow-end="true" points="301.24026190476184,391.6 301.24026190476184,415.6 356.34033333333326,415.6 356.34033333333326,522.2 401.053,522.2 401.053,589.8333333333334" fill="none" stroke="var(--_line)" stroke-width="1" stroke-dasharray="4 4" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Prefix" data-to="N5" data-style="dotted" data-arrow-start="false" data-arrow-end="true" points="317.52083333333326,391.6 317.52083333333326,403.6 398.3348333333333,403.6 398.3348333333333,510.20000000000005 472.04200000000003,510.20000000000005 472.04200000000003,700.7 457.1241666666667,700.7 457.1241666666667,736.7" fill="none" stroke="var(--_line)" stroke-width="1" stroke-dasharray="4 4" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="P0" data-to="P1" data-style="solid" data-arrow-start="false" data-arrow-end="false" points="276.8194047619047,120.9 276.8194047619047,168.9" fill="none" stroke="var(--_line)" stroke-width="1" />
+<polyline class="edge" data-from="P1" data-to="P2" data-style="solid" data-arrow-start="false" data-arrow-end="false" points="276.8194047619047,205.8 276.8194047619047,253.8" fill="none" stroke="var(--_line)" stroke-width="1" />
+<polyline class="edge" data-from="P2" data-to="PP" data-style="solid" data-arrow-start="false" data-arrow-end="false" points="276.8194047619047,290.70000000000005 276.8194047619047,330.25" fill="none" stroke="var(--_line)" stroke-width="1" />
+<polyline class="edge" data-from="N0" data-to="N1" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="187.532,677.4333333333334 187.532,707.0666666666667 114.766,707.0666666666667 114.766,736.7" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="N1" data-to="N2" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="114.766,824.3000000000001 114.766,836.3000000000001 203.06733333333335,836.3000000000001 203.06733333333335,872.3000000000001" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="N0" data-to="N3" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="187.532,677.4333333333334 187.532,707.0666666666667 260.298,707.0666666666667 260.298,736.7" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="N4" data-to="N5" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="401.053,694.3333333333334 401.053,700.7 415.9708333333333,700.7 415.9708333333333,736.7" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<g class="edge-label" data-from="Prefix" data-to="N0" data-label="unconditional
+for all nodes">
+  <rect x="186.60071428571425" y="446.6" width="80.61400000000002" height="44.6" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="226.90771428571426" y="468.90000000000003" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)"><tspan x="226.90771428571426" dy="-3.3000000000000007">unconditional</tspan><tspan x="226.90771428571426" dy="14.3">for all nodes</tspan></text>
+</g>
+<g class="node" data-id="P0" data-label="pos 0" data-shape="rectangle">
+  <rect x="239.9129047619047" y="84" width="73.81299999999999" height="36.900000000000006" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
+  <text x="276.8194047619047" y="102.45" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f" dy="4.55">pos 0</text>
+</g>
+<g class="node" data-id="P1" data-label="pos 1" data-shape="rectangle">
+  <rect x="242.13590476190473" y="168.9" width="69.36699999999999" height="36.900000000000006" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
+  <text x="276.8194047619047" y="187.35000000000002" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f" dy="4.55">pos 1</text>
+</g>
+<g class="node" data-id="P2" data-label="..." data-shape="rectangle">
+  <rect x="246.8194047619047" y="253.8" width="60" height="36.900000000000006" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
+  <text x="276.8194047619047" y="272.25" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f" dy="4.55">...</text>
+</g>
+<g class="node" data-id="PP" data-label="pos P-1" data-shape="rectangle">
+  <rect x="235.8374047619047" y="330.25" width="81.964" height="36.900000000000006" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
+  <text x="276.8194047619047" y="348.7" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f" dy="4.55">pos P-1</text>
+</g>
+<g class="node" data-id="N0" data-label="Node 0
+'the'
+index=0
+mask=0b...001" data-shape="rectangle">
+  <rect x="126.543" y="589.8333333333334" width="121.978" height="87.60000000000001" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="187.532" y="633.6333333333333" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="187.532" dy="-20.8">Node 0</tspan><tspan x="187.532" dy="16.900000000000002">&#39;the&#39;</tspan><tspan x="187.532" dy="16.900000000000002">index=0</tspan><tspan x="187.532" dy="16.900000000000002">mask=0b...001</tspan></text>
+</g>
+<g class="node" data-id="N1" data-label="Node 1
+'cat'
+index=1
+mask=0b...011" data-shape="rectangle">
+  <rect x="56" y="736.7" width="117.53200000000001" height="87.60000000000001" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="114.766" y="780.5" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="114.766" dy="-20.8">Node 1</tspan><tspan x="114.766" dy="16.900000000000002">&#39;cat&#39;</tspan><tspan x="114.766" dy="16.900000000000002">index=1</tspan><tspan x="114.766" dy="16.900000000000002">mask=0b...011</tspan></text>
+</g>
+<g class="node" data-id="N2" data-label="Node 2
+'sat'
+index=2
+mask=0b...111" data-shape="rectangle">
+  <rect x="165.372" y="872.3000000000001" width="113.086" height="87.60000000000001" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="221.91500000000002" y="916.1" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="221.91500000000002" dy="-20.8">Node 2</tspan><tspan x="221.91500000000002" dy="16.900000000000002">&#39;sat&#39;</tspan><tspan x="221.91500000000002" dy="16.900000000000002">index=2</tspan><tspan x="221.91500000000002" dy="16.900000000000002">mask=0b...111</tspan></text>
+</g>
+<g class="node" data-id="N3" data-label="Node 3
+'dog'
+index=3
+mask=0b...011" data-shape="rectangle">
+  <rect x="201.532" y="736.7" width="117.53200000000001" height="87.60000000000001" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="260.298" y="780.5" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="260.298" dy="-20.8">Node 3</tspan><tspan x="260.298" dy="16.900000000000002">&#39;dog&#39;</tspan><tspan x="260.298" dy="16.900000000000002">index=3</tspan><tspan x="260.298" dy="16.900000000000002">mask=0b...011</tspan></text>
+</g>
+<g class="node" data-id="N4" data-label="Node 4
+'a'
+index=4
+mask=0b...001
+(sibling of N0)" data-shape="rectangle">
+  <rect x="340.06399999999996" y="589.8333333333334" width="121.978" height="104.50000000000001" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="401.05299999999994" y="642.0833333333334" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="401.05299999999994" dy="-29.250000000000004">Node 4</tspan><tspan x="401.05299999999994" dy="16.900000000000002">&#39;a&#39;</tspan><tspan x="401.05299999999994" dy="16.900000000000002">index=4</tspan><tspan x="401.05299999999994" dy="16.900000000000002">mask=0b...001</tspan><tspan x="401.05299999999994" dy="16.900000000000002">(sibling of N0)</tspan></text>
+</g>
+<g class="node" data-id="N5" data-label="Node 5
+'cat'
+index=5
+mask=0b10001" data-shape="rectangle">
+  <rect x="374.8175" y="736.7" width="123.46000000000001" height="87.60000000000001" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="436.5475" y="780.5" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="436.5475" dy="-20.8">Node 5</tspan><tspan x="436.5475" dy="16.900000000000002">&#39;cat&#39;</tspan><tspan x="436.5475" dy="16.900000000000002">index=5</tspan><tspan x="436.5475" dy="16.900000000000002">mask=0b10001</tspan></text>
+</g>
+<g class="node" data-id="L1" data-label="attends to: ALL prefix positions" data-shape="rectangle">
+  <rect x="607.8074047619046" y="330.25" width="221.27199999999996" height="36.900000000000006" rx="0" ry="0" fill="#f3e8ff" stroke="#9333ea" stroke-width="0.75" />
+  <text x="718.4434047619046" y="348.7" text-anchor="middle" font-size="13" font-weight="500" fill="#581c87" dy="4.55">attends to: ALL prefix positions</text>
+</g>
+<g class="node" data-id="L2" data-label="attends to: ancestors in tree
+(bit i set = attend to node i)" data-shape="rectangle">
+  <rect x="857.0794047619046" y="330.25" width="202.00599999999997" height="53.800000000000004" rx="0" ry="0" fill="#f3e8ff" stroke="#9333ea" stroke-width="0.75" />
+  <text x="958.0824047619046" y="357.15" text-anchor="middle" font-size="13" font-weight="500" fill="#581c87"><tspan x="958.0824047619046" dy="-3.9000000000000012">attends to: ancestors in tree</tspan><tspan x="958.0824047619046" dy="16.900000000000002">(bit i set = attend to node i)</tspan></text>
+</g>
+<g class="node" data-id="L3" data-label="does NOT attend to: siblings
+or non-ancestor tree nodes" data-shape="rectangle">
+  <rect x="377.8014047619047" y="330.25" width="202.006" height="53.800000000000004" rx="0" ry="0" fill="#f3e8ff" stroke="#9333ea" stroke-width="0.75" />
+  <text x="478.80440476190466" y="357.15" text-anchor="middle" font-size="13" font-weight="500" fill="#581c87"><tspan x="478.80440476190466" dy="-3.9000000000000012">does NOT attend to: siblings</tspan><tspan x="478.80440476190466" dy="16.900000000000002">or non-ancestor tree nodes</tspan></text>
+</g>
+</svg>

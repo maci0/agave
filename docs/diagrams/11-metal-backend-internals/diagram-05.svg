@@ -1,0 +1,105 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 654.1554999999998 640" width="654.1554999999998" height="640" style="--bg:#FFFFFF;--fg:#27272A;background:#ffffff">
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;display=swap');
+  text { font-family: 'Inter', system-ui, sans-serif; }
+  svg {
+    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
+    --_text:          #1a1a2e;
+    --_text-sec:      var(--muted, color-mix(in srgb, #1a1a2e 60%, #ffffff));
+    --_text-muted:    var(--muted, color-mix(in srgb, #1a1a2e 40%, #ffffff));
+    --_text-faint:    color-mix(in srgb, #1a1a2e 25%, #ffffff);
+    --_line:          var(--line, color-mix(in srgb, #1a1a2e 50%, #ffffff));
+    --_arrow:         var(--accent, color-mix(in srgb, #1a1a2e 85%, #ffffff));
+    --_node-fill:     var(--surface, color-mix(in srgb, #1a1a2e 3%, #ffffff));
+    --_node-stroke:   var(--border, color-mix(in srgb, #1a1a2e 20%, #ffffff));
+    --_group-fill:    #ffffff;
+    --_group-hdr:     color-mix(in srgb, #1a1a2e 5%, #ffffff);
+    --_inner-stroke:  color-mix(in srgb, #1a1a2e 12%, #ffffff);
+    --_key-badge:     color-mix(in srgb, #1a1a2e 10%, #ffffff);
+  }
+</style>
+<defs>
+  <marker id="seq-arrow" markerWidth="8" markerHeight="5" refX="8" refY="2.5" orient="auto-start-reverse">
+    <polygon points="0 0, 8 2.5, 0 5" fill="var(--_arrow)" />
+  </marker>
+  <marker id="seq-arrow-open" markerWidth="8" markerHeight="5" refX="8" refY="2.5" orient="auto-start-reverse">
+    <polyline points="0 0, 8 2.5, 0 5" fill="none" stroke="var(--_arrow)" stroke-width="1" />
+  </marker>
+</defs>
+<line class="lifeline" data-actor="CPU" x1="159.546" y1="70" x2="159.546" y2="610" stroke="var(--_line)" stroke-width="0.75" stroke-dasharray="6 4" />
+<line class="lifeline" data-actor="CMB" x1="357.6135" y1="70" x2="357.6135" y2="610" stroke="var(--_line)" stroke-width="0.75" stroke-dasharray="6 4" />
+<line class="lifeline" data-actor="GPU" x1="563.0909999999999" y1="70" x2="563.0909999999999" y2="610" stroke="var(--_line)" stroke-width="0.75" stroke-dasharray="6 4" />
+<g class="message" data-from="CPU" data-to="CMB" data-label="encode gemv(W_q) [deferred]" data-line-style="solid" data-arrow-head="filled" data-self="false">
+  <line x1="159.546" y1="90" x2="357.6135" y2="90" stroke="var(--_line)" stroke-width="1" marker-end="url(#seq-arrow)" />
+  <text x="258.57975" y="80" font-size="11" text-anchor="middle" font-weight="400" fill="var(--_text-muted)" dy="3.8499999999999996">encode gemv(W_q) [deferred]</text>
+</g>
+<g class="message" data-from="CPU" data-to="CMB" data-label="encode gemv(W_k) [deferred]" data-line-style="solid" data-arrow-head="filled" data-self="false">
+  <line x1="159.546" y1="130" x2="357.6135" y2="130" stroke="var(--_line)" stroke-width="1" marker-end="url(#seq-arrow)" />
+  <text x="258.57975" y="120" font-size="11" text-anchor="middle" font-weight="400" fill="var(--_text-muted)" dy="3.8499999999999996">encode gemv(W_k) [deferred]</text>
+</g>
+<g class="message" data-from="CPU" data-to="CMB" data-label="encode gemv(W_v) [deferred]" data-line-style="solid" data-arrow-head="filled" data-self="false">
+  <line x1="159.546" y1="170" x2="357.6135" y2="170" stroke="var(--_line)" stroke-width="1" marker-end="url(#seq-arrow)" />
+  <text x="258.57975" y="160" font-size="11" text-anchor="middle" font-weight="400" fill="var(--_text-muted)" dy="3.8499999999999996">encode gemv(W_v) [deferred]</text>
+</g>
+<g class="message" data-from="CPU" data-to="CMB" data-label="encode sdpa(q,k,v) [deferred]" data-line-style="solid" data-arrow-head="filled" data-self="false">
+  <line x1="159.546" y1="210" x2="357.6135" y2="210" stroke="var(--_line)" stroke-width="1" marker-end="url(#seq-arrow)" />
+  <text x="258.57975" y="200" font-size="11" text-anchor="middle" font-weight="400" fill="var(--_text-muted)" dy="3.8499999999999996">encode sdpa(q,k,v) [deferred]</text>
+</g>
+<g class="message" data-from="CPU" data-to="CPU" data-label="argmax(logits) — READS STALE DATA (write hazard)" data-line-style="solid" data-arrow-head="filled" data-self="true">
+  <polyline points="159.546,265 189.546,265 189.546,285 159.546,285" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#seq-arrow)" />
+  <text x="197.546" y="275" font-size="11" text-anchor="start" font-weight="400" fill="var(--_text-muted)" dy="3.8499999999999996">argmax(logits) — READS STALE DATA (write hazard)</text>
+</g>
+<g class="message" data-from="CPU" data-to="CMB" data-label="encode gemv(lm_head) [deferred]" data-line-style="solid" data-arrow-head="filled" data-self="false">
+  <line x1="159.546" y1="350" x2="357.6135" y2="350" stroke="var(--_line)" stroke-width="1" marker-end="url(#seq-arrow)" />
+  <text x="258.57975" y="340" font-size="11" text-anchor="middle" font-weight="400" fill="var(--_text-muted)" dy="3.8499999999999996">encode gemv(lm_head) [deferred]</text>
+</g>
+<g class="message" data-from="CPU" data-to="CMB" data-label="commit() — submit all at once" data-line-style="solid" data-arrow-head="filled" data-self="false">
+  <line x1="159.546" y1="390" x2="357.6135" y2="390" stroke="var(--_line)" stroke-width="1" marker-end="url(#seq-arrow)" />
+  <text x="258.57975" y="380" font-size="11" text-anchor="middle" font-weight="400" fill="var(--_text-muted)" dy="3.8499999999999996">commit() — submit all at once</text>
+</g>
+<g class="message" data-from="CMB" data-to="GPU" data-label="execute all encoded ops" data-line-style="solid" data-arrow-head="filled" data-self="false">
+  <line x1="357.6135" y1="430" x2="563.0909999999999" y2="430" stroke="var(--_line)" stroke-width="1" marker-end="url(#seq-arrow)" />
+  <text x="460.3522499999999" y="420" font-size="11" text-anchor="middle" font-weight="400" fill="var(--_text-muted)" dy="3.8499999999999996">execute all encoded ops</text>
+</g>
+<g class="message" data-from="GPU" data-to="CPU" data-label="waitUntilCompleted() — CPU blocks here" data-line-style="dashed" data-arrow-head="filled" data-self="false">
+  <line x1="563.0909999999999" y1="470" x2="159.546" y2="470" stroke="var(--_line)" stroke-width="1" stroke-dasharray="6 4" marker-end="url(#seq-arrow)" />
+  <text x="361.3185" y="460" font-size="11" text-anchor="middle" font-weight="400" fill="var(--_text-muted)" dy="3.8499999999999996">waitUntilCompleted() — CPU blocks here</text>
+</g>
+<g class="message" data-from="CPU" data-to="CPU" data-label="argmax(logits) — CORRECT: reads fresh logits" data-line-style="solid" data-arrow-head="filled" data-self="true">
+  <polyline points="159.546,525 189.546,525 189.546,545 159.546,545" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#seq-arrow)" />
+  <text x="197.546" y="535" font-size="11" text-anchor="start" font-weight="400" fill="var(--_text-muted)" dy="3.8499999999999996">argmax(logits) — CORRECT: reads fresh logits</text>
+</g>
+<g class="note" data-position="over" data-actors="CPU">
+  <polygon points="44.553,218 268.539,218 274.539,224 274.539,241 44.553,241" fill="#ffffff" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <polygon points="268.539,218 274.539,224 268.539,224" fill="var(--_inner-stroke)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="159.546" y="229.5" font-size="11" text-anchor="middle" font-weight="400" fill="var(--_text-muted)" dy="3.8499999999999996">CPU tries to read logits here WITHOUT sync</text>
+</g>
+<g class="note" data-position="over" data-actors="CPU,GPU">
+  <polygon points="258.50249999999994,303 458.1345,303 464.1345,309 464.1345,326 258.50249999999994,326" fill="#ffffff" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <polygon points="458.1345,303 464.1345,309 458.1345,309" fill="var(--_inner-stroke)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="361.3185" y="314.5" font-size="11" text-anchor="middle" font-weight="400" fill="var(--_text-muted)" dy="3.8499999999999996">Correct pattern: sync before CPU read</text>
+</g>
+<g class="note" data-position="over" data-actors="CPU">
+  <polygon points="30,478 283.092,478 289.092,484 289.092,501 30,501" fill="#ffffff" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <polygon points="283.092,478 289.092,484 283.092,484" fill="var(--_inner-stroke)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="159.546" y="489.5" font-size="11" text-anchor="middle" font-weight="400" fill="var(--_text-muted)" dy="3.8499999999999996">GPU writes are now visible in UMA shared memory</text>
+</g>
+<g class="note" data-position="over" data-actors="CPU,GPU">
+  <polygon points="266.2245,563 450.4125,563 456.4125,569 456.4125,586 266.2245,586" fill="#ffffff" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <polygon points="450.4125,563 456.4125,569 450.4125,569" fill="var(--_inner-stroke)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="361.3185" y="574.5" font-size="11" text-anchor="middle" font-weight="400" fill="var(--_text-muted)" dy="3.8499999999999996">Total syncs per token: 1-2 (not 800+)</text>
+</g>
+<g class="actor" data-id="CPU" data-label="CPU Thread" data-type="participant">
+  <rect x="105.89150000000001" y="30" width="107.30899999999998" height="40" rx="4" ry="4" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="159.546" y="50" font-size="13" text-anchor="middle" font-weight="500" fill="var(--_text)" dy="4.55">CPU Thread</text>
+</g>
+<g class="actor" data-id="CMB" data-label="Command Buffer
+(GPU queue)" data-type="participant">
+  <rect x="253.20049999999998" y="30" width="208.826" height="40" rx="4" ry="4" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="357.6135" y="50" font-size="13" text-anchor="middle" font-weight="500" fill="var(--_text)"><tspan x="357.6135" dy="-3.9000000000000012">Command Buffer</tspan><tspan x="357.6135" dy="16.900000000000002">(GPU queue)</tspan></text>
+</g>
+<g class="actor" data-id="GPU" data-label="GPU Hardware" data-type="participant">
+  <rect x="502.0264999999999" y="30" width="122.129" height="40" rx="4" ry="4" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="563.0909999999999" y="50" font-size="13" text-anchor="middle" font-weight="500" fill="var(--_text)" dy="4.55">GPU Hardware</text>
+</g>
+</svg>

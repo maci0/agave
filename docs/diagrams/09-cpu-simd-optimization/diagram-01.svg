@@ -1,0 +1,87 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 935.3059999999999 380.5" width="935.3059999999999" height="380.5" style="--bg:#FFFFFF;--fg:#27272A;background:#ffffff">
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;display=swap');
+  text { font-family: 'Inter', system-ui, sans-serif; }
+  svg {
+    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
+    --_text:          #1a1a2e;
+    --_text-sec:      var(--muted, color-mix(in srgb, #1a1a2e 60%, #ffffff));
+    --_text-muted:    var(--muted, color-mix(in srgb, #1a1a2e 40%, #ffffff));
+    --_text-faint:    color-mix(in srgb, #1a1a2e 25%, #ffffff);
+    --_line:          var(--line, color-mix(in srgb, #1a1a2e 50%, #ffffff));
+    --_arrow:         var(--accent, color-mix(in srgb, #1a1a2e 85%, #ffffff));
+    --_node-fill:     var(--surface, color-mix(in srgb, #1a1a2e 3%, #ffffff));
+    --_node-stroke:   var(--border, color-mix(in srgb, #1a1a2e 20%, #ffffff));
+    --_group-fill:    #ffffff;
+    --_group-hdr:     color-mix(in srgb, #1a1a2e 5%, #ffffff);
+    --_inner-stroke:  color-mix(in srgb, #1a1a2e 12%, #ffffff);
+    --_key-badge:     color-mix(in srgb, #1a1a2e 10%, #ffffff);
+  }
+</style>
+<defs>
+  <marker id="arrowhead" markerWidth="8" markerHeight="5" refX="7" refY="2.5" orient="auto">
+    <polygon points="0 0, 8 2.5, 0 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+  <marker id="arrowhead-start" markerWidth="8" markerHeight="5" refX="1" refY="2.5" orient="auto-start-reverse">
+    <polygon points="8 0, 0 2.5, 8 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+</defs>
+<g class="subgraph" data-id="Scalar" data-label="Scalar (8 instructions)">
+  <rect x="40" y="70.89999999999999" width="176.18" height="238.70000000000002" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="40" y="70.89999999999999" width="176.18" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="52" y="84.89999999999999" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">Scalar (8 instructions)</text>
+</g>
+<g class="subgraph" data-id="SIMD" data-label="SIMD @Vector(8, f32) (1 instruction)">
+  <rect x="367.568" y="40" width="527.7379999999999" height="300.5" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="367.568" y="40" width="527.7379999999999" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="379.568" y="54" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">SIMD @Vector(8, f32) (1 instruction)</text>
+</g>
+<polyline class="edge" data-from="Scalar" data-to="SIMD" data-style="solid" data-arrow-start="false" data-arrow-end="false" data-label="8x slower" points="216.18,190.25 367.568,190.25" fill="none" stroke="var(--_line)" stroke-width="1" />
+<polyline class="edge" data-from="s4" data-to="r4" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="168.09,208.7 168.09,256.7" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="reg_a" data-to="op" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="763.483,137.8 763.483,149.8 654.8541666666666,149.8 654.8541666666666,185.8" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="reg_b" data-to="op" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="501.614,137.8 501.614,149.8 610.2428333333332,149.8 610.2428333333332,185.8" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="op" data-to="reg_c" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="632.5485,222.70000000000002 632.5484999999999,270.70000000000005" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<g class="edge-label" data-from="Scalar" data-to="SIMD" data-label="8x slower">
+  <rect x="260.18" y="174.25" width="63.388" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="291.874" y="189.4" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">8x slower</text>
+</g>
+<g class="node" data-id="s1" data-label="&quot;a[0" data-shape="rectangle">
+  <rect x="138.09" y="114.89999999999999" width="64.17999999999999" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="170.18" y="133.35" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">&quot;a[0</text>
+</g>
+<g class="node" data-id="s2" data-label="&quot;a[1" data-shape="rectangle">
+  <rect x="56" y="114.89999999999999" width="60" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="86" y="133.35" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">&quot;a[1</text>
+</g>
+<g class="node" data-id="s3" data-label="&quot;a[2" data-shape="rectangle">
+  <rect x="56" y="171.8" width="64.17999999999999" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="88.09" y="190.25" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">&quot;a[2</text>
+</g>
+<g class="node" data-id="s4" data-label="..." data-shape="rectangle">
+  <rect x="138.09" y="171.8" width="60" height="36.900000000000006" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="168.09" y="190.25" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d" dy="4.55">...</text>
+</g>
+<g class="node" data-id="r4" data-label="..." data-shape="rectangle">
+  <rect x="140.18" y="256.7" width="60" height="36.900000000000006" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
+  <text x="170.18" y="275.15" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d" dy="4.55">...</text>
+</g>
+<g class="node" data-id="reg_a" data-label="AVX2 register
+1.0 | 2.0 | 3.0 | 4.0 | 5.0 | 6.0 | 7.0 | 8.0" data-shape="rectangle">
+  <rect x="647.66" y="84" width="231.646" height="53.800000000000004" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
+  <text x="763.483" y="110.9" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f"><tspan x="763.483" dy="-3.9000000000000012">AVX2 register</tspan><tspan x="763.483" dy="16.900000000000002">1.0 | 2.0 | 3.0 | 4.0 | 5.0 | 6.0 | 7.0 | 8.0</tspan></text>
+</g>
+<g class="node" data-id="reg_b" data-label="AVX2 register
+2.0 | 2.0 | 2.0 | 2.0 | 2.0 | 2.0 | 2.0 | 2.0" data-shape="rectangle">
+  <rect x="383.568" y="84" width="236.09199999999996" height="53.800000000000004" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
+  <text x="501.614" y="110.9" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f"><tspan x="501.614" dy="-3.9000000000000012">AVX2 register</tspan><tspan x="501.614" dy="16.900000000000002">2.0 | 2.0 | 2.0 | 2.0 | 2.0 | 2.0 | 2.0 | 2.0</tspan></text>
+</g>
+<g class="node" data-id="op" data-label="vaddps (1 cycle)" data-shape="rectangle">
+  <rect x="565.6315" y="185.8" width="133.834" height="36.900000000000006" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="632.5485" y="204.25" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d" dy="4.55">vaddps (1 cycle)</text>
+</g>
+<g class="node" data-id="reg_c" data-label="AVX2 register
+3.0 | 4.0 | 5.0 | 6.0 | 7.0 | 8.0 | 9.0 | 10.0" data-shape="rectangle">
+  <rect x="513.0205" y="270.70000000000005" width="239.05599999999995" height="53.800000000000004" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
+  <text x="632.5485" y="297.6" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="632.5485" dy="-3.9000000000000012">AVX2 register</tspan><tspan x="632.5485" dy="16.900000000000002">3.0 | 4.0 | 5.0 | 6.0 | 7.0 | 8.0 | 9.0 | 10.0</tspan></text>
+</g>
+</svg>

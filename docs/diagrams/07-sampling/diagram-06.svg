@@ -1,0 +1,126 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 757.1647499999999 1092.541" width="757.1647499999999" height="1092.541" style="--bg:#FFFFFF;--fg:#27272A;background:#ffffff">
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;display=swap');
+  text { font-family: 'Inter', system-ui, sans-serif; }
+  svg {
+    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
+    --_text:          #1a1a2e;
+    --_text-sec:      var(--muted, color-mix(in srgb, #1a1a2e 60%, #ffffff));
+    --_text-muted:    var(--muted, color-mix(in srgb, #1a1a2e 40%, #ffffff));
+    --_text-faint:    color-mix(in srgb, #1a1a2e 25%, #ffffff);
+    --_line:          var(--line, color-mix(in srgb, #1a1a2e 50%, #ffffff));
+    --_arrow:         var(--accent, color-mix(in srgb, #1a1a2e 85%, #ffffff));
+    --_node-fill:     var(--surface, color-mix(in srgb, #1a1a2e 3%, #ffffff));
+    --_node-stroke:   var(--border, color-mix(in srgb, #1a1a2e 20%, #ffffff));
+    --_group-fill:    #ffffff;
+    --_group-hdr:     color-mix(in srgb, #1a1a2e 5%, #ffffff);
+    --_inner-stroke:  color-mix(in srgb, #1a1a2e 12%, #ffffff);
+    --_key-badge:     color-mix(in srgb, #1a1a2e 10%, #ffffff);
+  }
+</style>
+<defs>
+  <marker id="arrowhead" markerWidth="8" markerHeight="5" refX="7" refY="2.5" orient="auto">
+    <polygon points="0 0, 8 2.5, 0 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+  <marker id="arrowhead-start" markerWidth="8" markerHeight="5" refX="1" refY="2.5" orient="auto-start-reverse">
+    <polygon points="8 0, 0 2.5, 8 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+</defs>
+<g class="subgraph" data-id="Defaults" data-label="Safe starting point">
+  <rect x="318.39099999999996" y="381.41499999999996" width="0" height="0" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="318.39099999999996" y="381.41499999999996" width="0" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="330.39099999999996" y="395.41499999999996" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">Safe starting point</text>
+</g>
+<polyline class="edge" data-from="Start" data-to="Q1" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="194.57499999999993,76.9 194.57499999999993,124.90000000000003" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Q1" data-to="Greedy" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="Yes" points="163.20583333333332,281.74583333333334 163.20583333333332,537.3410000000001 105.80549999999994,537.3410000000001 105.8055,617.6410000000001" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Q1" data-to="Q2" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="No" points="225.9441666666666,281.74583333333334 225.9441666666666,349.115 283.3444999999999,349.115 283.3444999999999,429.41499999999996" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Q2" data-to="Grammar" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="Yes - JSON/grammar" points="255.43333333333328,568.9708333333333 255.43333333333328,707.441 190.69286666666653,707.441 190.69286666666653,787.741" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Q2" data-to="Q3" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="No" points="311.2556666666666,568.9708333333333 311.2556666666666,608.882 418.24936666666656,608.882 418.24936666666656,689.1819999999999" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Q3" data-to="LongForm" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="Avoid repetition in long text" points="365.3416666666665,812.6332999999998 365.3416666666665,877.5409999999999 137.3287499999999,877.5409999999999 137.3287499999999,969.8409999999999" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Q3" data-to="Creative" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="Creative + diverse" points="400.61346666666657,847.9051 400.61346666666657,901.5409999999999 312.13024999999993,901.5409999999999 312.13024999999993,969.8409999999999" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Q3" data-to="Mirostat" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="Consistent readability" points="435.88526666666655,847.9051 435.88526666666655,901.5409999999999 482.11524999999995,901.5409999999999 482.11524999999995,969.8409999999999" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Q3" data-to="Balanced" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="General conversation" points="471.15706666666654,812.6332999999998 471.15706666666654,877.5409999999999 648.0247499999999,877.5409999999999 648.0247499999999,969.8409999999999" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<g class="edge-label" data-from="Q1" data-to="Greedy" data-label="Yes">
+  <rect x="87.30549999999994" y="544.3410000000001" width="36.658" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="105.63449999999995" y="559.4910000000001" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">Yes</text>
+</g>
+<g class="edge-label" data-from="Q1" data-to="Q2" data-label="No">
+  <rect x="267.8444999999999" y="356.115" width="30.718000000000004" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="283.2034999999999" y="371.265" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">No</text>
+</g>
+<g class="edge-label" data-from="Q2" data-to="Grammar" data-label="Yes - JSON/grammar">
+  <rect x="132.19286666666653" y="714.441" width="116.25399999999999" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="190.31986666666654" y="729.591" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">Yes - JSON/grammar</text>
+</g>
+<g class="edge-label" data-from="Q2" data-to="Q3" data-label="No">
+  <rect x="402.74936666666656" y="615.882" width="30.718000000000004" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="418.10836666666654" y="631.0319999999999" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">No</text>
+</g>
+<g class="edge-label" data-from="Q3" data-to="LongForm" data-label="Avoid repetition in long text">
+  <rect x="66.32874999999989" y="884.5409999999999" width="141.20200000000003" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="136.9297499999999" y="899.6909999999999" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">Avoid repetition in long text</text>
+</g>
+<g class="edge-label" data-from="Q3" data-to="Creative" data-label="Creative + diverse">
+  <rect x="259.63024999999993" y="908.5409999999999" width="104.37400000000002" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="311.81724999999994" y="923.6909999999999" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">Creative + diverse</text>
+</g>
+<g class="edge-label" data-from="Q3" data-to="Mirostat" data-label="Consistent readability">
+  <rect x="422.11524999999995" y="908.5409999999999" width="119.22400000000002" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="481.72724999999997" y="923.6909999999999" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">Consistent readability</text>
+</g>
+<g class="edge-label" data-from="Q3" data-to="Balanced" data-label="General conversation">
+  <rect x="587.5247499999999" y="884.5409999999999" width="120.41200000000002" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="647.73075" y="899.6909999999999" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">General conversation</text>
+</g>
+<g class="node" data-id="Start" data-label="What are you generating?" data-shape="rectangle">
+  <rect x="98.75899999999996" y="40" width="191.63199999999995" height="36.900000000000006" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
+  <text x="194.57499999999993" y="58.45" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f" dy="4.55">What are you generating?</text>
+</g>
+<g class="node" data-id="Greedy" data-label="temperature=0
+greedy argmax" data-shape="rectangle">
+  <rect x="40" y="617.6410000000001" width="131.611" height="53.800000000000004" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
+  <text x="105.8055" y="644.541" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="105.8055" dy="-3.9000000000000012">temperature=0</tspan><tspan x="105.8055" dy="16.900000000000002">greedy argmax</tspan></text>
+</g>
+<g class="node" data-id="Grammar" data-label="--json-schema / --grammar
+grammar mask handles the rest" data-shape="rectangle">
+  <rect x="79.31586666666658" y="787.741" width="222.75399999999996" height="53.800000000000004" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
+  <text x="190.69286666666656" y="814.641" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="190.69286666666656" dy="-3.9000000000000012">--json-schema / --grammar</tspan><tspan x="190.69286666666656" dy="16.900000000000002">grammar mask handles the rest</tspan></text>
+</g>
+<g class="node" data-id="LongForm" data-label="repeat_penalty=1.1
+DRY multiplier=1.5
+temperature=0.8" data-shape="rectangle">
+  <rect x="63.74274999999989" y="969.8409999999999" width="147.17200000000003" height="70.7" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
+  <text x="137.3287499999999" y="1005.1909999999999" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="137.3287499999999" dy="-12.350000000000001">repeat_penalty=1.1</tspan><tspan x="137.3287499999999" dy="16.900000000000002">DRY multiplier=1.5</tspan><tspan x="137.3287499999999" dy="16.900000000000002">temperature=0.8</tspan></text>
+</g>
+<g class="node" data-id="Creative" data-label="temperature=1.2
+min_p=0.05
+or XTC for variety" data-shape="rectangle">
+  <rect x="238.9147499999999" y="969.8409999999999" width="146.431" height="70.7" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
+  <text x="312.13024999999993" y="1005.1909999999999" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="312.13024999999993" dy="-12.350000000000001">temperature=1.2</tspan><tspan x="312.13024999999993" dy="16.900000000000002">min_p=0.05</tspan><tspan x="312.13024999999993" dy="16.900000000000002">or XTC for variety</tspan></text>
+</g>
+<g class="node" data-id="Mirostat" data-label="mirostat=2
+tau=5.0
+(ignores top-k/p)" data-shape="rectangle">
+  <rect x="413.34574999999995" y="969.8409999999999" width="137.539" height="70.7" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
+  <text x="482.11524999999995" y="1005.1909999999999" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="482.11524999999995" dy="-12.350000000000001">mirostat=2</tspan><tspan x="482.11524999999995" dy="16.900000000000002">tau=5.0</tspan><tspan x="482.11524999999995" dy="16.900000000000002">(ignores top-k/p)</tspan></text>
+</g>
+<g class="node" data-id="Balanced" data-label="temperature=0.7
+top-p=0.9" data-shape="rectangle">
+  <rect x="578.8847499999999" y="969.8409999999999" width="138.28" height="53.800000000000004" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
+  <text x="648.0247499999999" y="996.7409999999999" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="648.0247499999999" dy="-3.9000000000000012">temperature=0.7</tspan><tspan x="648.0247499999999" dy="16.900000000000002">top-p=0.9</tspan></text>
+</g>
+<g class="node" data-id="Q1" data-label="Need exact,
+reproducible output?" data-shape="diamond">
+  <polygon points="194.57499999999996,124.9 288.68249999999995,219.0075 194.57499999999996,313.115 100.46749999999997,219.0075" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="194.57499999999996" y="219.0075" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="194.57499999999996" dy="-3.9000000000000012">Need exact,</tspan><tspan x="194.57499999999996" dy="16.900000000000002">reproducible output?</tspan></text>
+</g>
+<g class="node" data-id="Q2" data-label="Structured output
+required?" data-shape="diamond">
+  <polygon points="283.3444999999999,429.415 367.0779999999999,513.1485 283.3444999999999,596.8820000000001 199.61099999999993,513.1485" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="283.3444999999999" y="513.1485" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="283.3444999999999" dy="-3.9000000000000012">Structured output</tspan><tspan x="283.3444999999999" dy="16.900000000000002">required?</tspan></text>
+</g>
+<g class="node" data-id="Q3" data-label="What matters most?" data-shape="diamond">
+  <polygon points="418.24936666666656,689.1819999999999 506.4288666666666,777.3614999999999 418.24936666666656,865.5409999999998 330.06986666666654,777.3614999999999" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="418.24936666666656" y="777.3614999999999" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">What matters most?</text>
+</g>
+</svg>

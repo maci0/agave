@@ -1,0 +1,276 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1486.2560000000003 1070.7199999999998" width="1486.2560000000003" height="1070.7199999999998" style="--bg:#FFFFFF;--fg:#27272A;background:#ffffff">
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;display=swap');
+  text { font-family: 'Inter', system-ui, sans-serif; }
+  svg {
+    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
+    --_text:          #1a1a2e;
+    --_text-sec:      var(--muted, color-mix(in srgb, #1a1a2e 60%, #ffffff));
+    --_text-muted:    var(--muted, color-mix(in srgb, #1a1a2e 40%, #ffffff));
+    --_text-faint:    color-mix(in srgb, #1a1a2e 25%, #ffffff);
+    --_line:          var(--line, color-mix(in srgb, #1a1a2e 50%, #ffffff));
+    --_arrow:         var(--accent, color-mix(in srgb, #1a1a2e 85%, #ffffff));
+    --_node-fill:     var(--surface, color-mix(in srgb, #1a1a2e 3%, #ffffff));
+    --_node-stroke:   var(--border, color-mix(in srgb, #1a1a2e 20%, #ffffff));
+    --_group-fill:    #ffffff;
+    --_group-hdr:     color-mix(in srgb, #1a1a2e 5%, #ffffff);
+    --_inner-stroke:  color-mix(in srgb, #1a1a2e 12%, #ffffff);
+    --_key-badge:     color-mix(in srgb, #1a1a2e 10%, #ffffff);
+  }
+</style>
+<defs>
+  <marker id="arrowhead" markerWidth="8" markerHeight="5" refX="7" refY="2.5" orient="auto">
+    <polygon points="0 0, 8 2.5, 0 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+  <marker id="arrowhead-start" markerWidth="8" markerHeight="5" refX="1" refY="2.5" orient="auto-start-reverse">
+    <polygon points="8 0, 0 2.5, 8 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+</defs>
+<g class="subgraph" data-id="Legend" data-label="Resolution rule per parameter">
+  <rect x="40" y="40" width="458.7060000000001" height="244.50000000000003" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="40" y="40" width="458.7060000000001" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="52" y="54" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">Resolution rule per parameter</text>
+</g>
+<g class="subgraph" data-id="Params" data-label="Per-parameter override gates">
+  <rect x="40" y="304.5" width="1406.2560000000003" height="726.2199999999999" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="40" y="304.5" width="1406.2560000000003" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="52" y="318.5" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">Per-parameter override gates</text>
+</g>
+<polyline class="edge" data-from="L1" data-to="LU" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="use" points="198.726,102.45 322.196,102.45" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="L2" data-to="LR" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="use" points="203.17200000000003,167.8 326.64200000000005,167.8" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="L3" data-to="LD" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="use" points="203.17200000000003,241.60000000000002 326.64200000000005,241.60000000000002" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="T1" data-to="TG" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="867.87425,385.4 867.8742500000001,433.4" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="TG" data-to="TV" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="true" points="843.2975833333334,556.2833333333332 843.2975833333334,592.86 790.7755,592.86 790.7755,683.081" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="TG" data-to="TR" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="false" points="892.4509166666667,556.2833333333333 892.4509166666667,592.86 944.973,592.86 944.9730000000001,683.081" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="TR" data-to="TRV" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="Some(v)" points="920.3963333333334,805.9643333333332 920.3963333333334,856.62 873.3185,856.62 873.3185,960.92" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="TR" data-to="TDV" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="null" points="969.5496666666667,805.9643333333333 969.5496666666667,856.62 1016.6275,856.62 1016.6274999999999,960.92" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="P1" data-to="PG" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="175.93325,385.4 175.93325,433.4" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="PG" data-to="PV" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="true" points="156.04958333333332,532.8183333333333 156.04958333333332,564.702 108.46749999999999,564.702 108.4675,683.081" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="PG" data-to="PR" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="false" points="195.81691666666666,532.8183333333334 195.81691666666666,564.702 243.399,564.702 243.399,683.081" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="PR" data-to="PRV" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="Some(v)" points="225.24433333333332,701.2356666666667 225.24433333333332,789.9300000000001 171.7445,789.9300000000001 171.7445,906.827" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="PR" data-to="PDV" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="null" points="261.5536666666667,701.2356666666667 261.55366666666663,789.9300000000001 315.0535,789.9300000000001 315.0535,906.827" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="M1" data-to="MG" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="1223.84825,385.4 1223.8482500000002,433.4" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="MG" data-to="MV" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="true" points="1199.2715833333336,556.2833333333333 1199.2715833333334,592.86 1146.7495000000001,592.86 1146.7495000000001,683.081" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="MG" data-to="MR" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="false" points="1248.4249166666668,556.2833333333333 1248.4249166666668,592.86 1300.9470000000001,592.86 1300.9470000000001,683.081" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="MR" data-to="MRV" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="Some(v)" points="1276.3703333333335,805.9643333333333 1276.3703333333335,856.62 1229.2925000000002,856.62 1229.2925000000002,960.92" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="MR" data-to="MDV" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="null" points="1325.5236666666667,805.9643333333333 1325.523666666667,856.62 1372.6015000000002,856.62 1372.6015000000002,960.92" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="C1" data-to="CG" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="517.0872499999999,385.4 517.0872499999999,433.4" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="CG" data-to="CV" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="true" points="495.96858333333324,538.9933333333333 495.9685833333333,572.112 445.17549999999994,572.112 445.17549999999994,683.081" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="CG" data-to="CR" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="false" points="538.2059166666666,538.9933333333333 538.2059166666666,572.112 588.999,572.112 588.999,683.081" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="CR" data-to="CRV" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="Some(v)" points="610.1176666666667,788.6743333333334 610.1176666666667,815.124 660.6534999999999,815.124 660.6535,906.827" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="CR" data-to="CDV" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="null" points="567.8803333333333,788.6743333333333 567.8803333333333,815.124 517.3444999999999,815.124 517.3444999999999,906.827" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<g class="edge-label" data-from="L1" data-to="LU" data-label="use">
+  <rect x="242.726" y="86.44999999999999" width="35.47" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="260.461" y="101.6" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">use</text>
+</g>
+<g class="edge-label" data-from="L2" data-to="LR" data-label="use">
+  <rect x="247.17200000000003" y="151.8" width="35.47" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="264.90700000000004" y="166.95000000000002" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">use</text>
+</g>
+<g class="edge-label" data-from="L3" data-to="LD" data-label="use">
+  <rect x="247.17200000000003" y="225.60000000000002" width="35.47" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="264.90700000000004" y="240.75000000000003" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">use</text>
+</g>
+<g class="edge-label" data-from="TG" data-to="TV" data-label="true">
+  <rect x="772.2755" y="623.86" width="36.658" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="790.6044999999999" y="639.01" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">true</text>
+</g>
+<g class="edge-label" data-from="TG" data-to="TR" data-label="false">
+  <rect x="924.473" y="623.86" width="40.221999999999994" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="944.584" y="639.01" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">false</text>
+</g>
+<g class="edge-label" data-from="TR" data-to="TRV" data-label="Some(v)">
+  <rect x="845.3185" y="887.62" width="55.666000000000004" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="873.1514999999999" y="902.77" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">Some(v)</text>
+</g>
+<g class="edge-label" data-from="TR" data-to="TDV" data-label="null">
+  <rect x="999.1275" y="887.62" width="34.282" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="1016.2685" y="902.77" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">null</text>
+</g>
+<g class="edge-label" data-from="PG" data-to="PV" data-label="true">
+  <rect x="89.96749999999997" y="595.702" width="36.658" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="108.29649999999998" y="610.852" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">true</text>
+</g>
+<g class="edge-label" data-from="PG" data-to="PR" data-label="false">
+  <rect x="222.899" y="595.702" width="40.221999999999994" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="243.01" y="610.852" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">false</text>
+</g>
+<g class="edge-label" data-from="PR" data-to="PRV" data-label="Some(v)">
+  <rect x="143.7445" y="820.9300000000001" width="55.666000000000004" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="171.5775" y="836.08" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">Some(v)</text>
+</g>
+<g class="edge-label" data-from="PR" data-to="PDV" data-label="null">
+  <rect x="297.5535" y="820.9300000000001" width="34.282" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="314.6945" y="836.08" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">null</text>
+</g>
+<g class="edge-label" data-from="MG" data-to="MV" data-label="true">
+  <rect x="1128.2495000000001" y="623.86" width="36.658" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="1146.5785" y="639.01" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">true</text>
+</g>
+<g class="edge-label" data-from="MG" data-to="MR" data-label="false">
+  <rect x="1280.4470000000001" y="623.86" width="40.221999999999994" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="1300.5580000000002" y="639.01" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">false</text>
+</g>
+<g class="edge-label" data-from="MR" data-to="MRV" data-label="Some(v)">
+  <rect x="1201.2925000000002" y="887.62" width="55.666000000000004" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="1229.1255000000003" y="902.77" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">Some(v)</text>
+</g>
+<g class="edge-label" data-from="MR" data-to="MDV" data-label="null">
+  <rect x="1355.1015000000002" y="887.62" width="34.282" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="1372.2425000000003" y="902.77" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">null</text>
+</g>
+<g class="edge-label" data-from="CG" data-to="CV" data-label="true">
+  <rect x="426.67549999999994" y="603.112" width="36.658" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="445.00449999999995" y="618.262" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">true</text>
+</g>
+<g class="edge-label" data-from="CG" data-to="CR" data-label="false">
+  <rect x="568.499" y="603.112" width="40.221999999999994" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="588.61" y="618.262" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">false</text>
+</g>
+<g class="edge-label" data-from="CR" data-to="CRV" data-label="Some(v)">
+  <rect x="632.6534999999999" y="846.124" width="55.666000000000004" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="660.4864999999999" y="861.274" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">Some(v)</text>
+</g>
+<g class="edge-label" data-from="CR" data-to="CDV" data-label="null">
+  <rect x="499.8445" y="846.124" width="34.282" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="516.9855" y="861.274" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">null</text>
+</g>
+<g class="node" data-id="L1" data-label="user_set.X = true" data-shape="rectangle">
+  <rect x="56" y="84" width="142.726" height="36.900000000000006" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
+  <text x="127.363" y="102.45" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f" dy="4.55">user_set.X = true</text>
+</g>
+<g class="node" data-id="LU" data-label="user CLI value" data-shape="rectangle">
+  <rect x="322.196" y="84" width="127.90599999999999" height="36.900000000000006" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
+  <text x="386.149" y="102.45" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d" dy="4.55">user CLI value</text>
+</g>
+<g class="node" data-id="L2" data-label="user_set.X = false
+recipe.X != null" data-shape="rectangle">
+  <rect x="56" y="140.9" width="147.17200000000003" height="53.800000000000004" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
+  <text x="129.586" y="167.8" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12"><tspan x="129.586" dy="-3.9000000000000012">user_set.X = false</tspan><tspan x="129.586" dy="16.900000000000002">recipe.X != null</tspan></text>
+</g>
+<g class="node" data-id="LR" data-label="recipe value" data-shape="rectangle">
+  <rect x="326.64200000000005" y="149.35000000000002" width="115.30899999999998" height="36.900000000000006" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
+  <text x="384.29650000000004" y="167.8" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d" dy="4.55">recipe value</text>
+</g>
+<g class="node" data-id="L3" data-label="user_set.X = false
+recipe.X = null" data-shape="rectangle">
+  <rect x="56" y="214.70000000000002" width="147.17200000000003" height="53.800000000000004" rx="0" ry="0" fill="#f3e8ff" stroke="#9333ea" stroke-width="0.75" />
+  <text x="129.586" y="241.60000000000002" text-anchor="middle" font-size="13" font-weight="500" fill="#581c87"><tspan x="129.586" dy="-3.9000000000000012">user_set.X = false</tspan><tspan x="129.586" dy="16.900000000000002">recipe.X = null</tspan></text>
+</g>
+<g class="node" data-id="LD" data-label="CLI baseline default" data-shape="rectangle">
+  <rect x="326.64200000000005" y="223.15" width="156.06400000000002" height="36.900000000000006" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
+  <text x="404.6740000000001" y="241.60000000000002" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12" dy="4.55">CLI baseline default</text>
+</g>
+<g class="node" data-id="T1" data-label="temperature" data-shape="rectangle">
+  <rect x="811.33125" y="348.5" width="113.086" height="36.900000000000006" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
+  <text x="867.87425" y="366.95" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f" dy="4.55">temperature</text>
+</g>
+<g class="node" data-id="TV" data-label="user value
+e.g. 0.8" data-shape="rectangle">
+  <rect x="738.308" y="683.081" width="104.93499999999999" height="53.800000000000004" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
+  <text x="790.7755" y="709.981" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="790.7755" dy="-3.9000000000000012">user value</tspan><tspan x="790.7755" dy="16.900000000000002">e.g. 0.8</tspan></text>
+</g>
+<g class="node" data-id="TRV" data-label="recipe value
+e.g. 0.6" data-shape="rectangle">
+  <rect x="815.664" y="960.92" width="115.30899999999998" height="53.800000000000004" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
+  <text x="873.3185" y="987.8199999999999" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="873.3185" dy="-3.9000000000000012">recipe value</tspan><tspan x="873.3185" dy="16.900000000000002">e.g. 0.6</tspan></text>
+</g>
+<g class="node" data-id="TDV" data-label="CLI baseline
+e.g. 0.0" data-shape="rectangle">
+  <rect x="958.973" y="960.92" width="115.30900000000001" height="53.800000000000004" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
+  <text x="1016.6274999999999" y="987.8199999999999" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12"><tspan x="1016.6274999999999" dy="-3.9000000000000012">CLI baseline</tspan><tspan x="1016.6274999999999" dy="16.900000000000002">e.g. 0.0</tspan></text>
+</g>
+<g class="node" data-id="P1" data-label="top_p" data-shape="rectangle">
+  <rect x="138.65625" y="348.5" width="74.554" height="36.900000000000006" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
+  <text x="175.93325" y="366.95" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f" dy="4.55">top_p</text>
+</g>
+<g class="node" data-id="PV" data-label="user value" data-shape="rectangle">
+  <rect x="56" y="683.081" width="104.93499999999999" height="36.900000000000006" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
+  <text x="108.4675" y="701.5310000000001" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d" dy="4.55">user value</text>
+</g>
+<g class="node" data-id="PRV" data-label="recipe value" data-shape="rectangle">
+  <rect x="114.09" y="906.827" width="115.30899999999998" height="36.900000000000006" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
+  <text x="171.7445" y="925.277" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d" dy="4.55">recipe value</text>
+</g>
+<g class="node" data-id="PDV" data-label="CLI baseline
+e.g. 1.0" data-shape="rectangle">
+  <rect x="257.399" y="906.827" width="115.30900000000001" height="53.800000000000004" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
+  <text x="315.0535" y="933.727" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12"><tspan x="315.0535" dy="-3.9000000000000012">CLI baseline</tspan><tspan x="315.0535" dy="16.900000000000002">e.g. 1.0</tspan></text>
+</g>
+<g class="node" data-id="M1" data-label="max_tokens" data-shape="rectangle">
+  <rect x="1167.3052500000001" y="348.5" width="113.086" height="36.900000000000006" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
+  <text x="1223.84825" y="366.95" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f" dy="4.55">max_tokens</text>
+</g>
+<g class="node" data-id="MV" data-label="user value" data-shape="rectangle">
+  <rect x="1094.2820000000002" y="683.081" width="104.93499999999999" height="36.900000000000006" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
+  <text x="1146.7495000000001" y="701.5310000000001" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d" dy="4.55">user value</text>
+</g>
+<g class="node" data-id="MRV" data-label="recipe value
+e.g. 1024" data-shape="rectangle">
+  <rect x="1171.6380000000001" y="960.92" width="115.30899999999998" height="53.800000000000004" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
+  <text x="1229.2925000000002" y="987.8199999999999" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="1229.2925000000002" dy="-3.9000000000000012">recipe value</tspan><tspan x="1229.2925000000002" dy="16.900000000000002">e.g. 1024</tspan></text>
+</g>
+<g class="node" data-id="MDV" data-label="CLI baseline
+e.g. 512" data-shape="rectangle">
+  <rect x="1314.9470000000001" y="960.92" width="115.30900000000001" height="53.800000000000004" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
+  <text x="1372.6015000000002" y="987.8199999999999" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12"><tspan x="1372.6015000000002" dy="-3.9000000000000012">CLI baseline</tspan><tspan x="1372.6015000000002" dy="16.900000000000002">e.g. 512</tspan></text>
+</g>
+<g class="node" data-id="C1" data-label="ctx_size" data-shape="rectangle">
+  <rect x="470.91824999999994" y="348.5" width="92.338" height="36.900000000000006" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
+  <text x="517.0872499999999" y="366.95" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f" dy="4.55">ctx_size</text>
+</g>
+<g class="node" data-id="CV" data-label="user value" data-shape="rectangle">
+  <rect x="392.70799999999997" y="683.081" width="104.93499999999999" height="36.900000000000006" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
+  <text x="445.17549999999994" y="701.5310000000001" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d" dy="4.55">user value</text>
+</g>
+<g class="node" data-id="CRV" data-label="recipe value
+e.g. 2048" data-shape="rectangle">
+  <rect x="602.999" y="906.827" width="115.30899999999998" height="53.800000000000004" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
+  <text x="660.6535" y="933.727" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="660.6535" dy="-3.9000000000000012">recipe value</tspan><tspan x="660.6535" dy="16.900000000000002">e.g. 2048</tspan></text>
+</g>
+<g class="node" data-id="CDV" data-label="CLI baseline
+e.g. 4096" data-shape="rectangle">
+  <rect x="459.68999999999994" y="906.827" width="115.30900000000001" height="53.800000000000004" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
+  <text x="517.3444999999999" y="933.727" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12"><tspan x="517.3444999999999" dy="-3.9000000000000012">CLI baseline</tspan><tspan x="517.3444999999999" dy="16.900000000000002">e.g. 4096</tspan></text>
+</g>
+<g class="node" data-id="TG" data-label="user_set
+.temperature?" data-shape="diamond">
+  <polygon points="867.8742500000001,433.4 941.6042500000001,507.13 867.8742500000001,580.86 794.14425,507.13" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="867.8742500000001" y="507.13" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="867.8742500000001" dy="-3.9000000000000012">user_set</tspan><tspan x="867.8742500000001" dy="16.900000000000002">.temperature?</tspan></text>
+</g>
+<g class="node" data-id="TR" data-label="recipe
+.temperature?" data-shape="diamond">
+  <polygon points="944.9730000000001,683.081 1018.7030000000001,756.811 944.9730000000001,830.541 871.243,756.811" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="944.9730000000001" y="756.811" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="944.9730000000001" dy="-3.9000000000000012">recipe</tspan><tspan x="944.9730000000001" dy="16.900000000000002">.temperature?</tspan></text>
+</g>
+<g class="node" data-id="PG" data-label="user_set
+.top_p?" data-shape="diamond">
+  <polygon points="175.93325,433.4 235.58425,493.051 175.93325,552.702 116.28224999999999,493.051" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="175.93325" y="493.051" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="175.93325" dy="-3.9000000000000012">user_set</tspan><tspan x="175.93325" dy="16.900000000000002">.top_p?</tspan></text>
+</g>
+<g class="node" data-id="PR" data-label="recipe
+.top_p?" data-shape="diamond">
+  <polygon points="243.399,683.0810000000001 297.863,737.5450000000001 243.399,792.009 188.935,737.5450000000001" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="243.399" y="737.5450000000001" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="243.399" dy="-3.9000000000000012">recipe</tspan><tspan x="243.399" dy="16.900000000000002">.top_p?</tspan></text>
+</g>
+<g class="node" data-id="MG" data-label="user_set
+.max_tokens?" data-shape="diamond">
+  <polygon points="1223.8482500000002,433.4 1297.5782500000003,507.13 1223.8482500000002,580.86 1150.1182500000002,507.13" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="1223.8482500000002" y="507.13" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="1223.8482500000002" dy="-3.9000000000000012">user_set</tspan><tspan x="1223.8482500000002" dy="16.900000000000002">.max_tokens?</tspan></text>
+</g>
+<g class="node" data-id="MR" data-label="recipe
+.max_tokens?" data-shape="diamond">
+  <polygon points="1300.9470000000001,683.081 1374.6770000000001,756.811 1300.9470000000001,830.541 1227.217,756.811" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="1300.9470000000001" y="756.811" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="1300.9470000000001" dy="-3.9000000000000012">recipe</tspan><tspan x="1300.9470000000001" dy="16.900000000000002">.max_tokens?</tspan></text>
+</g>
+<g class="node" data-id="CG" data-label="user_set
+.ctx_size?" data-shape="diamond">
+  <polygon points="517.0872499999999,433.4 580.4432499999999,496.756 517.0872499999999,560.112 453.73124999999993,496.756" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="517.0872499999999" y="496.756" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="517.0872499999999" dy="-3.9000000000000012">user_set</tspan><tspan x="517.0872499999999" dy="16.900000000000002">.ctx_size?</tspan></text>
+</g>
+<g class="node" data-id="CR" data-label="recipe
+.ctx_size?" data-shape="diamond">
+  <polygon points="588.999,683.081 652.355,746.437 588.999,809.793 525.643,746.437" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="588.999" y="746.437" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="588.999" dy="-3.9000000000000012">recipe</tspan><tspan x="588.999" dy="16.900000000000002">.ctx_size?</tspan></text>
+</g>
+</svg>

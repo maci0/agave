@@ -1,0 +1,95 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 749.6065 495" width="749.6065" height="495" style="--bg:#FFFFFF;--fg:#27272A;background:#ffffff">
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;display=swap');
+  text { font-family: 'Inter', system-ui, sans-serif; }
+  svg {
+    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
+    --_text:          #1a1a2e;
+    --_text-sec:      var(--muted, color-mix(in srgb, #1a1a2e 60%, #ffffff));
+    --_text-muted:    var(--muted, color-mix(in srgb, #1a1a2e 40%, #ffffff));
+    --_text-faint:    color-mix(in srgb, #1a1a2e 25%, #ffffff);
+    --_line:          var(--line, color-mix(in srgb, #1a1a2e 50%, #ffffff));
+    --_arrow:         var(--accent, color-mix(in srgb, #1a1a2e 85%, #ffffff));
+    --_node-fill:     var(--surface, color-mix(in srgb, #1a1a2e 3%, #ffffff));
+    --_node-stroke:   var(--border, color-mix(in srgb, #1a1a2e 20%, #ffffff));
+    --_group-fill:    #ffffff;
+    --_group-hdr:     color-mix(in srgb, #1a1a2e 5%, #ffffff);
+    --_inner-stroke:  color-mix(in srgb, #1a1a2e 12%, #ffffff);
+    --_key-badge:     color-mix(in srgb, #1a1a2e 10%, #ffffff);
+  }
+</style>
+<defs>
+  <marker id="seq-arrow" markerWidth="8" markerHeight="5" refX="8" refY="2.5" orient="auto-start-reverse">
+    <polygon points="0 0, 8 2.5, 0 5" fill="var(--_arrow)" />
+  </marker>
+  <marker id="seq-arrow-open" markerWidth="8" markerHeight="5" refX="8" refY="2.5" orient="auto-start-reverse">
+    <polyline points="0 0, 8 2.5, 0 5" fill="none" stroke="var(--_arrow)" stroke-width="1" />
+  </marker>
+</defs>
+<line class="lifeline" data-actor="Main" x1="70.687" y1="70" x2="70.687" y2="465" stroke="var(--_line)" stroke-width="0.75" stroke-dasharray="6 4" />
+<line class="lifeline" data-actor="Fmt" x1="214.6615" y1="70" x2="214.6615" y2="465" stroke="var(--_line)" stroke-width="0.75" stroke-dasharray="6 4" />
+<line class="lifeline" data-actor="Rec" x1="364.56399999999996" y1="70" x2="364.56399999999996" y2="465" stroke="var(--_line)" stroke-width="0.75" stroke-dasharray="6 4" />
+<line class="lifeline" data-actor="CLI" x1="504.56399999999996" y1="70" x2="504.56399999999996" y2="465" stroke="var(--_line)" stroke-width="0.75" stroke-dasharray="6 4" />
+<line class="lifeline" data-actor="Inf" x1="653.355" y1="70" x2="653.355" y2="465" stroke="var(--_line)" stroke-width="0.75" stroke-dasharray="6 4" />
+<g class="message" data-from="Main" data-to="Fmt" data-label="detect arch, backend, quant from model file" data-line-style="solid" data-arrow-head="filled" data-self="false">
+  <line x1="70.687" y1="90" x2="214.6615" y2="90" stroke="var(--_line)" stroke-width="1" marker-end="url(#seq-arrow)" />
+  <text x="142.67425" y="80" font-size="11" text-anchor="middle" font-weight="400" fill="var(--_text-muted)" dy="3.8499999999999996">detect arch, backend, quant from model file</text>
+</g>
+<g class="message" data-from="Fmt" data-to="Main" data-label="arch=&quot;qwen35&quot;, backend=&quot;Metal&quot;, quant=&quot;Q4_K_M&quot;" data-line-style="dashed" data-arrow-head="filled" data-self="false">
+  <line x1="214.6615" y1="130" x2="70.687" y2="130" stroke="var(--_line)" stroke-width="1" stroke-dasharray="6 4" marker-end="url(#seq-arrow)" />
+  <text x="142.67425" y="120" font-size="11" text-anchor="middle" font-weight="400" fill="var(--_text-muted)" dy="3.8499999999999996">arch=&quot;qwen35&quot;, backend=&quot;Metal&quot;, quant=&quot;Q4_K_M&quot;</text>
+</g>
+<g class="message" data-from="Main" data-to="Rec" data-label="match(&quot;qwen35&quot;, &quot;Metal&quot;, &quot;Q4_K_M&quot;)" data-line-style="solid" data-arrow-head="filled" data-self="false">
+  <line x1="70.687" y1="170" x2="364.56399999999996" y2="170" stroke="var(--_line)" stroke-width="1" marker-end="url(#seq-arrow)" />
+  <text x="217.6255" y="160" font-size="11" text-anchor="middle" font-weight="400" fill="var(--_text-muted)" dy="3.8499999999999996">match(&quot;qwen35&quot;, &quot;Metal&quot;, &quot;Q4_K_M&quot;)</text>
+</g>
+<g class="message" data-from="Rec" data-to="Main" data-label="Recipe { temp=0.6, top_p=0.9, max_tokens=1024 }" data-line-style="dashed" data-arrow-head="filled" data-self="false">
+  <line x1="364.56399999999996" y1="210" x2="70.687" y2="210" stroke="var(--_line)" stroke-width="1" stroke-dasharray="6 4" marker-end="url(#seq-arrow)" />
+  <text x="217.6255" y="200" font-size="11" text-anchor="middle" font-weight="400" fill="var(--_text-muted)" dy="3.8499999999999996">Recipe { temp=0.6, top_p=0.9, max_tokens=1024 }</text>
+</g>
+<g class="message" data-from="Main" data-to="CLI" data-label="parse flags, record which were set" data-line-style="solid" data-arrow-head="filled" data-self="false">
+  <line x1="70.687" y1="250" x2="504.56399999999996" y2="250" stroke="var(--_line)" stroke-width="1" marker-end="url(#seq-arrow)" />
+  <text x="287.6255" y="240" font-size="11" text-anchor="middle" font-weight="400" fill="var(--_text-muted)" dy="3.8499999999999996">parse flags, record which were set</text>
+</g>
+<g class="message" data-from="CLI" data-to="Main" data-label="temperature=0.3 (user set), top_p not set, max_tokens not set" data-line-style="dashed" data-arrow-head="filled" data-self="false">
+  <line x1="504.56399999999996" y1="290" x2="70.687" y2="290" stroke="var(--_line)" stroke-width="1" stroke-dasharray="6 4" marker-end="url(#seq-arrow)" />
+  <text x="287.6255" y="280" font-size="11" text-anchor="middle" font-weight="400" fill="var(--_text-muted)" dy="3.8499999999999996">temperature=0.3 (user set), top_p not set, max_tokens not set</text>
+</g>
+<g class="message" data-from="Main" data-to="Rec" data-label="applyDefaults(user_values, overrides)" data-line-style="solid" data-arrow-head="filled" data-self="false">
+  <line x1="70.687" y1="330" x2="364.56399999999996" y2="330" stroke="var(--_line)" stroke-width="1" marker-end="url(#seq-arrow)" />
+  <text x="217.6255" y="320" font-size="11" text-anchor="middle" font-weight="400" fill="var(--_text-muted)" dy="3.8499999999999996">applyDefaults(user_values, overrides)</text>
+</g>
+<g class="message" data-from="Rec" data-to="Main" data-label="Applied { temp=0.3, top_p=0.9, max_tokens=1024 }" data-line-style="dashed" data-arrow-head="filled" data-self="false">
+  <line x1="364.56399999999996" y1="385" x2="70.687" y2="385" stroke="var(--_line)" stroke-width="1" stroke-dasharray="6 4" marker-end="url(#seq-arrow)" />
+  <text x="217.6255" y="375" font-size="11" text-anchor="middle" font-weight="400" fill="var(--_text-muted)" dy="3.8499999999999996">Applied { temp=0.3, top_p=0.9, max_tokens=1024 }</text>
+</g>
+<g class="message" data-from="Main" data-to="Inf" data-label="run inference with final config" data-line-style="solid" data-arrow-head="filled" data-self="false">
+  <line x1="70.687" y1="425" x2="653.355" y2="425" stroke="var(--_line)" stroke-width="1" marker-end="url(#seq-arrow)" />
+  <text x="362.021" y="415" font-size="11" text-anchor="middle" font-weight="400" fill="var(--_text-muted)" dy="3.8499999999999996">run inference with final config</text>
+</g>
+<g class="note" data-position="over" data-actors="Rec">
+  <polygon points="183.34,338 539.7879999999999,338 545.7879999999999,344 545.7879999999999,361 183.34,361" fill="#ffffff" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <polygon points="539.7879999999999,338 545.7879999999999,344 539.7879999999999,344" fill="var(--_inner-stroke)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="364.56399999999996" y="349.5" font-size="11" text-anchor="middle" font-weight="400" fill="var(--_text-muted)"><tspan x="364.56399999999996" dy="-10.450000000000001">temperature → 0.3 (user)</tspan><tspan x="364.56399999999996" dy="14.3">top_p → 0.9 (recipe)</tspan><tspan x="364.56399999999996" dy="14.3">max_tokens → 1024 (recipe)</tspan></text>
+</g>
+<g class="actor" data-id="Main" data-label="main.zig" data-type="participant">
+  <rect x="30" y="30" width="81.374" height="40" rx="4" ry="4" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="70.687" y="50" font-size="13" text-anchor="middle" font-weight="500" fill="var(--_text)" dy="4.55">main.zig</text>
+</g>
+<g class="actor" data-id="Fmt" data-label="Format detector" data-type="participant">
+  <rect x="151.37399999999997" y="30" width="126.57500000000002" height="40" rx="4" ry="4" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="214.6615" y="50" font-size="13" text-anchor="middle" font-weight="500" fill="var(--_text)" dy="4.55">Format detector</text>
+</g>
+<g class="actor" data-id="Rec" data-label="recipe.zig" data-type="participant">
+  <rect x="317.94899999999996" y="30" width="93.22999999999999" height="40" rx="4" ry="4" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="364.56399999999996" y="50" font-size="13" text-anchor="middle" font-weight="500" fill="var(--_text)" dy="4.55">recipe.zig</text>
+</g>
+<g class="actor" data-id="CLI" data-label="CLI args" data-type="participant">
+  <rect x="462.0245" y="30" width="85.079" height="40" rx="4" ry="4" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="504.56399999999996" y="50" font-size="13" text-anchor="middle" font-weight="500" fill="var(--_text)" dy="4.55">CLI args</text>
+</g>
+<g class="actor" data-id="Inf" data-label="Inference engine" data-type="participant">
+  <rect x="587.1035" y="30" width="132.503" height="40" rx="4" ry="4" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="653.355" y="50" font-size="13" text-anchor="middle" font-weight="500" fill="var(--_text)" dy="4.55">Inference engine</text>
+</g>
+</svg>

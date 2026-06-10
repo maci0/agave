@@ -1,0 +1,134 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 330.308 1781.1" width="330.308" height="1781.1" style="--bg:#FFFFFF;--fg:#27272A;background:#ffffff">
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;display=swap');
+  text { font-family: 'Inter', system-ui, sans-serif; }
+  svg {
+    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
+    --_text:          #1a1a2e;
+    --_text-sec:      var(--muted, color-mix(in srgb, #1a1a2e 60%, #ffffff));
+    --_text-muted:    var(--muted, color-mix(in srgb, #1a1a2e 40%, #ffffff));
+    --_text-faint:    color-mix(in srgb, #1a1a2e 25%, #ffffff);
+    --_line:          var(--line, color-mix(in srgb, #1a1a2e 50%, #ffffff));
+    --_arrow:         var(--accent, color-mix(in srgb, #1a1a2e 85%, #ffffff));
+    --_node-fill:     var(--surface, color-mix(in srgb, #1a1a2e 3%, #ffffff));
+    --_node-stroke:   var(--border, color-mix(in srgb, #1a1a2e 20%, #ffffff));
+    --_group-fill:    #ffffff;
+    --_group-hdr:     color-mix(in srgb, #1a1a2e 5%, #ffffff);
+    --_inner-stroke:  color-mix(in srgb, #1a1a2e 12%, #ffffff);
+    --_key-badge:     color-mix(in srgb, #1a1a2e 10%, #ffffff);
+  }
+</style>
+<defs>
+  <marker id="arrowhead" markerWidth="8" markerHeight="5" refX="7" refY="2.5" orient="auto">
+    <polygon points="0 0, 8 2.5, 0 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+  <marker id="arrowhead-start" markerWidth="8" markerHeight="5" refX="1" refY="2.5" orient="auto-start-reverse">
+    <polygon points="8 0, 0 2.5, 8 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+</defs>
+<g class="subgraph" data-id="Attention" data-label="Attention block">
+  <rect x="40" y="141.8" width="250.308" height="758.4" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="40" y="141.8" width="250.308" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="52" y="155.8" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">Attention block</text>
+</g>
+<g class="subgraph" data-id="FFN" data-label="Feed-forward block">
+  <rect x="48.52149999999999" y="948.1999999999999" width="233.26500000000001" height="639.6999999999999" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="48.52149999999999" y="948.1999999999999" width="233.26500000000001" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="60.52149999999999" y="962.1999999999999" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">Feed-forward block</text>
+</g>
+<polyline class="edge" data-from="Tokens" data-to="Attention" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="165.154,93.80000000000001 165.154,141.8" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Attention" data-to="FFN" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="165.154,900.2 165.154,948.1999999999999" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="FFN" data-to="NextLayer" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="next layer" points="165.154,1587.8999999999999 165.154,1704.1999999999998" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="RN1" data-to="QKV" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="165.154,239.60000000000002 165.154,287.6" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="QKV" data-to="RN2" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="165.154,358.3 165.154,406.3" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="RN2" data-to="RoPE" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="165.154,460.1 165.154,508.1" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="RoPE" data-to="SDPA" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="165.154,561.9000000000001 165.154,609.9000000000001" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="SDPA" data-to="ProjO" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="165.154,680.5999999999999 165.154,728.5999999999999" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="ProjO" data-to="Add1" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="165.154,799.3 165.154,847.3" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="RN3" data-to="GateUp" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="165.154,1046 165.154,1094" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="GateUp" data-to="Gelu" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="165.154,1164.6999999999998 165.154,1212.6999999999998" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Gelu" data-to="Mul" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="165.154,1266.5 165.154,1314.5" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Mul" data-to="Down" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="165.154,1368.3 165.154,1416.3" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Down" data-to="Add2" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="165.154,1487 165.154,1535" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<g class="edge-label" data-from="FFN" data-to="NextLayer" data-label="next layer">
+  <rect x="132.654" y="1630.8999999999999" width="64.576" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="164.942" y="1646.05" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">next layer</text>
+</g>
+<g class="node" data-id="Tokens" data-label="&quot;Input tokens
+[seq_len, hidden_dim" data-shape="rectangle">
+  <rect x="82.67599999999999" y="40" width="164.95600000000002" height="53.800000000000004" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="165.154" y="66.9" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="165.154" dy="-3.9000000000000012">&quot;Input tokens</tspan><tspan x="165.154" dy="16.900000000000002">[seq_len, hidden_dim</tspan></text>
+</g>
+<g class="node" data-id="NextLayer" data-label="Layer N+1 ..." data-shape="rectangle">
+  <rect x="109.35199999999999" y="1704.1999999999998" width="111.60400000000001" height="36.900000000000006" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
+  <text x="165.154" y="1722.6499999999999" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d" dy="4.55">Layer N+1 ...</text>
+</g>
+<g class="node" data-id="RN1" data-label="rmsNormBatched
+normalize hidden states" data-shape="rectangle">
+  <rect x="75.266" y="185.8" width="179.77599999999998" height="53.800000000000004" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="165.154" y="212.70000000000002" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="165.154" dy="-3.9000000000000012">rmsNormBatched</tspan><tspan x="165.154" dy="16.900000000000002">normalize hidden states</tspan></text>
+</g>
+<g class="node" data-id="QKV" data-label="&quot;GEMM(Q, K, V)
+one-shot projection
+[seq_len, head_dim * n_heads" data-shape="rectangle">
+  <rect x="56" y="287.6" width="218.308" height="70.7" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="165.154" y="322.95000000000005" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="165.154" dy="-12.350000000000001">&quot;GEMM(Q, K, V)</tspan><tspan x="165.154" dy="16.900000000000002">one-shot projection</tspan><tspan x="165.154" dy="16.900000000000002">[seq_len, head_dim * n_heads</tspan></text>
+</g>
+<g class="node" data-id="RN2" data-label="rmsNormMulti
+norm Q and K (Gemma3-style)" data-shape="rectangle">
+  <rect x="60.81650000000002" y="406.3" width="208.67499999999995" height="53.800000000000004" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="165.154" y="433.2" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="165.154" dy="-3.9000000000000012">rmsNormMulti</tspan><tspan x="165.154" dy="16.900000000000002">norm Q and K (Gemma3-style)</tspan></text>
+</g>
+<g class="node" data-id="RoPE" data-label="ropeBatched
+rotary position embeddings" data-shape="rectangle">
+  <rect x="64.89200000000001" y="508.1" width="200.52399999999997" height="53.800000000000004" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="165.154" y="535" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="165.154" dy="-3.9000000000000012">ropeBatched</tspan><tspan x="165.154" dy="16.900000000000002">rotary position embeddings</tspan></text>
+</g>
+<g class="node" data-id="SDPA" data-label="sdpaPrefill (FA2)
+causal self-attention
+dual-source K/V from GEMM" data-shape="rectangle">
+  <rect x="61.557500000000005" y="609.9000000000001" width="207.19299999999998" height="70.7" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="165.154" y="645.2500000000001" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="165.154" dy="-12.350000000000001">sdpaPrefill (FA2)</tspan><tspan x="165.154" dy="16.900000000000002">causal self-attention</tspan><tspan x="165.154" dy="16.900000000000002">dual-source K/V from GEMM</tspan></text>
+</g>
+<g class="node" data-id="ProjO" data-label="&quot;GEMM(O)
+output projection
+[seq_len, hidden_dim" data-shape="rectangle">
+  <rect x="82.67599999999999" y="728.5999999999999" width="164.95600000000002" height="70.7" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="165.154" y="763.9499999999999" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="165.154" dy="-12.350000000000001">&quot;GEMM(O)</tspan><tspan x="165.154" dy="16.900000000000002">output projection</tspan><tspan x="165.154" dy="16.900000000000002">[seq_len, hidden_dim</tspan></text>
+</g>
+<g class="node" data-id="Add1" data-label="residual add" data-shape="rectangle">
+  <rect x="107.49950000000001" y="847.3" width="115.30899999999998" height="36.900000000000006" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
+  <text x="165.154" y="865.75" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12" dy="4.55">residual add</text>
+</g>
+<g class="node" data-id="RN3" data-label="rmsNormBatched
+normalize after attention" data-shape="rectangle">
+  <rect x="75.266" y="992.1999999999999" width="179.77599999999998" height="53.800000000000004" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="165.154" y="1019.0999999999999" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="165.154" dy="-3.9000000000000012">rmsNormBatched</tspan><tspan x="165.154" dy="16.900000000000002">normalize after attention</tspan></text>
+</g>
+<g class="node" data-id="GateUp" data-label="&quot;GEMM(gate, up)
+dual projection
+[seq_len, ffn_dim" data-shape="rectangle">
+  <rect x="96.01399999999998" y="1094" width="138.28000000000003" height="70.7" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="165.154" y="1129.35" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="165.154" dy="-12.350000000000001">&quot;GEMM(gate, up)</tspan><tspan x="165.154" dy="16.900000000000002">dual projection</tspan><tspan x="165.154" dy="16.900000000000002">[seq_len, ffn_dim</tspan></text>
+</g>
+<g class="node" data-id="Gelu" data-label="GELU activation
+(in-register for megakernel)" data-shape="rectangle">
+  <rect x="64.52149999999999" y="1212.6999999999998" width="201.26500000000001" height="53.800000000000004" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="165.154" y="1239.6" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="165.154" dy="-3.9000000000000012">GELU activation</tspan><tspan x="165.154" dy="16.900000000000002">(in-register for megakernel)</tspan></text>
+</g>
+<g class="node" data-id="Mul" data-label="element-wise multiply
+gate * up" data-shape="rectangle">
+  <rect x="84.15799999999999" y="1314.5" width="161.99200000000002" height="53.800000000000004" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="165.154" y="1341.4" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="165.154" dy="-3.9000000000000012">element-wise multiply</tspan><tspan x="165.154" dy="16.900000000000002">gate * up</tspan></text>
+</g>
+<g class="node" data-id="Down" data-label="&quot;GEMM(down)
+project back to hidden
+[seq_len, hidden_dim" data-shape="rectangle">
+  <rect x="80.08250000000001" y="1416.3" width="170.14299999999997" height="70.7" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="165.154" y="1451.6499999999999" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="165.154" dy="-12.350000000000001">&quot;GEMM(down)</tspan><tspan x="165.154" dy="16.900000000000002">project back to hidden</tspan><tspan x="165.154" dy="16.900000000000002">[seq_len, hidden_dim</tspan></text>
+</g>
+<g class="node" data-id="Add2" data-label="residual add" data-shape="rectangle">
+  <rect x="107.49950000000001" y="1535" width="115.30899999999998" height="36.900000000000006" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
+  <text x="165.154" y="1553.45" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12" dy="4.55">residual add</text>
+</g>
+</svg>

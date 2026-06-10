@@ -1,0 +1,201 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 746.7239999999999 764.475" width="746.7239999999999" height="764.475" style="--bg:#FFFFFF;--fg:#27272A;background:#ffffff">
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;display=swap');
+  text { font-family: 'Inter', system-ui, sans-serif; }
+  svg {
+    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
+    --_text:          #1a1a2e;
+    --_text-sec:      var(--muted, color-mix(in srgb, #1a1a2e 60%, #ffffff));
+    --_text-muted:    var(--muted, color-mix(in srgb, #1a1a2e 40%, #ffffff));
+    --_text-faint:    color-mix(in srgb, #1a1a2e 25%, #ffffff);
+    --_line:          var(--line, color-mix(in srgb, #1a1a2e 50%, #ffffff));
+    --_arrow:         var(--accent, color-mix(in srgb, #1a1a2e 85%, #ffffff));
+    --_node-fill:     var(--surface, color-mix(in srgb, #1a1a2e 3%, #ffffff));
+    --_node-stroke:   var(--border, color-mix(in srgb, #1a1a2e 20%, #ffffff));
+    --_group-fill:    #ffffff;
+    --_group-hdr:     color-mix(in srgb, #1a1a2e 5%, #ffffff);
+    --_inner-stroke:  color-mix(in srgb, #1a1a2e 12%, #ffffff);
+    --_key-badge:     color-mix(in srgb, #1a1a2e 10%, #ffffff);
+  }
+</style>
+<defs>
+  <marker id="arrowhead" markerWidth="8" markerHeight="5" refX="7" refY="2.5" orient="auto">
+    <polygon points="0 0, 8 2.5, 0 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+  <marker id="arrowhead-start" markerWidth="8" markerHeight="5" refX="1" refY="2.5" orient="auto-start-reverse">
+    <polygon points="8 0, 0 2.5, 8 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+</defs>
+<g class="subgraph" data-id="KV" data-label="KV blocks (columns)">
+  <rect x="40" y="40" width="0" height="0" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="40" y="40" width="0" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="52" y="54" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">KV blocks (columns)</text>
+</g>
+<g class="subgraph" data-id="Q0" data-label="Query 0">
+  <rect x="60" y="40" width="0" height="0" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="60" y="40" width="0" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="72" y="54" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">Query 0</text>
+</g>
+<g class="subgraph" data-id="Q3" data-label="Query 3">
+  <rect x="80" y="40" width="0" height="0" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="80" y="40" width="0" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="92" y="54" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">Query 3</text>
+</g>
+<g class="subgraph" data-id="Q5" data-label="Query 5">
+  <rect x="100" y="40" width="0" height="0" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="100" y="40" width="0" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="112" y="54" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">Query 5</text>
+</g>
+<g class="subgraph" data-id="Q7" data-label="Query 7">
+  <rect x="120" y="40" width="0" height="0" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="120" y="40" width="0" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="132" y="54" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">Query 7</text>
+</g>
+<g class="subgraph" data-id="Legend" data-label="Legend">
+  <rect x="140" y="40" width="0" height="0" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="140" y="40" width="0" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="152" y="54" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">Legend</text>
+</g>
+<polyline class="edge" data-from="Q0n" data-to="K0" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="G" points="253.12099999999998,495.08000000000004 265.121,495.08000000000004 265.121,410.635 377.899,410.635 377.899,388.78 364.68550000000005,388.78" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Q0n" data-to="K1" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="G" points="253.12099999999998,507.38000000000005 265.121,507.38 265.121,557.175 365.899,557.175 365.899,548.0450000000001 364.68550000000005,548.045" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Q3n" data-to="K0" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="G" points="248.675,623.36 277.121,623.36 277.121,457.275 389.899,457.275 389.899,399.54 364.68550000000005,399.54" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Q3n" data-to="K1" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="G" points="248.675,630.74 301.121,630.74 301.121,590.475 365.899,590.475 365.899,558.8050000000001 364.68550000000005,558.805" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Q3n" data-to="K2" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="W" points="248.675,645.5 260.675,645.5 260.675,705.325 364.68550000000005,705.325" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Q3n" data-to="K3" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="W" points="248.675,638.12 301.12100000000004,638.12 301.12100000000004,657.0749999999999 367.68100000000004,657.0749999999999 367.68100000000004,646.575 364.68550000000005,646.575" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Q5n" data-to="K0" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="G" points="253.12099999999998,388.60499999999996 325.121,388.60499999999996 325.121,377.335 389.899,377.335 389.899,378.02 364.68550000000005,378.02" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Q5n" data-to="K1" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="G" points="253.12099999999998,394.755 301.121,394.755 301.121,523.875 353.899,523.875 353.899,537.2850000000001 364.68550000000005,537.285" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Q5n" data-to="K3" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="W" points="253.12099999999998,400.905 289.121,400.905 289.121,623.775 367.68100000000004,623.775 367.68100000000004,634.275 364.68550000000005,634.275" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Q5n" data-to="K4" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="W" points="253.12099999999998,382.455 301.121,382.455 301.121,310.04999999999995 364.68550000000005,310.05" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Q5n" data-to="K5" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="W" points="253.12099999999998,376.30499999999995 289.121,376.30499999999995 289.121,261.79999999999995 391.68100000000004,261.79999999999995 391.68100000000004,251.29999999999995 364.68550000000005,251.29999999999993" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Q7n" data-to="K0" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="G" points="253.12100000000004,234.64999999999995 325.121,234.64999999999998 325.121,343.35 389.899,343.35 389.899,367.26 364.68550000000005,367.26" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Q7n" data-to="K1" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="G" points="253.12100000000004,240.79999999999995 313.121,240.79999999999995 313.121,490.575 365.899,490.575 365.899,526.525 364.68550000000005,526.525" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Q7n" data-to="K5" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="W" points="253.12100000000004,228.49999999999994 391.68100000000004,228.5 391.68100000000004,238.99999999999994 364.68550000000005,238.99999999999994" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Q7n" data-to="K6" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="W" points="253.12100000000004,216.19999999999996 265.12100000000004,216.19999999999993 265.12100000000004,115.35000000000002 364.68550000000005,115.34999999999998" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Q7n" data-to="K7" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="W" points="253.12100000000004,222.34999999999997 277.12100000000004,222.34999999999997 277.12100000000004,180.25 364.68550000000005,180.24999999999994" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<g class="edge-label" data-from="Q0n" data-to="K0" data-label="G">
+  <rect x="333.121" y="394.635" width="24.778" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="345.51" y="409.78499999999997" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">G</text>
+</g>
+<g class="edge-label" data-from="Q0n" data-to="K1" data-label="G">
+  <rect x="309.121" y="541.175" width="24.778" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="321.51" y="556.3249999999999" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">G</text>
+</g>
+<g class="edge-label" data-from="Q3n" data-to="K0" data-label="G">
+  <rect x="357.121" y="441.275" width="24.778" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="369.51" y="456.42499999999995" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">G</text>
+</g>
+<g class="edge-label" data-from="Q3n" data-to="K1" data-label="G">
+  <rect x="309.121" y="574.475" width="24.778" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="321.51" y="589.625" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">G</text>
+</g>
+<g class="edge-label" data-from="Q3n" data-to="K2" data-label="W">
+  <rect x="268.67500000000007" y="689.325" width="26.560000000000002" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="281.95500000000004" y="704.475" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">W</text>
+</g>
+<g class="edge-label" data-from="Q3n" data-to="K3" data-label="W">
+  <rect x="309.1210000000001" y="641.0749999999999" width="26.560000000000002" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="322.40100000000007" y="656.2249999999999" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">W</text>
+</g>
+<g class="edge-label" data-from="Q5n" data-to="K0" data-label="G">
+  <rect x="333.121" y="361.335" width="24.778" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="345.51" y="376.48499999999996" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">G</text>
+</g>
+<g class="edge-label" data-from="Q5n" data-to="K1" data-label="G">
+  <rect x="309.121" y="507.875" width="24.778" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="321.51" y="523.025" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">G</text>
+</g>
+<g class="edge-label" data-from="Q5n" data-to="K3" data-label="W">
+  <rect x="309.1210000000001" y="607.775" width="26.560000000000002" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="322.40100000000007" y="622.925" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">W</text>
+</g>
+<g class="edge-label" data-from="Q5n" data-to="K4" data-label="W">
+  <rect x="333.1210000000001" y="294.04999999999995" width="26.560000000000002" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="346.40100000000007" y="309.19999999999993" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">W</text>
+</g>
+<g class="edge-label" data-from="Q5n" data-to="K5" data-label="W">
+  <rect x="333.1210000000001" y="245.79999999999993" width="26.560000000000002" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="346.40100000000007" y="260.94999999999993" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">W</text>
+</g>
+<g class="edge-label" data-from="Q7n" data-to="K0" data-label="G">
+  <rect x="333.121" y="327.35" width="24.778" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="345.51" y="342.5" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">G</text>
+</g>
+<g class="edge-label" data-from="Q7n" data-to="K1" data-label="G">
+  <rect x="333.121" y="474.575" width="24.778" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="345.51" y="489.72499999999997" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">G</text>
+</g>
+<g class="edge-label" data-from="Q7n" data-to="K5" data-label="W">
+  <rect x="333.1210000000001" y="212.5" width="26.560000000000002" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="346.40100000000007" y="227.65" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">W</text>
+</g>
+<g class="edge-label" data-from="Q7n" data-to="K6" data-label="W">
+  <rect x="273.1210000000001" y="99.35000000000002" width="26.560000000000002" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="286.40100000000007" y="114.50000000000003" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">W</text>
+</g>
+<g class="edge-label" data-from="Q7n" data-to="K7" data-label="W">
+  <rect x="285.1210000000001" y="164.25" width="26.560000000000002" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="298.40100000000007" y="179.4" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">W</text>
+</g>
+<g class="node" data-id="K0" data-label="KV 0
+(global)" data-shape="rectangle">
+  <rect x="364.68550000000005" y="356.5" width="84.928" height="53.800000000000004" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
+  <text x="407.14950000000005" y="383.4" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="407.14950000000005" dy="-3.9000000000000012">KV 0</tspan><tspan x="407.14950000000005" dy="16.900000000000002">(global)</tspan></text>
+</g>
+<g class="node" data-id="K1" data-label="KV 1
+(global)" data-shape="rectangle">
+  <rect x="364.68550000000005" y="515.765" width="84.928" height="53.800000000000004" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
+  <text x="407.14950000000005" y="542.665" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="407.14950000000005" dy="-3.9000000000000012">KV 1</tspan><tspan x="407.14950000000005" dy="16.900000000000002">(global)</tspan></text>
+</g>
+<g class="node" data-id="K2" data-label="KV 2" data-shape="rectangle">
+  <rect x="364.68550000000005" y="686.875" width="69.36699999999999" height="36.900000000000006" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="399.369" y="705.325" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d" dy="4.55">KV 2</text>
+</g>
+<g class="node" data-id="K3" data-label="KV 3" data-shape="rectangle">
+  <rect x="364.68550000000005" y="621.975" width="69.36699999999999" height="36.900000000000006" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="399.369" y="640.4250000000001" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d" dy="4.55">KV 3</text>
+</g>
+<g class="node" data-id="K4" data-label="KV 4" data-shape="rectangle">
+  <rect x="364.68550000000005" y="291.6" width="69.36699999999999" height="36.900000000000006" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="399.369" y="310.05" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d" dy="4.55">KV 4</text>
+</g>
+<g class="node" data-id="K5" data-label="KV 5" data-shape="rectangle">
+  <rect x="364.68550000000005" y="226.69999999999993" width="69.36699999999999" height="36.900000000000006" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="399.369" y="245.14999999999992" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d" dy="4.55">KV 5</text>
+</g>
+<g class="node" data-id="K6" data-label="KV 6" data-shape="rectangle">
+  <rect x="364.68550000000005" y="96.89999999999998" width="69.36699999999999" height="36.900000000000006" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="399.369" y="115.34999999999998" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d" dy="4.55">KV 6</text>
+</g>
+<g class="node" data-id="K7" data-label="KV 7" data-shape="rectangle">
+  <rect x="364.68550000000005" y="161.79999999999995" width="69.36699999999999" height="36.900000000000006" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="399.369" y="180.24999999999994" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d" dy="4.55">KV 7</text>
+</g>
+<g class="node" data-id="Q0n" data-label="Q0: attends G0, G1" data-shape="rectangle">
+  <rect x="111.13599999999997" y="482.78000000000003" width="141.985" height="36.900000000000006" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
+  <text x="182.12849999999997" y="501.23" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f" dy="4.55">Q0: attends G0, G1</text>
+</g>
+<g class="node" data-id="Q3n" data-label="Q3: attends G0, G1, W1, W2, W3" data-shape="rectangle">
+  <rect x="40.00000000000003" y="615.98" width="208.67499999999998" height="36.900000000000006" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
+  <text x="144.33750000000003" y="634.4300000000001" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f" dy="4.55">Q3: attends G0, G1, W1, W2, W3</text>
+</g>
+<g class="node" data-id="Q5n" data-label="Q5: attends G0, G1, W3, W4, W5" data-shape="rectangle">
+  <rect x="40" y="370.155" width="213.12099999999998" height="36.900000000000006" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
+  <text x="146.5605" y="388.60499999999996" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f" dy="4.55">Q5: attends G0, G1, W3, W4, W5</text>
+</g>
+<g class="node" data-id="Q7n" data-label="Q7: attends G0, G1, W5, W6, W7" data-shape="rectangle">
+  <rect x="40.00000000000006" y="210.04999999999995" width="213.12099999999998" height="36.900000000000006" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
+  <text x="146.56050000000005" y="228.49999999999994" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f" dy="4.55">Q7: attends G0, G1, W5, W6, W7</text>
+</g>
+<g class="node" data-id="LG" data-label="G = global (always)" data-shape="rectangle">
+  <rect x="364.68550000000005" y="40" width="149.39499999999998" height="36.900000000000006" rx="0" ry="0" fill="#f3e8ff" stroke="#9333ea" stroke-width="0.75" />
+  <text x="439.38300000000004" y="58.45" text-anchor="middle" font-size="13" font-weight="500" fill="#581c87" dy="4.55">G = global (always)</text>
+</g>
+<g class="node" data-id="LW" data-label="W = window (local)" data-shape="rectangle">
+  <rect x="160" y="40" width="145.69" height="36.900000000000006" rx="0" ry="0" fill="#f3e8ff" stroke="#9333ea" stroke-width="0.75" />
+  <text x="232.845" y="58.45" text-anchor="middle" font-size="13" font-weight="500" fill="#581c87" dy="4.55">W = window (local)</text>
+</g>
+<g class="node" data-id="LD" data-label="unmarked = masked, skipped" data-shape="rectangle">
+  <rect x="495.085" y="40" width="211.63899999999998" height="36.900000000000006" rx="0" ry="0" fill="#f3e8ff" stroke="#9333ea" stroke-width="0.75" />
+  <text x="600.9045" y="58.45" text-anchor="middle" font-size="13" font-weight="500" fill="#581c87" dy="4.55">unmarked = masked, skipped</text>
+</g>
+</svg>

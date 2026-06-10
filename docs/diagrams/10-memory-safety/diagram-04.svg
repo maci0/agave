@@ -1,0 +1,91 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 655.87275 943.4820000000001" width="655.87275" height="943.4820000000001" style="--bg:#FFFFFF;--fg:#27272A;background:#ffffff">
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;display=swap');
+  text { font-family: 'Inter', system-ui, sans-serif; }
+  svg {
+    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
+    --_text:          #1a1a2e;
+    --_text-sec:      var(--muted, color-mix(in srgb, #1a1a2e 60%, #ffffff));
+    --_text-muted:    var(--muted, color-mix(in srgb, #1a1a2e 40%, #ffffff));
+    --_text-faint:    color-mix(in srgb, #1a1a2e 25%, #ffffff);
+    --_line:          var(--line, color-mix(in srgb, #1a1a2e 50%, #ffffff));
+    --_arrow:         var(--accent, color-mix(in srgb, #1a1a2e 85%, #ffffff));
+    --_node-fill:     var(--surface, color-mix(in srgb, #1a1a2e 3%, #ffffff));
+    --_node-stroke:   var(--border, color-mix(in srgb, #1a1a2e 20%, #ffffff));
+    --_group-fill:    #ffffff;
+    --_group-hdr:     color-mix(in srgb, #1a1a2e 5%, #ffffff);
+    --_inner-stroke:  color-mix(in srgb, #1a1a2e 12%, #ffffff);
+    --_key-badge:     color-mix(in srgb, #1a1a2e 10%, #ffffff);
+  }
+</style>
+<defs>
+  <marker id="arrowhead" markerWidth="8" markerHeight="5" refX="7" refY="2.5" orient="auto">
+    <polygon points="0 0, 8 2.5, 0 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+  <marker id="arrowhead-start" markerWidth="8" markerHeight="5" refX="1" refY="2.5" orient="auto-start-reverse">
+    <polygon points="8 0, 0 2.5, 8 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+</defs>
+<polyline class="edge" data-from="START" data-to="Q1" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="402.75874999999996,93.80000000000001 402.75874999999996,141.8" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Q1" data-to="Q2" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="yes
+e.g. return buf, return struct" points="365.83208333333334,326.4333333333334 365.83208333333334,399.35999999999996 287.68375000000003,399.35999999999996 287.68375000000003,493.96000000000004" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Q1" data-to="USE_DEFER" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="no
+this function owns it fully" points="439.6854166666666,326.4333333333334 439.6854166666666,536.882 517.83375,536.882 517.83375,631.482" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Q2" data-to="USE_ERRDEFER" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="yes
+more fallible steps below" points="252.9800833333333,667.4783333333334 252.9800833333333,738.182 159.52800000000002,738.182 159.528,832.782" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Q2" data-to="NO_DEFER" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="no
+this is the last step" points="322.3874166666667,667.4783333333332 322.3874166666667,738.182 415.83949999999993,738.182 415.83949999999993,832.782" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<g class="edge-label" data-from="Q1" data-to="Q2" data-label="yes
+e.g. return buf, return struct">
+  <rect x="215.18374999999995" y="406.35999999999996" width="144.76600000000002" height="44.6" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="287.56674999999996" y="428.65999999999997" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)"><tspan x="287.56674999999996" dy="-3.3000000000000007">yes</tspan><tspan x="287.56674999999996" dy="14.3">e.g. return buf, return struct</tspan></text>
+</g>
+<g class="edge-label" data-from="Q1" data-to="USE_DEFER" data-label="no
+this function owns it fully">
+  <rect x="454.33374999999995" y="543.882" width="126.946" height="44.6" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="517.80675" y="566.1819999999999" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)"><tspan x="517.80675" dy="-3.3000000000000007">no</tspan><tspan x="517.80675" dy="14.3">this function owns it fully</tspan></text>
+</g>
+<g class="edge-label" data-from="Q2" data-to="USE_ERRDEFER" data-label="yes
+more fallible steps below">
+  <rect x="94.528" y="745.182" width="129.91600000000003" height="44.6" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="159.48600000000002" y="767.482" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)"><tspan x="159.48600000000002" dy="-3.3000000000000007">yes</tspan><tspan x="159.48600000000002" dy="14.3">more fallible steps below</tspan></text>
+</g>
+<g class="edge-label" data-from="Q2" data-to="NO_DEFER" data-label="no
+this is the last step">
+  <rect x="365.3395" y="745.182" width="100.81000000000003" height="44.6" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="415.7445" y="767.482" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)"><tspan x="415.7445" dy="-3.3000000000000007">no</tspan><tspan x="415.7445" dy="14.3">this is the last step</tspan></text>
+</g>
+<g class="node" data-id="START" data-label="You just acquired a resource
+(alloc, open, init)" data-shape="rectangle">
+  <rect x="296.56874999999997" y="40" width="212.38" height="53.800000000000004" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
+  <text x="402.75874999999996" y="66.9" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f"><tspan x="402.75874999999996" dy="-3.9000000000000012">You just acquired a resource</tspan><tspan x="402.75874999999996" dy="16.900000000000002">(alloc, open, init)</tspan></text>
+</g>
+<g class="node" data-id="USE_DEFER" data-label="use defer
+cleanup runs on ALL exits
+(success and error)" data-shape="rectangle">
+  <rect x="419.79475" y="631.482" width="196.07799999999997" height="70.7" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="517.83375" y="666.832" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="517.83375" dy="-12.350000000000001">use defer</tspan><tspan x="517.83375" dy="16.900000000000002">cleanup runs on ALL exits</tspan><tspan x="517.83375" dy="16.900000000000002">(success and error)</tspan></text>
+</g>
+<g class="node" data-id="USE_ERRDEFER" data-label="use errdefer
+cleanup runs ONLY on error
+caller gets ownership on success" data-shape="rectangle">
+  <rect x="40" y="832.782" width="239.05599999999998" height="70.7" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
+  <text x="159.528" y="868.1320000000001" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12"><tspan x="159.528" dy="-12.350000000000001">use errdefer</tspan><tspan x="159.528" dy="16.900000000000002">cleanup runs ONLY on error</tspan><tspan x="159.528" dy="16.900000000000002">caller gets ownership on success</tspan></text>
+</g>
+<g class="node" data-id="NO_DEFER" data-label="no defer needed
+return and transfer ownership
+no error path to guard" data-shape="rectangle">
+  <rect x="307.056" y="832.782" width="217.56699999999998" height="70.7" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
+  <text x="415.8395" y="868.1320000000001" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="415.8395" dy="-12.350000000000001">no defer needed</tspan><tspan x="415.8395" dy="16.900000000000002">return and transfer ownership</tspan><tspan x="415.8395" dy="16.900000000000002">no error path to guard</tspan></text>
+</g>
+<g class="node" data-id="Q1" data-label="Are you going to return
+this resource to the caller?" data-shape="diamond">
+  <polygon points="402.75874999999996,141.8 513.5387499999999,252.57999999999998 402.75874999999996,363.35999999999996 291.97875,252.57999999999998" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="402.75874999999996" y="252.57999999999998" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="402.75874999999996" dy="-3.9000000000000012">Are you going to return</tspan><tspan x="402.75874999999996" dy="16.900000000000002">this resource to the caller?</tspan></text>
+</g>
+<g class="node" data-id="Q2" data-label="Could the function
+error out after this point?" data-shape="diamond">
+  <polygon points="287.68375,493.9599999999999 391.79474999999996,598.0709999999999 287.68375,702.1819999999999 183.57274999999998,598.0709999999999" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="287.68375" y="598.0709999999999" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="287.68375" dy="-3.9000000000000012">Could the function</tspan><tspan x="287.68375" dy="16.900000000000002">error out after this point?</tspan></text>
+</g>
+</svg>

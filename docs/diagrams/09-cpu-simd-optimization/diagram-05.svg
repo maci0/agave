@@ -1,0 +1,92 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1167.5439999999999 322.65000000000003" width="1167.5439999999999" height="322.65000000000003" style="--bg:#FFFFFF;--fg:#27272A;background:#ffffff">
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;display=swap');
+  text { font-family: 'Inter', system-ui, sans-serif; }
+  svg {
+    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
+    --_text:          #1a1a2e;
+    --_text-sec:      var(--muted, color-mix(in srgb, #1a1a2e 60%, #ffffff));
+    --_text-muted:    var(--muted, color-mix(in srgb, #1a1a2e 40%, #ffffff));
+    --_text-faint:    color-mix(in srgb, #1a1a2e 25%, #ffffff);
+    --_line:          var(--line, color-mix(in srgb, #1a1a2e 50%, #ffffff));
+    --_arrow:         var(--accent, color-mix(in srgb, #1a1a2e 85%, #ffffff));
+    --_node-fill:     var(--surface, color-mix(in srgb, #1a1a2e 3%, #ffffff));
+    --_node-stroke:   var(--border, color-mix(in srgb, #1a1a2e 20%, #ffffff));
+    --_group-fill:    #ffffff;
+    --_group-hdr:     color-mix(in srgb, #1a1a2e 5%, #ffffff);
+    --_inner-stroke:  color-mix(in srgb, #1a1a2e 12%, #ffffff);
+    --_key-badge:     color-mix(in srgb, #1a1a2e 10%, #ffffff);
+  }
+</style>
+<defs>
+  <marker id="arrowhead" markerWidth="8" markerHeight="5" refX="7" refY="2.5" orient="auto">
+    <polygon points="0 0, 8 2.5, 0 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+  <marker id="arrowhead-start" markerWidth="8" markerHeight="5" refX="1" refY="2.5" orient="auto-start-reverse">
+    <polygon points="8 0, 0 2.5, 8 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+</defs>
+<g class="subgraph" data-id="Block" data-label="Q4_0 block — 18 bytes total
+encode 32 elements">
+  <rect x="40" y="72.82500000000002" width="447.703" height="153.375" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="40" y="72.82500000000002" width="447.703" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="52" y="86.82500000000002" font-size="12" font-weight="600" fill="var(--_text-sec)"><tspan x="52" dy="-3.6000000000000014">Q4_0 block — 18 bytes total</tspan><tspan x="52" dy="15.600000000000001">encode 32 elements</tspan></text>
+</g>
+<g class="subgraph" data-id="Byte" data-label="Single nibble byte (byte j)">
+  <rect x="617.707" y="40" width="164.352" height="153.8" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="617.707" y="40" width="164.352" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="629.707" y="54" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">Single nibble byte (byte j)</text>
+</g>
+<g class="subgraph" data-id="Decode" data-label="Dequantize element">
+  <rect x="912.063" y="67.05" width="215.481" height="215.60000000000002" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="912.063" y="67.05" width="215.481" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="924.063" y="81.05" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">Dequantize element</text>
+</g>
+<polyline class="edge" data-from="Byte" data-to="Decode" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="q0, q1" points="782.059,116.9 900.063,116.9 900.063,138.91666666666669 912.063,138.91666666666669" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="nibbles" data-to="Byte" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="byte j" points="471.703,152.175 487.703,152.175 523.703,152.175 523.703,116.9 617.707,116.9" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="scale" data-to="Decode" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="scale" points="240.22199999999998,186.63333333333335 252.22199999999998,186.63333333333335 252.22199999999998,197.52500000000003 487.703,197.52500000000003 605.707,197.52500000000003 605.707,232.8 900.063,232.8 900.063,210.78333333333336 912.063,210.78333333333336" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="scale" data-to="nibbles" data-style="solid" data-arrow-start="false" data-arrow-end="false" points="240.22199999999998,163.0666666666667 252.22199999999998,163.0666666666667 252.22199999999998,152.175 288.222,152.175" fill="none" stroke="var(--_line)" stroke-width="1" />
+<polyline class="edge" data-from="d1" data-to="d2" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="1019.8035,164.85000000000002 1019.8035,212.85000000000002" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<g class="edge-label" data-from="Byte" data-to="Decode" data-label="q0, q1">
+  <rect x="826.059" y="100.9" width="42.004" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="847.0609999999999" y="116.05000000000001" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">q0, q1</text>
+</g>
+<g class="edge-label" data-from="nibbles" data-to="Byte" data-label="byte j">
+  <rect x="531.703" y="100.9" width="42.004" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="552.7049999999999" y="116.05000000000001" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">byte j</text>
+</g>
+<g class="edge-label" data-from="scale" data-to="Decode" data-label="scale">
+  <rect x="824.2769999999999" y="216.8" width="43.786" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="846.17" y="231.95000000000002" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">scale</text>
+</g>
+<g class="node" data-id="scale" data-label="bytes 0-1
+f16 scale
+applied to all 32 elements" data-shape="rectangle">
+  <rect x="56" y="139.5" width="184.22199999999998" height="70.7" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
+  <text x="148.111" y="174.85" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f"><tspan x="148.111" dy="-12.350000000000001">bytes 0-1</tspan><tspan x="148.111" dy="16.900000000000002">f16 scale</tspan><tspan x="148.111" dy="16.900000000000002">applied to all 32 elements</tspan></text>
+</g>
+<g class="node" data-id="nibbles" data-label="bytes 2-17
+16 packed bytes
+= 32 nibbles (4 bits each)" data-shape="rectangle">
+  <rect x="288.222" y="116.82500000000002" width="183.481" height="70.7" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
+  <text x="379.9625" y="152.175" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f"><tspan x="379.9625" dy="-12.350000000000001">bytes 2-17</tspan><tspan x="379.9625" dy="16.900000000000002">16 packed bytes</tspan><tspan x="379.9625" dy="16.900000000000002">= 32 nibbles (4 bits each)</tspan></text>
+</g>
+<g class="node" data-id="lo" data-label="&quot;low nibble [3:0" data-shape="rectangle">
+  <rect x="633.707" y="84" width="126.424" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="696.919" y="102.45" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">&quot;low nibble [3:0</text>
+</g>
+<g class="node" data-id="hi" data-label="&quot;high nibble [7:4" data-shape="rectangle">
+  <rect x="633.707" y="140.9" width="132.352" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="699.883" y="159.35000000000002" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">&quot;high nibble [7:4</text>
+</g>
+<g class="node" data-id="d1" data-label="q = nibble - 8
+(center at zero)" data-shape="rectangle">
+  <rect x="954.3685" y="111.05" width="130.87" height="53.800000000000004" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="1019.8035" y="137.95" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="1019.8035" dy="-3.9000000000000012">q = nibble - 8</tspan><tspan x="1019.8035" dy="16.900000000000002">(center at zero)</tspan></text>
+</g>
+<g class="node" data-id="d2" data-label="f32 = scale * q
+(apply block scale once)" data-shape="rectangle">
+  <rect x="928.063" y="212.85000000000002" width="183.481" height="53.800000000000004" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
+  <text x="1019.8035" y="239.75000000000003" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="1019.8035" dy="-3.9000000000000012">f32 = scale * q</tspan><tspan x="1019.8035" dy="16.900000000000002">(apply block scale once)</tspan></text>
+</g>
+</svg>

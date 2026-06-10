@@ -1,0 +1,162 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 2277.806 373.95000000000005" width="2277.806" height="373.95000000000005" style="--bg:#FFFFFF;--fg:#27272A;background:#ffffff">
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;display=swap');
+  text { font-family: 'Inter', system-ui, sans-serif; }
+  svg {
+    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
+    --_text:          #1a1a2e;
+    --_text-sec:      var(--muted, color-mix(in srgb, #1a1a2e 60%, #ffffff));
+    --_text-muted:    var(--muted, color-mix(in srgb, #1a1a2e 40%, #ffffff));
+    --_text-faint:    color-mix(in srgb, #1a1a2e 25%, #ffffff);
+    --_line:          var(--line, color-mix(in srgb, #1a1a2e 50%, #ffffff));
+    --_arrow:         var(--accent, color-mix(in srgb, #1a1a2e 85%, #ffffff));
+    --_node-fill:     var(--surface, color-mix(in srgb, #1a1a2e 3%, #ffffff));
+    --_node-stroke:   var(--border, color-mix(in srgb, #1a1a2e 20%, #ffffff));
+    --_group-fill:    #ffffff;
+    --_group-hdr:     color-mix(in srgb, #1a1a2e 5%, #ffffff);
+    --_inner-stroke:  color-mix(in srgb, #1a1a2e 12%, #ffffff);
+    --_key-badge:     color-mix(in srgb, #1a1a2e 10%, #ffffff);
+  }
+</style>
+<defs>
+  <marker id="arrowhead" markerWidth="8" markerHeight="5" refX="7" refY="2.5" orient="auto">
+    <polygon points="0 0, 8 2.5, 0 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+  <marker id="arrowhead-start" markerWidth="8" markerHeight="5" refX="1" refY="2.5" orient="auto-start-reverse">
+    <polygon points="8 0, 0 2.5, 8 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+</defs>
+<g class="subgraph" data-id="Unfused" data-label="Unfused: 8 VRAM reads/writes">
+  <rect x="207.755" y="40" width="1322.078" height="186.70000000000002" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="207.755" y="40" width="1322.078" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="219.755" y="54" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">Unfused: 8 VRAM reads/writes</text>
+</g>
+<g class="subgraph" data-id="Fused" data-label="Fused megakernel: 2 VRAM reads/writes">
+  <rect x="1577.833" y="169.45000000000005" width="659.973" height="164.5" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="1577.833" y="169.45000000000005" width="659.973" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="1589.833" y="183.45000000000005" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">Fused megakernel: 2 VRAM reads/writes</text>
+</g>
+<polyline class="edge" data-from="Input" data-to="G1" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="159.755,170.35 195.755,170.35000000000002 195.755,110.9 207.755,110.9 223.755,110.9" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Input" data-to="U1" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="159.755,183.8 207.755,183.8 370.021,183.8" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Input" data-to="FG" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="load once" points="159.755,197.25 195.755,197.25 195.755,265.70000000000005 1577.833,265.70000000000005 1593.833,265.70000000000005" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="G1" data-to="VRAM1" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="write gate
+to VRAM" points="322.021,110.9 505.913,110.9" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="VRAM1" data-to="Gelu" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="read gate
+from VRAM" points="585.654,110.9 761.395,110.9" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="U1" data-to="VRAM2" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="write up
+to VRAM" points="457.913,183.8 633.654,183.8" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="VRAM2" data-to="Mul" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="read up
+from VRAM" points="713.395,183.8 871.661,183.8 871.661,156.31666666666666 907.661,156.31666666666666" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Gelu" data-to="Mul" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="859.661,110.9 871.661,110.9 871.661,138.38333333333333 907.661,138.38333333333333" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Mul" data-to="VRAM3" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="write mid
+to VRAM" points="1025.934,147.35000000000002 1171.976,147.35000000000002" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="VRAM3" data-to="D1" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="read mid
+from VRAM" points="1251.717,147.35000000000002 1409.6390000000001,147.35000000000002" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="FG" data-to="FV" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="write once
+to VRAM" points="1726.1850000000002,265.70000000000005 1879.949,265.70000000000005" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="FV" data-to="FD" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="read once
+from VRAM" points="1959.69,265.70000000000005 2117.612,265.70000000000005" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<g class="edge-label" data-from="Input" data-to="FG" data-label="load once">
+  <rect x="1470.4450000000002" y="249.70000000000002" width="63.388" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="1502.1390000000001" y="264.85" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">load once</text>
+</g>
+<g class="edge-label" data-from="G1" data-to="VRAM1" data-label="write gate
+to VRAM">
+  <rect x="382.86699999999996" y="87.9" width="62.2" height="44.6" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="413.967" y="110.2" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)"><tspan x="413.967" dy="-3.3000000000000007">write gate</tspan><tspan x="413.967" dy="14.3">to VRAM</tspan></text>
+</g>
+<g class="edge-label" data-from="VRAM1" data-to="Gelu" data-label="read gate
+from VRAM">
+  <rect x="638.5635" y="87.9" width="69.92200000000001" height="44.6" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="673.5245" y="110.2" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)"><tspan x="673.5245" dy="-3.3000000000000007">read gate</tspan><tspan x="673.5245" dy="14.3">from VRAM</tspan></text>
+</g>
+<g class="edge-label" data-from="U1" data-to="VRAM2" data-label="write up
+to VRAM">
+  <rect x="516.7625" y="160.8" width="58.042" height="44.6" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="545.7835" y="183.10000000000002" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)"><tspan x="545.7835" dy="-3.3000000000000007">write up</tspan><tspan x="545.7835" dy="14.3">to VRAM</tspan></text>
+</g>
+<g class="edge-label" data-from="VRAM2" data-to="Mul" data-label="read up
+from VRAM">
+  <rect x="775.567" y="160.8" width="69.92200000000001" height="44.6" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="810.528" y="183.10000000000002" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)"><tspan x="810.528" dy="-3.3000000000000007">read up</tspan><tspan x="810.528" dy="14.3">from VRAM</tspan></text>
+</g>
+<g class="edge-label" data-from="Mul" data-to="VRAM3" data-label="write mid
+to VRAM">
+  <rect x="1069.934" y="124.35000000000001" width="58.042" height="44.6" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="1098.955" y="146.65" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)"><tspan x="1098.955" dy="-3.3000000000000007">write mid</tspan><tspan x="1098.955" dy="14.3">to VRAM</tspan></text>
+</g>
+<g class="edge-label" data-from="VRAM3" data-to="D1" data-label="read mid
+from VRAM">
+  <rect x="1295.7169999999999" y="124.35000000000001" width="69.92200000000001" height="44.6" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="1330.6779999999999" y="146.65" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)"><tspan x="1330.6779999999999" dy="-3.3000000000000007">read mid</tspan><tspan x="1330.6779999999999" dy="14.3">from VRAM</tspan></text>
+</g>
+<g class="edge-label" data-from="FG" data-to="FV" data-label="write once
+to VRAM">
+  <rect x="1770.185" y="242.70000000000005" width="65.764" height="44.6" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="1803.067" y="265.00000000000006" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)"><tspan x="1803.067" dy="-3.3000000000000007">write once</tspan><tspan x="1803.067" dy="14.3">to VRAM</tspan></text>
+</g>
+<g class="edge-label" data-from="FV" data-to="FD" data-label="read once
+from VRAM">
+  <rect x="2003.69" y="242.70000000000005" width="69.92200000000001" height="44.6" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="2038.651" y="265.00000000000006" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)"><tspan x="2038.651" dy="-3.3000000000000007">read once</tspan><tspan x="2038.651" dy="14.3">from VRAM</tspan></text>
+</g>
+<g class="node" data-id="Input" data-label="x
+(hidden state)" data-shape="rectangle">
+  <rect x="40" y="156.9" width="119.75500000000001" height="53.800000000000004" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
+  <text x="99.8775" y="183.8" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f"><tspan x="99.8775" dy="-3.9000000000000012">x</tspan><tspan x="99.8775" dy="16.900000000000002">(hidden state)</tspan></text>
+</g>
+<g class="node" data-id="G1" data-label="gate_proj
+GEMV" data-shape="rectangle">
+  <rect x="223.755" y="84" width="98.266" height="53.800000000000004" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="272.888" y="110.9" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="272.888" dy="-3.9000000000000012">gate_proj</tspan><tspan x="272.888" dy="16.900000000000002">GEMV</tspan></text>
+</g>
+<g class="node" data-id="VRAM1" data-label="VRAM" data-shape="rectangle">
+  <rect x="505.913" y="92.45" width="79.741" height="36.900000000000006" rx="0" ry="0" fill="#fee2e2" stroke="#ef4444" stroke-width="0.75" />
+  <text x="545.7835" y="110.9" text-anchor="middle" font-size="13" font-weight="500" fill="#7f1d1d" dy="4.55">VRAM</text>
+</g>
+<g class="node" data-id="Gelu" data-label="GELU
+activation" data-shape="rectangle">
+  <rect x="761.395" y="84" width="98.266" height="53.800000000000004" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="810.528" y="110.9" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="810.528" dy="-3.9000000000000012">GELU</tspan><tspan x="810.528" dy="16.900000000000002">activation</tspan></text>
+</g>
+<g class="node" data-id="U1" data-label="up_proj
+GEMV" data-shape="rectangle">
+  <rect x="370.021" y="156.9" width="87.892" height="53.800000000000004" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="413.967" y="183.8" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="413.967" dy="-3.9000000000000012">up_proj</tspan><tspan x="413.967" dy="16.900000000000002">GEMV</tspan></text>
+</g>
+<g class="node" data-id="VRAM2" data-label="VRAM" data-shape="rectangle">
+  <rect x="633.654" y="165.35000000000002" width="79.741" height="36.900000000000006" rx="0" ry="0" fill="#fee2e2" stroke="#ef4444" stroke-width="0.75" />
+  <text x="673.5245" y="183.8" text-anchor="middle" font-size="13" font-weight="500" fill="#7f1d1d" dy="4.55">VRAM</text>
+</g>
+<g class="node" data-id="Mul" data-label="Element-wise
+multiply" data-shape="rectangle">
+  <rect x="907.661" y="120.45" width="118.273" height="53.800000000000004" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="966.7974999999999" y="147.35" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="966.7974999999999" dy="-3.9000000000000012">Element-wise</tspan><tspan x="966.7974999999999" dy="16.900000000000002">multiply</tspan></text>
+</g>
+<g class="node" data-id="VRAM3" data-label="VRAM" data-shape="rectangle">
+  <rect x="1171.976" y="128.9" width="79.741" height="36.900000000000006" rx="0" ry="0" fill="#fee2e2" stroke="#ef4444" stroke-width="0.75" />
+  <text x="1211.8465" y="147.35000000000002" text-anchor="middle" font-size="13" font-weight="500" fill="#7f1d1d" dy="4.55">VRAM</text>
+</g>
+<g class="node" data-id="D1" data-label="down_proj
+GEMV" data-shape="rectangle">
+  <rect x="1409.6390000000001" y="120.45" width="104.194" height="53.800000000000004" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="1461.736" y="147.35" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="1461.736" dy="-3.9000000000000012">down_proj</tspan><tspan x="1461.736" dy="16.900000000000002">GEMV</tspan></text>
+</g>
+<g class="node" data-id="FG" data-label="gate_proj
++ GELU
++ up_proj
++ multiply
+(all in registers)" data-shape="rectangle">
+  <rect x="1593.833" y="213.45000000000005" width="132.352" height="104.50000000000001" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="1660.009" y="265.70000000000005" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="1660.009" dy="-29.250000000000004">gate_proj</tspan><tspan x="1660.009" dy="16.900000000000002">+ GELU</tspan><tspan x="1660.009" dy="16.900000000000002">+ up_proj</tspan><tspan x="1660.009" dy="16.900000000000002">+ multiply</tspan><tspan x="1660.009" dy="16.900000000000002">(all in registers)</tspan></text>
+</g>
+<g class="node" data-id="FV" data-label="VRAM" data-shape="rectangle">
+  <rect x="1879.949" y="247.25000000000006" width="79.741" height="36.900000000000006" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
+  <text x="1919.8195" y="265.70000000000005" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12" dy="4.55">VRAM</text>
+</g>
+<g class="node" data-id="FD" data-label="down_proj
+GEMV" data-shape="rectangle">
+  <rect x="2117.612" y="238.80000000000007" width="104.194" height="53.800000000000004" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="2169.7090000000003" y="265.70000000000005" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="2169.7090000000003" dy="-3.9000000000000012">down_proj</tspan><tspan x="2169.7090000000003" dy="16.900000000000002">GEMV</tspan></text>
+</g>
+</svg>

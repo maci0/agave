@@ -1,0 +1,136 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 821.883 845.3" width="821.883" height="845.3" style="--bg:#FFFFFF;--fg:#27272A;background:#ffffff">
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;display=swap');
+  text { font-family: 'Inter', system-ui, sans-serif; }
+  svg {
+    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
+    --_text:          #1a1a2e;
+    --_text-sec:      var(--muted, color-mix(in srgb, #1a1a2e 60%, #ffffff));
+    --_text-muted:    var(--muted, color-mix(in srgb, #1a1a2e 40%, #ffffff));
+    --_text-faint:    color-mix(in srgb, #1a1a2e 25%, #ffffff);
+    --_line:          var(--line, color-mix(in srgb, #1a1a2e 50%, #ffffff));
+    --_arrow:         var(--accent, color-mix(in srgb, #1a1a2e 85%, #ffffff));
+    --_node-fill:     var(--surface, color-mix(in srgb, #1a1a2e 3%, #ffffff));
+    --_node-stroke:   var(--border, color-mix(in srgb, #1a1a2e 20%, #ffffff));
+    --_group-fill:    #ffffff;
+    --_group-hdr:     color-mix(in srgb, #1a1a2e 5%, #ffffff);
+    --_inner-stroke:  color-mix(in srgb, #1a1a2e 12%, #ffffff);
+    --_key-badge:     color-mix(in srgb, #1a1a2e 10%, #ffffff);
+  }
+</style>
+<defs>
+  <marker id="arrowhead" markerWidth="8" markerHeight="5" refX="7" refY="2.5" orient="auto">
+    <polygon points="0 0, 8 2.5, 0 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+  <marker id="arrowhead-start" markerWidth="8" markerHeight="5" refX="1" refY="2.5" orient="auto-start-reverse">
+    <polygon points="8 0, 0 2.5, 8 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+</defs>
+<g class="subgraph" data-id="RecipeStruct" data-label="Recipe struct (all fields optional)">
+  <rect x="40" y="103.09999999999997" width="371.985" height="261.40000000000003" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="40" y="103.09999999999997" width="371.985" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="52" y="117.09999999999997" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">Recipe struct (all fields optional)</text>
+</g>
+<g class="subgraph" data-id="AppliedStruct" data-label="Applied struct (all fields concrete after resolution)">
+  <rect x="292.71524999999997" y="480.8" width="251.496" height="324.5" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="292.71524999999997" y="480.8" width="251.496" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="304.71524999999997" y="494.8" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">Applied struct (all fields concrete after resolution)</text>
+</g>
+<g class="subgraph" data-id="Overrides" data-label="Overrides struct (tracks what the user set via CLI)">
+  <rect x="439.985" y="40" width="341.898" height="324.5" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="439.985" y="40" width="341.898" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="451.985" y="54" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">Overrides struct (tracks what the user set via CLI)</text>
+</g>
+<polyline class="edge" data-from="RecipeStruct" data-to="AppliedStruct" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="applyDefaults(cli_values, overrides)" points="225.9925,364.5 225.9925,468.8 376.54725,468.8 376.54725,480.8" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Overrides" data-to="AppliedStruct" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="gates each field independently" points="610.934,364.5 610.934,468.8 460.37925,468.8 460.37925,480.8" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<g class="edge-label" data-from="RecipeStruct" data-to="AppliedStruct" data-label="applyDefaults(cli_values, overrides)">
+  <rect x="131.4925" y="407.5" width="188.12800000000001" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="225.55650000000003" y="422.65" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">applyDefaults(cli_values, overrides)</text>
+</g>
+<g class="edge-label" data-from="Overrides" data-to="AppliedStruct" data-label="gates each field independently">
+  <rect x="531.434" y="407.5" width="158.428" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="610.6479999999999" y="422.65" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">gates each field independently</text>
+</g>
+<g class="node" data-id="R1" data-label="&quot;name: [" data-shape="rectangle">
+  <rect x="56" y="144" width="85.66900000000001" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="98.8345" y="162.45" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">&quot;name: [</text>
+</g>
+<g class="node" data-id="R2" data-label="temperature: ?f32
+= null" data-shape="rectangle">
+  <rect x="203.165" y="209.35" width="143.467" height="53.800000000000004" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
+  <text x="274.8985" y="236.25" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f"><tspan x="274.8985" dy="-3.9000000000000012">temperature: ?f32</tspan><tspan x="274.8985" dy="16.900000000000002">= null</tspan></text>
+</g>
+<g class="node" data-id="R3" data-label="top_p: ?f32
+= null" data-shape="rectangle">
+  <rect x="161.669" y="144" width="104.93499999999999" height="53.800000000000004" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
+  <text x="214.1365" y="170.9" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f"><tspan x="214.1365" dy="-3.9000000000000012">top_p: ?f32</tspan><tspan x="214.1365" dy="16.900000000000002">= null</tspan></text>
+</g>
+<g class="node" data-id="R4" data-label="top_k: ?u32
+= null" data-shape="rectangle">
+  <rect x="286.604" y="144" width="109.381" height="53.800000000000004" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
+  <text x="341.29449999999997" y="170.9" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f"><tspan x="341.29449999999997" dy="-3.9000000000000012">top_k: ?u32</tspan><tspan x="341.29449999999997" dy="16.900000000000002">= null</tspan></text>
+</g>
+<g class="node" data-id="R5" data-label="repeat_penalty: ?f32
+= null" data-shape="rectangle">
+  <rect x="223.913" y="303.15" width="161.251" height="53.800000000000004" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
+  <text x="304.5385" y="330.04999999999995" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f"><tspan x="304.5385" dy="-3.9000000000000012">repeat_penalty: ?f32</tspan><tspan x="304.5385" dy="16.900000000000002">= null</tspan></text>
+</g>
+<g class="node" data-id="R6" data-label="max_tokens: ?u32
+= null" data-shape="rectangle">
+  <rect x="56" y="303.15" width="147.913" height="53.800000000000004" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
+  <text x="129.9565" y="330.04999999999995" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f"><tspan x="129.9565" dy="-3.9000000000000012">max_tokens: ?u32</tspan><tspan x="129.9565" dy="16.900000000000002">= null</tspan></text>
+</g>
+<g class="node" data-id="R7" data-label="ctx_size: ?u32
+= null" data-shape="rectangle">
+  <rect x="56" y="209.35" width="127.16499999999999" height="53.800000000000004" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
+  <text x="119.5825" y="236.25" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f"><tspan x="119.5825" dy="-3.9000000000000012">ctx_size: ?u32</tspan><tspan x="119.5825" dy="16.900000000000002">= null</tspan></text>
+</g>
+<g class="node" data-id="A1" data-label="temperature: f32" data-shape="rectangle">
+  <rect x="308.71524999999997" y="638.6" width="136.05700000000002" height="36.900000000000006" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
+  <text x="376.74375" y="657.0500000000001" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d" dy="4.55">temperature: f32</text>
+</g>
+<g class="node" data-id="A2" data-label="top_p: f32" data-shape="rectangle">
+  <rect x="308.71524999999997" y="524.8" width="97.525" height="36.900000000000006" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
+  <text x="357.47774999999996" y="543.25" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d" dy="4.55">top_p: f32</text>
+</g>
+<g class="node" data-id="A3" data-label="top_k: u32" data-shape="rectangle">
+  <rect x="426.24024999999995" y="524.8" width="101.971" height="36.900000000000006" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
+  <text x="477.22574999999995" y="543.25" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d" dy="4.55">top_k: u32</text>
+</g>
+<g class="node" data-id="A4" data-label="repeat_penalty: f32" data-shape="rectangle">
+  <rect x="308.71524999999997" y="752.4000000000001" width="153.841" height="36.900000000000006" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
+  <text x="385.63575" y="770.8500000000001" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d" dy="4.55">repeat_penalty: f32</text>
+</g>
+<g class="node" data-id="A5" data-label="max_tokens: u32" data-shape="rectangle">
+  <rect x="308.71524999999997" y="695.5" width="140.50300000000001" height="36.900000000000006" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
+  <text x="378.96675" y="713.95" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d" dy="4.55">max_tokens: u32</text>
+</g>
+<g class="node" data-id="A6" data-label="ctx_size: u32" data-shape="rectangle">
+  <rect x="308.71524999999997" y="581.7" width="119.755" height="36.900000000000006" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
+  <text x="368.59274999999997" y="600.1500000000001" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d" dy="4.55">ctx_size: u32</text>
+</g>
+<g class="node" data-id="O1" data-label="temperature: bool = false" data-shape="rectangle">
+  <rect x="455.985" y="209.35" width="183.481" height="36.900000000000006" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
+  <text x="547.7255" y="227.8" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12" dy="4.55">temperature: bool = false</text>
+</g>
+<g class="node" data-id="O2" data-label="top_p: bool = false" data-shape="rectangle">
+  <rect x="455.985" y="84" width="144.949" height="36.900000000000006" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
+  <text x="528.4595" y="102.45" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12" dy="4.55">top_p: bool = false</text>
+</g>
+<g class="node" data-id="O3" data-label="top_k: bool = false" data-shape="rectangle">
+  <rect x="620.934" y="84" width="144.949" height="36.900000000000006" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
+  <text x="693.4085" y="102.45" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12" dy="4.55">top_k: bool = false</text>
+</g>
+<g class="node" data-id="O4" data-label="repeat_penalty: bool = false" data-shape="rectangle">
+  <rect x="455.985" y="303.15" width="201.265" height="36.900000000000006" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
+  <text x="556.6175000000001" y="321.59999999999997" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12" dy="4.55">repeat_penalty: bool = false</text>
+</g>
+<g class="node" data-id="O5" data-label="max_tokens: bool = false" data-shape="rectangle">
+  <rect x="455.985" y="254.70000000000002" width="183.481" height="36.900000000000006" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
+  <text x="547.7255" y="273.15000000000003" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12" dy="4.55">max_tokens: bool = false</text>
+</g>
+<g class="node" data-id="O6" data-label="ctx_size: bool = false" data-shape="rectangle">
+  <rect x="455.985" y="144" width="162.73300000000003" height="36.900000000000006" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
+  <text x="537.3515" y="162.45" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12" dy="4.55">ctx_size: bool = false</text>
+</g>
+</svg>

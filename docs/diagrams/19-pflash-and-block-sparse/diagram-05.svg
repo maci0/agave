@@ -1,0 +1,92 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 827.4585000000001 518" width="827.4585000000001" height="518" style="--bg:#FFFFFF;--fg:#27272A;background:#ffffff">
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;display=swap');
+  text { font-family: 'Inter', system-ui, sans-serif; }
+  svg {
+    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
+    --_text:          #1a1a2e;
+    --_text-sec:      var(--muted, color-mix(in srgb, #1a1a2e 60%, #ffffff));
+    --_text-muted:    var(--muted, color-mix(in srgb, #1a1a2e 40%, #ffffff));
+    --_text-faint:    color-mix(in srgb, #1a1a2e 25%, #ffffff);
+    --_line:          var(--line, color-mix(in srgb, #1a1a2e 50%, #ffffff));
+    --_arrow:         var(--accent, color-mix(in srgb, #1a1a2e 85%, #ffffff));
+    --_node-fill:     var(--surface, color-mix(in srgb, #1a1a2e 3%, #ffffff));
+    --_node-stroke:   var(--border, color-mix(in srgb, #1a1a2e 20%, #ffffff));
+    --_group-fill:    #ffffff;
+    --_group-hdr:     color-mix(in srgb, #1a1a2e 5%, #ffffff);
+    --_inner-stroke:  color-mix(in srgb, #1a1a2e 12%, #ffffff);
+    --_key-badge:     color-mix(in srgb, #1a1a2e 10%, #ffffff);
+  }
+</style>
+<defs>
+  <marker id="seq-arrow" markerWidth="8" markerHeight="5" refX="8" refY="2.5" orient="auto-start-reverse">
+    <polygon points="0 0, 8 2.5, 0 5" fill="var(--_arrow)" />
+  </marker>
+  <marker id="seq-arrow-open" markerWidth="8" markerHeight="5" refX="8" refY="2.5" orient="auto-start-reverse">
+    <polyline points="0 0, 8 2.5, 0 5" fill="none" stroke="var(--_arrow)" stroke-width="1" />
+  </marker>
+</defs>
+<g class="block" data-type="loop" data-label="DDTree decode (per generation step)">
+  <rect x="30" y="228" width="667.897" height="240" rx="0" ry="0" fill="none" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="30" y="228" width="242.70999999999995" height="18" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="36" y="237" font-size="11" font-weight="600" fill="var(--_text-sec)" dy="3.8499999999999996">loop [DDTree decode (per generation step)]</text>
+</g>
+<line class="lifeline" data-actor="User" x1="80" y1="70" x2="80" y2="488" stroke="var(--_line)" stroke-width="0.75" stroke-dasharray="6 4" />
+<line class="lifeline" data-actor="Scorer" x1="237.3665" y1="70" x2="237.3665" y2="488" stroke="var(--_line)" stroke-width="0.75" stroke-dasharray="6 4" />
+<line class="lifeline" data-actor="Target" x1="431.35850000000005" y1="70" x2="431.35850000000005" y2="488" stroke="var(--_line)" stroke-width="0.75" stroke-dasharray="6 4" />
+<line class="lifeline" data-actor="Draft" x1="617.9405" y1="70" x2="617.9405" y2="488" stroke="var(--_line)" stroke-width="0.75" stroke-dasharray="6 4" />
+<g class="message" data-from="User" data-to="Scorer" data-label="Full prompt (128K tokens)" data-line-style="solid" data-arrow-head="filled" data-self="false">
+  <line x1="80" y1="90" x2="237.3665" y2="90" stroke="var(--_line)" stroke-width="1" marker-end="url(#seq-arrow)" />
+  <text x="158.68325" y="80" font-size="11" text-anchor="middle" font-weight="400" fill="var(--_text-muted)" dy="3.8499999999999996">Full prompt (128K tokens)</text>
+</g>
+<g class="message" data-from="Scorer" data-to="Target" data-label="Selected blocks only (~8K tokens)" data-line-style="dashed" data-arrow-head="filled" data-self="false">
+  <line x1="237.3665" y1="145" x2="431.35850000000005" y2="145" stroke="var(--_line)" stroke-width="1" stroke-dasharray="6 4" marker-end="url(#seq-arrow)" />
+  <text x="334.3625" y="135" font-size="11" text-anchor="middle" font-weight="400" fill="var(--_text-muted)" dy="3.8499999999999996">Selected blocks only (~8K tokens)</text>
+</g>
+<g class="message" data-from="Target" data-to="Draft" data-label="KV cache ready, begin decode" data-line-style="dashed" data-arrow-head="filled" data-self="false">
+  <line x1="431.35850000000005" y1="200" x2="617.9405" y2="200" stroke="var(--_line)" stroke-width="1" stroke-dasharray="6 4" marker-end="url(#seq-arrow)" />
+  <text x="524.6495" y="190" font-size="11" text-anchor="middle" font-weight="400" fill="var(--_text-muted)" dy="3.8499999999999996">KV cache ready, begin decode</text>
+</g>
+<g class="message" data-from="Draft" data-to="Draft" data-label="Propose 5-token tree (~8ms)" data-line-style="solid" data-arrow-head="filled" data-self="true">
+  <polyline points="617.9405,268 647.9405,268 647.9405,288 617.9405,288" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#seq-arrow)" />
+  <text x="655.9405" y="278" font-size="11" text-anchor="start" font-weight="400" fill="var(--_text-muted)" dy="3.8499999999999996">Propose 5-token tree (~8ms)</text>
+</g>
+<g class="message" data-from="Draft" data-to="Target" data-label="Tree of candidates" data-line-style="solid" data-arrow-head="filled" data-self="false">
+  <line x1="617.9405" y1="338" x2="431.35850000000005" y2="338" stroke="var(--_line)" stroke-width="1" marker-end="url(#seq-arrow)" />
+  <text x="524.6495" y="328" font-size="11" text-anchor="middle" font-weight="400" fill="var(--_text-muted)" dy="3.8499999999999996">Tree of candidates</text>
+</g>
+<g class="message" data-from="Target" data-to="Target" data-label="Verify batch in 1 pass (~65ms)" data-line-style="solid" data-arrow-head="filled" data-self="true">
+  <polyline points="431.35850000000005,378 461.35850000000005,378 461.35850000000005,398 431.35850000000005,398" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#seq-arrow)" />
+  <text x="469.35850000000005" y="388" font-size="11" text-anchor="start" font-weight="400" fill="var(--_text-muted)" dy="3.8499999999999996">Verify batch in 1 pass (~65ms)</text>
+</g>
+<g class="message" data-from="Target" data-to="User" data-label="Accept ~3 tokens on average" data-line-style="dashed" data-arrow-head="filled" data-self="false">
+  <line x1="431.35850000000005" y1="448" x2="80" y2="448" stroke="var(--_line)" stroke-width="1" stroke-dasharray="6 4" marker-end="url(#seq-arrow)" />
+  <text x="255.67925000000002" y="438" font-size="11" text-anchor="middle" font-weight="400" fill="var(--_text-muted)" dy="3.8499999999999996">Accept ~3 tokens on average</text>
+</g>
+<g class="note" data-position="over" data-actors="Scorer">
+  <polygon points="137.2235,98 331.5095,98 337.5095,104 337.5095,121 137.2235,121" fill="#ffffff" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <polygon points="331.5095,98 337.5095,104 331.5095,104" fill="var(--_inner-stroke)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="237.36650000000003" y="109.5" font-size="11" text-anchor="middle" font-weight="400" fill="var(--_text-muted)" dy="3.8499999999999996">Block sparse attention pass (~200ms)</text>
+</g>
+<g class="note" data-position="over" data-actors="Target">
+  <polygon points="325.8695,153 530.8475000000001,153 536.8475000000001,159 536.8475000000001,176 325.8695,176" fill="#ffffff" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <polygon points="530.8475000000001,153 536.8475000000001,159 530.8475000000001,159" fill="var(--_inner-stroke)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="431.35850000000005" y="164.5" font-size="11" text-anchor="middle" font-weight="400" fill="var(--_text-muted)" dy="3.8499999999999996">Compressed prefill (~500ms vs 6000ms)</text>
+</g>
+<g class="actor" data-id="User" data-label="User" data-type="participant">
+  <rect x="40" y="30" width="80" height="40" rx="4" ry="4" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="80" y="50" font-size="13" text-anchor="middle" font-weight="500" fill="var(--_text)" dy="4.55">User</text>
+</g>
+<g class="actor" data-id="Scorer" data-label="Scorer Model (small)" data-type="participant">
+  <rect x="160" y="30" width="154.733" height="40" rx="4" ry="4" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="237.3665" y="50" font-size="13" text-anchor="middle" font-weight="500" fill="var(--_text)" dy="4.55">Scorer Model (small)</text>
+</g>
+<g class="actor" data-id="Target" data-label="Target Model (large)" data-type="participant">
+  <rect x="354.73300000000006" y="30" width="153.251" height="40" rx="4" ry="4" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="431.35850000000005" y="50" font-size="13" text-anchor="middle" font-weight="500" fill="var(--_text)" dy="4.55">Target Model (large)</text>
+</g>
+<g class="actor" data-id="Draft" data-label="Draft Model (small)" data-type="participant">
+  <rect x="547.984" y="30" width="139.913" height="40" rx="4" ry="4" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="617.9405" y="50" font-size="13" text-anchor="middle" font-weight="500" fill="var(--_text)" dy="4.55">Draft Model (small)</text>
+</g>
+</svg>

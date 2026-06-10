@@ -1,0 +1,152 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 692.7362499999999 1466.9560000000001" width="692.7362499999999" height="1466.9560000000001" style="--bg:#FFFFFF;--fg:#27272A;background:#ffffff">
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;display=swap');
+  text { font-family: 'Inter', system-ui, sans-serif; }
+  svg {
+    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
+    --_text:          #1a1a2e;
+    --_text-sec:      var(--muted, color-mix(in srgb, #1a1a2e 60%, #ffffff));
+    --_text-muted:    var(--muted, color-mix(in srgb, #1a1a2e 40%, #ffffff));
+    --_text-faint:    color-mix(in srgb, #1a1a2e 25%, #ffffff);
+    --_line:          var(--line, color-mix(in srgb, #1a1a2e 50%, #ffffff));
+    --_arrow:         var(--accent, color-mix(in srgb, #1a1a2e 85%, #ffffff));
+    --_node-fill:     var(--surface, color-mix(in srgb, #1a1a2e 3%, #ffffff));
+    --_node-stroke:   var(--border, color-mix(in srgb, #1a1a2e 20%, #ffffff));
+    --_group-fill:    #ffffff;
+    --_group-hdr:     color-mix(in srgb, #1a1a2e 5%, #ffffff);
+    --_inner-stroke:  color-mix(in srgb, #1a1a2e 12%, #ffffff);
+    --_key-badge:     color-mix(in srgb, #1a1a2e 10%, #ffffff);
+  }
+</style>
+<defs>
+  <marker id="arrowhead" markerWidth="8" markerHeight="5" refX="7" refY="2.5" orient="auto">
+    <polygon points="0 0, 8 2.5, 0 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+  <marker id="arrowhead-start" markerWidth="8" markerHeight="5" refX="1" refY="2.5" orient="auto-start-reverse">
+    <polygon points="8 0, 0 2.5, 8 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+</defs>
+<g class="subgraph" data-id="Phase1" data-label="Phase 1: find insertion point (chat_template.zig)">
+  <rect x="40" y="40" width="0" height="0" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="40" y="40" width="0" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="52" y="54" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">Phase 1: find insertion point (chat_template.zig)</text>
+</g>
+<g class="subgraph" data-id="Phase2" data-label="Phase 2: splice image tokens (chat_template.zig)">
+  <rect x="202.86949999999996" y="362.3" width="321.726" height="197.086" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="202.86949999999996" y="362.3" width="321.726" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="214.86949999999996" y="376.3" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">Phase 2: splice image tokens (chat_template.zig)</text>
+</g>
+<g class="subgraph" data-id="Phase3" data-label="Phase 3: embedding replacement (model forward())">
+  <rect x="272.7289999999999" y="896.186" width="186.87" height="214.87" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="272.7289999999999" y="896.186" width="186.87" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="284.7289999999999" y="910.186" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">Phase 3: embedding replacement (model forward())</text>
+</g>
+<polyline class="edge" data-from="TokenArr" data-to="Scan" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="202.86949999999996,93.80000000000001 202.86949999999996,141.8" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Scan" data-to="InsertPos" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="202.86949999999996,212.5 202.86949999999996,260.5" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="EmitStart" data-to="EmitPads" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="417.2048333333333,737.936 417.2048333333332,765.486 455.4824166666666,765.486 455.4824166666666,785.936" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="EmitEnd" data-to="SplicedArr" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="217.92374999999993,737.936 217.92374999999993,782.3860000000001 241.65483333333327,782.3860000000001 241.65483333333327,785.936" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="NormalEmb" data-to="NextTok" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="225.18124999999998,1265.606 225.18124999999998,1285.3809999999999 369.3955833333332,1285.3809999999999 369.3955833333332,1305.156" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="VisEmb" data-to="NextTok" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="486.6797499999999,1248.7060000000001 486.6797499999999,1285.3809999999999 369.3955833333332,1285.3809999999999 369.3955833333332,1305.156" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="NextTok" data-to="TokenLoop" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="369.3955833333332,1342.056 369.3955833333332,1378.056 434.3532499999999,1378.056 434.3532499999999,1390.056" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="InsertPos" data-to="Phase2" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="202.86949999999996,314.3 202.86949999999996,362.3" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="SplicedArr" data-to="Phase3" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="272.7289999999999,839.736 272.7289999999999,896.186" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="DistinctStart" data-to="EmitStart" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="yes" points="417.2048333333333,520.5383333333333 417.2048333333333,559.386 417.2048333333333,684.1360000000001" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="DistinctStart" data-to="EmitPads" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="no" points="462.9001666666666,520.5383333333333 462.9001666666666,559.386 462.9001666666666,595.3860000000001 508.57133333333326,595.3860000000001 508.57133333333326,765.486 496.53616666666665,765.486 496.53616666666665,785.936" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="EmitPads" data-to="DistinctEnd" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="537.5899166666666,785.936 537.5899166666666,765.486 550.3779999999999,765.486 550.3779999999999,350.3 285.18949999999995,350.3 285.18949999999995,362.3 285.18949999999995,406.3" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="DistinctEnd" data-to="EmitEnd" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="yes" points="263.08283333333327,516.8333333333334 263.08283333333327,559.386 263.08283333333327,612.2860000000002 217.92374999999996,612.2860000000002 217.92374999999993,684.1360000000001" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="DistinctEnd" data-to="SplicedArr" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="no" points="307.29616666666664,516.8333333333334 307.29616666666664,559.386 307.29616666666664,612.2860000000002 307.06724999999994,612.2860000000002 307.06724999999994,782.3860000000001 303.8031666666666,782.3860000000001 303.8031666666666,785.936" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="TokenLoop" data-to="IsPad" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="497.48958333333326,1390.056 497.48958333333326,1378.056 644.7362499999999,1378.056 644.7362499999999,884.186 366.16399999999993,884.186 366.16399999999993,896.186 366.16399999999993,940.186" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="IsPad" data-to="NormalEmb" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="no" points="340.35233333333326,1069.2443333333333 340.35233333333326,1111.056 340.35233333333326,1123.056 225.18124999999998,1123.056 225.18124999999998,1211.806" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="IsPad" data-to="VisEmb" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="yes" points="391.9756666666666,1069.2443333333333 391.9756666666666,1111.056 391.9756666666666,1139.956 486.6797499999999,1139.956 486.6797499999999,1211.806" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<g class="edge-label" data-from="DistinctStart" data-to="EmitStart" data-label="yes">
+  <rect x="399.2048333333332" y="602.3860000000001" width="35.47" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="416.93983333333324" y="617.5360000000001" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">yes</text>
+</g>
+<g class="edge-label" data-from="DistinctStart" data-to="EmitPads" data-label="no">
+  <rect x="493.57133333333326" y="602.3860000000001" width="29.53" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="508.33633333333324" y="617.5360000000001" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">no</text>
+</g>
+<g class="edge-label" data-from="DistinctEnd" data-to="EmitEnd" data-label="yes">
+  <rect x="199.92374999999993" y="619.2860000000002" width="35.47" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="217.65874999999994" y="634.4360000000001" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">yes</text>
+</g>
+<g class="edge-label" data-from="DistinctEnd" data-to="SplicedArr" data-label="no">
+  <rect x="292.06724999999994" y="619.2860000000002" width="29.53" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="306.83224999999993" y="634.4360000000001" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">no</text>
+</g>
+<g class="edge-label" data-from="IsPad" data-to="NormalEmb" data-label="no">
+  <rect x="210.18124999999998" y="1130.056" width="29.53" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="224.94624999999996" y="1145.2060000000001" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">no</text>
+</g>
+<g class="edge-label" data-from="IsPad" data-to="VisEmb" data-label="yes">
+  <rect x="468.6797499999999" y="1146.956" width="35.47" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="486.4147499999999" y="1162.106" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">yes</text>
+</g>
+<g class="node" data-id="TokenArr" data-label="&quot;token array
+[sys_tok..., user_prefix_toks..., text_toks..." data-shape="rectangle">
+  <rect x="60" y="40" width="285.7389999999999" height="53.800000000000004" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="202.86949999999996" y="66.9" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="202.86949999999996" dy="-3.9000000000000012">&quot;token array</tspan><tspan x="202.86949999999996" dy="16.900000000000002">[sys_tok..., user_prefix_toks..., text_toks...</tspan></text>
+</g>
+<g class="node" data-id="Scan" data-label="findImageInsertPos()
+scan for last occurrence
+of user_prefix token sequence" data-shape="rectangle">
+  <rect x="92.60399999999998" y="141.8" width="220.53099999999998" height="70.7" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="202.86949999999996" y="177.15" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="202.86949999999996" dy="-12.350000000000001">findImageInsertPos()</tspan><tspan x="202.86949999999996" dy="16.900000000000002">scan for last occurrence</tspan><tspan x="202.86949999999996" dy="16.900000000000002">of user_prefix token sequence</tspan></text>
+</g>
+<g class="node" data-id="InsertPos" data-label="insertion position
+(index after last prefix match)" data-shape="rectangle">
+  <rect x="99.64349999999996" y="260.5" width="206.452" height="53.800000000000004" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
+  <text x="202.86949999999996" y="287.4" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12"><tspan x="202.86949999999996" dy="-3.9000000000000012">insertion position</tspan><tspan x="202.86949999999996" dy="16.900000000000002">(index after last prefix match)</tspan></text>
+</g>
+<g class="node" data-id="EmitStart" data-label="prepend start token
+(e.g. &lt;|vision_start|&gt;)" data-shape="rectangle">
+  <rect x="335.83833333333325" y="684.1360000000001" width="162.73300000000003" height="53.800000000000004" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
+  <text x="417.2048333333333" y="711.0360000000001" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12"><tspan x="417.2048333333333" dy="-3.9000000000000012">prepend start token</tspan><tspan x="417.2048333333333" dy="16.900000000000002">(e.g. &lt;|vision_start|&gt;)</tspan></text>
+</g>
+<g class="node" data-id="EmitPads" data-label="emit pad token x N
+(N = n_visual_tokens
+from vision encoder)" data-shape="rectangle">
+  <rect x="414.42866666666663" y="785.936" width="164.21499999999997" height="70.7" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
+  <text x="496.53616666666665" y="821.2860000000001" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12"><tspan x="496.53616666666665" dy="-12.350000000000001">emit pad token x N</tspan><tspan x="496.53616666666665" dy="16.900000000000002">(N = n_visual_tokens</tspan><tspan x="496.53616666666665" dy="16.900000000000002">from vision encoder)</tspan></text>
+</g>
+<g class="node" data-id="EmitEnd" data-label="append end token
+(e.g. &lt;|vision_end|&gt;)" data-shape="rectangle">
+  <rect x="138.7802499999999" y="684.1360000000001" width="158.287" height="53.800000000000004" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
+  <text x="217.92374999999993" y="711.0360000000001" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12"><tspan x="217.92374999999993" dy="-3.9000000000000012">append end token</tspan><tspan x="217.92374999999993" dy="16.900000000000002">(e.g. &lt;|vision_end|&gt;)</tspan></text>
+</g>
+<g class="node" data-id="SplicedArr" data-label="&quot;spliced token array
+[..., start?, pad*N, end?, ..." data-shape="rectangle">
+  <rect x="179.50649999999996" y="785.936" width="186.44499999999994" height="53.800000000000004" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="272.7289999999999" y="812.836" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="272.7289999999999" dy="-3.9000000000000012">&quot;spliced token array</tspan><tspan x="272.7289999999999" dy="16.900000000000002">[..., start?, pad*N, end?, ...</tspan></text>
+</g>
+<g class="node" data-id="TokenLoop" data-label="iterate tokens in forward()" data-shape="rectangle">
+  <rect x="371.2169166666666" y="1390.056" width="189.409" height="36.900000000000006" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="465.9214166666666" y="1408.506" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d" dy="4.55">iterate tokens in forward()</text>
+</g>
+<g class="node" data-id="NormalEmb" data-label="embLookup(token_id)
+normal text embedding" data-shape="rectangle">
+  <rect x="139.73924999999997" y="1211.806" width="170.884" height="53.800000000000004" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="225.18124999999998" y="1238.7060000000001" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="225.18124999999998" dy="-3.9000000000000012">embLookup(token_id)</tspan><tspan x="225.18124999999998" dy="16.900000000000002">normal text embedding</tspan></text>
+</g>
+<g class="node" data-id="VisEmb" data-label="&quot;copy visual_embeddings[visual_token_idx" data-shape="rectangle">
+  <rect x="338.62325" y="1211.806" width="296.1129999999999" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="486.6797499999999" y="1230.256" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">&quot;copy visual_embeddings[visual_token_idx</text>
+</g>
+<g class="node" data-id="NextTok" data-label="next token" data-shape="rectangle">
+  <rect x="318.4100833333332" y="1305.156" width="101.971" height="36.900000000000006" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="369.3955833333332" y="1323.606" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d" dy="4.55">next token</text>
+</g>
+<g class="node" data-id="DistinctStart" data-label="start != pad?" data-shape="diamond">
+  <polygon points="440.05249999999995,406.3 508.59549999999996,474.843 440.05249999999995,543.386 371.50949999999995,474.843" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="440.05249999999995" y="474.843" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">start != pad?</text>
+</g>
+<g class="node" data-id="DistinctEnd" data-label="end != pad?" data-shape="diamond">
+  <polygon points="285.18949999999995,406.3 351.50949999999995,472.62 285.18949999999995,538.94 218.86949999999996,472.62" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="285.18949999999995" y="472.62" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">end != pad?</text>
+</g>
+<g class="node" data-id="IsPad" data-label="token_id ==
+image_pad_id?" data-shape="diamond">
+  <polygon points="366.16399999999993,940.1860000000001 443.59899999999993,1017.6210000000001 366.16399999999993,1095.056 288.7289999999999,1017.6210000000001" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="366.16399999999993" y="1017.6210000000001" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="366.16399999999993" dy="-3.9000000000000012">token_id ==</tspan><tspan x="366.16399999999993" dy="16.900000000000002">image_pad_id?</tspan></text>
+</g>
+</svg>

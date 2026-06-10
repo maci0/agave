@@ -1,0 +1,95 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 813.5145 609.0000000000001" width="813.5145" height="609.0000000000001" style="--bg:#FFFFFF;--fg:#27272A;background:#ffffff">
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;display=swap');
+  text { font-family: 'Inter', system-ui, sans-serif; }
+  svg {
+    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
+    --_text:          #1a1a2e;
+    --_text-sec:      var(--muted, color-mix(in srgb, #1a1a2e 60%, #ffffff));
+    --_text-muted:    var(--muted, color-mix(in srgb, #1a1a2e 40%, #ffffff));
+    --_text-faint:    color-mix(in srgb, #1a1a2e 25%, #ffffff);
+    --_line:          var(--line, color-mix(in srgb, #1a1a2e 50%, #ffffff));
+    --_arrow:         var(--accent, color-mix(in srgb, #1a1a2e 85%, #ffffff));
+    --_node-fill:     var(--surface, color-mix(in srgb, #1a1a2e 3%, #ffffff));
+    --_node-stroke:   var(--border, color-mix(in srgb, #1a1a2e 20%, #ffffff));
+    --_group-fill:    #ffffff;
+    --_group-hdr:     color-mix(in srgb, #1a1a2e 5%, #ffffff);
+    --_inner-stroke:  color-mix(in srgb, #1a1a2e 12%, #ffffff);
+    --_key-badge:     color-mix(in srgb, #1a1a2e 10%, #ffffff);
+  }
+</style>
+<defs>
+  <marker id="arrowhead" markerWidth="8" markerHeight="5" refX="7" refY="2.5" orient="auto">
+    <polygon points="0 0, 8 2.5, 0 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+  <marker id="arrowhead-start" markerWidth="8" markerHeight="5" refX="1" refY="2.5" orient="auto-start-reverse">
+    <polygon points="8 0, 0 2.5, 8 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+</defs>
+<g class="subgraph" data-id="Confidence" data-label="Model confidence drives top-p size">
+  <rect x="773.5145" y="40" width="0" height="0" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="773.5145" y="40" width="0" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="785.5145" y="54" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">Model confidence drives top-p size</text>
+</g>
+<polyline class="edge" data-from="Start" data-to="TopK" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="246.00249999999994,93.80000000000007 246.00249999999994,117.80000000000007 132.111,117.80000000000007 132.111,141.80000000000007" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Start" data-to="TopP" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="246.00249999999994,93.80000000000007 246.00249999999994,117.80000000000007 359.8939999999999,117.80000000000007 359.8939999999999,141.80000000000007" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="TopK" data-to="K_out" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="132.111,195.60000000000008 132.111,243.60000000000008" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="TopP" data-to="P_out" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="359.8939999999999,195.60000000000008 359.89399999999995,243.60000000000008" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="K_out" data-to="Renorm_K" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="132.111,297.4000000000001 132.111,345.4000000000001" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="P_out" data-to="Renorm_P" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="359.89399999999995,297.4000000000001 359.8939999999999,345.4000000000001" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Renorm_K" data-to="Combined" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="132.111,382.30000000000007 132.111,406.30000000000007 246.00249999999994,406.30000000000007 246.00249999999994,430.3000000000001" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Renorm_P" data-to="Combined" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="359.8939999999999,382.30000000000007 359.8939999999999,406.30000000000007 246.00249999999994,406.30000000000007 246.00249999999994,430.3000000000001" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Combined" data-to="Sample" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="246.00249999999994,484.10000000000014 246.0024999999999,532.1000000000001" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<g class="node" data-id="Start" data-label="&quot;Sorted Token Probabilities
+[0.40, 0.25, 0.15, 0.10, 0.06, 0.04" data-shape="rectangle">
+  <rect x="139.07149999999996" y="40.000000000000064" width="213.86199999999997" height="53.800000000000004" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="246.00249999999994" y="66.90000000000006" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="246.00249999999994" dy="-3.9000000000000012">&quot;Sorted Token Probabilities</tspan><tspan x="246.00249999999994" dy="16.900000000000002">[0.40, 0.25, 0.15, 0.10, 0.06, 0.04</tspan></text>
+</g>
+<g class="node" data-id="TopK" data-label="Top-K Filter
+keep only top K tokens" data-shape="rectangle">
+  <rect x="45.928" y="141.80000000000007" width="172.36599999999999" height="53.800000000000004" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="132.111" y="168.70000000000007" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="132.111" dy="-3.9000000000000012">Top-K Filter</tspan><tspan x="132.111" dy="16.900000000000002">keep only top K tokens</tspan></text>
+</g>
+<g class="node" data-id="TopP" data-label="Top-P Filter
+cumulate until sum &gt;= P" data-shape="rectangle">
+  <rect x="272.9699999999999" y="141.80000000000007" width="173.848" height="53.800000000000004" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="359.8939999999999" y="168.70000000000007" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="359.8939999999999" dy="-3.9000000000000012">Top-P Filter</tspan><tspan x="359.8939999999999" dy="16.900000000000002">cumulate until sum &gt;= P</tspan></text>
+</g>
+<g class="node" data-id="K_out" data-label="&quot;Fixed K candidates
+e.g. top-3: [0.40, 0.25, 0.15" data-shape="rectangle">
+  <rect x="40" y="243.60000000000008" width="184.22199999999998" height="53.800000000000004" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="132.111" y="270.50000000000006" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="132.111" dy="-3.9000000000000012">&quot;Fixed K candidates</tspan><tspan x="132.111" dy="16.900000000000002">e.g. top-3: [0.40, 0.25, 0.15</tspan></text>
+</g>
+<g class="node" data-id="P_out" data-label="&quot;Variable candidates
+e.g. P=0.9: [0.40, 0.25, 0.15, 0.10" data-shape="rectangle">
+  <rect x="252.22199999999998" y="243.60000000000008" width="215.34399999999994" height="53.800000000000004" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="359.89399999999995" y="270.50000000000006" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="359.89399999999995" dy="-3.9000000000000012">&quot;Variable candidates</tspan><tspan x="359.89399999999995" dy="16.900000000000002">e.g. P=0.9: [0.40, 0.25, 0.15, 0.10</tspan></text>
+</g>
+<g class="node" data-id="Renorm_K" data-label="Renormalize to 1.0" data-shape="rectangle">
+  <rect x="60.00699999999996" y="345.4000000000001" width="144.20800000000003" height="36.900000000000006" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="132.111" y="363.8500000000001" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d" dy="4.55">Renormalize to 1.0</text>
+</g>
+<g class="node" data-id="Renorm_P" data-label="Renormalize to 1.0" data-shape="rectangle">
+  <rect x="287.7899999999999" y="345.4000000000001" width="144.20800000000003" height="36.900000000000006" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="359.8939999999999" y="363.8500000000001" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d" dy="4.55">Renormalize to 1.0</text>
+</g>
+<g class="node" data-id="Combined" data-label="Both applied? Intersection wins
+(whichever is more restrictive)" data-shape="rectangle">
+  <rect x="134.99599999999998" y="430.3000000000001" width="222.01299999999995" height="53.800000000000004" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
+  <text x="246.00249999999994" y="457.2000000000001" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12"><tspan x="246.00249999999994" dy="-3.9000000000000012">Both applied? Intersection wins</tspan><tspan x="246.00249999999994" dy="16.900000000000002">(whichever is more restrictive)</tspan></text>
+</g>
+<g class="node" data-id="Sample" data-label="Sample from remaining tokens" data-shape="rectangle">
+  <rect x="138.70099999999994" y="532.1000000000001" width="214.60299999999998" height="36.900000000000006" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
+  <text x="246.00249999999994" y="550.5500000000002" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d" dy="4.55">Sample from remaining tokens</text>
+</g>
+<g class="node" data-id="Certain" data-label="Confident model
+top-p=0.9 → 1-2 tokens" data-shape="rectangle">
+  <rect x="380.9334999999999" y="40.000000000000064" width="164.21500000000003" height="53.800000000000004" rx="0" ry="0" fill="#f3e8ff" stroke="#9333ea" stroke-width="0.75" />
+  <text x="463.04099999999994" y="66.90000000000006" text-anchor="middle" font-size="13" font-weight="500" fill="#581c87"><tspan x="463.04099999999994" dy="-3.9000000000000012">Confident model</tspan><tspan x="463.04099999999994" dy="16.900000000000002">top-p=0.9 → 1-2 tokens</tspan></text>
+</g>
+<g class="node" data-id="Uncertain" data-label="Uncertain model
+top-p=0.9 → 20+ tokens" data-shape="rectangle">
+  <rect x="573.1485" y="40" width="172.36599999999999" height="53.800000000000004" rx="0" ry="0" fill="#f3e8ff" stroke="#9333ea" stroke-width="0.75" />
+  <text x="659.3315" y="66.9" text-anchor="middle" font-size="13" font-weight="500" fill="#581c87"><tspan x="659.3315" dy="-3.9000000000000012">Uncertain model</tspan><tspan x="659.3315" dy="16.900000000000002">top-p=0.9 → 20+ tokens</tspan></text>
+</g>
+</svg>

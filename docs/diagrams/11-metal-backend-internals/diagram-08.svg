@@ -1,0 +1,119 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 949.0729999999998 862" width="949.0729999999998" height="862" style="--bg:#FFFFFF;--fg:#27272A;background:#ffffff">
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;display=swap');
+  text { font-family: 'Inter', system-ui, sans-serif; }
+  svg {
+    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
+    --_text:          #1a1a2e;
+    --_text-sec:      var(--muted, color-mix(in srgb, #1a1a2e 60%, #ffffff));
+    --_text-muted:    var(--muted, color-mix(in srgb, #1a1a2e 40%, #ffffff));
+    --_text-faint:    color-mix(in srgb, #1a1a2e 25%, #ffffff);
+    --_line:          var(--line, color-mix(in srgb, #1a1a2e 50%, #ffffff));
+    --_arrow:         var(--accent, color-mix(in srgb, #1a1a2e 85%, #ffffff));
+    --_node-fill:     var(--surface, color-mix(in srgb, #1a1a2e 3%, #ffffff));
+    --_node-stroke:   var(--border, color-mix(in srgb, #1a1a2e 20%, #ffffff));
+    --_group-fill:    #ffffff;
+    --_group-hdr:     color-mix(in srgb, #1a1a2e 5%, #ffffff);
+    --_inner-stroke:  color-mix(in srgb, #1a1a2e 12%, #ffffff);
+    --_key-badge:     color-mix(in srgb, #1a1a2e 10%, #ffffff);
+  }
+</style>
+<defs>
+  <marker id="seq-arrow" markerWidth="8" markerHeight="5" refX="8" refY="2.5" orient="auto-start-reverse">
+    <polygon points="0 0, 8 2.5, 0 5" fill="var(--_arrow)" />
+  </marker>
+  <marker id="seq-arrow-open" markerWidth="8" markerHeight="5" refX="8" refY="2.5" orient="auto-start-reverse">
+    <polyline points="0 0, 8 2.5, 0 5" fill="none" stroke="var(--_arrow)" stroke-width="1" />
+  </marker>
+</defs>
+<line class="lifeline" data-actor="GPU" x1="135.52449999999996" y1="70" x2="135.52449999999996" y2="832" stroke="var(--_line)" stroke-width="0.75" stroke-dasharray="6 4" />
+<line class="lifeline" data-actor="UMA" x1="380.27499999999986" y1="70" x2="380.27499999999986" y2="832" stroke="var(--_line)" stroke-width="0.75" stroke-dasharray="6 4" />
+<line class="lifeline" data-actor="CPU" x1="643.9209999999998" y1="70" x2="643.9209999999998" y2="832" stroke="var(--_line)" stroke-width="0.75" stroke-dasharray="6 4" />
+<g class="message" data-from="GPU" data-to="UMA" data-label="gemm(hidden, W_q) → q_buf [encoded, deferred]" data-line-style="solid" data-arrow-head="filled" data-self="false">
+  <line x1="135.52449999999996" y1="90" x2="380.27499999999986" y2="90" stroke="var(--_line)" stroke-width="1" marker-end="url(#seq-arrow)" />
+  <text x="257.8997499999999" y="80" font-size="11" text-anchor="middle" font-weight="400" fill="var(--_text-muted)" dy="3.8499999999999996">gemm(hidden, W_q) → q_buf [encoded, deferred]</text>
+</g>
+<g class="message" data-from="GPU" data-to="UMA" data-label="gemm(hidden, W_k) → k_buf [encoded, deferred]" data-line-style="solid" data-arrow-head="filled" data-self="false">
+  <line x1="135.52449999999996" y1="130" x2="380.27499999999986" y2="130" stroke="var(--_line)" stroke-width="1" marker-end="url(#seq-arrow)" />
+  <text x="257.8997499999999" y="120" font-size="11" text-anchor="middle" font-weight="400" fill="var(--_text-muted)" dy="3.8499999999999996">gemm(hidden, W_k) → k_buf [encoded, deferred]</text>
+</g>
+<g class="message" data-from="GPU" data-to="UMA" data-label="gemm(hidden, W_v) → v_buf [encoded, deferred]" data-line-style="solid" data-arrow-head="filled" data-self="false">
+  <line x1="135.52449999999996" y1="170" x2="380.27499999999986" y2="170" stroke="var(--_line)" stroke-width="1" marker-end="url(#seq-arrow)" />
+  <text x="257.8997499999999" y="160" font-size="11" text-anchor="middle" font-weight="400" fill="var(--_text-muted)" dy="3.8499999999999996">gemm(hidden, W_v) → v_buf [encoded, deferred]</text>
+</g>
+<g class="message" data-from="GPU" data-to="GPU" data-label="commit + waitUntilCompleted (be.sync #1)" data-line-style="solid" data-arrow-head="filled" data-self="true">
+  <polyline points="135.52449999999996,210 165.52449999999996,210 165.52449999999996,230 135.52449999999996,230" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#seq-arrow)" />
+  <text x="173.52449999999996" y="220" font-size="11" text-anchor="start" font-weight="400" fill="var(--_text-muted)" dy="3.8499999999999996">commit + waitUntilCompleted (be.sync #1)</text>
+</g>
+<g class="message" data-from="UMA" data-to="CPU" data-label="read q_buf, k_buf, v_buf" data-line-style="solid" data-arrow-head="filled" data-self="false">
+  <line x1="380.27499999999986" y1="295" x2="643.9209999999998" y2="295" stroke="var(--_line)" stroke-width="1" marker-end="url(#seq-arrow)" />
+  <text x="512.0979999999998" y="285" font-size="11" text-anchor="middle" font-weight="400" fill="var(--_text-muted)" dy="3.8499999999999996">read q_buf, k_buf, v_buf</text>
+</g>
+<g class="message" data-from="CPU" data-to="CPU" data-label="compute n_patches × n_patches attention scores" data-line-style="solid" data-arrow-head="filled" data-self="true">
+  <polyline points="643.9209999999998,335 673.9209999999998,335 673.9209999999998,355 643.9209999999998,355" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#seq-arrow)" />
+  <text x="681.9209999999998" y="345" font-size="11" text-anchor="start" font-weight="400" fill="var(--_text-muted)" dy="3.8499999999999996">compute n_patches × n_patches attention scores</text>
+</g>
+<g class="message" data-from="CPU" data-to="CPU" data-label="softmax(scores) — full non-causal attention" data-line-style="solid" data-arrow-head="filled" data-self="true">
+  <polyline points="643.9209999999998,405 673.9209999999998,405 673.9209999999998,425 643.9209999999998,425" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#seq-arrow)" />
+  <text x="681.9209999999998" y="415" font-size="11" text-anchor="start" font-weight="400" fill="var(--_text-muted)" dy="3.8499999999999996">softmax(scores) — full non-causal attention</text>
+</g>
+<g class="message" data-from="CPU" data-to="CPU" data-label="weighted sum → attn_out" data-line-style="solid" data-arrow-head="filled" data-self="true">
+  <polyline points="643.9209999999998,475 673.9209999999998,475 673.9209999999998,495 643.9209999999998,495" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#seq-arrow)" />
+  <text x="681.9209999999998" y="485" font-size="11" text-anchor="start" font-weight="400" fill="var(--_text-muted)" dy="3.8499999999999996">weighted sum → attn_out</text>
+</g>
+<g class="message" data-from="CPU" data-to="UMA" data-label="write attn_out" data-line-style="solid" data-arrow-head="filled" data-self="false">
+  <line x1="643.9209999999998" y1="545" x2="380.27499999999986" y2="545" stroke="var(--_line)" stroke-width="1" marker-end="url(#seq-arrow)" />
+  <text x="512.0979999999998" y="535" font-size="11" text-anchor="middle" font-weight="400" fill="var(--_text-muted)" dy="3.8499999999999996">write attn_out</text>
+</g>
+<g class="message" data-from="GPU" data-to="UMA" data-label="gemm(attn_out, W_o) → hidden [encoded, deferred]" data-line-style="solid" data-arrow-head="filled" data-self="false">
+  <line x1="135.52449999999996" y1="585" x2="380.27499999999986" y2="585" stroke="var(--_line)" stroke-width="1" marker-end="url(#seq-arrow)" />
+  <text x="257.8997499999999" y="575" font-size="11" text-anchor="middle" font-weight="400" fill="var(--_text-muted)" dy="3.8499999999999996">gemm(attn_out, W_o) → hidden [encoded, deferred]</text>
+</g>
+<g class="message" data-from="GPU" data-to="GPU" data-label="commit + waitUntilCompleted (be.sync #2)" data-line-style="solid" data-arrow-head="filled" data-self="true">
+  <polyline points="135.52449999999996,625 165.52449999999996,625 165.52449999999996,645 135.52449999999996,645" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#seq-arrow)" />
+  <text x="173.52449999999996" y="635" font-size="11" text-anchor="start" font-weight="400" fill="var(--_text-muted)" dy="3.8499999999999996">commit + waitUntilCompleted (be.sync #2)</text>
+</g>
+<g class="message" data-from="UMA" data-to="CPU" data-label="read hidden (for residual add)" data-line-style="solid" data-arrow-head="filled" data-self="false">
+  <line x1="380.27499999999986" y1="710" x2="643.9209999999998" y2="710" stroke="var(--_line)" stroke-width="1" marker-end="url(#seq-arrow)" />
+  <text x="512.0979999999998" y="700" font-size="11" text-anchor="middle" font-weight="400" fill="var(--_text-muted)" dy="3.8499999999999996">read hidden (for residual add)</text>
+</g>
+<g class="message" data-from="CPU" data-to="UMA" data-label="write hidden + residual" data-line-style="solid" data-arrow-head="filled" data-self="false">
+  <line x1="643.9209999999998" y1="750" x2="380.27499999999986" y2="750" stroke="var(--_line)" stroke-width="1" marker-end="url(#seq-arrow)" />
+  <text x="512.0979999999998" y="740" font-size="11" text-anchor="middle" font-weight="400" fill="var(--_text-muted)" dy="3.8499999999999996">write hidden + residual</text>
+</g>
+<g class="note" data-position="over" data-actors="UMA">
+  <polygon points="295.2789999999999,248 459.27099999999984,248 465.27099999999984,254 465.27099999999984,271 295.2789999999999,271" fill="#ffffff" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <polygon points="459.27099999999984,248 465.27099999999984,254 459.27099999999984,254" fill="var(--_inner-stroke)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="380.27499999999986" y="259.5" font-size="11" text-anchor="middle" font-weight="400" fill="var(--_text-muted)" dy="3.8499999999999996">Q/K/V writes now visible to CPU</text>
+</g>
+<g class="note" data-position="over" data-actors="UMA">
+  <polygon points="294.98199999999986,663 459.56799999999987,663 465.56799999999987,669 465.56799999999987,686 294.98199999999986,686" fill="#ffffff" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <polygon points="459.56799999999987,663 465.56799999999987,669 459.56799999999987,669" fill="var(--_inner-stroke)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="380.27499999999986" y="674.5" font-size="11" text-anchor="middle" font-weight="400" fill="var(--_text-muted)" dy="3.8499999999999996">Output projection visible to CPU</text>
+</g>
+<g class="note" data-position="over" data-actors="GPU,CPU">
+  <polygon points="256.61274999999995,758 516.8327499999998,758 522.8327499999998,764 522.8327499999998,781 256.61274999999995,781" fill="#ffffff" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <polygon points="516.8327499999998,758 522.8327499999998,764 516.8327499999998,764" fill="var(--_inner-stroke)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="389.7227499999999" y="769.5" font-size="11" text-anchor="middle" font-weight="400" fill="var(--_text-muted)" dy="3.8499999999999996">FFN layers follow same GPU/CPU interleave pattern</text>
+</g>
+<g class="note" data-position="over" data-actors="GPU,CPU">
+  <polygon points="160.6817499999999,785 612.7637499999998,785 618.7637499999998,791 618.7637499999998,808 160.6817499999999,808" fill="#ffffff" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <polygon points="612.7637499999998,785 618.7637499999998,791 612.7637499999998,791" fill="var(--_inner-stroke)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="389.7227499999999" y="796.5" font-size="11" text-anchor="middle" font-weight="400" fill="var(--_text-muted)"><tspan x="389.7227499999999" dy="-3.3000000000000007">GEMM projections (bulk compute) run on GPU</tspan><tspan x="389.7227499999999" dy="14.3">Softmax + score matrix run on CPU thread pool</tspan></text>
+</g>
+<g class="actor" data-id="GPU" data-label="GPU (Metal)
+gemm projections" data-type="participant">
+  <rect x="30" y="30" width="211.04899999999992" height="40" rx="4" ry="4" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="135.52449999999996" y="50" font-size="13" text-anchor="middle" font-weight="500" fill="var(--_text)"><tspan x="135.52449999999996" dy="-3.9000000000000012">GPU (Metal)</tspan><tspan x="135.52449999999996" dy="16.900000000000002">gemm projections</tspan></text>
+</g>
+<g class="actor" data-id="UMA" data-label="Shared DRAM
+(UMA buffer)" data-type="participant">
+  <rect x="281.04899999999986" y="30" width="198.45199999999994" height="40" rx="4" ry="4" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="380.27499999999986" y="50" font-size="13" text-anchor="middle" font-weight="500" fill="var(--_text)"><tspan x="380.27499999999986" dy="-3.9000000000000012">Shared DRAM</tspan><tspan x="380.27499999999986" dy="16.900000000000002">(UMA buffer)</tspan></text>
+</g>
+<g class="actor" data-id="CPU" data-label="CPU Thread Pool
+attention + softmax" data-type="participant">
+  <rect x="519.5009999999999" y="30" width="248.83999999999992" height="40" rx="4" ry="4" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="643.9209999999998" y="50" font-size="13" text-anchor="middle" font-weight="500" fill="var(--_text)"><tspan x="643.9209999999998" dy="-3.9000000000000012">CPU Thread Pool</tspan><tspan x="643.9209999999998" dy="16.900000000000002">attention + softmax</tspan></text>
+</g>
+</svg>

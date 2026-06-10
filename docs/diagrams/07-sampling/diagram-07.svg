@@ -1,0 +1,119 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 343.4355 1552.0149999999999" width="343.4355" height="1552.0149999999999" style="--bg:#FFFFFF;--fg:#27272A;background:#ffffff">
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;display=swap');
+  text { font-family: 'Inter', system-ui, sans-serif; }
+  svg {
+    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
+    --_text:          #1a1a2e;
+    --_text-sec:      var(--muted, color-mix(in srgb, #1a1a2e 60%, #ffffff));
+    --_text-muted:    var(--muted, color-mix(in srgb, #1a1a2e 40%, #ffffff));
+    --_text-faint:    color-mix(in srgb, #1a1a2e 25%, #ffffff);
+    --_line:          var(--line, color-mix(in srgb, #1a1a2e 50%, #ffffff));
+    --_arrow:         var(--accent, color-mix(in srgb, #1a1a2e 85%, #ffffff));
+    --_node-fill:     var(--surface, color-mix(in srgb, #1a1a2e 3%, #ffffff));
+    --_node-stroke:   var(--border, color-mix(in srgb, #1a1a2e 20%, #ffffff));
+    --_group-fill:    #ffffff;
+    --_group-hdr:     color-mix(in srgb, #1a1a2e 5%, #ffffff);
+    --_inner-stroke:  color-mix(in srgb, #1a1a2e 12%, #ffffff);
+    --_key-badge:     color-mix(in srgb, #1a1a2e 10%, #ffffff);
+  }
+</style>
+<defs>
+  <marker id="arrowhead" markerWidth="8" markerHeight="5" refX="7" refY="2.5" orient="auto">
+    <polygon points="0 0, 8 2.5, 0 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+  <marker id="arrowhead-start" markerWidth="8" markerHeight="5" refX="1" refY="2.5" orient="auto-start-reverse">
+    <polygon points="8 0, 0 2.5, 8 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+</defs>
+<polyline class="edge" data-from="Logits" data-to="Bias" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="175.38599999999997,93.80000000000001 175.38599999999997,141.8" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Bias" data-to="Penalties" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="175.38599999999997,195.60000000000002 175.38599999999997,243.60000000000002" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Penalties" data-to="Grammar" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="175.38599999999997,297.40000000000003 175.38599999999997,345.40000000000003" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Grammar" data-to="Temp" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="175.38599999999997,399.20000000000005 175.38599999999997,447.20000000000005" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Temp" data-to="XTC" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="175.38599999999997,501.00000000000006 175.38599999999997,549" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="XTC" data-to="MinP" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="175.38599999999997,602.8000000000001 175.38599999999997,650.8000000000001" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="MinP" data-to="TopK" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="175.38599999999997,704.6 175.38599999999997,752.6" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="TopK" data-to="Softmax" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="175.38599999999997,806.4 175.38599999999997,854.4" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Softmax" data-to="TopP" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="175.38599999999997,908.1999999999999 175.38599999999997,956.1999999999999" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="TopP" data-to="Mirostat" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="175.38599999999997,1009.9999999999999 175.38599999999997,1057.9999999999998" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Mirostat" data-to="MiroTrunc" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="Yes - replaces top-k/p" points="156.36683333333332,1153.095833333333 156.36683333333332,1208.1149999999998 126.92399999999999,1208.1149999999998 126.92399999999999,1288.4149999999997" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Mirostat" data-to="FinalSample" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="No" points="194.40516666666667,1153.095833333333 194.40516666666667,1208.1149999999998 223.848,1208.1149999999998 223.848,1378.2149999999997 207.20116666666667,1378.2149999999997 207.20116666666667,1390.2149999999997" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="MiroTrunc" data-to="FinalSample" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="126.92399999999999,1342.2149999999997 126.92399999999999,1378.2149999999997 143.57083333333333,1378.2149999999997 143.57083333333333,1390.2149999999997" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="FinalSample" data-to="NextToken" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="175.38600000000002,1427.1149999999998 175.38599999999997,1475.1149999999998" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<g class="edge-label" data-from="Mirostat" data-to="MiroTrunc" data-label="Yes - replaces top-k/p">
+  <rect x="66.92399999999999" y="1215.1149999999998" width="119.81800000000004" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="126.83300000000001" y="1230.2649999999999" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">Yes - replaces top-k/p</text>
+</g>
+<g class="edge-label" data-from="Mirostat" data-to="FinalSample" data-label="No">
+  <rect x="208.348" y="1215.1149999999998" width="30.718000000000004" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="223.70700000000002" y="1230.2649999999999" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">No</text>
+</g>
+<g class="node" data-id="Logits" data-label="Raw Logits
+one score per vocab token" data-shape="rectangle">
+  <rect x="75.86500000000001" y="40" width="199.04199999999994" height="53.800000000000004" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
+  <text x="175.38599999999997" y="66.9" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f"><tspan x="175.38599999999997" dy="-3.9000000000000012">Raw Logits</tspan><tspan x="175.38599999999997" dy="16.900000000000002">one score per vocab token</tspan></text>
+</g>
+<g class="node" data-id="Bias" data-label="Logit Bias
+per-token additive adjustments" data-shape="rectangle">
+  <rect x="65.86150000000002" y="141.8" width="219.04899999999992" height="53.800000000000004" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="175.38599999999997" y="168.70000000000002" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="175.38599999999997" dy="-3.9000000000000012">Logit Bias</tspan><tspan x="175.38599999999997" dy="16.900000000000002">per-token additive adjustments</tspan></text>
+</g>
+<g class="node" data-id="Penalties" data-label="Repetition Penalties
+repeat / frequency / presence / DRY" data-shape="rectangle">
+  <rect x="50.3005" y="243.60000000000002" width="250.17099999999996" height="53.800000000000004" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="175.38599999999997" y="270.5" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="175.38599999999997" dy="-3.9000000000000012">Repetition Penalties</tspan><tspan x="175.38599999999997" dy="16.900000000000002">repeat / frequency / presence / DRY</tspan></text>
+</g>
+<g class="node" data-id="Grammar" data-label="Grammar Mask
+set invalid tokens to -infinity" data-shape="rectangle">
+  <rect x="76.2355" y="345.40000000000003" width="198.30099999999996" height="53.800000000000004" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="175.38599999999997" y="372.3" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="175.38599999999997" dy="-3.9000000000000012">Grammar Mask</tspan><tspan x="175.38599999999997" dy="16.900000000000002">set invalid tokens to -infinity</tspan></text>
+</g>
+<g class="node" data-id="Temp" data-label="Temperature Scaling
+logits /= temperature" data-shape="rectangle">
+  <rect x="92.53749999999998" y="447.20000000000005" width="165.697" height="53.800000000000004" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="175.38599999999997" y="474.1" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="175.38599999999997" dy="-3.9000000000000012">Temperature Scaling</tspan><tspan x="175.38599999999997" dy="16.900000000000002">logits /= temperature</tspan></text>
+</g>
+<g class="node" data-id="XTC" data-label="XTC Exclusion
+randomly drop top tokens" data-shape="rectangle">
+  <rect x="80.68149999999999" y="549" width="189.409" height="53.800000000000004" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="175.38599999999997" y="575.9" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="175.38599999999997" dy="-3.9000000000000012">XTC Exclusion</tspan><tspan x="175.38599999999997" dy="16.900000000000002">randomly drop top tokens</tspan></text>
+</g>
+<g class="node" data-id="MinP" data-label="Min-P Filter
+drop tokens below min_p × max_prob" data-shape="rectangle">
+  <rect x="47.33649999999999" y="650.8000000000001" width="256.099" height="53.800000000000004" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="175.38599999999997" y="677.7" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="175.38599999999997" dy="-3.9000000000000012">Min-P Filter</tspan><tspan x="175.38599999999997" dy="16.900000000000002">drop tokens below min_p × max_prob</tspan></text>
+</g>
+<g class="node" data-id="TopK" data-label="Top-K Filter
+keep only K highest" data-shape="rectangle">
+  <rect x="97.72449999999999" y="752.6" width="155.32299999999998" height="53.800000000000004" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="175.38599999999997" y="779.5" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="175.38599999999997" dy="-3.9000000000000012">Top-K Filter</tspan><tspan x="175.38599999999997" dy="16.900000000000002">keep only K highest</tspan></text>
+</g>
+<g class="node" data-id="Softmax" data-label="Softmax
+convert logits to probabilities" data-shape="rectangle">
+  <rect x="71.0485" y="854.4" width="208.67499999999995" height="53.800000000000004" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
+  <text x="175.38599999999997" y="881.3" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12"><tspan x="175.38599999999997" dy="-3.9000000000000012">Softmax</tspan><tspan x="175.38599999999997" dy="16.900000000000002">convert logits to probabilities</tspan></text>
+</g>
+<g class="node" data-id="TopP" data-label="Top-P Filter
+nucleus cutoff + renormalize" data-shape="rectangle">
+  <rect x="72.53049999999999" y="956.1999999999999" width="205.71099999999998" height="53.800000000000004" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="175.38599999999997" y="983.0999999999999" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="175.38599999999997" dy="-3.9000000000000012">Top-P Filter</tspan><tspan x="175.38599999999997" dy="16.900000000000002">nucleus cutoff + renormalize</tspan></text>
+</g>
+<g class="node" data-id="MiroTrunc" data-label="Mirostat Truncation
+entropy-targeted cutoff" data-shape="rectangle">
+  <rect x="40" y="1288.4149999999997" width="173.84799999999998" height="53.800000000000004" rx="0" ry="0" fill="#f3e8ff" stroke="#9333ea" stroke-width="0.75" />
+  <text x="126.92399999999999" y="1315.3149999999998" text-anchor="middle" font-size="13" font-weight="500" fill="#581c87"><tspan x="126.92399999999999" dy="-3.9000000000000012">Mirostat Truncation</tspan><tspan x="126.92399999999999" dy="16.900000000000002">entropy-targeted cutoff</tspan></text>
+</g>
+<g class="node" data-id="FinalSample" data-label="Weighted Random Sample" data-shape="rectangle">
+  <rect x="79.94050000000001" y="1390.2149999999997" width="190.89099999999996" height="36.900000000000006" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="175.386" y="1408.6649999999997" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d" dy="4.55">Weighted Random Sample</text>
+</g>
+<g class="node" data-id="NextToken" data-label="Next Token ID" data-shape="rectangle">
+  <rect x="113.65599999999999" y="1475.1149999999998" width="123.46" height="36.900000000000006" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
+  <text x="175.386" y="1493.5649999999998" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d" dy="4.55">Next Token ID</text>
+</g>
+<g class="node" data-id="Mirostat" data-label="Mirostat
+active?" data-shape="diamond">
+  <polygon points="175.38599999999997,1058 232.44349999999997,1115.0575 175.38599999999997,1172.1149999999998 118.32849999999996,1115.0575" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="175.38599999999997" y="1115.0575" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="175.38599999999997" dy="-3.9000000000000012">Mirostat</tspan><tspan x="175.38599999999997" dy="16.900000000000002">active?</tspan></text>
+</g>
+</svg>

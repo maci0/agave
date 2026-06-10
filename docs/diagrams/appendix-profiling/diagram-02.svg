@@ -1,0 +1,69 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 674.4939999999999 335" width="674.4939999999999" height="335" style="--bg:#FFFFFF;--fg:#27272A;background:#ffffff">
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;display=swap');
+  text { font-family: 'Inter', system-ui, sans-serif; }
+  svg {
+    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
+    --_text:          #1a1a2e;
+    --_text-sec:      var(--muted, color-mix(in srgb, #1a1a2e 60%, #ffffff));
+    --_text-muted:    var(--muted, color-mix(in srgb, #1a1a2e 40%, #ffffff));
+    --_text-faint:    color-mix(in srgb, #1a1a2e 25%, #ffffff);
+    --_line:          var(--line, color-mix(in srgb, #1a1a2e 50%, #ffffff));
+    --_arrow:         var(--accent, color-mix(in srgb, #1a1a2e 85%, #ffffff));
+    --_node-fill:     var(--surface, color-mix(in srgb, #1a1a2e 3%, #ffffff));
+    --_node-stroke:   var(--border, color-mix(in srgb, #1a1a2e 20%, #ffffff));
+    --_group-fill:    #ffffff;
+    --_group-hdr:     color-mix(in srgb, #1a1a2e 5%, #ffffff);
+    --_inner-stroke:  color-mix(in srgb, #1a1a2e 12%, #ffffff);
+    --_key-badge:     color-mix(in srgb, #1a1a2e 10%, #ffffff);
+  }
+</style>
+<defs>
+  <marker id="seq-arrow" markerWidth="8" markerHeight="5" refX="8" refY="2.5" orient="auto-start-reverse">
+    <polygon points="0 0, 8 2.5, 0 5" fill="var(--_arrow)" />
+  </marker>
+  <marker id="seq-arrow-open" markerWidth="8" markerHeight="5" refX="8" refY="2.5" orient="auto-start-reverse">
+    <polyline points="0 0, 8 2.5, 0 5" fill="none" stroke="var(--_arrow)" stroke-width="1" />
+  </marker>
+</defs>
+<line class="lifeline" data-actor="CPU" x1="106.255" y1="70" x2="106.255" y2="305" stroke="var(--_line)" stroke-width="0.75" stroke-dasharray="6 4" />
+<line class="lifeline" data-actor="GPU" x1="293.2075" y1="70" x2="293.2075" y2="305" stroke="var(--_line)" stroke-width="0.75" stroke-dasharray="6 4" />
+<line class="lifeline" data-actor="Perf" x1="460.894" y1="70" x2="460.894" y2="305" stroke="var(--_line)" stroke-width="0.75" stroke-dasharray="6 4" />
+<g class="message" data-from="CPU" data-to="Perf" data-label="t = perf.start() → nanoTimestamp()" data-line-style="solid" data-arrow-head="filled" data-self="false">
+  <line x1="106.255" y1="90" x2="460.894" y2="90" stroke="var(--_line)" stroke-width="1" marker-end="url(#seq-arrow)" />
+  <text x="283.5745" y="80" font-size="11" text-anchor="middle" font-weight="400" fill="var(--_text-muted)" dy="3.8499999999999996">t = perf.start() → nanoTimestamp()</text>
+</g>
+<g class="message" data-from="CPU" data-to="GPU" data-label="be.gemv(x, w, y, n, k)  [queued, not yet run]" data-line-style="solid" data-arrow-head="filled" data-self="false">
+  <line x1="106.255" y1="130" x2="293.2075" y2="130" stroke="var(--_line)" stroke-width="1" marker-end="url(#seq-arrow)" />
+  <text x="199.73125" y="120" font-size="11" text-anchor="middle" font-weight="400" fill="var(--_text-muted)" dy="3.8499999999999996">be.gemv(x, w, y, n, k)  [queued, not yet run]</text>
+</g>
+<g class="message" data-from="CPU" data-to="GPU" data-label="be.sync()  [block until GPU finishes]" data-line-style="solid" data-arrow-head="filled" data-self="false">
+  <line x1="106.255" y1="170" x2="293.2075" y2="170" stroke="var(--_line)" stroke-width="1" marker-end="url(#seq-arrow)" />
+  <text x="199.73125" y="160" font-size="11" text-anchor="middle" font-weight="400" fill="var(--_text-muted)" dy="3.8499999999999996">be.sync()  [block until GPU finishes]</text>
+</g>
+<g class="message" data-from="GPU" data-to="CPU" data-label="done" data-line-style="dashed" data-arrow-head="filled" data-self="false">
+  <line x1="293.2075" y1="210" x2="106.255" y2="210" stroke="var(--_line)" stroke-width="1" stroke-dasharray="6 4" marker-end="url(#seq-arrow)" />
+  <text x="199.73125" y="200" font-size="11" text-anchor="middle" font-weight="400" fill="var(--_text-muted)" dy="3.8499999999999996">done</text>
+</g>
+<g class="message" data-from="CPU" data-to="Perf" data-label="perf.end(.gemv_qkv, t)" data-line-style="solid" data-arrow-head="filled" data-self="false">
+  <line x1="106.255" y1="250" x2="460.894" y2="250" stroke="var(--_line)" stroke-width="1" marker-end="url(#seq-arrow)" />
+  <text x="283.5745" y="240" font-size="11" text-anchor="middle" font-weight="400" fill="var(--_text-muted)" dy="3.8499999999999996">perf.end(.gemv_qkv, t)</text>
+</g>
+<g class="note" data-position="over" data-actors="Perf">
+  <polygon points="277.29400000000004,258 638.4939999999999,258 644.4939999999999,264 644.4939999999999,281 277.29400000000004,281" fill="#ffffff" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <polygon points="638.4939999999999,258 644.4939999999999,264 638.4939999999999,264" fill="var(--_inner-stroke)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="460.894" y="269.5" font-size="11" text-anchor="middle" font-weight="400" fill="var(--_text-muted)"><tspan x="460.894" dy="-10.450000000000001">elapsed = now - t</tspan><tspan x="460.894" dy="14.3">times_us[gemv_qkv] += elapsed</tspan><tspan x="460.894" dy="14.3">counts[gemv_qkv] += 1</tspan></text>
+</g>
+<g class="actor" data-id="CPU" data-label="CPU (model forward)" data-type="participant">
+  <rect x="30" y="30" width="152.51" height="40" rx="4" ry="4" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="106.255" y="50" font-size="13" text-anchor="middle" font-weight="500" fill="var(--_text)" dy="4.55">CPU (model forward)</text>
+</g>
+<g class="actor" data-id="GPU" data-label="GPU (Metal/CUDA)" data-type="participant">
+  <rect x="222.51" y="30" width="141.39499999999998" height="40" rx="4" ry="4" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="293.2075" y="50" font-size="13" text-anchor="middle" font-weight="500" fill="var(--_text)" dy="4.55">GPU (Metal/CUDA)</text>
+</g>
+<g class="actor" data-id="Perf" data-label="PerfCounters" data-type="participant">
+  <rect x="403.90500000000003" y="30" width="113.978" height="40" rx="4" ry="4" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="460.894" y="50" font-size="13" text-anchor="middle" font-weight="500" fill="var(--_text)" dy="4.55">PerfCounters</text>
+</g>
+</svg>

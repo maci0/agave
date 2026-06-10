@@ -1,0 +1,159 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 398.674 648.3000000000001" width="398.674" height="648.3000000000001" style="--bg:#FFFFFF;--fg:#27272A;background:#ffffff">
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;display=swap');
+  text { font-family: 'Inter', system-ui, sans-serif; }
+  svg {
+    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
+    --_text:          #1a1a2e;
+    --_text-sec:      var(--muted, color-mix(in srgb, #1a1a2e 60%, #ffffff));
+    --_text-muted:    var(--muted, color-mix(in srgb, #1a1a2e 40%, #ffffff));
+    --_text-faint:    color-mix(in srgb, #1a1a2e 25%, #ffffff);
+    --_line:          var(--line, color-mix(in srgb, #1a1a2e 50%, #ffffff));
+    --_arrow:         var(--accent, color-mix(in srgb, #1a1a2e 85%, #ffffff));
+    --_node-fill:     var(--surface, color-mix(in srgb, #1a1a2e 3%, #ffffff));
+    --_node-stroke:   var(--border, color-mix(in srgb, #1a1a2e 20%, #ffffff));
+    --_group-fill:    #ffffff;
+    --_group-hdr:     color-mix(in srgb, #1a1a2e 5%, #ffffff);
+    --_inner-stroke:  color-mix(in srgb, #1a1a2e 12%, #ffffff);
+    --_key-badge:     color-mix(in srgb, #1a1a2e 10%, #ffffff);
+  }
+</style>
+<defs>
+  <marker id="arrowhead" markerWidth="8" markerHeight="5" refX="7" refY="2.5" orient="auto">
+    <polygon points="0 0, 8 2.5, 0 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+  <marker id="arrowhead-start" markerWidth="8" markerHeight="5" refX="1" refY="2.5" orient="auto-start-reverse">
+    <polygon points="8 0, 0 2.5, 8 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+</defs>
+<g class="subgraph" data-id="VHeads" data-label="8 V-heads (query heads)">
+  <rect x="40.00000000000003" y="580.3000000000001" width="0" height="0" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="40.00000000000003" y="580.3000000000001" width="0" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="52.00000000000003" y="594.3000000000001" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">8 V-heads (query heads)</text>
+</g>
+<g class="subgraph" data-id="KHeads" data-label="2 K-heads (key/value heads)">
+  <rect x="40.00000000000003" y="608.3000000000001" width="0" height="0" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="40.00000000000003" y="608.3000000000001" width="0" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="52.00000000000003" y="622.3000000000001" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">2 K-heads (key/value heads)</text>
+</g>
+<polyline class="edge" data-from="V0" data-to="K0" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="GGUF: h%2=0" points="122.515,61.49999999999991 177.466,61.49999999999991 177.466,51 274.674,51 274.674,153.1999999999999 292.674,153.1999999999999" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="V1" data-to="K1" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="GGUF: h%2=1" points="122.515,206.9999999999999 145.03,206.9999999999999 145.03,217.49999999999994 286.674,217.49999999999994 286.674,419.6 292.674,419.6" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="V2" data-to="K0" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="GGUF: h%2=0" points="122.515,128.0999999999999 153.466,128.0999999999999 153.466,117.59999999999995 250.674,117.59999999999995 250.674,161.39999999999992 292.674,161.39999999999992" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="V3" data-to="K1" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="GGUF: h%2=1" points="122.515,273.5999999999999 157.03,273.5999999999999 157.03,284.09999999999997 262.674,284.09999999999997 262.674,423.69999999999993 292.674,423.69999999999993" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="V4" data-to="K0" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="GGUF: h%2=0" points="122.515,327.9 153.466,327.9 153.466,317.4 250.674,317.4 250.674,177.79999999999993 292.674,177.79999999999993" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="V5" data-to="K1" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="GGUF: h%2=1" points="122.515,461.1 157.03,461.1 157.03,450.6 250.674,450.6 250.674,436 292.674,436" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="V6" data-to="K0" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="GGUF: h%2=0" points="122.515,394.5 153.466,394.5 153.466,384 274.674,384 274.674,181.89999999999992 292.674,181.89999999999992" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="V7" data-to="K1" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="GGUF: h%2=1" points="122.515,527.7 181.03,527.7 181.03,517.2 274.674,517.2 274.674,444.19999999999993 292.674,444.19999999999993" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="V0" data-to="K0" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="HF: h*2/8=0" points="122.515,73.79999999999991 172,73.79999999999991 172,84.29999999999997 262.674,84.29999999999997 262.674,157.2999999999999 292.674,157.2999999999999" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="V1" data-to="K0" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="HF: h*2/8=0" points="122.515,194.6999999999999 136,194.6999999999999 136,184.19999999999993 226.674,184.19999999999993 226.674,169.5999999999999 292.674,169.5999999999999" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="V2" data-to="K0" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="HF: h*2/8=0" points="122.515,140.39999999999992 148,140.39999999999992 148,150.89999999999992 238.674,150.89999999999992 238.674,165.49999999999991 292.674,165.49999999999991" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="V3" data-to="K0" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="HF: h*2/8=0" points="122.515,261.29999999999995 148,261.29999999999995 148,250.79999999999995 238.674,250.79999999999995 238.674,173.69999999999993 292.674,173.69999999999993" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="V4" data-to="K1" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="HF: h*2/8=1" points="122.515,340.19999999999993 163.564,340.19999999999993 163.564,350.70000000000005 250.674,350.70000000000005 250.674,427.79999999999995 292.674,427.79999999999995" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="V5" data-to="K1" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="HF: h*2/8=1" points="122.515,473.4000000000001 175.564,473.4000000000001 175.564,483.9000000000001 262.674,483.9000000000001 262.674,440.1 292.674,440.1" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="V6" data-to="K1" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="HF: h*2/8=1" points="122.515,406.80000000000007 151.56400000000002,406.80000000000007 151.56400000000002,417.30000000000007 238.674,417.30000000000007 238.674,431.9 292.674,431.9" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="V7" data-to="K1" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="HF: h*2/8=1" points="122.515,540.0000000000001 199.564,540.0000000000001 199.564,550.5 286.674,550.5 286.674,448.29999999999995 292.674,448.29999999999995" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<g class="edge-label" data-from="V0" data-to="K0" data-label="GGUF: h%2=0">
+  <rect x="185.466" y="35" width="81.208" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="226.07" y="50.15" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">GGUF: h%2=0</text>
+</g>
+<g class="edge-label" data-from="V1" data-to="K1" data-label="GGUF: h%2=1">
+  <rect x="153.03" y="201.49999999999994" width="77.644" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="191.852" y="216.64999999999995" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">GGUF: h%2=1</text>
+</g>
+<g class="edge-label" data-from="V2" data-to="K0" data-label="GGUF: h%2=0">
+  <rect x="161.466" y="101.59999999999995" width="81.208" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="202.07" y="116.74999999999996" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">GGUF: h%2=0</text>
+</g>
+<g class="edge-label" data-from="V3" data-to="K1" data-label="GGUF: h%2=1">
+  <rect x="165.03" y="268.09999999999997" width="77.644" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="203.852" y="283.24999999999994" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">GGUF: h%2=1</text>
+</g>
+<g class="edge-label" data-from="V4" data-to="K0" data-label="GGUF: h%2=0">
+  <rect x="161.466" y="301.4" width="81.208" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="202.07" y="316.54999999999995" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">GGUF: h%2=0</text>
+</g>
+<g class="edge-label" data-from="V5" data-to="K1" data-label="GGUF: h%2=1">
+  <rect x="165.03" y="434.6" width="77.644" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="203.852" y="449.75" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">GGUF: h%2=1</text>
+</g>
+<g class="edge-label" data-from="V6" data-to="K0" data-label="GGUF: h%2=0">
+  <rect x="161.466" y="368" width="81.208" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="202.07" y="383.15" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">GGUF: h%2=0</text>
+</g>
+<g class="edge-label" data-from="V7" data-to="K1" data-label="GGUF: h%2=1">
+  <rect x="189.03" y="501.20000000000005" width="77.644" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="227.852" y="516.35" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">GGUF: h%2=1</text>
+</g>
+<g class="edge-label" data-from="V0" data-to="K0" data-label="HF: h*2/8=0">
+  <rect x="180" y="68.29999999999997" width="74.674" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="217.337" y="83.44999999999997" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">HF: h*2/8=0</text>
+</g>
+<g class="edge-label" data-from="V1" data-to="K0" data-label="HF: h*2/8=0">
+  <rect x="144" y="168.19999999999993" width="74.674" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="181.337" y="183.34999999999994" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">HF: h*2/8=0</text>
+</g>
+<g class="edge-label" data-from="V2" data-to="K0" data-label="HF: h*2/8=0">
+  <rect x="156" y="134.89999999999992" width="74.674" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="193.337" y="150.04999999999993" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">HF: h*2/8=0</text>
+</g>
+<g class="edge-label" data-from="V3" data-to="K0" data-label="HF: h*2/8=0">
+  <rect x="156" y="234.79999999999995" width="74.674" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="193.337" y="249.94999999999996" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">HF: h*2/8=0</text>
+</g>
+<g class="edge-label" data-from="V4" data-to="K1" data-label="HF: h*2/8=1">
+  <rect x="171.564" y="334.70000000000005" width="71.11" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="207.119" y="349.85" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">HF: h*2/8=1</text>
+</g>
+<g class="edge-label" data-from="V5" data-to="K1" data-label="HF: h*2/8=1">
+  <rect x="183.564" y="467.9000000000001" width="71.11" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="219.119" y="483.05000000000007" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">HF: h*2/8=1</text>
+</g>
+<g class="edge-label" data-from="V6" data-to="K1" data-label="HF: h*2/8=1">
+  <rect x="159.56400000000002" y="401.30000000000007" width="71.11" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="195.11900000000003" y="416.45000000000005" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">HF: h*2/8=1</text>
+</g>
+<g class="edge-label" data-from="V7" data-to="K1" data-label="HF: h*2/8=1">
+  <rect x="207.564" y="534.5" width="71.11" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="243.119" y="549.65" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">HF: h*2/8=1</text>
+</g>
+<g class="node" data-id="V0" data-label="V0" data-shape="rectangle">
+  <rect x="62.515" y="49.1999999999999" width="60" height="36.900000000000006" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
+  <text x="92.515" y="67.6499999999999" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f" dy="4.55">V0</text>
+</g>
+<g class="node" data-id="V1" data-label="V1" data-shape="rectangle">
+  <rect x="62.515" y="182.3999999999999" width="60" height="36.900000000000006" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
+  <text x="92.515" y="200.8499999999999" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f" dy="4.55">V1</text>
+</g>
+<g class="node" data-id="V2" data-label="V2" data-shape="rectangle">
+  <rect x="62.515" y="115.79999999999991" width="60" height="36.900000000000006" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
+  <text x="92.515" y="134.24999999999991" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f" dy="4.55">V2</text>
+</g>
+<g class="node" data-id="V3" data-label="V3" data-shape="rectangle">
+  <rect x="62.515" y="248.99999999999991" width="60" height="36.900000000000006" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
+  <text x="92.515" y="267.44999999999993" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f" dy="4.55">V3</text>
+</g>
+<g class="node" data-id="V4" data-label="V4" data-shape="rectangle">
+  <rect x="62.515" y="315.5999999999999" width="60" height="36.900000000000006" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
+  <text x="92.515" y="334.0499999999999" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f" dy="4.55">V4</text>
+</g>
+<g class="node" data-id="V5" data-label="V5" data-shape="rectangle">
+  <rect x="62.515" y="448.80000000000007" width="60" height="36.900000000000006" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
+  <text x="92.515" y="467.25000000000006" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f" dy="4.55">V5</text>
+</g>
+<g class="node" data-id="V6" data-label="V6" data-shape="rectangle">
+  <rect x="62.515" y="382.20000000000005" width="60" height="36.900000000000006" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
+  <text x="92.515" y="400.65000000000003" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f" dy="4.55">V6</text>
+</g>
+<g class="node" data-id="V7" data-label="V7" data-shape="rectangle">
+  <rect x="62.515" y="515.4000000000001" width="60" height="36.900000000000006" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
+  <text x="92.515" y="533.8500000000001" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f" dy="4.55">V7</text>
+</g>
+<g class="node" data-id="K0" data-label="K0" data-shape="rectangle">
+  <rect x="292.674" y="149.0999999999999" width="60" height="36.900000000000006" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
+  <text x="322.674" y="167.5499999999999" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d" dy="4.55">K0</text>
+</g>
+<g class="node" data-id="K1" data-label="K1" data-shape="rectangle">
+  <rect x="292.674" y="415.5" width="60" height="36.900000000000006" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
+  <text x="322.674" y="433.95" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d" dy="4.55">K1</text>
+</g>
+</svg>

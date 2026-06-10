@@ -1,0 +1,95 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 431.476 1040.7" width="431.476" height="1040.7" style="--bg:#FFFFFF;--fg:#27272A;background:#ffffff">
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;display=swap');
+  text { font-family: 'Inter', system-ui, sans-serif; }
+  svg {
+    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
+    --_text:          #1a1a2e;
+    --_text-sec:      var(--muted, color-mix(in srgb, #1a1a2e 60%, #ffffff));
+    --_text-muted:    var(--muted, color-mix(in srgb, #1a1a2e 40%, #ffffff));
+    --_text-faint:    color-mix(in srgb, #1a1a2e 25%, #ffffff);
+    --_line:          var(--line, color-mix(in srgb, #1a1a2e 50%, #ffffff));
+    --_arrow:         var(--accent, color-mix(in srgb, #1a1a2e 85%, #ffffff));
+    --_node-fill:     var(--surface, color-mix(in srgb, #1a1a2e 3%, #ffffff));
+    --_node-stroke:   var(--border, color-mix(in srgb, #1a1a2e 20%, #ffffff));
+    --_group-fill:    #ffffff;
+    --_group-hdr:     color-mix(in srgb, #1a1a2e 5%, #ffffff);
+    --_inner-stroke:  color-mix(in srgb, #1a1a2e 12%, #ffffff);
+    --_key-badge:     color-mix(in srgb, #1a1a2e 10%, #ffffff);
+  }
+</style>
+<defs>
+  <marker id="arrowhead" markerWidth="8" markerHeight="5" refX="7" refY="2.5" orient="auto">
+    <polygon points="0 0, 8 2.5, 0 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+  <marker id="arrowhead-start" markerWidth="8" markerHeight="5" refX="1" refY="2.5" orient="auto-start-reverse">
+    <polygon points="8 0, 0 2.5, 8 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+</defs>
+<g class="subgraph" data-id="Pass1" data-label="Pass 1: Compute RMS">
+  <rect x="40" y="141.8" width="236.96999999999997" height="419.20000000000005" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="40" y="141.8" width="236.96999999999997" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="52" y="155.8" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">Pass 1: Compute RMS</text>
+</g>
+<g class="subgraph" data-id="Pass2" data-label="Pass 2: Normalize and Scale">
+  <rect x="124.14900000000002" y="683.3" width="242.15699999999995" height="317.40000000000003" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="124.14900000000002" y="683.3" width="242.15699999999995" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="136.149" y="697.3" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">Pass 2: Normalize and Scale</text>
+</g>
+<polyline class="edge" data-from="Input" data-to="Pass1" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="171.92633333333333,93.80000000000001 171.92633333333333,129.8 56,129.8 56,141.8" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Input" data-to="Pass2" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="original x" points="216.04366666666664,93.80000000000001 216.04366666666664,129.8 331.96999999999997,129.8 331.96999999999997,671.3 285.587,671.3 285.587,683.3" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Sqrt" data-to="Pass2" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="rms value" points="158.48499999999999,545 158.48499999999999,671.3 204.868,671.3 204.868,683.3" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Sq" data-to="Mean" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="158.48499999999999,239.60000000000002 158.48499999999999,287.6" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Mean" data-to="Eps" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="158.48499999999999,341.40000000000003 158.48499999999999,389.40000000000003" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Eps" data-to="Sqrt" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="158.48499999999999,443.20000000000005 158.48499999999999,491.20000000000005" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Div" data-to="Scale" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="245.2275,781.0999999999999 245.2275,829.0999999999999" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Scale" data-to="Out" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="245.2275,882.9 245.2275,930.9" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<g class="edge-label" data-from="Input" data-to="Pass2" data-label="original x">
+  <rect x="300.97" y="610" width="61.012" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="331.476" y="625.15" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">original x</text>
+</g>
+<g class="edge-label" data-from="Sqrt" data-to="Pass2" data-label="rms value">
+  <rect x="126.48499999999997" y="610" width="63.388000000000005" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="158.17899999999997" y="625.15" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">rms value</text>
+</g>
+<g class="node" data-id="Input" data-label="&quot;Input vector x
+e.g. [2.0, 4.0, 4.0" data-shape="rectangle">
+  <rect x="127.80899999999998" y="40" width="132.352" height="53.800000000000004" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="193.98499999999999" y="66.9" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="193.98499999999999" dy="-3.9000000000000012">&quot;Input vector x</tspan><tspan x="193.98499999999999" dy="16.900000000000002">e.g. [2.0, 4.0, 4.0</tspan></text>
+</g>
+<g class="node" data-id="Sq" data-label="&quot;Square each element
+x² = [4, 16, 16" data-shape="rectangle">
+  <rect x="74.15449999999998" y="185.8" width="168.661" height="53.800000000000004" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="158.48499999999999" y="212.70000000000002" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="158.48499999999999" dy="-3.9000000000000012">&quot;Square each element</tspan><tspan x="158.48499999999999" dy="16.900000000000002">x² = [4, 16, 16</tspan></text>
+</g>
+<g class="node" data-id="Mean" data-label="Mean of squares
+mean(x²) = 12.0" data-shape="rectangle">
+  <rect x="88.23349999999999" y="287.6" width="140.503" height="53.800000000000004" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="158.48499999999999" y="314.5" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="158.48499999999999" dy="-3.9000000000000012">Mean of squares</tspan><tspan x="158.48499999999999" dy="16.900000000000002">mean(x²) = 12.0</tspan></text>
+</g>
+<g class="node" data-id="Eps" data-label="Add epsilon for stability
+12.0 + 1e-6" data-shape="rectangle">
+  <rect x="70.4495" y="389.40000000000003" width="176.07099999999997" height="53.800000000000004" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
+  <text x="158.48499999999999" y="416.3" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12"><tspan x="158.48499999999999" dy="-3.9000000000000012">Add epsilon for stability</tspan><tspan x="158.48499999999999" dy="16.900000000000002">12.0 + 1e-6</tspan></text>
+</g>
+<g class="node" data-id="Sqrt" data-label="Square root
+rms = sqrt(12.000001) ≈ 3.464" data-shape="rectangle">
+  <rect x="56" y="491.20000000000005" width="204.96999999999997" height="53.800000000000004" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
+  <text x="158.48499999999999" y="518.1" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12"><tspan x="158.48499999999999" dy="-3.9000000000000012">Square root</tspan><tspan x="158.48499999999999" dy="16.900000000000002">rms = sqrt(12.000001) ≈ 3.464</tspan></text>
+</g>
+<g class="node" data-id="Div" data-label="&quot;Divide each element by rms
+[2/3.464, 4/3.464, 4/3.464" data-shape="rectangle">
+  <rect x="143.85399999999998" y="727.3" width="202.74699999999999" height="53.800000000000004" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="245.22749999999996" y="754.1999999999999" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="245.22749999999996" dy="-3.9000000000000012">&quot;Divide each element by rms</tspan><tspan x="245.22749999999996" dy="16.900000000000002">[2/3.464, 4/3.464, 4/3.464</tspan></text>
+</g>
+<g class="node" data-id="Scale" data-label="Multiply by learned weights w
+(per-element scale, trained)" data-shape="rectangle">
+  <rect x="140.149" y="829.0999999999999" width="210.15699999999995" height="53.800000000000004" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="245.22749999999996" y="855.9999999999999" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="245.22749999999996" dy="-3.9000000000000012">Multiply by learned weights w</tspan><tspan x="245.22749999999996" dy="16.900000000000002">(per-element scale, trained)</tspan></text>
+</g>
+<g class="node" data-id="Out" data-label="Normalized output
+unit RMS, scaled by w" data-shape="rectangle">
+  <rect x="161.63799999999998" y="930.9" width="167.179" height="53.800000000000004" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
+  <text x="245.22749999999996" y="957.8" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="245.22749999999996" dy="-3.9000000000000012">Normalized output</tspan><tspan x="245.22749999999996" dy="16.900000000000002">unit RMS, scaled by w</tspan></text>
+</g>
+</svg>

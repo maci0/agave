@@ -1,0 +1,106 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 665.0770000000001 389" width="665.0770000000001" height="389" style="--bg:#FFFFFF;--fg:#27272A;background:#ffffff">
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;display=swap');
+  text { font-family: 'Inter', system-ui, sans-serif; }
+  svg {
+    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
+    --_text:          #1a1a2e;
+    --_text-sec:      var(--muted, color-mix(in srgb, #1a1a2e 60%, #ffffff));
+    --_text-muted:    var(--muted, color-mix(in srgb, #1a1a2e 40%, #ffffff));
+    --_text-faint:    color-mix(in srgb, #1a1a2e 25%, #ffffff);
+    --_line:          var(--line, color-mix(in srgb, #1a1a2e 50%, #ffffff));
+    --_arrow:         var(--accent, color-mix(in srgb, #1a1a2e 85%, #ffffff));
+    --_node-fill:     var(--surface, color-mix(in srgb, #1a1a2e 3%, #ffffff));
+    --_node-stroke:   var(--border, color-mix(in srgb, #1a1a2e 20%, #ffffff));
+    --_group-fill:    #ffffff;
+    --_group-hdr:     color-mix(in srgb, #1a1a2e 5%, #ffffff);
+    --_inner-stroke:  color-mix(in srgb, #1a1a2e 12%, #ffffff);
+    --_key-badge:     color-mix(in srgb, #1a1a2e 10%, #ffffff);
+  }
+</style>
+<defs>
+  <marker id="arrowhead" markerWidth="8" markerHeight="5" refX="7" refY="2.5" orient="auto">
+    <polygon points="0 0, 8 2.5, 0 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+  <marker id="arrowhead-start" markerWidth="8" markerHeight="5" refX="1" refY="2.5" orient="auto-start-reverse">
+    <polygon points="8 0, 0 2.5, 8 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+</defs>
+<g class="subgraph" data-id="GEMV" data-label="GEMV — Decode (1 token at a time)">
+  <rect x="40" y="65" width="0" height="0" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="40" y="65" width="0" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="52" y="79" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">GEMV — Decode (1 token at a time)</text>
+</g>
+<g class="subgraph" data-id="GEMM" data-label="GEMM — Prefill (N tokens batched)">
+  <rect x="248.41200000000003" y="65" width="0" height="0" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="248.41200000000003" y="65" width="0" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="260.41200000000003" y="79" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">GEMM — Prefill (N tokens batched)</text>
+</g>
+<polyline class="edge" data-from="WA" data-to="XA" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="1 dot product
+per row" points="176.05700000000002,248.3 344.077,248.3" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="XA" data-to="YA" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="433.451,248.3 476.105,248.3" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="WB" data-to="XB" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="N dot products
+per row" points="176.05700000000002,322.1 344.077,322.1" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="XB" data-to="YB" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="454.199,322.1 507.5450000000001,322.1" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="GEMV" data-to="GEMM" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="N=200 prompt tokens
+→ 200× more useful
+work per memory load" points="40,65 248.41200000000003,65" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<g class="edge-label" data-from="WA" data-to="XA" data-label="1 dot product
+per row">
+  <rect x="220.05700000000002" y="225.3" width="74.674" height="44.6" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="257.394" y="247.60000000000002" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)"><tspan x="257.394" dy="-3.3000000000000007">1 dot product</tspan><tspan x="257.394" dy="14.3">per row</tspan></text>
+</g>
+<g class="edge-label" data-from="WB" data-to="XB" data-label="N dot products
+per row">
+  <rect x="220.05700000000002" y="299.1" width="85.36600000000001" height="44.6" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="262.74" y="321.40000000000003" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)"><tspan x="262.74" dy="-3.3000000000000007">N dot products</tspan><tspan x="262.74" dy="14.3">per row</tspan></text>
+</g>
+<g class="edge-label" data-from="GEMV" data-to="GEMM" data-label="N=200 prompt tokens
+→ 200× more useful
+work per memory load">
+  <rect x="84" y="35" width="120.41200000000002" height="58.900000000000006" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="144.20600000000002" y="64.45" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)"><tspan x="144.20600000000002" dy="-10.450000000000001">N=200 prompt tokens</tspan><tspan x="144.20600000000002" dy="14.3">→ 200× more useful</tspan><tspan x="144.20600000000002" dy="14.3">work per memory load</tspan></text>
+</g>
+<g class="node" data-id="WA" data-label="&quot;Weight matrix W
+[out × in" data-shape="rectangle">
+  <rect x="40" y="221.4" width="136.05700000000002" height="53.800000000000004" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="108.02850000000001" y="248.3" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="108.02850000000001" dy="-3.9000000000000012">&quot;Weight matrix W</tspan><tspan x="108.02850000000001" dy="16.900000000000002">[out × in</tspan></text>
+</g>
+<g class="node" data-id="XA" data-label="&quot;Input x
+[in floats" data-shape="rectangle">
+  <rect x="344.077" y="221.4" width="89.374" height="53.800000000000004" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="388.764" y="248.3" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="388.764" dy="-3.9000000000000012">&quot;Input x</tspan><tspan x="388.764" dy="16.900000000000002">[in floats</tspan></text>
+</g>
+<g class="node" data-id="YA" data-label="&quot;Output y
+[out floats" data-shape="rectangle">
+  <rect x="476.105" y="221.4" width="96.78399999999999" height="53.800000000000004" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="524.4970000000001" y="248.3" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="524.4970000000001" dy="-3.9000000000000012">&quot;Output y</tspan><tspan x="524.4970000000001" dy="16.900000000000002">[out floats</tspan></text>
+</g>
+<g class="node" data-id="NoteA" data-label="Bandwidth-bound:
+each weight byte used once
+Arithmetic intensity ≈ 1 op/byte" data-shape="rectangle">
+  <rect x="268.41200000000003" y="40" width="211.639" height="70.7" rx="0" ry="0" fill="#fee2e2" stroke="#ef4444" stroke-width="0.75" />
+  <text x="374.23150000000004" y="75.35" text-anchor="middle" font-size="13" font-weight="500" fill="#7f1d1d"><tspan x="374.23150000000004" dy="-12.350000000000001">Bandwidth-bound:</tspan><tspan x="374.23150000000004" dy="16.900000000000002">each weight byte used once</tspan><tspan x="374.23150000000004" dy="16.900000000000002">Arithmetic intensity ≈ 1 op/byte</tspan></text>
+</g>
+<g class="node" data-id="WB" data-label="&quot;Weight matrix W
+[out × in" data-shape="rectangle">
+  <rect x="40" y="295.20000000000005" width="136.05700000000002" height="53.800000000000004" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="108.02850000000001" y="322.1" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="108.02850000000001" dy="-3.9000000000000012">&quot;Weight matrix W</tspan><tspan x="108.02850000000001" dy="16.900000000000002">[out × in</tspan></text>
+</g>
+<g class="node" data-id="XB" data-label="&quot;Input X
+[N × in floats" data-shape="rectangle">
+  <rect x="344.077" y="295.20000000000005" width="110.122" height="53.800000000000004" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="399.138" y="322.1" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="399.138" dy="-3.9000000000000012">&quot;Input X</tspan><tspan x="399.138" dy="16.900000000000002">[N × in floats</tspan></text>
+</g>
+<g class="node" data-id="YB" data-label="&quot;Output Y
+[N × out floats" data-shape="rectangle">
+  <rect x="507.5450000000001" y="295.20000000000005" width="117.53200000000001" height="53.800000000000004" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="566.311" y="322.1" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="566.311" dy="-3.9000000000000012">&quot;Output Y</tspan><tspan x="566.311" dy="16.900000000000002">[N × out floats</tspan></text>
+</g>
+<g class="node" data-id="NoteB" data-label="Compute-bound:
+each weight byte used N times
+Arithmetic intensity ≈ N ops/byte" data-shape="rectangle">
+  <rect x="40" y="130.7" width="224.97699999999998" height="70.7" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
+  <text x="152.4885" y="166.04999999999998" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="152.4885" dy="-12.350000000000001">Compute-bound:</tspan><tspan x="152.4885" dy="16.900000000000002">each weight byte used N times</tspan><tspan x="152.4885" dy="16.900000000000002">Arithmetic intensity ≈ N ops/byte</tspan></text>
+</g>
+</svg>

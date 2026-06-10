@@ -1,0 +1,92 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1286.9489999999998 388.1" width="1286.9489999999998" height="388.1" style="--bg:#FFFFFF;--fg:#27272A;background:#ffffff">
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;display=swap');
+  text { font-family: 'Inter', system-ui, sans-serif; }
+  svg {
+    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
+    --_text:          #1a1a2e;
+    --_text-sec:      var(--muted, color-mix(in srgb, #1a1a2e 60%, #ffffff));
+    --_text-muted:    var(--muted, color-mix(in srgb, #1a1a2e 40%, #ffffff));
+    --_text-faint:    color-mix(in srgb, #1a1a2e 25%, #ffffff);
+    --_line:          var(--line, color-mix(in srgb, #1a1a2e 50%, #ffffff));
+    --_arrow:         var(--accent, color-mix(in srgb, #1a1a2e 85%, #ffffff));
+    --_node-fill:     var(--surface, color-mix(in srgb, #1a1a2e 3%, #ffffff));
+    --_node-stroke:   var(--border, color-mix(in srgb, #1a1a2e 20%, #ffffff));
+    --_group-fill:    #ffffff;
+    --_group-hdr:     color-mix(in srgb, #1a1a2e 5%, #ffffff);
+    --_inner-stroke:  color-mix(in srgb, #1a1a2e 12%, #ffffff);
+    --_key-badge:     color-mix(in srgb, #1a1a2e 10%, #ffffff);
+  }
+</style>
+<defs>
+  <marker id="arrowhead" markerWidth="8" markerHeight="5" refX="7" refY="2.5" orient="auto">
+    <polygon points="0 0, 8 2.5, 0 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+  <marker id="arrowhead-start" markerWidth="8" markerHeight="5" refX="1" refY="2.5" orient="auto-start-reverse">
+    <polygon points="8 0, 0 2.5, 8 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+</defs>
+<g class="subgraph" data-id="T1" data-label="Tier 1 — Fused FFN
+(megakernel.metal)">
+  <rect x="82.721" y="141.8" width="0" height="0" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="82.721" y="141.8" width="0" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="94.721" y="155.8" font-size="12" font-weight="600" fill="var(--_text-sec)"><tspan x="94.721" dy="-3.6000000000000014">Tier 1 — Fused FFN</tspan><tspan x="94.721" dy="15.600000000000001">(megakernel.metal)</tspan></text>
+</g>
+<g class="subgraph" data-id="T2" data-label="Tier 2 — True Megakernels
+(mega_common.metal)">
+  <rect x="125.44200000000001" y="141.8" width="0" height="0" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="125.44200000000001" y="141.8" width="0" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="137.442" y="155.8" font-size="12" font-weight="600" fill="var(--_text-sec)"><tspan x="137.442" dy="-3.6000000000000014">Tier 2 — True Megakernels</tspan><tspan x="137.442" dy="15.600000000000001">(mega_common.metal)</tspan></text>
+</g>
+<g class="subgraph" data-id="T3" data-label="Tier 3 — Composed Megakernels
+(mega_compose.zig)">
+  <rect x="168.163" y="141.8" width="0" height="0" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="168.163" y="141.8" width="0" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="180.163" y="155.8" font-size="12" font-weight="600" fill="var(--_text-sec)"><tspan x="180.163" dy="-3.6000000000000014">Tier 3 — Composed Megakernels</tspan><tspan x="180.163" dy="15.600000000000001">(mega_compose.zig)</tspan></text>
+</g>
+<polyline class="edge" data-from="Flag" data-to="T1" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="82.721,105.80000000000001 82.721,141.8" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Flag" data-to="T2" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="125.44200000000001,105.80000000000001 125.44200000000001,141.8" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Flag" data-to="T3" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="168.163,105.80000000000001 168.163,141.8" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="T1Desc" data-to="Total" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="402.50149999999996,139.60000000000002 402.50149999999996,166.05 741.8049999999998,166.05 741.8049999999998,175.60000000000002" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="T2Desc" data-to="Total" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="741.8049999999998,139.60000000000002 741.8049999999998,166.05 741.8049999999998,166.05 741.8049999999998,175.60000000000002" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="T3Desc" data-to="Total" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="1082.2199999999998,156.5 1082.2199999999998,166.05 741.8049999999998,166.05 741.8049999999998,175.60000000000002" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Total" data-to="Benefit" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="741.8049999999998,229.40000000000003 741.8049999999998,277.40000000000003" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<g class="node" data-id="Flag" data-label="--megakernel flag
+enables fusion system" data-shape="rectangle">
+  <rect x="40" y="52" width="170.884" height="53.800000000000004" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
+  <text x="125.442" y="78.9" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f"><tspan x="125.442" dy="-3.9000000000000012">--megakernel flag</tspan><tspan x="125.442" dy="16.900000000000002">enables fusion system</tspan></text>
+</g>
+<g class="node" data-id="T1Desc" data-label="3 dispatches → 1 dispatch per FFN layer
+gate GEMV + up GEMV + activation fused
+11 kernels: SiLU×6 dtypes + GELU×5 dtypes
+Dtypes: Q8_0, Q4_K, Q5_K, Q6_K, Q4_0, MLX_Q4" data-shape="rectangle">
+  <rect x="238.88400000000001" y="52" width="327.23499999999996" height="87.60000000000001" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="402.50149999999996" y="95.80000000000001" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="402.50149999999996" dy="-20.8">3 dispatches → 1 dispatch per FFN layer</tspan><tspan x="402.50149999999996" dy="16.900000000000002">gate GEMV + up GEMV + activation fused</tspan><tspan x="402.50149999999996" dy="16.900000000000002">11 kernels: SiLU×6 dtypes + GELU×5 dtypes</tspan><tspan x="402.50149999999996" dy="16.900000000000002">Dtypes: Q8_0, Q4_K, Q5_K, Q6_K, Q4_0, MLX_Q4</tspan></text>
+</g>
+<g class="node" data-id="T2Desc" data-label="Entire transformer layer = 1 dispatch
+18 composable building blocks
+Atomic counter grid sync (mega_grid_sync)
+5 pre-compiled megakernel pipelines" data-shape="rectangle">
+  <rect x="594.1189999999999" y="52" width="295.37199999999996" height="87.60000000000001" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
+  <text x="741.8049999999998" y="95.80000000000001" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f"><tspan x="741.8049999999998" dy="-20.8">Entire transformer layer = 1 dispatch</tspan><tspan x="741.8049999999998" dy="16.900000000000002">18 composable building blocks</tspan><tspan x="741.8049999999998" dy="16.900000000000002">Atomic counter grid sync (mega_grid_sync)</tspan><tspan x="741.8049999999998" dy="16.900000000000002">5 pre-compiled megakernel pipelines</tspan></text>
+</g>
+<g class="node" data-id="T3Desc" data-label="MSL source generated at runtime
+from ModelDesc struct definition
+composeMSL() → compileComposedMegakernel()
+newLibraryWithSource() JIT compilation
+New models: zero shader code needed" data-shape="rectangle">
+  <rect x="917.4909999999999" y="52" width="329.4579999999999" height="104.50000000000001" rx="0" ry="0" fill="#f3e8ff" stroke="#9333ea" stroke-width="0.75" />
+  <text x="1082.2199999999998" y="104.25" text-anchor="middle" font-size="13" font-weight="500" fill="#581c87"><tspan x="1082.2199999999998" dy="-29.250000000000004">MSL source generated at runtime</tspan><tspan x="1082.2199999999998" dy="16.900000000000002">from ModelDesc struct definition</tspan><tspan x="1082.2199999999998" dy="16.900000000000002">composeMSL() → compileComposedMegakernel()</tspan><tspan x="1082.2199999999998" dy="16.900000000000002">newLibraryWithSource() JIT compilation</tspan><tspan x="1082.2199999999998" dy="16.900000000000002">New models: zero shader code needed</tspan></text>
+</g>
+<g class="node" data-id="Total" data-label="83 total MSL pipelines compiled
+(standard ops + Tier 1 + Tier 2 + Tier 3)" data-shape="rectangle">
+  <rect x="610.4209999999998" y="175.60000000000002" width="262.76800000000003" height="53.800000000000004" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
+  <text x="741.8049999999998" y="202.50000000000003" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12"><tspan x="741.8049999999998" dy="-3.9000000000000012">83 total MSL pipelines compiled</tspan><tspan x="741.8049999999998" dy="16.900000000000002">(standard ops + Tier 1 + Tier 2 + Tier 3)</tspan></text>
+</g>
+<g class="node" data-id="Benefit" data-label="Reduced dispatch overhead
+Improved GPU utilization
+Lower CPU encoding cost per token" data-shape="rectangle">
+  <rect x="615.9784999999999" y="277.40000000000003" width="251.653" height="70.7" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
+  <text x="741.805" y="312.75000000000006" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="741.805" dy="-12.350000000000001">Reduced dispatch overhead</tspan><tspan x="741.805" dy="16.900000000000002">Improved GPU utilization</tspan><tspan x="741.805" dy="16.900000000000002">Lower CPU encoding cost per token</tspan></text>
+</g>
+</svg>

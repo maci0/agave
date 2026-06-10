@@ -1,0 +1,144 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1340.6345000000001 899.1729999999999" width="1340.6345000000001" height="899.1729999999999" style="--bg:#FFFFFF;--fg:#27272A;background:#ffffff">
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;display=swap');
+  text { font-family: 'Inter', system-ui, sans-serif; }
+  svg {
+    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
+    --_text:          #1a1a2e;
+    --_text-sec:      var(--muted, color-mix(in srgb, #1a1a2e 60%, #ffffff));
+    --_text-muted:    var(--muted, color-mix(in srgb, #1a1a2e 40%, #ffffff));
+    --_text-faint:    color-mix(in srgb, #1a1a2e 25%, #ffffff);
+    --_line:          var(--line, color-mix(in srgb, #1a1a2e 50%, #ffffff));
+    --_arrow:         var(--accent, color-mix(in srgb, #1a1a2e 85%, #ffffff));
+    --_node-fill:     var(--surface, color-mix(in srgb, #1a1a2e 3%, #ffffff));
+    --_node-stroke:   var(--border, color-mix(in srgb, #1a1a2e 20%, #ffffff));
+    --_group-fill:    #ffffff;
+    --_group-hdr:     color-mix(in srgb, #1a1a2e 5%, #ffffff);
+    --_inner-stroke:  color-mix(in srgb, #1a1a2e 12%, #ffffff);
+    --_key-badge:     color-mix(in srgb, #1a1a2e 10%, #ffffff);
+  }
+</style>
+<defs>
+  <marker id="arrowhead" markerWidth="8" markerHeight="5" refX="7" refY="2.5" orient="auto">
+    <polygon points="0 0, 8 2.5, 0 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+  <marker id="arrowhead-start" markerWidth="8" markerHeight="5" refX="1" refY="2.5" orient="auto-start-reverse">
+    <polygon points="8 0, 0 2.5, 8 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+</defs>
+<g class="subgraph" data-id="Output" data-label="All paths">
+  <rect x="559.7870714285714" y="313.713" width="0" height="0" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="559.7870714285714" y="313.713" width="0" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="571.7870714285714" y="327.713" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">All paths</text>
+</g>
+<polyline class="edge" data-from="Entry" data-to="TokCheck" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="458.57157142857136,93.80000000000001 458.57157142857136,141.8" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="TokCheck" data-to="GEMV" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="yes — single token" points="429.91940476190473,285.0608333333334 429.91940476190473,385.573 117.66149999999993,385.573 117.66149999999993,465.873" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="TokCheck" data-to="DtypeCheck" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="no — batch / prefill" points="487.223738095238,285.0608333333334 487.223738095238,325.713 696.4935,325.713 696.4935,406.01300000000003" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="DtypeCheck" data-to="GemmF32" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="f32" points="643.8292142857143,500.8087142857143 643.8292142857143,565.473 194.8375000000001,565.473 194.83749999999986,678.223" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="DtypeCheck" data-to="GemmBF16" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="bf16 / f16" points="664.8949285714286,521.8744285714286 664.8949285714286,577.473 377.41949999999997,577.473 377.41949999999997,678.223" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="DtypeCheck" data-to="GemmQ8" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="q8_0" points="685.9606428571428,542.9401428571427 685.9606428571428,589.473 582.9725000000001,589.473 582.9725000000001,678.223" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="DtypeCheck" data-to="GemmQ4K" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="q4_k / q5_k / q6_k" points="707.0263571428571,542.9401428571429 707.0263571428571,618.3729999999999 810.0145,618.3729999999999 810.0145,678.223" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="DtypeCheck" data-to="GemmQ4" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="q4_0" points="728.0920714285714,521.8744285714286 728.0920714285714,606.3729999999999 1031.1285,606.3729999999999 1031.1285,678.223" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="DtypeCheck" data-to="Panic" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="other" points="749.1577857142856,500.8087142857144 749.1577857142856,565.473 1221.491,565.473 1221.491,678.223" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="GemmF32" data-to="Threadgroup" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="194.83749999999992,748.923 194.83749999999992,785.598 504.9716071428571,785.598 504.9716071428571,805.3729999999999" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="GemmBF16" data-to="Threadgroup" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="377.4195,748.923 377.4195,785.598 504.9716071428571,785.598 504.9716071428571,805.3729999999999" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="GemmQ8" data-to="Threadgroup" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="582.9725000000001,765.823 582.9725000000001,785.598 504.9716071428571,785.598 504.9716071428571,805.3729999999999" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="GemmQ4K" data-to="Threadgroup" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="810.0145,748.923 810.0145,785.598 504.9716071428571,785.598 504.9716071428571,805.3729999999999" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="GemmQ4" data-to="Threadgroup" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="1031.1285,748.923 1031.1285,785.598 504.9716071428571,785.598 504.9716071428571,805.3729999999999" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="GEMV" data-to="Threadgroup" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="117.6615,553.473 117.6615,785.598 504.9716071428571,785.598 504.9716071428571,805.3729999999999" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<g class="edge-label" data-from="TokCheck" data-to="GEMV" data-label="yes — single token">
+  <rect x="66.66149999999993" y="392.573" width="101.40400000000002" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="117.36349999999995" y="407.72299999999996" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">yes — single token</text>
+</g>
+<g class="edge-label" data-from="TokCheck" data-to="DtypeCheck" data-label="no — batch / prefill">
+  <rect x="647.4935" y="332.713" width="97.84000000000003" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="696.4135000000001" y="347.863" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">no — batch / prefill</text>
+</g>
+<g class="edge-label" data-from="DtypeCheck" data-to="GemmF32" data-label="f32">
+  <rect x="178.8375000000001" y="625.3729999999999" width="31.906" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="194.7905000000001" y="640.5229999999999" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">f32</text>
+</g>
+<g class="edge-label" data-from="DtypeCheck" data-to="GemmBF16" data-label="bf16 / f16">
+  <rect x="351.41949999999997" y="613.3729999999999" width="51.508" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="377.1735" y="628.5229999999999" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">bf16 / f16</text>
+</g>
+<g class="edge-label" data-from="DtypeCheck" data-to="GemmQ8" data-label="q8_0">
+  <rect x="561.9725000000001" y="596.473" width="41.41" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="582.6775000000001" y="611.6229999999999" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">q8_0</text>
+</g>
+<g class="edge-label" data-from="DtypeCheck" data-to="GemmQ4K" data-label="q4_k / q5_k / q6_k">
+  <rect x="759.0145" y="625.3729999999999" width="101.99800000000002" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="810.0135" y="640.5229999999999" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">q4_k / q5_k / q6_k</text>
+</g>
+<g class="edge-label" data-from="DtypeCheck" data-to="GemmQ4" data-label="q4_0">
+  <rect x="1010.1284999999999" y="637.3729999999999" width="41.41" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="1030.8335" y="652.5229999999999" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">q4_0</text>
+</g>
+<g class="edge-label" data-from="DtypeCheck" data-to="Panic" data-label="other">
+  <rect x="1199.991" y="572.473" width="42.598" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="1221.29" y="587.6229999999999" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">other</text>
+</g>
+<g class="node" data-id="Entry" data-label="be.gemm(x, W, y,
+n_tok, n_out, n_in)" data-shape="rectangle">
+  <rect x="385.35607142857134" y="40" width="146.431" height="53.800000000000004" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
+  <text x="458.57157142857136" y="66.9" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f"><tspan x="458.57157142857136" dy="-3.9000000000000012">be.gemm(x, W, y,</tspan><tspan x="458.57157142857136" dy="16.900000000000002">n_tok, n_out, n_in)</tspan></text>
+</g>
+<g class="node" data-id="GEMV" data-label="GEMV path
+gemv(x, W, y)
+1 vector × matrix
+low latency, no tiling" data-shape="rectangle">
+  <rect x="40" y="465.873" width="155.323" height="87.60000000000001" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
+  <text x="117.6615" y="509.673" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="117.6615" dy="-20.8">GEMV path</tspan><tspan x="117.6615" dy="16.900000000000002">gemv(x, W, y)</tspan><tspan x="117.6615" dy="16.900000000000002">1 vector × matrix</tspan><tspan x="117.6615" dy="16.900000000000002">low latency, no tiling</tspan></text>
+</g>
+<g class="node" data-id="GemmF32" data-label="pipe_gemm_f32
+(f32 weights)
+no tiling" data-shape="rectangle">
+  <rect x="128.66149999999993" y="678.223" width="132.352" height="70.7" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="194.83749999999992" y="713.573" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="194.83749999999992" dy="-12.350000000000001">pipe_gemm_f32</tspan><tspan x="194.83749999999992" dy="16.900000000000002">(f32 weights)</tspan><tspan x="194.83749999999992" dy="16.900000000000002">no tiling</tspan></text>
+</g>
+<g class="node" data-id="GemmBF16" data-label="pipe_gemm_bf16
+(half-precision weights)
+sequential token loop" data-shape="rectangle">
+  <rect x="289.0135" y="678.223" width="176.81199999999998" height="70.7" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="377.4195" y="713.573" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="377.4195" dy="-12.350000000000001">pipe_gemm_bf16</tspan><tspan x="377.4195" dy="16.900000000000002">(half-precision weights)</tspan><tspan x="377.4195" dy="16.900000000000002">sequential token loop</tspan></text>
+</g>
+<g class="node" data-id="GemmQ8" data-label="pipe_gemm_q8_0
+(8-bit quant)
+TILE_T=8 token tiling
+amortize weight decode" data-shape="rectangle">
+  <rect x="493.82550000000003" y="678.223" width="178.29399999999998" height="87.60000000000001" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="582.9725000000001" y="722.0229999999999" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="582.9725000000001" dy="-20.8">pipe_gemm_q8_0</tspan><tspan x="582.9725000000001" dy="16.900000000000002">(8-bit quant)</tspan><tspan x="582.9725000000001" dy="16.900000000000002">TILE_T=8 token tiling</tspan><tspan x="582.9725000000001" dy="16.900000000000002">amortize weight decode</tspan></text>
+</g>
+<g class="node" data-id="GemmQ4K" data-label="pipe_gemm_q4_k / q5_k / q6_k
+(4/5/6-bit K-quant)
+TILE_T=4 token tiling" data-shape="rectangle">
+  <rect x="700.1195" y="678.223" width="219.79" height="70.7" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="810.0145" y="713.573" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="810.0145" dy="-12.350000000000001">pipe_gemm_q4_k / q5_k / q6_k</tspan><tspan x="810.0145" dy="16.900000000000002">(4/5/6-bit K-quant)</tspan><tspan x="810.0145" dy="16.900000000000002">TILE_T=4 token tiling</tspan></text>
+</g>
+<g class="node" data-id="GemmQ4" data-label="pipe_gemm_q4_0
+(4-bit quant)
+TILE_T=4 token tiling" data-shape="rectangle">
+  <rect x="947.9095" y="678.223" width="166.43800000000005" height="70.7" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="1031.1285" y="713.573" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="1031.1285" dy="-12.350000000000001">pipe_gemm_q4_0</tspan><tspan x="1031.1285" dy="16.900000000000002">(4-bit quant)</tspan><tspan x="1031.1285" dy="16.900000000000002">TILE_T=4 token tiling</tspan></text>
+</g>
+<g class="node" data-id="Panic" data-label="@panic
+no CPU fallback
+add GPU kernel first" data-shape="rectangle">
+  <rect x="1142.3475" y="678.223" width="158.287" height="70.7" rx="0" ry="0" fill="#fee2e2" stroke="#ef4444" stroke-width="0.75" />
+  <text x="1221.491" y="713.573" text-anchor="middle" font-size="13" font-weight="500" fill="#7f1d1d"><tspan x="1221.491" dy="-12.350000000000001">@panic</tspan><tspan x="1221.491" dy="16.900000000000002">no CPU fallback</tspan><tspan x="1221.491" dy="16.900000000000002">add GPU kernel first</tspan></text>
+</g>
+<g class="node" data-id="Threadgroup" data-label="1 threadgroup per output row
+encode → barrier → next kernel" data-shape="rectangle">
+  <rect x="395.44710714285713" y="805.3729999999999" width="219.049" height="53.800000000000004" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
+  <text x="504.9716071428571" y="832.2729999999999" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f"><tspan x="504.9716071428571" dy="-3.9000000000000012">1 threadgroup per output row</tspan><tspan x="504.9716071428571" dy="16.900000000000002">encode → barrier → next kernel</tspan></text>
+</g>
+<g class="node" data-id="TokCheck" data-label="n_tok == 1?
+(token generation)" data-shape="diamond">
+  <polygon points="458.57157142857136,141.8 544.5280714285714,227.75650000000002 458.57157142857136,313.713 372.61507142857135,227.75650000000002" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="458.57157142857136" y="227.75650000000002" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="458.57157142857136" dy="-3.9000000000000012">n_tok == 1?</tspan><tspan x="458.57157142857136" dy="16.900000000000002">(token generation)</tspan></text>
+</g>
+<g class="node" data-id="DtypeCheck" data-label="Weight dtype?" data-shape="diamond">
+  <polygon points="696.4935,406.01300000000003 770.2235000000001,479.74300000000005 696.4935,553.4730000000001 622.7635,479.74300000000005" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="696.4935" y="479.74300000000005" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">Weight dtype?</text>
+</g>
+</svg>

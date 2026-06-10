@@ -1,0 +1,83 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 580.466 396.1" width="580.466" height="396.1" style="--bg:#FFFFFF;--fg:#27272A;background:#ffffff">
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;display=swap');
+  text { font-family: 'Inter', system-ui, sans-serif; }
+  svg {
+    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
+    --_text:          #1a1a2e;
+    --_text-sec:      var(--muted, color-mix(in srgb, #1a1a2e 60%, #ffffff));
+    --_text-muted:    var(--muted, color-mix(in srgb, #1a1a2e 40%, #ffffff));
+    --_text-faint:    color-mix(in srgb, #1a1a2e 25%, #ffffff);
+    --_line:          var(--line, color-mix(in srgb, #1a1a2e 50%, #ffffff));
+    --_arrow:         var(--accent, color-mix(in srgb, #1a1a2e 85%, #ffffff));
+    --_node-fill:     var(--surface, color-mix(in srgb, #1a1a2e 3%, #ffffff));
+    --_node-stroke:   var(--border, color-mix(in srgb, #1a1a2e 20%, #ffffff));
+    --_group-fill:    #ffffff;
+    --_group-hdr:     color-mix(in srgb, #1a1a2e 5%, #ffffff);
+    --_inner-stroke:  color-mix(in srgb, #1a1a2e 12%, #ffffff);
+    --_key-badge:     color-mix(in srgb, #1a1a2e 10%, #ffffff);
+  }
+</style>
+<defs>
+  <marker id="arrowhead" markerWidth="8" markerHeight="5" refX="7" refY="2.5" orient="auto">
+    <polygon points="0 0, 8 2.5, 0 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+  <marker id="arrowhead-start" markerWidth="8" markerHeight="5" refX="1" refY="2.5" orient="auto-start-reverse">
+    <polygon points="8 0, 0 2.5, 8 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+</defs>
+<g class="subgraph" data-id="TQ2_0" data-label="TQ2_0: 4 ternary values per byte">
+  <rect x="152.34500000000003" y="252.95000000000002" width="0" height="0" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="152.34500000000003" y="252.95000000000002" width="0" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="164.34500000000003" y="266.95000000000005" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">TQ2_0: 4 ternary values per byte</text>
+</g>
+<polyline class="edge" data-from="Byte" data-to="P0" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="152.345,206.5 170.34500000000003,206.5 170.34500000000003,75.35 188.34500000000003,75.35" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Byte" data-to="P1" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="152.345,206.5 170.34500000000003,206.5 170.34500000000003,165.6 188.34500000000003,165.6" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Byte" data-to="P2" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="152.345,206.5 170.34500000000003,206.5 170.34500000000003,247.4 188.34500000000003,247.4" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Byte" data-to="P3" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="152.345,206.5 170.34500000000003,206.5 170.34500000000003,329.2 188.34500000000003,329.2" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="P0" data-to="DQ0" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="325.14300000000003,75.35 367.956,75.35" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="P1" data-to="DQ1" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="315.51,165.6 367.956,165.6" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="P2" data-to="DQ2" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="319.956,247.4 367.956,247.39999999999998" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="P3" data-to="DQ3" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="319.956,329.2 367.956,329.2" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<g class="node" data-id="Byte" data-label="1 byte (8 bits)" data-shape="rectangle">
+  <rect x="40" y="188.05" width="112.345" height="36.900000000000006" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
+  <text x="96.1725" y="206.5" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f" dy="4.55">1 byte (8 bits)</text>
+</g>
+<g class="node" data-id="P0" data-label="bits 0-1
+value for elem 0
+00=−1  01=0  10=+1" data-shape="rectangle">
+  <rect x="188.34500000000003" y="40" width="136.798" height="70.7" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
+  <text x="256.744" y="75.35" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12"><tspan x="256.744" dy="-12.350000000000001">bits 0-1</tspan><tspan x="256.744" dy="16.900000000000002">value for elem 0</tspan><tspan x="256.744" dy="16.900000000000002">00=−1  01=0  10=+1</tspan></text>
+</g>
+<g class="node" data-id="P1" data-label="bits 2-3
+value for elem 1" data-shape="rectangle">
+  <rect x="188.34500000000003" y="138.7" width="127.16499999999999" height="53.800000000000004" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
+  <text x="251.9275" y="165.6" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12"><tspan x="251.9275" dy="-3.9000000000000012">bits 2-3</tspan><tspan x="251.9275" dy="16.900000000000002">value for elem 1</tspan></text>
+</g>
+<g class="node" data-id="P2" data-label="bits 4-5
+value for elem 2" data-shape="rectangle">
+  <rect x="188.34500000000003" y="220.5" width="131.611" height="53.800000000000004" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
+  <text x="254.15050000000002" y="247.4" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12"><tspan x="254.15050000000002" dy="-3.9000000000000012">bits 4-5</tspan><tspan x="254.15050000000002" dy="16.900000000000002">value for elem 2</tspan></text>
+</g>
+<g class="node" data-id="P3" data-label="bits 6-7
+value for elem 3" data-shape="rectangle">
+  <rect x="188.34500000000003" y="302.3" width="131.611" height="53.800000000000004" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
+  <text x="254.15050000000002" y="329.2" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12"><tspan x="254.15050000000002" dy="-3.9000000000000012">bits 6-7</tspan><tspan x="254.15050000000002" dy="16.900000000000002">value for elem 3</tspan></text>
+</g>
+<g class="node" data-id="DQ0" data-label="(encoded − 1) × scale" data-shape="rectangle">
+  <rect x="367.956" y="56.9" width="160.51000000000002" height="36.900000000000006" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
+  <text x="448.211" y="75.35" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d" dy="4.55">(encoded − 1) × scale</text>
+</g>
+<g class="node" data-id="DQ1" data-label="(encoded − 1) × scale" data-shape="rectangle">
+  <rect x="367.956" y="147.14999999999998" width="160.51000000000002" height="36.900000000000006" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
+  <text x="448.211" y="165.59999999999997" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d" dy="4.55">(encoded − 1) × scale</text>
+</g>
+<g class="node" data-id="DQ2" data-label="(encoded − 1) × scale" data-shape="rectangle">
+  <rect x="367.956" y="228.95" width="160.51000000000002" height="36.900000000000006" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
+  <text x="448.211" y="247.39999999999998" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d" dy="4.55">(encoded − 1) × scale</text>
+</g>
+<g class="node" data-id="DQ3" data-label="(encoded − 1) × scale" data-shape="rectangle">
+  <rect x="367.956" y="310.75" width="160.51000000000002" height="36.900000000000006" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
+  <text x="448.211" y="329.2" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d" dy="4.55">(encoded − 1) × scale</text>
+</g>
+</svg>

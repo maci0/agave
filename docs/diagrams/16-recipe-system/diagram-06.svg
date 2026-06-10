@@ -1,0 +1,91 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1102.353 437.40000000000003" width="1102.353" height="437.40000000000003" style="--bg:#FFFFFF;--fg:#27272A;background:#ffffff">
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;display=swap');
+  text { font-family: 'Inter', system-ui, sans-serif; }
+  svg {
+    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
+    --_text:          #1a1a2e;
+    --_text-sec:      var(--muted, color-mix(in srgb, #1a1a2e 60%, #ffffff));
+    --_text-muted:    var(--muted, color-mix(in srgb, #1a1a2e 40%, #ffffff));
+    --_text-faint:    color-mix(in srgb, #1a1a2e 25%, #ffffff);
+    --_line:          var(--line, color-mix(in srgb, #1a1a2e 50%, #ffffff));
+    --_arrow:         var(--accent, color-mix(in srgb, #1a1a2e 85%, #ffffff));
+    --_node-fill:     var(--surface, color-mix(in srgb, #1a1a2e 3%, #ffffff));
+    --_node-stroke:   var(--border, color-mix(in srgb, #1a1a2e 20%, #ffffff));
+    --_group-fill:    #ffffff;
+    --_group-hdr:     color-mix(in srgb, #1a1a2e 5%, #ffffff);
+    --_inner-stroke:  color-mix(in srgb, #1a1a2e 12%, #ffffff);
+    --_key-badge:     color-mix(in srgb, #1a1a2e 10%, #ffffff);
+  }
+</style>
+<defs>
+  <marker id="arrowhead" markerWidth="8" markerHeight="5" refX="7" refY="2.5" orient="auto">
+    <polygon points="0 0, 8 2.5, 0 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+  <marker id="arrowhead-start" markerWidth="8" markerHeight="5" refX="1" refY="2.5" orient="auto-start-reverse">
+    <polygon points="8 0, 0 2.5, 8 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+</defs>
+<g class="subgraph" data-id="Examples" data-label="Example preset order in array">
+  <rect x="40" y="40" width="254.754" height="266.70000000000005" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="40" y="40" width="254.754" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="52" y="54" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">Example preset order in array</text>
+</g>
+<polyline class="edge" data-from="Exact" data-to="AnyQ" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="most specific
+check first" points="173.68300000000002,362.05 331.327,362.05000000000007" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="AnyQ" data-to="Any" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="narrower before
+broader" points="457.01,362.05000000000007 640.474,362.05000000000007" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Any" data-to="Fallback" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="last resort
+before null" points="782.4590000000001,362.05000000000007 937.4110000000001,362.05" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="P1" data-to="P2" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="167.377,120.9 167.377,168.9" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="P2" data-to="P3" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="159.377,205.8 159.377,253.8" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<g class="edge-label" data-from="Exact" data-to="AnyQ" data-label="most specific
+check first">
+  <rect x="209.68300000000002" y="339.05000000000007" width="77.644" height="44.6" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="248.50500000000002" y="361.3500000000001" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)"><tspan x="248.50500000000002" dy="-3.3000000000000007">most specific</tspan><tspan x="248.50500000000002" dy="14.3">check first</tspan></text>
+</g>
+<g class="edge-label" data-from="AnyQ" data-to="Any" data-label="narrower before
+broader">
+  <rect x="501.01000000000005" y="339.05000000000007" width="95.46400000000001" height="44.6" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="548.7420000000001" y="361.3500000000001" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)"><tspan x="548.7420000000001" dy="-3.3000000000000007">narrower before</tspan><tspan x="548.7420000000001" dy="14.3">broader</tspan></text>
+</g>
+<g class="edge-label" data-from="Any" data-to="Fallback" data-label="last resort
+before null">
+  <rect x="826.4590000000001" y="339.05000000000007" width="66.952" height="44.6" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="859.9350000000001" y="361.3500000000001" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)"><tspan x="859.9350000000001" dy="-3.3000000000000007">last resort</tspan><tspan x="859.9350000000001" dy="14.3">before null</tspan></text>
+</g>
+<g class="node" data-id="Exact" data-label="Specific model
+Specific quant" data-shape="rectangle">
+  <rect x="48" y="335.15000000000003" width="125.68300000000002" height="53.800000000000004" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
+  <text x="110.84150000000001" y="362.05" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f"><tspan x="110.84150000000001" dy="-3.9000000000000012">Specific model</tspan><tspan x="110.84150000000001" dy="16.900000000000002">Specific quant</tspan></text>
+</g>
+<g class="node" data-id="AnyQ" data-label="Specific model
+Any quant
+(quant='')" data-shape="rectangle">
+  <rect x="331.327" y="326.70000000000005" width="125.68300000000002" height="70.7" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
+  <text x="394.1685" y="362.05000000000007" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12"><tspan x="394.1685" dy="-12.350000000000001">Specific model</tspan><tspan x="394.1685" dy="16.900000000000002">Any quant</tspan><tspan x="394.1685" dy="16.900000000000002">(quant=&#39;&#39;)</tspan></text>
+</g>
+<g class="node" data-id="Any" data-label="Any model
+Any quant
+(arch='', quant='')" data-shape="rectangle">
+  <rect x="640.474" y="326.70000000000005" width="141.985" height="70.7" rx="0" ry="0" fill="#f3e8ff" stroke="#9333ea" stroke-width="0.75" />
+  <text x="711.4665" y="362.05000000000007" text-anchor="middle" font-size="13" font-weight="500" fill="#581c87"><tspan x="711.4665" dy="-12.350000000000001">Any model</tspan><tspan x="711.4665" dy="16.900000000000002">Any quant</tspan><tspan x="711.4665" dy="16.900000000000002">(arch=&#39;&#39;, quant=&#39;&#39;)</tspan></text>
+</g>
+<g class="node" data-id="Fallback" data-label="Recipe.default
+(all nulls)" data-shape="rectangle">
+  <rect x="937.4110000000001" y="335.15000000000003" width="124.94200000000001" height="53.800000000000004" rx="0" ry="0" fill="#fee2e2" stroke="#ef4444" stroke-width="0.75" />
+  <text x="999.8820000000001" y="362.05" text-anchor="middle" font-size="13" font-weight="500" fill="#7f1d1d"><tspan x="999.8820000000001" dy="-3.9000000000000012">Recipe.default</tspan><tspan x="999.8820000000001" dy="16.900000000000002">(all nulls)</tspan></text>
+</g>
+<g class="node" data-id="P1" data-label="qwen35 + Metal + MLX_4bit" data-shape="rectangle">
+  <rect x="67.11500000000001" y="84" width="200.52399999999997" height="36.900000000000006" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
+  <text x="167.377" y="102.45" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f" dy="4.55">qwen35 + Metal + MLX_4bit</text>
+</g>
+<g class="node" data-id="P2" data-label="qwen3 + Metal + (any quant)" data-shape="rectangle">
+  <rect x="67.115" y="168.9" width="200.524" height="36.900000000000006" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
+  <text x="167.377" y="187.35000000000002" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12" dy="4.55">qwen3 + Metal + (any quant)</text>
+</g>
+<g class="node" data-id="P3" data-label="(any model) + CPU + (any quant)" data-shape="rectangle">
+  <rect x="48" y="253.8" width="222.754" height="36.900000000000006" rx="0" ry="0" fill="#f3e8ff" stroke="#9333ea" stroke-width="0.75" />
+  <text x="159.377" y="272.25" text-anchor="middle" font-size="13" font-weight="500" fill="#581c87" dy="4.55">(any model) + CPU + (any quant)</text>
+</g>
+</svg>

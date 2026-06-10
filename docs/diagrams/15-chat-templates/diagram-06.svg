@@ -1,0 +1,201 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1574.7160000000001 1963.234" width="1574.7160000000001" height="1963.234" style="--bg:#FFFFFF;--fg:#27272A;background:#ffffff">
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;display=swap');
+  text { font-family: 'Inter', system-ui, sans-serif; }
+  svg {
+    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
+    --_text:          #1a1a2e;
+    --_text-sec:      var(--muted, color-mix(in srgb, #1a1a2e 60%, #ffffff));
+    --_text-muted:    var(--muted, color-mix(in srgb, #1a1a2e 40%, #ffffff));
+    --_text-faint:    color-mix(in srgb, #1a1a2e 25%, #ffffff);
+    --_line:          var(--line, color-mix(in srgb, #1a1a2e 50%, #ffffff));
+    --_arrow:         var(--accent, color-mix(in srgb, #1a1a2e 85%, #ffffff));
+    --_node-fill:     var(--surface, color-mix(in srgb, #1a1a2e 3%, #ffffff));
+    --_node-stroke:   var(--border, color-mix(in srgb, #1a1a2e 20%, #ffffff));
+    --_group-fill:    #ffffff;
+    --_group-hdr:     color-mix(in srgb, #1a1a2e 5%, #ffffff);
+    --_inner-stroke:  color-mix(in srgb, #1a1a2e 12%, #ffffff);
+    --_key-badge:     color-mix(in srgb, #1a1a2e 10%, #ffffff);
+  }
+</style>
+<defs>
+  <marker id="arrowhead" markerWidth="8" markerHeight="5" refX="7" refY="2.5" orient="auto">
+    <polygon points="0 0, 8 2.5, 0 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+  <marker id="arrowhead-start" markerWidth="8" markerHeight="5" refX="1" refY="2.5" orient="auto-start-reverse">
+    <polygon points="8 0, 0 2.5, 8 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+</defs>
+<g class="subgraph" data-id="SystemBlock" data-label="Step 1: system message handling">
+  <rect x="1133.7305000000001" y="227" width="287.787" height="1052.092" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="1133.7305000000001" y="227" width="287.787" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="1145.7305000000001" y="241" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">Step 1: system message handling</text>
+</g>
+<g class="subgraph" data-id="MsgLoop" data-label="Step 2: conversation messages (iterate)">
+  <rect x="618.4276666666667" y="1303.092" width="182.19400000000002" height="428.242" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="618.4276666666667" y="1303.092" width="182.19400000000002" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="630.4276666666667" y="1317.092" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">Step 2: conversation messages (iterate)</text>
+</g>
+<g class="subgraph" data-id="GenStep" data-label="Step 3: open final assistant turn">
+  <rect x="311.13899999999995" y="1755.334" width="0" height="0" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="311.13899999999995" y="1755.334" width="0" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="323.13899999999995" y="1769.334" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">Step 3: open final assistant turn</text>
+</g>
+<polyline class="edge" data-from="Start" data-to="SystemBlock" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="1090.8511666666666,179 1090.8511666666668,215 1133.7305000000001,215 1133.7305000000001,227" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="SystemBlock" data-to="MsgLoop" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="1133.7305000000001,1279.092 1133.7305000000001,1291.092 618.4276666666667,1291.092 618.4276666666667,1303.092" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="MsgLoop" data-to="GenStep" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="618.4276666666667,1731.334 618.4276666666667,1743.334 311.13899999999995,1743.334 311.13899999999995,1755.334" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="GenStep" data-to="Done" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="311.13899999999995,1755.334 311.139,1825.484" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="HasDefault" data-to="EmitDefault" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="yes" points="1335.4781666666668,398.8233333333334 1335.4781666666668,436.38800000000003 1404.5175000000002,436.38800000000003 1404.5175000000002,1279.092 1404.5175000000002,1291.092 1433.318416666667,1291.092 1433.318416666667,215 1301.9836666666667,215 1301.9836666666667,146.7 1288.8195,146.7 1288.8195,110.7" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="EmitDefault" data-to="HasUserSys" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="1338.6178333333332,110.7 1338.6178333333335,203 1325.4536666666668,203 1325.4536666666668,203 1195.9198333333334,203 1195.9198333333334,227 1195.9198333333334,563.7826666666668" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="HasUserSys" data-to="SkipSys" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="no" points="1195.9198333333334,656.1613333333331 1195.9198333333334,691.256 1164.0525000000002,691.256 1164.0525000000002,1279.092 1164.0525,1383.392 1113.938,1383.392 1113.938,1502.092 1155.3730833333336,1502.092 1155.3730833333336,1514.092" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="HasOverride" data-to="EmitOverride" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="yes" points="1241.0018333333335,960.4293333333333 1241.0018333333335,1005.404 1230.1295,1005.404 1230.1295,1279.092 1230.1295,1389.392" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="HasNoDefault" data-to="EmitPlain" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="yes" points="1343.3881666666668,1237.527333333333 1343.3881666666668,1279.092 1343.3881666666668,1303.092 1460.0185000000001,1303.092 1460.0185000000001,1389.392" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="HasNoDefault" data-to="SkipSys" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="no" points="1292.2588333333335,1237.5273333333334 1292.2588333333335,1279.092 1292.2588333333335,1383.392 1346.7910000000002,1383.392 1346.7910000000002,1502.092 1192.327416666667,1502.092 1192.327416666667,1514.092" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="RoleCheck" data-to="EmitUser" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="user" points="740.4616666666667,1439.9030000000002 740.4616666666667,1482.8400000000001 783.6216666666667,1482.8400000000001 783.6216666666667,1731.334 783.6216666666667,1743.334 1035.9095,1743.334 1035.9095,1825.484" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="RoleCheck" data-to="EmitAsst" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="assistant" points="678.5876666666667,1439.9030000000002 678.5876666666667,1482.8400000000001 634.4276666666667,1482.8400000000001 634.4276666666667,1731.334 634.4276666666667,1755.334 509.65250000000003,1755.334 509.65250000000003,1825.484" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="IsChatML" data-to="EmitToolChatML" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="yes" points="730.8903333333334,1693.9683333333332 730.8903333333334,1731.334 730.8903333333334,1755.334 862.9604999999999,1755.334 862.9604999999999,1825.484" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="IsChatML" data-to="EmitToolFallback" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="no" points="688.1590000000001,1693.9683333333335 688.1590000000001,1731.334 688.159,1825.484" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="HasDefault" data-to="HasUserSys" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="no" points="1284.3488333333335,398.8233333333334 1284.3488333333335,436.38800000000003 1250.0791666666669,436.38800000000003 1250.0791666666669,504.688 1242.1091666666669,504.688 1242.1091666666669,563.7826666666666" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="HasUserSys" data-to="HasOverride" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="yes" points="1242.1091666666669,656.1613333333333 1242.1091666666669,691.256 1273.9765000000002,691.256 1273.9765000000002,795.556" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="HasOverride" data-to="HasNoDefault" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="no" points="1306.9511666666667,960.4293333333335 1306.9511666666667,1005.404 1317.8235000000002,1005.404 1317.8235000000002,1109.7040000000002" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="RoleCheck" data-to="IsChatML" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="tool" points="709.5246666666667,1470.8400000000001 709.5246666666667,1587.14" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<g class="edge-label" data-from="HasDefault" data-to="EmitDefault" data-label="yes">
+  <rect x="1283.9836666666667" y="153.7" width="35.47" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="1301.7186666666666" y="168.85" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">yes</text>
+</g>
+<g class="edge-label" data-from="HasUserSys" data-to="SkipSys" data-label="no">
+  <rect x="1098.938" y="1440.7920000000001" width="29.53" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="1113.7030000000002" y="1455.9420000000002" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">no</text>
+</g>
+<g class="edge-label" data-from="HasOverride" data-to="EmitOverride" data-label="yes">
+  <rect x="1212.1295000000002" y="1322.092" width="35.47" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="1229.8645000000001" y="1337.2420000000002" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">yes</text>
+</g>
+<g class="edge-label" data-from="HasNoDefault" data-to="EmitPlain" data-label="yes">
+  <rect x="1442.0185000000001" y="1310.092" width="35.47" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="1459.7535" y="1325.2420000000002" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">yes</text>
+</g>
+<g class="edge-label" data-from="HasNoDefault" data-to="SkipSys" data-label="no">
+  <rect x="1331.7910000000002" y="1464.7920000000001" width="29.53" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="1346.5560000000003" y="1479.9420000000002" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">no</text>
+</g>
+<g class="edge-label" data-from="RoleCheck" data-to="EmitUser" data-label="user">
+  <rect x="1015.4095000000001" y="1750.334" width="40.221999999999994" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="1035.5205" y="1765.4840000000002" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">user</text>
+</g>
+<g class="edge-label" data-from="RoleCheck" data-to="EmitAsst" data-label="assistant">
+  <rect x="479.15250000000003" y="1762.334" width="60.41800000000001" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="509.36150000000004" y="1777.4840000000002" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">assistant</text>
+</g>
+<g class="edge-label" data-from="IsChatML" data-to="EmitToolChatML" data-label="yes">
+  <rect x="844.9604999999999" y="1762.334" width="35.47" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="862.6954999999999" y="1777.4840000000002" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">yes</text>
+</g>
+<g class="edge-label" data-from="IsChatML" data-to="EmitToolFallback" data-label="no">
+  <rect x="673.159" y="1774.334" width="29.53" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="687.924" y="1789.4840000000002" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">no</text>
+</g>
+<g class="edge-label" data-from="HasDefault" data-to="HasUserSys" data-label="no">
+  <rect x="1235.0791666666667" y="467.38800000000003" width="29.53" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="1249.8441666666668" y="482.538" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">no</text>
+</g>
+<g class="edge-label" data-from="HasUserSys" data-to="HasOverride" data-label="yes">
+  <rect x="1255.9765000000002" y="722.256" width="35.47" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="1273.7115000000001" y="737.406" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">yes</text>
+</g>
+<g class="edge-label" data-from="HasOverride" data-to="HasNoDefault" data-label="no">
+  <rect x="1302.8235" y="1036.404" width="29.53" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="1317.5885" y="1051.554" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">no</text>
+</g>
+<g class="edge-label" data-from="RoleCheck" data-to="IsChatML" data-label="tool">
+  <rect x="692.0246666666668" y="1513.84" width="34.282" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="709.1656666666668" y="1528.99" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">tool</text>
+</g>
+<g class="node" data-id="Start" data-label="formatConversation()" data-shape="stadium">
+  <rect x="1008.3731666666666" y="142.1" width="164.95600000000002" height="36.900000000000006" rx="18.450000000000003" ry="18.450000000000003" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
+  <text x="1090.8511666666666" y="160.55" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f" dy="4.55">formatConversation()</text>
+</g>
+<g class="node" data-id="Done" data-label="return rendered prompt" data-shape="stadium">
+  <rect x="221.251" y="1825.484" width="179.77599999999995" height="36.900000000000006" rx="18.450000000000003" ry="18.450000000000003" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
+  <text x="311.139" y="1843.934" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d" dy="4.55">return rendered prompt</text>
+</g>
+<g class="node" data-id="EmitDefault" data-label="emit system_prefix
++ default_system
++ system_suffix" data-shape="rectangle">
+  <rect x="1239.0211666666667" y="40" width="149.395" height="70.7" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
+  <text x="1313.7186666666666" y="75.35" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12"><tspan x="1313.7186666666666" dy="-12.350000000000001">emit system_prefix</tspan><tspan x="1313.7186666666666" dy="16.900000000000002">+ default_system</tspan><tspan x="1313.7186666666666" dy="16.900000000000002">+ system_suffix</tspan></text>
+</g>
+<g class="node" data-id="SkipSys" data-label="skip system" data-shape="rectangle">
+  <rect x="1118.4187500000003" y="1514.092" width="110.86299999999999" height="36.900000000000006" rx="0" ry="0" fill="#f3e8ff" stroke="#9333ea" stroke-width="0.75" />
+  <text x="1173.8502500000002" y="1532.5420000000001" text-anchor="middle" font-size="13" font-weight="500" fill="#581c87" dy="4.55">skip system</text>
+</g>
+<g class="node" data-id="EmitOverride" data-label="emit override.prefix
++ system_msg
++ override.suffix" data-shape="rectangle">
+  <rect x="1152.468" y="1389.392" width="155.32299999999998" height="70.7" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
+  <text x="1230.1295" y="1424.742" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12"><tspan x="1230.1295" dy="-12.350000000000001">emit override.prefix</tspan><tspan x="1230.1295" dy="16.900000000000002">+ system_msg</tspan><tspan x="1230.1295" dy="16.900000000000002">+ override.suffix</tspan></text>
+</g>
+<g class="node" data-id="EmitPlain" data-label="emit system_prefix
++ system_msg
++ system_suffix" data-shape="rectangle">
+  <rect x="1385.3210000000001" y="1389.392" width="149.395" height="70.7" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
+  <text x="1460.0185000000001" y="1424.742" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12"><tspan x="1460.0185000000001" dy="-12.350000000000001">emit system_prefix</tspan><tspan x="1460.0185000000001" dy="16.900000000000002">+ system_msg</tspan><tspan x="1460.0185000000001" dy="16.900000000000002">+ system_suffix</tspan></text>
+</g>
+<g class="node" data-id="EmitUser" data-label="emit user_prefix
++ content
++ user_suffix" data-shape="rectangle">
+  <rect x="967.881" y="1825.484" width="136.05700000000002" height="70.7" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="1035.9095" y="1860.8339999999998" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="1035.9095" dy="-12.350000000000001">emit user_prefix</tspan><tspan x="1035.9095" dy="16.900000000000002">+ content</tspan><tspan x="1035.9095" dy="16.900000000000002">+ user_suffix</tspan></text>
+</g>
+<g class="node" data-id="EmitAsst" data-label="emit assistant_prefix
++ content
++ assistant_suffix" data-shape="rectangle">
+  <rect x="429.02700000000004" y="1825.484" width="161.251" height="70.7" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="509.65250000000003" y="1860.8339999999998" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="509.65250000000003" dy="-12.350000000000001">emit assistant_prefix</tspan><tspan x="509.65250000000003" dy="16.900000000000002">+ content</tspan><tspan x="509.65250000000003" dy="16.900000000000002">+ assistant_suffix</tspan></text>
+</g>
+<g class="node" data-id="EmitToolChatML" data-label="emit &lt;|im_start|&gt;tool
++ tool_call_id
++ content
++ &lt;|im_end|&gt;" data-shape="rectangle">
+  <rect x="786.04" y="1825.484" width="153.841" height="87.60000000000001" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="862.9604999999999" y="1869.2839999999999" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="862.9604999999999" dy="-20.8">emit &lt;|im_start|&gt;tool</tspan><tspan x="862.9604999999999" dy="16.900000000000002">+ tool_call_id</tspan><tspan x="862.9604999999999" dy="16.900000000000002">+ content</tspan><tspan x="862.9604999999999" dy="16.900000000000002">+ &lt;|im_end|&gt;</tspan></text>
+</g>
+<g class="node" data-id="EmitToolFallback" data-label="&quot;emit user_prefix
++ '[Tool Result" data-shape="rectangle">
+  <rect x="618.278" y="1825.484" width="139.762" height="53.800000000000004" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="688.159" y="1852.384" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="688.159" dy="-3.9000000000000012">&quot;emit user_prefix</tspan><tspan x="688.159" dy="16.900000000000002">+ &#39;[Tool Result</tspan></text>
+</g>
+<g class="node" data-id="EmitAsstPrefix" data-label="emit assistant_prefix
++ generation_prefix" data-shape="rectangle">
+  <rect x="40" y="40" width="161.251" height="53.800000000000004" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
+  <text x="120.6255" y="66.9" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="120.6255" dy="-3.9000000000000012">emit assistant_prefix</tspan><tspan x="120.6255" dy="16.900000000000002">+ generation_prefix</tspan></text>
+</g>
+<g class="node" data-id="HasDefault" data-label="default_system
+set?" data-shape="diamond">
+  <polygon points="1309.9135,271 1386.6075,347.694 1309.9135,424.38800000000003 1233.2195000000002,347.694" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="1309.9135" y="347.694" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="1309.9135" dy="-3.9000000000000012">default_system</tspan><tspan x="1309.9135" dy="16.900000000000002">set?</tspan></text>
+</g>
+<g class="node" data-id="HasUserSys" data-label="system_msg
+provided?" data-shape="diamond">
+  <polygon points="1219.0145000000002,540.688 1288.2985000000003,609.972 1219.0145000000002,679.256 1149.7305000000001,609.972" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="1219.0145000000002" y="609.972" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="1219.0145000000002" dy="-3.9000000000000012">system_msg</tspan><tspan x="1219.0145000000002" dy="16.900000000000002">provided?</tspan></text>
+</g>
+<g class="node" data-id="HasOverride" data-label="system_role_override
+set?" data-shape="diamond">
+  <polygon points="1273.9765000000002,795.556 1372.9005000000002,894.48 1273.9765000000002,993.404 1175.0525000000002,894.48" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="1273.9765000000002" y="894.48" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="1273.9765000000002" dy="-3.9000000000000012">system_role_override</tspan><tspan x="1273.9765000000002" dy="16.900000000000002">set?</tspan></text>
+</g>
+<g class="node" data-id="HasNoDefault" data-label="default_system
+not set?" data-shape="diamond">
+  <polygon points="1317.8235,1109.704 1394.5175,1186.398 1317.8235,1263.0919999999999 1241.1295,1186.398" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="1317.8235" y="1186.398" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="1317.8235" dy="-3.9000000000000012">default_system</tspan><tspan x="1317.8235" dy="16.900000000000002">not set?</tspan></text>
+</g>
+<g class="node" data-id="RoleCheck" data-label="msg.role?" data-shape="diamond">
+  <polygon points="709.5246666666667,1347.092 771.3986666666667,1408.9660000000001 709.5246666666667,1470.8400000000001 647.6506666666667,1408.9660000000001" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="709.5246666666667" y="1408.9660000000001" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">msg.role?</text>
+</g>
+<g class="node" data-id="IsChatML" data-label="is_chatml?" data-shape="diamond">
+  <polygon points="709.5246666666667,1587.14 773.6216666666667,1651.237 709.5246666666667,1715.334 645.4276666666667,1651.237" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="709.5246666666667" y="1651.237" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">is_chatml?</text>
+</g>
+</svg>

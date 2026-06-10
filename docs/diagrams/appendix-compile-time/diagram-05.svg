@@ -1,0 +1,95 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1026.241 576.415" width="1026.241" height="576.415" style="--bg:#FFFFFF;--fg:#27272A;background:#ffffff">
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;display=swap');
+  text { font-family: 'Inter', system-ui, sans-serif; }
+  svg {
+    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
+    --_text:          #1a1a2e;
+    --_text-sec:      var(--muted, color-mix(in srgb, #1a1a2e 60%, #ffffff));
+    --_text-muted:    var(--muted, color-mix(in srgb, #1a1a2e 40%, #ffffff));
+    --_text-faint:    color-mix(in srgb, #1a1a2e 25%, #ffffff);
+    --_line:          var(--line, color-mix(in srgb, #1a1a2e 50%, #ffffff));
+    --_arrow:         var(--accent, color-mix(in srgb, #1a1a2e 85%, #ffffff));
+    --_node-fill:     var(--surface, color-mix(in srgb, #1a1a2e 3%, #ffffff));
+    --_node-stroke:   var(--border, color-mix(in srgb, #1a1a2e 20%, #ffffff));
+    --_group-fill:    #ffffff;
+    --_group-hdr:     color-mix(in srgb, #1a1a2e 5%, #ffffff);
+    --_inner-stroke:  color-mix(in srgb, #1a1a2e 12%, #ffffff);
+    --_key-badge:     color-mix(in srgb, #1a1a2e 10%, #ffffff);
+  }
+</style>
+<defs>
+  <marker id="arrowhead" markerWidth="8" markerHeight="5" refX="7" refY="2.5" orient="auto">
+    <polygon points="0 0, 8 2.5, 0 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+  <marker id="arrowhead-start" markerWidth="8" markerHeight="5" refX="1" refY="2.5" orient="auto-start-reverse">
+    <polygon points="8 0, 0 2.5, 8 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+</defs>
+<g class="subgraph" data-id="CompileTime" data-label="Compiler — resolved at compile time (T is known)">
+  <rect x="181.74749999999995" y="141.8" width="146.115" height="174.115" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="181.74749999999995" y="141.8" width="146.115" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="193.74749999999995" y="155.8" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">Compiler — resolved at compile time (T is known)</text>
+</g>
+<g class="subgraph" data-id="Binary" data-label="Binary — only called variant present">
+  <rect x="40" y="40" width="0" height="0" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="40" y="40" width="0" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="52" y="54" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">Binary — only called variant present</text>
+</g>
+<polyline class="edge" data-from="Q4" data-to="BQ4" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="533.0414999999999,314.146 533.0414999999999,362.146" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Q8" data-to="BQ8" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="337.86249999999995,432.846 337.86249999999995,482.615" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="BF" data-to="BBF" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="902.6514999999999,314.146 902.6514999999998,362.146" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="SW" data-to="Q4" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="300.45099999999996,254.269 327.86249999999995,254.269 533.0414999999999,254.269 533.0414999999999,243.44600000000003" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="SW" data-to="Q8" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="277.628,277.092 327.86249999999995,277.092 337.86249999999995,277.092 337.86249999999995,362.146" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="SW" data-to="BF" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="277.62799999999993,208.62300000000002 327.86249999999995,208.62300000000002 902.6514999999999,208.62300000000002 902.6514999999999,243.44600000000003" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="SW" data-to="ERR" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="300.45099999999996,231.44600000000003 327.86249999999995,231.44600000000003 717.8464999999999,231.44600000000003 717.8464999999999,243.44600000000003" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Generic" data-to="SW" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="171.74749999999995,93.80000000000001 171.74749999999995,242.85750000000002 181.74749999999995,242.85750000000002 197.74749999999995,242.85750000000002" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<g class="node" data-id="Generic" data-label="dequantize(comptime T: type, ...)
+generic call site" data-shape="rectangle">
+  <rect x="60" y="40" width="223.49499999999992" height="53.800000000000004" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
+  <text x="171.74749999999995" y="66.9" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f"><tspan x="171.74749999999995" dy="-3.9000000000000012">dequantize(comptime T: type, ...)</tspan><tspan x="171.74749999999995" dy="16.900000000000002">generic call site</tspan></text>
+</g>
+<g class="node" data-id="Q4" data-label="T == Q4_0
+→ dequantizeQ4_0()
+monomorphized copy" data-shape="rectangle">
+  <rect x="449.45199999999994" y="243.44600000000003" width="167.17899999999997" height="70.7" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="533.0414999999999" y="278.79600000000005" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="533.0414999999999" dy="-12.350000000000001">T == Q4_0</tspan><tspan x="533.0414999999999" dy="16.900000000000002">→ dequantizeQ4_0()</tspan><tspan x="533.0414999999999" dy="16.900000000000002">monomorphized copy</tspan></text>
+</g>
+<g class="node" data-id="Q8" data-label="T == Q8_0
+→ dequantizeQ8_0()
+monomorphized copy" data-shape="rectangle">
+  <rect x="254.27299999999994" y="362.146" width="167.17899999999997" height="70.7" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="337.86249999999995" y="397.49600000000004" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="337.86249999999995" dy="-12.350000000000001">T == Q8_0</tspan><tspan x="337.86249999999995" dy="16.900000000000002">→ dequantizeQ8_0()</tspan><tspan x="337.86249999999995" dy="16.900000000000002">monomorphized copy</tspan></text>
+</g>
+<g class="node" data-id="BF" data-label="T == BF16
+→ dequantizeBF16()
+monomorphized copy" data-shape="rectangle">
+  <rect x="819.0619999999999" y="243.44600000000003" width="167.17899999999997" height="70.7" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="902.6514999999999" y="278.79600000000005" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="902.6514999999999" dy="-12.350000000000001">T == BF16</tspan><tspan x="902.6514999999999" dy="16.900000000000002">→ dequantizeBF16()</tspan><tspan x="902.6514999999999" dy="16.900000000000002">monomorphized copy</tspan></text>
+</g>
+<g class="node" data-id="ERR" data-label="T == other
+→ @compileError()
+halts compilation" data-shape="rectangle">
+  <rect x="644.6309999999999" y="243.44600000000003" width="146.43099999999998" height="70.7" rx="0" ry="0" fill="#fee2e2" stroke="#ef4444" stroke-width="0.75" />
+  <text x="717.8464999999999" y="278.79600000000005" text-anchor="middle" font-size="13" font-weight="500" fill="#7f1d1d"><tspan x="717.8464999999999" dy="-12.350000000000001">T == other</tspan><tspan x="717.8464999999999" dy="16.900000000000002">→ @compileError()</tspan><tspan x="717.8464999999999" dy="16.900000000000002">halts compilation</tspan></text>
+</g>
+<g class="node" data-id="BQ4" data-label="dequantizeQ4_0
+(direct call, inlined)" data-shape="rectangle">
+  <rect x="457.97349999999994" y="362.146" width="150.13600000000002" height="53.800000000000004" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
+  <text x="533.0414999999999" y="389.046" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="533.0414999999999" dy="-3.9000000000000012">dequantizeQ4_0</tspan><tspan x="533.0414999999999" dy="16.900000000000002">(direct call, inlined)</tspan></text>
+</g>
+<g class="node" data-id="BQ8" data-label="dequantizeQ8_0
+(direct call, inlined)" data-shape="rectangle">
+  <rect x="262.7944999999999" y="482.615" width="150.13600000000002" height="53.800000000000004" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
+  <text x="337.86249999999995" y="509.515" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="337.86249999999995" dy="-3.9000000000000012">dequantizeQ8_0</tspan><tspan x="337.86249999999995" dy="16.900000000000002">(direct call, inlined)</tspan></text>
+</g>
+<g class="node" data-id="BBF" data-label="dequantizeBF16
+(direct call, inlined)" data-shape="rectangle">
+  <rect x="827.5834999999998" y="362.146" width="150.13600000000002" height="53.800000000000004" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
+  <text x="902.6514999999998" y="389.046" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="902.6514999999998" dy="-3.9000000000000012">dequantizeBF16</tspan><tspan x="902.6514999999998" dy="16.900000000000002">(direct call, inlined)</tspan></text>
+</g>
+<g class="node" data-id="SW" data-label="switch T" data-shape="diamond">
+  <polygon points="254.80499999999995,185.8 311.86249999999995,242.85750000000002 254.80499999999995,299.915 197.74749999999995,242.85750000000002" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="254.80499999999995" y="242.85750000000002" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">switch T</text>
+</g>
+</svg>

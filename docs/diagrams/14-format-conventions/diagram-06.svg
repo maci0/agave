@@ -1,0 +1,102 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 719.2939166666665 559.671" width="719.2939166666665" height="559.671" style="--bg:#FFFFFF;--fg:#27272A;background:#ffffff">
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;display=swap');
+  text { font-family: 'Inter', system-ui, sans-serif; }
+  svg {
+    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
+    --_text:          #1a1a2e;
+    --_text-sec:      var(--muted, color-mix(in srgb, #1a1a2e 60%, #ffffff));
+    --_text-muted:    var(--muted, color-mix(in srgb, #1a1a2e 40%, #ffffff));
+    --_text-faint:    color-mix(in srgb, #1a1a2e 25%, #ffffff);
+    --_line:          var(--line, color-mix(in srgb, #1a1a2e 50%, #ffffff));
+    --_arrow:         var(--accent, color-mix(in srgb, #1a1a2e 85%, #ffffff));
+    --_node-fill:     var(--surface, color-mix(in srgb, #1a1a2e 3%, #ffffff));
+    --_node-stroke:   var(--border, color-mix(in srgb, #1a1a2e 20%, #ffffff));
+    --_group-fill:    #ffffff;
+    --_group-hdr:     color-mix(in srgb, #1a1a2e 5%, #ffffff);
+    --_inner-stroke:  color-mix(in srgb, #1a1a2e 12%, #ffffff);
+    --_key-badge:     color-mix(in srgb, #1a1a2e 10%, #ffffff);
+  }
+</style>
+<defs>
+  <marker id="arrowhead" markerWidth="8" markerHeight="5" refX="7" refY="2.5" orient="auto">
+    <polygon points="0 0, 8 2.5, 0 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+  <marker id="arrowhead-start" markerWidth="8" markerHeight="5" refX="1" refY="2.5" orient="auto-start-reverse">
+    <polygon points="8 0, 0 2.5, 8 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+</defs>
+<g class="subgraph" data-id="Bad" data-label="Bad pattern — scratch buffer reuse">
+  <rect x="646.5691666666667" y="384.071" width="0" height="0" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="646.5691666666667" y="384.071" width="0" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="658.5691666666667" y="398.071" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">Bad pattern — scratch buffer reuse</text>
+</g>
+<g class="subgraph" data-id="Good" data-label="Fixed pattern — per-tensor cache">
+  <rect x="415.60966666666667" y="147.80000000000004" width="157.971" height="185.971" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="415.60966666666667" y="147.80000000000004" width="157.971" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="427.60966666666667" y="161.80000000000004" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">Fixed pattern — per-tensor cache</text>
+</g>
+<polyline class="edge" data-from="B1" data-to="B2" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="151.74749999999997,76.9 151.7475,124.9" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="B2" data-to="B3" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="151.7475,178.70000000000002 151.7475,226.70000000000002" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="B3" data-to="B4" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="151.7475,280.5 151.7475,328.5" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="B4" data-to="B5" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="151.7475,399.20000000000005 151.74749999999997,439.63550000000004" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="G1" data-to="G2" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="494.5951666666666,93.80000000000004 494.59516666666667,191.80000000000004" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="G2" data-to="G3" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="yes" points="473.6,296.7758333333334 473.6,351.7710000000001 390.89241666666663,351.7710000000001 390.89241666666663,439.63550000000004" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="G2" data-to="G4" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="no" points="515.5903333333333,296.7758333333334 515.5903333333333,351.7710000000001 598.2979166666667,351.7710000000001 598.2979166666667,439.63550000000004" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<g class="edge-label" data-from="G2" data-to="G3" data-label="yes">
+  <rect x="372.89241666666663" y="358.7710000000001" width="35.47" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="390.62741666666665" y="373.92100000000005" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">yes</text>
+</g>
+<g class="edge-label" data-from="G2" data-to="G4" data-label="no">
+  <rect x="583.2979166666667" y="358.7710000000001" width="29.53" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="598.0629166666666" y="373.92100000000005" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">no</text>
+</g>
+<g class="node" data-id="B1" data-label="dequant(norm_layer1, scratch)" data-shape="rectangle">
+  <rect x="42.22299999999998" y="40" width="219.04899999999998" height="36.900000000000006" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
+  <text x="151.74749999999997" y="58.45" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f" dy="4.55">dequant(norm_layer1, scratch)</text>
+</g>
+<g class="node" data-id="B2" data-label="getBufRef(scratch)
+caches ptr → MTLBuffer A" data-shape="rectangle">
+  <rect x="55.56100000000002" y="124.9" width="192.37299999999996" height="53.800000000000004" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
+  <text x="151.7475" y="151.8" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12"><tspan x="151.7475" dy="-3.9000000000000012">getBufRef(scratch)</tspan><tspan x="151.7475" dy="16.900000000000002">caches ptr → MTLBuffer A</tspan></text>
+</g>
+<g class="node" data-id="B3" data-label="dequant(norm_layer2, scratch)
+overwrites scratch memory" data-shape="rectangle">
+  <rect x="40" y="226.70000000000002" width="223.49499999999998" height="53.800000000000004" rx="0" ry="0" fill="#fee2e2" stroke="#ef4444" stroke-width="0.75" />
+  <text x="151.7475" y="253.60000000000002" text-anchor="middle" font-size="13" font-weight="500" fill="#7f1d1d"><tspan x="151.7475" dy="-3.9000000000000012">dequant(norm_layer2, scratch)</tspan><tspan x="151.7475" dy="16.900000000000002">overwrites scratch memory</tspan></text>
+</g>
+<g class="node" data-id="B4" data-label="getBufRef(scratch)
+returns CACHED MTLBuffer A
+(stale — still points to layer1 data)" data-shape="rectangle">
+  <rect x="40.37049999999999" y="328.5" width="222.754" height="70.7" rx="0" ry="0" fill="#fee2e2" stroke="#ef4444" stroke-width="0.75" />
+  <text x="151.7475" y="363.85" text-anchor="middle" font-size="13" font-weight="500" fill="#7f1d1d"><tspan x="151.7475" dy="-12.350000000000001">getBufRef(scratch)</tspan><tspan x="151.7475" dy="16.900000000000002">returns CACHED MTLBuffer A</tspan><tspan x="151.7475" dy="16.900000000000002">(stale — still points to layer1 data)</tspan></text>
+</g>
+<g class="node" data-id="B5" data-label="GPU reads layer1 norm weights
+for layer2 forward pass
+SILENT CORRUPTION" data-shape="rectangle">
+  <rect x="41.11149999999999" y="439.63550000000004" width="221.27199999999996" height="70.7" rx="0" ry="0" fill="#fee2e2" stroke="#ef4444" stroke-width="0.75" />
+  <text x="151.74749999999997" y="474.98550000000006" text-anchor="middle" font-size="13" font-weight="500" fill="#7f1d1d"><tspan x="151.74749999999997" dy="-12.350000000000001">GPU reads layer1 norm weights</tspan><tspan x="151.74749999999997" dy="16.900000000000002">for layer2 forward pass</tspan><tspan x="151.74749999999997" dy="16.900000000000002">SILENT CORRUPTION</tspan></text>
+</g>
+<g class="node" data-id="G1" data-label="normAsF32(tensor)
+check norm_cache by data_ptr key" data-shape="rectangle">
+  <rect x="370.6211666666666" y="40.000000000000036" width="247.94799999999998" height="53.800000000000004" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
+  <text x="494.5951666666666" y="66.90000000000003" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f"><tspan x="494.5951666666666" dy="-3.9000000000000012">normAsF32(tensor)</tspan><tspan x="494.5951666666666" dy="16.900000000000002">check norm_cache by data_ptr key</tspan></text>
+</g>
+<g class="node" data-id="G3" data-label="return cached f32 buf
+permanent allocation
+correct MTLBuffer always" data-shape="rectangle">
+  <rect x="292.4829166666667" y="439.63550000000004" width="196.81899999999996" height="70.7" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
+  <text x="390.8924166666667" y="474.98550000000006" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="390.8924166666667" dy="-12.350000000000001">return cached f32 buf</tspan><tspan x="390.8924166666667" dy="16.900000000000002">permanent allocation</tspan><tspan x="390.8924166666667" dy="16.900000000000002">correct MTLBuffer always</tspan></text>
+</g>
+<g class="node" data-id="G4" data-label="allocate new f32 buf
+dequant once
+store in norm_cache
+return stable ptr" data-shape="rectangle">
+  <rect x="517.3019166666666" y="439.63550000000004" width="161.992" height="87.60000000000001" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
+  <text x="598.2979166666665" y="483.43550000000005" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="598.2979166666665" dy="-20.8">allocate new f32 buf</tspan><tspan x="598.2979166666665" dy="16.900000000000002">dequant once</tspan><tspan x="598.2979166666665" dy="16.900000000000002">store in norm_cache</tspan><tspan x="598.2979166666665" dy="16.900000000000002">return stable ptr</tspan></text>
+</g>
+<g class="node" data-id="G2" data-label="cache hit?" data-shape="diamond">
+  <polygon points="494.59516666666667,191.80000000000004 557.5806666666667,254.78550000000004 494.59516666666667,317.7710000000001 431.60966666666667,254.78550000000004" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="494.59516666666667" y="254.78550000000004" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">cache hit?</text>
+</g>
+</svg>

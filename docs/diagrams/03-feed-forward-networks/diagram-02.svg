@@ -1,0 +1,93 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 608.624 582" width="608.624" height="582" style="--bg:#FFFFFF;--fg:#27272A;background:#ffffff">
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;display=swap');
+  text { font-family: 'Inter', system-ui, sans-serif; }
+  svg {
+    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
+    --_text:          #1a1a2e;
+    --_text-sec:      var(--muted, color-mix(in srgb, #1a1a2e 60%, #ffffff));
+    --_text-muted:    var(--muted, color-mix(in srgb, #1a1a2e 40%, #ffffff));
+    --_text-faint:    color-mix(in srgb, #1a1a2e 25%, #ffffff);
+    --_line:          var(--line, color-mix(in srgb, #1a1a2e 50%, #ffffff));
+    --_arrow:         var(--accent, color-mix(in srgb, #1a1a2e 85%, #ffffff));
+    --_node-fill:     var(--surface, color-mix(in srgb, #1a1a2e 3%, #ffffff));
+    --_node-stroke:   var(--border, color-mix(in srgb, #1a1a2e 20%, #ffffff));
+    --_group-fill:    #ffffff;
+    --_group-hdr:     color-mix(in srgb, #1a1a2e 5%, #ffffff);
+    --_inner-stroke:  color-mix(in srgb, #1a1a2e 12%, #ffffff);
+    --_key-badge:     color-mix(in srgb, #1a1a2e 10%, #ffffff);
+  }
+</style>
+<defs>
+  <marker id="arrowhead" markerWidth="8" markerHeight="5" refX="7" refY="2.5" orient="auto">
+    <polygon points="0 0, 8 2.5, 0 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+  <marker id="arrowhead-start" markerWidth="8" markerHeight="5" refX="1" refY="2.5" orient="auto-start-reverse">
+    <polygon points="8 0, 0 2.5, 8 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+</defs>
+<polyline class="edge" data-from="Input" data-to="SiLU" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="154.56799999999998,291 172.56799999999998,291 172.56799999999998,92.25 190.568,92.25" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Input" data-to="GELU" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="154.56799999999998,291 172.56799999999998,291 172.56799999999998,224.75 190.568,224.75" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Input" data-to="ReLU2" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="154.56799999999998,291 172.56799999999998,291 172.56799999999998,357.25 190.568,357.25" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Input" data-to="Sigmoid" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="154.56799999999998,291 172.56799999999998,291 172.56799999999998,489.75 190.568,489.75" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="SiLU" data-to="FFN" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="376.27199999999993,92.25 405.23249999999996,92.25000000000001" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="GELU" data-to="FFN2" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="344.409,224.75 405.23249999999996,224.75" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="ReLU2" data-to="FFN3" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="338.481,357.25 405.23249999999996,357.25" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Sigmoid" data-to="Router" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="362.193,489.75 405.23249999999996,489.75" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<g class="node" data-id="Input" data-label="Input value x" data-shape="rectangle">
+  <rect x="40" y="272.55" width="114.568" height="36.900000000000006" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
+  <text x="97.28399999999999" y="291" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f" dy="4.55">Input value x</text>
+</g>
+<g class="node" data-id="SiLU" data-label="SiLU / Swish
+x · sigmoid(x)
+
+Smooth, passes positive,
+dampens negative" data-shape="rectangle">
+  <rect x="190.568" y="40" width="185.70399999999995" height="104.50000000000001" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
+  <text x="283.41999999999996" y="92.25" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12"><tspan x="283.41999999999996" dy="-29.250000000000004">SiLU / Swish</tspan><tspan x="283.41999999999996" dy="16.900000000000002">x · sigmoid(x)</tspan><tspan x="283.41999999999996" dy="16.900000000000002"></tspan><tspan x="283.41999999999996" dy="16.900000000000002">Smooth, passes positive,</tspan><tspan x="283.41999999999996" dy="16.900000000000002">dampens negative</tspan></text>
+</g>
+<g class="node" data-id="GELU" data-label="GELU
+≈ 0.5x(1 + tanh(...))
+
+Similar to SiLU,
+Gaussian-weighted" data-shape="rectangle">
+  <rect x="190.568" y="172.5" width="153.841" height="104.50000000000001" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
+  <text x="267.48850000000004" y="224.75" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12"><tspan x="267.48850000000004" dy="-29.250000000000004">GELU</tspan><tspan x="267.48850000000004" dy="16.900000000000002">≈ 0.5x(1 + tanh(...))</tspan><tspan x="267.48850000000004" dy="16.900000000000002"></tspan><tspan x="267.48850000000004" dy="16.900000000000002">Similar to SiLU,</tspan><tspan x="267.48850000000004" dy="16.900000000000002">Gaussian-weighted</tspan></text>
+</g>
+<g class="node" data-id="ReLU2" data-label="ReLU²
+max(0, x)²
+
+Hard zero cutoff,
+squared positives" data-shape="rectangle">
+  <rect x="190.568" y="305" width="147.913" height="104.50000000000001" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
+  <text x="264.5245" y="357.25" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12"><tspan x="264.5245" dy="-29.250000000000004">ReLU²</tspan><tspan x="264.5245" dy="16.900000000000002">max(0, x)²</tspan><tspan x="264.5245" dy="16.900000000000002"></tspan><tspan x="264.5245" dy="16.900000000000002">Hard zero cutoff,</tspan><tspan x="264.5245" dy="16.900000000000002">squared positives</tspan></text>
+</g>
+<g class="node" data-id="Sigmoid" data-label="Sigmoid
+1 / (1 + e^-x)
+
+Output in (0, 1)
+Used for gates/routing" data-shape="rectangle">
+  <rect x="190.568" y="437.5" width="171.62499999999997" height="104.50000000000001" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
+  <text x="276.3805" y="489.75" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12"><tspan x="276.3805" dy="-29.250000000000004">Sigmoid</tspan><tspan x="276.3805" dy="16.900000000000002">1 / (1 + e^-x)</tspan><tspan x="276.3805" dy="16.900000000000002"></tspan><tspan x="276.3805" dy="16.900000000000002">Output in (0, 1)</tspan><tspan x="276.3805" dy="16.900000000000002">Used for gates/routing</tspan></text>
+</g>
+<g class="node" data-id="FFN" data-label="FFN gate
+(most models)" data-shape="rectangle">
+  <rect x="405.23249999999996" y="65.35000000000002" width="119.75500000000001" height="53.800000000000004" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
+  <text x="465.10999999999996" y="92.25000000000003" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="465.10999999999996" dy="-3.9000000000000012">FFN gate</tspan><tspan x="465.10999999999996" dy="16.900000000000002">(most models)</tspan></text>
+</g>
+<g class="node" data-id="FFN2" data-label="FFN gate
+(Gemma 3)" data-shape="rectangle">
+  <rect x="405.23249999999996" y="197.85" width="100.489" height="53.800000000000004" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
+  <text x="455.477" y="224.75" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="455.477" dy="-3.9000000000000012">FFN gate</tspan><tspan x="455.477" dy="16.900000000000002">(Gemma 3)</tspan></text>
+</g>
+<g class="node" data-id="FFN3" data-label="FFN gate
+(Nemotron-Nano MoE)" data-shape="rectangle">
+  <rect x="405.23249999999996" y="330.35" width="170.14299999999997" height="53.800000000000004" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
+  <text x="490.304" y="357.25" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="490.304" dy="-3.9000000000000012">FFN gate</tspan><tspan x="490.304" dy="16.900000000000002">(Nemotron-Nano MoE)</tspan></text>
+</g>
+<g class="node" data-id="Router" data-label="MoE router
+(GLM-4)" data-shape="rectangle">
+  <rect x="405.23249999999996" y="462.85" width="108.64" height="53.800000000000004" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
+  <text x="459.55249999999995" y="489.75" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="459.55249999999995" dy="-3.9000000000000012">MoE router</tspan><tspan x="459.55249999999995" dy="16.900000000000002">(GLM-4)</tspan></text>
+</g>
+</svg>

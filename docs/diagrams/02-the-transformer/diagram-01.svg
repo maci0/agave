@@ -1,0 +1,95 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 365.25899999999996 761.9" width="365.25899999999996" height="761.9" style="--bg:#FFFFFF;--fg:#27272A;background:#ffffff">
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;display=swap');
+  text { font-family: 'Inter', system-ui, sans-serif; }
+  svg {
+    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
+    --_text:          #1a1a2e;
+    --_text-sec:      var(--muted, color-mix(in srgb, #1a1a2e 60%, #ffffff));
+    --_text-muted:    var(--muted, color-mix(in srgb, #1a1a2e 40%, #ffffff));
+    --_text-faint:    color-mix(in srgb, #1a1a2e 25%, #ffffff);
+    --_line:          var(--line, color-mix(in srgb, #1a1a2e 50%, #ffffff));
+    --_arrow:         var(--accent, color-mix(in srgb, #1a1a2e 85%, #ffffff));
+    --_node-fill:     var(--surface, color-mix(in srgb, #1a1a2e 3%, #ffffff));
+    --_node-stroke:   var(--border, color-mix(in srgb, #1a1a2e 20%, #ffffff));
+    --_group-fill:    #ffffff;
+    --_group-hdr:     color-mix(in srgb, #1a1a2e 5%, #ffffff);
+    --_inner-stroke:  color-mix(in srgb, #1a1a2e 12%, #ffffff);
+    --_key-badge:     color-mix(in srgb, #1a1a2e 10%, #ffffff);
+  }
+</style>
+<defs>
+  <marker id="arrowhead" markerWidth="8" markerHeight="5" refX="7" refY="2.5" orient="auto">
+    <polygon points="0 0, 8 2.5, 0 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+  <marker id="arrowhead-start" markerWidth="8" markerHeight="5" refX="1" refY="2.5" orient="auto-start-reverse">
+    <polygon points="8 0, 0 2.5, 8 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+</defs>
+<g class="subgraph" data-id="AttnBlock" data-label="Attention sublayer (with residual)">
+  <rect x="40" y="40" width="0" height="0" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="40" y="40" width="0" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="52" y="54" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">Attention sublayer (with residual)</text>
+</g>
+<g class="subgraph" data-id="FFNBlock" data-label="FFN sublayer (with residual)">
+  <rect x="60" y="40" width="0" height="0" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="60" y="40" width="0" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="72" y="54" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">FFN sublayer (with residual)</text>
+</g>
+<polyline class="edge" data-from="AN" data-to="Attn" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="144.3235,178.70000000000002 144.3235,226.70000000000002" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Attn" data-to="AttnAdd" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="144.3235,263.6 144.3235,299.6 194.81625,299.6 194.81625,311.6" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="FN" data-to="FFN" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="144.3235,433.4 144.3235,481.40000000000003" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="FFN" data-to="FFNAdd" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="144.3235,535.2 144.3235,571.2 194.81625,571.2 194.81625,583.2" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="In" data-to="AN" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="180.53458333333333,93.80000000000001 180.53458333333333,129.8 144.3235,129.8 144.3235,141.8" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="In" data-to="AttnAdd" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="skip connection
+(unchanged)" points="229.09791666666666,93.80000000000001 229.09791666666666,217.00000000000003 265.30899999999997,217.00000000000003 265.30899999999997,299.6 214.81625,299.6 214.81625,311.6" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="AttnAdd" data-to="FN" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="194.81625,348.5 194.81625,384.5 144.3235,384.5 144.3235,396.5" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="AttnAdd" data-to="FFNAdd" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="skip connection
+(unchanged)" points="214.81625,348.5 214.81625,488.6 265.30899999999997,488.6 265.30899999999997,571.2 214.81625,571.2 214.81625,583.2" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="FFNAdd" data-to="Out" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="204.81625,620.1 204.81625,668.1" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<g class="edge-label" data-from="In" data-to="AttnAdd" data-label="skip connection
+(unchanged)">
+  <rect x="219.30899999999997" y="224.00000000000003" width="91.9" height="44.6" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="265.25899999999996" y="246.30000000000004" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)"><tspan x="265.25899999999996" dy="-3.3000000000000007">skip connection</tspan><tspan x="265.25899999999996" dy="14.3">(unchanged)</tspan></text>
+</g>
+<g class="edge-label" data-from="AttnAdd" data-to="FFNAdd" data-label="skip connection
+(unchanged)">
+  <rect x="219.30899999999997" y="495.59999999999997" width="91.9" height="44.6" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="265.25899999999996" y="517.9" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)"><tspan x="265.25899999999996" dy="-3.3000000000000007">skip connection</tspan><tspan x="265.25899999999996" dy="14.3">(unchanged)</tspan></text>
+</g>
+<g class="node" data-id="In" data-label="Residual stream x
+(hidden state in)" data-shape="rectangle">
+  <rect x="131.97125" y="40" width="145.69" height="53.800000000000004" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
+  <text x="204.81625" y="66.9" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f"><tspan x="204.81625" dy="-3.9000000000000012">Residual stream x</tspan><tspan x="204.81625" dy="16.900000000000002">(hidden state in)</tspan></text>
+</g>
+<g class="node" data-id="AN" data-label="RMSNorm" data-shape="rectangle">
+  <rect x="93.338" y="141.8" width="101.971" height="36.900000000000006" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
+  <text x="144.3235" y="160.25" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12" dy="4.55">RMSNorm</text>
+</g>
+<g class="node" data-id="Attn" data-label="Attention" data-shape="rectangle">
+  <rect x="98.1545" y="226.70000000000002" width="92.338" height="36.900000000000006" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="144.3235" y="245.15000000000003" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d" dy="4.55">Attention</text>
+</g>
+<g class="node" data-id="AttnAdd" data-label="+ x" data-shape="rectangle">
+  <rect x="174.81625" y="311.6" width="60" height="36.900000000000006" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
+  <text x="204.81625" y="330.05" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12" dy="4.55">+ x</text>
+</g>
+<g class="node" data-id="FN" data-label="RMSNorm" data-shape="rectangle">
+  <rect x="93.338" y="396.5" width="101.971" height="36.900000000000006" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
+  <text x="144.3235" y="414.95" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12" dy="4.55">RMSNorm</text>
+</g>
+<g class="node" data-id="FFN" data-label="Feed-Forward
+Network" data-shape="rectangle">
+  <rect x="80" y="481.40000000000003" width="128.647" height="53.800000000000004" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="144.3235" y="508.3" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="144.3235" dy="-3.9000000000000012">Feed-Forward</tspan><tspan x="144.3235" dy="16.900000000000002">Network</tspan></text>
+</g>
+<g class="node" data-id="FFNAdd" data-label="+ x" data-shape="rectangle">
+  <rect x="174.81625" y="583.2" width="60" height="36.900000000000006" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
+  <text x="204.81625" y="601.6500000000001" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12" dy="4.55">+ x</text>
+</g>
+<g class="node" data-id="Out" data-label="Residual stream x'
+(hidden state out)" data-shape="rectangle">
+  <rect x="130.48925" y="668.1" width="148.654" height="53.800000000000004" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
+  <text x="204.81625" y="695" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="204.81625" dy="-3.9000000000000012">Residual stream x&#39;</tspan><tspan x="204.81625" dy="16.900000000000002">(hidden state out)</tspan></text>
+</g>
+</svg>

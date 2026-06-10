@@ -1,0 +1,139 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 704.6669999999999 898.3999999999999" width="704.6669999999999" height="898.3999999999999" style="--bg:#FFFFFF;--fg:#27272A;background:#ffffff">
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;display=swap');
+  text { font-family: 'Inter', system-ui, sans-serif; }
+  svg {
+    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
+    --_text:          #1a1a2e;
+    --_text-sec:      var(--muted, color-mix(in srgb, #1a1a2e 60%, #ffffff));
+    --_text-muted:    var(--muted, color-mix(in srgb, #1a1a2e 40%, #ffffff));
+    --_text-faint:    color-mix(in srgb, #1a1a2e 25%, #ffffff);
+    --_line:          var(--line, color-mix(in srgb, #1a1a2e 50%, #ffffff));
+    --_arrow:         var(--accent, color-mix(in srgb, #1a1a2e 85%, #ffffff));
+    --_node-fill:     var(--surface, color-mix(in srgb, #1a1a2e 3%, #ffffff));
+    --_node-stroke:   var(--border, color-mix(in srgb, #1a1a2e 20%, #ffffff));
+    --_group-fill:    #ffffff;
+    --_group-hdr:     color-mix(in srgb, #1a1a2e 5%, #ffffff);
+    --_inner-stroke:  color-mix(in srgb, #1a1a2e 12%, #ffffff);
+    --_key-badge:     color-mix(in srgb, #1a1a2e 10%, #ffffff);
+  }
+</style>
+<defs>
+  <marker id="arrowhead" markerWidth="8" markerHeight="5" refX="7" refY="2.5" orient="auto">
+    <polygon points="0 0, 8 2.5, 0 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+  <marker id="arrowhead-start" markerWidth="8" markerHeight="5" refX="1" refY="2.5" orient="auto-start-reverse">
+    <polygon points="8 0, 0 2.5, 8 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+</defs>
+<g class="subgraph" data-id="Input" data-label="Q or K vector (8 dims shown)">
+  <rect x="170.12900000000002" y="577.45" width="0" height="0" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="170.12900000000002" y="577.45" width="0" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="182.12900000000002" y="591.45" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">Q or K vector (8 dims shown)</text>
+</g>
+<g class="subgraph" data-id="Freqs" data-label="Rotation Frequency per plane
+(lower dim = faster rotation)">
+  <rect x="158.12900000000002" y="605.45" width="0" height="0" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="158.12900000000002" y="605.45" width="0" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="170.12900000000002" y="619.45" font-size="12" font-weight="600" fill="var(--_text-sec)"><tspan x="170.12900000000002" dy="-3.6000000000000014">Rotation Frequency per plane</tspan><tspan x="170.12900000000002" dy="15.600000000000001">(lower dim = faster rotation)</tspan></text>
+</g>
+<polyline class="edge" data-from="Pos" data-to="Angle0" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="170.12900000000002,522.55 205.61450000000002,522.55 205.61450000000002,205.14999999999998 241.10000000000002,205.14999999999998" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Pos" data-to="Angle1" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="170.12900000000002,522.55 205.61450000000002,522.55 205.61450000000002,416.75 241.10000000000002,416.75" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Pos" data-to="Angle2" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="170.12900000000002,522.55 205.61450000000002,522.55 205.61450000000002,628.3499999999999 241.10000000000002,628.3499999999999" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Pos" data-to="Angle3" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="170.12900000000002,522.55 205.61450000000002,522.55 205.61450000000002,839.95 241.10000000000002,839.95" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="D01" data-to="R0" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="326.028,58.45 362.481,58.45 362.481,107.64500000000002 385.596,107.64500000000002" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="F0" data-to="R0" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="339.36600000000004,131.79999999999998 362.481,131.79999999999998 362.481,107.64500000000002 385.596,107.64500000000002" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Angle0" data-to="R0" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="392.718,205.14999999999998 365.445,205.14999999999998 365.445,121.09500000000003 385.596,121.09500000000003" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="D23" data-to="R1" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="330.47400000000005,270.04999999999995 362.481,270.04999999999995 362.481,319.245 385.596,319.245" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="F1" data-to="R1" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="339.36600000000004,343.3999999999999 362.481,343.3999999999999 362.481,319.245 385.596,319.245" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Angle1" data-to="R1" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="392.718,416.75 369.747,416.75 369.747,328.47 385.596,328.47" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="D45" data-to="R2" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="330.47400000000005,481.65 366.18600000000004,481.65 366.18600000000004,530.845 385.596,530.845" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="F2" data-to="R2" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="346.776,554.9999999999999 366.18600000000004,554.9999999999999 366.18600000000004,530.845 385.596,530.845" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Angle2" data-to="R2" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="392.718,628.3499999999999 369.747,628.3499999999999 369.747,540.0699999999999 385.596,540.0699999999999" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="D67" data-to="R3" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="330.47400000000005,693.25 369.891,693.25 369.891,742.4449999999999 385.596,742.4449999999999" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="F3" data-to="R3" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="354.18600000000004,766.5999999999998 369.891,766.5999999999998 369.891,742.4449999999999 385.596,742.4449999999999" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Angle3" data-to="R3" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="392.718,839.95 381.747,839.95 381.747,751.6699999999998 385.596,751.6699999999998" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="R0" data-to="Out" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="499.423,107.64500000000002 507.34749999999997,107.64500000000002 507.34749999999997,425.0449999999999 515.2719999999999,425.0449999999999" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="R1" data-to="Out" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="483.121,319.245 507.34749999999997,319.245 507.34749999999997,425.0449999999999 515.2719999999999,425.0449999999999" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="R2" data-to="Out" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="483.121,530.845 507.34749999999997,530.845 507.34749999999997,425.0449999999999 515.2719999999999,425.0449999999999" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="R3" data-to="Out" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="483.121,742.4449999999999 507.34749999999997,742.4449999999999 507.34749999999997,425.0449999999999 515.2719999999999,425.0449999999999" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<g class="node" data-id="D01" data-label="dims 0-1" data-shape="rectangle">
+  <rect x="241.10000000000002" y="40" width="84.928" height="36.900000000000006" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
+  <text x="283.564" y="58.45" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f" dy="4.55">dims 0-1</text>
+</g>
+<g class="node" data-id="D23" data-label="dims 2-3" data-shape="rectangle">
+  <rect x="241.10000000000002" y="251.59999999999997" width="89.374" height="36.900000000000006" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
+  <text x="285.78700000000003" y="270.04999999999995" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f" dy="4.55">dims 2-3</text>
+</g>
+<g class="node" data-id="D45" data-label="dims 4-5" data-shape="rectangle">
+  <rect x="241.10000000000002" y="463.2" width="89.374" height="36.900000000000006" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
+  <text x="285.78700000000003" y="481.65" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f" dy="4.55">dims 4-5</text>
+</g>
+<g class="node" data-id="D67" data-label="dims 6-7" data-shape="rectangle">
+  <rect x="241.10000000000002" y="674.8" width="89.374" height="36.900000000000006" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
+  <text x="285.78700000000003" y="693.25" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f" dy="4.55">dims 6-7</text>
+</g>
+<g class="node" data-id="F0" data-label="freq₀ = 1.0
+(fast)" data-shape="rectangle">
+  <rect x="241.10000000000002" y="104.89999999999999" width="98.266" height="53.800000000000004" rx="0" ry="0" fill="#f3e8ff" stroke="#9333ea" stroke-width="0.75" />
+  <text x="290.233" y="131.79999999999998" text-anchor="middle" font-size="13" font-weight="500" fill="#581c87"><tspan x="290.233" dy="-3.9000000000000012">freq₀ = 1.0</tspan><tspan x="290.233" dy="16.900000000000002">(fast)</tspan></text>
+</g>
+<g class="node" data-id="F1" data-label="freq₁ = 0.1
+(medium)" data-shape="rectangle">
+  <rect x="241.10000000000002" y="316.49999999999994" width="98.266" height="53.800000000000004" rx="0" ry="0" fill="#f3e8ff" stroke="#9333ea" stroke-width="0.75" />
+  <text x="290.233" y="343.3999999999999" text-anchor="middle" font-size="13" font-weight="500" fill="#581c87"><tspan x="290.233" dy="-3.9000000000000012">freq₁ = 0.1</tspan><tspan x="290.233" dy="16.900000000000002">(medium)</tspan></text>
+</g>
+<g class="node" data-id="F2" data-label="freq₂ = 0.01
+(slow)" data-shape="rectangle">
+  <rect x="241.10000000000002" y="528.0999999999999" width="105.67599999999999" height="53.800000000000004" rx="0" ry="0" fill="#f3e8ff" stroke="#9333ea" stroke-width="0.75" />
+  <text x="293.938" y="554.9999999999999" text-anchor="middle" font-size="13" font-weight="500" fill="#581c87"><tspan x="293.938" dy="-3.9000000000000012">freq₂ = 0.01</tspan><tspan x="293.938" dy="16.900000000000002">(slow)</tspan></text>
+</g>
+<g class="node" data-id="F3" data-label="freq₃ = 0.001
+(very slow)" data-shape="rectangle">
+  <rect x="241.10000000000002" y="739.6999999999998" width="113.086" height="53.800000000000004" rx="0" ry="0" fill="#f3e8ff" stroke="#9333ea" stroke-width="0.75" />
+  <text x="297.64300000000003" y="766.5999999999998" text-anchor="middle" font-size="13" font-weight="500" fill="#581c87"><tspan x="297.64300000000003" dy="-3.9000000000000012">freq₃ = 0.001</tspan><tspan x="297.64300000000003" dy="16.900000000000002">(very slow)</tspan></text>
+</g>
+<g class="node" data-id="Pos" data-label="Token Position
+(e.g. pos = 7)" data-shape="rectangle">
+  <rect x="40" y="495.65" width="130.12900000000002" height="53.800000000000004" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
+  <text x="105.06450000000001" y="522.55" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f"><tspan x="105.06450000000001" dy="-3.9000000000000012">Token Position</tspan><tspan x="105.06450000000001" dy="16.900000000000002">(e.g. pos = 7)</tspan></text>
+</g>
+<g class="node" data-id="Angle0" data-label="angle = pos × freq₀" data-shape="rectangle">
+  <rect x="241.10000000000002" y="186.7" width="151.618" height="36.900000000000006" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
+  <text x="316.909" y="205.14999999999998" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12" dy="4.55">angle = pos × freq₀</text>
+</g>
+<g class="node" data-id="Angle1" data-label="angle = pos × freq₁" data-shape="rectangle">
+  <rect x="241.10000000000002" y="398.3" width="151.618" height="36.900000000000006" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
+  <text x="316.909" y="416.75" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12" dy="4.55">angle = pos × freq₁</text>
+</g>
+<g class="node" data-id="Angle2" data-label="angle = pos × freq₂" data-shape="rectangle">
+  <rect x="241.10000000000002" y="609.8999999999999" width="151.618" height="36.900000000000006" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
+  <text x="316.909" y="628.3499999999999" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12" dy="4.55">angle = pos × freq₂</text>
+</g>
+<g class="node" data-id="Angle3" data-label="angle = pos × freq₃" data-shape="rectangle">
+  <rect x="241.10000000000002" y="821.5" width="151.618" height="36.900000000000006" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
+  <text x="316.909" y="839.95" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12" dy="4.55">angle = pos × freq₃</text>
+</g>
+<g class="node" data-id="R0" data-label="&quot;Rotate 2D
+[cos θ, -sin θ" data-shape="rectangle">
+  <rect x="385.596" y="80.74500000000002" width="113.827" height="53.800000000000004" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="442.5095" y="107.64500000000002" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="442.5095" dy="-3.9000000000000012">&quot;Rotate 2D</tspan><tspan x="442.5095" dy="16.900000000000002">[cos θ, -sin θ</tspan></text>
+</g>
+<g class="node" data-id="R1" data-label="Rotate 2D" data-shape="rectangle">
+  <rect x="385.596" y="300.795" width="97.525" height="36.900000000000006" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="434.3585" y="319.245" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d" dy="4.55">Rotate 2D</text>
+</g>
+<g class="node" data-id="R2" data-label="Rotate 2D" data-shape="rectangle">
+  <rect x="385.596" y="512.395" width="97.525" height="36.900000000000006" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="434.3585" y="530.845" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d" dy="4.55">Rotate 2D</text>
+</g>
+<g class="node" data-id="R3" data-label="Rotate 2D" data-shape="rectangle">
+  <rect x="385.596" y="723.9949999999999" width="97.525" height="36.900000000000006" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="434.3585" y="742.4449999999999" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d" dy="4.55">Rotate 2D</text>
+</g>
+<g class="node" data-id="Out" data-label="Rotated Q or K
+(position encoded)" data-shape="rectangle">
+  <rect x="515.2719999999999" y="398.1449999999999" width="149.39499999999998" height="53.800000000000004" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
+  <text x="589.9694999999999" y="425.0449999999999" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="589.9694999999999" dy="-3.9000000000000012">Rotated Q or K</tspan><tspan x="589.9694999999999" dy="16.900000000000002">(position encoded)</tspan></text>
+</g>
+</svg>

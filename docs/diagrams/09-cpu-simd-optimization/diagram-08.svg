@@ -1,0 +1,122 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 874.3280000000002 773.009" width="874.3280000000002" height="773.009" style="--bg:#FFFFFF;--fg:#27272A;background:#ffffff">
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;display=swap');
+  text { font-family: 'Inter', system-ui, sans-serif; }
+  svg {
+    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
+    --_text:          #1a1a2e;
+    --_text-sec:      var(--muted, color-mix(in srgb, #1a1a2e 60%, #ffffff));
+    --_text-muted:    var(--muted, color-mix(in srgb, #1a1a2e 40%, #ffffff));
+    --_text-faint:    color-mix(in srgb, #1a1a2e 25%, #ffffff);
+    --_line:          var(--line, color-mix(in srgb, #1a1a2e 50%, #ffffff));
+    --_arrow:         var(--accent, color-mix(in srgb, #1a1a2e 85%, #ffffff));
+    --_node-fill:     var(--surface, color-mix(in srgb, #1a1a2e 3%, #ffffff));
+    --_node-stroke:   var(--border, color-mix(in srgb, #1a1a2e 20%, #ffffff));
+    --_group-fill:    #ffffff;
+    --_group-hdr:     color-mix(in srgb, #1a1a2e 5%, #ffffff);
+    --_inner-stroke:  color-mix(in srgb, #1a1a2e 12%, #ffffff);
+    --_key-badge:     color-mix(in srgb, #1a1a2e 10%, #ffffff);
+  }
+</style>
+<defs>
+  <marker id="arrowhead" markerWidth="8" markerHeight="5" refX="7" refY="2.5" orient="auto">
+    <polygon points="0 0, 8 2.5, 0 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+  <marker id="arrowhead-start" markerWidth="8" markerHeight="5" refX="1" refY="2.5" orient="auto-start-reverse">
+    <polygon points="8 0, 0 2.5, 8 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+</defs>
+<g class="subgraph" data-id="SiLU" data-label="SiLU activation
+x * sigmoid(x)">
+  <rect x="343.13200000000006" y="141.8" width="188.06400000000002" height="113.80000000000001" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="343.13200000000006" y="141.8" width="188.06400000000002" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="355.13200000000006" y="155.8" font-size="12" font-weight="600" fill="var(--_text-sec)"><tspan x="355.13200000000006" dy="-3.6000000000000014">SiLU activation</tspan><tspan x="355.13200000000006" dy="15.600000000000001">x * sigmoid(x)</tspan></text>
+</g>
+<g class="subgraph" data-id="Sparsity" data-label="~40% near-zero after SiLU
+(magnitude &lt; threshold)">
+  <rect x="40" y="371.90000000000003" width="794.3280000000002" height="113.80000000000001" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="40" y="371.90000000000003" width="794.3280000000002" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="52" y="385.90000000000003" font-size="12" font-weight="600" fill="var(--_text-sec)"><tspan x="52" dy="-3.6000000000000014">~40% near-zero after SiLU</tspan><tspan x="52" dy="15.600000000000001">(magnitude &lt; threshold)</tspan></text>
+</g>
+<g class="subgraph" data-id="Check" data-label="isBlockSparse (SIMD max-abs)">
+  <rect x="93.03800000000012" y="533.7" width="688.252" height="199.30900000000003" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="93.03800000000012" y="533.7" width="688.252" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="105.03800000000012" y="547.7" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">isBlockSparse (SIMD max-abs)</text>
+</g>
+<polyline class="edge" data-from="gate" data-to="SiLU" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="357.7290000000001,93.80000000000001 357.7290000000001,129.8 405.82000000000005,129.8 405.82000000000005,141.8" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="up" data-to="SiLU" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="516.5990000000002,93.80000000000001 516.5990000000002,129.8 468.5080000000001,129.8 468.5080000000001,141.8" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="SiLU" data-to="Sparsity" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="element-wise product" points="437.1640000000001,255.60000000000002 437.1640000000001,371.90000000000003" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Sparsity" data-to="Check" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="437.1640000000001,485.70000000000005 437.1640000000001,533.7" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="sparse" data-to="dense1" data-style="dotted" data-arrow-start="false" data-arrow-end="false" points="215.02800000000002,442.80000000000007 263.028,442.80000000000007" fill="none" stroke="var(--_line)" stroke-width="1" stroke-dasharray="4 4" />
+<polyline class="edge" data-from="dense1" data-to="sparse2" data-style="dotted" data-arrow-start="false" data-arrow-end="false" points="414.6460000000001,442.80000000000007 462.6460000000001,442.80000000000007" fill="none" stroke="var(--_line)" stroke-width="1" stroke-dasharray="4 4" />
+<polyline class="edge" data-from="sparse2" data-to="dense2" data-style="dotted" data-arrow-start="false" data-arrow-end="false" points="626.1200000000001,442.80000000000007 674.1200000000001,442.80000000000007" fill="none" stroke="var(--_line)" stroke-width="1" stroke-dasharray="4 4" />
+<polyline class="edge" data-from="c1" data-to="c2" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="297.70600000000013,647.3545 345.70600000000013,647.3545" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="c2" data-to="skip" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="yes" points="461.7968333333335,624.1363333333334 497.01500000000016,624.1363333333334 497.01500000000016,606.4545 608.4850000000001,606.4545" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="c2" data-to="compute" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="no" points="461.7968333333335,670.5726666666667 497.01500000000016,670.5726666666667 497.01500000000016,688.2545 608.4850000000001,688.2545" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<g class="edge-label" data-from="SiLU" data-to="Sparsity" data-label="element-wise product">
+  <rect x="378.6640000000001" y="298.6" width="116.25400000000002" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="436.7910000000001" y="313.75" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">element-wise product</text>
+</g>
+<g class="edge-label" data-from="c2" data-to="skip" data-label="yes">
+  <rect x="529.0150000000002" y="590.4545" width="35.47" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="546.7500000000002" y="605.6045" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">yes</text>
+</g>
+<g class="edge-label" data-from="c2" data-to="compute" data-label="no">
+  <rect x="531.9850000000001" y="672.2545000000001" width="29.53" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="546.7500000000001" y="687.4045000000001" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">no</text>
+</g>
+<g class="node" data-id="gate" data-label="gate_proj output
+(n values)" data-shape="rectangle">
+  <rect x="289.7005000000001" y="40" width="136.05700000000002" height="53.800000000000004" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
+  <text x="357.7290000000001" y="66.9" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f"><tspan x="357.7290000000001" dy="-3.9000000000000012">gate_proj output</tspan><tspan x="357.7290000000001" dy="16.900000000000002">(n values)</tspan></text>
+</g>
+<g class="node" data-id="up" data-label="up_proj output
+(n values)" data-shape="rectangle">
+  <rect x="453.7575000000001" y="40" width="125.68299999999999" height="53.800000000000004" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
+  <text x="516.5990000000002" y="66.9" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f"><tspan x="516.5990000000002" dy="-3.9000000000000012">up_proj output</tspan><tspan x="516.5990000000002" dy="16.900000000000002">(n values)</tspan></text>
+</g>
+<g class="node" data-id="act" data-label="gate * sigmoid(gate)
+element-wise" data-shape="rectangle">
+  <rect x="359.13200000000006" y="185.8" width="156.06400000000002" height="53.800000000000004" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="437.1640000000001" y="212.70000000000002" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="437.1640000000001" dy="-3.9000000000000012">gate * sigmoid(gate)</tspan><tspan x="437.1640000000001" dy="16.900000000000002">element-wise</tspan></text>
+</g>
+<g class="node" data-id="sparse" data-label="block 0: |max| = 0.001
+SKIP" data-shape="rectangle">
+  <rect x="56" y="415.90000000000003" width="159.02800000000002" height="53.800000000000004" rx="0" ry="0" fill="#fee2e2" stroke="#ef4444" stroke-width="0.75" />
+  <text x="135.514" y="442.8" text-anchor="middle" font-size="13" font-weight="500" fill="#7f1d1d"><tspan x="135.514" dy="-3.9000000000000012">block 0: |max| = 0.001</tspan><tspan x="135.514" dy="16.900000000000002">SKIP</tspan></text>
+</g>
+<g class="node" data-id="dense1" data-label="block 1: |max| = 0.83
+compute" data-shape="rectangle">
+  <rect x="263.028" y="415.90000000000003" width="151.61800000000002" height="53.800000000000004" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
+  <text x="338.83700000000005" y="442.8" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="338.83700000000005" dy="-3.9000000000000012">block 1: |max| = 0.83</tspan><tspan x="338.83700000000005" dy="16.900000000000002">compute</tspan></text>
+</g>
+<g class="node" data-id="sparse2" data-label="block 2: |max| = 0.002
+SKIP" data-shape="rectangle">
+  <rect x="462.6460000000001" y="415.90000000000003" width="163.474" height="53.800000000000004" rx="0" ry="0" fill="#fee2e2" stroke="#ef4444" stroke-width="0.75" />
+  <text x="544.383" y="442.8" text-anchor="middle" font-size="13" font-weight="500" fill="#7f1d1d"><tspan x="544.383" dy="-3.9000000000000012">block 2: |max| = 0.002</tspan><tspan x="544.383" dy="16.900000000000002">SKIP</tspan></text>
+</g>
+<g class="node" data-id="dense2" data-label="block 3: |max| = 1.2
+compute" data-shape="rectangle">
+  <rect x="674.1200000000001" y="415.90000000000003" width="144.20800000000003" height="53.800000000000004" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
+  <text x="746.2240000000002" y="442.8" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="746.2240000000002" dy="-3.9000000000000012">block 3: |max| = 1.2</tspan><tspan x="746.2240000000002" dy="16.900000000000002">compute</tspan></text>
+</g>
+<g class="node" data-id="c1" data-label="@reduce(.Max, @abs(xv))
+~1 cycle per 8 elements" data-shape="rectangle">
+  <rect x="109.03800000000012" y="620.4545" width="188.668" height="53.800000000000004" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="203.37200000000013" y="647.3545" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="203.37200000000013" dy="-3.9000000000000012">@reduce(.Max, @abs(xv))</tspan><tspan x="203.37200000000013" dy="16.900000000000002">~1 cycle per 8 elements</tspan></text>
+</g>
+<g class="node" data-id="c2" data-label="&lt; threshold?" data-shape="diamond">
+  <polygon points="415.3605000000001,577.7 485.0150000000001,647.3545 415.3605000000001,717.009 345.70600000000013,647.3545" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="415.3605000000001" y="647.3545" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">&lt; threshold?</text>
+</g>
+<g class="node" data-id="skip" data-label="continue
+(skip dequant + dot)" data-shape="rectangle">
+  <rect x="608.4850000000001" y="579.5545000000001" width="153.841" height="53.800000000000004" rx="0" ry="0" fill="#fee2e2" stroke="#ef4444" stroke-width="0.75" />
+  <text x="685.4055000000001" y="606.4545" text-anchor="middle" font-size="13" font-weight="500" fill="#7f1d1d"><tspan x="685.4055000000001" dy="-3.9000000000000012">continue</tspan><tspan x="685.4055000000001" dy="16.900000000000002">(skip dequant + dot)</tspan></text>
+</g>
+<g class="node" data-id="compute" data-label="normal GEMV block
+(dequant + FMA)" data-shape="rectangle">
+  <rect x="608.4850000000001" y="661.3545" width="156.805" height="53.800000000000004" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
+  <text x="686.8875000000002" y="688.2545" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="686.8875000000002" dy="-3.9000000000000012">normal GEMV block</tspan><tspan x="686.8875000000002" dy="16.900000000000002">(dequant + FMA)</tspan></text>
+</g>
+</svg>

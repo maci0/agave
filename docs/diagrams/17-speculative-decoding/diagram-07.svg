@@ -1,0 +1,111 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 510.8708333333333 1149.427" width="510.8708333333333" height="1149.427" style="--bg:#FFFFFF;--fg:#27272A;background:#ffffff">
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;display=swap');
+  text { font-family: 'Inter', system-ui, sans-serif; }
+  svg {
+    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
+    --_text:          #1a1a2e;
+    --_text-sec:      var(--muted, color-mix(in srgb, #1a1a2e 60%, #ffffff));
+    --_text-muted:    var(--muted, color-mix(in srgb, #1a1a2e 40%, #ffffff));
+    --_text-faint:    color-mix(in srgb, #1a1a2e 25%, #ffffff);
+    --_line:          var(--line, color-mix(in srgb, #1a1a2e 50%, #ffffff));
+    --_arrow:         var(--accent, color-mix(in srgb, #1a1a2e 85%, #ffffff));
+    --_node-fill:     var(--surface, color-mix(in srgb, #1a1a2e 3%, #ffffff));
+    --_node-stroke:   var(--border, color-mix(in srgb, #1a1a2e 20%, #ffffff));
+    --_group-fill:    #ffffff;
+    --_group-hdr:     color-mix(in srgb, #1a1a2e 5%, #ffffff);
+    --_inner-stroke:  color-mix(in srgb, #1a1a2e 12%, #ffffff);
+    --_key-badge:     color-mix(in srgb, #1a1a2e 10%, #ffffff);
+  }
+</style>
+<defs>
+  <marker id="arrowhead" markerWidth="8" markerHeight="5" refX="7" refY="2.5" orient="auto">
+    <polygon points="0 0, 8 2.5, 0 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+  <marker id="arrowhead-start" markerWidth="8" markerHeight="5" refX="1" refY="2.5" orient="auto-start-reverse">
+    <polygon points="8 0, 0 2.5, 8 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+</defs>
+<polyline class="edge" data-from="Start" data-to="Check" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="83.87033333333332,1055.627 83.87033333333332,1043.627 57.028749999999974,1043.627 57.028749999999974,670.2270000000001 98.00791666666667,670.2270000000001 98.00791666666667,155.041" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Check" data-to="DefaultK" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="no (warmup)" points="136.35491666666667,193.38799999999998 136.35491666666667,601.9270000000001 138.15666666666664,601.9270000000001 138.15666666666664,682.2270000000001" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Check" data-to="Compute" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="yes" points="174.70191666666665,155.041 174.70191666666665,205.38799999999998 330.74216666666666,205.38799999999998 330.74216666666666,285.688" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Compute" data-to="BestK" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="330.74216666666666,339.488 330.74216666666666,387.488" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="BestK" data-to="LowAccept" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="330.74216666666666,441.288 330.74216666666666,489.288" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="LowAccept" data-to="Cooldown" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="yes" points="357.66533333333336,623.9038333333333 357.66533333333336,686.827 363.9398333333333,686.827 363.93983333333335,767.127" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="LowAccept" data-to="Draft" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="no" points="303.81899999999996,623.9038333333333 303.81899999999996,686.827 238.995,686.827 238.995,755.1270000000001 180.44549999999998,755.1270000000001 180.44549999999998,767.1270000000001" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="DefaultK" data-to="Draft" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="138.15666666666664,719.1270000000001 138.15666666666664,755.1270000000001 131.88216666666665,755.1270000000001 131.88216666666665,767.1270000000001" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Cooldown" data-to="SingleDecode" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="363.93983333333335,837.827 363.9398333333333,877.377" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Draft" data-to="Verify" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="156.16383333333334,820.927 156.16383333333334,877.377" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Verify" data-to="RecordStats" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="156.16383333333334,914.2769999999999 156.16383333333334,953.827" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="RecordStats" data-to="Start" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="156.16383333333334,1007.627 156.16383333333334,1043.627 127.74066666666666,1043.627 127.74066666666666,1055.627" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<g class="edge-label" data-from="Check" data-to="DefaultK" data-label="no (warmup)">
+  <rect x="100.65666666666665" y="608.9270000000001" width="74.08000000000001" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="137.69666666666666" y="624.0770000000001" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">no (warmup)</text>
+</g>
+<g class="edge-label" data-from="Check" data-to="Compute" data-label="yes">
+  <rect x="312.74216666666666" y="212.38799999999998" width="35.47" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="330.4771666666667" y="227.53799999999998" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">yes</text>
+</g>
+<g class="edge-label" data-from="LowAccept" data-to="Cooldown" data-label="yes">
+  <rect x="345.9398333333333" y="693.827" width="35.47" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="363.6748333333333" y="708.977" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">yes</text>
+</g>
+<g class="edge-label" data-from="LowAccept" data-to="Draft" data-label="no">
+  <rect x="223.995" y="693.827" width="29.53" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="238.76" y="708.977" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">no</text>
+</g>
+<g class="node" data-id="Start" data-label="start of step
+which K to use?" data-shape="rectangle">
+  <rect x="40" y="1055.627" width="131.611" height="53.800000000000004" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
+  <text x="105.8055" y="1082.527" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f"><tspan x="105.8055" dy="-3.9000000000000012">start of step</tspan><tspan x="105.8055" dy="16.900000000000002">which K to use?</tspan></text>
+</g>
+<g class="node" data-id="DefaultK" data-label="use default K=5" data-shape="rectangle">
+  <rect x="72.72166666666665" y="682.2270000000001" width="130.87" height="36.900000000000006" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
+  <text x="138.15666666666664" y="700.6770000000001" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f" dy="4.55">use default K=5</text>
+</g>
+<g class="node" data-id="Compute" data-label="compute expected_tokens(K)
+for K = 1..configured_K" data-shape="rectangle">
+  <rect x="224.92266666666666" y="285.688" width="211.639" height="53.800000000000004" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
+  <text x="330.74216666666666" y="312.58799999999997" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12"><tspan x="330.74216666666666" dy="-3.9000000000000012">compute expected_tokens(K)</tspan><tspan x="330.74216666666666" dy="16.900000000000002">for K = 1..configured_K</tspan></text>
+</g>
+<g class="node" data-id="BestK" data-label="use best K
+(argmax expected_tokens)" data-shape="rectangle">
+  <rect x="231.59166666666667" y="387.488" width="198.301" height="53.800000000000004" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
+  <text x="330.74216666666666" y="414.388" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12"><tspan x="330.74216666666666" dy="-3.9000000000000012">use best K</tspan><tspan x="330.74216666666666" dy="16.900000000000002">(argmax expected_tokens)</tspan></text>
+</g>
+<g class="node" data-id="Cooldown" data-label="enter cooldown
+single-token decode (no draft)
+for N steps" data-shape="rectangle">
+  <rect x="257.0088333333333" y="767.127" width="213.86199999999997" height="70.7" rx="0" ry="0" fill="#fee2e2" stroke="#ef4444" stroke-width="0.75" />
+  <text x="363.9398333333333" y="802.477" text-anchor="middle" font-size="13" font-weight="500" fill="#7f1d1d"><tspan x="363.9398333333333" dy="-12.350000000000001">enter cooldown</tspan><tspan x="363.9398333333333" dy="16.900000000000002">single-token decode (no draft)</tspan><tspan x="363.9398333333333" dy="16.900000000000002">for N steps</tspan></text>
+</g>
+<g class="node" data-id="Draft" data-label="run draft model
+K forward passes" data-shape="rectangle">
+  <rect x="83.31883333333333" y="767.1270000000001" width="145.69" height="53.800000000000004" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="156.16383333333334" y="794.027" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="156.16383333333334" dy="-3.9000000000000012">run draft model</tspan><tspan x="156.16383333333334" dy="16.900000000000002">K forward passes</tspan></text>
+</g>
+<g class="node" data-id="SingleDecode" data-label="single-token decode
+(no speculation)" data-shape="rectangle">
+  <rect x="283.6848333333333" y="877.377" width="160.51" height="53.800000000000004" rx="0" ry="0" fill="#fee2e2" stroke="#ef4444" stroke-width="0.75" />
+  <text x="363.9398333333333" y="904.2769999999999" text-anchor="middle" font-size="13" font-weight="500" fill="#7f1d1d"><tspan x="363.9398333333333" dy="-3.9000000000000012">single-token decode</tspan><tspan x="363.9398333333333" dy="16.900000000000002">(no speculation)</tspan></text>
+</g>
+<g class="node" data-id="Verify" data-label="verify with target model" data-shape="rectangle">
+  <rect x="69.61033333333333" y="877.377" width="173.107" height="36.900000000000006" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="156.16383333333334" y="895.827" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d" dy="4.55">verify with target model</text>
+</g>
+<g class="node" data-id="RecordStats" data-label="record: how many
+tokens were accepted" data-shape="rectangle">
+  <rect x="70.72183333333334" y="953.827" width="170.884" height="53.800000000000004" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
+  <text x="156.16383333333334" y="980.727" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="156.16383333333334" dy="-3.9000000000000012">record: how many</tspan><tspan x="156.16383333333334" dy="16.900000000000002">tokens were accepted</tspan></text>
+</g>
+<g class="node" data-id="Check" data-label="enough stats
+(&gt;= 10 rounds)?" data-shape="diamond">
+  <polygon points="136.35491666666667,40 213.04891666666666,116.69399999999999 136.35491666666667,193.38799999999998 59.66091666666668,116.69399999999999" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="136.35491666666667" y="116.69399999999999" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="136.35491666666667" dy="-3.9000000000000012">enough stats</tspan><tspan x="136.35491666666667" dy="16.900000000000002">(&gt;= 10 rounds)?</tspan></text>
+</g>
+<g class="node" data-id="LowAccept" data-label="acceptance rate
+&lt; 25%?" data-shape="diamond">
+  <polygon points="330.74216666666666,489.288 411.51166666666666,570.0575 330.74216666666666,650.827 249.97266666666667,570.0575" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="330.74216666666666" y="570.0575" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="330.74216666666666" dy="-3.9000000000000012">acceptance rate</tspan><tspan x="330.74216666666666" dy="16.900000000000002">&lt; 25%?</tspan></text>
+</g>
+</svg>

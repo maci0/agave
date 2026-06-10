@@ -1,0 +1,122 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1090.8519999999999 556.1000000000001" width="1090.8519999999999" height="556.1000000000001" style="--bg:#FFFFFF;--fg:#27272A;background:#ffffff">
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;display=swap');
+  text { font-family: 'Inter', system-ui, sans-serif; }
+  svg {
+    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
+    --_text:          #1a1a2e;
+    --_text-sec:      var(--muted, color-mix(in srgb, #1a1a2e 60%, #ffffff));
+    --_text-muted:    var(--muted, color-mix(in srgb, #1a1a2e 40%, #ffffff));
+    --_text-faint:    color-mix(in srgb, #1a1a2e 25%, #ffffff);
+    --_line:          var(--line, color-mix(in srgb, #1a1a2e 50%, #ffffff));
+    --_arrow:         var(--accent, color-mix(in srgb, #1a1a2e 85%, #ffffff));
+    --_node-fill:     var(--surface, color-mix(in srgb, #1a1a2e 3%, #ffffff));
+    --_node-stroke:   var(--border, color-mix(in srgb, #1a1a2e 20%, #ffffff));
+    --_group-fill:    #ffffff;
+    --_group-hdr:     color-mix(in srgb, #1a1a2e 5%, #ffffff);
+    --_inner-stroke:  color-mix(in srgb, #1a1a2e 12%, #ffffff);
+    --_key-badge:     color-mix(in srgb, #1a1a2e 10%, #ffffff);
+  }
+</style>
+<defs>
+  <marker id="arrowhead" markerWidth="8" markerHeight="5" refX="7" refY="2.5" orient="auto">
+    <polygon points="0 0, 8 2.5, 0 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+  <marker id="arrowhead-start" markerWidth="8" markerHeight="5" refX="1" refY="2.5" orient="auto-start-reverse">
+    <polygon points="8 0, 0 2.5, 8 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+</defs>
+<g class="subgraph" data-id="SourceFiles" data-label="Source Files (on disk, compile time only)">
+  <rect x="40" y="432.1000000000001" width="0" height="0" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="40" y="432.1000000000001" width="0" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="52" y="446.1000000000001" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">Source Files (on disk, compile time only)</text>
+</g>
+<g class="subgraph" data-id="CompileStep" data-label="Zig Compiler">
+  <rect x="40" y="460.1000000000001" width="0" height="0" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="40" y="460.1000000000001" width="0" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="52" y="474.1000000000001" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">Zig Compiler</text>
+</g>
+<g class="subgraph" data-id="Binary" data-label="Agave Binary (.rodata — no external files needed)">
+  <rect x="40" y="488.1000000000001" width="0" height="0" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="40" y="488.1000000000001" width="0" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="52" y="502.1000000000001" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">Agave Binary (.rodata — no external files needed)</text>
+</g>
+<g class="subgraph" data-id="Runtime" data-label="Runtime (zero file I/O)">
+  <rect x="40" y="516.1000000000001" width="0" height="0" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="40" y="516.1000000000001" width="0" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="52" y="530.1000000000001" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">Runtime (zero file I/O)</text>
+</g>
+<polyline class="edge" data-from="MSL1" data-to="EF" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="186.575,66.9 225.323,66.9 225.323,189.60000000000002 227.02100000000002,189.60000000000002" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="MSL2" data-to="EF" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="208.805,148.70000000000002 225.323,148.70000000000002 225.323,189.60000000000002 227.02100000000002,189.60000000000002" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="MSL3" data-to="EF" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="186.575,230.50000000000003 225.323,230.50000000000003 225.323,189.60000000000002 227.02100000000002,189.60000000000002" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="MSLN" data-to="EF" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="223.625,303.85 225.323,303.85 225.323,189.60000000000002 227.02100000000002,189.60000000000002" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="SPV" data-to="EF2" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="195.467,377.20000000000005 227.02100000000002,377.20000000000005" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="EF" data-to="Concat" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="348.25800000000004,189.60000000000002 396.25800000000004,189.60000000000002" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Concat" data-to="ROData" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="576.775,189.60000000000002 631.444,189.60000000000002" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="EF2" data-to="ROData2" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="348.25800000000004,377.20000000000005 396.25800000000004,377.2000000000001" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="ROData" data-to="Init" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="763.7959999999999,189.60000000000002 811.7959999999999,189.60000000000002" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="ROData2" data-to="Init2" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="528.61,377.2000000000001 569.941,377.2000000000001" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<g class="node" data-id="MSL1" data-label="common.metal
+(MSL source)" data-shape="rectangle">
+  <rect x="63.115" y="40" width="123.46" height="53.800000000000004" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
+  <text x="124.845" y="66.9" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f"><tspan x="124.845" dy="-3.9000000000000012">common.metal</tspan><tspan x="124.845" dy="16.900000000000002">(MSL source)</tspan></text>
+</g>
+<g class="node" data-id="MSL2" data-label="elementwise.metal
+(MSL source)" data-shape="rectangle">
+  <rect x="63.115" y="121.80000000000001" width="145.69" height="53.800000000000004" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
+  <text x="135.96" y="148.70000000000002" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f"><tspan x="135.96" dy="-3.9000000000000012">elementwise.metal</tspan><tspan x="135.96" dy="16.900000000000002">(MSL source)</tspan></text>
+</g>
+<g class="node" data-id="MSL3" data-label="gemv.metal
+(MSL source)" data-shape="rectangle">
+  <rect x="63.115" y="203.60000000000002" width="123.46" height="53.800000000000004" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
+  <text x="124.845" y="230.50000000000003" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f"><tspan x="124.845" dy="-3.9000000000000012">gemv.metal</tspan><tspan x="124.845" dy="16.900000000000002">(MSL source)</tspan></text>
+</g>
+<g class="node" data-id="MSLN" data-label="... (5 more .metal files)" data-shape="rectangle">
+  <rect x="63.115" y="285.40000000000003" width="160.51" height="36.900000000000006" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
+  <text x="143.37" y="303.85" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f" dy="4.55">... (5 more .metal files)</text>
+</g>
+<g class="node" data-id="SPV" data-label="gemv.spv
+(SPIR-V binary)" data-shape="rectangle">
+  <rect x="63.115" y="350.30000000000007" width="132.352" height="53.800000000000004" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
+  <text x="129.291" y="377.20000000000005" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f"><tspan x="129.291" dy="-3.9000000000000012">gemv.spv</tspan><tspan x="129.291" dy="16.900000000000002">(SPIR-V binary)</tspan></text>
+</g>
+<g class="node" data-id="EF" data-label="@embedFile
+(compile step)" data-shape="rectangle">
+  <rect x="227.02100000000002" y="162.70000000000002" width="121.23700000000001" height="53.800000000000004" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="287.6395" y="189.60000000000002" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="287.6395" dy="-3.9000000000000012">@embedFile</tspan><tspan x="287.6395" dy="16.900000000000002">(compile step)</tspan></text>
+</g>
+<g class="node" data-id="EF2" data-label="@embedFile
+(compile step)" data-shape="rectangle">
+  <rect x="227.02100000000002" y="350.30000000000007" width="121.23700000000001" height="53.800000000000004" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="287.6395" y="377.20000000000005" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="287.6395" dy="-3.9000000000000012">@embedFile</tspan><tspan x="287.6395" dy="16.900000000000002">(compile step)</tspan></text>
+</g>
+<g class="node" data-id="Concat" data-label="++ concatenation
+(zero-cost, compile time)" data-shape="rectangle">
+  <rect x="396.25800000000004" y="162.70000000000002" width="180.51699999999997" height="53.800000000000004" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="486.5165" y="189.60000000000002" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="486.5165" dy="-3.9000000000000012">++ concatenation</tspan><tspan x="486.5165" dy="16.900000000000002">(zero-cost, compile time)</tspan></text>
+</g>
+<g class="node" data-id="ROData" data-label="&quot;.rodata section
+in binary
+([" data-shape="rectangle">
+  <rect x="631.444" y="154.25000000000003" width="132.352" height="70.7" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="697.62" y="189.60000000000002" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="697.62" dy="-12.350000000000001">&quot;.rodata section</tspan><tspan x="697.62" dy="16.900000000000002">in binary</tspan><tspan x="697.62" dy="16.900000000000002">([</tspan></text>
+</g>
+<g class="node" data-id="ROData2" data-label="&quot;.rodata section
+in binary
+([" data-shape="rectangle">
+  <rect x="396.25800000000004" y="341.8500000000001" width="132.352" height="70.7" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="462.434" y="377.2000000000001" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="462.434" dy="-12.350000000000001">&quot;.rodata section</tspan><tspan x="462.434" dy="16.900000000000002">in binary</tspan><tspan x="462.434" dy="16.900000000000002">([</tspan></text>
+</g>
+<g class="node" data-id="Init" data-label="MetalBackend.init()
+newLibraryWithSource(src)
+(driver compiles to GPU bytecode)" data-shape="rectangle">
+  <rect x="811.7959999999999" y="154.25000000000003" width="239.05599999999995" height="70.7" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
+  <text x="931.324" y="189.60000000000002" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="931.324" dy="-12.350000000000001">MetalBackend.init()</tspan><tspan x="931.324" dy="16.900000000000002">newLibraryWithSource(src)</tspan><tspan x="931.324" dy="16.900000000000002">(driver compiles to GPU bytecode)</tspan></text>
+</g>
+<g class="node" data-id="Init2" data-label="VulkanBackend.init()
+createShaderModule(code)
+(SPIR-V loaded directly)" data-shape="rectangle">
+  <rect x="569.941" y="341.8500000000001" width="205.71099999999998" height="70.7" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
+  <text x="672.7965" y="377.2000000000001" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="672.7965" dy="-12.350000000000001">VulkanBackend.init()</tspan><tspan x="672.7965" dy="16.900000000000002">createShaderModule(code)</tspan><tspan x="672.7965" dy="16.900000000000002">(SPIR-V loaded directly)</tspan></text>
+</g>
+</svg>

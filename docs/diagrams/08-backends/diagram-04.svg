@@ -1,0 +1,92 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 915.2139999999999 375.6" width="915.2139999999999" height="375.6" style="--bg:#FFFFFF;--fg:#27272A;background:#ffffff">
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;display=swap');
+  text { font-family: 'Inter', system-ui, sans-serif; }
+  svg {
+    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
+    --_text:          #1a1a2e;
+    --_text-sec:      var(--muted, color-mix(in srgb, #1a1a2e 60%, #ffffff));
+    --_text-muted:    var(--muted, color-mix(in srgb, #1a1a2e 40%, #ffffff));
+    --_text-faint:    color-mix(in srgb, #1a1a2e 25%, #ffffff);
+    --_line:          var(--line, color-mix(in srgb, #1a1a2e 50%, #ffffff));
+    --_arrow:         var(--accent, color-mix(in srgb, #1a1a2e 85%, #ffffff));
+    --_node-fill:     var(--surface, color-mix(in srgb, #1a1a2e 3%, #ffffff));
+    --_node-stroke:   var(--border, color-mix(in srgb, #1a1a2e 20%, #ffffff));
+    --_group-fill:    #ffffff;
+    --_group-hdr:     color-mix(in srgb, #1a1a2e 5%, #ffffff);
+    --_inner-stroke:  color-mix(in srgb, #1a1a2e 12%, #ffffff);
+    --_key-badge:     color-mix(in srgb, #1a1a2e 10%, #ffffff);
+  }
+</style>
+<defs>
+  <marker id="arrowhead" markerWidth="8" markerHeight="5" refX="7" refY="2.5" orient="auto">
+    <polygon points="0 0, 8 2.5, 0 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+  <marker id="arrowhead-start" markerWidth="8" markerHeight="5" refX="1" refY="2.5" orient="auto-start-reverse">
+    <polygon points="8 0, 0 2.5, 8 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+</defs>
+<g class="subgraph" data-id="Discrete" data-label="Discrete GPU (NVIDIA RTX, AMD RX)">
+  <rect x="40" y="221.8" width="835.2139999999999" height="113.80000000000001" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="40" y="221.8" width="835.2139999999999" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="52" y="235.8" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">Discrete GPU (NVIDIA RTX, AMD RX)</text>
+</g>
+<g class="subgraph" data-id="UMA" data-label="UMA (Apple Silicon, NVIDIA Grace)">
+  <rect x="40" y="40" width="582.24" height="161.8" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="40" y="40" width="582.24" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="52" y="54" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">UMA (Apple Silicon, NVIDIA Grace)</text>
+</g>
+<polyline class="edge" data-from="SysRAM" data-to="PCIe" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="cudaMemcpy
+(explicit copy)" points="222.438,292.70000000000005 392.834,292.70000000000005" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="PCIe" data-to="VRAM" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="488.877,292.70000000000005 536.877,292.70000000000005" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="VRAM" data-to="dGPU" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="689.977,292.70000000000005 737.977,292.70000000000005" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="SharedMem" data-to="uGPU" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="zero-copy pointer
+newBufferWithBytesNoCopy" points="246.891,125.93333333333334 258.89099999999996,125.93333333333334 258.89099999999996,102.45 485.00300000000004,102.45" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="SharedMem" data-to="uCPU" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="normal pointer" points="246.891,143.86666666666667 258.89099999999996,143.86666666666667 258.89099999999996,167.35000000000002 485.00300000000004,167.35000000000002" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<g class="edge-label" data-from="SysRAM" data-to="PCIe" data-label="cudaMemcpy
+(explicit copy)">
+  <rect x="266.438" y="269.7" width="82.39600000000002" height="44.6" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="307.63599999999997" y="292" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)"><tspan x="307.63599999999997" dy="-3.3000000000000007">cudaMemcpy</tspan><tspan x="307.63599999999997" dy="14.3">(explicit copy)</tspan></text>
+</g>
+<g class="edge-label" data-from="SharedMem" data-to="uGPU" data-label="zero-copy pointer
+newBufferWithBytesNoCopy">
+  <rect x="290.89099999999996" y="79.45" width="150.11200000000002" height="44.6" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="365.947" y="101.75" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)"><tspan x="365.947" dy="-3.3000000000000007">zero-copy pointer</tspan><tspan x="365.947" dy="14.3">newBufferWithBytesNoCopy</tspan></text>
+</g>
+<g class="edge-label" data-from="SharedMem" data-to="uCPU" data-label="normal pointer">
+  <rect x="323.561" y="151.35" width="84.77200000000002" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="365.947" y="166.5" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">normal pointer</text>
+</g>
+<g class="node" data-id="SysRAM" data-label="System RAM
+(weights loaded here)" data-shape="rectangle">
+  <rect x="56" y="265.8" width="166.438" height="53.800000000000004" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
+  <text x="139.219" y="292.7" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f"><tspan x="139.219" dy="-3.9000000000000012">System RAM</tspan><tspan x="139.219" dy="16.900000000000002">(weights loaded here)</tspan></text>
+</g>
+<g class="node" data-id="PCIe" data-label="PCIe Bus
+~64 GB/s" data-shape="rectangle">
+  <rect x="392.834" y="265.8" width="96.04299999999999" height="53.800000000000004" rx="0" ry="0" fill="#fee2e2" stroke="#ef4444" stroke-width="0.75" />
+  <text x="440.8555" y="292.7" text-anchor="middle" font-size="13" font-weight="500" fill="#7f1d1d"><tspan x="440.8555" dy="-3.9000000000000012">PCIe Bus</tspan><tspan x="440.8555" dy="16.900000000000002">~64 GB/s</tspan></text>
+</g>
+<g class="node" data-id="VRAM" data-label="VRAM
+(GPU-only memory)" data-shape="rectangle">
+  <rect x="536.877" y="265.8" width="153.1" height="53.800000000000004" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
+  <text x="613.4269999999999" y="292.7" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12"><tspan x="613.4269999999999" dy="-3.9000000000000012">VRAM</tspan><tspan x="613.4269999999999" dy="16.900000000000002">(GPU-only memory)</tspan></text>
+</g>
+<g class="node" data-id="dGPU" data-label="GPU Compute" data-shape="rectangle">
+  <rect x="737.977" y="274.25" width="121.23700000000001" height="36.900000000000006" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
+  <text x="798.5955" y="292.7" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d" dy="4.55">GPU Compute</text>
+</g>
+<g class="node" data-id="SharedMem" data-label="Shared Physical Memory
+(weights live here once)" data-shape="rectangle">
+  <rect x="56" y="108" width="190.891" height="53.800000000000004" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
+  <text x="151.44549999999998" y="134.9" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f"><tspan x="151.44549999999998" dy="-3.9000000000000012">Shared Physical Memory</tspan><tspan x="151.44549999999998" dy="16.900000000000002">(weights live here once)</tspan></text>
+</g>
+<g class="node" data-id="uGPU" data-label="GPU Compute" data-shape="rectangle">
+  <rect x="485.00300000000004" y="84" width="121.23700000000001" height="36.900000000000006" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
+  <text x="545.6215000000001" y="102.45" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d" dy="4.55">GPU Compute</text>
+</g>
+<g class="node" data-id="uCPU" data-label="CPU Compute" data-shape="rectangle">
+  <rect x="485.00300000000004" y="148.9" width="121.23700000000001" height="36.900000000000006" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
+  <text x="545.6215000000001" y="167.35000000000002" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d" dy="4.55">CPU Compute</text>
+</g>
+</svg>

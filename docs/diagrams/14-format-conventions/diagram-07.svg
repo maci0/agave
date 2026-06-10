@@ -1,0 +1,108 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1840.192 372.84299999999996" width="1840.192" height="372.84299999999996" style="--bg:#FFFFFF;--fg:#27272A;background:#ffffff">
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;display=swap');
+  text { font-family: 'Inter', system-ui, sans-serif; }
+  svg {
+    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
+    --_text:          #1a1a2e;
+    --_text-sec:      var(--muted, color-mix(in srgb, #1a1a2e 60%, #ffffff));
+    --_text-muted:    var(--muted, color-mix(in srgb, #1a1a2e 40%, #ffffff));
+    --_text-faint:    color-mix(in srgb, #1a1a2e 25%, #ffffff);
+    --_line:          var(--line, color-mix(in srgb, #1a1a2e 50%, #ffffff));
+    --_arrow:         var(--accent, color-mix(in srgb, #1a1a2e 85%, #ffffff));
+    --_node-fill:     var(--surface, color-mix(in srgb, #1a1a2e 3%, #ffffff));
+    --_node-stroke:   var(--border, color-mix(in srgb, #1a1a2e 20%, #ffffff));
+    --_group-fill:    #ffffff;
+    --_group-hdr:     color-mix(in srgb, #1a1a2e 5%, #ffffff);
+    --_inner-stroke:  color-mix(in srgb, #1a1a2e 12%, #ffffff);
+    --_key-badge:     color-mix(in srgb, #1a1a2e 10%, #ffffff);
+  }
+</style>
+<defs>
+  <marker id="arrowhead" markerWidth="8" markerHeight="5" refX="7" refY="2.5" orient="auto">
+    <polygon points="0 0, 8 2.5, 0 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+  <marker id="arrowhead-start" markerWidth="8" markerHeight="5" refX="1" refY="2.5" orient="auto-start-reverse">
+    <polygon points="8 0, 0 2.5, 8 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+</defs>
+<polyline class="edge" data-from="Model" data-to="Lookup" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="164.20099999999996,155.56074999999998 212.20099999999996,155.56074999999998" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Lookup" data-to="Branch" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="399.38699999999994,155.56074999999998 447.38699999999994,155.56074999999998" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Branch" data-to="GGUFLookup" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="No (GGUF)" points="582.6203333333333,128.5140833333333 1131.868,128.5140833333333 1131.868,75.35 1250.82,75.35" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Branch" data-to="Translate" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="Yes (SafeTensors)" points="582.6203333333333,182.60741666666667 645.667,182.60741666666667 645.667,235.77149999999997 805.0110000000001,235.77149999999997" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Translate" data-to="Map" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="940.3270000000001,235.77149999999997 988.3270000000001,235.77149999999997" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Map" data-to="HFName" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="Yes + needs .weight" points="1133.93425,187.23575 1296.128,187.23575 1296.128,133.61075 1465.7725,133.61074999999997" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Map" data-to="HFNameW" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="Yes, append .weight" points="1182.47,235.77149999999997 1380.784,235.77149999999997" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Map" data-to="PassThru" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="No mapping" points="1133.93425,284.30724999999995 1349.9930000000002,284.30724999999995 1349.9930000000002,309.12149999999997 1465.7725,309.12149999999997" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="GGUFLookup" data-to="TensorInfo" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="1409.848,75.35 1634.09375,75.35 1634.09375,199.09649999999996 1650.056,199.09649999999996" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="HFName" data-to="TensorInfo" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="1609.9805000000001,133.61074999999997 1634.09375,133.61074999999997 1634.09375,199.09649999999996 1650.056,199.09649999999996" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="HFNameW" data-to="TensorInfo" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="1602.056,235.77149999999997 1634.09375,235.77149999999997 1634.09375,199.09649999999996 1650.056,199.09649999999996" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="PassThru" data-to="TensorInfo" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="1618.1315,309.12149999999997 1634.09375,309.12149999999997 1634.09375,199.09649999999996 1650.056,199.09649999999996" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<g class="edge-label" data-from="Branch" data-to="GGUFLookup" data-label="No (GGUF)">
+  <rect x="1139.868" y="59.35" width="66.952" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="1173.344" y="74.5" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">No (GGUF)</text>
+</g>
+<g class="edge-label" data-from="Branch" data-to="Translate" data-label="Yes (SafeTensors)">
+  <rect x="653.667" y="219.77149999999997" width="107.34400000000002" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="707.339" y="234.92149999999998" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">Yes (SafeTensors)</text>
+</g>
+<g class="edge-label" data-from="Map" data-to="HFName" data-label="Yes + needs .weight">
+  <rect x="1304.1279999999997" y="117.61075" width="109.72000000000003" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="1358.9879999999998" y="132.76075" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">Yes + needs .weight</text>
+</g>
+<g class="edge-label" data-from="Map" data-to="HFNameW" data-label="Yes, append .weight">
+  <rect x="1226.47" y="219.77149999999997" width="110.31400000000002" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="1281.627" y="234.92149999999998" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">Yes, append .weight</text>
+</g>
+<g class="edge-label" data-from="Map" data-to="PassThru" data-label="No mapping">
+  <rect x="1357.9930000000002" y="293.12149999999997" width="71.70400000000001" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="1393.8450000000003" y="308.27149999999995" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">No mapping</text>
+</g>
+<g class="node" data-id="Model" data-label="Model code
+reads 'ssm_a'" data-shape="rectangle">
+  <rect x="40" y="128.66074999999998" width="124.20099999999998" height="53.800000000000004" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
+  <text x="102.10049999999998" y="155.56074999999998" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f"><tspan x="102.10049999999998" dy="-3.9000000000000012">Model code</tspan><tspan x="102.10049999999998" dy="16.900000000000002">reads &#39;ssm_a&#39;</tspan></text>
+</g>
+<g class="node" data-id="Lookup" data-label="Format.getTensor(name)" data-shape="rectangle">
+  <rect x="212.20099999999996" y="137.11074999999997" width="187.18599999999998" height="36.900000000000006" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="305.794" y="155.56074999999998" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d" dy="4.55">Format.getTensor(name)</text>
+</g>
+<g class="node" data-id="GGUFLookup" data-label="Look up
+'blk.N.ssm_a.weight'
+directly" data-shape="rectangle">
+  <rect x="1250.82" y="40" width="159.028" height="70.7" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="1330.3339999999998" y="75.35" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="1330.3339999999998" dy="-12.350000000000001">Look up</tspan><tspan x="1330.3339999999998" dy="16.900000000000002">&#39;blk.N.ssm_a.weight&#39;</tspan><tspan x="1330.3339999999998" dy="16.900000000000002">directly</tspan></text>
+</g>
+<g class="node" data-id="Translate" data-label="ggufToHfName()" data-shape="rectangle">
+  <rect x="805.0110000000001" y="217.32149999999996" width="135.31599999999997" height="36.900000000000006" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
+  <text x="872.6690000000001" y="235.77149999999995" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12" dy="4.55">ggufToHfName()</text>
+</g>
+<g class="node" data-id="HFName" data-label="'model.layers.N.
+linear_attn.A_log'
+(no .weight suffix)" data-shape="rectangle">
+  <rect x="1465.7725" y="98.26074999999997" width="144.208" height="70.7" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
+  <text x="1537.8765" y="133.61074999999997" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12"><tspan x="1537.8765" dy="-12.350000000000001">&#39;model.layers.N.</tspan><tspan x="1537.8765" dy="16.900000000000002">linear_attn.A_log&#39;</tspan><tspan x="1537.8765" dy="16.900000000000002">(no .weight suffix)</tspan></text>
+</g>
+<g class="node" data-id="HFNameW" data-label="'model.layers.N.
+linear_attn.in_proj_qkv.weight'" data-shape="rectangle">
+  <rect x="1380.784" y="208.87149999999997" width="221.27199999999996" height="53.800000000000004" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
+  <text x="1491.42" y="235.77149999999997" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12"><tspan x="1491.42" dy="-3.9000000000000012">&#39;model.layers.N.</tspan><tspan x="1491.42" dy="16.900000000000002">linear_attn.in_proj_qkv.weight&#39;</tspan></text>
+</g>
+<g class="node" data-id="PassThru" data-label="Pass through as-is" data-shape="rectangle">
+  <rect x="1465.7725" y="290.6715" width="152.359" height="36.900000000000006" rx="0" ry="0" fill="#f3e8ff" stroke="#9333ea" stroke-width="0.75" />
+  <text x="1541.952" y="309.12149999999997" text-anchor="middle" font-size="13" font-weight="500" fill="#581c87" dy="4.55">Pass through as-is</text>
+</g>
+<g class="node" data-id="TensorInfo" data-label="TensorInfo
+(dtype, dims, offset)" data-shape="rectangle">
+  <rect x="1650.056" y="172.19649999999996" width="150.13600000000002" height="53.800000000000004" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
+  <text x="1725.124" y="199.09649999999996" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="1725.124" dy="-3.9000000000000012">TensorInfo</tspan><tspan x="1725.124" dy="16.900000000000002">(dtype, dims, offset)</tspan></text>
+</g>
+<g class="node" data-id="Branch" data-label="is_safetensors?" data-shape="diamond">
+  <polygon points="528.5269999999999,74.42074999999997 609.6669999999999,155.56074999999998 528.5269999999999,236.70075 447.38699999999994,155.56074999999998" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="528.5269999999999" y="155.56074999999998" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">is_safetensors?</text>
+</g>
+<g class="node" data-id="Map" data-label="In tensor_name_map?" data-shape="diamond">
+  <polygon points="1085.3985,138.7 1182.47,235.77149999999997 1085.3985,332.84299999999996 988.327,235.77149999999997" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="1085.3985" y="235.77149999999997" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">In tensor_name_map?</text>
+</g>
+</svg>

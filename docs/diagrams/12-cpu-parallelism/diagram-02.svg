@@ -1,0 +1,111 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 621.181 542.8000000000001" width="621.181" height="542.8000000000001" style="--bg:#FFFFFF;--fg:#27272A;background:#ffffff">
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;display=swap');
+  text { font-family: 'Inter', system-ui, sans-serif; }
+  svg {
+    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
+    --_text:          #1a1a2e;
+    --_text-sec:      var(--muted, color-mix(in srgb, #1a1a2e 60%, #ffffff));
+    --_text-muted:    var(--muted, color-mix(in srgb, #1a1a2e 40%, #ffffff));
+    --_text-faint:    color-mix(in srgb, #1a1a2e 25%, #ffffff);
+    --_line:          var(--line, color-mix(in srgb, #1a1a2e 50%, #ffffff));
+    --_arrow:         var(--accent, color-mix(in srgb, #1a1a2e 85%, #ffffff));
+    --_node-fill:     var(--surface, color-mix(in srgb, #1a1a2e 3%, #ffffff));
+    --_node-stroke:   var(--border, color-mix(in srgb, #1a1a2e 20%, #ffffff));
+    --_group-fill:    #ffffff;
+    --_group-hdr:     color-mix(in srgb, #1a1a2e 5%, #ffffff);
+    --_inner-stroke:  color-mix(in srgb, #1a1a2e 12%, #ffffff);
+    --_key-badge:     color-mix(in srgb, #1a1a2e 10%, #ffffff);
+  }
+</style>
+<defs>
+  <marker id="arrowhead" markerWidth="8" markerHeight="5" refX="7" refY="2.5" orient="auto">
+    <polygon points="0 0, 8 2.5, 0 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+  <marker id="arrowhead-start" markerWidth="8" markerHeight="5" refX="1" refY="2.5" orient="auto-start-reverse">
+    <polygon points="8 0, 0 2.5, 8 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+</defs>
+<g class="subgraph" data-id="n24_rows_grain4__6_chunks" data-label="n=24 rows, grain=4 → 6 chunks">
+  <rect x="161.237" y="334.75" width="0" height="0" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="161.237" y="334.75" width="0" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="173.237" y="348.75" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">n=24 rows, grain=4 → 6 chunks</text>
+</g>
+<polyline class="edge" data-from="Counter" data-to="M" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="fetchAdd(4)" points="161.237,246.15 178.424,246.15 178.424,66.89999999999999 329.311,66.9" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Counter" data-to="W1" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="fetchAdd(4)" points="161.237,256.25 190.424,256.25 190.424,148.7 329.311,148.70000000000002" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Counter" data-to="W2" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="fetchAdd(4)" points="161.237,266.35 202.424,266.35 202.424,230.5 329.311,230.50000000000003" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Counter" data-to="W1b" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="fetchAdd(4)" points="161.237,276.45000000000005 197.237,276.45000000000005 197.237,312.3 329.311,312.3" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Counter" data-to="W3" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="fetchAdd(4)" points="161.237,286.55 185.237,286.55 185.237,394.1 329.311,394.1" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Counter" data-to="W2b" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="fetchAdd(4)" points="161.237,296.65000000000003 173.237,296.65000000000003 173.237,475.90000000000003 329.311,475.90000000000003" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="M" data-to="Out" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="446.84299999999996,66.9 458.5805,66.9 458.5805,265.8 470.318,265.8" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="W1" data-to="Out" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="425.354,148.70000000000002 458.5805,148.70000000000002 458.5805,265.8 470.318,265.8" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="W2" data-to="Out" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="426.09499999999997,230.50000000000003 458.5805,230.50000000000003 458.5805,265.8 470.318,265.8" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="W1b" data-to="Out" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="431.282,312.3 458.5805,312.3 458.5805,265.8 470.318,265.8" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="W3" data-to="Out" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="431.282,394.1 458.5805,394.1 458.5805,265.8 470.318,265.8" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="W2b" data-to="Out" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="440.174,475.90000000000003 458.5805,475.90000000000003 458.5805,265.8 470.318,265.8" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<g class="edge-label" data-from="Counter" data-to="M" data-label="fetchAdd(4)">
+  <rect x="213.67600000000002" y="50.9" width="71.11" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="249.23100000000002" y="66.05" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">fetchAdd(4)</text>
+</g>
+<g class="edge-label" data-from="Counter" data-to="W1" data-label="fetchAdd(4)">
+  <rect x="223.16499999999996" y="132.7" width="71.11" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="258.71999999999997" y="147.85" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">fetchAdd(4)</text>
+</g>
+<g class="edge-label" data-from="Counter" data-to="W2" data-label="fetchAdd(4)">
+  <rect x="210.424" y="214.5" width="71.11" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="245.979" y="229.65" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">fetchAdd(4)</text>
+</g>
+<g class="edge-label" data-from="Counter" data-to="W1b" data-label="fetchAdd(4)">
+  <rect x="205.237" y="296.3" width="71.11" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="240.792" y="311.45" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">fetchAdd(4)</text>
+</g>
+<g class="edge-label" data-from="Counter" data-to="W3" data-label="fetchAdd(4)">
+  <rect x="217.237" y="378.1" width="71.11" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="252.792" y="393.25" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">fetchAdd(4)</text>
+</g>
+<g class="edge-label" data-from="Counter" data-to="W2b" data-label="fetchAdd(4)">
+  <rect x="220.345" y="459.90000000000003" width="71.11" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="255.9" y="475.05" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">fetchAdd(4)</text>
+</g>
+<g class="node" data-id="Counter" data-label="task_counter
+(atomic usize)
+starts at 0" data-shape="rectangle">
+  <rect x="40" y="236.05" width="121.237" height="70.7" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
+  <text x="100.6185" y="271.40000000000003" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f"><tspan x="100.6185" dy="-12.350000000000001">task_counter</tspan><tspan x="100.6185" dy="16.900000000000002">(atomic usize)</tspan><tspan x="100.6185" dy="16.900000000000002">starts at 0</tspan></text>
+</g>
+<g class="node" data-id="M" data-label="Main Thread
+rows 0–3" data-shape="rectangle">
+  <rect x="329.311" y="40" width="117.532" height="53.800000000000004" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="388.077" y="66.9" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="388.077" dy="-3.9000000000000012">Main Thread</tspan><tspan x="388.077" dy="16.900000000000002">rows 0–3</tspan></text>
+</g>
+<g class="node" data-id="W1" data-label="Worker 1
+rows 4–7" data-shape="rectangle">
+  <rect x="329.311" y="121.80000000000001" width="96.04299999999999" height="53.800000000000004" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="377.3325" y="148.70000000000002" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="377.3325" dy="-3.9000000000000012">Worker 1</tspan><tspan x="377.3325" dy="16.900000000000002">rows 4–7</tspan></text>
+</g>
+<g class="node" data-id="W2" data-label="Worker 2
+rows 8–11" data-shape="rectangle">
+  <rect x="329.311" y="203.60000000000002" width="96.78399999999999" height="53.800000000000004" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="377.703" y="230.50000000000003" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="377.703" dy="-3.9000000000000012">Worker 2</tspan><tspan x="377.703" dy="16.900000000000002">rows 8–11</tspan></text>
+</g>
+<g class="node" data-id="W1b" data-label="Worker 1
+rows 12–15" data-shape="rectangle">
+  <rect x="329.311" y="285.40000000000003" width="101.971" height="53.800000000000004" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="380.2965" y="312.3" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="380.2965" dy="-3.9000000000000012">Worker 1</tspan><tspan x="380.2965" dy="16.900000000000002">rows 12–15</tspan></text>
+</g>
+<g class="node" data-id="W3" data-label="Worker 3
+rows 16–19" data-shape="rectangle">
+  <rect x="329.311" y="367.20000000000005" width="101.971" height="53.800000000000004" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="380.2965" y="394.1" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="380.2965" dy="-3.9000000000000012">Worker 3</tspan><tspan x="380.2965" dy="16.900000000000002">rows 16–19</tspan></text>
+</g>
+<g class="node" data-id="W2b" data-label="Worker 2
+rows 20–23" data-shape="rectangle">
+  <rect x="329.311" y="449.00000000000006" width="110.863" height="53.800000000000004" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="384.74249999999995" y="475.90000000000003" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="384.74249999999995" dy="-3.9000000000000012">Worker 2</tspan><tspan x="384.74249999999995" dy="16.900000000000002">rows 20–23</tspan></text>
+</g>
+<g class="node" data-id="Out" data-label="Output rows
+(y vector)" data-shape="rectangle">
+  <rect x="470.318" y="238.90000000000003" width="110.86299999999999" height="53.800000000000004" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
+  <text x="525.7495" y="265.8" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="525.7495" dy="-3.9000000000000012">Output rows</tspan><tspan x="525.7495" dy="16.900000000000002">(y vector)</tspan></text>
+</g>
+</svg>

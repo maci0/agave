@@ -1,0 +1,168 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1137.1599999999999 958.4" width="1137.1599999999999" height="958.4" style="--bg:#FFFFFF;--fg:#27272A;background:#ffffff">
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;display=swap');
+  text { font-family: 'Inter', system-ui, sans-serif; }
+  svg {
+    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
+    --_text:          #1a1a2e;
+    --_text-sec:      var(--muted, color-mix(in srgb, #1a1a2e 60%, #ffffff));
+    --_text-muted:    var(--muted, color-mix(in srgb, #1a1a2e 40%, #ffffff));
+    --_text-faint:    color-mix(in srgb, #1a1a2e 25%, #ffffff);
+    --_line:          var(--line, color-mix(in srgb, #1a1a2e 50%, #ffffff));
+    --_arrow:         var(--accent, color-mix(in srgb, #1a1a2e 85%, #ffffff));
+    --_node-fill:     var(--surface, color-mix(in srgb, #1a1a2e 3%, #ffffff));
+    --_node-stroke:   var(--border, color-mix(in srgb, #1a1a2e 20%, #ffffff));
+    --_group-fill:    #ffffff;
+    --_group-hdr:     color-mix(in srgb, #1a1a2e 5%, #ffffff);
+    --_inner-stroke:  color-mix(in srgb, #1a1a2e 12%, #ffffff);
+    --_key-badge:     color-mix(in srgb, #1a1a2e 10%, #ffffff);
+  }
+</style>
+<defs>
+  <marker id="arrowhead" markerWidth="8" markerHeight="5" refX="7" refY="2.5" orient="auto">
+    <polygon points="0 0, 8 2.5, 0 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+  <marker id="arrowhead-start" markerWidth="8" markerHeight="5" refX="1" refY="2.5" orient="auto-start-reverse">
+    <polygon points="8 0, 0 2.5, 8 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+</defs>
+<g class="subgraph" data-id="Transports" data-label="Transport Layer (transport.zig)">
+  <rect x="428.75299999999993" y="40" width="279.654" height="221.4" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="428.75299999999993" y="40" width="279.654" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="440.75299999999993" y="54" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">Transport Layer (transport.zig)</text>
+</g>
+<g class="subgraph" data-id="Modes" data-label="Parallelism Modes">
+  <rect x="40" y="309.4" width="1057.1599999999999" height="609" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="40" y="309.4" width="1057.1599999999999" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="52" y="323.4" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">Parallelism Modes</text>
+<g class="subgraph" data-id="TP" data-label="Tensor Parallelism (--tp N)">
+  <rect x="56" y="637.9" width="643.4639999999999" height="130.7" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="56" y="637.9" width="643.4639999999999" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="68" y="651.9" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">Tensor Parallelism (--tp N)</text>
+</g>
+<g class="subgraph" data-id="PP" data-label="Pipeline Parallelism (--pp N)">
+  <rect x="56" y="353.4" width="444.534" height="130.7" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="56" y="353.4" width="444.534" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="68" y="367.4" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">Pipeline Parallelism (--pp N)</text>
+</g>
+<g class="subgraph" data-id="Hybrid" data-label="Hybrid TP+PP">
+  <rect x="56" y="788.5999999999999" width="1025.1599999999999" height="113.80000000000001" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="56" y="788.5999999999999" width="1025.1599999999999" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="68" y="802.5999999999999" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">Hybrid TP+PP</text>
+</g>
+<g class="subgraph" data-id="Disagg" data-label="Disaggregated (--disagg)">
+  <rect x="56" y="504.09999999999997" width="577.551" height="113.80000000000001" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="56" y="504.09999999999997" width="577.551" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="68" y="518.0999999999999" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">Disaggregated (--disagg)</text>
+</g>
+</g>
+<polyline class="edge" data-from="Transports" data-to="Modes" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="568.5799999999999,261.4 568.5799999999999,309.4" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="TP0" data-to="TP1" data-style="solid" data-arrow-start="true" data-arrow-end="true" data-label="allReduce
+(shm or NCCL)" points="291.049,717.25 464.41499999999996,717.25" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" marker-start="url(#arrowhead-start)" />
+<polyline class="edge" data-from="PP0" data-to="PP1" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="activation
+transfer" points="202.87,432.75 353.664,432.75" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="H0" data-to="H1" data-style="solid" data-arrow-start="true" data-arrow-end="true" data-label="TP allReduce" points="193.978,859.4999999999999 363.18600000000004,859.4999999999999" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" marker-start="url(#arrowhead-start)" />
+<polyline class="edge" data-from="H2" data-to="H3" data-style="solid" data-arrow-start="true" data-arrow-end="true" data-label="TP allReduce" points="773.974,859.4999999999999 943.182,859.4999999999999" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" marker-start="url(#arrowhead-start)" />
+<polyline class="edge" data-from="H1" data-to="H2" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="PP activation" points="485.16400000000004,859.4999999999999 651.9960000000001,859.4999999999999" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="PNode" data-to="DNode" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="KV cache transfer
+(TCP or NCCL)" points="231.02800000000002,575 422.21400000000006,575" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<g class="edge-label" data-from="TP0" data-to="TP1" data-label="allReduce
+(shm or NCCL)">
+  <rect x="335.049" y="694.25" width="85.366" height="44.6" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="377.73199999999997" y="716.55" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)"><tspan x="377.73199999999997" dy="-3.3000000000000007">allReduce</tspan><tspan x="377.73199999999997" dy="14.3">(shm or NCCL)</tspan></text>
+</g>
+<g class="edge-label" data-from="PP0" data-to="PP1" data-label="activation
+transfer">
+  <rect x="246.87" y="409.74999999999994" width="62.794000000000004" height="44.6" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="278.267" y="432.04999999999995" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)"><tspan x="278.267" dy="-3.3000000000000007">activation</tspan><tspan x="278.267" dy="14.3">transfer</tspan></text>
+</g>
+<g class="edge-label" data-from="H0" data-to="H1" data-label="TP allReduce">
+  <rect x="237.978" y="843.4999999999999" width="81.208" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="278.582" y="858.6499999999999" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">TP allReduce</text>
+</g>
+<g class="edge-label" data-from="H2" data-to="H3" data-label="TP allReduce">
+  <rect x="817.974" y="843.4999999999999" width="81.208" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="858.5780000000001" y="858.6499999999999" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">TP allReduce</text>
+</g>
+<g class="edge-label" data-from="H1" data-to="H2" data-label="PP activation">
+  <rect x="529.164" y="843.4999999999999" width="78.83200000000001" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="568.58" y="858.6499999999999" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">PP activation</text>
+</g>
+<g class="edge-label" data-from="PNode" data-to="DNode" data-label="KV cache transfer
+(TCP or NCCL)">
+  <rect x="275.028" y="552" width="103.18600000000002" height="44.6" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="326.62100000000004" y="574.3" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)"><tspan x="326.62100000000004" dy="-3.3000000000000007">KV cache transfer</tspan><tspan x="326.62100000000004" dy="14.3">(TCP or NCCL)</tspan></text>
+</g>
+<g class="node" data-id="TCP" data-label="TCP
+cross-node
+(any network)" data-shape="rectangle">
+  <rect x="571.1699999999998" y="84" width="121.23700000000001" height="70.7" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
+  <text x="631.7884999999999" y="119.35" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f"><tspan x="631.7884999999999" dy="-12.350000000000001">TCP</tspan><tspan x="631.7884999999999" dy="16.900000000000002">cross-node</tspan><tspan x="631.7884999999999" dy="16.900000000000002">(any network)</tspan></text>
+</g>
+<g class="node" data-id="SHM" data-label="POSIX shm
+same-node
+zero-copy" data-shape="rectangle">
+  <rect x="444.75299999999993" y="84" width="106.41699999999999" height="70.7" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
+  <text x="497.96149999999994" y="119.35" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f"><tspan x="497.96149999999994" dy="-12.350000000000001">POSIX shm</tspan><tspan x="497.96149999999994" dy="16.900000000000002">same-node</tspan><tspan x="497.96149999999994" dy="16.900000000000002">zero-copy</tspan></text>
+</g>
+<g class="node" data-id="NCCL" data-label="NCCL
+RoCE RDMA
+GPU-optimized" data-shape="rectangle">
+  <rect x="444.75299999999993" y="174.7" width="127.16499999999999" height="70.7" rx="0" ry="0" fill="#f3e8ff" stroke="#9333ea" stroke-width="0.75" />
+  <text x="508.3354999999999" y="210.04999999999998" text-anchor="middle" font-size="13" font-weight="500" fill="#581c87"><tspan x="508.3354999999999" dy="-12.350000000000001">NCCL</tspan><tspan x="508.3354999999999" dy="16.900000000000002">RoCE RDMA</tspan><tspan x="508.3354999999999" dy="16.900000000000002">GPU-optimized</tspan></text>
+</g>
+<g class="node" data-id="TP0" data-label="GPU 0
+weight shard 0
+allReduceAdd after each layer" data-shape="rectangle">
+  <rect x="72" y="681.9" width="219.049" height="70.7" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="181.5245" y="717.25" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="181.5245" dy="-12.350000000000001">GPU 0</tspan><tspan x="181.5245" dy="16.900000000000002">weight shard 0</tspan><tspan x="181.5245" dy="16.900000000000002">allReduceAdd after each layer</tspan></text>
+</g>
+<g class="node" data-id="TP1" data-label="GPU 1
+weight shard 1
+allReduceAdd after each layer" data-shape="rectangle">
+  <rect x="464.41499999999996" y="681.9" width="219.049" height="70.7" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="573.9395" y="717.25" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="573.9395" dy="-12.350000000000001">GPU 1</tspan><tspan x="573.9395" dy="16.900000000000002">weight shard 1</tspan><tspan x="573.9395" dy="16.900000000000002">allReduceAdd after each layer</tspan></text>
+</g>
+<g class="node" data-id="PP0" data-label="GPU 0
+layers 0..L/2
+prefill + decode" data-shape="rectangle">
+  <rect x="72" y="397.4" width="130.87" height="70.7" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="137.435" y="432.75" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="137.435" dy="-12.350000000000001">GPU 0</tspan><tspan x="137.435" dy="16.900000000000002">layers 0..L/2</tspan><tspan x="137.435" dy="16.900000000000002">prefill + decode</tspan></text>
+</g>
+<g class="node" data-id="PP1" data-label="GPU 1
+layers L/2..L
+prefill + decode" data-shape="rectangle">
+  <rect x="353.664" y="397.4" width="130.87" height="70.7" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="419.099" y="432.75" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="419.099" dy="-12.350000000000001">GPU 1</tspan><tspan x="419.099" dy="16.900000000000002">layers L/2..L</tspan><tspan x="419.099" dy="16.900000000000002">prefill + decode</tspan></text>
+</g>
+<g class="node" data-id="H0" data-label="GPU 0
+layer shard A" data-shape="rectangle">
+  <rect x="72" y="832.5999999999999" width="121.978" height="53.800000000000004" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="132.989" y="859.4999999999999" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="132.989" dy="-3.9000000000000012">GPU 0</tspan><tspan x="132.989" dy="16.900000000000002">layer shard A</tspan></text>
+</g>
+<g class="node" data-id="H1" data-label="GPU 1
+layer shard A" data-shape="rectangle">
+  <rect x="363.18600000000004" y="832.5999999999999" width="121.978" height="53.800000000000004" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="424.175" y="859.4999999999999" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="424.175" dy="-3.9000000000000012">GPU 1</tspan><tspan x="424.175" dy="16.900000000000002">layer shard A</tspan></text>
+</g>
+<g class="node" data-id="H2" data-label="GPU 2
+layer shard B" data-shape="rectangle">
+  <rect x="651.9960000000001" y="832.5999999999999" width="121.978" height="53.800000000000004" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="712.9850000000001" y="859.4999999999999" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="712.9850000000001" dy="-3.9000000000000012">GPU 2</tspan><tspan x="712.9850000000001" dy="16.900000000000002">layer shard B</tspan></text>
+</g>
+<g class="node" data-id="H3" data-label="GPU 3
+layer shard B" data-shape="rectangle">
+  <rect x="943.182" y="832.5999999999999" width="121.978" height="53.800000000000004" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="1004.171" y="859.4999999999999" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="1004.171" dy="-3.9000000000000012">GPU 3</tspan><tspan x="1004.171" dy="16.900000000000002">layer shard B</tspan></text>
+</g>
+<g class="node" data-id="PNode" data-label="Prefill node
+full context ingestion" data-shape="rectangle">
+  <rect x="72" y="548.0999999999999" width="159.02800000000002" height="53.800000000000004" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
+  <text x="151.514" y="574.9999999999999" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f"><tspan x="151.514" dy="-3.9000000000000012">Prefill node</tspan><tspan x="151.514" dy="16.900000000000002">full context ingestion</tspan></text>
+</g>
+<g class="node" data-id="DNode" data-label="Decode node
+token-by-token generation" data-shape="rectangle">
+  <rect x="422.21400000000006" y="548.0999999999999" width="195.33699999999996" height="53.800000000000004" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
+  <text x="519.8825" y="574.9999999999999" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="519.8825" dy="-3.9000000000000012">Decode node</tspan><tspan x="519.8825" dy="16.900000000000002">token-by-token generation</tspan></text>
+</g>
+</svg>

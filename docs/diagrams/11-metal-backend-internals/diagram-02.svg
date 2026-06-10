@@ -1,0 +1,81 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 419.478 1053.9899999999998" width="419.478" height="1053.9899999999998" style="--bg:#FFFFFF;--fg:#27272A;background:#ffffff">
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;display=swap');
+  text { font-family: 'Inter', system-ui, sans-serif; }
+  svg {
+    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
+    --_text:          #1a1a2e;
+    --_text-sec:      var(--muted, color-mix(in srgb, #1a1a2e 60%, #ffffff));
+    --_text-muted:    var(--muted, color-mix(in srgb, #1a1a2e 40%, #ffffff));
+    --_text-faint:    color-mix(in srgb, #1a1a2e 25%, #ffffff);
+    --_line:          var(--line, color-mix(in srgb, #1a1a2e 50%, #ffffff));
+    --_arrow:         var(--accent, color-mix(in srgb, #1a1a2e 85%, #ffffff));
+    --_node-fill:     var(--surface, color-mix(in srgb, #1a1a2e 3%, #ffffff));
+    --_node-stroke:   var(--border, color-mix(in srgb, #1a1a2e 20%, #ffffff));
+    --_group-fill:    #ffffff;
+    --_group-hdr:     color-mix(in srgb, #1a1a2e 5%, #ffffff);
+    --_inner-stroke:  color-mix(in srgb, #1a1a2e 12%, #ffffff);
+    --_key-badge:     color-mix(in srgb, #1a1a2e 10%, #ffffff);
+  }
+</style>
+<defs>
+  <marker id="arrowhead" markerWidth="8" markerHeight="5" refX="7" refY="2.5" orient="auto">
+    <polygon points="0 0, 8 2.5, 0 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+  <marker id="arrowhead-start" markerWidth="8" markerHeight="5" refX="1" refY="2.5" orient="auto-start-reverse">
+    <polygon points="8 0, 0 2.5, 8 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+</defs>
+<polyline class="edge" data-from="Call" data-to="Hash" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="181.41025000000002,76.9 181.41025000000002,124.9" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Hash" data-to="Lookup" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="181.41025000000002,161.8 181.41025000000002,209.8" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Lookup" data-to="Return" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="Hit (stable weight pointer)" points="140.77858333333336,412.9583333333333 140.77858333333336,591.39 102.5,591.39 102.5,846.3899999999999 148.85408333333336,846.3899999999999 148.85408333333336,858.3899999999999" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Lookup" data-to="Align" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="Miss (first access)" points="222.04191666666668,412.9583333333333 222.04191666666668,489.59 260.32050000000004,489.59 260.32050000000004,569.89" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Align" data-to="Wrap" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="260.32050000000004,623.6899999999999 260.32050000000004,671.6899999999999" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Wrap" data-to="Store" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="260.32050000000004,725.4899999999999 260.32050000000004,773.4899999999999" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Store" data-to="Return" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="260.32050000000004,810.3899999999999 260.32050000000004,846.3899999999999 213.96641666666665,846.3899999999999 213.96641666666665,858.3899999999999" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Return" data-to="Kernel" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="181.41025000000002,912.1899999999998 181.41025000000002,960.1899999999998" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<g class="edge-label" data-from="Lookup" data-to="Return" data-label="Hit (stable weight pointer)">
+  <rect x="36" y="598.39" width="132.29200000000003" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="102.14600000000002" y="613.54" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">Hit (stable weight pointer)</text>
+</g>
+<g class="edge-label" data-from="Lookup" data-to="Align" data-label="Miss (first access)">
+  <rect x="208.3205" y="496.59" width="103.78000000000003" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="260.2105" y="511.73999999999995" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">Miss (first access)</text>
+</g>
+<g class="node" data-id="Call" data-label="getBufRef(ptr, len)" data-shape="rectangle">
+  <rect x="108.93575000000001" y="40" width="144.949" height="36.900000000000006" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
+  <text x="181.41025000000002" y="58.45" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f" dy="4.55">getBufRef(ptr, len)</text>
+</g>
+<g class="node" data-id="Hash" data-label="Compute addr = @intFromPtr(ptr)" data-shape="rectangle">
+  <rect x="66.69875000000002" y="124.9" width="229.423" height="36.900000000000006" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
+  <text x="181.41025000000002" y="143.35000000000002" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12" dy="4.55">Compute addr = @intFromPtr(ptr)</text>
+</g>
+<g class="node" data-id="Return" data-label="Return cached MTLBuffer
++ recomputed offset" data-shape="rectangle">
+  <rect x="83.74175000000005" y="858.3899999999999" width="195.33699999999996" height="53.800000000000004" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
+  <text x="181.41025000000002" y="885.2899999999998" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="181.41025000000002" dy="-3.9000000000000012">Return cached MTLBuffer</tspan><tspan x="181.41025000000002" dy="16.900000000000002">+ recomputed offset</tspan></text>
+</g>
+<g class="node" data-id="Align" data-label="Align ptr down to
+page boundary" data-shape="rectangle">
+  <rect x="192.29200000000003" y="569.89" width="136.05700000000002" height="53.800000000000004" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
+  <text x="260.32050000000004" y="596.79" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12"><tspan x="260.32050000000004" dy="-3.9000000000000012">Align ptr down to</tspan><tspan x="260.32050000000004" dy="16.900000000000002">page boundary</tspan></text>
+</g>
+<g class="node" data-id="Wrap" data-label="newBufferWithBytesNoCopy
+(zero-copy, Shared mode)" data-shape="rectangle">
+  <rect x="156.72400000000005" y="671.6899999999999" width="207.19299999999998" height="53.800000000000004" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="260.32050000000004" y="698.5899999999999" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="260.32050000000004" dy="-3.9000000000000012">newBufferWithBytesNoCopy</tspan><tspan x="260.32050000000004" dy="16.900000000000002">(zero-copy, Shared mode)</tspan></text>
+</g>
+<g class="node" data-id="Store" data-label="buf_cache.put(aligned_base, info)" data-shape="rectangle">
+  <rect x="141.16300000000007" y="773.4899999999999" width="238.31499999999994" height="36.900000000000006" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
+  <text x="260.32050000000004" y="791.9399999999999" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12" dy="4.55">buf_cache.put(aligned_base, info)</text>
+</g>
+<g class="node" data-id="Kernel" data-label="Pass BufRef{buf, offset}
+to Metal compute encoder" data-shape="rectangle">
+  <rect x="86.33525000000003" y="960.1899999999998" width="190.15" height="53.800000000000004" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
+  <text x="181.41025000000002" y="987.0899999999998" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="181.41025000000002" dy="-3.9000000000000012">Pass BufRef{buf, offset}</tspan><tspan x="181.41025000000002" dy="16.900000000000002">to Metal compute encoder</tspan></text>
+</g>
+<g class="node" data-id="Lookup" data-label="buf_cache.get(aligned_base)?" data-shape="diamond">
+  <polygon points="181.41025000000002,209.8 303.30525,331.695 181.41025000000002,453.59 59.51525000000004,331.695" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="181.41025000000002" y="331.695" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">buf_cache.get(aligned_base)?</text>
+</g>
+</svg>

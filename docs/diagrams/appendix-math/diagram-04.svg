@@ -1,0 +1,78 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 420.869 693.9" width="420.869" height="693.9" style="--bg:#FFFFFF;--fg:#27272A;background:#ffffff">
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;display=swap');
+  text { font-family: 'Inter', system-ui, sans-serif; }
+  svg {
+    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
+    --_text:          #1a1a2e;
+    --_text-sec:      var(--muted, color-mix(in srgb, #1a1a2e 60%, #ffffff));
+    --_text-muted:    var(--muted, color-mix(in srgb, #1a1a2e 40%, #ffffff));
+    --_text-faint:    color-mix(in srgb, #1a1a2e 25%, #ffffff);
+    --_line:          var(--line, color-mix(in srgb, #1a1a2e 50%, #ffffff));
+    --_arrow:         var(--accent, color-mix(in srgb, #1a1a2e 85%, #ffffff));
+    --_node-fill:     var(--surface, color-mix(in srgb, #1a1a2e 3%, #ffffff));
+    --_node-stroke:   var(--border, color-mix(in srgb, #1a1a2e 20%, #ffffff));
+    --_group-fill:    #ffffff;
+    --_group-hdr:     color-mix(in srgb, #1a1a2e 5%, #ffffff);
+    --_inner-stroke:  color-mix(in srgb, #1a1a2e 12%, #ffffff);
+    --_key-badge:     color-mix(in srgb, #1a1a2e 10%, #ffffff);
+  }
+</style>
+<defs>
+  <marker id="arrowhead" markerWidth="8" markerHeight="5" refX="7" refY="2.5" orient="auto">
+    <polygon points="0 0, 8 2.5, 0 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+  <marker id="arrowhead-start" markerWidth="8" markerHeight="5" refX="1" refY="2.5" orient="auto-start-reverse">
+    <polygon points="8 0, 0 2.5, 8 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+</defs>
+<polyline class="edge" data-from="Input" data-to="Naive" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="213.21325000000002,93.80000000000001 213.21325000000002,117.80000000000001 122.47800000000001,117.80000000000001 122.47800000000001,141.8" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Naive" data-to="Overflow" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="122.47800000000001,178.70000000000002 122.47800000000001,226.70000000000002" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Input" data-to="FindMax" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="213.21325000000002,93.80000000000001 213.21325000000002,117.80000000000001 303.9485,117.80000000000001 303.9485,141.80000000000004" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="FindMax" data-to="Shift" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="303.9485,178.70000000000005 303.9485,226.70000000000005" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Shift" data-to="ExpSafe" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="303.9485,280.50000000000006 303.9485000000001,328.50000000000006" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="ExpSafe" data-to="Sum" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="303.9485000000001,382.30000000000007 303.9485,430.30000000000007" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Sum" data-to="Divide" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="303.9485,467.20000000000005 303.9485,515.2" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Divide" data-to="Probs" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="303.9485,552.1 303.9485,600.1" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<g class="node" data-id="Input" data-label="&quot;Raw scores x
+e.g. [1000, 1001, 999" data-shape="rectangle">
+  <rect x="139.62725" y="40" width="147.17200000000003" height="53.800000000000004" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="213.21325000000002" y="66.9" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="213.21325000000002" dy="-3.9000000000000012">&quot;Raw scores x</tspan><tspan x="213.21325000000002" dy="16.900000000000002">e.g. [1000, 1001, 999</tspan></text>
+</g>
+<g class="node" data-id="Naive" data-label="Naive: exp(x) directly" data-shape="rectangle">
+  <rect x="40" y="141.8" width="164.95600000000002" height="36.900000000000006" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="122.47800000000001" y="160.25" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d" dy="4.55">Naive: exp(x) directly</text>
+</g>
+<g class="node" data-id="Overflow" data-label="exp(1000) = Inf
+overflow — unusable" data-shape="rectangle">
+  <rect x="42.964" y="226.70000000000002" width="159.02800000000002" height="53.800000000000004" rx="0" ry="0" fill="#fee2e2" stroke="#ef4444" stroke-width="0.75" />
+  <text x="122.47800000000001" y="253.60000000000002" text-anchor="middle" font-size="13" font-weight="500" fill="#7f1d1d"><tspan x="122.47800000000001" dy="-3.9000000000000012">exp(1000) = Inf</tspan><tspan x="122.47800000000001" dy="16.900000000000002">overflow — unusable</tspan></text>
+</g>
+<g class="node" data-id="FindMax" data-label="Find max(x) = 1001" data-shape="rectangle">
+  <rect x="232.95600000000002" y="141.80000000000004" width="141.985" height="36.900000000000006" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="303.9485" y="160.25000000000006" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d" dy="4.55">Find max(x) = 1001</text>
+</g>
+<g class="node" data-id="Shift" data-label="&quot;Subtract max
+x_shifted = [-1, 0, -2" data-shape="rectangle">
+  <rect x="230.733" y="226.70000000000005" width="146.431" height="53.800000000000004" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="303.9485" y="253.60000000000005" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="303.9485" dy="-3.9000000000000012">&quot;Subtract max</tspan><tspan x="303.9485" dy="16.900000000000002">x_shifted = [-1, 0, -2</tspan></text>
+</g>
+<g class="node" data-id="ExpSafe" data-label="&quot;exp(x_shifted)
+= [0.368, 1.0, 0.135" data-shape="rectangle">
+  <rect x="234.06750000000005" y="328.50000000000006" width="139.762" height="53.800000000000004" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="303.9485000000001" y="355.40000000000003" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="303.9485000000001" dy="-3.9000000000000012">&quot;exp(x_shifted)</tspan><tspan x="303.9485000000001" dy="16.900000000000002">= [0.368, 1.0, 0.135</tspan></text>
+</g>
+<g class="node" data-id="Sum" data-label="sum = 1.503" data-shape="rectangle">
+  <rect x="251.11050000000003" y="430.30000000000007" width="105.676" height="36.900000000000006" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
+  <text x="303.9485" y="448.75000000000006" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12" dy="4.55">sum = 1.503</text>
+</g>
+<g class="node" data-id="Divide" data-label="Divide each by sum" data-shape="rectangle">
+  <rect x="227.02800000000002" y="515.2" width="153.841" height="36.900000000000006" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="303.9485" y="533.6500000000001" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d" dy="4.55">Divide each by sum</text>
+</g>
+<g class="node" data-id="Probs" data-label="&quot;Probabilities
+[0.245, 0.665, 0.090" data-shape="rectangle">
+  <rect x="227.02800000000002" y="600.1" width="153.841" height="53.800000000000004" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="303.9485" y="627" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="303.9485" dy="-3.9000000000000012">&quot;Probabilities</tspan><tspan x="303.9485" dy="16.900000000000002">[0.245, 0.665, 0.090</tspan></text>
+</g>
+</svg>

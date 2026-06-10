@@ -1,0 +1,97 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 493.62399999999997 1025.489" width="493.62399999999997" height="1025.489" style="--bg:#FFFFFF;--fg:#27272A;background:#ffffff">
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;display=swap');
+  text { font-family: 'Inter', system-ui, sans-serif; }
+  svg {
+    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
+    --_text:          #1a1a2e;
+    --_text-sec:      var(--muted, color-mix(in srgb, #1a1a2e 60%, #ffffff));
+    --_text-muted:    var(--muted, color-mix(in srgb, #1a1a2e 40%, #ffffff));
+    --_text-faint:    color-mix(in srgb, #1a1a2e 25%, #ffffff);
+    --_line:          var(--line, color-mix(in srgb, #1a1a2e 50%, #ffffff));
+    --_arrow:         var(--accent, color-mix(in srgb, #1a1a2e 85%, #ffffff));
+    --_node-fill:     var(--surface, color-mix(in srgb, #1a1a2e 3%, #ffffff));
+    --_node-stroke:   var(--border, color-mix(in srgb, #1a1a2e 20%, #ffffff));
+    --_group-fill:    #ffffff;
+    --_group-hdr:     color-mix(in srgb, #1a1a2e 5%, #ffffff);
+    --_inner-stroke:  color-mix(in srgb, #1a1a2e 12%, #ffffff);
+    --_key-badge:     color-mix(in srgb, #1a1a2e 10%, #ffffff);
+  }
+</style>
+<defs>
+  <marker id="arrowhead" markerWidth="8" markerHeight="5" refX="7" refY="2.5" orient="auto">
+    <polygon points="0 0, 8 2.5, 0 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+  <marker id="arrowhead-start" markerWidth="8" markerHeight="5" refX="1" refY="2.5" orient="auto-start-reverse">
+    <polygon points="8 0, 0 2.5, 8 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+</defs>
+<g class="subgraph" data-id="TestAllocator" data-label="std.testing.allocator — Leak Detection Lifecycle">
+  <rect x="40" y="40" width="413.62399999999997" height="945.4890000000001" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="40" y="40" width="413.62399999999997" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="52" y="54" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">std.testing.allocator — Leak Detection Lifecycle</text>
+</g>
+<polyline class="edge" data-from="T0" data-to="A1" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="216.0605,154.7 216.0605,202.7" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="A1" data-to="A2" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="216.0605,273.4 216.0605,321.4" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="A2" data-to="F1" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="216.0605,392.1 216.0605,440.1" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="F1" data-to="TE" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="216.0605,510.8 216.0605,558.8" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="TE" data-to="CHECK" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="216.0605,595.7 216.0605,643.7" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="CHECK" data-to="PASS" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="yes
+table = {}" points="195.31233333333333,747.4408333333334 195.31233333333333,780.1890000000001 113.6545,780.1890000000001 113.65449999999998,898.7890000000001" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="CHECK" data-to="FAIL" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="no
+table = {ptr_B}" points="236.80866666666668,747.4408333333333 236.80866666666668,780.1890000000001 318.4665,780.1890000000001 318.4665,898.7890000000001" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<g class="edge-label" data-from="CHECK" data-to="PASS" data-label="yes
+table = {}">
+  <rect x="85.6545" y="811.1890000000001" width="55.666" height="44.6" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="113.4875" y="833.489" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)"><tspan x="113.4875" dy="-3.3000000000000007">yes</tspan><tspan x="113.4875" dy="14.3">table = {}</tspan></text>
+</g>
+<g class="edge-label" data-from="CHECK" data-to="FAIL" data-label="no
+table = {ptr_B}">
+  <rect x="277.4665" y="811.1890000000001" width="81.802" height="44.6" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="318.3675" y="833.489" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)"><tspan x="318.3675" dy="-3.3000000000000007">no</tspan><tspan x="318.3675" dy="14.3">table = {ptr_B}</tspan></text>
+</g>
+<g class="node" data-id="T0" data-label="test begins
+allocator created
+alloc table = {}" data-shape="rectangle">
+  <rect x="145.06799999999998" y="84" width="141.985" height="70.7" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
+  <text x="216.0605" y="119.35" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f"><tspan x="216.0605" dy="-12.350000000000001">test begins</tspan><tspan x="216.0605" dy="16.900000000000002">allocator created</tspan><tspan x="216.0605" dy="16.900000000000002">alloc table = {}</tspan></text>
+</g>
+<g class="node" data-id="A1" data-label="alloc(u8, 100)
+registers ptr_A → 100 bytes
+table = {ptr_A}" data-shape="rectangle">
+  <rect x="118.0215" y="202.7" width="196.078" height="70.7" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="216.0605" y="238.04999999999998" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="216.0605" dy="-12.350000000000001">alloc(u8, 100)</tspan><tspan x="216.0605" dy="16.900000000000002">registers ptr_A → 100 bytes</tspan><tspan x="216.0605" dy="16.900000000000002">table = {ptr_A}</tspan></text>
+</g>
+<g class="node" data-id="A2" data-label="alloc(u32, 64)
+registers ptr_B → 256 bytes
+table = {ptr_A, ptr_B}" data-shape="rectangle">
+  <rect x="115.79849999999999" y="321.4" width="200.524" height="70.7" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="216.0605" y="356.75" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="216.0605" dy="-12.350000000000001">alloc(u32, 64)</tspan><tspan x="216.0605" dy="16.900000000000002">registers ptr_B → 256 bytes</tspan><tspan x="216.0605" dy="16.900000000000002">table = {ptr_A, ptr_B}</tspan></text>
+</g>
+<g class="node" data-id="F1" data-label="free(ptr_A)
+removes ptr_A from table
+table = {ptr_B}" data-shape="rectangle">
+  <rect x="122.83800000000002" y="440.1" width="186.44499999999996" height="70.7" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
+  <text x="216.0605" y="475.45000000000005" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12"><tspan x="216.0605" dy="-12.350000000000001">free(ptr_A)</tspan><tspan x="216.0605" dy="16.900000000000002">removes ptr_A from table</tspan><tspan x="216.0605" dy="16.900000000000002">table = {ptr_B}</tspan></text>
+</g>
+<g class="node" data-id="TE" data-label="test body exits" data-shape="rectangle">
+  <rect x="153.5895" y="558.8" width="124.942" height="36.900000000000006" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
+  <text x="216.0605" y="577.25" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12" dy="4.55">test body exits</text>
+</g>
+<g class="node" data-id="CHECK" data-label="alloc table
+empty?" data-shape="diamond">
+  <polygon points="216.0605,643.7 278.305,705.9445000000001 216.0605,768.1890000000001 153.81599999999997,705.9445000000001" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="216.0605" y="705.9445000000001" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="216.0605" dy="-3.9000000000000012">alloc table</tspan><tspan x="216.0605" dy="16.900000000000002">empty?</tspan></text>
+</g>
+<g class="node" data-id="PASS" data-label="TEST PASS
+no leaks" data-shape="rectangle">
+  <rect x="56" y="898.7890000000001" width="115.30899999999998" height="53.800000000000004" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
+  <text x="113.65449999999998" y="925.6890000000001" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="113.65449999999998" dy="-3.9000000000000012">TEST PASS</tspan><tspan x="113.65449999999998" dy="16.900000000000002">no leaks</tspan></text>
+</g>
+<g class="node" data-id="FAIL" data-label="TEST FAIL
+memory leak detected
+ptr_B (256 bytes) was never freed" data-shape="rectangle">
+  <rect x="199.309" y="898.7890000000001" width="238.31499999999997" height="70.7" rx="0" ry="0" fill="#fee2e2" stroke="#ef4444" stroke-width="0.75" />
+  <text x="318.4665" y="934.1390000000001" text-anchor="middle" font-size="13" font-weight="500" fill="#7f1d1d"><tspan x="318.4665" dy="-12.350000000000001">TEST FAIL</tspan><tspan x="318.4665" dy="16.900000000000002">memory leak detected</tspan><tspan x="318.4665" dy="16.900000000000002">ptr_B (256 bytes) was never freed</tspan></text>
+</g>
+</svg>

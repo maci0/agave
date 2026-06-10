@@ -1,0 +1,134 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 943.0289166666666 1445.2800000000002" width="943.0289166666666" height="1445.2800000000002" style="--bg:#FFFFFF;--fg:#27272A;background:#ffffff">
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;display=swap');
+  text { font-family: 'Inter', system-ui, sans-serif; }
+  svg {
+    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
+    --_text:          #1a1a2e;
+    --_text-sec:      var(--muted, color-mix(in srgb, #1a1a2e 60%, #ffffff));
+    --_text-muted:    var(--muted, color-mix(in srgb, #1a1a2e 40%, #ffffff));
+    --_text-faint:    color-mix(in srgb, #1a1a2e 25%, #ffffff);
+    --_line:          var(--line, color-mix(in srgb, #1a1a2e 50%, #ffffff));
+    --_arrow:         var(--accent, color-mix(in srgb, #1a1a2e 85%, #ffffff));
+    --_node-fill:     var(--surface, color-mix(in srgb, #1a1a2e 3%, #ffffff));
+    --_node-stroke:   var(--border, color-mix(in srgb, #1a1a2e 20%, #ffffff));
+    --_group-fill:    #ffffff;
+    --_group-hdr:     color-mix(in srgb, #1a1a2e 5%, #ffffff);
+    --_inner-stroke:  color-mix(in srgb, #1a1a2e 12%, #ffffff);
+    --_key-badge:     color-mix(in srgb, #1a1a2e 10%, #ffffff);
+  }
+</style>
+<defs>
+  <marker id="arrowhead" markerWidth="8" markerHeight="5" refX="7" refY="2.5" orient="auto">
+    <polygon points="0 0, 8 2.5, 0 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+  <marker id="arrowhead-start" markerWidth="8" markerHeight="5" refX="1" refY="2.5" orient="auto-start-reverse">
+    <polygon points="8 0, 0 2.5, 8 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+</defs>
+<g class="subgraph" data-id="Guarantee" data-label="Distribution Guarantee">
+  <rect x="434.5709166666667" y="40" width="468.45799999999997" height="113.80000000000001" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="434.5709166666667" y="40" width="468.45799999999997" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="446.5709166666667" y="54" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">Distribution Guarantee</text>
+</g>
+<polyline class="edge" data-from="Start" data-to="ReadProbs" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="296.9535,484.38900000000007 296.9535000000001,520.389" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="ReadProbs" data-to="Ratio" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="296.9535000000001,591.089 296.9535000000001,639.089" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Ratio" data-to="Sample" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="296.9535000000001,692.889 296.9535000000001,740.889" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Sample" data-to="Decision" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="296.9535000000001,777.789 296.9535000000001,813.789 226.44191666666669,813.789 226.44191666666669,849.2541666666666" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Decision" data-to="Accept" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="yes: accept
+(draft token is good enough)" points="179.51158333333336,849.2541666666666 179.51158333333336,813.789 109,813.789 109,338.289 281.28625,338.289 281.28625,153.8" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Decision" data-to="Residual" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="no: reject
+(draft overestimates probability)" points="202.97675000000004,966.5799999999999 202.97675000000004,1097.18" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Residual" data-to="Correct" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="202.97675000000004,1167.88 202.97675000000004,1215.88" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Correct" data-to="Stop" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="202.97675000000004,1286.5800000000002 202.97675000000004,1334.5800000000002" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Accept" data-to="More" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="343.92858333333334,153.8 343.92858333333334,189.8 416.95825,189.8 416.95825,201.8" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="More" data-to="Start" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="yes" points="396.2100833333333,305.54083333333324 396.2100833333333,338.289 296.9535000000001,338.289 296.9535,430.5890000000001" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="More" data-to="BonusToken" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="no (all K accepted)" points="437.70641666666666,305.54083333333335 437.70641666666666,362.2890000000002 536.963,362.2890000000002 536.963,430.5890000000001" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<g class="edge-label" data-from="Decision" data-to="Accept" data-label="yes: accept
+(draft token is good enough)">
+  <rect x="36" y="738.189" width="145.95400000000004" height="44.6" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="108.97700000000002" y="760.4889999999999" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)"><tspan x="108.97700000000002" dy="-3.3000000000000007">yes: accept</tspan><tspan x="108.97700000000002" dy="14.3">(draft token is good enough)</tspan></text>
+</g>
+<g class="edge-label" data-from="Decision" data-to="Residual" data-label="no: reject
+(draft overestimates probability)">
+  <rect x="120.47675000000004" y="1009.5800000000002" width="164.962" height="44.6" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="202.95775000000003" y="1031.88" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)"><tspan x="202.95775000000003" dy="-3.3000000000000007">no: reject</tspan><tspan x="202.95775000000003" dy="14.3">(draft overestimates probability)</tspan></text>
+</g>
+<g class="edge-label" data-from="More" data-to="Start" data-label="yes">
+  <rect x="278.9535000000001" y="345.289" width="35.47" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="296.6885000000001" y="360.43899999999996" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">yes</text>
+</g>
+<g class="edge-label" data-from="More" data-to="BonusToken" data-label="no (all K accepted)">
+  <rect x="485.463" y="369.2890000000002" width="102.59200000000001" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="536.759" y="384.4390000000002" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">no (all K accepted)</text>
+</g>
+<g class="node" data-id="Start" data-label="For each draft token x_i
+proposed by draft model" data-shape="rectangle">
+  <rect x="205.95400000000004" y="430.5890000000001" width="181.99899999999997" height="53.800000000000004" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
+  <text x="296.9535" y="457.4890000000001" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f"><tspan x="296.9535" dy="-3.9000000000000012">For each draft token x_i</tspan><tspan x="296.9535" dy="16.900000000000002">proposed by draft model</tspan></text>
+</g>
+<g class="node" data-id="ReadProbs" data-label="Read probabilities
+p_draft(x_i) from draft logits
+p_target(x_i) from target logits" data-shape="rectangle">
+  <rect x="190.39300000000006" y="520.389" width="213.12099999999995" height="70.7" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
+  <text x="296.9535" y="555.739" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f"><tspan x="296.9535" dy="-12.350000000000001">Read probabilities</tspan><tspan x="296.9535" dy="16.900000000000002">p_draft(x_i) from draft logits</tspan><tspan x="296.9535" dy="16.900000000000002">p_target(x_i) from target logits</tspan></text>
+</g>
+<g class="node" data-id="Ratio" data-label="Compute acceptance ratio
+r = p_target(x_i) / p_draft(x_i)" data-shape="rectangle">
+  <rect x="192.61600000000004" y="639.089" width="208.67499999999998" height="53.800000000000004" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
+  <text x="296.9535" y="665.989" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12"><tspan x="296.9535" dy="-3.9000000000000012">Compute acceptance ratio</tspan><tspan x="296.9535" dy="16.900000000000002">r = p_target(x_i) / p_draft(x_i)</tspan></text>
+</g>
+<g class="node" data-id="Sample" data-label="Sample u ~ Uniform(0, 1)" data-shape="rectangle">
+  <rect x="210.02950000000004" y="740.889" width="173.84799999999998" height="36.900000000000006" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
+  <text x="296.9535" y="759.339" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12" dy="4.55">Sample u ~ Uniform(0, 1)</text>
+</g>
+<g class="node" data-id="Accept" data-label="Accept x_i
+move to next position
+no extra compute needed" data-shape="rectangle">
+  <rect x="218.64391666666668" y="83.10000000000001" width="187.927" height="70.7" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
+  <text x="312.60741666666667" y="118.45000000000002" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="312.60741666666667" dy="-12.350000000000001">Accept x_i</tspan><tspan x="312.60741666666667" dy="16.900000000000002">move to next position</tspan><tspan x="312.60741666666667" dy="16.900000000000002">no extra compute needed</tspan></text>
+</g>
+<g class="node" data-id="Residual" data-label="Compute residual distribution
+p_residual(x) = max(0, p_target(x) - p_draft(x))
+normalized over full vocabulary" data-shape="rectangle">
+  <rect x="50.84475000000009" y="1097.18" width="304.2639999999999" height="70.7" rx="0" ry="0" fill="#fee2e2" stroke="#ef4444" stroke-width="0.75" />
+  <text x="202.97675000000004" y="1132.53" text-anchor="middle" font-size="13" font-weight="500" fill="#7f1d1d"><tspan x="202.97675000000004" dy="-12.350000000000001">Compute residual distribution</tspan><tspan x="202.97675000000004" dy="16.900000000000002">p_residual(x) = max(0, p_target(x) - p_draft(x))</tspan><tspan x="202.97675000000004" dy="16.900000000000002">normalized over full vocabulary</tspan></text>
+</g>
+<g class="node" data-id="Correct" data-label="Sample correction token x_i'
+from p_residual
+replace x_i with x_i'" data-shape="rectangle">
+  <rect x="99.38025000000005" y="1215.88" width="207.19299999999998" height="70.7" rx="0" ry="0" fill="#fee2e2" stroke="#ef4444" stroke-width="0.75" />
+  <text x="202.97675000000004" y="1251.23" text-anchor="middle" font-size="13" font-weight="500" fill="#7f1d1d"><tspan x="202.97675000000004" dy="-12.350000000000001">Sample correction token x_i&#39;</tspan><tspan x="202.97675000000004" dy="16.900000000000002">from p_residual</tspan><tspan x="202.97675000000004" dy="16.900000000000002">replace x_i with x_i&#39;</tspan></text>
+</g>
+<g class="node" data-id="Stop" data-label="Stop -- discard all
+remaining draft tokens
+after position i" data-shape="rectangle">
+  <rect x="117.53475000000003" y="1334.5800000000002" width="170.88400000000001" height="70.7" rx="0" ry="0" fill="#fee2e2" stroke="#ef4444" stroke-width="0.75" />
+  <text x="202.97675000000004" y="1369.93" text-anchor="middle" font-size="13" font-weight="500" fill="#7f1d1d"><tspan x="202.97675000000004" dy="-12.350000000000001">Stop -- discard all</tspan><tspan x="202.97675000000004" dy="16.900000000000002">remaining draft tokens</tspan><tspan x="202.97675000000004" dy="16.900000000000002">after position i</tspan></text>
+</g>
+<g class="node" data-id="BonusToken" data-label="Sample bonus token
+from p_target at position K+1
+(always done after full acceptance)" data-shape="rectangle">
+  <rect x="415.953" y="430.5890000000001" width="242.01999999999992" height="70.7" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
+  <text x="536.963" y="465.93900000000014" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="536.963" dy="-12.350000000000001">Sample bonus token</tspan><tspan x="536.963" dy="16.900000000000002">from p_target at position K+1</tspan><tspan x="536.963" dy="16.900000000000002">(always done after full acceptance)</tspan></text>
+</g>
+<g class="node" data-id="Decision" data-label="u &lt;= min(1, r)?" data-shape="diamond">
+  <polygon points="202.97675,825.789 273.37225,896.1845 202.97675,966.5799999999999 132.58125,896.1845" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="202.97675" y="896.1845" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">u &lt;= min(1, r)?</text>
+</g>
+<g class="node" data-id="More" data-label="more draft
+tokens?" data-shape="diamond">
+  <polygon points="416.95825,201.8 479.20275000000004,264.0445 416.95825,326.28900000000004 354.71375,264.0445" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="416.95825" y="264.0445" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="416.95825" dy="-3.9000000000000012">more draft</tspan><tspan x="416.95825" dy="16.900000000000002">tokens?</tspan></text>
+</g>
+<g class="node" data-id="G1" data-label="&quot;At every accepted position:
+E[output" data-shape="rectangle">
+  <rect x="450.5709166666667" y="84" width="203.48799999999997" height="53.800000000000004" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="552.3149166666667" y="110.9" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="552.3149166666667" dy="-3.9000000000000012">&quot;At every accepted position:</tspan><tspan x="552.3149166666667" dy="16.900000000000002">E[output</tspan></text>
+</g>
+<g class="node" data-id="G2" data-label="Output is i.i.d. identical
+to sampling from target alone" data-shape="rectangle">
+  <rect x="682.0589166666666" y="84" width="204.97" height="53.800000000000004" rx="0" ry="0" fill="#f3e8ff" stroke="#9333ea" stroke-width="0.75" />
+  <text x="784.5439166666666" y="110.9" text-anchor="middle" font-size="13" font-weight="500" fill="#581c87"><tspan x="784.5439166666666" dy="-3.9000000000000012">Output is i.i.d. identical</tspan><tspan x="784.5439166666666" dy="16.900000000000002">to sampling from target alone</tspan></text>
+</g>
+</svg>

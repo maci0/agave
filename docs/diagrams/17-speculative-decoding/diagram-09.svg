@@ -1,0 +1,157 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1424.6834999999999 1467.564" width="1424.6834999999999" height="1467.564" style="--bg:#FFFFFF;--fg:#27272A;background:#ffffff">
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;display=swap');
+  text { font-family: 'Inter', system-ui, sans-serif; }
+  svg {
+    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
+    --_text:          #1a1a2e;
+    --_text-sec:      var(--muted, color-mix(in srgb, #1a1a2e 60%, #ffffff));
+    --_text-muted:    var(--muted, color-mix(in srgb, #1a1a2e 40%, #ffffff));
+    --_text-faint:    color-mix(in srgb, #1a1a2e 25%, #ffffff);
+    --_line:          var(--line, color-mix(in srgb, #1a1a2e 50%, #ffffff));
+    --_arrow:         var(--accent, color-mix(in srgb, #1a1a2e 85%, #ffffff));
+    --_node-fill:     var(--surface, color-mix(in srgb, #1a1a2e 3%, #ffffff));
+    --_node-stroke:   var(--border, color-mix(in srgb, #1a1a2e 20%, #ffffff));
+    --_group-fill:    #ffffff;
+    --_group-hdr:     color-mix(in srgb, #1a1a2e 5%, #ffffff);
+    --_inner-stroke:  color-mix(in srgb, #1a1a2e 12%, #ffffff);
+    --_key-badge:     color-mix(in srgb, #1a1a2e 10%, #ffffff);
+  }
+</style>
+<defs>
+  <marker id="arrowhead" markerWidth="8" markerHeight="5" refX="7" refY="2.5" orient="auto">
+    <polygon points="0 0, 8 2.5, 0 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+  <marker id="arrowhead-start" markerWidth="8" markerHeight="5" refX="1" refY="2.5" orient="auto-start-reverse">
+    <polygon points="8 0, 0 2.5, 8 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+</defs>
+<g class="subgraph" data-id="RingBuffer" data-label="Ring Buffer (last 2048 generated tokens, 8 KB)">
+  <rect x="51.78749999999994" y="1330.664" width="182.13600000000002" height="96.9" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="51.78749999999994" y="1330.664" width="182.13600000000002" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="63.78749999999994" y="1344.664" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">Ring Buffer (last 2048 generated tokens, 8 KB)</text>
+</g>
+<g class="subgraph" data-id="Query" data-label="Query Construction">
+  <rect x="151.97049999999996" y="40" width="205.107" height="298.20000000000005" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="151.97049999999996" y="40" width="205.107" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="163.97049999999996" y="54" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">Query Construction</text>
+</g>
+<g class="subgraph" data-id="Performance" data-label="Performance Profile">
+  <rect x="385.0775" y="578.5640000000001" width="999.6059999999999" height="96.9" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="385.0775" y="578.5640000000001" width="999.6059999999999" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="397.0775" y="592.5640000000001" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">Performance Profile</text>
+</g>
+<polyline class="edge" data-from="Search" data-to="Found" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="254.52399999999994,545.5 254.52399999999994,593.5" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Found" data-to="Proposal" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="yes
+(found at position j)" points="236.8633333333333,681.8033333333333 236.8633333333333,711.4640000000002 142.85549999999995,711.4640000000002 142.85549999999998,806.0640000000001" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Found" data-to="Fallback" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="no match
+(novel context)" points="272.18466666666666,681.8033333333333 272.18466666666666,711.4639999999999 366.19249999999994,711.4639999999999 366.19249999999994,806.0640000000001" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Proposal" data-to="Verify" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="proposed draft tokens" points="142.85549999999998,876.7640000000001 142.8555,993.0640000000001" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Verify" data-to="Emit" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="accepted tokens" points="109.06433333333332,1046.864 109.06433333333332,1082.864 93.12349999999995,1082.864 93.12349999999995,1151.164 123.51383333333331,1151.164 123.51383333333331,1163.164" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Verify" data-to="Emit" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="correction token" points="176.64666666666665,1046.864 176.64666666666665,1082.864 192.58749999999998,1082.864 192.58749999999998,1151.164 162.19716666666665,1151.164 162.19716666666665,1163.164" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Emit" data-to="RingBuffer" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="append new token
+advance head" points="142.85549999999998,1200.064 142.85549999999995,1330.664" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Gram" data-to="Search" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="scan ring buffer
+for matching prefix" points="254.52399999999994,322.20000000000005 254.52399999999994,474.80000000000007" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="QT" data-to="Gram" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="build query gram
+[t-2, t-1, t0]" points="254.52399999999994,137.8 254.52399999999994,268.4" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<g class="edge-label" data-from="Found" data-to="Proposal" data-label="yes
+(found at position j)">
+  <rect x="91.35549999999995" y="718.4640000000002" width="102.59200000000003" height="44.6" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="142.65149999999997" y="740.7640000000001" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)"><tspan x="142.65149999999997" dy="-3.3000000000000007">yes</tspan><tspan x="142.65149999999997" dy="14.3">(found at position j)</tspan></text>
+</g>
+<g class="edge-label" data-from="Found" data-to="Fallback" data-label="no match
+(novel context)">
+  <rect x="323.19249999999994" y="718.4639999999999" width="85.96000000000001" height="44.6" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="366.17249999999996" y="740.7639999999999" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)"><tspan x="366.17249999999996" dy="-3.3000000000000007">no match</tspan><tspan x="366.17249999999996" dy="14.3">(novel context)</tspan></text>
+</g>
+<g class="edge-label" data-from="Proposal" data-to="Verify" data-label="proposed draft tokens">
+  <rect x="81.85549999999998" y="919.7640000000001" width="121.00600000000003" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="142.3585" y="934.9140000000001" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">proposed draft tokens</text>
+</g>
+<g class="edge-label" data-from="Verify" data-to="Emit" data-label="accepted tokens">
+  <rect x="45.12349999999994" y="1089.864" width="95.46400000000001" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="92.85549999999995" y="1105.0140000000001" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">accepted tokens</text>
+</g>
+<g class="edge-label" data-from="Verify" data-to="Emit" data-label="correction token">
+  <rect x="144.58749999999998" y="1089.864" width="95.46400000000003" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="192.3195" y="1105.0140000000001" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">correction token</text>
+</g>
+<g class="edge-label" data-from="Emit" data-to="RingBuffer" data-label="append new token
+advance head">
+  <rect x="91.85549999999996" y="1243.064" width="101.99800000000002" height="44.6" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="142.85449999999997" y="1265.364" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)"><tspan x="142.85449999999997" dy="-3.3000000000000007">append new token</tspan><tspan x="142.85449999999997" dy="14.3">advance head</tspan></text>
+</g>
+<g class="edge-label" data-from="Gram" data-to="Search" data-label="scan ring buffer
+for matching prefix">
+  <rect x="202.52399999999997" y="387.20000000000005" width="103.18600000000004" height="44.6" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="254.117" y="409.50000000000006" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)"><tspan x="254.117" dy="-3.3000000000000007">scan ring buffer</tspan><tspan x="254.117" dy="14.3">for matching prefix</tspan></text>
+</g>
+<g class="edge-label" data-from="QT" data-to="Gram" data-label="build query gram
+[t-2, t-1, t0]">
+  <rect x="206.02399999999997" y="180.8" width="96.058" height="44.6" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="254.05299999999997" y="203.10000000000002" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)"><tspan x="254.05299999999997" dy="-3.3000000000000007">build query gram</tspan><tspan x="254.05299999999997" dy="14.3">[t-2, t-1, t0]</tspan></text>
+</g>
+<g class="node" data-id="Search" data-label="N-gram Search
+O(window) linear scan
+stop at first length-N match" data-shape="rectangle">
+  <rect x="159.07849999999996" y="474.80000000000007" width="190.891" height="70.7" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="254.52399999999994" y="510.1500000000001" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="254.52399999999994" dy="-12.350000000000001">N-gram Search</tspan><tspan x="254.52399999999994" dy="16.900000000000002">O(window) linear scan</tspan><tspan x="254.52399999999994" dy="16.900000000000002">stop at first length-N match</tspan></text>
+</g>
+<g class="node" data-id="Proposal" data-label="Proposal: tokens at j+1..j+K
+from history buffer
+(up to spec-tokens K tokens)" data-shape="rectangle">
+  <rect x="40" y="806.0640000000001" width="205.71099999999996" height="70.7" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
+  <text x="142.85549999999998" y="841.4140000000001" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12"><tspan x="142.85549999999998" dy="-12.350000000000001">Proposal: tokens at j+1..j+K</tspan><tspan x="142.85549999999998" dy="16.900000000000002">from history buffer</tspan><tspan x="142.85549999999998" dy="16.900000000000002">(up to spec-tokens K tokens)</tspan></text>
+</g>
+<g class="node" data-id="Fallback" data-label="Fallback:
+single-token decode
+(no speculation this step)" data-shape="rectangle">
+  <rect x="273.71099999999996" y="806.0640000000001" width="184.96299999999997" height="70.7" rx="0" ry="0" fill="#fee2e2" stroke="#ef4444" stroke-width="0.75" />
+  <text x="366.19249999999994" y="841.4140000000001" text-anchor="middle" font-size="13" font-weight="500" fill="#7f1d1d"><tspan x="366.19249999999994" dy="-12.350000000000001">Fallback:</tspan><tspan x="366.19249999999994" dy="16.900000000000002">single-token decode</tspan><tspan x="366.19249999999994" dy="16.900000000000002">(no speculation this step)</tspan></text>
+</g>
+<g class="node" data-id="Verify" data-label="Target Model Verification
+standard accept/reject loop" data-shape="rectangle">
+  <rect x="41.48200000000001" y="993.0640000000001" width="202.74699999999996" height="53.800000000000004" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="142.8555" y="1019.964" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="142.8555" dy="-3.9000000000000012">Target Model Verification</tspan><tspan x="142.8555" dy="16.900000000000002">standard accept/reject loop</tspan></text>
+</g>
+<g class="node" data-id="Emit" data-label="Emit to output" data-shape="rectangle">
+  <rect x="84.83049999999997" y="1163.164" width="116.05" height="36.900000000000006" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
+  <text x="142.85549999999998" y="1181.614" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d" dy="4.55">Emit to output</text>
+</g>
+<g class="node" data-id="Found" data-label="match
+found?" data-shape="diamond">
+  <polygon points="254.52399999999997,593.5 307.506,646.482 254.52399999999997,699.4639999999999 201.54199999999997,646.482" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="254.52399999999997" y="646.482" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="254.52399999999997" dy="-3.9000000000000012">match</tspan><tspan x="254.52399999999997" dy="16.900000000000002">found?</tspan></text>
+</g>
+<g class="node" data-id="RB" data-label="&quot;[ t0, t1, t2, ..., t_head " data-shape="rectangle">
+  <rect x="67.78749999999994" y="1374.664" width="150.13600000000002" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="142.85549999999995" y="1393.114" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">&quot;[ t0, t1, t2, ..., t_head </text>
+</g>
+<g class="node" data-id="QT" data-label="Current output tail
+(last N tokens, N = 3..10)" data-shape="rectangle">
+  <rect x="167.97049999999996" y="84" width="173.107" height="53.800000000000004" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
+  <text x="254.52399999999994" y="110.9" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f"><tspan x="254.52399999999994" dy="-3.9000000000000012">Current output tail</tspan><tspan x="254.52399999999994" dy="16.900000000000002">(last N tokens, N = 3..10)</tspan></text>
+</g>
+<g class="node" data-id="Gram" data-label="&quot;Query: ['
+', '4', '. '" data-shape="rectangle">
+  <rect x="207.24349999999995" y="268.4" width="94.561" height="53.800000000000004" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="254.52399999999994" y="295.29999999999995" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="254.52399999999994" dy="-3.9000000000000012">&quot;Query: [&#39;</tspan><tspan x="254.52399999999994" dy="16.900000000000002">&#39;, &#39;4&#39;, &#39;. &#39;</tspan></text>
+</g>
+<g class="node" data-id="P1" data-label="Zero draft model weight memory" data-shape="rectangle">
+  <rect x="674.8024999999999" y="622.5640000000001" width="224.236" height="36.900000000000006" rx="0" ry="0" fill="#f3e8ff" stroke="#9333ea" stroke-width="0.75" />
+  <text x="786.9205" y="641.0140000000001" text-anchor="middle" font-size="13" font-weight="500" fill="#581c87" dy="4.55">Zero draft model weight memory</text>
+</g>
+<g class="node" data-id="P2" data-label="O(window) lookup per step" data-shape="rectangle">
+  <rect x="927.0384999999999" y="622.5640000000001" width="193.855" height="36.900000000000006" rx="0" ry="0" fill="#f3e8ff" stroke="#9333ea" stroke-width="0.75" />
+  <text x="1023.9659999999999" y="641.0140000000001" text-anchor="middle" font-size="13" font-weight="500" fill="#581c87" dy="4.55">O(window) lookup per step</text>
+</g>
+<g class="node" data-id="P3" data-label="Best on: code, JSON, repeated lists" data-shape="rectangle">
+  <rect x="401.0775" y="622.5640000000001" width="245.72499999999994" height="36.900000000000006" rx="0" ry="0" fill="#f3e8ff" stroke="#9333ea" stroke-width="0.75" />
+  <text x="523.9399999999999" y="641.0140000000001" text-anchor="middle" font-size="13" font-weight="500" fill="#581c87" dy="4.55">Best on: code, JSON, repeated lists</text>
+</g>
+<g class="node" data-id="P4" data-label="Useless on: novel creative text" data-shape="rectangle">
+  <rect x="1148.8935" y="622.5640000000001" width="219.78999999999994" height="36.900000000000006" rx="0" ry="0" fill="#f3e8ff" stroke="#9333ea" stroke-width="0.75" />
+  <text x="1258.7884999999999" y="641.0140000000001" text-anchor="middle" font-size="13" font-weight="500" fill="#581c87" dy="4.55">Useless on: novel creative text</text>
+</g>
+</svg>

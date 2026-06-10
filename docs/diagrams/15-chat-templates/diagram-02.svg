@@ -1,0 +1,100 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 369.74 1151.4" width="369.74" height="1151.4" style="--bg:#FFFFFF;--fg:#27272A;background:#ffffff">
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;display=swap');
+  text { font-family: 'Inter', system-ui, sans-serif; }
+  svg {
+    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
+    --_text:          #1a1a2e;
+    --_text-sec:      var(--muted, color-mix(in srgb, #1a1a2e 60%, #ffffff));
+    --_text-muted:    var(--muted, color-mix(in srgb, #1a1a2e 40%, #ffffff));
+    --_text-faint:    color-mix(in srgb, #1a1a2e 25%, #ffffff);
+    --_line:          var(--line, color-mix(in srgb, #1a1a2e 50%, #ffffff));
+    --_arrow:         var(--accent, color-mix(in srgb, #1a1a2e 85%, #ffffff));
+    --_node-fill:     var(--surface, color-mix(in srgb, #1a1a2e 3%, #ffffff));
+    --_node-stroke:   var(--border, color-mix(in srgb, #1a1a2e 20%, #ffffff));
+    --_group-fill:    #ffffff;
+    --_group-hdr:     color-mix(in srgb, #1a1a2e 5%, #ffffff);
+    --_inner-stroke:  color-mix(in srgb, #1a1a2e 12%, #ffffff);
+    --_key-badge:     color-mix(in srgb, #1a1a2e 10%, #ffffff);
+  }
+</style>
+<defs>
+  <marker id="arrowhead" markerWidth="8" markerHeight="5" refX="7" refY="2.5" orient="auto">
+    <polygon points="0 0, 8 2.5, 0 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+  <marker id="arrowhead-start" markerWidth="8" markerHeight="5" refX="1" refY="2.5" orient="auto-start-reverse">
+    <polygon points="8 0, 0 2.5, 8 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+</defs>
+<polyline class="edge" data-from="SysMsg" data-to="SysPre" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="115.06799999999998,93.80000000000001 115.06799999999998,141.8" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="SysPre" data-to="SysBody" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="115.06799999999998,212.5 115.06799999999998,260.5" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="SysBody" data-to="SysSuf" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="115.06799999999998,297.40000000000003 115.06799999999998,353.85" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="UserMsg" data-to="UserPre" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="266.8985,407.65000000000003 266.8985,444.32500000000005 190.98325,444.32500000000005 190.98325,464.1" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="UserPre" data-to="UserBody" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="190.98325,534.8 190.98325,582.8" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="UserBody" data-to="UserSuf" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="190.98325,619.6999999999999 190.98325,667.6999999999999" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="SysSuf" data-to="UserPre" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="115.06799999999998,424.55 115.06799999999998,444.32500000000005 190.98325,444.32500000000005 190.98325,464.1" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="UserSuf" data-to="AsstPre" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="190.98325,721.4999999999999 190.98325,769.4999999999999" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="AsstPre" data-to="GenPfx" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="190.98325,857.0999999999999 190.98325,905.0999999999999" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="GenPfx" data-to="GenStart" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="190.98325,1026.5 190.98325,1074.5" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<g class="node" data-id="SysMsg" data-label="system message
+'You are helpful'" data-shape="rectangle">
+  <rect x="45.557499999999976" y="40" width="139.02100000000002" height="53.800000000000004" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
+  <text x="115.06799999999998" y="66.9" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f"><tspan x="115.06799999999998" dy="-3.9000000000000012">system message</tspan><tspan x="115.06799999999998" dy="16.900000000000002">&#39;You are helpful&#39;</tspan></text>
+</g>
+<g class="node" data-id="SysPre" data-label="system_prefix
+&lt;|im_start|&gt;system
+" data-shape="rectangle">
+  <rect x="40" y="141.8" width="150.13599999999997" height="70.7" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
+  <text x="115.06799999999998" y="177.15" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f"><tspan x="115.06799999999998" dy="-12.350000000000001">system_prefix</tspan><tspan x="115.06799999999998" dy="16.900000000000002">&lt;|im_start|&gt;system</tspan><tspan x="115.06799999999998" dy="16.900000000000002"></tspan></text>
+</g>
+<g class="node" data-id="SysBody" data-label="message body" data-shape="rectangle">
+  <rect x="51.48549999999999" y="260.5" width="127.16499999999999" height="36.900000000000006" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
+  <text x="115.06799999999998" y="278.95" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12" dy="4.55">message body</text>
+</g>
+<g class="node" data-id="SysSuf" data-label="system_suffix
+&lt;|im_end|&gt;
+" data-shape="rectangle">
+  <rect x="54.07899999999998" y="353.85" width="121.97800000000001" height="70.7" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
+  <text x="115.06799999999998" y="389.20000000000005" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f"><tspan x="115.06799999999998" dy="-12.350000000000001">system_suffix</tspan><tspan x="115.06799999999998" dy="16.900000000000002">&lt;|im_end|&gt;</tspan><tspan x="115.06799999999998" dy="16.900000000000002"></tspan></text>
+</g>
+<g class="node" data-id="UserMsg" data-label="user message
+'What is 2+2?'" data-shape="rectangle">
+  <rect x="204.05700000000002" y="353.85" width="125.68299999999999" height="53.800000000000004" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
+  <text x="266.8985" y="380.75" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f"><tspan x="266.8985" dy="-3.9000000000000012">user message</tspan><tspan x="266.8985" dy="16.900000000000002">&#39;What is 2+2?&#39;</tspan></text>
+</g>
+<g class="node" data-id="UserPre" data-label="user_prefix
+&lt;|im_start|&gt;user
+" data-shape="rectangle">
+  <rect x="122.58424999999998" y="464.1" width="136.798" height="70.7" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
+  <text x="190.98325" y="499.45000000000005" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f"><tspan x="190.98325" dy="-12.350000000000001">user_prefix</tspan><tspan x="190.98325" dy="16.900000000000002">&lt;|im_start|&gt;user</tspan><tspan x="190.98325" dy="16.900000000000002"></tspan></text>
+</g>
+<g class="node" data-id="UserBody" data-label="message body" data-shape="rectangle">
+  <rect x="127.40074999999999" y="582.8" width="127.16499999999999" height="36.900000000000006" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
+  <text x="190.98325" y="601.25" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12" dy="4.55">message body</text>
+</g>
+<g class="node" data-id="UserSuf" data-label="user_suffix
+(empty)" data-shape="rectangle">
+  <rect x="136.66324999999998" y="667.6999999999999" width="108.64" height="53.800000000000004" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
+  <text x="190.98324999999997" y="694.5999999999999" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f"><tspan x="190.98324999999997" dy="-3.9000000000000012">user_suffix</tspan><tspan x="190.98324999999997" dy="16.900000000000002">(empty)</tspan></text>
+</g>
+<g class="node" data-id="AsstPre" data-label="assistant_prefix
+&lt;|im_end|&gt;
+&lt;|im_start|&gt;assistant
+" data-shape="rectangle">
+  <rect x="109.98724999999999" y="769.4999999999999" width="161.992" height="87.60000000000001" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
+  <text x="190.98325" y="813.2999999999998" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f"><tspan x="190.98325" dy="-20.8">assistant_prefix</tspan><tspan x="190.98325" dy="16.900000000000002">&lt;|im_end|&gt;</tspan><tspan x="190.98325" dy="16.900000000000002">&lt;|im_start|&gt;assistant</tspan><tspan x="190.98325" dy="16.900000000000002"></tspan></text>
+</g>
+<g class="node" data-id="GenPfx" data-label="generation_prefix
+&lt;think&gt;
+
+&lt;/think&gt;
+
+" data-shape="rectangle">
+  <rect x="117.39724999999997" y="905.0999999999999" width="147.17200000000003" height="121.4" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
+  <text x="190.98325" y="965.8" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12"><tspan x="190.98325" dy="-37.70000000000001">generation_prefix</tspan><tspan x="190.98325" dy="16.900000000000002">&lt;think&gt;</tspan><tspan x="190.98325" dy="16.900000000000002"></tspan><tspan x="190.98325" dy="16.900000000000002">&lt;/think&gt;</tspan><tspan x="190.98325" dy="16.900000000000002"></tspan><tspan x="190.98325" dy="16.900000000000002"></tspan></text>
+</g>
+<g class="node" data-id="GenStart" data-label="--- model generates here ---" data-shape="rectangle">
+  <rect x="92.94424999999998" y="1074.5" width="196.078" height="36.900000000000006" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
+  <text x="190.98325" y="1092.95" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d" dy="4.55">--- model generates here ---</text>
+</g>
+</svg>

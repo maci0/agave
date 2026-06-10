@@ -1,0 +1,126 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 814.02 719.7" width="814.02" height="719.7" style="--bg:#FFFFFF;--fg:#27272A;background:#ffffff">
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;display=swap');
+  text { font-family: 'Inter', system-ui, sans-serif; }
+  svg {
+    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
+    --_text:          #1a1a2e;
+    --_text-sec:      var(--muted, color-mix(in srgb, #1a1a2e 60%, #ffffff));
+    --_text-muted:    var(--muted, color-mix(in srgb, #1a1a2e 40%, #ffffff));
+    --_text-faint:    color-mix(in srgb, #1a1a2e 25%, #ffffff);
+    --_line:          var(--line, color-mix(in srgb, #1a1a2e 50%, #ffffff));
+    --_arrow:         var(--accent, color-mix(in srgb, #1a1a2e 85%, #ffffff));
+    --_node-fill:     var(--surface, color-mix(in srgb, #1a1a2e 3%, #ffffff));
+    --_node-stroke:   var(--border, color-mix(in srgb, #1a1a2e 20%, #ffffff));
+    --_group-fill:    #ffffff;
+    --_group-hdr:     color-mix(in srgb, #1a1a2e 5%, #ffffff);
+    --_inner-stroke:  color-mix(in srgb, #1a1a2e 12%, #ffffff);
+    --_key-badge:     color-mix(in srgb, #1a1a2e 10%, #ffffff);
+  }
+</style>
+<defs>
+  <marker id="arrowhead" markerWidth="8" markerHeight="5" refX="7" refY="2.5" orient="auto">
+    <polygon points="0 0, 8 2.5, 0 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+  <marker id="arrowhead-start" markerWidth="8" markerHeight="5" refX="1" refY="2.5" orient="auto-start-reverse">
+    <polygon points="8 0, 0 2.5, 8 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+</defs>
+<g class="subgraph" data-id="Sequential" data-label="Sequential dispatch — 2 thread pool calls">
+  <rect x="40" y="40" width="205.84799999999996" height="639.7" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="40" y="40" width="205.84799999999996" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="52" y="54" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">Sequential dispatch — 2 thread pool calls</text>
+</g>
+<g class="subgraph" data-id="Batched" data-label="gemvMulti — 1 thread pool call">
+  <rect x="273.84799999999996" y="40" width="500.172" height="537.9000000000001" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="273.84799999999996" y="40" width="500.172" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="285.84799999999996" y="54" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">gemvMulti — 1 thread pool call</text>
+</g>
+<polyline class="edge" data-from="S_in" data-to="S_D1" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="142.92399999999998,137.8 142.92399999999998,185.8" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="S_D1" data-to="S_W1" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="142.92399999999998,256.5 142.92399999999998,296.05" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="S_W1" data-to="S_D2" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="142.92399999999998,332.95 142.92399999999998,397.85" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="S_D2" data-to="S_W2" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="142.92399999999998,468.55 142.92399999999998,508.09999999999997" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="S_W2" data-to="S_D3" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="142.92399999999998,545 142.92399999999998,593" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="B_in" data-to="B_ops" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="522.8225,137.8 522.8225,185.8" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="B_ops" data-to="B_dispatch" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="522.8225,239.60000000000002 522.8225,296.05" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="B_dispatch" data-to="B_gate_A" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="522.8225,366.75 522.8225,382.3 460.80099999999993,382.3 460.80099999999993,397.85" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="B_dispatch" data-to="B_up_A" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="522.8225,366.75 522.8225,382.3 584.8439999999999,382.3 584.8439999999999,397.85" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="B_dispatch" data-to="B_gate_B" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="522.8225,366.75 522.8225,382.3 708.887,382.3 708.887,397.85" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="B_dispatch" data-to="B_up_B" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="522.8225,366.75 522.8225,382.3 336.758,382.3 336.758,397.85" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="B_gate_A" data-to="B_out" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="460.80099999999993,451.65000000000003 460.80099999999993,479.875 522.8225,479.875 522.8225,508.1" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="B_up_A" data-to="B_out" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="584.8439999999999,451.65000000000003 584.8439999999999,479.875 522.8225,479.875 522.8225,508.1" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="B_gate_B" data-to="B_out" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="708.887,451.65000000000003 708.887,479.875 522.8225,479.875 522.8225,508.1" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="B_up_B" data-to="B_out" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="336.758,451.65000000000003 336.758,479.875 522.8225,479.875 522.8225,508.1" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<g class="node" data-id="S_in" data-label="Input vector x
+(shared by all experts)" data-shape="rectangle">
+  <rect x="56.37049999999998" y="84" width="173.107" height="53.800000000000004" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
+  <text x="142.92399999999998" y="110.9" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f"><tspan x="142.92399999999998" dy="-3.9000000000000012">Input vector x</tspan><tspan x="142.92399999999998" dy="16.900000000000002">(shared by all experts)</tspan></text>
+</g>
+<g class="node" data-id="S_D1" data-label="Dispatch 1
+gate_proj expert A
+thread pool: serialize" data-shape="rectangle">
+  <rect x="60.44599999999997" y="185.8" width="164.95600000000002" height="70.7" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
+  <text x="142.92399999999998" y="221.15" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12"><tspan x="142.92399999999998" dy="-12.350000000000001">Dispatch 1</tspan><tspan x="142.92399999999998" dy="16.900000000000002">gate_proj expert A</tspan><tspan x="142.92399999999998" dy="16.900000000000002">thread pool: serialize</tspan></text>
+</g>
+<g class="node" data-id="S_W1" data-label="Wait for completion" data-shape="rectangle">
+  <rect x="68.22649999999999" y="296.05" width="149.39499999999998" height="36.900000000000006" rx="0" ry="0" fill="#fee2e2" stroke="#ef4444" stroke-width="0.75" />
+  <text x="142.92399999999998" y="314.5" text-anchor="middle" font-size="13" font-weight="500" fill="#7f1d1d" dy="4.55">Wait for completion</text>
+</g>
+<g class="node" data-id="S_D2" data-label="Dispatch 2
+up_proj expert A
+thread pool: serialize" data-shape="rectangle">
+  <rect x="60.44599999999997" y="397.85" width="164.95600000000002" height="70.7" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
+  <text x="142.92399999999998" y="433.20000000000005" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12"><tspan x="142.92399999999998" dy="-12.350000000000001">Dispatch 2</tspan><tspan x="142.92399999999998" dy="16.900000000000002">up_proj expert A</tspan><tspan x="142.92399999999998" dy="16.900000000000002">thread pool: serialize</tspan></text>
+</g>
+<g class="node" data-id="S_W2" data-label="Wait for completion" data-shape="rectangle">
+  <rect x="68.22649999999999" y="508.09999999999997" width="149.39499999999998" height="36.900000000000006" rx="0" ry="0" fill="#fee2e2" stroke="#ef4444" stroke-width="0.75" />
+  <text x="142.92399999999998" y="526.55" text-anchor="middle" font-size="13" font-weight="500" fill="#7f1d1d" dy="4.55">Wait for completion</text>
+</g>
+<g class="node" data-id="S_D3" data-label="Dispatch 3..N
+repeat for expert B, C...
+2 calls per expert" data-shape="rectangle">
+  <rect x="56" y="593" width="173.84799999999996" height="70.7" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
+  <text x="142.92399999999998" y="628.35" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12"><tspan x="142.92399999999998" dy="-12.350000000000001">Dispatch 3..N</tspan><tspan x="142.92399999999998" dy="16.900000000000002">repeat for expert B, C...</tspan><tspan x="142.92399999999998" dy="16.900000000000002">2 calls per expert</tspan></text>
+</g>
+<g class="node" data-id="B_in" data-label="Input vector x
+(shared by all experts)" data-shape="rectangle">
+  <rect x="436.26899999999995" y="84" width="173.107" height="53.800000000000004" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
+  <text x="522.8225" y="110.9" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f"><tspan x="522.8225" dy="-3.9000000000000012">Input vector x</tspan><tspan x="522.8225" dy="16.900000000000002">(shared by all experts)</tspan></text>
+</g>
+<g class="node" data-id="B_ops" data-label="&quot;Build GemvOp array
+op[0" data-shape="rectangle">
+  <rect x="441.45599999999996" y="185.8" width="162.733" height="53.800000000000004" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="522.8225" y="212.70000000000002" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="522.8225" dy="-3.9000000000000012">&quot;Build GemvOp array</tspan><tspan x="522.8225" dy="16.900000000000002">op[0</tspan></text>
+</g>
+<g class="node" data-id="B_dispatch" data-label="gemvMulti dispatch
+all output rows
+in parallel" data-shape="rectangle">
+  <rect x="446.2724999999999" y="296.05" width="153.10000000000002" height="70.7" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="522.8225" y="331.40000000000003" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="522.8225" dy="-12.350000000000001">gemvMulti dispatch</tspan><tspan x="522.8225" dy="16.900000000000002">all output rows</tspan><tspan x="522.8225" dy="16.900000000000002">in parallel</tspan></text>
+</g>
+<g class="node" data-id="B_gate_A" data-label="gate buf A
+(parallel)" data-shape="rectangle">
+  <rect x="411.66799999999995" y="397.85" width="98.26599999999999" height="53.800000000000004" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="460.80099999999993" y="424.75" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="460.80099999999993" dy="-3.9000000000000012">gate buf A</tspan><tspan x="460.80099999999993" dy="16.900000000000002">(parallel)</tspan></text>
+</g>
+<g class="node" data-id="B_up_A" data-label="up buf A
+(parallel)" data-shape="rectangle">
+  <rect x="537.934" y="397.85" width="93.82000000000001" height="53.800000000000004" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="584.8439999999999" y="424.75" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="584.8439999999999" dy="-3.9000000000000012">up buf A</tspan><tspan x="584.8439999999999" dy="16.900000000000002">(parallel)</tspan></text>
+</g>
+<g class="node" data-id="B_gate_B" data-label="gate buf B
+(parallel)" data-shape="rectangle">
+  <rect x="659.7539999999999" y="397.85" width="98.26599999999999" height="53.800000000000004" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="708.887" y="424.75" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="708.887" dy="-3.9000000000000012">gate buf B</tspan><tspan x="708.887" dy="16.900000000000002">(parallel)</tspan></text>
+</g>
+<g class="node" data-id="B_up_B" data-label="up buf B
+(parallel)" data-shape="rectangle">
+  <rect x="289.84799999999996" y="397.85" width="93.82000000000001" height="53.800000000000004" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="336.758" y="424.75" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="336.758" dy="-3.9000000000000012">up buf B</tspan><tspan x="336.758" dy="16.900000000000002">(parallel)</tspan></text>
+</g>
+<g class="node" data-id="B_out" data-label="Results ready
+(single barrier)" data-shape="rectangle">
+  <rect x="457.7579999999999" y="508.1" width="130.12900000000002" height="53.800000000000004" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
+  <text x="522.8225" y="535" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="522.8225" dy="-3.9000000000000012">Results ready</tspan><tspan x="522.8225" dy="16.900000000000002">(single barrier)</tspan></text>
+</g>
+</svg>

@@ -1,0 +1,59 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 306.28799999999995 321.8" width="306.28799999999995" height="321.8" style="--bg:#FFFFFF;--fg:#27272A;background:#ffffff">
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;display=swap');
+  text { font-family: 'Inter', system-ui, sans-serif; }
+  svg {
+    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
+    --_text:          #1a1a2e;
+    --_text-sec:      var(--muted, color-mix(in srgb, #1a1a2e 60%, #ffffff));
+    --_text-muted:    var(--muted, color-mix(in srgb, #1a1a2e 40%, #ffffff));
+    --_text-faint:    color-mix(in srgb, #1a1a2e 25%, #ffffff);
+    --_line:          var(--line, color-mix(in srgb, #1a1a2e 50%, #ffffff));
+    --_arrow:         var(--accent, color-mix(in srgb, #1a1a2e 85%, #ffffff));
+    --_node-fill:     var(--surface, color-mix(in srgb, #1a1a2e 3%, #ffffff));
+    --_node-stroke:   var(--border, color-mix(in srgb, #1a1a2e 20%, #ffffff));
+    --_group-fill:    #ffffff;
+    --_group-hdr:     color-mix(in srgb, #1a1a2e 5%, #ffffff);
+    --_inner-stroke:  color-mix(in srgb, #1a1a2e 12%, #ffffff);
+    --_key-badge:     color-mix(in srgb, #1a1a2e 10%, #ffffff);
+  }
+</style>
+<defs>
+  <marker id="arrowhead" markerWidth="8" markerHeight="5" refX="7" refY="2.5" orient="auto">
+    <polygon points="0 0, 8 2.5, 0 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+  <marker id="arrowhead-start" markerWidth="8" markerHeight="5" refX="1" refY="2.5" orient="auto-start-reverse">
+    <polygon points="8 0, 0 2.5, 8 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+</defs>
+<g class="subgraph" data-id="Matrix" data-label="Row-major matrix in memory
+(4 cols × 3 rows = 12 floats, 48 bytes)">
+  <rect x="103.57199999999999" y="40" width="99.14399999999999" height="96.9" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="103.57199999999999" y="40" width="99.14399999999999" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="115.57199999999999" y="54" font-size="12" font-weight="600" fill="var(--_text-sec)"><tspan x="115.57199999999999" dy="-3.6000000000000014">Row-major matrix in memory</tspan><tspan x="115.57199999999999" dy="15.600000000000001">(4 cols × 3 rows = 12 floats, 48 bytes)</tspan></text>
+</g>
+<g class="subgraph" data-id="Good" data-label="Row-major iteration (sequential)">
+  <rect x="40" y="184.9" width="99.14399999999999" height="96.9" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="40" y="184.9" width="99.14399999999999" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="52" y="198.9" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">Row-major iteration (sequential)</text>
+</g>
+<g class="subgraph" data-id="Bad" data-label="Column-major iteration (strided)">
+  <rect x="167.14399999999998" y="184.9" width="99.14399999999999" height="96.9" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="167.14399999999998" y="184.9" width="99.14399999999999" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="179.14399999999998" y="198.9" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">Column-major iteration (strided)</text>
+</g>
+<polyline class="edge" data-from="Matrix" data-to="Good" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="136.62,136.9 136.62,172.9 89.572,172.9 89.572,184.9" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Matrix" data-to="Bad" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="169.668,136.9 169.668,172.9 216.71599999999998,172.9 216.71599999999998,184.9" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<g class="node" data-id="m00" data-label="&quot;[0,0" data-shape="rectangle">
+  <rect x="119.57199999999999" y="84" width="67.14399999999999" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="153.14399999999998" y="102.45" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">&quot;[0,0</text>
+</g>
+<g class="node" data-id="g1" data-label="&quot;[0,0" data-shape="rectangle">
+  <rect x="56" y="228.9" width="67.14399999999999" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="89.572" y="247.35000000000002" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">&quot;[0,0</text>
+</g>
+<g class="node" data-id="b1" data-label="&quot;[0,0" data-shape="rectangle">
+  <rect x="183.14399999999998" y="228.9" width="67.14399999999999" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="216.71599999999998" y="247.35000000000002" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">&quot;[0,0</text>
+</g>
+</svg>

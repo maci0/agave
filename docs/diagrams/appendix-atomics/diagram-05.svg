@@ -1,0 +1,129 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 737.99 1164.4920000000002" width="737.99" height="1164.4920000000002" style="--bg:#FFFFFF;--fg:#27272A;background:#ffffff">
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;display=swap');
+  text { font-family: 'Inter', system-ui, sans-serif; }
+  svg {
+    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
+    --_text:          #1a1a2e;
+    --_text-sec:      var(--muted, color-mix(in srgb, #1a1a2e 60%, #ffffff));
+    --_text-muted:    var(--muted, color-mix(in srgb, #1a1a2e 40%, #ffffff));
+    --_text-faint:    color-mix(in srgb, #1a1a2e 25%, #ffffff);
+    --_line:          var(--line, color-mix(in srgb, #1a1a2e 50%, #ffffff));
+    --_arrow:         var(--accent, color-mix(in srgb, #1a1a2e 85%, #ffffff));
+    --_node-fill:     var(--surface, color-mix(in srgb, #1a1a2e 3%, #ffffff));
+    --_node-stroke:   var(--border, color-mix(in srgb, #1a1a2e 20%, #ffffff));
+    --_group-fill:    #ffffff;
+    --_group-hdr:     color-mix(in srgb, #1a1a2e 5%, #ffffff);
+    --_inner-stroke:  color-mix(in srgb, #1a1a2e 12%, #ffffff);
+    --_key-badge:     color-mix(in srgb, #1a1a2e 10%, #ffffff);
+  }
+</style>
+<defs>
+  <marker id="arrowhead" markerWidth="8" markerHeight="5" refX="7" refY="2.5" orient="auto">
+    <polygon points="0 0, 8 2.5, 0 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+  <marker id="arrowhead-start" markerWidth="8" markerHeight="5" refX="1" refY="2.5" orient="auto-start-reverse">
+    <polygon points="8 0, 0 2.5, 8 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+</defs>
+<g class="subgraph" data-id="Main" data-label="Main thread">
+  <rect x="235.17900000000003" y="457.1" width="418.811" height="617.392" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="235.17900000000003" y="457.1" width="418.811" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="247.17900000000003" y="471.1" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">Main thread</text>
+</g>
+<g class="subgraph" data-id="Workers" data-label="Worker threads (run concurrently)">
+  <rect x="40" y="82" width="613.99" height="232.5" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="40" y="82" width="613.99" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="52" y="96" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">Worker threads (run concurrently)</text>
+</g>
+<polyline class="edge" data-from="Dispatch" data-to="W1" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="599.3444999999999,1058.4920000000002 599.3445,1104.4920000000002 689.99,1104.4920000000002 689.99,40 143.66500000000002,40 143.66500000000002,126" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Dispatch" data-to="W2" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="522.0535,1058.4920000000002 522.0535000000001,1116.4920000000002 676.99,1116.4920000000002 676.99,52 346.99500000000006,52 346.995,126" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Dispatch" data-to="WN" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="560.6990000000001,1058.4920000000002 560.6990000000001,1092.4920000000002 663.99,1092.4920000000002 663.99,64 550.325,64 550.325,126" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Sub1" data-to="Spin" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="active decrements" points="143.665,298.5 143.66499999999994,394.8 171.78725000000006,394.8 171.78725000000006,439.1 286.2601666666667,439.1 286.2601666666667,635.2 291.29616666666675,635.2 291.29616666666675,733.1973333333333" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Sub2" data-to="Spin" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="active decrements" points="346.995,298.5 346.995,370.8 327.34225000000004,370.8 327.34225000000004,439.1 307.68949999999995,439.1 307.68950000000007,635.2 322.2948333333334,635.2 322.2948333333334,702.1986666666667" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="SubN" data-to="Spin" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="last decrement
+active → 0" points="550.3249999999999,298.5 550.3249999999999,356.5 525.94025,356.5 525.94025,439.1 501.55550000000005,439.1 501.55550000000005,647.2 415.29083333333335,647.2 415.29083333333335,733.1973333333334" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Spin" data-to="Hint" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="no — still workers running" points="384.29216666666673,702.1986666666668 384.29216666666673,635.2 428.2935,635.2 428.2935,566.9000000000001 414.8281666666667,566.9000000000001 414.8281666666667,554.9000000000001" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Hint" data-to="Spin" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="366.7588333333333,554.9000000000001 366.7588333333333,566.9000000000001 353.2935,566.9000000000001 353.2935,671.2" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Spin" data-to="Done" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="yes — acquire fence
+sees all release writes" points="353.2935,857.192 353.2935,987.792" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="W1" data-to="Sub1" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="143.665,196.7 143.665,244.7" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="W2" data-to="Sub2" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="346.995,196.7 346.995,244.7" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="WN" data-to="SubN" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="550.325,196.7 550.3249999999999,244.7" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<g class="edge-label" data-from="Sub1" data-to="Spin" data-label="active decrements">
+  <rect x="119.78725000000006" y="401.8" width="103.78000000000002" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="171.67725000000007" y="416.95" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">active decrements</text>
+</g>
+<g class="edge-label" data-from="Sub2" data-to="Spin" data-label="active decrements">
+  <rect x="275.34225000000004" y="377.8" width="103.78000000000002" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="327.23225" y="392.95" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">active decrements</text>
+</g>
+<g class="edge-label" data-from="SubN" data-to="Spin" data-label="last decrement
+active → 0">
+  <rect x="482.9402499999999" y="363.5" width="85.96000000000001" height="44.6" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="525.9202499999999" y="385.8" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)"><tspan x="525.9202499999999" dy="-3.3000000000000007">last decrement</tspan><tspan x="525.9202499999999" dy="14.3">active → 0</tspan></text>
+</g>
+<g class="edge-label" data-from="Spin" data-to="Hint" data-label="no — still workers running">
+  <rect x="360.2935" y="597.9000000000001" width="135.26200000000003" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="427.9245" y="613.0500000000001" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">no — still workers running</text>
+</g>
+<g class="edge-label" data-from="Spin" data-to="Done" data-label="yes — acquire fence
+sees all release writes">
+  <rect x="291.79350000000005" y="900.1920000000001" width="122.78800000000004" height="44.6" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="353.18750000000006" y="922.4920000000001" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)"><tspan x="353.18750000000006" dy="-3.3000000000000007">yes — acquire fence</tspan><tspan x="353.18750000000006" dy="14.3">sees all release writes</tspan></text>
+</g>
+<g class="node" data-id="Dispatch" data-label="Dispatch work
+active = n_workers
+(.acq_rel CAS)" data-shape="rectangle">
+  <rect x="483.408" y="987.792" width="154.582" height="70.7" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
+  <text x="560.6990000000001" y="1023.142" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f"><tspan x="560.6990000000001" dy="-12.350000000000001">Dispatch work</tspan><tspan x="560.6990000000001" dy="16.900000000000002">active = n_workers</tspan><tspan x="560.6990000000001" dy="16.900000000000002">(.acq_rel CAS)</tspan></text>
+</g>
+<g class="node" data-id="Spin" data-label="active.load(.acquire)
+== 0?" data-shape="diamond">
+  <polygon points="353.2935,671.2 446.2895,764.196 353.2935,857.192 260.2975,764.196" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="353.2935" y="764.196" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="353.2935" dy="-3.9000000000000012">active.load(.acquire)</tspan><tspan x="353.2935" dy="16.900000000000002">== 0?</tspan></text>
+</g>
+<g class="node" data-id="Hint" data-label="spinLoopHint()
+CPU pause / yield" data-shape="rectangle">
+  <rect x="318.6895" y="501.1" width="144.208" height="53.800000000000004" rx="0" ry="0" fill="#f3e8ff" stroke="#9333ea" stroke-width="0.75" />
+  <text x="390.7935" y="528" text-anchor="middle" font-size="13" font-weight="500" fill="#581c87"><tspan x="390.7935" dy="-3.9000000000000012">spinLoopHint()</tspan><tspan x="390.7935" dy="16.900000000000002">CPU pause / yield</tspan></text>
+</g>
+<g class="node" data-id="Done" data-label="All worker output
+visible — safe to read results" data-shape="stadium">
+  <rect x="251.17900000000003" y="987.792" width="204.229" height="53.800000000000004" rx="26.900000000000002" ry="26.900000000000002" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
+  <text x="353.29350000000005" y="1014.692" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="353.29350000000005" dy="-3.9000000000000012">All worker output</tspan><tspan x="353.29350000000005" dy="16.900000000000002">visible — safe to read results</tspan></text>
+</g>
+<g class="node" data-id="W1" data-label="Worker 1
+doWork() → chunk A
+writes output buffer" data-shape="rectangle">
+  <rect x="65.63299999999998" y="126" width="156.06400000000002" height="70.7" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="143.665" y="161.35" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="143.665" dy="-12.350000000000001">Worker 1</tspan><tspan x="143.665" dy="16.900000000000002">doWork() → chunk A</tspan><tspan x="143.665" dy="16.900000000000002">writes output buffer</tspan></text>
+</g>
+<g class="node" data-id="W2" data-label="Worker 2
+doWork() → chunk B
+writes output buffer" data-shape="rectangle">
+  <rect x="268.96299999999997" y="126" width="156.06400000000002" height="70.7" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="346.995" y="161.35" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="346.995" dy="-12.350000000000001">Worker 2</tspan><tspan x="346.995" dy="16.900000000000002">doWork() → chunk B</tspan><tspan x="346.995" dy="16.900000000000002">writes output buffer</tspan></text>
+</g>
+<g class="node" data-id="WN" data-label="Worker N
+doWork() → chunk N
+writes output buffer" data-shape="rectangle">
+  <rect x="472.293" y="126" width="156.06400000000002" height="70.7" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="550.325" y="161.35" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="550.325" dy="-12.350000000000001">Worker N</tspan><tspan x="550.325" dy="16.900000000000002">doWork() → chunk N</tspan><tspan x="550.325" dy="16.900000000000002">writes output buffer</tspan></text>
+</g>
+<g class="node" data-id="Sub1" data-label="fetchSub(1, .release)
+publishes output writes" data-shape="rectangle">
+  <rect x="56" y="244.7" width="175.32999999999998" height="53.800000000000004" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
+  <text x="143.665" y="271.59999999999997" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12"><tspan x="143.665" dy="-3.9000000000000012">fetchSub(1, .release)</tspan><tspan x="143.665" dy="16.900000000000002">publishes output writes</tspan></text>
+</g>
+<g class="node" data-id="Sub2" data-label="fetchSub(1, .release)
+publishes output writes" data-shape="rectangle">
+  <rect x="259.33" y="244.7" width="175.32999999999998" height="53.800000000000004" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
+  <text x="346.995" y="271.59999999999997" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12"><tspan x="346.995" dy="-3.9000000000000012">fetchSub(1, .release)</tspan><tspan x="346.995" dy="16.900000000000002">publishes output writes</tspan></text>
+</g>
+<g class="node" data-id="SubN" data-label="fetchSub(1, .release)
+publishes output writes" data-shape="rectangle">
+  <rect x="462.65999999999997" y="244.7" width="175.32999999999998" height="53.800000000000004" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
+  <text x="550.3249999999999" y="271.59999999999997" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12"><tspan x="550.3249999999999" dy="-3.9000000000000012">fetchSub(1, .release)</tspan><tspan x="550.3249999999999" dy="16.900000000000002">publishes output writes</tspan></text>
+</g>
+</svg>

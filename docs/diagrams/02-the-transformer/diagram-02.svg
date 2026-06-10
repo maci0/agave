@@ -1,0 +1,118 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 419.3905 1230" width="419.3905" height="1230" style="--bg:#FFFFFF;--fg:#27272A;background:#ffffff">
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;display=swap');
+  text { font-family: 'Inter', system-ui, sans-serif; }
+  svg {
+    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
+    --_text:          #1a1a2e;
+    --_text-sec:      var(--muted, color-mix(in srgb, #1a1a2e 60%, #ffffff));
+    --_text-muted:    var(--muted, color-mix(in srgb, #1a1a2e 40%, #ffffff));
+    --_text-faint:    color-mix(in srgb, #1a1a2e 25%, #ffffff);
+    --_line:          var(--line, color-mix(in srgb, #1a1a2e 50%, #ffffff));
+    --_arrow:         var(--accent, color-mix(in srgb, #1a1a2e 85%, #ffffff));
+    --_node-fill:     var(--surface, color-mix(in srgb, #1a1a2e 3%, #ffffff));
+    --_node-stroke:   var(--border, color-mix(in srgb, #1a1a2e 20%, #ffffff));
+    --_group-fill:    #ffffff;
+    --_group-hdr:     color-mix(in srgb, #1a1a2e 5%, #ffffff);
+    --_inner-stroke:  color-mix(in srgb, #1a1a2e 12%, #ffffff);
+    --_key-badge:     color-mix(in srgb, #1a1a2e 10%, #ffffff);
+  }
+</style>
+<defs>
+  <marker id="arrowhead" markerWidth="8" markerHeight="5" refX="7" refY="2.5" orient="auto">
+    <polygon points="0 0, 8 2.5, 0 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+  <marker id="arrowhead-start" markerWidth="8" markerHeight="5" refX="1" refY="2.5" orient="auto-start-reverse">
+    <polygon points="8 0, 0 2.5, 8 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+</defs>
+<g class="subgraph" data-id="Layer0" data-label="Transformer Layer (repeated N times)">
+  <rect x="111.16383333333332" y="345.4000000000001" width="0" height="0" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="111.16383333333332" y="345.4000000000001" width="0" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="123.16383333333332" y="359.4000000000001" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">Transformer Layer (repeated N times)</text>
+</g>
+<polyline class="edge" data-from="TokenID" data-to="EmbedLookup" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="130.99949999999998,93.80000000000001 130.99949999999998,138.25" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="EmbedLookup" data-to="H0" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="130.99949999999998,192.05 130.99949999999998,231.60000000000002" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="H0" data-to="Layer0" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="111.16383333333332,285.40000000000003 111.16383333333332,345.4000000000001" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="PreNorm1" data-to="Attn" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="300.98449999999997,175.15 300.98449999999997,231.60000000000002" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Attn" data-to="Add1" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="300.98449999999997,285.40000000000003 300.98449999999997,303.40000000000003 290.98449999999997,303.40000000000003 290.98449999999997,321.40000000000003" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="PreNorm2" data-to="FFN" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="253.82274999999998,443.20000000000005 253.82274999999996,491.20000000000005" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="FFN" data-to="Add2" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="253.82274999999996,545 253.82274999999996,581 280.98449999999997,581 280.98449999999997,593" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="H0" data-to="Add1" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="130.99949999999998,285.40000000000003 130.99949999999998,303.40000000000003 290.98449999999997,303.40000000000003 290.98449999999997,321.40000000000003" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Add1" data-to="PreNorm2" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="290.98449999999997,358.30000000000007 290.98449999999997,382.30000000000007 253.82274999999998,382.30000000000007 253.82274999999998,406.3" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Add1" data-to="Add2" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="290.98449999999997,358.30000000000007 290.98449999999997,382.30000000000007 290.98449999999997,382.30000000000007 290.98449999999997,593" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Add2" data-to="HN" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="290.98449999999997,629.9 290.98449999999997,677.9" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="HN" data-to="FinalNorm" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="290.98449999999997,731.6999999999999 290.98449999999997,779.6999999999999" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="FinalNorm" data-to="VocabProj" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="290.98449999999997,816.5999999999999 290.98449999999997,864.5999999999999" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="VocabProj" data-to="Logits" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="290.98449999999997,918.3999999999999 290.98449999999997,966.3999999999999" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Logits" data-to="Argmax" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="290.98449999999997,1020.1999999999998 290.98449999999997,1068.1999999999998" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Argmax" data-to="NextToken" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="290.98449999999997,1105.1 290.9844999999999,1153.1" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<g class="node" data-id="TokenID" data-label="Token ID
+(e.g. 15496)" data-shape="rectangle">
+  <rect x="78.53199999999998" y="40" width="104.93499999999999" height="53.800000000000004" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
+  <text x="130.99949999999998" y="66.9" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f"><tspan x="130.99949999999998" dy="-3.9000000000000012">Token ID</tspan><tspan x="130.99949999999998" dy="16.900000000000002">(e.g. 15496)</tspan></text>
+</g>
+<g class="node" data-id="EmbedLookup" data-label="Embedding Lookup
+(vocab × n_embd matrix)" data-shape="rectangle">
+  <rect x="40" y="138.25" width="181.99899999999997" height="53.800000000000004" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="130.99949999999998" y="165.15" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="130.99949999999998" dy="-3.9000000000000012">Embedding Lookup</tspan><tspan x="130.99949999999998" dy="16.900000000000002">(vocab × n_embd matrix)</tspan></text>
+</g>
+<g class="node" data-id="H0" data-label="&quot;Hidden State
+[2304 floats" data-shape="rectangle">
+  <rect x="71.49249999999998" y="231.60000000000002" width="119.01400000000001" height="53.800000000000004" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="130.99949999999998" y="258.5" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="130.99949999999998" dy="-3.9000000000000012">&quot;Hidden State</tspan><tspan x="130.99949999999998" dy="16.900000000000002">[2304 floats</tspan></text>
+</g>
+<g class="node" data-id="PreNorm1" data-label="RMSNorm" data-shape="rectangle">
+  <rect x="249.99899999999997" y="138.25" width="101.971" height="36.900000000000006" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
+  <text x="300.98449999999997" y="156.7" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12" dy="4.55">RMSNorm</text>
+</g>
+<g class="node" data-id="Attn" data-label="Attention
+(Q/K/V + SDPA)" data-shape="rectangle">
+  <rect x="235.54949999999997" y="231.60000000000002" width="130.86999999999998" height="53.800000000000004" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="300.98449999999997" y="258.5" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="300.98449999999997" dy="-3.9000000000000012">Attention</tspan><tspan x="300.98449999999997" dy="16.900000000000002">(Q/K/V + SDPA)</tspan></text>
+</g>
+<g class="node" data-id="Add1" data-label="+" data-shape="rounded">
+  <rect x="260.98449999999997" y="321.40000000000003" width="60" height="36.900000000000006" rx="6" ry="6" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="290.98449999999997" y="339.85" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">+</text>
+</g>
+<g class="node" data-id="PreNorm2" data-label="RMSNorm" data-shape="rectangle">
+  <rect x="202.83724999999998" y="406.3" width="101.971" height="36.900000000000006" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
+  <text x="253.82274999999998" y="424.75" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12" dy="4.55">RMSNorm</text>
+</g>
+<g class="node" data-id="FFN" data-label="Feed-Forward
+Network" data-shape="rectangle">
+  <rect x="189.49924999999996" y="491.20000000000005" width="128.647" height="53.800000000000004" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="253.82274999999996" y="518.1" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="253.82274999999996" dy="-3.9000000000000012">Feed-Forward</tspan><tspan x="253.82274999999996" dy="16.900000000000002">Network</tspan></text>
+</g>
+<g class="node" data-id="Add2" data-label="+" data-shape="rounded">
+  <rect x="260.98449999999997" y="593" width="60" height="36.900000000000006" rx="6" ry="6" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="290.98449999999997" y="611.45" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">+</text>
+</g>
+<g class="node" data-id="HN" data-label="&quot;Hidden State
+[2304 floats" data-shape="rectangle">
+  <rect x="231.47749999999996" y="677.9" width="119.01400000000001" height="53.800000000000004" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="290.98449999999997" y="704.8" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="290.98449999999997" dy="-3.9000000000000012">&quot;Hidden State</tspan><tspan x="290.98449999999997" dy="16.900000000000002">[2304 floats</tspan></text>
+</g>
+<g class="node" data-id="FinalNorm" data-label="Final RMSNorm" data-shape="rectangle">
+  <rect x="224.06749999999997" y="779.6999999999999" width="133.834" height="36.900000000000006" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
+  <text x="290.98449999999997" y="798.15" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12" dy="4.55">Final RMSNorm</text>
+</g>
+<g class="node" data-id="VocabProj" data-label="Vocab Projection
+(n_embd → vocab_size)" data-shape="rectangle">
+  <rect x="202.57849999999996" y="864.5999999999999" width="176.81199999999998" height="53.800000000000004" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="290.98449999999997" y="891.4999999999999" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="290.98449999999997" dy="-3.9000000000000012">Vocab Projection</tspan><tspan x="290.98449999999997" dy="16.900000000000002">(n_embd → vocab_size)</tspan></text>
+</g>
+<g class="node" data-id="Logits" data-label="&quot;Logits
+[262144 floats" data-shape="rectangle">
+  <rect x="231.47749999999996" y="966.3999999999999" width="119.01400000000001" height="53.800000000000004" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="290.98449999999997" y="993.2999999999998" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="290.98449999999997" dy="-3.9000000000000012">&quot;Logits</tspan><tspan x="290.98449999999997" dy="16.900000000000002">[262144 floats</tspan></text>
+</g>
+<g class="node" data-id="Argmax" data-label="Argmax / Sample" data-shape="rectangle">
+  <rect x="221.474" y="1068.1999999999998" width="139.021" height="36.900000000000006" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="290.98449999999997" y="1086.6499999999999" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d" dy="4.55">Argmax / Sample</text>
+</g>
+<g class="node" data-id="NextToken" data-label="Next Token ID" data-shape="rectangle">
+  <rect x="229.25449999999995" y="1153.1" width="123.46" height="36.900000000000006" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
+  <text x="290.98449999999997" y="1171.55" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d" dy="4.55">Next Token ID</text>
+</g>
+</svg>

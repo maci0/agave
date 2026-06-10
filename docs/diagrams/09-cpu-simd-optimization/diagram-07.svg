@@ -1,0 +1,105 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 785.4080000000001 585.4000000000001" width="785.4080000000001" height="585.4000000000001" style="--bg:#FFFFFF;--fg:#27272A;background:#ffffff">
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;display=swap');
+  text { font-family: 'Inter', system-ui, sans-serif; }
+  svg {
+    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
+    --_text:          #1a1a2e;
+    --_text-sec:      var(--muted, color-mix(in srgb, #1a1a2e 60%, #ffffff));
+    --_text-muted:    var(--muted, color-mix(in srgb, #1a1a2e 40%, #ffffff));
+    --_text-faint:    color-mix(in srgb, #1a1a2e 25%, #ffffff);
+    --_line:          var(--line, color-mix(in srgb, #1a1a2e 50%, #ffffff));
+    --_arrow:         var(--accent, color-mix(in srgb, #1a1a2e 85%, #ffffff));
+    --_node-fill:     var(--surface, color-mix(in srgb, #1a1a2e 3%, #ffffff));
+    --_node-stroke:   var(--border, color-mix(in srgb, #1a1a2e 20%, #ffffff));
+    --_group-fill:    #ffffff;
+    --_group-hdr:     color-mix(in srgb, #1a1a2e 5%, #ffffff);
+    --_inner-stroke:  color-mix(in srgb, #1a1a2e 12%, #ffffff);
+    --_key-badge:     color-mix(in srgb, #1a1a2e 10%, #ffffff);
+  }
+</style>
+<defs>
+  <marker id="arrowhead" markerWidth="8" markerHeight="5" refX="7" refY="2.5" orient="auto">
+    <polygon points="0 0, 8 2.5, 0 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+  <marker id="arrowhead-start" markerWidth="8" markerHeight="5" refX="1" refY="2.5" orient="auto-start-reverse">
+    <polygon points="8 0, 0 2.5, 8 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+</defs>
+<g class="subgraph" data-id="Pass1" data-label="Pass 1 — sum of squares">
+  <rect x="109.42800000000011" y="124.9" width="566.5519999999999" height="113.80000000000001" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="109.42800000000011" y="124.9" width="566.5519999999999" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="121.42800000000011" y="138.9" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">Pass 1 — sum of squares</text>
+</g>
+<g class="subgraph" data-id="Scalar" data-label="Scalar normalization">
+  <rect x="186.26600000000008" y="286.70000000000005" width="412.876" height="96.9" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="186.26600000000008" y="286.70000000000005" width="412.876" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="198.26600000000008" y="300.70000000000005" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">Scalar normalization</text>
+</g>
+<g class="subgraph" data-id="Pass2" data-label="Pass 2 — normalize + weight">
+  <rect x="40" y="431.6" width="705.4080000000001" height="113.80000000000001" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="40" y="431.6" width="705.4080000000001" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="52" y="445.6" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">Pass 2 — normalize + weight</text>
+</g>
+<polyline class="edge" data-from="input" data-to="Pass1" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="520.3348333333333,76.9 520.3348333333333,112.9 392.70400000000006,112.9 392.70400000000006,124.9" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Pass1" data-to="Scalar" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="392.70400000000006,238.70000000000002 392.70400000000006,286.70000000000005" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Scalar" data-to="Pass2" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="392.70400000000006,383.6 392.70400000000006,431.6" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="input" data-to="Pass2" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="553.0901666666667,76.9 553.0901666666667,112.9 685.98,112.9 685.98,419.6 569.056,419.6 569.056,431.6" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="weight" data-to="Pass2" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="104.68700000000007,375.6 104.68700000000007,419.6 216.35200000000003,419.6 216.35200000000003,431.6" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="p1a" data-to="p1b" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="312.6140000000001,195.8 360.6140000000001,195.8" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="p1b" data-to="p1c" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="515.9370000000001,195.8 563.9370000000001,195.8" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="s1" data-to="s2" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="405.01300000000003,357.15000000000003 453.01300000000003,357.15000000000003" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="p2a" data-to="p2b" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="199.467,502.5 247.467,502.5" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="p2b" data-to="p2c" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="386.48800000000006,502.5 434.48800000000006,502.5" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="p2c" data-to="p2d" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="569.8040000000001,502.5 617.8040000000001,502.5" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<g class="node" data-id="input" data-label="&quot;input[0..n" data-shape="rectangle">
+  <rect x="487.57950000000005" y="40" width="98.266" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="536.7125000000001" y="58.45" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">&quot;input[0..n</text>
+</g>
+<g class="node" data-id="weight" data-label="&quot;weight[0..n" data-shape="rectangle">
+  <rect x="51.10800000000006" y="338.70000000000005" width="107.158" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="104.68700000000007" y="357.15000000000003" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">&quot;weight[0..n</text>
+</g>
+<g class="node" data-id="p1a" data-label="@mulAdd(V8, xv, xv, acc)
+for each 8-element chunk" data-shape="rectangle">
+  <rect x="125.42800000000011" y="168.9" width="187.18599999999998" height="53.800000000000004" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="219.0210000000001" y="195.8" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="219.0210000000001" dy="-3.9000000000000012">@mulAdd(V8, xv, xv, acc)</tspan><tspan x="219.0210000000001" dy="16.900000000000002">for each 8-element chunk</tspan></text>
+</g>
+<g class="node" data-id="p1b" data-label="@reduce(.Add, acc)
+horizontal sum" data-shape="rectangle">
+  <rect x="360.6140000000001" y="168.9" width="155.32299999999998" height="53.800000000000004" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="438.2755000000001" y="195.8" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="438.2755000000001" dy="-3.9000000000000012">@reduce(.Add, acc)</tspan><tspan x="438.2755000000001" dy="16.900000000000002">horizontal sum</tspan></text>
+</g>
+<g class="node" data-id="p1c" data-label="&quot;sum_sq
+= Σ input[i" data-shape="rectangle">
+  <rect x="563.9370000000001" y="168.9" width="96.043" height="53.800000000000004" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="611.9585000000002" y="195.8" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="611.9585000000002" dy="-3.9000000000000012">&quot;sum_sq</tspan><tspan x="611.9585000000002" dy="16.900000000000002">= Σ input[i</tspan></text>
+</g>
+<g class="node" data-id="s1" data-label="rms = sqrt(sum_sq / n + eps)" data-shape="rectangle">
+  <rect x="202.26600000000008" y="330.70000000000005" width="202.74699999999999" height="36.900000000000006" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
+  <text x="303.63950000000006" y="349.15000000000003" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12" dy="4.55">rms = sqrt(sum_sq / n + eps)</text>
+</g>
+<g class="node" data-id="s2" data-label="scale = 1.0 / rms" data-shape="rectangle">
+  <rect x="453.01300000000003" y="338.70000000000005" width="130.12900000000002" height="36.900000000000006" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
+  <text x="518.0775000000001" y="357.15000000000003" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12" dy="4.55">scale = 1.0 / rms</text>
+</g>
+<g class="node" data-id="p2a" data-label="@splat(scale)
+broadcast scalar" data-shape="rectangle">
+  <rect x="56" y="475.6" width="143.467" height="53.800000000000004" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="127.7335" y="502.5" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="127.7335" dy="-3.9000000000000012">@splat(scale)</tspan><tspan x="127.7335" dy="16.900000000000002">broadcast scalar</tspan></text>
+</g>
+<g class="node" data-id="p2b" data-label="xv * scale_v
+normalize chunk" data-shape="rectangle">
+  <rect x="247.467" y="475.6" width="139.02100000000002" height="53.800000000000004" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="316.9775" y="502.5" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="316.9775" dy="-3.9000000000000012">xv * scale_v</tspan><tspan x="316.9775" dy="16.900000000000002">normalize chunk</tspan></text>
+</g>
+<g class="node" data-id="p2c" data-label="normalized * wv
+apply weight" data-shape="rectangle">
+  <rect x="434.48800000000006" y="475.6" width="135.316" height="53.800000000000004" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="502.1460000000001" y="502.5" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="502.1460000000001" dy="-3.9000000000000012">normalized * wv</tspan><tspan x="502.1460000000001" dy="16.900000000000002">apply weight</tspan></text>
+</g>
+<g class="node" data-id="p2d" data-label="&quot;output[i..i+8" data-shape="rectangle">
+  <rect x="617.8040000000001" y="484.05" width="111.60400000000001" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="673.6060000000001" y="502.5" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">&quot;output[i..i+8</text>
+</g>
+</svg>

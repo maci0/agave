@@ -1,0 +1,192 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1851.885 671.2" width="1851.885" height="671.2" style="--bg:#FFFFFF;--fg:#27272A;background:#ffffff">
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;display=swap');
+  text { font-family: 'Inter', system-ui, sans-serif; }
+  svg {
+    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
+    --_text:          #1a1a2e;
+    --_text-sec:      var(--muted, color-mix(in srgb, #1a1a2e 60%, #ffffff));
+    --_text-muted:    var(--muted, color-mix(in srgb, #1a1a2e 40%, #ffffff));
+    --_text-faint:    color-mix(in srgb, #1a1a2e 25%, #ffffff);
+    --_line:          var(--line, color-mix(in srgb, #1a1a2e 50%, #ffffff));
+    --_arrow:         var(--accent, color-mix(in srgb, #1a1a2e 85%, #ffffff));
+    --_node-fill:     var(--surface, color-mix(in srgb, #1a1a2e 3%, #ffffff));
+    --_node-stroke:   var(--border, color-mix(in srgb, #1a1a2e 20%, #ffffff));
+    --_group-fill:    #ffffff;
+    --_group-hdr:     color-mix(in srgb, #1a1a2e 5%, #ffffff);
+    --_inner-stroke:  color-mix(in srgb, #1a1a2e 12%, #ffffff);
+    --_key-badge:     color-mix(in srgb, #1a1a2e 10%, #ffffff);
+  }
+</style>
+<defs>
+  <marker id="arrowhead" markerWidth="8" markerHeight="5" refX="7" refY="2.5" orient="auto">
+    <polygon points="0 0, 8 2.5, 0 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+  <marker id="arrowhead-start" markerWidth="8" markerHeight="5" refX="1" refY="2.5" orient="auto-start-reverse">
+    <polygon points="8 0, 0 2.5, 8 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+</defs>
+<g class="subgraph" data-id="KVPath" data-label="KV Cache">
+  <rect x="268.23299999999995" y="260.1" width="166.57500000000002" height="96.9" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="268.23299999999995" y="260.1" width="166.57500000000002" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="280.23299999999995" y="274.1" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">KV Cache</text>
+</g>
+<g class="subgraph" data-id="WPath" data-label="Model Weights">
+  <rect x="955.2823928571428" y="76.9" width="0" height="0" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="955.2823928571428" y="76.9" width="0" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="967.2823928571428" y="90.9" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">Model Weights</text>
+</g>
+<polyline class="edge" data-from="START" data-to="KV" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="KV cache at runtime" points="801.5037261904761,76.9 801.5037261904761,88.9 351.52049999999986,88.9 351.52049999999986,169.2" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="START" data-to="WQ" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="Model weights" points="864.3930595238095,76.9 864.3930595238095,88.9 1303.333,88.9 1303.3329999999999,169.2" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="WQ" data-to="WPlatform" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="1303.3329999999999,206.10000000000002 1303.3329999999999,254.10000000000002" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="WPlatform" data-to="WCPU" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="CPU" points="1254.2119285714284,291 1254.2119285714284,303 795.3785,303 795.3785,395.30000000000007" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="WPlatform" data-to="WAPPLE" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="Apple Silicon" points="1273.860357142857,291 1273.860357142857,315 1005.7479999999999,315 1005.7479999999999,395.3" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="WPlatform" data-to="WGPU" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="GPU (limited VRAM)" points="1293.5087857142855,291 1293.5087857142855,327 1211.6715,327 1211.6715,395.30000000000007" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="WPlatform" data-to="WBIT" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="BitNet model" points="1313.1572142857142,291 1313.1572142857142,327.00000000000006 1394.9945,327.00000000000006 1394.9944999999998,395.30000000000007" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="WPlatform" data-to="WCAL" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="Need calibration-free" points="1332.8056428571426,291 1332.8056428571426,315.00000000000006 1576.8355,315.00000000000006 1576.8355,395.30000000000007" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="WCAL" data-to="WGPTQ" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="yes" points="1548.7253333333333,432.20000000000005 1548.7253333333333,497.1000000000001 1472.9475,497.1000000000001 1472.9475,565.4000000000001" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="WCAL" data-to="WHQQ" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="no" points="1604.9456666666665,432.20000000000005 1604.9456666666665,473.1000000000001 1680.7234999999998,473.1000000000001 1680.7234999999998,565.4000000000001" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="WPlatform" data-to="WREF" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="Reference / debug" points="1352.4540714285713,291 1352.4540714285713,303.00000000000006 1750.5255,303.00000000000006 1750.5255,395.30000000000007" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="KV" data-to="KVQ" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="351.52049999999986,206.10000000000002 351.52049999999986,304.1" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="KVQ" data-to="KVF16" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="max quality" points="311.14799999999997,341 311.14800000000014,375.00000000000006 102.84150000000022,375.00000000000006 102.84150000000022,467.30000000000007" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="KVQ" data-to="KVT" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="balanced" points="338.06299999999993,341 338.0630000000001,399.00000000000006 267.26900000000023,399.00000000000006 267.26900000000023,467.30000000000007" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="KVQ" data-to="KVT2" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="max compression" points="364.97799999999995,341 364.97800000000007,399.00000000000006 435.7720000000004,399.00000000000006 435.77200000000016,467.30000000000007" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="KVQ" data-to="KVP" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="CPU-bound decode" points="391.893,341 391.89300000000026,375.00000000000006 603.9045000000001,375.00000000000006 603.9045000000003,467.30000000000007" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<g class="edge-label" data-from="START" data-to="KV" data-label="KV cache at runtime">
+  <rect x="296.52049999999986" y="95.9" width="109.72000000000003" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="351.38049999999987" y="111.05000000000001" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">KV cache at runtime</text>
+</g>
+<g class="edge-label" data-from="START" data-to="WQ" data-label="Model weights">
+  <rect x="1260.833" y="95.9" width="84.17800000000003" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="1302.922" y="111.05000000000001" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">Model weights</text>
+</g>
+<g class="edge-label" data-from="WPlatform" data-to="WCPU" data-label="CPU">
+  <rect x="775.3785" y="310" width="39.03399999999999" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="794.8955000000001" y="325.15" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">CPU</text>
+</g>
+<g class="edge-label" data-from="WPlatform" data-to="WAPPLE" data-label="Apple Silicon">
+  <rect x="966.2479999999999" y="322" width="78.83200000000001" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="1005.664" y="337.15" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">Apple Silicon</text>
+</g>
+<g class="edge-label" data-from="WPlatform" data-to="WGPU" data-label="GPU (limited VRAM)">
+  <rect x="1157.6715" y="334" width="107.34400000000001" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="1211.3435" y="349.15" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">GPU (limited VRAM)</text>
+</g>
+<g class="edge-label" data-from="WPlatform" data-to="WBIT" data-label="BitNet model">
+  <rect x="1357.4945" y="334.00000000000006" width="74.08000000000001" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="1394.5345" y="349.15000000000003" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">BitNet model</text>
+</g>
+<g class="edge-label" data-from="WPlatform" data-to="WCAL" data-label="Need calibration-free">
+  <rect x="1518.3355" y="326.90000000000003" width="116.25400000000002" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="1576.4624999999999" y="342.05" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">Need calibration-free</text>
+</g>
+<g class="edge-label" data-from="WCAL" data-to="WGPTQ" data-label="yes">
+  <rect x="1454.9475" y="504.10000000000014" width="35.47" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="1472.6825" y="519.2500000000001" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">yes</text>
+</g>
+<g class="edge-label" data-from="WCAL" data-to="WHQQ" data-label="no">
+  <rect x="1665.7234999999998" y="480.1000000000001" width="29.53" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="1680.4885" y="495.25000000000006" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">no</text>
+</g>
+<g class="edge-label" data-from="WPlatform" data-to="WREF" data-label="Reference / debug">
+  <rect x="1698.5255" y="310.00000000000006" width="103.78000000000003" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="1750.4155" y="325.15000000000003" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">Reference / debug</text>
+</g>
+<g class="edge-label" data-from="KVQ" data-to="KVF16" data-label="max quality">
+  <rect x="67.8415" y="382" width="69.328" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="102.5055" y="397.15" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">max quality</text>
+</g>
+<g class="edge-label" data-from="KVQ" data-to="KVT" data-label="balanced">
+  <rect x="236.269" y="406" width="61.606" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="267.072" y="421.15" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">balanced</text>
+</g>
+<g class="edge-label" data-from="KVQ" data-to="KVT2" data-label="max compression">
+  <rect x="385.27200000000016" y="406" width="100.21600000000001" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="435.38000000000017" y="421.15" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">max compression</text>
+</g>
+<g class="edge-label" data-from="KVQ" data-to="KVP" data-label="CPU-bound decode">
+  <rect x="548.9044999999999" y="382" width="109.12600000000002" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="603.4674999999999" y="397.15" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">CPU-bound decode</text>
+</g>
+<g class="node" data-id="START" data-label="What are you quantizing?" data-shape="rectangle">
+  <rect x="738.6143928571428" y="40" width="188.668" height="36.900000000000006" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
+  <text x="832.9483928571428" y="58.45" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f" dy="4.55">What are you quantizing?</text>
+</g>
+<g class="node" data-id="KV" data-label="KV cache path" data-shape="rectangle">
+  <rect x="288.30849999999987" y="169.2" width="126.424" height="36.900000000000006" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
+  <text x="351.52049999999986" y="187.64999999999998" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f" dy="4.55">KV cache path</text>
+</g>
+<g class="node" data-id="WQ" data-label="Weight quant path" data-shape="rectangle">
+  <rect x="1231.5994999999998" y="169.2" width="143.467" height="36.900000000000006" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
+  <text x="1303.3329999999999" y="187.64999999999998" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f" dy="4.55">Weight quant path</text>
+</g>
+<g class="node" data-id="KVF16" data-label="f16 / FP8 E4M3
+--kv-type f16" data-shape="rectangle">
+  <rect x="40" y="467.3" width="125.68299999999999" height="53.800000000000004" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
+  <text x="102.8415" y="494.2" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="102.8415" dy="-3.9000000000000012">f16 / FP8 E4M3</tspan><tspan x="102.8415" dy="16.900000000000002">--kv-type f16</tspan></text>
+</g>
+<g class="node" data-id="KVT" data-label="turbo preset
+--kv-type turbo
+q8_0-K + turbo4-V" data-shape="rectangle">
+  <rect x="193.683" y="467.3" width="147.172" height="70.7" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
+  <text x="267.269" y="502.65000000000003" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="267.269" dy="-12.350000000000001">turbo preset</tspan><tspan x="267.269" dy="16.900000000000002">--kv-type turbo</tspan><tspan x="267.269" dy="16.900000000000002">q8_0-K + turbo4-V</tspan></text>
+</g>
+<g class="node" data-id="KVT2" data-label="turbo2 / turbo3
+--kv-type turbo3
+4.6x vs f16" data-shape="rectangle">
+  <rect x="368.855" y="467.3" width="133.834" height="70.7" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
+  <text x="435.77200000000005" y="502.65000000000003" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12"><tspan x="435.77200000000005" dy="-12.350000000000001">turbo2 / turbo3</tspan><tspan x="435.77200000000005" dy="16.900000000000002">--kv-type turbo3</tspan><tspan x="435.77200000000005" dy="16.900000000000002">4.6x vs f16</tspan></text>
+</g>
+<g class="node" data-id="KVP" data-label="PlanarQuant pq3
+256 FMAs, fastest" data-shape="rectangle">
+  <rect x="530.6890000000001" y="467.3" width="146.43099999999998" height="53.800000000000004" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="603.9045000000001" y="494.2" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="603.9045000000001" dy="-3.9000000000000012">PlanarQuant pq3</tspan><tspan x="603.9045000000001" dy="16.900000000000002">256 FMAs, fastest</tspan></text>
+</g>
+<g class="node" data-id="WPlatform" data-label="Target platform?" data-shape="rectangle">
+  <rect x="1234.5634999999997" y="254.10000000000002" width="137.539" height="36.900000000000006" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
+  <text x="1303.3329999999996" y="272.55" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f" dy="4.55">Target platform?</text>
+</g>
+<g class="node" data-id="WCPU" data-label="IQ4_NL / Q4_0 / Q5_K
+Optimized SIMD kernels" data-shape="rectangle">
+  <rect x="705.12" y="395.30000000000007" width="180.51699999999997" height="53.800000000000004" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
+  <text x="795.3785" y="422.20000000000005" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="795.3785" dy="-3.9000000000000012">IQ4_NL / Q4_0 / Q5_K</tspan><tspan x="795.3785" dy="16.900000000000002">Optimized SIMD kernels</tspan></text>
+</g>
+<g class="node" data-id="WAPPLE" data-label="MLX 4-bit
+Native Metal, affine quant" data-shape="rectangle">
+  <rect x="913.637" y="395.3" width="184.22199999999998" height="53.800000000000004" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
+  <text x="1005.7479999999999" y="422.2" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="1005.7479999999999" dy="-3.9000000000000012">MLX 4-bit</tspan><tspan x="1005.7479999999999" dy="16.900000000000002">Native Metal, affine quant</tspan></text>
+</g>
+<g class="node" data-id="WGPU" data-label="Q4_K / FP8 E4M3
+Good quality/size ratio" data-shape="rectangle">
+  <rect x="1125.859" y="395.30000000000007" width="171.62499999999997" height="53.800000000000004" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
+  <text x="1211.6715" y="422.20000000000005" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="1211.6715" dy="-3.9000000000000012">Q4_K / FP8 E4M3</tspan><tspan x="1211.6715" dy="16.900000000000002">Good quality/size ratio</tspan></text>
+</g>
+<g class="node" data-id="WBIT" data-label="TQ1_0 / TQ2_0
+Ternary weights" data-shape="rectangle">
+  <rect x="1325.484" y="395.30000000000007" width="139.021" height="53.800000000000004" rx="0" ry="0" fill="#f3e8ff" stroke="#9333ea" stroke-width="0.75" />
+  <text x="1394.9945" y="422.20000000000005" text-anchor="middle" font-size="13" font-weight="500" fill="#581c87"><tspan x="1394.9945" dy="-3.9000000000000012">TQ1_0 / TQ2_0</tspan><tspan x="1394.9945" dy="16.900000000000002">Ternary weights</tspan></text>
+</g>
+<g class="node" data-id="WCAL" data-label="Calibration available?" data-shape="rectangle">
+  <rect x="1492.5049999999999" y="395.30000000000007" width="168.661" height="36.900000000000006" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
+  <text x="1576.8355" y="413.75000000000006" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f" dy="4.55">Calibration available?</text>
+</g>
+<g class="node" data-id="WGPTQ" data-label="GPTQ / AWQ
+Hessian / activation scale" data-shape="rectangle">
+  <rect x="1377.8725" y="565.4000000000001" width="190.14999999999998" height="53.800000000000004" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="1472.9475" y="592.3000000000001" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="1472.9475" dy="-3.9000000000000012">GPTQ / AWQ</tspan><tspan x="1472.9475" dy="16.900000000000002">Hessian / activation scale</tspan></text>
+</g>
+<g class="node" data-id="WHQQ" data-label="HQQ
+No calibration needed" data-shape="rectangle">
+  <rect x="1596.0224999999998" y="565.4000000000001" width="169.402" height="53.800000000000004" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="1680.7234999999998" y="592.3000000000001" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="1680.7234999999998" dy="-3.9000000000000012">HQQ</tspan><tspan x="1680.7234999999998" dy="16.900000000000002">No calibration needed</tspan></text>
+</g>
+<g class="node" data-id="WREF" data-label="f32 / bf16
+Full precision" data-shape="rectangle">
+  <rect x="1689.166" y="395.30000000000007" width="122.71900000000001" height="53.800000000000004" rx="0" ry="0" fill="#f3e8ff" stroke="#9333ea" stroke-width="0.75" />
+  <text x="1750.5255" y="422.20000000000005" text-anchor="middle" font-size="13" font-weight="500" fill="#581c87"><tspan x="1750.5255" dy="-3.9000000000000012">f32 / bf16</tspan><tspan x="1750.5255" dy="16.900000000000002">Full precision</tspan></text>
+</g>
+<g class="node" data-id="KVQ" data-label="Quality priority?" data-shape="rectangle">
+  <rect x="284.23299999999995" y="304.1" width="134.57500000000002" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="351.52049999999997" y="322.55" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">Quality priority?</text>
+</g>
+</svg>

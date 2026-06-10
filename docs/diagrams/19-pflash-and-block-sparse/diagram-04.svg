@@ -1,0 +1,118 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1434.5177499999998 820.5" width="1434.5177499999998" height="820.5" style="--bg:#FFFFFF;--fg:#27272A;background:#ffffff">
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;display=swap');
+  text { font-family: 'Inter', system-ui, sans-serif; }
+  svg {
+    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
+    --_text:          #1a1a2e;
+    --_text-sec:      var(--muted, color-mix(in srgb, #1a1a2e 60%, #ffffff));
+    --_text-muted:    var(--muted, color-mix(in srgb, #1a1a2e 40%, #ffffff));
+    --_text-faint:    color-mix(in srgb, #1a1a2e 25%, #ffffff);
+    --_line:          var(--line, color-mix(in srgb, #1a1a2e 50%, #ffffff));
+    --_arrow:         var(--accent, color-mix(in srgb, #1a1a2e 85%, #ffffff));
+    --_node-fill:     var(--surface, color-mix(in srgb, #1a1a2e 3%, #ffffff));
+    --_node-stroke:   var(--border, color-mix(in srgb, #1a1a2e 20%, #ffffff));
+    --_group-fill:    #ffffff;
+    --_group-hdr:     color-mix(in srgb, #1a1a2e 5%, #ffffff);
+    --_inner-stroke:  color-mix(in srgb, #1a1a2e 12%, #ffffff);
+    --_key-badge:     color-mix(in srgb, #1a1a2e 10%, #ffffff);
+  }
+</style>
+<defs>
+  <marker id="arrowhead" markerWidth="8" markerHeight="5" refX="7" refY="2.5" orient="auto">
+    <polygon points="0 0, 8 2.5, 0 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+  <marker id="arrowhead-start" markerWidth="8" markerHeight="5" refX="1" refY="2.5" orient="auto-start-reverse">
+    <polygon points="8 0, 0 2.5, 8 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+</defs>
+<g class="subgraph" data-id="Dense" data-label="Dense prompt (API docs)
+mean=0.78, threshold=0.66">
+  <rect x="119.88450000000006" y="772.5" width="0" height="0" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="119.88450000000006" y="772.5" width="0" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="131.88450000000006" y="786.5" font-size="12" font-weight="600" fill="var(--_text-sec)"><tspan x="131.88450000000006" dy="-3.6000000000000014">Dense prompt (API docs)</tspan><tspan x="131.88450000000006" dy="15.600000000000001">mean=0.78, threshold=0.66</tspan></text>
+</g>
+<g class="subgraph" data-id="Padded" data-label="Padded prompt (novel + boilerplate)
+mean=0.14, threshold=0.12">
+  <rect x="314.693" y="772.5" width="0" height="0" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="314.693" y="772.5" width="0" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="326.693" y="786.5" font-size="12" font-weight="600" fill="var(--_text-sec)"><tspan x="326.693" dy="-3.6000000000000014">Padded prompt (novel + boilerplate)</tspan><tspan x="326.693" dy="15.600000000000001">mean=0.14, threshold=0.12</tspan></text>
+</g>
+<polyline class="edge" data-from="Scores" data-to="Mean" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="217.28875,76.9 217.28875000000002,124.9" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Mean" data-to="Threshold" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="217.28875000000002,161.8 217.28874999999994,209.8" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Threshold" data-to="Compare" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="217.28874999999994,246.70000000000002 217.28875000000002,294.70000000000005" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Compare" data-to="Keep" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="yes" points="187.77208333333334,442.28333333333336 187.77208333333334,507.8 119.88450000000006,507.8 119.8845,588.1" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Compare" data-to="Drop" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="no" points="246.8054166666667,442.2833333333334 246.8054166666667,507.8 314.693,507.8 314.693,588.1" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Keep" data-to="Dense" data-style="dotted" data-arrow-start="false" data-arrow-end="true" data-label="~70% kept
+(dense case)" points="119.8845,641.9 119.88450000000006,772.5" fill="none" stroke="var(--_line)" stroke-width="1" stroke-dasharray="4 4" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Drop" data-to="Padded" data-style="dotted" data-arrow-start="false" data-arrow-end="true" data-label="~92% dropped
+(padded case)" points="314.693,641.9 314.693,772.5" fill="none" stroke="var(--_line)" stroke-width="1" stroke-dasharray="4 4" marker-end="url(#arrowhead)" />
+<g class="edge-label" data-from="Compare" data-to="Keep" data-label="yes">
+  <rect x="101.88450000000006" y="514.8" width="35.47" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="119.61950000000006" y="529.9499999999999" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">yes</text>
+</g>
+<g class="edge-label" data-from="Compare" data-to="Drop" data-label="no">
+  <rect x="299.693" y="514.8" width="29.53" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="314.45799999999997" y="529.9499999999999" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">no</text>
+</g>
+<g class="edge-label" data-from="Keep" data-to="Dense" data-label="~70% kept
+(dense case)">
+  <rect x="80.38450000000006" y="684.9" width="78.83200000000001" height="44.6" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="119.80050000000006" y="707.1999999999999" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)"><tspan x="119.80050000000006" dy="-3.3000000000000007">~70% kept</tspan><tspan x="119.80050000000006" dy="14.3">(dense case)</tspan></text>
+</g>
+<g class="edge-label" data-from="Drop" data-to="Padded" data-label="~92% dropped
+(padded case)">
+  <rect x="272.193" y="684.9" width="84.77200000000002" height="44.6" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="314.579" y="707.1999999999999" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)"><tspan x="314.579" dy="-3.3000000000000007">~92% dropped</tspan><tspan x="314.579" dy="14.3">(padded case)</tspan></text>
+</g>
+<g class="node" data-id="Scores" data-label="Block Importance Scores" data-shape="rectangle">
+  <rect x="122.21374999999998" y="40" width="190.15" height="36.900000000000006" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
+  <text x="217.28875" y="58.45" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f" dy="4.55">Block Importance Scores</text>
+</g>
+<g class="node" data-id="Mean" data-label="Compute mean(scores)" data-shape="rectangle">
+  <rect x="129.25325000000004" y="124.9" width="176.07099999999997" height="36.900000000000006" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
+  <text x="217.28875000000002" y="143.35000000000002" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d" dy="4.55">Compute mean(scores)</text>
+</g>
+<g class="node" data-id="Threshold" data-label="threshold = alpha * mean" data-shape="rectangle">
+  <rect x="124.43674999999996" y="209.8" width="185.70399999999998" height="36.900000000000006" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
+  <text x="217.28874999999994" y="228.25" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12" dy="4.55">threshold = alpha * mean</text>
+</g>
+<g class="node" data-id="Keep" data-label="Keep block
+(sent to target model)" data-shape="rectangle">
+  <rect x="40" y="588.1" width="159.769" height="53.800000000000004" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
+  <text x="119.8845" y="615" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="119.8845" dy="-3.9000000000000012">Keep block</tspan><tspan x="119.8845" dy="16.900000000000002">(sent to target model)</tspan></text>
+</g>
+<g class="node" data-id="Drop" data-label="Drop block
+(never reaches target)" data-shape="rectangle">
+  <rect x="227.769" y="588.1" width="173.84799999999996" height="53.800000000000004" rx="0" ry="0" fill="#fee2e2" stroke="#ef4444" stroke-width="0.75" />
+  <text x="314.693" y="615" text-anchor="middle" font-size="13" font-weight="500" fill="#7f1d1d"><tspan x="314.693" dy="-3.9000000000000012">Drop block</tspan><tspan x="314.693" dy="16.900000000000002">(never reaches target)</tspan></text>
+</g>
+<g class="node" data-id="D1" data-label="block: 0.80 -- KEEP" data-shape="rectangle">
+  <rect x="340.36375000000004" y="503.20000000000005" width="152.35899999999998" height="36.900000000000006" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
+  <text x="416.54325000000006" y="521.6500000000001" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d" dy="4.55">block: 0.80 -- KEEP</text>
+</g>
+<g class="node" data-id="D2" data-label="block: 0.60 -- DROP" data-shape="rectangle">
+  <rect x="520.7227499999999" y="40" width="152.35899999999998" height="36.900000000000006" rx="0" ry="0" fill="#fee2e2" stroke="#ef4444" stroke-width="0.75" />
+  <text x="596.9022499999999" y="58.45" text-anchor="middle" font-size="13" font-weight="500" fill="#7f1d1d" dy="4.55">block: 0.60 -- DROP</text>
+</g>
+<g class="node" data-id="D3" data-label="block: 0.90 -- KEEP" data-shape="rectangle">
+  <rect x="701.0817499999999" y="40" width="152.35899999999998" height="36.900000000000006" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
+  <text x="777.2612499999999" y="58.45" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d" dy="4.55">block: 0.90 -- KEEP</text>
+</g>
+<g class="node" data-id="P1" data-label="block: 0.90 -- KEEP" data-shape="rectangle">
+  <rect x="881.44075" y="40" width="152.35899999999998" height="36.900000000000006" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
+  <text x="957.6202499999999" y="58.45" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d" dy="4.55">block: 0.90 -- KEEP</text>
+</g>
+<g class="node" data-id="P2" data-label="block: 0.05 -- DROP" data-shape="rectangle">
+  <rect x="1061.79975" y="40" width="152.35899999999998" height="36.900000000000006" rx="0" ry="0" fill="#fee2e2" stroke="#ef4444" stroke-width="0.75" />
+  <text x="1137.9792499999999" y="58.45" text-anchor="middle" font-size="13" font-weight="500" fill="#7f1d1d" dy="4.55">block: 0.05 -- DROP</text>
+</g>
+<g class="node" data-id="P3" data-label="block: 0.03 -- DROP" data-shape="rectangle">
+  <rect x="1242.1587499999998" y="40" width="152.35899999999998" height="36.900000000000006" rx="0" ry="0" fill="#fee2e2" stroke="#ef4444" stroke-width="0.75" />
+  <text x="1318.3382499999998" y="58.45" text-anchor="middle" font-size="13" font-weight="500" fill="#7f1d1d" dy="4.55">block: 0.03 -- DROP</text>
+</g>
+<g class="node" data-id="Compare" data-label="score &gt; threshold?" data-shape="diamond">
+  <polygon points="217.28875000000005,294.70000000000005 305.83875000000006,383.25000000000006 217.28875000000005,471.80000000000007 128.73875000000004,383.25000000000006" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="217.28875000000005" y="383.25000000000006" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">score &gt; threshold?</text>
+</g>
+</svg>
