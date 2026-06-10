@@ -58,7 +58,7 @@ test "constants valid" {
     // group_size and words-per-group are implicit constants in the kernel;
     // verify their values are sane at comptime.
     comptime std.debug.assert(32 > 0); // gs: group_size
-    comptime std.debug.assert(4 > 0);  // wpg: words per group (32 nibbles / 8 per word)
+    comptime std.debug.assert(4 > 0); // wpg: words per group (32 nibbles / 8 per word)
 }
 
 test "fuzz: gemv_mxfp4_st functions" {

@@ -166,7 +166,9 @@ test "constants valid" {
 test "fuzz: gemv_tq1_0 functions" {
     try std.testing.fuzz({}, struct {
         fn f(_: void, _: *std.testing.Smith) !void {
-            comptime { _ = &tq1_0BlockDot; }
+            comptime {
+                _ = &tq1_0BlockDot;
+            }
         }
     }.f, .{});
 }

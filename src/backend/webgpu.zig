@@ -1674,17 +1674,17 @@ pub const WebGpuBackend = struct {
     /// w_q: packed uint8 nibbles [n * k/2], scale/zero: bf16 packed two-per-u32 [n * k/group_size].
     pub fn gemvHqq(self: *WebGpuBackend, x: [*]const f32, w_q: [*]const u8, scale: [*]const u8, zero: [*]const u8, y: [*]f32, n: usize, k: usize, group_size: u32) void {
         const n_groups = (k + group_size - 1) / group_size;
-        const x_sz  = k * @sizeOf(f32);
-        const wq_sz = n * (k / 2);                      // packed nibbles: 2 per byte
-        const sq_sz = n * n_groups * @sizeOf(u16);      // bf16 scale
-        const zr_sz = n * n_groups * @sizeOf(u16);      // bf16 zero
-        const y_sz  = n * @sizeOf(f32);
+        const x_sz = k * @sizeOf(f32);
+        const wq_sz = n * (k / 2); // packed nibbles: 2 per byte
+        const sq_sz = n * n_groups * @sizeOf(u16); // bf16 scale
+        const zr_sz = n * n_groups * @sizeOf(u16); // bf16 zero
+        const y_sz = n * @sizeOf(f32);
 
-        const x_buf  = self.getOrUpload(@ptrCast(x),     x_sz);
-        const wq_buf = self.getOrUpload(@ptrCast(w_q),   wq_sz);
+        const x_buf = self.getOrUpload(@ptrCast(x), x_sz);
+        const wq_buf = self.getOrUpload(@ptrCast(w_q), wq_sz);
         const sc_buf = self.getOrUpload(@ptrCast(scale), sq_sz);
-        const zr_buf = self.getOrUpload(@ptrCast(zero),  zr_sz);
-        const y_buf  = self.createOutputBuf(y_sz);
+        const zr_buf = self.getOrUpload(@ptrCast(zero), zr_sz);
+        const y_buf = self.createOutputBuf(y_sz);
 
         const Params = extern struct { n_v: u32, k_v: u32, gs: u32, _pad: u32 = 0 };
         const p = Params{ .n_v = @intCast(n), .k_v = @intCast(k), .gs = group_size };
@@ -1692,11 +1692,11 @@ pub const WebGpuBackend = struct {
         self.deferDestroy(params_buf);
 
         const entries = [_]WGPUBindGroupEntry{
-            storageEntry(0, x_buf,  x_sz),
+            storageEntry(0, x_buf, x_sz),
             storageEntry(1, wq_buf, wq_sz),
             storageEntry(2, sc_buf, sq_sz),
             storageEntry(3, zr_buf, zr_sz),
-            storageEntry(4, y_buf,  y_sz),
+            storageEntry(4, y_buf, y_sz),
             uniformEntry(5, params_buf, Params),
         };
         self.dispatchCompute(self.pipe_gemv_hqq, &entries, @intCast(n));
@@ -2132,49 +2132,221 @@ test "WebGPU comptime struct layout verification" {
 
 // ── Per-function comptime signature tests ────────────────────────
 
-test "WebGpuBackend.init" { comptime { _ = &WebGpuBackend.init; } }
-test "WebGpuBackend.deinit" { comptime { _ = &WebGpuBackend.deinit; } }
-test "WebGpuBackend.silu" { comptime { _ = &WebGpuBackend.silu; } }
-test "WebGpuBackend.gelu" { comptime { _ = &WebGpuBackend.gelu; } }
-test "WebGpuBackend.add" { comptime { _ = &WebGpuBackend.add; } }
-test "WebGpuBackend.mul" { comptime { _ = &WebGpuBackend.mul; } }
-test "WebGpuBackend.siluMul" { comptime { _ = &WebGpuBackend.siluMul; } }
-test "WebGpuBackend.geluMul" { comptime { _ = &WebGpuBackend.geluMul; } }
-test "WebGpuBackend.rmsNorm" { comptime { _ = &WebGpuBackend.rmsNorm; } }
-test "WebGpuBackend.softmax" { comptime { _ = &WebGpuBackend.softmax; } }
-test "WebGpuBackend.rope" { comptime { _ = &WebGpuBackend.rope; } }
-test "WebGpuBackend.embLookup" { comptime { _ = &WebGpuBackend.embLookup; } }
-test "WebGpuBackend.gemv" { comptime { _ = &WebGpuBackend.gemv; } }
-test "WebGpuBackend.gemm" { comptime { _ = &WebGpuBackend.gemm; } }
-test "WebGpuBackend.l2Norm" { comptime { _ = &WebGpuBackend.l2Norm; } }
-test "WebGpuBackend.addRmsNorm" { comptime { _ = &WebGpuBackend.addRmsNorm; } }
-test "WebGpuBackend.addScaled" { comptime { _ = &WebGpuBackend.addScaled; } }
-test "WebGpuBackend.sigmoidMul" { comptime { _ = &WebGpuBackend.sigmoidMul; } }
-test "WebGpuBackend.deinterleave" { comptime { _ = &WebGpuBackend.deinterleave; } }
-test "WebGpuBackend.splitQGate" { comptime { _ = &WebGpuBackend.splitQGate; } }
-test "WebGpuBackend.rmsNormMulti" { comptime { _ = &WebGpuBackend.rmsNormMulti; } }
-test "WebGpuBackend.rmsNormBatched" { comptime { _ = &WebGpuBackend.rmsNormBatched; } }
-test "WebGpuBackend.ropeBatched" { comptime { _ = &WebGpuBackend.ropeBatched; } }
-test "WebGpuBackend.sdpa" { comptime { _ = &WebGpuBackend.sdpa; } }
-test "WebGpuBackend.sdpaWithStats" { comptime { _ = &WebGpuBackend.sdpaWithStats; } }
-test "WebGpuBackend.sdpaPaged" { comptime { _ = &WebGpuBackend.sdpaPaged; } }
-test "WebGpuBackend.sdpaTree" { comptime { _ = &WebGpuBackend.sdpaTree; } }
-test "WebGpuBackend.sdpaPrefill" { comptime { _ = &WebGpuBackend.sdpaPrefill; } }
-test "WebGpuBackend.gemvT" { comptime { _ = &WebGpuBackend.gemvT; } }
-test "WebGpuBackend.gemvNvfp4St" { comptime { _ = &WebGpuBackend.gemvNvfp4St; } }
-test "WebGpuBackend.gemvMlxQ" { comptime { _ = &WebGpuBackend.gemvMlxQ; } }
-test "WebGpuBackend.gemvMxfp4St" { comptime { _ = &WebGpuBackend.gemvMxfp4St; } }
-test "WebGpuBackend.gemvGptq" { comptime { _ = &WebGpuBackend.gemvGptq; } }
-test "WebGpuBackend.gemvAwq" { comptime { _ = &WebGpuBackend.gemvAwq; } }
-test "WebGpuBackend.gemvMulti" { comptime { _ = &WebGpuBackend.gemvMulti; } }
-test "WebGpuBackend.causalConv1dSilu" { comptime { _ = &WebGpuBackend.causalConv1dSilu; } }
-test "WebGpuBackend.deltaNet" { comptime { _ = &WebGpuBackend.deltaNet; } }
-test "WebGpuBackend.sync" { comptime { _ = &WebGpuBackend.sync; } }
-test "WebGpuBackend.beginBatch" { comptime { _ = &WebGpuBackend.beginBatch; } }
-test "WebGpuBackend.endBatch" { comptime { _ = &WebGpuBackend.endBatch; } }
-test "WebGpuBackend.allocKvSlice" { comptime { _ = &WebGpuBackend.allocKvSlice; } }
-test "WebGpuBackend.freeKvSlice" { comptime { _ = &WebGpuBackend.freeKvSlice; } }
-test "WebGpuBackend.backendInfo" { comptime { _ = &WebGpuBackend.backendInfo; } }
+test "WebGpuBackend.init" {
+    comptime {
+        _ = &WebGpuBackend.init;
+    }
+}
+test "WebGpuBackend.deinit" {
+    comptime {
+        _ = &WebGpuBackend.deinit;
+    }
+}
+test "WebGpuBackend.silu" {
+    comptime {
+        _ = &WebGpuBackend.silu;
+    }
+}
+test "WebGpuBackend.gelu" {
+    comptime {
+        _ = &WebGpuBackend.gelu;
+    }
+}
+test "WebGpuBackend.add" {
+    comptime {
+        _ = &WebGpuBackend.add;
+    }
+}
+test "WebGpuBackend.mul" {
+    comptime {
+        _ = &WebGpuBackend.mul;
+    }
+}
+test "WebGpuBackend.siluMul" {
+    comptime {
+        _ = &WebGpuBackend.siluMul;
+    }
+}
+test "WebGpuBackend.geluMul" {
+    comptime {
+        _ = &WebGpuBackend.geluMul;
+    }
+}
+test "WebGpuBackend.rmsNorm" {
+    comptime {
+        _ = &WebGpuBackend.rmsNorm;
+    }
+}
+test "WebGpuBackend.softmax" {
+    comptime {
+        _ = &WebGpuBackend.softmax;
+    }
+}
+test "WebGpuBackend.rope" {
+    comptime {
+        _ = &WebGpuBackend.rope;
+    }
+}
+test "WebGpuBackend.embLookup" {
+    comptime {
+        _ = &WebGpuBackend.embLookup;
+    }
+}
+test "WebGpuBackend.gemv" {
+    comptime {
+        _ = &WebGpuBackend.gemv;
+    }
+}
+test "WebGpuBackend.gemm" {
+    comptime {
+        _ = &WebGpuBackend.gemm;
+    }
+}
+test "WebGpuBackend.l2Norm" {
+    comptime {
+        _ = &WebGpuBackend.l2Norm;
+    }
+}
+test "WebGpuBackend.addRmsNorm" {
+    comptime {
+        _ = &WebGpuBackend.addRmsNorm;
+    }
+}
+test "WebGpuBackend.addScaled" {
+    comptime {
+        _ = &WebGpuBackend.addScaled;
+    }
+}
+test "WebGpuBackend.sigmoidMul" {
+    comptime {
+        _ = &WebGpuBackend.sigmoidMul;
+    }
+}
+test "WebGpuBackend.deinterleave" {
+    comptime {
+        _ = &WebGpuBackend.deinterleave;
+    }
+}
+test "WebGpuBackend.splitQGate" {
+    comptime {
+        _ = &WebGpuBackend.splitQGate;
+    }
+}
+test "WebGpuBackend.rmsNormMulti" {
+    comptime {
+        _ = &WebGpuBackend.rmsNormMulti;
+    }
+}
+test "WebGpuBackend.rmsNormBatched" {
+    comptime {
+        _ = &WebGpuBackend.rmsNormBatched;
+    }
+}
+test "WebGpuBackend.ropeBatched" {
+    comptime {
+        _ = &WebGpuBackend.ropeBatched;
+    }
+}
+test "WebGpuBackend.sdpa" {
+    comptime {
+        _ = &WebGpuBackend.sdpa;
+    }
+}
+test "WebGpuBackend.sdpaWithStats" {
+    comptime {
+        _ = &WebGpuBackend.sdpaWithStats;
+    }
+}
+test "WebGpuBackend.sdpaPaged" {
+    comptime {
+        _ = &WebGpuBackend.sdpaPaged;
+    }
+}
+test "WebGpuBackend.sdpaTree" {
+    comptime {
+        _ = &WebGpuBackend.sdpaTree;
+    }
+}
+test "WebGpuBackend.sdpaPrefill" {
+    comptime {
+        _ = &WebGpuBackend.sdpaPrefill;
+    }
+}
+test "WebGpuBackend.gemvT" {
+    comptime {
+        _ = &WebGpuBackend.gemvT;
+    }
+}
+test "WebGpuBackend.gemvNvfp4St" {
+    comptime {
+        _ = &WebGpuBackend.gemvNvfp4St;
+    }
+}
+test "WebGpuBackend.gemvMlxQ" {
+    comptime {
+        _ = &WebGpuBackend.gemvMlxQ;
+    }
+}
+test "WebGpuBackend.gemvMxfp4St" {
+    comptime {
+        _ = &WebGpuBackend.gemvMxfp4St;
+    }
+}
+test "WebGpuBackend.gemvGptq" {
+    comptime {
+        _ = &WebGpuBackend.gemvGptq;
+    }
+}
+test "WebGpuBackend.gemvAwq" {
+    comptime {
+        _ = &WebGpuBackend.gemvAwq;
+    }
+}
+test "WebGpuBackend.gemvMulti" {
+    comptime {
+        _ = &WebGpuBackend.gemvMulti;
+    }
+}
+test "WebGpuBackend.causalConv1dSilu" {
+    comptime {
+        _ = &WebGpuBackend.causalConv1dSilu;
+    }
+}
+test "WebGpuBackend.deltaNet" {
+    comptime {
+        _ = &WebGpuBackend.deltaNet;
+    }
+}
+test "WebGpuBackend.sync" {
+    comptime {
+        _ = &WebGpuBackend.sync;
+    }
+}
+test "WebGpuBackend.beginBatch" {
+    comptime {
+        _ = &WebGpuBackend.beginBatch;
+    }
+}
+test "WebGpuBackend.endBatch" {
+    comptime {
+        _ = &WebGpuBackend.endBatch;
+    }
+}
+test "WebGpuBackend.allocKvSlice" {
+    comptime {
+        _ = &WebGpuBackend.allocKvSlice;
+    }
+}
+test "WebGpuBackend.freeKvSlice" {
+    comptime {
+        _ = &WebGpuBackend.freeKvSlice;
+    }
+}
+test "WebGpuBackend.backendInfo" {
+    comptime {
+        _ = &WebGpuBackend.backendInfo;
+    }
+}
 
 test "fuzz: all webgpu functions" {
     try std.testing.fuzz({}, struct {

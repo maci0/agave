@@ -1058,7 +1058,8 @@ pub const BackendState = struct {
                             }
                         };
                         self.name = "ROCm";
-                        self.rocm_be.cpu.pool = &self.pool.?; break :blk .{ .rocm = &self.rocm_be };
+                        self.rocm_be.cpu.pool = &self.pool.?;
+                        break :blk .{ .rocm = &self.rocm_be };
                     } else {
                         @panic("ROCm backend disabled at build time");
                     }
@@ -1128,7 +1129,8 @@ pub const BackendState = struct {
                                     if (comptime build_options.enable_cpu) break :blk .{ .cpu = &self.cpu_be } else @panic("All GPU backends failed and CPU disabled");
                                 };
                                 self.name = "ROCm";
-                                self.rocm_be.cpu.pool = &self.pool.?; break :blk .{ .rocm = &self.rocm_be };
+                                self.rocm_be.cpu.pool = &self.pool.?;
+                                break :blk .{ .rocm = &self.rocm_be };
                             }
                             if (comptime build_options.enable_vulkan) {
                                 self.vulkan_be = VulkanBackend.init(allocator, device_id) catch {
@@ -1156,7 +1158,8 @@ pub const BackendState = struct {
                             if (comptime build_options.enable_cpu) break :blk .{ .cpu = &self.cpu_be } else @panic("ROCm failed, no other backends enabled");
                         };
                         self.name = "ROCm";
-                        self.rocm_be.cpu.pool = &self.pool.?; break :blk .{ .rocm = &self.rocm_be };
+                        self.rocm_be.cpu.pool = &self.pool.?;
+                        break :blk .{ .rocm = &self.rocm_be };
                     }
                     // Try Vulkan
                     if (comptime build_options.enable_vulkan) {
@@ -1860,7 +1863,7 @@ test "Backend.rmsNormMulti via CPU dispatch" {
     const be = Backend{ .cpu = &cpu };
     // 2 heads, head_dim=8, weight = all 1.0
     var data = [_]f32{
-        1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0,
+        1.0, 2.0, 3.0, 4.0, 5.0,  6.0,  7.0,  8.0,
         2.0, 4.0, 6.0, 8.0, 10.0, 12.0, 14.0, 16.0,
     };
     var weight = [_]f32{ 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0 };
@@ -1958,7 +1961,7 @@ test "Backend.gemvMulti via CPU dispatch — single op" {
 test "Backend.gemvMulti via CPU dispatch — empty ops" {
     var cpu = CpuBackend{};
     const be = Backend{ .cpu = &cpu };
-    var x = [_]f32{ 1.0 };
+    var x = [_]f32{1.0};
     const ops = [_]GemvOp{};
     be.gemvMulti(&x, &ops, 1); // Must not panic
 }
@@ -2047,7 +2050,7 @@ test "Backend.invalidateActivation via CPU dispatch — no-op" {
 test "Backend.getDevicePtr via CPU dispatch returns 0" {
     var cpu = CpuBackend{};
     const be = Backend{ .cpu = &cpu };
-    var buf = [_]f32{ 1.0 };
+    var buf = [_]f32{1.0};
     const ptr = be.getDevicePtr(@as([*]const f32, &buf));
     try std.testing.expectEqual(@as(u64, 0), ptr);
 }

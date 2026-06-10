@@ -195,7 +195,9 @@ pub fn buildCompressedPrompt(state: *PFlashState, token_ids: []const u32) []cons
 pub fn countSelected(state: *const PFlashState) usize {
     const n_blocks = (state.orig_len + @as(usize, state.config.block_size) - 1) / @as(usize, state.config.block_size);
     var count: usize = 0;
-    for (state.selected[0..n_blocks]) |s| if (s) { count += 1; };
+    for (state.selected[0..n_blocks]) |s| if (s) {
+        count += 1;
+    };
     return count;
 }
 
@@ -283,7 +285,9 @@ test "selectBlocks alpha threshold" {
     for (state.block_scores[0..8], 0..) |*s, i| s.* = @as(f32, @floatFromInt(i + 1));
     selectBlocks(&state);
     var n: usize = 0;
-    for (state.selected[0..8]) |s| if (s) { n += 1; };
+    for (state.selected[0..8]) |s| if (s) {
+        n += 1;
+    };
     try std.testing.expect(n >= 5); // blocks 3..8 should be selected
 }
 

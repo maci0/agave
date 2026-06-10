@@ -498,7 +498,9 @@ test "fuzz: scorePositions selectVictims compactCache" {
 
             // Invariant: count of true in keep must equal kept.
             var count: usize = 0;
-            for (0..seq_len) |i| if (keep[i]) { count += 1; };
+            for (0..seq_len) |i| if (keep[i]) {
+                count += 1;
+            };
             try std.testing.expectEqual(kept, count);
 
             // compactCache: must reduce or maintain seq_len.

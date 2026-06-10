@@ -156,8 +156,12 @@ test "fuzz: gemvF16" {
             smith.bytesWithHash(&w_bytes, 1);
             x = @bitCast(x_bytes);
             w = @bitCast(w_bytes);
-            for (&x) |*v| if (!std.math.isFinite(v.*)) { v.* = 0.0; };
-            for (&w) |*v| if (!std.math.isFinite(@as(f32, @floatCast(v.*)))) { v.* = 0.0; };
+            for (&x) |*v| if (!std.math.isFinite(v.*)) {
+                v.* = 0.0;
+            };
+            for (&w) |*v| if (!std.math.isFinite(@as(f32, @floatCast(v.*)))) {
+                v.* = 0.0;
+            };
             gemvF16(&x, &w, &y, n, k);
             for (y) |v| try std.testing.expect(std.math.isFinite(v));
         }

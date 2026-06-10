@@ -241,7 +241,6 @@ pub const Grammar = struct {
         }
         return text;
     }
-
 };
 
 // ── Grammar State ───────────────────────────────────────────────

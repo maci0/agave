@@ -60,9 +60,15 @@ pub const ParseResult = struct {
         return std.fmt.parseInt(T, s, 10) catch null;
     }
 
-    pub fn optionU16(self: *const ParseResult, name: []const u8) ?u16 { return self.optionInt(u16, name); }
-    pub fn optionU32(self: *const ParseResult, name: []const u8) ?u32 { return self.optionInt(u32, name); }
-    pub fn optionU64(self: *const ParseResult, name: []const u8) ?u64 { return self.optionInt(u64, name); }
+    pub fn optionU16(self: *const ParseResult, name: []const u8) ?u16 {
+        return self.optionInt(u16, name);
+    }
+    pub fn optionU32(self: *const ParseResult, name: []const u8) ?u32 {
+        return self.optionInt(u32, name);
+    }
+    pub fn optionU64(self: *const ParseResult, name: []const u8) ?u64 {
+        return self.optionInt(u64, name);
+    }
 
     /// Parse a named option as f32, returning null if absent or invalid.
     pub fn optionF32(self: *const ParseResult, name: []const u8) ?f32 {

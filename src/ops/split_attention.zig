@@ -589,8 +589,12 @@ test "fuzz: partitionBlocks and splitSdpaMerge" {
             smith.bytesWithHash(&b_bytes, 2);
             out_a = @bitCast(a_bytes);
             out_b = @bitCast(b_bytes);
-            for (&out_a) |*v| if (!std.math.isFinite(v.*)) { v.* = 0.0; };
-            for (&out_b) |*v| if (!std.math.isFinite(v.*)) { v.* = 0.0; };
+            for (&out_a) |*v| if (!std.math.isFinite(v.*)) {
+                v.* = 0.0;
+            };
+            for (&out_b) |*v| if (!std.math.isFinite(v.*)) {
+                v.* = 0.0;
+            };
 
             // Use small finite max values to avoid exp overflow.
             var max_a = [_]f32{@as(f32, @floatFromInt(@as(i8, @bitCast(raw[10])))) / 32.0};

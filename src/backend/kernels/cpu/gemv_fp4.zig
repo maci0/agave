@@ -300,7 +300,9 @@ test "fuzz: gemvMXFP4 gemvNVFP4" {
                 smith.bytesWithHash(&x_raw, 0);
                 smith.bytesWithHash(&w, 1);
                 x = @bitCast(x_raw);
-                for (&x) |*v| if (!std.math.isFinite(v.*)) { v.* = 0.0; };
+                for (&x) |*v| if (!std.math.isFinite(v.*)) {
+                    v.* = 0.0;
+                };
                 gemvMXFP4(&x, &w, &y, n, qk);
                 for (y) |v| try std.testing.expect(std.math.isFinite(v));
             }
@@ -317,7 +319,9 @@ test "fuzz: gemvMXFP4 gemvNVFP4" {
                 smith.bytesWithHash(&x_raw, 2);
                 smith.bytesWithHash(&w, 3);
                 x = @bitCast(x_raw);
-                for (&x) |*v| if (!std.math.isFinite(v.*)) { v.* = 0.0; };
+                for (&x) |*v| if (!std.math.isFinite(v.*)) {
+                    v.* = 0.0;
+                };
                 // Clamp FP8 E4M3 scale to non-NaN (0x7F = NaN in E4M3).
                 for (0..n) |r| {
                     if (w[r * bpb] == 0x7F or w[r * bpb] == 0xFF) w[r * bpb] = 0;

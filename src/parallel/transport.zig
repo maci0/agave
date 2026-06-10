@@ -320,11 +320,12 @@ pub const Transport = struct {
 
         // Log NCCL environment variables for debugging transport selection
         const nccl_env_vars = [_][]const u8{
-            "NCCL_SOCKET_IFNAME", "NCCL_IB_HCA", "NCCL_IB_GID_INDEX",
+            "NCCL_SOCKET_IFNAME", "NCCL_IB_HCA",          "NCCL_IB_GID_INDEX",
             "NCCL_NET_GDR_LEVEL", "NCCL_IB_AR_THRESHOLD", "NCCL_IB_PCI_RELAXED_ORDERING",
-            "NCCL_IB_TIMEOUT", "NCCL_IB_RETRY_CNT", "NCCL_DEBUG",
-            "NCCL_P2P_LEVEL", "NCCL_SHM_DISABLE", "NCCL_ALGO", "NCCL_PROTO",
-            "NCCL_CROSS_NIC", "NCCL_NET_GDR_READ", "NCCL_BUFFSIZE", "NCCL_NTHREADS",
+            "NCCL_IB_TIMEOUT",    "NCCL_IB_RETRY_CNT",    "NCCL_DEBUG",
+            "NCCL_P2P_LEVEL",     "NCCL_SHM_DISABLE",     "NCCL_ALGO",
+            "NCCL_PROTO",         "NCCL_CROSS_NIC",       "NCCL_NET_GDR_READ",
+            "NCCL_BUFFSIZE",      "NCCL_NTHREADS",
         };
         for (nccl_env_vars) |name| {
             if (getenv(name)) |val| {
@@ -365,9 +366,8 @@ pub const Transport = struct {
                 std.log.info("NCCL: comm nranks={d} cuda_dev={d}", .{ comm_count, comm_dev });
             }
             std.log.info("NCCL: rank {d}/{d} communicator ready (group_ops={}, dev_buf={})", .{
-                self.rank, self.world_size,
-                self.nccl_group_start != null,
-                self.nccl_dev_buf != 0,
+                self.rank,                     self.world_size,
+                self.nccl_group_start != null, self.nccl_dev_buf != 0,
             });
         }
     }
@@ -462,7 +462,10 @@ pub const Transport = struct {
         const byte_len = n * @sizeOf(f32);
         if (self.kind == .nccl and self.nccl_send != null) {
             self.ensureNcclComm();
-            if (self.nccl_comm == null) { self.tcpSend(buf, byte_len); return; }
+            if (self.nccl_comm == null) {
+                self.tcpSend(buf, byte_len);
+                return;
+            }
             const peer: c_int = if (self.rank == 0) 1 else 0;
             // Try device pointer first (avoids host→device copy)
             const dptr: u64 = if (self.cuda_get_dev_ptr) |getPtr|
@@ -485,7 +488,10 @@ pub const Transport = struct {
             if (self.cuda_sync) |sync| _ = sync();
             return;
         }
-        if (self.kind == .shm) { self.shmSend(@ptrCast(buf), byte_len); return; }
+        if (self.kind == .shm) {
+            self.shmSend(@ptrCast(buf), byte_len);
+            return;
+        }
         self.tcpSend(buf, byte_len);
     }
 
@@ -536,7 +542,10 @@ pub const Transport = struct {
         const byte_len = n * @sizeOf(f32);
         if (self.kind == .nccl and self.nccl_recv != null) {
             self.ensureNcclComm();
-            if (self.nccl_comm == null) { self.tcpRecv(buf, byte_len); return; }
+            if (self.nccl_comm == null) {
+                self.tcpRecv(buf, byte_len);
+                return;
+            }
             const peer: c_int = if (self.rank == 0) 1 else 0;
             self.ensureStagingBuf(byte_len);
             if (self.nccl_dev_buf != 0) {
@@ -547,7 +556,10 @@ pub const Transport = struct {
             }
             return;
         }
-        if (self.kind == .shm) { self.shmRecv(@ptrCast(buf), byte_len); return; }
+        if (self.kind == .shm) {
+            self.shmRecv(@ptrCast(buf), byte_len);
+            return;
+        }
         self.tcpRecv(buf, byte_len);
     }
 

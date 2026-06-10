@@ -1277,9 +1277,15 @@ fn parseUint(comptime T: type, s: ?[]const u8, comptime flag: []const u8) ?T {
     };
 }
 
-fn parseU32(s: ?[]const u8, comptime flag: []const u8) ?u32 { return parseUint(u32, s, flag); }
-fn parseU64(s: ?[]const u8, comptime flag: []const u8) ?u64 { return parseUint(u64, s, flag); }
-fn parseU16(s: ?[]const u8, comptime flag: []const u8) ?u16 { return parseUint(u16, s, flag); }
+fn parseU32(s: ?[]const u8, comptime flag: []const u8) ?u32 {
+    return parseUint(u32, s, flag);
+}
+fn parseU64(s: ?[]const u8, comptime flag: []const u8) ?u64 {
+    return parseUint(u64, s, flag);
+}
+fn parseU16(s: ?[]const u8, comptime flag: []const u8) ?u16 {
+    return parseUint(u16, s, flag);
+}
 
 /// Check if a long option name matches any known CLI spec.
 fn isKnownSpec(name: []const u8) bool {
@@ -2198,8 +2204,7 @@ fn initAndRun(
             // Use f32 row bytes (largest possible) to cover any quant format
             const row_bytes = @max(
                 backend_mod.gemvRowBytes(.f32, local_ff),
-                @max(backend_mod.gemvRowBytes(.q8_0, local_ff),
-                     backend_mod.gemvRowBytes(.q4_k, local_ff)),
+                @max(backend_mod.gemvRowBytes(.q8_0, local_ff), backend_mod.gemvRowBytes(.q4_k, local_ff)),
             );
             const shard_size = n_embd * row_bytes;
             if (shard_size > 0) {
@@ -2641,7 +2646,10 @@ fn initAndRun(
                     gen_count += 1;
                     var is_eog = false;
                     for (eog.ids[0..eog.len]) |e_id| {
-                        if (next == e_id) { is_eog = true; break; }
+                        if (next == e_id) {
+                            is_eog = true;
+                            break;
+                        }
                     }
                     if (is_eog) break;
                     next = mdl.model().forward(next) catch break;
@@ -3450,7 +3458,10 @@ fn generateAndPrintInner(
                         gen_ids_buf[token_count] = jump_tok;
                         token_count += 1;
                         last = jump_tok;
-                        if (gs.isComplete()) { hit_eog = true; break; }
+                        if (gs.isComplete()) {
+                            hit_eog = true;
+                            break;
+                        }
                         continue;
                     }
                 }

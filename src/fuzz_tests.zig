@@ -2104,10 +2104,10 @@ test "fuzz: weightBytes no overflow" {
     try std.testing.fuzz({}, struct {
         fn f(_: void, smith: *Smith) !void {
             const dtypes = [_]format_mod.DType{
-                .f32, .f16, .bf16, .q4_0, .q4_1, .q5_0, .q8_0,
-                .q4_k, .q5_k, .q6_k, .q2_k, .q3_k,
-                .fp8_e4m3, .fp8_e5m2, .iq4_nl, .iq4_xs, .tq1_0,
-                .mxfp4, .nvfp4, .gptq, .awq, .mlx_q,
+                .f32,    .f16,    .bf16,  .q4_0,  .q4_1,  .q5_0,     .q8_0,
+                .q4_k,   .q5_k,   .q6_k,  .q2_k,  .q3_k,  .fp8_e4m3, .fp8_e5m2,
+                .iq4_nl, .iq4_xs, .tq1_0, .mxfp4, .nvfp4, .gptq,     .awq,
+                .mlx_q,
             };
             const dtype = dtypes[smith.indexWithHash(dtypes.len, 0)];
             const n: usize = @as(usize, smith.valueWithHash(u16, 1)) + 1;
@@ -2124,9 +2124,9 @@ test "fuzz: gemvRowBytes no overflow" {
     try std.testing.fuzz({}, struct {
         fn f(_: void, smith: *Smith) !void {
             const dtypes = [_]format_mod.DType{
-                .f32, .f16, .bf16, .q4_0, .q4_1, .q5_0, .q8_0,
-                .q4_k, .q5_k, .q6_k, .q2_k, .q3_k,
-                .fp8_e4m3, .fp8_e5m2, .iq4_nl, .iq4_xs, .tq1_0, .mxfp4,
+                .f32,    .f16,    .bf16,  .q4_0,  .q4_1, .q5_0,     .q8_0,
+                .q4_k,   .q5_k,   .q6_k,  .q2_k,  .q3_k, .fp8_e4m3, .fp8_e5m2,
+                .iq4_nl, .iq4_xs, .tq1_0, .mxfp4,
             };
             const dtype = dtypes[smith.indexWithHash(dtypes.len, 0)];
             const k: usize = (@as(usize, smith.valueWithHash(u8, 1)) + 1) * 32;
@@ -2142,11 +2142,9 @@ test "fuzz: KvQuantType name + bitsPerElement + classification" {
     try std.testing.fuzz({}, struct {
         fn f(_: void, smith: *Smith) !void {
             const all_types = [_]kv_quant.KvQuantType{
-                .f32, .f16, .q8_0, .int8, .fp8_e4m3, .nvfp4,
-                .turbo2, .turbo3, .turbo4,
-                .planar2, .planar3, .planar4,
-                .iso2, .iso3, .iso4,
-                .rotor2, .rotor3, .rotor4,
+                .f32,    .f16,    .q8_0,   .int8,    .fp8_e4m3, .nvfp4,
+                .turbo2, .turbo3, .turbo4, .planar2, .planar3,  .planar4,
+                .iso2,   .iso3,   .iso4,   .rotor2,  .rotor3,   .rotor4,
             };
             const kv_type = all_types[smith.indexWithHash(all_types.len, 0)];
             // name() must return non-empty string
@@ -2179,10 +2177,10 @@ test "fuzz: KvQuantType fromString roundtrip" {
             _ = kv_quant.KvQuantType.fromString(buf[0..len]);
             // Known strings must roundtrip
             const known = [_][]const u8{
-                "f32", "f16", "q8_0", "q8", "int8", "i8",
-                "fp8", "fp8_e4m3", "nvfp4", "fp4",
-                "turbo2", "tq2", "turbo3", "tq3", "turbo4", "tq4",
-                "planar2", "pq2", "iso2", "iq2", "rotor2", "rq2",
+                "f32",    "f16",      "q8_0",   "q8",  "int8",    "i8",
+                "fp8",    "fp8_e4m3", "nvfp4",  "fp4", "turbo2",  "tq2",
+                "turbo3", "tq3",      "turbo4", "tq4", "planar2", "pq2",
+                "iso2",   "iq2",      "rotor2", "rq2",
             };
             const k = known[smith.indexWithHash(known.len, 2)];
             const result = kv_quant.KvQuantType.fromString(k);
@@ -2573,8 +2571,8 @@ test "fuzz: TensorInfo dataByteLen no overflow" {
     try std.testing.fuzz({}, struct {
         fn f(_: void, smith: *Smith) !void {
             const dtypes = [_]format_mod.DType{
-                .f32, .f16, .bf16, .q4_0, .q4_1, .q5_0, .q8_0,
-                .q4_k, .q5_k, .q6_k, .q2_k, .q3_k, .iq4_nl, .iq4_xs,
+                .f32,      .f16,      .bf16,  .q4_0,  .q4_1,  .q5_0,   .q8_0,
+                .q4_k,     .q5_k,     .q6_k,  .q2_k,  .q3_k,  .iq4_nl, .iq4_xs,
                 .fp8_e4m3, .fp8_e5m2, .tq1_0, .mxfp4, .nvfp4,
             };
             const dtype = dtypes[smith.indexWithHash(dtypes.len, 0)];

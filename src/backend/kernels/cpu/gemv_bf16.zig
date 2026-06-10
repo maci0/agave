@@ -164,7 +164,9 @@ test "fuzz: gemvBF16" {
             smith.bytesWithHash(&x_raw, 0);
             smith.bytesWithHash(&w_bytes, 1);
             x = @bitCast(x_raw);
-            for (&x) |*v| if (!std.math.isFinite(v.*)) { v.* = 0.0; };
+            for (&x) |*v| if (!std.math.isFinite(v.*)) {
+                v.* = 0.0;
+            };
             // BF16: mask out exponent-all-ones (0x7F80 = inf/nan) to keep finite.
             const w16: [*]u16 = @ptrCast(@alignCast(&w_bytes));
             for (0..n * k) |i| {

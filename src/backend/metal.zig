@@ -3893,51 +3893,61 @@ test "fuzz: all metal functions" {
     comptime {
         const decls = [_][]const u8{
             // Init / deinit
-            "init",              "deinit",
+            "init",                          "deinit",
             // Info
-            "deviceName",        "backendInfo",      "n_pipelines",
+            "deviceName",                    "backendInfo",
+            "n_pipelines",
             // KV cache
-            "allocKvSlice",      "freeKvSlice",
+                              "allocKvSlice",
+            "freeKvSlice",
             // GEMV variants
-            "gemv",              "gemvNvfp4St",      "gemvMlxQ",
-            "gemvMxfp4St",       "gemvGptq",         "gemvAwq",        "gemvHqq",
-            "gemvMulti",         "gemvT",
+                              "gemv",
+            "gemvNvfp4St",                   "gemvMlxQ",
+            "gemvMxfp4St",                   "gemvGptq",
+            "gemvAwq",                       "gemvHqq",
+            "gemvMulti",                     "gemvT",
             // Norms
-            "rmsNorm",           "addRmsNorm",       "rmsNormMulti",
-            "rmsNormBatched",    "l2Norm",
+            "rmsNorm",                       "addRmsNorm",
+            "rmsNormMulti",                  "rmsNormBatched",
+            "l2Norm",
             // Activations
-            "silu",              "gelu",             "siluMul",
-            "geluMul",           "sigmoidMul",
+                                   "silu",
+            "gelu",                          "siluMul",
+            "geluMul",                       "sigmoidMul",
             // Fused FFN (SiLU)
-            "fusedFfnGateUpSiluQ8",    "fusedFfnGateUpSiluQ4K",
-            "fusedFfnGateUpSiluQ40",   "fusedFfnGateUpSiluMlxQ4",
-            "fusedFfnGateUpSiluQ6K",   "fusedFfnGateUpSiluQ5K",
+            "fusedFfnGateUpSiluQ8",          "fusedFfnGateUpSiluQ4K",
+            "fusedFfnGateUpSiluQ40",         "fusedFfnGateUpSiluMlxQ4",
+            "fusedFfnGateUpSiluQ6K",         "fusedFfnGateUpSiluQ5K",
             // Fused FFN (GELU)
-            "fusedFfnGateUpGeluQ8",    "fusedFfnGateUpGeluQ4K",
-            "fusedFfnGateUpGeluQ40",   "fusedFfnGateUpGeluQ6K",
+            "fusedFfnGateUpGeluQ8",          "fusedFfnGateUpGeluQ4K",
+            "fusedFfnGateUpGeluQ40",         "fusedFfnGateUpGeluQ6K",
             "fusedFfnGateUpGeluQ5K",
             // Megakernels
-            "dispatchMegakernelQwen35Q8",   "dispatchMegakernelGemmaQ4K",
-            "dispatchMegakernelQwen35Q4K",  "dispatchMegakernelNemotronHQ8",
-            "compileComposedMegakernel",    "dispatchMegakernelAuto",
+                    "dispatchMegakernelQwen35Q8",
+            "dispatchMegakernelGemmaQ4K",    "dispatchMegakernelQwen35Q4K",
+            "dispatchMegakernelNemotronHQ8", "compileComposedMegakernel",
+            "dispatchMegakernelAuto",
             // Elementwise
-            "add",               "mul",              "addScaled",
+                   "add",
+            "mul",                           "addScaled",
             // Interleave / split
-            "deinterleave",      "splitQGate",
+            "deinterleave",                  "splitQGate",
             // Softmax
             "softmax",
             // RoPE
-            "rope",              "ropeBatched",
+                                  "rope",
+            "ropeBatched",
             // Embedding
-            "embLookup",
+                              "embLookup",
             // GEMM
             "gemm",
             // SDPA
-            "sdpa",              "sdpaPaged",        "sdpaWithStats",
-            "sdpaTree",          "sdpaPrefill",
+                                     "sdpa",
+            "sdpaPaged",                     "sdpaWithStats",
+            "sdpaTree",                      "sdpaPrefill",
             // Batch / sync
-            "beginBatch",        "endBatch",         "sync",
-            "resetCounters",
+            "beginBatch",                    "endBatch",
+            "sync",                          "resetCounters",
             // SSM
             "deltaNet",
         };

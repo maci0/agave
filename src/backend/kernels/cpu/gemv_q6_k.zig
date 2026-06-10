@@ -292,12 +292,17 @@ test "fuzz: gemvQ6_K" {
             smith.bytesWithHash(&x_raw, 0);
             smith.bytesWithHash(&w, 1);
             x = @bitCast(x_raw);
-            for (&x) |*v| if (!std.math.isFinite(v.*)) { v.* = 0.0; };
+            for (&x) |*v| if (!std.math.isFinite(v.*)) {
+                v.* = 0.0;
+            };
             // Clamp d (f16) at offset 208 for each row.
             for (0..n) |r| {
                 const base = r * bpb + q6_k_d_offset;
                 const raw = std.mem.readInt(u16, w[base..][0..2], .little);
-                if (raw & 0x7C00 == 0x7C00) { w[base] = 0; w[base + 1] = 0; }
+                if (raw & 0x7C00 == 0x7C00) {
+                    w[base] = 0;
+                    w[base + 1] = 0;
+                }
             }
             gemvQ6_K(&x, &w, &y, n, k);
             for (y) |v| try std.testing.expect(std.math.isFinite(v));

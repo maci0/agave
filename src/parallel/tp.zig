@@ -35,9 +35,18 @@ pub const TpGroup = struct {
 
         for (0..degree) |r| {
             ranks[r] = try ModelStorage.initFromArch(
-                arch, allocator, fmt, be, ctx_size,
-                .f32, .f32, 0, 0, null,
-                @intCast(r), degree,
+                arch,
+                allocator,
+                fmt,
+                be,
+                ctx_size,
+                .f32,
+                .f32,
+                0,
+                0,
+                null,
+                @intCast(r),
+                degree,
             );
             init_count = r + 1;
         }

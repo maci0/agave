@@ -368,7 +368,6 @@ fn rotorDot(comptime bits: u3, q_vec: [*]const f32, kv_data: [*]const u8, n: usi
         var vals: [turbo_block_size]f32 = undefined;
         for (0..turbo_block_size) |i| vals[i] = codebook[indices[i]];
 
-    
         var acc: V8 = @splat(@as(f32, 0.0));
         comptime var si: usize = 0;
         inline while (si + 8 <= turbo_block_size) : (si += 8) {
@@ -400,7 +399,6 @@ fn rotorMulAccum(comptime bits: u3, acc: [*]f32, weight: f32, kv_data: [*]const 
         for (0..turbo_block_size) |i| buf[i] = codebook[indices[i]];
         rotorInverse(&buf);
 
-    
         const scale = weight * norm;
         const scale_v: V8 = @splat(scale);
         const count = @min(turbo_block_size, n - base);
@@ -618,7 +616,6 @@ fn storeF16(dst: [*]u8, src: [*]const f32, n: usize) void {
 }
 
 fn storeQ8_0(dst: [*]u8, src: [*]const f32, n: usize) void {
-
     const nb = (n + block_size - 1) / block_size;
     for (0..nb) |b| {
         const base = b * block_size;
@@ -648,7 +645,6 @@ fn storeQ8_0(dst: [*]u8, src: [*]const f32, n: usize) void {
 }
 
 fn storeInt8(dst: [*]u8, src: [*]const f32, n: usize) void {
-
     const nb = (n + block_size - 1) / block_size;
     for (0..nb) |b| {
         const base = b * block_size;
@@ -691,7 +687,6 @@ fn storeFp8(dst: [*]u8, src: [*]const f32, n: usize) void {
 }
 
 fn storeNvfp4(dst: [*]u8, src: [*]const f32, n: usize) void {
-
     const nb = (n + nvfp4_block - 1) / nvfp4_block;
     for (0..nb) |b| {
         const base = b * nvfp4_block;
@@ -785,7 +780,6 @@ fn dotF16(q_vec: [*]const f32, kv_data: [*]const u8, n: usize) f32 {
 }
 
 fn dotQ8_0(q_vec: [*]const f32, kv_data: [*]const u8, n: usize) f32 {
-
     const nb = (n + block_size - 1) / block_size;
     var sum: f32 = 0;
     for (0..nb) |b| {
@@ -812,7 +806,6 @@ fn dotQ8_0(q_vec: [*]const f32, kv_data: [*]const u8, n: usize) f32 {
 }
 
 fn dotInt8(q_vec: [*]const f32, kv_data: [*]const u8, n: usize) f32 {
-
     const nb = (n + block_size - 1) / block_size;
     var sum: f32 = 0;
     for (0..nb) |b| {
@@ -839,7 +832,6 @@ fn dotInt8(q_vec: [*]const f32, kv_data: [*]const u8, n: usize) f32 {
 }
 
 fn dotFp8(q_vec: [*]const f32, kv_data: [*]const u8, n: usize) f32 {
-
     var acc: V8 = @splat(0.0);
     var i: usize = 0;
     while (i + 8 <= n) : (i += 8) {
@@ -858,7 +850,6 @@ fn dotFp8(q_vec: [*]const f32, kv_data: [*]const u8, n: usize) f32 {
 }
 
 fn dotNvfp4(q_vec: [*]const f32, kv_data: [*]const u8, n: usize) f32 {
-
     const nb = (n + nvfp4_block - 1) / nvfp4_block;
     var sum: f32 = 0;
     for (0..nb) |b| {
@@ -946,7 +937,6 @@ fn mulAccF16(acc: [*]f32, weight: f32, kv_data: [*]const u8, n: usize) void {
 }
 
 fn mulAccQ8_0(acc: [*]f32, weight: f32, kv_data: [*]const u8, n: usize) void {
-
     const nb = (n + block_size - 1) / block_size;
     for (0..nb) |b| {
         const bp = kv_data + b * q8_0_block_bytes;
@@ -969,7 +959,6 @@ fn mulAccQ8_0(acc: [*]f32, weight: f32, kv_data: [*]const u8, n: usize) void {
 }
 
 fn mulAccInt8(acc: [*]f32, weight: f32, kv_data: [*]const u8, n: usize) void {
-
     const nb = (n + block_size - 1) / block_size;
     for (0..nb) |b| {
         const bp = kv_data + b * int8_block_bytes;
@@ -992,7 +981,6 @@ fn mulAccInt8(acc: [*]f32, weight: f32, kv_data: [*]const u8, n: usize) void {
 }
 
 fn mulAccFp8(acc: [*]f32, weight: f32, kv_data: [*]const u8, n: usize) void {
-
     const wv: V8 = @splat(weight);
     var i: usize = 0;
     while (i + 8 <= n) : (i += 8) {
@@ -1009,7 +997,6 @@ fn mulAccFp8(acc: [*]f32, weight: f32, kv_data: [*]const u8, n: usize) void {
 }
 
 fn mulAccNvfp4(acc: [*]f32, weight: f32, kv_data: [*]const u8, n: usize) void {
-
     const nb = (n + nvfp4_block - 1) / nvfp4_block;
     for (0..nb) |b| {
         const bp = kv_data + b * nvfp4_block_bytes;
@@ -1087,7 +1074,7 @@ fn turboStore(comptime bits: u3, dst: [*]u8, src: [*]const f32, n: usize) void {
 
         // Combined normalize + WHT scale in single SIMD pass:
         // WHT(x/norm) * (1/sqrt(32)) == WHT(x) * (1 / (norm * sqrt(32)))
-    
+
         const combined_scale: V8 = @splat(wht_inv_sqrt / norm);
         comptime var vi: usize = 0;
         inline while (vi + 8 <= turbo_block_size) : (vi += 8) {
@@ -1320,7 +1307,7 @@ fn turboDot(comptime bits: u3, q_vec: [*]const f32, kv_data: [*]const u8, n: usi
         for (0..turbo_block_size) |i| {
             vals[i] = codebook[indices[i]];
         }
-    
+
         var acc: V8 = @splat(@as(f32, 0.0));
         comptime var si: usize = 0;
         inline while (si + 8 <= turbo_block_size) : (si += 8) {
@@ -1362,7 +1349,6 @@ fn planarDot(comptime bits: u3, q_vec: [*]const f32, kv_data: [*]const u8, n: us
         var vals: [turbo_block_size]f32 = undefined;
         for (0..turbo_block_size) |i| vals[i] = codebook[indices[i]];
 
-    
         var acc: V8 = @splat(@as(f32, 0.0));
         comptime var si: usize = 0;
         inline while (si + 8 <= turbo_block_size) : (si += 8) {
@@ -1401,7 +1387,6 @@ fn isoDot(comptime bits: u3, q_vec: [*]const f32, kv_data: [*]const u8, n: usize
         var vals: [turbo_block_size]f32 = undefined;
         for (0..turbo_block_size) |i| vals[i] = codebook[indices[i]];
 
-    
         var acc: V8 = @splat(@as(f32, 0.0));
         comptime var si: usize = 0;
         inline while (si + 8 <= turbo_block_size) : (si += 8) {
@@ -1445,7 +1430,7 @@ fn turboMulAccum(comptime bits: u3, acc: [*]f32, weight: f32, kv_data: [*]const 
         wht32(&buf);
 
         // Accumulate: rescale by weight * norm / sqrt(32) (orthonormal WHT inverse + denormalization)
-    
+
         const scale = weight * norm * wht_inv_sqrt;
         const scale_v: V8 = @splat(scale);
         const count = @min(turbo_block_size, n - base);
@@ -1482,7 +1467,6 @@ fn planarMulAccum(comptime bits: u3, acc: [*]f32, weight: f32, kv_data: [*]const
 
         givensRotateInverse(&buf);
 
-    
         const scale = weight * norm;
         const scale_v: V8 = @splat(scale);
         const count = @min(turbo_block_size, n - base);
@@ -1519,7 +1503,6 @@ fn isoMulAccum(comptime bits: u3, acc: [*]f32, weight: f32, kv_data: [*]const u8
 
         quatRotateInverse(&buf);
 
-    
         const scale = weight * norm;
         const scale_v: V8 = @splat(scale);
         const count = @min(turbo_block_size, n - base);
@@ -2123,11 +2106,9 @@ test "fuzz: all kv_quant functions" {
             // ── KvQuantType: exercise all pub methods on a random variant ──
             const type_idx = smith.valueWithHash(u8, 0) % 18;
             const all_types = [18]KvQuantType{
-                .f32, .f16, .q8_0, .int8, .fp8_e4m3, .nvfp4,
-                .turbo2, .turbo3, .turbo4,
-                .planar2, .planar3, .planar4,
-                .iso2,    .iso3,    .iso4,
-                .rotor2,  .rotor3,  .rotor4,
+                .f32,    .f16,    .q8_0,   .int8,    .fp8_e4m3, .nvfp4,
+                .turbo2, .turbo3, .turbo4, .planar2, .planar3,  .planar4,
+                .iso2,   .iso3,   .iso4,   .rotor2,  .rotor3,   .rotor4,
             };
             const kv_type = all_types[type_idx];
 

@@ -11,7 +11,9 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const is_freestanding = builtin.os.tag == .freestanding;
-const Io = if (is_freestanding) struct { pub const File = void; } else std.Io;
+const Io = if (is_freestanding) struct {
+    pub const File = void;
+} else std.Io;
 const SsdFile = if (is_freestanding) void else Io.File;
 
 /// Millisecond timestamp via raw C call (avoids Io dispatch in hot path).

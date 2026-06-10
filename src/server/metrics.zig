@@ -294,10 +294,10 @@ pub const Metrics = struct {
 
     pub fn recordInterTokenLatency(self: *Metrics, duration_ms: u64) void {
         self.recordToBuckets(duration_ms, .{
-            "itl_5ms", "itl_10ms", "itl_20ms", "itl_50ms",
+            "itl_5ms",   "itl_10ms",  "itl_20ms",  "itl_50ms",
             "itl_100ms", "itl_200ms", "itl_500ms", "itl_1s",
         }, .{
-            itl_bucket_5ms, itl_bucket_10ms, itl_bucket_20ms, itl_bucket_50ms,
+            itl_bucket_5ms,   itl_bucket_10ms,  itl_bucket_20ms,  itl_bucket_50ms,
             itl_bucket_100ms, itl_bucket_200ms, itl_bucket_500ms, itl_bucket_1s,
         }, "itl_inf");
         _ = self.itl_sum.fetchAdd(duration_ms, .monotonic);
@@ -673,7 +673,7 @@ pub const Metrics = struct {
 
         // Inter-token latency histogram
         try self.renderHistogram(writer, "agave_inter_token_latency_seconds", "Inter-token latency — wall-clock time between consecutive tokens", .{
-            "itl_5ms", "itl_10ms", "itl_20ms", "itl_50ms",
+            "itl_5ms",   "itl_10ms",  "itl_20ms",  "itl_50ms",
             "itl_100ms", "itl_200ms", "itl_500ms", "itl_1s",
             "itl_inf",
         }, .{ "0.005", "0.01", "0.02", "0.05", "0.1", "0.2", "0.5", "1.0", "+Inf" }, "itl_sum", true);

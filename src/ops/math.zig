@@ -280,7 +280,10 @@ pub fn applyPenalties(logits: []f32, gen_tokens: []const u32, frequency_penalty:
         var slot = tid & set_mask;
         var is_new = true;
         while (set[slot] != empty_slot) {
-            if (set[slot] == tid) { is_new = false; break; }
+            if (set[slot] == tid) {
+                is_new = false;
+                break;
+            }
             slot = (slot +% 1) & set_mask;
         }
         if (is_new) {

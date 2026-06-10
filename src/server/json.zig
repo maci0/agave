@@ -391,7 +391,10 @@ pub fn parseSampling(body: []const u8) SamplingParams {
             if (std.mem.indexOfScalarPos(u8, lb_str, i, '"')) |q1| {
                 if (std.mem.indexOfScalarPos(u8, lb_str, q1 + 1, '"')) |q2| {
                     const key = lb_str[q1 + 1 .. q2];
-                    const tid = std.fmt.parseInt(u32, key, 10) catch { i = q2 + 1; continue; };
+                    const tid = std.fmt.parseInt(u32, key, 10) catch {
+                        i = q2 + 1;
+                        continue;
+                    };
                     // Find colon then value
                     if (std.mem.indexOfScalarPos(u8, lb_str, q2 + 1, ':')) |colon| {
                         var vi = colon + 1;
@@ -400,7 +403,10 @@ pub fn parseSampling(body: []const u8) SamplingParams {
                         var ve = vi;
                         while (ve < lb_str.len and (lb_str[ve] == '-' or lb_str[ve] == '.' or (lb_str[ve] >= '0' and lb_str[ve] <= '9'))) ve += 1;
                         if (ve > vi) {
-                            const bias = std.fmt.parseFloat(f32, lb_str[vi..ve]) catch { i = ve; continue; };
+                            const bias = std.fmt.parseFloat(f32, lb_str[vi..ve]) catch {
+                                i = ve;
+                                continue;
+                            };
                             const idx = result.logit_bias_count;
                             result.logit_bias_ids[idx] = tid;
                             result.logit_bias_vals[idx] = bias;
@@ -837,11 +843,31 @@ pub fn jsonUnescape(allocator: Allocator, input: []const u8) ![]u8 {
                     out += 1;
                     i += 1;
                 },
-                'n' => { buf[out] = '\n'; out += 1; i += 1; },
-                'r' => { buf[out] = '\r'; out += 1; i += 1; },
-                't' => { buf[out] = '\t'; out += 1; i += 1; },
-                'b' => { buf[out] = 0x08; out += 1; i += 1; },
-                'f' => { buf[out] = 0x0C; out += 1; i += 1; },
+                'n' => {
+                    buf[out] = '\n';
+                    out += 1;
+                    i += 1;
+                },
+                'r' => {
+                    buf[out] = '\r';
+                    out += 1;
+                    i += 1;
+                },
+                't' => {
+                    buf[out] = '\t';
+                    out += 1;
+                    i += 1;
+                },
+                'b' => {
+                    buf[out] = 0x08;
+                    out += 1;
+                    i += 1;
+                },
+                'f' => {
+                    buf[out] = 0x0C;
+                    out += 1;
+                    i += 1;
+                },
                 'u' => {
                     if (i + 5 <= input.len) {
                         const cp = std.fmt.parseInt(u21, input[i + 1 .. i + 5], 16) catch {
@@ -1265,7 +1291,8 @@ test "matchesStop" {
 }
 
 test "extractObjectField" {
-    const j = \\{"name":"test","params":{"type":"object","props":{"x":1}},"other":"val"}
+    const j =
+        \\{"name":"test","params":{"type":"object","props":{"x":1}},"other":"val"}
     ;
     const obj = extractObjectField(j, "params") orelse return error.TestUnexpectedResult;
     try std.testing.expectEqualStrings("{\"type\":\"object\",\"props\":{\"x\":1}}", obj);
@@ -1274,7 +1301,8 @@ test "extractObjectField" {
 }
 
 test "extractObjectField array" {
-    const j = \\{"items":[1,2,3],"name":"x"}
+    const j =
+        \\{"items":[1,2,3],"name":"x"}
     ;
     const arr = extractObjectField(j, "items") orelse return error.TestUnexpectedResult;
     try std.testing.expectEqualStrings("[1,2,3]", arr);
@@ -1294,7 +1322,8 @@ test "parseTools basic" {
 }
 
 test "parseTools no tools" {
-    const body = \\{"messages":[]}
+    const body =
+        \\{"messages":[]}
     ;
     const tp = parseTools(body);
     try std.testing.expectEqual(@as(u32, 0), tp.tool_count);
@@ -1310,7 +1339,8 @@ test "extractTextFromContentArray" {
 }
 
 test "extractTextFromContentArray string content" {
-    const obj = \\{"role":"user","content":"hello"}
+    const obj =
+        \\{"role":"user","content":"hello"}
     ;
     try std.testing.expect(extractTextFromContentArray(obj) == null);
 }
@@ -1429,7 +1459,8 @@ test "extractJsonImage OpenAI data URI" {
 }
 
 test "extractJsonImage no image" {
-    const body = \\{"messages":[{"role":"user","content":"hello"}]}
+    const body =
+        \\{"messages":[{"role":"user","content":"hello"}]}
     ;
     try std.testing.expect(extractJsonImage(body) == null);
 }

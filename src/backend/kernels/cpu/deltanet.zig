@@ -329,10 +329,9 @@ test "fuzz: all deltanet functions" {
             var ssm_norm_w: [head_v]f32 = undefined;
 
             inline for (.{
-                &conv_in,     &conv_out_buf, &z_buf,    &alpha_buf,
-                &beta_buf,    &output,       &conv_state,
-                &ssm_state_arr, &ssm_a,      &dt_bias,  &conv_w,
-                &ssm_norm_w,
+                &conv_in,  &conv_out_buf, &z_buf,      &alpha_buf,
+                &beta_buf, &output,       &conv_state, &ssm_state_arr,
+                &ssm_a,    &dt_bias,      &conv_w,     &ssm_norm_w,
             }, 0..) |buf, seed| {
                 for (buf, 0..) |*slot, j| {
                     const hash: u32 = @intCast(seed *% 31 +% j);
@@ -345,9 +344,19 @@ test "fuzz: all deltanet functions" {
 
             // --- Exercise deltaNet (full pipeline) ---
             deltaNet(
-                &conv_in, &conv_out_buf, &z_buf, &alpha_buf, &beta_buf,
-                &output, &conv_state, ssm_state, &ssm_a, &dt_bias,
-                &conv_w, &ssm_norm_w, p,
+                &conv_in,
+                &conv_out_buf,
+                &z_buf,
+                &alpha_buf,
+                &beta_buf,
+                &output,
+                &conv_state,
+                ssm_state,
+                &ssm_a,
+                &dt_bias,
+                &conv_w,
+                &ssm_norm_w,
+                p,
             );
             for (0..num_heads * head_v) |i| {
                 if (std.math.isNan(output[i])) return;
@@ -378,8 +387,17 @@ test "fuzz: all deltanet functions" {
             }
 
             deltaNetHead(
-                0, &gate_vals, &beta_vals, &q2, &k2, &v2,
-                &out2, &state2, &z2, &nw2, p,
+                0,
+                &gate_vals,
+                &beta_vals,
+                &q2,
+                &k2,
+                &v2,
+                &out2,
+                &state2,
+                &z2,
+                &nw2,
+                p,
             );
             for (0..head_v) |i| {
                 if (std.math.isNan(out2[i])) return;

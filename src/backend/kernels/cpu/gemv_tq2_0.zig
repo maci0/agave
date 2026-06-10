@@ -78,8 +78,8 @@ test "TQ2_0 value encoding" {
     // 0b00=0→-1, 0b01=1→0, 0b10=2→+1
     const scale: f32 = 2.0;
     try std.testing.expectApproxEqAbs(@as(f32, -2.0), (0.0 - 1.0) * scale, 1e-6);
-    try std.testing.expectApproxEqAbs(@as(f32, 0.0),  (1.0 - 1.0) * scale, 1e-6);
-    try std.testing.expectApproxEqAbs(@as(f32, 2.0),  (2.0 - 1.0) * scale, 1e-6);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.0), (1.0 - 1.0) * scale, 1e-6);
+    try std.testing.expectApproxEqAbs(@as(f32, 2.0), (2.0 - 1.0) * scale, 1e-6);
 }
 
 test "TQ2_0 gemv all positive (+1)" {
@@ -121,7 +121,7 @@ test "TQ2_0 gemv multi-row" {
     @as(*f16, @ptrCast(@alignCast(&w[0]))).* = @as(f16, 1.0);
     @memset(w[2..block_bytes], 0xAA); // row0: +1
     @as(*f16, @ptrCast(@alignCast(&w[block_bytes]))).* = @as(f16, 1.0);
-    @memset(w[block_bytes + 2..], 0x00); // row1: -1
+    @memset(w[block_bytes + 2 ..], 0x00); // row1: -1
     const x = [_]f32{1.0} ** 256;
     var y: [2]f32 = .{ 0.0, 0.0 };
     gemvTQ2_0(&x, &w, &y, 2, 256);

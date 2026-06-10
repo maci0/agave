@@ -73,7 +73,9 @@ test "constants valid" {
 test "fuzz: gemv_mlx_q6 functions" {
     try std.testing.fuzz({}, struct {
         fn f(_: void, _: *std.testing.Smith) !void {
-            comptime { _ = &unpackU6; }
+            comptime {
+                _ = &unpackU6;
+            }
         }
     }.f, .{});
 }

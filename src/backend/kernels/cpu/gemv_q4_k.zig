@@ -381,14 +381,19 @@ test "fuzz: gemvQ4_K" {
             smith.bytesWithHash(&x_raw, 0);
             smith.bytesWithHash(&w, 1);
             x = @bitCast(x_raw);
-            for (&x) |*v| if (!std.math.isFinite(v.*)) { v.* = 0.0; };
+            for (&x) |*v| if (!std.math.isFinite(v.*)) {
+                v.* = 0.0;
+            };
             // Clamp d and dmin (f16) to finite for each row.
             for (0..n) |r| {
                 const base = r * bpb;
                 inline for (0..2) |off| {
                     const o = base + off * 2;
                     const raw = std.mem.readInt(u16, w[o..][0..2], .little);
-                    if (raw & 0x7C00 == 0x7C00) { w[o] = 0; w[o + 1] = 0; }
+                    if (raw & 0x7C00 == 0x7C00) {
+                        w[o] = 0;
+                        w[o + 1] = 0;
+                    }
                 }
             }
             gemvQ4_K(&x, &w, &y, n, k);

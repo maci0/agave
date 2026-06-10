@@ -139,8 +139,12 @@ test "fuzz: gemvF32" {
             x = @bitCast(x_bytes);
             w = @bitCast(w_bytes);
             // Clamp to finite values to avoid NaN propagation masking real bugs.
-            for (&x) |*v| if (!std.math.isFinite(v.*)) { v.* = 0.0; };
-            for (&w) |*v| if (!std.math.isFinite(v.*)) { v.* = 0.0; };
+            for (&x) |*v| if (!std.math.isFinite(v.*)) {
+                v.* = 0.0;
+            };
+            for (&w) |*v| if (!std.math.isFinite(v.*)) {
+                v.* = 0.0;
+            };
             gemvF32(&x, &w, &y, n, k);
             // Invariant: output must be finite when inputs are finite.
             for (y) |v| try std.testing.expect(std.math.isFinite(v));

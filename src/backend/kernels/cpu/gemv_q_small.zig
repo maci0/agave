@@ -698,7 +698,10 @@ test "fuzz: gemvQ4_1 gemvQ5_0 gemvQ2_K gemvQ3_K" {
             const clampF16 = struct {
                 fn c(w: []u8, off: usize) void {
                     const raw = std.mem.readInt(u16, w[off..][0..2], .little);
-                    if (raw & 0x7C00 == 0x7C00) { w[off] = 0; w[off + 1] = 0; }
+                    if (raw & 0x7C00 == 0x7C00) {
+                        w[off] = 0;
+                        w[off + 1] = 0;
+                    }
                 }
             }.c;
 
@@ -714,8 +717,13 @@ test "fuzz: gemvQ4_1 gemvQ5_0 gemvQ2_K gemvQ3_K" {
                 smith.bytesWithHash(&x_raw, 0);
                 smith.bytesWithHash(&w, 1);
                 x = @bitCast(x_raw);
-                for (&x) |*v| if (!std.math.isFinite(v.*)) { v.* = 0.0; };
-                for (0..n) |r| { clampF16(&w, r * bpb); clampF16(&w, r * bpb + 2); }
+                for (&x) |*v| if (!std.math.isFinite(v.*)) {
+                    v.* = 0.0;
+                };
+                for (0..n) |r| {
+                    clampF16(&w, r * bpb);
+                    clampF16(&w, r * bpb + 2);
+                }
                 gemvQ4_1(&x, &w, &y, n, qk);
                 for (y) |v| std.debug.assert(std.math.isFinite(v));
             }
@@ -732,7 +740,9 @@ test "fuzz: gemvQ4_1 gemvQ5_0 gemvQ2_K gemvQ3_K" {
                 smith.bytesWithHash(&x_raw, 2);
                 smith.bytesWithHash(&w, 3);
                 x = @bitCast(x_raw);
-                for (&x) |*v| if (!std.math.isFinite(v.*)) { v.* = 0.0; };
+                for (&x) |*v| if (!std.math.isFinite(v.*)) {
+                    v.* = 0.0;
+                };
                 for (0..n) |r| clampF16(&w, r * bpb);
                 gemvQ5_0(&x, &w, &y, n, qk);
                 for (y) |v| std.debug.assert(std.math.isFinite(v));
@@ -750,8 +760,13 @@ test "fuzz: gemvQ4_1 gemvQ5_0 gemvQ2_K gemvQ3_K" {
                 smith.bytesWithHash(&x_raw, 4);
                 smith.bytesWithHash(&w, 5);
                 x = @bitCast(x_raw);
-                for (&x) |*v| if (!std.math.isFinite(v.*)) { v.* = 0.0; };
-                for (0..n) |r| { clampF16(&w, r * bpb + 80); clampF16(&w, r * bpb + 82); }
+                for (&x) |*v| if (!std.math.isFinite(v.*)) {
+                    v.* = 0.0;
+                };
+                for (0..n) |r| {
+                    clampF16(&w, r * bpb + 80);
+                    clampF16(&w, r * bpb + 82);
+                }
                 gemvQ2_K(&x, &w, &y, n, bs);
                 for (y) |v| std.debug.assert(std.math.isFinite(v));
             }
@@ -768,7 +783,9 @@ test "fuzz: gemvQ4_1 gemvQ5_0 gemvQ2_K gemvQ3_K" {
                 smith.bytesWithHash(&x_raw, 6);
                 smith.bytesWithHash(&w, 7);
                 x = @bitCast(x_raw);
-                for (&x) |*v| if (!std.math.isFinite(v.*)) { v.* = 0.0; };
+                for (&x) |*v| if (!std.math.isFinite(v.*)) {
+                    v.* = 0.0;
+                };
                 for (0..n) |r| clampF16(&w, r * bpb + 108);
                 gemvQ3_K(&x, &w, &y, n, bs);
                 for (y) |v| std.debug.assert(std.math.isFinite(v));

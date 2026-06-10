@@ -1307,18 +1307,14 @@ pub const VulkanBackend = struct {
             &self.pipe_gemv_q4_0,     &self.pipe_gemv_q4_1,
             &self.pipe_gemv_q5_0,     &self.pipe_gemv_q2_k,
             &self.pipe_gemv_q3_k,     &self.pipe_gemv_iq4_nl,
-            &self.pipe_gemv_iq4_xs,
-            &self.pipe_gemv_bf16,
+            &self.pipe_gemv_iq4_xs,   &self.pipe_gemv_bf16,
             &self.pipe_gemv_f16,      &self.pipe_gemv_q4_k,
             &self.pipe_gemv_q5_k,     &self.pipe_gemv_q6_k,
             &self.pipe_gemv_fp8_e4m3, &self.pipe_gemv_fp8_e5m2,
-            &self.pipe_gemv_t_q8_0,
-            &self.pipe_gemv_tq1_0,
-            &self.pipe_gemv_tq2_0,
-            &self.pipe_gemv_hqq,
-                // Attention
-              &self.pipe_sdpa,
-            &self.pipe_sdpa_turbo,
+            &self.pipe_gemv_t_q8_0,   &self.pipe_gemv_tq1_0,
+            &self.pipe_gemv_tq2_0,    &self.pipe_gemv_hqq,
+            // Attention
+            &self.pipe_sdpa,          &self.pipe_sdpa_turbo,
             &self.pipe_sdpa_paged,
                 // Embedding
                &self.pipe_embedding,
@@ -1599,10 +1595,15 @@ pub const VulkanBackend = struct {
         _ = self.vkEndCommandBuffer(self.cmd_buf);
         _ = self.vkResetFences(self.device, 1, &self.fence);
         _ = self.vkQueueSubmit(self.queue, 1, &.{
-            .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO, .pNext = null,
-            .waitSemaphoreCount = 0, .pWaitSemaphores = null, .pWaitDstStageMask = null,
-            .commandBufferCount = 1, .pCommandBuffers = &self.cmd_buf,
-            .signalSemaphoreCount = 0, .pSignalSemaphores = null,
+            .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
+            .pNext = null,
+            .waitSemaphoreCount = 0,
+            .pWaitSemaphores = null,
+            .pWaitDstStageMask = null,
+            .commandBufferCount = 1,
+            .pCommandBuffers = &self.cmd_buf,
+            .signalSemaphoreCount = 0,
+            .pSignalSemaphores = null,
         }, self.fence);
         _ = self.vkWaitForFences(self.device, 1, &self.fence, VK_TRUE, ~@as(u64, 0));
         self.cmd_recording = false;
@@ -2027,24 +2028,24 @@ pub const VulkanBackend = struct {
     /// w_q: packed uint8 nibbles [n * k/2], scale/zero: bf16 packed two-per-u32 [n * k/group_size].
     pub fn gemvHqq(self: *VulkanBackend, x: [*]const f32, w_q: [*]const u8, scale: [*]const u8, zero: [*]const u8, y: [*]f32, n: usize, k: usize, group_size: u32) void {
         const n_groups = (k + group_size - 1) / group_size;
-        const x_sz  = k * @sizeOf(f32);
-        const wq_sz = n * (k / 2);                          // bytes: 2 nibbles per byte
-        const sq_sz = n * n_groups * @sizeOf(u16);          // bf16 scale array
-        const zr_sz = n * n_groups * @sizeOf(u16);          // bf16 zero  array
-        const y_sz  = n * @sizeOf(f32);
+        const x_sz = k * @sizeOf(f32);
+        const wq_sz = n * (k / 2); // bytes: 2 nibbles per byte
+        const sq_sz = n * n_groups * @sizeOf(u16); // bf16 scale array
+        const zr_sz = n * n_groups * @sizeOf(u16); // bf16 zero  array
+        const y_sz = n * @sizeOf(f32);
 
-        const x_pool  = self.getPooledBuf(x_sz);
+        const x_pool = self.getPooledBuf(x_sz);
         defer self.releasePooledBuf(x_pool);
-        const wq_vk   = self.getOrUpload(@ptrCast(w_q),  wq_sz);
-        const sc_vk   = self.getOrUpload(@ptrCast(scale), sq_sz);
-        const zr_vk   = self.getOrUpload(@ptrCast(zero),  zr_sz);
-        const y_pool  = self.getPooledBuf(y_sz);
+        const wq_vk = self.getOrUpload(@ptrCast(w_q), wq_sz);
+        const sc_vk = self.getOrUpload(@ptrCast(scale), sq_sz);
+        const zr_vk = self.getOrUpload(@ptrCast(zero), zr_sz);
+        const y_pool = self.getPooledBuf(y_sz);
         defer self.releasePooledBuf(y_pool);
         self.uploadBuffer(x_pool.mem, @ptrCast(x), x_sz);
 
         const params = [3]u32{ @intCast(n), @intCast(k), group_size };
-        const bufs   = [_]VkBuffer{ x_pool.buf, wq_vk.buf, sc_vk.buf, zr_vk.buf, y_pool.buf };
-        const sizes  = [_]usize{ x_sz, wq_sz, sq_sz, zr_sz, y_sz };
+        const bufs = [_]VkBuffer{ x_pool.buf, wq_vk.buf, sc_vk.buf, zr_vk.buf, y_pool.buf };
+        const sizes = [_]usize{ x_sz, wq_sz, sq_sz, zr_sz, y_sz };
         self.dispatch(self.pipe_gemv_hqq, &bufs, &sizes, @ptrCast(&params), 12, @intCast(n));
         self.downloadF32(y_pool.mem, y, n);
     }
@@ -2716,52 +2717,236 @@ test "Vulkan BufState enum" {
 
 // ── Per-function comptime signature tests ────────────────────────
 
-test "VulkanBackend.init" { comptime { _ = &VulkanBackend.init; } }
-test "VulkanBackend.deinit" { comptime { _ = &VulkanBackend.deinit; } }
-test "VulkanBackend.flushActivations" { comptime { _ = &VulkanBackend.flushActivations; } }
-test "VulkanBackend.invalidateAct" { comptime { _ = &VulkanBackend.invalidateAct; } }
-test "VulkanBackend.invalidateWeight" { comptime { _ = &VulkanBackend.invalidateWeight; } }
-test "VulkanBackend.gemv" { comptime { _ = &VulkanBackend.gemv; } }
-test "VulkanBackend.rmsNorm" { comptime { _ = &VulkanBackend.rmsNorm; } }
-test "VulkanBackend.silu" { comptime { _ = &VulkanBackend.silu; } }
-test "VulkanBackend.gelu" { comptime { _ = &VulkanBackend.gelu; } }
-test "VulkanBackend.add" { comptime { _ = &VulkanBackend.add; } }
-test "VulkanBackend.gemvT" { comptime { _ = &VulkanBackend.gemvT; } }
-test "VulkanBackend.addScaled" { comptime { _ = &VulkanBackend.addScaled; } }
-test "VulkanBackend.addRmsNorm" { comptime { _ = &VulkanBackend.addRmsNorm; } }
-test "VulkanBackend.mul" { comptime { _ = &VulkanBackend.mul; } }
-test "VulkanBackend.softmax" { comptime { _ = &VulkanBackend.softmax; } }
-test "VulkanBackend.rope" { comptime { _ = &VulkanBackend.rope; } }
-test "VulkanBackend.embLookup" { comptime { _ = &VulkanBackend.embLookup; } }
-test "VulkanBackend.causalConv1dSilu" { comptime { _ = &VulkanBackend.causalConv1dSilu; } }
-test "VulkanBackend.l2Norm" { comptime { _ = &VulkanBackend.l2Norm; } }
-test "VulkanBackend.gemvNvfp4St" { comptime { _ = &VulkanBackend.gemvNvfp4St; } }
-test "VulkanBackend.gemvMlxQ" { comptime { _ = &VulkanBackend.gemvMlxQ; } }
-test "VulkanBackend.gemvMxfp4St" { comptime { _ = &VulkanBackend.gemvMxfp4St; } }
-test "VulkanBackend.gemvGptq" { comptime { _ = &VulkanBackend.gemvGptq; } }
-test "VulkanBackend.gemvAwq" { comptime { _ = &VulkanBackend.gemvAwq; } }
-test "VulkanBackend.sigmoidMul" { comptime { _ = &VulkanBackend.sigmoidMul; } }
-test "VulkanBackend.siluMul" { comptime { _ = &VulkanBackend.siluMul; } }
-test "VulkanBackend.geluMul" { comptime { _ = &VulkanBackend.geluMul; } }
-test "VulkanBackend.rmsNormMulti" { comptime { _ = &VulkanBackend.rmsNormMulti; } }
-test "VulkanBackend.deinterleave" { comptime { _ = &VulkanBackend.deinterleave; } }
-test "VulkanBackend.splitQGate" { comptime { _ = &VulkanBackend.splitQGate; } }
-test "VulkanBackend.gemvMulti" { comptime { _ = &VulkanBackend.gemvMulti; } }
-test "VulkanBackend.allocKvSlice" { comptime { _ = &VulkanBackend.allocKvSlice; } }
-test "VulkanBackend.freeKvSlice" { comptime { _ = &VulkanBackend.freeKvSlice; } }
-test "VulkanBackend.gemm" { comptime { _ = &VulkanBackend.gemm; } }
-test "VulkanBackend.rmsNormBatched" { comptime { _ = &VulkanBackend.rmsNormBatched; } }
-test "VulkanBackend.ropeBatched" { comptime { _ = &VulkanBackend.ropeBatched; } }
-test "VulkanBackend.sdpaTree" { comptime { _ = &VulkanBackend.sdpaTree; } }
-test "VulkanBackend.sdpaPrefill" { comptime { _ = &VulkanBackend.sdpaPrefill; } }
-test "VulkanBackend.deltaNet" { comptime { _ = &VulkanBackend.deltaNet; } }
-test "VulkanBackend.sync" { comptime { _ = &VulkanBackend.sync; } }
-test "VulkanBackend.beginBatch" { comptime { _ = &VulkanBackend.beginBatch; } }
-test "VulkanBackend.endBatch" { comptime { _ = &VulkanBackend.endBatch; } }
-test "VulkanBackend.backendInfo" { comptime { _ = &VulkanBackend.backendInfo; } }
-test "VulkanBackend.sdpa" { comptime { _ = &VulkanBackend.sdpa; } }
-test "VulkanBackend.sdpaPaged" { comptime { _ = &VulkanBackend.sdpaPaged; } }
-test "VulkanBackend.sdpaWithStats" { comptime { _ = &VulkanBackend.sdpaWithStats; } }
+test "VulkanBackend.init" {
+    comptime {
+        _ = &VulkanBackend.init;
+    }
+}
+test "VulkanBackend.deinit" {
+    comptime {
+        _ = &VulkanBackend.deinit;
+    }
+}
+test "VulkanBackend.flushActivations" {
+    comptime {
+        _ = &VulkanBackend.flushActivations;
+    }
+}
+test "VulkanBackend.invalidateAct" {
+    comptime {
+        _ = &VulkanBackend.invalidateAct;
+    }
+}
+test "VulkanBackend.invalidateWeight" {
+    comptime {
+        _ = &VulkanBackend.invalidateWeight;
+    }
+}
+test "VulkanBackend.gemv" {
+    comptime {
+        _ = &VulkanBackend.gemv;
+    }
+}
+test "VulkanBackend.rmsNorm" {
+    comptime {
+        _ = &VulkanBackend.rmsNorm;
+    }
+}
+test "VulkanBackend.silu" {
+    comptime {
+        _ = &VulkanBackend.silu;
+    }
+}
+test "VulkanBackend.gelu" {
+    comptime {
+        _ = &VulkanBackend.gelu;
+    }
+}
+test "VulkanBackend.add" {
+    comptime {
+        _ = &VulkanBackend.add;
+    }
+}
+test "VulkanBackend.gemvT" {
+    comptime {
+        _ = &VulkanBackend.gemvT;
+    }
+}
+test "VulkanBackend.addScaled" {
+    comptime {
+        _ = &VulkanBackend.addScaled;
+    }
+}
+test "VulkanBackend.addRmsNorm" {
+    comptime {
+        _ = &VulkanBackend.addRmsNorm;
+    }
+}
+test "VulkanBackend.mul" {
+    comptime {
+        _ = &VulkanBackend.mul;
+    }
+}
+test "VulkanBackend.softmax" {
+    comptime {
+        _ = &VulkanBackend.softmax;
+    }
+}
+test "VulkanBackend.rope" {
+    comptime {
+        _ = &VulkanBackend.rope;
+    }
+}
+test "VulkanBackend.embLookup" {
+    comptime {
+        _ = &VulkanBackend.embLookup;
+    }
+}
+test "VulkanBackend.causalConv1dSilu" {
+    comptime {
+        _ = &VulkanBackend.causalConv1dSilu;
+    }
+}
+test "VulkanBackend.l2Norm" {
+    comptime {
+        _ = &VulkanBackend.l2Norm;
+    }
+}
+test "VulkanBackend.gemvNvfp4St" {
+    comptime {
+        _ = &VulkanBackend.gemvNvfp4St;
+    }
+}
+test "VulkanBackend.gemvMlxQ" {
+    comptime {
+        _ = &VulkanBackend.gemvMlxQ;
+    }
+}
+test "VulkanBackend.gemvMxfp4St" {
+    comptime {
+        _ = &VulkanBackend.gemvMxfp4St;
+    }
+}
+test "VulkanBackend.gemvGptq" {
+    comptime {
+        _ = &VulkanBackend.gemvGptq;
+    }
+}
+test "VulkanBackend.gemvAwq" {
+    comptime {
+        _ = &VulkanBackend.gemvAwq;
+    }
+}
+test "VulkanBackend.sigmoidMul" {
+    comptime {
+        _ = &VulkanBackend.sigmoidMul;
+    }
+}
+test "VulkanBackend.siluMul" {
+    comptime {
+        _ = &VulkanBackend.siluMul;
+    }
+}
+test "VulkanBackend.geluMul" {
+    comptime {
+        _ = &VulkanBackend.geluMul;
+    }
+}
+test "VulkanBackend.rmsNormMulti" {
+    comptime {
+        _ = &VulkanBackend.rmsNormMulti;
+    }
+}
+test "VulkanBackend.deinterleave" {
+    comptime {
+        _ = &VulkanBackend.deinterleave;
+    }
+}
+test "VulkanBackend.splitQGate" {
+    comptime {
+        _ = &VulkanBackend.splitQGate;
+    }
+}
+test "VulkanBackend.gemvMulti" {
+    comptime {
+        _ = &VulkanBackend.gemvMulti;
+    }
+}
+test "VulkanBackend.allocKvSlice" {
+    comptime {
+        _ = &VulkanBackend.allocKvSlice;
+    }
+}
+test "VulkanBackend.freeKvSlice" {
+    comptime {
+        _ = &VulkanBackend.freeKvSlice;
+    }
+}
+test "VulkanBackend.gemm" {
+    comptime {
+        _ = &VulkanBackend.gemm;
+    }
+}
+test "VulkanBackend.rmsNormBatched" {
+    comptime {
+        _ = &VulkanBackend.rmsNormBatched;
+    }
+}
+test "VulkanBackend.ropeBatched" {
+    comptime {
+        _ = &VulkanBackend.ropeBatched;
+    }
+}
+test "VulkanBackend.sdpaTree" {
+    comptime {
+        _ = &VulkanBackend.sdpaTree;
+    }
+}
+test "VulkanBackend.sdpaPrefill" {
+    comptime {
+        _ = &VulkanBackend.sdpaPrefill;
+    }
+}
+test "VulkanBackend.deltaNet" {
+    comptime {
+        _ = &VulkanBackend.deltaNet;
+    }
+}
+test "VulkanBackend.sync" {
+    comptime {
+        _ = &VulkanBackend.sync;
+    }
+}
+test "VulkanBackend.beginBatch" {
+    comptime {
+        _ = &VulkanBackend.beginBatch;
+    }
+}
+test "VulkanBackend.endBatch" {
+    comptime {
+        _ = &VulkanBackend.endBatch;
+    }
+}
+test "VulkanBackend.backendInfo" {
+    comptime {
+        _ = &VulkanBackend.backendInfo;
+    }
+}
+test "VulkanBackend.sdpa" {
+    comptime {
+        _ = &VulkanBackend.sdpa;
+    }
+}
+test "VulkanBackend.sdpaPaged" {
+    comptime {
+        _ = &VulkanBackend.sdpaPaged;
+    }
+}
+test "VulkanBackend.sdpaWithStats" {
+    comptime {
+        _ = &VulkanBackend.sdpaWithStats;
+    }
+}
 
 test "VulkanBackend rope" {
     var vk_be = VulkanBackend.init(std.testing.allocator, 0) catch |err| {

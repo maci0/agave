@@ -110,7 +110,9 @@ test "constants valid" {
 test "fuzz: fused_ffn_q6_k functions" {
     try std.testing.fuzz({}, struct {
         fn f(_: void, _: *std.testing.Smith) !void {
-            comptime { _ = &q6kBlockDot; }
+            comptime {
+                _ = &q6kBlockDot;
+            }
         }
     }.f, .{});
 }

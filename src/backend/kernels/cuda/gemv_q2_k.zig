@@ -73,7 +73,9 @@ test "constants valid" {
 test "fuzz: gemv_q2_k functions" {
     try std.testing.fuzz({}, struct {
         fn f(_: void, _: *std.testing.Smith) !void {
-            comptime { _ = &q2kBlockDot; }
+            comptime {
+                _ = &q2kBlockDot;
+            }
         }
     }.f, .{});
 }

@@ -244,11 +244,16 @@ pub fn sdpaQuantHeadsSparse(q: [*]const f32, keys: [*]const u8, values: [*]const
 /// Stable softmax that handles -inf entries (masked positions).
 fn softmaxSparse(data: []f32) void {
     var max_val = -std.math.inf(f32);
-    for (data) |v| if (v > max_val) { max_val = v; };
+    for (data) |v| if (v > max_val) {
+        max_val = v;
+    };
     if (max_val == -std.math.inf(f32)) return;
     var sum: f32 = 0;
     for (data) |*v| {
-        if (v.* == -std.math.inf(f32)) { v.* = 0; continue; }
+        if (v.* == -std.math.inf(f32)) {
+            v.* = 0;
+            continue;
+        }
         v.* = @exp(v.* - max_val);
         sum += v.*;
     }

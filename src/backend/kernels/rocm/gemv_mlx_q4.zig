@@ -84,7 +84,9 @@ test "constants valid" {
 test "fuzz: gemv_mlx_q4 functions" {
     try std.testing.fuzz({}, struct {
         fn f(_: void, _: *std.testing.Smith) !void {
-            comptime { _ = &accumWord; }
+            comptime {
+                _ = &accumWord;
+            }
         }
     }.f, .{});
 }

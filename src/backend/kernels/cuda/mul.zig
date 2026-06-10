@@ -18,7 +18,9 @@ test "constants valid" {
 test "fuzz: mul functions" {
     try std.testing.fuzz({}, struct {
         fn f(_: void, _: *std.testing.Smith) !void {
-            comptime { _ = @sizeOf(u8); }
+            comptime {
+                _ = @sizeOf(u8);
+            }
         }
     }.f, .{});
 }

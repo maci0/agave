@@ -368,7 +368,9 @@ pub const Gemma4Model = struct {
                 const kv_key_tmp = std.fmt.bufPrint(&key_buf_kv, "{s}.attention.head_count_kv", .{pfx}) catch continue;
                 if (f.getMetaU32Array(kv_key_tmp)) |arr| {
                     var mn: u32 = std.math.maxInt(u32);
-                    for (arr) |v| if (v < mn) { mn = v; };
+                    for (arr) |v| if (v < mn) {
+                        mn = v;
+                    };
                     if (mn != std.math.maxInt(u32)) break :blk mn;
                 }
                 if (std.mem.eql(u8, pfx, arch) and std.mem.eql(u8, arch, "gemma4")) break; // no fallback needed
@@ -731,7 +733,6 @@ pub const Gemma4Model = struct {
             // raw norm weights (unlike Gemma3 where SafeTensors needs +1).
             .norm_add_one = false,
         };
-
 
         // ── Per-layer KV cache allocation ──────────────────────────
         // Gemma 4 has per-layer varying kvd (sliding and global layers use different nkv*hd).

@@ -105,7 +105,9 @@ test "constants valid" {
 test "fuzz: gemv_q4_0 functions" {
     try std.testing.fuzz({}, struct {
         fn f(_: void, _: *std.testing.Smith) !void {
-            comptime { _ = &q4_0BlockDot; }
+            comptime {
+                _ = &q4_0BlockDot;
+            }
         }
     }.f, .{});
 }

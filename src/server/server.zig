@@ -2641,7 +2641,10 @@ fn generateN(formatted: []const u8, reset: bool, max_tokens: usize, sampling: Sa
                             gen_tokens[token_count] = jump_tok;
                             token_count += 1;
                             last = jump_tok;
-                            if (gs.isComplete()) { hit_eog = true; break; }
+                            if (gs.isComplete()) {
+                                hit_eog = true;
+                                break;
+                            }
                             continue;
                         }
                     }

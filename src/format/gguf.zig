@@ -133,7 +133,7 @@ pub const GGMLType = enum(u32) {
             .iq1_m => 56, // 256 elements
             .iq4_nl => 18, // f16 scale + 16 bytes (32 nibbles, same as q4_0)
             .iq4_xs => 136, // f16 d (2) + u16 scales_h (2) + scales_l[4] (4) + qs[128] (128)
-            .tq1_0 => 64,  // f16 scale (2) + qs[40] + qh[13] + padding[9]
+            .tq1_0 => 64, // f16 scale (2) + qs[40] + qh[13] + padding[9]
             .tq2_0 => 66, // f16 scale (2) + qs[64] (256 elements × 2 bits = 64 bytes)
             .mxfp4 => 17, // 1 byte E8M0 scale + 16 bytes (32 FP4 nibbles)
             else => 1,

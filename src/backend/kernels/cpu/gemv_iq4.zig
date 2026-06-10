@@ -346,7 +346,10 @@ test "fuzz: gemvIQ4_NL gemvIQ4_XS" {
             const clampF16 = struct {
                 fn c(w: []u8, off: usize) void {
                     const raw = std.mem.readInt(u16, w[off..][0..2], .little);
-                    if (raw & 0x7C00 == 0x7C00) { w[off] = 0; w[off + 1] = 0; }
+                    if (raw & 0x7C00 == 0x7C00) {
+                        w[off] = 0;
+                        w[off + 1] = 0;
+                    }
                 }
             }.c;
 
@@ -362,7 +365,9 @@ test "fuzz: gemvIQ4_NL gemvIQ4_XS" {
                 smith.bytesWithHash(&x_raw, 0);
                 smith.bytesWithHash(&w, 1);
                 x = @bitCast(x_raw);
-                for (&x) |*v| if (!std.math.isFinite(v.*)) { v.* = 0.0; };
+                for (&x) |*v| if (!std.math.isFinite(v.*)) {
+                    v.* = 0.0;
+                };
                 for (0..n) |r| clampF16(&w, r * bpb);
                 gemvIQ4_NL(&x, &w, &y, n, qk);
                 for (y) |v| try std.testing.expect(std.math.isFinite(v));
@@ -380,7 +385,9 @@ test "fuzz: gemvIQ4_NL gemvIQ4_XS" {
                 smith.bytesWithHash(&x_raw, 2);
                 smith.bytesWithHash(&w, 3);
                 x = @bitCast(x_raw);
-                for (&x) |*v| if (!std.math.isFinite(v.*)) { v.* = 0.0; };
+                for (&x) |*v| if (!std.math.isFinite(v.*)) {
+                    v.* = 0.0;
+                };
                 for (0..n) |r| clampF16(&w, r * bpb);
                 gemvIQ4_XS(&x, &w, &y, n, bs);
                 for (y) |v| try std.testing.expect(std.math.isFinite(v));

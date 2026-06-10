@@ -1898,10 +1898,9 @@ fn parseConfigObject(
         const should_recurse = (std.mem.eql(u8, key_res.val, "rope_parameters") or
             std.mem.eql(u8, key_res.val, "rope_scaling")) or
             (!is_override and (std.mem.eql(u8, key_res.val, "text_config") or
-            std.mem.eql(u8, key_res.val, "quantization") or
-            std.mem.eql(u8, key_res.val, "quantization_config")));
-        if (should_recurse and json[i] == '{')
-        {
+                std.mem.eql(u8, key_res.val, "quantization") or
+                std.mem.eql(u8, key_res.val, "quantization_config")));
+        if (should_recurse and json[i] == '{') {
             i = try parseConfigObject(allocator, json, i, meta, owned, true);
         } else {
             const owned_key = try dupeString(allocator, owned, key_res.val);

@@ -240,7 +240,9 @@ test "fuzz: gemvQ4_0" {
             smith.bytesWithHash(&x_raw, 0);
             smith.bytesWithHash(&w, 1);
             x = @bitCast(x_raw);
-            for (&x) |*v| if (!std.math.isFinite(v.*)) { v.* = 0.0; };
+            for (&x) |*v| if (!std.math.isFinite(v.*)) {
+                v.* = 0.0;
+            };
             // Clamp f16 scale bytes to finite: mask inf/nan (exponent all-ones = 0x7C00).
             for (0..n) |r| {
                 const base = r * bpb;

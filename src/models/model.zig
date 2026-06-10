@@ -1612,11 +1612,15 @@ test "findMlxCompanion 3D expert tensor computes bits from last dim" {
 }
 
 test "resetKvCache compiles" {
-    comptime { _ = &resetKvCache; }
+    comptime {
+        _ = &resetKvCache;
+    }
 }
 
 test "ensureKvBlock compiles" {
-    comptime { _ = &ensureKvBlock; }
+    comptime {
+        _ = &ensureKvBlock;
+    }
 }
 
 test "dispatchGemv HQQ path — CPU" {
@@ -1629,26 +1633,32 @@ test "dispatchGemv HQQ path — CPU" {
     const zero_bf16: [2]u8 = .{ 0x00, 0x00 }; // 0.0
     // scale and zero are [1] element tensors (one group)
     var scale_data = [_]u8{ 0x80, 0x3F }; // bf16 1.0
-    var zero_data = [_]u8{ 0x00, 0x00 };  // bf16 0.0
+    var zero_data = [_]u8{ 0x00, 0x00 }; // bf16 0.0
     _ = one_bf16;
     _ = zero_bf16;
 
     var tensors = [_]MockFormat.NamedTensor{
         .{ .name = "blk.0.attn_q.W_q", .info = .{
             .name = "blk.0.attn_q.W_q",
-            .n_dims = 2, .dims = .{ 1, 2, 0, 0 },
-            .dtype = .hqq, .data_ptr = @ptrCast(&w_q_data),
-        }},
+            .n_dims = 2,
+            .dims = .{ 1, 2, 0, 0 },
+            .dtype = .hqq,
+            .data_ptr = @ptrCast(&w_q_data),
+        } },
         .{ .name = "blk.0.attn_q.meta.scale", .info = .{
             .name = "blk.0.attn_q.meta.scale",
-            .n_dims = 1, .dims = .{ 1, 0, 0, 0 },
-            .dtype = .bf16, .data_ptr = @ptrCast(&scale_data),
-        }},
+            .n_dims = 1,
+            .dims = .{ 1, 0, 0, 0 },
+            .dtype = .bf16,
+            .data_ptr = @ptrCast(&scale_data),
+        } },
         .{ .name = "blk.0.attn_q.meta.zero", .info = .{
             .name = "blk.0.attn_q.meta.zero",
-            .n_dims = 1, .dims = .{ 1, 0, 0, 0 },
-            .dtype = .bf16, .data_ptr = @ptrCast(&zero_data),
-        }},
+            .n_dims = 1,
+            .dims = .{ 1, 0, 0, 0 },
+            .dtype = .bf16,
+            .data_ptr = @ptrCast(&zero_data),
+        } },
     };
     var mock = MockFormat{ .tensors = &tensors };
     const be = backend_mod.Backend{ .cpu = &(backend_mod.CpuBackend{}) };
@@ -1663,19 +1673,21 @@ test "dispatchGemv HQQ path — CPU" {
 
 test "dispatchGemv HQQ path — missing companion returns fallback" {
     // HQQ tensor but no companion scale/zero → falls through to be.gemv (unknown dtype → zero)
-    var w_q_data = [_]u8{ 0x21 };
+    var w_q_data = [_]u8{0x21};
     var tensors = [_]MockFormat.NamedTensor{
         .{ .name = "blk.0.attn_q.W_q", .info = .{
             .name = "blk.0.attn_q.W_q",
-            .n_dims = 1, .dims = .{ 1, 0, 0, 0 },
-            .dtype = .hqq, .data_ptr = @ptrCast(&w_q_data),
-        }},
+            .n_dims = 1,
+            .dims = .{ 1, 0, 0, 0 },
+            .dtype = .hqq,
+            .data_ptr = @ptrCast(&w_q_data),
+        } },
     };
     var mock = MockFormat{ .tensors = &tensors };
     var cpu = backend_mod.CpuBackend{};
     const be = backend_mod.Backend{ .cpu = &cpu };
     const t = tensors[0].info;
-    var x = [_]f32{ 1.0 };
+    var x = [_]f32{1.0};
     var y = [_]f32{99.0};
     // Should not panic — falls back to be.gemv with .hqq dtype → zeroed output
     dispatchGemv(be, mock.format(), &x, t, &y, 1, 1);
@@ -1899,7 +1911,7 @@ test "fuzz: all model functions" {
                 std.debug.assert(fwd == 7);
 
                 // prefill
-                const ids = [_]u32{ smith.valueWithHash(u32, 20) };
+                const ids = [_]u32{smith.valueWithHash(u32, 20)};
                 const pfx = m.prefill(&ids) catch return;
                 std.debug.assert(pfx == 7);
 

@@ -999,8 +999,8 @@ pub const CudaBackend = struct {
             var nf: u32 = @intCast(n_ff);
             var ne: u32 = @intCast(n_embd);
             var params = [_]?*anyopaque{
-                @ptrCast(&d_x), @ptrCast(&d_gate), @ptrCast(&d_up),
-                @ptrCast(&d_out), @ptrCast(&nf), @ptrCast(&ne),
+                @ptrCast(&d_x),   @ptrCast(&d_gate), @ptrCast(&d_up),
+                @ptrCast(&d_out), @ptrCast(&nf),     @ptrCast(&ne),
             };
             self.launch(func, @intCast(n_ff), block_size, reduction_smem, &params);
         }
@@ -1016,8 +1016,8 @@ pub const CudaBackend = struct {
             var nf: u32 = @intCast(n_ff);
             var ne: u32 = @intCast(n_embd);
             var params = [_]?*anyopaque{
-                @ptrCast(&d_x), @ptrCast(&d_gate), @ptrCast(&d_up),
-                @ptrCast(&d_out), @ptrCast(&nf), @ptrCast(&ne),
+                @ptrCast(&d_x),   @ptrCast(&d_gate), @ptrCast(&d_up),
+                @ptrCast(&d_out), @ptrCast(&nf),     @ptrCast(&ne),
             };
             self.launch(func, @intCast(n_ff), block_size, reduction_smem, &params);
         }
@@ -1033,8 +1033,8 @@ pub const CudaBackend = struct {
             var nf: u32 = @intCast(n_ff);
             var ne: u32 = @intCast(n_embd);
             var params = [_]?*anyopaque{
-                @ptrCast(&d_x), @ptrCast(&d_gate), @ptrCast(&d_up),
-                @ptrCast(&d_out), @ptrCast(&nf), @ptrCast(&ne),
+                @ptrCast(&d_x),   @ptrCast(&d_gate), @ptrCast(&d_up),
+                @ptrCast(&d_out), @ptrCast(&nf),     @ptrCast(&ne),
             };
             self.launch(func, @intCast(n_ff), block_size, reduction_smem, &params);
         }
@@ -1605,9 +1605,9 @@ pub const CudaBackend = struct {
             var k_u32: u32 = @intCast(k);
             var gs_u32: u32 = group_size;
             var params = [_]?*anyopaque{
-                @ptrCast(&d_x),    @ptrCast(&d_w), @ptrCast(&d_s),
-                @ptrCast(&d_z),    @ptrCast(&d_y), @ptrCast(&n_u32),
-                @ptrCast(&k_u32),  @ptrCast(&gs_u32),
+                @ptrCast(&d_x),   @ptrCast(&d_w),    @ptrCast(&d_s),
+                @ptrCast(&d_z),   @ptrCast(&d_y),    @ptrCast(&n_u32),
+                @ptrCast(&k_u32), @ptrCast(&gs_u32),
             };
             self.launch(func, @intCast(n), block_size, reduction_smem, &params);
         } else {
@@ -1632,9 +1632,9 @@ pub const CudaBackend = struct {
             var k_u32: u32 = @intCast(k);
             var gs_u32: u32 = group_size;
             var params = [_]?*anyopaque{
-                @ptrCast(&d_x),    @ptrCast(&d_w), @ptrCast(&d_s),
-                @ptrCast(&d_z),    @ptrCast(&d_y), @ptrCast(&n_u32),
-                @ptrCast(&k_u32),  @ptrCast(&gs_u32),
+                @ptrCast(&d_x),   @ptrCast(&d_w),    @ptrCast(&d_s),
+                @ptrCast(&d_z),   @ptrCast(&d_y),    @ptrCast(&n_u32),
+                @ptrCast(&k_u32), @ptrCast(&gs_u32),
             };
             self.launch(func, @intCast(n), block_size, reduction_smem, &params);
         } else {
@@ -1661,8 +1661,8 @@ pub const CudaBackend = struct {
             var k_u32: u32 = @intCast(k);
             var gs_u32: u32 = group_size;
             var params = [_]?*anyopaque{
-                @ptrCast(&d_x),   @ptrCast(&d_wq), @ptrCast(&d_sc),
-                @ptrCast(&d_zr),  @ptrCast(&d_y),  @ptrCast(&n_u32),
+                @ptrCast(&d_x),   @ptrCast(&d_wq),   @ptrCast(&d_sc),
+                @ptrCast(&d_zr),  @ptrCast(&d_y),    @ptrCast(&n_u32),
                 @ptrCast(&k_u32), @ptrCast(&gs_u32),
             };
             const grid: u32 = @intCast((n + 3) / 4);
@@ -2055,10 +2055,10 @@ pub const CudaBackend = struct {
         var paged_bs_u: u32 = kv_view.block_size;
 
         var params = [_]?*anyopaque{
-            @ptrCast(&d_q),       @ptrCast(&d_k),     @ptrCast(&d_v),
-            @ptrCast(&d_out),     @ptrCast(&d_bt),    @ptrCast(&nh_u),
-            @ptrCast(&nkv_u),     @ptrCast(&hd_u),    @ptrCast(&sl),
-            @ptrCast(&kvd_u),     @ptrCast(&scale_f), @ptrCast(&paged_bs_u),
+            @ptrCast(&d_q),   @ptrCast(&d_k),     @ptrCast(&d_v),
+            @ptrCast(&d_out), @ptrCast(&d_bt),    @ptrCast(&nh_u),
+            @ptrCast(&nkv_u), @ptrCast(&hd_u),    @ptrCast(&sl),
+            @ptrCast(&kvd_u), @ptrCast(&scale_f), @ptrCast(&paged_bs_u),
         };
 
         const smem: u32 = (sl + 1) * @sizeOf(f32);
@@ -2458,64 +2458,296 @@ test "CUDA default struct initialization is safe" {
 
 // ── Per-function comptime signature tests ────────────────────────
 
-test "CudaBackend.init" { comptime { _ = &CudaBackend.init; } }
-test "CudaBackend.deinit" { comptime { _ = &CudaBackend.deinit; } }
-test "CudaBackend.setThreadContext" { comptime { _ = &CudaBackend.setThreadContext; } }
-test "CudaBackend.registerHostRegion" { comptime { _ = &CudaBackend.registerHostRegion; } }
-test "CudaBackend.flushActivations" { comptime { _ = &CudaBackend.flushActivations; } }
-test "CudaBackend.invalidateAct" { comptime { _ = &CudaBackend.invalidateAct; } }
-test "CudaBackend.getDevicePtrOpaque" { comptime { _ = &CudaBackend.getDevicePtrOpaque; } }
-test "CudaBackend.getDevicePtr" { comptime { _ = &CudaBackend.getDevicePtr; } }
-test "CudaBackend.invalidateWeight" { comptime { _ = &CudaBackend.invalidateWeight; } }
-test "CudaBackend.gemv" { comptime { _ = &CudaBackend.gemv; } }
-test "CudaBackend.sigmoidMul" { comptime { _ = &CudaBackend.sigmoidMul; } }
-test "CudaBackend.siluMul" { comptime { _ = &CudaBackend.siluMul; } }
-test "CudaBackend.geluMul" { comptime { _ = &CudaBackend.geluMul; } }
-test "CudaBackend.fusedFfnGateUpSiluQ8" { comptime { _ = &CudaBackend.fusedFfnGateUpSiluQ8; } }
-test "CudaBackend.fusedFfnGateUpGeluQ8" { comptime { _ = &CudaBackend.fusedFfnGateUpGeluQ8; } }
-test "CudaBackend.fusedFfnGateUpSiluQ4K" { comptime { _ = &CudaBackend.fusedFfnGateUpSiluQ4K; } }
-test "CudaBackend.fusedFfnGateUpSiluQ5K" { comptime { _ = &CudaBackend.fusedFfnGateUpSiluQ5K; } }
-test "CudaBackend.fusedFfnGateUpSiluQ6K" { comptime { _ = &CudaBackend.fusedFfnGateUpSiluQ6K; } }
-test "CudaBackend.dispatchMegakernelQwen35Q8" { comptime { _ = &CudaBackend.dispatchMegakernelQwen35Q8; } }
-test "CudaBackend.dispatchMegakernelGemmaQ4K" { comptime { _ = &CudaBackend.dispatchMegakernelGemmaQ4K; } }
-test "CudaBackend.rmsNormMulti" { comptime { _ = &CudaBackend.rmsNormMulti; } }
-test "CudaBackend.deinterleave" { comptime { _ = &CudaBackend.deinterleave; } }
-test "CudaBackend.splitQGate" { comptime { _ = &CudaBackend.splitQGate; } }
-test "CudaBackend.gemvMulti" { comptime { _ = &CudaBackend.gemvMulti; } }
-test "CudaBackend.rmsNorm" { comptime { _ = &CudaBackend.rmsNorm; } }
-test "CudaBackend.silu" { comptime { _ = &CudaBackend.silu; } }
-test "CudaBackend.gelu" { comptime { _ = &CudaBackend.gelu; } }
-test "CudaBackend.add" { comptime { _ = &CudaBackend.add; } }
-test "CudaBackend.addRmsNorm" { comptime { _ = &CudaBackend.addRmsNorm; } }
-test "CudaBackend.gemvT" { comptime { _ = &CudaBackend.gemvT; } }
-test "CudaBackend.addScaled" { comptime { _ = &CudaBackend.addScaled; } }
-test "CudaBackend.mul" { comptime { _ = &CudaBackend.mul; } }
-test "CudaBackend.softmax" { comptime { _ = &CudaBackend.softmax; } }
-test "CudaBackend.rope" { comptime { _ = &CudaBackend.rope; } }
-test "CudaBackend.embLookup" { comptime { _ = &CudaBackend.embLookup; } }
-test "CudaBackend.l2Norm" { comptime { _ = &CudaBackend.l2Norm; } }
-test "CudaBackend.gemvNvfp4St" { comptime { _ = &CudaBackend.gemvNvfp4St; } }
-test "CudaBackend.gemvMlxQ" { comptime { _ = &CudaBackend.gemvMlxQ; } }
-test "CudaBackend.gemvMxfp4St" { comptime { _ = &CudaBackend.gemvMxfp4St; } }
-test "CudaBackend.gemvGptq" { comptime { _ = &CudaBackend.gemvGptq; } }
-test "CudaBackend.gemvAwq" { comptime { _ = &CudaBackend.gemvAwq; } }
-test "CudaBackend.gemvHqq" { comptime { _ = &CudaBackend.gemvHqq; } }
-test "CudaBackend.sync" { comptime { _ = &CudaBackend.sync; } }
-test "CudaBackend.beginBatch" { comptime { _ = &CudaBackend.beginBatch; } }
-test "CudaBackend.endBatch" { comptime { _ = &CudaBackend.endBatch; } }
-test "CudaBackend.backendInfo" { comptime { _ = &CudaBackend.backendInfo; } }
-test "CudaBackend.allocKvSlice" { comptime { _ = &CudaBackend.allocKvSlice; } }
-test "CudaBackend.freeKvSlice" { comptime { _ = &CudaBackend.freeKvSlice; } }
-test "CudaBackend.registerRamKv" { comptime { _ = &CudaBackend.registerRamKv; } }
-test "CudaBackend.sdpa" { comptime { _ = &CudaBackend.sdpa; } }
-test "CudaBackend.sdpaWithStats" { comptime { _ = &CudaBackend.sdpaWithStats; } }
-test "CudaBackend.gemm" { comptime { _ = &CudaBackend.gemm; } }
-test "CudaBackend.rmsNormBatched" { comptime { _ = &CudaBackend.rmsNormBatched; } }
-test "CudaBackend.ropeBatched" { comptime { _ = &CudaBackend.ropeBatched; } }
-test "CudaBackend.sdpaTree" { comptime { _ = &CudaBackend.sdpaTree; } }
-test "CudaBackend.sdpaPaged" { comptime { _ = &CudaBackend.sdpaPaged; } }
-test "CudaBackend.sdpaPrefill" { comptime { _ = &CudaBackend.sdpaPrefill; } }
-test "CudaBackend.deltaNet" { comptime { _ = &CudaBackend.deltaNet; } }
+test "CudaBackend.init" {
+    comptime {
+        _ = &CudaBackend.init;
+    }
+}
+test "CudaBackend.deinit" {
+    comptime {
+        _ = &CudaBackend.deinit;
+    }
+}
+test "CudaBackend.setThreadContext" {
+    comptime {
+        _ = &CudaBackend.setThreadContext;
+    }
+}
+test "CudaBackend.registerHostRegion" {
+    comptime {
+        _ = &CudaBackend.registerHostRegion;
+    }
+}
+test "CudaBackend.flushActivations" {
+    comptime {
+        _ = &CudaBackend.flushActivations;
+    }
+}
+test "CudaBackend.invalidateAct" {
+    comptime {
+        _ = &CudaBackend.invalidateAct;
+    }
+}
+test "CudaBackend.getDevicePtrOpaque" {
+    comptime {
+        _ = &CudaBackend.getDevicePtrOpaque;
+    }
+}
+test "CudaBackend.getDevicePtr" {
+    comptime {
+        _ = &CudaBackend.getDevicePtr;
+    }
+}
+test "CudaBackend.invalidateWeight" {
+    comptime {
+        _ = &CudaBackend.invalidateWeight;
+    }
+}
+test "CudaBackend.gemv" {
+    comptime {
+        _ = &CudaBackend.gemv;
+    }
+}
+test "CudaBackend.sigmoidMul" {
+    comptime {
+        _ = &CudaBackend.sigmoidMul;
+    }
+}
+test "CudaBackend.siluMul" {
+    comptime {
+        _ = &CudaBackend.siluMul;
+    }
+}
+test "CudaBackend.geluMul" {
+    comptime {
+        _ = &CudaBackend.geluMul;
+    }
+}
+test "CudaBackend.fusedFfnGateUpSiluQ8" {
+    comptime {
+        _ = &CudaBackend.fusedFfnGateUpSiluQ8;
+    }
+}
+test "CudaBackend.fusedFfnGateUpGeluQ8" {
+    comptime {
+        _ = &CudaBackend.fusedFfnGateUpGeluQ8;
+    }
+}
+test "CudaBackend.fusedFfnGateUpSiluQ4K" {
+    comptime {
+        _ = &CudaBackend.fusedFfnGateUpSiluQ4K;
+    }
+}
+test "CudaBackend.fusedFfnGateUpSiluQ5K" {
+    comptime {
+        _ = &CudaBackend.fusedFfnGateUpSiluQ5K;
+    }
+}
+test "CudaBackend.fusedFfnGateUpSiluQ6K" {
+    comptime {
+        _ = &CudaBackend.fusedFfnGateUpSiluQ6K;
+    }
+}
+test "CudaBackend.dispatchMegakernelQwen35Q8" {
+    comptime {
+        _ = &CudaBackend.dispatchMegakernelQwen35Q8;
+    }
+}
+test "CudaBackend.dispatchMegakernelGemmaQ4K" {
+    comptime {
+        _ = &CudaBackend.dispatchMegakernelGemmaQ4K;
+    }
+}
+test "CudaBackend.rmsNormMulti" {
+    comptime {
+        _ = &CudaBackend.rmsNormMulti;
+    }
+}
+test "CudaBackend.deinterleave" {
+    comptime {
+        _ = &CudaBackend.deinterleave;
+    }
+}
+test "CudaBackend.splitQGate" {
+    comptime {
+        _ = &CudaBackend.splitQGate;
+    }
+}
+test "CudaBackend.gemvMulti" {
+    comptime {
+        _ = &CudaBackend.gemvMulti;
+    }
+}
+test "CudaBackend.rmsNorm" {
+    comptime {
+        _ = &CudaBackend.rmsNorm;
+    }
+}
+test "CudaBackend.silu" {
+    comptime {
+        _ = &CudaBackend.silu;
+    }
+}
+test "CudaBackend.gelu" {
+    comptime {
+        _ = &CudaBackend.gelu;
+    }
+}
+test "CudaBackend.add" {
+    comptime {
+        _ = &CudaBackend.add;
+    }
+}
+test "CudaBackend.addRmsNorm" {
+    comptime {
+        _ = &CudaBackend.addRmsNorm;
+    }
+}
+test "CudaBackend.gemvT" {
+    comptime {
+        _ = &CudaBackend.gemvT;
+    }
+}
+test "CudaBackend.addScaled" {
+    comptime {
+        _ = &CudaBackend.addScaled;
+    }
+}
+test "CudaBackend.mul" {
+    comptime {
+        _ = &CudaBackend.mul;
+    }
+}
+test "CudaBackend.softmax" {
+    comptime {
+        _ = &CudaBackend.softmax;
+    }
+}
+test "CudaBackend.rope" {
+    comptime {
+        _ = &CudaBackend.rope;
+    }
+}
+test "CudaBackend.embLookup" {
+    comptime {
+        _ = &CudaBackend.embLookup;
+    }
+}
+test "CudaBackend.l2Norm" {
+    comptime {
+        _ = &CudaBackend.l2Norm;
+    }
+}
+test "CudaBackend.gemvNvfp4St" {
+    comptime {
+        _ = &CudaBackend.gemvNvfp4St;
+    }
+}
+test "CudaBackend.gemvMlxQ" {
+    comptime {
+        _ = &CudaBackend.gemvMlxQ;
+    }
+}
+test "CudaBackend.gemvMxfp4St" {
+    comptime {
+        _ = &CudaBackend.gemvMxfp4St;
+    }
+}
+test "CudaBackend.gemvGptq" {
+    comptime {
+        _ = &CudaBackend.gemvGptq;
+    }
+}
+test "CudaBackend.gemvAwq" {
+    comptime {
+        _ = &CudaBackend.gemvAwq;
+    }
+}
+test "CudaBackend.gemvHqq" {
+    comptime {
+        _ = &CudaBackend.gemvHqq;
+    }
+}
+test "CudaBackend.sync" {
+    comptime {
+        _ = &CudaBackend.sync;
+    }
+}
+test "CudaBackend.beginBatch" {
+    comptime {
+        _ = &CudaBackend.beginBatch;
+    }
+}
+test "CudaBackend.endBatch" {
+    comptime {
+        _ = &CudaBackend.endBatch;
+    }
+}
+test "CudaBackend.backendInfo" {
+    comptime {
+        _ = &CudaBackend.backendInfo;
+    }
+}
+test "CudaBackend.allocKvSlice" {
+    comptime {
+        _ = &CudaBackend.allocKvSlice;
+    }
+}
+test "CudaBackend.freeKvSlice" {
+    comptime {
+        _ = &CudaBackend.freeKvSlice;
+    }
+}
+test "CudaBackend.registerRamKv" {
+    comptime {
+        _ = &CudaBackend.registerRamKv;
+    }
+}
+test "CudaBackend.sdpa" {
+    comptime {
+        _ = &CudaBackend.sdpa;
+    }
+}
+test "CudaBackend.sdpaWithStats" {
+    comptime {
+        _ = &CudaBackend.sdpaWithStats;
+    }
+}
+test "CudaBackend.gemm" {
+    comptime {
+        _ = &CudaBackend.gemm;
+    }
+}
+test "CudaBackend.rmsNormBatched" {
+    comptime {
+        _ = &CudaBackend.rmsNormBatched;
+    }
+}
+test "CudaBackend.ropeBatched" {
+    comptime {
+        _ = &CudaBackend.ropeBatched;
+    }
+}
+test "CudaBackend.sdpaTree" {
+    comptime {
+        _ = &CudaBackend.sdpaTree;
+    }
+}
+test "CudaBackend.sdpaPaged" {
+    comptime {
+        _ = &CudaBackend.sdpaPaged;
+    }
+}
+test "CudaBackend.sdpaPrefill" {
+    comptime {
+        _ = &CudaBackend.sdpaPrefill;
+    }
+}
+test "CudaBackend.deltaNet" {
+    comptime {
+        _ = &CudaBackend.deltaNet;
+    }
+}
 
 test "fuzz: all cuda functions" {
     try std.testing.fuzz({}, struct {

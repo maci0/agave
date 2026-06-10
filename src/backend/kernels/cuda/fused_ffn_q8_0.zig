@@ -116,7 +116,9 @@ test "constants valid" {
 test "fuzz: fused_ffn_q8_0 functions" {
     try std.testing.fuzz({}, struct {
         fn f(_: void, _: *std.testing.Smith) !void {
-            comptime { _ = &q8_0BlockDot; }
+            comptime {
+                _ = &q8_0BlockDot;
+            }
         }
     }.f, .{});
 }

@@ -200,7 +200,9 @@ export fn agave_dealloc(ptr: usize, len: usize) void {
 // ── Tests ──────────────────────────────────────────────────────────
 
 test "wasmLogFn is a no-op" {
-    comptime { _ = &wasmLogFn; }
+    comptime {
+        _ = &wasmLogFn;
+    }
     wasmLogFn(.debug, .wasm, "test {}", .{42});
 }
 
