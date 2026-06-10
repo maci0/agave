@@ -5,6 +5,7 @@
 
 const std = @import("std");
 const Io = std.Io;
+const build_options = @import("build_options");
 const cli_mod = @import("cli.zig");
 const backend_mod = @import("backend/backend.zig");
 const format_mod = @import("format/format.zig");
@@ -1192,15 +1193,17 @@ fn setupTransport(allocator: std.mem.Allocator, peers_str: []const u8, rank: u32
     if (want_nccl) {
         switch (be_union) {
             .cuda => |cuda_be| {
-                t.cuda_sync = cuda_be.cuCtxSynchronize;
-                t.cuda_ctx = cuda_be.context;
-                t.cuda_ctx_set = if (cuda_be.cuCtxSetCurrent) |f| f else null;
-                t.cuda_backend = @ptrCast(cuda_be);
-                t.cuda_get_dev_ptr = backend_mod.CudaBackend.getDevicePtrOpaque;
-                t.cuda_mem_alloc = cuda_be.cuMemAlloc;
-                t.cuda_mem_free = cuda_be.cuMemFree;
-                t.cuda_memcpy_htod = cuda_be.cuMemcpyHtoD;
-                t.cuda_memcpy_dtoh = cuda_be.cuMemcpyDtoH;
+                if (comptime build_options.enable_cuda) {
+                    t.cuda_sync = cuda_be.cuCtxSynchronize;
+                    t.cuda_ctx = cuda_be.context;
+                    t.cuda_ctx_set = if (cuda_be.cuCtxSetCurrent) |f| f else null;
+                    t.cuda_backend = @ptrCast(cuda_be);
+                    t.cuda_get_dev_ptr = backend_mod.CudaBackend.getDevicePtrOpaque;
+                    t.cuda_mem_alloc = cuda_be.cuMemAlloc;
+                    t.cuda_mem_free = cuda_be.cuMemFree;
+                    t.cuda_memcpy_htod = cuda_be.cuMemcpyHtoD;
+                    t.cuda_memcpy_dtoh = cuda_be.cuMemcpyDtoH;
+                }
             },
             else => {},
         }
