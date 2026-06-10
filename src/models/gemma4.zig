@@ -1029,9 +1029,8 @@ pub const Gemma4Model = struct {
         const cs: usize = if (has_gemm) self.chunk_size else 1;
 
         // Fall back to sequential for: images, MoE, PLE, no GEMM, or single token.
-        // NOTE: models with n_layers >= 48 (Gemma 4 12B) use sequential prefill as a
-        // workaround for a bug in prefillChunk that causes corrupted hidden states for
-        // large models. The bug is in the batched Metal GEMM path — investigation ongoing.
+        // NOTE: Gemma 4 12B (n_layers >= 48) uses sequential prefill — batched prefill
+        // was tested but produces the same convergence issue as sequential for this model.
         if (has_image or self.n_experts > 0 or self.ple_dim > 0 or cs <= 1 or token_ids.len == 1 or self.n_layers >= 48) {
             var last: u32 = 0;
             var i: usize = 0;
@@ -1160,7 +1159,7 @@ pub const Gemma4Model = struct {
         // Select attention dimensions based on layer type
         const src_layer = self.kv_source[li];
         const src_is_global = self.layer_is_global[src_layer];
-        const nh: usize = if (!is_global) self.gl_n_head else self.sl_n_head;
+        const nh: usize = if (is_global) self.gl_n_head else self.sl_n_head;
         const nkv: usize = self.per_layer_n_kv_head[src_layer];
         const hd: usize = if (src_is_global) self.gl_head_dim else self.sl_head_dim;
         const qkv_dim = nh * hd;
@@ -1199,7 +1198,7 @@ pub const Gemma4Model = struct {
             }
 
             // Batched RoPE for Q and K
-            if (!is_global) {
+            if (is_global) {
                 const rd: usize = @intFromFloat(@as(f32, @floatFromInt(self.gl_head_dim)) * self.gl_partial_rotary);
                 const rd_even = rd & ~@as(usize, 1);
                 if (rd_even > 0) {
@@ -1227,7 +1226,7 @@ pub const Gemma4Model = struct {
             if (self.fmt.layerTensor(li, "attn_q_norm.weight")) |qn| {
                 self.be.rmsNormMulti(self.pf_q.ptr, self.normAsF32(qn, hd), n_tok * nh, hd, self.rms_eps);
             }
-            if (!is_global) {
+            if (is_global) {
                 const rd: usize = @intFromFloat(@as(f32, @floatFromInt(self.gl_head_dim)) * self.gl_partial_rotary);
                 const rd_even = rd & ~@as(usize, 1);
                 if (rd_even > 0) {
@@ -1267,7 +1266,7 @@ pub const Gemma4Model = struct {
             // Copy this token's Q from pf_q
             @memcpy(self.q_buf[0..qkv_dim], self.pf_q[t * qkv_dim ..][0..qkv_dim]);
 
-            if (!is_global and self.sliding_window > 0) {
+            if (!is_global and self.sliding_window > 0 and hd > gpu_sdpa_max_head_dim) {
                 const win: usize = @min(sl, self.sliding_window);
                 const start: usize = if (sl > self.sliding_window) sl - self.sliding_window else 0;
                 attn_ops.scaledDotProductAttention(
@@ -1494,7 +1493,7 @@ pub const Gemma4Model = struct {
 
                     // RoPE for K
                     const pos = image_start + ti;
-                    if (!is_global) {
+                    if (is_global) {
                         const rd: usize = @intFromFloat(@as(f32, @floatFromInt(self.gl_head_dim)) * self.gl_partial_rotary);
                         const rd_even = rd & ~@as(usize, 1);
                         if (rd_even > 0) self.be.rope(self.k_buf.ptr, pos, nkv, hd, rd_even, self.gl_rope_theta);
@@ -1677,7 +1676,7 @@ pub const Gemma4Model = struct {
         // use the SOURCE layer's type because we attend against its cache.
         const src_layer = self.kv_source[li];
         const src_is_global = self.layer_is_global[src_layer];
-        const nh: usize = if (!is_global) self.gl_n_head else self.sl_n_head;
+        const nh: usize = if (is_global) self.gl_n_head else self.sl_n_head;
         const nkv: usize = self.per_layer_n_kv_head[src_layer];
         const hd: usize = if (src_is_global) self.gl_head_dim else self.sl_head_dim;
         const qkv_dim = nh * hd;
@@ -1727,7 +1726,7 @@ pub const Gemma4Model = struct {
 
             // RoPE for Q and K — independent buffers, batch without barriers
             t = self.perf.start();
-            if (!is_global) {
+            if (is_global) {
                 const rd: usize = @intFromFloat(@as(f32, @floatFromInt(self.gl_head_dim)) * self.gl_partial_rotary);
                 const rd_even = rd & ~@as(usize, 1);
                 if (rd_even > 0) {
@@ -1753,7 +1752,7 @@ pub const Gemma4Model = struct {
             self.perf.end(.rms_norm, t);
 
             t = self.perf.start();
-            if (!is_global) {
+            if (is_global) {
                 const rd: usize = @intFromFloat(@as(f32, @floatFromInt(self.gl_head_dim)) * self.gl_partial_rotary);
                 const rd_even = rd & ~@as(usize, 1);
                 if (rd_even > 0) {
@@ -1813,7 +1812,9 @@ pub const Gemma4Model = struct {
                 .f32,
                 .f32,
             );
-        } else if (!is_global and self.sliding_window > 0) {
+        } else if (!is_global and self.sliding_window > 0 and hd > gpu_sdpa_max_head_dim) {
+            // CPU windowed SDPA only for large-head SWA (hd > 256). For hd ≤ 256,
+            // fall through to Metal SDPA — CPU windowed is broken for 12B GQA (nkv=8).
             const win: usize = @min(sl, self.sliding_window);
             const start: usize = if (sl > self.sliding_window) sl - self.sliding_window else 0;
             attn_ops.scaledDotProductAttention(
@@ -1836,6 +1837,7 @@ pub const Gemma4Model = struct {
                 .f32,
             );
         } else if (hd > gpu_sdpa_max_head_dim) {
+            // DEBUG: print Q/K magnitudes for global layer
             attn_ops.scaledDotProductAttention(
                 self.q_buf.ptr,
                 kv_keys_bytes,
