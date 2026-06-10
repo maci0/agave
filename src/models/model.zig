@@ -1661,7 +1661,8 @@ test "dispatchGemv HQQ path — CPU" {
         } },
     };
     var mock = MockFormat{ .tensors = &tensors };
-    const be = backend_mod.Backend{ .cpu = &(backend_mod.CpuBackend{}) };
+    var cpu_be = backend_mod.CpuBackend{};
+    const be = backend_mod.Backend{ .cpu = &cpu_be };
 
     const t = tensors[0].info;
     var x = [_]f32{ 1.0, 1.0, 1.0, 1.0 };
