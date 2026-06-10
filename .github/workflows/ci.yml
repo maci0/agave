@@ -163,7 +163,15 @@ jobs:
           restore-keys: zig-${{ env.ZIG_VERSION }}-cross-${{ matrix.target }}-
 
       - name: Build for target
-        run: zig build -Dtarget=${{ matrix.target }}
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          FLAGS="-Dtarget=$TARGET"
+          # Metal is macOS-only and unavailable on Linux runners — disable for macOS cross-compile.
+          if [[ "$TARGET" == *"-macos" ]]; then
+            FLAGS="$FLAGS -Denable-metal=false"
+          fi
+          zig build $FLAGS
 
   ci-pass:
     name: CI passed

@@ -34,7 +34,9 @@ RUN ARCH=$(uname -m) && \
     else echo "Unsupported architecture: $ARCH" && exit 1; fi && \
     curl -fsSL "$ZIG_URL" -o /tmp/zig.tar.xz && \
     echo "${EXPECTED_SHA256}  /tmp/zig.tar.xz" | sha256sum -c - && \
-    tar -xJf /tmp/zig.tar.xz -C /usr/local --strip-components=1 && \
+    mkdir -p /usr/local/zig && \
+    tar -xJf /tmp/zig.tar.xz -C /usr/local/zig --strip-components=1 && \
+    ln -s /usr/local/zig/zig /usr/local/bin/zig && \
     rm /tmp/zig.tar.xz
 
 WORKDIR /src
