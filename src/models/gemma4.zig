@@ -1160,7 +1160,7 @@ pub const Gemma4Model = struct {
         // Select attention dimensions based on layer type
         const src_layer = self.kv_source[li];
         const src_is_global = self.layer_is_global[src_layer];
-        const nh: usize = if (is_global) self.gl_n_head else self.sl_n_head;
+        const nh: usize = if (!is_global) self.gl_n_head else self.sl_n_head;
         const nkv: usize = self.per_layer_n_kv_head[src_layer];
         const hd: usize = if (src_is_global) self.gl_head_dim else self.sl_head_dim;
         const qkv_dim = nh * hd;
@@ -1199,7 +1199,7 @@ pub const Gemma4Model = struct {
             }
 
             // Batched RoPE for Q and K
-            if (is_global) {
+            if (!is_global) {
                 const rd: usize = @intFromFloat(@as(f32, @floatFromInt(self.gl_head_dim)) * self.gl_partial_rotary);
                 const rd_even = rd & ~@as(usize, 1);
                 if (rd_even > 0) {
@@ -1227,7 +1227,7 @@ pub const Gemma4Model = struct {
             if (self.fmt.layerTensor(li, "attn_q_norm.weight")) |qn| {
                 self.be.rmsNormMulti(self.pf_q.ptr, self.normAsF32(qn, hd), n_tok * nh, hd, self.rms_eps);
             }
-            if (is_global) {
+            if (!is_global) {
                 const rd: usize = @intFromFloat(@as(f32, @floatFromInt(self.gl_head_dim)) * self.gl_partial_rotary);
                 const rd_even = rd & ~@as(usize, 1);
                 if (rd_even > 0) {
@@ -1494,7 +1494,7 @@ pub const Gemma4Model = struct {
 
                     // RoPE for K
                     const pos = image_start + ti;
-                    if (is_global) {
+                    if (!is_global) {
                         const rd: usize = @intFromFloat(@as(f32, @floatFromInt(self.gl_head_dim)) * self.gl_partial_rotary);
                         const rd_even = rd & ~@as(usize, 1);
                         if (rd_even > 0) self.be.rope(self.k_buf.ptr, pos, nkv, hd, rd_even, self.gl_rope_theta);
@@ -1677,7 +1677,7 @@ pub const Gemma4Model = struct {
         // use the SOURCE layer's type because we attend against its cache.
         const src_layer = self.kv_source[li];
         const src_is_global = self.layer_is_global[src_layer];
-        const nh: usize = if (is_global) self.gl_n_head else self.sl_n_head;
+        const nh: usize = if (!is_global) self.gl_n_head else self.sl_n_head;
         const nkv: usize = self.per_layer_n_kv_head[src_layer];
         const hd: usize = if (src_is_global) self.gl_head_dim else self.sl_head_dim;
         const qkv_dim = nh * hd;
@@ -1727,7 +1727,7 @@ pub const Gemma4Model = struct {
 
             // RoPE for Q and K — independent buffers, batch without barriers
             t = self.perf.start();
-            if (is_global) {
+            if (!is_global) {
                 const rd: usize = @intFromFloat(@as(f32, @floatFromInt(self.gl_head_dim)) * self.gl_partial_rotary);
                 const rd_even = rd & ~@as(usize, 1);
                 if (rd_even > 0) {
@@ -1753,7 +1753,7 @@ pub const Gemma4Model = struct {
             self.perf.end(.rms_norm, t);
 
             t = self.perf.start();
-            if (is_global) {
+            if (!is_global) {
                 const rd: usize = @intFromFloat(@as(f32, @floatFromInt(self.gl_head_dim)) * self.gl_partial_rotary);
                 const rd_even = rd & ~@as(usize, 1);
                 if (rd_even > 0) {
@@ -1891,7 +1891,6 @@ pub const Gemma4Model = struct {
             );
         }
         self.perf.end(.sdpa, t);
-
 
         // 6. Output projection + post-attention norm + residual
         t = self.perf.start();
