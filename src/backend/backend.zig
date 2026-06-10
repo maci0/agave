@@ -452,6 +452,8 @@ pub const NullBackend = struct {
     pub fn backendInfo(_: *const NullBackend) BackendInfo {
         unreachable;
     }
+
+    pub fn resetCounters(_: *NullBackend) void {}
 };
 
 /// CPU backend — accessed through Backend union dispatch.
