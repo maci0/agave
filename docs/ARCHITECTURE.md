@@ -300,16 +300,36 @@ Browser inference entry point for running Agave in WebAssembly environments. Pro
 
 ### Speculative Decoding (`src/spec/`)
 
+Agave supports 11 speculative decoding modes via `--spec-mode`:
+
 | Module | Description |
 |--------|-------------|
-| `spec_decode.zig` | Orchestrator: draft, verify, generation loop (standard + DDTree modes) |
+| `spec_decode.zig` | Orchestrator: all draft/verify modes, adaptive K, FR-Spec masking, EAGLE/MLP/Lookahead drafting |
 | `ddtree.zig` | DDTree tree construction: best-first heap, compile, acceptance walk |
-| `ngram.zig` | N-gram speculative decoding: history-based draft from token patterns (no draft model) |
+| `ngram.zig` | N-gram, SharedNgramPool (server cross-request), SuffixState (10k cache), LookaheadState (Jacobi) |
 | `pflash.zig` | PFlash speculative prefill: block scoring, alpha-threshold selection, compressed prefill |
 
 | Backend Kernel | Description |
 |----------------|-------------|
 | `sdpa_tree.zig` | Tree-masked SDPA: ancestor bitmask attention for tree verification |
+
+**Mode summary:**
+
+| `--spec-mode` | Draft source | Draft model required? |
+|---|---|---|
+| `standard` | Separate draft model, greedy | Yes |
+| `ddtree` | Separate draft model, tree-based | Yes |
+| `self` | Target model with layer skip | No |
+| `ngram` | Output history ring buffer | No |
+| `suffix` | Cross-request suffix cache (10k tokens) | No |
+| `lookahead` | Jacobi parallel branch exploration | No |
+| `mtp` | Built-in MTP prediction heads | No (in model) |
+| `medusa` | Built-in Medusa MLP heads (MTP alias) | No (in model) |
+| `eagle` | Hidden-state conditioned draft (chained) | Yes |
+| `mlp` | Hidden-state conditioned draft (frozen) | Yes |
+| `pflash` | Block-scored speculative prefill | Yes |
+
+EAGLE uses `get_hidden_state` + `eagle_forward` vtable methods on the target model to extract last residual hidden state and feed it to the draft model. FR-Spec (`--spec-token-map`) restricts draft logits to a frequency-ranked token subset.
 
 ### Block Sparse Attention (`src/ops/sparse_attn.zig`)
 
