@@ -92,6 +92,9 @@ pub const Gemma3Model = struct {
     // Working buffers
     hidden: []f32,
     hidden2: []f32,
+    /// True when feedForward() deferred the FFN residual add. hidden2 holds
+    /// the normed FFN output until the next attention() consumes it via addRmsNorm.
+    pending_ffn_residual: bool = false,
     q_buf: []f32,
     k_buf: []f32,
     v_buf: []f32,
@@ -333,6 +336,8 @@ pub const Gemma3Model = struct {
 
         try model_mod.ensureKvBlock(self);
 
+        self.pending_ffn_residual = false;
+
         // Embedding lookup + Gemma scaling
         var t = self.perf.start();
         self.embLookup(token_id);
@@ -345,6 +350,12 @@ pub const Gemma3Model = struct {
             self.fmt.prefetchLayer(@intCast(li + 1));
             try self.attention(l);
             try self.feedForward(l);
+        }
+
+        // Flush deferred FFN residual from last layer before output norm.
+        if (self.pending_ffn_residual) {
+            self.be.add(self.hidden.ptr, self.hidden2.ptr, self.hidden.ptr, self.n_embd);
+            self.pending_ffn_residual = false;
         }
 
         // Final norm → logits → argmax
@@ -718,10 +729,15 @@ pub const Gemma3Model = struct {
         const nh: usize = self.n_head;
         const nkv: usize = self.n_head_kv;
         const hd: usize = self.head_dim;
-        // Pre-norm
+        // Pre-norm — fuse with deferred FFN residual if pending.
         var t = self.perf.start();
         const norm_w = self.fmt.layerTensor(li, "attn_norm.weight") orelse return error.MissingTensor;
-        self.be.rmsNorm(self.hidden.ptr, self.normAsF32(norm_w, e), self.hidden2.ptr, self.hidden.len, self.rms_eps);
+        if (self.pending_ffn_residual) {
+            self.be.addRmsNorm(self.hidden.ptr, self.hidden2.ptr, self.normAsF32(norm_w, e), self.hidden2.ptr, self.hidden.len, self.rms_eps);
+            self.pending_ffn_residual = false;
+        } else {
+            self.be.rmsNorm(self.hidden.ptr, self.normAsF32(norm_w, e), self.hidden2.ptr, self.hidden.len, self.rms_eps);
+        }
         self.perf.end(.rms_norm, t);
 
         // QKV projections
@@ -913,10 +929,12 @@ pub const Gemma3Model = struct {
         self.doGemv(self.ff_gate.ptr, dw, self.hidden2.ptr, e, ff);
         self.perf.end(.gemv_ffn, t);
 
-        // Fused post-FFN norm + residual add.
+        // Normalize FFN output in-place, defer residual add to next attention().
+        // The deferred add is fused with the next pre-attention rmsNorm via addRmsNorm.
         t = self.perf.start();
         const post_norm = self.fmt.layerTensor(li, "post_ffw_norm.weight") orelse return error.MissingTensor;
-        self.be.rmsNormAdd(self.hidden2.ptr, self.normAsF32(post_norm, e), self.hidden.ptr, e, self.rms_eps);
+        self.be.rmsNorm(self.hidden2.ptr, self.normAsF32(post_norm, e), self.hidden2.ptr, e, self.rms_eps);
+        self.pending_ffn_residual = true;
         self.perf.end(.add, t);
     }
 
