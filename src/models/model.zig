@@ -79,6 +79,16 @@ pub const Model = struct {
         get_mtp_depth: *const fn (self: *anyopaque) u32,
         get_mtp_logits: *const fn (self: *anyopaque) []f32,
         reset_mtp_cache: *const fn (self: *anyopaque) void,
+        /// Return the last residual hidden state (n_embd floats).
+        /// Required by EAGLE speculative decoding: the draft model is conditioned on
+        /// the target model's hidden state at each step.
+        /// Returns an empty slice if the model doesn't expose hidden states.
+        get_hidden_state: *const fn (self: *anyopaque) []const f32,
+        /// EAGLE-conditioned forward: run one draft step using the target's hidden state
+        /// as additional context. The hidden state is concatenated / added to the token
+        /// embedding before the first attention layer (EAGLE-1 approach).
+        /// Returns draft token. Falls back to standard forward() if not implemented.
+        eagle_forward: *const fn (self: *anyopaque, token_id: u32, context_hidden: []const f32) ForwardError!u32,
     };
 
     /// Create a polymorphic Model from a concrete model type.
@@ -245,6 +255,22 @@ pub const Model = struct {
                         self.resetMtpCache();
                 }
             }.call),
+            .get_hidden_state = @ptrCast(&struct {
+                fn call(self: *T) []const f32 {
+                    // Models expose hidden state via .hidden field ([]f32, n_embd elements).
+                    if (comptime @hasField(T, "hidden")) return self.hidden;
+                    return &.{};
+                }
+            }.call),
+            .eagle_forward = @ptrCast(&struct {
+                fn call(self: *T, token_id: u32, context_hidden: []const f32) ForwardError!u32 {
+                    // If model implements eagleForward (EAGLE-trained draft), use it.
+                    // Otherwise fall back to standard forward() ignoring the context.
+                    if (comptime @hasDecl(T, "eagleForward"))
+                        return self.eagleForward(token_id, context_hidden);
+                    return self.forward(token_id);
+                }
+            }.call),
         };
     }
 
@@ -323,6 +349,18 @@ pub const Model = struct {
     /// Reset MTP KV cache (on speculation rejection).
     pub fn resetMtpCache(self: Model) void {
         self.vtable.reset_mtp_cache(self.ptr);
+    }
+
+    /// Return the last residual hidden state (n_embd floats).
+    /// Valid after forward() or prefill(). Empty slice if unsupported.
+    pub fn getHiddenState(self: Model) []const f32 {
+        return self.vtable.get_hidden_state(self.ptr);
+    }
+
+    /// EAGLE-conditioned draft forward: runs a draft step using the target model's
+    /// hidden state as context (concatenated with token embedding, EAGLE-1 style).
+    pub fn eagleForward(self: Model, token_id: u32, context_hidden: []const f32) ForwardError!u32 {
+        return self.vtable.eagle_forward(self.ptr, token_id, context_hidden);
     }
 
     /// Signal the model to cancel the current forward pass.

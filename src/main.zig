@@ -395,7 +395,7 @@ const cli_specs = [_]cli_mod.ArgSpec{
     .{ .long = "draft-model", .kind = .option, .help = "Path to draft model for speculative decoding." },
     .{ .long = "spec-tokens", .short = 'K', .kind = .option, .help = "Draft tokens per speculation round [default: 5]." },
     .{ .long = "tree-budget", .kind = .option, .help = "DDTree node budget [default: 64]." },
-    .{ .long = "spec-mode", .kind = .option, .help = "Speculative mode: standard, ddtree, self, ngram, suffix, mtp, pflash [default: ddtree with --draft-model]." },
+    .{ .long = "spec-mode", .kind = .option, .help = "Speculative mode: standard, ddtree, self, ngram, suffix, mtp, eagle, pflash [default: ddtree with --draft-model]." },
     .{ .long = "spec-token-map", .kind = .option, .help = "FR-Spec token frequency map file (one token ID per line). Restricts draft to high-frequency tokens for improved acceptance rate." },
     .{ .long = "draft-layers", .kind = .option, .help = "Layers for self-speculative draft [default: auto]." },
     .{ .long = "pflash-alpha", .kind = .option, .help = "PFlash block selection threshold (0.0-2.0) [default: 0.85]." },
@@ -411,7 +411,7 @@ const cli_specs = [_]cli_mod.ArgSpec{
     .{ .long = "benchmark", .help = "Run decode benchmark: prefill + decode, print stats (supports --json)." },
 };
 
-const SpecMode = enum { none, standard, ddtree, self_spec, ngram, suffix, mtp, pflash };
+const SpecMode = enum { none, standard, ddtree, self_spec, ngram, suffix, mtp, eagle, pflash };
 
 const CliArgs = struct {
     model_path: []const u8,
@@ -1041,8 +1041,9 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
                 if (std.mem.eql(u8, s, "ngram")) break :blk SpecMode.ngram;
                 if (std.mem.eql(u8, s, "suffix")) break :blk SpecMode.suffix;
                 if (std.mem.eql(u8, s, "mtp")) break :blk SpecMode.mtp;
+                if (std.mem.eql(u8, s, "eagle")) break :blk SpecMode.eagle;
                 if (std.mem.eql(u8, s, "pflash")) break :blk SpecMode.pflash;
-                eprint("Error: unknown --spec-mode '{s}' (expected: standard, ddtree, self, ngram, mtp, pflash)\n", .{s});
+                eprint("Error: unknown --spec-mode '{s}' (expected: standard, ddtree, self, ngram, suffix, mtp, eagle, pflash)\n", .{s});
                 std.process.exit(2);
             }
             break :blk if (dm != null) SpecMode.ddtree else SpecMode.none;
@@ -3019,6 +3020,7 @@ fn generateSpeculative(
     const use_ngram = (effective_spec_mode == .ngram);
     const use_suffix = (effective_spec_mode == .suffix);
     const use_mtp = (effective_spec_mode == .mtp);
+    const use_eagle = (effective_spec_mode == .eagle);
     var ngram_state = ngram_mod.NgramState{};
     if (use_ngram) {
         // Seed n-gram history with prefill tokens
@@ -3101,6 +3103,14 @@ fn generateSpeculative(
             }
             spec_state.n_draft = @intCast(n);
             break :blk @as(u32, @intCast(n));
+        } else if (use_eagle) blk: {
+            // EAGLE: condition draft on target's hidden state (set by last target forward).
+            // For greedy decode: draftEagle; for sampling: draftEagleWithLogits.
+            const n = if (!use_sampling)
+                spec_decode.draftEagle(&spec_state, target.*, draft_model.*, last)
+            else
+                spec_decode.draftEagleWithLogits(&spec_state, target.*, draft_model.*, last);
+            break :blk n;
         } else if (is_self_draft and !use_sampling)
             spec_decode.draft(&spec_state, draft_model, last)
         else

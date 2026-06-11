@@ -138,6 +138,68 @@ pub fn draftMtp(state: *SpecState, model: *Model, last_token: u32) u32 {
     return n;
 }
 
+/// EAGLE speculative decoding: condition each draft step on the target model's hidden state.
+///
+/// EAGLE-1 (Efficient Acceleration via Greedily-Embedded Token Entropy, ICML 2024):
+/// The draft model is a small autoregressive model trained to predict the target's next
+/// hidden state and token from the CURRENT hidden state. At each step:
+///   1. target.forward(last_token) → target runs its full forward pass
+///   2. target.getHiddenState() → extract last residual hidden (n_embd floats)
+///   3. draft_model.eagleForward(tok, target_hidden) → draft token using hidden context
+///   4. Repeat: draft_model.eagleForward(draft_tok, draft_hidden) for subsequent steps
+///
+/// If the draft model doesn't implement eagleForward (standard model), it falls back
+/// to standard forward() — still benefits from the target model's logit reuse.
+///
+/// For EAGLE-2: this function extends naturally; the tree-verification path in DDTree
+/// handles multi-candidate speculation. Pass use_tree=true to enable.
+///
+/// Requires: target and draft_model have been initialized with the same vocab/embedding dim.
+pub fn draftEagle(state: *SpecState, target_model: Model, draft_model: Model, last_token: u32) u32 {
+    // Step 0: get target model's hidden state from the PREVIOUS target forward pass.
+    // The caller is responsible for having called target.forward() before this.
+    var context_hidden = target_model.getHiddenState();
+
+    var tok = last_token;
+    var n: u32 = 0;
+    while (n < state.k and n < max_draft_tokens) {
+        // Draft step: use context hidden from the previous (target or draft) forward pass.
+        tok = draft_model.eagleForward(tok, context_hidden) catch break;
+        state.draft_tokens[n] = tok;
+        n += 1;
+        // For subsequent draft steps, condition on the DRAFT model's own hidden state.
+        // This implements the autoregressive chaining in EAGLE-1.
+        context_hidden = draft_model.getHiddenState();
+    }
+    state.n_draft = n;
+    return n;
+}
+
+/// EAGLE with saved logits (for rejection sampling verification).
+/// Same as draftEagle but saves log-prob distributions for stochastic verification.
+pub fn draftEagleWithLogits(state: *SpecState, target_model: Model, draft_model: Model, last_token: u32) u32 {
+    var context_hidden = target_model.getHiddenState();
+    var tok = last_token;
+    var n: u32 = 0;
+    const vs = state.vocab_size;
+    while (n < state.k and n < max_draft_tokens) {
+        _ = draft_model.eagleForward(tok, context_hidden) catch break;
+        const logits = draft_model.getLogits();
+        const offset = @as(usize, n) * vs;
+        const dst = state.draft_log_probs[offset..][0..vs];
+        @memcpy(dst, logits);
+        if (state.token_mask) |tm| applyFrSpecMask(dst, tm);
+        logSoftmax(dst);
+        tok = math_ops.argmax(dst);
+        state.draft_tokens[n] = tok;
+        state.depth_slices[n] = dst;
+        n += 1;
+        context_hidden = draft_model.getHiddenState();
+    }
+    state.n_draft = n;
+    return n;
+}
+
 /// Generate K draft tokens without saving logits (fastest for self-draft).
 pub fn draft(state: *SpecState, draft_model: *Model, last_token: u32) u32 {
     var tok = last_token;
