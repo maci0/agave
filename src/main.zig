@@ -411,7 +411,20 @@ const cli_specs = [_]cli_mod.ArgSpec{
     .{ .long = "benchmark", .help = "Run decode benchmark: prefill + decode, print stats (supports --json)." },
 };
 
-const SpecMode = enum { none, standard, ddtree, self_spec, ngram, suffix, mtp, eagle, mlp, lookahead, pflash };
+const SpecMode = enum {
+    none,
+    standard,
+    ddtree,
+    self_spec,
+    ngram,
+    suffix,
+    mtp,
+    medusa, // Alias for mtp: Medusa heads are MTP heads with simple MLP architecture
+    eagle,
+    mlp,
+    lookahead,
+    pflash,
+};
 
 const CliArgs = struct {
     model_path: []const u8,
@@ -1041,6 +1054,7 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
                 if (std.mem.eql(u8, s, "ngram")) break :blk SpecMode.ngram;
                 if (std.mem.eql(u8, s, "suffix")) break :blk SpecMode.suffix;
                 if (std.mem.eql(u8, s, "mtp")) break :blk SpecMode.mtp;
+                if (std.mem.eql(u8, s, "medusa")) break :blk SpecMode.medusa;
                 if (std.mem.eql(u8, s, "eagle")) break :blk SpecMode.eagle;
                 if (std.mem.eql(u8, s, "mlp")) break :blk SpecMode.mlp;
                 if (std.mem.eql(u8, s, "lookahead")) break :blk SpecMode.lookahead;
@@ -3021,7 +3035,9 @@ fn generateSpeculative(
     const self_spec = (effective_spec_mode == .self_spec);
     const use_ngram = (effective_spec_mode == .ngram);
     const use_suffix = (effective_spec_mode == .suffix);
-    const use_mtp = (effective_spec_mode == .mtp);
+    // Medusa is MTP with a different underlying head architecture but same inference path.
+    // Both predict K tokens from mtpForward(last_token, depth) for depth=0..K-1.
+    const use_mtp = (effective_spec_mode == .mtp or effective_spec_mode == .medusa);
     const use_eagle = (effective_spec_mode == .eagle);
     const use_mlp = (effective_spec_mode == .mlp);
     const use_lookahead = (effective_spec_mode == .lookahead);

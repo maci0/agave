@@ -26,7 +26,8 @@ agave model.gguf --spec-mode self --draft-layers 9 "prompt"      # Self-speculat
 agave model.gguf --spec-mode ngram "prompt"                      # N-gram (history-based, no draft model)
 agave model.gguf --spec-mode suffix "prompt"                     # Suffix decoding (cross-request exact match, dynamic k)
 agave model.gguf --spec-mode lookahead "prompt"                  # Lookahead / Jacobi parallel draft (novel tokens)
-agave target.gguf --draft-model eagle.gguf --spec-mode eagle "prompt"  # EAGLE (hidden-state conditioned draft)
+agave target.gguf --draft-model eagle.gguf --spec-mode eagle "prompt"  # EAGLE (hidden-state conditioned, chains draft hidden)
+agave target.gguf --draft-model mlp.gguf --spec-mode mlp "prompt"    # MLP Speculator (frozen target hidden, no chain)
 agave target.gguf --draft-model draft.gguf --spec-token-map freq.txt --spec-mode ddtree "prompt"  # FR-Spec vocab truncation
 agave model-mtp.gguf --spec-mode mtp "prompt"                    # Multi-token prediction heads
 agave model.gguf --ctx-size auto "prompt"                        # Auto-fit context to available memory
