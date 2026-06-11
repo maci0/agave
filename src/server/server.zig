@@ -2378,7 +2378,19 @@ fn generateN(formatted: []const u8, reset: bool, max_tokens: usize, sampling: Sa
         };
     }
     defer if (injected_ids) |ids| g_server.allocator.free(ids);
-    const token_ids: []const u32 = if (injected_ids) |ids| ids else raw_token_ids;
+    var token_ids: []const u32 = if (injected_ids) |ids| ids else raw_token_ids;
+    // Apply truncation_side: if prompt exceeds ctx_size, trim left or right.
+    if (g_server.ctx_size > 0 and token_ids.len > @as(usize, g_server.ctx_size)) {
+        const limit = @as(usize, g_server.ctx_size);
+        token_ids = switch (sampling.truncation_side) {
+            .right => token_ids[0..limit], // keep prefix
+            .left => token_ids[token_ids.len - limit ..], // keep suffix (recency)
+        };
+        std.log.warn("req={d} prompt truncated {d}->{d} tokens ({s} side)", .{
+            log_request_id,                     token_ids.len + (if (sampling.truncation_side == .right) 0 else g_server.ctx_size), limit,
+            @tagName(sampling.truncation_side),
+        });
+    }
     const prompt_token_count: u32 = @intCast(token_ids.len);
 
     // Scheduler path: enqueue and block until complete

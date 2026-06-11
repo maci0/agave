@@ -82,6 +82,9 @@ pub const SamplingParams = struct {
     user: ?[]const u8 = null,
     n: u32 = 1,
     json_mode: bool = false,
+    /// Which side to truncate when prompt exceeds context: "right" (default) drops tail,
+    /// "left" drops the beginning of the prompt (preserves recency over earlier context).
+    truncation_side: enum { right, left } = .right,
     grammar_string: ?[]const u8 = null,
     json_schema: ?[]const u8 = null,
     stop: [max_stop_sequences]?[]const u8 = .{null} ** max_stop_sequences,
@@ -419,6 +422,11 @@ pub fn parseSampling(body: []const u8) SamplingParams {
         }
     }
 
+    // Parse truncation_side: "left" drops beginning of prompt; "right" (default) drops tail.
+    if (extractField(body, "truncation_side")) |ts| {
+        if (std.mem.eql(u8, ts, "left")) result.truncation_side = .left;
+    }
+
     return result;
 }
 
@@ -522,7 +530,8 @@ pub fn extractMessages(json: []const u8, allocator: Allocator) ?ExtractedMessage
             extractTextFromContentArray(obj_slice) orelse continue;
         const owned_content = jsonUnescapeOwned(allocator, content) catch continue;
 
-        if (std.mem.eql(u8, role_str, "system")) {
+        // OpenAI o1/o3 SDK sends "developer" role instead of "system" — normalize.
+        if (std.mem.eql(u8, role_str, "system") or std.mem.eql(u8, role_str, "developer")) {
             if (system_msg) |prev_sys| allocator.free(@constCast(prev_sys));
             system_msg = owned_content;
         } else if (std.mem.eql(u8, role_str, "user")) {
