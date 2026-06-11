@@ -200,6 +200,33 @@ pub fn draftEagleWithLogits(state: *SpecState, target_model: Model, draft_model:
     return n;
 }
 
+const ngram_mod = @import("ngram.zig");
+
+/// Lookahead decoding (Fu et al. 2024 / Jacobi parallel decoding).
+/// Advances all branches in the lookahead window by running target.forward() once
+/// per branch slot. Then searches for any n-gram match with the current context.
+/// Returns number of draft tokens proposed (0 = no match, fallback to single decode).
+pub fn draftLookahead(state: *SpecState, target_model: *Model, last_token: u32, la_state: *ngram_mod.LookaheadState, context: []const u32) u32 {
+    // Advance each branch: run target.forward(branch_last_token) to extend
+    var next_tokens: [ngram_mod.LookaheadState.max_branches]u32 = undefined;
+    const n_branches = la_state.n_branches;
+    for (0..n_branches) |b| {
+        const branch_last = if (la_state.branch_len[b] > 0)
+            la_state.branches[b][la_state.branch_len[b] - 1]
+        else
+            last_token;
+        const predicted = target_model.forward(branch_last) catch last_token;
+        next_tokens[b] = predicted;
+    }
+    la_state.advance(next_tokens[0..n_branches]);
+
+    // Search for n-gram match between any branch and current context tail
+    const match = la_state.findMatch(context) orelse return 0;
+    const n = la_state.proposeContinuation(match.branch, match.match_len, state.k, &state.draft_tokens);
+    state.n_draft = @intCast(n);
+    return @intCast(n);
+}
+
 /// Generate K draft tokens without saving logits (fastest for self-draft).
 pub fn draft(state: *SpecState, draft_model: *Model, last_token: u32) u32 {
     var tok = last_token;

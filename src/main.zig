@@ -411,7 +411,7 @@ const cli_specs = [_]cli_mod.ArgSpec{
     .{ .long = "benchmark", .help = "Run decode benchmark: prefill + decode, print stats (supports --json)." },
 };
 
-const SpecMode = enum { none, standard, ddtree, self_spec, ngram, suffix, mtp, eagle, pflash };
+const SpecMode = enum { none, standard, ddtree, self_spec, ngram, suffix, mtp, eagle, lookahead, pflash };
 
 const CliArgs = struct {
     model_path: []const u8,
@@ -1042,6 +1042,7 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
                 if (std.mem.eql(u8, s, "suffix")) break :blk SpecMode.suffix;
                 if (std.mem.eql(u8, s, "mtp")) break :blk SpecMode.mtp;
                 if (std.mem.eql(u8, s, "eagle")) break :blk SpecMode.eagle;
+                if (std.mem.eql(u8, s, "lookahead")) break :blk SpecMode.lookahead;
                 if (std.mem.eql(u8, s, "pflash")) break :blk SpecMode.pflash;
                 eprint("Error: unknown --spec-mode '{s}' (expected: standard, ddtree, self, ngram, suffix, mtp, eagle, pflash)\n", .{s});
                 std.process.exit(2);
@@ -3021,6 +3022,9 @@ fn generateSpeculative(
     const use_suffix = (effective_spec_mode == .suffix);
     const use_mtp = (effective_spec_mode == .mtp);
     const use_eagle = (effective_spec_mode == .eagle);
+    const use_lookahead = (effective_spec_mode == .lookahead);
+    var la_state = ngram_mod.LookaheadState{};
+    if (use_lookahead) la_state.seed(token_ids);
     var ngram_state = ngram_mod.NgramState{};
     if (use_ngram) {
         // Seed n-gram history with prefill tokens
@@ -3071,7 +3075,7 @@ fn generateSpeculative(
                 last = math_ops.sampleToken(cl, cli.temperature, cli.top_k, cli.top_p, prng.random());
             }
             if (isEogToken(last, eog)) break;
-            if (use_ngram) ngram_state.push(last);
+            if (use_ngram or use_lookahead) ngram_state.push(last);
             if (token_count < gen_ids_buf.len) {
                 gen_ids_buf[token_count] = last;
                 token_count += 1;
@@ -3103,6 +3107,11 @@ fn generateSpeculative(
             }
             spec_state.n_draft = @intCast(n);
             break :blk @as(u32, @intCast(n));
+        } else if (use_lookahead) blk: {
+            // Lookahead: advance branches then find n-gram match with current context
+            const tail_start = if (ngram_state.len >= 8) ngram_state.len - 8 else 0;
+            const n = spec_decode.draftLookahead(&spec_state, target, last, &la_state, ngram_state.history[tail_start..ngram_state.len]);
+            break :blk n;
         } else if (use_eagle) blk: {
             // EAGLE: condition draft on target's hidden state (set by last target forward).
             // For greedy decode: draftEagle; for sampling: draftEagleWithLogits.
@@ -3117,8 +3126,8 @@ fn generateSpeculative(
             spec_decode.draftWithLogits(&spec_state, draft_model, last);
         if (self_spec) target.setLayerSkip(0, 0);
         if (n_drafted == 0) {
-            // N-gram / Suffix: no match — fall back to single-token decode
-            if (use_ngram or use_suffix) {
+            // N-gram / Suffix / Lookahead: no match — fall back to single-token decode
+            if (use_ngram or use_suffix or use_lookahead) {
                 last = target.forward(last) catch break;
                 if (use_sampling) {
                     const cl2 = target.getLogits();
@@ -3127,7 +3136,7 @@ fn generateSpeculative(
                     last = math_ops.sampleToken(cl2, cli.temperature, cli.top_k, cli.top_p, prng.random());
                 }
                 if (isEogToken(last, eog)) break;
-                if (use_ngram) ngram_state.push(last);
+                if (use_ngram or use_lookahead) ngram_state.push(last);
                 if (use_suffix) if (suffix_state_opt) |*ss| ss.push(last);
                 if (token_count < gen_ids_buf.len) {
                     gen_ids_buf[token_count] = last;
