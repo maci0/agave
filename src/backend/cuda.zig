@@ -171,6 +171,7 @@ pub const CudaBackend = struct {
     fn_mul: CUfunction = null,
     fn_rms_norm: CUfunction = null,
     fn_add_rms_norm: CUfunction = null,
+    fn_rms_norm_add: CUfunction = null,
     fn_softmax: CUfunction = null,
     fn_l2_norm: CUfunction = null,
     fn_rope: CUfunction = null,
@@ -455,6 +456,7 @@ pub const CudaBackend = struct {
         self.fn_mul = try self.getFunction("mul_kernel");
         self.fn_rms_norm = try self.getFunction("rms_norm_kernel");
         self.fn_add_rms_norm = try self.getFunction("add_rms_norm_kernel");
+        self.fn_rms_norm_add = try self.getFunction("rms_norm_add_kernel");
         self.fn_softmax = try self.getFunction("softmax_kernel");
         self.fn_l2_norm = try self.getFunction("l2_norm_kernel");
         self.fn_rope = try self.getFunction("rope_kernel");
@@ -1432,13 +1434,19 @@ pub const CudaBackend = struct {
     }
 
     /// Fused rmsNorm + accumulate: b[i] += rmsNorm(a, weight, eps)[i].
-    /// TODO: add CUDA PTX kernel. CPU fallback for correctness in the interim.
     pub fn rmsNormAdd(self: *CudaBackend, a: [*]const f32, weight: [*]const f32, b: [*]f32, n: usize, eps: f32) void {
-        self.sync();
-        var ss: f32 = 0;
-        for (0..n) |i| ss += a[i] * a[i];
-        const inv = 1.0 / @sqrt(ss / @as(f32, @floatFromInt(n)) + eps);
-        for (0..n) |i| b[i] += a[i] * weight[i] * inv;
+        const sz = n * @sizeOf(f32);
+        var d_a = self.getInputBuf(a, sz);
+        if (self.act_cache.getPtr(@intFromPtr(weight))) |act| act.state = .stale;
+        var d_w = self.getInputBuf(weight, sz);
+        var d_b = self.getInPlaceBuf(b, sz);
+        var n_u32: u32 = @intCast(n);
+        var eps_f32: f32 = eps;
+        var params = [_]?*anyopaque{
+            @ptrCast(&d_a), @ptrCast(&d_w), @ptrCast(&d_b),
+            @ptrCast(&n_u32), @ptrCast(&eps_f32),
+        };
+        self.launch(self.fn_rms_norm_add, 1, block_size, reduction_smem, &params);
     }
 
     /// Transposed GEMV: y[out_dim] = W^T @ x[in_dim] for Q8_0 3D weights.

@@ -24,6 +24,7 @@ comptime {
     // Normalization
     _ = @import("rms_norm.zig");
     _ = @import("add_rms_norm.zig");
+    _ = @import("rms_norm_add.zig");
     _ = @import("softmax.zig");
     _ = @import("l2_norm.zig");
 

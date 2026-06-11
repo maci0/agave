@@ -124,6 +124,7 @@ pub const RocmBackend = struct {
     fn_mul: HipFunction = null,
     fn_rms_norm: HipFunction = null,
     fn_add_rms_norm: HipFunction = null,
+    fn_rms_norm_add: HipFunction = null,
     fn_softmax: HipFunction = null,
     fn_l2_norm: HipFunction = null,
     fn_rope: HipFunction = null,
@@ -299,6 +300,7 @@ pub const RocmBackend = struct {
         self.fn_mul = self.getFunction(hipModuleGetFunction, "mul_kernel") catch null;
         self.fn_rms_norm = self.getFunction(hipModuleGetFunction, "rms_norm_kernel") catch null;
         self.fn_add_rms_norm = self.getFunction(hipModuleGetFunction, "add_rms_norm_kernel") catch null;
+        self.fn_rms_norm_add = self.getFunction(hipModuleGetFunction, "rms_norm_add_kernel") catch null;
         self.fn_softmax = self.getFunction(hipModuleGetFunction, "softmax_kernel") catch null;
         self.fn_l2_norm = self.getFunction(hipModuleGetFunction, "l2_norm_kernel") catch null;
         self.fn_rope = self.getFunction(hipModuleGetFunction, "rope_kernel") catch null;
@@ -759,13 +761,27 @@ pub const RocmBackend = struct {
     }
 
     /// Fused rmsNorm + accumulate: b[i] += rmsNorm(a, weight, eps)[i].
-    /// TODO: add ROCm HIP kernel. CPU fallback for correctness in the interim.
     pub fn rmsNormAdd(self: *RocmBackend, a: [*]const f32, weight: [*]const f32, b: [*]f32, n: usize, eps: f32) void {
-        self.sync();
-        var ss: f32 = 0;
-        for (0..n) |i| ss += a[i] * a[i];
-        const inv = 1.0 / @sqrt(ss / @as(f32, @floatFromInt(n)) + eps);
-        for (0..n) |i| b[i] += a[i] * weight[i] * inv;
+        if (self.fn_rms_norm_add == null) {
+            // Fallback: sync and run on CPU
+            self.sync();
+            var ss: f32 = 0;
+            for (0..n) |i| ss += a[i] * a[i];
+            const inv = 1.0 / @sqrt(ss / @as(f32, @floatFromInt(n)) + eps);
+            for (0..n) |i| b[i] += a[i] * weight[i] * inv;
+            return;
+        }
+        const sz = n * @sizeOf(f32);
+        var d_a = self.getInputBuf(a, sz);
+        var d_w = self.getOrUpload(@ptrCast(weight), sz);
+        var d_b = self.getInPlaceBuf(b, sz);
+        var n_u32: u32 = @intCast(n);
+        var eps_f32: f32 = eps;
+        var params = [_]?*anyopaque{
+            @ptrCast(&d_a), @ptrCast(&d_w), @ptrCast(&d_b),
+            @ptrCast(&n_u32), @ptrCast(&eps_f32),
+        };
+        self.launch(self.fn_rms_norm_add.?, 1, block_size, reduction_smem, &params);
     }
 
     /// Transposed GEMV for Q8_0 3D weights: y[out_dim] = W^T @ x[in_dim].
