@@ -46,6 +46,7 @@ const wgsl_rms_norm_multi = @embedFile("kernels/webgpu/rms_norm_multi.wgsl");
 const wgsl_deinterleave = @embedFile("kernels/webgpu/deinterleave.wgsl");
 const wgsl_split_qgate = @embedFile("kernels/webgpu/split_qgate.wgsl");
 const wgsl_add_rms_norm = @embedFile("kernels/webgpu/add_rms_norm.wgsl");
+const wgsl_rms_norm_add = @embedFile("kernels/webgpu/rms_norm_add.wgsl");
 const wgsl_add_scaled = @embedFile("kernels/webgpu/add_scaled.wgsl");
 const wgsl_gemv_t_q8_0 = @embedFile("kernels/webgpu/gemv_t_q8_0.wgsl");
 const wgsl_sdpa = @embedFile("kernels/webgpu/sdpa.wgsl");
@@ -353,6 +354,7 @@ pub const WebGpuBackend = struct {
     pipe_deinterleave: PipelineInfo = .{},
     pipe_split_qgate: PipelineInfo = .{},
     pipe_add_rms_norm: PipelineInfo = .{},
+    pipe_rms_norm_add: PipelineInfo = .{},
     pipe_add_scaled: PipelineInfo = .{},
     pipe_gemv_t_q8_0: PipelineInfo = .{},
     pipe_gemv_nvfp4_st: PipelineInfo = .{},
@@ -605,6 +607,7 @@ pub const WebGpuBackend = struct {
         self.pipe_deinterleave = try self.createPipeline(wgsl_deinterleave);
         self.pipe_split_qgate = try self.createPipeline(wgsl_split_qgate);
         self.pipe_add_rms_norm = try self.createPipeline(wgsl_add_rms_norm);
+        self.pipe_rms_norm_add = try self.createPipeline(wgsl_rms_norm_add);
         self.pipe_add_scaled = try self.createPipeline(wgsl_add_scaled);
         self.pipe_gemv_t_q8_0 = try self.createPipeline(wgsl_gemv_t_q8_0);
         self.pipe_gemv_nvfp4_st = try self.createPipeline(wgsl_gemv_nvfp4_st);
@@ -1192,13 +1195,23 @@ pub const WebGpuBackend = struct {
     }
 
     /// Fused rmsNorm + accumulate: b[i] += rmsNorm(a, weight, eps)[i].
-    /// TODO: add WGSL compute shader. CPU fallback for correctness in the interim.
     pub fn rmsNormAdd(self: *WebGpuBackend, a: [*]const f32, weight: [*]const f32, b: [*]f32, n: usize, eps: f32) void {
-        self.sync();
-        var ss: f32 = 0;
-        for (0..n) |i| ss += a[i] * a[i];
-        const inv = 1.0 / @sqrt(ss / @as(f32, @floatFromInt(n)) + eps);
-        for (0..n) |i| b[i] += a[i] * weight[i] * inv;
+        const size = n * @sizeOf(f32);
+        const a_buf = self.getOrUpload(@ptrCast(a), size);
+        const w_buf = self.getOrUpload(@ptrCast(weight), size);
+        const b_buf = self.getOrUpload(@ptrCast(b), size);
+        const Params = extern struct { n: u32, eps: f32, _pad: [8]u8 = .{0} ** 8 };
+        const p = Params{ .n = @intCast(n), .eps = eps };
+        const params_buf = self.createUniformBuf(Params, p);
+        self.deferDestroy(params_buf);
+        const entries = [_]WGPUBindGroupEntry{
+            storageEntry(0, a_buf, size),
+            storageEntry(1, w_buf, size),
+            storageEntry(2, b_buf, size),
+            uniformEntry(3, params_buf, Params),
+        };
+        self.dispatchCompute(self.pipe_rms_norm_add, &entries, 1);
+        self.cacheGpuResult(b, b_buf, size);
     }
 
     pub fn addScaled(self: *WebGpuBackend, src: [*]const f32, dst: [*]f32, scale: f32, n: usize) void {
