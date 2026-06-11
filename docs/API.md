@@ -448,6 +448,44 @@ Content-Type: application/octet-stream
 
 Both endpoints require authentication if `--api-key` is configured. Use case: compute system-prompt KV on one instance, distribute to a fleet for warm-start generation without redundant prefill.
 
+**Metadata** — lightweight KV state query for external orchestrators:
+```bash
+GET /v1/kv_cache/info
+→ 200 OK
+{
+  "seq_len": 42,
+  "cached_prefix_len": 42,
+  "prefix_hash": "a3f1b29c7d8e4f50",
+  "kv_used": 100,
+  "kv_total": 8192
+}
+```
+
+`prefix_hash` is the FNV-1a hash of the cached prefix token IDs — use it for fast remote matching to route requests to the most cache-warm instance without full KV export.
+
+---
+
+## Thinking Budget
+
+For reasoning models (DeepSeek R1, QwQ, Gemma 4 thinking variants), limit the number of thinking tokens:
+
+```bash
+# Anthropic API format
+curl http://localhost:49453/v1/chat/completions -d '{
+  "messages": [{"role": "user", "content": "Solve this step by step: ..."}],
+  "thinking": {"type": "enabled", "budget_tokens": 2000},
+  "max_tokens": 4000
+}'
+
+# Flat field format (also accepted)
+{
+  "thinking_budget_tokens": 2000,
+  "max_tokens": 4000
+}
+```
+
+When the model generates more than `budget_tokens` tokens inside `<think>...</think>`, it is nudged out of the thinking phase by applying a strong positive logit bias to the `</think>` token. This caps reasoning time without hard-stopping mid-thought.
+
 ---
 
 ## Streaming
