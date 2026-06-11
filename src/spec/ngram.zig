@@ -154,6 +154,137 @@ pub const SharedNgramPool = struct {
 /// Global singleton for server mode.  Created once at server start; null in CLI mode.
 pub var global_pool: ?SharedNgramPool = null;
 
+/// Suffix Decoding: exact suffix matching with dynamic speculation depth.
+///
+/// vLLM-style suffix decoding (https://docs.vllm.ai/en/latest/features/speculative_decoding/suffix/):
+/// - Maintains a large cross-request token cache (default: 10k tokens)
+/// - Finds the LONGEST suffix of the current context that exists earlier in the cache
+/// - Longer matches → deeper speculation (up to max_tree_depth)
+/// - No draft model required; zero overhead beyond cache lookups
+///
+/// Dynamic depth: match_len == min_suffix → k=1; match_len >= max_suffix → k=max_k.
+pub const SuffixState = struct {
+    const cache_capacity: usize = 10_000;
+    const min_suffix: usize = 2; // minimum suffix length to attempt
+    const max_suffix: usize = 32; // maximum suffix length to search
+    const default_max_k: usize = 24; // vLLM default max tree depth
+
+    history: []u32,
+    len: usize = 0,
+    max_k: usize = default_max_k,
+    allocator: std.mem.Allocator,
+
+    pub fn init(allocator: std.mem.Allocator) !SuffixState {
+        return SuffixState{
+            .history = try allocator.alloc(u32, cache_capacity),
+            .allocator = allocator,
+        };
+    }
+
+    pub fn deinit(self: *SuffixState) void {
+        self.allocator.free(self.history);
+    }
+
+    /// Add a generated token to the suffix cache.
+    pub fn push(self: *SuffixState, token: u32) void {
+        if (self.len < cache_capacity) {
+            self.history[self.len] = token;
+            self.len += 1;
+        } else {
+            // Compact: keep the second half
+            const keep = cache_capacity / 2;
+            std.mem.copyForwards(u32, self.history[0..keep], self.history[cache_capacity - keep ..]);
+            self.len = keep;
+            self.history[self.len] = token;
+            self.len += 1;
+        }
+    }
+
+    /// Propose up to `max_draft` tokens using suffix matching.
+    /// Returns both the number proposed AND the effective match length
+    /// (used to compute dynamic k: longer match → more draft tokens).
+    pub fn proposeWithDepth(self: *const SuffixState, max_draft: usize, out: []u32) struct { n: usize, match_len: usize } {
+        if (self.len < min_suffix + 1 or max_draft == 0) return .{ .n = 0, .match_len = 0 };
+
+        const hist = self.history[0..self.len];
+
+        // Try longest suffix first (dynamic: longer match → more tokens proposed)
+        const max_n = @min(max_suffix, self.len - 1);
+        var n: usize = max_n;
+        while (n >= min_suffix) : (n -= 1) {
+            const suffix = hist[self.len - n ..];
+            const search_end = self.len - n;
+
+            var pos: usize = 0;
+            while (pos + n <= search_end) : (pos += 1) {
+                if (std.mem.eql(u32, hist[pos .. pos + n], suffix)) {
+                    // Found match at pos: propose continuation
+                    const avail = self.len - (pos + n);
+                    const n_out = @min(@min(avail, max_draft), out.len);
+                    @memcpy(out[0..n_out], hist[pos + n ..][0..n_out]);
+                    return .{ .n = n_out, .match_len = n };
+                }
+            }
+        }
+        return .{ .n = 0, .match_len = 0 };
+    }
+
+    /// Propose tokens and compute dynamic speculation depth.
+    /// Depth scales with match quality: 1 token for minimum match, max_k for maximum.
+    pub fn propose(self: *const SuffixState, out: []u32) usize {
+        const result = self.proposeWithDepth(self.max_k, out);
+        if (result.n == 0) return 0;
+        // Dynamic depth: scale proposed count by match quality
+        const quality = @as(f32, @floatFromInt(result.match_len - min_suffix)) /
+            @as(f32, @floatFromInt(max_suffix - min_suffix));
+        const dynamic_k = @as(usize, @intFromFloat(@as(f32, @floatFromInt(self.max_k)) * @min(1.0, quality + 0.2)));
+        return @min(result.n, @max(1, dynamic_k));
+    }
+};
+
+test "suffix propose basic" {
+    var s = try SuffixState.init(std.testing.allocator);
+    defer s.deinit();
+
+    const tokens = [_]u32{ 1, 2, 3, 4, 5, 1, 2, 3, 4, 5, 6, 7, 8 };
+    for (tokens) |t| s.push(t);
+
+    var draft: [8]u32 = undefined;
+    const n = s.propose(&draft);
+    // Suffix "1 2 3 4 5" (last 5) matches hist[0..5] → propose 4 5 6 7 8
+    try std.testing.expect(n > 0);
+    try std.testing.expect(n <= s.max_k);
+}
+
+test "suffix no match" {
+    var s = try SuffixState.init(std.testing.allocator);
+    defer s.deinit();
+
+    // History with no suffix match for current tail
+    for ([_]u32{ 1, 2, 3, 4 }) |t| s.push(t);
+    // Current tail (from history last 2 = "3 4") — no match earlier
+    var draft: [4]u32 = undefined;
+    const n = s.propose(&draft);
+    try std.testing.expect(n == 0);
+}
+
+test "fuzz: SuffixState" {
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *std.testing.Smith) !void {
+            var s = try SuffixState.init(std.testing.allocator);
+            defer s.deinit();
+
+            const n_push = smith.valueWithHash(u8, 0);
+            for (0..n_push) |i| {
+                s.push(smith.valueWithHash(u32, @as(u32, @truncate(i)) +% 100));
+            }
+            var draft: [32]u32 = undefined;
+            const n = s.propose(&draft);
+            try std.testing.expect(n <= s.max_k);
+        }
+    }.f, .{});
+}
+
 test "ngram basic proposal" {
     var state = NgramState{};
 

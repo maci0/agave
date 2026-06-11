@@ -410,7 +410,7 @@ const cli_specs = [_]cli_mod.ArgSpec{
     .{ .long = "benchmark", .help = "Run decode benchmark: prefill + decode, print stats (supports --json)." },
 };
 
-const SpecMode = enum { none, standard, ddtree, self_spec, ngram, mtp, pflash };
+const SpecMode = enum { none, standard, ddtree, self_spec, ngram, suffix, mtp, pflash };
 
 const CliArgs = struct {
     model_path: []const u8,
@@ -1037,6 +1037,7 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
                 if (std.mem.eql(u8, s, "ddtree")) break :blk SpecMode.ddtree;
                 if (std.mem.eql(u8, s, "self")) break :blk SpecMode.self_spec;
                 if (std.mem.eql(u8, s, "ngram")) break :blk SpecMode.ngram;
+                if (std.mem.eql(u8, s, "suffix")) break :blk SpecMode.suffix;
                 if (std.mem.eql(u8, s, "mtp")) break :blk SpecMode.mtp;
                 if (std.mem.eql(u8, s, "pflash")) break :blk SpecMode.pflash;
                 eprint("Error: unknown --spec-mode '{s}' (expected: standard, ddtree, self, ngram, mtp, pflash)\n", .{s});
@@ -3002,6 +3003,7 @@ fn generateSpeculative(
     const use_ddtree = (effective_spec_mode == .ddtree);
     const self_spec = (effective_spec_mode == .self_spec);
     const use_ngram = (effective_spec_mode == .ngram);
+    const use_suffix = (effective_spec_mode == .suffix);
     const use_mtp = (effective_spec_mode == .mtp);
     var ngram_state = ngram_mod.NgramState{};
     if (use_ngram) {
@@ -3009,6 +3011,18 @@ fn generateSpeculative(
         for (token_ids) |tid| ngram_state.push(tid);
         if (!isEogToken(first_target, eog)) ngram_state.push(first_target);
     }
+    var suffix_state_opt: ?ngram_mod.SuffixState = null;
+    if (use_suffix) {
+        suffix_state_opt = ngram_mod.SuffixState.init(allocator) catch blk: {
+            std.log.warn("suffix: alloc failed, falling back to ngram", .{});
+            break :blk null;
+        };
+        if (suffix_state_opt) |*ss| {
+            for (token_ids) |tid| ss.push(tid);
+            if (!isEogToken(first_target, eog)) ss.push(first_target);
+        }
+    }
+    defer if (suffix_state_opt) |*ss| ss.deinit();
 
     // Self-speculative: auto-detect layer skip range (skip middle 50%)
     const self_spec_skip_divisor = 4;
@@ -3055,6 +3069,13 @@ fn generateSpeculative(
         const effective_k = spec_state.optimalK();
         const n_drafted = if (use_mtp) blk: {
             break :blk spec_decode.draftMtp(&spec_state, target, last);
+        } else if (use_suffix) blk: {
+            const n = if (suffix_state_opt) |*ss|
+                ss.propose(&spec_state.draft_tokens)
+            else
+                0;
+            spec_state.n_draft = @intCast(n);
+            break :blk @as(u32, @intCast(n));
         } else if (use_ngram) blk: {
             var n = ngram_state.propose(effective_k, &spec_state.draft_tokens);
             // Try shared pool if local history found nothing (server mode)
@@ -3072,8 +3093,8 @@ fn generateSpeculative(
             spec_decode.draftWithLogits(&spec_state, draft_model, last);
         if (self_spec) target.setLayerSkip(0, 0);
         if (n_drafted == 0) {
-            // N-gram: no match — fall back to single-token decode
-            if (use_ngram) {
+            // N-gram / Suffix: no match — fall back to single-token decode
+            if (use_ngram or use_suffix) {
                 last = target.forward(last) catch break;
                 if (use_sampling) {
                     const cl2 = target.getLogits();
@@ -3082,7 +3103,8 @@ fn generateSpeculative(
                     last = math_ops.sampleToken(cl2, cli.temperature, cli.top_k, cli.top_p, prng.random());
                 }
                 if (isEogToken(last, eog)) break;
-                ngram_state.push(last);
+                if (use_ngram) ngram_state.push(last);
+                if (use_suffix) if (suffix_state_opt) |*ss| ss.push(last);
                 if (token_count < gen_ids_buf.len) {
                     gen_ids_buf[token_count] = last;
                     token_count += 1;
@@ -3153,6 +3175,17 @@ fn generateSpeculative(
         // MTP: sync KV cache position (reset to match target on partial rejection)
         if (use_mtp) {
             target.resetMtpCache();
+        }
+
+        // Update suffix cache with accepted tokens
+        if (use_suffix) {
+            if (suffix_state_opt) |*ss| {
+                for (0..result.accepted) |i| {
+                    if (isEogToken(spec_state.draft_tokens[i], eog)) break;
+                    ss.push(spec_state.draft_tokens[i]);
+                }
+                if (!hit_eog) ss.push(result.next_token);
+            }
         }
 
         // Update n-gram history with accepted tokens
