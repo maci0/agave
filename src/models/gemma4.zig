@@ -1997,22 +1997,22 @@ pub const Gemma4Model = struct {
             const moe_out = self.attn_out[0..e];
             self.be.add(self.dense_out.ptr, moe_out.ptr, self.dense_out.ptr, e);
 
-            // Apply post_ffw_norm to combined output (before residual add)
+            // Fuse post_ffw_norm + residual add.
             if (self.fmt.layerTensor(li, "post_ffw_norm.weight")) |post_norm| {
-                self.be.rmsNorm(self.dense_out.ptr, self.normAsF32(post_norm, e), self.dense_out.ptr, e, self.rms_eps);
+                self.be.rmsNormAdd(self.dense_out.ptr, self.normAsF32(post_norm, e), self.hidden.ptr, e, self.rms_eps);
+            } else {
+                self.be.add(self.hidden.ptr, self.dense_out.ptr, self.hidden.ptr, e);
             }
-
-            // Add to residual
-            self.be.add(self.hidden.ptr, self.dense_out.ptr, self.hidden.ptr, e);
             self.perf.end(.add, t_combine);
         } else {
             // ── Dense-only path (no MoE experts) ────────────────────
-            // Apply post_ffw_norm to dense output, then add to residual.
+            // Fuse post_ffw_norm + residual add into rmsNormAdd (saves 1 dispatch when norm exists).
             const t_dense = self.perf.start();
             if (self.fmt.layerTensor(li, "post_ffw_norm.weight")) |post_norm| {
-                self.be.rmsNorm(self.dense_out.ptr, self.normAsF32(post_norm, e), self.dense_out.ptr, e, self.rms_eps);
+                self.be.rmsNormAdd(self.dense_out.ptr, self.normAsF32(post_norm, e), self.hidden.ptr, e, self.rms_eps);
+            } else {
+                self.be.add(self.hidden.ptr, self.dense_out.ptr, self.hidden.ptr, e);
             }
-            self.be.add(self.hidden.ptr, self.dense_out.ptr, self.hidden.ptr, e);
             self.perf.end(.add, t_dense);
         }
 

@@ -1191,6 +1191,16 @@ pub const WebGpuBackend = struct {
         self.cacheGpuResult(out, out_buf, size);
     }
 
+    /// Fused rmsNorm + accumulate: b[i] += rmsNorm(a, weight, eps)[i].
+    /// TODO: add WGSL compute shader. CPU fallback for correctness in the interim.
+    pub fn rmsNormAdd(self: *WebGpuBackend, a: [*]const f32, weight: [*]const f32, b: [*]f32, n: usize, eps: f32) void {
+        self.sync();
+        var ss: f32 = 0;
+        for (0..n) |i| ss += a[i] * a[i];
+        const inv = 1.0 / @sqrt(ss / @as(f32, @floatFromInt(n)) + eps);
+        for (0..n) |i| b[i] += a[i] * weight[i] * inv;
+    }
+
     pub fn addScaled(self: *WebGpuBackend, src: [*]const f32, dst: [*]f32, scale: f32, n: usize) void {
         const size = n * @sizeOf(f32);
         const src_buf = self.getOrUpload(@ptrCast(src), size);

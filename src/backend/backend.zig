@@ -329,6 +329,10 @@ pub const NullBackend = struct {
         unreachable;
     }
 
+    pub fn rmsNormAdd(_: *NullBackend, _: [*]const f32, _: [*]const f32, _: [*]f32, _: usize, _: f32) void {
+        unreachable;
+    }
+
     pub fn mul(_: *NullBackend, _: [*]const f32, _: [*]const f32, _: [*]f32, _: usize) void {
         unreachable;
     }
@@ -617,6 +621,14 @@ pub const Backend = union(enum) {
     pub inline fn addRmsNorm(self: Backend, a: [*]f32, b: [*]const f32, weight: [*]const f32, output: [*]f32, n: usize, eps: f32) void {
         switch (self) {
             inline else => |be| be.addRmsNorm(a, b, weight, output, n, eps),
+        }
+    }
+
+    /// Fused rmsNorm + accumulate: b[i] += rmsNorm(a, weight, eps)[i].
+    /// Replaces rmsNorm(a, w, a) + add(b, a, b) — saves one dispatch per post-FFN boundary.
+    pub inline fn rmsNormAdd(self: Backend, a: [*]const f32, weight: [*]const f32, b: [*]f32, n: usize, eps: f32) void {
+        switch (self) {
+            inline else => |be| be.rmsNormAdd(a, weight, b, n, eps),
         }
     }
 
@@ -2092,6 +2104,7 @@ test "NullBackend — all method signatures are consistent with Backend" {
         _ = @TypeOf(NullBackend.allocKvSlice);
         _ = @TypeOf(NullBackend.freeKvSlice);
         _ = @TypeOf(NullBackend.addRmsNorm);
+        _ = @TypeOf(NullBackend.rmsNormAdd);
         _ = @TypeOf(NullBackend.addScaled);
         _ = @TypeOf(NullBackend.l2Norm);
         _ = @TypeOf(NullBackend.sigmoidMul);
@@ -2519,6 +2532,7 @@ test "fuzz: all backend functions" {
                 _ = &NullBackend.gemvT;
                 _ = &NullBackend.addScaled;
                 _ = &NullBackend.addRmsNorm;
+                _ = &NullBackend.rmsNormAdd;
                 _ = &NullBackend.mul;
                 _ = &NullBackend.softmax;
                 _ = &NullBackend.rope;
@@ -2567,6 +2581,7 @@ test "fuzz: all backend functions" {
                 _ = &Backend.gemvT;
                 _ = &Backend.addScaled;
                 _ = &Backend.addRmsNorm;
+                _ = &Backend.rmsNormAdd;
                 _ = &Backend.mul;
                 _ = &Backend.softmax;
                 _ = &Backend.rope;

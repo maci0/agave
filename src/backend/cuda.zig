@@ -1431,6 +1431,16 @@ pub const CudaBackend = struct {
         self.launch(self.fn_add_rms_norm, 1, block_size, reduction_smem, &params);
     }
 
+    /// Fused rmsNorm + accumulate: b[i] += rmsNorm(a, weight, eps)[i].
+    /// TODO: add CUDA PTX kernel. CPU fallback for correctness in the interim.
+    pub fn rmsNormAdd(self: *CudaBackend, a: [*]const f32, weight: [*]const f32, b: [*]f32, n: usize, eps: f32) void {
+        self.sync();
+        var ss: f32 = 0;
+        for (0..n) |i| ss += a[i] * a[i];
+        const inv = 1.0 / @sqrt(ss / @as(f32, @floatFromInt(n)) + eps);
+        for (0..n) |i| b[i] += a[i] * weight[i] * inv;
+    }
+
     /// Transposed GEMV: y[out_dim] = W^T @ x[in_dim] for Q8_0 3D weights.
     pub fn gemvT(self: *CudaBackend, x: [*]const f32, w: [*]const u8, y: [*]f32, out_dim: usize, in_dim: usize) void {
         const quant = @import("../ops/quant.zig");

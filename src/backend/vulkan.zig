@@ -1743,6 +1743,16 @@ pub const VulkanBackend = struct {
         self.dispatch(self.pipe_add_scaled, &bufs, &sizes, @ptrCast(&params), @sizeOf(Params), @intCast((n + workgroup_size - 1) / workgroup_size));
     }
 
+    /// Fused rmsNorm + accumulate: b[i] += rmsNorm(a, weight, eps)[i].
+    /// TODO: add rms_norm_add.comp Vulkan shader. CPU fallback for correctness in the interim.
+    pub fn rmsNormAdd(self: *VulkanBackend, a: [*]const f32, weight: [*]const f32, b: [*]f32, n: usize, eps: f32) void {
+        self.sync();
+        var ss: f32 = 0;
+        for (0..n) |i| ss += a[i] * a[i];
+        const inv = 1.0 / @sqrt(ss / @as(f32, @floatFromInt(n)) + eps);
+        for (0..n) |i| b[i] += a[i] * weight[i] * inv;
+    }
+
     /// Fused add + rmsNorm.
     pub fn addRmsNorm(self: *VulkanBackend, a: [*]f32, b: [*]const f32, weight: [*]const f32, output: [*]f32, n: usize, eps: f32) void {
         const sz = n * @sizeOf(f32);

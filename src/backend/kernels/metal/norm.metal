@@ -113,6 +113,33 @@ kernel void add_rms_norm_fused_f32(
     }
 }
 
+// Fused rmsNorm + accumulate: b[i] += norm(a)[i] * weight[i].
+// Saves one dispatch vs separate rmsNorm(a) + add(b, a, b) when a is post-FFN normed output.
+// a is read-only; b is the residual stream, updated in-place.
+kernel void rms_norm_add_f32(
+    device const float* a       [[buffer(0)]],
+    device const float* weight  [[buffer(1)]],
+    device float* b             [[buffer(2)]],
+    constant uint& n            [[buffer(3)]],
+    constant float& eps         [[buffer(4)]],
+    uint tid [[thread_index_in_threadgroup]],
+    uint tg_size [[threads_per_threadgroup]])
+{
+    threadgroup float shared[8];
+
+    // Pass 1: sum of squares of a
+    float sum = 0.0f;
+    for (uint i = tid; i < n; i += tg_size) sum += a[i] * a[i];
+    sum = threadgroup_reduce_sum(sum, shared, tid, tg_size);
+    if (tid == 0) shared[0] = sum;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    // Pass 2: accumulate normalized a into b
+    float inv_rms = rsqrt(shared[0] / float(n) + eps);
+    for (uint i = tid; i < n; i += tg_size)
+        b[i] += a[i] * weight[i] * inv_rms;
+}
+
 // ── Softmax (three-pass with threadgroup reduction) ───────────
 
 // Pass 1: Find max (reduction) — uses simd_max for fast SIMD-group reduction.

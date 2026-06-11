@@ -758,6 +758,16 @@ pub const RocmBackend = struct {
         self.launch(self.fn_add_rms_norm.?, 1, block_size, reduction_smem, &params);
     }
 
+    /// Fused rmsNorm + accumulate: b[i] += rmsNorm(a, weight, eps)[i].
+    /// TODO: add ROCm HIP kernel. CPU fallback for correctness in the interim.
+    pub fn rmsNormAdd(self: *RocmBackend, a: [*]const f32, weight: [*]const f32, b: [*]f32, n: usize, eps: f32) void {
+        self.sync();
+        var ss: f32 = 0;
+        for (0..n) |i| ss += a[i] * a[i];
+        const inv = 1.0 / @sqrt(ss / @as(f32, @floatFromInt(n)) + eps);
+        for (0..n) |i| b[i] += a[i] * weight[i] * inv;
+    }
+
     /// Transposed GEMV for Q8_0 3D weights: y[out_dim] = W^T @ x[in_dim].
     /// W is stored as [in_dim rows, out_dim cols] in Q8_0 blocks.
     /// One workgroup per output element, threads stride over input rows.

@@ -311,6 +311,11 @@ pub const CpuBackend = struct {
         norm_kernel.addRmsNorm(a, b, weight, output, n, eps);
     }
 
+    /// Fused rmsNorm + accumulate: b[i] += rmsNorm(a, weight, eps)[i].
+    pub fn rmsNormAdd(_: *CpuBackend, a: [*]const f32, weight: [*]const f32, b: [*]f32, n: usize, eps: f32) void {
+        norm_kernel.rmsNormAdd(a, weight, b, n, eps);
+    }
+
     /// Applies SiLU (Swish) activation: x * sigmoid(x).
     pub fn silu(_: *CpuBackend, input: [*]const f32, output: [*]f32, n: usize) void {
         activation_kernel.silu(input, output, n);

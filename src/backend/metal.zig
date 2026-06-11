@@ -173,6 +173,7 @@ pub const MetalBackend = struct {
     pipe_gelu_mul: objc.id,
     pipe_rms_norm_fused: objc.id,
     pipe_add_rms_norm_fused: objc.id,
+    pipe_rms_norm_add: objc.id,
     pipe_kv_append: objc.id,
     pipe_sdpa: objc.id,
     pipe_sdpa_tree: objc.id,
@@ -348,6 +349,7 @@ pub const MetalBackend = struct {
             .pipe_gelu_mul = undefined,
             .pipe_rms_norm_fused = undefined,
             .pipe_add_rms_norm_fused = undefined,
+            .pipe_rms_norm_add = undefined,
             .pipe_kv_append = undefined,
             .pipe_sdpa = undefined,
             .pipe_sdpa_tree = undefined,
@@ -441,6 +443,7 @@ pub const MetalBackend = struct {
         self.pipe_gelu_mul = try self.makePipeline("gelu_mul_f32");
         self.pipe_rms_norm_fused = try self.makePipeline("rms_norm_fused_f32");
         self.pipe_add_rms_norm_fused = try self.makePipeline("add_rms_norm_fused_f32");
+        self.pipe_rms_norm_add = try self.makePipeline("rms_norm_add_f32");
         self.pipe_kv_append = try self.makePipeline("kv_append");
         self.pipe_sdpa = try self.makePipeline("sdpa_fa2");
         self.pipe_sdpa_tree = try self.makePipeline("sdpa_tree_fa2");
@@ -980,6 +983,26 @@ pub const MetalBackend = struct {
         setBuf(enc, out_ref, 3);
         setBytes(enc, @ptrCast(&n_val), @sizeOf(u32), 4);
         setBytes(enc, @ptrCast(&eps_val), @sizeOf(f32), 5);
+        self.endEncodeThreadgroups(enc, 1, tg);
+    }
+
+    /// Fused rmsNorm + accumulate: b[i] += norm(a, weight, eps)[i].
+    /// Replaces rmsNorm(a, weight, a) + add(b, a, b) — saves one dispatch per post-FFN norm boundary.
+    pub fn rmsNormAdd(self: *MetalBackend, a: [*]const f32, weight: [*]const f32, b: [*]f32, n: usize, eps: f32) void {
+        const a_ref = self.getBufRef(@ptrCast(a), n * @sizeOf(f32));
+        const w_ref = self.getBufRef(@ptrCast(weight), n * @sizeOf(f32));
+        const b_ref = self.getBufRef(@ptrCast(b), n * @sizeOf(f32));
+
+        const n_val: u32 = @intCast(n);
+        const eps_val: f32 = eps;
+
+        const tg = @min(threadgroup_size, n);
+        const enc = self.getEncoder(self.pipe_rms_norm_add);
+        setBuf(enc, a_ref, 0);
+        setBuf(enc, w_ref, 1);
+        setBuf(enc, b_ref, 2);
+        setBytes(enc, @ptrCast(&n_val), @sizeOf(u32), 3);
+        setBytes(enc, @ptrCast(&eps_val), @sizeOf(f32), 4);
         self.endEncodeThreadgroups(enc, 1, tg);
     }
 

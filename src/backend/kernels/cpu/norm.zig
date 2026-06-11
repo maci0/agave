@@ -96,6 +96,44 @@ pub fn addRmsNorm(a: [*]f32, b: [*]const f32, weight: [*]const f32, output: [*]f
     while (i < n) : (i += 1) output[i] = a[i] * inv * weight[i];
 }
 
+/// Fused rmsNorm + accumulate: b[i] += rmsNorm(a, weight, eps)[i].
+/// Single pass saves one dispatch vs rmsNorm(a, w, tmp) + add(b, tmp, b).
+pub fn rmsNormAdd(a: [*]const f32, weight: [*]const f32, b: [*]f32, n: usize, eps: f32) void {
+    // Pass 1: sum of squares of a (4x unrolled).
+    var acc0: V8 = v8zero;
+    var acc1: V8 = v8zero;
+    var acc2: V8 = v8zero;
+    var acc3: V8 = v8zero;
+    var i: usize = 0;
+    while (i + 32 <= n) : (i += 32) {
+        const v0: V8 = a[i..][0..8].*;
+        const v1: V8 = a[i + 8 ..][0..8].*;
+        const v2: V8 = a[i + 16 ..][0..8].*;
+        const v3: V8 = a[i + 24 ..][0..8].*;
+        acc0 = @mulAdd(V8, v0, v0, acc0);
+        acc1 = @mulAdd(V8, v1, v1, acc1);
+        acc2 = @mulAdd(V8, v2, v2, acc2);
+        acc3 = @mulAdd(V8, v3, v3, acc3);
+    }
+    while (i + 8 <= n) : (i += 8) {
+        const v: V8 = a[i..][0..8].*;
+        acc0 = @mulAdd(V8, v, v, acc0);
+    }
+    var ss = @reduce(.Add, acc0 + acc1 + acc2 + acc3);
+    while (i < n) : (i += 1) ss = @mulAdd(f32, a[i], a[i], ss);
+    const inv: f32 = 1.0 / @sqrt(ss / @as(f32, @floatFromInt(n)) + eps);
+    const inv_v: V8 = @splat(inv);
+
+    // Pass 2: accumulate normalized a into b.
+    i = 0;
+    while (i + 8 <= n) : (i += 8) {
+        const va: V8 = a[i..][0..8].*;
+        const vw: V8 = weight[i..][0..8].*;
+        b[i..][0..8].* = @as(V8, b[i..][0..8].*) + va * vw * inv_v;
+    }
+    while (i < n) : (i += 1) b[i] += a[i] * inv * weight[i];
+}
+
 /// L2 normalizes a vector in-place: x[i] /= sqrt(sum(x^2) + eps).
 pub fn l2Norm(x: [*]f32, n: usize, eps: f32) void {
     // 4x unrolled accumulation to hide FMA latency.
@@ -174,6 +212,19 @@ test "addRmsNorm fused" {
     // Verify a was modified in-place (a = a + b)
     for (0..8) |i| {
         try std.testing.expectApproxEqAbs(@as(f32, @floatFromInt(i + 2)), a[i], 1e-6);
+    }
+}
+
+test "rmsNormAdd accumulate" {
+    const a = [_]f32{ 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0 };
+    const weight = [_]f32{ 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0 };
+    var b = [_]f32{ 10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0 };
+    rmsNormAdd(&a, &weight, &b, 8, 1e-6);
+    // RMS of a = sqrt((1+4+9+16+25+36+49+64)/8) = sqrt(25.5)
+    const rms = @sqrt(@as(f32, 204.0 / 8.0));
+    for (0..8) |i| {
+        const normed = @as(f32, @floatFromInt(i + 1)) / rms;
+        try std.testing.expectApproxEqAbs(10.0 + normed, b[i], 1e-4);
     }
 }
 
