@@ -395,7 +395,7 @@ const cli_specs = [_]cli_mod.ArgSpec{
     .{ .long = "draft-model", .kind = .option, .help = "Path to draft model for speculative decoding." },
     .{ .long = "spec-tokens", .short = 'K', .kind = .option, .help = "Draft tokens per speculation round [default: 5]." },
     .{ .long = "tree-budget", .kind = .option, .help = "DDTree node budget [default: 64]." },
-    .{ .long = "spec-mode", .kind = .option, .help = "Speculative mode: standard, ddtree, self, ngram, suffix, mtp, eagle, pflash [default: ddtree with --draft-model]." },
+    .{ .long = "spec-mode", .kind = .option, .help = "Speculative mode: standard, ddtree, self, ngram, suffix, lookahead, mtp, medusa, eagle, mlp, pflash [default: ddtree with --draft-model]." },
     .{ .long = "spec-token-map", .kind = .option, .help = "FR-Spec token frequency map file (one token ID per line). Restricts draft to high-frequency tokens for improved acceptance rate." },
     .{ .long = "draft-layers", .kind = .option, .help = "Layers for self-speculative draft [default: auto]." },
     .{ .long = "pflash-alpha", .kind = .option, .help = "PFlash block selection threshold (0.0-2.0) [default: 0.85]." },
@@ -1571,7 +1571,7 @@ fn printUsage() void {
         \\
         \\SPECULATIVE DECODING:
         \\      --draft-model <PATH>  Draft model GGUF for speculative decoding
-        \\      --spec-mode <MODE>    Speculative mode: standard, ddtree, self, ngram, mtp, pflash [default: ddtree with --draft-model]
+        \\      --spec-mode <MODE>    Speculative mode: standard, ddtree, self, ngram, suffix, lookahead, mtp, medusa, eagle, mlp, pflash
         \\  -K, --spec-tokens <N>     Draft tokens per speculation round [default: 5]
         \\      --tree-budget <N>     DDTree node budget [default: 64]
         \\      --draft-layers <N>    Layers for self-speculative draft [default: auto]
