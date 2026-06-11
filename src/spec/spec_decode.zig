@@ -42,6 +42,11 @@ pub const SpecState = struct {
     k_accept_counts: [max_draft_tokens]u32 = .{0} ** max_draft_tokens,
     k_total_counts: [max_draft_tokens]u32 = .{0} ** max_draft_tokens,
     adaptive_k_enabled: bool = false,
+    /// Adaptive V2: current per-request k (starts at configured k, adjusts within request).
+    current_k: u32 = 5,
+    /// Sliding window (last 8 rounds) for per-request acceptance rate tracking.
+    recent_accepted: [8]u32 = .{0} ** 8,
+    recent_drafted: [8]u32 = .{0} ** 8,
 
     /// FR-Spec token mask: if non-null, a boolean array of vocab_size where mask[id]=true
     /// means the token is in the high-frequency set. Draft logits for mask[id]=false tokens
@@ -57,6 +62,7 @@ pub const SpecState = struct {
         const sampling_buf = try allocator.alloc(f32, vocab_size);
         return .{
             .k = k,
+            .current_k = k, // adaptive V2: starts at configured k
             .vocab_size = vocab_size,
             .draft_log_probs = draft_log_probs,
             .sampling_buf = sampling_buf,
@@ -89,14 +95,45 @@ pub const SpecState = struct {
             self.k_total_counts[ki] += 1;
             self.k_accept_counts[ki] += accepted;
         }
+
+        // Adaptive V2: per-request sliding window (last 8 rounds).
+        // Shift window left, append new sample. When recent acceptance drops below
+        // 30% of k, reduce current_k by 1 (floor at 1). When acceptance is > 80%,
+        // increase current_k by 1 (ceiling at configured k).
+        if (self.adaptive_k_enabled) {
+            std.mem.copyForwards(u32, self.recent_accepted[0..7], self.recent_accepted[1..8]);
+            std.mem.copyForwards(u32, self.recent_drafted[0..7], self.recent_drafted[1..8]);
+            self.recent_accepted[7] = accepted;
+            self.recent_drafted[7] = self.n_draft;
+            if (self.total_rounds >= 8) {
+                var w_accepted: u32 = 0;
+                var w_drafted: u32 = 0;
+                for (self.recent_accepted) |a| w_accepted += a;
+                for (self.recent_drafted) |d| w_drafted += d;
+                if (w_drafted > 0) {
+                    const rate = @as(f32, @floatFromInt(w_accepted)) / @as(f32, @floatFromInt(w_drafted));
+                    const threshold_low: f32 = 0.30;
+                    const threshold_high: f32 = 0.80;
+                    if (rate < threshold_low and self.current_k > 1) {
+                        self.current_k -= 1;
+                    } else if (rate > threshold_high and self.current_k < self.k) {
+                        self.current_k += 1;
+                    }
+                }
+            }
+        }
     }
 
     /// Compute optimal K based on acceptance history.
+    /// Adaptive V2: uses current_k (per-request sliding window) when available,
+    /// falling back to the global profile-guided optimal.
     /// Expected value: E[tokens] = k × accept_rate(k) + 1 (bonus token).
     /// Cost model: verify cost ≈ 1 forward pass regardless of k (tree verify).
     /// Optimal k maximizes E[tokens] / cost = k × accept_rate(k) + 1.
     /// Returns the configured k if insufficient data for profiling.
     pub fn optimalK(self: *const SpecState) u32 {
+        // V2: use sliding-window adjusted k if it has converged (enough rounds)
+        if (self.adaptive_k_enabled and self.total_rounds >= 8) return self.current_k;
         if (!self.adaptive_k_enabled or self.total_rounds < adaptive_k_min_rounds) return self.k;
 
         var best_k: u32 = self.k;
