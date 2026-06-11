@@ -202,6 +202,55 @@ pub fn draftEagleWithLogits(state: *SpecState, target_model: Model, draft_model:
 
 const ngram_mod = @import("ngram.zig");
 
+/// MLP Speculator (vLLM, Chen et al. 2023): lightweight 3-layer MLP draft model.
+///
+/// Unlike EAGLE which autoregressively chains hidden states, the MLP Speculator uses
+/// the TARGET MODEL'S hidden state as the SOLE context for all K draft steps.
+/// Each draft step independently predicts: mlp_model.eagleForward(draft_tok, target_hidden).
+/// This makes it cheaper than EAGLE (no draft model KV cache growth) but slightly less
+/// accurate (doesn't adapt to its own prior draft outputs).
+///
+/// Suitable for any draft model with a simple MLP head — does not require the full
+/// autoregressive chain. Effectively EAGLE-0 (single conditioning, no self-conditioning).
+///
+/// Usage: agave target.gguf --draft-model mlp-speculator.gguf --spec-mode mlp
+pub fn draftMlpSpeculator(state: *SpecState, target_model: Model, draft_model: Model, last_token: u32) u32 {
+    // Freeze the target's hidden state once — all draft steps use the same context.
+    const target_hidden = target_model.getHiddenState();
+    var tok = last_token;
+    var n: u32 = 0;
+    while (n < state.k and n < max_draft_tokens) {
+        tok = draft_model.eagleForward(tok, target_hidden) catch break;
+        state.draft_tokens[n] = tok;
+        n += 1;
+    }
+    state.n_draft = n;
+    return n;
+}
+
+/// MLP Speculator with saved logits for rejection sampling.
+pub fn draftMlpSpeculatorWithLogits(state: *SpecState, target_model: Model, draft_model: Model, last_token: u32) u32 {
+    const target_hidden = target_model.getHiddenState();
+    var tok = last_token;
+    var n: u32 = 0;
+    const vs = state.vocab_size;
+    while (n < state.k and n < max_draft_tokens) {
+        _ = draft_model.eagleForward(tok, target_hidden) catch break;
+        const logits = draft_model.getLogits();
+        const offset = @as(usize, n) * vs;
+        const dst = state.draft_log_probs[offset..][0..vs];
+        @memcpy(dst, logits);
+        if (state.token_mask) |tm| applyFrSpecMask(dst, tm);
+        logSoftmax(dst);
+        tok = math_ops.argmax(dst);
+        state.draft_tokens[n] = tok;
+        state.depth_slices[n] = dst;
+        n += 1;
+    }
+    state.n_draft = n;
+    return n;
+}
+
 /// Lookahead decoding (Fu et al. 2024 / Jacobi parallel decoding).
 /// Advances all branches in the lookahead window by running target.forward() once
 /// per branch slot. Then searches for any n-gram match with the current context.

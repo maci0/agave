@@ -411,7 +411,7 @@ const cli_specs = [_]cli_mod.ArgSpec{
     .{ .long = "benchmark", .help = "Run decode benchmark: prefill + decode, print stats (supports --json)." },
 };
 
-const SpecMode = enum { none, standard, ddtree, self_spec, ngram, suffix, mtp, eagle, lookahead, pflash };
+const SpecMode = enum { none, standard, ddtree, self_spec, ngram, suffix, mtp, eagle, mlp, lookahead, pflash };
 
 const CliArgs = struct {
     model_path: []const u8,
@@ -1042,9 +1042,10 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
                 if (std.mem.eql(u8, s, "suffix")) break :blk SpecMode.suffix;
                 if (std.mem.eql(u8, s, "mtp")) break :blk SpecMode.mtp;
                 if (std.mem.eql(u8, s, "eagle")) break :blk SpecMode.eagle;
+                if (std.mem.eql(u8, s, "mlp")) break :blk SpecMode.mlp;
                 if (std.mem.eql(u8, s, "lookahead")) break :blk SpecMode.lookahead;
                 if (std.mem.eql(u8, s, "pflash")) break :blk SpecMode.pflash;
-                eprint("Error: unknown --spec-mode '{s}' (expected: standard, ddtree, self, ngram, suffix, mtp, eagle, pflash)\n", .{s});
+                eprint("Error: unknown --spec-mode '{s}' (expected: standard, ddtree, self, ngram, suffix, mtp, eagle, mlp, lookahead, pflash)\n", .{s});
                 std.process.exit(2);
             }
             break :blk if (dm != null) SpecMode.ddtree else SpecMode.none;
@@ -3022,6 +3023,7 @@ fn generateSpeculative(
     const use_suffix = (effective_spec_mode == .suffix);
     const use_mtp = (effective_spec_mode == .mtp);
     const use_eagle = (effective_spec_mode == .eagle);
+    const use_mlp = (effective_spec_mode == .mlp);
     const use_lookahead = (effective_spec_mode == .lookahead);
     var la_state = ngram_mod.LookaheadState{};
     if (use_lookahead) la_state.seed(token_ids);
@@ -3119,6 +3121,13 @@ fn generateSpeculative(
                 spec_decode.draftEagle(&spec_state, target.*, draft_model.*, last)
             else
                 spec_decode.draftEagleWithLogits(&spec_state, target.*, draft_model.*, last);
+            break :blk n;
+        } else if (use_mlp) blk: {
+            // MLP Speculator: single-context draft (no chain). All K steps use target's hidden.
+            const n = if (!use_sampling)
+                spec_decode.draftMlpSpeculator(&spec_state, target.*, draft_model.*, last)
+            else
+                spec_decode.draftMlpSpeculatorWithLogits(&spec_state, target.*, draft_model.*, last);
             break :blk n;
         } else if (is_self_draft and !use_sampling)
             spec_decode.draft(&spec_state, draft_model, last)
