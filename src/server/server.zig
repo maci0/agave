@@ -703,6 +703,41 @@ fn hasToolCalls(text: []const u8) bool {
     return std.mem.indexOf(u8, text, "<tool_call>") != null;
 }
 
+/// Split generated text into (reasoning, content) parts.
+/// Detects <think>...</think> (DeepSeek R1, QwQ) and similar markers.
+/// Returns reasoning slice and content slice — both reference the original text (no alloc).
+const ThinkingSplit = struct { reasoning: []const u8, content: []const u8 };
+fn splitThinkingContent(text: []const u8) ThinkingSplit {
+    // Pattern: <think>REASONING</think>CONTENT
+    const think_open = "<think>";
+    const think_close = "</think>";
+    if (std.mem.startsWith(u8, text, think_open)) {
+        if (std.mem.indexOf(u8, text, think_close)) |end| {
+            const reasoning = text[think_open.len..end];
+            const content = blk2: {
+                var s = text[end + think_close.len ..];
+                while (s.len > 0 and (s[0] == 32 or s[0] == 9 or s[0] == 13 or s[0] == 10)) s = s[1..];
+                break :blk2 s;
+            };
+            return .{ .reasoning = reasoning, .content = content };
+        }
+    }
+    // Pattern: text contains <think>...</think> anywhere
+    if (std.mem.indexOf(u8, text, think_open)) |start| {
+        if (std.mem.indexOf(u8, text[start..], think_close)) |rel_end| {
+            const reasoning = text[start + think_open.len .. start + rel_end];
+            const after = text[start + rel_end + think_close.len ..];
+            const content = blk2: {
+                var s = after;
+                while (s.len > 0 and (s[0] == 32 or s[0] == 9 or s[0] == 13 or s[0] == 10)) s = s[1..];
+                break :blk2 s;
+            };
+            return .{ .reasoning = reasoning, .content = if (content.len > 0) content else text[0..start] };
+        }
+    }
+    return .{ .reasoning = "", .content = text };
+}
+
 /// Build tool_calls JSON response from model output containing <tool_call> tags.
 /// Supports multiple tool calls. Arguments are JSON-escaped strings per OpenAI spec.
 fn buildToolCallResponse(buf: []u8, raw_text: []const u8, req_id: u64, created: i64, prompt_tokens: u32, completion_tokens: u32) []const u8 {
@@ -1134,14 +1169,34 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
                 logRequestDone(method, path, 500, elapsedMs(request_start));
                 return;
             };
-        } else std.fmt.bufPrint(&resp_buf,
-            \\{{"id":"chatcmpl-{d}","object":"chat.completion","created":{d},"model":"{s}","system_fingerprint":"{s}","choices":[{{"index":0,"message":{{"role":"assistant","content":"{s}"}},"finish_reason":"{s}"}}],"usage":{{"prompt_tokens":{d},"completion_tokens":{d},"total_tokens":{d}}}}}
-        , .{ req_id, created, g_server.model_name, system_fingerprint, gen.escaped, gen.finish_reason, gen.stats.prompt_tokens, gen.stats.tokens_generated, total }) catch {
-            std.log.warn("req={d} response buffer overflow: output {d} bytes exceeds {d} byte buffer", .{ log_request_id, gen.escaped.len, response_buf_size });
-            sendJsonError(stream, "500 Internal Server Error", "server_error", "Response too large");
-            g_server.metrics.recordFailure();
-            logRequestDone(method, path, 500, elapsedMs(request_start));
-            return;
+        } else blk: {
+            // Split reasoning_content from content for thinking models (DeepSeek R1, QwQ, Gemma 4 12B).
+            const split = splitThinkingContent(gen.raw);
+            if (split.reasoning.len > 0) {
+                // Emit separate reasoning_content field (DeepSeek/o1 compatible API)
+                const reasoning_escaped = json.jsonEscape(g_server.allocator, split.reasoning) catch split.reasoning;
+                defer if (reasoning_escaped.ptr != split.reasoning.ptr) g_server.allocator.free(reasoning_escaped);
+                const content_escaped = json.jsonEscape(g_server.allocator, split.content) catch split.content;
+                defer if (content_escaped.ptr != split.content.ptr) g_server.allocator.free(content_escaped);
+                break :blk std.fmt.bufPrint(&resp_buf,
+                    \\{{"id":"chatcmpl-{d}","object":"chat.completion","created":{d},"model":"{s}","system_fingerprint":"{s}","choices":[{{"index":0,"message":{{"role":"assistant","reasoning_content":"{s}","content":"{s}"}},"finish_reason":"{s}"}}],"usage":{{"prompt_tokens":{d},"completion_tokens":{d},"total_tokens":{d}}}}}
+                , .{ req_id, created, g_server.model_name, system_fingerprint, reasoning_escaped, content_escaped, gen.finish_reason, gen.stats.prompt_tokens, gen.stats.tokens_generated, total }) catch {
+                    std.log.warn("req={d} response buffer overflow (reasoning)", .{log_request_id});
+                    sendJsonError(stream, "500 Internal Server Error", "server_error", "Response too large");
+                    g_server.metrics.recordFailure();
+                    logRequestDone(method, path, 500, elapsedMs(request_start));
+                    return;
+                };
+            }
+            break :blk std.fmt.bufPrint(&resp_buf,
+                \\{{"id":"chatcmpl-{d}","object":"chat.completion","created":{d},"model":"{s}","system_fingerprint":"{s}","choices":[{{"index":0,"message":{{"role":"assistant","content":"{s}"}},"finish_reason":"{s}"}}],"usage":{{"prompt_tokens":{d},"completion_tokens":{d},"total_tokens":{d}}}}}
+            , .{ req_id, created, g_server.model_name, system_fingerprint, gen.escaped, gen.finish_reason, gen.stats.prompt_tokens, gen.stats.tokens_generated, total }) catch {
+                std.log.warn("req={d} response buffer overflow: output {d} bytes exceeds {d} byte buffer", .{ log_request_id, gen.escaped.len, response_buf_size });
+                sendJsonError(stream, "500 Internal Server Error", "server_error", "Response too large");
+                g_server.metrics.recordFailure();
+                logRequestDone(method, path, 500, elapsedMs(request_start));
+                return;
+            };
         };
         sendJson(stream, json_body);
 
