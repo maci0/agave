@@ -2542,6 +2542,11 @@ fn initAndRun(
     }
 
     if (cli.serve) {
+        // Initialize shared n-gram pool for cross-request history sharing.
+        // Server slots use this as a fallback when their own history has no match.
+        if (cli.spec_mode == .ngram) {
+            ngram_mod.global_pool = ngram_mod.SharedNgramPool{};
+        }
         var tok_if = tok.tokenizer();
         const ve_ptr: ?*VisionEncoder = if (vision_enc != null) &vision_enc.? else null;
         const srv_pad_id: u32 = if (img_tokens) |it| it.pad else 0;
@@ -3051,7 +3056,14 @@ fn generateSpeculative(
         const n_drafted = if (use_mtp) blk: {
             break :blk spec_decode.draftMtp(&spec_state, target, last);
         } else if (use_ngram) blk: {
-            const n = ngram_state.propose(effective_k, &spec_state.draft_tokens);
+            var n = ngram_state.propose(effective_k, &spec_state.draft_tokens);
+            // Try shared pool if local history found nothing (server mode)
+            if (n == 0) {
+                if (ngram_mod.global_pool) |*pool| {
+                    const tail_start = if (ngram_state.len >= 10) ngram_state.len - 10 else 0;
+                    n = pool.propose(ngram_state.history[tail_start..ngram_state.len], effective_k, &spec_state.draft_tokens);
+                }
+            }
             spec_state.n_draft = @intCast(n);
             break :blk @as(u32, @intCast(n));
         } else if (is_self_draft and !use_sampling)
@@ -3126,6 +3138,14 @@ fn generateSpeculative(
             if (rate < adaptive_threshold) {
                 draft_cooldown = adaptive_window;
             }
+            // Log rolling acceptance rate every adaptive_window rounds when verbose
+            if (g_verbose and spec_state.total_rounds % 10 == 0 and spec_state.total_drafted > 0) {
+                std.log.debug("spec: {d}/{d} ({d:.1}%) accepted this window, {d:.1}% overall", .{
+                    recent_accepted, recent_drafted,
+                    rate * 100.0,
+                    spec_state.acceptanceRate() * 100.0,
+                });
+            }
             recent_accepted = 0;
             recent_drafted = 0;
         }
@@ -3140,8 +3160,12 @@ fn generateSpeculative(
             for (0..result.accepted) |i| {
                 if (isEogToken(spec_state.draft_tokens[i], eog)) break;
                 ngram_state.push(spec_state.draft_tokens[i]);
+                if (ngram_mod.global_pool) |*pool| pool.push(spec_state.draft_tokens[i]);
             }
-            if (!hit_eog) ngram_state.push(result.next_token);
+            if (!hit_eog) {
+                ngram_state.push(result.next_token);
+                if (ngram_mod.global_pool) |*pool| pool.push(result.next_token);
+            }
         }
 
         // Stream

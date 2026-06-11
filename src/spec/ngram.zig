@@ -76,6 +76,84 @@ pub const NgramState = struct {
     }
 };
 
+/// Shared n-gram pool for server mode: all concurrent requests contribute to
+/// and draw from a single global token history.  When a slot generates a token
+/// it calls SharedNgramPool.push(); when drafting it searches both its own
+/// NgramState AND the shared pool, taking whichever gives a longer match.
+///
+/// Inspired by llama.cpp ngram-mod (PR #19164): a shared pool means concurrent
+/// requests on similar content benefit from each other's history for free.
+///
+/// Thread-safety: guarded by a plain Mutex; critical sections are short
+/// (ring-buffer push or linear scan), so contention is negligible.
+pub const SharedNgramPool = struct {
+    const pool_capacity: usize = 8192; // ~32 KB — larger than per-request 2 KB
+
+    history: [pool_capacity]u32 = undefined,
+    len: usize = 0,
+    mu: std.atomic.Mutex = .unlocked,
+
+    fn lock(self: *SharedNgramPool) void {
+        while (!self.mu.tryLock()) std.atomic.spinLoopHint();
+    }
+    fn unlock(self: *SharedNgramPool) void {
+        self.mu.unlock();
+    }
+
+    /// Record a generated token into the shared pool (called by every server slot).
+    pub fn push(self: *SharedNgramPool, token: u32) void {
+        self.lock();
+        defer self.unlock();
+        if (self.len < pool_capacity) {
+            self.history[self.len] = token;
+            self.len += 1;
+        } else {
+            const keep = pool_capacity / 2;
+            std.mem.copyForwards(u32, self.history[0..keep], self.history[pool_capacity - keep ..]);
+            self.len = keep;
+            self.history[self.len] = token;
+            self.len += 1;
+        }
+    }
+
+    /// Propose continuation tokens from shared history given the current tail.
+    /// `tail` is the most recent tokens (the n-gram query); writes into `out`.
+    /// Returns number of tokens proposed (0 if no match).
+    pub fn propose(self: *SharedNgramPool, tail: []const u32, max_draft: usize, out: []u32) usize {
+        if (tail.len < min_ngram or max_draft == 0) return 0;
+        self.lock();
+        defer self.unlock();
+        const hist = self.history[0..self.len];
+        if (hist.len < min_ngram + 1) return 0;
+
+        var best_pos: usize = 0;
+        var best_len: usize = 0;
+        const max_n = @min(max_ngram, @min(tail.len, hist.len - 1));
+        var n: usize = max_n;
+        while (n >= min_ngram) : (n -= 1) {
+            const pat = tail[tail.len - n ..];
+            const end = hist.len - n;
+            var pos: usize = 0;
+            while (pos + n <= end) : (pos += 1) {
+                if (std.mem.eql(u32, hist[pos .. pos + n], pat)) {
+                    best_pos = pos + n;
+                    best_len = n;
+                    break;
+                }
+            }
+            if (best_len > 0) break;
+        }
+        if (best_len == 0) return 0;
+        const avail = hist.len - best_pos;
+        const n_out = @min(@min(avail, max_draft), out.len);
+        @memcpy(out[0..n_out], hist[best_pos..][0..n_out]);
+        return n_out;
+    }
+};
+
+/// Global singleton for server mode.  Created once at server start; null in CLI mode.
+pub var global_pool: ?SharedNgramPool = null;
+
 test "ngram basic proposal" {
     var state = NgramState{};
 
