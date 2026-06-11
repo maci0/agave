@@ -1029,10 +1029,11 @@ pub const Gemma4Model = struct {
         };
         const cs: usize = if (has_gemm) self.chunk_size else 1;
 
-        // Fall back to sequential for: images, MoE, PLE, no GEMM, or single token.
+        // Fall back to sequential for: MoE, PLE, no GEMM, or single token.
         // NOTE: Gemma 4 12B (n_layers >= 48) uses sequential prefill — batched prefill
         // was tested but produces the same convergence issue as sequential for this model.
-        if (has_image or self.n_experts > 0 or self.ple_dim > 0 or cs <= 1 or token_ids.len == 1 or self.n_layers >= 48) {
+        // Image-containing sequences use the interleaved chunked path below when has_gemm.
+        if (self.n_experts > 0 or self.ple_dim > 0 or cs <= 1 or token_ids.len == 1 or self.n_layers >= 48) {
             var last: u32 = 0;
             var i: usize = 0;
             while (i < token_ids.len) {
@@ -1052,11 +1053,31 @@ pub const Gemma4Model = struct {
         }
 
         // Batched prefill for dense models (E2B, E4B).
+        // For vision sequences (has_image), interleave text chunks with image batches:
+        //   text span → prefillChunk (GEMM) → image span → forwardImageBatch → repeat.
+        // This extends chunked prefill to VLMs (TGI v3.3.0 approach).
         var offset: usize = 0;
         while (offset < token_ids.len) {
-            const chunk_len = @min(cs, token_ids.len - offset);
-            try self.prefillChunk(token_ids[offset..][0..chunk_len], @as(u32, @intCast(offset)));
-            offset += chunk_len;
+            if (has_image and token_ids[offset] == pad_id) {
+                // Image token run: find its extent and process with forwardImageBatch
+                var run_end = offset + 1;
+                while (run_end < token_ids.len and token_ids[run_end] == pad_id) : (run_end += 1) {}
+                const n_img: u32 = @intCast(run_end - offset);
+                try self.forwardImageBatch(n_img);
+                offset = run_end;
+            } else {
+                // Text span: find how many non-image tokens, then chunk-process
+                var span_end = offset + 1;
+                while (span_end < token_ids.len and !(has_image and token_ids[span_end] == pad_id)) : (span_end += 1) {}
+                const span = token_ids[offset..span_end];
+                var span_off: usize = 0;
+                while (span_off < span.len) {
+                    const chunk_len = @min(cs, span.len - span_off);
+                    try self.prefillChunk(span[span_off..][0..chunk_len], @as(u32, @intCast(offset + span_off)));
+                    span_off += chunk_len;
+                }
+                offset = span_end;
+            }
         }
 
         // Final: rmsNorm + logits on the LAST token only
