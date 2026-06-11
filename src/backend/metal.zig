@@ -475,7 +475,7 @@ pub const MetalBackend = struct {
     }
 
     /// Number of MSL compute pipelines compiled at init.
-    pub const n_pipelines: u32 = 70;
+    pub const n_pipelines: u32 = 71;
 
     /// Returns the Metal device name (e.g., "Apple M4 Pro").
     pub fn deviceName(self: *const MetalBackend) []const u8 {
@@ -3164,7 +3164,7 @@ test "Metal tuning constants are valid" {
 
 test "Metal n_pipelines count" {
     if (comptime builtin.os.tag != .macos) return error.SkipZigTest;
-    try std.testing.expectEqual(@as(u32, 70), MetalBackend.n_pipelines);
+    try std.testing.expectEqual(@as(u32, 71), MetalBackend.n_pipelines);
 }
 
 // ── Helper to get a Metal backend or skip the test ──────────────
