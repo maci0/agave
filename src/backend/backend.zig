@@ -1679,6 +1679,20 @@ test "Backend.addRmsNorm via CPU dispatch" {
     try std.testing.expectApproxEqAbs(@as(f32, 9.0), a[7], 1e-5);
 }
 
+test "Backend.rmsNormAdd via CPU dispatch" {
+    var cpu = CpuBackend{};
+    const be = Backend{ .cpu = &cpu };
+    const a = [_]f32{ 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0 };
+    const weight = [_]f32{ 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0 };
+    var b = [_]f32{ 10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0 };
+    be.rmsNormAdd(&a, &weight, &b, 8, 1e-6);
+    // rms(a) = sqrt(mean([1,4,9,16,25,36,49,64])) = sqrt(204/8) = sqrt(25.5)
+    const rms = @sqrt(@as(f32, 25.5) + 1e-6);
+    // b[i] = 10.0 + a[i]/rms
+    try std.testing.expectApproxEqAbs(10.0 + 1.0 / rms, b[0], 1e-4);
+    try std.testing.expectApproxEqAbs(10.0 + 8.0 / rms, b[7], 1e-4);
+}
+
 test "Backend.softmax via CPU dispatch" {
     var cpu = CpuBackend{};
     const be = Backend{ .cpu = &cpu };
