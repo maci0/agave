@@ -1244,12 +1244,32 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
             return;
         }
         g_server.metrics.recordRequest();
-        const text = json.extractField(req.body, "text") orelse json.extractField(req.body, "content") orelse {
-            sendJsonError(stream, "400 Bad Request", "invalid_request_error", "Missing required field: text");
+        // Accept: {"text":"..."} or {"content":"..."} (raw text)
+        // Also accept: {"messages":[...]} (chat-completion format — apply template then tokenize)
+        const body = req.body;
+        const input_text: []const u8 = blk: {
+            if (json.extractField(body, "text")) |t| break :blk t;
+            if (json.extractField(body, "content")) |t| break :blk t;
+            if (json.extractMessages(body, g_server.allocator)) |msgs| {
+                defer msgs.deinit(g_server.allocator);
+                const sys = msgs.system orelse "";
+                const formatted = g_server.chat_template.formatConversation(g_server.allocator, sys, msgs.messages) catch break :blk "";
+                defer g_server.allocator.free(formatted);
+                const tids = g_server.tokenizer.encode(formatted) catch break :blk "";
+                defer g_server.allocator.free(tids);
+                var resp_buf2: [response_buf_size]u8 = undefined;
+                const resp2 = std.fmt.bufPrint(&resp_buf2, "{{\"count\":{d},\"model\":\"{s}\"}}", .{ tids.len, g_server.model_name }) catch break :blk "";
+                sendJson(stream, resp2);
+                g_server.metrics.recordCompletion();
+                logRequestDone(method, path, 200, elapsedMs(request_start));
+                return;
+            }
+            sendJsonError(stream, "400 Bad Request", "invalid_request_error", "Provide text, content, or messages");
             g_server.metrics.recordFailure();
             logRequestDone(method, path, 400, elapsedMs(request_start));
             return;
         };
+        const text = input_text;
         const unescaped = json.jsonUnescape(g_server.allocator, text) catch @constCast(text);
         defer if (unescaped.ptr != text.ptr) g_server.allocator.free(unescaped);
         const token_ids = g_server.tokenizer.encode(unescaped) catch |err| {
