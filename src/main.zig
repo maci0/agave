@@ -3164,8 +3164,7 @@ fn generateSpeculative(
             if (g_verbose and spec_state.total_rounds % 10 == 0 and spec_state.total_drafted > 0) {
                 std.log.debug("spec: {d}/{d} ({d:.1}%) accepted this window, {d:.1}% overall", .{
                     recent_accepted, recent_drafted,
-                    rate * 100.0,
-                    spec_state.acceptanceRate() * 100.0,
+                    rate * 100.0,    spec_state.acceptanceRate() * 100.0,
                 });
             }
             recent_accepted = 0;
