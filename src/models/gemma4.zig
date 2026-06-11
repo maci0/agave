@@ -296,6 +296,9 @@ pub const Gemma4Model = struct {
     perf: perf.PerfCounters = .{},
     /// Enable fused megakernel for single-dispatch forward pass.
     megakernel_enabled: bool = false,
+    /// True when dualFfnLayer() deferred its FFN residual add (dense_out not yet added to hidden).
+    /// The next attention() call will fuse the deferred add with pre-attention rmsNorm via addRmsNorm.
+    pending_ffn_residual: bool = false,
 
     // ── Visual token embeddings (multimodal) ───────────────────
     /// Visual token embeddings from vision encoder, or null if text-only.
@@ -938,6 +941,9 @@ pub const Gemma4Model = struct {
 
         try model_mod.ensureKvBlock(self);
 
+        // Ensure deferred FFN residual state is clean at start of each forward pass.
+        self.pending_ffn_residual = false;
+
         // Check if this is an image token — if so, skip embedding lookup
         // entirely and use the pre-computed visual embedding directly.
         // This matches llama.cpp's ubatch.token=false path where embedding
@@ -980,6 +986,12 @@ pub const Gemma4Model = struct {
             self.fmt.prefetchLayer(@intCast(li + 1));
             try self.attention(l);
             try self.dualFfnLayer(l);
+        }
+
+        // Flush any deferred FFN residual from the last layer before output norm.
+        if (self.pending_ffn_residual) {
+            self.be.add(self.hidden.ptr, self.dense_out.ptr, self.hidden.ptr, self.n_embd);
+            self.pending_ffn_residual = false;
         }
 
         // Final RMSNorm → LM head → softcap → argmax
@@ -1741,10 +1753,16 @@ pub const Gemma4Model = struct {
         const qkv_dim = nh * hd;
         const kv_dim = nkv * hd;
 
-        // 1. Pre-attention RMSNorm
+        // 1. Pre-attention RMSNorm — fuse with deferred FFN residual add if pending.
         var t = self.perf.start();
         const norm_w = self.fmt.layerTensor(li, "attn_norm.weight") orelse return error.MissingTensor;
-        self.be.rmsNorm(self.hidden.ptr, self.normAsF32(norm_w, e), self.hidden2.ptr, e, self.rms_eps);
+        if (self.pending_ffn_residual) {
+            // Fused: hidden += dense_out (deferred FFN residual), hidden2 = rmsNorm(hidden, attn_norm)
+            self.be.addRmsNorm(self.hidden.ptr, self.dense_out.ptr, self.normAsF32(norm_w, e), self.hidden2.ptr, e, self.rms_eps);
+            self.pending_ffn_residual = false;
+        } else {
+            self.be.rmsNorm(self.hidden.ptr, self.normAsF32(norm_w, e), self.hidden2.ptr, e, self.rms_eps);
+        }
         self.perf.end(.rms_norm, t);
 
         // 2. Q projection — always computed regardless of KV sharing.
@@ -2007,9 +2025,14 @@ pub const Gemma4Model = struct {
         } else {
             // ── Dense-only path (no MoE experts) ────────────────────
             // Fuse post_ffw_norm + residual add into rmsNormAdd (saves 1 dispatch when norm exists).
+            // When no post_ffw_norm AND no PLE AND no layer_output_scale: defer the add to the
+            // next attention() which will fuse it with the pre-attention rmsNorm via addRmsNorm.
             const t_dense = self.perf.start();
             if (self.fmt.layerTensor(li, "post_ffw_norm.weight")) |post_norm| {
                 self.be.rmsNormAdd(self.dense_out.ptr, self.normAsF32(post_norm, e), self.hidden.ptr, e, self.rms_eps);
+            } else if (self.ple_dim == 0 and self.fmt.layerTensor(li, "layer_output_scale.weight") == null) {
+                // Defer: dense_out holds FFN output; attention() will consume it via addRmsNorm.
+                self.pending_ffn_residual = true;
             } else {
                 self.be.add(self.hidden.ptr, self.dense_out.ptr, self.hidden.ptr, e);
             }
