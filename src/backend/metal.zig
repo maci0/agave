@@ -212,6 +212,9 @@ pub const MetalBackend = struct {
     /// Memory barriers between dispatches ensure write visibility.
     /// Ended and cleared on flush(). Eliminates per-op encoder overhead.
     active_enc: ?objc.id = null,
+    /// Label of the most-recently-set pipeline (for Metal System Trace visibility).
+    /// Set on the encoder so Instruments shows kernel names in GPU timelines.
+    active_pipeline_label: ?[*:0]const u8 = null,
     /// Cache of MTLBuffer objects keyed by data pointer (usize).
     /// Avoids recreating wrapBuffer objects for stable pointers (mmap'd weights,
     /// model activation buffers) on every GEMV / norm / elementwise call.
@@ -673,6 +676,13 @@ pub const MetalBackend = struct {
             self.active_enc = objc.msgSend(objc.id, self.active_cmd.?, objc.sel("computeCommandEncoder"), .{});
         }
         objc.msgSend(void, self.active_enc.?, objc.sel("setComputePipelineState:"), .{pipeline});
+        // Label the encoder with the current pipeline name for Metal System Trace visibility.
+        // This makes kernel names appear in Instruments GPU timelines (xctrace --template "Metal System Trace").
+        if (self.active_pipeline_label) |lbl| {
+            const NSString = objc.getClass("NSString").?;
+            const ns_lbl = objc.msgSend(?objc.id, NSString, objc.sel("stringWithUTF8String:"), .{lbl});
+            if (ns_lbl) |ns| objc.msgSend(void, self.active_enc.?, objc.sel("setLabel:"), .{ns});
+        }
         return self.active_enc.?;
     }
 
@@ -825,6 +835,29 @@ pub const MetalBackend = struct {
     /// y[n] = W[n,k] @ x[k].  Dispatches a Metal kernel per supported dtype;
     /// panics for unsupported dtypes (no silent CPU fallback).
     pub fn gemv(self: *MetalBackend, x: [*]const f32, w: TensorData, y: [*]f32, n: usize, k: usize) void {
+        // Label the encoder so kernel names appear in Metal System Trace (xctrace GPU profiling)
+        self.active_pipeline_label = switch (w.dtype) {
+            .f32 => "gemv_f32",
+            .q8_0 => "gemv_q8_0",
+            .q4_0 => "gemv_q4_0",
+            .q4_1 => "gemv_q4_1",
+            .q4_k => "gemv_q4_k",
+            .q5_k => "gemv_q5_k",
+            .q6_k => "gemv_q6_k",
+            .q2_k => "gemv_q2_k",
+            .q3_k => "gemv_q3_k",
+            .q5_0 => "gemv_q5_0",
+            .iq4_nl => "gemv_iq4_nl",
+            .iq4_xs => "gemv_iq4_xs",
+            .bf16 => "gemv_bf16",
+            .f16 => "gemv_f16",
+            .fp8_e4m3 => "gemv_fp8_e4m3",
+            .fp8_e5m2 => "gemv_fp8_e5m2",
+            .mxfp4 => "gemv_mxfp4",
+            .tq1_0 => "gemv_tq1_0",
+            .tq2_0 => "gemv_tq2_0",
+            else => "gemv",
+        };
         const pipeline: objc.id = switch (w.dtype) {
             .f32 => self.pipe_gemv_f32,
             .q8_0 => self.pipe_gemv_q8_0,
@@ -910,6 +943,7 @@ pub const MetalBackend = struct {
     /// Fused single-dispatch: sum-of-squares + normalize in one threadgroup.
     /// Data stays in threadgroup memory between phases, avoiding extra bandwidth.
     pub fn rmsNorm(self: *MetalBackend, input: [*]const f32, weight: [*]const f32, output: [*]f32, n: usize, eps: f32) void {
+        self.active_pipeline_label = "rms_norm";
         const in_ref = self.getBufRef(@ptrCast(input), n * @sizeOf(f32));
         const w_ref = self.getBufRef(@ptrCast(weight), n * @sizeOf(f32));
         const out_ref = self.getBufRef(@ptrCast(output), n * @sizeOf(f32));
@@ -1813,6 +1847,7 @@ pub const MetalBackend = struct {
     /// Apply rotary position embedding in-place.
     /// Grid = n_heads × rope_dim / 2 threads; each thread rotates one (re, im) pair.
     pub fn rope(self: *MetalBackend, x: [*]f32, pos: usize, n_heads: usize, head_dim: usize, rope_dim: usize, theta: f32) void {
+        self.active_pipeline_label = "rope";
         const total = n_heads * head_dim;
         const x_ref = self.getBufRef(@ptrCast(x), total * @sizeOf(f32));
 
@@ -2188,6 +2223,7 @@ pub const MetalBackend = struct {
     /// not the SDPA hot path). Panics on non-f32, non-turbo KV types.
     /// Panics for sequences > 4096 or head dims > 256.
     pub fn sdpa(self: *MetalBackend, q: [*]const f32, keys: []u8, values: []u8, k_new: [*]const f32, v_new: [*]const f32, output: [*]f32, nh: usize, nkv: usize, hd: usize, seq_len: usize, scale: f32, kv_type_k: backend_mod.KvQuantType, kv_type_v: backend_mod.KvQuantType) void {
+        self.active_pipeline_label = if (kv_type_k.isTurbo()) "sdpa_turbo" else "sdpa_fa2";
         const is_turbo_k = kv_type_k.isTurbo();
         const is_turbo_v = kv_type_v.isTurbo();
         const is_f32_k = (kv_type_k == .f32);
