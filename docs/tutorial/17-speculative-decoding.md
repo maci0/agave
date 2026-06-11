@@ -165,18 +165,142 @@ Next attempt after "Date\n5. ":
 
 Zero memory overhead (no draft model weights). The ring buffer uses 8 KB.
 
+In **server mode**, a `SharedNgramPool` (8KB, thread-safe spinlock) accumulates tokens from all concurrent requests. When a request's local history has no match, it searches the shared pool — giving "warm-start" drafting from other users' recent output.
+
+### Suffix Decoding (`--spec-mode suffix`)
+
+Like n-gram but uses a larger cross-request cache (10,000 tokens) with **exact suffix matching** and **dynamic speculation depth** -- longer matches trigger deeper speculation.
+
+```bash
+agave model.gguf --spec-mode suffix "Complete this function:"
+```
+
+When a k-token suffix of the current context matches earlier output, the subsequent tokens are proposed as drafts. Match length k scales the draft depth: minimum match → k=1 draft token; maximum match → k=max_k drafts.
+
+**Best for**: chat with shared context, code completion with common library patterns, long structured outputs. Better than n-gram for diverse token patterns because it requires exact suffix match rather than fixed n-gram length.
+
+### Lookahead Decoding (`--spec-mode lookahead`)
+
+Jacobi-style parallel decoding -- no draft model, no history matching. Maintains W=5 "branches" of N=7 candidate tokens, each advanced by running target.forward() on the branch's last token. After advancing all branches, searches for any n-gram match between any branch and the current context.
+
+```bash
+agave model.gguf --spec-mode lookahead "Write code to parse JSON:"
+```
+
+```mermaid
+graph LR
+    classDef setup fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
+    classDef sync  fill:#dcfce7,stroke:#22c55e,color:#14532d
+    classDef success fill:#bbf7d0,stroke:#16a34a,color:#14532d
+
+    Ctx["Current context\n[token₁, token₂, ...]"]:::setup
+    B0["Branch 0\n[tok_a, tok_b, tok_c...]"]:::sync
+    B1["Branch 1\n[tok_d, tok_e, tok_f...]"]:::sync
+    B2["Branch 2\n[tok_g, tok_h, tok_i...]"]:::sync
+    M["N-gram match found\nin Branch 1"]:::success
+    Out["Propose B1 continuation\nas draft tokens"]:::success
+
+    Ctx --> B0
+    Ctx --> B1
+    Ctx --> B2
+    B1 --> M --> Out
+```
+
+**Advantage over n-gram**: generates *novel* tokens (not just replaying history), so it works even at the start of generation. **Disadvantage**: runs W extra target.forward() calls per decode step; only beneficial when acceptance rates are high.
+
+### EAGLE (`--spec-mode eagle`)
+
+EAGLE (Efficient Acceleration via Greedily-Embedded Token Entropy) conditions the draft model on the **target model's hidden state** rather than just the previous token. At each draft step:
+
+1. `target.forward(tok)` runs normally → agave extracts `target.getHiddenState()`  
+2. `draft.eagleForward(tok, target_hidden)` combines token embedding with hidden state
+3. Chain: draft's own hidden state feeds subsequent draft steps (EAGLE-1 autoregressive)
+
+```bash
+agave target.gguf --draft-model eagle-draft.gguf --spec-mode eagle "prompt"
+```
+
+**Why it works**: the target's hidden state encodes the full context semantics -- the draft sees *what the target is thinking* rather than just the last token. This gives much higher acceptance rates than standard draft models at the same draft model size.
+
+Community EAGLE models (e.g., `EAGLE-LLaMA3-Instruct-8B`) expose this via `eagleForward()`. Standard draft models fall back to `forward()` (same as `--spec-mode standard`).
+
+### MLP Speculator (`--spec-mode mlp`)
+
+Single-step conditioning: all K draft steps use the **frozen** target hidden state from before drafting, not an autoregressive chain. Cheaper than EAGLE (no draft KV growth) but slightly lower acceptance.
+
+```bash
+agave target.gguf --draft-model mlp-speculator.gguf --spec-mode mlp "prompt"
+```
+
+|Mode|Draft conditioning|KV growth|Acceptance|
+|-----|-----|-----|-----|
+|`standard`|Previous token only|Yes|Low-Medium|
+|`eagle`|Target hidden (chained)|Yes|High|
+|`mlp`|Target hidden (frozen)|No|Medium-High|
+
+### Medusa (`--spec-mode medusa`)
+
+Multiple parallel prediction heads (MLP-based) trained on top of the base model. Each head predicts the token at position +1, +2, ..., +N simultaneously from the same hidden state. Uses the same `mtpForward(token, depth)` inference path as MTP.
+
+```bash
+agave model-medusa.gguf --spec-mode medusa "prompt"
+```
+
+Load Medusa GGUF directly -- the model file contains both the base transformer and the Medusa prediction heads. Internally, `--spec-mode medusa` is an alias for the MTP inference path.
+
+### FR-Spec: Frequency-Ranked Vocabulary (`--spec-token-map`)
+
+Restricts the draft model's LM head to only high-frequency tokens, reducing the effective vocabulary during drafting. Provide a pre-computed frequency map file (one token ID per line):
+
+```bash
+agave target.gguf --draft-model draft.gguf --spec-token-map freq.txt "prompt"
+```
+
+The map is a plain text file of token IDs (whitespace/comma separated):
+
+```
+532 4096 1024 258 99 ...
+```
+
+**How it works**: after the draft model's forward pass, logits for tokens not in the map are set to -∞ before argmax/sampling. This restricts proposals to tokens the target model is also likely to pick (high-frequency tokens have high acceptance rates). Inspired by SGLang's FR-Spec (arxiv 2502.14856, ACL 2025).
+
+Generate frequency maps from your target model's training corpus or use vocab-sorted top-K from the tokenizer.
+
 ## Architecture
 
 ```
 src/spec/
 ├── spec_decode.zig   — orchestrator: draft, verify, generation loop
+│                       draftEagle, draftMlpSpeculator, draftLookahead,
+│                       buildTokenMask (FR-Spec), PerHeadKvScales
 ├── ddtree.zig        — DDTree: heap, tree build, compile, acceptance walk
 ├── pflash.zig        — PFlash: block scoring, adaptive selection, compressed prefill
-└── ngram.zig         — N-gram: history ring buffer, n-gram matching, proposal
+└── ngram.zig         — N-gram history + SharedNgramPool (server cross-request)
+                        SuffixState (10k cache, dynamic k)
+                        LookaheadState (Jacobi branches)
 
 src/backend/kernels/cpu/
 └── sdpa_tree.zig     — tree-masked SDPA kernel (ancestor bitmask attention)
+
+src/models/model.zig
+└── VTable: get_hidden_state, eagle_forward  — EAGLE hidden-state conditioning
 ```
+
+Agave supports **11 speculative decoding modes**:
+
+| Mode | Flag | Draft source | Draft model needed? |
+|------|------|------|------|
+| Standard | `--spec-mode standard` | Draft model, greedy | Yes |
+| DDTree | `--spec-mode ddtree` | Draft model, tree | Yes |
+| Self | `--spec-mode self` | Layer-skipped target | No |
+| N-gram | `--spec-mode ngram` | History ring buffer | No |
+| Suffix | `--spec-mode suffix` | Cross-request exact match | No |
+| Lookahead | `--spec-mode lookahead` | Jacobi parallel branches | No |
+| MTP | `--spec-mode mtp` | Built-in MTP heads | No (in model) |
+| Medusa | `--spec-mode medusa` | Built-in MLP heads | No (in model) |
+| EAGLE | `--spec-mode eagle` | Hidden-state conditioned | Yes |
+| MLP Speculator | `--spec-mode mlp` | Frozen hidden-state | Yes |
+| PFlash | `--spec-mode pflash` | Draft model + block scoring | Yes |
 
 ### Data Flow
 
@@ -698,6 +822,8 @@ agave model.gguf --draft-model draft.gguf --serve
 agave model.gguf --draft-model draft.gguf --spec-mode ddtree --serve
 agave model.gguf --spec-mode self --serve
 agave model-mtp.gguf --spec-mode mtp --serve
+agave model.gguf --spec-mode suffix --serve           # shared pool auto-enabled
+agave model.gguf --spec-mode ngram --serve            # cross-request history
 ```
 
 ```bash
@@ -712,9 +838,13 @@ The server uses the same speculative decoding loop as CLI mode. Draft model pref
 - [DDTree: Accelerating Speculative Decoding with Block Diffusion Draft Trees (Ringel & Romano, 2026)](https://arxiv.org/abs/2604.12989)
 - [Fast Inference from Transformers via Speculative Decoding (Leviathan et al., 2023)](https://arxiv.org/abs/2211.17192)
 - [SpecInfer: Accelerating LLM Serving with Tree-based Speculative Inference (Miao et al., 2024)](https://arxiv.org/abs/2305.09781)
+- [EAGLE: Speculative Sampling Requires Rethinking Feature Uncertainty (Li et al., 2024)](https://arxiv.org/abs/2401.15077)
+- [Lookahead Decoding: Break the Sequential Dependency of LLM Inference (Fu et al., 2024)](https://arxiv.org/abs/2402.02057)
+- [FR-Spec: Frequency-Ranked Speculative Decoding (arxiv 2502.14856, ACL 2025)](https://arxiv.org/abs/2502.14856)
+- [Medusa: Simple Framework for Accelerating LLM Generation (Cai et al., 2024)](https://arxiv.org/abs/2401.10774)
 
 ---
 
-**In the code:** [src/spec/spec_decode.zig](../../src/spec/spec_decode.zig) (orchestrator, adaptive K, cooldown), [src/spec/ddtree.zig](../../src/spec/ddtree.zig) (DDTree construction), [src/spec/ngram.zig](../../src/spec/ngram.zig) (n-gram history matching), [src/spec/pflash.zig](../../src/spec/pflash.zig) (PFlash block scoring and compressed prefill), [src/ops/sparse_attn.zig](../../src/ops/sparse_attn.zig) (block sparse SDPA), [src/backend/kernels/cpu/sdpa_tree.zig](../../src/backend/kernels/cpu/sdpa_tree.zig) (tree-masked attention)
+**In the code:** [src/spec/spec_decode.zig](../../src/spec/spec_decode.zig) (orchestrator, adaptive K, EAGLE/MLP/Lookahead drafting, FR-Spec mask), [src/spec/ddtree.zig](../../src/spec/ddtree.zig) (DDTree construction), [src/spec/ngram.zig](../../src/spec/ngram.zig) (n-gram, SharedNgramPool, SuffixState, LookaheadState), [src/spec/pflash.zig](../../src/spec/pflash.zig) (PFlash block scoring and compressed prefill), [src/models/model.zig](../../src/models/model.zig) (get_hidden_state/eagle_forward vtable), [src/ops/sparse_attn.zig](../../src/ops/sparse_attn.zig) (block sparse SDPA), [src/backend/kernels/cpu/sdpa_tree.zig](../../src/backend/kernels/cpu/sdpa_tree.zig) (tree-masked attention)
 
 **Next:** [Chapter 19: PFlash and Block Sparse Attention ->](19-pflash-and-block-sparse.md) | **Back:** [Chapter 16: Recipe System <-](16-recipe-system.md) | **Product docs:** [Models](../MODELS.md)

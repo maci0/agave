@@ -442,6 +442,20 @@ w = (nibble - zero) * scale      # group_size=128, typically
 
 The critical implementation difference from GGUF: zero-points and scales are loaded from separate tensors (`.scales`, `.qzeros`), not from a header embedded in the weight block.
 
+### AutoRound W4A16
+
+AutoRound (Intel) is a GPTQ-format quantization method that uses a different calibration algorithm -- sign gradient descent rather than second-order Hessian updates. It produces 4-bit weights with f16 activations and stores them in the same GPTQ SafeTensors layout (`.qweight`, `.scales`, `.qzeros`).
+
+**Loading AutoRound models:**
+
+```bash
+# AutoRound models export as GPTQ format; load identically
+./agave model-autoround-dir/ "prompt"
+# config.json may say quant_method="auto-round" or "gptq" -- both load fine
+```
+
+Since the storage format is identical to GPTQ, Agave loads AutoRound models via the same `DType.gptq` path. The calibration algorithm difference is invisible at inference time.
+
 ## HQQ — Half-Quadratic Quantization
 
 HQQ requires **no calibration data**. Weights are quantized using half-quadratic optimization, which finds the best INT4 approximation by iteratively reweighting an L1-like loss — no forward passes through the model, no sample dataset required. This makes HQQ practical for quantizing any model without a calibration corpus.

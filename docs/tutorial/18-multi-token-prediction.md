@@ -403,7 +403,12 @@ MTP GGUFs must include the nextn tensors. Look for "-MTP" in the filename (e.g.,
 | DDTree | `ddtree` | Separate draft model | Best speedup with good draft model |
 | Self-spec | `self` | Target model (skip layers) | No extra model needed |
 | N-gram | `ngram` | Output history | Code, structured output, templates |
+| Suffix | `suffix` | Cross-request cache | Server mode with shared context |
+| Lookahead | `lookahead` | Jacobi parallel branches | Novel tokens, diverse output |
 | **MTP** | `mtp` | Built-in prediction heads | MTP-trained models, best acceptance rate |
+| **Medusa** | `medusa` | Built-in MLP heads (alias for MTP) | Medusa-format GGUFs |
+| EAGLE | `eagle` | Hidden-state conditioned draft | High acceptance with EAGLE models |
+| MLP Speculator | `mlp` | Frozen hidden-state draft | Lighter than EAGLE |
 
 ---
 

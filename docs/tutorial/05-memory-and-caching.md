@@ -514,6 +514,37 @@ flowchart TB
 
 ---
 
-**In the code:** [src/kvcache/manager.zig](../../src/kvcache/manager.zig) (KvCache, PagedKvCache, RadixTree, KV eviction), [src/kvcache/block_allocator.zig](../../src/kvcache/block_allocator.zig) (block allocation), [src/kvcache/tiered.zig](../../src/kvcache/tiered.zig) (VRAM + RAM + SSD tiers), [src/ops/kv_quant.zig](../../src/ops/kv_quant.zig) (KV cache quantization — f16, q8_0, fp8, nvfp4, TurboQuant), [src/backend/cpu.zig](../../src/backend/cpu.zig) (CPU prefill attention), [src/backend/kernels/metal/sdpa.metal](../../src/backend/kernels/metal/sdpa.metal) (GPU prefill FA2)
+### Per-Head KV Quantization
+
+Standard KV quantization uses one scale per 16–32 elements (per-block). **Per-head** quantization uses one dynamic scale per KV head, tracked as the running absmax across all positions:
+
+```
+PerHeadKvScales { scales: [n_kv_heads]f32 }
+  kvStorePerHead(dst, src, n, head_idx, scales)  → FP8 + update scale
+  kvDotPerHead(q, kv, n, head_idx, scales)       → scaled dot product
+```
+
+This matches vLLM's per-head FP8 KV format: coarser granularity than per-block (less metadata) but compatible with FlashAttention-style GPU kernels that apply one scale per attention computation. Use via `--kv-type fp8`.
+
+### Cross-Instance KV Cache Sharing
+
+Multiple agave instances serving the same model can share prefix KV caches (LMCache-style):
+
+```bash
+# Instance A: compute system-prompt KV and export
+curl http://A:49453/v1/kv_cache?n_tokens=512 --output prefix.bin
+
+# Instance B: import prefix, skip prefill for shared tokens
+curl http://B:49453/v1/kv_cache?n_tokens=512 --data-binary @prefix.bin -X POST
+```
+
+**GET `/v1/kv_cache?n_tokens=N`** → exports KV[0..N] as flat binary (layer₀_K | layer₀_V | layer₁_K | ...).  
+**POST `/v1/kv_cache?n_tokens=N`** (body = binary) → imports and sets `kv_seq_len = N`.
+
+Useful for shared system prompts: compute the prefix KV once on one instance, distribute to a fleet.
+
+---
+
+**In the code:** [src/kvcache/manager.zig](../../src/kvcache/manager.zig) (KvCache, PagedKvCache, RadixTree, KV eviction), [src/kvcache/block_allocator.zig](../../src/kvcache/block_allocator.zig) (block allocation), [src/kvcache/tiered.zig](../../src/kvcache/tiered.zig) (VRAM + RAM + SSD tiers), [src/ops/kv_quant.zig](../../src/ops/kv_quant.zig) (KV cache quantization — f16, q8_0, fp8, nvfp4, TurboQuant, PerHeadKvScales), [src/backend/cpu.zig](../../src/backend/cpu.zig) (CPU prefill attention), [src/backend/kernels/metal/sdpa.metal](../../src/backend/kernels/metal/sdpa.metal) (GPU prefill FA2, 64K seq limit)
 
 **Next:** [Chapter 6: State Space Models →](06-state-space-models.md) | **Back:** [Chapter 4: Quantization ←](04-quantization.md) | **Product docs:** [Architecture](../ARCHITECTURE.md)
