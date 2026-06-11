@@ -3103,7 +3103,7 @@ fn generateSpeculative(
 
         // Draft phase
         if (self_spec) target.setLayerSkip(skip_start, skip_end);
-        const is_self_draft = (target.ptr == draft_model.ptr and !self_spec and !use_ngram and !use_mtp);
+        const is_self_draft = (target.ptr == draft_model.ptr and !self_spec and !use_ngram and !use_mtp and !use_eagle and !use_mlp);
         const effective_k = spec_state.optimalK();
         const n_drafted = if (use_mtp) blk: {
             break :blk spec_decode.draftMtp(&spec_state, target, last);

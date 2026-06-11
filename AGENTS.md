@@ -23,6 +23,8 @@ zig build -Denable-webgpu=false                # Disable WebGPU backend
 agave target.gguf --draft-model draft.gguf "prompt"              # Separate draft model
 agave model.gguf --spec-mode ddtree "prompt"                     # DDTree self-draft
 agave model.gguf --spec-mode self --draft-layers 9 "prompt"      # Self-speculative (layer skip)
+agave model.gguf --spec-mode self --kv-type turbo2 "prompt"      # QuantSpec approximation: quantized KV draft (Apple ICML 2025)
+agave model-medusa.gguf --spec-mode medusa "prompt"              # Medusa MLP heads (alias for mtp)
 agave model.gguf --spec-mode ngram "prompt"                      # N-gram (history-based, no draft model)
 agave model.gguf --spec-mode suffix "prompt"                     # Suffix decoding (cross-request exact match, dynamic k)
 agave model.gguf --spec-mode lookahead "prompt"                  # Lookahead / Jacobi parallel draft (novel tokens)
