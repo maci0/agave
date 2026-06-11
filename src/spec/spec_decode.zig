@@ -310,22 +310,21 @@ pub fn buildTokenMask(allocator: std.mem.Allocator, token_map_path: []const u8, 
     errdefer allocator.free(mask);
     @memset(mask, false);
 
-    // Read file via POSIX
+    // Read file in 64KB chunks (no fstat — avoids platform ABI differences).
     const fd = try posix.openat(posix.AT.FDCWD, token_map_path, .{}, 0);
     defer _ = std.c.close(fd);
-    // Get file size via std.c.fstat
-    var st: std.c.Stat = undefined;
-    if (std.c.fstat(fd, &st) != 0) return error.FileNotFound;
-    const file_size: usize = @intCast(st.size);
-    const content = try allocator.alloc(u8, file_size);
-    defer allocator.free(content);
+    var content_list = std.ArrayList(u8).empty;
+    defer content_list.deinit(allocator);
+    var read_buf: [65536]u8 = undefined;
     var off: usize = 0;
-    while (off < file_size) {
-        const result = std.c.pread(fd, content[off..].ptr, content[off..].len, @intCast(off));
+    while (true) {
+        const result = std.c.pread(fd, &read_buf, read_buf.len, @intCast(off));
         const n: isize = @bitCast(result);
         if (n <= 0) break;
+        try content_list.appendSlice(allocator, read_buf[0..@intCast(n)]);
         off += @intCast(n);
     }
+    const content = content_list.items;
 
     var it = std.mem.tokenizeAny(u8, content[0..off], " \t\r\n,");
     var count: usize = 0;
