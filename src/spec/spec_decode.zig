@@ -43,6 +43,14 @@ pub const SpecState = struct {
     k_total_counts: [max_draft_tokens]u32 = .{0} ** max_draft_tokens,
     adaptive_k_enabled: bool = false,
 
+    /// FR-Spec token mask: if non-null, a boolean array of vocab_size where mask[id]=true
+    /// means the token is in the high-frequency set. Draft logits for mask[id]=false tokens
+    /// are set to -inf before argmax, restricting proposals to frequent tokens only.
+    /// Improves acceptance rate by biasing draft toward tokens the target model prefers.
+    /// Built from --spec-token-map <file> (one token ID per line) via buildTokenMask().
+    /// Owned by caller (allocator.free(mask) in deinit).
+    token_mask: ?[]bool = null,
+
     pub fn init(allocator: std.mem.Allocator, k: u32, vocab_size: u32) !SpecState {
         const draft_log_probs = try allocator.alloc(f32, max_draft_tokens * vocab_size);
         errdefer allocator.free(draft_log_probs);
@@ -144,17 +152,70 @@ pub fn draft(state: *SpecState, draft_model: *Model, last_token: u32) u32 {
 }
 
 /// Generate K draft tokens, saving logit distributions at each step.
+/// FR-Spec mask (correct implementation): restrict logits to token_mask.
+/// MUST be called right after @memcpy(dst, model_logits) while dst has original values.
+/// Sets all positions where token_mask[i]=false to -inf. O(vocab_size) per call.
+fn applyFrSpecMask(dst: []f32, token_mask: []const bool) void {
+    const n = @min(dst.len, token_mask.len);
+    for (dst[0..n], token_mask[0..n]) |*v, in_map| {
+        if (!in_map) v.* = -std.math.inf(f32);
+    }
+    // Any logits beyond token_mask.len are also masked out
+    for (dst[n..]) |*v| v.* = -std.math.inf(f32);
+}
+
+/// Build a boolean token mask from a whitespace/newline-separated list of token IDs.
+/// Returns an allocated []bool of size vocab_size (caller owns and must free).
+pub fn buildTokenMask(allocator: std.mem.Allocator, token_map_path: []const u8, vocab_size: u32) ![]bool {
+    const posix = std.posix;
+    const mask = try allocator.alloc(bool, vocab_size);
+    errdefer allocator.free(mask);
+    @memset(mask, false);
+
+    // Read file via POSIX
+    const fd = try posix.openat(posix.AT.FDCWD, token_map_path, .{}, 0);
+    defer _ = std.c.close(fd);
+    // Get file size via std.c.fstat
+    var st: std.c.Stat = undefined;
+    if (std.c.fstat(fd, &st) != 0) return error.FileNotFound;
+    const file_size: usize = @intCast(st.size);
+    const content = try allocator.alloc(u8, file_size);
+    defer allocator.free(content);
+    var off: usize = 0;
+    while (off < file_size) {
+        const result = std.c.pread(fd, content[off..].ptr, content[off..].len, @intCast(off));
+        const n: isize = @bitCast(result);
+        if (n <= 0) break;
+        off += @intCast(n);
+    }
+
+    var it = std.mem.tokenizeAny(u8, content[0..off], " \t\r\n,");
+    var count: usize = 0;
+    while (it.next()) |tok| {
+        const id = std.fmt.parseInt(u32, std.mem.trim(u8, tok, " \t\r\n"), 10) catch continue;
+        if (id < vocab_size) {
+            mask[id] = true;
+            count += 1;
+        }
+    }
+    std.log.info("FR-Spec: loaded {d} tokens from {s} (vocab={d})", .{ count, token_map_path, vocab_size });
+    return mask;
+}
+
 pub fn draftWithLogits(state: *SpecState, draft_model: *Model, last_token: u32) u32 {
     var tok = last_token;
     var n: u32 = 0;
     const vs = state.vocab_size;
     while (n < state.k and n < max_draft_tokens) {
-        tok = draft_model.forward(tok) catch break;
+        _ = draft_model.forward(tok) catch break;
         const logits = draft_model.getLogits();
         const offset = @as(usize, n) * vs;
         const dst = state.draft_log_probs[offset..][0..vs];
         @memcpy(dst, logits);
+        // FR-Spec: restrict draft to high-frequency tokens only
+        if (state.token_mask) |tm| applyFrSpecMask(dst, tm);
         logSoftmax(dst);
+        tok = math_ops.argmax(dst);
         state.draft_tokens[n] = tok;
         state.depth_slices[n] = dst;
         n += 1;

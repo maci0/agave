@@ -395,7 +395,8 @@ const cli_specs = [_]cli_mod.ArgSpec{
     .{ .long = "draft-model", .kind = .option, .help = "Path to draft model for speculative decoding." },
     .{ .long = "spec-tokens", .short = 'K', .kind = .option, .help = "Draft tokens per speculation round [default: 5]." },
     .{ .long = "tree-budget", .kind = .option, .help = "DDTree node budget [default: 64]." },
-    .{ .long = "spec-mode", .kind = .option, .help = "Speculative mode: standard, ddtree, self, ngram, mtp, pflash [default: ddtree with --draft-model]." },
+    .{ .long = "spec-mode", .kind = .option, .help = "Speculative mode: standard, ddtree, self, ngram, suffix, mtp, pflash [default: ddtree with --draft-model]." },
+    .{ .long = "spec-token-map", .kind = .option, .help = "FR-Spec token frequency map file (one token ID per line). Restricts draft to high-frequency tokens for improved acceptance rate." },
     .{ .long = "draft-layers", .kind = .option, .help = "Layers for self-speculative draft [default: auto]." },
     .{ .long = "pflash-alpha", .kind = .option, .help = "PFlash block selection threshold (0.0-2.0) [default: 0.85]." },
     .{ .long = "pflash-block-size", .kind = .option, .help = "PFlash scoring block size in tokens [default: 64]." },
@@ -481,6 +482,7 @@ const CliArgs = struct {
     tree_budget: u32 = 64,
     spec_mode: SpecMode = .none,
     draft_layers: ?u32 = null,
+    spec_token_map: ?[]const u8 = null,
     // PFlash speculative prefill
     pflash_alpha: f32 = 0.85,
     pflash_block_size: u32 = 64,
@@ -1058,6 +1060,7 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
         },
         .pflash_block_size = parseU32(res.option("pflash-block-size"), "pflash-block-size") orelse 64,
         .pflash_scorer_path = res.option("pflash-scorer"),
+        .spec_token_map = res.option("spec-token-map"),
         .user_set = .{
             .temperature = res.option("temperature") != null,
             .top_p = res.option("top-p") != null,
@@ -2984,6 +2987,17 @@ fn generateSpeculative(
     };
     spec_state.adaptive_k_enabled = true;
     defer spec_state.deinit(allocator);
+
+    // FR-Spec: load token frequency map if provided
+    var fr_spec_mask: ?[]bool = null;
+    defer if (fr_spec_mask) |m| allocator.free(m);
+    if (cli.spec_token_map) |map_path| {
+        fr_spec_mask = spec_decode.buildTokenMask(allocator, map_path, target.vocabSize()) catch |err| blk: {
+            std.log.warn("spec-token-map: failed to load ({s}), FR-Spec disabled", .{@errorName(err)});
+            break :blk null;
+        };
+        spec_state.token_mask = fr_spec_mask;
+    }
 
     const gen_start = milliTimestamp(g_io);
     var last = first_target;
