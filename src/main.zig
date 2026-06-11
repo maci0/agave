@@ -1063,7 +1063,8 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
                 if (std.mem.eql(u8, s, "mlp")) break :blk SpecMode.mlp;
                 if (std.mem.eql(u8, s, "lookahead")) break :blk SpecMode.lookahead;
                 if (std.mem.eql(u8, s, "pflash")) break :blk SpecMode.pflash;
-                eprint("Error: unknown --spec-mode '{s}' (expected: standard, ddtree, self, ngram, suffix, mtp, eagle, mlp, lookahead, pflash)\n", .{s});
+                if (std.mem.eql(u8, s, "auto")) break :blk if (dm != null) SpecMode.ddtree else SpecMode.ngram;
+                eprint("Error: unknown --spec-mode '{s}' (expected: auto, standard, ddtree, self, ngram, suffix, mtp, eagle, mlp, lookahead, pflash)\n", .{s});
                 std.process.exit(2);
             }
             break :blk if (dm != null) SpecMode.ddtree else SpecMode.none;
