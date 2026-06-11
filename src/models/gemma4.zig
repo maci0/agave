@@ -1562,6 +1562,43 @@ pub const Gemma4Model = struct {
         model_mod.signalCancel(&self.cancelled);
     }
 
+    /// Export KV cache for positions [0, n_tokens) into a flat byte buffer.
+    /// Layout: [layer_0_keys | layer_0_values | layer_1_keys | ...] per position.
+    /// Returns bytes written (0 if dst too small or n_tokens > kv_seq_len).
+    pub fn exportKvPrefix(self: *Gemma4Model, dst: []u8, n_tokens: usize) usize {
+        if (n_tokens > self.kv_seq_len) return 0;
+        var offset: usize = 0;
+        for (self.layer_keys, self.layer_values, 0..) |keys, vals, i| {
+            const kvd = self.layer_kvd[i];
+            const k_bytes = n_tokens * kvd * @sizeOf(f32);
+            const v_bytes = n_tokens * kvd * @sizeOf(f32);
+            if (offset + k_bytes + v_bytes > dst.len) return 0;
+            @memcpy(dst[offset..][0..k_bytes], std.mem.sliceAsBytes(keys[0 .. n_tokens * kvd]));
+            offset += k_bytes;
+            @memcpy(dst[offset..][0..v_bytes], std.mem.sliceAsBytes(vals[0 .. n_tokens * kvd]));
+            offset += v_bytes;
+        }
+        return offset;
+    }
+
+    /// Import KV cache from a buffer (previously exported by exportKvPrefix).
+    /// Sets kv_seq_len = n_tokens. Returns false on size mismatch.
+    pub fn importKvPrefix(self: *Gemma4Model, src: []const u8, n_tokens: usize) bool {
+        var offset: usize = 0;
+        for (self.layer_keys, self.layer_values, 0..) |keys, vals, i| {
+            const kvd = self.layer_kvd[i];
+            const k_bytes = n_tokens * kvd * @sizeOf(f32);
+            const v_bytes = n_tokens * kvd * @sizeOf(f32);
+            if (offset + k_bytes + v_bytes > src.len) return false;
+            @memcpy(std.mem.sliceAsBytes(keys[0 .. n_tokens * kvd]), src[offset..][0..k_bytes]);
+            offset += k_bytes;
+            @memcpy(std.mem.sliceAsBytes(vals[0 .. n_tokens * kvd]), src[offset..][0..v_bytes]);
+            offset += v_bytes;
+        }
+        self.kv_seq_len = n_tokens;
+        return true;
+    }
+
     /// Return physical block IDs from layer 0 of the current sequence table.
     pub fn getBlockTable(self: *Gemma4Model) []const u32 {
         return self.seq_table.block_table[0];

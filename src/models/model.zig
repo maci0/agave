@@ -89,6 +89,13 @@ pub const Model = struct {
         /// embedding before the first attention layer (EAGLE-1 approach).
         /// Returns draft token. Falls back to standard forward() if not implemented.
         eagle_forward: *const fn (self: *anyopaque, token_id: u32, context_hidden: []const f32) ForwardError!u32,
+        /// Export KV cache for positions [0, kv_seq_len) into a caller-allocated buffer.
+        /// Returns the number of bytes written, or 0 if export is unsupported.
+        /// Used for cross-instance KV cache sharing (LMCache-style prefix offload).
+        export_kv_prefix: *const fn (self: *anyopaque, dst: []u8, n_tokens: usize) usize,
+        /// Import KV cache from a buffer (previously exported by export_kv_prefix).
+        /// Sets kv_seq_len to n_tokens on success. Returns false if unsupported.
+        import_kv_prefix: *const fn (self: *anyopaque, src: []const u8, n_tokens: usize) bool,
     };
 
     /// Create a polymorphic Model from a concrete model type.
@@ -264,11 +271,23 @@ pub const Model = struct {
             }.call),
             .eagle_forward = @ptrCast(&struct {
                 fn call(self: *T, token_id: u32, context_hidden: []const f32) ForwardError!u32 {
-                    // If model implements eagleForward (EAGLE-trained draft), use it.
-                    // Otherwise fall back to standard forward() ignoring the context.
                     if (comptime @hasDecl(T, "eagleForward"))
                         return self.eagleForward(token_id, context_hidden);
                     return self.forward(token_id);
+                }
+            }.call),
+            .export_kv_prefix = @ptrCast(&struct {
+                fn call(self: *T, dst: []u8, n_tokens: usize) usize {
+                    if (comptime @hasDecl(T, "exportKvPrefix"))
+                        return self.exportKvPrefix(dst, n_tokens);
+                    return 0;
+                }
+            }.call),
+            .import_kv_prefix = @ptrCast(&struct {
+                fn call(self: *T, src: []const u8, n_tokens: usize) bool {
+                    if (comptime @hasDecl(T, "importKvPrefix"))
+                        return self.importKvPrefix(src, n_tokens);
+                    return false;
                 }
             }.call),
         };
@@ -361,6 +380,19 @@ pub const Model = struct {
     /// hidden state as context (concatenated with token embedding, EAGLE-1 style).
     pub fn eagleForward(self: Model, token_id: u32, context_hidden: []const f32) ForwardError!u32 {
         return self.vtable.eagle_forward(self.ptr, token_id, context_hidden);
+    }
+
+    /// Export KV cache prefix (positions 0..n_tokens) into dst buffer.
+    /// Returns bytes written; 0 if unsupported. Buffer must be large enough.
+    /// For cross-instance prefix cache sharing (LMCache-style).
+    pub fn exportKvPrefix(self: Model, dst: []u8, n_tokens: usize) usize {
+        return self.vtable.export_kv_prefix(self.ptr, dst, n_tokens);
+    }
+
+    /// Import KV cache prefix from src buffer; sets kv_seq_len = n_tokens.
+    /// Returns true on success. Enables warm-start generation from shared prefix.
+    pub fn importKvPrefix(self: Model, src: []const u8, n_tokens: usize) bool {
+        return self.vtable.import_kv_prefix(self.ptr, src, n_tokens);
     }
 
     /// Signal the model to cancel the current forward pass.

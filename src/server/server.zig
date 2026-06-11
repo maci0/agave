@@ -1343,6 +1343,61 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
         return;
     }
 
+    // ── /v1/kv_cache: cross-instance KV prefix sharing (LMCache-style) ──────────
+    // GET  /v1/kv_cache?n_tokens=<N>  — export N-token prefix as binary blob
+    // POST /v1/kv_cache?n_tokens=<N>  — import N-token prefix from binary body
+    if ((is_get or is_post) and std.mem.startsWith(u8, path, "/v1/kv_cache")) {
+        logRequest(method, path);
+        if (!validateAuth(g_server, req.headers)) {
+            send401(stream);
+            logRequestDone(method, path, 401, elapsedMs(request_start));
+            return;
+        }
+        // Parse n_tokens from query string: ?n_tokens=<N>
+        var n_tokens: usize = 0;
+        if (std.mem.indexOf(u8, req.path, "n_tokens=")) |qi| {
+            const start = qi + "n_tokens=".len;
+            const end = std.mem.indexOfAnyPos(u8, req.path, start, "&# ") orelse req.path.len;
+            n_tokens = std.fmt.parseInt(usize, req.path[start..end], 10) catch 0;
+        }
+        if (n_tokens == 0) {
+            sendJsonError(stream, "400 Bad Request", "invalid_request", "n_tokens required");
+            logRequestDone(method, path, 400, elapsedMs(request_start));
+            return;
+        }
+        if (is_get) {
+            // Export: allocate buffer, fill KV data, send as binary
+            g_server.stdout_mutex.lockUncancelable(g_server.io);
+            defer g_server.stdout_mutex.unlock(g_server.io);
+            // Estimate buffer size: n_tokens * n_layers * kvd * 2 (k+v) * 4 bytes
+            // Use 64MB upper bound for safety
+            const buf = g_server.allocator.alloc(u8, 64 * 1024 * 1024) catch {
+                sendJsonError(stream, "500 Internal Server Error", "server_error", "OOM");
+                logRequestDone(method, path, 500, elapsedMs(request_start));
+                return;
+            };
+            defer g_server.allocator.free(buf);
+            const n_written = g_server.model.exportKvPrefix(buf, n_tokens);
+            if (n_written == 0) {
+                sendJsonError(stream, "501 Not Implemented", "not_implemented", "Model does not support KV export");
+                logRequestDone(method, path, 501, elapsedMs(request_start));
+                return;
+            }
+            sendResponse(stream, "200 OK", "application/octet-stream", buf[0..n_written]);
+            logRequestDone(method, path, 200, elapsedMs(request_start));
+        } else {
+            // Import: read body as binary KV blob
+            if (!g_server.model.importKvPrefix(req.body, n_tokens)) {
+                sendJsonError(stream, "400 Bad Request", "invalid_request", "KV import failed (size mismatch or unsupported)");
+                logRequestDone(method, path, 400, elapsedMs(request_start));
+                return;
+            }
+            sendJson(stream, std.fmt.allocPrint(g_server.allocator, "{{\"imported\":{d}}}", .{n_tokens}) catch "{}");
+            logRequestDone(method, path, 200, elapsedMs(request_start));
+        }
+        return;
+    }
+
     if (is_post and std.mem.eql(u8, path, "/v1/embeddings")) {
         logRequest(method, path);
         if (!validateAuth(g_server, req.headers)) {
