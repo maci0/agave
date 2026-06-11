@@ -2715,6 +2715,8 @@ fn generateN(formatted: []const u8, reset: bool, max_tokens: usize, sampling: Sa
     var last: u32 = first_gen_token;
     var token_count: u32 = 0;
     var cancelled = false;
+    var g_in_think_block: bool = false;
+    var g_n_think_tokens: u32 = 0;
 
     // Include first generated token (from last prefill forward)
     const first_is_eog = token_ids.len > 0 and g_server.isEog(first_gen_token);
@@ -2847,6 +2849,17 @@ fn generateN(formatted: []const u8, reset: bool, max_tokens: usize, sampling: Sa
             if (sampling.logit_bias_count > 0) {
                 math_ops.applyLogitBias(logits, &sampling.logit_bias_ids, &sampling.logit_bias_vals, sampling.logit_bias_count);
             }
+            // Thinking budget: bias towards </think> token when inside think block and budget exceeded.
+            if (sampling.thinking_budget_tokens > 0 and g_n_think_tokens >= sampling.thinking_budget_tokens and g_in_think_block) {
+                const close_think = "</think>";
+                const close_ids = g_server.tokenizer.encode(close_think) catch null;
+                if (close_ids) |ids| {
+                    defer g_server.allocator.free(ids);
+                    for (ids) |tid| if (tid < @as(u32, @intCast(logits.len))) {
+                        logits[tid] += 100.0;
+                    };
+                }
+            }
             if (sampling.repetition_penalty != 1.0 and token_count > 0) {
                 math_ops.applyRepeatPenalty(logits, gen_tokens[0..token_count], sampling.repetition_penalty);
             }
@@ -2923,6 +2936,16 @@ fn generateN(formatted: []const u8, reset: bool, max_tokens: usize, sampling: Sa
                     token_count += 1;
                     hit_eog = true;
                     break;
+                }
+            }
+            // Update thinking block state for budget tracking.
+            if (sampling.thinking_budget_tokens > 0) {
+                const tk_sl = [1]u32{next};
+                if (g_server.tokenizer.decode(@constCast(&tk_sl)) catch null) |tk_text| {
+                    defer g_server.allocator.free(tk_text);
+                    if (std.mem.indexOf(u8, tk_text, "<think>") != null) g_in_think_block = true;
+                    if (std.mem.indexOf(u8, tk_text, "</think>") != null) g_in_think_block = false;
+                    if (g_in_think_block) g_n_think_tokens += 1;
                 }
             }
             last = next;
