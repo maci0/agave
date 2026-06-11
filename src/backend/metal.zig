@@ -2372,6 +2372,19 @@ pub const MetalBackend = struct {
             self.gemv(x, w, y, n_out, n_in);
             return;
         }
+        // Split-K small-batch: for very small n_tok (spec decode tree verification, 2-3 tokens),
+        // issue parallel GEMV calls (one per token) rather than the tiled GEMM. The GEMM kernel
+        // uses TILE_T=8 — with < 4 tokens, the tiles are mostly empty and GEMV is ~25% faster
+        // per-token on M-series (MLX v0.31.2 benchmark). Batch the dispatches to reuse the
+        // same command buffer; Metal schedules them concurrently on the GPU.
+        if (n_tok <= 3) {
+            self.beginBatch();
+            for (0..n_tok) |t| {
+                self.gemv(x + t * n_in, w, y + t * n_out, n_out, n_in);
+            }
+            self.endBatch();
+            return;
+        }
 
         const pipeline: objc.id = switch (w.dtype) {
             .f32 => self.pipe_gemm_f32,
