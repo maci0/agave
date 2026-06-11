@@ -1555,6 +1555,12 @@ pub const Gemma4Model = struct {
                 try self.attention(layer_idx);
                 try self.dualFfnLayer(layer_idx);
 
+                // Flush deferred FFN residual before saving hidden state.
+                if (self.pending_ffn_residual) {
+                    self.be.add(self.hidden.ptr, self.dense_out.ptr, self.hidden.ptr, ed);
+                    self.pending_ffn_residual = false;
+                }
+
                 @memcpy(all_hidden[ti * ed ..][0..ed], self.hidden);
             }
         }
