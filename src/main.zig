@@ -3108,10 +3108,17 @@ fn generateSpeculative(
         const n_drafted = if (use_mtp) blk: {
             break :blk spec_decode.draftMtp(&spec_state, target, last);
         } else if (use_suffix) blk: {
-            const n = if (suffix_state_opt) |*ss|
+            var n: usize = if (suffix_state_opt) |*ss|
                 ss.propose(&spec_state.draft_tokens)
             else
                 0;
+            // Fallback to shared ngram pool if suffix cache has no match (server mode)
+            if (n == 0) {
+                if (ngram_mod.global_pool) |*pool| {
+                    const tail_start = if (ngram_state.len >= 10) ngram_state.len - 10 else 0;
+                    n = pool.propose(ngram_state.history[tail_start..ngram_state.len], effective_k, &spec_state.draft_tokens);
+                }
+            }
             spec_state.n_draft = @intCast(n);
             break :blk @as(u32, @intCast(n));
         } else if (use_ngram) blk: {
@@ -3234,14 +3241,20 @@ fn generateSpeculative(
             target.resetMtpCache();
         }
 
-        // Update suffix cache with accepted tokens
+        // Update suffix cache with accepted tokens (also push to ngram_state for pool fallback context)
         if (use_suffix) {
             if (suffix_state_opt) |*ss| {
                 for (0..result.accepted) |i| {
                     if (isEogToken(spec_state.draft_tokens[i], eog)) break;
                     ss.push(spec_state.draft_tokens[i]);
+                    ngram_state.push(spec_state.draft_tokens[i]);
+                    if (ngram_mod.global_pool) |*pool| pool.push(spec_state.draft_tokens[i]);
                 }
-                if (!hit_eog) ss.push(result.next_token);
+                if (!hit_eog) {
+                    ss.push(result.next_token);
+                    ngram_state.push(result.next_token);
+                    if (ngram_mod.global_pool) |*pool| pool.push(result.next_token);
+                }
             }
         }
 
