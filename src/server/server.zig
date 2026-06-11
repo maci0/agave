@@ -1473,6 +1473,38 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
         return;
     }
 
+    // ── /v1/kv_cache/info: lightweight KV metadata for external orchestrators ──
+    // Returns: seq_len, prefix_len, kv_used, kv_total, prefix_hash
+    // Useful for: routing decisions, cross-instance prefix matching, cache monitoring
+    if (is_get and std.mem.eql(u8, path, "/v1/kv_cache/info")) {
+        logRequest(method, path);
+        if (!validateAuth(g_server, req.headers)) {
+            send401(stream);
+            logRequestDone(method, path, 401, elapsedMs(request_start));
+            return;
+        }
+        const seq_len = g_server.model.kvSeqLen();
+        const kv_used = g_server.metrics.kv_blocks_used.load(.monotonic);
+        const kv_total = g_server.metrics.kv_blocks_total.load(.monotonic);
+        const prefix_ids = g_server.cached_prompt_ids;
+        // FNV-1a hash of cached prefix token IDs for fast remote matching
+        var hash: u64 = 14695981039346656037;
+        for (prefix_ids) |tid| {
+            const b: [4]u8 = @bitCast(tid);
+            for (b) |byte| {
+                hash ^= @as(u64, byte);
+                hash *%= 1099511628211;
+            }
+        }
+        const info_json = std.fmt.allocPrint(g_server.allocator,
+            \\{{"seq_len":{d},"cached_prefix_len":{d},"prefix_hash":"{x}","kv_used":{d},"kv_total":{d}}}
+        , .{ seq_len, prefix_ids.len, hash, kv_used, kv_total }) catch "{}";
+        defer g_server.allocator.free(info_json);
+        sendJson(stream, info_json);
+        logRequestDone(method, path, 200, elapsedMs(request_start));
+        return;
+    }
+
     if (is_post and std.mem.eql(u8, path, "/v1/embeddings")) {
         logRequest(method, path);
         if (!validateAuth(g_server, req.headers)) {
