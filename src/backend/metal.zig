@@ -495,9 +495,14 @@ pub const MetalBackend = struct {
     }
 
     /// Detect the highest supported Metal GPU family.
+    /// Metal 4 (value 5002) is available on M5 chips with macOS 26.2+.
+    /// Metal 4 adds TensorOps (neural accelerators) accessible via MTLTensorOp.
+    /// Agave detects Metal 4 support and will route eligible operations to TensorOps
+    /// when the API is stable. For now, Metal 4 is reported in --verbose output.
     fn detectMetalFamily(self: *const MetalBackend) []const u8 {
         // MTLGPUFamily enum values (Apple-defined)
         const families = [_]struct { val: c_long, name: []const u8 }{
+            .{ .val = 5002, .name = "Metal 4 (M5 TensorOps)" }, // macOS 26.2+
             .{ .val = 5001, .name = "Metal 3" },
             .{ .val = 1009, .name = "Apple Family 9" },
             .{ .val = 1008, .name = "Apple Family 8" },
@@ -508,6 +513,13 @@ pub const MetalBackend = struct {
                 return fam.name;
         }
         return "";
+    }
+
+    /// Returns true if the device supports Metal 4 TensorOps (M5+ with macOS 26.2+).
+    /// When true, eligible linear algebra operations can use Neural Accelerators,
+    /// providing 3-4x TTFT speedup for quantized LLM inference (Apple ML Research, 2026).
+    pub fn supportsMetal4TensorOps(self: *const MetalBackend) bool {
+        return objc.msgSend(bool, self.device, objc.sel("supportsFamily:"), .{@as(c_long, 5002)});
     }
 
     /// Compile a named MSL kernel into a compute pipeline state.
