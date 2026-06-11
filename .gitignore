@@ -77,3 +77,4 @@ research/kernels/vision_ref_dumps/
 
 # Stray operator manifests (not part of this project)
 pelorus-*.yamldocs/diagrams/
+docs/changelogs/
