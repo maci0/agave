@@ -427,6 +427,27 @@ Prefix cache hit: 1847/2103 tokens reused
 
 Cache is invalidated when the prompt prefix changes (e.g., switching conversations or modifying the system prompt). Works with both streaming and non-streaming requests.
 
+### Cross-Instance KV Cache Sharing
+
+For deployments with multiple agave instances serving the same model, KV cache prefixes can be transferred between instances:
+
+**Export** — serialize `N` tokens of KV cache as a binary blob:
+```bash
+GET /v1/kv_cache?n_tokens=512
+→ 200 OK  Content-Type: application/octet-stream
+   <binary KV data>
+```
+
+**Import** — restore KV cache from a blob (sets `kv_seq_len = N`, skips prefill for those tokens):
+```bash
+POST /v1/kv_cache?n_tokens=512
+Content-Type: application/octet-stream
+<binary KV data>
+→ 200 OK  {"imported":512}
+```
+
+Both endpoints require authentication if `--api-key` is configured. Use case: compute system-prompt KV on one instance, distribute to a fleet for warm-start generation without redundant prefill.
+
 ---
 
 ## Streaming
