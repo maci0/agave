@@ -89,6 +89,9 @@ pub const SamplingParams = struct {
     json_schema: ?[]const u8 = null,
     stop: [max_stop_sequences]?[]const u8 = .{null} ** max_stop_sequences,
     n_stop: u32 = 0,
+    /// Anthropic-style thinking budget: max tokens for <think>...</think> reasoning.
+    /// 0 = unlimited. When exceeded, model is nudged out of thinking with </think>.
+    thinking_budget_tokens: u32 = 0,
 
     pub fn hasStop(self: *const SamplingParams) bool {
         return self.n_stop > 0;
@@ -425,6 +428,16 @@ pub fn parseSampling(body: []const u8) SamplingParams {
     // Parse truncation_side: "left" drops beginning of prompt; "right" (default) drops tail.
     if (extractField(body, "truncation_side")) |ts| {
         if (std.mem.eql(u8, ts, "left")) result.truncation_side = .left;
+    }
+
+    // Parse thinking budget: Anthropic API "thinking": {"type": "enabled", "budget_tokens": N}
+    // or OpenAI-style "thinking_budget_tokens": N.
+    if (extractIntField(body, "thinking_budget_tokens")) |b| {
+        result.thinking_budget_tokens = @intCast(@max(0, b));
+    } else if (std.mem.indexOf(u8, body, "\"thinking\"")) |_| {
+        if (extractIntField(body, "budget_tokens")) |b| {
+            result.thinking_budget_tokens = @intCast(@max(0, b));
+        }
     }
 
     return result;

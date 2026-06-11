@@ -4499,6 +4499,22 @@ fn generateStream(stream: TcpStream, prompt: []const u8, req_id: u64, created: i
         }
 
         var last_token_time: i64 = milliTimestamp();
+
+        // Thinking budget state (Anthropic-style: limit reasoning token count).
+        const think_budget = sampling.thinking_budget_tokens;
+        var think_token_count: u32 = 0;
+        var in_think_block: bool = false;
+        // Check if the first token is the start of a thinking block
+        if (think_budget > 0 and token_ids.len > 0 and !g_server.isEog(first_gen_token)) {
+            const ft_sl = [1]u32{first_gen_token};
+            if (g_server.tokenizer.decode(@constCast(&ft_sl)) catch null) |ft_text| {
+                defer g_server.allocator.free(ft_text);
+                if (std.mem.indexOf(u8, ft_text, "<think>") != null) in_think_block = true;
+                if (std.mem.indexOf(u8, ft_text, "</think>") != null) in_think_block = false;
+                if (in_think_block) think_token_count += 1;
+            }
+        }
+
         for (0..max_tokens -| 1) |_| {
             if (token_ids.len == 0 or (token_count == 0 and g_server.isEog(first_gen_token))) break;
 
@@ -4537,6 +4553,21 @@ fn generateStream(stream: TcpStream, prompt: []const u8, req_id: u64, created: i
             const s_logits = model.getLogits();
             if (sampling.logit_bias_count > 0) {
                 math_ops.applyLogitBias(s_logits, &sampling.logit_bias_ids, &sampling.logit_bias_vals, sampling.logit_bias_count);
+            }
+            // Thinking budget: when in a think block and budget exhausted, heavily bias
+            // towards the end-of-thinking token to force the model out of reasoning.
+            if (think_budget > 0 and in_think_block and think_token_count >= think_budget) {
+                const close_think = "</think>";
+                const close_ids = g_server.tokenizer.encode(close_think) catch null;
+                if (close_ids) |ids| {
+                    defer g_server.allocator.free(ids);
+                    // Apply strong positive bias to all </think> sub-tokens
+                    for (ids) |tid| {
+                        if (tid < @as(u32, @intCast(s_logits.len))) {
+                            s_logits[tid] += 100.0;
+                        }
+                    }
+                }
             }
             if (sampling.repetition_penalty != 1.0 and s_gen_count > 0) {
                 math_ops.applyRepeatPenalty(s_logits, s_gen_tokens[0..s_gen_count], sampling.repetition_penalty);
@@ -4605,6 +4636,17 @@ fn generateStream(stream: TcpStream, prompt: []const u8, req_id: u64, created: i
                 s_gen_tokens[s_gen_count] = next;
                 s_gen_count += 1;
             }
+            // Update thinking block state for next iteration
+            if (think_budget > 0) {
+                const tok_sl = [1]u32{next};
+                if (g_server.tokenizer.decode(@constCast(&tok_sl)) catch null) |tok_text| {
+                    defer g_server.allocator.free(tok_text);
+                    if (std.mem.indexOf(u8, tok_text, "<think>") != null) in_think_block = true;
+                    if (std.mem.indexOf(u8, tok_text, "</think>") != null) in_think_block = false;
+                    if (in_think_block) think_token_count += 1;
+                }
+            }
+
             // Record inter-token latency
             const now_itl = milliTimestamp();
             const itl_ms: u64 = @intCast(@max(now_itl - last_token_time, 0));
