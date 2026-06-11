@@ -573,6 +573,84 @@ pub fn kvByteOffset(kv_type: KvQuantType, i: usize) usize {
     };
 }
 
+// ── Per-head KV quantization scales ──────────────────────────────
+//
+// vLLM per-head KV quantization: separate FP32 scale per Q/K/V head.
+// More coarse than per-block (less metadata) but enables GPU-friendly
+// attention kernels that apply one scale per head (FlashAttention style).
+//
+// Usage with --kv-type fp8_e4m3:
+//   1. Allocate PerHeadKvScales with nkv heads
+//   2. Call kvStorePerHead(dst, src, n, head_idx, scales) to store and track scale
+//   3. Call kvDotPerHead(q, kv, n, head_idx, scales) to compute scaled dot product
+//
+// Requires Flash Attention as the backend for optimal throughput
+// (the CPU windowed SDPA path supports it via the scaled dot helpers below).
+
+/// Per-head scale tracking for FP8 KV quantization (q_scale, k_scale, v_scale).
+/// Each head maintains a running max-absval scale, updated on every kvStore call.
+/// Thread-safety: one PerHeadKvScales per KV cache buffer; no concurrent writes.
+pub const PerHeadKvScales = struct {
+    scales: []f32, // shape [n_heads], one f32 scale per head
+
+    pub fn init(allocator: std.mem.Allocator, n_heads: usize) !PerHeadKvScales {
+        const s = try allocator.alloc(f32, n_heads);
+        @memset(s, 1.0); // safe default: scale=1 = no rescaling
+        return .{ .scales = s };
+    }
+
+    pub fn deinit(self: PerHeadKvScales, allocator: std.mem.Allocator) void {
+        allocator.free(self.scales);
+    }
+};
+
+/// Store `n` f32 values as FP8 with per-head dynamic scaling.
+/// Computes absmax over src, updates scales[head_idx] = max(old, absmax),
+/// then quantizes src → dst using the updated scale.
+pub fn kvStorePerHead(dst: [*]u8, src: [*]const f32, n: usize, head_idx: usize, scales: *PerHeadKvScales) void {
+    // Compute absmax over src
+    var absmax: f32 = 0;
+    for (src[0..n]) |v| absmax = @max(absmax, @abs(v));
+    if (absmax < 1e-7) absmax = 1.0; // guard against zero
+    // Update running scale (max over time for dynamic range tracking)
+    const head_scale = &scales.scales[head_idx];
+    head_scale.* = @max(head_scale.*, absmax);
+    // FP8 E4M3 max representable value = 448.0
+    const fp8_max: f32 = 448.0;
+    const inv_scale = fp8_max / head_scale.*;
+    // Quantize: scale to FP8 range, convert
+    var i: usize = 0;
+    while (i + 8 <= n) : (i += 8) {
+        inline for (0..8) |j| {
+            dst[i + j] = f32ToFp8E4M3(src[i + j] * inv_scale);
+        }
+    }
+    while (i < n) : (i += 1) {
+        dst[i] = f32ToFp8E4M3(src[i] * inv_scale);
+    }
+}
+
+/// Compute scaled dot product Q·K where K is stored as per-head FP8.
+/// Dequantizes K using scales[head_idx] then dots with q_vec (f32).
+pub fn kvDotPerHead(q_vec: [*]const f32, kv_data: [*]const u8, n: usize, head_idx: usize, scales: *const PerHeadKvScales) f32 {
+    const fp8_max: f32 = 448.0;
+    const scale = scales.scales[head_idx] / fp8_max;
+    var acc: V8 = @splat(0.0);
+    const sv: V8 = @splat(scale);
+    var i: usize = 0;
+    while (i + 8 <= n) : (i += 8) {
+        const qv: V8 = q_vec[i..][0..8].*;
+        var kv_v: V8 = undefined;
+        inline for (0..8) |j| kv_v[j] = quant.fp8e4m3ToF32(kv_data[i + j]);
+        acc = @mulAdd(V8, qv, kv_v * sv, acc);
+    }
+    var sum: f32 = @reduce(.Add, acc);
+    while (i < n) : (i += 1) {
+        sum = @mulAdd(f32, q_vec[i], quant.fp8e4m3ToF32(kv_data[i]) * scale, sum);
+    }
+    return sum;
+}
+
 // ── Store (quantize f32 → format) ────────────────────────────────
 
 /// Quantize `n` f32 values from `src` and write to `dst` in the given format.
