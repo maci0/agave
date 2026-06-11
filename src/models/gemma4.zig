@@ -1961,7 +1961,8 @@ pub const Gemma4Model = struct {
         if (self.fmt.layerTensor(li, "post_attention_norm.weight")) |post_norm| {
             self.be.rmsNorm(self.hidden2.ptr, self.normAsF32(post_norm, e), self.hidden2.ptr, e, self.rms_eps);
         }
-        self.be.add(self.hidden.ptr, self.hidden2.ptr, self.hidden.ptr, e);
+        // Residual add deferred: denseFfn() fuses add(hidden, hidden2) + rmsNorm via addRmsNorm,
+        // saving one dispatch per layer. hidden2 holds attn output until denseFfn() consumes it.
         self.perf.end(.add, t);
     }
 
@@ -2039,17 +2040,19 @@ pub const Gemma4Model = struct {
         }
     }
 
-    /// Dense FFN: pre-norm → gate/up projections → GELU-gated multiply → down projection
-    /// → post_ffw_norm_1. Output stored in self.dense_out.
+    /// Dense FFN: fused (residual-add + pre-norm) → gate/up projections → GELU-gated multiply
+    /// → down projection → post_ffw_norm_1. Output stored in self.dense_out.
     /// Uses per-layer FFN dimension (may vary across layers for E2B).
     fn denseFfn(self: *Gemma4Model, li: u32) !void {
         const e: usize = self.n_embd;
         const ff: usize = self.per_layer_ff_dim[li];
 
-        // Pre-FFN RMSNorm
+        // Fused residual add + pre-FFN RMSNorm.
+        // hidden2 holds the attention output from attention() (residual add deferred to here).
+        // addRmsNorm: hidden += hidden2 (residual), hidden2 = rmsNorm(hidden, ffn_norm).
         var t = self.perf.start();
         const norm_w = self.fmt.layerTensor(li, "ffn_norm.weight") orelse return error.MissingTensor;
-        self.be.rmsNorm(self.hidden.ptr, self.normAsF32(norm_w, e), self.hidden2.ptr, e, self.rms_eps);
+        self.be.addRmsNorm(self.hidden.ptr, self.hidden2.ptr, self.normAsF32(norm_w, e), self.hidden2.ptr, e, self.rms_eps);
         self.perf.end(.rms_norm, t);
 
         // Gate + Up projections + GELU*mul
