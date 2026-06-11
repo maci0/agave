@@ -834,7 +834,7 @@ pub const Llama4Model = struct {
         self.perf.end(.gemv_out, t);
 
         t = self.perf.start();
-        self.be.add(self.hidden.ptr, self.hidden2.ptr, self.hidden.ptr, e);
+        // Residual add deferred: feedForward/denseFFN fuses add(hidden, hidden2) + rmsNorm.
         self.perf.end(.add, t);
     }
 
@@ -849,15 +849,17 @@ pub const Llama4Model = struct {
         }
     }
 
-    /// Dense SwiGLU FFN: pre-norm, gate+up projections, SiLU*mul, down projection, residual.
+    /// Dense SwiGLU FFN: fused (residual-add + pre-norm), gate+up projections, SiLU*mul,
+    /// down projection, residual. hidden2 holds the deferred attention output on entry.
     fn denseFFN(self: *Llama4Model, li: u32) !void {
         const e: usize = self.n_embd;
         const ff: usize = self.n_ff;
 
+        // Fused residual add + pre-FFN norm (hidden2 = deferred attention output).
         var t = self.perf.start();
         const norm_w = self.fmt.layerTensor(li, "ffn_norm.weight") orelse
             self.fmt.layerTensor(li, "post_attention_layernorm.weight") orelse return error.MissingTensor;
-        self.be.rmsNorm(self.hidden.ptr, self.normAsF32(norm_w, e), self.hidden2.ptr, self.hidden.len, self.rms_eps);
+        self.be.addRmsNorm(self.hidden.ptr, self.hidden2.ptr, self.normAsF32(norm_w, e), self.hidden2.ptr, self.hidden.len, self.rms_eps);
         self.perf.end(.rms_norm, t);
 
         t = self.perf.start();
@@ -889,11 +891,11 @@ pub const Llama4Model = struct {
         const n_exp: usize = self.n_experts;
         const n_active: usize = self.n_experts_active;
 
-        // Pre-FFN norm
+        // Fused residual add + pre-FFN norm (hidden2 = deferred attention output).
         var t = self.perf.start();
         const norm_w = self.fmt.layerTensor(li, "ffn_norm.weight") orelse
             self.fmt.layerTensor(li, "post_attention_layernorm.weight") orelse return error.MissingTensor;
-        self.be.rmsNorm(self.hidden.ptr, self.normAsF32(norm_w, e), self.hidden2.ptr, self.hidden.len, self.rms_eps);
+        self.be.addRmsNorm(self.hidden.ptr, self.hidden2.ptr, self.normAsF32(norm_w, e), self.hidden2.ptr, self.hidden.len, self.rms_eps);
         self.perf.end(.rms_norm, t);
 
         // Router: logits = router_weight @ hidden2

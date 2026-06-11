@@ -632,8 +632,7 @@ pub const GptOssModel = struct {
         const pan = self.fmt.layerTensor(li, "post_attention_norm.weight") orelse return error.MissingTensor;
         self.be.rmsNorm(self.hidden2.ptr, self.normAsF32(pan, e), self.hidden2.ptr, e, self.rms_eps);
 
-        // 9. Residual: hidden += attn_out (post-normed).
-        self.be.add(self.hidden.ptr, self.hidden2.ptr, self.hidden.ptr, e);
+        // 9. Residual add deferred: moeLayer fuses add(hidden, hidden2) + optional rmsNorm.
     }
 
     /// MoE FFN layer: optional pre-FFN norm → router → top-k selection →
@@ -644,10 +643,12 @@ pub const GptOssModel = struct {
         const n_exp: usize = self.n_experts;
         const n_active: usize = self.n_experts_active;
 
-        // Optional pre-FFN norm (may be absent — model uses residual stream directly).
+        // Fused residual add + optional pre-FFN norm.
+        // hidden2 holds the deferred attention output (residual add deferred from attention()).
         if (self.fmt.layerTensor(li, "ffn_norm.weight")) |fnw| {
-            self.be.rmsNorm(self.hidden.ptr, self.normAsF32(fnw, e), self.hidden2.ptr, e, self.rms_eps);
+            self.be.addRmsNorm(self.hidden.ptr, self.hidden2.ptr, self.normAsF32(fnw, e), self.hidden2.ptr, e, self.rms_eps);
         } else {
+            self.be.add(self.hidden.ptr, self.hidden2.ptr, self.hidden.ptr, e);
             @memcpy(self.hidden2[0..e], self.hidden[0..e]);
         }
 

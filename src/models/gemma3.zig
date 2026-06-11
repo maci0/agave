@@ -861,7 +861,7 @@ pub const Gemma3Model = struct {
         t = self.perf.start();
         const post_norm = self.fmt.layerTensor(li, "post_attention_norm.weight") orelse return error.MissingTensor;
         self.be.rmsNorm(self.hidden2.ptr, self.normAsF32(post_norm, e), self.hidden2.ptr, self.hidden2.len, self.rms_eps);
-        self.be.add(self.hidden.ptr, self.hidden2.ptr, self.hidden.ptr, e);
+        // Residual add deferred: feedForward() fuses add(hidden, hidden2) + rmsNorm via addRmsNorm.
         self.perf.end(.add, t);
     }
 
@@ -869,9 +869,10 @@ pub const Gemma3Model = struct {
         const e: usize = self.n_embd;
         const ff: usize = self.n_ff;
 
+        // Fused residual add + pre-FFN RMSNorm (hidden2 holds deferred attn output).
         var t = self.perf.start();
         const norm_w = self.fmt.layerTensor(li, "ffn_norm.weight") orelse return error.MissingTensor;
-        self.be.rmsNorm(self.hidden.ptr, self.normAsF32(norm_w, e), self.hidden2.ptr, self.hidden.len, self.rms_eps);
+        self.be.addRmsNorm(self.hidden.ptr, self.hidden2.ptr, self.normAsF32(norm_w, e), self.hidden2.ptr, self.hidden.len, self.rms_eps);
         self.perf.end(.rms_norm, t);
 
         t = self.perf.start();

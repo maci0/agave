@@ -471,8 +471,7 @@ pub const Glm4Model = struct {
         // 9. Output projection
         try self.mlxLayerGemv(li, "self_attn.o_proj", self.attn_out, self.hidden2, e, nh * vhd);
 
-        // 10. Residual
-        self.be.add(self.hidden.ptr, self.hidden2.ptr, self.hidden.ptr, e);
+        // 10. Residual add deferred: denseFfn/moeFfn fuses add(hidden, hidden2) + rmsNorm.
     }
 
     // ── Dense FFN (layers 0..first_k_dense_replace-1) ─────────────
@@ -481,8 +480,9 @@ pub const Glm4Model = struct {
         const e: usize = self.n_embd;
         const ff: usize = self.intermediate_size;
 
+        // Fused residual add + pre-FFN norm (hidden2 = deferred attention output).
         const nw = self.layerTensor(li, "post_attention_layernorm.weight") orelse return error.MissingTensor;
-        self.be.rmsNorm(self.hidden.ptr, @ptrCast(@alignCast(nw.data_ptr)), self.hidden2.ptr, e, self.rms_eps);
+        self.be.addRmsNorm(self.hidden.ptr, self.hidden2.ptr, @ptrCast(@alignCast(nw.data_ptr)), self.hidden2.ptr, e, self.rms_eps);
 
         self.be.sync();
 
@@ -536,8 +536,9 @@ pub const Glm4Model = struct {
         const e: usize = self.n_embd;
         const ff: usize = self.moe_intermediate_size;
 
+        // Fused residual add + pre-FFN norm (hidden2 = deferred attention output).
         const nw = self.layerTensor(li, "post_attention_layernorm.weight") orelse return error.MissingTensor;
-        self.be.rmsNorm(self.hidden.ptr, @ptrCast(@alignCast(nw.data_ptr)), self.hidden2.ptr, e, self.rms_eps);
+        self.be.addRmsNorm(self.hidden.ptr, self.hidden2.ptr, @ptrCast(@alignCast(nw.data_ptr)), self.hidden2.ptr, e, self.rms_eps);
 
         // Router: sigmoid scoring
         const gate_t = self.layerTensor(li, "mlp.gate.weight") orelse return error.MissingTensor;
