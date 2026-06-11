@@ -913,10 +913,10 @@ pub const Gemma3Model = struct {
         self.doGemv(self.ff_gate.ptr, dw, self.hidden2.ptr, e, ff);
         self.perf.end(.gemv_ffn, t);
 
+        // Fused post-FFN norm + residual add.
         t = self.perf.start();
         const post_norm = self.fmt.layerTensor(li, "post_ffw_norm.weight") orelse return error.MissingTensor;
-        self.be.rmsNorm(self.hidden2.ptr, self.normAsF32(post_norm, e), self.hidden2.ptr, self.hidden2.len, self.rms_eps);
-        self.be.add(self.hidden.ptr, self.hidden2.ptr, self.hidden.ptr, e);
+        self.be.rmsNormAdd(self.hidden2.ptr, self.normAsF32(post_norm, e), self.hidden.ptr, e, self.rms_eps);
         self.perf.end(.add, t);
     }
 
