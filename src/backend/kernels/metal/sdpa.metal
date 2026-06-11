@@ -17,7 +17,8 @@
 #include <metal_stdlib>
 using namespace metal;
 
-constant uint sdpa_max_seq_len = 4096;
+// Not used as array bound — kernel tiles over sl with sdpa_block_size; 64K matches Zig-side limit.
+constant uint sdpa_max_seq_len = 65536;
 constant uint sdpa_max_head_dim = 256;
 constant uint sdpa_block_size = 16;  // Bc: K,V block size (16 to fit 32KB threadgroup limit)
 constant float sparse_v_threshold = 1e-6f;  // Skip V positions with negligible softmax weight

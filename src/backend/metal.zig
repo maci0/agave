@@ -49,8 +49,11 @@ const page_size = std.heap.page_size_min;
 const threadgroup_size: usize = 256;
 /// Softmax inputs smaller than this threshold run on CPU (GPU dispatch overhead dominates).
 const softmax_cpu_threshold: usize = 128;
-/// Maximum sequence length for the fused SDPA kernel (limited by threadgroup memory).
-const sdpa_max_seq_len: usize = 4096;
+/// Maximum sequence length for the fused SDPA kernel.
+/// The kernel tiles over sl via sdpa_block_size=16 blocks — no per-element threadgroup allocation,
+/// so the true limit is the buffer size passed in (kv_cache allocation), not a kernel constraint.
+/// 65536 = 64K tokens; real limit is --ctx-size / KV cache allocation.
+const sdpa_max_seq_len: usize = 65536;
 /// Maximum per-head dimension for the fused SDPA kernel.
 const sdpa_max_head_dim: usize = 256;
 /// Number of output rows processed per threadgroup in Q4_0 GEMV (must match q4_0_nr in gemv.metal).
