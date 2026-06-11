@@ -509,6 +509,7 @@ const spv_split_qgate = @embedFile("kernels/vulkan/split_qgate.spv");
 // Fused
 const spv_add_scaled = @embedFile("kernels/vulkan/add_scaled.spv");
 const spv_add_rms_norm = @embedFile("kernels/vulkan/add_rms_norm.spv");
+const spv_rms_norm_add = @embedFile("kernels/vulkan/rms_norm_add.spv");
 
 // Normalization
 const spv_rms_norm = @embedFile("kernels/vulkan/rms_norm.spv");
@@ -615,6 +616,7 @@ pub const VulkanBackend = struct {
     pipe_split_qgate: PipelineInfo = .{},
     pipe_add_scaled: PipelineInfo = .{},
     pipe_add_rms_norm: PipelineInfo = .{},
+    pipe_rms_norm_add: PipelineInfo = .{},
 
     // Normalization pipelines
     pipe_rms_norm: PipelineInfo = .{},
@@ -1100,6 +1102,8 @@ pub const VulkanBackend = struct {
         self.pipe_add_scaled = try self.createPipeline(spv_add_scaled, 2, 8);
         // Fused add+rmsNorm: 4 bufs (data in-place, residual, weight, out), 8 bytes push (n, eps)
         self.pipe_add_rms_norm = try self.createPipeline(spv_add_rms_norm, 4, 8);
+        // Fused rmsNorm+accumulate: 3 bufs (a read-only, weight, b in-place), 8 bytes push (n, eps)
+        self.pipe_rms_norm_add = try self.createPipeline(spv_rms_norm_add, 3, 8);
         // Normalization: rmsNorm 3 bufs, 8 bytes push (n, eps)
         self.pipe_rms_norm = try self.createPipeline(spv_rms_norm, 3, 8);
         // Per-head rmsNorm: 2 bufs (data in-place, weight), 12 bytes push (n_heads, head_dim, eps)
@@ -1744,13 +1748,16 @@ pub const VulkanBackend = struct {
     }
 
     /// Fused rmsNorm + accumulate: b[i] += rmsNorm(a, weight, eps)[i].
-    /// TODO: add rms_norm_add.comp Vulkan shader. CPU fallback for correctness in the interim.
     pub fn rmsNormAdd(self: *VulkanBackend, a: [*]const f32, weight: [*]const f32, b: [*]f32, n: usize, eps: f32) void {
-        self.sync();
-        var ss: f32 = 0;
-        for (0..n) |i| ss += a[i] * a[i];
-        const inv = 1.0 / @sqrt(ss / @as(f32, @floatFromInt(n)) + eps);
-        for (0..n) |i| b[i] += a[i] * weight[i] * inv;
+        const sz = n * @sizeOf(f32);
+        const a_buf = self.getInputBuf(a, sz);
+        const w_vk = self.getOrUpload(@ptrCast(weight), sz);
+        const b_buf = self.getInPlaceBuf(b, sz);
+        const Params = extern struct { n: u32, eps: f32 };
+        const params = Params{ .n = @intCast(n), .eps = eps };
+        const bufs = [_]VkBuffer{ a_buf.buf, w_vk.buf, b_buf.buf };
+        const buf_sizes = [_]usize{ sz, sz, sz };
+        self.dispatch(self.pipe_rms_norm_add, &bufs, &buf_sizes, @ptrCast(&params), @sizeOf(Params), 1);
     }
 
     /// Fused add + rmsNorm.
