@@ -1686,6 +1686,34 @@ pub const CudaBackend = struct {
     /// No-op — CUDA dispatches are not batched.
     pub fn endBatch(_: *CudaBackend) void {}
 
+    // ── CUDA Graph capture (spec decode optimization) ────────────────────────
+    // CUDA graphs eliminate per-step kernel launch overhead (~10μs/step).
+    // Full implementation requires refactoring kernel launches to use a CUDA stream
+    // (currently using default stream 0). API surface is defined here for future use.
+    // When implemented: capture the draft forward pass as a graph for the first round,
+    // then replay for subsequent spec decode rounds with updated device pointers.
+
+    /// Begin CUDA graph capture on the current stream.
+    /// No-op until stream-based kernel launches are implemented.
+    pub fn beginGraphCapture(_: *CudaBackend) void {
+        // TODO: cuStreamBeginCapture(stream, CU_STREAM_CAPTURE_MODE_GLOBAL)
+        std.log.debug("CUDA graph capture: not yet implemented (requires stream refactor)", .{});
+    }
+
+    /// End CUDA graph capture and instantiate executable graph.
+    /// Returns true on success, false if capture is unsupported.
+    pub fn endGraphCapture(_: *CudaBackend) bool {
+        // TODO: cuStreamEndCapture(stream, &graph); cuGraphInstantiate(...)
+        return false;
+    }
+
+    /// Launch a previously captured CUDA graph for the spec decode hot path.
+    /// Falls back to regular execution if graph was never captured.
+    pub fn launchGraph(_: *CudaBackend) bool {
+        // TODO: cuGraphLaunch(graphExec, stream)
+        return false;
+    }
+
     /// Returns backend startup information for display.
     pub fn backendInfo(self: *const CudaBackend) backend_mod.BackendInfo {
         return .{
