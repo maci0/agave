@@ -372,6 +372,7 @@ const cli_specs = [_]cli_mod.ArgSpec{
     .{ .long = "mmap", .help = "Use lazy mmap instead of eagerly paging weights into RAM." },
     .{ .long = "prefill-batch-size", .kind = .option, .help = "Prefill chunk size in tokens [default: 512]." },
     // KV cache
+    .{ .long = "no-kv-cache", .help = "Disable KV cache allocation (prefill-only / embedding use cases). Prevents any decode-phase caching." },
     .{ .long = "kv-type", .kind = .option, .help = "KV cache quantization [default: f16]." },
     .{ .long = "kv-type-k", .kind = .option, .help = "KV cache key quantization (overrides --kv-type for keys)." },
     .{ .long = "kv-type-v", .kind = .option, .help = "KV cache value quantization (overrides --kv-type for values)." },
@@ -972,6 +973,9 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
         .backend_choice = backend_choice,
         .device_id = device_id,
         .ctx_size = blk: {
+            // --no-kv-cache: set ctx_size=0 → model init skips KV allocation entirely.
+            // Suitable for prefill-only (embedding extraction, scoring) workloads.
+            if (res.flag("no-kv-cache")) break :blk 0;
             const raw = res.option("ctx-size") orelse break :blk 0;
             if (std.mem.eql(u8, raw, "auto")) break :blk std.math.maxInt(u32);
             break :blk std.fmt.parseInt(u32, raw, 10) catch {
