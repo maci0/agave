@@ -722,36 +722,33 @@ pub const DiffusionGemmaModel = struct {
         const rope_theta = if (is_global) self.gl_rope_theta else self.sl_rope_theta;
         const rope_dim: u32 = if (is_global) self.gl_rope_dim else self.sl_rope_dim;
 
-        // 1. Pre-attention norm for all canvas tokens.
+        // 1. Pre-attention norm for all canvas tokens (batched: cl vectors of length e).
         const nw_in = self.lt(li, "input_layernorm.weight") orelse return error.MissingTensor;
-        for (0..cl) |i| {
-            self.be.rmsNorm(self.pf_hidden[i * e ..].ptr, wf32(nw_in), self.pf_scratch[i * e ..].ptr, e, self.rms_eps);
-        }
+        self.be.rmsNormBatched(self.pf_hidden.ptr, wf32(nw_in), self.pf_scratch.ptr, cl, e, self.rms_eps);
 
-        // 2. QK projection for all canvas tokens.
+        // 2. QKV projection for all canvas tokens via batched GEMM (cl tokens at once).
         const qw = self.lt(li, "self_attn.q_proj.weight") orelse return error.MissingTensor;
         const kw = self.lt(li, "self_attn.k_proj.weight") orelse return error.MissingTensor;
         const vw = self.lt(li, "self_attn.v_proj.weight") orelse return error.MissingTensor;
         const kvd: usize = nkv * hd;
 
-        // Allocate scratch for all canvas K/V.
         // Use pre-allocated canvas K/V buffers (sized for max kvd = gl_n_kv_head * gl_head_dim).
         const canvas_k = self.canvas_k_buf[0 .. cl * kvd];
         const canvas_v = self.canvas_v_buf[0 .. cl * kvd];
 
-        for (0..cl) |i| {
-            const inp = self.pf_scratch[i * e ..].ptr;
-            self.be.gemv(inp, .{ .data = qw.data_ptr, .dtype = qw.dtype }, self.q_buf.ptr + i * qd, qd, e);
-            self.be.gemv(inp, .{ .data = kw.data_ptr, .dtype = kw.dtype }, canvas_k.ptr + i * kvd, kvd, e);
-            self.be.gemv(inp, .{ .data = vw.data_ptr, .dtype = vw.dtype }, canvas_v.ptr + i * kvd, kvd, e);
-        }
+        // Batched GEMM: Q[cl, qd] = pf_scratch[cl, e] @ Wq^T[qd, e]
+        self.be.beginBatch();
+        self.be.gemm(self.pf_scratch.ptr, .{ .data = qw.data_ptr, .dtype = qw.dtype }, self.q_buf.ptr, cl, qd, e);
+        self.be.gemm(self.pf_scratch.ptr, .{ .data = kw.data_ptr, .dtype = kw.dtype }, canvas_k.ptr, cl, kvd, e);
+        self.be.gemm(self.pf_scratch.ptr, .{ .data = vw.data_ptr, .dtype = vw.dtype }, canvas_v.ptr, cl, kvd, e);
+        self.be.endBatch();
 
-        // QK norms.
+        // QK norms (batched: process cl*nh heads, each of size hd).
         if (self.lt(li, "self_attn.q_norm.weight")) |qnw| {
-            for (0..cl) |i| self.be.rmsNormBatched(self.q_buf.ptr + i * qd, wf32(qnw), self.q_buf.ptr + i * qd, nh, hd, self.rms_eps);
+            self.be.rmsNormBatched(self.q_buf.ptr, wf32(qnw), self.q_buf.ptr, cl * nh, hd, self.rms_eps);
         }
         if (self.lt(li, "self_attn.k_norm.weight")) |knw| {
-            for (0..cl) |i| self.be.rmsNormBatched(canvas_k.ptr + i * kvd, wf32(knw), canvas_k.ptr + i * kvd, nkv, hd, self.rms_eps);
+            self.be.rmsNormBatched(canvas_k.ptr, wf32(knw), canvas_k.ptr, cl * nkv, hd, self.rms_eps);
         }
 
         // 3. RoPE — canvas tokens start at kv_seq_len in position space.
@@ -793,19 +790,17 @@ pub const DiffusionGemmaModel = struct {
             self.be.gemv(self.attn_out.ptr, .{ .data = ow.data_ptr, .dtype = ow.dtype }, self.pf_scratch[i * e ..].ptr, e, attn_out_dim);
         }
 
-        // Post-attn norm + residual.
+        // Post-attn norm (batched) + residual add (batched).
         if (self.lt(li, "post_attention_layernorm.weight")) |pan| {
-            for (0..cl) |i| self.be.rmsNorm(self.pf_scratch[i * e ..].ptr, wf32(pan), self.pf_scratch[i * e ..].ptr, e, self.rms_eps);
+            self.be.rmsNormBatched(self.pf_scratch.ptr, wf32(pan), self.pf_scratch.ptr, cl, e, self.rms_eps);
         }
-        for (0..cl) |i| {
-            self.be.add(self.pf_hidden[i * e ..].ptr, self.pf_scratch[i * e ..].ptr, self.pf_hidden[i * e ..].ptr, e);
-        }
+        // Element-wise add: pf_hidden += pf_scratch (cl * e elements).
+        self.be.sync();
+        for (0..cl * e) |i| self.pf_hidden[i] += self.pf_scratch[i];
 
-        // Pre-FFN norm for all canvas tokens.
+        // Pre-FFN norm (batched) for all canvas tokens.
         const nw_pre_ffn = self.lt(li, "pre_feedforward_layernorm.weight") orelse return error.MissingTensor;
-        for (0..cl) |i| {
-            self.be.rmsNorm(self.pf_hidden[i * e ..].ptr, wf32(nw_pre_ffn), self.pf_scratch[i * e ..].ptr, e, self.rms_eps);
-        }
+        self.be.rmsNormBatched(self.pf_hidden.ptr, wf32(nw_pre_ffn), self.pf_scratch.ptr, cl, e, self.rms_eps);
 
         // MoE / dense FFN for each canvas token.
         for (0..cl) |i| {
@@ -816,12 +811,12 @@ pub const DiffusionGemmaModel = struct {
             }
         }
 
-        // Post-FFN norm + residual.
+        // Post-FFN norm (batched) + residual add.
         if (self.lt(li, "post_feedforward_layernorm.weight")) |pffn| {
-            for (0..cl) |i| {
-                self.be.rmsNorm(self.pf_scratch[i * e ..].ptr, wf32(pffn), self.pf_scratch[i * e ..].ptr, e, self.rms_eps);
-                self.be.add(self.pf_hidden[i * e ..].ptr, self.pf_scratch[i * e ..].ptr, self.pf_hidden[i * e ..].ptr, e);
-            }
+            self.be.sync();
+            self.be.rmsNormBatched(self.pf_scratch.ptr, wf32(pffn), self.pf_scratch.ptr, cl, e, self.rms_eps);
+            self.be.sync();
+            for (0..cl * e) |i| self.pf_hidden[i] += self.pf_scratch[i];
         }
     }
 
