@@ -9,6 +9,7 @@ pub const Arch = enum {
     qwen35,
     gemma3,
     gemma4,
+    diffusion_gemma,
     gpt_oss,
     nemotron_h,
     nemotron_nano,
@@ -46,6 +47,8 @@ pub const Arch = enum {
             .{ "deepseek2", .glm4 },
             .{ "llama4", .llama4 },
             .{ "llama4_text", .llama4 },
+            .{ "diffusion_gemma", .diffusion_gemma },
+            .{ "diffusion_gemma_text", .diffusion_gemma },
         };
         inline for (map) |entry| {
             if (std.mem.eql(u8, name, entry[0])) return entry[1];
@@ -58,6 +61,7 @@ pub const Arch = enum {
         return switch (self) {
             .gemma3 => "Gemma 3",
             .gemma4 => "Gemma 4",
+            .diffusion_gemma => "DiffusionGemma",
             .qwen35 => "Qwen 3.5",
             .gpt_oss => "GPT-OSS",
             .nemotron_h => "Nemotron-H",
@@ -71,7 +75,7 @@ pub const Arch = enum {
     pub fn chatTemplate(self: Arch) ChatTemplate {
         return switch (self) {
             .gemma3 => ChatTemplate.gemma,
-            .gemma4 => ChatTemplate.gemma4,
+            .gemma4, .diffusion_gemma => ChatTemplate.gemma4,
             .gpt_oss => ChatTemplate.gpt_oss,
             .qwen35 => ChatTemplate.qwen35,
             .glm4 => ChatTemplate.glm4,
@@ -91,7 +95,7 @@ pub const Arch = enum {
     pub fn templateName(self: Arch) []const u8 {
         return switch (self) {
             .gemma3 => "gemma",
-            .gemma4 => "gemma4",
+            .gemma4, .diffusion_gemma => "gemma4",
             .gpt_oss => "gpt-oss",
             .qwen35 => "qwen35",
             .glm4 => "glm4",
@@ -105,6 +109,7 @@ pub const Arch = enum {
         return switch (self) {
             .gemma3 => build_options.enable_gemma3,
             .gemma4 => build_options.enable_gemma4,
+            .diffusion_gemma => build_options.enable_diffusion_gemma,
             .qwen35 => build_options.enable_qwen35,
             .gpt_oss => build_options.enable_gpt_oss,
             .nemotron_h => build_options.enable_nemotron_h,
@@ -121,14 +126,14 @@ pub const Arch = enum {
             .glm4 => glm4_fallback_bos,
             .qwen35, .gpt_oss, .nemotron_h, .nemotron_nano => null,
             .llama4 => llama4_fallback_bos,
-            .gemma3, .gemma4 => default_bos_id,
+            .gemma3, .gemma4, .diffusion_gemma => default_bos_id,
         };
     }
 
     /// Fallback EOS token ID when metadata is missing.
     pub fn defaultEos(self: Arch) u32 {
         return switch (self) {
-            .gemma3, .gemma4 => gemma_fallback_eos,
+            .gemma3, .gemma4, .diffusion_gemma => gemma_fallback_eos,
             .llama4 => llama4_fallback_eos,
             else => default_fallback_eos,
         };
@@ -149,6 +154,7 @@ pub const Arch = enum {
         return switch (self) {
             .gemma3 => "gemma3",
             .gemma4 => "gemma4",
+            .diffusion_gemma => "diffusion-gemma",
             .qwen35 => "qwen35",
             .gpt_oss => "gpt-oss",
             .nemotron_h => "nemotron-h",
@@ -230,12 +236,15 @@ test "Arch.detect known names" {
     try std.testing.expectEqual(Arch.glm4, Arch.detect("glm4_moe_lite").?);
     try std.testing.expectEqual(Arch.llama4, Arch.detect("llama4").?);
     try std.testing.expectEqual(Arch.llama4, Arch.detect("llama4_text").?);
+    try std.testing.expectEqual(Arch.diffusion_gemma, Arch.detect("diffusion_gemma").?);
+    try std.testing.expectEqual(Arch.diffusion_gemma, Arch.detect("diffusion_gemma_text").?);
     try std.testing.expectEqual(@as(?Arch, null), Arch.detect("unknown_model"));
 }
 
 test "Arch.displayName" {
     try std.testing.expectEqualStrings("Gemma 3", Arch.gemma3.displayName());
     try std.testing.expectEqualStrings("Gemma 4", Arch.gemma4.displayName());
+    try std.testing.expectEqualStrings("DiffusionGemma", Arch.diffusion_gemma.displayName());
     try std.testing.expectEqualStrings("Qwen 3.5", Arch.qwen35.displayName());
     try std.testing.expectEqualStrings("GPT-OSS", Arch.gpt_oss.displayName());
     try std.testing.expectEqualStrings("Nemotron-H", Arch.nemotron_h.displayName());

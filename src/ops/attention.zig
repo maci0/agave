@@ -636,6 +636,117 @@ test "sdpa windowed attention excludes tokens outside window" {
     try std.testing.expectApproxEqAbs(@as(f32, 0.0), attn_out[3], 1e-5);
 }
 
+/// Canvas attention for DiffusionGemma denoising: one query token attends to
+/// all cached prompt tokens (from kv cache) and all canvas tokens (bidirectional).
+///
+/// This implements the block diffusion attention pattern:
+///   - Prompt tokens (in KV cache): query attends to all (no causal mask).
+///   - Canvas tokens: query attends to all cl canvas positions (bidirectional).
+///
+/// Parameters:
+///   - q: Query vector [nh * hd] for this canvas token.
+///   - kv_keys: KV cache byte slice (prompt tokens, n_cached entries).
+///   - kv_values: KV cache value byte slice (prompt tokens).
+///   - canvas_k: Canvas key vectors [cl * nkv * hd].
+///   - canvas_v: Canvas value vectors [cl * nkv * hd].
+///   - attn_out: Output buffer [nh * hd].
+///   - scores: Scratch [n_cached + cl] elements.
+///   - nh, nkv, hd: Head counts and head dimension.
+///   - n_cached: Number of prompt tokens in KV cache.
+///   - cl: Canvas length (number of canvas tokens to attend to).
+///   - scale: Attention scale (1/sqrt(hd)).
+///   - be: Backend for softmax.
+///   - kv_type_k, kv_type_v: KV cache quantization types.
+/// Canvas attention for DiffusionGemma denoising: one query token attends to
+/// all cached prompt tokens (from kv cache) and all canvas tokens (bidirectional,
+/// no causal mask). CPU-only — canvas (256 tokens) is small enough that GPU
+/// dispatch overhead is not worth it.
+pub fn scaledDotProductAttentionCanvas(
+    q: [*]const f32,
+    kv_keys: []u8,
+    kv_values: []u8,
+    canvas_k: []const f32,
+    canvas_v: []const f32,
+    attn_out: [*]f32,
+    scores: [*]f32,
+    nh: usize,
+    nkv: usize,
+    hd: usize,
+    n_cached: usize,
+    cl: usize,
+    scale: f32,
+    be: Backend,
+    kv_type_k: KvQuantType,
+    kv_type_v: KvQuantType,
+) void {
+    _ = be;
+    const hpg = nh / nkv;
+    const kvd = nkv * hd;
+    const total_kv = n_cached + cl;
+
+    @memset(attn_out[0 .. nh * hd], 0);
+
+    for (0..nh) |h| {
+        const kvh = h / hpg;
+        const q_base = h * hd;
+
+        // 1. Score against all cached prompt tokens (f32 or quantized).
+        if (kv_type_k == .f32) {
+            const f32_keys: [*]const f32 = @ptrCast(@alignCast(kv_keys.ptr));
+            for (0..n_cached) |t| {
+                const k_base = t * kvd + kvh * hd;
+                var dot: f32 = 0;
+                for (0..hd) |d| dot = @mulAdd(f32, q[q_base + d], f32_keys[k_base + d], dot);
+                scores[t] = dot * scale;
+            }
+        } else {
+            for (0..n_cached) |t| {
+                const elem_off = t * kvd + kvh * hd;
+                const k_off = kv_quant.kvByteOffset(kv_type_k, elem_off);
+                scores[t] = kv_quant.kvDot(q + q_base, kv_keys[k_off..].ptr, hd, kv_type_k) * scale;
+            }
+        }
+
+        // 2. Score against canvas tokens (bidirectional — all attend to all).
+        for (0..cl) |ci| {
+            const k_ptr = canvas_k.ptr + ci * kvd + kvh * hd;
+            var dot: f32 = 0;
+            for (0..hd) |d| dot = @mulAdd(f32, q[q_base + d], k_ptr[d], dot);
+            scores[n_cached + ci] = dot * scale;
+        }
+
+        // 3. Softmax.
+        cpuSoftmax(scores, total_kv);
+
+        // 4. V accumulation from cached tokens.
+        if (kv_type_v == .f32) {
+            const f32_values: [*]const f32 = @ptrCast(@alignCast(kv_values.ptr));
+            for (0..n_cached) |t| {
+                const w = scores[t];
+                if (w < sparse_v_threshold) continue;
+                const v_base = t * kvd + kvh * hd;
+                for (0..hd) |d| attn_out[q_base + d] = @mulAdd(f32, w, f32_values[v_base + d], attn_out[q_base + d]);
+            }
+        } else {
+            for (0..n_cached) |t| {
+                const w = scores[t];
+                if (w < sparse_v_threshold) continue;
+                const elem_off = t * kvd + kvh * hd;
+                const v_off = kv_quant.kvByteOffset(kv_type_v, elem_off);
+                kv_quant.kvMulAccum(attn_out + q_base, w, kv_values[v_off..].ptr, hd, kv_type_v);
+            }
+        }
+
+        // 5. V accumulation from canvas tokens (f32, no quantization).
+        for (0..cl) |ci| {
+            const w = scores[n_cached + ci];
+            if (w < sparse_v_threshold) continue;
+            const v_ptr = canvas_v.ptr + ci * kvd + kvh * hd;
+            for (0..hd) |d| attn_out[q_base + d] = @mulAdd(f32, w, v_ptr[d], attn_out[q_base + d]);
+        }
+    }
+}
+
 test "fuzz: all attention functions" {
     // Exercises ALL pub functions: scaledDotProductAttention,
     // scaledDotProductAttentionTiered, pagedAttention, TieredSdpaInfo.

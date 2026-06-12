@@ -747,6 +747,7 @@ pub fn resetKvCache(self: anytype) void {
 pub const ModelStorage = union(enum) {
     gemma3: Gemma3Model,
     gemma4: Gemma4Model,
+    diffusion_gemma: DiffusionGemmaModel,
     qwen35: Qwen35Model,
     gpt_oss: GptOssModel,
     nemotron_h: NemotronHModel,
@@ -758,7 +759,7 @@ pub const ModelStorage = union(enum) {
     /// Returns a ModelStorage union holding the initialized concrete model.
     pub fn initFromArch(arch: Arch, allocator: std.mem.Allocator, fmt: format_mod.Format, be: backend_mod.Backend, ctx_size: u32, kv_type_k: KvQuantType, kv_type_v: KvQuantType, kv_boundary_v: u32, kv_eviction_budget: u32, tiered_cache: ?*TieredKvCache, tp_rank: u32, tp_degree: u32) !ModelStorage {
         switch (arch) {
-            inline .gemma3, .gemma4, .qwen35, .gpt_oss, .nemotron_h, .nemotron_nano, .glm4, .llama4 => |a| {
+            inline .gemma3, .gemma4, .diffusion_gemma, .qwen35, .gpt_oss, .nemotron_h, .nemotron_nano, .glm4, .llama4 => |a| {
                 if (comptime !a.isEnabled()) unreachable;
                 const M = comptime modelType(a);
                 var mdl = try M.init(allocator, fmt, be, ctx_size, kv_type_k, kv_type_v, tiered_cache);
@@ -785,6 +786,7 @@ pub const ModelStorage = union(enum) {
         return switch (a) {
             .gemma3 => Gemma3Model,
             .gemma4 => Gemma4Model,
+            .diffusion_gemma => DiffusionGemmaModel,
             .qwen35 => Qwen35Model,
             .gpt_oss => GptOssModel,
             .nemotron_h => NemotronHModel,
@@ -960,6 +962,7 @@ pub const ModelStorage = union(enum) {
 
 const Gemma3Model = if (build_options.enable_gemma3) @import("gemma3.zig").Gemma3Model else void;
 const Gemma4Model = if (build_options.enable_gemma4) @import("gemma4.zig").Gemma4Model else void;
+const DiffusionGemmaModel = if (build_options.enable_diffusion_gemma) @import("diffusion_gemma.zig").DiffusionGemmaModel else void;
 const Qwen35Model = if (build_options.enable_qwen35) @import("qwen35.zig").Qwen35Model else void;
 const GptOssModel = if (build_options.enable_gpt_oss) @import("gpt_oss.zig").GptOssModel else void;
 const NemotronHModel = if (build_options.enable_nemotron_h) @import("nemotron_h.zig").NemotronHModel else void;

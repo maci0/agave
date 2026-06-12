@@ -406,6 +406,10 @@ const cli_specs = [_]cli_mod.ArgSpec{
     .{ .long = "pflash-alpha", .kind = .option, .help = "PFlash block selection threshold (0.0-2.0) [default: 0.85]." },
     .{ .long = "pflash-block-size", .kind = .option, .help = "PFlash scoring block size in tokens [default: 64]." },
     .{ .long = "pflash-scorer", .kind = .option, .help = "Separate model for PFlash block importance scoring (defaults to --draft-model)." },
+    // Diffusion generation
+    .{ .long = "diffusion-steps", .kind = .option, .help = "Max denoising iterations for DiffusionGemma [default: 16]." },
+    .{ .long = "diffusion-canvas", .kind = .option, .help = "Canvas size (tokens per generation block) for DiffusionGemma [default: 256]." },
+    .{ .long = "diffusion-confidence", .kind = .option, .help = "Token acceptance confidence threshold for diffusion (0.0-1.0) [default: 0.5]." },
     // Diagnostics
     .{ .long = "verbose", .short = 'V', .help = "Show technical details (params, load times, EOG)." },
     .{ .long = "debug", .short = 'd', .help = "Enable debug logging (token IDs, layer timing); implies --verbose." },
@@ -515,6 +519,13 @@ const CliArgs = struct {
     pflash_block_size: u32 = 64,
     /// Separate model for PFlash block scoring (optional; defaults to --draft-model).
     pflash_scorer_path: ?[]const u8 = null,
+    // Diffusion generation (DiffusionGemma)
+    /// Maximum denoising steps for block diffusion (default 16).
+    diffusion_steps: u32 = 16,
+    /// Number of tokens in the generation canvas per diffusion block (default 256).
+    diffusion_canvas: u32 = 256,
+    /// Confidence threshold: tokens above this probability are accepted (default 0.5).
+    diffusion_confidence: f32 = 0.5,
     /// Tracks which CLI args the user explicitly set (so recipes don't override them).
     user_set: Recipe.Overrides = .{},
 };
@@ -1110,6 +1121,17 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
         .pflash_block_size = parseU32(res.option("pflash-block-size"), "pflash-block-size") orelse 64,
         .pflash_scorer_path = res.option("pflash-scorer"),
         .spec_token_map = res.option("spec-token-map"),
+        .diffusion_steps = parseU32(res.option("diffusion-steps"), "diffusion-steps") orelse 16,
+        .diffusion_canvas = parseU32(res.option("diffusion-canvas"), "diffusion-canvas") orelse 256,
+        .diffusion_confidence = blk: {
+            if (res.option("diffusion-confidence")) |s| {
+                break :blk std.fmt.parseFloat(f32, s) catch {
+                    eprint("Error: --diffusion-confidence must be a number\n", .{});
+                    std.process.exit(1);
+                };
+            }
+            break :blk 0.5;
+        },
         .user_set = .{
             .temperature = res.option("temperature") != null,
             .top_p = res.option("top-p") != null,
@@ -1999,7 +2021,7 @@ pub fn main(init: std.process.Init) !void {
     const vocab = fmt.getVocab();
     const merges = fmt.getMerges();
     // Gemma uses SentencePiece tokenization even when merges are present in tokenizer.json
-    const tok_kind: TokenizerKind = if (arch == .gemma3 or arch == .gemma4) .spm_no_dummy else if (merges != null) .bpe else .spm;
+    const tok_kind: TokenizerKind = if (arch == .gemma3 or arch == .gemma4 or arch == .diffusion_gemma) .spm_no_dummy else if (merges != null) .bpe else .spm;
     dbg("tokenizer: vocab={s}, merges={s}, kind={s}", .{
         if (vocab != null) @as([]const u8, "yes") else @as([]const u8, "null"),
         if (merges != null) @as([]const u8, "yes") else @as([]const u8, "null"),
@@ -2819,7 +2841,11 @@ fn initAndRun(
             }
         }
     } else if (effective_prompt) |prompt| {
-        generateAndPrint(allocator, &model_if, tok, cli, tok_kind, eog, arch, prompt, !g_quiet, minfo, display, img_tokens, n_visual_tokens, draft_ptr, scorer_ptr);
+        if (arch == .diffusion_gemma) {
+            generateDiffusion(allocator, &model_if, tok, cli, tok_kind, arch, prompt, !g_quiet);
+        } else {
+            generateAndPrint(allocator, &model_if, tok, cli, tok_kind, eog, arch, prompt, !g_quiet, minfo, display, img_tokens, n_visual_tokens, draft_ptr, scorer_ptr);
+        }
     } else {
         runRepl(allocator, &model_if, tok, cli, tok_kind, eog, arch, minfo, display, img_tokens, n_visual_tokens);
     }
@@ -3004,6 +3030,157 @@ fn runRepl(
             }
             allocator.free(text);
         }
+    }
+}
+
+// ── Diffusion generation (DiffusionGemma) ────────────────────────
+
+/// Block diffusion generation loop for DiffusionGemma.
+/// Encodes the prompt autoregressively, then iteratively denoises a 256-token
+/// canvas using bidirectional attention, accepting high-confidence tokens.
+fn generateDiffusion(
+    allocator: std.mem.Allocator,
+    model: *Model,
+    tok: *BpeTokenizer,
+    cli: *const CliArgs,
+    tok_kind: TokenizerKind,
+    arch: Arch,
+    prompt: []const u8,
+    show_stats: bool,
+) void {
+    const template = arch.chatTemplateForLayers(model.nLayers());
+    const formatted = template.format(allocator, cli.system_prompt, prompt) catch @as([]const u8, prompt);
+    defer if (formatted.ptr != prompt.ptr) allocator.free(formatted);
+
+    const token_ids = switch (tok_kind) {
+        .spm => tok.encodeSpm(formatted),
+        .spm_no_dummy => tok.encodeSpmNoDummy(formatted),
+        .bpe => tok.encode(formatted),
+    } catch {
+        eprint("Error: tokenization failed\n", .{});
+        return;
+    };
+
+    if (!g_quiet) eprint("diffusion: prompt = {d} tokens\n", .{token_ids.len});
+
+    // 1. Encoder prefill.
+    const start_ms = milliTimestamp(g_io);
+    const last_tok = model.prefill(token_ids) catch |e| {
+        eprint("Error: prefill failed: {}\n", .{e});
+        return;
+    };
+    const prefill_ms = milliTimestamp(g_io) - start_ms;
+    _ = last_tok;
+
+    // 2. Diffusion denoising.
+    const max_steps = cli.diffusion_steps;
+    const canvas_len = cli.diffusion_canvas;
+    const confidence_threshold = cli.diffusion_confidence;
+
+    // Use DiffusionGemmaModel directly for forwardCanvas.
+    const DiffusionModel = @import("models/diffusion_gemma.zig").DiffusionGemmaModel;
+
+    var total_generated: u32 = 0;
+    var block_count: u32 = 0;
+    const max_blocks = (cli.max_tokens + canvas_len - 1) / canvas_len;
+
+    // Track timing.
+    const gen_start_ms = milliTimestamp(g_io);
+
+    while (block_count < max_blocks) : (block_count += 1) {
+        // Initialize canvas with random tokens (uniform state diffusion).
+        var canvas = allocator.alloc(u32, canvas_len) catch {
+            eprint("Error: canvas allocation failed\n", .{});
+            return;
+        };
+        defer allocator.free(canvas);
+        var canvas_logits = allocator.alloc(f32, canvas_len * model.vocabSize()) catch {
+            eprint("Error: canvas logits allocation failed\n", .{});
+            return;
+        };
+        defer allocator.free(canvas_logits);
+
+        // Start with random tokens (uniform state diffusion uses random noise).
+        var rng = std.Random.DefaultPrng.init(@intCast(block_count + 1));
+        const vocab_sz = model.vocabSize();
+        for (canvas) |*t| t.* = rng.random().intRangeLessThan(u32, 4, @min(vocab_sz - 1, 32000));
+
+        var locked = allocator.alloc(bool, canvas_len) catch {
+            eprint("Error: allocation failed\n", .{});
+            return;
+        };
+        defer allocator.free(locked);
+        @memset(locked, false);
+
+        var n_locked: u32 = 0;
+
+        // Retrieve DiffusionGemmaModel pointer for forwardCanvas.
+        // The model vtable wraps DiffusionGemmaModel; we access it via downcasting.
+        // Since we know the arch, the storage is DiffusionGemmaModel.
+        // We can't call forwardCanvas through the vtable (it's not there), so we
+        // look up the concrete model through the ModelStorage union.
+        // NOTE: We pass the model ptr and rely on the vtable's ptr field being
+        // the DiffusionGemmaModel directly (Model.from stores m as ptr).
+        const concrete: *DiffusionModel = @ptrCast(@alignCast(model.ptr));
+
+        // Denoising loop.
+        for (0..max_steps) |step| {
+            // Forward pass over canvas with bidirectional attention.
+            concrete.forwardCanvas(canvas, canvas_logits) catch |e| {
+                eprint("Error: forwardCanvas failed: {}\n", .{e});
+                return;
+            };
+
+            // Accept tokens above confidence threshold; re-noise the rest.
+            var newly_locked: u32 = 0;
+            for (0..canvas_len) |i| {
+                if (locked[i]) continue;
+                const logits = canvas_logits[i * vocab_sz ..][0..vocab_sz];
+                const best_tok = math_ops.argmax(logits);
+                const best_score = blk: {
+                    // Softmax probability of best token.
+                    var mx: f32 = -std.math.inf(f32);
+                    for (logits) |v| if (v > mx) { mx = v; };
+                    var s: f32 = 0;
+                    for (logits) |v| s += @exp(v - mx);
+                    break :blk @exp(logits[best_tok] - mx) / s;
+                };
+                if (best_score >= confidence_threshold) {
+                    canvas[i] = best_tok;
+                    locked[i] = true;
+                    newly_locked += 1;
+                } else {
+                    // Re-noise with a fresh random token.
+                    canvas[i] = rng.random().intRangeLessThan(u32, 4, @min(vocab_sz - 1, 32000));
+                }
+            }
+            n_locked += newly_locked;
+            if (!g_quiet) eprint("diffusion: step {d}/{d}, {d}/{d} tokens locked\n", .{ step + 1, max_steps, n_locked, canvas_len });
+
+            // Stop when all canvas tokens are locked.
+            if (n_locked >= canvas_len) break;
+        }
+
+        // Output the locked canvas tokens.
+        const canvas_text = tok.decode(canvas) catch null;
+        if (canvas_text) |text| {
+            _ = std.posix.system.write(1, text.ptr, text.len);
+            allocator.free(text);
+        }
+        total_generated += @intCast(canvas_len);
+
+        // Prefill the canvas into the KV cache for the next block.
+        _ = model.prefill(canvas) catch break;
+
+        // Stop if max_tokens reached.
+        if (total_generated >= cli.max_tokens) break;
+    }
+    _ = std.posix.system.write(1, "\n", 1);
+
+    if (show_stats) {
+        const gen_ms = milliTimestamp(g_io) - gen_start_ms;
+        const tok_per_s = if (gen_ms > 0) @as(f64, @floatFromInt(total_generated)) * 1000.0 / @as(f64, @floatFromInt(gen_ms)) else 0;
+        eprint("\nprefill: {d}ms, generated: {d} tokens in {d}ms ({d:.1} tok/s)\n", .{ prefill_ms, total_generated, gen_ms, tok_per_s });
     }
 }
 
