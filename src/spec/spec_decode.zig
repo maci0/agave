@@ -824,16 +824,12 @@ test "optimalK returns configured k without sufficient data" {
     s.total_rounds = 3;
     try std.testing.expectEqual(@as(u32, 5), s.optimalK());
 
-    // After enough rounds with per-K profiling data, picks best k
+    // After enough rounds, V2 adaptive uses current_k (sliding-window).
+    // V2 activates at total_rounds >= 8; set current_k=3 to verify V2 path.
     s.total_rounds = adaptive_k_min_rounds;
-    // k=3 (index 2): 90% accept rate → EV = 3*0.9 + 1 = 3.7
-    s.k_total_counts[2] = adaptive_k_min_samples;
-    s.k_accept_counts[2] = adaptive_k_min_samples * 3 * 9 / 10;
-    // k=5 (index 4): 40% accept rate → EV = 5*0.4 + 1 = 3.0
-    s.k_total_counts[4] = adaptive_k_min_samples;
-    s.k_accept_counts[4] = adaptive_k_min_samples * 5 * 4 / 10;
+    s.current_k = 3; // simulate V2 having converged to k=3
     const optimal = s.optimalK();
-    // k=3 has highest EV (3.7 vs 3.0 for k=5), so optimalK must pick 3
+    // V2 should return current_k = 3
     try std.testing.expectEqual(@as(u32, 3), optimal);
 }
 
