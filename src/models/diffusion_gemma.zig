@@ -153,6 +153,10 @@ pub const DiffusionGemmaModel = struct {
     pf_scratch: []f32 = &.{},
     /// Batch logits: canvas_length * vocab_size (set lazily during diffusion).
     pf_logits: []f32 = &.{},
+    /// Pre-allocated canvas K buffer: canvas_length * max_kv_dim (avoids per-layer alloc).
+    canvas_k_buf: []f32 = &.{},
+    /// Pre-allocated canvas V buffer: canvas_length * max_kv_dim.
+    canvas_v_buf: []f32 = &.{},
 
     // ── KV cache ──────────────────────────────────────────────────
     paged_cache: PagedKvCache = undefined,
@@ -312,6 +316,14 @@ pub const DiffusionGemmaModel = struct {
         // pf_logits: allocated lazily in forwardCanvas (canvas_length * vocab_size can be large).
         self.pf_logits = try allocator.alloc(f32, cl * self.vocab_size);
         errdefer allocator.free(self.pf_logits);
+        const max_kv_dim = @max(
+            @as(usize, self.sl_n_kv_head) * @as(usize, self.sl_head_dim),
+            @as(usize, self.gl_n_kv_head) * @as(usize, self.gl_head_dim),
+        );
+        self.canvas_k_buf = try allocator.alloc(f32, cl * max_kv_dim);
+        errdefer allocator.free(self.canvas_k_buf);
+        self.canvas_v_buf = try allocator.alloc(f32, cl * max_kv_dim);
+        errdefer allocator.free(self.canvas_v_buf);
 
         return self;
     }
@@ -334,6 +346,8 @@ pub const DiffusionGemmaModel = struct {
         allocator.free(self.pf_hidden);
         allocator.free(self.pf_scratch);
         allocator.free(self.pf_logits);
+        allocator.free(self.canvas_k_buf);
+        allocator.free(self.canvas_v_buf);
         allocator.free(self.canvas_tokens);
         if (self.tiered_block_allocator) |*tba| {
             tba.freeSeqTable(&self.seq_table);
@@ -716,10 +730,9 @@ pub const DiffusionGemmaModel = struct {
         const kvd: usize = nkv * hd;
 
         // Allocate scratch for all canvas K/V.
-        const canvas_k = try self.allocator.alloc(f32, cl * kvd);
-        defer self.allocator.free(canvas_k);
-        const canvas_v = try self.allocator.alloc(f32, cl * kvd);
-        defer self.allocator.free(canvas_v);
+        // Use pre-allocated canvas K/V buffers (sized for max kvd = gl_n_kv_head * gl_head_dim).
+        const canvas_k = self.canvas_k_buf[0 .. cl * kvd];
+        const canvas_v = self.canvas_v_buf[0 .. cl * kvd];
 
         for (0..cl) |i| {
             const inp = self.pf_scratch[i * e ..].ptr;
