@@ -28,7 +28,8 @@ agave model-medusa.gguf --spec-mode medusa "prompt"              # Medusa MLP he
 agave model.gguf --spec-mode ngram "prompt"                      # N-gram (history-based, no draft model)
 agave model.gguf --spec-mode suffix "prompt"                     # Suffix decoding (cross-request exact match, dynamic k)
 agave model.gguf --spec-mode lookahead "prompt"                  # Lookahead / Jacobi parallel draft (novel tokens)
-agave target.gguf --draft-model eagle.gguf --spec-mode eagle "prompt"  # EAGLE (hidden-state conditioned, chains draft hidden)
+agave target.gguf --draft-model eagle.gguf --spec-mode eagle "prompt"  # EAGLE (post-norm hidden-state conditioned, chains draft hidden)
+agave target.gguf --draft-model eagle.gguf --spec-mode eagle3 "prompt" # EAGLE-3 (pre-output-norm hidden, richer conditioning signal)
 agave target.gguf --draft-model mlp.gguf --spec-mode mlp "prompt"    # MLP Speculator (frozen target hidden, no chain)
 agave target.gguf --draft-model draft.gguf --spec-token-map freq.txt --spec-mode ddtree "prompt"  # FR-Spec vocab truncation
 agave model-mtp.gguf --spec-mode mtp "prompt"                    # Multi-token prediction heads
@@ -44,6 +45,19 @@ agave model.gguf --draft-model draft.gguf --spec-mode pflash --pflash-alpha 0.7 
 
 ```bash
 agave model.gguf --megakernel "prompt"         # Fused FFN megakernel (3→1 dispatch)
+```
+
+```bash
+# Multimodal (vision + video)
+agave model.gguf --mmproj mmproj.gguf --image pic.png "Describe this image"
+agave model.gguf --mmproj mmproj.gguf --video clip.mp4 "What happens in this video?"
+agave model.gguf --mmproj mmproj.gguf --video clip.mp4 --video-fps 2 "Summarize"
+```
+
+```bash
+# Server features
+agave model.gguf --serve --sleep-after 300     # Enter sleep-mode after 5min idle
+agave model.gguf --serve --no-kv-cache         # Prefill-only / embedding server
 ```
 
 ```bash

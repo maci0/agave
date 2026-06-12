@@ -224,6 +224,18 @@ agave target.gguf --draft-model eagle-draft.gguf --spec-mode eagle "prompt"
 
 Community EAGLE models (e.g., `EAGLE-LLaMA3-Instruct-8B`) expose this via `eagleForward()`. Standard draft models fall back to `forward()` (same as `--spec-mode standard`).
 
+### EAGLE-3 (`--spec-mode eagle3`)
+
+EAGLE-3 is a refinement of EAGLE-1 that conditions on the **pre-output-norm** hidden state instead of the post-norm representation. Before the final `rmsNorm(hidden, output_norm)` is applied, the raw residual stream is saved and used for draft conditioning.
+
+**Why it may help**: output normalization forces the hidden state to unit magnitude, discarding scale information. The pre-norm state carries residual magnitude differences that can signal token confidence or domain shifts — information that draft models may exploit for better prediction.
+
+```bash
+agave target.gguf --draft-model eagle-draft.gguf --spec-mode eagle3 "prompt"
+```
+
+Currently, pre-norm state is saved by Gemma 4 (`hidden_pre_norm` field). For other models it falls back to the post-norm hidden (same as `--spec-mode eagle`). EAGLE-3 draft models trained specifically on pre-norm states would benefit most.
+
 ### MLP Speculator (`--spec-mode mlp`)
 
 Single-step conditioning: all K draft steps use the **frozen** target hidden state from before drafting, not an autoregressive chain. Cheaper than EAGLE (no draft KV growth) but slightly lower acceptance.
@@ -286,10 +298,11 @@ src/models/model.zig
 └── VTable: get_hidden_state, eagle_forward  — EAGLE hidden-state conditioning
 ```
 
-Agave supports **11 speculative decoding modes**:
+Agave supports **12 speculative decoding modes**:
 
 | Mode | Flag | Draft source | Draft model needed? |
 |------|------|------|------|
+| Auto | `--spec-mode auto` | DDTree with draft, N-gram without | Conditional |
 | Standard | `--spec-mode standard` | Draft model, greedy | Yes |
 | DDTree | `--spec-mode ddtree` | Draft model, tree | Yes |
 | Self | `--spec-mode self` | Layer-skipped target | No |
@@ -298,7 +311,8 @@ Agave supports **11 speculative decoding modes**:
 | Lookahead | `--spec-mode lookahead` | Jacobi parallel branches | No |
 | MTP | `--spec-mode mtp` | Built-in MTP heads | No (in model) |
 | Medusa | `--spec-mode medusa` | Built-in MLP heads | No (in model) |
-| EAGLE | `--spec-mode eagle` | Hidden-state conditioned | Yes |
+| EAGLE | `--spec-mode eagle` | Post-norm hidden-state conditioned | Yes |
+| EAGLE-3 | `--spec-mode eagle3` | Pre-output-norm hidden-state | Yes |
 | MLP Speculator | `--spec-mode mlp` | Frozen hidden-state | Yes |
 | PFlash | `--spec-mode pflash` | Draft model + block scoring | Yes |
 
