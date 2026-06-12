@@ -291,11 +291,20 @@ pub const Qwen35Model = struct {
         }
 
         // Detect gate in Q: Qwen3.5 Q weight output dim = n_head * head_dim * 2.
-        // GGUF stores dims reversed (dim[n-1] = output rows); SafeTensors uses dim[0].
+        // When attn_output_gate is true AND Q dim / n_head == head_dim (not 2*head_dim),
+        // the Q projection has NO embedded gate — the output gate is applied separately.
+        // (Nex-N2-Pro uses output-only gate; Qwen3.5 standard embeds gate in Q proj.)
         if (f.layerTensor(check_layer, "attn_q.weight")) |qw| {
             const q_out_dim: usize = if (qw.n_dims >= 1) @intCast(qw.dims[0]) else 0;
             const expected_gate = @as(usize, self.n_head) * @as(usize, self.head_dim) * 2;
-            self.has_gate = (q_out_dim == expected_gate);
+            const expected_no_gate = @as(usize, self.n_head) * @as(usize, self.head_dim);
+            if (self.has_full_attn_output_gate and q_out_dim == expected_no_gate) {
+                // attn_output_gate model where gate is NOT embedded in Q proj.
+                // Q heads use head_dim directly; output gate applied separately.
+                self.has_gate = false;
+            } else {
+                self.has_gate = (q_out_dim == expected_gate);
+            }
         }
 
         // Detect Q/K per-head norms (present in Qwen3/3.5, absent in Qwen2).
