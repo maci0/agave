@@ -910,11 +910,11 @@ pub const Gemma4Model = struct {
         if (self.pf_positions.len > 0) pa.free(self.pf_positions);
         // Free working buffers
         const bufs = .{
-            &self.hidden,          &self.hidden_pre_norm, &self.hidden2,
-            &self.q_buf,           &self.k_buf,           &self.v_buf,
-            &self.attn_out,        &self.ff_buf,          &self.ff_buf2,
-            &self.dense_gate,      &self.dense_up,        &self.dense_out,
-            &self.router_input,    &self.router_buf,      &self.logits_buf,
+            &self.hidden,       &self.hidden_pre_norm, &self.hidden2,
+            &self.q_buf,        &self.k_buf,           &self.v_buf,
+            &self.attn_out,     &self.ff_buf,          &self.ff_buf2,
+            &self.dense_gate,   &self.dense_up,        &self.dense_out,
+            &self.router_input, &self.router_buf,      &self.logits_buf,
             &self.scores,
         };
         inline for (bufs) |buf| self.allocator.free(buf.*);

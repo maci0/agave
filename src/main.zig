@@ -393,6 +393,8 @@ const cli_specs = [_]cli_mod.ArgSpec{
     // Multimodal
     .{ .long = "mmproj", .kind = .option, .help = "Path to vision projector GGUF (mmproj file)." },
     .{ .long = "image", .kind = .option, .help = "Path to image file for multimodal inference (PNG or PPM P6)." },
+    .{ .long = "video", .kind = .option, .help = "Path to video file for multimodal inference. Extracts frames via ffmpeg and feeds them to the vision encoder. Use --video-fps to control sampling rate." },
+    .{ .long = "video-fps", .kind = .option, .help = "Frames per second to sample from video (default: 1). Higher FPS = more visual tokens." },
     // Speculative decoding
     .{ .long = "draft-model", .kind = .option, .help = "Path to draft model for speculative decoding." },
     .{ .long = "spec-tokens", .short = 'K', .kind = .option, .help = "Draft tokens per speculation round [default: 5]." },
@@ -483,6 +485,10 @@ const CliArgs = struct {
     mmproj: ?[]const u8 = null,
     /// Path to image file (PNG or PPM P6) for multimodal inference.
     image: ?[]const u8 = null,
+    /// Path to video file for multimodal inference (requires ffmpeg).
+    video: ?[]const u8 = null,
+    /// Frames per second to sample from video (default: 1).
+    video_fps: f32 = 1.0,
     /// Enable fused megakernel for single-dispatch forward pass.
     megakernel: bool = false,
     /// Tensor parallelism degree (split weights across ranks).
@@ -1051,6 +1057,17 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
         .image = res.option("image"),
         .draft_model_path = res.option("draft-model"),
         .sleep_after_s = parseU32(res.option("sleep-after"), "sleep-after") orelse 0,
+        .video = res.option("video"),
+        .video_fps = blk: {
+            if (res.option("video-fps")) |s| {
+                const v = std.fmt.parseFloat(f32, s) catch {
+                    eprint("Error: --video-fps must be a number\n", .{});
+                    std.process.exit(2);
+                };
+                break :blk @max(0.1, v);
+            }
+            break :blk 1.0;
+        },
         .spec_tokens = parseU32(res.option("spec-tokens"), "spec-tokens") orelse 5,
         .tree_budget = parseU32(res.option("tree-budget"), "tree-budget") orelse 64,
         .spec_mode = blk: {
@@ -1596,6 +1613,9 @@ fn printUsage() void {
         \\MULTIMODAL:
         \\      --mmproj <PATH>    Path to vision projector GGUF (mmproj file)
         \\      --image <PATH>     Path to image file (PNG or PPM P6)
+        \\      --video <PATH>     Path to video file (frames extracted via ffmpeg)
+        \\      --video-fps <N>    Video frame sampling rate (default: 1 fps)
+        \\      --sleep-after <N>  Server sleep-mode idle timeout in seconds (0=off)
         \\
         \\DIAGNOSTICS:
         \\  -V, --verbose          Show technical details (params, load times, EOG)
@@ -2457,6 +2477,97 @@ fn initAndRun(
         }
     } else if (cli.image != null) {
         eprint("Warning: --image ignored (no vision projector found — use --mmproj <path> to specify)\n", .{});
+    }
+
+    // ── Video input: extract frames via ffmpeg and encode with vision encoder ──
+    if (cli.video) |video_path| {
+        if (vision_enc == null) {
+            eprint("Warning: --video ignored (no vision projector found — use --mmproj <path> to specify)\n", .{});
+        } else {
+            const ve = &vision_enc.?;
+            // Create temp directory for extracted frames
+            var tmp_buf: [256]u8 = @splat(0);
+            const tmp_dir_slice = std.fmt.bufPrint(&tmp_buf, "/tmp/agave_video_{d}", .{milliTimestamp(g_io)}) catch "/tmp/agave_video";
+            // Ensure null-terminated for C calls
+            tmp_buf[tmp_dir_slice.len] = 0;
+            const tmp_dir: [*:0]const u8 = @ptrCast(&tmp_buf);
+            _ = std.c.mkdir(tmp_dir, 0o755);
+            defer {
+                const rm_argv = [_][]const u8{ "rm", "-rf", tmp_dir_slice };
+                if (std.process.spawn(g_io, .{ .argv = &rm_argv })) |rm_proc_val| {
+                    var rm_proc = rm_proc_val;
+                    _ = rm_proc.wait(g_io) catch null;
+                } else |_| {}
+            }
+
+            // Extract frames using ffmpeg: one PNG per second (or custom fps)
+            var fps_buf: [32]u8 = undefined;
+            const fps_str = std.fmt.bufPrint(&fps_buf, "fps={d:.2}", .{cli.video_fps}) catch "fps=1";
+            var fp_buf: [400]u8 = undefined;
+            const frame_pattern = std.fmt.bufPrint(&fp_buf, "{s}/frame_%04d.png", .{tmp_dir_slice}) catch "";
+            {
+                const ffmpeg_argv = [_][]const u8{ "ffmpeg", "-i", video_path, "-vf", fps_str, frame_pattern, "-y", "-loglevel", "quiet" };
+                if (std.process.spawn(g_io, .{ .argv = &ffmpeg_argv })) |ffmpeg_proc_val| {
+                    var ffmpeg_proc = ffmpeg_proc_val;
+                    _ = ffmpeg_proc.wait(g_io) catch null;
+                } else |_| {
+                    eprint("Warning: ffmpeg not found — is ffmpeg installed?\n", .{});
+                }
+            }
+
+            // Collect extracted frames (sorted by name = temporal order)
+            // Open temp dir and iterate frame PNGs via POSIX readdir
+            var all_visual_tokens: std.ArrayList(f32) = .empty;
+            defer all_visual_tokens.deinit(allocator);
+            var frame_count: u32 = 0;
+
+            {
+                // Iterate extracted PNGs using Io.Dir
+                var scan_dir = Io.Dir.cwd().openDir(g_io, tmp_dir_slice, .{ .iterate = true }) catch Io.Dir.cwd();
+                var scan_buf: [Io.Dir.Reader.min_buffer_len]u8 align(@alignOf(usize)) = undefined;
+                var reader = Io.Dir.Reader.init(scan_dir, &scan_buf);
+                var frame_names: std.ArrayList([]u8) = .empty;
+                defer {
+                    for (frame_names.items) |n| allocator.free(n);
+                    frame_names.deinit(allocator);
+                }
+                var entries: [8]Io.Dir.Entry = undefined;
+                while (reader.read(g_io, &entries) catch null) |n| {
+                    for (entries[0..n]) |entry| {
+                        if (!std.mem.endsWith(u8, entry.name, ".png")) continue;
+                        const nc = allocator.dupe(u8, entry.name) catch continue;
+                        frame_names.append(allocator, nc) catch {
+                            allocator.free(nc);
+                        };
+                    }
+                    if (n == 0) break;
+                }
+                if (scan_dir.handle != Io.Dir.cwd().handle) scan_dir.close(g_io);
+                std.mem.sort([]u8, frame_names.items, {}, struct {
+                    fn lt(_: void, a: []u8, b: []u8) bool {
+                        return std.mem.lessThan(u8, a, b);
+                    }
+                }.lt);
+                for (frame_names.items) |name| {
+                    var frame_path_buf2: [512]u8 = undefined;
+                    const frame_path = std.fmt.bufPrint(&frame_path_buf2, "{s}/{s}", .{ tmp_dir_slice, name }) catch continue;
+                    const img_pixels = loadImage(allocator, frame_path, ve.image_size) catch continue;
+                    defer allocator.free(img_pixels);
+                    const tokens = ve.encode(img_pixels) catch continue;
+                    all_visual_tokens.appendSlice(allocator, tokens) catch {};
+                    frame_count += 1;
+                }
+            }
+            if (frame_count > 0 and ve.projection_dim > 0) {
+                n_visual_tokens = @intCast(all_visual_tokens.items.len / ve.projection_dim);
+                const owned = all_visual_tokens.toOwnedSlice(allocator) catch &.{};
+                const pad_id: u32 = if (img_tokens) |it| it.pad else 0;
+                model_if.setImageEmbeddings(owned, n_visual_tokens, pad_id);
+                if (!g_quiet) eprint("video: encoded {d} frames → {d} visual tokens\n", .{ frame_count, n_visual_tokens });
+            } else {
+                eprint("Warning: no frames extracted from '{s}' (is ffmpeg installed? is --mmproj set?)\n", .{video_path});
+            }
+        }
     }
 
     // ── Draft model loading (speculative decoding) ──────────────
