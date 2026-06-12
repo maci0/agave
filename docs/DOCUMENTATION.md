@@ -25,6 +25,7 @@ A progressive tutorial series that builds understanding layer by layer:
 17. [Speculative Decoding & DDTree](tutorial/17-speculative-decoding.md) — 12 modes: DDTree, self-spec, n-gram, suffix, lookahead, EAGLE, EAGLE-3, MLP Speculator, Medusa, MTP, FR-Spec, shared pools
 18. [Multi-Token Prediction](tutorial/18-multi-token-prediction.md) — MTP heads, +1 offset norm, draft/verify loop
 19. [PFlash and Block Sparse Attention](tutorial/19-pflash-and-block-sparse.md) — block sparsity, speculative prefill, alpha tuning, scoring models, PFlash+DDTree composition
+20. [Diffusion Language Models](tutorial/20-diffusion-lm.md) — DiffusionGemma, block diffusion, uniform state diffusion, bidirectional canvas attention, confidence-based acceptance, block autoregressive chaining
 
 **Appendices:**
 - [Mathematical Operations Reference](tutorial/appendix-math.md) — dot product, softmax, GEMV, convolution
