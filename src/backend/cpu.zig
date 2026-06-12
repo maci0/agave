@@ -60,18 +60,42 @@ fn detectCpuModel() []const u8 {
             return cpu_model_buf[0..cpu_model_len];
         }
     } else if (comptime builtin.os.tag == .linux) {
-        // Linux: parse /proc/cpuinfo for "model name"
+        // Linux: parse /proc/cpuinfo for CPU name.
+        // x86 uses "model name\t: ...", ARM uses "Model\t: ..." or "Hardware\t: ...".
         var read_buf: [cpuinfo_read_buf_size]u8 = undefined;
         const data = readSmallFile("/proc/cpuinfo", &read_buf);
         if (data.len == 0) return "";
-        const needle = "model name\t: ";
-        if (std.mem.indexOf(u8, data, needle)) |pos| {
-            const start = pos + needle.len;
-            const end = std.mem.indexOfScalarPos(u8, data, start, '\n') orelse data.len;
-            const name_len = @min(end - start, cpu_model_buf.len);
-            @memcpy(cpu_model_buf[0..name_len], data[start..][0..name_len]);
-            cpu_model_len = name_len;
-            return cpu_model_buf[0..cpu_model_len];
+        // Try x86-style first, then ARM/RISC-V fallbacks.
+        const needles = [_][]const u8{
+            "model name\t: ", // x86, some ARM kernels
+            "Model\t: ",      // Raspberry Pi, some ARM
+            "Hardware\t: ",   // older ARM kernels
+        };
+        for (needles) |needle| {
+            if (std.mem.indexOf(u8, data, needle)) |pos| {
+                const start = pos + needle.len;
+                const end = std.mem.indexOfScalarPos(u8, data, start, '\n') orelse data.len;
+                const name_len = @min(end - start, cpu_model_buf.len);
+                @memcpy(cpu_model_buf[0..name_len], data[start..][0..name_len]);
+                cpu_model_len = name_len;
+                return cpu_model_buf[0..cpu_model_len];
+            }
+        }
+        // ARM/RISC-V without a friendly name: return implementer+part as fallback.
+        const impl_needle = "CPU implementer\t: ";
+        const part_needle = "CPU part\t: ";
+        if (std.mem.indexOf(u8, data, impl_needle)) |ipos| {
+            const istart = ipos + impl_needle.len;
+            const iend = std.mem.indexOfScalarPos(u8, data, istart, '\n') orelse data.len;
+            const ppos = std.mem.indexOf(u8, data, part_needle) orelse 0;
+            const pstart = if (ppos > 0) ppos + part_needle.len else 0;
+            const pend = if (ppos > 0) std.mem.indexOfScalarPos(u8, data, pstart, '\n') orelse data.len else 0;
+            if (ppos > 0) {
+                const n = std.fmt.bufPrint(&cpu_model_buf, "ARM impl={s} part={s}",
+                    .{ data[istart..iend], data[pstart..pend] }) catch return "";
+                cpu_model_len = n.len;
+                return cpu_model_buf[0..cpu_model_len];
+            }
         }
     }
     return "";
