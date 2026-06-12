@@ -707,6 +707,11 @@ pub const DiffusionGemmaModel = struct {
 
     /// Canvas layer: processes cl tokens with bidirectional attention in the canvas
     /// range. pf_hidden[0..cl*e] holds the per-token hidden states.
+    ///
+    /// v1 implementation: iterates tokens sequentially (cl calls per layer).
+    /// Future optimization: batch all cl tokens through a single GEMM dispatch
+    /// using be.gemm() with batch size cl, reducing GPU dispatch overhead
+    /// from O(cl * n_layers) to O(n_layers) per denoising step.
     fn canvasLayer(self: *DiffusionGemmaModel, li: u32, cl: usize) !void {
         const e: usize = self.n_embd;
         const is_global = isGlobalLayer(li);
