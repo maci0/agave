@@ -2194,6 +2194,12 @@ fn initAndRun(
     defer if (tiered_cache_storage) |*tc| tc.deinit();
 
     if (cli.kv_tiers) |tiers_str| {
+        // Warn: split-attention tiered SDPA is only fully implemented for Gemma 3.
+        // Other architectures store KV in tiered blocks but compute SDPA against the
+        // first block only, giving wrong results for long sequences.
+        if (arch != .gemma3) {
+            eprint("Warning: --kv-tiers is only fully implemented for Gemma 3. Other models may produce incorrect output.\n", .{});
+        }
         const has_ram = std.mem.indexOf(u8, tiers_str, "ram") != null;
         const has_ssd = std.mem.indexOf(u8, tiers_str, "ssd") != null;
 
