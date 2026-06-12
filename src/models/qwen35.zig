@@ -138,6 +138,9 @@ pub const Qwen35Model = struct {
     // Per-layer state: conv_states[layer] = ring buffer [conv_channels * (d_conv-1)]
     conv_states: [][]f32 = &.{},
     ssm_states: [][]f32 = &.{},
+    /// Per-layer DeltaNet flag: true if this layer is a DeltaNet SSM layer.
+    /// Populated during init; uses tensor presence for MTP-aware detection.
+    layer_is_deltanet: []bool = &.{},
 
     // KV cache (PagedAttention or TieredKvCache)
     paged_cache: PagedKvCache = undefined,
@@ -439,6 +442,10 @@ pub const Qwen35Model = struct {
         errdefer allocator.free(self.conv_states);
         self.ssm_states = try allocator.alloc([]f32, nl);
         errdefer allocator.free(self.ssm_states);
+        self.layer_is_deltanet = try allocator.alloc(bool, nl);
+        errdefer allocator.free(self.layer_is_deltanet);
+        // Pre-populate: use interval heuristic first, then refine by tensor presence below.
+        for (0..nl) |i| self.layer_is_deltanet[i] = !self.isFullAttn(@intCast(i));
 
         var layer_init_count: usize = 0;
         errdefer {
@@ -448,7 +455,7 @@ pub const Qwen35Model = struct {
             }
         }
         for (0..nl) |i| {
-            if (!self.isFullAttn(@intCast(i))) {
+            if (self.layer_is_deltanet[i]) {
                 // Conv state: (d_conv-1) columns, each of conv_channels
                 self.conv_states[i] = try allocator.alloc(f32, (self.ssm_d_conv - 1) * conv_ch);
                 @memset(self.conv_states[i], 0);
@@ -492,7 +499,14 @@ pub const Qwen35Model = struct {
                 continue;
             }
             const li: u32 = @intCast(i);
-            const ssm_a_t = f.layerTensor(li, "ssm_a") orelse return error.MissingTensor;
+            // If SSM tensors don't exist for this layer, promote to full attention.
+            // Handles models where block_count includes MTP heads using standard attention
+            // tensor names rather than nextn.* (e.g. Qwopus3.5-9B-Coder-MTP).
+            const ssm_a_t = f.layerTensor(li, "ssm_a") orelse {
+                self.layer_is_deltanet[i] = false; // Treat as full attention
+                dn_init_count = i + 1;
+                continue;
+            };
             const dt_bias_t = f.layerTensor(li, "ssm_dt.bias") orelse return error.MissingTensor;
             const conv_w_t = f.layerTensor(li, "ssm_conv1d.weight") orelse return error.MissingTensor;
             const ssm_norm_t = f.layerTensor(li, "ssm_norm.weight") orelse return error.MissingTensor;
@@ -564,6 +578,7 @@ pub const Qwen35Model = struct {
         }
         self.allocator.free(self.conv_states);
         self.allocator.free(self.ssm_states);
+        if (self.layer_is_deltanet.len > 0) self.allocator.free(self.layer_is_deltanet);
         self.allocator.free(self.dn_ssm_a);
         self.allocator.free(self.dn_dt_bias);
         self.allocator.free(self.dn_conv_w);
@@ -1570,7 +1585,7 @@ pub const Qwen35Model = struct {
                 // Full attention TP pending — needs per-rank KV cache refactor
                 const saved_tp = self.tp_degree;
                 self.tp_degree = 1;
-                if (self.isFullAttn(l)) try self.fullAttnLayer(l, fuse) else try self.deltaNetLayer(l, fuse);
+                if (!self.layer_is_deltanet[l]) try self.fullAttnLayer(l, fuse) else try self.deltaNetLayer(l, fuse);
                 self.tp_degree = saved_tp;
 
                 // FFN TP: norm → per-rank compute → all-reduce
@@ -1633,7 +1648,7 @@ pub const Qwen35Model = struct {
                 self.be.invalidateActivation(self.hidden2.ptr);
                 self.tp_rank = 0;
             } else {
-                if (self.isFullAttn(l)) try self.fullAttnLayer(l, fuse) else try self.deltaNetLayer(l, fuse);
+                if (!self.layer_is_deltanet[l]) try self.fullAttnLayer(l, fuse) else try self.deltaNetLayer(l, fuse);
                 if (self.is_moe) {
                     try self.moeLayer(l);
                 } else {
