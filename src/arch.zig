@@ -256,6 +256,7 @@ test "Arch.displayName" {
 test "Arch.defaultBos" {
     try std.testing.expectEqual(@as(?u32, 2), Arch.gemma3.defaultBos());
     try std.testing.expectEqual(@as(?u32, 2), Arch.gemma4.defaultBos());
+    try std.testing.expectEqual(@as(?u32, 2), Arch.diffusion_gemma.defaultBos());
     try std.testing.expectEqual(@as(?u32, 154822), Arch.glm4.defaultBos());
     try std.testing.expectEqual(@as(?u32, null), Arch.qwen35.defaultBos());
     try std.testing.expectEqual(@as(?u32, null), Arch.gpt_oss.defaultBos());
@@ -267,6 +268,7 @@ test "Arch.defaultBos" {
 test "Arch.defaultEos" {
     try std.testing.expectEqual(@as(u32, 1), Arch.gemma3.defaultEos());
     try std.testing.expectEqual(@as(u32, 1), Arch.gemma4.defaultEos());
+    try std.testing.expectEqual(@as(u32, 1), Arch.diffusion_gemma.defaultEos());
     try std.testing.expectEqual(@as(u32, 248046), Arch.qwen35.defaultEos());
     try std.testing.expectEqual(@as(u32, 248046), Arch.gpt_oss.defaultEos());
     try std.testing.expectEqual(@as(u32, 248046), Arch.glm4.defaultEos());
