@@ -553,13 +553,17 @@ pub const DiffusionGemmaModel = struct {
             );
         } else {
             const sliding: usize = if (!is_global) self.sliding_window else 0;
+            // Full attention (no sliding window) — simpler for v1 DiffusionGemma.
+            // DiffusionGemma uses sliding window 1024 for sliding layers, but we use full
+            // attention here since the encoder is short (prompt only).
             attn_ops.scaledDotProductAttention(
                 self.q_buf.ptr, kv_view.keys, kv_view.values,
                 self.k_buf, self.v_buf, self.attn_out.ptr, self.scores_buf.ptr,
                 nh, nkv, hd, self.kv_seq_len,
                 1.0 / @sqrt(@as(f32, @floatFromInt(hd))),
-                self.be, null, sliding, self.kv_type_k, self.kv_type_v,
+                self.be, null, 0, self.kv_type_k, self.kv_type_v,
             );
+            _ = sliding; // sliding window enforcement not needed for short prompts
         }
 
         // 5. Optional layer scalar on attention output.
