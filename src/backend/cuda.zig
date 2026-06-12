@@ -1813,11 +1813,18 @@ pub const CudaBackend = struct {
 
     /// Get or allocate device KV cache buffer. Returns device pointer.
     /// Allocates full capacity on first use. Does NOT upload from host.
+    /// Get or allocate a GPU KV cache buffer for the given host pointer.
+    /// On first allocation, uploads the existing host data so that accumulated
+    /// positions (pre-filled in host memory) are visible to GPU kernels.
     fn getOrAllocKvBuf(self: *CudaBackend, addr: usize, capacity: usize) CUdeviceptr {
         if (self.kv_dev_cache.getPtr(addr)) |kv| return kv.dptr;
 
         var dptr: CUdeviceptr = 0;
         _ = self.cuMemAlloc(&dptr, @max(capacity, 4));
+        // Upload any pre-existing host-side data so accumulated KV positions are visible.
+        if (addr != 0 and capacity > 0) {
+            _ = self.cuMemcpyHtoD(dptr, @ptrFromInt(addr), capacity);
+        }
         self.kv_dev_cache.put(addr, .{
             .dptr = dptr,
             .capacity = capacity,
