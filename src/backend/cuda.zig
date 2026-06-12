@@ -1443,7 +1443,7 @@ pub const CudaBackend = struct {
         var n_u32: u32 = @intCast(n);
         var eps_f32: f32 = eps;
         var params = [_]?*anyopaque{
-            @ptrCast(&d_a), @ptrCast(&d_w), @ptrCast(&d_b),
+            @ptrCast(&d_a),   @ptrCast(&d_w),     @ptrCast(&d_b),
             @ptrCast(&n_u32), @ptrCast(&eps_f32),
         };
         self.launch(self.fn_rms_norm_add, 1, block_size, reduction_smem, &params);
