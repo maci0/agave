@@ -389,6 +389,7 @@ const cli_specs = [_]cli_mod.ArgSpec{
     .{ .long = "port", .short = 'p', .kind = .option, .help = "Server port [default: 49453]." },
     .{ .long = "host", .kind = .option, .help = "Server bind address: IPv4, localhost, 0.0.0.0, or 0 [default: 127.0.0.1]." },
     .{ .long = "api-key", .kind = .option, .help = "API key for server auth (or AGAVE_API_KEY env)." },
+    .{ .long = "sleep-after", .kind = .option, .help = "Enter sleep mode after N seconds of server inactivity (0 = disabled). Signals /health sleeping:true; wakes on next request." },
     // Multimodal
     .{ .long = "mmproj", .kind = .option, .help = "Path to vision projector GGUF (mmproj file)." },
     .{ .long = "image", .kind = .option, .help = "Path to image file for multimodal inference (PNG or PPM P6)." },
@@ -491,6 +492,8 @@ const CliArgs = struct {
     transport: TransportChoice = .auto,
     pp_degree: u32 = 1,
     disagg: bool = false,
+    /// Sleep mode: enter sleep after N seconds of server inactivity (0 = disabled).
+    sleep_after_s: u32 = 0,
     // Speculative decoding
     draft_model_path: ?[]const u8 = null,
     spec_tokens: u32 = 5,
@@ -1047,6 +1050,7 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
         .mmproj = res.option("mmproj"),
         .image = res.option("image"),
         .draft_model_path = res.option("draft-model"),
+        .sleep_after_s = parseU32(res.option("sleep-after"), "sleep-after") orelse 0,
         .spec_tokens = parseU32(res.option("spec-tokens"), "spec-tokens") orelse 5,
         .tree_budget = parseU32(res.option("tree-budget"), "tree-budget") orelse 64,
         .spec_mode = blk: {
@@ -2603,6 +2607,7 @@ fn initAndRun(
             .draft_model = draft_ptr,
             .spec_tokens = cli.spec_tokens,
             .tree_budget = cli.tree_budget,
+            .sleep_after_s = cli.sleep_after_s,
         }) catch |e| {
             eprint("Error: server failed: {}\n", .{e});
             return false;

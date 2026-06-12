@@ -142,6 +142,28 @@ fn timestamp() i64 {
     return ts.sec;
 }
 
+/// Background sleep monitor: checks idle time every 10s.
+/// Sets g_server.sleeping=true after sleep_after_s seconds of inactivity.
+/// The server remains in "sleep" state (serving requests at normal speed)
+/// but signals external orchestrators via /health "sleeping": true.
+/// Future: could release optional caches or defer prefetching here.
+fn sleepMonitorLoop(shutdown: *const std.atomic.Value(bool)) void {
+    const poll_interval_ns: u64 = 10 * std.time.ns_per_s; // check every 10s
+    while (!shutdown.load(.acquire)) {
+        sleepNs(poll_interval_ns);
+        if (shutdown.load(.acquire)) break;
+        const sleep_after_s = g_server.sleep_after_s;
+        if (sleep_after_s == 0) continue;
+        const last_ms = g_server.last_request_ms.load(.acquire);
+        const now_ms = milliTimestamp();
+        const idle_s: u32 = @intCast(@max(0, @divFloor(now_ms - last_ms, 1000)));
+        if (!g_server.sleeping.load(.acquire) and idle_s >= sleep_after_s) {
+            g_server.sleeping.store(true, .release);
+            std.log.info("server: entering sleep mode after {d}s idle", .{idle_s});
+        }
+    }
+}
+
 /// Compute tokens-per-second from a token count and elapsed milliseconds.
 /// Returns 0 if elapsed time is zero (avoids division by zero).
 fn tokensPerSec(token_count: u32, time_ms: u64) f32 {
@@ -288,6 +310,12 @@ const Server = struct {
     shutdown_requested: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
     /// Context window size (tokens).
     ctx_size: u32 = 0,
+    /// Sleep mode: seconds of idle time before sleeping (0 = disabled).
+    sleep_after_s: u32 = 0,
+    /// Timestamp of last completed request (monotonic ms). 0 = no requests yet.
+    last_request_ms: std.atomic.Value(i64) = std.atomic.Value(i64).init(0),
+    /// True when the server is in sleep mode (idle too long).
+    sleeping: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
 
     fn getActiveConv(self: *Server) ?*Conversation {
         return self.getConvById(self.active_id);
@@ -848,6 +876,12 @@ fn send429(stream: TcpStream, retry_after: u32) void {
 
 fn handleRequest(stream: TcpStream, req: HttpRequest) void {
     const request_start = milliTimestamp();
+    // Wake from sleep mode on any incoming request.
+    g_server.last_request_ms.store(request_start, .release);
+    if (g_server.sleeping.load(.acquire)) {
+        g_server.sleeping.store(false, .release);
+        std.log.info("server: waking from sleep mode", .{});
+    }
     const path = req.path;
     const method = req.method;
     const is_get = std.mem.eql(u8, method, "GET");
@@ -905,9 +939,10 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
         const kv_seq_len = g_server.model.kvSeqLen();
         const sched_errs = g_server.metrics.scheduler_errors.load(.monotonic);
         const preemptions = g_server.metrics.preemptions_total.load(.monotonic);
+        const sleeping = g_server.sleeping.load(.acquire);
         const json_body = std.fmt.bufPrint(&buf,
-            \\{{"status":"{s}","reason":"{s}","version":"{s}","model":"{s}","backend":"{s}","uptime_s":{d},"active_connections":{d},"requests_total":{d},"requests_completed":{d},"requests_failed":{d},"requests_cancelled":{d},"queue_depth":{d},"kv_cache_used":{d},"kv_cache_total":{d},"kv_seq_len":{d},"ctx_size":{d},"scheduler_errors":{d},"preemptions":{d}}}
-        , .{ status, reason, engine_version, g_server.model_name, g_server.backend_name, uptime, g_server.metrics.active_connections.load(.monotonic), g_server.metrics.requests_total.load(.monotonic), completed, failed, cancelled, queue, kv_used, kv_total, kv_seq_len, g_server.ctx_size, sched_errs, preemptions }) catch
+            \\{{"status":"{s}","reason":"{s}","version":"{s}","model":"{s}","backend":"{s}","uptime_s":{d},"active_connections":{d},"requests_total":{d},"requests_completed":{d},"requests_failed":{d},"requests_cancelled":{d},"queue_depth":{d},"kv_cache_used":{d},"kv_cache_total":{d},"kv_seq_len":{d},"ctx_size":{d},"scheduler_errors":{d},"preemptions":{d},"sleeping":{s}}}
+        , .{ status, reason, engine_version, g_server.model_name, g_server.backend_name, uptime, g_server.metrics.active_connections.load(.monotonic), g_server.metrics.requests_total.load(.monotonic), completed, failed, cancelled, queue, kv_used, kv_total, kv_seq_len, g_server.ctx_size, sched_errs, preemptions, if (sleeping) "true" else "false" }) catch
             std.fmt.bufPrint(&buf, "{{\"status\":\"{s}\"}}", .{status}) catch return;
         sendResponse(stream, http_status, "application/json", json_body);
         return;
@@ -4811,6 +4846,10 @@ pub const ServerConfig = struct {
     draft_model: ?*Model = null,
     spec_tokens: u32 = 5,
     tree_budget: u32 = 64,
+    /// Seconds of inactivity before entering sleep mode (0 = disabled).
+    /// In sleep mode the server suspends CPU-side speculative work and logs
+    /// a "sleeping" state in /health. Wake-up happens automatically on next request.
+    sleep_after_s: u32 = 0,
 };
 
 /// Start the HTTP server with OpenAI-compatible API endpoints.
@@ -4875,6 +4914,7 @@ pub fn run(config: ServerConfig) !void {
         .draft_model = config.draft_model,
         .spec_tokens = config.spec_tokens,
         .tree_budget = config.tree_budget,
+        .sleep_after_s = config.sleep_after_s,
     };
     server.api_key = api_key;
     server.start_time = timestamp();
@@ -4901,6 +4941,18 @@ pub fn run(config: ServerConfig) !void {
         sched_thread.join();
         server.scheduler_thread = null;
     }
+
+    // Sleep-mode monitor: background thread checks idle time every 10 seconds.
+    // When the server has been idle for sleep_after_s seconds, sets sleeping=true
+    // and logs a message. Wake-up happens automatically on the next request.
+    var sleep_thread: ?std.Thread = null;
+    if (config.sleep_after_s > 0) {
+        server.last_request_ms.store(milliTimestamp(), .release);
+        sleep_thread = std.Thread.spawn(.{}, sleepMonitorLoop, .{&server.scheduler_shutdown}) catch null;
+        if (sleep_thread == null) std.log.warn("server: failed to start sleep monitor thread", .{});
+        if (sleep_thread != null) std.log.info("server: sleep mode enabled (idle timeout: {d}s)", .{config.sleep_after_s});
+    }
+    defer if (sleep_thread) |t| t.join();
 
     const address = net.IpAddress{ .ip4 = .{ .bytes = host, .port = port } };
     var tcp = net.IpAddress.listen(&address, io, .{ .reuse_address = true }) catch |err| {
