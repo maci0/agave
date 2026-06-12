@@ -55,6 +55,14 @@ agave model.gguf --mmproj mmproj.gguf --video clip.mp4 --video-fps 2 "Summarize"
 ```
 
 ```bash
+# DiffusionGemma (block diffusion generation)
+agave diffusiongemma-26B-A4B-it/ "Describe the future of AI"        # default 16 steps
+agave diffusiongemma-26B-A4B-it/ --diffusion-steps 48 "..."         # more steps for quality
+agave diffusiongemma-26B-A4B-it/ --diffusion-confidence 0.8 "..."   # higher acceptance bar
+agave diffusiongemma-26B-A4B-it/ --diffusion-canvas 128 "..."       # smaller canvas
+```
+
+```bash
 # Server features
 agave model.gguf --serve --sleep-after 300     # Enter sleep-mode after 5min idle
 agave model.gguf --serve --no-kv-cache         # Prefill-only / embedding server
