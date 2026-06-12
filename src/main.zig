@@ -3176,6 +3176,12 @@ fn generateDiffusion(
         // Prefill the canvas into the KV cache for the next block.
         _ = model.prefill(canvas) catch break;
 
+        // Stop if canvas contains EOS token (generation complete).
+        const eos_id = model.eosId();
+        var has_eos = false;
+        for (canvas) |t| if (t == eos_id) { has_eos = true; break; };
+        if (has_eos) break;
+
         // Stop if max_tokens reached.
         if (total_generated >= cli.max_tokens) break;
     }
