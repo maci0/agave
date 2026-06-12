@@ -511,7 +511,7 @@ pub const NemotronNanoModel = struct {
     }
 
     fn isMultiBlock(self: *NemotronNanoModel, layer: usize) bool {
-        return self.seq_table.block_table[layer].len > 1;
+        return self.paged_cache.block_size > 0 and self.seq_table.block_table[layer].len > 1;
     }
 
     /// Mamba-2 SSM layer: pre-norm → NVFP4 in_proj → causal conv1d →

@@ -1749,7 +1749,7 @@ pub const Gemma4Model = struct {
     }
 
     fn isMultiBlock(self: *Gemma4Model, layer: usize) bool {
-        return self.seq_table.block_table[self.kv_source[layer]].len > 1;
+        return self.paged_cache.block_size > 0 and self.seq_table.block_table[self.kv_source[layer]].len > 1;
     }
 
     /// One attention layer: pre-norm → QKV → QK norm → V norm (tied K=V) → RoPE →

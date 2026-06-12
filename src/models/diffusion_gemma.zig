@@ -510,7 +510,7 @@ pub const DiffusionGemmaModel = struct {
     }
 
     fn isMultiBlock(self: *DiffusionGemmaModel, layer: usize) bool {
-        return self.seq_table.block_table[layer].len > 1;
+        return self.paged_cache.block_size > 0 and self.seq_table.block_table[layer].len > 1;
     }
 
     // ── Layer implementations (encoder / autoregressive) ──────────

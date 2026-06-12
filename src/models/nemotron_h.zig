@@ -456,7 +456,7 @@ pub const NemotronHModel = struct {
     }
 
     fn isMultiBlock(self: *NemotronHModel, layer: usize) bool {
-        return self.seq_table.block_table[layer].len > 1;
+        return self.paged_cache.block_size > 0 and self.seq_table.block_table[layer].len > 1;
     }
 
     /// Mamba-2 SSM layer: pre-norm → input projection → causal conv1d →

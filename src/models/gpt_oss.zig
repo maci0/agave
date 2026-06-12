@@ -382,7 +382,7 @@ pub const GptOssModel = struct {
     }
 
     fn isMultiBlock(self: *GptOssModel, layer: usize) bool {
-        return self.seq_table.block_table[layer].len > 1;
+        return self.paged_cache.block_size > 0 and self.seq_table.block_table[layer].len > 1;
     }
 
     /// Dispatch GEMV through the backend. For mlx_q weights, looks up companion

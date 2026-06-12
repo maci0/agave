@@ -329,7 +329,7 @@ pub const Glm4Model = struct {
     }
 
     fn isMultiBlock(self: *Glm4Model, layer: usize) bool {
-        return self.seq_table.block_table[layer].len > 1;
+        return self.paged_cache.block_size > 0 and self.seq_table.block_table[layer].len > 1;
     }
 
     // ── Embedding ────────────────────────────────────────────────

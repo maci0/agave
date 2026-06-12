@@ -713,7 +713,8 @@ pub const Qwen35Model = struct {
     }
 
     fn isMultiBlock(self: *Qwen35Model, layer: usize) bool {
-        return self.seq_table.block_table[layer].len > 1;
+        // Tiered KV uses its own block management; paged_cache.block_size=0 when tiered.
+        return self.paged_cache.block_size > 0 and self.seq_table.block_table[layer].len > 1;
     }
 
     // ---- MLX-aware GEMV dispatch ----

@@ -1046,7 +1046,7 @@ pub const Llama4Model = struct {
     }
 
     fn isMultiBlock(self: *Llama4Model, layer: usize) bool {
-        return self.seq_table.block_table[layer].len > 1;
+        return self.paged_cache.block_size > 0 and self.seq_table.block_table[layer].len > 1;
     }
 
     /// Embedding lookup: fetch token embedding from weight table.

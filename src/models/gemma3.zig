@@ -721,7 +721,7 @@ pub const Gemma3Model = struct {
     }
 
     fn isMultiBlock(self: *Gemma3Model, layer: usize) bool {
-        return self.seq_table.block_table[layer].len > 1;
+        return self.paged_cache.block_size > 0 and self.seq_table.block_table[layer].len > 1;
     }
 
     fn attention(self: *Gemma3Model, li: u32) !void {
