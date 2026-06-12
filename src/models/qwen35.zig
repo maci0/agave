@@ -454,15 +454,9 @@ pub const Qwen35Model = struct {
         self.layer_is_deltanet = try allocator.alloc(bool, nl);
         errdefer allocator.free(self.layer_is_deltanet);
         // Pre-populate from tensor presence: a layer is DeltaNet if it has attn_qkv.weight.
-        // Falls back to interval heuristic when tensor checks are too slow (large models).
         // This correctly handles irregular patterns (layer_types arrays) and MTP boundary layers.
-        if (self.full_attn_interval > 1) {
-            for (0..nl) |i| {
-                self.layer_is_deltanet[i] = f.layerTensor(@intCast(i), "attn_qkv.weight") != null;
-            }
-        } else {
-            // Pure attention model — no DeltaNet layers
-            for (0..nl) |i| self.layer_is_deltanet[i] = false;
+        for (0..nl) |i| {
+            self.layer_is_deltanet[i] = f.layerTensor(@intCast(i), "attn_qkv.weight") != null;
         }
 
         var layer_init_count: usize = 0;
