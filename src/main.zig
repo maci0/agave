@@ -390,6 +390,7 @@ const cli_specs = [_]cli_mod.ArgSpec{
     .{ .long = "host", .kind = .option, .help = "Server bind address: IPv4, localhost, 0.0.0.0, or 0 [default: 127.0.0.1]." },
     .{ .long = "api-key", .kind = .option, .help = "API key for server auth (or AGAVE_API_KEY env)." },
     .{ .long = "sleep-after", .kind = .option, .help = "Enter sleep mode after N seconds of server inactivity (0 = disabled). Signals /health sleeping:true; wakes on next request." },
+    .{ .long = "max-batch-size", .kind = .option, .help = "Max concurrent requests to batch per scheduler cycle [default: 8]. Higher values increase throughput at the cost of latency per request." },
     // Multimodal
     .{ .long = "mmproj", .kind = .option, .help = "Path to vision projector GGUF (mmproj file)." },
     .{ .long = "image", .kind = .option, .help = "Path to image file for multimodal inference (PNG or PPM P6)." },
@@ -500,6 +501,8 @@ const CliArgs = struct {
     disagg: bool = false,
     /// Sleep mode: enter sleep after N seconds of server inactivity (0 = disabled).
     sleep_after_s: u32 = 0,
+    /// Maximum concurrent requests to batch together per scheduler cycle (default 8).
+    max_batch_size: u32 = 8,
     // Speculative decoding
     draft_model_path: ?[]const u8 = null,
     spec_tokens: u32 = 5,
@@ -1057,6 +1060,7 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
         .image = res.option("image"),
         .draft_model_path = res.option("draft-model"),
         .sleep_after_s = parseU32(res.option("sleep-after"), "sleep-after") orelse 0,
+        .max_batch_size = parseU32(res.option("max-batch-size"), "max-batch-size") orelse 8,
         .video = res.option("video"),
         .video_fps = blk: {
             if (res.option("video-fps")) |s| {
@@ -1616,6 +1620,7 @@ fn printUsage() void {
         \\      --video <PATH>     Path to video file (frames extracted via ffmpeg)
         \\      --video-fps <N>    Video frame sampling rate (default: 1 fps)
         \\      --sleep-after <N>  Server sleep-mode idle timeout in seconds (0=off)
+        \\      --max-batch-size <N> Max concurrent requests per scheduler cycle [default: 8]
         \\
         \\DIAGNOSTICS:
         \\  -V, --verbose          Show technical details (params, load times, EOG)
@@ -2722,6 +2727,7 @@ fn initAndRun(
             .spec_tokens = cli.spec_tokens,
             .tree_budget = cli.tree_budget,
             .sleep_after_s = cli.sleep_after_s,
+            .max_batch_size = cli.max_batch_size,
         }) catch |e| {
             eprint("Error: server failed: {}\n", .{e});
             return false;
