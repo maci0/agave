@@ -12,7 +12,7 @@ agave pull google/gemma-4-4b-it-gguf --list          # list available files
 | Model | Arch ID | Attention | FFN | Special |
 |-------|---------|-----------|-----|---------|
 | **Gemma 3** | `gemma3` | GQA + QK norm + post-norms | GELU + SwiGLU | Embedding scaling, logit softcap, vision (SigLIP) |
-| **Qwen 3.5/3.6** | `qwen35` | GQA (every 4th layer) | SiLU + SwiGLU | DeltaNet SSM hybrid, MoE (3.5-35B, 3.6-35B), MTP heads |
+| **Qwen 3.5/3.6** | `qwen35` | GQA (every 4th layer) | SiLU + SwiGLU | DeltaNet SSM hybrid, MoE (3.5-35B, 3.6-35B, Nex-N2-Pro 512-expert), MTP heads, attn_output_gate |
 | **GPT-OSS** | `gpt_oss` | GQA + sliding window + sinks | SiLU + SwiGLU | MoE (top-4 of 32 experts) |
 | **Nemotron-H** | `nemotron_h` | GQA (sparse layers) | SiLU + SwiGLU | Mamba-2 SSM hybrid (GGUF) |
 | **Nemotron Nano** | `nemotron_nano` | GQA (sparse layers) | ReLU² MoE | SSM + MoE + attention hybrid (NVFP4) |
@@ -44,7 +44,7 @@ agave pull google/gemma-4-4b-it-gguf --list          # list available files
 
 **Gemma 3**: GGUF converter bakes +1.0 into RMS norm weights (don't add again). Embeddings scaled by `sqrt(n_embd)`. Uses SPM tokenizer (no merges). Tied output embeddings. Vision supported via SigLIP encoder. Supports `--megakernel` (fused FFN GELU, true megakernel Q4K/Q8 on Metal+CUDA).
 
-**Qwen 3.5/3.6**: Hybrid architecture alternating DeltaNet SSM and full attention layers. DeltaNet uses causal conv1d → delta rule state recurrence with learned decay (alpha) and update strength (beta). Full attention layers have gated output with sigmoid. Qwen 3.6-35B-A3B uses the same architecture with 40 layers, 256 experts (top-8 + shared), hidden_size 2048. Formats: GGUF (Q4_K_M, Q8_0), SafeTensors (BF16, MLX-4bit, NVFP4 compressed-tensors partial). Supports `--megakernel` (fused FFN SiLU, true megakernel Q8/Q4K on Metal+CUDA+ROCm).
+**Qwen 3.5/3.6**: Hybrid architecture alternating DeltaNet SSM and full attention layers (every 4th layer is full attention). DeltaNet uses causal conv1d → delta rule state recurrence with learned decay (alpha) and update strength (beta). Full attention layers have gated Q output with sigmoid. Qwen 3.6-35B-A3B uses same arch with 40 layers, 256 experts (top-8 + shared), hidden_size 2048. **nex-agi/Nex-N2-Pro**: same `qwen35moe` arch, 60 layers (3 DeltaNet + 1 full_attention × 15), 512 experts (top-10), hidden_size 4096, full-attention output gate (`attn_output_gate`), MTP head. Expert count is auto-detected from weight tensor dimensions. Formats: GGUF (Q4_K_M, Q8_0), SafeTensors (BF16, MLX-4bit). Supports `--megakernel` (fused FFN SiLU, true megakernel Q8/Q4K on Metal+CUDA+ROCm).
 
 **GPT-OSS**: Even layers = 128-token sliding window, odd = full sequence. Learned attention sinks per head. Clamped SwiGLU `[-7.0, +7.0]` in MoE experts.
 
