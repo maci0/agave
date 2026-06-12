@@ -2715,6 +2715,10 @@ fn initAndRun(
     }
 
     if (cli.serve) {
+        if (arch == .diffusion_gemma) {
+            eprint("Warning: DiffusionGemma in server mode uses autoregressive generation only\n", .{});
+            eprint("         (block diffusion via --serve not yet implemented)\n", .{});
+        }
         // Initialize shared n-gram pool for cross-request history sharing.
         // Server slots use this as a fallback when their own history has no match.
         if (cli.spec_mode == .ngram) {
