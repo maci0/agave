@@ -214,7 +214,7 @@ Before approving any PR, verify:
 
 **Agave — Production-Ready LLM Inference Engine**
 
-Supports 6 backends (Metal, CUDA, Vulkan, ROCm, WebGPU, CPU), 8 model architectures (Gemma3/4, Qwen3.5, GPT-OSS, Nemotron-H/Nano, GLM-4, Llama 4), and extensive quantization (Q2-Q8, FP8, bf16, NVFP4, MXFP4, MLX, TurboQuant KV). Megakernel system with composable building blocks for fused GPU dispatch. CLI and HTTP server interfaces. Built with Zig 0.16.0. Zero external dependencies.
+Supports 6 backends (Metal, CUDA, Vulkan, ROCm, WebGPU, CPU), 8 model architectures (Gemma3/4, Qwen3.5/Nex-N2-Pro, GPT-OSS, Nemotron-H/Nano, GLM-4, Llama 4), and extensive quantization (Q2-Q8, FP8, bf16, NVFP4, MXFP4, MLX, TurboQuant KV). Megakernel system with composable building blocks for fused GPU dispatch. CLI and HTTP server interfaces. Built with Zig 0.16.0. Zero external dependencies.
 
 **Core Value:** Every supported model must produce correct output on every backend at full GPU speed.
 
