@@ -78,6 +78,7 @@ pub const Qwen35Model = struct {
     has_qk_norm: bool = true, // Per-head Q/K RMS norms (Qwen3/3.5 only, not Qwen2)
     has_post_attn_norm: bool = true, // Qwen3.5 fused addRmsNorm; Qwen3 uses separate ffn_norm
     has_attn_bias: bool = false, // Q/K/V bias (Qwen2/2.5 only, not Qwen3/3.5)
+    has_full_attn_output_gate: bool = false, // Full attention output gate (Nex-N2-Pro: attn_output_gate)
 
     // Tensor parallelism
     tp_rank: u32 = 0,
@@ -228,11 +229,16 @@ pub const Qwen35Model = struct {
             break :blk self.head_dim;
         };
 
-        // MoE configuration (e.g., Qwen3.5-35B-A3B uses 256 experts, top-8 + shared expert)
-        // Also detect from tensor presence (compressed-tensors SafeTensors may not have
-        // expert_count in metadata if the config flattening missed it).
-        const expert_count_meta = f.getArchU32(arch, "expert_count") orelse
-            if (f.layerTensor(0, "ffn_gate_exps.weight") != null) @as(u32, 256) else null;
+        // MoE configuration (e.g., Qwen3.5-35B-A3B: 256 experts; Nex-N2-Pro: 512 experts).
+        // Infer expert count from metadata or from tensor dimensions when metadata is absent.
+        const expert_count_meta = f.getArchU32(arch, "expert_count") orelse blk: {
+            if (f.layerTensor(0, "ffn_gate_exps.weight")) |t| {
+                // Tensor shape for stacked expert weights: dims[0] = n_experts (outermost).
+                const n_from_tensor: u32 = if (t.n_dims >= 1) @intCast(t.dims[0]) else 256;
+                break :blk n_from_tensor;
+            }
+            break :blk null;
+        };
         if (expert_count_meta) |ec| {
             self.is_moe = true;
             self.n_experts = ec;
@@ -299,6 +305,17 @@ pub const Qwen35Model = struct {
         // Qwen3.5: "post_attention_norm" (fused addRmsNorm before MLP).
         // Qwen3/2: "ffn_norm" (separate pre-norm, standard residual after attention).
         self.has_post_attn_norm = f.layerTensor(check_layer, "post_attention_norm.weight") != null;
+
+        // Detect full-attention output gate (attn_output_gate: true in Nex-N2-Pro config).
+        // The full attention output is gated: attn_out *= sigmoid(gate(hidden2))
+        // Use metadata flag or tensor presence as fallback.
+        self.has_full_attn_output_gate = blk: {
+            // Check config metadata first
+            if (f.getMetaU32("attn_output_gate")) |v| break :blk v != 0;
+            // Fallback: check for output gate weight tensor in a full attention layer
+            if (f.layerTensor(check_layer, "attn_output_gate.weight")) |_| break :blk true;
+            break :blk false;
+        };
 
         // Detect MLX quantized weights (SafeTensors U32 packed with companion scale/bias).
         // Check multiple tensor names since some layers might not have attention.
@@ -845,7 +862,8 @@ pub const Qwen35Model = struct {
             const gate_buf = self.ff_buf1.ptr;
             const q_deint = self.ff_buf2.ptr;
             if (self.is_safetensors) {
-                // SafeTensors/HF: Q+gate concatenated per head — GPU split kernel
+                // SafeTensors/HF: per-head interleaved [Q_h0, G_h0, Q_h1, G_h1, ...].
+                // Each head has head_dim Q values followed by head_dim gate values.
                 self.be.splitQGate(self.q_buf.ptr, q_deint, gate_buf, hd, nh);
             } else {
                 // GGUF: Q+gate element-wise interleaved [Q0,G0,Q1,G1,...] per head
@@ -928,6 +946,21 @@ pub const Qwen35Model = struct {
             self.be.sigmoidMul(self.attn_out.ptr, self.ff_buf1.ptr, qd);
             self.syncProfile();
             self.perf.end(.sigmoid_mul, t);
+        }
+
+        // Full-attention output gate (Nex-N2-Pro attn_output_gate: true).
+        // Distinct from the Q-projection gate (has_gate): applies to the attention output
+        // before the output projection — attn_out *= sigmoid(gate_proj(hidden2)).
+        if (self.has_full_attn_output_gate) {
+            if (self.fmt.layerTensor(li, "attn_output_gate.weight")) |gw| {
+                t = self.perf.start();
+                // Compute gate using original (pre-attn) normed hidden2 → stored in ff_buf2
+                // (ff_buf2 was not used for Q processing since has_gate handled the Q gate)
+                self.doGemv(self.hidden2.ptr, gw, self.ff_buf2.ptr, qd, e);
+                self.be.sigmoidMul(self.attn_out.ptr, self.ff_buf2.ptr, qd);
+                self.syncProfile();
+                self.perf.end(.sigmoid_mul, t);
+            }
         }
 
         // Output projection (row-split for TP: each rank uses local_qd input columns)
@@ -1380,6 +1413,7 @@ pub const Qwen35Model = struct {
             const gate_buf = self.ff_buf1.ptr;
             const q_deint = self.ff_buf2.ptr;
             if (self.is_safetensors) {
+                // SafeTensors/HF: per-head interleaved [Q_h0, G_h0, Q_h1, G_h1, ...]
                 self.be.splitQGate(self.q_buf.ptr, q_deint, gate_buf, hd, nh);
             } else {
                 self.be.deinterleave(self.q_buf.ptr, q_deint, gate_buf, hd, nh);

@@ -545,6 +545,8 @@ const gguf_hf_layer_map = [_]struct { []const u8, []const u8 }{
     .{ "ssm_a", "linear_attn.A_log" },
     .{ "ssm_conv1d", "linear_attn.conv1d" },
     .{ "ssm_norm", "linear_attn.norm" },
+    // Nex-N2-Pro: full-attention output gate (attn_output_gate: true)
+    .{ "attn_output_gate", "self_attn.output_gate" },
 };
 
 /// HuggingFace model prefixes to try (multimodal first, then plain).
@@ -688,12 +690,14 @@ const gguf_hf_meta_map = [_]struct { []const u8, []const u8 }{
     .{ "expert_used_count", "num_experts_per_tok" },
     .{ "expert_feed_forward_length", "moe_intermediate_size" },
     .{ "expert_shared_feed_forward_length", "shared_expert_intermediate_size" },
-    // Qwen3.5 DeltaNet SSM
+    // Qwen3.5 DeltaNet SSM (hybrid linear+full attention)
     .{ "full_attention_interval", "full_attention_interval" },
     .{ "ssm.conv_kernel", "linear_conv_kernel_dim" },
     .{ "ssm.state_size", "linear_key_head_dim" },
     .{ "ssm.group_count", "linear_num_key_heads" },
     .{ "ssm.time_step_rank", "linear_num_value_heads" },
+    // Nex-N2-Pro / hybrid full-attention output gating
+    .{ "attn_output_gate", "attn_output_gate" },
     .{ "partial_rotary_factor", "partial_rotary_factor" },
     .{ "vocab_size", "vocab_size" },
 };
