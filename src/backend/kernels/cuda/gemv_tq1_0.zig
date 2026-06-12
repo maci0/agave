@@ -94,7 +94,7 @@ inline fn tq1_0BlockDot(x: [*]const f32, block_ptr: [*]const u8, k: u32, base_co
 
 /// TQ1_0 GEMV kernel: NR=4 rows per block.
 /// Each block processes rows [blockIdx*4 .. blockIdx*4+3].
-export fn gemv_tq1_0_kernel(x: [*]const f32, w: [*]const u8, y: [*]f32, n: u32, k: u32) callconv(.kernel) void {
+export fn gemv_tq1_0_kernel(x: [*]const f32, w: [*]const u8, y: [*]f32, n: u32, k: u32) callconv(.nvptx_device) void {
     const row_base = cu.blockIdx() * nr;
     if (row_base >= n) return;
     const tid = cu.threadIdx();

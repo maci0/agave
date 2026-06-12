@@ -17,7 +17,7 @@ export fn gemv_awq_kernel(
     n: u32,
     k: u32,
     group_size: u32,
-) callconv(.kernel) void {
+) callconv(.nvptx_device) void {
     const col = cu.blockIdx();
     if (col >= n) return;
     const tid = cu.threadIdx();

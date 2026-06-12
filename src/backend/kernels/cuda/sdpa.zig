@@ -24,7 +24,7 @@ export fn sdpa_kernel(
     sl: u32,
     kvd: u32,
     scale: f32,
-) callconv(.kernel) void {
+) callconv(.nvptx_device) void {
     const tid = cu.threadIdx();
     const head = cu.blockIdx();
     const bdim = cu.blockDim();
@@ -119,7 +119,7 @@ export fn sdpa_paged_kernel(
     kvd: u32,
     scale: f32,
     paged_bs: u32,
-) callconv(.kernel) void {
+) callconv(.nvptx_device) void {
     const tid = cu.threadIdx();
     const head = cu.blockIdx();
     const bdim = cu.blockDim();

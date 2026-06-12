@@ -18,7 +18,7 @@ export fn gemv_hqq_kernel(
     n: u32,
     k: u32,
     group_size: u32,
-) callconv(.kernel) void {
+) callconv(.nvptx_device) void {
     const row_base = cu.blockIdx() * nr;
     if (row_base >= n) return;
     const tid = cu.threadIdx();

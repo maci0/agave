@@ -10,7 +10,7 @@ export fn rms_norm_add_kernel(
     b: [*]f32,
     n: u32,
     eps: f32,
-) callconv(.kernel) void {
+) callconv(.nvptx_device) void {
     const tid = cu.threadIdx();
     const bdim = cu.blockDim();
 

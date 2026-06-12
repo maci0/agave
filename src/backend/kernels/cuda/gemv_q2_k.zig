@@ -34,7 +34,7 @@ inline fn q2kBlockDot(x: [*]const f32, bp: [*]const u8, k: u32, block_start: u32
     return sum;
 }
 
-export fn gemv_q2_k_kernel(x: [*]const f32, w: [*]const u8, y: [*]f32, n: u32, k: u32) callconv(.kernel) void {
+export fn gemv_q2_k_kernel(x: [*]const f32, w: [*]const u8, y: [*]f32, n: u32, k: u32) callconv(.nvptx_device) void {
     const row = cu.blockIdx();
     if (row >= n) return;
     const tid = cu.threadIdx();

@@ -10,7 +10,7 @@ const block_elems: u32 = 256;
 const iq4nl_lut = [16]i8{ -127, -104, -83, -65, -49, -35, -22, -10, 1, 13, 25, 38, 53, 69, 89, 113 };
 const scale_bias: i32 = -32;
 
-export fn gemv_iq4_xs_kernel(x: [*]const f32, w: [*]const u8, y: [*]f32, n: u32, k: u32) callconv(.kernel) void {
+export fn gemv_iq4_xs_kernel(x: [*]const f32, w: [*]const u8, y: [*]f32, n: u32, k: u32) callconv(.nvptx_device) void {
     const row = cu.blockIdx();
     if (row >= n) return;
     const tid = cu.threadIdx();

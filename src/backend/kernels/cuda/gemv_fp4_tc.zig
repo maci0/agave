@@ -46,7 +46,7 @@ export fn gemv_fp4_tc_fallback_kernel(
     y: [*]f32,
     n: u32,
     k: u32,
-) callconv(.kernel) void {
+) callconv(.nvptx_device) void {
     const row = cu.blockIdx();
     const tid = cu.threadIdx();
     if (row >= n) return;

@@ -3,7 +3,7 @@
 
 const cu = @import("common.zig");
 
-export fn rms_norm_kernel(input: [*]const f32, weight: [*]const f32, output: [*]f32, n: u32, eps: f32) callconv(.kernel) void {
+export fn rms_norm_kernel(input: [*]const f32, weight: [*]const f32, output: [*]f32, n: u32, eps: f32) callconv(.nvptx_device) void {
     const tid = cu.threadIdx();
     const bdim = cu.blockDim();
 

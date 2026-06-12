@@ -283,7 +283,7 @@ export fn megakernel_gemma_q8_kernel(
     embd_scale: f32,
     max_seq_len: u32,
     seq_pos: u32,
-) callconv(.kernel) void {
+) callconv(.nvptx_device) void {
     _ = kv_keys;
     _ = kv_values;
     _ = max_seq_len;

@@ -4,7 +4,7 @@
 
 const cu = @import("common.zig");
 
-export fn silu_mul_kernel(a: [*]const f32, b: [*]const f32, out: [*]f32, n: u32) callconv(.kernel) void {
+export fn silu_mul_kernel(a: [*]const f32, b: [*]const f32, out: [*]f32, n: u32) callconv(.nvptx_device) void {
     const idx = cu.globalIdx();
     if (idx >= n) return;
     const x = a[idx];

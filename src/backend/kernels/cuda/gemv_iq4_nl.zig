@@ -28,7 +28,7 @@ inline fn iq4nlBlockDot(x: [*]const f32, bp: [*]const u8, k: u32, base: u32) f32
     return sum * d;
 }
 
-export fn gemv_iq4_nl_kernel(x: [*]const f32, w: [*]const u8, y: [*]f32, n: u32, k: u32) callconv(.kernel) void {
+export fn gemv_iq4_nl_kernel(x: [*]const f32, w: [*]const u8, y: [*]f32, n: u32, k: u32) callconv(.nvptx_device) void {
     const row = cu.blockIdx();
     if (row >= n) return;
     const tid = cu.threadIdx();

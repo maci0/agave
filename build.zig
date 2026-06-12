@@ -91,12 +91,10 @@ pub fn build(b: *std.Build) void {
             });
             ptx.root_module.strip = true;
 
-            // Post-process PTX: work around Zig 0.16 + LLVM 21 aliasee bug.
-            // callconv(.kernel) crashes LLVM (NVPTXAsmPrinter rejects aliases to
-            // kernel functions, LLVM PR #81170). Kernels use callconv(.c) which
-            // generates .func. Post-processing renames definitions using alias
-            // mappings (.alias clean, mangled → .entry clean replacing .func mangled),
-            // then promotes forward declarations and removes .alias directives.
+            // Post-process PTX: work around Zig 0.16 + LLVM aliasee bug.
+            // callconv(.kernel) causes LLVM NVPTX to reject aliases to kernel functions.
+            // Kernels use callconv(.nvptx_device) which generates .func (device function).
+            // Post-processing: find .alias directives, promote .func → .entry, remove aliases.
             const fixup = b.addSystemCommand(&.{
                 "python3", "-c",
                 \\import re, sys

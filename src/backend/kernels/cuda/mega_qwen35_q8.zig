@@ -394,7 +394,7 @@ export fn megakernel_qwen35_q8_kernel(
     full_attn_interval: u32,
     max_seq_len: u32,
     seq_pos: u32,
-) callconv(.kernel) void {
+) callconv(.nvptx_device) void {
     // Suppress unused parameter warnings for KV cache (Phase 2)
     _ = kv_keys;
     _ = kv_values;

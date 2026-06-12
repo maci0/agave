@@ -20,7 +20,7 @@ export fn sdpa_tree_kernel(
     prefix_len: u32,
     n_nodes: u32,
     scale: f32,
-) callconv(.kernel) void {
+) callconv(.nvptx_device) void {
     const flat_id = cu.blockIdx();
     const tid = cu.threadIdx();
     const tg_sz = cu.blockDim();

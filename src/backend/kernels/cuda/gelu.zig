@@ -8,7 +8,7 @@ const gelu_coeff: f32 = 0.044715;
 /// GELU tanh-argument clamp bound (prevents exp overflow in tanhf).
 const gelu_clamp_bound: f32 = 10.0;
 
-export fn gelu_kernel(input: [*]const f32, output: [*]f32, n: u32) callconv(.kernel) void {
+export fn gelu_kernel(input: [*]const f32, output: [*]f32, n: u32) callconv(.nvptx_device) void {
     const idx = cu.globalIdx();
     if (idx >= n) return;
     const x = input[idx];

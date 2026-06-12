@@ -36,7 +36,7 @@ export fn sdpa_prefill_kernel(
     prev_len: u32,
     n_tok: u32,
     scale: f32,
-) callconv(.kernel) void {
+) callconv(.nvptx_device) void {
     const block_id = cu.blockIdx();
     const tok = block_id / nh;
     const h = block_id % nh;

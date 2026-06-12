@@ -28,7 +28,7 @@ export fn gemv_q4_0_batch_kernel(
     y3: [*]f32,
     n3: u32,
     k: u32,
-) callconv(.kernel) void {
+) callconv(.nvptx_device) void {
     const global_row = cu.blockIdx();
     const total = n0 + n1 + n2 + n3;
     if (global_row >= total) return;

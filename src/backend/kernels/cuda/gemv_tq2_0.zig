@@ -19,7 +19,7 @@ export fn gemv_tq2_0_kernel(
     y: [*]f32,
     n: u32,
     k: u32,
-) callconv(.kernel) void {
+) callconv(.nvptx_device) void {
     const row_base = cu.blockIdx() * nr;
     if (row_base >= n) return;
     const tid = cu.threadIdx();
