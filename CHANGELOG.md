@@ -2,12 +2,16 @@
 
 ## 2026-06-12 — Feature Release
 
-### CUDA PTX Build Fix
-- `callconv(.nvptx_device)` replaces `callconv(.kernel)` in all 60 CUDA kernel functions
-- Fixes `LLVM ERROR: NVPTX aliasee must be a non-kernel function definition` (Zig 0.16/LLVM)
-- Build.zig Python fixup converts `.func` device functions → `.entry` kernel entries post-compilation
-- All 44 PTX kernels now compile and run on GB10 (sm_121) via CUDA 13.0 compatibility
-- Verified: Qwen3.5-0.8B-Q8_0 at 24.2 tok/s decode on NVIDIA GB10
+### CUDA Full Validation (GB10 / sm_121 / CUDA 13.0)
+- `callconv(.nvptx_device)` replaces `callconv(.kernel)` — fixes Zig 0.16/LLVM NVPTX alias crash
+- Build PTX fixup: Python script promotes `.func *_kernel` → `.entry` post-compilation
+- All 60 kernel .zig files now in PTX build list (was 19); 61 kernels registered at runtime
+- CUDA KV cache fix: `getOrAllocKvBuf` uploads host data on first allocation (was reading garbage)
+- ARM Linux CPU detection fix: uses `CPU implementer+part` fallback (no `model name` on aarch64)
+- Test results: **1025 passed, 0 failed** on GB10 (-Denable-vulkan=false)
+- Server mode verified: `/health` returns `backend=CUDA`, CUDA spec decode (ngram 91% accept)
+- TurboQuant KV (`--kv-type turbo2`) works on CUDA
+- Performance: 22.3 tok/s decode Qwen3.5-0.8B-Q8_0 on GB10 (UMA; CPU 48 tok/s)
 
 ### DiffusionGemma (Block Diffusion LLM)
 - Added `diffusion_gemma` architecture — Google's DiffusionGemma 26B-A4B (SafeTensors BF16)
