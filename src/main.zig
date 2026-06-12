@@ -396,7 +396,7 @@ const cli_specs = [_]cli_mod.ArgSpec{
     .{ .long = "draft-model", .kind = .option, .help = "Path to draft model for speculative decoding." },
     .{ .long = "spec-tokens", .short = 'K', .kind = .option, .help = "Draft tokens per speculation round [default: 5]." },
     .{ .long = "tree-budget", .kind = .option, .help = "DDTree node budget [default: 64]." },
-    .{ .long = "spec-mode", .kind = .option, .help = "Speculative mode: auto, standard, ddtree, self, ngram, suffix, lookahead, mtp, medusa, eagle, mlp, pflash [default: ddtree with --draft-model]." },
+    .{ .long = "spec-mode", .kind = .option, .help = "Speculative mode: auto, standard, ddtree, self, ngram, suffix, lookahead, mtp, medusa, eagle, eagle3, mlp, pflash [default: ddtree with --draft-model]." },
     .{ .long = "spec-token-map", .kind = .option, .help = "FR-Spec token frequency map file (one token ID per line). Restricts draft to high-frequency tokens for improved acceptance rate." },
     .{ .long = "draft-layers", .kind = .option, .help = "Layers for self-speculative draft [default: auto]." },
     .{ .long = "pflash-alpha", .kind = .option, .help = "PFlash block selection threshold (0.0-2.0) [default: 0.85]." },
@@ -422,6 +422,7 @@ const SpecMode = enum {
     mtp,
     medusa, // Alias for mtp: Medusa heads are MTP heads with simple MLP architecture
     eagle,
+    eagle3, // EAGLE-3: conditions on pre-output-norm hidden state
     mlp,
     lookahead,
     pflash,
@@ -1060,11 +1061,12 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
                 if (std.mem.eql(u8, s, "mtp")) break :blk SpecMode.mtp;
                 if (std.mem.eql(u8, s, "medusa")) break :blk SpecMode.medusa;
                 if (std.mem.eql(u8, s, "eagle")) break :blk SpecMode.eagle;
+                if (std.mem.eql(u8, s, "eagle3")) break :blk SpecMode.eagle3;
                 if (std.mem.eql(u8, s, "mlp")) break :blk SpecMode.mlp;
                 if (std.mem.eql(u8, s, "lookahead")) break :blk SpecMode.lookahead;
                 if (std.mem.eql(u8, s, "pflash")) break :blk SpecMode.pflash;
                 if (std.mem.eql(u8, s, "auto")) break :blk if (dm != null) SpecMode.ddtree else SpecMode.ngram;
-                eprint("Error: unknown --spec-mode '{s}' (expected: auto, standard, ddtree, self, ngram, suffix, mtp, eagle, mlp, lookahead, pflash)\n", .{s});
+                eprint("Error: unknown --spec-mode '{s}' (expected: auto, standard, ddtree, self, ngram, suffix, mtp, eagle, eagle3, mlp, lookahead, pflash)\n", .{s});
                 std.process.exit(2);
             }
             break :blk if (dm != null) SpecMode.ddtree else SpecMode.none;
@@ -1576,7 +1578,7 @@ fn printUsage() void {
         \\
         \\SPECULATIVE DECODING:
         \\      --draft-model <PATH>  Draft model GGUF for speculative decoding
-        \\      --spec-mode <MODE>    Speculative mode: auto, standard, ddtree, self, ngram, suffix, lookahead, mtp, medusa, eagle, mlp, pflash
+        \\      --spec-mode <MODE>    Speculative mode: auto, standard, ddtree, self, ngram, suffix, lookahead, mtp, medusa, eagle, eagle3, mlp, pflash
         \\  -K, --spec-tokens <N>     Draft tokens per speculation round [default: 5]
         \\      --tree-budget <N>     DDTree node budget [default: 64]
         \\      --draft-layers <N>    Layers for self-speculative draft [default: auto]
@@ -3044,6 +3046,7 @@ fn generateSpeculative(
     // Both predict K tokens from mtpForward(last_token, depth) for depth=0..K-1.
     const use_mtp = (effective_spec_mode == .mtp or effective_spec_mode == .medusa);
     const use_eagle = (effective_spec_mode == .eagle);
+    const use_eagle3 = (effective_spec_mode == .eagle3);
     const use_mlp = (effective_spec_mode == .mlp);
     const use_lookahead = (effective_spec_mode == .lookahead);
     var la_state = ngram_mod.LookaheadState{};
@@ -3108,7 +3111,7 @@ fn generateSpeculative(
 
         // Draft phase
         if (self_spec) target.setLayerSkip(skip_start, skip_end);
-        const is_self_draft = (target.ptr == draft_model.ptr and !self_spec and !use_ngram and !use_mtp and !use_eagle and !use_mlp);
+        const is_self_draft = (target.ptr == draft_model.ptr and !self_spec and !use_ngram and !use_mtp and !use_eagle and !use_eagle3 and !use_mlp);
         const effective_k = spec_state.optimalK();
         const n_drafted = if (use_mtp) blk: {
             break :blk spec_decode.draftMtp(&spec_state, target, last);
@@ -3143,12 +3146,18 @@ fn generateSpeculative(
             const n = spec_decode.draftLookahead(&spec_state, target, last, &la_state, ngram_state.history[tail_start..ngram_state.len]);
             break :blk n;
         } else if (use_eagle) blk: {
-            // EAGLE: condition draft on target's hidden state (set by last target forward).
-            // For greedy decode: draftEagle; for sampling: draftEagleWithLogits.
+            // EAGLE: condition draft on target's post-norm hidden state (EAGLE-1).
             const n = if (!use_sampling)
                 spec_decode.draftEagle(&spec_state, target.*, draft_model.*, last)
             else
                 spec_decode.draftEagleWithLogits(&spec_state, target.*, draft_model.*, last);
+            break :blk n;
+        } else if (use_eagle3) blk: {
+            // EAGLE-3: condition draft on pre-output-norm hidden state for richer signal.
+            const n = if (!use_sampling)
+                spec_decode.draftEagle3(&spec_state, target.*, draft_model.*, last)
+            else
+                spec_decode.draftEagle3WithLogits(&spec_state, target.*, draft_model.*, last);
             break :blk n;
         } else if (use_mlp) blk: {
             // MLP Speculator: single-context draft (no chain). All K steps use target's hidden.

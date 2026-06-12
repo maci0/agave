@@ -84,6 +84,11 @@ pub const Model = struct {
         /// the target model's hidden state at each step.
         /// Returns an empty slice if the model doesn't expose hidden states.
         get_hidden_state: *const fn (self: *anyopaque) []const f32,
+        /// Return the pre-output-norm hidden state (n_embd floats).
+        /// EAGLE-3: conditions on the un-normalized residual stream after all layers
+        /// but before the final output_norm. Carries magnitude info post-norm loses.
+        /// Falls back to get_hidden_state() if model doesn't save pre-norm state.
+        get_pre_norm_hidden_state: *const fn (self: *anyopaque) []const f32,
         /// EAGLE-conditioned forward: run one draft step using the target's hidden state
         /// as additional context. The hidden state is concatenated / added to the token
         /// embedding before the first attention layer (EAGLE-1 approach).
@@ -269,6 +274,17 @@ pub const Model = struct {
                     return &.{};
                 }
             }.call),
+            .get_pre_norm_hidden_state = @ptrCast(&struct {
+                fn call(self: *T) []const f32 {
+                    // Return pre-output-norm hidden if available (EAGLE-3).
+                    // Falls back to post-norm .hidden for models that don't save it.
+                    if (comptime @hasField(T, "hidden_pre_norm")) {
+                        if (self.hidden_pre_norm.len > 0) return self.hidden_pre_norm;
+                    }
+                    if (comptime @hasField(T, "hidden")) return self.hidden;
+                    return &.{};
+                }
+            }.call),
             .eagle_forward = @ptrCast(&struct {
                 fn call(self: *T, token_id: u32, context_hidden: []const f32) ForwardError!u32 {
                     if (comptime @hasDecl(T, "eagleForward"))
@@ -374,6 +390,12 @@ pub const Model = struct {
     /// Valid after forward() or prefill(). Empty slice if unsupported.
     pub fn getHiddenState(self: Model) []const f32 {
         return self.vtable.get_hidden_state(self.ptr);
+    }
+
+    /// Return the pre-output-norm hidden state (n_embd floats) for EAGLE-3.
+    /// Valid after forward(). Falls back to post-norm hidden if not saved.
+    pub fn getPreNormHiddenState(self: Model) []const f32 {
+        return self.vtable.get_pre_norm_hidden_state(self.ptr);
     }
 
     /// EAGLE-conditioned draft forward: runs a draft step using the target model's

@@ -204,6 +204,10 @@ pub const Gemma4Model = struct {
 
     // ── Working buffers (allocated once, reused every token) ─────
     hidden: []f32 = &.{},
+    /// Pre-output-norm hidden state saved before the final rmsNorm.
+    /// Used by EAGLE-3 speculative decoding which conditions on the
+    /// un-normalized residual stream rather than the post-norm representation.
+    hidden_pre_norm: []f32 = &.{},
     hidden2: []f32 = &.{},
     q_buf: []f32 = &.{},
     k_buf: []f32 = &.{},
@@ -791,6 +795,8 @@ pub const Gemma4Model = struct {
         // ── Working buffer allocation ────────────────────────────
         self.hidden = try allocator.alloc(f32, n_embd);
         errdefer allocator.free(self.hidden);
+        self.hidden_pre_norm = try allocator.alloc(f32, n_embd);
+        errdefer allocator.free(self.hidden_pre_norm);
         self.hidden2 = try allocator.alloc(f32, n_embd);
         errdefer allocator.free(self.hidden2);
         self.q_buf = try allocator.alloc(f32, max_qkv_dim);
@@ -904,11 +910,12 @@ pub const Gemma4Model = struct {
         if (self.pf_positions.len > 0) pa.free(self.pf_positions);
         // Free working buffers
         const bufs = .{
-            &self.hidden,     &self.hidden2,    &self.q_buf,
-            &self.k_buf,      &self.v_buf,      &self.attn_out,
-            &self.ff_buf,     &self.ff_buf2,    &self.dense_gate,
-            &self.dense_up,   &self.dense_out,  &self.router_input,
-            &self.router_buf, &self.logits_buf, &self.scores,
+            &self.hidden,          &self.hidden_pre_norm, &self.hidden2,
+            &self.q_buf,           &self.k_buf,           &self.v_buf,
+            &self.attn_out,        &self.ff_buf,          &self.ff_buf2,
+            &self.dense_gate,      &self.dense_up,        &self.dense_out,
+            &self.router_input,    &self.router_buf,      &self.logits_buf,
+            &self.scores,
         };
         inline for (bufs) |buf| self.allocator.free(buf.*);
     }
@@ -993,6 +1000,12 @@ pub const Gemma4Model = struct {
             self.be.add(self.hidden.ptr, self.dense_out.ptr, self.hidden.ptr, self.n_embd);
             self.pending_ffn_residual = false;
         }
+
+        // Save pre-output-norm hidden state for EAGLE-3 speculative decoding.
+        // The residual stream before the final rmsNorm carries magnitude information
+        // that post-norm suppresses, providing richer conditioning for draft models.
+        self.be.sync();
+        @memcpy(self.hidden_pre_norm, self.hidden);
 
         // Final RMSNorm → LM head → softcap → argmax
         t = self.perf.start();

@@ -237,6 +237,56 @@ pub fn draftEagleWithLogits(state: *SpecState, target_model: Model, draft_model:
     return n;
 }
 
+/// EAGLE-3 speculative decoding: conditions on pre-output-norm hidden state.
+///
+/// EAGLE-3 improvement over EAGLE-1: instead of the post-output-norm hidden state,
+/// uses the residual stream BEFORE the final rmsNorm. This preserves magnitude
+/// information that normalization discards, providing richer conditioning signal
+/// for draft model prediction accuracy.
+///
+/// The target model must save hidden_pre_norm in its forward() — currently Gemma4.
+/// Falls back to post-norm getHiddenState() for models that don't implement it.
+pub fn draftEagle3(state: *SpecState, target_model: Model, draft_model: Model, last_token: u32) u32 {
+    // Use pre-output-norm hidden state for EAGLE-3 conditioning.
+    var context_hidden = target_model.getPreNormHiddenState();
+
+    var tok = last_token;
+    var n: u32 = 0;
+    while (n < state.k and n < max_draft_tokens) {
+        tok = draft_model.eagleForward(tok, context_hidden) catch break;
+        state.draft_tokens[n] = tok;
+        n += 1;
+        // Subsequent draft steps use draft model's own hidden state (same as EAGLE-1).
+        context_hidden = draft_model.getHiddenState();
+    }
+    state.n_draft = n;
+    return n;
+}
+
+/// EAGLE-3 with saved logits for stochastic rejection sampling.
+pub fn draftEagle3WithLogits(state: *SpecState, target_model: Model, draft_model: Model, last_token: u32) u32 {
+    var context_hidden = target_model.getPreNormHiddenState();
+    var tok = last_token;
+    var n: u32 = 0;
+    const vs = state.vocab_size;
+    while (n < state.k and n < max_draft_tokens) {
+        _ = draft_model.eagleForward(tok, context_hidden) catch break;
+        const logits = draft_model.getLogits();
+        const offset = @as(usize, n) * vs;
+        const dst = state.draft_log_probs[offset..][0..vs];
+        @memcpy(dst, logits);
+        if (state.token_mask) |tm| applyFrSpecMask(dst, tm);
+        logSoftmax(dst);
+        tok = math_ops.argmax(dst);
+        state.draft_tokens[n] = tok;
+        state.depth_slices[n] = dst;
+        n += 1;
+        context_hidden = draft_model.getHiddenState();
+    }
+    state.n_draft = n;
+    return n;
+}
+
 const ngram_mod = @import("ngram.zig");
 
 /// MLP Speculator (vLLM, Chen et al. 2023): lightweight 3-layer MLP draft model.
