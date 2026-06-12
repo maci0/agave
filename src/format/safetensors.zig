@@ -550,11 +550,14 @@ const gguf_hf_layer_map = [_]struct { []const u8, []const u8 }{
 };
 
 /// HuggingFace model prefixes to try (multimodal first, then plain).
+/// Empty prefix "" handles models where top-level tensors (e.g. lm_head.weight)
+/// are stored without any model prefix (gpt-oss MXFP4 style).
 const hf_prefixes = [_][]const u8{
     "model.language_model.",
     "language_model.model.",
     "language_model.",
     "model.",
+    "",
 };
 
 /// Translate a GGUF-style tensor name to HuggingFace-style using a given prefix.

@@ -285,8 +285,8 @@ pub const GptOssModel = struct {
         if (emb_t.dtype == .mlx_q) {
             const emb_s = self.fmt.getTensor("token_embd.scales") orelse return error.MissingTensor;
             const emb_b = self.fmt.getTensor("token_embd.biases") orelse return error.MissingTensor;
-            // Detect MLX quant bits: .unknown scale dtype = MXFP4 (4-bit), else affine (8-bit)
-            const bits: u32 = if (emb_s.dtype == .unknown) 4 else 8;
+            // Detect MLX quant bits: U8 scale dtype (.nvfp4 or .unknown) = MXFP4 (4-bit), BF16 = affine (8-bit)
+            const bits: u32 = if (emb_s.dtype == .nvfp4 or emb_s.dtype == .unknown) 4 else 8;
             mlx_ops.mlxEmbLookup(
                 self.hidden.ptr,
                 @ptrCast(@alignCast(emb_t.data_ptr)),
@@ -457,8 +457,9 @@ pub const GptOssModel = struct {
         const prefix = t.name[0..wi];
         const s_name = std.fmt.bufPrint(&sbuf, "{s}.scales", .{prefix}) catch return null;
         const st = self.fmt.getTensor(s_name) orelse return null;
-        // U8 scales (DType.unknown) = MXFP4 FP8; BF16 scales = affine
-        const is_mxfp4 = (st.dtype == .unknown);
+        // U8 scales (DType.nvfp4 in our system, from parseDType "U8"→nvfp4) = MXFP4 FP8 block scales.
+        // BF16 scales = MLX affine quantization. Both use 1 byte per block of 32 elements.
+        const is_mxfp4 = (st.dtype == .nvfp4 or st.dtype == .unknown);
         if (is_mxfp4) {
             // MXFP4: no quantization biases — only weight * fp8_scale
             return .{
