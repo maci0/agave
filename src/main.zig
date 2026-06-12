@@ -2511,7 +2511,7 @@ fn initAndRun(
                     var ffmpeg_proc = ffmpeg_proc_val;
                     _ = ffmpeg_proc.wait(g_io) catch null;
                 } else |_| {
-                    eprint("Warning: ffmpeg not found — is ffmpeg installed?\n", .{});
+                    eprint("Warning: ffmpeg not found (is ffmpeg installed?)\n", .{});
                 }
             }
 
@@ -2634,6 +2634,9 @@ fn initAndRun(
         draft_ptr = &draft_model_if;
         eprint("draft: {s} · {s}\n", .{ draft_arch.displayName(), Format.getQuantName(draft_fmt) });
     } else if (cli.spec_mode != .none) {
+        if (cli.spec_mode == .eagle or cli.spec_mode == .eagle3 or cli.spec_mode == .mlp) {
+            eprint("Warning: --spec-mode {s} requires --draft-model (falling back to self-draft)\n", .{@tagName(cli.spec_mode)});
+        }
         draft_ptr = &model_if;
     }
 

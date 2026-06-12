@@ -222,11 +222,14 @@ Not implemented. Returns 501.
 
 ### POST /v1/tokenize
 
-Count tokens for a text string. Accepts `text` or `content` as the field name.
+Count tokens for a text string or messages array. Accepts `text`, `content`, or `messages` (applies the model's chat template before counting).
 
 ```bash
 curl http://localhost:49453/v1/tokenize -d '{"text": "Hello world"}'
 # {"count": 2, "model": "model-name"}
+
+curl http://localhost:49453/v1/tokenize -d '{"messages": [{"role": "user", "content": "Hello"}]}'
+# {"count": 8, "model": "model-name"}
 ```
 
 ### POST /v1/detokenize
@@ -261,12 +264,14 @@ Liveness probe (no auth required). Returns HTTP 200 for `"ok"` and `"degraded"` 
 
 Returns status, uptime, active connections, KV cache utilization, and request counters. Status is `"ok"`, `"degraded"` (KV pressure or high error rate), or `"shutting_down"`. When `--api-key` is configured and no valid auth header is provided, returns only `{"status":"...", "reason":"..."}` (no model/version/backend details) to prevent fingerprinting.
 
+The `sleeping` field is `true` when the server has been idle longer than `--sleep-after`; it auto-clears on the next request.
+
 ```json
 {"status":"ok","reason":"none","version":"0.1.0","model":"model-name","backend":"metal",
  "uptime_s":120,"active_connections":1,"requests_total":5,"requests_completed":5,
  "requests_failed":0,"requests_cancelled":0,"queue_depth":0,
  "kv_cache_used":100,"kv_cache_total":8192,"kv_seq_len":42,"ctx_size":4096,
- "scheduler_errors":0,"preemptions":0}
+ "scheduler_errors":0,"preemptions":0,"sleeping":false}
 ```
 
 ### GET /ready

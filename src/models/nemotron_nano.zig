@@ -144,6 +144,8 @@ pub const NemotronNanoModel = struct {
     kv_seq_len: usize = 0,
     layer_skip_start: u32 = 0,
     layer_skip_end: u32 = 0,
+    /// When true, hidden2 holds unmerged layer output. Next layer's pre-norm fuses add via addRmsNorm.
+    pending_residual: bool = false,
     cancelled: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
     /// Enable fused megakernel for single-dispatch forward pass.
     megakernel_enabled: bool = false,
@@ -421,9 +423,14 @@ pub const NemotronNanoModel = struct {
             }
         }
 
-        // Final norm (cached BF16→f32) → LM head → argmax
+        // Final norm (flush pending residual, then cached BF16→f32) → LM head → argmax
         const nf = self.fmt.getTensor("backbone.norm_f.weight") orelse return error.MissingTensor;
-        self.be.rmsNorm(self.hidden.ptr, self.normAsF32(nf, e), self.hidden.ptr, e, self.rms_eps);
+        if (self.pending_residual) {
+            self.be.addRmsNorm(self.hidden.ptr, self.hidden2.ptr, self.normAsF32(nf, e), self.hidden.ptr, e, self.rms_eps);
+            self.pending_residual = false;
+        } else {
+            self.be.rmsNorm(self.hidden.ptr, self.normAsF32(nf, e), self.hidden.ptr, e, self.rms_eps);
+        }
 
         const lm = self.fmt.getTensor("lm_head.weight") orelse return error.MissingTensor;
         if (lm.dtype == .mlx_q) {
@@ -522,9 +529,14 @@ pub const NemotronNanoModel = struct {
         const d_conv: usize = self.ssm_d_conv;
         const proj_size: usize = d_inner + conv_ch + num_heads;
 
-        // 1. Pre-norm (cached BF16→f32)
+        // 1. Pre-norm (fused with previous layer's deferred residual when pending_residual=true).
         const nw = self.stLayerTensor(li, "norm.weight") orelse return error.MissingTensor;
-        self.be.rmsNorm(self.hidden.ptr, self.normAsF32(nw, e), self.hidden2.ptr, e, self.rms_eps);
+        if (self.pending_residual) {
+            self.be.addRmsNorm(self.hidden.ptr, self.hidden2.ptr, self.normAsF32(nw, e), self.hidden2.ptr, e, self.rms_eps);
+            self.pending_residual = false;
+        } else {
+            self.be.rmsNorm(self.hidden.ptr, self.normAsF32(nw, e), self.hidden2.ptr, e, self.rms_eps);
+        }
 
         // 2. Input projection (MLX, NVFP4, or BF16 depending on format)
         const ip_w = self.stLayerTensor(li, "mixer.in_proj.weight") orelse return error.MissingTensor;
@@ -591,8 +603,8 @@ pub const NemotronNanoModel = struct {
         }
         self.be.sync();
 
-        // 9. Residual
-        self.be.add(self.hidden.ptr, self.hidden2.ptr, self.hidden.ptr, e);
+        // 9. Defer residual add: will fuse with next layer's pre-norm via addRmsNorm.
+        self.pending_residual = true;
     }
 
     /// MoE FFN layer: pre-norm → sigmoid router → top-k expert selection →
@@ -604,9 +616,14 @@ pub const NemotronNanoModel = struct {
         const ff: usize = self.moe_intermediate_size;
         const shared_ff: usize = self.shared_expert_size;
 
-        // 1. Pre-norm (cached BF16→f32)
+        // 1. Pre-norm (flush pending residual first; MoE uses moe_out not hidden2, so can't defer its own).
         const nw = self.stLayerTensor(li, "norm.weight") orelse return error.MissingTensor;
-        self.be.rmsNorm(self.hidden.ptr, self.normAsF32(nw, e), self.hidden2.ptr, e, self.rms_eps);
+        if (self.pending_residual) {
+            self.be.addRmsNorm(self.hidden.ptr, self.hidden2.ptr, self.normAsF32(nw, e), self.hidden2.ptr, e, self.rms_eps);
+            self.pending_residual = false;
+        } else {
+            self.be.rmsNorm(self.hidden.ptr, self.normAsF32(nw, e), self.hidden2.ptr, e, self.rms_eps);
+        }
 
         // 2. Router: GEMV → sigmoid + bias correction
         const gate_w = self.stLayerTensor(li, "mixer.gate.weight") orelse return error.MissingTensor;
@@ -709,9 +726,14 @@ pub const NemotronNanoModel = struct {
         const nkv: usize = self.n_head_kv;
         const hd: usize = self.head_dim;
 
-        // 1. Pre-norm (cached BF16→f32)
+        // 1. Pre-norm (fused with previous layer's deferred residual when pending_residual=true).
         const nw = self.stLayerTensor(li, "norm.weight") orelse return error.MissingTensor;
-        self.be.rmsNorm(self.hidden.ptr, self.normAsF32(nw, e), self.hidden2.ptr, e, self.rms_eps);
+        if (self.pending_residual) {
+            self.be.addRmsNorm(self.hidden.ptr, self.hidden2.ptr, self.normAsF32(nw, e), self.hidden2.ptr, e, self.rms_eps);
+            self.pending_residual = false;
+        } else {
+            self.be.rmsNorm(self.hidden.ptr, self.normAsF32(nw, e), self.hidden2.ptr, e, self.rms_eps);
+        }
 
         // 2. Q/K/V projections (BF16 or MLX quantized)
         const qw = self.stLayerTensor(li, "mixer.q_proj.weight") orelse return error.MissingTensor;
@@ -772,8 +794,8 @@ pub const NemotronNanoModel = struct {
         const ow = self.stLayerTensor(li, "mixer.o_proj.weight") orelse return error.MissingTensor;
         try self.doGemv(self.attn_out.ptr, ow, self.hidden2.ptr, e, nh * hd, li, "mixer.o_proj");
 
-        // 6. Residual
-        self.be.add(self.hidden.ptr, self.hidden2.ptr, self.hidden.ptr, e);
+        // 6. Defer residual add: will fuse with next layer's pre-norm via addRmsNorm.
+        self.pending_residual = true;
     }
 
     // ── Helpers ───────────────────────────────────────────────────

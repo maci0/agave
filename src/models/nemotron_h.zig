@@ -137,6 +137,9 @@ pub const NemotronHModel = struct {
     kv_seq_len: usize = 0,
     layer_skip_start: u32 = 0,
     layer_skip_end: u32 = 0,
+    /// When true, hidden2 holds an unmerged attention/FFN output. The next layer's pre-norm
+    /// fuses the residual add into addRmsNorm(hidden, hidden2, w, hidden2) instead of two dispatches.
+    pending_residual: bool = false,
     /// Set to true from another thread to abort an in-progress `forward` call.
     cancelled: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
     /// Enable fused megakernel for single-dispatch forward pass.
@@ -377,8 +380,13 @@ pub const NemotronHModel = struct {
             self.fmt.getTensor("token_embd.weight") orelse return error.MissingTensor;
         self.kv_seq_len += 1;
 
-        // Final norm → LM head → argmax
-        self.be.rmsNorm(self.hidden.ptr, @ptrCast(@alignCast(nw.data_ptr)), self.hidden.ptr, self.n_embd, self.rms_eps);
+        // Flush deferred residual (if last layer left it pending), then final norm.
+        if (self.pending_residual) {
+            self.be.addRmsNorm(self.hidden.ptr, self.hidden2.ptr, @ptrCast(@alignCast(nw.data_ptr)), self.hidden.ptr, self.n_embd, self.rms_eps);
+            self.pending_residual = false;
+        } else {
+            self.be.rmsNorm(self.hidden.ptr, @ptrCast(@alignCast(nw.data_ptr)), self.hidden.ptr, self.n_embd, self.rms_eps);
+        }
         self.be.gemv(self.hidden.ptr, .{ .data = ow.data_ptr, .dtype = ow.dtype }, self.logits_buf.ptr, self.vocab_size, self.n_embd);
         self.be.sync(); // GPU wrote logits — sync before CPU argmax
         return math_ops.argmax(self.logits_buf);
@@ -468,16 +476,15 @@ pub const NemotronHModel = struct {
 
         std.debug.assert(num_heads % n_group == 0);
 
-        // 1. Pre-norm.
+        // 1. Pre-norm (fused with previous layer's deferred residual when pending_residual=true).
         const nw = self.fmt.layerTensor(li, "attn_norm.weight") orelse return error.MissingTensor;
 
-        self.be.rmsNorm(
-            self.hidden.ptr,
-            @ptrCast(@alignCast(nw.data_ptr)),
-            self.hidden2.ptr,
-            e,
-            self.rms_eps,
-        );
+        if (self.pending_residual) {
+            self.be.addRmsNorm(self.hidden.ptr, self.hidden2.ptr, @ptrCast(@alignCast(nw.data_ptr)), self.hidden2.ptr, e, self.rms_eps);
+            self.pending_residual = false;
+        } else {
+            self.be.rmsNorm(self.hidden.ptr, @ptrCast(@alignCast(nw.data_ptr)), self.hidden2.ptr, e, self.rms_eps);
+        }
 
         // 2. Input projection: [z(d_inner) | conv_in(conv_ch) | dt(num_heads)]
         const iw = self.fmt.layerTensor(li, "ssm_in.weight") orelse return error.MissingTensor;
@@ -539,8 +546,8 @@ pub const NemotronHModel = struct {
             d_inner,
         );
 
-        // 9. Residual.
-        self.be.add(self.hidden.ptr, self.hidden2.ptr, self.hidden.ptr, e);
+        // 9. Defer residual add: will fuse with next layer's pre-norm via addRmsNorm.
+        self.pending_residual = true;
     }
 
     /// GQA attention layer: pre-norm → Q/K/V projections → partial RoPE →
@@ -553,15 +560,14 @@ pub const NemotronHModel = struct {
         const qd: usize = nh * hd;
         const kvd: usize = nkv * hd;
 
-        // 1. Pre-norm.
+        // 1. Pre-norm (fused with previous layer's deferred residual when pending_residual=true).
         const nw = self.fmt.layerTensor(li, "attn_norm.weight") orelse return error.MissingTensor;
-        self.be.rmsNorm(
-            self.hidden.ptr,
-            @ptrCast(@alignCast(nw.data_ptr)),
-            self.hidden2.ptr,
-            e,
-            self.rms_eps,
-        );
+        if (self.pending_residual) {
+            self.be.addRmsNorm(self.hidden.ptr, self.hidden2.ptr, @ptrCast(@alignCast(nw.data_ptr)), self.hidden2.ptr, e, self.rms_eps);
+            self.pending_residual = false;
+        } else {
+            self.be.rmsNorm(self.hidden.ptr, @ptrCast(@alignCast(nw.data_ptr)), self.hidden2.ptr, e, self.rms_eps);
+        }
 
         // 2. Q/K/V projections (no bias).
         const qw = self.fmt.layerTensor(li, "attn_q.weight") orelse return error.MissingTensor;
@@ -628,8 +634,8 @@ pub const NemotronHModel = struct {
             qd,
         );
 
-        // 7. Residual.
-        self.be.add(self.hidden.ptr, self.hidden2.ptr, self.hidden.ptr, e);
+        // 7. Defer residual add: will fuse with next layer's pre-norm via addRmsNorm.
+        self.pending_residual = true;
     }
 
     /// FFN-only layer: pre-norm → squared-ReLU MLP (up → relu² → down) → residual add.
@@ -638,15 +644,14 @@ pub const NemotronHModel = struct {
         const e: usize = self.n_embd;
         const ff: usize = self.n_ff;
 
-        // 1. Pre-norm.
+        // 1. Pre-norm (fused with previous layer's deferred residual when pending_residual=true).
         const nw = self.fmt.layerTensor(li, "attn_norm.weight") orelse return error.MissingTensor;
-        self.be.rmsNorm(
-            self.hidden.ptr,
-            @ptrCast(@alignCast(nw.data_ptr)),
-            self.hidden2.ptr,
-            e,
-            self.rms_eps,
-        );
+        if (self.pending_residual) {
+            self.be.addRmsNorm(self.hidden.ptr, self.hidden2.ptr, @ptrCast(@alignCast(nw.data_ptr)), self.hidden2.ptr, e, self.rms_eps);
+            self.pending_residual = false;
+        } else {
+            self.be.rmsNorm(self.hidden.ptr, @ptrCast(@alignCast(nw.data_ptr)), self.hidden2.ptr, e, self.rms_eps);
+        }
 
         // 2. Up projection → squared ReLU.
         const uw = self.fmt.layerTensor(li, "ffn_up.weight") orelse return error.MissingTensor;
@@ -658,8 +663,8 @@ pub const NemotronHModel = struct {
         const dw = self.fmt.layerTensor(li, "ffn_down.weight") orelse return error.MissingTensor;
         self.be.gemv(self.ff_buf1.ptr, .{ .data = dw.data_ptr, .dtype = dw.dtype }, self.hidden2.ptr, e, ff);
 
-        // 4. Residual.
-        self.be.add(self.hidden.ptr, self.hidden2.ptr, self.hidden.ptr, e);
+        // 4. Defer residual add: will fuse with next layer's pre-norm via addRmsNorm.
+        self.pending_residual = true;
     }
 
     // ── Helpers ───────────────────────────────────────────────────
