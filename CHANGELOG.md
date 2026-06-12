@@ -2,6 +2,14 @@
 
 ## 2026-06-12 — Feature Release
 
+### DiffusionGemma (Block Diffusion LLM)
+- Added `diffusion_gemma` architecture — Google's DiffusionGemma 26B-A4B (SafeTensors BF16)
+- `src/models/diffusion_gemma.zig`: Gemma 4 26B A4B backbone with block diffusion inference
+- `src/ops/attention.zig`: `scaledDotProductAttentionCanvas()` for bidirectional canvas attention
+- Inference loop: encoder prefill → iterative denoising (uniform state diffusion) → block autoregressive chaining
+- 128 experts, top-8, fused `experts.gate_up_proj` tensor, per-layer `layer_scalar`
+- New flags: `--diffusion-steps` (default 16), `--diffusion-canvas` (default 256), `--diffusion-confidence` (default 0.5)
+
 ### New Features
 - **EAGLE-3 speculative decoding** (`--spec-mode eagle3`): conditions draft on pre-output-norm hidden state instead of post-norm; preserves residual magnitude for potentially richer draft conditioning. `hidden_pre_norm` buffer added to Gemma4.
 - **Video input** (`--video`, `--video-fps`): extract frames via ffmpeg at configurable FPS, encode each through vision encoder, concatenate visual tokens for temporal understanding. Works with any vision-capable model (Gemma4, Qwen VL).
