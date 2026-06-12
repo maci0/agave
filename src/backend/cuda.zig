@@ -284,8 +284,8 @@ pub const CudaBackend = struct {
         size: usize = 0,
     };
 
-    /// Number of PTX kernels loaded at init.
-    pub const n_kernels: u32 = 44;
+    /// Number of PTX kernels registered by name at init (from getFunction calls).
+    pub const n_kernels: u32 = 61;
 
     /// Library name loaded via dlopen at init.
     pub const lib_name = cuda_lib_name;
@@ -2399,7 +2399,7 @@ test "CUDA backend public function signatures compile" {
 }
 
 test "CUDA n_kernels constant matches expected count" {
-    try std.testing.expectEqual(@as(u32, 44), CudaBackend.n_kernels);
+    try std.testing.expectEqual(@as(u32, 61), CudaBackend.n_kernels);
 }
 
 test "CUDA lib_name is platform-appropriate" {
