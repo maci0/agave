@@ -58,6 +58,7 @@ agave model.gguf --mmproj mmproj.gguf --video clip.mp4 --video-fps 2 "Summarize"
 # Server features
 agave model.gguf --serve --sleep-after 300     # Enter sleep-mode after 5min idle
 agave model.gguf --serve --no-kv-cache         # Prefill-only / embedding server
+agave model.gguf --serve --max-batch-size 16   # Higher throughput for concurrent workloads
 ```
 
 ```bash
