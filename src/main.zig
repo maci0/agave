@@ -3161,8 +3161,8 @@ fn generateDiffusion(
             if (n_locked >= canvas_len) break;
         }
 
-        // Output the locked canvas tokens.
-        const canvas_text = tok.decode(canvas) catch null;
+        // Output the locked canvas tokens (use SPM decode for Gemma tokenizer).
+        const canvas_text = tok.decodeSpm(canvas) catch tok.decode(canvas) catch null;
         if (canvas_text) |text| {
             _ = std.posix.system.write(1, text.ptr, text.len);
             allocator.free(text);
