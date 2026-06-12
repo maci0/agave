@@ -116,11 +116,13 @@ pub const Glm4Model = struct {
         if (f.getMetaU32("hidden_size")) |v| self.n_embd = v;
         if (f.getMetaU32("num_attention_heads")) |v| self.n_head = v;
         if (f.getMetaU32("vocab_size")) |v| self.vocab_size = v;
-        if (f.getMetaU32("q_lora_rank")) |v| self.q_lora_rank = v;
-        if (f.getMetaU32("kv_lora_rank")) |v| self.kv_lora_rank = v;
-        if (f.getMetaU32("qk_nope_head_dim")) |v| self.qk_nope_head_dim = v;
-        if (f.getMetaU32("qk_rope_head_dim")) |v| self.qk_rope_head_dim = v;
-        if (f.getMetaU32("v_head_dim")) |v| self.v_head_dim = v;
+        // MLA parameters — try HF keys first, then GGUF arch-prefixed keys (deepseek2.*)
+        const arch = f.getMetaStr("general.architecture") orelse "glm4";
+        if (f.getMetaU32("q_lora_rank") orelse f.getArchU32(arch, "attention.q_lora_rank")) |v| self.q_lora_rank = v;
+        if (f.getMetaU32("kv_lora_rank") orelse f.getArchU32(arch, "attention.kv_lora_rank")) |v| self.kv_lora_rank = v;
+        if (f.getMetaU32("qk_nope_head_dim") orelse f.getArchU32(arch, "attention.key_length_mla")) |v| self.qk_nope_head_dim = v;
+        if (f.getMetaU32("qk_rope_head_dim") orelse f.getArchU32(arch, "attention.rope_key_length")) |v| self.qk_rope_head_dim = v;
+        if (f.getMetaU32("v_head_dim") orelse f.getArchU32(arch, "attention.value_length_mla")) |v| self.v_head_dim = v;
         if (f.getMetaU32("intermediate_size")) |v| self.intermediate_size = v;
         if (f.getMetaU32("moe_intermediate_size")) |v| self.moe_intermediate_size = v;
         if (f.getMetaU32("n_routed_experts")) |v| self.n_routed_experts = v;
@@ -630,15 +632,49 @@ pub const Glm4Model = struct {
     // ── Helpers ──────────────────────────────────────────────────
 
     fn layerTensor(self: *Glm4Model, li: u32, suffix: []const u8) ?TensorInfo {
-        const name = std.fmt.bufPrint(&self.name_buf, "model.layers.{d}.{s}", .{ li, suffix }) catch return null;
-        return self.fmt.getTensor(name);
+        // Try SafeTensors/HF name first (model.layers.N.suffix)
+        const hf_name = std.fmt.bufPrint(&self.name_buf, "model.layers.{d}.{s}", .{ li, suffix }) catch return null;
+        if (self.fmt.getTensor(hf_name)) |t| return t;
+        // Try GGUF-specific translation for MLA attention tensors
+        if (hfToGgufAttnName(suffix)) |gguf_name| {
+            if (self.fmt.layerTensor(li, gguf_name)) |t| return t;
+        }
+        // Generic GGUF fallback: blk.N.suffix
+        return self.fmt.layerTensor(li, suffix);
+    }
+
+    /// Translate HF attention layer prefix to GGUF tensor suffix.
+    /// For GGUF: "self_attn.q_a_proj" → "attn_q_a.weight", etc.
+    fn hfToGgufAttnName(prefix: []const u8) ?[]const u8 {
+        const mappings = .{
+            // MLA projection weights
+            .{ "self_attn.q_a_proj", "attn_q_a.weight" },
+            .{ "self_attn.q_b_proj", "attn_q_b.weight" },
+            .{ "self_attn.kv_a_proj_with_mqa", "attn_kv_a_mqa.weight" },
+            .{ "self_attn.embed_q", "attn_k_b.weight" },
+            .{ "self_attn.unembed_out", "attn_v_b.weight" },
+            // MLA norm weights
+            .{ "self_attn.q_a_layernorm.weight", "attn_q_a_norm.weight" },
+            .{ "self_attn.kv_a_layernorm.weight", "attn_kv_a_norm.weight" },
+        };
+        inline for (mappings) |m| {
+            if (std.mem.eql(u8, prefix, m[0])) return m[1];
+        }
+        return null;
     }
 
     /// Layer GEMV: MLX quantized path or standard be.gemv for GGUF/BF16/F32.
     fn mlxLayerGemv(self: *Glm4Model, li: u32, prefix: []const u8, x: []const f32, y: []f32, n: usize, k: usize) !void {
         var buf: [name_buf_size]u8 = undefined;
+        // Try SafeTensors HF name first
         const w_name = std.fmt.bufPrint(&buf, "model.layers.{d}.{s}.weight", .{ li, prefix }) catch return error.MissingTensor;
-        const w_t = self.fmt.getTensor(w_name) orelse return error.MissingTensor;
+        // Fallback to GGUF naming (blk.N.attn_q_a.weight, etc.)
+        const w_t = self.fmt.getTensor(w_name) orelse blk: {
+            if (hfToGgufAttnName(prefix)) |gguf_name| {
+                break :blk self.fmt.layerTensor(li, gguf_name);
+            }
+            break :blk null;
+        } orelse return error.MissingTensor;
 
         if (w_t.dtype == .mlx_q) {
             var buf2: [name_buf_size]u8 = undefined;
@@ -711,7 +747,12 @@ pub const Glm4Model = struct {
     fn multiLinearGemv(self: *Glm4Model, li: u32, prefix: []const u8, x: []const f32, y: [*]f32, nh: usize, out_dim: usize, in_dim: usize) !void {
         var buf: [name_buf_size]u8 = undefined;
         const w_name = std.fmt.bufPrint(&buf, "model.layers.{d}.{s}.weight", .{ li, prefix }) catch return error.MissingTensor;
-        const w_t = self.fmt.getTensor(w_name) orelse return error.MissingTensor;
+        const w_t = self.fmt.getTensor(w_name) orelse blk: {
+            if (hfToGgufAttnName(prefix)) |gguf_name| {
+                break :blk self.fmt.layerTensor(li, gguf_name);
+            }
+            break :blk null;
+        } orelse return error.MissingTensor;
 
         if (w_t.dtype == .mlx_q) {
             var buf2: [name_buf_size]u8 = undefined;

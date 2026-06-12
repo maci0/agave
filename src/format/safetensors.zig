@@ -732,6 +732,12 @@ const gguf_hf_meta_aliases = [_]struct { []const u8, []const u8 }{
     .{ "expert_count", "num_local_experts" },
     .{ "expert_count", "num_experts" },
     .{ "expert_count", "num_experts" },
+    // DeepSeek V3/GLM-4 MLA attention dimensions (HF config.json keys)
+    .{ "attention.q_lora_rank", "q_lora_rank" },
+    .{ "attention.kv_lora_rank", "kv_lora_rank" },
+    .{ "attention.key_length_mla", "qk_nope_head_dim" },
+    .{ "attention.rope_key_length", "qk_rope_head_dim" },
+    .{ "attention.value_length_mla", "v_head_dim" },
 };
 
 /// Try all possible GGUF→HF translations for a metadata key, including aliases.
