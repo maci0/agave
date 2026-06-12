@@ -992,13 +992,9 @@ test "GLM4 ropePartial multi-head" {
 }
 
 test "GLM4 default config constants" {
-    // Verify default struct field values match the GLM-4 MoE Lite spec
-    var m = Glm4Model{};
-    m.n_layers = 47;
-    m.n_embd = 2048;
-    m.n_head = 20;
-    m.q_lora_rank = 768;
-    m.kv_lora_rank = 512;
+    // Verify default struct field values match the GLM-4 MoE Lite spec.
+    // fmt/be/allocator have no defaults; use undefined for them, all other fields initialized.
+    const m = Glm4Model{ .fmt = undefined, .be = undefined, .allocator = undefined };
     try std.testing.expectEqual(@as(u32, 47), m.n_layers);
     try std.testing.expectEqual(@as(u32, 2048), m.n_embd);
     try std.testing.expectEqual(@as(u32, 20), m.n_head);
