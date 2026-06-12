@@ -246,14 +246,17 @@ test "suffix propose basic" {
     var s = try SuffixState.init(std.testing.allocator);
     defer s.deinit();
 
-    const tokens = [_]u32{ 1, 2, 3, 4, 5, 1, 2, 3, 4, 5, 6, 7, 8 };
+    // Sequence: [10,20,30,40,10,20] — last 2 tokens "10,20" appear at pos 0.
+    // Suffix matching should find hist[0..2] matches hist[4..6], propose hist[2..4] = [30,40].
+    const tokens = [_]u32{ 10, 20, 30, 40, 10, 20 };
     for (tokens) |t| s.push(t);
 
     var draft: [8]u32 = undefined;
     const n = s.propose(&draft);
-    // Suffix "1 2 3 4 5" (last 5) matches hist[0..5] → propose 4 5 6 7 8
-    try std.testing.expect(n > 0);
+    // Suffix "10 20" (last 2) matches at pos 0 → propose "30 40"
+    try std.testing.expect(n >= 1);
     try std.testing.expect(n <= s.max_k);
+    try std.testing.expect(draft[0] == 30);
 }
 
 test "suffix no match" {

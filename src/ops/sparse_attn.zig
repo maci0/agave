@@ -394,8 +394,8 @@ test "fuzz: all sparse_attn functions" {
             const ratio = sparsityRatio(mask);
             try std.testing.expect(ratio >= 0.0 and ratio <= 1.0);
 
-            // get() is false for out-of-bounds (future) blocks
-            if (mask.n_blocks > 0) {
+            // get() is false for future blocks: qi=0 should NOT attend to ki=n_blocks-1 when n_blocks > 1.
+            if (mask.n_blocks > 1) {
                 try std.testing.expect(!mask.get(0, mask.n_blocks - 1));
             }
         }

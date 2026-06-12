@@ -144,8 +144,8 @@ pub fn selectBlocks(state: *PFlashState) void {
         if (state.selected[bi]) n_selected += 1;
     }
 
-    // Enforce max_kept_ratio cap
-    const max_blocks = @as(usize, @intFromFloat(@as(f32, @floatFromInt(n_blocks)) * cfg.max_kept_ratio + 1));
+    // Enforce max_kept_ratio cap (strict floor: 25% of 16 = 4, not 5).
+    const max_blocks = @max(1, @as(usize, @intFromFloat(@as(f32, @floatFromInt(n_blocks)) * cfg.max_kept_ratio)));
     if (n_selected > max_blocks) {
         // Trim lowest-scoring selected blocks until within cap
         // Find threshold score for top max_blocks
