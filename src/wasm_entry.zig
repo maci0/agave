@@ -187,6 +187,7 @@ export fn agave_free(ctx_ptr: usize) void {
 }
 
 export fn agave_alloc(len: usize) usize {
+    if (len == 0) return 0;
     const buf = gpa.alloc(u8, len) catch return 0;
     return @intFromPtr(buf.ptr);
 }

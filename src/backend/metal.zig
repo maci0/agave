@@ -3193,7 +3193,7 @@ test "MetalBackend.backendInfo" {
     try std.testing.expectEqualStrings("Metal", info.name);
     try std.testing.expect(info.total_mem > 0);
     try std.testing.expect(info.is_uma);
-    try std.testing.expectEqual(@as(u32, 70), info.n_gpu_kernels);
+    try std.testing.expectEqual(@as(u32, 71), info.n_gpu_kernels);
     try std.testing.expectEqualStrings("MSL", info.kernel_type);
     try std.testing.expect(info.device_name.len > 0);
 }

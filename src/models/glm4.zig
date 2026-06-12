@@ -993,7 +993,7 @@ test "GLM4 ropePartial multi-head" {
 
 test "GLM4 default config constants" {
     // Verify default struct field values match the GLM-4 MoE Lite spec
-    var m: Glm4Model = undefined;
+    var m = Glm4Model{};
     m.n_layers = 47;
     m.n_embd = 2048;
     m.n_head = 20;

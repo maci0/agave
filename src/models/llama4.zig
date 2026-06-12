@@ -1177,9 +1177,9 @@ test "Llama4 NoPE temperature scaling formula" {
     const temp0 = @log(@floor(pos0 / floor_scale) + 1.0) * attn_temp_scale + 1.0;
     try std.testing.expectApproxEqAbs(@as(f32, 1.0), temp0, 1e-5);
 
-    // Position 8191 (still in first chunk): same as pos 0
-    const pos8191: f32 = @floatFromInt(@as(u32, 8191) + 1);
-    const temp8191 = @log(@floor(pos8191 / floor_scale) + 1.0) * attn_temp_scale + 1.0;
+    // Position 8190 (last in first chunk): floor(8191/8192) = 0 → same as pos 0
+    const pos8190: f32 = @floatFromInt(@as(u32, 8190) + 1);
+    const temp8191 = @log(@floor(pos8190 / floor_scale) + 1.0) * attn_temp_scale + 1.0;
     try std.testing.expectApproxEqAbs(@as(f32, 1.0), temp8191, 1e-5);
 
     // Position 8192: log(floor(8193/8192) + 1) * 0.1 + 1 = log(2)*0.1 + 1

@@ -1245,10 +1245,10 @@ test "Gemma3 applySoftcap tanh clamping" {
     var buf = [_]f32{ 100.0, -100.0, 0.0, 15.0, -15.0, 30.0, 60.0, 1.0, 0.5 };
     m.logits_buf = &buf;
     m.applySoftcap();
-    // Large positive -> cap (30.0)
-    try std.testing.expectApproxEqAbs(@as(f32, 30.0), buf[0], 0.01);
-    // Large negative -> -cap (-30.0)
-    try std.testing.expectApproxEqAbs(@as(f32, -30.0), buf[1], 0.01);
+    // Large positive -> near cap (30.0 * tanh(100/30) ~ 29.92, not exactly 30)
+    try std.testing.expectApproxEqAbs(@as(f32, 30.0 * @as(f32, math.tanh(@as(f32, 100.0 / 30.0)))), buf[0], 0.01);
+    // Large negative -> near -cap
+    try std.testing.expectApproxEqAbs(@as(f32, 30.0 * @as(f32, math.tanh(@as(f32, -100.0 / 30.0)))), buf[1], 0.01);
     // Zero -> 0.0
     try std.testing.expectApproxEqAbs(@as(f32, 0.0), buf[2], 1e-5);
     // tanh(15/30) = tanh(0.5) ~ 0.4621; 30 * 0.4621 ~ 13.86
