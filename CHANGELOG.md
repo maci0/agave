@@ -5,6 +5,9 @@
 ### Bug Fixes
 - tiered KV cache (`--kv-tiers vram+ram`) crash fixed: `isMultiBlock` now guards against `paged_cache.block_size == 0` (all 9 model architectures)
 - Warning added: tiered SDPA split-attention only fully implemented for Gemma 3; other models will warn
+- CUDA: all 60 kernel files now in PTX build list (was 19); 61 kernels registered at runtime (was 44)
+- CUDA SDPA correctness: `getOrAllocKvBuf` now uploads host KV data on first GPU allocation
+- ARM Linux CPU detection: `implementer+part` fallback for aarch64 `/proc/cpuinfo` (no `model name`)
 
 ### CUDA Full Validation (GB10 / sm_121 / CUDA 13.0)
 - `callconv(.nvptx_device)` replaces `callconv(.kernel)` — fixes Zig 0.16/LLVM NVPTX alias crash
