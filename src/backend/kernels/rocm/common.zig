@@ -170,6 +170,21 @@ pub inline fn bf16ToF32(val: u16) f32 {
     return @bitCast(@as(u32, val) << 16);
 }
 
+/// FP16 → f32: read 2 bytes from ptr as little-endian u16, convert to f32.
+pub fn f16tof32(ptr: [*]const u8) f32 {
+    const val = @as(u16, ptr[0]) | (@as(u16, ptr[1]) << 8);
+    const sign: u32 = @as(u32, val >> 15) << 31;
+    const exp_f16: u32 = (val >> 10) & 0x1F;
+    const mant_f16: u32 = val & 0x3FF;
+    if (exp_f16 == 0 and mant_f16 == 0) return @bitCast(sign);
+    if (exp_f16 == 0x1F) {
+        if (mant_f16 == 0) return @bitCast(sign | 0x7F800000); // inf
+        return @bitCast(sign | 0x7FC00000); // NaN
+    }
+    const exp_f32: u32 = exp_f16 + (127 - 15);
+    return @bitCast(sign | (exp_f32 << 23) | (mant_f16 << 13));
+}
+
 /// E8M0 → f32: val = 2^(byte - 127). Pure power-of-2 (no mantissa).
 pub inline fn e8m0ToF32(byte: u8) f32 {
     if (byte == 0) return 0.0;

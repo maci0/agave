@@ -61,7 +61,7 @@ test "fuzz: gemv_awq functions" {
     try std.testing.fuzz({}, struct {
         fn f(_: void, _: *std.testing.Smith) !void {
             comptime {
-                comptime std.debug.assert(gemm_reverse.len > 0);
+                std.debug.assert(gemm_reverse.len > 0);
                 _ = @sizeOf(u8);
             }
         }

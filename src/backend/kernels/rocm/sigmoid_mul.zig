@@ -10,14 +10,6 @@ export fn sigmoid_mul_kernel(a: [*]const f32, b: [*]const f32, output: [*]f32, n
     output[idx] = a[idx] * cu.sigmoidf(b[idx]);
 }
 
-/// Fused SiLU + multiply: out[i] = silu(a[i]) * b[i]
-/// Used in SwiGLU FFN to avoid separate silu + mul dispatches.
-export fn silu_mul_kernel(a: [*]const f32, b: [*]const f32, output: [*]f32, n: u32) callconv(.kernel) void {
-    const idx = cu.globalIdx();
-    if (idx >= n) return;
-    const x = a[idx];
-    output[idx] = (x * cu.sigmoidf(x)) * b[idx];
-}
 
 const std = @import("std");
 
