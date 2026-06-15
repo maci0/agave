@@ -1497,6 +1497,10 @@ pub const VulkanBackend = struct {
     }
 
     fn downloadF32(self: *VulkanBackend, mem: VkDeviceMemory, data: [*]f32, count: usize) void {
+        // Ensure any pending GPU commands complete before reading from host-visible memory.
+        // The deferred dispatch system records GPU work without executing it; reading
+        // from a pooled buffer's host-mapped memory without a sync returns stale data.
+        if (self.cmd_recording) self.submitPending();
         var mapped: ?*anyopaque = null;
         _ = self.vkMapMemory(self.device, mem, 0, count * @sizeOf(f32), 0, &mapped);
         if (mapped) |ptr| {
@@ -1734,7 +1738,6 @@ pub const VulkanBackend = struct {
         const bufs = [_]VkBuffer{ x_buf.buf, w_vk.buf, y_buf.buf };
         const sizes = [_]usize{ x_sz, w_sz, y_sz };
         self.dispatch(self.pipe_gemv_t_q8_0, &bufs, &sizes, @ptrCast(&params), 8, @intCast(out_dim));
-        self.submitPending(); // must sync before readback
         self.downloadF32(y_buf.mem, y, out_dim);
     }
 
@@ -1902,8 +1905,7 @@ pub const VulkanBackend = struct {
         const n_groups = (conv_ch + workgroup_size - 1) / workgroup_size;
 
         self.dispatch(self.pipe_conv1d, &bufs, &sizes, @ptrCast(&params), @sizeOf(Params), @intCast(n_groups));
-
-        // Download result
+        // Download result (downloadF32 submits pending work first)
         self.downloadF32(output_buf.mem, conv_out, conv_ch);
 
         // Update ring buffer state on CPU (shift rows left, append new input)
@@ -2303,8 +2305,6 @@ pub const VulkanBackend = struct {
         const bufs = [_]VkBuffer{ q_pool.buf, k_pool.buf, v_pool.buf, gate_pool.buf, beta_pool.buf, z_pool.buf, norm_vk.buf, state_pool.buf, out_pool.buf };
         const sizes = [_]usize{ q_sz, q_sz, v_sz, gate_sz, gate_sz, v_sz, norm_sz, state_sz, v_sz };
         self.dispatch(self.pipe_deltanet, &bufs, &sizes, @ptrCast(&params), @sizeOf(Params), @intCast(num_v));
-        // Must submit before reading back — deferred dispatch hasn't run yet.
-        self.submitPending();
         self.downloadF32(out_pool.mem, output, num_v * hvd);
         self.downloadF32(state_pool.mem, @ptrCast(ssm_state.ptr), ssm_state.len);
     }
