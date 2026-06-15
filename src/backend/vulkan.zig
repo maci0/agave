@@ -753,7 +753,7 @@ pub const VulkanBackend = struct {
     act_pool_count: u32 = 0,
 
     /// Number of SPIR-V compute pipelines compiled at init.
-    pub const n_pipelines: u32 = 44;
+    pub const n_pipelines: u32 = 49;
 
     /// Library name loaded via dlopen at init.
     pub const lib_name = vk_lib_name;
@@ -2666,7 +2666,7 @@ test "Vulkan VK_API_VERSION_1_1 encoding" {
 }
 
 test "Vulkan n_pipelines and lib_name" {
-    try std.testing.expectEqual(@as(u32, 44), VulkanBackend.n_pipelines);
+    try std.testing.expectEqual(@as(u32, 49), VulkanBackend.n_pipelines);
     const expected_lib = switch (builtin.os.tag) {
         .macos => "libMoltenVK.dylib",
         .linux => "libvulkan.so.1",
