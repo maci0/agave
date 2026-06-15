@@ -1189,8 +1189,6 @@ pub const VulkanBackend = struct {
                 }
                 return act.vk_buf;
             }
-            // Buffer too small — must submit before destroying (buffer may be in pending cmd buf).
-            self.submitPending();
             self.destroyBuffer(act.vk_buf);
             _ = self.act_cache.remove(addr);
         }
@@ -1212,7 +1210,6 @@ pub const VulkanBackend = struct {
                 act.state = .dirty;
                 return act.vk_buf;
             }
-            self.submitPending();
             self.destroyBuffer(act.vk_buf);
         }
         const buf = self.createBuffer(size);
@@ -1231,7 +1228,6 @@ pub const VulkanBackend = struct {
                 act.state = .dirty;
                 return act.vk_buf;
             }
-            self.submitPending();
             self.destroyBuffer(act.vk_buf);
         }
         const buf = self.createBuffer(size);
@@ -1266,7 +1262,6 @@ pub const VulkanBackend = struct {
     pub fn invalidateWeight(self: *VulkanBackend, ptr: anytype) void {
         const addr = @intFromPtr(ptr);
         if (self.buf_cache.getPtr(addr)) |cached| {
-            self.submitPending();
             self.destroyBuffer(cached.vk_buf);
             _ = self.buf_cache.remove(addr);
         }
@@ -1465,6 +1460,9 @@ pub const VulkanBackend = struct {
     }
 
     fn destroyBuffer(self: *VulkanBackend, b: VkBuf) void {
+        // Flush pending commands before destroying — a buffer recorded in the command
+        // buffer becomes invalid once destroyed, corrupting the command buffer state.
+        if (self.cmd_recording) self.submitPending();
         self.vkDestroyBuffer(self.device, b.buf, null);
         self.vkFreeMemory(self.device, b.mem, null);
     }
@@ -1477,11 +1475,8 @@ pub const VulkanBackend = struct {
         const addr = @intFromPtr(ptr);
         if (self.buf_cache.get(addr)) |cached| {
             if (cached.size >= size) return cached.vk_buf;
-            // Size grew — must submit pending commands before freeing the old buffer
-            // (destroying a buffer recorded in a pending command buffer invalidates it).
-            self.submitPending();
-            self.vkDestroyBuffer(self.device, cached.vk_buf.buf, null);
-            self.vkFreeMemory(self.device, cached.vk_buf.mem, null);
+            // destroyBuffer submits pending commands first if needed.
+            self.destroyBuffer(cached.vk_buf);
             _ = self.buf_cache.remove(addr);
         }
         const buf = self.createBuffer(size);
