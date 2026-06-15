@@ -280,6 +280,9 @@ pub inline fn fp8e5m2ToF32(val: u8) f32 {
 // Uses wave-level ds_bpermute for intra-wave reduction (no barriers),
 // then LDS for inter-wave reduction (1 barrier instead of log2(N)).
 
+/// Warp/wave-level reduce-add. Alias for waveReduceAdd (CUDA compatibility).
+pub const warpReduceAdd = waveReduceAdd;
+
 /// Block-level reduce-add. All threads must participate.
 /// Returns the sum in thread 0.
 pub fn blockReduceAdd(val: f32) f32 {
