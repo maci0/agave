@@ -1734,6 +1734,7 @@ pub const VulkanBackend = struct {
         const bufs = [_]VkBuffer{ x_buf.buf, w_vk.buf, y_buf.buf };
         const sizes = [_]usize{ x_sz, w_sz, y_sz };
         self.dispatch(self.pipe_gemv_t_q8_0, &bufs, &sizes, @ptrCast(&params), 8, @intCast(out_dim));
+        self.submitPending(); // must sync before readback
         self.downloadF32(y_buf.mem, y, out_dim);
     }
 
@@ -2302,6 +2303,8 @@ pub const VulkanBackend = struct {
         const bufs = [_]VkBuffer{ q_pool.buf, k_pool.buf, v_pool.buf, gate_pool.buf, beta_pool.buf, z_pool.buf, norm_vk.buf, state_pool.buf, out_pool.buf };
         const sizes = [_]usize{ q_sz, q_sz, v_sz, gate_sz, gate_sz, v_sz, norm_sz, state_sz, v_sz };
         self.dispatch(self.pipe_deltanet, &bufs, &sizes, @ptrCast(&params), @sizeOf(Params), @intCast(num_v));
+        // Must submit before reading back — deferred dispatch hasn't run yet.
+        self.submitPending();
         self.downloadF32(out_pool.mem, output, num_v * hvd);
         self.downloadF32(state_pool.mem, @ptrCast(ssm_state.ptr), ssm_state.len);
     }
