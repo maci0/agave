@@ -69,6 +69,7 @@ Single GPU dispatch for ALL layers. Uses composable building blocks with atomic 
 | `mega_rope` | Rotary position encoding |
 | `mega_add` | Residual addition |
 | `mega_kv_append_f32` / `mega_kv_append_tq` | KV cache append (f32 + TurboQuant WHT encode) |
+| `mega_sync_reset` | Reset atomic sync counter between stages |
 | `mega_sdpa_inline` | Full inline SDPA with TQ+ dequant, sparse V (1e-6), GQA, online softmax |
 
 ### True Megakernel Files
@@ -234,9 +235,9 @@ Helper constructors simplify common patterns:
 
 | Backend | Pipelines/Kernels | Megakernel Files | Composed |
 |---------|:-----------------:|:----------------:|:--------:|
-| Metal | 70+ | 7 (5 true + megakernel.metal + mega_common.metal) | Yes (runtime MSL) |
-| CUDA | 56 | 4 (3 true + fused FFN) | No |
-| ROCm | 44 | 1 (true Qwen Q8_0) | No |
+| Metal | ~88 | 7 (5 true + megakernel.metal + mega_common.metal) | Yes (runtime MSL) |
+| CUDA | ~59 | 4 (3 true + fused FFN) | No |
+| ROCm | ~46 | 1 (true Qwen Q8_0) | No |
 
 The composed megakernel (`mega_compose.zig`) generates an additional Metal pipeline at runtime via `compileComposedMegakernel()`. This pipeline is not counted in the static file totals above.
 
@@ -244,7 +245,7 @@ The composed megakernel (`mega_compose.zig`) generates an additional Metal pipel
 
 | File | Lines | Purpose |
 |------|-------|---------|
-| `src/backend/mega_compose.zig` | ~780 | Composable megakernel generator (ModelDesc, composeMSL) |
+| `src/backend/mega_compose.zig` | ~1,036 | Composable megakernel generator (ModelDesc, composeMSL) |
 | `src/backend/megakernel.zig` | — | Weight offset computation for fused FFN megakernels |
 | `src/backend/kernels/metal/mega_common.metal` | 732 | 18 composable building blocks |
 | `src/backend/kernels/metal/megakernel.metal` | — | 11 fused FFN kernels (Tier 1) |

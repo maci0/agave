@@ -651,6 +651,7 @@ Primitive categories:
   GEMV:        mega_gemv_q8, mega_gemv_q4k, mega_gemv_q4_0, mega_gemv_q5k, mega_gemv_q6k
   Activation:  mega_silu_mul, mega_gelu_mul, mega_relu_squared, mega_silu_mul_clamp
   Transform:   mega_rope, mega_add
+  Sync:        mega_sync_reset (reset atomic counter between stages)
   KV Cache:    mega_kv_append_f32, mega_kv_append_tq (TurboQuant encoding)
   Attention:   mega_sdpa_inline (TQ+ dequant, sparse V, online softmax, GQA)
 ```

@@ -193,7 +193,7 @@ flowchart TD
     NoPenalty["No DRY penalty\nlogit unchanged"]:::success
     Extend["Extend match backward\nhow many prior tokens also match?"]:::sync
     Length["Match length L\n(tokens in common prefix)"]:::migration
-    Penalty["Apply penalty\nlogit -= dry_multiplier ^ L"]:::danger
+    Penalty["Apply penalty\nlogit -= dry_multiplier × L"]:::danger
     Ex1["token 'sat' after 'cat'\nL=1 (just 'sat') → no penalty"]:::optional
     Ex2["token 'on' after 'cat sat'\nL=2 (bigram) → penalty x1.5^2=2.25"]:::optional
     Ex3["token 'mat' after 'cat sat on'\nL=3 → penalty x1.5^3=3.375"]:::optional

@@ -165,7 +165,7 @@ Next attempt after "Date\n5. ":
 
 Zero memory overhead (no draft model weights). The ring buffer uses 8 KB.
 
-In **server mode**, a `SharedNgramPool` (8KB, thread-safe spinlock) accumulates tokens from all concurrent requests. When a request's local history has no match, it searches the shared pool — giving "warm-start" drafting from other users' recent output.
+In **server mode**, a `SharedNgramPool` (~32 KB / 8,192 token history, thread-safe spinlock) accumulates tokens from all concurrent requests. When a request's local history has no match, it searches the shared pool — giving "warm-start" drafting from other users' recent output.
 
 ### Suffix Decoding (`--spec-mode suffix`)
 
@@ -516,9 +516,7 @@ flowchart TD
     DefaultK["use default K=5"]:::setup
     Compute["compute expected_tokens(K)\nfor K = 1..configured_K"]:::migration
     BestK["use best K\n(argmax expected_tokens)"]:::migration
-    Cooldown["enter cooldown\nsingle-token decode (no draft)\nfor N steps"]:::danger
     Draft["run draft model\nK forward passes"]:::sync
-    SingleDecode["single-token decode\n(no speculation)"]:::danger
     Verify["verify with target model"]:::sync
     RecordStats["record: how many\ntokens were accepted"]:::success
 
@@ -526,11 +524,8 @@ flowchart TD
     Check -- "no (warmup)" --> DefaultK
     Check -- "yes" --> Compute
     Compute --> BestK
-    BestK --> LowAccept{"acceptance rate\n< 25%?"}
-    LowAccept -- "yes" --> Cooldown
-    LowAccept -- "no" --> Draft
+    BestK --> Draft
     DefaultK --> Draft
-    Cooldown --> SingleDecode
     Draft --> Verify
     Verify --> RecordStats
     RecordStats --> Start
@@ -550,9 +545,7 @@ Early in generation (first 10 verification rounds), the system uses the default 
 
 ### Cooldown
 
-When the acceptance rate over the last `adaptive_window` (8) drafted tokens drops below 25%, speculative decoding is bypassed for the next 8 steps. The generation loop calls `target.forward()` directly for single-token decode with no draft model involved. This avoids wasting compute on bad draft proposals during challenging output segments (reasoning, novel vocabulary, code switches).
-
-The cooldown counter decrements each step and re-enables speculation when it expires.
+**Note:** The cooldown mechanism (bypassing speculation when acceptance drops below a threshold) is planned but not yet implemented in the current codebase. The current adaptive logic uses `adaptive_k_min_rounds = 10` (warmup period) and `adaptive_k_min_samples = 3` (minimum per-K observations) to select the optimal draft length via `optimalK()`.
 
 ## Self-Speculative Layer Skipping
 

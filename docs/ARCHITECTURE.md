@@ -205,7 +205,7 @@ When you run `agave model.gguf "Hello"`:
 | `qwen35` | Qwen 3.5 | `<\|im_end\|>`, `<\|endoftext\|>` | ChatML + `<think>\n\n</think>\n\n` generation prefix (disables reasoning) |
 | `gemma` | Gemma 3, Gemma 2 | `<end_of_turn>`, `<eos>` | |
 | `gemma4` | Gemma 4 | `<turn\|>`, `<eos>`, `<channel\|>`, `<\|endoftext\|>`, `<\|end\|>` | `<\|channel>0\n<channel\|>` generation prefix |
-| `glm4` | GLM-4 | `<\|endoftext\|>`, `<\|user\|>`, `<\|observation\|>` | `[gMASK]<sop>` prefix, `</think>` generation prefix |
+| `glm4` | GLM-4 | `<\|endoftext\|>`, `<\|user\|>`, `<\|observation\|>` | `[gMASK]<sop>` prefix, no generation prefix |
 | `gpt_oss` | GPT-OSS Harmony | `<\|end\|>`, `<\|endoftext\|>` | Includes default system prompt + developer role override |
 | `llama4` | Llama 4 | `<\|eot\|>`, `<\|end_of_text\|>` | Default system prompt |
 

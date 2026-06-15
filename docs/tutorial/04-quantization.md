@@ -358,7 +358,7 @@ flowchart LR
     end
 ```
 
-**TQ1_0** (1.58 bits/weight): Encodes 256 ternary values per block using base-3 packing — 5 trits per byte (3^5=243 combinations per byte, leaving 13 invalid codes unused). Block layout: 2 bytes f16 scale + 48 bytes (5-trit packed) + 4 bytes (4-trit packed) = 54 bytes total for 256 elements.
+**TQ1_0** (1.58 bits/weight): Encodes 256 ternary values per block using base-3 packing — 5 trits per byte (3^5=243 combinations per byte, leaving 13 invalid codes unused). Block size: 64 bytes total for 256 elements (`tq1_0_block_bytes = 64` in `backend.zig`).
 
 **TQ2_0** (2 bits/weight): Simpler binary packing — 4 values per byte using 2 bits each (bit patterns: `00`=−1, `01`=0, `10`=+1, `11`=unused). Block layout: 2 bytes f16 scale + 64 bytes packed = 66 bytes total for 256 elements.
 

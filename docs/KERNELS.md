@@ -71,6 +71,7 @@ True megakernels execute an entire transformer layer (or multiple layers) in a s
 | `mega_rope` | Rotary position encoding |
 | `mega_add` | Residual addition |
 | `mega_kv_append_f32` / `mega_kv_append_tq` | KV cache append with TurboQuant encoding |
+| `mega_sync_reset` | Reset atomic sync counter between stages |
 | `mega_sdpa_inline` | Full inline SDPA with TQ+ dequant, sparse V (1e-6), online softmax, GQA |
 
 ### True Megakernel Implementations
@@ -95,7 +96,7 @@ The composer automatically selects the correct GEMV function (Q8_0/Q4_K/Q5_K/Q6_
 
 ## GEMV by Data Type
 
-**NR multi-row optimization** is applied across all backends and quant formats. Each kernel computes NR output rows per thread/threadgroup, amortizing input vector loads. CPU: all formats use NR=2. Metal: Q4_K/Q5_K/Q6_K use NR=2; Q4_0/Q8_0 use NR=4; Q2_K/Q3_K/BF16/F16 use NR=2. CUDA: Q4_K/Q5_K/Q6_K use NR=2; Q4_0/Q8_0 use NR=4. ROCm: Q4_K/Q5_K/Q6_K use NR=2; Q4_0/Q8_0 use NR=4.
+**NR multi-row optimization** is applied across all backends and quant formats. Each kernel computes NR output rows per thread/threadgroup, amortizing input vector loads. CPU: Q8_0/Q4_0/BF16/F16 use NR=4; K-quant formats (Q4_K/Q5_K/Q6_K) use NR=2. Metal: Q4_K/Q5_K/Q6_K use NR=2; Q4_0/Q8_0 use NR=4; Q2_K/Q3_K/BF16/F16 use NR=2. CUDA: Q4_K/Q5_K/Q6_K use NR=2; Q4_0/Q8_0 use NR=4. ROCm: Q4_K/Q5_K/Q6_K use NR=2; Q4_0/Q8_0 use NR=4.
 
 | Data Type | CPU | Metal | Vulkan | CUDA | ROCm | WebGPU |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: |
@@ -131,7 +132,7 @@ The composer automatically selects the correct GEMV function (Q8_0/Q4_K/Q5_K/Q6_
 | ROCm | `src/backend/kernels/rocm/` | `common.zig` (shared primitives), `silu.zig`, `silu_mul.zig`, `gelu.zig`, `gelu_mul.zig`, `add.zig`, `add_rms_norm.zig`, `mul.zig`, `rms_norm.zig`, `rms_norm_multi.zig`, `softmax.zig`, `l2_norm.zig`, `rope.zig`, `sigmoid_mul.zig`, `deinterleave.zig`, `split_qgate.zig`, `sdpa.zig`, `sdpa_paged.zig`, `sdpa_tree.zig`, `deltanet.zig`, `deltanet_recurrence.zig`, `gemv_{f32,bf16,f16,q8_0,q4_0,q4_1,q5_0,q4_k,q5_k,q6_k,q2_k,q3_k,iq4_nl,iq4_xs,fp8_e4m3,fp8_e5m2,mlx_q4,nvfp4_st,mxfp4_st,t_q8_0,tq1_0,tq2_0}.zig`, `gemv_gptq.zig`, `gemv_awq.zig`, `gemv_hqq.zig`, `mega_qwen35_q8.zig` (true megakernel), `all.zig` (aggregator) — compiled to HSACO via `zig build amdgcn` |
 | WebGPU | `src/backend/kernels/webgpu/` | `silu.wgsl`, `silu_mul.wgsl`, `gelu.wgsl`, `gelu_mul.wgsl`, `add.wgsl`, `add_rms_norm.wgsl`, `rms_norm_add.wgsl`, `add_scaled.wgsl`, `mul.wgsl`, `rms_norm.wgsl`, `rms_norm_multi.wgsl`, `softmax.wgsl`, `l2_norm.wgsl`, `rope.wgsl`, `sigmoid_mul.wgsl`, `deinterleave.wgsl`, `split_qgate.wgsl`, `embedding.wgsl`, `sdpa.wgsl`, `sdpa_paged.wgsl`, `sdpa_tree.wgsl`, `conv1d.wgsl`, `deltanet_recurrence.wgsl`, `gemv_f32.wgsl`, `gemv_bf16.wgsl`, `gemv_f16.wgsl`, `gemv_fp8_e4m3.wgsl`, `gemv_fp8_e5m2.wgsl`, `gemv_q4_1.wgsl`, `gemv_q5_0.wgsl`, `gemv_q8_0.wgsl`, `gemv_q4_0.wgsl`, `gemv_q4_k.wgsl`, `gemv_q5_k.wgsl`, `gemv_q6_k.wgsl`, `gemv_q2_k.wgsl`, `gemv_q3_k.wgsl`, `gemv_iq4_nl.wgsl`, `gemv_iq4_xs.wgsl`, `gemv_t_q8_0.wgsl`, `gemv_gptq.wgsl`, `gemv_awq.wgsl`, `gemv_hqq.wgsl`, `gemv_mlx_q4.wgsl`, `gemv_nvfp4_st.wgsl`, `gemv_mxfp4_st.wgsl`, `gemv_tq1_0.wgsl`, `gemv_tq2_0.wgsl` |
 
-**Pipeline/kernel counts**: Metal 71 pipelines (+ 1 runtime-composed), CUDA 57 kernels, ROCm 44 kernels, Vulkan 45 shaders, WebGPU 44 shaders. Total megakernel code: ~4,640 lines across 16 files plus ~773 lines in `mega_compose.zig` (composable generator).
+**Pipeline/kernel counts**: Metal ~88 pipelines (+ 1 runtime-composed), CUDA ~59 kernels, ROCm ~46 kernels, Vulkan ~49 shaders, WebGPU ~48 shaders. Total megakernel code: ~4,955 lines across 16 files plus ~1,036 lines in `mega_compose.zig` (composable generator).
 
 ## Sparse GEMV (Activation Sparsity)
 
