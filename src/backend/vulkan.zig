@@ -1878,13 +1878,17 @@ pub const VulkanBackend = struct {
         const state_sz = (d_conv - 1) * conv_ch * @sizeOf(f32);
         const conv_w_sz = d_conv * conv_ch * @sizeOf(f32);
 
+        // Use pooled bufs for inputs; use act_cache output so subsequent GPU ops
+        // (l2Norm, deltaNet) can read conv_out without a CPU round-trip.
         const input_buf = self.getPooledBuf(conv_ch_sz);
         defer self.releasePooledBuf(input_buf);
         const state_buf = self.getPooledBuf(state_sz);
         defer self.releasePooledBuf(state_buf);
-        const output_buf = self.getPooledBuf(conv_ch_sz);
-        defer self.releasePooledBuf(output_buf);
         const conv_w_buf = self.getOrUpload(@ptrCast(conv_w), conv_w_sz);
+
+        // Update ring buffer state on CPU FIRST (uses only CPU-side data: conv_state, conv_in).
+        // This must happen before uploading state_buf so GPU sees the old state.
+        const hist = d_conv - 1;
 
         // Bias buffer — use zeros if no bias
         var zero_buf: [1]f32 = .{0.0};
@@ -1892,6 +1896,9 @@ pub const VulkanBackend = struct {
 
         self.uploadBuffer(input_buf.mem, @ptrCast(conv_in), conv_ch_sz);
         self.uploadBuffer(state_buf.mem, @ptrCast(conv_state), state_sz);
+
+        // Output goes into act_cache so l2Norm/deltaNet can read it directly on GPU.
+        const output_buf = self.getOutputBuf(conv_out, conv_ch_sz);
 
         const Params = extern struct { conv_ch_val: u32, d_conv_val: u32, has_bias: u32 };
         const params = Params{
@@ -1905,12 +1912,10 @@ pub const VulkanBackend = struct {
         const n_groups = (conv_ch + workgroup_size - 1) / workgroup_size;
 
         self.dispatch(self.pipe_conv1d, &bufs, &sizes, @ptrCast(&params), @sizeOf(Params), @intCast(n_groups));
-        // Download result (downloadF32 submits pending work first)
-        self.downloadF32(output_buf.mem, conv_out, conv_ch);
+        // No downloadF32 needed — conv_out stays on GPU in act_cache.
+        // Subsequent getInputBuf(conv_out) will use the act_cache buffer directly.
 
-        // Update ring buffer state on CPU (shift rows left, append new input)
-        // This is a small memcpy operation and doesn't significantly impact performance
-        const hist = d_conv - 1;
+        // Update ring buffer state on CPU (only CPU data involved — no GPU sync needed).
         if (hist > 1) {
             for (0..hist - 1) |p| {
                 @memcpy(conv_state[p * conv_ch ..][0..conv_ch], conv_state[(p + 1) * conv_ch ..][0..conv_ch]);
@@ -2289,8 +2294,8 @@ pub const VulkanBackend = struct {
         const norm_vk = self.getOrUpload(@ptrCast(ssm_norm_w), norm_sz);
         const state_pool = self.getPooledBuf(state_sz);
         defer self.releasePooledBuf(state_pool);
-        const out_pool = self.getPooledBuf(v_sz);
-        defer self.releasePooledBuf(out_pool);
+        // Use act_cache for output so the output projection GEMV can read it directly on GPU.
+        const out_buf = self.getOutputBuf(output, v_sz);
 
         self.uploadBuffer(q_pool.mem, @ptrCast(q_ptr), q_sz);
         self.uploadBuffer(k_pool.mem, @ptrCast(k_ptr), q_sz);
@@ -2302,10 +2307,10 @@ pub const VulkanBackend = struct {
 
         const Params = extern struct { nvh: u32, nkh: u32, hkd_v: u32, hvd_v: u32, q_scale: f32, rms_eps: f32 };
         const params = Params{ .nvh = @intCast(num_v), .nkh = @intCast(num_k), .hkd_v = @intCast(hkd), .hvd_v = @intCast(hvd), .q_scale = p.q_scale, .rms_eps = p.rms_eps };
-        const bufs = [_]VkBuffer{ q_pool.buf, k_pool.buf, v_pool.buf, gate_pool.buf, beta_pool.buf, z_pool.buf, norm_vk.buf, state_pool.buf, out_pool.buf };
+        const bufs = [_]VkBuffer{ q_pool.buf, k_pool.buf, v_pool.buf, gate_pool.buf, beta_pool.buf, z_pool.buf, norm_vk.buf, state_pool.buf, out_buf.buf };
         const sizes = [_]usize{ q_sz, q_sz, v_sz, gate_sz, gate_sz, v_sz, norm_sz, state_sz, v_sz };
         self.dispatch(self.pipe_deltanet, &bufs, &sizes, @ptrCast(&params), @sizeOf(Params), @intCast(num_v));
-        self.downloadF32(out_pool.mem, output, num_v * hvd);
+        // Only download SSM state (must persist on CPU across tokens). Output stays on GPU.
         self.downloadF32(state_pool.mem, @ptrCast(ssm_state.ptr), ssm_state.len);
     }
 
