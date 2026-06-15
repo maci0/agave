@@ -9,6 +9,9 @@ pub fn build(b: *std.Build) void {
     const enable_metal = b.option(bool, "enable-metal", "Enable Metal backend (default: true)") orelse true;
     const enable_cuda = b.option(bool, "enable-cuda", "Enable CUDA backend (default: true)") orelse true;
     const enable_rocm = b.option(bool, "enable-rocm", "Enable ROCm backend (default: true)") orelse true;
+    // Debug binary fails to link on Linux x86_64 with GCC >= 16 (R_X86_64_PC64 relocation).
+    // Use -Denable-debug=false to skip it on affected systems.
+    const enable_debug_binary = b.option(bool, "enable-debug", "Build agave-debug binary (default: true)") orelse true;
 
     const enable_vulkan = b.option(bool, "enable-vulkan", "Enable Vulkan backend (default: true)") orelse true;
     const enable_webgpu = b.option(bool, "enable-webgpu", "Enable WebGPU backend via wgpu-native (default: true)") orelse true;
@@ -217,7 +220,7 @@ pub fn build(b: *std.Build) void {
         mod_dbg.linkFramework("Foundation", .{});
         mod_dbg.linkFramework("Accelerate", .{});
     }
-    b.installArtifact(exe_dbg);
+    if (enable_debug_binary) b.installArtifact(exe_dbg);
 
     // ── Run step (uses the optimized binary) ─────────────────────
     const run_cmd = b.addRunArtifact(exe_rel);
