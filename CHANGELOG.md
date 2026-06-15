@@ -1,5 +1,19 @@
 # Changelog
 
+## 2026-06-15 — Vulkan Correctness Fixes
+
+### Vulkan Backend Fixes
+- `destroyBuffer`: submits pending GPU commands before destroying — prevents VUID-vkCmd invalid state (buffer destroyed while recorded in command buffer)
+- `downloadF32`: submits pending work before host readback — prevents reading stale deferred dispatch results
+- Qwen3.5 Vulkan garbled output fixed: DeltaNet causalConv1d was reading stale conv output due to deferred dispatch not executing before downloadF32
+- Vulkan Q8_0 Qwen2.5: confirmed correct at 14.2 tok/s on RX 7900 XTX
+- `n_pipelines`: updated 44→49 (5 new pipelines added without updating count)
+
+### Build
+- `-Denable-debug=false`: new flag to skip `agave-debug` binary on Linux x86_64 with GCC ≥16 (R_X86_64_PC64 relocation unsupported in debug builds)
+
+---
+
 ## 2026-06-12 — Feature Release
 
 ### Bug Fixes
