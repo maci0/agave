@@ -859,6 +859,7 @@ pub const MetalBackend = struct {
             .mxfp4 => "gemv_mxfp4",
             .tq1_0 => "gemv_tq1_0",
             .tq2_0 => "gemv_tq2_0",
+            .iq2_xxs, .iq2_xs, .iq2_s, .iq3_xxs, .iq3_s, .iq1_s, .iq1_m => "gemv_iq_cpu",
             else => "gemv",
         };
         const pipeline: objc.id = switch (w.dtype) {
@@ -881,6 +882,12 @@ pub const MetalBackend = struct {
             .mxfp4 => self.pipe_gemv_mxfp4,
             .tq1_0 => self.pipe_gemv_tq1_0,
             .tq2_0 => self.pipe_gemv_tq2_0,
+            // IQ2/IQ3: no GPU kernel yet — fall back to CPU
+            .iq2_xxs, .iq2_xs, .iq2_s, .iq3_xxs, .iq3_s, .iq1_s, .iq1_m => {
+                var cpu = self.cpuFallback();
+                cpu.gemv(x, w, y, n, k);
+                return;
+            },
             else => @panic("Metal GEMV: unsupported dtype — add a GPU kernel"),
         };
 

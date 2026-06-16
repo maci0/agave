@@ -573,6 +573,7 @@ pub const RocmBackend = struct {
             .fp8_e5m2 => self.fn_gemv_fp8_e5m2,
             .tq1_0 => self.fn_gemv_tq1_0,
             .tq2_0 => self.fn_gemv_tq2_0,
+            .iq2_xxs, .iq2_xs, .iq2_s, .iq3_xxs, .iq3_s, .iq1_s, .iq1_m => { self.cpu.gemv(x, w, y, n, k); return; },
             else => @panic("ROCm GEMV: unsupported dtype — add a GPU kernel"),
         };
 

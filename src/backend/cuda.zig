@@ -875,6 +875,7 @@ pub const CudaBackend = struct {
             .fp8_e5m2 => self.fn_gemv_fp8_e5m2,
             .tq1_0 => if (self.fn_gemv_tq1_0) |f| f else return self.cpuGemvFallback(x, w, y, n, k),
             .tq2_0 => if (self.fn_gemv_tq2_0) |f| f else return self.cpuGemvFallback(x, w, y, n, k),
+            .iq2_xxs, .iq2_xs, .iq2_s, .iq3_xxs, .iq3_s, .iq1_s, .iq1_m => return self.cpuGemvFallback(x, w, y, n, k),
             else => @panic("CUDA GEMV: unsupported dtype — add a GPU kernel"),
         };
 

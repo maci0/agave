@@ -217,6 +217,20 @@ pub const nvfp4_block_bytes: usize = 9;
 pub const tq1_0_block_bytes: usize = 64;
 /// TQ2_0: 130 bytes per 256-element super-block (f16 scale + 128 bytes data).
 pub const tq2_0_block_bytes: usize = 66;
+/// IQ3_XXS: 98 bytes per 256-element super-block.
+pub const iq3_xxs_block_bytes: usize = 98;
+/// IQ3_S: 110 bytes per 256-element super-block.
+pub const iq3_s_block_bytes: usize = 110;
+/// IQ2_XXS: 66 bytes per 256-element super-block.
+pub const iq2_xxs_block_bytes: usize = 66;
+/// IQ2_XS: 74 bytes per 256-element super-block.
+pub const iq2_xs_block_bytes: usize = 74;
+/// IQ2_S: 82 bytes per 256-element super-block.
+pub const iq2_s_block_bytes: usize = 82;
+/// IQ1_S: 50 bytes per 256-element super-block.
+pub const iq1_s_block_bytes: usize = 50;
+/// IQ1_M: 56 bytes per 256-element super-block.
+pub const iq1_m_block_bytes: usize = 56;
 
 /// Compute raw byte size of a weight matrix [n, k] for a given dtype.
 /// Used by GPU backends to determine upload buffer sizes. Accounts for
@@ -240,6 +254,13 @@ pub fn weightBytes(dtype: DType, n: usize, k: usize) usize {
         .q3_k => n * nsb * q3_k_block_bytes,
         .iq4_nl => n * nb * iq4_nl_block_bytes,
         .iq4_xs => n * nsb * iq4_xs_block_bytes,
+        .iq3_xxs => n * nsb * iq3_xxs_block_bytes,
+        .iq3_s => n * nsb * iq3_s_block_bytes,
+        .iq2_xxs => n * nsb * iq2_xxs_block_bytes,
+        .iq2_xs => n * nsb * iq2_xs_block_bytes,
+        .iq2_s => n * nsb * iq2_s_block_bytes,
+        .iq1_s => n * nsb * iq1_s_block_bytes,
+        .iq1_m => n * nsb * iq1_m_block_bytes,
         .tq1_0 => n * nsb * tq1_0_block_bytes,
         .tq2_0 => n * nsb * tq2_0_block_bytes,
         .nvfp4 => n * ((k + nvfp4_block_elems - 1) / nvfp4_block_elems) * nvfp4_block_bytes,
@@ -269,6 +290,13 @@ pub fn gemvRowBytes(dtype: DType, k: usize) usize {
         .q6_k => nsb * q6_k_block_bytes,
         .iq4_nl => nb * iq4_nl_block_bytes,
         .iq4_xs => nsb * iq4_xs_block_bytes,
+        .iq3_xxs => nsb * iq3_xxs_block_bytes,
+        .iq3_s => nsb * iq3_s_block_bytes,
+        .iq2_xxs => nsb * iq2_xxs_block_bytes,
+        .iq2_xs => nsb * iq2_xs_block_bytes,
+        .iq2_s => nsb * iq2_s_block_bytes,
+        .iq1_s => nsb * iq1_s_block_bytes,
+        .iq1_m => nsb * iq1_m_block_bytes,
         .mxfp4 => nb * mxfp4_block_bytes,
         .nvfp4 => ((k + nvfp4_block_elems - 1) / nvfp4_block_elems) * nvfp4_block_bytes,
         .f16, .bf16 => k * f16_elem_bytes,

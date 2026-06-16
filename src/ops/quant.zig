@@ -218,6 +218,42 @@ pub fn dequantToF32(output: []f32, data: [*]const u8, dtype: DType, n: usize) vo
                 }
             }
         },
+        .iq4_nl => {
+            // IQ4_NL: 18 bytes/32 elements. f16 scale + 16 nibble bytes via iq4nl_table.
+            const bpb = @import("../backend/backend.zig").iq4_nl_block_bytes;
+            const qk: usize = 32;
+            const nb = (n + qk - 1) / qk;
+            for (0..nb) |b| {
+                const blk = data[b * bpb ..];
+                const d: f32 = @floatCast(@as(*const f16, @ptrCast(@alignCast(blk))).*);
+                const count = @min(qk, n - b * qk);
+                for (0..count) |i| {
+                    const byte = blk[2 + i / 2];
+                    const nibble: u4 = if (i % 2 == 0) @truncate(byte & 0xF) else @truncate(byte >> 4);
+                    output[b * qk + i] = d * @as(f32, @floatFromInt(iq4nl_table[nibble]));
+                }
+            }
+        },
+        .iq4_xs => {
+            // IQ4_XS: 136 bytes/256 elements. f16 d + u16 scales_h + u8 scales_l[4] + u8 qs[128].
+            const bpb = @import("../backend/backend.zig").iq4_xs_block_bytes;
+            const qk: usize = 256;
+            const nb = (n + qk - 1) / qk;
+            for (0..nb) |b| {
+                const blk = data[b * bpb ..];
+                const d: f32 = @floatCast(@as(*const f16, @ptrCast(@alignCast(blk))).*);
+                const count = @min(qk, n - b * qk);
+                for (0..count) |i| {
+                    const byte = blk[8 + i / 2]; // qs starts at offset 8
+                    const nibble: u4 = if (i % 2 == 0) @truncate(byte & 0xF) else @truncate(byte >> 4);
+                    output[b * qk + i] = d * @as(f32, @floatFromInt(iq4nl_table[nibble]));
+                }
+            }
+        },
+        // IQ2/IQ3/IQ1: complex codebook formats — approximate as zero (LoRA rarely applied to these)
+        .iq2_xxs, .iq2_xs, .iq2_s, .iq3_xxs, .iq3_s, .iq1_s, .iq1_m => {
+            @memset(output[0..n], 0);
+        },
         else => {
             @panic("dequantToF32: unsupported dtype");
         },

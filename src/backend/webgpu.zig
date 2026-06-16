@@ -1109,6 +1109,13 @@ pub const WebGpuBackend = struct {
             .q6_k => self.pipe_gemv_q6_k,
             .tq1_0 => self.pipe_gemv_tq1_0,
             .tq2_0 => self.pipe_gemv_tq2_0,
+            // IQ2/IQ3: no WebGPU shader — CPU fallback
+            .iq2_xxs, .iq2_xs, .iq2_s, .iq3_xxs, .iq3_s, .iq1_s, .iq1_m => {
+                const CpuBackend = @import("cpu.zig").CpuBackend;
+                var cpu = CpuBackend{};
+                cpu.gemv(x, w, y, n, k);
+                return;
+            },
             else => @panic("WebGPU gemv: unsupported weight dtype"),
         };
         const nb32 = (k + 31) / 32;

@@ -1648,6 +1648,7 @@ pub const VulkanBackend = struct {
             .fp8_e5m2 => self.pipe_gemv_fp8_e5m2,
             .tq1_0 => self.pipe_gemv_tq1_0,
             .tq2_0 => self.pipe_gemv_tq2_0,
+            .iq2_xxs, .iq2_xs, .iq2_s, .iq3_xxs, .iq3_s, .iq1_s, .iq1_m => { const CpuBackend = @import("cpu.zig").CpuBackend; var cpu = CpuBackend{}; cpu.gemv(x, w, y, n, k); return; },
             else => @panic("Vulkan GEMV: unsupported dtype — add a GPU shader"),
         };
 
