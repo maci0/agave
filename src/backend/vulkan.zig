@@ -2244,8 +2244,8 @@ pub const VulkanBackend = struct {
         const hvd = p.head_v_dim;
 
         self.sync();
-        var gate_arr: [64]f32 = undefined;
-        var beta_arr: [64]f32 = undefined;
+        var gate_arr: [128]f32 = undefined; // max_ssm_v_heads
+        var beta_arr: [128]f32 = undefined;
         for (0..num_v) |h| {
             gate_arr[h] = ssm_a[h] * math_ops.softplus(alpha_buf[h] + dt_bias[h]);
             beta_arr[h] = math_ops.sigmoid(beta_buf[h]);
