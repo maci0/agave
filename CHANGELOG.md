@@ -2,6 +2,10 @@
 
 ## 2026-06-15 — Vulkan Correctness Fixes
 
+### Vulkan DeltaNet Fixes (2026-06-16)
+- `deltanet_recurrence.comp`: GQA head mapping wrong for `num_k != num_v` — CPU uses `h % num_k` (round-robin) but shader used `h * num_k / num_v` (blocked). Fixes garbled output for Qwen3.5-4B and any model with mismatched k/v head counts.
+- `vulkan.zig`: `gate_arr`/`beta_arr` too small (64) — should be 128 to match `max_ssm_v_heads`. Prevents stack overflow for models with >64 v_heads.
+
 ### Vulkan Backend Fixes
 - `destroyBuffer`: submits pending GPU commands before destroying — prevents VUID-vkCmd invalid state (buffer destroyed while recorded in command buffer)
 - `downloadF32`: submits pending work before host readback — prevents reading stale deferred dispatch results
