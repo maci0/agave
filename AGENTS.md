@@ -63,6 +63,11 @@ agave diffusiongemma-26B-A4B-it/ --diffusion-canvas 128 "..."       # smaller ca
 ```
 
 ```bash
+# LoRA adapters
+agave model.gguf --lora adapter.gguf "prompt"                        # Merge LoRA at load time
+```
+
+```bash
 # Server features
 agave model.gguf --serve --sleep-after 300     # Enter sleep-mode after 5min idle
 agave model.gguf --serve --no-kv-cache         # Prefill-only / embedding server
