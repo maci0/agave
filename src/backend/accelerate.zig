@@ -45,6 +45,28 @@ pub fn sgemm(m: usize, n: usize, k: usize, a: [*]const f32, b: [*]const f32, out
     );
 }
 
+/// C[m×k_out] += scale * A[m×k_inner] @ B[k_inner×k_out] (row-major, no transpose).
+/// Used for LoRA delta application: merged += (alpha/rank) * lora_b @ lora_a.
+pub fn sgemmAdd(m: usize, k_out: usize, k_inner: usize, scale: f32, a: [*]const f32, b: [*]const f32, c: [*]f32) void {
+    if (comptime !is_macos) unreachable;
+    cblas_sgemm(
+        CblasRowMajor,
+        CblasNoTrans,
+        CblasNoTrans,
+        @intCast(m),
+        @intCast(k_out),
+        @intCast(k_inner),
+        scale,
+        a,
+        @intCast(k_inner),
+        b,
+        @intCast(k_out),
+        1.0, // beta=1: add to existing C
+        c,
+        @intCast(k_out),
+    );
+}
+
 /// Dot product of two F32 vectors via Accelerate (AMX-accelerated).
 pub fn sdot(n: usize, x: [*]const f32, y: [*]const f32) f32 {
     if (comptime !is_macos) unreachable;

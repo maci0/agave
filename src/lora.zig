@@ -132,17 +132,17 @@ fn addLoraMatrix(
     k: usize,
     scale: f32,
 ) void {
-    // On macOS with Accelerate: compute delta via sgemm(scale, b, a), add to merged.
+    // macOS: use Accelerate SGEMM (AMX-accelerated, ~4× faster than NEON scalar).
+    // merged[n,k] += scale * b[n,rank] @ a[rank,k] — beta=1 accumulates in place.
     if (comptime builtin.os.tag == .macos) {
-        const accel = @import("backend/accelerate.zig");
-        // delta[n,k] = scale * b[n,rank] @ a[rank,k]
-        // accel.sgemm(m=n, n=k, k_inner=rank, a=b, b=a, out=delta)
-        // We can't scale and add in one sgemm call without a temporary, so
-        // compute into a stack-allocated delta and add manually for small rank.
-        // For large n*k (≥ 1M), allocate a temp buffer isn't worth it at load time.
-        _ = accel; // use scalar path — sgemm only adds to a pre-zeroed matrix
+        const build_options = @import("build_options");
+        if (comptime build_options.enable_metal) {
+            const accel = @import("backend/accelerate.zig");
+            accel.sgemmAdd(n, k, rank, scale, b.ptr, a.ptr, merged.ptr);
+            return;
+        }
     }
-    // Scalar path (all platforms, also handles the macOS fallback above)
+    // Scalar fallback (Linux, non-Metal macOS)
     for (0..n) |i| {
         const b_row = b[i * rank ..][0..rank];
         const m_row = merged[i * k ..][0..k];
