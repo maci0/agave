@@ -1,6 +1,15 @@
 # Changelog
 
-## 2026-06-16 — MTP Spec Decode Fix (Qwopus)
+## 2026-06-16 — LoRA Adapter Support + MTP Fix
+
+### LoRA Adapter Loading
+- `--lora <path>`: load a LoRA adapter GGUF file alongside the base model
+- Load-time merge: base weights are dequanted to F32, delta = (alpha/rank) * lora_b @ lora_a is added, result stored as F32 override
+- Transparent to all model code via `GGUFFile.lora_overrides` map checked in `getTensor()`
+- Supports any base quantization (Q4_0, Q4_K, Q8_0, BF16, F16, etc.) and any lora tensor dtype
+- Format: llama.cpp GGUF LoRA (convert_lora_to_gguf.py output), `adapter.type = "lora"`
+
+### MTP Spec Decode Fix (Qwopus)
 
 - `qwen35.zig`: MTP detection now handles two GGUF layouts — layout A has block_count excluding MTP heads (nextn at blk.{n_layers}), layout B has block_count including MTP heads (nextn at blk.{n_layers-1}). Layout B adjusts n_layers down so mtpForward uses the correct mtp_lid.
 - `qwen35.zig`: All nextn tensor lookups now try `.weight` suffix first (e.g. `nextn.eh_proj.weight`) before falling back to bare name, matching Qwopus GGUF storage convention.
