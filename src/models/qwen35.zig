@@ -342,9 +342,22 @@ pub const Qwen35Model = struct {
             if (self.is_mlx) break;
         }
 
-        // MTP: detect nextn tensors at layer n_layers (first MTP head)
-        if (f.layerTensor(self.n_layers, "nextn.eh_proj")) |_| {
+        // MTP detection: two GGUF layouts exist.
+        // Layout A (block_count excludes MTP): nextn head at blk.{n_layers}
+        // Layout B (block_count includes MTP): nextn head at blk.{n_layers-1}, shared transformer
+        //   also counted in block_count. Subtract nextn_predict_layers from n_layers so the
+        //   regular forward pass runs blk.0..n_layers-1 and mtpForward uses mtp_lid = n_layers+depth.
+        const nextn_at_n = f.layerTensor(self.n_layers, "nextn.eh_proj") != null or
+            f.layerTensor(self.n_layers, "nextn.eh_proj.weight") != null;
+        const nextn_at_n1 = f.layerTensor(self.n_layers - 1, "nextn.eh_proj") != null or
+            f.layerTensor(self.n_layers - 1, "nextn.eh_proj.weight") != null;
+        if (nextn_at_n) {
             self.n_mtp_layers = f.getArchU32(arch, "nextn_predict_layers") orelse 1;
+        } else if (nextn_at_n1) {
+            // block_count includes MTP heads: last block is nextn head, adjust n_layers down
+            const nc = f.getArchU32(arch, "nextn_predict_layers") orelse 1;
+            self.n_mtp_layers = nc;
+            self.n_layers -= nc;
         }
 
         std.debug.assert(self.n_head % self.n_head_kv == 0);
@@ -1400,16 +1413,20 @@ pub const Qwen35Model = struct {
         const qd: usize = nh * hd;
         const mtp_lid: u32 = self.n_layers + depth;
 
-        // 1. Embed the token using MTP-specific embedding table
-        const emb_t = self.fmt.layerTensor(mtp_lid, "nextn.embed_tokens") orelse return error.MissingTensor;
+        // 1. Embed token — per-depth embed table if present, else share main embedding
+        const emb_t = self.fmt.layerTensor(mtp_lid, "nextn.embed_tokens.weight") orelse
+            self.fmt.layerTensor(mtp_lid, "nextn.embed_tokens") orelse
+            self.fmt.getTensor("token_embd.weight") orelse return error.MissingTensor;
         self.be.embLookup(.{ .data = emb_t.data_ptr, .dtype = emb_t.dtype }, token_id, self.hidden2.ptr, e);
 
         // 2. RMSNorm both branches with +1 offset: output = (1 + w) * rmsNorm(x)
         // Standard rmsNorm computes w * x / rms. We need (1 + w) * x / rms.
         // Strategy: rmsNorm with weight w → result, then add x / rms (unweighted).
         // Equivalently: compute rms, apply (1+w) manually on CPU.
-        const enorm_t = self.fmt.layerTensor(mtp_lid, "nextn.enorm") orelse return error.MissingTensor;
-        const hnorm_t = self.fmt.layerTensor(mtp_lid, "nextn.hnorm") orelse return error.MissingTensor;
+        const enorm_t = self.fmt.layerTensor(mtp_lid, "nextn.enorm.weight") orelse
+            self.fmt.layerTensor(mtp_lid, "nextn.enorm") orelse return error.MissingTensor;
+        const hnorm_t = self.fmt.layerTensor(mtp_lid, "nextn.hnorm.weight") orelse
+            self.fmt.layerTensor(mtp_lid, "nextn.hnorm") orelse return error.MissingTensor;
         const enorm_w = self.normAsF32(enorm_t, e);
         const hnorm_w = self.normAsF32(hnorm_t, e);
         self.be.sync();
@@ -1420,7 +1437,8 @@ pub const Qwen35Model = struct {
         rmsNormPlusOne(self.mtp_hidden_pre_norm, self.mtp_concat_buf[e..][0..e], hnorm_w, e, self.rms_eps);
 
         // 3. eh_proj: [2*n_embd] → [n_embd]
-        const eh_proj = self.fmt.layerTensor(mtp_lid, "nextn.eh_proj") orelse return error.MissingTensor;
+        const eh_proj = self.fmt.layerTensor(mtp_lid, "nextn.eh_proj.weight") orelse
+            self.fmt.layerTensor(mtp_lid, "nextn.eh_proj") orelse return error.MissingTensor;
         self.doGemv(self.mtp_concat_buf.ptr, eh_proj, self.hidden.ptr, e, e * 2);
 
         // 4. Transformer block: attention + FFN at mtp_lid
@@ -1513,9 +1531,12 @@ pub const Qwen35Model = struct {
         self.be.addScaled(self.hidden2.ptr, self.hidden.ptr, 1.0, e);
 
         // 5. Output head: shared_head_norm → shared_head_head → logits
-        const sh_norm = self.fmt.layerTensor(mtp_lid, "nextn.shared_head_norm") orelse return error.MissingTensor;
+        const sh_norm = self.fmt.layerTensor(mtp_lid, "nextn.shared_head_norm.weight") orelse
+            self.fmt.layerTensor(mtp_lid, "nextn.shared_head_norm") orelse return error.MissingTensor;
         self.be.rmsNorm(self.hidden.ptr, self.normAsF32(sh_norm, e), self.hidden.ptr, e, self.rms_eps);
-        const sh_head = self.fmt.layerTensor(mtp_lid, "nextn.shared_head_head") orelse return error.MissingTensor;
+        // Shared output head — use per-depth nextn head if present, else share main output
+        const sh_head = self.fmt.layerTensor(mtp_lid, "nextn.shared_head_head") orelse
+            self.fmt.getTensor("output.weight") orelse return error.MissingTensor;
         self.doGemv(self.hidden.ptr, sh_head, self.mtp_logits_buf.ptr, self.vocab_size, e);
         self.be.sync();
 
