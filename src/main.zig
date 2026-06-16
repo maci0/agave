@@ -391,6 +391,8 @@ const cli_specs = [_]cli_mod.ArgSpec{
     .{ .long = "api-key", .kind = .option, .help = "API key for server auth (or AGAVE_API_KEY env)." },
     .{ .long = "sleep-after", .kind = .option, .help = "Enter sleep mode after N seconds of server inactivity (0 = disabled). Signals /health sleeping:true; wakes on next request." },
     .{ .long = "max-batch-size", .kind = .option, .help = "Max concurrent requests to batch per scheduler cycle [default: 8]. Higher values increase throughput at the cost of latency per request." },
+    // LoRA
+    .{ .long = "lora", .kind = .option, .help = "Path to LoRA adapter GGUF file. Merged at load time into the base model weights." },
     // Multimodal
     .{ .long = "mmproj", .kind = .option, .help = "Path to vision projector GGUF (mmproj file)." },
     .{ .long = "image", .kind = .option, .help = "Path to image file for multimodal inference (PNG or PPM P6)." },
@@ -486,6 +488,8 @@ const CliArgs = struct {
     profile: bool,
     use_mmap: bool,
     prefill_batch_size: u32,
+    /// Path to LoRA adapter GGUF. Applied at load time (merged into base weights as F32).
+    lora_path: ?[]const u8 = null,
     /// Path to vision projector GGUF (mmproj file) for multimodal inference.
     mmproj: ?[]const u8 = null,
     /// Path to image file (PNG or PPM P6) for multimodal inference.
@@ -957,6 +961,7 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
     // Early file existence checks — fail fast before slow model loading
     if (grammar_path) |p| validateFileExists(p, "--grammar");
     if (res.option("image")) |p| validateFileExists(p, "--image");
+    if (res.option("lora")) |p| validateFileExists(p, "--lora");
     if (res.option("mmproj")) |p| validateFileExists(p, "--mmproj");
     if (res.option("draft-model")) |p| validateFileExists(p, "--draft-model");
     if (res.option("pflash-scorer")) |p| validateFileExists(p, "--pflash-scorer");
@@ -1067,6 +1072,7 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
         .disagg = res.flag("disagg"),
         .use_mmap = res.flag("mmap"),
         .prefill_batch_size = parseU32(res.option("prefill-batch-size"), "prefill-batch-size") orelse default_chunk_size,
+        .lora_path = res.option("lora"),
         .mmproj = res.option("mmproj"),
         .image = res.option("image"),
         .draft_model_path = res.option("draft-model"),
@@ -1636,6 +1642,9 @@ fn printUsage() void {
         \\OPTIMIZATION:
         \\      --megakernel          Enable fused FFN megakernels (3→1 dispatch per layer)
         \\
+        \\LORA:
+        \\      --lora <PATH>      LoRA adapter GGUF — merged at load time into base weights
+        \\
         \\MULTIMODAL:
         \\      --mmproj <PATH>    Path to vision projector GGUF (mmproj file)
         \\      --image <PATH>     Path to image file (PNG or PPM P6)
@@ -1806,6 +1815,15 @@ pub fn main(init: std.process.Init) !void {
                 eprint("  File is too small to be a valid GGUF model.\n", .{});
             std.process.exit(1);
         };
+        // Apply LoRA adapter (load-time merge into base weights as F32).
+        if (cli.lora_path) |lp| {
+            const lora_mod = @import("lora.zig");
+            lora_mod.applyLoraGguf(allocator, &gguf_file.?, lp) catch |e| {
+                eprint("Error: failed to apply LoRA '{s}': {}\n", .{ lp, e });
+                std.process.exit(1);
+            };
+            eprint("lora: merged adapter '{s}' ({d} tensors overridden)\n", .{ lp, gguf_file.?.lora_overrides.count() });
+        }
         fmt = gguf_file.?.format();
     }
     const load_ms = elapsedMs(load_start);

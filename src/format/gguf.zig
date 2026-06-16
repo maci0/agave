@@ -266,6 +266,15 @@ pub const GGUFFile = struct {
     owned_arrays: std.ArrayList([*]const u8) = .empty,
     owned_array_lens: std.ArrayList(usize) = .empty,
     owned_u32_arrays: std.ArrayList([]u32) = .empty,
+    /// Tensor overrides: merged LoRA weights that replace mmap'd tensors.
+    /// Keyed by GGUF tensor name. Values are allocator-owned F32 slices.
+    lora_overrides: std.StringHashMapUnmanaged(LoraOverride) = .empty,
+
+    pub const LoraOverride = struct {
+        data: []f32,
+        n_dims: u32,
+        dims: [4]u64,
+    };
 
     /// Opens and memory-maps a GGUF file, parsing headers, metadata, and tensor info.
     pub fn open(allocator: Allocator, path: []const u8) !GGUFFile {
@@ -343,7 +352,7 @@ pub const GGUFFile = struct {
         .get_merges = @ptrCast(&fmtGetMerges),
     };
 
-    fn ggmlToDType(t: GGMLType) DType {
+    pub fn ggmlToDType(t: GGMLType) DType {
         return switch (t) {
             .f32 => .f32,
             .f16 => .f16,
@@ -367,11 +376,20 @@ pub const GGUFFile = struct {
     }
 
     fn fmtGetTensor(self: *GGUFFile, name: []const u8) ?FormatTensorInfo {
+        // LoRA override takes priority — merged F32 weight replaces original.
+        if (self.lora_overrides.get(name)) |ov| {
+            return .{ .name = name, .n_dims = ov.n_dims, .dims = ov.dims, .dtype = .f32, .data_ptr = @ptrCast(ov.data.ptr) };
+        }
         const info = self.tensors.getPtr(name) orelse {
             // Fallback: try translating HF-style name to GGUF-style.
             var buf: [name_buf_size]u8 = undefined;
             const gguf_name = hfNameToGguf(name, &buf) orelse return null;
-            const info2 = self.tensors.getPtr(gguf_name) orelse return null;
+            const info2 = self.tensors.getPtr(gguf_name) orelse {
+                if (self.lora_overrides.get(gguf_name)) |ov2| {
+                    return .{ .name = gguf_name, .n_dims = ov2.n_dims, .dims = ov2.dims, .dtype = .f32, .data_ptr = @ptrCast(ov2.data.ptr) };
+                }
+                return null;
+            };
             return .{ .name = info2.name, .n_dims = info2.n_dims, .dims = info2.dims, .dtype = ggmlToDType(info2.ggml_type), .data_ptr = self.tensorData(info2) };
         };
         return .{ .name = info.name, .n_dims = info.n_dims, .dims = info.dims, .dtype = ggmlToDType(info.ggml_type), .data_ptr = self.tensorData(info) };
@@ -428,6 +446,11 @@ pub const GGUFFile = struct {
 
     /// Release all resources: metadata, tensors, owned strings, and the mmap.
     pub fn deinit(self: *GGUFFile) void {
+        var ov_iter = self.lora_overrides.valueIterator();
+        while (ov_iter.next()) |ov| self.allocator.free(ov.data);
+        var ov_key_iter = self.lora_overrides.keyIterator();
+        while (ov_key_iter.next()) |k| self.allocator.free(k.*);
+        self.lora_overrides.deinit(self.allocator);
         self.metadata.deinit();
         self.tensors.deinit();
         for (self.owned_strings.items) |s| self.allocator.free(s);
