@@ -1,5 +1,14 @@
 # Changelog
 
+## 2026-06-16 — MTP Spec Decode Fix (Qwopus)
+
+- `qwen35.zig`: MTP detection now handles two GGUF layouts — layout A has block_count excluding MTP heads (nextn at blk.{n_layers}), layout B has block_count including MTP heads (nextn at blk.{n_layers-1}). Layout B adjusts n_layers down so mtpForward uses the correct mtp_lid.
+- `qwen35.zig`: All nextn tensor lookups now try `.weight` suffix first (e.g. `nextn.eh_proj.weight`) before falling back to bare name, matching Qwopus GGUF storage convention.
+- `qwen35.zig`: `nextn.embed_tokens` falls back to shared `token_embd.weight`; `nextn.shared_head_head` falls back to shared `output.weight`.
+- Verified: Qwopus3.6-27B-Coder-MTP — 74% accept rate, 0.7 mean tokens/step.
+
+---
+
 ## 2026-06-15 — Vulkan Correctness Fixes
 
 ### Vulkan DeltaNet Fixes (2026-06-16)
