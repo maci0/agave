@@ -91,6 +91,7 @@ All quantized GEMV formats native on all 6 backends. See [KERNELS.md](KERNELS.md
 | Apple Accelerate.framework (AMX BLAS for F32 CPU GEMV/GEMM) | — |
 | MLX-4bit SafeTensors rope_theta + vocab_size fix | — |
 | GGUF MoE expert stride fix (dims[1]*dims[2]) | — |
+| LoRA adapter loading (`--lora <path>`, load-time merge, all quant formats) | llama.cpp |
 
 ### High Priority
 
