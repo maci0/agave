@@ -1,6 +1,17 @@
 # Changelog
 
-## 2026-06-16 — LoRA Adapter Support + MTP Fix
+## 2026-06-16 — IQ2/IQ3 Quant Support + LoRA + MTP Fix
+
+### IQ2/IQ3/IQ1 Quantization Support
+- Added DType entries: `iq2_xxs`, `iq2_xs`, `iq2_s`, `iq3_xxs`, `iq3_s`, `iq1_s`, `iq1_m`
+- Previously mapped to `.unknown` → zeroed output and warned. Now dispatched to CPU reference kernels
+- `iq2_xxs`: full codebook-based dequant via iq2xxs_grid[256] (512-bit packed int8 entries)
+- `iq2_xs`, `iq2_s`, `iq3_xxs`, `iq3_s`, `iq1_s`, `iq1_m`: approximation stubs (scale-based)
+- Metal/Vulkan/CUDA/ROCm/WebGPU: CPU fallback instead of panic for these dtypes
+- `dequantToF32`: iq4_nl/iq4_xs properly dequanted; iq2/iq3 stub for LoRA merge path
+- Mixed-quant "UD" models (e.g. unsloth Qwen3-0.6B-UD-IQ2_XXS) now load and run
+
+### LoRA Adapter Support
 
 ### LoRA Adapter Loading
 - `--lora <path>`: load a LoRA adapter GGUF file alongside the base model
