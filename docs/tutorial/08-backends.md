@@ -378,7 +378,7 @@ flowchart TD
 
 **WebGPU** (`webgpu.zig`): WGSL compute shaders loaded via wgpu-native C API. Dynamic library loading (`dlopen`). Enabled by default in the build system. **Lazy readback cache**: activation buffers stay on GPU between operations — `cacheGpuResult` registers GPU output in `buf_cache`, and `getOrUpload` finds it on next access. Downloads only happen on `sync()`. This eliminates ~200 CPU↔GPU round-trips per token. ~48 WGSL compute shaders covering all core ops including quantized GEMV for all formats. Buffer lifecycle uses deferred destruction — params and cache-evicted buffers are queued for cleanup during `sync()` to avoid destroying buffers still referenced by pending command buffers.
 
-**Vulkan** (`vulkan.zig`): Pre-compiled SPIR-V compute shaders. Subgroup arithmetic for reductions. Fused single-dispatch normalization/softmax. Works on all vendors including Apple (via MoltenVK). No megakernel support.
+**Vulkan** (`vulkan.zig`): Pre-compiled SPIR-V compute shaders. Subgroup arithmetic for reductions. Fused single-dispatch normalization/softmax. Works on all vendors including Apple (via KosmicKrisp). No megakernel support.
 
 **ROCm** (`rocm.zig`): HIP Runtime API loaded dynamically. AMDGCN kernels compiled from Zig via `amdgcn-amdhsa` target. Same deferred execution pattern as CUDA. **Megakernel**: 28 kernels including 1 true megakernel (Qwen Q8). Sparse V threshold in SDPA.
 
@@ -458,3 +458,59 @@ See [Parallelism docs](../PARALLELISM.md) for full details.
 **In the code:** [src/backend/backend.zig](../../src/backend/backend.zig) (dispatcher), [src/backend/](../../src/backend/) (cpu, metal, cuda, vulkan, rocm implementations), [src/backend/kernels/](../../src/backend/kernels/) (GPU kernel sources)
 
 **Next:** [Chapter 9: CPU SIMD Optimization →](09-cpu-simd-optimization.md) | **Back:** [Chapter 7: Sampling ←](07-sampling.md) | **Product docs:** [Architecture](../ARCHITECTURE.md) · [Models](../MODELS.md)
+
+---
+
+## Glossary
+
+**AMX (Apple Matrix coprocessor)** — Dedicated matrix multiplication hardware on Apple Silicon, accessed via Accelerate.framework.
+
+**backend** — An abstraction layer that routes compute operations to a specific hardware implementation (CPU, Metal, CUDA, Vulkan, ROCm, WebGPU).
+
+**command buffer** — A queue of GPU operations submitted together for execution.
+
+**compute API** — A vendor-specific programming interface for dispatching work to a processor (e.g., Metal, CUDA, Vulkan).
+
+**CUDA (Compute Unified Device Architecture)** — NVIDIA's GPU compute platform.
+
+**deferred dispatch** — Encoding GPU operations into command buffers without blocking; execution happens when the buffer is committed.
+
+**disaggregated inference** — Separating prefill (prompt processing) and decode (token generation) onto different nodes.
+
+**dispatcher pattern** — A compile-time dispatch using Zig's tagged union with `inline else` to route calls to the correct backend at zero runtime cost.
+
+**dlopen** — A POSIX function for loading shared libraries at runtime, avoiding compile-time dependencies on vendor SDKs.
+
+**GLSL (OpenGL Shading Language)** — The shader language for Vulkan compute kernels; compiled to SPIR-V.
+
+**HIP (Heterogeneous-compute Interface for Portability)** — AMD's GPU programming interface, API-compatible with CUDA.
+
+**HSACO (HSA Code Object)** — The compiled binary format for AMD GPU kernels.
+
+**IR (Intermediate Representation)** — Compiled bytecode (PTX, SPIR-V, Metal IR) that a GPU driver translates to native machine code at runtime.
+
+**kernel fusion** — Combining multiple sequential operations into a single kernel to eliminate intermediate memory traffic.
+
+**mmap (memory-mapped I/O)** — Mapping a file directly into virtual memory so the OS handles paging, avoiding explicit read calls.
+
+**MSL (Metal Shading Language)** — Apple's GPU shader/compute language for Metal.
+
+**NCCL (NVIDIA Collective Communications Library)** — A library for multi-GPU collective operations (all-reduce, broadcast) over PCIe or network.
+
+**PCIe (Peripheral Component Interconnect Express)** — The bus connecting discrete GPUs to the CPU.
+
+**pipeline parallelism** — Distributing transformer layers across multiple GPUs; activations flow sequentially between stages.
+
+**PTX (Parallel Thread Execution)** — NVIDIA's intermediate assembly language for CUDA kernels, JIT-compiled to native GPU code.
+
+**RDMA (Remote Direct Memory Access)** — Hardware-level network data transfer bypassing the CPU and OS, for ultra-low-latency GPU communication.
+
+**RoCE (RDMA over Converged Ethernet)** — RDMA over standard Ethernet infrastructure.
+
+**ROCm (Radeon Open Compute)** — AMD's open GPU compute platform.
+
+**SPIR-V (Standard Portable Intermediate Representation)** — Vulkan's binary shader format.
+
+**tensor parallelism** — Distributing weight shards across multiple GPUs; each computes a partial result, then all-reduce merges them.
+
+**WGSL (WebGPU Shading Language)** — The shader language for WebGPU compute kernels.

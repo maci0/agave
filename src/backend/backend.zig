@@ -82,7 +82,7 @@ pub const BackendInfo = struct {
     /// GPU device name (e.g., "Apple M4 Pro", "NVIDIA GB10").
     device_name: []const u8 = "",
 
-    /// Dynamic library loaded via dlopen (e.g., "libcuda.so.1", "libMoltenVK.dylib").
+    /// Dynamic library loaded via dlopen (e.g., "libcuda.so.1", "libkosmickrisp.dylib").
     lib_name: []const u8 = "",
 
     /// Number of GPU kernels/pipelines loaded at init.

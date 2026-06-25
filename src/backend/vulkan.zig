@@ -1,8 +1,8 @@
-//! Vulkan compute backend via MoltenVK (macOS) or native Vulkan (Linux).
+//! Vulkan compute backend via KosmicKrisp (macOS) or native Vulkan (Linux).
 //! Uses SPIR-V compute shaders for GPU dispatch with subgroup reduction.
 //! Panics on unsupported quantization types (no silent CPU fallback).
 //!
-//! The Vulkan library (libvulkan.so / libMoltenVK.dylib) is loaded at runtime
+//! The Vulkan library (libvulkan.so / libkosmickrisp.dylib) is loaded at runtime
 //! via std.DynLib — no link-time dependency. If the library is not available,
 //! init() returns error.VulkanNotAvailable and the caller falls back to
 //! another backend.
@@ -487,7 +487,7 @@ const FnCmdPushDescriptorSet = *const fn (VkCommandBuffer, c_int, VkPipelineLayo
 // ── Library name ────────────────────────────────────────────────
 
 const vk_lib_name = switch (builtin.os.tag) {
-    .macos => "libMoltenVK.dylib",
+    .macos => "libkosmickrisp.dylib",
     .linux => "libvulkan.so.1",
     .windows => "vulkan-1.dll",
     else => "libvulkan.so",
@@ -699,7 +699,7 @@ pub const VulkanBackend = struct {
     // Dynamic library handle
     lib: std.DynLib = undefined,
 
-    // Vulkan function pointers (loaded from libvulkan / libMoltenVK)
+    // Vulkan function pointers (loaded from libvulkan / libkosmickrisp)
     vkDestroyInstance: FnDestroyInstance = undefined,
     vkEnumeratePhysicalDevices: FnEnumeratePhysicalDevices = undefined,
     vkGetPhysicalDeviceQueueFamilyProperties: FnGetPhysicalDeviceQueueFamilyProperties = undefined,
@@ -2673,7 +2673,7 @@ test "Vulkan VK_API_VERSION_1_1 encoding" {
 test "Vulkan n_pipelines and lib_name" {
     try std.testing.expectEqual(@as(u32, 49), VulkanBackend.n_pipelines);
     const expected_lib = switch (builtin.os.tag) {
-        .macos => "libMoltenVK.dylib",
+        .macos => "libkosmickrisp.dylib",
         .linux => "libvulkan.so.1",
         .windows => "vulkan-1.dll",
         else => "libvulkan.so",
