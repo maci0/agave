@@ -463,6 +463,16 @@ const FnDestroyPipelineLayout = *const fn (VkDevice, VkPipelineLayout, ?*const a
 
 const FnCreateComputePipelines = *const fn (VkDevice, VkPipelineCache, u32, *const VkComputePipelineCreateInfo, ?*const anyopaque, *VkPipeline) callconv(.c) VkResult;
 const FnDestroyPipeline = *const fn (VkDevice, VkPipeline, ?*const anyopaque) callconv(.c) void;
+const VkPipelineCacheCreateInfo = extern struct {
+    sType: u32 = 0x0000_0011,
+    pNext: ?*anyopaque = null,
+    flags: u32 = 0,
+    initialDataSize: usize = 0,
+    pInitialData: ?*const anyopaque = null,
+};
+const FnCreatePipelineCache = *const fn (VkDevice, *const VkPipelineCacheCreateInfo, ?*const anyopaque, *VkPipelineCache) callconv(.c) VkResult;
+const FnGetPipelineCacheData = *const fn (VkDevice, VkPipelineCache, *usize, ?*anyopaque) callconv(.c) VkResult;
+const FnDestroyPipelineCache = *const fn (VkDevice, VkPipelineCache, ?*const anyopaque) callconv(.c) void;
 
 const FnCreateShaderModule = *const fn (VkDevice, *const VkShaderModuleCreateInfo, ?*const anyopaque, *VkShaderModule) callconv(.c) VkResult;
 const FnDestroyShaderModule = *const fn (VkDevice, VkShaderModule, ?*const anyopaque) callconv(.c) void;
@@ -477,6 +487,50 @@ const FnBindBufferMemory = *const fn (VkDevice, VkBuffer, VkDeviceMemory, VkDevi
 const FnMapMemory = *const fn (VkDevice, VkDeviceMemory, VkDeviceSize, VkDeviceSize, VkFlags, *?*anyopaque) callconv(.c) VkResult;
 const FnUnmapMemory = *const fn (VkDevice, VkDeviceMemory) callconv(.c) void;
 
+// Pipeline cache helpers: load/save ~/.cache/agave/vk_pipeline_cache.bin via POSIX
+fn vkCachePath(buf: *[512]u8) ?[]u8 {
+    const home_c = std.c.getenv("HOME") orelse return null;
+    const home = std.mem.span(home_c);
+    return std.fmt.bufPrint(buf, "{s}/.cache/agave/vk_pipeline_cache.bin", .{home}) catch null;
+}
+fn loadVkCacheFile(allocator: std.mem.Allocator) ?[]u8 {
+    var path_buf: [512]u8 = undefined;
+    const path = vkCachePath(&path_buf) orelse return null;
+    const P = std.posix;
+    const fd = P.openat(P.AT.FDCWD, path, .{}, 0) catch return null;
+    defer _ = if (comptime builtin.os.tag == .linux) P.system.close(fd) else std.c.close(fd);
+    var s: std.c.Stat = undefined;
+    if (std.c.fstat(fd, &s) != 0) return null;
+    const size: usize = @intCast(s.size);
+    const buf = allocator.alloc(u8, size) catch return null;
+    var off: usize = 0;
+    while (off < size) {
+        const n = P.read(fd, buf[off..]) catch break;
+        if (n == 0) break;
+        off += n;
+    }
+    return if (off == size) buf else { allocator.free(buf); return null; };
+}
+fn saveVkCacheFile(data: []const u8) void {
+    var path_buf: [512]u8 = undefined;
+    const path = vkCachePath(&path_buf) orelse return;
+    // ensure ~/.cache/agave exists
+    var dir_buf: [512:0]u8 = undefined;
+    if (std.fmt.bufPrintZ(&dir_buf, "{s}", .{std.fs.path.dirname(path) orelse return}) catch null) |dir| {
+        _ = std.c.mkdir(dir, 0o755);
+    }
+    const P = std.posix;
+    // O_WRONLY|O_CREAT|O_TRUNC = 0x201 on Linux/macOS
+    const fd = P.openat(P.AT.FDCWD, path, @bitCast(@as(u32, 0o1 | 0o100 | 0o1000)), 0o644) catch return;
+    defer _ = if (comptime builtin.os.tag == .linux) P.system.close(fd) else std.c.close(fd);
+    var off: usize = 0;
+    while (off < data.len) {
+        const n = std.c.write(fd, data[off..].ptr, data.len - off);
+        if (n <= 0) break;
+        off += @intCast(n);
+    }
+}
+
 const FnCmdBindPipeline = *const fn (VkCommandBuffer, c_int, VkPipeline) callconv(.c) void;
 const FnCmdBindDescriptorSets = *const fn (VkCommandBuffer, c_int, VkPipelineLayout, u32, u32, *const VkDescriptorSet, u32, ?*const u32) callconv(.c) void;
 const FnCmdPushConstants = *const fn (VkCommandBuffer, VkPipelineLayout, VkFlags, u32, u32, [*]const u8) callconv(.c) void;
@@ -487,7 +541,7 @@ const FnCmdPushDescriptorSet = *const fn (VkCommandBuffer, c_int, VkPipelineLayo
 // ── Library name ────────────────────────────────────────────────
 
 const vk_lib_name = switch (builtin.os.tag) {
-    .macos => "libkosmickrisp.dylib",
+    .macos => "libvulkan.1.dylib",
     .linux => "libvulkan.so.1",
     .windows => "vulkan-1.dll",
     else => "libvulkan.so",
@@ -731,6 +785,10 @@ pub const VulkanBackend = struct {
     vkDestroyPipelineLayout: FnDestroyPipelineLayout = undefined,
     vkCreateComputePipelines: FnCreateComputePipelines = undefined,
     vkDestroyPipeline: FnDestroyPipeline = undefined,
+    vkCreatePipelineCache: ?FnCreatePipelineCache = null,
+    vkGetPipelineCacheData: ?FnGetPipelineCacheData = null,
+    vkDestroyPipelineCache: ?FnDestroyPipelineCache = null,
+    pipeline_cache: VkPipelineCache = null,
     vkCreateShaderModule: FnCreateShaderModule = undefined,
     vkDestroyShaderModule: FnDestroyShaderModule = undefined,
     vkCreateBuffer: FnCreateBuffer = undefined,
@@ -846,6 +904,7 @@ pub const VulkanBackend = struct {
         self.lib = std.DynLib.open(vk_lib_name) catch
             std.DynLib.open("/usr/lib/x86_64-linux-gnu/" ++ vk_lib_name) catch
             std.DynLib.open("/usr/lib/aarch64-linux-gnu/" ++ vk_lib_name) catch
+            std.DynLib.open("/opt/homebrew/lib/" ++ vk_lib_name) catch
             return error.VulkanNotAvailable;
         errdefer self.lib.close();
 
@@ -882,6 +941,9 @@ pub const VulkanBackend = struct {
         self.vkDestroyPipelineLayout = self.lookup(FnDestroyPipelineLayout, "vkDestroyPipelineLayout") orelse return error.VulkanNotAvailable;
         self.vkCreateComputePipelines = self.lookup(FnCreateComputePipelines, "vkCreateComputePipelines") orelse return error.VulkanNotAvailable;
         self.vkDestroyPipeline = self.lookup(FnDestroyPipeline, "vkDestroyPipeline") orelse return error.VulkanNotAvailable;
+        self.vkCreatePipelineCache = self.lookup(FnCreatePipelineCache, "vkCreatePipelineCache");
+        self.vkGetPipelineCacheData = self.lookup(FnGetPipelineCacheData, "vkGetPipelineCacheData");
+        self.vkDestroyPipelineCache = self.lookup(FnDestroyPipelineCache, "vkDestroyPipelineCache");
         self.vkCreateShaderModule = self.lookup(FnCreateShaderModule, "vkCreateShaderModule") orelse return error.VulkanNotAvailable;
         self.vkDestroyShaderModule = self.lookup(FnDestroyShaderModule, "vkDestroyShaderModule") orelse return error.VulkanNotAvailable;
         self.vkCreateBuffer = self.lookup(FnCreateBuffer, "vkCreateBuffer") orelse return error.VulkanNotAvailable;
@@ -919,7 +981,8 @@ pub const VulkanBackend = struct {
             .enabledExtensionCount = 0,
             .ppEnabledExtensionNames = null,
         };
-        if (vkCreateInstance(&inst_info, null, &self.instance) != VK_SUCCESS)
+        const inst_result = vkCreateInstance(&inst_info, null, &self.instance);
+        if (inst_result != VK_SUCCESS)
             return error.VulkanInitFailed;
 
         // Pick first physical device
@@ -1082,6 +1145,18 @@ pub const VulkanBackend = struct {
             }
         }
 
+        // Pipeline cache: load from disk if available (speeds up re-init on software renderers)
+        if (self.vkCreatePipelineCache) |createCache| {
+            const initial_data = loadVkCacheFile(allocator);
+            defer if (initial_data) |d| allocator.free(d);
+            const ci = VkPipelineCacheCreateInfo{
+                .initialDataSize = if (initial_data) |d| d.len else 0,
+                .pInitialData = if (initial_data) |d| d.ptr else null,
+            };
+            _ = createCache(self.device, &ci, null, &self.pipeline_cache);
+            if (initial_data != null) std.log.info("Vulkan: loaded pipeline cache", .{});
+        }
+
         // Create pipelines — bindings, push_size
         // Elementwise: 2 bufs (in, out), 4 bytes push (n)
         self.pipe_silu = try self.createPipeline(spv_silu, 2, 4);
@@ -1152,7 +1227,11 @@ pub const VulkanBackend = struct {
         self.pipe_sdpa = try self.createPipeline(spv_sdpa, 4, 20);
         // SDPA TurboQuant: 4 bufs (Q, K_raw, V_raw, out), 36 bytes push
         // (nh, nkv, hd, sl, scale, bits_k, bits_v, block_bytes_k, block_bytes_v)
-        self.pipe_sdpa_turbo = try self.createPipeline(spv_sdpa_turbo, 4, 36);
+        // ponytail: optional — subgroup ops missing on some drivers (e.g. KosmicKrisp)
+        self.pipe_sdpa_turbo = self.createPipeline(spv_sdpa_turbo, 4, 36) catch blk: {
+            std.log.warn("Vulkan: sdpa_turbo unavailable (no subgroup support), TurboQuant KV disabled", .{});
+            break :blk .{};
+        };
         // SDPA paged: 5 bufs (Q, K_flat, V_flat, out, block_table), 24 bytes push
         // (nh, nkv, hd, sl, scale, paged_bs)
         self.pipe_sdpa_paged = try self.createPipeline(spv_sdpa_paged, 5, 24);
@@ -1164,6 +1243,21 @@ pub const VulkanBackend = struct {
         self.pipe_deltanet = try self.createPipeline(spv_deltanet, 9, 24);
         // sdpaTree: 7 bufs, 24 bytes push (nh, nkv, hd, prefix_len, n_nodes, scale)
         self.pipe_sdpa_tree = try self.createPipeline(spv_sdpa_tree, 7, 24);
+
+        // Save pipeline cache to disk for faster re-init next time
+        if (self.pipeline_cache != null) {
+            if (self.vkGetPipelineCacheData) |getData| {
+                var data_size: usize = 0;
+                _ = getData(self.device, self.pipeline_cache, &data_size, null);
+                if (data_size > 0) {
+                    if (allocator.alloc(u8, data_size) catch null) |d| {
+                        defer allocator.free(d);
+                        _ = getData(self.device, self.pipeline_cache, &data_size, d.ptr);
+                        saveVkCacheFile(d);
+                    }
+                }
+            }
+        }
 
         return self;
     }
@@ -1333,6 +1427,9 @@ pub const VulkanBackend = struct {
         if (self.desc_pool != null) self.vkDestroyDescriptorPool(self.device, self.desc_pool, null);
         if (self.fence != null) self.vkDestroyFence(self.device, self.fence, null);
         if (self.cmd_pool != null) self.vkDestroyCommandPool(self.device, self.cmd_pool, null);
+        if (self.pipeline_cache != null) {
+            if (self.vkDestroyPipelineCache) |destroyCache| destroyCache(self.device, self.pipeline_cache, null);
+        }
         self.vkDestroyDevice(self.device, null);
         if (self.instance != null) self.vkDestroyInstance(self.instance, null);
         self.lib.close();
@@ -1413,7 +1510,7 @@ pub const VulkanBackend = struct {
             .basePipelineIndex = 0,
         };
         var pipeline: VkPipeline = null;
-        if (self.vkCreateComputePipelines(self.device, null, 1, &pipe_ci, null, &pipeline) != VK_SUCCESS)
+        if (self.vkCreateComputePipelines(self.device, self.pipeline_cache, 1, &pipe_ci, null, &pipeline) != VK_SUCCESS)
             return error.VulkanInitFailed;
 
         self.vkDestroyShaderModule(self.device, shader_mod, null);
@@ -2673,7 +2770,7 @@ test "Vulkan VK_API_VERSION_1_1 encoding" {
 test "Vulkan n_pipelines and lib_name" {
     try std.testing.expectEqual(@as(u32, 49), VulkanBackend.n_pipelines);
     const expected_lib = switch (builtin.os.tag) {
-        .macos => "libkosmickrisp.dylib",
+        .macos => "libvulkan.1.dylib",
         .linux => "libvulkan.so.1",
         .windows => "vulkan-1.dll",
         else => "libvulkan.so",
