@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026-06-18 — Vulkan: KosmicKrisp + Pipeline Cache
+
+### Vulkan macOS Backend
+- **KosmicKrisp** replaces MoltenVK as the macOS Vulkan testing target
+- Load path: `libvulkan.1.dylib` (Homebrew Vulkan loader) with `/opt/homebrew/lib/` fallback; set `VK_ICD_FILENAMES` to KosmicKrisp ICD and `DYLD_LIBRARY_PATH=/opt/homebrew/lib`
+- `sdpa_turbo` pipeline gracefully skipped when driver lacks `GroupNonUniform` subgroup ops (lavapipe/KosmicKrisp don't implement them); TurboQuant KV falls back to standard SDPA
+- **Disk-backed `VkPipelineCache`**: compiled shaders saved to `~/.cache/agave/vk_pipeline_cache.bin` (1.2 MB for 49 kernels), loaded on subsequent runs; note lavapipe re-JITs LLVM IR each run regardless (~5 min; driver limitation)
+
 ## 2026-06-16 — IQ2/IQ3 Quant Support + LoRA + MTP Fix
 
 ### IQ2/IQ3/IQ1 Quantization Support

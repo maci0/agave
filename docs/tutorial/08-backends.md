@@ -378,7 +378,7 @@ flowchart TD
 
 **WebGPU** (`webgpu.zig`): WGSL compute shaders loaded via wgpu-native C API. Dynamic library loading (`dlopen`). Enabled by default in the build system. **Lazy readback cache**: activation buffers stay on GPU between operations — `cacheGpuResult` registers GPU output in `buf_cache`, and `getOrUpload` finds it on next access. Downloads only happen on `sync()`. This eliminates ~200 CPU↔GPU round-trips per token. ~48 WGSL compute shaders covering all core ops including quantized GEMV for all formats. Buffer lifecycle uses deferred destruction — params and cache-evicted buffers are queued for cleanup during `sync()` to avoid destroying buffers still referenced by pending command buffers.
 
-**Vulkan** (`vulkan.zig`): Pre-compiled SPIR-V compute shaders. Subgroup arithmetic for reductions. Fused single-dispatch normalization/softmax. Works on all vendors including Apple (via KosmicKrisp). No megakernel support.
+**Vulkan** (`vulkan.zig`): Pre-compiled SPIR-V compute shaders. Subgroup arithmetic for reductions. Fused single-dispatch normalization/softmax. Works on all vendors including Apple (via KosmicKrisp — use `libvulkan.1.dylib` loader, not MoltenVK directly). `sdpa_turbo` (TurboQuant KV) requires `GroupNonUniform` subgroup ops and is skipped gracefully on drivers that lack it (e.g. lavapipe/KosmicKrisp). **Disk-backed VkPipelineCache** at `~/.cache/agave/vk_pipeline_cache.bin` (1.2 MB for 49 shaders); speeds up re-init on drivers that honour it. No megakernel support.
 
 **ROCm** (`rocm.zig`): HIP Runtime API loaded dynamically. AMDGCN kernels compiled from Zig via `amdgcn-amdhsa` target. Same deferred execution pattern as CUDA. **Megakernel**: 28 kernels including 1 true megakernel (Qwen Q8). Sparse V threshold in SDPA.
 

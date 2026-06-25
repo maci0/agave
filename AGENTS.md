@@ -75,6 +75,13 @@ agave model.gguf --serve --max-batch-size 16   # Higher throughput for concurren
 ```
 
 ```bash
+# Vulkan on macOS (KosmicKrisp — install via android-commandlinetools)
+VK_ICD_FILENAMES=$(brew --prefix)/share/android-commandlinetools/emulator/lib64/vulkan/libkosmickrisp_icd.json \
+DYLD_LIBRARY_PATH=$(brew --prefix)/lib \
+agave model.gguf --backend vulkan "prompt"                         # First run ~5min (LLVM JIT)
+```
+
+```bash
 # Distributed inference
 agave model.gguf --list-devices                                    # Show available GPUs
 agave model.gguf --backend vulkan --device 1                       # Select GPU by index
