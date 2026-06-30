@@ -28,7 +28,7 @@ pub fn build(b: *std.Build) void {
     const enable_llama4 = b.option(bool, "enable-llama4", "Enable Llama 4 model support (default: true)") orelse true;
 
     // ── Helper: link frameworks for macOS ─────────────────────────
-    // Note: Vulkan (libvulkan.so / libMoltenVK.dylib) is loaded at runtime
+    // Note: Vulkan (libvulkan.so / libvulkan.1.dylib (via KosmicKrisp ICD)) is loaded at runtime
     // via std.DynLib — no link-time dependency needed.
     const link_metal = enable_metal and target.result.os.tag == .macos;
     const link_platform = struct {
