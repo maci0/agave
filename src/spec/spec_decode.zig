@@ -12,6 +12,7 @@ const std = @import("std");
 const Model = @import("../models/model.zig").Model;
 const math_ops = @import("../ops/math.zig");
 const ddtree = @import("ddtree.zig");
+const dspark = @import("dspark.zig");
 
 pub const max_draft_tokens: usize = 32;
 const log_softmax_eps: f32 = 1e-10;
@@ -158,6 +159,39 @@ pub const SpecResult = struct {
     accepted: u32,
     next_token: u32,
 };
+
+/// DSpark: Confidence-Scheduled Verification trim (§3.2, Cheng et al. 2026).
+///
+/// Uses per-position acceptance history as a proxy for per-step survival probability
+/// and trims the drafted block to the longest prefix with positive expected return
+/// under the single-request degenerate case of Algorithm 1 (flat SPS(B) assumption).
+///
+/// In the multi-request server path the full hardware-aware scheduler in dspark.zig
+/// should be called directly with the actual SPS profile and per-request blocks.
+pub fn dsparkTrimDraft(state: *SpecState) void {
+    const n = state.n_draft;
+    if (n <= 1) return;
+
+    // Estimate per-position survival prob from long-run acceptance history.
+    // c[k] ≈ accept_rate(k) / accept_rate(k-1) (conditional given prefix ok).
+    // Use k_accept_counts[k] / k_total_counts[k] as the marginal acceptance at depth k.
+    // Fall back to uniform 0.75 if insufficient history.
+    var survival: f32 = 1.0;
+    for (0..n) |k| {
+        const total = state.k_total_counts[k];
+        const c: f32 = if (total >= 5)
+            @as(f32, @floatFromInt(state.k_accept_counts[k])) / @as(f32, @floatFromInt(total))
+        else
+            0.75; // prior until we have data
+        survival *= c;
+        // Stop if expected marginal gain < 0.15 (single-request threshold).
+        // In production, the hardware-aware scheduler would compute this dynamically.
+        if (survival < 0.15) {
+            state.n_draft = @intCast(k + 1);
+            return;
+        }
+    }
+}
 
 /// Generate draft tokens using MTP (Multi-Token Prediction) heads.
 /// Each depth produces one draft token from a lightweight single-layer forward pass.

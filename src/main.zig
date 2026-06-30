@@ -402,7 +402,7 @@ const cli_specs = [_]cli_mod.ArgSpec{
     .{ .long = "draft-model", .kind = .option, .help = "Path to draft model for speculative decoding." },
     .{ .long = "spec-tokens", .short = 'K', .kind = .option, .help = "Draft tokens per speculation round [default: 5]." },
     .{ .long = "tree-budget", .kind = .option, .help = "DDTree node budget [default: 64]." },
-    .{ .long = "spec-mode", .kind = .option, .help = "Speculative mode: auto, standard, ddtree, self, ngram, suffix, lookahead, mtp, medusa, eagle, eagle3, mlp, pflash [default: ddtree with --draft-model]." },
+    .{ .long = "spec-mode", .kind = .option, .help = "Speculative mode: auto, standard, ddtree, self, ngram, suffix, lookahead, mtp, medusa, eagle, eagle3, mlp, pflash, dspark [default: ddtree with --draft-model]." },
     .{ .long = "spec-token-map", .kind = .option, .help = "FR-Spec token frequency map file (one token ID per line). Restricts draft to high-frequency tokens for improved acceptance rate." },
     .{ .long = "draft-layers", .kind = .option, .help = "Layers for self-speculative draft [default: auto]." },
     .{ .long = "pflash-alpha", .kind = .option, .help = "PFlash block selection threshold (0.0-2.0) [default: 0.85]." },
@@ -436,6 +436,7 @@ const SpecMode = enum {
     mlp,
     lookahead,
     pflash,
+    dspark, // DSpark: confidence-scheduled verification (Cheng et al., 2026)
 };
 
 const CliArgs = struct {
@@ -1107,8 +1108,9 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
                 if (std.mem.eql(u8, s, "mlp")) break :blk SpecMode.mlp;
                 if (std.mem.eql(u8, s, "lookahead")) break :blk SpecMode.lookahead;
                 if (std.mem.eql(u8, s, "pflash")) break :blk SpecMode.pflash;
+                if (std.mem.eql(u8, s, "dspark")) break :blk SpecMode.dspark;
                 if (std.mem.eql(u8, s, "auto")) break :blk if (dm != null) SpecMode.ddtree else SpecMode.ngram;
-                eprint("Error: unknown --spec-mode '{s}' (expected: auto, standard, ddtree, self, ngram, suffix, mtp, eagle, eagle3, mlp, lookahead, pflash)\n", .{s});
+                eprint("Error: unknown --spec-mode '{s}' (expected: auto, standard, ddtree, self, ngram, suffix, mtp, eagle, eagle3, mlp, lookahead, pflash, dspark)\n", .{s});
                 std.process.exit(2);
             }
             break :blk if (dm != null) SpecMode.ddtree else SpecMode.none;
@@ -1631,7 +1633,7 @@ fn printUsage() void {
         \\
         \\SPECULATIVE DECODING:
         \\      --draft-model <PATH>  Draft model GGUF for speculative decoding
-        \\      --spec-mode <MODE>    Speculative mode: auto, standard, ddtree, self, ngram, suffix, lookahead, mtp, medusa, eagle, eagle3, mlp, pflash
+        \\      --spec-mode <MODE>    Speculative mode: auto, standard, ddtree, self, ngram, suffix, lookahead, mtp, medusa, eagle, eagle3, mlp, pflash, dspark
         \\  -K, --spec-tokens <N>     Draft tokens per speculation round [default: 5]
         \\      --tree-budget <N>     DDTree node budget [default: 64]
         \\      --draft-layers <N>    Layers for self-speculative draft [default: auto]
@@ -3385,6 +3387,7 @@ fn generateSpeculative(
     const use_eagle3 = (effective_spec_mode == .eagle3);
     const use_mlp = (effective_spec_mode == .mlp);
     const use_lookahead = (effective_spec_mode == .lookahead);
+    const use_dspark = (effective_spec_mode == .dspark);
     var la_state = ngram_mod.LookaheadState{};
     if (use_lookahead) la_state.seed(token_ids);
     var ngram_state = ngram_mod.NgramState{};
@@ -3447,7 +3450,7 @@ fn generateSpeculative(
 
         // Draft phase
         if (self_spec) target.setLayerSkip(skip_start, skip_end);
-        const is_self_draft = (target.ptr == draft_model.ptr and !self_spec and !use_ngram and !use_mtp and !use_eagle and !use_eagle3 and !use_mlp);
+        const is_self_draft = (target.ptr == draft_model.ptr and !self_spec and !use_ngram and !use_mtp and !use_eagle and !use_eagle3 and !use_mlp and !use_dspark);
         const effective_k = spec_state.optimalK();
         const n_drafted = if (use_mtp) blk: {
             break :blk spec_decode.draftMtp(&spec_state, target, last);
@@ -3502,6 +3505,18 @@ fn generateSpeculative(
             else
                 spec_decode.draftMlpSpeculatorWithLogits(&spec_state, target.*, draft_model.*, last);
             break :blk n;
+        } else if (use_dspark) blk: {
+            // DSpark: draft with confidence-scheduled verification trim.
+            // Draft tokens using the existing draft model (any drafter), then apply
+            // the hardware-aware prefix scheduler to drop low-survival-prob suffix tokens.
+            const n = if (!use_sampling)
+                spec_decode.draft(&spec_state, draft_model, last)
+            else
+                spec_decode.draftWithLogits(&spec_state, draft_model, last);
+            // Apply confidence-based trim: use acceptance history as proxy for per-position
+            // survival probability and trim draft to tokens with positive expected return.
+            if (n > 0) spec_decode.dsparkTrimDraft(&spec_state);
+            break :blk spec_state.n_draft;
         } else if (is_self_draft and !use_sampling)
             spec_decode.draft(&spec_state, draft_model, last)
         else
@@ -4108,6 +4123,7 @@ test {
     _ = @import("ops/split_attention.zig");
     _ = @import("ops/sparse_attn.zig");
     _ = @import("spec/pflash.zig");
+    _ = @import("spec/dspark.zig");
     _ = @import("arch.zig");
     _ = @import("perf.zig");
     _ = @import("recipe.zig");
