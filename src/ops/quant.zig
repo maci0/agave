@@ -202,19 +202,20 @@ pub fn dequantToF32(output: []f32, data: [*]const u8, dtype: DType, n: usize) vo
             }
         },
         .q4_0 => {
+            // Split packing: byte j holds element j in low nibble, element j+16 in high nibble.
+            // (Matches llama.cpp dequantize_row_q4_0 and gemvQ4_0 split packing.)
             const n_blocks = (n + quant_block_elems - 1) / quant_block_elems;
             for (0..n_blocks) |b| {
                 const blk = data[b * q4_0_block_bytes ..];
                 const scale: f32 = @floatCast(@as(*const f16, @ptrCast(@alignCast(blk))).*);
                 const nibbles = blk[2..];
                 const count = @min(quant_block_elems, n - b * quant_block_elems);
-                for (0..count) |i| {
-                    const byte = nibbles[i / 2];
-                    const nibble: i8 = if (i % 2 == 0)
-                        @as(i8, @intCast(byte & 0xF)) - 8
-                    else
-                        @as(i8, @intCast(byte >> 4)) - 8;
-                    output[b * quant_block_elems + i] = scale * @as(f32, @floatFromInt(nibble));
+                for (0..@min(quant_block_elems / 2, count)) |j| {
+                    const byte = nibbles[j];
+                    output[b * quant_block_elems + j] = scale * @as(f32, @floatFromInt(@as(i8, @intCast(byte & 0xF)) - 8));
+                    if (b * quant_block_elems + j + quant_block_elems / 2 < n) {
+                        output[b * quant_block_elems + j + quant_block_elems / 2] = scale * @as(f32, @floatFromInt(@as(i8, @intCast(byte >> 4)) - 8));
+                    }
                 }
             }
         },
@@ -568,18 +569,18 @@ test "dequantToF32 q8_0 negative values" {
 
 test "dequantToF32 q4_0" {
     // One Q4_0 block: f16 scale + 16 nibble bytes. scale=1.0.
-    // dequantToF32 unpacks interleaved: even i → lo nibble, odd i → hi nibble, biased -8.
-    // Use asymmetric nibbles to verify even/odd extraction is not swapped.
+    // Split packing (matches llama.cpp dequantize_row_q4_0 and gemvQ4_0):
+    //   byte j (j=0..15): lo nibble → element j, hi nibble → element j+16.
     // Nibble byte 0xF3: lo=3, hi=0xF(15)
-    //   → even elements dequant to (3-8)*1.0 = -5.0
-    //   → odd elements dequant to (15-8)*1.0 = 7.0
+    //   → elements [0..15]  dequant to (3-8)*1.0 = -5.0  (low nibbles)
+    //   → elements [16..31] dequant to (15-8)*1.0 = 7.0  (high nibbles)
     var block: [q4_0_block_bytes]u8 align(2) = undefined;
     std.mem.writeInt(u16, block[0..2], 0x3C00, .little); // f16(1.0)
     for (2..q4_0_block_bytes) |i| block[i] = 0xF3;
     var output: [quant_block_elems]f32 = undefined;
     dequantToF32(&output, &block, .q4_0, quant_block_elems);
     for (0..quant_block_elems) |i| {
-        const expected: f32 = if (i % 2 == 0) -5.0 else 7.0;
+        const expected: f32 = if (i < quant_block_elems / 2) -5.0 else 7.0;
         try std.testing.expectApproxEqAbs(expected, output[i], 0.01);
     }
 }

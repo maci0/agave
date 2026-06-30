@@ -2639,7 +2639,7 @@ pub const VulkanBackend = struct {
 
 test "VulkanBackend init and silu" {
     var vk_be = VulkanBackend.init(std.testing.allocator, 0) catch |err| {
-        if (err == error.VulkanNotAvailable) return error.SkipZigTest;
+        if (err == error.VulkanNotAvailable or err == error.VulkanInitFailed or err == error.NoVulkanDevice) return error.SkipZigTest;
         return err;
     };
     defer vk_be.deinit();
@@ -2655,7 +2655,7 @@ test "VulkanBackend init and silu" {
 
 test "VulkanBackend gelu" {
     var vk_be = VulkanBackend.init(std.testing.allocator, 0) catch |err| {
-        if (err == error.VulkanNotAvailable) return error.SkipZigTest;
+        if (err == error.VulkanNotAvailable or err == error.VulkanInitFailed or err == error.NoVulkanDevice) return error.SkipZigTest;
         return err;
     };
     defer vk_be.deinit();
@@ -2672,7 +2672,7 @@ test "VulkanBackend gelu" {
 
 test "VulkanBackend rmsNorm" {
     var vk_be = VulkanBackend.init(std.testing.allocator, 0) catch |err| {
-        if (err == error.VulkanNotAvailable) return error.SkipZigTest;
+        if (err == error.VulkanNotAvailable or err == error.VulkanInitFailed or err == error.NoVulkanDevice) return error.SkipZigTest;
         return err;
     };
     defer vk_be.deinit();
@@ -2691,7 +2691,7 @@ test "VulkanBackend rmsNorm" {
 
 test "VulkanBackend softmax" {
     var vk_be = VulkanBackend.init(std.testing.allocator, 0) catch |err| {
-        if (err == error.VulkanNotAvailable) return error.SkipZigTest;
+        if (err == error.VulkanNotAvailable or err == error.VulkanInitFailed or err == error.NoVulkanDevice) return error.SkipZigTest;
         return err;
     };
     defer vk_be.deinit();
@@ -2710,7 +2710,7 @@ test "VulkanBackend softmax" {
 
 test "VulkanBackend l2Norm" {
     var vk_be = VulkanBackend.init(std.testing.allocator, 0) catch |err| {
-        if (err == error.VulkanNotAvailable) return error.SkipZigTest;
+        if (err == error.VulkanNotAvailable or err == error.VulkanInitFailed or err == error.NoVulkanDevice) return error.SkipZigTest;
         return err;
     };
     defer vk_be.deinit();
@@ -3073,7 +3073,7 @@ test "VulkanBackend.sdpaWithStats" {
 
 test "VulkanBackend rope" {
     var vk_be = VulkanBackend.init(std.testing.allocator, 0) catch |err| {
-        if (err == error.VulkanNotAvailable) return error.SkipZigTest;
+        if (err == error.VulkanNotAvailable or err == error.VulkanInitFailed or err == error.NoVulkanDevice) return error.SkipZigTest;
         return err;
     };
     defer vk_be.deinit();

@@ -1101,8 +1101,21 @@ test "ggmlToDType complete mapping" {
     for (mapping) |m| {
         try std.testing.expectEqual(m[1], GGUFFile.ggmlToDType(m[0]));
     }
-    // Types that map to unknown
-    const unknown_types = [_]GGMLType{ .i8, .i16, .i32, .i64, .f64, .q5_1, .q8_1, .iq2_xxs, .iq2_xs, .iq2_s, .iq3_xxs, .iq3_s, .iq1_s, .iq1_m };
+    // IQ2/IQ3/IQ1 now have dedicated DType entries (not .unknown)
+    const iq_mapping = [_]struct { GGMLType, DType }{
+        .{ .iq2_xxs, .iq2_xxs },
+        .{ .iq2_xs, .iq2_xs },
+        .{ .iq2_s, .iq2_s },
+        .{ .iq3_xxs, .iq3_xxs },
+        .{ .iq3_s, .iq3_s },
+        .{ .iq1_s, .iq1_s },
+        .{ .iq1_m, .iq1_m },
+    };
+    for (iq_mapping) |m| {
+        try std.testing.expectEqual(m[1], GGUFFile.ggmlToDType(m[0]));
+    }
+    // Types that map to unknown (unsupported integer and fp64 types)
+    const unknown_types = [_]GGMLType{ .i8, .i16, .i32, .i64, .f64, .q5_1, .q8_1 };
     for (unknown_types) |t| {
         try std.testing.expectEqual(DType.unknown, GGUFFile.ggmlToDType(t));
     }
