@@ -957,3 +957,65 @@ flowchart TD
 **In the code:** [src/ops/quant.zig](../../src/ops/quant.zig) (dequantization helpers), [src/ops/mlx.zig](../../src/ops/mlx.zig) (MLX format), [src/ops/kv_quant.zig](../../src/ops/kv_quant.zig) (KV cache quantization: TurboQuant/PlanarQuant/IsoQuant/RotorQuant), [src/backend/kernels/cpu/](../../src/backend/kernels/cpu/) (per-format GEMV kernels)
 
 **Next:** [Chapter 5: Memory and Caching →](05-memory-and-caching.md) | **Back:** [Chapter 3: Feed-Forward Networks ←](03-feed-forward-networks.md) | **Product docs:** [Architecture](../ARCHITECTURE.md)
+
+---
+
+## Glossary
+
+**affine quantization** — A dequantization formula using both scale and bias: float = scale × int + bias.
+
+**AWQ (Activation-aware Weight Quantization)** — A calibration-based INT4 method that finds per-channel activation scales to protect important weights.
+
+**block quantization** — Grouping values (typically 32) that share a single scale factor for dequantization.
+
+**companion tensors** — Separate tensors (e.g., `.scales`, `.biases`) storing per-group quantization parameters alongside packed weight tensors.
+
+**exponent** — The bits in a floating-point number that determine its magnitude range.
+
+**FMA (Fused Multiply-Add)** — A single hardware instruction computing a×b+c in one step, more accurate and faster than separate operations.
+
+**FP8 E4M3** — An 8-bit floating-point format with 4 exponent bits and 3 mantissa bits; used for weights.
+
+**FP8 E5M2** — An 8-bit floating-point format with 5 exponent bits and 2 mantissa bits; wider range, used for activations.
+
+**GGUF** — A single-file binary model format (from the llama.cpp ecosystem) that embeds quantization metadata in weight blocks and supports memory-mapped loading.
+
+**Givens rotation** — An orthogonal rotation applied to a pair of coordinates in a 2D plane; used in PlanarQuant KV cache quantization.
+
+**GPTQ (GPT Quantization)** — A calibration-based INT4 method using Hessian-based weight updates to minimize quantization error.
+
+**Hessian** — A matrix of second-order derivatives used by GPTQ for optimal weight rounding decisions.
+
+**HQQ (Half-Quadratic Quantization)** — A calibration-free INT4 quantization method using iterative optimization with full-precision zero points.
+
+**Lloyd-Max codebook** — A set of optimal quantization bins and centroid values for scalar quantization of Gaussian-distributed data.
+
+**mantissa** — The fractional precision bits of a floating-point number; more bits = finer precision.
+
+**memory-bandwidth bound** — When performance is limited by the rate of reading data from memory, not by compute speed.
+
+**MXFP4** — A 4-bit microscaled floating-point format with 32-element blocks and E8M0 (pure power-of-2) scales.
+
+**nibble** — A 4-bit value; half a byte. Two nibbles pack into one byte.
+
+**NVFP4** — NVIDIA's 4-bit microscaled floating-point format with 16-element blocks and FP8 E4M3 scales.
+
+**perplexity (PPL)** — A measure of how well a model predicts text; lower = better quality.
+
+**QAT (Quantization-Aware Training)** — Training a model with quantization effects simulated, producing weights optimized for low-bit inference.
+
+**quaternion** — A 4-component number system used to represent 3D rotations without gimbal lock.
+
+**SafeTensors** — A multi-file model format from HuggingFace for storing weights safely (no pickle), using JSON metadata headers.
+
+**scale factor** — A per-block multiplier that converts stored small integers back to approximate float values.
+
+**subnormal** — A very small floating-point number below the normal representable range, using reduced precision.
+
+**super-block** — A larger quantization group (typically 256 values) with hierarchical two-level scales for finer-grained accuracy.
+
+**ternary quantization** — Encoding weights as {−1, 0, +1}, enabling multiplication-free inference.
+
+**W4A16** — Shorthand for 4-bit weights with 16-bit activations.
+
+**Walsh-Hadamard Transform (WHT)** — A deterministic orthogonal rotation using only additions and subtractions that decorrelates distributions before quantization.

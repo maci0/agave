@@ -937,3 +937,33 @@ See [API.md — Tool Calling](../API.md#tool-calling) for request/response forma
 **Related:** [Tokenization](01-tokens-and-text.md) (how tokens are encoded/decoded)
 
 **Next:** [Chapter 16: Recipe System →](16-recipe-system.md) | **Back:** [Chapter 14: Format Conventions ←](14-format-conventions.md) | **Product docs:** [Models](../MODELS.md)
+
+---
+
+## Glossary
+
+**chat template** — A data-driven configuration mapping conversation roles to special-token-delimited prefix/suffix strings, replacing hardcoded prompt formatting.
+
+**ChatML** — A chat formatting convention using `<|im_start|>` / `<|im_end|>` markers, adopted by Qwen, Nemotron, and other models.
+
+**default_system** — A fixed system message baked into the template, used when the user supplies none.
+
+**EOG token (end-of-generation)** — A special token whose presence in output signals that generation should stop.
+
+**findImageInsertPos()** — A function that scans a token array for the last user-prefix token sequence and returns the position after it.
+
+**formatConversation()** — The main template function rendering a multi-turn conversation into a flat prompt string.
+
+**generation_prefix** — A string appended after the final assistant prefix before generation begins; used to control model reasoning behavior.
+
+**image token injection** — Splicing visual placeholder tokens into a tokenized prompt so the model can replace them with vision-encoder embeddings.
+
+**injectImageTokens()** — A function that splices image placeholder tokens (start + N×pad + end) at a computed insertion point.
+
+**pad token (image)** — A placeholder token repeated once per visual patch, whose embedding is replaced at runtime by vision-encoder output.
+
+**role marker** — A special token or string identifying who is speaking in a multi-turn conversation (system, user, assistant, tool).
+
+**system_role_override** — A template field re-routing system messages through a different role prefix (e.g., "developer" in GPT-OSS).
+
+**tight coupling** — Embedding format details directly in model code, making changes fragile and non-portable.

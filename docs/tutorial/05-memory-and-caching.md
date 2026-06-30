@@ -548,3 +548,39 @@ Useful for shared system prompts: compute the prefix KV once on one instance, di
 **In the code:** [src/kvcache/manager.zig](../../src/kvcache/manager.zig) (KvCache, PagedKvCache, RadixTree, KV eviction), [src/kvcache/block_allocator.zig](../../src/kvcache/block_allocator.zig) (block allocation), [src/kvcache/tiered.zig](../../src/kvcache/tiered.zig) (VRAM + RAM + SSD tiers), [src/ops/kv_quant.zig](../../src/ops/kv_quant.zig) (KV cache quantization — f16, q8_0, fp8, nvfp4, TurboQuant, PerHeadKvScales), [src/backend/cpu.zig](../../src/backend/cpu.zig) (CPU prefill attention), [src/backend/kernels/metal/sdpa.metal](../../src/backend/kernels/metal/sdpa.metal) (GPU prefill FA2, 64K seq limit)
 
 **Next:** [Chapter 6: State Space Models →](06-state-space-models.md) | **Back:** [Chapter 4: Quantization ←](04-quantization.md) | **Product docs:** [Architecture](../ARCHITECTURE.md)
+
+---
+
+## Glossary
+
+**attention sinks** — The first few token positions that accumulate disproportionate attention mass and should never be evicted.
+
+**block (KV cache)** — A fixed-size unit of KV cache storage (default 16 positions) allocated on demand.
+
+**block table** — A per-request mapping from logical sequence positions to physical memory blocks.
+
+**chunked prefill** — Splitting long prompts into fixed-size chunks (e.g., 512 tokens) to bound memory usage during prefill.
+
+**continuous batching** — Processing multiple requests simultaneously where each can grow/shrink independently.
+
+**cross-instance KV sharing** — Exporting and importing KV cache data between server instances to avoid redundant prefill computation.
+
+**KV cache** — Storage for previously computed Key and Value vectors so they don't need to be recomputed for each new token.
+
+**KV cache eviction** — Removing low-value entries from the KV cache when context exceeds the budget, allowing generation to continue.
+
+**norm-based eviction** — Scoring cached positions by L2 norm of their K vector; low-norm positions are evicted first.
+
+**OOM (Out Of Memory)** — An error when the system cannot allocate enough memory for the requested operation.
+
+**PagedAttention** — A memory management technique mapping logical sequence positions to non-contiguous physical memory blocks, like OS virtual memory.
+
+**per-head KV quantization** — Using one dynamic scale per KV head (tracked as running absmax) rather than per-block scales.
+
+**RadixAttention** — A caching strategy using a radix tree (prefix trie) to detect and share common prompt prefixes across requests.
+
+**radix tree / prefix trie** — A tree data structure where shared prefixes are stored once and branched at divergence points.
+
+**split-attention** — Running GPU and CPU SDPA concurrently on different KV cache tiers, merging results via online softmax correction.
+
+**tiered KV cache** — Storing KV cache blocks across multiple memory tiers (VRAM, RAM, SSD) based on access recency.

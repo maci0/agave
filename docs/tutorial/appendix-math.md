@@ -685,3 +685,27 @@ Inference hot path is allocation-free — all buffers pre-allocated, operations 
 - Chapter 7 (sampling operations)
 
 **Next:** [Appendix: Compile-Time Optimization →](appendix-compile-time.md) | **Back:** [Chapter 17: Speculative Decoding ←](17-speculative-decoding.md)
+
+---
+
+## Glossary
+
+**arithmetic intensity** — The ratio of compute operations to bytes transferred (FLOP/byte); low = bandwidth-bound, high = compute-bound.
+
+**bandwidth-bound** — Operations where time is dominated by memory reads/writes rather than arithmetic (GEMV, normalization).
+
+**CDF (Cumulative Distribution Function)** — The integral of a probability distribution; GELU approximates the Gaussian CDF.
+
+**compute-bound** — Operations where arithmetic dominates over memory access (attention for long sequences, GEMM during prefill).
+
+**FLOP (Floating-Point Operation)** — A single floating-point arithmetic operation (add, multiply, etc.).
+
+**L2 normalization** — Scaling a vector to unit length without learned weights.
+
+**numerical stability trick** — Subtracting the maximum value before exponentiating in softmax to prevent float overflow.
+
+**RMSNorm** — Root Mean Square Normalization: scales a vector to unit RMS then applies learned weights.
+
+**scaled dot-product attention** — The formula softmax(Q·Kᵀ/√d)·V; division by √head_dim prevents scores from growing too large.
+
+**TFLOPS (Teraflops)** — Trillion floating-point operations per second; a measure of compute throughput.

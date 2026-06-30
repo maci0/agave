@@ -462,3 +462,43 @@ agave model.gguf --json-schema '{"type":"object","properties":{"answer":{"type":
 **Math reference:** [Argmax](appendix-math.md#argmax), [Temperature Scaling](appendix-math.md#temperature-scaling), [Top-K](appendix-math.md#top-k-selection), [Top-P](appendix-math.md#top-p-nucleus-sampling)
 
 **Next:** [Chapter 8: Backends →](08-backends.md) | **Back:** [Chapter 6: State Space Models ←](06-state-space-models.md) | **Product docs:** [Architecture](../ARCHITECTURE.md), [HTTP API](../API.md)
+
+---
+
+## Glossary
+
+**DRY (Don't Repeat Yourself)** — A penalty method that detects repeated n-gram sequences and penalizes tokens that would continue them.
+
+**entropy** — A measure of uncertainty in a probability distribution; higher entropy = more uniform/unpredictable.
+
+**frequency penalty** — An additive per-occurrence penalty proportional to how many times a token has appeared.
+
+**GBNF (Generative BNF)** — A grammar format used to specify valid output patterns for constrained decoding.
+
+**grammar-constrained decoding** — Masking logits so only tokens consistent with a formal grammar can be selected.
+
+**greedy decoding** — Always selecting the highest-probability token (argmax); deterministic but often repetitive.
+
+**jump decoding** — Skipping the forward pass when the grammar allows exactly one valid next token, emitting it directly.
+
+**logit bias** — Direct additive adjustments to specific token logits before sampling, used for API-level steering.
+
+**min-P** — An adaptive threshold keeping only tokens whose probability is at least min_p × the top token's probability.
+
+**Mirostat** — An adaptive sampling method that dynamically adjusts the candidate set to maintain a target entropy level.
+
+**mode collapse** — When sampling repeatedly produces the same high-probability sequences due to insufficient diversity.
+
+**n-gram** — A contiguous sequence of n tokens (bigram = 2, trigram = 3, etc.).
+
+**presence penalty** — A one-time additive penalty applied to any token that has appeared at least once.
+
+**repeat penalty** — A multiplicative penalty applied to logits of previously generated tokens to discourage repetition.
+
+**temperature** — A scaling factor applied to logits before softmax; lower = peakier distribution, higher = flatter.
+
+**top-K sampling** — Restricting the candidate set to only the K highest-scoring tokens before sampling.
+
+**top-P / nucleus sampling** — Keeping the smallest set of tokens whose cumulative probability exceeds P, then renormalizing.
+
+**XTC (eXclude Top Choices)** — A sampling method that randomly removes high-probability tokens to increase diversity.

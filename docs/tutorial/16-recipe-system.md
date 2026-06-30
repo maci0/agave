@@ -757,3 +757,27 @@ test "user override priority" {
 **Related:** [Chapter 7: Sampling](07-sampling.md) (parameter meanings), [Chapter 15: Chat Templates](15-chat-templates.md) (another data-driven config system)
 
 **Next:** [Chapter 17: Speculative Decoding & DDTree →](17-speculative-decoding.md) | **Back:** [Chapter 15: Chat Templates ←](15-chat-templates.md) | **Product docs:** [Models](../MODELS.md)
+
+---
+
+## Glossary
+
+**Applied** — The fully-resolved struct with concrete (non-optional) parameter values after merging CLI flags, recipe defaults, and baseline defaults.
+
+**arch_prefix** — The leading substring of a model's architecture name used for prefix matching (e.g., `"qwen3"` matches `"qwen35"`).
+
+**configuration sprawl** — The problem of scattered, duplicated magic numbers across model files for settings like temperature and context size.
+
+**ctx_size (context size)** — The maximum number of tokens a model can process in a single sequence.
+
+**first-match-wins** — The matching rule returning the first preset whose criteria are satisfied, making array order determine priority.
+
+**Overrides** — A struct of boolean flags tracking which parameters the user explicitly set via CLI, preventing recipe defaults from overriding user intent.
+
+**Preset** — A struct pairing a match pattern (arch_prefix, backend, quant) with a Recipe, stored in a priority-ordered array.
+
+**recipe** — A named set of optional inference-parameter defaults matched by model architecture, backend, and quantization type.
+
+**three-level priority chain** — The resolution order: (1) user CLI flag, (2) recipe default, (3) CLI baseline default.
+
+**wildcard match** — An empty-string field in a preset matching any value for that criterion.

@@ -730,3 +730,33 @@ defer pool.deinit();
 **Related:** [std.Thread](https://ziglang.org/documentation/master/std/#std.Thread), [std.atomic](https://ziglang.org/documentation/master/std/#std.atomic), [Futex](https://man7.org/linux/man-pages/man2/futex.2.html)
 
 **Next:** [Chapter 13: Batched Dispatch and Fusion →](13-batched-dispatch-and-fusion.md) | **Back:** [Chapter 11: Metal Backend Internals ←](11-metal-backend-internals.md) | **Product docs:** [Architecture](../ARCHITECTURE.md)
+
+---
+
+## Glossary
+
+**cache line** — The smallest unit of data transfer between CPU cache levels; typically 64 bytes.
+
+**cache-line padding** — Inserting unused bytes so frequently-written variables by different threads occupy separate cache lines, avoiding false sharing.
+
+**CAS (Compare-And-Swap)** — An atomic operation that updates a value only if it currently matches an expected value; foundational for lock-free data structures.
+
+**cmpxchgWeak** — A CAS variant that may spuriously fail; faster on ARM, best used in retry loops.
+
+**false sharing** — Performance degradation when different threads write to variables sharing the same cache line, causing cross-core invalidation.
+
+**fetchAdd** — An atomic operation that reads, adds, and returns the original value in one indivisible step.
+
+**futex (fast userspace mutex)** — A kernel primitive for efficient thread sleep/wake without busy-waiting.
+
+**generation counter** — An atomic variable workers sleep on; incrementing it signals new work.
+
+**grain size** — The number of work units assigned per atomic fetch-add; controls contention vs. load balance trade-off.
+
+**main thread participation** — The pattern where the main thread does useful work alongside pool workers instead of idly waiting.
+
+**spin-wait** — Busy-looping on a condition instead of sleeping; appropriate for microsecond-scale waits.
+
+**spinLoopHint** — A CPU hint (`pause` on x86, `yield` on ARM) reducing power during spin-wait loops.
+
+**thread pool** — A set of persistent worker threads that sleep when idle and wake on demand, avoiding per-operation thread creation overhead.

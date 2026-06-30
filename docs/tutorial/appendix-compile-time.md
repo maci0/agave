@@ -858,3 +858,31 @@ pub fn getNextId() usize {
 **Related:** [Zig Language Reference — comptime](https://ziglang.org/documentation/master/#comptime), [Chapter 9: CPU SIMD Optimization](09-cpu-simd-optimization.md#real-world-example-rmsnorm) (uses comptime LUTs)
 
 **Next:** [Appendix: Profiling and Debugging →](appendix-profiling.md) | **Back:** [Appendix: Mathematical Operations ←](appendix-math.md)
+
+---
+
+## Glossary
+
+**@compileError** — A Zig builtin halting compilation with a custom error message.
+
+**@embedFile** — A Zig builtin reading a file at compile time and embedding its contents as a byte-string constant in `.rodata`.
+
+**build_options** — Compile-time configuration values set in `build.zig` and imported via `@import("build_options")`.
+
+**comptime** — Zig's compile-time execution feature: expressions evaluated during compilation whose results are baked into the binary.
+
+**comptime assertion** — A `std.debug.assert()` evaluated at compile time; failure halts compilation before producing a binary.
+
+**conditional compilation** — Using comptime feature detection (OS, CPU, build flags) to select code paths, ensuring only relevant code is compiled.
+
+**dead code elimination** — The compiler's removal of code branches that can never execute, reducing binary size.
+
+**inline else** — A Zig switch pattern expanding to separate cases per tagged-union variant at compile time, enabling inlining without vtable dispatch.
+
+**IQ4_NL** — A 4-bit non-linear quantization format using 16 non-uniformly-spaced dequantization values for better accuracy.
+
+**lookup table (LUT)** — A pre-computed array where a runtime input indexes directly into the result, replacing expensive arithmetic.
+
+**monomorphized** — When a generic function is duplicated for each type it is instantiated with, producing separate optimized copies.
+
+**.rodata** — The read-only data section of an executable; compile-time constants and embedded files are stored here.

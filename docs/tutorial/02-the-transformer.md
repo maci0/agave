@@ -601,3 +601,65 @@ flowchart LR
 **Math reference:** [Q/K/V projections](appendix-math.md#qkv-projections), [Attention scores](appendix-math.md#attention-score-computation), [Dot product](appendix-math.md#dot-product), [Softmax](appendix-math.md#softmax), [RMSNorm](appendix-math.md#rms-normalization-rmsnorm), [L2 norm](appendix-math.md#l2-normalization)
 
 **Next:** [Chapter 3: Feed-Forward Networks →](03-feed-forward-networks.md) | **Back:** [Chapter 1: Tokens and Text ←](01-tokens-and-text.md) | **Product docs:** [Architecture](../ARCHITECTURE.md)
+
+---
+
+## Glossary
+
+**attention** — A mechanism that lets each token decide which previous tokens to focus on by computing similarity scores.
+
+**attention head** — One independent attention computation; multiple heads run in parallel, each learning different relationships.
+
+**attention sinks** — Learned per-head scalar values that absorb excess attention probability, preventing over-concentration on early positions.
+
+**causal mask** — A constraint that prevents tokens from attending to future positions, enforced by setting future scores to −∞.
+
+**decode** — Generating tokens one at a time in the autoregressive loop (GEMV, sequential).
+
+**FlashAttention** — An optimization that computes attention in tiles using online softmax, avoiding materializing the full score matrix.
+
+**GEMM (General Matrix-Matrix multiply)** — Multiplying a weight matrix by multiple vectors at once; more compute-efficient per byte loaded.
+
+**GQA (Grouped Query Attention)** — An optimization that shares K/V heads across multiple Q heads to reduce KV cache memory.
+
+**HBM (High Bandwidth Memory)** — Off-chip DRAM on GPUs; fast but slower than on-chip SRAM.
+
+**hidden state** — The fixed-size internal vector representation that flows through each transformer layer, being progressively refined.
+
+**kernel (compute)** — A single computational function dispatched to run on CPU or GPU hardware.
+
+**L2 normalization** — Scaling a vector to unit length (norm = 1) without learned weights.
+
+**linear projection** — A matrix-vector multiply that transforms a vector into a different representation.
+
+**MHA (Multi-Head Attention)** — Standard attention where each Q head has its own dedicated K and V heads.
+
+**MLA (Multi-head Latent Attention)** — An attention variant that compresses K/V into a low-rank latent space before caching.
+
+**online softmax** — Incrementally computing softmax as tiles arrive, without storing all scores in memory at once.
+
+**prefill** — Processing all prompt tokens at once through the model (GEMM, batched).
+
+**Q (Query) / K (Key) / V (Value)** — Linear projections of the hidden state used in attention: Q = what this token looks for, K = what it contains, V = information it carries.
+
+**residual connection** — Adding the input directly to the sublayer output (`output = input + sublayer(input)`), preserving information flow.
+
+**RMSNorm (Root Mean Square Normalization)** — Scales a vector so its average squared value equals 1, then applies learned weights.
+
+**RoPE (Rotary Position Encoding)** — A position encoding method that rotates Q and K vectors by position-dependent angles, encoding relative distance.
+
+**SDPA (Scaled Dot-Product Attention)** — The core attention formula: softmax(Q·Kᵀ/√d)·V, extracted as a reusable kernel.
+
+**SIMD (Single Instruction Multiple Data)** — Processing multiple values simultaneously with one CPU instruction.
+
+**sliding window attention** — An attention variant where each layer only attends to the most recent N tokens instead of the full sequence.
+
+**softmax** — A function that converts a vector of raw scores into probabilities summing to 1.0.
+
+**SRAM (Static RAM)** — Fast on-chip memory used for caches and registers on GPUs.
+
+**transformer layer** — A processing unit consisting of an attention sublayer and a feed-forward network sublayer, stacked N times.
+
+**UMA (Unified Memory Architecture)** — A system where CPU and GPU share the same physical memory (e.g., Apple Silicon).
+
+**VRAM (Video RAM)** — GPU-attached memory for model weights and intermediate data.

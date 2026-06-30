@@ -736,3 +736,33 @@ When investigating slow performance:
 **Related:** [Chapter 11: Metal Backend Internals](11-metal-backend-internals.md#profiling-counters), [Chapter 13: Batched Dispatch and Fusion](13-batched-dispatch-and-fusion.md#real-world-example-qwen35-optimization-journey)
 
 **Next:** [Appendix: Atomic Operations →](appendix-atomics.md) | **Back:** [Appendix: Compile-Time Optimization ←](appendix-compile-time.md)
+
+---
+
+## Glossary
+
+**--profile flag** — CLI flag enabling per-operation timing instrumentation; incurs ~50% throughput loss due to forced GPU syncs.
+
+**barrier count** — Number of GPU memory barriers per token; high counts indicate serialized execution.
+
+**batch_mode** — Metal flag suppressing per-dispatch memory barriers for better throughput.
+
+**cpuFallback()** — Metal method that flushes GPU work and returns a CPU backend reference for permitted fallback operations.
+
+**dispatch count** — Number of GPU kernel invocations per token; optimal range 300–600.
+
+**megakernel** — A fused GPU kernel combining multiple operations into a single dispatch, reducing dispatch and barrier overhead.
+
+**missing kernel policy** — The rule that GPU backends must `@panic` on unimplemented kernels, never silently falling back to CPU.
+
+**Op enum** — Enumeration of profiled operation types (emb_lookup, rms_norm, gemv_qkv, sdpa, etc.) indexing into counter arrays.
+
+**PerfCounters** — The profiling struct accumulating per-operation call counts and microsecond durations.
+
+**performance regression** — A silent slowdown where the model still runs correctly but at lower throughput.
+
+**resetCounters()** — Function zeroing all dispatch/barrier/sync counters at the start of each token's profiling window.
+
+**softmax_cpu_threshold** — Minimum vector size (128) below which GPU softmax is slower than CPU SIMD, triggering a permitted fallback.
+
+**sync count** — Number of CPU/GPU round-trip flushes per token; should be ≤3.

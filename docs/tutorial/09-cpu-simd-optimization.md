@@ -761,3 +761,33 @@ This is inspired by [PowerInfer](https://github.com/Tiiny-AI/PowerInfer) and [Tu
 **In the code:** [src/backend/kernels/cpu/gemv.zig](../../src/backend/kernels/cpu/gemv.zig) (`isBlockSparse`, `sparse_threshold`), [src/backend/kernels/cpu/gemv_f32.zig](../../src/backend/kernels/cpu/gemv_f32.zig), [src/backend/kernels/cpu/gemv_bf16.zig](../../src/backend/kernels/cpu/gemv_bf16.zig), [src/backend/kernels/cpu/norm.zig](../../src/backend/kernels/cpu/norm.zig), [src/ops/mlx.zig](../../src/ops/mlx.zig) (MLX GEMV with factored dequant)
 
 **Next:** [Chapter 10: Memory Safety →](10-memory-safety.md) | **Back:** [Chapter 8: Backends ←](08-backends.md) | **Product docs:** [Architecture](../ARCHITECTURE.md) · [Models](../MODELS.md)
+
+---
+
+## Glossary
+
+**@mulAdd (FMA)** — Fused Multiply-Add; a single instruction computing a×b+c with no intermediate rounding, mapped to hardware FMA units.
+
+**@reduce** — Zig builtin that collapses a SIMD vector to a scalar via a specified operation (e.g., `.Add` for horizontal sum).
+
+**@splat** — Zig builtin that broadcasts a scalar value to all lanes of a SIMD vector.
+
+**@Vector** — Zig's portable SIMD type mapping to hardware vector registers; e.g., `@Vector(8, f32)` is 8 packed f32 values.
+
+**activation sparsity** — The phenomenon where ~40% of activation values are near-zero after SiLU, allowing those GEMV blocks to be skipped.
+
+**AVX2 (Advanced Vector Extensions 2)** — Intel/AMD 256-bit SIMD instruction set providing 8-wide f32 operations.
+
+**cache locality** — Accessing memory sequentially to maximize CPU cache hits and minimize cache misses.
+
+**isBlockSparse** — A SIMD max-abs check that determines whether all input values in a block are below a threshold, enabling the block to be skipped.
+
+**multi-row GEMV batching** — Processing multiple output rows simultaneously (NR=2 or NR=4) to amortize the cost of loading the input vector.
+
+**NEON** — ARM's SIMD instruction set providing 128-bit vector operations on aarch64 processors.
+
+**NR (Number of Rows)** — The number of output rows computed per batch in a multi-row GEMV kernel (e.g., NR=4 for Q8_0 on CPU).
+
+**register pressure** — The constraint from having finite hardware SIMD registers; exceeding capacity causes spills to slower stack memory.
+
+**tail loop** — A scalar cleanup loop handling remaining elements when data length is not a multiple of the SIMD vector width.

@@ -156,3 +156,35 @@ Agave v1 implementation runs canvas attention serially (one token at a time thro
 | Diffusion + MTP | TBD | Partial | Yes |
 
 The self-correction property is unique to diffusion: if an early token becomes inconsistent with later context, re-noising lets the model fix it. Autoregressive models commit to each token irrevocably.
+
+---
+
+## Glossary
+
+**anchor token** — A canvas token that has been accepted (locked) during denoising; provides stable context for resolving remaining positions.
+
+**bidirectional attention** — Attention where each canvas position can see all other canvas positions simultaneously (no causal mask).
+
+**block autoregressive chaining** — Appending a fully denoised canvas to the KV cache and starting a new one conditioned on all prior context.
+
+**canvas** — A fixed-size buffer (default 256 tokens) initialized with random vocabulary tokens that is iteratively denoised to produce output.
+
+**confidence-based acceptance** — Locking a canvas position when the model's softmax probability for its top token exceeds a threshold.
+
+**dLLM (diffusion language model)** — A language model generating text by iteratively denoising random tokens in parallel rather than autoregressively.
+
+**denoising step** — One forward pass over the canvas followed by acceptance/re-noising decisions at each position.
+
+**diffusion-canvas** — CLI parameter setting the canvas size (default 256 tokens).
+
+**diffusion-confidence** — CLI parameter setting the probability threshold for locking a canvas position.
+
+**diffusion-steps** — CLI parameter controlling the maximum denoising iterations per canvas block (default 16).
+
+**re-noising** — Replacing a rejected canvas token with a fresh random token to give the model a clean slate.
+
+**self-correction** — The property unique to diffusion: if an early token becomes inconsistent with later context, re-noising lets the model fix it.
+
+**uniform state diffusion** — Initializing canvas positions with arbitrary vocabulary entries rather than special [MASK] tokens.
+
+**VLM (Vision Language Model)** — A model combining vision encoding and language generation for image understanding tasks.

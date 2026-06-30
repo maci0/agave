@@ -911,3 +911,31 @@ When adding support for a new model architecture:
 **Related:** [Chapter 4: Quantization](04-quantization.md#mlx-affine-quantization) (MLX format details)
 
 **Next:** [Chapter 15: Chat Templates →](15-chat-templates.md) | **Back:** [Chapter 13: Batched Dispatch and Fusion ←](13-batched-dispatch-and-fusion.md) | **Product docs:** [Models](../MODELS.md)
+
+---
+
+## Glossary
+
+**A_log pre-conversion** — The convention where GGUF stores SSM decay as pre-computed `-exp(A_log)` while SafeTensors stores raw `A_log` requiring init-time conversion.
+
+**dimension order normalization** — Reversing GGUF's inner-first dimension order so `dims[0]` always means the output (row) dimension, matching PyTorch convention.
+
+**Format VTable** — A struct of function pointers implementing format polymorphism (`getTensor`, `getMetaU32`, etc.).
+
+**GGUF (GPT-Generated Unified Format)** — A single-file binary model format with mmap-friendly layout, quantization metadata embedded in weight blocks.
+
+**is_safetensors flag** — A boolean on the Format interface decoupling format detection from convention selection.
+
+**metadata key mapping** — A bidirectional table translating between GGUF metadata keys and HuggingFace config.json keys.
+
+**mmproj** — A separate GGUF file containing vision encoder and multimodal projector weights, loaded alongside the main language model.
+
+**norm weight caching** — Using a per-tensor fixed-size cache for dequantized norm weights, avoiding stale GPU buffer reads.
+
+**Q/Gate split layout** — The memory layout difference for interleaved Q and gate values: element-interleaved per head (GGUF) vs. concatenated halves (SafeTensors).
+
+**SafeTensors** — A multi-file model format from HuggingFace storing tensors with JSON metadata headers.
+
+**silent correctness failure** — A bug where the model runs without errors but produces garbage output due to mismatched format conventions.
+
+**tensor name mapping** — Translation between GGUF short names (e.g., `attn_qkv`) and HuggingFace full paths (e.g., `linear_attn.in_proj_qkv.weight`).

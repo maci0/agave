@@ -351,3 +351,39 @@ Enable with `--megakernel`. See [Chapter 13](13-batched-dispatch-and-fusion.md) 
 **Math reference:** [SiLU](appendix-math.md#silu-swish), [GELU](appendix-math.md#gelu-gaussian-error-linear-unit), [Sigmoid](appendix-math.md#sigmoid), [Softplus](appendix-math.md#softplus)
 
 **Next:** [Chapter 4: Quantization →](04-quantization.md) | **Back:** [Chapter 2: The Transformer ←](02-the-transformer.md) | **Product docs:** [Architecture](../ARCHITECTURE.md)
+
+---
+
+## Glossary
+
+**activation function** — A nonlinear transformation applied element-wise to introduce non-linearity into the network.
+
+**FFN (Feed-Forward Network)** — The second sublayer in each transformer layer; processes each position independently through expansion, activation, and compression.
+
+**gate projection** — A linear projection whose output is passed through an activation and used to gate another projection.
+
+**GELU (Gaussian Error Linear Unit)** — An activation function similar to SiLU but using a Gaussian-weighted smoothing.
+
+**GLU (Gated Linear Unit)** — A structure where one projection's output gates (controls) another via element-wise multiplication.
+
+**megakernel fusion** — Combining multiple GPU dispatches (e.g., gate + up + down projections) into a single kernel to eliminate memory round-trips.
+
+**MoE (Mixture of Experts)** — An architecture with multiple FFN "experts" where a router selects a subset to process each token, enabling large capacity with sparse activation.
+
+**ReLU (Rectified Linear Unit)** — Activation function: max(0, x); sets negatives to zero. ReLU² squares the result.
+
+**router** — A small learned network that scores and selects which experts should process each token.
+
+**shared expert** — An expert that is always active regardless of router output, providing a baseline contribution.
+
+**sigmoid** — The function 1/(1 + e^(−x)) mapping any value to (0, 1), used for gates and routing.
+
+**SiLU / Swish** — Activation function: x × sigmoid(x); smooth, passes positive values, dampens negatives.
+
+**Softplus** — Activation function: log(1 + exp(x)); a smooth approximation ensuring positive output, used for SSM timestep computation.
+
+**sparse activation** — Only a small subset of total parameters is used per token; the rest remain idle, reducing compute cost.
+
+**SwiGLU (Swish-Gated Linear Unit)** — A gated FFN architecture using SiLU activation on a gate projection multiplied element-wise with an up-projection.
+
+**top-K routing** — Selecting the K highest-scoring experts for each token in a MoE layer.

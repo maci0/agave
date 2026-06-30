@@ -417,3 +417,29 @@ MTP GGUFs must include the nextn tensors. Look for "-MTP" in the filename (e.g.,
 **Related:** [Chapter 2: The Transformer](02-the-transformer.md) (attention, RoPE, normalization), [Chapter 3: FFN](03-feed-forward-networks.md) (SwiGLU, MoE), [Chapter 7: Sampling](07-sampling.md) (argmax, temperature), [Chapter 17: Speculative Decoding](17-speculative-decoding.md) (DDTree, n-gram, verification)
 
 **Next:** [Appendix: Mathematical Operations →](appendix-math.md) | **Back:** [Chapter 17: Speculative Decoding ←](17-speculative-decoding.md) | **Product docs:** [Models](../MODELS.md)
+
+---
+
+## Glossary
+
+**eh_proj** — The GEMV projection mapping the concatenated `[embed; hidden]` vector from 2×n_embd back to n_embd dimensions.
+
+**enorm** — The offset RMSNorm weight tensor applied to the token embedding branch in an MTP head.
+
+**hnorm** — The offset RMSNorm weight tensor applied to the hidden state branch in an MTP head.
+
+**MTP head** — A single transformer layer with fusion plumbing that takes the model's pre-norm hidden state and current token embedding to produce a draft token at ~5% of a full forward cost.
+
+**nextn tensors** — GGUF tensor names prefixed with `blk.N.nextn.*` that store MTP head weights.
+
+**nextn_predict_layers** — A GGUF metadata field indicating how many MTP depths are present in the checkpoint.
+
+**offset RMSNorm (+1 norm)** — A variant where weight is applied as `(1 + w) * x_norm` instead of `w * x_norm`, ensuring the normalized input passes through even if w decays to zero.
+
+**pre-norm hidden state** — The residual stream after the last attention block but before the final FFN residual and output norm.
+
+**shared_head_head** — The output GEMV weight matrix in an MTP head mapping n_embd → vocab_size.
+
+**shared_head_norm** — The RMSNorm weight applied before the MTP head's output projection.
+
+**SSM state checkpoint/restore** — Copying recurrent state before speculation and restoring it on rejection, required for hybrid models that mutate state in-place.

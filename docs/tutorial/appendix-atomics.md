@@ -647,3 +647,37 @@ zig build -Dsanitize-thread
 **Related:** [Chapter 12: CPU Parallelism](12-cpu-parallelism.md#memory-ordering), [Zig std.atomic documentation](https://ziglang.org/documentation/master/std/#std.atomic)
 
 **Back:** [Appendix: Profiling and Debugging ←](appendix-profiling.md)
+
+---
+
+## Glossary
+
+**.acquire** — Atomic load ordering ensuring all writes before a paired `.release` store are visible after this load.
+
+**.monotonic** — Weakest atomic ordering: guarantees atomicity but no cross-thread synchronization of surrounding memory.
+
+**.release** — Atomic store ordering ensuring all prior writes are visible before this store becomes visible.
+
+**.seq_cst (sequential consistency)** — Strongest ordering: all threads see all operations in the same global order; slowest, rarely needed.
+
+**atomic operation** — A CPU instruction performing a read-modify-write on memory as one indivisible step, preventing race conditions.
+
+**CAS (Compare-And-Swap)** — An atomic operation updating a value only if it currently matches an expected value.
+
+**cmpxchgStrong** — A CAS variant that only fails if values genuinely differ; used for one-shot CAS.
+
+**cmpxchgWeak** — A CAS variant that may spuriously fail; faster on ARM, best in retry loops.
+
+**fence** — An explicit memory barrier ordering non-atomic writes relative to atomic operations.
+
+**futex (fast userspace mutex)** — A kernel primitive letting threads sleep cheaply until a memory location changes.
+
+**hyperthreading** — Intel's simultaneous multithreading where two logical cores share one physical core's execution units.
+
+**race condition** — A bug where two threads read and write the same memory without coordination, corrupting data.
+
+**spinLoopHint** — A CPU hint (`pause` on x86, `yield` on ARM) reducing power during busy-wait loops.
+
+**std.atomic.Value(T)** — Zig's atomic wrapper providing load, store, fetchAdd, and compare-and-swap with configurable ordering.
+
+**torn read/write** — Reading a partially-updated value when a multi-byte write is split across two CPU operations.

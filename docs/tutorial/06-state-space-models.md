@@ -385,3 +385,35 @@ Layer types are determined at init from model **metadata** (descriptive informat
 **Math reference:** [Convolution (1D Causal)](appendix-math.md#convolution-1d-causal), [Outer Product](appendix-math.md#outer-product), [Softplus](appendix-math.md#softplus)
 
 **Next:** [Chapter 7: Sampling →](07-sampling.md) | **Back:** [Chapter 5: Memory and Caching ←](05-memory-and-caching.md) | **Product docs:** [Architecture](../ARCHITECTURE.md)
+
+---
+
+## Glossary
+
+**causal convolution** — A sliding-window operation combining nearby values using learned weights, looking only at past positions.
+
+**d_conv** — The width of the causal convolution window (e.g., 4 = current + 3 past inputs).
+
+**decay factor** — A multiplier < 1 applied to the state matrix each step, causing older information to exponentially fade.
+
+**DeltaNet** — A linear-complexity recurrence using the delta rule (error-correcting outer-product updates) to maintain associative memory.
+
+**delta rule** — An update rule where the state correction is proportional to the error between the desired value and what the state already encodes.
+
+**discretization (dt)** — Computing a per-step timestep from the input, controlling how much the state decays and how much new information is written.
+
+**hybrid model** — A model that interleaves attention layers (for exact recall) with SSM layers (for speed) in a single architecture.
+
+**linear-complexity recurrence** — An update loop running in O(d²) per step (constant with respect to sequence length), unlike O(n) attention.
+
+**Mamba-2** — An SSM architecture with input-dependent discretization (dt), allowing the model to selectively remember or forget.
+
+**outer product** — Forming a matrix by multiplying a column vector by a row vector; used to write key-value associations into the state matrix.
+
+**recurrence** — A computation where each step depends on the previous step's output, processing sequentially.
+
+**ring buffer** — A fixed-size circular array where new entries overwrite the oldest, avoiding reallocation.
+
+**SSM (State Space Model)** — A sequence model that maintains a fixed-size state matrix as a compressed summary of all past tokens, updating in O(1) per step.
+
+**state matrix** — A fixed-size matrix (e.g., 128×128 per head) that accumulates key-value associations via outer-product updates with decay.

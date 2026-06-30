@@ -936,3 +936,31 @@ flowchart TD
 **Related:** [Chapter 11: Metal Backend Internals](11-metal-backend-internals.md#batch-mode-suppressing-intermediate-barriers)
 
 **Next:** [Chapter 14: Format Conventions →](14-format-conventions.md) | **Back:** [Chapter 12: CPU Parallelism ←](12-cpu-parallelism.md) | **Product docs:** [Architecture](../ARCHITECTURE.md)
+
+---
+
+## Glossary
+
+**addRmsNorm** — A fused operation performing residual addition and RMS normalization in a single kernel dispatch.
+
+**addScaled** — A fused operation computing `dst += src * scale` on GPU, used for MoE expert accumulation.
+
+**dispatch overhead** — The CPU-side cost (~5–10 µs) of setting up pipeline state, binding buffers, and launching a GPU kernel.
+
+**fusion** — Combining sequential GPU operations into a single kernel so intermediate results stay in registers.
+
+**gemvMulti** — A batched GEMV interface dispatching multiple matrix-vector multiplies sharing the same input vector in a single command.
+
+**GemvOp** — A struct describing one GEMV operation within a gemvMulti batch: weight data, output buffer, and row count.
+
+**mega_grid_sync** — An atomic-counter-based grid-level barrier synchronizing all threadgroups within a megakernel dispatch.
+
+**siluMul** — A fused operation computing `silu(a) * b` in one kernel, eliminating the intermediate activation buffer.
+
+**splitQGate** — A GPU kernel deinterleaving Q and gate values from an interleaved buffer into separate contiguous buffers.
+
+**Tier 1 (Fused FFN)** — Megakernel level combining gate + up + activation into a single dispatch (3→1 per FFN).
+
+**Tier 2 (True Megakernel)** — Megakernel level executing an entire transformer layer in one dispatch using composable building blocks.
+
+**Tier 3 (Composed Megakernel)** — Auto-generated model-specific MSL from a ModelDesc struct; no hand-written shader code needed.

@@ -558,3 +558,19 @@ zig build test
 **Related:** [Zig Language Reference — defer](https://ziglang.org/documentation/master/#defer), [Zig Language Reference — errdefer](https://ziglang.org/documentation/master/#errdefer)
 
 **Next:** [Chapter 11: Metal Backend Internals →](11-metal-backend-internals.md) | **Back:** [Chapter 9: CPU SIMD Optimization ←](09-cpu-simd-optimization.md) | **Product docs:** [Architecture](../ARCHITECTURE.md)
+
+---
+
+## Glossary
+
+**arena allocator** — A bulk allocator that frees all allocations at once via `deinit()`, useful for short-lived temporary data.
+
+**defer** — Zig keyword scheduling a statement to execute when the current scope exits, regardless of normal or error exit.
+
+**deinit() pattern** — Convention where structs with owned resources provide a `deinit()` method that releases all internal allocations.
+
+**errdefer** — Zig keyword scheduling cleanup only if the scope exits via an error return.
+
+**explicit allocation** — Zig's memory model where every allocation must be paired with a manual free; no garbage collector.
+
+**std.testing.allocator** — Zig's test allocator that tracks all allocations and automatically detects memory leaks when a test completes.

@@ -764,3 +764,29 @@ flowchart TD
 **Related:** [Metal Shading Language Specification](https://developer.apple.com/metal/Metal-Shading-Language-Specification.pdf), [Metal Programming Guide (archived)](https://developer.apple.com/library/archive/documentation/Miscellaneous/Conceptual/MetalProgrammingGuide/), [Metal Documentation](https://developer.apple.com/documentation/metal)
 
 **Next:** [Chapter 12: CPU Parallelism →](12-cpu-parallelism.md) | **Back:** [Chapter 10: Memory Safety ←](10-memory-safety.md) | **Product docs:** [Architecture](../ARCHITECTURE.md)
+
+---
+
+## Glossary
+
+**batch mode** — A Metal backend mode (`beginBatch`/`endBatch`) that suppresses intermediate memory barriers between independent operations.
+
+**BufRef** — A struct containing a Metal buffer object and a byte offset, referencing sub-regions within a page-aligned buffer.
+
+**buffer caching** — Storing MTLBuffer wrappers keyed by host pointer to avoid repeated ObjC allocation overhead.
+
+**command buffer batching** — Maintaining a persistent command buffer and encoder across dispatches, committing all work at once.
+
+**memory barrier** — A GPU synchronization primitive ensuring write visibility between kernel dispatches.
+
+**ModelDesc** — A struct describing model architecture used by `mega_compose.zig` to auto-generate megakernel MSL.
+
+**page alignment** — The requirement that `newBufferWithBytesNoCopy` pointers be aligned to 16 KB page boundaries on Apple Silicon.
+
+**profiling counters** — Runtime counters (dispatch_count, barrier_count, sync_count) tracked when `--profile` is enabled.
+
+**threadgroup memory** — Fast on-chip shared memory accessible by all threads in a threadgroup; limited to 32 KB on Apple Silicon.
+
+**token tiling** — GEMM optimization where multiple input tokens share a single weight load (e.g., TILE_T=8 for Q8_0).
+
+**zero-copy buffer wrapping** — Creating a Metal GPU buffer that references existing CPU memory without copying data, via `newBufferWithBytesNoCopy`.

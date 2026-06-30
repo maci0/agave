@@ -344,3 +344,59 @@ This is why inference speed matters — generating 100 tokens requires 100 seque
 **In the code:** [src/tokenizer/bpe.zig](../../src/tokenizer/bpe.zig) (tokenizer), [src/backend/kernels/cpu/embedding.zig](../../src/backend/kernels/cpu/embedding.zig) (embedding lookup), [src/ops/math.zig](../../src/ops/math.zig) (argmax, sampleToken)
 
 **Next:** [Chapter 2: The Transformer →](02-the-transformer.md) | **Product docs:** [Architecture](../ARCHITECTURE.md)
+
+---
+
+## Glossary
+
+**argmax** — The operation that finds the index of the highest value in an array; used for greedy decoding.
+
+**autoregressive** — A generation mode where each output token is fed back as input to produce the next token.
+
+**BOS (Beginning of Sequence)** — A special token signaling the start of a sequence.
+
+**BPE (Byte Pair Encoding)** — A tokenization algorithm that iteratively merges the most frequent adjacent byte/character pairs to build a vocabulary.
+
+**byte-level BPE** — A BPE variant where every possible byte (0x00–0xFF) maps to a printable character, ensuring any input can be tokenized.
+
+**dequantize** — Convert quantized (compressed) values back to full-precision floats.
+
+**dispatch overhead** — The cost of sending work to an accelerator (GPU) and synchronizing, which can exceed compute cost for small operations.
+
+**embedding** — A learned fixed-size float vector that encodes a token's meaning; looked up from a table by token ID.
+
+**embedding dimension (n_embd)** — The number of floats in each embedding vector (typically 1024–8192).
+
+**EOS (End of Sequence)** — A special token signaling that generation should stop.
+
+**FP32** — 32-bit floating-point format; 4 bytes per value, full precision.
+
+**BF16 (bfloat16)** — 16-bit brain floating-point format; same exponent range as FP32 but fewer mantissa bits.
+
+**forward pass** — A single pass of input data through all model layers to produce output.
+
+**frozen weights** — Model parameters that are fixed and no longer updated (inference-only).
+
+**GEMV (General Matrix-Vector multiply)** — Multiplying a weight matrix by a single input vector to produce one output vector.
+
+**inference** — Using a trained model's frozen weights to generate new output, as opposed to training.
+
+**logits** — Raw, unnormalized scores output by the model — one per vocabulary token — before conversion to probabilities.
+
+**pre-trained** — A model whose weights have already been learned through training.
+
+**quantized** — Compressed to a lower-precision numerical format to save memory.
+
+**SPM (SentencePiece)** — A tokenization algorithm that uses greedy longest-match against a vocabulary, without requiring a merge table.
+
+**tensor** — A general multi-dimensional array (scalar = 0D, vector = 1D, matrix = 2D, etc.).
+
+**tied embeddings** — When input embedding and output projection share the same weight matrix, saving memory.
+
+**token** — An integer ID representing a subword piece of text — the basic unit language models operate on.
+
+**tokenizer** — A component that converts between text strings and sequences of token IDs.
+
+**vocabulary** — The complete set of all tokens a model can recognize, each mapped to a unique integer ID.
+
+**weights** — The learned numerical parameters (matrix/vector values) that encode a model's knowledge.
