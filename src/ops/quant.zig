@@ -235,18 +235,31 @@ pub fn dequantToF32(output: []f32, data: [*]const u8, dtype: DType, n: usize) vo
             }
         },
         .iq4_xs => {
-            // IQ4_XS: 136 bytes/256 elements. f16 d + u16 scales_h + u8 scales_l[4] + u8 qs[128].
+            // IQ4_XS: 136 bytes/256 elements.
+            //   d        f16   [0..1]   main scale
+            //   scales_h u16   [2..3]   2 high bits per sub-block (8 sub-blocks)
+            //   scales_l u8[4] [4..7]   4 low  bits per sub-block
+            //   qs       u8[128][8..135] 256 nibbles via iq4nl_table
+            // Sub-scale for sub-block ib: s = low4 | (high2 << 4), range 0..63
+            // Effective: d * (s - 32) * 0.0625 * iq4nl_table[nibble]
             const bpb = @import("../backend/backend.zig").iq4_xs_block_bytes;
             const qk: usize = 256;
             const nb = (n + qk - 1) / qk;
             for (0..nb) |b| {
                 const blk = data[b * bpb ..];
                 const d: f32 = @floatCast(@as(*const f16, @ptrCast(@alignCast(blk))).*);
+                const scales_h = std.mem.readInt(u16, blk[2..4], .little);
+                const scales_l = blk[4..8];
                 const count = @min(qk, n - b * qk);
                 for (0..count) |i| {
-                    const byte = blk[8 + i / 2]; // qs starts at offset 8
+                    const ib32: usize = i / 32; // sub-block index (0..7)
+                    const low4: u6 = @truncate((scales_l[ib32 >> 1] >> @intCast(4 * (ib32 & 1))) & 0xF);
+                    const high2: u6 = @truncate((scales_h >> @intCast(2 * ib32)) & 0x3);
+                    const s: i32 = @intCast(low4 | (high2 << 4));
+                    const sub_scale: f32 = d * @as(f32, @floatFromInt(s - 32)) * 0.0625;
+                    const byte = blk[8 + i / 2];
                     const nibble: u4 = if (i % 2 == 0) @truncate(byte & 0xF) else @truncate(byte >> 4);
-                    output[b * qk + i] = d * @as(f32, @floatFromInt(iq4nl_table[nibble]));
+                    output[b * qk + i] = sub_scale * @as(f32, @floatFromInt(iq4nl_table[nibble]));
                 }
             }
         },
