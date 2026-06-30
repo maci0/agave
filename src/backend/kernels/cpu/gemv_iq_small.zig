@@ -146,13 +146,17 @@ pub fn gemvIQ2_XXS(x: [*]const f32, w: [*]const u8, y: [*]f32, n: usize, k: usiz
                 yi += 32;
                 gi += 8;
             }) {
+                const aux = std.mem.readInt(u32, qs[gi + 4 ..][0..4], .little);
+                const dl = d * (0.5 + @as(f32, @floatFromInt(aux >> 28))) * 0.25;
+                // Signs: 4 groups × 7-bit index into ksigns_iq2xs → 8-bit mask (matches llama.cpp)
+                const sb0 = ksigns_iq2xs[(aux >> 0) & 0x7F];
+                const sb1 = ksigns_iq2xs[(aux >> 7) & 0x7F];
+                const sb2 = ksigns_iq2xs[(aux >> 14) & 0x7F];
+                const sb3 = ksigns_iq2xs[(aux >> 21) & 0x7F];
                 const g0 = iq2xxs_grid[qs[gi + 0]];
                 const g1 = iq2xxs_grid[qs[gi + 1]];
                 const g2 = iq2xxs_grid[qs[gi + 2]];
                 const g3 = iq2xxs_grid[qs[gi + 3]];
-                const aux = std.mem.readInt(u32, qs[gi + 4 ..][0..4], .little);
-                const dl = d * (0.5 + @as(f32, @floatFromInt(aux >> 28))) * 0.25;
-                const signs = aux & 0x0FFFFFFF;
 
                 const base = b * qk + yi;
                 for (0..8) |j| {
@@ -160,10 +164,10 @@ pub fn gemvIQ2_XXS(x: [*]const f32, w: [*]const u8, y: [*]f32, n: usize, k: usiz
                     const v1: i8 = @bitCast(@as(u8, @truncate(g1 >> @as(u6, @intCast(j * 8)))));
                     const v2: i8 = @bitCast(@as(u8, @truncate(g2 >> @as(u6, @intCast(j * 8)))));
                     const v3: i8 = @bitCast(@as(u8, @truncate(g3 >> @as(u6, @intCast(j * 8)))));
-                    const s0: f32 = if ((signs >> @intCast(j)) & 1 != 0) -1.0 else 1.0;
-                    const s1: f32 = if ((signs >> @intCast(j + 8)) & 1 != 0) -1.0 else 1.0;
-                    const s2: f32 = if ((signs >> @intCast(j + 16)) & 1 != 0) -1.0 else 1.0;
-                    const s3: f32 = if ((signs >> @intCast(j + 24)) & 1 != 0) -1.0 else 1.0;
+                    const s0: f32 = if (sb0 & (@as(u8, 1) << @intCast(j)) != 0) -1.0 else 1.0;
+                    const s1: f32 = if (sb1 & (@as(u8, 1) << @intCast(j)) != 0) -1.0 else 1.0;
+                    const s2: f32 = if (sb2 & (@as(u8, 1) << @intCast(j)) != 0) -1.0 else 1.0;
+                    const s3: f32 = if (sb3 & (@as(u8, 1) << @intCast(j)) != 0) -1.0 else 1.0;
                     if (base + j < k) sum += @as(f64, x[base + j]) * dl * @as(f32, @floatFromInt(v0)) * s0;
                     if (base + j + 8 < k) sum += @as(f64, x[base + j + 8]) * dl * @as(f32, @floatFromInt(v1)) * s1;
                     if (base + j + 16 < k) sum += @as(f64, x[base + j + 16]) * dl * @as(f32, @floatFromInt(v2)) * s2;
@@ -205,19 +209,23 @@ pub fn gemvIQ3_XXS(x: [*]const f32, w: [*]const u8, y: [*]f32, n: usize, k: usiz
             }) {
                 const aux = std.mem.readInt(u32, gas[gi..][0..4], .little);
                 const dl = d * (0.5 + @as(f32, @floatFromInt(aux >> 28))) * 0.5;
-                const signs = aux & 0x0FFFFFFF;
-
+                // Signs: 4 sub-groups × 7-bit index into ksigns_iq2xs (matches llama.cpp)
+                // Each sub-group covers 2 grid entries (8 elements: 4 from grid1, 4 from grid2).
                 const base = b * qk + yi;
-                for (0..8) |gi2| { // 8 grid entries per group of 32
-                    const grid_entry = iq3xxs_grid[qs[qi + gi2]];
-                    const elem_base = gi2 * 4;
+                for (0..4) |l| { // 4 sub-groups, each producing 8 elements
+                    const sign_byte = ksigns_iq2xs[(aux >> @intCast(7 * l)) & 0x7F];
+                    const grid1 = iq3xxs_grid[qs[qi + 2 * l + 0]];
+                    const grid2 = iq3xxs_grid[qs[qi + 2 * l + 1]];
+                    const elem_base = l * 8;
                     for (0..4) |j| {
-                        const v: i8 = @bitCast(@as(u8, @truncate(grid_entry >> @as(u5, @intCast(j * 8)))));
-                        const sign_bit = elem_base + j;
-                        const s: f32 = if ((signs >> @intCast(sign_bit)) & 1 != 0) -1.0 else 1.0;
-                        if (base + elem_base + j < k) {
-                            sum += @as(f64, x[base + elem_base + j]) * dl * @as(f32, @floatFromInt(v)) * s;
-                        }
+                        const v1: i8 = @bitCast(@as(u8, @truncate(grid1 >> @as(u5, @intCast(j * 8)))));
+                        const v2: i8 = @bitCast(@as(u8, @truncate(grid2 >> @as(u5, @intCast(j * 8)))));
+                        const s1: f32 = if (sign_byte & (@as(u8, 1) << @intCast(j)) != 0) -1.0 else 1.0;
+                        const s2: f32 = if (sign_byte & (@as(u8, 1) << @intCast(j + 4)) != 0) -1.0 else 1.0;
+                        if (base + elem_base + j < k)
+                            sum += @as(f64, x[base + elem_base + j]) * dl * @as(f32, @floatFromInt(v1)) * s1;
+                        if (base + elem_base + j + 4 < k)
+                            sum += @as(f64, x[base + elem_base + j + 4]) * dl * @as(f32, @floatFromInt(v2)) * s2;
                     }
                 }
             }
@@ -530,8 +538,10 @@ pub fn gemvIQ3_S(x: [*]const f32, w: [*]const u8, y: [*]f32, n: usize, k: usize)
                     const shift2: u4 = @intCast(7 - 2 * l);
                     const hi1: u9 = @truncate((@as(u16, qh_byte) << shift1) & 0x100);
                     const hi2: u9 = @truncate((@as(u16, qh_byte) << shift2) & 0x100);
-                    const idx1: u9 = @as(u9, qs[8 * ib32 + 2 * l + 0]) | hi1;
-                    const idx2: u9 = @as(u9, qs[8 * ib32 + 2 * l + 1]) | hi2;
+                    // qs layout: [idx0..3 in first half, idx4..7 in second half]
+                    // grid1 uses qs[l], grid2 uses qs[l+4] (matches llama.cpp dequantize_row_iq3_s)
+                    const idx1: u9 = @as(u9, qs[8 * ib32 + l]) | hi1;
+                    const idx2: u9 = @as(u9, qs[8 * ib32 + l + 4]) | hi2;
                     const g1 = iq3s_grid[idx1];
                     const g2 = iq3s_grid[idx2];
                     const sign_byte = signs[4 * ib32 + l];
