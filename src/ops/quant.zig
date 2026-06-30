@@ -274,7 +274,11 @@ pub fn dequantToF32(output: []f32, data: [*]const u8, dtype: DType, n: usize) vo
             @memset(output[0..n], 0);
         },
         else => {
-            @panic("dequantToF32: unsupported dtype");
+            // Unsupported dtype in dequantToF32 (used for LoRA merge path).
+            // Zero the output rather than panic — the LoRA merge will be skipped
+            // for this tensor, which is safer than crashing.
+            std.log.warn("dequantToF32: unsupported dtype {s}, zeroing output", .{@tagName(dtype)});
+            @memset(output[0..n], 0);
         },
     }
 }

@@ -392,8 +392,9 @@ pub const GGUFFile = struct {
             var buf: [name_buf_size]u8 = undefined;
             const gguf_name = hfNameToGguf(name, &buf) orelse return null;
             const info2 = self.tensors.getPtr(gguf_name) orelse {
-                if (self.lora_overrides.get(gguf_name)) |ov2| {
-                    return .{ .name = gguf_name, .n_dims = ov2.n_dims, .dims = ov2.dims, .dtype = .f32, .data_ptr = @ptrCast(ov2.data.ptr) };
+                // Use getEntry to get the stored key (owned by map), not the stack-local gguf_name.
+                if (self.lora_overrides.getEntry(gguf_name)) |entry| {
+                    return .{ .name = entry.key_ptr.*, .n_dims = entry.value_ptr.n_dims, .dims = entry.value_ptr.dims, .dtype = .f32, .data_ptr = @ptrCast(entry.value_ptr.data.ptr) };
                 }
                 return null;
             };

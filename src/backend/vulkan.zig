@@ -1256,8 +1256,10 @@ pub const VulkanBackend = struct {
                 if (data_size > 0) {
                     if (allocator.alloc(u8, data_size) catch null) |d| {
                         defer allocator.free(d);
-                        _ = getData(self.device, self.pipeline_cache, &data_size, d.ptr);
-                        saveVkCacheFile(d);
+                        // Only save if the second call succeeds (VK_SUCCESS=0).
+                        if (getData(self.device, self.pipeline_cache, &data_size, d.ptr) == 0) {
+                            saveVkCacheFile(d[0..data_size]);
+                        }
                     }
                 }
             }
