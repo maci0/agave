@@ -220,6 +220,8 @@ pub fn dequantToF32(output: []f32, data: [*]const u8, dtype: DType, n: usize) vo
         },
         .iq4_nl => {
             // IQ4_NL: 18 bytes/32 elements. f16 scale + 16 nibble bytes via iq4nl_table.
+            // Split packing: elements [0..15] use low nibbles, [16..31] use high nibbles.
+            // (Matches gemvIQ4_NL split packing; different from Q4_0 interleaved packing.)
             const bpb = @import("../backend/backend.zig").iq4_nl_block_bytes;
             const qk: usize = 32;
             const nb = (n + qk - 1) / qk;
@@ -227,10 +229,13 @@ pub fn dequantToF32(output: []f32, data: [*]const u8, dtype: DType, n: usize) vo
                 const blk = data[b * bpb ..];
                 const d: f32 = @floatCast(@as(*const f16, @ptrCast(@alignCast(blk))).*);
                 const count = @min(qk, n - b * qk);
-                for (0..count) |i| {
-                    const byte = blk[2 + i / 2];
-                    const nibble: u4 = if (i % 2 == 0) @truncate(byte & 0xF) else @truncate(byte >> 4);
-                    output[b * qk + i] = d * @as(f32, @floatFromInt(iq4nl_table[nibble]));
+                // First half: low nibbles; second half: high nibbles.
+                for (0..@min(qk / 2, count)) |j| {
+                    const byte = blk[2 + j];
+                    output[b * qk + j] = d * @as(f32, @floatFromInt(iq4nl_table[@as(u4, @truncate(byte & 0xF))]));
+                    if (b * qk + j + qk / 2 < n) {
+                        output[b * qk + j + qk / 2] = d * @as(f32, @floatFromInt(iq4nl_table[@as(u4, @truncate(byte >> 4))]));
+                    }
                 }
             }
         },
