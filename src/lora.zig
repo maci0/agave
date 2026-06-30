@@ -89,13 +89,20 @@ pub fn applyLoraGguf(
         addLoraMatrix(merged, lb, la, n, rank, k, scale);
 
         // Insert override keyed by the GGUF canonical name (dupe'd — mmap pointer will be freed).
+        // Use getOrPut to avoid leaking the key allocation on duplicate tensor names.
         const key = try allocator.dupe(u8, base_ti.name);
         errdefer allocator.free(key);
-        try base_gguf.lora_overrides.put(allocator, key, .{
+        const gop = try base_gguf.lora_overrides.getOrPut(allocator, key);
+        if (gop.found_existing) {
+            // Duplicate — free the new key and update value only.
+            allocator.free(key);
+            allocator.free(gop.value_ptr.data); // free old merged data
+        }
+        gop.value_ptr.* = .{
             .data = merged,
             .n_dims = base_ti.n_dims,
             .dims = base_ti.dims,
-        });
+        };
     }
 }
 

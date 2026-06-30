@@ -501,6 +501,7 @@ fn loadVkCacheFile(allocator: std.mem.Allocator) ?[]u8 {
     defer _ = if (comptime builtin.os.tag == .linux) P.system.close(fd) else std.c.close(fd);
     var s: std.c.Stat = undefined;
     if (std.c.fstat(fd, &s) != 0) return null;
+    if (s.size <= 0) return null;
     const size: usize = @intCast(s.size);
     const buf = allocator.alloc(u8, size) catch return null;
     var off: usize = 0;
@@ -520,8 +521,11 @@ fn saveVkCacheFile(data: []const u8) void {
         _ = std.c.mkdir(dir, 0o755);
     }
     const P = std.posix;
-    // O_WRONLY|O_CREAT|O_TRUNC = 0x201 on Linux/macOS
-    const fd = P.openat(P.AT.FDCWD, path, @bitCast(@as(u32, 0o1 | 0o100 | 0o1000)), 0o644) catch return;
+    // Platform-correct O_WRONLY|O_CREAT|O_TRUNC:
+    //   Linux:  O_WRONLY=1, O_CREAT=64(0o100), O_TRUNC=512(0o1000) → 577
+    //   macOS:  O_WRONLY=1, O_CREAT=512(0x200), O_TRUNC=1024(0x400) → 1537
+    const open_flags: u32 = if (comptime builtin.os.tag == .linux) (1 | 64 | 512) else (1 | 0x200 | 0x400);
+    const fd = P.openat(P.AT.FDCWD, path, @bitCast(open_flags), 0o644) catch return;
     defer _ = if (comptime builtin.os.tag == .linux) P.system.close(fd) else std.c.close(fd);
     var off: usize = 0;
     while (off < data.len) {

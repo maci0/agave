@@ -104,15 +104,19 @@ pub fn scheduleVerification(
 ) void {
     const R = blocks.len;
     if (R == 0) return;
+    // Caller must supply scratch with capacity ≥ R × γ.
+    std.debug.assert(scratch.len >= R * max_block);
+    // result.lengths / cur_len are [256]u32 — clamp to prevent OOB.
+    const R_clamped = @min(R, 256);
 
     // Compute survival probabilities for all blocks.
     for (blocks) |*b| b.computeSurvival();
 
     // Build candidate pool: every (r, j) with a_{r,j} > 0.
     var n_cands: usize = 0;
-    for (blocks, 0..) |b, r| {
+    for (blocks[0..R_clamped], 0..) |b, r| {
         for (0..b.n) |j| {
-            if (b.a[j] > 0.0) {
+            if (b.a[j] > 0.0 and n_cands < scratch.len) {
                 scratch[n_cands] = .{
                     .req = @intCast(r),
                     .pos = @intCast(j),
@@ -131,14 +135,14 @@ pub fn scheduleVerification(
     }.lt);
 
     // Initialise per-request verification lengths to 0.
-    @memset(result.lengths[0..@min(R, 256)], 0);
+    @memset(result.lengths[0..R_clamped], 0);
 
     // State: current verification length per request.
     var cur_len: [256]u32 = .{0} ** 256;
-    // Starting point: baseline batch = R (one anchor token per request, no drafts).
-    var batch_size: u32 = @intCast(R);
-    // Expected accepts at baseline = R (each request gets its target bonus token).
-    var tau: f32 = @floatFromInt(R);
+    // Starting point: baseline batch = R_clamped (one anchor token per request, no drafts).
+    var batch_size: u32 = @intCast(R_clamped);
+    // Expected accepts at baseline = R_clamped (each request gets its target bonus token).
+    var tau: f32 = @floatFromInt(R_clamped);
     var theta_best: f32 = tau * profile.stepsPerSec(batch_size);
 
     // Record baseline as current best.
@@ -164,7 +168,7 @@ pub fn scheduleVerification(
         if (theta > theta_best) {
             theta_best = theta;
             // Snapshot current lengths as the new best.
-            @memcpy(result.lengths[0..@min(R, 256)], cur_len[0..@min(R, 256)]);
+            @memcpy(result.lengths[0..R_clamped], cur_len[0..R_clamped]);
             result.batch_size = batch_size;
             result.expected_accepts = tau;
         } else {
@@ -246,7 +250,9 @@ pub const RnnHead = struct {
     w1: []const f32,
     /// W2 row-major [rank, vocab_size].
     w2: []const f32,
-    /// W_g, W_c, W_o jointly packed as [3*(2r+d), r] — split gate/candidate/output.
+    /// W_g, W_c, W_o jointly packed row-major as [3*r, 2r+d] — split gate/candidate/output.
+    /// w_gco[ri*(2r+d)..(ri+1)*(2r+d)] = row ri of W_g;
+    /// w_gco[(r+ri)*(2r+d)..] = row ri of W_c; w_gco[(2r+ri)*(2r+d)..] = row ri of W_o.
     w_gco: []const f32,
     vocab_size: u32,
     rank: u32,
@@ -256,12 +262,14 @@ pub const RnnHead = struct {
     /// h_k: backbone hidden at position k (hidden_dim floats).
     /// prev_token: x_{k-1}.
     /// bias: output B_k(x_{<k}, ·) written here (vocab_size floats).
+    /// z_scratch: caller-provided scratch of length ≥ 2*rank + hidden_dim (zero-alloc hot path).
     pub fn step(
         self: RnnHead,
-        state: []f32,      // [rank], updated in-place
+        state: []f32,       // [rank], updated in-place
         prev_token: u32,
-        h_k: []const f32,  // [hidden_dim]
-        bias: []f32,        // [vocab_size], output
+        h_k: []const f32,   // [hidden_dim]
+        bias: []f32,         // [vocab_size], output
+        z_scratch: []f32,    // [≥ 2*rank + hidden_dim], caller-owned scratch
     ) void {
         const r = self.rank;
         const d = self.hidden_dim;
@@ -269,8 +277,9 @@ pub const RnnHead = struct {
         const z_dim = 2 * r + d;
 
         // Build z_k = [s_{k-1}; W1[prev_token]; h_k]
-        var z_buf: [max_block * 4 + 4096]f32 = undefined; // generous upper bound
-        const z = z_buf[0..z_dim];
+        // Caller provides z_scratch of length ≥ z_dim (no hot-path allocation).
+        std.debug.assert(z_scratch.len >= z_dim);
+        const z = z_scratch[0..z_dim];
         @memcpy(z[0..r], state[0..r]);                         // s_{k-1}
         @memcpy(z[r .. r + r], self.w1[prev_token * r ..][0..r]); // W1[x_{k-1}]
         @memcpy(z[2 * r .. 2 * r + d], h_k);                   // h_k

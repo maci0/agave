@@ -349,15 +349,16 @@ pub const Qwen35Model = struct {
         //   regular forward pass runs blk.0..n_layers-1 and mtpForward uses mtp_lid = n_layers+depth.
         const nextn_at_n = f.layerTensor(self.n_layers, "nextn.eh_proj") != null or
             f.layerTensor(self.n_layers, "nextn.eh_proj.weight") != null;
-        const nextn_at_n1 = f.layerTensor(self.n_layers - 1, "nextn.eh_proj") != null or
-            f.layerTensor(self.n_layers - 1, "nextn.eh_proj.weight") != null;
+        const nextn_at_n1 = self.n_layers > 0 and (
+            f.layerTensor(self.n_layers - 1, "nextn.eh_proj") != null or
+            f.layerTensor(self.n_layers - 1, "nextn.eh_proj.weight") != null);
         if (nextn_at_n) {
             self.n_mtp_layers = f.getArchU32(arch, "nextn_predict_layers") orelse 1;
         } else if (nextn_at_n1) {
             // block_count includes MTP heads: last block is nextn head, adjust n_layers down
             const nc = f.getArchU32(arch, "nextn_predict_layers") orelse 1;
             self.n_mtp_layers = nc;
-            self.n_layers -= nc;
+            self.n_layers = if (nc < self.n_layers) self.n_layers - nc else 0;
         }
 
         std.debug.assert(self.n_head % self.n_head_kv == 0);
