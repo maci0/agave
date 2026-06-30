@@ -16,7 +16,7 @@ By the end of this tutorial, you'll understand:
 - **State space models**: Linear-time alternatives to quadratic attention (DeltaNet, Mamba-2)
 - **Sampling strategies**: Temperature, top-k, top-p, min-p, XTC, DRY, Mirostat, logit bias, grammar-constrained decoding
 - **Compute backends**: How CPU, GPU (CUDA, Metal, Vulkan, ROCm, WebGPU) backends execute kernels and manage memory
-- **Speculative decoding**: Draft models, DDTree tree construction, self-speculative layer skipping, n-gram, adaptive K
+- **Speculative decoding**: Draft models, DDTree tree construction, self-speculative layer skipping, n-gram, EAGLE, DSpark confidence-scheduled verification, adaptive K
 - **Multi-Token Prediction**: MTP heads, +1 offset norm, built-in draft tokens, 70-85% acceptance rates
 
 ## Prerequisites
@@ -94,7 +94,7 @@ Everything you need to add a new architecture to Agave:
 | 14 | [Format Conventions](14-format-conventions.md) | GGUF vs SafeTensors differences, tensor layout, metadata mapping | 12 min |
 | 15 | [Chat Templates](15-chat-templates.md) | Data-driven role markers, EOG tokens, multi-turn formatting | 12 min |
 | 16 | [Recipe System](16-recipe-system.md) | Proven defaults per model+hardware, user override semantics | 10 min |
-| 17 | [Speculative Decoding & DDTree](17-speculative-decoding.md) | Draft models, DDTree, self-speculative, n-gram, adaptive K | 10 min |
+| 17 | [Speculative Decoding & DDTree](17-speculative-decoding.md) | Draft models, DDTree, self-speculative, n-gram, EAGLE, DSpark, adaptive K | 12 min |
 | 18 | [Multi-Token Prediction](18-multi-token-prediction.md) | MTP heads, +1 offset norm, draft/verify with built-in heads | 10 min |
 
 **Appendices:**
@@ -106,6 +106,8 @@ Everything you need to add a new architecture to Agave:
 ## How This Relates to the Code
 
 Each chapter references the Agave source files that implement the concepts discussed. The code follows the same layered structure as these tutorials — understanding the concepts makes the code straightforward to read.
+
+Every chapter ends with a **Glossary** section defining all new terms introduced in that chapter. Terms are explained inline on first use and collected at the end for quick reference.
 
 For product documentation (project structure, module reference, supported models), see:
 

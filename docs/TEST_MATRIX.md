@@ -168,6 +168,7 @@
 |---------|------|:------:|
 | --ctx-size auto | CLI | Compiles, needs model test |
 | --spec-mode ngram | CLI | Compiles + unit tests pass |
+| --spec-mode dspark | CLI | Compiles + 4/4 unit tests pass |
 | --benchmark | CLI | Compiles, needs model test |
 | XTC sampling (API + CLI) | Sampler | Compiles + unit tests pass |
 | DRY sampling (API + CLI) | Sampler | Compiles + unit tests pass |

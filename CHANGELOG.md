@@ -1,5 +1,29 @@
 # Changelog
 
+## 2026-06-30 — DSpark Speculative Decoding
+
+### DSpark: Confidence-Scheduled Speculative Decoding (Cheng et al., 2026)
+
+Implements the [DSpark framework](https://github.com/deepseek-ai/DeepSpec/blob/main/DSpark_paper.pdf) from DeepSeek-AI in `src/spec/dspark.zig`.
+
+**`src/spec/dspark.zig`** (new file):
+- `SpsProfile` — pre-profiled steps-per-second table for target-model token-batch sizes; `syntheticComputeBound()` for offline use
+- `ConfidenceBlock` + `computeSurvival()` — per-request per-position survival probs `a_{r,j} = Π_{i≤j} c_i`
+- `scheduleVerification()` — **Algorithm 1** (Hardware-Aware Prefix Scheduler): globally sorts `(request, position)` candidates by survival probability descending, greedily admits tokens while `Θ = τ × SPS(B)` improves, stops on first drop (non-anticipating property). `O(Rγ log Rγ)`.
+- `MarkovHead` — low-rank `V×V` transition bias `B(x_{k-1},·) = W1[x_{k-1}]W2` (§3.1 Eq. 5), `rank=256` default
+- `RnnHead` — gated recurrent sequential head with full prefix history (§3.1 Eq. 6)
+- `ConfidenceHead` — `c_k = σ(w^T [h_k; W1[x_{k-1}]])` (§3.2.1 Eq. 7)
+- `calibrateSts()` — Sequential Temperature Scaling: per-position 1D grid search minimising ECE of cumulative product (§3.2.1)
+
+**`src/spec/spec_decode.zig`**:
+- `dsparkTrimDraft()` — single-request draft trim using per-position acceptance history as survival-probability proxy; drops suffix below 0.15 expected survival
+
+**`src/main.zig`**:
+- `--spec-mode dspark` wired into decode loop: drafts via existing draft model, trims via `dsparkTrimDraft()`
+- Enum, help strings, and test export all updated
+
+4/4 unit tests pass (Markov bias correctness, scheduler greedy/load cases, SPS profile).
+
 ## 2026-06-18 — Vulkan: KosmicKrisp + Pipeline Cache
 
 ### Vulkan macOS Backend

@@ -300,14 +300,15 @@ Browser inference entry point for running Agave in WebAssembly environments. Pro
 
 ### Speculative Decoding (`src/spec/`)
 
-Agave supports 11 speculative decoding modes via `--spec-mode`:
+Agave supports 12 speculative decoding modes via `--spec-mode`:
 
 | Module | Description |
 |--------|-------------|
-| `spec_decode.zig` | Orchestrator: all draft/verify modes, adaptive K, FR-Spec masking, EAGLE/MLP/Lookahead drafting |
+| `spec_decode.zig` | Orchestrator: all draft/verify modes, adaptive K, FR-Spec masking, EAGLE/MLP/Lookahead drafting, DSpark confidence trim |
 | `ddtree.zig` | DDTree tree construction: best-first heap, compile, acceptance walk |
 | `ngram.zig` | N-gram, SharedNgramPool (server cross-request), SuffixState (10k cache), LookaheadState (Jacobi) |
 | `pflash.zig` | PFlash speculative prefill: block scoring, alpha-threshold selection, compressed prefill |
+| `dspark.zig` | DSpark: confidence-scheduled verification, hardware-aware prefix scheduler, Markov/RNN sequential head, SPS profiling |
 
 | Backend Kernel | Description |
 |----------------|-------------|
@@ -328,8 +329,11 @@ Agave supports 11 speculative decoding modes via `--spec-mode`:
 | `eagle` | Hidden-state conditioned draft (chained) | Yes |
 | `mlp` | Hidden-state conditioned draft (frozen) | Yes |
 | `pflash` | Block-scored speculative prefill | Yes |
+| `dspark` | Confidence-scheduled verification (any drafter) | Optional |
 
 EAGLE uses `get_hidden_state` + `eagle_forward` vtable methods on the target model to extract last residual hidden state and feed it to the draft model. FR-Spec (`--spec-token-map`) restricts draft logits to a frequency-ranked token subset.
+
+DSpark (Cheng et al., 2026) applies confidence-scheduled verification on top of any existing drafter. After drafting, `dsparkTrimDraft()` uses per-position acceptance history as a survival-probability proxy and trims the verification block to tokens with positive expected return. In server mode, the full `scheduleVerification()` (Algorithm 1) jointly optimises all concurrent requests against a pre-profiled `SpsProfile` throughput curve. The `dspark.zig` module also implements the Markov head (`B(x_{k-1},·) = W1[x_{k-1}]W2`, low-rank V×V), RNN head (gated recurrent sequential stage), and confidence head (`c_k = σ(w^T [h_k; W1[x_{k-1}]])`), ready for inference when a trained DSpark checkpoint is loaded.
 
 ### Block Sparse Attention (`src/ops/sparse_attn.zig`)
 

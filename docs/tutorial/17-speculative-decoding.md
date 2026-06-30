@@ -250,6 +250,39 @@ agave target.gguf --draft-model mlp-speculator.gguf --spec-mode mlp "prompt"
 |`eagle`|Target hidden (chained)|Yes|High|
 |`mlp`|Target hidden (frozen)|No|Medium-High|
 
+### DSpark (`--spec-mode dspark`)
+
+DSpark (Cheng et al., 2026, DeepSeek-AI) unifies high-throughput parallel generation with adaptive, load-aware verification. It addresses two problems with naive parallel drafting: **suffix decay** (later positions are less correlated, acceptance drops) and **verification waste** (blindly verifying all draft tokens hurts throughput under load).
+
+```bash
+agave target.gguf --draft-model draft.gguf --spec-mode dspark "prompt"
+```
+
+**Two complementary components:**
+
+**1. Semi-autoregressive generation** — a parallel backbone produces all `γ` draft logits in one pass; a lightweight sequential head injects intra-block dependency. Two instantiations:
+
+- **Markov head**: first-order transition bias `B(x_{k-1}, ·) = W1[x_{k-1}] W2` (low-rank `V×V`, rank 256). Given the sampled previous token, boosts coherent continuations and suppresses cross-mode collisions (e.g. "of course" vs "no problem" → avoids "of problem").
+- **RNN head**: gated recurrent state accumulates full prefix history within a block, providing richer conditioning at slightly higher sequential cost.
+
+**2. Confidence-scheduled verification** — a lightweight confidence head predicts per-position acceptance probability `c_k = σ(w^T [h_k; W1[x_{k-1}]])`. Cumulative survival `a_{r,j} = Π_{i≤j} c_i` estimates the probability the j-length prefix is fully accepted.
+
+The **Hardware-Aware Prefix Scheduler** (Algorithm 1) maximises system throughput `Θ = τ × SPS(B)` where `SPS(B)` is the measured steps-per-second at batch size `B`. It globally sorts all `(request, position)` candidates by survival probability descending, greedily admits tokens while throughput improves, and stops immediately on the first drop (ensuring the non-anticipating property required for lossless verification).
+
+**Performance** (DeepSeek paper results, DeepSeek-V4 serving):
+- 60–85% faster per-user generation vs. MTP-1 baseline at matched throughput
+- Outperforms Eagle3 (autoregressive) by 27–31% accepted length across math/code/chat
+- Outperforms DFlash (parallel) by 16–18% accepted length
+
+**Current agave implementation:**
+
+`--spec-mode dspark` drafts tokens via the existing draft model (any mode), then applies `dsparkTrimDraft()` — a single-request confidence trim using long-run per-position acceptance history as a survival-probability proxy. Tokens whose estimated prefix survival drops below 0.15 are dropped before verification.
+
+The `src/spec/dspark.zig` module provides the full Algorithm 1 scheduler (`scheduleVerification()`), Markov/RNN head inference, confidence head, and Sequential Temperature Scaling calibration — ready for trained DSpark checkpoints from the [DeepSpec repository](https://github.com/deepseek-ai/DeepSpec).
+
+**Training** (requires DeepSpec):
+Loss = `α_ce × L_ce + α_tv × L_tv + α_conf × L_conf` with position weights `exp(-(k-1)/γ)`. The TV loss (`‖p_draft − p_target‖₁`) directly maximises expected acceptance rate. The confidence loss trains `c_k` to predict the analytical acceptance rate `1 − ½‖p_d − p_t‖₁`.
+
 ### Medusa (`--spec-mode medusa`)
 
 Multiple parallel prediction heads (MLP-based) trained on top of the base model. Each head predicts the token at position +1, +2, ..., +N simultaneously from the same hidden state. Uses the same `mtpForward(token, depth)` inference path as MTP.
@@ -284,9 +317,11 @@ Generate frequency maps from your target model's training corpus or use vocab-so
 src/spec/
 ├── spec_decode.zig   — orchestrator: draft, verify, generation loop
 │                       draftEagle, draftMlpSpeculator, draftLookahead,
-│                       buildTokenMask (FR-Spec), PerHeadKvScales
+│                       buildTokenMask (FR-Spec), dsparkTrimDraft
 ├── ddtree.zig        — DDTree: heap, tree build, compile, acceptance walk
 ├── pflash.zig        — PFlash: block scoring, adaptive selection, compressed prefill
+├── dspark.zig        — DSpark: SpsProfile, ConfidenceBlock, scheduleVerification (Alg 1)
+│                       MarkovHead, RnnHead, ConfidenceHead, calibrateSts (STS)
 └── ngram.zig         — N-gram history + SharedNgramPool (server cross-request)
                         SuffixState (10k cache, dynamic k)
                         LookaheadState (Jacobi branches)
@@ -855,3 +890,53 @@ The server uses the same speculative decoding loop as CLI mode. Draft model pref
 **In the code:** [src/spec/spec_decode.zig](../../src/spec/spec_decode.zig) (orchestrator, adaptive K, EAGLE/MLP/Lookahead drafting, FR-Spec mask), [src/spec/ddtree.zig](../../src/spec/ddtree.zig) (DDTree construction), [src/spec/ngram.zig](../../src/spec/ngram.zig) (n-gram, SharedNgramPool, SuffixState, LookaheadState), [src/spec/pflash.zig](../../src/spec/pflash.zig) (PFlash block scoring and compressed prefill), [src/models/model.zig](../../src/models/model.zig) (get_hidden_state/eagle_forward vtable), [src/ops/sparse_attn.zig](../../src/ops/sparse_attn.zig) (block sparse SDPA), [src/backend/kernels/cpu/sdpa_tree.zig](../../src/backend/kernels/cpu/sdpa_tree.zig) (tree-masked attention)
 
 **Next:** [Chapter 19: PFlash and Block Sparse Attention ->](19-pflash-and-block-sparse.md) | **Back:** [Chapter 16: Recipe System <-](16-recipe-system.md) | **Product docs:** [Models](../MODELS.md)
+
+---
+
+## Glossary
+
+**acceptance rate** — The fraction of draft tokens the target model agrees with, determining the speedup factor.
+
+**adaptive K** — Runtime auto-tuning of the draft depth K based on per-K acceptance statistics.
+
+**ancestor bitmask** — A per-node bitmask (`[8]u64`, 512 bits) encoding which tree nodes are ancestors of a given node.
+
+**bonus token** — An extra token sampled from the target distribution at position K+1 after all draft tokens are accepted.
+
+**DDTree (Draft Distribution Tree)** — A tree-structured speculative method building an optimal candidate tree from draft distributions using a best-first heap.
+
+**draft model** — A small, fast model that generates candidate tokens during speculation.
+
+**EAGLE** — A speculative method where the draft model is conditioned on the target's hidden state rather than just the previous token.
+
+**FR-Spec (Frequency-Ranked Speculative Decoding)** — Restricts the draft vocabulary to high-frequency tokens, improving acceptance rates.
+
+**KV cache rollback** — Resetting the KV cache sequence length to the accepted prefix after a draft rejection.
+
+**LM head (Language Model head)** — The final linear projection mapping hidden states to vocabulary-sized logits.
+
+**MLP Speculator** — A single-step speculation mode using the frozen target hidden state for all draft steps (no autoregressive chain).
+
+**MTP (Multi-Token Prediction)** — Lightweight draft heads trained jointly with the model to predict multiple future tokens.
+
+**n-gram mode** — A draft-free speculation mode searching recent token history for n-gram matches to propose continuations.
+
+**PFlash (speculative prefill)** — A technique scoring prompt blocks with a cheap model to identify which blocks matter, prefilling only those.
+
+**RAG (Retrieval-Augmented Generation)** — A pipeline that retrieves relevant documents and includes them in the prompt for grounded generation.
+
+**rejection sampling** — Preserving the target distribution during stochastic speculative decoding by accepting drafts with probability min(1, p_target/p_draft).
+
+**self-speculative decoding** — Using the target model as its own draft by skipping a subset of transformer layers.
+
+**SharedNgramPool** — A thread-safe pool (~32 KB) accumulating tokens from all concurrent server requests for cross-request n-gram speculation.
+
+**speculative decoding** — An acceleration technique where a cheap draft model proposes multiple tokens that a larger target model verifies.
+
+**suffix decoding** — Like n-gram but using exact suffix matching over a larger cross-request cache (10,000 tokens) with dynamic depth.
+
+**target model** — The full, accurate model that verifies draft tokens and produces the final output.
+
+**tree attention** — Modified SDPA where each tree node attends only to its ancestor nodes, not the full draft tree.
+
+**TTFT (Time To First Token)** — The latency from receiving a request to emitting the first output token.
