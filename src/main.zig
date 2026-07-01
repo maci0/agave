@@ -4125,6 +4125,7 @@ test {
     _ = @import("ops/sparse_attn.zig");
     _ = @import("spec/pflash.zig");
     _ = @import("spec/dspark.zig");
+    _ = @import("lora.zig");
     _ = @import("arch.zig");
     _ = @import("perf.zig");
     _ = @import("recipe.zig");
