@@ -971,6 +971,13 @@ test "ggmlToDType mapping" {
     try std.testing.expectEqual(DType.q4_k, GGUFFile.ggmlToDType(.q4_k));
     try std.testing.expectEqual(DType.iq4_nl, GGUFFile.ggmlToDType(.iq4_nl));
     try std.testing.expectEqual(DType.iq4_xs, GGUFFile.ggmlToDType(.iq4_xs));
+    try std.testing.expectEqual(DType.iq3_xxs, GGUFFile.ggmlToDType(.iq3_xxs));
+    try std.testing.expectEqual(DType.iq3_s, GGUFFile.ggmlToDType(.iq3_s));
+    try std.testing.expectEqual(DType.iq2_xxs, GGUFFile.ggmlToDType(.iq2_xxs));
+    try std.testing.expectEqual(DType.iq2_xs, GGUFFile.ggmlToDType(.iq2_xs));
+    try std.testing.expectEqual(DType.iq2_s, GGUFFile.ggmlToDType(.iq2_s));
+    try std.testing.expectEqual(DType.iq1_s, GGUFFile.ggmlToDType(.iq1_s));
+    try std.testing.expectEqual(DType.iq1_m, GGUFFile.ggmlToDType(.iq1_m));
     try std.testing.expectEqual(DType.unknown, GGUFFile.ggmlToDType(.i8));
 }
 
