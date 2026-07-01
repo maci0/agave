@@ -285,6 +285,7 @@ pub const RnnHead = struct {
         @memcpy(z[2 * r .. 2 * r + d], h_k);                   // h_k
 
         // Apply W_gco: [z_dim, r*3] → [gate; cand; out] each R^r
+        std.debug.assert(r <= 4096); // stack buffers below are sized for r ≤ 4096
         var gate_buf: [4096]f32 = undefined;
         var cand_buf: [4096]f32 = undefined;
         var out_buf: [4096]f32 = undefined;
