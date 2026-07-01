@@ -4173,6 +4173,7 @@ test {
     _ = @import("backend/kernels/cpu/gemv_f32.zig");
     _ = @import("backend/kernels/cpu/gemv_fp4.zig");
     _ = @import("backend/kernels/cpu/gemv_iq4.zig");
+    _ = @import("backend/kernels/cpu/gemv_iq_small.zig");
     _ = @import("backend/kernels/cpu/gemv_q_small.zig");
     _ = @import("backend/kernels/cpu/gemv_q4_0.zig");
     _ = @import("backend/kernels/cpu/gemv_q4_k.zig");

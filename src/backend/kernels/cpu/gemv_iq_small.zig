@@ -903,6 +903,66 @@ fn gemvStub(x: [*]const f32, w: [*]const u8, y: [*]f32, n: usize, k: usize, bpb:
     }
 }
 
+// ── Unit tests ────────────────────────────────────────────────────────────────
+
+test "gemvIQ2_XXS scale-zero produces zero output" {
+    // d=0 in f16 → dl=0 → GEMV output must be 0 regardless of other bits.
+    var block = [_]u8{0} ** backend_mod.iq2_xxs_block_bytes; // d=0, all else 0
+    var x = [_]f32{1.0} ** 256;
+    var y = [_]f32{0.0};
+    gemvIQ2_XXS(&x, &block, &y, 1, 256);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.0), y[0], 1e-6);
+}
+
+test "gemvIQ2_XXS all-same-grid positive signs" {
+    // d=1.0 (f16 0x3C00), all qs indices = 0 → iq2xxs_grid[0] = 0x0808...(all 8s).
+    // aux = 0: sub_scale=0, all sign_idx=0 → ksigns_iq2xs[0]=0 → all positive.
+    // dl = 1.0 * (0.5 + 0) * 0.25 = 0.125. Each element = 0.125 * 8 = 1.0.
+    // x = all-ones[256], 1 row. Expected: sum = 256 * 1.0 * 1.0 = 256.0.
+    var block = [_]u8{0} ** backend_mod.iq2_xxs_block_bytes;
+    // Write f16(1.0) = 0x3C00 at byte 0 (little-endian).
+    block[0] = 0x00;
+    block[1] = 0x3C;
+    // qs bytes 2..65 already 0 → all grid index 0, all aux 0.
+    var x = [_]f32{1.0} ** 256;
+    var y = [_]f32{0.0};
+    gemvIQ2_XXS(&x, &block, &y, 1, 256);
+    try std.testing.expectApproxEqAbs(@as(f32, 256.0), y[0], 1e-3);
+}
+
+test "gemvIQ3_XXS scale-zero produces zero output" {
+    var block = [_]u8{0} ** backend_mod.iq3_xxs_block_bytes;
+    var x = [_]f32{1.0} ** 256;
+    var y = [_]f32{0.0};
+    gemvIQ3_XXS(&x, &block, &y, 1, 256);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.0), y[0], 1e-6);
+}
+
+test "gemvIQ3_S scale-zero produces zero output" {
+    var block = [_]u8{0} ** backend_mod.iq3_s_block_bytes;
+    var x = [_]f32{1.0} ** 256;
+    var y = [_]f32{0.0};
+    gemvIQ3_S(&x, &block, &y, 1, 256);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.0), y[0], 1e-6);
+}
+
+test "gemvIQ2_XS scale-zero produces zero output" {
+    // align(2) required because gemvIQ2_XS casts bp+2 to [*]const u16.
+    var block align(2) = [_]u8{0} ** backend_mod.iq2_xs_block_bytes;
+    var x = [_]f32{1.0} ** 256;
+    var y = [_]f32{0.0};
+    gemvIQ2_XS(&x, &block, &y, 1, 256);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.0), y[0], 1e-6);
+}
+
+test "gemvIQ2_S scale-zero produces zero output" {
+    var block = [_]u8{0} ** backend_mod.iq2_s_block_bytes;
+    var x = [_]f32{1.0} ** 256;
+    var y = [_]f32{0.0};
+    gemvIQ2_S(&x, &block, &y, 1, 256);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.0), y[0], 1e-6);
+}
+
 pub fn gemvIQ1_S(x: [*]const f32, w: [*]const u8, y: [*]f32, n: usize, k: usize) void {
     gemvStub(x, w, y, n, k, backend_mod.iq1_s_block_bytes);
 }
