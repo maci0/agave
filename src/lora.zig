@@ -50,11 +50,13 @@ pub fn applyLoraGguf(
         const lora_b_info = lora_file.tensors.get(lora_b_name) orelse continue;
         const lora_a_info = kv.value_ptr.*;
 
-        // rank = lora_a.dims[0], k = lora_a.dims[1], n = lora_b.dims[0]
+        // rank = lora_a.dims[0], k = lora_a.dims[1], n = lora_b.dims[0], lora_b.dims[1] = rank
         const rank: usize = @intCast(lora_a_info.dims[0]);
         const k: usize = @intCast(lora_a_info.dims[1]);
         const n: usize = @intCast(lora_b_info.dims[0]);
+        const rank_b: usize = @intCast(lora_b_info.dims[1]);
         if (rank == 0 or k == 0 or n == 0) continue;
+        if (rank_b != rank) continue; // inconsistent LoRA pair — skip to avoid OOB read
 
         const scale = alpha / @as(f32, @floatFromInt(rank));
 
