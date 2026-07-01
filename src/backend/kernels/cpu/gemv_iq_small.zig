@@ -125,7 +125,7 @@ const iq3xxs_grid = [256]u32{
 // Block: f16 d (2) + uint8[64] qs (64) = 66 bytes, 256 elements
 // 8 groups × 32 elements. Per group (8 bytes):
 //   qs[0..3] = 4 codebook indices into iq2xxs_grid
-//   qs[4..7] = uint32 aux: bits 28-31=sub-scale(0-15), bits 0-27=sign bits
+//   qs[4..7] = uint32 aux: bits 28-31=sub-scale(0-15), bits 0-27=4×7-bit ksigns indices
 pub fn gemvIQ2_XXS(x: [*]const f32, w: [*]const u8, y: [*]f32, n: usize, k: usize) void {
     const bpb = backend_mod.iq2_xxs_block_bytes;
     const qk: usize = 256;
@@ -181,9 +181,9 @@ pub fn gemvIQ2_XXS(x: [*]const f32, w: [*]const u8, y: [*]f32, n: usize, k: usiz
 
 // ── IQ3_XXS GEMV ─────────────────────────────────────────────────────────────
 // Block: f16 d (2) + uint8[64] qs (64) + uint8[32] gas (32) = 98 bytes, 256 elements
-// 8 groups × 32 elements. Per group:
-//   qs[0..7] = 8 codebook indices into iq3xxs_grid (each index → 4 values)
-//   gas[0..3] = uint32 aux: bits 28-31=sub-scale(0-15), bits 0-27=sign bits
+// 8 groups × 32 elements. Per group (8 bytes qs + 4 bytes aux):
+//   qs[0..7] = 8 codebook indices into iq3xxs_grid (pairs: grid1=qs[2l], grid2=qs[2l+1])
+//   gas[0..3] = uint32 aux: bits 28-31=sub-scale(0-15), bits 0-27=4×7-bit ksigns indices
 pub fn gemvIQ3_XXS(x: [*]const f32, w: [*]const u8, y: [*]f32, n: usize, k: usize) void {
     const bpb = backend_mod.iq3_xxs_block_bytes;
     const qk: usize = 256;
