@@ -1793,6 +1793,7 @@ pub fn main(init: std.process.Init) !void {
             std.process.exit(1);
         };
         fmt = st_dir.?.format();
+        if (cli.lora_path != null) eprint("warning: --lora is only supported for GGUF models; ignored for SafeTensors\n", .{});
     } else {
         gguf_file = GGUFFile.open(allocator, cli.model_path) catch |e| {
             eprint("Error: failed to open '{s}': {}\n", .{ cli.model_path, e });
