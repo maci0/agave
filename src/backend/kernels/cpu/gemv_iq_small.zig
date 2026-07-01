@@ -963,6 +963,80 @@ test "gemvIQ2_S scale-zero produces zero output" {
     try std.testing.expectApproxEqAbs(@as(f32, 0.0), y[0], 1e-6);
 }
 
+test "gemvIQ2_XXS ksigns_iq2xs lookup distinguishes from direct-bit extraction" {
+    // Sign index = 127 → ksigns_iq2xs[127] = 255 = 0xFF: ALL 8 bits set → all g0 elements negative.
+    // Old bug: aux & 0x7F as direct flags → bits 0-6 set, bit 7 clear → element 7 of g0 positive.
+    // New code: ksigns_iq2xs[127] = 0xFF → element 7 is also negative.
+    //
+    // With d=1.0, g0=g1=g2=g3=iq2xxs_grid[0] (all 8s), x=all-1s, sub_scale=0:
+    //   dl = 0.125.  Group 0: g0 all-neg → -8×1.0 = -8, g1+g2+g3 all-pos → +24.  Sum = 16.
+    //   Groups 1..7: aux=0 → all positive. Each = 32×1.0. Total: 7×32 = 224.
+    //   Expected total: 16 + 224 = 240.  Old code gives 18+224=242 (bit-7 of g0 wrong).
+    var block = [_]u8{0} ** backend_mod.iq2_xxs_block_bytes;
+    block[0] = 0x00; block[1] = 0x3C; // f16(1.0)
+    // Group 0 aux at bytes 6..9: lower 7 bits = 0x7F, rest 0.
+    block[6] = 0x7F; // aux = 0x0000007F; sub_scale=0, sb0_idx=127
+    var x = [_]f32{1.0} ** 256;
+    var y = [_]f32{0.0};
+    gemvIQ2_XXS(&x, &block, &y, 1, 256);
+    try std.testing.expectApproxEqAbs(@as(f32, 240.0), y[0], 1e-2);
+}
+
+test "gemvIQ3_S split qs layout: grid1 from qs[l], grid2 from qs[l+4]" {
+    // qs[4]=3 → iq3s_grid[3]=0x0101010b → j=0: v=11, j=1,2,3: v=1.
+    // x[4]=100, x[else set]=1.0, x[8..255]=0.0.
+    //
+    // New code (split: idx2=iq3s_grid[qs[4]]):
+    //   l=0 grid2=iq3s_grid[3]=[11,1,1,1]×x[4..7]=[100,1,1,1] → 11×100+1+1+1=1103
+    //   l=0 grid1=iq3s_grid[qs[0]]=iq3s_grid[0]=[1,1,1,1]×x[0..3]=1 → 4
+    //   l=0 total: 1107.  l=1..3: x=0. Sub-block 0: 1107.  Others: 0.  Total: 1107.
+    //
+    // Old code (interleaved: idx2=iq3s_grid[qs[1]]=iq3s_grid[0]=[1,1,1,1]):
+    //   l=0 grid2=[1,1,1,1]×x[4..7]=[100,1,1,1] → 103.
+    //   l=0: 4+103=107.  l=2 grid1=iq3s_grid[qs[4]]=iq3s_grid[3]=[11,1,1,1]×x[16..19]=0 → 0.
+    //   Sub-block 0 old: 107. Total: 107.  1107 ≠ 107 → test catches the bug.
+    var block = [_]u8{0} ** backend_mod.iq3_s_block_bytes;
+    block[0] = 0x00; block[1] = 0x3C; // f16(1.0)
+    block[6] = 3; // qs[4] = 3 → iq3s_grid[3] (byte offset: 2 + 4 = 6)
+    // scales[0..3]=0 → scale_nibble=0 → db=1.0*(1+0)=1.0; qh=0; signs=0.
+    var x = [_]f32{0.0} ** 256;
+    x[0] = 1.0; x[1] = 1.0; x[2] = 1.0; x[3] = 1.0; // grid1 elements
+    x[4] = 100.0; x[5] = 1.0; x[6] = 1.0; x[7] = 1.0; // grid2 elements
+    var y = [_]f32{0.0};
+    gemvIQ3_S(&x, &block, &y, 1, 256);
+    try std.testing.expectApproxEqAbs(@as(f32, 1107.0), y[0], 1e-1);
+}
+
+test "gemvIQ3_XXS ksigns_iq2xs lookup: sign_idx=1 gives 0b10000001 not 0b00000001" {
+    // sign_idx = 1 → ksigns_iq2xs[1] = 129 = 0b10000001: bits 0 AND 7 set.
+    // Direct extraction would give 1 = 0b00000001: only bit 0 set.
+    // The difference: element 7 of the sign_byte (grid2 j=3) negative vs positive.
+    //
+    // d=1.0, all qs=0 → all grids iq3xxs_grid[0]=0x04040404=[4,4,4,4].
+    // aux byte0=1 → sign_idx0=1, rest=0. dl = 0.25.
+    //
+    // Sub-group 0 (l=0), sign_byte = ksigns_iq2xs[1] = 129 = 0b10000001:
+    //   grid1 (j=0..3): bit0=1→s=-1, bits1-3=0→s=+1.
+    //     0.25*(4×(-1)+4+4+4) = 0.25×8 = 2.0
+    //   grid2 (j=0..3, uses bits 4..7): bit4=0,5=0,6=0,7=1.
+    //     j=3: bit7 set → s=-1. Others +1.
+    //     0.25*(4+4+4+4×(-1)) = 0.25×8 = 2.0
+    //   Sub-group 0: 4.0
+    //
+    // Sub-groups 1..3 with sign_idx=0 → all positive: 3×8 = 24.0
+    // Group 0 total: 28.0.  Groups 1..7 (aux=0 → all positive): 7×32 = 224.0.
+    // Grand total: 252.0.
+    // Old code (direct bits, signs=1): only element 0 negative → group 0 = 30. Total = 254. DIFFERENT.
+    var block = [_]u8{0} ** backend_mod.iq3_xxs_block_bytes;
+    block[0] = 0x00; block[1] = 0x3C; // f16(1.0)
+    // qs[0..7] = 0 (all groups use iq3xxs_grid[0])
+    block[66] = 1; // gas group 0 aux byte0 = 1 → sign_idx0=1 → ksigns_iq2xs[1]=129
+    var x = [_]f32{1.0} ** 256;
+    var y = [_]f32{0.0};
+    gemvIQ3_XXS(&x, &block, &y, 1, 256);
+    try std.testing.expectApproxEqAbs(@as(f32, 252.0), y[0], 1e-2);
+}
+
 pub fn gemvIQ1_S(x: [*]const f32, w: [*]const u8, y: [*]f32, n: usize, k: usize) void {
     gemvStub(x, w, y, n, k, backend_mod.iq1_s_block_bytes);
 }
