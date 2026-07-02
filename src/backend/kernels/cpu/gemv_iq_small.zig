@@ -5,6 +5,7 @@
 
 const std = @import("std");
 const backend_mod = @import("../../backend.zig");
+const gemv_common = @import("gemv.zig");
 
 inline fn readF16LE(data: [*]const u8, off: usize) f32 {
     const bits = std.mem.readInt(u16, data[off..][0..2], .little);
@@ -173,11 +174,11 @@ pub fn gemvIQ2_XXS(x: [*]const f32, w: [*]const u8, y: [*]f32, n: usize, k: usiz
         var sum: f64 = 0.0;
         const rp = w + row * row_bytes;
         for (0..nsb) |b| {
+            const base0 = b * qk;
+            if (gemv_common.isBlockSparse(x, base0, @min(qk, k - base0))) continue;
             const bp = rp + b * bpb;
             const d: f32 = readF16LE(bp, 0);
             const qs = bp + 2;
-            const base0 = b * qk;
-            // Full block: all 256 elements within k — use SIMD path (no bounds check).
             const full = base0 + qk <= k;
 
             var gi: usize = 0;
@@ -238,11 +239,12 @@ pub fn gemvIQ3_XXS(x: [*]const f32, w: [*]const u8, y: [*]f32, n: usize, k: usiz
         var sum: f64 = 0.0;
         const rp = w + row * row_bytes;
         for (0..nsb) |b| {
+            const base0 = b * qk;
+            if (gemv_common.isBlockSparse(x, base0, @min(qk, k - base0))) continue;
             const bp = rp + b * bpb;
             const d: f32 = readF16LE(bp, 0);
             const qs = bp + 2; // uint8[64]
             const gas = bp + 66; // uint8[32] (starts after qs[64])
-            const base0 = b * qk;
             const full = base0 + qk <= k;
 
             var qi: usize = 0;
@@ -440,11 +442,12 @@ pub fn gemvIQ2_XS(x: [*]const f32, w: [*]const u8, y: [*]f32, n: usize, k: usize
         var sum: f64 = 0.0;
         const rp = w + row * row_bytes;
         for (0..nsb) |b| {
+            const base0 = b * qk;
+            if (gemv_common.isBlockSparse(x, base0, @min(qk, k - base0))) continue;
             const bp = rp + b * bpb;
             const d: f32 = readF16LE(bp, 0);
             const qs16_ptr: [*]const u16 = @ptrCast(@alignCast(bp + 2)); // uint16_t[32]
             const scales = bp + 66; // uint8_t[8]
-            const base0 = b * qk;
             const full = base0 + qk <= k;
 
             for (0..8) |ib32| { // 8 sub-blocks of 32 elements
@@ -561,6 +564,7 @@ pub fn gemvIQ3_S(x: [*]const f32, w: [*]const u8, y: [*]f32, n: usize, k: usize)
         var sum: f64 = 0.0;
         const rp = w + row * row_bytes;
         for (0..nsb) |b| {
+            if (gemv_common.isBlockSparse(x, b * qk, @min(qk, k - b * qk))) continue;
             const bp = rp + b * bpb;
             const d: f32 = readF16LE(bp, 0);
             const qs = bp + 2;    // uint8[64]
@@ -888,6 +892,7 @@ pub fn gemvIQ2_S(x: [*]const f32, w: [*]const u8, y: [*]f32, n: usize, k: usize)
         var sum: f64 = 0.0;
         const rp = w + row * row_bytes;
         for (0..nsb) |b| {
+            if (gemv_common.isBlockSparse(x, b * qk, @min(qk, k - b * qk))) continue;
             const bp = rp + b * bpb;
             const d: f32 = readF16LE(bp, 0);
             const qs = bp + 2;     // uint8[32] grid low + uint8[32] signs
@@ -939,8 +944,9 @@ fn gemvStub(x: [*]const f32, w: [*]const u8, y: [*]f32, n: usize, k: usize, bpb:
         var sum: f64 = 0.0;
         const rp = w + row * row_bytes;
         for (0..nsb) |b| {
-            const d: f32 = readF16LE(rp + b * bpb, 0);
             const base = b * qk;
+            if (gemv_common.isBlockSparse(x, base, @min(qk, k - base))) continue;
+            const d: f32 = readF16LE(rp + b * bpb, 0);
             for (0..@min(qk, k - base)) |j| {
                 sum += @as(f64, x[base + j]) * d;
             }
