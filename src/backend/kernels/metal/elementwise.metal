@@ -107,10 +107,7 @@ kernel void gelu_mul_f32(
     const float sqrt_2_over_pi = 0.7978845608028654f;
     const float coeff = 0.044715f;
     float inner = sqrt_2_over_pi * fma(coeff * x * x, x, x);
-    float clamped = clamp(inner, -10.0f, 10.0f);
-    float e2 = exp(2.0f * clamped);
-    float t = (e2 - 1.0f) / (e2 + 1.0f);
-    out[tid] = 0.5f * x * (1.0f + t) * b[tid];
+    out[tid] = 0.5f * x * (1.0f + tanh(inner)) * b[tid];
 }
 
 // GELU activation: y = 0.5 * x * (1 + tanh(sqrt(2/pi) * (x + 0.044715 * x^3)))
@@ -125,10 +122,8 @@ kernel void gelu_f32(
     const float sqrt_2_over_pi = 0.7978845608028654f;
     const float coeff = 0.044715f;
     float inner = sqrt_2_over_pi * fma(coeff * x * x, x, x);
-    // tanh via (exp(2x)-1)/(exp(2x)+1), clamped to prevent exp overflow
-    float clamped = clamp(inner, -10.0f, 10.0f);
-    float e2 = exp(2.0f * clamped);
-    output[tid] = 0.5f * x * (1.0f + (e2 - 1.0f) / (e2 + 1.0f));
+    // Use native tanh intrinsic — faster than manual exp(2x) formulation.
+    output[tid] = 0.5f * x * (1.0f + tanh(inner));
 }
 
 // Scaled accumulate: dst[i] += src[i] * scale

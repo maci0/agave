@@ -108,9 +108,7 @@ kernel void fused_ffn_gate_up_gelu_q8(
     if (tid == 0) {
         const float sqrt_2_over_pi = 0.7978845608028654f;
         float inner = sqrt_2_over_pi * fma(0.044715f * gate_sum * gate_sum, gate_sum, gate_sum);
-        float clamped = clamp(inner, -10.0f, 10.0f);
-        float e2 = exp(2.0f * clamped);
-        ff_out[tgid] = 0.5f * gate_sum * (1.0f + (e2 - 1.0f) / (e2 + 1.0f)) * up_sum;
+        ff_out[tgid] = 0.5f * gate_sum * (1.0f + tanh(inner)) * up_sum;
     }
 }
 
@@ -254,9 +252,7 @@ kernel void fused_ffn_gate_up_gelu_q4_k(
     if (tid == 0) {
         const float sqrt_2_over_pi = 0.7978845608028654f;
         float inner = sqrt_2_over_pi * fma(0.044715f * gate_sum * gate_sum, gate_sum, gate_sum);
-        float clamped = clamp(inner, -10.0f, 10.0f);
-        float e2 = exp(2.0f * clamped);
-        ff_out[tgid] = 0.5f * gate_sum * (1.0f + (e2 - 1.0f) / (e2 + 1.0f)) * up_sum;
+        ff_out[tgid] = 0.5f * gate_sum * (1.0f + tanh(inner)) * up_sum;
     }
 }
 
@@ -294,9 +290,7 @@ kernel void fused_ffn_gate_up_gelu_q4_0(
     if (tid == 0) {
         const float sqrt_2_over_pi = 0.7978845608028654f;
         float inner = sqrt_2_over_pi * fma(0.044715f * gate_sum * gate_sum, gate_sum, gate_sum);
-        float clamped = clamp(inner, -10.0f, 10.0f);
-        float e2 = exp(2.0f * clamped);
-        ff_out[tgid] = 0.5f * gate_sum * (1.0f + (e2 - 1.0f) / (e2 + 1.0f)) * up_sum;
+        ff_out[tgid] = 0.5f * gate_sum * (1.0f + tanh(inner)) * up_sum;
     }
 }
 
@@ -375,9 +369,7 @@ kernel void fused_ffn_gate_up_gelu_q6_k(
     if (tid == 0) {
         const float sqrt_2_over_pi = 0.7978845608028654f;
         float inner = sqrt_2_over_pi * fma(0.044715f * gate_sum * gate_sum, gate_sum, gate_sum);
-        float clamped = clamp(inner, -10.0f, 10.0f);
-        float e2 = exp(2.0f * clamped);
-        ff_out[tgid] = 0.5f * gate_sum * (1.0f + (e2 - 1.0f) / (e2 + 1.0f)) * up_sum;
+        ff_out[tgid] = 0.5f * gate_sum * (1.0f + tanh(inner)) * up_sum;
     }
 }
 
@@ -456,9 +448,7 @@ kernel void fused_ffn_gate_up_gelu_q5_k(
     if (tid == 0) {
         const float sqrt_2_over_pi = 0.7978845608028654f;
         float inner = sqrt_2_over_pi * fma(0.044715f * gate_sum * gate_sum, gate_sum, gate_sum);
-        float clamped = clamp(inner, -10.0f, 10.0f);
-        float e2 = exp(2.0f * clamped);
-        ff_out[tgid] = 0.5f * gate_sum * (1.0f + (e2 - 1.0f) / (e2 + 1.0f)) * up_sum;
+        ff_out[tgid] = 0.5f * gate_sum * (1.0f + tanh(inner)) * up_sum;
     }
 }
 

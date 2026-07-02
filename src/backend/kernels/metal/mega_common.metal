@@ -327,9 +327,7 @@ inline void mega_gelu_mul(
     for (uint i = tgid * tg_size + tid; i < n; i += tg_size * 4096) {
         float g = gate[i];
         float inner = sqrt_2_over_pi * fma(0.044715f * g * g, g, g);
-        float clamped = clamp(inner, -10.0f, 10.0f);
-        float e2 = exp(2.0f * clamped);
-        gate[i] = 0.5f * g * (1.0f + (e2 - 1.0f) / (e2 + 1.0f)) * up[i];
+        gate[i] = 0.5f * g * (1.0f + tanh(inner)) * up[i];
     }
 }
 

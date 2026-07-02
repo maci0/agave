@@ -21,8 +21,8 @@ kernel void rope_f32(
     uint i = tid % half_rope;
     uint base = h * head_dim;
 
-    float freq = exp(-log(theta) * float(2 * i) / float(rope_dim));
-    float angle = float(pos) * freq;
+    // powr(theta, -exp) = exp(-log(theta)*exp): one GPU intrinsic vs two transcendentals.
+    float angle = float(pos) * powr(theta, -2.0f * float(i) / float(rope_dim));
     float cos_a = cos(angle);
     float sin_a = sin(angle);
 
@@ -61,8 +61,7 @@ kernel void rope_batched_f32(
     uint base = tok * stride + h * head_dim;
     uint pos = positions[tok];
 
-    float freq = exp(-log(theta) * float(2 * i) / float(rope_dim));
-    float angle = float(pos) * freq;
+    float angle = float(pos) * powr(theta, -2.0f * float(i) / float(rope_dim));
     float cos_a = cos(angle);
     float sin_a = sin(angle);
 
