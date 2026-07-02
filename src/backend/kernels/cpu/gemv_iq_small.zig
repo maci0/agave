@@ -126,9 +126,23 @@ const iq3xxs_grid = [256]u32{
 // 8 groups × 32 elements. Per group (8 bytes):
 //   qs[0..3] = 4 codebook indices into iq2xxs_grid
 //   qs[4..7] = uint32 aux: bits 28-31=sub-scale(0-15), bits 0-27=4×7-bit ksigns indices
-/// Dot product of 8 x-elements against one IQ2_XXS grid entry with signs applied.
+/// Dot product of 4 x-elements against a u32 grid entry with per-element signs.
+/// sb_nibble: lower 4 bits used as sign mask (bit j → -1 if set, j=0..3).
+inline fn simdGroup4(x_ptr: [*]const f32, g: u32, sb_nibble: u8, dl: f32) f32 {
+    const V4f32 = @Vector(4, f32);
+    const V4u8 = @Vector(4, u8);
+    const w_f32: V4f32 = @floatFromInt(@as(@Vector(4, i8), @bitCast(@as(V4u8, @bitCast(g)))));
+    const shifts: V4u8 = .{ 0, 1, 2, 3 };
+    const bits_f32: V4f32 = @floatFromInt((@as(V4u8, @splat(sb_nibble)) >> shifts) & @as(V4u8, @splat(@as(u8, 1))));
+    const signs: V4f32 = @as(V4f32, @splat(@as(f32, 1.0))) - @as(V4f32, @splat(@as(f32, 2.0))) * bits_f32;
+    const x_v: V4f32 = x_ptr[0..4].*;
+    return @reduce(.Add, @as(V4f32, @splat(dl)) * x_v * w_f32 * signs);
+}
+
+/// Dot product of 8 x-elements against a u64 grid entry with per-element signs.
 /// sign = 1.0 - 2.0*bit: branchless, compiles to FMSUB on NEON/AVX.
-inline fn iq2xxsGroup8(x_ptr: [*]const f32, g: u64, sb: u8, dl: f32) f32 {
+/// sb: 8-bit sign mask from ksigns_iq2xs (bit j → -1 if set).
+inline fn simdGroup8(x_ptr: [*]const f32, g: u64, sb: u8, dl: f32) f32 {
     const V8f32 = @Vector(8, f32);
     const V8u8 = @Vector(8, u8);
     // Extract 8 i8 weights from 64-bit grid entry.
@@ -175,10 +189,10 @@ pub fn gemvIQ2_XXS(x: [*]const f32, w: [*]const u8, y: [*]f32, n: usize, k: usiz
                 const base = base0 + yi;
                 if (full) {
                     // SIMD: 4 vector dot products, each covering 8 elements — no branches.
-                    sum += iq2xxsGroup8(x + base, g0, sb0, dl);
-                    sum += iq2xxsGroup8(x + base + 8, g1, sb1, dl);
-                    sum += iq2xxsGroup8(x + base + 16, g2, sb2, dl);
-                    sum += iq2xxsGroup8(x + base + 24, g3, sb3, dl);
+                    sum += simdGroup8(x + base, g0, sb0, dl);
+                    sum += simdGroup8(x + base + 8, g1, sb1, dl);
+                    sum += simdGroup8(x + base + 16, g2, sb2, dl);
+                    sum += simdGroup8(x + base + 24, g3, sb3, dl);
                 } else {
                     // Partial last block: scalar with per-element bounds guard.
                     for (0..8) |j| {
@@ -221,34 +235,34 @@ pub fn gemvIQ3_XXS(x: [*]const f32, w: [*]const u8, y: [*]f32, n: usize, k: usiz
             const d: f32 = readF16LE(bp, 0);
             const qs = bp + 2; // uint8[64]
             const gas = bp + 66; // uint8[32] (starts after qs[64])
+            const base0 = b * qk;
+            const full = base0 + qk <= k;
 
-            var qi: usize = 0; // byte offset into qs
-            var gi: usize = 0; // byte offset into gas
-            var yi: usize = 0; // element offset
-            while (yi < 256) : ({
-                yi += 32;
-                qi += 8;
-                gi += 4;
-            }) {
+            var qi: usize = 0;
+            var gi: usize = 0;
+            var yi: usize = 0;
+            while (yi < 256) : ({ yi += 32; qi += 8; gi += 4; }) {
                 const aux = std.mem.readInt(u32, gas[gi..][0..4], .little);
                 const dl = d * (0.5 + @as(f32, @floatFromInt(aux >> 28))) * 0.5;
-                // Signs: 4 sub-groups × 7-bit index into ksigns_iq2xs (matches llama.cpp)
-                // Each sub-group covers 2 grid entries (8 elements: 4 from grid1, 4 from grid2).
-                const base = b * qk + yi;
-                for (0..4) |l| { // 4 sub-groups, each producing 8 elements
+                const base = base0 + yi;
+                for (0..4) |l| {
                     const sign_byte = ksigns_iq2xs[(aux >> @intCast(7 * l)) & 0x7F];
                     const grid1 = iq3xxs_grid[qs[qi + 2 * l + 0]];
                     const grid2 = iq3xxs_grid[qs[qi + 2 * l + 1]];
-                    const elem_base = l * 8;
-                    for (0..4) |j| {
-                        const v1: i8 = @bitCast(@as(u8, @truncate(grid1 >> @as(u5, @intCast(j * 8)))));
-                        const v2: i8 = @bitCast(@as(u8, @truncate(grid2 >> @as(u5, @intCast(j * 8)))));
-                        const s1: f32 = if (sign_byte & (@as(u8, 1) << @intCast(j)) != 0) -1.0 else 1.0;
-                        const s2: f32 = if (sign_byte & (@as(u8, 1) << @intCast(j + 4)) != 0) -1.0 else 1.0;
-                        if (base + elem_base + j < k)
-                            sum += @as(f64, x[base + elem_base + j]) * dl * @as(f32, @floatFromInt(v1)) * s1;
-                        if (base + elem_base + j + 4 < k)
-                            sum += @as(f64, x[base + elem_base + j + 4]) * dl * @as(f32, @floatFromInt(v2)) * s2;
+                    const eb = l * 8;
+                    if (full) {
+                        // 2× simdGroup4: 4 elements from grid1, 4 from grid2.
+                        sum += simdGroup4(x + base + eb, grid1, sign_byte & 0xF, dl);
+                        sum += simdGroup4(x + base + eb + 4, grid2, sign_byte >> 4, dl);
+                    } else {
+                        for (0..4) |j| {
+                            const v1: i8 = @bitCast(@as(u8, @truncate(grid1 >> @as(u5, @intCast(j * 8)))));
+                            const v2: i8 = @bitCast(@as(u8, @truncate(grid2 >> @as(u5, @intCast(j * 8)))));
+                            const s1: f32 = if (sign_byte & (@as(u8, 1) << @intCast(j)) != 0) -1.0 else 1.0;
+                            const s2: f32 = if (sign_byte & (@as(u8, 1) << @intCast(j + 4)) != 0) -1.0 else 1.0;
+                            if (base + eb + j < k) sum += @as(f64, x[base + eb + j]) * dl * @as(f32, @floatFromInt(v1)) * s1;
+                            if (base + eb + j + 4 < k) sum += @as(f64, x[base + eb + j + 4]) * dl * @as(f32, @floatFromInt(v2)) * s2;
+                        }
                     }
                 }
             }
@@ -423,26 +437,27 @@ pub fn gemvIQ2_XS(x: [*]const f32, w: [*]const u8, y: [*]f32, n: usize, k: usize
             const d: f32 = readF16LE(bp, 0);
             const qs16_ptr: [*]const u16 = @ptrCast(@alignCast(bp + 2)); // uint16_t[32]
             const scales = bp + 66; // uint8_t[8]
+            const base0 = b * qk;
+            const full = base0 + qk <= k;
 
             for (0..8) |ib32| { // 8 sub-blocks of 32 elements
                 const db0 = d * (0.5 + @as(f32, @floatFromInt(scales[ib32] & 0xF))) * 0.25;
                 const db1 = d * (0.5 + @as(f32, @floatFromInt(scales[ib32] >> 4))) * 0.25;
-                const base = b * qk + ib32 * 32;
+                const base = base0 + ib32 * 32;
 
-                for (0..4) |l| { // 4 uint16 entries per sub-block = 32 elements
-                    const qs = qs16_ptr[4 * ib32 + l];
-                    const grid_idx: u9 = @truncate(qs & 0x1FF);
-                    const sign_idx: u7 = @truncate(qs >> 9);
-                    const grid = iq2xs_grid[grid_idx];
-                    const signs_byte = ksigns_iq2xs[sign_idx];
+                for (0..4) |l| {
+                    const qs_val = qs16_ptr[4 * ib32 + l];
+                    const grid = iq2xs_grid[@as(u9, @truncate(qs_val & 0x1FF))];
+                    const signs_byte = ksigns_iq2xs[@as(u7, @truncate(qs_val >> 9))];
                     const db = if (l < 2) db0 else db1;
                     const elem_off = base + l * 8;
-
-                    for (0..8) |j| {
-                        const v: i8 = @bitCast(@as(u8, @truncate(grid >> @as(u6, @intCast(j * 8)))));
-                        const s: f32 = if (signs_byte & (@as(u8, 1) << @intCast(j)) != 0) -1.0 else 1.0;
-                        if (elem_off + j < k) {
-                            sum += @as(f64, x[elem_off + j]) * db * @as(f32, @floatFromInt(v)) * s;
+                    if (full) {
+                        sum += simdGroup8(x + elem_off, grid, signs_byte, db);
+                    } else {
+                        for (0..8) |j| {
+                            const v: i8 = @bitCast(@as(u8, @truncate(grid >> @as(u6, @intCast(j * 8)))));
+                            const s: f32 = if (signs_byte & (@as(u8, 1) << @intCast(j)) != 0) -1.0 else 1.0;
+                            if (elem_off + j < k) sum += @as(f64, x[elem_off + j]) * db * @as(f32, @floatFromInt(v)) * s;
                         }
                     }
                 }
@@ -545,6 +560,7 @@ pub fn gemvIQ3_S(x: [*]const f32, w: [*]const u8, y: [*]f32, n: usize, k: usize)
             const qh = bp + 66;   // uint8[8]
             const signs = bp + 74; // uint8[32]
             const scales = bp + 106; // uint8[4]
+            const full = b * qk + qk <= k;
 
             for (0..8) |ib32| {
                 const scale_nibble: u4 = if (ib32 % 2 == 0)
@@ -556,29 +572,28 @@ pub fn gemvIQ3_S(x: [*]const f32, w: [*]const u8, y: [*]f32, n: usize, k: usize)
                 const base = b * qk + ib32 * 32;
 
                 for (0..4) |l| {
-                    // 9-bit grid indices
                     const shift1: u4 = @intCast(8 - 2 * l);
                     const shift2: u4 = @intCast(7 - 2 * l);
                     const hi1: u9 = @truncate((@as(u16, qh_byte) << shift1) & 0x100);
                     const hi2: u9 = @truncate((@as(u16, qh_byte) << shift2) & 0x100);
-                    // qs layout: [idx0..3 in first half, idx4..7 in second half]
-                    // grid1 uses qs[l], grid2 uses qs[l+4] (matches llama.cpp dequantize_row_iq3_s)
                     const idx1: u9 = @as(u9, qs[8 * ib32 + l]) | hi1;
                     const idx2: u9 = @as(u9, qs[8 * ib32 + l + 4]) | hi2;
                     const g1 = iq3s_grid[idx1];
                     const g2 = iq3s_grid[idx2];
                     const sign_byte = signs[4 * ib32 + l];
-                    const elem_base = base + l * 8;
-
-                    for (0..4) |j| {
-                        const v1: i8 = @bitCast(@as(u8, @truncate(g1 >> @as(u5, @intCast(j * 8)))));
-                        const v2: i8 = @bitCast(@as(u8, @truncate(g2 >> @as(u5, @intCast(j * 8)))));
-                        const s1: f32 = if (sign_byte & (@as(u8, 1) << @intCast(j)) != 0) -1.0 else 1.0;
-                        const s2: f32 = if (sign_byte & (@as(u8, 1) << @intCast(j + 4)) != 0) -1.0 else 1.0;
-                        if (elem_base + j < k)
-                            sum += @as(f64, x[elem_base + j]) * db * @as(f32, @floatFromInt(v1)) * s1;
-                        if (elem_base + j + 4 < k)
-                            sum += @as(f64, x[elem_base + j + 4]) * db * @as(f32, @floatFromInt(v2)) * s2;
+                    const eb = base + l * 8;
+                    if (full) {
+                        sum += simdGroup4(x + eb, g1, sign_byte & 0xF, db);
+                        sum += simdGroup4(x + eb + 4, g2, sign_byte >> 4, db);
+                    } else {
+                        for (0..4) |j| {
+                            const v1: i8 = @bitCast(@as(u8, @truncate(g1 >> @as(u5, @intCast(j * 8)))));
+                            const v2: i8 = @bitCast(@as(u8, @truncate(g2 >> @as(u5, @intCast(j * 8)))));
+                            const s1: f32 = if (sign_byte & (@as(u8, 1) << @intCast(j)) != 0) -1.0 else 1.0;
+                            const s2: f32 = if (sign_byte & (@as(u8, 1) << @intCast(j + 4)) != 0) -1.0 else 1.0;
+                            if (eb + j < k) sum += @as(f64, x[eb + j]) * db * @as(f32, @floatFromInt(v1)) * s1;
+                            if (eb + j + 4 < k) sum += @as(f64, x[eb + j + 4]) * db * @as(f32, @floatFromInt(v2)) * s2;
+                        }
                     }
                 }
             }
@@ -871,6 +886,7 @@ pub fn gemvIQ2_S(x: [*]const f32, w: [*]const u8, y: [*]f32, n: usize, k: usize)
             const qs = bp + 2;     // uint8[32] grid low + uint8[32] signs
             const qh = bp + 66;    // uint8[8]
             const scales = bp + 74; // uint8[8]
+            const full = b * qk + qk <= k;
 
             for (0..8) |ib32| {
                 const sc = scales[ib32];
@@ -880,20 +896,20 @@ pub fn gemvIQ2_S(x: [*]const f32, w: [*]const u8, y: [*]f32, n: usize, k: usize)
                 const base = b * qk + ib32 * 32;
 
                 for (0..4) |l| {
-                    // 10-bit grid index
                     const shift: u4 = @intCast(8 - 2 * l);
                     const hi: u16 = (@as(u16, qh_byte) << shift) & 0x300;
                     const idx: u10 = @truncate(@as(u16, qs[4 * ib32 + l]) | hi);
                     const grid = iq2s_grid[idx];
                     const sign_byte = qs[32 + 4 * ib32 + l];
                     const db = if (l < 2) db0 else db1;
-                    const elem_base = base + l * 8;
-
-                    for (0..8) |j| {
-                        const v: i8 = @bitCast(@as(u8, @truncate(grid >> @as(u6, @intCast(j * 8)))));
-                        const s: f32 = if (sign_byte & (@as(u8, 1) << @intCast(j)) != 0) -1.0 else 1.0;
-                        if (elem_base + j < k) {
-                            sum += @as(f64, x[elem_base + j]) * db * @as(f32, @floatFromInt(v)) * s;
+                    const eb = base + l * 8;
+                    if (full) {
+                        sum += simdGroup8(x + eb, grid, sign_byte, db);
+                    } else {
+                        for (0..8) |j| {
+                            const v: i8 = @bitCast(@as(u8, @truncate(grid >> @as(u6, @intCast(j * 8)))));
+                            const s: f32 = if (sign_byte & (@as(u8, 1) << @intCast(j)) != 0) -1.0 else 1.0;
+                            if (eb + j < k) sum += @as(f64, x[eb + j]) * db * @as(f32, @floatFromInt(v)) * s;
                         }
                     }
                 }
