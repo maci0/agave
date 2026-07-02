@@ -128,30 +128,37 @@ const iq3xxs_grid = [256]u32{
 //   qs[4..7] = uint32 aux: bits 28-31=sub-scale(0-15), bits 0-27=4×7-bit ksigns indices
 /// Dot product of 4 x-elements against a u32 grid entry with per-element signs.
 /// sb_nibble: lower 4 bits used as sign mask (bit j → -1 if set, j=0..3).
+/// Decode 4-bit sign mask to @Vector(4, bool): bit j set → true (→ -1.0).
+inline fn signs4(sb_nibble: u8) @Vector(4, bool) {
+    const V4u8 = @Vector(4, u8);
+    const shifts: V4u8 = .{ 0, 1, 2, 3 };
+    return ((@as(V4u8, @splat(sb_nibble)) >> shifts) & @as(V4u8, @splat(@as(u8, 1)))) != @as(V4u8, @splat(@as(u8, 0)));
+}
+
+/// Decode 8-bit sign mask to @Vector(8, bool): bit j set → true (→ -1.0).
+inline fn signs8(sb: u8) @Vector(8, bool) {
+    const V8u8 = @Vector(8, u8);
+    const shifts: V8u8 = .{ 0, 1, 2, 3, 4, 5, 6, 7 };
+    return ((@as(V8u8, @splat(sb)) >> shifts) & @as(V8u8, @splat(@as(u8, 1)))) != @as(V8u8, @splat(@as(u8, 0)));
+}
+
+/// Dot product of 4 x-elements against a u32 grid entry with per-element signs.
+/// @select compiles to a single NEON BSL instruction — avoids float conversion + arithmetic.
 inline fn simdGroup4(x_ptr: [*]const f32, g: u32, sb_nibble: u8, dl: f32) f32 {
     const V4f32 = @Vector(4, f32);
-    const V4u8 = @Vector(4, u8);
-    const w_f32: V4f32 = @floatFromInt(@as(@Vector(4, i8), @bitCast(@as(V4u8, @bitCast(g)))));
-    const shifts: V4u8 = .{ 0, 1, 2, 3 };
-    const bits_f32: V4f32 = @floatFromInt((@as(V4u8, @splat(sb_nibble)) >> shifts) & @as(V4u8, @splat(@as(u8, 1))));
-    const signs: V4f32 = @as(V4f32, @splat(@as(f32, 1.0))) - @as(V4f32, @splat(@as(f32, 2.0))) * bits_f32;
+    const w_f32: V4f32 = @floatFromInt(@as(@Vector(4, i8), @bitCast(@as(@Vector(4, u8), @bitCast(g)))));
+    const signs: V4f32 = @select(f32, signs4(sb_nibble), @as(V4f32, @splat(@as(f32, -1.0))), @as(V4f32, @splat(@as(f32, 1.0))));
     const x_v: V4f32 = x_ptr[0..4].*;
     return @reduce(.Add, @as(V4f32, @splat(dl)) * x_v * w_f32 * signs);
 }
 
 /// Dot product of 8 x-elements against a u64 grid entry with per-element signs.
-/// sign = 1.0 - 2.0*bit: branchless, compiles to FMSUB on NEON/AVX.
+/// @select compiles to a single NEON BSL instruction — avoids float conversion + arithmetic.
 /// sb: 8-bit sign mask from ksigns_iq2xs (bit j → -1 if set).
 inline fn simdGroup8(x_ptr: [*]const f32, g: u64, sb: u8, dl: f32) f32 {
     const V8f32 = @Vector(8, f32);
-    const V8u8 = @Vector(8, u8);
-    // Extract 8 i8 weights from 64-bit grid entry.
-    const w_f32: V8f32 = @floatFromInt(@as(@Vector(8, i8), @bitCast(@as(V8u8, @bitCast(g)))));
-    // Sign vector: bit j → -1.0 if set, +1.0 if clear. Branchless via 1 - 2*bit.
-    const shifts: V8u8 = .{ 0, 1, 2, 3, 4, 5, 6, 7 };
-    const bits_f32: V8f32 = @floatFromInt((@as(V8u8, @splat(sb)) >> shifts) & @as(V8u8, @splat(@as(u8, 1))));
-    const signs: V8f32 = @as(V8f32, @splat(@as(f32, 1.0))) - @as(V8f32, @splat(@as(f32, 2.0))) * bits_f32;
-    // SIMD dot product over 8 elements.
+    const w_f32: V8f32 = @floatFromInt(@as(@Vector(8, i8), @bitCast(@as(@Vector(8, u8), @bitCast(g)))));
+    const signs: V8f32 = @select(f32, signs8(sb), @as(V8f32, @splat(@as(f32, -1.0))), @as(V8f32, @splat(@as(f32, 1.0))));
     const x_v: V8f32 = x_ptr[0..8].*;
     return @reduce(.Add, @as(V8f32, @splat(dl)) * x_v * w_f32 * signs);
 }
