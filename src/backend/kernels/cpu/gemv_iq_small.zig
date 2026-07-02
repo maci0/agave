@@ -1037,6 +1037,71 @@ test "gemvIQ3_XXS ksigns_iq2xs lookup: sign_idx=1 gives 0b10000001 not 0b0000000
     try std.testing.expectApproxEqAbs(@as(f32, 252.0), y[0], 1e-2);
 }
 
+test "fuzz: all IQ2/IQ3 GEMV functions produce finite output" {
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *std.testing.Smith) !void {
+            // Clamp f16 scale to non-NaN/Inf (exponent 0x1F = NaN/Inf → clamp to 0).
+            const clampF16 = struct {
+                fn c(w: []u8, off: usize) void {
+                    if (w[off + 1] & 0x7C == 0x7C) { w[off] = 0; w[off + 1] = 0; }
+                }
+            }.c;
+
+            var x: [256]f32 = undefined;
+            var x_raw: [256 * 4]u8 = undefined;
+            smith.bytesWithHash(&x_raw, 0);
+            x = @bitCast(x_raw);
+            for (&x) |*v| { if (!std.math.isFinite(v.*)) v.* = 0.0; }
+
+            // IQ2_XXS
+            {
+                var w: [backend_mod.iq2_xxs_block_bytes]u8 = undefined;
+                smith.bytesWithHash(&w, 1);
+                clampF16(&w, 0);
+                var y: [1]f32 = undefined;
+                gemvIQ2_XXS(&x, &w, &y, 1, 256);
+                try std.testing.expect(std.math.isFinite(y[0]));
+            }
+            // IQ3_XXS
+            {
+                var w: [backend_mod.iq3_xxs_block_bytes]u8 = undefined;
+                smith.bytesWithHash(&w, 2);
+                clampF16(&w, 0);
+                var y: [1]f32 = undefined;
+                gemvIQ3_XXS(&x, &w, &y, 1, 256);
+                try std.testing.expect(std.math.isFinite(y[0]));
+            }
+            // IQ2_XS
+            {
+                var w: [backend_mod.iq2_xs_block_bytes]u8 align(2) = undefined;
+                smith.bytesWithHash(&w, 3);
+                clampF16(&w, 0);
+                var y: [1]f32 = undefined;
+                gemvIQ2_XS(&x, &w, &y, 1, 256);
+                try std.testing.expect(std.math.isFinite(y[0]));
+            }
+            // IQ3_S
+            {
+                var w: [backend_mod.iq3_s_block_bytes]u8 = undefined;
+                smith.bytesWithHash(&w, 4);
+                clampF16(&w, 0);
+                var y: [1]f32 = undefined;
+                gemvIQ3_S(&x, &w, &y, 1, 256);
+                try std.testing.expect(std.math.isFinite(y[0]));
+            }
+            // IQ2_S
+            {
+                var w: [backend_mod.iq2_s_block_bytes]u8 = undefined;
+                smith.bytesWithHash(&w, 5);
+                clampF16(&w, 0);
+                var y: [1]f32 = undefined;
+                gemvIQ2_S(&x, &w, &y, 1, 256);
+                try std.testing.expect(std.math.isFinite(y[0]));
+            }
+        }
+    }.f);
+}
+
 pub fn gemvIQ1_S(x: [*]const f32, w: [*]const u8, y: [*]f32, n: usize, k: usize) void {
     gemvStub(x, w, y, n, k, backend_mod.iq1_s_block_bytes);
 }
