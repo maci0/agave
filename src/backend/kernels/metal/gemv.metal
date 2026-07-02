@@ -539,17 +539,17 @@ inline float q4_k_block_dot(device const uchar* bp, device const float* x, uint 
         float d_hi = d * float(sc_hi), dm_hi = dmin * float(m_hi);
         uint ql_off = g * 32, gi_lo = bk + g * 64, gi_hi = gi_lo + 32;
         if (gi_lo + 63 < k) {
-            float q_dot_lo = 0.0f, x_sum_lo = 0.0f;
+            // Fused lo+hi loop: read qs[ql_off+l] once, process both nibbles.
+            float q_dot_lo = 0.0f, q_dot_hi = 0.0f;
+            float x_sum_lo = 0.0f, x_sum_hi = 0.0f;
             for (uint l = 0; l < 32; l += 4) {
-                float4 xv = *(device const float4*)(x + gi_lo + l);
-                float4 qv = float4(qs[ql_off+l]&0xF, qs[ql_off+l+1]&0xF, qs[ql_off+l+2]&0xF, qs[ql_off+l+3]&0xF);
-                q_dot_lo += dot(xv, qv); x_sum_lo += xv.x+xv.y+xv.z+xv.w;
-            }
-            float q_dot_hi = 0.0f, x_sum_hi = 0.0f;
-            for (uint l = 0; l < 32; l += 4) {
-                float4 xv = *(device const float4*)(x + gi_hi + l);
-                float4 qv = float4(qs[ql_off+l]>>4, qs[ql_off+l+1]>>4, qs[ql_off+l+2]>>4, qs[ql_off+l+3]>>4);
-                q_dot_hi += dot(xv, qv); x_sum_hi += xv.x+xv.y+xv.z+xv.w;
+                float4 xlo = *(device const float4*)(x + gi_lo + l);
+                float4 xhi = *(device const float4*)(x + gi_hi + l);
+                uchar q0 = qs[ql_off+l], q1 = qs[ql_off+l+1], q2 = qs[ql_off+l+2], q3 = qs[ql_off+l+3];
+                float4 qvlo = float4(q0&0xF, q1&0xF, q2&0xF, q3&0xF);
+                float4 qvhi = float4(q0>>4, q1>>4, q2>>4, q3>>4);
+                q_dot_lo += dot(xlo, qvlo); x_sum_lo += xlo.x+xlo.y+xlo.z+xlo.w;
+                q_dot_hi += dot(xhi, qvhi); x_sum_hi += xhi.x+xhi.y+xhi.z+xhi.w;
             }
             sum += d_lo*q_dot_lo - dm_lo*x_sum_lo + d_hi*q_dot_hi - dm_hi*x_sum_hi;
         } else {
@@ -636,38 +636,28 @@ kernel void gemv_q4_k(
                 uint sc0_lo, m0_lo, sc0_hi, m0_hi;
                 getScaleMinK4(g * 2, sc0, sc0_lo, m0_lo);
                 getScaleMinK4(g * 2 + 1, sc0, sc0_hi, m0_hi);
+                // Fused lo+hi loops: halves qs reads by processing both nibbles in one pass.
                 float q_dot_lo = 0.0f, q_dot_hi = 0.0f;
+                float r1_dot_lo = 0.0f, r1_dot_hi = 0.0f;
+                uint sc1_lo = 0, m1_lo = 0, sc1_hi = 0, m1_hi = 0;
+                if (nr_active > 1) { getScaleMinK4(g * 2, sc1, sc1_lo, m1_lo); getScaleMinK4(g * 2 + 1, sc1, sc1_hi, m1_hi); }
                 for (uint l = 0; l < 32; l += 4) {
-                    float4 qv = float4(qs0[ql_off + l] & 0xF, qs0[ql_off + l + 1] & 0xF,
-                                       qs0[ql_off + l + 2] & 0xF, qs0[ql_off + l + 3] & 0xF);
-                    q_dot_lo += dot(xv_lo[l / 4], qv);
-                }
-                for (uint l = 0; l < 32; l += 4) {
-                    float4 qv = float4(qs0[ql_off + l] >> 4, qs0[ql_off + l + 1] >> 4,
-                                       qs0[ql_off + l + 2] >> 4, qs0[ql_off + l + 3] >> 4);
-                    q_dot_hi += dot(xv_hi[l / 4], qv);
+                    uchar q0 = qs0[ql_off+l], q1 = qs0[ql_off+l+1], q2 = qs0[ql_off+l+2], q3 = qs0[ql_off+l+3];
+                    float4 qvlo = float4(q0&0xF, q1&0xF, q2&0xF, q3&0xF);
+                    float4 qvhi = float4(q0>>4, q1>>4, q2>>4, q3>>4);
+                    q_dot_lo += dot(xv_lo[l/4], qvlo);
+                    q_dot_hi += dot(xv_hi[l/4], qvhi);
+                    if (nr_active > 1) {
+                        uchar r0 = qs1[ql_off+l], r1 = qs1[ql_off+l+1], r2 = qs1[ql_off+l+2], r3 = qs1[ql_off+l+3];
+                        r1_dot_lo += dot(xv_lo[l/4], float4(r0&0xF, r1&0xF, r2&0xF, r3&0xF));
+                        r1_dot_hi += dot(xv_hi[l/4], float4(r0>>4, r1>>4, r2>>4, r3>>4));
+                    }
                 }
                 sum0 += d0 * float(sc0_lo) * q_dot_lo - dmin0 * float(m0_lo) * x_sum_lo
                       + d0 * float(sc0_hi) * q_dot_hi - dmin0 * float(m0_hi) * x_sum_hi;
-
-                // Row 1 — reuse preloaded x registers + x_sum
                 if (nr_active > 1) {
-                    uint sc1_lo, m1_lo, sc1_hi, m1_hi;
-                    getScaleMinK4(g * 2, sc1, sc1_lo, m1_lo);
-                    getScaleMinK4(g * 2 + 1, sc1, sc1_hi, m1_hi);
-                    q_dot_lo = 0.0f; q_dot_hi = 0.0f;
-                    for (uint l = 0; l < 32; l += 4) {
-                        float4 qv = float4(qs1[ql_off + l] & 0xF, qs1[ql_off + l + 1] & 0xF,
-                                           qs1[ql_off + l + 2] & 0xF, qs1[ql_off + l + 3] & 0xF);
-                        q_dot_lo += dot(xv_lo[l / 4], qv);
-                    }
-                    for (uint l = 0; l < 32; l += 4) {
-                        float4 qv = float4(qs1[ql_off + l] >> 4, qs1[ql_off + l + 1] >> 4,
-                                           qs1[ql_off + l + 2] >> 4, qs1[ql_off + l + 3] >> 4);
-                        q_dot_hi += dot(xv_hi[l / 4], qv);
-                    }
-                    sum1 += d1 * float(sc1_lo) * q_dot_lo - dmin1 * float(m1_lo) * x_sum_lo
-                          + d1 * float(sc1_hi) * q_dot_hi - dmin1 * float(m1_hi) * x_sum_hi;
+                    sum1 += d1 * float(sc1_lo) * r1_dot_lo - dmin1 * float(m1_lo) * x_sum_lo
+                          + d1 * float(sc1_hi) * r1_dot_hi - dmin1 * float(m1_hi) * x_sum_hi;
                 }
             } else {
                 // Boundary: scalar fallback
