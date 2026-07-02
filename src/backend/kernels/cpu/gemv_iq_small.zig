@@ -126,6 +126,22 @@ const iq3xxs_grid = [256]u32{
 // 8 groups × 32 elements. Per group (8 bytes):
 //   qs[0..3] = 4 codebook indices into iq2xxs_grid
 //   qs[4..7] = uint32 aux: bits 28-31=sub-scale(0-15), bits 0-27=4×7-bit ksigns indices
+/// Dot product of 8 x-elements against one IQ2_XXS grid entry with signs applied.
+/// sign = 1.0 - 2.0*bit: branchless, compiles to FMSUB on NEON/AVX.
+inline fn iq2xxsGroup8(x_ptr: [*]const f32, g: u64, sb: u8, dl: f32) f32 {
+    const V8f32 = @Vector(8, f32);
+    const V8u8 = @Vector(8, u8);
+    // Extract 8 i8 weights from 64-bit grid entry.
+    const w_f32: V8f32 = @floatFromInt(@as(@Vector(8, i8), @bitCast(@as(V8u8, @bitCast(g)))));
+    // Sign vector: bit j → -1.0 if set, +1.0 if clear. Branchless via 1 - 2*bit.
+    const shifts: V8u8 = .{ 0, 1, 2, 3, 4, 5, 6, 7 };
+    const bits_f32: V8f32 = @floatFromInt((@as(V8u8, @splat(sb)) >> shifts) & @as(V8u8, @splat(@as(u8, 1))));
+    const signs: V8f32 = @as(V8f32, @splat(@as(f32, 1.0))) - @as(V8f32, @splat(@as(f32, 2.0))) * bits_f32;
+    // SIMD dot product over 8 elements.
+    const x_v: V8f32 = x_ptr[0..8].*;
+    return @reduce(.Add, @as(V8f32, @splat(dl)) * x_v * w_f32 * signs);
+}
+
 pub fn gemvIQ2_XXS(x: [*]const f32, w: [*]const u8, y: [*]f32, n: usize, k: usize) void {
     const bpb = backend_mod.iq2_xxs_block_bytes;
     const qk: usize = 256;
@@ -139,16 +155,15 @@ pub fn gemvIQ2_XXS(x: [*]const f32, w: [*]const u8, y: [*]f32, n: usize, k: usiz
             const bp = rp + b * bpb;
             const d: f32 = readF16LE(bp, 0);
             const qs = bp + 2;
+            const base0 = b * qk;
+            // Full block: all 256 elements within k — use SIMD path (no bounds check).
+            const full = base0 + qk <= k;
 
             var gi: usize = 0;
             var yi: usize = 0;
-            while (yi < 256) : ({
-                yi += 32;
-                gi += 8;
-            }) {
+            while (yi < 256) : ({ yi += 32; gi += 8; }) {
                 const aux = std.mem.readInt(u32, qs[gi + 4 ..][0..4], .little);
                 const dl = d * (0.5 + @as(f32, @floatFromInt(aux >> 28))) * 0.25;
-                // Signs: 4 groups × 7-bit index into ksigns_iq2xs → 8-bit mask (matches llama.cpp)
                 const sb0 = ksigns_iq2xs[(aux >> 0) & 0x7F];
                 const sb1 = ksigns_iq2xs[(aux >> 7) & 0x7F];
                 const sb2 = ksigns_iq2xs[(aux >> 14) & 0x7F];
@@ -157,21 +172,29 @@ pub fn gemvIQ2_XXS(x: [*]const f32, w: [*]const u8, y: [*]f32, n: usize, k: usiz
                 const g1 = iq2xxs_grid[qs[gi + 1]];
                 const g2 = iq2xxs_grid[qs[gi + 2]];
                 const g3 = iq2xxs_grid[qs[gi + 3]];
-
-                const base = b * qk + yi;
-                for (0..8) |j| {
-                    const v0: i8 = @bitCast(@as(u8, @truncate(g0 >> @as(u6, @intCast(j * 8)))));
-                    const v1: i8 = @bitCast(@as(u8, @truncate(g1 >> @as(u6, @intCast(j * 8)))));
-                    const v2: i8 = @bitCast(@as(u8, @truncate(g2 >> @as(u6, @intCast(j * 8)))));
-                    const v3: i8 = @bitCast(@as(u8, @truncate(g3 >> @as(u6, @intCast(j * 8)))));
-                    const s0: f32 = if (sb0 & (@as(u8, 1) << @intCast(j)) != 0) -1.0 else 1.0;
-                    const s1: f32 = if (sb1 & (@as(u8, 1) << @intCast(j)) != 0) -1.0 else 1.0;
-                    const s2: f32 = if (sb2 & (@as(u8, 1) << @intCast(j)) != 0) -1.0 else 1.0;
-                    const s3: f32 = if (sb3 & (@as(u8, 1) << @intCast(j)) != 0) -1.0 else 1.0;
-                    if (base + j < k) sum += @as(f64, x[base + j]) * dl * @as(f32, @floatFromInt(v0)) * s0;
-                    if (base + j + 8 < k) sum += @as(f64, x[base + j + 8]) * dl * @as(f32, @floatFromInt(v1)) * s1;
-                    if (base + j + 16 < k) sum += @as(f64, x[base + j + 16]) * dl * @as(f32, @floatFromInt(v2)) * s2;
-                    if (base + j + 24 < k) sum += @as(f64, x[base + j + 24]) * dl * @as(f32, @floatFromInt(v3)) * s3;
+                const base = base0 + yi;
+                if (full) {
+                    // SIMD: 4 vector dot products, each covering 8 elements — no branches.
+                    sum += iq2xxsGroup8(x + base, g0, sb0, dl);
+                    sum += iq2xxsGroup8(x + base + 8, g1, sb1, dl);
+                    sum += iq2xxsGroup8(x + base + 16, g2, sb2, dl);
+                    sum += iq2xxsGroup8(x + base + 24, g3, sb3, dl);
+                } else {
+                    // Partial last block: scalar with per-element bounds guard.
+                    for (0..8) |j| {
+                        const v0: i8 = @bitCast(@as(u8, @truncate(g0 >> @as(u6, @intCast(j * 8)))));
+                        const v1: i8 = @bitCast(@as(u8, @truncate(g1 >> @as(u6, @intCast(j * 8)))));
+                        const v2: i8 = @bitCast(@as(u8, @truncate(g2 >> @as(u6, @intCast(j * 8)))));
+                        const v3: i8 = @bitCast(@as(u8, @truncate(g3 >> @as(u6, @intCast(j * 8)))));
+                        const s0: f32 = if (sb0 & (@as(u8, 1) << @intCast(j)) != 0) -1.0 else 1.0;
+                        const s1: f32 = if (sb1 & (@as(u8, 1) << @intCast(j)) != 0) -1.0 else 1.0;
+                        const s2: f32 = if (sb2 & (@as(u8, 1) << @intCast(j)) != 0) -1.0 else 1.0;
+                        const s3: f32 = if (sb3 & (@as(u8, 1) << @intCast(j)) != 0) -1.0 else 1.0;
+                        if (base + j < k) sum += @as(f64, x[base + j]) * dl * @as(f32, @floatFromInt(v0)) * s0;
+                        if (base + j + 8 < k) sum += @as(f64, x[base + j + 8]) * dl * @as(f32, @floatFromInt(v1)) * s1;
+                        if (base + j + 16 < k) sum += @as(f64, x[base + j + 16]) * dl * @as(f32, @floatFromInt(v2)) * s2;
+                        if (base + j + 24 < k) sum += @as(f64, x[base + j + 24]) * dl * @as(f32, @floatFromInt(v3)) * s3;
+                    }
                 }
             }
         }
@@ -1099,7 +1122,7 @@ test "fuzz: all IQ2/IQ3 GEMV functions produce finite output" {
                 try std.testing.expect(std.math.isFinite(y[0]));
             }
         }
-    }.f);
+    }.f, .{});
 }
 
 pub fn gemvIQ1_S(x: [*]const f32, w: [*]const u8, y: [*]f32, n: usize, k: usize) void {
