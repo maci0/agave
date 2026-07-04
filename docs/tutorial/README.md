@@ -78,24 +78,24 @@ Everything you need to add a new architecture to Agave:
 
 | # | Chapter | What You'll Learn | ~Time |
 | --- | --------- | ------------------- | :---: |
-| 1 | [Tokens and Text](01-tokens-and-text.md) | How text becomes numbers the model can process | 7 min |
-| 2 | [The Transformer](02-the-transformer.md) | The core architecture: attention, position encoding, normalization | 12 min |
-| 3 | [Feed-Forward Networks](03-feed-forward-networks.md) | Activation functions, SwiGLU, MoE, megakernel fusion | 5 min |
-| 4 | [Quantization](04-quantization.md) | Compressing weights from 32 bits to 4 bits; MLX, TurboQuant, PlanarQuant | 15 min |
-| 5 | [Memory and Caching](05-memory-and-caching.md) | KV cache, PagedAttention, paged SDPA, RadixAttention | 10 min |
-| 6 | [State Space Models](06-state-space-models.md) | Linear-time alternatives to attention: DeltaNet and Mamba-2 | 7 min |
-| 7 | [Sampling](07-sampling.md) | Temperature, top-k, top-p, min-p, XTC, DRY, Mirostat, logit bias, grammar | 8 min |
-| 8 | [Backends](08-backends.md) | CPU, CUDA, Metal, Vulkan, ROCm, WebGPU — dispatchers and paged SDPA | 8 min |
-| 9 | [CPU SIMD Optimization](09-cpu-simd-optimization.md) | @Vector, @reduce, @mulAdd, multi-row batching, quantized GEMV | 12 min |
-| 10 | [Memory Safety](10-memory-safety.md) | defer, errdefer, guaranteed cleanup, leak detection | 8 min |
-| 11 | [Metal Backend Internals](11-metal-backend-internals.md) | UMA, buffer caching, command buffers, batch mode, threadgroup limits | 12 min |
-| 12 | [CPU Parallelism](12-cpu-parallelism.md) | Futex-based thread pool, work-stealing, atomic counters | 10 min |
-| 13 | [Batched Dispatch and Fusion](13-batched-dispatch-and-fusion.md) | gemvMulti, fused ops, megakernel system (3 tiers) | 16 min |
-| 14 | [Format Conventions](14-format-conventions.md) | GGUF vs SafeTensors differences, tensor layout, metadata mapping | 12 min |
-| 15 | [Chat Templates](15-chat-templates.md) | Data-driven role markers, EOG tokens, multi-turn formatting | 12 min |
-| 16 | [Recipe System](16-recipe-system.md) | Proven defaults per model+hardware, user override semantics | 10 min |
-| 17 | [Speculative Decoding & DDTree](17-speculative-decoding.md) | Draft models, DDTree, self-speculative, n-gram, EAGLE, DSpark, adaptive K | 12 min |
-| 18 | [Multi-Token Prediction](18-multi-token-prediction.md) | MTP heads, +1 offset norm, draft/verify with built-in heads | 10 min |
+| 1 | [Tokens and Text](01-tokens-and-text.md) | How text becomes numbers the model can process | 12 min |
+| 2 | [The Transformer](02-the-transformer.md) | The core architecture: attention, position encoding, normalization | 21 min |
+| 3 | [Feed-Forward Networks](03-feed-forward-networks.md) | Activation functions, SwiGLU, MoE, megakernel fusion | 12 min |
+| 4 | [Quantization](04-quantization.md) | Compressing weights from 32 bits to 4 bits; MLX, TurboQuant, PlanarQuant | 28 min |
+| 5 | [Memory and Caching](05-memory-and-caching.md) | KV cache, PagedAttention, paged SDPA, RadixAttention | 17 min |
+| 6 | [State Space Models](06-state-space-models.md) | Linear-time alternatives to attention: DeltaNet and Mamba-2 | 14 min |
+| 7 | [Sampling](07-sampling.md) | Temperature, top-k, top-p, min-p, XTC, DRY, Mirostat, logit bias, grammar | 12 min |
+| 8 | [Backends](08-backends.md) | CPU, CUDA, Metal, Vulkan, ROCm, WebGPU — dispatchers and paged SDPA | 15 min |
+| 9 | [CPU SIMD Optimization](09-cpu-simd-optimization.md) | @Vector, @reduce, @mulAdd, multi-row batching, quantized GEMV | 19 min |
+| 10 | [Memory Safety](10-memory-safety.md) | defer, errdefer, guaranteed cleanup, leak detection | 11 min |
+| 11 | [Metal Backend Internals](11-metal-backend-internals.md) | UMA, buffer caching, command buffers, batch mode, threadgroup limits | 19 min |
+| 12 | [CPU Parallelism](12-cpu-parallelism.md) | Futex-based thread pool, work-stealing, atomic counters | 15 min |
+| 13 | [Batched Dispatch and Fusion](13-batched-dispatch-and-fusion.md) | gemvMulti, fused ops, megakernel system (3 tiers) | 22 min |
+| 14 | [Format Conventions](14-format-conventions.md) | GGUF vs SafeTensors differences, tensor layout, metadata mapping | 20 min |
+| 15 | [Chat Templates](15-chat-templates.md) | Data-driven role markers, EOG tokens, multi-turn formatting | 18 min |
+| 16 | [Recipe System](16-recipe-system.md) | Proven defaults per model+hardware, user override semantics | 15 min |
+| 17 | [Speculative Decoding & DDTree](17-speculative-decoding.md) | Draft models, DDTree, self-speculative, n-gram, EAGLE, DSpark, adaptive K | 29 min |
+| 18 | [Multi-Token Prediction](18-multi-token-prediction.md) | MTP heads, +1 offset norm, draft/verify with built-in heads | 16 min |
 
 **Appendices:**
 - [Mathematical Operations Reference](appendix-math.md) — Quick reference for all math operations (dot product, softmax, GEMV, convolution, etc.)
@@ -114,3 +114,23 @@ For product documentation (project structure, module reference, supported models
 - [Architecture](../ARCHITECTURE.md) — project structure and module reference
 - [Models](../MODELS.md) — supported models and performance benchmarks
 - [Kernel Status](../KERNELS.md) — per-backend kernel implementation status
+
+## Further Reading
+
+If these tutorials leave you wanting to go deeper, these are worth your time:
+
+**Foundations**
+- *The Little Book of Deep Learning* — François Fleuret. Dense, precise, free. Best mathematical treatment of transformers that fits in 200 pages.
+- *Understanding Deep Learning* — Simon Prince. Broader coverage, available free online. Good on the math behind training and loss landscapes.
+
+**Architecture & Systems**
+- *Dive into Deep Learning* — d2l.ai. Extremely practical, chapter on attention is excellent. Every concept has working code.
+- *GPU Puzzles* — Sasha Rush. Interactive CUDA puzzles. If you want to understand why memory layout matters, work through these.
+
+**Inference & Deployment**
+- *LLM Inference Optimization* — NVIDIA TensorRT-LLM docs/blog posts. Dense but accurate on batching, KV cache management, and throughput vs. latency tradeoffs.
+- FlashAttention papers (Dao et al. 2022, 2023) — The original papers are readable and explain exactly why the tiled SDPA algorithm works. Chapter 5 of this tutorial is a summary.
+
+**Quantization**
+- *A White Paper on Neural Network Quantization* — Nagel et al. (Qualcomm). The most complete treatment of quantization theory: PTQ, QAT, GPTQ, and calibration.
+- GGUF/llama.cpp source — `ggml-quants.c` is the reference implementation for every quantization format this engine supports.
