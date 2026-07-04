@@ -33,9 +33,9 @@ Different readers have different goals. Here are recommended paths through the t
 
 ### 🎓 **ML Beginners (Systems Programmers New to ML)**
 Start from the beginning and read sequentially. Chapters 1-8 build understanding from first principles:
-1. **Chapters 1-4** — Core concepts (tokens, transformers, quantization)
-2. **Chapters 5-8** — Advanced concepts (caching, SSMs, sampling, backends)
-3. **Chapters 9-16** — Implementation patterns (SIMD, memory safety, backend internals)
+- [**Chapter 1: Tokens**](01-tokens-and-text.md) → [**Chapter 2: Transformer**](02-the-transformer.md) → [**Chapter 3: FFN**](03-feed-forward-networks.md) → [**Chapter 4: Quantization**](04-quantization.md)
+- [**Chapter 5: Caching**](05-memory-and-caching.md) → [**Chapter 6: SSMs**](06-state-space-models.md) → [**Chapter 7: Sampling**](07-sampling.md) → [**Chapter 8: Backends**](08-compute-backends.md)
+- [**Chapter 9: SIMD**](09-cpu-simd-optimization.md) → [**Chapter 10: Memory Safety**](10-memory-safety.md) → [**Chapter 11: Metal**](11-metal-backend-internals.md) → onward
 
 ### 🔧 **Implementation-Focused (Experienced ML Engineers)**
 You already know transformers and attention — jump straight to implementation:
