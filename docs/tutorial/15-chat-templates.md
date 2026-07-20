@@ -366,13 +366,13 @@ flowchart LR
         Format --> EOGRes --> GenLoop
     end
 
-    A1 -->|chatTemplate()| T1
-    A2 -->|chatTemplate()| T2
-    A3 -->|chatTemplate()| T3
-    A4 -->|chatTemplate()| T4
-    A5 -->|chatTemplate()| T5
-    A6 -->|chatTemplate()| T6
-    A7 -->|chatTemplate()| T7
+    A1 -->|"chatTemplate()"| T1
+    A2 -->|"chatTemplate()"| T2
+    A3 -->|"chatTemplate()"| T3
+    A4 -->|"chatTemplate()"| T4
+    A5 -->|"chatTemplate()"| T5
+    A6 -->|"chatTemplate()"| T6
+    A7 -->|"chatTemplate()"| T7
 
     T1 & T2 & T3 & T4 & T5 & T6 & T7 --> Format
 ```

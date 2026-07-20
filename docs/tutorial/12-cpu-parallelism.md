@@ -109,12 +109,12 @@ flowchart LR
     W2b["Worker 2\nrows 20–23"]:::sync
     Out["Output rows\n(y vector)"]:::success
 
-    Counter -->|fetchAdd(4)| M
-    Counter -->|fetchAdd(4)| W1
-    Counter -->|fetchAdd(4)| W2
-    Counter -->|fetchAdd(4)| W1b
-    Counter -->|fetchAdd(4)| W3
-    Counter -->|fetchAdd(4)| W2b
+    Counter -->|"fetchAdd(4)"| M
+    Counter -->|"fetchAdd(4)"| W1
+    Counter -->|"fetchAdd(4)"| W2
+    Counter -->|"fetchAdd(4)"| W1b
+    Counter -->|"fetchAdd(4)"| W3
+    Counter -->|"fetchAdd(4)"| W2b
 
     M --> Out
     W1 --> Out

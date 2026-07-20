@@ -49,7 +49,7 @@ flowchart LR
 
     Stored --> Dequant
     Dequant --> GEMV
-
+```
 
 **Q4_0, Q8_0** (GGUF-style): Groups of 32 values share a single **scale factor** (a multiplier that converts small integers back to approximate float values). Each value is stored as a small integer, dequantized on-the-fly:
 
@@ -99,7 +99,7 @@ flowchart TD
         SC1
         SC7
     end
-
+```
 
 ## MLX Affine Quantization
 
@@ -136,7 +136,7 @@ flowchart LR
         Unpack
         Affine
     end
-
+```
 
 Used by Apple MLX models (Gemma QAT 4-bit, GLM-4 6-bit). Each group of 64 values has a scale and bias:
 

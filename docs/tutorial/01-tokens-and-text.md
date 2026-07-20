@@ -301,7 +301,7 @@ flowchart TB
     classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
     classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
 
-    Prompt["Prompt tokens\n\"The capital of France is\"\n[464, 3361, 286, 4881, 318]"]:::setup
+    Prompt["Prompt tokens\nThe capital of France is\n(464, 3361, 286, 4881, 318)"]:::setup
     Done["Generation complete"]:::success
 
     subgraph Prefill["Prefill phase — process prompt"]

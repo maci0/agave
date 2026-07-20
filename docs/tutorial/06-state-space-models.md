@@ -72,7 +72,7 @@ flowchart LR
 
     Past100K["100K past tokens"]:::setup --> KVCache
     Past100K -. "compressed into" .-> State
-
+```
 
 ## Causal Convolution
 
@@ -179,7 +179,7 @@ flowchart TD
     Update --> Output["Step 4: Output\nout = S @ q / sqrt(k_dim)"]:::success
     Q --> Output
     Output --> Gate["Multiply by SiLU(z) gate"]:::optional
-
+```
 
 **GQA in DeltaNet:** GQA head mapping uses tiling (`kh = h % num_k_heads`) for both GGUF and SafeTensors formats (`kqv_order` is always false for Qwen3.5).
 
@@ -217,7 +217,7 @@ flowchart LR
     D --> Skip["y += D * x\n(skip connection)"]:::optional
     ReadOut --> Skip
     Skip --> Output["Output y[t]"]:::success
-
+```
 
 **Per-head recurrence:**
 
@@ -266,7 +266,7 @@ flowchart TD
 
     Past["100K past tokens"]:::setup --> TransformerMem
     Past -. "compressed into fixed box" .-> SSMMem
-
+```
 
 | Aspect | Transformer Attention | SSM Recurrence |
 |--------|----------------------|----------------|
