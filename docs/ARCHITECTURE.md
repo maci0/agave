@@ -56,10 +56,13 @@ agave/
 │   │   ├── format.zig     # Format interface (getTensor, getMetaStr, ...)
 │   │   ├── gguf.zig       # GGUF v2/v3 parser with mmap
 │   │   └── safetensors.zig# Multi-shard SafeTensors loader with config.json
+│   ├── lora.zig           # LoRA adapter load + merge at model load time
+│   ├── pull.zig           # HuggingFace Hub model download (`agave pull`)
 │   ├── models/
 │   │   ├── model.zig      # Model interface (forward, prefill, resetCache, cancel)
 │   │   ├── gemma3.zig     # Gemma 3 (GQA, GELU, post-norms)
 │   │   ├── gemma4.zig     # Gemma 4 (dual attention, MoE/dense variants, PLE)
+│   │   ├── diffusion_gemma.zig # DiffusionGemma (block diffusion, bidirectional canvas)
 │   │   ├── qwen35.zig     # Qwen 3.5 (hybrid DeltaNet SSM + attention)
 │   │   ├── gpt_oss.zig    # GPT-OSS (MoE, sliding window, attention sinks)
 │   │   ├── nemotron_h.zig # Nemotron-H (Mamba-2 + attention hybrid)
@@ -69,6 +72,7 @@ agave/
 │   │   └── vision.zig       # Vision encoder (SigLIP-2, SigLIP, Qwen VL) for multimodal models
 │   ├── ops/
 │   │   ├── attention.zig  # Shared SDPA kernel (SIMD, sliding window, backend dispatch)
+│   │   ├── sparse_attn.zig # Block sparse attention (PFlash scorer path)
 │   │   ├── math.zig       # argmax, GELU, sampling (top-k/p, min-p, XTC, Mirostat, DRY)
 │   │   ├── ssm.zig        # SSM ops: causal conv1d, Mamba-2 recurrence, group norm+gate
 │   │   ├── quant.zig      # Quantization helpers (bf16, mxfp4, fp8, iq4nl, nvfp4_st)
@@ -292,7 +296,7 @@ Constrained decoding via GBNF grammars and JSON schema. The module provides:
 | JSON Schema Converter | Converts JSON Schema objects into equivalent GBNF grammars for structured output |
 | Decoding State Machine | Tracks valid next-token sets during generation, masking logits to enforce grammar constraints |
 
-Activated via `--grammar <file.gbnf>` or `--json_schema <schema>` CLI flags, or via the server API's `grammar` / `json_schema` sampling parameters.
+Activated via `--grammar <file.gbnf>` or `--json-schema <schema>` CLI flags, or via the server API's `grammar` / `json_schema` sampling parameters.
 
 ### WASM (`src/wasm_entry.zig`)
 

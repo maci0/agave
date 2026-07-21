@@ -416,7 +416,7 @@ MTP GGUFs must include the nextn tensors. Look for "-MTP" in the filename (e.g.,
 
 **Related:** [Chapter 2: The Transformer](02-the-transformer.md) (attention, RoPE, normalization), [Chapter 3: FFN](03-feed-forward-networks.md) (SwiGLU, MoE), [Chapter 7: Sampling](07-sampling.md) (argmax, temperature), [Chapter 17: Speculative Decoding](17-speculative-decoding.md) (DDTree, n-gram, verification)
 
-**Next:** [Appendix: Mathematical Operations →](appendix-math.md) | **Back:** [Chapter 17: Speculative Decoding ←](17-speculative-decoding.md) | **Product docs:** [Models](../MODELS.md)
+**Next:** [Chapter 19: PFlash and Block Sparse Attention →](19-pflash-and-block-sparse.md) | **Back:** [Chapter 17: Speculative Decoding ←](17-speculative-decoding.md)
 
 ---
 

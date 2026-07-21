@@ -65,11 +65,13 @@ The 12B variant has 48 layers with a global attention layer every 6 layers (laye
 
 ## Performance
 
+Canonical numbers live in [BENCHMARKS.md](BENCHMARKS.md). The table below is a convenience snapshot and may lag re-benches.
+
 ### Apple M4 Pro (48 GB)
 
 | Model | Quant | Backend | tok/s |
 |-------|-------|---------|-------|
-| Qwen3.5 0.8B | Q8_0 | Metal | 183 |
+| Qwen3.5 0.8B | Q8_0 | Metal | 125† |
 | Qwen3.5 0.8B | Q4_0 | Metal | 110 |
 | Qwen3.5 9B | Q4_K_M | Metal | 7.2 |
 | Qwen3.5 9B | MLX-4bit | Metal | 12.7 |

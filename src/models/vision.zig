@@ -1254,10 +1254,7 @@ pub const VisionEncoder = struct {
         // Cache miss: allocate, convert, and store permanently.
         if (self.norm_cache_len >= max_norm_entries)
             @panic("normAsF32: norm cache overflow — increase max_norm_entries");
-        const buf = self.allocator.alloc(f32, n) catch |err| {
-            std.log.warn("normAsF32: alloc failed ({s}), using unconverted weights", .{@errorName(err)});
-            return @ptrCast(@alignCast(t.data_ptr));
-        };
+        const buf = self.allocator.alloc(f32, n) catch @panic("normAsF32: out of memory converting norm weights");
         const src: [*]const u16 = @ptrCast(@alignCast(t.data_ptr));
         for (0..n) |i| buf[i] = quant.bf16ToF32(src[i]);
         self.norm_cache[self.norm_cache_len] = .{ .key = key, .data = buf };

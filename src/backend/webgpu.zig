@@ -1423,14 +1423,17 @@ pub const WebGpuBackend = struct {
         const flat_elems = n_phys_blocks * block_stride;
         const flat_bytes = flat_elems * @sizeOf(f32);
 
+        // Grow with 2x capacity so decode rarely re-allocates as block count rises.
         if (self.sdpa_flat_keys == null or self.sdpa_flat_keys.?.len < flat_elems) {
+            const new_cap = @max(flat_elems, if (self.sdpa_flat_keys) |old| old.len * 2 else flat_elems);
             if (self.sdpa_flat_keys) |old| std.heap.page_allocator.free(old);
-            self.sdpa_flat_keys = std.heap.page_allocator.alloc(f32, flat_elems) catch
+            self.sdpa_flat_keys = std.heap.page_allocator.alloc(f32, new_cap) catch
                 @panic("WebGPU sdpaPaged: out of memory for flat key staging buffer");
         }
         if (self.sdpa_flat_vals == null or self.sdpa_flat_vals.?.len < flat_elems) {
+            const new_cap_v = @max(flat_elems, if (self.sdpa_flat_vals) |old| old.len * 2 else flat_elems);
             if (self.sdpa_flat_vals) |old| std.heap.page_allocator.free(old);
-            self.sdpa_flat_vals = std.heap.page_allocator.alloc(f32, flat_elems) catch
+            self.sdpa_flat_vals = std.heap.page_allocator.alloc(f32, new_cap_v) catch
                 @panic("WebGPU sdpaPaged: out of memory for flat value staging buffer");
         }
         const flat_keys = self.sdpa_flat_keys.?;
@@ -1516,7 +1519,7 @@ pub const WebGpuBackend = struct {
             self.cacheGpuResult(output, o_buf, q_sz);
             return;
         }
-        @import("kernels/cpu/sdpa_tree.zig").sdpaTree(q_all, prefix_keys, prefix_values, tree_keys, tree_values, output, ancestor_masks, nh, nkv, hd, prefix_len, n_nodes, scale, kv_type_k, kv_type_v);
+        @panic("WebGPU sdpaTree: unsupported KV type (need f32); use --kv-type f32 or --backend cpu");
     }
 
     pub fn sdpaPrefill(self: *WebGpuBackend, q: [*]const f32, k: [*]const f32, v: [*]const f32, kv_keys: []u8, kv_values: []u8, output: [*]f32, nh: usize, nkv: usize, hd: usize, prev_len: usize, n_tok: usize, scale: f32, kv_type_k: KvQuantType, kv_type_v: KvQuantType) void {

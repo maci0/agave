@@ -366,7 +366,7 @@ const cli_specs = [_]cli_mod.ArgSpec{
     .{ .long = "pp", .kind = .option, .help = "Pipeline parallelism stages [default: 1]." },
     .{ .long = "peers", .kind = .option, .help = "TP peer addresses for distributed inference (e.g. 192.168.0.212:9999)." },
     .{ .long = "rank", .kind = .option, .help = "This node's rank for TP/PP/disagg [default: 0]." },
-    .{ .long = "transport", .kind = .option, .help = "IPC transport: auto, tcp, shm, nccl [default: auto]. Also accepts rdma, udp, grpc (not yet implemented, falls back to tcp)." },
+    .{ .long = "transport", .kind = .option, .help = "IPC transport: auto, tcp, shm, nccl [default: auto]. rdma/udp/grpc are rejected until implemented." },
     .{ .long = "ctx-size", .kind = .option, .help = "Context window size; 0 = full, auto = fit to memory [default: 4096 or model limit, whichever is smaller]." },
     .{ .long = "allow-cpu-fallback", .help = "Allow GPU backends to fall back to CPU for unsupported ops." },
     .{ .long = "mmap", .help = "Use lazy mmap instead of eagerly paging weights into RAM." },
@@ -817,6 +817,12 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
             eprint("Error: --tp must be >= 1\n", .{});
             std.process.exit(2);
         }
+        // TpGroup currently runs rank 0 only (all-reduce not implemented).
+        if (tp > 1) {
+            eprint("Error: --tp > 1 is not supported yet (tensor-parallel all-reduce is incomplete)\n", .{});
+            eprint("  Use --pp for pipeline parallelism, or run a single rank.\n", .{});
+            std.process.exit(2);
+        }
     }
     if (parseU32(res.option("pp"), "pp")) |pp| {
         if (pp == 0) {
@@ -1053,7 +1059,19 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
             }
             break :blk parts;
         },
-        .api_key = res.option("api-key") orelse g_environ.get("AGAVE_API_KEY"),
+        .api_key = blk: {
+            const key = res.option("api-key") orelse g_environ.get("AGAVE_API_KEY");
+            // Non-loopback bind without a key exposes the full inference API.
+            const host_str = res.option("host") orelse "127.0.0.1";
+            const open_bind = std.mem.eql(u8, host_str, "0.0.0.0") or std.mem.eql(u8, host_str, "0") or
+                !(std.mem.eql(u8, host_str, "127.0.0.1") or std.mem.eql(u8, host_str, "localhost"));
+            if (res.flag("serve") and open_bind and key == null) {
+                eprint("Error: --host {s} requires --api-key (or AGAVE_API_KEY) for non-loopback binds\n", .{host_str});
+                eprint("  Use --host 127.0.0.1 for local-only access without auth.\n", .{});
+                std.process.exit(2);
+            }
+            break :blk key;
+        },
         .allow_cpu_fallback = res.flag("allow-cpu-fallback"),
         .debug = res.flag("debug"),
         .json = json_mode,
@@ -1064,10 +1082,17 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
         .tp_degree = parseU32(res.option("tp"), "tp") orelse 1,
         .tp_rank = parseU32(res.option("rank"), "rank") orelse 0,
         .tp_peers = res.option("peers"),
-        .transport = if (res.option("transport")) |t| std.meta.stringToEnum(TransportChoice, t) orelse {
-            eprint("Error: unknown transport '{s}'\n", .{t});
-            eprint("  Valid options: auto, tcp, shm, nccl (rdma, udp, grpc accepted but fall back to tcp)\n", .{});
-            std.process.exit(2);
+        .transport = if (res.option("transport")) |t| blk: {
+            const choice = std.meta.stringToEnum(TransportChoice, t) orelse {
+                eprint("Error: unknown transport '{s}'\n", .{t});
+                eprint("  Valid options: auto, tcp, shm, nccl\n", .{});
+                std.process.exit(2);
+            };
+            if (choice == .rdma or choice == .udp or choice == .grpc) {
+                eprint("Error: transport '{s}' is not implemented (use auto, tcp, shm, or nccl)\n", .{t});
+                std.process.exit(2);
+            }
+            break :blk choice;
         } else .auto,
         .pp_degree = parseU32(res.option("pp"), "pp") orelse 1,
         .disagg = res.flag("disagg"),
@@ -1193,15 +1218,12 @@ fn parsePeerAddr(peers_str: []const u8, fallback_port: u16) ?PeerAddr {
 
 const TransportMod = @import("parallel/transport.zig");
 
-fn resolveTransportKind(choice: TransportChoice, peers_str: []const u8) TransportMod.TransportKind {
+fn resolveTransportKind(choice: TransportChoice, peers_str: []const u8) error{TransportNotImplemented}!TransportMod.TransportKind {
     return switch (choice) {
         .tcp => .tcp,
         .shm => .shm,
         .nccl => .nccl,
-        .rdma, .udp, .grpc => {
-            std.log.warn("transport '{s}' not yet implemented, using tcp", .{@tagName(choice)});
-            return .tcp;
-        },
+        .rdma, .udp, .grpc => error.TransportNotImplemented,
         .auto => {
             const is_local = std.mem.eql(u8, peers_str, "localhost") or std.mem.eql(u8, peers_str, "127.0.0.1");
             const resolved: TransportMod.TransportKind = if (is_local) .shm else .tcp;
@@ -1215,7 +1237,10 @@ fn setupTransport(allocator: std.mem.Allocator, peers_str: []const u8, rank: u32
     const t = allocator.create(TransportMod.Transport) catch return null;
     var transport_ok = false;
     defer if (!transport_ok) allocator.destroy(t);
-    var kind = resolveTransportKind(choice, peers_str);
+    var kind = resolveTransportKind(choice, peers_str) catch {
+        std.log.err("transport '{s}' is not implemented (use auto, tcp, shm, or nccl)", .{@tagName(choice)});
+        return null;
+    };
     t.* = TransportMod.Transport.init(allocator, kind, rank, world_size) catch return null;
 
     if (kind == .shm) {
@@ -1621,10 +1646,14 @@ fn printUsage() void {
         \\  -s, --serve            Start HTTP server (OpenAI + Anthropic API)
         \\  -p, --port <PORT>      Server port [default: 49453]
         \\      --host <ADDR>      Bind address: IPv4, localhost, 0.0.0.0, or 0 [default: 127.0.0.1]
+        \\                         Non-loopback binds require --api-key (or AGAVE_API_KEY)
         \\      --api-key <KEY>    API key for server auth (or AGAVE_API_KEY env)
+        \\      --sleep-after <N>  Enter sleep mode after N seconds idle (0 = disabled)
+        \\      --max-batch-size <N>  Max concurrent batched requests [default: 1]
+        \\      --no-kv-cache      Prefill-only / embedding server (no decode KV)
         \\
         \\PARALLELISM:
-        \\      --tp <N>              Tensor parallelism degree [default: 1]
+        \\      --tp <N>              Tensor parallelism degree [default: 1; only 1 supported until all-reduce ships]
         \\      --pp <N>              Pipeline parallelism stages [default: 1]
         \\      --peers <ADDR>        Peer address (e.g. 192.168.0.2 or localhost for same-node)
         \\      --rank <N>            This node's rank for TP/PP/disagg [default: 0]
@@ -1637,9 +1666,16 @@ fn printUsage() void {
         \\  -K, --spec-tokens <N>     Draft tokens per speculation round [default: 5]
         \\      --tree-budget <N>     DDTree node budget [default: 64]
         \\      --draft-layers <N>    Layers for self-speculative draft [default: auto]
+        \\      --spec-token-map <F>  FR-Spec token frequency map for vocab truncation
         \\      --pflash-alpha <F>    PFlash block selection threshold [default: 0.85]
         \\      --pflash-block-size <N>  PFlash scoring block size in tokens [default: 64]
         \\      --pflash-scorer <PATH>  Separate model for PFlash block scoring (defaults to --draft-model)
+        \\
+        \\ADAPTERS & DIFFUSION:
+        \\      --lora <PATH>         Merge LoRA adapter GGUF at load time
+        \\      --diffusion-steps <N> DiffusionGemma denoising steps [default: 16]
+        \\      --diffusion-canvas <N> DiffusionGemma canvas length [default: 256]
+        \\      --diffusion-confidence <F>  Diffusion acceptance confidence [default: 0.9]
         \\
         \\OPTIMIZATION:
         \\      --megakernel          Enable fused FFN megakernels (3→1 dispatch per layer)
@@ -2608,7 +2644,10 @@ fn initAndRun(
                     const img_pixels = loadImage(allocator, frame_path, ve.image_size) catch continue;
                     defer allocator.free(img_pixels);
                     const tokens = ve.encode(img_pixels) catch continue;
-                    all_visual_tokens.appendSlice(allocator, tokens) catch {};
+                    all_visual_tokens.appendSlice(allocator, tokens) catch {
+                        eprint("Error: out of memory collecting video frame embeddings\n", .{});
+                        return false;
+                    };
                     frame_count += 1;
                 }
             }
@@ -4337,15 +4376,18 @@ test "parsePeerAddr invalid" {
 }
 
 test "resolveTransportKind explicit" {
-    try std.testing.expectEqual(TransportMod.TransportKind.tcp, resolveTransportKind(.tcp, "10.0.0.1"));
-    try std.testing.expectEqual(TransportMod.TransportKind.shm, resolveTransportKind(.shm, "10.0.0.1"));
-    try std.testing.expectEqual(TransportMod.TransportKind.nccl, resolveTransportKind(.nccl, "10.0.0.1"));
+    try std.testing.expectEqual(TransportMod.TransportKind.tcp, try resolveTransportKind(.tcp, "10.0.0.1"));
+    try std.testing.expectEqual(TransportMod.TransportKind.shm, try resolveTransportKind(.shm, "10.0.0.1"));
+    try std.testing.expectEqual(TransportMod.TransportKind.nccl, try resolveTransportKind(.nccl, "10.0.0.1"));
+    try std.testing.expectError(error.TransportNotImplemented, resolveTransportKind(.rdma, "10.0.0.1"));
+    try std.testing.expectError(error.TransportNotImplemented, resolveTransportKind(.udp, "10.0.0.1"));
+    try std.testing.expectError(error.TransportNotImplemented, resolveTransportKind(.grpc, "10.0.0.1"));
 }
 
 test "resolveTransportKind auto localhost" {
-    try std.testing.expectEqual(TransportMod.TransportKind.shm, resolveTransportKind(.auto, "localhost"));
-    try std.testing.expectEqual(TransportMod.TransportKind.shm, resolveTransportKind(.auto, "127.0.0.1"));
-    try std.testing.expectEqual(TransportMod.TransportKind.tcp, resolveTransportKind(.auto, "10.0.0.2"));
+    try std.testing.expectEqual(TransportMod.TransportKind.shm, try resolveTransportKind(.auto, "localhost"));
+    try std.testing.expectEqual(TransportMod.TransportKind.shm, try resolveTransportKind(.auto, "127.0.0.1"));
+    try std.testing.expectEqual(TransportMod.TransportKind.tcp, try resolveTransportKind(.auto, "10.0.0.2"));
 }
 
 test "isKnownShort recognizes valid short flags" {
@@ -4430,11 +4472,11 @@ test "fuzz: main.zig pure functions" {
             // parsePeerAddr with random strings
             _ = parsePeerAddr(ip_buf[0..s_len], smith.valueWithHash(u16, 2));
 
-            // resolveTransportKind all choices
+            // resolveTransportKind all choices (unimplemented transports return error, not exit)
             const choices = [_]TransportChoice{ .auto, .tcp, .shm, .nccl, .rdma, .udp, .grpc };
             for (choices) |c| {
-                _ = resolveTransportKind(c, "localhost");
-                _ = resolveTransportKind(c, "10.0.0.1");
+                _ = resolveTransportKind(c, "localhost") catch {};
+                _ = resolveTransportKind(c, "10.0.0.1") catch {};
             }
 
             // parseUint null/valid paths

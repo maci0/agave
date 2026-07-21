@@ -76,7 +76,11 @@ research/kernels/vision_ref_dumps/
 /test_*.png
 
 # Stray operator manifests (not part of this project)
-pelorus-*.yamldocs/diagrams/
+pelorus-*.yaml
+
+# Optional offline diagram renders (Mermaid in tutorials is the source of truth)
+# Uncomment to stop tracking local re-renders: docs/diagrams/
+
 docs/changelogs/
 
 # Local scratch / generated files

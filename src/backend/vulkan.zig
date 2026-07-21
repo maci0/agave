@@ -2328,7 +2328,7 @@ pub const VulkanBackend = struct {
             self.downloadF32(o_pool.mem, output, n_nodes * nh * hd);
             return;
         }
-        @import("kernels/cpu/sdpa_tree.zig").sdpaTree(q_all, prefix_keys, prefix_values, tree_keys, tree_values, output, ancestor_masks, nh, nkv, hd, prefix_len, n_nodes, scale, kv_type_k, kv_type_v);
+        @panic("Vulkan sdpaTree: unsupported KV type (need f32); use --kv-type f32 or --backend cpu");
     }
 
     /// Prefill SDPA — sequential loop over tokens, calling single-token sdpa.

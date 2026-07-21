@@ -580,7 +580,7 @@ Block sparse attention reduces scoring cost from O(n²) to O(n) by skipping dot 
 
 **In the code:** [src/ops/sparse_attn.zig](../../src/ops/sparse_attn.zig) (block sparse CPU SDPA kernel), [src/spec/pflash.zig](../../src/spec/pflash.zig) (block scoring, adaptive threshold, compressed prefill)
 
-**Next:** [Appendix: Mathematical Operations →](appendix-math.md) | **Back:** [Chapter 18: Multi-Token Prediction ←](18-multi-token-prediction.md) | **Related:** [Chapter 17: Speculative Decoding ←](17-speculative-decoding.md)
+**Next:** [Chapter 20: Diffusion Language Models →](20-diffusion-lm.md) | **Back:** [Chapter 18: Multi-Token Prediction ←](18-multi-token-prediction.md) | **Related:** [Chapter 17: Speculative Decoding ←](17-speculative-decoding.md)
 
 ---
 

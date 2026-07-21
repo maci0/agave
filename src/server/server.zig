@@ -4802,8 +4802,15 @@ fn handleConnection(stream: TcpStream) void {
         stream.close();
     }
     log_request_id = g_server.request_counter.fetchAdd(1, .monotonic);
-    var buf: [http_buf_size]u8 = undefined;
-    switch (readHttpRequest(stream, &buf)) {
+    // Heap buffer: avoid ~1MB stack per connection thread (up to max_concurrent_connections).
+    const buf = g_server.allocator.alloc(u8, http_buf_size) catch {
+        g_server.metrics.recordRequest();
+        g_server.metrics.recordFailure();
+        sendJsonError(stream, "503 Service Unavailable", "server_error", "Out of memory");
+        return;
+    };
+    defer g_server.allocator.free(buf);
+    switch (readHttpRequest(stream, buf)) {
         .ok => |req| handleRequest(stream, req),
         .body_too_large => {
             g_server.metrics.recordRequest();

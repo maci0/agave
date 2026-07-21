@@ -1,5 +1,7 @@
 # Agave vs llama.cpp — Performance Benchmarks
 
+**Source of truth for throughput claims.** README, MODELS, and TEST_MATRIX should cite this file rather than inventing parallel numbers.
+
 **Date**: 2026-05-18 (M4 Pro benchmarks from 2026-03-24, CUDA GB10 from 2026-05-12, NCCL RoCE from 2026-05-18)
 **Hardware**: Apple M4 Pro (14-core CPU, 20-core GPU), 48 GB unified memory
 **OS**: macOS 26.3.1 (aarch64)
@@ -33,7 +35,7 @@ Single-token autoregressive generation (batch=1). This is the primary metric for
 
 ## Megakernel System
 
-The megakernel system has two tiers, enabled via `--megakernel`:
+The megakernel system has three tiers (see [MEGAKERNEL.md](MEGAKERNEL.md)); measured deltas below cover Tier 1 fused FFN, enabled via `--megakernel`:
 
 ### Tier 1: Fused FFN
 

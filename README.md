@@ -18,7 +18,7 @@
 
 ## Features
 
-- **8 Model Architectures**: Gemma 3, Gemma 4, Qwen 3.5, GPT-OSS, Nemotron-H, Nemotron Nano, GLM-4, Llama 4
+- **9 Model Architectures**: Gemma 3, Gemma 4, DiffusionGemma, Qwen 3.5, GPT-OSS, Nemotron-H, Nemotron Nano, GLM-4, Llama 4
 - **6 Backends**: CPU (SIMD-optimized, Accelerate.framework on macOS), Metal GPU (Apple Silicon), Vulkan, CUDA, ROCm, WebGPU — individually toggleable at build time
 - **Compile-Time Model Selection**: Disable unused model architectures to reduce binary size
 - **2 Formats**: GGUF, SafeTensors (multi-shard, MLX quantized, NVFP4)
@@ -30,15 +30,15 @@
 - **Model Download**: `agave pull <org/repo>` — download GGUF models from HuggingFace Hub with auto quant selection
 - **Interactive REPL**: Multi-turn chat with `/help`, `/clear`, `/stats`, `/model`, `/quit`
 - **HTTP Server**: OpenAI + Anthropic API compatible, built-in chat UI, Prometheus metrics, rate limiting
-- **Multimodal Vision**: Image understanding via Gemma 4 SigLIP-2, Gemma 3 SigLIP, and Qwen VL vision encoders — image upload via CLI (`--image`) and HTTP API
+- **Multimodal**: Image (`--image`) and video frames (`--video`, `--video-fps`) via Gemma 4 SigLIP-2, Gemma 3 SigLIP, and Qwen VL encoders; also HTTP API
 - **Structured Output**: GBNF grammar (`--grammar-string`, `--grammar`), JSON schema (`--json-schema`), JSON mode (`--json-output`), server `response_format: json_object/json_schema`
-- **Full Sampling**: temperature, top-k, top-p, min-p, repeat/frequency/presence penalties, seed, stop sequences
+- **Full Sampling**: CLI: temperature, top-k, top-p, min-p, repeat penalty, seed. HTTP API also: frequency/presence penalties, stop sequences
 - **Batched Prefill**: Chunked GEMM + fused FlashAttention-2 for fast prompt processing
 - **Distributed Inference**: Tensor parallelism (TP), pipeline parallelism (PP), disaggregated prefill/decode. Same-node multi-GPU via POSIX shm (zero-copy IPC), cross-node via TCP. Heterogeneous: mix CUDA + Vulkan + CPU across x86_64 + aarch64
-- **Speculative Decoding**: Draft model, self-speculative (layer skip), DDTree with configurable tree budget, n-gram history-based prediction, multi-token prediction (MTP) heads
+- **Speculative Decoding**: Modes: standard, ddtree, self, ngram, suffix, lookahead, mtp/medusa, eagle, eagle3, mlp, pflash, dspark; plus FR-Spec vocab map and LoRA (`--lora`)
 - **Fused Megakernels**: Composable GPU megakernels — gate+up+SiLU fused into single dispatch (3→1)
 - **Sparse GEMV**: Skip near-zero FFN activation blocks (~40% sparsity from SiLU). CPU +21%, Metal +12%, all GPU backends. Inspired by PowerInfer/TurboSparse
-- **~125 tok/s** on Qwen3.5 0.8B Q8_0 (Metal, Apple Silicon M4 Pro), **24.9 tok/s** on Qwen3.5 9B MLX-4bit (82% of native MLX-lm)
+- **~125 tok/s** on Qwen3.5 0.8B Q8_0 Metal (M4 Pro; see [docs/BENCHMARKS.md](docs/BENCHMARKS.md) as the source of truth), **24.9 tok/s** on Qwen3.5 9B MLX-4bit
 
 ## Quick Start
 
@@ -238,7 +238,7 @@ Measured on Apple M4 Pro (48 GB unified memory). See [docs/BENCHMARKS.md](docs/B
 
 | Model | Quant | Backend | Decode (tok/s) | vs llama.cpp |
 |-------|-------|---------|---------------:|-------------:|
-| Qwen3.5 0.8B | Q8_0 | Metal | 183 | **1.31x** |
+| Qwen3.5 0.8B | Q8_0 | Metal | 125† | — |
 | Qwen3.5 9B | Q8_0 | Metal | 41.7 | **1.67x** |
 | Gemma 3 4B | MLX-Q4 | Metal | 78.1 | — |
 | Gemma 3 12B | Q8_0 | Metal | 22.3 | **1.19x** |
@@ -252,7 +252,7 @@ Measured on Apple M4 Pro (48 GB unified memory). See [docs/BENCHMARKS.md](docs/B
 
 | Backend | Hardware | Decode (tok/s) |
 |---------|----------|---------------:|
-| Metal | Apple M4 Pro | 129 |
+| Metal | Apple M4 Pro | 125† |
 | ROCm | AMD RX 7900 XTX | 50.8 |
 | CPU | Ryzen 9 9950X (32T) | 44 |
 | CUDA | NVIDIA GB10 (aarch64) | 35 |
@@ -269,6 +269,8 @@ Measured on Apple M4 Pro (48 GB unified memory). See [docs/BENCHMARKS.md](docs/B
 | 27B Q4_K_M | Single GPU | — | 2.2 |
 | 27B Q4_K_M | PP=2 | NCCL RoCE | 2.2 |
 | 27B Q4_K_M | TP=2 | NCCL RoCE | 1.7 |
+
+†Canonical decode numbers from [docs/BENCHMARKS.md](docs/BENCHMARKS.md) (2026-05-26 sparse GEMV + Accelerate). Other tables may reflect older runs.
 
 All quant formats supported on all backends: Q8_0 (GPU), Q4_0/Q4_K/Q5_K/Q6_K (GPU or CPU fallback on UMA). See [docs/KERNELS.md](docs/KERNELS.md) for details.
 
@@ -335,14 +337,28 @@ agave [OPTIONS] <model> [prompt]
       --mmap               Use lazy mmap instead of preloading weights into RAM
       --megakernel         Enable fused FFN megakernels (3→1 dispatch per layer)
       --draft-model <PATH> Draft model GGUF for speculative decoding
-      --spec-mode <MODE>   Speculative mode: standard, ddtree, self, ngram, mtp [default: ddtree with --draft-model]
-                           ngram uses output history (no draft model needed)
+      --spec-mode <MODE>   Speculative mode: auto, standard, ddtree, self, ngram, suffix,
+                           lookahead, mtp, medusa, eagle, eagle3, mlp, pflash, dspark
   -K, --spec-tokens <N>    Draft tokens per speculation round [default: 5]
       --tree-budget <N>    DDTree node budget [default: 64]
       --draft-layers <N>   Layers for self-speculative draft [default: auto]
+      --spec-token-map <F> FR-Spec token frequency map for vocab truncation
+      --pflash-alpha <F>   PFlash block selection threshold [default: 0.85]
+      --pflash-block-size <N>  PFlash scoring block size [default: 64]
+      --pflash-scorer <P>  Separate model for PFlash scoring
+      --lora <PATH>        Merge LoRA adapter GGUF at load time
+      --image <PATH>       Image file for multimodal (PNG/PPM)
+      --video <PATH>       Video directory of PNG frames
+      --video-fps <N>      Video frame sampling rate [default: 1]
+      --diffusion-steps <N>  DiffusionGemma denoising steps [default: 16]
+      --diffusion-canvas <N> DiffusionGemma canvas size [default: 256]
+      --diffusion-confidence <F>  Diffusion acceptance threshold [default: 0.9]
+      --sleep-after <N>    Server sleep after N seconds idle (0=off)
+      --max-batch-size <N> Server concurrent batch size
+      --no-kv-cache        Prefill-only / embedding server mode
       --list-devices       List available compute devices and exit
       --device <N>         GPU device index for CUDA/ROCm/Vulkan [default: 0]
-      --tp <N>             Tensor parallelism degree [default: 1]
+      --tp <N>             Tensor parallelism degree [default: 1] (currently only 1 supported)
       --pp <N>             Pipeline parallelism stages [default: 1]
       --peers <ADDR>       Peer address for distributed inference
       --rank <N>           This node's rank [default: 0]
@@ -391,7 +407,7 @@ zig build -Dtarget=aarch64-linux-gnu -Denable-metal=false
 | `enable-vulkan` | bool | true | Vulkan backend (runtime dlopen) |
 | `enable-cuda` | bool | true | CUDA backend (runtime dlopen) |
 | `enable-rocm` | bool | true | ROCm backend (runtime dlopen) |
-| `enable-webgpu` | bool | false | WebGPU backend (WGSL shaders) |
+| `enable-webgpu` | bool | true | WebGPU backend (WGSL shaders) |
 | `cuda-sm` | enum | sm_90 | CUDA SM target (sm_50..sm_120) |
 | `rocm-arch` | enum | gfx1100 | ROCm GFX target (gfx90a..gfx1151) |
 
@@ -401,6 +417,7 @@ zig build -Dtarget=aarch64-linux-gnu -Denable-metal=false
 |--------|------|---------|---------|
 | `enable-gemma3` | bool | true | Gemma 3 model support |
 | `enable-gemma4` | bool | true | Gemma 4 model support |
+| `enable-diffusion-gemma` | bool | true | DiffusionGemma model support |
 | `enable-qwen35` | bool | true | Qwen 3.5 model support |
 | `enable-gpt-oss` | bool | true | GPT-OSS model support |
 | `enable-nemotron-h` | bool | true | Nemotron-H model support |
@@ -572,7 +589,7 @@ zig build -Dtarget=aarch64-linux-musl \
 
 ## Documentation
 
-- **[Tutorial: LLM Inference From Scratch](docs/tutorial/README.md)** — 18-chapter progressive tutorial + 4 appendixes
+- **[Tutorial: LLM Inference From Scratch](docs/tutorial/README.md)** — 20-chapter progressive tutorial + 4 appendixes
 - **[Architecture](docs/ARCHITECTURE.md)** — Project structure, module reference, inference pipeline
 - **[Models](docs/MODELS.md)** — Supported models, parameters, per-model details
 - **[Benchmarks](docs/BENCHMARKS.md)** — Performance comparisons vs llama.cpp

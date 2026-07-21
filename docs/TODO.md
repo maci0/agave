@@ -2,7 +2,7 @@
 
 Bugs, performance issues, and future work. Detailed designs inline.
 
-**Last updated**: 2026-06-08
+**Last updated**: 2026-07-21
 
 ---
 
@@ -34,11 +34,11 @@ All quantized GEMV formats native on all 6 backends. See [KERNELS.md](KERNELS.md
 
 | Backend | Status | Notes |
 |---------|:------:|-------|
-| Metal | Complete | ~88 pipelines, GPTQ, paged SDPA |
-| CUDA | Complete | ~59 kernels, fused FFN, 3 megakernels |
+| Metal | Complete | 71 pipelines, GPTQ, paged SDPA |
+| CUDA | Complete | 61 kernels, fused FFN, 3 megakernels |
 | Vulkan | Complete | ~49 shaders, deferred dispatch |
 | WebGPU | Complete | ~48 shaders, lazy readback |
-| ROCm | Complete | ~46 kernels, GPTQ, 1 megakernel |
+| ROCm | Complete | 29 kernels, GPTQ, 1 megakernel |
 
 ---
 
@@ -147,7 +147,7 @@ All quantized GEMV formats native on all 6 backends. See [KERNELS.md](KERNELS.md
 
 ## Model Abstraction (Deferred)
 
-All 8 models share near-identical skeletons. A `ModelBuilder` could save ~600 lines but adds comptime complexity. Deferred because:
+All 9 models share near-identical skeletons. A `ModelBuilder` could save ~600 lines but adds comptime complexity. Deferred because:
 1. Models rarely change once working
 2. Each has unique quirks (Gemma scaling, GPT-OSS sinks, Qwen DeltaNet, GLM4 MLA)
 3. Self-contained files are easier to debug

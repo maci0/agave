@@ -2037,13 +2037,12 @@ pub const CudaBackend = struct {
             self.launch(self.fn_sdpa_tree, n_nodes * @as(u32, @intCast(nh)), block_size, reduction_smem, &params);
             return;
         }
-        @import("kernels/cpu/sdpa_tree.zig").sdpaTree(q_all, prefix_keys, prefix_values, tree_keys, tree_values, output, ancestor_masks, nh, nkv, hd, prefix_len, n_nodes, scale, kv_type_k, kv_type_v);
+        @panic("CUDA sdpaTree: unsupported KV type (need f32); use --kv-type f32 or --backend cpu");
     }
 
     /// Paged SDPA: block-table-indexed attention for non-contiguous KV cache.
     /// Appends k_new/v_new to paged cache, gathers blocks into flat contiguous
     /// buffers, uploads to GPU, then dispatches the paged SDPA kernel.
-    /// Falls back to CPU kernel if PTX was not rebuilt with sdpa_paged_kernel.
     pub fn sdpaPaged(self: *CudaBackend, q: [*]const f32, kv_view: PagedKvView, k_new: [*]const f32, v_new: [*]const f32, output: [*]f32, nh: usize, nkv: usize, hd: usize, scale: f32, _: KvQuantType, _: KvQuantType) void {
         const kvd = nkv * hd;
         var sl: u32 = @intCast(kv_view.seq_len + 1);
@@ -2055,13 +2054,8 @@ pub const CudaBackend = struct {
         @memcpy(kv_view.keyPtrMut(kv_view.seq_len)[0..kvd], k_new[0..kvd]);
         @memcpy(kv_view.valuePtrMut(kv_view.seq_len)[0..kvd], v_new[0..kvd]);
 
-        // Fall back to CPU if paged kernel not in PTX (needs `zig build ptx` to regenerate)
         if (self.fn_sdpa_paged == null) {
-            const cpu_sdpa = @import("kernels/cpu/sdpa.zig");
-            for (0..nh) |h| {
-                cpu_sdpa.sdpaPagedHead(q, kv_view, output, h, nh, nkv, hd, sl, scale);
-            }
-            return;
+            @panic("CUDA sdpaPaged: kernel not loaded — rebuild with `zig build ptx` or use --backend cpu");
         }
 
         // Gather scattered blocks into flat contiguous staging buffers.
@@ -2074,14 +2068,17 @@ pub const CudaBackend = struct {
         const flat_elems = n_phys_blocks * block_stride;
         const flat_bytes = flat_elems * @sizeOf(f32);
 
+        // Grow with 2x capacity so decode rarely re-allocates as block count rises.
         if (self.sdpa_flat_keys == null or self.sdpa_flat_keys.?.len < flat_elems) {
+            const new_cap = @max(flat_elems, if (self.sdpa_flat_keys) |old| old.len * 2 else flat_elems);
             if (self.sdpa_flat_keys) |old| std.heap.page_allocator.free(old);
-            self.sdpa_flat_keys = std.heap.page_allocator.alloc(f32, flat_elems) catch
+            self.sdpa_flat_keys = std.heap.page_allocator.alloc(f32, new_cap) catch
                 @panic("CUDA sdpaPaged: out of memory for flat key staging buffer");
         }
         if (self.sdpa_flat_vals == null or self.sdpa_flat_vals.?.len < flat_elems) {
+            const new_cap_v = @max(flat_elems, if (self.sdpa_flat_vals) |old| old.len * 2 else flat_elems);
             if (self.sdpa_flat_vals) |old| std.heap.page_allocator.free(old);
-            self.sdpa_flat_vals = std.heap.page_allocator.alloc(f32, flat_elems) catch
+            self.sdpa_flat_vals = std.heap.page_allocator.alloc(f32, new_cap_v) catch
                 @panic("CUDA sdpaPaged: out of memory for flat value staging buffer");
         }
         const flat_keys = self.sdpa_flat_keys.?;

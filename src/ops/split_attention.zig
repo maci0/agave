@@ -8,10 +8,10 @@
 //!   2. `splitAttention()` checks the partition:
 //!      - All GPU → fast path: `be.sdpa()` (zero overhead).
 //!      - All CPU → CPU SDPA on thread pool (or calling thread if no pool).
-//!      - Mixed → GPU SDPA with stats (deferred) + CPU SDPA on thread pool
-//!        (concurrent on UMA), then `splitSdpaMerge()` to combine.
-//!   3. The merge uses FlashAttention-2 online softmax correction — exact, no
-//!      approximation.
+//!      - Mixed → full-sequence CPU SDPA after `be.sync()` (GPU backends do not
+//!        yet emit real per-head softmax stats; identity stats would corrupt merge).
+//!   3. When real GPU stats exist, `splitSdpaMerge()` can combine partial outputs
+//!      with FlashAttention-2 online softmax correction (exact, no approximation).
 
 const std = @import("std");
 const tiered = @import("../kvcache/tiered.zig");
@@ -245,55 +245,39 @@ pub fn splitAttention(
         return;
     }
 
-    // ── Split path: concurrent GPU + CPU ──────────────────────────
+    // ── Split path: mixed VRAM + RAM/SSD ──────────────────────────
     //
-    // Dispatch order (optimized for UMA overlap):
-    //   1. KV append (CPU-side for both tiers)
-    //   2. Launch GPU SDPA via sdpaWithStats (deferred on Metal)
-    //   3. Run CPU SDPA via thread pool (blocks until done; GPU runs concurrently)
-    //   4. be.sync() — wait for GPU command buffer
-    //   5. Merge partial outputs via online softmax correction
+    // GPU backends currently fill identity softmax stats (max=0, sum=1) after a
+    // normal SDPA. Online merge requires real per-head max/sum from each split;
+    // identity stats silently corrupt the result. Until backends emit real stats,
+    // run full-sequence CPU SDPA (exact, no merge) after syncing GPU work.
 
-    std.debug.assert(nh <= max_heads);
-
-    // Stack-allocated per-head softmax stats (max 256 heads * 4 bytes = 1KB each)
-    var gpu_max: [max_heads]f32 = undefined;
-    var gpu_sum: [max_heads]f32 = undefined;
-    var cpu_max: [max_heads]f32 = undefined;
-    var cpu_sum: [max_heads]f32 = undefined;
-
-    // Step 1: GPU SDPA with stats (deferred dispatch on Metal/UMA)
-    be.sdpaWithStats(q, kv_keys, kv_values, k_new, v_new, gpu_out, &gpu_max, &gpu_sum, nh, nkv, hd, seq_len, scale, kv_type_k, kv_type_v);
-
-    // Step 2: CPU SDPA on thread pool (runs concurrently with GPU command buffer)
-    var cpu_job = CpuSdpaJob{
-        .q = q,
-        .keys = kv_keys.ptr,
-        .values = kv_values.ptr,
-        .output = cpu_out,
-        .head_max = &cpu_max,
-        .head_sum = &cpu_sum,
-        .nh = nh,
-        .nkv = nkv,
-        .hd = hd,
-        .sl = seq_len + 1,
-        .scale = scale,
-        .kv_type_k = kv_type_k,
-        .kv_type_v = kv_type_v,
-    };
-
-    if (pool) |p| {
-        p.parallelFor(nh, 1, @ptrCast(&cpu_job), CpuSdpaJob.work);
-    } else {
-        // No thread pool: run CPU SDPA inline
-        CpuSdpaJob.work(@ptrCast(&cpu_job), 0, nh);
-    }
-
-    // Step 3: Wait for GPU
     be.sync();
-
-    // Step 4: Merge GPU and CPU partial outputs
-    splitSdpaMerge(gpu_out, &gpu_max, &gpu_sum, cpu_out, &cpu_max, &cpu_sum, output, nh, hd);
+    const kvd_mixed = nkv * hd;
+    const k_off_m = kv_quant.kvByteOffset(kv_type_k, seq_len * kvd_mixed);
+    const v_off_m = kv_quant.kvByteOffset(kv_type_v, seq_len * kvd_mixed);
+    kv_quant.kvStore(kv_keys.ptr + k_off_m, k_new, kvd_mixed, kv_type_k);
+    kv_quant.kvStore(kv_values.ptr + v_off_m, v_new, kvd_mixed, kv_type_v);
+    if (pool) |p| {
+        var ctx = CpuSdpaNoStatsJob{
+            .q = q,
+            .keys = kv_keys.ptr,
+            .values = kv_values.ptr,
+            .output = output,
+            .nh = nh,
+            .nkv = nkv,
+            .hd = hd,
+            .sl = seq_len + 1,
+            .scale = scale,
+            .kv_type_k = kv_type_k,
+            .kv_type_v = kv_type_v,
+        };
+        p.parallelFor(nh, 1, @ptrCast(&ctx), CpuSdpaNoStatsJob.work);
+    } else {
+        sdpa_cpu.sdpaQuantHeads(q, kv_keys.ptr, kv_values.ptr, output, nh, nkv, hd, seq_len + 1, scale, kv_type_k, kv_type_v);
+    }
+    _ = gpu_out;
+    _ = cpu_out;
 }
 
 /// Merge two partial SDPA outputs using online softmax correction.

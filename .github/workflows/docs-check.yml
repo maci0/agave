@@ -1,0 +1,42 @@
+name: Docs check
+
+on:
+  push:
+    branches: [ main, develop ]
+    paths:
+      - 'docs/**'
+      - 'README.md'
+      - 'AGENTS.md'
+      - 'scripts/check-docs.py'
+      - 'src/backend/metal.zig'
+      - 'src/backend/cuda.zig'
+      - 'src/backend/rocm.zig'
+      - 'src/backend/vulkan.zig'
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'docs/**'
+      - 'README.md'
+      - 'AGENTS.md'
+      - 'scripts/check-docs.py'
+      - 'src/backend/metal.zig'
+      - 'src/backend/cuda.zig'
+      - 'src/backend/rocm.zig'
+      - 'src/backend/vulkan.zig'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check-docs:
+    name: Link and count hygiene
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+
+      - name: Run docs checks
+        run: python3 scripts/check-docs.py

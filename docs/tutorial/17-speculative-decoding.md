@@ -747,100 +747,16 @@ MTP requires GGUF files with nextn tensors (look for "-MTP" in the filename). Se
 
 ## PFlash: Speculative Prefill for Long Contexts
 
-All the modes above address decode speed -- the time between tokens during generation. Prefill is a separate bottleneck: for a 128K-token prompt, the target model must attend over every token pair before producing the first output token. PFlash (from Luce-Org/lucebox-hub) attacks this with speculative prefill.
+Decode modes above speed up token-by-token generation. **Prefill** is a separate bottleneck: a 128K prompt forces the target model to attend over the full sequence before the first output token.
 
-### What PFlash Does
-
-Instead of running the full target model over the entire prompt, PFlash uses a cheap scorer to identify which KV blocks matter and prefills only those blocks through the target model.
-
-```mermaid
-flowchart LR
-    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
-    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
-    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
-    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
-    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
-    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
-
-    Prompt["Long Prompt\n128K tokens"]:::setup
-    Scorer["Scorer Model\n(draft model or dedicated tiny model)\nblock-sparse O(n) pass"]:::sync
-    Scores["Block Importance Scores\n[0.1, 0.9, 0.2, 0.8, 0.3, 0.7, ...]"]:::migration
-    Threshold["Adaptive Threshold\nalpha x mean(scores)\n(default alpha=0.85)"]:::migration
-    Drop["Dropped Blocks\n~85-95% of prompt\n(boilerplate, padding, off-topic)"]:::danger
-    Keep["Kept Blocks\n~5-15% of prompt\n(high-relevance context)"]:::sync
-    Target["Target Model\nprefill compressed prompt\n6-13K tokens instead of 128K"]:::sync
-    KVCache["KV Cache\n(compressed representation)"]:::migration
-    Decode["DDTree Speculative Decode\nnormal token generation loop"]:::sync
-    Tokens["Output Tokens"]:::success
-
-    Prompt --> Scorer
-    Scorer --> Scores
-    Scores --> Threshold
-    Threshold --> Drop
-    Threshold --> Keep
-    Keep --> Target
-    Target --> KVCache
-    KVCache --> Decode
-    Decode --> Tokens
-
-    subgraph Compression["PFlash Compression (8-20x)"]
-        Scorer
-        Scores
-        Threshold
-        Drop
-        Keep
-    end
-```
-
-The key insight: most tokens in a long prompt are not consulted during generation. A technical document's repeated boilerplate, padding, or off-topic context contributes little to the final answer. The scorer identifies and discards these blocks before the expensive target model runs.
-
-### Adaptive PFlash: The Alpha Threshold
-
-The selection threshold is `alpha * mean(block_scores)`, not a fixed top-K count. This is what "Adaptive PFlash" refers to in the original paper.
-
-Why adaptive matters:
-
-- A dense technical reference might have 40% of blocks score above threshold
-- A padded narrative prompt might have only 3% score above threshold
-- Fixed top-K=10 over-selects for the dense case and under-selects for the sparse case
-
-Lower alpha = more aggressive compression = faster prefill but higher risk of dropping important context. Start with the default (0.85) and lower it if you observe degraded output quality.
+**PFlash** uses a cheap scorer to rank prompt KV blocks, keeps only high-importance blocks, and prefills the target over that compressed set. It composes with DDTree decode (`--spec-mode pflash`).
 
 ```bash
-agave model.gguf --draft-model draft.gguf --spec-mode pflash "prompt"                       # alpha=0.85 (default)
-agave model.gguf --draft-model draft.gguf --spec-mode pflash --pflash-alpha 0.7 "prompt"    # aggressive
-agave model.gguf --draft-model draft.gguf --spec-mode pflash --pflash-alpha 0.95 "prompt"   # conservative
-```
-
-### PFlash + DDTree: Combining Prefill and Decode Speedup
-
-PFlash and DDTree solve different bottlenecks and compose cleanly. PFlash fills the KV cache with the compressed prompt representation; DDTree then runs its normal speculative decode loop over that KV cache.
-
-```bash
-# PFlash prefill + DDTree decode (recommended for 32K+ prompts)
 agave target.gguf --draft-model draft.gguf --spec-mode pflash "prompt"
-
-# Separate scorer for maximum throughput (scorer can be smaller than draft model)
-agave target.gguf --draft-model draft.gguf --pflash-scorer tiny-scorer.gguf --spec-mode pflash "prompt"
-
-# Tune block granularity (smaller blocks = finer selection, more overhead)
-agave target.gguf --draft-model draft.gguf --spec-mode pflash --pflash-block-size 32 "prompt"
+agave target.gguf --draft-model draft.gguf --spec-mode pflash --pflash-alpha 0.7 "prompt"
 ```
 
-The scorer defaults to the `--draft-model`. If you already have a draft model loaded for DDTree, PFlash reuses it at no extra memory cost. For maximum throughput, a dedicated `--pflash-scorer` model can be smaller than the draft model -- it only needs to rank block importance, not produce accurate next-token predictions.
-
-### Performance Expectations
-
-PFlash targets time-to-first-token (TTFT) for long prompts. Decode throughput is unchanged.
-
-| Context length | Expected TTFT reduction |
-|---------------|------------------------|
-| 8K tokens | Minimal (overhead not worth it) |
-| 32K tokens | ~3-5x |
-| 128K tokens | ~8-12x |
-| 512K tokens | ~20-40x |
-
-Actual numbers depend on prompt compressibility (how many blocks score below threshold), scorer speed, and target model size. Prompts with high repetition or large amounts of boilerplate compress more aggressively.
+Full algorithm (block sparse attention, alpha threshold, scorer models, expected TTFT gains): **[Chapter 19: PFlash and Block Sparse Attention](19-pflash-and-block-sparse.md)**.
 
 **When to use PFlash:**
 - Prompts longer than 32K tokens
@@ -889,7 +805,7 @@ The server uses the same speculative decoding loop as CLI mode. Draft model pref
 
 **In the code:** [src/spec/spec_decode.zig](../../src/spec/spec_decode.zig) (orchestrator, adaptive K, EAGLE/MLP/Lookahead drafting, FR-Spec mask), [src/spec/ddtree.zig](../../src/spec/ddtree.zig) (DDTree construction), [src/spec/ngram.zig](../../src/spec/ngram.zig) (n-gram, SharedNgramPool, SuffixState, LookaheadState), [src/spec/pflash.zig](../../src/spec/pflash.zig) (PFlash block scoring and compressed prefill), [src/models/model.zig](../../src/models/model.zig) (get_hidden_state/eagle_forward vtable), [src/ops/sparse_attn.zig](../../src/ops/sparse_attn.zig) (block sparse SDPA), [src/backend/kernels/cpu/sdpa_tree.zig](../../src/backend/kernels/cpu/sdpa_tree.zig) (tree-masked attention)
 
-**Next:** [Chapter 19: PFlash and Block Sparse Attention ->](19-pflash-and-block-sparse.md) | **Back:** [Chapter 16: Recipe System <-](16-recipe-system.md) | **Product docs:** [Models](../MODELS.md)
+**Next:** [Chapter 18: Multi-Token Prediction →](18-multi-token-prediction.md) | **Back:** [Chapter 16: Recipe System ←](16-recipe-system.md)
 
 ---
 

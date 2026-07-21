@@ -684,7 +684,7 @@ Inference hot path is allocation-free — all buffers pre-allocated, operations 
 - Chapter 6 (convolution, outer product, SSM recurrence)
 - Chapter 7 (sampling operations)
 
-**Next:** [Appendix: Compile-Time Optimization →](appendix-compile-time.md) | **Back:** [Chapter 17: Speculative Decoding ←](17-speculative-decoding.md)
+**Next:** [Appendix: Compile-Time Optimization →](appendix-compile-time.md) | **Back:** [Chapter 20: Diffusion Language Models ←](20-diffusion-lm.md)
 
 ---
 

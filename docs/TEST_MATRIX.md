@@ -1,6 +1,7 @@
 # Agave Test Matrix — Model × Backend × Quant
 
-**Date**: 2026-05-19
+**Date**: 2026-05-19 (last full re-run). **Status note (2026-07-21):** matrix coverage lags shipped features. Missing rows for Llama 4, DiffusionGemma, GPT-OSS, Nemotron-H, full Vulkan/ROCm/WebGPU correctness, LoRA, and newer `--spec-mode` values. Re-run before release; treat PASS cells below as historical, not complete coverage.
+
 **Hardware**:
 - Metal/CPU: Apple M4 Pro (14-core CPU, 20-core GPU), 48 GB unified memory, macOS 26.4
 - CUDA: NVIDIA GB10 (Blackwell sm_121), aarch64, Ubuntu 24.04, CUDA 13.0 (maci@10.10.10.212)

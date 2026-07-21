@@ -18,6 +18,8 @@ By the end of this tutorial, you'll understand:
 - **Compute backends**: How CPU, GPU (CUDA, Metal, Vulkan, ROCm, WebGPU) backends execute kernels and manage memory
 - **Speculative decoding**: Draft models, DDTree tree construction, self-speculative layer skipping, n-gram, EAGLE, DSpark confidence-scheduled verification, adaptive K
 - **Multi-Token Prediction**: MTP heads, +1 offset norm, built-in draft tokens, 70-85% acceptance rates
+- **PFlash / block sparse**: Scorer-driven prefill compression for long contexts
+- **Diffusion LMs**: Block diffusion (DiffusionGemma), bidirectional canvas, confidence acceptance
 
 ## Prerequisites
 
@@ -34,7 +36,7 @@ Different readers have different goals. Here are recommended paths through the t
 ### 🎓 **ML Beginners (Systems Programmers New to ML)**
 Start from the beginning and read sequentially. Chapters 1-8 build understanding from first principles:
 - [**Chapter 1: Tokens**](01-tokens-and-text.md) → [**Chapter 2: Transformer**](02-the-transformer.md) → [**Chapter 3: FFN**](03-feed-forward-networks.md) → [**Chapter 4: Quantization**](04-quantization.md)
-- [**Chapter 5: Caching**](05-memory-and-caching.md) → [**Chapter 6: SSMs**](06-state-space-models.md) → [**Chapter 7: Sampling**](07-sampling.md) → [**Chapter 8: Backends**](08-compute-backends.md)
+- [**Chapter 5: Caching**](05-memory-and-caching.md) → [**Chapter 6: SSMs**](06-state-space-models.md) → [**Chapter 7: Sampling**](07-sampling.md) → [**Chapter 8: Backends**](08-backends.md)
 - [**Chapter 9: SIMD**](09-cpu-simd-optimization.md) → [**Chapter 10: Memory Safety**](10-memory-safety.md) → [**Chapter 11: Metal**](11-metal-backend-internals.md) → onward
 
 ### 🔧 **Implementation-Focused (Experienced ML Engineers)**
@@ -96,6 +98,8 @@ Everything you need to add a new architecture to Agave:
 | 16 | [Recipe System](16-recipe-system.md) | Proven defaults per model+hardware, user override semantics | 15 min |
 | 17 | [Speculative Decoding & DDTree](17-speculative-decoding.md) | Draft models, DDTree, self-speculative, n-gram, EAGLE, DSpark, adaptive K | 29 min |
 | 18 | [Multi-Token Prediction](18-multi-token-prediction.md) | MTP heads, +1 offset norm, draft/verify with built-in heads | 16 min |
+| 19 | [PFlash and Block Sparse](19-pflash-and-block-sparse.md) | Block sparse attention, speculative prefill, alpha tuning | 18 min |
+| 20 | [Diffusion Language Models](20-diffusion-lm.md) | DiffusionGemma, block diffusion, bidirectional canvas | 14 min |
 
 **Appendices:**
 - [Mathematical Operations Reference](appendix-math.md) — Quick reference for all math operations (dot product, softmax, GEMV, convolution, etc.)

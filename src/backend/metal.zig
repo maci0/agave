@@ -2384,14 +2384,17 @@ pub const MetalBackend = struct {
         const flat_elems = n_phys_blocks * block_stride;
         const flat_bytes = flat_elems * @sizeOf(f32);
 
+        // Grow with 2x capacity so decode rarely re-allocates as block count rises.
         if (self.sdpa_flat_keys == null or self.sdpa_flat_keys.?.len < flat_elems) {
+            const new_cap = @max(flat_elems, if (self.sdpa_flat_keys) |old| old.len * 2 else flat_elems);
             if (self.sdpa_flat_keys) |old| std.heap.page_allocator.free(old);
-            self.sdpa_flat_keys = std.heap.page_allocator.alloc(f32, flat_elems) catch
+            self.sdpa_flat_keys = std.heap.page_allocator.alloc(f32, new_cap) catch
                 @panic("Metal sdpaPaged: out of memory for flat key staging buffer");
         }
         if (self.sdpa_flat_vals == null or self.sdpa_flat_vals.?.len < flat_elems) {
+            const new_cap_v = @max(flat_elems, if (self.sdpa_flat_vals) |old| old.len * 2 else flat_elems);
             if (self.sdpa_flat_vals) |old| std.heap.page_allocator.free(old);
-            self.sdpa_flat_vals = std.heap.page_allocator.alloc(f32, flat_elems) catch
+            self.sdpa_flat_vals = std.heap.page_allocator.alloc(f32, new_cap_v) catch
                 @panic("Metal sdpaPaged: out of memory for flat value staging buffer");
         }
         const flat_keys = self.sdpa_flat_keys.?;
@@ -2619,8 +2622,7 @@ pub const MetalBackend = struct {
             }
             return;
         }
-        // CPU fallback for non-turbo quantized prefix KV
-        @import("kernels/cpu/sdpa_tree.zig").sdpaTree(q_all, prefix_keys, prefix_values, tree_keys, tree_values, output, ancestor_masks, nh, nkv, hd, prefix_len, n_nodes, scale, kv_type_k, kv_type_v);
+        @panic("Metal sdpaTree: unsupported KV type (need f32 or turbo); use --kv-type f32/turbo* or --backend cpu");
     }
 
     /// for future chunks/decode. All dispatches in one command buffer.

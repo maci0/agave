@@ -1,4 +1,4 @@
-# Tutorial 20: Diffusion Language Models
+# Chapter 20: Diffusion Language Models
 
 ## Overview
 
@@ -63,7 +63,7 @@ Once the 256-token canvas is fully denoised, it becomes part of the KV cache. A 
 DiffusionGemma is built on the Gemma 4 26B A4B backbone:
 - 30 layers: pattern of 5 sliding-window + 1 global attention (repeat 5×)
 - 128 experts MoE with top-8 routing
-- 2816 hidden dimension, 16 attention heads, 8 KV heads
+- 2816 hidden dimension; dual attention: sliding-window heads (dim 256, 16/8 Q/KV) and global heads (dim 512)
 - BF16 SafeTensors only (no GGUF yet)
 - Tensor prefix: `model.decoder.layers.N.*`
 
@@ -156,6 +156,15 @@ Agave v1 implementation runs canvas attention serially (one token at a time thro
 | Diffusion + MTP | TBD | Partial | Yes |
 
 The self-correction property is unique to diffusion: if an early token becomes inconsistent with later context, re-noising lets the model fix it. Autoregressive models commit to each token irrevocably.
+
+---
+
+
+---
+
+**In the code:** [src/models/diffusion_gemma.zig](../../src/models/diffusion_gemma.zig) (canvas forward, block diffusion), [src/ops/attention.zig](../../src/ops/attention.zig) (`scaledDotProductAttentionCanvas`), [src/main.zig](../../src/main.zig) (`generateDiffusion`)
+
+**Next:** [Appendix: Mathematical Operations →](appendix-math.md) | **Back:** [Chapter 19: PFlash and Block Sparse Attention ←](19-pflash-and-block-sparse.md)
 
 ---
 

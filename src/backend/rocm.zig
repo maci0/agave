@@ -1406,12 +1406,7 @@ pub const RocmBackend = struct {
         var sl: u32 = @intCast(kv_view.seq_len + 1);
 
         if (self.fn_sdpa_paged == null) {
-            self.flushActivations();
-            @memcpy(kv_view.keyPtrMut(kv_view.seq_len)[0..kvd], k_new[0..kvd]);
-            @memcpy(kv_view.valuePtrMut(kv_view.seq_len)[0..kvd], v_new[0..kvd]);
-            const cpu_sdpa = @import("kernels/cpu/sdpa.zig");
-            for (0..nh) |h| cpu_sdpa.sdpaPagedHead(q, kv_view, output, h, nh, nkv, hd, sl, scale);
-            return;
+            @panic("ROCm sdpaPaged: kernel not loaded — rebuild HSACO or use --backend cpu");
         }
 
         self.flushActivations();
@@ -1427,14 +1422,17 @@ pub const RocmBackend = struct {
         const flat_elems = n_phys_blocks * block_stride;
         const flat_bytes = flat_elems * @sizeOf(f32);
 
+        // Grow with 2x capacity so decode rarely re-allocates as block count rises.
         if (self.sdpa_flat_keys == null or self.sdpa_flat_keys.?.len < flat_elems) {
+            const new_cap = @max(flat_elems, if (self.sdpa_flat_keys) |old| old.len * 2 else flat_elems);
             if (self.sdpa_flat_keys) |old| std.heap.page_allocator.free(old);
-            self.sdpa_flat_keys = std.heap.page_allocator.alloc(f32, flat_elems) catch
+            self.sdpa_flat_keys = std.heap.page_allocator.alloc(f32, new_cap) catch
                 @panic("ROCm sdpaPaged: OOM for key staging");
         }
         if (self.sdpa_flat_vals == null or self.sdpa_flat_vals.?.len < flat_elems) {
+            const new_cap_v = @max(flat_elems, if (self.sdpa_flat_vals) |old| old.len * 2 else flat_elems);
             if (self.sdpa_flat_vals) |old| std.heap.page_allocator.free(old);
-            self.sdpa_flat_vals = std.heap.page_allocator.alloc(f32, flat_elems) catch
+            self.sdpa_flat_vals = std.heap.page_allocator.alloc(f32, new_cap_v) catch
                 @panic("ROCm sdpaPaged: OOM for value staging");
         }
         const flat_keys = self.sdpa_flat_keys.?;
@@ -1521,7 +1519,7 @@ pub const RocmBackend = struct {
             self.launch(self.fn_sdpa_tree, n_nodes * @as(u32, @intCast(nh)), block_size, reduction_smem, &params);
             return;
         }
-        @import("kernels/cpu/sdpa_tree.zig").sdpaTree(q_all, prefix_keys, prefix_values, tree_keys, tree_values, output, ancestor_masks, nh, nkv, hd, prefix_len, n_nodes, scale, kv_type_k, kv_type_v);
+        @panic("ROCm sdpaTree: unsupported KV type (need f32); use --kv-type f32 or --backend cpu");
     }
 
     /// Prefill SDPA — sequential loop over tokens, calling single-token sdpa.

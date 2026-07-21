@@ -148,7 +148,23 @@ CLI arguments are parsed by `src/cli.zig` (self-contained, zero dependencies). T
 2. For flags (bool): `.{ .long = "my-flag", .short = 'f', .kind = .flag }`
 3. For options (string): `.{ .long = "my-option", .kind = .option }`
 4. Access in `parseCli()`: `res.flag("my-flag")`, `res.option("my-option")`, `res.optionU32("my-option")`
-5. Add to `printUsage()` help text
+5. Add to `printUsage()` help text **and** the CLI Options block in `README.md`
+6. If the flag is user-facing, mention it in Features (README) when it is a major capability
+
+## Docs update checklist (after CHANGELOG entries)
+
+When shipping a user-visible change, update in the same PR when possible:
+
+1. `CHANGELOG.md` entry
+2. `README.md` Features and/or CLI Options if the surface changed
+3. `printUsage()` in `src/main.zig` (keep in sync with `cli_specs`)
+4. `docs/KERNELS.md` pipeline counts from `n_pipelines` / `n_kernels` if kernels changed
+5. `docs/MODELS.md` / `docs/ARCHITECTURE.md` for new arches or modules
+6. `docs/TEST_MATRIX.md` date + cells if correctness coverage changed
+7. `docs/BENCHMARKS.md` only for measured numbers (do not invent parallel tok/s tables elsewhere)
+8. Tutorial nav (Next/Back) if a new chapter was added
+
+Run `python3 scripts/check-docs.py` (when present) for link and count hygiene.
 
 ## How to Add a New Chat Template
 

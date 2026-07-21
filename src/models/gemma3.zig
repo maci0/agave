@@ -995,10 +995,7 @@ pub const Gemma3Model = struct {
         // Guard capacity before allocating to avoid leaking uncached buffers.
         if (self.norm_cache_len >= max_norm_entries)
             @panic("normAsF32: norm cache overflow — increase max_norm_entries");
-        const buf = self.allocator.alloc(f32, n) catch |err| {
-            std.log.warn("normAsF32: alloc failed ({s}), using unconverted weights", .{@errorName(err)});
-            return @ptrCast(@alignCast(t.data_ptr));
-        };
+        const buf = self.allocator.alloc(f32, n) catch @panic("normAsF32: out of memory converting norm weights");
         const offset: f32 = if (self.norm_add_one) 1.0 else 0.0;
         if (t.dtype == .bf16) {
             const src: [*]const u16 = @ptrCast(@alignCast(t.data_ptr));

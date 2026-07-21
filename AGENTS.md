@@ -146,7 +146,7 @@ These rules are non-negotiable. Every change must respect all of them.
 - Every change must maintain cross-compilation for all targets (Linux x86_64/aarch64, macOS aarch64).
 - `ReleaseFast` is production. `Debug` retains full safety checks.
 - Model toggles: `-Denable-<model>=false` (gemma3, gemma4, diffusion-gemma, qwen35, gpt-oss, nemotron-h, nemotron-nano, glm4, llama4).
-- Backend maturity: Level 0 (CPU) → Level 1 (Metal + Vulkan, current goal) → Level 2 (CUDA + ROCm optimized). WebGPU has 43 shaders (most core ops).
+- Backend maturity: Level 0 (CPU) → Level 1 (Metal + Vulkan, current goal) → Level 2 (CUDA + ROCm optimized). WebGPU has 48 shaders (most core ops).
 
 ### Error Handling & Safety
 - Use explicit Zig error sets and `try`/`catch`. Never swallow errors with `catch {}` except in shutdown paths.

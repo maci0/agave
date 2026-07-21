@@ -122,8 +122,7 @@ pub const Grammar = struct {
             .completed = state.completed,
         };
         test_state.stack.ensureTotalCapacity(self.allocator, required_cap) catch {
-            std.log.err("grammar: OOM allocating test state (cap={d}), constrained decoding disabled for this token", .{required_cap});
-            return;
+            @panic("grammar: OOM allocating maskLogits test state");
         };
         defer test_state.stack.deinit(self.allocator);
 
