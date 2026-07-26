@@ -44,6 +44,10 @@ pub const BpeTokenizer = struct {
     allocator: Allocator,
     // Owned memory for duped strings
     owned_strings: std.ArrayList([]const u8) = .empty,
+    // Word-level BPE cache: maps pretoken bytes → token ID slice.
+    // Avoids re-running bytesToUnicode + applyBpe for recurring words.
+    // Keys and values are owned by this allocator.
+    word_cache: std.StringHashMapUnmanaged([]u32) = .{},
 
     /// Return the generic Tokenizer interface backed by this BPE tokenizer.
     pub fn tokenizer(self: *BpeTokenizer) TokenizerIface {
@@ -102,6 +106,13 @@ pub const BpeTokenizer = struct {
         self.unicode_to_byte.deinit();
         for (self.owned_strings.items) |s| self.allocator.free(s);
         self.owned_strings.deinit(self.allocator);
+        // Free word cache: keys and values are both owned.
+        var it = self.word_cache.iterator();
+        while (it.next()) |entry| {
+            self.allocator.free(entry.key_ptr.*);
+            self.allocator.free(entry.value_ptr.*);
+        }
+        self.word_cache.deinit(self.allocator);
     }
 
     fn own(self: *BpeTokenizer, s: []const u8) ![]const u8 {
@@ -260,7 +271,8 @@ pub const BpeTokenizer = struct {
     }
 
     /// Encode text to token IDs using byte-level BPE with merge rules.
-    pub fn encode(self: *const BpeTokenizer, text: []const u8) ![]u32 {
+    /// Word-level cache: segments seen before skip bytesToUnicode + applyBpe entirely.
+    pub fn encode(self: *BpeTokenizer, text: []const u8) ![]u32 {
         if (text.len == 0) return try self.allocator.alloc(u32, 0);
         var result: std.ArrayList(u32) = .empty;
 
@@ -322,28 +334,42 @@ pub const BpeTokenizer = struct {
                     try result.append(self.allocator, id);
                 }
             } else {
-                // Byte-level BPE
-                const unicode_text = try self.bytesToUnicode(seg);
-                defer self.allocator.free(unicode_text);
-                var chars = try self.splitUtfChars(unicode_text);
-                defer chars.deinit(self.allocator);
-                var bpe_tokens = try self.applyBpe(chars.items);
-                defer {
-                    // Free merged strings (those not pointing into unicode_text)
-                    for (bpe_tokens.items) |s| {
-                        if (@intFromPtr(s.ptr) < @intFromPtr(unicode_text.ptr) or
-                            @intFromPtr(s.ptr) >= @intFromPtr(unicode_text.ptr) + unicode_text.len)
-                        {
-                            self.allocator.free(s);
+                // Byte-level BPE — check word cache first.
+                if (self.word_cache.get(seg)) |cached_ids| {
+                    try result.appendSlice(self.allocator, cached_ids);
+                } else {
+                    const unicode_text = try self.bytesToUnicode(seg);
+                    defer self.allocator.free(unicode_text);
+                    var chars = try self.splitUtfChars(unicode_text);
+                    defer chars.deinit(self.allocator);
+                    var bpe_tokens = try self.applyBpe(chars.items);
+                    defer {
+                        for (bpe_tokens.items) |s| {
+                            if (@intFromPtr(s.ptr) < @intFromPtr(unicode_text.ptr) or
+                                @intFromPtr(s.ptr) >= @intFromPtr(unicode_text.ptr) + unicode_text.len)
+                            {
+                                self.allocator.free(s);
+                            }
+                        }
+                        bpe_tokens.deinit(self.allocator);
+                    }
+                    // Collect IDs for this segment.
+                    const seg_start = result.items.len;
+                    for (bpe_tokens.items) |tok| {
+                        if (self.token_to_id.get(tok)) |id| {
+                            try result.append(self.allocator, id);
+                        } else {
+                            try result.append(self.allocator, 0); // unk
                         }
                     }
-                    bpe_tokens.deinit(self.allocator);
-                }
-                for (bpe_tokens.items) |tok| {
-                    if (self.token_to_id.get(tok)) |id| {
-                        try result.append(self.allocator, id);
-                    } else {
-                        try result.append(self.allocator, 0); // unk
+                    // Store in cache: key = owned copy of seg, value = owned copy of IDs.
+                    const seg_ids = result.items[seg_start..];
+                    if (seg_ids.len > 0 and seg.len <= 4096) {
+                        const owned_key = try self.allocator.dupe(u8, seg);
+                        errdefer self.allocator.free(owned_key);
+                        const owned_val = try self.allocator.dupe(u32, seg_ids);
+                        errdefer self.allocator.free(owned_val);
+                        try self.word_cache.put(self.allocator, owned_key, owned_val);
                     }
                 }
             }

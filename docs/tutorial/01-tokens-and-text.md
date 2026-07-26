@@ -341,7 +341,37 @@ This is why inference speed matters — generating 100 tokens requires 100 seque
 
 ---
 
-**In the code:** [src/tokenizer/bpe.zig](../../src/tokenizer/bpe.zig) (tokenizer), [src/backend/kernels/cpu/embedding.zig](../../src/backend/kernels/cpu/embedding.zig) (embedding lookup), [src/ops/math.zig](../../src/ops/math.zig) (argmax, sampleToken)
+## Tokenizer Performance: Word-Level BPE Cache
+
+The `applyBpe` function runs a merge loop that can iterate many times per pretoken — for a word like `" transformer"`, it starts with individual bytes and merges pairs until no merge rule applies. This is expensive.
+
+The key insight: the same pretokens appear repeatedly. In any English prompt, words like `" the"`, `" is"`, `" model"`, and code keywords appear constantly. After the first encode, the merge result for each word is already known.
+
+Agave's tokenizer caches these results in `word_cache: StringHashMapUnmanaged([]u32)`:
+
+```zig
+// Before applyBpe: check cache
+if (self.word_cache.get(seg)) |cached_ids| {
+    try result.appendSlice(self.allocator, cached_ids);
+} else {
+    // Run the full BPE pipeline
+    const unicode_text = try self.bytesToUnicode(seg);
+    // ... bytesToUnicode → splitUtfChars → applyBpe ...
+
+    // Store result in cache for future calls
+    const owned_key = try self.allocator.dupe(u8, seg);
+    const owned_val = try self.allocator.dupe(u32, seg_ids);
+    try self.word_cache.put(self.allocator, owned_key, owned_val);
+}
+```
+
+On cache hit, three allocations and the entire merge loop are skipped. On a typical prompt with a 50-word system prompt, roughly 80–90% of pretokens will hit the cache after the first call.
+
+This technique is adapted from [gigatoken](https://github.com/marcelroed/gigatoken), which applies the same principle at much larger scale for training data ingestion.
+
+---
+
+**In the code:** [src/tokenizer/bpe.zig](../../src/tokenizer/bpe.zig) (tokenizer, word cache), [src/backend/kernels/cpu/embedding.zig](../../src/backend/kernels/cpu/embedding.zig) (embedding lookup), [src/ops/math.zig](../../src/ops/math.zig) (argmax, sampleToken)
 
 **Next:** [Chapter 2: The Transformer →](02-the-transformer.md) | **Product docs:** [Architecture](../ARCHITECTURE.md)
 
