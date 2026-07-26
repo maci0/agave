@@ -8,8 +8,10 @@ const quant = @import("quant.zig");
 /// Default MLX quantization parameters.
 /// 64 elements per quantization group.
 pub const mlx_group_size: usize = 64;
-/// MXFP4 group size (32 elements per group, distinct from MLX affine's 64).
-pub const mxfp4_group_size: usize = 32;
+/// MXFP4 group size: NVIDIA MXFP4 spec uses 16-element blocks (not 32).
+/// Each scale covers 16 weight elements. Group size 32 was wrong and caused
+/// row-stride corruption: every row after row 0 read the wrong scale bytes.
+pub const mxfp4_group_size: usize = 16;
 
 /// Bit-packing constants for u32-packed quantized weights.
 const bits_per_u32: usize = 32;
@@ -313,7 +315,8 @@ fn mlxGemvQ8Rows(
 }
 
 /// Compute a range of rows for MLX MXFP4 GEMV.
-/// Scales are E8M0 (pure power-of-2), NOT FP8 E4M3.
+/// Scales are FP8 E4M3 block scales (NVIDIA MXFP4 spec), one per 16-element group.
+/// Previously decoded as E8M0 (wrong), causing near-zero outputs for all rows.
 pub fn mlxMxfp4GemvRows(
     x: [*]const f32,
     pw: [*]const u32,
@@ -335,7 +338,7 @@ pub fn mlxMxfp4GemvRows(
         const sr = scales_u8 + row * gpr;
 
         for (0..gpr) |g| {
-            const scale = quant.e8m0ToF32(sr[g]);
+            const scale = quant.fp8e4m3ToF32(sr[g]);
             const sv: V8 = @splat(scale);
             const xo = g * mxfp4_group_size;
             const wo = g * wpg;

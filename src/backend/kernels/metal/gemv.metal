@@ -1341,14 +1341,24 @@ kernel void gemv_mlx_q8(
 }
 
 // ── MXFP4 SafeTensors GEMV ──────────────────────────────────
-// U32-packed 4-bit nibbles (8 per word), E8M0 per-group scale, group_size=32.
-// Dequant: float_val = mxfp4_lut[nibble] * 2^(scale_byte - 127)
-// E8M0 is a pure power-of-2 format (OCP Microscaling spec). No bias.
+// U32-packed 4-bit nibbles (8 per word), FP8 E4M3 per-group scale, group_size=16.
+// NVIDIA MXFP4 spec: 16-element groups with FP8 E4M3 block scales (bias=7).
+// Dequant: float_val = mxfp4_lut[nibble] * fp8e4m3_to_f32(scale_byte)
 
-// E8M0 → float: val = 2^(byte - 127). Pure exponent, no mantissa bits.
-inline float e8m0_to_f32(uchar val) {
-    if (val == 0) return 0.0f;
-    return as_type<float>(uint(val) << 23);
+// FP8 E4M3 → float: sign=1b, exp=4b (bias=7), mantissa=3b.
+// Matches quant.fp8e4m3ToF32() in Zig (same logic, same LUT semantics).
+inline float fp8e4m3_to_f32(uchar val) {
+    uint sign = uint(val >> 7) << 31;
+    uint exp  = uint(val >> 3) & 0x0Fu;
+    uint mant = uint(val) & 0x7u;
+    if (exp == 0x0Fu && mant == 0x7u) return as_type<float>(sign | 0x7FC00000u); // NaN→0 for scale
+    if (exp == 0u) {
+        if (mant == 0u) return as_type<float>(sign);
+        return as_type<float>(sign) * float(mant) * (1.0f / 512.0f); // denormal
+    }
+    uint exp_f32  = (exp + 127u - 7u) << 23;
+    uint mant_f32 = mant << 20; // 23 - 3 = 20
+    return as_type<float>(sign | exp_f32 | mant_f32);
 }
 
 // MXFP4 E2M1 dequant lookup table
@@ -1370,14 +1380,14 @@ kernel void gemv_mxfp4_st(
 {
     if (tgid >= n) return;
 
-    const uint gs = 32;
-    const uint wpg = 4;   // u32 words per group (32 nibbles / 8 per word)
+    const uint gs = 16;   // NVIDIA MXFP4: 16-element groups (was wrong at 32)
+    const uint wpg = 2;   // u32 words per group (16 nibbles / 8 per word)
     uint gpr = (k + gs - 1) / gs;
     uint w_row = tgid * gpr * wpg;
     float sum = 0.0f;
 
     for (uint g = tid; g < gpr; g += tg_size) {
-        float scale = e8m0_to_f32(scales[tgid * gpr + g]);
+        float scale = fp8e4m3_to_f32(scales[tgid * gpr + g]);
         uint xo = g * gs;
         uint wg = w_row + g * wpg;
 

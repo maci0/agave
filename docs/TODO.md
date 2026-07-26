@@ -11,10 +11,10 @@ Bugs, performance issues, and future work. Detailed designs inline.
 | # | Issue | Severity | Status |
 |---|-------|----------|--------|
 | 1 | GLM-4.7 Flash — degenerate output (also broken in llama.cpp) | Low (upstream) | Won't fix |
-| 6 | ROCm HSACO target triple rejected by kernel 7.0.6+ | High | Needs Zig std library patch for amdgcn target triple |
-| 4 | Vulkan push descriptor crashes on RADV gfx1100 | Medium | Suspected RADV driver issue. Infrastructure in place, disabled |
+| 6 | ROCm HSACO code object v3 rejected by kernel 7.0.6+ | High | Zig generates v3; ROCm 6.x / kernel 7.0.6+ requires v4. Rebuild with `clang -mcode-object-version=4` on ROCm 6 host (see build.zig comment) |
+| 4 | Vulkan push descriptor crashes on RADV gfx1100 | Medium | Suspected RADV driver issue. Worked around: push descriptors disabled, deferred path used |
 | ~~8~~ | ~~Gemma 4 26B-A4B MoE garbled output~~ | ~~Fixed~~ | ~~expertWeightStride used dims[0]*dims[1] instead of dims[1]*dims[2]~~ |
-| 9 | GPT-OSS MXFP4 garbled output | Low | MXFP4 dequant or attention sink bug |
+| ~~9~~ | ~~GPT-OSS MXFP4 garbled output~~ | ~~Fixed~~ | ~~Two bugs: mxfp4_group_size=32 (should be 16 per NVIDIA spec), scale decoded as E8M0 (should be FP8 E4M3). Both Zig + Metal fixed~~ |
 
 <details><summary>Fixed bugs</summary>
 

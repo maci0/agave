@@ -163,7 +163,11 @@ pub fn build(b: *std.Build) void {
         const install_obj = b.addInstallFile(obj.getEmittedBin(), "rocm/kernels.o");
         amdgcn_step.dependOn(&install_obj.step);
 
-        // Link into shared ELF (HSACO) for hipModuleLoadData
+        // Link into shared ELF (HSACO) for hipModuleLoadData.
+        // NOTE: On Linux with ROCm 6.x (kernel ≥ 7.0.6), GFX11 KFD requires
+        // code object version ≥ 4. If loading fails, rebuild on a ROCm 6 host:
+        //   clang -target amdgcn-amd-amdhsa -mcpu=gfx1100 -mcode-object-version=4 \
+        //         kernels.o -o kernels.hsaco
         const link = b.addSystemCommand(&.{ "ld.lld", "-shared", "-o" });
         const hsaco_out = link.addOutputFileArg("kernels.hsaco");
         link.addFileArg(obj.getEmittedBin());
