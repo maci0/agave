@@ -164,14 +164,28 @@ pub fn build(b: *std.Build) void {
         amdgcn_step.dependOn(&install_obj.step);
 
         // Link into shared ELF (HSACO) for hipModuleLoadData.
-        // NOTE: On Linux with ROCm 6.x (kernel ≥ 7.0.6), GFX11 KFD requires
-        // code object version ≥ 4. If loading fails, rebuild on a ROCm 6 host:
-        //   clang -target amdgcn-amd-amdhsa -mcpu=gfx1100 -mcode-object-version=4 \
-        //         kernels.o -o kernels.hsaco
         const link = b.addSystemCommand(&.{ "ld.lld", "-shared", "-o" });
         const hsaco_out = link.addOutputFileArg("kernels.hsaco");
         link.addFileArg(obj.getEmittedBin());
+
+        // Zig 0.16 bundles LLVM 20, which defaults to Code Object V6 (EI_ABIVERSION=4).
+        // ROCm 6.x ships LLVM 18/19 and only accepts V3–V5 (EI_ABIVERSION ≤ 3).
+        // Patch byte 8 (EI_ABIVERSION) from 4→3 to produce a Code Object V5 HSACO
+        // that ROCm 5.3–6.x accepts.  See: https://github.com/ziglang/zig/issues/XXXXX
+        const patch = b.addSystemCommand(&.{
+            "python3", "-c",
+            \\import sys
+            \\d = bytearray(open(sys.argv[1], 'rb').read())
+            \\if d[7] == 64 and d[8] == 4:  # ELFOSABI_AMDGPU_HSA and V6
+            \\    d[8] = 3                   # downgrade to V5 (ROCm 5.3-6.x compatible)
+            \\    open(sys.argv[1], 'wb').write(d)
+            \\    print(f'patched EI_ABIVERSION 4→3 in {sys.argv[1]}')
+        });
+        patch.addFileArg(hsaco_out);
+        patch.step.dependOn(&link.step);
+
         const install_hsaco = b.addInstallFile(hsaco_out, "rocm/kernels.hsaco");
+        install_hsaco.step.dependOn(&patch.step);
         amdgcn_step.dependOn(&install_hsaco.step);
     }
 
