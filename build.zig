@@ -164,6 +164,14 @@ pub fn build(b: *std.Build) void {
         amdgcn_step.dependOn(&install_obj.step);
 
         // Link into shared ELF (HSACO) for hipModuleLoadData.
+        // KNOWN BUG (ziglang/zig): Zig 0.16 emits ISA target triple
+        //   amdgcn-amd-amdhsa5.0.0-unknown-gfx1100  (OS semver appended)
+        // but HIP requires exact match against
+        //   amdgcn-amd-amdhsa--gfx1100
+        // causing hipErrorNoBinaryForGpu on hipModuleLoad. Binary patching
+        // is infeasible due to ELF VirtAddr constraints. Rebuild once Zig
+        // fixes std.Target.Os.amdhsa to omit the semver from the triple.
+        // See: https://github.com/ziglang/zig/issues/XXXXX
         const link = b.addSystemCommand(&.{ "ld.lld", "-shared", "-o" });
         const hsaco_out = link.addOutputFileArg("kernels.hsaco");
         link.addFileArg(obj.getEmittedBin());

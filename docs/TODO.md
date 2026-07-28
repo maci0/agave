@@ -11,7 +11,7 @@ Bugs, performance issues, and future work. Detailed designs inline.
 | # | Issue | Severity | Status |
 |---|-------|----------|--------|
 | 1 | GLM-4.7 Flash — degenerate output (also broken in llama.cpp) | Low (upstream) | Won't fix |
-| 6 | ROCm HSACO code object v3 rejected by kernel 7.0.6+ | High | Zig generates v3; ROCm 6.x / kernel 7.0.6+ requires v4. Rebuild with `clang -mcode-object-version=4` on ROCm 6 host (see build.zig comment) |
+| 6 | ROCm HSACO: wrong ISA target triple — hipErrorNoBinaryForGpu | High | Zig 0.16 emits `amdgcn-amd-amdhsa5.0.0-unknown-gfx1100` (includes OS semver from Target.zig); HIP does exact-match against `amdgcn-amd-amdhsa--gfx1100`. Binary patching infeasible (ELF VirtAddr consistency). Fix: Zig stdlib patch to strip version from amdhsa triple. Tracked: ziglang/zig#XXXX |
 | 4 | Vulkan push descriptor crashes on RADV gfx1100 | Medium | Suspected RADV driver issue. Worked around: push descriptors disabled, deferred path used |
 | ~~8~~ | ~~Gemma 4 26B-A4B MoE garbled output~~ | ~~Fixed~~ | ~~expertWeightStride used dims[0]*dims[1] instead of dims[1]*dims[2]~~ |
 | ~~9~~ | ~~GPT-OSS MXFP4 garbled output~~ | ~~Fixed~~ | ~~Two bugs: mxfp4_group_size=32 (should be 16 per NVIDIA spec), scale decoded as E8M0 (should be FP8 E4M3). Both Zig + Metal fixed~~ |
