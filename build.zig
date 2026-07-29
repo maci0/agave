@@ -163,37 +163,36 @@ pub fn build(b: *std.Build) void {
         const install_obj = b.addInstallFile(obj.getEmittedBin(), "rocm/kernels.o");
         amdgcn_step.dependOn(&install_obj.step);
 
-        // Link into shared ELF (HSACO) for hipModuleLoadData.
-        // KNOWN BUG (ziglang/zig): Zig 0.16 emits ISA target triple
-        //   amdgcn-amd-amdhsa5.0.0-unknown-gfx1100  (OS semver appended)
-        // but HIP requires exact match against
-        //   amdgcn-amd-amdhsa--gfx1100
-        // causing hipErrorNoBinaryForGpu on hipModuleLoad. Binary patching
-        // is infeasible due to ELF VirtAddr constraints. Rebuild once Zig
-        // fixes std.Target.Os.amdhsa to omit the semver from the triple.
-        // See: https://github.com/ziglang/zig/issues/XXXXX
+        // Workaround: two Zig 0.16 bugs for AMDGCN targets (ziglang/zig#XXXXX):
+        //
+        // Bug 1 — Wrong ISA string in metadata:
+        //   Zig emits amdhsa.target = "amdgcn-amd-amdhsa5.0.0-unknown-gfx1100"
+        //   (OS semver from Target.zig appended to triple).
+        //   HIP does exact-string matching; expects "amdgcn-amd-amdhsa--gfx1100".
+        //   Workaround: patch the NT_AMDGPU_METADATA note section in the .o
+        //   before linking (ET_REL has no VirtAddr constraints, safe to shrink).
+        //
+        // Bug 2 — .kd symbols emitted as LOCAL:
+        //   Kernel descriptor symbols (foo.kd) need GLOBAL binding so the linker
+        //   exports them to .dynsym. Zig emits them as LOCAL → HIP can't find them.
+        //   Workaround: llvm-objcopy --globalize-symbol for every .kd symbol.
+        //
+        // Run this build step on a Linux machine with ROCm installed and llvm-objcopy
+        // (from /opt/rocm/lib/llvm/bin) in PATH. The resulting HSACO is committed.
+        const fix_obj = b.addSystemCommand(&.{
+            "python3", b.path("src/backend/kernels/rocm/fix_kd_isa.py").getPath(b),
+        });
+        fix_obj.addFileArg(obj.getEmittedBin());
+        const fixed_obj = fix_obj.addOutputFileArg("kernels_fixed.o");
+        fix_obj.step.dependOn(&obj.step);
+
         const link = b.addSystemCommand(&.{ "ld.lld", "-shared", "-o" });
         const hsaco_out = link.addOutputFileArg("kernels.hsaco");
-        link.addFileArg(obj.getEmittedBin());
-
-        // Zig 0.16 bundles LLVM 20, which defaults to Code Object V6 (EI_ABIVERSION=4).
-        // ROCm 6.x ships LLVM 18/19 and only accepts V3–V5 (EI_ABIVERSION ≤ 3).
-        // Patch byte 8 (EI_ABIVERSION) from 4→3 to produce a Code Object V5 HSACO
-        // that ROCm 5.3–6.x accepts.  See: https://github.com/ziglang/zig/issues/XXXXX
-        const patch = b.addSystemCommand(&.{
-            "python3", "-c",
-            \\import sys
-            \\d = bytearray(open(sys.argv[1], 'rb').read())
-            \\if d[7] == 64 and d[8] == 4:  # ELFOSABI_AMDGPU_HSA and V6
-            \\    d[8] = 3                   # downgrade to V5 (ROCm 5.3-6.x compatible)
-            \\    open(sys.argv[1], 'wb').write(d)
-            \\    print(f'patched EI_ABIVERSION 4→3 in {sys.argv[1]}')
-        });
-        patch.addFileArg(hsaco_out);
-        patch.step.dependOn(&link.step);
+        link.addFileArg(fixed_obj);
+        link.step.dependOn(&fix_obj.step);
 
         const install_hsaco = b.addInstallFile(hsaco_out, "rocm/kernels.hsaco");
-        install_hsaco.step.dependOn(&patch.step);
+        install_hsaco.step.dependOn(&link.step);
         amdgcn_step.dependOn(&install_hsaco.step);
     }
 
