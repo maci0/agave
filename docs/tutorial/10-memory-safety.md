@@ -2,6 +2,39 @@
 
 Zig's approach to memory management: **explicit allocation, guaranteed cleanup**. No garbage collector, no hidden allocations, no surprises. When you call `allocator.alloc()`, you must call `allocator.free()` — and Zig provides tools to make this **automatic and bulletproof**.
 
+## Code Flow
+
+```mermaid
+flowchart LR
+    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
+    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
+    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
+    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
+    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
+
+    Acquire["alloc / open / init\na resource"]:::setup
+    Own{"does the caller\nend up owning it?"}
+    Defer["defer cleanup()\nruns on every exit"]:::sync
+    Fallible{"more fallible\nsteps below?"}
+    ErrDefer["errdefer cleanup()\nruns only on error"]:::migration
+    None["no defer needed\nownership transfers as-is"]:::success
+    Success["function returns normally"]:::success
+    Failure["function returns an error"]:::danger
+
+    Acquire --> Own
+    Own -- "no, this function owns it" --> Defer
+    Own -- "yes, caller owns it" --> Fallible
+    Fallible -- "yes" --> ErrDefer
+    Fallible -- "no" --> None
+    Defer --> Success
+    Defer --> Failure
+    ErrDefer --> Success
+    ErrDefer --> Failure
+    None --> Success
+```
+
+`defer` and `errdefer` differ only in when they run: `defer` fires on every scope exit, `errdefer` fires only when the scope exits through an error. The rest of this chapter applies that one distinction to real allocation and initialization code.
+
 ## defer: Guaranteed Cleanup
 
 `defer` executes a statement when the current scope exits — **always**, whether by normal return, error return, or early return:
@@ -550,6 +583,10 @@ zig build test
 # All tests automatically use std.testing.allocator
 # Leaks → test failure
 ```
+
+## Gotchas
+
+**A per-iteration `errdefer` only guards that one iteration, not the ones that already succeeded.** In a loop that allocates one resource per item, `errdefer allocator.free(item[i])` declared inside the loop body cleans up `item[i]` if the current iteration fails, but it already ran out of scope for every earlier iteration that completed without error. `allocKvCache()` in [src/kvcache/manager.zig](../../src/kvcache/manager.zig) shows the fix: alongside the per-iteration `errdefer allocator.free(keys[i])`, it tracks a running `init_count` and installs one more `errdefer` *before* the loop starts that walks `0..init_count`, freeing every layer that already succeeded. Drop that outer errdefer and a failure on layer 5 of 24 leaks layers 0 through 4.
 
 ---
 

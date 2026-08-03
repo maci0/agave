@@ -620,6 +620,32 @@ mul(a, b)[i] = a[i] * b[i]
 
 ## Common Patterns
 
+### When to Use What
+
+A quick lookup for which operation applies to a given problem, and which chapter walks through it:
+
+```mermaid
+flowchart TD
+    classDef setup fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
+    classDef sync  fill:#dcfce7,stroke:#22c55e,color:#14532d
+
+    Need["I need to…"]:::setup --> Dot["compare directions / attention scores → dot product"]:::sync
+    Need --> Soft["turn scores into distribution → softmax"]:::sync
+    Need --> Gemv["apply linear layer to one vector → GEMV"]:::sync
+    Need --> Gemm["many tokens × one weight → GEMM / batched"]:::sync
+    Need --> Norm["stabilize activations → RMSNorm / LayerNorm"]:::sync
+    Need --> Act["gated FFN non-linearity → SiLU / GELU"]:::sync
+```
+
+| Need | Operation | Tutorial chapter |
+|------|-----------|-------------------|
+| Compare directions, score attention | Dot product | [Chapter 2: The Transformer](02-the-transformer.md) |
+| Turn scores into a probability distribution | Softmax | [Chapter 7: Sampling](07-sampling.md) |
+| Apply a linear layer to one vector (decode) | GEMV | [Chapter 9: CPU SIMD Optimization](09-cpu-simd-optimization.md) |
+| Many tokens against one weight matrix (prefill) | GEMM / batched | [Chapter 13: Batched Dispatch and Fusion](13-batched-dispatch-and-fusion.md) |
+| Stabilize activations before a sublayer | RMSNorm / LayerNorm | [Chapter 2: The Transformer](02-the-transformer.md) |
+| Gated non-linearity inside an FFN | SiLU / GELU | [Chapter 3: Feed-Forward Networks](03-feed-forward-networks.md) |
+
 ### GEMV dominates inference
 
 Matrix-vector multiply is ~95% of decode time. Every linear layer (`Linear(in, out)`) is a GEMV:

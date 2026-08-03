@@ -2,6 +2,30 @@
 
 When a GPU isn't available, the CPU backend needs to be fast. Modern CPUs have **SIMD** (Single Instruction Multiple Data) units that can process 4-8 values in parallel with a single instruction. Zig provides portable SIMD via `@Vector` — the same code generates **NEON** on ARM (Apple Silicon, Raspberry Pi) and **AVX2/AVX-512** on x86_64 (Intel, AMD).
 
+## Code Flow
+
+```mermaid
+flowchart LR
+    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
+    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
+    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
+    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
+
+    X["x, w\n(k floats each)"]:::setup
+    Load["load 8-wide chunk\n@Vector(8, f32)"]:::sync
+    FMA["@mulAdd(V8, xv, wv, acc)\nSIMD accumulate"]:::sync
+    More{"i + 8 <= k?"}
+    Reduce["@reduce(.Add, acc)\nhorizontal sum"]:::migration
+    Tail["scalar tail loop\nfor k % 8 remainder"]:::migration
+    Y["y[row]"]:::success
+
+    X --> Load --> FMA --> More
+    More -- "yes" --> Load
+    More -- "no" --> Reduce --> Tail --> Y
+```
+
+One GEMV row: load 8 floats from `x` and `w`, fuse-multiply-add into a SIMD accumulator, repeat until fewer than 8 elements remain, then reduce the accumulator to a scalar and finish the leftover elements one at a time. The rest of this chapter builds up to that loop and beyond it.
+
 ## The @Vector Type
 
 A single SIMD instruction operates on an entire register of values at once, turning N sequential operations into 1 parallel operation.
@@ -338,6 +362,16 @@ pub fn gemvF32(x: [*]const f32, w: [*]const f32, y: [*]f32, n: usize, k: usize) 
 **Why not 8 rows?** Register pressure. 8 accumulators + 8 row-weight vectors + the xv broadcast = ~17 SIMD registers on AVX2, which only has 16 YMM registers, forcing spills to the stack. 4 rows is the sweet spot.
 
 **NR=2 for K-quant formats:** Q4_K, Q5_K, and Q6_K use **NR=2**; Q4_0, Q8_0, BF16, and F16 use **NR=4** (same as the f32 kernel). The heavier per-block dequantization in K-quant formats is what reduces the optimal row count to 2. The same NR multi-row pattern is applied across GPU backends as well (Metal, CUDA, ROCm) with NR values tuned per format and hardware.
+
+### Performance (from BENCHMARKS.md)
+
+Measured 2026-03-24 on Apple M4 Pro (14-core CPU), full methodology in [BENCHMARKS.md](../BENCHMARKS.md).
+
+| Claim | Source |
+|-------|--------|
+| Qwen3.5 9B Q8_0 CPU decode: 11.3 tok/s | BENCHMARKS Decode Throughput, M4 Pro |
+| Gemma 3 12B Q8_0 CPU decode: 6.3 tok/s | BENCHMARKS Decode Throughput, M4 Pro |
+| CPU numbers use all 14 threads (Agave) vs 10 threads (llama.cpp default) | BENCHMARKS Notes |
 
 ## Handling Quantized Data
 
