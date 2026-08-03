@@ -1,5 +1,9 @@
 # Chapter 2: The Transformer
 
+**Prerequisites:** [Chapter 1: Tokens and Text](01-tokens-and-text.md)
+
+**Time:** ~18 min
+
 The forward pass is the core computation: given a token, predict the next one.
 
 ```
@@ -115,6 +119,8 @@ flowchart TD
 
 Attention answers: "which previous tokens should I pay attention to?"
 
+### Code Flow
+
 ```mermaid
 flowchart LR
     classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
@@ -133,8 +139,10 @@ flowchart LR
     Scores["Dot Products\nQ · K / √d"]:::sync
     Mask["Causal Mask\n(future = -∞)"]:::danger
     Softmax["Softmax\n→ attention weights"]:::sync
-    WeightedSum["Weighted Sum\n× V vectors"]:::sync
-    Out["Attention Output\n[n_embd floats]"]:::success
+    WeightedSum["Weighted Sum\n× V vectors\n(per head)"]:::sync
+    Concat["Concat heads\n[n_embd floats]"]:::migration
+    Wo["Output Projection\nW_o @ concat"]:::sync
+    Out["Attention Output\n[n_embd floats]\n(added to residual)"]:::success
 
     X -->|"W_q @"| Q
     X -->|"W_k @"| K
@@ -154,7 +162,7 @@ flowchart LR
     Mask --> Softmax
     Softmax --> WeightedSum
     PastV --> WeightedSum
-    WeightedSum --> Out
+    WeightedSum --> Concat --> Wo --> Out
 ```
 
 **What are Q, K, V?** They're three different **linear projections** (matrix-vector multiplies) of the same input hidden state `x`:
@@ -211,6 +219,8 @@ learning different relationships (syntax, semantics, position, etc.)
 ```
 
 **Causal masking:** During generation, token at position `i` must only attend to positions `≤ i` — it cannot look at future tokens that haven't been generated yet. This is enforced by setting attention scores for future positions to `-∞` before softmax, which zeroes them out. The resulting lower-triangular attention matrix is called a **causal mask**. (Some models like GPT-OSS use a sliding window variant where even-numbered layers only attend to the most recent 128 tokens.)
+
+**Output projection:** Every head's weighted-sum output is concatenated back into one `[n_embd]`-wide vector, then passed through one more learned matrix, `W_o` (`attn_output.weight` in the GGUF layout), before the result is added to the residual stream. This final projection mixes information across heads: without it, each head's contribution would stay in its own isolated slice of the output vector.
 
 ### GQA (Grouped Query Attention)
 
@@ -588,15 +598,27 @@ flowchart LR
 
 **Chunked prefill** (`--prefill-batch-size N`, default 512) splits long prompts into fixed-size chunks. Each chunk is one batched pass through all layers. Memory overhead is bounded by the chunk size, not the full prompt length.
 
-## Common Pitfalls
+## Gotchas
 
 **GPU sync before argmax**: After the final GEMV (vocab projection), logits are written by the GPU. CPU argmax must call `be.sync()` first — without it, you read stale data on UMA platforms.
 
 **KV cache overflow**: The cache has a fixed context size. Models must call `ensureKvBlock()` before each forward to allocate new blocks. If the cache is full, return `error.KVCacheFull` (or evict via `--kv-eviction`).
 
-**RoPE partial rotation**: Some models rotate only a fraction of head_dim (Gemma4 global layers: 25%). The non-rotated dimensions carry non-positional features — don't zero them.
+**RoPE dim mismatch**: Some models rotate only a fraction of head_dim (`rope_dim` in `src/backend/kernels/cpu/rope.zig`, e.g. Gemma4 global layers: 25%). The non-rotated dimensions carry non-positional features, don't zero them, and don't assume `rope_dim == head_dim` when wiring a new architecture.
+
+**GQA kv head mismatch**: GQA head grouping is a plain integer division, `hpg = n_head / n_head_kv` (`src/ops/attention.zig`). `src/models/qwen35.zig` asserts `n_head % n_head_kv == 0` at model construction, but `std.debug.assert` compiles out in `ReleaseFast`. A GGUF with a wrong `attention.head_count_kv` value that isn't an exact divisor of `head_count` won't crash in production, it'll quietly compute the wrong Q-to-KV head grouping and produce degraded output with no error.
+
+## How This Relates to the Code
 
 **In the code:** [src/ops/attention.zig](../../src/ops/attention.zig) (SDPA), [src/backend/kernels/cpu/rope.zig](../../src/backend/kernels/cpu/rope.zig) (RoPE), [src/backend/kernels/cpu/norm.zig](../../src/backend/kernels/cpu/norm.zig) (RMSNorm, L2Norm), [src/backend/kernels/cpu/sdpa.zig](../../src/backend/kernels/cpu/sdpa.zig) (CPU FlashAttention), [src/backend/cpu.zig](../../src/backend/cpu.zig) (CPU GEMM), [src/backend/kernels/metal/gemm.metal](../../src/backend/kernels/metal/gemm.metal) (Metal GEMM), [src/backend/kernels/cuda/gemm_q8_0.zig](../../src/backend/kernels/cuda/gemm_q8_0.zig) (CUDA GEMM)
+
+```text
+Q, K, V = Wq @ x, Wk @ x, Wv @ x        # src/ops/attention.zig
+scores  = (Q @ Kᵀ) * scale               # causal mask applied here
+weights = softmax(scores)
+attn    = weights @ V                    # per head, KV heads shared across Q-head groups
+out     = Wo @ concat(attn heads)
+```
 
 **Math reference:** [Q/K/V projections](appendix-math.md#qkv-projections), [Attention scores](appendix-math.md#attention-score-computation), [Dot product](appendix-math.md#dot-product), [Softmax](appendix-math.md#softmax), [RMSNorm](appendix-math.md#rms-normalization-rmsnorm), [L2 norm](appendix-math.md#l2-normalization)
 

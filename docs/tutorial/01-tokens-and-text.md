@@ -1,6 +1,33 @@
 # Chapter 1: Tokens and Text
 
+**Prerequisites:** [Chapter 0: Getting Started](00-getting-started.md)
+
+**Time:** ~12 min
+
 Language models don't see text — they see **tokens**, which are integer IDs representing subword pieces (fragments like "Hello" → "He" + "llo" that are smaller than words but larger than individual characters). Before anything else happens, we need to convert text to numbers and back.
+
+## Code Flow
+
+```mermaid
+flowchart LR
+    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
+    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
+    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
+    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
+
+    Text["Raw text"]:::setup
+    Tok["tokenize()\nBPE or SPM"]:::sync
+    Ids["Token IDs"]:::migration
+    Emb["embed()\ntable lookup"]:::sync
+    Layers["N transformer layers\n(Chapters 2-3)"]:::migration
+    Proj["vocab projection\nW_output @ hidden"]:::sync
+    Logits["Logits"]:::migration
+    Next["argmax / sample\n→ next token ID"]:::success
+
+    Text --> Tok --> Ids --> Emb --> Layers --> Proj --> Logits --> Next
+```
+
+This chapter covers the first and last legs of that path (tokenize, embed, project); the layers in between are Chapters 2-3.
 
 ## What is Inference?
 
@@ -369,11 +396,22 @@ On cache hit, three allocations and the entire merge loop are skipped. On a typi
 
 This technique is adapted from [gigatoken](https://github.com/marcelroed/gigatoken), which applies the same principle at much larger scale for training data ingestion.
 
----
+## Gotchas
+
+- **Special tokens match on literal substring, not intent.** `encode()` scans the raw text for `<` and checks every registered special token for an exact substring match at that position (`src/tokenizer/bpe.zig`, the special-token scan inside `encode()`). If a prompt happens to contain the literal text of a special token, for example a user pastes `<|im_start|>` into a chat message, it's consumed as that control token rather than encoded as ordinary text. Untrusted input that isn't escaped can inject role markers into the token stream this way.
+- **A BPE piece missing from the vocabulary falls back to token ID 0, silently.** If `applyBpe()`'s merge result produces a piece that `token_to_id` doesn't have an entry for (shouldn't happen with a matched vocabulary and merge table, but can with a corrupted or mismatched one), `encode()` appends ID 0 with no error. ID 0 is typically `<pad>`, so a broken vocab produces plausible-looking padding tokens instead of a crash you'd notice.
+
+## How This Relates to the Code
 
 **In the code:** [src/tokenizer/bpe.zig](../../src/tokenizer/bpe.zig) (tokenizer, word cache), [src/backend/kernels/cpu/embedding.zig](../../src/backend/kernels/cpu/embedding.zig) (embedding lookup), [src/ops/math.zig](../../src/ops/math.zig) (argmax, sampleToken)
 
-**Next:** [Chapter 2: The Transformer →](02-the-transformer.md) | **Product docs:** [Architecture](../ARCHITECTURE.md)
+```text
+bytes → pretokens → BPE merges → token ids
+emb[i] = table[token_id]
+logits = emb_out @ W_vocab   # or tied embeddings
+```
+
+**Next:** [Chapter 2: The Transformer →](02-the-transformer.md) | **Back:** [Chapter 0: Getting Started ←](00-getting-started.md) | **Product docs:** [Architecture](../ARCHITECTURE.md)
 
 ---
 
