@@ -757,6 +757,21 @@ flowchart TD
 2. **Shared storage mode:** Always use `MTLResourceStorageModeShared` on Apple Silicon
 3. **Page alignment:** Handle mid-page pointers with base+offset pattern
 
+## Performance (from BENCHMARKS.md)
+
+Measured 2026-03-24 on Apple M4 Pro (14-core CPU, 20-core GPU), full methodology in [BENCHMARKS.md](../BENCHMARKS.md).
+
+| Claim | Source |
+|-------|--------|
+| Agave is 1.2-1.7x faster than llama.cpp on Metal for decode on supported quant formats | BENCHMARKS Decode Throughput, Notes |
+| Qwen3.5 9B Q8_0 Metal decode: 41.7 tok/s vs llama.cpp Metal 25.0 tok/s (1.67x) | BENCHMARKS Decode Throughput, M4 Pro |
+| Gemma 3 12B Q8_0 Metal decode: 22.3 tok/s vs llama.cpp Metal 18.7 tok/s (1.19x) | BENCHMARKS Decode Throughput, M4 Pro |
+| Qwen3.5 0.8B Q8_0 Metal decode: 125 tok/s (sparse GEMV + Accelerate.framework, updated 2026-05-26) | BENCHMARKS Decode Throughput, M4 Pro |
+
+## Gotchas
+
+**Threadgroup memory failures are silent.** Metal's `newComputePipelineStateWithFunction:error:` returns `nil` when a kernel's `threadgroup` variables exceed the 32 KB per-threadgroup limit on Apple Silicon, but nothing about that call raises an exception or prints a message on its own. `makePipeline()` (shown above) only surfaces the real cause because it explicitly reads the returned `NSError` and logs `localizedDescription` before returning `error.PipelineFailed`. Skip that check, or catch the error generically without inspecting it, and pipeline creation looks like it "just failed" with no clue that a `threadgroup` array was the reason. The SDPA kernel lives right at this edge: `q_local + kv_block + out_acc + scores + shared` must stay under 32 KB, and `kv_block` (16 KB for `sdpa_block_size x sdpa_max_head_dim`) is both the largest contributor and the first one to blow the budget if `max_seq_len` or `head_dim` grow.
+
 ---
 
 **In the code:** [src/backend/metal.zig](../../src/backend/metal.zig) (full implementation), [src/backend/kernels/metal/*.metal](../../src/backend/kernels/metal/) (MSL kernels), [src/backend/objc.zig](../../src/backend/objc.zig) (Objective-C bindings)

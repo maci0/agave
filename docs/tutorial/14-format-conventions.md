@@ -904,6 +904,12 @@ When adding support for a new model architecture:
 
 **Golden rule:** Same model, different format → **identical outputs**. Any divergence is a bug.
 
+LoRA adapter merging in [Chapter 21: LoRA Adapters](21-lora.md) leans on this same tensor-name translation: an adapter's `.lora_a`/`.lora_b` pair has to resolve to the identical base-model tensor this chapter's mapping produces, first by bare name and then with `.weight` appended, before the merge can add the right delta into the right weight.
+
+## Gotchas
+
+**The SafeTensors `U32` dtype string means "packed MLX-quantized data," not "32-bit unsigned integers."** `parseDType()` in [src/format/safetensors.zig](../../src/format/safetensors.zig) maps the on-disk string `"U32"` directly to `DType.mlx_q`, and the tensor's recorded `dims` describe the **packed word shape** (rows x groups-per-row), not the logical unpacked element count. `numElements()` (the product of `dims`) is correct for GGUF, where dims already describe the unpacked tensor, but for an MLX-quantized SafeTensors tensor it returns the packed word count, smaller than the true element count by the packing factor, and nothing about the call raises an error. Section 5 above is the concrete failure this causes: detecting a gated Q projection by comparing `numElements()` against an expected element count silently misdetects every MLX-quantized SafeTensors model, because the comparison checks a word count against an element-count threshold and gets a plausible-looking but wrong answer. The fix is to key detection off `dims[0]` (the output row dimension, accurate whether or not the tensor is packed) instead of `numElements()` whenever the tensor is MLX-quantized.
+
 ---
 
 **In the code:** [src/format/gguf.zig](../../src/format/gguf.zig) (GGUF loader with HF mapping), [src/format/safetensors.zig](../../src/format/safetensors.zig) (SafeTensors loader), [src/models/qwen35.zig](../../src/models/qwen35.zig) (format-aware model), [src/backend/kernels/cpu/deltanet.zig](../../src/backend/kernels/cpu/deltanet.zig) (convention-aware kernels)

@@ -4,6 +4,32 @@ Modern CPUs have 4-64 cores. A single-threaded GEMV can only saturate one core's
 
 Agave uses a lightweight **futex-based thread pool** that wakes workers on demand, distributes work via an atomic counter, and has the main thread participate instead of just waiting.
 
+## Code Flow
+
+```mermaid
+flowchart LR
+    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
+    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
+    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
+    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
+    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
+
+    Call["parallelFor(total, grain,\nctx, func)"]:::setup
+    Small{"total <= grain\nor no workers?"}
+    Inline["run func() inline\non caller's thread"]:::danger
+    Post["post task descriptor\ncounter = 0"]:::migration
+    Wake["generation++\nfutexWake(all workers)"]:::sync
+    Race["main + workers\nrace on task_counter\n(fetchAdd per chunk)"]:::sync
+    Spin["main spin-waits\nwhile active != 0"]:::migration
+    Done["parallelFor() returns"]:::success
+
+    Call --> Small
+    Small -- "yes" --> Inline
+    Small -- "no" --> Post --> Wake --> Race --> Spin --> Done
+```
+
+One `parallelFor` call: post the work descriptor, bump the generation counter to wake sleeping workers, then the main thread joins the same atomic-counter race instead of idling. No thread is ever spawned per call; workers are created once at pool startup and sleep between calls. The rest of this chapter builds up to and past that loop.
+
 ## Why Not Just Spawn Threads?
 
 ```zig
@@ -722,6 +748,8 @@ defer pool.deinit();
 - `n_rows < 4` → inline faster
 - Already on GPU → CPU threading irrelevant
 - Overhead dominates (e.g., softmax with n=128)
+
+The same atomic-counter work-distribution idea scales past one machine in [Chapter 22: Distributed Inference](22-distributed-inference.md): tensor parallelism shards a layer's weights across GPUs the way `parallelFor` shards rows across CPU cores, with a network `allReduceAdd` standing in for the local reduction this chapter's workers do in-process.
 
 ---
 

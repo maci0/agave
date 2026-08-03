@@ -2,6 +2,36 @@
 
 Every GPU kernel dispatch has overhead: setting up the pipeline state, binding buffers, launching threadgroups, and inserting memory barriers. When operations share the same input vector or can be combined into a single pass, **batching** and **fusion** eliminate redundant dispatches.
 
+## Code Flow
+
+```mermaid
+flowchart LR
+    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
+    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
+    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
+    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
+    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
+    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
+
+    X["x (input vector)"]:::setup
+    Batch{"ops share x?\n(Q/K/V projections)"}
+    Multi["gemvMulti(x, ops, k)\none dispatch per op,\nsame encoder, one barrier"]:::sync
+    Single["gemv(x, w, y)\none dispatch, one barrier"]:::migration
+    FFN{"gate/up feed\nan activation?"}
+    Fused["fused FFN kernel\ngate + up + activation\nin ONE dispatch"]:::success
+    Unfused["3 dispatches\ngate, up, siluMul/geluMul"]:::danger
+
+    X --> Batch
+    Batch -- "yes" --> Multi
+    Batch -- "no" --> Single
+    Multi --> FFN
+    Single --> FFN
+    FFN -- "yes, quant supported\n+ @hasDecl finds kernel" --> Fused
+    FFN -- "no" --> Unfused
+```
+
+`gemvMulti` collapses N dispatches sharing one input into N sub-dispatches under a single barrier; the fused FFN kernel goes further and collapses gate GEMV + up GEMV + activation into one dispatch with no intermediate VRAM writes. The rest of this chapter builds up to both paths and the megakernel tiers beyond them.
+
 ## The Dispatch Overhead Problem
 
 Each GPU kernel dispatch burns ~5-10 µs on CPU-side setup before any compute happens. When three projections each need their own dispatch, the overhead stacks up — and the same input vector gets loaded from memory three times.
@@ -634,6 +664,16 @@ For small models (0.8-2B), dispatch overhead is a significant fraction of per-to
 
 For larger models (4B+), the per-dispatch compute time dominates, so the relative gain is smaller.
 
+### Performance (from BENCHMARKS.md)
+
+Measured 2026-03-24 on Apple M4 Pro, full methodology in [BENCHMARKS.md](../BENCHMARKS.md). These are Tier 1 fused-FFN deltas measured with `--megakernel`, standard dispatch vs. fused, same model and quant:
+
+| Claim | Source |
+|-------|--------|
+| Qwen3.5 0.8B Q8_0, short decode: 111.7 -> 116.3 tok/s (+4%) | BENCHMARKS Megakernel System, Tier 1 |
+| Qwen3.5 0.8B Q8_0, profiled decode: 23.8 -> 25.5 tok/s (+7%) | BENCHMARKS Megakernel System, Tier 1 |
+| Largest gains come from mixed-quant models (Q4_K_M) where fused kernels cover every layer type | BENCHMARKS Megakernel System, Tier 1 |
+
 **Supported models:** Qwen 3.5, Gemma 3, Gemma 4 (dense+MoE), GLM-4 on Metal. Qwen 3.5 on CUDA (Q8_0, Q4_K, Q5_K, Q6_K) and ROCm (Q8_0).
 
 **Weight offset computation:** The megakernel needs to access both gate and up weight matrices in a single dispatch. `src/backend/megakernel.zig` computes per-layer byte offsets so the kernel can locate both weight tensors without separate buffer bindings.
@@ -928,6 +968,10 @@ flowchart TD
 1. **Validate output:** Fused kernel must match unfused output exactly
 2. **Test edge cases:** Single element, non-multiple-of-8 sizes
 3. **Check all backends:** Fusion bug on Metal but not CPU? Check threadgroup barriers.
+
+## Gotchas
+
+**Fused FFN methods don't exist on every backend, and calling one that isn't there is a compile error, not a runtime one.** `metal.zig` defines `fusedFfnGateUpSiluQ8` and its siblings, but the CPU, CUDA, and ROCm backend structs don't all define the same set, and on Linux the Metal backend itself compiles down to a stub with none of them. Because `Backend` dispatches through `inline else => |be|`, the compiler generates a concrete call for every backend variant at every call site, so a naked `be.fusedFfnGateUpSiluQ8(...)` inside that switch fails to build the moment `zig build` reaches a backend that lacks the method, not just at runtime on that backend. `mlpLayer()` in [src/models/qwen35.zig](../../src/models/qwen35.zig) (and the equivalent in `gemma3.zig`/`gemma4.zig`) guards every fused call with `if (comptime @hasDecl(@TypeOf(be.*), "fusedFfnGateUpSiluQ8")) { ... }`, so the fused branch only gets compiled in for backends that actually implement it. Drop the `comptime @hasDecl` check and the build breaks on the first non-Metal backend, even though the bug only "looks like" a Metal problem.
 
 ---
 

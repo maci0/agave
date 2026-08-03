@@ -2,6 +2,26 @@
 
 A chat model expects prompts in a specific format with special tokens marking roles (user, assistant, system). Hardcoding these in model code creates **tight coupling** and makes the codebase fragile. **Chat templates** are data-driven: role markers and end-of-generation tokens are **configuration**, not code.
 
+## Code Flow
+
+```mermaid
+flowchart LR
+    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
+    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
+    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
+    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
+
+    Msgs["messages\n[system?, user, assistant, ...]"]:::setup
+    Fmt["ChatTemplate.formatConversation()\nprefix/suffix per role\n+ generation_prefix"]:::migration
+    Prompt["rendered prompt\n(flat string, special tokens)"]:::sync
+    Tok["tokenizer.encode()"]:::sync
+    Ids["token ID array"]:::success
+
+    Msgs --> Fmt --> Prompt --> Tok --> Ids
+```
+
+One call to `formatConversation()` turns a role-tagged messages array into the exact flat string the tokenizer expects, special tokens and all. The rest of this chapter is about what that one function does per architecture.
+
 ## The Problem: Hardcoded Prompt Formatting
 
 ```mermaid
@@ -921,6 +941,8 @@ call_123_0
 ```
 
 See [API.md — Tool Calling](../API.md#tool-calling) for request/response format and usage examples.
+
+[Chapter 23: Server / HTTP API](23-server-http-api.md) hands `formatConversation()` a messages array parsed from an incoming HTTP request instead of a CLI argument; the server never reimplements templating, it calls the exact same per-architecture function this chapter describes.
 
 ## Future Extensions
 
