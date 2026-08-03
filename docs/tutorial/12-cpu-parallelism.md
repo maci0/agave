@@ -589,7 +589,7 @@ if (total <= effective_grain) {
 
 **Why?** For tiny work (< 4 rows), threading overhead dominates. Faster to run inline.
 
-## Avoiding Common Pitfalls
+## Gotchas
 
 ### Pitfall 1: Shared Mutable State
 

@@ -790,6 +790,11 @@ This is inspired by [PowerInfer](https://github.com/Tiiny-AI/PowerInfer) and [Tu
 
 **Why CPU only?** GPU kernels are bandwidth-bound (waiting for memory, not compute). Adding branch checks to GPU shaders causes thread divergence which hurts performance. CPU GEMV is compute-bound (sequential dot products), so skipping blocks is pure win.
 
+## Gotchas
+
+- **The tail loop isn't optional cleanup.** When `k` (or `n`) isn't a multiple of the vector width, skipping the scalar tail loop after the `@Vector(8, f32)` main loop doesn't crash, it just silently drops the last few elements from the dot product. This is easy to miss on test inputs sized as round numbers (256, 4096) and only shows up once someone runs a GEMV against an odd hidden dimension or a quantized block boundary that doesn't divide evenly by 8.
+- **`@reduce(.Add)`'s pairwise tree changes rounding, not just speed.** Reducing a SIMD accumulator with `@reduce` sums pairs in a tree order (see the reduction-tree diagram above), which accumulates floating-point rounding error differently than a naive sequential `for` loop summing the same values one at a time. A golden test that compares a new SIMD kernel against a scalar reference bit-for-bit will fail on rounding alone even when the SIMD kernel is correct; compare with a tolerance instead.
+
 ---
 
 **In the code:** [src/backend/kernels/cpu/gemv.zig](../../src/backend/kernels/cpu/gemv.zig) (`isBlockSparse`, `sparse_threshold`), [src/backend/kernels/cpu/gemv_f32.zig](../../src/backend/kernels/cpu/gemv_f32.zig), [src/backend/kernels/cpu/gemv_bf16.zig](../../src/backend/kernels/cpu/gemv_bf16.zig), [src/backend/kernels/cpu/norm.zig](../../src/backend/kernels/cpu/norm.zig), [src/ops/mlx.zig](../../src/ops/mlx.zig) (MLX GEMV with factored dequant)

@@ -315,8 +315,6 @@ agave model.gguf --json-output "Generate a user profile"
 
 The grammar state machine masks logits before sampling — tokens that would violate the grammar get set to -infinity. This guarantees syntactically valid output regardless of sampling parameters.
 
-**Gotcha: grammar's interaction with sampling varies by path and token position.** Both `main.zig` (CLI) and `src/server/server.zig` (HTTP) mask invalid tokens to `-infinity` first, ahead of temperature, top-k/top-p, min-p, and XTC. The CLI then runs the normal sampling pipeline over the masked logits whenever temperature is non-zero, so distinct grammar-valid completions can still be sampled. On the HTTP server, streaming (SSE) responses call `argmax` on the masked logits for every token, first and subsequent alike, so streamed grammar output is always deterministic. Non-streaming HTTP responses argmax every token after the first, but the first token still runs the full sampling pipeline when temperature is non-zero, so a non-streaming grammar-constrained response can start with a sampled token and settle into deterministic argmax from the second token on.
-
 **Jump decoding**: When the grammar allows exactly one valid next token (e.g., a colon after a JSON key, a closing brace at the end), the forward pass is skipped entirely and that token is emitted directly. This eliminates unnecessary GPU compute for deterministic structural tokens, significantly speeding up JSON schema output where many tokens are fixed by the schema.
 
 ```mermaid
@@ -475,6 +473,10 @@ A quick-reference cheat sheet for the algorithm parameters covered above (the de
 | Strict structured | 0 | 0 | 1.0 | 0 | grammar/constrained |
 
 These are starting points, not hard rules. A model with a narrower vocabulary distribution may need a lower temperature than shown here to feel equally focused.
+
+## Gotchas
+
+- **Grammar's interaction with sampling varies by path and token position.** Both `main.zig` (CLI) and `src/server/server.zig` (HTTP) mask invalid tokens to `-infinity` first, ahead of temperature, top-k/top-p, min-p, and XTC. The CLI then runs the normal sampling pipeline over the masked logits whenever temperature is non-zero, so distinct grammar-valid completions can still be sampled. On the HTTP server, streaming (SSE) responses call `argmax` on the masked logits for every token, first and subsequent alike, so streamed grammar output is always deterministic. Non-streaming HTTP responses argmax every token after the first, but the first token still runs the full sampling pipeline when temperature is non-zero, so a non-streaming grammar-constrained response can start with a sampled token and settle into deterministic argmax from the second token on.
 
 ---
 

@@ -942,6 +942,11 @@ call_123_0
 
 See [API.md — Tool Calling](../API.md#tool-calling) for request/response format and usage examples.
 
+## Gotchas
+
+- **`user_suffix` being empty isn't a bug to "fix."** The `qwen35` template leaves `user_suffix` empty because the end-of-user marker is already folded into `assistant_prefix` (`<|im_end|>\n<|im_start|>assistant\n`, see the qwen35 example above). Adding a closing tag to `user_suffix` when porting a new ChatML-style model duplicates it in every rendered prompt instead of erroring, since `formatConversation()` just concatenates strings with no validation.
+- **`generation_prefix` belongs only on the final assistant turn, not on every assistant message.** `formatConversation()` appends it exactly once, after the last `assistant_prefix` at the end of the function (see formatConversation() Control Flow above), not inside the per-message loop. Wiring it into the loop instead would re-inject Qwen3.5's empty `<think>` block into completed conversation history the model was never trained to see mid-conversation.
+
 [Chapter 23: Server / HTTP API](23-server-http-api.md) hands `formatConversation()` a messages array parsed from an incoming HTTP request instead of a CLI argument; the server never reimplements templating, it calls the exact same per-architecture function this chapter describes.
 
 ## Future Extensions

@@ -392,6 +392,11 @@ flowchart TD
 
 Layer types are determined at init from model **metadata** (descriptive information about the model structure — layer counts, dimensions, patterns — stored in the model file header) and dispatched in each model's `forward()` loop.
 
+## Gotchas
+
+- **The state matrix's lossy recall isn't a bug you can fix by tuning decay.** Code that treats an SSM layer's state like a KV cache, expecting to retrieve an exact fact from thousands of tokens ago, will get a plausible-looking but wrong answer instead of an error: the association simply decayed below the noise floor of the other associations sharing that fixed-size matrix. If a workload needs exact long-range recall, the fix is a hybrid layer pattern with attention checkpoints (see Hybrid Layer Patterns above), not a smaller decay constant.
+- **SSM recurrence can't be batched across tokens the way attention's GEMM can.** Each timestep's state update depends on the previous timestep's state, so prefill can't dispatch one wide matrix multiply across the sequence dimension for SSM layers the way it does for attention (see Hardware Considerations above). Code that tries to parallelize the recurrence loop across tokens instead of across heads will produce a state that never accumulated the intermediate steps, not just a slower kernel.
+
 ---
 
 **In the code:** [src/ops/ssm.zig](../../src/ops/ssm.zig) (causalConv1dSilu, mamba2Recurrence, groupRmsNormSiluGate), [src/backend/kernels/cpu/deltanet.zig](../../src/backend/kernels/cpu/deltanet.zig) (DeltaNet recurrence), [src/models/qwen35.zig](../../src/models/qwen35.zig) (hybrid dispatch)

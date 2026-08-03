@@ -457,7 +457,7 @@ See [Parallelism docs](../PARALLELISM.md) for full details.
 
 ---
 
-## Common Pitfalls
+## Gotchas
 
 **Never import backend implementations directly**: Model code uses `@import("backend/backend.zig")`, never `@import("backend/cuda.zig")`. Backend-specific types (`CUcontext`, `MTLDevice`) stay private to their backend file.
 
