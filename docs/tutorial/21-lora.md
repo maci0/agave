@@ -48,16 +48,20 @@ flowchart TD
   Open["open adapter GGUF\ncheck adapter.type == 'lora'"]:::setup
   FindA["iterate tensors\nfind each *.lora_a"]:::sync
   PairB["look up matching *.lora_b\nsame base suffix"]:::sync
-  Check{{"lora_b present?\nrank matches?\nbase shape matches?"}}
+  RankCheck{{"lora_b present?\nrank_a == rank_b?\nrank, k, n > 0?"}}
   Skip["skip this pair\n(no error, no log)"]:::danger
   Locate["locate base tensor\nbare name, then name + '.weight'"]:::sync
+  ShapeCheck{{"base dims match\nn and k?"}}
+  DequantAB["dequant lora_a, lora_b → F32"]:::sync
   Dequant["dequant(base) → F32 buffer"]:::sync
   Merge["merged = base + (alpha/rank) · lora_b @ lora_a"]:::sync
   Install["install merged F32 buffer\ninto lora_overrides[base_name]"]:::success
 
-  Open --> FindA --> PairB --> Check
-  Check -->|"no"| Skip
-  Check -->|"yes"| Locate --> Dequant --> Merge --> Install
+  Open --> FindA --> PairB --> RankCheck
+  RankCheck -->|"no"| Skip
+  RankCheck -->|"yes"| Locate --> ShapeCheck
+  ShapeCheck -->|"no"| Skip
+  ShapeCheck -->|"yes"| DequantAB --> Dequant --> Merge --> Install
   Skip --> FindA
 ```
 
@@ -65,7 +69,7 @@ flowchart TD
 
 Each merged tensor is written into `lora_overrides`, a hash map on the base model's `GGUFFile` keyed by the base tensor's canonical name. It does not replace anything in the memory-mapped file; the original mmap'd bytes stay exactly as they were on disk.
 
-The map only matters at one call site: `getTensor()`. Every model implementation resolves its weight tensors by calling `fmt.getTensor(name)` while it builds its layer structs, the same access pattern covered in Chapter 14. `getTensor()` checks `lora_overrides` first; on a hit it returns the merged F32 buffer instead of the mmap'd original, with no other change to the caller. Model code never checks whether an adapter was applied, and it never sees `lora_overrides` directly, it just gets back a normal `TensorInfo` pointing at F32 data instead of the original quantized data.
+The map only matters at one call site: `getTensor()`. Every model implementation resolves its weight tensors by calling `fmt.getTensor(name)` while it builds its layer structs, the same access pattern covered in Chapter 14. `getTensor()` checks `lora_overrides` first; on a hit it returns the merged F32 buffer instead of the mmap'd original, with no other change to the caller. Model code never checks whether an adapter was applied, and it never sees `lora_overrides` directly; it just gets back a normal `TensorInfo` pointing at F32 data instead of the original quantized data.
 
 Because this lookup happens during model construction, not inside `forward()`, LoRA adds zero cost to token generation. By the time the first token is generated, every model struct already holds plain pointers into either the original mmap or a merged override buffer, indistinguishable from each other at the call sites that matter.
 
@@ -83,7 +87,7 @@ agave model.gguf --lora adapter.gguf "prompt"
 
 ## Gotchas
 
-- **Wrong adapter type fails the whole load, not the whole tensor set.** `applyLoraGguf()` checks `adapter.type` (or `general.type`) once, at the top of the function, before touching any tensors. If it isn't `"lora"`, the function returns `error.NotALoraAdapter` immediately and nothing is merged. This is a hard error, not a partial apply.
+- **Wrong adapter type fails the entire load before any tensors are merged.** `applyLoraGguf()` checks `adapter.type` (or `general.type`) once, at the top of the function, before touching any tensors. If it isn't `"lora"`, the function returns `error.NotALoraAdapter` immediately and nothing is merged. This is a hard error, not a partial apply.
 - **A bad individual pair is silently skipped, not reported.** Inside the per-tensor loop, a missing `lora_b`, a rank mismatch between `lora_a` and `lora_b`, or a shape mismatch against the base tensor all take the same path: `continue` to the next `lora_a` entry. There's no error, no log line naming the skipped tensor, just one fewer entry in the final `lora_overrides` count that gets printed after loading finishes.
 - **Every merged tensor becomes F32, unconditionally.** There's no quantized merge path (no "add a dense delta to a Q4_0 block without fully expanding it" kernel). Expect the memory increase from section 5 for every tensor the adapter actually modifies, proportional to how many of the model's projections the adapter was trained against.
 
