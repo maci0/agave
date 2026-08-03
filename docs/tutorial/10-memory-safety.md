@@ -1,5 +1,9 @@
 # Chapter 10: Memory Safety
 
+**Prerequisites:** [Chapter 0: Getting Started](00-getting-started.md) (helpful for codebase context, not required)
+
+**Time:** ~11 min
+
 Zig's approach to memory management: **explicit allocation, guaranteed cleanup**. No garbage collector, no hidden allocations, no surprises. When you call `allocator.alloc()`, you must call `allocator.free()` — and Zig provides tools to make this **automatic and bulletproof**.
 
 ## Code Flow

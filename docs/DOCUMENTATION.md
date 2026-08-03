@@ -6,7 +6,7 @@ This documentation has been reorganized into focused sections:
 
 A progressive tutorial series that builds understanding layer by layer:
 
-0. [Getting Started](tutorial/00-getting-started.md) — pipeline from model file to sampled text
+0. [Getting Started](tutorial/00-getting-started.md): pipeline from model file to sampled text
 1. [Tokens and Text](tutorial/01-tokens-and-text.md) — tokenization, BPE, embedding
 2. [The Transformer](tutorial/02-the-transformer.md) — attention, GQA, RoPE, normalization
 3. [Feed-Forward Networks](tutorial/03-feed-forward-networks.md) — activations, SwiGLU, MoE
@@ -27,12 +27,12 @@ A progressive tutorial series that builds understanding layer by layer:
 18. [Multi-Token Prediction](tutorial/18-multi-token-prediction.md) — MTP heads, +1 offset norm, draft/verify loop
 19. [PFlash and Block Sparse Attention](tutorial/19-pflash-and-block-sparse.md) — block sparsity, speculative prefill, alpha tuning, scoring models, PFlash+DDTree composition
 20. [Diffusion Language Models](tutorial/20-diffusion-lm.md) — DiffusionGemma, block diffusion, uniform state diffusion, bidirectional canvas attention, confidence-based acceptance, block autoregressive chaining
-21. [LoRA Adapters](tutorial/21-lora.md) — load-time F32 merge of low-rank adapter weights
-22. [Distributed Inference](tutorial/22-distributed-inference.md) — tensor/pipeline parallelism, transport selection, device sharding
-23. [Server / HTTP API](tutorial/23-server-http-api.md) — HTTP request pipeline, sessions, streaming, structured output
+21. [LoRA Adapters](tutorial/21-lora.md): load-time F32 merge of low-rank adapter weights
+22. [Distributed Inference](tutorial/22-distributed-inference.md): tensor/pipeline parallelism, transport selection, device sharding
+23. [Server / HTTP API](tutorial/23-server-http-api.md): HTTP request pipeline, sessions, streaming, structured output
 
 **Appendices:**
-- [Troubleshooting](tutorial/appendix-troubleshooting.md) — symptom → cause → fix for common inference failures
+- [Troubleshooting](tutorial/appendix-troubleshooting.md): symptom → cause → fix for common inference failures
 - [Mathematical Operations Reference](tutorial/appendix-math.md) — dot product, softmax, GEMV, convolution
 - [Compile-Time Optimization](tutorial/appendix-compile-time.md) — comptime, @embedFile, lookup tables
 - [Profiling and Debugging](tutorial/appendix-profiling.md) — --profile flag, dispatch counters

@@ -135,7 +135,7 @@ Looking for one specific topic instead of a full reading path? Jump straight to 
 | Diffusion LM | 20 |
 
 **Appendices:**
-- [Troubleshooting](appendix-troubleshooting.md) — Symptom → cause → fix for common inference failures
+- [Troubleshooting](appendix-troubleshooting.md): Symptom → cause → fix for common inference failures
 - [Mathematical Operations Reference](appendix-math.md) — Quick reference for all math operations (dot product, softmax, GEMV, convolution, etc.)
 - [Compile-Time Optimization](appendix-compile-time.md) — comptime keyword, @embedFile, lookup tables, feature detection, type specialization
 - [Profiling and Debugging](appendix-profiling.md) — --profile flag, dispatch counters, missing kernel policy, regression detection

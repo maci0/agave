@@ -1,5 +1,9 @@
 # Chapter 15: Chat Templates
 
+**Prerequisites:** [Chapter 1: Tokens and Text](01-tokens-and-text.md) (tokenizer.encode(), special tokens)
+
+**Time:** ~18 min
+
 A chat model expects prompts in a specific format with special tokens marking roles (user, assistant, system). Hardcoding these in model code creates **tight coupling** and makes the codebase fragile. **Chat templates** are data-driven: role markers and end-of-generation tokens are **configuration**, not code.
 
 ## Code Flow

@@ -1,5 +1,9 @@
 # Chapter 7: Sampling
 
+**Prerequisites:** [Chapter 2: The Transformer](02-the-transformer.md) (produces the logits this chapter filters and samples from)
+
+**Time:** ~12 min
+
 After the forward pass produces **logits** (raw unnormalized scores, one per vocabulary token), the model must **select** the next token. The simplest method is **greedy decoding** (pick the highest score), but this produces repetitive, **deterministic** (always the same output for the same input) output. Sampling parameters add controlled randomness for more natural text.
 
 ### Code Flow

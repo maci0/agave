@@ -1,5 +1,9 @@
 # Chapter 17: Speculative Decoding & DDTree
 
+**Prerequisites:** [Chapter 5: Memory and Caching](05-memory-and-caching.md) (KV cache rollback on rejection), [Chapter 2: The Transformer](02-the-transformer.md) (target-model verification)
+
+**Time:** ~29 min
+
 Standard autoregressive decoding generates one token per forward pass. For large models, each pass takes tens of milliseconds — the token generation rate is bottlenecked by model size, not memory bandwidth. Speculative decoding breaks this bottleneck by using a cheap draft model to propose multiple candidate tokens, then verifying them against the full target model.
 
 ## The Core Idea
@@ -803,9 +807,9 @@ The server uses the same speculative decoding loop as CLI mode. Draft model pref
 
 ## Gotchas
 
-- **KV rollback after reject must cover the draft cache too, not just the target's.** When acceptance is partial (`A < K`), the acceptance walk trims the target KV cache to `P + A + 1` with `setKvSeqLen()`. In separate-model mode, that call has to run against the draft's KV cache as well (see KV Cache Rollback on Rejection above) — skipping it leaves the draft's cache sitting at `P + K` while the target's is back at `P + A + 1`. The next round's draft still produces tokens, and the target still verifies them, so nothing crashes; the draft is just silently attending to K/V entries for tokens that were never accepted, degrading acceptance rate for reasons that don't show up anywhere except a slow decline in average tokens-per-step.
+- **KV rollback after reject must cover the draft cache too, not just the target's.** When acceptance is partial (`A < K`), the acceptance walk trims the target KV cache to `P + A + 1` with `setKvSeqLen()`. In separate-model mode, that call has to run against the draft's KV cache as well (see KV Cache Rollback on Rejection above): skipping it leaves the draft's cache sitting at `P + K` while the target's is back at `P + A + 1`. The next round's draft still produces tokens, and the target still verifies them, so nothing crashes; the draft is just silently attending to K/V entries for tokens that were never accepted, degrading acceptance rate for reasons that don't show up anywhere except a slow decline in average tokens-per-step.
 - **Self-draft mode needs exactly one rollback call, not two.** Because self-speculative and self-draft modes share a single KV cache between the draft and verify phases, calling `setKvSeqLen()` twice (once per "logical" cache) truncates past the correct position on the second call. The shared-cache case is a single `setKvSeqLen(P + A + 1)`, full stop.
-- **`A = K` (full acceptance) means no rollback call at all.** Both caches are already sitting at `P + K`, consistent with each other. Calling `setKvSeqLen()` anyway on the full-acceptance path is harmless only if the position argument is computed correctly (`P + K`, not `P + K + 1` from an off-by-one bonus-token miscount) — an easy place to introduce a one-token corruption that only shows up after many rounds of always-accepted drafts.
+- **`A = K` (full acceptance) means no rollback call at all.** Both caches are already sitting at `P + K`, consistent with each other. Calling `setKvSeqLen()` anyway on the full-acceptance path is harmless only if the position argument is computed correctly (`P + K`, not `P + K + 1` from an off-by-one bonus-token miscount), an easy place to introduce a one-token corruption that only shows up after many rounds of always-accepted drafts.
 
 ---
 

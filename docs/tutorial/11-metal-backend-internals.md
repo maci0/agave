@@ -1,5 +1,9 @@
 # Chapter 11: Metal Backend Internals
 
+**Prerequisites:** [Chapter 8: Backends](08-backends.md) (UMA, dispatcher pattern)
+
+**Time:** ~19 min
+
 The Metal backend is Agave's primary GPU path on Apple Silicon. It's designed around **zero-copy UMA** (Unified Memory Architecture — CPU and GPU share the same physical RAM), **deferred dispatch** (batching operations without blocking), and **cache-aware resource management** (reusing GPU buffer wrappers to avoid ObjC allocation overhead).
 
 ## Unified Memory Architecture (UMA)

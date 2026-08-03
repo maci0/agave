@@ -1,5 +1,9 @@
 # Chapter 16: Recipe System
 
+**Prerequisites:** [Chapter 7: Sampling](07-sampling.md), [Chapter 15: Chat Templates](15-chat-templates.md) (both helpful, not required)
+
+**Time:** ~15 min
+
 Every model + hardware combination has **different optimal settings**. A small Qwen3.5 4-bit model on Apple Silicon might run best with creative sampling (temp=0.7), while a large MoE on CPU needs conservative defaults (ctx_size=2048) to avoid OOM. Hardcoding these in model code creates **configuration sprawl**.
 
 The **recipe system** provides **proven defaults** for specific scenarios while **preserving user control** — CLI flags always override recipe values.
@@ -752,9 +756,9 @@ test "user override priority" {
 
 ## Gotchas
 
-- **Forgetting the `Overrides` bit silently breaks user control.** Writing a user's CLI value into the working variable is not enough on its own — `applyDefaults()` decides whether to keep it by checking the matching `Overrides` boolean, not by comparing values. If a new CLI flag is added without also setting `overrides.<field> = true` when the user passes it, the recipe's value wins even though the user explicitly asked for something else, and there's no error or warning to signal it happened.
+- **Forgetting the `Overrides` bit silently breaks user control.** Writing a user's CLI value into the working variable is not enough on its own: `applyDefaults()` decides whether to keep it by checking the matching `Overrides` boolean, not by comparing values. If a new CLI flag is added without also setting `overrides.<field> = true` when the user passes it, the recipe's value wins even though the user explicitly asked for something else, and there's no error or warning to signal it happened.
 - **A fully wildcard preset must go last, not first.** `match()` is first-match-wins (see Matching Specificity above). A preset with `arch_prefix = ""`, `backend = ""`, and `quant = ""` matches every call. Placed early in the `presets` array, it silently shadows every more specific preset below it, so none of the tuned, model-specific recipes ever get applied.
-- **`Recipe.default` (all-null) is not the same as an empty `Overrides{}`.** A `null` recipe field means "the recipe has no opinion, fall through to the CLI baseline." A `false` override bit means "the user didn't set this flag." Both end up deferring to the next tier in the three-level chain, but they're independent booleans checked at different points in `applyDefaults()` — conflating them when adding new fields is an easy way to introduce a resolution bug that only shows up for one specific parameter.
+- **`Recipe.default` (all-null) is not the same as an empty `Overrides{}`.** A `null` recipe field means "the recipe has no opinion, fall through to the CLI baseline." A `false` override bit means "the user didn't set this flag." Both end up deferring to the next tier in the three-level chain, but they're independent booleans checked at different points in `applyDefaults()`: conflating them when adding new fields is an easy way to introduce a resolution bug that only shows up for one specific parameter.
 
 ---
 

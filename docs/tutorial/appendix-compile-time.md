@@ -855,7 +855,7 @@ pub fn getNextId() usize {
 
 ## Gotchas
 
-- **A comptime assertion only protects the table it's attached to.** `iq4nl_table`'s strictly-increasing check and `Q4_0_Block`'s size check each guard one specific structure. Adding a new lookup table or packed struct elsewhere in the codebase without its own `comptime { std.debug.assert(...) }` block gets none of that protection automatically — the pattern has to be repeated deliberately at every new table, it isn't inherited from the appendix's examples.
+- **A comptime assertion only protects the table it's attached to.** `iq4nl_table`'s strictly-increasing check and `Q4_0_Block`'s size check each guard one specific structure. Adding a new lookup table or packed struct elsewhere in the codebase without its own `comptime { std.debug.assert(...) }` block gets none of that protection automatically: the pattern has to be repeated deliberately at every new table, it isn't inherited from the appendix's examples.
 
 ---
 

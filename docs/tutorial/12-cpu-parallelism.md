@@ -1,5 +1,9 @@
 # Chapter 12: CPU Parallelism
 
+**Prerequisites:** [Chapter 9: CPU SIMD Optimization](09-cpu-simd-optimization.md) (the single-threaded GEMV loop this chapter parallelizes)
+
+**Time:** ~15 min
+
 Modern CPUs have 4-64 cores. A single-threaded GEMV can only saturate one core's memory bandwidth (~10-20 GB/s). The total system bandwidth is much higher (~100-400 GB/s). **Threading unlocks the full bandwidth.**
 
 Agave uses a lightweight **futex-based thread pool** that wakes workers on demand, distributes work via an atomic counter, and has the main thread participate instead of just waiting.

@@ -1,5 +1,9 @@
 # Chapter 13: Batched Dispatch and Fusion
 
+**Prerequisites:** [Chapter 8: Backends](08-backends.md), [Chapter 11: Metal Backend Internals](11-metal-backend-internals.md) (both helpful, not required)
+
+**Time:** ~22 min
+
 Every GPU kernel dispatch has overhead: setting up the pipeline state, binding buffers, launching threadgroups, and inserting memory barriers. When operations share the same input vector or can be combined into a single pass, **batching** and **fusion** eliminate redundant dispatches.
 
 ## Code Flow

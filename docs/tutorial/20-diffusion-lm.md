@@ -1,5 +1,9 @@
 # Chapter 20: Diffusion Language Models
 
+**Prerequisites:** [Chapter 2: The Transformer](02-the-transformer.md) (bidirectional vs. causal attention), [Chapter 5: Memory and Caching](05-memory-and-caching.md) (canvas attends against the prompt KV cache)
+
+**Time:** ~14 min
+
 ## Overview
 
 DiffusionGemma is Google's first publicly released **diffusion language model (dLLM)**. Unlike autoregressive LLMs that generate one token at a time from left to right, DiffusionGemma generates entire 256-token blocks simultaneously using iterative denoising — the same idea as image diffusion but applied to discrete text tokens.
