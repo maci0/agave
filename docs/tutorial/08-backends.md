@@ -1,5 +1,9 @@
 # Chapter 8: Backends
 
+**Prerequisites:** [Chapter 0: Getting Started](00-getting-started.md), [Chapter 1: Tokens and Text](01-tokens-and-text.md), [Chapter 2: The Transformer](02-the-transformer.md), [Chapter 3: Feed-Forward Networks](03-feed-forward-networks.md) (all helpful, not required)
+
+**Time:** ~20 min
+
 Inference can run on different compute backends: **CPU** (universal, always available), **GPU** (massively parallel — thousands of cores organized into **warps/wavefronts** that execute via **SIMT** — Single Instruction Multiple Thread, where groups of 32-64 threads run the same instruction in lockstep on different data), or specialized **accelerators** (purpose-built hardware like TPUs, NPUs, or FPGAs optimized for specific workloads). Each backend provides a **compute API** that lets you write **kernels** (small programs that run on the hardware) and dispatch them.
 
 **SIMD vs SIMT:** CPUs use **SIMD** (one instruction operates on a vector register of packed values, e.g., 8 f32s in AVX2 — see [Chapter 9](09-cpu-simd-optimization.md)). GPUs use **SIMT** (one instruction is executed by many threads simultaneously, each with its own registers and program counter). The distinction matters: SIMD has no divergence — all lanes do the same thing. SIMT threads can branch independently, but divergent branches serialize.
@@ -153,6 +157,12 @@ flowchart LR
 ## The Dispatcher Pattern
 
 Model code never imports backend implementations directly. Instead, the `Backend` tagged union with `inline else` dispatch resolves **at compile time** (during compilation, not when the program runs — zero runtime overhead). Every model calls the same `be.gemv()` regardless of which hardware is present.
+
+```text
+Backend = union { cpu, metal, vulkan, cuda, rocm, webgpu }
+gemv(args):
+  match backend: each variant.gemv(args)   # inline else at compile time
+```
 
 ```mermaid
 flowchart LR
@@ -386,6 +396,8 @@ flowchart TD
 
 ## Distributed Inference
 
+See [Chapter 22: Distributed Inference](22-distributed-inference.md) for the full walkthrough of tensor and pipeline parallelism; this section covers only how the transport layer sits on top of the single-device dispatcher above.
+
 All GPU backends support distributed inference via `src/parallel/transport.zig`. Three transports: **TCP** (cross-node), **POSIX shm** (same-node zero-copy), **NCCL** (GPU-optimized RoCE RDMA, loaded via `dlopen`). Modes: tensor parallelism (`--tp 2` splits weights), pipeline parallelism (`--pp 2` splits layers), hybrid TP+PP, disaggregated prefill/decode (`--disagg`). Device selection via `--device N`.
 
 NCCL integration requires `cuDevicePrimaryCtxRetain` (not `cuCtxCreate`) — NCCL uses the CUDA primary context and will corrupt a separate driver API context. Device pointer `allReduceAdd` passes GPU activation cache pointers directly to NCCL when data is dirty on device; when CPU fallback has written to host (stale on GPU), uploads to a device staging buffer first.
@@ -449,7 +461,7 @@ See [Parallelism docs](../PARALLELISM.md) for full details.
 
 **Never import backend implementations directly**: Model code uses `@import("backend/backend.zig")`, never `@import("backend/cuda.zig")`. Backend-specific types (`CUcontext`, `MTLDevice`) stay private to their backend file.
 
-**Missing `be.sync()` before CPU reads**: GPU operations are asynchronous. If you need to read GPU-produced data on CPU (e.g., argmax on logits), call `be.sync()` first. On CPU backend, sync is a no-op.
+**Missing `be.sync()` before CPU reads**: GPU operations are asynchronous. If you need to read GPU-produced data on CPU (e.g., argmax on logits), call `be.sync()` first. On UMA platforms this is easy to miss because the CPU pointer and GPU pointer are the same memory. The read succeeds without crashing; it just returns stale data from before the GPU finished writing. On CPU backend, sync is a no-op.
 
 **Metal threadgroup memory limit**: Must stay under 32KB total. Calculate: `q_local + kv_block + out_acc + scores + shared`. Pipeline creation fails silently without the error logging in `makePipeline`.
 

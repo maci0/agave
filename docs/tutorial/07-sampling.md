@@ -2,6 +2,12 @@
 
 After the forward pass produces **logits** (raw unnormalized scores, one per vocabulary token), the model must **select** the next token. The simplest method is **greedy decoding** (pick the highest score), but this produces repetitive, **deterministic** (always the same output for the same input) output. Sampling parameters add controlled randomness for more natural text.
 
+### Code Flow
+
+```text
+logits -> filters (bias, penalties, grammar mask, temperature, XTC, min-p, top-k, top-p) -> sample
+```
+
 ## Temperature
 
 Controls randomness by scaling logits before sampling:
@@ -309,6 +315,8 @@ agave model.gguf --json-output "Generate a user profile"
 
 The grammar state machine masks logits before sampling — tokens that would violate the grammar get set to -infinity. This guarantees syntactically valid output regardless of sampling parameters.
 
+**Gotcha: grammar's interaction with sampling varies by path and token position.** Both `main.zig` (CLI) and `src/server/server.zig` (HTTP) mask invalid tokens to `-infinity` first, ahead of temperature, top-k/top-p, min-p, and XTC. The CLI then runs the normal sampling pipeline over the masked logits whenever temperature is non-zero, so distinct grammar-valid completions can still be sampled. On the HTTP server, streaming (SSE) responses call `argmax` on the masked logits for every token, first and subsequent alike, so streamed grammar output is always deterministic. Non-streaming HTTP responses argmax every token after the first, but the first token still runs the full sampling pipeline when temperature is non-zero, so a non-streaming grammar-constrained response can start with a sampled token and settle into deterministic argmax from the second token on.
+
 **Jump decoding**: When the grammar allows exactly one valid next token (e.g., a colon after a JSON key, a closing brace at the end), the forward pass is skipped entirely and that token is emitted directly. This eliminates unnecessary GPU compute for deterministic structural tokens, significantly speeding up JSON schema output where many tokens are fixed by the schema.
 
 ```mermaid
@@ -454,6 +462,19 @@ agave model.gguf -t 0.8 --repeat-penalty 1.1 -n 1000 "Write an essay"
 # Structured output
 agave model.gguf --json-schema '{"type":"object","properties":{"answer":{"type":"string"}}}' "Capital of France?"
 ```
+
+## Common Configurations
+
+A quick-reference cheat sheet for the algorithm parameters covered above (the decision tree gives the reasoning; this gives concrete starting values):
+
+| Use case | temperature | top_k | top_p | min_p | notes |
+|----------|------------:|------:|------:|------:|-------|
+| Factual / code | 0–0.2 | 40 | 0.9 | 0 | near-greedy |
+| General chat | 0.7–0.9 | 0 | 0.9 | 0.05 | balanced |
+| Creative writing | 1.1–1.3 | 0 | 0.95 | 0.02 | wider nucleus |
+| Strict structured | 0 | 0 | 1.0 | 0 | grammar/constrained |
+
+These are starting points, not hard rules. A model with a narrower vocabulary distribution may need a lower temperature than shown here to feel equally focused.
 
 ---
 

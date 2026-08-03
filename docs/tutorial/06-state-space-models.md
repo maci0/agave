@@ -1,5 +1,9 @@
 # Chapter 6: State Space Models
 
+**Prerequisites:** [Chapter 2: The Transformer](02-the-transformer.md), [Chapter 5: Memory and Caching](05-memory-and-caching.md) (both helpful, not required)
+
+**Time:** ~20 min
+
 SSMs are a family of sequence models based on state-space theory. [Mamba (Gu & Dao, 2023)](https://arxiv.org/abs/2312.00752) introduced **selective** state spaces — input-dependent parameters that give SSMs content-aware reasoning ability. SSMs are an alternative to attention that process tokens in **O(1) with respect to sequence length** per step (constant time — doesn't grow with the number of previous tokens) instead of O(n²). Instead of re-reading all previous tokens, they maintain a fixed-size **state matrix** that summarizes the past:
 
 ```
@@ -37,6 +41,13 @@ fundamental tradeoff: constant memory, but lossy recall.
 
 **Hybrid models** combine attention and SSM layers: attention every N layers for global context, SSM for the rest for speed.
 
+### Code Flow
+
+```text
+attention step: score(q, every cached k) -> softmax -> weighted sum over all v    # O(n) per token
+ssm step:       state = decay(state) + write(k, v); out = read(state, q)         # O(1) per token
+```
+
 ```mermaid
 flowchart LR
     classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
@@ -72,6 +83,9 @@ flowchart LR
 
     Past100K["100K past tokens"]:::setup --> KVCache
     Past100K -. "compressed into" .-> State
+
+    AttnOut -.->|"O(n) work / token"| Compare["Same past information,\ndifferent access strategy"]:::optional
+    Read -.->|"O(1) work / token"| Compare
 ```
 
 ## Causal Convolution
