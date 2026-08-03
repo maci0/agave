@@ -410,6 +410,12 @@ MTP GGUFs must include the nextn tensors. Look for "-MTP" in the filename (e.g.,
 | EAGLE | `eagle` | Hidden-state conditioned draft | High acceptance with EAGLE models |
 | MLP Speculator | `mlp` | Frozen hidden-state draft | Lighter than EAGLE |
 
+## Gotchas
+
+- **The `+1` offset is easy to lose when porting or refactoring.** `enorm` and `hnorm` are stored in the GGUF exactly like ordinary RMSNorm weights, `w`, with no metadata flag distinguishing them. Applying the standard `output = w * x_norm` formula instead of `output = (1 + w) * x_norm` compiles cleanly and produces output, it doesn't crash. It just quietly removes the residual identity path the offset provides, so acceptance rates degrade rather than fail outright, and the only way to catch the regression is comparing against a known-good MTP acceptance rate, not a runtime check.
+- **Concatenation order is `[embed; hidden]`, not `[hidden; embed]`.** `eh_proj` expects the token embedding branch first and the hidden-state branch second. Swapping the order still produces a `2×n_embd` vector of the right shape, so nothing errors, but the projection weights were trained against one specific ordering and silently produce garbage draft tokens against the other.
+- **MTP's KV cache is separate from the main model's.** The MTP head keeps its own K/V for the fused attention block (see Draft/Verify Loop above). On rejection, only the MTP cache needs rolling back for pure-attention models; for Qwen 3.5's hybrid DeltaNet layers, the recurrent SSM state also has to be restored from a checkpoint (see SSM State Checkpoint/Restore), and forgetting that second restore leaves the SSM state contaminated by a draft pass the target model rejected.
+
 ---
 
 **In the code:** [src/models/qwen35.zig](../../src/models/qwen35.zig) (`mtpForward`, `rmsNormPlusOne`, MTP buffer allocation), [src/models/model.zig](../../src/models/model.zig) (`mtpForward`, `getMtpDepth`, `resetMtpCache` VTable methods), [src/spec/spec_decode.zig](../../src/spec/spec_decode.zig) (`draftMtp` function)

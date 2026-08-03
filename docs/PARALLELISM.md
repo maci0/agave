@@ -5,6 +5,8 @@
 **Transports**: TCP, POSIX Shared Memory, NCCL (RoCE RDMA), RCCL (declared, not yet implemented)  
 **Backends**: All GPU backends (Metal, CUDA, Vulkan, ROCm, WebGPU) + CPU
 
+**Tutorial:** [Distributed Inference](tutorial/22-distributed-inference.md)
+
 ---
 
 ## Quick Start

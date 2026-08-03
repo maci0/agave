@@ -1,5 +1,7 @@
 # Appendix: Compile-Time Optimization
 
+**Prerequisites:** [Chapter 4: Quantization](04-quantization.md) (dequantization LUTs), [Chapter 9: CPU SIMD Optimization](09-cpu-simd-optimization.md#real-world-example-rmsnorm) (comptime-specialized kernels)
+
 Zig's `comptime` feature executes code **at compile time**, generating optimized runtime code with zero overhead. Agave uses this extensively for lookup tables, feature detection, and type-specialized dispatch.
 
 ## comptime Basics
@@ -850,6 +852,10 @@ pub fn getNextId() usize {
 3. **Use @embedFile for resources** that ship with the binary
 4. **Use comptime assertions** to validate invariants
 5. **Don't use comptime for runtime configuration** — use `const` or runtime parameters instead
+
+## Gotchas
+
+- **A comptime assertion only protects the table it's attached to.** `iq4nl_table`'s strictly-increasing check and `Q4_0_Block`'s size check each guard one specific structure. Adding a new lookup table or packed struct elsewhere in the codebase without its own `comptime { std.debug.assert(...) }` block gets none of that protection automatically — the pattern has to be repeated deliberately at every new table, it isn't inherited from the appendix's examples.
 
 ---
 

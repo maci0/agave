@@ -801,6 +801,12 @@ The server uses the same speculative decoding loop as CLI mode. Draft model pref
 - [FR-Spec: Frequency-Ranked Speculative Decoding (arxiv 2502.14856, ACL 2025)](https://arxiv.org/abs/2502.14856)
 - [Medusa: Simple Framework for Accelerating LLM Generation (Cai et al., 2024)](https://arxiv.org/abs/2401.10774)
 
+## Gotchas
+
+- **KV rollback after reject must cover the draft cache too, not just the target's.** When acceptance is partial (`A < K`), the acceptance walk trims the target KV cache to `P + A + 1` with `setKvSeqLen()`. In separate-model mode, that call has to run against the draft's KV cache as well (see KV Cache Rollback on Rejection above) — skipping it leaves the draft's cache sitting at `P + K` while the target's is back at `P + A + 1`. The next round's draft still produces tokens, and the target still verifies them, so nothing crashes; the draft is just silently attending to K/V entries for tokens that were never accepted, degrading acceptance rate for reasons that don't show up anywhere except a slow decline in average tokens-per-step.
+- **Self-draft mode needs exactly one rollback call, not two.** Because self-speculative and self-draft modes share a single KV cache between the draft and verify phases, calling `setKvSeqLen()` twice (once per "logical" cache) truncates past the correct position on the second call. The shared-cache case is a single `setKvSeqLen(P + A + 1)`, full stop.
+- **`A = K` (full acceptance) means no rollback call at all.** Both caches are already sitting at `P + K`, consistent with each other. Calling `setKvSeqLen()` anyway on the full-acceptance path is harmless only if the position argument is computed correctly (`P + K`, not `P + K + 1` from an off-by-one bonus-token miscount) — an easy place to introduce a one-token corruption that only shows up after many rounds of always-accepted drafts.
+
 ---
 
 **In the code:** [src/spec/spec_decode.zig](../../src/spec/spec_decode.zig) (orchestrator, adaptive K, EAGLE/MLP/Lookahead drafting, FR-Spec mask), [src/spec/ddtree.zig](../../src/spec/ddtree.zig) (DDTree construction), [src/spec/ngram.zig](../../src/spec/ngram.zig) (n-gram, SharedNgramPool, SuffixState, LookaheadState), [src/spec/pflash.zig](../../src/spec/pflash.zig) (PFlash block scoring and compressed prefill), [src/models/model.zig](../../src/models/model.zig) (get_hidden_state/eagle_forward vtable), [src/ops/sparse_attn.zig](../../src/ops/sparse_attn.zig) (block sparse SDPA), [src/backend/kernels/cpu/sdpa_tree.zig](../../src/backend/kernels/cpu/sdpa_tree.zig) (tree-masked attention)

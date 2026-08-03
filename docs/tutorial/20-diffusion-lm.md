@@ -100,6 +100,40 @@ This is structurally identical to how VLM image tokens work in Gemma 4: image/ca
 
 ### Denoising Loop (in `generateDiffusion()`)
 
+```mermaid
+flowchart TD
+    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
+    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
+    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
+    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
+    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
+    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
+
+    Prefill["model.prefill(prompt)\nencode prompt into KV cache"]:::setup
+    NewCanvas["canvas = 256 random tokens\nlocked = [false] × 256"]:::setup
+    Forward["forwardCanvas(canvas)\nbidirectional attention over canvas\n+ causal attention over prompt KV"]:::sync
+    Accept["for each unlocked position:\nconfidence >= threshold? lock : re-noise"]:::migration
+    AllLocked{"all 256\nlocked?"}
+    NextStep{"step < max_steps?"}
+    Emit["write canvas text to stdout\nmodel.prefill(canvas) → adds block to KV cache"]:::success
+    EosCheck{"canvas contains\nEOS token?"}
+    LenCheck{"total_generated\n>= max_tokens?"}
+    Stop(["stop generation"]):::danger
+    NextBlock["start next canvas block"]:::migration
+
+    Prefill --> NewCanvas --> Forward --> Accept --> AllLocked
+    AllLocked -- "no" --> NextStep
+    NextStep -- "yes" --> Forward
+    NextStep -- "no (max_steps reached)" --> Emit
+    AllLocked -- "yes" --> Emit
+    Emit --> EosCheck
+    EosCheck -- "yes" --> Stop
+    EosCheck -- "no" --> LenCheck
+    LenCheck -- "yes" --> Stop
+    LenCheck -- "no" --> NextBlock
+    NextBlock --> NewCanvas
+```
+
 ```
 1. Encode prompt (model.prefill)
 2. For each canvas block:
@@ -110,6 +144,7 @@ This is structurally identical to how VLM image tokens work in Gemma 4: image/ca
       iii. If all locked: break
    c. Append canvas text to output
    d. model.prefill(canvas) → adds canvas to KV cache for next block
+   e. Stop if canvas contains EOS, or total_generated >= max_tokens
 ```
 
 ---
@@ -159,6 +194,11 @@ The self-correction property is unique to diffusion: if an early token becomes i
 
 ---
 
+## Gotchas
+
+- **`--max-tokens` rounds up to whole canvas blocks, it doesn't cap output length the way it does in autoregressive mode.** In AR generation, `--max-tokens 50` stops after exactly 50 tokens. In diffusion mode, `generateDiffusion()` computes `max_blocks = ceil(max_tokens / canvas_len)`, so `--max-tokens 50` with the default 256-token canvas still runs one full block and can emit up to 256 tokens before the length check ever fires. To bound output length precisely, shrink `--diffusion-canvas` itself rather than relying on `--max-tokens` alone.
+- **The full canvas is written to stdout before the EOS check runs.** Each block emits all of its locked tokens first, then checks whether the block contains EOS to decide whether to start another block. If EOS appears at position 50 of a 256-token canvas, positions 51-255 (whatever the model denoised them to) are still printed as part of that block's output before generation stops.
+- **Shrinking the canvas isn't the same trade-off as shrinking `--max-tokens` in AR mode.** Canvas attention is bidirectional across the whole canvas, so `forwardCanvas()` cost scales with canvas size regardless of how much of it turns out to be needed. A smaller canvas means more blocks (more `model.prefill()` calls) for the same total output; it's a granularity knob, not a speed-for-quality trade like reducing `--max-tokens` is in autoregressive generation.
 
 ---
 

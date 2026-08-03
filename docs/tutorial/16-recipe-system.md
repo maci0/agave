@@ -750,6 +750,12 @@ test "user override priority" {
 - **Update when defaults change** (e.g., better quantization methods)
 - **Keep it minimal** — don't add a recipe for every combination
 
+## Gotchas
+
+- **Forgetting the `Overrides` bit silently breaks user control.** Writing a user's CLI value into the working variable is not enough on its own — `applyDefaults()` decides whether to keep it by checking the matching `Overrides` boolean, not by comparing values. If a new CLI flag is added without also setting `overrides.<field> = true` when the user passes it, the recipe's value wins even though the user explicitly asked for something else, and there's no error or warning to signal it happened.
+- **A fully wildcard preset must go last, not first.** `match()` is first-match-wins (see Matching Specificity above). A preset with `arch_prefix = ""`, `backend = ""`, and `quant = ""` matches every call. Placed early in the `presets` array, it silently shadows every more specific preset below it, so none of the tuned, model-specific recipes ever get applied.
+- **`Recipe.default` (all-null) is not the same as an empty `Overrides{}`.** A `null` recipe field means "the recipe has no opinion, fall through to the CLI baseline." A `false` override bit means "the user didn't set this flag." Both end up deferring to the next tier in the three-level chain, but they're independent booleans checked at different points in `applyDefaults()` — conflating them when adding new fields is an easy way to introduce a resolution bug that only shows up for one specific parameter.
+
 ---
 
 **In the code:** [src/recipe.zig](../../src/recipe.zig) (recipe system implementation), [src/main.zig](../../src/main.zig) (recipe matching and application)

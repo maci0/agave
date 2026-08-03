@@ -1,5 +1,7 @@
 # Appendix: Atomic Operations and Memory Ordering
 
+**Prerequisites:** [Chapter 12: CPU Parallelism](12-cpu-parallelism.md#memory-ordering) (thread pool, futex wake/wait)
+
 Multi-threaded code needs **synchronization** to coordinate between threads. Zig provides **atomic operations** — CPU instructions that read-modify-write memory **atomically** (as one indivisible operation, preventing race conditions).
 
 ## The Problem: Race Conditions

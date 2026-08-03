@@ -101,7 +101,7 @@ ids = tokenize(prompt)
 prefill(ids)                    # fill KV for the prompt
 loop:
   logits = forward(last_id)
-  sync if logits live on GPU
+  be.sync()                       # called unconditionally; no-op on CPU, flushes pending work on GPU backends
   next = sample(logits)
   append next; break on stop
 text = detokenize(generated_ids)

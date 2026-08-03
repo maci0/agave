@@ -576,6 +576,12 @@ Do not use when:
 
 Block sparse attention reduces scoring cost from O(n²) to O(n) by skipping dot products for block pairs outside the global and window pattern. PFlash uses this cheap scorer to select which KV blocks the target model must process, compressing a 128K-token prefill to 5-15K tokens while preserving the information the model will actually use. DDTree then accelerates decode. The two techniques address distinct bottlenecks and compose without interference.
 
+## Gotchas
+
+- **A too-aggressive alpha degrades quality silently, it never errors.** Lowering `--pflash-alpha` from 0.85 toward 0.50 keeps compiling, loading, and generating without complaint at every step. There's no assertion that the selected blocks are actually sufficient for the target model to answer correctly. The failure mode is a wrong or hallucinated answer because a load-bearing block, a constraint mentioned once, a definition referenced later, fell below the mean-relative threshold and was dropped before the target model ever saw it. PFlash gives no in-band signal that it under-selected; always re-validate output quality on representative prompts after lowering alpha (see Choosing Alpha above), rather than assuming a lower number is always a safe speed/quality trade.
+- **`max_kept_ratio` (default 0.20) is a hard ceiling, not a suggestion.** Even a prompt whose scores all cluster near the mean, where the adaptive threshold would otherwise keep 70-90% of blocks, gets capped at 20% kept. For dense, uniformly-important prompts (API references, dense technical specs), this cap can be more aggressive than the alpha value alone suggests; raising it is a separate lever from tuning alpha.
+- **Block size interacts with alpha, they aren't independent knobs.** Coarser blocks (128 tokens) force an all-or-nothing decision over a whole paragraph; a single important sentence surrounded by boilerplate can pull an otherwise-droppable block above threshold, or an important sentence can get diluted by irrelevant neighbors and pull an otherwise-keepable block below it. Tuning alpha without considering `--pflash-block-size` for the prompt's structure can produce inconsistent selection behavior across runs.
+
 ---
 
 **In the code:** [src/ops/sparse_attn.zig](../../src/ops/sparse_attn.zig) (block sparse CPU SDPA kernel), [src/spec/pflash.zig](../../src/spec/pflash.zig) (block scoring, adaptive threshold, compressed prefill)

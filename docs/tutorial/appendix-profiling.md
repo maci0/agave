@@ -1,5 +1,7 @@
 # Appendix: Profiling and Debugging
 
+**Prerequisites:** [Chapter 11: Metal Backend Internals](11-metal-backend-internals.md#profiling-counters), [Chapter 13: Batched Dispatch and Fusion](13-batched-dispatch-and-fusion.md)
+
 Performance regressions are silent — the model still runs, but slower. **Profiling** makes performance visible. Agave has built-in instrumentation for dispatch counts, barriers, syncs, and per-operation timing.
 
 ## --profile Flag
@@ -728,6 +730,10 @@ When investigating slow performance:
 1. **Never use --profile in production:** 50% throughput loss
 2. **Use metrics instead:** Log tokens/sec, TTFT, latency percentiles
 3. **A/B test optimizations:** Roll out changes to subset of traffic first
+
+## Gotchas
+
+- **Comparing profiled numbers across runs without `--profile` on both sides is meaningless.** The 50% throughput hit from forced GPU syncs applies unevenly across operations (small ops feel it more than large ones), so a profiled run's *relative* percentages between operations are trustworthy, but its *absolute* tok/s is not comparable to an unprofiled run's tok/s. Always compare profiled-vs-profiled or unprofiled-vs-unprofiled, never mix the two when judging a regression.
 
 ---
 

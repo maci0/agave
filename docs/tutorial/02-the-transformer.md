@@ -600,13 +600,10 @@ flowchart LR
 
 ## Gotchas
 
-**GPU sync before argmax**: After the final GEMV (vocab projection), logits are written by the GPU. CPU argmax must call `be.sync()` first — without it, you read stale data on UMA platforms.
-
-**KV cache overflow**: The cache has a fixed context size. Models must call `ensureKvBlock()` before each forward to allocate new blocks. If the cache is full, return `error.KVCacheFull` (or evict via `--kv-eviction`).
-
-**RoPE dim mismatch**: Some models rotate only a fraction of head_dim (`rope_dim` in `src/backend/kernels/cpu/rope.zig`, e.g. Gemma4 global layers: 25%). The non-rotated dimensions carry non-positional features, don't zero them, and don't assume `rope_dim == head_dim` when wiring a new architecture.
-
-**GQA kv head mismatch**: GQA head grouping is a plain integer division, `hpg = n_head / n_head_kv` (`src/ops/attention.zig`). `src/models/qwen35.zig` asserts `n_head % n_head_kv == 0` at model construction, but `std.debug.assert` compiles out in `ReleaseFast`. A GGUF with a wrong `attention.head_count_kv` value that isn't an exact divisor of `head_count` won't crash in production, it'll quietly compute the wrong Q-to-KV head grouping and produce degraded output with no error.
+- **GPU sync before argmax**: After the final GEMV (vocab projection), logits are written by the GPU. CPU argmax must call `be.sync()` first — without it, you read stale data on UMA platforms.
+- **KV cache overflow**: The cache has a fixed context size. Models must call `ensureKvBlock()` before each forward to allocate new blocks. If the cache is full, return `error.KVCacheFull` (or evict via `--kv-eviction`).
+- **RoPE dim mismatch**: Some models rotate only a fraction of head_dim (`rope_dim` in `src/backend/kernels/cpu/rope.zig`, e.g. Gemma4 global layers: 25%). The non-rotated dimensions carry non-positional features, don't zero them, and don't assume `rope_dim == head_dim` when wiring a new architecture.
+- **GQA kv head mismatch**: GQA head grouping is a plain integer division, `hpg = n_head / n_head_kv` (`src/ops/attention.zig`). `src/models/qwen35.zig` asserts `n_head % n_head_kv == 0` at model construction, but `std.debug.assert` compiles out in `ReleaseFast`. A GGUF with a wrong `attention.head_count_kv` value that isn't an exact divisor of `head_count` won't crash in production, it'll quietly compute the wrong Q-to-KV head grouping and produce degraded output with no error.
 
 ## How This Relates to the Code
 

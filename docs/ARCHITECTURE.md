@@ -2,6 +2,8 @@
 
 Project structure, module reference, and inference pipeline for the Agave inference engine.
 
+**Tutorial:** [Getting Started](tutorial/00-getting-started.md)
+
 For conceptual background, see the [tutorial series](tutorial/README.md).
 
 ## Quick Start

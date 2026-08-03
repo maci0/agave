@@ -39,6 +39,11 @@ If you can read Zig, C, or Rust code and understand concepts like "cache line" a
 
 Different readers have different goals. Here are recommended paths through the tutorials:
 
+### 🧑‍💻 **Beginner Systems Programmer (Knows C, New to Zig/ML)**
+You're comfortable with C-style memory management and pointers but haven't touched Zig or ML before. This path front-loads Zig idioms and memory safety before backend/hardware detail, then loops back for the sampling and caching pieces that tie generation together:
+- [**Chapter 0: Getting Started**](00-getting-started.md) → [**Chapter 1: Tokens**](01-tokens-and-text.md) → [**Chapter 2: Transformer**](02-the-transformer.md) → [**Chapter 3: FFN**](03-feed-forward-networks.md)
+- [**Chapter 10: Memory Safety**](10-memory-safety.md) → [**Chapter 8: Backends**](08-backends.md) → [**Chapter 7: Sampling**](07-sampling.md) → [**Chapter 5: Caching**](05-memory-and-caching.md)
+
 ### 🎓 **ML Beginners (Systems Programmers New to ML)**
 Start from the beginning and read sequentially. Chapters 0–8 build understanding from first principles:
 - [**Chapter 0: Getting Started**](00-getting-started.md) → [**Chapter 1: Tokens**](01-tokens-and-text.md) → [**Chapter 2: Transformer**](02-the-transformer.md) → [**Chapter 3: FFN**](03-feed-forward-networks.md) → [**Chapter 4: Quantization**](04-quantization.md)
@@ -110,6 +115,24 @@ Everything you need to add a new architecture to Agave:
 | 21 | [LoRA Adapters](21-lora.md) | Load-time merge of low-rank adapter weights | 12 min |
 | 22 | [Distributed Inference](22-distributed-inference.md) | TP/PP, transport selection, weight sharding | 20 min |
 | 23 | [Server / HTTP API](23-server-http-api.md) | HTTP → session → generate → stream/JSON pipeline | 18 min |
+
+## Quick Reference
+
+Looking for one specific topic instead of a full reading path? Jump straight to the relevant chapters:
+
+| Feature | Chapters |
+|---------|----------|
+| Tokenization / embeddings | 0, 1 |
+| Attention / RoPE / GQA | 2 |
+| Quantization | 4 |
+| KV cache | 5 |
+| Sampling / grammar | 7 |
+| Backends | 8, 11 |
+| Speculative decoding | 17, 18, 19 |
+| LoRA | 14, 21 |
+| Distributed | 8, 12, 22 |
+| Server pipeline | 7, 15, 23 |
+| Diffusion LM | 20 |
 
 **Appendices:**
 - [Troubleshooting](appendix-troubleshooting.md) — Symptom → cause → fix for common inference failures

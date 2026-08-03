@@ -1,5 +1,7 @@
 # Agave HTTP API Reference
 
+**Tutorial:** [Server / HTTP API](tutorial/23-server-http-api.md)
+
 Start the server:
 ```bash
 agave model.gguf --serve                    # default port 49453
