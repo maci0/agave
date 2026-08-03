@@ -4,10 +4,13 @@ A tutorial series that builds understanding of LLM inference from the ground up.
 
 Each chapter introduces one major concept at a time, explaining both the **why** (the problem being solved) and the **how** (the algorithm and implementation). All AI/ML terminology is explained inline when first mentioned.
 
+**Start here:** [Chapter 0: Getting Started](00-getting-started.md)
+
 ## What You'll Learn
 
 By the end of this tutorial, you'll understand:
 
+- **The inference pipeline**: From model file on disk through tokenization, prefill, decode, and sampling ([Chapter 0](00-getting-started.md))
 - **How text becomes numbers**: Tokenization, embeddings, and vocabulary projection
 - **The transformer architecture**: Attention mechanisms, position encoding, residual connections, and normalization
 - **Feed-forward networks**: Activation functions, gated linear units, and Mixture of Experts (MoE)
@@ -20,6 +23,9 @@ By the end of this tutorial, you'll understand:
 - **Multi-Token Prediction**: MTP heads, +1 offset norm, built-in draft tokens, 70-85% acceptance rates
 - **PFlash / block sparse**: Scorer-driven prefill compression for long contexts
 - **Diffusion LMs**: Block diffusion (DiffusionGemma), bidirectional canvas, confidence acceptance
+- **LoRA adapters**: Load-time merge of low-rank adapter weights into base tensors
+- **Distributed inference**: Tensor and pipeline parallelism, transport selection, device sharding
+- **Server pipeline**: HTTP request handling, sessions, streaming, and structured output
 
 ## Prerequisites
 
@@ -34,8 +40,8 @@ If you can read Zig, C, or Rust code and understand concepts like "cache line" a
 Different readers have different goals. Here are recommended paths through the tutorials:
 
 ### 🎓 **ML Beginners (Systems Programmers New to ML)**
-Start from the beginning and read sequentially. Chapters 1-8 build understanding from first principles:
-- [**Chapter 1: Tokens**](01-tokens-and-text.md) → [**Chapter 2: Transformer**](02-the-transformer.md) → [**Chapter 3: FFN**](03-feed-forward-networks.md) → [**Chapter 4: Quantization**](04-quantization.md)
+Start from the beginning and read sequentially. Chapters 0–8 build understanding from first principles:
+- [**Chapter 0: Getting Started**](00-getting-started.md) → [**Chapter 1: Tokens**](01-tokens-and-text.md) → [**Chapter 2: Transformer**](02-the-transformer.md) → [**Chapter 3: FFN**](03-feed-forward-networks.md) → [**Chapter 4: Quantization**](04-quantization.md)
 - [**Chapter 5: Caching**](05-memory-and-caching.md) → [**Chapter 6: SSMs**](06-state-space-models.md) → [**Chapter 7: Sampling**](07-sampling.md) → [**Chapter 8: Backends**](08-backends.md)
 - [**Chapter 9: SIMD**](09-cpu-simd-optimization.md) → [**Chapter 10: Memory Safety**](10-memory-safety.md) → [**Chapter 11: Metal**](11-metal-backend-internals.md) → onward
 
@@ -80,6 +86,7 @@ Everything you need to add a new architecture to Agave:
 
 | # | Chapter | What You'll Learn | ~Time |
 | --- | --------- | ------------------- | :---: |
+| 0 | [Getting Started](00-getting-started.md) | Pipeline from model file to sampled text tokens | 15 min |
 | 1 | [Tokens and Text](01-tokens-and-text.md) | How text becomes numbers the model can process | 12 min |
 | 2 | [The Transformer](02-the-transformer.md) | The core architecture: attention, position encoding, normalization | 21 min |
 | 3 | [Feed-Forward Networks](03-feed-forward-networks.md) | Activation functions, SwiGLU, MoE, megakernel fusion | 12 min |
@@ -100,8 +107,12 @@ Everything you need to add a new architecture to Agave:
 | 18 | [Multi-Token Prediction](18-multi-token-prediction.md) | MTP heads, +1 offset norm, draft/verify with built-in heads | 16 min |
 | 19 | [PFlash and Block Sparse](19-pflash-and-block-sparse.md) | Block sparse attention, speculative prefill, alpha tuning | 18 min |
 | 20 | [Diffusion Language Models](20-diffusion-lm.md) | DiffusionGemma, block diffusion, bidirectional canvas | 14 min |
+| 21 | [LoRA Adapters](21-lora.md) | Load-time merge of low-rank adapter weights | 12 min |
+| 22 | [Distributed Inference](22-distributed-inference.md) | TP/PP, transport selection, weight sharding | 20 min |
+| 23 | [Server / HTTP API](23-server-http-api.md) | HTTP → session → generate → stream/JSON pipeline | 18 min |
 
 **Appendices:**
+- [Troubleshooting](appendix-troubleshooting.md) — Symptom → cause → fix for common inference failures
 - [Mathematical Operations Reference](appendix-math.md) — Quick reference for all math operations (dot product, softmax, GEMV, convolution, etc.)
 - [Compile-Time Optimization](appendix-compile-time.md) — comptime keyword, @embedFile, lookup tables, feature detection, type specialization
 - [Profiling and Debugging](appendix-profiling.md) — --profile flag, dispatch counters, missing kernel policy, regression detection

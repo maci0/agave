@@ -164,7 +164,7 @@ The self-correction property is unique to diffusion: if an early token becomes i
 
 **In the code:** [src/models/diffusion_gemma.zig](../../src/models/diffusion_gemma.zig) (canvas forward, block diffusion), [src/ops/attention.zig](../../src/ops/attention.zig) (`scaledDotProductAttentionCanvas`), [src/main.zig](../../src/main.zig) (`generateDiffusion`)
 
-**Next:** [Appendix: Mathematical Operations →](appendix-math.md) | **Back:** [Chapter 19: PFlash and Block Sparse Attention ←](19-pflash-and-block-sparse.md)
+**Next:** [Chapter 21: LoRA Adapters →](21-lora.md) | **Back:** [Chapter 19: PFlash and Block Sparse Attention ←](19-pflash-and-block-sparse.md)
 
 ---
 
