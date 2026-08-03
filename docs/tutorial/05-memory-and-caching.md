@@ -1,10 +1,20 @@
 # Chapter 5: Memory and Caching
 
+**Prerequisites:** [Chapter 2: The Transformer](02-the-transformer.md)
+
+**Time:** ~20 min
+
 During **autoregressive generation** (generating text one token at a time, where each new token depends on all previous tokens), each new token needs to attend to all previous tokens. Recomputing K and V for every previous position would waste enormous compute. The **KV cache** stores them.
 
 ## The KV Cache
 
 Each generated token extends the cache — every subsequent token attends to all previously stored K/V pairs.
+
+### Code Flow
+
+```text
+append K/V → attend over cache
+```
 
 ```mermaid
 flowchart LR
@@ -543,9 +553,23 @@ curl http://B:49453/v1/kv_cache?n_tokens=512 --data-binary @prefix.bin -X POST
 
 Useful for shared system prompts: compute the prefix KV once on one instance, distribute to a fleet.
 
----
+## Gotchas
+
+**Cached K bakes in absolute position (inverse RoPE)**: RoPE rotates K by an angle derived from its *absolute* position before it's written to the cache ([Chapter 2](02-the-transformer.md#rope-rotary-position-encoding)). A cached K vector isn't position-neutral: reusing it at a different position requires either recomputing it from scratch or applying an inverse rotation followed by re-rotation to the new angle, neither of which Agave's paged cache does. This is why RadixAttention's prefix sharing only works because shared prefixes start at position 0 in every request that shares them: the cached K vectors' baked-in rotation is already correct for whoever reuses that block.
+
+**Paged block-index math assumes a fixed block size**: `PagedKvView` (`src/kvcache/manager.zig`) converts a logical position to a block index and in-block offset via `position >> block_shift` / `position & block_mask` when `block_size` is a power of two, falling back to plain division/modulo otherwise. Both paths must agree on the same `block_size` for the life of a cache; resizing `block_size` after blocks have been allocated (rather than just adding more blocks of the existing size) would silently misalign every position lookup that follows.
+
+## How This Relates to the Code
 
 **In the code:** [src/kvcache/manager.zig](../../src/kvcache/manager.zig) (KvCache, PagedKvCache, RadixTree, KV eviction), [src/kvcache/block_allocator.zig](../../src/kvcache/block_allocator.zig) (block allocation), [src/kvcache/tiered.zig](../../src/kvcache/tiered.zig) (VRAM + RAM + SSD tiers), [src/ops/kv_quant.zig](../../src/ops/kv_quant.zig) (KV cache quantization — f16, q8_0, fp8, nvfp4, TurboQuant, PerHeadKvScales), [src/backend/cpu.zig](../../src/backend/cpu.zig) (CPU prefill attention), [src/backend/kernels/metal/sdpa.metal](../../src/backend/kernels/metal/sdpa.metal) (GPU prefill FA2, 64K seq limit)
+
+```text
+block = blockTable[position / block_size]              # src/kvcache/manager.zig
+append K, V to blocks[block] at (position % block_size)
+...
+scores = Q @ Kcache^T * scale                            # gather across block table
+attn   = softmax(scores) @ Vcache
+```
 
 **Next:** [Chapter 6: State Space Models →](06-state-space-models.md) | **Back:** [Chapter 4: Quantization ←](04-quantization.md) | **Product docs:** [Architecture](../ARCHITECTURE.md)
 

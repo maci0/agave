@@ -1,5 +1,9 @@
 # Chapter 3: Feed-Forward Networks
 
+**Prerequisites:** [Chapter 2: The Transformer](02-the-transformer.md)
+
+**Time:** ~15 min
+
 The **FFN (Feed-Forward Network)** is the second **sublayer** (component within a transformer layer) in each transformer layer. "Feed-forward" means data flows in one direction through the network — input → hidden layer → output, with no loops or **recurrence** (unlike **RNNs** — Recurrent Neural Networks — which cycle back on themselves, feeding outputs back as inputs).
 
 While attention lets tokens communicate with each other, the FFN processes each position **independently** — it's a separate computation per token that doesn't look at neighboring tokens.
@@ -9,6 +13,8 @@ While attention lets tokens communicate with each other, the FFN processes each 
 ## SwiGLU
 
 The standard FFN structure in modern transformers:
+
+### Code Flow
 
 ```mermaid
 flowchart LR
@@ -39,6 +45,10 @@ flowchart LR
         Act
         Mul
     end
+```
+
+```text
+silu(xW_g) ⊙ (xW_u) → W_d
 ```
 
 ```
@@ -137,6 +147,8 @@ flowchart TD
 5. Shared: output += shared_expert(hidden)             # always-active (if present)
 ```
 
+**Route note:** Selection and weighting aren't always the same score. Nemotron-Nano and GLM-4 add a per-expert **bias** to the raw router score before calling `topKExperts` (`src/ops/math.zig`): the bias shifts *which* experts win the top-k cut, but the mixing weight applied to each selected expert's output still uses the original, unbiased score. This lets the router steer selection toward under-used experts (a training-time load-balancing signal) without that artificial nudge leaking into the output magnitude. `topKExperts` also breaks ties by position: when two experts score identically, the lower-indexed one wins, so router output isn't perfectly symmetric under reordering.
+
 This gives the **capacity** (total model size/knowledge) of a large model (30B total parameters) with the compute cost of a small one (3B active per token).
 
 **Worked example** — Nemotron-Nano with 128 experts, top-6 routing, and 1 shared expert:
@@ -226,7 +238,12 @@ MoE 30B (top-2/128):  ~0.5B multiplies per token  (2 experts active)
 Tradeoff: 30B weights still occupy memory — only the compute is sparse.
 ```
 
-This gives large-model quality at small-model compute cost. The tradeoff: all expert weights must fit in memory even though most are idle. A 128-expert MoE model stores 128× the FFN weights but only activates 2× per token.
+| | Weights resident in memory | Compute active per token |
+| :--- | :--- | :--- |
+| Dense 30B | 30B (100%) | 30B (100%) |
+| MoE 30B (top-2/128) | 30B (100%) | ~0.5B (~1.7%) |
+
+Memory footprint is identical between the two rows; only the multiply count drops. This gives large-model quality at small-model compute cost, but all expert weights must still fit in memory even though most sit idle: a 128-expert MoE model stores 128× the FFN weights of a single expert while activating only 2× per token.
 
 ### Expert Weight Layout
 
@@ -344,9 +361,27 @@ flowchart LR
 
 Enable with `--megakernel`. See [Chapter 13](13-batched-dispatch-and-fusion.md) for details.
 
+## Gotchas
+
+**Expert stride isn't a plain element count for quantized formats**: `expert_stride = dims[0] * dims[1]` (the formula in [Expert Weight Layout](#expert-weight-layout)) gives the *element* count per expert, not the byte offset. `expertWeightStride()` (`src/models/model.zig`) is the format-aware function that actually computes the byte stride, accounting for block headers in Q4_K/Q8_0 and the packed-nibble layout in NVFP4. Reimplementing the raw multiply instead of calling this function silently misreads every expert past the first.
+
+**Clamp before mixed-precision expert compute**: GPT-OSS's clamped SwiGLU forces gate/up activations into `[-7.0, +7.0]` before the expert FFN runs. Skipping the clamp when wiring a new MoE model risks overflow in the lower-precision accumulation path, producing NaNs that only show up with certain input distributions.
+
+**`gemvMulti` assumes a shared input vector**: Batched expert dispatch (`gemvMulti`) parallelizes gate+up GEMVs for multiple experts against the *same* `x`. It's only valid when all batched ops read the same input: mixing GEMVs from different tokens or different hidden states into one `gemvMulti` call silently computes the wrong outputs for whichever ops don't share `x`.
+
 ---
 
+## How This Relates to the Code
+
 **In the code:** [src/backend/kernels/cpu/activation.zig](../../src/backend/kernels/cpu/activation.zig) (SiLU, GELU), [src/ops/math.zig](../../src/ops/math.zig) (softplus, sigmoid, topKExperts), [src/models/gpt_oss.zig](../../src/models/gpt_oss.zig) (MoE implementation)
+
+```text
+gate = silu(x @ W_gate)              # src/backend/kernels/cpu/activation.zig
+up   = x @ W_up
+h    = gate ⊙ up                     # element-wise
+y    = h @ W_down
+# MoE: y = Σ weight_i * FFN_i(x) for top-k routed experts, + shared_expert(x) if present
+```
 
 **Math reference:** [SiLU](appendix-math.md#silu-swish), [GELU](appendix-math.md#gelu-gaussian-error-linear-unit), [Sigmoid](appendix-math.md#sigmoid), [Softplus](appendix-math.md#softplus)
 

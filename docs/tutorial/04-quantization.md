@@ -1,5 +1,9 @@
 # Chapter 4: Quantization
 
+**Prerequisites:** [Chapter 2: The Transformer](02-the-transformer.md)
+
+**Time:** ~25 min
+
 Model weights are trained in float32 (32 bits per value) but stored compressed for inference. **Quantization** maps floating-point values to lower-**precision** (fewer bits per number, less accurate but smaller) representations, trading a small amount of accuracy for massive memory and speed gains.
 
 ## Why Quantize?
@@ -817,6 +821,12 @@ All geometric methods use the same CLI pattern: `--kv-type <prefix><bits>` where
 
 Dequantization happens *inside* the GEMV kernel, not before it. This avoids materializing the full-precision weight matrix.
 
+### Code Flow
+
+```text
+load quantized block → dequant inside GEMV → accumulate
+```
+
 ```mermaid
 flowchart TD
     classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
@@ -868,6 +878,15 @@ GEMV is the dominant operation — ~95% of inference compute time. Every linear 
 For a 2560×2560 matrix, that's 6.5M **multiply-accumulates** (multiply two numbers and add the result to a running sum — the core operation in matrix math) per call, and a typical model does ~210 GEMVs per token. Agave has separate kernels per **dtype** (data type — f32, bf16, q4_0, etc.) because each quantization format has completely different bit layouts.
 
 (For the full mathematical definition with examples, see [Math Reference: GEMV](appendix-math.md#matrix-vector-multiply-gemv))
+
+### Performance (from BENCHMARKS.md)
+
+Format choice is a bandwidth question: smaller quant formats read fewer bytes per GEMV, which is where these numbers come from. Measured 2026-03-24 to 2026-05-18 on Apple M4 Pro (14-core CPU, 20-core GPU, 48 GB unified memory) against llama.cpp with Metal enabled; see [BENCHMARKS.md](../BENCHMARKS.md) for the full methodology.
+
+| Claim | Source |
+|-------|--------|
+| Metal decode vs llama.cpp ~1.2–1.7× on supported quants | BENCHMARKS Decode Throughput, M4 Pro |
+| Megakernel Tier 1 up to +7% decode on Qwen3.5 0.8B Q8_0 | BENCHMARKS Megakernel Tier 1 |
 
 ## Choosing a Format
 
@@ -942,7 +961,9 @@ flowchart TD
 
 ---
 
-## Common Pitfalls
+## Gotchas
+
+**Never full-tensor pre-dequant on hot path**: The temptation when adding a new format is to dequantize the whole weight matrix to f32 once, then run a plain f32 GEMV. Don't. That buffer is the model's full memory footprint times 4-8x (see [Key Principle](#key-principle)) and it has to happen on every forward call, since weights aren't cached across calls. Dequantization belongs inside the per-block loop of the GEMV kernel itself, one block at a time, in registers.
 
 **numElements() for packed weights**: MLX-quantized weights store packed u32 words. `numElements()` returns the word count, not the actual element count. Always check the dtype before interpreting dimensions.
 
@@ -954,7 +975,19 @@ flowchart TD
 
 **V cache inverse rotation**: For rotation-based KV quantization (TurboQuant, PlanarQuant, IsoQuant, RotorQuant), the V cache dequantization **must** apply the inverse rotation. K cache can rotate the query instead (orthogonality trick). Omitting the V inverse rotation produces garbage output.
 
+## How This Relates to the Code
+
 **In the code:** [src/ops/quant.zig](../../src/ops/quant.zig) (dequantization helpers), [src/ops/mlx.zig](../../src/ops/mlx.zig) (MLX format), [src/ops/kv_quant.zig](../../src/ops/kv_quant.zig) (KV cache quantization: TurboQuant/PlanarQuant/IsoQuant/RotorQuant), [src/backend/kernels/cpu/](../../src/backend/kernels/cpu/) (per-format GEMV kernels)
+
+```text
+for each output row:
+    acc = 0
+    for each block in row:                 # e.g. 32 elements for Q4_0/Q8_0
+        scale = block.scale                 # read alongside the packed data
+        for j in block:
+            acc += dequant(block.quant[j], scale) * x[j]   # dequant happens here, once, in-register
+    y[row] = acc
+```
 
 **Next:** [Chapter 5: Memory and Caching →](05-memory-and-caching.md) | **Back:** [Chapter 3: Feed-Forward Networks ←](03-feed-forward-networks.md) | **Product docs:** [Architecture](../ARCHITECTURE.md)
 
