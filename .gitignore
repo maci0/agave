@@ -86,6 +86,8 @@ docs/changelogs/
 # Local scratch / generated files
 graphify-out/
 .ralph/
+.worktrees/
+.superpowers/
 glossary-batch*.md
 outputs/
 progress.md
