@@ -79,6 +79,37 @@ flowchart TD
   Check -->|"no"| Json["buffer full generation\none JSON response"]:::success
 ```
 
+## CLI Quick Reference
+
+Server-related flags from [`src/main.zig`](../../src/main.zig):
+
+| Flag | Short | Default | Description |
+|------|-------|---------|-------------|
+| `--serve` | `-s` | | Start HTTP server (OpenAI + Anthropic API) |
+| `--port` | `-p` | `49453` | Server port |
+| `--host` | | `127.0.0.1` | Bind address: IPv4, `localhost`, `0.0.0.0`, or `0` |
+| `--api-key` | | | API key for auth (or `AGAVE_API_KEY` env). Required for non-loopback binds |
+| `--sleep-after N` | | `0` (disabled) | Enter sleep mode after N seconds idle; signals `/health` sleeping:true |
+| `--max-batch-size N` | | `8` | Max concurrent requests batched per scheduler cycle |
+| `--no-kv-cache` | | | Prefill-only / embedding server (no decode-phase KV cache) |
+
+```bash
+# Basic server
+agave model.gguf --serve
+
+# Custom port and host, with API key
+agave model.gguf --serve --port 8080 --host 0.0.0.0 --api-key mysecret
+
+# Sleep mode after 5 minutes idle
+agave model.gguf --serve --sleep-after 300
+
+# Higher throughput for concurrent workloads
+agave model.gguf --serve --max-batch-size 16
+
+# Prefill-only / embedding server
+agave model.gguf --serve --no-kv-cache
+```
+
 ## Gotchas
 
 - **Streaming with tool calls isn't actually streamed.** Every other streaming path emits one SSE chunk per token as it's produced. The tool-call path (section 9) runs the full generation to completion first and only then slices it into delta chunks, so `"stream": true` plus `tools` gets you the SSE response *shape* without the token-level latency the shape implies.

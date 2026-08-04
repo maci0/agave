@@ -486,6 +486,32 @@ A quick-reference cheat sheet for the algorithm parameters covered above (the de
 
 These are starting points, not hard rules. A model with a narrower vocabulary distribution may need a lower temperature than shown here to feel equally focused.
 
+## CLI Quick Reference
+
+All sampling-related flags accepted by the `agave` binary, with their defaults from [`src/main.zig`](../../src/main.zig):
+
+| Flag | Short | Default | Description |
+|------|-------|---------|-------------|
+| `--temperature` | `-t` | `0` | Sampling temperature; 0 = greedy (argmax) |
+| `--top-k` | | `0` | Top-k sampling; 0 = disabled (consider all tokens) |
+| `--top-p` | | `1.0` | Nucleus sampling threshold |
+| `--min-p` | | `0` | Min-p threshold: keep tokens with prob ≥ min_p × max_prob |
+| `--repeat-penalty` | | `1.0` | Multiplicative repetition penalty |
+| `--dry-multiplier` | | `0` | DRY n-gram repetition penalty multiplier; 0 = disabled |
+| `--dry-length` | | `2` | DRY minimum n-gram length to penalize |
+| `--xtc-probability` | | `0` | XTC exclude-top-choices probability; 0 = disabled |
+| `--xtc-threshold` | | `0.1` | XTC probability threshold for exclusion |
+| `--mirostat-mode` | | `0` | Mirostat mode: 0 = disabled, 2 = Mirostat 2.0 |
+| `--mirostat-tau` | | `5.0` | Mirostat target entropy |
+| `--mirostat-eta` | | `0.1` | Mirostat learning rate |
+| `--seed` | | random | Random seed for sampling |
+| `--grammar` | | | GBNF grammar file for constrained decoding |
+| `--grammar-string` | | | Inline GBNF grammar string |
+| `--json-output` | | | Constrain generation to valid JSON via grammar |
+| `--json-schema` | | | JSON schema for structured output (converts to GBNF) |
+
+When multiple grammar options are given, priority is: `--json-output` > `--json-schema` > `--grammar-string` > `--grammar` (file).
+
 ## Gotchas
 
 - **Grammar's interaction with sampling varies by path and token position.** Both `main.zig` (CLI) and `src/server/server.zig` (HTTP) mask invalid tokens to `-infinity` first, ahead of temperature, top-k/top-p, min-p, and XTC. The CLI then runs the normal sampling pipeline over the masked logits whenever temperature is non-zero, so distinct grammar-valid completions can still be sampled. On the HTTP server, streaming (SSE) responses call `argmax` on the masked logits for every token, first and subsequent alike, so streamed grammar output is always deterministic. Non-streaming HTTP responses argmax every token after the first, but the first token still runs the full sampling pipeline when temperature is non-zero, so a non-streaming grammar-constrained response can start with a sampled token and settle into deterministic argmax from the second token on.

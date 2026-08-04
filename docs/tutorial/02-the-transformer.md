@@ -448,6 +448,10 @@ flowchart TD
 | Attention Sinks | GPT-OSS | Before softmax | Learned sink absorbs excess attention |
 | Sigmoid Gate | Qwen3.5 | After SDPA | Element-wise gate on attention output |
 | Logit Softcapping | Gemma3 | After logits | Smooth clamp to [−cap, +cap] |
+| iRoPE | Llama 4 | Q/K rotation | Interleaved RoPE (local) and NoPE (global) layers |
+| Chunked Attention | Llama 4 | SDPA | Local layers attend within fixed-size chunks |
+
+**iRoPE (interleaved RoPE)** (Llama 4): Alternates between local layers with standard RoPE and global NoPE layers that skip rotation entirely. A layer is NoPE when `(layer_id + 1) % nope_interval == 0` (default interval 4, so layers 3, 7, 11, … are global). Local layers use **chunked attention** — each token only attends within a fixed-size chunk, reducing cost to O(chunk²) instead of O(n²). NoPE global layers attend to the full sequence and apply learned **temperature scaling** to Q vectors, giving the model position-independent global context at periodic checkpoints. See [`src/models/llama4.zig`](../../src/models/llama4.zig). Llama 4 also uses Mixture-of-Experts routing (top-1 with an optional shared expert; some layers fall back to dense FFN when no router tensor is present — see [Chapter 3](03-feed-forward-networks.md)).
 
 **Per-Head QK Normalization** (Gemma3, Qwen3.5): RMS-normalizes Q and K per head before computing scores, stabilizing attention regardless of embedding **magnitude** (the size/scale of the values — how large the numbers are).
 
@@ -717,6 +721,8 @@ out     = Wo @ concat(attn heads)
 
 **causal mask** — A constraint that prevents tokens from attending to future positions, enforced by setting future scores to −∞.
 
+**chunked attention** — An attention variant where each token only attends within a fixed-size chunk, reducing cost from O(n²) to O(chunk²); used by Llama 4 local layers.
+
 **decode** — Generating tokens one at a time in the autoregressive loop (GEMV, sequential).
 
 **FlashAttention** — An optimization that computes attention in tiles using online softmax, avoiding materializing the full score matrix.
@@ -729,6 +735,8 @@ out     = Wo @ concat(attn heads)
 
 **hidden state** — The fixed-size internal vector representation that flows through each transformer layer, being progressively refined.
 
+**iRoPE (interleaved RoPE)** — Llama 4's attention pattern that alternates between local layers with standard RoPE and global NoPE layers that skip rotation.
+
 **kernel (compute)** — A single computational function dispatched to run on CPU or GPU hardware.
 
 **L2 normalization** — Scaling a vector to unit length (norm = 1) without learned weights.
@@ -738,6 +746,8 @@ out     = Wo @ concat(attn heads)
 **MHA (Multi-Head Attention)** — Standard attention where each Q head has its own dedicated K and V heads.
 
 **MLA (Multi-head Latent Attention)** — An attention variant that projects the hidden state into a small shared latent vector, then expands it into per-head K and V via small per-head matrices. Reduces the KV projection parameter count and, in an absorbed implementation, the KV cache size. Used by GLM-4 and DeepSeek V2/V3.
+
+**NoPE (No Position Encoding)** — An attention layer that skips rotary position encoding entirely, attending to the full sequence with position-independent Q/K vectors and learned temperature scaling.
 
 **online softmax** — Incrementally computing softmax as tiles arrive, without storing all scores in memory at once.
 

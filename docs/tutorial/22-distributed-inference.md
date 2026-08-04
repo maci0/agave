@@ -107,6 +107,44 @@ flowchart TD
   SendRecv --> Output["assembled output\n(last stage samples token)"]:::success
 ```
 
+## CLI Invocation
+
+Distributed inference flags from [`src/main.zig`](../../src/main.zig):
+
+| Flag | Short | Default | Description |
+|------|-------|---------|-------------|
+| `--tp N` | | `1` | Tensor parallelism degree (blocked at CLI today for N>1) |
+| `--pp N` | | `1` | Pipeline parallelism stages |
+| `--rank N` | | `0` | This node's rank for TP/PP/disagg |
+| `--peers ADDR` | | | Peer address (e.g. `192.168.0.2` or `192.168.0.2:9999`) |
+| `--transport TYPE` | | `auto` | IPC transport: `auto`, `tcp`, `shm`, `nccl` |
+| `--disagg` | | off | Disaggregated prefill/decode (rank 0 prefills, rank 1 decodes) |
+| `--list-devices` | | | List available compute devices and exit |
+| `--device N` | | `0` | GPU device index for CUDA/ROCm/Vulkan |
+
+```bash
+# List available GPUs
+agave model.gguf --list-devices
+
+# Select a specific GPU by index
+agave model.gguf --backend vulkan --device 1
+
+# Same-node pipeline parallelism (shared memory transport)
+agave model.gguf --pp 2 --rank 0 --peers localhost "prompt"
+
+# Cross-node pipeline parallelism (TCP)
+agave model.gguf --pp 2 --rank 0 --peers 192.168.0.2 "prompt"
+
+# Pipeline parallelism over NCCL RoCE RDMA
+agave model.gguf --pp 2 --rank 0 --peers 10.0.1.2 --transport nccl
+
+# Disaggregated prefill/decode
+agave model.gguf --disagg --rank 0 --peers 192.168.0.2
+
+# Hybrid TP+PP (when TP is enabled)
+agave model.gguf --tp 2 --pp 2 --rank 0 --peers 192.168.0.2
+```
+
 ## Gotchas
 
 - **`--tp > 1` is blocked at the CLI today, not just slow or experimental.** The model-layer TP code in section 2 (sharding, `allReduceAdd`, the in-process dual-rank trick) all exists and compiles, but `main.zig`'s argument validation exits with an error before any of it runs if `--tp` is above `1`. Distributed tensor parallelism is not something you can launch through the `agave` binary right now, full stop; it's a model-layer capability without a CLI path to it yet. `--pp` and `--disagg` have no equivalent gate: both are launchable today (see [PARALLELISM.md](../PARALLELISM.md) for the exact invocation).

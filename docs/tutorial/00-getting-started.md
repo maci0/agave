@@ -15,6 +15,16 @@ A trained model ships as one of two **artifacts** (the file or directory Agave l
 
 Agave tells them apart by inspecting the path. If it's a directory, it's SafeTensors; otherwise it opens the single file as GGUF and checks the magic bytes. Both formats end up behind one internal `Format` interface, so everything downstream (tokenizer loading, weight lookup, metadata queries) reads either one the same way. The two formats disagree on tensor naming, dimension order, and a few numeric conventions. Chapter 14 covers those differences and why getting them wrong produces wrong output instead of a crash.
 
+Agave can also download models directly from Hugging Face Hub using the `pull` subcommand, which selects the best file(s) based on quantization preference:
+
+```bash
+agave pull Qwen/Qwen3.5-0.6B-GGUF
+agave pull Qwen/Qwen3.5-0.6B-GGUF --quant Q4_K_M
+agave pull Qwen/Qwen3.5-0.6B-GGUF --list    # list available files without downloading
+```
+
+See [`src/pull.zig`](../../src/pull.zig) for the download implementation.
+
 ## 2. Architecture Detection and Weight Load
 
 Once the artifact is open, Agave reads an architecture string from its metadata (`general.architecture` for GGUF, `model_type` for SafeTensors config) and matches it against the model implementations it was compiled with: Gemma3, Gemma4, DiffusionGemma, Qwen 3.5, GPT-OSS, Nemotron-H/Nano, GLM-4, or Llama 4. An unrecognized string is a hard, immediate error. A *misidentified* one is not: two architectures can share a metadata string family closely enough that detection guesses wrong, and the model will still build and run, just against the wrong tensor layout.

@@ -394,6 +394,8 @@ flowchart TD
 
 Layer types are determined at init from model **metadata** (descriptive information about the model structure — layer counts, dimensions, patterns — stored in the model file header) and dispatched in each model's `forward()` loop.
 
+**Nemotron-H's Mamba-2 layers** are distinct from Qwen3.5's DeltaNet layers. Where DeltaNet uses the delta rule (error-correcting outer-product updates) for its recurrence, Mamba-2 uses selective-state-space recurrence with causal conv1d and discretized dt (timestep) gating. In the 8B variant (42 layers), Nemotron-H has 21 SSM (Mamba-2) layers on even indices, 4 attention layers at positions 1, 9, 17, 25, and 17 FFN-only layers filling the rest. Layer types are not hardcoded — they're detected at init by probing for tensor presence (`ssm_in.weight` → SSM, `attn_q.weight` → attention, else FFN-only). See [`src/models/nemotron_h.zig`](../../src/models/nemotron_h.zig).
+
 ## Gotchas
 
 - **The state matrix's lossy recall isn't a bug you can fix by tuning decay.** Code that treats an SSM layer's state like a KV cache, expecting to retrieve an exact fact from thousands of tokens ago, will get a plausible-looking but wrong answer instead of an error: the association simply decayed below the noise floor of the other associations sharing that fixed-size matrix. If a workload needs exact long-range recall, the fix is a hybrid layer pattern with attention checkpoints (see Hybrid Layer Patterns above), not a smaller decay constant.
