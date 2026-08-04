@@ -304,7 +304,85 @@ Each KV head is shared by 4 Q heads (16 / 4 = 4 heads per group)
 Memory: 4× smaller KV cache vs full Multi-Head Attention (MHA)
 ```
 
-**MLA (Multi-head Latent Attention)**, introduced in [DeepSeek-V2 (DeepSeek-AI, 2024)](https://arxiv.org/abs/2405.04434), goes further — it compresses K/V into a **low-rank latent space** (a smaller intermediate representation with fewer dimensions) before caching, reducing memory even more. Used by GLM-4.
+### MLA (Multi-head Latent Attention)
+
+[MLA (DeepSeek-AI, 2024)](https://arxiv.org/abs/2405.04434) goes further than GQA — instead of sharing K/V heads, it compresses K and V into a **low-rank latent vector** before generating per-head keys and values. Used by GLM-4 and DeepSeek V2/V3 (`src/models/glm4.zig`).
+
+**The problem MLA solves:** GQA reduces KV cache by sharing heads (4× with 16Q/4KV). But the cache still stores one full K vector and one full V vector per head per position. MLA compresses further by factoring the K/V computation through a narrow bottleneck.
+
+**How it works:**
+
+1. **Compress** — Project the hidden state into a small **KV latent** vector of dimension `kv_lora_rank` (512 in GLM-4), plus a separate rotary-position component `k_pe` of dimension `qk_rope_head_dim` (64):
+
+   ```text
+   kv_proj = hidden @ W_kv_a          # [n_embd] → [kv_lora_rank + rope_dim]
+   kv_latent = kv_proj[0..kv_lora_rank]   # the compressed representation
+   k_pe      = kv_proj[kv_lora_rank..]    # position info (shared across heads)
+   ```
+
+2. **Expand** — For each of the `n_head` attention heads, project the latent into per-head K_nope and V vectors using small per-head matrices:
+
+   ```text
+   K_nope[h] = kv_latent @ W_embed_q[h]      # [kv_lora_rank] → [nope_dim] per head
+   V[h]      = kv_latent @ W_unembed_out[h]   # [kv_lora_rank] → [v_head_dim] per head
+   K[h]      = concat(K_nope[h], k_pe)         # [nope_dim + rope_dim] per head
+   ```
+
+3. **Q also uses low-rank factorization** — Q goes through its own compress/expand path (`q_a_proj` → layernorm → `q_b_proj`), reducing the Q projection parameter count.
+
+4. **RoPE on the rope portion only** — Rotary position encoding is applied only to the `rope_dim` slice of each head's K and Q (`qk_rope_head_dim = 64`), not the full head dimension. The `nope_dim` portion (192) carries position-independent features.
+
+```mermaid
+flowchart TD
+    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
+    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
+    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
+    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
+    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
+    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
+
+    Hidden["Hidden state\n[n_embd = 2048]"]:::setup
+
+    subgraph Q_Path["Q path (low-rank)"]
+        QA["q_a_proj\n2048 → 768"]:::sync
+        QNorm["RMSNorm"]:::migration
+        QB["q_b_proj\n768 → 20×256"]:::sync
+        QA --> QNorm --> QB
+    end
+
+    subgraph KV_Path["KV path (compressed)"]
+        KVA["kv_a_proj\n2048 → 576\n(512 latent + 64 rope)"]:::sync
+        Split{"split"}:::migration
+        Latent["kv_latent\n[512]"]:::migration
+        KPE["k_pe\n[64]\n(shared across heads)"]:::optional
+        KVNorm["RMSNorm"]:::migration
+        EmbedQ["embed_q\n512 → 192 × 20 heads\n(K_nope per head)"]:::sync
+        UnembedOut["unembed_out\n512 → 256 × 20 heads\n(V per head)"]:::sync
+        KVA --> Split
+        Split --> Latent
+        Split --> KPE
+        Latent --> KVNorm
+        KVNorm --> EmbedQ
+        KVNorm --> UnembedOut
+    end
+
+    Concat["K[h] = concat(K_nope[h], k_pe)\n+ RoPE on rope portion"]:::sync
+    SDPA_MLA["SDPA\nQ @ Kᵀ / √d → softmax → @ V"]:::success
+    Out["o_proj → residual"]:::success
+
+    Hidden --> Q_Path
+    Hidden --> KV_Path
+    QB --> Concat
+    EmbedQ --> Concat
+    KPE --> Concat
+    Concat --> SDPA_MLA
+    UnembedOut --> SDPA_MLA
+    SDPA_MLA --> Out
+```
+
+**KV cache trade-off:** A fully absorbed MLA implementation would cache only the latent vector (`kv_lora_rank + rope_dim = 576` floats per position, shared across all heads). Agave's current implementation reconstructs the full per-head K and V from the latent and caches the expanded result (`n_head × (nope_dim + rope_dim) + n_head × v_head_dim = 20×256 + 20×256 = 10,240` floats per position). This trades higher cache memory for simpler attention dispatch — the SDPA kernel sees standard per-head K/V arrays identical to GQA, so no attention-kernel changes are needed. A future absorbed-KV path would cut cache memory by ~18× at the cost of re-expanding the latent for every cached position during every attention computation.
+
+**Implementation:** [`src/models/glm4.zig`](../../src/models/glm4.zig) (`mlaAttention`, `multiLinearGemv`). Architecture string `deepseek2` maps to `glm4` in [`src/arch.zig`](../../src/arch.zig).
 
 ### SDPA (Scaled Dot-Product Attention)
 
@@ -659,7 +737,7 @@ out     = Wo @ concat(attn heads)
 
 **MHA (Multi-Head Attention)** — Standard attention where each Q head has its own dedicated K and V heads.
 
-**MLA (Multi-head Latent Attention)** — An attention variant that compresses K/V into a low-rank latent space before caching.
+**MLA (Multi-head Latent Attention)** — An attention variant that projects the hidden state into a small shared latent vector, then expands it into per-head K and V via small per-head matrices. Reduces the KV projection parameter count and, in an absorbed implementation, the KV cache size. Used by GLM-4 and DeepSeek V2/V3.
 
 **online softmax** — Incrementally computing softmax as tiles arrive, without storing all scores in memory at once.
 
