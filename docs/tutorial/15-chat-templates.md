@@ -4,6 +4,8 @@
 
 **Time:** ~18 min
 
+> After this chapter you can explain data-driven chat templates, EOG tokens, and how the server reuses template logic.
+
 A chat model expects prompts in a specific format with special tokens marking roles (user, assistant, system). Hardcoding these in model code creates **tight coupling** and makes the codebase fragile. **Chat templates** are data-driven: role markers and end-of-generation tokens are **configuration**, not code.
 
 ## Code Flow

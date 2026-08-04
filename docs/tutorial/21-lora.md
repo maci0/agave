@@ -91,8 +91,6 @@ agave model.gguf --lora adapter.gguf "prompt"
 - **A bad individual pair is silently skipped, not reported.** Inside the per-tensor loop, a missing `lora_b`, a rank mismatch between `lora_a` and `lora_b`, or a shape mismatch against the base tensor all take the same path: `continue` to the next `lora_a` entry. There's no error, no log line naming the skipped tensor, just one fewer entry in the final `lora_overrides` count that gets printed after loading finishes.
 - **Every merged tensor becomes F32, unconditionally.** There's no quantized merge path (no "add a dense delta to a Q4_0 block without fully expanding it" kernel). Expect the memory increase from section 5 for every tensor the adapter actually modifies, proportional to how many of the model's projections the adapter was trained against.
 
-## How This Relates to the Code
-
 **In the code:** [`lora` merge path](../../src/lora.zig)
 
 ```text

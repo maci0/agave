@@ -4,11 +4,15 @@
 
 **Time:** ~25 min
 
+> After this chapter you can explain block quantization, choose a format for your model, and understand why dequantization happens inside the kernel.
+
 Model weights are trained in float32 (32 bits per value) but stored compressed for inference. **Quantization** maps floating-point values to lower-**precision** (fewer bits per number, less accurate but smaller) representations, trading a small amount of accuracy for massive memory and speed gains.
 
 ## Why Quantize?
 
-A 7B parameter model (7 billion weight values — the "B" in model names like "Qwen3.5-7B") in float32 needs 28 GB of memory (`7 × 10⁹ × 4 bytes = 28 GB`). In 4-bit quantization, it needs ~3.5 GB (`7 × 10⁹ × 0.5 bytes = 3.5 GB`) — small enough to fit in a laptop's GPU memory. Inference is almost always **memory-bandwidth bound** (the bottleneck is reading weights from RAM/VRAM, not arithmetic operations), so smaller weights = faster inference: half the bits means half the bytes to read from memory, which roughly doubles throughput.
+A 7B parameter model (7 billion weight values — the "B" in model names like "Qwen3.5-7B") in float32 needs 28 GB of memory (`7 × 10⁹ × 4 bytes = 28 GB`). In 4-bit quantization, it needs ~3.5 GB (`7 × 10⁹ × 0.5 bytes = 3.5 GB`) — small enough to fit in a laptop's GPU memory.
+
+Inference is almost always **memory-bandwidth bound** (the bottleneck is reading weights from RAM/VRAM, not arithmetic operations), so smaller weights = faster inference: half the bits means half the bytes to read from memory, which roughly doubles throughput.
 
 ## Block Quantization
 
@@ -964,8 +968,6 @@ flowchart TD
 **TQ2_0 byte ordering**: Each byte holds **4** ternary values (2 bits each). Slot `s` within a byte is extracted as `(byte >> (s * 2)) & 0x3`, where `s = k % 4`. Element `k` lives in byte `k / 4`. Confusing this with nibble-based (4-bit) extraction silently misreads all weight values.
 
 **V cache inverse rotation**: For rotation-based KV quantization (TurboQuant, PlanarQuant, IsoQuant, RotorQuant), the V cache dequantization **must** apply the inverse rotation. K cache can rotate the query instead (orthogonality trick). Omitting the V inverse rotation produces garbage output.
-
-## How This Relates to the Code
 
 **In the code:** [src/ops/quant.zig](../../src/ops/quant.zig) (dequantization helpers), [src/ops/mlx.zig](../../src/ops/mlx.zig) (MLX format), [src/ops/kv_quant.zig](../../src/ops/kv_quant.zig) (KV cache quantization: TurboQuant/PlanarQuant/IsoQuant/RotorQuant), [src/backend/kernels/cpu/](../../src/backend/kernels/cpu/) (per-format GEMV kernels)
 

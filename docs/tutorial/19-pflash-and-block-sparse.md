@@ -1,5 +1,11 @@
 # Chapter 19: PFlash and Block Sparse Attention
 
+**Prerequisites:** [Chapter 5: Memory and Caching](05-memory-and-caching.md), [Chapter 17: Speculative Decoding](17-speculative-decoding.md)
+
+**Time:** ~16 min
+
+> After this chapter you can explain block sparsity masks, PFlash speculative prefill, alpha tuning, and PFlash+DDTree composition.
+
 Long prompts are expensive. A 128K-token context with full causal attention requires 128K × 128K / 2 = 8 billion dot products for a single layer. Most of that work is wasted: the model's output depends on a small fraction of the input -- the relevant document passages, the key constraint tokens, the system prompt's core instruction.
 
 This chapter covers two techniques that attack this waste directly:

@@ -4,6 +4,8 @@
 
 **Time:** ~12 min
 
+> After this chapter you can explain BPE and SentencePiece tokenization, embedding lookup, and vocabulary projection.
+
 Language models don't see text — they see **tokens**, which are integer IDs representing subword pieces (fragments like "Hello" → "He" + "llo" that are smaller than words but larger than individual characters). Before anything else happens, we need to convert text to numbers and back.
 
 ## Code Flow
@@ -223,7 +225,14 @@ flowchart LR
 
 ## Embedding Lookup
 
-The first operation in the forward pass converts a token ID into a **vector** (a 1D array of numbers). The model has an **embedding** (a learned numerical representation — a fixed-size array of floats that encodes the token's meaning) **table** — a **matrix** (a 2D array) of shape `[vocab_size × n_embd]` where `vocab_size` is the total number of tokens in the vocabulary (e.g., 128K) and `n_embd` is the **embedding dimension** (the size/length of each vector — how many numbers it contains, typically 1024–8192 floating-point numbers). Each row is the learned representation of one token.
+The first operation in the forward pass converts a token ID into a **vector** (a 1D array of numbers).
+
+The model has an **embedding table** — a **matrix** (2D array) of shape `[vocab_size × n_embd]`:
+
+- **vocab_size**: the total number of tokens in the vocabulary (e.g., 128K)
+- **n_embd**: the **embedding dimension** — how many floats each vector contains (typically 1024–8192)
+
+Each row is the learned representation of one token. An **embedding** is just this fixed-size array of floats that encodes a token's meaning.
 
 ```mermaid
 flowchart LR
@@ -260,13 +269,17 @@ Embedding lookup is just a table read: take row `token_id` from the matrix.
 
 Embedding lookup is so simple that CPU memcpy is faster than GPU **dispatch** overhead (the cost of sending work to the GPU and synchronizing), which is why all backends run this on the CPU.
 
-The table may be **quantized** (compressed to lower **precision** — fewer bits per number, less accurate — formats like Q4_0 or BF16 to save memory) — the implementation **dequantizes** (converts back to full precision) on the fly during the lookup. Gemma3 scales embeddings by `sqrt(n_embd)` after lookup, **amplifying the signal** (making the values larger to increase their influence) for its architecture.
+The table may be **quantized** (compressed to lower **precision** — fewer bits per number, less accurate — formats like Q4_0 or BF16 to save memory). The implementation **dequantizes** (converts back to full precision) on the fly during the lookup.
+
+Gemma3 scales embeddings by `sqrt(n_embd)` after lookup, **amplifying the signal** (making the values larger to increase their influence) for its architecture.
 
 ## Vocabulary Projection
 
 At the end of the forward pass, we need to go back from a vector to token probabilities. This is a matrix multiply: `logits = W_output @ hidden`, where **hidden** is the output vector from the final layer and **logits** are the raw scores (unnormalized probabilities) — one score per vocabulary token.
 
-This is the **largest single GEMV** (matrix-vector multiply — multiplying a weight matrix by a single hidden state vector) in the model — for a 128K-token vocabulary, it's 128K output rows. For models with **tied embeddings** (Gemma3), the output weight matrix is the same as the embedding table (reusing the same parameters for both input and output), saving memory.
+This is the **largest single GEMV** (matrix-vector multiply — multiplying a weight matrix by a single hidden state vector) in the model — for a 128K-token vocabulary, it's 128K output rows.
+
+For models with **tied embeddings** (Gemma3), the output weight matrix is the same as the embedding table (reusing the same parameters for both input and output), saving memory.
 
 After projection, **argmax** (the operation that finds the index of the maximum value) over the logits gives the predicted next token ID.
 
@@ -394,8 +407,6 @@ This technique is adapted from [gigatoken](https://github.com/marcelroed/gigatok
 
 - **Special tokens match on literal substring, not intent.** `encode()` scans the raw text for `<` and checks every registered special token for an exact substring match at that position (`src/tokenizer/bpe.zig`, the special-token scan inside `encode()`). If a prompt happens to contain the literal text of a special token, for example a user pastes `<|im_start|>` into a chat message, it's consumed as that control token rather than encoded as ordinary text. Untrusted input that isn't escaped can inject role markers into the token stream this way.
 - **A BPE piece missing from the vocabulary falls back to token ID 0, silently.** If `applyBpe()`'s merge result produces a piece that `token_to_id` doesn't have an entry for (shouldn't happen with a matched vocabulary and merge table, but can with a corrupted or mismatched one), `encode()` appends ID 0 with no error. ID 0 is typically `<pad>`, so a broken vocab produces plausible-looking padding tokens instead of a crash you'd notice.
-
-## How This Relates to the Code
 
 **In the code:** [src/tokenizer/bpe.zig](../../src/tokenizer/bpe.zig) (tokenizer, word cache), [src/backend/kernels/cpu/embedding.zig](../../src/backend/kernels/cpu/embedding.zig) (embedding lookup), [src/ops/math.zig](../../src/ops/math.zig) (argmax, sampleToken)
 

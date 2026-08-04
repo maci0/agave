@@ -4,6 +4,8 @@
 
 **Time:** ~22 min
 
+> After this chapter you can explain `gemvMulti`, fused ops, and the three-tier megakernel system.
+
 Every GPU kernel dispatch has overhead: setting up the pipeline state, binding buffers, launching threadgroups, and inserting memory barriers. When operations share the same input vector or can be combined into a single pass, **batching** and **fusion** eliminate redundant dispatches.
 
 ## Code Flow

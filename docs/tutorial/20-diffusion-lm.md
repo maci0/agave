@@ -4,6 +4,8 @@
 
 **Time:** ~14 min
 
+> After this chapter you can explain block diffusion, canvas denoising, confidence-based acceptance, and how DiffusionGemma chains 256-token blocks.
+
 ## Overview
 
 DiffusionGemma is Google's first publicly released **diffusion language model (dLLM)**. Unlike autoregressive LLMs that generate one token at a time from left to right, DiffusionGemma generates entire 256-token blocks simultaneously using iterative denoising — the same idea as image diffusion but applied to discrete text tokens.

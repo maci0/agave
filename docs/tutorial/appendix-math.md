@@ -1,5 +1,7 @@
 # Appendix: Mathematical Operations Reference
 
+> After this appendix you can implement dot product, softmax, RMSNorm, GEMV, and 1D convolution from scratch.
+
 A quick reference for the core mathematical operations used in LLM inference. Written for systems programmers — think of these as the "library functions" that get called thousands of times per token.
 
 ## Vector and Matrix Operations
@@ -709,6 +711,8 @@ Inference hot path is allocation-free — all buffers pre-allocated, operations 
 - Chapter 4 (GEMV, quantization)
 - Chapter 6 (convolution, outer product, SSM recurrence)
 - Chapter 7 (sampling operations)
+
+**In the code:** [src/ops/math.zig](../../src/ops/math.zig) (argmax, softmax, sampleToken), [src/backend/kernels/cpu/norm.zig](../../src/backend/kernels/cpu/norm.zig) (RMSNorm, L2Norm), [src/backend/kernels/cpu/gemv.zig](../../src/backend/kernels/cpu/gemv.zig) (GEMV), [src/backend/kernels/cpu/activation.zig](../../src/backend/kernels/cpu/activation.zig) (SiLU, GELU)
 
 **Next:** [Appendix: Compile-Time Optimization →](appendix-compile-time.md) | **Back:** [Appendix: Troubleshooting ←](appendix-troubleshooting.md)
 

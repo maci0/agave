@@ -4,6 +4,8 @@
 
 **Time:** ~15 min
 
+> After this chapter you can explain how recipes auto-tune per-model defaults, priority order, and how CLI flags override them.
+
 Every model + hardware combination has **different optimal settings**. A small Qwen3.5 4-bit model on Apple Silicon might run best with creative sampling (temp=0.7), while a large MoE on CPU needs conservative defaults (ctx_size=2048) to avoid OOM. Hardcoding these in model code creates **configuration sprawl**.
 
 The **recipe system** provides **proven defaults** for specific scenarios while **preserving user control** — CLI flags always override recipe values.

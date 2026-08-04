@@ -4,6 +4,8 @@
 
 **Time:** ~19 min
 
+> After this chapter you can explain `@Vector` SIMD, multi-row GEMV batching, and quantized kernel structure.
+
 When a GPU isn't available, the CPU backend needs to be fast. Modern CPUs have **SIMD** (Single Instruction Multiple Data) units that can process 4-8 values in parallel with a single instruction. Zig provides portable SIMD via `@Vector` — the same code generates **NEON** on ARM (Apple Silicon, Raspberry Pi) and **AVX2/AVX-512** on x86_64 (Intel, AMD).
 
 ## Code Flow

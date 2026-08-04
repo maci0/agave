@@ -4,6 +4,8 @@
 
 **Time:** ~11 min
 
+> After this chapter you can explain `defer`/`errdefer`, the allocator pattern, and how to detect memory leaks in tests.
+
 Zig's approach to memory management: **explicit allocation, guaranteed cleanup**. No garbage collector, no hidden allocations, no surprises. When you call `allocator.alloc()`, you must call `allocator.free()` — and Zig provides tools to make this **automatic and bulletproof**.
 
 ## Code Flow

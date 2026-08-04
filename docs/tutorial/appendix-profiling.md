@@ -2,6 +2,8 @@
 
 **Prerequisites:** [Chapter 11: Metal Backend Internals](11-metal-backend-internals.md#profiling-counters), [Chapter 13: Batched Dispatch and Fusion](13-batched-dispatch-and-fusion.md)
 
+> After this appendix you can use `--profile` to identify bottleneck ops, read dispatch counters, and diagnose regressions.
+
 Performance regressions are silent — the model still runs, but slower. **Profiling** makes performance visible. Agave has built-in instrumentation for dispatch counts, barriers, syncs, and per-operation timing.
 
 ## --profile Flag

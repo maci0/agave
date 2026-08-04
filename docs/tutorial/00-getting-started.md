@@ -17,9 +17,13 @@ Agave tells them apart by inspecting the path. If it's a directory, it's SafeTen
 
 ## 2. Architecture Detection and Weight Load
 
-Once the artifact is open, Agave reads an architecture string from its metadata (`general.architecture` for GGUF, `model_type` for SafeTensors config) and matches it against the model implementations it was compiled with: Gemma3, Gemma4, Qwen 3.5, GPT-OSS, Nemotron-H/Nano, GLM-4, or Llama 4. An unrecognized string is a hard, immediate error. A *misidentified* one is not: two architectures can share a metadata string family closely enough that detection guesses wrong, and the model will still build and run, just against the wrong tensor layout.
+Once the artifact is open, Agave reads an architecture string from its metadata (`general.architecture` for GGUF, `model_type` for SafeTensors config) and matches it against the model implementations it was compiled with: Gemma3, Gemma4, DiffusionGemma, Qwen 3.5, GPT-OSS, Nemotron-H/Nano, GLM-4, or Llama 4. An unrecognized string is a hard, immediate error. A *misidentified* one is not: two architectures can share a metadata string family closely enough that detection guesses wrong, and the model will still build and run, just against the wrong tensor layout.
 
-With the architecture chosen, Agave picks a compute **backend** (CPU, Metal, CUDA, Vulkan, ROCm, or WebGPU; Chapter 8 covers selection) and loads weights into that backend's buffers. "Loads" doesn't mean "converts to float32": quantized tensors (weights compressed to formats like Q4_0 or BF16 to save memory, covered in Chapter 4) stay in their compressed form. The GEMV/GEMM kernels dequantize each block on the fly as they read it, so the working set in memory (and, for GPU backends, in VRAM) stays close to the file's on-disk size rather than ballooning to full precision. On unified-memory hardware (CPU and GPU sharing the same physical RAM, called **UMA**, covered in Chapter 8 and Chapter 11) the mmap'd file region can be registered directly with the backend, letting the GPU read weights without a separate copy.
+With the architecture chosen, Agave picks a compute **backend** (CPU, Metal, CUDA, Vulkan, ROCm, or WebGPU; Chapter 8 covers selection) and loads weights into that backend's buffers.
+
+"Loads" doesn't mean "converts to float32": quantized tensors (weights compressed to formats like Q4_0 or BF16 to save memory, covered in Chapter 4) stay in their compressed form. The GEMV/GEMM kernels (GEMV = matrix-**v**ector multiply, used in decode; GEMM = matrix-**m**atrix multiply, used in prefill) dequantize each block on the fly as they read it, so the working set in memory (and, for GPU backends, in VRAM) stays close to the file's on-disk size rather than ballooning to full precision.
+
+On unified-memory hardware (CPU and GPU sharing the same physical RAM, called **UMA**, covered in Chapter 8 and Chapter 11) the mmap'd file region can be registered directly with the backend, letting the GPU read weights without a separate copy.
 
 ## 3. Tokenization of the Prompt
 
@@ -29,10 +33,13 @@ The model doesn't accept text; it accepts a sequence of integer **token IDs**. B
 
 Generation runs in two distinct phases that share the same underlying computation (a forward pass through every model layer) but differ in shape and cost:
 
-- **Prefill** processes the entire prompt's token IDs in one batched call. Every layer computes attention and feed-forward outputs for all prompt positions at once, and, critically, populates the **KV cache**, a per-layer store of previously computed Key/Value vectors (Chapter 5). Prefill is compute-bound: it's dominated by large matrix-matrix multiplies (GEMM), which parallelize well.
-- **Decode** is the token-by-token loop that follows. Each iteration runs `forward()` on exactly one token (the last one produced), attending against the KV cache built by prefill and every prior decode step, so it never reprocesses earlier tokens. Decode is memory-bandwidth-bound: each step is dominated by matrix-vector multiplies (GEMV), where the bottleneck is reading weights from memory, not raw arithmetic.
+- **Prefill** processes the entire prompt's token IDs in one batched call. Every layer computes attention and feed-forward outputs for all prompt positions at once, and, critically, populates the **KV cache** — a per-layer store of previously computed Key/Value vectors (Chapter 5). Prefill is **compute-bound**: it's dominated by large matrix-matrix multiplies (GEMM), which parallelize well across GPU cores.
 
-This split exists because generation is **autoregressive** (every output token becomes the input to produce the next one), so there is no way to batch the unknown future tokens the way the known prompt tokens can be batched. That asymmetry, batched prefill followed by sequential decode, is why prefill and decode get reported as separate throughput numbers rather than one blended figure.
+- **Decode** is the token-by-token loop that follows. Each iteration runs `forward()` on exactly one token (the last one produced), attending against the KV cache built by prefill and every prior decode step, so it never reprocesses earlier tokens. Decode is **memory-bandwidth-bound**: each step is dominated by matrix-vector multiplies (GEMV), where the bottleneck is reading weights from memory, not raw arithmetic.
+
+This split exists because generation is **autoregressive** — every output token becomes the input to produce the next one, so there is no way to batch the unknown future tokens the way the known prompt tokens can be batched.
+
+That asymmetry (batched prefill followed by sequential decode) is why prefill and decode get reported as separate throughput numbers rather than one blended figure.
 
 ## 5. Sampling and Detokenization
 
@@ -41,7 +48,9 @@ Each `forward()` call ends with a **vocabulary projection**: a matrix multiply t
 - **Greedy**: take the highest-scoring logit (**argmax**), or
 - **Sampled**: apply temperature, top-k, top-p, or other filters to turn logits into a probability distribution and draw from it (Chapter 7).
 
-On GPU backends the logits are written by the GPU asynchronously, so the CPU must **synchronize** (block until the GPU finishes and its writes are visible) before reading them for argmax or sampling. See the first gotcha below. Once a token ID is chosen, it's appended to the running list of generated IDs and checked against the model's end-of-sequence markers. When generation stops (end-of-sequence token, or a max-token limit), the full list of generated IDs is **detokenized**, converted back to a text string in one pass, the mirror image of the tokenization step in section 3.
+On GPU backends the logits are written by the GPU asynchronously, so the CPU must **synchronize** (block until the GPU finishes and its writes are visible) before reading them for argmax or sampling. See the first gotcha below.
+
+Once a token ID is chosen, it's appended to the running list of generated IDs and checked against the model's end-of-sequence markers. When generation stops (end-of-sequence token, or a max-token limit), the full list of generated IDs is **detokenized** — converted back to a text string in one pass, the mirror image of the tokenization step in section 3.
 
 ## 6. Timings and Tokens as Pipeline Artifacts
 
@@ -88,8 +97,6 @@ flowchart TD
 
 - **Stale logits from missing sync.** GPU backends write the vocabulary-projection output asynchronously: the dispatch call returns before the GPU has actually finished writing `logits`. Every model's `forward()` calls `be.sync()` immediately after the final projection GEMV and before `math_ops.argmax()` reads the buffer (see `self.be.sync()` right before `argmax` in `src/models/qwen35.zig`). Skip that sync in custom code and you'll read whatever was in the buffer before the GPU wrote to it, most visible on UMA (Unified Memory Architecture: CPU and GPU share the same physical RAM) systems, where the read doesn't fault, it just silently returns garbage.
 - **Format or architecture mismatch is silent, not a crash.** An unrecognized architecture string is a hard error, but a *misdetected* one, or a tensor-naming convention borrowed from the wrong format (GGUF's llama.cpp conventions vs. SafeTensors' HuggingFace conventions), is not. The model builds, runs, and produces low-quality or nonsensical output with no error message, what Chapter 14 calls a "silent correctness failure." If a model that should work produces garbage, format/architecture mismatch is the first thing to check.
-
-## How This Relates to the Code
 
 **In the code:** [`main` generation path](../../src/main.zig), [Model interface](../../src/models/model.zig)
 

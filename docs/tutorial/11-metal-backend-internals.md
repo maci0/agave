@@ -4,6 +4,8 @@
 
 **Time:** ~19 min
 
+> After this chapter you can explain UMA zero-copy, Metal command buffers, buffer caching, and the 32 KB threadgroup limit.
+
 The Metal backend is Agave's primary GPU path on Apple Silicon. It's designed around **zero-copy UMA** (Unified Memory Architecture — CPU and GPU share the same physical RAM), **deferred dispatch** (batching operations without blocking), and **cache-aware resource management** (reusing GPU buffer wrappers to avoid ObjC allocation overhead).
 
 ## Unified Memory Architecture (UMA)

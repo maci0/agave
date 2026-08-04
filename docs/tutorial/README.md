@@ -143,7 +143,7 @@ Looking for one specific topic instead of a full reading path? Jump straight to 
 - [Profiling and Debugging](appendix-profiling.md) — --profile flag, dispatch counters, missing kernel policy, regression detection
 - [Atomic Operations and Memory Ordering](appendix-atomics.md) — std.atomic.Value, memory ordering semantics, lock-free patterns
 
-## How This Relates to the Code
+## Code References and Glossaries
 
 Each chapter references the Agave source files that implement the concepts discussed. The code follows the same layered structure as these tutorials — understanding the concepts makes the code straightforward to read.
 

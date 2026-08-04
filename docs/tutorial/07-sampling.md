@@ -4,7 +4,11 @@
 
 **Time:** ~12 min
 
-After the forward pass produces **logits** (raw unnormalized scores, one per vocabulary token), the model must **select** the next token. The simplest method is **greedy decoding** (pick the highest score), but this produces repetitive, **deterministic** (always the same output for the same input) output. Sampling parameters add controlled randomness for more natural text.
+> After this chapter you can configure temperature, top-k, top-p, min-p, XTC, DRY, Mirostat, logit bias, and grammar constraints.
+
+After the forward pass produces **logits** (raw unnormalized scores, one per vocabulary token), the model must **select** the next token. The simplest method is **greedy decoding** (pick the highest score), but this produces repetitive, **deterministic** (always the same output for the same input) output.
+
+Sampling parameters add controlled randomness for more natural text.
 
 ### Code Flow
 

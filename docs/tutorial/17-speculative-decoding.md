@@ -4,6 +4,8 @@
 
 **Time:** ~29 min
 
+> After this chapter you can explain draft/verify/accept, DDTree, self-speculative, EAGLE, MTP, and all 12 speculative decoding modes.
+
 Standard autoregressive decoding generates one token per forward pass. For large models, each pass takes tens of milliseconds — the token generation rate is bottlenecked by model size, not memory bandwidth. Speculative decoding breaks this bottleneck by using a cheap draft model to propose multiple candidate tokens, then verifying them against the full target model.
 
 ## The Core Idea

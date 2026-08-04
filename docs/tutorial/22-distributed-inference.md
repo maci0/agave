@@ -116,8 +116,6 @@ flowchart TD
 - **Only the FFN block is genuinely tensor-parallel today.** As covered in section 2, attention always runs at `tp_degree = 1` because per-rank KV cache splitting isn't implemented. Expect TP speedup (or memory savings) proportional to the FFN block's share of the layer, not the whole layer, and don't expect attention-heavy configurations to benefit as much as the FFN math alone would suggest.
 - **RCCL is a name in an enum, nothing more.** `TransportKind.rccl` exists so code can pattern-match on it and so future work has a slot to fill in, but `Transport.init()` returns `error.NotImplemented` for it unconditionally. There's no partial ROCm collective path to fall back to.
 
-## How This Relates to the Code
-
 **In the code:** [`parallel` transport and sharding](../../src/parallel/transport.zig), [`Qwen35Model.forward()` TP/PP wiring](../../src/models/qwen35.zig), [`TpGroup`, rank-0-only, unused](../../src/parallel/tp.zig), [`device discovery`](../../src/devices/discovery.zig)
 
 ```text

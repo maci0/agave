@@ -86,8 +86,6 @@ flowchart TD
 - **Buffered and streaming responses aren't the same JSON shape with different pacing.** The buffered response is one object with a complete `choices[0].message`; the streaming response is a sequence of partial `delta` objects ending in `data: [DONE]`. Code written against one shape will not parse the other; see API.md's streaming section for the exact chunk formats per endpoint.
 - **Prefix reuse depends on the client resending an unmodified prefix.** The radix-tree cache (section 5) matches on exact token-ID equality from the start of the sequence. Editing an earlier message, not just appending a new one, changes every token from that point forward, so the cached prefix stops at the edit and everything after it reprefills from scratch, even though most of the conversation "looks" unchanged to a human reading it.
 
-## How This Relates to the Code
-
 **In the code:** [`server` request handling](../../src/server/server.zig), [`json` parsing](../../src/server/json.zig), [`scheduler` continuous batching](../../src/server/scheduler.zig)
 
 ```text

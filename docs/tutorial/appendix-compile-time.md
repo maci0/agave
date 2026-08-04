@@ -2,6 +2,8 @@
 
 **Prerequisites:** [Chapter 4: Quantization](04-quantization.md) (dequantization LUTs), [Chapter 9: CPU SIMD Optimization](09-cpu-simd-optimization.md#real-world-example-rmsnorm) (comptime-specialized kernels)
 
+> After this appendix you can explain `comptime` dispatch, `@embedFile`, lookup tables, and `inline else` tagged-union expansion.
+
 Zig's `comptime` feature executes code **at compile time**, generating optimized runtime code with zero overhead. Agave uses this extensively for lookup tables, feature detection, and type-specialized dispatch.
 
 ## comptime Basics

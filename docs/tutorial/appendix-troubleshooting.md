@@ -92,8 +92,6 @@ flowchart TD
 - **Metal pipeline creation can fail silently past the threadgroup memory limit.** Kernels whose combined threadgroup memory (`q_local + kv_block + out_acc + scores + shared`) exceeds 32 KB fail to build, and without the error logging in `makePipeline`, that failure can look like a hang or an unrelated crash further downstream instead of a clear compile error.
 - **Reproduce before debugging.** For symptom 6 (GLM-4) in particular, confirm the same failure occurs in llama.cpp against the same GGUF before investigating Agave's own code; it saves chasing a bug that isn't there.
 
-## How This Relates to the Code
-
 Every entry above traces back to one of a small number of subsystems: KV cache sizing and eviction (`src/kvcache/manager.zig`), the sync-then-argmax step every model's `forward()` performs, the backend dispatcher's fallback chain, the format loaders' convention branching, the distributed transport layer, and the HTTP server's request parsing and scheduler. None of these are unique failure surfaces invented for this appendix, they're the same code paths Chapters 4, 5, 8, 14, 22, and 23 already describe; troubleshooting is just entering that code from the symptom end instead of the explanation end.
 
 **In the code:** [`main` load/generate path](../../src/main.zig), [`backend` dispatcher](../../src/backend/backend.zig), [`server` request handling](../../src/server/server.zig)

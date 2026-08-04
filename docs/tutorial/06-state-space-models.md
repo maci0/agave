@@ -4,6 +4,8 @@
 
 **Time:** ~20 min
 
+> After this chapter you can explain DeltaNet and Mamba-2 recurrences, how hybrid attention/SSM models work, and why SSMs are O(1) per step.
+
 SSMs are a family of sequence models based on state-space theory. [Mamba (Gu & Dao, 2023)](https://arxiv.org/abs/2312.00752) introduced **selective** state spaces — input-dependent parameters that give SSMs content-aware reasoning ability. SSMs are an alternative to attention that process tokens in **O(1) with respect to sequence length** per step (constant time — doesn't grow with the number of previous tokens) instead of O(n²). Instead of re-reading all previous tokens, they maintain a fixed-size **state matrix** that summarizes the past:
 
 ```
@@ -310,7 +312,7 @@ Ratio: attention does 250× more work at 32K context.
 
 The tradeoff: SSMs are faster but lose exact long-range recall. The state matrix has fixed size (128×128 = 16,384 floats per head), so it acts as a lossy compression of all past tokens — like a 1,024 KB "summary" trying to represent 125 MB of cached history. If the model saw "The capital of France is" 10,000 tokens ago, the relevant information has been multiplied by decay^10,000 and is effectively gone. Attention doesn't have this problem — it stores every K/V and can look them up exactly, at the cost of scanning all of them every token.
 
-Hybrid models get the best of both: SSM layers for speed on most positions, attention layers every Nth layer for precise long-range access. Qwen3.5 uses attention every 4th layer — 48 of its 64 layers are cheap SSM layers, and 16 are full-attention layers that maintain exact recall. The attention layers act as "checkpoints" that periodically refresh the model's access to the full history.
+Hybrid models get the best of both: SSM layers for speed on most positions, attention layers every Nth layer for precise long-range access. The published Qwen3.5 configuration uses attention every 4th layer — 48 of its 64 layers are cheap SSM layers, and 16 are full-attention layers that maintain exact recall. The attention layers act as "checkpoints" that periodically refresh the model's access to the full history. (The code detects the layer pattern dynamically from tensor presence via `layer_is_deltanet[i] = f.layerTensor(i, "attn_qkv.weight") != null`, so other Qwen3.5 variants with different layer counts or attention ratios work automatically.)
 
 ## State Matrix Visualization
 
@@ -344,7 +346,7 @@ SSM recurrence is **inherently sequential** — each timestep depends on the pre
 
 ## Hybrid Layer Patterns
 
-Qwen3.5 places a full-attention layer every 4th layer across its 64-layer stack. The remaining 48 layers are DeltaNet SSM layers, making token generation cheap on most layers while preserving exact recall at regular checkpoints.
+The published Qwen3.5 model places a full-attention layer every 4th layer across its 64-layer stack. The remaining 48 layers are DeltaNet SSM layers, making token generation cheap on most layers while preserving exact recall at regular checkpoints. Other variants may use different layer counts — the code auto-detects the pattern from the model file.
 
 ```mermaid
 flowchart TD

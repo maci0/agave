@@ -4,6 +4,8 @@
 
 **Time:** ~16 min
 
+> After this chapter you can explain MTP heads, the +1 offset norm trick, and how MTP tokens feed speculative decoding.
+
 Standard LLM inference is **autoregressive** — each forward pass through the model produces exactly one token. The model processes all its layers (attention, feed-forward networks, normalization) to produce a probability distribution over the vocabulary, picks the best token, feeds it back in, and repeats. This is slow for large models because each token requires a full pass through billions of parameters.
 
 **Multi-Token Prediction (MTP)** adds lightweight draft heads to the model that predict future tokens from the model's internal state. These heads are trained jointly with the main model — they live in the same checkpoint, share representations, and understand the model's output distribution natively. This makes them far more accurate than external draft models.

@@ -4,6 +4,8 @@
 
 **Time:** ~18 min
 
+> After this chapter you can trace a single token through attention, RoPE, normalization, and residual connections.
+
 The forward pass is the core computation: given a token, predict the next one.
 
 ```
@@ -11,21 +13,27 @@ Token ID → Embedding → N Transformer Layers → Final Norm → Logits → Ar
 ```
 
 Concrete example (Gemma4 E2B, 2.6B parameters):
+
 ```
 Token 15496     → embed → [2304 floats]  → 35 layers → [2304 floats]  → norm → [2304 floats]
 ("Hello")          lookup    hidden state     attention+FFN    hidden state            
                                                               → vocab proj → [262144 floats] → argmax → Token 11
                                                                  logits (one per vocab entry)            (",")
 ```
+
 The **hidden state** (the internal vector representation flowing through each layer) is a fixed-size vector (2304 floats = 9 KB) that flows through every layer. Each layer reads its weight matrices (~180 MB total for this model) to transform it.
 
 Each **transformer layer** has two sublayers:
 1. **Attention** — lets the model look at previous tokens
 2. **FFN** (Feed-Forward Network) — processes each position independently
 
-A model has N layers stacked in sequence (e.g., 35 for Gemma4 E2B, 64 for Qwen3.5 0.8B). Each layer has its own **independent weight matrices** — layer 0's attention weights are completely different from layer 15's. The hidden state vector passes through all N layers, getting progressively refined. Early layers tend to learn basic features (syntax, word relationships), later layers learn more abstract ones (reasoning, facts).
+A model has N layers stacked in sequence (e.g., 35 for Gemma4 E2B, 64 for Qwen3.5 0.8B). Each layer has its own **independent weight matrices** — layer 0's attention weights are completely different from layer 15's.
 
-Both sublayers use **residual connections** (`output = input + sublayer(input)`) so information flows through unchanged, preventing the **vanishing gradient problem** (where gradients get exponentially smaller in deep networks during training, making learning impossible) in deep networks.
+The hidden state vector passes through all N layers, getting progressively refined:
+- **Early layers** tend to learn basic features (syntax, word relationships)
+- **Later layers** learn more abstract ones (reasoning, facts)
+
+Both sublayers use **residual connections** (`output = input + sublayer(input)`) so information flows through unchanged. This prevents the **vanishing gradient problem** — where gradients get exponentially smaller in deep networks during training, making learning impossible.
 
 ```mermaid
 flowchart TD
@@ -604,8 +612,6 @@ flowchart LR
 - **KV cache overflow**: The cache has a fixed context size. Models must call `ensureKvBlock()` before each forward to allocate new blocks. If the cache is full, return `error.KVCacheFull` (or evict via `--kv-eviction`).
 - **RoPE dim mismatch**: Some models rotate only a fraction of head_dim (`rope_dim` in `src/backend/kernels/cpu/rope.zig`, e.g. Gemma4 global layers: 25%). The non-rotated dimensions carry non-positional features, don't zero them, and don't assume `rope_dim == head_dim` when wiring a new architecture.
 - **GQA kv head mismatch**: GQA head grouping is a plain integer division, `hpg = n_head / n_head_kv` (`src/ops/attention.zig`). `src/models/qwen35.zig` asserts `n_head % n_head_kv == 0` at model construction, but `std.debug.assert` compiles out in `ReleaseFast`. A GGUF with a wrong `attention.head_count_kv` value that isn't an exact divisor of `head_count` won't crash in production, it'll quietly compute the wrong Q-to-KV head grouping and produce degraded output with no error.
-
-## How This Relates to the Code
 
 **In the code:** [src/ops/attention.zig](../../src/ops/attention.zig) (SDPA), [src/backend/kernels/cpu/rope.zig](../../src/backend/kernels/cpu/rope.zig) (RoPE), [src/backend/kernels/cpu/norm.zig](../../src/backend/kernels/cpu/norm.zig) (RMSNorm, L2Norm), [src/backend/kernels/cpu/sdpa.zig](../../src/backend/kernels/cpu/sdpa.zig) (CPU FlashAttention), [src/backend/cpu.zig](../../src/backend/cpu.zig) (CPU GEMM), [src/backend/kernels/metal/gemm.metal](../../src/backend/kernels/metal/gemm.metal) (Metal GEMM), [src/backend/kernels/cuda/gemm_q8_0.zig](../../src/backend/kernels/cuda/gemm_q8_0.zig) (CUDA GEMM)
 

@@ -4,6 +4,8 @@
 
 **Time:** ~20 min
 
+> After this chapter you can explain the KV cache, PagedAttention, RadixAttention, KV quantization, and cache eviction.
+
 During **autoregressive generation** (generating text one token at a time, where each new token depends on all previous tokens), each new token needs to attend to all previous tokens. Recomputing K and V for every previous position would waste enormous compute. The **KV cache** stores them.
 
 ## The KV Cache
@@ -566,8 +568,6 @@ Useful for shared system prompts: compute the prefix KV once on one instance, di
 **Cached K bakes in absolute position (inverse RoPE)**: RoPE rotates K by an angle derived from its *absolute* position before it's written to the cache ([Chapter 2](02-the-transformer.md#rope-rotary-position-encoding)). A cached K vector isn't position-neutral: reusing it at a different position requires either recomputing it from scratch or applying an inverse rotation followed by re-rotation to the new angle, neither of which Agave's paged cache does. This is why RadixAttention's prefix sharing only works because shared prefixes start at position 0 in every request that shares them: the cached K vectors' baked-in rotation is already correct for whoever reuses that block.
 
 **Paged block-index math assumes a fixed block size**: `PagedKvView` (`src/kvcache/manager.zig`) converts a logical position to a block index and in-block offset via `position >> block_shift` / `position & block_mask` when `block_size` is a power of two, falling back to plain division/modulo otherwise. Both paths must agree on the same `block_size` for the life of a cache; resizing `block_size` after blocks have been allocated (rather than just adding more blocks of the existing size) would silently misalign every position lookup that follows.
-
-## How This Relates to the Code
 
 **In the code:** [src/kvcache/manager.zig](../../src/kvcache/manager.zig) (KvCache, PagedKvCache, RadixTree, KV eviction), [src/kvcache/block_allocator.zig](../../src/kvcache/block_allocator.zig) (block allocation), [src/kvcache/tiered.zig](../../src/kvcache/tiered.zig) (VRAM + RAM + SSD tiers), [src/ops/kv_quant.zig](../../src/ops/kv_quant.zig) (KV cache quantization — f16, q8_0, fp8, nvfp4, TurboQuant, PerHeadKvScales), [src/backend/cpu.zig](../../src/backend/cpu.zig) (CPU prefill attention), [src/backend/kernels/metal/sdpa.metal](../../src/backend/kernels/metal/sdpa.metal) (GPU prefill FA2, 64K seq limit)
 

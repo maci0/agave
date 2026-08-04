@@ -4,6 +4,8 @@
 
 **Time:** ~15 min
 
+> After this chapter you can explain SwiGLU, activation functions, Mixture-of-Experts routing, and megakernel fusion.
+
 The **FFN (Feed-Forward Network)** is the second **sublayer** (component within a transformer layer) in each transformer layer. "Feed-forward" means data flows in one direction through the network — input → hidden layer → output, with no loops or **recurrence** (unlike **RNNs** — Recurrent Neural Networks — which cycle back on themselves, feeding outputs back as inputs).
 
 While attention lets tokens communicate with each other, the FFN processes each position **independently** — it's a separate computation per token that doesn't look at neighboring tokens.
@@ -370,8 +372,6 @@ Enable with `--megakernel`. See [Chapter 13](13-batched-dispatch-and-fusion.md) 
 **`gemvMulti` assumes a shared input vector**: Batched expert dispatch (`gemvMulti`) parallelizes gate+up GEMVs for multiple experts against the *same* `x`. It's only valid when all batched ops read the same input: mixing GEMVs from different tokens or different hidden states into one `gemvMulti` call silently computes the wrong outputs for whichever ops don't share `x`.
 
 ---
-
-## How This Relates to the Code
 
 **In the code:** [src/backend/kernels/cpu/activation.zig](../../src/backend/kernels/cpu/activation.zig) (SiLU, GELU), [src/ops/math.zig](../../src/ops/math.zig) (softplus, sigmoid, topKExperts), [src/models/gpt_oss.zig](../../src/models/gpt_oss.zig) (MoE implementation)
 

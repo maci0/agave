@@ -2,6 +2,8 @@
 
 **Prerequisites:** [Chapter 12: CPU Parallelism](12-cpu-parallelism.md#memory-ordering) (thread pool, futex wake/wait)
 
+> After this appendix you can explain `std.atomic.Value`, memory ordering levels, and lock-free patterns in Agave.
+
 Multi-threaded code needs **synchronization** to coordinate between threads. Zig provides **atomic operations** — CPU instructions that read-modify-write memory **atomically** (as one indivisible operation, preventing race conditions).
 
 ## The Problem: Race Conditions

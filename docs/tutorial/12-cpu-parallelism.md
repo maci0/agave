@@ -4,6 +4,8 @@
 
 **Time:** ~15 min
 
+> After this chapter you can explain the futex-based thread pool, `parallelFor`, and why the main thread participates in work.
+
 Modern CPUs have 4-64 cores. A single-threaded GEMV can only saturate one core's memory bandwidth (~10-20 GB/s). The total system bandwidth is much higher (~100-400 GB/s). **Threading unlocks the full bandwidth.**
 
 Agave uses a lightweight **futex-based thread pool** that wakes workers on demand, distributes work via an atomic counter, and has the main thread participate instead of just waiting.
