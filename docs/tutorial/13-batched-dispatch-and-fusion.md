@@ -68,12 +68,14 @@ sequenceDiagram
 
 A typical attention layer does:
 
-```zig
-be.gemv(x, w_q, q, n_q, k);    // Q projection: 1 dispatch + 1 barrier
-be.gemv(x, w_k, k_buf, n_k, k); // K projection: 1 dispatch + 1 barrier
-be.gemv(x, w_v, v, n_v, k);    // V projection: 1 dispatch + 1 barrier
-// Total: 3 dispatches, 3 barriers
+```text
+be.gemv(x, w_q, q, n_q, k)      # Q projection: 1 dispatch + 1 barrier
+be.gemv(x, w_k, k_buf, n_k, k)  # K projection: 1 dispatch + 1 barrier
+be.gemv(x, w_v, v, n_v, k)      # V projection: 1 dispatch + 1 barrier
+# Total: 3 dispatches, 3 barriers
 ```
+
+**Implementation:** [src/backend/backend.zig](../../src/backend/backend.zig) (`gemv` dispatcher).
 
 **Sequential Dispatch Visualization:**
 
@@ -108,7 +110,7 @@ Overhead saved: 2 dispatches, 2 barriers
 - Memory barrier: ~0 µs (Apple Silicon overlaps work)
 - Total per dispatch: ~5-10 µs
 
-For a 27B model with ~210 GEMVs per token, that's **1-2 ms of pure overhead** per token.
+For a large model with ~210 GEMVs per token, that's **1-2 ms of pure overhead** per token.
 
 ## Batched GEMV: gemvMulti
 
@@ -149,94 +151,77 @@ flowchart LR
 
 ### GemvOp Structure
 
-```zig
-pub const GemvOp = struct {
-    w: TensorData,      // Weight matrix (quantized)
-    y: [*]f32,          // Output buffer
-    n: usize,           // Number of output rows
-    // Optional MLX companions (for MLX quantized weights)
-    mlx_scales: ?[*]const u8 = null,
-    mlx_biases: ?[*]const u8 = null,
-    mlx_bits: u32 = 0,
-};
+```text
+GemvOp:
+  w: TensorData          # weight matrix (quantized)
+  y: [*]f32              # output buffer
+  n: usize               # number of output rows
+  mlx_scales: ?[*]const u8 = null   # optional MLX companions
+  mlx_biases: ?[*]const u8 = null
+  mlx_bits: u32 = 0
 ```
+
+**Implementation:** [src/backend/backend.zig](../../src/backend/backend.zig) (`GemvOp`).
 
 ### Backend Interface
 
-```zig
-pub inline fn gemvMulti(self: Backend, x: [*]const f32, ops: []const GemvOp, k: usize) void {
-    switch (self) {
-        inline else => |be| be.gemvMulti(x, ops, k),
-    }
-}
+```text
+gemvMulti(self: Backend, x, ops, k):
+  switch self:
+    inline else => |be|: be.gemvMulti(x, ops, k)   # zero vtable overhead
 ```
+
+**Implementation:** [src/backend/backend.zig](../../src/backend/backend.zig) (`Backend.gemvMulti` dispatcher).
 
 ### Usage Example
 
-```zig
-// Attention Q/K/V projection (all share input x)
-const ops = [_]GemvOp{
-    .{ .w = w_q, .y = q_buf, .n = n_q * nh },
-    .{ .w = w_k, .y = k_buf, .n = n_kv * nh },
-    .{ .w = w_v, .y = v_buf, .n = n_kv * nh },
-};
-be.gemvMulti(x, &ops, n_embd);  // 1 dispatch instead of 3
+```text
+# attention Q/K/V projection (all share input x)
+ops = [
+  GemvOp{ w_q, q_buf, n_q * nh },
+  GemvOp{ w_k, k_buf, n_kv * nh },
+  GemvOp{ w_v, v_buf, n_kv * nh },
+]
+be.gemvMulti(x, ops, n_embd)   # 1 dispatch instead of 3
 ```
 
 ### Metal Implementation
 
-```zig
-pub fn gemvMulti(self: *MetalBackend, x: [*]const f32, ops: []const GemvOp, k: usize) void {
-    for (ops) |op| {
-        // Determine pipeline based on dtype and MLX companions
-        const pipeline = if (op.mlx_scales != null) blk: {
-            if (op.mlx_bits == 4) break :blk self.pipe_gemv_mlx_q4;
-            if (op.mlx_bits == 6) break :blk self.pipe_gemv_mlx_q6;
-            if (op.mlx_bits == 8) break :blk self.pipe_gemv_mlx_q8;
-            @panic("Unsupported MLX bit width");
-        } else switch (op.w.dtype) {
-            .f32 => self.pipe_gemv_f32,
-            .bf16 => self.pipe_gemv_bf16,
-            .q4_0 => self.pipe_gemv_q4_0,
-            .q8_0 => self.pipe_gemv_q8_0,
-            // ... other dtypes
-        };
-
-        // Encode this GEMV (reuses active encoder)
-        self.encode(pipeline, &[_]BufRef{
-            self.getBufRef(@ptrCast(x), k * @sizeOf(f32)),
-            self.getBufRef(@ptrCast(op.w.data), weightBytes(op.w.dtype, op.n, k)),
-            self.getBufRef(@ptrCast(op.y), op.n * @sizeOf(f32)),
-            // ... MLX companions if present
-        }, grid);
-    }
-    // Single barrier at the end (outside the loop)
-}
+```text
+gemvMulti(self: MetalBackend, x, ops, k):
+  for op in ops:
+    pipeline = pick pipeline from op.w.dtype (or op.mlx_bits if MLX companions present)
+    self.encode(pipeline, buffers = [x, op.w.data, op.y, ...mlx companions], grid)
+    # reuses the active command encoder, no barrier per op
+  # single barrier inserted once, after the loop
 ```
+
+**Implementation:** [src/backend/metal.zig](../../src/backend/metal.zig) (`MetalBackend.gemvMulti`).
 
 **Key insight:** All dispatches use the same command encoder. The GPU can overlap them, and only **one barrier** is inserted after all ops complete.
 
 ### CPU Implementation
 
-```zig
-pub fn gemvMulti(self: *CpuBackend, x: [*]const f32, ops: []const GemvOp, k: usize) void {
-    // Parallel dispatch when all ops share dtype and n >= 32
-    if (self.pool) |pool| { /* parallelFor across total_n rows */ }
-    // Fallback: sequential
-    for (ops) |op| { self.gemv(x, op.w, op.y, op.n, k); }
-}
+```text
+gemvMulti(self: CpuBackend, x, ops, k):
+  if pool exists and ops share dtype and n >= 32:
+    parallelFor across combined rows of all ops
+  else:
+    for op in ops: self.gemv(x, op.w, op.y, op.n, k)   # sequential fallback
 ```
+
+**Implementation:** [src/backend/cpu.zig](../../src/backend/cpu.zig) (`CpuBackend.gemvMulti`).
 
 CPU parallelizes rows across the thread pool when ops share a dtype, falling back to sequential otherwise.
 
 ### Performance Impact
 
-**Qwen3.5 27B MLX** (Apple M4 Pro):
-- Before gemvMulti: 930 barriers/token
-- After gemvMulti: 690 barriers/token
-- Throughput change: 0% (barriers are free on Apple Silicon)
+**Illustrative `--profile` counters** (large Qwen3.5-class MLX model on Apple Silicon; not a `BENCHMARKS.md` row):
+- Before gemvMulti: many barriers/token
+- After gemvMulti: fewer barriers/token (independent GEMVs share one barrier group)
+- Throughput change on Apple Silicon: often near zero (barriers are cheap)
 
-**But:** On discrete GPUs (NVIDIA, AMD), barriers flush PCIe, so this would be a 20-30% win.
+**But:** On discrete GPUs (NVIDIA, AMD), barriers can flush PCIe, so the same batching can be a larger win.
 
 ## Fused Operations
 
@@ -244,22 +229,22 @@ CPU parallelizes rows across the thread pool when ops share a dtype, falling bac
 
 ### Why Fusion Matters
 
-```zig
-// Unfused: 2 dispatches, 2 memory round-trips
-be.add(residual, ffn_out, temp, n_embd);       // Write temp to VRAM
-be.rmsNorm(temp, norm_w, normalized, n_embd);  // Read temp from VRAM
+```text
+# Unfused: 2 dispatches, 2 memory round-trips
+be.add(residual, ffn_out, temp, n_embd)       # write temp to VRAM
+be.rmsNorm(temp, norm_w, normalized, n_embd)  # read temp from VRAM
 
-// Memory traffic: residual (read) + ffn_out (read) + temp (write+read) + normalized (write)
-//               = 4 memory ops
+# memory traffic: residual (read) + ffn_out (read) + temp (write+read) + normalized (write) = 4 ops
 ```
 
-```zig
-// Fused: 1 dispatch, 1 memory round-trip
-be.addRmsNorm(residual, ffn_out, norm_w, normalized, n_embd);
+```text
+# Fused: 1 dispatch, 1 memory round-trip
+be.addRmsNorm(residual, ffn_out, norm_w, normalized, n_embd)
 
-// Memory traffic: residual (read) + ffn_out (read) + normalized (write)
-//               = 3 memory ops (25% reduction)
+# memory traffic: residual (read) + ffn_out (read) + normalized (write) = 3 ops (25% fewer)
 ```
+
+**Implementation:** [src/backend/backend.zig](../../src/backend/backend.zig) (`addRmsNorm` interface).
 
 **Savings:** Eliminate `temp` write and read → 2× memory bandwidth saved for the intermediate result.
 
@@ -307,17 +292,15 @@ flowchart LR
 
 #### addRmsNorm: Residual + Normalization
 
-```zig
-pub inline fn addRmsNorm(
-    self: Backend,
-    a: [*]f32,              // Residual (modified in-place)
-    b: [*]const f32,        // Input to add
-    weight: [*]const f32,   // Norm weight
-    output: [*]f32,         // Normalized output
-    n: usize,
-    eps: f32,
-) void
+```text
+addRmsNorm(self: Backend, a, b, weight, output, n, eps)
+  a: [*]f32              # residual, modified in-place
+  b: [*]const f32         # input to add
+  weight: [*]const f32    # norm weight
+  output: [*]f32          # normalized output
 ```
+
+**Implementation:** [src/backend/backend.zig](../../src/backend/backend.zig) (`addRmsNorm` interface).
 
 **Metal kernel:**
 
@@ -344,28 +327,27 @@ kernel void add_rms_norm_fused(
 
 **Usage:** After every FFN sub-block:
 
-```zig
-// Before: residual += ffn(x); x = rmsNorm(residual)
-be.add(residual, ffn_out, residual, n_embd);
-be.rmsNorm(residual, norm_w, x_normed, n_embd, eps);
+```text
+# Before: residual += ffn(x); x = rmsNorm(residual)
+be.add(residual, ffn_out, residual, n_embd)
+be.rmsNorm(residual, norm_w, x_normed, n_embd, eps)
 
-// After: fused
-be.addRmsNorm(residual, ffn_out, norm_w, x_normed, n_embd, eps);
+# After: fused
+be.addRmsNorm(residual, ffn_out, norm_w, x_normed, n_embd, eps)
 ```
 
 **Impact:** Qwen3.5 saved **64 dispatches/token** (32 layers × 2 residual+norm per layer).
 
 #### siluMul: SwiGLU Activation
 
-```zig
-pub inline fn siluMul(
-    self: Backend,
-    a: [*]const f32,  // Gate input
-    b: [*]const f32,  // Up input
-    out: [*]f32,      // Output
-    n: usize,
-) void
+```text
+siluMul(self: Backend, a, b, out, n)
+  a: [*]const f32   # gate input
+  b: [*]const f32   # up input
+  out: [*]f32       # output
 ```
+
+**Implementation:** [src/backend/backend.zig](../../src/backend/backend.zig) (`siluMul` interface).
 
 **Formula:** `out[i] = silu(a[i]) * b[i]` where `silu(x) = x * sigmoid(x)`
 
@@ -386,23 +368,20 @@ kernel void silu_mul(
 
 **Unfused equivalent:**
 
-```zig
-be.silu(gate, temp, n);  // Write temp
-be.mul(temp, up, out, n); // Read temp, write out
+```text
+be.silu(gate, temp, n)    # write temp
+be.mul(temp, up, out, n)  # read temp, write out
 ```
 
 **Fused:** No `temp` buffer needed → saves 1 allocation + 2 memory transfers.
 
 **Usage:** SwiGLU FFN:
 
-```zig
-// gate_out = silu(gate_proj(x))
-// up_out = up_proj(x)
-// ffn_out = gate_out * up_out
-
-be.gemv(x, w_gate, gate_buf, ff_dim, n_embd);
-be.gemv(x, w_up, up_buf, ff_dim, n_embd);
-be.siluMul(gate_buf, up_buf, ffn_out, ff_dim);  // Fused
+```text
+# gate_out = silu(gate_proj(x)); up_out = up_proj(x); ffn_out = gate_out * up_out
+be.gemv(x, w_gate, gate_buf, ff_dim, n_embd)
+be.gemv(x, w_up, up_buf, ff_dim, n_embd)
+be.siluMul(gate_buf, up_buf, ffn_out, ff_dim)   # fused activation + multiply
 ```
 
 #### splitQGate: Q+Gate Deinterleaving (GPU Kernel)
@@ -463,17 +442,16 @@ flowchart TD
 
 **Naive CPU implementation:**
 
-```zig
-// CPU: requires be.sync() round-trip (GPU → CPU → GPU)
-be.sync();  // Flush GPU writes to qg_buf
-for (0..nh) |h| {
-    const src = h * hd * 2;
-    const dst = h * hd;
-    @memcpy(q_out[dst..][0..hd], qg[src..][0..hd]);
-    @memcpy(g_out[dst..][0..hd], qg[src+hd..][0..hd]);
-}
-// q_out and g_out now contain CPU-copied data
-// Next GPU op must re-upload them → 2 more syncs!
+```text
+# CPU: requires be.sync() round-trip (GPU -> CPU -> GPU)
+be.sync()   # flush GPU writes to qg_buf
+for h in 0..nh:
+  src = h * hd * 2
+  dst = h * hd
+  memcpy(q_out[dst..dst+hd], qg[src..src+hd])
+  memcpy(g_out[dst..dst+hd], qg[src+hd..src+2*hd])
+# q_out and g_out now hold CPU-copied data
+# the next GPU op must re-upload them: 2 more syncs
 ```
 
 **Cost:** 24 syncs/token (one per DeltaNet layer) × ~200 µs/sync = **4.8 ms/token overhead**.
@@ -499,57 +477,47 @@ kernel void split_qgate(
 }
 ```
 
-**Dispatch:**
+**Dispatch:** `be.splitQGate(qg_buf, q_buf, g_buf, hd, nh)`, one dispatch, no sync needed.
 
-```zig
-be.splitQGate(qg_buf, q_buf, g_buf, hd, nh);  // 1 dispatch, no sync needed
-```
+**Implementation:** [src/backend/backend.zig](../../src/backend/backend.zig) (`splitQGate` interface), [src/backend/kernels/metal/mega_common.metal](../../src/backend/kernels/metal/mega_common.metal) (kernel).
 
-**Impact:** Eliminated 24 syncs/token → Qwen3.5 throughput **12.3 → 14.1 tok/s** (+15%).
+**Impact:** Removes one CPU↔GPU sync per DeltaNet layer (Q/gate split). On a large hybrid Qwen3.5-class model that is a large sync reduction and a measurable decode gain; exact tok/s deltas belong in `--profile` / `BENCHMARKS.md`, not as fixed textbook numbers.
 
 **Key insight:** Moving data manipulation from CPU to GPU eliminates sync points. Even a trivial operation (memcpy) is worth a GPU kernel if it avoids a round-trip.
 
 #### addScaled: MoE Expert Accumulation
 
-```zig
-pub inline fn addScaled(
-    self: Backend,
-    src: [*]const f32,  // Expert output
-    dst: [*]f32,        // Accumulator (modified in-place)
-    scale: f32,         // Expert weight
-    n: usize,
-) void
+```text
+addScaled(self: Backend, src, dst, scale, n)
+  src: [*]const f32   # expert output
+  dst: [*]f32         # accumulator, modified in-place
+  scale: f32          # expert weight
 ```
+
+**Implementation:** [src/backend/backend.zig](../../src/backend/backend.zig) (`addScaled` interface).
 
 **Formula:** `dst[i] += src[i] * scale`
 
 **Usage:** Mixture of Experts:
 
-```zig
-// Zero accumulator
-@memset(moe_out, 0.0);
+```text
+memset(moe_out, 0.0)                        # zero accumulator
 
-// Dispatch experts
-for (active_experts) |expert_id, i| {
-    be.gemv(x, expert_weights[expert_id], expert_out, ff_dim, n_embd);
-    const weight = expert_weights[i];
-    be.addScaled(expert_out, moe_out, weight, ff_dim);  // Accumulate
-}
+for expert_id, i in active_experts:
+  be.gemv(x, expert_weights[expert_id], expert_out, ff_dim, n_embd)
+  be.addScaled(expert_out, moe_out, expert_weights[i], ff_dim)   # accumulate
 
-// No sync needed — moe_out stays on GPU throughout
+# no sync needed, moe_out stays on GPU throughout
 ```
 
 **Alternative (unfused):**
 
-```zig
-for (active_experts) |expert_id, i| {
-    be.gemv(x, expert_weights[expert_id], expert_out, ff_dim, n_embd);
-    be.sync();  // BAD: Force GPU → CPU
-    const weight = expert_weights[i];
-    for (0..ff_dim) |j| {
-        moe_out[j] += expert_out[j] * weight;  // CPU accumulation
-    }
-}
+```text
+for expert_id, i in active_experts:
+  be.gemv(x, expert_weights[expert_id], expert_out, ff_dim, n_embd)
+  be.sync()                       # BAD: forces GPU -> CPU
+  for j in 0..ff_dim:
+    moe_out[j] += expert_out[j] * expert_weights[i]   # CPU accumulation
 ```
 
 **Cost:** `n_experts` syncs per MoE layer → 8 experts × 20 MoE layers = **160 syncs/token**.
@@ -661,10 +629,10 @@ Each threadgroup computes one output element. It loads the same `x` vector once 
 
 **Performance:**
 
-For small models (0.8-2B), dispatch overhead is a significant fraction of per-token time. Fusing 3->1 saves ~48 dispatches per token (24 layers x 2 saved):
+For small models (0.8-2B), dispatch overhead is a significant fraction of per-token time. Fusing gate+up+activation (3→1) saves about two dispatches per FFN layer; totals also include fixed per-token overhead outside those layers:
 
-- Qwen 3.5 0.8B Q8_0: 380 -> 332 dispatches/token, +4-7% decode
-- Gemma 4 E2B Q4_K_M: +93% short decode, -23% prefill
+- Qwen 3.5 0.8B Q8_0: 380 -> 332 dispatches/token, +4-7% decode (BENCHMARKS Megakernel Tier 1)
+- Gemma 4 E2B Q4_K_M: +93% short decode, -23% prefill (BENCHMARKS Megakernel Tier 1)
 
 For larger models (4B+), the per-dispatch compute time dominates, so the relative gain is smaller.
 
@@ -686,7 +654,7 @@ Measured 2026-03-24 on Apple M4 Pro, full methodology in [BENCHMARKS.md](../BENC
 
 True megakernels go further: execute an **entire transformer layer** (norm, Q/K/V projection, RoPE, KV cache append, SDPA, output projection, FFN) in a single GPU dispatch. This eliminates **all** per-layer dispatches and barriers.
 
-**Composable building blocks** (`mega_common.metal`, 732 lines, 18 primitives):
+**Composable building blocks** (`mega_common.metal`, 730 lines, 18 primitives):
 
 ```
 Primitive categories:
@@ -771,27 +739,18 @@ Model Metadata (GGUF) → ModelDesc → composeMSL() → MSL source → Metal ru
 
 **Adding a new model** only requires defining a `ModelDesc`:
 
-```zig
-const desc = ModelDesc{
-    .name = "new_model",
-    .n_layers = 32,
-    .n_embd = 4096,
-    .n_ff = 11008,
-    .n_head = 32,
-    .n_kv = 8,
-    .head_dim = 128,
-    .rope_dim = 128,
-    .rope_theta = 10000.0,
-    .rms_eps = 1e-6,
-    .max_seq_len = 4096,
-    .activation = .silu,
-    .quant = .q4_k,
-    .layer_types = ModelDesc.uniform(32, .attention),
-};
-var buf: [32768]u8 = undefined;
-const msl = mega_compose.composeMSL(&buf, desc);
-try metal_be.compileComposedMegakernel(msl);
+```text
+desc = ModelDesc{
+  name: "new_model", n_layers: 32, n_embd: 4096, n_ff: 11008,
+  n_head: 32, n_kv: 8, head_dim: 128, rope_dim: 128, rope_theta: 10000.0,
+  rms_eps: 1e-6, max_seq_len: 4096, activation: silu, quant: q4_k,
+  layer_types: ModelDesc.uniform(32, attention),
+}
+msl = mega_compose.composeMSL(buf, desc)
+metal_be.compileComposedMegakernel(msl)
 ```
+
+**Implementation:** [src/backend/mega_compose.zig](../../src/backend/mega_compose.zig) (`ModelDesc`, `composeMSL`).
 
 No MSL or shader code needed -- the composer generates everything from the descriptor.
 
@@ -828,39 +787,32 @@ When operations are **independent** (no data dependency), batch them to suppress
 
 ### beginBatch / endBatch Pattern
 
-```zig
-// Normalize Q and K (independent — can run in parallel)
-be.beginBatch();
-  be.rmsNormMulti(q_buf, norm_w, nh_q, hd, eps);   // No barrier after
-  be.rmsNormMulti(k_buf, norm_w, nh_kv, hd, eps);  // No barrier after
-be.endBatch();  // Single barrier here
+```text
+# normalize Q and K (independent, can run in parallel)
+be.beginBatch()
+  be.rmsNormMulti(q_buf, norm_w, nh_q, hd, eps)    # no barrier after
+  be.rmsNormMulti(k_buf, norm_w, nh_kv, hd, eps)   # no barrier after
+be.endBatch()                                      # single barrier here
 ```
+
+**Implementation:** [src/backend/backend.zig](../../src/backend/backend.zig) (`beginBatch`, `endBatch` interfaces).
 
 **Metal implementation:**
 
-```zig
-pub fn beginBatch(self: *MetalBackend) void {
-    self.batch_mode = true;
-}
+```text
+beginBatch(self: MetalBackend):
+  self.batch_mode = true
 
-pub fn endBatch(self: *MetalBackend) void {
-    self.batch_mode = false;
-    if (self.active_enc) |enc| {
-        objc.msgSend(void, enc, objc.sel("memoryBarrierWithScope:"), .{
-            MTLBarrierScopeBuffers,
-        });
-    }
-}
+endBatch(self: MetalBackend):
+  self.batch_mode = false
+  if active_enc exists: insert memoryBarrier(scope: Buffers)
 
-fn encode(...) void {
-    // ... dispatch kernel ...
-
-    // Suppress barrier in batch mode
-    if (!self.batch_mode) {
-        objc.msgSend(void, enc, objc.sel("memoryBarrierWithScope:"), .{...});
-    }
-}
+encode(...):
+  ... dispatch kernel ...
+  if not batch_mode: insert memoryBarrier(...)   # suppressed while batching
 ```
+
+**Implementation:** [src/backend/metal.zig](../../src/backend/metal.zig) (`MetalBackend.beginBatch`, `endBatch`, `encode`).
 
 ```mermaid
 sequenceDiagram
@@ -900,20 +852,22 @@ sequenceDiagram
 
 **Impact:** Qwen3.5 used batching for RoPE(Q) + RoPE(K) → saved ~64 barriers/token.
 
-## Real-World Example: Qwen3.5 Optimization Journey
+## Worked Example: Qwen3.5-Class Optimization Journey
+
+Pedagogical walkthrough for a large hybrid Qwen3.5-class MLX model (many DeltaNet layers). Counter magnitudes are illustrative of the shape of the gains from `--profile`, not a cited `BENCHMARKS.md` measurement and not a claim that a "Qwen3.5 27B" checkpoint ships in-tree.
 
 **Initial (naive):**
-- 24 DeltaNet layers × 1 sync per Q/gate split = **24 syncs/token**
-- No gemvMulti → 3 dispatches for Q/K/V projection = **~600 extra dispatches**
-- No addRmsNorm → 64 extra dispatches for residual+norm
-- **Throughput:** 12.3 tok/s
+- One CPU↔GPU sync per DeltaNet layer for Q/gate split
+- No gemvMulti → separate dispatches for Q/K/V
+- No addRmsNorm → extra residual+norm dispatches
+- High dispatch/barrier/sync counts, lower decode throughput
 
 **Optimizations applied:**
 
-1. **splitQGate GPU kernel** → eliminated 24 syncs
-2. **gemvMulti for Q/K/V** → reduced dispatches by ~200
-3. **addRmsNorm fusion** → reduced dispatches by 64
-4. **Batch mode for independent norms/RoPE** → reduced barriers by 240
+1. **splitQGate GPU kernel** → removes per-layer Q/gate syncs
+2. **gemvMulti for Q/K/V** → fewer dispatches and barriers for shared-input projections
+3. **addRmsNorm fusion** → fewer residual+norm dispatches
+4. **Batch mode for independent norms/RoPE** → fewer redundant barriers
 
 ```mermaid
 flowchart TD
@@ -924,25 +878,24 @@ flowchart TD
     classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
     classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
 
-    Start["Baseline: Qwen3.5 27B MLX\n12.3 tok/s\n24 syncs/token\n930 barriers/token\n~1250 dispatches/token"]:::danger
-    Step1["0 syncs/token\n930 barriers/token\n~1250 dispatches/token\n~13.0 tok/s"]:::migration
-    Step2["0 syncs/token\n690 barriers/token\n~1050 dispatches/token\n~13.5 tok/s"]:::migration
-    Step3["0 syncs/token\n690 barriers/token\n~994 dispatches/token\n~13.9 tok/s"]:::sync
-    Final["Final: Qwen3.5 27B MLX\n14.1 tok/s (+15%)\n1 sync/token\n690 barriers/token\n994 dispatches/token"]:::success
+    Start["Baseline: naive dispatch\nhigh syncs/token\nhigh barriers/token\nhigh dispatches/token"]:::danger
+    Step1["splitQGate on GPU\nsyncs collapse"]:::migration
+    Step2["gemvMulti Q+K+V\nfewer barriers + dispatches"]:::migration
+    Step3["addRmsNorm fusion\nfewer residual/norm dispatches"]:::sync
+    Final["Batch RoPE/norms\n1 sync for final argmax\nlower CPU encode cost"]:::success
 
-    Start -->|"(1) splitQGate\nGPU kernel\neliminate 24 CPU-GPU syncs\n(-4.8 ms/token overhead)"| Step1
-    Step1 -->|"(2) gemvMulti\nbatch Q+K+V projections\n-240 barriers/token\n-200 dispatches/token"| Step2
-    Step2 -->|"(3) addRmsNorm fusion\nfuse residual+norm\n-64 dispatches/token"| Step3
-    Step3 -->|"(4) beginBatch/endBatch\nfor RoPE(Q) + RoPE(K)\n-240 redundant barriers"| Final
+    Start -->|"(1) splitQGate"| Step1
+    Step1 -->|"(2) gemvMulti"| Step2
+    Step2 -->|"(3) addRmsNorm"| Step3
+    Step3 -->|"(4) beginBatch/endBatch"| Final
 ```
 
-**Final:**
-- 1 sync/token (only for final argmax)
-- 690 barriers/token (down from 930)
-- 994 dispatches/token
-- **Throughput:** 14.1 tok/s (+15%)
+**Final shape:**
+- ~1 sync/token (final argmax)
+- Fewer barriers and dispatches than the naive path
+- Higher decode throughput from less CPU encode / GPU ping-pong
 
-**Key insight:** Even though barriers are free on Apple Silicon, reducing dispatches and syncs improves throughput by reducing CPU-side overhead and GPU command buffer size.
+**Key insight:** Even though barriers are cheap on Apple Silicon, reducing dispatches and syncs still improves throughput by cutting CPU-side overhead and GPU command buffer size.
 
 ## Best Practices
 

@@ -6,6 +6,8 @@ Each chapter introduces one major concept at a time, explaining both the **why**
 
 **Start here:** [Chapter 0: Getting Started](00-getting-started.md)
 
+**A note on code samples:** these tutorials teach algorithms as language-agnostic pseudocode (fenced as `text`), not as compilable Zig. Each pseudocode block is followed by an **Implementation** link pointing at the real source in `src/`.
+
 ## What You'll Learn
 
 By the end of this tutorial, you'll understand:
@@ -59,7 +61,7 @@ You already know transformers and attention — jump straight to implementation:
 
 ### ⚡ **Performance Optimization**
 Focus on chapters that explain speedup techniques:
-- [**Chapter 4: Quantization**](04-quantization.md#mlx-affine-quantization) — MLX factored dequantization (30-40% speedup)
+- [**Chapter 4: Quantization**](04-quantization.md#mlx-affine-quantization) — MLX factored dequantization (fewer arithmetic ops per block)
 - [**Chapter 9: CPU SIMD**](09-cpu-simd-optimization.md) — Multi-row GEMV batching (2-4× speedup)
 - [**Chapter 13: Batched Dispatch**](13-batched-dispatch-and-fusion.md) — Qwen3.5 optimization journey (15% speedup)
 - [**Appendix: Compile-Time**](appendix-compile-time.md) — Lookup tables (20-30× for FP8 dequant)

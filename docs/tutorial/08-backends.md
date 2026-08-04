@@ -201,22 +201,21 @@ flowchart LR
     end
 ```
 
-```zig
-pub const Backend = union(enum) {
-    cpu: *CpuBackend,
-    metal: *MetalBackend,
-    vulkan: *VulkanBackend,
-    cuda: *CudaBackend,
-    rocm: *RocmBackend,
-    webgpu: *WebGpuBackend,
+```text
+type Backend = union(enum):
+    cpu:    *CpuBackend
+    metal:  *MetalBackend
+    vulkan: *VulkanBackend
+    cuda:   *CudaBackend
+    rocm:   *RocmBackend
+    webgpu: *WebGpuBackend
 
-    pub fn gemv(self: Backend, ...) void {
-        switch (self) {
-            inline else => |be| be.gemv(...),
-        }
-    }
-};
+fn gemv(self, args):
+    switch (self):
+        inline else => |be| be.gemv(args)   # resolved at compile time
 ```
+
+**Implementation:** [`src/backend/backend.zig`](../../src/backend/backend.zig) (`Backend`, `Backend.gemv`)
 
 This gives zero-overhead dispatch (no **vtable** — virtual function table used for dynamic dispatch in object-oriented languages, no function pointers) while keeping model code hardware-agnostic.
 
@@ -264,11 +263,13 @@ All GPU backends use **deferred dispatch** — operations are encoded into **com
 
 Extended SDPA that returns per-head softmax statistics for split-attention merge:
 
-```zig
-be.sdpaWithStats(q, keys, values, k_new, v_new, output,
-                 head_max, head_sum,  // per-head max and sum(exp)
-                 nh, nkv, hd, seq_len, scale, kv_type_k, kv_type_v);
+```text
+sdpaWithStats(q, keys, values, k_new, v_new, output,
+              head_max, head_sum,  # per-head max and sum(exp)
+              nh, nkv, hd, seq_len, scale, kv_type_k, kv_type_v)
 ```
+
+**Implementation:** [`src/backend/backend.zig`](../../src/backend/backend.zig) (`Backend.sdpaWithStats`)
 
 Used by the split-attention path when KV cache spans GPU and CPU tiers. The `head_max` and `head_sum` arrays enable online softmax merging of partial attention outputs from different devices.
 
@@ -278,9 +279,11 @@ Used by the split-attention path when KV cache spans GPU and CPU tiers. The `hea
 
 Paged SDPA handles non-contiguous KV cache blocks via `PagedKvView` — a block table that maps logical positions to physical blocks:
 
-```zig
-be.sdpaPaged(q, kv_view, k_new, v_new, output, nh, nkv, hd, scale, kv_type_k, kv_type_v);
+```text
+sdpaPaged(q, kv_view, k_new, v_new, output, nh, nkv, hd, scale, kv_type_k, kv_type_v)
 ```
+
+**Implementation:** [`src/backend/backend.zig`](../../src/backend/backend.zig) (`Backend.sdpaPaged`)
 
 Instead of flat `keys[t * kvd]` offset arithmetic, the kernel computes `block_table[t / block_size]` → physical block → `keys[pos_in_block * kvd]`. Models use 16-token blocks allocated on demand, so memory scales with actual sequence length rather than maximum context window.
 
@@ -382,15 +385,15 @@ flowchart TD
 
 ## Backend-Specific Notes
 
-**Metal** (`metal.zig`): MSL compute shaders with **threadgroup**-level (a group of threads that execute together and can share fast on-chip memory) `simd_sum` reduction. Buffer caching eliminates ~800 ObjC alloc/release per token. [FlashAttention-2 (Dao, 2023)](https://arxiv.org/abs/2307.08691) with block_size=16 (fits 32KB threadgroup memory). Prefill: native GEMM (f32/Q8_0/Q4_0), batched RoPE, dual-source FA2, zero per-layer flush. **Megakernel**: 70 pipelines including 11 fused FFN kernels and 5 true megakernels with atomic grid sync. Sparse V threshold in SDPA.
+**Metal** (`metal.zig`): MSL compute shaders with **threadgroup**-level (a group of threads that execute together and can share fast on-chip memory) `simd_sum` reduction. Buffer caching eliminates ~800 ObjC alloc/release per token. [FlashAttention-2 (Dao, 2023)](https://arxiv.org/abs/2307.08691) with block_size=16 (fits 32KB threadgroup memory). Prefill: native GEMM (f32/Q8_0/Q4_0), batched RoPE, dual-source FA2, zero per-layer flush. **Megakernel**: 71 pipelines including 11 fused FFN kernels and 5 true megakernels with atomic grid sync. Sparse V threshold in SDPA.
 
-**CUDA** (`cuda.zig`): Zig kernels compiled to PTX via `nvptx64-cuda` target — no CUDA C++ dependency. Driver API loaded dynamically via `dlopen`. Deferred execution with activation caching for zero-sync SDPA. Prefill: native GEMM (Q8_0), batched RMSNorm/RoPE. **Megakernel**: 43 kernels including 5 fused FFN kernels (SiLU × Q8_0/Q4_K/Q5_K/Q6_K and GELU × Q8_0) and 3 true megakernels. Sparse V threshold in SDPA.
+**CUDA** (`cuda.zig`): Zig kernels compiled to PTX via `nvptx64-cuda` target — no CUDA C++ dependency. Driver API loaded dynamically via `dlopen`. Deferred execution with activation caching for zero-sync SDPA. Prefill: native GEMM (Q8_0), batched RMSNorm/RoPE. **Megakernel**: 61 kernels including 5 fused FFN kernels (SiLU × Q8_0/Q4_K/Q5_K/Q6_K and GELU × Q8_0) and 3 true megakernels. Sparse V threshold in SDPA.
 
 **WebGPU** (`webgpu.zig`): WGSL compute shaders loaded via wgpu-native C API. Dynamic library loading (`dlopen`). Enabled by default in the build system. **Lazy readback cache**: activation buffers stay on GPU between operations — `cacheGpuResult` registers GPU output in `buf_cache`, and `getOrUpload` finds it on next access. Downloads only happen on `sync()`. This eliminates ~200 CPU↔GPU round-trips per token. ~48 WGSL compute shaders covering all core ops including quantized GEMV for all formats. Buffer lifecycle uses deferred destruction — params and cache-evicted buffers are queued for cleanup during `sync()` to avoid destroying buffers still referenced by pending command buffers.
 
 **Vulkan** (`vulkan.zig`): Pre-compiled SPIR-V compute shaders. Subgroup arithmetic for reductions. Fused single-dispatch normalization/softmax. Works on all vendors including Apple (via KosmicKrisp — use `libvulkan.1.dylib` loader, not MoltenVK directly). `sdpa_turbo` (TurboQuant KV) requires `GroupNonUniform` subgroup ops and is skipped gracefully on drivers that lack it (e.g. lavapipe/KosmicKrisp). **Disk-backed VkPipelineCache** at `~/.cache/agave/vk_pipeline_cache.bin` (1.2 MB for 49 shaders); speeds up re-init on drivers that honour it. No megakernel support.
 
-**ROCm** (`rocm.zig`): HIP Runtime API loaded dynamically. AMDGCN kernels compiled from Zig via `amdgcn-amdhsa` target. Same deferred execution pattern as CUDA. **Megakernel**: 28 kernels including 1 true megakernel (Qwen Q8). Sparse V threshold in SDPA.
+**ROCm** (`rocm.zig`): HIP Runtime API loaded dynamically. AMDGCN kernels compiled from Zig via `amdgcn-amdhsa` target. Same deferred execution pattern as CUDA. **Megakernel**: 29 kernels including 1 true megakernel (Qwen Q8). Sparse V threshold in SDPA.
 
 ---
 

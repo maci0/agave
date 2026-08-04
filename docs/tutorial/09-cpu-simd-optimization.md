@@ -67,14 +67,16 @@ flowchart LR
 
 A vector is a fixed-size array that maps to hardware SIMD registers:
 
-```zig
-const V8 = @Vector(8, f32);  // 8 × f32 = 256 bits (AVX2 register or 2 NEON registers)
+```text
+V8 = Vector(8 x f32)   # 256 bits: AVX2 register, or 2 NEON registers
 
-var a: V8 = .{1, 2, 3, 4, 5, 6, 7, 8};
-var b: V8 = .{2, 2, 2, 2, 2, 2, 2, 2};
-var c = a + b;  // Compiles to 1 instruction: vadd or vaddps
-// c = {3, 4, 5, 6, 7, 8, 9, 10}
+a = {1, 2, 3, 4, 5, 6, 7, 8}
+b = {2, 2, 2, 2, 2, 2, 2, 2}
+c = a + b              # compiles to 1 instruction: vadd / vaddps
+c = {3, 4, 5, 6, 7, 8, 9, 10}
 ```
+
+**Implementation:** [`src/backend/kernels/cpu/gemv_f32.zig`](../../src/backend/kernels/cpu/gemv_f32.zig) (`V8`)
 
 **Why 8 elements?** AVX2 (Intel/AMD) has 256-bit registers = 8 f32s. NEON (ARM) has 128-bit registers = 4 f32s, so the compiler uses 2 registers. This is the sweet spot for portable code.
 
@@ -82,15 +84,14 @@ var c = a + b;  // Compiles to 1 instruction: vadd or vaddps
 
 Vectors load from slices using array syntax:
 
-```zig
-const x: [*]const f32 = ...;  // Input data
-var i: usize = 0;
-
-while (i + 8 <= n) : (i += 8) {
-    const xv: V8 = x[i..][0..8].*;  // Load 8 consecutive f32s
-    // xv now contains x[i], x[i+1], ..., x[i+7]
-}
+```text
+i = 0
+while i + 8 <= n:
+    xv = load8(x[i..i+8])   # xv = {x[i], x[i+1], ..., x[i+7]}
+    i += 8
 ```
+
+**Implementation:** [`src/backend/kernels/cpu/gemv_f32.zig`](../../src/backend/kernels/cpu/gemv_f32.zig) (`gemvF32`)
 
 **Memory alignment matters:** SIMD loads are fastest when the address is aligned to 32 bytes (AVX2) or 16 bytes (NEON). Agave relies on the allocator providing sufficient alignment — `std.heap.page_allocator` guarantees this for large allocations.
 
@@ -98,24 +99,27 @@ while (i + 8 <= n) : (i += 8) {
 
 ### @splat — Broadcast a Scalar
 
-```zig
-const v: V8 = @splat(2.5);  // All 8 elements = 2.5
-// v = {2.5, 2.5, 2.5, 2.5, 2.5, 2.5, 2.5, 2.5}
+```text
+v = splat(2.5)   # v = {2.5, 2.5, 2.5, 2.5, 2.5, 2.5, 2.5, 2.5}, all 8 lanes
 ```
 
 Used to initialize accumulators to zero:
 
-```zig
-const v8zero: V8 = @splat(0.0);
-var acc: V8 = v8zero;
+```text
+v8zero = splat(0.0)
+acc = v8zero
 ```
+
+**Implementation:** [`src/backend/kernels/cpu/gemv_f32.zig`](../../src/backend/kernels/cpu/gemv_f32.zig) (`v8zero`)
 
 ### @reduce — Horizontal Sum
 
-```zig
-const v: V8 = .{1, 2, 3, 4, 5, 6, 7, 8};
-const sum = @reduce(.Add, v);  // sum = 36.0 (1+2+3+4+5+6+7+8)
+```text
+v = {1, 2, 3, 4, 5, 6, 7, 8}
+sum = reduce(Add, v)   # sum = 36.0 (1+2+3+4+5+6+7+8)
 ```
+
+**Implementation:** [`src/backend/kernels/cpu/gemv_f32.zig`](../../src/backend/kernels/cpu/gemv_f32.zig) (`gemvF32`, uses `@reduce(.Add, ...)`)
 
 Compiles to a **reduction tree** (pair-wise adds that preserve precision better than sequential accumulation):
 
@@ -204,11 +208,11 @@ flowchart LR
 
 **The single most important SIMD operation for inference.**
 
-```zig
-acc = @mulAdd(V8, a, b, acc);
-// Equivalent to: acc += a * b
-// But compiles to 1 instruction instead of 2
+```text
+acc = mulAdd(a, b, acc)   # acc += a * b, but 1 instruction instead of 2
 ```
+
+**Implementation:** [`src/backend/kernels/cpu/gemv_f32.zig`](../../src/backend/kernels/cpu/gemv_f32.zig) (`gemvF32`, uses `@mulAdd`)
 
 Maps to hardware FMA:
 - **NEON**: `vfma` or `vmlaq_f32` (1 cycle latency, 2× throughput)
@@ -221,16 +225,18 @@ Maps to hardware FMA:
 
 Example from f32 GEMV (dot product):
 
-```zig
-var acc: V8 = v8zero;
-var i: usize = 0;
-while (i + 8 <= k) : (i += 8) {
-    const xv: V8 = x[i..][0..8].*;
-    const wv: V8 = w[row*k + i ..][0..8].*;
-    acc = @mulAdd(V8, xv, wv, acc);  // acc += xv * wv
-}
-const dot = @reduce(.Add, acc);
+```text
+acc = v8zero
+i = 0
+while i + 8 <= k:
+    xv = load8(x[i..i+8])
+    wv = load8(w[row*k + i .. row*k + i + 8])
+    acc = mulAdd(xv, wv, acc)   # acc += xv * wv
+    i += 8
+dot = reduce(Add, acc)
 ```
+
+**Implementation:** [`src/backend/kernels/cpu/gemv_f32.zig`](../../src/backend/kernels/cpu/gemv_f32.zig) (`gemvF32`)
 
 **Performance:** On Apple M4, this achieves **~70% of peak memory bandwidth** — the bottleneck is loading `x` and `w`, not arithmetic.
 
@@ -290,69 +296,48 @@ flowchart LR
     acc3 -- "@reduce(.Add)" --> y3
 ```
 
-```zig
-pub fn gemvF32(x: [*]const f32, w: [*]const f32, y: [*]f32, n: usize, k: usize) void {
-    var row: usize = 0;
+```text
+gemvF32(x, w, y, n, k):
+    row = 0
+    while row + 4 <= n:                      # 4-row batch
+        acc0, acc1, acc2, acc3 = v8zero x 4
+        r0, r1, r2, r3 = row*k, row*k+k, row*k+2k, row*k+3k
 
-    // Process 4 rows at a time
-    while (row + 4 <= n) : (row += 4) {
-        var acc0: V8 = v8zero;
-        var acc1: V8 = v8zero;
-        var acc2: V8 = v8zero;
-        var acc3: V8 = v8zero;
+        i = 0
+        while i + 8 <= k:
+            xv = load8(x[i..i+8])             # load x ONCE
+            acc0 = mulAdd(xv, load8(w[r0+i..r0+i+8]), acc0)   # reuse xv
+            acc1 = mulAdd(xv, load8(w[r1+i..r1+i+8]), acc1)   # for all 4 rows
+            acc2 = mulAdd(xv, load8(w[r2+i..r2+i+8]), acc2)
+            acc3 = mulAdd(xv, load8(w[r3+i..r3+i+8]), acc3)
+            i += 8
 
-        const r0 = row * k;       // Offset to row 0
-        const r1 = r0 + k;        // Offset to row 1
-        const r2 = r1 + k;        // Offset to row 2
-        const r3 = r2 + k;        // Offset to row 3
+        t0, t1, t2, t3 = 0.0 x 4               # scalar tail (k % 8 remainder)
+        while i < k:
+            t0 = mulAdd(x[i], w[r0+i], t0)
+            t1 = mulAdd(x[i], w[r1+i], t1)
+            t2 = mulAdd(x[i], w[r2+i], t2)
+            t3 = mulAdd(x[i], w[r3+i], t3)
+            i += 1
 
-        var i: usize = 0;
-        while (i + 8 <= k) : (i += 8) {
-            const xv: V8 = x[i..][0..8].*;  // Load x ONCE
+        y[row..row+4] = reduce(Add, acc0) + t0, reduce(Add, acc1) + t1,
+                         reduce(Add, acc2) + t2, reduce(Add, acc3) + t3
+        row += 4
 
-            // Reuse xv for all 4 rows
-            acc0 = @mulAdd(V8, xv, @as(V8, w[r0+i..][0..8].*), acc0);
-            acc1 = @mulAdd(V8, xv, @as(V8, w[r1+i..][0..8].*), acc1);
-            acc2 = @mulAdd(V8, xv, @as(V8, w[r2+i..][0..8].*), acc2);
-            acc3 = @mulAdd(V8, xv, @as(V8, w[r3+i..][0..8].*), acc3);
-        }
-
-        // Tail loop for remaining elements (if k not multiple of 8)
-        var t0: f32 = 0.0;
-        var t1: f32 = 0.0;
-        var t2: f32 = 0.0;
-        var t3: f32 = 0.0;
-        while (i < k) : (i += 1) {
-            const xv = x[i];
-            t0 = @mulAdd(f32, xv, w[r0+i], t0);
-            t1 = @mulAdd(f32, xv, w[r1+i], t1);
-            t2 = @mulAdd(f32, xv, w[r2+i], t2);
-            t3 = @mulAdd(f32, xv, w[r3+i], t3);
-        }
-
-        // Reduce and store
-        y[row]     = @reduce(.Add, acc0) + t0;
-        y[row + 1] = @reduce(.Add, acc1) + t1;
-        y[row + 2] = @reduce(.Add, acc2) + t2;
-        y[row + 3] = @reduce(.Add, acc3) + t3;
-    }
-
-    // Remainder rows (< 4 remaining)
-    while (row < n) : (row += 1) {
-        var acc: V8 = v8zero;
-        var tail: f32 = 0.0;
-        const roff = row * k;
-        var i: usize = 0;
-        while (i + 8 <= k) : (i += 8) {
-            acc = @mulAdd(V8, @as(V8, x[i..][0..8].*), @as(V8, w[roff+i..][0..8].*), acc);
-        }
-        while (i < k) : (i += 1) {
-            tail = @mulAdd(f32, x[i], w[roff+i], tail);
-        }
-        y[row] = @reduce(.Add, acc) + tail;
-    }
-}
+    while row < n:                            # remainder rows (n % 4)
+        acc, tail = v8zero, 0.0
+        i = 0
+        while i + 8 <= k:
+            acc = mulAdd(load8(x[i..i+8]), load8(w[row*k+i..row*k+i+8]), acc)
+            i += 8
+        while i < k:
+            tail = mulAdd(x[i], w[row*k+i], tail)
+            i += 1
+        y[row] = reduce(Add, acc) + tail
+        row += 1
 ```
+
+**Implementation:** [`src/backend/kernels/cpu/gemv_f32.zig`](../../src/backend/kernels/cpu/gemv_f32.zig) (`gemvF32`)
 
 **Key insights:**
 
@@ -423,133 +408,117 @@ flowchart LR
 
 Q4_0 layout: 32 elements per block = 16 bytes (nibbles) + 2 bytes (f16 scale) = 18 bytes/block.
 
-```zig
-pub fn gemvQ4_0(x: [*]const f32, w: [*]const u8, y: [*]f32, n: usize, k: usize) void {
-    const block_size = 32;
-    const nb = (k + block_size - 1) / block_size;  // Blocks per row
+```text
+gemvQ4_0(x, w, y, n, k):
+    block_size = 32
+    nb = ceil(k / block_size)                 # blocks per row
 
-    var row: usize = 0;
-    while (row < n) : (row += 1) {
-        var sum: f32 = 0.0;
-        const row_offset = row * nb * 18;  // 18 bytes per Q4_0 block
+    for row in 0..n:
+        sum = 0.0
+        row_offset = row * nb * 18            # 18 bytes per Q4_0 block
 
-        for (0..nb) |ib| {
-            const block_offset = row_offset + ib * 18;
+        for ib in 0..nb:
+            block_offset = row_offset + ib * 18
+            scale = f16_to_f32(w[block_offset..block_offset+2])   # 2-byte f16 scale
+            quant_data = w[block_offset+2 ..]
+            x_offset = ib * block_size
 
-            // Decode scale (first 2 bytes, f16 format)
-            const scale_ptr = @as(*const f16, @ptrCast(@alignCast(&w[block_offset])));
-            const scale: f32 = @floatCast(scale_ptr.*);
+            block_sum = 0.0
+            for j in 0..16:                   # 16 bytes = 32 nibbles (2 per byte)
+                byte = quant_data[j]
+                q0 = (byte & 0xF) - 8          # low nibble -> element j
+                q1 = (byte >> 4) - 8           # high nibble -> element j + 16
+                block_sum += q0 * x[x_offset + j]
+                block_sum += q1 * x[x_offset + j + 16]
 
-            // Dequantize and accumulate 32 elements
-            const quant_data = w[block_offset + 2 ..];
-            const x_offset = ib * block_size;
-
-            var block_sum: f32 = 0.0;
-            for (0..16) |j| {  // 16 bytes = 32 nibbles (2 per byte)
-                const byte = quant_data[j];
-                const q0 = @as(i8, @intCast(byte & 0xF)) - 8;  // Low nibble -> element j
-                const q1 = @as(i8, @intCast(byte >> 4)) - 8;   // High nibble -> element j + 16
-                block_sum += @as(f32, @floatFromInt(q0)) * x[x_offset + j];
-                block_sum += @as(f32, @floatFromInt(q1)) * x[x_offset + j + 16];
-            }
-
-            sum += scale * block_sum;  // Apply scale once per block
-        }
-        y[row] = sum;
-    }
-}
+            sum += scale * block_sum          # scale applied once per block
+        y[row] = sum
 ```
+
+**Implementation:** [`src/backend/kernels/cpu/gemv_q4_0.zig`](../../src/backend/kernels/cpu/gemv_q4_0.zig) (`gemvQ4_0`)
 
 **Optimization notes:**
 
-- **Scalar loop** shown for clarity — production code uses V8 SIMD for the 32-element block
-- **Scale applied once per block** — not per element (32× fewer multiplies)
-- **Nibble extraction** via bit shifts — no lookup tables needed
+- **Scalar loop** shown for clarity, the real kernel uses V8 SIMD for the 32-element block
+- **Scale applied once per block**, not per element (32x fewer multiplies)
+- **Nibble extraction** via bit shifts, no lookup tables needed
 - **Signed offset** (`-8`) centers the quantized range at zero
-
-For the full SIMD-optimized version, see [src/backend/kernels/cpu/gemv_q4_0.zig](../../src/backend/kernels/cpu/gemv_q4_0.zig).
 
 ## Common Patterns
 
 ### Zeroing an Accumulator
 
-```zig
-const v8zero: V8 = @splat(0.0);
-var acc: V8 = v8zero;
+```text
+v8zero = splat(0.0)
+acc = v8zero
 ```
+
+**Implementation:** [`src/backend/kernels/cpu/gemv_f32.zig`](../../src/backend/kernels/cpu/gemv_f32.zig) (`v8zero`)
 
 ### Element-wise Operations
 
-```zig
-// Element-wise multiply
-const a: V8 = ...;
-const b: V8 = ...;
-const c = a * b;  // c[i] = a[i] * b[i]
-
-// Element-wise add
-const sum = a + b;
-
-// Multiply by scalar (broadcast)
-const scaled = a * @as(V8, @splat(2.0));
+```text
+c      = a * b               # c[i] = a[i] * b[i]
+sum    = a + b                # element-wise add
+scaled = a * splat(2.0)       # multiply by scalar (broadcast)
 ```
+
+**Implementation:** [`src/backend/kernels/cpu/elementwise.zig`](../../src/backend/kernels/cpu/elementwise.zig) (`add`, `mul`)
 
 ### Conditional Operations (Masking)
 
-```zig
-// Select elements based on condition
-const mask = a > @as(V8, @splat(0.0));  // Boolean vector
-const result = @select(f32, mask, a, v8zero);  // result[i] = mask[i] ? a[i] : 0.0
+```text
+mask   = a > splat(0.0)                # boolean vector
+result = select(mask, a, v8zero)       # result[i] = mask[i] ? a[i] : 0.0
 ```
 
-Used in ReLU (Rectified Linear Unit — max(0, x)):
+Used in ReLU-family activations (max(0, x)):
 
-```zig
-pub fn relu(x: [*]f32, n: usize) void {
-    const v8zero: V8 = @splat(0.0);
-    var i: usize = 0;
-    while (i + 8 <= n) : (i += 8) {
-        const xv: V8 = x[i..][0..8].*;
-        const result = @max(xv, v8zero);  // Element-wise max
-        x[i..][0..8].* = result;
-    }
-    while (i < n) : (i += 1) {
-        x[i] = @max(x[i], 0.0);
-    }
-}
+```text
+applyReluSquared(x):
+    zero = splat(0.0)
+    i = 0
+    while i + 8 <= len(x):
+        v = load8(x[i..i+8])
+        r = max(v, zero)               # element-wise max
+        x[i..i+8] = r * r              # squared for ReLU^2
+        i += 8
+    while i < len(x):
+        v = max(x[i], 0.0)
+        x[i] = v * v
+        i += 1
 ```
+
+**Implementation:** [`src/ops/math.zig`](../../src/ops/math.zig) (`applyReluSquared`, uses `@max`; production activation is ReLU^2, plain ReLU shown here for masking clarity)
 
 ### Transcendental Functions
 
 Zig provides SIMD-vectorized math builtins:
 
-```zig
-const v: V8 = ...;
-const exp_v = @exp(v);    // Element-wise e^x
-const sqrt_v = @sqrt(v);  // Element-wise √x
-const log_v = @log(v);    // Element-wise ln(x)
+```text
+exp_v  = exp(v)     # element-wise e^x
+sqrt_v = sqrt(v)    # element-wise sqrt(x)
+log_v  = log(v)     # element-wise ln(x)
 ```
 
-Used in SoftPlus activation (`log(1 + e^x)`):
+Used in Softplus activation (`log(1 + e^x)`):
 
-```zig
-pub inline fn softplus(x: f32) f32 {
-    return @log(1.0 + @exp(x));
-}
+```text
+softplus(x) = log(1.0 + exp(x))     # scalar
 
-// Vectorized version
-pub fn softplusVec(x: [*]f32, n: usize) void {
-    const v8one: V8 = @splat(1.0);
-    var i: usize = 0;
-    while (i + 8 <= n) : (i += 8) {
-        const xv: V8 = x[i..][0..8].*;
-        const result = @log(v8one + @exp(xv));
-        x[i..][0..8].* = result;
-    }
-    while (i < n) : (i += 1) {
-        x[i] = softplus(x[i]);
-    }
-}
+softplusVec(x, n):                  # vectorized
+    v8one = splat(1.0)
+    i = 0
+    while i + 8 <= n:
+        xv = load8(x[i..i+8])
+        x[i..i+8] = log(v8one + exp(xv))
+        i += 8
+    while i < n:
+        x[i] = softplus(x[i])
+        i += 1
 ```
+
+**Implementation:** [`src/ops/math.zig`](../../src/ops/math.zig) (`softplus`)
 
 **Note:** On CUDA/Metal, avoid `@exp` in GPU kernels — it compiles to a slow `libcall`. Use native GPU intrinsics instead (e.g., MSL `exp()`, CUDA `__expf()`).
 
@@ -587,41 +556,34 @@ flowchart TD
     Matrix --> Bad
 ```
 
-```zig
-// GOOD: Sequential memory access
-for (0..n_rows) |row| {
-    for (0..n_cols) |col| {
-        process(matrix[row * n_cols + col]);
-    }
-}
+```text
+# GOOD: sequential memory access
+for row in 0..n_rows:
+    for col in 0..n_cols:
+        process(matrix[row * n_cols + col])
 
-// BAD: Strided access (cache misses)
-for (0..n_cols) |col| {
-    for (0..n_rows) |row| {
-        process(matrix[row * n_cols + col]);
-    }
-}
+# BAD: strided access (cache misses)
+for col in 0..n_cols:
+    for row in 0..n_rows:
+        process(matrix[row * n_cols + col])
 ```
+
+**Implementation:** [`src/backend/kernels/cpu/gemv_f32.zig`](../../src/backend/kernels/cpu/gemv_f32.zig) (`gemvF32` iterates row-major)
 
 ### Alignment
 
 Aligned loads are faster (1 cycle vs 2-3 cycles for unaligned on some CPUs):
 
-```zig
-// Let the allocator handle alignment
-const data = try allocator.alloc(f32, n);  // Typically 16-byte aligned
-
-// For explicit control:
-const data = try allocator.alignedAlloc(f32, 32, n);  // Force 32-byte alignment
+```text
+data = allocator.alloc(f32, n)             # typically 16-byte aligned
+data = allocator.alignedAlloc(f32, 32, n)  # force 32-byte alignment
 ```
+
+**Implementation:** [`src/backend/metal.zig`](../../src/backend/metal.zig) (page-aligned KV cache allocation for zero-copy GPU access)
 
 ### Prefetching
 
-For large sequential scans, hint the CPU to prefetch:
-
-```zig
-@prefetch(ptr, .{ .rw = .read, .locality = 3, .cache = .data });
-```
+For large sequential scans, hint the CPU to prefetch: `@prefetch(ptr, .{ .rw = .read, .locality = 3, .cache = .data })`.
 
 Agave doesn't use explicit prefetching — the CPU's hardware prefetcher does well enough for sequential GEMV access.
 
@@ -629,25 +591,21 @@ Agave doesn't use explicit prefetching — the CPU's hardware prefetcher does we
 
 Branches inside SIMD loops can **serialize** (force sequential execution, losing SIMD parallelism). Use `@select` or `@max`/`@min` instead:
 
-```zig
-// BAD: Branch per element (serializes)
-for (0..n) |i| {
-    if (x[i] > 0) {
-        y[i] = x[i];
-    } else {
-        y[i] = 0;
-    }
-}
+```text
+# BAD: branch per element (serializes)
+for i in 0..n:
+    y[i] = x[i] if x[i] > 0 else 0
 
-// GOOD: SIMD-friendly (no branches)
-var i: usize = 0;
-const v8zero: V8 = @splat(0.0);
-while (i + 8 <= n) : (i += 8) {
-    const xv: V8 = x[i..][0..8].*;
-    const yv = @max(xv, v8zero);
-    y[i..][0..8].* = yv;
-}
+# GOOD: SIMD-friendly (no branches)
+v8zero = splat(0.0)
+i = 0
+while i + 8 <= n:
+    xv = load8(x[i..i+8])
+    y[i..i+8] = max(xv, v8zero)
+    i += 8
 ```
+
+**Implementation:** [`src/ops/math.zig`](../../src/ops/math.zig) (`applyReluSquared`, branch-free `@max`)
 
 ## Real-World Example: RMSNorm
 
@@ -689,50 +647,44 @@ flowchart TD
 
 (simplified for clarity -- the real implementation in norm.zig uses 4-accumulator unrolling with a stride-32 inner loop to hide FMA latency)
 
-```zig
-pub fn rmsNorm(input: [*]const f32, weight: [*]const f32, output: [*]f32, n: usize, eps: f32) void {
-    // Pass 1: Compute mean of squares
-    var sum_sq: f32 = 0.0;
-    {
-        var acc: V8 = @splat(0.0);
-        var i: usize = 0;
-        while (i + 8 <= n) : (i += 8) {
-            const xv: V8 = input[i..][0..8].*;
-            acc = @mulAdd(V8, xv, xv, acc);  // acc += xv * xv
-        }
-        sum_sq = @reduce(.Add, acc);
-        while (i < n) : (i += 1) {
-            sum_sq = @mulAdd(f32, input[i], input[i], sum_sq);
-        }
-    }
+```text
+rmsNorm(input, weight, output, n, eps):
+    # Pass 1: mean of squares
+    acc = splat(0.0)
+    i = 0
+    while i + 8 <= n:
+        xv = load8(input[i..i+8])
+        acc = mulAdd(xv, xv, acc)      # acc += xv * xv
+        i += 8
+    sum_sq = reduce(Add, acc)
+    while i < n:
+        sum_sq = mulAdd(input[i], input[i], sum_sq)
+        i += 1
 
-    const rms = @sqrt(sum_sq / @as(f32, @floatFromInt(n)) + eps);
-    const scale = 1.0 / rms;
+    rms = sqrt(sum_sq / n + eps)
+    scale = 1.0 / rms
 
-    // Pass 2: Normalize and apply weight
-    {
-        const scale_v: V8 = @splat(scale);
-        var i: usize = 0;
-        while (i + 8 <= n) : (i += 8) {
-            const xv: V8 = input[i..][0..8].*;
-            const wv: V8 = weight[i..][0..8].*;
-            const normalized = xv * scale_v;
-            const weighted = normalized * wv;
-            output[i..][0..8].* = weighted;
-        }
-        while (i < n) : (i += 1) {
-            output[i] = (input[i] * scale) * weight[i];
-        }
-    }
-}
+    # Pass 2: normalize and apply weight
+    scale_v = splat(scale)
+    i = 0
+    while i + 8 <= n:
+        xv = load8(input[i..i+8])
+        wv = load8(weight[i..i+8])
+        output[i..i+8] = xv * scale_v * wv
+        i += 8
+    while i < n:
+        output[i] = input[i] * scale * weight[i]
+        i += 1
 ```
+
+**Implementation:** [`src/backend/kernels/cpu/norm.zig`](../../src/backend/kernels/cpu/norm.zig) (`rmsNorm`)
 
 **Optimizations:**
 
-- **FMA for squares** — `@mulAdd(V8, xv, xv, acc)` is 1 instruction
-- **Horizontal sum** — `@reduce(.Add, acc)` for final sum
-- **Broadcast scale** — `@splat(scale)` once, reuse for all elements
-- **Fused normalize+weight** — both in one loop (cache-friendly)
+- **FMA for squares**, `@mulAdd(V8, xv, xv, acc)` is 1 instruction
+- **Horizontal sum**, `@reduce(.Add, acc)` for final sum
+- **Broadcast scale**, `@splat(scale)` once, reuse for all elements
+- **Fused normalize+weight**, both in one loop (cache-friendly)
 
 **Alternative:** GPU backends can fuse both passes into a single kernel using **threadgroup reductions** (parallel sum across threads, not sequential).
 
@@ -775,22 +727,20 @@ flowchart TD
     Sparsity --> Check
 ```
 
-```zig
-// Before processing each weight block, check if input is negligible
-for (0..nb) |b| {
-    if (isBlockSparse(x, b * block_size, block_size)) continue;
-    // ... normal dequant + MAC ...
-}
+```text
+for b in 0..nb:                                        # before each weight block
+    if isBlockSparse(x, b * block_size, block_size):
+        continue                                        # skip dequant + dot entirely
+    # ... normal dequant + MAC ...
 ```
+
+**Implementation:** [`src/backend/kernels/cpu/gemv.zig`](../../src/backend/kernels/cpu/gemv.zig) (`isBlockSparse`, `sparse_threshold`)
 
 `isBlockSparse` uses SIMD max-abs reduction (~1 cycle per 8 elements) to check if all block inputs are below threshold. If so, the entire block (dequant + dot product) is skipped.
 
-**Measured speedup (Qwen3.5 on M4 Pro CPU):**
-- Q8_0: +21% decode throughput
-- Q4_K_M: +23% decode throughput
-- Output identical — threshold only controls whether to compute, not what values to use
+**Expected effect:** Skipping near-zero activation blocks cuts CPU GEMV work on SiLU models (roughly ~40% sparse). Exact Qwen3.5 CPU decode deltas are not recorded in `docs/BENCHMARKS.md`; Metal decode figures that mention sparse GEMV live there instead. Output stays identical: the threshold only controls whether to compute, not what values to use.
 
-This is inspired by [PowerInfer](https://github.com/Tiiny-AI/PowerInfer) and [TurboSparse](https://arxiv.org/abs/2406.05955), which exploit activation sparsity for 2-5× speedup on ReLU models (90%+ sparsity). SiLU models have lower sparsity (~40%) but still benefit significantly.
+This is inspired by [PowerInfer](https://github.com/Tiiny-AI/PowerInfer) and [TurboSparse](https://arxiv.org/abs/2406.05955), which exploit activation sparsity for large speedups on ReLU models (90%+ sparsity). SiLU models have lower sparsity but still benefit.
 
 **Why CPU only?** GPU kernels are bandwidth-bound (waiting for memory, not compute). Adding branch checks to GPU shaders causes thread divergence which hurts performance. CPU GEMV is compute-bound (sequential dot products), so skipping blocks is pure win.
 

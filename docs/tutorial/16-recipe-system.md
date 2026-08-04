@@ -12,17 +12,17 @@ The **recipe system** provides **proven defaults** for specific scenarios while 
 
 **Bad pattern** (scattered magic numbers):
 
-```zig
-// In qwen35.zig
-const default_temperature = 0.6;
-const default_ctx = 4096;
+```text
+# in qwen35.zig
+default_temperature = 0.6
+default_ctx = 4096
 
-// In gemma3.zig
-const default_temperature = 0.7;
-const default_ctx = 8192;
+# in gemma3.zig
+default_temperature = 0.7
+default_ctx = 8192
 
-// In main.zig
-const cli_temp = args.temperature orelse model.default_temperature;
+# in main.zig
+cli_temp = args.temperature orelse model.default_temperature
 ```
 
 **Problems:**
@@ -38,17 +38,18 @@ A **recipe** is a named set of optional parameter defaults matched by **architec
 
 ### Recipe Structure
 
-```zig
-pub const Recipe = struct {
-    name: []const u8 = "default",
-    temperature: ?f32 = null,
-    top_p: ?f32 = null,
-    top_k: ?u32 = null,
-    repeat_penalty: ?f32 = null,
-    max_tokens: ?u32 = null,
-    ctx_size: ?u32 = null,
-};
+```text
+Recipe:
+  name: string = "default"
+  temperature: f32? = null
+  top_p: f32? = null
+  top_k: u32? = null
+  repeat_penalty: f32? = null
+  max_tokens: u32? = null
+  ctx_size: u32? = null
 ```
+
+**Implementation:** [`src/recipe.zig`](../../src/recipe.zig) (`Recipe`)
 
 **Key insight:** All fields are `?T` (optional). `null` means "use the CLI default / model default".
 
@@ -102,73 +103,34 @@ graph TD
 
 ### Preset Recipes
 
-```zig
-const presets = [_]Preset{
-    // Small models on Metal — responsive chat defaults
-    .{
-        .arch_prefix = "qwen3",
-        .backend = "Metal",
-        .quant = "Q4",
-        .recipe = .{
-            .name = "Qwen3.5 Q4 Metal",
-            .temperature = 0.6,
-            .top_p = 0.9,
-            .repeat_penalty = 1.1,
-            .max_tokens = 1024,
-            // ctx_size = null (use model default)
-        },
-    },
-    .{
-        .arch_prefix = "gemma",
-        .backend = "Metal",
-        .quant = "Q4",
-        .recipe = .{
-            .name = "Gemma Q4 Metal",
-            .temperature = 0.7,
-            .top_p = 0.95,
-            .repeat_penalty = 1.05,
-            .max_tokens = 1024,
-        },
-    },
-    // Large MoE on Metal — conservative to avoid OOM
-    .{
-        .arch_prefix = "gpt",
-        .backend = "Metal",
-        .quant = "",  // Any quantization
-        .recipe = .{
-            .name = "GPT-OSS Metal",
-            .temperature = 0.5,
-            .top_p = 0.9,
-            .max_tokens = 512,
-            .ctx_size = 2048,  // Limit context to prevent OOM
-        },
-    },
-    // GLM-4 — needs repeat penalty to avoid greedy loops
-    .{
-        .arch_prefix = "glm4",
-        .backend = "",
-        .quant = "",
-        .recipe = .{
-            .name = "GLM-4 generic",
-            .temperature = 0.7,
-            .repeat_penalty = 1.1,
-            .max_tokens = 1024,
-        },
-    },
-    // CPU-only — smaller batches, lower context
-    .{
-        .arch_prefix = "",  // Any model
-        .backend = "CPU",
-        .quant = "",
-        .recipe = .{
-            .name = "CPU generic",
-            .max_tokens = 256,
-            .ctx_size = 2048,
-            // temperature/top_p = null (use CLI defaults)
-        },
-    },
-};
+```text
+presets = [
+    # small models on Metal, responsive chat defaults
+    { arch_prefix: "qwen3", backend: "Metal", quant: "Q4",
+      recipe: { name: "Qwen3.5 Q4 Metal", temperature: 0.6, top_p: 0.9,
+                repeat_penalty: 1.1, max_tokens: 1024 } },   # ctx_size = null (use model default)
+
+    { arch_prefix: "gemma", backend: "Metal", quant: "Q4",
+      recipe: { name: "Gemma Q4 Metal", temperature: 0.7, top_p: 0.95,
+                repeat_penalty: 1.05, max_tokens: 1024 } },
+
+    # large MoE on Metal, conservative to avoid OOM
+    { arch_prefix: "gpt", backend: "Metal", quant: "",   # any quantization
+      recipe: { name: "GPT-OSS Metal", temperature: 0.5, top_p: 0.9,
+                max_tokens: 512, ctx_size: 2048 } },       # limit context to prevent OOM
+
+    # GLM-4, needs repeat penalty to avoid greedy loops
+    { arch_prefix: "glm4", backend: "", quant: "",
+      recipe: { name: "GLM-4 generic", temperature: 0.7, repeat_penalty: 1.1,
+                max_tokens: 1024 } },
+
+    # CPU-only, smaller batches, lower context
+    { arch_prefix: "", backend: "CPU", quant: "",         # any model
+      recipe: { name: "CPU generic", max_tokens: 256, ctx_size: 2048 } },  # temperature/top_p = null (use CLI defaults)
+]
 ```
+
+**Implementation:** [`src/recipe.zig`](../../src/recipe.zig) (`presets`, `Preset`)
 
 ### Matching Logic
 
@@ -208,22 +170,21 @@ flowchart TD
     More -- "no" --> Miss
 ```
 
-```zig
-pub fn match(arch: []const u8, backend: []const u8, quant: []const u8) ?Recipe {
-    for (presets) |p| {
-        if (p.matches(arch, backend, quant)) return p.recipe;
-    }
-    return null;  // No match → use Recipe.default (all nulls)
-}
+```text
+match(arch, backend, quant) -> Recipe?:
+    for p in presets:
+        if p.matches(arch, backend, quant): return p.recipe
+    return null   # no match -> use Recipe.default (all nulls)
 
-fn matches(self: Preset, arch: []const u8, be: []const u8, q: []const u8) bool {
-    // Empty string = wildcard (matches anything)
-    if (self.arch_prefix.len > 0 and !std.mem.startsWith(u8, arch, self.arch_prefix)) return false;
-    if (self.backend.len > 0 and !std.mem.eql(u8, be, self.backend)) return false;
-    if (self.quant.len > 0 and !std.mem.startsWith(u8, q, self.quant)) return false;
-    return true;
-}
+Preset.matches(self, arch, be, q) -> bool:
+    # empty string = wildcard (matches anything)
+    if self.arch_prefix != "" and not arch.startsWith(self.arch_prefix): return false
+    if self.backend != "" and be != self.backend: return false
+    if self.quant != "" and not q.startsWith(self.quant): return false
+    return true
 ```
+
+**Implementation:** [`src/recipe.zig`](../../src/recipe.zig) (`Recipe.match`, `Preset.matches`)
 
 **Matching rules:**
 
@@ -272,33 +233,34 @@ flowchart LR
 
 ### Override Tracking
 
-```zig
-pub const Overrides = struct {
-    temperature: bool = false,
-    top_p: bool = false,
-    top_k: bool = false,
-    repeat_penalty: bool = false,
-    max_tokens: bool = false,
-    ctx_size: bool = false,
-};
+```text
+Overrides:
+  temperature: bool = false
+  top_p: bool = false
+  top_k: bool = false
+  repeat_penalty: bool = false
+  max_tokens: bool = false
+  ctx_size: bool = false
 ```
+
+**Implementation:** [`src/recipe.zig`](../../src/recipe.zig) (`Recipe.Overrides`)
 
 **Set in main.zig:**
 
-```zig
-var overrides = Recipe.Overrides{};
+```text
+overrides = Recipe.Overrides{}
 
-// Parse CLI args
-if (args.temperature) |t| {
-    overrides.temperature = true;
-    temperature = t;
-}
-if (args.top_p) |p| {
-    overrides.top_p = true;
-    top_p = p;
-}
-// ... etc
+# parse CLI args
+if t = args.temperature:
+    overrides.temperature = true
+    temperature = t
+if p = args.top_p:
+    overrides.top_p = true
+    top_p = p
+# ... etc
 ```
+
+**Implementation:** [`src/main.zig`](../../src/main.zig) (CLI override tracking)
 
 ### Override Flag Mapping
 
@@ -377,34 +339,24 @@ flowchart TD
 
 ### Applying Defaults
 
-```zig
-pub fn applyDefaults(
-    self: Recipe,
-    temperature: f32,      // Current value (CLI default or user-provided)
-    top_p: f32,
-    top_k: u32,
-    repeat_penalty: f32,
-    max_tokens: u32,
-    ctx_size: u32,
-    user_set: Overrides,   // Which values the user explicitly set
-) Applied {
-    return .{
-        // If user set temperature → use user value
-        // Else if recipe has temperature → use recipe value
-        // Else → use CLI default
-        .temperature = if (user_set.temperature)
-            temperature
-        else
-            self.temperature orelse temperature,
-
-        .top_p = if (user_set.top_p) top_p else self.top_p orelse top_p,
-        .top_k = if (user_set.top_k) top_k else self.top_k orelse top_k,
-        .repeat_penalty = if (user_set.repeat_penalty) repeat_penalty else self.repeat_penalty orelse repeat_penalty,
-        .max_tokens = if (user_set.max_tokens) max_tokens else self.max_tokens orelse max_tokens,
-        .ctx_size = if (user_set.ctx_size) ctx_size else self.ctx_size orelse ctx_size,
-    };
-}
+```text
+applyDefaults(self: Recipe, temperature, top_p, top_k, repeat_penalty, max_tokens, ctx_size,
+              user_set: Overrides) -> Applied:
+    # temperature: current value is the CLI default or user-provided value
+    # if user set it -> use that value
+    # else if recipe has a value -> use recipe value
+    # else -> the current value already holds the CLI default
+    return Applied{
+        temperature:     temperature     if user_set.temperature     else (self.temperature     orelse temperature),
+        top_p:           top_p           if user_set.top_p           else (self.top_p           orelse top_p),
+        top_k:           top_k           if user_set.top_k           else (self.top_k           orelse top_k),
+        repeat_penalty:  repeat_penalty  if user_set.repeat_penalty  else (self.repeat_penalty  orelse repeat_penalty),
+        max_tokens:      max_tokens      if user_set.max_tokens      else (self.max_tokens      orelse max_tokens),
+        ctx_size:        ctx_size        if user_set.ctx_size        else (self.ctx_size        orelse ctx_size),
+    }
 ```
+
+**Implementation:** [`src/recipe.zig`](../../src/recipe.zig) (`Recipe.applyDefaults`)
 
 **Precedence (highest to lowest):**
 
@@ -438,43 +390,38 @@ sequenceDiagram
     Main->>Inf: run inference with final config
 ```
 
-```zig
-// 1. Detect architecture, backend, quantization
-const arch = try Arch.detect(fmt);
-const backend_name = if (args.backend) |b| b else detectDefaultBackend();
-const quant = detectQuantization(fmt);
+```text
+# 1. detect architecture, backend, quantization
+arch = Arch.detect(fmt)
+backend_name = args.backend orelse detectDefaultBackend()
+quant = detectQuantization(fmt)
 
-// 2. Match recipe
-const recipe = Recipe.match(arch.displayName(), backend_name, quant) orelse Recipe.default;
+# 2. match recipe
+recipe = Recipe.match(arch.displayName(), backend_name, quant) orelse Recipe.default
+log("Using recipe: " + recipe.name)
 
-std.log.info("Using recipe: {s}", .{recipe.name});
+# 3. parse CLI args, track overrides
+overrides = Recipe.Overrides{}
+temperature = 0.0   # CLI default
+top_p = 1.0
+# ... etc
 
-// 3. Parse CLI args, track overrides
-var overrides = Recipe.Overrides{};
-var temperature: f32 = 0.0;  // CLI default
-var top_p: f32 = 1.0;
-// ... etc
+if t = args.temperature:
+    overrides.temperature = true
+    temperature = t
+if p = args.top_p:
+    overrides.top_p = true
+    top_p = p
+# ... etc
 
-if (args.temperature) |t| {
-    overrides.temperature = true;
-    temperature = t;
-}
-if (args.top_p) |p| {
-    overrides.top_p = true;
-    top_p = p;
-}
-// ... etc
+# 4. apply recipe defaults (respecting user overrides)
+cfg = recipe.applyDefaults(temperature, top_p, top_k, repeat_penalty, max_tokens, ctx_size, overrides)
 
-// 4. Apply recipe defaults (respecting user overrides)
-const cfg = recipe.applyDefaults(
-    temperature, top_p, top_k, repeat_penalty, max_tokens, ctx_size,
-    overrides
-);
-
-// 5. Use cfg values
-std.log.info("Temperature: {d}, Top-P: {d}, Max tokens: {d}",
-    .{cfg.temperature, cfg.top_p, cfg.max_tokens});
+# 5. use cfg values
+log("Temperature: " + cfg.temperature + ", Top-P: " + cfg.top_p + ", Max tokens: " + cfg.max_tokens)
 ```
+
+**Implementation:** [`src/main.zig`](../../src/main.zig) (recipe matching and application)
 
 ### Example: Qwen3.5 Q4 on Metal
 
@@ -563,19 +510,19 @@ graph LR
     end
 ```
 
-```zig
-const presets = [_]Preset{
-    // 1. Exact match: specific model + backend + quant
-    .{ .arch_prefix = "qwen35", .backend = "Metal", .quant = "MLX_4bit", .recipe = ... },
+```text
+presets = [
+    # 1. exact match: specific model + backend + quant
+    { arch_prefix: "qwen35", backend: "Metal", quant: "MLX_4bit", recipe: ... },
 
-    // 2. Model + backend (any quant)
-    .{ .arch_prefix = "qwen3", .backend = "Metal", .quant = "", .recipe = ... },
+    # 2. model + backend (any quant)
+    { arch_prefix: "qwen3", backend: "Metal", quant: "", recipe: ... },
 
-    // 3. Backend-only (any model, any quant)
-    .{ .arch_prefix = "", .backend = "CPU", .quant = "", .recipe = ... },
+    # 3. backend-only (any model, any quant)
+    { arch_prefix: "", backend: "CPU", quant: "", recipe: ... },
 
-    // Recipe.default is the final fallback (all nulls)
-};
+    # Recipe.default is the final fallback (all nulls)
+]
 ```
 
 **Why order matters:** First match wins. Specific recipes must come before generic ones.
@@ -595,13 +542,13 @@ const presets = [_]Preset{
 
 **Example:**
 
-```zig
-.recipe = .{
-    .name = "GPT-OSS Metal",
-    .temperature = 0.5,        // Set (model-specific optimal)
-    .top_p = null,             // Omit (user should choose based on use case)
-    .max_tokens = 512,         // Set (reasonable limit)
-    .ctx_size = 2048,          // Set (prevents OOM on 64GB machines)
+```text
+recipe = {
+  name: "GPT-OSS Metal"
+  temperature: 0.5,   # set (model-specific optimal)
+  top_p: null,        # omit (user should choose based on use case)
+  max_tokens: 512,    # set (reasonable limit)
+  ctx_size: 2048,     # set (prevents OOM on 64GB machines)
 }
 ```
 
@@ -609,16 +556,15 @@ const presets = [_]Preset{
 
 ### CPU Generic (Conservative)
 
-```zig
-.{
-    .arch_prefix = "",  // Any model
-    .backend = "CPU",
-    .quant = "",        // Any quantization
-    .recipe = .{
-        .name = "CPU generic",
-        .max_tokens = 256,      // Faster generation
-        .ctx_size = 2048,       // Lower memory
-    },
+```text
+{ arch_prefix: "",   # any model
+  backend: "CPU",
+  quant: "",         # any quantization
+  recipe: {
+    name: "CPU generic",
+    max_tokens: 256,   # faster generation
+    ctx_size: 2048,    # lower memory
+  },
 }
 ```
 
@@ -626,18 +572,17 @@ const presets = [_]Preset{
 
 ### GPT-OSS (MoE, Conservative)
 
-```zig
-.{
-    .arch_prefix = "gpt",
-    .backend = "Metal",
-    .quant = "",
-    .recipe = .{
-        .name = "GPT-OSS Metal",
-        .temperature = 0.5,    // Lower temp for reasoning model
-        .top_p = 0.9,
-        .ctx_size = 2048,      // MoE uses more memory, limit context
-        .max_tokens = 512,     // Prevent excessive generation
-    },
+```text
+{ arch_prefix: "gpt",
+  backend: "Metal",
+  quant: "",
+  recipe: {
+    name: "GPT-OSS Metal",
+    temperature: 0.5,   # lower temp for reasoning model
+    top_p: 0.9,
+    ctx_size: 2048,      # MoE uses more memory, limit context
+    max_tokens: 512,     # prevent excessive generation
+  },
 }
 ```
 
@@ -649,12 +594,11 @@ const presets = [_]Preset{
 
 **Potential:** Recipes could compute defaults based on available memory:
 
-```zig
-pub fn computeCtxSize(avail_mem: usize, model_size: usize) u32 {
-    const kv_per_token = 256;  // Bytes per token (approx)
-    const safe_mem = avail_mem * 0.7;  // Leave 30% free
-    return @min(16384, (safe_mem - model_size) / kv_per_token);
-}
+```text
+computeCtxSize(avail_mem, model_size) -> u32:
+    kv_per_token = 256           # bytes per token, approx
+    safe_mem = avail_mem * 0.7   # leave 30% free
+    return min(16384, (safe_mem - model_size) / kv_per_token)
 ```
 
 **Not implemented** — recipes are currently static.
@@ -682,55 +626,47 @@ pub fn computeCtxSize(avail_mem: usize, model_size: usize) u32 {
 
 ## Testing Recipes
 
-```zig
-test "recipe match exact" {
-    const r = Recipe.match("qwen35", "Metal", "Q4_K") orelse Recipe.default;
-    try std.testing.expectEqualStrings("Qwen3.5 Q4 Metal", r.name);
-    try std.testing.expectApproxEqAbs(@as(f32, 0.6), r.temperature.?, 0.001);
-}
+```text
+test "recipe match exact":
+    r = Recipe.match("qwen35", "Metal", "Q4_K") orelse Recipe.default
+    assert r.name == "Qwen3.5 Q4 Metal"
+    assert approxEqual(r.temperature, 0.6)
 
-test "recipe match glm4 gets GLM-4 recipe" {
-    const r = Recipe.match("glm4", "CPU", "Q4_0") orelse Recipe.default;
-    try std.testing.expectEqualStrings("GLM-4 generic", r.name);
-    try std.testing.expectApproxEqAbs(@as(f32, 1.1), r.repeat_penalty.?, 0.001);
-}
+test "recipe match glm4 gets GLM-4 recipe":
+    r = Recipe.match("glm4", "CPU", "Q4_0") orelse Recipe.default
+    assert r.name == "GLM-4 generic"
+    assert approxEqual(r.repeat_penalty, 1.1)
 
-test "recipe match falls through to CPU generic" {
-    const r = Recipe.match("unknown_cpu_arch", "CPU", "Q4_0") orelse Recipe.default;
-    try std.testing.expectEqualStrings("CPU generic", r.name);
-}
+test "recipe match falls through to CPU generic":
+    r = Recipe.match("unknown_cpu_arch", "CPU", "Q4_0") orelse Recipe.default
+    assert r.name == "CPU generic"
 
-test "recipe no match returns null" {
-    const r = Recipe.match("unknown_arch", "Vulkan", "F32");
-    try std.testing.expect(r == null);
-}
+test "recipe no match returns null":
+    r = Recipe.match("unknown_arch", "Vulkan", "F32")
+    assert r == null
 
-test "user override priority" {
-    const recipe = Recipe{
-        .temperature = 0.6,
-        .top_p = 0.9,
-        .max_tokens = 1024,
-    };
+test "user override priority":
+    recipe = Recipe{ temperature: 0.6, top_p: 0.9, max_tokens: 1024 }
 
-    // User sets temperature only
-    var overrides = Recipe.Overrides{};
-    overrides.temperature = true;
+    # user sets temperature only
+    overrides = Recipe.Overrides{ temperature: true }
 
-    const cfg = recipe.applyDefaults(
-        0.3,  // User's temperature
-        0.8,  // CLI default top_p
-        50,   // CLI default top_k
-        1.0,  // CLI default repeat_penalty
-        512,  // CLI default max_tokens
-        4096, // CLI default ctx_size
-        overrides
-    );
+    cfg = recipe.applyDefaults(
+        temperature = 0.3,      # user's temperature
+        top_p = 0.8,            # CLI default
+        top_k = 50,             # CLI default
+        repeat_penalty = 1.0,   # CLI default
+        max_tokens = 512,       # CLI default
+        ctx_size = 4096,        # CLI default
+        overrides,
+    )
 
-    try std.testing.expectEqual(@as(f32, 0.3), cfg.temperature);  // User value
-    try std.testing.expectEqual(@as(f32, 0.9), cfg.top_p);        // Recipe value
-    try std.testing.expectEqual(@as(u32, 1024), cfg.max_tokens);  // Recipe value
-}
+    assert cfg.temperature == 0.3    # user value
+    assert cfg.top_p == 0.9          # recipe value
+    assert cfg.max_tokens == 1024    # recipe value
 ```
+
+**Implementation:** [`src/recipe.zig`](../../src/recipe.zig) (recipe matching and `applyDefaults` tests)
 
 ## Best Practices
 

@@ -376,23 +376,17 @@ The key insight: the same pretokens appear repeatedly. In any English prompt, wo
 
 Agave's tokenizer caches these results in `word_cache: StringHashMapUnmanaged([]u32)`:
 
-```zig
-// Before applyBpe: check cache
-if (self.word_cache.get(seg)) |cached_ids| {
-    try result.appendSlice(self.allocator, cached_ids);
-} else {
-    // Run the full BPE pipeline
-    const unicode_text = try self.bytesToUnicode(seg);
-    // ... bytesToUnicode → splitUtfChars → applyBpe ...
-
-    // Store result in cache for future calls
-    const owned_key = try self.allocator.dupe(u8, seg);
-    const owned_val = try self.allocator.dupe(u32, seg_ids);
-    try self.word_cache.put(self.allocator, owned_key, owned_val);
-}
+```text
+lookup seg in word_cache
+if hit:  append cached token ids to result          # skip merge loop entirely
+if miss: unicode_text = bytesToUnicode(seg)
+         seg_ids = splitUtfChars(unicode_text) → applyBpe(...)
+         store (seg copy, seg_ids copy) in word_cache for future calls
 ```
 
-On cache hit, three allocations and the entire merge loop are skipped. On a typical prompt with a 50-word system prompt, roughly 80–90% of pretokens will hit the cache after the first call.
+**Implementation:** [`src/tokenizer/bpe.zig`](../../src/tokenizer/bpe.zig) (`word_cache`, `applyBpe`)
+
+On cache hit, three allocations and the entire merge loop are skipped. In practice, most pretokens in a repeated system prompt hit the cache after the first call (illustrative estimate, not a BENCHMARKS.md measurement).
 
 This technique is adapted from [gigatoken](https://github.com/marcelroed/gigatoken), which applies the same principle at much larger scale for training data ingestion.
 

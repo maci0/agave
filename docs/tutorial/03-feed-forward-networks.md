@@ -140,7 +140,7 @@ flowchart TD
 ```
 
 ```
-1. Router: scores = softmax(hidden @ gate_weight)     # score each expert (Qwen 3.5 MoE: softmax+top-8; GPT-OSS: sigmoid+top-4)
+1. Router: scores = softmax(hidden @ gate_weight)     # score each expert (Qwen 3.5 MoE: softmax+top-8; GPT-OSS: top-4 then softmax)
 2. Select: top_k = top-8 experts by score             # pick best K
 3. Normalize: weights = softmax(top_k_scores)         # normalize selected
 4. Compute: output = Σ weight[i] * expert_i(hidden)   # weighted sum (each expert's output multiplied by its weight, then added together)
@@ -182,7 +182,7 @@ Expert selection uses **stack-allocated** arrays (fixed-size buffers on the call
 | :--- | :--- | :--- | :--- | :--- |
 | Qwen 3.5/3.6 MoE | 256 | 8 | Yes (1) | Softmax |
 | GPT-OSS | 32 | 4 | No | Softmax |
-| GLM-4 | varies | varies | No | Sigmoid (independent gates) |
+| GLM-4 | varies | varies | Yes (1) | Sigmoid (independent gates) |
 | Nemotron-Nano | 128 | 6 | Yes (1, 2x routed FFN dim) | Sigmoid |
 | Gemma 4 26B-A4B | 128 | 8 | No (dual path: dense + MoE per layer) | Softmax |
 
@@ -250,7 +250,7 @@ Memory footprint is identical between the two rows; only the multiply count drop
 Expert weights are stored as 3D tensors: `[n_experts, rows, cols]`. The **expert stride** is the byte offset between consecutive experts. For quantized formats (Q4_K, Q8_0), the stride accounts for block structure:
 
 ```
-expert_stride = dims[0] * dims[1]    (for 3D: per-expert = rows × cols, element count only)
+expert_stride = dims[1] * dims[2]    (for 3D [n_experts, rows, cols]: per-expert = rows × cols, element count only)
 expert_data = base_ptr + expert_id * stride
 ```
 
@@ -309,13 +309,13 @@ flowchart TD
     end
 ```
 
-```zig
-const ops = [_]GemvOp{
-    .{ .w = .{ .data = gate_data, .dtype = gate_exps.dtype }, .y = gate_buf, .n = ff },
-    .{ .w = .{ .data = up_data,  .dtype = up_exps.dtype  }, .y = up_buf,  .n = ff },
-};
-be.gemvMulti(input, &ops, k);
+```text
+ops = [ {w: gate_data, dtype: gate.dtype, y: gate_buf, n: ff},
+        {w: up_data,   dtype: up.dtype,   y: up_buf,   n: ff} ]
+be.gemvMulti(input, ops, k)        # one thread-pool dispatch, both rows in parallel
 ```
+
+**Implementation:** [`src/backend/backend.zig`](../../src/backend/backend.zig) (`GemvOp`, `gemvMulti`), [`src/models/gpt_oss.zig`](../../src/models/gpt_oss.zig) (batched expert gate+up dispatch)
 
 ## Megakernel Fusion
 
@@ -363,9 +363,9 @@ Enable with `--megakernel`. See [Chapter 13](13-batched-dispatch-and-fusion.md) 
 
 ## Gotchas
 
-**Expert stride isn't a plain element count for quantized formats**: `expert_stride = dims[0] * dims[1]` (the formula in [Expert Weight Layout](#expert-weight-layout)) gives the *element* count per expert, not the byte offset. `expertWeightStride()` (`src/models/model.zig`) is the format-aware function that actually computes the byte stride, accounting for block headers in Q4_K/Q8_0 and the packed-nibble layout in NVFP4. Reimplementing the raw multiply instead of calling this function silently misreads every expert past the first.
+**Expert stride isn't a plain element count for quantized formats**: `expert_stride = dims[1] * dims[2]` (the formula in [Expert Weight Layout](#expert-weight-layout)) gives the *element* count per expert, not the byte offset. `expertWeightStride()` (`src/models/model.zig`) is the format-aware function that actually computes the byte stride, accounting for block headers in Q4_K/Q8_0 and the packed-nibble layout in NVFP4. Reimplementing the raw multiply instead of calling this function silently misreads every expert past the first.
 
-**Clamp before mixed-precision expert compute**: GPT-OSS's clamped SwiGLU forces gate/up activations into `[-7.0, +7.0]` before the expert FFN runs. Skipping the clamp when wiring a new MoE model risks overflow in the lower-precision accumulation path, producing NaNs that only show up with certain input distributions.
+**Clamp before mixed-precision expert compute**: GPT-OSS's clamped SwiGLU clamps the `silu(gate) * up` product into `[-7.0, +7.0]` after the gate/up activation is computed. Skipping the clamp when wiring a new MoE model risks overflow in the lower-precision accumulation path, producing NaNs that only show up with certain input distributions.
 
 **`gemvMulti` assumes a shared input vector**: Batched expert dispatch (`gemvMulti`) parallelizes gate+up GEMVs for multiple experts against the *same* `x`. It's only valid when all batched ops read the same input: mixing GEMVs from different tokens or different hidden states into one `gemvMulti` call silently computes the wrong outputs for whichever ops don't share `x`.
 

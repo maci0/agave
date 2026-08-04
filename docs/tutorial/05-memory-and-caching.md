@@ -45,6 +45,10 @@ flowchart LR
         C3
     end
 ```
+
+The cache grows one slot per token, one slot per layer, per KV head:
+
+```
 Token 1: compute K₁, V₁, store in cache
 Token 2: compute K₂, V₂, store in cache, attend to [K₁,K₂], [V₁,V₂]
 Token 3: compute K₃, V₃, store in cache, attend to [K₁,K₂,K₃], [V₁,V₂,V₃]
@@ -171,7 +175,7 @@ All share the same storage format (f16 norm + Lloyd-Max packed indices) and code
 
 The preset also enables **boundary V protection** — the first and last 2 transformer layers keep V at f16 regardless of the configured V type. These boundary layers have outsized influence on output quality (early layers establish representations, final layers shape the distribution). Middle layers use turbo4 V, where compression is nearly free.
 
-**Sparse V dequantization** further accelerates quantized V reads. After softmax, positions with weight below 1e-6 are skipped entirely — no V dequantization, no multiply-accumulate. At 32K context, this yields +22.8% decode throughput because most softmax mass concentrates on a small number of positions. See [Chapter 4: Quantization](04-quantization.md#turboquant--the-turbo-preset) for implementation details.
+**Sparse V dequantization** further accelerates quantized V reads. After softmax, positions with weight below 1e-6 are skipped entirely: no V dequantization, no multiply-accumulate. At long context most softmax mass concentrates on a small number of positions, so skipping the rest improves decode speed with zero measured perplexity impact (`src/ops/attention.zig`). See [Chapter 4: Quantization](04-quantization.md#turboquant--the-turbo-preset) for implementation details.
 
 ## PagedAttention
 
@@ -267,6 +271,8 @@ graph LR
     BranchA -->|"answer"| AnsA
     BranchB -->|"answer"| AnsB
 ```
+
+```text
 Request A: "You are helpful. What is 2+2?"     → compute KV for "You are helpful." once
 Request B: "You are helpful. Tell me a joke."   → reuse KV, only compute " Tell me a joke."
 ```
@@ -341,6 +347,8 @@ sequenceDiagram
 
 
 ```
+
+```text
 prefill([2048 tokens], chunk_size=512):
   chunk 0: tokens[0..512]    → GEMM + causal FA2 (prev_len=0)
   chunk 1: tokens[512..1024] → GEMM + causal FA2 (prev_len=512)

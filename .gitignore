@@ -88,6 +88,7 @@ graphify-out/
 .ralph/
 .worktrees/
 .superpowers/
+docs/superpowers/
 glossary-batch*.md
 outputs/
 progress.md

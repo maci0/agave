@@ -44,11 +44,11 @@ flowchart LR
 
 ```
 
-```zig
-const table_size = 256;  // Regular constant
-const doubled = comptime table_size * 2;  // Computed at compile time (512)
+```text
+table_size = 256                    # regular constant
+doubled = comptime(table_size * 2)  # computed at compile time -> 512
 
-// The binary contains the value 512, not the multiplication
+# the binary contains the value 512, not the multiplication
 ```
 
 **When to use comptime:**
@@ -109,47 +109,40 @@ flowchart TD
 
 **Naive approach** (runtime conversion):
 
-```zig
-pub fn fp8e4m3ToF32(val: u8) f32 {
-    // Extract sign, exponent, mantissa from 8-bit value
-    const sign = (val >> 7) & 1;
-    const exp = (val >> 3) & 0xF;
-    const mant = val & 0x7;
+```text
+fp8e4m3ToF32(val):                    # naive, runtime conversion
+    sign = (val >> 7) & 1
+    exp  = (val >> 3) & 0xF
+    mant = val & 0x7
 
-    // Compute float value
-    const bias = 7;
-    const sign_mult = if (sign == 1) -1.0 else 1.0;
+    bias = 7
+    sign_mult = sign == 1 ? -1.0 : 1.0
 
-    if (exp == 0) {
-        // Subnormal
-        return sign_mult * (@as(f32, @floatFromInt(mant)) / 8.0) * std.math.pow(f32, 2.0, 1 - bias);
-    } else {
-        // Normal
-        const frac = 1.0 + (@as(f32, @floatFromInt(mant)) / 8.0);
-        return sign_mult * frac * std.math.pow(f32, 2.0, @as(f32, @floatFromInt(exp)) - bias);
-    }
-}
+    if exp == 0:                      # subnormal
+        return sign_mult * (mant / 8.0) * 2^(1 - bias)
+    else:                             # normal
+        frac = 1.0 + (mant / 8.0)
+        return sign_mult * frac * 2^(exp - bias)
 ```
 
 **Cost per call:** ~20-30 instructions (bit shifts, branches, floating-point arithmetic, `pow()` call).
 
 **Optimized approach** (comptime lookup table):
 
-```zig
-// Build 256-entry lookup table at compile time
-const fp8e4m3_lut: [256]f32 = blk: {
-    var table: [256]f32 = undefined;
-    for (0..256) |i| {
-        table[i] = fp8e4m3Compute(@intCast(i));  // Computed once at compile time
-    }
-    break :blk table;
-};
-
-// Runtime dequantization is a single array lookup
-pub inline fn fp8e4m3ToF32(val: u8) f32 {
-    return fp8e4m3_lut[val];
+```text
+# build the 256-entry lookup table at compile time
+fp8e4m3_lut: [256]f32 = comptime {
+    for i in 0..256:
+        table[i] = fp8e4m3Compute(i)     # computed once, at compile time
+    return table
 }
+
+# runtime dequantization is a single array lookup
+fp8e4m3ToF32(val):
+    return fp8e4m3_lut[val]
 ```
+
+**Implementation:** [`src/ops/quant.zig`](../../src/ops/quant.zig) (`fp8e4m3_lut`, `fp8e4m3ToF32`)
 
 **Cost per call:** 1 instruction (load from `.rodata` section).
 
@@ -157,12 +150,11 @@ pub inline fn fp8e4m3ToF32(val: u8) f32 {
 
 ### comptime Block Syntax
 
-```zig
-const table = blk: {
-    var result: [N]T = undefined;
-    // ... compute result ...
-    break :blk result;  // Return from comptime block
-};
+```text
+table: [N]T = comptime {
+    ... compute result ...
+    return result           # returns from the comptime block
+}
 ```
 
 **Key points:**
@@ -174,34 +166,34 @@ const table = blk: {
 
 ### IQ4_NL Dequantization Table
 
-**IQ4_NL** uses a fixed dequantization table (not computed, but verified at comptime):
+**IQ4_NL** uses a fixed dequantization table (not computed at runtime). Length and monotonicity are verified by a unit test, not a `comptime` assert:
 
-```zig
-pub const iq4nl_table: [16]i8 = .{
+```text
+iq4nl_table: [16]i8 = [
     -127, -104, -83, -65, -49, -35, -22, -10,
     1, 13, 25, 38, 53, 69, 89, 113,
-};
+]
 
-// Illustrative usage (not a real API function — callers use iq4nl_table directly):
-// const val = @as(f32, @floatFromInt(iq4nl_table[nibble])) * scale;
+# usage (callers index the table directly):
+# val = iq4nl_table[nibble] * scale
 ```
 
-**Why a table?** IQ4_NL uses **non-linear quantization** — the step sizes aren't uniform. Small values have fine steps, large values have coarse steps. This gives better accuracy than linear Q4.
+**Implementation:** [`src/ops/quant.zig`](../../src/ops/quant.zig) (`iq4nl_table`)
 
-**comptime verification:**
+**Why a table?** IQ4_NL uses **non-linear quantization**. The step sizes aren't uniform. Small values have fine steps, large values have coarse steps. This gives better accuracy than linear Q4.
 
-```zig
-comptime {
-    std.debug.assert(iq4nl_table.len == 16);  // 4-bit = 16 values
-    for (iq4nl_table, 0..) |v, i| {
-        if (i > 0) {
-            std.debug.assert(v > iq4nl_table[i - 1]);  // Strictly increasing
-        }
-    }
-}
+**Test verification** (`src/ops/quant.zig`):
+
+```text
+test "iq4nl_table":
+    expect(iq4nl_table.len == 16)
+    for i in 1..16:
+        expect(iq4nl_table[i] > iq4nl_table[i - 1])   # strictly monotonic
 ```
 
-This runs at compile time. If the table is malformed, **compilation fails**.
+This runs during `zig build test`, not as a `comptime` assert. If the table is malformed, the test fails, but a normal `zig build` would not catch it.
+
+**Implementation:** [`src/ops/quant.zig`](../../src/ops/quant.zig) (`test "iq4nl_table"`)
 
 ## Feature Detection
 
@@ -248,54 +240,50 @@ flowchart LR
 
 ### Target OS Detection
 
-```zig
-const builtin = @import("builtin");
-
-pub fn initBackend() !Backend {
-    if (comptime builtin.os.tag == .macos) {
-        return Backend{ .metal = try MetalBackend.init() };
-    } else if (comptime builtin.os.tag == .linux) {
-        return Backend{ .vulkan = try VulkanBackend.init() };
-    } else {
-        return Backend{ .cpu = try CpuBackend.init() };
-    }
-}
+```text
+initBackend():
+    if comptime(os == macos):
+        return Backend.metal(MetalBackend.init())
+    else if comptime(os == linux):
+        return Backend.vulkan(VulkanBackend.init())
+    else:
+        return Backend.cpu(CpuBackend.init())
 ```
+
+**Implementation:** [`src/backend/backend.zig`](../../src/backend/backend.zig) (backend selection dispatcher)
 
 **Dead code elimination:** The compiler generates **only the code for the target platform**. If compiling for macOS, the Linux and CPU branches are **completely removed** from the binary.
 
 ### CPU Feature Detection
 
-```zig
-const has_avx2 = comptime builtin.cpu.features.isEnabled(@import("std").Target.x86.Feature.avx2);
+```text
+has_avx2 = comptime(cpu.features.isEnabled(x86.Feature.avx2))
 
-pub fn gemv(...) void {
-    if (comptime has_avx2) {
-        gemvAVX2(...);  // 256-bit SIMD
-    } else {
-        gemvSSE2(...);  // 128-bit SIMD fallback
-    }
-}
+gemv(...):
+    if comptime(has_avx2):
+        gemvAVX2(...)      # 256-bit SIMD
+    else:
+        gemvSSE2(...)      # 128-bit SIMD fallback
 ```
+
+**Implementation:** [`src/ops/math.zig`](../../src/ops/math.zig) (comptime SIMD width dispatch)
 
 **Benefit:** No runtime CPU detection overhead. The compiler knows at build time which CPU features are available (based on `-mcpu` flag or target triple).
 
 ### Build Options
 
-```zig
-// build.zig
-const backend_options = b.addOptions();
-backend_options.addOption(bool, "enable_metal", true);
-backend_options.addOption(bool, "enable_cuda", false);
+```text
+# build.zig
+backend_options.addOption(bool, "enable_metal", true)
+backend_options.addOption(bool, "enable_cuda", false)
 
-// backend.zig
-const build_options = @import("build_options");
-
-pub const MetalBackend = if (build_options.enable_metal)
-    @import("metal.zig").MetalBackend
-else
-    NullBackend;
+# backend.zig
+MetalBackend = build_options.enable_metal
+    ? import("metal.zig").MetalBackend
+    : NullBackend
 ```
+
+**Implementation:** [`build.zig`](../../build.zig) (`-Denable-<model>` / backend toggles), [`src/backend/backend.zig`](../../src/backend/backend.zig) (`build_options` gated imports)
 
 **Effect:** If `enable_metal=false`, the Metal backend is **not compiled at all** — `@import("metal.zig")` never happens, reducing binary size and compile time.
 
@@ -315,7 +303,7 @@ flowchart LR
     MSL1["common.metal\n(MSL source)"]:::setup
     MSL2["elementwise.metal\n(MSL source)"]:::setup
     MSL3["gemv.metal\n(MSL source)"]:::setup
-    MSLN["... (5 more .metal files)"]:::setup
+    MSLN["... (14 more .metal files)"]:::setup
     SPV["gemv.spv\n(SPIR-V binary)"]:::setup
     EF["@embedFile\n(compile step)"]:::sync
     EF2["@embedFile\n(compile step)"]:::sync
@@ -365,23 +353,22 @@ flowchart LR
 
 ### Metal Shader Embedding
 
-```zig
-// Concatenate all MSL files at compile time
-const msl_source = @embedFile("kernels/metal/common.metal") ++
-    @embedFile("kernels/metal/elementwise.metal") ++
-    @embedFile("kernels/metal/norm.metal") ++
-    @embedFile("kernels/metal/rope.metal") ++
-    @embedFile("kernels/metal/gemv.metal") ++
-    @embedFile("kernels/metal/gemm.metal") ++
-    @embedFile("kernels/metal/sdpa.metal") ++
-    @embedFile("kernels/metal/deltanet.metal");
+```text
+# concatenate all MSL files at compile time (17 files total: common, elementwise,
+# norm, rope, gemv, gemm, sdpa, sdpa_tree, deltanet, gemv_tiled, megakernel,
+# mega_common, and 5 per-model megakernel variants)
+msl_source = embedFile("common.metal")
+    ++ embedFile("elementwise.metal")
+    ++ embedFile("norm.metal")
+    ++ ... (14 more .metal files)
 
-pub fn init(allocator: Allocator) !MetalBackend {
-    // Compile MSL source at runtime (driver compiles to GPU bytecode)
-    const library = device.newLibraryWithSource(msl_source, null, &err);
-    // ...
-}
+init():
+    # compile MSL source at runtime (driver compiles to GPU bytecode)
+    library = device.newLibraryWithSource(msl_source)
+    ...
 ```
+
+**Implementation:** [`src/backend/metal.zig`](../../src/backend/metal.zig) (`msl_source` concatenation of all 17 embedded `.metal` files)
 
 **Benefits:**
 
@@ -391,12 +378,12 @@ pub fn init(allocator: Allocator) !MetalBackend {
 
 **Alternative (runtime file loading):**
 
-```zig
-// BAD: Runtime file I/O
-const file = try std.fs.cwd().openFile("shaders/gemv.metal", .{});
-defer file.close();
-const source = try file.readToEndAlloc(allocator, 1024 * 1024);
-defer allocator.free(source);
+```text
+# BAD: runtime file I/O
+file = open("shaders/gemv.metal")
+defer close(file)
+source = readAll(file)
+defer free(source)
 ```
 
 **Problems:**
@@ -412,17 +399,15 @@ defer allocator.free(source);
 
 Vulkan uses pre-compiled SPIR-V bytecode:
 
-```zig
-const gemv_spirv = @embedFile("kernels/vulkan/gemv.spv");
+```text
+gemv_spirv = embedFile("gemv.spv")
 
-pub fn init() !VulkanBackend {
-    const shader_module = vk.createShaderModule(device, .{
-        .code_size = gemv_spirv.len,
-        .code = @ptrCast(gemv_spirv.ptr),
-    });
-    // ...
-}
+init():
+    shader_module = vk.createShaderModule(device, code = gemv_spirv)
+    ...
 ```
+
+**Implementation:** [`src/backend/vulkan.zig`](../../src/backend/vulkan.zig) (`@embedFile` for pre-compiled SPIR-V)
 
 **SPIR-V is binary data** — `@embedFile` works with any file type, not just text.
 
@@ -432,19 +417,19 @@ Generate different code for each type at compile time.
 
 ### Generic Dequantization
 
-```zig
-pub fn dequantize(comptime T: type, quant: []const u8, output: []f32) void {
-    switch (T) {
-        Q4_0 => dequantizeQ4_0(quant, output),
-        Q8_0 => dequantizeQ8_0(quant, output),
-        BF16 => dequantizeBF16(quant, output),
-        else => @compileError("Unsupported quantization type"),
-    }
-}
+```text
+dequantize(comptime T, quant, output):
+    switch T:
+        Q4_0 -> dequantizeQ4_0(quant, output)
+        Q8_0 -> dequantizeQ8_0(quant, output)
+        BF16 -> dequantizeBF16(quant, output)
+        else -> compileError("unsupported quantization type")
 
-// Usage:
-dequantize(Q4_0, quant_data, f32_output);  // Compiles to direct call to dequantizeQ4_0
+# usage: dequantize(Q4_0, quant_data, f32_output)
+# compiles down to a direct call to dequantizeQ4_0, no switch at runtime
 ```
+
+**Implementation:** [`src/ops/quant.zig`](../../src/ops/quant.zig) (comptime-dispatched dequantization per format)
 
 **No runtime dispatch** — the switch is resolved at compile time, and only the relevant function is called.
 
@@ -490,33 +475,28 @@ flowchart TD
 
 ### Tagged Union Dispatch (inline else)
 
-```zig
-pub const Backend = union(enum) {
-    cpu: *CpuBackend,
-    metal: *MetalBackend,
-    // ...
+```text
+Backend: union(cpu, metal, vulkan, cuda, rocm, webgpu)
 
-    pub fn gemv(self: Backend, ...) void {
-        switch (self) {
-            inline else => |be| be.gemv(...),  // Expands to separate case per variant
-        }
-    }
-};
+    gemv(self, ...):
+        switch self:
+            inline else -> |be| be.gemv(...)     # expands to one case per variant
 ```
 
 **What `inline else` does:**
 
-```zig
-// Expands to:
-switch (self) {
-    .cpu => |be| be.gemv(...),
-    .metal => |be| be.gemv(...),
-    .vulkan => |be| be.gemv(...),
-    .cuda => |be| be.gemv(...),
-    .rocm => |be| be.gemv(...),
-    .webgpu => |be| be.gemv(...),
-}
+```text
+# expands to:
+switch self:
+    cpu    -> |be| be.gemv(...)
+    metal  -> |be| be.gemv(...)
+    vulkan -> |be| be.gemv(...)
+    cuda   -> |be| be.gemv(...)
+    rocm   -> |be| be.gemv(...)
+    webgpu -> |be| be.gemv(...)
 ```
+
+**Implementation:** [`src/backend/backend.zig`](../../src/backend/backend.zig) (`inline else` tagged-union dispatch)
 
 **Benefit:** Compiler sees all calls, can inline them. No function pointer indirection.
 
@@ -572,17 +552,17 @@ flowchart TD
 
 Compile-time format string checking prevents runtime errors.
 
-```zig
-// GOOD: Format string validated at compile time
-std.log.info("Temperature: {d}, Tokens: {d}", .{temp, n_tokens});
+```text
+# GOOD: format string validated at compile time
+log.info("Temperature: {d}, Tokens: {d}", [temp, n_tokens])
 
-// BAD: Wrong number of arguments — compile error!
-std.log.info("Temperature: {d}, Tokens: {d}", .{temp});
-// error: expected 2 format arguments, found 1
+# BAD: wrong number of arguments -> compile error
+log.info("Temperature: {d}, Tokens: {d}", [temp])
+# error: expected 2 format arguments, found 1
 
-// BAD: Wrong type specifier — compile error!
-std.log.info("Temperature: {d}", .{"0.5"});
-// error: cannot format string with 'd' (expected number)
+# BAD: wrong type specifier -> compile error
+log.info("Temperature: {d}", ["0.5"])
+# error: cannot format string with 'd' (expected number)
 ```
 
 **C comparison:**
@@ -643,38 +623,36 @@ flowchart TD
 
 ### Array Size Validation
 
-```zig
-const quant_block_elems = 32;
-const Q4_0_Block = extern struct {
-    scale: f16,
-    quants: [16]u8,  // 16 bytes = 32 nibbles
-};
+```text
+quant_block_elems = 32
+Q4_0_Block: extern struct { scale: f16, quants: [16]u8 }   # 16 bytes = 32 nibbles
 
-comptime {
-    std.debug.assert(@sizeOf(Q4_0_Block) == 18);  // 2 + 16 = 18 bytes
-    std.debug.assert(16 * 2 == quant_block_elems);  // 16 bytes × 2 nibbles/byte
-}
+comptime:
+    assert(sizeOf(Q4_0_Block) == 18)      # 2 + 16 = 18 bytes
+    assert(16 * 2 == quant_block_elems)   # 16 bytes x 2 nibbles/byte
 ```
+
+**Implementation:** [`src/ops/quant.zig`](../../src/ops/quant.zig) (`q4_0_block_bytes = 18`: 2-byte scale + 16 bytes of nibbles)
 
 **Effect:** If you change `quants` to `[15]u8`, compilation fails with an assertion error.
 
 ### Alignment Validation
 
-```zig
-comptime {
-    std.debug.assert(@alignOf(KVCache) == 64);  // Must be cache-line aligned
-}
+```text
+comptime:
+    assert(alignOf(KVCache) == 64)   # must be cache-line aligned
 ```
 
 ### Type Size Checks
 
-```zig
-comptime {
-    std.debug.assert(@sizeOf(f32) == 4);
-    std.debug.assert(@sizeOf(bf16) == 2);
-    std.debug.assert(@sizeOf(V8) == 32);  // 8 × f32
-}
+```text
+comptime:
+    assert(sizeOf(f32) == 4)
+    assert(sizeOf(bf16) == 2)
+    assert(sizeOf(V8) == 32)   # 8 x f32
 ```
+
+**Implementation:** [`src/ops/math.zig`](../../src/ops/math.zig) (`V8` vector type and comptime size checks)
 
 **Why?** If porting to a weird platform where `f32` isn't 32 bits, these fail at compile time instead of producing silent data corruption at runtime.
 
@@ -682,21 +660,20 @@ comptime {
 
 ### MXFP4 Lookup Table
 
-```zig
-// MXFP4 uses E2M1 format (2-bit exponent, 1-bit mantissa)
-// 4-bit nibble → 16 possible values stored as a literal constant table
-pub fn mxfp4Lookup(nibble: u8) f32 {
-    const table: [16]f32 = .{
-        0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0,
-        0.0, -0.5, -1.0, -1.5, -2.0, -3.0, -4.0, -6.0,
-    };
-    return table[nibble & 0xF];
-}
+```text
+# MXFP4 uses E2M1 format (2-bit exponent, 1-bit mantissa)
+# 4-bit nibble -> 16 possible values, stored as a literal constant table
+mxfp4Lookup(nibble):
+    table = [0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0,
+             0.0, -0.5, -1.0, -1.5, -2.0, -3.0, -4.0, -6.0]
+    return table[nibble & 0xF]
 
-// For the scaled variant (nibble value × block scale), see nvfp4Dequant.
-// The mantissa term for E2M1 is 0.5 * mant (not 1.0 * mant):
-//   mant=0 → 0.0 addend, mant=1 → 0.5 addend, giving 1.0 and 1.5 for normal values.
+# for the scaled variant (nibble value x block scale), see nvfp4Dequant.
+# the mantissa term for E2M1 is 0.5 * mant (not 1.0 * mant):
+#   mant=0 -> 0.0 addend, mant=1 -> 0.5 addend, giving 1.0 and 1.5 for normal values
 ```
+
+**Implementation:** [`src/ops/quant.zig`](../../src/ops/quant.zig) (`mxfp4Lookup`, `nvfp4Dequant`)
 
 **Single-level lookup:** nibble → base value via literal table (no module-level symbol). For NVFP4 scaled dequantization, `nvfp4Dequant` combines `mxfp4Lookup` with a block scale.
 
@@ -704,21 +681,22 @@ pub fn mxfp4Lookup(nibble: u8) f32 {
 
 Block byte sizes are defined as named module-level constants in `backend.zig`:
 
-```zig
-pub const q4_0_block_bytes: usize = 18;   // 2-byte scale + 16 bytes of nibbles
-pub const q8_0_block_bytes: usize = 34;   // 2-byte scale + 32 bytes of i8 values
-pub const q4_k_block_bytes: usize = 144;
-pub const q6_k_block_bytes: usize = 210;
-// ...
+```text
+q4_0_block_bytes: usize = 18    # 2-byte scale + 16 bytes of nibbles
+q8_0_block_bytes: usize = 34    # 2-byte scale + 32 bytes of i8 values
+q4_k_block_bytes: usize = 144
+q6_k_block_bytes: usize = 210
+...
 ```
 
 **Usage:** reference the constant directly by name:
 
-```zig
-const bytes_per_block = backend.q4_0_block_bytes;  // 18
-
-const num_blocks = (total_bytes + backend.q4_0_block_bytes - 1) / backend.q4_0_block_bytes;
+```text
+bytes_per_block = backend.q4_0_block_bytes    # 18
+num_blocks = ceilDiv(total_bytes, backend.q4_0_block_bytes)
 ```
+
+**Implementation:** [`src/backend/backend.zig`](../../src/backend/backend.zig) (`q4_0_block_bytes` and per-format block-byte constants)
 
 **Benefit:** Named constants are self-documenting, always available at comptime, and require no function call overhead.
 
@@ -746,53 +724,52 @@ const num_blocks = (total_bytes + backend.q4_0_block_bytes - 1) / backend.q4_0_b
 
 ### Conditional Compilation
 
-```zig
-const use_simd = comptime builtin.cpu.arch == .x86_64 or builtin.cpu.arch == .aarch64;
+```text
+use_simd = comptime(cpu.arch == x86_64 or cpu.arch == aarch64)
 
-pub fn dotProduct(a: []const f32, b: []const f32) f32 {
-    if (comptime use_simd) {
-        return dotProductSIMD(a, b);
-    } else {
-        return dotProductScalar(a, b);
-    }
-}
+dotProduct(a, b):
+    if comptime(use_simd):
+        return dotProductSIMD(a, b)
+    else:
+        return dotProductScalar(a, b)
 ```
+
+**Implementation:** [`src/ops/math.zig`](../../src/ops/math.zig) (`dotProduct`, SIMD-vectorized reductions)
 
 ### Type-Generic Containers
 
-```zig
-pub fn RingBuffer(comptime T: type, comptime size: usize) type {
-    return struct {
-        data: [size]T,
-        head: usize = 0,
+```text
+RingBuffer(comptime T, comptime size):
+    return struct:
+        data: [size]T
+        head: usize = 0
 
-        pub fn push(self: *@This(), item: T) void {
-            self.data[self.head] = item;
-            self.head = (self.head + 1) % size;
-        }
-    };
-}
+        push(item):
+            data[head] = item
+            head = (head + 1) % size
 
-// Usage:
-var conv_state = RingBuffer(f32, 4).init();  // 4-element f32 ring buffer
+# usage:
+conv_state = RingBuffer(f32, 4).init()   # 4-element f32 ring buffer
 ```
+
+**Implementation:** [`src/models/nemotron_h.zig`](../../src/models/nemotron_h.zig) (`conv_states` ring buffer, `causalConv1dSilu` in [`src/ops/ssm.zig`](../../src/ops/ssm.zig))
 
 **Each instantiation** (`RingBuffer(f32, 4)`, `RingBuffer(u32, 8)`) generates **separate specialized code**.
 
 ### Compile-Time String Manipulation
 
-```zig
-const kernel_name = "gemv_" ++ dtype_name;  // Comptime string concat
+```text
+kernel_name = "gemv_" ++ dtype_name    # comptime string concat
 
-pub fn loadKernel(comptime dtype: DType) !Pipeline {
-    const name = comptime kernelName(dtype);  // e.g., "gemv_q4_0"
-    return library.newFunctionWithName(name);
-}
+loadKernel(comptime dtype):
+    name = comptime(kernelName(dtype))   # e.g. "gemv_q4_0"
+    return library.newFunctionWithName(name)
 
-fn kernelName(comptime dtype: DType) []const u8 {
-    return "gemv_" ++ @tagName(dtype);  // "gemv_" + "q4_0" → "gemv_q4_0"
-}
+kernelName(comptime dtype):
+    return "gemv_" ++ tagName(dtype)     # "gemv_" + "q4_0" -> "gemv_q4_0"
 ```
+
+**Implementation:** [`src/backend/metal.zig`](../../src/backend/metal.zig) (comptime kernel name construction for pipeline lookup)
 
 ## Anti-Patterns
 
@@ -800,28 +777,26 @@ fn kernelName(comptime dtype: DType) []const u8 {
 
 **BAD:** Using comptime for simple runtime values
 
-```zig
-const temperature = comptime 0.7;  // Pointless — it's already a constant
+```text
+temperature = comptime 0.7    # pointless, it's already a constant
 ```
 
 **GOOD:** Just use `const`
 
-```zig
-const temperature: f32 = 0.7;
+```text
+temperature: f32 = 0.7
 ```
 
 ### Don't Compute Heavy Things at Comptime
 
 **BAD:** Large nested loops at comptime slow down compilation
 
-```zig
-const huge_table = comptime blk: {
-    var table: [1000000]f32 = undefined;
-    for (0..1000000) |i| {
-        table[i] = expensiveComputation(i);  // Runs at compile time!
-    }
-    break :blk table;
-};
+```text
+huge_table = comptime {
+    for i in 0..1_000_000:
+        table[i] = expensiveComputation(i)   # runs at compile time
+    return table
+}
 ```
 
 **Effect:** Compilation takes minutes instead of seconds.
@@ -832,15 +807,13 @@ const huge_table = comptime blk: {
 
 **WRONG:** This doesn't work
 
-```zig
-var comptime_counter: usize = 0;  // Error: comptime variables can't be var
+```text
+comptime_counter: usize = 0   # error: comptime variables can't be var
 
-pub fn getNextId() usize {
-    comptime {
-        comptime_counter += 1;  // Error: comptime mutation not allowed
-        return comptime_counter;
-    }
-}
+getNextId():
+    comptime:
+        comptime_counter += 1   # error: comptime mutation not allowed
+        return comptime_counter
 ```
 
 **comptime is for constants**, not mutable state.
@@ -855,7 +828,7 @@ pub fn getNextId() usize {
 
 ## Gotchas
 
-- **A comptime assertion only protects the table it's attached to.** `iq4nl_table`'s strictly-increasing check and `Q4_0_Block`'s size check each guard one specific structure. Adding a new lookup table or packed struct elsewhere in the codebase without its own `comptime { std.debug.assert(...) }` block gets none of that protection automatically: the pattern has to be repeated deliberately at every new table, it isn't inherited from the appendix's examples.
+- **Verification only protects what you attach it to.** `iq4nl_table` is checked in a unit test; `Q4_0_Block`'s size check is a `comptime` assert. Adding a new lookup table or packed struct without its own test or `comptime { std.debug.assert(...) }` gets none of that protection automatically: the pattern has to be repeated deliberately at every new table.
 
 ---
 

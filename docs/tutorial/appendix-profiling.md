@@ -87,36 +87,31 @@ Metal counters:
 
 ### Timing Individual Operations
 
-```zig
-// src/perf.zig
-pub const Op = enum {
-    emb_lookup, rms_norm, gemv_qkv, gemv_out, gemv_ffn,
-    deinterleave, rope, sdpa, sigmoid_mul, silu_mul,
-    gelu_mul, add, deltanet, total_layer,
-};
+```text
+Op: enum { emb_lookup, rms_norm, gemv_qkv, gemv_out, gemv_ffn,
+           deinterleave, rope, sdpa, sigmoid_mul, silu_mul,
+           gelu_mul, add, deltanet, total_layer }
 
-pub const PerfCounters = struct {
-    counts: [n_ops]u64 = [_]u64{0} ** n_ops,
-    times_us: [n_ops]u64 = [_]u64{0} ** n_ops,
-    n_tokens: u64 = 0,
-    enabled: bool = false,
+PerfCounters:
+    counts: [n_ops]u64 = 0
+    times_us: [n_ops]u64 = 0
+    n_tokens: u64 = 0
+    enabled: bool = false
 
-    pub inline fn start(self: *PerfCounters) i128 {
-        if (!self.enabled) return 0;
-        // Call the private nanoTimestamp() helper, which reads CLOCK_REALTIME directly
-        // via std.c.clock_gettime — avoids Io virtual dispatch overhead in the hot path.
-        return nanoTimestamp();
-    }
+    start():
+        if not enabled: return 0
+        # reads CLOCK_REALTIME directly via the private nanoTimestamp() helper,
+        # avoiding Io virtual dispatch overhead in the hot path
+        return nanoTimestamp()
 
-    pub inline fn end(self: *PerfCounters, op: Op, t0: i128) void {
-        if (!self.enabled) return;
-        const elapsed: u64 = @intCast(@divFloor(std.time.nanoTimestamp() - t0, 1000));
-        const idx = @intFromEnum(op);
-        self.times_us[idx] += elapsed;
-        self.counts[idx] += 1;
-    }
-};
+    end(op, t0):
+        if not enabled: return
+        elapsed = (nanoTimestamp() - t0) / 1000
+        times_us[op] += elapsed
+        counts[op] += 1
 ```
+
+**Implementation:** [`src/perf.zig`](../../src/perf.zig) (`Op`, `PerfCounters.start`/`end`)
 
 ### Instrumented Operation
 
@@ -136,15 +131,16 @@ sequenceDiagram
     Note over Perf: elapsed = now - t<br/>times_us[gemv_qkv] += elapsed<br/>counts[gemv_qkv] += 1
 ```
 
-```zig
-// In model forward(), e.g. src/models/qwen35.zig
-var t = self.perf.start();
+```text
+t = perf.start()
 
-self.be.gemv(x, w, y, n, k);
-self.be.sync();  // Flush GPU work (ensures timing is accurate)
+be.gemv(x, w, y, n, k)
+be.sync()                    # flush GPU work so timing reflects real execution
 
-self.perf.end(.gemv_qkv, t);
+perf.end(gemv_qkv, t)
 ```
+
+**Implementation:** [`src/models/qwen35.zig`](../../src/models/qwen35.zig) (`perf.start`/`sync`/`perf.end` wrapping around `gemv`)
 
 **Key:** GPU work is deferred. Without `sync()`, you'd measure only the CPU dispatch time (~5 µs), not the actual GPU execution time.
 
@@ -154,24 +150,26 @@ self.perf.end(.gemv_qkv, t);
 
 Each operation in the forward pass is wrapped with `start()`/`end()`:
 
-```zig
-// src/models/qwen35.zig — attention layer
-var t = self.perf.start();
-self.be.rmsNorm(x, w, eps);
-self.perf.end(.rms_norm, t);
+```text
+# attention layer
+t = perf.start()
+be.rmsNorm(x, w, eps)
+perf.end(rms_norm, t)
 
-t = self.perf.start();
-self.be.gemvMulti(qkv_ops);
-self.perf.end(.gemv_qkv, t);
+t = perf.start()
+be.gemvMulti(qkv_ops)
+perf.end(gemv_qkv, t)
 
-t = self.perf.start();
-self.be.rope(q, k, freqs, pos);
-self.perf.end(.rope, t);
+t = perf.start()
+be.rope(q, k, freqs, pos)
+perf.end(rope, t)
 
-t = self.perf.start();
-self.be.sdpa(q, k, v, out, ...);
-self.perf.end(.sdpa, t);
+t = perf.start()
+be.sdpa(q, k, v, out, ...)
+perf.end(sdpa, t)
 ```
+
+**Implementation:** [`src/models/qwen35.zig`](../../src/models/qwen35.zig) (attention layer, per-op `start`/`end` wraps)
 
 After generation completes, `perf.report()` prints a table with call counts, total time, average time, and percentage breakdown per operation.
 
@@ -208,55 +206,56 @@ graph TD
     Sync -->|"zero\n→ suspicious"| ZeroSync
 ```
 
-```zig
-pub const MetalBackend = struct {
-    dispatch_count: u32 = 0,
-    barrier_count: u32 = 0,
-    sync_count: u32 = 0,
-    profile_counters: bool = false,
-    // ...
-};
+```text
+MetalBackend:
+    dispatch_count: u32 = 0
+    barrier_count: u32 = 0
+    sync_count: u32 = 0
+    profile_counters: bool = false
 
-fn encode(...) void {
-    // ... dispatch kernel ...
-    if (self.profile_counters) self.dispatch_count += 1;
+    encode(...):
+        ... dispatch kernel ...
+        if profile_counters: dispatch_count += 1
 
-    // ... insert barrier ...
-    if (!self.batch_mode) {
-        // ... barrier ...
-        if (self.profile_counters) self.barrier_count += 1;
-    }
-}
+        ... insert barrier ...
+        if not batch_mode:
+            ... barrier ...
+            if profile_counters: barrier_count += 1
 
-fn flush() void {
-    // ... commit command buffer ...
-    if (self.profile_counters) self.sync_count += 1;
-}
+    flush():
+        ... commit command buffer ...
+        if profile_counters: sync_count += 1
 ```
+
+**Implementation:** [`src/backend/metal.zig`](../../src/backend/metal.zig) (`dispatch_count`, `barrier_count`, `sync_count`, gated by `profile_counters`)
 
 **Reset per token:**
 
-```zig
-pub fn resetCounters(self: *MetalBackend) void {
-    self.dispatch_count = 0;
-    self.barrier_count = 0;
-    self.sync_count = 0;
-    self.profile_counters = true;
-}
+```text
+resetCounters():
+    dispatch_count = 0
+    barrier_count = 0
+    sync_count = 0
+    profile_counters = true
 ```
+
+**Implementation:** [`src/backend/metal.zig`](../../src/backend/metal.zig) (`resetCounters`)
 
 **Print at first decode token:**
 
-```zig
-// src/models/qwen35.zig — fires only on the first generated token (kv_seq_len == 1)
-if (self.be == .metal and self.kv_seq_len == 1) {
-    const m = &self.be.metal;
-    std.log.warn("Metal: {d} dispatches, {d} barriers, {d} syncs",
-        .{ m.dispatch_count, m.barrier_count, m.sync_count });
-}
+```text
+# only when --profile is on, first decode token
+if perf.enabled and kv_seq_len == 1:
+    if comptime(os == macos):
+        switch be:
+            metal -> |be| log.warn("Metal stats: {dispatch_count} dispatches, "
+                                    "{barrier_count} barriers, {sync_count} syncs")
+            else -> ()
 ```
 
-Note: counters are accessed directly from the `.metal` tagged-union variant, not via a `g_profile` global. Printing is gated on `kv_seq_len == 1` so it fires once (the first decode step) rather than after every token.
+**Implementation:** [`src/models/qwen35.zig`](../../src/models/qwen35.zig) (Metal stats print, gated on `perf.enabled` and `kv_seq_len == 1`)
+
+Note: counters come from the `.metal` tagged-union variant, not a `g_profile` global. Printing requires `perf.enabled` (`--profile`) and `kv_seq_len == 1` so it fires once on the first decode step.
 
 ### Interpreting Counts
 
@@ -286,17 +285,17 @@ Note: counters are accessed directly from the `.metal` tagged-union variant, not
 
 ### Enforcement
 
-```zig
-pub fn gemvMlxQ(self: *MetalBackend, x: [*]const f32, weight: [*]const u8, scales: [*]const u8, biases: [*]const u8, y: [*]f32, n: usize, k: usize, bits: u32) void {
-    const pipeline = switch (bits) {
-        4 => self.pipe_gemv_mlx_q4,
-        6 => self.pipe_gemv_mlx_q6,
-        8 => self.pipe_gemv_mlx_q8,
-        else => @panic("Metal MLX GEMV: unsupported bit width"),
-    };
-    // ... dispatch ...
-}
+```text
+gemvMlxQ(x, weight, scales, biases, y, n, k, bits):
+    pipeline = switch bits:
+        4 -> pipe_gemv_mlx_q4
+        6 -> pipe_gemv_mlx_q6
+        8 -> pipe_gemv_mlx_q8
+        else -> panic("Metal MLX GEMV: unsupported bit width")
+    ... dispatch ...
 ```
+
+**Implementation:** [`src/backend/metal.zig`](../../src/backend/metal.zig) (`gemvMlxQ`, 4/6/8-bit pipelines, `@panic` on anything else)
 
 **Error message requirements:**
 
@@ -309,16 +308,14 @@ Note: 4-bit, 6-bit, and 8-bit are all supported on Metal. The panic fires for an
 
 **Alternative (silent fallback):**
 
-```zig
-pub fn gemvMlxQ(...) void {
-    if (bits == 6) {
-        // Silently fall back to CPU
-        self.be.sync();  // Flush GPU
-        cpuGemvMlxQ(...);  // Run on CPU
-        return;
-    }
-    // ... GPU path ...
-}
+```text
+# ANTI-PATTERN: silent fallback, do not do this
+gemvMlxQ(...):
+    if bits == 6:
+        be.sync()             # flush GPU
+        cpuGemvMlxQ(...)      # silently run on CPU instead
+        return
+    ... GPU path ...
 ```
 
 **Problem:** User expects GPU performance, gets CPU performance, **doesn't realize** until they profile. Silent regressions are the worst kind.
@@ -379,15 +376,16 @@ flowchart TD
 
 #### 1. embLookup (Single-Row Read)
 
-```zig
-pub fn embLookup(self: *MetalBackend, table: TensorData, token_id: u32, output: [*]f32, dim: usize) void {
-    // Fallback to CPU: single-row lookup is faster on CPU than GPU dispatch overhead.
-    // cpuFallback() calls flush() first, ensuring any pending GPU writes (e.g., a preceding
-    // rmsNorm output) are visible before the CPU reads the embedding table.
-    var cpu = self.cpuFallback();
-    cpu.embLookup(table, token_id, output, dim);
-}
+```text
+embLookup(table, token_id, output, dim):
+    # single-row lookup is faster on CPU than GPU dispatch overhead.
+    # cpuFallback() flushes first, so any pending GPU writes (e.g. a preceding
+    # rmsNorm output) are visible before the CPU reads the embedding table.
+    cpu = cpuFallback()
+    cpu.embLookup(table, token_id, output, dim)
 ```
+
+**Implementation:** [`src/backend/metal.zig`](../../src/backend/metal.zig) (`embLookup`, permitted CPU fallback)
 
 **Why CPU is faster:**
 
@@ -397,20 +395,20 @@ pub fn embLookup(self: *MetalBackend, table: TensorData, token_id: u32, output: 
 
 #### 2. Tiny Softmax (Below Threshold)
 
-```zig
-const softmax_cpu_threshold: usize = 128;
+```text
+softmax_cpu_threshold: usize = 128
 
-pub fn softmax(self: *MetalBackend, data: [*]f32, n: usize) void {
-    if (n < softmax_cpu_threshold) {
-        // CPU fallback: dispatch overhead dominates for tiny softmax.
-        // cpuFallback() flushes pending GPU work so the CPU reads current data.
-        var cpu = self.cpuFallback();
-        cpu.softmax(data, n);
-        return;
-    }
-    // ... GPU path ...
-}
+softmax(data, n):
+    if n < softmax_cpu_threshold:
+        # dispatch overhead dominates for tiny softmax.
+        # cpuFallback() flushes pending GPU work so the CPU reads current data.
+        cpu = cpuFallback()
+        cpu.softmax(data, n)
+        return
+    ... GPU path ...
 ```
+
+**Implementation:** [`src/backend/metal.zig`](../../src/backend/metal.zig) (`softmax_cpu_threshold`, `softmax`, permitted CPU fallback)
 
 **Why threshold?**
 
@@ -506,37 +504,38 @@ flowchart TD
 
 ### Example: Identifying a Regression
 
+Illustrative `--profile` shape (not a `BENCHMARKS.md` row). Numbers show the *kind* of counter move you look for:
+
 **Before (baseline):**
 
 ```
-Metal: 690 dispatches, 690 barriers, 1 sync
-Token time: 71ms (14.1 tok/s)
+Metal stats: low dispatches, barriers matched to batch groups, 1 sync
+Token time: lower
 ```
 
 **After (regression):**
 
 ```
-Metal: 706 dispatches, 930 barriers, 17 syncs
-Token time: 83ms (12.0 tok/s)
+Metal stats: more dispatches, many more barriers, many syncs
+Token time: higher
 ```
 
 **Analysis:**
 
-- +16 dispatches → something new is being dispatched
-- +240 barriers → batching was removed somewhere
-- +16 syncs → **major red flag** — CPU/GPU round-trips added
+- Extra dispatches → something new is being launched
+- Extra barriers → batching was removed somewhere
+- Extra syncs → major red flag: CPU/GPU round-trips added
 
-**Investigation:** 16 syncs = 16 DeltaNet layers. Check DeltaNet code.
+**Investigation:** Sync count matching DeltaNet layer count often means Q/gate split fell back to CPU.
 
 **Root cause:** Q/gate split moved from GPU kernel to CPU memcpy:
 
-```zig
-// REGRESSION: CPU memcpy requires sync before and after
-self.be.sync();  // Sync 1 (GPU → CPU)
-for (0..nh) |h| {
-    @memcpy(...);  // CPU memcpy
-}
-// Next GPU op needs data → sync 2 (CPU → GPU)
+```text
+# REGRESSION: CPU memcpy requires a sync before and after
+be.sync()                       # sync 1 (GPU -> CPU)
+for h in 0..nh:
+    memcpy(...)                 # CPU memcpy
+# next GPU op needs the data -> sync 2 (CPU -> GPU)
 ```
 
 **Fix:** Move split to GPU kernel (eliminates 16 syncs/token).
@@ -547,24 +546,21 @@ Agave doesn't currently use Tracy, but here's how you'd integrate it:
 
 ### Build with Tracy
 
-```zig
-// build.zig
-const tracy = b.dependency("tracy", .{});
-exe.linkLibrary(tracy.artifact("tracy"));
-exe.addCSourceFile(.{ .file = tracy.path("public/TracyClient.cpp"), .flags = &.{"-DTRACY_ENABLE"} });
+```text
+# build.zig (hypothetical — Agave has zero external dependencies today)
+tracy = b.dependency("tracy")
+exe.linkLibrary(tracy.artifact("tracy"))
+exe.addCSourceFile(tracy.path("public/TracyClient.cpp"), flags = ["-DTRACY_ENABLE"])
 ```
 
 ### Instrument Code
 
-```zig
-const tracy = @cImport(@cInclude("tracy/Tracy.hpp"));
+```text
+gemv(...):
+    zone = tracy.ZoneScoped()
+    defer tracy.ZoneEnd(zone)
 
-pub fn gemv(...) void {
-    const zone = tracy.ZoneScoped();
-    defer tracy.ZoneEnd(zone);
-
-    // ... operation ...
-}
+    ... operation ...
 ```
 
 ### View Results
@@ -659,7 +655,7 @@ graph LR
 
     subgraph TrueMega["True megakernel (Tier 2)\nmodel+quant must support"]
         T1["entire layer\nattn + FFN + norms\nfused into 1 dispatch\n(mega_grid_sync atomic barriers\nreplace Metal memory barriers)"]:::setup
-        TTotal["Total: ~30 dispatches/token\n~30 barriers (atomic, not Metal)\n1 sync\n(n_layers + small overhead)"]:::success
+        TTotal["Total: ~35 dispatches/token\n~35 barriers (atomic, not Metal)\n1 sync\n(n_layers + small overhead)"]:::success
         T1 --> TTotal
     end
 
@@ -677,11 +673,12 @@ Combining `--profile` with `--megakernel` shows the impact of kernel fusion on d
 # With fused FFN megakernel (Tier 1)
 ./agave model.gguf --profile --megakernel "Test"
 # Metal: 946 dispatches, 642 barriers, 1 sync
-# (48 fewer dispatches = 24 layers x 2 saved per FFN)
+# (48 fewer dispatches vs standard; not exactly 2 per layer because
+#  totals include fixed per-token overhead outside the 32 FFN layers)
 
 # With true megakernel (Tier 2, when available for model+quant)
-# Metal: ~30 dispatches, ~30 barriers, 1 sync
-# (entire layer runs as single dispatch)
+# Metal: ~35 dispatches, ~35 barriers, 1 sync
+# (entire layer runs as single dispatch; n_layers + small overhead)
 ```
 
 True megakernels show the most dramatic reduction -- dispatch count drops from hundreds to roughly `n_layers + overhead`. This is because each layer becomes a single dispatch with internal `mega_grid_sync` atomic barriers replacing Metal memory barriers.

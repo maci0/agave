@@ -67,19 +67,14 @@ flowchart LR
 
 **Bad pattern** (don't do this):
 
-```zig
-// Hardcoded in qwen35.zig
-pub fn formatPrompt(user_msg: []const u8) ![]u8 {
-    return std.fmt.allocPrint(allocator,
-        "<|im_start|>user\n{s}<|im_end|>\n<|im_start|>assistant\n",
-        .{user_msg}
-    );
-}
+```text
+# hardcoded in qwen35.zig
+formatPrompt(user_msg):
+    return "<|im_start|>user\n" + user_msg + "<|im_end|>\n<|im_start|>assistant\n"
 
-// Hardcoded end-of-generation check
-pub fn isEOG(token_id: u32) bool {
-    return token_id == 151643 or token_id == 151645;  // <|im_end|>, <|endoftext|>
-}
+# hardcoded end-of-generation check
+isEOG(token_id):
+    return token_id == 151643 or token_id == 151645   # <|im_end|>, <|endoftext|>
 ```
 
 **Problems:**
@@ -91,36 +86,37 @@ pub fn isEOG(token_id: u32) bool {
 
 ## The Solution: Data-Driven Templates
 
-**Template structure** (from `src/chat_template.zig`):
+**Template structure:**
 
-```zig
-pub const ChatTemplate = struct {
-    system_prefix: []const u8,
-    system_suffix: []const u8,
-    user_prefix: []const u8,
-    user_suffix: []const u8,
-    assistant_prefix: []const u8,
-    assistant_suffix: []const u8,
-    eog_tokens: []const []const u8,  // Token names, not IDs
-    default_system: ?[]const u8 = null,
-    system_role_override: ?struct { prefix: []const u8, suffix: []const u8 } = null,
-    generation_prefix: []const u8 = "",
-};
+```text
+ChatTemplate:
+  system_prefix: string
+  system_suffix: string
+  user_prefix: string
+  user_suffix: string
+  assistant_prefix: string
+  assistant_suffix: string
+  eog_tokens: string list        # token names, not IDs
+  default_system: string? = null
+  system_role_override: { prefix: string, suffix: string }? = null
+  generation_prefix: string = ""
 ```
+
+**Implementation:** [`src/chat_template.zig`](../../src/chat_template.zig) (`ChatTemplate`)
 
 **Example template** (ChatML, used by Qwen3.5):
 
-```zig
-pub const qwen35 = ChatTemplate{
-    .system_prefix = "<|im_start|>system\n",
-    .system_suffix = "<|im_end|>\n",
-    .user_prefix = "<|im_start|>user\n",
-    .user_suffix = "",
-    .assistant_prefix = "<|im_end|>\n<|im_start|>assistant\n",
-    .assistant_suffix = "<|im_end|>\n",
-    .eog_tokens = &.{ "<|im_end|>", "<|endoftext|>" },
-    .generation_prefix = "<think>\n\n</think>\n\n",  // Suppress reasoning
-};
+```text
+qwen35 = ChatTemplate{
+  system_prefix = "<|im_start|>system\n"
+  system_suffix = "<|im_end|>\n"
+  user_prefix = "<|im_start|>user\n"
+  user_suffix = ""
+  assistant_prefix = "<|im_end|>\n<|im_start|>assistant\n"
+  assistant_suffix = "<|im_end|>\n"
+  eog_tokens = ["<|im_end|>", "<|endoftext|>"]
+  generation_prefix = "<think>\n\n</think>\n\n"   # suppress reasoning
+}
 ```
 
 **Note:** `user_suffix` is empty because `assistant_prefix` already includes `<|im_end|>\n` — the end-of-user marker is baked into the transition.
@@ -164,55 +160,53 @@ flowchart TD
 
 ### Single-Turn Prompt
 
-```zig
-const template = ChatTemplate.qwen35;
-const prompt = try template.format(
-    allocator,
-    "You are a helpful assistant.",  // System message
-    "What is 2+2?"                   // User message
-);
-defer allocator.free(prompt);
+```text
+template = ChatTemplate.qwen35
+prompt = template.format(
+    system_msg = "You are a helpful assistant.",
+    user_msg = "What is 2+2?",
+)
 
-// Result:
-// <|im_start|>system
-// You are a helpful assistant.<|im_end|>
-// <|im_start|>user
-// What is 2+2?<|im_end|>
-// <|im_start|>assistant
-// <think>
-//
-// </think>
+# result:
+# <|im_start|>system
+# You are a helpful assistant.<|im_end|>
+# <|im_start|>user
+# What is 2+2?<|im_end|>
+# <|im_start|>assistant
+# <think>
+#
+# </think>
 ```
+
+**Implementation:** [`src/chat_template.zig`](../../src/chat_template.zig) (`ChatTemplate.format`)
 
 **Note:** `generation_prefix` is only appended **after the final assistant prefix** when generating a response, not for past assistant messages in conversation history.
 
 ### Multi-Turn Conversation
 
-```zig
-const messages = [_]Message{
-    .{ .role = .user, .content = "Hello!" },
-    .{ .role = .assistant, .content = "Hi there!" },
-    .{ .role = .user, .content = "How are you?" },
-};
+```text
+messages = [
+    { role: user,      content: "Hello!" },
+    { role: assistant, content: "Hi there!" },
+    { role: user,      content: "How are you?" },
+]
 
-const prompt = try template.formatConversation(
-    allocator,
-    null,  // No system message
-    &messages
-);
+prompt = template.formatConversation(system_msg = null, messages)
 
-// Result:
-// <|im_start|>user
-// Hello!<|im_end|>
-// <|im_start|>assistant
-// Hi there!<|im_end|>
-// <|im_start|>user
-// How are you?<|im_end|>
-// <|im_start|>assistant
-// <think>
-//
-// </think>
+# result:
+# <|im_start|>user
+# Hello!<|im_end|>
+# <|im_start|>assistant
+# Hi there!<|im_end|>
+# <|im_start|>user
+# How are you?<|im_end|>
+# <|im_start|>assistant
+# <think>
+#
+# </think>
 ```
+
+**Implementation:** [`src/chat_template.zig`](../../src/chat_template.zig) (`ChatTemplate.formatConversation`)
 
 ## Architecture-Specific Templates
 
@@ -254,101 +248,112 @@ flowchart LR
 
 ### Gemma 3
 
-```zig
-pub const gemma = ChatTemplate{
-    .system_prefix = "<start_of_turn>user\n",  // No dedicated system role
-    .system_suffix = "\n\n",
-    .user_prefix = "<start_of_turn>user\n",
-    .user_suffix = "",
-    .assistant_prefix = "<end_of_turn>\n<start_of_turn>model\n",
-    .assistant_suffix = "<end_of_turn>\n",
-    .eog_tokens = &.{ "<end_of_turn>", "<eos>" },
-};
+```text
+gemma = ChatTemplate{
+  system_prefix = "<start_of_turn>user\n"   # no dedicated system role
+  system_suffix = "\n\n"
+  user_prefix = "<start_of_turn>user\n"
+  user_suffix = ""
+  assistant_prefix = "<end_of_turn>\n<start_of_turn>model\n"
+  assistant_suffix = "<end_of_turn>\n"
+  eog_tokens = ["<end_of_turn>", "<eos>"]
+}
 ```
+
+**Implementation:** [`src/chat_template.zig`](../../src/chat_template.zig) (`ChatTemplate.gemma`)
 
 **Note:** Gemma doesn't have a separate system role — system messages use the user prefix. The `assistant_prefix` includes `<end_of_turn>\n` to close the prior turn before opening the model turn.
 
 ### Gemma 4
 
-```zig
-pub const gemma4 = ChatTemplate{
-    .system_prefix = "<|turn>system\n",
-    .system_suffix = "<turn|>\n",
-    .user_prefix = "<|turn>user\n",
-    .user_suffix = "<turn|>\n",
-    .assistant_prefix = "<|turn>model\n",
-    .assistant_suffix = "<turn|>\n",
-    .eog_tokens = &.{ "<turn|>", "<eos>", "<channel|>", "<|endoftext|>", "<|end|>" },
-    .generation_prefix = "<|channel>0\n<channel|>",
-};
+```text
+gemma4 = ChatTemplate{
+  system_prefix = "<|turn>system\n"
+  system_suffix = "<turn|>\n"
+  user_prefix = "<|turn>user\n"
+  user_suffix = "<turn|>\n"
+  assistant_prefix = "<|turn>model\n"
+  assistant_suffix = "<turn|>\n"
+  eog_tokens = ["<turn|>", "<eos>", "<channel|>", "<|endoftext|>", "<|end|>"]
+  generation_prefix = "<|channel>0\n<channel|>"
+}
 ```
+
+**Implementation:** [`src/chat_template.zig`](../../src/chat_template.zig) (`ChatTemplate.gemma4`)
 
 **Note:** Gemma 4 uses a channel system. `generation_prefix` selects channel 0 (direct answer) and closes it immediately, preventing reasoning tokens.
 
 ### GPT-OSS
 
-```zig
-pub const gpt_oss = ChatTemplate{
-    .system_prefix = "<|start|>system<|message|>",
-    .system_suffix = "<|end|>",
-    .user_prefix = "<|start|>user<|message|>",
-    .user_suffix = "",
-    .assistant_prefix = "<|end|><|start|>assistant",
-    .assistant_suffix = "<|end|>",
-    .eog_tokens = &.{ "<|end|>", "<|endoftext|>" },
-    .default_system = "You are a helpful assistant.\n" ++
-        "Reasoning: medium\n" ++
-        "# Valid channels: analysis, commentary, final. " ++
-        "Channel must be included for every message.",
-    .system_role_override = .{
-        .prefix = "<|start|>developer<|message|># Instructions\n",
-        .suffix = "<|end|>",
-    },
-};
+```text
+gpt_oss = ChatTemplate{
+  system_prefix = "<|start|>system<|message|>"
+  system_suffix = "<|end|>"
+  user_prefix = "<|start|>user<|message|>"
+  user_suffix = ""
+  assistant_prefix = "<|end|><|start|>assistant"
+  assistant_suffix = "<|end|>"
+  eog_tokens = ["<|end|>", "<|endoftext|>"]
+  default_system = "You are a helpful assistant.\n"
+                  + "Reasoning: medium\n"
+                  + "# Valid channels: analysis, commentary, final. "
+                  + "Channel must be included for every message."
+  system_role_override = {
+    prefix = "<|start|>developer<|message|># Instructions\n"
+    suffix = "<|end|>"
+  }
+}
 ```
+
+**Implementation:** [`src/chat_template.zig`](../../src/chat_template.zig) (`ChatTemplate.gpt_oss`)
 
 **Note:** GPT-OSS uses `<|start|>`/`<|end|>` markers (not Llama-style headers). It has both a `default_system` message and a `system_role_override` — user-provided system messages are formatted as "developer" instructions.
 
 ### GLM-4
 
-```zig
-pub const glm4 = ChatTemplate{
-    .system_prefix = "[gMASK]<sop>",
-    .system_suffix = "",
-    .user_prefix = "<|user|>",
-    .user_suffix = "",
-    .assistant_prefix = "<|assistant|>\n",
-    .assistant_suffix = "",
-    .eog_tokens = &.{ "<|endoftext|>", "<|user|>", "<|observation|>" },
-    .default_system = "",
-    .generation_prefix = "",
-    .system_role_override = .{
-        .prefix = "<|system|>\n",
-        .suffix = "",
-    },
-};
+```text
+glm4 = ChatTemplate{
+  system_prefix = "[gMASK]<sop>"
+  system_suffix = ""
+  user_prefix = "<|user|>"
+  user_suffix = ""
+  assistant_prefix = "<|assistant|>\n"
+  assistant_suffix = ""
+  eog_tokens = ["<|endoftext|>", "<|user|>", "<|observation|>"]
+  default_system = ""
+  generation_prefix = ""
+  system_role_override = {
+    prefix = "<|system|>\n"
+    suffix = ""
+  }
+}
 ```
+
+**Implementation:** [`src/chat_template.zig`](../../src/chat_template.zig) (`ChatTemplate.glm4`)
 
 **Note:** GLM-4 uses `[gMASK]<sop>` as the initial BOS marker. The `system_role_override` maps user-provided system messages to the `<|system|>` role. Reasoning is disabled by default — GLM-4 has no generation prefix.
 
 ### Nemotron-H / Nemotron-Nano (ChatML)
 
-```zig
-// Both use the default ChatML template (via the `else` fallback in arch.zig)
-pub const chatml = ChatTemplate{
-    .system_prefix = "<|im_start|>system\n",
-    .system_suffix = "<|im_end|>\n",
-    .user_prefix = "<|im_start|>user\n",
-    .user_suffix = "",
-    .assistant_prefix = "<|im_end|>\n<|im_start|>assistant\n",
-    .assistant_suffix = "<|im_end|>\n",
-    .eog_tokens = &.{ "<|im_end|>", "<|endoftext|>" },
-};
+Both use the default ChatML template, via the `else` fallback in `arch.zig`:
+
+```text
+chatml = ChatTemplate{
+  system_prefix = "<|im_start|>system\n"
+  system_suffix = "<|im_end|>\n"
+  user_prefix = "<|im_start|>user\n"
+  user_suffix = ""
+  assistant_prefix = "<|im_end|>\n<|im_start|>assistant\n"
+  assistant_suffix = "<|im_end|>\n"
+  eog_tokens = ["<|im_end|>", "<|endoftext|>"]
+}
 ```
+
+**Implementation:** [`src/chat_template.zig`](../../src/chat_template.zig) (`ChatTemplate.chatml`)
 
 ## Template Selection
 
-The `Arch` enum acts as the single dispatch point: every model architecture maps to exactly one `ChatTemplate` constant, and that constant flows through formatting into EOG resolution and finally the generation loop.
+The `Arch` enum is the dispatch point for chat templates. Most architectures map to one base `ChatTemplate` via `chatTemplate()`. Gemma 4 is the exception: `chatTemplateForLayers(n_layers)` returns `ChatTemplate.gemma4_unified` when `n_layers >= 48` (thinking-channel prefix), otherwise plain `gemma4`. DiffusionGemma shares the base `gemma4` template. The chosen template then flows through formatting into EOG resolution and the generation loop.
 
 ```mermaid
 flowchart LR
@@ -362,18 +367,18 @@ flowchart LR
     subgraph Archs["Arch enum variants (arch.zig)"]
         direction TB
         A1["gemma3"]:::setup
-        A2["gemma4"]:::setup
+        A2["gemma4\n(+ diffusion_gemma)"]:::setup
         A3["qwen35"]:::setup
         A4["gpt_oss"]:::setup
         A5["glm4"]:::setup
         A6["llama4"]:::setup
-        A7["nemotron_h\nnemotron_nano\n(else branch)"]:::setup
+        A7["nemotron_h\nnemotron_nano\n(else → chatml)"]:::setup
     end
 
     subgraph Templates["ChatTemplate constants (chat_template.zig)"]
         direction TB
         T1["ChatTemplate.gemma\n&lt;start_of_turn&gt; style"]:::migration
-        T2["ChatTemplate.gemma4\n&lt;|turn&gt; + channel style"]:::migration
+        T2["ChatTemplate.gemma4\nor gemma4_unified\n(n_layers &gt;= 48)"]:::migration
         T3["ChatTemplate.qwen35\nChatML + generation_prefix"]:::migration
         T4["ChatTemplate.gpt_oss\n&lt;|start|&gt; + developer role"]:::migration
         T5["ChatTemplate.glm4\n[gMASK]&lt;sop&gt; style"]:::migration
@@ -391,7 +396,7 @@ flowchart LR
     end
 
     A1 -->|"chatTemplate()"| T1
-    A2 -->|"chatTemplate()"| T2
+    A2 -->|"chatTemplateForLayers()"| T2
     A3 -->|"chatTemplate()"| T3
     A4 -->|"chatTemplate()"| T4
     A5 -->|"chatTemplate()"| T5
@@ -401,44 +406,40 @@ flowchart LR
     T1 & T2 & T3 & T4 & T5 & T6 & T7 --> Format
 ```
 
-**Architecture determines template** (from `src/arch.zig`):
+**Architecture determines template:**
 
-```zig
-pub const Arch = enum {
-    gemma3,
-    gemma4,
-    qwen35,
-    gpt_oss,
-    nemotron_h,
-    nemotron_nano,
-    glm4,
-    llama4,
+```text
+chatTemplate(self: Arch) -> ChatTemplate:
+    switch self:
+        gemma3               -> ChatTemplate.gemma
+        gemma4, diffusion_gemma -> ChatTemplate.gemma4
+        gpt_oss               -> ChatTemplate.gpt_oss
+        qwen35                -> ChatTemplate.qwen35
+        glm4                  -> ChatTemplate.glm4
+        llama4                -> ChatTemplate.llama4
+        else                  -> ChatTemplate.chatml   # Nemotron-H, Nemotron-Nano
 
-    pub fn chatTemplate(self: Arch) ChatTemplate {
-        return switch (self) {
-            .gemma3 => ChatTemplate.gemma,
-            .gemma4 => ChatTemplate.gemma4,
-            .gpt_oss => ChatTemplate.gpt_oss,
-            .qwen35 => ChatTemplate.qwen35,
-            .glm4 => ChatTemplate.glm4,
-            .llama4 => ChatTemplate.llama4,
-            else => ChatTemplate.chatml,  // Nemotron-H, Nemotron-Nano
-        };
-    }
-};
+chatTemplateForLayers(self: Arch, n_layers) -> ChatTemplate:
+    if self == gemma4 and n_layers >= 48:
+        return ChatTemplate.gemma4_unified   # thinking-channel prefix
+    return self.chatTemplate()
 ```
 
-**Main loop uses architecture's template:**
+**Implementation:** [`src/arch.zig`](../../src/arch.zig) (`Arch.chatTemplate`, `Arch.chatTemplateForLayers`)
 
-```zig
-const arch = Arch.detect(fmt) orelse return error.UnknownArch;
-const template = arch.chatTemplate();
+**Main loop uses the layer-aware selector when layer count is known:**
 
-const prompt = if (args.system_msg) |sys|
-    try template.format(allocator, sys, args.user_msg)
-else
-    try template.format(allocator, null, args.user_msg);
+```text
+arch = Arch.detect(fmt) orelse error UnknownArch
+template = arch.chatTemplateForLayers(n_layers)
+
+prompt = if args.system_msg:
+             template.format(args.system_msg, args.user_msg)
+         else:
+             template.format(null, args.user_msg)
 ```
+
+**Implementation:** [`src/main.zig`](../../src/main.zig) (`chatTemplateForLayers` call sites)
 
 **No model-specific code needed** — the architecture enum handles it.
 
@@ -475,8 +476,8 @@ flowchart LR
 
 ### Template Definition
 
-```zig
-.eog_tokens = &.{ "<|im_end|>", "<|endoftext|>" },
+```text
+eog_tokens = ["<|im_end|>", "<|endoftext|>"]
 ```
 
 ### Tokenizer Lookup
@@ -484,18 +485,16 @@ flowchart LR
 At startup, the engine looks up each EOG token name in the tokenizer's special token
 map (loaded from GGUF metadata or `tokenizer.json`):
 
-```zig
-// src/main.zig — EOG token resolution
-const tmpl = arch.chatTemplate();
-for (tmpl.eog_tokens) |eog_name| {
-    if (tok.special_tokens.get(eog_name)) |id| {
-        if (!isEogToken(id, eog) and eog.len < eog.ids.len) {
-            eog.ids[eog.len] = id;
-            eog.len += 1;
-        }
-    }
-}
+```text
+tmpl = arch.chatTemplate()
+for eog_name in tmpl.eog_tokens:
+    if id = tok.special_tokens.get(eog_name):
+        if not isEogToken(id, eog) and eog.len < eog.ids.len:
+            eog.ids[eog.len] = id
+            eog.len += 1
 ```
+
+**Implementation:** [`src/main.zig`](../../src/main.zig) (EOG token resolution)
 
 During generation, each produced token is checked against the resolved EOG IDs to
 detect when the model signals end-of-generation.
@@ -510,14 +509,13 @@ Some models inject a **fixed system message** before the user's system prompt.
 
 **Example:** GPT-OSS includes a default system prompt with reasoning instructions:
 
-```zig
-pub const gpt_oss = ChatTemplate{
-    .system_prefix = "<|start|>system<|message|>",
-    .system_suffix = "<|end|>",
-    // ...
-    .default_system = "You are a helpful assistant.\n" ++
-        "Reasoning: medium\n# Valid channels: ...",
-};
+```text
+gpt_oss = ChatTemplate{
+  system_prefix = "<|start|>system<|message|>"
+  system_suffix = "<|end|>"
+  ...
+  default_system = "You are a helpful assistant.\nReasoning: medium\n# Valid channels: ..."
+}
 ```
 
 **Behavior:** When no user-provided system message is given, `default_system` is used automatically. When the user does provide a system message AND `system_role_override` exists, the user's message is formatted using the override (as a "developer" instruction in GPT-OSS's case), while `default_system` remains.
@@ -528,20 +526,20 @@ Some models route user-provided system messages through a different role.
 
 **Example:** GPT-OSS maps user system messages to a "developer" role:
 
-```zig
-.system_role_override = .{
-    .prefix = "<|start|>developer<|message|># Instructions\n",
-    .suffix = "<|end|>",
-},
+```text
+system_role_override = {
+  prefix = "<|start|>developer<|message|># Instructions\n"
+  suffix = "<|end|>"
+}
 ```
 
 **Example:** GLM-4 maps user system messages to `<|system|>`:
 
-```zig
-.system_role_override = .{
-    .prefix = "<|system|>\n",
-    .suffix = "",
-},
+```text
+system_role_override = {
+  prefix = "<|system|>\n"
+  suffix = ""
+}
 ```
 
 **When to use:** The template has a default system prompt (`default_system`) but still wants to accept user-provided system text through a different role prefix.
@@ -550,11 +548,11 @@ Some models route user-provided system messages through a different role.
 
 **Qwen3.5 reasoning suppression:** Empty `<think>` block disables reasoning (greedy decoding makes open-ended reasoning unstable).
 
-```zig
-pub const qwen35 = ChatTemplate{
-    // ...
-    .generation_prefix = "<think>\n\n</think>\n\n",
-};
+```text
+qwen35 = ChatTemplate{
+  ...
+  generation_prefix = "<think>\n\n</think>\n\n"
+}
 ```
 
 **Applied only to the final assistant turn:**
@@ -581,18 +579,12 @@ Previous response<|im_end|>
 
 ### Format Function
 
-```zig
-pub fn format(
-    self: ChatTemplate,
-    allocator: Allocator,
-    system_msg: ?[]const u8,
-    user_msg: []const u8,
-) ![]u8 {
-    return self.formatConversation(allocator, system_msg, &.{
-        .{ .role = .user, .content = user_msg },
-    });
-}
+```text
+format(self: ChatTemplate, system_msg: string?, user_msg: string) -> string:
+    return self.formatConversation(system_msg, [{ role: user, content: user_msg }])
 ```
+
+**Implementation:** [`src/chat_template.zig`](../../src/chat_template.zig) (`ChatTemplate.format`)
 
 ### formatConversation() Control Flow
 
@@ -661,74 +653,44 @@ flowchart TD
 
 ### Multi-Turn Format Function
 
-```zig
-pub fn formatConversation(
-    self: ChatTemplate,
-    allocator: Allocator,
-    system_msg: ?[]const u8,
-    messages: []const Message,
-) ![]u8 {
-    var result = std.ArrayList(u8).empty;
+```text
+formatConversation(self: ChatTemplate, system_msg: string?, messages: Message[]) -> string:
+    result = ""
 
-    // 1. Fixed default system message
-    if (self.default_system) |ds| {
-        try result.appendSlice(allocator, self.system_prefix);
-        try result.appendSlice(allocator, ds);
-        try result.appendSlice(allocator, self.system_suffix);
-    }
+    # 1. fixed default system message
+    if ds = self.default_system:
+        result += self.system_prefix + ds + self.system_suffix
 
-    // 2. User-provided system message (if no default or role override exists)
-    if (system_msg) |sys| {
-        if (self.system_role_override) |role| {
-            try result.appendSlice(allocator, role.prefix);
-            try result.appendSlice(allocator, sys);
-            try result.appendSlice(allocator, role.suffix);
-        } else if (self.default_system == null) {
-            try result.appendSlice(allocator, self.system_prefix);
-            try result.appendSlice(allocator, sys);
-            try result.appendSlice(allocator, self.system_suffix);
-        }
-    }
+    # 2. user-provided system message (if no default or role override exists)
+    if sys = system_msg:
+        if role = self.system_role_override:
+            result += role.prefix + sys + role.suffix
+        else if self.default_system == null:
+            result += self.system_prefix + sys + self.system_suffix
 
-    // 3. Conversation messages
-    for (messages) |msg| {
-        switch (msg.role) {
-            .user => {
-                try result.appendSlice(allocator, self.user_prefix);
-                try result.appendSlice(allocator, msg.content);
-                try result.appendSlice(allocator, self.user_suffix);
-            },
-            .assistant => {
-                try result.appendSlice(allocator, self.assistant_prefix);
-                try result.appendSlice(allocator, msg.content);
-                try result.appendSlice(allocator, self.assistant_suffix);
-            },
-            .tool => {
-                if (is_chatml) {
-                    try result.appendSlice(allocator, "<|im_start|>tool\n");
-                    if (msg.tool_call_id) |tcid| {
-                        try result.appendSlice(allocator, tcid);
-                        try result.appendSlice(allocator, "\n");
-                    }
-                    try result.appendSlice(allocator, msg.content);
-                    try result.appendSlice(allocator, "<|im_end|>\n");
-                } else {
-                    try result.appendSlice(allocator, self.user_prefix);
-                    try result.appendSlice(allocator, "[Tool Result] ");
-                    try result.appendSlice(allocator, msg.content);
-                    try result.appendSlice(allocator, self.user_suffix);
-                }
-            },
-        }
-    }
+    # 3. conversation messages
+    for msg in messages:
+        switch msg.role:
+            user:
+                result += self.user_prefix + msg.content + self.user_suffix
+            assistant:
+                result += self.assistant_prefix + msg.content + self.assistant_suffix
+            tool:
+                if is_chatml:
+                    result += "<|im_start|>tool\n"
+                    if tcid = msg.tool_call_id:
+                        result += tcid + "\n"
+                    result += msg.content + "<|im_end|>\n"
+                else:
+                    result += self.user_prefix + "[Tool Result] " + msg.content + self.user_suffix
 
-    // 4. Final assistant prefix for generation
-    try result.appendSlice(allocator, self.assistant_prefix);
-    try result.appendSlice(allocator, self.generation_prefix);
+    # 4. final assistant prefix for generation
+    result += self.assistant_prefix + self.generation_prefix
 
-    return result.toOwnedSlice(allocator);
-}
+    return result
 ```
+
+**Implementation:** [`src/chat_template.zig`](../../src/chat_template.zig) (`ChatTemplate.formatConversation`)
 
 ## Benefits of Data-Driven Templates
 
@@ -740,15 +702,10 @@ pub fn formatConversation(
 
 ### Testability
 
-```zig
-test "chatml format basic" {
-    const result = try ChatTemplate.chatml.format(std.testing.allocator, null, "Hi");
-    defer std.testing.allocator.free(result);
-    try std.testing.expectEqualStrings(
-        "<|im_start|>user\nHi<|im_end|>\n<|im_start|>assistant\n",
-        result,
-    );
-}
+```text
+test "chatml format basic":
+    result = ChatTemplate.chatml.format(system_msg = null, user_msg = "Hi")
+    assert result == "<|im_start|>user\nHi<|im_end|>\n<|im_start|>assistant\n"
 ```
 
 ### Flexibility
@@ -763,35 +720,35 @@ test "chatml format basic" {
 
 Used by: Nemotron-H, Nemotron-Nano (Qwen3.5 uses a variant with `generation_prefix`)
 
-```zig
-.system_prefix = "<|im_start|>system\n",
-.system_suffix = "<|im_end|>\n",
-.user_prefix = "<|im_start|>user\n",
-.user_suffix = "",
-.assistant_prefix = "<|im_end|>\n<|im_start|>assistant\n",
-.assistant_suffix = "<|im_end|>\n",
+```text
+system_prefix = "<|im_start|>system\n"
+system_suffix = "<|im_end|>\n"
+user_prefix = "<|im_start|>user\n"
+user_suffix = ""
+assistant_prefix = "<|im_end|>\n<|im_start|>assistant\n"
+assistant_suffix = "<|im_end|>\n"
 ```
 
 ### Turn-Based (Gemma 3)
 
-```zig
-.system_prefix = "<start_of_turn>user\n",
-.system_suffix = "\n\n",
-.user_prefix = "<start_of_turn>user\n",
-.user_suffix = "",
-.assistant_prefix = "<end_of_turn>\n<start_of_turn>model\n",
-.assistant_suffix = "<end_of_turn>\n",
+```text
+system_prefix = "<start_of_turn>user\n"
+system_suffix = "\n\n"
+user_prefix = "<start_of_turn>user\n"
+user_suffix = ""
+assistant_prefix = "<end_of_turn>\n<start_of_turn>model\n"
+assistant_suffix = "<end_of_turn>\n"
 ```
 
 ### Marker-Based (GPT-OSS)
 
-```zig
-.system_prefix = "<|start|>system<|message|>",
-.system_suffix = "<|end|>",
-.user_prefix = "<|start|>user<|message|>",
-.user_suffix = "",
-.assistant_prefix = "<|end|><|start|>assistant",
-.assistant_suffix = "<|end|>",
+```text
+system_prefix = "<|start|>system<|message|>"
+system_suffix = "<|end|>"
+user_prefix = "<|start|>user<|message|>"
+user_suffix = ""
+assistant_prefix = "<|end|><|start|>assistant"
+assistant_suffix = "<|end|>"
 ```
 
 ## Image Token Injection (Multimodal)
@@ -860,22 +817,18 @@ flowchart TD
 
 `findImageInsertPos()` scans the token array for the **last occurrence** of the user-turn prefix token sequence (e.g., the tokens for `<start_of_turn>user\n`), then returns the position immediately after that match. Using the last occurrence avoids false positives when individual prefix tokens (like `\n`) appear earlier in the prompt (e.g., in the system section):
 
-```zig
-// src/chat_template.zig
-pub fn findImageInsertPos(tokens: []const u32, prefix_seq: []const u32) usize {
-    if (prefix_seq.len == 0) return 0;
-    var last_match: usize = 0;
-    if (tokens.len >= prefix_seq.len) {
-        var i: usize = 0;
-        while (i + prefix_seq.len <= tokens.len) : (i += 1) {
-            if (std.mem.eql(u32, tokens[i..][0..prefix_seq.len], prefix_seq)) {
-                last_match = i + prefix_seq.len;
-            }
-        }
-    }
-    return last_match;
-}
+```text
+findImageInsertPos(tokens: u32[], prefix_seq: u32[]) -> usize:
+    if prefix_seq.len == 0: return 0
+    last_match = 0
+    if tokens.len >= prefix_seq.len:
+        for i in 0..(tokens.len - prefix_seq.len + 1):
+            if tokens[i..][0..prefix_seq.len] == prefix_seq:
+                last_match = i + prefix_seq.len
+    return last_match
 ```
+
+**Implementation:** [`src/chat_template.zig`](../../src/chat_template.zig) (`findImageInsertPos`)
 
 ### Injecting the Image Sequence
 
@@ -893,33 +846,35 @@ Different model architectures use different special tokens for image placeholder
 
 When start equals pad (Gemma 4), `injectImageTokens()` omits the start wrapper to avoid the model consuming the start token as a visual embedding — it just injects `pad * N + end`:
 
-```zig
-// src/chat_template.zig — architecture-aware wrapping
-const has_distinct_start = image_tokens.start != image_tokens.pad;
-const has_distinct_end = image_tokens.end != image_tokens.pad;
-const prefix_len: usize = if (has_distinct_start) 1 else 0;
-const suffix_len: usize = if (has_distinct_end) 1 else 0;
+```text
+# architecture-aware wrapping
+has_distinct_start = (image_tokens.start != image_tokens.pad)
+has_distinct_end = (image_tokens.end != image_tokens.pad)
+prefix_len = 1 if has_distinct_start else 0
+suffix_len = 1 if has_distinct_end else 0
 ```
+
+**Implementation:** [`src/chat_template.zig`](../../src/chat_template.zig) (`injectImageTokens`)
 
 ### Embedding Replacement During Forward
 
 The image tokens are not just markers — they trigger embedding replacement in the model's forward pass. When `forward()` encounters a pad token ID, it copies the next visual embedding vector from the vision encoder output instead of performing the normal embedding table lookup:
 
-```zig
-// src/models/gemma4.zig — forward() embedding replacement
-if (self.image_embeddings) |vis_embd| {
-    if (token_id == self.image_pad_token_id) {
-        const idx = self.visual_token_idx;
-        const offset = @as(usize, idx) * self.n_embd;
-        @memcpy(self.hidden, vis_embd[offset..][0..self.n_embd]);
-        self.visual_token_idx = idx + 1;
-        is_image_token = true;
-    }
-}
-if (!is_image_token) {
-    self.embLookup(token_id);  // Normal text embedding
-}
+```text
+# forward() embedding replacement
+if vis_embd = self.image_embeddings:
+    if token_id == self.image_pad_token_id:
+        idx = self.visual_token_idx
+        offset = idx * self.n_embd
+        self.hidden = vis_embd[offset..][0..self.n_embd]
+        self.visual_token_idx = idx + 1
+        is_image_token = true
+
+if not is_image_token:
+    self.embLookup(token_id)   # normal text embedding
 ```
+
+**Implementation:** [`src/models/gemma4.zig`](../../src/models/gemma4.zig) (`forward`, image embedding replacement)
 
 The visual embeddings are set before generation via `model.setImageEmbeddings()`, which stores the vision encoder's output buffer and the pad token ID. The `visual_token_idx` counter advances through the visual embeddings one token at a time, ensuring each pad token gets the correct patch embedding.
 
@@ -929,13 +884,14 @@ Tool/function calling is supported via the HTTP API. When tools are present in a
 
 Tool results are sent back as messages with `role: "tool"` and a `tool_call_id` field. The `Message` struct includes:
 
-```zig
-pub const Message = struct {
-    role: Role,
-    content: []const u8,
-    tool_call_id: ?[]const u8 = null,
-};
+```text
+Message:
+  role: Role
+  content: string
+  tool_call_id: string? = null
 ```
+
+**Implementation:** [`src/chat_template.zig`](../../src/chat_template.zig) (`Message`)
 
 For ChatML models (Qwen3.5, Nemotron), tool results are formatted as:
 ```

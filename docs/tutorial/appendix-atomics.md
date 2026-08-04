@@ -24,20 +24,19 @@ sequenceDiagram
 
 Without atomics, concurrent writes corrupt data:
 
-```zig
-// WRONG: Race condition
-var counter: usize = 0;
+```text
+# WRONG: race condition
+counter: usize = 0
 
-fn workerThread() void {
-    counter += 1;  // Read counter, add 1, write back (3 separate operations)
-}
+workerThread():
+    counter += 1     # read counter, add 1, write back: 3 separate operations
 
-// If 2 threads run workerThread() concurrently:
-// Thread A reads counter=0
-// Thread B reads counter=0  ← Both read 0 before either writes!
-// Thread A writes counter=1
-// Thread B writes counter=1  ← Overwrites A's update!
-// Final value: 1 (expected: 2)
+# if 2 threads run workerThread() concurrently:
+#   Thread A reads counter=0
+#   Thread B reads counter=0   <- both read 0 before either writes
+#   Thread A writes counter=1
+#   Thread B writes counter=1  <- overwrites A's update
+#   final value: 1 (expected: 2)
 ```
 
 **The issue:** `counter += 1` is **not atomic** — it compiles to:
@@ -54,42 +53,35 @@ Between any two instructions, another thread can run and see inconsistent state.
 
 **`std.atomic.Value(T)`** provides atomic read-modify-write operations:
 
-```zig
-var counter = std.atomic.Value(usize).init(0);
+```text
+counter = atomic.Value(usize).init(0)
 
-fn workerThread() void {
-    _ = counter.fetchAdd(1, .monotonic);  // Atomic increment
-}
+workerThread():
+    counter.fetchAdd(1, .monotonic)    # atomic increment
 
-// Guaranteed: 2 threads → counter = 2
+# guaranteed: 2 threads -> counter = 2
 ```
+
+**Implementation:** [`src/thread_pool.zig`](../../src/thread_pool.zig) (`task_counter.fetchAdd(grain, .monotonic)`)
 
 **How it works:** `fetchAdd` compiles to a single CPU instruction (e.g., x86 `lock add` or ARM `ldadd`) that the hardware guarantees is atomic.
 
 ### Common Operations
 
-```zig
-var val = std.atomic.Value(u32).init(10);
+```text
+val = atomic.Value(u32).init(10)
 
-// Fetch-and-add: returns old value, adds delta
-const old = val.fetchAdd(5, .monotonic);  // old=10, val=15
+old  = val.fetchAdd(5, .monotonic)     # returns old value, adds delta: old=10, val=15
+old2 = val.fetchSub(3, .monotonic)     # returns old value, subtracts delta: old2=15, val=12
 
-// Fetch-and-sub: returns old value, subtracts delta
-const old2 = val.fetchSub(3, .monotonic);  // old2=15, val=12
+swapped = val.cmpxchgStrong(12, 20, .monotonic, .monotonic)
+if swapped == null:
+    ...   # swap succeeded: val=20
+else:
+    ...   # swap failed: val still 12, someone else changed it
 
-// Compare-and-swap: only update if current value matches expected
-const swapped = val.cmpxchgStrong(12, 20, .monotonic, .monotonic);
-if (swapped == null) {
-    // Swap succeeded: val=20
-} else {
-    // Swap failed: val still 12, someone else changed it
-}
-
-// Load: atomic read
-const current = val.load(.monotonic);
-
-// Store: atomic write
-val.store(50, .monotonic);
+current = val.load(.monotonic)         # atomic read
+val.store(50, .monotonic)              # atomic write
 ```
 
 ## Memory Ordering
@@ -129,22 +121,24 @@ flowchart LR
 
 **Use for:** Simple counters where you don't care about ordering.
 
-```zig
-var counter = std.atomic.Value(usize).init(0);
+```text
+counter = atomic.Value(usize).init(0)
 
-// Thread A
-_ = counter.fetchAdd(1, .monotonic);
+# Thread A
+counter.fetchAdd(1, .monotonic)
 
-// Thread B
-const val = counter.load(.monotonic);
-// val could be 0 or 1 — no guarantee when the write is visible
+# Thread B
+val = counter.load(.monotonic)
+# val could be 0 or 1: no guarantee when the write becomes visible
 ```
 
 **Example from thread pool:**
 
-```zig
-const start = self.task_counter.fetchAdd(grain, .monotonic);
+```text
+start = task_counter.fetchAdd(grain, .monotonic)
 ```
+
+**Implementation:** [`src/thread_pool.zig`](../../src/thread_pool.zig) (`task_counter.fetchAdd`)
 
 **Why monotonic?** The counter value doesn't carry ordering information — it's just work assignment. Each thread grabs a chunk independently.
 
@@ -171,45 +165,45 @@ sequenceDiagram
     C->>C: process(data[0..99])  ✓ safe
 ```
 
-```zig
-var ready = std.atomic.Value(bool).init(false);
-var data: [100]u8 = undefined;
+```text
+ready = atomic.Value(bool).init(false)
+data: [100]u8
 
-// Producer thread
-for (0..100) |i| {
-    data[i] = compute(i);  // Fill data
-}
-ready.store(true, .release);  // Publish: data writes happen-before this store
+# producer thread
+for i in 0..100:
+    data[i] = compute(i)              # fill data
+ready.store(true, .release)           # publish: data writes happen-before this store
 
-// Consumer thread
-while (!ready.load(.acquire)) {}  // Wait until ready
-// Now safe to read data — all writes are visible
-for (data) |d| {
-    process(d);
-}
+# consumer thread
+while not ready.load(.acquire): ()    # wait until ready
+# now safe to read data: all writes are visible
+for d in data:
+    process(d)
 ```
 
 **Guarantee:** If consumer sees `ready=true`, it's guaranteed to see the fully-filled `data` array.
 
 **Example from thread pool:**
 
-```zig
-// Main thread: publish work (simplified — actual code uses a CAS on active
-// before writing task fields, and also sets task_grain and resets task_counter)
-self.task_func = func;
-self.task_ctx = ctx;
-self.task_total = total;
-self.task_grain = effective_grain;
-self.task_counter.store(0, .release);
-_ = self.generation.fetchAdd(1, .release);  // All writes happen-before this
-self.io.futexWake(u32, &self.generation.raw, @intCast(self.n_workers));
+```text
+# main thread: publish work (simplified: real code also CASes `active`
+# before writing task fields, and sets task_grain)
+task_func = func
+task_ctx = ctx
+task_total = total
+task_grain = effective_grain
+task_counter.store(0, .release)
+generation.fetchAdd(1, .release)      # all writes happen-before this
+io.futexWake(&generation, n_workers)
 
-// Worker thread: subscribe
-const new_gen = self.generation.load(.acquire);  // See all writes before release
-if (new_gen == local_gen) continue; // spurious wakeup
-local_gen = new_gen;
-// Safe to read task_func, task_ctx, task_total, task_grain
+# worker thread: subscribe
+new_gen = generation.load(.acquire)   # see all writes before the release
+if new_gen == local_gen: continue     # spurious wakeup
+local_gen = new_gen
+# safe to read task_func, task_ctx, task_total, task_grain
 ```
+
+**Implementation:** [`src/thread_pool.zig`](../../src/thread_pool.zig) (dispatch and `workerLoop`)
 
 #### .seq_cst — Sequential Consistency
 
@@ -237,24 +231,23 @@ local_gen = new_gen;
 
 ### Thread Pool Work Counter
 
-```zig
-// src/thread_pool.zig
-task_counter: std.atomic.Value(usize) = std.atomic.Value(usize).init(0),
+```text
+task_counter: atomic.Value(usize) = 0
 
-fn doWork(self: *ThreadPool) void {
-    const func = self.task_func orelse return;
-    const ctx  = self.task_ctx  orelse return;
-    const total = self.task_total;
-    const grain = self.task_grain;
+doWork():
+    func  = task_func or return
+    ctx   = task_ctx or return
+    total = task_total
+    grain = task_grain
 
-    while (true) {
-        const start = self.task_counter.fetchAdd(grain, .monotonic);
-        if (start >= total) break;
-        const end = @min(start + grain, total);
-        func(ctx, start, end);
-    }
-}
+    loop:
+        start = task_counter.fetchAdd(grain, .monotonic)
+        if start >= total: break
+        end = min(start + grain, total)
+        func(ctx, start, end)
 ```
+
+**Implementation:** [`src/thread_pool.zig`](../../src/thread_pool.zig) (`task_counter`, `doWork`)
 
 **Why `.monotonic`?**
 
@@ -293,47 +286,50 @@ sequenceDiagram
     Note over Main: active==0 → all done, safe to read results
 ```
 
-```zig
-generation: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
+```text
+generation: atomic.Value(u32) = 0
 
-// Main thread: post work
-// CAS claims the pool atomically (0 → n_workers); concurrent parallelFor falls back inline.
-// active is set *before* task fields so workers cannot start with stale state.
-if (self.active.cmpxchgWeak(0, @intCast(self.n_workers), .acq_rel, .monotonic)) |still_active| {
-    func(ctx, 0, total);  // Concurrent call — run inline instead
-    return;
-}
-// Post task fields (published to workers by generation.fetchAdd release below)
-self.task_func = func;
-self.task_ctx = ctx;
-self.task_total = total;
-self.task_grain = effective_grain;
-self.task_counter.store(0, .release);  // Reset counter
-_ = self.generation.fetchAdd(1, .release);  // Publish: all task fields valid
-self.io.futexWake(u32, &self.generation.raw, @intCast(self.n_workers));
+# main thread: post work
+# CAS claims the pool atomically (0 -> n_workers); a concurrent parallelFor
+# call falls back to running inline. active is set *before* task fields so
+# workers can never start with stale state.
+if active.cmpxchgWeak(0, n_workers, .acq_rel, .monotonic) is still_active:
+    func(ctx, 0, total)          # concurrent call: run inline instead
+    return
+
+# post task fields (published to workers by the generation.fetchAdd release below)
+task_func = func
+task_ctx = ctx
+task_total = total
+task_grain = effective_grain
+task_counter.store(0, .release)      # reset counter
+generation.fetchAdd(1, .release)     # publish: all task fields valid
+io.futexWake(&generation, n_workers)
 ```
+
+**Implementation:** [`src/thread_pool.zig`](../../src/thread_pool.zig) (`active` CAS claim, dispatch)
 
 **Why `.release`?**
 
 - Ensures `task_func`, `task_ctx`, `task_total` are visible to workers **before** they see the generation bump
 - Without release, workers could see new generation but stale task fields → undefined behavior
 
-```zig
-// Worker thread: consume work
-fn workerLoop(pool: *ThreadPool) void {
-    var local_gen: u32 = 0;
-    while (true) {
-        pool.io.futexWaitUncancelable(u32, &pool.generation.raw, local_gen);
-        if (pool.shutdown.load(.acquire)) return;
+```text
+# worker thread: consume work
+workerLoop(pool):
+    local_gen: u32 = 0
+    loop:
+        pool.io.futexWaitUncancelable(&pool.generation, local_gen)
+        if pool.shutdown.load(.acquire): return
 
-        const new_gen = pool.generation.load(.acquire);  // See all task fields
-        if (new_gen == local_gen) continue; // spurious wakeup — generation unchanged
-        local_gen = new_gen;
-        pool.doWork();
-        _ = pool.active.fetchSub(1, .release);  // Signal completion
-    }
-}
+        new_gen = pool.generation.load(.acquire)   # see all task fields
+        if new_gen == local_gen: continue          # spurious wakeup, generation unchanged
+        local_gen = new_gen
+        pool.doWork()
+        pool.active.fetchSub(1, .release)          # signal completion
 ```
+
+**Implementation:** [`src/thread_pool.zig`](../../src/thread_pool.zig) (`workerLoop`)
 
 **Why `.acquire`?**
 
@@ -381,17 +377,18 @@ flowchart TD
     Spin -->|"yes — acquire fence\nsees all release writes"| Done
 ```
 
-```zig
-active: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
+```text
+active: atomic.Value(u32) = 0
 
-// Worker: signal completion
-_ = pool.active.fetchSub(1, .release);
+# worker: signal completion
+pool.active.fetchSub(1, .release)
 
-// Main thread: wait for completion
-while (pool.active.load(.acquire) != 0) {
-    std.atomic.spinLoopHint();
-}
+# main thread: wait for completion
+while pool.active.load(.acquire) != 0:
+    atomic.spinLoopHint()
 ```
+
+**Implementation:** [`src/thread_pool.zig`](../../src/thread_pool.zig) (`active`, spin-wait for completion)
 
 **Why `.release`/`.acquire`?**
 
@@ -401,17 +398,19 @@ while (pool.active.load(.acquire) != 0) {
 
 ### Shutdown Flag
 
-```zig
-shutdown: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+```text
+shutdown: atomic.Value(bool) = false
 
-// Main thread: signal shutdown
-self.shutdown.store(true, .release);
-_ = self.generation.fetchAdd(1, .release);
-self.io.futexWake(u32, &self.generation.raw, @intCast(self.n_workers));
+# main thread: signal shutdown
+shutdown.store(true, .release)
+generation.fetchAdd(1, .release)
+io.futexWake(&generation, n_workers)
 
-// Worker: check shutdown
-if (pool.shutdown.load(.acquire)) return;
+# worker: check shutdown
+if pool.shutdown.load(.acquire): return
 ```
+
+**Implementation:** [`src/thread_pool.zig`](../../src/thread_pool.zig) (`shutdown`), [`src/server/scheduler.zig`](../../src/server/scheduler.zig) (`is_cancelled`, the same store-release/load-acquire pattern for request cancellation)
 
 **Why `.release`/`.acquire`?**
 
@@ -451,27 +450,20 @@ flowchart TD
     Retry --> Read
 ```
 
-```zig
-pub fn push(self: *LockFreeStack, item: *Node) void {
-    while (true) {
-        const current_head = self.head.load(.acquire);
-        item.next = current_head;
+```text
+push(item):
+    loop:
+        current_head = head.load(.acquire)
+        item.next = current_head
 
-        // Try to swap: if head still equals current_head, set it to item
-        const result = self.head.cmpxchgWeak(
-            current_head,
-            item,
-            .release,  // On success: publish item.next write
-            .acquire,  // On failure: see why it failed
-        );
+        # try to swap: if head still equals current_head, set it to item
+        result = head.cmpxchgWeak(current_head, item,
+                                   success_order = .release,   # publishes item.next
+                                   failure_order = .acquire)    # see why it failed
 
-        if (result == null) {
-            // Success: head was current_head, now it's item
-            return;
-        }
-        // Failure: head changed, retry with new head value
-    }
-}
+        if result == null:
+            return               # success: head was current_head, now it's item
+        # failure: head changed, retry with the new head value
 ```
 
 **cmpxchgWeak vs cmpxchgStrong:**
@@ -485,11 +477,12 @@ pub fn push(self: *LockFreeStack, item: *Node) void {
 
 When spinning (busy-waiting), hint the CPU to save power:
 
-```zig
-while (pool.active.load(.acquire) != 0) {
-    std.atomic.spinLoopHint();  // Maps to `pause` (x86) or `yield` (ARM)
-}
+```text
+while pool.active.load(.acquire) != 0:
+    atomic.spinLoopHint()    # maps to `pause` (x86) or `yield` (ARM)
 ```
+
+**Implementation:** [`src/thread_pool.zig`](../../src/thread_pool.zig) (spin-wait with `spinLoopHint`)
 
 **What it does:**
 
@@ -503,24 +496,24 @@ while (pool.active.load(.acquire) != 0) {
 
 **Explicit memory barrier** — rarely needed in Zig (acquire/release is usually sufficient).
 
-```zig
-std.atomic.fence(.release);  // All writes before this are visible
-// ... some non-atomic write ...
-std.atomic.fence(.acquire);  // All writes after this see prior writes
+```text
+atomic.fence(.release)     # all writes before this are visible
+... some non-atomic write ...
+atomic.fence(.acquire)     # all writes after this see prior writes
 ```
 
 **Use when:** Synchronizing non-atomic writes with atomic operations.
 
 **Example (rare):**
 
-```zig
-// Non-atomic writes
-self.data[0] = 42;
-self.data[1] = 43;
+```text
+# non-atomic writes
+data[0] = 42
+data[1] = 43
 
-std.atomic.fence(.release);  // Publish data writes
+atomic.fence(.release)             # publish data writes
 
-self.ready.store(true, .monotonic);  // Signal ready (no need for release here — fence did it)
+ready.store(true, .monotonic)      # signal ready (no need for release here, the fence did it)
 ```
 
 **Agave doesn't use fences** — acquire/release on atomic operations is clearer and sufficient.
@@ -529,61 +522,59 @@ self.ready.store(true, .monotonic);  // Signal ready (no need for release here �
 
 ### Pitfall 1: Using Non-Atomic for Synchronization
 
-```zig
-// WRONG: Data race
-var flag: bool = false;  // Not atomic!
+```text
+# WRONG: data race
+flag: bool = false     # not atomic
 
-// Thread A
-data.fill();
-flag = true;  // Write
+# Thread A
+data.fill()
+flag = true             # write
 
-// Thread B
-if (flag) {  // Read
-    data.process();  // May see partially-filled data!
-}
+# Thread B
+if flag:                 # read
+    data.process()       # may see partially-filled data
 ```
 
 **Fix:** Use `std.atomic.Value(bool)` with proper ordering.
 
 ### Pitfall 2: Missing Acquire/Release
 
-```zig
-// WRONG: Missing release
-var counter = std.atomic.Value(usize).init(0);
+```text
+# WRONG: missing release
+counter = atomic.Value(usize).init(0)
 
-// Producer
-data[0] = compute();
-counter.store(1, .monotonic);  // Should be .release!
+# producer
+data[0] = compute()
+counter.store(1, .monotonic)      # should be .release
 
-// Consumer
-if (counter.load(.monotonic) == 1) {  // Should be .acquire!
-    process(data[0]);  // May see stale data!
-}
+# consumer
+if counter.load(.monotonic) == 1:  # should be .acquire
+    process(data[0])                # may see stale data
 ```
 
 **Fix:** Use `.release` on store, `.acquire` on load.
 
 ### Pitfall 3: Assuming Atomicity Without Explicit Atomic Type
 
-```zig
-// WRONG: Not atomic on all platforms
-var x: u64 = 0;
+```text
+# WRONG: not atomic on all platforms
+x: u64 = 0
 
-// Thread A
-x = 123;  // May be two 32-bit stores on 32-bit platforms!
+# Thread A
+x = 123        # may be two 32-bit stores on 32-bit platforms
 
-// Thread B
-const val = x;  // May read torn value (high/low half from different writes)
+# Thread B
+val = x         # may read a torn value (high/low half from different writes)
 ```
 
 **Fix:** Use `std.atomic.Value(u64)` for guaranteed atomicity.
 
 ### Pitfall 4: Overusing .seq_cst
 
-```zig
-// WRONG: Unnecessarily slow
-var counter = std.atomic.Value(usize).init(0);
-_ = counter.fetchAdd(1, .seq_cst);  // Should be .monotonic!
+```text
+# WRONG: unnecessarily slow
+counter = atomic.Value(usize).init(0)
+counter.fetchAdd(1, .seq_cst)    # should be .monotonic
 ```
 
 **Fix:** Use weakest ordering that provides required guarantees.
@@ -644,7 +635,7 @@ zig build -Dsanitize-thread
 
 ---
 
-**In the code:** [src/thread_pool.zig](../../src/thread_pool.zig) (extensive use of atomics for synchronization), [src/backend/cpu.zig](../../src/backend/cpu.zig) (atomic cancellation flag)
+**In the code:** [src/thread_pool.zig](../../src/thread_pool.zig) (extensive use of atomics for synchronization), [src/server/scheduler.zig](../../src/server/scheduler.zig) (atomic cancellation flag)
 
 **Related:** [Chapter 12: CPU Parallelism](12-cpu-parallelism.md#memory-ordering), [Zig std.atomic documentation](https://ziglang.org/documentation/master/std/#std.atomic)
 

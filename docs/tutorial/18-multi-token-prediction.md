@@ -369,7 +369,7 @@ flowchart TD
 |--------|-----|---------------------|--------|
 | Acceptance rate | 70-85% | ~50% | Variable |
 | Draft cost | ~5% of full forward | 100% of draft model | Zero |
-| Memory overhead | ~2-10% | Full draft model weights | 8 KB ring buffer |
+| Memory overhead | ~2-10% | Full draft model weights | 8 KB history buffer |
 | Model support | MTP-trained only | Any model pair | Any model |
 
 ### SSM Caveat (Qwen 3.5)
@@ -380,8 +380,8 @@ Qwen 3.5 uses a hybrid architecture with **DeltaNet SSM** layers. SSM layers mai
 
 | Model | MTP Depth | Status |
 |-------|-----------|--------|
-| Qwen 3.5 (0.8B-27B) | 1 | Supported (SSM overhead caveat) |
-| Qwen 3.6 (27B, 35B-A3B) | 1-3 | Architecture supported |
+| Qwen 3.5 (0.8B, 9B; MoE variants) | 1 | Supported (SSM overhead caveat) |
+| Qwen 3.6 (35B-A3B) | 1-3 | Architecture supported |
 | DeepSeek V3/R1 | 1 | Architecture supported |
 | Gemma 4 | Separate assistant checkpoint | Future |
 

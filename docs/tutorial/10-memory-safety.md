@@ -43,23 +43,23 @@ flowchart LR
 
 `defer` executes a statement when the current scope exits — **always**, whether by normal return, error return, or early return:
 
-```zig
-pub fn processFile(allocator: Allocator, path: []const u8) !void {
-    const file = try std.fs.cwd().openFile(path, .{});
-    defer file.close();  // Runs when this function exits, no matter how
+```text
+processFile(path):
+    file = open(path)
+    defer close(file)               # runs on every exit, no matter how
 
-    const data = try file.readToEndAlloc(allocator, 1024 * 1024);
-    defer allocator.free(data);  // Runs before file.close() (declared last, runs first)
+    data = readAll(file)
+    defer free(data)                # runs before close(file): declared last, runs first
 
-    // ... process data ...
+    ... process data ...
 
-    if (someCondition) {
-        return error.Invalid;  // Both defers still run!
-    }
+    if someCondition:
+        return error(Invalid)       # both defers still run
 
-    // Normal return — both defers run
-}
+    return                          # normal return: both defers still run
 ```
+
+**Implementation:** [`src/pull.zig`](../../src/pull.zig) (open/read/close pattern around model downloads)
 
 **Execution order:** Defers run in **reverse order** of declaration (stack unwinding — last declared, first executed):
 
@@ -77,11 +77,11 @@ sequenceDiagram
     Stack->>Cleanup: file.close()          [first declared, last run]
 ```
 
-```zig
-defer std.debug.print("Third\n", .{});
-defer std.debug.print("Second\n", .{});
-defer std.debug.print("First\n", .{});
-// Prints: First, Second, Third
+```text
+defer print("Third")
+defer print("Second")
+defer print("First")
+# prints: First, Second, Third (reverse of declaration order)
 ```
 
 **Why reverse order?** Resources should be released in the opposite order they were acquired (last acquired, first released — like closing nested function calls).
@@ -90,22 +90,21 @@ defer std.debug.print("First\n", .{});
 
 `errdefer` runs **only if the function returns an error** after the `errdefer` was declared. It's for cleaning up partial initialization:
 
-```zig
-pub fn initModel(allocator: Allocator, config: Config) !Model {
-    var model: Model = undefined;
+```text
+initModel(config):
+    model.weights = alloc(f32, config.n_params)
+    errdefer free(model.weights)              # only if we error out later
 
-    model.weights = try allocator.alloc(f32, config.n_params);
-    errdefer allocator.free(model.weights);  // Only if we error out later
+    model.cache = KVCache.init(config.max_seq_len)
+    errdefer model.cache.deinit()             # only if we error out after this point
 
-    model.cache = try KVCache.init(allocator, config.max_seq_len);
-    errdefer model.cache.deinit();  // Only if we error out after this point
+    model.backend = Backend.init()
+    errdefer model.backend.deinit()
 
-    model.backend = try Backend.init(allocator);
-    errdefer model.backend.deinit();
-
-    return model;  // Success: no errdefers run, caller owns model
-}
+    return model                              # success: no errdefers run, caller owns model
 ```
+
+**Implementation:** [`src/kvcache/manager.zig`](../../src/kvcache/manager.zig) (`allocKvCache`), [`src/main.zig`](../../src/main.zig) (multi-component init chain)
 
 **What happens on error?**
 
@@ -199,81 +198,72 @@ flowchart TD
 
 ### Example 1: Simple Allocation
 
-```zig
-pub fn processTokens(allocator: Allocator, tokens: []const u32) ![]f32 {
-    const embeddings = try allocator.alloc(f32, tokens.len * 768);
-    defer allocator.free(embeddings);  // Always cleanup
+```text
+processTokens(tokens):                        # BUG
+    embeddings = alloc(f32, tokens.len * 768)
+    defer free(embeddings)                    # always runs, even on the return below
 
-    for (tokens, 0..) |token, i| {
-        // ... compute embedding ...
-        if (token >= vocab_size) return error.InvalidToken;  // defer still runs!
-    }
+    for token, i in tokens:
+        ... compute embedding ...
+        if token >= vocab_size:
+            return error(InvalidToken)        # defer still runs, fine here
 
-    return embeddings;  // Wait, this is wrong! defer frees it before we return!
-}
+    return embeddings                         # WRONG: defer frees it before the caller sees it!
 ```
 
 **Bug:** `defer` runs before the return, so we're returning a pointer to freed memory!
 
 **Fix:** Only use `defer` when you **don't** return the resource:
 
-```zig
-pub fn processTokens(allocator: Allocator, tokens: []const u32) ![]f32 {
-    const embeddings = try allocator.alloc(f32, tokens.len * 768);
-    errdefer allocator.free(embeddings);  // Only cleanup on error
+```text
+processTokens(tokens):                        # FIX
+    embeddings = alloc(f32, tokens.len * 768)
+    errdefer free(embeddings)                  # only cleanup on error
 
-    for (tokens, 0..) |token, i| {
-        if (token >= vocab_size) return error.InvalidToken;  // errdefer runs
-    }
+    for token, i in tokens:
+        if token >= vocab_size:
+            return error(InvalidToken)         # errdefer runs, embeddings freed
 
-    return embeddings;  // Success: errdefer doesn't run, caller owns embeddings
-}
+    return embeddings                          # success: errdefer skipped, caller owns embeddings
 ```
+
+**Implementation:** [`src/models/model.zig`](../../src/models/model.zig) (allocate-then-validate pattern in embedding/token paths)
 
 ### Example 2: Struct with Multiple Resources
 
 **Pattern:** Each struct with allocated resources provides a `deinit()` method:
 
-```zig
-pub const KVCache = struct {
-    keys: []u8,
-    values: []u8,
-    block_table: []u32,
-    allocator: Allocator,
+```text
+KVCache:
+    fields: keys, values, block_table
 
-    pub fn init(allocator: Allocator, max_seq_len: usize, kv_dim: usize) !KVCache {
-        const keys = try allocator.alloc(u8, max_seq_len * kv_dim);
-        errdefer allocator.free(keys);
+    init(max_seq_len, kv_dim):
+        keys = alloc(u8, max_seq_len * kv_dim)
+        errdefer free(keys)
 
-        const values = try allocator.alloc(u8, max_seq_len * kv_dim);
-        errdefer allocator.free(values);
+        values = alloc(u8, max_seq_len * kv_dim)
+        errdefer free(values)
 
-        const block_table = try allocator.alloc(u32, max_seq_len);
-        errdefer allocator.free(block_table);
+        block_table = alloc(u32, max_seq_len)
+        errdefer free(block_table)
 
-        return KVCache{
-            .keys = keys,
-            .values = values,
-            .block_table = block_table,
-            .allocator = allocator,
-        };
-    }
+        return KVCache{ keys, values, block_table }
 
-    pub fn deinit(self: *KVCache) void {
-        self.allocator.free(self.block_table);
-        self.allocator.free(self.values);
-        self.allocator.free(self.keys);
-    }
-};
+    deinit():
+        free(block_table)                     # reverse of allocation order
+        free(values)
+        free(keys)
 ```
+
+**Implementation:** [`src/kvcache/manager.zig`](../../src/kvcache/manager.zig) (`allocKvCache`, `KvCache.deinit`)
 
 **Usage:**
 
-```zig
-var cache = try KVCache.init(allocator, 4096, 640);
-defer cache.deinit();  // Always cleanup
+```text
+cache = KVCache.init(4096, 640)
+defer cache.deinit()                          # always cleanup
 
-// ... use cache ...
+... use cache ...
 ```
 
 **Why this works:**
@@ -286,30 +276,27 @@ defer cache.deinit();  // Always cleanup
 
 Simplified illustrative example showing how Agave-style multi-component initialization chains defer and errdefer:
 
-```zig
-pub fn initAndRun(allocator: Allocator, args: Args) !void {
-    // Format (loads model weights from disk)
-    var fmt = try Format.init(allocator, args.model_path);
-    defer fmt.deinit();
+```text
+initAndRun(args):
+    fmt = Format.init(args.model_path)        # loads model weights from disk
+    defer fmt.deinit()
 
-    // Backend (GPU/CPU compute)
-    var be = try Backend.init(allocator, args.backend_type);
-    defer be.deinit();
+    be = Backend.init(args.backend_type)      # GPU/CPU compute
+    defer be.deinit()
 
-    // Tokenizer (text ↔ token IDs)
-    var tok = try Tokenizer.init(allocator, fmt);
-    defer tok.deinit();
+    tok = Tokenizer.init(fmt)                 # text <-> token IDs
+    defer tok.deinit()
 
-    // Model (weights + forward pass)
-    var model = try Model.init(allocator, fmt, be);
-    defer model.deinit();
+    model = Model.init(fmt, be)               # weights + forward pass
+    defer model.deinit()
 
-    // If ANY init fails, all prior defers run automatically
-    // If all succeed, all defers run at function exit
+    # if ANY init fails, all prior defers run automatically
+    # if all succeed, all defers run at function exit
 
-    try runGeneration(allocator, &model, &tok, args);
-}
+    runGeneration(model, tok, args)
 ```
+
+**Implementation:** [`src/main.zig`](../../src/main.zig) (format, backend, tokenizer, and model init chain)
 
 **Clean and safe:** No manual error handling, no forgotten cleanup, no leaks.
 
@@ -344,111 +331,102 @@ flowchart TD
     end
 ```
 
-```zig
-// BAD: defer accumulates, all run at function exit
-for (files) |path| {
-    const file = try std.fs.cwd().openFile(path, .{});
-    defer file.close();  // Wrong! All files stay open until function exits
+```text
+# BAD: defer accumulates, all run at function exit
+for path in files:
+    file = open(path)
+    defer close(file)                         # wrong: all files stay open until function exits
 
-    // ... process file ...
-}
+    ... process file ...
 ```
 
 **Fix:** Use an explicit scope or call cleanup directly:
 
-```zig
-// GOOD: Explicit scope
-for (files) |path| {
-    {  // New scope
-        const file = try std.fs.cwd().openFile(path, .{});
-        defer file.close();  // Runs at end of this block
+```text
+# GOOD: explicit inner scope
+for path in files:
+    {                                          # new scope
+        file = open(path)
+        defer close(file)                      # runs at end of this block
 
-        // ... process file ...
-    }  // file.close() runs here
-}
+        ... process file ...
+    }                                           # close(file) runs here
 
-// Or: Manual cleanup when defer isn't appropriate
-for (files) |path| {
-    const file = try std.fs.cwd().openFile(path, .{});
-    defer file.close();  // Runs at end of loop iteration? NO!
-
-    // Actually, this is still wrong. Manual is better:
-    errdefer file.close();
-    // ... process ...
-    file.close();  // Explicit
-}
+# Or: manual cleanup when defer isn't appropriate
+for path in files:
+    file = open(path)
+    errdefer close(file)                       # only cleans up on the error path
+    ... process ...
+    close(file)                                # explicit cleanup on the success path
 ```
 
 **Better pattern:** Extract to a helper function:
 
-```zig
-fn processFile(path: []const u8) !void {
-    const file = try std.fs.cwd().openFile(path, .{});
-    defer file.close();  // Runs at end of this function
-    // ... process ...
-}
+```text
+processFile(path):
+    file = open(path)
+    defer close(file)                          # runs at end of this function
+    ... process ...
 
-for (files) |path| {
-    try processFile(path);  // Clean and correct
-}
+for path in files:
+    processFile(path)                          # clean and correct: one file open at a time
 ```
+
+**Implementation:** [`src/pull.zig`](../../src/pull.zig) (per-file processing extracted into a helper so each file's handle closes before the next opens)
 
 ### Pitfall 2: Conditional defer
 
-```zig
-// BAD: defer is unconditional, can't be inside an if
-if (use_cache) {
-    const cache = try allocator.alloc(u8, size);
-    defer allocator.free(cache);  // Runs when function exits, not at end of if!
-}
-// cache is out of scope, but defer still tries to free it → use-after-free
+```text
+# BAD: defer is unconditional, can't be scoped to just the if
+if use_cache:
+    cache = alloc(u8, size)
+    defer free(cache)                          # runs when the function exits, not at end of if!
+# cache is out of scope here, but the defer still tries to free it -> use-after-free
 ```
 
 **Fix:** Don't do this. Use `errdefer` with explicit cleanup, or refactor:
 
-```zig
-// Option 1: Always allocate, conditionally use
-const cache = if (use_cache) try allocator.alloc(u8, size) else &[_]u8{};
-defer if (use_cache) allocator.free(cache);
+```text
+# Option 1: always allocate, conditionally use
+cache = use_cache ? alloc(u8, size) : empty_slice
+defer if use_cache: free(cache)
 
-// Option 2: Refactor into separate function
-if (use_cache) {
-    try withCache(allocator, size);
-}
+# Option 2: refactor into a separate function
+if use_cache:
+    withCache(size)
 
-fn withCache(allocator: Allocator, size: usize) !void {
-    const cache = try allocator.alloc(u8, size);
-    defer allocator.free(cache);
-    // ... use cache ...
-}
+withCache(size):
+    cache = alloc(u8, size)
+    defer free(cache)
+    ... use cache ...
 ```
 
 ### Pitfall 3: Forgetting errdefer in Multi-Step Init
 
-```zig
-// BAD: Leaks if second allocation fails
-pub fn init(allocator: Allocator) !MyStruct {
-    const buf1 = try allocator.alloc(u8, 1024);
-    const buf2 = try allocator.alloc(u8, 2048);  // If this fails, buf1 leaks!
+```text
+# BAD: leaks if the second allocation fails
+init():
+    buf1 = alloc(u8, 1024)
+    buf2 = alloc(u8, 2048)                     # if this fails, buf1 leaks
 
-    return MyStruct{ .buf1 = buf1, .buf2 = buf2 };
-}
+    return MyStruct{ buf1, buf2 }
 ```
 
 **Fix:** Use `errdefer` after each allocation:
 
-```zig
-// GOOD: No leaks on any error path
-pub fn init(allocator: Allocator) !MyStruct {
-    const buf1 = try allocator.alloc(u8, 1024);
-    errdefer allocator.free(buf1);
+```text
+# GOOD: no leaks on any error path
+init():
+    buf1 = alloc(u8, 1024)
+    errdefer free(buf1)
 
-    const buf2 = try allocator.alloc(u8, 2048);
-    errdefer allocator.free(buf2);
+    buf2 = alloc(u8, 2048)
+    errdefer free(buf2)
 
-    return MyStruct{ .buf1 = buf1, .buf2 = buf2 };
-}
+    return MyStruct{ buf1, buf2 }
 ```
+
+**Implementation:** [`src/kvcache/manager.zig`](../../src/kvcache/manager.zig) (`allocKvCache`, per-iteration and outer `errdefer` for the per-layer allocation loop)
 
 ## Testing for Leaks
 
@@ -478,34 +456,34 @@ flowchart TD
 
 Zig's test allocator **automatically detects leaks**:
 
-```zig
-test "no leaks" {
-    const allocator = std.testing.allocator;  // Tracks all allocs/frees
+```text
+test "no leaks":
+    allocator = testing.allocator             # tracks every alloc/free
 
     {
-        var cache = try KVCache.init(allocator, 1024, 128);
-        defer cache.deinit();
+        cache = KVCache.init(1024, 128)
+        defer cache.deinit()
 
-        // ... test logic ...
+        ... test logic ...
     }
 
-    // If any allocation wasn't freed, test fails with "memory leak detected"
-}
+    # if any allocation wasn't freed, the test fails with "memory leak detected"
 ```
+
+**Implementation:** [`src/kvcache/manager.zig`](../../src/kvcache/manager.zig) (tests use `std.testing.allocator` around `allocKvCache`/`deinit`)
 
 **Example failure:**
 
-```zig
-test "leak example" {
-    const allocator = std.testing.allocator;
+```text
+test "leak example":
+    allocator = testing.allocator
 
-    const buf = try allocator.alloc(u8, 100);
-    // Oops, forgot defer allocator.free(buf);
-}
+    buf = alloc(u8, 100)
+    # oops, forgot `defer free(buf)`
 
-// Output:
-// Test [leak example] leaked memory.
-// All test allocations must be freed before test completion.
+# output:
+#   Test [leak example] leaked memory.
+#   All test allocations must be freed before test completion.
 ```
 
 This is **your safety net** — write tests, use `std.testing.allocator`, catch leaks before production.
@@ -542,24 +520,23 @@ flowchart TD
     Arena -- "arena.deinit()" --> Free
 ```
 
-```zig
-pub fn generateText(allocator: Allocator, prompt: []const u8) ![]u8 {
-    var arena = std.heap.ArenaAllocator.init(allocator);
-    defer arena.deinit();  // Frees ALL arena allocations in one go
+```text
+generateText(prompt):
+    arena = ArenaAllocator.init(allocator)
+    defer arena.deinit()                       # frees ALL arena allocations in one go
 
-    const arena_alloc = arena.allocator();
+    # every allocation below is freed by arena.deinit()
+    tokens          = tokenize(arena, prompt)
+    embeddings      = embed(arena, tokens)
+    output_tokens   = generate(arena, embeddings)
 
-    // All these allocations are freed by arena.deinit()
-    const tokens = try tokenize(arena_alloc, prompt);
-    const embeddings = try embed(arena_alloc, tokens);
-    const output_tokens = try generate(arena_alloc, embeddings);
+    # final result: allocate from the parent allocator, not the arena
+    text = decode(allocator, output_tokens)
 
-    // Final result: allocate from parent allocator, not arena
-    const text = try decode(allocator, output_tokens);
-
-    return text;  // arena.deinit() runs, cleans up temps
-}
+    return text                                 # arena.deinit() runs, cleans up temps
 ```
+
+**Implementation:** [`src/pull.zig`](../../src/pull.zig) (`std.heap.ArenaAllocator` for request-scoped temporary allocations during model downloads and repository listing)
 
 **When to use:**
 

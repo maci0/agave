@@ -55,39 +55,31 @@ flowchart LR
     Conv -->|"false"| LLConv
 ```
 
-```zig
-// src/format/format.zig — vtable-based polymorphism
-pub const Format = struct {
-    ptr: *anyopaque,
-    vtable: *const VTable,
-    /// True for SafeTensors (HF conventions), false for GGUF (llama.cpp conventions).
-    is_safetensors: bool = false,
+```text
+Format (vtable-based polymorphism):
+  ptr: pointer to concrete loader (SafeTensorsDir or GGUFFile)
+  vtable: pointer to VTable
+  is_safetensors: bool = false   # true = SafeTensors/HF conventions, false = GGUF/llama.cpp conventions
 
-    pub const VTable = struct {
-        get_tensor: *const fn (self: *anyopaque, name: []const u8) ?TensorInfo,
-        get_meta_str: *const fn (self: *anyopaque, key: []const u8) ?[]const u8,
-        get_meta_u32: *const fn (self: *anyopaque, key: []const u8) ?u32,
-        get_meta_f32: *const fn (self: *anyopaque, key: []const u8) ?f32,
-        get_meta_u32_array: *const fn (self: *anyopaque, key: []const u8) ?[]const u32,
-        get_vocab: *const fn (self: *anyopaque) ?[]const []const u8,
-        get_merges: *const fn (self: *anyopaque) ?[]const []const u8,
-    };
+  VTable:
+    get_tensor(ptr, name) -> TensorInfo?
+    get_meta_str / get_meta_u32 / get_meta_f32 / get_meta_u32_array(ptr, key) -> value?
+    get_vocab(ptr) -> string list?
+    get_merges(ptr) -> string list?
 
-    pub fn getTensor(self: Format, name: []const u8) ?TensorInfo {
-        return self.vtable.get_tensor(self.ptr, name);
-    }
-};
+  getTensor(self, name):
+    return self.vtable.get_tensor(self.ptr, name)
 
-// Usage in main.zig — format detection by path type:
-// Directory → SafeTensors, single file → GGUF
-if (is_dir) {
-    st_dir = try SafeTensorsDir.open(allocator, model_path);
-    fmt = st_dir.?.format(); // returns Format interface
-} else {
-    gguf_file = try GGUFFile.open(allocator, model_path);
-    fmt = gguf_file.?.format(); // returns Format interface
-}
+Format detection by path type (directory -> SafeTensors, single file -> GGUF):
+  if is_dir:
+      st_dir = SafeTensorsDir.open(model_path)
+      fmt = st_dir.format()      # is_safetensors = true
+  else:
+      gguf_file = GGUFFile.open(model_path)
+      fmt = gguf_file.format()   # is_safetensors = false
 ```
+
+**Implementation:** [`src/format/format.zig`](../../src/format/format.zig) (`Format`, `Format.VTable`, `Format.getTensor`)
 
 **Flag:** `is_safetensors` field added to Format interface to decouple format detection from convention selection.
 
@@ -140,50 +132,46 @@ flowchart TD
     H2 --> VProj
 ```
 
-**GGUF (llama.cpp):**
-```zig
-// Split order: Q, K, V (matches llama.cpp ggml_repeat semantics)
-const q_start = 0;
-const k_start = key_dim;
-const v_start = key_dim + key_dim;
+**GGUF (llama.cpp):** split order Q, K, V (matches llama.cpp `ggml_repeat` semantics)
 
-@memcpy(q_buf[0..key_dim], conv_out[q_start..][0..key_dim]);
-@memcpy(k_buf[0..key_dim], conv_out[k_start..][0..key_dim]);
-@memcpy(v_buf[0..v_dim],   conv_out[v_start..][0..v_dim]);
+```text
+q_start = 0
+k_start = key_dim
+v_start = key_dim + key_dim
+
+q_buf[0..key_dim] = conv_out[q_start..][0..key_dim]
+k_buf[0..key_dim] = conv_out[k_start..][0..key_dim]
+v_buf[0..v_dim]   = conv_out[v_start..][0..v_dim]
 ```
 
-**SafeTensors (HuggingFace):**
-```zig
-// Split order: K, Q, V (matches original DeltaNet paper)
-const k_start = 0;
-const q_start = key_dim;
-const v_start = key_dim + key_dim;
+**SafeTensors (HuggingFace):** split order K, Q, V (matches original DeltaNet paper)
 
-@memcpy(k_buf[0..key_dim], conv_out[k_start..][0..key_dim]);
-@memcpy(q_buf[0..key_dim], conv_out[q_start..][0..key_dim]);
-@memcpy(v_buf[0..v_dim],   conv_out[v_start..][0..v_dim]);
+```text
+k_start = 0
+q_start = key_dim
+v_start = key_dim + key_dim
+
+k_buf[0..key_dim] = conv_out[k_start..][0..key_dim]
+q_buf[0..key_dim] = conv_out[q_start..][0..key_dim]
+v_buf[0..v_dim]   = conv_out[v_start..][0..v_dim]
 ```
+
+**Implementation:** [`src/backend/kernels/cpu/deltanet.zig`](../../src/backend/kernels/cpu/deltanet.zig) (conv1d output split)
 
 **Controlled by:** `kqv_order` flag in `DeltaNetParams`. The field exists to support per-format branching, but in practice it is hardcoded to `false` for both GGUF and HF SafeTensors:
 
-```zig
-pub const DeltaNetParams = struct {
-    // ...
-    /// True when conv_out split order is K,Q,V (HuggingFace/SafeTensors).
-    /// False (default) when split order is Q,K,V (GGUF/llama.cpp convention).
-    kqv_order: bool = false,
-};
+```text
+DeltaNetParams:
+  ...
+  kqv_order: bool = false
+  # true  -> conv_out split order is K,Q,V (HuggingFace/SafeTensors)
+  # false -> conv_out split order is Q,K,V (GGUF/llama.cpp convention), the default
+
+Model code (qwen35.zig):
+  p = DeltaNetParams{ ..., kqv_order = false }  # Q,K,V order for both GGUF and HF SafeTensors
 ```
 
-**Model code:**
-
-```zig
-// src/models/qwen35.zig
-const p = DeltaNetParams{
-    // ... other params ...
-    .kqv_order = false, // Q,K,V order for both GGUF and HF SafeTensors
-};
-```
+**Implementation:** [`src/backend/kernels/cpu/deltanet.zig`](../../src/backend/kernels/cpu/deltanet.zig) (`DeltaNetParams`), [`src/models/qwen35.zig`](../../src/models/qwen35.zig) (`kqv_order` construction)
 
 ### 2. DeltaNet GQA Head Mapping
 
@@ -236,10 +224,10 @@ flowchart LR
 
 **SafeTensors pattern:** `0,0,0,0,1,1,1,1` (interleaved groups — contiguous blocks)
 
-**GGUF (llama.cpp TILING):**
-```zig
-// V-head maps to K-head via modulo wrapping
-const kh = h % num_k_heads;
+**GGUF (llama.cpp TILING):** V-head maps to K-head via modulo wrapping
+
+```text
+kh = h % num_k_heads
 ```
 
 **Example:** 8 V-heads, 2 K-heads
@@ -249,10 +237,10 @@ const kh = h % num_k_heads;
 - V-head 3 → K-head 1 (3 % 2)
 - Pattern: `0,1,0,1,0,1,0,1` (tiled)
 
-**SafeTensors (INTERLEAVED GROUPING):**
-```zig
-// V-heads grouped by K-head
-const kh = h * num_k_heads / num_v_heads;
+**SafeTensors (INTERLEAVED GROUPING):** V-heads grouped by K-head
+
+```text
+kh = h * num_k_heads / num_v_heads
 ```
 
 **Example:** 8 V-heads, 2 K-heads
@@ -262,50 +250,46 @@ const kh = h * num_k_heads / num_v_heads;
 
 **Controlled by:** Same `kqv_order` flag (GQA mapping convention follows split order convention). Since `kqv_order` is `false` for both formats in Qwen3.5, the tiling path is always used.
 
-**Implementation:**
-
-```zig
-// src/backend/kernels/cpu/deltanet.zig
-const kh = if (p.kqv_order)
-    h * p.num_k_heads / p.num_v_heads  // interleaved groups
-else
-    h % p.num_k_heads;                 // tiling (used by both formats)
+```text
+kh = if p.kqv_order:
+         h * p.num_k_heads / p.num_v_heads   # interleaved groups
+     else:
+         h % p.num_k_heads                   # tiling (used by both formats)
 ```
+
+**Implementation:** [`src/backend/kernels/cpu/deltanet.zig`](../../src/backend/kernels/cpu/deltanet.zig) (GQA head mapping)
 
 ### 3. SSM A_log Pre-Conversion
 
 **Operation:** DeltaNet state decay uses `exp(A_log * dt)`.
 
-**GGUF:**
-```zig
-// A_log is stored as -exp(A_log) (pre-converted by llama.cpp)
-const decay = ssm_a[h] * dt;  // ssm_a already contains -exp(A_log)
+**GGUF:** `A_log` is stored as `-exp(A_log)`, pre-converted by llama.cpp
+
+```text
+decay = ssm_a[h] * dt   # ssm_a already contains -exp(A_log)
 ```
 
-**SafeTensors:**
-```zig
-// A_log is stored raw (must convert at init)
-for (ssm_a) |*a| {
-    a.* = -@exp(a.*);  // Convert once at model load
-}
-// Then use same code as GGUF
-const decay = ssm_a[h] * dt;
+**SafeTensors:** `A_log` is stored raw, must convert at init
+
+```text
+for a in ssm_a:
+    a = -exp(a)          # convert once at model load
+
+# then use the same code as GGUF
+decay = ssm_a[h] * dt
 ```
 
-**Detection:**
+**Detection** (`init()`):
 
-```zig
-// src/models/qwen35.zig init()
-if (self.fmt.is_safetensors) {
-    // Convert A_log to -exp(A_log)
-    for (0..n_layers) |layer| {
-        const ssm_a = self.getLayerTensor(layer, "ssm_a");
-        for (ssm_a) |*a| {
-            a.* = -@exp(a.*);
-        }
-    }
-}
+```text
+if self.fmt.is_safetensors:
+    for layer in 0..n_layers:
+        ssm_a = self.getLayerTensor(layer, "ssm_a")
+        for a in ssm_a:
+            a = -exp(a)
 ```
+
+**Implementation:** [`src/models/qwen35.zig`](../../src/models/qwen35.zig) (`init`, A_log conversion)
 
 **Why the difference?** llama.cpp pre-computes this to avoid calling `exp()` on every token. PyTorch stores the raw value for flexibility.
 
@@ -353,27 +337,25 @@ flowchart TD
 
 **Split code:**
 
-```zig
-if (self.fmt.is_safetensors) {
-    // Concatenated: first half = Q, second half = gate
-    for (0..nh) |h| {
-        const src = h * hd * 2;
-        const q_src = src;
-        const g_src = src + hd;
-        @memcpy(q_buf[h*hd..][0..hd], qg[q_src..][0..hd]);
-        @memcpy(g_buf[h*hd..][0..hd], qg[g_src..][0..hd]);
-    }
-} else {
-    // Interleaved: alternating Q and gate
-    for (0..nh) |h| {
-        for (0..hd) |i| {
-            const src = h * hd * 2 + i * 2;
-            q_buf[h*hd + i] = qg[src];
-            g_buf[h*hd + i] = qg[src + 1];
-        }
-    }
-}
+```text
+if self.fmt.is_safetensors:
+    # Concatenated: first half = Q, second half = gate
+    for h in 0..nh:
+        src = h * hd * 2
+        q_src = src
+        g_src = src + hd
+        q_buf[h*hd..][0..hd] = qg[q_src..][0..hd]
+        g_buf[h*hd..][0..hd] = qg[g_src..][0..hd]
+else:
+    # Interleaved: alternating Q and gate
+    for h in 0..nh:
+        for i in 0..hd:
+            src = h * hd * 2 + i * 2
+            q_buf[h*hd + i] = qg[src]
+            g_buf[h*hd + i] = qg[src + 1]
 ```
+
+**Implementation:** [`src/models/qwen35.zig`](../../src/models/qwen35.zig) (Q/gate split)
 
 **Impact:** Wrong layout → Q gets half of gate's values, gate gets half of Q's → attention completely broken.
 
@@ -410,33 +392,18 @@ flowchart LR
 
 ### 5. Gate Detection via Tensor Dimensions
 
-**Problem:** Detect whether a projection has a gate by checking tensor shape.
+**Problem:** Detect whether Q projection embeds a gate by checking tensor shape. For Qwen3.5, gated Q has output dim `n_head * head_dim * 2`.
 
-**GGUF:**
-```zig
-// numElements() returns actual element count
-const has_gate = (tensor.numElements() == n_embd * 2);
-```
+**Pitfall:** Calling `numElements()` on MLX SafeTensors returns U32 word count, not logical element count, so an element-count gate check silently mis-detects.
 
-**SafeTensors (MLX quantized):**
-```zig
-// numElements() returns U32 word count, not element count!
-// Must use dims[0] (output dimension) instead
-const has_gate = (tensor.dims[0] == n_embd * 2);
-```
+**Fix:** Always read `dims[0]` (output rows), for both GGUF and SafeTensors. Agave does this in `Qwen35Model` init (`src/models/qwen35.zig`):
 
-**Root cause:** MLX quantization packs weights in U32 words. GGUF `numElements()` returns the element count (after unpacking), but SafeTensors `numElements()` returns word count.
-
-**Fix:**
-
-```zig
-pub fn hasGate(tensor: TensorInfo, n_embd: usize, is_safetensors: bool) bool {
-    if (is_safetensors) {
-        return tensor.dims[0] == n_embd * 2;  // Use dims[0] for MLX
-    } else {
-        return tensor.numElements() / n_embd == 2;  // Use element count for GGUF
-    }
-}
+```text
+q_out_dim = qw.dims[0]
+expected_gate = n_head * head_dim * 2
+has_gate = (q_out_dim == expected_gate)
+# unless attn_output_gate and q_out_dim == n_head * head_dim
+# (Nex-N2-Pro: gate is a separate tensor, not embedded in Q)
 ```
 
 ### 6. Norm Weight Caching (Affects Both Formats)
@@ -445,50 +412,44 @@ pub fn hasGate(tensor: TensorInfo, n_embd: usize, is_safetensors: bool) bool {
 
 **Bad pattern:**
 
-```zig
-// Dequant bf16 norm weights to f32 into scratch buffer
-dequantToF32(bf16_norm, scratch, n_embd);  // Write to scratch
-const buf = be.getBufRef(scratch);         // Cache scratch pointer → MTLBuffer
-// ... use for this layer ...
+```text
+dequantToF32(bf16_norm, scratch, n_embd)     # write to scratch
+buf = be.getBufRef(scratch)                  # caches scratch pointer -> MTLBuffer
+# ... use for this layer ...
 
-// Next layer: reuse scratch
-dequantToF32(bf16_norm_layer2, scratch, n_embd);  // Modify scratch
-const buf2 = be.getBufRef(scratch);  // Returns CACHED buffer (stale!)
-// GPU reads layer 1's norm weights, not layer 2's
+# next layer: reuse scratch
+dequantToF32(bf16_norm_layer2, scratch, n_embd)  # modify scratch
+buf2 = be.getBufRef(scratch)   # returns CACHED buffer (stale!)
+# GPU reads layer 1's norm weights, not layer 2's
 ```
 
-**Fix:** Use **per-tensor cache** instead of reusable scratch:
+**Fix:** Use **per-tensor cache** instead of reusable scratch. Fixed-size array cache, no HashMap allocation, linear scan over ~200 entries:
 
-```zig
-// src/models/qwen35.zig
-// Fixed-size array cache — no HashMap allocation, linear scan over ~200 entries.
-norm_cache: [max_norm_entries]NormCacheEntry = undefined,
-norm_cache_len: usize = 0,
+```text
+norm_cache: [max_norm_entries]NormCacheEntry
+norm_cache_len: usize = 0
 
-fn normAsF32(self: *Qwen35Model, t: TensorInfo, n: usize) [*]const f32 {
-    if (t.dtype == .f32) return @ptrCast(@alignCast(t.data_ptr));
+normAsF32(self, t, n):
+    if t.dtype == f32: return t.data_ptr
 
-    // Linear scan — at most ~200 entries, first-token only on miss.
-    const key = @intFromPtr(t.data_ptr);
-    for (self.norm_cache[0..self.norm_cache_len]) |entry| {
-        if (entry.key == key) return entry.data.ptr;
-    }
+    # linear scan: at most ~200 entries, first-token only on miss
+    key = address_of(t.data_ptr)
+    for entry in self.norm_cache[0..self.norm_cache_len]:
+        if entry.key == key: return entry.data
 
-    // Cache miss: allocate, convert, store permanently.
-    if (self.norm_cache_len >= max_norm_entries) {
-        quant.dequantToF32(self.dequant_buf, t.data_ptr, t.dtype, n);
-        return self.dequant_buf.ptr;
-    }
-    const buf = self.allocator.alloc(f32, n) catch {
-        quant.dequantToF32(self.dequant_buf, t.data_ptr, t.dtype, n);
-        return self.dequant_buf.ptr;
-    };
-    quant.dequantToF32(buf, t.data_ptr, t.dtype, n);
-    self.norm_cache[self.norm_cache_len] = .{ .key = key, .data = buf };
-    self.norm_cache_len += 1;
-    return buf.ptr;
-}
+    # cache miss: allocate, convert, store permanently
+    if self.norm_cache_len >= max_norm_entries:
+        dequantToF32(self.dequant_buf, t.data_ptr, t.dtype, n)
+        return self.dequant_buf
+
+    buf = allocate f32[n]  # falls back to dequant_buf on allocation failure
+    dequantToF32(buf, t.data_ptr, t.dtype, n)
+    self.norm_cache[self.norm_cache_len] = { key: key, data: buf }
+    self.norm_cache_len += 1
+    return buf
 ```
+
+**Implementation:** [`src/models/qwen35.zig`](../../src/models/qwen35.zig) (`normAsF32`, `norm_cache`)
 
 **Key insight:** Each norm weight gets its own permanent f32 buffer. Metal caches the pointer → always correct data.
 
@@ -527,34 +488,34 @@ flowchart TD
 
 ### SSM Dimension Mappings
 
-```zig
-// src/format/safetensors.zig
-const gguf_hf_meta_map = [_]struct { []const u8, []const u8 }{
-    .{ "full_attention_interval", "full_attention_interval" },
-    .{ "ssm.conv_kernel", "linear_conv_kernel_dim" },
-    .{ "ssm.state_size", "linear_key_head_dim" },
-    .{ "ssm.group_count", "linear_num_key_heads" },
-    .{ "ssm.time_step_rank", "linear_num_value_heads" },
-    .{ "partial_rotary_factor", "partial_rotary_factor" },
-};
+```text
+gguf_hf_meta_map = [
+    ("full_attention_interval", "full_attention_interval"),
+    ("ssm.conv_kernel",         "linear_conv_kernel_dim"),
+    ("ssm.state_size",          "linear_key_head_dim"),
+    ("ssm.group_count",         "linear_num_key_heads"),
+    ("ssm.time_step_rank",      "linear_num_value_heads"),
+    ("partial_rotary_factor",   "partial_rotary_factor"),
+]
 ```
+
+**Implementation:** [`src/format/safetensors.zig`](../../src/format/safetensors.zig) (`gguf_hf_meta_map`)
 
 **Usage:**
 
 The map is used by `SafeTensorsDir` when looking up a GGUF-style metadata key against a `config.json`. `lookupMetaAllTranslations()` iterates `gguf_hf_meta_map`, finds the HF key for a given GGUF suffix, and returns the first matching value from the parsed JSON:
 
-```zig
-// src/format/safetensors.zig — SafeTensorsDir metadata lookup
-fn lookupMetaAllTranslations(config_meta: *const std.StringHashMap(MetaValue), key: []const u8) ?MetaValue {
-    // Primary translation: strip arch prefix, look up GGUF suffix in map → HF key
-    if (ggufKeyToHf(key)) |hf_key| {
-        if (config_meta.get(hf_key)) |v| return v;
-    }
-    // Alias pass: some GGUF suffixes map to multiple valid HF keys
-    // ...
-    return null;
-}
+```text
+lookupMetaAllTranslations(config_meta, key):
+    # primary translation: strip arch prefix, look up GGUF suffix in map -> HF key
+    if hf_key = ggufKeyToHf(key):
+        if v = config_meta.get(hf_key): return v
+    # alias pass: some GGUF suffixes map to multiple valid HF keys
+    ...
+    return null
 ```
+
+**Implementation:** [`src/format/safetensors.zig`](../../src/format/safetensors.zig) (`lookupMetaAllTranslations`, `SafeTensorsDir`)
 
 For GGUF files, the direction is reversed: `gguf.zig`'s `fmtGetMetaU32` translates an HF key to a GGUF suffix via `hfKeyToGgufSuffix()`, then looks up the arch-prefixed GGUF key in the binary metadata.
 
@@ -576,7 +537,7 @@ flowchart LR
     Model["Model code\nreads 'ssm_a'"]:::setup
     Lookup["Format.getTensor(name)"]:::sync
     GGUFLookup["Look up\n'blk.N.ssm_a.weight'\ndirectly"]:::sync
-    Translate["ggufToHfName()"]:::migration
+    Translate["ggufToHfName()\n(+ ggufToHfNameIter)"]:::migration
     HFName["'model.layers.N.\nlinear_attn.A_log'\n(no .weight suffix)"]:::migration
     HFNameW["'model.layers.N.\nlinear_attn.in_proj_qkv.weight'"]:::migration
     PassThru["Pass through as-is"]:::optional
@@ -586,9 +547,9 @@ flowchart LR
     Lookup --> Branch{"is_safetensors?"}
     Branch -->|"No (GGUF)"| GGUFLookup
     Branch -->|"Yes (SafeTensors)"| Translate
-    Translate --> Map{"In tensor_name_map?"}
-    Map -->|"Yes + needs .weight"| HFName
-    Map -->|"Yes, append .weight"| HFNameW
+    Translate --> Map{"In gguf_hf_layer_map?"}
+    Map -->|"Yes, no attr suffix"| HFName
+    Map -->|"Yes, keep .weight/.bias"| HFNameW
     Map -->|"No mapping"| PassThru
     GGUFLookup --> TensorInfo
     HFName --> TensorInfo
@@ -598,55 +559,36 @@ flowchart LR
 
 ### DeltaNet Tensor Names
 
-```zig
-// GGUF → HF mapping
-const tensor_name_map = std.StaticStringMap([]const u8).initComptime(.{
-    .{ "attn_qkv", "linear_attn.in_proj_qkv" },
-    .{ "attn_gate", "linear_attn.in_proj_z" },
-    .{ "ssm_alpha", "in_proj_a" },
-    .{ "ssm_beta", "in_proj_b" },
-    .{ "ssm_out", "out_proj" },
-    .{ "ssm_a", "A_log" },
-    .{ "ssm_conv1d", "conv1d" },
-    .{ "ssm_norm", "norm" },
-    .{ "ssm_dt.bias", "dt_bias" },  // Special case: HF uses underscore
-});
+Mapping lives in `gguf_hf_layer_map` (`src/format/safetensors.zig`): a plain array scanned linearly by `ggufToHfName` / `ggufToHfNameIter`, not a `StaticStringMap`. HF paths already include the `linear_attn.` prefix:
+
+```text
+attn_qkv   → linear_attn.in_proj_qkv
+attn_gate  → linear_attn.in_proj_z
+ssm_alpha  → linear_attn.in_proj_a
+ssm_beta   → linear_attn.in_proj_b
+ssm_out    → linear_attn.out_proj
+ssm_a      → linear_attn.A_log
+ssm_conv1d → linear_attn.conv1d
+ssm_norm   → linear_attn.norm
 ```
+
+`ssm_dt.bias` is not a map entry. `ggufToHfName` hardcodes it to `linear_attn.dt_bias`.
 
 ### Attribute-less Tensor Names
 
-**GGUF:** All tensors have `.weight` suffix
+**GGUF:** Most tensors have a `.weight` / `.bias` suffix
 ```
 blk.0.attn_qkv.weight
-blk.0.ssm_a.weight
+blk.0.ssm_a            ← no attribute suffix (A_log)
 ```
 
-**SafeTensors:** Some tensors have no suffix
+**SafeTensors:** Some tensors have no trailing `.weight`
 ```
 model.layers.0.linear_attn.in_proj_qkv.weight  ← has .weight
 model.layers.0.linear_attn.A_log                ← NO .weight
 ```
 
-**Translation function:**
-
-```zig
-pub fn ggufToHfName(gguf_name: []const u8) []const u8 {
-    // Handle attribute-less tensors
-    if (std.mem.endsWith(u8, gguf_name, "ssm_a")) {
-        return "linear_attn.A_log";  // No .weight suffix
-    }
-    if (std.mem.endsWith(u8, gguf_name, "ssm_dt.bias")) {
-        return "dt_bias";  // No .bias suffix in HF
-    }
-
-    // Regular tensors: use map
-    if (tensor_name_map.get(gguf_name)) |hf_name| {
-        return hf_name ++ ".weight";  // Append .weight
-    }
-
-    return gguf_name;  // No mapping found
-}
-```
+**Translation:** private `ggufToHfName(name, buf, prefix)` writes a fully-qualified, layer-indexed HF path into `buf` (for example `model.layers.0.linear_attn.A_log` or `model.layers.0.linear_attn.dt_bias`). It never returns a bare component name.
 
 ## Dimension Order Normalization
 
@@ -654,22 +596,24 @@ pub fn ggufToHfName(gguf_name: []const u8) []const u8 {
 
 Agave normalizes GGUF dimensions during parsing so `dims[0]` always means output rows, regardless of format:
 
-```zig
-// src/format/gguf.zig — dims reversed at parse time
-var raw_dims: [4]u64 = .{ 0, 0, 0, 0 };
-for (0..n_dims) |d| {
-    raw_dims[d] = try self.readU64(off);
-    off += 8;
-}
-var dims: [4]u64 = .{ 0, 0, 0, 0 };
-for (0..n_dims) |d| dims[d] = raw_dims[n_dims - 1 - d];
+```text
+# dims reversed at parse time
+raw_dims = [0, 0, 0, 0]
+for d in 0..n_dims:
+    raw_dims[d] = readU64(off)
+    off += 8
+
+dims = [0, 0, 0, 0]
+for d in 0..n_dims:
+    dims[d] = raw_dims[n_dims - 1 - d]
 ```
+
+**Implementation:** [`src/format/gguf.zig`](../../src/format/gguf.zig) (tensor dims reversal at parse time)
 
 This means all model code can use `dims[0]` uniformly:
 
-```zig
-// In model code (all formats):
-const out_dim = tensor.dims[0];  // Always outer dimension
+```text
+out_dim = tensor.dims[0]   # always the outer dimension, in model code for all formats
 ```
 
 ```mermaid
@@ -709,28 +653,23 @@ flowchart LR
 
 **Strategy:** Load the same model in both formats, compare outputs token-by-token.
 
-```zig
-test "qwen35 GGUF vs SafeTensors equivalence" {
-    const gguf_model = try loadModel(allocator, "model.gguf");
-    defer gguf_model.deinit();
+```text
+test "qwen35 GGUF vs SafeTensors equivalence":
+    gguf_model = loadModel("model.gguf")
+    st_model = loadModel("model_safetensors/")
 
-    const st_model = try loadModel(allocator, "model_safetensors/");
-    defer st_model.deinit();
+    tokens = tokenize("Hello, world!")
 
-    const prompt = "Hello, world!";
-    const tokens = try tokenize(prompt);
+    for token in tokens:
+        gguf_logits = gguf_model.forward(token)
+        st_logits = st_model.forward(token)
 
-    for (tokens) |token| {
-        const gguf_logits = try gguf_model.forward(token);
-        const st_logits = try st_model.forward(token);
-
-        // Compare logits (should be identical within FP precision)
-        for (gguf_logits, st_logits) |g, s| {
-            try std.testing.expectApproxEqAbs(g, s, 1e-4);
-        }
-    }
-}
+        # logits should be identical within FP precision
+        for g, s in zip(gguf_logits, st_logits):
+            assert approxEqual(g, s, tolerance = 1e-4)
 ```
+
+**Implementation:** equivalence tests in [`src/models/qwen35.zig`](../../src/models/qwen35.zig)
 
 **Catches:**
 - Wrong split order → different Q/K/V → different attention scores
@@ -741,46 +680,45 @@ test "qwen35 GGUF vs SafeTensors equivalence" {
 
 ### Pitfall 1: Assuming Single Convention
 
-```zig
-// BAD: Hardcoded GGUF convention
-const kh = h % num_k_heads;  // Wrong for SafeTensors!
+```text
+# BAD: hardcoded GGUF convention
+kh = h % num_k_heads   # wrong for SafeTensors!
 ```
 
 **Fix:** Detect format, apply correct convention.
 
 ### Pitfall 2: Format Detection via Quantization
 
-```zig
-// BAD: Conflates format (GGUF vs SafeTensors) with quantization (MLX vs GGUF-Q)
-const is_mlx = tensor.dtype == .mlx_q;
-if (is_mlx) {
-    // Apply SafeTensors conventions  ← WRONG! BF16 SafeTensors exists
-}
+```text
+# BAD: conflates format (GGUF vs SafeTensors) with quantization (MLX vs GGUF-Q)
+is_mlx = (tensor.dtype == mlx_q)
+if is_mlx:
+    # apply SafeTensors conventions  <- WRONG! BF16 SafeTensors exists
 ```
 
 **Fix:** Use `is_safetensors` flag, not dtype.
 
 ### Pitfall 3: Cached Buffer Corruption
 
-```zig
-// BAD: Reuse scratch buffer for different norms
-dequant(norm1, scratch);
-gpu_buffer = getBufRef(scratch);  // Caches scratch → GPU buffer mapping
-dequant(norm2, scratch);          // Overwrites scratch
-// GPU buffer still points to old norm1 data!
+```text
+# BAD: reuse scratch buffer for different norms
+dequant(norm1, scratch)
+gpu_buffer = getBufRef(scratch)   # caches scratch -> GPU buffer mapping
+dequant(norm2, scratch)           # overwrites scratch
+# GPU buffer still points to old norm1 data!
 ```
 
 **Fix:** Per-tensor cache or disable caching for scratch buffers.
 
 ### Pitfall 4: Forgetting Metadata Mapping
 
-```zig
-// BAD: Only check GGUF key
-const d_conv = fmt.getMetaU32("ssm.conv_kernel") orelse return error.MissingMeta;
-// Fails on SafeTensors (uses "linear_conv_kernel_dim")
+```text
+# BAD: only check GGUF key
+d_conv = fmt.getMetaU32("ssm.conv_kernel") orelse error MissingMeta
+# fails on SafeTensors (uses "linear_conv_kernel_dim")
 ```
 
-**Fix:** Use bidirectional mapping (gguf_hf_meta_map).
+**Fix:** Use bidirectional mapping (`gguf_hf_meta_map`).
 
 ## GGUF 3D Expert Tensors
 
@@ -861,19 +799,15 @@ The `v.` prefix denotes vision encoder layers, while `mm.` denotes the multimoda
 
 Agave auto-detects mmproj files by scanning the model directory for files matching `mmproj*.gguf`:
 
-```zig
-// src/main.zig — mmproj auto-detection
-if (mmproj_path == null and (cli.image != null or cli.serve)) {
-    // Scan model directory for mmproj*.gguf
-    while (dir.next()) |entry| {
-        if (std.mem.startsWith(u8, entry.name, "mmproj") and
-            std.mem.endsWith(u8, entry.name, ".gguf"))
-        {
-            mmproj_path = entry.name;
-        }
-    }
-}
+```text
+if mmproj_path == null and (cli.image != null or cli.serve):
+    # scan model directory for mmproj*.gguf
+    for entry in dir:
+        if entry.name.startsWith("mmproj") and entry.name.endsWith(".gguf"):
+            mmproj_path = entry.name
 ```
+
+**Implementation:** [`src/main.zig`](../../src/main.zig) (mmproj auto-detection)
 
 You can also specify the path explicitly with `--mmproj path/to/mmproj.gguf`.
 

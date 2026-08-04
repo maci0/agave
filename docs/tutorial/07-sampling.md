@@ -9,7 +9,7 @@ After the forward pass produces **logits** (raw unnormalized scores, one per voc
 ### Code Flow
 
 ```text
-logits -> filters (bias, penalties, grammar mask, temperature, XTC, min-p, top-k, top-p) -> sample
+logits -> filters (bias, penalties, grammar mask, min-p, XTC, temperature, top-k, top-p) -> sample
 ```
 
 ## Temperature
@@ -49,6 +49,8 @@ flowchart LR
         T_high
     end
 ```
+
+```text
 adjusted_logits[i] = logits[i] / temperature
 probabilities = softmax(adjusted_logits)
 next_token = sample(probabilities)
@@ -415,10 +417,10 @@ flowchart TD
     Logits --> Bias
     Bias --> Penalties
     Penalties --> Grammar
-    Grammar --> Temp
-    Temp --> XTC
-    XTC --> MinP
-    MinP --> TopK
+    Grammar --> MinP
+    MinP --> XTC
+    XTC --> Temp
+    Temp --> TopK
     TopK --> Softmax
     Softmax --> TopP
     TopP --> Mirostat{"Mirostat\nactive?"}
@@ -427,6 +429,8 @@ flowchart TD
     MiroTrunc --> FinalSample
     FinalSample --> NextToken
 ```
+
+```text
 logits (raw scores, one per vocab token)
   │
   ├─ logit bias (per-token additive adjust)   [API steering]

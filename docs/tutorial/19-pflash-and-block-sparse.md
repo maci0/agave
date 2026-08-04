@@ -65,7 +65,7 @@ flowchart TD
 
 ### Block Attention Matrix Layout
 
-The diagram below shows which query blocks (rows) attend which KV blocks (columns) for an 8-block sequence with G=2 global blocks and W=2 window blocks. G = attended as global, W = within sliding window, dot = masked out.
+The diagram below shows which query blocks (rows) attend which KV blocks (columns) for an 8-block sequence with G=2 global blocks and W=2 window blocks. Agave's default pattern is `n_global = 2` and `window = 1` (±1 block) in `BlockSparsePattern`; this example uses W=2 so the local band is easier to see. G = attended as global, W = within sliding window, dot = masked out.
 
 ```mermaid
 flowchart LR
@@ -141,7 +141,7 @@ flowchart LR
     end
 ```
 
-At 2048 blocks (128K tokens) with G=2 and W=2, the attended fraction drops to ~3-5%. The reduction scales with sequence length: a 200x reduction at 128K tokens.
+At 2048 blocks (128K tokens) with G=2 and W=2, the attended fraction drops to under ~1% (~0.5% by the dot-product count in the complexity table below). The reduction scales with sequence length: about a 200x reduction at 128K tokens.
 
 Each query block always computes scores for:
 - All G global blocks (two in this example)
@@ -153,7 +153,7 @@ All other block pairs are skipped entirely -- the inner loop doesn't execute, so
 
 The CPU kernel in `sparse_attn.zig` works at the block level:
 
-```
+```text
 for each query_block qb:
     accumulate attention over:
         global_blocks[0..G]            // always attend
@@ -161,11 +161,13 @@ for each query_block qb:
     skip all other kv_blocks           // no dot products computed
 ```
 
+**Implementation:** [`src/ops/sparse_attn.zig`](../../src/ops/sparse_attn.zig) (`buildMask`, `sdpaHeadSparse`)
+
 This is the kernel used by PFlash's scorer pass. It is not used during target model prefill (which gets the compressed prompt) or during decode (which operates one token at a time and doesn't need sparsity).
 
 ### Complexity
 
-| Sequence length | Full attention | Block sparse (G=2, W=2, B=64) |
+| Sequence length | Full attention | Block sparse (G=2, W=2 illustration; default W=1, B=64) |
 |-----------------|---------------|-------------------------------|
 | 8K tokens (128 blocks) | 64M dot products / layer | ~5M dot products / layer |
 | 32K tokens (512 blocks) | 1B dot products / layer | ~20M dot products / layer |
@@ -233,10 +235,12 @@ flowchart LR
 
 **Step 2: Select.** Apply the adaptive threshold:
 
-```
+```text
 mean_score = mean(all block scores)
 selected = {block b : score[b] > alpha * mean_score}
 ```
+
+**Implementation:** [`src/spec/pflash.zig`](../../src/spec/pflash.zig) (`selectBlocks`)
 
 Blocks above the threshold are kept; the rest are discarded. With `alpha=0.85` and a typical prompt, 5-15% of blocks are selected.
 
@@ -293,7 +297,7 @@ flowchart TD
 
 Compare two prompts with alpha=0.85:
 
-```
+```text
 Dense technical reference (API docs, 128K tokens):
   scores:  [0.8, 0.9, 0.7, 0.85, 0.6, 0.9, 0.8, ...]
   mean:    0.78
@@ -416,7 +420,7 @@ agave target-14B.gguf \
 
 **Combined pipeline:**
 
-```
+```text
 [PREFILL PHASE]
 Scorer: block sparse pass over 128K tokens  (~200ms)
   -> select 8K tokens (alpha threshold)

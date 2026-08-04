@@ -98,45 +98,38 @@ flowchart TD
 
 ### Cache Structure
 
-```zig
-const BufferInfo = struct {
-    metal_buf: objc.id,  // MTLBuffer
-    len: usize,
-};
+```text
+type BufferInfo:
+    metal_buf: MTLBuffer
+    len: usize
 
-// Map: host pointer → Metal buffer wrapper
-buf_cache: std.AutoHashMap(usize, BufferInfo)
+buf_cache: HashMap(host_pointer -> BufferInfo)
 ```
+
+**Implementation:** [`src/backend/metal.zig`](../../src/backend/metal.zig) (`BufferInfo`, `buf_cache`)
 
 ### Lookup Pattern
 
-```zig
-fn getBufRef(self: *MetalBackend, ptr: [*]const u8, len: usize) BufRef {
-    const addr = @intFromPtr(ptr);
-    const aligned_base = addr & ~(page_size - 1);
-    const offset = addr - aligned_base;
+```text
+getBufRef(ptr, len):
+    addr = intFromPtr(ptr)
+    aligned_base = addr & ~(page_size - 1)
+    offset = addr - aligned_base
 
-    // Check cache using aligned base address as key
-    if (self.buf_cache.get(aligned_base)) |cached| {
-        return BufRef{ .buf = cached.metal_buf, .offset = offset };
-    }
+    if buf_cache.get(aligned_base) is Some(cached):
+        return BufRef{ buf: cached.metal_buf, offset: offset }
 
-    // Not cached: wrap from the aligned base (zero-copy)
-    const aligned_ptr = @as([*]const u8, @ptrFromInt(aligned_base));
-    const aligned_len = (offset + len + page_size - 1) & ~(@as(usize, page_size - 1));
-    const buf = objc.msgSend(
-        ?objc.id,
-        self.device,
-        objc.sel("newBufferWithBytesNoCopy:length:options:deallocator:"),
-        .{ aligned_ptr, aligned_len, MTLResourceStorageModeShared, @as(?objc.id, null) },
-    ) orelse @panic("Metal buffer creation failed");
+    # not cached: wrap from the aligned base (zero-copy)
+    aligned_ptr = ptrFromInt(aligned_base)
+    aligned_len = roundUp(offset + len, page_size)
+    buf = device.newBufferWithBytesNoCopy(aligned_ptr, aligned_len, StorageModeShared)
+          or panic("Metal buffer creation failed")
 
-    // Cache at aligned base for future use
-    self.buf_cache.put(aligned_base, .{ .metal_buf = buf, .len = aligned_len }) catch {};
-
-    return BufRef{ .buf = buf, .offset = offset };
-}
+    buf_cache.put(aligned_base, { metal_buf: buf, len: aligned_len })
+    return BufRef{ buf: buf, offset: offset }
 ```
+
+**Implementation:** [`src/backend/metal.zig`](../../src/backend/metal.zig) (`getBufRef`)
 
 **When to cache:**
 
@@ -149,20 +142,21 @@ fn getBufRef(self: *MetalBackend, ptr: [*]const u8, len: usize) BufRef {
 
 **Workaround:** Wrap the **entire page range** and use an offset:
 
-```zig
-const page_size = std.heap.page_size_min; // 16384 on Apple Silicon
-const page_mask = ~(page_size - 1);
+```text
+page_size = 16384                              # Apple Silicon page size
+page_mask = ~(page_size - 1)
 
-const page_base = @intFromPtr(ptr) & page_mask;  // Round down to page boundary
-const offset = @intFromPtr(ptr) - page_base;     // Offset within page
+page_base = intFromPtr(ptr) & page_mask         # round down to page boundary
+offset    = intFromPtr(ptr) - page_base         # offset within page
 
-const aligned_ptr = @as([*]const u8, @ptrFromInt(page_base));
-const aligned_len = (offset + len + page_size - 1) & ~(page_size - 1);
+aligned_ptr = ptrFromInt(page_base)
+aligned_len = roundUp(offset + len, page_size)
 
-const buf = device.newBufferWithBytesNoCopy(aligned_ptr, aligned_len, ...);
-
-return BufRef{ .buf = buf, .offset = offset };
+buf = device.newBufferWithBytesNoCopy(aligned_ptr, aligned_len, ...)
+return BufRef{ buf: buf, offset: offset }
 ```
+
+**Implementation:** [`src/backend/metal.zig`](../../src/backend/metal.zig) (`getBufRef`)
 
 **Example:**
 
@@ -211,56 +205,36 @@ sequenceDiagram
 
 ### Active Command Buffer State
 
-```zig
-pub const MetalBackend = struct {
-    queue: objc.id,               // MTLCommandQueue
-    active_cmd: ?objc.id = null,  // MTLCommandBuffer
-    active_enc: ?objc.id = null,  // MTLComputeCommandEncoder
-    // ...
-};
+```text
+type MetalBackend:
+    queue:      MTLCommandQueue
+    active_cmd: MTLCommandBuffer?
+    active_enc: MTLComputeCommandEncoder?
+    ...
 ```
+
+**Implementation:** [`src/backend/metal.zig`](../../src/backend/metal.zig) (`MetalBackend`, `active_cmd`, `active_enc`)
 
 ### Encode Pattern
 
-```zig
-fn encode(self: *MetalBackend, pipeline: objc.id, buffers: []BufRef, grid: Grid) void {
-    // Create command buffer + encoder on first dispatch
-    if (self.active_enc == null) {
-        self.active_cmd = objc.msgSend(?objc.id, self.queue, objc.sel("commandBuffer"), .{})
-            orelse @panic("Metal command buffer creation failed");
+```text
+encode(self, pipeline, buffers, grid):
+    if self.active_enc is None:                       # lazy creation on first dispatch
+        self.active_cmd = queue.commandBuffer() or panic
+        self.active_enc = active_cmd.computeCommandEncoder() or panic
 
-        self.active_enc = objc.msgSend(?objc.id, self.active_cmd.?, objc.sel("computeCommandEncoder"), .{})
-            orelse @panic("Metal compute encoder creation failed");
-    }
+    enc = self.active_enc
+    enc.setComputePipelineState(pipeline)
+    for i, buf_ref in enumerate(buffers):
+        enc.setBuffer(buf_ref.buf, buf_ref.offset, atIndex: i)
 
-    const enc = self.active_enc.?;
+    enc.dispatchThreadgroups(grid.threadgroups, grid.threads_per_group)
 
-    // Set pipeline state
-    objc.msgSend(void, enc, objc.sel("setComputePipelineState:"), .{pipeline});
-
-    // Set buffers
-    for (buffers, 0..) |buf_ref, i| {
-        objc.msgSend(void, enc, objc.sel("setBuffer:offset:atIndex:"), .{
-            buf_ref.buf,
-            buf_ref.offset,
-            @as(c_ulong, i),
-        });
-    }
-
-    // Dispatch threadgroups
-    objc.msgSend(void, enc, objc.sel("dispatchThreadgroups:threadsPerThreadgroup:"), .{
-        grid.threadgroups,
-        grid.threads_per_group,
-    });
-
-    // Insert memory barrier (unless in batch mode)
-    if (!self.batch_mode) {
-        objc.msgSend(void, enc, objc.sel("memoryBarrierWithScope:"), .{
-            MTLBarrierScopeBuffers,
-        });
-    }
-}
+    if not self.batch_mode:                            # barrier unless batching
+        enc.memoryBarrierWithScope(Buffers)
 ```
+
+**Implementation:** [`src/backend/metal.zig`](../../src/backend/metal.zig) (`encode`)
 
 **Key points:**
 
@@ -270,24 +244,17 @@ fn encode(self: *MetalBackend, pipeline: objc.id, buffers: []BufRef, grid: Grid)
 
 ### Flush (Commit and Wait)
 
-```zig
-fn flush(self: *MetalBackend) void {
-    if (self.active_enc) |enc| {
-        // End encoding
-        objc.msgSend(void, enc, objc.sel("endEncoding"), .{});
-
-        // Commit command buffer (submits to GPU)
-        objc.msgSend(void, self.active_cmd.?, objc.sel("commit"), .{});
-
-        // Wait for completion
-        objc.msgSend(void, self.active_cmd.?, objc.sel("waitUntilCompleted"), .{});
-
-        // Clear state
-        self.active_enc = null;
-        self.active_cmd = null;
-    }
-}
+```text
+flush(self):
+    if self.active_enc is Some(enc):
+        enc.endEncoding()
+        self.active_cmd.commit()               # submit to GPU
+        self.active_cmd.waitUntilCompleted()    # block until done
+        self.active_enc = None
+        self.active_cmd = None
 ```
+
+**Implementation:** [`src/backend/metal.zig`](../../src/backend/metal.zig) (`flush`)
 
 **When to flush:**
 
@@ -322,12 +289,12 @@ flowchart LR
     B3["rmsNorm V"]:::sync
     B4["next op"]:::success
 
-    subgraph Sequential["Without beginBatch (930 barriers/token)"]
+    subgraph Sequential["Without beginBatch\n(many barriers/token)"]
         direction LR
         A1 -->|barrier| A2 -->|barrier| A3 -->|barrier| A4
     end
 
-    subgraph Batched["With beginBatch/endBatch (690 barriers/token)"]
+    subgraph Batched["With beginBatch/endBatch\n(one barrier for the group)"]
         direction LR
         B1 & B2 & B3 -->|"single barrier\n(endBatch)"| B4
     end
@@ -335,39 +302,36 @@ flowchart LR
 
 ### API
 
-```zig
-pub fn beginBatch(self: *MetalBackend) void {
-    self.batch_mode = true;
-}
+```text
+beginBatch(self):
+    self.batch_mode = true
 
-pub fn endBatch(self: *MetalBackend) void {
-    self.batch_mode = false;
-    if (self.active_enc) |enc| {
-        objc.msgSend(void, enc, objc.sel("memoryBarrierWithScope:"), .{
-            MTLBarrierScopeBuffers,
-        });
-    }
-}
+endBatch(self):
+    self.batch_mode = false
+    if self.active_enc is Some(enc):
+        enc.memoryBarrierWithScope(Buffers)     # single barrier for the group
 ```
+
+**Implementation:** [`src/backend/metal.zig`](../../src/backend/metal.zig) (`beginBatch`, `endBatch`)
 
 ### Usage Example
 
-```zig
-// Normalize Q and K in parallel (independent operations)
-be.beginBatch();
-  be.rmsNormMulti(q_buf, norm_w, nh_q, hd, eps);  // No barrier after
-  be.rmsNormMulti(k_buf, norm_w, nh_kv, hd, eps); // No barrier after
-be.endBatch();  // Single barrier here
+```text
+# Normalize Q and K in parallel (independent operations)
+be.beginBatch()
+  be.rmsNormMulti(q_buf, norm_w, nh_q, hd, eps)    # no barrier after
+  be.rmsNormMulti(k_buf, norm_w, nh_kv, hd, eps)   # no barrier after
+be.endBatch()                                      # single barrier here
 
-// vs sequential (default):
-be.rmsNormMulti(q_buf, norm_w, nh_q, hd, eps);  // Barrier after
-be.rmsNormMulti(k_buf, norm_w, nh_kv, hd, eps); // Barrier after
+# vs sequential (default):
+be.rmsNormMulti(q_buf, norm_w, nh_q, hd, eps)    # barrier after
+be.rmsNormMulti(k_buf, norm_w, nh_kv, hd, eps)   # barrier after
 ```
 
 **Impact:**
 
-- **Qwen3.5:** Reduced barriers from 930 → 690 per token
-- **Throughput change:** 0% (Apple Silicon GPUs overlap work even with barriers — they're essentially free)
+- **Qwen3.5-class models:** Barrier count drops when independent norms/RoPE share one `endBatch` (illustrative `--profile` counters, not a `BENCHMARKS.md` row)
+- **Throughput change:** often near zero on Apple Silicon (GPUs overlap work even with barriers; they are essentially free)
 
 **Why track it anyway?**
 
@@ -387,17 +351,18 @@ be.rmsNormMulti(k_buf, norm_w, nh_kv, hd, eps); // Barrier after
 
 ### Example: Argmax After Logits
 
-```zig
-// Compute logits on GPU (deferred)
-be.gemv(x, lm_head, logits, vocab_size, n_embd);
+```text
+be.gemv(x, lm_head, logits, vocab_size, n_embd)   # compute logits on GPU (deferred)
 
-// WRONG: Read logits on CPU immediately (stale data!)
-const token = argmax(logits);  // Reads old logits, not the new ones!
+# WRONG: read logits on CPU immediately (stale data!)
+token = argmax(logits)     # reads old logits, not the new ones
 
-// CORRECT: Sync first to flush GPU writes
-be.sync();  // Commit command buffer, wait for completion
-const token = argmax(logits);  // Now reads the correct logits
+# CORRECT: sync first to flush GPU writes
+be.sync()                  # commit command buffer, wait for completion
+token = argmax(logits)     # now reads the correct logits
 ```
+
+**Implementation:** [`src/backend/metal.zig`](../../src/backend/metal.zig) (`sync`)
 
 ### Sync Points in Forward Pass
 
@@ -447,36 +412,23 @@ Metal has a **per-threadgroup memory limit** of 32 KB on Apple Silicon. If your 
 
 ### Debugging Pipeline Creation
 
-```zig
-fn makePipeline(self: *MetalBackend, name: [*:0]const u8) !objc.id {
-    const fn_name = objc.msgSend(?objc.id, NSString, objc.sel("stringWithUTF8String:"), .{
-        name,
-    }) orelse return error.StringFailed;
+```text
+makePipeline(self, name):
+    fn_name = NSString.stringWithUTF8String(name) or return error.StringFailed
 
-    const function = objc.msgSend(?objc.id, self.library, objc.sel("newFunctionWithName:"), .{fn_name})
-        orelse {
-            std.log.err("Metal kernel not found: {s}", .{name});
-            return error.KernelNotFound;
-        };
+    function = self.library.newFunctionWithName(fn_name)
+               or { log.err("Metal kernel not found: %s", name); return error.KernelNotFound }
 
-    var err: ?objc.id = null;
-    const pipeline = objc.msgSend(?objc.id, self.device, objc.sel("newComputePipelineStateWithFunction:error:"), .{
-        function,
-        @as(*?objc.id, &err),
-    }) orelse {
-        if (err) |e| {
-            const desc = objc.msgSend(?objc.id, e, objc.sel("localizedDescription"), .{});
-            if (desc) |d| {
-                const utf8 = objc.msgSend([*:0]const u8, d, objc.sel("UTF8String"), .{});
-                std.log.err("Metal pipeline creation error: {s}", .{utf8});
-            }
-        }
-        return error.PipelineFailed;
-    };
+    pipeline, err = self.device.newComputePipelineStateWithFunction(function)
+    if pipeline is None:
+        if err is Some(e):
+            log.err("Metal pipeline creation error: %s", e.localizedDescription)  # the only place
+        return error.PipelineFailed                                                # this error surfaces
 
-    return pipeline;
-}
+    return pipeline
 ```
+
+**Implementation:** [`src/backend/metal.zig`](../../src/backend/metal.zig) (`makePipeline`)
 
 **Key:** Check the error object and log `localizedDescription` to see the actual Metal error (often "threadgroup memory exceeded").
 
@@ -505,7 +457,7 @@ kernel void sdpa(
 - Increasing to 32 positions → 32 KB (no room for other vars)
 - Increasing `max_head_dim` to 512 → 32 KB (also maxed out)
 
-**Trade-off:** Agave caps SDPA at 4096 seq_len, 256 head_dim to fit in 32 KB. Larger contexts fall back to chunked attention.
+**Trade-off:** Agave caps SDPA at 65536 seq_len and 256 head_dim to fit tile buffers in 32 KB threadgroup memory. Inputs that exceed those limits panic rather than silently falling back to another attention strategy.
 
 ### Threadgroup Memory Budget Breakdown
 
@@ -526,7 +478,7 @@ flowchart TD
     Shared["shared\nfloat[8]\n= 32 bytes\n(0.1% of budget)"]:::sync
     Free["headroom\n~13.4 KB remaining\n(42% of budget)"]:::success
     Constraint["Constraint: 16 positions × 256 head_dim\nIncreasing to 32 pos → 32 KB (maxed)\nIncreasing head_dim to 512 → 32 KB (maxed)"]:::migration
-    Fallback["Contexts > 4096 tokens\nor head_dim > 256\nfall back to chunked attention"]:::optional
+    Fallback["seq_len > 65536 or head_dim > 256\npanics (no silent fallback)"]:::danger
 
     Budget --> KV
     Budget --> Q
@@ -543,36 +495,34 @@ flowchart TD
 
 The Metal backend tracks dispatch/barrier/sync counts when `profile_counters` is enabled (via `--profile` flag).
 
-```zig
-pub const MetalBackend = struct {
-    dispatch_count: u32 = 0,
-    barrier_count: u32 = 0,
-    sync_count: u32 = 0,
-    profile_counters: bool = false,
-    // ...
-};
+```text
+type MetalBackend:
+    dispatch_count:    u32 = 0
+    barrier_count:     u32 = 0
+    sync_count:        u32 = 0
+    profile_counters:  bool = false
+    ...
 
-fn encode(...) void {
-    // ... dispatch kernel ...
-    if (self.profile_counters) self.dispatch_count += 1;
-}
+encode(...):
+    ... dispatch kernel ...
+    if self.profile_counters: self.dispatch_count += 1
 
-fn flush(...) void {
-    // ... commit and wait ...
-}
+flush(...):
+    ... commit and wait ...
 
-fn sync(...) void {
-    self.flush();
-    if (self.profile_counters) self.sync_count += 1;
-}
+sync(...):
+    self.flush()
+    if self.profile_counters: self.sync_count += 1
 ```
+
+**Implementation:** [`src/backend/metal.zig`](../../src/backend/metal.zig) (`dispatch_count`, `barrier_count`, `sync_count`, `profile_counters`)
 
 **Usage:**
 
 ```bash
 ./zig-out/bin/agave model.gguf --profile "Test prompt"
-# Output per token:
-# Metal: 994 dispatches, 690 barriers, 18 syncs
+# Output (first decode token when --profile is on):
+# Metal stats: <dispatches>, <barriers>, <syncs>
 ```
 
 **Optimization insights:**
@@ -581,7 +531,7 @@ fn sync(...) void {
 - High barrier count → opportunity for batch mode (if operations are independent)
 - Dispatch count × kernel overhead → lower bound on latency
 
-**Example:** Qwen3.5 reduced sync count from 18 → 1 per token by moving Q/gate split to GPU → 15% faster.
+**Example:** Moving Q/gate split to the GPU can collapse many per-layer syncs to a single end-of-token sync. Exact dispatch/barrier/sync counters come from `--profile` on your model and quant; they are not fixed numbers in `BENCHMARKS.md`.
 
 ## BF16 GEMM Kernel
 
@@ -591,27 +541,26 @@ The Metal backend includes a `gemm_bf16` kernel (in `gemm.metal`) for batched ma
 
 2. **Batched prefill:** During chunked prefill, multiple prompt tokens are processed together. Each chunk's linear projections use GEMM instead of per-token GEMV.
 
-```zig
-// src/backend/metal.zig — GEMM dtype dispatch
-pub fn gemm(self: *MetalBackend, x: [*]const f32, w: TensorData, y: [*]f32,
-            n_tok: usize, n_out: usize, n_in: usize) void {
-    if (n_tok <= 1) {
-        self.gemv(x, w, y, n_out, n_in);  // Single token → GEMV
-        return;
-    }
-    const pipeline: objc.id = switch (w.dtype) {
-        .f32 => self.pipe_gemm_f32,
-        .bf16, .f16 => self.pipe_gemm_bf16,
-        .q8_0 => self.pipe_gemm_q8_0,
-        .q4_0 => self.pipe_gemm_q4_0,
-        .q4_k => self.pipe_gemm_q4_k,
-        .q5_k => self.pipe_gemm_q5_k,
-        .q6_k => self.pipe_gemm_q6_k,
-        else => @panic("Metal GEMM: unsupported dtype — add GPU kernel"),
-    };
-    // ... encode dispatch with one threadgroup per output row
-}
+```text
+gemm(self, x, w, y, n_tok, n_out, n_in):
+    if n_tok <= 1:
+        self.gemv(x, w, y, n_out, n_in)      # single token -> GEMV
+        return
+
+    pipeline = match w.dtype:
+        f32          => pipe_gemm_f32
+        bf16 | f16   => pipe_gemm_bf16
+        q8_0         => pipe_gemm_q8_0
+        q4_0         => pipe_gemm_q4_0
+        q4_k         => pipe_gemm_q4_k
+        q5_k         => pipe_gemm_q5_k
+        q6_k         => pipe_gemm_q6_k
+        other        => panic("Metal GEMM: unsupported dtype, add GPU kernel")
+
+    # ... encode dispatch with one threadgroup per output row
 ```
+
+**Implementation:** [`src/backend/metal.zig`](../../src/backend/metal.zig) (`gemm`)
 
 Each threadgroup handles one output row. The bf16 variant processes tokens sequentially without token tiling; token tiling is used in the quantized GEMM kernels (Q8_0 uses `TILE_T=8`, Q4_K uses `TILE_T=4`) to amortize weight loads across multiple input vectors.
 
@@ -708,7 +657,7 @@ This interleaving is necessary because the vision encoder uses full (non-causal)
 1. **Batch independent ops:** Use `beginBatch()` / `endBatch()` to suppress intermediate barriers
 2. **Minimize syncs:** Only sync when CPU needs GPU data
 3. **Fuse kernels:** Combine sequential ops (e.g., `addRmsNorm`) to reduce dispatches
-4. **Megakernel pipelines:** The `--megakernel` flag enables a three-tier fusion system. **Tier 1** (fused FFN) combines gate GEMV + up GEMV + activation into a single dispatch (3->1 per FFN layer) via 11 kernels in `megakernel.metal` (SiLU x {Q8_0, Q4_K, Q5_K, Q6_K, Q4_0, MLX_Q4} + GELU x {Q8_0, Q4_K, Q5_K, Q6_K, Q4_0}). **Tier 2** (true megakernels) executes entire transformer layers in a single dispatch using 18 composable building blocks in `mega_common.metal` with atomic counter grid sync (`mega_grid_sync`). **Tier 3** (composed megakernels) auto-generates model-specific MSL at runtime via `mega_compose.zig`: the `composeMSL()` function produces MSL source from a `ModelDesc` struct, then `compileComposedMegakernel()` compiles it via `newLibraryWithSource`. This enables megakernel support for new models without writing any shader code -- just a `ModelDesc` definition. The Metal backend compiles **83 MSL pipelines** total (standard ops + fused FFN + 5 true megakernels + 1 runtime-composed). See [Chapter 13](13-batched-dispatch-and-fusion.md) for details.
+4. **Megakernel pipelines:** The `--megakernel` flag enables a three-tier fusion system. **Tier 1** (fused FFN) combines gate GEMV + up GEMV + activation into a single dispatch (3->1 per FFN layer) via 11 kernels in `megakernel.metal` (SiLU x {Q8_0, Q4_K, Q5_K, Q6_K, Q4_0, MLX_Q4} + GELU x {Q8_0, Q4_K, Q5_K, Q6_K, Q4_0}). **Tier 2** (true megakernels) executes entire transformer layers in a single dispatch using 18 composable building blocks in `mega_common.metal` with atomic counter grid sync (`mega_grid_sync`). **Tier 3** (composed megakernels) auto-generates model-specific MSL at runtime via `mega_compose.zig`: the `composeMSL()` function produces MSL source from a `ModelDesc` struct, then `compileComposedMegakernel()` compiles it via `newLibraryWithSource`. This enables megakernel support for new models without writing any shader code -- just a `ModelDesc` definition. The Metal backend compiles **71 MSL pipelines** total (standard ops + fused FFN + 5 true megakernels + 1 runtime-composed). See [Chapter 13](13-batched-dispatch-and-fusion.md) for details.
 
 ```mermaid
 flowchart TD
@@ -723,7 +672,7 @@ flowchart TD
     T1Desc["3 dispatches → 1 dispatch per FFN layer\ngate GEMV + up GEMV + activation fused\n11 kernels: SiLU×6 dtypes + GELU×5 dtypes\nDtypes: Q8_0, Q4_K, Q5_K, Q6_K, Q4_0, MLX_Q4"]:::sync
     T2Desc["Entire transformer layer = 1 dispatch\n18 composable building blocks\nAtomic counter grid sync (mega_grid_sync)\n5 pre-compiled megakernel pipelines"]:::setup
     T3Desc["MSL source generated at runtime\nfrom ModelDesc struct definition\ncomposeMSL() → compileComposedMegakernel()\nnewLibraryWithSource() JIT compilation\nNew models: zero shader code needed"]:::optional
-    Total["83 total MSL pipelines compiled\n(standard ops + Tier 1 + Tier 2 + Tier 3)"]:::migration
+    Total["71 total MSL pipelines compiled\n(standard ops + Tier 1 + Tier 2 + Tier 3)"]:::migration
     Benefit["Reduced dispatch overhead\nImproved GPU utilization\nLower CPU encoding cost per token"]:::success
 
     Flag --> T1

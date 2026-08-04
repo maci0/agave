@@ -151,7 +151,7 @@ agave model.gguf --spec-mode ngram --spec-tokens 8 "Generate a JSON schema"
 
 **Worked example** -- generating a list:
 
-```
+```text
 Generated so far: "1. Apple\n2. Banana\n3. Cherry\n4. "
 Last 3 tokens: ["\n", "4", ". "]
 
@@ -167,7 +167,7 @@ Next attempt after "Date\n5. ":
   Falls back to single-token decode
 ```
 
-Zero memory overhead (no draft model weights). The ring buffer uses 8 KB.
+Zero memory overhead (no draft model weights). The history buffer uses 8 KB.
 
 In **server mode**, a `SharedNgramPool` (~32 KB / 8,192 token history, thread-safe spinlock) accumulates tokens from all concurrent requests. When a request's local history has no match, it searches the shared pool — giving "warm-start" drafting from other users' recent output.
 
@@ -307,7 +307,7 @@ agave target.gguf --draft-model draft.gguf --spec-token-map freq.txt "prompt"
 
 The map is a plain text file of token IDs (whitespace/comma separated):
 
-```
+```text
 532 4096 1024 258 99 ...
 ```
 
@@ -317,7 +317,7 @@ Generate frequency maps from your target model's training corpus or use vocab-so
 
 ## Architecture
 
-```
+```text
 src/spec/
 ├── spec_decode.zig   — orchestrator: draft, verify, generation loop
 │                       draftEagle, draftMlpSpeculator, draftLookahead,
@@ -337,7 +337,7 @@ src/models/model.zig
 └── VTable: get_hidden_state, eagle_forward  — EAGLE hidden-state conditioning
 ```
 
-Agave supports **12 speculative decoding modes**:
+Agave supports **14 speculative decoding modes**:
 
 | Mode | Flag | Draft source | Draft model needed? |
 |------|------|------|------|
@@ -345,7 +345,7 @@ Agave supports **12 speculative decoding modes**:
 | Standard | `--spec-mode standard` | Draft model, greedy | Yes |
 | DDTree | `--spec-mode ddtree` | Draft model, tree | Yes |
 | Self | `--spec-mode self` | Layer-skipped target | No |
-| N-gram | `--spec-mode ngram` | History ring buffer | No |
+| N-gram | `--spec-mode ngram` | History buffer (2048 tokens) | No |
 | Suffix | `--spec-mode suffix` | Cross-request exact match | No |
 | Lookahead | `--spec-mode lookahead` | Jacobi parallel branches | No |
 | MTP | `--spec-mode mtp` | Built-in MTP heads | No (in model) |
@@ -354,6 +354,7 @@ Agave supports **12 speculative decoding modes**:
 | EAGLE-3 | `--spec-mode eagle3` | Pre-output-norm hidden-state | Yes |
 | MLP Speculator | `--spec-mode mlp` | Frozen hidden-state | Yes |
 | PFlash | `--spec-mode pflash` | Draft model + block scoring | Yes |
+| DSpark | `--spec-mode dspark` | Draft model + confidence trim | Yes |
 
 ### Data Flow
 
@@ -424,7 +425,7 @@ sequenceDiagram
 
 The tree construction is O(B log B) where B is the node budget:
 
-```
+```text
 Initialize: push (depth=0, rank=0) with log_prob = log q0[best_token]
 
 While tree_size < B:
@@ -437,6 +438,8 @@ While tree_size < B:
     Push child: (depth + 1, rank 0)
         cum_log_prob = current_cum + log q[depth+1][best_token]
 ```
+
+**Implementation:** [`src/spec/ddtree.zig`](../../src/spec/ddtree.zig) (`DDTreeBuilder.buildTree`, min-heap `HeapEntry` push/pop, `presort`)
 
 This produces the optimal prefix-closed tree under the draft model's factorized distribution.
 
@@ -570,15 +573,14 @@ flowchart TD
     RecordStats --> Start
 ```
 
-```
+```text
 expected_tokens(K) = sum(i=1..K) i x P(accept exactly i)
 optimal_K = argmax over K of expected_tokens(K) / cost(K)
 ```
 
-Enable with:
-```bash
-agave model.gguf --draft-model draft.gguf --adaptive-k "prompt"
-```
+**Implementation:** [`src/spec/spec_decode.zig`](../../src/spec/spec_decode.zig) (`SpecState.optimalK`)
+
+Adaptive K is enabled automatically whenever speculative decoding with a draft model is active (`spec_state.adaptive_k_enabled = true` in `src/main.zig`). There is no separate CLI flag.
 
 Early in generation (first 10 verification rounds), the system uses the default K. As statistics accumulate, it adjusts K per-step by picking the K with the highest expected-value estimate.
 
@@ -632,7 +634,7 @@ flowchart LR
     end
 ```
 
-## N-gram Ring Buffer Matching
+## N-gram History Buffer Matching
 
 ```mermaid
 flowchart TD
@@ -643,8 +645,8 @@ flowchart TD
     classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
     classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
 
-    subgraph RingBuffer["Ring Buffer (last 2048 generated tokens, 8 KB)"]
-        RB["[ t0, t1, t2, ..., t_head ]\nfixed-size circular buffer\nhead pointer advances each token"]:::setup
+    subgraph RingBuffer["History buffer (last 2048 generated tokens, 8 KB)"]
+        RB["append until capacity\nwhen full: shift newest half forward\n(amortized compaction, no head pointer)"]:::setup
     end
 
     subgraph Query["Query Construction"]
@@ -659,14 +661,14 @@ flowchart TD
     Verify["Target Model Verification\nstandard accept/reject loop"]:::sync
     Emit["Emit to output"]:::success
 
-    Gram -->|"scan ring buffer\nfor matching prefix"| Search
+    Gram -->|"scan history buffer\nfor matching prefix"| Search
     Search --> Found{"match\nfound?"}
     Found -->|"yes\n(found at position j)"| Proposal
     Found -->|"no match\n(novel context)"| Fallback
     Proposal -->|"proposed draft tokens"| Verify
     Verify -->|"accepted tokens"| Emit
     Verify -->|"correction token"| Emit
-    Emit -->|"append new token\nadvance head"| RingBuffer
+    Emit -->|"append new token\n(compact if full)"| RingBuffer
 
     subgraph Performance["Performance Profile"]
         P1["Zero draft model weight memory"]:::optional
@@ -683,7 +685,7 @@ flowchart TD
 | `--spec-tokens` | Draft depth K | 3-8 for most models |
 | `--tree-budget` | Tree width B | 32-128 (diminishing returns beyond 256) |
 | `--draft-layers` | Layers skipped (self-spec) | 25-50% of total layers |
-| `--adaptive-k` | Auto-tune K at runtime | Enable for long generations |
+| Adaptive K | Auto-tunes K at runtime (always on with draft model) | Longer generations benefit most |
 | Draft model size | Acceptance rate vs speed | 1/4 to 1/8 of target size |
 
 ### Batch Tree Verification
@@ -696,7 +698,7 @@ Models without `forwardTree()` (Qwen3.5, Nemotron, etc.) fall back to sequential
 
 ### Example Speedup
 
-```
+```text
 Without spec dec:  1 forward pass per token  -> 15 tok/s (Qwen 3.5 8B, Metal)
 With DDTree:       ~3 tokens per verify pass -> ~35 tok/s (2.3x speedup)
 

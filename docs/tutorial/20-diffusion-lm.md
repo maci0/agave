@@ -28,7 +28,7 @@ DiffusionGemma breaks the sequential dependency by generating 256 tokens at once
 
 A **canvas** of 256 token positions is initialized with random tokens from the vocabulary. There is no special [MASK] token — positions are filled with arbitrary vocabulary entries (uniform state diffusion).
 
-```
+```text
 canvas = [random_tok, random_tok, ..., random_tok]  // 256 positions
 ```
 
@@ -42,13 +42,15 @@ Bidirectional attention lets the model produce internally consistent output: if 
 
 After each forward pass, the model produces logit scores for every canvas position. For each position:
 
-```
+```text
 prob = softmax(logits)[argmax(logits)]  // confidence of best token
 if prob >= threshold:
     accept token (lock it)
 else:
     replace with new random token (re-noise)
 ```
+
+**Implementation:** [`src/main.zig`](../../src/main.zig) (`generateDiffusion`, per-position confidence check against `--diffusion-confidence`)
 
 Accepted tokens become **anchors** for future denoising steps. Re-noised positions get fresh random tokens — not the rejected guess — so the model gets a clean slate rather than being biased by a bad early prediction.
 
@@ -138,7 +140,7 @@ flowchart TD
     NextBlock --> NewCanvas
 ```
 
-```
+```text
 1. Encode prompt (model.prefill)
 2. For each canvas block:
    a. canvas = [random tokens]
@@ -150,6 +152,8 @@ flowchart TD
    d. model.prefill(canvas) → adds canvas to KV cache for next block
    e. Stop if canvas contains EOS, or total_generated >= max_tokens
 ```
+
+**Implementation:** [`src/main.zig`](../../src/main.zig) (`generateDiffusion`), [`src/models/diffusion_gemma.zig`](../../src/models/diffusion_gemma.zig) (`forwardCanvas`)
 
 ---
 
@@ -176,7 +180,7 @@ agave diffusiongemma-26B-A4B-it/ --diffusion-canvas 128 "..."
 
 DiffusionGemma's theoretical advantage:
 - Generates 256 tokens per denoising step (vs 1 per autoregressive step)
-- Typical convergence in 12-16 steps → ~16-21 forward passes for 256 tokens
+- Typical convergence in 12-16 steps → 12-16 forward passes for 256 tokens (one `forwardCanvas` per step)
 - Autoregressive equivalent: 256 forward passes
 
 Reported throughput: ~1,288 tokens/sec on H200 (FP8), ~6× autoregressive baseline.

@@ -36,13 +36,14 @@ One `parallelFor` call: post the work descriptor, bump the generation counter to
 
 ## Why Not Just Spawn Threads?
 
-```zig
-// BAD: Spawning threads per operation
-for (n_rows) |row| {
-    const thread = try std.Thread.spawn(.{}, gemvRow, .{row});
-    thread.join();
-}
+```text
+BAD: spawn a thread per operation
+for row in 0..n_rows:
+    thread = Thread.spawn(gemvRow, row)
+    thread.join()
 ```
+
+**Implementation:** the pool-based alternative that avoids this cost lives in [src/thread_pool.zig](../../src/thread_pool.zig); there is no per-call spawn anywhere in that file.
 
 **Problems:**
 
@@ -94,24 +95,26 @@ In Zig 0.16, futex operations go through the `Io` context (threaded from `main(I
 
 ### Generation Counter Pattern
 
-```zig
-generation: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
-io: Io,  // stored at spawn() time
+```text
+ThreadPool fields:
+  generation: atomic u32 = 0
+  io: Io                       # stored at spawn() time
 
-// Post work
-_ = generation.fetchAdd(1, .release);  // Bump generation
-io.futexWake(u32, &generation.raw, n_workers);  // Wake all workers
+Post work (main thread):
+  generation.fetchAdd(1, release)       # bump generation
+  io.futexWake(&generation, n_workers)  # wake all workers
 
-// Worker loop
-var local_gen: u32 = 0;
-while (true) {
-    pool.io.futexWaitUncancelable(u32, &pool.generation.raw, local_gen);
-    const new_gen = pool.generation.load(.acquire);
-    if (new_gen == local_gen) continue; // spurious wakeup
-    local_gen = new_gen;
-    // ... do work ...
-}
+Worker loop:
+  local_gen = 0
+  loop:
+    io.futexWaitUncancelable(&generation, local_gen)
+    new_gen = generation.load(acquire)
+    if new_gen == local_gen: continue   # spurious wakeup
+    local_gen = new_gen
+    ... do work ...
 ```
+
+**Implementation:** [src/thread_pool.zig](../../src/thread_pool.zig) (`ThreadPool.generation`, `workerLoop`).
 
 **Key insight:** Workers sleep on the `generation` variable. When new work arrives, the main thread bumps `generation` and wakes all workers. Workers see the new value and start processing.
 
@@ -158,24 +161,22 @@ flowchart LR
     end
 ```
 
-```zig
-task_counter: std.atomic.Value(usize) = std.atomic.Value(usize).init(0);
-task_total: usize = n_rows;
-task_grain: usize = 4;  // Rows per chunk
+```text
+ThreadPool fields:
+  task_counter: atomic usize = 0
+  task_total: usize = n_rows
+  task_grain: usize = 4          # rows per chunk
 
-fn doWork(pool: *ThreadPool) void {
-    while (true) {
-        const start = pool.task_counter.fetchAdd(pool.task_grain, .monotonic);
-        if (start >= pool.task_total) break;  // No more work
-        const end = @min(start + pool.task_grain, pool.task_total);
-
-        // Process rows [start, end)
-        for (start..end) |row| {
-            gemvRow(row);
-        }
-    }
-}
+doWork(pool):
+  loop:
+    start = task_counter.fetchAdd(task_grain, monotonic)
+    if start >= task_total: break         # no more work
+    end = min(start + task_grain, task_total)
+    for row in start..end:
+      gemvRow(row)
 ```
+
+**Implementation:** [src/thread_pool.zig](../../src/thread_pool.zig) (`doWork`).
 
 **Benefits:**
 
@@ -237,27 +238,24 @@ flowchart TD
     Spin --> Done
 ```
 
-```zig
-pub fn parallelFor(pool: *ThreadPool, total: usize, grain: usize, ctx: *anyopaque, func: WorkFunc) void {
-    // Post work
-    pool.task_counter.store(0, .release);
-    if (self.active.cmpxchgWeak(0, @intCast(self.n_workers), .acq_rel, .monotonic)) |still_active| {
-        std.log.err("ThreadPool: concurrent parallelFor detected (active={d}), running inline", .{still_active});
-        func(ctx, 0, total);
-        return;
-    }
-    _ = pool.generation.fetchAdd(1, .release);
-    pool.io.futexWake(u32, &pool.generation.raw, @intCast(pool.n_workers));
+```text
+parallelFor(pool, total, grain, ctx, func):
+  task_counter.store(0, release)
+  if active.cmpxchgWeak(0, n_workers, acq_rel, monotonic) is Some(still_active):
+    log.err("concurrent parallelFor detected, running inline")
+    func(ctx, 0, total)
+    return
 
-    // Main thread participates
-    pool.doWork();
+  generation.fetchAdd(1, release)
+  io.futexWake(&generation, n_workers)
 
-    // Wait for workers to finish
-    while (pool.active.load(.acquire) != 0) {
-        std.atomic.spinLoopHint();  // Hint CPU to save power during spin
-    }
-}
+  pool.doWork()                          # main thread participates
+
+  while active.load(acquire) != 0:
+    spinLoopHint()                       # hint CPU to save power during spin
 ```
+
+**Implementation:** [src/thread_pool.zig](../../src/thread_pool.zig) (`parallelFor`).
 
 **Why participate?** If you have 8 cores and spawn 7 worker threads, the main thread sitting idle wastes 1/8 of your compute power.
 
@@ -297,160 +295,93 @@ stateDiagram-v2
 
 ## Full Thread Pool Implementation
 
-From `src/thread_pool.zig`:
+The full struct ties every piece above together: task descriptor fields, the generation counter, the active-worker count, and the shutdown flag.
 
-```zig
-pub const ThreadPool = struct {
-    workers: [max_workers]Worker = undefined,
-    n_workers: usize = 0,
-    io: Io = undefined,  // Stored at spawn() for futex operations
+```text
+ThreadPool struct (fields):
+  workers: [max_workers]Worker
+  n_workers: usize
+  io: Io                                    # stored at spawn() for futex ops
 
-    // Task descriptor
-    task_func: ?*const fn (*anyopaque, usize, usize) void = null,
-    task_ctx: ?*anyopaque = null,
-    task_total: usize = 0,
-    task_grain: usize = 1,
-    task_counter: std.atomic.Value(usize) = std.atomic.Value(usize).init(0),
+  task_func, task_ctx, task_total, task_grain
+  task_counter: atomic usize                # hottest field, cache-line padded
+                                             # so generation/active don't share
+                                             # its line and cause cross-core
+                                             # invalidation
 
-    // Cache-line pad: task_counter is the hottest field (fetchAdd per chunk).
-    // Without padding, generation/active share its cache line, causing
-    // cross-core invalidation when workers finish vs. pull new chunks.
-    _counter_pad: [cache_line - @sizeOf(std.atomic.Value(usize))]u8 = undefined,
+  generation: atomic u32
+  active: atomic u32
+  shutdown: atomic bool
 
-    // Synchronization
-    generation: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
-    active: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
-    shutdown: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+init(n): n_workers = min(n, max_workers)
 
-    pub fn init(n: usize) ThreadPool {
-        return .{ .n_workers = @min(n, max_workers) };
-    }
+spawn(io):
+  self.io = io
+  for i in 0..n_workers:
+    workers[i] = Thread.spawn(workerLoop, self)
+    # on spawn failure: shrink n_workers to i, stop
 
-    pub fn spawn(self: *ThreadPool, io: Io) void {
-        self.io = io;  // Store Io for futex operations
-        for (0..self.n_workers) |i| {
-            self.workers[i] = .{
-                .thread = std.Thread.spawn(.{}, workerLoop, .{self}) catch |err| {
-                    std.log.warn("ThreadPool: failed to spawn worker {d}: {s}", .{ i, @errorName(err) });
-                    self.n_workers = i;  // Reduce count if spawn fails
-                    return;
-                },
-            };
-        }
-    }
+deinit():
+  shutdown.store(true, release)
+  generation.fetchAdd(1, release)
+  io.futexWake(&generation, n_workers)
+  for each worker: thread.join()
 
-    pub fn deinit(self: *ThreadPool) void {
-        self.shutdown.store(true, .release);
-        _ = self.generation.fetchAdd(1, .release);
-        self.io.futexWake(u32, &self.generation.raw, @intCast(self.n_workers));
+parallelFor(total, grain, ctx, func):
+  if total == 0: return
+  effective_grain = max(grain, min_grain)
+  if n_workers == 0 or total <= effective_grain:
+    func(ctx, 0, total)                     # too small, run inline
+    return
+  task_func, task_ctx = func, ctx
+  task_total, task_grain = total, effective_grain
+  task_counter.store(0, release)
+  active.store(n_workers, release)
+  generation.fetchAdd(1, release)
+  io.futexWake(&generation, n_workers)
+  doWork()                                  # main thread participates
+  while active.load(acquire) != 0: spinLoopHint()
 
-        for (0..self.n_workers) |i| {
-            self.workers[i].thread.join();
-        }
-    }
+doWork():
+  loop:
+    start = task_counter.fetchAdd(task_grain, monotonic)
+    if start >= task_total: break
+    end = min(start + task_grain, task_total)
+    task_func(task_ctx, start, end)
 
-    pub fn parallelFor(
-        self: *ThreadPool,
-        total: usize,
-        grain: usize,
-        ctx: *anyopaque,
-        func: *const fn (*anyopaque, usize, usize) void,
-    ) void {
-        if (total == 0) return;
-
-        const effective_grain = @max(grain, min_grain);
-
-        // Too small for parallelism? Run inline
-        if (self.n_workers == 0 or total <= effective_grain) {
-            func(ctx, 0, total);
-            return;
-        }
-
-        // Post task
-        self.task_func = func;
-        self.task_ctx = ctx;
-        self.task_total = total;
-        self.task_grain = effective_grain;
-        self.task_counter.store(0, .release);
-        self.active.store(@intCast(self.n_workers), .release);
-
-        // Wake workers
-        _ = self.generation.fetchAdd(1, .release);
-        self.io.futexWake(u32, &self.generation.raw, @intCast(self.n_workers));
-
-        // Main thread participates
-        self.doWork();
-
-        // Spin-wait for completion
-        while (self.active.load(.acquire) != 0) {
-            std.atomic.spinLoopHint();
-        }
-    }
-
-    fn doWork(self: *ThreadPool) void {
-        const func = self.task_func orelse return;
-        const ctx = self.task_ctx orelse return;
-        const total = self.task_total;
-        const grain = self.task_grain;
-
-        while (true) {
-            const start = self.task_counter.fetchAdd(grain, .monotonic);
-            if (start >= total) break;
-            const end = @min(start + grain, total);
-            func(ctx, start, end);
-        }
-    }
-
-    fn workerLoop(pool: *ThreadPool) void {
-        var local_gen: u32 = 0;
-
-        while (true) {
-            // Sleep until generation changes
-            pool.io.futexWaitUncancelable(u32, &pool.generation.raw, local_gen);
-
-            if (pool.shutdown.load(.acquire)) return;
-
-            const new_gen = pool.generation.load(.acquire);
-            if (new_gen == local_gen) continue; // spurious wakeup
-            local_gen = new_gen;
-
-            // Do work
-            pool.doWork();
-
-            // Signal completion
-            _ = pool.active.fetchSub(1, .release);
-        }
-    }
-};
+workerLoop(pool):
+  local_gen = 0
+  loop:
+    io.futexWaitUncancelable(&generation, local_gen)
+    if shutdown.load(acquire): return
+    new_gen = generation.load(acquire)
+    if new_gen == local_gen: continue        # spurious wakeup
+    local_gen = new_gen
+    pool.doWork()
+    active.fetchSub(1, release)
 ```
+
+**Implementation:** [src/thread_pool.zig](../../src/thread_pool.zig) (full `ThreadPool` struct: `init`, `spawn`, `deinit`, `parallelFor`, `doWork`, `workerLoop`).
 
 ## Usage Example: Parallel GEMV
 
-```zig
-const GemvCtx = struct {
-    x: [*]const f32,
-    w: [*]const f32,
-    y: [*]f32,
-    k: usize,
-};
+```text
+GemvCtx: { x, w, y (pointers), k }
 
-fn gemvRows(ctx: *anyopaque, start: usize, end: usize) void {
-    const gemv_ctx: *GemvCtx = @ptrCast(@alignCast(ctx));
-    for (start..end) |row| {
-        var acc: f32 = 0.0;
-        const roff = row * gemv_ctx.k;
-        for (0..gemv_ctx.k) |j| {
-            acc += gemv_ctx.w[roff + j] * gemv_ctx.x[j];
-        }
-        gemv_ctx.y[row] = acc;
-    }
-}
+gemvRows(ctx, start, end):
+  for row in start..end:
+    acc = 0.0
+    roff = row * ctx.k
+    for j in 0..ctx.k:
+      acc += ctx.w[roff + j] * ctx.x[j]
+    ctx.y[row] = acc
 
-pub fn gemvParallel(pool: *ThreadPool, x: [*]const f32, w: [*]const f32, y: [*]f32, n: usize, k: usize) void {
-    var ctx = GemvCtx{ .x = x, .w = w, .y = y, .k = k };
-    pool.parallelFor(n, 4, &ctx, gemvRows);  // 4 rows per chunk
-}
+gemvParallel(pool, x, w, y, n, k):
+  ctx = GemvCtx{x, w, y, k}
+  pool.parallelFor(n, grain=4, &ctx, gemvRows)
 ```
+
+**Implementation:** [src/backend/cpu.zig](../../src/backend/cpu.zig) (parallel GEMV dispatch through `ThreadPool.parallelFor`).
 
 **Performance:** On an 8-core CPU, this achieves ~6-7× speedup (not 8× due to memory bandwidth saturation and atomic contention).
 
@@ -479,11 +410,7 @@ sequenceDiagram
 
 ### .monotonic
 
-No synchronization — just atomicity. Use for counters:
-
-```zig
-const start = pool.task_counter.fetchAdd(grain, .monotonic);
-```
+No synchronization — just atomicity. Use for counters: `task_counter.fetchAdd(grain, .monotonic)`.
 
 **Why monotonic?** The counter value doesn't synchronize memory — it's just work assignment. Workers don't need to see other threads' writes.
 
@@ -494,16 +421,18 @@ const start = pool.task_counter.fetchAdd(grain, .monotonic);
 
 Use for **handoff** between threads:
 
-```zig
-// Main thread: release
-pool.task_total = total;
-pool.task_grain = grain;
-_ = pool.generation.fetchAdd(1, .release);  // All prior writes visible
+```text
+Main thread (release):
+  task_total = total
+  task_grain = grain
+  generation.fetchAdd(1, release)      # all prior writes now visible
 
-// Worker thread: acquire
-local_gen = pool.generation.load(.acquire);  // See all writes before release
-// Now safe to read task_total, task_grain
+Worker thread (acquire):
+  local_gen = generation.load(acquire) # sees all writes before the release
+  # now safe to read task_total, task_grain
 ```
+
+**Implementation:** [src/thread_pool.zig](../../src/thread_pool.zig) (`parallelFor` release side, `workerLoop` acquire side).
 
 ### .seq_cst (Sequential Consistency)
 
@@ -515,18 +444,15 @@ Agave doesn't use `.seq_cst` — acquire/release is sufficient for thread pool h
 
 ### Number of Workers
 
-```zig
-const n_cores = std.Thread.getCpuCount() catch 1;
-const n_workers = n_cores - 1;  // Leave 1 core for main thread
-```
+`n_workers = Thread.getCpuCount() - 1`, leaving one core for the main thread.
+
+**Implementation:** [src/backend/backend.zig](../../src/backend/backend.zig) (`BackendState.init`).
 
 **Why n-1?** Main thread participates, so total threads = `n_workers + 1`.
 
 ### Grain Size
 
-```zig
-const min_grain: usize = 4;  // Minimum rows per chunk
-```
+`min_grain = 4` rows per chunk (module-level constant in [src/thread_pool.zig](../../src/thread_pool.zig)).
 
 **Heuristic:** `grain = max(min_grain, n_rows / (n_threads * 4))`
 
@@ -584,12 +510,13 @@ flowchart LR
 
 ### Inline Threshold
 
-```zig
-if (total <= effective_grain) {
-    func(ctx, 0, total);  // Run inline, skip threading overhead
-    return;
-}
+```text
+if total <= effective_grain:
+    func(ctx, 0, total)   # run inline, skip threading overhead
+    return
 ```
+
+**Implementation:** [src/thread_pool.zig](../../src/thread_pool.zig) (`parallelFor` early-return branch).
 
 **Why?** For tiny work (< 4 rows), threading overhead dominates. Faster to run inline.
 
@@ -597,65 +524,41 @@ if (total <= effective_grain) {
 
 ### Pitfall 1: Shared Mutable State
 
-```zig
-// BAD: Race condition
-var sum: f32 = 0;
-pool.parallelFor(n, grain, &sum, func);
+```text
+BAD: race condition
+sum: f32 = 0
+pool.parallelFor(n, grain, &sum, func)
 
-fn func(ctx: *anyopaque, start: usize, end: usize) void {
-    const sum_ptr: *f32 = @ptrCast(@alignCast(ctx));
-    for (start..end) |i| {
-        sum_ptr.* += data[i];  // WRONG: Multiple threads writing to same memory
-    }
-}
+func(ctx, start, end):
+  for i in start..end:
+    sum.* += data[i]     # WRONG: multiple threads writing the same memory
 ```
 
 **Fix:** Use thread-local accumulators, then reduce:
 
-```zig
-// GOOD: Thread-local accumulators
-const SumCtx = struct {
-    data: [*]const f32,
-    partial_sums: []f32,
-    grain: usize,
-};
+```text
+GOOD: thread-local accumulators
+SumCtx: { data, partial_sums, grain }
 
-fn func(ctx: *anyopaque, start: usize, end: usize) void {
-    const sum_ctx: *SumCtx = @ptrCast(@alignCast(ctx));
-    const thread_id = start / sum_ctx.grain;
-    var local_sum: f32 = 0.0;
+func(ctx, start, end):
+  thread_id = start / ctx.grain
+  local_sum = 0.0
+  for i in start..end:
+    local_sum += ctx.data[i]
+  ctx.partial_sums[thread_id] = local_sum
 
-    for (start..end) |i| {
-        local_sum += sum_ctx.data[i];
-    }
-
-    sum_ctx.partial_sums[thread_id] = local_sum;
-}
-
-// Then reduce on main thread
-var total: f32 = 0.0;
-for (partial_sums) |ps| total += ps;
+# Then reduce on main thread
+total = 0.0
+for ps in partial_sums: total += ps
 ```
 
 ### Pitfall 2: False Sharing
 
-```zig
-// BAD: Partial sums are adjacent in memory
-var partial_sums: [8]f32 = undefined;  // 8 f32s = 32 bytes = half a cache line
-```
+BAD: `partial_sums: [8]f32` puts all 8 values (32 bytes) in half a single cache line.
 
 **Problem:** Cache lines are 64 bytes. Multiple threads writing to the same cache line **ping-pong** it between cores → slowdown.
 
-**Fix:** Pad to cache line size:
-
-```zig
-// GOOD: Each partial sum on its own cache line
-const CacheLinePadded = struct {
-    value: f32 align(64),  // Force 64-byte alignment
-};
-
-var partial_sums: [8]CacheLinePadded = undefined;
-```
+**Fix:** Pad to cache line size. `CacheLinePadded = struct { value: f32 align(64) }`, then `partial_sums: [8]CacheLinePadded`, so each value owns a full 64-byte line.
 
 ```mermaid
 flowchart TB
@@ -712,34 +615,23 @@ Agave avoids this by using per-chunk reduction in the worker function — no sha
 
 ### Pitfall 3: Forgetting to Call spawn()
 
-```zig
-// BAD: Workers never created
-var pool = ThreadPool.init(7);  // Just sets n_workers
-pool.parallelFor(...);  // No workers exist! Runs inline on main thread
-```
+BAD: `pool = ThreadPool.init(7)` only sets `n_workers`; calling `pool.parallelFor(...)` next runs inline on the main thread because no workers exist yet.
 
-**Fix:** Call `spawn(io)` after the pool is at its final memory location:
-
-```zig
-// GOOD
-var pool = ThreadPool.init(7);
-pool.spawn(io);  // Actually creates worker threads (io from main(Init))
-defer pool.deinit();
-```
+**Fix:** Call `spawn(io)` after the pool is at its final memory location: `pool = ThreadPool.init(7)`, then `pool.spawn(io)` to actually create the worker threads (`io` comes from `main(Init)`), then `defer pool.deinit()`.
 
 **Why separate?** Workers capture `pool` by pointer. If you spawn before the pool is at its final location (e.g., it's a stack local that gets moved), the pointer becomes invalid. The `io` parameter is the Zig 0.16 `Io` context needed for futex operations.
 
 ## Performance Characteristics
 
-**Speedup** (measured on Apple M4 Pro, 12 cores):
+**Scaling shape** (illustrative on Apple M4 Pro, 14 cores / 13 workers + main; not a `BENCHMARKS.md` table):
 
-| Operation | Single-threaded | 11 workers + main | Speedup |
-| --------- | --------------- | ----------------- | ------- |
-| F32 GEMV (4096×4096) | 1.2 ms | 0.18 ms | 6.7× |
-| Q4_0 GEMV (4096×4096) | 0.8 ms | 0.13 ms | 6.2× |
-| RMSNorm (4096) | 15 µs | 3 µs | 5.0× |
+| Operation | Single-threaded | Parallel (13 workers + main) | Typical speedup band |
+| --------- | --------------- | ---------------------------- | -------------------- |
+| F32 GEMV (large square) | baseline | much lower latency | ~5–7× |
+| Q4_0 GEMV (large square) | baseline | much lower latency | ~5–7× |
+| RMSNorm (hidden dim) | baseline | lower latency | ~4–6× |
 
-**Why not 12× speedup?** Memory bandwidth saturation. With 12 threads, bandwidth is exhausted well before linear scaling; marginal gains from threads beyond the saturation point are small, so actual speedup plateaus in the 5-7x range.
+**Why not 14× speedup?** Memory bandwidth saturation. With a full core count, bandwidth is exhausted well before linear scaling; marginal gains from threads beyond the saturation point are small, so actual speedup plateaus in the mid single-digit range.
 
 **Overhead:**
 

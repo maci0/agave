@@ -171,11 +171,13 @@ word[7] = elem[56..63]
 
 Nibble extraction:
 
-```zig
-const word_idx = elem_idx / 8;
-const bit_offset = (elem_idx % 8) * 4;
-const nibble = (words[word_idx] >> bit_offset) & 0xF;
+```text
+word_idx   = elem_idx / 8
+bit_offset = (elem_idx % 8) * 4
+nibble     = (words[word_idx] >> bit_offset) & 0xF
 ```
+
+**Implementation:** [`src/ops/mlx.zig`](../../src/ops/mlx.zig) (`unpackU4`)
 
 **Scales and biases:** Separate bf16 arrays (2 bytes per value):
 
@@ -184,16 +186,15 @@ scales[group] → bf16 scale for group
 biases[group] → bf16 bias for group
 ```
 
-### Factored Dequantization (30-40% Speedup)
+### Factored Dequantization
 
 **Naive approach:** Dequantize each element before multiplying:
 
-```zig
-for (0..64) |j| {  // For each element in group
-    const q = unpack(quant, j);        // Extract quantized value
-    const dq = scale * q + bias;       // Dequantize
-    acc += dq * x[j];                  // Multiply by input
-}
+```text
+for j in 0..64:                 # each element in the group
+    q  = unpack(quant, j)
+    dq = scale * q + bias        # dequantize
+    acc += dq * x[j]             # multiply by input
 ```
 
 **Cost:** 64 multiplies (scale × q) + 64 adds (+ bias) + 64 FMAs (dq × x) = **192 operations per group**.
@@ -206,22 +207,23 @@ sum(x[j] * (scale * q[j] + bias)) = scale * sum(x[j] * q[j]) + bias * sum(x[j])
 
 This is the **distributive property** — pull the constant scale and bias outside the sum:
 
-```zig
-var q_dot: f32 = 0;  // dot(quantized, input)
-var x_sum: f32 = 0;  // sum(input)
+```text
+q_dot = 0   # dot(quantized, input)
+x_sum = 0   # sum(input)
 
-for (0..64) |j| {
-    const q = unpack(quant, j);
-    q_dot += q * x[j];  // Accumulate q·x
-    x_sum += x[j];      // Accumulate sum(x)
-}
+for j in 0..64:
+    q = unpack(quant, j)
+    q_dot += q * x[j]      # accumulate q·x
+    x_sum += x[j]           # accumulate sum(x)
 
-acc += scale * q_dot + bias * x_sum;  // Apply scale/bias ONCE
+acc += scale * q_dot + bias * x_sum   # apply scale/bias ONCE
 ```
 
 **Cost:** 64 FMAs (q × x, fused multiply-add) + 64 adds (sum x) + **2 final ops** = **130 operations per group**.
 
-**Savings:** 192 → 130 ops = **32% reduction** in arithmetic. Real-world speedup: **30-40%** (measured on Apple M4 with Gemma3 27B QAT).
+**Implementation:** [`src/ops/mlx.zig`](../../src/ops/mlx.zig) (`mlxGemvQ4Rows`, factored `q_dot`/`x_sum` accumulation)
+
+**Savings:** 192 → 130 ops = **32% reduction** in arithmetic. In practice that usually shows up as a meaningful decode speedup; there is no corresponding row in `docs/BENCHMARKS.md`, so treat the wall-clock gain as expected rather than a cited measurement.
 
 ```mermaid
 flowchart LR
@@ -257,7 +259,7 @@ flowchart LR
         FF --> FT
     end
 
-    Naive -->|"32% fewer ops\n30-40% real speedup"| Factored
+    Naive -->|"32% fewer ops\nexpected wall-clock gain"| Factored
 ```
 
 **Why this works:**
@@ -268,34 +270,23 @@ flowchart LR
 
 **SIMD implementation** (pseudocode illustrating the vectorized approach):
 
-```zig
-var q_dot_acc: V8 = @splat(0.0);
-var x_sum_acc: V8 = @splat(0.0);
+```text
+q_dot_acc, x_sum_acc = vector8(0.0), vector8(0.0)
 
-var j: usize = 0;
-while (j + 8 <= 64) : (j += 8) {
-    // Unpack 8 quantized values
-    const qv = unpackU4x8(quant, j);  // V8 of quantized values
+for j in 0..64 step 8:
+    qv = unpack_8_nibbles(quant, j)     # V8 of quantized values
+    xv = load_8(x, base + j)            # V8 of input values
+    q_dot_acc = fma(qv, xv, q_dot_acc)   # vector fused multiply-add
+    x_sum_acc += xv
 
-    // Load 8 input values
-    const xv: V8 = x[base + j ..][0..8].*;
-
-    // FMA: q_dot += qv * xv
-    q_dot_acc = @mulAdd(V8, qv, xv, q_dot_acc);
-
-    // Accumulate x sum
-    x_sum_acc += xv;
-}
-
-// Horizontal reduce
-const q_dot = @reduce(.Add, q_dot_acc);
-const x_sum = @reduce(.Add, x_sum_acc);
-
-// Apply scale/bias once
-acc += scale * q_dot + bias * x_sum;
+q_dot = horizontal_sum(q_dot_acc)
+x_sum = horizontal_sum(x_sum_acc)
+acc += scale * q_dot + bias * x_sum      # apply scale/bias once
 ```
 
 **Additional optimization:** `@mulAdd` maps to NEON `vfma` (fused multiply-add) — 1 instruction instead of separate multiply + add.
+
+**Implementation:** [`src/ops/mlx.zig`](../../src/ops/mlx.zig) (`mlxGemvQ4Rows`, `@Vector`/`@mulAdd`/`@reduce` SIMD path)
 
 ### When to Use MLX Quantization
 
@@ -379,7 +370,7 @@ This maps {0, 1, 2} → {-1, 0, +1} × scale, where encoded values are the store
 | | TQ1_0 | TQ2_0 |
 |---|---|---|
 | Bits per weight | 1.58 | 2.0 |
-| Bytes per 256-elem block | 54 | 66 |
+| Bytes per 256-elem block | 64 | 66 |
 | Decode complexity | Base-3 lookup table | Bitshift only |
 | CPU throughput | Slightly lower (table) | Highest (bitshift) |
 
@@ -485,7 +476,7 @@ The zero being stored as a full float (rather than packed INT4 like GPTQ) simpli
 ./agave model-hqq-dir/ "prompt"
 ```
 
-Note: GPU backends (Metal, Vulkan, WebGPU, CUDA, ROCm) fall through to CPU for HQQ — native GPU kernels are planned but not yet implemented.
+Note: All GPU backends (Metal, Vulkan, WebGPU, CUDA, ROCm) implement native HQQ GEMV kernels (`gemvHqq`).
 
 ## Floating-Point Quantization
 
@@ -556,7 +547,7 @@ Value = (-1)^0 × 1.75 × 2^2 = 7.0
 - FP8 E4M3: Weights and gradients with small deltas
 - FP8 E5M2: Activations with wide dynamic range
 
-**NVFP4, MXFP4**: 4-bit microscaled floating-point. NVFP4 uses 16-element blocks (9 bytes each); MXFP4 uses 32-element blocks (17 bytes each). Both use FP8 E4M3 scales. Hardware-native on NVIDIA Blackwell and newer.
+**NVFP4, MXFP4**: 4-bit microscaled floating-point. NVFP4 uses 16-element blocks (9 bytes each) with FP8 E4M3 scales; MXFP4 uses 32-element blocks (17 bytes each) with E8M0 (power-of-2) scales. Hardware-native on NVIDIA Blackwell and newer.
 
 ## TurboQuant — KV Cache Quantization
 
@@ -673,15 +664,15 @@ Empirically, compressing K below q8_0 causes measurable perplexity degradation, 
 
 The first and last 2 transformer layers keep V at f16 even when the middle layers use turbo4. These boundary layers are disproportionately important — early layers establish token representations, and final layers directly influence the output distribution. The `turbo` preset enables this automatically:
 
-```zig
-// src/models/gemma4.zig — per-layer V type selection
-inline fn layerVType(self: *const Gemma4Model, li: u32) KvQuantType {
-    if (self.kv_boundary_v == 0) return self.kv_type_v;
-    const b = self.kv_boundary_v;
-    if (li < b or li >= self.n_layers - b) return .f16;
-    return self.kv_type_v;
-}
+```text
+layerVType(layer_index):
+    if kv_boundary_v == 0: return kv_type_v            # boundary protection off
+    if layer_index < boundary or layer_index >= n_layers - boundary:
+        return f16                                      # protected boundary layer
+    return kv_type_v                                    # middle layers use the compressed type
 ```
+
+**Implementation:** [`src/models/gemma4.zig`](../../src/models/gemma4.zig) (`layerVType`)
 
 For a 42-layer model with `--kv-type turbo`: layers 0-1 and 40-41 use f16 V, layers 2-39 use turbo4 V. All layers use q8_0 K.
 
@@ -689,19 +680,18 @@ For a 42-layer model with `--kv-type turbo`: layers 0-1 and 40-41 use f16 V, lay
 
 During attention, most softmax weights are near zero — only a handful of positions actually contribute to the output. Sparse V skips the V dequantization and multiply-accumulate for any position where the softmax weight is below 1e-6 (contributing less than 0.0001% to the output):
 
-```zig
-// src/ops/attention.zig
-const sparse_v_threshold: f32 = 1e-6;
+```text
+sparse_v_threshold = 1e-6
 
-for (0..win_len) |wi| {
-    const score = scores[score_offset + wi];
-    if (score < sparse_v_threshold) continue; // Skip negligible positions
-    const t = win_start + wi;
-    kv_quant.kvMulAccum(attn_out + q_base, score, kv_values[v_off..].ptr, hd, kv_type_v);
-}
+for wi in 0..win_len:
+    score = scores[score_offset + wi]
+    if score < sparse_v_threshold: continue      # skip negligible positions
+    kvMulAccum(attn_out, score, kv_values[window position], head_dim, kv_type_v)
 ```
 
-At 32K context length, the majority of positions have negligible softmax weights. Skipping their V reads yields **+22.8% decode speed** with zero measured perplexity impact. This is especially effective with quantized V formats (turbo4, turbo3) because it avoids both the dequantization arithmetic and the cache-unfriendly memory reads.
+**Implementation:** [`src/ops/attention.zig`](../../src/ops/attention.zig) (`sparse_v_threshold`)
+
+At 32K context length, the majority of positions have negligible softmax weights. Skipping their V reads improves decode speed with zero measured perplexity impact (see the comment on `sparse_v_threshold` in `src/ops/attention.zig`). This is especially effective with quantized V formats (turbo4, turbo3) because it avoids both the dequantization arithmetic and the cache-unfriendly memory reads.
 
 ## Geometric KV Cache Quantization
 
