@@ -31,6 +31,9 @@ const max_active_experts: usize = 8;
 const name_buf_size: usize = model_mod.tensor_name_buf_size;
 /// Default MLX quantization bit width for GLM-4 (6-bit, unlike 4-bit default for other models).
 const default_glm4_mlx_bits: u32 = 6;
+/// Norm weight cache capacity (final + 4 per layer).
+const max_norm_entries: usize = 512;
+const NormCacheEntry = model_mod.NormCacheEntry;
 
 // ── Model struct ─────────────────────────────────────────────────
 
@@ -104,6 +107,10 @@ pub const Glm4Model = struct {
 
     // Thread pool for parallel CPU work
     pool: ?*@import("../thread_pool.zig").ThreadPool = null,
+
+    /// Permanent f32 cache for non-f32 RMS norm weights (BF16 etc.).
+    norm_cache: [max_norm_entries]NormCacheEntry = undefined,
+    norm_cache_len: usize = 0,
 
     /// Initialize the model from format metadata and allocate all working buffers.
     pub fn init(allocator: Allocator, f: Format, be: Backend, ctx_size: u32, kv_type_k: kv_quant.KvQuantType, kv_type_v: kv_quant.KvQuantType, tiered_cache: ?*TieredKvCache) !Glm4Model {
@@ -208,11 +215,13 @@ pub const Glm4Model = struct {
             try self.block_allocator.appendBlock(&self.seq_table);
         }
 
+        self.warmNormCache();
         return self;
     }
 
     /// Release all heap allocations owned by this model.
     pub fn deinit(self: *Glm4Model) void {
+        for (self.norm_cache[0..self.norm_cache_len]) |entry| self.allocator.free(entry.data);
         if (self.tiered_block_allocator) |*ta| {
             ta.freeSeqTable(&self.seq_table);
         } else {
@@ -262,7 +271,7 @@ pub const Glm4Model = struct {
 
         // Final norm → logits
         const nw = self.fmt.getTensor("model.norm.weight") orelse return error.MissingTensor;
-        self.be.rmsNorm(self.hidden.ptr, @ptrCast(@alignCast(nw.data_ptr)), self.hidden.ptr, self.n_embd, self.rms_eps);
+        self.be.rmsNorm(self.hidden.ptr, self.normAsF32(nw, self.n_embd), self.hidden.ptr, self.n_embd, self.rms_eps);
 
         // LM head (may be quantized)
         self.be.sync();
@@ -365,13 +374,13 @@ pub const Glm4Model = struct {
         const vhd: usize = self.v_head_dim;
         // 1. Pre-norm
         const nw = self.layerTensor(li, "input_layernorm.weight") orelse return error.MissingTensor;
-        self.be.rmsNorm(self.hidden.ptr, @ptrCast(@alignCast(nw.data_ptr)), self.hidden2.ptr, e, self.rms_eps);
+        self.be.rmsNorm(self.hidden.ptr, self.normAsF32(nw, e), self.hidden2.ptr, e, self.rms_eps);
 
         // 2. Q path: hidden2 → q_a_proj(e→q_lora_rank) → layernorm → q_b_proj(q_lora_rank→nh*q_head_dim)
         self.be.sync();
         try self.mlxLayerGemv(li, "self_attn.q_a_proj", self.hidden2, self.q_compressed, self.q_lora_rank, e);
         const qn = self.layerTensor(li, "self_attn.q_a_layernorm.weight") orelse return error.MissingTensor;
-        self.be.rmsNorm(self.q_compressed.ptr, @ptrCast(@alignCast(qn.data_ptr)), self.q_compressed.ptr, self.q_lora_rank, self.rms_eps);
+        self.be.rmsNorm(self.q_compressed.ptr, self.normAsF32(qn, self.q_lora_rank), self.q_compressed.ptr, self.q_lora_rank, self.rms_eps);
         self.be.sync();
         try self.mlxLayerGemv(li, "self_attn.q_b_proj", self.q_compressed, self.q_full, nh * q_head_dim, self.q_lora_rank);
         // 3. KV path: hidden2 → kv_a_proj_with_mqa(e→kv_rank+rope_dim) → split
@@ -383,7 +392,7 @@ pub const Glm4Model = struct {
 
         // Layernorm on kv_latent
         const kvn = self.layerTensor(li, "self_attn.kv_a_layernorm.weight") orelse return error.MissingTensor;
-        self.be.rmsNorm(self.kv_latent.ptr, @ptrCast(@alignCast(kvn.data_ptr)), self.kv_latent.ptr, kv_rank, self.rms_eps);
+        self.be.rmsNorm(self.kv_latent.ptr, self.normAsF32(kvn, kv_rank), self.kv_latent.ptr, kv_rank, self.rms_eps);
 
         // 4. Per-head K_nope and V from kv_latent via embed_q and unembed_out
         // embed_q: [nh, nope_dim, kv_rank] → K_nope per head (HF tensor name; despite the name, projects kv_latent into K_nope)
@@ -484,7 +493,7 @@ pub const Glm4Model = struct {
 
         // Fused residual add + pre-FFN norm (hidden2 = deferred attention output).
         const nw = self.layerTensor(li, "post_attention_layernorm.weight") orelse return error.MissingTensor;
-        self.be.addRmsNorm(self.hidden.ptr, self.hidden2.ptr, @ptrCast(@alignCast(nw.data_ptr)), self.hidden2.ptr, e, self.rms_eps);
+        self.be.addRmsNorm(self.hidden.ptr, self.hidden2.ptr, self.normAsF32(nw, e), self.hidden2.ptr, e, self.rms_eps);
 
         self.be.sync();
 
@@ -540,7 +549,7 @@ pub const Glm4Model = struct {
 
         // Fused residual add + pre-FFN norm (hidden2 = deferred attention output).
         const nw = self.layerTensor(li, "post_attention_layernorm.weight") orelse return error.MissingTensor;
-        self.be.addRmsNorm(self.hidden.ptr, self.hidden2.ptr, @ptrCast(@alignCast(nw.data_ptr)), self.hidden2.ptr, e, self.rms_eps);
+        self.be.addRmsNorm(self.hidden.ptr, self.hidden2.ptr, self.normAsF32(nw, e), self.hidden2.ptr, e, self.rms_eps);
 
         // Router: sigmoid scoring
         const gate_t = self.layerTensor(li, "mlp.gate.weight") orelse return error.MissingTensor;
@@ -630,6 +639,36 @@ pub const Glm4Model = struct {
     }
 
     // ── Helpers ──────────────────────────────────────────────────
+
+    /// Return f32 view of a norm tensor, converting+caching non-f32 weights once.
+    fn normAsF32(self: *Glm4Model, t: TensorInfo, n: usize) [*]const f32 {
+        if (t.dtype == .f32) return @ptrCast(@alignCast(t.data_ptr));
+
+        const key = @intFromPtr(t.data_ptr);
+        for (self.norm_cache[0..self.norm_cache_len]) |entry| {
+            if (entry.key == key) return entry.data.ptr;
+        }
+
+        if (self.norm_cache_len >= max_norm_entries)
+            @panic("normAsF32: norm cache overflow — increase max_norm_entries");
+        const buf = self.allocator.alloc(f32, n) catch @panic("normAsF32: out of memory converting norm weights");
+        quant_ops.dequantToF32(buf, t.data_ptr, t.dtype, n);
+        self.norm_cache[self.norm_cache_len] = .{ .key = key, .data = buf };
+        self.norm_cache_len += 1;
+        return buf.ptr;
+    }
+
+    fn warmNormCache(self: *Glm4Model) void {
+        const e: usize = self.n_embd;
+        if (self.fmt.getTensor("model.norm.weight")) |t| _ = self.normAsF32(t, e);
+        for (0..self.n_layers) |li| {
+            const l: u32 = @intCast(li);
+            if (self.layerTensor(l, "input_layernorm.weight")) |t| _ = self.normAsF32(t, e);
+            if (self.layerTensor(l, "self_attn.q_a_layernorm.weight")) |t| _ = self.normAsF32(t, self.q_lora_rank);
+            if (self.layerTensor(l, "self_attn.kv_a_layernorm.weight")) |t| _ = self.normAsF32(t, self.kv_lora_rank);
+            if (self.layerTensor(l, "post_attention_layernorm.weight")) |t| _ = self.normAsF32(t, e);
+        }
+    }
 
     fn layerTensor(self: *Glm4Model, li: u32, suffix: []const u8) ?TensorInfo {
         // Try SafeTensors/HF name first (model.layers.N.suffix)

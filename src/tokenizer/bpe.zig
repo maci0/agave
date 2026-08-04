@@ -15,6 +15,10 @@ const spm_prefix = "\xe2\x96\x81";
 const qwen_default_eos_id: u32 = 151645;
 /// Default Qwen BOS token ID, used when tokenizer.json doesn't specify one.
 const qwen_default_bos_id: u32 = 151643;
+/// Max bytes per cached BPE segment (longer segments skip the cache).
+const max_word_cache_seg_bytes: usize = 4096;
+/// Cap on word_cache entries to bound memory in long-lived --serve processes.
+const max_word_cache_entries: usize = 8192;
 
 // ── GPT-2 byte-to-unicode mapping ranges (OpenAI BPE specification) ──
 /// First printable ASCII codepoint (maps 1:1 in GPT-2 byte encoder).
@@ -47,7 +51,10 @@ pub const BpeTokenizer = struct {
     // Word-level BPE cache: maps pretoken bytes → token ID slice.
     // Avoids re-running bytesToUnicode + applyBpe for recurring words.
     // Keys and values are owned by this allocator.
+    // Atomic spinlock guards concurrent encode from server connection threads
+    // (Zig 0.16 Mutex lives on Io; tokenizer has no Io context).
     word_cache: std.StringHashMapUnmanaged([]u32) = .{},
+    word_cache_lock: std.atomic.Value(u8) = .init(0),
 
     /// Return the generic Tokenizer interface backed by this BPE tokenizer.
     pub fn tokenizer(self: *BpeTokenizer) TokenizerIface {
@@ -90,6 +97,16 @@ pub const BpeTokenizer = struct {
         };
     }
 
+    fn lockWordCache(self: *BpeTokenizer) void {
+        while (self.word_cache_lock.cmpxchgWeak(0, 1, .acquire, .monotonic) != null) {
+            std.atomic.spinLoopHint();
+        }
+    }
+
+    fn unlockWordCache(self: *BpeTokenizer) void {
+        self.word_cache_lock.store(0, .release);
+    }
+
     /// Free all owned memory (vocab, merges, byte mappings).
     pub fn deinit(self: *BpeTokenizer) void {
         // Free byte_to_unicode mappings allocated by initByteMappings
@@ -107,6 +124,8 @@ pub const BpeTokenizer = struct {
         for (self.owned_strings.items) |s| self.allocator.free(s);
         self.owned_strings.deinit(self.allocator);
         // Free word cache: keys and values are both owned.
+        self.lockWordCache();
+        defer self.unlockWordCache();
         var it = self.word_cache.iterator();
         while (it.next()) |entry| {
             self.allocator.free(entry.key_ptr.*);
@@ -335,9 +354,24 @@ pub const BpeTokenizer = struct {
                 }
             } else {
                 // Byte-level BPE — check word cache first.
-                if (self.word_cache.get(seg)) |cached_ids| {
-                    try result.appendSlice(self.allocator, cached_ids);
+                self.lockWordCache();
+                const cached_opt = self.word_cache.get(seg);
+                if (cached_opt) |cached_ids| {
+                    // Copy under lock so concurrent deinit cannot free the slice.
+                    var tmp_ids: [256]u32 = undefined;
+                    const n_ids = cached_ids.len;
+                    if (n_ids <= tmp_ids.len) {
+                        @memcpy(tmp_ids[0..n_ids], cached_ids);
+                        self.unlockWordCache();
+                        try result.appendSlice(self.allocator, tmp_ids[0..n_ids]);
+                    } else {
+                        const owned = try self.allocator.dupe(u32, cached_ids);
+                        self.unlockWordCache();
+                        defer self.allocator.free(owned);
+                        try result.appendSlice(self.allocator, owned);
+                    }
                 } else {
+                    self.unlockWordCache();
                     const unicode_text = try self.bytesToUnicode(seg);
                     defer self.allocator.free(unicode_text);
                     var chars = try self.splitUtfChars(unicode_text);
@@ -364,12 +398,16 @@ pub const BpeTokenizer = struct {
                     }
                     // Store in cache: key = owned copy of seg, value = owned copy of IDs.
                     const seg_ids = result.items[seg_start..];
-                    if (seg_ids.len > 0 and seg.len <= 4096) {
-                        const owned_key = try self.allocator.dupe(u8, seg);
-                        errdefer self.allocator.free(owned_key);
-                        const owned_val = try self.allocator.dupe(u32, seg_ids);
-                        errdefer self.allocator.free(owned_val);
-                        try self.word_cache.put(self.allocator, owned_key, owned_val);
+                    if (seg_ids.len > 0 and seg.len <= max_word_cache_seg_bytes) {
+                        self.lockWordCache();
+                        defer self.unlockWordCache();
+                        if (self.word_cache.count() < max_word_cache_entries and !self.word_cache.contains(seg)) {
+                            const owned_key = try self.allocator.dupe(u8, seg);
+                            errdefer self.allocator.free(owned_key);
+                            const owned_val = try self.allocator.dupe(u32, seg_ids);
+                            errdefer self.allocator.free(owned_val);
+                            try self.word_cache.put(self.allocator, owned_key, owned_val);
+                        }
                     }
                 }
             }

@@ -14,6 +14,8 @@
 const std = @import("std");
 
 const nibbles_per_u32: usize = 8;
+/// Skip near-zero activations (sparse AWQ FFN). Absolute threshold on x[ki].
+const awq_sparse_skip_threshold: f32 = 0.005;
 
 /// GEMM interleaved order: nibble at shift position i*4 maps to output column order_map[i].
 const gemm_order: [8]u3 = .{ 0, 2, 4, 6, 1, 3, 5, 7 };
@@ -34,9 +36,12 @@ pub fn awqGemv(
     k: usize,
     group_size: u32,
 ) void {
-    awqGemvRows(x, qweight, scales, qzeros, y, 0, n, k, group_size);
+    awqGemvRows(x, qweight, scales, qzeros, y, 0, n, n, k, group_size);
 }
 
+/// Parallel-friendly AWQ GEMV over an output-column range.
+/// `n` is the full matrix width (for qweight/qzeros/scales strides);
+/// `start_col`/`n_cols` select the chunk. `n_cols` must be a multiple of 8.
 pub fn awqGemvRows(
     x: [*]const f32,
     qweight: [*]const u32,
@@ -45,34 +50,38 @@ pub fn awqGemvRows(
     y: [*]f32,
     start_col: usize,
     n_cols: usize,
+    n: usize,
     k: usize,
     group_size: u32,
 ) void {
     const gs: usize = group_size;
-    const n_words = n_cols / nibbles_per_u32;
+    const words_per_row = n / nibbles_per_u32;
+    const chunk_words = n_cols / nibbles_per_u32;
+    const start_word = start_col / nibbles_per_u32;
 
-    // Zero output
+    // Zero output chunk
     @memset(y[start_col .. start_col + n_cols], 0);
 
     // AWQ column-major: iterate over input positions (k), unpack 8 outputs per word
     for (0..k) |ki| {
         const xv = x[ki];
-        if (@abs(xv) < 0.005) continue; // Sparse skip
+        if (@abs(xv) < awq_sparse_skip_threshold) continue;
 
         const g = ki / gs;
 
-        // Process 8 output channels per word
-        for (0..n_words) |wi| {
-            const out_base = start_col + wi * nibbles_per_u32;
-            const word = qweight[ki * n_words + wi];
-            const z_word = qzeros[g * n_words + wi];
+        // Process 8 output channels per word within the chunk
+        for (0..chunk_words) |cwi| {
+            const wi = start_word + cwi;
+            const out_base = wi * nibbles_per_u32;
+            const word = qweight[ki * words_per_row + wi];
+            const z_word = qzeros[g * words_per_row + wi];
 
             inline for (0..8) |ni| {
                 const nibble: u4 = @truncate(word >> @as(u5, @intCast(ni * 4)));
                 const zero: u4 = @truncate(z_word >> @as(u5, @intCast(ni * 4)));
                 // GEMM order: nibble at shift ni maps to output column gemm_order[ni]
                 const out_idx = out_base + gemm_order[ni];
-                const scale = f16ToF32(scales[g * n_cols + out_idx]);
+                const scale = f16ToF32(scales[g * n + out_idx]);
                 const dequant = (@as(f32, @floatFromInt(@as(i8, nibble))) - @as(f32, @floatFromInt(@as(i8, zero)))) * scale;
                 y[out_idx] += dequant * xv;
             }
@@ -100,7 +109,7 @@ test "awqGemv GEMM order" {
     var x = [_]f32{1.0};
     var y = [_]f32{0} ** 8;
 
-    awqGemvRows(&x, &qweight, &scales, &qzeros, &y, 0, n, k, gs);
+    awqGemvRows(&x, &qweight, &scales, &qzeros, &y, 0, n, n, k, gs);
 
     // Expected with GEMM reorder:
     // out[0]: (7-7)*sc[0] = 0
@@ -138,7 +147,7 @@ test "awqGemvRows with non-zero start_col" {
     var y_rows: [8]f32 = undefined;
 
     awqGemv(&x, &qweight, &scales, &qzeros, &y_direct, n, k, gs);
-    awqGemvRows(&x, &qweight, &scales, &qzeros, &y_rows, 0, n, k, gs);
+    awqGemvRows(&x, &qweight, &scales, &qzeros, &y_rows, 0, n, n, k, gs);
 
     // Both should produce identical results
     for (0..8) |i| {
@@ -146,35 +155,64 @@ test "awqGemvRows with non-zero start_col" {
     }
 }
 
+test "awqGemvRows chunk uses full-n strides" {
+    // n=16 so qweight/qzeros have 2 words per k/group. Chunk covering only
+    // cols 8..15 must index with full-n stride (words_per_row=2), not n_cols.
+    const n: usize = 16;
+    const k: usize = 1;
+    const gs: u32 = 128;
+
+    // Word0 for cols 0-7, word1 for cols 8-15. Only word1 is non-zero.
+    var qweight = [_]u32{ 0, 0x97585367 };
+    var qzeros = [_]u32{ 0, 0xb6674377 };
+    var scales = [_]u16{
+        0,    0,    0,    0,    0,    0,    0,    0,
+        6794, 7247, 8252, 7744, 11327, 8329, 8451, 8314,
+    };
+    var x = [_]f32{1.0};
+    var y = [_]f32{0} ** 16;
+
+    awqGemvRows(&x, &qweight, &scales, &qzeros, &y, 8, 8, n, k, gs);
+
+    const expected = [_]f32{ 0.0, 0.004208, -0.008270, -0.006104, 0.0, 0.008858, 0.009789, -0.017487 };
+    const tol: f32 = 0.001;
+    for (0..8) |i| {
+        try std.testing.expectApproxEqAbs(0.0, y[i], 1e-6);
+        if (@abs(y[8 + i] - expected[i]) > tol) {
+            std.log.err("AWQ chunk fail: y[{d}] = {d:.6}, expected {d:.6}", .{ 8 + i, y[8 + i], expected[i] });
+            return error.TestUnexpectedResult;
+        }
+    }
+}
+
 test "fuzz: all awq functions" {
     try std.testing.fuzz({}, struct {
         fn f(_: void, smith: *std.testing.Smith) !void {
+            const k: usize = 8;
             const n: usize = 8;
-            const k: usize = 1;
-            const gs: u32 = 128;
+            const group_size: u32 = 8;
 
-            // Random inputs
-            var x = [_]f32{smith.valueWithHash(f32, 0)};
-            var qweight = [_]u32{smith.valueWithHash(u32, 1)};
+            var qweight = [_]u32{smith.valueWithHash(u32, 0)};
+            var scale_bits = smith.valueWithHash(u16, 1);
+            const exp = (scale_bits >> 10) & 0x1F;
+            if (exp == 0x1F) scale_bits &= 0x83FF;
+            var scales_arr = [_]u16{scale_bits} ** n;
             var qzeros = [_]u32{smith.valueWithHash(u32, 2)};
-            var scales: [8]u16 = undefined;
-            for (&scales, 0..) |*s, i| {
-                s.* = smith.valueWithHash(u16, @intCast(3 + i));
+
+            var x: [k]f32 = undefined;
+            for (0..k) |i| {
+                const bits = smith.valueWithHash(u32, @as(u32, @intCast(i)) +% 100);
+                x[i] = @bitCast(bits);
+                if (!std.math.isFinite(x[i])) x[i] = 0.0;
             }
 
-            // Exercise awqGemv (pub)
-            var y1: [8]f32 = undefined;
-            awqGemv(&x, &qweight, &scales, &qzeros, &y1, n, k, gs);
+            var y1 = [_]f32{0.0} ** n;
+            awqGemv(&x, &qweight, &scales_arr, &qzeros, &y1, n, k, group_size);
+            for (y1) |v| if (!std.math.isFinite(v)) return error.TestUnexpectedResult;
 
-            // Exercise awqGemvRows (pub)
-            var y2: [8]f32 = undefined;
-            awqGemvRows(&x, &qweight, &scales, &qzeros, &y2, 0, n, k, gs);
-
-            // awqGemv delegates to awqGemvRows with start_col=0, so outputs must match
-            for (0..8) |i| {
-                if (!std.math.isFinite(y1[i])) return error.TestUnexpectedResult;
-                if (@abs(y1[i] - y2[i]) > 1e-6) return error.TestUnexpectedResult;
-            }
+            var y2 = [_]f32{0.0} ** n;
+            awqGemvRows(&x, &qweight, &scales_arr, &qzeros, &y2, 0, n, n, k, group_size);
+            for (0..n) |i| if (y1[i] != y2[i]) return error.TestUnexpectedResult;
         }
     }.f, .{});
 }

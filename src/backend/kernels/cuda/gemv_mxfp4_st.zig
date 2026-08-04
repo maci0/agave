@@ -1,13 +1,18 @@
 //! MXFP4 SafeTensors GEMV: y[row] = dot(dequant(W[row,:]), x)
-//! Weights: u32-packed 4-bit nibbles (8 per word), group_size=32.
-//! Scales: E8M0 per group (pure power-of-2, 1 byte each). No bias.
-//! Dequant: float_val = mxfp4_lut[nibble] * 2^(scale - 127).
+//! Weights: u32-packed 4-bit nibbles (8 per word), group_size=16.
+//! Scales: FP8 E4M3 per group (1 byte each). No bias.
+//! Dequant: float_val = mxfp4_lut[nibble] * fp8e4m3_to_f32(scale).
 //! Grid: n blocks of 256 threads (one row per block).
 
 const cu = @import("common.zig");
 
 const e2m1_lut = cu.e2m1_lut;
-const e8m0ToF32 = cu.e8m0ToF32;
+const fp8e4m3ToF32 = cu.fp8e4m3ToF32;
+
+/// NVIDIA MXFP4: 16 elements per scale group.
+const mxfp4_group_size: u32 = 16;
+/// u32 words per group (16 nibbles / 8 per word).
+const mxfp4_words_per_group: u32 = 2;
 
 export fn gemv_mxfp4_st_kernel(
     x: [*]const f32,
@@ -22,15 +27,15 @@ export fn gemv_mxfp4_st_kernel(
     const tid = cu.threadIdx();
     const bdim = cu.blockDim();
 
-    const gs: u32 = 32;
-    const wpg: u32 = 4; // 32 nibbles / 8 per word
+    const gs = mxfp4_group_size;
+    const wpg = mxfp4_words_per_group;
     const gpr = (k + gs - 1) / gs;
     const wpr = gpr * wpg;
 
     var sum: f32 = 0.0;
     var g: u32 = tid;
     while (g < gpr) : (g += bdim) {
-        const scale = e8m0ToF32(s[row * gpr + g]);
+        const scale = fp8e4m3ToF32(s[row * gpr + g]);
         const xo = g * gs;
         const wo = row * wpr + g * wpg;
 
@@ -55,10 +60,8 @@ export fn gemv_mxfp4_st_kernel(
 const std = @import("std");
 
 test "constants valid" {
-    // group_size and words-per-group are implicit constants in the kernel;
-    // verify their values are sane at comptime.
-    comptime std.debug.assert(32 > 0); // gs: group_size
-    comptime std.debug.assert(4 > 0); // wpg: words per group (32 nibbles / 8 per word)
+    comptime std.debug.assert(mxfp4_group_size == 16);
+    comptime std.debug.assert(mxfp4_words_per_group == 2);
 }
 
 test "fuzz: gemv_mxfp4_st functions" {

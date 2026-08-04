@@ -59,8 +59,9 @@ pub const TpGroup = struct {
         self.allocator.free(self.ranks);
     }
 
-    /// Run forward on rank 0 only (all-reduce not yet implemented).
+    /// Run forward. Multi-rank TP needs all-reduce; fail closed until implemented.
     pub fn forward(self: *TpGroup, token_id: u32) !u32 {
+        if (self.degree > 1) return error.TpIncomplete;
         const model = self.ranks[0].model();
         return model.forward(token_id);
     }

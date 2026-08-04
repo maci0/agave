@@ -37,6 +37,11 @@ pub const LayerType = enum { ssm, attention, ffn_only };
 
 /// Maximum supported layer count (controls static array sizes for layer_types).
 const max_layers: usize = 128;
+/// Norm weight cache (output + attn_norm + ssm_norm per SSM layer).
+const max_norm_entries: usize = 512;
+const NormCacheEntry = model_mod.NormCacheEntry;
+const TensorInfo = format_mod.TensorInfo;
+const quant_ops = @import("../ops/quant.zig");
 
 /// Buffer size for tensor name formatting.
 const name_buf_size: usize = model_mod.tensor_name_buf_size;
@@ -144,6 +149,10 @@ pub const NemotronHModel = struct {
     cancelled: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
     /// Enable fused megakernel for single-dispatch forward pass.
     megakernel_enabled: bool = false,
+
+    /// Permanent f32 cache for non-f32 RMS norm weights.
+    norm_cache: [max_norm_entries]NormCacheEntry = undefined,
+    norm_cache_len: usize = 0,
 
     // ── Lifecycle ─────────────────────────────────────────────────
 
@@ -306,11 +315,13 @@ pub const NemotronHModel = struct {
             layer_init_count = i + 1;
         }
 
+        self.warmNormCache();
         return self;
     }
 
     /// Release all heap allocations owned by this model.
     pub fn deinit(self: *NemotronHModel) void {
+        for (self.norm_cache[0..self.norm_cache_len]) |entry| self.allocator.free(entry.data);
         const nl: usize = self.n_layers;
         for (0..nl) |i| {
             if (self.conv_states[i].len > 0) self.allocator.free(self.conv_states[i]);
@@ -382,10 +393,10 @@ pub const NemotronHModel = struct {
 
         // Flush deferred residual (if last layer left it pending), then final norm.
         if (self.pending_residual) {
-            self.be.addRmsNorm(self.hidden.ptr, self.hidden2.ptr, @ptrCast(@alignCast(nw.data_ptr)), self.hidden.ptr, self.n_embd, self.rms_eps);
+            self.be.addRmsNorm(self.hidden.ptr, self.hidden2.ptr, self.normAsF32(nw, self.n_embd), self.hidden.ptr, self.n_embd, self.rms_eps);
             self.pending_residual = false;
         } else {
-            self.be.rmsNorm(self.hidden.ptr, @ptrCast(@alignCast(nw.data_ptr)), self.hidden.ptr, self.n_embd, self.rms_eps);
+            self.be.rmsNorm(self.hidden.ptr, self.normAsF32(nw, self.n_embd), self.hidden.ptr, self.n_embd, self.rms_eps);
         }
         self.be.gemv(self.hidden.ptr, .{ .data = ow.data_ptr, .dtype = ow.dtype }, self.logits_buf.ptr, self.vocab_size, self.n_embd);
         self.be.sync(); // GPU wrote logits — sync before CPU argmax
@@ -480,10 +491,10 @@ pub const NemotronHModel = struct {
         const nw = self.fmt.layerTensor(li, "attn_norm.weight") orelse return error.MissingTensor;
 
         if (self.pending_residual) {
-            self.be.addRmsNorm(self.hidden.ptr, self.hidden2.ptr, @ptrCast(@alignCast(nw.data_ptr)), self.hidden2.ptr, e, self.rms_eps);
+            self.be.addRmsNorm(self.hidden.ptr, self.hidden2.ptr, self.normAsF32(nw, e), self.hidden2.ptr, e, self.rms_eps);
             self.pending_residual = false;
         } else {
-            self.be.rmsNorm(self.hidden.ptr, @ptrCast(@alignCast(nw.data_ptr)), self.hidden2.ptr, e, self.rms_eps);
+            self.be.rmsNorm(self.hidden.ptr, self.normAsF32(nw, e), self.hidden2.ptr, e, self.rms_eps);
         }
 
         // 2. Input projection: [z(d_inner) | conv_in(conv_ch) | dt(num_heads)]
@@ -507,8 +518,8 @@ pub const NemotronHModel = struct {
         const cs = self.conv_states[li];
         const conv_w_t = self.fmt.layerTensor(li, "ssm_conv1d.weight") orelse return error.MissingTensor;
         const conv_b_t = self.fmt.layerTensor(li, "ssm_conv1d.bias") orelse return error.MissingTensor;
-        const conv_w: [*]const f32 = @ptrCast(@alignCast(conv_w_t.data_ptr));
-        const conv_b: [*]const f32 = @ptrCast(@alignCast(conv_b_t.data_ptr));
+        const conv_w = requireF32Ptr(conv_w_t, "ssm_conv1d.weight");
+        const conv_b = requireF32Ptr(conv_b_t, "ssm_conv1d.bias");
         ssm_ops.causalConv1dSilu(self.ssm_conv_out.ptr, cs.ptr, conv_in_ptr, conv_w, conv_b, conv_ch, d_conv);
 
         // 4. Split conv output: x[0:d_inner] | B[d_inner:d_inner+n_group*d_state] | C[...].
@@ -520,9 +531,9 @@ pub const NemotronHModel = struct {
         const ssm_a_t = self.fmt.layerTensor(li, "ssm_a") orelse return error.MissingTensor;
         const ssm_d_t = self.fmt.layerTensor(li, "ssm_d") orelse return error.MissingTensor;
         const dt_bias_t = self.fmt.layerTensor(li, "ssm_dt.bias") orelse return error.MissingTensor;
-        const ssm_a: [*]const f32 = @ptrCast(@alignCast(ssm_a_t.data_ptr));
-        const ssm_d: [*]const f32 = @ptrCast(@alignCast(ssm_d_t.data_ptr));
-        const dt_bias: [*]const f32 = @ptrCast(@alignCast(dt_bias_t.data_ptr));
+        const ssm_a = requireF32Ptr(ssm_a_t, "ssm_a");
+        const ssm_d = requireF32Ptr(ssm_d_t, "ssm_d");
+        const dt_bias = requireF32Ptr(dt_bias_t, "ssm_dt.bias");
 
         // 6. Mamba-2 autoregressive recurrence, per head.
         const state = self.ssm_states[li]; // [num_heads * mamba_head_dim * d_state]
@@ -532,7 +543,7 @@ pub const NemotronHModel = struct {
 
         // 7. Group RMS norm on y, then SiLU gate.
         const norm_w_t = self.fmt.layerTensor(li, "ssm_norm.weight") orelse return error.MissingTensor;
-        const norm_w: [*]const f32 = @ptrCast(@alignCast(norm_w_t.data_ptr));
+        const norm_w = self.normAsF32(norm_w_t, d_inner);
 
         ssm_ops.groupRmsNormSiluGate(y_ptr, z_ptr, norm_w, d_inner, n_group, self.rms_eps);
 
@@ -563,10 +574,10 @@ pub const NemotronHModel = struct {
         // 1. Pre-norm (fused with previous layer's deferred residual when pending_residual=true).
         const nw = self.fmt.layerTensor(li, "attn_norm.weight") orelse return error.MissingTensor;
         if (self.pending_residual) {
-            self.be.addRmsNorm(self.hidden.ptr, self.hidden2.ptr, @ptrCast(@alignCast(nw.data_ptr)), self.hidden2.ptr, e, self.rms_eps);
+            self.be.addRmsNorm(self.hidden.ptr, self.hidden2.ptr, self.normAsF32(nw, e), self.hidden2.ptr, e, self.rms_eps);
             self.pending_residual = false;
         } else {
-            self.be.rmsNorm(self.hidden.ptr, @ptrCast(@alignCast(nw.data_ptr)), self.hidden2.ptr, e, self.rms_eps);
+            self.be.rmsNorm(self.hidden.ptr, self.normAsF32(nw, e), self.hidden2.ptr, e, self.rms_eps);
         }
 
         // 2. Q/K/V projections (no bias).
@@ -647,10 +658,10 @@ pub const NemotronHModel = struct {
         // 1. Pre-norm (fused with previous layer's deferred residual when pending_residual=true).
         const nw = self.fmt.layerTensor(li, "attn_norm.weight") orelse return error.MissingTensor;
         if (self.pending_residual) {
-            self.be.addRmsNorm(self.hidden.ptr, self.hidden2.ptr, @ptrCast(@alignCast(nw.data_ptr)), self.hidden2.ptr, e, self.rms_eps);
+            self.be.addRmsNorm(self.hidden.ptr, self.hidden2.ptr, self.normAsF32(nw, e), self.hidden2.ptr, e, self.rms_eps);
             self.pending_residual = false;
         } else {
-            self.be.rmsNorm(self.hidden.ptr, @ptrCast(@alignCast(nw.data_ptr)), self.hidden2.ptr, e, self.rms_eps);
+            self.be.rmsNorm(self.hidden.ptr, self.normAsF32(nw, e), self.hidden2.ptr, e, self.rms_eps);
         }
 
         // 2. Up projection → squared ReLU.
@@ -675,7 +686,47 @@ pub const NemotronHModel = struct {
         return @as(usize, self.ssm_d_inner) +
             2 * @as(usize, self.ssm_n_group) * @as(usize, self.ssm_d_state);
     }
+
+    /// Return f32 view of a norm tensor, converting+caching non-f32 weights once.
+    fn normAsF32(self: *NemotronHModel, t: TensorInfo, n: usize) [*]const f32 {
+        if (t.dtype == .f32) return @ptrCast(@alignCast(t.data_ptr));
+
+        const key = @intFromPtr(t.data_ptr);
+        for (self.norm_cache[0..self.norm_cache_len]) |entry| {
+            if (entry.key == key) return entry.data.ptr;
+        }
+
+        if (self.norm_cache_len >= max_norm_entries)
+            @panic("normAsF32: norm cache overflow — increase max_norm_entries");
+        const buf = self.allocator.alloc(f32, n) catch @panic("normAsF32: out of memory converting norm weights");
+        quant_ops.dequantToF32(buf, t.data_ptr, t.dtype, n);
+        self.norm_cache[self.norm_cache_len] = .{ .key = key, .data = buf };
+        self.norm_cache_len += 1;
+        return buf.ptr;
+    }
+
+    fn warmNormCache(self: *NemotronHModel) void {
+        const e: usize = self.n_embd;
+        if (self.fmt.getTensor("output_norm.weight")) |t| _ = self.normAsF32(t, e);
+        for (0..self.n_layers) |li| {
+            const l: u32 = @intCast(li);
+            if (self.fmt.layerTensor(l, "attn_norm.weight")) |t| _ = self.normAsF32(t, e);
+            if (self.layer_types[li] == .ssm) {
+                if (self.fmt.layerTensor(l, "ssm_norm.weight")) |t| {
+                    _ = self.normAsF32(t, self.ssm_d_inner);
+                }
+            }
+        }
+    }
 };
+
+/// SSM parameter tensors must be f32; quantized SSM weights are not supported.
+fn requireF32Ptr(t: TensorInfo, name: []const u8) [*]const f32 {
+    if (t.dtype != .f32) {
+        std.debug.panic("nemotron_h: {s} must be f32 (got {s})", .{ name, @tagName(t.dtype) });
+    }
+    return @ptrCast(@alignCast(t.data_ptr));
+}
 
 // ── Tests ─────────────────────────────────────────────────────────
 

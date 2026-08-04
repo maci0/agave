@@ -866,7 +866,7 @@ pub const Backend = union(enum) {
     /// Compute y[n] = W[n,k] @ x[k] for MXFP4 SafeTensors layout (MLX-style packing).
     ///
     /// MXFP4 stores weights as U32-packed 4-bit nibbles (8 per word) with
-    /// FP8 E4M3 per-group scales (group_size=32). No quantization bias.
+    /// FP8 E4M3 per-group scales (group_size=16). No quantization bias.
     /// Dequant: float_val = mxfp4_lut[nibble] * fp8_scale.
     pub inline fn gemvMxfp4St(self: Backend, x: [*]const f32, weight: [*]const u8, scale: [*]const u8, y: [*]f32, n: usize, k: usize) void {
         switch (self) {

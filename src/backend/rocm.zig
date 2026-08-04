@@ -364,8 +364,8 @@ pub const RocmBackend = struct {
         while (wt_it.next()) |cached| _ = self.hipFree(@ptrFromInt(cached.dptr));
         self.buf_cache.deinit();
 
-        if (self.sdpa_flat_keys) |buf| std.heap.page_allocator.free(buf);
-        if (self.sdpa_flat_vals) |buf| std.heap.page_allocator.free(buf);
+        if (self.sdpa_flat_keys) |buf| self.allocator.free(buf);
+        if (self.sdpa_flat_vals) |buf| self.allocator.free(buf);
         if (self.module != null) _ = self.hipModuleUnload(self.module);
         _ = self.hipDeviceSynchronize();
         self.lib.close();
@@ -573,9 +573,10 @@ pub const RocmBackend = struct {
             .fp8_e5m2 => self.fn_gemv_fp8_e5m2,
             .tq1_0 => self.fn_gemv_tq1_0,
             .tq2_0 => self.fn_gemv_tq2_0,
-            .iq2_xxs, .iq2_xs, .iq2_s, .iq3_xxs, .iq3_s, .iq1_s, .iq1_m => { self.cpu.gemv(x, w, y, n, k); return; },
+            .iq2_xxs, .iq2_xs, .iq2_s, .iq3_xxs, .iq3_s, .iq1_s, .iq1_m => @panic("ROCm GEMV: IQ2/IQ3/IQ1 kernels not implemented"),
             else => @panic("ROCm GEMV: unsupported dtype — add a GPU kernel"),
         };
+        if (func == null) @panic("ROCm GEMV: required kernel missing for dtype");
 
         var d_x = self.getInputBuf(x, k * @sizeOf(f32));
         var d_w = self.getOrUpload(w.data, weightBytes(w.dtype, n, k));
@@ -601,12 +602,7 @@ pub const RocmBackend = struct {
 
     /// GPTQ INT4 GEMV: y[row] = dot(dequant(qweight[row,:]), x)
     pub fn gemvGptq(self: *RocmBackend, x: [*]const f32, qweight: [*]const u32, scales: [*]const u16, qzeros: [*]const u32, y: [*]f32, n: usize, k: usize, group_size: u32) void {
-        if (self.fn_gemv_gptq == null) {
-            self.flushActivations();
-            const gptq_ops = @import("../ops/gptq.zig");
-            gptq_ops.gptqGemv(x, qweight, scales, qzeros, y, n, k, group_size);
-            return;
-        }
+        const func = self.fn_gemv_gptq orelse @panic("ROCm gemvGptq: kernel not loaded");
         const words_per_row = k / 8;
         var d_x = self.getInputBuf(x, k * @sizeOf(f32));
         var d_qw = self.getOrUpload(@ptrCast(qweight), n * words_per_row * @sizeOf(u32));
@@ -624,17 +620,12 @@ pub const RocmBackend = struct {
             @ptrCast(&d_qz),  @ptrCast(&d_y),    @ptrCast(&n_u32),
             @ptrCast(&k_u32), @ptrCast(&gs_u32),
         };
-        self.launch(self.fn_gemv_gptq.?, @intCast(n), block_size, reduction_smem, &params);
+        self.launch(func, @intCast(n), block_size, reduction_smem, &params);
     }
 
     /// AWQ INT4 GEMV: y[col] = sum_k dequant(qweight[k, col]) * x[k]
     pub fn gemvAwq(self: *RocmBackend, x: [*]const f32, qweight: [*]const u32, scales: [*]const u16, qzeros: [*]const u32, y: [*]f32, n: usize, k: usize, group_size: u32) void {
-        if (self.fn_gemv_awq == null) {
-            self.flushActivations();
-            const awq_ops = @import("../ops/awq.zig");
-            awq_ops.awqGemv(x, qweight, scales, qzeros, y, n, k, group_size);
-            return;
-        }
+        const func = self.fn_gemv_awq orelse @panic("ROCm gemvAwq: kernel not loaded");
         const n_words = n / 8;
         const n_groups = (k + group_size - 1) / group_size;
         var d_x = self.getInputBuf(x, k * @sizeOf(f32));
@@ -651,19 +642,14 @@ pub const RocmBackend = struct {
             @ptrCast(&d_qz),  @ptrCast(&d_y),    @ptrCast(&n_u32),
             @ptrCast(&k_u32), @ptrCast(&gs_u32),
         };
-        self.launch(self.fn_gemv_awq.?, @intCast(n), block_size, reduction_smem, &params);
+        self.launch(func, @intCast(n), block_size, reduction_smem, &params);
     }
 
     /// HQQ 4-bit GEMV on ROCm GPU.
     /// w_q: uint8 [n_out, k_in/2], scale/zero: bf16 [n_out, k_in/group_size].
     /// Dequant: w = (nibble - zero) * scale. Kernel uses NR=4 row parallelism.
     pub fn gemvHqq(self: *RocmBackend, x: [*]const f32, w_q: [*]const u8, scale: [*]const u8, zero: [*]const u8, y: [*]f32, n: usize, k: usize, group_size: u32) void {
-        if (self.fn_gemv_hqq == null) {
-            self.flushActivations();
-            const hqq_ops = @import("../ops/hqq.zig");
-            hqq_ops.hqqGemv(x, w_q, @ptrCast(@alignCast(scale)), @ptrCast(@alignCast(zero)), y, n, k, group_size);
-            return;
-        }
+        const func = self.fn_gemv_hqq orelse @panic("ROCm gemvHqq: kernel not loaded");
         const bytes_per_row = (k + 1) / 2;
         const n_groups = (k + group_size - 1) / group_size;
 
@@ -682,7 +668,7 @@ pub const RocmBackend = struct {
             @ptrCast(&k_u32), @ptrCast(&gs_u32),
         };
         const grid: u32 = @intCast((n + 3) / 4);
-        self.launch(self.fn_gemv_hqq.?, grid, block_size, reduction_smem, &params);
+        self.launch(func, grid, block_size, reduction_smem, &params);
     }
 
     /// output[i] = input[i] * weight[i] * rsqrt(mean(x^2) + eps)
@@ -763,15 +749,8 @@ pub const RocmBackend = struct {
 
     /// Fused rmsNorm + accumulate: b[i] += rmsNorm(a, weight, eps)[i].
     pub fn rmsNormAdd(self: *RocmBackend, a: [*]const f32, weight: [*]const f32, b: [*]f32, n: usize, eps: f32) void {
-        if (self.fn_rms_norm_add == null) {
-            // Fallback: sync and run on CPU
-            self.sync();
-            var ss: f32 = 0;
-            for (0..n) |i| ss += a[i] * a[i];
-            const inv = 1.0 / @sqrt(ss / @as(f32, @floatFromInt(n)) + eps);
-            for (0..n) |i| b[i] += a[i] * weight[i] * inv;
-            return;
-        }
+        if (self.fn_rms_norm_add == null)
+            @panic("ROCm rmsNormAdd: kernel not loaded");
         const sz = n * @sizeOf(f32);
         var d_a = self.getInputBuf(a, sz);
         var d_w = self.getOrUpload(@ptrCast(weight), sz);
@@ -916,7 +895,9 @@ pub const RocmBackend = struct {
     pub fn gemvMxfp4St(self: *RocmBackend, x: [*]const f32, w_packed: [*]const u8, w_scale: [*]const u8, y: [*]f32, n: usize, k: usize) void {
         var d_x = self.getInputBuf(x, k * @sizeOf(f32));
         var d_w = self.getOrUpload(@ptrCast(w_packed), n * k / 2);
-        var d_s = self.getOrUpload(@ptrCast(w_scale), n * k / 32);
+        const mxfp4_gs: usize = 16; // NVIDIA MXFP4 group size (must match gemv_mxfp4_st.zig)
+        const gpr = (k + mxfp4_gs - 1) / mxfp4_gs;
+        var d_s = self.getOrUpload(@ptrCast(w_scale), n * gpr);
         var d_y = self.getOutputBuf(y, n * @sizeOf(f32));
         var n_u32: u32 = @intCast(n);
         var k_u32: u32 = @intCast(k);
@@ -1425,14 +1406,14 @@ pub const RocmBackend = struct {
         // Grow with 2x capacity so decode rarely re-allocates as block count rises.
         if (self.sdpa_flat_keys == null or self.sdpa_flat_keys.?.len < flat_elems) {
             const new_cap = @max(flat_elems, if (self.sdpa_flat_keys) |old| old.len * 2 else flat_elems);
-            if (self.sdpa_flat_keys) |old| std.heap.page_allocator.free(old);
-            self.sdpa_flat_keys = std.heap.page_allocator.alloc(f32, new_cap) catch
+            if (self.sdpa_flat_keys) |old| self.allocator.free(old);
+            self.sdpa_flat_keys = self.allocator.alloc(f32, new_cap) catch
                 @panic("ROCm sdpaPaged: OOM for key staging");
         }
         if (self.sdpa_flat_vals == null or self.sdpa_flat_vals.?.len < flat_elems) {
             const new_cap_v = @max(flat_elems, if (self.sdpa_flat_vals) |old| old.len * 2 else flat_elems);
-            if (self.sdpa_flat_vals) |old| std.heap.page_allocator.free(old);
-            self.sdpa_flat_vals = std.heap.page_allocator.alloc(f32, new_cap_v) catch
+            if (self.sdpa_flat_vals) |old| self.allocator.free(old);
+            self.sdpa_flat_vals = self.allocator.alloc(f32, new_cap_v) catch
                 @panic("ROCm sdpaPaged: OOM for value staging");
         }
         const flat_keys = self.sdpa_flat_keys.?;

@@ -48,8 +48,8 @@ const max_routed_experts: usize = 256;
 /// Default MLX quantization bit width (4-bit). Canonical source: model.zig.
 const default_mlx_bits = model_mod.default_mlx_bits;
 
-/// Maximum norm cache entries. 52 layers × up to 4 norms per layer + 1 final = ~209.
-const max_norm_entries: usize = 256;
+/// Maximum norm cache entries. 52 layers × norms + SSM/conv tensors + final.
+const max_norm_entries: usize = 512;
 
 /// Buffer size for tensor name formatting (layer prefix + suffix).
 const name_buf_size: usize = model_mod.tensor_name_buf_size;
@@ -813,15 +813,10 @@ pub const NemotronNanoModel = struct {
         }
 
         // Cache miss: allocate, convert, store permanently.
-        if (self.norm_cache_len >= max_norm_entries) {
-            // Fallback: convert into bf16_buf_small (no caching)
-            bf16ToF32Buf(t.data_ptr, self.bf16_buf_small[0..n]);
-            return self.bf16_buf_small.ptr;
-        }
-        const buf = self.allocator.alloc(f32, n) catch {
-            bf16ToF32Buf(t.data_ptr, self.bf16_buf_small[0..n]);
-            return self.bf16_buf_small.ptr;
-        };
+        // Never reuse bf16_buf_small: GPU backends cache buffer bindings by pointer.
+        if (self.norm_cache_len >= max_norm_entries)
+            @panic("normAsF32: norm cache overflow — increase max_norm_entries");
+        const buf = self.allocator.alloc(f32, n) catch @panic("normAsF32: out of memory converting norm weights");
         bf16ToF32Buf(t.data_ptr, buf);
         self.norm_cache[self.norm_cache_len] = .{ .key = key, .data = buf };
         self.norm_cache_len += 1;

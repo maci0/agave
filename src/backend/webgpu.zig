@@ -656,8 +656,8 @@ pub const WebGpuBackend = struct {
         self.buf_cache.deinit();
 
         if (self.staging_buf != null) self.fn_buffer_destroy(self.staging_buf);
-        if (self.sdpa_flat_keys) |buf| std.heap.page_allocator.free(buf);
-        if (self.sdpa_flat_vals) |buf| std.heap.page_allocator.free(buf);
+        if (self.sdpa_flat_keys) |buf| self.allocator.free(buf);
+        if (self.sdpa_flat_vals) |buf| self.allocator.free(buf);
         if (self.device != null) self.fn_device_release(self.device);
         if (self.adapter != null) self.fn_adapter_release(self.adapter);
         if (self.instance != null) self.fn_instance_release(self.instance);
@@ -1109,13 +1109,8 @@ pub const WebGpuBackend = struct {
             .q6_k => self.pipe_gemv_q6_k,
             .tq1_0 => self.pipe_gemv_tq1_0,
             .tq2_0 => self.pipe_gemv_tq2_0,
-            // IQ2/IQ3: no WebGPU shader — CPU fallback
-            .iq2_xxs, .iq2_xs, .iq2_s, .iq3_xxs, .iq3_s, .iq1_s, .iq1_m => {
-                const CpuBackend = @import("cpu.zig").CpuBackend;
-                var cpu = CpuBackend{};
-                cpu.gemv(x, w, y, n, k);
-                return;
-            },
+            // IQ2/IQ3/IQ1: no WebGPU shader — fail closed (no silent CPU fallback).
+            .iq2_xxs, .iq2_xs, .iq2_s, .iq3_xxs, .iq3_s, .iq1_s, .iq1_m => @panic("WebGPU gemv: IQ2/IQ3/IQ1 kernels not implemented"),
             else => @panic("WebGPU gemv: unsupported weight dtype"),
         };
         const nb32 = (k + 31) / 32;
@@ -1426,14 +1421,14 @@ pub const WebGpuBackend = struct {
         // Grow with 2x capacity so decode rarely re-allocates as block count rises.
         if (self.sdpa_flat_keys == null or self.sdpa_flat_keys.?.len < flat_elems) {
             const new_cap = @max(flat_elems, if (self.sdpa_flat_keys) |old| old.len * 2 else flat_elems);
-            if (self.sdpa_flat_keys) |old| std.heap.page_allocator.free(old);
-            self.sdpa_flat_keys = std.heap.page_allocator.alloc(f32, new_cap) catch
+            if (self.sdpa_flat_keys) |old| self.allocator.free(old);
+            self.sdpa_flat_keys = self.allocator.alloc(f32, new_cap) catch
                 @panic("WebGPU sdpaPaged: out of memory for flat key staging buffer");
         }
         if (self.sdpa_flat_vals == null or self.sdpa_flat_vals.?.len < flat_elems) {
             const new_cap_v = @max(flat_elems, if (self.sdpa_flat_vals) |old| old.len * 2 else flat_elems);
-            if (self.sdpa_flat_vals) |old| std.heap.page_allocator.free(old);
-            self.sdpa_flat_vals = std.heap.page_allocator.alloc(f32, new_cap_v) catch
+            if (self.sdpa_flat_vals) |old| self.allocator.free(old);
+            self.sdpa_flat_vals = self.allocator.alloc(f32, new_cap_v) catch
                 @panic("WebGPU sdpaPaged: out of memory for flat value staging buffer");
         }
         const flat_keys = self.sdpa_flat_keys.?;
@@ -1617,7 +1612,8 @@ pub const WebGpuBackend = struct {
     pub fn gemvMxfp4St(self: *WebGpuBackend, x: [*]const f32, w_packed: [*]const u8, w_scales: [*]const u8, y: [*]f32, n: usize, k: usize) void {
         const x_sz = k * @sizeOf(f32);
         const w_sz = n * k / 2;
-        const s_sz = n * k / 32;
+        const mxfp4_gs: usize = 16; // NVIDIA MXFP4 group size (must match gemv_mxfp4_st.wgsl)
+        const s_sz = n * ((k + mxfp4_gs - 1) / mxfp4_gs);
         const y_sz = n * @sizeOf(f32);
         const x_buf = self.getOrUpload(@ptrCast(x), x_sz);
         const w_buf = self.getOrUpload(@ptrCast(w_packed), w_sz);

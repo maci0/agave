@@ -78,7 +78,7 @@ const q8_0_block_bytes: usize = backend_mod.q8_0_block_bytes;
 const quant_super_block_elems: usize = backend_mod.quant_super_block_elems;
 /// Elements per MLX group (64-element groups for MLX 4-bit quantization).
 const mlx_group_size: usize = mlx_ops.mlx_group_size;
-/// Elements per MXFP4 group (32-element groups for microscaled FP4 quantization).
+/// Elements per MXFP4 group (16-element groups per NVIDIA MXFP4 / GPT-OSS SafeTensors).
 const mxfp4_group_size: usize = mlx_ops.mxfp4_group_size;
 /// SIMD group width on Apple Silicon GPUs (threads per SIMD group).
 const simd_width: usize = 32;
@@ -91,8 +91,8 @@ const mlx_words_per_group_q4: usize = 8;
 const mlx_words_per_group_q6: usize = 12;
 /// Words per group for MLX 8-bit quantization (64 elems / 4 values per word).
 const mlx_words_per_group_q8: usize = 16;
-/// Words per group for MXFP4 quantization (32 nibbles / 8 per word).
-const mxfp4_words_per_group: usize = 4;
+/// Words per group for MXFP4 quantization (16 nibbles / 8 per word = 2).
+const mxfp4_words_per_group: usize = mxfp4_group_size * 4 / 32;
 
 /// Reference to a cached Metal buffer with a byte offset.
 /// Allows sub-region access (e.g. per-head slices) without creating separate
@@ -221,6 +221,9 @@ pub const MetalBackend = struct {
     /// model activation buffers) on every GEMV / norm / elementwise call.
     /// Cached buffers live for the model's lifetime and are released in deinit().
     buf_cache: std.AutoHashMap(usize, BufferInfo),
+    /// Host allocator for staging buffers (paged SDPA flats). Not used for
+    /// page-aligned GPU zero-copy maps (those stay on page_allocator).
+    allocator: std.mem.Allocator,
     /// When true, memory barriers between dispatches are suppressed to allow
     /// the GPU to overlap independent operations. Set by beginBatch(), cleared
     /// by endBatch() which inserts a single barrier.
@@ -379,6 +382,7 @@ pub const MetalBackend = struct {
             .scratch_buf = scratch_buf,
             .active_cmd = null,
             .buf_cache = std.AutoHashMap(usize, BufferInfo).init(allocator),
+            .allocator = allocator,
         };
         // Pre-allocate capacity so hot-path buf_cache.put() calls won't need to grow.
         try self.buf_cache.ensureTotalCapacity(backend_mod.buf_cache_initial_capacity);
@@ -596,8 +600,8 @@ pub const MetalBackend = struct {
     /// Call this when the MetalBackend is no longer needed.
     pub fn deinit(self: *MetalBackend) void {
         release(self.scratch_buf);
-        if (self.sdpa_flat_keys) |buf| std.heap.page_allocator.free(buf);
-        if (self.sdpa_flat_vals) |buf| std.heap.page_allocator.free(buf);
+        if (self.sdpa_flat_keys) |buf| self.allocator.free(buf);
+        if (self.sdpa_flat_vals) |buf| self.allocator.free(buf);
         var it = self.buf_cache.valueIterator();
         while (it.next()) |info| release(info.metal_buf);
         self.buf_cache.deinit();
@@ -859,7 +863,7 @@ pub const MetalBackend = struct {
             .mxfp4 => "gemv_mxfp4",
             .tq1_0 => "gemv_tq1_0",
             .tq2_0 => "gemv_tq2_0",
-            .iq2_xxs, .iq2_xs, .iq2_s, .iq3_xxs, .iq3_s, .iq1_s, .iq1_m => "gemv_iq_cpu",
+            .iq2_xxs, .iq2_xs, .iq2_s, .iq3_xxs, .iq3_s, .iq1_s, .iq1_m => "gemv_iq_unimplemented",
             else => "gemv",
         };
         const pipeline: objc.id = switch (w.dtype) {
@@ -882,12 +886,8 @@ pub const MetalBackend = struct {
             .mxfp4 => self.pipe_gemv_mxfp4,
             .tq1_0 => self.pipe_gemv_tq1_0,
             .tq2_0 => self.pipe_gemv_tq2_0,
-            // IQ2/IQ3: no GPU kernel yet — fall back to CPU
-            .iq2_xxs, .iq2_xs, .iq2_s, .iq3_xxs, .iq3_s, .iq1_s, .iq1_m => {
-                var cpu = self.cpuFallback();
-                cpu.gemv(x, w, y, n, k);
-                return;
-            },
+            // IQ2/IQ3/IQ1: no GPU kernel yet — fail closed (no silent CPU fallback).
+            .iq2_xxs, .iq2_xs, .iq2_s, .iq3_xxs, .iq3_s, .iq1_s, .iq1_m => @panic("Metal GEMV: IQ2/IQ3/IQ1 kernels not implemented"),
             else => @panic("Metal GEMV: unsupported dtype — add a GPU kernel"),
         };
 
@@ -2001,7 +2001,7 @@ pub const MetalBackend = struct {
 
     /// MXFP4 SafeTensors GEMV on GPU.
     /// U32-packed nibbles with FP8 E4M3 per-group scales (no bias).
-    /// group_size=32, 4 words per group (8 nibbles per word × 4 = 32 values).
+    /// group_size=16, 2 words per group (8 nibbles per word × 2 = 16 values).
     pub fn gemvMxfp4St(self: *MetalBackend, x: [*]const f32, weight: [*]const u8, scale: [*]const u8, y: [*]f32, n: usize, k: usize) void {
         const gpr = (k + mxfp4_group_size - 1) / mxfp4_group_size;
         const wpg: usize = mxfp4_words_per_group;
@@ -2387,14 +2387,14 @@ pub const MetalBackend = struct {
         // Grow with 2x capacity so decode rarely re-allocates as block count rises.
         if (self.sdpa_flat_keys == null or self.sdpa_flat_keys.?.len < flat_elems) {
             const new_cap = @max(flat_elems, if (self.sdpa_flat_keys) |old| old.len * 2 else flat_elems);
-            if (self.sdpa_flat_keys) |old| std.heap.page_allocator.free(old);
-            self.sdpa_flat_keys = std.heap.page_allocator.alloc(f32, new_cap) catch
+            if (self.sdpa_flat_keys) |old| self.allocator.free(old);
+            self.sdpa_flat_keys = self.allocator.alloc(f32, new_cap) catch
                 @panic("Metal sdpaPaged: out of memory for flat key staging buffer");
         }
         if (self.sdpa_flat_vals == null or self.sdpa_flat_vals.?.len < flat_elems) {
             const new_cap_v = @max(flat_elems, if (self.sdpa_flat_vals) |old| old.len * 2 else flat_elems);
-            if (self.sdpa_flat_vals) |old| std.heap.page_allocator.free(old);
-            self.sdpa_flat_vals = std.heap.page_allocator.alloc(f32, new_cap_v) catch
+            if (self.sdpa_flat_vals) |old| self.allocator.free(old);
+            self.sdpa_flat_vals = self.allocator.alloc(f32, new_cap_v) catch
                 @panic("Metal sdpaPaged: out of memory for flat value staging buffer");
         }
         const flat_keys = self.sdpa_flat_keys.?;

@@ -45,7 +45,8 @@ const default_mlx_bits = model_mod.default_mlx_bits;
 pub const Qwen35Model = struct {
     /// Norm weight cache: permanently dequantized BF16 norm weights keyed by data pointer.
     /// Avoids reusing dequant_buf for GPU ops (Metal buf_cache would serve stale data).
-    const max_norm_entries: usize = 256;
+    // Deepest configs: 64 layers × 5 norms + output + Q/K/V biases ≈ 321+ entries.
+    const max_norm_entries: usize = 512;
     const NormCacheEntry = model_mod.NormCacheEntry;
 
     fmt: Format,
@@ -649,15 +650,11 @@ pub const Qwen35Model = struct {
 
         // Cache miss: allocate, convert, store permanently.
         // Guard capacity before allocating to avoid leaking uncached buffers.
-        if (self.norm_cache_len >= max_norm_entries) {
-            quant.dequantToF32(self.dequant_buf, t.data_ptr, t.dtype, n);
-            return self.dequant_buf.ptr;
-        }
-        const buf = self.allocator.alloc(f32, n) catch {
-            // Fallback to dequant_buf (CPU-only, not GPU-safe)
-            quant.dequantToF32(self.dequant_buf, t.data_ptr, t.dtype, n);
-            return self.dequant_buf.ptr;
-        };
+        // Never reuse dequant_buf: GPU backends cache buffer bindings by pointer,
+        // so a reused scratch would serve stale norm weights.
+        if (self.norm_cache_len >= max_norm_entries)
+            @panic("normAsF32: norm cache overflow — increase max_norm_entries");
+        const buf = self.allocator.alloc(f32, n) catch @panic("normAsF32: out of memory converting norm weights");
         quant.dequantToF32(buf, t.data_ptr, t.dtype, n);
         self.norm_cache[self.norm_cache_len] = .{ .key = key, .data = buf };
         self.norm_cache_len += 1;

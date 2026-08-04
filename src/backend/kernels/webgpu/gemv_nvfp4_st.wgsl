@@ -24,7 +24,8 @@ fn fp8e4m3(val: u32) -> f32 {
         let fv = f32(m) / 8.0 * exp2(-6.0);
         if (s == 1u) { return -fv; } else { return fv; }
     }
-    if (e == 15u) { return 0.0; }
+    // OCP E4M3FN: only e=15,m=7 is NaN; e=15,m<7 are finite (256..448).
+    if (e == 15u && m == 7u) { return 0.0; }
     let fv = (1.0 + f32(m) / 8.0) * exp2(f32(e) - 7.0);
     if (s == 1u) { return -fv; } else { return fv; }
 }

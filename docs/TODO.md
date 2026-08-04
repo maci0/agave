@@ -2,7 +2,7 @@
 
 Bugs, performance issues, and future work. Detailed designs inline.
 
-**Last updated**: 2026-07-21
+**Last updated**: 2026-07-31
 
 ---
 
@@ -14,7 +14,7 @@ Bugs, performance issues, and future work. Detailed designs inline.
 | ~~6~~ | ~~ROCm HSACO: wrong ISA triple + LOCAL .kd symbols~~ | ~~Fixed~~ | ~~Two Zig 0.16 bugs: (1) amdhsa semver appended to ISA triple, (2) .kd symbols emitted LOCAL. Worked around via fix_kd_isa.py (ET_REL patch + llvm-objcopy). hipModuleLoad now returns hipSuccess on ROCm 7.2.4 / gfx1100~~ |
 | 4 | Vulkan push descriptor crashes on RADV gfx1100 | Medium | Suspected RADV driver issue. Worked around: push descriptors disabled, deferred path used |
 | ~~8~~ | ~~Gemma 4 26B-A4B MoE garbled output~~ | ~~Fixed~~ | ~~expertWeightStride used dims[0]*dims[1] instead of dims[1]*dims[2]~~ |
-| ~~9~~ | ~~GPT-OSS MXFP4 garbled output~~ | ~~Fixed~~ | ~~Two bugs: mxfp4_group_size=32 (should be 16 per NVIDIA spec), scale decoded as E8M0 (should be FP8 E4M3). Both Zig + Metal fixed~~ |
+| ~~9~~ | ~~GPT-OSS MXFP4 garbled output~~ | ~~Fixed~~ | ~~Two bugs: mxfp4_group_size=32 (should be 16 per NVIDIA spec), scale decoded as E8M0 (should be FP8 E4M3). Fixed across CPU + all 6 GPU backends (Metal/CUDA/Vulkan/WebGPU/ROCm) + host buffer sizing~~ |
 
 <details><summary>Fixed bugs</summary>
 

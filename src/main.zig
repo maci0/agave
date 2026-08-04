@@ -897,7 +897,9 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
     if (res.flag("benchmark") and n_positionals > 1 and !res.flag("serve"))
         eprint("Warning: --benchmark uses a fixed prompt; your prompt will be ignored\n", .{});
 
-    // Warn about --allow-cpu-fallback with CPU backend (already on CPU, nothing to fall back to)
+    // Warn about --allow-cpu-fallback: not wired into GPU backends yet (they fail closed).
+    if (res.flag("allow-cpu-fallback"))
+        eprint("Warning: --allow-cpu-fallback is not implemented; GPU backends fail closed on missing kernels\n", .{});
     if (res.flag("allow-cpu-fallback") and backend_choice == .cpu)
         eprint("Warning: --allow-cpu-fallback has no effect with --backend cpu\n", .{});
 
@@ -1070,7 +1072,16 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
                 eprint("  Use --host 127.0.0.1 for local-only access without auth.\n", .{});
                 std.process.exit(2);
             }
-            break :blk key;
+            // Empty/whitespace key would satisfy "key present" checks while accepting any empty header.
+            if (key) |k| {
+                const trimmed = std.mem.trim(u8, k, " \t\r\n");
+                if (trimmed.len == 0) {
+                    eprint("Error: --api-key (or AGAVE_API_KEY) must be non-empty\n", .{});
+                    std.process.exit(2);
+                }
+                break :blk trimmed;
+            }
+            break :blk null;
         },
         .allow_cpu_fallback = res.flag("allow-cpu-fallback"),
         .debug = res.flag("debug"),
@@ -3903,7 +3914,10 @@ fn generateAndPrintInner(
         // Grammar masking
         if (grammar_state) |*gs| {
             if (!gs.isComplete()) {
-                gs.grammar.maskLogits(gs, first_logits, tok.id_to_token.items);
+                gs.grammar.maskLogits(gs, first_logits, tok.id_to_token.items) catch |err| {
+                    eprint("Error: grammar mask OOM: {s}\n", .{@errorName(err)});
+                    return null;
+                };
             }
         }
         // JSON mode: force first token to start with {
@@ -4019,7 +4033,10 @@ fn generateAndPrintInner(
         const has_grammar = if (grammar_state) |*gs| !gs.isComplete() else false;
         if (has_grammar) {
             const vocab_texts = tok.id_to_token.items;
-            grammar_state.?.grammar.maskLogits(&grammar_state.?, logits, vocab_texts);
+            grammar_state.?.grammar.maskLogits(&grammar_state.?, logits, vocab_texts) catch |err| {
+                eprint("Error: grammar mask OOM: {s}\n", .{@errorName(err)});
+                break;
+            };
         }
         if (cli.mirostat_mode >= 2 and use_sampling) {
             next = math_ops.sampleMirostat(logits, cli.mirostat_tau, cli.mirostat_eta, &cli_mirostat_mu, cli.temperature, prng.random());

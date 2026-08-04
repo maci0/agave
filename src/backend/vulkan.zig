@@ -1751,7 +1751,7 @@ pub const VulkanBackend = struct {
             .fp8_e5m2 => self.pipe_gemv_fp8_e5m2,
             .tq1_0 => self.pipe_gemv_tq1_0,
             .tq2_0 => self.pipe_gemv_tq2_0,
-            .iq2_xxs, .iq2_xs, .iq2_s, .iq3_xxs, .iq3_s, .iq1_s, .iq1_m => { const CpuBackend = @import("cpu.zig").CpuBackend; var cpu = CpuBackend{}; cpu.gemv(x, w, y, n, k); return; },
+            .iq2_xxs, .iq2_xs, .iq2_s, .iq3_xxs, .iq3_s, .iq1_s, .iq1_m => @panic("Vulkan GEMV: IQ2/IQ3/IQ1 kernels not implemented"),
             else => @panic("Vulkan GEMV: unsupported dtype — add a GPU shader"),
         };
 
@@ -2082,7 +2082,8 @@ pub const VulkanBackend = struct {
     pub fn gemvMxfp4St(self: *VulkanBackend, x: [*]const f32, w_packed: [*]const u8, w_scale: [*]const u8, y: [*]f32, n: usize, k: usize) void {
         const x_sz = k * @sizeOf(f32);
         const w_sz = n * k / 2;
-        const s_sz = n * k / 32;
+        const mxfp4_gs: usize = 16; // NVIDIA MXFP4 group size (must match gemv_mxfp4_st.comp)
+        const s_sz = n * ((k + mxfp4_gs - 1) / mxfp4_gs);
         const y_sz = n * @sizeOf(f32);
         const x_pool = self.getPooledBuf(x_sz);
         defer self.releasePooledBuf(x_pool);

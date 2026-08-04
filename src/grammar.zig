@@ -109,7 +109,9 @@ pub const Grammar = struct {
 
     /// Mask logits for tokens that don't match the grammar.
     /// Sets disallowed token logits to -inf.
-    pub fn maskLogits(self: *const Grammar, state: *GrammarState, logits: []f32, vocab: []const []const u8) void {
+    /// Returns `error.OutOfMemory` if the temporary test-state stack cannot be allocated
+    /// (callers must fail the request, not ignore).
+    pub fn maskLogits(self: *const Grammar, state: *GrammarState, logits: []f32, vocab: []const []const u8) error{OutOfMemory}!void {
         if (state.completed) return;
         if (state.stack.items.len == 0) return;
 
@@ -121,9 +123,7 @@ pub const Grammar = struct {
             .stack = std.ArrayList(StackEntry).empty,
             .completed = state.completed,
         };
-        test_state.stack.ensureTotalCapacity(self.allocator, required_cap) catch {
-            @panic("grammar: OOM allocating maskLogits test state");
-        };
+        try test_state.stack.ensureTotalCapacity(self.allocator, required_cap);
         defer test_state.stack.deinit(self.allocator);
 
         const src = state.stack.items;
@@ -1314,7 +1314,7 @@ test "maskLogits constrains vocab" {
     // Vocab: ["y", "n", "yes", "no"]
     const vocab = [_][]const u8{ "y", "n", "yes", "no" };
     var logits = [_]f32{ 1.0, 2.0, 3.0, 4.0 };
-    grammar.maskLogits(&state, &logits, &vocab);
+    grammar.maskLogits(&state, &logits, &vocab) catch unreachable;
     // "y" (idx 0) valid prefix, "yes" (idx 2) valid full match
     try std.testing.expect(logits[0] != -std.math.inf(f32));
     try std.testing.expect(logits[2] != -std.math.inf(f32));
@@ -1398,7 +1398,7 @@ test "fuzz: all grammar functions" {
             var logits = [_]f32{ 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0 };
             var state2 = grammar.initState() catch return;
             defer state2.deinit();
-            grammar.maskLogits(&state2, &logits, &vocab);
+            grammar.maskLogits(&state2, &logits, &vocab) catch return;
             for (logits) |l| {
                 std.debug.assert(std.math.isFinite(l) or l == -std.math.inf(f32));
             }

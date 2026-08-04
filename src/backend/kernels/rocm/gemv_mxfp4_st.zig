@@ -1,31 +1,41 @@
 //! MXFP4 SafeTensors GEMV kernel for ROCm.
-//! FP4 E2M1 weights (2 per byte) with E8M0 per-32-element block scales.
+//! U32-packed FP4 E2M1 weights with FP8 E4M3 per-16-element group scales.
 //! Grid: n blocks of 256 threads (1 workgroup per output row).
 
 const cu = @import("common.zig");
 
 const e2m1_lut = cu.e2m1_lut;
-const e8m0ToF32 = cu.e8m0ToF32;
+const fp8e4m3ToF32 = cu.fp8e4m3ToF32;
+
+/// NVIDIA MXFP4: 16 elements per scale group.
+const mxfp4_group_size: u32 = 16;
+/// Bytes per group (16 nibbles → 8 bytes).
+const mxfp4_bytes_per_group: u32 = 8;
 
 export fn gemv_mxfp4_st_kernel(x: [*]const f32, weight: [*]const u8, scale: [*]const u8, y: [*]f32, n: u32, k: u32) callconv(.kernel) void {
     const row = cu.blockIdx();
     const tid = cu.threadIdx();
     if (row >= n) return;
 
-    const blocks_per_row = k / 32;
-    const bytes_per_row = k / 2;
+    const gpr = (k + mxfp4_group_size - 1) / mxfp4_group_size;
+    const bytes_per_row = (k + 1) / 2;
 
     var sum: f32 = 0.0;
-    var blk: u32 = tid;
-    while (blk < blocks_per_row) : (blk += cu.block_dim) {
-        const sc = e8m0ToF32(scale[row * blocks_per_row + blk]);
-        const base = blk * 32;
-        const w_off = row * bytes_per_row + blk * 16;
-        for (0..16) |j| {
+    var g: u32 = tid;
+    while (g < gpr) : (g += cu.block_dim) {
+        const sc = fp8e4m3ToF32(scale[row * gpr + g]);
+        const base = g * mxfp4_group_size;
+        const w_off = row * bytes_per_row + g * mxfp4_bytes_per_group;
+        const elems = @min(mxfp4_group_size, k - base);
+        const nbytes = (elems + 1) / 2;
+        var j: u32 = 0;
+        while (j < nbytes) : (j += 1) {
             const byte = weight[w_off + j];
             const v0 = e2m1_lut[byte & 0xF] * sc;
             const v1 = e2m1_lut[byte >> 4] * sc;
-            sum += v0 * x[base + 2 * j] + v1 * x[base + 2 * j + 1];
+            const xi0 = base + 2 * j;
+            sum += v0 * x[xi0];
+            if (xi0 + 1 < k) sum += v1 * x[xi0 + 1];
         }
     }
 
@@ -36,8 +46,8 @@ export fn gemv_mxfp4_st_kernel(x: [*]const f32, weight: [*]const u8, scale: [*]c
 const std = @import("std");
 
 test "constants valid" {
-    // No module-level numeric constants defined in this file.
-    _ = @sizeOf(u8);
+    comptime std.debug.assert(mxfp4_group_size == 16);
+    comptime std.debug.assert(mxfp4_bytes_per_group == 8);
 }
 
 test "fuzz: gemv_mxfp4_st functions" {

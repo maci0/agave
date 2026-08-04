@@ -1344,21 +1344,12 @@ kernel void gemv_mlx_q8(
 // U32-packed 4-bit nibbles (8 per word), FP8 E4M3 per-group scale, group_size=16.
 // NVIDIA MXFP4 spec: 16-element groups with FP8 E4M3 block scales (bias=7).
 // Dequant: float_val = mxfp4_lut[nibble] * fp8e4m3_to_f32(scale_byte)
+// Uses the shared fp8e4m3_to_f32 LUT helper defined above (with NVFP4).
 
-// FP8 E4M3 → float: sign=1b, exp=4b (bias=7), mantissa=3b.
-// Matches quant.fp8e4m3ToF32() in Zig (same logic, same LUT semantics).
-inline float fp8e4m3_to_f32(uchar val) {
-    uint sign = uint(val >> 7) << 31;
-    uint exp  = uint(val >> 3) & 0x0Fu;
-    uint mant = uint(val) & 0x7u;
-    if (exp == 0x0Fu && mant == 0x7u) return as_type<float>(sign | 0x7FC00000u); // NaN→0 for scale
-    if (exp == 0u) {
-        if (mant == 0u) return as_type<float>(sign);
-        return as_type<float>(sign) * float(mant) * (1.0f / 512.0f); // denormal
-    }
-    uint exp_f32  = (exp + 127u - 7u) << 23;
-    uint mant_f32 = mant << 20; // 23 - 3 = 20
-    return as_type<float>(sign | exp_f32 | mant_f32);
+// E8M0 → float for GGUF MXFP4 blocks: val = 2^(byte - 127). Pure exponent, no mantissa.
+inline float e8m0_to_f32(uchar val) {
+    if (val == 0) return 0.0f;
+    return as_type<float>(uint(val) << 23);
 }
 
 // MXFP4 E2M1 dequant lookup table

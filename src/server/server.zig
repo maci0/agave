@@ -1502,7 +1502,12 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
                 logRequestDone(method, path, 400, elapsedMs(request_start));
                 return;
             }
-            sendJson(stream, std.fmt.allocPrint(g_server.allocator, "{{\"imported\":{d}}}", .{n_tokens}) catch "{}");
+            if (std.fmt.allocPrint(g_server.allocator, "{{\"imported\":{d}}}", .{n_tokens})) |import_resp| {
+                defer g_server.allocator.free(import_resp);
+                sendJson(stream, import_resp);
+            } else |_| {
+                sendJson(stream, "{}");
+            }
             logRequestDone(method, path, 200, elapsedMs(request_start));
         }
         return;
@@ -1533,7 +1538,11 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
         }
         const info_json = std.fmt.allocPrint(g_server.allocator,
             \\{{"seq_len":{d},"cached_prefix_len":{d},"prefix_hash":"{x}","kv_used":{d},"kv_total":{d}}}
-        , .{ seq_len, prefix_ids.len, hash, kv_used, kv_total }) catch "{}";
+        , .{ seq_len, prefix_ids.len, hash, kv_used, kv_total }) catch {
+            sendJson(stream, "{}");
+            logRequestDone(method, path, 200, elapsedMs(request_start));
+            return;
+        };
         defer g_server.allocator.free(info_json);
         sendJson(stream, info_json);
         logRequestDone(method, path, 200, elapsedMs(request_start));
@@ -2698,7 +2707,10 @@ fn generateN(formatted: []const u8, reset: bool, max_tokens: usize, sampling: Sa
         if (use_grammar) {
             if (grammar_storage) |*g| {
                 if (grammar_state_storage) |*gs| {
-                    g.maskLogits(gs, first_logits, vocab_texts);
+                    g.maskLogits(gs, first_logits, vocab_texts) catch {
+                        std.log.warn("req={d} grammar mask OOM", .{log_request_id});
+                        return .{ .data = g_server.allocator.dupe(u8, "[grammar OOM]") catch &.{}, .finish_reason = "error", .stats = zero_stats };
+                    };
                 }
             }
         }
@@ -2876,7 +2888,11 @@ fn generateN(formatted: []const u8, reset: bool, max_tokens: usize, sampling: Sa
             if (use_grammar) {
                 if (grammar_storage) |*g| {
                     if (grammar_state_storage) |*gs| {
-                        g.maskLogits(gs, logits, vocab_texts);
+                        g.maskLogits(gs, logits, vocab_texts) catch {
+                            std.log.warn("req={d} grammar mask OOM", .{log_request_id});
+                            forward_failed = true;
+                            break;
+                        };
                         next = math_ops.argmax(logits);
                     }
                 }
@@ -4478,7 +4494,12 @@ fn generateStream(stream: TcpStream, prompt: []const u8, req_id: u64, created: i
         if (s_grammar) |*g| {
             if (s_grammar_state) |*gs| {
                 const s_first_logits = model.getLogits();
-                g.maskLogits(gs, s_first_logits, s_vocab_texts);
+                g.maskLogits(gs, s_first_logits, s_vocab_texts) catch {
+                    std.log.warn("req={d} stream grammar mask OOM", .{log_request_id});
+                    _ = sseWriteData(stream, "{\"error\":\"grammar OOM\"}");
+                    _ = sseWriteData(stream, "[DONE]");
+                    return;
+                };
                 first_gen_token = math_ops.argmax(s_first_logits);
             }
         }
@@ -4671,7 +4692,10 @@ fn generateStream(stream: TcpStream, prompt: []const u8, req_id: u64, created: i
             if (use_grammar_s) {
                 if (s_grammar) |*g| {
                     if (s_grammar_state) |*gs| {
-                        g.maskLogits(gs, s_logits, s_vocab_texts);
+                        g.maskLogits(gs, s_logits, s_vocab_texts) catch {
+                            std.log.warn("req={d} stream grammar mask OOM", .{log_request_id});
+                            break;
+                        };
                         next = math_ops.argmax(s_logits);
                     }
                 }

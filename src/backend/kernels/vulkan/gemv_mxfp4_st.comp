@@ -6,18 +6,28 @@ layout(set = 0, binding = 2) readonly buffer S { uint s_packed[]; };
 layout(set = 0, binding = 3) writeonly buffer Y { float y[]; };
 layout(push_constant) uniform Params { uint n; uint k; };
 
-// MXFP4 E2M1 dequant + E8M0 scale
-// Block size = 32 elements, 16 weight bytes, 1 E8M0 scale byte per block
+// MXFP4 E2M1 dequant + FP8 E4M3 scale
+// Group size = 16 elements, 8 weight bytes, 1 FP8 E4M3 scale byte per group
 
 float mxfp4_lut(uint nibble) {
     float t[16] = float[16](0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0,
-                            0.0, -0.5, -1.0, -1.5, -2.0, -3.0, -4.0, -6.0);
+                            -0.0, -0.5, -1.0, -1.5, -2.0, -3.0, -4.0, -6.0);
     return t[nibble & 0xFu];
 }
 
-float e8m0_to_f32(uint e) {
-    if (e == 0u) return 0.0;
-    return uintBitsToFloat(e << 23u); // 2^(e-127)
+float fp8e4m3(uint val) {
+    uint s = (val >> 7) & 1u;
+    uint e = (val >> 3) & 0xFu;
+    uint m = val & 0x7u;
+    if (e == 0u) {
+        if (m == 0u) return 0.0;
+        float fv = float(m) / 8.0 * exp2(-6.0);
+        return s == 1u ? -fv : fv;
+    }
+    // OCP E4M3FN: only e=15,m=7 is NaN; e=15,m<7 are finite (256..448).
+    if (e == 15u && m == 7u) return 0.0; // NaN → 0 for scales
+    float fv = (1.0 + float(m) / 8.0) * exp2(float(e) - 7.0);
+    return s == 1u ? -fv : fv;
 }
 
 shared float partial[256];
@@ -27,26 +37,29 @@ void main() {
     uint tid = gl_LocalInvocationID.x;
     if (row >= n) return;
 
-    uint blocks_per_row = k / 32u;
-    uint bytes_per_row = k / 2u;
+    uint groups_per_row = (k + 15u) / 16u;
+    uint bytes_per_row = (k + 1u) / 2u;
 
     float sum = 0.0;
-    for (uint blk = tid; blk < blocks_per_row; blk += 256u) {
-        // E8M0 scale for this 32-element block
-        uint s_idx = row * blocks_per_row + blk;
+    for (uint g = tid; g < groups_per_row; g += 256u) {
+        uint s_idx = row * groups_per_row + g;
         uint s_word = s_packed[s_idx / 4u];
-        float sc = e8m0_to_f32((s_word >> ((s_idx % 4u) * 8u)) & 0xFFu);
+        float sc = fp8e4m3((s_word >> ((s_idx % 4u) * 8u)) & 0xFFu);
 
-        uint base = blk * 32u;
-        uint w_byte_base = row * bytes_per_row + blk * 16u;
+        uint base = g * 16u;
+        uint w_byte_base = row * bytes_per_row + g * 8u;
+        uint elems = min(16u, k - base);
+        uint nbytes = (elems + 1u) / 2u;
 
-        for (uint j = 0u; j < 16u; j++) {
+        for (uint j = 0u; j < nbytes; j++) {
             uint w_idx = (w_byte_base + j) / 4u;
             uint w_shift = ((w_byte_base + j) % 4u) * 8u;
             uint byte_val = (w_packed[w_idx] >> w_shift) & 0xFFu;
             float v0 = mxfp4_lut(byte_val & 0xFu) * sc;
             float v1 = mxfp4_lut(byte_val >> 4u) * sc;
-            sum += v0 * x[base + 2u * j] + v1 * x[base + 2u * j + 1u];
+            uint xi0 = base + 2u * j;
+            sum += v0 * x[xi0];
+            if (xi0 + 1u < k) sum += v1 * x[xi0 + 1u];
         }
     }
 

@@ -547,8 +547,8 @@ pub const CudaBackend = struct {
         }
         self.buf_cache.deinit();
 
-        if (self.sdpa_flat_keys) |buf| std.heap.page_allocator.free(buf);
-        if (self.sdpa_flat_vals) |buf| std.heap.page_allocator.free(buf);
+        if (self.sdpa_flat_keys) |buf| self.allocator.free(buf);
+        if (self.sdpa_flat_vals) |buf| self.allocator.free(buf);
         if (self.module != null) _ = self.cuModuleUnload(self.module);
         if (self.context != null) {
             _ = self.cuCtxSynchronize();
@@ -837,6 +837,7 @@ pub const CudaBackend = struct {
     // ── Launch helper ───────────────────────────────────────────
 
     /// CPU fallback for GEMV on UMA (sm_121) where PTX register spilling corrupts output.
+    /// Only used for q4/q5/q6 paths that are known-broken on UMA; never for missing kernels.
     fn cpuGemvFallback(self: *CudaBackend, x: [*]const f32, w: TensorData, y: [*]f32, n: usize, k: usize) void {
         self.flushActivations();
         self.cpu.gemv(x, w, y, n, k);
@@ -856,6 +857,7 @@ pub const CudaBackend = struct {
     /// y[n] = W[n,k] @ x[k]. GPU kernels for F32, BF16, F16, Q8_0, Q4_0,
     /// Q4_K, Q5_K, Q6_K, FP8_E4M3, FP8_E5M2; unsupported dtypes panic.
     pub fn gemv(self: *CudaBackend, x: [*]const f32, w: TensorData, y: [*]f32, n: usize, k: usize) void {
+        // UMA (sm_121): PTX register spilling corrupts q4/q5/q6 GEMV output; CPU path is required.
         const func = switch (w.dtype) {
             .f32 => self.fn_gemv_f32,
             .bf16 => self.fn_gemv_bf16,
@@ -863,21 +865,22 @@ pub const CudaBackend = struct {
             .q8_0 => self.fn_gemv_q8_0,
             .q4_0 => if (self.is_uma) return self.cpuGemvFallback(x, w, y, n, k) else self.fn_gemv_q4_0,
             .q4_1 => if (self.is_uma) return self.cpuGemvFallback(x, w, y, n, k) else self.fn_gemv_q4_1,
-            .q5_0 => if (self.is_uma) return self.cpuGemvFallback(x, w, y, n, k) else if (self.fn_gemv_q5_0) |f| f else return self.cpuGemvFallback(x, w, y, n, k),
-            .q2_k => if (self.fn_gemv_q2_k) |f| f else return self.cpuGemvFallback(x, w, y, n, k),
-            .q3_k => if (self.fn_gemv_q3_k) |f| f else return self.cpuGemvFallback(x, w, y, n, k),
-            .iq4_nl => if (self.fn_gemv_iq4_nl) |f| f else return self.cpuGemvFallback(x, w, y, n, k),
-            .iq4_xs => if (self.fn_gemv_iq4_xs) |f| f else return self.cpuGemvFallback(x, w, y, n, k),
+            .q5_0 => if (self.is_uma) return self.cpuGemvFallback(x, w, y, n, k) else self.fn_gemv_q5_0,
+            .q2_k => self.fn_gemv_q2_k,
+            .q3_k => self.fn_gemv_q3_k,
+            .iq4_nl => self.fn_gemv_iq4_nl,
+            .iq4_xs => self.fn_gemv_iq4_xs,
             .q4_k => if (self.is_uma) return self.cpuGemvFallback(x, w, y, n, k) else self.fn_gemv_q4_k,
             .q5_k => if (self.is_uma) return self.cpuGemvFallback(x, w, y, n, k) else self.fn_gemv_q5_k,
             .q6_k => if (self.is_uma) return self.cpuGemvFallback(x, w, y, n, k) else self.fn_gemv_q6_k,
             .fp8_e4m3 => self.fn_gemv_fp8_e4m3,
             .fp8_e5m2 => self.fn_gemv_fp8_e5m2,
-            .tq1_0 => if (self.fn_gemv_tq1_0) |f| f else return self.cpuGemvFallback(x, w, y, n, k),
-            .tq2_0 => if (self.fn_gemv_tq2_0) |f| f else return self.cpuGemvFallback(x, w, y, n, k),
-            .iq2_xxs, .iq2_xs, .iq2_s, .iq3_xxs, .iq3_s, .iq1_s, .iq1_m => return self.cpuGemvFallback(x, w, y, n, k),
+            .tq1_0 => self.fn_gemv_tq1_0,
+            .tq2_0 => self.fn_gemv_tq2_0,
+            .iq2_xxs, .iq2_xs, .iq2_s, .iq3_xxs, .iq3_s, .iq1_s, .iq1_m => @panic("CUDA GEMV: IQ2/IQ3/IQ1 kernels not implemented"),
             else => @panic("CUDA GEMV: unsupported dtype — add a GPU kernel"),
         };
+        if (func == null) @panic("CUDA GEMV: required kernel missing for dtype");
 
         var d_x = self.getInputBuf(x, k * @sizeOf(f32));
         var d_w = self.getOrUpload(w.data, weightBytes(w.dtype, n, k));
@@ -1587,11 +1590,11 @@ pub const CudaBackend = struct {
         self.launch(func, @intCast(n), block_size, reduction_smem, &params);
     }
 
-    /// MXFP4 SafeTensors GEMV: u32-packed nibbles + E8M0 scales, group_size=32.
+    /// MXFP4 SafeTensors GEMV: u32-packed nibbles + FP8 E4M3 scales, group_size=16.
     pub fn gemvMxfp4St(self: *CudaBackend, x: [*]const f32, weight: [*]const u8, scale: [*]const u8, y: [*]f32, n: usize, k: usize) void {
-        const mxfp4_gs: usize = 32;
+        const mxfp4_gs: usize = mlx_ops.mxfp4_group_size;
         const gpr = (k + mxfp4_gs - 1) / mxfp4_gs;
-        const wpg: usize = 4; // 32 nibbles / 8 per word
+        const wpg: usize = mxfp4_gs * 4 / 32; // 16 nibbles / 8 per word = 2
         const w_bytes = n * gpr * wpg * @sizeOf(u32);
 
         var d_x = self.getInputBuf(x, k * @sizeOf(f32));
@@ -1610,86 +1613,74 @@ pub const CudaBackend = struct {
 
     /// GPTQ INT4 GEMV on CUDA GPU.
     pub fn gemvGptq(self: *CudaBackend, x: [*]const f32, qweight: [*]const u32, scales: [*]const u16, qzeros: [*]const u32, y: [*]f32, n: usize, k: usize, group_size: u32) void {
-        if (self.fn_gemv_gptq) |func| {
-            const words_per_row = k / 8;
-            const n_groups = (k + group_size - 1) / group_size;
+        const func = self.fn_gemv_gptq orelse @panic("CUDA gemvGptq: kernel not loaded");
+        const words_per_row = k / 8;
+        const n_groups = (k + group_size - 1) / group_size;
 
-            var d_x = self.getInputBuf(x, k * @sizeOf(f32));
-            var d_w = self.getOrUpload(@ptrCast(qweight), n * words_per_row * @sizeOf(u32));
-            var d_s = self.getOrUpload(@ptrCast(scales), n * n_groups * @sizeOf(u16));
-            var d_z = self.getOrUpload(@ptrCast(qzeros), n_groups * ((n + 7) / 8) * @sizeOf(u32));
-            var d_y = self.getOutputBuf(y, n * @sizeOf(f32));
+        var d_x = self.getInputBuf(x, k * @sizeOf(f32));
+        var d_w = self.getOrUpload(@ptrCast(qweight), n * words_per_row * @sizeOf(u32));
+        var d_s = self.getOrUpload(@ptrCast(scales), n * n_groups * @sizeOf(u16));
+        var d_z = self.getOrUpload(@ptrCast(qzeros), n_groups * ((n + 7) / 8) * @sizeOf(u32));
+        var d_y = self.getOutputBuf(y, n * @sizeOf(f32));
 
-            var n_u32: u32 = @intCast(n);
-            var k_u32: u32 = @intCast(k);
-            var gs_u32: u32 = group_size;
-            var params = [_]?*anyopaque{
-                @ptrCast(&d_x),   @ptrCast(&d_w),    @ptrCast(&d_s),
-                @ptrCast(&d_z),   @ptrCast(&d_y),    @ptrCast(&n_u32),
-                @ptrCast(&k_u32), @ptrCast(&gs_u32),
-            };
-            self.launch(func, @intCast(n), block_size, reduction_smem, &params);
-        } else {
-            const gptq_ops = @import("../ops/gptq.zig");
-            gptq_ops.gptqGemv(x, qweight, scales, qzeros, y, n, k, group_size);
-        }
+        var n_u32: u32 = @intCast(n);
+        var k_u32: u32 = @intCast(k);
+        var gs_u32: u32 = group_size;
+        var params = [_]?*anyopaque{
+            @ptrCast(&d_x),   @ptrCast(&d_w),    @ptrCast(&d_s),
+            @ptrCast(&d_z),   @ptrCast(&d_y),    @ptrCast(&n_u32),
+            @ptrCast(&k_u32), @ptrCast(&gs_u32),
+        };
+        self.launch(func, @intCast(n), block_size, reduction_smem, &params);
     }
 
     /// AWQ INT4 GEMV on CUDA GPU.
     pub fn gemvAwq(self: *CudaBackend, x: [*]const f32, qweight: [*]const u32, scales: [*]const u16, qzeros: [*]const u32, y: [*]f32, n: usize, k: usize, group_size: u32) void {
-        if (self.fn_gemv_awq) |func| {
-            const n_words = n / 8;
-            const n_groups = (k + group_size - 1) / group_size;
+        const func = self.fn_gemv_awq orelse @panic("CUDA gemvAwq: kernel not loaded");
+        const n_words = n / 8;
+        const n_groups = (k + group_size - 1) / group_size;
 
-            var d_x = self.getInputBuf(x, k * @sizeOf(f32));
-            var d_w = self.getOrUpload(@ptrCast(qweight), k * n_words * @sizeOf(u32));
-            var d_s = self.getOrUpload(@ptrCast(scales), n_groups * n * @sizeOf(u16));
-            var d_z = self.getOrUpload(@ptrCast(qzeros), n_groups * n_words * @sizeOf(u32));
-            var d_y = self.getOutputBuf(y, n * @sizeOf(f32));
+        var d_x = self.getInputBuf(x, k * @sizeOf(f32));
+        var d_w = self.getOrUpload(@ptrCast(qweight), k * n_words * @sizeOf(u32));
+        var d_s = self.getOrUpload(@ptrCast(scales), n_groups * n * @sizeOf(u16));
+        var d_z = self.getOrUpload(@ptrCast(qzeros), n_groups * n_words * @sizeOf(u32));
+        var d_y = self.getOutputBuf(y, n * @sizeOf(f32));
 
-            var n_u32: u32 = @intCast(n);
-            var k_u32: u32 = @intCast(k);
-            var gs_u32: u32 = group_size;
-            var params = [_]?*anyopaque{
-                @ptrCast(&d_x),   @ptrCast(&d_w),    @ptrCast(&d_s),
-                @ptrCast(&d_z),   @ptrCast(&d_y),    @ptrCast(&n_u32),
-                @ptrCast(&k_u32), @ptrCast(&gs_u32),
-            };
-            self.launch(func, @intCast(n), block_size, reduction_smem, &params);
-        } else {
-            const awq_ops = @import("../ops/awq.zig");
-            awq_ops.awqGemv(x, qweight, scales, qzeros, y, n, k, group_size);
-        }
+        var n_u32: u32 = @intCast(n);
+        var k_u32: u32 = @intCast(k);
+        var gs_u32: u32 = group_size;
+        var params = [_]?*anyopaque{
+            @ptrCast(&d_x),   @ptrCast(&d_w),    @ptrCast(&d_s),
+            @ptrCast(&d_z),   @ptrCast(&d_y),    @ptrCast(&n_u32),
+            @ptrCast(&k_u32), @ptrCast(&gs_u32),
+        };
+        self.launch(func, @intCast(n), block_size, reduction_smem, &params);
     }
 
     /// HQQ 4-bit GEMV on CUDA GPU.
     /// w_q: uint8 [n_out, k_in/2], scale/zero: bf16 [n_out, k_in/group_size].
     /// Dequant: w = (nibble - zero) * scale. Kernel uses NR=4 row parallelism.
     pub fn gemvHqq(self: *CudaBackend, x: [*]const f32, w_q: [*]const u8, scale: [*]const u8, zero: [*]const u8, y: [*]f32, n: usize, k: usize, group_size: u32) void {
-        if (self.fn_gemv_hqq) |func| {
-            const bytes_per_row = (k + 1) / 2;
-            const n_groups = (k + group_size - 1) / group_size;
+        const func = self.fn_gemv_hqq orelse @panic("CUDA gemvHqq: kernel not loaded");
+        const bytes_per_row = (k + 1) / 2;
+        const n_groups = (k + group_size - 1) / group_size;
 
-            var d_x = self.getInputBuf(x, k * @sizeOf(f32));
-            var d_wq = self.getOrUpload(@ptrCast(w_q), n * bytes_per_row * @sizeOf(u8));
-            var d_sc = self.getOrUpload(@ptrCast(scale), n * n_groups * @sizeOf(u16));
-            var d_zr = self.getOrUpload(@ptrCast(zero), n * n_groups * @sizeOf(u16));
-            var d_y = self.getOutputBuf(y, n * @sizeOf(f32));
+        var d_x = self.getInputBuf(x, k * @sizeOf(f32));
+        var d_wq = self.getOrUpload(@ptrCast(w_q), n * bytes_per_row * @sizeOf(u8));
+        var d_sc = self.getOrUpload(@ptrCast(scale), n * n_groups * @sizeOf(u16));
+        var d_zr = self.getOrUpload(@ptrCast(zero), n * n_groups * @sizeOf(u16));
+        var d_y = self.getOutputBuf(y, n * @sizeOf(f32));
 
-            var n_u32: u32 = @intCast(n);
-            var k_u32: u32 = @intCast(k);
-            var gs_u32: u32 = group_size;
-            var params = [_]?*anyopaque{
-                @ptrCast(&d_x),   @ptrCast(&d_wq),   @ptrCast(&d_sc),
-                @ptrCast(&d_zr),  @ptrCast(&d_y),    @ptrCast(&n_u32),
-                @ptrCast(&k_u32), @ptrCast(&gs_u32),
-            };
-            const grid: u32 = @intCast((n + 3) / 4);
-            self.launch(func, grid, block_size, reduction_smem, &params);
-        } else {
-            const hqq_ops = @import("../ops/hqq.zig");
-            hqq_ops.hqqGemv(x, w_q, @ptrCast(@alignCast(scale)), @ptrCast(@alignCast(zero)), y, n, k, group_size);
-        }
+        var n_u32: u32 = @intCast(n);
+        var k_u32: u32 = @intCast(k);
+        var gs_u32: u32 = group_size;
+        var params = [_]?*anyopaque{
+            @ptrCast(&d_x),   @ptrCast(&d_wq),   @ptrCast(&d_sc),
+            @ptrCast(&d_zr),  @ptrCast(&d_y),    @ptrCast(&n_u32),
+            @ptrCast(&k_u32), @ptrCast(&gs_u32),
+        };
+        const grid: u32 = @intCast((n + 3) / 4);
+        self.launch(func, grid, block_size, reduction_smem, &params);
     }
 
     /// Commit pending GPU work and download results to host.
@@ -2071,14 +2062,14 @@ pub const CudaBackend = struct {
         // Grow with 2x capacity so decode rarely re-allocates as block count rises.
         if (self.sdpa_flat_keys == null or self.sdpa_flat_keys.?.len < flat_elems) {
             const new_cap = @max(flat_elems, if (self.sdpa_flat_keys) |old| old.len * 2 else flat_elems);
-            if (self.sdpa_flat_keys) |old| std.heap.page_allocator.free(old);
-            self.sdpa_flat_keys = std.heap.page_allocator.alloc(f32, new_cap) catch
+            if (self.sdpa_flat_keys) |old| self.allocator.free(old);
+            self.sdpa_flat_keys = self.allocator.alloc(f32, new_cap) catch
                 @panic("CUDA sdpaPaged: out of memory for flat key staging buffer");
         }
         if (self.sdpa_flat_vals == null or self.sdpa_flat_vals.?.len < flat_elems) {
             const new_cap_v = @max(flat_elems, if (self.sdpa_flat_vals) |old| old.len * 2 else flat_elems);
-            if (self.sdpa_flat_vals) |old| std.heap.page_allocator.free(old);
-            self.sdpa_flat_vals = std.heap.page_allocator.alloc(f32, new_cap_v) catch
+            if (self.sdpa_flat_vals) |old| self.allocator.free(old);
+            self.sdpa_flat_vals = self.allocator.alloc(f32, new_cap_v) catch
                 @panic("CUDA sdpaPaged: out of memory for flat value staging buffer");
         }
         const flat_keys = self.sdpa_flat_keys.?;

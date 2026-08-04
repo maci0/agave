@@ -623,7 +623,7 @@ pub const CpuBackend = struct {
         fn work(ctx_ptr: *anyopaque, start: usize, end: usize) void {
             const ctx: *const GptqCtx = @ptrCast(@alignCast(ctx_ptr));
             const gptq_ops = @import("../ops/gptq.zig");
-            gptq_ops.gptqGemvRows(ctx.x, ctx.qw, ctx.scales, ctx.qzeros, ctx.y, start, end - start, ctx.k, ctx.gs);
+            gptq_ops.gptqGemvRows(ctx.x, ctx.qw, ctx.scales, ctx.qzeros, ctx.y, start, end - start, ctx.n, ctx.k, ctx.gs);
         }
     };
 

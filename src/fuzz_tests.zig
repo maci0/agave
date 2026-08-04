@@ -415,7 +415,7 @@ test "fuzz: AWQ dequant no crash" {
             // Output
             var y: [n]f32 = undefined;
 
-            awq.awqGemvRows(&x, &qw, &scales, &qz, &y, 0, n, k, group_size);
+            awq.awqGemvRows(&x, &qw, &scales, &qz, &y, 0, n, n, k, group_size);
             // Invariant: output must be finite (no NaN from INT4 dequant)
             for (y) |v| try std.testing.expect(std.math.isFinite(v));
         }
@@ -451,7 +451,7 @@ test "fuzz: GPTQ dequant no crash" {
             // Output
             var y: [n]f32 = undefined;
 
-            gptq.gptqGemvRows(&x, &qw, &scales, &qz, &y, 0, n, k, group_size);
+            gptq.gptqGemvRows(&x, &qw, &scales, &qz, &y, 0, n, n, k, group_size);
             // Invariant: output must be finite (no NaN from INT4 dequant)
             for (y) |v| try std.testing.expect(std.math.isFinite(v));
         }

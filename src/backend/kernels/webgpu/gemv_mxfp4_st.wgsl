@@ -11,13 +11,23 @@ struct Params {
 
 fn mxfp4_lut(nibble: u32) -> f32 {
     let t = array<f32, 16>(0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0,
-                           0.0, -0.5, -1.0, -1.5, -2.0, -3.0, -4.0, -6.0);
+                           -0.0, -0.5, -1.0, -1.5, -2.0, -3.0, -4.0, -6.0);
     return t[nibble & 0xFu];
 }
 
-fn e8m0_to_f32(e: u32) -> f32 {
-    if (e == 0u) { return 0.0; }
-    return bitcast<f32>(e << 23u);
+fn fp8e4m3(val: u32) -> f32 {
+    let s = (val >> 7u) & 1u;
+    let e = (val >> 3u) & 0xFu;
+    let m = val & 0x7u;
+    if (e == 0u) {
+        if (m == 0u) { return 0.0; }
+        let fv = f32(m) / 8.0 * exp2(-6.0);
+        if (s == 1u) { return -fv; } else { return fv; }
+    }
+    // OCP E4M3FN: only e=15,m=7 is NaN; e=15,m<7 are finite (256..448).
+    if (e == 15u && m == 7u) { return 0.0; } // NaN → 0 for scales
+    let fv = (1.0 + f32(m) / 8.0) * exp2(f32(e) - 7.0);
+    if (s == 1u) { return -fv; } else { return fv; }
 }
 
 var<workgroup> partial: array<f32, 256>;
@@ -29,25 +39,31 @@ fn main(@builtin(workgroup_id) wgid: vec3<u32>, @builtin(local_invocation_id) li
     if (row >= params.n) { return; }
 
     let k = params.k;
-    let blocks_per_row = k / 32u;
-    let bytes_per_row = k / 2u;
+    let groups_per_row = (k + 15u) / 16u;
+    let bytes_per_row = (k + 1u) / 2u;
 
     var sum: f32 = 0.0;
-    for (var blk = tid; blk < blocks_per_row; blk = blk + 256u) {
-        let s_idx = row * blocks_per_row + blk;
+    for (var g = tid; g < groups_per_row; g = g + 256u) {
+        let s_idx = row * groups_per_row + g;
         let s_word = s_packed[s_idx / 4u];
-        let sc = e8m0_to_f32((s_word >> ((s_idx % 4u) * 8u)) & 0xFFu);
+        let sc = fp8e4m3((s_word >> ((s_idx % 4u) * 8u)) & 0xFFu);
 
-        let base = blk * 32u;
-        let w_byte_base = row * bytes_per_row + blk * 16u;
+        let base = g * 16u;
+        let w_byte_base = row * bytes_per_row + g * 8u;
+        let elems = min(16u, k - base);
+        let nbytes = (elems + 1u) / 2u;
 
-        for (var j = 0u; j < 16u; j = j + 1u) {
+        for (var j = 0u; j < nbytes; j = j + 1u) {
             let w_byte_idx = w_byte_base + j;
             let w_word = w_packed[w_byte_idx / 4u];
             let byte_val = (w_word >> ((w_byte_idx % 4u) * 8u)) & 0xFFu;
             let v0 = mxfp4_lut(byte_val & 0xFu) * sc;
             let v1 = mxfp4_lut(byte_val >> 4u) * sc;
-            sum = sum + v0 * x[base + 2u * j] + v1 * x[base + 2u * j + 1u];
+            let xi0 = base + 2u * j;
+            sum = sum + v0 * x[xi0];
+            if (xi0 + 1u < k) {
+                sum = sum + v1 * x[xi0 + 1u];
+            }
         }
     }
 

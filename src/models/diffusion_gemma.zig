@@ -34,6 +34,7 @@ const TensorInfo = format_mod.TensorInfo;
 const Model = model_mod.Model;
 const Allocator = std.mem.Allocator;
 const kv_quant = @import("../ops/kv_quant.zig");
+const quant = @import("../ops/quant.zig");
 const PagedKvCache = kvcache.PagedKvCache;
 const SeqBlockTable = kvcache.SeqBlockTable;
 const BlockAllocator = block_alloc_mod.BlockAllocator;
@@ -74,6 +75,8 @@ pub const default_canvas_length: u32 = 256;
 const max_layers: usize = 64;
 /// Buffer size for constructing tensor names.
 const name_buf_size: usize = 256;
+/// Norm weight cache entries: ~6 norms/layer × 30 layers + final ≈ 181; leave headroom.
+const max_norm_entries: usize = 256;
 
 /// GPU SDPA threshold: head dims above this fall back to CPU-side SDPA.
 const gpu_sdpa_max_head_dim: usize = 256;
@@ -175,6 +178,10 @@ pub const DiffusionGemmaModel = struct {
     hidden_pre_norm: []f32 = &.{},
     cancelled: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
     megakernel_enabled: bool = false,
+
+    /// Permanently dequantized BF16 norm weights (GPU-safe stable pointers).
+    norm_cache: [max_norm_entries]model_mod.NormCacheEntry = undefined,
+    norm_cache_len: usize = 0,
 
     // ── Lifecycle ─────────────────────────────────────────────────
 
@@ -325,11 +332,13 @@ pub const DiffusionGemmaModel = struct {
         self.canvas_v_buf = try allocator.alloc(f32, cl * max_kv_dim);
         errdefer allocator.free(self.canvas_v_buf);
 
+        self.warmNormCache();
         return self;
     }
 
     pub fn deinit(self: *DiffusionGemmaModel) void {
         const allocator = self.allocator;
+        for (self.norm_cache[0..self.norm_cache_len]) |entry| allocator.free(entry.data);
         allocator.free(self.hidden);
         allocator.free(self.hidden2);
         allocator.free(self.hidden_pre_norm);
@@ -384,7 +393,7 @@ pub const DiffusionGemmaModel = struct {
 
         self.be.sync();
         @memcpy(self.hidden_pre_norm, self.hidden);
-        self.be.rmsNorm(self.hidden.ptr, @ptrCast(@alignCast(nw.data_ptr)), self.hidden.ptr, self.n_embd, self.rms_eps);
+        self.be.rmsNorm(self.hidden.ptr, self.normAsF32(nw, self.n_embd), self.hidden.ptr, self.n_embd, self.rms_eps);
         self.be.gemv(self.hidden.ptr, .{ .data = ow.data_ptr, .dtype = ow.dtype }, self.logits_buf.ptr, self.vocab_size, self.n_embd);
         self.be.sync();
         return math_ops.argmax(self.logits_buf);
@@ -424,7 +433,7 @@ pub const DiffusionGemmaModel = struct {
         // Final norm + LM head for each canvas position.
         const nw = self.fmt.getTensor("model.decoder.norm.weight") orelse return error.MissingTensor;
         const ow = emb_t; // tied weights
-        const nw_f32: [*]const f32 = @ptrCast(@alignCast(nw.data_ptr));
+        const nw_f32 = self.normAsF32(nw, e);
 
         for (0..cl) |i| {
             const h = self.pf_hidden[i * e ..][0..e];
@@ -475,9 +484,41 @@ pub const DiffusionGemmaModel = struct {
         return self.fmt.getTensor(name);
     }
 
-    /// Decode a BF16 weight tensor as f32 pointer (assumes BF16 input).
-    inline fn wf32(t: TensorInfo) [*]const f32 {
-        return @ptrCast(@alignCast(t.data_ptr));
+    /// Convert norm weights to a stable f32 pointer. Caches BF16→f32 conversions
+    /// so GPU backends never bind a reused scratch buffer.
+    fn normAsF32(self: *DiffusionGemmaModel, t: TensorInfo, n: usize) [*]const f32 {
+        if (t.dtype == .f32) return @ptrCast(@alignCast(t.data_ptr));
+
+        const key = @intFromPtr(t.data_ptr);
+        for (self.norm_cache[0..self.norm_cache_len]) |entry| {
+            if (entry.key == key) return entry.data.ptr;
+        }
+
+        if (self.norm_cache_len >= max_norm_entries)
+            @panic("normAsF32: norm cache overflow — increase max_norm_entries");
+        const buf = self.allocator.alloc(f32, n) catch @panic("normAsF32: out of memory converting norm weights");
+        quant.dequantToF32(buf, t.data_ptr, t.dtype, n);
+        self.norm_cache[self.norm_cache_len] = .{ .key = key, .data = buf };
+        self.norm_cache_len += 1;
+        return buf.ptr;
+    }
+
+    /// Pre-convert BF16 norms at init so inference never allocates.
+    fn warmNormCache(self: *DiffusionGemmaModel) void {
+        const e: usize = self.n_embd;
+        const sl_hd: usize = self.sl_head_dim;
+        const gl_hd: usize = self.gl_head_dim;
+        if (self.fmt.getTensor("model.decoder.norm.weight")) |t| _ = self.normAsF32(t, e);
+        for (0..self.n_layers) |li| {
+            const l: u32 = @intCast(li);
+            const hd: usize = if (isGlobalLayer(l)) gl_hd else sl_hd;
+            if (self.lt(l, "input_layernorm.weight")) |t| _ = self.normAsF32(t, e);
+            if (self.lt(l, "self_attn.q_norm.weight")) |t| _ = self.normAsF32(t, hd);
+            if (self.lt(l, "self_attn.k_norm.weight")) |t| _ = self.normAsF32(t, hd);
+            if (self.lt(l, "post_attention_layernorm.weight")) |t| _ = self.normAsF32(t, e);
+            if (self.lt(l, "pre_feedforward_layernorm.weight")) |t| _ = self.normAsF32(t, e);
+            if (self.lt(l, "post_feedforward_layernorm.weight")) |t| _ = self.normAsF32(t, e);
+        }
     }
 
     // ── KV cache view helpers ─────────────────────────────────────
@@ -529,7 +570,7 @@ pub const DiffusionGemmaModel = struct {
 
         // 1. Pre-attention norm.
         const nw_in = self.lt(li, "input_layernorm.weight") orelse return error.MissingTensor;
-        self.be.rmsNorm(self.hidden.ptr, wf32(nw_in), self.hidden2.ptr, e, self.rms_eps);
+        self.be.rmsNorm(self.hidden.ptr, self.normAsF32(nw_in, e), self.hidden2.ptr, e, self.rms_eps);
 
         // 2. Q/K/V projections.
         const qw = self.lt(li, "self_attn.q_proj.weight") orelse return error.MissingTensor;
@@ -543,10 +584,10 @@ pub const DiffusionGemmaModel = struct {
 
         // QK norms (Gemma 4 style).
         if (self.lt(li, "self_attn.q_norm.weight")) |qnw| {
-            self.be.rmsNormBatched(self.q_buf.ptr, wf32(qnw), self.q_buf.ptr, nh, hd, self.rms_eps);
+            self.be.rmsNormBatched(self.q_buf.ptr, self.normAsF32(qnw, hd), self.q_buf.ptr, nh, hd, self.rms_eps);
         }
         if (self.lt(li, "self_attn.k_norm.weight")) |knw| {
-            self.be.rmsNormBatched(self.k_buf.ptr, wf32(knw), self.k_buf.ptr, nkv, hd, self.rms_eps);
+            self.be.rmsNormBatched(self.k_buf.ptr, self.normAsF32(knw, hd), self.k_buf.ptr, nkv, hd, self.rms_eps);
         }
 
         // 3. RoPE.
@@ -600,7 +641,7 @@ pub const DiffusionGemmaModel = struct {
         self.be.gemv(self.attn_out.ptr, .{ .data = ow.data_ptr, .dtype = ow.dtype }, self.hidden2.ptr, e, qd);
 
         if (self.lt(li, "post_attention_layernorm.weight")) |pan| {
-            self.be.rmsNorm(self.hidden2.ptr, wf32(pan), self.hidden2.ptr, e, self.rms_eps);
+            self.be.rmsNorm(self.hidden2.ptr, self.normAsF32(pan, e), self.hidden2.ptr, e, self.rms_eps);
         }
 
         // 7. Residual: hidden += hidden2.
@@ -608,7 +649,7 @@ pub const DiffusionGemmaModel = struct {
 
         // 8. Pre-FFN norm.
         const nw_pre_ffn = self.lt(li, "pre_feedforward_layernorm.weight") orelse return error.MissingTensor;
-        self.be.rmsNorm(self.hidden.ptr, wf32(nw_pre_ffn), self.hidden2.ptr, e, self.rms_eps);
+        self.be.rmsNorm(self.hidden.ptr, self.normAsF32(nw_pre_ffn, e), self.hidden2.ptr, e, self.rms_eps);
 
         // 9. MoE forward (if this is an expert layer).
         if (self.n_experts > 0 and self.lt(li, "router.proj.weight") != null) {
@@ -619,7 +660,7 @@ pub const DiffusionGemmaModel = struct {
 
         // 10. Post-FFN norm + residual.
         if (self.lt(li, "post_feedforward_layernorm.weight")) |pffn| {
-            self.be.rmsNorm(self.hidden2.ptr, wf32(pffn), self.hidden2.ptr, e, self.rms_eps);
+            self.be.rmsNorm(self.hidden2.ptr, self.normAsF32(pffn, e), self.hidden2.ptr, e, self.rms_eps);
         }
         self.be.add(self.hidden.ptr, self.hidden2.ptr, self.hidden.ptr, e);
     }
@@ -724,7 +765,7 @@ pub const DiffusionGemmaModel = struct {
 
         // 1. Pre-attention norm for all canvas tokens (batched: cl vectors of length e).
         const nw_in = self.lt(li, "input_layernorm.weight") orelse return error.MissingTensor;
-        self.be.rmsNormBatched(self.pf_hidden.ptr, wf32(nw_in), self.pf_scratch.ptr, cl, e, self.rms_eps);
+        self.be.rmsNormBatched(self.pf_hidden.ptr, self.normAsF32(nw_in, e), self.pf_scratch.ptr, cl, e, self.rms_eps);
 
         // 2. QKV projection for all canvas tokens via batched GEMM (cl tokens at once).
         const qw = self.lt(li, "self_attn.q_proj.weight") orelse return error.MissingTensor;
@@ -745,10 +786,10 @@ pub const DiffusionGemmaModel = struct {
 
         // QK norms (batched: process cl*nh heads, each of size hd).
         if (self.lt(li, "self_attn.q_norm.weight")) |qnw| {
-            self.be.rmsNormBatched(self.q_buf.ptr, wf32(qnw), self.q_buf.ptr, cl * nh, hd, self.rms_eps);
+            self.be.rmsNormBatched(self.q_buf.ptr, self.normAsF32(qnw, hd), self.q_buf.ptr, cl * nh, hd, self.rms_eps);
         }
         if (self.lt(li, "self_attn.k_norm.weight")) |knw| {
-            self.be.rmsNormBatched(canvas_k.ptr, wf32(knw), canvas_k.ptr, cl * nkv, hd, self.rms_eps);
+            self.be.rmsNormBatched(canvas_k.ptr, self.normAsF32(knw, hd), canvas_k.ptr, cl * nkv, hd, self.rms_eps);
         }
 
         // 3. RoPE — canvas tokens start at kv_seq_len in position space.
@@ -792,7 +833,7 @@ pub const DiffusionGemmaModel = struct {
 
         // Post-attn norm (batched) + residual add (batched).
         if (self.lt(li, "post_attention_layernorm.weight")) |pan| {
-            self.be.rmsNormBatched(self.pf_scratch.ptr, wf32(pan), self.pf_scratch.ptr, cl, e, self.rms_eps);
+            self.be.rmsNormBatched(self.pf_scratch.ptr, self.normAsF32(pan, e), self.pf_scratch.ptr, cl, e, self.rms_eps);
         }
         // Element-wise add: pf_hidden += pf_scratch (cl * e elements).
         self.be.sync();
@@ -800,7 +841,7 @@ pub const DiffusionGemmaModel = struct {
 
         // Pre-FFN norm (batched) for all canvas tokens.
         const nw_pre_ffn = self.lt(li, "pre_feedforward_layernorm.weight") orelse return error.MissingTensor;
-        self.be.rmsNormBatched(self.pf_hidden.ptr, wf32(nw_pre_ffn), self.pf_scratch.ptr, cl, e, self.rms_eps);
+        self.be.rmsNormBatched(self.pf_hidden.ptr, self.normAsF32(nw_pre_ffn, e), self.pf_scratch.ptr, cl, e, self.rms_eps);
 
         // MoE / dense FFN for each canvas token.
         for (0..cl) |i| {
@@ -814,7 +855,7 @@ pub const DiffusionGemmaModel = struct {
         // Post-FFN norm (batched) + residual add.
         if (self.lt(li, "post_feedforward_layernorm.weight")) |pffn| {
             self.be.sync();
-            self.be.rmsNormBatched(self.pf_scratch.ptr, wf32(pffn), self.pf_scratch.ptr, cl, e, self.rms_eps);
+            self.be.rmsNormBatched(self.pf_scratch.ptr, self.normAsF32(pffn, e), self.pf_scratch.ptr, cl, e, self.rms_eps);
             self.be.sync();
             for (0..cl * e) |i| self.pf_hidden[i] += self.pf_scratch[i];
         }
