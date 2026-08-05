@@ -1,0 +1,65 @@
+# Local HTTP server. Copy .env.example to .env and set AGAVE_API_KEY + model path.
+# Usage:
+#   cp .env.example .env   # then edit AGAVE_API_KEY and AGAVE_MODEL
+#   docker compose up --build
+# One-shot CLI inference: docker run --rm --no-healthcheck -v ... agave:local /models/model.gguf "prompt"
+
+services:
+  agave:
+    build:
+      context: .
+      args:
+        # Fast local image: CPU + Gemma3 only (override in compose.override.yml if needed).
+        ENABLE_CUDA: "false"
+        ENABLE_VULKAN: "false"
+        ENABLE_ROCM: "false"
+        ENABLE_WEBGPU: "false"
+        ENABLE_DEBUG: "false"
+        ENABLE_QWEN35: "false"
+        ENABLE_GPT_OSS: "false"
+        ENABLE_NEMOTRON_H: "false"
+        ENABLE_NEMOTRON_NANO: "false"
+        ENABLE_GLM4: "false"
+        ENABLE_GEMMA4: "false"
+        ENABLE_DIFFUSION_GEMMA: "false"
+        ENABLE_LLAMA4: "false"
+    image: agave:local
+    # Default to loopback publish so the API is not exposed on LAN interfaces.
+    # Set AGAVE_HOST_BIND=0.0.0.0 in .env only when you intentionally need remote access.
+    ports:
+      - "${AGAVE_HOST_BIND:-127.0.0.1}:${AGAVE_PORT:-49453}:${AGAVE_PORT:-49453}"
+    # Compose auto-loads ./.env for ${VAR} substitution; pass only what the process needs.
+    environment:
+      AGAVE_PORT: ${AGAVE_PORT:-49453}
+      AGAVE_API_KEY: ${AGAVE_API_KEY:?Set AGAVE_API_KEY in .env (see .env.example)}
+    volumes:
+      - ${AGAVE_MODELS_DIR:-./models}:/models:ro
+    # ENTRYPOINT is already: agave --host 0.0.0.0
+    command: ["${AGAVE_MODEL:-/models/model.gguf}", "--serve"]
+    restart: unless-stopped
+    stop_grace_period: 30s
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+      - /home/agave:size=64m,uid=10001,gid=10001,mode=0755
+    mem_limit: 8g
+    cpus: "4.0"
+    pids_limit: 256
+    init: true
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    # Inherits image HEALTHCHECK (/ready). Explicit here so compose overrides stay clear.
+    # start_period allows slow model load before probes count as failures.
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:$${AGAVE_PORT:-49453}/ready || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 120s
