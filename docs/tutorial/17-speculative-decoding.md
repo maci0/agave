@@ -4,7 +4,7 @@
 
 **Time:** ~29 min
 
-> After this chapter you can explain draft/verify/accept, DDTree, self-speculative, EAGLE, MTP, and all 12 speculative decoding modes.
+> After this chapter you can explain draft/verify/accept, DDTree, self-speculative, EAGLE, MTP, and all 14 speculative decoding modes.
 
 Standard autoregressive decoding generates one token per forward pass. For large models, each pass takes tens of milliseconds — the token generation rate is bottlenecked by model size, not memory bandwidth. Speculative decoding breaks this bottleneck by using a cheap draft model to propose multiple candidate tokens, then verifying them against the full target model.
 
@@ -356,7 +356,7 @@ Agave supports **14 speculative decoding modes**:
 | EAGLE-3 | `--spec-mode eagle3` | Pre-output-norm hidden-state | Yes |
 | MLP Speculator | `--spec-mode mlp` | Frozen hidden-state | Yes |
 | PFlash | `--spec-mode pflash` | Draft model + block scoring | Yes |
-| DSpark | `--spec-mode dspark` | Draft model + confidence trim | Yes |
+| DSpark | `--spec-mode dspark` | Draft model + confidence trim | Optional |
 
 ### Data Flow
 
