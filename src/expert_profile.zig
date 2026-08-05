@@ -120,9 +120,85 @@ pub const ExpertProfile = struct {
 
         try buf.appendSlice(allocator, "  ]\n}\n");
 
-        const file = try std.fs.cwd().createFile(path, .{});
-        defer file.close();
-        try file.writeAll(buf.items);
+        const open_flags: u32 = if (comptime @import("builtin").os.tag == .linux) (1 | 64 | 512) else (1 | 0x200 | 0x400);
+        const fd = std.posix.openat(std.posix.AT.FDCWD, path, @bitCast(open_flags), 0o644) catch |e| return e;
+        defer _ = std.posix.system.close(fd);
+        var off: usize = 0;
+        while (off < buf.items.len) {
+            const n = std.c.write(fd, buf.items[off..].ptr, buf.items.len - off);
+            if (n <= 0) break;
+            off += @intCast(n);
+        }
+    }
+
+    /// Load a profile written by writeJson. Minimal hand-rolled parser
+    /// (avoids pulling in a full JSON library for this single use case).
+    pub fn loadJson(allocator: Allocator, path: []const u8) !ExpertProfile {
+        const fd = std.posix.openat(std.posix.AT.FDCWD, path, .{}, 0) catch |e| return e;
+        defer _ = std.posix.system.close(fd);
+        // Stat for size, then read all.
+        var st: std.c.Stat = undefined;
+        if (std.c.fstat(fd, &st) != 0) return error.StatFailed;
+        const fsize: usize = @intCast(@max(0, st.size));
+        if (fsize == 0) return error.EmptyFile;
+        const data = try allocator.alloc(u8, fsize);
+        var got: usize = 0;
+        while (got < fsize) {
+            const n = std.posix.read(fd, data[got..]) catch break;
+            if (n == 0) break;
+            got += n;
+        }
+        if (got < fsize) return error.ReadFailed;
+        defer allocator.free(data);
+
+        // Parse n_layers and n_experts from the header lines.
+        var n_layers: u32 = 0;
+        var n_experts: u32 = 0;
+        var total_tokens: u64 = 0;
+        var lines = std.mem.splitScalar(u8, data, '\n');
+        while (lines.next()) |line| {
+            const t = std.mem.trim(u8, line, " \t\r,");
+            if (std.mem.startsWith(u8, t, "\"n_layers\"")) {
+                const col = std.mem.lastIndexOfScalar(u8, t, ':') orelse continue;
+                n_layers = std.fmt.parseInt(u32, std.mem.trim(u8, t[col + 1 ..], " ,:"), 10) catch continue;
+            } else if (std.mem.startsWith(u8, t, "\"n_experts\"")) {
+                const col = std.mem.lastIndexOfScalar(u8, t, ':') orelse continue;
+                n_experts = std.fmt.parseInt(u32, std.mem.trim(u8, t[col + 1 ..], " ,:"), 10) catch continue;
+            } else if (std.mem.startsWith(u8, t, "\"total_tokens\"")) {
+                const col = std.mem.lastIndexOfScalar(u8, t, ':') orelse continue;
+                total_tokens = std.fmt.parseInt(u64, std.mem.trim(u8, t[col + 1 ..], " ,:"), 10) catch continue;
+            }
+        }
+        if (n_layers == 0 or n_experts == 0) return error.InvalidProfileJson;
+
+        var profile = try ExpertProfile.init(allocator, n_layers, n_experts);
+        profile.total_tokens = total_tokens;
+
+        // Parse layers array: each line inside "layers": [ [...], ... ]
+        var in_layers = false;
+        var layer_idx: usize = 0;
+        var lines2 = std.mem.splitScalar(u8, data, '\n');
+        while (lines2.next()) |line| {
+            const t = std.mem.trim(u8, line, " \t\r");
+            if (std.mem.indexOf(u8, t, "\"layers\"") != null) { in_layers = true; continue; }
+            if (!in_layers) continue;
+            if (!std.mem.startsWith(u8, t, "[")) continue;
+            if (layer_idx >= n_layers) break;
+            // Parse comma-separated numbers between [ and ]
+            const inner_start = std.mem.indexOfScalar(u8, t, '[') orelse continue;
+            const inner_end = std.mem.lastIndexOfScalar(u8, t, ']') orelse continue;
+            const inner = t[inner_start + 1 .. inner_end];
+            var nums = std.mem.splitScalar(u8, inner, ',');
+            var ei: usize = 0;
+            while (nums.next()) |ns| {
+                if (ei >= n_experts) break;
+                const v = std.fmt.parseInt(u64, std.mem.trim(u8, ns, " "), 10) catch continue;
+                profile.counts[layer_idx * n_experts + ei] = v;
+                ei += 1;
+            }
+            layer_idx += 1;
+        }
+        return profile;
     }
 };
 

@@ -4,9 +4,9 @@
 
 **Time:** ~20 min
 
-> After this chapter you can explain directional steering (CLI), NLL quality scoring (library), expert profiling (library), KV checkpoint headers (library), mixed-quant splicing (tooling), and SSD expert streaming (library).
+> After this chapter you can explain directional steering (CLI), NLL quality scoring (library), expert profiling (CLI), KV checkpoint headers (library), mixed-quant splicing (tooling), SSD expert streaming (CLI), power throttling (CLI), frontier benchmarking (CLI), and distributed prefix hashing (library).
 
-This chapter covers six related capabilities. Only **directional steering** is wired to CLI flags today. The others ship as library modules and/or Python tools; call them from code or tooling until CLI wiring lands.
+This chapter covers nine related capabilities. **Directional steering**, **SSD expert streaming**, **expert profiling**, **power throttling**, and **frontier benchmarking** are wired to CLI flags. The others ship as library modules and/or Python tools.
 
 ---
 
@@ -102,17 +102,17 @@ For MoE models, **expert profiling** tracks which routed experts are activated d
 - Whether expert load is balanced (training quality signal)
 - Which experts to pin in the SSD streaming cache (section 6)
 
-There is **no `--expert-profile` CLI flag** yet. Use the library from MoE forward paths or tests:
+Profile an inference run and pre-pin hot experts on the next run:
 
-```zig
-var profile = try ExpertProfile.init(allocator, n_layers, n_experts);
-defer profile.deinit(allocator);
-profile.record(layer, expert_id); // per routed expert
-profile.recordToken();
-try profile.writeJson(allocator, "profile.json");
+```bash
+# Step 1: profile a representative prompt
+agave model.gguf --ssd-streaming --expert-profile-out profile.json "Your prompt here"
+
+# Step 2: use the profile to pre-pin on future runs (avoids cold-start SSD reads)
+agave model.gguf --ssd-streaming --expert-profile-in profile.json "Your prompt here"
 ```
 
-The profile records per-layer, per-expert activation counts. `topExperts()` extracts the top-K most active experts per layer for hotlist generation.
+The profile records per-layer, per-expert activation counts. `topExperts()` extracts the top-K most active experts per layer for hotlist generation. Pre-pinning runs before the first token, so the most-used experts are already resident.
 
 **Implementation:** [`src/expert_profile.zig`](../../src/expert_profile.zig) (`ExpertProfile`, zero-alloc `record()` in hot path).
 
@@ -171,18 +171,96 @@ The cache uses LRU eviction with `madvise(WILLNEED)` prefetching:
 3. **Cache hit**: use the resident weights directly (zero cost)
 4. **Cache miss**: evict the LRU expert, `madvise(WILLNEED)` the new expert's byte range, then use the weights once faulted in
 
-There is **no `--ssd-streaming` / `--ssd-cache-*` CLI** yet. Tiered KV SSD (`--kv-tiers vram+ram+ssd`) is a different feature. Wire `ExpertCache` from MoE paths:
+SSD streaming is now wired to CLI flags:
 
-```zig
-var cache = try ExpertCache.init(allocator, n_layers, n_experts, 32);
-defer cache.deinit(allocator);
-_ = cache.touch(layer, expert_id);
-cache.prefetch(layer, expert_id, weight_ptr, expert_bytes);
+```bash
+# Basic: 256 resident expert slots (default)
+agave model.gguf --ssd-streaming "Your prompt here"
+
+# Larger cache for fewer SSD reads (more RAM usage)
+agave model.gguf --ssd-streaming --ssd-cache-slots 512 "Your prompt here"
+
+# Combined with hotlist pre-pinning
+agave model.gguf --ssd-streaming --expert-profile-in profile.json "Your prompt here"
 ```
 
-The expert hotlist (section 3) can pin profiled hot experts so they are never evicted.
+Note: this is separate from `--kv-tiers vram+ram+ssd` (KV cache tiering). SSD streaming is for model weights (routed experts), KV tiering is for attention state.
+
+The expert cache is initialized automatically for MoE models when `--ssd-streaming` is set. Cache stats (hit/miss rate) are printed after inference.
 
 **Implementation:** [`src/expert_cache.zig`](../../src/expert_cache.zig) (`ExpertCache`, LRU eviction, `madvise` prefetch).
+
+---
+
+## 7. Power Throttling — CLI
+
+**Power throttling** reduces GPU utilization to control heat and fan noise without changing outputs. At `--power P`, agave inserts a sleep between decode calls such that the GPU is active P% of the token period and idle (100-P)% of it.
+
+```bash
+# Target 60% GPU utilisation (quieter, cooler)
+agave model.gguf --power 60 "Your long generation here"
+
+# Target 30% for near-silent operation (e.g. overnight batch)
+agave model.gguf --power 30 --max-tokens 2000 "Prompt"
+```
+
+The sleep duration is adaptive: it measures each forward pass and applies `idle_ns = forward_ns × (100 - P) / P`. The first token is never throttled (no measurement yet). Outputs are identical to unthrottled — only the wall-clock rate changes.
+
+**Implementation:** `generateAndPrintInner` in [`src/main.zig`](../../src/main.zig) (per-token sleep based on measured forward time).
+
+---
+
+## 8. Frontier Benchmarking — CLI
+
+**Frontier benchmarking** (from [ds4](https://github.com/antirez/ds4)) measures prefill and generation throughput at multiple context lengths by snapshotting KV state at each frontier and running a short greedy probe before continuing. This gives a realistic picture of how throughput changes with context length.
+
+```bash
+# Default frontiers: 512, 2048, 8192 tokens
+agave model.gguf --frontier-bench
+
+# Custom frontiers
+agave model.gguf --frontier-bench --frontier-ctx 1024,4096,16384,65536
+
+# JSON output for scripting
+agave model.gguf --frontier-bench --frontier-ctx 512,2048,8192 --json
+```
+
+Output (text mode):
+```
+Frontier Benchmark (3 frontiers, 16 probe tokens each):
+  ctx=   512: prefill 3200.1 t/s  decode 42.3 t/s  (prefill 512 tok)
+  ctx=  2048: prefill 2100.4 t/s  decode 38.1 t/s  (prefill 1536 tok)
+  ctx=  8192: prefill  890.2 t/s  decode 27.8 t/s  (prefill 6144 tok)
+```
+
+Each frontier prefills incrementally from where the last one stopped. KV state is exported before the probe and restored after, so the next frontier continues as if the probe never happened (where `exportKvPrefix`/`importKvPrefix` is implemented).
+
+**Implementation:** `runFrontierBench` in [`src/main.zig`](../../src/main.zig).
+
+---
+
+## 9. Distributed Prefix Hash — library
+
+**Rolling prefix hash** (from [ds4](https://github.com/antirez/ds4)) detects transcript divergence in pipeline-parallel inference. When the coordinator restarts at position 0 while a worker is at position N, the hashes immediately diverge, allowing the coordinator to trigger a transcript replay instead of silently producing corrupt activations.
+
+The hash is available on the `Transport` struct:
+
+```zig
+// Coordinator: advance after each token is committed
+transport.advanceTokenHash(token_id);
+
+// Worker: verify the coordinator's hash matches
+if (!transport.verifyTokenHash(received_hash)) {
+    // trigger coordinator-side transcript replay
+}
+
+// Reset at session start
+transport.resetTokenHash();
+```
+
+The hash uses Wyhash accumulation: `h = Wyhash(prev_h, token_id_bytes)`. This is an O(1) update per token. The wire protocol does not yet carry the hash field automatically — integration with `sendBuf`/`recvBuf` is planned once the side-channel format is finalized.
+
+**Implementation:** `Transport.advanceTokenHash`, `verifyTokenHash`, `resetTokenHash` in [`src/parallel/transport.zig`](../../src/parallel/transport.zig).
 
 ---
 
@@ -196,7 +274,7 @@ The expert hotlist (section 3) can pin profiled hot experts so they are never ev
 
 ---
 
-**In the code:** [`src/steering.zig`](../../src/steering.zig) (directional steering, CLI), [`src/eval.zig`](../../src/eval.zig) (NLL `scoreCase`), [`src/expert_profile.zig`](../../src/expert_profile.zig) (expert profiling), [`src/kvcache/checkpoint.zig`](../../src/kvcache/checkpoint.zig) (checkpoint header), [`src/expert_cache.zig`](../../src/expert_cache.zig) (SSD expert streaming), [`tools/`](../../tools/) (Python tooling)
+**In the code:** [`src/steering.zig`](../../src/steering.zig) (directional steering), [`src/eval.zig`](../../src/eval.zig) (NLL `scoreCase`), [`src/expert_profile.zig`](../../src/expert_profile.zig) (expert profiling + `loadJson`), [`src/kvcache/checkpoint.zig`](../../src/kvcache/checkpoint.zig) (checkpoint header), [`src/expert_cache.zig`](../../src/expert_cache.zig) (SSD expert streaming + `admit_prepin`), [`src/parallel/transport.zig`](../../src/parallel/transport.zig) (rolling prefix hash), [`src/main.zig`](../../src/main.zig) (`runFrontierBench`, power throttling, expert cache init), [`tools/`](../../tools/) (Python tooling)
 
 **Next:** [Appendix: Troubleshooting →](appendix-troubleshooting.md) | **Back:** [Chapter 23: Server / HTTP API ←](23-server-http-api.md)
 

@@ -157,6 +157,19 @@ pub const ExpertCache = struct {
         }
     }
 
+    /// Pre-pin top-K experts for a layer (startup hotlist, no madvise).
+    /// Returns the number actually admitted (≤ k, bounded by cache capacity).
+    pub fn admit_prepin(self: *ExpertCache, layer: u32, ids: []const u32, k: u32) u32 {
+        var admitted: u32 = 0;
+        for (0..@min(@as(usize, k), ids.len)) |i| {
+            if (!self.touch(layer, ids[i])) {
+                _ = self.admit(layer, ids[i]);
+                admitted += 1;
+            }
+        }
+        return admitted;
+    }
+
     /// Report cache statistics.
     pub fn reportStats(self: *const ExpertCache) void {
         const total = self.hits + self.misses;

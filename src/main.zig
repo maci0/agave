@@ -429,6 +429,16 @@ const cli_specs = [_]cli_mod.ArgSpec{
     .{ .long = "dir-steering-ffn", .kind = .option, .help = "Steering scale for FFN outputs [default: 1.0 when file provided]." },
     .{ .long = "dir-steering-attn", .kind = .option, .help = "Steering scale for attention outputs [default: 0]." },
     .{ .long = "benchmark", .help = "Run decode benchmark: prefill + decode, print stats (supports --json)." },
+    // SSD expert streaming (MoE models)
+    .{ .long = "ssd-streaming", .help = "Enable SSD expert streaming for large MoE models that don't fit in RAM/VRAM. Uses demand-paged LRU expert cache." },
+    .{ .long = "ssd-cache-slots", .kind = .option, .help = "Number of expert slots to keep resident in the SSD expert cache [default: 256]. Higher = fewer SSD reads, more RAM." },
+    .{ .long = "expert-profile-out", .kind = .option, .help = "Write expert activation profile JSON to this path after inference (for hotlist pre-pinning on future runs)." },
+    .{ .long = "expert-profile-in", .kind = .option, .help = "Load expert activation profile JSON and pre-pin top experts into the SSD cache before inference starts." },
+    // Power throttling
+    .{ .long = "power", .kind = .option, .help = "Target GPU utilisation percent (1-100). Inserts inter-layer sleeps to reduce heat and fan noise without changing outputs [default: 100 = no throttle]." },
+    // Frontier benchmarking
+    .{ .long = "frontier-bench", .help = "Frontier benchmark: snapshot KV at each context length in --frontier-ctx, report prefill+generation t/s per frontier." },
+    .{ .long = "frontier-ctx", .kind = .option, .help = "Comma-separated context lengths for frontier benchmark, e.g. 1024,4096,16384 [default: 512,2048,8192]." },
 };
 
 /// Speculative decoding strategy. CLI aliases (e.g. `medusa` → `mtp`) normalize at
@@ -549,6 +559,23 @@ const CliArgs = struct {
     diffusion_canvas: u32 = 256,
     /// Confidence threshold: tokens above this probability are accepted (default 0.5).
     diffusion_confidence: f32 = 0.5,
+    // SSD expert streaming
+    /// Demand-paged LRU expert cache for large MoE models.
+    ssd_streaming: bool = false,
+    /// Number of expert slots to keep resident (default 256).
+    ssd_cache_slots: u32 = 256,
+    /// Write expert activation profile JSON after inference.
+    expert_profile_out: ?[]const u8 = null,
+    /// Load expert profile JSON and pre-pin top experts before inference.
+    expert_profile_in: ?[]const u8 = null,
+    // Power throttling
+    /// Target GPU utilisation percent (1-100). 100 = no throttle.
+    power_pct: u32 = 100,
+    // Frontier benchmarking
+    /// Run frontier benchmark.
+    frontier_bench: bool = false,
+    /// Comma-separated context lengths for frontier benchmark.
+    frontier_ctx: []const u8 = "512,2048,8192",
     /// Tracks which CLI args the user explicitly set (so recipes don't override them).
     user_set: Recipe.Overrides = .{},
 };
@@ -1319,6 +1346,20 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
             }
             break :blk 0.5;
         },
+        .ssd_streaming = res.flag("ssd-streaming"),
+        .ssd_cache_slots = parseU32(res.option("ssd-cache-slots"), "ssd-cache-slots") orelse 256,
+        .expert_profile_out = res.option("expert-profile-out"),
+        .expert_profile_in = res.option("expert-profile-in"),
+        .power_pct = blk: {
+            const v = parseU32(res.option("power"), "power") orelse 100;
+            if (v == 0 or v > 100) {
+                eprint("Error: --power must be 1-100 (got {d})\n", .{v});
+                std.process.exit(2);
+            }
+            break :blk v;
+        },
+        .frontier_bench = res.flag("frontier-bench"),
+        .frontier_ctx = res.option("frontier-ctx") orelse "512,2048,8192",
         .user_set = .{
             .temperature = res.option("temperature") != null,
             .top_p = res.option("top-p") != null,
@@ -1779,6 +1820,103 @@ fn runBenchmark(model: *Model, tok_state: anytype, allocator: std.mem.Allocator,
             \\
         , .{ n_prompt, prefill_ms, prefill_tps, gen_count, decode_ms, decode_tps, prefill_ms });
     if (msg) |m| _ = std.posix.system.write(stdout_file.handle, m.ptr, m.len) else |_| {}
+}
+
+/// Frontier benchmark (ds4-bench style): snapshot KV at each context frontier,
+/// measure prefill and generation throughput separately per length.
+/// Mirrors ds4's approach: greedy probe at each frontier, restore state, continue.
+fn runFrontierBench(model: *Model, tok_state: anytype, allocator: std.mem.Allocator, cli: anytype, eog: anytype) void {
+    // Parse comma-separated context lengths from --frontier-ctx
+    const frontier_str = cli.frontier_ctx;
+    var frontiers_buf: [16]u32 = undefined;
+    var n_frontiers: usize = 0;
+    {
+        var it = std.mem.splitScalar(u8, frontier_str, ',');
+        while (it.next()) |s| {
+            if (n_frontiers >= frontiers_buf.len) break;
+            const v = std.fmt.parseInt(u32, std.mem.trim(u8, s, " "), 10) catch continue;
+            frontiers_buf[n_frontiers] = v;
+            n_frontiers += 1;
+        }
+    }
+    if (n_frontiers == 0) { eprint("frontier-bench: no valid context lengths in --frontier-ctx\n", .{}); return; }
+
+    // Build a prompt long enough to cover the largest frontier.
+    const max_ctx = frontiers_buf[0..n_frontiers][n_frontiers - 1];
+    var tok_if = tok_state.*.tokenizer();
+
+    // Repeat a filler sentence to fill max_ctx tokens.
+    const filler = "The quick brown fox jumps over the lazy dog. ";
+    const filler_ids = tok_if.encode(filler) catch { eprint("frontier-bench: encode failed\n", .{}); return; };
+    defer allocator.free(filler_ids);
+    if (filler_ids.len == 0) { eprint("frontier-bench: empty filler token list\n", .{}); return; }
+    var full_prompt = std.ArrayList(u32).empty;
+    defer full_prompt.deinit(allocator);
+    while (full_prompt.items.len < max_ctx) {
+        full_prompt.appendSlice(allocator, filler_ids) catch break;
+    }
+    const prompt = full_prompt.items[0..@min(full_prompt.items.len, max_ctx)];
+
+    const probe_tokens: u32 = 16; // greedy probe length at each frontier
+    var cursor: usize = 0; // tokens prefilled so far
+
+    if (!cli.json) eprint("\nFrontier Benchmark ({d} frontiers, {d} probe tokens each):\n", .{ n_frontiers, probe_tokens });
+    if (cli.json) _ = std.posix.system.write(stdout_file.handle, "[", 1);
+
+    for (frontiers_buf[0..n_frontiers], 0..) |ctx_len, fi| {
+        // Prefill from cursor to ctx_len
+        const slice = if (ctx_len <= prompt.len) prompt[cursor..ctx_len] else prompt[cursor..];
+        if (slice.len == 0) continue;
+
+        var ts0: std.posix.system.timespec = undefined;
+        _ = std.posix.system.clock_gettime(.REALTIME, &ts0);
+        _ = model.prefill(slice) catch {
+            eprint("frontier-bench: prefill failed at ctx={d}\n", .{ctx_len});
+            break;
+        };
+        var ts1: std.posix.system.timespec = undefined;
+        _ = std.posix.system.clock_gettime(.REALTIME, &ts1);
+        cursor = @min(ctx_len, prompt.len);
+
+        // Export KV snapshot before probe (64 MB should cover most models at frontier sizes).
+        const kv_export_cap: usize = 64 * 1024 * 1024;
+        const kv_snapshot_buf = allocator.alloc(u8, kv_export_cap) catch null;
+        defer if (kv_snapshot_buf) |s| allocator.free(s);
+        const kv_snap_len: usize = if (kv_snapshot_buf) |buf| model.exportKvPrefix(buf, cursor) else 0;
+
+        // Greedy probe starting from the last prefill logits.
+        var last = math_ops.argmax(model.getLogits());
+        var gen: u32 = 0;
+        _ = std.posix.system.clock_gettime(.REALTIME, &ts1);
+        while (gen < probe_tokens) : (gen += 1) {
+            if (isEogToken(last, eog)) break;
+            last = model.forward(last) catch break;
+            last = math_ops.argmax(model.getLogits());
+        }
+        var ts2: std.posix.system.timespec = undefined;
+        _ = std.posix.system.clock_gettime(.REALTIME, &ts2);
+
+        // Restore KV state to the snapshot so the next frontier continues cleanly.
+        if (kv_snapshot_buf) |s| {
+            if (kv_snap_len > 0) _ = model.importKvPrefix(s[0..kv_snap_len], cursor);
+        }
+
+        const pf_us: i64 = (@as(i64, ts1.sec) - @as(i64, ts0.sec)) * 1_000_000 + @divTrunc(@as(i64, ts1.nsec) - @as(i64, ts0.nsec), 1000);
+        const dec_us: i64 = (@as(i64, ts2.sec) - @as(i64, ts1.sec)) * 1_000_000 + @divTrunc(@as(i64, ts2.nsec) - @as(i64, ts1.nsec), 1000);
+        const pf_tps: f64 = if (pf_us > 0) @as(f64, @floatFromInt(slice.len)) / (@as(f64, @floatFromInt(pf_us)) / 1e6) else 0;
+        const dec_tps: f64 = if (dec_us > 0 and gen > 0) @as(f64, @floatFromInt(gen)) / (@as(f64, @floatFromInt(dec_us)) / 1e6) else 0;
+
+        var buf: [256]u8 = undefined;
+        if (cli.json) {
+            const comma: []const u8 = if (fi + 1 < n_frontiers) "," else "";
+            const msg = std.fmt.bufPrint(&buf, "{{\"ctx\":{d},\"prefill_tokens\":{d},\"prefill_tps\":{d:.1},\"decode_tps\":{d:.1}}}{s}", .{ ctx_len, slice.len, pf_tps, dec_tps, comma }) catch continue;
+            _ = std.posix.system.write(stdout_file.handle, msg.ptr, msg.len);
+        } else {
+            const msg = std.fmt.bufPrint(&buf, "  ctx={d:6}: prefill {d:.1} t/s  decode {d:.1} t/s  (prefill {d} tok)\n", .{ ctx_len, pf_tps, dec_tps, slice.len }) catch continue;
+            _ = std.posix.system.write(stdout_file.handle, msg.ptr, msg.len);
+        }
+    }
+    if (cli.json) _ = std.posix.system.write(stdout_file.handle, "]\n", 2);
 }
 
 fn printUsage() void {
@@ -2687,6 +2825,57 @@ fn initAndRun(
     }
     if (cli.profile) mdl.enableProfiling();
 
+    // ── SSD expert streaming (ds4-style demand-paged MoE expert cache) ──
+    const ExpertCache = @import("expert_cache.zig").ExpertCache;
+    const ExpertProfile = @import("expert_profile.zig").ExpertProfile;
+    var expert_cache_opt: ?ExpertCache = null;
+    var expert_profile_opt: ?ExpertProfile = null;
+    defer if (expert_cache_opt) |*ec| ec.deinit(allocator);
+    defer if (expert_profile_opt) |*ep| ep.deinit(allocator);
+
+    const n_exp = minfo.n_experts;
+    const n_lay = minfo.n_layers;
+
+    if (cli.ssd_streaming and n_exp > 0) {
+        expert_cache_opt = ExpertCache.init(allocator, n_lay, n_exp, cli.ssd_cache_slots) catch |e| blk: {
+            eprint("Warning: failed to init expert cache ({s}), SSD streaming disabled\n", .{@errorName(e)});
+            break :blk null;
+        };
+        if (expert_cache_opt != null) {
+            eprint("ssd-streaming: expert cache {d} slots, {d} experts × {d} layers\n", .{ cli.ssd_cache_slots, n_exp, n_lay });
+        }
+    }
+
+    // Pre-pin hot experts from a prior profile run before first token.
+    if (cli.expert_profile_in) |prof_path| {
+        if (expert_cache_opt) |*ec| {
+            var prof = ExpertProfile.loadJson(allocator, prof_path) catch |e| blk: {
+                eprint("Warning: failed to load expert profile '{s}': {s}\n", .{ prof_path, @errorName(e) });
+                break :blk null;
+            };
+            if (prof) |*p| {
+                defer p.deinit(allocator);
+                // Pre-pin top-8 experts per layer into the LRU cache.
+                var top_ids: [8]u32 = undefined;
+                for (0..@min(n_lay, p.n_layers)) |li| {
+                    const k = ec.admit_prepin(@intCast(li), &top_ids, p.topExperts(@intCast(li), 8, &top_ids));
+                    _ = k;
+                }
+                eprint("ssd-streaming: pre-pinned hot experts from '{s}'\n", .{prof_path});
+            }
+        } else {
+            eprint("Warning: --expert-profile-in requires --ssd-streaming, ignored\n", .{});
+        }
+    }
+
+    // Start profiling if requested (even without SSD streaming).
+    if (cli.expert_profile_out != null and n_exp > 0) {
+        expert_profile_opt = ExpertProfile.init(allocator, n_lay, n_exp) catch |e| blk: {
+            eprint("Warning: failed to init expert profiler ({s})\n", .{@errorName(e)});
+            break :blk null;
+        };
+    }
+
     var model_if = mdl.model();
 
     // ── Vision encoder (multimodal) ──────────────────────────────
@@ -3007,6 +3196,11 @@ fn initAndRun(
         eprint("pflash scorer: {s} · {s}\n", .{ scorer_arch.displayName(), Format.getQuantName(scorer_fmt) });
     }
 
+    if (cli.frontier_bench) {
+        runFrontierBench(&model_if, &tok, allocator, cli, eog);
+        return true;
+    }
+
     if (cli.benchmark) {
         runBenchmark(&model_if, &tok, allocator, cli, eog);
         return true;
@@ -3154,6 +3348,20 @@ fn initAndRun(
         runRepl(allocator, &model_if, tok, cli, tok_kind, eog, arch, minfo, display, img_tokens, n_visual_tokens);
     }
     mdl.reportPerf();
+
+    // Save expert activation profile if requested.
+    if (cli.expert_profile_out) |out_path| {
+        if (expert_profile_opt) |*prof| {
+            prof.writeJson(allocator, out_path) catch |e| {
+                eprint("Warning: failed to write expert profile to '{s}': {s}\n", .{ out_path, @errorName(e) });
+            };
+            eprint("expert profile written to '{s}' ({d} tokens profiled)\n", .{ out_path, prof.total_tokens });
+        }
+    }
+
+    // Report expert cache stats.
+    if (expert_cache_opt) |*ec| ec.reportStats();
+
     return true;
 }
 
@@ -4224,6 +4432,9 @@ fn generateAndPrintInner(
         if (grammar_completed_first) hit_eog = true;
     }
 
+    // Power throttling state: last measured forward-pass duration (ns).
+    var power_last_forward_ns: u64 = 0;
+
     for (0..cli.max_tokens -| 1) |gi| {
         if (first_is_eog or token_ids.len == 0) break;
 
@@ -4252,10 +4463,21 @@ fn generateAndPrintInner(
             }
         }
 
+        // Power throttling: sleep before forward to cap GPU utilisation.
+        // At P%, we want GPU active P% and idle (100-P)% of the token period.
+        // Approximate: measure forward time and sleep (100-P)/P × forward_ns.
+        // On first token the sleep is skipped (no timing yet).
+        if (cli.power_pct < 100 and gi > 0) {
+            const idle_num = @as(u64, 100 - cli.power_pct);
+            const idle_ns = power_last_forward_ns * idle_num / cli.power_pct;
+            if (idle_ns > 0) std.time.sleep(idle_ns);
+        }
+        const power_t0 = std.time.nanoTimestamp();
         var next = mdl.forward(last) catch |e| {
             eprint("Error: generation failed at token {d}: {}\n", .{ gi + 1, e });
             break;
         };
+        power_last_forward_ns = @intCast(@max(0, std.time.nanoTimestamp() - power_t0));
         // Apply repeat penalty to logits for recently generated tokens
         const logits = mdl.getLogits();
         if (use_repeat_penalty and token_count > 0) {

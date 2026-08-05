@@ -583,6 +583,55 @@ const Server = struct {
 
 var g_server: *Server = undefined;
 
+/// Tool call exact-replay map: maps tool_call_id (u64, XxHash64 of ID string)
+/// → raw generated output bytes containing the original <tool_call>…</tool_call> text.
+/// Lets the server reconstruct the exact token stream when a client resends
+/// tool call history — same approach as ds4's DSML replay map.
+/// Capped at tool_replay_max entries (LRU eviction via insertion-order counter).
+const tool_replay_max: usize = 10_000;
+const ToolReplayEntry = struct {
+    raw: []u8, // owned, allocated via g_tool_replay_allocator
+    seq: u64,  // insertion sequence number (for LRU eviction)
+};
+var g_tool_replay: std.AutoHashMapUnmanaged(u64, ToolReplayEntry) = .{};
+var g_tool_replay_allocator: std.mem.Allocator = undefined;
+var g_tool_replay_seq: u64 = 0;
+var g_tool_replay_mutex: std.Thread.Mutex = .{};
+
+fn toolReplayStore(id_str: []const u8, raw: []const u8) void {
+    if (id_str.len == 0) return;
+    const key = std.hash.XxHash64.hash(0, id_str);
+    const owned = g_tool_replay_allocator.dupe(u8, raw) catch return;
+    g_tool_replay_mutex.lock();
+    defer g_tool_replay_mutex.unlock();
+    // Evict oldest entry if at capacity.
+    if (g_tool_replay.count() >= tool_replay_max) {
+        var oldest_key: u64 = 0;
+        var oldest_seq: u64 = std.math.maxInt(u64);
+        var it = g_tool_replay.iterator();
+        while (it.next()) |e| {
+            if (e.value_ptr.seq < oldest_seq) { oldest_seq = e.value_ptr.seq; oldest_key = e.key_ptr.*; }
+        }
+        if (g_tool_replay.fetchRemove(oldest_key)) |removed| g_tool_replay_allocator.free(removed.value.raw);
+    }
+    g_tool_replay_seq += 1;
+    const entry = ToolReplayEntry{ .raw = owned, .seq = g_tool_replay_seq };
+    if (g_tool_replay.fetchPut(g_tool_replay_allocator, key, entry)) |old| {
+        g_tool_replay_allocator.free(old.value.raw);
+    } else |_| {
+        g_tool_replay_allocator.free(owned);
+    }
+}
+
+fn toolReplayGet(id_str: []const u8) ?[]const u8 {
+    if (id_str.len == 0) return null;
+    const key = std.hash.XxHash64.hash(0, id_str);
+    g_tool_replay_mutex.lock();
+    defer g_tool_replay_mutex.unlock();
+    const entry = g_tool_replay.get(key) orelse return null;
+    return entry.raw;
+}
+
 /// Per-thread request ID for log correlation. Set at the start of each
 /// handleRequest() call so all log lines from the same request (including
 /// logGeneration calls deep in generate functions) share the same ID.
@@ -1594,7 +1643,14 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
         const total = gen.stats.tokens_generated + gen.stats.prompt_tokens;
         var resp_buf: [response_buf_size]u8 = undefined;
 
-        // Check if output contains tool calls
+        // Check if output contains tool calls.
+        // Store raw output in the replay map keyed by request ID so future turns
+        // can reconstruct the exact token stream from stored bytes (ds4 replay approach).
+        if (tool_params.tool_count > 0 and hasToolCalls(gen.raw)) {
+            var rid_buf: [24]u8 = undefined;
+            const rid_str = std.fmt.bufPrint(&rid_buf, "{d}", .{req_id}) catch "";
+            toolReplayStore(rid_str, gen.raw);
+        }
         const json_body = if (tool_params.tool_count > 0 and hasToolCalls(gen.raw)) blk: {
             const tc_resp = buildToolCallResponse(&resp_buf, gen.raw, req_id, created, gen.stats.prompt_tokens, gen.stats.tokens_generated);
             break :blk if (tc_resp.len > 0) tc_resp else std.fmt.bufPrint(&resp_buf,
@@ -5738,6 +5794,7 @@ pub fn run(config: ServerConfig) !void {
     }
 
     g_server = &server;
+    g_tool_replay_allocator = config.allocator;
 
     // Initialize continuous batching scheduler and background thread.
     // The scheduler owns the model forward loop; HTTP handlers enqueue
