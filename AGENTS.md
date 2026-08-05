@@ -34,6 +34,8 @@ agave target.gguf --draft-model mlp.gguf --spec-mode mlp "prompt"    # MLP Specu
 agave target.gguf --draft-model draft.gguf --spec-token-map freq.txt --spec-mode ddtree "prompt"  # FR-Spec vocab truncation
 agave model-mtp.gguf --spec-mode mtp "prompt"                    # Multi-token prediction heads
 agave model.gguf --ctx-size auto "prompt"                        # Auto-fit context to available memory
+agave model.gguf --dir-steering-file dir.f32 "prompt"             # Directional steering (FFN, scale 1.0)
+agave model.gguf --dir-steering-file dir.f32 --dir-steering-ffn -1 "prompt"  # Amplify direction
 agave model.gguf -t 0.8 --mirostat-mode 2 "prompt"              # Mirostat target-entropy sampling
 agave model.gguf -t 0.8 --dry-multiplier 1.5 "prompt"           # DRY n-gram repetition penalty
 agave target.gguf --draft-model draft.gguf --spec-mode ddtree \

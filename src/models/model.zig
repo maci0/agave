@@ -832,6 +832,17 @@ pub const ModelStorage = union(enum) {
         }
     }
 
+    /// Set directional steering for runtime activation editing.
+    pub fn setSteering(self: *ModelStorage, steer: *const @import("../steering.zig").DirectionalSteering) void {
+        switch (self.*) {
+            inline else => |*m| {
+                if (@TypeOf(m.*) != void) {
+                    if (comptime @hasField(@TypeOf(m.*), "steering")) m.steering = steer;
+                }
+            },
+        }
+    }
+
     /// Set the TP row-shard scratch buffer for weight column extraction.
     pub fn setTpRowShardBuf(self: *ModelStorage, buf: []u8) void {
         switch (self.*) {

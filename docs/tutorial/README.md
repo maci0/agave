@@ -117,6 +117,7 @@ Everything you need to add a new architecture to Agave:
 | 21 | [LoRA Adapters](21-lora.md) | Load-time merge of low-rank adapter weights | 12 min |
 | 22 | [Distributed Inference](22-distributed-inference.md) | TP/PP, transport selection, weight sharding | 20 min |
 | 23 | [Server / HTTP API](23-server-http-api.md) | HTTP → session → generate → stream/JSON pipeline | 18 min |
+| 24 | [Advanced Features](24-advanced-features.md) | Directional steering, NLL testing, expert profiling, KV checkpointing, SSD streaming | 20 min |
 
 ## Quick Reference
 

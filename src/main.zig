@@ -23,6 +23,7 @@ const arch_mod = @import("arch.zig");
 const Arch = arch_mod.Arch;
 const TokenizerKind = tok_mod.TokenizerKind;
 const Recipe = @import("recipe.zig").Recipe;
+const DirectionalSteering = @import("steering.zig").DirectionalSteering;
 
 const Backend = backend_mod.Backend;
 const BackendState = backend_mod.BackendState;
@@ -42,17 +43,20 @@ const grammar_mod = @import("grammar.zig");
 const TieredKvCache = @import("kvcache/tiered.zig").TieredKvCache;
 const pull = @import("pull.zig");
 const image = @import("image.zig");
+const sim_clock = @import("sim_clock.zig");
 
 const stdout_file = Io.File.stdout();
 const stderr_file = Io.File.stderr();
 const stdin_file = Io.File.stdin();
 
 fn milliTimestamp(io: Io) i64 {
-    return Io.Clock.real.now(io).toMilliseconds();
+    _ = io;
+    return sim_clock.milliNow();
 }
 
 fn nanoTimestamp(io: Io) i96 {
-    return Io.Clock.real.now(io).toNanoseconds();
+    _ = io;
+    return sim_clock.nanoNow();
 }
 
 /// Read all piped stdin into an allocated buffer.
@@ -419,9 +423,14 @@ const cli_specs = [_]cli_mod.ArgSpec{
     .{ .long = "model-info", .help = "Print model metadata and exit (supports --json)." },
     .{ .long = "megakernel", .help = "Enable fused FFN megakernels (3→1 dispatch per layer)." },
     .{ .long = "profile", .help = "Profile per-op timing (halves throughput)." },
+    .{ .long = "dir-steering-file", .kind = .option, .help = "Directional steering f32 vector file (n_layers × n_embd floats)." },
+    .{ .long = "dir-steering-ffn", .kind = .option, .help = "Steering scale for FFN outputs [default: 1.0 when file provided]." },
+    .{ .long = "dir-steering-attn", .kind = .option, .help = "Steering scale for attention outputs [default: 0]." },
     .{ .long = "benchmark", .help = "Run decode benchmark: prefill + decode, print stats (supports --json)." },
 };
 
+/// Speculative decoding strategy. CLI aliases (e.g. `medusa` → `mtp`) normalize at
+/// parse time so call sites never branch on synonym variants.
 const SpecMode = enum {
     none,
     standard,
@@ -430,7 +439,6 @@ const SpecMode = enum {
     ngram,
     suffix,
     mtp,
-    medusa, // Alias for mtp: Medusa heads are MTP heads with simple MLP architecture
     eagle,
     eagle3, // EAGLE-3: conditions on pre-output-norm hidden state
     mlp,
@@ -524,6 +532,10 @@ const CliArgs = struct {
     pflash_block_size: u32 = 64,
     /// Separate model for PFlash block scoring (optional; defaults to --draft-model).
     pflash_scorer_path: ?[]const u8 = null,
+    // Directional steering
+    dir_steering_file: ?[]const u8 = null,
+    dir_steering_ffn: f32 = 0,
+    dir_steering_attn: f32 = 0,
     // Diffusion generation (DiffusionGemma)
     /// Maximum denoising steps for block diffusion (default 16).
     diffusion_steps: u32 = 16,
@@ -581,6 +593,13 @@ fn checkSubcommand(allocator: std.mem.Allocator) bool {
             return true;
         }
         eprint("Error: no help available for '{s}'\n", .{sub});
+        const topics = [_][]const u8{ "pull", "calibrate" };
+        for (topics) |topic| {
+            if (closeMatch(sub, topic)) {
+                eprint("  Did you mean 'agave help {s}'?\n", .{topic});
+                break;
+            }
+        }
         eprint("Available help topics: pull, calibrate\n", .{});
         eprint("Run 'agave --help' for more information.\n", .{});
         std.process.exit(2);
@@ -609,6 +628,9 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
         std.process.exit(2);
     }
 
+    // Reject --flag=value on boolean flags (parser stores them in options).
+    rejectEqualsOnFlag(&res);
+
     // Reject unknown flags (catches typos like --temeprature); matches pull/calibrate.
     rejectUnknownOptions(&res);
 
@@ -623,6 +645,12 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
     // Auto-detect TTY: disable color when stdout is not a terminal
     g_tty = stdout_file.isTty(g_io) catch false;
     g_color = blk: {
+        // Conflicting pair: require a single explicit choice.
+        if (res.option("color") != null and res.flag("no-color")) {
+            eprint("Error: conflicting --color and --no-color; use only one\n", .{});
+            eprint("Run 'agave --help' for more information.\n", .{});
+            std.process.exit(2);
+        }
         // --color=always|never|auto takes precedence
         if (res.option("color")) |cm| {
             if (std.mem.eql(u8, cm, "always")) break :blk true;
@@ -993,17 +1021,23 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
             eprint("Warning: --draft-model is the same file as the target model\n", .{});
     }
 
-    // Warn about --mmproj without --image in non-server mode (loads but never uses vision encoder)
-    if (res.option("mmproj") != null and res.option("image") == null and !res.flag("serve"))
-        eprint("Warning: --mmproj has no effect without --image or --serve\n", .{});
+    // Warn about --mmproj without image/video in non-server mode (loads but never uses vision)
+    if (res.option("mmproj") != null and res.option("image") == null and res.option("video") == null and !res.flag("serve"))
+        eprint("Warning: --mmproj has no effect without --image, --video, or --serve\n", .{});
+
+    // Warn about --video-fps without --video
+    if (res.option("video-fps") != null and res.option("video") == null)
+        eprint("Warning: --video-fps has no effect without --video\n", .{});
 
     // Early file existence checks — fail fast before slow model loading
     if (grammar_path) |p| validateFileExists(p, "--grammar");
     if (res.option("image")) |p| validateFileExists(p, "--image");
+    if (res.option("video")) |p| validateFileExists(p, "--video");
     if (res.option("lora")) |p| validateFileExists(p, "--lora");
     if (res.option("mmproj")) |p| validateFileExists(p, "--mmproj");
     if (res.option("draft-model")) |p| validateFileExists(p, "--draft-model");
     if (res.option("pflash-scorer")) |p| validateFileExists(p, "--pflash-scorer");
+    if (res.option("spec-token-map")) |p| validateFileExists(p, "--spec-token-map");
 
     // JSON mode + interactive REPL would corrupt the JSON output stream
     if (json_mode and !res.flag("model-info") and !res.flag("serve") and n_positionals < 2) {
@@ -1175,7 +1209,8 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
                 if (std.mem.eql(u8, s, "ngram")) break :blk SpecMode.ngram;
                 if (std.mem.eql(u8, s, "suffix")) break :blk SpecMode.suffix;
                 if (std.mem.eql(u8, s, "mtp")) break :blk SpecMode.mtp;
-                if (std.mem.eql(u8, s, "medusa")) break :blk SpecMode.medusa;
+                // Medusa heads share the MTP inference path; normalize at the CLI boundary.
+                if (std.mem.eql(u8, s, "medusa")) break :blk SpecMode.mtp;
                 if (std.mem.eql(u8, s, "eagle")) break :blk SpecMode.eagle;
                 if (std.mem.eql(u8, s, "eagle3")) break :blk SpecMode.eagle3;
                 if (std.mem.eql(u8, s, "mlp")) break :blk SpecMode.mlp;
@@ -1206,6 +1241,26 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
         .pflash_block_size = parseU32(res.option("pflash-block-size"), "pflash-block-size") orelse 64,
         .pflash_scorer_path = res.option("pflash-scorer"),
         .spec_token_map = res.option("spec-token-map"),
+        .dir_steering_file = res.option("dir-steering-file"),
+        .dir_steering_ffn = blk: {
+            if (res.option("dir-steering-ffn")) |s| {
+                break :blk std.fmt.parseFloat(f32, s) catch {
+                    eprint("Error: --dir-steering-ffn must be a number\n", .{});
+                    std.process.exit(2);
+                };
+            }
+            // Default: 1.0 when a steering file is provided, 0 otherwise
+            break :blk if (res.option("dir-steering-file") != null) @as(f32, 1.0) else @as(f32, 0);
+        },
+        .dir_steering_attn = blk: {
+            if (res.option("dir-steering-attn")) |s| {
+                break :blk std.fmt.parseFloat(f32, s) catch {
+                    eprint("Error: --dir-steering-attn must be a number\n", .{});
+                    std.process.exit(2);
+                };
+            }
+            break :blk 0;
+        },
         .diffusion_steps = parseU32(res.option("diffusion-steps"), "diffusion-steps") orelse 16,
         .diffusion_canvas = parseU32(res.option("diffusion-canvas"), "diffusion-canvas") orelse 256,
         .diffusion_confidence = blk: {
@@ -1504,6 +1559,19 @@ fn insertionMatch(shorter: []const u8, longer: []const u8) bool {
     return true;
 }
 
+/// Reject `--flag=value` on boolean flags (parser stores them in options, not flags).
+fn rejectEqualsOnFlag(res: *const cli_mod.ParseResult) void {
+    for (cli_specs) |spec| {
+        if (spec.kind != .flag) continue;
+        if (res.option(spec.long)) |val| {
+            eprint("Error: --{s} does not take a value (got '--{s}={s}')\n", .{ spec.long, spec.long, val });
+            eprint("  Use --{s} alone, without '=...'\n", .{spec.long});
+            eprint("Run 'agave --help' for more information.\n", .{});
+            std.process.exit(2);
+        }
+    }
+}
+
 /// Reject flags or options not recognized by cli_specs (exit 2).
 /// Catches typos like --temeprature that would otherwise silently use defaults.
 fn rejectUnknownOptions(res: *const cli_mod.ParseResult) void {
@@ -1555,8 +1623,9 @@ fn rejectFlagAsValue(res: *const cli_mod.ParseResult) void {
     }
 }
 
-/// True if a positional looks like an unknown short option (-z) or cluster (-qv).
+/// True if a positional looks like an unknown short option (-z) or unknown cluster (-xy).
 /// Letter-only so prompts like "-5" are not rejected. Paths like "-n" need `./-n` or `--`.
+/// Known clusters (e.g. -qV) are parsed in cli.zig and never land here.
 fn looksLikeUnknownShortOpt(pos: []const u8) bool {
     if (pos.len < 2 or pos[0] != '-' or pos[1] == '-') return false;
     for (pos[1..]) |c| {
@@ -1669,7 +1738,7 @@ fn runBenchmark(model: *Model, tok_state: anytype, allocator: std.mem.Allocator,
 
 fn printUsage() void {
     const usage =
-        \\agave — Zig LLM inference engine
+        \\agave: Zig LLM inference engine
         \\
         \\USAGE:
         \\  agave [OPTIONS] <model.gguf|model-dir/> [prompt]
@@ -1684,8 +1753,9 @@ fn printUsage() void {
         \\  -h, --help             Show this help message and exit
         \\  -v, --version          Print version and exit
         \\  -q, --quiet            Suppress banner and stats (raw output only)
+        \\                         Short boolean flags may be clustered (e.g. -qV)
         \\      --color <MODE>     Color mode: auto, always, never [default: auto]
-        \\      --no-color         Disable colored output (same as --color=never, respects NO_COLOR env)
+        \\      --no-color         Disable colored output (same as --color=never; do not combine with --color)
         \\
         \\GENERATION:
         \\  -n, --max-tokens <N>      Maximum tokens to generate [default: 512]
@@ -2274,14 +2344,13 @@ pub fn main(init: std.process.Init) !void {
         std.process.exit(1);
 }
 
-/// Load an image file (PNG, PPM P6, or JPEG) and resize to
-/// target_size x target_size. Returns [target_size * target_size * 3]u8
-/// RGB pixels in row-major, channel-last order.
+/// Load a PNG or PPM P6 image and resize to target_size x target_size.
+/// Returns [target_size * target_size * 3]u8 RGB pixels (row-major, channel-last).
 ///
 /// Format is auto-detected from magic bytes:
 ///   - PNG (0x89 P N G): full decode via image.decodePng
 ///   - PPM P6 ("P6"): raw RGB parse
-///   - JPEG (0xFF 0xD8): returns error with suggestion to convert
+///   - JPEG (0xFF 0xD8): rejected with a convert-to-PNG hint (`error.InvalidImageFormat`)
 ///
 /// Resize uses bilinear interpolation via image.resize.
 fn loadImage(allocator: std.mem.Allocator, path: []const u8, target_size: u32) ![]u8 {
@@ -2427,6 +2496,30 @@ fn initAndRun(
     mdl.setPool(pool);
     mdl.fixBlockAllocator();
     mdl.setChunkSize(cli.prefill_batch_size);
+
+    // Directional steering: load direction vectors and attach to model
+    var dir_steering: ?DirectionalSteering = null;
+    if (cli.dir_steering_file) |steer_path| {
+        const n_layers = mdl.model().nLayers();
+        const n_embd = mdl.model().nEmbd();
+        dir_steering = DirectionalSteering.init(
+            allocator,
+            g_io,
+            steer_path,
+            n_layers,
+            n_embd,
+            cli.dir_steering_ffn,
+            cli.dir_steering_attn,
+        ) catch |err| blk: {
+            eprint("Error: failed to load steering file '{s}': {}\n", .{ steer_path, err });
+            break :blk null;
+        };
+        if (dir_steering) |*steer| {
+            mdl.setSteering(steer);
+            eprint("steering: {s} (ffn={d:.1}, attn={d:.1})\n", .{ steer_path, cli.dir_steering_ffn, cli.dir_steering_attn });
+        }
+    }
+    defer if (dir_steering) |*steer| steer.deinit(allocator);
 
     // TP: allocate row-shard scratch buffer for weight column extraction
     if (cli.tp_degree > 1) {
@@ -3260,7 +3353,8 @@ fn generateDiffusion(
         defer allocator.free(canvas_logits);
 
         // Start with random tokens (uniform state diffusion uses random noise).
-        var rng = std.Random.DefaultPrng.init(@intCast(block_count + 1));
+        // Mix CLI seed with block index so --seed fully determines the canvas.
+        var rng = std.Random.DefaultPrng.init(cli.seed +% @as(u64, @intCast(block_count)) +% 1);
         const vocab_sz = model.vocabSize();
         for (canvas) |*t| t.* = rng.random().intRangeLessThan(u32, 4, @min(vocab_sz - 1, 32000));
 
@@ -3299,7 +3393,9 @@ fn generateDiffusion(
                 const best_score = blk: {
                     // Softmax probability of best token.
                     var mx: f32 = -std.math.inf(f32);
-                    for (logits) |v| if (v > mx) { mx = v; };
+                    for (logits) |v| if (v > mx) {
+                        mx = v;
+                    };
                     var s: f32 = 0;
                     for (logits) |v| s += @exp(v - mx);
                     break :blk @exp(logits[best_tok] - mx) / s;
@@ -3334,7 +3430,10 @@ fn generateDiffusion(
         // Stop if canvas contains EOS token (generation complete).
         const eos_id = model.eosId();
         var has_eos = false;
-        for (canvas) |t| if (t == eos_id) { has_eos = true; break; };
+        for (canvas) |t| if (t == eos_id) {
+            has_eos = true;
+            break;
+        };
         if (has_eos) break;
 
         // Stop if max_tokens reached.
@@ -3509,9 +3608,8 @@ fn generateSpeculative(
     const self_spec = (effective_spec_mode == .self_spec);
     const use_ngram = (effective_spec_mode == .ngram);
     const use_suffix = (effective_spec_mode == .suffix);
-    // Medusa is MTP with a different underlying head architecture but same inference path.
-    // Both predict K tokens from mtpForward(last_token, depth) for depth=0..K-1.
-    const use_mtp = (effective_spec_mode == .mtp or effective_spec_mode == .medusa);
+    // Medusa CLI alias is normalized to .mtp at parse time.
+    const use_mtp = (effective_spec_mode == .mtp);
     const use_eagle = (effective_spec_mode == .eagle);
     const use_eagle3 = (effective_spec_mode == .eagle3);
     const use_mlp = (effective_spec_mode == .mlp);
@@ -3849,7 +3947,10 @@ fn generateAndPrintInner(
             .spm => tok.encodeSpm(template.user_prefix),
             .spm_no_dummy => tok.encodeSpmNoDummy(template.user_prefix),
             .bpe => tok.encode(template.user_prefix),
-        } catch break :blk text_token_ids;
+        } catch {
+            eprint("Error: failed to encode user prefix for image token insertion\n", .{});
+            return null;
+        };
         defer allocator.free(prefix_tokens);
 
         const insert_pos: usize = chat_tmpl_mod.findImageInsertPos(text_token_ids, prefix_tokens);
@@ -3857,13 +3958,17 @@ fn generateAndPrintInner(
         // Use injectImageTokens which handles architecture-specific wrapping:
         // Gemma 4 (start=end=pad): just pad×N
         // Qwen 3.5 (distinct start/end): [start, pad×N, end]
+        // Fail closed: continuing without placeholders silently drops the image.
         const result = chat_tmpl_mod.injectImageTokens(
             allocator,
             text_token_ids,
             insert_pos,
             img_tokens.?,
             n_visual_tokens,
-        ) catch break :blk text_token_ids;
+        ) catch {
+            eprint("Error: failed to inject image tokens into prompt\n", .{});
+            return null;
+        };
 
         injected_token_ids = result;
         dbg("injected {d} image tokens at pos {d}, total {d}", .{ n_visual_tokens, insert_pos, result.len });
@@ -4267,6 +4372,8 @@ test {
     _ = @import("pull.zig");
     _ = @import("calibrate.zig");
     _ = @import("image.zig");
+    _ = @import("image_tokens.zig");
+    _ = @import("steering.zig");
     _ = @import("thread_pool.zig");
     _ = @import("ops/kv_quant.zig");
     _ = @import("ops/quant.zig");
@@ -4545,6 +4652,7 @@ test "fuzz: main.zig pure functions" {
                 _ = &parseU64;
                 _ = &parseU16;
                 _ = &parseF32;
+                _ = &rejectEqualsOnFlag;
                 _ = &rejectUnknownOptions;
                 _ = &rejectFlagAsValue;
                 _ = &rejectUnknownShortPositionals;

@@ -129,7 +129,7 @@ sample (temperature==0 default → greedy)
 stream: emit SSE chunks (buffered first if tool calls) | else: buffer JSON response
 ```
 
-**Next:** [Appendix: Troubleshooting →](appendix-troubleshooting.md) | **Back:** [Chapter 22: Distributed Inference ←](22-distributed-inference.md) | **Product docs:** [API](../API.md)
+**Next:** [Chapter 24: Advanced Features →](24-advanced-features.md) | **Back:** [Chapter 22: Distributed Inference ←](22-distributed-inference.md) | **Product docs:** [API](../API.md)
 
 ---
 

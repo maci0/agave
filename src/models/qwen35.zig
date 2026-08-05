@@ -171,6 +171,8 @@ pub const Qwen35Model = struct {
     /// Incremented each time a pad token is encountered during forward().
     visual_token_idx: u32 = 0,
 
+    /// Optional directional steering for runtime activation editing.
+    steering: ?*const @import("../steering.zig").DirectionalSteering = null,
     /// Enable fused megakernel for single-dispatch forward pass.
     megakernel_enabled: bool = false,
 
@@ -1014,6 +1016,12 @@ pub const Qwen35Model = struct {
         self.syncProfile();
         self.perf.end(.gemv_out, t);
 
+        // Directional steering: project out (or amplify) attention-output direction
+        if (self.steering) |steer| {
+            self.be.sync();
+            steer.applyAttn(self.hidden2.ptr, li);
+        }
+
         // Qwen3/2: standard residual after attention (no fused addRmsNorm in MLP).
         if (!self.has_post_attn_norm) {
             t = self.perf.start();
@@ -1203,6 +1211,12 @@ pub const Qwen35Model = struct {
         }
         self.syncProfile();
         self.perf.end(.gemv_ffn, t);
+
+        // Directional steering: project out (or amplify) FFN-output direction
+        if (self.steering) |steer| {
+            self.be.sync();
+            steer.applyFfn(self.hidden2.ptr, li);
+        }
 
         if (defer_residual) return; // Caller fuses with next layer's pre-attn norm
 
