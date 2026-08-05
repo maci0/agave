@@ -34,6 +34,12 @@ const max_logit_bias: usize = 16;
 /// Maximum number of tool definitions per request.
 const max_tools: usize = 8;
 
+/// Zero heap bytes that may hold prompt/message text, then free.
+fn wipeFree(allocator: Allocator, buf: []u8) void {
+    @memset(buf, 0);
+    allocator.free(buf);
+}
+
 /// A tool/function definition from the OpenAI tools array.
 pub const ToolDef = struct {
     name: []const u8,
@@ -115,8 +121,8 @@ pub const ExtractedMessages = struct {
     system: ?[]const u8,
 
     pub fn deinit(self: ExtractedMessages, allocator: Allocator) void {
-        for (self.messages) |msg| allocator.free(@constCast(msg.content));
-        if (self.system) |sys| allocator.free(@constCast(sys));
+        for (self.messages) |msg| wipeFree(allocator, @constCast(msg.content));
+        if (self.system) |sys| wipeFree(allocator, @constCast(sys));
         allocator.free(self.messages);
     }
 };
@@ -554,7 +560,7 @@ pub fn extractMessages(json: []const u8, allocator: Allocator) ?ExtractedMessage
 
         // OpenAI o1/o3 SDK sends "developer" role instead of "system" — normalize.
         if (std.mem.eql(u8, role_str, "system") or std.mem.eql(u8, role_str, "developer")) {
-            if (system_msg) |prev_sys| allocator.free(@constCast(prev_sys));
+            if (system_msg) |prev_sys| wipeFree(allocator, @constCast(prev_sys));
             system_msg = owned_content;
         } else if (std.mem.eql(u8, role_str, "user")) {
             messages_buf[count] = .{ .role = .user, .content = owned_content };
@@ -568,18 +574,18 @@ pub fn extractMessages(json: []const u8, allocator: Allocator) ?ExtractedMessage
             messages_buf[count] = .{ .role = .tool, .content = owned_content, .tool_call_id = tcid };
             count += 1;
         } else {
-            allocator.free(owned_content);
+            wipeFree(allocator, owned_content);
         }
     }
 
     if (count == 0) {
-        if (system_msg) |sys| allocator.free(@constCast(sys));
+        if (system_msg) |sys| wipeFree(allocator, @constCast(sys));
         return null;
     }
 
     const messages = allocator.alloc(Message, count) catch {
-        for (messages_buf[0..count]) |msg| allocator.free(@constCast(msg.content));
-        if (system_msg) |sys| allocator.free(@constCast(sys));
+        for (messages_buf[0..count]) |msg| wipeFree(allocator, @constCast(msg.content));
+        if (system_msg) |sys| wipeFree(allocator, @constCast(sys));
         return null;
     };
     @memcpy(messages, messages_buf[0..count]);

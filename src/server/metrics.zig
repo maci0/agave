@@ -8,47 +8,69 @@ const std = @import("std");
 /// Re-export for callers that historically imported FixedBufStream from metrics.
 pub const FixedBufStream = @import("fixed_buf_stream.zig").FixedBufStream;
 
-/// Latency histogram bucket boundaries (milliseconds).
-/// These must match the Prometheus `le` labels in renderPrometheus().
-const latency_bucket_10ms: u64 = 10;
-const latency_bucket_50ms: u64 = 50;
-const latency_bucket_100ms: u64 = 100;
-const latency_bucket_500ms: u64 = 500;
-const latency_bucket_1s: u64 = 1000;
-const latency_bucket_5s: u64 = 5000;
-const latency_bucket_10s: u64 = 10000;
-const latency_bucket_30s: u64 = 30000;
+/// Finite histogram bucket: observation bound + Prometheus `le` label.
+/// Recording and rendering share this table so bounds and labels cannot drift.
+const HistBucket = struct { bound: u64, le: []const u8 };
 
-/// TPOT (time per output token) histogram bucket boundaries (milliseconds).
-/// Finer granularity than latency — decode speed is typically 5-100ms/token.
-const tpot_bucket_5ms: u64 = 5;
-const tpot_bucket_10ms: u64 = 10;
-const tpot_bucket_20ms: u64 = 20;
-const tpot_bucket_50ms: u64 = 50;
-const tpot_bucket_100ms: u64 = 100;
-const tpot_bucket_200ms: u64 = 200;
-const tpot_bucket_500ms: u64 = 500;
+fn histBounds(comptime buckets: []const HistBucket) [buckets.len]u64 {
+    var out: [buckets.len]u64 = undefined;
+    for (buckets, 0..) |b, i| out[i] = b.bound;
+    return out;
+}
 
-/// Token count histogram bucket boundaries (prompt and generation length).
-const token_bucket_16: u32 = 16;
-const token_bucket_64: u32 = 64;
-const token_bucket_128: u32 = 128;
-const token_bucket_256: u32 = 256;
-const token_bucket_512: u32 = 512;
-const token_bucket_1024: u32 = 1024;
-const token_bucket_2048: u32 = 2048;
-const token_bucket_4096: u32 = 4096;
+fn histLes(comptime buckets: []const HistBucket) [buckets.len + 1][]const u8 {
+    var out: [buckets.len + 1][]const u8 = undefined;
+    for (buckets, 0..) |b, i| out[i] = b.le;
+    out[buckets.len] = "+Inf";
+    return out;
+}
 
-/// Inter-token latency (ITL) histogram bucket boundaries (milliseconds).
-/// Measures wall-clock time between consecutive tokens as seen by client.
-const itl_bucket_5ms: u64 = 5;
-const itl_bucket_10ms: u64 = 10;
-const itl_bucket_20ms: u64 = 20;
-const itl_bucket_50ms: u64 = 50;
-const itl_bucket_100ms: u64 = 100;
-const itl_bucket_200ms: u64 = 200;
-const itl_bucket_500ms: u64 = 500;
-const itl_bucket_1s: u64 = 1000;
+/// Latency / TTFT / queue-time buckets (milliseconds → seconds `le` labels).
+const latency_buckets = [_]HistBucket{
+    .{ .bound = 10, .le = "0.01" },
+    .{ .bound = 50, .le = "0.05" },
+    .{ .bound = 100, .le = "0.1" },
+    .{ .bound = 500, .le = "0.5" },
+    .{ .bound = 1000, .le = "1" },
+    .{ .bound = 5000, .le = "5" },
+    .{ .bound = 10000, .le = "10" },
+    .{ .bound = 30000, .le = "30" },
+};
+
+/// TPOT buckets (ms/token). Finer than latency; decode is typically 5-100ms/token.
+const tpot_buckets = [_]HistBucket{
+    .{ .bound = 5, .le = "0.005" },
+    .{ .bound = 10, .le = "0.01" },
+    .{ .bound = 20, .le = "0.02" },
+    .{ .bound = 50, .le = "0.05" },
+    .{ .bound = 100, .le = "0.1" },
+    .{ .bound = 200, .le = "0.2" },
+    .{ .bound = 500, .le = "0.5" },
+};
+
+/// Prompt / generation token-count buckets (`le` is the count itself).
+const token_buckets = [_]HistBucket{
+    .{ .bound = 16, .le = "16" },
+    .{ .bound = 64, .le = "64" },
+    .{ .bound = 128, .le = "128" },
+    .{ .bound = 256, .le = "256" },
+    .{ .bound = 512, .le = "512" },
+    .{ .bound = 1024, .le = "1024" },
+    .{ .bound = 2048, .le = "2048" },
+    .{ .bound = 4096, .le = "4096" },
+};
+
+/// Inter-token latency buckets (ms → seconds). `1.0` label kept for scrape stability.
+const itl_buckets = [_]HistBucket{
+    .{ .bound = 5, .le = "0.005" },
+    .{ .bound = 10, .le = "0.01" },
+    .{ .bound = 20, .le = "0.02" },
+    .{ .bound = 50, .le = "0.05" },
+    .{ .bound = 100, .le = "0.1" },
+    .{ .bound = 200, .le = "0.2" },
+    .{ .bound = 500, .le = "0.5" },
+    .{ .bound = 1000, .le = "1.0" },
+};
 
 /// Cache line size for padding to prevent false sharing between atomic groups.
 const cache_line: usize = 64;
@@ -71,6 +93,11 @@ pub const Metrics = struct {
     requests_rate_limited: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
     connections_rejected: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
     requests_timeout: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
+    /// Client-caused rejects (4xx except auth/rate-limit). Kept separate from
+    /// requests_failed so /ready error-rate degradation tracks server faults only.
+    requests_client_error: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
+    /// 1 when idle sleep mode is active (see --sleep-after); 0 otherwise.
+    sleeping: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
     _pad0: [cache_line]u8 = undefined,
 
     // ── Group 2: Generation counters (generation thread) ──
@@ -216,8 +243,21 @@ pub const Metrics = struct {
     }
 
     /// Increment failed request counter (5xx errors, encode/forward failures).
+    /// Do not use for client 4xx — those go to recordClientError() so readiness
+    /// error-rate checks are not poisoned by bad requests.
     pub fn recordFailure(self: *Metrics) void {
         _ = self.requests_failed.fetchAdd(1, .monotonic);
+    }
+
+    /// Increment client-error counter (400/404/405/413 and similar).
+    /// Does not affect /health|/ready high_error_rate degradation.
+    pub fn recordClientError(self: *Metrics) void {
+        _ = self.requests_client_error.fetchAdd(1, .monotonic);
+    }
+
+    /// Update sleep-mode gauge (1 = sleeping, 0 = awake).
+    pub fn updateSleeping(self: *Metrics, is_sleeping: bool) void {
+        self.sleeping.store(if (is_sleeping) 1 else 0, .monotonic);
     }
 
     /// Increment auth failure counter (401 responses).
@@ -259,10 +299,7 @@ pub const Metrics = struct {
         self.recordToBuckets(duration_ms, .{
             "itl_5ms",   "itl_10ms",  "itl_20ms",  "itl_50ms",
             "itl_100ms", "itl_200ms", "itl_500ms", "itl_1s",
-        }, .{
-            itl_bucket_5ms,   itl_bucket_10ms,  itl_bucket_20ms,  itl_bucket_50ms,
-            itl_bucket_100ms, itl_bucket_200ms, itl_bucket_500ms, itl_bucket_1s,
-        }, "itl_inf");
+        }, comptime histBounds(&itl_buckets), "itl_inf");
         _ = self.itl_sum.fetchAdd(duration_ms, .monotonic);
     }
 
@@ -310,10 +347,7 @@ pub const Metrics = struct {
         self.recordToBuckets(duration_ms, .{
             "latency_10ms", "latency_50ms", "latency_100ms", "latency_500ms",
             "latency_1s",   "latency_5s",   "latency_10s",   "latency_30s",
-        }, .{
-            latency_bucket_10ms, latency_bucket_50ms, latency_bucket_100ms, latency_bucket_500ms,
-            latency_bucket_1s,   latency_bucket_5s,   latency_bucket_10s,   latency_bucket_30s,
-        }, "latency_inf");
+        }, comptime histBounds(&latency_buckets), "latency_inf");
     }
 
     /// Update current queue depth gauge.
@@ -348,10 +382,7 @@ pub const Metrics = struct {
         self.recordToBuckets(prefill_ms, .{
             "ttft_10ms", "ttft_50ms", "ttft_100ms", "ttft_500ms",
             "ttft_1s",   "ttft_5s",   "ttft_10s",   "ttft_30s",
-        }, .{
-            latency_bucket_10ms, latency_bucket_50ms, latency_bucket_100ms, latency_bucket_500ms,
-            latency_bucket_1s,   latency_bucket_5s,   latency_bucket_10s,   latency_bucket_30s,
-        }, "ttft_inf");
+        }, comptime histBounds(&latency_buckets), "ttft_inf");
     }
 
     /// Record throughput from a completed request (tokens per second × 100).
@@ -390,10 +421,7 @@ pub const Metrics = struct {
         self.recordToBuckets(tpot_ms, .{
             "tpot_5ms",   "tpot_10ms",  "tpot_20ms",  "tpot_50ms",
             "tpot_100ms", "tpot_200ms", "tpot_500ms",
-        }, .{
-            tpot_bucket_5ms,   tpot_bucket_10ms,  tpot_bucket_20ms,  tpot_bucket_50ms,
-            tpot_bucket_100ms, tpot_bucket_200ms, tpot_bucket_500ms,
-        }, "tpot_inf");
+        }, comptime histBounds(&tpot_buckets), "tpot_inf");
     }
 
     /// Record time spent waiting in the scheduler queue before execution.
@@ -402,10 +430,7 @@ pub const Metrics = struct {
         self.recordToBuckets(queue_ms, .{
             "queue_time_10ms", "queue_time_50ms", "queue_time_100ms", "queue_time_500ms",
             "queue_time_1s",   "queue_time_5s",   "queue_time_10s",   "queue_time_30s",
-        }, .{
-            latency_bucket_10ms, latency_bucket_50ms, latency_bucket_100ms, latency_bucket_500ms,
-            latency_bucket_1s,   latency_bucket_5s,   latency_bucket_10s,   latency_bucket_30s,
-        }, "queue_time_inf");
+        }, comptime histBounds(&latency_buckets), "queue_time_inf");
     }
 
     /// Record prompt token count for the prompt length distribution histogram.
@@ -414,10 +439,7 @@ pub const Metrics = struct {
         self.recordToBuckets(@as(u64, count), .{
             "prompt_tok_16",  "prompt_tok_64",   "prompt_tok_128",  "prompt_tok_256",
             "prompt_tok_512", "prompt_tok_1024", "prompt_tok_2048", "prompt_tok_4096",
-        }, .{
-            token_bucket_16,  token_bucket_64,   token_bucket_128,  token_bucket_256,
-            token_bucket_512, token_bucket_1024, token_bucket_2048, token_bucket_4096,
-        }, "prompt_tok_inf");
+        }, comptime histBounds(&token_buckets), "prompt_tok_inf");
     }
 
     /// Record generation token count for the output length distribution histogram.
@@ -426,10 +448,7 @@ pub const Metrics = struct {
         self.recordToBuckets(@as(u64, count), .{
             "gen_tok_16",  "gen_tok_64",   "gen_tok_128",  "gen_tok_256",
             "gen_tok_512", "gen_tok_1024", "gen_tok_2048", "gen_tok_4096",
-        }, .{
-            token_bucket_16,  token_bucket_64,   token_bucket_128,  token_bucket_256,
-            token_bucket_512, token_bucket_1024, token_bucket_2048, token_bucket_4096,
-        }, "gen_tok_inf");
+        }, comptime histBounds(&token_buckets), "gen_tok_inf");
     }
 
     /// Render metrics in Prometheus text format.
@@ -447,9 +466,13 @@ pub const Metrics = struct {
         try writer.writeAll("# TYPE agave_requests_cancelled_total counter\n");
         try writer.print("agave_requests_cancelled_total {d}\n", .{self.requests_cancelled.load(.monotonic)});
 
-        try writer.writeAll("# HELP agave_requests_failed_total Total requests failed with errors\n");
+        try writer.writeAll("# HELP agave_requests_failed_total Total requests failed with server errors (5xx / inference faults)\n");
         try writer.writeAll("# TYPE agave_requests_failed_total counter\n");
         try writer.print("agave_requests_failed_total {d}\n", .{self.requests_failed.load(.monotonic)});
+
+        try writer.writeAll("# HELP agave_requests_client_error_total Total requests rejected as client errors (4xx)\n");
+        try writer.writeAll("# TYPE agave_requests_client_error_total counter\n");
+        try writer.print("agave_requests_client_error_total {d}\n", .{self.requests_client_error.load(.monotonic)});
 
         try writer.writeAll("# HELP agave_tokens_generated_total Total tokens generated\n");
         try writer.writeAll("# TYPE agave_tokens_generated_total counter\n");
@@ -481,13 +504,13 @@ pub const Metrics = struct {
             "latency_10ms", "latency_50ms", "latency_100ms", "latency_500ms",
             "latency_1s",   "latency_5s",   "latency_10s",   "latency_30s",
             "latency_inf",
-        }, .{ "0.01", "0.05", "0.1", "0.5", "1", "5", "10", "30", "+Inf" }, "latency_sum", true);
+        }, comptime histLes(&latency_buckets), "latency_sum", true);
 
         try self.renderHistogram(writer, "agave_ttft_seconds", "Time-to-first-token histogram", .{
             "ttft_10ms", "ttft_50ms", "ttft_100ms", "ttft_500ms",
             "ttft_1s",   "ttft_5s",   "ttft_10s",   "ttft_30s",
             "ttft_inf",
-        }, .{ "0.01", "0.05", "0.1", "0.5", "1", "5", "10", "30", "+Inf" }, "ttft_sum", true);
+        }, comptime histLes(&latency_buckets), "ttft_sum", true);
 
         // Prefill tokens
         try writer.writeAll("# HELP agave_prefill_tokens_total Total prompt tokens processed during prefill\n");
@@ -545,6 +568,10 @@ pub const Metrics = struct {
         try writer.writeAll("# HELP agave_up Whether the agave server is running\n");
         try writer.writeAll("# TYPE agave_up gauge\n");
         try writer.writeAll("agave_up 1\n");
+
+        try writer.writeAll("# HELP agave_sleeping Whether the server is in idle sleep mode (1=sleeping)\n");
+        try writer.writeAll("# TYPE agave_sleeping gauge\n");
+        try writer.print("agave_sleeping {d}\n", .{self.sleeping.load(.monotonic)});
 
         const start = self.process_start_time.load(.monotonic);
         if (start > 0) {
@@ -606,25 +633,25 @@ pub const Metrics = struct {
         try self.renderHistogram(writer, "agave_time_per_output_token_seconds", "Time per output token histogram", .{
             "tpot_5ms",   "tpot_10ms",  "tpot_20ms",  "tpot_50ms",
             "tpot_100ms", "tpot_200ms", "tpot_500ms", "tpot_inf",
-        }, .{ "0.005", "0.01", "0.02", "0.05", "0.1", "0.2", "0.5", "+Inf" }, "tpot_sum", true);
+        }, comptime histLes(&tpot_buckets), "tpot_sum", true);
 
         try self.renderHistogram(writer, "agave_request_queue_time_seconds", "Request queue wait time histogram", .{
             "queue_time_10ms", "queue_time_50ms", "queue_time_100ms", "queue_time_500ms",
             "queue_time_1s",   "queue_time_5s",   "queue_time_10s",   "queue_time_30s",
             "queue_time_inf",
-        }, .{ "0.01", "0.05", "0.1", "0.5", "1", "5", "10", "30", "+Inf" }, "queue_time_sum", true);
+        }, comptime histLes(&latency_buckets), "queue_time_sum", true);
 
         try self.renderHistogram(writer, "agave_request_prompt_tokens", "Prompt token count distribution", .{
             "prompt_tok_16",  "prompt_tok_64",   "prompt_tok_128",  "prompt_tok_256",
             "prompt_tok_512", "prompt_tok_1024", "prompt_tok_2048", "prompt_tok_4096",
             "prompt_tok_inf",
-        }, .{ "16", "64", "128", "256", "512", "1024", "2048", "4096", "+Inf" }, "prompt_tok_sum", false);
+        }, comptime histLes(&token_buckets), "prompt_tok_sum", false);
 
         try self.renderHistogram(writer, "agave_request_generation_tokens", "Generation token count distribution", .{
             "gen_tok_16",  "gen_tok_64",   "gen_tok_128",  "gen_tok_256",
             "gen_tok_512", "gen_tok_1024", "gen_tok_2048", "gen_tok_4096",
             "gen_tok_inf",
-        }, .{ "16", "64", "128", "256", "512", "1024", "2048", "4096", "+Inf" }, "gen_tok_sum", false);
+        }, comptime histLes(&token_buckets), "gen_tok_sum", false);
 
         // GPU KV cache usage (separate from combined kv_cache_usage_perc)
         const gpu_kv_used = self.gpu_kv_blocks_used.load(.monotonic);
@@ -635,11 +662,11 @@ pub const Metrics = struct {
         try writer.print("agave_gpu_cache_usage_perc {d:.4}\n", .{gpu_kv_perc});
 
         // Inter-token latency histogram
-        try self.renderHistogram(writer, "agave_inter_token_latency_seconds", "Inter-token latency — wall-clock time between consecutive tokens", .{
+        try self.renderHistogram(writer, "agave_inter_token_latency_seconds", "Inter-token latency: wall-clock time between consecutive tokens", .{
             "itl_5ms",   "itl_10ms",  "itl_20ms",  "itl_50ms",
             "itl_100ms", "itl_200ms", "itl_500ms", "itl_1s",
             "itl_inf",
-        }, .{ "0.005", "0.01", "0.02", "0.05", "0.1", "0.2", "0.5", "1.0", "+Inf" }, "itl_sum", true);
+        }, comptime histLes(&itl_buckets), "itl_sum", true);
 
         // Preemptions (KV cache eviction under memory pressure)
         try writer.writeAll("# HELP agave_num_preemptions_total Requests preempted due to KV cache pressure\n");
@@ -713,6 +740,7 @@ test "Metrics: renderPrometheus outputs valid format" {
         "agave_requests_total 2",
         "agave_requests_completed_total 1",
         "agave_requests_failed_total 0",
+        "agave_requests_client_error_total 0",
         "agave_tokens_generated_total 42",
         "agave_queue_depth 5",
         "agave_request_duration_seconds_bucket{le=\"0.5\"} 1",
@@ -736,6 +764,7 @@ test "Metrics: renderPrometheus outputs valid format" {
         "# TYPE agave_scheduler_errors_total counter",
         "agave_scheduler_errors_total 0",
         "agave_up 1",
+        "agave_sleeping 0",
     };
 
     // Build line set from output for O(n*m) lookup
@@ -842,6 +871,22 @@ test "Metrics: recordFailure increments counter" {
     try std.testing.expectEqual(@as(u64, 0), metrics.requests_failed.load(.monotonic));
     metrics.recordFailure();
     try std.testing.expectEqual(@as(u64, 1), metrics.requests_failed.load(.monotonic));
+}
+
+test "Metrics: recordClientError increments counter without touching failed" {
+    var metrics = Metrics{};
+    metrics.recordClientError();
+    metrics.recordClientError();
+    try std.testing.expectEqual(@as(u64, 2), metrics.requests_client_error.load(.monotonic));
+    try std.testing.expectEqual(@as(u64, 0), metrics.requests_failed.load(.monotonic));
+}
+
+test "Metrics: updateSleeping sets gauge" {
+    var metrics = Metrics{};
+    metrics.updateSleeping(true);
+    try std.testing.expectEqual(@as(u32, 1), metrics.sleeping.load(.monotonic));
+    metrics.updateSleeping(false);
+    try std.testing.expectEqual(@as(u32, 0), metrics.sleeping.load(.monotonic));
 }
 
 test "Metrics: recordAuthFailure increments counter" {
@@ -1201,7 +1246,9 @@ test "fuzz: all Metrics recording functions" {
             metrics.recordCompletion();
             metrics.recordCancellation();
             metrics.recordFailure();
+            metrics.recordClientError();
             metrics.recordAuthFailure();
+            metrics.updateSleeping(true);
             metrics.recordRateLimit();
             metrics.recordConnectionRejection();
             metrics.recordTimeout();

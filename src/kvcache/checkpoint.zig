@@ -1,10 +1,18 @@
-//! KV cache disk checkpointing — save and restore KV state across restarts.
+//! KV cache disk checkpoint header format (envelope only).
 //!
-//! Serializes the KV cache to a binary file with a versioned header so that
-//! long system prompts and conversation prefixes don't need re-prefilling
-//! after a server restart.
+//! Defines the versioned binary header for future save/restore of KV state so
+//! long system prompts need not be re-prefilled after a restart. Payload I/O
+//! (`save` / `load`) is not implemented yet; this module validates and
+//! round-trips the 28-byte header.
 //!
-//! File format:
+//! Not used by the live HTTP `/v1/kv_cache` path. That endpoint ships an
+//! unversioned f32 interleaved layout (`exportKvPrefix` / `importKvPrefix`)
+//! because this header assumes a single `kv_dim` for every layer, which dual
+//! attention and MLA models violate. Keep the two formats separate until the
+//! disk format gains per-layer dimensions (or the HTTP blob gains a versioned
+//! envelope).
+//!
+//! File format (planned full file; header is what this module implements):
 //!   [4 bytes] magic: "KVC\x01"
 //!   [4 bytes] version: u32 = 1
 //!   [4 bytes] payload_abi: u32 = 1 (bumped when KV layout changes)
@@ -16,8 +24,10 @@
 //!   [payload] n_layers × n_tokens × kv_dim × sizeof(f32) bytes of V data
 //!
 //! Usage:
-//!   try checkpoint.save(allocator, kv_cache, path, n_layers, kv_dim, n_tokens);
-//!   const n_restored = try checkpoint.load(allocator, kv_cache, path, n_layers, kv_dim);
+//!   var buf: [28]u8 = undefined;
+//!   writeHeader(&buf, n_layers, kv_dim, n_tokens);
+//!   const h = readHeader(&buf);
+//!   try validateHeader(h, n_layers, kv_dim);
 //!
 //! Based on the KV checkpoint approach from antirez/ds4.
 

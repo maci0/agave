@@ -421,6 +421,17 @@ inline fn sigmoid(x: f32) f32 {
 
 // ── Unit tests ────────────────────────────────────────────────────────────────
 
+test "ConfidenceBlock.computeSurvival cumulative product" {
+    var c_data = [_]f32{ 0.9, 0.8, 0.5, 0.1 };
+    var block = ConfidenceBlock{ .c = &c_data };
+    block.computeSurvival();
+    try std.testing.expectEqual(@as(u32, 4), block.n);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.9), block.a[0], 1e-6);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.72), block.a[1], 1e-6);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.36), block.a[2], 1e-6);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.036), block.a[3], 1e-6);
+}
+
 test "MarkovHead.sampleGreedy applies transition bias" {
     // Simple 4-token vocab, rank 2.
     // W1 rows: token 0 → [1, 0], token 1 → [0, 1]
@@ -435,6 +446,21 @@ test "MarkovHead.sampleGreedy applies transition bias" {
     var bias: [4]f32 = undefined;
     const tok = head.sampleGreedy(&base, 0, &bias);
     try std.testing.expectEqual(@as(u32, 2), tok);
+    try std.testing.expectApproxEqAbs(@as(f32, 0), bias[0], 1e-6);
+    try std.testing.expectApproxEqAbs(@as(f32, 0), bias[1], 1e-6);
+    try std.testing.expectApproxEqAbs(@as(f32, 1), bias[2], 1e-6);
+    try std.testing.expectApproxEqAbs(@as(f32, -1), bias[3], 1e-6);
+}
+
+test "ConfidenceHead.confidence is sigmoid of concat dot" {
+    // d=2, r=1: w = [1, 0, 2], h = [1, 1], W1[0] = [0.5]
+    // dot = 1*1 + 0*1 + 2*0.5 = 2 → σ(2) ≈ 0.880797
+    const w = [_]f32{ 1, 0, 2 };
+    const w1 = [_]f32{ 0.5, 0, 0, 0 }; // vocab 4, rank 1
+    const head = ConfidenceHead{ .w = &w, .w1 = &w1, .hidden_dim = 2, .rank = 1 };
+    const h = [_]f32{ 1, 1 };
+    const c = head.confidence(&h, 0);
+    try std.testing.expectApproxEqAbs(@as(f32, 1.0 / (1.0 + @exp(-2.0))), c, 1e-5);
 }
 
 test "scheduleVerification single request greedy trim" {
@@ -454,13 +480,10 @@ test "scheduleVerification single request greedy trim" {
     scheduleVerification(&blocks, profile, &result, &scratch);
 
     // survival: [0.9, 0.72, 0.36, 0.036]
-    // Θ starts at R=1, SPS(1)=1 → Θ_0 = 1.0
-    // Add pos 0 (a=0.9): B=2, τ=1.9, Θ=1.9*SPS(2)=1.9 > 1.0 ✓ admit
-    // Add pos 1 (a=0.72): B=3, τ=2.62, Θ=2.62*SPS(3)=2.62 > 1.9 ✓ admit
-    // Add pos 2 (a=0.36): B=4, τ=2.98, Θ=2.98 > 2.62 ✓ admit
-    // Add pos 3 (a=0.036): B=5, τ=3.016, Θ=3.016 > 2.98 ✓ admit
-    // All admitted because SPS is flat.
-    try std.testing.expect(result.lengths[0] >= 1);
+    // Flat SPS admits every position: length=4, batch=1+4, τ=1+sum(a).
+    try std.testing.expectEqual(@as(u32, 4), result.lengths[0]);
+    try std.testing.expectEqual(@as(u32, 5), result.batch_size);
+    try std.testing.expectApproxEqAbs(@as(f32, 3.016), result.expected_accepts, 1e-5);
 }
 
 test "scheduleVerification drops low-confidence tokens under load" {
@@ -477,10 +500,11 @@ test "scheduleVerification drops low-confidence tokens under load" {
     var scratch: [128]Candidate = undefined;
     scheduleVerification(&blocks, profile, &result, &scratch);
 
-    // High-confidence tokens (a≈0.9, 0.81) should be admitted,
-    // low-confidence ones (a≈0.081, 0.0081) should be dropped.
-    try std.testing.expect(result.lengths[0] >= 1);
-    try std.testing.expect(result.lengths[0] <= 4);
+    // Θ(B=1)=10 → admit pos0 (a=0.9): Θ=15.2 → try pos1 (a=0.81): Θ=13.55 < 15.2 → stop.
+    // Only the first draft position survives under load.
+    try std.testing.expectEqual(@as(u32, 1), result.lengths[0]);
+    try std.testing.expectEqual(@as(u32, 2), result.batch_size);
+    try std.testing.expectApproxEqAbs(@as(f32, 1.9), result.expected_accepts, 1e-5);
 }
 
 test "SpsProfile synthetic compute bound decreases with batch" {

@@ -3182,3 +3182,125 @@ test "fuzz: vision form/json image extract + base64 + decode" {
         }
     }.f, .{});
 }
+
+// ── Additional high-risk untrusted surfaces ─────────────────────
+
+test "fuzz: deeply nested JSON extractObjectField + skip paths" {
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *Smith) !void {
+            // Craft nested objects/arrays so extractObjectField and message
+            // scanners exercise bracket-matching under adversarial depth.
+            const depth: usize = smith.indexWithHash(48, 0) + 1;
+            var body: [512]u8 = undefined;
+            var i: usize = 0;
+            const prefix = "{\"messages\":[{\"role\":\"user\",\"content\":";
+            if (prefix.len > body.len) return;
+            @memcpy(body[0..prefix.len], prefix);
+            i = prefix.len;
+            for (0..depth) |_| {
+                if (i + 1 >= body.len) break;
+                body[i] = '{';
+                i += 1;
+            }
+            const mid = "\"x\":\"";
+            if (i + mid.len >= body.len) return;
+            @memcpy(body[i..][0..mid.len], mid);
+            i += mid.len;
+            var payload: [32]u8 = undefined;
+            smith.bytesWithHash(&payload, 1);
+            const plen = smith.indexWithHash(payload.len + 1, 2);
+            for (payload[0..plen]) |*b| {
+                if (b.* < 0x20 or b.* == '"' or b.* == '\\') b.* = 'x';
+            }
+            const copy_len = @min(plen, body.len - i);
+            @memcpy(body[i..][0..copy_len], payload[0..copy_len]);
+            i += copy_len;
+            if (i + 1 >= body.len) return;
+            body[i] = '"';
+            i += 1;
+            for (0..depth) |_| {
+                if (i + 1 >= body.len) break;
+                body[i] = '}';
+                i += 1;
+            }
+            const suffix = "}]}";
+            if (i + suffix.len > body.len) return;
+            @memcpy(body[i..][0..suffix.len], suffix);
+            i += suffix.len;
+
+            _ = json.extractObjectField(body[0..i], "messages");
+            _ = json.extractObjectField(body[0..i], "content");
+            _ = json.extractLastMessage(body[0..i]);
+            if (json.extractMessages(body[0..i], std.testing.allocator)) |msgs| {
+                var m = msgs;
+                defer m.deinit(std.testing.allocator);
+                try std.testing.expect(m.messages.len <= 128);
+            }
+            const s = json.parseSampling(body[0..i]);
+            try std.testing.expect(std.math.isFinite(s.temperature));
+        }
+    }.f, .{});
+}
+
+test "fuzz: Anthropic stop_sequences + logit_bias structure-aware" {
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *Smith) !void {
+            var frag: [64]u8 = undefined;
+            smith.bytesWithHash(&frag, 0);
+            const flen = smith.indexWithHash(frag.len + 1, 1);
+            for (frag[0..flen]) |*b| {
+                if (b.* < 0x20 or b.* == '"' or b.* == '\\') b.* = 's';
+            }
+            var body: [384]u8 = undefined;
+            const n = std.fmt.bufPrint(&body,
+                \\{{"temperature":{d},"stop_sequences":["{s}","</s>"],"logit_bias":{{"{d}":{d},"999":-100}},"response_format":{{"type":"json_object"}}}}
+            , .{
+                @as(f32, @floatFromInt(smith.valueWithHash(u8, 2))) / 32.0,
+                frag[0..@min(flen, 24)],
+                smith.valueWithHash(u16, 3),
+                @as(i8, @bitCast(smith.valueWithHash(u8, 4))),
+            }) catch return;
+            const s = json.parseSampling(body[0..n.len]);
+            try std.testing.expect(s.n_stop <= 4);
+            try std.testing.expect(s.logit_bias_count <= 16);
+            try std.testing.expect(std.math.isFinite(s.temperature));
+            _ = s.matchesStop(frag[0..flen]);
+            _ = s.matchesStop("</s>");
+            _ = s.hasStop();
+        }
+    }.f, .{});
+}
+
+test "fuzz: grammar fromJsonSchema nested + maskLogits" {
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *Smith) !void {
+            const allocator = std.testing.allocator;
+            // Nested schema shapes that SchemaConverter walks recursively
+            var schema: [320]u8 = undefined;
+            const kinds = [_][]const u8{ "string", "number", "integer", "boolean", "object", "array" };
+            const kind = kinds[smith.indexWithHash(kinds.len, 0)];
+            const n = std.fmt.bufPrint(&schema,
+                \\{{"type":"object","properties":{{"a":{{"type":"{s}","enum":["x","y"]}},"b":{{"type":"array","items":{{"type":"string"}}}}}},"required":["a"]}}
+            , .{kind}) catch return;
+            var g = grammar_mod.Grammar.fromJsonSchema(allocator, schema[0..n.len]) catch {
+                // Also try raw bytes as schema
+                var raw: [128]u8 = undefined;
+                smith.bytesWithHash(&raw, 1);
+                const rlen = smith.indexWithHash(raw.len + 1, 2);
+                var g2 = grammar_mod.Grammar.fromJsonSchema(allocator, raw[0..rlen]) catch return;
+                defer g2.deinit();
+                return;
+            };
+            defer g.deinit();
+            var state = g.initState() catch return;
+            defer state.deinit();
+            const ch: u8 = smith.valueWithHash(u8, 3);
+            _ = state.acceptChar(ch);
+            var logits: [32]f32 = undefined;
+            for (&logits, 0..) |*v, i| v.* = @as(f32, @floatFromInt(smith.valueWithHash(i8, @truncate(i))));
+            // Empty vocab path must not crash maskLogits
+            g.maskLogits(&state, &logits, &.{}) catch {};
+            for (logits) |v| try std.testing.expect(!std.math.isNan(v));
+        }
+    }.f, .{});
+}

@@ -554,12 +554,14 @@ Multiple agave instances serving the same model can share prefix KV caches (LMCa
 # Instance A: compute system-prompt KV and export
 curl http://A:49453/v1/kv_cache?n_tokens=512 --output prefix.bin
 
-# Instance B: import prefix, skip prefill for shared tokens
+# Instance B: import prefix (sets kv_seq_len = N; clears prefix-cache token IDs)
 curl http://B:49453/v1/kv_cache?n_tokens=512 --data-binary @prefix.bin -X POST
 ```
 
-**GET `/v1/kv_cache?n_tokens=N`** → exports KV[0..N] as flat binary (layer₀_K | layer₀_V | layer₁_K | ...).  
+**GET `/v1/kv_cache?n_tokens=N`** → exports KV[0..N] as unversioned f32 binary (layer₀_K | layer₀_V | layer₁_K | ...).  
 **POST `/v1/kv_cache?n_tokens=N`** (body = binary) → imports and sets `kv_seq_len = N`.
+
+The blob has no prompt token IDs, so a following OpenAI-style request still re-prefills unless the server already has matching prefix-cache IDs from a local generation. Useful today for orchestrators that manage prefill themselves, or chat continuation via `kv_valid`. See [API.md](../API.md) and the Design Decisions table in [ARCHITECTURE.md](../ARCHITECTURE.md).
 
 Useful for shared system prompts: compute the prefix KV once on one instance, distribute to a fleet.
 

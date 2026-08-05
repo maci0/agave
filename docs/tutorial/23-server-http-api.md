@@ -88,23 +88,28 @@ Server-related flags from [`src/main.zig`](../../src/main.zig):
 | `--serve` | `-s` | | Start HTTP server (OpenAI + Anthropic API) |
 | `--port` | `-p` | `49453` | Server port |
 | `--host` | | `127.0.0.1` | Bind address: IPv4, `localhost`, `0.0.0.0`, or `0` |
-| `--api-key` | | | API key for auth (or `AGAVE_API_KEY` env). Required for non-loopback binds |
+| `--api-key` | | | API key for auth. Prefer `AGAVE_API_KEY` (env wins if both set). Required for non-loopback binds |
 | `--sleep-after N` | | `0` (disabled) | Enter sleep mode after N seconds idle; signals `/health` sleeping:true |
 | `--max-batch-size N` | | `8` | Max concurrent requests batched per scheduler cycle |
+| `--rate-limit-rpm N` | | `0` (unlimited) | Max requests per minute; enables token-bucket rate limiting |
+| `--rate-limit-tpm N` | | `0` (unlimited) | Max prompt tokens per minute; enables token-bucket rate limiting |
 | `--no-kv-cache` | | | Prefill-only / embedding server (no decode-phase KV cache) |
 
 ```bash
 # Basic server
 agave model.gguf --serve
 
-# Custom port and host, with API key
-agave model.gguf --serve --port 8080 --host 0.0.0.0 --api-key mysecret
+# Custom port and host (prefer env so the key is not in the process list)
+AGAVE_API_KEY=mysecret agave model.gguf --serve --port 8080 --host 0.0.0.0
 
 # Sleep mode after 5 minutes idle
 agave model.gguf --serve --sleep-after 300
 
 # Higher throughput for concurrent workloads
 agave model.gguf --serve --max-batch-size 16
+
+# Rate limiting (60 req/min, 100k prompt tokens/min)
+agave model.gguf --serve --rate-limit-rpm 60 --rate-limit-tpm 100000
 
 # Prefill-only / embedding server
 agave model.gguf --serve --no-kv-cache

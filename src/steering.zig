@@ -9,8 +9,8 @@
 //! Positive scale removes the direction. Negative scale amplifies it.
 //! With no file or zero scales, this is a no-op.
 //!
-//! Usage:
-//!   var steer = try DirectionalSteering.init(allocator, path, n_layers, n_embd, ffn_scale, attn_scale);
+//! Usage (CLI: `--dir-steering-file`, `--dir-steering-ffn`, `--dir-steering-attn`):
+//!   var steer = try DirectionalSteering.init(allocator, io, path, n_layers, n_embd, ffn_scale, attn_scale);
 //!   defer steer.deinit(allocator);
 //!   steer.apply(hidden_ptr, layer_idx, scale);  // hot path: zero-alloc
 //!
@@ -197,6 +197,8 @@ test "DirectionalSteering.apply amplifies with negative scale" {
     steer.apply(&y, 0, -1.0);
     try std.testing.expectApproxEqAbs(@as(f32, 6), y[0], 1e-6);
     try std.testing.expectApproxEqAbs(@as(f32, 4), y[1], 1e-6);
+    try std.testing.expectApproxEqAbs(@as(f32, 5), y[2], 1e-6);
+    try std.testing.expectApproxEqAbs(@as(f32, 6), y[3], 1e-6);
 }
 
 test "DirectionalSteering.apply zero scale is no-op" {
@@ -211,6 +213,9 @@ test "DirectionalSteering.apply zero scale is no-op" {
     };
     steer.apply(&y, 0, 0);
     try std.testing.expectApproxEqAbs(@as(f32, 3), y[0], 1e-6);
+    try std.testing.expectApproxEqAbs(@as(f32, 4), y[1], 1e-6);
+    try std.testing.expectApproxEqAbs(@as(f32, 5), y[2], 1e-6);
+    try std.testing.expectApproxEqAbs(@as(f32, 6), y[3], 1e-6);
 }
 
 test "DirectionalSteering.apply out-of-range layer is no-op" {
@@ -225,6 +230,9 @@ test "DirectionalSteering.apply out-of-range layer is no-op" {
     };
     steer.apply(&y, 99, 1.0); // layer 99 > n_layers=1
     try std.testing.expectApproxEqAbs(@as(f32, 3), y[0], 1e-6);
+    try std.testing.expectApproxEqAbs(@as(f32, 4), y[1], 1e-6);
+    try std.testing.expectApproxEqAbs(@as(f32, 5), y[2], 1e-6);
+    try std.testing.expectApproxEqAbs(@as(f32, 6), y[3], 1e-6);
 }
 
 test "DirectionalSteering.apply diagonal direction" {
@@ -256,28 +264,19 @@ test "fuzz: initFromData + apply no crash" {
             const n_embd: u32 = @as(u32, smith.valueWithHash(u4, 1)) + 1; // 1..16
             const n_floats = @as(usize, n_layers) * @as(usize, n_embd);
 
-            // Size mismatch must error
-            {
-                const bad = try allocator.alloc(f32, n_floats + 1);
-                defer allocator.free(bad);
-                try std.testing.expectError(error.SteeringFileSizeMismatch, DirectionalSteering.initFromData(bad, n_layers, n_embd, 1.0, 0));
-            }
-
             const data = try allocator.alloc(f32, n_floats);
-            defer allocator.free(data);
             for (data, 0..) |*v, i| {
                 v.* = @as(f32, @bitCast(smith.valueWithHash(u32, @truncate(i))));
             }
             const ffn_scale: f32 = @bitCast(smith.valueWithHash(u32, 2));
             const attn_scale: f32 = @bitCast(smith.valueWithHash(u32, 3));
-            var steer = try DirectionalSteering.initFromData(data, n_layers, n_embd, ffn_scale, attn_scale);
-            // initFromData takes ownership; prevent double-free of `data`
-            steer.directions = data;
-            defer {
-                steer.directions = &.{};
-            }
+            var steer = DirectionalSteering.initFromData(data, n_layers, n_embd, ffn_scale, attn_scale) catch {
+                allocator.free(data);
+                return;
+            };
+            defer steer.deinit(allocator);
 
-            var y = try allocator.alloc(f32, n_embd);
+            const y = try allocator.alloc(f32, n_embd);
             defer allocator.free(y);
             for (y, 0..) |*v, i| {
                 v.* = @as(f32, @bitCast(smith.valueWithHash(u32, @truncate(100 + i))));

@@ -6,6 +6,8 @@
 //!
 //! Tests and a future sim harness call setOverrideMs / advanceMs to drive
 //! timeouts, rate-limit refill, and scheduling priority from a single seed.
+//! Under override, sleepNs advances virtual time and returns immediately so
+//! poll loops do not block wall-clock time.
 //!
 //! The override is process-global (not thread-local). Tests that set it must
 //! `defer setOverrideMs(null)` and must not run concurrently with other tests
@@ -25,6 +27,11 @@ var override_ms: std.atomic.Value(i64) = .init(no_override);
 /// Install (or clear) a simulated millisecond clock. Pass null to restore wall time.
 pub fn setOverrideMs(ms: ?i64) void {
     override_ms.store(ms orelse no_override, .release);
+}
+
+/// True when milliNow/nanoNow/sleepNs are driven by the override (not the OS clock).
+pub fn isOverridden() bool {
+    return override_ms.load(.acquire) != no_override;
 }
 
 /// Advance the simulated clock by `delta` ms. If no override is set, seeds it
@@ -64,6 +71,23 @@ pub fn nanoNow() i96 {
     return @as(i96, ts.sec) * 1_000_000_000 + ts.nsec;
 }
 
+/// Sleep `ns` nanoseconds. Under a clock override, advances the virtual clock
+/// by floor(ns / 1e6) ms and returns immediately (no wall-clock block) so
+/// scheduler polls, sleep-mode monitors, and rate-limit waits are sim-driven.
+pub fn sleepNs(ns: u64) void {
+    if (isOverridden()) {
+        const ms: i64 = @intCast(ns / std.time.ns_per_ms);
+        if (ms > 0) advanceMs(ms);
+        return;
+    }
+    if (comptime is_freestanding) return;
+    const ts = std.posix.timespec{
+        .sec = @intCast(ns / std.time.ns_per_s),
+        .nsec = @intCast(ns % std.time.ns_per_s),
+    };
+    _ = std.c.nanosleep(&ts, null);
+}
+
 test "override freezes milliNow" {
     defer setOverrideMs(null);
     setOverrideMs(1_700_000_000_000);
@@ -80,4 +104,15 @@ test "advanceMs accumulates from wall when unset" {
     const t0 = milliNow();
     advanceMs(250);
     try std.testing.expectEqual(t0 + 250, milliNow());
+}
+
+test "sleepNs advances virtual clock when overridden" {
+    defer setOverrideMs(null);
+    setOverrideMs(1_000_000);
+    sleepNs(5 * std.time.ns_per_ms);
+    try std.testing.expectEqual(@as(i64, 1_000_005), milliNow());
+    // Sub-millisecond sleeps must not move the ms clock.
+    sleepNs(500_000);
+    try std.testing.expectEqual(@as(i64, 1_000_005), milliNow());
+    try std.testing.expect(isOverridden());
 }

@@ -19,8 +19,8 @@ zig build                                          # Build (ReleaseFast + Debug)
 ```
 
 `zig build` produces three binaries:
-- `zig-out/bin/agave` — ReleaseFast (optimized, ~5.3 MB)
-- `zig-out/bin/agave-debug` — Debug (safety checks, leak detection, ~13.4 MB)
+- `zig-out/bin/agave` — ReleaseFast (optimized; size varies with enabled models/backends)
+- `zig-out/bin/agave-debug` — Debug (safety checks, leak detection)
 - `zig-out/bin/agave-bench` — ReleaseFast micro-benchmark tool (`src/micro_bench.zig`)
 
 ## Project Structure
@@ -31,7 +31,7 @@ agave/
 ├── build.zig.zon          # Package metadata (zero external dependencies)
 ├── src/
 │   ├── main.zig           # CLI: arg parsing, format detection, model init, REPL, recipe application
-│   ├── cli.zig            # Self-contained CLI argument parser (zero deps, replaces clap)
+│   ├── cli.zig            # Self-contained CLI argument parser (zero deps)
 │   ├── arch.zig           # Architecture enum, detection, chat template mapping
 │   ├── pull.zig           # Model download from HuggingFace Hub (agave pull <org/repo>)
 │   ├── server/
@@ -46,6 +46,11 @@ agave/
 │   ├── recipe.zig         # Optional preset configs per model/hardware/quant combo
 │   ├── grammar.zig        # GBNF parser, JSON schema -> grammar converter, constrained decoding
 │   ├── calibrate.zig      # TriAttention calibration subcommand (agave calibrate)
+│   ├── steering.zig       # Directional steering (--dir-steering-file); activation projection
+│   ├── eval.zig           # Token NLL scoring library (scoreCase; no --eval CLI yet)
+│   ├── expert_profile.zig # MoE expert activation profiler (library; no CLI yet)
+│   ├── expert_cache.zig   # SSD expert LRU streaming cache (library; no CLI yet)
+│   ├── image_tokens.zig   # Multimodal image placeholder token IDs (shared by arch + chat_template)
 │   ├── test_exports.zig   # Test bridge re-exporting backend types for out-of-tree tests
 │   ├── thread_pool.zig    # Futex-based work-stealing thread pool
 │   ├── sim_clock.zig      # Injectable wall clock (deterministic tests / future sim harness)
@@ -121,7 +126,8 @@ agave/
 │   │   ├── manager.zig    # KV cache alloc/free, PagedKvCache, RadixTree
 │   │   ├── block_allocator.zig # Block allocation for paged KV cache
 │   │   ├── tiered.zig     # Tiered KV cache (VRAM + RAM + SSD)
-│   │   └── prefetch.zig   # Async block prefetching for tiered cache
+│   │   ├── prefetch.zig   # Async block prefetching for tiered cache
+│   │   └── checkpoint.zig # KV checkpoint header encode/validate (payload I/O not wired yet)
 │   ├── web/
 │   │   ├── app.js         # Chat UI JavaScript (SSE streaming, conversation management)
 │   │   ├── body.html      # Chat UI HTML body
@@ -145,10 +151,19 @@ Irreversible or high-cost choices. Rationale lives here so they are not re-litig
 | Backend dispatch | Tagged union + `inline else` (not vtable) | Zero indirect-call cost on every GEMV/SDPA | Dynamic plugin backends become a hard requirement |
 | Model dispatch | Comptime-generated vtable (`Model.from`) | Architectures differ too much for one tagged union; optional methods (EAGLE, MTP, SSM snapshot) need soft no-ops | VTable surface exceeds ~40 methods and most models leave half unused |
 | Quantization | Dequant inside kernels; no full f32 weight materialization on hot path | Bandwidth-bound decode; full dequant would dominate | A backend cannot express in-kernel dequant for a new format |
+| Weight I/O | mmap GGUF (SafeTensors secondary); no full materialize at load | UMA zero-copy; peak RSS ≈ working set | Discrete-GPU direct-to-VRAM (`cuFile`) becomes the common path |
+| KV memory model | Paged blocks + optional tiered VRAM/RAM/SSD | Prefix sharing, preemption, and demotion need non-contiguous layout | A target requires fully contiguous device-resident KV only |
+| HTTP surface | OpenAI + Anthropic shapes on one server | Clients already speak those protocols; one binary | A third incompatible protocol becomes a first-class requirement |
+| Scheduling | Continuous batching over paged KV (not one-request-at-a-time) | Multi-tenant throughput; matches vLLM-class serving | Single-user interactive REPL is the only deployment mode |
+| Spec CLI aliases | Normalize at parse (`medusa` → `mtp`); domain enum has no synonyms | Call sites must not re-branch on marketing names | A “alias” gains a divergent inference path |
 | Wall clock | `sim_clock` for server/scheduler/rate-limiter/tiered KV; MONOTONIC for interval timers (`perf`, `pull`, benches) | One injectable clock for deterministic timeout/refill tests; MONOTONIC avoids NTP skew in elapsed timing | Multi-threaded tests need per-thread virtual clocks |
 | Device discovery `BackendKind` | `cpu/metal/cuda/rocm/vulkan` only (no `webgpu`) | `--list-devices` / TP-PP target discrete GPUs; WebGPU is a single logical adapter (browser or wgpu), not multi-device topology | WebGPU multi-adapter or peer groups become real |
 | Server sleep mode | Flag in `/health` only; weights stay resident | Orchestrators need an idle signal without cold-start latency | Memory pressure requires actual weight unload / sleep-to-disk |
 | GPU missing kernels | `@panic` (fail closed), except documented cases (`embLookup`, small Metal softmax) | Silent CPU fallback hides broken builds and destroys latency | A new op is proven faster on CPU on UMA (must comment why) |
+| `max_tokens` cap | Tied to `gen_ids_buf_size` (4096) | Generation ID buffer cannot hold more tokens than the clamp | Streaming without a fixed ID buffer needs a higher cap |
+| HTTP KV prefix blob | Unversioned f32 layout: `layer0_K\|layer0_V\|…` (not `checkpoint.KVC`) | Hot path for LMCache-style fleet transfer; uniform-dim checkpoint header cannot express dual-attn / MLA per-layer `kvd` | Wire format gains magic/version + token IDs for safe API prefix reuse |
+| KV export implementors | Soft vtable stubs; only Gemma4 implements today | Avoid forcing every arch to stub; 501 when unsupported | A second architecture needs fleet KV transfer |
+| KV import vs prefix cache | Import clears `cached_prompt_ids`, sets `kv_valid` | Blob carries no token IDs; keeping old IDs would lie to `/info` and prefix matching | Blob (or sidecar) includes prompt token IDs so API `reset=true` can skip re-prefill |
 
 ## The Inference Pipeline
 

@@ -554,24 +554,25 @@ pub const TieredKvCache = struct {
         if (blk.tier != .ssd) return; // Already promoted by another thread
 
         const ssd = self.ssd_file orelse return error.SsdNotConfigured;
-
+        // Validate offset before allocating so a failed promote never leaves
+        // dangling pointers on the block (errdefer would free but not clear).
+        const offset = blk.ssd_offset orelse return error.SsdBlockNotSpilled;
         const slot_size = std.math.mul(usize, @as(usize, self.block_size), self.kv_dim) catch return error.OutOfMemory;
 
-        // Allocate RAM backing
-        blk.base.keys = try self.allocator.alloc(f32, slot_size);
-        errdefer self.allocator.free(blk.base.keys);
-        blk.base.values = try self.allocator.alloc(f32, slot_size);
-        errdefer self.allocator.free(blk.base.values);
+        const keys = try self.allocator.alloc(f32, slot_size);
+        errdefer self.allocator.free(keys);
+        const values = try self.allocator.alloc(f32, slot_size);
+        errdefer self.allocator.free(values);
 
         // Read from SSD using positioned I/O (pread) to avoid
         // seek+read races when prefetcher and scheduler access the file concurrently.
-        const offset = blk.ssd_offset orelse return error.SsdBlockNotSpilled;
-        const keys_bytes = std.mem.sliceAsBytes(blk.base.keys);
-        const values_bytes = std.mem.sliceAsBytes(blk.base.values);
+        const keys_bytes = std.mem.sliceAsBytes(keys);
+        const values_bytes = std.mem.sliceAsBytes(values);
         _ = try preadAll(ssd, keys_bytes, @intCast(offset));
         _ = try preadAll(ssd, values_bytes, @intCast(offset + keys_bytes.len));
 
-        // Update tier metadata
+        blk.base.keys = keys;
+        blk.base.values = values;
         blk.tier = .ram;
         blk.last_access_ms = milliTimestamp();
         _ = self.ram_used.fetchAdd(1, .monotonic);
@@ -579,10 +580,51 @@ pub const TieredKvCache = struct {
         std.log.debug("Promoted block {d} from SSD to RAM", .{block_id});
     }
 
+    /// Promote SSD→RAM with I/O outside tier_lock so the prefetcher worker
+    /// does not freeze alloc/free/promote for the duration of pread.
+    /// Concurrent promoters of the same block: loser discards its buffers.
     pub fn promoteFromSsd(self: *TieredKvCache, block_id: u32) !void {
+        const ssd, const offset, const slot_size = blk: {
+            self.lockTier();
+            defer self.unlockTier();
+            const b = &self.blocks[block_id];
+            if (b.tier != .ssd) return;
+            const file = self.ssd_file orelse return error.SsdNotConfigured;
+            const off = b.ssd_offset orelse return error.SsdBlockNotSpilled;
+            const size = std.math.mul(usize, @as(usize, self.block_size), self.kv_dim) catch return error.OutOfMemory;
+            break :blk .{ file, off, size };
+        };
+
+        var installed = false;
+        const keys = try self.allocator.alloc(f32, slot_size);
+        errdefer if (!installed) self.allocator.free(keys);
+        const values = try self.allocator.alloc(f32, slot_size);
+        errdefer if (!installed) self.allocator.free(values);
+
+        const keys_bytes = std.mem.sliceAsBytes(keys);
+        const values_bytes = std.mem.sliceAsBytes(values);
+        _ = try preadAll(ssd, keys_bytes, @intCast(offset));
+        _ = try preadAll(ssd, values_bytes, @intCast(offset + keys_bytes.len));
+
         self.lockTier();
         defer self.unlockTier();
-        return self.promoteFromSsdInner(block_id);
+        var b = &self.blocks[block_id];
+        // Drop if another promoter won, or the block was freed while we read
+        // (ref_count==0 on free list). Installing into a free SSD block would
+        // corrupt ram_used and hand live buffers to a recycled slot.
+        if (b.tier != .ssd or b.base.ref_count == 0) {
+            self.allocator.free(keys);
+            self.allocator.free(values);
+            installed = true; // disarm errdefer (already freed)
+            return;
+        }
+        b.base.keys = keys;
+        b.base.values = values;
+        installed = true;
+        b.tier = .ram;
+        b.last_access_ms = milliTimestamp();
+        _ = self.ram_used.fetchAdd(1, .monotonic);
+        std.log.debug("Promoted block {d} from SSD to RAM", .{block_id});
     }
 
     /// Free a block and return to appropriate tier free list.

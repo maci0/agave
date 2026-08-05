@@ -30,6 +30,11 @@ pub const quant_block_elems: usize = 32;
 pub const q8_0_block_bytes: usize = 34;
 /// Bytes per Q4_0 block: f16 scale (2) + 16 nibble bytes = 18.
 pub const q4_0_block_bytes: usize = 18;
+/// IQ4_NL: 18 bytes per 32-element block (same layout as Q4_0).
+pub const iq4_nl_block_bytes: usize = 18;
+/// IQ4_XS: 136 bytes per 256-element super-block.
+/// Layout: f16 d (2) + u16 scales_h (2) + u8 scales_l[4] (4) + u8 qs[128] (128).
+pub const iq4_xs_block_bytes: usize = 136;
 /// Elements per IQ4_XS super-block (8×32 sub-blocks).
 const iq4_xs_block_elems: usize = 256;
 /// IQ4_XS sub-scale unit: (s - 32) is mapped through this factor (1/16).
@@ -241,7 +246,7 @@ pub fn dequantToF32(output: []f32, data: [*]const u8, dtype: DType, n: usize) vo
             // IQ4_NL: 18 bytes/32 elements. f16 scale + 16 nibble bytes via iq4nl_table.
             // Split packing: elements [0..15] use low nibbles, [16..31] use high nibbles.
             // (Matches gemvIQ4_NL split packing; different from Q4_0 interleaved packing.)
-            const bpb = @import("../backend/backend.zig").iq4_nl_block_bytes;
+            const bpb = iq4_nl_block_bytes;
             const qk = quant_block_elems;
             const nb = (n + qk - 1) / qk;
             for (0..nb) |b| {
@@ -266,7 +271,7 @@ pub fn dequantToF32(output: []f32, data: [*]const u8, dtype: DType, n: usize) vo
             //   qs       u8[128][8..135] 256 nibbles via iq4nl_table
             // Sub-scale for sub-block ib: s = low4 | (high2 << 4), range 0..63
             // Effective: d * (s - 32) * iq4_xs_scale_unit * iq4nl_table[nibble]
-            const bpb = @import("../backend/backend.zig").iq4_xs_block_bytes;
+            const bpb = iq4_xs_block_bytes;
             const qk = iq4_xs_block_elems;
             const nb = (n + qk - 1) / qk;
             for (0..nb) |b| {

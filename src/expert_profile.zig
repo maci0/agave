@@ -6,11 +6,11 @@
 //!   2. SSD streaming cache policy (which experts to keep resident)
 //!   3. Quality diagnostics (expert load balance)
 //!
-//! Usage:
-//!   var profile = ExpertProfile.init(allocator, n_layers, n_experts);
+//! Library API (no CLI flag yet; call from model/MoE paths or tests):
+//!   var profile = try ExpertProfile.init(allocator, n_layers, n_experts);
 //!   defer profile.deinit(allocator);
-//!   profile.record(layer, expert_id);  // called per routed expert per token
-//!   try profile.writeJson(path);       // dump to file
+//!   profile.record(layer, expert_id);  // hot path: zero-alloc
+//!   try profile.writeJson(allocator, path);
 //!
 //! Based on expert profiling from antirez/ds4.
 
@@ -97,29 +97,28 @@ pub const ExpertProfile = struct {
 
     /// Write profile data as JSON to a file path.
     pub fn writeJson(self: *const ExpertProfile, allocator: Allocator, path: []const u8) !void {
-        var buf = std.ArrayList(u8).init(allocator);
-        defer buf.deinit();
-        const writer = buf.writer();
+        var buf: std.ArrayList(u8) = .empty;
+        defer buf.deinit(allocator);
 
-        try writer.writeAll("{\n");
-        try writer.print("  \"n_layers\": {d},\n", .{self.n_layers});
-        try writer.print("  \"n_experts\": {d},\n", .{self.n_experts});
-        try writer.print("  \"total_tokens\": {d},\n", .{self.total_tokens});
-        try writer.writeAll("  \"layers\": [\n");
+        try buf.appendSlice(allocator, "{\n");
+        try buf.print(allocator, "  \"n_layers\": {d},\n", .{self.n_layers});
+        try buf.print(allocator, "  \"n_experts\": {d},\n", .{self.n_experts});
+        try buf.print(allocator, "  \"total_tokens\": {d},\n", .{self.total_tokens});
+        try buf.appendSlice(allocator, "  \"layers\": [\n");
 
         for (0..self.n_layers) |li| {
             const base = li * self.n_experts;
-            try writer.writeAll("    [");
+            try buf.appendSlice(allocator, "    [");
             for (0..self.n_experts) |ei| {
-                if (ei > 0) try writer.writeAll(", ");
-                try writer.print("{d}", .{self.counts[base + ei]});
+                if (ei > 0) try buf.appendSlice(allocator, ", ");
+                try buf.print(allocator, "{d}", .{self.counts[base + ei]});
             }
-            try writer.writeByte(']');
-            if (li < self.n_layers - 1) try writer.writeByte(',');
-            try writer.writeByte('\n');
+            try buf.appendSlice(allocator, "]");
+            if (li < self.n_layers - 1) try buf.appendSlice(allocator, ",");
+            try buf.appendSlice(allocator, "\n");
         }
 
-        try writer.writeAll("  ]\n}\n");
+        try buf.appendSlice(allocator, "  ]\n}\n");
 
         const file = try std.fs.cwd().createFile(path, .{});
         defer file.close();
@@ -165,4 +164,41 @@ test "ExpertProfile topExperts" {
     try std.testing.expectEqual(@as(u32, 2), top[0]); // highest: 3 activations
     try std.testing.expectEqual(@as(u32, 0), top[1]); // second: 2 activations
     try std.testing.expectEqual(@as(u32, 3), top[2]); // third: 1 activation
+}
+
+test "fuzz: record + topExperts bounds" {
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *std.testing.Smith) !void {
+            const allocator = std.testing.allocator;
+            const n_layers: u32 = @as(u32, smith.valueWithHash(u3, 0)) + 1; // 1..8
+            const n_experts: u32 = @as(u32, smith.valueWithHash(u4, 1)) + 1; // 1..16
+            var profile = try ExpertProfile.init(allocator, n_layers, n_experts);
+            defer profile.deinit(allocator);
+
+            // Oversized dims must reject
+            try std.testing.expectError(error.ProfileDimensionTooLarge, ExpertProfile.init(allocator, max_layers + 1, 1));
+            try std.testing.expectError(error.ProfileDimensionTooLarge, ExpertProfile.init(allocator, 1, max_experts + 1));
+
+            const rounds = smith.valueWithHash(u5, 2) + 1;
+            for (0..rounds) |i| {
+                profile.record(smith.valueWithHash(u8, @truncate(10 + i)), smith.valueWithHash(u8, @truncate(20 + i)));
+                profile.recordToken();
+            }
+
+            var out: [16]u32 = undefined;
+            const k = smith.valueWithHash(u8, 3);
+            const layer = smith.valueWithHash(u8, 4);
+            const written = profile.topExperts(layer, k, &out);
+            try std.testing.expect(written <= out.len);
+            if (layer >= n_layers) {
+                try std.testing.expect(written == 0);
+            } else {
+                try std.testing.expect(written <= @min(@min(k, n_experts), @as(u32, @intCast(out.len))));
+            }
+            for (out[0..written]) |id| {
+                try std.testing.expect(id < n_experts);
+            }
+            _ = profile.getCount(layer, smith.valueWithHash(u8, 5));
+        }
+    }.f, .{});
 }

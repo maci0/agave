@@ -205,10 +205,10 @@ pub const q5_k_block_bytes: usize = 176;
 /// Q6_K: 210 bytes per 256-element super-block.
 pub const q6_k_block_bytes: usize = 210;
 /// IQ4_NL: 18 bytes per 32-element block (same layout as Q4_0).
-pub const iq4_nl_block_bytes: usize = 18;
+pub const iq4_nl_block_bytes: usize = quant_ops.iq4_nl_block_bytes;
 /// IQ4_XS: 136 bytes per 256-element super-block.
 /// Layout: f16 d (2) + u16 scales_h (2) + u8 scales_l[4] (4) + u8 qs[128] (128).
-pub const iq4_xs_block_bytes: usize = 136;
+pub const iq4_xs_block_bytes: usize = quant_ops.iq4_xs_block_bytes;
 /// MXFP4: 16B quants + 1B scale = 17 bytes per 32-element block.
 pub const mxfp4_block_bytes: usize = 17;
 /// NVFP4: 8B quants + 1B scale = 9 bytes per 16-element block.

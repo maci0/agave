@@ -20,8 +20,13 @@ must still appear under **Changed** or **Breaking** below. See
   warning and continued). Fix typos or remove unrecognized flags.
 - CLI: an option value that looks like another flag (e.g. `--port --host`) now
   exits with code 2 instead of a warning. Pass an explicit value for each option.
+- CLI: `--flag=value` on a boolean flag (e.g. `--quiet=true`) now exits with
+  code 2 instead of treating the flag as set. Use the bare flag (`--quiet`).
 - Auth: when both `--api-key` and `AGAVE_API_KEY` are set, `AGAVE_API_KEY` wins
   (previously the CLI flag won). Prefer setting only the env var.
+- HTTP: browser cross-origin requests to a server with no API key return `403`
+  with `code: cross_origin_forbidden` (CSRF protection). Set `AGAVE_API_KEY` or
+  `--api-key`, or call same-origin / non-browser clients.
 - HTTP: `/v1/kv_cache` error `type` is now `invalid_request_error` (was
   `invalid_request`) for missing/invalid `n_tokens` and import failures. Align
   client checks with OpenAI-style `invalid_request_error`.
@@ -33,6 +38,11 @@ must still appear under **Changed** or **Breaking** below. See
 - Server env fallbacks: `AGAVE_HOST` and `AGAVE_PORT` when `--host` / `--port`
   are omitted (`--host` / `--port` still win when set). Documented in `--help`
   and Docker examples.
+- Server rate limiting: `--rate-limit-rpm` / `--rate-limit-tpm` (token bucket;
+  `0` = unlimited / off). Exceeded limits return `429` with `Retry-After`.
+- Local Compose path: `docker-compose.yml` + `.env.example` (`AGAVE_API_KEY`
+  required; publish defaults to `127.0.0.1`).
+- CLI: short flag clusters and attached short-option values (e.g. `-qV`, `-n128`).
 
 ### Fixed
 - GPT-OSS / MXFP4 SafeTensors: group size corrected to 16 and block scales decoded
@@ -53,6 +63,8 @@ must still appear under **Changed** or **Breaking** below. See
 - `--max-batch-size` help no longer claims default `1`; runtime default remains `8`
 - Non-loopback `--serve` without a key still requires auth; prefer `AGAVE_API_KEY`
   over `--api-key` (process-list exposure)
+- HTTP JSON errors more often include machine-readable `param` and `code` (additive
+  for clients that ignore unknown fields; see `docs/API.md`)
 
 ## 2026-06-30 — DSpark Speculative Decoding
 

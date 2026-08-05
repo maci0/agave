@@ -4,9 +4,13 @@
 //!   - `--flag` boolean flags
 //!   - `--option value` or `--option=value` string options
 //!   - `-f` short flags (mapped via ArgSpec)
-//!   - `-f value` short options (mapped via ArgSpec)
+//!   - `-abc` short flag clusters (boolean flags only; option chars must be last)
+//!   - `-f value` or `-fVALUE` short options (mapped via ArgSpec)
 //!   - `--` stops option parsing (everything after is positional)
 //!   - Bare arguments (no `-` prefix) are positional
+//!
+//! `--flag=value` on a boolean flag is recorded in `options` (not `flags`) so
+//! callers can reject it; do not treat that as the flag being set.
 
 const std = @import("std");
 
@@ -141,8 +145,9 @@ pub fn parse(allocator: std.mem.Allocator, args: std.process.Args, specs: []cons
                     if (spec.kind == .option) {
                         result.options.put(name, value) catch @panic("out of memory");
                     } else {
-                        // --flag=value is unusual but store as flag
-                        result.flags.put(name, {}) catch @panic("out of memory");
+                        // Boolean --flag=value: keep in options so callers can error
+                        // (do not set the flag; --help=1 must not act like --help).
+                        result.options.put(name, value) catch @panic("out of memory");
                     }
                 } else {
                     // Unknown --name=value: store as option anyway
@@ -171,23 +176,49 @@ pub fn parse(allocator: std.mem.Allocator, args: std.process.Args, specs: []cons
             continue;
         }
 
-        // Short option: -X
-        if (arg.len == 2 and arg[0] == '-' and arg[1] != '-') {
-            const ch = arg[1];
-            if (findByShort(specs, ch)) |spec| {
+        // Short option: -X, -abc (flag cluster), or -n512 / -n 512 (option)
+        if (arg.len >= 2 and arg[0] == '-' and arg[1] != '-') {
+            // Validate the whole cluster first. Applying flags then falling back
+            // to positional on a mid-cluster typo (e.g. -qZ) would both set the
+            // flag and treat "-qZ" as a model path.
+            var vi: usize = 1;
+            var cluster_ok = true;
+            while (vi < arg.len) {
+                const ch = arg[vi];
+                if (findByShort(specs, ch)) |spec| {
+                    if (spec.kind == .flag) {
+                        vi += 1;
+                    } else {
+                        break; // option consumes the rest (or next argv)
+                    }
+                } else {
+                    cluster_ok = false;
+                    break;
+                }
+            }
+            if (!cluster_ok) {
+                result.positionals.append(allocator, arg) catch @panic("out of memory");
+                continue;
+            }
+            var i: usize = 1;
+            while (i < arg.len) {
+                const ch = arg[i];
+                const spec = findByShort(specs, ch).?;
                 if (spec.kind == .flag) {
                     result.flags.put(spec.long, {}) catch @panic("out of memory");
+                    i += 1;
                 } else {
-                    // Option: consume next arg as value
-                    if (iter.next()) |val| {
+                    // Option must be last in the cluster; attached rest or next argv.
+                    const rest = arg[i + 1 ..];
+                    if (rest.len > 0) {
+                        result.options.put(spec.long, rest) catch @panic("out of memory");
+                    } else if (iter.next()) |val| {
                         result.options.put(spec.long, val) catch @panic("out of memory");
                     } else {
                         result.missing_value = spec.long;
                     }
+                    break;
                 }
-            } else {
-                // Unknown short: treat as positional (callers may reject letter-only typos)
-                result.positionals.append(allocator, arg) catch @panic("out of memory");
             }
             continue;
         }
@@ -271,6 +302,41 @@ test "parse missing option value sets missing_value" {
     try std.testing.expect(r.option("backend") == null);
 }
 
+test "boolean flag with equals goes to options not flags" {
+    const specs = [_]ArgSpec{
+        .{ .long = "quiet", .short = 'q' },
+        .{ .long = "help", .short = 'h' },
+    };
+
+    const argv = [_][*:0]const u8{ "agave", "--quiet=true", "--help=1" };
+    const args = std.process.Args{ .vector = &argv };
+    var r = parse(std.testing.allocator, args, &specs);
+    defer r.deinit();
+
+    try std.testing.expect(!r.flag("quiet"));
+    try std.testing.expect(!r.flag("help"));
+    try std.testing.expectEqualStrings("true", r.option("quiet").?);
+    try std.testing.expectEqualStrings("1", r.option("help").?);
+}
+
+test "short flag cluster and attached option value" {
+    const specs = [_]ArgSpec{
+        .{ .long = "quiet", .short = 'q' },
+        .{ .long = "verbose", .short = 'V' },
+        .{ .long = "max-tokens", .short = 'n', .kind = .option },
+    };
+
+    const argv = [_][*:0]const u8{ "agave", "-qV", "-n128", "model.gguf" };
+    const args = std.process.Args{ .vector = &argv };
+    var r = parse(std.testing.allocator, args, &specs);
+    defer r.deinit();
+
+    try std.testing.expect(r.flag("quiet"));
+    try std.testing.expect(r.flag("verbose"));
+    try std.testing.expectEqual(@as(?u32, 128), r.optionU32("max-tokens"));
+    try std.testing.expectEqualStrings("model.gguf", r.positional(0).?);
+}
+
 test "parse unknown short treated as positional" {
     const specs = [_]ArgSpec{
         .{ .long = "help", .short = 'h' },
@@ -282,6 +348,23 @@ test "parse unknown short treated as positional" {
     defer r.deinit();
 
     try std.testing.expectEqualStrings("-x", r.positional(0).?);
+    try std.testing.expectEqualStrings("model.gguf", r.positional(1).?);
+}
+
+test "unknown char mid-cluster does not partially set flags" {
+    const specs = [_]ArgSpec{
+        .{ .long = "quiet", .short = 'q' },
+        .{ .long = "verbose", .short = 'V' },
+    };
+
+    const argv = [_][*:0]const u8{ "agave", "-qZ", "model.gguf" };
+    const args = std.process.Args{ .vector = &argv };
+    var r = parse(std.testing.allocator, args, &specs);
+    defer r.deinit();
+
+    try std.testing.expect(!r.flag("quiet"));
+    try std.testing.expect(!r.flag("verbose"));
+    try std.testing.expectEqualStrings("-qZ", r.positional(0).?);
     try std.testing.expectEqualStrings("model.gguf", r.positional(1).?);
 }
 

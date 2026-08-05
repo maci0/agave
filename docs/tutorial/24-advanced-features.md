@@ -4,13 +4,13 @@
 
 **Time:** ~20 min
 
-> After this chapter you can explain directional steering, NLL quality testing, expert profiling, KV checkpointing, mixed-quant splicing, and SSD expert streaming.
+> After this chapter you can explain directional steering (CLI), NLL quality scoring (library), expert profiling (library), KV checkpoint headers (library), mixed-quant splicing (tooling), and SSD expert streaming (library).
 
-This chapter covers six features that extend Agave beyond basic inference: runtime behavior control, quality measurement, MoE optimization, session persistence, model compression tooling, and memory-constrained expert loading.
+This chapter covers six related capabilities. Only **directional steering** is wired to CLI flags today. The others ship as library modules and/or Python tools; call them from code or tooling until CLI wiring lands.
 
 ---
 
-## 1. Directional Steering
+## 1. Directional Steering (CLI)
 
 **Directional steering** is a runtime activation edit that controls model behavior without fine-tuning. A steering file contains one normalized direction vector per layer (`n_layers × n_embd` floats). During inference, the direction is projected out of (or into) the activation after each layer:
 
@@ -22,7 +22,7 @@ y = y - scale * direction[layer] * dot(direction[layer], y)
 - **Negative scale** amplifies the direction
 - **Zero scale** = no-op
 
-The FFN output is the recommended hook point — it carries style, behavior, and topic signals. Attention steering is available but more fragile.
+The FFN output is the recommended hook point: it carries style, behavior, and topic signals. Attention steering is available but more fragile.
 
 ```bash
 # Suppress verbosity (FFN steering, scale 1.0 default)
@@ -61,7 +61,7 @@ python3 tools/dir-steering/build_direction.py \
 
 ---
 
-## 2. Quality Testing (NLL Scoring)
+## 2. Quality Testing (NLL Scoring) — library + tooling
 
 **Token-by-token NLL** (negative log-likelihood) measures how much probability a local model assigns to each ground-truth token from a reference model. Lower NLL = the local model more closely matches the reference.
 
@@ -69,31 +69,32 @@ python3 tools/dir-steering/build_direction.py \
 NLL = -mean(log P(correct_token_i)) across all continuation tokens
 ```
 
-This is more rigorous than "does the output look right" — it directly quantifies quality loss from quantization without requiring full benchmark suites.
+This is more rigorous than "does the output look right": it quantifies quality loss from quantization without a full benchmark suite.
 
-### Workflow
+There is **no `--eval` CLI flag** yet. Collect continuations with the Python tool, then call `eval.scoreCase` from Zig (tests or a thin harness):
 
 ```bash
-# 1. Collect greedy continuations from official API
+# Collect greedy continuations from a reference API
 python3 tools/quality-testing/collect_continuations.py \
     --endpoint https://api.deepseek.com/chat/completions \
     --model deepseek-v4-flash \
     --prompts prompts.txt \
     --out continuations.jsonl
-
-# 2. Score local model against those continuations
-agave model-q4.gguf --eval continuations.jsonl    # NLL: 1.234
-agave model-q8.gguf --eval continuations.jsonl    # NLL: 0.987
-agave model-f16.gguf --eval continuations.jsonl   # NLL: 0.954
 ```
 
-The metric also reports **argmax accuracy** — the fraction of positions where the local model's greedy prediction matches the reference token.
+```zig
+// Library API in src/eval.zig
+const result = eval.scoreCase(model, prompt_ids, continuation_ids) orelse return error.EvalFailed;
+// result.mean_nll, result.n_correct_argmax / result.n_tokens
+```
+
+The metric also reports **argmax accuracy**: the fraction of positions where the local model's greedy prediction matches the reference token.
 
 **Implementation:** [`src/eval.zig`](../../src/eval.zig) (`scoreCase()`, `EvalResult`), [`tools/quality-testing/`](../../tools/quality-testing/) (collection scripts).
 
 ---
 
-## 3. Expert Hotlist Profiling
+## 3. Expert Hotlist Profiling — library
 
 For MoE models, **expert profiling** tracks which routed experts are activated during inference. The resulting frequency data tells you:
 
@@ -101,38 +102,46 @@ For MoE models, **expert profiling** tracks which routed experts are activated d
 - Whether expert load is balanced (training quality signal)
 - Which experts to pin in the SSD streaming cache (section 6)
 
-```bash
-# Run inference with profiling enabled
-agave model.gguf --expert-profile profile.json "long prompt..."
+There is **no `--expert-profile` CLI flag** yet. Use the library from MoE forward paths or tests:
+
+```zig
+var profile = try ExpertProfile.init(allocator, n_layers, n_experts);
+defer profile.deinit(allocator);
+profile.record(layer, expert_id); // per routed expert
+profile.recordToken();
+try profile.writeJson(allocator, "profile.json");
 ```
 
-The profile records per-layer, per-expert activation counts. The `topExperts()` function extracts the top-K most active experts per layer for hotlist generation.
+The profile records per-layer, per-expert activation counts. `topExperts()` extracts the top-K most active experts per layer for hotlist generation.
 
 **Implementation:** [`src/expert_profile.zig`](../../src/expert_profile.zig) (`ExpertProfile`, zero-alloc `record()` in hot path).
 
 ---
 
-## 4. KV Cache Disk Checkpointing
+## 4. KV Cache Disk Checkpointing — header only
 
-**KV checkpointing** serializes the KV cache state to disk so that long system prompts and conversation prefixes don't need re-prefilling after a server restart.
+**KV checkpointing** is intended to serialize KV cache state to disk so long system prompts need not be re-prefilled after a restart.
 
-The file format is versioned:
+Today [`src/kvcache/checkpoint.zig`](../../src/kvcache/checkpoint.zig) implements the **versioned 28-byte header** only (`writeHeader` / `readHeader` / `validateHeader`). Full payload `save` / `load` and CLI flags are **not wired yet**.
+
+Planned file format:
 
 ```text
 [4 bytes] magic: "KVC\x01"
 [4 bytes] version: u32
 [4 bytes] payload_abi: u32 (bumped when KV layout changes)
 [4 bytes] n_layers, [4 bytes] kv_dim, [4 bytes] n_tokens
+[4 bytes] reserved
 [payload] K data, then V data
 ```
 
-The `payload_abi` field is separate from the file version — the outer envelope stays stable while internal KV layout (quantization type, dimension order) can change between releases without silent corruption.
+The `payload_abi` field is separate from the file version: the outer envelope stays stable while internal KV layout (quantization type, dimension order) can change between releases without silent corruption.
 
-**Implementation:** [`src/kvcache/checkpoint.zig`](../../src/kvcache/checkpoint.zig) (header format, validation).
+**Implementation:** [`src/kvcache/checkpoint.zig`](../../src/kvcache/checkpoint.zig) (header format and validation).
 
 ---
 
-## 5. Mixed-Quant Expert Splicing
+## 5. Mixed-Quant Expert Splicing — tooling
 
 **Mixed-quant splicing** creates a GGUF where most routed experts use an aggressive quantization (e.g. IQ2_XXS) but selected layers' experts are replaced with a higher-quality quantization (e.g. Q4_K) from a donor file.
 
@@ -145,32 +154,33 @@ python3 tools/mixed-quant/splice_mixed_experts.py \
     --dry-run  # preview first
 ```
 
-The result is a model that's nearly as small as the aggressive quant but with higher quality in the final layers (where quantization loss has the most impact on output quality). Only routed expert tensors are replaced — shared experts, projections, and routing weights stay from the base file.
+The result is nearly as small as the aggressive quant but with higher quality in the final layers (where quantization loss hurts output most). Only routed expert tensors are replaced; shared experts, projections, and routing weights stay from the base file.
 
 **Implementation:** [`tools/mixed-quant/`](../../tools/mixed-quant/) (GGUF splicer).
 
 ---
 
-## 6. SSD Expert Streaming
+## 6. SSD Expert Streaming — library
 
-**SSD streaming** enables running MoE models that don't fit in RAM by keeping only a cache of hot experts resident and streaming cold experts from the mmap'd model file on demand.
+**SSD streaming** keeps a cache of hot MoE experts resident and streams cold experts from the mmap'd model file on demand.
 
 The cache uses LRU eviction with `madvise(WILLNEED)` prefetching:
 
 1. Router selects experts for the current token
 2. For each selected expert: check if it's in the cache
 3. **Cache hit**: use the resident weights directly (zero cost)
-4. **Cache miss**: evict the LRU expert, `madvise(WILLNEED)` the new expert's byte range to trigger background SSD page-in, then use the weights once they're faulted in
+4. **Cache miss**: evict the LRU expert, `madvise(WILLNEED)` the new expert's byte range, then use the weights once faulted in
 
-```bash
-# Enable SSD streaming with 32 expert slots cached
-agave model.gguf --ssd-streaming --ssd-cache-experts 32 "prompt"
+There is **no `--ssd-streaming` / `--ssd-cache-*` CLI** yet. Tiered KV SSD (`--kv-tiers vram+ram+ssd`) is a different feature. Wire `ExpertCache` from MoE paths:
 
-# Set explicit byte budget
-agave model.gguf --ssd-streaming --ssd-cache-bytes 4G "prompt"
+```zig
+var cache = try ExpertCache.init(allocator, n_layers, n_experts, 32);
+defer cache.deinit(allocator);
+_ = cache.touch(layer, expert_id);
+cache.prefetch(layer, expert_id, weight_ptr, expert_bytes);
 ```
 
-The expert hotlist (section 3) integrates with the cache: profiled hot experts can be pinned so they're never evicted, ensuring the most-routed experts always hit the fast path.
+The expert hotlist (section 3) can pin profiled hot experts so they are never evicted.
 
 **Implementation:** [`src/expert_cache.zig`](../../src/expert_cache.zig) (`ExpertCache`, LRU eviction, `madvise` prefetch).
 
@@ -180,13 +190,13 @@ The expert hotlist (section 3) integrates with the cache: profiled hot experts c
 
 - **Steering direction quality depends on prompt diversity.** A direction built from 5 prompt pairs will be noisy and may cause repetition or nonsense at strong scales. Use 50-100 pairs for reliable results. Start with FFN scales between `-1` and `2`; if the model degrades, reduce the scale.
 - **NLL scoring requires greedy (temperature=0) reference continuations.** If the reference was sampled with temperature > 0, the NLL metric becomes a noisy measure of sampling luck rather than model quality.
-- **KV checkpoint payload ABI must match exactly.** A checkpoint saved with one KV quantization type (e.g. TurboQuant) cannot be loaded into a session using a different type (e.g. f16). The `payload_abi` field catches this, but the mismatch error doesn't tell you *which* setting differs.
-- **SSD streaming adds latency variance.** Cache hits are free; cache misses incur SSD read latency (tens of microseconds on NVMe, milliseconds on SATA). Token generation speed will be bimodal — fast for common expert paths, slower for rare ones. Expert profiling + pinning reduces but doesn't eliminate this variance.
-- **Mixed-quant splicing requires compatible GGUFs.** The base and donor files must have the same architecture, layer count, expert count, and tensor naming. Splicing between incompatible files produces silent corruption, not an error.
+- **KV checkpoint payload ABI must match exactly** once payload I/O exists. A checkpoint saved with one KV quantization type cannot load into a session using a different type. The `payload_abi` field is meant to catch that.
+- **SSD streaming adds latency variance** when wired. Cache hits are free; misses incur SSD read latency. Expert profiling + pinning reduces but does not eliminate variance.
+- **Mixed-quant splicing requires compatible GGUFs.** The base and donor files must share architecture, layer count, expert count, and tensor naming. Splicing incompatible files produces silent corruption, not an error.
 
 ---
 
-**In the code:** [`src/steering.zig`](../../src/steering.zig) (directional steering), [`src/eval.zig`](../../src/eval.zig) (NLL evaluation), [`src/expert_profile.zig`](../../src/expert_profile.zig) (expert profiling), [`src/kvcache/checkpoint.zig`](../../src/kvcache/checkpoint.zig) (KV checkpointing), [`src/expert_cache.zig`](../../src/expert_cache.zig) (SSD expert streaming), [`tools/`](../../tools/) (Python tooling)
+**In the code:** [`src/steering.zig`](../../src/steering.zig) (directional steering, CLI), [`src/eval.zig`](../../src/eval.zig) (NLL `scoreCase`), [`src/expert_profile.zig`](../../src/expert_profile.zig) (expert profiling), [`src/kvcache/checkpoint.zig`](../../src/kvcache/checkpoint.zig) (checkpoint header), [`src/expert_cache.zig`](../../src/expert_cache.zig) (SSD expert streaming), [`tools/`](../../tools/) (Python tooling)
 
 **Next:** [Appendix: Troubleshooting →](appendix-troubleshooting.md) | **Back:** [Chapter 23: Server / HTTP API ←](23-server-http-api.md)
 
@@ -202,7 +212,7 @@ The expert hotlist (section 3) integrates with the cache: profiled hot experts c
 
 **expert hotlist** — The set of most-frequently-routed experts per layer, identified by profiling and optionally pinned in the expert cache to guarantee fast-path access.
 
-**KV checkpoint** — A versioned binary file storing serialized KV cache state (keys and values for all layers at all cached positions), enabling session persistence across restarts.
+**KV checkpoint** — A versioned binary envelope for serialized KV cache state; header encode/validate ships today, full save/load is not wired yet.
 
 **mixed-quant splicing** — Creating a GGUF where selected layers' routed experts use a higher quantization from a donor file while other layers keep the base file's aggressive quantization.
 

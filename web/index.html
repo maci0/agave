@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+<!-- Browser WASM shell (standalone). Distinct from src/web/ (HTTP --serve chat UI). -->
 <html lang="en">
 <head>
     <meta charset="UTF-8">
@@ -14,11 +15,13 @@
             --accent-hover: #6bb83f;
             --accent-ink: #1a1a2e;
             --focus: #5aad35;
+            /* Borders meet WCAG 1.4.11 (≥3:1) against bg/surface */
+            --border: #777777;
         }
         * { margin: 0; padding: 0; box-sizing: border-box; }
         html { color-scheme: dark; }
         body { font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', 'Noto Sans Arabic', 'Noto Sans CJK JP', 'PingFang SC', 'Hiragino Sans', 'Microsoft YaHei', sans-serif; background: var(--bg); color: var(--text); height: 100vh; height: 100dvh; display: flex; flex-direction: column; line-height: 1.5; }
-        header { padding: 1rem 2rem; background: var(--surface); border-bottom: 1px solid #333; }
+        header { padding: 1rem 2rem; background: var(--surface); border-bottom: 1px solid var(--border); }
         header h1 { font-size: 1.2rem; color: var(--accent); }
         header small { color: var(--muted); }
         main { flex: 1; display: flex; flex-direction: column; min-height: 0; }
@@ -29,11 +32,16 @@
         .msg.assistant { background: #2a2a3e; }
         .msg.system { background: #2a3e2a; color: #8c8; font-size: 0.9rem; max-width: 100%; }
         .msg.error { background: #3e2a2a; color: #e88; font-size: 0.9rem; max-width: 100%; }
-        #controls { padding: 1rem 2rem; background: var(--surface); border-top: 1px solid #333; display: flex; gap: 0.5rem; }
-        #prompt { flex: 1; padding: 0.75rem; border: 1px solid #444; border-radius: 8px; background: var(--bg); color: var(--text); font-size: 1rem; transition: border-color 0.15s; }
+        .msg.empty-hint { background: transparent; border: 1px dashed var(--border); color: var(--muted); max-width: 100%; text-align: center; margin: 2rem auto; }
+        .msg-role { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
+        #model-url[aria-invalid="true"] { border-color: #e88; }
+        #url-error { color: #e88; font-size: 0.85rem; width: 100%; display: none; }
+        #url-error:not(:empty) { display: block; }
+        #controls { padding: 1rem 2rem; background: var(--surface); border-top: 1px solid var(--border); display: flex; gap: 0.5rem; }
+        #prompt { flex: 1; padding: 0.75rem; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); color: var(--text); font-size: 1rem; transition: border-color 0.15s; min-height: 44px; }
         #prompt:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(90, 173, 53, 0.2); outline: none; }
         #prompt:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
-        button { padding: 0.75rem 1.5rem; border: none; border-radius: 8px; background: var(--accent); color: var(--accent-ink); cursor: pointer; font-size: 1rem; font-weight: 600; transition: background 0.15s, transform 0.1s; }
+        button { padding: 0.75rem 1.5rem; border: none; border-radius: 8px; background: var(--accent); color: var(--accent-ink); cursor: pointer; font-size: 1rem; font-weight: 600; transition: background 0.15s, transform 0.1s; min-height: 44px; }
         button:hover:not(:disabled) { background: var(--accent-hover); }
         button:active:not(:disabled) { transform: scale(0.97); }
         button:disabled { background: #555; color: #ccc; cursor: not-allowed; opacity: 0.6; }
@@ -41,15 +49,17 @@
         #status { padding: 0.5rem 2rem; background: #111; color: var(--muted); font-size: 0.85rem; }
         #model-input { padding: 1rem 2rem; background: var(--surface); display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; }
         #model-input label[for="model-url"] { font-size: 0.9rem; color: var(--muted); flex: 0 0 auto; }
-        #model-input input[type="url"] { flex: 1; min-width: 200px; padding: 0.5rem; border: 1px solid #444; border-radius: 4px; background: var(--bg); color: var(--text); }
+        #model-input input[type="url"] { flex: 1; min-width: 200px; padding: 0.5rem; border: 1px solid var(--border); border-radius: 4px; background: var(--bg); color: var(--text); min-height: 44px; }
         #model-input input[type="url"]:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(90, 173, 53, 0.2); outline: none; }
         #model-input input[type="url"]:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
-        #drop-zone { border: 2px dashed #666; border-radius: 8px; padding: 0.5rem 1rem; color: var(--muted); cursor: pointer; font-size: 0.9rem; }
+        #drop-zone { border: 2px dashed var(--border); border-radius: 8px; padding: 0.5rem 1rem; color: var(--muted); cursor: pointer; font-size: 0.9rem; display: inline-flex; align-items: center; min-height: 44px; }
         #drop-zone:hover { border-color: var(--accent); color: var(--accent); }
         #drop-zone.dragover { border-color: var(--accent); color: var(--accent); }
-        #file-input { display: none; }
+        #drop-zone[aria-disabled="true"] { opacity: 0.5; cursor: not-allowed; pointer-events: none; }
+        #file-input { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
+        #file-input:focus, #file-input:focus-visible { outline: none; }
         button:focus-visible, input:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
-        #drop-zone:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; border-color: var(--accent); }
+        #drop-zone:focus-within { outline: 2px solid var(--focus); outline-offset: 2px; border-color: var(--accent); }
         .skip-link { position: absolute; top: -100%; inset-inline-start: 16px; z-index: 200; font-size: 13px; padding: 8px 16px; background: var(--accent); color: var(--accent-ink); border-radius: 4px; text-decoration: none; font-weight: 600; transition: top .2s; }
         .skip-link:focus { top: 8px; }
         @media (prefers-reduced-motion: reduce) {
@@ -86,20 +96,23 @@
     <div id="model-input" role="region" aria-label="Model loading">
         <label for="model-url">Model URL</label>
         <input type="url" id="model-url" placeholder="https://example.com/model.gguf" autocomplete="url" spellcheck="false" />
-        <button type="button" onclick="loadModelFromUrl()" id="load-btn">Load URL</button>
-        <div id="drop-zone" role="button" tabindex="0" aria-label="Drop GGUF file or click to browse" onclick="document.getElementById('file-input').click()" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();document.getElementById('file-input').click();}">
+        <button type="button" onclick="loadModelFromUrl()" id="load-btn">Load model</button>
+        <label id="drop-zone" for="file-input">
             Drop GGUF file or click
-        </div>
-        <input type="file" id="file-input" accept=".gguf" aria-label="Choose GGUF model file" onchange="loadModelFromFile(event)" />
+        </label>
+        <input type="file" id="file-input" accept=".gguf" onchange="loadModelFromFile(event)" />
+        <div id="url-error" role="alert"></div>
     </div>
     <main aria-label="Chat">
-    <div id="status" role="status" aria-live="polite">Status: Not initialized</div>
-    <div id="chat" role="log" aria-label="Chat messages" aria-live="off" tabindex="0"></div>
+    <div id="status" role="status" aria-live="polite">Load a GGUF model to begin</div>
+    <div id="chat" role="log" aria-label="Chat messages" aria-live="off" tabindex="0">
+        <div id="chat-empty" class="msg empty-hint">Load a GGUF model above, then type a message to start chatting.</div>
+    </div>
     <form id="controls" onsubmit="event.preventDefault(); send();" aria-label="Send message">
-        <input type="text" id="prompt" placeholder="Load a model to start..." aria-label="Message input" aria-describedby="input-hint" enterkeyhint="send" autocomplete="off" dir="auto" disabled />
+        <input type="text" id="prompt" placeholder="Load a model to start..." aria-label="Message input" enterkeyhint="send" autocomplete="off" dir="auto" disabled />
         <button type="submit" id="send-btn" aria-label="Send message" disabled>Send</button>
     </form>
-    <div id="input-hint" style="text-align:center;padding:4px;color:var(--muted);font-size:0.8rem;display:none;">Enter to send</div>
+    <div id="input-hint" hidden style="text-align:center;padding:4px;color:var(--muted);font-size:0.8rem;">Enter to send</div>
     </main>
     <div id="sr-announce" style="position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0" aria-live="polite" aria-atomic="true"></div>
 
@@ -126,15 +139,23 @@
         });
 
         async function loadModelFromUrl() {
-            const url = document.getElementById('model-url').value.trim();
+            const urlInput = document.getElementById('model-url');
+            const urlError = document.getElementById('url-error');
+            const url = urlInput.value.trim();
             if (!url) {
-                status.textContent = 'Error: Enter a model URL first';
+                status.textContent = 'Enter a model URL first';
+                urlError.textContent = 'Enter a model URL first';
                 announceToSR('Enter a model URL first');
-                document.getElementById('model-url').focus();
+                urlInput.setAttribute('aria-invalid', 'true');
+                urlInput.setAttribute('aria-describedby', 'url-error');
+                urlInput.focus();
                 return;
             }
+            urlInput.removeAttribute('aria-invalid');
+            urlInput.removeAttribute('aria-describedby');
+            urlError.textContent = '';
             await initAndLoad(async () => {
-                status.textContent = 'Status: Downloading model...';
+                status.textContent = 'Downloading model…';
                 await engine.loadModel(url);
             });
         }
@@ -147,7 +168,7 @@
 
         async function loadModelFromBuffer(file) {
             await initAndLoad(async () => {
-                status.textContent = `Status: Reading ${file.name} (${(file.size / 1024 / 1024).toLocaleString(undefined, { maximumFractionDigits: 1, minimumFractionDigits: 1 })} MB)...`;
+                status.textContent = `Reading ${file.name} (${(file.size / 1024 / 1024).toLocaleString(undefined, { maximumFractionDigits: 1, minimumFractionDigits: 1 })} MB)…`;
                 const data = await file.arrayBuffer();
                 await engine.loadModel(data);
             });
@@ -156,35 +177,36 @@
         async function initAndLoad(loadFn) {
             const loadBtn = document.getElementById('load-btn');
             const dropZoneEl = document.getElementById('drop-zone');
+            const fileInput = document.getElementById('file-input');
             loadBtn.disabled = true;
             loadBtn.setAttribute('aria-busy', 'true');
             loadBtn.textContent = 'Loading…';
             dropZoneEl.setAttribute('aria-disabled', 'true');
-            dropZoneEl.style.pointerEvents = 'none';
-            dropZoneEl.style.opacity = '0.5';
-            status.textContent = 'Status: Initializing WASM engine...';
+            fileInput.disabled = true;
+            status.textContent = 'Initializing engine…';
             try {
                 if (!engine.ready) await engine.init();
                 await loadFn();
                 addMessage('system', engine.initMessage || 'Model loaded');
-                status.textContent = 'Status: Ready';
+                status.textContent = 'Ready';
                 announceToSR('Model loaded. Ready to chat.');
                 promptInput.disabled = false;
                 promptInput.placeholder = 'Type a message...';
                 document.getElementById('send-btn').disabled = false;
-                document.getElementById('input-hint').style.display = '';
+                var hint = document.getElementById('input-hint');
+                hint.hidden = false;
+                promptInput.setAttribute('aria-describedby', 'input-hint');
                 promptInput.focus();
             } catch (e) {
-                status.textContent = `Error: ${e.message}`;
-                addMessage('error', `Error: ${e.message}`);
+                status.textContent = `Could not load model: ${e.message}`;
+                addMessage('error', `Could not load model: ${e.message}`);
                 announceToSR('Error loading model: ' + e.message);
             }
             loadBtn.disabled = false;
             loadBtn.removeAttribute('aria-busy');
-            loadBtn.textContent = 'Load URL';
+            loadBtn.textContent = 'Load model';
             dropZoneEl.removeAttribute('aria-disabled');
-            dropZoneEl.style.pointerEvents = '';
-            dropZoneEl.style.opacity = '';
+            fileInput.disabled = false;
         }
 
         let isSending = false;
@@ -193,12 +215,16 @@
             if (!text || isSending) return;
             isSending = true;
 
+            const sendBtn = document.getElementById('send-btn');
             addMessage('user', text);
             promptInput.value = '';
             promptInput.disabled = true;
-            document.getElementById('send-btn').disabled = true;
+            sendBtn.disabled = true;
+            sendBtn.setAttribute('aria-busy', 'true');
+            sendBtn.textContent = 'Generating…';
             chat.setAttribute('aria-busy', 'true');
-            status.textContent = 'Status: Processing...';
+            status.textContent = 'Generating…';
+            announceToSR('Generating response…');
 
             try {
                 const output = await engine.generate(text, { maxTokens: 200 });
@@ -208,9 +234,11 @@
             }
 
             promptInput.disabled = false;
-            document.getElementById('send-btn').disabled = false;
+            sendBtn.disabled = false;
+            sendBtn.removeAttribute('aria-busy');
+            sendBtn.textContent = 'Send';
             chat.setAttribute('aria-busy', 'false');
-            status.textContent = 'Status: Ready';
+            status.textContent = 'Ready';
             promptInput.focus();
             announceToSR('Response complete');
             isSending = false;
@@ -223,11 +251,27 @@
         }
 
         function addMessage(role, text) {
+            const empty = document.getElementById('chat-empty');
+            if (empty) empty.remove();
             const div = document.createElement('div');
             div.className = `msg ${role}`;
             div.dir = 'auto';
-            div.textContent = text;
-            if (role === 'error') div.setAttribute('role', 'alert');
+            const roleLabels = { user: 'You', assistant: 'Agave', system: 'System', error: 'Error' };
+            const roleId = 'msg-role-' + Date.now() + '-' + Math.random().toString(36).slice(2, 7);
+            const roleEl = document.createElement('span');
+            roleEl.id = roleId;
+            roleEl.className = 'msg-role';
+            roleEl.textContent = roleLabels[role] || role;
+            const body = document.createElement('span');
+            body.textContent = text;
+            div.appendChild(roleEl);
+            div.appendChild(body);
+            if (role === 'error') {
+                div.setAttribute('role', 'alert');
+            } else {
+                div.setAttribute('role', 'group');
+                div.setAttribute('aria-labelledby', roleId);
+            }
             chat.appendChild(div);
             chat.scrollTop = chat.scrollHeight;
             if (role === 'error' || role === 'system') announceToSR(text);
@@ -240,6 +284,11 @@
             if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
         });
 
+        document.getElementById('model-url').addEventListener('input', (e) => {
+            e.target.removeAttribute('aria-invalid');
+            e.target.removeAttribute('aria-describedby');
+            document.getElementById('url-error').textContent = '';
+        });
         document.getElementById('model-url').addEventListener('keydown', (e) => {
             if (e.key === 'Enter') { e.preventDefault(); loadModelFromUrl(); }
         });

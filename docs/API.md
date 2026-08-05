@@ -11,9 +11,15 @@ Start the server:
 ```bash
 agave model.gguf --serve                    # default port 49453
 agave model.gguf --serve --port 9090        # custom port
-agave model.gguf --serve --api-key mysecret  # bearer token auth (prefer AGAVE_API_KEY)
+# Prefer AGAVE_API_KEY over --api-key (env wins if both set; avoids process-list exposure)
+AGAVE_API_KEY=mysecret agave model.gguf --serve
+agave model.gguf --serve --rate-limit-rpm 60 --rate-limit-tpm 100000  # token-bucket limits
 # Or: AGAVE_API_KEY=mysecret AGAVE_PORT=9090 agave model.gguf --serve
 ```
+
+Cross-origin browser calls without an API key are rejected (`403`,
+`cross_origin_forbidden`). `/v1/embeddings` returns `501` (not a stability promise).
+See [Versioning & Releases](CONTRIBUTING.md#versioning--releases).
 
 ---
 
@@ -57,7 +63,7 @@ curl http://localhost:49453/v1/chat/completions -d '{
 | logprobs | bool | false | Return log probabilities for output tokens (streaming only) |
 | top_logprobs | int | null | Number of top token log probabilities to return per position, 0-20 (streaming only) |
 | n | int | 1 | Number of completions (only n=1 supported, n>1 returns 400) |
-| user | string | null | User identifier for request tracking (logged server-side) |
+| user | string | null | OpenAI compatibility only; accepted but ignored (not logged; often holds PII) |
 | stream | bool | false | Server-Sent Events streaming |
 | stream_options | object | null | `{"include_usage": true/false}` — gate usage chunk in streaming (usage included by default when omitted) |
 | grammar | string | null | GBNF grammar for constrained decoding |
@@ -203,7 +209,7 @@ Manage conversations.
 
 ```bash
 curl http://localhost:49453/v1/conversations
-# [{"id":1,"title":"Hello world","active":true,"count":4}]
+# [{"id":1,"title":"Chat 1","active":true,"count":4}]
 ```
 
 **POST** — Create, select, or delete conversations via form-encoded `action` field:
@@ -223,10 +229,16 @@ curl -X POST http://localhost:49453/v1/conversations -d 'action=delete&id=1'
 ```
 
 Limits: maximum 100 concurrent conversations, 1000 messages per conversation.
+Conversations are process-local (in RAM only): not written to disk, wiped on
+server shutdown, and message text is zeroed on delete/clear. Titles are opaque
+(`Chat {id}`), never derived from user message content. The OpenAI `user`
+request field is ignored (often an email or username).
 
 ### POST /v1/embeddings
 
-Not implemented. Returns 501.
+Not implemented. Returns `501` (`code: not_implemented`). Experimental stub:
+not part of the supported HTTP contract until a changelog entry ships a real
+implementation.
 
 ### POST /v1/tokenize
 
@@ -304,6 +316,8 @@ Shutdown response (503):
 
 Prometheus-format metrics: request count, latency, throughput, TTFT, token counts.
 
+Requires authentication when `--api-key` or `AGAVE_API_KEY` is set (returns 401 otherwise). No auth when neither is configured.
+
 ---
 
 ## Structured Output
@@ -363,7 +377,7 @@ curl http://localhost:49453/v1/chat/completions -d '{
 
 The `content` field can be either a string (text only) or an array of content parts. Text parts (`"type": "text"`) provide the prompt; image parts (`"type": "image_url"`) provide the image as a base64 data URI. Only one image per request is supported. The image is processed by the vision encoder (SigLIP-2) and injected as visual tokens at the appropriate position in the prompt.
 
-Supported image formats: PNG only (JPEG is not yet supported — convert to PNG first). Maximum resolution depends on the model (Gemma 4 E2B: 224×224, Gemma 4 26B: 768×768, Qwen VL: 448×448).
+Supported image formats over HTTP: PNG only (JPEG is rejected; convert to PNG first). The CLI `--image` path also accepts PPM P6. Maximum resolution depends on the model (Gemma 4 E2B/E4B: 224×224, Gemma 4 26B: 768×768, Gemma 3: 896×896, Qwen VL: model metadata / native).
 
 ---
 
@@ -444,6 +458,12 @@ Cache is invalidated when the prompt prefix changes (e.g., switching conversatio
 
 For deployments with multiple agave instances serving the same model, KV cache prefixes can be transferred between instances:
 
+**Wire format** (unversioned; not the disk `checkpoint.KVC` header):
+`layer₀_K | layer₀_V | layer₁_K | layer₁_V | …` as little-endian f32.
+Per-layer K/V length is `n_tokens × kvd_layer × 4` bytes (`kvd` may differ across layers on dual-attention / MLA models).
+Only architectures that implement `exportKvPrefix` / `importKvPrefix` support this (currently Gemma 4); others return `501`.
+The blob does **not** include prompt token IDs, so a following OpenAI-style request with `reset` still re-prefills unless the server already holds matching prefix-cache IDs from a prior local generation.
+
 **Export** — serialize `N` tokens of KV cache as a binary blob (`n_tokens` is a required query parameter):
 ```bash
 GET /v1/kv_cache?n_tokens=512
@@ -451,7 +471,7 @@ GET /v1/kv_cache?n_tokens=512
    <binary KV data>
 ```
 
-**Import** — restore KV cache from a blob (sets `kv_seq_len = N`, skips prefill for those tokens):
+**Import** — restore KV cache from a blob (sets `kv_seq_len = N`, clears prefix-cache token IDs, sets `kv_valid`):
 ```bash
 POST /v1/kv_cache?n_tokens=512
 Content-Type: application/octet-stream
@@ -466,6 +486,9 @@ this route only).
 `/v1/kv_cache` and `/v1/kv_cache/info` require authentication if `--api-key` or
 `AGAVE_API_KEY` is configured. Use case: compute system-prompt KV on one instance,
 distribute to a fleet for warm-start generation without redundant prefill.
+Warm-start that skips prefill on the API path needs matching prompt token IDs in
+the blob (not yet in the wire format); today import is coherent for chat
+continuation / `kv_valid` and for orchestrators that manage prefill themselves.
 
 **Metadata** — lightweight KV state query for external orchestrators (`GET` only; not shadowed by `/v1/kv_cache`):
 ```bash
@@ -535,8 +558,11 @@ All endpoints return JSON error bodies on failure.
 
 **OpenAI format** (all endpoints except `/v1/messages`):
 ```json
-{"error": {"message": "Missing or empty messages array", "type": "invalid_request_error", "param": null, "code": null}}
+{"error": {"message": "Missing or empty messages array", "type": "invalid_request_error", "param": "messages", "code": "missing_required_parameter"}}
 ```
+
+`param` names the offending field or query key when known; otherwise `null`.
+`code` is a stable machine-readable string when known (for example `missing_required_parameter`, `n_not_supported`, `invalid_api_key`, `method_not_allowed`, `unknown_endpoint`, `conversation_not_found`, `request_too_large`, `malformed_request`, `rate_limit_exceeded`, `not_implemented`, `cross_origin_forbidden`, `message_too_long`, `image_decode_failed`, `kv_import_failed`, `unknown_conversation_action`, `no_active_conversation`, `no_user_message`, `conversation_limit_reached`, `conversation_message_limit`, `server_overloaded`); otherwise `null`.
 
 **Anthropic format** (`/v1/messages` only):
 ```json
@@ -547,13 +573,14 @@ All endpoints return JSON error bodies on failure.
 |--------|------|
 | `400 Bad Request` | Malformed JSON, missing required fields, invalid parameter values |
 | `401 Unauthorized` | Missing or invalid `Authorization: Bearer <key>` or `X-API-Key` when `--api-key` is set |
+| `403 Forbidden` | Cross-origin browser request rejected when no `--api-key` is configured (CSRF protection) |
 | `404 Not Found` | Unknown endpoint or conversation not found |
 | `405 Method Not Allowed` | Known endpoint with wrong HTTP method (includes `Allow` header) |
 | `413 Payload Too Large` | Request body exceeds 1 MB server limit |
-| `429 Too Many Requests` | Reserved for token-bucket rate limiting (`rate_limiter.zig`); not enabled via CLI yet |
+| `429 Too Many Requests` | Token-bucket rate limiting via `--rate-limit-rpm` / `--rate-limit-tpm` (includes `Retry-After`) |
 | `500 Internal Server Error` | Model forward error, OOM, or unexpected server failure |
 | `501 Not Implemented` | Endpoint exists but is not yet implemented (e.g., `/v1/embeddings`) |
-| `503 Service Unavailable` | Conversation limit reached, shutting down, or degraded (`/ready` only — inference endpoints do not return 503 for degraded state) |
+| `503 Service Unavailable` | Conversation limit reached, shutting down, overloaded, or degraded (`/ready` only — inference endpoints do not return 503 for degraded state) |
 
 ---
 
@@ -594,4 +621,4 @@ All responses include these headers:
 
 Rate-limited responses (429) also include `Retry-After` with seconds until the next request is allowed.
 
-When no `--api-key` is configured, CORS headers (`Access-Control-Allow-Origin: *`) are included for browser access. CORS is disabled when authentication is active.
+When no `--api-key` is configured, cross-origin browser requests (mismatched `Origin` vs `Host`) are rejected with 403 to prevent CSRF against a local `--serve`. Same-origin use of the embedded UI is unchanged. CORS `Access-Control-Allow-Origin` is not emitted; use a reverse proxy if a separate web origin must call the API.

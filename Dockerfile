@@ -2,7 +2,9 @@
 # Pin to a dated Debian tag for reproducible builds (bump with dependabot/docker).
 FROM --platform=$BUILDPLATFORM debian:bookworm-20260713-slim AS build
 
-ARG ZIG_VERSION=0.16.0
+# Empty default: install the version pinned in .zigversion (single source of truth).
+# Override with --build-arg ZIG_VERSION=x.y.z and matching ZIG_SHA256_* args.
+ARG ZIG_VERSION=
 ARG TARGETARCH
 
 # Backend enable flags. Metal disabled by default (macOS-only, not usable in Docker).
@@ -28,15 +30,20 @@ ARG ENABLE_LLAMA4=true
 
 RUN apt-get update && apt-get install -y --no-install-recommends curl xz-utils ca-certificates && rm -rf /var/lib/apt/lists/*
 
-# Zig toolchain checksums (SHA256). Update when bumping ZIG_VERSION.
+# Zig toolchain checksums (SHA256). Update when bumping .zigversion / ZIG_VERSION.
 ARG ZIG_SHA256_X86_64=70e49664a74374b48b51e6f3fdfbf437f6395d42509050588bd49abe52ba3d00
 ARG ZIG_SHA256_AARCH64=ea4b09bfb22ec6f6c6ceac57ab63efb6b46e17ab08d21f69f3a48b38e1534f17
 
-RUN ARCH=$(uname -m) && \
-    ZIG_URL="https://ziglang.org/download/${ZIG_VERSION}/zig-${ARCH}-linux-${ZIG_VERSION}.tar.xz" && \
+# Read pin before full COPY so the toolchain layer stays cacheable.
+COPY --link .zigversion /tmp/agave.zigversion
+
+RUN ZIG_VER="${ZIG_VERSION:-$(tr -d '[:space:]' </tmp/agave.zigversion)}" && \
+    ARCH=$(uname -m) && \
+    ZIG_URL="https://ziglang.org/download/${ZIG_VER}/zig-${ARCH}-linux-${ZIG_VER}.tar.xz" && \
     if [ "$ARCH" = "x86_64" ]; then EXPECTED_SHA256="$ZIG_SHA256_X86_64"; \
     elif [ "$ARCH" = "aarch64" ]; then EXPECTED_SHA256="$ZIG_SHA256_AARCH64"; \
     else echo "Unsupported architecture: $ARCH" && exit 1; fi && \
+    echo "Installing Zig ${ZIG_VER} (${ARCH})" && \
     curl -fsSL "$ZIG_URL" -o /tmp/zig.tar.xz && \
     echo "${EXPECTED_SHA256}  /tmp/zig.tar.xz" | sha256sum -c - && \
     mkdir -p /usr/local/zig && \
@@ -47,6 +54,19 @@ RUN ARCH=$(uname -m) && \
 WORKDIR /src
 COPY --link . .
 
+# Default builds must match .zigversion. Explicit ZIG_VERSION overrides are for
+# experiments only (also bump ZIG_SHA256_* when overriding).
+RUN PIN=$(tr -d '[:space:]' < .zigversion) && \
+    INSTALLED=$(zig version) && \
+    if [ -z "$ZIG_VERSION" ]; then \
+      if [ "$INSTALLED" != "$PIN" ]; then \
+        echo "error: zig version $INSTALLED does not match .zigversion=$PIN" >&2; exit 1; \
+      fi; \
+    elif [ "$INSTALLED" != "$ZIG_VERSION" ]; then \
+      echo "error: zig version $INSTALLED does not match ZIG_VERSION=$ZIG_VERSION" >&2; exit 1; \
+    fi && \
+    echo "Zig ok: $INSTALLED (pin=$PIN${ZIG_VERSION:+ override=$ZIG_VERSION})"
+
 # Cross-compile for the target platform.
 # Use glibc (-gnu) when any dlopen backend is enabled (CUDA/Vulkan/ROCm need glibc).
 # Use musl when only CPU/Metal backends are active (smaller static binary).
@@ -55,6 +75,7 @@ RUN --mount=type=cache,target=/src/.zig-cache \
     ZIG_TARGET=$(case "$TARGETARCH" in \
         amd64) echo "x86_64-linux" ;; \
         arm64) echo "aarch64-linux" ;; \
+        *) echo "error: unsupported TARGETARCH=$TARGETARCH (expected amd64 or arm64)" >&2; exit 1 ;; \
     esac) && \
     if [ "$ENABLE_CUDA" = "true" ] || [ "$ENABLE_VULKAN" = "true" ] || [ "$ENABLE_ROCM" = "true" ]; then \
         ZIG_TARGET="${ZIG_TARGET}-gnu"; \
@@ -90,9 +111,10 @@ LABEL org.opencontainers.image.title="agave" \
       org.opencontainers.image.source="https://github.com/maci0/agave"
 
 # curl is only used by HEALTHCHECK (not on the inference hot path).
+# Pin UID/GID so compose tmpfs mounts (read_only root) can match ownership.
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl && rm -rf /var/lib/apt/lists/* && \
-    groupadd -r agave && \
-    useradd -r -g agave -d /home/agave -m -s /sbin/nologin agave
+    groupadd -r -g 10001 agave && \
+    useradd -r -u 10001 -g agave -d /home/agave -m -s /sbin/nologin agave
 
 COPY --link --from=build /out/bin/agave /usr/local/bin/agave
 
@@ -107,10 +129,15 @@ STOPSIGNAL SIGTERM
 ENV AGAVE_PORT=49453
 
 # Shell form + $$ so AGAVE_PORT expands at container runtime (not image build).
-HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=3 \
-    CMD curl -sf http://localhost:$$AGAVE_PORT/health || exit 1
+# Use /ready (not /health): Docker HEALTHCHECK gates routing/depends_on, and
+# /health returns 200 while degraded (KV pressure / high error rate).
+# Probe assumes --serve. One-shot inference should pass --no-healthcheck.
+# start-period covers slow model load before probes count as failures.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=120s --retries=3 \
+    CMD curl -sf http://localhost:$$AGAVE_PORT/ready || exit 1
 
 # Binds all interfaces for container networking. --serve requires AGAVE_API_KEY
 # (or --api-key) because non-loopback binds are rejected without auth.
 # Override listen port with -e AGAVE_PORT=<port> (and publish the same host port).
+# Prefer docker compose (see docker-compose.yml) over ad-hoc runs for local serve.
 ENTRYPOINT ["agave", "--host", "0.0.0.0"]

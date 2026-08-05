@@ -1,8 +1,12 @@
-//! Shared model architecture enum and tokenizer kind.
+//! Shared model architecture enum, chat-template mapping, and multimodal defaults.
+//!
+//! Depends on `chat_template.zig` for template structs and on `image_tokens.zig`
+//! for the leaf `ImageTokens` type (re-exported here for a stable public path).
 
 const std = @import("std");
 const build_options = @import("build_options");
 const ChatTemplate = @import("chat_template.zig").ChatTemplate;
+pub const ImageTokens = @import("image_tokens.zig").ImageTokens;
 
 /// Supported model architectures — used for dispatch, display, and build-time toggles.
 pub const Arch = enum {
@@ -183,18 +187,6 @@ pub const default_bos_id: u32 = 2;
 pub const max_eog_ids: usize = 8;
 
 // ── Image token IDs for multimodal models ─────────────────────
-
-/// Image token IDs for multimodal models.
-/// These are special tokens in the vocabulary that serve as placeholders
-/// for visual embeddings during forward passes.
-pub const ImageTokens = struct {
-    /// Start-of-image token ID (e.g. `<img>`, `<|vision_start|>`).
-    start: u32,
-    /// End-of-image token ID (e.g. `</img>`, `<|vision_end|>`).
-    end: u32,
-    /// Placeholder token ID repeated n_visual_tokens times between start/end.
-    pad: u32,
-};
 
 /// Gemma 4 uses <|image|> (258880) as the image placeholder token.
 /// Note: 255999 is <|image> (without trailing |) — different token.

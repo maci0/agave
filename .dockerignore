@@ -3,25 +3,27 @@
 zig-out/
 zig-out-linux/
 
-# Model weights (large files, bind-mounted at runtime)
-models/
+# Model weights at repo root (bind-mounted at runtime).
+# MUST be /models/ — a bare models/ also excludes src/models/ (architecture code).
+/models/
 *.gguf
 *.safetensors
 
-# Python / research / WASM frontend (not needed in image)
+# Python / research / top-level WASM demo (not needed in image).
+# Anchor with / so src/web and similar paths stay in the build context.
 .venv/
-research/
-tests/
-web/
+/research/
+/tests/
+/web/
 __pycache__/
 
 # Review / planning outputs (not needed in image)
-outputs/
+/outputs/
 .planning/
 notes/
 progress.md
-scripts/
-graphify-out/
+/scripts/
+/graphify-out/
 .pi-subagents/
 .review-loop.lock
 
@@ -77,10 +79,18 @@ vision_ref_dumps/
 # Environment / secrets
 .env
 .env.*
+!.env.example
 *.key
 *.pem
 *.p12
 *.pfx
+
+# Local orchestration (not needed in image build context)
+docker-compose*.yml
+compose*.yml
+
+# Local tooling / experiments (not needed in image)
+/tools/
 
 # Stray files
 pelorus-*.yaml

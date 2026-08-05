@@ -395,6 +395,8 @@ const cli_specs = [_]cli_mod.ArgSpec{
     .{ .long = "api-key", .kind = .option, .help = "API key for server auth. Prefer AGAVE_API_KEY (avoids process-list exposure; env wins if both set)." },
     .{ .long = "sleep-after", .kind = .option, .help = "Enter sleep mode after N seconds of server inactivity (0 = disabled). Signals /health sleeping:true; wakes on next request." },
     .{ .long = "max-batch-size", .kind = .option, .help = "Max concurrent requests to batch per scheduler cycle [default: 8]. Higher values increase throughput at the cost of latency per request." },
+    .{ .long = "rate-limit-rpm", .kind = .option, .help = "Server max requests per minute (0 = unlimited). Enables token-bucket rate limiting when set with or without --rate-limit-tpm." },
+    .{ .long = "rate-limit-tpm", .kind = .option, .help = "Server max prompt tokens per minute (0 = unlimited). Enables token-bucket rate limiting when set with or without --rate-limit-rpm." },
     // LoRA
     .{ .long = "lora", .kind = .option, .help = "Path to LoRA adapter GGUF file. Merged at load time into the base model weights." },
     // Multimodal
@@ -520,6 +522,10 @@ const CliArgs = struct {
     sleep_after_s: u32 = 0,
     /// Maximum concurrent requests to batch together per scheduler cycle (default 8).
     max_batch_size: u32 = 8,
+    /// Server rate limit: max requests per minute (0 = unlimited / disabled).
+    rate_limit_rpm: u32 = 0,
+    /// Server rate limit: max prompt tokens per minute (0 = unlimited / disabled).
+    rate_limit_tpm: u32 = 0,
     // Speculative decoding
     draft_model_path: ?[]const u8 = null,
     spec_tokens: u32 = 5,
@@ -919,6 +925,9 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
         } else if (g_environ.get("AGAVE_API_KEY") != null) {
             eprint("Warning: AGAVE_API_KEY has no effect without --serve\n", .{});
         }
+        if (res.option("rate-limit-rpm") != null or res.option("rate-limit-tpm") != null) {
+            eprint("Warning: --rate-limit-rpm/--rate-limit-tpm have no effect without --serve\n", .{});
+        }
     } else {
         // Warn about flags ignored in server mode (early, before model loading)
         if (n_positionals > 1)
@@ -1186,6 +1195,8 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
         .draft_model_path = res.option("draft-model"),
         .sleep_after_s = parseU32(res.option("sleep-after"), "sleep-after") orelse 0,
         .max_batch_size = parseU32(res.option("max-batch-size"), "max-batch-size") orelse 8,
+        .rate_limit_rpm = parseU32(res.option("rate-limit-rpm"), "rate-limit-rpm") orelse 0,
+        .rate_limit_tpm = parseU32(res.option("rate-limit-tpm"), "rate-limit-tpm") orelse 0,
         .video = res.option("video"),
         .video_fps = blk: {
             if (res.option("video-fps")) |s| {
@@ -1811,6 +1822,8 @@ fn printUsage() void {
         \\                         When both are set, AGAVE_API_KEY wins
         \\      --sleep-after <N>  Enter sleep mode after N seconds idle (0 = disabled)
         \\      --max-batch-size <N>  Max concurrent batched requests [default: 8]
+        \\      --rate-limit-rpm <N>  Max requests/min (0 = unlimited; enables rate limiting)
+        \\      --rate-limit-tpm <N>  Max prompt tokens/min (0 = unlimited; enables rate limiting)
         \\      --no-kv-cache      Prefill-only / embedding server (no decode KV)
         \\
         \\PARALLELISM:
@@ -3002,6 +3015,8 @@ fn initAndRun(
             .tree_budget = cli.tree_budget,
             .sleep_after_s = cli.sleep_after_s,
             .max_batch_size = cli.max_batch_size,
+            .rate_limit_rpm = cli.rate_limit_rpm,
+            .rate_limit_tpm = cli.rate_limit_tpm,
         }) catch |e| {
             eprint("Error: server failed: {}\n", .{e});
             return false;
@@ -4374,6 +4389,8 @@ test {
     _ = @import("image.zig");
     _ = @import("image_tokens.zig");
     _ = @import("steering.zig");
+    _ = @import("expert_profile.zig");
+    _ = @import("expert_cache.zig");
     _ = @import("thread_pool.zig");
     _ = @import("ops/kv_quant.zig");
     _ = @import("ops/quant.zig");
@@ -4397,6 +4414,7 @@ test {
     _ = @import("kvcache/block_allocator.zig");
     _ = @import("kvcache/manager.zig");
     _ = @import("kvcache/tiered.zig");
+    _ = @import("kvcache/checkpoint.zig");
     _ = @import("models/model.zig");
     _ = @import("models/gemma4.zig");
     _ = @import("models/nemotron_nano.zig");

@@ -43,12 +43,20 @@ const mb_to_bytes: usize = 1024 * 1024;
 
 var cpu_model_buf: [cpu_model_buf_size]u8 = .{0} ** cpu_model_buf_size;
 var cpu_model_len: usize = 0;
-var cpu_model_detected: bool = false;
+/// Set only after the buffer is fully written (release). Readers use acquire.
+var cpu_model_detected: std.atomic.Value(bool) = .init(false);
+/// Spinlock for one-time detection (avoids torn buffer under concurrent first calls).
+var cpu_model_init_lock: std.atomic.Value(u8) = .init(0);
 
 /// Detect CPU model name from the OS. Called once at first backendInfo() call.
 fn detectCpuModel() []const u8 {
-    if (cpu_model_detected) return cpu_model_buf[0..cpu_model_len];
-    cpu_model_detected = true;
+    if (cpu_model_detected.load(.acquire)) return cpu_model_buf[0..cpu_model_len];
+
+    while (cpu_model_init_lock.cmpxchgWeak(0, 1, .acquire, .monotonic) != null)
+        std.atomic.spinLoopHint();
+    defer cpu_model_init_lock.store(0, .release);
+
+    if (cpu_model_detected.load(.acquire)) return cpu_model_buf[0..cpu_model_len];
 
     if (comptime builtin.os.tag == .macos) {
         // macOS: sysctlbyname("machdep.cpu.brand_string")
@@ -57,6 +65,7 @@ fn detectCpuModel() []const u8 {
         if (rc == 0 and len > 0) {
             // Strip trailing null
             cpu_model_len = if (cpu_model_buf[len - 1] == 0) len - 1 else len;
+            cpu_model_detected.store(true, .release);
             return cpu_model_buf[0..cpu_model_len];
         }
     } else if (comptime builtin.os.tag == .linux) {
@@ -64,7 +73,10 @@ fn detectCpuModel() []const u8 {
         // x86 uses "model name\t: ...", ARM uses "Model\t: ..." or "Hardware\t: ...".
         var read_buf: [cpuinfo_read_buf_size]u8 = undefined;
         const data = readSmallFile("/proc/cpuinfo", &read_buf);
-        if (data.len == 0) return "";
+        if (data.len == 0) {
+            cpu_model_detected.store(true, .release);
+            return "";
+        }
         // Try x86-style first, then ARM/RISC-V fallbacks.
         const needles = [_][]const u8{
             "model name\t: ", // x86, some ARM kernels
@@ -78,6 +90,7 @@ fn detectCpuModel() []const u8 {
                 const name_len = @min(end - start, cpu_model_buf.len);
                 @memcpy(cpu_model_buf[0..name_len], data[start..][0..name_len]);
                 cpu_model_len = name_len;
+                cpu_model_detected.store(true, .release);
                 return cpu_model_buf[0..cpu_model_len];
             }
         }
@@ -92,12 +105,17 @@ fn detectCpuModel() []const u8 {
             const pend = if (ppos > 0) std.mem.indexOfScalarPos(u8, data, pstart, '\n') orelse data.len else 0;
             if (ppos > 0) {
                 const n = std.fmt.bufPrint(&cpu_model_buf, "ARM impl={s} part={s}",
-                    .{ data[istart..iend], data[pstart..pend] }) catch return "";
+                    .{ data[istart..iend], data[pstart..pend] }) catch {
+                    cpu_model_detected.store(true, .release);
+                    return "";
+                };
                 cpu_model_len = n.len;
+                cpu_model_detected.store(true, .release);
                 return cpu_model_buf[0..cpu_model_len];
             }
         }
     }
+    cpu_model_detected.store(true, .release);
     return "";
 }
 
@@ -210,12 +228,18 @@ const os_version_buf_size: usize = 128;
 const os_prefix_len: usize = 6;
 var os_version_buf: [os_version_buf_size]u8 = .{0} ** os_version_buf_size;
 var os_version_len: usize = 0;
-var os_version_detected: bool = false;
+var os_version_detected: std.atomic.Value(bool) = .init(false);
+var os_version_init_lock: std.atomic.Value(u8) = .init(0);
 
 /// Detect OS version string. Returns "macOS 14.2.1" or "Linux 6.5.0" style strings.
 pub fn detectOsVersion() []const u8 {
-    if (os_version_detected) return os_version_buf[0..os_version_len];
-    os_version_detected = true;
+    if (os_version_detected.load(.acquire)) return os_version_buf[0..os_version_len];
+
+    while (os_version_init_lock.cmpxchgWeak(0, 1, .acquire, .monotonic) != null)
+        std.atomic.spinLoopHint();
+    defer os_version_init_lock.store(0, .release);
+
+    if (os_version_detected.load(.acquire)) return os_version_buf[0..os_version_len];
 
     if (comptime builtin.os.tag == .macos) {
         // macOS: Try kern.osproductversion first (e.g., "14.2.1"), fall back to kern.osrelease
@@ -226,6 +250,7 @@ pub fn detectOsVersion() []const u8 {
             // Strip trailing null
             const total_len = os_prefix_len + (if (os_version_buf[os_prefix_len + len - 1] == 0) len - 1 else len);
             os_version_len = total_len;
+            os_version_detected.store(true, .release);
             return os_version_buf[0..os_version_len];
         }
     } else if (comptime builtin.os.tag == .linux) {
@@ -237,8 +262,10 @@ pub fn detectOsVersion() []const u8 {
         const copy_len = @min(release_slice.len, os_version_buf.len - os_prefix_len);
         @memcpy(os_version_buf[os_prefix_len..][0..copy_len], release_slice[0..copy_len]);
         os_version_len = os_prefix_len + copy_len;
+        os_version_detected.store(true, .release);
         return os_version_buf[0..os_version_len];
     }
+    os_version_detected.store(true, .release);
     return "";
 }
 
@@ -1268,7 +1295,7 @@ test "parseSysfsCacheSize — returns 0 on non-linux or valid size" {
 
 test "detectCpuModel — returns non-empty on supported platforms" {
     // Reset detection state for a clean test.
-    cpu_model_detected = false;
+    cpu_model_detected.store(false, .release);
     cpu_model_len = 0;
     const model = detectCpuModel();
     if (comptime builtin.os.tag == .macos or builtin.os.tag == .linux) {

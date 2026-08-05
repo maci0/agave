@@ -356,6 +356,8 @@ agave [OPTIONS] <model> [prompt]
       --diffusion-confidence <F>  Diffusion acceptance threshold [default: 0.5]
       --sleep-after <N>    Server sleep after N seconds idle (0=off)
       --max-batch-size <N> Server concurrent batch size [default: 8]
+      --rate-limit-rpm <N> Server max requests/min (0=unlimited)
+      --rate-limit-tpm <N> Server max prompt tokens/min (0=unlimited)
       --no-kv-cache        Prefill-only / embedding server mode
       --list-devices       List available compute devices and exit
       --device <N>         GPU device index for CUDA/ROCm/Vulkan [default: 0]
@@ -532,6 +534,8 @@ research/kernels/          # Kernel research (not part of main build)
 
 ## Docker
 
+Preferred local server path: copy `.env.example` to `.env`, set `AGAVE_API_KEY` and model paths, then `docker compose up --build`. Compose publishes on `127.0.0.1` by default (override with `AGAVE_HOST_BIND`).
+
 Build multi-platform images (x86_64 + aarch64) using `docker buildx`:
 
 ```bash
@@ -558,12 +562,12 @@ docker buildx build --load -t agave \
   --build-arg ENABLE_NEMOTRON_NANO=false \
   --build-arg ENABLE_GLM4=false .
 
-# Run inference
-docker run --rm -v /path/to/models:/models agave /models/model.gguf "Hello"
+# One-shot inference (--no-healthcheck: image HEALTHCHECK expects --serve /ready)
+docker run --rm --no-healthcheck -v /path/to/models:/models agave /models/model.gguf "Hello"
 
-# Run HTTP server (AGAVE_API_KEY required: image binds 0.0.0.0)
-# HEALTHCHECK reads AGAVE_PORT; keep -p and -e AGAVE_PORT aligned if you change the port.
-docker run --rm -p 49453:49453 -e AGAVE_API_KEY=changeme \
+# HTTP server (AGAVE_API_KEY required: image binds 0.0.0.0 inside the container)
+# Prefer loopback publish; HEALTHCHECK reads AGAVE_PORT (keep -p and -e aligned).
+docker run --rm -p 127.0.0.1:49453:49453 -e AGAVE_API_KEY \
   -v /path/to/models:/models agave /models/model.gguf --serve
 
 # Override Zig version at build time

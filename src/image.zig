@@ -19,8 +19,11 @@ const png_signature = [8]u8{ 0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n' };
 /// Maximum image file size to load (64 MB).
 pub const max_file_size: usize = 64 * 1024 * 1024;
 
-/// Maximum decompressed scanline data (100 MP * 4 channels + filter bytes).
-const max_decompressed_size: usize = 100 * 1024 * 1024;
+/// Cap IHDR width/height before decompress (CWE-409 zip/PNG bombs via tiny IDAT).
+const max_image_dimension: u32 = 4096;
+
+/// Maximum decompressed scanline data (~4096^2 RGBA + filter bytes, with margin).
+const max_decompressed_size: usize = 50 * 1024 * 1024;
 
 /// Number of channels in output RGB pixels.
 const rgb_channels: usize = 3;
@@ -66,7 +69,10 @@ pub const PngImage = struct {
     allocator: Allocator,
 
     pub fn deinit(self: *PngImage) void {
+        // Zero pixel bytes before free so image data does not linger in freelist.
+        @memset(self.pixels, 0);
         self.allocator.free(self.pixels);
+        self.pixels = &.{};
     }
 };
 
@@ -123,6 +129,7 @@ pub fn decodePng(allocator: Allocator, data: []const u8) ImageError!PngImage {
     if (color_type != color_type_rgb and color_type != color_type_rgba) return error.UnsupportedColorType;
     if (interlace != 0) return error.UnsupportedInterlace;
     if (width == 0 or height == 0) return error.InvalidIhdr;
+    if (width > max_image_dimension or height > max_image_dimension) return error.InvalidImageSize;
 
     const bpp: usize = if (color_type == color_type_rgba) rgba_channels else rgb_channels;
 
@@ -258,6 +265,7 @@ pub fn decodePpm(data: []const u8) ImageError!PpmImage {
     _ = std.fmt.parseInt(u32, max_str, 10) catch return error.InvalidImageFormat;
 
     if (width == 0 or height == 0) return error.InvalidImageFormat;
+    if (width > max_image_dimension or height > max_image_dimension) return error.InvalidImageSize;
 
     if (pos < data.len) pos += 1;
 
@@ -543,6 +551,36 @@ test "decodePng rejects invalid signature" {
 test "decodePng rejects too-short data" {
     const data = [_]u8{ 0x89, 'P', 'N' };
     try std.testing.expectError(error.InvalidPngSignature, decodePng(std.testing.allocator, &data));
+}
+
+test "decodePng rejects oversized IHDR dimensions" {
+    // Minimal PNG: signature + IHDR claiming 10000x10000 (over max_image_dimension).
+    var buf: [8 + 8 + 13 + 4]u8 = undefined;
+    @memcpy(buf[0..8], &png_signature);
+    // length = 13
+    buf[8] = 0;
+    buf[9] = 0;
+    buf[10] = 0;
+    buf[11] = 13;
+    @memcpy(buf[12..16], &chunk_ihdr);
+    // width = 10000
+    buf[16] = 0;
+    buf[17] = 0;
+    buf[18] = 0x27;
+    buf[19] = 0x10;
+    // height = 10000
+    buf[20] = 0;
+    buf[21] = 0;
+    buf[22] = 0x27;
+    buf[23] = 0x10;
+    buf[24] = 8; // bit depth
+    buf[25] = 2; // RGB
+    buf[26] = 0;
+    buf[27] = 0;
+    buf[28] = 0; // no interlace
+    // CRC placeholder (decoder does not validate CRC before dimension check)
+    @memset(buf[29..33], 0);
+    try std.testing.expectError(error.InvalidImageSize, decodePng(std.testing.allocator, &buf));
 }
 
 test "paethPredictor basic cases" {

@@ -9,14 +9,11 @@
 //! Metric: mean negative log probability across all continuation tokens.
 //! Lower = better (model assigns higher probability to the correct tokens).
 //!
-//! Usage from main.zig:
-//!   const result = try eval.evaluate(allocator, model, tokenizer, continuations);
-//!   result.print();
+//! Library API (no `--eval` CLI yet). Score one prompt + continuation:
+//!   const result = eval.scoreCase(model, prompt_ids, continuation_ids) orelse return error.EvalFailed;
 //!
-//! Continuation file format (JSONL):
-//!   {"prompt": "What is 2+2?", "continuation": "The answer is 4.", "tokens": [464, 3361, ...]}
-//!   Each line has a prompt and either `continuation` (text, re-tokenized) or
-//!   `tokens` (pre-tokenized continuation token IDs).
+//! Collect reference continuations with `tools/quality-testing/collect_continuations.py`
+//! (JSONL: prompt plus `continuation` text and/or pre-tokenized `tokens`).
 //!
 //! Based on the quality testing approach from antirez/ds4.
 

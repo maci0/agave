@@ -2,6 +2,30 @@
 
 Templates and step-by-step guides for extending the inference engine.
 
+## Where New Code Goes
+
+| Kind of change | Put it in |
+|---|---|
+| Compute backend / kernels | `src/backend/` (+ `kernels/<backend>/`) |
+| Model architecture | `src/models/` |
+| Shared math / quant / attention ops | `src/ops/` |
+| Weight file formats | `src/format/` |
+| KV cache policy | `src/kvcache/` |
+| Speculative decoding | `src/spec/` |
+| HTTP API / scheduler / metrics | `src/server/` |
+| Built-in `--serve` chat UI | `src/web/` |
+| Browser WASM shell | `web/` (not `src/web/`) |
+| Tokenizer | `src/tokenizer/` |
+| Distributed TP/PP transport | `src/parallel/` |
+| Local GPU enumeration | `src/devices/` |
+| CLI flags / REPL wiring | `src/cli.zig`, `src/main.zig` |
+| Architecture enum / chat templates | `src/arch.zig`, `src/chat_template.zig` |
+| Directional steering | `src/steering.zig` (CLI via `main.zig`) |
+| NLL eval / MoE expert profile+cache | `src/eval.zig`, `src/expert_profile.zig`, `src/expert_cache.zig` (library; wire CLI in `main.zig` when ready) |
+| Image placeholder token IDs | `src/image_tokens.zig` (shared by `arch.zig` / `chat_template.zig`) |
+
+Import through package dispatchers (`backend/backend.zig`, `models/model.zig`, `format/format.zig`, `tokenizer/tokenizer.zig`). Do not import concrete backend or model files from outside their package.
+
 ## How to Add a New Backend
 
 Existing backends: CPU (`cpu.zig`), Metal (`metal.zig`), Vulkan (`vulkan.zig`), CUDA (`cuda.zig`), ROCm (`rocm.zig`), WebGPU (`webgpu.zig`).
@@ -451,6 +475,8 @@ maintainers (avoid commit hashes as the only description).
 4. Smoke: `agave --version`, one short CPU inference, and `GET /health` if serving.
 5. Note minimum Zig (`.zigversion`) in release notes when raised (breaking for
    builders).
+6. Run `python3 scripts/check-docs.py` (SemVer string must match across
+   `build.zig.zon`, `CHANGELOG.md`, `docs/API.md`, and `docs/CONTRIBUTING.md`).
 
 ### Deprecation
 
@@ -467,7 +493,10 @@ Until **1.0.0**, there is no multi-version support matrix and no promised LTS:
 - **Backports**: none by default. Cherry-picks are case-by-case only.
 - **Minimum Zig**: `.zigversion` / `build.zig.zon` `.minimum_zig_version`. Raising
   it is a **Breaking** changelog entry for anyone building from source.
-- **Experimental surface**: features described as incomplete, not CLI-enabled, or
-  `501 Not Implemented` in `docs/API.md` (for example token-bucket rate limiting)
-  are not a stability promise; do not depend on them without a changelog
-  commitment.
+- **Supported (opt-in)**: `--rate-limit-rpm` / `--rate-limit-tpm` token-bucket
+  limits (default off). Treat removals or default changes as **Breaking**.
+- **Experimental / incomplete**: endpoints that return `501 Not Implemented` in
+  `docs/API.md` (for example `/v1/embeddings`), disk KV checkpoint
+  (`checkpoint.KVC` in `src/kvcache/checkpoint.zig`, not CLI-exposed yet), and
+  the unversioned `/v1/kv_cache` HTTP blob (not the KVC disk header). Still
+  changelog user-visible breaks; do not assume long-term wire stability.

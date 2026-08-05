@@ -23,6 +23,7 @@ var inp = document.getElementById('msg');
 var sendBtn = document.getElementById('send-btn');
 var stopBtn = document.getElementById('stop-btn');
 var modelName = '', abortCtrl = null, isStreaming = false, autoScroll = true, renderTimer = null;
+var msgRoleIdSeq = 0;
 sendBtn.disabled = true;
 var backendName = '';
 var streamTokenCount = 0, streamStartTime = 0;
@@ -40,37 +41,52 @@ fetch('/v1/models').then(function(r) { return r.json(); }).then(function(d) {
 
 function setOfflineBadge() {
   var badge = document.getElementById('model-name');
-  badge.textContent = 'offline - click to retry';
-  badge.style.cursor = 'pointer';
-  badge.setAttribute('role', 'button');
-  badge.setAttribute('tabindex', '0');
-  badge.setAttribute('aria-label', 'Offline. Activate to retry connection');
-  badge.onkeydown = function(e) { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); badge.click(); } };
-  badge.onclick = function() {
-    badge.textContent = 'loading...';
-    badge.style.cursor = '';
-    badge.onclick = null;
-    badge.onkeydown = null;
-    badge.removeAttribute('role');
-    badge.removeAttribute('tabindex');
-    badge.removeAttribute('aria-label');
+  // Prefer a native button over role="button" on a live region span (4.1.2)
+  var btn = badge;
+  if (badge.tagName !== 'BUTTON') {
+    btn = document.createElement('button');
+    btn.type = 'button';
+    btn.id = 'model-name';
+    btn.className = 'model-badge';
+    btn.setAttribute('aria-live', 'polite');
+    badge.replaceWith(btn);
+  }
+  btn.textContent = 'offline - click to retry';
+  btn.setAttribute('aria-label', 'Offline. Activate to retry connection');
+  btn.onclick = function() {
+    var loading = document.createElement('span');
+    loading.id = 'model-name';
+    loading.className = 'model-badge';
+    loading.setAttribute('aria-live', 'polite');
+    loading.textContent = 'loading...';
+    btn.replaceWith(loading);
     fetch('/v1/models').then(function(r) { return r.json(); }).then(function(d) {
+      var el = document.getElementById('model-name');
       if (d.data && d.data[0]) {
         modelName = d.data[0].id;
         backendName = d.data[0].backend || '';
-        badge.textContent = modelName;
-        badge.title = modelName;
+        el.textContent = modelName;
+        el.title = modelName;
         updateCtxBadge(d.data[0]);
       } else { setOfflineBadge(); }
     }).catch(function() { setOfflineBadge(); });
   };
 }
 
-// Load system prompt from localStorage
-var savedSystemPrompt = localStorage.getItem('agave_system_prompt');
+// System prompt: sessionStorage only (tab lifetime). Migrate away from older
+// localStorage key so sensitive prompt text does not persist across sessions.
+var savedSystemPrompt = sessionStorage.getItem('agave_system_prompt');
+if (savedSystemPrompt === null) {
+  var legacySp = localStorage.getItem('agave_system_prompt');
+  if (legacySp !== null) {
+    savedSystemPrompt = legacySp;
+    sessionStorage.setItem('agave_system_prompt', legacySp);
+    localStorage.removeItem('agave_system_prompt');
+  }
+}
 if (savedSystemPrompt) document.getElementById('system-prompt').value = savedSystemPrompt;
 document.getElementById('system-prompt').addEventListener('input', function() {
-  localStorage.setItem('agave_system_prompt', this.value);
+  sessionStorage.setItem('agave_system_prompt', this.value);
 });
 
 // Persist and restore sampling settings
@@ -97,15 +113,38 @@ topPEl.addEventListener('input', function() {
   localStorage.setItem('agave_top_p', this.value);
 });
 maxTokEl.addEventListener('input', function() {
+  this.removeAttribute('aria-invalid');
+  var errEl = document.getElementById('max-tokens-error');
+  if (errEl) { errEl.textContent = ''; errEl.hidden = true; }
+  this.setAttribute('aria-describedby', 'max-tokens-range');
   localStorage.setItem('agave_max_tokens', this.value);
 });
 maxTokEl.addEventListener('keydown', function(e) {
   if (e.key === 'Enter') e.preventDefault();
 });
 maxTokEl.addEventListener('blur', function() {
-  var v = parseInt(this.value);
-  if (isNaN(v) || v < 1) this.value = 1;
-  else if (v > 4096) this.value = 4096;
+  var raw = this.value;
+  var v = parseInt(raw, 10);
+  var clamped = v;
+  if (isNaN(v) || v < 1) clamped = 1;
+  else if (v > 4096) clamped = 4096;
+  var errEl = document.getElementById('max-tokens-error');
+  if (String(clamped) !== String(raw).trim() || isNaN(v)) {
+    this.value = clamped;
+    this.setAttribute('aria-invalid', 'true');
+    var msg = 'Max tokens adjusted to ' + clamped + ' (allowed range 1 to 4096)';
+    if (errEl) {
+      errEl.textContent = msg;
+      errEl.hidden = false;
+      this.setAttribute('aria-describedby', 'max-tokens-range max-tokens-error');
+    } else {
+      announceToSR(msg);
+    }
+  } else {
+    this.removeAttribute('aria-invalid');
+    if (errEl) { errEl.textContent = ''; errEl.hidden = true; }
+    this.setAttribute('aria-describedby', 'max-tokens-range');
+  }
   localStorage.setItem('agave_max_tokens', this.value);
 });
 
@@ -177,6 +216,9 @@ function onImageSelect(e) {
 
 function removeImage() {
   pendingImage = null;
+  var thumb = document.getElementById('img-thumb');
+  thumb.removeAttribute('src');
+  thumb.src = '';
   document.getElementById('img-preview').style.display = 'none';
   document.getElementById('img-input').value = '';
   sendBtn.disabled = !inp.value.trim();
@@ -248,6 +290,8 @@ function setStreaming(s) {
     streamTokenCount = 0; streamStartTime = performance.now();
     tc.textContent = fmtNum(0, 1) + ' tok/s'; tc.classList.add('visible');
     announceToSR('Generating response…');
+    // Move focus to Stop so keyboard users can cancel without hunting (2.4.3)
+    stopBtn.focus();
   } else {
     tc.classList.remove('visible');
     announceToSR('Response complete.');
@@ -296,9 +340,12 @@ function toggleSettings() {
 function clearSystemPrompt() {
   var el = document.getElementById('system-prompt');
   el.value = '';
+  sessionStorage.removeItem('agave_system_prompt');
   localStorage.removeItem('agave_system_prompt');
   announceToSR('System prompt cleared');
 }
+
+var CTX_WARN_RATIO = 0.85;
 
 function updateCtxBadge(modelData) {
   var badge = document.getElementById('ctx-badge');
@@ -308,9 +355,23 @@ function updateCtxBadge(modelData) {
   if (max <= 0) return;
   var fmtCtx = function(n) { return n >= 1024 ? fmtInt(Math.round(n / 1024)) + 'K' : fmtInt(n); };
   var label = fmtCtx(used) + '/' + fmtCtx(max);
+  var nearFull = used / max >= CTX_WARN_RATIO;
   badge.textContent = label;
-  badge.setAttribute('aria-label', 'Context: ' + fmtInt(used) + ' of ' + fmtInt(max) + ' tokens used');
+  badge.classList.toggle('warn', nearFull);
+  badge.setAttribute('aria-label', nearFull
+    ? 'Context nearly full: ' + fmtInt(used) + ' of ' + fmtInt(max) + ' tokens used'
+    : 'Context: ' + fmtInt(used) + ' of ' + fmtInt(max) + ' tokens used');
   badge.classList.add('visible');
+}
+
+/** Map HTTP status codes to short, actionable messages for the chat UI. */
+function httpErrorMessage(status) {
+  if (status === 400) return 'The request was rejected. Check your message and settings.';
+  if (status === 413) return 'Message or image is too large.';
+  if (status === 429) return 'The server is busy. Wait a moment and try again.';
+  if (status === 503) return 'The model is not ready yet. Try again shortly.';
+  if (status >= 500) return 'Something went wrong on the server. Try again.';
+  return 'Could not complete the request (error ' + status + ').';
 }
 
 function refreshCtxBadge() {
@@ -346,7 +407,10 @@ function exportConv() {
 function addUser(text, imageSrc) {
   var e = document.getElementById('empty'); if (e) e.remove();
   var w = document.createElement('div'); w.className = 'msg-wrap user';
-  var r = document.createElement('span'); r.className = 'role user'; r.textContent = 'You';
+  w.setAttribute('role', 'group');
+  var roleId = 'msg-role-' + (++msgRoleIdSeq);
+  w.setAttribute('aria-labelledby', roleId);
+  var r = document.createElement('span'); r.className = 'role user'; r.id = roleId; r.textContent = 'You';
   var m = document.createElement('div'); m.className = 'msg user'; m.dir = 'auto';
   if (imageSrc) {
     var img = document.createElement('img'); img.className = 'msg-img'; img.src = imageSrc; img.alt = 'Attached image';
@@ -361,7 +425,10 @@ function addUser(text, imageSrc) {
 function addAssistant() {
   var e = document.getElementById('empty'); if (e) e.remove();
   var w = document.createElement('div'); w.className = 'msg-wrap assistant';
-  var r = document.createElement('span'); r.className = 'role assistant'; r.textContent = 'agave';
+  w.setAttribute('role', 'group');
+  var roleId = 'msg-role-' + (++msgRoleIdSeq);
+  w.setAttribute('aria-labelledby', roleId);
+  var r = document.createElement('span'); r.className = 'role assistant'; r.id = roleId; r.textContent = 'agave';
   var m = document.createElement('div'); m.className = 'msg assistant thinking'; m.dir = 'auto';
   m.textContent = '\u2026';
   w.appendChild(r); w.appendChild(m); chat.appendChild(w); scrollBottom();
@@ -407,6 +474,14 @@ function renderContent(el, content, final) {
   if (renderTimer && !final) return;
   var doRender = function() {
     el.classList.remove('thinking');
+    // During streaming, skip marked+DOMPurify (O(n) every tick). Plain text is enough;
+    // full markdown/sanitize runs once on the final chunk.
+    if (!final) {
+      el.textContent = content;
+      scrollBottom();
+      renderTimer = null;
+      return;
+    }
     el.textContent = '';
     var dc = content;
     if (content.indexOf('<think>') !== -1) {
@@ -451,12 +526,23 @@ function renderContent(el, content, final) {
       var h = a.getAttribute('href') || '';
       // Block active content schemes that may survive sanitizer gaps (CWE-79).
       var lower = h.trim().toLowerCase();
+      var isData = lower.indexOf('data:') === 0;
+      var isSafeDataImage = lower.indexOf('data:image/') === 0 && lower.indexOf('data:image/svg') !== 0;
       if (lower.indexOf('javascript:') === 0 || lower.indexOf('vbscript:') === 0 ||
-          lower.indexOf('data:text/html') === 0) {
+          (isData && !isSafeDataImage)) {
         a.removeAttribute('href');
         return;
       }
-      if (h && h.charAt(0) !== '#') { a.target = '_blank'; a.rel = 'noopener noreferrer'; }
+      if (h && h.charAt(0) !== '#') {
+        a.target = '_blank';
+        a.rel = 'noopener noreferrer';
+        if (!a.querySelector('.sr-only-newtab')) {
+          var tip = document.createElement('span');
+          tip.className = 'sr-only sr-only-newtab';
+          tip.textContent = ' (opens in new tab)';
+          a.appendChild(tip);
+        }
+      }
     });
     if (final) {
       el.setAttribute('data-content', content);
@@ -511,7 +597,7 @@ function streamResponse(body, errLabel, url) {
   fetch(url || '/v1/chat', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: body, signal: abortCtrl.signal })
   .then(function(resp) {
-    if (!resp.ok) throw new Error('Server error: ' + resp.status);
+    if (!resp.ok) throw new Error(httpErrorMessage(resp.status));
     var reader = resp.body.getReader(), decoder = new TextDecoder(), buf = '';
     function read() {
       return reader.read().then(function(r) {
@@ -583,7 +669,7 @@ function regenerate() {
 function handleCommand(cmd) {
   if (cmd === '/help') {
     var el = addAssistant();
-    renderContent(el, '**Commands:**\n- `/clear` / `/reset` \u2014 Clear conversation and KV cache\n- `/stats` \u2014 Toggle generation statistics\n- `/context` / `/ctx` \u2014 Show context window usage\n- `/model` \u2014 Show model name\n- `/help` \u2014 Show this help\n\n**Shortcuts:**\n- `Enter` \u2014 Send message\n- `Shift+Enter` \u2014 New line\n- `Escape` \u2014 Stop generation or close dialog\n\nUse the \u2699 settings panel to configure temperature, top-p, max tokens, and system prompt.', true);
+    renderContent(el, '**Commands:**\n- `/clear` / `/reset`: Clear conversation and KV cache\n- `/stats`: Toggle generation statistics\n- `/context` / `/ctx`: Show context window usage\n- `/model`: Show model name\n- `/help`: Show this help\n\n**Shortcuts:**\n- `Enter`: Send message\n- `Shift+Enter`: New line\n- `Escape`: Stop generation or close dialog\n\nUse the \u2699 settings panel to configure temperature, top-p, max tokens, and system prompt.', true);
     return;
   }
   if (cmd === '/stats') {
@@ -653,7 +739,7 @@ function showEmpty() {
   while (chat.firstChild) chat.removeChild(chat.firstChild);
   var empty = document.createElement('div'); empty.id = 'empty';
   // Hardcoded HTML constant — no user input, safe without sanitization
-  var icon = document.createElement('div'); icon.className = 'icon'; icon.textContent = '\uD83C\uDF35';
+  var icon = document.createElement('div'); icon.className = 'icon'; icon.setAttribute('aria-hidden', 'true'); icon.textContent = '\uD83C\uDF35';
   var h2 = document.createElement('h2'); h2.textContent = 'agave';
   var p = document.createElement('p'); p.textContent = 'High-performance LLM inference engine';
   var hints = document.createElement('div'); hints.className = 'hints';
@@ -668,13 +754,27 @@ function showEmpty() {
   chat.appendChild(empty);
 }
 
+function closeMobileSidebar() {
+  var sb = document.getElementById('sidebar');
+  if (sb && sb.classList.contains('open') && window.matchMedia('(max-width: 700px)').matches) {
+    toggleSidebar();
+  }
+}
+
 function clearChat() {
-  if (!confirm('Clear this conversation?')) return;
+  var hasMsgs = !!chat.querySelector('.msg-wrap');
+  if (hasMsgs && !confirm('Clear this conversation?')) return;
   if (isStreaming) stopGen();
   if (pendingImage) removeImage();
   fetch('/v1/chat', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: 'message=%2Fclear' })
-  .then(function() { loadConvs(); showEmpty(); inp.focus(); announceToSR('Conversation cleared'); })
-  .catch(function() { showEmpty(); inp.focus(); showToast('Could not clear on server. Local view was reset.', 'info'); });
+  .then(function() {
+    loadConvs(); showEmpty(); closeMobileSidebar(); inp.focus();
+    announceToSR('Conversation cleared');
+  })
+  .catch(function() {
+    showEmpty(); closeMobileSidebar(); inp.focus();
+    showToast('Could not clear on server. Local view was reset.', 'info');
+  });
 }
 
 function toggleSidebar() {
@@ -683,8 +783,12 @@ function toggleSidebar() {
   document.getElementById('sidebar-overlay').classList.toggle('show');
   if (btn) btn.setAttribute('aria-expanded', isOpen);
   var main = document.querySelector('.main');
+  var hdr = document.querySelector('header');
   var isMobile = window.matchMedia('(max-width: 700px)').matches;
-  if (main && isMobile) main.inert = isOpen;
+  if (isMobile) {
+    if (main) main.inert = isOpen;
+    if (hdr) hdr.inert = isOpen;
+  }
   if (isOpen) {
     var firstBtn = sb.querySelector('.new-chat-btn');
     if (firstBtn) firstBtn.focus();
@@ -700,6 +804,7 @@ function toggleSidebar() {
   } else {
     if (sb._trapFocus) { sb.removeEventListener('keydown', sb._trapFocus); sb._trapFocus = null; }
     if (main) main.inert = false;
+    if (hdr) hdr.inert = false;
     if (btn && btn.offsetParent !== null) btn.focus();
   }
 }
@@ -709,6 +814,7 @@ function loadConvs() {
     var list = document.getElementById('conv-list');
     while (list.firstChild) list.removeChild(list.firstChild);
     if (!convs.length) {
+      list.removeAttribute('role');
       var em = document.createElement('div'); em.className = 'conv-empty';
       em.appendChild(document.createTextNode('No conversations yet.'));
       em.appendChild(document.createElement('br'));
@@ -718,6 +824,7 @@ function loadConvs() {
       em.appendChild(document.createTextNode(' to start.'));
       list.appendChild(em); return;
     }
+    list.setAttribute('role', 'list');
     convs.forEach(function(c) {
       var item = document.createElement('div'); item.className = 'conv-item' + (c.active ? ' active' : '');
       item.setAttribute('role', 'listitem');
@@ -738,7 +845,17 @@ function loadConvs() {
   }).catch(function() {
     var list = document.getElementById('conv-list');
     while (list.firstChild) list.removeChild(list.firstChild);
-    var em = document.createElement('div'); em.className = 'conv-empty'; em.textContent = 'Could not load conversations';
+    list.removeAttribute('role');
+    var em = document.createElement('div'); em.className = 'conv-empty';
+    em.appendChild(document.createTextNode('Could not load conversations.'));
+    em.appendChild(document.createElement('br'));
+    var retry = document.createElement('button');
+    retry.type = 'button';
+    retry.className = 'conv-retry';
+    retry.textContent = 'Retry';
+    retry.setAttribute('aria-label', 'Retry loading conversations');
+    retry.onclick = function() { loadConvs(); };
+    em.appendChild(retry);
     list.appendChild(em);
   });
 }
@@ -748,7 +865,7 @@ function newConv() {
   if (pendingImage) removeImage();
   fetch('/v1/conversations', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: 'action=new' })
   .then(function() {
-    loadConvs(); showEmpty(); inp.focus();
+    loadConvs(); showEmpty(); closeMobileSidebar(); inp.focus();
     announceToSR('New conversation started');
   }).catch(function() {
     loadConvs();
@@ -778,6 +895,7 @@ function selectConv(id) {
     inp.focus();
   }).catch(function() {
     if (mySeq !== selectSeq) return;
+    while (chat.firstChild) chat.removeChild(chat.firstChild);
     var errMsg = 'Failed to load conversation. Check that the server is running.';
     var err = document.createElement('div'); err.className = 'error-msg';
     err.setAttribute('role', 'alert');
@@ -817,14 +935,18 @@ function setDialogBackdropInert(on) {
 var infoTrigger = null;
 function showInfo() {
   var m = document.getElementById('info-modal'); m.classList.add('show');
+  m.setAttribute('aria-hidden', 'false');
+  var dlg = m.querySelector('.modal');
   infoTrigger = document.activeElement;
   document.getElementById('info-model').textContent = modelName || '-';
   document.getElementById('info-backend').textContent = backendName || '-';
   setDialogBackdropInert(true);
   var cb = m.querySelector('.modal-close'); if (cb) cb.focus();
+  else if (dlg) dlg.focus();
   m._trapFocus = function(e) {
     if (e.key !== 'Tab') return;
-    var focusable = m.querySelectorAll('button, [href], [tabindex]:not([tabindex="-1"])');
+    var root = dlg || m;
+    var focusable = root.querySelectorAll('button, [href], [tabindex]:not([tabindex="-1"])');
     if (!focusable.length) return;
     var first = focusable[0], last = focusable[focusable.length - 1];
     if (e.shiftKey) { if (document.activeElement === first) { e.preventDefault(); last.focus(); } }
@@ -835,6 +957,7 @@ function showInfo() {
 
 function hideInfo() {
   var m = document.getElementById('info-modal'); m.classList.remove('show');
+  m.setAttribute('aria-hidden', 'true');
   if (m._trapFocus) { m.removeEventListener('keydown', m._trapFocus); m._trapFocus = null; }
   setDialogBackdropInert(false);
   if (infoTrigger && infoTrigger.offsetParent !== null) infoTrigger.focus();

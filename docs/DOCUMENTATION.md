@@ -30,7 +30,7 @@ A progressive tutorial series that builds understanding layer by layer:
 21. [LoRA Adapters](tutorial/21-lora.md): load-time F32 merge of low-rank adapter weights
 22. [Distributed Inference](tutorial/22-distributed-inference.md): tensor/pipeline parallelism, transport selection, device sharding
 23. [Server / HTTP API](tutorial/23-server-http-api.md): HTTP request pipeline, sessions, streaming, structured output
-24. [Advanced Features](tutorial/24-advanced-features.md): directional steering, NLL quality testing, expert profiling, KV checkpointing, mixed-quant splicing, SSD expert streaming
+24. [Advanced Features](tutorial/24-advanced-features.md): directional steering (CLI); NLL scoring, expert profiling, KV checkpoint headers, SSD expert streaming (library); mixed-quant splicing (tooling)
 
 **Appendices:**
 - [Troubleshooting](tutorial/appendix-troubleshooting.md): symptom → cause → fix for common inference failures

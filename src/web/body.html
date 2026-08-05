@@ -6,7 +6,7 @@
 <header>
 <div class="logo">
 <button type="button" class="hdr-btn menu-btn" onclick="toggleSidebar()" title="Menu" aria-label="Toggle sidebar" aria-expanded="false" aria-controls="sidebar" id="menu-btn">&#9776;</button>
-<h1>&#127797; agave</h1><span class="model-badge" id="model-name" aria-live="polite">loading...</span><span class="ctx-badge" id="ctx-badge" aria-live="polite"></span></div>
+<h1><span aria-hidden="true">&#127797; </span>agave</h1><span class="model-badge" id="model-name" aria-live="polite">loading...</span><span class="ctx-badge" id="ctx-badge" aria-live="polite"></span></div>
 <div class="hdr-btns">
 <button type="button" class="new-chat-btn" onclick="newConv()" aria-label="New conversation">+ New</button>
 <button type="button" class="hdr-btn" onclick="exportConv()" title="Export conversation" aria-label="Export conversation"><span class="btn-text">Export </span>&#8681;</button>
@@ -20,12 +20,12 @@
 <h2 class="sidebar-title">Chats</h2>
 <button type="button" class="new-chat-btn" onclick="newConv()" aria-label="New conversation">+ New</button>
 </div>
-<div class="conv-list" id="conv-list" role="list" aria-label="Conversations"><div class="conv-empty">No conversations yet.<br>Use <strong>+ New</strong> to start.</div></div>
+<div class="conv-list" id="conv-list" aria-label="Conversations"><div class="conv-empty">No conversations yet.<br>Use <strong>+ New</strong> to start.</div></div>
 </aside>
 <main class="main">
 <div id="chat" role="log" aria-label="Chat messages" aria-live="off" tabindex="0">
 <div id="empty">
-<div class="icon">&#127797;</div><h2>agave</h2>
+<div class="icon" aria-hidden="true">&#127797;</div><h2>agave</h2>
 <p>High-performance LLM inference engine</p>
 <div class="hints">
 <span class="hint">Type a message to start</span>
@@ -34,11 +34,11 @@
 </div>
 </div>
 </div>
-<div class="modal-overlay" id="info-modal" onclick="if(event.target===this)hideInfo()" role="dialog" aria-modal="true" aria-labelledby="modal-title">
-<div class="modal">
+<div class="modal-overlay" id="info-modal" onclick="if(event.target===this)hideInfo()" aria-hidden="true">
+<div class="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title" tabindex="-1">
 <div class="modal-head">
-<h2 class="modal-title" id="modal-title">&#127797; About Agave</h2>
-<button class="modal-close" onclick="hideInfo()" aria-label="Close dialog">&#10005;</button>
+<h2 class="modal-title" id="modal-title"><span aria-hidden="true">&#127797; </span>About Agave</h2>
+<button type="button" class="modal-close" onclick="hideInfo()" aria-label="Close dialog">&#10005;</button>
 </div>
 <div class="modal-body">
 <p><strong>Agave LLM Inference Engine</strong></p>
@@ -53,6 +53,8 @@
 <li>SSE streaming responses</li>
 <li>Zero-copy weight loading via mmap</li>
 </ul>
+<h3>Privacy</h3>
+<p>Prompts and chats stay on this machine. Conversations are in-memory only (cleared on server restart or delete). The system prompt is kept in session storage for this browser tab and is not sent to third parties. No analytics or telemetry.</p>
 <h3>Shortcuts</h3>
 <div class="info-row"><span class="info-label">Send</span><span class="info-val"><kbd>Enter</kbd></span></div>
 <div class="info-row"><span class="info-label">New line</span><span class="info-val"><kbd>Shift+Enter</kbd></span></div>
@@ -81,16 +83,17 @@
 <div class="setting-group">
 <label for="max-tokens">Max Tokens</label>
 <input type="number" id="max-tokens" min="1" max="4096" value="512" inputmode="numeric" aria-describedby="max-tokens-range"><span id="max-tokens-range" class="setting-range-hint">1–4096</span>
+<span id="max-tokens-error" class="setting-error" role="alert" hidden></span>
 </div>
 </div>
 <div class="system-prompt-group">
-<div class="system-prompt-header"><label for="system-prompt">System Prompt</label><button type="button" class="system-prompt-clear" onclick="clearSystemPrompt()" aria-label="Clear system prompt">clear</button></div>
+<div class="system-prompt-header"><label for="system-prompt">System Prompt</label><button type="button" class="system-prompt-clear" onclick="clearSystemPrompt()" aria-label="Clear system prompt">Clear</button></div>
 <textarea id="system-prompt" placeholder="Optional system prompt..." rows="2" spellcheck="false" autocapitalize="off" dir="auto"></textarea>
 </div>
 </div>
 <div class="input-row">
 <input type="file" id="img-input" accept="image/jpeg,image/png,image/gif,image/webp" style="display:none" aria-label="Attach image" onchange="onImageSelect(event)">
-<button type="button" class="hdr-btn img-btn" id="img-btn" onclick="document.getElementById('img-input').click()" title="Attach image" aria-label="Attach image">&#128247;</button>
+<button type="button" class="hdr-btn img-btn" id="img-btn" onclick="document.getElementById('img-input').click()" title="Attach image (or paste / drop)" aria-label="Attach image. You can also paste or drop an image.">&#128247;</button>
 <textarea id="msg" placeholder="Send a message..." rows="1" aria-label="Message input" aria-describedby="input-hint" enterkeyhint="send" autocomplete="off" autofocus dir="auto"></textarea>
 <button type="button" class="settings-toggle" id="settings-toggle" onclick="toggleSettings()" title="Sampling settings" aria-label="Toggle settings panel" aria-expanded="false" aria-controls="settings-panel">&#9881;</button>
 <button type="submit" class="send-btn" id="send-btn" title="Send message (Enter)" aria-label="Send message">Send</button>

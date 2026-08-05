@@ -38,6 +38,21 @@ jobs:
         id: zig
         run: echo "version=$(tr -d '[:space:]' < .zigversion)" >> "$GITHUB_OUTPUT"
 
+      - name: Check Zig version pins agree
+        run: |
+          set -euo pipefail
+          pin="${{ steps.zig.outputs.version }}"
+          zon="$(sed -n 's/^[[:space:]]*\.minimum_zig_version[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' build.zig.zon | head -n1)"
+          if [[ -z "$zon" ]]; then
+            echo "::error::Could not parse minimum_zig_version from build.zig.zon"
+            exit 1
+          fi
+          if [[ "$pin" != "$zon" ]]; then
+            echo "::error::.zigversion ($pin) != build.zig.zon minimum_zig_version ($zon)"
+            exit 1
+          fi
+          echo "Zig pin OK: $pin"
+
       - name: Setup Zig
         uses: goto-bus-stop/setup-zig@abea47f85e598557f500fa1fd2ab7464fcb39406 # v2.2.1
         with:
@@ -71,7 +86,8 @@ jobs:
           path: |
             .zig-cache
             ~/.cache/zig
-          key: zig-${{ steps.zig.outputs.version }}-linux-x86-${{ hashFiles('build.zig', 'build.zig.zon', 'src/**/*.zig', 'tests/**/*.zig') }}
+          # Hash all of src/ (embedded .metal/.spv/.wgsl/.ptx/.hsaco + src/web UI), not only *.zig.
+          key: zig-${{ steps.zig.outputs.version }}-linux-x86-${{ hashFiles('build.zig', 'build.zig.zon', 'src/**', 'tests/**') }}
           restore-keys: zig-${{ steps.zig.outputs.version }}-linux-x86-
 
       - name: Run tests
@@ -102,7 +118,8 @@ jobs:
           path: |
             .zig-cache
             ~/Library/Caches/zig
-          key: zig-${{ steps.zig.outputs.version }}-macos-${{ hashFiles('build.zig', 'build.zig.zon', 'src/**/*.zig', 'tests/**/*.zig') }}
+          # Hash all of src/ (embedded kernels + src/web UI), not only *.zig.
+          key: zig-${{ steps.zig.outputs.version }}-macos-${{ hashFiles('build.zig', 'build.zig.zon', 'src/**', 'tests/**') }}
           restore-keys: zig-${{ steps.zig.outputs.version }}-macos-
 
       - name: Run tests
@@ -150,7 +167,24 @@ jobs:
           cache-to: type=gha,mode=max
 
       - name: Smoke test binary
-        run: docker run --rm --entrypoint agave agave:ci --help
+        run: |
+          set -euo pipefail
+          docker run --rm --entrypoint agave agave:ci --help
+          # Runtime image must not run as root (Dockerfile USER agave, uid 10001).
+          uid="$(docker run --rm --entrypoint id agave:ci -u)"
+          if [[ "$uid" != "10001" ]]; then
+            echo "::error::Container uid=$uid; expected USER agave (uid 10001)"
+            exit 1
+          fi
+          echo "Container uid=$uid (non-root ok)"
+          # HEALTHCHECK must probe /ready (not /health) so orchestrators do not
+          # route to degraded instances. One-shot CLI runs should pass --no-healthcheck.
+          hc="$(docker inspect --format='{{json .Config.Healthcheck.Test}}' agave:ci)"
+          if [[ "$hc" != *"/ready"* ]]; then
+            echo "::error::Image HEALTHCHECK missing /ready probe: $hc"
+            exit 1
+          fi
+          echo "HEALTHCHECK ok: $hc"
 
   cross-compile-check:
     name: Cross-compilation matrix
@@ -184,7 +218,7 @@ jobs:
           path: |
             .zig-cache
             ~/.cache/zig
-          key: zig-${{ steps.zig.outputs.version }}-cross-${{ matrix.target }}-${{ hashFiles('build.zig', 'build.zig.zon', 'src/**/*.zig') }}
+          key: zig-${{ steps.zig.outputs.version }}-cross-${{ matrix.target }}-${{ hashFiles('build.zig', 'build.zig.zon', 'src/**') }}
           restore-keys: zig-${{ steps.zig.outputs.version }}-cross-${{ matrix.target }}-
 
       - name: Build for target
@@ -223,13 +257,13 @@ jobs:
           path: |
             .zig-cache
             ~/.cache/zig
-          key: zig-${{ steps.zig.outputs.version }}-fuzz-${{ hashFiles('build.zig', 'build.zig.zon', 'src/**/*.zig', 'tests/**/*.zig') }}
+          key: zig-${{ steps.zig.outputs.version }}-fuzz-${{ hashFiles('build.zig', 'build.zig.zon', 'src/**', 'tests/**') }}
           restore-keys: zig-${{ steps.zig.outputs.version }}-fuzz-
 
       - name: Run bounded fuzz pass
         # --fuzz=N runs coverage-guided mutation for N iterations then exits.
         # Focus on untrusted-input surfaces (JSON, GGUF, image, grammar, CLI).
-        run: zig build test --fuzz=500 --summary all
+        run: zig build test --fuzz=1000 --summary all
 
   ci-pass:
     name: CI passed
@@ -240,8 +274,21 @@ jobs:
     steps:
       - name: Verify all jobs passed
         run: |
-          if [[ "${{ contains(needs.*.result, 'failure') }}" == "true" ]] || \
-             [[ "${{ contains(needs.*.result, 'cancelled') }}" == "true" ]]; then
-            echo "::error::One or more CI jobs failed or were cancelled"
-            exit 1
-          fi
+          set -euo pipefail
+          # Require every needed job == success (skipped/cancelled must not green the gate).
+          for pair in \
+            "fmt-check:${{ needs.fmt-check.result }}" \
+            "test-linux-x86:${{ needs.test-linux-x86.result }}" \
+            "test-macos:${{ needs.test-macos.result }}" \
+            "docker-build:${{ needs.docker-build.result }}" \
+            "cross-compile-check:${{ needs.cross-compile-check.result }}" \
+            "fuzz-smoke:${{ needs.fuzz-smoke.result }}"
+          do
+            name="${pair%%:*}"
+            result="${pair#*:}"
+            if [[ "$result" != "success" ]]; then
+              echo "::error::Required CI job '$name' result was '$result' (expected success)"
+              exit 1
+            fi
+          done
+          echo "All required CI jobs succeeded"

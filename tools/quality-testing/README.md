@@ -28,17 +28,20 @@ python3 tools/quality-testing/collect_continuations.py \
 
 ### 2. Score Local Model
 
-```bash
-agave model.gguf --eval continuations.jsonl
+There is **no `--eval` CLI flag** yet. Call the library from Zig (tests or a
+thin harness) after tokenizing each JSONL line:
+
+```zig
+const result = eval.scoreCase(model, prompt_ids, continuation_ids) orelse return error.EvalFailed;
+// Compare result.mean_nll / argmax accuracy across quants
 ```
+
+See [`src/eval.zig`](../../src/eval.zig) and [Chapter 24](../../docs/tutorial/24-advanced-features.md).
 
 ### 3. Compare Quantizations
 
-```bash
-agave model-q4.gguf --eval continuations.jsonl    # NLL: 1.234
-agave model-q8.gguf --eval continuations.jsonl    # NLL: 0.987
-agave model-f16.gguf --eval continuations.jsonl   # NLL: 0.954 (baseline)
-```
+Score the same `continuations.jsonl` against Q4 / Q8 / F16 builds with
+`scoreCase` and compare mean NLL (lower is better) and argmax accuracy.
 
 ## Prompt File Format
 

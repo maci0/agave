@@ -72,12 +72,11 @@ pub const Prefetcher = struct {
         const end = @min(start_idx + prefetch_count, block_ids.len);
         if (start_idx >= block_ids.len) return;
 
-        self.mutex.lockUncancelable(self.io);
-        defer self.mutex.unlock(self.io);
-
-        // Check promotion status under tier_lock to avoid data race on blk.tier.
-        // Worker's promoteFromSsd handles already-promoted blocks (returns early).
-        var queued: usize = 0;
+        // Probe tier state WITHOUT holding the ring mutex. promoteFromSsd may hold
+        // tier_lock across SSD I/O; nesting ring mutex → tier_lock would stall the
+        // worker's dequeue path (and any other prefetchNext) for the full I/O wait.
+        var to_queue: [prefetch_count]u32 = undefined;
+        var n_queue: usize = 0;
         for (block_ids[start_idx..end]) |block_id| {
             const needs = blk: {
                 self.cache.lockTier();
@@ -85,16 +84,26 @@ pub const Prefetcher = struct {
                 break :blk self.cache.needsPromotion(block_id);
             };
             if (needs) {
-                if (self.ring_len >= max_queue_size) {
-                    std.log.warn("Prefetch queue full — dropping oldest job (block {d})", .{self.ring[self.ring_head].block_id});
-                    self.ring_head = (self.ring_head + 1) % max_queue_size;
-                    self.ring_len -= 1;
-                }
-                const tail = (self.ring_head + self.ring_len) % max_queue_size;
-                self.ring[tail] = .{ .block_id = block_id };
-                self.ring_len += 1;
-                queued += 1;
+                to_queue[n_queue] = block_id;
+                n_queue += 1;
             }
+        }
+        if (n_queue == 0) return;
+
+        self.mutex.lockUncancelable(self.io);
+        defer self.mutex.unlock(self.io);
+
+        var queued: usize = 0;
+        for (to_queue[0..n_queue]) |block_id| {
+            if (self.ring_len >= max_queue_size) {
+                std.log.warn("Prefetch queue full, dropping oldest job (block {d})", .{self.ring[self.ring_head].block_id});
+                self.ring_head = (self.ring_head + 1) % max_queue_size;
+                self.ring_len -= 1;
+            }
+            const tail = (self.ring_head + self.ring_len) % max_queue_size;
+            self.ring[tail] = .{ .block_id = block_id };
+            self.ring_len += 1;
+            queued += 1;
         }
 
         if (queued > 0) {

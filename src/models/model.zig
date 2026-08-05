@@ -103,9 +103,13 @@ pub const Model = struct {
         /// Export KV cache for positions [0, kv_seq_len) into a caller-allocated buffer.
         /// Returns the number of bytes written, or 0 if export is unsupported.
         /// Used for cross-instance KV cache sharing (LMCache-style prefix offload).
+        /// Soft stub returns 0 when the concrete model omits `exportKvPrefix`
+        /// (only Gemma4 implements today). Wire layout is unversioned f32; see
+        /// docs/ARCHITECTURE.md Design Decisions and docs/API.md.
         export_kv_prefix: *const fn (self: *anyopaque, dst: []u8, n_tokens: usize) usize,
         /// Import KV cache from a buffer (previously exported by export_kv_prefix).
         /// Sets kv_seq_len to n_tokens on success. Returns false if unsupported.
+        /// Soft stub returns false when the concrete model omits `importKvPrefix`.
         import_kv_prefix: *const fn (self: *anyopaque, src: []const u8, n_tokens: usize) bool,
     };
 

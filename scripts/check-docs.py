@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Lightweight docs hygiene checks for Agave.
 
-Validates relative links, mermaid vs diagram asset counts, and backend
-kernel count claims against source constants.
+Validates relative links, mermaid vs diagram asset counts, backend kernel
+count claims against source constants, and product SemVer / Zig version
+alignment across build.zig.zon, CHANGELOG, API docs, and .zigversion.
 """
 
 from __future__ import annotations
@@ -83,11 +84,65 @@ def check_kernel_constants() -> list[str]:
     return errors
 
 
+def check_version_consistency() -> list[str]:
+    """Keep product SemVer and minimum Zig aligned across release SSOT files."""
+    errors: list[str] = []
+    zon = (ROOT / "build.zig.zon").read_text(encoding="utf-8", errors="replace")
+    ver_m = re.search(r'\.version\s*=\s*"([^"]+)"', zon)
+    zig_m = re.search(r'\.minimum_zig_version\s*=\s*"([^"]+)"', zon)
+    if not ver_m:
+        return ["build.zig.zon: missing .version string"]
+    if not zig_m:
+        return ["build.zig.zon: missing .minimum_zig_version string"]
+    product = ver_m.group(1)
+    min_zig = zig_m.group(1)
+
+    zigversion_path = ROOT / ".zigversion"
+    if zigversion_path.exists():
+        file_zig = zigversion_path.read_text(encoding="utf-8", errors="replace").strip()
+        if file_zig != min_zig:
+            errors.append(
+                f".zigversion: {file_zig!r} != build.zig.zon minimum_zig_version {min_zig!r}"
+            )
+    else:
+        errors.append(".zigversion: missing (must match build.zig.zon .minimum_zig_version)")
+
+    changelog = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8", errors="replace")
+    if f"Product version is **{product}**" not in changelog:
+        errors.append(
+            f"CHANGELOG.md: must state Product version is **{product}** "
+            "(match build.zig.zon .version)"
+        )
+    if "## [Unreleased]" not in changelog:
+        errors.append("CHANGELOG.md: missing ## [Unreleased] section")
+
+    api = (ROOT / "docs" / "API.md").read_text(encoding="utf-8", errors="replace")
+    if f"Product version **{product}**" not in api:
+        errors.append(
+            f"docs/API.md: must state Product version **{product}** "
+            "(match build.zig.zon .version)"
+        )
+    if f'"agave-v{product}"' not in api and f"agave-v{product}" not in api:
+        errors.append(
+            f"docs/API.md: system_fingerprint examples should use agave-v{product}"
+        )
+
+    contrib = (ROOT / "docs" / "CONTRIBUTING.md").read_text(encoding="utf-8", errors="replace")
+    if f"Product version: **{product}**" not in contrib:
+        errors.append(
+            f"docs/CONTRIBUTING.md: must state Product version: **{product}** "
+            "(match build.zig.zon .version)"
+        )
+
+    return errors
+
+
 def main() -> int:
     errors: list[str] = []
     errors.extend(check_links())
     errors.extend(check_diagram_counts())
     errors.extend(check_kernel_constants())
+    errors.extend(check_version_consistency())
     if errors:
         print(f"check-docs: {len(errors)} issue(s)")
         for e in errors:

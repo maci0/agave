@@ -232,7 +232,7 @@ fn getenv(name: []const u8) ?[]const u8 {
 /// Print usage information to stdout (pipeable: agave pull --help | less).
 pub fn printUsage() void {
     const usage =
-        \\agave pull — Download models from HuggingFace Hub
+        \\agave pull: Download models from HuggingFace Hub
         \\
         \\USAGE:
         \\  agave pull [OPTIONS] <org/repo>
@@ -840,20 +840,35 @@ fn createSymlink(allocator: Allocator, target: []const u8, link_path: []const u8
 /// Creates `$HOME/.cache/agave/models/{org}/{repo}` pointing to the
 /// snapshot directory containing the downloaded model.
 fn createAgaveSymlink(allocator: Allocator, repo: []const u8, snapshot_dir: []const u8) void {
-    const home = getenv("HOME") orelse return;
+    const home = getenv("HOME") orelse {
+        eprint("Warning: HOME not set, skipping agave model symlink\n", .{});
+        return;
+    };
 
     // Split repo into org and name.
-    const slash_idx = std.mem.indexOfScalar(u8, repo, '/') orelse return;
+    const slash_idx = std.mem.indexOfScalar(u8, repo, '/') orelse {
+        eprint("Warning: repo '{s}' has no org/name separator, skipping agave symlink\n", .{repo});
+        return;
+    };
     const org = repo[0..slash_idx];
     const name = repo[slash_idx + 1 ..];
 
     // Create $HOME/.cache/agave/models/{org}/
-    const agave_dir = std.fmt.allocPrint(allocator, "{s}/.cache/agave/models/{s}", .{ home, org }) catch return;
+    const agave_dir = std.fmt.allocPrint(allocator, "{s}/.cache/agave/models/{s}", .{ home, org }) catch {
+        eprint("Warning: OOM creating agave cache path for {s}/{s}\n", .{ org, name });
+        return;
+    };
     defer allocator.free(agave_dir);
-    ensureDir(agave_dir) catch return;
+    ensureDir(agave_dir) catch |err| {
+        eprint("Warning: could not create agave cache dir '{s}': {}\n", .{ agave_dir, err });
+        return;
+    };
 
     // Create symlink: $HOME/.cache/agave/models/{org}/{repo_name} -> snapshot_dir
-    const link_path = std.fmt.allocPrint(allocator, "{s}/{s}", .{ agave_dir, name }) catch return;
+    const link_path = std.fmt.allocPrint(allocator, "{s}/{s}", .{ agave_dir, name }) catch {
+        eprint("Warning: OOM creating agave symlink path for {s}/{s}\n", .{ org, name });
+        return;
+    };
     defer allocator.free(link_path);
 
     // Atomic symlink replacement: create at temp path with random suffix to
@@ -862,7 +877,10 @@ fn createAgaveSymlink(allocator: Allocator, repo: []const u8, snapshot_dir: []co
     mod_io.random(&rand_buf);
     const tmp_path = std.fmt.allocPrint(allocator, "{s}.tmp.{x}", .{
         link_path, std.mem.readInt(u64, &rand_buf, .little),
-    }) catch return;
+    }) catch {
+        eprint("Warning: OOM creating temp path for agave symlink {s}/{s}\n", .{ org, name });
+        return;
+    };
     defer allocator.free(tmp_path);
 
     createSymlink(allocator, snapshot_dir, tmp_path) catch |err| {
@@ -1043,7 +1061,10 @@ fn downloadFileOnce(
     }
 
     // Determine total size (checked arithmetic prevents overflow from crafted Content-Length).
-    const content_length = response.head.content_length orelse 0;
+    const content_length = response.head.content_length orelse blk: {
+        eprint("Warning: server omitted Content-Length; size-based integrity check disabled\n", .{});
+        break :blk @as(u64, 0);
+    };
     const total_size: u64 = if (status == .partial_content)
         std.math.add(u64, existing_size, content_length) catch return PullError.DownloadFailed
     else

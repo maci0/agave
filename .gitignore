@@ -1,6 +1,9 @@
 # Zig build artifacts
 .zig-cache/
 zig-out/
+# Stray local WASM droppings at repo root (canonical output: zig build wasm → zig-out/web/)
+/root.wasm
+/*.wasm
 
 # Python virtual environment
 .venv/
@@ -56,6 +59,7 @@ tests/golden_outputs/
 # Environment and secrets
 .env
 .env.*
+!.env.example
 *.key
 *.pem
 *.p12

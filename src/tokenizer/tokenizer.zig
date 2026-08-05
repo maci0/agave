@@ -1,5 +1,9 @@
 //! Tokenizer interface.
 //! Implementations: bpe.zig (byte-level BPE, SentencePiece, and SentencePiece-no-dummy modes).
+//!
+//! `BpeTokenizer` is re-exported here as the package barrel. That creates a
+//! compile-time import edge with `bpe.zig` (interface ←→ impl); callers should
+//! keep importing via this module, not reach into `bpe.zig` directly.
 
 const std = @import("std");
 

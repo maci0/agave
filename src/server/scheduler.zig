@@ -20,16 +20,14 @@ const RadixTree = @import("../kvcache/manager.zig").RadixTree;
 const Metrics = @import("metrics.zig").Metrics;
 const TieredKvCache = @import("../kvcache/tiered.zig").TieredKvCache;
 const Prefetcher = @import("../kvcache/prefetch.zig").Prefetcher;
+const math_ops = @import("../ops/math.zig");
 
 /// Scheduler loop poll interval (nanoseconds).
 const scheduler_poll_ns: u64 = 1_000_000; // 1ms
 
+/// Sleep via sim_clock so virtual time advances under a clock override.
 fn sleepNs(ns: u64) void {
-    const ts = std.posix.timespec{
-        .sec = @intCast(ns / std.time.ns_per_s),
-        .nsec = @intCast(ns % std.time.ns_per_s),
-    };
-    _ = std.c.nanosleep(&ts, null);
+    sim_clock.sleepNs(ns);
 }
 
 /// Cache-aware priority coefficient (α in the priority formula).
@@ -54,6 +52,17 @@ const initial_token_capacity: usize = 4096 + 8;
 /// Maximum prefill tokens processed per scheduler step per request.
 /// Limits prefill blocking so decode requests get timely service.
 const prefill_chunk_size: u32 = 32;
+
+/// Pick next token from the last forward()'s logits using request sampling.
+/// Matches the direct generate path: temperature == 0 keeps forward()'s greedy
+/// argmax (no min_p / resampling). Falls back to `greedy` when logits are empty.
+fn sampleNextToken(req: *Request, model: *Model, greedy: u32) u32 {
+    if (req.temperature == 0) return greedy;
+    const logits = model.getLogits();
+    if (logits.len == 0) return greedy;
+    if (req.min_p > 0) math_ops.applyMinP(logits, req.min_p);
+    return math_ops.sampleToken(logits, req.temperature, req.top_k, req.top_p, req.prng.random());
+}
 
 /// Per-request state for continuous batching.
 pub const Request = struct {
@@ -82,6 +91,14 @@ pub const Request = struct {
     /// KV cache position for this request (for multi-request interleaving).
     kv_position: usize = 0,
     allocator: Allocator,
+
+    /// Per-request sampling (set by the HTTP handler after enqueue).
+    /// Defaults match greedy decoding so tests/enqueue alone stay correct.
+    temperature: f32 = 0,
+    top_k: u32 = 0,
+    top_p: f32 = 1.0,
+    min_p: f32 = 0,
+    prng: std.Random.DefaultPrng = undefined,
 
     /// Append a token to the output sequence.
     /// If the token matches any EOG (end-of-generation) ID, sets is_finished
@@ -279,6 +296,7 @@ pub const RequestManager = struct {
             .cached_blocks = prefix_match.blocks,
             .prompt_tokens_slice = prompt_tokens_slice,
             .allocator = self.allocator,
+            .prng = std.Random.DefaultPrng.init(id),
         };
 
         try req.tokens.ensureTotalCapacity(self.allocator, initial_token_capacity);
@@ -438,11 +456,12 @@ pub const RequestManager = struct {
             // Restore KV position for this request
             model.setKvSeqLen(req.kv_position);
 
-            const next_token = model.forward(req.last_token_id) catch |err| {
+            const greedy = model.forward(req.last_token_id) catch |err| {
                 std.log.err("req={d} forward failed: {}", .{ req.id, err });
                 req.is_cancelled.store(true, .release);
                 continue;
             };
+            const next_token = sampleNextToken(req, model, greedy);
 
             req.kv_position = model.kvSeqLen();
 
@@ -511,8 +530,11 @@ pub const RequestManager = struct {
             // Re-check is_cancelled: handler may have cancelled during prefill.
             if (req.prefill_pos >= req.prompt_tokens and !req.is_cancelled.load(.acquire)) {
                 req.prefill_done_at = milliTimestamp();
-                req.last_token_id = last_token;
-                req.appendToken(last_token, eog_ids);
+                // `last_token` is the greedy argmax from the final prefill forward;
+                // re-sample from logits so temperature/top-p apply to the first token.
+                const first = sampleNextToken(req, model, last_token);
+                req.last_token_id = first;
+                req.appendToken(first, eog_ids);
             }
 
             break; // Only one prefill chunk per step
@@ -919,6 +941,13 @@ test "sleepNs does not crash" {
     sleepNs(1_000); // 1 microsecond
     const after = milliTimestamp();
     try std.testing.expect(after >= before);
+}
+
+test "sleepNs advances under sim_clock override" {
+    defer sim_clock.setOverrideMs(null);
+    sim_clock.setOverrideMs(50_000);
+    sleepNs(scheduler_poll_ns); // 1ms poll
+    try std.testing.expectEqual(@as(i64, 50_001), milliTimestamp());
 }
 
 // Mock model for testing

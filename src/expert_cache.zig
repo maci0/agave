@@ -9,12 +9,12 @@
 //! an expert not in the cache, the least-recently-used slab is evicted and the
 //! new expert's weights are faulted in from the mmap'd file.
 //!
-//! Usage:
+//! Library API (no `--ssd-streaming` CLI yet; wire from MoE forward paths):
 //!   var cache = try ExpertCache.init(allocator, n_layers, n_experts, cache_size);
 //!   defer cache.deinit(allocator);
 //!
 //!   // Before MoE forward, ensure selected experts are resident:
-//!   cache.touch(layer, expert_id);
+//!   _ = cache.touch(layer, expert_id);
 //!   cache.prefetch(layer, expert_id, weight_ptr, expert_bytes);
 //!
 //! Based on the SSD streaming approach from antirez/ds4.
@@ -50,6 +50,7 @@ pub const ExpertCache = struct {
 
     pub fn init(allocator: Allocator, n_layers: u32, n_experts: u32, n_cache_slots: u32) !ExpertCache {
         const n_slots = @min(n_cache_slots, @as(u32, @intCast(max_cache_slots)));
+        if (n_slots == 0) return error.ZeroCacheSlots;
         const slots = try allocator.alloc(CacheSlot, n_slots);
         @memset(slots, CacheSlot{});
 
@@ -89,15 +90,16 @@ pub const ExpertCache = struct {
 
     /// Admit an expert to the cache, evicting LRU if full.
     /// Returns the slot index where the expert was placed.
+    /// Out-of-range layer/expert IDs do not occupy a slot (would be unfindable
+    /// via `touch`); returns `std.math.maxInt(u32)` as a sentinel.
     pub fn admit(self: *ExpertCache, layer: u32, expert_id: u32) u32 {
         // Check if already present
         const key = @as(usize, layer) * self.n_experts + expert_id;
-        if (key < self.lookup.len) {
-            if (self.lookup[key]) |slot_idx| {
-                self.access_counter += 1;
-                self.slots[slot_idx].last_access = self.access_counter;
-                return slot_idx;
-            }
+        if (key >= self.lookup.len) return std.math.maxInt(u32);
+        if (self.lookup[key]) |slot_idx| {
+            self.access_counter += 1;
+            self.slots[slot_idx].last_access = self.access_counter;
+            return slot_idx;
         }
 
         // Find a free slot or evict LRU
@@ -134,9 +136,7 @@ pub const ExpertCache = struct {
             .last_access = self.access_counter,
             .occupied = true,
         };
-        if (key < self.lookup.len) {
-            self.lookup[key] = target_slot;
-        }
+        self.lookup[key] = target_slot;
 
         return target_slot;
     }
@@ -179,9 +179,15 @@ test "ExpertCache init and touch" {
     try std.testing.expectEqual(@as(u64, 1), cache.misses);
 
     // Admit and then touch
-    _ = cache.admit(0, 3);
+    const slot = cache.admit(0, 3);
+    try std.testing.expectEqual(@as(u32, 0), slot);
     try std.testing.expect(cache.touch(0, 3));
     try std.testing.expectEqual(@as(u64, 1), cache.hits);
+
+    // Re-admit is idempotent: same slot, still touchable
+    try std.testing.expectEqual(slot, cache.admit(0, 3));
+    try std.testing.expect(cache.touch(0, 3));
+    try std.testing.expectEqual(@as(u64, 2), cache.hits);
 }
 
 test "ExpertCache LRU eviction" {
@@ -189,15 +195,71 @@ test "ExpertCache LRU eviction" {
     var cache = try ExpertCache.init(allocator, 2, 4, 2); // only 2 slots
     defer cache.deinit(allocator);
 
-    _ = cache.admit(0, 0); // slot 0, access=1
-    _ = cache.admit(0, 1); // slot 1, access=2 — cache full
+    try std.testing.expectEqual(@as(u32, 0), cache.admit(0, 0)); // slot 0, access=1
+    try std.testing.expectEqual(@as(u32, 1), cache.admit(0, 1)); // slot 1, access=2 — cache full
 
     // Touch expert 1 to make expert 0 the LRU
     try std.testing.expect(cache.touch(0, 1)); // access=3
     // Now: slot 0 (expert 0) access=1, slot 1 (expert 1) access=3
     // Admitting expert 2 should evict expert 0 (lowest access time)
-    _ = cache.admit(0, 2);
+    const evicted_into = cache.admit(0, 2);
+    try std.testing.expectEqual(@as(u32, 0), evicted_into);
     try std.testing.expect(!cache.touch(0, 0)); // evicted
     try std.testing.expect(cache.touch(0, 1)); // still present
     try std.testing.expect(cache.touch(0, 2)); // newly admitted
+}
+
+test "ExpertCache out-of-range touch is miss without hit" {
+    const allocator = std.testing.allocator;
+    var cache = try ExpertCache.init(allocator, 2, 4, 2);
+    defer cache.deinit(allocator);
+
+    try std.testing.expect(!cache.touch(99, 0));
+    try std.testing.expectEqual(@as(u64, 0), cache.hits);
+    // OOR keys short-circuit before miss accounting
+    try std.testing.expectEqual(@as(u64, 0), cache.misses);
+    try std.testing.expect(!cache.touch(0, 99));
+    try std.testing.expectEqual(@as(u64, 0), cache.hits);
+    try std.testing.expectEqual(@as(u64, 0), cache.misses);
+}
+
+test "ExpertCache zero slots rejected; OOR admit is sentinel" {
+    const allocator = std.testing.allocator;
+    try std.testing.expectError(error.ZeroCacheSlots, ExpertCache.init(allocator, 2, 4, 0));
+
+    var cache = try ExpertCache.init(allocator, 2, 4, 2);
+    defer cache.deinit(allocator);
+
+    try std.testing.expectEqual(@as(u32, 0), cache.admit(0, 0));
+    // OOR must not evict the resident expert
+    try std.testing.expectEqual(std.math.maxInt(u32), cache.admit(99, 0));
+    try std.testing.expect(cache.touch(0, 0));
+}
+
+test "fuzz: admit + touch out-of-range ids" {
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *std.testing.Smith) !void {
+            const allocator = std.testing.allocator;
+            const n_layers: u32 = @as(u32, smith.valueWithHash(u2, 0)) + 1; // 1..4
+            const n_experts: u32 = @as(u32, smith.valueWithHash(u3, 1)) + 1; // 1..8
+            const n_slots: u32 = @as(u32, smith.valueWithHash(u3, 2)) + 1; // 1..8
+            var cache = try ExpertCache.init(allocator, n_layers, n_experts, n_slots);
+            defer cache.deinit(allocator);
+
+            const rounds = smith.valueWithHash(u4, 3) + 1;
+            for (0..rounds) |i| {
+                const layer = smith.valueWithHash(u8, @truncate(10 + i));
+                const expert = smith.valueWithHash(u8, @truncate(20 + i));
+                const in_range = layer < n_layers and expert < n_experts;
+                _ = cache.admit(layer, expert);
+                const hit = cache.touch(layer, expert);
+                // In-range admit must be findable; OOR keys never count as hits.
+                if (in_range) {
+                    try std.testing.expect(hit);
+                } else {
+                    try std.testing.expect(!hit);
+                }
+            }
+        }
+    }.f, .{});
 }

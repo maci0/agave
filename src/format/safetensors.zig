@@ -3075,6 +3075,206 @@ test "fuzz: all safetensors functions" {
             comptime {
                 _ = &SafeTensorsDir.deinit;
             }
+
+            // ── Untrusted file-format parsers (HF shard/index/config/tokenizer JSON) ──
+            // Random blobs + structure-aware wrappers so parse* paths are reached.
+            var blob: [384]u8 = undefined;
+            smith.bytesWithHash(&blob, 10);
+            const blob_len = smith.indexWithHash(blob.len + 1, 11);
+
+            // isSafeShardName: path traversal / null-byte rejection
+            const safe = isSafeShardName(blob[0..blob_len]);
+            if (safe) {
+                try std.testing.expect(std.mem.indexOf(u8, blob[0..blob_len], "..") == null);
+                try std.testing.expect(std.mem.indexOfScalar(u8, blob[0..blob_len], '/') == null);
+                try std.testing.expect(std.mem.indexOfScalar(u8, blob[0..blob_len], 0) == null);
+            }
+
+            // skipValue / parseString / parseDType on truncated + nested inputs
+            _ = skipValue(blob[0..blob_len], 0) catch {};
+            _ = parseString(blob[0..blob_len], 0) catch {};
+            _ = parseDType(blob[0..@min(blob_len, 16)]);
+            _ = parseU64Slice(blob[0..@min(blob_len, 24)]) catch {};
+
+            // Deep nesting must hit max_json_depth and return error (no stack blowup)
+            if (smith.valueWithHash(u8, 12) & 1 == 0) {
+                var deep: [max_json_depth * 2 + 8]u8 = undefined;
+                @memset(deep[0 .. max_json_depth + 1], '[');
+                @memset(deep[max_json_depth + 1 ..][0 .. max_json_depth + 1], ']');
+                try std.testing.expectError(error.JsonUnexpected, skipValue(deep[0 .. (max_json_depth + 1) * 2], 0));
+            }
+
+            // Structure-aware shard header
+            {
+                var hdr_json: [512]u8 = undefined;
+                const inner = blob[0..@min(blob_len, 48)];
+                // Sanitize so wrapper stays syntactically mostly-JSON; mutate fields separately
+                var name_san: [48]u8 = undefined;
+                const nlen = @min(inner.len, name_san.len);
+                for (inner[0..nlen], 0..) |c, i| {
+                    name_san[i] = if (c >= 0x20 and c != '"' and c != '\\') c else 'a';
+                }
+                const dtypes = [_][]const u8{ "F32", "F16", "BF16", "U32", "F8_E4M3", "U8", "I32", "NOPE" };
+                const dt = dtypes[smith.indexWithHash(dtypes.len, 13)];
+                const written = std.fmt.bufPrint(&hdr_json,
+                    \\{{"__metadata__":{{"x":"y"}},"{s}":{{"dtype":"{s}","shape":[{d},{d}],"data_offsets":[{d},{d}]}}}}
+                , .{
+                    name_san[0..nlen],
+                    dt,
+                    smith.valueWithHash(u8, 14),
+                    smith.valueWithHash(u8, 15),
+                    smith.valueWithHash(u16, 16),
+                    smith.valueWithHash(u16, 17),
+                }) catch null;
+                if (written) |js| {
+                    var parse_tensors = std.StringHashMap(TensorEntry).init(allocator);
+                    defer parse_tensors.deinit();
+                    var owned: std.ArrayList([]u8) = .empty;
+                    defer {
+                        for (owned.items) |s| allocator.free(s);
+                        owned.deinit(allocator);
+                    }
+                    parseShardHeader(allocator, js, smith.valueWithHash(u8, 18) % 4, &parse_tensors, &owned) catch {};
+                    var it = parse_tensors.valueIterator();
+                    while (it.next()) |e| {
+                        try std.testing.expect(e.data_end >= e.data_start);
+                        try std.testing.expect(e.n_dims <= 4);
+                    }
+                }
+                // Pure random bytes through the same entry point
+                var junk_tensors = std.StringHashMap(TensorEntry).init(allocator);
+                defer junk_tensors.deinit();
+                var junk_owned: std.ArrayList([]u8) = .empty;
+                defer {
+                    for (junk_owned.items) |s| allocator.free(s);
+                    junk_owned.deinit(allocator);
+                }
+                parseShardHeader(allocator, blob[0..blob_len], 0, &junk_tensors, &junk_owned) catch {};
+
+                // Binary framing: u64 LE header length + overflow/bounds (mirrors open())
+                var frame: [8]u8 = undefined;
+                smith.bytesWithHash(&frame, 21);
+                const json_len = std.mem.readInt(u64, &frame, .little);
+                const total_header_size = std.math.add(u64, 8, json_len) catch null;
+                if (total_header_size) |ths| {
+                    const fake_file_size: u64 = smith.valueWithHash(u32, 22);
+                    const reject = ths > max_header_json_size or ths > fake_file_size;
+                    if (!reject and ths >= 8 and fake_file_size >= ths) {
+                        // In-range length: feed the blob as if it were the JSON header
+                        var framed_tensors = std.StringHashMap(TensorEntry).init(allocator);
+                        defer framed_tensors.deinit();
+                        var framed_owned: std.ArrayList([]u8) = .empty;
+                        defer {
+                            for (framed_owned.items) |s| allocator.free(s);
+                            framed_owned.deinit(allocator);
+                        }
+                        const use_len = @min(blob_len, @as(usize, @intCast(@min(ths - 8, max_header_json_size))));
+                        parseShardHeader(allocator, blob[0..use_len], 0, &framed_tensors, &framed_owned) catch {};
+                    }
+                }
+            }
+
+            // Index JSON (weight_map + path traversal)
+            {
+                var idx_json: [400]u8 = undefined;
+                const paths = [_][]const u8{ "model-00001.safetensors", "../escape.safetensors", "a/b.safetensors", "ok.safetensors" };
+                const shard = paths[smith.indexWithHash(paths.len, 19)];
+                const written = std.fmt.bufPrint(&idx_json,
+                    \\{{"metadata":{{}},"weight_map":{{"w.weight":"{s}","w2.weight":"{s}"}}}}
+                , .{ shard, paths[smith.indexWithHash(paths.len, 20)] }) catch null;
+                if (written) |js| {
+                    var shard_list: std.ArrayList([]const u8) = .empty;
+                    defer shard_list.deinit(allocator);
+                    var shard_to_idx = std.StringHashMap(usize).init(allocator);
+                    defer shard_to_idx.deinit();
+                    var owned: std.ArrayList([]u8) = .empty;
+                    defer {
+                        for (owned.items) |s| allocator.free(s);
+                        owned.deinit(allocator);
+                    }
+                    parseIndexJson(allocator, js, &shard_list, &shard_to_idx, &owned) catch {};
+                    for (shard_list.items) |name| {
+                        try std.testing.expect(isSafeShardName(name));
+                    }
+                }
+                var shard_list2: std.ArrayList([]const u8) = .empty;
+                defer shard_list2.deinit(allocator);
+                var shard_to_idx2 = std.StringHashMap(usize).init(allocator);
+                defer shard_to_idx2.deinit();
+                var owned2: std.ArrayList([]u8) = .empty;
+                defer {
+                    for (owned2.items) |s| allocator.free(s);
+                    owned2.deinit(allocator);
+                }
+                parseIndexJson(allocator, blob[0..blob_len], &shard_list2, &shard_to_idx2, &owned2) catch {};
+            }
+
+            // config.json (nested rope_parameters / text_config)
+            {
+                var cfg: [400]u8 = undefined;
+                const written = std.fmt.bufPrint(&cfg,
+                    \\{{"hidden_size":{d},"text_config":{{"num_layers":{d},"rope_parameters":{{"factor":{d}}}}},"eos_token_id":[{d},{d}],"flag":true}}
+                , .{
+                    smith.valueWithHash(u16, 21),
+                    smith.valueWithHash(u8, 22),
+                    smith.valueWithHash(u8, 23),
+                    smith.valueWithHash(u16, 24),
+                    smith.valueWithHash(u16, 25),
+                }) catch null;
+                if (written) |js| {
+                    var meta = std.StringHashMap(MetaValue).init(allocator);
+                    defer meta.deinit();
+                    var owned: std.ArrayList([]u8) = .empty;
+                    defer {
+                        for (owned.items) |s| allocator.free(s);
+                        owned.deinit(allocator);
+                    }
+                    parseConfigJson(allocator, js, &meta, &owned) catch {};
+                }
+                var meta2 = std.StringHashMap(MetaValue).init(allocator);
+                defer meta2.deinit();
+                var owned2: std.ArrayList([]u8) = .empty;
+                defer {
+                    for (owned2.items) |s| allocator.free(s);
+                    owned2.deinit(allocator);
+                }
+                parseConfigJson(allocator, blob[0..blob_len], &meta2, &owned2) catch {};
+            }
+
+            // tokenizer.json (vocab + merges + added_tokens)
+            {
+                var tok: [400]u8 = undefined;
+                const written = std.fmt.bufPrint(&tok,
+                    \\{{"model":{{"vocab":{{"a":{d},"b":{d}}},"merges":["a b","b c"]}},"added_tokens":[{{"id":{d},"content":"<pad>"}}]}}
+                , .{
+                    smith.valueWithHash(u8, 26) % 32,
+                    smith.valueWithHash(u8, 27) % 32,
+                    smith.valueWithHash(u8, 28) % 64,
+                }) catch null;
+                if (written) |js| {
+                    var vocab: ?[][]u8 = null;
+                    var merges: ?[][]u8 = null;
+                    var owned: std.ArrayList([]u8) = .empty;
+                    defer {
+                        if (vocab) |v| allocator.free(v);
+                        if (merges) |m| allocator.free(m);
+                        for (owned.items) |s| allocator.free(s);
+                        owned.deinit(allocator);
+                    }
+                    parseTokenizerJson(allocator, js, &vocab, &merges, &owned) catch {};
+                    if (vocab) |v| try std.testing.expect(v.len <= max_vocab_size);
+                }
+                var vocab2: ?[][]u8 = null;
+                var merges2: ?[][]u8 = null;
+                var owned2: std.ArrayList([]u8) = .empty;
+                defer {
+                    if (vocab2) |v| allocator.free(v);
+                    if (merges2) |m| allocator.free(m);
+                    for (owned2.items) |s| allocator.free(s);
+                    owned2.deinit(allocator);
+                }
+                parseTokenizerJson(allocator, blob[0..blob_len], &vocab2, &merges2, &owned2) catch {};
+            }
         }
     }.f, .{});
 }

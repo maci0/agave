@@ -1594,7 +1594,9 @@ pub const Gemma4Model = struct {
     }
 
     /// Export KV cache for positions [0, n_tokens) into a flat byte buffer.
-    /// Layout: [layer_0_keys | layer_0_values | layer_1_keys | ...] per position.
+    /// Layout: [layer_0_keys | layer_0_values | layer_1_keys | ...] as f32
+    /// (unversioned; not `kvcache/checkpoint.KVC`). Per-layer width is
+    /// `layer_kvd[i]`, so dual-attention layers may differ in byte size.
     /// Returns bytes written (0 if dst too small or n_tokens > kv_seq_len).
     pub fn exportKvPrefix(self: *Gemma4Model, dst: []u8, n_tokens: usize) usize {
         if (n_tokens > self.kv_seq_len) return 0;

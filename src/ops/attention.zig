@@ -686,6 +686,8 @@ pub fn scaledDotProductAttentionCanvas(
 
     @memset(attn_out[0 .. nh * hd], 0);
 
+    const SimdVec = @Vector(simd_width, f32);
+
     for (0..nh) |h| {
         const kvh = h / hpg;
         const q_base = h * hd;
@@ -695,8 +697,15 @@ pub fn scaledDotProductAttentionCanvas(
             const f32_keys: [*]const f32 = @ptrCast(@alignCast(kv_keys.ptr));
             for (0..n_cached) |t| {
                 const k_base = t * kvd + kvh * hd;
-                var dot: f32 = 0;
-                for (0..hd) |d| dot = @mulAdd(f32, q[q_base + d], f32_keys[k_base + d], dot);
+                var acc: SimdVec = @splat(0.0);
+                var d: usize = 0;
+                while (d + simd_width <= hd) : (d += simd_width) {
+                    const qv: SimdVec = q[q_base + d ..][0..simd_width].*;
+                    const kv: SimdVec = f32_keys[k_base + d ..][0..simd_width].*;
+                    acc = @mulAdd(SimdVec, qv, kv, acc);
+                }
+                var dot = @reduce(.Add, acc);
+                while (d < hd) : (d += 1) dot = @mulAdd(f32, q[q_base + d], f32_keys[k_base + d], dot);
                 scores[t] = dot * scale;
             }
         } else {
@@ -707,11 +716,18 @@ pub fn scaledDotProductAttentionCanvas(
             }
         }
 
-        // 2. Score against canvas tokens (bidirectional — all attend to all).
+        // 2. Score against canvas tokens (bidirectional, all attend to all).
         for (0..cl) |ci| {
             const k_ptr = canvas_k.ptr + ci * kvd + kvh * hd;
-            var dot: f32 = 0;
-            for (0..hd) |d| dot = @mulAdd(f32, q[q_base + d], k_ptr[d], dot);
+            var acc: SimdVec = @splat(0.0);
+            var d: usize = 0;
+            while (d + simd_width <= hd) : (d += simd_width) {
+                const qv: SimdVec = q[q_base + d ..][0..simd_width].*;
+                const kv: SimdVec = k_ptr[d..][0..simd_width].*;
+                acc = @mulAdd(SimdVec, qv, kv, acc);
+            }
+            var dot = @reduce(.Add, acc);
+            while (d < hd) : (d += 1) dot = @mulAdd(f32, q[q_base + d], k_ptr[d], dot);
             scores[n_cached + ci] = dot * scale;
         }
 
@@ -725,7 +741,16 @@ pub fn scaledDotProductAttentionCanvas(
                 const w = scores[t];
                 if (w < sparse_v_threshold) continue;
                 const v_base = t * kvd + kvh * hd;
-                for (0..hd) |d| attn_out[q_base + d] = @mulAdd(f32, w, f32_values[v_base + d], attn_out[q_base + d]);
+                const sv: SimdVec = @splat(w);
+                var d: usize = 0;
+                while (d + simd_width <= hd) : (d += simd_width) {
+                    const vv: SimdVec = f32_values[v_base + d ..][0..simd_width].*;
+                    const cur: SimdVec = attn_out[q_base + d ..][0..simd_width].*;
+                    attn_out[q_base + d ..][0..simd_width].* = @mulAdd(SimdVec, sv, vv, cur);
+                }
+                while (d < hd) : (d += 1) {
+                    attn_out[q_base + d] = @mulAdd(f32, w, f32_values[v_base + d], attn_out[q_base + d]);
+                }
             }
         } else {
             for (0..n_cached) |t| {
@@ -742,7 +767,16 @@ pub fn scaledDotProductAttentionCanvas(
             const w = scores[n_cached + ci];
             if (w < sparse_v_threshold) continue;
             const v_ptr = canvas_v.ptr + ci * kvd + kvh * hd;
-            for (0..hd) |d| attn_out[q_base + d] = @mulAdd(f32, w, v_ptr[d], attn_out[q_base + d]);
+            const sv: SimdVec = @splat(w);
+            var d: usize = 0;
+            while (d + simd_width <= hd) : (d += simd_width) {
+                const vv: SimdVec = v_ptr[d..][0..simd_width].*;
+                const cur: SimdVec = attn_out[q_base + d ..][0..simd_width].*;
+                attn_out[q_base + d ..][0..simd_width].* = @mulAdd(SimdVec, sv, vv, cur);
+            }
+            while (d < hd) : (d += 1) {
+                attn_out[q_base + d] = @mulAdd(f32, w, v_ptr[d], attn_out[q_base + d]);
+            }
         }
     }
 }

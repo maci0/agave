@@ -3,8 +3,7 @@
 //! end-of-generation tokens for each supported model family.
 
 const std = @import("std");
-const arch_mod = @import("arch.zig");
-const ImageTokens = arch_mod.ImageTokens;
+const ImageTokens = @import("image_tokens.zig").ImageTokens;
 
 /// Pre-allocation headroom for tool message formatting (ChatML tags + label).
 const tool_format_overhead: usize = 64;

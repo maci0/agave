@@ -61,10 +61,11 @@ const CalibrateArgs = struct {
 /// Print usage information to stdout.
 pub fn printUsage() void {
     const usage_text =
-        \\agave calibrate — Generate TriAttention calibration statistics
+        \\agave calibrate: Generate TriAttention calibration statistics
         \\
         \\USAGE:
         \\  agave calibrate [OPTIONS] <model.gguf|model-dir/>
+        \\  agave calibrate [OPTIONS] -- <model.gguf|model-dir/>
         \\
         \\ARGUMENTS:
         \\  <model.gguf|model-dir/>  Path to GGUF model file or SafeTensors directory
