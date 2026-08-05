@@ -5,12 +5,12 @@
 <div class="sidebar-overlay" id="sidebar-overlay" onclick="toggleSidebar()" role="presentation"></div>
 <header>
 <div class="logo">
-<button type="button" class="hdr-btn menu-btn" onclick="toggleSidebar()" title="Menu" aria-label="Toggle sidebar" aria-expanded="false" aria-controls="sidebar" id="menu-btn">&#9776;</button>
-<h1><span aria-hidden="true">&#127797; </span>agave</h1><span class="model-badge" id="model-name" aria-live="polite">loading...</span><span class="ctx-badge" id="ctx-badge" aria-live="polite"></span></div>
+<button type="button" class="hdr-btn menu-btn" onclick="toggleSidebar()" title="Menu" aria-label="Open sidebar" aria-expanded="false" aria-controls="sidebar" id="menu-btn">&#9776;</button>
+<h1><span aria-hidden="true">&#127797; </span>agave</h1><span class="model-badge" id="model-name" aria-live="polite">Loading…</span><span class="ctx-badge" id="ctx-badge" aria-live="polite"></span></div>
 <div class="hdr-btns">
 <button type="button" class="new-chat-btn" onclick="newConv()" aria-label="New conversation">+ New</button>
 <button type="button" class="hdr-btn" onclick="exportConv()" title="Export conversation" aria-label="Export conversation"><span class="btn-text">Export </span>&#8681;</button>
-<button type="button" class="hdr-btn" onclick="clearChat()" title="Clear conversation" aria-label="Clear conversation"><span class="btn-text">Clear </span>&#10005;</button>
+<button type="button" class="hdr-btn" onclick="clearChat()" title="Clear conversation" aria-label="Clear conversation"><span class="btn-text btn-text-keep">Clear </span>&#10005;</button>
 <button type="button" class="hdr-btn" onclick="showInfo()" title="About" aria-label="About Agave"><span class="btn-text">Info </span>&#9432;</button>
 </div>
 </header>
@@ -18,19 +18,22 @@
 <aside class="sidebar" id="sidebar" aria-label="Conversations">
 <div class="sidebar-hdr">
 <h2 class="sidebar-title">Chats</h2>
+<div class="sidebar-hdr-actions">
+<button type="button" class="hdr-btn sidebar-close" id="sidebar-close" onclick="toggleSidebar()" aria-label="Close sidebar">&#10005;</button>
 <button type="button" class="new-chat-btn" onclick="newConv()" aria-label="New conversation">+ New</button>
+</div>
 </div>
 <div class="conv-list" id="conv-list" aria-label="Conversations"><div class="conv-empty">No conversations yet.<br>Use <strong>+ New</strong> to start.</div></div>
 </aside>
 <main class="main">
 <div id="chat" role="log" aria-label="Chat messages" aria-live="off" tabindex="0">
 <div id="empty">
-<div class="icon" aria-hidden="true">&#127797;</div><h2>agave</h2>
-<p>High-performance LLM inference engine</p>
+<div class="icon" aria-hidden="true">&#127797;</div><h2>Start a conversation</h2>
+<p>Type a message below to chat with the model.</p>
 <div class="hints">
 <span class="hint">Type a message to start</span>
 <button class="hint" type="button" onclick="handleCommand('/help')">/help for commands</button>
-<span class="hint">Shift+Enter for new line</span>
+<span class="hint">Enter to send</span>
 </div>
 </div>
 </div>
@@ -48,10 +51,10 @@
 <div class="info-row"><span class="info-label">API</span><span class="info-val">OpenAI-compatible</span></div>
 <h3>Features</h3>
 <ul>
-<li>Multi-backend: CPU, Metal, Vulkan, CUDA, ROCm, WebGPU</li>
-<li>GGUF &amp; SafeTensors support</li>
-<li>SSE streaming responses</li>
-<li>Zero-copy weight loading via mmap</li>
+<li>Runs locally on CPU or GPU</li>
+<li>Open GGUF and SafeTensors models</li>
+<li>Responses stream token by token</li>
+<li>Chats stay on this machine</li>
 </ul>
 <h3>Privacy</h3>
 <p>Prompts and chats stay on this machine. Conversations are in-memory only (cleared on server restart or delete). The system prompt is kept in session storage for this browser tab and is not sent to third parties. No analytics or telemetry.</p>
@@ -95,7 +98,7 @@
 <input type="file" id="img-input" accept="image/jpeg,image/png,image/gif,image/webp" style="display:none" aria-label="Attach image" onchange="onImageSelect(event)">
 <button type="button" class="hdr-btn img-btn" id="img-btn" onclick="document.getElementById('img-input').click()" title="Attach image (or paste / drop)" aria-label="Attach image. You can also paste or drop an image.">&#128247;</button>
 <textarea id="msg" placeholder="Send a message..." rows="1" aria-label="Message input" aria-describedby="input-hint" enterkeyhint="send" autocomplete="off" autofocus dir="auto"></textarea>
-<button type="button" class="settings-toggle" id="settings-toggle" onclick="toggleSettings()" title="Sampling settings" aria-label="Toggle settings panel" aria-expanded="false" aria-controls="settings-panel">&#9881;</button>
+<button type="button" class="settings-toggle" id="settings-toggle" onclick="toggleSettings()" title="Sampling settings" aria-label="Open sampling settings" aria-expanded="false" aria-controls="settings-panel">&#9881;</button>
 <button type="submit" class="send-btn" id="send-btn" title="Send message (Enter)" aria-label="Send message">Send</button>
 <button type="button" class="stop-btn" id="stop-btn" onclick="stopGen()" title="Stop generation" aria-label="Stop generation">Stop</button>
 <span class="toks-counter" id="toks-counter" role="status" aria-label="Generation speed"></span>

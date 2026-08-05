@@ -23,6 +23,8 @@ var inp = document.getElementById('msg');
 var sendBtn = document.getElementById('send-btn');
 var stopBtn = document.getElementById('stop-btn');
 var modelName = '', abortCtrl = null, isStreaming = false, autoScroll = true, renderTimer = null;
+/** Latest stream paint target — updated on every token so the throttled flush shows current text, not the stale closure from schedule time. */
+var pendingStreamRender = null;
 var msgRoleIdSeq = 0;
 sendBtn.disabled = true;
 var backendName = '';
@@ -58,7 +60,7 @@ function setOfflineBadge() {
     loading.id = 'model-name';
     loading.className = 'model-badge';
     loading.setAttribute('aria-live', 'polite');
-    loading.textContent = 'loading...';
+    loading.textContent = 'Loading…';
     btn.replaceWith(loading);
     fetch('/v1/models').then(function(r) { return r.json(); }).then(function(d) {
       var el = document.getElementById('model-name');
@@ -205,6 +207,9 @@ function loadImageFile(file, label) {
     sendBtn.disabled = false;
     announceToSR(label);
   };
+  reader.onerror = function() {
+    showToast('Could not read that image. Try another file.');
+  };
   reader.readAsDataURL(file);
   return true;
 }
@@ -254,7 +259,13 @@ inp.addEventListener('paste', function(e) {
 
 var chatForm = document.getElementById('chat-form');
 chatForm.addEventListener('dragover', function(e) { e.preventDefault(); chatForm.classList.add('drag-over'); });
-chatForm.addEventListener('dragleave', function(e) { e.preventDefault(); chatForm.classList.remove('drag-over'); });
+chatForm.addEventListener('dragleave', function(e) {
+  e.preventDefault();
+  // Ignore leave events that stay inside the form (child → child flicker).
+  var to = e.relatedTarget;
+  if (to && chatForm.contains(to)) return;
+  chatForm.classList.remove('drag-over');
+});
 chatForm.addEventListener('drop', function(e) {
   e.preventDefault();
   chatForm.classList.remove('drag-over');
@@ -327,7 +338,9 @@ function toggleSettings() {
   var open = panel.classList.toggle('open');
   panel.hidden = !open;
   btn.classList.toggle('active', open);
-  btn.setAttribute('aria-expanded', open);
+  btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+  btn.setAttribute('aria-label', open ? 'Close sampling settings' : 'Open sampling settings');
+  btn.title = open ? 'Close settings' : 'Sampling settings';
   if (open) {
     var first = panel.querySelector('input');
     if (first) first.focus();
@@ -354,13 +367,15 @@ function updateCtxBadge(modelData) {
   var max = modelData.ctx_size || 0;
   if (max <= 0) return;
   var fmtCtx = function(n) { return n >= 1024 ? fmtInt(Math.round(n / 1024)) + 'K' : fmtInt(n); };
-  var label = fmtCtx(used) + '/' + fmtCtx(max);
   var nearFull = used / max >= CTX_WARN_RATIO;
+  var label = (nearFull ? '!\u00a0' : '') + fmtCtx(used) + '/' + fmtCtx(max);
   badge.textContent = label;
   badge.classList.toggle('warn', nearFull);
-  badge.setAttribute('aria-label', nearFull
+  var fullLabel = nearFull
     ? 'Context nearly full: ' + fmtInt(used) + ' of ' + fmtInt(max) + ' tokens used'
-    : 'Context: ' + fmtInt(used) + ' of ' + fmtInt(max) + ' tokens used');
+    : 'Context: ' + fmtInt(used) + ' of ' + fmtInt(max) + ' tokens used';
+  badge.setAttribute('aria-label', fullLabel);
+  badge.title = fullLabel;
   badge.classList.add('visible');
 }
 
@@ -471,17 +486,28 @@ function announceToSR(text) {
 }
 
 function renderContent(el, content, final) {
-  if (renderTimer && !final) return;
+  // Streaming: keep pending content fresh and flush at most every 60ms.
+  // Closing over schedule-time content dropped later tokens while the timer
+  // was armed, so the UI lagged one throttle window behind.
+  if (!final) {
+    pendingStreamRender = { el: el, content: content };
+    if (renderTimer) return;
+    renderTimer = setTimeout(function() {
+      renderTimer = null;
+      var p = pendingStreamRender;
+      pendingStreamRender = null;
+      if (!p) return;
+      p.el.classList.remove('thinking');
+      p.el.textContent = p.content;
+      scrollBottom();
+    }, 60);
+    return;
+  }
+  if (renderTimer) { clearTimeout(renderTimer); renderTimer = null; }
+  pendingStreamRender = null;
   var doRender = function() {
     el.classList.remove('thinking');
-    // During streaming, skip marked+DOMPurify (O(n) every tick). Plain text is enough;
-    // full markdown/sanitize runs once on the final chunk.
-    if (!final) {
-      el.textContent = content;
-      scrollBottom();
-      renderTimer = null;
-      return;
-    }
+    // Full markdown/sanitize runs once on the final chunk.
     el.textContent = '';
     var dc = content;
     if (content.indexOf('<think>') !== -1) {
@@ -493,7 +519,11 @@ function renderContent(el, content, final) {
         var escapedThink = t.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\n/g,'<br>');
         return '<details class="think-block"><summary>Chain of thought ' + thinkIdx + '</summary><div class="think-content">' + escapedThink + '</div></details>';
       });
-      if (dc.indexOf('<think>') === 0) dc = dc.substring(7);
+      // Unclosed <think>: strip the tag and escape so marked cannot treat the
+      // remainder as raw HTML (marked 11 passes HTML through; CWE-79).
+      if (dc.indexOf('<think>') === 0) {
+        dc = dc.substring(7).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+      }
     }
     var parsed;
     if (typeof marked !== 'undefined') {
@@ -510,6 +540,18 @@ function renderContent(el, content, final) {
       el.textContent = content;
     }
     processCode(el);
+    // Keep page outline intact: chat markdown must not introduce competing h1/h2
+    // (page already uses h1 for brand and h2 for sidebar/empty/dialog).
+    el.querySelectorAll('h1, h2, h3, h4, h5, h6').forEach(function(h) {
+      var level = parseInt(h.tagName.charAt(1), 10);
+      var next = Math.min(level + 2, 6);
+      if (next === level) return;
+      var nh = document.createElement('h' + next);
+      while (h.firstChild) nh.appendChild(h.firstChild);
+      // Do not copy attributes from markdown headings (CWE-79): re-applying
+      // attrs after sanitize can reintroduce handlers if a sanitizer gap exists.
+      h.parentNode.replaceChild(nh, h);
+    });
     el.querySelectorAll('table').forEach(function(t) {
       var wrapper = document.createElement('div');
       wrapper.className = 'table-wrap';
@@ -544,25 +586,21 @@ function renderContent(el, content, final) {
         }
       }
     });
-    if (final) {
-      el.setAttribute('data-content', content);
-      var cb = document.createElement('button'); cb.type = 'button'; cb.className = 'msg-copy'; cb.textContent = 'Copy';
-      cb.setAttribute('aria-label', 'Copy response');
-      cb.onclick = function() {
-        navigator.clipboard.writeText(content).then(function() {
-          cb.textContent = 'Copied!';
-          announceToSR('Response copied to clipboard');
-          setTimeout(function() { cb.textContent = 'Copy'; }, 2000);
-        }).catch(function() { cb.textContent = 'Failed'; announceToSR('Copy failed'); setTimeout(function() { cb.textContent = 'Copy'; }, 2000); });
-      };
-      el.appendChild(cb);
-      announceToSR('Agave responded: ' + truncateAnnounce(el.textContent, 200));
-    }
+    el.setAttribute('data-content', content);
+    var cb = document.createElement('button'); cb.type = 'button'; cb.className = 'msg-copy'; cb.textContent = 'Copy';
+    cb.setAttribute('aria-label', 'Copy response');
+    cb.onclick = function() {
+      navigator.clipboard.writeText(content).then(function() {
+        cb.textContent = 'Copied!';
+        announceToSR('Response copied to clipboard');
+        setTimeout(function() { cb.textContent = 'Copy'; }, 2000);
+      }).catch(function() { cb.textContent = 'Failed'; announceToSR('Copy failed'); setTimeout(function() { cb.textContent = 'Copy'; }, 2000); });
+    };
+    el.appendChild(cb);
+    announceToSR('Agave responded: ' + truncateAnnounce(el.textContent, 200));
     scrollBottom();
-    renderTimer = null;
   };
-  if (final) { if (renderTimer) clearTimeout(renderTimer); doRender(); }
-  else { renderTimer = setTimeout(doRender, 60); }
+  doRender();
 }
 
 function mkStat(label, val, unit) {
@@ -629,6 +667,9 @@ function streamResponse(body, errLabel, url) {
       err.textContent = errMsg;
       el.textContent = ''; el.appendChild(err);
       announceToSR(errMsg);
+      // Same server path as regenerate: last user turn is already stored when the
+      // request reached prep; Retry re-runs from that turn without retyping.
+      addRegenBtn(el, 'Retry');
     }
   })
   .finally(function() {
@@ -644,16 +685,17 @@ function sendMessage(text) {
   if (pendingImage) removeImage();
 }
 
-function addRegenBtn(msgEl) {
+function addRegenBtn(msgEl, actionLabel) {
   var oldBtns = chat.querySelectorAll('.regen-btn');
   for (var i = 0; i < oldBtns.length; i++) oldBtns[i].remove();
   var wrap = msgEl.closest('.msg-wrap');
   if (!wrap || !wrap.classList.contains('assistant')) return;
+  var label = actionLabel || 'Regenerate';
   var btn = document.createElement('button');
   btn.type = 'button';
   btn.className = 'regen-btn';
-  btn.textContent = '\u21BB Regenerate';
-  btn.setAttribute('aria-label', 'Regenerate response');
+  btn.textContent = '\u21BB ' + label;
+  btn.setAttribute('aria-label', label === 'Retry' ? 'Retry generating response' : 'Regenerate response');
   btn.onclick = function() { regenerate(); };
   wrap.appendChild(btn);
 }
@@ -740,10 +782,10 @@ function showEmpty() {
   var empty = document.createElement('div'); empty.id = 'empty';
   // Hardcoded HTML constant — no user input, safe without sanitization
   var icon = document.createElement('div'); icon.className = 'icon'; icon.setAttribute('aria-hidden', 'true'); icon.textContent = '\uD83C\uDF35';
-  var h2 = document.createElement('h2'); h2.textContent = 'agave';
-  var p = document.createElement('p'); p.textContent = 'High-performance LLM inference engine';
+  var h2 = document.createElement('h2'); h2.textContent = 'Start a conversation';
+  var p = document.createElement('p'); p.textContent = 'Type a message below to chat with the model.';
   var hints = document.createElement('div'); hints.className = 'hints';
-  ['Type a message to start', '/help for commands', 'Shift+Enter for new line'].forEach(function(t) {
+  ['Type a message to start', '/help for commands', 'Enter to send'].forEach(function(t) {
     var isHelp = t === '/help for commands';
     var s = document.createElement(isHelp ? 'button' : 'span');
     s.className = 'hint'; s.textContent = t;
@@ -779,22 +821,45 @@ function clearChat() {
 
 function toggleSidebar() {
   var sb = document.getElementById('sidebar'), btn = document.getElementById('menu-btn');
-  var isOpen = sb.classList.toggle('open');
-  document.getElementById('sidebar-overlay').classList.toggle('show');
-  if (btn) btn.setAttribute('aria-expanded', isOpen);
-  var main = document.querySelector('.main');
-  var hdr = document.querySelector('header');
   var isMobile = window.matchMedia('(max-width: 700px)').matches;
-  if (isMobile) {
-    if (main) main.inert = isOpen;
-    if (hdr) hdr.inert = isOpen;
+  // Drawer open/close is mobile-only; desktop sidebar stays in the layout.
+  if (!isMobile) {
+    syncSidebarForViewport();
+    return;
+  }
+  var isOpen = sb.classList.toggle('open');
+  document.getElementById('sidebar-overlay').classList.toggle('show', isOpen);
+  if (btn) {
+    btn.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
+    btn.setAttribute('aria-label', isOpen ? 'Close sidebar' : 'Open sidebar');
   }
   if (isOpen) {
-    var firstBtn = sb.querySelector('.new-chat-btn');
-    if (firstBtn) firstBtn.focus();
+    setMobileSidebarModal(true);
+    var closeBtn = document.getElementById('sidebar-close');
+    if (closeBtn) closeBtn.focus();
+    else {
+      var firstBtn = sb.querySelector('.new-chat-btn');
+      if (firstBtn) firstBtn.focus();
+    }
+  } else {
+    setMobileSidebarModal(false);
+    if (btn && btn.offsetParent !== null) btn.focus();
+  }
+}
+
+/** Apply or clear mobile-drawer modality (inert backdrop + Tab cycle). */
+function setMobileSidebarModal(on) {
+  var sb = document.getElementById('sidebar');
+  var main = document.querySelector('.main');
+  var hdr = document.querySelector('header');
+  if (main) main.inert = on;
+  if (hdr) hdr.inert = on;
+  if (!sb) return;
+  if (on) {
+    if (sb._trapFocus) return;
     sb._trapFocus = function(e) {
       if (e.key !== 'Tab') return;
-      var focusable = sb.querySelectorAll('button, [href], [tabindex]:not([tabindex="-1"])');
+      var focusable = sb.querySelectorAll('button:not([disabled]), [href], [tabindex]:not([tabindex="-1"])');
       if (!focusable.length) return;
       var first = focusable[0], last = focusable[focusable.length - 1];
       if (e.shiftKey) { if (document.activeElement === first) { e.preventDefault(); last.focus(); } }
@@ -803,11 +868,28 @@ function toggleSidebar() {
     sb.addEventListener('keydown', sb._trapFocus);
   } else {
     if (sb._trapFocus) { sb.removeEventListener('keydown', sb._trapFocus); sb._trapFocus = null; }
-    if (main) main.inert = false;
-    if (hdr) hdr.inert = false;
-    if (btn && btn.offsetParent !== null) btn.focus();
   }
 }
+
+/** If the viewport leaves the mobile drawer breakpoint, drop modality so chat stays usable. */
+function syncSidebarForViewport() {
+  var sb = document.getElementById('sidebar');
+  if (!sb) return;
+  var isMobile = window.matchMedia('(max-width: 700px)').matches;
+  if (!isMobile) {
+    if (sb.classList.contains('open')) {
+      sb.classList.remove('open');
+      document.getElementById('sidebar-overlay').classList.remove('show');
+    }
+    setMobileSidebarModal(false);
+    var btn = document.getElementById('menu-btn');
+    if (btn) {
+      btn.setAttribute('aria-expanded', 'false');
+      btn.setAttribute('aria-label', 'Open sidebar');
+    }
+  }
+}
+window.addEventListener('resize', syncSidebarForViewport);
 
 function loadConvs() {
   fetch('/v1/conversations').then(function(r) { return r.json(); }).then(function(convs) {
@@ -897,9 +979,19 @@ function selectConv(id) {
     if (mySeq !== selectSeq) return;
     while (chat.firstChild) chat.removeChild(chat.firstChild);
     var errMsg = 'Failed to load conversation. Check that the server is running.';
-    var err = document.createElement('div'); err.className = 'error-msg';
+    var err = document.createElement('div'); err.className = 'error-msg toast';
     err.setAttribute('role', 'alert');
-    err.textContent = errMsg;
+    var span = document.createElement('span');
+    span.style.flex = '1';
+    span.textContent = errMsg;
+    var retry = document.createElement('button');
+    retry.type = 'button';
+    retry.className = 'conv-retry';
+    retry.textContent = 'Retry';
+    retry.setAttribute('aria-label', 'Retry loading conversation');
+    retry.onclick = function() { selectConv(id); };
+    err.appendChild(span);
+    err.appendChild(retry);
     chat.appendChild(err); scrollBottom();
     announceToSR(errMsg);
   });
@@ -941,16 +1033,27 @@ function showInfo() {
   document.getElementById('info-model').textContent = modelName || '-';
   document.getElementById('info-backend').textContent = backendName || '-';
   setDialogBackdropInert(true);
-  var cb = m.querySelector('.modal-close'); if (cb) cb.focus();
-  else if (dlg) dlg.focus();
+  // Focus the dialog container so AT announces the accessible name (aria-labelledby).
+  if (dlg) dlg.focus();
+  else {
+    var cb = m.querySelector('.modal-close'); if (cb) cb.focus();
+  }
   m._trapFocus = function(e) {
     if (e.key !== 'Tab') return;
     var root = dlg || m;
-    var focusable = root.querySelectorAll('button, [href], [tabindex]:not([tabindex="-1"])');
-    if (!focusable.length) return;
+    var focusable = root.querySelectorAll('button:not([disabled]), [href], input, select, textarea, [tabindex]:not([tabindex="-1"])');
+    if (!focusable.length) {
+      if (dlg) { e.preventDefault(); dlg.focus(); }
+      return;
+    }
     var first = focusable[0], last = focusable[focusable.length - 1];
-    if (e.shiftKey) { if (document.activeElement === first) { e.preventDefault(); last.focus(); } }
-    else { if (document.activeElement === last) { e.preventDefault(); first.focus(); } }
+    if (e.shiftKey) {
+      if (document.activeElement === first || document.activeElement === dlg) {
+        e.preventDefault(); last.focus();
+      }
+    } else if (document.activeElement === last) {
+      e.preventDefault(); first.focus();
+    }
   };
   m.addEventListener('keydown', m._trapFocus);
 }

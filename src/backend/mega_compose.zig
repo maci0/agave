@@ -170,11 +170,19 @@ const msl_header =
     \\
 ;
 
-/// Generate the params struct + per-layer constant arrays.
-fn emitParamsStruct(buf: []u8, desc: ModelDesc) []const u8 {
-    var fbs = std.io.fixedBufferStream(buf);
-    const w = fbs.writer();
-    w.writeAll(
+/// Append `s` into `b` at `*p`, truncating silently if the buffer is full.
+fn appendSlice(b: []u8, p: *usize, s: []const u8) void {
+    if (p.* + s.len > b.len) return;
+    @memcpy(b[p.*..][0..s.len], s);
+    p.* += s.len;
+}
+
+/// Emit `MegaAutoParams` and optional per-layer constant arrays.
+/// Must run before the kernel body so `composeMSL` output is compilable when
+/// concatenated with the Metal `msl_source` blob (which already defines
+/// `MegaLayerOffsets` via the hand-written mega_*.metal files).
+fn emitParamsStruct(buf: []u8, pos: *usize, desc: ModelDesc) void {
+    appendSlice(buf, pos,
         \\struct MegaAutoParams {
         \\    uint n_layers;
         \\    uint n_embd;
@@ -194,54 +202,50 @@ fn emitParamsStruct(buf: []u8, desc: ModelDesc) []const u8 {
         \\};
         \\
         \\
-    ) catch return "";
+    );
 
-    if (desc.hasPerLayerVariation()) {
-        w.writeAll("// Per-layer dimension overrides (baked at compile time)\n") catch return "";
-        w.writeAll("constant uint layer_n_head[] = {") catch return "";
-        for (0..desc.n_layers) |i| {
-            if (i > 0) w.writeAll(",") catch return "";
-            std.fmt.format(w, "{d}", .{desc.layerNHead(i)}) catch return "";
+    if (!desc.hasPerLayerVariation()) return;
+
+    appendSlice(buf, pos, "// Per-layer dimension overrides (baked at compose time)\n");
+
+    const EmitU32 = struct {
+        fn array(b: []u8, p: *usize, name: []const u8, desc_inner: ModelDesc, get: *const fn (ModelDesc, usize) u32) void {
+            appendSlice(b, p, "constant uint ");
+            appendSlice(b, p, name);
+            appendSlice(b, p, "[] = {");
+            var i: usize = 0;
+            while (i < desc_inner.n_layers) : (i += 1) {
+                if (i > 0) appendSlice(b, p, ",");
+                var num_buf: [16]u8 = undefined;
+                const s = std.fmt.bufPrint(&num_buf, "{d}", .{get(desc_inner, i)}) catch return;
+                appendSlice(b, p, s);
+            }
+            appendSlice(b, p, "};\n");
         }
-        w.writeAll("};\n") catch return "";
-
-        w.writeAll("constant uint layer_n_kv[] = {") catch return "";
-        for (0..desc.n_layers) |i| {
-            if (i > 0) w.writeAll(",") catch return "";
-            std.fmt.format(w, "{d}", .{desc.layerNKv(i)}) catch return "";
+    };
+    const EmitF32 = struct {
+        fn array(b: []u8, p: *usize, name: []const u8, desc_inner: ModelDesc, get: *const fn (ModelDesc, usize) f32) void {
+            appendSlice(b, p, "constant float ");
+            appendSlice(b, p, name);
+            appendSlice(b, p, "[] = {");
+            var i: usize = 0;
+            while (i < desc_inner.n_layers) : (i += 1) {
+                if (i > 0) appendSlice(b, p, ",");
+                var num_buf: [32]u8 = undefined;
+                const s = std.fmt.bufPrint(&num_buf, "{d:.1}", .{get(desc_inner, i)}) catch return;
+                appendSlice(b, p, s);
+            }
+            appendSlice(b, p, "};\n");
         }
-        w.writeAll("};\n") catch return "";
+    };
 
-        w.writeAll("constant uint layer_head_dim[] = {") catch return "";
-        for (0..desc.n_layers) |i| {
-            if (i > 0) w.writeAll(",") catch return "";
-            std.fmt.format(w, "{d}", .{desc.layerHeadDim(i)}) catch return "";
-        }
-        w.writeAll("};\n") catch return "";
-
-        w.writeAll("constant uint layer_n_ff[] = {") catch return "";
-        for (0..desc.n_layers) |i| {
-            if (i > 0) w.writeAll(",") catch return "";
-            std.fmt.format(w, "{d}", .{desc.layerNFf(i)}) catch return "";
-        }
-        w.writeAll("};\n") catch return "";
-
-        w.writeAll("constant float layer_rope_theta[] = {") catch return "";
-        for (0..desc.n_layers) |i| {
-            if (i > 0) w.writeAll(",") catch return "";
-            std.fmt.format(w, "{d:.1}", .{desc.layerRopeTheta(i)}) catch return "";
-        }
-        w.writeAll("};\n") catch return "";
-
-        w.writeAll("constant uint layer_window[] = {") catch return "";
-        for (0..desc.n_layers) |i| {
-            if (i > 0) w.writeAll(",") catch return "";
-            std.fmt.format(w, "{d}", .{desc.layerWindow(i)}) catch return "";
-        }
-        w.writeAll("};\n\n") catch return "";
-    }
-
-    return fbs.getWritten();
+    EmitU32.array(buf, pos, "layer_n_head", desc, ModelDesc.layerNHead);
+    EmitU32.array(buf, pos, "layer_n_kv", desc, ModelDesc.layerNKv);
+    EmitU32.array(buf, pos, "layer_head_dim", desc, ModelDesc.layerHeadDim);
+    EmitU32.array(buf, pos, "layer_n_ff", desc, ModelDesc.layerNFf);
+    EmitF32.array(buf, pos, "layer_rope_theta", desc, ModelDesc.layerRopeTheta);
+    EmitU32.array(buf, pos, "layer_window", desc, ModelDesc.layerWindow);
+    appendSlice(buf, pos, "\n");
 }
 
 /// GEMV function name for the given quant kind.
@@ -279,17 +283,9 @@ fn activationFn(activation: Activation) []const u8 {
 pub fn composeMSL(buf: []u8, desc: ModelDesc) []const u8 {
     var pos: usize = 0;
 
-    // Helper to append to buffer
-    const append = struct {
-        fn f(b: []u8, p: *usize, s: []const u8) void {
-            if (p.* + s.len > b.len) return;
-            @memcpy(b[p.*..][0..s.len], s);
-            p.* += s.len;
-        }
-    }.f;
-
-    // Header
-    append(buf, &pos, msl_header);
+    // Header + params/offset structs (required for Metal compile)
+    appendSlice(buf, &pos, msl_header);
+    emitParamsStruct(buf, &pos, desc);
 
     // Kernel signature
     const sig =
@@ -317,15 +313,15 @@ pub fn composeMSL(buf: []u8, desc: ModelDesc) []const u8 {
         \\
         \\
     ;
-    append(buf, &pos, sig);
+    appendSlice(buf, &pos, sig);
 
     // Layer loop
-    append(buf, &pos, "    for (uint li = 0; li < p.n_layers; li++) {\n");
-    append(buf, &pos, "        device const MegaLayerOffsets& lo = layer_off[li];\n");
+    appendSlice(buf, &pos, "    for (uint li = 0; li < p.n_layers; li++) {\n");
+    appendSlice(buf, &pos, "        device const MegaLayerOffsets& lo = layer_off[li];\n");
 
     // Per-layer dimension variables (from baked constant arrays or uniform params)
     if (desc.hasPerLayerVariation()) {
-        append(buf, &pos,
+        appendSlice(buf, &pos,
             \\        uint cur_n_head = layer_n_head[li];
             \\        uint cur_n_kv = layer_n_kv[li];
             \\        uint cur_head_dim = layer_head_dim[li];
@@ -336,7 +332,7 @@ pub fn composeMSL(buf: []u8, desc: ModelDesc) []const u8 {
             \\
         );
     } else {
-        append(buf, &pos,
+        appendSlice(buf, &pos,
             \\        uint cur_n_head = p.n_head;
             \\        uint cur_n_kv = p.n_kv;
             \\        uint cur_head_dim = p.head_dim;
@@ -350,7 +346,7 @@ pub fn composeMSL(buf: []u8, desc: ModelDesc) []const u8 {
 
     // Pre-attention norm
     if (desc.fuse_residual) {
-        append(buf, &pos,
+        appendSlice(buf, &pos,
             \\        device const float* norm_w = (device const float*)(weights + lo.attn_norm);
             \\        if (li > 0) {
             \\            mega_add_rms_norm(hidden, hidden2, norm_w, hidden2,
@@ -365,7 +361,7 @@ pub fn composeMSL(buf: []u8, desc: ModelDesc) []const u8 {
             \\
         );
     } else {
-        append(buf, &pos,
+        appendSlice(buf, &pos,
             \\        device const float* norm_w = (device const float*)(weights + lo.attn_norm);
             \\        mega_rms_norm(hidden, norm_w, hidden2,
             \\            ss_scratch, &sync_ctrs[sync_idx++ % 32],
@@ -391,7 +387,7 @@ pub fn composeMSL(buf: []u8, desc: ModelDesc) []const u8 {
         // Use a runtime layer-type check since we can't comptime-unroll in MSL
         // The layer_types are encoded as a bitfield in the params or checked via
         // the weight offsets (attention layers have attn_q != 0)
-        append(buf, &pos,
+        appendSlice(buf, &pos,
             \\        // Attention: skip if no attention weights for this layer
             \\        if (lo.attn_q != 0) {
             \\            uint qd = cur_n_head * cur_head_dim;
@@ -426,8 +422,8 @@ pub fn composeMSL(buf: []u8, desc: ModelDesc) []const u8 {
             \\                q_buf, qd, p.n_embd, shared, tgid, tid, tg_size);
             ,
         };
-        append(buf, &pos, q_gemv);
-        append(buf, &pos, "\n            mega_grid_sync(&sync_ctrs[sync_idx++ % 32], p.n_tgs, tgid, tid);\n            mega_sync_reset(&sync_ctrs[(sync_idx-1) % 32], tgid, tid);\n\n");
+        appendSlice(buf, &pos, q_gemv);
+        appendSlice(buf, &pos, "\n            mega_grid_sync(&sync_ctrs[sync_idx++ % 32], p.n_tgs, tgid, tid);\n            mega_sync_reset(&sync_ctrs[(sync_idx-1) % 32], tgid, tid);\n\n");
 
         // K projection (same quant)
         const k_gemv = switch (desc.quant) {
@@ -452,8 +448,8 @@ pub fn composeMSL(buf: []u8, desc: ModelDesc) []const u8 {
             \\                k_buf, kvd, p.n_embd, shared, tgid, tid, tg_size);
             ,
         };
-        append(buf, &pos, k_gemv);
-        append(buf, &pos, "\n            mega_grid_sync(&sync_ctrs[sync_idx++ % 32], p.n_tgs, tgid, tid);\n            mega_sync_reset(&sync_ctrs[(sync_idx-1) % 32], tgid, tid);\n\n");
+        appendSlice(buf, &pos, k_gemv);
+        appendSlice(buf, &pos, "\n            mega_grid_sync(&sync_ctrs[sync_idx++ % 32], p.n_tgs, tgid, tid);\n            mega_sync_reset(&sync_ctrs[(sync_idx-1) % 32], tgid, tid);\n\n");
 
         // V projection
         const v_gemv = switch (desc.quant) {
@@ -478,11 +474,11 @@ pub fn composeMSL(buf: []u8, desc: ModelDesc) []const u8 {
             \\                v_buf, kvd, p.n_embd, shared, tgid, tid, tg_size);
             ,
         };
-        append(buf, &pos, v_gemv);
-        append(buf, &pos, "\n            mega_grid_sync(&sync_ctrs[sync_idx++ % 32], p.n_tgs, tgid, tid);\n            mega_sync_reset(&sync_ctrs[(sync_idx-1) % 32], tgid, tid);\n\n");
+        appendSlice(buf, &pos, v_gemv);
+        appendSlice(buf, &pos, "\n            mega_grid_sync(&sync_ctrs[sync_idx++ % 32], p.n_tgs, tgid, tid);\n            mega_sync_reset(&sync_ctrs[(sync_idx-1) % 32], tgid, tid);\n\n");
 
         // RoPE
-        append(buf, &pos,
+        appendSlice(buf, &pos,
             \\            mega_rope(q_buf, cur_n_head, cur_head_dim, p.rope_dim, cur_rope_theta, p.seq_pos,
             \\                tgid, tid, tg_size);
             \\            mega_rope(k_buf, cur_n_kv, cur_head_dim, p.rope_dim, cur_rope_theta, p.seq_pos,
@@ -494,7 +490,7 @@ pub fn composeMSL(buf: []u8, desc: ModelDesc) []const u8 {
         );
 
         // KV cache append + inline SDPA
-        append(buf, &pos,
+        appendSlice(buf, &pos,
             \\            uint kv_layer_stride = p.max_seq_len * cur_n_kv * cur_head_dim;
             \\            device float* layer_keys = kv_keys + li * kv_layer_stride;
             \\            device float* layer_values = kv_values + li * kv_layer_stride;
@@ -538,15 +534,15 @@ pub fn composeMSL(buf: []u8, desc: ModelDesc) []const u8 {
             \\                hidden2, p.n_embd, cur_n_head * cur_head_dim, shared, tgid, tid, tg_size);
             ,
         };
-        append(buf, &pos, out_gemv);
-        append(buf, &pos, "\n            mega_grid_sync(&sync_ctrs[sync_idx++ % 32], p.n_tgs, tgid, tid);\n            mega_sync_reset(&sync_ctrs[(sync_idx-1) % 32], tgid, tid);\n");
+        appendSlice(buf, &pos, out_gemv);
+        appendSlice(buf, &pos, "\n            mega_grid_sync(&sync_ctrs[sync_idx++ % 32], p.n_tgs, tgid, tid);\n            mega_sync_reset(&sync_ctrs[(sync_idx-1) % 32], tgid, tid);\n");
 
-        append(buf, &pos, "        }\n\n"); // close attention if
+        appendSlice(buf, &pos, "        }\n\n"); // close attention if
     }
 
     // Post-attention norm (if applicable)
     if (desc.has_post_attn_norm) {
-        append(buf, &pos,
+        appendSlice(buf, &pos,
             \\        device const float* post_norm_w = (device const float*)(weights + lo.post_attn_norm);
             \\        mega_add_rms_norm(hidden, hidden2, post_norm_w, hidden2,
             \\            ss_scratch, &sync_ctrs[sync_idx++ % 32],
@@ -555,7 +551,7 @@ pub fn composeMSL(buf: []u8, desc: ModelDesc) []const u8 {
             \\
         );
     } else {
-        append(buf, &pos,
+        appendSlice(buf, &pos,
             \\        mega_add(hidden, hidden2, p.n_embd, tgid, tid, tg_size);
             \\        mega_grid_sync(&sync_ctrs[sync_idx++ % 32], p.n_tgs, tgid, tid);
             \\        mega_sync_reset(&sync_ctrs[(sync_idx-1) % 32], tgid, tid);
@@ -589,8 +585,8 @@ pub fn composeMSL(buf: []u8, desc: ModelDesc) []const u8 {
             \\            ff_gate, cur_n_ff, p.n_embd, shared, tgid, tid, tg_size);
             ,
         };
-        append(buf, &pos, gate_gemv);
-        append(buf, &pos, "\n        mega_grid_sync(&sync_ctrs[sync_idx++ % 32], p.n_tgs, tgid, tid);\n        mega_sync_reset(&sync_ctrs[(sync_idx-1) % 32], tgid, tid);\n\n");
+        appendSlice(buf, &pos, gate_gemv);
+        appendSlice(buf, &pos, "\n        mega_grid_sync(&sync_ctrs[sync_idx++ % 32], p.n_tgs, tgid, tid);\n        mega_sync_reset(&sync_ctrs[(sync_idx-1) % 32], tgid, tid);\n\n");
 
         // Up GEMV (same quant)
         const up_gemv = switch (desc.quant) {
@@ -615,8 +611,8 @@ pub fn composeMSL(buf: []u8, desc: ModelDesc) []const u8 {
             \\            ff_up, cur_n_ff, p.n_embd, shared, tgid, tid, tg_size);
             ,
         };
-        append(buf, &pos, up_gemv);
-        append(buf, &pos, "\n        mega_grid_sync(&sync_ctrs[sync_idx++ % 32], p.n_tgs, tgid, tid);\n        mega_sync_reset(&sync_ctrs[(sync_idx-1) % 32], tgid, tid);\n\n");
+        appendSlice(buf, &pos, up_gemv);
+        appendSlice(buf, &pos, "\n        mega_grid_sync(&sync_ctrs[sync_idx++ % 32], p.n_tgs, tgid, tid);\n        mega_sync_reset(&sync_ctrs[(sync_idx-1) % 32], tgid, tid);\n\n");
 
         // Activation
         const act_call = switch (desc.activation) {
@@ -624,8 +620,8 @@ pub fn composeMSL(buf: []u8, desc: ModelDesc) []const u8 {
             .gelu => "        mega_gelu_mul(ff_gate, ff_up, cur_n_ff, tgid, tid, tg_size);\n",
             .relu_squared => unreachable,
         };
-        append(buf, &pos, act_call);
-        append(buf, &pos, "        mega_grid_sync(&sync_ctrs[sync_idx++ % 32], p.n_tgs, tgid, tid);\n        mega_sync_reset(&sync_ctrs[(sync_idx-1) % 32], tgid, tid);\n\n");
+        appendSlice(buf, &pos, act_call);
+        appendSlice(buf, &pos, "        mega_grid_sync(&sync_ctrs[sync_idx++ % 32], p.n_tgs, tgid, tid);\n        mega_sync_reset(&sync_ctrs[(sync_idx-1) % 32], tgid, tid);\n\n");
     } else {
         // ReLU²: single up GEMV → relu² → down
         const up_gemv = switch (desc.quant) {
@@ -638,10 +634,10 @@ pub fn composeMSL(buf: []u8, desc: ModelDesc) []const u8 {
             \\            ff_gate, cur_n_ff, p.n_embd, shared, tgid, tid, tg_size);
             ,
         };
-        append(buf, &pos, up_gemv);
-        append(buf, &pos, "\n        mega_grid_sync(&sync_ctrs[sync_idx++ % 32], p.n_tgs, tgid, tid);\n        mega_sync_reset(&sync_ctrs[(sync_idx-1) % 32], tgid, tid);\n");
-        append(buf, &pos, "        mega_relu_squared(ff_gate, cur_n_ff, tgid, tid, tg_size);\n");
-        append(buf, &pos, "        mega_grid_sync(&sync_ctrs[sync_idx++ % 32], p.n_tgs, tgid, tid);\n        mega_sync_reset(&sync_ctrs[(sync_idx-1) % 32], tgid, tid);\n\n");
+        appendSlice(buf, &pos, up_gemv);
+        appendSlice(buf, &pos, "\n        mega_grid_sync(&sync_ctrs[sync_idx++ % 32], p.n_tgs, tgid, tid);\n        mega_sync_reset(&sync_ctrs[(sync_idx-1) % 32], tgid, tid);\n");
+        appendSlice(buf, &pos, "        mega_relu_squared(ff_gate, cur_n_ff, tgid, tid, tg_size);\n");
+        appendSlice(buf, &pos, "        mega_grid_sync(&sync_ctrs[sync_idx++ % 32], p.n_tgs, tgid, tid);\n        mega_sync_reset(&sync_ctrs[(sync_idx-1) % 32], tgid, tid);\n\n");
     }
 
     // Down projection
@@ -667,23 +663,23 @@ pub fn composeMSL(buf: []u8, desc: ModelDesc) []const u8 {
         \\            hidden2, p.n_embd, cur_n_ff, shared, tgid, tid, tg_size);
         ,
     };
-    append(buf, &pos, down_gemv);
-    append(buf, &pos, "\n        mega_grid_sync(&sync_ctrs[sync_idx++ % 32], p.n_tgs, tgid, tid);\n        mega_sync_reset(&sync_ctrs[(sync_idx-1) % 32], tgid, tid);\n");
+    appendSlice(buf, &pos, down_gemv);
+    appendSlice(buf, &pos, "\n        mega_grid_sync(&sync_ctrs[sync_idx++ % 32], p.n_tgs, tgid, tid);\n        mega_sync_reset(&sync_ctrs[(sync_idx-1) % 32], tgid, tid);\n");
 
     // End of layer loop
     if (!desc.fuse_residual) {
-        append(buf, &pos, "\n        mega_add(hidden, hidden2, p.n_embd, tgid, tid, tg_size);\n");
-        append(buf, &pos, "        mega_grid_sync(&sync_ctrs[sync_idx++ % 32], p.n_tgs, tgid, tid);\n        mega_sync_reset(&sync_ctrs[(sync_idx-1) % 32], tgid, tid);\n");
+        appendSlice(buf, &pos, "\n        mega_add(hidden, hidden2, p.n_embd, tgid, tid, tg_size);\n");
+        appendSlice(buf, &pos, "        mega_grid_sync(&sync_ctrs[sync_idx++ % 32], p.n_tgs, tgid, tid);\n        mega_sync_reset(&sync_ctrs[(sync_idx-1) % 32], tgid, tid);\n");
     }
-    append(buf, &pos, "    }\n");
+    appendSlice(buf, &pos, "    }\n");
 
     // Final residual (for fused residual models)
     if (desc.fuse_residual) {
-        append(buf, &pos, "    mega_add(hidden, hidden2, p.n_embd, tgid, tid, tg_size);\n");
+        appendSlice(buf, &pos, "    mega_add(hidden, hidden2, p.n_embd, tgid, tid, tg_size);\n");
     }
 
     // Close kernel
-    append(buf, &pos, "}\n");
+    appendSlice(buf, &pos, "}\n");
 
     return buf[0..pos];
 }
@@ -831,8 +827,10 @@ test "composeMSL uniform model does not emit per-layer arrays" {
     };
     const msl = composeMSL(&buf, desc);
     // Uniform model should use p.n_head, not per-layer arrays
+    try std.testing.expect(std.mem.indexOf(u8, msl, "struct MegaAutoParams") != null);
     try std.testing.expect(std.mem.indexOf(u8, msl, "cur_n_head = p.n_head") != null);
     try std.testing.expect(std.mem.indexOf(u8, msl, "cur_n_head = layer_n_head[li]") == null);
+    try std.testing.expect(std.mem.indexOf(u8, msl, "constant uint layer_n_head[]") == null);
 }
 
 test "composeMSL per-layer variation uses baked arrays" {
@@ -857,6 +855,9 @@ test "composeMSL per-layer variation uses baked arrays" {
 
     const msl = composeMSL(&buf, desc);
     // With per-layer variation, kernel should use layer arrays
+    try std.testing.expect(std.mem.indexOf(u8, msl, "struct MegaAutoParams") != null);
+    try std.testing.expect(std.mem.indexOf(u8, msl, "constant uint layer_n_head[]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, msl, "constant uint layer_head_dim[]") != null);
     try std.testing.expect(std.mem.indexOf(u8, msl, "cur_n_head = layer_n_head[li]") != null);
     try std.testing.expect(std.mem.indexOf(u8, msl, "cur_head_dim = layer_head_dim[li]") != null);
 }

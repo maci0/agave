@@ -46,6 +46,9 @@ Thumbs.db
 *.swp
 *.swo
 *~
+*.bak
+*.bak_*
+*.orig
 
 # Test harness artifacts
 tests/.venv/

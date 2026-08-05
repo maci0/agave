@@ -394,7 +394,8 @@ test "constants valid" {
     comptime std.debug.assert(q8_0_block_size > 0);
     comptime std.debug.assert(q8_0_group_size > 0);
     comptime std.debug.assert(n_sync_slots > 0);
-    comptime std.debug.assert(off_attn_norm == 0 or off_attn_norm > 0);
+    // attn_norm is the first layer-offset field (byte 0).
+    comptime std.debug.assert(off_attn_norm == 0);
     comptime std.debug.assert(off_attn_q > 0);
     comptime std.debug.assert(off_attn_k > 0);
     comptime std.debug.assert(off_attn_v > 0);

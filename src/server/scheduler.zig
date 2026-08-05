@@ -21,6 +21,7 @@ const Metrics = @import("metrics.zig").Metrics;
 const TieredKvCache = @import("../kvcache/tiered.zig").TieredKvCache;
 const Prefetcher = @import("../kvcache/prefetch.zig").Prefetcher;
 const math_ops = @import("../ops/math.zig");
+const SamplingParams = @import("json.zig").SamplingParams;
 
 /// Scheduler loop poll interval (nanoseconds).
 const scheduler_poll_ns: u64 = 1_000_000; // 1ms
@@ -53,14 +54,48 @@ const initial_token_capacity: usize = 4096 + 8;
 /// Limits prefill blocking so decode requests get timely service.
 const prefill_chunk_size: u32 = 32;
 
+/// Cap on SSM state snapshots retained for prefix restore. Snapshots can be
+/// multi-MB (all layer conv+recurrence). Without a bound the map grows without
+/// limit under sustained distinct prompts.
+const max_ssm_state_cache_entries: usize = 64;
+
+/// Logit-bias slot count — derived from SamplingParams so the scheduler
+/// buffer cannot drift from JSON parse capacity.
+const max_scheduler_logit_bias: usize = @as(SamplingParams, .{}).logit_bias_ids.len;
+
 /// Pick next token from the last forward()'s logits using request sampling.
 /// Matches the direct generate path: temperature == 0 keeps forward()'s greedy
-/// argmax (no min_p / resampling). Falls back to `greedy` when logits are empty.
+/// argmax unless penalties / logit bias mutate logits (then re-argmax). Falls
+/// back to `greedy` when logits are empty.
 fn sampleNextToken(req: *Request, model: *Model, greedy: u32) u32 {
-    if (req.temperature == 0) return greedy;
     const logits = model.getLogits();
     if (logits.len == 0) return greedy;
+
+    const gen_tokens = req.tokens.items;
+    if (req.logit_bias_count > 0) {
+        math_ops.applyLogitBias(logits, req.logit_bias_ids[0..], req.logit_bias_vals[0..], req.logit_bias_count);
+    }
+    if (req.repetition_penalty != 1.0 and gen_tokens.len > 0) {
+        math_ops.applyRepeatPenalty(logits, gen_tokens, req.repetition_penalty);
+    }
+    if (req.dry_multiplier > 0 and gen_tokens.len > 0) {
+        math_ops.applyDry(logits, gen_tokens, req.dry_multiplier, req.dry_allowed_length);
+    }
+    if (req.frequency_penalty != 0 or req.presence_penalty != 0) {
+        math_ops.applyPenalties(logits, gen_tokens, req.frequency_penalty, req.presence_penalty);
+    }
+
+    const mutated = req.logit_bias_count > 0 or req.repetition_penalty != 1.0 or
+        req.frequency_penalty != 0 or req.presence_penalty != 0 or req.dry_multiplier > 0;
+
+    if (req.temperature == 0) {
+        return if (mutated) math_ops.argmax(logits) else greedy;
+    }
+    if (req.mirostat >= 2) {
+        return math_ops.sampleMirostat(logits, req.mirostat_tau, req.mirostat_eta, &req.mirostat_mu, req.temperature, req.prng.random());
+    }
     if (req.min_p > 0) math_ops.applyMinP(logits, req.min_p);
+    if (req.xtc_probability > 0) math_ops.applyXtc(logits, req.xtc_probability, req.xtc_threshold, req.prng.random());
     return math_ops.sampleToken(logits, req.temperature, req.top_k, req.top_p, req.prng.random());
 }
 
@@ -71,6 +106,10 @@ pub const Request = struct {
     last_token_id: u32,
     is_finished: std.atomic.Value(bool),
     is_cancelled: std.atomic.Value(bool),
+    /// True when `is_cancelled` was set by the scheduler timeout path.
+    /// Lets HTTP handlers avoid counting timeouts as `requests_failed`
+    /// (which would poison `/ready` error-rate degradation).
+    is_timed_out: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
     visible_len: std.atomic.Value(u32),
     /// Set by the scheduler when the request is removed from its queues.
     /// The HTTP handler must wait on this before freeing the Request to
@@ -98,7 +137,26 @@ pub const Request = struct {
     top_k: u32 = 0,
     top_p: f32 = 1.0,
     min_p: f32 = 0,
+    frequency_penalty: f32 = 0,
+    presence_penalty: f32 = 0,
+    repetition_penalty: f32 = 1.0,
+    dry_multiplier: f32 = 0,
+    dry_allowed_length: u32 = 2,
+    xtc_probability: f32 = 0,
+    xtc_threshold: f32 = 0.1,
+    mirostat: u32 = 0,
+    mirostat_tau: f32 = 5.0,
+    mirostat_eta: f32 = 0.1,
+    /// Mirostat running estimate; reset when sampling is configured.
+    mirostat_mu: f32 = 10.0,
+    logit_bias_ids: [max_scheduler_logit_bias]u32 = .{0} ** max_scheduler_logit_bias,
+    logit_bias_vals: [max_scheduler_logit_bias]f32 = .{0} ** max_scheduler_logit_bias,
+    logit_bias_count: u32 = 0,
     prng: std.Random.DefaultPrng = undefined,
+    /// False until the handler finishes writing sampling fields. Scheduler
+    /// must not admit the request while this is false (avoids racing
+    /// temperature/top_p/prng with sampleNextToken).
+    sampling_ready: std.atomic.Value(bool) = std.atomic.Value(bool).init(true),
 
     /// Append a token to the output sequence.
     /// If the token matches any EOG (end-of-generation) ID, sets is_finished
@@ -130,7 +188,12 @@ pub const Request = struct {
     }
 
     /// Clean up allocated resources.
+    /// Zeros the token buffer before free so generated IDs (derived from
+    /// prompts / completions) do not linger in the allocator freelist.
     pub fn deinit(self: *Request) void {
+        if (self.tokens.capacity > 0) {
+            @memset(std.mem.sliceAsBytes(self.tokens.allocatedSlice()), 0);
+        }
         self.tokens.deinit(self.allocator);
     }
 };
@@ -142,6 +205,16 @@ pub const Request = struct {
 fn requestPriority(req: *const Request, now: i64) i64 {
     const cache_factor = comptime @as(i64, @intFromFloat(cache_priority_alpha * ms_per_second));
     return @as(i64, @intCast(req.cached_prefix_len)) * cache_factor - (now - req.enqueued_at);
+}
+
+/// Total order for the waiting queue (ascending). Pop from the end admits first.
+/// Equal priority ties break by id descending so lower id (earlier enqueue) is
+/// admitted first — independent of swapRemove layout from cancellations.
+fn waitingOrderLessThan(now: i64, a: *const Request, b: *const Request) bool {
+    const pa = requestPriority(a, now);
+    const pb = requestPriority(b, now);
+    if (pa != pb) return pa < pb;
+    return a.id > b.id;
 }
 
 /// Scheduler statistics for monitoring.
@@ -184,8 +257,10 @@ pub const RequestManager = struct {
 
     /// Initialize request manager.
     ///
-    /// If tiered_cache is provided, Prefetcher is initialized and started.
-    /// Otherwise, prefetcher remains null.
+    /// If tiered_cache is provided, Prefetcher is constructed but not started.
+    /// The scheduler loop starts it after this RequestManager is at its final
+    /// address (workers capture `*Prefetcher`; starting before return-by-value
+    /// or move leaves a dangling pointer).
     pub fn init(allocator: Allocator, metrics: *Metrics, max_batch_size: usize, timeout_sec: u32, tiered_cache: ?*TieredKvCache, io: Io) !RequestManager {
         var waiting: std.ArrayList(*Request) = .empty;
         try waiting.ensureTotalCapacity(allocator, max_waiting_queue_size);
@@ -215,12 +290,9 @@ pub const RequestManager = struct {
             .ssm_cache_inited = true,
         };
 
-        // Initialize and start prefetcher if tiered cache available
+        // Construct only — runSchedulerLoop starts the worker at the final address.
         if (tiered_cache) |cache| {
-            var prefetcher = Prefetcher.init(cache);
-            errdefer prefetcher.deinit();
-            try prefetcher.start(io);
-            mgr.prefetcher = prefetcher;
+            mgr.prefetcher = Prefetcher.init(cache);
         }
 
         return mgr;
@@ -297,6 +369,9 @@ pub const RequestManager = struct {
             .prompt_tokens_slice = prompt_tokens_slice,
             .allocator = self.allocator,
             .prng = std.Random.DefaultPrng.init(id),
+            // Handler publishes sampling via configureSchedulerSampling before
+            // the scheduler may admit this request.
+            .sampling_ready = std.atomic.Value(bool).init(false),
         };
 
         try req.tokens.ensureTotalCapacity(self.allocator, initial_token_capacity);
@@ -360,6 +435,7 @@ pub const RequestManager = struct {
                 const elapsed = req.elapsedSeconds(now);
                 if (elapsed > self.timeout_sec) {
                     std.log.warn("req={d} timed out after {d}s (limit {d}s), cancelling", .{ req.id, elapsed, self.timeout_sec });
+                    req.is_timed_out.store(true, .release);
                     req.is_cancelled.store(true, .release);
                     self.metrics.recordTimeout();
                 }
@@ -373,14 +449,18 @@ pub const RequestManager = struct {
                 const SortCtx = struct { now: i64 };
                 std.mem.sort(*Request, self.waiting.items, SortCtx{ .now = now }, struct {
                     fn lessThan(ctx: SortCtx, a: *Request, b: *Request) bool {
-                        return requestPriority(a, ctx.now) < requestPriority(b, ctx.now);
+                        return waitingOrderLessThan(ctx.now, a, b);
                     }
                 }.lessThan);
                 self.queue_dirty = false;
             }
 
-            // 4. Fill batch from waiting queue (ascending sort, pop takes highest priority)
+            // 4. Fill batch from waiting queue (ascending sort, pop takes highest priority).
+            // Skip the head until sampling_ready: handler may still be writing
+            // temperature/top_p/prng after enqueue returns.
             while (self.running.items.len < self.max_batch_size and self.waiting.items.len > 0) {
+                const candidate = self.waiting.items[self.waiting.items.len - 1];
+                if (!candidate.sampling_ready.load(.acquire)) break;
                 const req = self.waiting.pop().?;
                 self.running.append(self.allocator, req) catch |err| {
                     // Re-queue to prevent request loss on allocation failure.
@@ -446,6 +526,16 @@ pub const RequestManager = struct {
         // Decode-first scheduling: process all decode requests before prefill.
         // This ensures low TPOT for actively generating requests while new
         // requests' prefill is chunked to avoid blocking.
+        //
+        // Sort by id so swapRemove of finished/cancelled requests cannot change
+        // Phase B's choice of which prefiller advances (layout-dependent otherwise).
+        if (self.running.items.len > 1) {
+            std.mem.sort(*Request, self.running.items, {}, struct {
+                fn lessThan(_: void, a: *Request, b: *Request) bool {
+                    return a.id < b.id;
+                }
+            }.lessThan);
+        }
 
         // Phase A: decode all requests that finished prefill (one token each)
         for (self.running.items) |req| {
@@ -482,11 +572,27 @@ pub const RequestManager = struct {
                 };
                 if (self.ssm_cache_inited) {
                     if (model.saveSsmState(self.allocator)) |snapshot| {
-                        const h = std.hash.XxHash64.hash(0, std.mem.sliceAsBytes(req.prompt_tokens_slice));
-                        self.ssm_state_cache.put(h, snapshot) catch |err| {
-                            std.log.warn("req={d} SSM state cache insert failed: {}", .{ req.id, err });
-                            self.allocator.free(snapshot);
-                        };
+                        // saveSsmState may return a non-owned empty sentinel (&{})
+                        // when there is nothing to snapshot — never cache or free it.
+                        if (snapshot.len > 0) {
+                            const h = std.hash.XxHash64.hash(0, std.mem.sliceAsBytes(req.prompt_tokens_slice));
+                            if (self.ssm_state_cache.getPtr(h)) |existing| {
+                                self.allocator.free(existing.*);
+                                existing.* = snapshot;
+                            } else {
+                                while (self.ssm_state_cache.count() >= max_ssm_state_cache_entries) {
+                                    var kit = self.ssm_state_cache.keyIterator();
+                                    const victim_key = (kit.next() orelse break).*;
+                                    if (self.ssm_state_cache.fetchRemove(victim_key)) |kv| {
+                                        self.allocator.free(kv.value);
+                                    }
+                                }
+                                self.ssm_state_cache.put(h, snapshot) catch |err| {
+                                    std.log.warn("req={d} SSM state cache insert failed: {}", .{ req.id, err });
+                                    self.allocator.free(snapshot);
+                                };
+                            }
+                        }
                     }
                 }
             }
@@ -564,6 +670,17 @@ pub fn runSchedulerLoop(
     eog_ids: []const u32,
     shutdown: *std.atomic.Value(bool),
 ) void {
+    // Start prefetcher only now: manager is at its final address (init returns
+    // by value; starting inside init would leave the worker with a dangling
+    // pointer to the temporary Prefetcher).
+    if (manager.prefetcher) |*prefetcher| {
+        if (prefetcher.thread == null) {
+            prefetcher.start(manager.io) catch |err| {
+                std.log.err("Failed to start KV prefetcher: {}", .{err});
+                manager.prefetcher = null;
+            };
+        }
+    }
     model.setThreadContext();
     while (!shutdown.load(.acquire)) {
         manager.step(model, eog_ids) catch |err| {
@@ -580,6 +697,11 @@ fn testIo() Io {
     return threaded.io();
 }
 
+/// Tests enqueue without configureSchedulerSampling — mark ready so step can admit.
+fn markSamplingReady(req: *Request) void {
+    req.sampling_ready.store(true, .release);
+}
+
 // Unit tests
 test "enqueue increments waiting count" {
     const allocator = std.testing.allocator;
@@ -589,9 +711,11 @@ test "enqueue increments waiting count" {
 
     const tokens_a = [_]u32{ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 };
     const req1 = try manager.enqueue(&tokens_a);
+    markSamplingReady(req1);
     // Requests in waiting queue are freed by manager.deinit() — no defer needed.
     const tokens_b = [_]u32{ 11, 12, 13, 14, 15, 16, 17, 18, 19, 20 };
-    _ = try manager.enqueue(&tokens_b);
+    const req2 = try manager.enqueue(&tokens_b);
+    markSamplingReady(req2);
 
     const stats = manager.getStats();
     try std.testing.expectEqual(@as(u32, 2), stats.waiting_count);
@@ -608,9 +732,9 @@ test "step fills batch from waiting queue" {
 
     // Enqueue 3 requests — all freed by manager.deinit() (still in queues at test end)
     const dummy_tokens = [_]u32{ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 };
-    _ = try manager.enqueue(&dummy_tokens);
-    _ = try manager.enqueue(&dummy_tokens);
-    _ = try manager.enqueue(&dummy_tokens);
+    markSamplingReady(try manager.enqueue(&dummy_tokens));
+    markSamplingReady(try manager.enqueue(&dummy_tokens));
+    markSamplingReady(try manager.enqueue(&dummy_tokens));
 
     // Create mock model
     var mock_model = MockModel{};
@@ -639,13 +763,14 @@ test "step removes finished requests" {
 
     const dummy_tokens = [_]u32{ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 };
     const req1 = try manager.enqueue(&dummy_tokens);
+    markSamplingReady(req1);
     // req1 is removed from running by step() when finished — handler (test) owns cleanup.
     defer {
         req1.deinit();
         allocator.destroy(req1);
     }
     // req2 stays in running — freed by manager.deinit()
-    _ = try manager.enqueue(&dummy_tokens);
+    markSamplingReady(try manager.enqueue(&dummy_tokens));
 
     // Create mock model that returns non-EOS
     var mock_model = MockModel{};
@@ -678,7 +803,12 @@ test "step cancels timed-out requests" {
 
     const dummy_tokens = [_]u32{ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 };
     const req = try manager.enqueue(&dummy_tokens);
-    // req stays in running (cancelled but not removed until next step) — freed by manager.deinit()
+    markSamplingReady(req);
+    // After cancellation + remove, handler owns cleanup (not manager.deinit).
+    defer {
+        req.deinit();
+        allocator.destroy(req);
+    }
 
     var mock_model = MockModel{};
     var model = Model.from(MockModel, &mock_model);
@@ -694,6 +824,7 @@ test "step cancels timed-out requests" {
     sim_clock.advanceMs(1000);
     try manager.step(&model, &[_]u32{});
     try std.testing.expect(req.is_cancelled.load(.acquire));
+    try std.testing.expect(req.is_timed_out.load(.acquire));
     try std.testing.expectEqual(@as(u64, 1), metrics.requests_timeout.load(.monotonic));
     // Cancelled requests stay in running until the next step removes them.
     try std.testing.expectEqual(@as(u32, 1), manager.getStats().running_count);
@@ -702,6 +833,31 @@ test "step cancels timed-out requests" {
     try std.testing.expectEqual(@as(u32, 0), manager.getStats().running_count);
     try std.testing.expectEqual(@as(u32, 1), manager.getStats().cancelled_total);
     try std.testing.expect(req.scheduler_done.load(.acquire));
+}
+
+test "step does not admit until sampling_ready" {
+    const allocator = std.testing.allocator;
+    var metrics = Metrics{};
+    var manager = try RequestManager.init(allocator, &metrics, 2, 30, null, testIo());
+    defer manager.deinit();
+
+    const dummy_tokens = [_]u32{ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 };
+    const req = try manager.enqueue(&dummy_tokens);
+    // Intentionally leave sampling_ready=false (handler has not configured yet).
+
+    var mock_model = MockModel{};
+    var model = Model.from(MockModel, &mock_model);
+    try manager.step(&model, &[_]u32{});
+
+    const stats = manager.getStats();
+    try std.testing.expectEqual(@as(u32, 1), stats.waiting_count);
+    try std.testing.expectEqual(@as(u32, 0), stats.running_count);
+
+    markSamplingReady(req);
+    try manager.step(&model, &[_]u32{});
+    const after = manager.getStats();
+    try std.testing.expectEqual(@as(u32, 0), after.waiting_count);
+    try std.testing.expectEqual(@as(u32, 1), after.running_count);
 }
 
 test "appendToken marks finished on EOG" {
@@ -803,6 +959,69 @@ test "requestPriority prefers longer cached prefix" {
         .allocator = undefined,
     };
     try std.testing.expect(requestPriority(&req_cached, now) > requestPriority(&req_uncached, now));
+}
+
+test "waitingOrderLessThan breaks equal-priority ties by id FIFO" {
+    const now: i64 = 10_000;
+    const older = Request{
+        .id = 1,
+        .tokens = .empty,
+        .last_token_id = 0,
+        .is_finished = std.atomic.Value(bool).init(false),
+        .is_cancelled = std.atomic.Value(bool).init(false),
+        .visible_len = std.atomic.Value(u32).init(0),
+        .enqueued_at = now - 100,
+        .prompt_tokens = 10,
+        .cached_prefix_len = 0,
+        .allocator = undefined,
+    };
+    const newer = Request{
+        .id = 2,
+        .tokens = .empty,
+        .last_token_id = 0,
+        .is_finished = std.atomic.Value(bool).init(false),
+        .is_cancelled = std.atomic.Value(bool).init(false),
+        .visible_len = std.atomic.Value(u32).init(0),
+        .enqueued_at = now - 100,
+        .prompt_tokens = 10,
+        .cached_prefix_len = 0,
+        .allocator = undefined,
+    };
+    try std.testing.expectEqual(requestPriority(&older, now), requestPriority(&newer, now));
+    // Ascending sort: newer (higher id) is "less" so older sits at the high end and is popped first.
+    try std.testing.expect(waitingOrderLessThan(now, &newer, &older));
+    try std.testing.expect(!waitingOrderLessThan(now, &older, &newer));
+}
+
+test "waitingOrderLessThan prefers higher cache priority over id" {
+    const now: i64 = 10_000;
+    const low_cache = Request{
+        .id = 1,
+        .tokens = .empty,
+        .last_token_id = 0,
+        .is_finished = std.atomic.Value(bool).init(false),
+        .is_cancelled = std.atomic.Value(bool).init(false),
+        .visible_len = std.atomic.Value(u32).init(0),
+        .enqueued_at = now,
+        .prompt_tokens = 10,
+        .cached_prefix_len = 0,
+        .allocator = undefined,
+    };
+    const high_cache = Request{
+        .id = 99,
+        .tokens = .empty,
+        .last_token_id = 0,
+        .is_finished = std.atomic.Value(bool).init(false),
+        .is_cancelled = std.atomic.Value(bool).init(false),
+        .visible_len = std.atomic.Value(u32).init(0),
+        .enqueued_at = now,
+        .prompt_tokens = 10,
+        .cached_prefix_len = 50,
+        .allocator = undefined,
+    };
+    try std.testing.expect(requestPriority(&high_cache, now) > requestPriority(&low_cache, now));
+    try std.testing.expect(waitingOrderLessThan(now, &low_cache, &high_cache));
+    try std.testing.expect(!waitingOrderLessThan(now, &high_cache, &low_cache));
 }
 
 test "appendToken at capacity sets cancelled flag" {
@@ -950,6 +1169,37 @@ test "sleepNs advances under sim_clock override" {
     try std.testing.expectEqual(@as(i64, 50_001), milliTimestamp());
 }
 
+test "sampleNextToken applies logit bias at temperature 0" {
+    const allocator = std.testing.allocator;
+    var logits = [_]f32{ 1.0, 5.0, 2.0 };
+    var mock = MockModel{ .logits_buf = &logits };
+    var model = Model.from(MockModel, &mock);
+
+    var tokens: std.ArrayList(u32) = .empty;
+    try tokens.ensureTotalCapacity(allocator, 8);
+    defer tokens.deinit(allocator);
+
+    var req = Request{
+        .id = 1,
+        .tokens = tokens,
+        .last_token_id = 0,
+        .is_finished = std.atomic.Value(bool).init(false),
+        .is_cancelled = std.atomic.Value(bool).init(false),
+        .visible_len = std.atomic.Value(u32).init(0),
+        .enqueued_at = 0,
+        .prompt_tokens = 0,
+        .allocator = allocator,
+        .temperature = 0,
+        .logit_bias_count = 1,
+    };
+    req.logit_bias_ids[0] = 0;
+    req.logit_bias_vals[0] = 10.0; // boost token 0 above greedy argmax at index 1
+
+    // forward()'s greedy would be 1 (score 5); bias makes 0 win (1+10=11)
+    const next = sampleNextToken(&req, &model, 1);
+    try std.testing.expectEqual(@as(u32, 0), next);
+}
+
 // Mock model for testing
 const MockModel = struct {
     const MockBackend = struct {
@@ -1064,6 +1314,10 @@ test "fuzz: all scheduler functions" {
                 prompt_buf[pi] = smith.valueWithHash(u32, @intCast(13 + pi));
             }
             _ = manager.enqueue(prompt_buf[0..prompt_len]) catch return;
+            // Publish sampling so step can admit (mirrors configureSchedulerSampling).
+            if (manager.waiting.items.len > 0) {
+                manager.waiting.items[manager.waiting.items.len - 1].sampling_ready.store(true, .release);
+            }
 
             const after_enqueue = manager.getStats();
             try std.testing.expectEqual(@as(u32, 1), after_enqueue.waiting_count);

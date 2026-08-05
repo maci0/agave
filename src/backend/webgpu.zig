@@ -86,7 +86,6 @@ const wgpu_buffer_usage_copy_dst: WGPUBufferUsage = 0x0008;
 const wgpu_buffer_usage_map_read: WGPUBufferUsage = 0x0001;
 const wgpu_buffer_usage_uniform: WGPUBufferUsage = 0x0040;
 
-const WGPUBufferBindingType = u32;
 const wgpu_buffer_binding_storage = 7;
 const wgpu_buffer_binding_read_only_storage = 6;
 const wgpu_buffer_binding_uniform = 1;

@@ -101,7 +101,6 @@ const FnDeviceGetAttribute = *const fn (*c_int, c_int, CUdevice) callconv(.c) CU
 const FnCtxCreate = *const fn (*CUcontext, c_uint, CUdevice) callconv(.c) CUresult;
 const FnCtxDestroy = *const fn (CUcontext) callconv(.c) CUresult;
 const FnDevicePrimaryCtxRetain = *const fn (*CUcontext, CUdevice) callconv(.c) CUresult;
-const FnDevicePrimaryCtxRelease = *const fn (CUdevice) callconv(.c) CUresult;
 const FnCtxSync = *const fn () callconv(.c) CUresult;
 const FnCtxSetCurrent = *const fn (CUcontext) callconv(.c) CUresult;
 const FnModuleLoadData = *const fn (*CUmodule, [*]const u8) callconv(.c) CUresult;

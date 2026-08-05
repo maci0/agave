@@ -692,12 +692,6 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
     }
 
     const n_positionals = res.positionals.items.len;
-    if (n_positionals == 0) {
-        eprint("Error: missing model path\n", .{});
-        eprint("Usage: agave <model.gguf|model-dir/> [prompt]\n", .{});
-        eprint("Run 'agave --help' for more information.\n", .{});
-        std.process.exit(2);
-    }
 
     const backend_choice: BackendChoice = blk: {
         const be_str = res.option("backend") orelse "auto";
@@ -868,6 +862,22 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
             eprint("Error: --pp must be >= 1\n", .{});
             std.process.exit(2);
         }
+        // Transport is a fixed rank-0 ↔ rank-1 pair (shm names, tcp_fds[0],
+        // sendBuf peer). Multi-stage rings are not implemented yet.
+        if (pp > 2) {
+            eprint("Error: --pp > 2 is not supported yet (transport is a 2-rank pair only)\n", .{});
+            eprint("  Use --pp 2, or run a single stage (--pp 1).\n", .{});
+            std.process.exit(2);
+        }
+    }
+    if (parseU32(res.option("rank"), "rank")) |rank| {
+        const pp = parseU32(res.option("pp"), "pp") orelse 1;
+        const tp = parseU32(res.option("tp"), "tp") orelse 1;
+        const world = @max(pp, tp);
+        if (world > 1 and rank >= world) {
+            eprint("Error: --rank {d} is out of range for world size {d} (valid: 0..{d})\n", .{ rank, world, world - 1 });
+            std.process.exit(2);
+        }
     }
 
     // Validate speculative decoding parameters
@@ -900,6 +910,23 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
             eprint("Error: --max-batch-size must be >= 1\n", .{});
             std.process.exit(2);
         }
+    }
+
+    // Validate --video-fps early so bad values are reported before "missing model path"
+    if (parseF32(res.option("video-fps"), "video-fps")) |v| {
+        if (v <= 0) {
+            eprint("Error: --video-fps must be > 0 (got {d:.2})\n", .{v});
+            std.process.exit(2);
+        }
+    }
+
+    // Require model after option values are validated so typos like
+    // --temperature=abc report the bad value instead of "missing model path".
+    if (n_positionals == 0) {
+        eprint("Error: missing model path\n", .{});
+        eprint("Usage: agave <model.gguf|model-dir/> [prompt]\n", .{});
+        eprint("Run 'agave --help' for more information.\n", .{});
+        std.process.exit(2);
     }
 
     // Warn about extra positional arguments (e.g. unquoted multi-word prompt)
@@ -1038,6 +1065,14 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
     if (res.option("video-fps") != null and res.option("video") == null)
         eprint("Warning: --video-fps has no effect without --video\n", .{});
 
+    // Warn about directional steering scales without a vector file
+    if (res.option("dir-steering-file") == null) {
+        if (res.option("dir-steering-ffn") != null)
+            eprint("Warning: --dir-steering-ffn has no effect without --dir-steering-file\n", .{});
+        if (res.option("dir-steering-attn") != null)
+            eprint("Warning: --dir-steering-attn has no effect without --dir-steering-file\n", .{});
+    }
+
     // Early file existence checks — fail fast before slow model loading
     if (grammar_path) |p| validateFileExists(p, "--grammar");
     if (res.option("image")) |p| validateFileExists(p, "--image");
@@ -1047,6 +1082,7 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
     if (res.option("draft-model")) |p| validateFileExists(p, "--draft-model");
     if (res.option("pflash-scorer")) |p| validateFileExists(p, "--pflash-scorer");
     if (res.option("spec-token-map")) |p| validateFileExists(p, "--spec-token-map");
+    if (res.option("dir-steering-file")) |p| validateFileExists(p, "--dir-steering-file");
 
     // JSON mode + interactive REPL would corrupt the JSON output stream
     if (json_mode and !res.flag("model-info") and !res.flag("serve") and n_positionals < 2) {
@@ -1199,13 +1235,8 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
         .rate_limit_tpm = parseU32(res.option("rate-limit-tpm"), "rate-limit-tpm") orelse 0,
         .video = res.option("video"),
         .video_fps = blk: {
-            if (res.option("video-fps")) |s| {
-                const v = std.fmt.parseFloat(f32, s) catch {
-                    eprint("Error: --video-fps must be a number\n", .{});
-                    std.process.exit(2);
-                };
-                break :blk @max(0.1, v);
-            }
+            // Range already validated above; re-parse for the struct field.
+            if (parseF32(res.option("video-fps"), "video-fps")) |v| break :blk v;
             break :blk 1.0;
         },
         .spec_tokens = parseU32(res.option("spec-tokens"), "spec-tokens") orelse 5,
@@ -1507,6 +1538,7 @@ fn parseUint(comptime T: type, s: ?[]const u8, comptime flag: []const u8) ?T {
     const str = s orelse return null;
     return std.fmt.parseInt(T, str, 10) catch {
         eprint("Error: invalid value for --" ++ flag ++ ": '{s}' is not a valid integer\n", .{str});
+        eprint("Run 'agave --help' for more information.\n", .{});
         std.process.exit(2);
     };
 }
@@ -1670,10 +1702,12 @@ fn parseF32(s: ?[]const u8, comptime flag: []const u8) ?f32 {
     const str = s orelse return null;
     const val = std.fmt.parseFloat(f32, str) catch {
         eprint("Error: invalid value for --" ++ flag ++ ": '{s}' is not a valid number\n", .{str});
+        eprint("Run 'agave --help' for more information.\n", .{});
         std.process.exit(2);
     };
     if (!std.math.isFinite(val)) {
         eprint("Error: --" ++ flag ++ " must be a finite number, got '{s}'\n", .{str});
+        eprint("Run 'agave --help' for more information.\n", .{});
         std.process.exit(2);
     }
     return val;
@@ -1850,6 +1884,9 @@ fn printUsage() void {
         \\      --diffusion-steps <N> DiffusionGemma denoising steps [default: 16]
         \\      --diffusion-canvas <N> DiffusionGemma canvas length [default: 256]
         \\      --diffusion-confidence <F>  Diffusion acceptance confidence (0.0-1.0) [default: 0.5]
+        \\      --dir-steering-file <PATH>  Directional steering f32 vector (n_layers × n_embd floats)
+        \\      --dir-steering-ffn <F>      Steering scale for FFN outputs [default: 1.0 with file]
+        \\      --dir-steering-attn <F>     Steering scale for attention outputs [default: 0]
         \\
         \\OPTIMIZATION:
         \\      --megakernel          Enable fused FFN megakernels (3→1 dispatch per layer)
@@ -4389,8 +4426,10 @@ test {
     _ = @import("image.zig");
     _ = @import("image_tokens.zig");
     _ = @import("steering.zig");
+    _ = @import("eval.zig");
     _ = @import("expert_profile.zig");
     _ = @import("expert_cache.zig");
+    _ = @import("term.zig");
     _ = @import("thread_pool.zig");
     _ = @import("ops/kv_quant.zig");
     _ = @import("ops/quant.zig");
@@ -4416,7 +4455,13 @@ test {
     _ = @import("kvcache/tiered.zig");
     _ = @import("kvcache/checkpoint.zig");
     _ = @import("models/model.zig");
+    _ = @import("models/gemma3.zig");
     _ = @import("models/gemma4.zig");
+    _ = @import("models/diffusion_gemma.zig");
+    _ = @import("models/qwen35.zig");
+    _ = @import("models/gpt_oss.zig");
+    _ = @import("models/glm4.zig");
+    _ = @import("models/llama4.zig");
     _ = @import("models/nemotron_nano.zig");
     _ = @import("models/nemotron_h.zig");
     _ = @import("models/vision.zig");
@@ -4450,6 +4495,7 @@ test {
     _ = @import("backend/mega_compose.zig");
     _ = @import("backend/megakernel.zig");
     _ = @import("ops/gptq.zig");
+    _ = @import("ops/awq.zig");
     _ = @import("ops/hqq.zig");
 }
 

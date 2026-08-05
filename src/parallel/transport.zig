@@ -12,12 +12,15 @@ const max_peers: usize = 8;
 const shm_buf_size: usize = 16 * 1024 * 1024;
 const shm_region_size: usize = shm_buf_size + @sizeOf(ShmHeader);
 const shm_peer_retries: u32 = 5000;
+/// Delay between shm_open retries while waiting for the peer region.
+const shm_peer_retry_ns: u64 = 1_000_000;
 /// Maximum spin iterations for SHM send/recv before declaring peer unresponsive.
 /// ~100M spins ≈ several seconds at GHz clock rates. Prevents infinite hang
 /// when a peer process crashes mid-transfer.
 const shm_spin_max: u32 = 100_000_000;
 
 const builtin = @import("builtin");
+const sim_clock = @import("../sim_clock.zig");
 const shm_O_CREAT: c_int = if (builtin.os.tag == .macos) 0x200 else 0o100;
 const shm_O_EXCL: c_int = if (builtin.os.tag == .macos) 0x800 else 0o200;
 const shm_O_RDWR: c_int = 0o2;
@@ -174,7 +177,9 @@ pub const Transport = struct {
     /// Set up POSIX shared memory regions for same-node IPC.
     /// Creates two shm regions: one for sending (this rank writes), one for receiving (peer writes).
     /// Rank 0 creates send=agave_0to1, opens recv=agave_1to0 (and vice versa for rank 1).
+    /// Only a 2-rank pair is supported (hardcoded region names).
     pub fn setupShm(self: *Transport) !void {
+        if (self.world_size != 2) return error.UnsupportedWorldSize;
         const send_name = if (self.rank == 0) "/agave_0to1" else "/agave_1to0";
         const recv_name = if (self.rank == 0) "/agave_1to0" else "/agave_0to1";
         @memset(&self.shm_name_send, 0);
@@ -210,8 +215,8 @@ pub const Transport = struct {
         while (retry < shm_peer_retries) : (retry += 1) {
             self.shm_recv_fd = std.c.shm_open(&self.shm_name_recv, shm_O_RDWR, @as(c.mode_t, 0o600));
             if (self.shm_recv_fd >= 0) break;
-            var ts = posix.system.timespec{ .sec = 0, .nsec = 1_000_000 };
-            _ = posix.system.nanosleep(&ts, null);
+            // sim_clock: under override advances virtual time and returns immediately.
+            sim_clock.sleepNs(shm_peer_retry_ns);
         }
         if (self.shm_recv_fd < 0) return error.ShmPeerTimeout;
         errdefer {
@@ -700,6 +705,13 @@ test "Transport struct methods exist at comptime" {
     t.sendBufs(empty_send, empty_lens);
     t.recvBufs(empty_recv, empty_lens);
     try std.testing.expectEqual(@as(u32, 0), t.tcp_connected);
+}
+
+test "Transport.setupShm rejects non-pair world_size" {
+    const allocator = std.testing.allocator;
+    var t = try Transport.init(allocator, .shm, 0, 4);
+    defer t.deinit();
+    try std.testing.expectError(error.UnsupportedWorldSize, t.setupShm());
 }
 
 test "Transport.init nccl" {

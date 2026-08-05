@@ -39,12 +39,35 @@ inline fn simdMaxF32(buf: []const f32) f32 {
 }
 
 /// Return index of maximum element (first occurrence on ties).
+/// Single pass over `buf` (SIMD chunks + scalar tail) — avoids the prior
+/// max-then-rescan pattern that touched every logit twice on greedy decode.
 pub fn argmax(buf: []const f32) u32 {
-    const best_val = simdMaxF32(buf);
-    for (buf, 0..) |v, idx| {
-        if (v >= best_val) return @intCast(idx);
+    if (buf.len == 0) return 0;
+    var best_idx: u32 = 0;
+    var best_val: f32 = buf[0];
+    var i: usize = 1;
+    while (i + 8 <= buf.len) : (i += 8) {
+        const chunk: V8 = buf[i..][0..8].*;
+        const local_max = @reduce(.Max, chunk);
+        if (local_max > best_val) {
+            // Lane index must be comptime for @Vector access; unroll.
+            const lane: usize = blk: {
+                inline for (0..8) |l| {
+                    if (chunk[l] == local_max) break :blk l;
+                }
+                break :blk 0;
+            };
+            best_val = local_max;
+            best_idx = @intCast(i + lane);
+        }
     }
-    return 0;
+    while (i < buf.len) : (i += 1) {
+        if (buf[i] > best_val) {
+            best_val = buf[i];
+            best_idx = @intCast(i);
+        }
+    }
+    return best_idx;
 }
 
 /// Select the top-k elements from `scores` by value.
@@ -954,7 +977,7 @@ test "topKExperts negative scores" {
 
 test "argmax all equal returns first" {
     const buf = [_]f32{ 5.0, 5.0, 5.0, 5.0 };
-    // Ties broken by first occurrence (> not >=)
+    // Ties broken by first occurrence (strict > keeps earlier index)
     try std.testing.expectEqual(@as(u32, 0), argmax(&buf));
 }
 

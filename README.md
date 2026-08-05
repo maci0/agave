@@ -410,7 +410,7 @@ zig build -Dtarget=aarch64-linux-gnu -Denable-metal=false
 | `enable-vulkan` | bool | true | Vulkan backend (runtime dlopen) |
 | `enable-cuda` | bool | true | CUDA backend (runtime dlopen) |
 | `enable-rocm` | bool | true | ROCm backend (runtime dlopen) |
-| `enable-webgpu` | bool | true | WebGPU backend (WGSL shaders) |
+| `enable-webgpu` | bool | true | WebGPU backend (runtime dlopen, WGSL) |
 | `cuda-sm` | enum | sm_90 | CUDA SM target (sm_50..sm_120) |
 | `rocm-arch` | enum | gfx1100 | ROCm GFX target (gfx90a..gfx1151) |
 
@@ -549,18 +549,23 @@ docker buildx build --load -t agave .
 docker buildx build --load -t agave \
   --build-arg ENABLE_VULKAN=false \
   --build-arg ENABLE_CUDA=false \
-  --build-arg ENABLE_ROCM=false .
+  --build-arg ENABLE_ROCM=false \
+  --build-arg ENABLE_WEBGPU=false .
 
 # Minimal build: single model + CPU only
 docker buildx build --load -t agave \
   --build-arg ENABLE_VULKAN=false \
   --build-arg ENABLE_CUDA=false \
   --build-arg ENABLE_ROCM=false \
+  --build-arg ENABLE_WEBGPU=false \
   --build-arg ENABLE_QWEN35=false \
   --build-arg ENABLE_GPT_OSS=false \
   --build-arg ENABLE_NEMOTRON_H=false \
   --build-arg ENABLE_NEMOTRON_NANO=false \
-  --build-arg ENABLE_GLM4=false .
+  --build-arg ENABLE_GLM4=false \
+  --build-arg ENABLE_GEMMA4=false \
+  --build-arg ENABLE_DIFFUSION_GEMMA=false \
+  --build-arg ENABLE_LLAMA4=false .
 
 # One-shot inference (--no-healthcheck: image HEALTHCHECK expects --serve /ready)
 docker run --rm --no-healthcheck -v /path/to/models:/models agave /models/model.gguf "Hello"
@@ -574,25 +579,27 @@ docker run --rm -p 127.0.0.1:49453:49453 -e AGAVE_API_KEY \
 docker buildx build --build-arg ZIG_VERSION=0.16.0 -t agave .
 ```
 
-GPU backends (CUDA, Vulkan, ROCm) load their drivers at runtime via `dlopen`, which requires glibc. When all three GPU backends are disabled, the build automatically switches to musl for a fully static binary. Zig cross-compiles natively — no QEMU emulation needed during build.
+Dlopen backends (CUDA, Vulkan, ROCm, WebGPU) load native libraries at runtime and require glibc. When all four are disabled, the Docker build switches to musl for a fully static binary. Zig cross-compiles natively, no QEMU emulation needed during build.
 
 ### Static musl builds
 
 For environments where a fully static, dependency-free binary is needed (Alpine containers, embedded systems, minimal distros), disable all dlopen backends:
 
 ```bash
-# Static musl binary — CPU backend only
+# Static musl binary (CPU backend only)
 zig build -Dtarget=x86_64-linux-musl \
   -Denable-metal=false -Denable-vulkan=false \
-  -Denable-cuda=false -Denable-rocm=false
+  -Denable-cuda=false -Denable-rocm=false \
+  -Denable-webgpu=false
 
 # Cross-compile static ARM64 binary
 zig build -Dtarget=aarch64-linux-musl \
   -Denable-metal=false -Denable-vulkan=false \
-  -Denable-cuda=false -Denable-rocm=false
+  -Denable-cuda=false -Denable-rocm=false \
+  -Denable-webgpu=false
 ```
 
-**Note:** Static musl builds only work with the CPU backend. GPU backends (CUDA, Vulkan, ROCm) depend on `dlopen` to load vendor drivers at runtime, which requires glibc. Attempting to dlopen a glibc-linked `.so` from a musl binary will segfault.
+**Note:** Static musl builds only work with the CPU backend. Dlopen backends (CUDA, Vulkan, ROCm, WebGPU) need glibc. Loading a glibc-linked `.so` from a musl binary will segfault.
 
 ## Documentation
 

@@ -9,10 +9,6 @@ const Allocator = std.mem.Allocator;
 /// Used by split-attention to classify blocks without importing tiered.zig directly.
 pub const BlockTier = @import("tiered.zig").BlockTier;
 
-/// Default KV cache block size (tokens per block) used across all models.
-/// Shared constant to avoid repeating the literal 16 in every model init.
-const default_block_size: u16 = 16;
-
 /// Result of allocating a KV cache.
 /// Slices are byte arrays — the actual format (f32, f16, q8_0, etc.)
 /// is tracked by the model's `kv_type` field.

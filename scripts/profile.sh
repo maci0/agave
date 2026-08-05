@@ -47,7 +47,9 @@ CMD=("$@")
 for i in "${!CMD[@]}"; do
     if [[ "${CMD[$i]}" == *"zig-out/bin/agave" && "${CMD[$i]}" != *"agave-debug"* ]]; then
         echo "→ Building debug binary for symbol resolution..."
-        zig build 2>/dev/null || true
+        if ! zig build; then
+            echo "warning: zig build failed; profiling without agave-debug symbols" >&2
+        fi
         DBG="$(dirname "${CMD[$i]}")/agave-debug"
         if [[ -x "$DBG" ]]; then
             CMD[$i]="$DBG"
@@ -62,7 +64,7 @@ done
 TS=$(date +%Y%m%d_%H%M%S)
 TRACE_FILE="${OUTPUT:-/tmp/agave-${TS}.trace}"
 TMP_XML=$(mktemp /tmp/agave-profile-XXXXXXXXXX)
-trap "rm -f '$TMP_XML'" EXIT
+trap 'rm -f "$TMP_XML"' EXIT
 
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo "agave profiling harness"

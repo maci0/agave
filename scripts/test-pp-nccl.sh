@@ -14,16 +14,16 @@ PEER=${2:?Missing peer IP}
 MODEL=${3:?Missing model path}
 N_TOKENS=${4:-20}
 
-# NCCL configuration for ConnectX RoCE RDMA
-export NCCL_IB_HCA=rocep1s0f1,roceP2p1s0f1
-export NCCL_IB_GID_INDEX=5
-export NCCL_SOCKET_IFNAME=enp1s0f1np1,enP2p1s0f1np1
-export NCCL_IB_AR_THRESHOLD=0
-export NCCL_NET_GDR_LEVEL=3
-export NCCL_IB_PCI_RELAXED_ORDERING=1
-export NCCL_IB_RETRY_CNT=7
-export NCCL_IB_TIMEOUT=22
-export NCCL_DEBUG=INFO
+# NCCL configuration for ConnectX RoCE RDMA (override via env for other NICs).
+export NCCL_IB_HCA="${NCCL_IB_HCA:-rocep1s0f1,roceP2p1s0f1}"
+export NCCL_IB_GID_INDEX="${NCCL_IB_GID_INDEX:-5}"
+export NCCL_SOCKET_IFNAME="${NCCL_SOCKET_IFNAME:-enp1s0f1np1,enP2p1s0f1np1}"
+export NCCL_IB_AR_THRESHOLD="${NCCL_IB_AR_THRESHOLD:-0}"
+export NCCL_NET_GDR_LEVEL="${NCCL_NET_GDR_LEVEL:-3}"
+export NCCL_IB_PCI_RELAXED_ORDERING="${NCCL_IB_PCI_RELAXED_ORDERING:-1}"
+export NCCL_IB_RETRY_CNT="${NCCL_IB_RETRY_CNT:-7}"
+export NCCL_IB_TIMEOUT="${NCCL_IB_TIMEOUT:-22}"
+export NCCL_DEBUG="${NCCL_DEBUG:-INFO}"
 
 echo "=== PP=2 NCCL Test ==="
 echo "Rank: $RANK"

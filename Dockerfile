@@ -7,6 +7,13 @@ FROM --platform=$BUILDPLATFORM debian:bookworm-20260713-slim AS build
 ARG ZIG_VERSION=
 ARG TARGETARCH
 
+# Freeze apt to the same calendar day as the FROM tag. A dated image alone is not
+# enough: `apt-get update` against deb.debian.org still floats package versions.
+# Bump this when bumping debian:bookworm-YYYYMMDD-slim (CI checks they match).
+ARG DEBIAN_SNAPSHOT=20260713T000000Z
+# 2026-07-13 00:00:00 UTC; keep aligned with DEBIAN_SNAPSHOT / FROM tag day.
+ARG SOURCE_DATE_EPOCH=1783900800
+
 # Backend enable flags. Metal disabled by default (macOS-only, not usable in Docker).
 ARG ENABLE_CPU=true
 ARG ENABLE_METAL=false
@@ -28,7 +35,18 @@ ARG ENABLE_GEMMA4=true
 ARG ENABLE_DIFFUSION_GEMMA=true
 ARG ENABLE_LLAMA4=true
 
-RUN apt-get update && apt-get install -y --no-install-recommends curl xz-utils ca-certificates && rm -rf /var/lib/apt/lists/*
+ENV DEBIAN_FRONTEND=noninteractive \
+    LC_ALL=C \
+    TZ=UTC \
+    SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH}
+
+RUN set -eux; \
+    printf 'deb http://snapshot.debian.org/archive/debian/%s bookworm main\n' "$DEBIAN_SNAPSHOT" > /etc/apt/sources.list; \
+    printf 'deb http://snapshot.debian.org/archive/debian-security/%s bookworm-security main\n' "$DEBIAN_SNAPSHOT" > /etc/apt/sources.list.d/security.list; \
+    printf 'Acquire::Check-Valid-Until "false";\nAcquire::Retries "3";\n' > /etc/apt/apt.conf.d/99snapshot; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends curl xz-utils ca-certificates; \
+    rm -rf /var/lib/apt/lists/*
 
 # Zig toolchain checksums (SHA256). Update when bumping .zigversion / ZIG_VERSION.
 ARG ZIG_SHA256_X86_64=70e49664a74374b48b51e6f3fdfbf437f6395d42509050588bd49abe52ba3d00
@@ -54,10 +72,17 @@ RUN ZIG_VER="${ZIG_VERSION:-$(tr -d '[:space:]' </tmp/agave.zigversion)}" && \
 WORKDIR /src
 COPY --link . .
 
-# Default builds must match .zigversion. Explicit ZIG_VERSION overrides are for
-# experiments only (also bump ZIG_SHA256_* when overriding).
+# Default builds must match .zigversion and build.zig.zon. Explicit ZIG_VERSION
+# overrides are for experiments only (also bump ZIG_SHA256_* when overriding).
 RUN PIN=$(tr -d '[:space:]' < .zigversion) && \
+    ZON=$(sed -n 's/^[[:space:]]*\.minimum_zig_version[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' build.zig.zon | head -n1) && \
     INSTALLED=$(zig version) && \
+    if [ -z "$ZON" ]; then \
+      echo "error: could not parse minimum_zig_version from build.zig.zon" >&2; exit 1; \
+    fi && \
+    if [ "$PIN" != "$ZON" ]; then \
+      echo "error: .zigversion ($PIN) != build.zig.zon minimum_zig_version ($ZON)" >&2; exit 1; \
+    fi && \
     if [ -z "$ZIG_VERSION" ]; then \
       if [ "$INSTALLED" != "$PIN" ]; then \
         echo "error: zig version $INSTALLED does not match .zigversion=$PIN" >&2; exit 1; \
@@ -65,10 +90,10 @@ RUN PIN=$(tr -d '[:space:]' < .zigversion) && \
     elif [ "$INSTALLED" != "$ZIG_VERSION" ]; then \
       echo "error: zig version $INSTALLED does not match ZIG_VERSION=$ZIG_VERSION" >&2; exit 1; \
     fi && \
-    echo "Zig ok: $INSTALLED (pin=$PIN${ZIG_VERSION:+ override=$ZIG_VERSION})"
+    echo "Zig ok: $INSTALLED (pin=$PIN zon=$ZON${ZIG_VERSION:+ override=$ZIG_VERSION})"
 
 # Cross-compile for the target platform.
-# Use glibc (-gnu) when any dlopen backend is enabled (CUDA/Vulkan/ROCm need glibc).
+# Use glibc (-gnu) when any dlopen backend is enabled (CUDA/Vulkan/ROCm/WebGPU).
 # Use musl when only CPU/Metal backends are active (smaller static binary).
 RUN --mount=type=cache,target=/src/.zig-cache \
     --mount=type=cache,target=/root/.cache/zig \
@@ -77,7 +102,7 @@ RUN --mount=type=cache,target=/src/.zig-cache \
         arm64) echo "aarch64-linux" ;; \
         *) echo "error: unsupported TARGETARCH=$TARGETARCH (expected amd64 or arm64)" >&2; exit 1 ;; \
     esac) && \
-    if [ "$ENABLE_CUDA" = "true" ] || [ "$ENABLE_VULKAN" = "true" ] || [ "$ENABLE_ROCM" = "true" ]; then \
+    if [ "$ENABLE_CUDA" = "true" ] || [ "$ENABLE_VULKAN" = "true" ] || [ "$ENABLE_ROCM" = "true" ] || [ "$ENABLE_WEBGPU" = "true" ]; then \
         ZIG_TARGET="${ZIG_TARGET}-gnu"; \
     else \
         ZIG_TARGET="${ZIG_TARGET}-musl"; \
@@ -104,16 +129,33 @@ RUN --mount=type=cache,target=/src/.zig-cache \
 
 # Runtime image: Debian for glibc dlopen compatibility.
 # Musl static binaries also run fine on Debian.
-FROM debian:bookworm-20260713-slim
+# Pin TARGETPLATFORM so multi-arch buildx does not inherit BUILDPLATFORM from the prior stage.
+FROM --platform=$TARGETPLATFORM debian:bookworm-20260713-slim
+
+# Keep in sync with the build stage (same FROM day / snapshot).
+ARG DEBIAN_SNAPSHOT=20260713T000000Z
+ARG SOURCE_DATE_EPOCH=1783900800
 
 LABEL org.opencontainers.image.title="agave" \
       org.opencontainers.image.description="High-performance LLM inference engine" \
       org.opencontainers.image.source="https://github.com/maci0/agave"
 
+ENV DEBIAN_FRONTEND=noninteractive \
+    LC_ALL=C \
+    TZ=UTC \
+    SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH}
+
 # curl is only used by HEALTHCHECK (not on the inference hot path).
 # Pin UID/GID so compose tmpfs mounts (read_only root) can match ownership.
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl && rm -rf /var/lib/apt/lists/* && \
-    groupadd -r -g 10001 agave && \
+# Apt packages come from snapshot.debian.org (not live bookworm) for hermeticity.
+RUN set -eux; \
+    printf 'deb http://snapshot.debian.org/archive/debian/%s bookworm main\n' "$DEBIAN_SNAPSHOT" > /etc/apt/sources.list; \
+    printf 'deb http://snapshot.debian.org/archive/debian-security/%s bookworm-security main\n' "$DEBIAN_SNAPSHOT" > /etc/apt/sources.list.d/security.list; \
+    printf 'Acquire::Check-Valid-Until "false";\nAcquire::Retries "3";\n' > /etc/apt/apt.conf.d/99snapshot; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends ca-certificates curl; \
+    rm -rf /var/lib/apt/lists/*; \
+    groupadd -r -g 10001 agave; \
     useradd -r -u 10001 -g agave -d /home/agave -m -s /sbin/nologin agave
 
 COPY --link --from=build /out/bin/agave /usr/local/bin/agave

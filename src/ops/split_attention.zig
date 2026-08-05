@@ -29,9 +29,6 @@ const simd_width: usize = 8;
 /// Bounded by max blocks per sequence (256 blocks × block_size positions each).
 const max_ranges: usize = 256;
 
-/// Maximum number of query heads supported for stack-allocated stats buffers.
-const max_heads: usize = 256;
-
 /// A contiguous range of sequence positions assigned to a tier.
 pub const SeqRange = struct {
     /// First position (inclusive).

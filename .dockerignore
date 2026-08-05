@@ -34,10 +34,13 @@ progress.md
 .claude/
 .playwright-mcp/
 
-# Editor temporary files
+# Editor temporary files / local backups (keep out of build context)
 *.swp
 *.swo
 *~
+*.bak
+*.bak_*
+*.orig
 
 # Compiled artifacts (from local builds outside Zig)
 *.o

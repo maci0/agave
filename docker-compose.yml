@@ -24,6 +24,8 @@ services:
         ENABLE_DIFFUSION_GEMMA: "false"
         ENABLE_LLAMA4: "false"
     image: agave:local
+    # Match Dockerfile USER agave (uid/gid 10001); keeps tmpfs mounts consistent.
+    user: "10001:10001"
     # Default to loopback publish so the API is not exposed on LAN interfaces.
     # Set AGAVE_HOST_BIND=0.0.0.0 in .env only when you intentionally need remote access.
     ports:

@@ -59,11 +59,14 @@ pub const Prefetcher = struct {
     }
 
     /// Stop worker thread and free resources.
+    /// No-op if `start()` was never called (io/thread unset).
     pub fn deinit(self: *Prefetcher) void {
+        const t = self.thread orelse return;
+        self.thread = null;
         self.shutdown.store(true, .release);
         _ = self.generation.fetchAdd(1, .release);
         self.io.futexWake(u32, &self.generation.raw, 1);
-        if (self.thread) |t| t.join();
+        t.join();
     }
 
     /// Queue prefetch for next N blocks starting from current index.

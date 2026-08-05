@@ -124,6 +124,12 @@ const max_conversations: usize = 100;
 const max_messages_per_conv: usize = 1000;
 const max_message_len: usize = 100_000;
 const max_concurrent_connections: u32 = 64;
+/// Retry-After seconds advertised on 503 when at connection capacity or spawn fails.
+const capacity_retry_after_sec: u32 = 1;
+const capacity_503_body = "{\"error\":{\"message\":\"Server at capacity\",\"type\":\"server_error\",\"param\":null,\"code\":\"server_overloaded\"}}";
+const spawn_fail_503_body = "{\"error\":{\"message\":\"Server unable to handle request\",\"type\":\"server_error\",\"param\":null,\"code\":\"server_overloaded\"}}";
+const method_not_allowed_openai = "{\"error\":{\"message\":\"Method not allowed\",\"type\":\"invalid_request_error\",\"param\":null,\"code\":\"method_not_allowed\"}}";
+const method_not_allowed_anthropic = "{\"type\":\"error\",\"error\":{\"type\":\"invalid_request_error\",\"message\":\"Method not allowed\"}}";
 /// When only one of rpm/tpm is set via CLI, the unset bucket uses these
 /// capacities so the configured limit is the effective constraint.
 const rate_limit_unlimited_rpm: u32 = 1_000_000;
@@ -134,7 +140,6 @@ const scheduler_poll_interval_ns: u64 = 1_000_000; // 1ms — matches scheduler_
 /// Allows Ctrl+C to interrupt the accept loop.
 const accept_timeout_sec: i64 = 1;
 const ms_per_second: f32 = 1000.0;
-const stop_sequence_window: usize = 8;
 
 const stderr_file = Io.File.stderr();
 const stdout_file = Io.File.stdout();
@@ -154,6 +159,18 @@ fn nanoTimestamp() i96 {
 /// PRNG seed from request params, falling back to the injectable clock.
 fn prngSeedFromSampling(sampling: SamplingParams) u64 {
     return sampling.seed orelse @as(u64, @truncate(@as(u96, @bitCast(nanoTimestamp()))));
+}
+
+/// 2^64 / φ — mixes request id into a clock-derived seed so concurrent
+/// scheduler admits at the same virtual millisecond do not share one PRNG stream.
+const prng_seed_mix_golden: u64 = 0x9E3779B97F4A7C15;
+
+/// Effective scheduler PRNG seed: honor explicit `sampling.seed`, otherwise
+/// derive from sim_clock and request id (not the enqueue-time id alone).
+fn schedulerPrngSeed(req_id: u64, sampling: SamplingParams) u64 {
+    const base = prngSeedFromSampling(sampling);
+    if (sampling.seed != null) return base;
+    return base ^ (req_id *% prng_seed_mix_golden);
 }
 
 /// Sleep via sim_clock so virtual time advances under a clock override.
@@ -184,14 +201,22 @@ fn sleepMonitorLoop(shutdown: *const std.atomic.Value(bool)) void {
         if (!g_server.sleeping.load(.acquire) and idle_s >= sleep_after_s) {
             // Only enter sleep when truly idle: last_request_ms alone is wrong for
             // long-running generations that outlast sleep_after_s. Re-check
-            // connections under the mutex (unlocked check races with accept).
+            // connections and last_request under the mutex (unlocked check races
+            // with accept / wake-from-sleep on the handler path).
             var entered_sleep = false;
             {
                 g_server.mutex.lockUncancelable(g_server.io);
                 defer g_server.mutex.unlock(g_server.io);
-                if (g_server.metrics.active_connections.load(.acquire) == 0) {
-                    g_server.sleeping.store(true, .release);
-                    entered_sleep = true;
+                if (g_server.metrics.active_connections.load(.acquire) == 0 and
+                    !g_server.sleeping.load(.acquire))
+                {
+                    const last_locked = g_server.last_request_ms.load(.acquire);
+                    const now_locked = milliTimestamp();
+                    const idle_locked: u32 = @intCast(@max(0, @divFloor(now_locked - last_locked, 1000)));
+                    if (idle_locked >= sleep_after_s) {
+                        g_server.sleeping.store(true, .release);
+                        entered_sleep = true;
+                    }
                 }
             }
             if (entered_sleep) {
@@ -203,12 +228,31 @@ fn sleepMonitorLoop(shutdown: *const std.atomic.Value(bool)) void {
 }
 
 /// Copy per-request sampling onto a scheduler Request (enqueue defaults to greedy).
+/// Publishes sampling_ready last so the scheduler cannot admit until fields are set.
 fn configureSchedulerSampling(req: *scheduler.Request, sampling: SamplingParams) void {
     req.temperature = sampling.temperature;
     req.top_k = sampling.top_k;
     req.top_p = sampling.top_p;
     req.min_p = sampling.min_p;
-    if (sampling.seed) |s| req.prng = std.Random.DefaultPrng.init(s);
+    req.frequency_penalty = sampling.frequency_penalty;
+    req.presence_penalty = sampling.presence_penalty;
+    req.repetition_penalty = sampling.repetition_penalty;
+    req.dry_multiplier = sampling.dry_multiplier;
+    req.dry_allowed_length = sampling.dry_allowed_length;
+    req.xtc_probability = sampling.xtc_probability;
+    req.xtc_threshold = sampling.xtc_threshold;
+    req.mirostat = sampling.mirostat;
+    req.mirostat_tau = sampling.mirostat_tau;
+    req.mirostat_eta = sampling.mirostat_eta;
+    req.mirostat_mu = sampling.mirostat_tau * 2.0;
+    const n_bias = @min(sampling.logit_bias_count, @as(u32, @intCast(req.logit_bias_ids.len)));
+    req.logit_bias_count = n_bias;
+    @memcpy(req.logit_bias_ids[0..n_bias], sampling.logit_bias_ids[0..n_bias]);
+    @memcpy(req.logit_bias_vals[0..n_bias], sampling.logit_bias_vals[0..n_bias]);
+    // Always re-seed: enqueue leaves a placeholder id-based PRNG; null seed must
+    // follow prngSeedFromSampling (sim_clock) like the direct generation paths.
+    req.prng = std.Random.DefaultPrng.init(schedulerPrngSeed(req.id, sampling));
+    req.sampling_ready.store(true, .release);
 }
 
 /// Architecture image placeholder IDs from the running server config.
@@ -297,6 +341,8 @@ const known_endpoints = [_]KnownEndpoint{
     .{ .path = "/health", .allow = "GET, OPTIONS", .msg = "Use GET." },
     .{ .path = "/ready", .allow = "GET, OPTIONS", .msg = "Use GET." },
     .{ .path = "/metrics", .allow = "GET, OPTIONS", .msg = "Use GET." },
+    .{ .path = "/", .allow = "GET, OPTIONS", .msg = "Use GET." },
+    .{ .path = "/favicon.ico", .allow = "GET, OPTIONS", .msg = "Use GET." },
 };
 /// Per-connection read timeout (seconds) — prevents slow loris DoS attacks
 /// where an attacker holds connections open by sending data one byte at a time.
@@ -496,6 +542,9 @@ const Server = struct {
     }
 
     /// Delete a conversation by ID. Caller must hold self.mutex.
+    /// When the active conversation is deleted, immediately wipe KV / prefix
+    /// cache and n-gram history so prompt-derived state does not survive
+    /// an explicit erasure request (matches `/clear` / `/reset`).
     fn deleteConv(self: *Server, id: u32) void {
         for (self.conversations.items, 0..) |*conv, i| {
             if (conv.id == id) {
@@ -509,7 +558,10 @@ const Server = struct {
                 self.conversations.items[self.conversations.items.len - 1].id
             else
                 0;
+            self.model.resetCache();
             self.kv_valid = false;
+            self.clearCachedPromptIds();
+            if (ngram_mod.global_pool) |*pool| pool.clear();
         }
     }
 
@@ -568,7 +620,6 @@ fn estimatePromptTokens(token_count: usize, text_len: usize) u32 {
     return if (token_count > 0) @intCast(token_count) else @intCast(@max(1, text_len));
 }
 
-/// Characters unsafe for direct embedding in JSON string values or HTML contexts.
 /// Characters unsafe for direct embedding in JSON string values or HTML contexts.
 fn isUnsafeJsonChar(c: u8) bool {
     return c == '"' or c == '\\' or c < 0x20 or c == '<' or c == '>' or c == '&';
@@ -1144,7 +1195,9 @@ fn send401(stream: TcpStream) void {
 /// Returns false if the write failed (client disconnected).
 fn sendSseHeaders(stream: TcpStream) bool {
     var hdr_buf: [hdr_buf_size]u8 = undefined;
-    const hdr = std.fmt.bufPrint(&hdr_buf, "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\nX-Accel-Buffering: no\r\nX-Request-Id: {d}\r\n{s}" ++ security_headers ++ "Connection: keep-alive\r\n\r\n", .{ log_request_id, corsHeaders() }) catch return false;
+    // Cache-Control comes only from security_headers (no-store). Emitting a second
+    // Cache-Control: no-cache here produced duplicate headers and ambiguous caching.
+    const hdr = std.fmt.bufPrint(&hdr_buf, "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nX-Accel-Buffering: no\r\nX-Request-Id: {d}\r\n{s}" ++ security_headers ++ "Connection: keep-alive\r\n\r\n", .{ log_request_id, corsHeaders() }) catch return false;
     stream.writeAll(hdr) catch |err| {
         std.log.warn("req={d} SSE header write failed: {}", .{ log_request_id, err });
         return false;
@@ -1157,6 +1210,7 @@ const rate_limit_fallback = "{\"error\":{\"message\":\"Rate limit exceeded\",\"t
 /// Send 429 Too Many Requests with Retry-After header.
 fn send429(stream: TcpStream, retry_after: u32) void {
     g_server.metrics.recordRateLimit();
+    std.log.warn("req={d} rate limited (retry_after={d}s)", .{ log_request_id, retry_after });
     var buf: [error_body_buf_size]u8 = undefined;
     const body = std.fmt.bufPrint(&buf, "{{\"error\":{{\"message\":\"Rate limit exceeded. Retry after {d} seconds.\",\"type\":\"rate_limit_exceeded\",\"param\":null,\"code\":\"rate_limit_exceeded\"}}}}", .{retry_after}) catch rate_limit_fallback;
     var hdr_buf: [hdr_buf_size]u8 = undefined;
@@ -1176,14 +1230,40 @@ fn send429(stream: TcpStream, retry_after: u32) void {
     };
 }
 
+/// Send 503 with Retry-After (connection capacity / spawn failure).
+fn send503Retry(stream: TcpStream, body: []const u8, retry_after: u32) void {
+    var hdr_buf: [hdr_buf_size]u8 = undefined;
+    const hdr = std.fmt.bufPrint(&hdr_buf, "HTTP/1.1 503 Service Unavailable\r\nContent-Type: application/json\r\nContent-Length: {d}\r\nRetry-After: {d}\r\nX-Request-Id: {d}\r\n{s}" ++ security_headers ++ "Connection: close\r\n\r\n", .{ body.len, retry_after, log_request_id, corsHeaders() }) catch {
+        std.log.warn("req={d} 503 header format failed, using fallback", .{log_request_id});
+        sendResponse(stream, "503 Service Unavailable", "application/json", body);
+        return;
+    };
+    stream.writeAll(hdr) catch |err| {
+        std.log.warn("req={d} 503 write failed (headers): {}", .{ log_request_id, err });
+        return;
+    };
+    stream.writeAll(body) catch |err| {
+        std.log.warn("req={d} 503 write failed (body): {}", .{ log_request_id, err });
+        return;
+    };
+}
+
 // ── Request handler ─────────────────────────────────────────────
 
 fn handleRequest(stream: TcpStream, req: HttpRequest) void {
     const request_start = milliTimestamp();
-    // Wake from sleep mode on any incoming request.
-    g_server.last_request_ms.store(request_start, .release);
-    if (g_server.sleeping.load(.acquire)) {
-        g_server.sleeping.store(false, .release);
+    // Wake from sleep mode on any incoming request. Mutex serializes with
+    // sleepMonitorLoop so a late sleep store cannot overwrite this wake.
+    var woke_from_sleep = false;
+    {
+        g_server.mutex.lockUncancelable(g_server.io);
+        defer g_server.mutex.unlock(g_server.io);
+        g_server.last_request_ms.store(request_start, .release);
+        if (g_server.sleeping.swap(false, .acq_rel)) {
+            woke_from_sleep = true;
+        }
+    }
+    if (woke_from_sleep) {
         g_server.metrics.updateSleeping(false);
         std.log.info("server: waking from sleep mode", .{});
     }
@@ -1196,6 +1276,9 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
     // malicious page cannot drive inference or read conversation state on a
     // loopback --serve (CWE-352 / CWE-942).
     if (isCrossOriginUnauthenticated(req.headers)) {
+        g_server.metrics.recordRequest();
+        g_server.metrics.recordClientError();
+        std.log.warn("req={d} cross-origin request rejected (no API key)", .{log_request_id});
         sendJsonErrorEx(stream, "403 Forbidden", "invalid_request_error", "Cross-origin request rejected", null, "cross_origin_forbidden");
         return;
     }
@@ -1750,6 +1833,7 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
 
         // Parse token IDs from JSON array: {"tokens": [1, 2, 3]}
         var tok_ids: [gen_ids_buf_size]u32 = undefined;
+        defer @memset(std.mem.sliceAsBytes(&tok_ids), 0);
         const n_toks = parseDetokenizeTokens(req.body, &tok_ids);
         if (n_toks == 0) {
             sendJsonErrorEx(stream, "400 Bad Request", "invalid_request_error", "Missing or empty tokens array", "tokens", "missing_required_parameter");
@@ -1774,6 +1858,7 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
         };
         defer if (escaped.ptr != decoded.ptr) wipeFree(g_server.allocator, escaped);
         var final_buf: [response_buf_size]u8 = undefined;
+        defer @memset(&final_buf, 0);
         const resp = std.fmt.bufPrint(&final_buf,
             \\{{"text":"{s}","model":"{s}"}}
         , .{ escaped, g_server.model_name }) catch {
@@ -2653,20 +2738,18 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
             const body = if (ep.is_anthropic)
                 std.fmt.bufPrint(&body_buf,
                     \\{{"type":"error","error":{{"type":"invalid_request_error","message":"Method not allowed. {s}"}}}}
-                , .{ep.msg}) catch {
-                    sendResponse(stream, "405 Method Not Allowed", "application/json", anthropic_error_fallback);
-                    logRequestDone(method, path, 405, elapsedMs(request_start));
-                    return;
-                }
+                , .{ep.msg}) catch method_not_allowed_anthropic
             else
                 std.fmt.bufPrint(&body_buf,
                     \\{{"error":{{"message":"Method not allowed. {s}","type":"invalid_request_error","param":null,"code":"method_not_allowed"}}}}
-                , .{ep.msg}) catch {
-                    sendResponse(stream, "405 Method Not Allowed", "application/json", openai_error_fallback);
-                    logRequestDone(method, path, 405, elapsedMs(request_start));
-                    return;
-                };
-            const hdr = std.fmt.bufPrint(&hdr_buf, "HTTP/1.1 405 Method Not Allowed\r\nContent-Type: application/json\r\nContent-Length: {d}\r\nAllow: {s}\r\nX-Request-Id: {d}\r\n{s}" ++ security_headers ++ "Connection: close\r\n\r\n", .{ body.len, ep.allow, log_request_id, corsHeaders() }) catch return;
+                , .{ep.msg}) catch method_not_allowed_openai;
+            const hdr = std.fmt.bufPrint(&hdr_buf, "HTTP/1.1 405 Method Not Allowed\r\nContent-Type: application/json\r\nContent-Length: {d}\r\nAllow: {s}\r\nX-Request-Id: {d}\r\n{s}" ++ security_headers ++ "Connection: close\r\n\r\n", .{ body.len, ep.allow, log_request_id, corsHeaders() }) catch {
+                // Prefer a body without Allow over a silent drop (hung client).
+                sendResponse(stream, "405 Method Not Allowed", "application/json", body);
+                g_server.metrics.recordClientError();
+                logRequestDone(method, path, 405, elapsedMs(request_start));
+                return;
+            };
             stream.writeAll(hdr) catch |err| {
                 std.log.warn("req={d} 405 write failed: {}", .{ log_request_id, err });
                 return;
@@ -3060,12 +3143,21 @@ fn generateNPre(formatted: []const u8, reset: bool, max_tokens: usize, sampling:
         g_server.metrics.recordGenerationTokens(token_count);
 
         const finished = req.is_finished.load(.acquire);
+        const timed_out = req.is_timed_out.load(.acquire);
         const finish_reason: []const u8 = if (finished or stop_token_count != null)
             "stop"
         else if (token_count >= max_tokens)
             "length"
-        else blk: {
-            // Cancelled for timeout, forward failure, capacity, or client abort —
+        else if (timed_out) blk: {
+            // Scheduler already called recordTimeout(); treat as length so callers
+            // do not recordFailure and poison /ready error-rate degradation.
+            std.log.warn("req={d} scheduler generation timed out (tokens={d})", .{
+                log_request_id,
+                token_count,
+            });
+            break :blk "length";
+        } else blk: {
+            // Cancelled for forward failure, capacity, or client abort —
             // scheduler already logged the cause; surface as error for handlers.
             std.log.warn("req={d} scheduler generation incomplete (tokens={d}, cancelled={})", .{
                 log_request_id,
@@ -3260,6 +3352,7 @@ fn generateNPre(formatted: []const u8, reset: bool, max_tokens: usize, sampling:
     // to avoid per-token alloc/free overhead.
     const gen_start = milliTimestamp();
     var gen_tokens: [gen_ids_buf_size]u32 = undefined;
+    defer @memset(std.mem.sliceAsBytes(&gen_tokens), 0);
     var last: u32 = first_gen_token;
     var token_count: u32 = 0;
     var cancelled = false;
@@ -3291,6 +3384,7 @@ fn generateNPre(formatted: []const u8, reset: bool, max_tokens: usize, sampling:
     // that span up to ~32 tokens.
     const stop_buf_size: usize = 128;
     var stop_text_buf: [stop_buf_size]u8 = undefined;
+    defer @memset(&stop_text_buf, 0);
     var stop_text_len: usize = 0;
 
     const has_draft = g_server.draft_model != null and !first_is_eog and token_ids.len > 0;
@@ -3676,10 +3770,13 @@ fn chatStreamGeneratePre(stream: TcpStream, formatted: []const u8, reset: bool, 
         g_server.metrics.recordPromptTokens(prompt_token_count);
         g_server.metrics.recordGenerationTokens(token_count);
         // Match other stream paths: max_tokens is successful completion, not failure.
+        // Timeouts are already counted by recordTimeout(); do not poison requests_failed.
         if (!client_connected)
             g_server.metrics.recordCancellation()
         else if (req.is_finished.load(.acquire) or streamed_count >= max_tokens)
             g_server.metrics.recordCompletion()
+        else if (req.is_timed_out.load(.acquire))
+            std.log.warn("req={d} chat stream timed out (tokens={d})", .{ log_request_id, token_count })
         else {
             std.log.warn("req={d} chat stream incomplete (tokens={d}, cancelled={})", .{
                 log_request_id,
@@ -3758,6 +3855,7 @@ fn chatStreamGeneratePre(stream: TcpStream, formatted: []const u8, reset: bool, 
     // Generate and stream tokens
     const gen_start = milliTimestamp();
     var gen_tokens: [gen_ids_buf_size]u32 = undefined;
+    defer @memset(std.mem.sliceAsBytes(&gen_tokens), 0);
     var last: u32 = first_gen_token;
     var token_count: u32 = 0;
 
@@ -3930,6 +4028,7 @@ const anthropic_rate_limit_fallback = "{\"type\":\"error\",\"error\":{\"type\":\
 /// Send a 429 Too Many Requests response in Anthropic error format with Retry-After header.
 fn sendAnthropic429(stream: TcpStream, retry_after: u32) void {
     g_server.metrics.recordRateLimit();
+    std.log.warn("req={d} anthropic rate limited (retry_after={d}s)", .{ log_request_id, retry_after });
     var buf: [error_body_buf_size]u8 = undefined;
     const body = std.fmt.bufPrint(&buf, "{{\"type\":\"error\",\"error\":{{\"type\":\"rate_limit_error\",\"message\":\"Rate limit exceeded. Retry after {d} seconds.\"}}}}", .{retry_after}) catch anthropic_rate_limit_fallback;
     var hdr_buf: [hdr_buf_size]u8 = undefined;
@@ -4076,7 +4175,9 @@ fn generateAnthropicStream(stream: TcpStream, formatted: []const u8, max_tokens:
         g_server.metrics.recordTPOT(token_count, time_ms);
         g_server.metrics.recordPromptTokens(input_tokens);
         g_server.metrics.recordGenerationTokens(token_count);
-        if (!anth_client_connected) g_server.metrics.recordCancellation() else if (req.is_finished.load(.acquire) or token_count >= max_tokens) g_server.metrics.recordCompletion() else {
+        if (!anth_client_connected) g_server.metrics.recordCancellation() else if (req.is_finished.load(.acquire) or token_count >= max_tokens) g_server.metrics.recordCompletion() else if (req.is_timed_out.load(.acquire)) {
+            std.log.warn("req={d} anthropic stream timed out (tokens={d})", .{ log_request_id, token_count });
+        } else {
             std.log.warn("req={d} anthropic stream incomplete (tokens={d}, cancelled={})", .{
                 log_request_id,
                 token_count,
@@ -4490,7 +4591,9 @@ fn generateResponsesStream(stream: TcpStream, prompt: []const u8, max_tokens: us
         if (!resp_client_connected) {
             std.log.warn("req={d} client disconnected during streaming ({d} tokens sent)", .{ log_request_id, token_count });
             g_server.metrics.recordCancellation();
-        } else if (req.is_finished.load(.acquire) or token_count >= max_tokens) g_server.metrics.recordCompletion() else {
+        } else if (req.is_finished.load(.acquire) or token_count >= max_tokens) g_server.metrics.recordCompletion() else if (req.is_timed_out.load(.acquire)) {
+            std.log.warn("req={d} responses stream timed out (tokens={d})", .{ log_request_id, token_count });
+        } else {
             std.log.warn("req={d} responses stream incomplete (tokens={d}, cancelled={})", .{
                 log_request_id,
                 token_count,
@@ -4548,6 +4651,7 @@ fn generateResponsesStream(stream: TcpStream, prompt: []const u8, max_tokens: us
     var last: u32 = first_gen_token;
     var token_count: u32 = 0;
     var gen_tokens: [gen_ids_buf_size]u32 = undefined;
+    defer @memset(std.mem.sliceAsBytes(&gen_tokens), 0);
 
     var resp_disconnected = false;
     if (token_ids.len > 0 and !g_server.isEog(first_gen_token)) {
@@ -5038,7 +5142,9 @@ fn generateStream(stream: TcpStream, prompt: []const u8, req_id: u64, created: i
         g_server.metrics.recordTPOT(token_count, time_ms);
         g_server.metrics.recordPromptTokens(@intCast(token_ids.len));
         g_server.metrics.recordGenerationTokens(token_count);
-        if (!chunk_client_connected) g_server.metrics.recordCancellation() else if (req.is_finished.load(.acquire) or token_count >= max_tokens) g_server.metrics.recordCompletion() else {
+        if (!chunk_client_connected) g_server.metrics.recordCancellation() else if (req.is_finished.load(.acquire) or token_count >= max_tokens) g_server.metrics.recordCompletion() else if (req.is_timed_out.load(.acquire)) {
+            std.log.warn("req={d} openai stream timed out (tokens={d})", .{ log_request_id, token_count });
+        } else {
             std.log.warn("req={d} openai stream incomplete (tokens={d}, cancelled={})", .{
                 log_request_id,
                 token_count,
@@ -5259,6 +5365,7 @@ fn generateStream(stream: TcpStream, prompt: []const u8, req_id: u64, created: i
         // Standard streaming — token history for penalty tracking
         const use_penalties_s = sampling.frequency_penalty != 0 or sampling.presence_penalty != 0 or sampling.repetition_penalty != 1.0 or sampling.dry_multiplier > 0;
         var s_gen_tokens: [gen_ids_buf_size]u32 = undefined;
+        defer @memset(std.mem.sliceAsBytes(&s_gen_tokens), 0);
         var s_gen_count: u32 = 0;
         if (use_penalties_s and token_ids.len > 0 and !g_server.isEog(first_gen_token)) {
             s_gen_tokens[0] = first_gen_token;
@@ -5488,7 +5595,7 @@ fn handleConnection(stream: TcpStream) void {
     const buf = g_server.allocator.alloc(u8, http_buf_size) catch {
         g_server.metrics.recordRequest();
         g_server.metrics.recordFailure();
-        sendJsonError(stream, "503 Service Unavailable", "server_error", "Out of memory");
+        sendJsonErrorEx(stream, "503 Service Unavailable", "server_error", "Out of memory", null, "server_overloaded");
         return;
     };
     // Wipe before free: buffer holds Authorization secrets and prompt/message bodies.
@@ -5736,7 +5843,7 @@ pub fn run(config: ServerConfig) !void {
             g_server.metrics.recordConnectionRejection();
             const tc = getTimeComponents();
             slog("[{d:0>2}:{d:0>2}:{d:0>2}] req={d} Connection rejected: at capacity ({d}/{d}) -> 503\n", .{ tc.hours, tc.minutes, tc.seconds, log_request_id, max_concurrent_connections, max_concurrent_connections });
-            sendResponse(stream, "503 Service Unavailable", "application/json", "{\"error\":{\"message\":\"Server at capacity\",\"type\":\"server_error\",\"param\":null,\"code\":\"server_overloaded\"}}");
+            send503Retry(stream, capacity_503_body, capacity_retry_after_sec);
             stream.close();
             continue;
         }
@@ -5746,7 +5853,7 @@ pub fn run(config: ServerConfig) !void {
             g_server.metrics.recordRequest();
             g_server.metrics.recordFailure();
             std.log.err("Failed to spawn connection handler thread: {}", .{err});
-            sendResponse(stream, "503 Service Unavailable", "application/json", "{\"error\":{\"message\":\"Server unable to handle request\",\"type\":\"server_error\",\"param\":null,\"code\":\"server_overloaded\"}}");
+            send503Retry(stream, spawn_fail_503_body, capacity_retry_after_sec);
             stream.close();
             continue;
         };
@@ -5805,6 +5912,19 @@ pub fn run(config: ServerConfig) !void {
 
 test "parseContentLength normal" {
     try std.testing.expectEqual(@as(?usize, 42), parseContentLength("Content-Length: 42\r\nHost: localhost"));
+}
+
+test "prngSeedFromSampling uses sim_clock when seed omitted" {
+    defer sim_clock.setOverrideMs(null);
+    sim_clock.setOverrideMs(1_700_000_000_000);
+    const sampling = SamplingParams{};
+    const seed = prngSeedFromSampling(sampling);
+    const expected: u64 = @truncate(@as(u96, @bitCast(@as(i96, 1_700_000_000_000) * 1_000_000)));
+    try std.testing.expectEqual(expected, seed);
+    try std.testing.expectEqual(@as(u64, 99), schedulerPrngSeed(0, .{ .seed = 99 }));
+    const mixed = schedulerPrngSeed(7, sampling);
+    try std.testing.expect(mixed != seed);
+    try std.testing.expectEqual(seed ^ (7 *% prng_seed_mix_golden), mixed);
 }
 
 test "originMatchesHost accepts same-origin http" {
@@ -5914,12 +6034,15 @@ test "parseDetokenizeTokens reads token id array" {
 test "known_endpoints include kv_cache routes" {
     var found_cache = false;
     var found_info = false;
+    var found_root = false;
     for (known_endpoints) |ep| {
         if (std.mem.eql(u8, ep.path, "/v1/kv_cache")) found_cache = true;
         if (std.mem.eql(u8, ep.path, "/v1/kv_cache/info")) found_info = true;
+        if (std.mem.eql(u8, ep.path, "/")) found_root = true;
     }
     try std.testing.expect(found_cache);
     try std.testing.expect(found_info);
+    try std.testing.expect(found_root);
 }
 
 test "fuzz: all server functions" {
@@ -5982,8 +6105,8 @@ test "fuzz: all server functions" {
                 const count = smith.valueWithHash(u16, 0x02);
                 const time_ms = smith.valueWithHash(u16, 0x03);
                 const tps = tokensPerSec(@intCast(count), @intCast(time_ms));
-                std.debug.assert(tps >= 0 or tps == 0);
-                std.debug.assert(!std.math.isNan(tps));
+                try std.testing.expect(tps >= 0);
+                try std.testing.expect(!std.math.isNan(tps));
             }
 
             // estimatePromptTokens
@@ -6018,10 +6141,10 @@ test "fuzz: all server functions" {
                 var out_buf: [32]u8 = undefined;
                 const result = sanitizeForLog(input_buf[0..len], &out_buf);
                 std.debug.assert(result.len == len);
-                // Check no control chars in output (except space)
+                // Control chars and DEL are replaced; output must be printable.
                 for (result) |ch| {
-                    std.debug.assert(ch >= 0x20 or ch == ' ');
-                    std.debug.assert(ch != 0x7F);
+                    try std.testing.expect(ch >= 0x20);
+                    try std.testing.expect(ch != 0x7F);
                 }
             }
 

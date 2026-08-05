@@ -167,6 +167,28 @@ test "CaseResult zero tokens" {
     try std.testing.expectEqual(@as(u32, 0), r.n_tokens);
 }
 
+test "scoreCase empty continuation skips model" {
+    // Early return before any model method; stubs exist only for anytype typecheck.
+    const Dummy = struct {
+        fn resetCache(_: @This()) void {}
+        fn prefill(_: @This(), _: []const u32) error{Unused}!void {
+            return error.Unused;
+        }
+        fn forward(_: @This(), _: u32) error{Unused}!void {
+            return error.Unused;
+        }
+        fn getLogits(_: @This()) []const f32 {
+            return &.{};
+        }
+    };
+    const r = scoreCase(Dummy{}, &.{ 1, 2, 3 }, &.{});
+    try std.testing.expect(r != null);
+    try std.testing.expectEqual(@as(u32, 0), r.?.n_tokens);
+    try std.testing.expectEqual(@as(u32, 0), r.?.n_correct_argmax);
+    try std.testing.expectEqual(@as(f32, 0), r.?.mean_nll);
+    try std.testing.expectEqual(@as(f64, 0), r.?.total_nll);
+}
+
 test "EvalResult print does not crash" {
     var cases = [_]CaseResult{.{
         .mean_nll = 1.5,
@@ -182,5 +204,10 @@ test "EvalResult print does not crash" {
         .accuracy = 0.7,
         .n_failed = 0,
     };
+    try std.testing.expectEqual(@as(usize, 1), result.cases.len);
+    try std.testing.expectEqual(@as(u32, 10), result.total_tokens);
+    try std.testing.expectEqual(@as(u32, 7), result.total_correct);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.7), result.accuracy, 1e-6);
+    try std.testing.expectEqual(@as(u32, 0), result.n_failed);
     result.print();
 }

@@ -578,9 +578,9 @@ All endpoints return JSON error bodies on failure.
 | `405 Method Not Allowed` | Known endpoint with wrong HTTP method (includes `Allow` header) |
 | `413 Payload Too Large` | Request body exceeds 1 MB server limit |
 | `429 Too Many Requests` | Token-bucket rate limiting via `--rate-limit-rpm` / `--rate-limit-tpm` (includes `Retry-After`) |
-| `500 Internal Server Error` | Model forward error, OOM, or unexpected server failure |
+| `500 Internal Server Error` | Model forward error or unexpected server failure |
 | `501 Not Implemented` | Endpoint exists but is not yet implemented (e.g., `/v1/embeddings`) |
-| `503 Service Unavailable` | Conversation limit reached, shutting down, overloaded, or degraded (`/ready` only — inference endpoints do not return 503 for degraded state) |
+| `503 Service Unavailable` | Conversation limit reached, shutting down, connection capacity / spawn failure / request-buffer OOM (capacity responses include `Retry-After`), or degraded (`/ready` only — inference endpoints do not return 503 for degraded state) |
 
 ---
 
@@ -619,6 +619,8 @@ All responses include these headers:
 | `Cache-Control` | `no-store` |
 | `Connection` | `close` (non-streaming) or `keep-alive` (SSE streaming) |
 
-Rate-limited responses (429) also include `Retry-After` with seconds until the next request is allowed.
+Rate-limited responses (429) and connection-capacity responses (503 with
+`code` `server_overloaded`) include `Retry-After` with seconds until the next
+request is allowed.
 
 When no `--api-key` is configured, cross-origin browser requests (mismatched `Origin` vs `Host`) are rejected with 403 to prevent CSRF against a local `--serve`. Same-origin use of the embedded UI is unchanged. CORS `Access-Control-Allow-Origin` is not emitted; use a reverse proxy if a separate web origin must call the API.

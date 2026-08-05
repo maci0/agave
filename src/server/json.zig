@@ -47,12 +47,6 @@ pub const ToolDef = struct {
     parameters_json: []const u8,
 };
 
-/// Parsed tool call result from model output.
-const ToolCallResult = struct {
-    name: []const u8,
-    arguments: []const u8,
-};
-
 /// Tool definitions extracted from request.
 pub const ToolParams = struct {
     tools: [max_tools]?ToolDef = .{null} ** max_tools,
@@ -156,6 +150,7 @@ pub fn extractIntField(json: []const u8, field: []const u8) ?usize {
 
 /// Extract a floating-point field value from a JSON body (e.g., `"temperature": 0.7`).
 /// Scans at most 32 characters to bound parsing cost on malicious input.
+/// Rejects non-finite values (overflow like `1e999` → Inf) so callers never see Inf/NaN.
 pub fn extractFloatField(json: []const u8, field: []const u8) ?f32 {
     var buf: [extract_field_buf_size]u8 = undefined;
     const needle = quoteFieldKey(&buf, field) orelse return null;
@@ -165,7 +160,9 @@ pub fn extractFloatField(json: []const u8, field: []const u8) ?f32 {
         var end = val_pos;
         while (end < json.len and end - val_pos < max_float_chars and (json[end] == '.' or (json[end] >= '0' and json[end] <= '9') or json[end] == '-' or json[end] == 'e' or json[end] == 'E' or json[end] == '+')) : (end += 1) {}
         if (end == val_pos) continue;
-        return std.fmt.parseFloat(f32, json[val_pos..end]) catch continue;
+        const v = std.fmt.parseFloat(f32, json[val_pos..end]) catch continue;
+        if (!std.math.isFinite(v)) continue;
+        return v;
     }
     return null;
 }
@@ -348,9 +345,16 @@ pub fn parseSampling(body: []const u8) SamplingParams {
         .logprobs = extractBoolField(body, "logprobs"),
         .top_logprobs = @intCast(@min(extractIntField(body, "top_logprobs") orelse 0, 20)),
         .stream_include_usage = blk: {
-            // stream_options.include_usage — default true for compat
+            // stream_options.include_usage — default true when the key is omitted
+            // (docs/API.md). extractBoolField returns false for a missing key, so
+            // only override when the field is actually present.
             if (extractObjectField(body, "stream_options")) |so| {
-                break :blk extractBoolField(so, "include_usage");
+                var key_buf: [extract_field_buf_size]u8 = undefined;
+                const needle = quoteFieldKey(&key_buf, "include_usage") orelse break :blk true;
+                var search_start: usize = 0;
+                if (findFieldValuePos(so, needle, &search_start) != null) {
+                    break :blk extractBoolField(so, "include_usage");
+                }
             }
             break :blk true;
         },
@@ -428,6 +432,11 @@ pub fn parseSampling(body: []const u8) SamplingParams {
                                 i = ve;
                                 continue;
                             };
+                            // Overflow (e.g. 45 nines) → Inf; two Inf biases → NaN in softmax.
+                            if (!std.math.isFinite(bias)) {
+                                i = ve;
+                                continue;
+                            }
                             const idx = result.logit_bias_count;
                             result.logit_bias_ids[idx] = tid;
                             result.logit_bias_vals[idx] = bias;
@@ -620,11 +629,14 @@ pub fn extractFormBool(body: []const u8, field: []const u8) bool {
 }
 
 /// Extract a float value from a URL-encoded form field.
-/// Returns null if the field is missing or cannot be parsed.
+/// Returns null if the field is missing, cannot be parsed, or is non-finite
+/// (overflow like `1e999` → Inf), matching `extractFloatField`.
 pub fn extractFormFloat(body: []const u8, field: []const u8) ?f32 {
     const raw = extractFormField(body, field) orelse return null;
     if (raw.len == 0) return null;
-    return std.fmt.parseFloat(f32, raw) catch null;
+    const v = std.fmt.parseFloat(f32, raw) catch return null;
+    if (!std.math.isFinite(v)) return null;
+    return v;
 }
 
 /// Extract an unsigned integer value from a URL-encoded form field.
@@ -1248,6 +1260,8 @@ test "extractFloatField handles edge values" {
     try std.testing.expect(extractFloatField("{\"t\": not_a_number}", "t") == null);
     try std.testing.expect(extractFloatField("{\"other\": 1.0}", "t") == null);
     try std.testing.expect(extractFloatField("{}", "t") == null);
+    // Overflow → Inf from parseFloat; must not surface as a value
+    try std.testing.expect(extractFloatField("{\"t\": 1e999}", "t") == null);
 }
 
 test "extractJsonImage handles truncated base64 marker" {
@@ -1266,6 +1280,8 @@ test "extractFormFloat handles boundary values" {
     try std.testing.expectApproxEqAbs(@as(f32, 1e10), large.?, 1e6);
     const half = extractFormFloat("v=.5", "v");
     try std.testing.expectApproxEqAbs(@as(f32, 0.5), half.?, 0.001);
+    // Overflow → Inf; must not surface as a value
+    try std.testing.expect(extractFormFloat("v=1e999", "v") == null);
 }
 
 test "parseFormSampling handles extreme values" {
@@ -1417,6 +1433,18 @@ test "parseSampling logit_bias object" {
     try std.testing.expectApproxEqAbs(@as(f32, -2.0), s.logit_bias_vals[1], 0.01);
 }
 
+test "parseSampling logit_bias rejects non-finite values" {
+    // Digit overflow → Inf from parseFloat; must not enter logit_bias_vals.
+    const huge = "999999999999999999999999999999999999999999999";
+    const body = try std.fmt.allocPrint(std.testing.allocator, "{{\"logit_bias\": {{\"1\": {s}, \"2\": 1.5}}}}", .{huge});
+    defer std.testing.allocator.free(body);
+    const s = parseSampling(body);
+    try std.testing.expectEqual(@as(u32, 1), s.logit_bias_count);
+    try std.testing.expectEqual(@as(u32, 2), s.logit_bias_ids[0]);
+    try std.testing.expectApproxEqAbs(@as(f32, 1.5), s.logit_bias_vals[0], 0.01);
+    try std.testing.expect(std.math.isFinite(s.logit_bias_vals[0]));
+}
+
 test "parseSampling stream_options object" {
     const s1 = parseSampling(
         \\{"stream": true, "stream_options": {"include_usage": false}}
@@ -1427,6 +1455,17 @@ test "parseSampling stream_options object" {
         \\{"stream": true, "stream_options": {"include_usage": true}}
     );
     try std.testing.expect(s2.stream_include_usage);
+
+    // Empty stream_options (or object without include_usage): default true
+    const s3 = parseSampling(
+        \\{"stream": true, "stream_options": {}}
+    );
+    try std.testing.expect(s3.stream_include_usage);
+
+    const s4 = parseSampling(
+        \\{"stream": true}
+    );
+    try std.testing.expect(s4.stream_include_usage);
 }
 
 test "parseSampling response_format json_schema with nested schema" {
@@ -1560,9 +1599,9 @@ test "fuzz: all json functions" {
             // 2. extractIntField — returns optional usize
             _ = extractIntField(input, field);
 
-            // 3. extractFloatField — returns optional f32
+            // 3. extractFloatField — returns optional f32; must be finite when present
             if (extractFloatField(input, field)) |v| {
-                std.debug.assert(!std.math.isNan(v) or std.math.isNan(v)); // no crash
+                try std.testing.expect(std.math.isFinite(v));
             }
 
             // 4. extractField — returns optional slice into input
@@ -1612,8 +1651,10 @@ test "fuzz: all json functions" {
             // 12. extractFormBool — always returns bool
             _ = extractFormBool(input, field);
 
-            // 13. extractFormFloat — returns optional f32
-            _ = extractFormFloat(input, field);
+            // 13. extractFormFloat — returns optional f32; must be finite when present
+            if (extractFormFloat(input, field)) |v| {
+                try std.testing.expect(std.math.isFinite(v));
+            }
 
             // 14. extractFormInt — returns optional usize
             _ = extractFormInt(input, field);

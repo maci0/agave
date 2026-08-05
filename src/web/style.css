@@ -174,6 +174,16 @@ body::before {
   padding: 12px;
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
+  gap: 8px;
+}
+.sidebar-hdr-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+.sidebar-close {
+  display: none;
 }
 .sidebar-title {
   font-family: var(--mono);
@@ -620,7 +630,7 @@ body.show-stats .stats { display: flex; }
 .conv-select:focus-visible, .copy-btn:focus-visible, .msg-copy:focus-visible,
 .toast-dismiss:focus-visible, .img-remove:focus-visible, .img-btn:focus-visible,
 .settings-toggle:focus-visible, .system-prompt-clear:focus-visible, .regen-btn:focus-visible,
-.conv-retry:focus-visible {
+.conv-retry:focus-visible, .sidebar-close:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
@@ -686,10 +696,12 @@ button.hint:focus-visible { outline: 2px solid var(--accent); outline-offset: 2p
   #chat-form { padding: 12px 16px 16px; }
   #msg { font-size: 16px; }
   .btn-text { display: none; }
+  .btn-text-keep { display: inline; }
   .msg { padding: 12px 14px; }
   #empty h2 { font-size: 24px; }
   .input-hint { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
   .menu-btn { display: flex; }
+  .sidebar-close { display: inline-flex; }
   .settings-grid { grid-template-columns: 1fr; }
   .send-btn, .stop-btn { min-height: 44px; }
   .regen-btn { opacity: 1; min-height: 44px; display: inline-flex; align-items: center; }

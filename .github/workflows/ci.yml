@@ -52,6 +52,18 @@ jobs:
             exit 1
           fi
           echo "Zig pin OK: $pin"
+          # Dated debian:bookworm-YYYYMMDD-slim must match DEBIAN_SNAPSHOT=YYYYMMDDT...
+          from_day="$(sed -n 's/.*debian:bookworm-\([0-9]\{8\}\)-slim.*/\1/p' Dockerfile | head -n1)"
+          snap_day="$(sed -n 's/.*DEBIAN_SNAPSHOT=\([0-9]\{8\}\)T.*/\1/p' Dockerfile | head -n1)"
+          if [[ -z "$from_day" || -z "$snap_day" ]]; then
+            echo "::error::Could not parse debian FROM tag day and DEBIAN_SNAPSHOT from Dockerfile"
+            exit 1
+          fi
+          if [[ "$from_day" != "$snap_day" ]]; then
+            echo "::error::Dockerfile debian day ($from_day) != DEBIAN_SNAPSHOT day ($snap_day)"
+            exit 1
+          fi
+          echo "Debian snapshot day OK: $from_day"
 
       - name: Setup Zig
         uses: goto-bus-stop/setup-zig@abea47f85e598557f500fa1fd2ab7464fcb39406 # v2.2.1
@@ -185,6 +197,18 @@ jobs:
             exit 1
           fi
           echo "HEALTHCHECK ok: $hc"
+          # All dlopen backends disabled above → Dockerfile must select musl static.
+          ldd_out="$(docker run --rm --entrypoint ldd agave:ci /usr/local/bin/agave 2>&1 || true)"
+          echo "$ldd_out"
+          if echo "$ldd_out" | grep -qiE '=>|libc\.so'; then
+            echo "::error::Expected static musl binary when CUDA/Vulkan/ROCm/WebGPU are disabled"
+            exit 1
+          fi
+          if ! echo "$ldd_out" | grep -qiE 'not a dynamic|statically linked'; then
+            echo "::error::Unexpected ldd output (expected static binary): $ldd_out"
+            exit 1
+          fi
+          echo "Static musl binary ok"
 
   cross-compile-check:
     name: Cross-compilation matrix
@@ -225,12 +249,13 @@ jobs:
         env:
           TARGET: ${{ matrix.target }}
         run: |
-          FLAGS="-Dtarget=$TARGET"
+          set -euo pipefail
+          args=(-Dtarget="$TARGET")
           # Metal is macOS-only and unavailable on Linux runners; disable for macOS cross-compile.
           if [[ "$TARGET" == *"-macos" ]]; then
-            FLAGS="$FLAGS -Denable-metal=false"
+            args+=(-Denable-metal=false)
           fi
-          zig build $FLAGS
+          zig build "${args[@]}"
 
   fuzz-smoke:
     name: Fuzz smoke (parsers + API surfaces)

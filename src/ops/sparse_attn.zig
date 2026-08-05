@@ -114,12 +114,6 @@ const sparse_v_threshold: f32 = 1e-6;
 const max_seq_len: usize = 65536;
 const max_hd: usize = 256;
 
-/// Online softmax state for block-sparse SDPA.
-const OnlineSoftmax = struct {
-    max: f32 = -std.math.inf(f32),
-    sum: f32 = 0,
-};
-
 /// Compute block-sparse SDPA for a single head with f32 KV.
 /// Skips QK dot products and V accumulation for masked-out key blocks.
 /// Writes output to output[h*hd .. (h+1)*hd].

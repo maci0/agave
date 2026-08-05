@@ -219,10 +219,13 @@ pub fn build(b: *std.Build) void {
     backend_options.addOption(bool, "enable_diffusion_gemma", enable_diffusion_gemma);
     backend_options.addOption(bool, "enable_llama4", enable_llama4);
 
+    // Strip ReleaseFast: unstripped ELF/Mach-O embeds host absolute paths
+    // (project root, zig lib, global cache) and breaks path-independent rebuilds.
     const mod_rel = b.createModule(.{
         .root_source_file = b.path("src/main.zig"),
         .target = target,
         .optimize = .ReleaseFast,
+        .strip = true,
     });
     mod_rel.addImport("build_options", backend_options.createModule());
 
@@ -261,21 +264,42 @@ pub fn build(b: *std.Build) void {
     // ── Test step ────────────────────────────────────────────────
     const test_step = b.step("test", "Run unit tests");
 
+    // Test modules use ReleaseSafe so std.debug.assert / unreachable fire.
+    // Reusing mod_rel (ReleaseFast) silently no-ops ~400 assert-based checks
+    // in fuzz and unit tests (see std.debug.assert docs).
+    const test_optimize: std.builtin.OptimizeMode = .ReleaseSafe;
+
     // Main test suite (inline tests from src/)
-    test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = mod_rel })).step);
+    {
+        const mod_test = b.createModule(.{
+            .root_source_file = b.path("src/main.zig"),
+            .target = target,
+            .optimize = test_optimize,
+        });
+        mod_test.addImport("build_options", backend_options.createModule());
+        // No name filters: run the full inline suite from src/ (ReleaseSafe so asserts fire).
+        const t = b.addTest(.{ .root_module = mod_test });
+        link_platform(mod_test, t, target);
+        if (link_metal) {
+            mod_test.linkFramework("Metal", .{});
+            mod_test.linkFramework("Foundation", .{});
+            mod_test.linkFramework("Accelerate", .{});
+        }
+        test_step.dependOn(&b.addRunArtifact(t).step);
+    }
 
     // SDPA oracle self-tests (validates ground-truth reference for GPU tests)
     test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = b.createModule(.{
         .root_source_file = b.path("tests/sdpa_oracle.zig"),
         .target = target,
-        .optimize = .ReleaseFast,
+        .optimize = test_optimize,
     }) })).step);
 
     // Golden harness unit tests (degenerate output detection)
     test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = b.createModule(.{
         .root_source_file = b.path("tests/models/golden_harness.zig"),
         .target = target,
-        .optimize = .ReleaseFast,
+        .optimize = test_optimize,
     }) })).step);
 
     // Shared backend module for SDPA hardware tests (provides named "backend" import).
@@ -283,7 +307,7 @@ pub fn build(b: *std.Build) void {
     const backend_test_mod = b.createModule(.{
         .root_source_file = b.path("src/test_exports.zig"),
         .target = target,
-        .optimize = .ReleaseFast,
+        .optimize = test_optimize,
     });
     backend_test_mod.addImport("build_options", backend_options.createModule());
 
@@ -291,14 +315,14 @@ pub fn build(b: *std.Build) void {
     const oracle_mod = b.createModule(.{
         .root_source_file = b.path("tests/sdpa_oracle.zig"),
         .target = target,
-        .optimize = .ReleaseFast,
+        .optimize = test_optimize,
     });
 
     // Shared dual-delta test harness for GPU SDPA correctness tests
     const sdpa_harness_mod = b.createModule(.{
         .root_source_file = b.path("tests/sdpa_harness.zig"),
         .target = target,
-        .optimize = .ReleaseFast,
+        .optimize = test_optimize,
     });
     sdpa_harness_mod.addImport("backend", backend_test_mod);
     sdpa_harness_mod.addImport("sdpa_oracle", oracle_mod);
@@ -308,7 +332,7 @@ pub fn build(b: *std.Build) void {
         const mod = b.createModule(.{
             .root_source_file = b.path("tests/test_cuda_sdpa.zig"),
             .target = target,
-            .optimize = .ReleaseFast,
+            .optimize = test_optimize,
         });
         mod.addImport("backend", backend_test_mod);
         mod.addImport("sdpa_harness", sdpa_harness_mod);
@@ -327,7 +351,7 @@ pub fn build(b: *std.Build) void {
         const mod = b.createModule(.{
             .root_source_file = b.path("tests/test_metal_sdpa.zig"),
             .target = target,
-            .optimize = .ReleaseFast,
+            .optimize = test_optimize,
         });
         mod.addImport("backend", backend_test_mod);
         mod.addImport("sdpa_harness", sdpa_harness_mod);
@@ -345,7 +369,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = b.createModule(.{
         .root_source_file = b.path("tests/test_rocm_kernel.zig"),
         .target = target,
-        .optimize = .ReleaseFast,
+        .optimize = test_optimize,
     }) })).step);
 
     // micro_bench pure-function tests (parseKeyValue, parseKernelName, etc.)
@@ -389,6 +413,7 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/micro_bench.zig"),
         .target = target,
         .optimize = .ReleaseFast,
+        .strip = true,
     });
     mod_bench.addImport("build_options", backend_options.createModule());
 
